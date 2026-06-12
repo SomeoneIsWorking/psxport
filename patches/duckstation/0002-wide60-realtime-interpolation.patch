@@ -1,4 +1,4 @@
---- a/src/core/gpu.cpp	2026-06-12 20:51:15.177763883 +0300
+--- a/src/core/gpu.cpp	2026-06-12 21:28:31.006310935 +0300
 +++ b/src/core/gpu.cpp	2026-06-12 20:30:52.923625469 +0300
 @@ -8,6 +8,7 @@
  #include "dma.h"
@@ -87,7 +87,7 @@
          const u32 command = FifoPeek(0) >> 24;
          if (s_GP0_command_handler_table[command]())
            continue;
---- a/src/core/gpu_backend.cpp	2026-06-12 20:51:15.098863268 +0300
+--- a/src/core/gpu_backend.cpp	2026-06-12 21:28:30.917309801 +0300
 +++ b/src/core/gpu_backend.cpp	2026-06-12 20:02:37.051371015 +0300
 @@ -3,6 +3,7 @@
  
@@ -122,7 +122,7 @@
  
 --- a/src/core/gpu_wide60.h	1970-01-01 02:00:00.000000000 +0200
 +++ b/src/core/gpu_wide60.h	1970-01-01 02:00:00.000000000 +0200
-@@ -0,0 +1,50 @@
+@@ -0,0 +1,66 @@
 +// psxport "wide60" layer: synthesizes interpolated in-between frames for games
 +// that render at half the vsync rate, by capturing each logic frame's backend
 +// command list and replaying it with lerped vertices at the intermediate vblank.
@@ -172,10 +172,26 @@
 +/// original frame command list so the upcoming present shows it.
 +void OnVBlankStart();
 +
++// --- GTE transform-tagging tier (object identity) ---------------------------
++// Games write each object's translation into GTE TRX/TRY/TRZ, project with
++// RTPS/RTPT, then swc2 the resulting SXY into the prim arena. Tracking both
++// links every prim to the world-space transform that produced it.
++
++/// GTE control register write of TRX(37)/TRY(38)/TRZ(39), with the writing
++/// instruction's PC and current RA (locates per-object transform setup code).
++void OnGTETranslationWrite(u32 index, u32 value, u32 pc, u32 ra);
++
++/// swc2 of SXY0/1/2 (data regs 12-14): the stored packed screen-coord word,
++/// which reappears verbatim inside the submitted prim. Interpreter CPU only.
++void OnSXYStore(u32 value);
++
++/// RE aid: PSXPORT_TRACE_PC hit (logs args/ra with the current vblank count).
++void OnTracePCHit(u32 pc, u32 a0, u32 a1, u32 ra);
++
 +} // namespace Wide60
 --- a/src/core/gpu_wide60.cpp	1970-01-01 02:00:00.000000000 +0200
 +++ b/src/core/gpu_wide60.cpp	1970-01-01 02:00:00.000000000 +0200
-@@ -0,0 +1,706 @@
+@@ -0,0 +1,986 @@
 +// psxport "wide60" layer. See gpu_wide60.h for the high-level description.
 +//
 +// Method (validated offline against GPU dumps, tools/interp_dump.py in psxport):
@@ -197,6 +213,7 @@
 +// re-applied after each replay.
 +
 +#include "gpu_wide60.h"
++#include "bus.h"
 +#include "video_thread.h"
 +#include "video_thread_commands.h"
 +
@@ -224,18 +241,35 @@
 +  // in), and games alternate the offset per double-buffer — matching must be
 +  // done in buffer-relative space (abs - offset).
 +  s16 off_x = 0, off_y = 0;
++  s32 transform = -1; // index into FrameCapture::transforms (GTE tagging)
++};
++
++struct Transform
++{
++  s32 trx, try_, trz; // GTE translation = object world position
++  u32 pc, ra;         // CPU location of the TRZ write (RE: find cull callers)
 +};
 +
 +struct FrameCapture
 +{
 +  std::vector<u8> buf; // concatenated VideoThreadCommands
 +  std::vector<DrawRef> draws;
++  // GTE tagging tier: transforms seen this frame, and which arena addresses
++  // received projected SXY coords under which transform
++  std::vector<Transform> transforms;
++  // packed SXY word -> transform index. Keyed by VALUE, not address: games
++  // (Tomba 2) build prims in scratch buffers and memcpy into the OT arena, so
++  // store addresses never match the DMA'd packet addresses — but the stored
++  // screen-coord word survives the copy verbatim.
++  std::unordered_map<u32, u32> sxy_to_transform;
 +  bool overflowed = false;
 +
 +  void Clear()
 +  {
 +    buf.clear();
 +    draws.clear();
++    transforms.clear();
++    sxy_to_transform.clear();
 +    overflowed = false;
 +  }
 +};
@@ -252,6 +286,13 @@
 +static constexpr u32 MAX_FRAME_DRAWS = 32768;
 +static constexpr u32 MAX_DRAW_VERTICES = 4;
 +static constexpr s32 DISPLACEMENT_GATE = 48; // max per-vertex L1 delta to lerp
++// Wrong pairs inside runs of identical fingerprints (e.g. ground tiles) often
++// pass the gate by pairing a prim with its near neighbour, which lerps toward
++// the wrong target for one vsync (vertex flicker). Draws adjacent in arena
++// order belong to the same object and share a motion vector, so matches whose
++// displacement deviates from the local median get snapped instead.
++static constexpr s32 COHERENCE_WINDOW = 3;   // +-N matched neighbours
++static constexpr s32 COHERENCE_TOLERANCE = 12;
 +
 +static bool s_enabled = false;
 +static bool s_replaying = false;
@@ -304,6 +345,45 @@
 +  s_packet_src_addr = 0;
 +  s_flip_pending = false;
 +  s_last_flip_vblank = s_vblank_count;
++}
++
++// --- GTE transform tagging ----------------------------------------------------
++
++static s32 s_pending_tr[3] = {};
++static bool s_tr_written[3] = {};
++
++void OnGTETranslationWrite(u32 index, u32 value, u32 pc, u32 ra)
++{
++  const u32 c = index - 37; // TRX/TRY/TRZ
++  s_pending_tr[c] = static_cast<s32>(value);
++  s_tr_written[c] = true;
++  // a full TRX/TRY/TRZ load = one object transform; TRZ is written last by
++  // LoadTranslationVector-style sequences
++  if (c == 2 && s_tr_written[0] && s_tr_written[1])
++  {
++    FrameCapture& f = s_frames[s_build];
++    if (f.transforms.size() < MAX_FRAME_DRAWS)
++      f.transforms.push_back({s_pending_tr[0], s_pending_tr[1], s_pending_tr[2], pc, ra});
++    s_tr_written[0] = s_tr_written[1] = s_tr_written[2] = false;
++  }
++}
++
++void OnSXYStore(u32 value)
++{
++  FrameCapture& f = s_frames[s_build];
++  if (f.transforms.empty() || f.sxy_to_transform.size() >= 4 * MAX_FRAME_DRAWS)
++    return;
++  f.sxy_to_transform[value] = static_cast<u32>(f.transforms.size() - 1);
++}
++
++void OnTracePCHit(u32 pc, u32 a0, u32 a1, u32 ra)
++{
++  static FILE* fp = []() {
++    const char* path = std::getenv("PSXPORT_TRACE_OUT");
++    return path ? fopen(path, "w") : nullptr;
++  }();
++  if (fp)
++    fprintf(fp, "%llu,%08X,%08X,%08X,%08X\n", (unsigned long long)s_vblank_count, pc, a0, a1, ra);
 +}
 +
 +void SetPacketContext(u32 addr, s32 draw_offset_x, s32 draw_offset_y)
@@ -572,8 +652,60 @@
 +  }
 +
 +  if (IsDrawCommand(cmd->type))
-+    f.draws.push_back(
-+      {static_cast<u32>(f.buf.size()), s_packet_src_addr, ComputeToken(cmd), -1, s_packet_off_x, s_packet_off_y});
++  {
++    // GTE tagging: find the transform that projected this prim by looking up
++    // its vertices' packed screen-coord words (majority vote)
++    s32 transform = -1;
++    if (!f.sxy_to_transform.empty())
++    {
++      VertexPos verts[MAX_DRAW_VERTICES];
++      const u32 n = GetVertices(cmd, verts);
++      s32 votes[MAX_DRAW_VERTICES];
++      u32 nvotes = 0;
++      for (u32 i = 0; i < n; i++)
++      {
++        // games may nudge coords after projection (Tomba 2: +0..2 in x), so
++        // probe a small neighbourhood around the reconstructed SXY value
++        const s32 bx = verts[i].x - s_packet_off_x;
++        const s32 by = verts[i].y - s_packet_off_y;
++        for (s32 dy = -1; dy <= 1 && nvotes <= i; dy++)
++        {
++          for (s32 dx = -2; dx <= 0; dx++)
++          {
++            const u32 key =
++              (static_cast<u32>((by + dy) & 0xFFFF) << 16) | static_cast<u32>((bx + dx) & 0xFFFF);
++            const auto it = f.sxy_to_transform.find(key);
++            if (it != f.sxy_to_transform.end())
++            {
++              votes[nvotes++] = static_cast<s32>(it->second);
++              break;
++            }
++          }
++        }
++      }
++      if (nvotes > 0)
++      {
++        std::sort(votes, votes + nvotes);
++        u32 best_count = 0, run = 1;
++        for (u32 i = 1; i <= nvotes; i++)
++        {
++          if (i < nvotes && votes[i] == votes[i - 1])
++          {
++            run++;
++            continue;
++          }
++          if (run > best_count)
++          {
++            best_count = run;
++            transform = votes[i - 1];
++          }
++          run = 1;
++        }
++      }
++    }
++    f.draws.push_back({static_cast<u32>(f.buf.size()), s_packet_src_addr, ComputeToken(cmd), -1, s_packet_off_x,
++                       s_packet_off_y, transform});
++  }
 +
 +  const u8* bytes = reinterpret_cast<const u8*>(cmd);
 +  f.buf.insert(f.buf.end(), bytes, bytes + cmd->size);
@@ -768,6 +900,47 @@
 +        b[bi + k]->match = static_cast<s32>(a[ai + k] - prev.draws.data());
 +    }
 +  });
++
++  // motion-coherence filter (see COHERENCE_* constants)
++  struct MotionRef
++  {
++    DrawRef* d;
++    s32 dx, dy;
++  };
++  std::vector<MotionRef> motion;
++  motion.reserve(b.size());
++  for (DrawRef* d : b) // arena-address order
++  {
++    if (d->match < 0)
++      continue;
++    const DrawRef& p = prev.draws[static_cast<size_t>(d->match)];
++    const VideoThreadCommand* pc = reinterpret_cast<const VideoThreadCommand*>(&prev.buf[p.buf_offset]);
++    const VideoThreadCommand* cc = reinterpret_cast<const VideoThreadCommand*>(&cur.buf[d->buf_offset]);
++    if (GetVertices(pc, pv) == 0 || GetVertices(cc, cv) == 0)
++      continue;
++    motion.push_back({d, (cv[0].x - d->off_x) - (pv[0].x - p.off_x), (cv[0].y - d->off_y) - (pv[0].y - p.off_y)});
++  }
++  std::vector<DrawRef*> outliers;
++  s32 wx[2 * COHERENCE_WINDOW + 1], wy[2 * COHERENCE_WINDOW + 1];
++  for (size_t i = 0; i < motion.size(); i++)
++  {
++    const size_t lo = (i > static_cast<size_t>(COHERENCE_WINDOW)) ? (i - COHERENCE_WINDOW) : 0;
++    const size_t hi = std::min(motion.size(), i + COHERENCE_WINDOW + 1);
++    const size_t n = hi - lo;
++    if (n < 3)
++      continue;
++    for (size_t j = lo; j < hi; j++)
++    {
++      wx[j - lo] = motion[j].dx;
++      wy[j - lo] = motion[j].dy;
++    }
++    std::nth_element(wx, wx + n / 2, wx + n);
++    std::nth_element(wy, wy + n / 2, wy + n);
++    if (std::abs(motion[i].dx - wx[n / 2]) + std::abs(motion[i].dy - wy[n / 2]) > COHERENCE_TOLERANCE)
++      outliers.push_back(motion[i].d);
++  }
++  for (DrawRef* d : outliers)
++    d->match = -1;
 +}
 +
 +// --- replay -------------------------------------------------------------------
@@ -846,11 +1019,64 @@
 +  s_replaying = false;
 +}
 +
++/// PSXPORT_POKE="80077054=28620005;800772D4=28620370:28620278;..." — RAM word
++/// pokes applied every vblank (idempotent; survives overlay reloads). With the
++/// "old:new" form the word is only replaced while it currently equals "old" —
++/// required for overlay code, where another overlay may occupy the address.
++/// Prototype of the per-game patch layer.
++static void ApplyPokes()
++{
++  struct Poke
++  {
++    u32 addr, expect, value;
++    bool conditional;
++  };
++  static const std::vector<Poke> pokes = []() {
++    std::vector<Poke> v;
++    if (const char* env = std::getenv("PSXPORT_POKE"))
++    {
++      const char* p = env;
++      while (*p)
++      {
++        char* end;
++        const u32 addr = static_cast<u32>(std::strtoul(p, &end, 16));
++        if (*end != '=')
++          break;
++        const u32 first = static_cast<u32>(std::strtoul(end + 1, &end, 16));
++        if (*end == ':')
++        {
++          const u32 value = static_cast<u32>(std::strtoul(end + 1, &end, 16));
++          v.push_back({addr & 0x1FFFFF, first, value, true});
++        }
++        else
++        {
++          v.push_back({addr & 0x1FFFFF, 0, first, false});
++        }
++        p = (*end == ';') ? end + 1 : end;
++      }
++    }
++    return v;
++  }();
++  for (const Poke& pk : pokes)
++  {
++    if (pk.conditional)
++    {
++      u32 cur;
++      std::memcpy(&cur, Bus::g_ram + pk.addr, sizeof(cur));
++      if (cur != pk.expect)
++        continue;
++    }
++    std::memcpy(Bus::g_ram + pk.addr, &pk.value, sizeof(pk.value));
++  }
++}
++
 +void OnVBlankStart()
 +{
 +  s_vblank_count++;
 +  if (!s_enabled)
 +    return;
++
++  ApplyPokes();
 +
 +  if (s_lerp_pending)
 +  {
@@ -866,11 +1092,81 @@
 +
 +      if (Log::IsLogVisible(Log::Level::Dev, ___LogChannel___)) [[unlikely]]
 +      {
-+        u32 matched = 0;
-+        for (const DrawRef& d : s_frames[s_last].draws)
++        const FrameCapture& fl = s_frames[s_last];
++        const FrameCapture& fp = s_frames[s_prev];
++        u32 matched = 0, tagged = 0;
++        for (const DrawRef& d : fl.draws)
++        {
 +          matched += (d.match >= 0);
-+        DEV_LOG("wide60: lerp frame, gap={}, draws={}, matched={}", s_pending_gap, s_frames[s_last].draws.size(),
-+                matched);
++          tagged += (d.transform >= 0);
++        }
++        // transform continuity: cur transforms with a near (L1<4096) world
++        // position in prev = matchable object identity
++        u32 continuous = 0;
++        for (const Transform& t : fl.transforms)
++        {
++          for (const Transform& p : fp.transforms)
++          {
++            if (std::abs(t.trx - p.trx) + std::abs(t.try_ - p.try_) + std::abs(t.trz - p.trz) < 4096)
++            {
++              continuous++;
++              break;
++            }
++          }
++        }
++        DEV_LOG("wide60: lerp frame, gap={}, draws={}, matched={}, tagged={}, transforms={} (continuous={}), sxy={}",
++                s_pending_gap, fl.draws.size(), matched, tagged, fl.transforms.size(), continuous,
++                fl.sxy_to_transform.size());
++
++        // one-shot RAM dump for offline disassembly of overlay-loaded code
++        static bool s_ram_dumped = false;
++        if (!s_ram_dumped)
++        {
++          if (const char* path = std::getenv("PSXPORT_WIDE60_RAMDUMP"))
++          {
++            s_ram_dumped = true;
++            if (FILE* fp = fopen(path, "wb"))
++            {
++              fwrite(Bus::g_ram, 1, Bus::g_ram_size, fp);
++              fclose(fp);
++            }
++          }
++        }
++
++        // per-frame transform dump for cull RE (append mode; small)
++        if (const char* path = std::getenv("PSXPORT_WIDE60_TRDUMP"))
++        {
++          if (FILE* fp = fopen(path, "a"))
++          {
++            for (const Transform& t : fl.transforms)
++              fprintf(fp, "%llu,%d,%d,%d,%08X,%08X\n", (unsigned long long)s_vblank_count, t.trx, t.try_, t.trz, t.pc,
++                      t.ra);
++            fclose(fp);
++          }
++        }
++
++        static bool s_dumped2 = false;
++        if (!s_dumped2 && fl.draws.size() > 800 && !fl.sxy_to_transform.empty())
++        {
++          if (const char* path = std::getenv("PSXPORT_WIDE60_DUMP2"))
++          {
++            s_dumped2 = true;
++            if (FILE* fp = fopen(path, "w"))
++            {
++              for (const auto& [val, tid] : fl.sxy_to_transform)
++                fprintf(fp, "sxy,%d,%d,%u\n", static_cast<s16>(val & 0xFFFF), static_cast<s16>(val >> 16), tid);
++              VertexPos vp[MAX_DRAW_VERTICES];
++              for (const DrawRef& d : fl.draws)
++              {
++                const VideoThreadCommand* c = reinterpret_cast<const VideoThreadCommand*>(&fl.buf[d.buf_offset]);
++                const u32 n = GetVertices(c, vp);
++                for (u32 i = 0; i < n; i++)
++                  fprintf(fp, "vert,%d,%d,%u\n", vp[i].x - d.off_x, vp[i].y - d.off_y, static_cast<u32>(c->type));
++              }
++              fclose(fp);
++            }
++          }
++        }
 +      }
 +    }
 +  }
@@ -882,7 +1178,96 @@
 +}
 +
 +} // namespace Wide60
---- a/src/core/CMakeLists.txt	2026-06-12 20:51:15.091863178 +0300
+--- a/src/core/gte.cpp	2026-06-12 21:28:30.918309813 +0300
++++ b/src/core/gte.cpp	2026-06-12 21:13:42.117842022 +0300
+@@ -5,6 +5,7 @@
+ #include "cpu_core.h"
+ #include "cpu_core_private.h"
+ #include "cpu_pgxp.h"
++#include "gpu_wide60.h"
+ #include "host.h"
+ #include "settings.h"
+ 
+@@ -437,6 +438,16 @@
+     }
+     break;
+ 
++    case 37: // TRX
++    case 38: // TRY
++    case 39: // TRZ
++    {
++      if (Wide60::IsEnabled()) [[unlikely]]
++        Wide60::OnGTETranslationWrite(index, value, CPU::g_state.pc, CPU::g_state.regs.ra);
++      REGS.r32[index] = value;
++    }
++    break;
++
+     default:
+     {
+       // written as-is, 2x16 or 1x32 bits
+--- a/src/core/cpu_core.cpp	2026-06-12 21:28:30.911309724 +0300
++++ b/src/core/cpu_core.cpp	2026-06-12 21:22:25.040627657 +0300
+@@ -7,6 +7,7 @@
+ #include "cpu_core_private.h"
+ #include "cpu_disasm.h"
+ #include "cpu_pgxp.h"
++#include "gpu_wide60.h"
+ #include "gte.h"
+ #include "host.h"
+ #include "pcdrv.h"
+@@ -939,6 +940,18 @@
+     TracePrintInstruction();
+ #endif
+ 
++  // psxport RE aid: log $a0/$a1 whenever a given PC executes
++  // (PSXPORT_TRACE_PC=<hex>, interpreter only)
++  if (Wide60::IsEnabled()) [[unlikely]]
++  {
++    static const u32 trace_pc = []() {
++      const char* v = std::getenv("PSXPORT_TRACE_PC");
++      return v ? static_cast<u32>(std::strtoul(v, nullptr, 16)) : 0u;
++    }();
++    if (trace_pc != 0 && g_state.current_instruction_pc == trace_pc) [[unlikely]]
++      Wide60::OnTracePCHit(g_state.current_instruction_pc, g_state.regs.a0, g_state.regs.a1, g_state.regs.ra);
++  }
++
+   // Skip nops. Makes PGXP-CPU quicker, but also the regular interpreter.
+   if (inst.bits == 0)
+     return;
+@@ -1948,9 +1961,15 @@
+           {
+             StallUntilGTEComplete();
+ 
+-            const u32 value = GTE::ReadRegister(static_cast<u32>(inst.r.rd.GetValue()));
++            const u32 rd = static_cast<u32>(inst.r.rd.GetValue());
++            const u32 value = GTE::ReadRegister(rd);
+             WriteRegDelayed(inst.r.rt, value);
+ 
++            // SXY0/1/2 reads: the value is a packed screen coord that will be
++            // written into a prim (wide60 links it to the producing transform)
++            if (rd >= 12 && rd <= 14 && Wide60::IsEnabled()) [[unlikely]]
++              Wide60::OnSXYStore(value);
++
+             if constexpr (pgxp_mode >= PGXPMode::Memory)
+               PGXP::CPU_MFC2(inst, value);
+           }
+@@ -2030,9 +2049,14 @@
+         MemoryBreakpointCheck<MemoryAccessType::Write>(addr);
+       }
+ 
+-      const u32 value = GTE::ReadRegister(ZeroExtend32(static_cast<u8>(inst.i.rt.GetValue())));
++      const u32 rt = ZeroExtend32(static_cast<u8>(inst.i.rt.GetValue()));
++      const u32 value = GTE::ReadRegister(rt);
+       WriteMemoryWord(addr, value);
+ 
++      // SXY0/1/2 stores are projected screen coords destined for prims
++      if (rt >= 12 && rt <= 14 && Wide60::IsEnabled()) [[unlikely]]
++        Wide60::OnSXYStore(value);
++
+       if constexpr (pgxp_mode >= PGXPMode::Memory)
+         PGXP::CPU_SWC2(inst, addr, value);
+     }
+--- a/src/core/CMakeLists.txt	2026-06-12 21:28:30.907309673 +0300
 +++ b/src/core/CMakeLists.txt	2026-06-12 20:03:07.665735074 +0300
 @@ -70,6 +70,8 @@
    gpu_dump.cpp
@@ -893,8 +1278,8 @@
    gpu_hw.cpp
    gpu_hw.h
    gpu_hw_shadergen.cpp
---- a/src/duckstation-regtest/regtest_host.cpp	2026-06-12 20:51:15.177864277 +0300
-+++ b/src/duckstation-regtest/regtest_host.cpp	2026-06-12 20:03:30.450006013 +0300
+--- a/src/duckstation-regtest/regtest_host.cpp	2026-06-12 21:28:31.007192690 +0300
++++ b/src/duckstation-regtest/regtest_host.cpp	2026-06-12 21:17:03.557493874 +0300
 @@ -9,6 +9,7 @@
  #include "core/fullscreenui.h"
  #include "core/fullscreenui_widgets.h"
@@ -903,21 +1288,33 @@
  #include "core/gpu.h"
  #include "core/gpu_backend.h"
  #include "core/host.h"
-@@ -844,6 +845,7 @@
+@@ -844,6 +845,8 @@
    std::fprintf(stderr, "  -frames: Sets the number of frames to execute.\n");
    std::fprintf(stderr, "  -inputscript <path>: Replays pad 1 input from a script file.\n"
                         "    Lines of '<start_frame> <end_frame> <Button>' (digital pad button names).\n");
 +  std::fprintf(stderr, "  -wide60: Enables the wide60 frame-interpolation layer.\n");
++  std::fprintf(stderr, "  -loadstate <path>: Loads a save state after boot.\n");
    std::fprintf(stderr, "  -gpudump <path>: Records a GPU dump (.psxgpu) to the given path.\n");
    std::fprintf(stderr, "  -gpudumpstart <frame>: Frame number to start the GPU dump at.\n");
    std::fprintf(stderr, "  -gpudumpframes <n>: Number of frames to record in the GPU dump.\n");
-@@ -929,6 +931,11 @@
+@@ -929,6 +932,22 @@
          Core::SetBaseStringSettingValue("Pad1", "Type", "DigitalController");
          continue;
        }
 +      else if (CHECK_ARG("-wide60"))
 +      {
 +        Wide60::SetEnabled(true);
++        continue;
++      }
++      else if (CHECK_ARG_PARAM("-loadstate"))
++      {
++        AutoBoot(autoboot)->save_state = argv[++i];
++        continue;
++      }
++      else if (CHECK_ARG("-widescreen"))
++      {
++        Core::SetBaseBoolSettingValue("GPU", "WidescreenHack", true);
++        Core::SetBaseStringSettingValue("Display", "AspectRatio", "16:9");
 +        continue;
 +      }
        else if (CHECK_ARG_PARAM("-gpudump"))

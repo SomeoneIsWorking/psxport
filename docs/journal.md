@@ -1,5 +1,36 @@
 # Debug / progress journal
 
+## 2026-06-12 — per-game tier started: GTE tagging + Tomba 2 cull-cone patch (user repro fixed)
+- **Tomba 2 fisherman culling RE'd and patched.** Engine culls objects against a view
+  cone narrower than the screen (six `slti $v0,$v1,0x350..0x370` threshold sites in the
+  overlay enqueue function ~0x80077100-0x800776E0; v1 = cos-scaled dot/distance, below
+  threshold = culled). Pokes in patches/tomba2/cull-widen.md scale thresholds by ~0.72:
+  13 objects drawn vs 5 at the repro savestate, walk pop-ins 12 -> 5. Applied via new
+  PSXPORT_POKE env (every-vblank RAM pokes, conditional "old:new" form for overlay
+  safety) — the prototype of the per-game patch layer.
+- RE toolchain built into the fork (all env-gated): -loadstate / -widescreen regtest
+  flags, PSXPORT_TRACE_PC/-OUT (interpreter PC-hit logger: a0/a1/ra per hit + vblank),
+  PSXPORT_WIDE60_RAMDUMP (2MB RAM snapshot for capstone disassembly offline),
+  PSXPORT_WIDE60_TRDUMP (per-frame GTE transforms with writer pc/ra). Workflow that
+  found the cull: trace draw-object entry (0x8003CCA4) per frame -> diff drawn-object
+  sets across a scripted walk -> found live enqueue path (0x8007763C variant; NB the
+  0x8007703C sibling never runs in this scene) -> disassemble backwards to the cone test.
+- **GTE transform tagging tier (in progress):** TRX/TRY/TRZ ctc2 writes hooked (gte.cpp)
+  = object world transforms: Tomba 2 has 110-125/frame, 100% frame-to-frame continuity
+  (nearest-TR) — object identity is real. Linking transforms to prims: swc2/mfc2 SXY
+  hooks keyed by VALUE (Tomba 2 memcpys prims from scratch buffers, so addresses don't
+  survive; the packed coord word does). Status: only ~12% of draws tagged even with a
+  +-2px probe (game nudges coords post-projection; demo tunnel mesh appears to be
+  CPU-computed, not per-vertex GTE). Needs more work before it can drive matching.
+- Matcher: added motion-coherence filter (matches whose displacement deviates >12px
+  from the local median of +-3 arena-order neighbours snap instead of lerping) — kills
+  ~8 wrong pairs/frame on Crash Bash, match rate stays 97%. Aimed at the user-reported
+  vertex flicker; user verification pending.
+- Tomba 2 in-engine (demo, real gameplay): generic matcher ~96% (1132/1172 typical).
+  User-verified 60fps in the Qt GUI. Note: regtest headless to frame <12000 is all FMV
+  for Tomba (draws=0) — gameplay tests need -loadstate or frames >20500.
+- User direction: per-game quality (RE) is the priority, not generic-only.
+
 ## 2026-06-12 — REAL-TIME 60fps working in-emulator (patch 0002); user-verified on Tomba 2
 - `gpu_wide60.{h,cpp}` in the fork: captures each logic frame's backend command list
   (tee at `GPUBackend::PushCommand`, draws carry DMA src addr + E5 offset from the GP0
