@@ -1,5 +1,25 @@
 # Debug / progress journal
 
+## 2026-06-12 — oracle running; Crash Bash menu measured at 30 fps
+- DuckStation regtest builds (prebuilt deps release-20260526 in `dep/prebuilt/`; system
+  `extra-cmake-modules` required). Three fixes needed, kept as
+  `patches/duckstation/0001-*.patch` (submodule gitlink stays clean upstream — apply
+  patches after `submodule update`, see patches/duckstation/README.md).
+- **No retail BIOS on this machine.** Using **OpenBIOS** (PCSX-Redux's open-source BIOS):
+  downloaded from pcsx-redux GitHub Actions artifact "OpenBIOS" (gh api, needs auth),
+  installed to `~/.local/share/duckstation/bios/openbios.bin`. Crash Bash boots fine with
+  it (no fast-boot; menu reached ~frame 3500-4000). Keep a copy in `scratch/bios/`.
+- GPU dump pipeline verified end-to-end: `duckstation-regtest -gpudump <path>
+  -gpudumpstart N -gpudumpframes M -- <chd>` → `.psxgpu.zst` → `zstd -d` →
+  `tools/gpudump_stats.py` (counts draw cmds/frame, hashes display lists, infers logic
+  rate from identical-frame runs).
+- **Measured: Crash Bash main menu renders every other vblank → 30 fps menu logic**,
+  ~430 draw cmds per logic frame, all frames distinct (sequence: 0,429,0,430,...).
+  Gameplay rate unknown — needs controller input to reach a minigame (regtest has no
+  input mechanism yet; next fork feature: scripted input or memcard/savestate boot).
+- Log level names are case-sensitive (`-log Info`, not `info`).
+- regtest run perf: ~3000 emulated FPS headless software renderer — 4000 frames ≈ 1.4 s.
+
 ## 2026-06-12 — scope change #2: generic "wide60" layer (see CLAUDE.md)
 - Refined goal: a *reusable* widescreen+60fps system for PSX games, logic untouched,
   per-game RE minimized. Architecture = generic tier (primitive-level display-list

@@ -1,0 +1,114 @@
+diff --git a/src/duckstation-regtest/regtest_host.cpp b/src/duckstation-regtest/regtest_host.cpp
+index f48a9ad..c10a7ea 100644
+--- a/src/duckstation-regtest/regtest_host.cpp
++++ b/src/duckstation-regtest/regtest_host.cpp
+@@ -43,9 +43,13 @@
+ 
+ #include "fmt/format.h"
+ 
++#include <condition_variable>
+ #include <csignal>
+ #include <cstdio>
+ #include <ctime>
++#include <deque>
++#include <functional>
++#include <mutex>
+ 
+ LOG_CHANNEL(Host);
+ 
+@@ -78,6 +82,9 @@ static u32 s_frames_to_run = 60 * 60;
+ static u32 s_frames_remaining = 0;
+ static u32 s_frame_dump_interval = 0;
+ static std::string s_dump_base_directory;
++static std::string s_gpu_dump_path;
++static u32 s_gpu_dump_start_frame = 0;
++static u32 s_gpu_dump_num_frames = 1;
+ 
+ bool RegTestHost::InitializeFoldersAndConfig(Error* error)
+ {
+@@ -323,6 +330,14 @@ void Host::PumpMessagesOnCoreThread()
+ {
+   RegTestHost::ProcessCoreThreadEvents();
+ 
++  if (!s_gpu_dump_path.empty() && (s_frames_to_run - s_frames_remaining) == s_gpu_dump_start_frame)
++  {
++    if (!System::StartRecordingGPUDump(s_gpu_dump_path.c_str(), s_gpu_dump_num_frames))
++      ERROR_LOG("Failed to start GPU dump to '{}'", s_gpu_dump_path);
++    else
++      INFO_LOG("Started GPU dump to '{}' ({} frames)", s_gpu_dump_path, s_gpu_dump_num_frames);
++  }
++
+   s_frames_remaining--;
+   if (s_frames_remaining == 0)
+   {
+@@ -754,6 +769,9 @@ void RegTestHost::PrintCommandLineHelp(const char* progname)
+   std::fprintf(stderr, "  -dumpdir: Set frame dump base directory (will be dumped to basedir/gametitle).\n");
+   std::fprintf(stderr, "  -dumpinterval: Dumps every N frames.\n");
+   std::fprintf(stderr, "  -frames: Sets the number of frames to execute.\n");
++  std::fprintf(stderr, "  -gpudump <path>: Records a GPU dump (.psxgpu) to the given path.\n");
++  std::fprintf(stderr, "  -gpudumpstart <frame>: Frame number to start the GPU dump at.\n");
++  std::fprintf(stderr, "  -gpudumpframes <n>: Number of frames to record in the GPU dump.\n");
+   std::fprintf(stderr, "  -log <level>: Sets the log level. Defaults to verbose.\n");
+   std::fprintf(stderr, "  -console: Enables console logging output.\n");
+   std::fprintf(stderr, "  -pgxp: Enables PGXP.\n");
+@@ -827,6 +845,33 @@ bool RegTestHost::ParseCommandLineParameters(int argc, char* argv[], std::option
+ 
+         continue;
+       }
++      else if (CHECK_ARG_PARAM("-gpudump"))
++      {
++        s_gpu_dump_path = argv[++i];
++        if (s_gpu_dump_path.empty())
++        {
++          ERROR_LOG("Invalid GPU dump path specified.");
++          return false;
++        }
++
++        continue;
++      }
++      else if (CHECK_ARG_PARAM("-gpudumpstart"))
++      {
++        s_gpu_dump_start_frame = StringUtil::FromChars<u32>(argv[++i]).value_or(0);
++        continue;
++      }
++      else if (CHECK_ARG_PARAM("-gpudumpframes"))
++      {
++        s_gpu_dump_num_frames = StringUtil::FromChars<u32>(argv[++i]).value_or(0);
++        if (s_gpu_dump_num_frames == 0)
++        {
++          ERROR_LOG("Invalid GPU dump frame count specified: {}", argv[i]);
++          return false;
++        }
++
++        continue;
++      }
+       else if (CHECK_ARG_PARAM("-log"))
+       {
+         std::optional<Log::Level> level = Settings::ParseLogLevelName(argv[++i]);
+@@ -959,9 +1004,9 @@ int main(int argc, char* argv[])
+   CrashHandler::Install(&Bus::CleanupMemoryMap);
+ 
+   Error error;
+-  if (!Core::PerformEarlyHardwareChecks(&error) || !Core::ProcessStartup(&error))
++  if (!Core::PerformEarlyHardwareChecks(&error))
+   {
+-    std::fprintf(stderr, "ERROR: ProcessStartup() failed: %s\n", error.GetDescription().c_str());
++    std::fprintf(stderr, "ERROR: PerformEarlyHardwareChecks() failed: %s\n", error.GetDescription().c_str());
+     return EXIT_FAILURE;
+   }
+ 
+@@ -971,6 +1016,14 @@ int main(int argc, char* argv[])
+     return EXIT_FAILURE;
+   }
+ 
++  // Must come after InitializeFoldersAndConfig(): Achievements::ProcessStartup() reads
++  // the base settings layer, which does not exist before the config is initialized.
++  if (!Core::ProcessStartup(&error))
++  {
++    std::fprintf(stderr, "ERROR: ProcessStartup() failed: %s\n", error.GetDescription().c_str());
++    return EXIT_FAILURE;
++  }
++
+   std::optional<SystemBootParameters> autoboot;
+   if (!RegTestHost::ParseCommandLineParameters(argc, argv, autoboot))
+     return EXIT_FAILURE;
