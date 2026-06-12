@@ -1,4 +1,4 @@
---- a/src/core/gpu.cpp	2026-06-12 21:28:31.006310935 +0300
+--- a/src/core/gpu.cpp	2026-06-12 21:34:24.926823196 +0300
 +++ b/src/core/gpu.cpp	2026-06-12 20:30:52.923625469 +0300
 @@ -8,6 +8,7 @@
  #include "dma.h"
@@ -87,7 +87,7 @@
          const u32 command = FifoPeek(0) >> 24;
          if (s_GP0_command_handler_table[command]())
            continue;
---- a/src/core/gpu_backend.cpp	2026-06-12 21:28:30.917309801 +0300
+--- a/src/core/gpu_backend.cpp	2026-06-12 21:34:24.847822188 +0300
 +++ b/src/core/gpu_backend.cpp	2026-06-12 20:02:37.051371015 +0300
 @@ -3,6 +3,7 @@
  
@@ -191,7 +191,7 @@
 +} // namespace Wide60
 --- a/src/core/gpu_wide60.cpp	1970-01-01 02:00:00.000000000 +0200
 +++ b/src/core/gpu_wide60.cpp	1970-01-01 02:00:00.000000000 +0200
-@@ -0,0 +1,986 @@
+@@ -0,0 +1,1066 @@
 +// psxport "wide60" layer. See gpu_wide60.h for the high-level description.
 +//
 +// Method (validated offline against GPU dumps, tools/interp_dump.py in psxport):
@@ -293,6 +293,11 @@
 +// displacement deviates from the local median get snapped instead.
 +static constexpr s32 COHERENCE_WINDOW = 3;   // +-N matched neighbours
 +static constexpr s32 COHERENCE_TOLERANCE = 12;
++// GTE-tagged prims carry real object identity (world-space transform
++// continuity), so their pairing tolerates much larger screen motion than the
++// heuristic gate, and bypasses the coherence filter.
++static constexpr s32 TRANSFORM_MATCH_RANGE = 4096; // max TR L1 delta = same object
++static constexpr s32 TAGGED_DISPLACEMENT_GATE = 160;
 +
 +static bool s_enabled = false;
 +static bool s_replaying = false;
@@ -941,6 +946,79 @@
 +  }
 +  for (DrawRef* d : outliers)
 +    d->match = -1;
++
++  // --- per-game tier: object-identity matching for GTE-tagged prims ----------
++  // Match objects across frames by world-transform continuity (mutual nearest
++  // TR), then pair each matched object's prims by capture order + token. This
++  // overrides the heuristic pairing for the dynamic objects (characters), the
++  // main source of wrong-pair flicker, and tolerates fast motion.
++  if (!cur.transforms.empty() && !prev.transforms.empty())
++  {
++    const auto nearest = [](const Transform& t, const std::vector<Transform>& list) -> s32 {
++      s32 best = -1, best_d = TRANSFORM_MATCH_RANGE;
++      for (size_t i = 0; i < list.size(); i++)
++      {
++        const s32 d =
++          std::abs(t.trx - list[i].trx) + std::abs(t.try_ - list[i].try_) + std::abs(t.trz - list[i].trz);
++        if (d < best_d)
++        {
++          best_d = d;
++          best = static_cast<s32>(i);
++        }
++      }
++      return best;
++    };
++    std::vector<s32> cur_to_prev(cur.transforms.size());
++    for (size_t i = 0; i < cur.transforms.size(); i++)
++    {
++      const s32 p = nearest(cur.transforms[i], prev.transforms);
++      // require mutual nearest so two passing objects don't swap identities
++      cur_to_prev[i] =
++        (p >= 0 && nearest(prev.transforms[static_cast<size_t>(p)], cur.transforms) == static_cast<s32>(i)) ? p : -1;
++    }
++
++    // group prev draws by transform, in capture order
++    std::unordered_map<s32, std::vector<u32>> prev_by_tf;
++    for (u32 i = 0; i < prev.draws.size(); i++)
++    {
++      if (prev.draws[i].transform >= 0)
++        prev_by_tf[prev.draws[i].transform].push_back(i);
++    }
++
++    std::unordered_map<s32, u32> consumed; // cur transform -> prims paired so far
++    VertexPos tpv[MAX_DRAW_VERTICES], tcv[MAX_DRAW_VERTICES];
++    for (DrawRef& d : cur.draws)
++    {
++      if (d.transform < 0 || cur_to_prev[static_cast<size_t>(d.transform)] < 0)
++        continue;
++      const auto it = prev_by_tf.find(cur_to_prev[static_cast<size_t>(d.transform)]);
++      if (it == prev_by_tf.end())
++        continue;
++      const std::vector<u32>& candidates = it->second;
++      u32& pos = consumed[d.transform];
++      // advance to the next candidate with a matching token (animation can
++      // add/remove prims; token equality keeps vertex correspondence sane)
++      while (pos < candidates.size() && prev.draws[candidates[pos]].token != d.token)
++        pos++;
++      if (pos >= candidates.size())
++        continue;
++      const u32 pi = candidates[pos++];
++
++      const VideoThreadCommand* pc = reinterpret_cast<const VideoThreadCommand*>(&prev.buf[prev.draws[pi].buf_offset]);
++      const VideoThreadCommand* cc = reinterpret_cast<const VideoThreadCommand*>(&cur.buf[d.buf_offset]);
++      const u32 pn = GetVertices(pc, tpv);
++      if (pn == 0 || pn != GetVertices(cc, tcv))
++        continue;
++      const s32 dox = prev.draws[pi].off_x - d.off_x, doy = prev.draws[pi].off_y - d.off_y;
++      s32 disp = 0;
++      for (u32 i = 0; i < pn; i++)
++        disp = std::max(disp, std::abs(tpv[i].x - dox - tcv[i].x) + std::abs(tpv[i].y - doy - tcv[i].y));
++      if (disp <= TAGGED_DISPLACEMENT_GATE)
++        d.match = static_cast<s32>(pi);
++      else
++        d.match = -1; // identity says same object but geometry jumped: snap
++    }
++  }
 +}
 +
 +// --- replay -------------------------------------------------------------------
@@ -1094,11 +1172,12 @@
 +      {
 +        const FrameCapture& fl = s_frames[s_last];
 +        const FrameCapture& fp = s_frames[s_prev];
-+        u32 matched = 0, tagged = 0;
++        u32 matched = 0, tagged = 0, tagged_matched = 0;
 +        for (const DrawRef& d : fl.draws)
 +        {
 +          matched += (d.match >= 0);
 +          tagged += (d.transform >= 0);
++          tagged_matched += (d.transform >= 0 && d.match >= 0);
 +        }
 +        // transform continuity: cur transforms with a near (L1<4096) world
 +        // position in prev = matchable object identity
@@ -1114,8 +1193,9 @@
 +            }
 +          }
 +        }
-+        DEV_LOG("wide60: lerp frame, gap={}, draws={}, matched={}, tagged={}, transforms={} (continuous={}), sxy={}",
-+                s_pending_gap, fl.draws.size(), matched, tagged, fl.transforms.size(), continuous,
++        DEV_LOG("wide60: lerp frame, gap={}, draws={}, matched={}, tagged={} (matched={}), transforms={} "
++                "(continuous={}), sxy={}",
++                s_pending_gap, fl.draws.size(), matched, tagged, tagged_matched, fl.transforms.size(), continuous,
 +                fl.sxy_to_transform.size());
 +
 +        // one-shot RAM dump for offline disassembly of overlay-loaded code
@@ -1178,7 +1258,7 @@
 +}
 +
 +} // namespace Wide60
---- a/src/core/gte.cpp	2026-06-12 21:28:30.918309813 +0300
+--- a/src/core/gte.cpp	2026-06-12 21:34:24.849822214 +0300
 +++ b/src/core/gte.cpp	2026-06-12 21:13:42.117842022 +0300
 @@ -5,6 +5,7 @@
  #include "cpu_core.h"
@@ -1205,7 +1285,7 @@
      default:
      {
        // written as-is, 2x16 or 1x32 bits
---- a/src/core/cpu_core.cpp	2026-06-12 21:28:30.911309724 +0300
+--- a/src/core/cpu_core.cpp	2026-06-12 21:34:24.843822137 +0300
 +++ b/src/core/cpu_core.cpp	2026-06-12 21:22:25.040627657 +0300
 @@ -7,6 +7,7 @@
  #include "cpu_core_private.h"
@@ -1267,7 +1347,7 @@
        if constexpr (pgxp_mode >= PGXPMode::Memory)
          PGXP::CPU_SWC2(inst, addr, value);
      }
---- a/src/core/CMakeLists.txt	2026-06-12 21:28:30.907309673 +0300
+--- a/src/core/CMakeLists.txt	2026-06-12 21:34:24.840822099 +0300
 +++ b/src/core/CMakeLists.txt	2026-06-12 20:03:07.665735074 +0300
 @@ -70,6 +70,8 @@
    gpu_dump.cpp
@@ -1278,7 +1358,7 @@
    gpu_hw.cpp
    gpu_hw.h
    gpu_hw_shadergen.cpp
---- a/src/duckstation-regtest/regtest_host.cpp	2026-06-12 21:28:31.007192690 +0300
+--- a/src/duckstation-regtest/regtest_host.cpp	2026-06-12 21:34:24.926823196 +0300
 +++ b/src/duckstation-regtest/regtest_host.cpp	2026-06-12 21:17:03.557493874 +0300
 @@ -9,6 +9,7 @@
  #include "core/fullscreenui.h"

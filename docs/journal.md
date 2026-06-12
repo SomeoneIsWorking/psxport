@@ -1,5 +1,22 @@
 # Debug / progress journal
 
+## 2026-06-12 — per-game object-identity interpolation LIVE (both games)
+- MatchFrames now has the per-game pass: objects matched across frames by mutual-nearest
+  GTE translation (TRANSFORM_MATCH_RANGE 4096 L1), each matched object's prims paired in
+  capture order with token equality, gate 160px (vs 48 generic), overriding the heuristic
+  pairing. Identity-says-same but geometry-jumped pairs snap (match=-1), they don't fall
+  back to the heuristic.
+- Coverage: Crash Bash gameplay ~38% of draws tagged (the GTE-projected 3D models — the
+  moving things that flicker), 57 objects, 100% TR continuity, ~95% of tagged matched.
+  Tomba 2 gameplay ~10% tagged (NPC models; terrain is CPU-projected — confirmed: 152/500
+  prim verts have NO recorded SXY within ±8px, so the engine projects terrain without
+  per-vertex GTE) — but those 10% are exactly the characters. ~94% of tagged matched.
+- **GTE tagging requires CPU = Interpreter** (swc2/mfc2 hooks are interpreter-only; the
+  recompiler inlines them). Without it the generic tier still works, tagging is just 0.
+  GUI users: Settings -> CPU -> Execution Mode -> Interpreter.
+- Next for coverage: hook the game's CPU-side projection output path per game (Tomba 2
+  terrain), rotation-matrix tracking for camera-motion-aware gates, per-game config files.
+
 ## 2026-06-12 — per-game tier started: GTE tagging + Tomba 2 cull-cone patch (user repro fixed)
 - **Tomba 2 fisherman culling RE'd and patched.** Engine culls objects against a view
   cone narrower than the screen (six `slti $v0,$v1,0x350..0x370` threshold sites in the
