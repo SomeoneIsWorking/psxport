@@ -6,9 +6,29 @@
 
 #include <cstring>
 
+namespace {
+uint32_t s_render_hits = 0;
+
+int RenderEntryHeartbeat(uint32_t, uint32_t*, uint32_t*)
+{
+  s_render_hits++;
+  return PSXPORT_HOOK_CONTINUE;
+}
+} // namespace
+
 void Tomba2_Install()
 {
-  // overrides registered here as they are RE'd
+  // Heartbeat: per-object draw dispatch entry (RE'd from the live game;
+  // overlay code, hence the instruction signature: addiu sp,sp,-0x20).
+  // Nonzero hits per frame = the in-engine render loop is alive.
+  psxport_add_hook(0x8003CCA4, 0x27BDFFE0, RenderEntryHeartbeat);
+}
+
+uint32_t Tomba2_GetAndResetRenderHits()
+{
+  const uint32_t v = s_render_hits;
+  s_render_hits = 0;
+  return v;
 }
 
 uint16_t Tomba2_FrameTick(uint8_t* ram)

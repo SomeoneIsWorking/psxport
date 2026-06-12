@@ -9,7 +9,8 @@
 //   arrows = d-pad, Z/X/A/S = Cross/Circle/Square/Triangle,
 //   Enter/RShift = Start/Select, Q/W E/R = L1/L2 R1/R2,
 //   Tab = hold to fast-forward, Esc quits.
-// 14x CD loading is enabled by default (-slowcd to disable). -fastboot
+// Instant CD (data reads/seeks at PC speed, RE'd into the imported cdc.c)
+// is enabled by default; -slowcd reverts to native CD timing. -fastboot
 // (Beetle skip_bios) requires a retail BIOS: it intercepts the retail shell
 // and hangs the boot under OpenBIOS, so it is opt-in.
 // Input script lines: "<start_frame> <end_frame> <Button>" (digital pad).
@@ -19,6 +20,10 @@
 #include "games/tomba2.h"
 
 #include <SDL2/SDL.h>
+
+#include <csignal>
+#include <execinfo.h>
+#include <unistd.h>
 
 #include <cstdarg>
 #include <cstdint>
@@ -43,6 +48,7 @@ bool g_quit = false;
 bool g_fast_boot = false; // skip_bios hangs with OpenBIOS (no retail shell)
 bool g_fast_cd = true;
 bool g_ff_hold = false;      // Tab held
+bool g_repl = false;
 bool g_present_this_run = true;
 SDL_Window* g_window = nullptr;
 SDL_Renderer* g_renderer = nullptr;
@@ -57,6 +63,41 @@ uint8_t* g_ram = nullptr;
 bool g_tomba2 = false;
 uint16_t g_inject_buttons = 0; // game-module scoped injections
 bool g_module_turbo = false;   // game module requests fast-forward (load masks)
+
+// --- runtime logging -----------------------------------------------------
+// Frame-stamped events to stderr. The emulated TTY (BIOS A0:3C / B0:3D
+// putchar, used by OpenBIOS for its entire boot narrative and by many games
+// for debug prints) is captured via PC hooks on the kernel dispatchers.
+void RtLog(const char* tag, const char* msg)
+{
+  fprintf(stderr, "[%6u] %-4s %s\n", g_frame, tag, msg);
+}
+
+char g_tty_line[256];
+unsigned g_tty_len = 0;
+
+int BiosPutcharHook(uint32_t pc, uint32_t* gpr, uint32_t*)
+{
+  // A0 dispatcher: function id in t1 (reg 9); putchar arg in a0 (reg 4)
+  const uint32_t fn = gpr[9];
+  const bool is_putchar = (pc == 0xA0 && (fn == 0x3C || fn == 0x3E)) || (pc == 0xB0 && (fn == 0x3D || fn == 0x3F));
+  if (is_putchar)
+  {
+    const char ch = static_cast<char>(gpr[4]);
+    if (ch == '\n' || g_tty_len >= sizeof(g_tty_line) - 1)
+    {
+      g_tty_line[g_tty_len] = 0;
+      if (g_tty_len)
+        RtLog("tty", g_tty_line);
+      g_tty_len = 0;
+    }
+    else if (ch >= 0x20)
+    {
+      g_tty_line[g_tty_len++] = ch;
+    }
+  }
+  return PSXPORT_HOOK_CONTINUE;
+}
 
 struct InputEvent
 {
@@ -133,8 +174,10 @@ bool EnvironmentCb(unsigned cmd, void* data)
       auto* var = static_cast<retro_variable*>(data);
       if (g_fast_boot && strcmp(var->key, "beetle_psx_skip_bios") == 0)
         return (var->value = "enabled"), true;
-      if (g_fast_cd && strcmp(var->key, "beetle_psx_cd_fastload") == 0)
-        return (var->value = "14x"), true;
+      // whole-disc RAM precache: removes the threaded CD reader, whose
+      // read-ahead cond-wait wedges under instant-CD request rates
+      if (g_fast_cd && strcmp(var->key, "beetle_psx_cd_access_method") == 0)
+        return (var->value = "precache"), true;
       return false; // everything else at core defaults
     }
     default:
@@ -298,6 +341,38 @@ int16_t InputStateCb(unsigned port, unsigned device, unsigned, unsigned id)
 
 } // namespace
 
+namespace {
+int TraceHookFn(uint32_t pc, uint32_t* gpr, uint32_t*)
+{
+  fprintf(stderr, "[%6u] hook pc=%08X a0=%08X a1=%08X v0=%08X ra=%08X\n", g_frame, pc, gpr[4], gpr[5], gpr[2],
+          gpr[31]);
+  return PSXPORT_HOOK_CONTINUE;
+}
+} // namespace
+
+namespace {
+// Watchdog: SIGALRM every few seconds; if the frame counter hasn't advanced
+// since the previous alarm, the emulated machine (or the host loop) is stuck
+// — report where and die instead of hanging silently.
+volatile unsigned g_watchdog_last_frame = ~0u;
+void WatchdogAlarm(int)
+{
+  if (g_watchdog_last_frame == g_frame)
+  {
+    fprintf(stderr, "WATCHDOG: no progress since frame %u — dumping and killing\n", g_frame);
+    void* frames[24];
+    const int n = backtrace(frames, 24);
+    fprintf(stderr, "host backtrace (%d frames):\n", n);
+    backtrace_symbols_fd(frames, n, 2);
+    if (g_ram)
+      psxport_dump_cpu_state(g_ram);
+    _exit(2);
+  }
+  g_watchdog_last_frame = g_frame;
+  alarm(5);
+}
+} // namespace
+
 int main(int argc, char** argv)
 {
   const char* disc = nullptr;
@@ -320,10 +395,13 @@ int main(int argc, char** argv)
       g_system_dir = v;
     else if (strcmp(argv[i], "-play") == 0)
       g_play = true;
+    else if (strcmp(argv[i], "-repl") == 0)
+      g_repl = true;
     else if (strcmp(argv[i], "-fastboot") == 0)
       g_fast_boot = true;
     else if (strcmp(argv[i], "-slowcd") == 0)
       g_fast_cd = false;
+
     else if (argv[i][0] != '-')
       disc = argv[i];
   }
@@ -360,12 +438,18 @@ int main(int argc, char** argv)
       SDL_PauseAudioDevice(g_audio, 0);
   }
 
+  if (psxport_cd_instant < 0) // env overrides; bits: 1=seek 2=reset 4=startup 8=ackpace
+    psxport_cd_instant = g_fast_cd ? 0xF : 0;
+
   retro_set_environment(EnvironmentCb);
   retro_set_video_refresh(VideoCb);
   retro_set_audio_sample(AudioSampleCb);
   retro_set_audio_sample_batch(AudioBatchCb);
   retro_set_input_poll(InputPollCb);
   retro_set_input_state(InputStateCb);
+
+  signal(SIGALRM, WatchdogAlarm);
+  alarm(5);
 
   retro_init();
 
@@ -376,6 +460,10 @@ int main(int argc, char** argv)
     fprintf(stderr, "retro_load_game failed for %s\n", disc);
     return 1;
   }
+
+  // TTY capture on the kernel A0/B0 dispatchers (fixed kernel addresses)
+  psxport_add_hook(0xA0, 0, BiosPutcharHook);
+  psxport_add_hook(0xB0, 0, BiosPutcharHook);
 
   g_ram = static_cast<uint8_t*>(retro_get_memory_data(RETRO_MEMORY_SYSTEM_RAM));
   g_tomba2 = strstr(disc, "Tomba! 2") != nullptr;
@@ -449,7 +537,33 @@ int main(int argc, char** argv)
       p = sep ? sep + 1 : path_start + cov_ranges.back().path.size();
     }
   }
+  // debug: PSXPORT_GAMELOG=path — per-frame CSV: frame, render-hook hits
+  FILE* gamelog_fp = nullptr;
+  if (const char* env = std::getenv("PSXPORT_GAMELOG"))
+    gamelog_fp = fopen(env, "w");
+  // debug: PSXPORT_RAMHASH="interval:path" — FNV1a of RAM every N frames
+  FILE* ramhash_fp = nullptr;
+  unsigned ramhash_interval = 0;
+  if (const char* env = std::getenv("PSXPORT_RAMHASH"))
+  {
+    char* end;
+    ramhash_interval = static_cast<unsigned>(strtoul(env, &end, 10));
+    if (*end == ':')
+      ramhash_fp = fopen(end + 1, "w");
+  }
   const auto per_frame = [&]() {
+    if (gamelog_fp && g_tomba2)
+      fprintf(gamelog_fp, "%u,%u\n", g_frame, Tomba2_GetAndResetRenderHits());
+    if (ramhash_fp && g_ram && ramhash_interval && (g_frame % ramhash_interval) == 0)
+    {
+      uint64_t h = 0xcbf29ce484222325ULL;
+      for (size_t i = 0; i < 2 * 1024 * 1024; i++)
+      {
+        h ^= g_ram[i];
+        h *= 0x100000001b3ULL;
+      }
+      fprintf(ramhash_fp, "%u,%016llx\n", g_frame, (unsigned long long)h);
+    }
     for (CovRange& cr : cov_ranges)
     {
       if (g_frame == cr.start)
@@ -492,7 +606,85 @@ int main(int argc, char** argv)
     }
   };
 
-  if (g_play)
+  if (g_repl)
+  {
+    char* line = nullptr;
+    size_t cap = 0;
+    fprintf(stderr, "[repl] ready\n");
+    fflush(stderr);
+    while (getline(&line, &cap, stdin) > 0)
+    {
+      char cmd[16] = {};
+      uint32_t a = 0, b = 0;
+      char argbuf[64] = {};
+      if (sscanf(line, "%15s", cmd) != 1)
+        continue;
+      if (strcmp(cmd, "quit") == 0)
+        break;
+      else if (strcmp(cmd, "run") == 0 && sscanf(line, "%*s %u", &a) == 1)
+      {
+        const unsigned until = g_frame + a;
+        alarm(15);
+        for (; g_frame < until; g_frame++)
+        {
+          per_frame();
+          retro_run();
+        }
+        alarm(0);
+        fprintf(stderr, "[repl] at frame %u\n", g_frame);
+      }
+      else if (strcmp(cmd, "r") == 0 && sscanf(line, "%*s %x %u", &a, &b) >= 1)
+      {
+        if (!b)
+          b = 16;
+        fprintf(stderr, "[repl] %08X:", a);
+        for (uint32_t i = 0; i < b && i < 256; i++)
+          fprintf(stderr, " %02X", g_ram[(a + i) & 0x1FFFFF]);
+        fprintf(stderr, "\n");
+      }
+      else if (strcmp(cmd, "w") == 0 && sscanf(line, "%*s %x %x", &a, &b) == 2)
+      {
+        memcpy(g_ram + (a & 0x1FFFFF), &b, 4);
+        fprintf(stderr, "[repl] ok\n");
+      }
+      else if (strcmp(cmd, "w8") == 0 && sscanf(line, "%*s %x %x", &a, &b) == 2)
+      {
+        g_ram[a & 0x1FFFFF] = static_cast<uint8_t>(b);
+        fprintf(stderr, "[repl] ok\n");
+      }
+      else if (strcmp(cmd, "cd") == 0 && sscanf(line, "%*s %i", &a) == 1)
+      {
+        psxport_cd_instant = static_cast<int>(a);
+        fprintf(stderr, "[repl] cd_instant=%d\n", psxport_cd_instant);
+      }
+      else if (strcmp(cmd, "cdclog") == 0 && sscanf(line, "%*s %u", &a) == 1)
+      {
+        psxport_cdc_log = static_cast<int>(a);
+        fprintf(stderr, "[repl] cdclog=%d\n", psxport_cdc_log);
+      }
+      else if (strcmp(cmd, "trace") == 0 && sscanf(line, "%*s %x", &a) == 1)
+      {
+        psxport_add_hook(a, 0, TraceHookFn);
+        fprintf(stderr, "[repl] tracing %08X\n", a);
+      }
+      else if (strcmp(cmd, "bt") == 0)
+      {
+        psxport_dump_cpu_state(g_ram);
+      }
+      else if (strcmp(cmd, "state") == 0)
+      {
+        fprintf(stderr, "[repl] frame=%u last_pc=%08X\n", g_frame, psxport_last_pc);
+      }
+      else
+      {
+        fprintf(stderr, "[repl] ? %s", line);
+      }
+      fflush(stderr);
+      (void)argbuf;
+    }
+    free(line);
+  }
+  else if (g_play)
   {
     for (g_frame = 0; !g_quit; g_frame++)
     {

@@ -13,3 +13,6 @@ uint16_t Tomba2_FrameTick(uint8_t* ram);
 /// True while the game is in a load-mask segment (BIOS/logos) that should be
 /// fast-forwarded automatically in play mode.
 bool Tomba2_WantTurbo(const uint8_t* ram, unsigned frame);
+
+/// Debug heartbeat: render-dispatch hook hits since the last call.
+uint32_t Tomba2_GetAndResetRenderHits();

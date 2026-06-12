@@ -33,6 +33,24 @@ int psxport_on_pc(uint32_t pc, uint32_t instr, uint32_t* gpr, uint32_t* redirect
    a 512Kbit bitmap (one bit per word address). */
 extern uint8_t* psxport_cov_bitmap; /* NULL = disabled */
 
+/* Instant-CD: data reads/seeks at PC speed (CDDA/XA streaming stays native).
+   Consumed by the imported cdc.c. */
+extern int psxport_cd_instant;
+
+/* CDC command/IRQ logging to stderr (PSXPORT_CDC_LOG=1). */
+extern int psxport_cdc_log;
+
+/* Last emulated PC seen by the hook layer (watchdog diagnostics). */
+extern uint32_t psxport_last_pc;
+
+/* Live GPR file (32 GPRs + LO/HI), from the imported cpu.c. */
+uint32_t* psxport_cpu_gpr(void);
+
+/* Diagnostics: registers + heuristic MIPS stack trace (scans the emulated
+   stack for plausible return addresses: RAM text address preceded by a
+   jal/jalr). ram = 2MB main RAM. */
+void psxport_dump_cpu_state(const uint8_t* ram);
+
 #ifdef __cplusplus
 } /* extern "C" */
 

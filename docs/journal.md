@@ -1,5 +1,38 @@
 # Debug / progress journal
 
+## 2026-06-13 — instant CD + fastboot OpenBIOS: game EXEC at frame 50; runtime is driveable
+- **Boot chain now: ~50 frames to game EXEC** (retail-style ~4000, stock OpenBIOS ~700).
+  Pieces: (1) fastboot OpenBIOS (FASTBOOT=1 upstream no-shell mode, built from a
+  pcsx-redux sparse clone with mips64-linux-gnu cross gcc, FORMAT=elf32-tradlittlemips;
+  scripts/build-openbios.sh; binary committed at bios/openbios-fast.bin);
+  (2) instant-CD in the imported cdc.c, bitmask psxport_cd_instant (env
+  PSXPORT_CD_INSTANT, default 0xF): 1=instant seeks (~2000cy incl. spin-up/pause),
+  2=instant Reset (no random 0-3.25Mcy reset-seek - also a determinism hazard - and
+  10kcy completion), 4=1ms disc startup delay, 8=fast data-read pacing 7000cy/sector
+  (~64x; audio-paced CDDA/XA modes untouched); (3) beetle cd_access_method=precache
+  (whole disc to RAM) - REQUIRED: beetle's threaded CD reader cond-wait wedges under
+  instant request rates (host backtrace: CDIF_ReadRawSector/pthread_cond_wait).
+- **DEAD ENDS (do not revisit):** ack-accelerated reads (pull PSRCounter on IRQ ack)
+  desync the CDC sector pipe and wedge the BIOS bootstrap - twice. Holding the sector
+  clock while IRQ pending degrades PS_CDC_Update to tiny chunks (livelock). 1000cy/
+  sector pacing collides INT1s (consumer cannot ack between sectors). Beetle skip_bios
+  hangs OpenBIOS (intercepts the retail shell); superseded by our fastboot OpenBIOS.
+  The shell wait ("Data is acceptable", ~650 frames) was masking DiscStartupDelay.
+- **Runtime is now driveable + self-debugging:** -repl mode (stdin/FIFO: run/r/w/cd/
+  cdclog/trace/bt/state) so experiments need no rebuilds; TTY capture via PC hooks on
+  the kernel A0/B0 putchar dispatchers (OpenBIOS narrates its whole boot); CDC cmd/IRQ
+  log (PSXPORT_CDC_LOG); watchdog (SIGALRM, 5s no-frame-progress) dumps host backtrace
+  + emulated GPRs + heuristic MIPS stack scan (jal-preceded return addresses) then
+  kills. RAMHASH/GAMELOG/RAMDUMP/MEMWATCH/PCCOV env probes. Verified deterministic
+  (RAM hashes identical across runs, full instant config).
+- Tomba 2: engine running by frame ~1200 (GTE/card kernel patches logged), no hangs to
+  4000+. Heartbeat hook (0x8003CCA4) verified plumbing-wise; fires only in real
+  gameplay, which the X-mash script does not reach in this runtime (savestate support
+  is the proper fix, TODO).
+- User direction embedded in workflow: aggressive change + find-and-override on
+  breakage; debug probes over screenshots; runtime must be interactive (REPL) and
+  self-diagnosing (watchdog+stack traces). BIOS code is part of the project now.
+
 ## 2026-06-12 — runtime: hook layer + RE tooling; intro segments are LOAD MASKS
 - Hook/override layer live in the runtime: per-instruction hook point in beetle's
   interpreter (patches/beetle-psx/0001, -DPSXPORT_HOOKS), registry in

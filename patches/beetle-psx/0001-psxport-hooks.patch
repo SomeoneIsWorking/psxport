@@ -1,5 +1,128 @@
+diff --git a/mednafen/psx/cdc.c b/mednafen/psx/cdc.c
+index a84a0a4..f04f21a 100644
+--- a/mednafen/psx/cdc.c
++++ b/mednafen/psx/cdc.c
+@@ -50,6 +50,10 @@
+ 
+ #include "psx_events.h"
+ #include "irq.h"
++
++#ifdef PSXPORT_HOOKS
++#include "psxport_hooks.h"
++#endif
+ #include "cdc.h"
+ #include "spu.h"
+ 
+@@ -386,7 +390,11 @@ void PS_CDC_SetDisc(PS_CDC *cdc, bool tray_open, CDIF *cdif, const char *disc_id
+    else
+    {
+       cdc->HeaderBufValid = false;
++#ifdef PSXPORT_HOOKS
++      cdc->DiscStartupDelay = (psxport_cd_instant & 4) ? (33868800 / 1000) : ((int64_t)1000 * 33868800 / 1000);
++#else
+       cdc->DiscStartupDelay = (int64_t)1000 * 33868800 / 1000;
++#endif
+       cdc->DiscChanged = true;
+ 
+       CDIF_ReadTOC(cdc->Cur_CDIF, &cdc->toc);
+@@ -720,6 +728,10 @@ void PS_CDC_RecalcIRQ(PS_CDC *cdc)
+ 
+ void PS_CDC_WriteIRQ(PS_CDC *cdc, uint8_t V)
+ {
++#ifdef PSXPORT_HOOKS
++   if (psxport_cdc_log)
++      fprintf(stderr, "[cdc] irq %u\n", V);
++#endif
+    assert(cdc->CDCReadyReceiveCounter <= 0);
+    assert(!(cdc->IRQBuffer & 0xF));
+ 
+@@ -1575,6 +1587,16 @@ void PS_CDC_HandlePlayRead(PS_CDC *cdc)
+       speed_mul = 1;
+    }
+ 
++#ifdef PSXPORT_HOOKS
++   /* psxport instant-CD (bit 8): fast fixed read pacing for data sectors.
++      ~7000 cycles/sector (~64x) leaves the consumer's IRQ handler + DMA
++      enough headroom to acknowledge between sectors; pulling the clock on
++      ack (tried) desynchronizes the sector pipe and wedges the BIOS.
++      Audio-paced streaming modes keep native timing. */
++   if ((psxport_cd_instant & 8) && !(cdc->Mode & (MODE_CDDA | MODE_STRSND)))
++      cdc->PSRCounter += 7000;
++   else
++#endif
+    cdc->PSRCounter += 33868800 / (75 * speed_mul);
+ 
+    if(cdc->DriveStatus == DS_PLAYING)
+@@ -1671,7 +1693,6 @@ int32_t PS_CDC_Update(PS_CDC *cdc, const int32_t timestamp)
+ 
+       if(cdc->PSRCounter > 0)
+       {
+-
+          cdc->PSRCounter -= chunk_clocks;
+ 
+          if(cdc->ReportStartupDelay > 0)
+@@ -1827,6 +1848,11 @@ int32_t PS_CDC_Update(PS_CDC *cdc, const int32_t timestamp)
+                      else
+                      {
+                         const CDC_CTEntry *command = &Commands[cdc->PendingCommand];
++#ifdef PSXPORT_HOOKS
++                        if (psxport_cdc_log)
++                           fprintf(stderr, "[cdc] cmd %02X (%s) args=%d\n", cdc->PendingCommand,
++                                   command->name ? command->name : "?", cdc->ArgsReceiveIn);
++#endif
+                         next_time = command->func(cdc, cdc->ArgsReceiveIn, cdc->ArgsReceiveBuf);
+                         cdc->PendingCommandPhase = 2;
+                      }
+@@ -1941,6 +1967,8 @@ void PS_CDC_Write(PS_CDC *cdc, const int32_t timestamp, uint32_t A, uint8_t V)
+             cdc->IRQBuffer &= ~V;
+             PS_CDC_RecalcIRQ(cdc);
+ 
++
++
+             if(V & 0x80)  /* Forced CD hardware reset of some kind(interface, controller, and drive?)  Seems to take a while(relatively speaking) to complete. */
+             {
+                PS_CDC_SoftReset(cdc);
+@@ -2124,6 +2152,13 @@ int32_t PS_CDC_CalcSeekTime(PS_CDC *cdc, int32_t initial, int32_t target, bool m
+ {
+    int32_t ret = 0;
+ 
++#ifdef PSXPORT_HOOKS
++   /* psxport instant-CD: seeks (including spin-up and pause-resume penalties)
++      take ~1ms instead of modelled mechanical delays. */
++   if (psxport_cd_instant & 1)
++      return 2000; /* effectively instant */
++#endif
++
+    if(!motor_on)
+    {
+       initial = 0;
+@@ -2515,7 +2550,13 @@ int32_t PS_CDC_Command_Reset(PS_CDC *cdc, const int arg_count, const uint8_t *ar
+          cdc->SeekTarget = 0;
+          {
+             int32_t st = PS_CDC_CalcSeekTime(cdc, cdc->CurSector, cdc->SeekTarget, cdc->DriveStatus != DS_STOPPED, cdc->DriveStatus == DS_PAUSED);
++#ifdef PSXPORT_HOOKS
++            /* psxport instant-CD: no randomized mechanical reset-seek (also a
++               determinism hazard) */
++            int32_t rt = (psxport_cd_instant & 2) ? 0 : (int32_t)PSX_GetRandU32(0, 3250000);
++#else
+             int32_t rt = (int32_t)PSX_GetRandU32(0, 3250000);
++#endif
+             cdc->PSRCounter = (rt > st) ? rt : st;
+          }
+          PS_CDC_PreSeekHack(cdc, cdc->SeekTarget);
+@@ -2524,6 +2565,10 @@ int32_t PS_CDC_Command_Reset(PS_CDC *cdc, const int arg_count, const uint8_t *ar
+          cdc->StatusAfterSeek = DS_PAUSED;
+          PS_CDC_CLEAR_AIP(cdc);
+ 
++#ifdef PSXPORT_HOOKS
++         if (psxport_cd_instant & 2)
++            return(10000);
++#endif
+          return(4100000);
+       }
+    }
 diff --git a/mednafen/psx/cpu.c b/mednafen/psx/cpu.c
-index c07d4f8..1966618 100644
+index c07d4f8..1eef7b5 100644
 --- a/mednafen/psx/cpu.c
 +++ b/mednafen/psx/cpu.c
 @@ -32,6 +32,10 @@
@@ -13,7 +136,21 @@ index c07d4f8..1966618 100644
  #include "../state_helpers.h"
  #include "../math_ops.h"
  #include "../mednafen.h"
-@@ -912,8 +916,27 @@ static int32_t CPU_RunReal(PS_CPU *self, int32_t timestamp_in)
+@@ -305,6 +309,13 @@ void CPU_LightrecClear(uint32_t addr, uint32_t size)
+ 
+ const uint8_t *PSX_LoadExpansion1(void);
+ 
++#ifdef PSXPORT_HOOKS
++uint32_t* psxport_cpu_gpr(void)
++{
++   return s_cpu.GPR_full;
++}
++#endif
++
+ void CPU_Power(PS_CPU *self)
+ {
+    unsigned i;
+@@ -912,8 +923,27 @@ static int32_t CPU_RunReal(PS_CPU *self, int32_t timestamp_in)
  
     instr = ReadInstruction(&timestamp, PC);
  
