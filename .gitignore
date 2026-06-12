@@ -1,0 +1,21 @@
+# Generated recompiler output — regenerable from the ROM
+generated/
+
+# Build dirs
+build/
+build-*/
+
+# Scratch / run artifacts (see CLAUDE.md — never /tmp)
+scratch/
+
+# Local config (ROM path etc.)
+.env
+
+# ROM / disc drop-ins (never commit copyrighted assets)
+*.chd
+*.bin
+*.cue
+*.iso
+*.img
+*.exe
+*.psexe
