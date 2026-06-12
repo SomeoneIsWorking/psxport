@@ -29,6 +29,7 @@ int psxport_cd_instant = []() {
 int psxport_cdc_log = []() { const char* v = std::getenv("PSXPORT_CDC_LOG"); return (v && *v && *v != '0') ? 1 : 0; }();
 
 uint32_t psxport_last_pc = 0;
+unsigned psxport_frame = 0;
 
 extern "C" int psxport_on_pc(uint32_t pc, uint32_t instr, uint32_t* gpr, uint32_t* redirect_pc)
 {

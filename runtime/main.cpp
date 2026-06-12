@@ -552,6 +552,7 @@ int main(int argc, char** argv)
       ramhash_fp = fopen(end + 1, "w");
   }
   const auto per_frame = [&]() {
+    psxport_frame = g_frame;
     if (gamelog_fp && g_tomba2)
       fprintf(gamelog_fp, "%u,%u\n", g_frame, Tomba2_GetAndResetRenderHits());
     if (ramhash_fp && g_ram && ramhash_interval && (g_frame % ramhash_interval) == 0)

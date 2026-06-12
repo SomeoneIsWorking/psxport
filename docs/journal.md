@@ -1,5 +1,30 @@
 # Debug / progress journal
 
+## 2026-06-13 — read pacing root-caused via driven debugging; full fast boot chain works
+- **The "stuck on Whoopee logo" class is solved.** Chain of findings, all via the REPL/
+  trace/CDC-log tooling (no screenshot-guessing until final calibration):
+  (1) the "frozen vsync counter" was a misread — the game main loop RESETS its counter
+  each frame; identical bt = normal idle. (2) pad input verified delivered end-to-end
+  (kernel pad buffer 0x8010246F shows pressed bits). (3) the logo persisting was real:
+  frame-stamped CDC logs showed bit-8 fast read pacing made the game's chunked ReadN
+  loader retry forever (577 cmds vs 284 healthy; sectors outran per-vsync chunk
+  accounting). (4) FIX: fast pacing is consumer-conditional — next sector in 7000cy
+  only if the previous data IRQ is ACKed, else native gap. Also: pacing applies to
+  ReadN only (new psxport_read_is_readn; games stream audio manually over ReadS where
+  sector pacing IS the audio clock — accelerating it wedges stream-end detection).
+- Result, fastboot BIOS + full instant CD (default): EXEC f~50, logo jingle f~679,
+  in-engine cutscene stream (Setmode+ReadS) at **f1778** (stock+native: f2833; original
+  chain: ~4000+). RAM-hash deterministic. Remaining logo time is jingle-audio-bound
+  (a per-game override could skip the jingle itself — future).
+- CDC log lines now frame-stamped (psxport_frame). Reliable progress markers: cutscene
+  start = "Setmode+ReadS" pair; load activity = ReadN/Pause cycles. The stream clock at
+  0x8011824C is NOT a valid logo-end detector (byte-wraps, resets — misled two rounds).
+- DEAD END (again, harder): consumer-pacing via pulling PSRCounter on ack — desyncs the
+  pipe. The working form is forward-only conditional scheduling at delivery time.
+- Driving pattern that worked: wide60rt -repl under a FIFO + holder process; run in
+  chunks; bt/state/r/trace between; restart cheap (boot ~1s). Sessions are the new
+  default workflow for game RE.
+
 ## 2026-06-13 — instant CD + fastboot OpenBIOS: game EXEC at frame 50; runtime is driveable
 - **Boot chain now: ~50 frames to game EXEC** (retail-style ~4000, stock OpenBIOS ~700).
   Pieces: (1) fastboot OpenBIOS (FASTBOOT=1 upstream no-shell mode, built from a

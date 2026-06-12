@@ -43,6 +43,9 @@ extern int psxport_cdc_log;
 /* Last emulated PC seen by the hook layer (watchdog diagnostics). */
 extern uint32_t psxport_last_pc;
 
+/* Host frame counter (set by the frontend; stamps debug logs). */
+extern unsigned psxport_frame;
+
 /* Live GPR file (32 GPRs + LO/HI), from the imported cpu.c. */
 uint32_t* psxport_cpu_gpr(void);
 
