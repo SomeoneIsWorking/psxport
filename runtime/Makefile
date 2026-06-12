@@ -36,7 +36,9 @@ CFLAGS_COMMON := -O2 -g -fwrapv -fsigned-char $(INCFLAGS) -I$(BEETLE)/include \
                  -include $(BEETLE)/include/debug.h $(DEFINES) $(WARNINGS)
 CFLAGS   := $(CFLAGS_COMMON)
 CXXFLAGS := $(CFLAGS_COMMON) -std=c++14
-LDFLAGS  := -lpthread -ldl -lrt
+SDL_CFLAGS := $(shell pkg-config --cflags sdl2)
+SDL_LIBS  := $(shell pkg-config --libs sdl2)
+LDFLAGS  := -lpthread -ldl -lrt $(SDL_LIBS)
 
 # frontend-side libretro-common implementations the core expects from the host
 LRC := $(BEETLE)/libretro-common
@@ -66,7 +68,7 @@ wide60rt: $(OBJS)
 
 $(OBJDIR)/main.o: main.cpp
 	@mkdir -p $(dir $@)
-	$(CXX) -c $(CXXFLAGS) -o $@ $<
+	$(CXX) -c $(CXXFLAGS) $(SDL_CFLAGS) -o $@ $<
 
 $(OBJDIR)/%.o: %.c
 	@mkdir -p $(dir $@)
