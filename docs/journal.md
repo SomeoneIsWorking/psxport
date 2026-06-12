@@ -22,9 +22,15 @@
   mismatches). Output replays cleanly through the real renderer (regtest replay mode);
   earlier screen-space-key version produced giant stretched-polygon artifacts, v2 has
   none visible. Comparison video: scratch/screenshots/crashbash-30v60.mp4.
-- Next: longer captures for a better demo; Tomba 2 with SRCADDR (verify arena pattern
-  generalizes); then the real-time implementation of this matcher in the fork
-  (interpolated present at vblank between game flips).
+- Tomba 2 with SRCADDR: arenas also double-buffered (d1 overlap 0%) but slots NOT
+  stable at distance 2 (22.3% — allocator churns with streaming tunnel geometry), so
+  slot-based ground truth is Crash-Bash-specific, not universal. The 51% "consistency"
+  measured for Tomba 2 is against an invalid truth — ignore it. Fingerprint alignment
+  covers 90.5%; visual check of interpolated frames is clean (no stretched polys).
+  Videos: scratch/screenshots/{crashbash,tomba2}-30v60.mp4.
+- Next: real-time implementation of this matcher in the fork (synthesize+present the
+  interpolated frame at the vblank between game flips); widescreen tier; per-game
+  validation tooling that doesn't depend on slot stability.
 
 ## 2026-06-12 — both games measured: 30 fps presented framerate (gameplay)
 - Added `-inputscript` to regtest (in patch 0001): scripted pad-1 digital input,
