@@ -30,7 +30,17 @@ DuckStation is **CC-BY-NC-ND-4.0**: a modified fork is for local/personal use an
 NOT be distributed (binary or source). Game patches themselves (.cht/PPF) are fine to
 publish. Keep fork changes in our submodule checkout / patch files in-repo.
 
+## PC port runtime (scope change #3, 2026-06-12)
+`runtime/` is the actual PC port: Beetle PSX (mednafen) sources imported into our
+build (vendor/beetle-psx submodule + patches/beetle-psx/, GPL-2 = distributable),
+interpreter-only, with a PC-keyed native-override layer (`runtime/psxport_hooks.*`,
+signature-checked for overlay safety) and per-game modules (`runtime/games/`).
+The DuckStation fork remains the RE lab / oracle. Build: `make -C runtime`.
+Run: `runtime/wide60rt <chd> -bios <dir> -play` (OpenBIOS as scph5501.bin works;
+`-fastboot` requires a retail BIOS — hangs under OpenBIOS).
+
 ## Layout
+- `runtime/` — the PC port (see above); `runtime/games/` per-game modules.
 - `tools/` — offline tools (`discdump`: CHD → SYSTEM.CNF + boot EXE via libchdr).
 - `patches/` — per-game patch sources + built patch files.
 - `common/` — shared `.env` reader (`PSXPORT_DISC` etc.).

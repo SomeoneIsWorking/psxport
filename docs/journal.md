@@ -1,5 +1,28 @@
 # Debug / progress journal
 
+## 2026-06-12 — runtime: hook layer + RE tooling; intro segments are LOAD MASKS
+- Hook/override layer live in the runtime: per-instruction hook point in beetle's
+  interpreter (patches/beetle-psx/0001, -DPSXPORT_HOOKS), registry in
+  runtime/psxport_hooks.* (PC + expected-instruction signature -> native fn; REDIRECT
+  return skips original code, resumes at chosen PC = native override). RE aids ported:
+  PSXPORT_RAMDUMP (frame:path snapshots), PSXPORT_MEMWATCH (per-frame byte CSV),
+  PSXPORT_PCCOV (executed-PC bitmaps over frame ranges). Per-game modules in
+  runtime/games/ get RAM + per-frame tick + scoped input injection via main.cpp.
+- **Tomba 2 intro: the license text and Whoopee Camp logo are NOT skippable — they are
+  load masks.** Verified: scripted X presses change nothing (A/B identical timeline);
+  PC-coverage diff shows the segment-end code is absent from RAM until the loader
+  finishes (main overlay lands ~frame 1989 mid-logo; logo then runs out its jingle,
+  stream clock at 0x8011824C freezes at 7776 at segment end ~2400). Poking the clock
+  does nothing (it is an output, not the gate). DEAD END: do not look for an input
+  check or a timer compare to patch.
+- Implemented instead: scoped auto-turbo (8x, no presents/audio on skipped substeps)
+  while main overlay absent (word @0x8005082C == 0) OR logo stream clock ticking,
+  frame-capped. Ends exactly at the cutscene. No input injection (user correction:
+  the X-mash "skip" was never wanted as automash).
+- Beetle's skip_bios HANGS with OpenBIOS (intercepts the retail shell; game stalls at
+  the logo) — -fastboot is opt-in, default off. 14x CD loading is safe and default.
+- Tab = manual 8x fast-forward in play mode.
+
 ## 2026-06-12 — scope change #3: PC port via interpreter + overrides (Beetle/mednafen base)
 - User direction: build the actual PC port — NOT static recomp; an interpreter+overrides
   design (native function overrides hooked by PC over an interpreted base), because the

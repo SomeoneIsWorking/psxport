@@ -27,12 +27,13 @@ DEFINES := -DNDEBUG -DHAVE_PBP -DWANT_THREADING -DHAVE_THREADS \
            -DCHDR_SYSTEM_ZLIB -DNEED_TREMOR -DLOG_LEVEL=3 \
            -DENABLE_DISASSEMBLER=0 -DMEDNAFEN_VERSION_NUMERIC=9386 \
            -DSTDC_HEADERS -D__STDC_LIMIT_MACROS -D__STDC_CONSTANT_MACROS \
-           -D__LIBRETRO__ -D_LOW_ACCURACY_ -D_FILE_OFFSET_BITS=64
+           -D__LIBRETRO__ -D_LOW_ACCURACY_ -D_FILE_OFFSET_BITS=64 \
+           -DPSXPORT_HOOKS
 
 WARNINGS := -Wall -Wno-sign-compare -Wno-unused-variable -Wno-unused-function \
             -Wno-uninitialized -Wno-strict-aliasing
 
-CFLAGS_COMMON := -O2 -g -fwrapv -fsigned-char $(INCFLAGS) -I$(BEETLE)/include \
+CFLAGS_COMMON := -O2 -g -fwrapv -fsigned-char $(INCFLAGS) -I$(BEETLE)/include -I. \
                  -include $(BEETLE)/include/debug.h $(DEFINES) $(WARNINGS)
 CFLAGS   := $(CFLAGS_COMMON)
 CXXFLAGS := $(CFLAGS_COMMON) -std=c++14
@@ -61,7 +62,7 @@ ALL_CXX := $(sort $(SOURCES_CXX))
 
 OBJS := $(patsubst %.c,$(OBJDIR)/%.o,$(ALL_C)) \
         $(patsubst %.cpp,$(OBJDIR)/%.o,$(ALL_CXX)) \
-        $(OBJDIR)/main.o
+        $(OBJDIR)/main.o $(OBJDIR)/psxport_hooks.o $(OBJDIR)/games/tomba2.o
 
 wide60rt: $(OBJS)
 	$(CXX) -o $@ $(OBJS) $(LDFLAGS)
@@ -69,6 +70,14 @@ wide60rt: $(OBJS)
 $(OBJDIR)/main.o: main.cpp
 	@mkdir -p $(dir $@)
 	$(CXX) -c $(CXXFLAGS) $(SDL_CFLAGS) -o $@ $<
+
+$(OBJDIR)/psxport_hooks.o: psxport_hooks.cpp
+	@mkdir -p $(dir $@)
+	$(CXX) -c $(CXXFLAGS) -o $@ $<
+
+$(OBJDIR)/games/tomba2.o: games/tomba2.cpp
+	@mkdir -p $(dir $@)
+	$(CXX) -c $(CXXFLAGS) -o $@ $<
 
 $(OBJDIR)/%.o: %.c
 	@mkdir -p $(dir $@)
