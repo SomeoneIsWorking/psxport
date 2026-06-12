@@ -1,5 +1,25 @@
 # Debug / progress journal
 
+## 2026-06-12 — scope change #3: PC port via interpreter + overrides (Beetle/mednafen base)
+- User direction: build the actual PC port — NOT static recomp; an interpreter+overrides
+  design (native function overrides hooked by PC over an interpreted base), because the
+  generic+matching tiers still flicker and the real fix is rendering new frames from
+  interpolated state, which needs first-class control of the render path.
+- Base: **Beetle PSX (mednafen) sources imported into our build** — vendor/beetle-psx
+  submodule, runtime/Makefile reuses upstream Makefile.common source lists but compiles
+  everything ourselves (no .so, no prebuilt core; user explicitly wants source import).
+  Interpreter-only: HAVE_LIGHTREC=0. GPL-2: distributable with source, unlike the
+  CC-BY-NC-ND DuckStation fork (which stays as lab/oracle).
+- runtime/main.cpp: our host (libretro callbacks for now, to be replaced by native glue):
+  headless, -frames/-dumpdir/-dumpinterval (PPM), -inputscript (same format as regtest),
+  -bios dir. **VERIFIED: Tomba 2 boots and renders in-engine intro at frame ~4000 with
+  OpenBIOS** (copied as scph5501.bin; SHA warning is benign). Built deps-free in ~1 min.
+- PCSX-Redux was tried first and dropped: GPL-2 (fine) but heavy deps (luajit/luv/uv/
+  ffmpeg) vs beetle's zero-dep build; user picked beetle.
+- Next: port the hook layer (PC trace, pokes, GTE taps) into the imported cpu.cpp/gte.cpp;
+  override dispatch table (PC -> native fn, signature-checked for overlays); then the
+  first real override: Tomba 2 render entry at 60Hz with interpolated state.
+
 ## 2026-06-12 — per-game object-identity interpolation LIVE (both games)
 - MatchFrames now has the per-game pass: objects matched across frames by mutual-nearest
   GTE translation (TRANSFORM_MATCH_RANGE 4096 L1), each matched object's prims paired in

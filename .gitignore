@@ -19,3 +19,5 @@ scratch/
 *.img
 *.exe
 *.psexe
+runtime/obj/
+runtime/wide60rt
