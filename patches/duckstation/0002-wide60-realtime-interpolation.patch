@@ -1,0 +1,925 @@
+--- a/src/core/gpu.cpp	2026-06-12 20:51:15.177763883 +0300
++++ b/src/core/gpu.cpp	2026-06-12 20:30:52.923625469 +0300
+@@ -8,6 +8,7 @@
+ #include "dma.h"
+ #include "gpu_backend.h"
+ #include "gpu_dump.h"
++#include "gpu_wide60.h"
+ #include "gpu_helpers.h"
+ #include "gpu_hw_texture_cache.h"
+ #include "gpu_sw_rasterizer.h"
+@@ -496,6 +497,7 @@
+ 
+ void GPU::Reset(bool clear_vram)
+ {
++  Wide60::Reset();
+   s_locals.GPUSTAT.bits = 0x14802000;
+   s_locals.set_texture_disable_mask = false;
+   s_locals.GPUREAD_latch = 0;
+@@ -878,6 +880,8 @@
+       }
+ 
+       s_locals.fifo.Push(value);
++      if (Wide60::IsEnabled()) [[unlikely]]
++        Wide60::AddPushedWords(1);
+       ExecuteCommands();
+       return;
+     }
+@@ -935,6 +939,9 @@
+     dump->EndGP0Packet();
+   }
+ 
++  if (Wide60::IsEnabled()) [[unlikely]]
++    Wide60::AddPushedWords(word_count);
++
+   const u32 mask = Bus::g_ram_mask;
+   if (const u32 contig_words = std::min(word_count, s_locals.fifo.GetContiguousSpace()); contig_words > 0)
+   {
+@@ -1658,6 +1665,9 @@
+       {
+         DEBUG_LOG("Now in v-blank");
+ 
++        if (Wide60::IsEnabled()) [[unlikely]]
++          Wide60::OnVBlankStart();
++
+         if (s_locals.gpu_dump) [[unlikely]]
+         {
+           s_locals.gpu_dump->WriteVSync(System::GetGlobalTickCounter());
+@@ -2003,6 +2013,17 @@
+         s_locals.crtc_state.regs.display_address_start = new_value;
+         UpdateCRTCDisplayParameters();
+         GPUBackend::PushCommand(GPUBackend::NewBufferSwappedCommand());
++
++        // GP1 writes bypass the GP0 FIFO: draws of the old frame may still be
++        // queued. Defer the wide60 frame boundary until the FIFO has drained,
++        // so the capture segmentation matches submission order.
++        if (Wide60::IsEnabled()) [[unlikely]]
++        {
++          if (s_locals.fifo.IsEmpty())
++            Wide60::OnFlip();
++          else
++            Wide60::SetFlipPending(); // fires once the queued words drain
++        }
+       }
+     }
+     break;
+@@ -2714,6 +2735,9 @@
+   UpdateDMARequest();
+   UpdateGPUIdle();
+ 
++  if (Wide60::IsEnabled() && Wide60::IsFlipPending()) [[unlikely]]
++    Wide60::CheckFlipBoundary(s_locals.fifo.GetSize());
++
+   s_locals.executing_commands = was_executing_from_event;
+   if (!was_executing_from_event)
+     UpdateCommandTickEvent();
+@@ -2727,6 +2751,13 @@
+     {
+       case BlitterState::Idle:
+       {
++        if (Wide60::IsEnabled()) [[unlikely]]
++        {
++          Wide60::CheckFlipBoundary(s_locals.fifo.GetSize());
++          Wide60::SetPacketContext(Truncate32(s_locals.fifo.Peek() >> 32), s_locals.drawing_offset.x,
++                                   s_locals.drawing_offset.y);
++        }
++
+         const u32 command = FifoPeek(0) >> 24;
+         if (s_GP0_command_handler_table[command]())
+           continue;
+--- a/src/core/gpu_backend.cpp	2026-06-12 20:51:15.098863268 +0300
++++ b/src/core/gpu_backend.cpp	2026-06-12 20:02:37.051371015 +0300
+@@ -3,6 +3,7 @@
+ 
+ #include "gpu_backend.h"
+ #include "gpu.h"
++#include "gpu_wide60.h"
+ #include "gpu_sw_rasterizer.h"
+ #include "host.h"
+ #include "performance_counters.h"
+@@ -247,16 +248,22 @@
+ 
+ void GPUBackend::PushCommand(VideoThreadCommand* cmd)
+ {
++  if (Wide60::IsEnabled()) [[unlikely]]
++    Wide60::OnCommandPushed(cmd);
+   VideoThread::PushCommand(cmd);
+ }
+ 
+ void GPUBackend::PushCommandAndWakeThread(VideoThreadCommand* cmd)
+ {
++  if (Wide60::IsEnabled()) [[unlikely]]
++    Wide60::OnCommandPushed(cmd);
+   VideoThread::PushCommandAndWakeThread(cmd);
+ }
+ 
+ void GPUBackend::PushCommandAndSync(VideoThreadCommand* cmd, bool spin)
+ {
++  if (Wide60::IsEnabled()) [[unlikely]]
++    Wide60::OnCommandPushed(cmd);
+   VideoThread::PushCommandAndSync(cmd, spin);
+ }
+ 
+--- a/src/core/gpu_wide60.h	1970-01-01 02:00:00.000000000 +0200
++++ b/src/core/gpu_wide60.h	1970-01-01 02:00:00.000000000 +0200
+@@ -0,0 +1,50 @@
++// psxport "wide60" layer: synthesizes interpolated in-between frames for games
++// that render at half the vsync rate, by capturing each logic frame's backend
++// command list and replaying it with lerped vertices at the intermediate vblank.
++// Entirely invisible to the emulated machine (no FIFO/timing perturbation).
++
++#pragma once
++
++#include "types.h"
++
++struct VideoThreadCommand;
++
++namespace Wide60 {
++
++bool IsEnabled();
++void SetEnabled(bool enabled);
++
++/// Clears all captured state (system reset / state load).
++void Reset();
++
++/// CPU thread, from GP0 command dispatch: RAM address the next command was
++/// DMA'd from (FIFO high word, object-identity ordering for matching) and the
++/// current E5 drawing offset (for buffer-relative coordinate comparison).
++void SetPacketContext(u32 addr, s32 draw_offset_x, s32 draw_offset_y);
++
++/// CPU thread, from GPUBackend::PushCommand: tees frame-relevant commands into
++/// the current logic-frame capture buffer.
++void OnCommandPushed(const VideoThreadCommand* cmd);
++
++/// GP1(0x05) display start address changed: the current logic frame is done.
++/// Must only be called once the GP0 FIFO is empty (old frame's draws flushed).
++void OnFlip();
++
++/// Accounting for the GP0 FIFO so the frame boundary can be placed in
++/// execution order at the exact word the GP1(0x05) flip was submitted after.
++void AddPushedWords(u32 count);
++
++/// GP1(0x05) arrived while the GP0 FIFO still held the old frame's words;
++/// OnFlip() fires once all words pushed before the GP1 have been consumed.
++void SetFlipPending();
++bool IsFlipPending();
++
++/// Called with the current FIFO size whenever consumption progresses; fires
++/// the deferred OnFlip() when the boundary has been reached.
++void CheckFlipBoundary(u32 current_fifo_size);
++
++/// Start of vertical blank, before UpdateDisplay(): replays the lerped or the
++/// original frame command list so the upcoming present shows it.
++void OnVBlankStart();
++
++} // namespace Wide60
+--- a/src/core/gpu_wide60.cpp	1970-01-01 02:00:00.000000000 +0200
++++ b/src/core/gpu_wide60.cpp	1970-01-01 02:00:00.000000000 +0200
+@@ -0,0 +1,706 @@
++// psxport "wide60" layer. See gpu_wide60.h for the high-level description.
++//
++// Method (validated offline against GPU dumps, tools/interp_dump.py in psxport):
++// PSX engines bump-allocate per-object primitives from double-buffered arenas, so
++// DMA source address order == entity iteration order. Draws of consecutive logic
++// frames are sequence-aligned (difflib-style longest-matching-blocks) on
++// position-independent fingerprints: command type/flags + per-vertex texcoords.
++// CLUT/texpage are EXCLUDED from fingerprints: games double-buffer CLUTs, so those
++// fields alternate with frame parity and destroy adjacent-frame matching.
++// Matched draws within a displacement gate are vertex-lerped (midpoint); the rest
++// snap to their final position.
++//
++// Cadence (logic frame = interval between GP1(0x05) display start changes):
++// flip to B at vblank N -> at N+1 replay lerp(A,B) of B's command list (starts
++// with its own clear, drawn into B's buffer, which is what scans out) -> at N+2
++// replay B verbatim. Presented: A, lerp(A,B), B, lerp(B,C), C... 60 fps with no
++// added latency. Replays skip UpdateVRAM/CopyVRAM so stale uploads cannot clobber
++// the in-flight frame's streamed textures; the live drawing area / CLUT state is
++// re-applied after each replay.
++
++#include "gpu_wide60.h"
++#include "video_thread.h"
++#include "video_thread_commands.h"
++
++#include "common/log.h"
++
++#include <algorithm>
++#include <cstdlib>
++#include <cstring>
++#include <unordered_map>
++#include <vector>
++
++LOG_CHANNEL(GPU);
++
++namespace Wide60 {
++
++namespace {
++
++struct DrawRef
++{
++  u32 buf_offset;
++  u32 src_addr;
++  u64 token;
++  s32 match = -1; // index into previous frame's draws
++  // E5 drawing offset at submission: vertex coords are absolute (offset baked
++  // in), and games alternate the offset per double-buffer — matching must be
++  // done in buffer-relative space (abs - offset).
++  s16 off_x = 0, off_y = 0;
++};
++
++struct FrameCapture
++{
++  std::vector<u8> buf; // concatenated VideoThreadCommands
++  std::vector<DrawRef> draws;
++  bool overflowed = false;
++
++  void Clear()
++  {
++    buf.clear();
++    draws.clear();
++    overflowed = false;
++  }
++};
++
++struct VertexPos
++{
++  s32 x, y;     // native/integer position
++  float fx, fy; // precise position (== x,y for non-precise types)
++};
++
++} // namespace
++
++static constexpr u32 MAX_FRAME_BUFFER_SIZE = 8 * 1024 * 1024;
++static constexpr u32 MAX_FRAME_DRAWS = 32768;
++static constexpr u32 MAX_DRAW_VERTICES = 4;
++static constexpr s32 DISPLACEMENT_GATE = 48; // max per-vertex L1 delta to lerp
++
++static bool s_enabled = false;
++static bool s_replaying = false;
++
++static FrameCapture s_frames[4];
++static u8 s_prev2 = 3, s_prev = 0, s_last = 1, s_build = 2;
++static bool s_have_prev = false, s_have_last = false;
++
++static u32 s_packet_src_addr = 0;
++static s16 s_packet_off_x = 0, s_packet_off_y = 0;
++static u64 s_vblank_count = 0;
++static u64 s_last_flip_vblank = 0;
++static u32 s_pending_gap = 0;
++static bool s_lerp_pending = false;
++static bool s_restore_pending = false;
++static bool s_flip_pending = false;
++
++// live (game-pushed) backend-global state, re-applied after replays
++static GPUBackendSetDrawingAreaCommand s_live_drawing_area;
++static GPUBackendUpdateCLUTCommand s_live_clut;
++static bool s_live_drawing_area_valid = false;
++static bool s_live_clut_valid = false;
++
++bool IsEnabled()
++{
++  return s_enabled;
++}
++
++void SetEnabled(bool enabled)
++{
++  s_enabled = enabled;
++  if (!enabled)
++    Reset();
++}
++
++void Reset()
++{
++  // GUI frontend has no -wide60 switch; allow enabling via environment.
++  static const bool env_enabled = []() {
++    const char* v = std::getenv("PSXPORT_WIDE60");
++    return (v && *v && *v != '0');
++  }();
++  s_enabled |= env_enabled;
++
++  for (FrameCapture& f : s_frames)
++    f.Clear();
++  s_have_prev = s_have_last = false;
++  s_lerp_pending = s_restore_pending = false;
++  s_live_drawing_area_valid = s_live_clut_valid = false;
++  s_packet_src_addr = 0;
++  s_flip_pending = false;
++  s_last_flip_vblank = s_vblank_count;
++}
++
++void SetPacketContext(u32 addr, s32 draw_offset_x, s32 draw_offset_y)
++{
++  s_packet_src_addr = addr;
++  s_packet_off_x = static_cast<s16>(draw_offset_x);
++  s_packet_off_y = static_cast<s16>(draw_offset_y);
++}
++
++ALWAYS_INLINE static u64 HashU32(u64 h, u32 v)
++{
++  h ^= v;
++  h *= UINT64_C(0x100000001b3);
++  return h;
++}
++
++ALWAYS_INLINE static u32 DrawFlagBits(const GPUBackendDrawCommand& c)
++{
++  return (BoolToUInt32(c.texture_enable) << 0) | (BoolToUInt32(c.raw_texture_enable) << 1) |
++         (BoolToUInt32(c.transparency_enable) << 2) | (BoolToUInt32(c.shading_enable) << 3) |
++         (BoolToUInt32(c.quad_polygon) << 4);
++}
++
++static bool IsDrawCommand(VideoThreadCommandType type)
++{
++  switch (type)
++  {
++    case VideoThreadCommandType::DrawPolygon:
++    case VideoThreadCommandType::DrawPrecisePolygon:
++    case VideoThreadCommandType::DrawRectangle:
++    case VideoThreadCommandType::DrawLine:
++    case VideoThreadCommandType::DrawPreciseLine:
++      return true;
++    default:
++      return false;
++  }
++}
++
++/// Position-independent fingerprint. Texpage (draw_mode) and palette are
++/// deliberately excluded — they alternate with frame parity in games that
++/// double-buffer CLUTs/texture targets.
++static u64 ComputeToken(const VideoThreadCommand* cmd)
++{
++  u64 h = HashU32(UINT64_C(0xcbf29ce484222325), static_cast<u32>(cmd->type));
++  switch (cmd->type)
++  {
++    case VideoThreadCommandType::DrawPolygon:
++    {
++      const auto* c = static_cast<const GPUBackendDrawPolygonCommand*>(cmd);
++      h = HashU32(h, c->num_vertices);
++      h = HashU32(h, DrawFlagBits(*c));
++      if (c->texture_enable)
++      {
++        for (u32 i = 0; i < c->num_vertices; i++)
++          h = HashU32(h, c->vertices[i].texcoord);
++      }
++    }
++    break;
++
++    case VideoThreadCommandType::DrawPrecisePolygon:
++    {
++      const auto* c = static_cast<const GPUBackendDrawPrecisePolygonCommand*>(cmd);
++      h = HashU32(h, c->num_vertices);
++      h = HashU32(h, DrawFlagBits(*c));
++      if (c->texture_enable)
++      {
++        for (u32 i = 0; i < c->num_vertices; i++)
++          h = HashU32(h, c->vertices[i].texcoord);
++      }
++    }
++    break;
++
++    case VideoThreadCommandType::DrawRectangle:
++    {
++      const auto* c = static_cast<const GPUBackendDrawRectangleCommand*>(cmd);
++      h = HashU32(h, DrawFlagBits(*c));
++      h = HashU32(h, (ZeroExtend32(c->width) << 16) | ZeroExtend32(c->height));
++      h = HashU32(h, ZeroExtend32(c->texcoord));
++    }
++    break;
++
++    case VideoThreadCommandType::DrawLine:
++    case VideoThreadCommandType::DrawPreciseLine:
++    {
++      const auto* c = static_cast<const GPUBackendDrawCommand*>(cmd);
++      h = HashU32(h, c->num_vertices);
++      h = HashU32(h, DrawFlagBits(*c));
++    }
++    break;
++
++    default:
++      break;
++  }
++  return h;
++}
++
++/// Extracts vertex positions; returns vertex count (0 = not lerpable).
++static u32 GetVertices(const VideoThreadCommand* cmd, VertexPos* out)
++{
++  switch (cmd->type)
++  {
++    case VideoThreadCommandType::DrawPolygon:
++    {
++      const auto* c = static_cast<const GPUBackendDrawPolygonCommand*>(cmd);
++      const u32 n = std::min<u32>(c->num_vertices, MAX_DRAW_VERTICES);
++      for (u32 i = 0; i < n; i++)
++        out[i] = {c->vertices[i].x, c->vertices[i].y, static_cast<float>(c->vertices[i].x),
++                  static_cast<float>(c->vertices[i].y)};
++      return n;
++    }
++
++    case VideoThreadCommandType::DrawPrecisePolygon:
++    {
++      const auto* c = static_cast<const GPUBackendDrawPrecisePolygonCommand*>(cmd);
++      const u32 n = std::min<u32>(c->num_vertices, MAX_DRAW_VERTICES);
++      for (u32 i = 0; i < n; i++)
++        out[i] = {c->vertices[i].native_x, c->vertices[i].native_y, c->vertices[i].x, c->vertices[i].y};
++      return n;
++    }
++
++    case VideoThreadCommandType::DrawRectangle:
++    {
++      const auto* c = static_cast<const GPUBackendDrawRectangleCommand*>(cmd);
++      out[0] = {c->x, c->y, static_cast<float>(c->x), static_cast<float>(c->y)};
++      return 1;
++    }
++
++    case VideoThreadCommandType::DrawLine:
++    {
++      const auto* c = static_cast<const GPUBackendDrawLineCommand*>(cmd);
++      const u32 n = std::min<u32>(c->num_vertices, MAX_DRAW_VERTICES);
++      for (u32 i = 0; i < n; i++)
++        out[i] = {c->vertices[i].x, c->vertices[i].y, static_cast<float>(c->vertices[i].x),
++                  static_cast<float>(c->vertices[i].y)};
++      return n;
++    }
++
++    case VideoThreadCommandType::DrawPreciseLine:
++    {
++      const auto* c = static_cast<const GPUBackendDrawPreciseLineCommand*>(cmd);
++      const u32 n = std::min<u32>(c->num_vertices, MAX_DRAW_VERTICES);
++      for (u32 i = 0; i < n; i++)
++        out[i] = {c->vertices[i].native_x, c->vertices[i].native_y, c->vertices[i].x, c->vertices[i].y};
++      return n;
++    }
++
++    default:
++      return 0;
++  }
++}
++
++/// Midpoint with the same rounding as the validated offline tool: floor of the
++/// average, +1 when moving in +direction (i.e. rounds toward the current frame).
++ALWAYS_INLINE static s32 MidpointS32(s32 from, s32 to)
++{
++  return (from + to + ((to > from) ? 1 : 0)) >> 1;
++}
++
++/// Rewrites cmd's vertices to midpoint(from, cmd).
++static void LerpVertices(VideoThreadCommand* cmd, const VertexPos* from)
++{
++  switch (cmd->type)
++  {
++    case VideoThreadCommandType::DrawPolygon:
++    {
++      auto* c = static_cast<GPUBackendDrawPolygonCommand*>(cmd);
++      const u32 n = std::min<u32>(c->num_vertices, MAX_DRAW_VERTICES);
++      for (u32 i = 0; i < n; i++)
++      {
++        c->vertices[i].x = MidpointS32(from[i].x, c->vertices[i].x);
++        c->vertices[i].y = MidpointS32(from[i].y, c->vertices[i].y);
++      }
++    }
++    break;
++
++    case VideoThreadCommandType::DrawPrecisePolygon:
++    {
++      auto* c = static_cast<GPUBackendDrawPrecisePolygonCommand*>(cmd);
++      const u32 n = std::min<u32>(c->num_vertices, MAX_DRAW_VERTICES);
++      for (u32 i = 0; i < n; i++)
++      {
++        c->vertices[i].native_x = MidpointS32(from[i].x, c->vertices[i].native_x);
++        c->vertices[i].native_y = MidpointS32(from[i].y, c->vertices[i].native_y);
++        c->vertices[i].x = 0.5f * (from[i].fx + c->vertices[i].x);
++        c->vertices[i].y = 0.5f * (from[i].fy + c->vertices[i].y);
++      }
++    }
++    break;
++
++    case VideoThreadCommandType::DrawRectangle:
++    {
++      auto* c = static_cast<GPUBackendDrawRectangleCommand*>(cmd);
++      c->x = MidpointS32(from[0].x, c->x);
++      c->y = MidpointS32(from[0].y, c->y);
++    }
++    break;
++
++    case VideoThreadCommandType::DrawLine:
++    {
++      auto* c = static_cast<GPUBackendDrawLineCommand*>(cmd);
++      const u32 n = std::min<u32>(c->num_vertices, MAX_DRAW_VERTICES);
++      for (u32 i = 0; i < n; i++)
++      {
++        c->vertices[i].x = MidpointS32(from[i].x, c->vertices[i].x);
++        c->vertices[i].y = MidpointS32(from[i].y, c->vertices[i].y);
++      }
++    }
++    break;
++
++    case VideoThreadCommandType::DrawPreciseLine:
++    {
++      auto* c = static_cast<GPUBackendDrawPreciseLineCommand*>(cmd);
++      const u32 n = std::min<u32>(c->num_vertices, MAX_DRAW_VERTICES);
++      for (u32 i = 0; i < n; i++)
++      {
++        c->vertices[i].native_x = MidpointS32(from[i].x, c->vertices[i].native_x);
++        c->vertices[i].native_y = MidpointS32(from[i].y, c->vertices[i].native_y);
++        c->vertices[i].x = 0.5f * (from[i].fx + c->vertices[i].x);
++        c->vertices[i].y = 0.5f * (from[i].fy + c->vertices[i].y);
++      }
++    }
++    break;
++
++    default:
++      break;
++  }
++}
++
++void OnCommandPushed(const VideoThreadCommand* cmd)
++{
++  if (!s_enabled || s_replaying)
++    return;
++
++  switch (cmd->type)
++  {
++    // backend-global state: track live copies for post-replay re-application
++    case VideoThreadCommandType::SetDrawingArea:
++      std::memcpy(&s_live_drawing_area, cmd, sizeof(s_live_drawing_area));
++      s_live_drawing_area_valid = true;
++      break;
++
++    case VideoThreadCommandType::UpdateCLUT:
++      std::memcpy(&s_live_clut, cmd, sizeof(s_live_clut));
++      s_live_clut_valid = true;
++      break;
++
++    case VideoThreadCommandType::FillVRAM:
++    case VideoThreadCommandType::UpdateVRAM:
++    case VideoThreadCommandType::CopyVRAM:
++    case VideoThreadCommandType::DrawPolygon:
++    case VideoThreadCommandType::DrawPrecisePolygon:
++    case VideoThreadCommandType::DrawRectangle:
++    case VideoThreadCommandType::DrawLine:
++    case VideoThreadCommandType::DrawPreciseLine:
++      break;
++
++    default:
++      return; // not part of the frame command list
++  }
++
++  FrameCapture& f = s_frames[s_build];
++  if (f.overflowed || (f.buf.size() + cmd->size) > MAX_FRAME_BUFFER_SIZE || f.draws.size() >= MAX_FRAME_DRAWS)
++  {
++    f.overflowed = true;
++    return;
++  }
++
++  if (IsDrawCommand(cmd->type))
++    f.draws.push_back(
++      {static_cast<u32>(f.buf.size()), s_packet_src_addr, ComputeToken(cmd), -1, s_packet_off_x, s_packet_off_y});
++
++  const u8* bytes = reinterpret_cast<const u8*>(cmd);
++  f.buf.insert(f.buf.end(), bytes, bytes + cmd->size);
++}
++
++static u64 s_words_pushed = 0;
++static u64 s_flip_boundary = 0; // total-pushed count at the GP1(0x05) write
++
++void AddPushedWords(u32 count)
++{
++  s_words_pushed += count;
++}
++
++void SetFlipPending()
++{
++  s_flip_pending = true;
++  s_flip_boundary = s_words_pushed; // everything pushed so far is the old frame
++}
++
++bool IsFlipPending()
++{
++  return s_flip_pending;
++}
++
++void CheckFlipBoundary(u32 current_fifo_size)
++{
++  if (s_flip_pending && (s_words_pushed - current_fifo_size) >= s_flip_boundary)
++    OnFlip();
++}
++
++void OnFlip()
++{
++  s_flip_pending = false;
++  if (!s_enabled)
++    return;
++
++  s_pending_gap = static_cast<u32>(s_vblank_count - s_last_flip_vblank);
++  s_last_flip_vblank = s_vblank_count;
++
++  const u8 old_prev2 = s_prev2;
++  s_prev2 = s_prev;
++  s_prev = s_last;
++  s_last = s_build;
++  s_build = old_prev2;
++  s_frames[s_build].Clear();
++
++  s_have_prev = s_have_last;
++  s_have_last = true;
++  s_lerp_pending = true;
++  // the previously-displayed buffer is the back buffer now; the game redraws it
++  s_restore_pending = false;
++}
++
++// --- difflib-style sequence alignment on draw tokens -------------------------
++
++namespace {
++struct AlignRange
++{
++  u32 alo, ahi, blo, bhi;
++};
++} // namespace
++
++/// Equivalent of difflib.SequenceMatcher(autojunk=False).get_matching_blocks(),
++/// operating on 64-bit token hashes. Calls f(ai, bi, n) per matching block.
++template<typename F>
++static void GetMatchingBlocks(const std::vector<DrawRef*>& a, const std::vector<DrawRef*>& b, const F& f)
++{
++  std::unordered_map<u64, std::vector<u32>> b2j;
++  for (u32 j = 0; j < b.size(); j++)
++    b2j[b[j]->token].push_back(j);
++
++  std::vector<AlignRange> queue;
++  queue.push_back({0, static_cast<u32>(a.size()), 0, static_cast<u32>(b.size())});
++
++  std::unordered_map<u32, u32> j2len, newj2len;
++  while (!queue.empty())
++  {
++    const AlignRange r = queue.back();
++    queue.pop_back();
++
++    // find longest matching block in a[alo:ahi] x b[blo:bhi]
++    u32 besti = r.alo, bestj = r.blo, bestsize = 0;
++    j2len.clear();
++    for (u32 i = r.alo; i < r.ahi; i++)
++    {
++      newj2len.clear();
++      const auto it = b2j.find(a[i]->token);
++      if (it != b2j.end())
++      {
++        for (const u32 j : it->second)
++        {
++          if (j < r.blo)
++            continue;
++          if (j >= r.bhi)
++            break;
++          u32 k = 1;
++          if (j > 0)
++          {
++            const auto pit = j2len.find(j - 1);
++            if (pit != j2len.end())
++              k = pit->second + 1;
++          }
++          newj2len[j] = k;
++          if (k > bestsize)
++          {
++            besti = i - k + 1;
++            bestj = j - k + 1;
++            bestsize = k;
++          }
++        }
++      }
++      j2len.swap(newj2len);
++    }
++
++    if (bestsize == 0)
++      continue;
++
++    f(besti, bestj, bestsize);
++    if (besti > r.alo && bestj > r.blo)
++      queue.push_back({r.alo, besti, r.blo, bestj});
++    if (besti + bestsize < r.ahi && bestj + bestsize < r.bhi)
++      queue.push_back({besti + bestsize, r.ahi, bestj + bestsize, r.bhi});
++  }
++}
++
++/// Matches draws of the just-completed frame (cur) against the previous frame,
++/// filling DrawRef::match for pairs that pass the displacement gate.
++static void MatchFrames(FrameCapture& prev, FrameCapture& cur)
++{
++  std::vector<DrawRef*> a, b;
++  a.reserve(prev.draws.size());
++  b.reserve(cur.draws.size());
++  for (DrawRef& d : prev.draws)
++    a.push_back(&d);
++  for (DrawRef& d : cur.draws)
++  {
++    d.match = -1;
++    b.push_back(&d);
++  }
++
++  // arena/allocation order == entity iteration order
++  const auto by_addr = [](const DrawRef* x, const DrawRef* y) { return x->src_addr < y->src_addr; };
++  std::stable_sort(a.begin(), a.end(), by_addr);
++  std::stable_sort(b.begin(), b.end(), by_addr);
++
++  // one-shot sequence dump for offline analysis (PSXPORT_WIDE60_DUMP=<path>)
++  static bool s_dumped = false;
++  if (!s_dumped && cur.draws.size() > 1000 && s_vblank_count > 11800)
++  {
++    if (const char* path = std::getenv("PSXPORT_WIDE60_DUMP"))
++    {
++      s_dumped = true;
++      if (FILE* fp = fopen(path, "w"))
++      {
++        VertexPos vp[MAX_DRAW_VERTICES];
++        const auto dump_frame = [&](const char* name, const std::vector<DrawRef*>& seq, const FrameCapture& fc) {
++          for (const DrawRef* d : seq)
++          {
++            const VideoThreadCommand* c = reinterpret_cast<const VideoThreadCommand*>(&fc.buf[d->buf_offset]);
++            const u32 n = GetVertices(c, vp);
++            fprintf(fp, "%s,%08X,%016llX,%u,%d,%d\n", name, d->src_addr, (unsigned long long)d->token,
++                    static_cast<u32>(c->type), n ? vp[0].x : 0, n ? vp[0].y : 0);
++          }
++        };
++        dump_frame("a", a, prev);
++        dump_frame("b", b, cur);
++        fclose(fp);
++      }
++    }
++  }
++
++  VertexPos pv[MAX_DRAW_VERTICES], cv[MAX_DRAW_VERTICES];
++  GetMatchingBlocks(a, b, [&](u32 ai, u32 bi, u32 n) {
++    for (u32 k = 0; k < n; k++)
++    {
++      const VideoThreadCommand* pc = reinterpret_cast<const VideoThreadCommand*>(&prev.buf[a[ai + k]->buf_offset]);
++      const VideoThreadCommand* cc = reinterpret_cast<const VideoThreadCommand*>(&cur.buf[b[bi + k]->buf_offset]);
++      if (pc->type != cc->type)
++        continue;
++      const u32 pn = GetVertices(pc, pv);
++      const u32 cn = GetVertices(cc, cv);
++      if (pn == 0 || pn != cn)
++        continue;
++
++      // buffer-relative comparison: remove each frame's E5 offset
++      const s32 dox = a[ai + k]->off_x - b[bi + k]->off_x;
++      const s32 doy = a[ai + k]->off_y - b[bi + k]->off_y;
++      s32 disp = 0;
++      for (u32 i = 0; i < cn; i++)
++        disp = std::max(disp, std::abs(pv[i].x - dox - cv[i].x) + std::abs(pv[i].y - doy - cv[i].y));
++      if (disp <= DISPLACEMENT_GATE)
++        b[bi + k]->match = static_cast<s32>(a[ai + k] - prev.draws.data());
++    }
++  });
++}
++
++// --- replay -------------------------------------------------------------------
++
++static void ReapplyLiveState()
++{
++  if (s_live_drawing_area_valid)
++  {
++    VideoThreadCommand* cmd =
++      VideoThread::AllocateCommand(VideoThreadCommandType::SetDrawingArea, sizeof(s_live_drawing_area));
++    std::memcpy(cmd, &s_live_drawing_area, sizeof(s_live_drawing_area));
++    VideoThread::PushCommand(cmd);
++  }
++  if (s_live_clut_valid)
++  {
++    VideoThreadCommand* cmd = VideoThread::AllocateCommand(VideoThreadCommandType::UpdateCLUT, sizeof(s_live_clut));
++    std::memcpy(cmd, &s_live_clut, sizeof(s_live_clut));
++    VideoThread::PushCommand(cmd);
++  }
++}
++
++/// Replays a captured frame's command list, optionally with matched draws
++/// lerped toward their previous-frame positions.
++static void ReplayFrame(const FrameCapture& frame, const FrameCapture* lerp_prev)
++{
++  s_replaying = true;
++
++  VertexPos pv[MAX_DRAW_VERTICES];
++  size_t draw_idx = 0;
++  size_t pos = 0;
++  while (pos + sizeof(VideoThreadCommand) <= frame.buf.size())
++  {
++    const VideoThreadCommand* src = reinterpret_cast<const VideoThreadCommand*>(&frame.buf[pos]);
++    if (src->size < sizeof(VideoThreadCommand) || pos + src->size > frame.buf.size())
++      break; // corrupt capture; abort
++    pos += src->size;
++
++    const bool is_draw = IsDrawCommand(src->type);
++    const DrawRef* ref = nullptr;
++    if (is_draw)
++      ref = &frame.draws[draw_idx++];
++
++    // stale uploads/copies would clobber the in-flight frame's streamed data
++    if (src->type == VideoThreadCommandType::UpdateVRAM || src->type == VideoThreadCommandType::CopyVRAM)
++      continue;
++
++    VideoThreadCommand* cmd = VideoThread::AllocateCommand(src->type, src->size);
++    std::memcpy(cmd, src, src->size);
++
++    if (lerp_prev && ref && ref->match >= 0)
++    {
++      const DrawRef& pref = lerp_prev->draws[static_cast<size_t>(ref->match)];
++      const VideoThreadCommand* pc = reinterpret_cast<const VideoThreadCommand*>(&lerp_prev->buf[pref.buf_offset]);
++      const u32 pn = GetVertices(pc, pv);
++      if (pn > 0)
++      {
++        // rebase prev verts from its buffer's E5 offset to the current one, so
++        // the midpoint lands in the current buffer's coordinate space
++        const s32 dox = ref->off_x - pref.off_x;
++        const s32 doy = ref->off_y - pref.off_y;
++        for (u32 i = 0; i < pn; i++)
++        {
++          pv[i].x += dox;
++          pv[i].y += doy;
++          pv[i].fx += static_cast<float>(dox);
++          pv[i].fy += static_cast<float>(doy);
++        }
++        LerpVertices(cmd, pv);
++      }
++    }
++
++    VideoThread::PushCommand(cmd);
++  }
++
++  ReapplyLiveState();
++  s_replaying = false;
++}
++
++void OnVBlankStart()
++{
++  s_vblank_count++;
++  if (!s_enabled)
++    return;
++
++  if (s_lerp_pending)
++  {
++    s_lerp_pending = false;
++    // only interpolate sub-vsync-rate content; gap < 2 means the game already
++    // flips every vblank, gap > 4 means a load/scene change (snap, don't blend)
++    if (s_have_prev && s_have_last && s_pending_gap >= 2 && s_pending_gap <= 4 && !s_frames[s_prev].overflowed &&
++        !s_frames[s_last].overflowed)
++    {
++      MatchFrames(s_frames[s_prev], s_frames[s_last]);
++      ReplayFrame(s_frames[s_last], &s_frames[s_prev]);
++      s_restore_pending = true;
++
++      if (Log::IsLogVisible(Log::Level::Dev, ___LogChannel___)) [[unlikely]]
++      {
++        u32 matched = 0;
++        for (const DrawRef& d : s_frames[s_last].draws)
++          matched += (d.match >= 0);
++        DEV_LOG("wide60: lerp frame, gap={}, draws={}, matched={}", s_pending_gap, s_frames[s_last].draws.size(),
++                matched);
++      }
++    }
++  }
++  else if (s_restore_pending)
++  {
++    s_restore_pending = false;
++    ReplayFrame(s_frames[s_last], nullptr);
++  }
++}
++
++} // namespace Wide60
+--- a/src/core/CMakeLists.txt	2026-06-12 20:51:15.091863178 +0300
++++ b/src/core/CMakeLists.txt	2026-06-12 20:03:07.665735074 +0300
+@@ -70,6 +70,8 @@
+   gpu_dump.cpp
+   gpu_dump.h
+   gpu_helpers.h
++  gpu_wide60.cpp
++  gpu_wide60.h
+   gpu_hw.cpp
+   gpu_hw.h
+   gpu_hw_shadergen.cpp
+--- a/src/duckstation-regtest/regtest_host.cpp	2026-06-12 20:51:15.177864277 +0300
++++ b/src/duckstation-regtest/regtest_host.cpp	2026-06-12 20:03:30.450006013 +0300
+@@ -9,6 +9,7 @@
+ #include "core/fullscreenui.h"
+ #include "core/fullscreenui_widgets.h"
+ #include "core/game_list.h"
++#include "core/gpu_wide60.h"
+ #include "core/gpu.h"
+ #include "core/gpu_backend.h"
+ #include "core/host.h"
+@@ -844,6 +845,7 @@
+   std::fprintf(stderr, "  -frames: Sets the number of frames to execute.\n");
+   std::fprintf(stderr, "  -inputscript <path>: Replays pad 1 input from a script file.\n"
+                        "    Lines of '<start_frame> <end_frame> <Button>' (digital pad button names).\n");
++  std::fprintf(stderr, "  -wide60: Enables the wide60 frame-interpolation layer.\n");
+   std::fprintf(stderr, "  -gpudump <path>: Records a GPU dump (.psxgpu) to the given path.\n");
+   std::fprintf(stderr, "  -gpudumpstart <frame>: Frame number to start the GPU dump at.\n");
+   std::fprintf(stderr, "  -gpudumpframes <n>: Number of frames to record in the GPU dump.\n");
+@@ -929,6 +931,11 @@
+         Core::SetBaseStringSettingValue("Pad1", "Type", "DigitalController");
+         continue;
+       }
++      else if (CHECK_ARG("-wide60"))
++      {
++        Wide60::SetEnabled(true);
++        continue;
++      }
+       else if (CHECK_ARG_PARAM("-gpudump"))
+       {
+         s_gpu_dump_path = argv[++i];

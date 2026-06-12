@@ -21,6 +21,11 @@ Matching (validated 99.2% correct against arena-slot ground truth on Crash Bash)
 - A displacement gate (default 100px max per-vertex L1) snaps instead of lerping the
   rare residual mismatch; a wrong pair lerped halfway is a screen-crossing polygon.
 
+NOTE (2026-06-12): this parser only inspects words[0] of each GP0 packet, so E5 draw
+offsets bundled mid-packet are never seen. Games DO alternate E5 per double-buffer;
+this tool compares raw (= buffer-relative) coords and works by accident. The real-time
+implementation (fork gpu_wide60.cpp) gates in buffer-relative space explicitly.
+
 Usage: interp_dump.py <in.psxgpu> <out.psxgpu> [gate_px]
 """
 

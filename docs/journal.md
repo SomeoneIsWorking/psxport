@@ -1,5 +1,40 @@
 # Debug / progress journal
 
+## 2026-06-12 — REAL-TIME 60fps working in-emulator (patch 0002); user-verified on Tomba 2
+- `gpu_wide60.{h,cpp}` in the fork: captures each logic frame's backend command list
+  (tee at `GPUBackend::PushCommand`, draws carry DMA src addr + E5 offset from the GP0
+  dispatch hook), segments by GP1(0x05) flips, matches adjacent frames (src-addr sort +
+  difflib-style alignment on type/texcoord fingerprints, C++ port), and at the vblank
+  after a flip replays a vertex-lerped copy of the frame's list (its own clear included),
+  then the original one vblank later. Presented: A, lerp(A,B), B, lerp(B,C)... 60 fps,
+  zero added latency, timing-invisible to the game (no FIFO/tick changes). Replays skip
+  UpdateVRAM/CopyVRAM (stale uploads would clobber streamed textures) and re-apply live
+  drawing-area/CLUT after. Enable: regtest `-wide60` or `PSXPORT_WIDE60=1` (Qt GUI too).
+- **CRITICAL finding — E5 draw offsets DO alternate per double-buffer, bundled
+  mid-packet.** All our offline tools (`interp_dump.py`, the E5 scans) only parse
+  `words[0]` of each GP0 packet, so they never saw the E5s and compared raw
+  (= buffer-relative) coords — the offline matcher worked BY ACCIDENT. At the backend,
+  vertices are absolute (offset baked in) and alternate by e.g. y+256 per frame: gate in
+  **buffer-relative space** (abs − that draw's E5 offset), rebase prev verts to the
+  current offset before lerping. Before this fix: 0% matched (uniform disp ≈256);
+  after: **97% matched** on Crash Bash gameplay (1637/1688 draws/frame), beats offline.
+- Flip boundary: GP1 writes bypass the GP0 FIFO, so flip-at-GP1-time can cut the capture
+  mid-frame; the boundary now fires once all words pushed before the GP1 are consumed
+  (pushed-words counter). (In practice CB's FIFO was empty at GP1, but keep the guard.)
+- Verified: consecutive presented frames all distinct in gameplay (vs identical pairs at
+  30fps); interpolated frames visually clean; ~186 emu-fps headless SW renderer.
+  **User-verified 60fps in Qt GUI on Tomba! 2** (built with `-DBUILD_QT_FRONTEND=ON`).
+- Diagnostic tooling kept in the fork: `PSXPORT_WIDE60_DUMP=<csv>` dumps one frame-pair's
+  sorted (addr, token, type, x, y) sequences for offline analysis; distance-2 arena-slot
+  ground truth was used in-emulator to prove capture sanity (95% same-slot, disp ≤8).
+- **Open issues:** (1) vertex flicker during play — generic-tier mismatches (wrong pairs
+  within degenerate token runs lerping, borderline pairs alternating lerp/snap); the
+  per-game GTE-transform-tagging tier is the designed fix, or matcher hysteresis.
+  (2) Widescreen ineffective on Tomba 2 despite WidescreenHack=true + 16:9 (no gamedb
+  override; likely the game bypasses standard GTE projection — needs the per-game tier).
+  (3) Headless Tomba run showed draws=0 pre-frame-11900: that's the FMV region (demo
+  starts ~20500), not a capture failure — GUI run interpolated fine.
+
 ## 2026-06-12 — object-identity matching via arena slots; 60fps PoC verified visually
 - User direction: don't rely on screen-space nearest matching — use object identity.
   PSX-specific insight: matrices never reach the GPU (GTE is CPU-side), but the DMA
