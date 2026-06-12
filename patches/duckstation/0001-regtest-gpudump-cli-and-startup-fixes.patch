@@ -1,5 +1,5 @@
 diff --git a/src/duckstation-regtest/regtest_host.cpp b/src/duckstation-regtest/regtest_host.cpp
-index f48a9ad..c10a7ea 100644
+index f48a9ad..6fe290e 100644
 --- a/src/duckstation-regtest/regtest_host.cpp
 +++ b/src/duckstation-regtest/regtest_host.cpp
 @@ -43,9 +43,13 @@
@@ -16,20 +16,93 @@ index f48a9ad..c10a7ea 100644
  
  LOG_CHANNEL(Host);
  
-@@ -78,6 +82,9 @@ static u32 s_frames_to_run = 60 * 60;
+@@ -78,6 +82,79 @@ static u32 s_frames_to_run = 60 * 60;
  static u32 s_frames_remaining = 0;
  static u32 s_frame_dump_interval = 0;
  static std::string s_dump_base_directory;
 +static std::string s_gpu_dump_path;
 +static u32 s_gpu_dump_start_frame = 0;
 +static u32 s_gpu_dump_num_frames = 1;
++
++struct InputScriptEntry
++{
++  u32 start_frame;
++  u32 end_frame;
++  u32 button;
++};
++static std::vector<InputScriptEntry> s_input_script;
++
++// Indices match DigitalController::Button.
++static constexpr const char* s_input_script_button_names[] = {
++  "Select", "L3", "R3", "Start", "Up", "Right", "Down", "Left",
++  "L2",     "R2", "L1", "R1",    "Triangle", "Circle", "Cross", "Square",
++};
++
++static bool LoadInputScript(const char* path)
++{
++  auto fp = FileSystem::OpenManagedCFile(path, "rb");
++  if (!fp)
++  {
++    ERROR_LOG("Failed to open input script '{}'", path);
++    return false;
++  }
++
++  char line[256];
++  u32 line_no = 0;
++  while (std::fgets(line, sizeof(line), fp.get()))
++  {
++    line_no++;
++    char button_name[32];
++    InputScriptEntry entry;
++    if (line[0] == '#' || line[0] == '\n' || line[0] == '\r')
++      continue;
++    if (std::sscanf(line, "%u %u %31s", &entry.start_frame, &entry.end_frame, button_name) != 3)
++    {
++      ERROR_LOG("Malformed input script line {}: expected '<start_frame> <end_frame> <Button>'", line_no);
++      return false;
++    }
++
++    const auto begin = std::begin(s_input_script_button_names);
++    const auto end = std::end(s_input_script_button_names);
++    const auto it = std::find_if(begin, end, [&](const char* name) { return StringUtil::Strcasecmp(name, button_name) == 0; });
++    if (it == end)
++    {
++      ERROR_LOG("Unknown button '{}' in input script line {}", button_name, line_no);
++      return false;
++    }
++
++    entry.button = static_cast<u32>(it - begin);
++    s_input_script.push_back(entry);
++  }
++
++  INFO_LOG("Loaded {} input script entries from '{}'", s_input_script.size(), path);
++  return true;
++}
++
++static void ApplyInputScript(u32 frame)
++{
++  Controller* controller = System::GetController(0);
++  if (!controller)
++    return;
++
++  for (size_t button = 0; button < std::size(s_input_script_button_names); button++)
++  {
++    bool pressed = false;
++    for (const InputScriptEntry& entry : s_input_script)
++      pressed |= (entry.button == button && frame >= entry.start_frame && frame <= entry.end_frame);
++    controller->SetBindState(static_cast<u32>(button), pressed ? 1.0f : 0.0f);
++  }
++}
  
  bool RegTestHost::InitializeFoldersAndConfig(Error* error)
  {
-@@ -323,6 +330,14 @@ void Host::PumpMessagesOnCoreThread()
+@@ -323,6 +400,17 @@ void Host::PumpMessagesOnCoreThread()
  {
    RegTestHost::ProcessCoreThreadEvents();
  
++  if (!s_input_script.empty())
++    ApplyInputScript(s_frames_to_run - s_frames_remaining);
++
 +  if (!s_gpu_dump_path.empty() && (s_frames_to_run - s_frames_remaining) == s_gpu_dump_start_frame)
 +  {
 +    if (!System::StartRecordingGPUDump(s_gpu_dump_path.c_str(), s_gpu_dump_num_frames))
@@ -41,20 +114,31 @@ index f48a9ad..c10a7ea 100644
    s_frames_remaining--;
    if (s_frames_remaining == 0)
    {
-@@ -754,6 +769,9 @@ void RegTestHost::PrintCommandLineHelp(const char* progname)
+@@ -754,6 +842,11 @@ void RegTestHost::PrintCommandLineHelp(const char* progname)
    std::fprintf(stderr, "  -dumpdir: Set frame dump base directory (will be dumped to basedir/gametitle).\n");
    std::fprintf(stderr, "  -dumpinterval: Dumps every N frames.\n");
    std::fprintf(stderr, "  -frames: Sets the number of frames to execute.\n");
++  std::fprintf(stderr, "  -inputscript <path>: Replays pad 1 input from a script file.\n"
++                       "    Lines of '<start_frame> <end_frame> <Button>' (digital pad button names).\n");
 +  std::fprintf(stderr, "  -gpudump <path>: Records a GPU dump (.psxgpu) to the given path.\n");
 +  std::fprintf(stderr, "  -gpudumpstart <frame>: Frame number to start the GPU dump at.\n");
 +  std::fprintf(stderr, "  -gpudumpframes <n>: Number of frames to record in the GPU dump.\n");
    std::fprintf(stderr, "  -log <level>: Sets the log level. Defaults to verbose.\n");
    std::fprintf(stderr, "  -console: Enables console logging output.\n");
    std::fprintf(stderr, "  -pgxp: Enables PGXP.\n");
-@@ -827,6 +845,33 @@ bool RegTestHost::ParseCommandLineParameters(int argc, char* argv[], std::option
+@@ -827,6 +920,42 @@ bool RegTestHost::ParseCommandLineParameters(int argc, char* argv[], std::option
  
          continue;
        }
++      else if (CHECK_ARG_PARAM("-inputscript"))
++      {
++        if (!LoadInputScript(argv[++i]))
++          return false;
++
++        // Scripted input drives DigitalController::Button indices directly.
++        Core::SetBaseStringSettingValue("Pad1", "Type", "DigitalController");
++        continue;
++      }
 +      else if (CHECK_ARG_PARAM("-gpudump"))
 +      {
 +        s_gpu_dump_path = argv[++i];
@@ -85,7 +169,7 @@ index f48a9ad..c10a7ea 100644
        else if (CHECK_ARG_PARAM("-log"))
        {
          std::optional<Log::Level> level = Settings::ParseLogLevelName(argv[++i]);
-@@ -959,9 +1004,9 @@ int main(int argc, char* argv[])
+@@ -959,9 +1088,9 @@ int main(int argc, char* argv[])
    CrashHandler::Install(&Bus::CleanupMemoryMap);
  
    Error error;
@@ -97,7 +181,7 @@ index f48a9ad..c10a7ea 100644
      return EXIT_FAILURE;
    }
  
-@@ -971,6 +1016,14 @@ int main(int argc, char* argv[])
+@@ -971,6 +1100,14 @@ int main(int argc, char* argv[])
      return EXIT_FAILURE;
    }
  

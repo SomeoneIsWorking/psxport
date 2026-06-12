@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 """Analyze a DuckStation GPU dump (.psxgpu[.zst]).
 
-Per frame (vsync-delimited): count draw commands and hash the draw stream, then
-report how often consecutive frames have identical display lists. A game whose
-logic runs at 30fps shows pairs of identical frames; a 60fps game shows mostly
-unique frames. This is the offline prototype of the wide60 logic-rate detector.
+Measures the game's presented framerate two ways:
+1. Display-buffer flips: GP1(0x05) display-start changes per vsync. This is ground
+   truth — a 30fps game flips every 2 vsyncs. (Draw-command bucketing by vsync is
+   misleading: submission spans vblanks, so draws for one logic frame straddle two
+   vsync buckets.)
+2. Per-vsync draw counts + display-list hashes, for inspecting submission patterns.
+This is the offline prototype of the wide60 logic-rate detector.
 """
 
 import hashlib
@@ -45,6 +48,10 @@ def main() -> None:
     draws = 0
     hasher = hashlib.sha1()
 
+    vsync = 0
+    flips = []  # vsync index of each display-start change
+    last_display_start = None
+
     while pos + 4 <= len(data):
         (hdr,) = struct.unpack_from("<I", data, pos)
         pos += 4
@@ -62,10 +69,25 @@ def main() -> None:
             if is_draw_command(cmd):
                 draws += 1
                 hasher.update(payload)
+        elif ptype == 0x01 and length_words >= 1:
+            (word,) = struct.unpack_from("<I", payload, 0)
+            if (word >> 24) == 0x05:  # GP1 set display start
+                start = word & 0x7FFFF
+                if start != last_display_start:
+                    flips.append(vsync)
+                    last_display_start = start
         elif ptype == 0x02:
             frames.append((draws, hasher.hexdigest()))
             draws = 0
             hasher = hashlib.sha1()
+            vsync += 1
+
+    gaps = Counter(b - a for a, b in zip(flips, flips[1:]))
+    print(f"display flips: {len(flips)} over {vsync} vsyncs; "
+          f"vsyncs-between-flips histogram: {dict(sorted(gaps.items()))}")
+    if gaps:
+        dom_gap = gaps.most_common(1)[0][0]
+        print(f"=> presented framerate: 60/{dom_gap} = {60 // dom_gap} fps")
 
     print(f"frames: {len(frames)}")
     counts = [c for c, _ in frames]

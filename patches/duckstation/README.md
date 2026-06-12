@@ -10,6 +10,9 @@ cd vendor/duckstation && git apply ../../patches/duckstation/*.patch
 - `0001-regtest-gpudump-cli-and-startup-fixes.patch`
   - Adds `-gpudump <path>`, `-gpudumpstart <frame>`, `-gpudumpframes <n>` to
     duckstation-regtest (core API existed, regtest only exposed replay).
+  - Adds `-inputscript <path>`: replays pad-1 input from lines of
+    `<start_frame> <end_frame> <Button>` (digital pad button names); forces Pad1 type
+    to DigitalController.
   - Fixes regtest init order: `Core::ProcessStartup()` calls
     `Achievements::ProcessStartup()`, which reads the base settings layer — but regtest
     created that layer afterwards (null-deref SIGSEGV on startup). Reordered to match the

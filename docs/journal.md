@@ -1,5 +1,26 @@
 # Debug / progress journal
 
+## 2026-06-12 — both games measured: 30 fps presented framerate (gameplay)
+- Added `-inputscript` to regtest (in patch 0001): scripted pad-1 digital input,
+  `<start> <end> <Button>` per line. Deterministic across runs — menu navigation
+  scripted blind via screenshots worked reliably.
+- **Detection method correction:** bucketing draw commands by vsync is misleading
+  (submission spans vblanks → alternating big/small buckets). Ground truth is
+  **GP1(0x05) display-start changes** (buffer flips) per vsync — added to
+  gpudump_stats.py.
+- **Crash Bash gameplay (Battle/Jungle Bash, 4 players active): 30 fps** — 64/64 flips
+  at 2-vsync gaps. Menu also 30 fps. The "Crash Bash is 60fps" belief is false, at
+  least for menu + this minigame. ~1200 draw cmds per logic frame in gameplay.
+- **Tomba! 2 (attract DEMO, minecart, in-engine): 30 fps** — 73/75 flips at 2-vsync
+  gaps (outliers = loading hiccup). ~1400 draw cmds max.
+- Input scripts for reaching gameplay: `scratch/inputs-crashbash-gameplay.txt`
+  (menu → Battle → 1P → Jungle Bash, gameplay from ~frame 11700);
+  Tomba 2: title at ~3500, attract DEMO (in-engine minecart) ~frames 20500-24500 —
+  no menu navigation needed for engine captures (`scratch/inputs-t2d.txt`).
+- Tomba 2 cutscene-skip via Start did NOT work in scripted runs (FMV runs to ~18000
+  then Loading → demo); reaching actual player-controlled gameplay still TODO.
+- Dumps: `scratch/raw/crashbash-{menu,gameplay}.psxgpu`, `scratch/raw/tomba2-demo.psxgpu`.
+
 ## 2026-06-12 — oracle running; Crash Bash menu measured at 30 fps
 - DuckStation regtest builds (prebuilt deps release-20260526 in `dep/prebuilt/`; system
   `extra-cmake-modules` required). Three fixes needed, kept as
