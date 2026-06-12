@@ -60,8 +60,10 @@ HOST_SRCS_C := $(LRC)/streams/file_stream.c \
 ALL_C   := $(sort $(SOURCES_C) $(HOST_SRCS_C))
 ALL_CXX := $(sort $(SOURCES_CXX))
 
-OBJS := $(patsubst %.c,$(OBJDIR)/%.o,$(ALL_C)) \
-        $(patsubst %.cpp,$(OBJDIR)/%.o,$(ALL_CXX)) \
+# core sources live under ../vendor/beetle-psx; map them into obj/core/ so
+# no object ever lands outside obj/ (".." in an obj path escapes the tree)
+OBJS := $(patsubst $(BEETLE)/%.c,$(OBJDIR)/core/%.o,$(ALL_C)) \
+        $(patsubst $(BEETLE)/%.cpp,$(OBJDIR)/core/%.o,$(ALL_CXX)) \
         $(OBJDIR)/main.o $(OBJDIR)/psxport_hooks.o $(OBJDIR)/games/tomba2.o
 
 wide60rt: $(OBJS)
@@ -79,11 +81,11 @@ $(OBJDIR)/games/tomba2.o: games/tomba2.cpp
 	@mkdir -p $(dir $@)
 	$(CXX) -c $(CXXFLAGS) -o $@ $<
 
-$(OBJDIR)/%.o: %.c
+$(OBJDIR)/core/%.o: $(BEETLE)/%.c
 	@mkdir -p $(dir $@)
 	$(CC) -c $(CFLAGS) -o $@ $<
 
-$(OBJDIR)/%.o: %.cpp
+$(OBJDIR)/core/%.o: $(BEETLE)/%.cpp
 	@mkdir -p $(dir $@)
 	$(CXX) -c $(CXXFLAGS) -o $@ $<
 
