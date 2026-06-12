@@ -1,4 +1,4 @@
---- a/src/core/gpu.cpp	2026-06-12 21:34:24.926823196 +0300
+--- a/src/core/gpu.cpp	2026-06-12 21:47:44.816702787 +0300
 +++ b/src/core/gpu.cpp	2026-06-12 20:30:52.923625469 +0300
 @@ -8,6 +8,7 @@
  #include "dma.h"
@@ -87,7 +87,7 @@
          const u32 command = FifoPeek(0) >> 24;
          if (s_GP0_command_handler_table[command]())
            continue;
---- a/src/core/gpu_backend.cpp	2026-06-12 21:34:24.847822188 +0300
+--- a/src/core/gpu_backend.cpp	2026-06-12 21:47:44.732964941 +0300
 +++ b/src/core/gpu_backend.cpp	2026-06-12 20:02:37.051371015 +0300
 @@ -3,6 +3,7 @@
  
@@ -191,7 +191,7 @@
 +} // namespace Wide60
 --- a/src/core/gpu_wide60.cpp	1970-01-01 02:00:00.000000000 +0200
 +++ b/src/core/gpu_wide60.cpp	1970-01-01 02:00:00.000000000 +0200
-@@ -0,0 +1,1066 @@
+@@ -0,0 +1,1064 @@
 +// psxport "wide60" layer. See gpu_wide60.h for the high-level description.
 +//
 +// Method (validated offline against GPU dumps, tools/interp_dump.py in psxport):
@@ -299,7 +299,12 @@
 +static constexpr s32 TRANSFORM_MATCH_RANGE = 4096; // max TR L1 delta = same object
 +static constexpr s32 TAGGED_DISPLACEMENT_GATE = 160;
 +
-+static bool s_enabled = false;
++// GUI frontend has no -wide60 switch; allow enabling via environment. Read at
++// static init so it is set before the first settings load/fixup.
++static bool s_enabled = []() {
++  const char* v = std::getenv("PSXPORT_WIDE60");
++  return (v && *v && *v != '0');
++}();
 +static bool s_replaying = false;
 +
 +static FrameCapture s_frames[4];
@@ -335,13 +340,6 @@
 +
 +void Reset()
 +{
-+  // GUI frontend has no -wide60 switch; allow enabling via environment.
-+  static const bool env_enabled = []() {
-+    const char* v = std::getenv("PSXPORT_WIDE60");
-+    return (v && *v && *v != '0');
-+  }();
-+  s_enabled |= env_enabled;
-+
 +  for (FrameCapture& f : s_frames)
 +    f.Clear();
 +  s_have_prev = s_have_last = false;
@@ -1258,7 +1256,7 @@
 +}
 +
 +} // namespace Wide60
---- a/src/core/gte.cpp	2026-06-12 21:34:24.849822214 +0300
+--- a/src/core/gte.cpp	2026-06-12 21:47:44.734964966 +0300
 +++ b/src/core/gte.cpp	2026-06-12 21:13:42.117842022 +0300
 @@ -5,6 +5,7 @@
  #include "cpu_core.h"
@@ -1285,7 +1283,7 @@
      default:
      {
        // written as-is, 2x16 or 1x32 bits
---- a/src/core/cpu_core.cpp	2026-06-12 21:34:24.843822137 +0300
+--- a/src/core/cpu_core.cpp	2026-06-12 21:47:44.728964890 +0300
 +++ b/src/core/cpu_core.cpp	2026-06-12 21:22:25.040627657 +0300
 @@ -7,6 +7,7 @@
  #include "cpu_core_private.h"
@@ -1347,7 +1345,32 @@
        if constexpr (pgxp_mode >= PGXPMode::Memory)
          PGXP::CPU_SWC2(inst, addr, value);
      }
---- a/src/core/CMakeLists.txt	2026-06-12 21:34:24.840822099 +0300
+--- a/src/core/settings.cpp	2026-06-12 21:47:44.736964991 +0300
++++ b/src/core/settings.cpp	2026-06-12 21:44:53.919823449 +0300
+@@ -5,6 +5,7 @@
+ #include "achievements.h"
+ #include "controller.h"
+ #include "core.h"
++#include "gpu_wide60.h"
+ #include "gte_types.h"
+ #include "host.h"
+ #include "imgui_overlays.h"
+@@ -1208,6 +1209,14 @@
+ 
+ void Settings::FixIncompatibleSettings(const SettingsInterface& si, bool display_osd_messages)
+ {
++  // wide60's GTE-tagging hooks (swc2/mfc2) only exist in the interpreter; the
++  // recompiler inlines those instructions, silently degrading to generic-only.
++  if (Wide60::IsEnabled() && cpu_execution_mode != CPUExecutionMode::Interpreter)
++  {
++    INFO_LOG("wide60: forcing CPU execution mode to Interpreter for GTE tagging.");
++    cpu_execution_mode = CPUExecutionMode::Interpreter;
++  }
++
+   // fast forward boot requires fast boot
+   bios_fast_forward_boot = bios_patch_fast_boot && bios_fast_forward_boot;
+ 
+--- a/src/core/CMakeLists.txt	2026-06-12 21:47:44.726550603 +0300
 +++ b/src/core/CMakeLists.txt	2026-06-12 20:03:07.665735074 +0300
 @@ -70,6 +70,8 @@
    gpu_dump.cpp
@@ -1358,7 +1381,7 @@
    gpu_hw.cpp
    gpu_hw.h
    gpu_hw_shadergen.cpp
---- a/src/duckstation-regtest/regtest_host.cpp	2026-06-12 21:34:24.926823196 +0300
+--- a/src/duckstation-regtest/regtest_host.cpp	2026-06-12 21:47:44.816702787 +0300
 +++ b/src/duckstation-regtest/regtest_host.cpp	2026-06-12 21:17:03.557493874 +0300
 @@ -9,6 +9,7 @@
  #include "core/fullscreenui.h"
