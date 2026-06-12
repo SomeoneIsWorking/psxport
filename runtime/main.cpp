@@ -7,7 +7,12 @@
 //                 [-inputscript FILE] [-bios DIR] [-play]
 // -play opens an SDL window with keyboard/gamepad input and audio:
 //   arrows = d-pad, Z/X/A/S = Cross/Circle/Square/Triangle,
-//   Enter/RShift = Start/Select, Q/W E/R = L1/L2 R1/R2, Esc quits.
+//   Enter/RShift = Start/Select, Q/W E/R = L1/L2 R1/R2,
+//   Tab = hold to fast-forward, Esc quits.
+// -skipintro: auto-mashes Cross at fast-forward speed until you press any
+//   control (or frame 40000), to blast through logos/FMVs/menus.
+// Fast boot (BIOS skip) and 14x CD loading are enabled by default; disable
+// with -slowboot / -slowcd if a game misbehaves.
 // Input script lines: "<start_frame> <end_frame> <Button>" (digital pad).
 
 #include "libretro.h"
@@ -34,6 +39,11 @@ retro_pixel_format g_pixel_format = RETRO_PIXEL_FORMAT_0RGB1555;
 // --- play mode (SDL window/input/audio) ---
 bool g_play = false;
 bool g_quit = false;
+bool g_fast_boot = true;
+bool g_fast_cd = true;
+bool g_skipintro = false;    // auto-mash + fast-forward until user input
+bool g_ff_hold = false;      // Tab held
+bool g_present_this_run = true;
 SDL_Window* g_window = nullptr;
 SDL_Renderer* g_renderer = nullptr;
 SDL_Texture* g_texture = nullptr;
@@ -113,7 +123,14 @@ bool EnvironmentCb(unsigned cmd, void* data)
       *static_cast<bool*>(data) = true;
       return true;
     case RETRO_ENVIRONMENT_GET_VARIABLE:
-      return false; // all core options at defaults
+    {
+      auto* var = static_cast<retro_variable*>(data);
+      if (g_fast_boot && strcmp(var->key, "beetle_psx_skip_bios") == 0)
+        return (var->value = "enabled"), true;
+      if (g_fast_cd && strcmp(var->key, "beetle_psx_cd_fastload") == 0)
+        return (var->value = "14x"), true;
+      return false; // everything else at core defaults
+    }
     default:
       return false;
   }
@@ -158,7 +175,7 @@ void VideoCb(const void* data, unsigned width, unsigned height, size_t pitch)
   if (data && !g_dump_dir.empty() && g_dump_interval && (g_frame % g_dump_interval) == 0)
     WriteFramePPM(data, width, height, pitch);
 
-  if (!g_play || !data)
+  if (!g_play || !data || !g_present_this_run)
     return;
   if (!g_texture || g_tex_w != width || g_tex_h != height)
   {
@@ -180,7 +197,7 @@ void VideoCb(const void* data, unsigned width, unsigned height, size_t pitch)
 void AudioSampleCb(int16_t, int16_t) {}
 size_t AudioBatchCb(const int16_t* data, size_t frames)
 {
-  if (g_audio)
+  if (g_audio && g_present_this_run)
   {
     // keep latency bounded: drop if more than ~100ms is already queued
     if (SDL_GetQueuedAudioSize(g_audio) < 44100 * 4 / 10)
@@ -231,6 +248,10 @@ void InputPollCb()
   {
     if (ev.type == SDL_QUIT || (ev.type == SDL_KEYDOWN && ev.key.keysym.scancode == SDL_SCANCODE_ESCAPE))
       g_quit = true;
+    else if (ev.type == SDL_KEYDOWN && ev.key.keysym.scancode == SDL_SCANCODE_TAB)
+      g_ff_hold = true;
+    else if (ev.type == SDL_KEYUP && ev.key.keysym.scancode == SDL_SCANCODE_TAB)
+      g_ff_hold = false;
     else if (ev.type == SDL_CONTROLLERDEVICEADDED && !g_pad)
       g_pad = SDL_GameControllerOpen(ev.cdevice.which);
   }
@@ -260,6 +281,9 @@ int16_t InputStateCb(unsigned port, unsigned device, unsigned, unsigned id)
   if (port != 0 || device != RETRO_DEVICE_JOYPAD)
     return 0;
   if (g_play && id < 16 && (g_buttons & (1 << id)))
+    return 1;
+  // intro skip: mash Cross (3 frames on, 3 off) while active
+  if (g_skipintro && id == RETRO_DEVICE_ID_JOYPAD_B && (g_frame % 6) < 3)
     return 1;
   for (const InputEvent& ev : g_input_script)
   {
@@ -293,6 +317,12 @@ int main(int argc, char** argv)
       g_system_dir = v;
     else if (strcmp(argv[i], "-play") == 0)
       g_play = true;
+    else if (strcmp(argv[i], "-skipintro") == 0)
+      g_skipintro = true;
+    else if (strcmp(argv[i], "-slowboot") == 0)
+      g_fast_boot = false;
+    else if (strcmp(argv[i], "-slowcd") == 0)
+      g_fast_cd = false;
     else if (argv[i][0] != '-')
       disc = argv[i];
   }
@@ -349,7 +379,19 @@ int main(int argc, char** argv)
   if (g_play)
   {
     for (g_frame = 0; !g_quit; g_frame++)
-      retro_run(); // paced by vsync in the present
+    {
+      // intro skip ends on real user input (any button) or a hard cap
+      if (g_skipintro && (g_buttons != 0 || g_frame > 40000))
+        g_skipintro = false;
+
+      const unsigned steps = (g_ff_hold || g_skipintro) ? 8 : 1;
+      for (unsigned s = 0; s < steps; s++, g_frame += (s < steps ? 1 : 0))
+      {
+        g_present_this_run = (s == steps - 1); // present/queue only the last
+        retro_run();
+      }
+      g_present_this_run = true;
+    }
   }
   else
   {
