@@ -1,5 +1,31 @@
 # Debug / progress journal
 
+## 2026-06-12 — object-identity matching via arena slots; 60fps PoC verified visually
+- User direction: don't rely on screen-space nearest matching — use object identity.
+  PSX-specific insight: matrices never reach the GPU (GTE is CPU-side), but the DMA
+  linked list gives every GP0 packet's **RAM address**, and engines bump-allocate
+  per-object prims from a **double-buffered arena** (measured: 0% address overlap
+  between adjacent frames, 88.5% two frames apart → same slot = same prim at N↔N+2 =
+  free ground truth).
+- Fork change (patch 0001): GPU::DMAWrite records `SRCADDR <hex>` Comment packets in
+  GPU dumps (the dump player ignores Comment packets, so dumps stay replayable).
+- Matcher (in tools/interp_dump.py): sort draws by arena address (allocation order =
+  entity iteration order), sequence-align (difflib) on position-independent mesh
+  fingerprints = cmd byte + **texcoord low halves only**. KEY FINDING: clut/texpage
+  high halves alternate with frame parity (the game double-buffers CLUTs) — including
+  them drops adjacent-frame token overlap from 92.6% to 4%. Validated against the
+  N↔N+2 address ground truth: **89.1% aligned, 99.2% correct** (Crash Bash gameplay).
+  Naive rank pairing: 1%. Diff-align on (cmd,len) only: 18.7%. UV fingerprints with
+  clut included: 3.2% coverage. (Dead ends — don't revisit.)
+- tools/interp_dump.py converts a 30fps dump → 60fps dump (lerped in-between frames,
+  abs-coordinate lerp across E5 offsets, 100px displacement gate snaps residual
+  mismatches). Output replays cleanly through the real renderer (regtest replay mode);
+  earlier screen-space-key version produced giant stretched-polygon artifacts, v2 has
+  none visible. Comparison video: scratch/screenshots/crashbash-30v60.mp4.
+- Next: longer captures for a better demo; Tomba 2 with SRCADDR (verify arena pattern
+  generalizes); then the real-time implementation of this matcher in the fork
+  (interpolated present at vblank between game flips).
+
 ## 2026-06-12 — both games measured: 30 fps presented framerate (gameplay)
 - Added `-inputscript` to regtest (in patch 0001): scripted pad-1 digital input,
   `<start> <end> <Button>` per line. Deterministic across runs — menu navigation

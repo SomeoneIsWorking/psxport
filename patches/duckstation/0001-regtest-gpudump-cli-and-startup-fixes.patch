@@ -1,3 +1,21 @@
+diff --git a/src/core/gpu.cpp b/src/core/gpu.cpp
+index d31bc5d..32c121d 100644
+--- a/src/core/gpu.cpp
++++ b/src/core/gpu.cpp
+@@ -922,6 +922,13 @@ void GPU::DMAWrite(const u32* RESTRICT words, u32 address, u32 increment, u32 wo
+ 
+   if (GPUDump::Recorder* dump = GPU::GetGPUDump()) [[unlikely]]
+   {
++    // Sideband for offline analysis: the RAM address this packet was DMA'd from.
++    // Engines allocate per-object primitives contiguously, so the address stream
++    // segments the display list into object groups.
++    dump->BeginPacket(GPUDump::PacketType::Comment);
++    dump->WriteString(TinyString::from_format("SRCADDR {:08X}", address));
++    dump->EndPacket();
++
+     // No wraparound?
+     dump->BeginGP0Packet(word_count);
+     dump->WriteWords(words, word_count);
 diff --git a/src/duckstation-regtest/regtest_host.cpp b/src/duckstation-regtest/regtest_host.cpp
 index f48a9ad..6fe290e 100644
 --- a/src/duckstation-regtest/regtest_host.cpp
