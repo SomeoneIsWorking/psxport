@@ -1,5 +1,34 @@
 # Debug / progress journal
 
+## 2026-06-12 — scope change #2: generic "wide60" layer (see CLAUDE.md)
+- Refined goal: a *reusable* widescreen+60fps system for PSX games, logic untouched,
+  per-game RE minimized. Architecture = generic tier (primitive-level display-list
+  interpolation + DuckStation widescreen hack) + per-game tier (GTE transform tagging
+  config + culling/HUD patches). Full rationale in CLAUDE.md.
+- Framerates NOT verified for either game yet — the interpolator's logic-rate detector
+  will measure them. Do not assume Crash Bash is 60 fps (earlier note retracted;
+  user is unsure too).
+
+## 2026-06-12 — DuckStation hook-point survey (code reading, pre-build)
+- All primitives flow through a single backend command stream: `GPU::HandleRenderPolygonCommand`
+  (`src/core/gpu.cpp:3063`) → `GPUBackend::NewDrawPolygonCommand` (`gpu.cpp:3229`) →
+  video-thread queue of `GPUBackendDrawPolygonCommand` (+Line/Rectangle variants).
+  This *is* the per-frame display list for the interpolator: capture per frame at this
+  layer, match prims across frames, re-emit lerped copies on synthesized frames.
+- Frame boundary: vblank handling in `gpu.cpp` CRTC state (~line 1637).
+- `src/core/gpu_dump.cpp`: existing GP0 stream recorder → use it to dump real frames
+  and prototype the primitive matcher OFFLINE before modifying the render loop.
+- GTE register writes for the per-game tagging tier live in `src/core/gte.cpp`.
+
+## 2026-06-12 — scope change #1: no recomp, patches + modified emulator
+- DuckStation license is CC-BY-NC-ND-4.0 → modified fork must stay private; patches
+  themselves are publishable.
+- DuckStation regtest build: prebuilt deps downloaded (release-20260526, sha verified)
+  into `dep/prebuilt/`. Configure blocked on missing system `extra-cmake-modules`
+  (ECM, for Wayland) — needs `sudo dnf install extra-cmake-modules`.
+- The recompiler/harness scaffolding below is superseded; discdump, disc provisioning,
+  and the submodule remain in use.
+
 ## 2026-06-12 — project init
 - Repo scaffolded per recomp-init: `recompiler/ runtime/ overrides/ harness/ tools/
   generated/(gitignored) scratch/(gitignored)`.
