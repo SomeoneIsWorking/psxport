@@ -79,7 +79,8 @@ ALL_CXX := $(sort $(SOURCES_CXX))
 OBJS := $(patsubst $(BEETLE)/%.c,$(OBJDIR)/core/%.o,$(ALL_C)) \
         $(patsubst $(BEETLE)/%.cpp,$(OBJDIR)/core/%.o,$(ALL_CXX)) \
         $(OBJDIR)/main.o $(OBJDIR)/psxport_hooks.o $(OBJDIR)/wide60.o $(OBJDIR)/games/tomba2.o \
-        $(OBJDIR)/hle_iso.o $(OBJDIR)/hle_syscalls.o $(OBJDIR)/hle_kernel.o
+        $(OBJDIR)/hle_iso.o $(OBJDIR)/hle_syscalls.o $(OBJDIR)/hle_kernel.o \
+        $(OBJDIR)/hle_irq.o
 
 $(EXE): $(OBJS)
 	$(CXX) -o $@ $(OBJS) $(LDFLAGS)
@@ -109,6 +110,10 @@ $(OBJDIR)/hle_syscalls.o: hle_syscalls.cpp hle_bios.h
 	$(CXX) -c $(CXXFLAGS) -o $@ $<
 
 $(OBJDIR)/hle_kernel.o: hle_kernel.cpp hle_bios.h
+	@mkdir -p $(dir $@)
+	$(CXX) -c $(CXXFLAGS) -o $@ $<
+
+$(OBJDIR)/hle_irq.o: hle_irq.cpp hle_bios.h psxport_hooks.h
 	@mkdir -p $(dir $@)
 	$(CXX) -c $(CXXFLAGS) -o $@ $<
 

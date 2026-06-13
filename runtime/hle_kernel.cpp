@@ -136,6 +136,27 @@ struct EvCB {
 static const int EVCB_MAX = 16;
 static EvCB s_ev[EVCB_MAX];
 
+// Game-registered interrupt entry point (B0:0x19 HookEntryInt). The native
+// exception handler in hle_irq.cpp reads this and invokes it on a hardware IRQ.
+static uint32_t s_int_handler = 0;
+extern "C" uint32_t psxport_hle_int_handler(void) { return s_int_handler; }
+
+// Native event delivery helper for the IRQ path (see hle_bios.h). Marks matching
+// open+enabled EvCBs fired and collects mode-0x2000 callback func addresses.
+extern "C" int psxport_hle_deliver_event_funcs(uint32_t ev_class, uint32_t spec,
+                                               uint32_t* out_func, int max) {
+	int n = 0;
+	for (int i = 0; i < EVCB_MAX; i++) {
+		if (s_ev[i].open && s_ev[i].enabled &&
+		    s_ev[i].ev_class == ev_class && (s_ev[i].spec & spec)) {
+			s_ev[i].fired = true;
+			if ((s_ev[i].mode & 0x2000) && s_ev[i].func && n < max)
+				out_func[n++] = s_ev[i].func;
+		}
+	}
+	return n;
+}
+
 // Event id encoding matches the BIOS convention (0xF1000000 | index), so an id
 // handed back to game code round-trips through our table lookup.
 static const uint32_t EV_ID_BASE = 0xF1000000u;
@@ -273,13 +294,27 @@ extern "C" int psxport_hle_kernel(char table, uint32_t fnum, uint32_t* gpr, uint
 			return 1;
 		}
 
+		case 0x17: // ReturnFromException() -> void. The real BIOS restores the
+			// saved register frame and RFEs. In our HLE, the game's root IRQ
+			// dispatcher calls this near its end, but it ALSO has a normal
+			// epilogue + `jr $ra` that returns to our exception trampoline's
+			// sentinel, where hle_irq.cpp performs the single RFE + register
+			// restore. So here ReturnFromException is a benign return-to-caller:
+			// let the dispatcher run its epilogue; the real RFE happens at the
+			// sentinel. (Returning gpr[v0]=0 and falling through to ra.)
+			gpr[HLE_R_V0] = 0;
+			return 1;
 		case 0x18: // ResetEntryInt() -> void : clears the kernel's interrupt
 			// entry-point hook. No kernel IRQ chain here; benign no-op.
 			gpr[HLE_R_V0] = 0;
 			return 1;
-		case 0x19: // HookEntryInt(addr) -> void : registers the game's interrupt
-			// entry point with the kernel. We have no kernel IRQ dispatch to
-			// route through it yet (SCOPE NOTE), so record nothing; no-op.
+		case 0x19: // HookEntryInt(cb) -> void : registers the game's interrupt
+			// chain element with the kernel. Record cb; hle_irq.cpp's native
+			// exception handler reads cb->word[0] (the BIOS-vectored entry) and
+			// decodes the dispatcher it tail-`jal`s, then invokes that on each
+			// hardware IRQ. (Tomba2 passes cb=0x80025724, word[0]=0x80018268,
+			// which jal's the root dispatcher 0x800182D8.)
+			s_int_handler = a0;
 			gpr[HLE_R_V0] = 0;
 			return 1;
 		case 0x5B: // ChangeClearPAD(int) -> void : toggles whether the BIOS pad

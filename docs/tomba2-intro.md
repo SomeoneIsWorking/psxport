@@ -257,3 +257,55 @@ overlay; dump RAM at f1000 = scratch/bin/tomba2/ram_f1000.bin) to find the
   `PSXPORT_RAMDUMP`, `tools/disasm.py`. KEY: dump RAM **during the logo phase**
   (f400/f1000), not during the FMV — the FMV stream overwrites the intro driver code
   at 0x80011xxx/0x80018xxx.
+
+## HLE BIOS Stage 3 — native IRQ/exception delivery (2026-06-13, LANDED)
+Stage 3 makes hardware interrupts reach the game under PSXPORT_HLE_BIOS=1, which
+was the blocker past the second-stage loader. New file `runtime/hle_irq.cpp`;
+generic beetle accessors only (`psxport_cpu_cop0/_set_cop0` in cpu.c,
+`psxport_irq_status/_mask/_ack` in irq.c). Build/run isolated:
+`make -C runtime OBJDIR=obj_irq EXE=wide60rt_irq` / `./runtime/wide60rt_irq`.
+
+Mechanism (all policy in runtime/, no magic offsets):
+- beetle's interpreter already vectors to the general-exception entry when an
+  IRQ is pending and SR allows it. Under HLE that vector is EMPTY (no ROM
+  handler installed), so the CPU derailed into ROM at **0xBFC00180** (BEV=1,
+  never cleared by our HLE boot). Hook BOTH 0x80000080 and 0xBFC00180.
+- On entry read COP0 CAUSE. ExcCode 0 (interrupt): invoke the game's root IRQ
+  dispatcher as a subroutine via a trampoline ($ra = sentinel 0x80000040; a hook
+  there does the single RFE + register restore + resume at EPC/TAR). ExcCode 8
+  (syscall): Enter/ExitCriticalSection set/clear SR **0x401** (IEc + IM-IP2).
+- The dispatcher is resolved generically: HookEntryInt's arg (B0:0x19, recorded
+  in hle_kernel.cpp) is an ExCB whose word[0] is the BIOS-vectored entry; that
+  entry tail-`jal`s the real dispatcher (0x800182D8 for Tomba2) — we decode the
+  jal target. The dispatcher reads real I_STAT (via the kernel ptr table at
+  0x80026778/7C), services sources, bumps the VBLANK frame counter 0x800267B4
+  (the VSync wait at 0x80017FC4 spins on it), and acks I_STAT.
+
+Three bugs found + fixed, in order:
+1. **SR IM bits were 0** → CPU_RecalcIPCache never raised a pending IRQ even with
+   I_STAT/I_MASK set. ExitCriticalSection must set **0x401** (IEc + IM-IP2 bit
+   10), not just IEc. (Was the reason VBLANK never delivered at all.)
+2. **Reentrancy**: an IRQ firing while EPC was inside the dispatcher re-invoked
+   it and spun. Guard: if already servicing, mask (clear IEc) and resume the
+   in-progress dispatcher without re-dispatching.
+3. **$ra (and full reg file) clobbered**: the trampoline overwrote the
+   interrupted code's $ra with the sentinel; resuming at a `jr $ra` jumped to the
+   sentinel → infinite loop. Fix: save the FULL register file (GPR1..31 except
+   $sp, + LO/HI) at dispatch, restore at the sentinel RFE. (Faithful to what the
+   BIOS exception handler does with the process register-save area.)
+
+VERIFIED (PSXPORT_HLE_BIOS=1, no Start): VBLANK counter 0x800267B4 advances 1:1
+with frames (100@f100, 1000@f1000). The EXE runs its OWN logic — **no longer
+derails into ROM / 0x80040000**. At ~f1000 the game reconfigures the display
+(280x240 -> 700x480) and renders content (nonblack pixels). PSXPORT_IRQ_LOG=1
+traces each exception; =2 adds an I_STAT/I_MASK/SR probe.
+
+### NEXT BLOCKER (Stage 4 — missing syscalls, NOT IRQ): crash at ~f1284
+After rendering starts, the game faults: `UNHANDLED exception code=4 (ADEL) at
+epc=0x0000000E` — a jalr through a null/garbage function pointer (ra=0xE),
+deep in the Whoopee animation player (0x8001138C <- 0x800111B4 sequencer). The
+likely cause is one of the still-UNIMPL syscalls returning v0=0 where the game
+expects a valid pointer/handle. Surfaced UNIMPL (return-0 stubs) at the crash:
+A0(0x44) FlushCache, A0(0x49), B0(0x15), B0(0x35), B0(0x57), C0(0x02)
+SysEnqIntRP, C0(0x03) SysDeqIntRP. Implement these (esp. the EnqIntRP/event/dev
+ones) next; the IRQ path itself is complete.

@@ -114,6 +114,20 @@ extern unsigned psxport_frame;
 /* Live GPR file (32 GPRs + LO/HI), from the imported cpu.c. */
 uint32_t* psxport_cpu_gpr(void);
 
+/* Generic COP0 register access (cpu.c): read/write the CP0 register file by
+   index (CP0REG_SR=12, CAUSE=13, EPC=14, TAR=6). A write recomputes the cached
+   interrupt-pending state. Used by the runtime's native BIOS exception handler
+   (runtime/hle_irq.cpp) to read CAUSE/EPC and pop SR (RFE) on return. */
+uint32_t psxport_cpu_cop0(int reg);
+void psxport_cpu_set_cop0(int reg, uint32_t v);
+
+/* Generic IRQ-controller access (irq.c): I_STAT (status), I_MASK, and an
+   ack-bits operation (Status &= ~bits; recompute CPU IRQ line). Pending IRQs =
+   status & mask; bit 0=VBLANK,1=GPU,2=CD,3=DMA,4..6=TIMER0..2,7=SIO. */
+uint16_t psxport_irq_status(void);
+uint16_t psxport_irq_mask(void);
+void psxport_irq_ack(uint16_t bits);
+
 /* Generic CPU primitive (sibling to psxport_cpu_gpr): set the program counter,
    clearing branch-delay state, so execution resumes at `pc`. From cpu.c. The
    frontend uses gpr+set_pc to redirect the CPU; any boot/BIOS policy lives in

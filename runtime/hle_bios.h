@@ -67,6 +67,20 @@ int psxport_hle_syscall(char table, uint32_t fnum, uint32_t* gpr, uint8_t* ram);
 // (gpr[V0] set), 0 = not ours. Routed to from psxport_hle_syscall().
 int psxport_hle_kernel(char table, uint32_t fnum, uint32_t* gpr, uint8_t* ram);
 
+// ---- Stage 3: IRQ/exception delivery ---------------------------------------
+// The game registers its interrupt entry point via B0(0x19) HookEntryInt(addr).
+// hle_kernel.cpp records it; the native exception handler (hle_irq.cpp) invokes
+// it as a subroutine when a hardware IRQ fires. Returns 0 if none registered.
+uint32_t psxport_hle_int_handler(void);
+
+// Native event delivery: mark every open+enabled EvCB matching (ev_class, spec)
+// as fired, AND return (via out_func[count]) the PSX addresses of any mode-0x2000
+// (call-function) handlers that should be invoked. Used by the IRQ path to honor
+// OpenEvent(...,mode=0x2000,func) callbacks. Returns the number of funcs filled
+// (capped at max). Pure software events (no func) are just flagged fired.
+int psxport_hle_deliver_event_funcs(uint32_t ev_class, uint32_t spec,
+                                    uint32_t* out_func, int max);
+
 #ifdef __cplusplus
 }
 #endif

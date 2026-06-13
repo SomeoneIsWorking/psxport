@@ -21,6 +21,9 @@
 #include "wide60.h"
 #include "games/tomba2.h"
 
+// Stage-3 HLE BIOS: native IRQ/exception delivery (runtime/hle_irq.cpp).
+void Hle_Irq_Install(uint8_t* ram);
+
 #include <SDL2/SDL.h>
 
 #include <csignal>
@@ -744,6 +747,8 @@ int main(int argc, char** argv)
     psxport_add_hook(0xA0, 0, HleSyscallHook);
     psxport_add_hook(0xB0, 0, HleSyscallHook);
     psxport_add_hook(0xC0, 0, HleSyscallHook);
+    // Stage 3: native IRQ/exception delivery (vectors 0x80000080 / 0xBFC00180).
+    Hle_Irq_Install(g_ram);
     // Boot: load the disc's EXE into RAM and jump the CPU into it (skip the ROM).
     // The BIOS/boot policy lives here in the runtime; beetle only exposes the
     // generic CPU primitives (set_pc + the gpr file).
