@@ -94,15 +94,28 @@ Whoopee is reached ~f396 vs f670 baseline.
 
 ## OPEN: loads + paced sequencing are still slow (NEXT — make them PC-instant)
 
-Skipping the logos *unmasks* the loads they were hiding: after the Whoopee skip
-the screen is white/black while the **opening FMV streams in**. This is NOT
-unavoidable — on PC these are artificial waits to eliminate:
-- The FMV is XA/MDEC streamed; `psxport_cd_instant` deliberately stays native for
-  XA, so instant-CD (also OFF by default in -play) does NOT shorten it. **TODO:
-  RE the FMV load/stream path (in 0x800111B4's caller, past 0x80018C10) and serve
-  it at PC speed.**
-- The inter-stage black gaps are partly the game's own frame-counted dwells via
-  the VSync-wait primitives below. **TODO: RE and collapse those dwells.**
+Skipping the logos *unmasks* the inter-stage black/white gaps (SCEA→Whoopee
+≈234 frames even with the logo skipped; then the opening FMV streams in).
+
+**Measured cause (this is the important part): the gaps are the game PACING ITSELF
+one step per frame, NOT disk latency.** Evidence:
+- VSync-wait trace during the gap: the global frame counter `0x800267B4` ticks +1
+  per real frame and the game waits exactly 1 frame at a time (`0x80017FC4` called
+  with a0 = counter+1). There is NO far-target multi-frame dwell to "satisfy early".
+- `psxport_cd_instant` is a **bitmask** (bit0=1 misc, bit1=2 zero seek, bit2=4 short
+  startup, bit3=8 instant ReadN data). Full mask **15** reaches Whoopee at the SAME
+  f670 as native — making the disk instant does NOT shrink the gap. (Partial masks
+  2/8/10/14 desync the game so it never reaches Whoopee — instant-CD is fragile and
+  cannot be a blanket default.)
+
+So "instant load via faster disk" is NOT available here; the game advances its load/
+transition state machine (`0x80011a78`, keyed on `*(0x80025454)`, jump table
+@`0x80010054`) at a fixed per-frame rate regardless of data speed. Collapsing it
+requires either (a) forcing each state's own "advance" early (native, analogous to
+the logo skip, but many states + races the real loads) or (b) running the load-phase
+logic faster during the black window (a targeted turbo of just that phase — which is
+functionally fast-forward, the thing the user rejected for the logos). **This is a
+genuine native-vs-turbo tradeoff to decide before building.**
 
 ### Timing/IRQ primitives — mapped, intentionally LEFT EMULATED (do not native-own)
 Owning these natively would fake hardware timing (a bandaid). They depend on the
