@@ -1,5 +1,27 @@
 # Debug / progress journal
 
+## 2026-06-13 (later) — native intro skip IMPLEMENTED + verified
+- **Found the real intro driver:** `0x800111B4` is the logos sequencer (straight-line
+  blocking code, NO data-driven stage var). It calls `0x80010D54` (SCEA license:
+  fade-in/hold(180)/fade-out/done state machine on `$s5`) then a poll loop running
+  `0x8001138C` (Whoopee anim player; loop exits when `*(0x800253EC)==1`).
+- **Falsified the falsifications** (kept notes honest): `0x800111B4` IS the sequencer
+  (prior "stale stack-scan" note was wrong — it tested an unrelated fn); `0x8001E0CC`
+  DOES run; `0x800253EC` is the Whoopee done-flag (not a "scene step"), but is NOT a
+  usable lever (only re-checked at anim-pass boundaries — poking it mid-pass is inert,
+  verified).
+- **Native skip (default ON, Start-gated; runtime/games/tomba2.cpp):** `SceaSkip`
+  @0x80010ED0 forces `$s5=3` → SCEA jumps to done/return (skips hold AND fade
+  directly). `WhoopeeSkip` @0x80011414 sets the loop terminator + redirects to the
+  epilogue. **Verified:** Start held → post-Whoopee FMV stage at ~f505 vs ~f1181
+  baseline (~676f / ~11s earlier); end-to-end reaches the opening FMV cleanly.
+- **Retired** the rejected `Tomba2_WantTurbo` fast-forward + falsified `kScenePhase`.
+- **OPEN (user directive):** skipping the logos unmasks the loads they hid — the
+  opening FMV streams in (white/black gap) at native XA speed; inter-stage black gaps
+  are partly the game's frame-counted dwells. NEXT: RE the FMV load + paced dwells and
+  make them PC-instant. Timing/IRQ primitives mapped but LEFT EMULATED (owning them =
+  faking hardware). See docs/tomba2-intro.md.
+
 ## 2026-06-13 — intro RE restart: prior orchestrator FALSIFIED; logos NOT input-skippable
 - **User reframed the goal:** the SCEA + Whoopee Camp logos must be **natively
   skippable via RE + native port**, NOT emulator fast-forward (the shipped

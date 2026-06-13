@@ -10,11 +10,11 @@ void Tomba2_Install();
 /// (RETRO_DEVICE_ID_JOYPAD_* mask) to inject this frame.
 uint16_t Tomba2_FrameTick(uint8_t* ram);
 
-/// True while the game is in a load-mask segment (BIOS/logos) AND the user is
-/// holding the skip button (skip_held). The logos are load masks, not skippable
-/// segments (verified: input can't jump past the load) — so "skip" means
-/// fast-forward through them on demand, never automatically.
-bool Tomba2_WantTurbo(const uint8_t* ram, unsigned frame, bool skip_held);
+/// Latch the host "skip intro" input (Start) for this frame so the PC-native
+/// intro-skip overrides can read it from inside the interpreter. Holding Start
+/// natively skips the SCEA + Whoopee Camp logos via each logo's own advance
+/// path (runtime/games/tomba2.cpp; RE: docs/tomba2-intro.md).
+void Tomba2_SetSkipHeld(bool held);
 
 /// Debug heartbeat: render-dispatch hook hits since the last call.
 uint32_t Tomba2_GetAndResetRenderHits();

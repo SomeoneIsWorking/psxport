@@ -12,10 +12,13 @@
 namespace {
 uint32_t s_render_hits = 0;
 
-// Intro scene-phase word, driven by the orchestrator scene_update (0x8002C97C);
-// see docs/tomba2-scene-orchestrator.md. 0 = SCEA license screen, 1/2 = transition
-// + asset load, 3/4 = Whoopee Camp logo and the opening cutscene render loop.
-constexpr uint32_t kScenePhase = 0x675CC;
+// Host "skip intro" input (Start), latched each frame by the frontend so the
+// PC-native intro overrides below can see it from inside the interpreter.
+bool s_skip_held = false;
+// Main RAM, stashed each frame from Tomba2_FrameTick so an override can read or
+// write game state (e.g. mark a logo's "done" flag) without the emulator path.
+uint8_t* s_ram = nullptr;
+bool s_introskip = false; // intro skip installed (default on; PSXPORT_T2_NOINTROSKIP opts out)
 
 int RenderEntryHeartbeat(uint32_t, uint32_t*, uint32_t*)
 {
@@ -123,7 +126,59 @@ int CullSlti(uint32_t pc, uint32_t* gpr, uint32_t* redirect_pc)
   }
   return PSXPORT_HOOK_CONTINUE;
 }
+
+// --- Native intro skip (PC-owned intro progression; RE: docs/tomba2-intro.md) -
+// The intro is straight-line blocking code in the sequencer 0x800111B4 (verified:
+// no data-driven stage var exists). Each logo is shown by a function that is
+// entered once and BLOCKS in an internal per-VSync loop until its own end
+// condition; the pad is never polled, so the stock game can't skip them (only
+// the later FMV polls Start). These two overrides give the PC ownership of the
+// *advance decision* for each logo: when Start is held, satisfy the logo's OWN
+// exit path one step early. The emulated code still does all display/load — we
+// only own "when does the hold end", which is why this is a true native skip and
+// not emulator fast-forward, and why it can't race the asset loaders (the logo
+// is already displayed by the time its hold loop runs).
+
+// SCEA license (0x80010D54): a per-frame loop dispatching on phase $s5 (GPR[21]):
+//   0 = fade-in, 1 = hold(180 frames), 2 = fade-out, 3 = done -> the function
+// cleans up and returns (jr $ra @0x800111AC), and the sequencer advances. The
+// dispatch beq chain starts at 0x80010ED0 ("beq $s5,$v0,..."), reached once per
+// frame. On Start we set $s5=3 so the very next dispatch jumps straight to the
+// done/return path -- skipping the hold AND the fade-out directly (not just
+// ending the hold). The function's entry setup already ran, so done's cleanup is
+// the legitimate terminal path.
+int SceaSkip(uint32_t, uint32_t* gpr, uint32_t*)
+{
+  if (s_skip_held)
+    gpr[21] = 3; // $s5 = done phase
+  return PSXPORT_HOOK_CONTINUE;
+}
+
+// Whoopee Camp (0x8001138C): an animation player whose internal loop
+// 0x80011414..0x80011528 runs one displayed frame per iteration and exits when
+// *(0x800253EC)==1 (set by 0x800118C0 when the decode position passes frame
+// 250). 0x80011414 ("lui $v0,0x8004") is the loop top, reached once per frame.
+// On Start we take the function's own exit: mark *(0x800253EC)=1 (the natural
+// "animation done" flag) and redirect to the epilogue 0x80011530, returning v0=1
+// so the caller's poll loop (0x800112BC) advances to the opening FMV.
+int WhoopeeSkip(uint32_t pc, uint32_t* gpr, uint32_t* redirect_pc)
+{
+  if (!s_skip_held)
+    return PSXPORT_HOOK_CONTINUE;
+  if (s_ram)
+  {
+    const uint32_t done = 1;
+    memcpy(s_ram + 0x253EC, &done, 4); // the loop's own terminator flag
+  }
+  gpr[2] = 1; // v0 = "done" so the caller's `while(!v0)` poll loop exits
+  // Resume at the function epilogue (restores ra/s0/s1 and returns), in the same
+  // memory region the code runs in so the I-cache tag is unchanged.
+  *redirect_pc = 0x11530 | (psxport_last_pc & 0xE0000000);
+  return PSXPORT_HOOK_REDIRECT;
+}
 } // namespace
+
+void Tomba2_SetSkipHeld(bool held) { s_skip_held = held; }
 
 void Tomba2_Install()
 {
@@ -142,6 +197,16 @@ void Tomba2_Install()
   {
     for (const CullSite& s : kCullSites)
       psxport_add_hook(s.pc, s.instr, CullSlti);
+  }
+
+  // Native intro skip: PC owns the SCEA + Whoopee advance decision (Start).
+  // Default ON (the hooks are inert unless Start is held); opt out with
+  // PSXPORT_T2_NOINTROSKIP. Signature-gated to the resident intro code.
+  s_introskip = std::getenv("PSXPORT_T2_NOINTROSKIP") == nullptr;
+  if (s_introskip)
+  {
+    psxport_add_hook(0x80010ED0, 0x12A20019, SceaSkip);    // SCEA phase dispatch (beq $s5,$v0)
+    psxport_add_hook(0x80011414, 0x3C028004, WhoopeeSkip); // Whoopee loop top (lui $v0,0x8004)
   }
 
   // Live object enumeration: hook the universal per-object cull chokepoint.
@@ -170,6 +235,7 @@ uint32_t Tomba2_GetAndResetRenderHits()
 
 uint16_t Tomba2_FrameTick(uint8_t* ram)
 {
+  s_ram = ram; // available to overrides that need to read/write game state
   // s_obj_ptr now holds the objects submitted during the previous retro_run.
   if (s_objlog && s_obj_n)
   {
@@ -197,26 +263,3 @@ uint16_t Tomba2_FrameTick(uint8_t* ram)
   return 0;
 }
 
-bool Tomba2_WantTurbo(const uint8_t* ram, unsigned frame, bool skip_held)
-{
-  // Skip the intro logos (SCEA license + Whoopee Camp) by fast-forwarding while
-  // the skip button is held — never automatically. The whole intro is paced by
-  // the kernel ready-signal (scene_update -> dwell gate -> advance pump, see
-  // docs/tomba2-scene-orchestrator.md), so running the emulation faster makes
-  // those dwells elapse AND lets the asset loaders finish. We deliberately do
-  // NOT force the scene-advance event: that races the loaders and reproduces the
-  // white-screen "Whoopee Camp doesn't play" bug. (That bug's other cause — the
-  // old auto-skip writing into the pointer at 0x800253EC — is now removed.)
-  (void)frame;
-  if (!skip_held)
-    return false;
-  // The orchestrator drives the scene phase only during the attract/intro
-  // sequence. Phases 0..5 + 7 cover SCEA, the Whoopee Camp logo and the loads
-  // between them; phase 6 is the terminal/idle handoff. Once a state machine
-  // hasn't been initialised (game proper), the word reads outside 0..7. NOTE:
-  // the opening cutscene shares phase 3/4 with the logo, so a held Start also
-  // fast-forwards into the cutscene — that's acceptable "skip the intro".
-  uint32_t phase;
-  memcpy(&phase, ram + kScenePhase, 4);
-  return phase <= 5 || phase == 7;
-}
