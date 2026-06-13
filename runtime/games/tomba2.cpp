@@ -179,16 +179,22 @@ int WhoopeeSkip(uint32_t pc, uint32_t* gpr, uint32_t* redirect_pc)
 
 // Inter-stage timed dwell collapse. The load/transition state machine 0x80011a78
 // (keyed on *(0x80025454)) blocks state 0xE for a PURE 200-frame dwell: handler
-// 0x80012148 waits until frame_counter > *(0x80038498)+0xC8, displaying black --
-// dead time, not a load (instant-CD does not shrink it). At 0x80012164
-// ("beqz $v1, stay") $v1 = (saved+200 < counter). On Start we set $v1=1 so the
-// branch is not taken and the handler runs its OWN advance path (which sets
-// 0x80025444=5, calls 0x80012584, advances to state 0xF) -- skipping only the
-// wait. The earlier state 5 (~53f) is a real CD/load wait and is left intact.
+// 0x80012148 waits until frame_counter > *(0x80038498)+0xC8, displaying BLACK --
+// dead time, not a load (instant-CD does not shrink it; verified black 0,0,0
+// across the whole f321->f522 window). At 0x80012164 ("beqz $v1, stay") $v1 =
+// (saved+200 < counter). We set $v1=1 so the branch is not taken and the handler
+// runs its OWN advance path (sets 0x80025444=5, calls 0x80012584, advances to
+// state 0xF) -- skipping only the wait.
+//
+// UNCONDITIONAL (not Start-gated): this is the "big wait from Whoopee to FMV"
+// the user reported. It is pure black dead-time with no content, so on a PC port
+// there is no reason to ever sit through it -- "instant on PC". Gating it on
+// held-Start was wrong: a single Start tap at the Whoopee logo isn't still held
+// ~3s later when this dwell runs, so the wait returned. The logos themselves
+// (SceaSkip/WhoopeeSkip, which show actual content) stay Start-gated.
 int DwellSkip(uint32_t, uint32_t* gpr, uint32_t*)
 {
-  if (s_skip_held)
-    gpr[3] = 1; // $v1 != 0 -> dwell treated as elapsed, take the advance path
+  gpr[3] = 1; // $v1 != 0 -> dwell treated as elapsed, take the advance path
   return PSXPORT_HOOK_CONTINUE;
 }
 
