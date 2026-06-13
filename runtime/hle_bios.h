@@ -47,6 +47,14 @@ int psxport_cd_read_sectors(int32_t lba, int count, uint8_t* dst);
 //   out_pc/out_sp/out_gp = EXE entry PC, initial SP, GP (r28).
 int psxport_hle_boot(uint8_t* ram, uint32_t* out_pc, uint32_t* out_sp, uint32_t* out_gp);
 
+// Load a PS-X EXE from the disc by name (cdrom: path or bare NAME[;1]) into RAM
+// at its T_ADDR, clear its BSS, and return its entry context. Returns 1 on
+// success. out_pc = entry PC, out_gp = $gp, out_stack_top = stack_start+size
+// (0 if the EXE specifies no stack). Used by A0(0x51) LoadExec. The filename may
+// carry a "cdrom:\" / "cdrom0:" prefix and/or a ";1" version suffix.
+int psxport_hle_load_exe(uint8_t* ram, const char* name,
+                         uint32_t* out_pc, uint32_t* out_gp, uint32_t* out_stack_top);
+
 // ISO9660 lookup: find a file by name in the root directory. Returns true and
 // fills *out_lba (filesystem LBA, pass straight to psxport_cd_read_sectors) and
 // *out_size (bytes). Name match is case-insensitive and ignores a ";1" suffix.
@@ -85,11 +93,26 @@ uint32_t psxport_hle_take_pending_switch(void);        // consume request (0=non
 uint32_t Hle_Irq_ThreadSwitch(uint8_t* ram, uint32_t* gpr,
                               uint32_t new_tcb, uint32_t caller_ra);
 
+// ---- A0(0x51) LoadExec: load+exec a new EXE mid-run -------------------------
+// loadAndExec loads a PS-X EXE from disc and transfers control to it (it does
+// NOT return to the caller). Because the syscall handler can't redirect the live
+// CPU PC, the A0(0x51) handler records a pending exec here; HleSyscallHook then
+// installs the new context ($gp/$sp/$a0/$a1) into the live register file and
+// redirects PC to the entry. take_pending_exec returns 1 and fills *out_* if an
+// exec was requested (consuming it), else 0.
+int  psxport_hle_take_pending_exec(uint32_t* out_pc, uint32_t* out_gp,
+                                   uint32_t* out_sp);
+
 // ---- Stage 3: IRQ/exception delivery ---------------------------------------
 // The game registers its interrupt entry point via B0(0x19) HookEntryInt(addr).
 // hle_kernel.cpp records it; the native exception handler (hle_irq.cpp) invokes
 // it as a subroutine when a hardware IRQ fires. Returns 0 if none registered.
 uint32_t psxport_hle_int_handler(void);
+
+// Invalidate the cached root-IRQ dispatcher (hle_irq.cpp). Called from the
+// B0(0x19) HookEntryInt handler so a new EXE (loaded via A0:0x51 LoadExec) gets
+// its own dispatcher re-resolved instead of the previous EXE's stale cache.
+void psxport_hle_irq_reset_dispatcher(void);
 
 // Native event delivery: mark every open+enabled EvCB matching (ev_class, spec)
 // as fired, AND return (via out_func[count]) the PSX addresses of any mode-0x2000

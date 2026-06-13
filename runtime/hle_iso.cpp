@@ -145,6 +145,82 @@ bool cnf_get(const char* text, size_t len, const char* key, char* out, size_t ou
 
 } // namespace
 
+namespace {
+
+// Strip a "cdrom:" / "cdrom0:" device prefix and leading path separators from a
+// BOOT/LoadExec path, leaving just the filename (e.g. "MAIN.EXE;1"). Returns a
+// pointer into the same buffer.
+const char* strip_cdrom_prefix(const char* path) {
+  const char* name = path;
+  const char* colon = strchr(name, ':');
+  if (colon) name = colon + 1;
+  while (*name == '\\' || *name == '/') ++name;
+  return name;
+}
+
+} // namespace
+
+// Load a PS-X EXE from the disc by name into RAM at its T_ADDR, clear its BSS,
+// and return its entry context (pc, gp, stack top). Mirrors OpenBIOS
+// loadExe()+exec() (kernel/psxexe.{c,s}): read header (60 bytes at file +0x10),
+// copy text to text_addr, zero [bss_addr, bss_addr+bss_size), compute the stack
+// top as stack_start+stack_size. The actual SP/GP install + PC jump is done by
+// the caller (A0:0x51 LoadExec) so it can redirect the live CPU.
+int psxport_hle_load_exe(uint8_t* ram, const char* name_in,
+                         uint32_t* out_pc, uint32_t* out_gp, uint32_t* out_stack_top) {
+  if (!name_in) return 0;
+  const char* name = strip_cdrom_prefix(name_in);
+  if (*name == '\0') return 0;
+
+  uint32_t exe_lba = 0, exe_size = 0;
+  if (!psxport_hle_iso_find(name, &exe_lba, &exe_size)) return 0;
+  if (exe_size < 0x800) return 0;
+
+  uint32_t exe_sec = sectors_for(exe_size);
+  uint8_t* exe = (uint8_t*)malloc((size_t)exe_sec * 2048);
+  if (!exe) return 0;
+  if (psxport_cd_read_sectors((int32_t)exe_lba, (int)exe_sec, exe) != (int)exe_sec) {
+    free(exe);
+    return 0;
+  }
+  if (memcmp(exe, "PS-X EXE", 8) != 0) {
+    free(exe);
+    return 0;
+  }
+
+  // PS-X EXE header (first 0x800 bytes). LE uint32 fields:
+  //   +0x10 PC  +0x14 GP  +0x18 text_addr  +0x1C text_size
+  //   +0x28 bss_addr  +0x2C bss_size  +0x30 sp_base  +0x34 sp_offset
+  uint32_t pc        = rd_le32(exe + 0x10);
+  uint32_t gp        = rd_le32(exe + 0x14);
+  uint32_t text_addr = rd_le32(exe + 0x18);
+  uint32_t text_size = rd_le32(exe + 0x1C);
+  uint32_t bss_addr  = rd_le32(exe + 0x28);
+  uint32_t bss_size  = rd_le32(exe + 0x2C);
+  uint32_t sp_base   = rd_le32(exe + 0x30);
+  uint32_t sp_offset = rd_le32(exe + 0x34);
+
+  if ((uint64_t)0x800 + text_size > (uint64_t)exe_sec * 2048) {
+    text_size = (uint32_t)((uint64_t)exe_sec * 2048 - 0x800);
+  }
+  memcpy(ram + (text_addr & 0x1FFFFF), exe + 0x800, text_size);
+  free(exe);
+
+  // Clear BSS (exec()'s clearBSS loop): zero [bss_addr, bss_addr+bss_size).
+  if (bss_size) {
+    uint32_t b = bss_addr & 0x1FFFFF;
+    uint32_t n = bss_size;
+    if ((uint64_t)b + n > 0x200000u) n = 0x200000u - b;
+    memset(ram + b, 0, n);
+  }
+
+  if (out_pc) *out_pc = pc;
+  if (out_gp) *out_gp = gp;
+  // exec(): $sp = stack_start + stack_size, only if stack_start (header SP) set.
+  if (out_stack_top) *out_stack_top = sp_base ? (sp_base + sp_offset) : 0;
+  return 1;
+}
+
 // Boot: read SYSTEM.CNF, parse BOOT=cdrom:\NAME;1, load NAME's PS-X EXE into RAM
 // and return its initial PC/SP/GP. Returns 1 on success.
 int psxport_hle_boot(uint8_t* ram, uint32_t* out_pc, uint32_t* out_sp, uint32_t* out_gp) {

@@ -11,7 +11,7 @@
 //   B0(0x07) DeliverEvent  B0(0x08) OpenEvent   B0(0x09) CloseEvent
 //   B0(0x0A) WaitEvent     B0(0x0B) TestEvent   B0(0x0C) EnableEvent
 //   B0(0x0D) DisableEvent
-//   B0(0x15) Krom2RawAdd (ret discarded by Tomba2's int-init)
+//   B0(0x12-0x16) initPad/startPad/stopPad/initPadHighLevel/readPadHighLevel
 //   B0(0x18) ResetEntryInt B0(0x19) HookEntryInt B0(0x35) FileWrite
 //   B0(0x57) GetB0Table    B0(0x5B) ChangeClearPAD
 //   A0(0x44) FlushCache    A0(0x49) GPU_cw
@@ -192,6 +192,7 @@ static int ev_index(uint32_t id) {
 // 0x80010000) — verified zero in fresh + mid-intro RAM dumps.
 static const uint32_t HLE_WORK_BASE = 0x8000E000u; // control struct Q
 static const uint32_t HLE_B0TABLE   = 0x8000F000u; // fake B0 jump table P
+static const uint32_t HLE_C0TABLE   = 0x8000F800u; // fake C0 jump table (GetC0Table)
 static const uint32_t HLE_STUB_A    = HLE_WORK_BASE + 0x884u; // jr $ra; nop
 static const uint32_t HLE_STUB_B    = HLE_WORK_BASE + 0x894u;
 static bool s_work_inited = false;
@@ -205,6 +206,9 @@ static void work_area_init(uint8_t* ram) {
 	// B0 table P: slot at +0x16C points at the control struct Q. (The game only
 	// ever reads this one slot; the rest of the table page stays zero.)
 	hle_w32(ram, HLE_B0TABLE + 0x16Cu, HLE_WORK_BASE);
+	// C0 table page: a `jr $ra; nop` no-op stub at the page base, so any C0 entry
+	// the game might dereference/jump to lands on a safe return.
+	hle_w32(ram, HLE_C0TABLE + 0, 0x03E00008u); hle_w32(ram, HLE_C0TABLE + 4, 0);
 }
 
 // ---------------------------------------------------------------------------
@@ -416,8 +420,26 @@ extern "C" int psxport_hle_kernel(char table, uint32_t fnum, uint32_t* gpr, uint
 			// the game's own direct GPU writes). v0=0.
 			gpr[HLE_R_V0] = 0;
 			return 1;
-		case 0x72: // _96_remove() -> void : CD-device teardown counterpart of
-			// _96_init. No host device to tear down; benign no-op.
+		case 0x70: // initBackupUnit() / _bu_init() -> void : the BIOS memory-card
+			// device init (A0 table 0x70). Counterpart of the B0 card services
+			// above; no host card device to bring up. Benign success no-op so the
+			// game's card-init sequence proceeds.
+			gpr[HLE_R_V0] = 0;
+			return 1;
+		case 0x54: // initCDRom() -> 1 : the BIOS CD-ROM device init (A0 table 0x54
+		case 0x71: // and 0x71 both map to initCDRom in OpenBIOS). The real routine
+			// installs the CD IRQ handler + opens/enables the CD events and resets
+			// the drive. Under our HLE the CD is serviced natively and the game runs
+			// its OWN libcd (it programs the CD controller registers, incl. the IRQ-
+			// enable, directly — verified: it writes CD reg0x04=0x07 itself). So
+			// there is no BIOS-side CD device to bring up; return 1 (success) so the
+			// boot/intro proceeds. (Identified as A0(0x71) via the call-site
+			// trampoline 0x80012D3C; the intro sequencer calls it just before
+			// LoadExec'ing MAIN.EXE.)
+			gpr[HLE_R_V0] = 1;
+			return 1;
+		case 0x72: // _96_remove()/deinitCDRom() -> void : CD-device teardown
+			// counterpart of initCDRom. No host device to tear down; benign no-op.
 			gpr[HLE_R_V0] = 0;
 			return 1;
 		case 0xA2: // EnqueueCdIntr() -> void : installs the CD IRQ handler into
@@ -503,12 +525,16 @@ extern "C" int psxport_hle_kernel(char table, uint32_t fnum, uint32_t* gpr, uint
 			return 1;
 		}
 
-		case 0x15: // Krom2RawAdd(shiftjis) -> kanji-ROM glyph ptr (-1 if invalid).
-			// Tomba2 calls this from its interrupt-system init (0x800179E0) but
-			// DISCARDS the return (the next instruction overwrites v0). There is no
-			// kanji font ROM under HLE; return -1 (the BIOS "invalid code" result),
-			// which is the safe sentinel for any caller that does inspect it.
-			gpr[HLE_R_V0] = 0xFFFFFFFFu;
+		case 0x12: // initPad(buf1,len1,buf2,len2) -> void.  Low-level BIOS pad init.
+		case 0x13: // startPad() -> void.                   Pad input is serviced
+		case 0x14: // stopPad() -> void.                    natively in the runtime
+		case 0x15: // initPadHighLevel(type,buf,a,b) -> void. (frontio), not via the
+		case 0x16: // readPadHighLevel? -> void.            BIOS pad handlers, so all
+			// of these BIOS pad services are benign no-ops. (B0 0x15 is
+			// initPadHighLevel per the OpenBIOS B0 table — NOT Krom2RawAdd, which is
+			// B0 0x51.) Tomba2's int-system init (0x80017xxx) calls B0(0x14) stopPad
+			// + B0(0x15) initPadHighLevel during setup; returning 0 lets it proceed.
+			gpr[HLE_R_V0] = 0;
 			return 1;
 
 		case 0x35: { // FileWrite(fd, buf, len) -> bytes written. Tomba2 uses this
@@ -534,6 +560,43 @@ extern "C" int psxport_hle_kernel(char table, uint32_t fnum, uint32_t* gpr, uint
 			return 1;
 		}
 
+		case 0x56: // GetC0Table() -> ptr to the BIOS C0 jump table. MAIN.EXE reads
+			// it during startup (alongside GetB0Table). We publish a zeroed native
+			// C0-table page; any slot the game reads/jumps to lands on a `jr $ra`
+			// no-op stub at offset 0 (the page's first word is the stub). Returning
+			// a valid non-null pointer is what matters (a null derails like the old
+			// GetB0Table bug). The page stays otherwise zero (the game does not jump
+			// arbitrary C0 entries in the front-end path).
+			work_area_init(ram);
+			gpr[HLE_R_V0] = HLE_C0TABLE;
+			return 1;
+
+		// ---- Memory-card (BackupUnit) services -----------------------------
+		// MAIN.EXE initializes the memory card at startup (initCard/startCard/...).
+		// There is no host memory card in this bring-up, so report "init done, no
+		// card events pending": the card API is event-driven (it DeliverEvents on
+		// completion), and our event layer + the native card path are not wired,
+		// so we model these as benign successes. This unblocks the game's card-init
+		// sequence so the front-end can proceed. (Identities from the OpenBIOS B0
+		// table: 0x48 initCard, 0x49 startCard, 0x4A stopCard, 0x4B cardInfo,
+		// 0x4C mcWriteSector, 0x4D mcReadSector, 0x4E mcAllowNewCard.)
+		case 0x48: // initCard(pad_enable) -> void
+		case 0x49: // startCard() -> void
+		case 0x4A: // stopCard() -> void
+		case 0x4E: // mcAllowNewCard() -> void
+			gpr[HLE_R_V0] = 0;
+			return 1;
+		case 0x4B: // cardInfo(port) -> 1 : query a card's presence/status. Report
+			// success (the result is delivered via card events the game then waits
+			// on; with no card + no event delivery the game's card probe should
+			// time out to "no card" and continue). Return 1 (command accepted).
+			gpr[HLE_R_V0] = 1;
+			return 1;
+		case 0x4C: // mcWriteSector(port, sector, buf) -> 0 (no card; not written)
+		case 0x4D: // mcReadSector(port, sector, buf) -> 0  (no card; nothing read)
+			gpr[HLE_R_V0] = 0;
+			return 1;
+
 		case 0x17: // ReturnFromException() -> void. The real BIOS restores the
 			// saved register frame and RFEs. In our HLE, the game's root IRQ
 			// dispatcher calls this near its end, but it ALSO has a normal
@@ -555,6 +618,11 @@ extern "C" int psxport_hle_kernel(char table, uint32_t fnum, uint32_t* gpr, uint
 			// hardware IRQ. (Tomba2 passes cb=0x80025724, word[0]=0x80018268,
 			// which jal's the root dispatcher 0x800182D8.)
 			s_int_handler = a0;
+			// Re-resolve the cached dispatcher from this (possibly new) ExCB: a
+			// LoadExec'd EXE registers its own handler, and the old cached
+			// dispatcher would be stale (its EXE was overwritten). See
+			// psxport_hle_irq_reset_dispatcher.
+			psxport_hle_irq_reset_dispatcher();
 			gpr[HLE_R_V0] = 0;
 			return 1;
 		case 0x0E: { // OpenThread(pc, sp, gp) -> handle. Claims a FREE TCB slot,

@@ -428,6 +428,15 @@ uint32_t Hle_Irq_ThreadSwitch(uint8_t* ram, uint32_t* gpr,
   return resume_pc;
 }
 
+// Invalidate the cached root-IRQ dispatcher. Called when the game re-registers
+// its interrupt entry point (B0 0x19 HookEntryInt) — e.g. after A0(0x51)
+// LoadExec swaps in a new EXE (MAIN.EXE) with a different dispatcher. Without
+// this, the next IRQ would invoke the PREVIOUS EXE's cached dispatcher
+// (0x800182D8), whose code/callback tables the new EXE has overwritten, and
+// derail (verified: RI at 0x800183AC right after LoadExec). Forcing a re-resolve
+// from the new HookEntryInt ExCB picks up the new EXE's dispatcher.
+extern "C" void psxport_hle_irq_reset_dispatcher(void) { s_dispatcher = 0; }
+
 // --- ChangeThread request plumbing (called from hle_kernel.cpp B0 0x10) ------
 void psxport_hle_request_thread_switch(uint32_t tcb) { s_pending_switch = tcb; }
 uint32_t psxport_hle_take_pending_switch(void) {

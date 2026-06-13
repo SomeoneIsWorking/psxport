@@ -157,6 +157,21 @@ int HleSyscallHook(uint32_t pc, uint32_t* gpr, uint32_t* redirect_pc)
       *redirect_pc = Hle_Irq_ThreadSwitch(g_ram, gpr, new_tcb, gpr[31]);
       return PSXPORT_HOOK_REDIRECT;
     }
+    // A0(0x51) LoadExec: a new EXE was loaded; install its entry context and
+    // jump into it (exec() never returns to the caller). Mirrors psxexec.s:
+    // $gp=header.gp, $sp=$fp=stackTop, $a0=argc(1), $a1=argv(NULL), PC=entry.
+    {
+      uint32_t pc = 0, gp = 0, sp = 0;
+      if (psxport_hle_take_pending_exec(&pc, &gp, &sp))
+      {
+        gpr[28] = gp;             // $gp
+        if (sp) { gpr[29] = sp; gpr[30] = sp; } // $sp, $fp
+        gpr[31] = 0;              // $ra (new EXE entry shouldn't return)
+        gpr[4] = 1; gpr[5] = 0;   // $a0=argc, $a1=argv (exec shifts a1->a0,a2->a1)
+        *redirect_pc = pc;
+        return PSXPORT_HOOK_REDIRECT;
+      }
+    }
     *redirect_pc = gpr[31];
     return PSXPORT_HOOK_REDIRECT;
   }

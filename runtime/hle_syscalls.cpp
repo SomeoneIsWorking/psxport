@@ -8,9 +8,29 @@
 
 #include "hle_bios.h"
 
+#include <cstdio>
+#include <cstdlib>
+
 // PSX BIOS LCG. rand()/srand() share this seed; the exact recurrence and the
 // >>16 & 0x7FFF extraction matter for determinism (must match real hardware).
 static uint32_t s_rand_seed = 1;
+
+// ---- A0(0x51) LoadExec pending-exec state -----------------------------------
+// loadAndExec transfers control to the loaded EXE (never returns to its caller),
+// so the A0(0x51) handler records the new entry context here and HleSyscallHook
+// redirects the live CPU. (See hle_bios.h.)
+static bool     s_exec_pending = false;
+static uint32_t s_exec_pc = 0, s_exec_gp = 0, s_exec_sp = 0;
+
+extern "C" int psxport_hle_take_pending_exec(uint32_t* out_pc, uint32_t* out_gp,
+                                             uint32_t* out_sp) {
+	if (!s_exec_pending) return 0;
+	s_exec_pending = false;
+	if (out_pc) *out_pc = s_exec_pc;
+	if (out_gp) *out_gp = s_exec_gp;
+	if (out_sp) *out_sp = s_exec_sp;
+	return 1;
+}
 
 // Translate a PSX virtual address to a host pointer into the 2 MiB RAM. All the
 // byte-wise loops below stay within RAM, so plain pointer arithmetic is safe.
@@ -200,6 +220,48 @@ int psxport_hle_syscall(char table, uint32_t fnum, uint32_t* gpr, uint8_t* ram) 
 	case 0x30: { // srand(seed) -> void
 		s_rand_seed = a0;
 		gpr[HLE_R_V0] = 0;
+		return 1;
+	}
+
+	case 0x51: { // loadAndExec(filename, stackStart, stackSize) -> (does not
+		// return; transfers control to the loaded EXE). OpenBIOS loadAndExec
+		// (kernel/psxexe.c) -> exec (kernel/psxexec.s): load the EXE, then set
+		// stack_start/size from the args, clear BSS, set $gp=header.gp,
+		// $sp=stackStart+stackSize, jump to header.pc with $a0=1,$a1=NULL.
+		// We load it here and stash the entry context; HleSyscallHook installs
+		// the regs + redirects PC (the call must not return to its caller).
+		char fname[64];
+		uint32_t p = a0;
+		uint32_t i = 0;
+		for (; i < sizeof(fname) - 1; i++) {
+			uint8_t c = hle_r8(ram, p + i);
+			if (!c) break;
+			fname[i] = (char)c;
+		}
+		fname[i] = '\0';
+
+		uint32_t pc = 0, gp = 0, exe_stack_top = 0;
+		if (!psxport_hle_load_exe(ram, fname, &pc, &gp, &exe_stack_top)) {
+			fprintf(stderr, "[hle] LoadExec FAILED to load '%s'\n", fname);
+			gpr[HLE_R_V0] = 0; // exec returns 1 on success; 0 = failure
+			return 1;          // handled (returns to caller, which handles failure)
+		}
+		// exec(): if the EXE header carries no stack (stack_start==0 in the
+		// header), use the caller-supplied stackStart+stackSize (a1+a2). The
+		// game passes a1=0x80200000, a2=0 here (verified). loadAndExec overrides
+		// header.stack_start/size with the args BEFORE exec, so the args win when
+		// non-zero; fall back to the EXE's own stack top otherwise.
+		const uint32_t arg_stack = a1; // stackStart
+		const uint32_t arg_size  = a2; // stackSize
+		uint32_t sp;
+		if (arg_stack) sp = arg_stack + arg_size;
+		else if (exe_stack_top) sp = exe_stack_top;
+		else sp = 0x801FFFF0u;
+		s_exec_pending = true;
+		s_exec_pc = pc; s_exec_gp = gp; s_exec_sp = sp;
+		fprintf(stderr, "[hle] LoadExec '%s' -> pc=%08X gp=%08X sp=%08X\n",
+		        fname, pc, gp, sp);
+		gpr[HLE_R_V0] = 1; // exec returns 1 (success) — though it won't return here
 		return 1;
 	}
 
