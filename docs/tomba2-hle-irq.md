@@ -57,3 +57,21 @@ Replicate OpenBIOS's kernel state + exception protocol in the HLE:
 
 Until this lands, the ROM path (OpenBIOS `bios/scph5501.bin`) is the working way to
 play; the HLE is bring-up only.
+
+## Empirical: partial `__globals` makes it WORSE — it's all-or-nothing (2026-06-13)
+Tried laying down a minimal kernel (just `__globals` @ 0x100 -> Process[0] -> a 4-slot
+TCB array @ 0x8000C000) + saving/restoring the interrupted register file via the
+current thread's TCB. Result: **regressed from "reaches the FMV stage, ADEL @ f1284"
+to a 280×240 derail by ~f1000** — and the regression happens **with OR without** the
+separate exception stack. So the derail is caused by *populating `__globals` itself*:
+once `processes`/`threads` are non-null, the game takes its kernel **thread** path
+(OpenThread/ChangeThread/scheduler), which the HLE does not implement, and it derails
+*earlier* than the f1284 read the population was meant to satisfy. With `__globals==0`
+(committed) the game skips that path and gets further.
+
+Conclusion: the f1284 crash cannot be fixed by a partial kernel — populating the
+tables only helps if the **whole** thread model is implemented at once
+(OpenThread/ChangeThread over the TCB array + the exception save/restore-from-current-
+TCB protocol, so the activated thread code actually works). That is the real, sized
+piece of remaining HLE work. Do NOT re-attempt partial `__globals` population — it is
+a verified regression. (Reverted; baseline kept.)
