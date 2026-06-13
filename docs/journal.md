@@ -1,5 +1,31 @@
 # Debug / progress journal
 
+## 2026-06-13 — object-based 60fps: scope reframed + Tomba2 object system RE'd
+- **User reframed the 60fps work (supersedes the DuckStation primitive matcher).**
+  Not screen-space prim matching (its flaw: not object-based). Instead: RE the
+  game's own entity system, an override that tracks objects (map IDs), the
+  interpolator reads object transforms from there, and a *custom* renderer draws
+  interpolated state (not bound to beetle's/duck's render path).
+- **Cull-cone widening is now a native override** (was PSXPORT_POKE): six slti
+  sites hooked in runtime/games/tomba2.cpp (CullSlti), RAM untouched, region-
+  preserving redirect, overlay-signature-gated. Boot stays deterministic
+  (RAMHASH). patches/tomba2/cull-widen.md updated.
+- **Runtime gained savestates + REPL input driving** (main.cpp): -loadstate/
+  -savestate, REPL save/load + press/release/tap (g_repl_buttons), F5/F9 in
+  -play. Unblocks reaching live scenes headlessly. (Journal's "savestate TODO"
+  done.)
+- **Tomba2 object system mapped** (patches/tomba2/objects.md; tools/disasm.py =
+  new capstone MIPS disassembler for RAM dumps). The cull/LOD dispatcher
+  **0x8007712C** is the universal per-object chokepoint: a0 = object* for every
+  live drawable, once per logic frame. Hooking it (ObjectCull, PSXPORT_T2_OBJLOG)
+  enumerates the whole live set. Verified at frame ~7037+: 68-90 objects in a
+  contiguous pool (base ~0x800EF478, **stride 0xC4**), positions at obj+0x2e/
+  0x32/0x36 (s16 X/Y/Z), type at +0x0c, visible flag at +0x01. Camera world pos
+  in scratchpad 0x1F8000D2/D6/DA. Pointer is stable per-entity across frames =
+  the object ID; pool-slot reuse on scene change = snap, not lerp.
+- NEXT: rotation + model-pointer struct fields; per-frame snapshot override
+  (prev/cur keyed by pointer); a moving-object scene; then the custom renderer.
+
 ## 2026-06-13 — read pacing root-caused via driven debugging; full fast boot chain works
 - **The "stuck on Whoopee logo" class is solved.** Chain of findings, all via the REPL/
   trace/CDC-log tooling (no screenshot-guessing until final calibration):

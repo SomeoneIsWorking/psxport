@@ -4,6 +4,9 @@
 
 #include "../psxport_hooks.h"
 
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 
 namespace {
@@ -12,6 +15,22 @@ uint32_t s_render_hits = 0;
 int RenderEntryHeartbeat(uint32_t, uint32_t*, uint32_t*)
 {
   s_render_hits++;
+  return PSXPORT_HOOK_CONTINUE;
+}
+
+// --- live object capture (RE: patches/tomba2/objects.md) ---------------------
+// Every live drawable object funnels through the cull/LOD dispatcher
+// 0x8007712C once per logic frame with a0 = its struct pointer. Hooking it
+// enumerates the whole live object set; the pointer is the object identity.
+constexpr unsigned kMaxObjs = 1024;
+uint32_t s_obj_ptr[kMaxObjs];
+unsigned s_obj_n = 0;
+bool s_objlog = false;
+
+int ObjectCull(uint32_t, uint32_t* gpr, uint32_t*)
+{
+  if (s_obj_n < kMaxObjs)
+    s_obj_ptr[s_obj_n++] = gpr[4]; // a0 = object*
   return PSXPORT_HOOK_CONTINUE;
 }
 
@@ -69,6 +88,10 @@ void Tomba2_Install()
   // Cull-cone widening override (replaces the PSXPORT_POKE patch).
   for (const CullSite& s : kCullSites)
     psxport_add_hook(s.pc, s.instr, CullSlti);
+
+  // Live object enumeration: hook the universal per-object cull chokepoint.
+  s_objlog = std::getenv("PSXPORT_T2_OBJLOG") != nullptr;
+  psxport_add_hook(0x8007712C, 0x00051400, ObjectCull);
 }
 
 uint32_t Tomba2_GetAndResetRenderHits()
@@ -80,7 +103,27 @@ uint32_t Tomba2_GetAndResetRenderHits()
 
 uint16_t Tomba2_FrameTick(uint8_t* ram)
 {
-  (void)ram;
+  // s_obj_ptr now holds the objects submitted during the previous retro_run.
+  if (s_objlog && s_obj_n)
+  {
+    fprintf(stderr, "[%6u] objs n=%u:", psxport_frame, s_obj_n);
+    for (unsigned i = 0; i < s_obj_n && i < 8; i++)
+    {
+      const uint32_t p = s_obj_ptr[i] & 0x1FFFFF;
+      int16_t x = 0, y = 0, z = 0;
+      uint8_t type = 0;
+      if (p + 0x38 < 0x200000)
+      {
+        memcpy(&x, ram + p + 0x2E, 2);
+        memcpy(&y, ram + p + 0x32, 2);
+        memcpy(&z, ram + p + 0x36, 2);
+        type = ram[p + 0x0C];
+      }
+      fprintf(stderr, " %08X[t%u](%d,%d,%d)", s_obj_ptr[i], type, x, y, z);
+    }
+    fprintf(stderr, "\n");
+  }
+  s_obj_n = 0;
   return 0;
 }
 
