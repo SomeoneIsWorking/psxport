@@ -240,3 +240,26 @@ the low-level cdromBlockReading override + instant-CD, not the file/exec API). N
 + EXE loader from psxport_hle_boot) and A0(0x51) LoadExec (load a PS-X EXE mid-run onto
 the given stack and jump to it), plus the B0(0x14)/0x15 init stubs. The IRQ/exception
 core is solid now (f961 fixed); this is a fileio/exec layer on top.
+
+## HLE CD-ROM now works; FMV stream stuck on CD-IRQ delivery (2026-06-13)
+Big step: implemented the CD interrupt-enable (the BIOS CdInit normally sets
+IRQOutTestMask / 1F801802.idx1; pure HLE skipped it). `psxport_cd_set_irq_enable(0x1F)`
+at HLE boot → beetle now asserts IRQ_CD, the game manages IER to 0x07, **CD (0004) +
+DMA (0008) IRQs deliver, the primary CdlNop CD timeout is GONE**, and the HLE
+LoadExec's MAIN.EXE and reaches the StrPlayer FMV player streaming the opening movie
+(`ReadS`, 1123 data-ready `irq 1`s). Committed (beetle 3f66f8f, main 12e8b80).
+
+NEXT blocker — **the FMV ring buffer never fills**: the StrPlayer spins in its
+per-command prebuffer wait (loop @0x8008AE6C incrementing `*(0x8010274C)` vs a
+timeout; loop @0x80085924 waiting for a value to stabilize). Root: beetle raises ~1156
+CD IRQ asserts (1123 INT1 data-ready), but only **~13** reach our exception handler
+(`pending=0004`) — the rest are acked/cleared without an exception, so the game's CD
+data handler doesn't run to DMA each sector into the ring. So CD data-ready IRQ
+delivery is lossy under HLE. NEXT: instrument I_STAT bit2 set/clear vs exception-taken
+to see who acks the CD INT without delivering it (candidates: our cdromBlockReading /
+instant-CD override consuming/acking the streaming reads; or the dispatcher acking
+I_STAT before re-arming; or I_MASK bit2 toggling). The game may stream via the CD
+INT1->DMA3(CDROM) path that needs faithful per-sector delivery, not instant-CD.
+
+Residual: one intermittent `CdlSetloc` Sync timeout (f848) despite assert_CD=1 — same
+delivery-race class.
