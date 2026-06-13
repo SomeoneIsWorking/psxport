@@ -185,6 +185,7 @@ int psxport_bios_log = 0;
 
 extern "C" int psxport_on_pc(uint32_t pc, uint32_t instr, uint32_t* gpr, uint32_t* redirect_pc)
 {
+  const uint32_t prev_pc = psxport_last_pc; // PC of the instruction that jumped here
   psxport_last_pc = pc;
   if (psxport_prof)
   {
@@ -192,6 +193,31 @@ extern "C" int psxport_on_pc(uint32_t pc, uint32_t instr, uint32_t* gpr, uint32_
     s_prof_total++;
   }
   pc &= 0x1FFFFFFF; // KSEG-agnostic
+
+  // RE aid: PSXPORT_TRAP_LOWPC=1 — fire once when execution derails below RAM
+  // text (a jr/jalr to a null/garbage target), dumping the culprit jump (prev_pc)
+  // and the full register file so the bad target register + its source is visible.
+  // Excludes the legitimate low vectors (syscall/break/exception/A0/B0/C0).
+  {
+    static int s_trap = -1;
+    if (s_trap < 0)
+      s_trap = std::getenv("PSXPORT_TRAP_LOWPC") ? 1 : 0;
+    if (s_trap && pc < 0x10000 && pc != 0x40 && pc != 0x80 && pc != 0xA0 &&
+        pc != 0xB0 && pc != 0xC0 && pc != 0x180)
+    {
+      static int s_done = 0;
+      if (!s_done)
+      {
+        s_done = 1;
+        static const char* nm[34] = {"zr","at","v0","v1","a0","a1","a2","a3","t0","t1","t2","t3","t4","t5","t6","t7",
+                                     "s0","s1","s2","s3","s4","s5","s6","s7","t8","t9","k0","k1","gp","sp","fp","ra","lo","hi"};
+        std::fprintf(stderr, "[trap] DERAIL -> pc=%08X  jumped from prev=%08X\n", psxport_last_pc, prev_pc);
+        for (int i = 0; i < 32; i += 4)
+          std::fprintf(stderr, "  %s=%08X %s=%08X %s=%08X %s=%08X\n", nm[i], gpr[i], nm[i+1], gpr[i+1],
+                       nm[i+2], gpr[i+2], nm[i+3], gpr[i+3]);
+      }
+    }
+  }
   if (psxport_bios_log && (pc == 0xA0 || pc == 0xB0 || pc == 0xC0))
   {
     // $t1 = GPR[9] holds the function number; a0..a3 = GPR[4..7].
