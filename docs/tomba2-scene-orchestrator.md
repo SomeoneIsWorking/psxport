@@ -122,9 +122,49 @@ CD-driven). They pace the entire intro.
   `0x800675CC` (the orchestrator only drives it during the attract/intro
   sequence).
 
+## DECISIVE: the intro dwells are CD-load-bound, not timed (2026-06-13)
+
+The scene advances are paced by **CD reads**, not a display timer. Measured by
+toggling `PSXPORT_CD_INSTANT` and watching phase `0x800675CC`:
+
+| transition           | CD_INSTANT=1 | CD_INSTANT=0 |
+|----------------------|--------------|--------------|
+| 0→1 (SCEA ends)      | f337         | f483         |
+| 2→3 (Whoopee loads)  | f602         | f1173        |
+
+The SCEA "…America Presents" screen is a **load mask** for the Whoopee Camp
+assets: CDC log over f0–340 shows phase 0 is ~**18 load-chunk cycles**
+(`Setloc → SeekL → ReadN → Pause`, each with command/IRQ round-trips). The
+advance fires when the loads complete (ready-signal `0x80047174`), which is why
+forcing scene state or the advance event does nothing — there's nothing to skip
+*to* until the assets are resident.
+
+This **revives the "make the disc read instant" lever** and corrects the journal
+dead-end note ("logo is jingle-paced, CD won't help") — that was true only for
+the Whoopee jingle (ReadS/STRSND, consumer-paced by audio), NOT for the SCEA /
+asset-load phases (ReadN, CD-bound).
+
+**But** `psxport_cd_instant` already defaults to -1 (all implemented bits on:
+seek/reset/startup/ReadN-pacing) and SCEA *still* takes ~306 frames. The residual
+cost is the **per-command IRQ completion latency** across the 18 chunk cycles —
+not covered by the current bits, and not the raw read speed. So the routes to a
+true instant logo skip are, in order of cleanliness:
+1. **Fast-forward while Start held** (implemented). Runs the CD-paced frames
+   faster; loads still complete, no corruption. Robust, ~sub-second.
+2. **Accelerate the CD command/IRQ cadence** in cdc.c (make Setloc/Seek/Pause and
+   the ReadN data-ready IRQ complete near-instantly for data — leave CDDA/STRSND
+   audio consumer-paced). This is the real "instant" lever; it's delicate
+   (determinism, the test battery) and is the next RE/impl step.
+
+Forcing scene state is a **dead end** (verified): poking `0x80076AC0` (advance
+event), `0x8006E0CC` (job-stack index), and the elapsed counter `0x800654AC`
+during SCEA either no-ops (the VSync machinery re-manages the fields) or stalls
+(the job never reports done) — never a clean advance.
+
 ## Tooling used (reusable)
-- `PSXPORT_WATCHW="hexaddr"` — log every CPU store to a word (writing PC + value).
-  This found the orchestrator from the scene-phase variable in one run.
+- `PSXPORT_WATCHW="hexaddr"` — log every CPU store to a word (writing PC + value
+  + caller `$ra`). Found the orchestrator from the scene-phase variable, and the
+  CD-load callers of the dwell counter, in single runs.
 - `PSXPORT_POKE="frame:addr=val;A..B:addr=val"` — poke RAM at a frame/range to
   test a hypothesis.
 - `PSXPORT_FRAMEDUMP` + `tools/frames.py` — exact-frame PNG capture / contact

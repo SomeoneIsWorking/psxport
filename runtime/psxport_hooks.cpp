@@ -42,8 +42,9 @@ extern "C" void psxport_on_write(uint32_t addr, uint32_t val, uint32_t pc, int w
     return;
   last_pc = pc;
   last_val = val;
-  fprintf(stderr, "[WATCHW] f%u pc=%08X writes %08X (w%d) -> [%08X]\n",
-          psxport_frame, pc, val, width, addr);
+  const uint32_t ra = psxport_cpu_gpr()[31]; // caller (return address)
+  fprintf(stderr, "[WATCHW] f%u pc=%08X ra=%08X writes %08X (w%d) -> [%08X]\n",
+          psxport_frame, pc, ra, val, width, addr);
 }
 unsigned psxport_frame = 0;
 int psxport_gte_capture = 0;
