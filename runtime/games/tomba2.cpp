@@ -223,7 +223,14 @@ int FmvDwellSkip(uint32_t pc, uint32_t* gpr, uint32_t* redirect_pc)
 {
   if (s_skip_held)
     s_fmv_skip_latch = true; // a press latches skip-mode (survives a tap)
-  if (!s_fmv_skip_latch)
+  // Collapse the dwell when EITHER (a) the user latched a skip [covers the FMV
+  // prebuffer, where the drive IS actively reading], OR (b) the drive is IDLE.
+  // Case (b) is the "Loading..." screen: this pace loop spins (0 CD reads, 99%
+  // here) merely showing a "Loading..." label while nothing actually loads -- a
+  // pure timed dwell. Skipping it whenever the drive is idle makes those screens
+  // never appear, with no input needed. Real FMV playback keeps the drive busy
+  // (XA streaming -> DS_READING), so it stays paced and is NOT fast-forwarded.
+  if (!s_fmv_skip_latch && psxport_cd_drive_busy())
     return PSXPORT_HOOK_CONTINUE;
   *redirect_pc = 0x50CF8 | (psxport_last_pc & 0xE0000000); // loop exit
   return PSXPORT_HOOK_REDIRECT;

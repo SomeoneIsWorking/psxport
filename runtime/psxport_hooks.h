@@ -92,6 +92,11 @@ void psxport_prof_report(int top);
    runtime builds its native loads/HLE BIOS on top of this. */
 int psxport_cd_read_sectors(int32_t lba, int count, uint8_t* dst);
 
+/* Generic disc primitive: 1 if the drive is actively seeking/reading/playing,
+   0 if idle (paused/standby/stopped). Lets the runtime distinguish a real load
+   from an idle "Loading..." spin-dwell. From cdc.c. */
+int psxport_cd_drive_busy(void);
+
 /* BIOS-call tracer (RE aid): when psxport_bios_log != 0, every PSX BIOS call
    vector hit (A0/B0/C0 at phys 0x000000A0/B0/C0) logs its function number
    (in $t1) and a0..a3. Consecutive identical calls are coalesced so polling
