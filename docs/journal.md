@@ -1,5 +1,36 @@
 # Debug / progress journal
 
+## 2026-06-13 — intro RE restart: prior orchestrator FALSIFIED; logos NOT input-skippable
+- **User reframed the goal:** the SCEA + Whoopee Camp logos must be **natively
+  skippable via RE + native port**, NOT emulator fast-forward (the shipped
+  `Tomba2_WantTurbo` Start-hold is rejected). Methodology the user fixed:
+  **tooling → RE → native port → patch the native port**. Full RE in
+  `docs/tomba2-intro.md`.
+- **Tooling:** added REPL `shot <path>` (dumps current framebuffer to PPM on demand
+  while driving `-repl`); VideoCb caches the last frame in g_last_fb. Made the
+  skippability tests below possible.
+- **Verified intro timeline** (frames.py contact sheet, instant CD, no input): SCEA
+  license ~f200–600 → black → Whoopee Camp logo ~f850–1700 → opening **MDEC FMV**
+  ~f1800+ → title screen.
+- **The opening FMV IS natively Start-skippable** (REPL: press Start at f1900 →
+  title by f1990 vs still-FMV at f2160 no-input). **SCEA + Whoopee are NOT** (hold
+  Start from boot still shows them) — they're load masks with display-hold timers,
+  pad not polled. Render heartbeat 0x8003CCA4 dormant the whole intro (expected).
+- **FALSIFIED `0x800675CC`** (the scene-orchestrator doc's "scene phase"): never
+  written during SCEA/Whoopee (watchpoint logs only the f25 BIOS clear). Also
+  **FALSIFIED the `0x80011B4`/`0x80018C10` "intro driver"**: it came from a stale
+  `bt` stack-scan; tracing `0x8001e0cc` (in that chain) over f0–1900 = ZERO hits —
+  that code is post-intro title/menu, not the logo driver. Banner added to
+  tomba2-scene-orchestrator.md. (Lesson: the heuristic stack-scan reports stale
+  return addresses; confirm a "driver" by TRACING it before building on it.)
+- **Ground truth (PCCOV intersection SCEA∩Whoopee):** intro driver code at
+  0x80017E4C (VSync/elapsed-frame timing; frame counter 0x800267B4, markers
+  0x80025684/88), 0x800181E8-0x80018484 (stage machine — disasm NEXT), + smaller
+  regions. RAM-diff stage-var candidates: 0x80025454(5→0), 0x80025458(3→0),
+  0x8002667C(1→0), 0x80026620/28(0→8). NEXT: watchpoint these to find the dispatch.
+- KEY gotcha: the FMV stream overwrites 0x80011xxx/0x80018xxx — dump RAM **during
+  the logo phase** (f400/f1000) to disassemble the intro driver, not during the FMV.
+
 ## 2026-06-13 — display enhancements: widescreen + 4x internal res + sharp scaling
 - User: "not widescreen, doesn't look higher resolution, no bilinear." All three
   addressed via stock Beetle core options + presentation fixes (no GL context):

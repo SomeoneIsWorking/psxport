@@ -45,6 +45,13 @@ unsigned g_frame = 0;
 // so the same moment can be captured under different display configs for analysis).
 std::vector<std::pair<unsigned, std::string>> g_frame_dumps;
 
+// Last presented framebuffer, cached so the REPL `shot` command can dump the
+// current screen on demand while driving interactively (libretro reuses its own
+// buffer, so we copy). Tightly packed (pitch == width*bpp), pixel format in
+// g_pixel_format.
+std::vector<uint8_t> g_last_fb;
+unsigned g_last_fb_w = 0, g_last_fb_h = 0;
+
 retro_pixel_format g_pixel_format = RETRO_PIXEL_FORMAT_0RGB1555;
 
 // --- play mode (SDL window/input/audio) ---
@@ -305,6 +312,18 @@ void WriteFramePPM(const void* data, unsigned width, unsigned height, size_t pit
 
 void VideoCb(const void* data, unsigned width, unsigned height, size_t pitch)
 {
+  if (data)
+  {
+    // Cache a tightly-packed copy of the current frame for the REPL `shot`
+    // command (pitch may exceed width*bpp; pack rows so shot can use width*bpp).
+    const unsigned bpp = (g_pixel_format == RETRO_PIXEL_FORMAT_XRGB8888) ? 4 : 2;
+    g_last_fb.resize(static_cast<size_t>(width) * height * bpp);
+    const uint8_t* src = static_cast<const uint8_t*>(data);
+    for (unsigned y = 0; y < height; y++)
+      memcpy(g_last_fb.data() + static_cast<size_t>(y) * width * bpp, src + y * pitch, static_cast<size_t>(width) * bpp);
+    g_last_fb_w = width;
+    g_last_fb_h = height;
+  }
   if (data && !g_dump_dir.empty() && g_dump_interval && (g_frame % g_dump_interval) == 0)
     WriteFramePPM(data, width, height, pitch);
   if (data)
@@ -526,7 +545,7 @@ int main(int argc, char** argv)
     fprintf(stderr,
             "usage: %s <disc.chd> [-frames N] [-dumpdir DIR] [-dumpinterval N] [-inputscript FILE] [-bios DIR]\n"
             "          [-loadstate FILE] [-savestate FILE] [-play] [-repl]\n"
-            "  -repl drive commands (stdin): run N | tap <Button> [N] | press/release <Button>\n"
+            "  -repl drive commands (stdin): run N | tap <Button> [N] | press/release <Button> | shot PATH\n"
             "                                save/load <path> | r/w/w8 <addr> [..] | trace <pc> | bt | state\n",
             argv[0]);
     return 1;
@@ -856,6 +875,7 @@ int main(int argc, char** argv)
       char cmd[16] = {};
       uint32_t a = 0, b = 0;
       char argbuf[64] = {};
+      char argbuf2[1024] = {};
       if (sscanf(line, "%15s", cmd) != 1)
         continue;
       if (strcmp(cmd, "quit") == 0)
@@ -913,6 +933,19 @@ int main(int argc, char** argv)
       else if (strcmp(cmd, "state") == 0)
       {
         fprintf(stderr, "[repl] frame=%u last_pc=%08X repl_buttons=%04X\n", g_frame, psxport_last_pc, g_repl_buttons);
+      }
+      else if (strcmp(cmd, "shot") == 0 && sscanf(line, "%*s %1023s", argbuf2) == 1)
+      {
+        // Dump the last presented framebuffer (cached in VideoCb) to a PPM so the
+        // current screen can be eyeballed while driving interactively.
+        if (g_last_fb.empty())
+          fprintf(stderr, "[repl] no frame captured yet\n");
+        else
+        {
+          const unsigned bpp = (g_pixel_format == RETRO_PIXEL_FORMAT_XRGB8888) ? 4 : 2;
+          WriteFramePPMPath(g_last_fb.data(), g_last_fb_w, g_last_fb_h, static_cast<size_t>(g_last_fb_w) * bpp, argbuf2);
+          fprintf(stderr, "[repl] shot %ux%u -> %s\n", g_last_fb_w, g_last_fb_h, argbuf2);
+        }
       }
       else if ((strcmp(cmd, "press") == 0 || strcmp(cmd, "release") == 0) && sscanf(line, "%*s %31s", argbuf) == 1)
       {

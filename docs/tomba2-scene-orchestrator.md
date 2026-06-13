@@ -1,5 +1,17 @@
 # Tomba! 2 (SCUS-944.54) — intro scene orchestrator (reverse engineered)
 
+> **⚠️ FALSIFIED FOR THE INTRO (2026-06-13).** The central premise below — that
+> `0x800675CC` is the "scene phase" driving the SCEA license + Whoopee Camp logos —
+> is WRONG. A write-watchpoint (`PSXPORT_WATCHW=800675CC`) over f0–1800 logs exactly
+> ONE write to that word: the BIOS RAM-clear at f25 (value 0). Nothing in the actual
+> SCEA/Whoopee intro touches it. The EXE size here is `0x28800` (not `0x69000` as
+> stated below — that was a Crash Bash copy error). The real intro RE lives in
+> **`docs/tomba2-intro.md`**; the logos are driven by code at 0x80017E4C /
+> 0x800181E8 with timing against the frame counter `0x800267B4`. This `0x800675CC`
+> machinery, if real at all, belongs to some later (in-game) scene system, not the
+> boot logos. Treat everything below as unverified for the intro-skip task.
+
+
 Reverse engineered 2026-06-13 with the psxport RE tooling (write-watchpoint
 `PSXPORT_WATCHW`, RAM-diff scene enumeration, `tools/disasm.py`, frame capture
 `tools/frames.py`). All addresses are KSEG0 virtual; the boot EXE `SCUS_944.54`
