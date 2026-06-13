@@ -176,6 +176,21 @@ int WhoopeeSkip(uint32_t pc, uint32_t* gpr, uint32_t* redirect_pc)
   *redirect_pc = 0x11530 | (psxport_last_pc & 0xE0000000);
   return PSXPORT_HOOK_REDIRECT;
 }
+
+// Inter-stage timed dwell collapse. The load/transition state machine 0x80011a78
+// (keyed on *(0x80025454)) blocks state 0xE for a PURE 200-frame dwell: handler
+// 0x80012148 waits until frame_counter > *(0x80038498)+0xC8, displaying black --
+// dead time, not a load (instant-CD does not shrink it). At 0x80012164
+// ("beqz $v1, stay") $v1 = (saved+200 < counter). On Start we set $v1=1 so the
+// branch is not taken and the handler runs its OWN advance path (which sets
+// 0x80025444=5, calls 0x80012584, advances to state 0xF) -- skipping only the
+// wait. The earlier state 5 (~53f) is a real CD/load wait and is left intact.
+int DwellSkip(uint32_t, uint32_t* gpr, uint32_t*)
+{
+  if (s_skip_held)
+    gpr[3] = 1; // $v1 != 0 -> dwell treated as elapsed, take the advance path
+  return PSXPORT_HOOK_CONTINUE;
+}
 } // namespace
 
 void Tomba2_SetSkipHeld(bool held) { s_skip_held = held; }
@@ -207,6 +222,7 @@ void Tomba2_Install()
   {
     psxport_add_hook(0x80010ED0, 0x12A20019, SceaSkip);    // SCEA phase dispatch (beq $s5,$v0)
     psxport_add_hook(0x80011414, 0x3C028004, WhoopeeSkip); // Whoopee loop top (lui $v0,0x8004)
+    psxport_add_hook(0x80012164, 0x10600008, DwellSkip);   // inter-stage 200f dwell (beqz $v1)
   }
 
   // Live object enumeration: hook the universal per-object cull chokepoint.
