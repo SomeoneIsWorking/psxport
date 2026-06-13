@@ -1,5 +1,27 @@
 # Debug / progress journal
 
+## 2026-06-14 — HLE FMV#2 stall ROOT-CAUSED: interrupts stuck disabled (IEc=0), NOT a CD-ring bug
+- **Falsified the prior "FMV ring never fills / lossy CD-IRQ / per-sector DMA" framing**
+  (docs/tomba2-hle-irq.md banner added). Frame-stamped probes prove FMV#1 streams fine:
+  **1969 DMA3 arms / ~922 sectors** into the ring to f835. The stall is the FMV#2
+  *prebuffer*, after FMV#1: Setloc@f848 (acks fine) then **zero further CD commands**.
+- **Root cause:** the StrPlayer spins in the prebuffer wait `0x8008AE54` (gate =
+  `*(0x800ABDE0) > 0x3C3`) with **interrupts disabled**: new `irq` REPL cmd shows
+  `I_STAT=0005 I_MASK=000D pending=0005 SR.IEc=0 EPC=800808A4` (LeaveCriticalSection),
+  identical f880→f1280. VBLANK+CDROM IRQs are pending+unmasked but IEc=0 so beetle never
+  vectors them. The gate counter `0x800ABDE0` is bumped only by VBLANK callback
+  `0x800909C0`, dispatched by the game's I_STAT-polling dispatcher `0x80085D8C`
+  (`I_STAT & I_MASK & 0x0D`, bit0=VBLANK). Dispatcher runs **578× on ROM** (every frame),
+  **11× on HLE** then stops → counter frozen at 3 → infinite spin → no FMV#2.
+- EnterCS/LeaveCS trace: HLE goes net **+1 Enter** at the f845-848 transition then silent;
+  the outermost Leave that restores IEc=1 is never reached. ROM recovers. DEAD ENDS
+  (re-confirmed): instant-CD on/off identical; ring/DMA path is healthy; mode-0x2000
+  callback wiring is irrelevant (0x800909C0 is poll-dispatched, not a BIOS event callback).
+- **NEXT (fix):** instrument IEc across each Enter/Leave syscall + return_from_exception
+  RFE-pop (hle_irq.cpp) around f845-848 vs ROM. Tooling added: `irq`/`gpr` REPL cmds;
+  `[dma3]`/`[cd-reqdata]`/`[hretrace]`/`[timerN-mode]` probes (PSXPORT_CDC_LOG). Full
+  RE chain in docs/tomba2-hle-irq.md (2026-06-14 section).
+
 ## 2026-06-13 (later) — native intro skip IMPLEMENTED + verified
 - **Found the real intro driver:** `0x800111B4` is the logos sequencer (straight-line
   blocking code, NO data-driven stage var). It calls `0x80010D54` (SCEA license:

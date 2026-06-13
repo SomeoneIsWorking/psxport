@@ -1280,6 +1280,33 @@ int main(int argc, char** argv)
       {
         psxport_dump_cpu_state(g_ram);
       }
+      else if (strcmp(cmd, "gpr") == 0)
+      {
+        // RE aid: dump the live GPR file (32 GPRs + LO/HI) so a spin loop's
+        // pointer registers can be inspected across consecutive `run`s.
+        static const char* kNames[34] = {
+            "zero","at","v0","v1","a0","a1","a2","a3","t0","t1","t2","t3",
+            "t4","t5","t6","t7","s0","s1","s2","s3","s4","s5","s6","s7",
+            "t8","t9","k0","k1","gp","sp","fp","ra","lo","hi"};
+        uint32_t* gpr = psxport_cpu_gpr();
+        fprintf(stderr, "[repl] pc=%08X\n", psxport_last_pc);
+        for (int i = 0; i < 34; i++)
+          fprintf(stderr, "  %-3s=%08X%s", kNames[i], gpr[i], (i % 4 == 3) ? "\n" : "");
+        fprintf(stderr, "\n");
+      }
+      else if (strcmp(cmd, "irq") == 0)
+      {
+        // RE aid: dump the IRQ-delivery preconditions. An IRQ exception only
+        // vectors when (I_STAT & I_MASK) != 0 AND SR.IEc(bit0)=1. SR=cop0[12],
+        // EPC=cop0[14], Cause=cop0[13]. Finds interrupt-disable / mask deadlocks.
+        const uint32_t sr = psxport_cpu_cop0(12);
+        fprintf(stderr,
+                "[repl] I_STAT=%04X I_MASK=%04X pending=%04X | SR=%08X IEc=%u Im=%02X | EPC=%08X Cause=%08X\n",
+                psxport_irq_status(), psxport_irq_mask(),
+                (unsigned)(psxport_irq_status() & psxport_irq_mask()), sr,
+                (unsigned)(sr & 1), (unsigned)((sr >> 8) & 0xFF),
+                psxport_cpu_cop0(14), psxport_cpu_cop0(13));
+      }
       else if (strcmp(cmd, "state") == 0)
       {
         fprintf(stderr, "[repl] frame=%u last_pc=%08X repl_buttons=%04X dark=%d\n", g_frame, psxport_last_pc,

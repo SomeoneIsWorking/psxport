@@ -283,3 +283,56 @@ delivery-race class.
   INT1? does the game arm DMA3 but it doesn't transfer? Watchpoint the ring write index
   and the DMA3 CHCR. The fix is in the CD-streaming data path, not the event/IRQ core
   (which now works).
+
+### 2026-06-14 — FALSIFIED the whole "FMV-ring / lossy CD-IRQ / per-sector DMA" framing
+**The two sections above are WRONG.** Re-instrumented with frame-stamped DMA3 + BFRD
+probes (beetle dma.c `[dma3]`, cdc.c `[cd-reqdata]`, gated on PSXPORT_CDC_LOG) and a new
+`irq` REPL command (dumps I_STAT/I_MASK/SR.IEc/EPC/Cause). Findings, all on the HLE path:
+- **FMV#1 streams PERFECTLY.** Real counts to f835: **1969 DMA3 arms, 472081 words
+  (~922 sectors)** moved into the ring. The "only ~17 DMAs" claim was a measurement
+  error. CD INT1→DMA3 delivery is NOT lossy; the ring fills fine for FMV#1.
+- **The stall is AFTER FMV#1, at the FMV#2 prebuffer**, not a CD-data problem. Sequence:
+  FMV#1 ReadS@f324 → Pause@f842 → Reset@f845 → Demute/Setmode@f847 → **Setloc@f848 (acks
+  INT3 fine) → then ZERO further CD commands** (no SeekL, no ReadN, no 2nd ReadS) for
+  450+ frames. (ROM-BIOS at the same point runs Setloc→SeekL→ReadN→Pause prebuffer cycles
+  f926-1230, then ReadS@f1232 = FMV#2. 12 SeekL / 20 ReadN under ROM, **0 SeekL under HLE**.)
+- **Root cause = interrupts stuck DISABLED.** At the stall the CPU spins in the StrPlayer
+  prebuffer wait `0x8008AE54` (exits only when `*(0x800ABDE0) > 0x3C3`; the `0x3C0000`
+  timeout at 0x8008AE88 is effectively never). `irq` shows the deadlock unambiguously,
+  identical at f880/f980/f1280:
+  ```
+  I_STAT=0005 I_MASK=000D pending=0005 | SR=40600000 IEc=0 | EPC=800808A4 Cause=00000420
+  ```
+  VBLANK(bit0)+CDROM(bit2) are **pending AND unmasked** (pending=0x0005) but **SR.IEc=0**,
+  so beetle never vectors the exception. EPC=0x800808A4 = the **LeaveCriticalSection**
+  syscall (a0=2; the EnterCriticalSection stub is 0x80080890 a0=1). The game is wedged
+  inside an open critical section.
+- **Why that wedges the FMV:** the prebuffer gate `*(0x800ABDE0)` is a per-frame counter
+  bumped ONLY by the game's VBLANK callback `0x800909C0`, which is dispatched by the
+  game's I_STAT-polling callback dispatcher `0x80085D8C` (`pending = I_STAT & I_MASK &
+  0x000D`; bit0=VBLANK → table@0x800AAD1C[0]=0x800909C0; it ACKs the bit at 0x80085E4C).
+  Counts: dispatcher `0x80085D8C` runs **578× under ROM** (≈every frame, caller game-code
+  ra=0x80085D2C) vs **11× under HLE** (all f845-848, caller = IRQ trampoline ra=0x80000040),
+  then 0. With IEc=0 the pending VBLANK can't vector → dispatcher never runs → counter
+  frozen at 3 → wait needs >0x3C3 → spins forever → no prebuffer reads → no FMV#2.
+- **So the prior "wire mode-0x2000 callbacks" / "per-sector CD-poll/DMA" NEXTs are both
+  dead ends.** The defect is in the **IRQ-enable / critical-section state**, not CD data
+  and not the event-callback table. The game's `0x800909C0` is delivered by a polling
+  I_STAT dispatcher, not a BIOS event callback, so DeliverEvent wiring is irrelevant here.
+
+**Verified contrast:** EnterCS(0x80080894)/LeaveCS(0x800808A4) trace shows the HLE going
+net **+1 Enter (10 vs 9)** across the f845-848 transition then silent — the outermost
+LeaveCriticalSection that should restore IEc=1 is never reached (the game is spinning
+before it). On ROM the same transition recovers (IEc toggles back to 1, VBLANK fires
+every frame). DEAD ENDS confirmed: instant-CD on/off identical; the ring/DMA path is fine.
+
+**NEXT (the actual fix):** find why HLE leaves IEc=0 here where ROM doesn't. Concrete plan:
+log IEc before/after every Enter/LeaveCriticalSection syscall (hle_irq.cpp:296-328) and the
+return_from_exception RFE-pop (line 169) around f845-848, and compare to ROM. Hypotheses to
+test in order: (a) a LeaveCriticalSection whose `saved_sr|=0x404` writes a TCB that
+return_from_exception doesn't reload (thread-switch/`s_in_exception` interaction —
+Cause=0x420 shows a HW IRQ pending *at syscall time*, the fragile case); (b) the game's
+outermost Leave is genuinely gated behind a step that on ROM completes via an IRQ that HLE
+swallowed earlier (so fixing an earlier missed VBLANK delivery unblocks it). Tooling for
+this is in the tree: `irq`, `gpr` REPL cmds; `[dma3]`/`[cd-reqdata]`/`[hretrace]`/
+`[timerN-mode]` probes under PSXPORT_CDC_LOG.
