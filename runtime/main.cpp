@@ -67,6 +67,15 @@ uint16_t g_repl_buttons = 0;   // REPL-held pad bits (press/release), for drivin
 bool g_module_turbo = false;   // game module requests fast-forward (load masks)
 bool g_wide60 = false;         // reprojecting 60fps renderer (PSXPORT_WIDE60)
 
+// Display enhancements fed to the Beetle core as libretro options. The software
+// renderer honors internal_resolution (libretro.c: upscale_shift applies when no
+// hw renderer), and widescreen_hack scales GTE geometry (CPU-side), so both work
+// without a GL/Vulkan context.
+const char* g_internal_res = "4x"; // beetle_psx_internal_resolution; PSXPORT_INTERNAL_RES
+bool g_widescreen = true;          // beetle_psx_widescreen_hack; PSXPORT_NOWIDE disables
+const char* g_ws_aspect = "16:9";  // beetle_psx_widescreen_hack_aspect_ratio
+float g_aspect = 4.0f / 3.0f;      // core-reported display aspect (updated from av_info)
+
 // --- runtime logging -----------------------------------------------------
 // Frame-stamped events to stderr. The emulated TTY (BIOS A0:3C / B0:3D
 // putchar, used by OpenBIOS for its entire boot narrative and by many games
@@ -223,7 +232,27 @@ bool EnvironmentCb(unsigned cmd, void* data)
       // read-ahead cond-wait wedges under instant-CD request rates
       if (g_fast_cd && strcmp(var->key, "beetle_psx_cd_access_method") == 0)
         return (var->value = "precache"), true;
+      if (g_internal_res && strcmp(var->key, "beetle_psx_internal_resolution") == 0)
+        return (var->value = g_internal_res), true;
+      if (strcmp(var->key, "beetle_psx_widescreen_hack") == 0)
+        return (var->value = g_widescreen ? "enabled" : "disabled"), true;
+      if (g_widescreen && strcmp(var->key, "beetle_psx_widescreen_hack_aspect_ratio") == 0)
+        return (var->value = g_ws_aspect), true;
       return false; // everything else at core defaults
+    }
+    case RETRO_ENVIRONMENT_SET_GEOMETRY:
+    {
+      const auto* g = static_cast<const retro_game_geometry*>(data);
+      if (g && g->aspect_ratio > 0.0f)
+        g_aspect = g->aspect_ratio;
+      return true;
+    }
+    case RETRO_ENVIRONMENT_SET_SYSTEM_AV_INFO:
+    {
+      const auto* av = static_cast<const retro_system_av_info*>(data);
+      if (av && av->geometry.aspect_ratio > 0.0f)
+        g_aspect = av->geometry.aspect_ratio;
+      return true;
     }
     default:
       return false;
@@ -285,15 +314,16 @@ void VideoCb(const void* data, unsigned width, unsigned height, size_t pitch)
   SDL_UpdateTexture(g_texture, nullptr, data, static_cast<int>(pitch));
   SDL_RenderClear(g_renderer);
   // Scale the framebuffer to the current window/screen size, preserving the
-  // PSX 4:3 display aspect (letterbox/pillarbox the remainder). Recomputed each
-  // present, so it adapts live to window resizes and fullscreen.
+  // core-reported display aspect (4:3 native, or the widescreen-hack aspect when
+  // enabled). Letterbox/pillarbox the remainder. Recomputed each present, so it
+  // adapts live to window resizes, fullscreen, and aspect changes.
   int ow = 0, oh = 0;
   SDL_GetRendererOutputSize(g_renderer, &ow, &oh);
-  int tw = ow, th = (ow * 3) / 4;
+  int tw = ow, th = (int)(ow / g_aspect);
   if (th > oh)
   {
     th = oh;
-    tw = (oh * 4) / 3;
+    tw = (int)(oh * g_aspect);
   }
   SDL_Rect dst = {(ow - tw) / 2, (oh - th) / 2, tw, th};
   SDL_RenderCopy(g_renderer, g_texture, nullptr, &dst);
@@ -510,7 +540,7 @@ int main(int argc, char** argv)
       win_h = (dm.h * 85) / 100;
       win_w = (win_h * 4) / 3;
     }
-    SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "linear"); // smooth upscaling
+    SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "nearest"); // sharp pixels, no bilinear
     g_window = SDL_CreateWindow("wide60rt", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, win_w, win_h,
                                 SDL_WINDOW_RESIZABLE);
     g_renderer = SDL_CreateRenderer(g_window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
@@ -526,6 +556,25 @@ int main(int argc, char** argv)
 
   if (psxport_cd_instant < 0) // env overrides; bits: 1=seek 2=reset 4=startup 8=ackpace
     psxport_cd_instant = g_fast_cd ? 0xF : 0;
+
+  // Display enhancements (widescreen + internal upscale) default ON for
+  // interactive play, OFF for headless/RE runs — the wide60 reproject harness
+  // and GTE/GP0 capture assume NATIVE coordinates, which both the upscale and
+  // the widescreen hack change. Env vars override in either mode. (Read before
+  // the core loads options.)
+  if (!g_play)
+  {
+    g_widescreen = false;
+    g_internal_res = nullptr; // native 1x
+  }
+  if (const char* v = std::getenv("PSXPORT_INTERNAL_RES"))
+    g_internal_res = (*v && strcmp(v, "1x") != 0) ? v : nullptr;
+  if (std::getenv("PSXPORT_WIDE"))
+    g_widescreen = true;
+  if (std::getenv("PSXPORT_NOWIDE"))
+    g_widescreen = false;
+  if (const char* v = std::getenv("PSXPORT_WS_ASPECT"))
+    g_ws_aspect = v;
 
   retro_set_environment(EnvironmentCb);
   retro_set_video_refresh(VideoCb);
@@ -545,6 +594,19 @@ int main(int argc, char** argv)
   {
     fprintf(stderr, "retro_load_game failed for %s\n", disc);
     return 1;
+  }
+
+  // Pick up the core's display aspect (widescreen hack changes it from 4:3).
+  {
+    retro_system_av_info av = {};
+    retro_get_system_av_info(&av);
+    if (av.geometry.aspect_ratio > 0.0f)
+      g_aspect = av.geometry.aspect_ratio;
+    char msg[96];
+    snprintf(msg, sizeof(msg), "internal_res=%s widescreen=%s aspect=%.3f base=%ux%u",
+             g_internal_res ? g_internal_res : "1x", g_widescreen ? g_ws_aspect : "off", g_aspect,
+             av.geometry.base_width, av.geometry.base_height);
+    RtLog("disp", msg);
   }
 
   // TTY capture on the kernel A0/B0 dispatchers (fixed kernel addresses)

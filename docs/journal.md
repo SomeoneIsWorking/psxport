@@ -1,5 +1,36 @@
 # Debug / progress journal
 
+## 2026-06-13 — display enhancements: widescreen + 4x internal res + sharp scaling
+- User: "not widescreen, doesn't look higher resolution, no bilinear." All three
+  addressed via stock Beetle core options + presentation fixes (no GL context):
+  - **Higher resolution = `beetle_psx_internal_resolution`.** The SOFTWARE
+    renderer honors it: libretro.c:4287-4290 sets psx_gpu_upscale_shift =
+    upscale_shift_hw when there is NO hw renderer, and the framebuffer is emitted
+    at the upscaled size (libretro.c:3581). Verified 1x->350x240, 2x->700x480,
+    4x->1400x960; 4x runs ~174 emu-fps headless (~5.8x realtime) so it's fine for
+    live play with the software renderer. Default 4x in -play.
+  - **Widescreen = `beetle_psx_widescreen_hack` + `_aspect_ratio`.** Reports the
+    chosen aspect via av_info (16:9->1.778, 21:9->2.370, off->1.333). Default
+    16:9 in -play.
+  - **No bilinear:** SDL_HINT_RENDER_SCALE_QUALITY = nearest. Present now scales
+    to the core-reported aspect (g_aspect from av_info + SET_GEOMETRY/
+    SET_SYSTEM_AV_INFO), not a hardcoded 4:3, so widescreen isn't squished.
+- **KEY INTERACTION: widescreen_hack AND internal_resolution change the
+  coordinates the wide60 harness captures.** With both default-on, rtps-reproject
+  fell to 2% and wide60-verify to 8% — the reproject math + GP0<->GTE join assume
+  NATIVE screen coordinates, which the upscale (vertices at 4x) and the widescreen
+  X-scale both break. So these are **play-time enhancements only**: default ON for
+  -play, OFF (native 1x/4:3) for headless/RE runs. Env overrides either way
+  (PSXPORT_INTERNAL_RES, PSXPORT_WIDE/PSXPORT_NOWIDE, PSXPORT_WS_ASPECT). Battery
+  back to 100% at native. TODO: when the wide60 present stage is built, its
+  capture must account for the upscale shift + widescreen scale to coexist.
+- **Tomba2 widescreen caveats (expect, per-game tier):** the hack widens
+  GTE-projected geometry (characters/models) but Tomba2's terrain is CPU-projected
+  and 2D HUD isn't projected at all — those won't widen consistently, so expect
+  misalignment/stretch. Also the wider FOV reintroduces edge pop-in (the
+  cull-cone-widening override that masked it is disabled — it broke gameplay,
+  see below). Proper widescreen for Tomba2 needs the per-game cull/terrain work.
+
 ## 2026-06-13 — user-reported fixes: blinking objects, real logo skip, dynamic res
 - **Blinking / walk-through objects = the cull-cone-widening override.** User
   reported game objects blinking in/out *and being walk-through* (logic, not just
