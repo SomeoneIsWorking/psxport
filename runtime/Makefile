@@ -64,7 +64,7 @@ ALL_CXX := $(sort $(SOURCES_CXX))
 # no object ever lands outside obj/ (".." in an obj path escapes the tree)
 OBJS := $(patsubst $(BEETLE)/%.c,$(OBJDIR)/core/%.o,$(ALL_C)) \
         $(patsubst $(BEETLE)/%.cpp,$(OBJDIR)/core/%.o,$(ALL_CXX)) \
-        $(OBJDIR)/main.o $(OBJDIR)/psxport_hooks.o $(OBJDIR)/games/tomba2.o
+        $(OBJDIR)/main.o $(OBJDIR)/psxport_hooks.o $(OBJDIR)/wide60.o $(OBJDIR)/games/tomba2.o
 
 wide60rt: $(OBJS)
 	$(CXX) -o $@ $(OBJS) $(LDFLAGS)
@@ -72,6 +72,10 @@ wide60rt: $(OBJS)
 $(OBJDIR)/main.o: main.cpp
 	@mkdir -p $(dir $@)
 	$(CXX) -c $(CXXFLAGS) $(SDL_CFLAGS) -o $@ $<
+
+$(OBJDIR)/wide60.o: wide60.cpp
+	@mkdir -p $(dir $@)
+	$(CXX) -c $(CXXFLAGS) -o $@ $<
 
 $(OBJDIR)/psxport_hooks.o: psxport_hooks.cpp
 	@mkdir -p $(dir $@)

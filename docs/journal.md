@@ -31,9 +31,21 @@
   (DivTable/CalcRecip, dist/Z divide, IR + screen saturation) and reproduces the
   game's SX/SY on **6,348,755 / 6,348,755 = 100%** of captured vertices. We can
   reproject the same geometry at an interpolated (R,TR) bit-faithfully.
-- NEXT (renderer remaining): cross-frame transform matching (nearest-TR / order),
-  transform interpolation (TR linear, R nlerp), textured rasterization sampling
-  VRAM, present the synthesized in-between frame at 60fps.
+- **Renderer capture layer built (runtime/wide60.{h,cpp} + GPU poly tap in
+  gpu.c).** Captures per frame: GTE transforms, RTP projected verts (SXY->local
+  +transform), GP0 polygons (verts/uv/color/clut/tpage). Joins poly verts to
+  their transform by SXY. New psxport_set_gpu_poly_hook; PSXPORT_WIDE60=1 enables
+  the renderer module (owns the GTE/RTP/GPU hooks), PSXPORT_WIDE60_LOG logs
+  coverage.
+- **KEY FINDING: the game projects one logic frame BEFORE it draws.** Same-frame
+  poly<->projection join = ~0-2%; previous-frame join = 40-78%. So frame
+  boundaries must be the GPU display flip (GP1 0x05), draws joined to the prior
+  segment's projections. The <100% remainder is 2D geometry (UI/text/2D bg) with
+  no RTPS origin — those snap, not lerp. (This also explains why the cur-frame
+  join looked broken — it was a timing offset, not a coordinate-space bug.)
+- NEXT (renderer remaining): flip-based frame boundaries; cross-frame transform
+  matching (nearest-TR); transform interpolation (TR linear, R nlerp); textured
+  rasterization sampling VRAM; present the in-between frame at 60fps.
 
 ## 2026-06-13 — read pacing root-caused via driven debugging; full fast boot chain works
 - **The "stuck on Whoopee logo" class is solved.** Chain of findings, all via the REPL/

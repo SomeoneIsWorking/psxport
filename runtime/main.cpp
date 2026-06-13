@@ -17,6 +17,7 @@
 
 #include "libretro.h"
 #include "psxport_hooks.h"
+#include "wide60.h"
 #include "games/tomba2.h"
 
 #include <SDL2/SDL.h>
@@ -64,6 +65,7 @@ bool g_tomba2 = false;
 uint16_t g_inject_buttons = 0; // game-module scoped injections
 uint16_t g_repl_buttons = 0;   // REPL-held pad bits (press/release), for driving in
 bool g_module_turbo = false;   // game module requests fast-forward (load masks)
+bool g_wide60 = false;         // reprojecting 60fps renderer (PSXPORT_WIDE60)
 
 // --- runtime logging -----------------------------------------------------
 // Frame-stamped events to stderr. The emulated TTY (BIOS A0:3C / B0:3D
@@ -526,6 +528,12 @@ int main(int argc, char** argv)
   if (g_tomba2 && g_ram)
     Tomba2_Install();
 
+  // wide60 reprojecting renderer registers the GTE/RTP/GPU capture hooks last,
+  // so it owns them when enabled (overrides the per-game RE consumers).
+  g_wide60 = std::getenv("PSXPORT_WIDE60") != nullptr;
+  if (g_wide60)
+    Wide60_Install();
+
   if (loadstate)
   {
     if (LoadState(loadstate))
@@ -616,6 +624,8 @@ int main(int argc, char** argv)
       ramhash_fp = fopen(end + 1, "w");
   }
   const auto per_frame = [&]() {
+    if (g_wide60)
+      Wide60_FrameEnd(g_frame); // finalize the previous run's capture
     psxport_frame = g_frame;
     if (gamelog_fp && g_tomba2)
       fprintf(gamelog_fp, "%u,%u\n", g_frame, Tomba2_GetAndResetRenderHits());

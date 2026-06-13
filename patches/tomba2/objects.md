@@ -92,6 +92,20 @@ projection half of the custom renderer is done. Remaining: cross-frame transform
 matching, transform interpolation (TR linear, R nlerp/slerp), textured
 rasterization (VRAM as texsrc), present the extra frame.
 
+## Renderer capture layer (runtime/wide60.cpp) + the project->draw latency
+wide60 captures, per frame: the GTE transforms (CR tap), the projected vertices
+(RTP tap: SXY -> local vertex + transform), and the GP0 polygons (GPU poly tap:
+verts/uv/color/clut/tpage). It joins each polygon vertex to its transform by
+screen-space SXY (poly packet xy == GTE SXY, both pre-draw-offset).
+
+KEY FINDING (2026-06-13): the game **projects geometry one logic frame before it
+draws it.** Joining polys against the *same* frame's projections gives ~0-2%;
+joining against the *previous* frame's projections gives 40-78%. So the capture
+must be segmented by the GPU display flip (GP1 0x05) and draws joined to the
+PRIOR flip-segment's projections. The <100% remainder is 2D geometry (UI / text /
+2D backgrounds) that never goes through RTPS — those correctly snap, not lerp.
+NEXT: hook the flip for proper frame boundaries, then match/interp/rasterize.
+
 ## Status / next
 - [x] cull/submit chokepoint (0x8007712C) — enumerates all live objects by ptr
 - [x] full 0xC4 object struct mapped (pos 16.16 @+0x2c, rot matrix @+0x98,

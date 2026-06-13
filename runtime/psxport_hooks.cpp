@@ -32,10 +32,12 @@ uint32_t psxport_last_pc = 0;
 unsigned psxport_frame = 0;
 int psxport_gte_capture = 0;
 int psxport_rtp_capture = 0;
+int psxport_gpu_capture = 0;
 
 namespace {
 psxport_gte_cr_fn s_gte_cr_fn = nullptr;
 psxport_rtp_fn s_rtp_fn = nullptr;
+psxport_gpu_poly_fn s_gpu_poly_fn = nullptr;
 }
 
 extern "C" void psxport_on_gte_cr(unsigned which, uint32_t value)
@@ -60,6 +62,18 @@ void psxport_set_rtp_hook(psxport_rtp_fn fn)
 {
   s_rtp_fn = fn;
   psxport_rtp_capture = (fn != nullptr) ? 1 : 0;
+}
+
+extern "C" void psxport_on_gpu_poly(uint32_t cc, const uint32_t* cb, int32_t off_x, int32_t off_y)
+{
+  if (s_gpu_poly_fn)
+    s_gpu_poly_fn(cc, cb, off_x, off_y);
+}
+
+void psxport_set_gpu_poly_hook(psxport_gpu_poly_fn fn)
+{
+  s_gpu_poly_fn = fn;
+  psxport_gpu_capture = (fn != nullptr) ? 1 : 0;
 }
 
 extern "C" int psxport_on_pc(uint32_t pc, uint32_t instr, uint32_t* gpr, uint32_t* redirect_pc)

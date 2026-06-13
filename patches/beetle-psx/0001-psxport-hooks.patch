@@ -206,6 +206,34 @@ index c07d4f8..1eef7b5 100644
     // Instruction decode
     //
     opf = instr & 0x3F;
+diff --git a/mednafen/psx/gpu.c b/mednafen/psx/gpu.c
+index ea7e1f7..951fae2 100644
+--- a/mednafen/psx/gpu.c
++++ b/mednafen/psx/gpu.c
+@@ -21,6 +21,10 @@
+ #include "timer.h"
+ #include "FastFIFO.h"
+ 
++#ifdef PSXPORT_HOOKS
++#include "psxport_hooks.h"
++#endif
++
+ #include <retro_miscellaneous.h>
+ 
+ #if defined(__SSE2__)
+@@ -1425,6 +1429,12 @@ static void ProcessFIFO(uint32_t in_count)
+       Command_FBRead(&GPU, CB);
+    else
+    {
++#ifdef PSXPORT_HOOKS
++      /* psxport: tap polygon GP0 commands (verts/uv/color in CB) for the
++         reprojecting renderer, before rasterization. */
++      if (psxport_gpu_capture && cc >= 0x20 && cc <= 0x3F)
++         psxport_on_gpu_poly(cc, CB, GPU.OffsX, GPU.OffsY);
++#endif
+       if (command->func[GPU.abr][GPU.TexMode])
+          command->func[GPU.abr][GPU.TexMode | (GPU.MaskEvalAND ? 0x4 : 0x0)](&GPU, CB);
+    }
 diff --git a/mednafen/psx/gte.c b/mednafen/psx/gte.c
 index b6377e9..d123dd0 100644
 --- a/mednafen/psx/gte.c

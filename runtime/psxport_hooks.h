@@ -52,6 +52,13 @@ void psxport_on_gte_cr(unsigned which, uint32_t value);
 extern int psxport_rtp_capture;
 void psxport_on_rtp_vertex(int32_t vx, int32_t vy, int32_t vz, int32_t sx, int32_t sy, uint32_t sf);
 
+/* GPU polygon tap: when psxport_gpu_capture != 0, each GP0 polygon command
+   (cc 0x20-0x3F) is reported with its raw command buffer (cb) and the active
+   drawing offset, before rasterization. cb encodes verts/uv/color/clut/texpage
+   per the GP0 polygon format. */
+extern int psxport_gpu_capture;
+void psxport_on_gpu_poly(uint32_t cc, const uint32_t* cb, int32_t off_x, int32_t off_y);
+
 /* Last emulated PC seen by the hook layer (watchdog diagnostics). */
 extern uint32_t psxport_last_pc;
 
@@ -86,6 +93,11 @@ void psxport_set_gte_cr_hook(psxport_gte_cr_fn fn);
    reprojecting renderer. Setting a non-null fn enables capture. */
 typedef void (*psxport_rtp_fn)(int32_t vx, int32_t vy, int32_t vz, int32_t sx, int32_t sy, uint32_t sf);
 void psxport_set_rtp_hook(psxport_rtp_fn fn);
+
+/* Register a consumer for GP0 polygon commands. Setting a non-null fn enables
+   capture. cb points to a 16-word command buffer (valid only during the call). */
+typedef void (*psxport_gpu_poly_fn)(uint32_t cc, const uint32_t* cb, int32_t off_x, int32_t off_y);
+void psxport_set_gpu_poly_hook(psxport_gpu_poly_fn fn);
 #endif
 
 #endif
