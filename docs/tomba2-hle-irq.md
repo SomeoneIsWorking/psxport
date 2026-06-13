@@ -10,6 +10,19 @@
 > save/restore), the HLE BIOS now **boots and renders the Whoopee Camp intro logo
 > stably** (was: derail). NEXT blocker: it holds at the intro logo instead of advancing
 > to the FMV/title — a separate issue. The analysis below is kept for the record.
+>
+> **NEXT BLOCKER (2026-06-13): HLE holds at the Whoopee Camp intro logo.** Verified: a
+> continuous HLE run renders the Whoopee logo and the framebuffer is STATIC (meanRGB
+> ~205, unchanged f1500→f6000), yet the CPU is NOT spinning — `prof` is 100% game spread
+> across ~2210 PCs doing per-object math (e.g. the loop at 0x8001F9DC calling the object
+> dispatcher 0x80077768). So the game runs but the intro-advance gate never fires. Per
+> `docs/tomba2-intro.md` the Whoopee logo exits when its animation decode passes frame
+> 250 (sets the loop terminator) and the scene sequencer advances on a VSync/CD
+> ready-signal. NEXT: check whether the intro frame counter / the Whoopee decode actually
+> advances under HLE (read the candidate gate vars over time), and whether the animation
+> decode (MDEC/stream) is being driven — the advance likely waits on something the HLE
+> still doesn't deliver during the logo. (The IRQ/VBLANK delivery itself now works — that
+> was the f961 fix.)
 
 ## Symptom
 With `PSXPORT_HLE_BIOS=1`, Tomba!2 boots, runs to the opening-FMV stage (audio/XA
