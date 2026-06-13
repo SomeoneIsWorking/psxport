@@ -6,6 +6,8 @@
 #include <cstring>
 #include <cstdlib>
 #include <vector>
+#include <unordered_map>
+#include <algorithm>
 
 namespace {
 
@@ -29,6 +31,59 @@ int psxport_cd_instant = []() {
 int psxport_cdc_log = []() { const char* v = std::getenv("PSXPORT_CDC_LOG"); return (v && *v && *v != '0') ? 1 : 0; }();
 
 uint32_t psxport_last_pc = 0;
+
+// PC-sampling profiler. Counts every dispatched instruction PC into a histogram
+// so we can see where the CPU actually spends time during a load/dwell.
+int psxport_prof = 0;
+namespace {
+std::unordered_map<uint32_t, uint64_t> s_prof_hist;
+uint64_t s_prof_total = 0;
+}
+void psxport_prof_reset(void)
+{
+  s_prof_hist.clear();
+  s_prof_total = 0;
+}
+void psxport_prof_report(int top)
+{
+  std::vector<std::pair<uint32_t, uint64_t>> v(s_prof_hist.begin(), s_prof_hist.end());
+  std::sort(v.begin(), v.end(), [](const auto& a, const auto& b) { return a.second > b.second; });
+  fprintf(stderr, "=== PC profile: %llu samples, %zu distinct PCs ===\n",
+          (unsigned long long)s_prof_total, v.size());
+  // Region breakdown so the hotspot's home (BIOS ROM vs kernel RAM vs game) is obvious.
+  uint64_t r_biosrom = 0, r_kernel = 0, r_game = 0, r_other = 0;
+  for (const auto& p : v)
+  {
+    const uint32_t pc = p.first & 0x1FFFFFFF;
+    if (pc >= 0x1FC00000) r_biosrom += p.second;          // BIOS ROM (0xBFC.....)
+    else if (pc < 0x10000) r_kernel += p.second;          // kernel/handlers in low RAM
+    else if (pc < 0x200000) r_game += p.second;           // game / overlay code
+    else r_other += p.second;
+  }
+  auto pct = [&](uint64_t n) { return s_prof_total ? (100.0 * n / s_prof_total) : 0.0; };
+  fprintf(stderr, "  region: biosrom=%.1f%%  kernelRAM=%.1f%%  game=%.1f%%  other=%.1f%%\n",
+          pct(r_biosrom), pct(r_kernel), pct(r_game), pct(r_other));
+  const int n = (int)v.size() < top ? (int)v.size() : top;
+  for (int i = 0; i < n; i++)
+    fprintf(stderr, "  %2d. pc=%08X  %8llu  %5.1f%%\n", i + 1, v[i].first,
+            (unsigned long long)v[i].second, pct(v[i].second));
+  // Top game-range PCs (0x10000..0x200000) even when negligible overall: when a
+  // wait lives entirely inside the BIOS, the few game samples are the poll-loop
+  // call site that initiated it -- the thing to native-skip.
+  fprintf(stderr, "  -- top game-range PCs --\n");
+  int shown = 0;
+  for (const auto& p : v)
+  {
+    const uint32_t a = p.first & 0x1FFFFFFF;
+    if (a >= 0x10000 && a < 0x200000)
+    {
+      fprintf(stderr, "     pc=%08X  %8llu  %5.3f%%\n", p.first,
+              (unsigned long long)p.second, pct(p.second));
+      if (++shown >= 12) break;
+    }
+  }
+  if (!shown) fprintf(stderr, "     (none)\n");
+}
 
 // Write-watchpoint. Armed from PSXPORT_WATCHW in the frontend. Logs distinct
 // (pc,val) pairs to stderr so a store in a per-frame loop doesn't spam — each
@@ -126,10 +181,31 @@ void psxport_set_gpu_flip_hook(psxport_gpu_flip_fn fn)
   s_gpu_flip_fn = fn;
 }
 
+int psxport_bios_log = 0;
+
 extern "C" int psxport_on_pc(uint32_t pc, uint32_t instr, uint32_t* gpr, uint32_t* redirect_pc)
 {
   psxport_last_pc = pc;
+  if (psxport_prof)
+  {
+    s_prof_hist[pc]++;
+    s_prof_total++;
+  }
   pc &= 0x1FFFFFFF; // KSEG-agnostic
+  if (psxport_bios_log && (pc == 0xA0 || pc == 0xB0 || pc == 0xC0))
+  {
+    // $t1 = GPR[9] holds the function number; a0..a3 = GPR[4..7].
+    const char tbl = (pc == 0xA0) ? 'A' : (pc == 0xB0) ? 'B' : 'C';
+    const uint32_t fn = gpr[9];
+    static char s_last = 0;
+    static uint32_t s_last_fn = 0xFFFFFFFF, s_last_a0 = 0;
+    if (!(tbl == s_last && fn == s_last_fn && gpr[4] == s_last_a0))
+    {
+      fprintf(stderr, "[bios f%u] %c0(%02X) a0=%08X a1=%08X a2=%08X a3=%08X ra=%08X\n",
+              psxport_frame, tbl, fn, gpr[4], gpr[5], gpr[6], gpr[7], gpr[31]);
+      s_last = tbl; s_last_fn = fn; s_last_a0 = gpr[4];
+    }
+  }
   for (const Hook& h : s_hooks)
   {
     if (h.pc != pc)

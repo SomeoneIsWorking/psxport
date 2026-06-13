@@ -77,6 +77,28 @@ void psxport_on_gpu_flip(uint32_t value);
 /* Last emulated PC seen by the hook layer (watchdog diagnostics). */
 extern uint32_t psxport_last_pc;
 
+/* PC sampling profiler (RE aid): when psxport_prof != 0, every dispatched
+   instruction PC is counted into a histogram (one entry per distinct PC).
+   Use to find where the CPU actually spends time during a load/dwell so a fix
+   targets the real hotspot (BIOS event path vs. game decode loop) instead of a
+   guess. Requires hooks to be installed (the per-instruction dispatch gate). */
+extern int psxport_prof;
+void psxport_prof_reset(void);
+void psxport_prof_report(int top);
+
+/* BIOS HLE: native read of `count` 2048-byte data sectors from filesystem LBA
+   `lba` into `dst` (host-speed). Implemented in the imported cdc.c (CD image
+   access). Returns count on success, -1 on failure. Used by the cdromBlockReading
+   HLE override to bypass OpenBIOS's per-sector CD cadence. */
+int psxport_hle_cd_read2048(int32_t lba, int count, uint8_t* dst);
+
+/* BIOS-call tracer (RE aid): when psxport_bios_log != 0, every PSX BIOS call
+   vector hit (A0/B0/C0 at phys 0x000000A0/B0/C0) logs its function number
+   (in $t1) and a0..a3. Consecutive identical calls are coalesced so polling
+   loops (TestEvent) don't flood. Used to find the loader's real entry points
+   for native HLE. Stamped with psxport_frame. */
+extern int psxport_bios_log;
+
 /* Write-watchpoint (RE aid): when psxport_watch_addr != PSXPORT_WATCH_OFF, every
    CPU store whose target word (masked to 2MB) equals it reports the writing PC,
    value and width to psxport_on_write. Finds the code that owns a variable — e.g.

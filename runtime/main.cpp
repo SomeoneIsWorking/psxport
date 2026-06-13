@@ -122,6 +122,37 @@ int BiosPutcharHook(uint32_t pc, uint32_t* gpr, uint32_t*)
   return PSXPORT_HOOK_CONTINUE;
 }
 
+// HLE BIOS: native override of OpenBIOS cdromBlockReading(count, sector, buffer)
+// at 0xBFC03A9C (sig 0x24A30096 = `addiu v1,a1,0x96`, i.e. sector += 150). The
+// real routine reads `count` 2048-byte sectors from filesystem LBA `sector` into
+// `buffer` by driving the CDC one sector at a time (Setloc->SeekL->ReadN->wait),
+// blocking on TestEvent spins gated by per-sector disc pacing -- this is the
+// dominant cost of Tomba2's intro/FMV loads (the CPU sits 100% in this BIOS code,
+// 0% in the game). We service it natively from the CD image at host speed and
+// return, removing the PSX-side cadence entirely. The events it waits on are
+// internal to this routine (the caller never sees them), so returning the sector
+// count is a complete emulation. On any read failure we fall through to the real
+// BIOS path. Disable with PSXPORT_BIOS_HLE=0 for RE/oracle runs.
+bool g_bios_hle = true;
+int BiosHleCdBlockRead(uint32_t /*pc*/, uint32_t* gpr, uint32_t* redirect_pc)
+{
+  if (!g_bios_hle || !g_ram)
+    return PSXPORT_HOOK_CONTINUE;
+  const int32_t count  = static_cast<int32_t>(gpr[4]); // a0
+  const int32_t sector = static_cast<int32_t>(gpr[5]); // a1 (filesystem LBA)
+  const uint32_t buf   = gpr[6] & 0x1FFFFF;             // a2 -> main RAM offset
+  if (count <= 0 || buf + static_cast<uint32_t>(count) * 2048u > 0x200000u)
+    return PSXPORT_HOOK_CONTINUE; // out-of-range: let the real BIOS handle it
+  if (psxport_hle_cd_read2048(sector, count, g_ram + buf) != count)
+    return PSXPORT_HOOK_CONTINUE; // read failed: fall back to the real path
+  if (psxport_bios_log)
+    fprintf(stderr, "[hle f%u] cdromBlockReading lba=%d count=%d -> buf=%08X (%d KiB)\n",
+            psxport_frame, sector, count, gpr[6], count * 2);
+  gpr[2] = static_cast<uint32_t>(count); // v0 = sectors read
+  *redirect_pc = gpr[31];                // return to caller (ra)
+  return PSXPORT_HOOK_REDIRECT;
+}
+
 struct InputEvent
 {
   unsigned start, end;
@@ -588,14 +619,19 @@ int main(int argc, char** argv)
   }
 
   // Instant-CD default for the PC port: there is no physical drive on PC, so disc
-  // operations are instant. Full mask 0x3F = seek(1)+reset(2)+startup(4)+ReadN
-  // pacing(8)+ReadTOC(16)+Pause(32). Verified on Tomba2 through the whole pipeline
-  // (SCEA/Whoopee logos -> FMV -> title -> New Game -> in-level 3D) with no desync;
-  // collapses the artificial CD delays that made loads "take a while". Streaming
-  // (XA/STRSND) audio keeps native timing (bit 8 excludes it), so FMV audio is
-  // unaffected. Override with PSXPORT_CD_INSTANT=0 for native HW timing (RE / oracle
-  // runs that study real loading/CD behavior). -fastcd is now redundant (kept for
-  // back-compat). env (PSXPORT_CD_INSTANT) still wins when set.
+  // operations are instant. Mask 0x3F = seek(1)+reset(2)+startup(4)+ReadN
+  // pacing(8)+ReadTOC(16)+Pause(32). bit8 already delivers data sectors consumer-
+  // paced: it reschedules the next sector +7000 cyc the instant the consumer acks
+  // the prior DATA_READY (IRQBuffer&0xF clear), falling back to native rate only
+  // while the consumer is still draining -- so delivery tracks how fast the game's
+  // IRQ handler consumes, not beetle's cd_2x_speedup cap, with no deadlock risk.
+  // (A bit64 "defer-until-acked" variant was tried and removed: it deadlocks BIOS
+  // CD init by deferring forever when the consumer legitimately isn't draining, and
+  // gains nothing real -- the residual intro loads are CPU/consumer-paced, not
+  // delivery-paced.) Verified on Tomba2 through the whole pipeline (logos -> FMV ->
+  // title -> New Game -> in-level 3D) with no desync. Streaming (XA/STRSND) audio
+  // keeps native real-time pacing. Override with PSXPORT_CD_INSTANT=0 for native HW
+  // timing (RE / oracle runs). -fastcd is now redundant. env wins when set.
   if (psxport_cd_instant < 0)
     psxport_cd_instant = 0x3F;
 
@@ -656,6 +692,15 @@ int main(int argc, char** argv)
   psxport_add_hook(0xB0, 0, BiosPutcharHook);
 
   g_ram = static_cast<uint8_t*>(retro_get_memory_data(RETRO_MEMORY_SYSTEM_RAM));
+
+  // HLE BIOS: native-service OpenBIOS's blocking per-sector CD read. Generic
+  // (OpenBIOS, game-independent); signature-checked so a different BIOS can't
+  // misfire. PSXPORT_BIOS_HLE=0 opts out for RE/oracle runs.
+  if (const char* v = std::getenv("PSXPORT_BIOS_HLE"))
+    g_bios_hle = (*v && *v != '0');
+  if (g_bios_hle && g_ram)
+    psxport_add_hook(0xBFC03A9C, 0x24A30096, BiosHleCdBlockRead);
+
   g_tomba2 = strstr(disc, "Tomba! 2") != nullptr;
   if (g_tomba2 && g_ram)
     Tomba2_Install();
@@ -904,6 +949,25 @@ int main(int argc, char** argv)
         alarm(0);
         fprintf(stderr, "[repl] at frame %u\n", g_frame);
       }
+      else if (strcmp(cmd, "prof") == 0 && sscanf(line, "%*s %u", &a) == 1)
+      {
+        // Sample the CPU PC over `a` frames and report where time goes. Per-
+        // instruction histogram (psxport_prof) is heavy, so give the watchdog
+        // more slack than `run`.
+        const unsigned until = g_frame + a;
+        psxport_prof_reset();
+        psxport_prof = 1;
+        alarm(60);
+        for (; g_frame < until; g_frame++)
+        {
+          per_frame();
+          retro_run();
+        }
+        alarm(0);
+        psxport_prof = 0;
+        fprintf(stderr, "[repl] profiled to frame %u\n", g_frame);
+        psxport_prof_report(25);
+      }
       else if (strcmp(cmd, "r") == 0 && sscanf(line, "%*s %x %u", &a, &b) >= 1)
       {
         if (!b)
@@ -932,6 +996,11 @@ int main(int argc, char** argv)
       {
         psxport_cdc_log = static_cast<int>(a);
         fprintf(stderr, "[repl] cdclog=%d\n", psxport_cdc_log);
+      }
+      else if (strcmp(cmd, "bioslog") == 0 && sscanf(line, "%*s %u", &a) == 1)
+      {
+        psxport_bios_log = static_cast<int>(a);
+        fprintf(stderr, "[repl] bioslog=%d\n", psxport_bios_log);
       }
       else if (strcmp(cmd, "trace") == 0 && sscanf(line, "%*s %x", &a) == 1)
       {
