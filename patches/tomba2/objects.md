@@ -25,13 +25,25 @@ then calling 0x8007712C. The main wrapper `0x8007778C` (entry sig 0x27BDFFE8)
 alone has ~85 callers (every object-type handler). Hooking the cull function
 0x8007712C captures ALL objects regardless of wrapper.
 
-## Object struct fields (from wrapper 0x8007778C)
-    obj + 0x01 : visible flag (byte; set per frame by the cull pass)
-    obj + 0x0c : type/category byte
-    obj + 0x2e : world X position (s16)
-    obj + 0x32 : world Y position (s16)
-    obj + 0x36 : world Z position (s16)
-(More fields — rotation, model pointer — TBD.)
+## Object struct (0xC4 bytes) — verified by full A/B dump diff (frame 14130/14132)
+    obj + 0x00 : flags/state bytes (byte +0x01 = visible flag, set by cull pass)
+    obj + 0x0c : type/category (u32; common values 2/3/4/5)
+    obj + 0x1c : handler / update function pointer (code ptr, e.g. 0x800739AC)
+    obj + 0x24 : next-object pointer (intrusive linked list through the pool)
+    obj + 0x2c : world X position, 32-bit 16.16 fixed (int part = the s16 @+0x2e)
+    obj + 0x30 : world Y position, 16.16 fixed (int @+0x32)
+    obj + 0x34 : world Z position, 16.16 fixed (int @+0x36)
+    obj + 0x98 : 3x3 rotation matrix, 9 x s16, 1.0 = 0x1000 (identity for static
+                 props: [1000,0,0, 0,1000,0, 0,0,1000])
+    obj + 0xac : world position as 3 x s32 integers (the GTE TR vector copy)
+    obj + 0xc0 : model/placement-data pointer (per instance; steps 0x44 across
+                 the static-prop pool: 800F2BC4, 800F2C08, 800F2C4C, ...)
+
+This layout is shared across the static-prop pool (type 4) and appears common to
+types 2/3/5 (all have valid code handlers @+0x1c). NB: only the static-prop pool
+is the contiguous 0xC4-stride array; other entities (player/NPCs) are separate
+pools at other addresses — enumerate them via the 0x8007712C chokepoint (by
+pointer), do NOT index the array past its end.
 
 Camera world position lives in the scratchpad:
     0x1F8000D2 : camera X (u16)   0x1F8000D6 : camera Y   0x1F8000DA : camera Z
@@ -55,12 +67,24 @@ discontinuously) — the interpolator must treat a large per-slot jump as a
 re-bind (snap, don't lerp), same principle as the old primitive matcher.
 A struct-internal unique-id field (if any) is still TBD; the pointer suffices.
 
+## Motion is camera-dominated (key design fact)
+In the captured 3D scene (frames 7035-15922) all 89 live objects are static
+across consecutive logic frames — they are placed world props. The on-screen
+motion comes from the CAMERA. So the interpolator must interpolate the camera
+view (and the few independently-moving entities) and reproject, NOT lerp object
+world transforms alone. (This is also why DuckStation's screen-space prim matcher
+is the wrong tool: it can't reconstruct camera parallax.)
+
+The wrapper reads the camera from scratchpad 0x1F8000D2/D6/DA (pos); the
+authoritative camera transform (position + 3x3 rotation matrix, = the GTE
+rotation matrix + TR loaded before RTPS) is the next RE target.
+
 ## Status / next
-- [x] cull/submit chokepoint located (0x8007712C) — enumerates all live objects
-- [x] position fields located (obj+0x2e/0x32/0x36, s16)
-- [x] chokepoint fires + pointer stability verified in a live scene (frame 7037+)
-- [x] object pool: contiguous, stride 0xC4, base ~0x800EF478
-- [ ] rotation field(s) + model-data pointer in the struct
-- [ ] a moving-object scene to develop/verify motion interpolation
-- [ ] per-frame object snapshot override (prev/cur keyed by pointer, snap on jump)
-- [ ] custom interpolating renderer driven by snapshots
+- [x] cull/submit chokepoint (0x8007712C) — enumerates all live objects by ptr
+- [x] full 0xC4 object struct mapped (pos 16.16 @+0x2c, rot matrix @+0x98,
+      handler @+0x1c, model ptr @+0xc0, linked-list @+0x24)
+- [x] pointer stability verified; pool-slot reuse on scene change = snap
+- [ ] camera transform in main RAM / via GTE (rotation matrix + translation)
+- [ ] a moving scene (drive to overworld gameplay via REPL) to verify motion
+- [ ] per-frame snapshot override (camera + objects, prev/cur, snap on rebind)
+- [ ] custom interpolating renderer (reproject at lerped camera+object state)

@@ -107,7 +107,7 @@ uint16_t Tomba2_FrameTick(uint8_t* ram)
   if (s_objlog && s_obj_n)
   {
     fprintf(stderr, "[%6u] objs n=%u:", psxport_frame, s_obj_n);
-    for (unsigned i = 0; i < s_obj_n && i < 8; i++)
+    for (unsigned i = 0; i < s_obj_n; i++)
     {
       const uint32_t p = s_obj_ptr[i] & 0x1FFFFF;
       int16_t x = 0, y = 0, z = 0;
