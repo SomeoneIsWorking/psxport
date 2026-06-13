@@ -114,6 +114,11 @@ extern unsigned psxport_frame;
 /* Live GPR file (32 GPRs + LO/HI), from the imported cpu.c. */
 uint32_t* psxport_cpu_gpr(void);
 
+/* HLE BIOS boot: override the reset CPU state to enter the game's EXE directly
+   (PC=entry, $sp/$fp, $gp), bypassing the BIOS ROM at 0xBFC00000. Call after the
+   EXE text is in RAM and before the first instruction runs. From cpu.c. */
+void psxport_hle_set_boot(uint32_t pc, uint32_t sp, uint32_t gp);
+
 /* Diagnostics: registers + heuristic MIPS stack trace (scans the emulated
    stack for plausible return addresses: RAM text address preceded by a
    jal/jalr). ram = 2MB main RAM. */

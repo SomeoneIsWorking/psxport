@@ -37,9 +37,19 @@ CFLAGS_COMMON := -O2 -g -fwrapv -fsigned-char $(INCFLAGS) -I$(BEETLE)/include -I
                  -include $(BEETLE)/include/debug.h $(DEFINES) $(WARNINGS)
 CFLAGS   := $(CFLAGS_COMMON)
 CXXFLAGS := $(CFLAGS_COMMON) -std=c++14
-SDL_CFLAGS := $(shell pkg-config --cflags sdl2)
-SDL_LIBS  := $(shell pkg-config --libs sdl2)
-LDFLAGS  := -lpthread -ldl -lrt $(SDL_LIBS)
+# SDL2: prefer pkg-config, fall back to sdl2-config (Homebrew/macOS ships both).
+SDL_CFLAGS := $(shell pkg-config --cflags sdl2 2>/dev/null || sdl2-config --cflags 2>/dev/null)
+SDL_LIBS  := $(shell pkg-config --libs sdl2 2>/dev/null || sdl2-config --libs 2>/dev/null)
+
+# Platform link flags. librt/libdl are Linux-only; on macOS clock_gettime and
+# dlopen live in libc, so linking them fails ("library not found for -lrt").
+UNAME_S := $(shell uname -s)
+ifeq ($(UNAME_S),Darwin)
+  PLATFORM_LIBS := -lpthread
+else
+  PLATFORM_LIBS := -lpthread -ldl -lrt
+endif
+LDFLAGS  := $(PLATFORM_LIBS) $(SDL_LIBS)
 
 # frontend-side libretro-common implementations the core expects from the host
 LRC := $(BEETLE)/libretro-common
@@ -64,7 +74,8 @@ ALL_CXX := $(sort $(SOURCES_CXX))
 # no object ever lands outside obj/ (".." in an obj path escapes the tree)
 OBJS := $(patsubst $(BEETLE)/%.c,$(OBJDIR)/core/%.o,$(ALL_C)) \
         $(patsubst $(BEETLE)/%.cpp,$(OBJDIR)/core/%.o,$(ALL_CXX)) \
-        $(OBJDIR)/main.o $(OBJDIR)/psxport_hooks.o $(OBJDIR)/wide60.o $(OBJDIR)/games/tomba2.o
+        $(OBJDIR)/main.o $(OBJDIR)/psxport_hooks.o $(OBJDIR)/wide60.o $(OBJDIR)/games/tomba2.o \
+        $(OBJDIR)/hle_iso.o $(OBJDIR)/hle_syscalls.o
 
 wide60rt: $(OBJS)
 	$(CXX) -o $@ $(OBJS) $(LDFLAGS)
@@ -82,6 +93,14 @@ $(OBJDIR)/psxport_hooks.o: psxport_hooks.cpp
 	$(CXX) -c $(CXXFLAGS) -o $@ $<
 
 $(OBJDIR)/games/tomba2.o: games/tomba2.cpp
+	@mkdir -p $(dir $@)
+	$(CXX) -c $(CXXFLAGS) -o $@ $<
+
+$(OBJDIR)/hle_iso.o: hle_iso.cpp hle_bios.h
+	@mkdir -p $(dir $@)
+	$(CXX) -c $(CXXFLAGS) -o $@ $<
+
+$(OBJDIR)/hle_syscalls.o: hle_syscalls.cpp hle_bios.h
 	@mkdir -p $(dir $@)
 	$(CXX) -c $(CXXFLAGS) -o $@ $<
 

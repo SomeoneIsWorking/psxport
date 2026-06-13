@@ -17,6 +17,7 @@
 
 #include "libretro.h"
 #include "psxport_hooks.h"
+#include "hle_bios.h"
 #include "wide60.h"
 #include "games/tomba2.h"
 
@@ -120,6 +121,45 @@ int BiosPutcharHook(uint32_t pc, uint32_t* gpr, uint32_t*)
     }
   }
   return PSXPORT_HOOK_CONTINUE;
+}
+
+// ---- HLE BIOS (pure native BIOS, no MIPS ROM) -------------------------------
+// When enabled (PSXPORT_HLE_BIOS=1), the emulated CPU runs the game's EXE
+// directly and every A0/B0/C0 syscall is serviced natively here instead of by
+// BIOS-ROM code. There is NO dispatcher code at 0x000000A0/B0/C0 in this mode,
+// so the trap MUST consume the call (set $v0, return to $ra) — falling through
+// would execute whatever happens to sit at the vector. Bring-up flag: default
+// OFF until the kernel (events/exceptions) is complete.
+bool g_hle_bios = false;
+int HleSyscallHook(uint32_t pc, uint32_t* gpr, uint32_t* redirect_pc)
+{
+  BiosPutcharHook(pc, gpr, redirect_pc); // keep TTY capture (A0:3C/3E, B0:3D/3F)
+  const char table = (pc == 0xA0) ? 'A' : (pc == 0xB0) ? 'B' : 'C';
+  const uint32_t fnum = gpr[9]; // $t1 selects the function
+  // putchar variants: TTY already captured above; return the char and exit.
+  const bool is_putchar = (pc == 0xA0 && (fnum == 0x3C || fnum == 0x3E)) ||
+                          (pc == 0xB0 && (fnum == 0x3D || fnum == 0x3F));
+  if (!is_putchar && psxport_hle_syscall(table, fnum, gpr, g_ram))
+  {
+    *redirect_pc = gpr[31];
+    return PSXPORT_HOOK_REDIRECT;
+  }
+  if (!is_putchar)
+  {
+    // Surface unimplemented syscalls (deduped on the immediate repeat, like the
+    // bios tracer) so bring-up shows exactly what each game still needs.
+    static uint32_t last_key = 0xFFFFFFFFu;
+    const uint32_t key = (uint32_t(uint8_t(table)) << 8) | (fnum & 0xFF);
+    if (key != last_key)
+    {
+      fprintf(stderr, "[hle] UNIMPL %c0(%02X) a0=%08X a1=%08X a2=%08X ra=%08X\n",
+              table, fnum, gpr[4], gpr[5], gpr[6], gpr[31]);
+      last_key = key;
+    }
+    gpr[2] = 0;
+  }
+  *redirect_pc = gpr[31];
+  return PSXPORT_HOOK_REDIRECT;
 }
 
 // HLE BIOS: native override of OpenBIOS cdromBlockReading(count, sector, buffer)
@@ -687,11 +727,34 @@ int main(int argc, char** argv)
     RtLog("disp", msg);
   }
 
-  // TTY capture on the kernel A0/B0 dispatchers (fixed kernel addresses)
-  psxport_add_hook(0xA0, 0, BiosPutcharHook);
-  psxport_add_hook(0xB0, 0, BiosPutcharHook);
-
   g_ram = static_cast<uint8_t*>(retro_get_memory_data(RETRO_MEMORY_SYSTEM_RAM));
+
+  // HLE BIOS (pure native, no MIPS ROM). Bring-up flag PSXPORT_HLE_BIOS=1.
+  if (const char* v = std::getenv("PSXPORT_HLE_BIOS"))
+    g_hle_bios = (*v && *v != '0');
+
+  if (g_hle_bios && g_ram)
+  {
+    // Trap every A0/B0/C0 syscall to the native BIOS; no ROM dispatcher exists.
+    psxport_add_hook(0xA0, 0, HleSyscallHook);
+    psxport_add_hook(0xB0, 0, HleSyscallHook);
+    psxport_add_hook(0xC0, 0, HleSyscallHook);
+    // Boot: load the disc's EXE into RAM and jump the CPU into it (skip the ROM).
+    uint32_t pc = 0, sp = 0, gp = 0;
+    if (psxport_hle_boot(g_ram, &pc, &sp, &gp))
+    {
+      psxport_hle_set_boot(pc, sp, gp);
+      fprintf(stderr, "[hle] booted EXE pc=%08X sp=%08X gp=%08X\n", pc, sp, gp);
+    }
+    else
+      fprintf(stderr, "[hle] BOOT FAILED — falling back to BIOS ROM\n");
+  }
+  else
+  {
+    // TTY capture on the kernel A0/B0 dispatchers (fixed kernel addresses)
+    psxport_add_hook(0xA0, 0, BiosPutcharHook);
+    psxport_add_hook(0xB0, 0, BiosPutcharHook);
+  }
 
   // HLE BIOS: native-service OpenBIOS's blocking per-sector CD read. Generic
   // (OpenBIOS, game-independent); signature-checked so a different BIOS can't
