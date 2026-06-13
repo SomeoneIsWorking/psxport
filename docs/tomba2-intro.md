@@ -142,15 +142,33 @@ Per-state timing (Start held, direct logo skip), via `PSXPORT_WATCHW=80025454`:
 **COLLAPSED (implemented):** `DwellSkip` @`0x80012164` forces state 0xE's own advance
 path on Start. With the CD fixes + DwellSkip the machine now finishes ~f70.
 
-### Whoopee→FMV — STILL HAS NON-CD TIME (open)
-With instant-CD, the residual Whoopee→FMV time is NOT CD: `cdclog` shows two spans
-with **zero CD commands** (≈f163→229 and ≈f234→315 in the explicit-0x3F+skip run)
-between the inter-stage machine and the FMV loader — i.e. game-paced CPU/GPU init,
-not disk. The FMV itself then streams (real-time XA). Open work: characterise the
-no-CD spans (VSync-paced init? a timed dwell like state 0xE?) and collapse them like
-DwellSkip; and make the FMV skippable on *held* Start (currently needs a press edge).
-The FMV player is a separate overlay at **`0x80085000`–`0x8009A000`** (StrPlayer/MDEC)
-+ low kernel/libcd `0x80001000`–`0x80004000`; the FMV stream overwrites the
+### Whoopee→FMV — two residuals, one collapsed, one open
+After the inter-stage machine (~f70 with the CD fixes), reaching the visible FMV has
+two distinct black spans (Start held, instant-CD), found by PC-sampling (`bt`) inside
+each gap:
+
+1. **Post-Whoopee FMV pre-roll dwell — COLLAPSED (`FmvDwellSkip`).** A loaded overlay
+   at `0x80050xxx` frame-paces itself with a spin at `0x80050CE4`:
+   `while (*(0x800E809C) < threshold@0x1F800235)` (`0x800E809C` is a VBLANK-ticked
+   counter). This is the post-Whoopee dead black gap (~f440→620 of pure black). On
+   Start we redirect to the loop exit `0x80050CF8` so the wait elapses immediately
+   (same technique as DwellSkip; the loop's own decode work still runs). Verified: the
+   movie itself stays intact, the FMV becomes visible ~100f earlier, and the run still
+   reaches the title / New Game cleanly. Default ON, Start-gated.
+
+2. **Pre-Whoopee load (~f70→230) — OPEN, and it is NOT the CD.** `bt` shows the CPU
+   spinning in **BIOS** (`0xBFC05774`), and `cdclog` shows ~70 CD commands but only
+   ~17 actual sectors over those ~160 frames — i.e. the game/BIOS asks for a sector
+   only every ~9 frames. So this is **per-sector game/BIOS pacing (or per-sector
+   decode), not disk latency** — instant-CD already makes each sector cheap and does
+   not shrink it. Collapsing it needs RE of the loader/BIOS-read loop's per-iteration
+   gate (what the BIOS spin at `0xBFC05774` waits on between sectors), not a CD knob.
+   Distinct, deeper pass.
+
+The FMV itself then streams real-time XA. Also still open: make the FMV skippable on
+*held* Start (currently it needs a fresh press edge during playback). The FMV player
+is a separate overlay at **`0x80085000`–`0x8009A000`** (StrPlayer/MDEC) + low
+kernel/libcd `0x80001000`–`0x80004000`; the FMV stream overwrites the
 0x80011xxx/0x80018xxx intro code.
 
 ### Timing/IRQ primitives — mapped, intentionally LEFT EMULATED (do not native-own)

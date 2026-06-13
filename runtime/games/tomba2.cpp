@@ -191,6 +191,24 @@ int DwellSkip(uint32_t, uint32_t* gpr, uint32_t*)
     gpr[3] = 1; // $v1 != 0 -> dwell treated as elapsed, take the advance path
   return PSXPORT_HOOK_CONTINUE;
 }
+
+// Post-Whoopee FMV-stage frame-pacing dwell. In a loaded overlay at 0x80050xxx
+// the FMV/post-Whoopee loop frame-paces itself with a spin:
+// `while (*(0x800E809C) < threshold@0x1F800235)` at 0x80050CE4
+//   80050CE4 lhu  v0,-0x7f64(a0)   ; a0=0x800f0000 -> *(0x800E809C) vblank counter
+//   80050CEC sltu v0,v0,v1         ; v1 = threshold
+//   80050CF0 bnez v0,0x80050CE4    ; stay while counter < threshold
+// On Start, redirect to the loop exit 0x80050CF8 so the wait elapses immediately
+// (same technique as DwellSkip; the loop's own work still runs each iteration).
+// Collapses the dead black pre-roll between Whoopee and the visible FMV (~100f);
+// verified the movie itself stays intact and the run reaches the title/New Game.
+int FmvDwellSkip(uint32_t pc, uint32_t*, uint32_t* redirect_pc)
+{
+  if (!s_skip_held)
+    return PSXPORT_HOOK_CONTINUE;
+  *redirect_pc = 0x50CF8 | (psxport_last_pc & 0xE0000000); // loop exit
+  return PSXPORT_HOOK_REDIRECT;
+}
 } // namespace
 
 void Tomba2_SetSkipHeld(bool held) { s_skip_held = held; }
@@ -223,6 +241,7 @@ void Tomba2_Install()
     psxport_add_hook(0x80010ED0, 0x12A20019, SceaSkip);    // SCEA phase dispatch (beq $s5,$v0)
     psxport_add_hook(0x80011414, 0x3C028004, WhoopeeSkip); // Whoopee loop top (lui $v0,0x8004)
     psxport_add_hook(0x80012164, 0x10600008, DwellSkip);   // inter-stage 200f dwell (beqz $v1)
+    psxport_add_hook(0x80050CE4, 0x9482809C, FmvDwellSkip); // post-Whoopee FMV-stage frame dwell
   }
 
   // Live object enumeration: hook the universal per-object cull chokepoint.
