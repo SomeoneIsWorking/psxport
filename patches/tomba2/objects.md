@@ -84,7 +84,12 @@ rotation matrix + TR loaded before RTPS) is the next RE target.
 - [x] full 0xC4 object struct mapped (pos 16.16 @+0x2c, rot matrix @+0x98,
       handler @+0x1c, model ptr @+0xc0, linked-list @+0x24)
 - [x] pointer stability verified; pool-slot reuse on scene change = snap
-- [ ] camera transform in main RAM / via GTE (rotation matrix + translation)
+- [x] camera/object transforms captured via GTE tap (psxport_set_gte_cr_hook):
+      CR0-4 = 3x3 rotation matrix (s16, 1.0=0x1000), CR5-7 = translation TR.
+      KEY: TR is CAMERA-RELATIVE — it changes every frame as the camera moves
+      even for static objects, so the GTE stream already encodes on-screen motion
+      (incl. parallax). 41-58 transforms/frame. PSXPORT_T2_GTELOG=1 to dump.
+      This is the stream the interpolator lerps and the renderer reprojects.
 - [ ] a moving scene (drive to overworld gameplay via REPL) to verify motion
 - [ ] per-frame snapshot override (camera + objects, prev/cur, snap on rebind)
 - [ ] custom interpolating renderer (reproject at lerped camera+object state)

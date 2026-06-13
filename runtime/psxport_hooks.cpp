@@ -30,6 +30,23 @@ int psxport_cdc_log = []() { const char* v = std::getenv("PSXPORT_CDC_LOG"); ret
 
 uint32_t psxport_last_pc = 0;
 unsigned psxport_frame = 0;
+int psxport_gte_capture = 0;
+
+namespace {
+psxport_gte_cr_fn s_gte_cr_fn = nullptr;
+}
+
+extern "C" void psxport_on_gte_cr(unsigned which, uint32_t value)
+{
+  if (s_gte_cr_fn)
+    s_gte_cr_fn(which, value);
+}
+
+void psxport_set_gte_cr_hook(psxport_gte_cr_fn fn)
+{
+  s_gte_cr_fn = fn;
+  psxport_gte_capture = (fn != nullptr) ? 1 : 0;
+}
 
 extern "C" int psxport_on_pc(uint32_t pc, uint32_t instr, uint32_t* gpr, uint32_t* redirect_pc)
 {

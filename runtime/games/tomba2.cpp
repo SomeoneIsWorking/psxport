@@ -34,6 +34,32 @@ int ObjectCull(uint32_t, uint32_t* gpr, uint32_t*)
   return PSXPORT_HOOK_CONTINUE;
 }
 
+// --- GTE transform capture (camera/object transform fed to RTPS) -------------
+// CR0-4 pack the 3x3 rotation matrix (s16, 1.0=0x1000); CR5-7 = translation
+// TRX/TRY/TRZ (s32). The game loads a transform then projects; TRZ (which==7)
+// is the natural "transform complete" marker. We assemble and count these.
+uint32_t s_gte_cr[8];
+unsigned s_gte_xforms = 0; // transforms (TRZ writes) this frame
+bool s_gtelog = false;
+
+void GteCrConsumer(unsigned which, uint32_t value)
+{
+  s_gte_cr[which & 7] = value;
+  if (which == 7) // translation complete = one loaded transform
+  {
+    if (s_gtelog && s_gte_xforms < 6)
+    {
+      const int16_t r11 = s_gte_cr[0], r12 = s_gte_cr[0] >> 16, r13 = s_gte_cr[1], r21 = s_gte_cr[1] >> 16;
+      const int16_t r22 = s_gte_cr[2], r23 = s_gte_cr[2] >> 16, r31 = s_gte_cr[3], r32 = s_gte_cr[3] >> 16;
+      const int16_t r33 = s_gte_cr[4];
+      fprintf(stderr, "[%6u] xform#%u TR=(%d,%d,%d) R=[%d %d %d; %d %d %d; %d %d %d]\n", psxport_frame, s_gte_xforms,
+              (int32_t)s_gte_cr[5], (int32_t)s_gte_cr[6], (int32_t)s_gte_cr[7], r11, r12, r13, r21, r22, r23, r31, r32,
+              r33);
+    }
+    s_gte_xforms++;
+  }
+}
+
 // --- Object cull-cone widening (override; RE: patches/tomba2/cull-widen.md) --
 // The object enqueue-for-draw overlay tests v1 (cos-scaled dot/distance)
 // against a per-LOD threshold with `slti v0, v1, IMM` (v1 < IMM => culled).
@@ -92,6 +118,11 @@ void Tomba2_Install()
   // Live object enumeration: hook the universal per-object cull chokepoint.
   s_objlog = std::getenv("PSXPORT_T2_OBJLOG") != nullptr;
   psxport_add_hook(0x8007712C, 0x00051400, ObjectCull);
+
+  // GTE transform capture (camera + object transforms used for projection).
+  s_gtelog = std::getenv("PSXPORT_T2_GTELOG") != nullptr;
+  if (s_gtelog || std::getenv("PSXPORT_T2_GTE") != nullptr)
+    psxport_set_gte_cr_hook(GteCrConsumer);
 }
 
 uint32_t Tomba2_GetAndResetRenderHits()
@@ -123,7 +154,10 @@ uint16_t Tomba2_FrameTick(uint8_t* ram)
     }
     fprintf(stderr, "\n");
   }
+  if (s_gtelog && s_gte_xforms)
+    fprintf(stderr, "[%6u] gte xforms=%u\n", psxport_frame, s_gte_xforms);
   s_obj_n = 0;
+  s_gte_xforms = 0;
   return 0;
 }
 

@@ -40,6 +40,13 @@ extern int psxport_cd_instant;
 /* CDC command/IRQ logging to stderr (PSXPORT_CDC_LOG=1). */
 extern int psxport_cdc_log;
 
+/* GTE transform tap: when psxport_gte_capture != 0, GTE_WriteCR forwards
+   control-register writes 0..7 (rotation matrix CR0-4, translation CR5-7) to
+   psxport_on_gte_cr. This is the per-object/camera transform used to project
+   geometry — the basis for object-state capture and the reprojecting renderer. */
+extern int psxport_gte_capture;
+void psxport_on_gte_cr(unsigned which, uint32_t value);
+
 /* Last emulated PC seen by the hook layer (watchdog diagnostics). */
 extern uint32_t psxport_last_pc;
 
@@ -61,6 +68,11 @@ void psxport_dump_cpu_state(const uint8_t* ram);
    skips the signature check (use only for non-overlay addresses). */
 void psxport_add_hook(uint32_t pc, uint32_t expected_instr, psxport_hook_fn fn);
 void psxport_clear_hooks();
+
+/* Register a consumer for GTE control-register writes (0..7). Setting a non-null
+   fn enables capture; null disables. */
+typedef void (*psxport_gte_cr_fn)(unsigned which, uint32_t value);
+void psxport_set_gte_cr_hook(psxport_gte_cr_fn fn);
 #endif
 
 #endif
