@@ -1,6 +1,6 @@
 // psxport HLE BIOS — ISO9660 lookup + PS-X EXE boot. See hle_bios.h.
 //
-// All disc reads go through psxport_hle_cd_read2048(lba, count, buf), which
+// All disc reads go through psxport_cd_read_sectors(lba, count, buf), which
 // hands back 2048-byte Mode2/Form1 user-data sectors. ISO9660 places the
 // Primary Volume Descriptor at filesystem LBA 16; from there we reach the root
 // directory and walk its records to resolve a filename to an (LBA, size).
@@ -50,7 +50,7 @@ int psxport_hle_iso_find(const char* name, uint32_t* out_lba, uint32_t* out_size
 
   // Primary Volume Descriptor at LBA 16: type byte == 1, identifier "CD001".
   uint8_t pvd[2048];
-  if (psxport_hle_cd_read2048(16, 1, pvd) != 1) return 0;
+  if (psxport_cd_read_sectors(16, 1, pvd) != 1) return 0;
   if (pvd[0] != 1 || memcmp(pvd + 1, "CD001", 5) != 0) return 0;
 
   // Root directory record is 34 bytes at PVD offset 156. LBA at record+2 (LE),
@@ -64,7 +64,7 @@ int psxport_hle_iso_find(const char* name, uint32_t* out_lba, uint32_t* out_size
   uint32_t nsec = sectors_for(root_len);
   uint8_t* dir = (uint8_t*)malloc((size_t)nsec * 2048);
   if (!dir) return 0;
-  if (psxport_hle_cd_read2048((int32_t)root_lba, (int)nsec, dir) != (int)nsec) {
+  if (psxport_cd_read_sectors((int32_t)root_lba, (int)nsec, dir) != (int)nsec) {
     free(dir);
     return 0;
   }
@@ -156,7 +156,7 @@ int psxport_hle_boot(uint8_t* ram, uint32_t* out_pc, uint32_t* out_sp, uint32_t*
   uint32_t cnf_sec = sectors_for(cnf_size);
   uint8_t* cnf = (uint8_t*)malloc((size_t)cnf_sec * 2048);
   if (!cnf) return 0;
-  if (psxport_hle_cd_read2048((int32_t)cnf_lba, (int)cnf_sec, cnf) != (int)cnf_sec) {
+  if (psxport_cd_read_sectors((int32_t)cnf_lba, (int)cnf_sec, cnf) != (int)cnf_sec) {
     free(cnf);
     return 0;
   }
@@ -184,7 +184,7 @@ int psxport_hle_boot(uint8_t* ram, uint32_t* out_pc, uint32_t* out_sp, uint32_t*
   uint32_t exe_sec = sectors_for(exe_size);
   uint8_t* exe = (uint8_t*)malloc((size_t)exe_sec * 2048);
   if (!exe) return 0;
-  if (psxport_hle_cd_read2048((int32_t)exe_lba, (int)exe_sec, exe) != (int)exe_sec) {
+  if (psxport_cd_read_sectors((int32_t)exe_lba, (int)exe_sec, exe) != (int)exe_sec) {
     free(exe);
     return 0;
   }

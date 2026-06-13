@@ -86,11 +86,11 @@ extern int psxport_prof;
 void psxport_prof_reset(void);
 void psxport_prof_report(int top);
 
-/* BIOS HLE: native read of `count` 2048-byte data sectors from filesystem LBA
-   `lba` into `dst` (host-speed). Implemented in the imported cdc.c (CD image
-   access). Returns count on success, -1 on failure. Used by the cdromBlockReading
-   HLE override to bypass OpenBIOS's per-sector CD cadence. */
-int psxport_hle_cd_read2048(int32_t lba, int count, uint8_t* dst);
+/* Generic disc primitive: read `count` 2048-byte Mode2/Form1 user-data sectors
+   from filesystem LBA `lba` into `dst` at host speed. Implemented in the imported
+   cdc.c (needs the CDIF). Returns count on success, -1 on failure. The psxport
+   runtime builds its native loads/HLE BIOS on top of this. */
+int psxport_cd_read_sectors(int32_t lba, int count, uint8_t* dst);
 
 /* BIOS-call tracer (RE aid): when psxport_bios_log != 0, every PSX BIOS call
    vector hit (A0/B0/C0 at phys 0x000000A0/B0/C0) logs its function number
@@ -114,10 +114,11 @@ extern unsigned psxport_frame;
 /* Live GPR file (32 GPRs + LO/HI), from the imported cpu.c. */
 uint32_t* psxport_cpu_gpr(void);
 
-/* HLE BIOS boot: override the reset CPU state to enter the game's EXE directly
-   (PC=entry, $sp/$fp, $gp), bypassing the BIOS ROM at 0xBFC00000. Call after the
-   EXE text is in RAM and before the first instruction runs. From cpu.c. */
-void psxport_hle_set_boot(uint32_t pc, uint32_t sp, uint32_t gp);
+/* Generic CPU primitive (sibling to psxport_cpu_gpr): set the program counter,
+   clearing branch-delay state, so execution resumes at `pc`. From cpu.c. The
+   frontend uses gpr+set_pc to redirect the CPU; any boot/BIOS policy lives in
+   the psxport runtime, not here. */
+void psxport_cpu_set_pc(uint32_t pc);
 
 /* Diagnostics: registers + heuristic MIPS stack trace (scans the emulated
    stack for plausible return addresses: RAM text address preceded by a

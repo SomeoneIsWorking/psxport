@@ -183,7 +183,7 @@ int BiosHleCdBlockRead(uint32_t /*pc*/, uint32_t* gpr, uint32_t* redirect_pc)
   const uint32_t buf   = gpr[6] & 0x1FFFFF;             // a2 -> main RAM offset
   if (count <= 0 || buf + static_cast<uint32_t>(count) * 2048u > 0x200000u)
     return PSXPORT_HOOK_CONTINUE; // out-of-range: let the real BIOS handle it
-  if (psxport_hle_cd_read2048(sector, count, g_ram + buf) != count)
+  if (psxport_cd_read_sectors(sector, count, g_ram + buf) != count)
     return PSXPORT_HOOK_CONTINUE; // read failed: fall back to the real path
   if (psxport_bios_log)
     fprintf(stderr, "[hle f%u] cdromBlockReading lba=%d count=%d -> buf=%08X (%d KiB)\n",
@@ -740,10 +740,17 @@ int main(int argc, char** argv)
     psxport_add_hook(0xB0, 0, HleSyscallHook);
     psxport_add_hook(0xC0, 0, HleSyscallHook);
     // Boot: load the disc's EXE into RAM and jump the CPU into it (skip the ROM).
+    // The BIOS/boot policy lives here in the runtime; beetle only exposes the
+    // generic CPU primitives (set_pc + the gpr file).
     uint32_t pc = 0, sp = 0, gp = 0;
     if (psxport_hle_boot(g_ram, &pc, &sp, &gp))
     {
-      psxport_hle_set_boot(pc, sp, gp);
+      uint32_t* r = psxport_cpu_gpr();
+      r[28] = gp;                     // $gp
+      if (sp) { r[29] = sp; r[30] = sp; } // $sp, $fp
+      r[31] = 0;                      // $ra (EXE entry shouldn't return)
+      r[4] = 1; r[5] = 0;             // $a0=argc, $a1=argv (mirrors retail boot)
+      psxport_cpu_set_pc(pc);
       fprintf(stderr, "[hle] booted EXE pc=%08X sp=%08X gp=%08X\n", pc, sp, gp);
     }
     else

@@ -37,7 +37,7 @@ enum { HLE_R_ZERO=0, HLE_R_AT=1, HLE_R_V0=2, HLE_R_V1=3, HLE_R_A0=4, HLE_R_A1=5,
 // Mode2/Form1 user-data sectors from filesystem LBA `lba` into dst. Returns
 // count on success, -1 on failure. This is the host-speed disc backend the HLE
 // boot + cdrom: file I/O are built on.
-int psxport_hle_cd_read2048(int32_t lba, int count, uint8_t* dst);
+int psxport_cd_read_sectors(int32_t lba, int count, uint8_t* dst);
 
 // ---- Stage 1: boot ----------------------------------------------------------
 // Parse the disc: read SYSTEM.CNF (root dir of the ISO9660 filesystem), extract
@@ -48,7 +48,7 @@ int psxport_hle_cd_read2048(int32_t lba, int count, uint8_t* dst);
 int psxport_hle_boot(uint8_t* ram, uint32_t* out_pc, uint32_t* out_sp, uint32_t* out_gp);
 
 // ISO9660 lookup: find a file by name in the root directory. Returns true and
-// fills *out_lba (filesystem LBA, pass straight to psxport_hle_cd_read2048) and
+// fills *out_lba (filesystem LBA, pass straight to psxport_cd_read_sectors) and
 // *out_size (bytes). Name match is case-insensitive and ignores a ";1" suffix.
 int psxport_hle_iso_find(const char* name, uint32_t* out_lba, uint32_t* out_size);
 
