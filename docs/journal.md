@@ -21,6 +21,30 @@
   prebuffer pump rate or its completion gate — fmv-skip.md showed the gate vars resist
   poking. NEXT: RE the StrPlayer script-processor command list (0x8008AE00, 2-byte
   records) for a "hold N frames" opcode, or drive the VBLANK prebuffer callback faster.
+- **Prebuffer RE — gate FOUND, but it's consumer-rate-locked (no clean frame-counter
+  lever).** Tooling: added issuing-PC logging at the CD command-register write
+  (`[cmd-write]`, beetle cdc.c). Findings:
+  - All CD commands (prebuffer ReadN + FMV#2 ReadS) issue from **0x8008ADE4** (the
+    command-register store in the per-command processor 0x8008AC34); the opcode is the
+    caller's arg. The caller walks a **script VM**: interpreter loop at **0x8008C034**
+    (walks variable-length stream descriptors to 0x80104B68; per-stream handler
+    0x8008A00C is just an LBA→MSF converter), command issue inline.
+  - **The ReadS trigger is `0x800AC2D4` (active-stream count) going 3→4** — written by
+    0x8008C174 (s6 = #active streams). It sits at 3 the ENTIRE prebuffer (f864→1179)
+    then →4 at f1179 → ReadS@f1181. So the FMV#2-start gate = the 4th (FMV#2) stream
+    descriptor becoming active.
+  - **RULED OUT the "counter>target" wait (0x8008AE60) definitively**: measured live,
+    `target − counter ≡ 960` every frame (target rewritten to counter+0x3C0) → that
+    branch never fires; it's a self-resetting watchdog, not the pacer. fmv-skip.md's
+    "held-Start saves 120f" did NOT reproduce (forcing the 0x80050CE4 dwell saved 0f).
+  - **Root nature:** the StrPlayer streams everything at real-time MDEC/display rate
+    (~1.8 sectors/frame — FMV#1 too: 922 sec / 511f). The inter-FMV prebuffer fills
+    FMV#2's ring at that consumer rate while the (now-skipped) logo "plays", for its
+    designed ~6s. No single pokeable dwell; the clean fix is to advance the StrPlayer
+    script past the logo stream (force the 4th-stream activation / logo-stream-done),
+    which needs the stream-descriptor activation field RE'd — the next focused step.
+    Forcing FMV#2 early is verified SAFE (fmv-skip.md: clean frames at f1111), so the
+    risk is only in WHICH state to flip, not in early playback.
 
 ## 2026-06-14 — HLE FMV#2 stall ROOT-CAUSED: interrupts stuck disabled (IEc=0), NOT a CD-ring bug
 - **Falsified the prior "FMV ring never fills / lossy CD-IRQ / per-sector DMA" framing**
