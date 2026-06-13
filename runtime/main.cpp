@@ -8,7 +8,8 @@
 // -play opens an SDL window with keyboard/gamepad input and audio:
 //   arrows = d-pad, Z/X/A/S = Cross/Circle/Square/Triangle,
 //   Enter/RShift = Start/Select, Q/W E/R = L1/L2 R1/R2,
-//   Tab = hold to fast-forward, Esc quits.
+//   Tab = hold to fast-forward, F5/F9 = quicksave/load, F11 = fullscreen,
+//   F12 = screenshot (PNG -> scratch/shotNNN.png), Esc quits.
 // Instant CD (data reads/seeks at PC speed, RE'd into the imported cdc.c)
 // is enabled by default; -slowcd reverts to native CD timing. -fastboot
 // (Beetle skip_bios) requires a retail BIOS: it intercepts the retail shell
@@ -590,6 +591,21 @@ void InputPollCb()
       fprintf(stderr, "quicksave %s\n", SaveState("scratch/bin/quick.state") ? "ok" : "FAILED");
     else if (ev.type == SDL_KEYDOWN && ev.key.keysym.scancode == SDL_SCANCODE_F9)
       fprintf(stderr, "quickload %s\n", LoadState("scratch/bin/quick.state") ? "ok" : "FAILED");
+    else if (ev.type == SDL_KEYDOWN && ev.key.keysym.scancode == SDL_SCANCODE_F12)
+    {
+      // Screenshot the current frame to a PNG (no REPL needed). Lands in
+      // scratch/ (gitignored), numbered per session.
+      if (!g_last_fb.empty())
+      {
+        static unsigned shotn = 0;
+        char path[256];
+        snprintf(path, sizeof(path), "scratch/shot%03u.png", shotn++);
+        const unsigned bpp = (g_pixel_format == RETRO_PIXEL_FORMAT_XRGB8888) ? 4 : 2;
+        WriteFramePNGPath(g_last_fb.data(), g_last_fb_w, g_last_fb_h,
+                          static_cast<size_t>(g_last_fb_w) * bpp, path);
+        fprintf(stderr, "[shot] %ux%u -> %s\n", g_last_fb_w, g_last_fb_h, path);
+      }
+    }
     else if (ev.type == SDL_CONTROLLERDEVICEADDED && !g_pad)
       g_pad = SDL_GameControllerOpen(ev.cdevice.which);
   }
