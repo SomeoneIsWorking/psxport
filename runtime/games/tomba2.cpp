@@ -11,6 +11,8 @@
 
 namespace {
 uint32_t s_render_hits = 0;
+bool s_logo_skip = true;          // intro-logo skip (PSXPORT_T2_NOSKIP=1 disables)
+uint32_t s_last_logo_clock = 0;   // last logo audio-stream clock (tick detect)
 
 int RenderEntryHeartbeat(uint32_t, uint32_t*, uint32_t*)
 {
@@ -128,8 +130,19 @@ void Tomba2_Install()
   psxport_add_hook(0x8003CCA4, 0x27BDFFE0, RenderEntryHeartbeat);
 
   // Cull-cone widening override (replaces the PSXPORT_POKE patch).
-  for (const CullSite& s : kCullSites)
-    psxport_add_hook(s.pc, s.instr, CullSlti);
+  // OFF by default: forcing draw of culled objects makes them render without
+  // the engine ever setting up their collision/logic — they blink at the
+  // widened boundary and can be walked through. The six slti sites are not all
+  // confirmed to be the same cull test, so widening them corrupts gameplay.
+  // Re-enable for RE with PSXPORT_T2_CULLWIDEN=1 once the sites are understood.
+  if (std::getenv("PSXPORT_T2_CULLWIDEN") != nullptr)
+  {
+    for (const CullSite& s : kCullSites)
+      psxport_add_hook(s.pc, s.instr, CullSlti);
+  }
+
+  // Intro-logo skip is on by default; PSXPORT_T2_NOSKIP=1 disables it for RE.
+  s_logo_skip = std::getenv("PSXPORT_T2_NOSKIP") == nullptr;
 
   // Live object enumeration: hook the universal per-object cull chokepoint.
   s_objlog = std::getenv("PSXPORT_T2_OBJLOG") != nullptr;
@@ -155,8 +168,38 @@ uint32_t Tomba2_GetAndResetRenderHits()
   return v;
 }
 
+// Intro-logo skip (verified RE). 0x800253EC is the intro-sequence STEP the
+// license/logo loop polls: it stays 0 for the whole license + Whoopee Camp
+// jingle, the game sets it to 1 the instant the jingle finishes (natural
+// transition at frame ~1180 -> issues CD Pause, loads the next overlay), then
+// advances to 7 and the main overlay becomes resident at 0x8005082C.
+// Forcing 0->1 while the jingle is playing reproduces that exact transition
+// ~480 frames early (verified: forcing it at f700 cut the jingle at f701 and
+// ran the identical overlay-load sequence). We gate tightly so only the intro
+// logo is affected, never later streamed cutscenes (where the step is already
+// >0): act only while the step is still 0, the main overlay is NOT yet resident
+// (0x8005082C == 0), and the logo audio stream clock (0x8011824C) is ticking
+// (the jingle is actually playing). This is a state write, not a code patch —
+// it sets the flag to the same value the game itself writes at f1180.
+void LogoSkip(uint8_t* ram)
+{
+  uint32_t step, overlay, clock;
+  memcpy(&step, ram + 0x253EC, 4);
+  memcpy(&overlay, ram + 0x5082C, 4);
+  memcpy(&clock, ram + 0x11824C, 4);
+  const bool ticking = (clock != s_last_logo_clock);
+  s_last_logo_clock = clock;
+  if (step == 0 && overlay == 0 && ticking)
+  {
+    const uint32_t one = 1;
+    memcpy(ram + 0x253EC, &one, 4);
+  }
+}
+
 uint16_t Tomba2_FrameTick(uint8_t* ram)
 {
+  if (s_logo_skip)
+    LogoSkip(ram);
   // s_obj_ptr now holds the objects submitted during the previous retro_run.
   if (s_objlog && s_obj_n)
   {
@@ -184,12 +227,16 @@ uint16_t Tomba2_FrameTick(uint8_t* ram)
   return 0;
 }
 
-bool Tomba2_WantTurbo(const uint8_t* ram, unsigned frame)
+bool Tomba2_WantTurbo(const uint8_t* ram, unsigned frame, bool skip_held)
 {
   // The license text and Whoopee Camp logo are LOAD MASKS, not skippable
-  // segments (verified: X has no effect; the segment-end code is absent from
-  // RAM until the loader finishes, and the logo then runs out its jingle).
-  // Turbo instead, while either holds:
+  // segments (verified: input can't jump past the load; the segment-end code is
+  // absent from RAM until the loader finishes, then the logo runs out its
+  // jingle). So we never fast-forward automatically — only while the user holds
+  // the skip button, and only during the mask region:
+  if (!skip_held)
+    return false;
+  // Skip-button held — fast-forward while either holds:
   //  - the main game overlay is not yet resident (0x8005082C empty during
   //    BIOS/license/early logo, game code from ~frame 1989), or
   //  - the logo stream clock at 0x8011824C is still ticking (it advances

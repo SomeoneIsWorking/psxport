@@ -1,5 +1,48 @@
 # Debug / progress journal
 
+## 2026-06-13 — user-reported fixes: blinking objects, real logo skip, dynamic res
+- **Blinking / walk-through objects = the cull-cone-widening override.** User
+  reported game objects blinking in/out *and being walk-through* (logic, not just
+  visual). Root cause: `CullSlti` (runtime/games/tomba2.cpp) is the only Tomba2
+  hook that REDIRECTS + writes regs; it forced the engine to draw objects it had
+  culled, but their collision/logic was never set up -> visible yet walk-through,
+  flickering at the widened boundary. The six slti sites are NOT all confirmed to
+  be the same cull test. **Fix: gated OFF by default** (PSXPORT_T2_CULLWIDEN=1 to
+  re-enable for RE). Correctness-first: a widescreen enhancement must not corrupt
+  base gameplay. User confirmed blinking gone.
+- **Intro logo: a TRUE in-game skip (user rejected fast-forward; "we're on PC").**
+  First disproved the "make the disc read instant" instinct empirically: the data
+  reads (ReadN) are ALREADY ~64x; the logo is paced by the **jingle audio stream**
+  (ReadS/STRSND, irq1 every frame f680-1181), not a slow read. Accelerating audio
+  sector delivery does NOT help — gated by consumer-ack it's ~10% faster; ungated
+  it reaches the post-logo milestone at f2451 vs f1352 baseline (SLOWER: the
+  intro's sequencing is tied to the audio playing in real time). DEAD END: no
+  CD-timing change shortens the logo. Reverted (cdc.c back to committed).
+- **Logo gate RE'd: `0x800253EC` is the intro-sequence STEP** the license/logo
+  loop polls. Natural timeline: 0 for the whole license+Whoopee-Camp jingle ->
+  1 the instant the jingle ends (f1180, issues CD Pause + loads next overlay) ->
+  7 -> main overlay resident at 0x8005082C (f1263). Found by per-frame MEMWATCH of
+  flag candidates around the f1181 transition (253EC flips one frame BEFORE the
+  Pause and latches; everything else toggles per-frame, oscillates, or flips after
+  = downstream). **Forcing 0->1 reproduces the exact transition early** (verified:
+  poked at f700 -> Pause at f701 + identical overlay-load sequence). Implemented as
+  an auto skip in the module (LogoSkip): set 253EC=1 while step==0 AND overlay==0
+  AND the logo audio clock (0x8011824C) is ticking — tightly scoped to the intro
+  logo, never later cutscenes (step already >0). Result: 253EC->1 at f690 (was
+  f1180), overlay resident at f771 (was f1263), ~490 frames cut, deterministic, no
+  crash, full test-wide60 battery still 100%. PSXPORT_T2_NOSKIP=1 disables.
+  (Supersedes the auto-turbo load-mask handling; the "logos are unskippable load
+  masks" note below is FALSIFIED — they were skippable via the step gate all along.)
+- **Dynamic resolution (play window).** Window now sizes to ~85% of desktop height
+  at 4:3 (was fixed 960x720); framebuffer rescaled to the window every present with
+  correct PSX 4:3 aspect (letterbox), adapting live to resize. F11 = fullscreen,
+  linear filtering. (Visual confirmation pending — headless can't verify SDL.)
+- wide60 matcher (first half of the prior NEXT): nearest-TR object-identity match
+  across flip-segments + in-between synthesis (lerp transform, reproject joined
+  verts, unjoined left at frame-A = no flicker). Verified at t=1 against the game's
+  own next-frame projections: 79/79 xforms matched, 97% of next-frame verts within
+  2px. Present/rasterize stage still pending (needs the rasterizer-path decision).
+
 ## 2026-06-13 — object-based 60fps: scope reframed + Tomba2 object system RE'd
 - **User reframed the 60fps work (supersedes the DuckStation primitive matcher).**
   Not screen-space prim matching (its flaw: not object-based). Instead: RE the

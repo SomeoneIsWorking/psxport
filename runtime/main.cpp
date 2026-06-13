@@ -284,7 +284,19 @@ void VideoCb(const void* data, unsigned width, unsigned height, size_t pitch)
   }
   SDL_UpdateTexture(g_texture, nullptr, data, static_cast<int>(pitch));
   SDL_RenderClear(g_renderer);
-  SDL_RenderCopy(g_renderer, g_texture, nullptr, nullptr);
+  // Scale the framebuffer to the current window/screen size, preserving the
+  // PSX 4:3 display aspect (letterbox/pillarbox the remainder). Recomputed each
+  // present, so it adapts live to window resizes and fullscreen.
+  int ow = 0, oh = 0;
+  SDL_GetRendererOutputSize(g_renderer, &ow, &oh);
+  int tw = ow, th = (ow * 3) / 4;
+  if (th > oh)
+  {
+    th = oh;
+    tw = (oh * 4) / 3;
+  }
+  SDL_Rect dst = {(ow - tw) / 2, (oh - th) / 2, tw, th};
+  SDL_RenderCopy(g_renderer, g_texture, nullptr, &dst);
   SDL_RenderPresent(g_renderer);
 }
 
@@ -342,6 +354,11 @@ void InputPollCb()
   {
     if (ev.type == SDL_QUIT || (ev.type == SDL_KEYDOWN && ev.key.keysym.scancode == SDL_SCANCODE_ESCAPE))
       g_quit = true;
+    else if (ev.type == SDL_KEYDOWN && ev.key.keysym.scancode == SDL_SCANCODE_F11)
+    {
+      const bool fs = (SDL_GetWindowFlags(g_window) & SDL_WINDOW_FULLSCREEN_DESKTOP) != 0;
+      SDL_SetWindowFullscreen(g_window, fs ? 0 : SDL_WINDOW_FULLSCREEN_DESKTOP);
+    }
     else if (ev.type == SDL_KEYDOWN && ev.key.keysym.scancode == SDL_SCANCODE_TAB)
       g_ff_hold = true;
     else if (ev.type == SDL_KEYUP && ev.key.keysym.scancode == SDL_SCANCODE_TAB)
@@ -483,7 +500,18 @@ int main(int argc, char** argv)
       fprintf(stderr, "SDL_Init failed: %s\n", SDL_GetError());
       return 1;
     }
-    g_window = SDL_CreateWindow("wide60rt", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 960, 720,
+    // Size the window to the screen: a 4:3 box at ~85% of the desktop height
+    // (falls back to 960x720 if the display mode is unavailable). The output is
+    // then scaled to whatever the window/screen size is, in VideoCb.
+    int win_w = 960, win_h = 720;
+    SDL_DisplayMode dm;
+    if (SDL_GetDesktopDisplayMode(0, &dm) == 0 && dm.h > 0)
+    {
+      win_h = (dm.h * 85) / 100;
+      win_w = (win_h * 4) / 3;
+    }
+    SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "linear"); // smooth upscaling
+    g_window = SDL_CreateWindow("wide60rt", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, win_w, win_h,
                                 SDL_WINDOW_RESIZABLE);
     g_renderer = SDL_CreateRenderer(g_window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
     SDL_AudioSpec want = {}, have = {};
@@ -677,7 +705,10 @@ int main(int argc, char** argv)
         }
       }
       g_inject_buttons = g_tomba2 ? Tomba2_FrameTick(g_ram) : 0;
-      g_module_turbo = g_tomba2 && Tomba2_WantTurbo(g_ram, g_frame);
+      // Hold Start during the intro logos to fast-forward through them (they're
+      // load masks — can't be jumped past, only sped up). Not automatic.
+      const bool skip_held = (g_buttons & (1 << RETRO_DEVICE_ID_JOYPAD_START)) != 0;
+      g_module_turbo = g_tomba2 && Tomba2_WantTurbo(g_ram, g_frame, skip_held);
     }
   };
 

@@ -59,6 +59,20 @@ std::unordered_map<uint32_t, VertRef> s_sxy_map;  // this frame: (sx<<16|sy) -> 
 std::unordered_map<uint32_t, VertRef> s_sxy_prev; // previous frame's map
 std::vector<Poly> s_polys;
 
+// The synthesized in-between display list (frame A's polys with GTE-object
+// vertices reprojected at the lerped transform; non-GTE verts left untouched =
+// they show frame A's position = no flicker). Produced at each flip from the
+// just-finished frame's geometry + the next logic frame's poses. This is what
+// the present stage will rasterize between the two real frames.
+std::vector<Poly> s_inbetween;
+bool s_inbetween_ready = false;
+
+// Nearest-TR object-identity match: object world translations (TR) are distinct
+// per entity and continuous across logic frames, so the nearest TR in the next
+// segment is the same object. Beyond this L1 gate => no match (pool-slot reuse /
+// new object) => the vertex snaps to frame A rather than lerping to a wrong pose.
+constexpr int64_t kMatchGateL1 = 8192; // TR is 1/4096 fixed; 8192 = 2.0 world units
+
 // per-frame stats
 unsigned s_stat_polys = 0, s_stat_verts = 0, s_stat_joined = 0, s_stat_joined_prev = 0;
 unsigned s_unj_tex = 0, s_unj_flat = 0;
@@ -176,6 +190,45 @@ bool ReprojectRTPS(const Xform& xf, int32_t lx, int32_t ly, int32_t lz, int32_t&
   const int64_t m2 = (((int64_t)xf.TR[1]) << 12) + (int64_t)xf.R[3] * lx + (int64_t)xf.R[4] * ly + (int64_t)xf.R[5] * lz;
   const int64_t m3 = (((int64_t)xf.TR[2]) << 12) + (int64_t)xf.R[6] * lx + (int64_t)xf.R[7] * ly + (int64_t)xf.R[8] * lz;
   return ProjectFromMac(m1 >> 12, m2 >> 12, m3 >> 12, xf.ofx, xf.ofy, xf.H, sx, sy);
+}
+
+// Lerp one transform toward another at t in [0,1]. R is componentwise-lerped
+// (over half a logic frame the rotation delta is tiny; the small loss of
+// orthonormality is negligible and self-corrects at the next real frame). TR is
+// linear. Screen params (OFX/OFY/H) are taken from A (they don't move per frame).
+Xform LerpXform(const Xform& a, const Xform& b, double t)
+{
+  Xform o = a;
+  for (int i = 0; i < 9; i++)
+    o.R[i] = (int16_t)((double)a.R[i] + ((double)b.R[i] - (double)a.R[i]) * t);
+  for (int i = 0; i < 3; i++)
+    o.TR[i] = (int32_t)((double)a.TR[i] + ((double)b.TR[i] - (double)a.TR[i]) * t);
+  return o;
+}
+
+// Match each previous-segment transform (the pose that produced the just-drawn
+// frame) to its counterpart in the current segment (the next logic frame's pose)
+// by nearest TR. out[prev_id] = cur_id, or -1 if nothing within the gate.
+void MatchXforms(const std::vector<Xform>& prev, const std::vector<Xform>& cur, std::vector<int>& out)
+{
+  out.assign(prev.size(), -1);
+  for (size_t i = 0; i < prev.size(); i++)
+  {
+    int64_t best = kMatchGateL1 + 1;
+    int bestj = -1;
+    for (size_t j = 0; j < cur.size(); j++)
+    {
+      const int64_t d = llabs((int64_t)prev[i].TR[0] - cur[j].TR[0]) + llabs((int64_t)prev[i].TR[1] - cur[j].TR[1]) +
+                        llabs((int64_t)prev[i].TR[2] - cur[j].TR[2]);
+      if (d < best)
+      {
+        best = d;
+        bestj = (int)j;
+      }
+    }
+    if (best <= kMatchGateL1)
+      out[i] = bestj;
+  }
 }
 
 void OnRtpVertex(int32_t vx, int32_t vy, int32_t vz, int32_t sx, int32_t sy, uint32_t /*sf*/)
@@ -352,6 +405,70 @@ void OnFlip(uint32_t /*value*/)
       once = true;
       fprintf(stderr, "  REPROJECT-VERIFY: %u/%u object verts reproduced exactly (%.1f%%)\n", exact, checked,
               100.0 * exact / checked);
+    }
+  }
+
+  // --- object-identity matching + in-between synthesis --------------------
+  // The just-drawn frame (s_polys) was posed by s_xforms_prev; s_xforms is the
+  // next logic frame's pose of the same objects. Match them, then synthesize
+  // the t=0.5 frame: reproject each joined object vertex at the lerped pose;
+  // leave unjoined verts (CPU terrain / 2D UI) at frame-A coords (no flicker).
+  s_inbetween.clear();
+  s_inbetween_ready = false;
+  if (!s_xforms_prev.empty() && !s_xforms.empty() && !s_polys.empty())
+  {
+    std::vector<int> match;
+    MatchXforms(s_xforms_prev, s_xforms, match);
+
+    // verify the match endpoint: a joined vertex reprojected at its matched
+    // NEXT-frame pose must land where the game itself projected that object
+    // next frame (s_sxy_map = this segment's projections). High hit-rate =
+    // correct identity match => the t=0.5 in-between is trustworthy.
+    unsigned mchk = 0, mhit = 0;
+    for (const Poly& p : s_polys)
+    {
+      Poly q = p;
+      for (int i = 0; i < p.nverts; i++)
+      {
+        const int id = p.xform_id[i];
+        const int mid = (id >= 0 && id < (int)match.size()) ? match[id] : -1;
+        if (mid < 0)
+          continue; // unmatched/2D/terrain: keep frame-A coords (snap, no lerp)
+
+        int32_t bx, by;
+        if (ReprojectRTPS(s_xforms[mid], p.lx[i], p.ly[i], p.lz[i], bx, by))
+        {
+          mchk++;
+          // does the game's next-frame projection contain this position (±2px)?
+          bool hit = false;
+          for (int dy = -2; dy <= 2 && !hit; dy++)
+            for (int dx = -2; dx <= 2 && !hit; dx++)
+              hit = s_sxy_map.find(SxyKey(bx + dx, by + dy)) != s_sxy_map.end();
+          mhit += hit;
+        }
+        int32_t hx, hy;
+        if (ReprojectRTPS(LerpXform(s_xforms_prev[id], s_xforms[mid], 0.5), p.lx[i], p.ly[i], p.lz[i], hx, hy))
+        {
+          q.x[i] = (int16_t)hx;
+          q.y[i] = (int16_t)hy;
+        }
+      }
+      s_inbetween.push_back(q);
+    }
+    s_inbetween_ready = true;
+
+    if (s_verbose)
+    {
+      static bool once_m = false;
+      if (!once_m && mchk > 500)
+      {
+        once_m = true;
+        unsigned matched = 0;
+        for (int m : match)
+          matched += (m >= 0);
+        fprintf(stderr, "  MATCH-VERIFY: %u/%u xforms matched; %u/%u next-frame verts within 2px (%.1f%%)\n",
+                matched, (unsigned)match.size(), mhit, mchk, mchk ? 100.0 * mhit / mchk : 0.0);
+      }
     }
   }
 
