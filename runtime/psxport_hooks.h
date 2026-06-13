@@ -59,6 +59,10 @@ void psxport_on_rtp_vertex(int32_t vx, int32_t vy, int32_t vz, int32_t sx, int32
 extern int psxport_gpu_capture;
 void psxport_on_gpu_poly(uint32_t cc, const uint32_t* cb, int32_t off_x, int32_t off_y);
 
+/* GP1(0x05) display-flip tap (renderer frame boundary). Always forwarded when a
+   flip consumer is registered. */
+void psxport_on_gpu_flip(uint32_t value);
+
 /* Last emulated PC seen by the hook layer (watchdog diagnostics). */
 extern uint32_t psxport_last_pc;
 
@@ -98,6 +102,11 @@ void psxport_set_rtp_hook(psxport_rtp_fn fn);
    capture. cb points to a 16-word command buffer (valid only during the call). */
 typedef void (*psxport_gpu_poly_fn)(uint32_t cc, const uint32_t* cb, int32_t off_x, int32_t off_y);
 void psxport_set_gpu_poly_hook(psxport_gpu_poly_fn fn);
+
+/* Register a consumer for GP1(0x05) display-area writes (the display flip /
+   frame boundary). value = the raw GP1 parameter (DisplayFB X/Y start). */
+typedef void (*psxport_gpu_flip_fn)(uint32_t value);
+void psxport_set_gpu_flip_hook(psxport_gpu_flip_fn fn);
 #endif
 
 #endif

@@ -143,24 +143,49 @@ void OnGpuPoly(uint32_t cc, const uint32_t* cb, int32_t /*off_x*/, int32_t /*off
     {
       p.u[i] = p.v[i] = 0;
     }
-    // join to transform via screen coords (try this frame, then previous)
+    // Join to transform by screen coords. The game projects one flip-segment
+    // ahead of drawing, so this segment's draws correspond to the PREVIOUS
+    // segment's projections (s_sxy_prev).
     const uint32_t key = SxyKey(p.x[i], p.y[i]);
-    auto it = s_sxy_map.find(key);
     s_stat_verts++;
-    if (it != s_sxy_map.end())
+    auto it = s_sxy_prev.find(key);
+    if (it != s_sxy_prev.end())
     {
-      p.xform_id[i] = it->second.xform_id;
+      p.xform_id[i] = it->second.xform_id; // NB: indexes the previous segment
       s_stat_joined++;
     }
     else
     {
       p.xform_id[i] = -1;
-      if (s_sxy_prev.find(key) != s_sxy_prev.end())
-        s_stat_joined_prev++;
+      if (s_sxy_map.find(key) != s_sxy_map.end())
+        s_stat_joined_prev++; // same-segment fallback count (diagnostic)
     }
   }
   s_stat_polys++;
   s_polys.push_back(p);
+}
+
+// Display flip = frame boundary. The just-finished segment's draws (s_polys,
+// already joined to the previous segment's projections) form one rendered
+// frame. Roll the projection window forward: previous <- current.
+unsigned s_flip_count = 0;
+
+void OnFlip(uint32_t /*value*/)
+{
+  if (s_verbose && s_stat_verts)
+  {
+    fprintf(stderr, "[flip %6u] polys=%u verts=%u joined=%u (%.0f%%) sameSeg=%u xforms=%zu\n", s_flip_count,
+            s_stat_polys, s_stat_verts, s_stat_joined, s_stat_verts ? 100.0 * s_stat_joined / s_stat_verts : 0.0,
+            s_stat_joined_prev, s_xforms.size());
+  }
+  s_flip_count++;
+  // roll the projection window: this segment's projections become 'previous'
+  s_sxy_prev.swap(s_sxy_map);
+  s_sxy_map.clear();
+  s_xforms.clear(); // (transform list will be retained per-window once matching lands)
+  s_polys.clear();
+  s_cur_xform = -1;
+  s_stat_polys = s_stat_verts = s_stat_joined = s_stat_joined_prev = 0;
 }
 
 } // namespace
@@ -172,23 +197,11 @@ void Wide60_Install()
   psxport_set_gte_cr_hook(OnGteCr);
   psxport_set_rtp_hook(OnRtpVertex);
   psxport_set_gpu_poly_hook(OnGpuPoly);
+  psxport_set_gpu_flip_hook(OnFlip);
 }
 
-void Wide60_FrameEnd(unsigned frame)
+void Wide60_FrameEnd(unsigned /*frame*/)
 {
-  if (s_verbose && s_stat_polys)
-  {
-    fprintf(stderr, "[%6u] wide60 polys=%u verts=%u cur=%u(%.0f%%) prev=%u(%.0f%%) xforms=%zu map=%zu\n", frame,
-            s_stat_polys, s_stat_verts, s_stat_joined, s_stat_verts ? 100.0 * s_stat_joined / s_stat_verts : 0.0,
-            s_stat_joined_prev, s_stat_verts ? 100.0 * s_stat_joined_prev / s_stat_verts : 0.0, s_xforms.size(),
-            s_sxy_map.size());
-  }
-  // reset per-frame capture (keep this frame's map as 'previous' for latency
-  // join; transform snapshot s_cr persists across frames)
-  s_sxy_prev.swap(s_sxy_map);
-  s_xforms.clear();
-  s_sxy_map.clear();
-  s_polys.clear();
-  s_cur_xform = -1;
-  s_stat_polys = s_stat_verts = s_stat_joined = s_stat_joined_prev = 0;
+  // Segmentation now happens on the GPU flip (OnFlip); nothing to do per host
+  // frame yet. Reserved for presenting the synthesized in-between frame.
 }

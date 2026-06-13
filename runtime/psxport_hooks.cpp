@@ -76,6 +76,21 @@ void psxport_set_gpu_poly_hook(psxport_gpu_poly_fn fn)
   psxport_gpu_capture = (fn != nullptr) ? 1 : 0;
 }
 
+namespace {
+psxport_gpu_flip_fn s_gpu_flip_fn = nullptr;
+}
+
+extern "C" void psxport_on_gpu_flip(uint32_t value)
+{
+  if (s_gpu_flip_fn)
+    s_gpu_flip_fn(value);
+}
+
+void psxport_set_gpu_flip_hook(psxport_gpu_flip_fn fn)
+{
+  s_gpu_flip_fn = fn;
+}
+
 extern "C" int psxport_on_pc(uint32_t pc, uint32_t instr, uint32_t* gpr, uint32_t* redirect_pc)
 {
   psxport_last_pc = pc;
