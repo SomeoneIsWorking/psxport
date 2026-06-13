@@ -310,11 +310,18 @@ static uint32_t open_thread(uint8_t* ram, uint32_t pc, uint32_t sp, uint32_t gp)
 	hle_w32(ram, tcb + TCB_GPR + 30 * 4, sp);        // fp = r30
 	hle_w32(ram, tcb + TCB_GPR + HLE_R_GP * 4, gp);  // gp = r28
 	hle_w32(ram, tcb + TCB_RETPC, pc);
-	// A fresh thread must resume with interrupts enabled (the kernel hands new
-	// threads a sane SR). Seed SR = current thread's SR so it inherits the live
-	// interrupt-enable/KU state rather than resuming with IRQs masked.
+	// A fresh thread must resume with interrupts ENABLED (the kernel hands new
+	// threads a sane SR). Seed SR = current thread's control/KU bits, but force
+	// the interrupt-enable stack on: 0x404 = IEp(bit2) + IM-IP2(bit10) — the same
+	// "interrupts enabled" mask LeaveCriticalSection sets (hle_irq.cpp). On resume
+	// the ChangeThread/RFE pop maps IEp->IEc, so the thread runs interruptible.
+	// (Copying the creator's SR verbatim is WRONG when the creator OpenThreads
+	// from inside a critical section: the new thread then inherits IEc=0 and, if
+	// it spins on an IRQ-driven flag, deadlocks. Tomba2's StrPlayer creates the
+	// FMV#2 prebuffer thread mid-critical-section -> hung the whole FMV.)
 	const uint32_t cur = psxport_hle_current_tcb(ram);
-	if (cur) hle_w32(ram, tcb + TCB_SR, hle_r32(ram, cur + TCB_SR));
+	const uint32_t base = cur ? hle_r32(ram, cur + TCB_SR) : 0;
+	hle_w32(ram, tcb + TCB_SR, base | 0x404u);
 	return 0xFF000000u | (uint32_t)slot;
 }
 

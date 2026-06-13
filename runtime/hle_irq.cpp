@@ -128,10 +128,12 @@ uint32_t resolve_dispatcher(const uint8_t* ram, uint32_t hentry) {
   return 0;
 }
 int s_log = 0;                 // PSXPORT_IRQ_LOG: trace every exception
+int s_cs_log = 0;              // PSXPORT_CS_LOG: trace Enter/LeaveCriticalSection SR
 uint64_t s_irq_count = 0;
 
 void irq_log_init() {
   if (const char* v = getenv("PSXPORT_IRQ_LOG")) s_log = atoi(v);
+  if (const char* v = getenv("PSXPORT_CS_LOG")) s_cs_log = atoi(v);
 }
 
 // Outermost-IRQ interrupted-frame store. The game's root IRQ dispatcher runs as
@@ -187,9 +189,11 @@ int ExceptionReturnHook(uint32_t /*pc*/, uint32_t* gpr, uint32_t* redirect_pc) {
     // A ChangeThread inside the dispatcher switched threads: resume the new
     // thread from its TCB frame (the StrPlayer coroutine handoff).
     resume_pc = tcb_load(ram, cur, gpr, &sr);
-    if (s_log)
-      fprintf(stderr, "[irq f%u] handler returned -> SWITCHED to tcb=%08X resume=%08X\n",
-              psxport_frame, cur, resume_pc);
+    if (s_log || s_cs_log)
+      fprintf(stderr,
+              "[irq f%u] handler returned -> SWITCHED tcb=%08X resume=%08X tcbsr=%08X(IEp%u) -> IEc%u\n",
+              psxport_frame, cur, resume_pc, sr, (unsigned)((sr >> 2) & 1),
+              (unsigned)(((sr >> 2) & 1)));
   } else {
     // No switch: restore the interrupted frame from the host store (the TCB may
     // have been transiently clobbered by a mid-dispatcher syscall).
@@ -320,10 +324,24 @@ int ExceptionHook(uint32_t /*pc*/, uint32_t* gpr, uint32_t* redirect_pc) {
         psxport_hle_set_current_tcb(ram, gpr[HLE_R_A1]);
       }
     }
+    // RE probe: critical-section IEc tracking. Logs the SR going in (HW-pushed),
+    // the TCB saved-SR we leave for the RFE-pop, and the resulting live IEc, so a
+    // LeaveCriticalSection that fails to re-enable interrupts is visible directly.
+    const uint32_t cs_saved = (cur_tcb && (a0 == 1 || a0 == 2))
+                                  ? hle_r32(ram, cur_tcb + TCB_SR) : 0;
+    const bool cs_nest = s_in_exception;
+    *redirect_pc = return_from_exception(ram, gpr);
+    if (s_cs_log && (a0 == 1 || a0 == 2)) {
+      const uint32_t outsr = psxport_cpu_cop0(CP0_SR);
+      fprintf(stderr,
+              "[cs f%u] %s epc=%08X nest=%d livesr=%08X(IEc%u IEp%u) tcbsr=%08X(IEp%u) -> outsr=%08X(IEc%u) cur=%08X\n",
+              psxport_frame, a0 == 1 ? "ENTER" : "LEAVE", epc, cs_nest ? 1 : 0,
+              live_sr, (unsigned)(live_sr & 1), (unsigned)((live_sr >> 2) & 1),
+              cs_saved, (unsigned)((cs_saved >> 2) & 1), outsr, (unsigned)(outsr & 1), cur_tcb);
+    }
     if (s_log)
       fprintf(stderr, "[irq f%u] SYSCALL a0=%u epc=%08X cur=%08X new=%08X\n",
               psxport_frame, a0, epc, cur_tcb, psxport_hle_current_tcb(ram));
-    *redirect_pc = return_from_exception(ram, gpr);
     return PSXPORT_HOOK_REDIRECT;
   }
 
@@ -422,9 +440,9 @@ uint32_t Hle_Irq_ThreadSwitch(uint8_t* ram, uint32_t* gpr,
   // new_tcb's SR is stored pushed (from its last save / OpenThread seed); pop it.
   sr = (sr & ~0x0Fu) | ((sr >> 2) & 0x0Fu);
   psxport_cpu_set_cop0(CP0_SR, sr);
-  if (s_log)
-    fprintf(stderr, "[irq f%u] ChangeThread switch cur=%08X -> new=%08X resume=%08X\n",
-            psxport_frame, cur, new_tcb, resume_pc);
+  if (s_log || s_cs_log)
+    fprintf(stderr, "[irq f%u] ChangeThread switch cur=%08X -> new=%08X resume=%08X newsr=%08X(IEc%u)\n",
+            psxport_frame, cur, new_tcb, resume_pc, sr, (unsigned)(sr & 1));
   return resume_pc;
 }
 
