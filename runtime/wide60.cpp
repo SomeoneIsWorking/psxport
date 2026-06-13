@@ -107,6 +107,9 @@ void OnGteCr(unsigned which, uint32_t value)
   }
 }
 
+unsigned s_rtp_count = 0;    // projected vertices this segment
+unsigned s_near_unjoined = 0; // unjoined verts with an RTP within +-4px (nudge?)
+
 void OnRtpVertex(int32_t vx, int32_t vy, int32_t vz, int32_t sx, int32_t sy, uint32_t /*sf*/)
 {
   VertRef ref;
@@ -115,6 +118,7 @@ void OnRtpVertex(int32_t vx, int32_t vy, int32_t vz, int32_t sx, int32_t sy, uin
   ref.lz = (int16_t)vz;
   ref.xform_id = s_cur_xform;
   s_sxy_map[SxyKey(sx, sy)] = ref; // last writer wins on SXY collision
+  s_rtp_count++;
 }
 
 // Decode a GP0 polygon packet (cb) into a Poly, joining each vertex to its
@@ -173,6 +177,15 @@ void OnGpuPoly(uint32_t cc, const uint32_t* cb, int32_t /*off_x*/, int32_t /*off
       p.xform_id[i] = -1;
       if (s_sxy_map.find(key) != s_sxy_map.end())
         s_stat_joined_prev++; // same-segment fallback count (diagnostic)
+      // near-match scan: is there a projected vertex within +-4px (would mean
+      // the game nudges projected coords, vs. the vertex never being projected)?
+      for (int dy = -4; dy <= 4; dy++)
+        for (int dx = -4; dx <= 4; dx++)
+          if (s_sxy_prev.find(SxyKey(p.x[i] + dx, p.y[i] + dy)) != s_sxy_prev.end())
+          {
+            s_near_unjoined++;
+            dx = dy = 100; // break out
+          }
     }
   }
   s_stat_polys++;
@@ -211,11 +224,11 @@ void OnFlip(uint32_t /*value*/)
 {
   if (s_verbose && s_stat_verts)
   {
+    const unsigned unjoined = s_stat_verts - s_stat_joined;
     fprintf(stderr,
-            "[flip %6u] polys=%u verts=%u joined=%u (%.0f%%) | unjoined polys: tex=%u(area~%lld) flat=%u(area~%lld)\n",
-            s_flip_count, s_stat_polys, s_stat_verts, s_stat_joined,
-            s_stat_verts ? 100.0 * s_stat_joined / s_stat_verts : 0.0, s_unj_tex,
-            s_unj_tex ? s_unj_tex_area / s_unj_tex : 0, s_unj_flat, s_unj_flat ? s_unj_flat_area / s_unj_flat : 0);
+            "[flip %6u] verts=%u joined=%u (%.0f%%) rtp=%u unjoined=%u near4px=%u(%.0f%%) | unjTexPolys=%u\n",
+            s_flip_count, s_stat_verts, s_stat_joined, s_stat_verts ? 100.0 * s_stat_joined / s_stat_verts : 0.0,
+            s_rtp_count, unjoined, s_near_unjoined, unjoined ? 100.0 * s_near_unjoined / unjoined : 0.0, s_unj_tex);
   }
   s_flip_count++;
   // roll the projection window: this segment's projections become 'previous'
@@ -227,6 +240,7 @@ void OnFlip(uint32_t /*value*/)
   s_stat_polys = s_stat_verts = s_stat_joined = s_stat_joined_prev = 0;
   s_unj_tex = s_unj_flat = 0;
   s_unj_tex_area = s_unj_flat_area = 0;
+  s_rtp_count = s_near_unjoined = 0;
 }
 
 } // namespace

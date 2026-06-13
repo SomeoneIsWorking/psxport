@@ -43,9 +43,18 @@
   segment's projections. The <100% remainder is 2D geometry (UI/text/2D bg) with
   no RTPS origin — those snap, not lerp. (This also explains why the cur-frame
   join looked broken — it was a timing offset, not a coordinate-space bug.)
-- NEXT (renderer remaining): flip-based frame boundaries; cross-frame transform
-  matching (nearest-TR); transform interpolation (TR linear, R nlerp); textured
-  rasterization sampling VRAM; present the in-between frame at 60fps.
+- Flip boundaries done (GP1 0x05 tap); beetle now a committed in-submodule fork
+  (psxport branch), patch file retired (user call). GP0 vertex coords extracted
+  as 11-bit signed (Coord11) to match the GPU/GTE.
+- **CPU-projected terrain confirmed definitively.** Flip-segmented join = ~56% of
+  drawn verts. Diagnosis (per-segment): projections are ABUNDANT (rtp ~7000-8000
+  vs ~4700 drawn verts), yet 44% of drawn verts have NO projection even within
+  ±4px (near-match 9-31%). So the unjoined 44% is genuinely transformed by a
+  non-RTPS path (terrain/background = CPU-projected), not a coord nudge or timing
+  miss. **User direction: RE + tap the CPU projection path too** (full fidelity,
+  not a screen-space fallback).
+- NEXT: determine how terrain is transformed (GTE MVMVA vs pure CPU) -> locate &
+  tap that projection -> then matching/interp/rasterize/present.
 
 ## 2026-06-13 — read pacing root-caused via driven debugging; full fast boot chain works
 - **The "stuck on Whoopee logo" class is solved.** Chain of findings, all via the REPL/
