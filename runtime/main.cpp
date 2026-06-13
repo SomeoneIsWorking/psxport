@@ -924,6 +924,10 @@ int main(int argc, char** argv)
     // via OpenThread/ChangeThread + the syscall thread-switch protocol; the
     // tables must exist before the EXE runs (boot/main thread = thread[0]).
     psxport_hle_kernel_tables_init(g_ram);
+    // Enable CD-ROM interrupts (the BIOS CdInit normally sets this; we skip the
+    // ROM, so the CDC would never assert IRQ_CD and the game's CD Sync would
+    // time out). 0x1F = all five CD INT types.
+    psxport_cd_set_irq_enable(0x1F);
     // Boot: load the disc's EXE into RAM and jump the CPU into it (skip the ROM).
     // The BIOS/boot policy lives here in the runtime; beetle only exposes the
     // generic CPU primitives (set_pc + the gpr file).
