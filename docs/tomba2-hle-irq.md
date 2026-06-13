@@ -81,6 +81,32 @@ its return address. NEXT: log the saved `$sp` at outer-IRQ *entry* vs F's real r
 `$sp`, and fix the re-entrant sentinel (one ExceptionReturnHook per outer entry). The
 thread-model changes remain UNCOMMITTED (do not ship — verified still-broken).
 
+### Deeper (2026-06-13, ENTRY/return seq log): two distinct problems
+- **The "IRQ storm" is the sentinel's location, NOT new IRQs.** Logging both outer-IRQ
+  ENTRY and the sentinel return with `s_irq_count` shows a HEALTHY cadence through
+  #961: entries #958..#961 resume their exact epc (80017E54 → 800181C4 → 8001A394 →
+  8001A318), one return each. Then a SINGLE entry #961 produces *infinite* returns
+  (all "#961"). Cause: the trampoline sentinel `kSentinelRA = 0x80000040` is **inside
+  the low exception-vector page (0x0..0x80)**. When F derails to PC=0 and walks upward
+  it reaches 0x40 → `ExceptionReturnHook` re-fires → restores F at 0x8001A318 → F
+  derails again → loops forever. **Actionable: move kSentinelRA to a high reserved
+  address outside 0x0..0x80** (e.g. in the BIOS-reserved 0x8000xxxx work region) so a
+  derail can't re-trigger it — this stops the storm and lets PSXPORT_TRAP_LOWPC catch
+  the FIRST derail cleanly. (Does not fix the root, but removes the confounder.)
+- **Root: F's frame/`$sp` is inconsistent.** F (per-frame loop, one function, internal
+  loop 0x8001A2D4–0x8001A44C, common epilogue 0x8001A4A4 `lw $ra,0x34($sp); jr $ra;
+  addiu $sp,0x38`) reads `$ra` from `$sp+0x34 = 0x801FFF24` with `$sp=0x801FFEF0`. A
+  `PSXPORT_WATCHW=1FFF24` proves that slot is written **only once, value 0, at boot,
+  and NEVER by F** — even though F runs at the `$sp` that owns that slot. So F never
+  saved its own `$ra` there, which is impossible for a normally-entered function ⇒ the
+  thread-model IRQ save/restore is resuming F at a `$sp` that does not match where F's
+  prologue actually ran. NEXT: find F's real entry/prologue and watchpoint F's own
+  `sw $ra` to learn F's true `$sp`, then compare to the IRQ-saved `s_outer_gpr[29]` —
+  the discrepancy is the bug.
+
+Tooling added this pass (committed): `PSXPORT_TRAP_LOWPC` (derail trap). Uncommitted
+debug instrumentation in hle_irq.cpp: `$sp` in the return log + ENTRY log near f960.
+
 ## Empirical: partial `__globals` makes it WORSE — it's all-or-nothing (2026-06-13)
 Tried laying down a minimal kernel (just `__globals` @ 0x100 -> Process[0] -> a 4-slot
 TCB array @ 0x8000C000) + saving/restoring the interrupted register file via the
