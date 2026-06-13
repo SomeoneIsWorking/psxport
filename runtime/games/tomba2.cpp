@@ -212,25 +212,29 @@ int DwellSkip(uint32_t, uint32_t* gpr, uint32_t*)
 //   80050CEC sltu v0,v0,v1         ; v1 = threshold
 //   80050CF0 bnez v0,0x80050CE4    ; stay while counter < threshold
 // Redirect to the loop exit 0x80050CF8 so the wait elapses immediately (same
-// technique as DwellSkip; the loop's own work still runs each iteration). Escaping
-// the per-frame pace dwell every frame lets the read/decode loop iterate faster,
-// accelerating the prebuffer of FMV#2 (measured -121f to FMV#2 ReadS, glitch-free;
-// docs/tomba2-fmv-skip.md). Fires on a LATCH (s_fmv_skip_latch, set on a Start
-// press in Tomba2_SetSkipHeld) so a brief tap is enough, not a continuous hold; the
-// latch is cleared at the prebuffer-satisfied branch (FmvSkipClear) so FMV#2 plays
-// at native rate rather than being fast-forwarded.
+// technique as DwellSkip; the loop's own work still runs each iteration). Fires
+// ONLY on a LATCH (s_fmv_skip_latch, set on a Start press in Tomba2_SetSkipHeld)
+// so a brief tap is enough, not a continuous hold; the latch is cleared at the
+// prebuffer-satisfied branch (FmvSkipClear) so FMV#2 plays at native rate.
+//
+// DO NOT collapse this loop on drive-idle. Earlier (e94ea86) it did, to make
+// "Loading..." labels vanish -- but 0x80050CE4 is the GENERIC per-frame pacer for
+// the whole 0x80050xxx overlay, including the MAIN MENU. Collapsing it every idle
+// frame runs menu logic at uncapped CPU speed, so the attract/demo countdown
+// fast-forwarded (menu jumped to the demo almost instantly). psxport_cd_drive_busy()
+// cannot distinguish a "Loading..." dwell from the menu's normal vsync pacing --
+// both are drive-idle in this same loop -- so an idle-collapse here is a
+// fast-forward of real interactive frames, which is exactly what we must not do.
 int FmvDwellSkip(uint32_t pc, uint32_t* gpr, uint32_t* redirect_pc)
 {
   if (s_skip_held)
     s_fmv_skip_latch = true; // a press latches skip-mode (survives a tap)
-  // Collapse the dwell when EITHER (a) the user latched a skip [covers the FMV
-  // prebuffer, where the drive IS actively reading], OR (b) the drive is IDLE.
-  // Case (b) is the "Loading..." screen: this pace loop spins (0 CD reads, 99%
-  // here) merely showing a "Loading..." label while nothing actually loads -- a
-  // pure timed dwell. Skipping it whenever the drive is idle makes those screens
-  // never appear, with no input needed. Real FMV playback keeps the drive busy
-  // (XA streaming -> DS_READING), so it stays paced and is NOT fast-forwarded.
-  if (!s_fmv_skip_latch && psxport_cd_drive_busy())
+  // Gate on a latched skip AND an actively-reading drive. The drive-idle guard is
+  // what protects the menu: the menu's Start (confirm) sets the latch too, but the
+  // menu sits drive-idle in this same loop, so without the guard it would uncap and
+  // fast-forward the attract/demo countdown. Only the real FMV#2 prebuffer keeps the
+  // drive busy (XA streaming), so the collapse only ever touches that dead pre-roll.
+  if (!s_fmv_skip_latch || !psxport_cd_drive_busy())
     return PSXPORT_HOOK_CONTINUE;
   *redirect_pc = 0x50CF8 | (psxport_last_pc & 0xE0000000); // loop exit
   return PSXPORT_HOOK_REDIRECT;
