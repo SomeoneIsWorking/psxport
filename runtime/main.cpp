@@ -27,6 +27,7 @@
 #include <execinfo.h>
 #include <unistd.h>
 
+#include <cctype>
 #include <cstdarg>
 #include <cstdint>
 #include <cstdio>
@@ -771,7 +772,14 @@ int main(int argc, char** argv)
   if (g_bios_hle && g_ram)
     psxport_add_hook(0xBFC03A9C, 0x24A30096, BiosHleCdBlockRead);
 
-  g_tomba2 = strstr(disc, "Tomba! 2") != nullptr;
+  // Detect Tomba!2 by filename, tolerant of punctuation/case ("Tomba! 2",
+  // "Tomba 2", "tomba2", ...). The per-game hooks are instruction-signature
+  // gated, so a false positive on another disc is inert — match broadly.
+  {
+    std::string low(disc);
+    for (char& c : low) c = static_cast<char>(tolower((unsigned char)c));
+    g_tomba2 = low.find("tomba") != std::string::npos;
+  }
   if (g_tomba2 && g_ram)
     Tomba2_Install();
 
