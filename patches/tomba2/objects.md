@@ -123,11 +123,21 @@ RTPS(0x01)=6166, **MVMVA(0x12)=13190**, NCLIP(0x06)=16689, AVSZ3/4=1842/3005.
 The heavy MVMVA use is the terrain: MVMVA does R*V+TR (into IR1/2/3 = view
 space) but NOT the perspective divide / screen mapping — the game does that on
 the CPU. That's why terrain verts never appear in the RTPS SXY capture.
-KEY CONSEQUENCE: the terrain projection is the SAME math as RTPS (R*V+TR then
-OFX/OFY + IR*(H/Z)), just split MVMVA(GTE)+divide(CPU). So our already-verified
-RTPS reprojection reproduces it too — feed it from MVMVA results instead of
-RTPS. NEXT: tap MVMVA (capture input vert + view-space result), reproject with
-our RTPS divide, and confirm terrain coverage jumps.
+FIRST HYPOTHESIS (terrain = MVMVA + CPU divide) — **FALSIFIED 2026-06-13.**
+Tapped MVMVA (capture input vert + MAC result), reprojected with the verified
+RTPS divide, added to the join map: coverage did NOT move. Dumping the
+predictions showed why — Tomba 2's MVMVA ops are **lighting/normal transforms,
+not vertex projection**: inputs like V=(0,..), results with mac1==0 (so sx==OFX
+center) and off-screen Y (367/523/1023). So the terrain is projected by **pure-
+CPU MIPS math** (transform AND perspective divide on the CPU), using no GTE op
+we can reproject. The MVMVA tap is kept for counting only; it does not feed the
+join. (DEAD END — do not retry the MVMVA-reprojection route.)
+
+OPEN: covering terrain now requires either (a) locating & reimplementing the
+game's pure-CPU terrain projection routine (deep, game-specific MIPS RE), or
+(b) a screen-space fallback for non-GTE polys (the option not taken earlier).
+The GTE character/object geometry (~56%) IS fully reprojectable (RTPS verified
+100% bit-exact) — that part of the renderer can proceed regardless.
 
 ## Status / next
 - [x] cull/submit chokepoint (0x8007712C) — enumerates all live objects by ptr

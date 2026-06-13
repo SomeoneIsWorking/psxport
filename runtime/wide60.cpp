@@ -109,6 +109,61 @@ void OnGteCr(unsigned which, uint32_t value)
 
 unsigned s_rtp_count = 0;    // projected vertices this segment
 unsigned s_near_unjoined = 0; // unjoined verts with an RTP within +-4px (nudge?)
+unsigned s_mvmva_count = 0;
+
+// --- faithful GTE perspective divide + screen map (ported from gte.c, verified
+// bit-exact in tools/reproject.py). Used to finish the terrain projection that
+// the game splits MVMVA(GTE) + divide(CPU). -------------------------------
+uint8_t s_divtable[0x101];
+bool s_divtable_init = false;
+void InitDivTable()
+{
+  for (uint32_t divisor = 0x8000; divisor < 0x10000; divisor += 0x80)
+  {
+    uint32_t xa = 512;
+    for (int i = 1; i < 5; i++)
+      xa = (xa * (1024 * 512 - ((divisor >> 7) * xa))) >> 18;
+    s_divtable[(divisor >> 7) & 0xFF] = ((xa + 1) >> 1) - 0x101;
+  }
+  s_divtable[0x100] = s_divtable[0xFF];
+  s_divtable_init = true;
+}
+int32_t CalcRecip(uint16_t divisor)
+{
+  int32_t x = 0x101 + s_divtable[((divisor & 0x7FFF) + 0x40) >> 7];
+  int32_t tmp = (((int32_t)divisor * -x) + 0x80) >> 8;
+  return ((x * (131072 + tmp)) + 0x80) >> 8;
+}
+uint32_t GteDivide(uint32_t H, uint32_t Z)
+{
+  if (Z * 2 > H)
+  {
+    const int shift = (Z & 0xFFFF) ? (__builtin_clz(Z & 0xFFFF) - 16) : 16;
+    const uint32_t dividend = (H << shift) & 0xFFFFFFFF;
+    const uint32_t divisor = (Z << shift) & 0xFFFFFFFF;
+    uint32_t r = (uint32_t)(((uint64_t)dividend * CalcRecip(divisor | 0x8000) + 32768) >> 16);
+    return r > 0x1FFFF ? 0x1FFFF : r;
+  }
+  return 0x1FFFF;
+}
+inline int32_t SatI(int32_t v, int32_t lo, int32_t hi) { return v < lo ? lo : v > hi ? hi : v; }
+
+// Project a view-space point (MAC1/2/3 = R*V+TR, the MVMVA result) to screen
+// using the current OFX/OFY/H, exactly as RTPS's divide+screen-map.
+bool ProjectViewSpace(int32_t mac1, int32_t mac2, int32_t mac3, int32_t& sx, int32_t& sy)
+{
+  const int32_t sz = SatI(mac3, 0, 65535);
+  if (sz == 0)
+    return false;
+  const int32_t ir1 = SatI(mac1, -32768, 32767);
+  const int32_t ir2 = SatI(mac2, -32768, 32767);
+  const int32_t ofx = (int32_t)s_cr[24], ofy = (int32_t)s_cr[25];
+  const uint16_t H = (uint16_t)s_cr[26];
+  const int64_t hds = GteDivide(H, sz);
+  sx = SatI((int32_t)((ofx + ir1 * hds) >> 16), -1024, 1023);
+  sy = SatI((int32_t)((ofy + ir2 * hds) >> 16), -1024, 1023);
+  return true;
+}
 
 void OnRtpVertex(int32_t vx, int32_t vy, int32_t vz, int32_t sx, int32_t sy, uint32_t /*sf*/)
 {
@@ -119,6 +174,18 @@ void OnRtpVertex(int32_t vx, int32_t vy, int32_t vz, int32_t sx, int32_t sy, uin
   ref.xform_id = s_cur_xform;
   s_sxy_map[SxyKey(sx, sy)] = ref; // last writer wins on SXY collision
   s_rtp_count++;
+}
+
+// NEGATIVE RESULT (2026-06-13): Tomba 2's MVMVA ops are NOT terrain vertex
+// projection — they are lighting/normal transforms. Reprojecting their results
+// as positions yields garbage (mac1==0 -> sx==OFX center; off-screen Y), and
+// adding them to the join map did not improve coverage. So the terrain is
+// genuinely projected by pure-CPU MIPS math (transform AND divide), not via any
+// GTE op we can reproject. We keep the tap for counting only; it does NOT feed
+// the join. (ProjectViewSpace below is still used/verified for RTPS geometry.)
+void OnMvmva(int32_t /*vx*/, int32_t /*vy*/, int32_t /*vz*/, int32_t /*mac1*/, int32_t /*mac2*/, int32_t /*mac3*/)
+{
+  s_mvmva_count++;
 }
 
 // Decode a GP0 polygon packet (cb) into a Poly, joining each vertex to its
@@ -253,7 +320,7 @@ void OnFlip(uint32_t /*value*/)
   s_stat_polys = s_stat_verts = s_stat_joined = s_stat_joined_prev = 0;
   s_unj_tex = s_unj_flat = 0;
   s_unj_tex_area = s_unj_flat_area = 0;
-  s_rtp_count = s_near_unjoined = 0;
+  s_rtp_count = s_near_unjoined = s_mvmva_count = 0;
 }
 
 } // namespace
@@ -262,8 +329,11 @@ void Wide60_Install()
 {
   s_verbose = std::getenv("PSXPORT_WIDE60_LOG") != nullptr;
   std::memset(s_cr, 0, sizeof(s_cr));
+  if (!s_divtable_init)
+    InitDivTable();
   psxport_set_gte_cr_hook(OnGteCr);
   psxport_set_rtp_hook(OnRtpVertex);
+  psxport_set_mvmva_hook(OnMvmva);
   psxport_set_gpu_poly_hook(OnGpuPoly);
   psxport_set_gpu_flip_hook(OnFlip);
 }

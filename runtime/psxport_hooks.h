@@ -56,6 +56,13 @@ extern unsigned psxport_gte_op[64];
 extern int psxport_rtp_capture;
 void psxport_on_rtp_vertex(int32_t vx, int32_t vy, int32_t vz, int32_t sx, int32_t sy, uint32_t sf);
 
+/* MVMVA tap: when psxport_mvmva_capture != 0, each MVMVA (GTE matrix*vector+
+   vector) reports the input local vertex (v-selected) and the view-space result
+   MAC1/2/3. Tomba 2 transforms terrain with MVMVA then perspective-divides on
+   the CPU, so reprojecting these covers the non-RTPS geometry. */
+extern int psxport_mvmva_capture;
+void psxport_on_mvmva(int32_t vx, int32_t vy, int32_t vz, int32_t mac1, int32_t mac2, int32_t mac3);
+
 /* GPU polygon tap: when psxport_gpu_capture != 0, each GP0 polygon command
    (cc 0x20-0x3F) is reported with its raw command buffer (cb) and the active
    drawing offset, before rasterization. cb encodes verts/uv/color/clut/texpage
@@ -101,6 +108,10 @@ void psxport_set_gte_cr_hook(psxport_gte_cr_fn fn);
    reprojecting renderer. Setting a non-null fn enables capture. */
 typedef void (*psxport_rtp_fn)(int32_t vx, int32_t vy, int32_t vz, int32_t sx, int32_t sy, uint32_t sf);
 void psxport_set_rtp_hook(psxport_rtp_fn fn);
+
+/* Register a consumer for MVMVA results (input local vertex + view-space MAC). */
+typedef void (*psxport_mvmva_fn)(int32_t vx, int32_t vy, int32_t vz, int32_t mac1, int32_t mac2, int32_t mac3);
+void psxport_set_mvmva_hook(psxport_mvmva_fn fn);
 
 /* Register a consumer for GP0 polygon commands. Setting a non-null fn enables
    capture. cb points to a 16-word command buffer (valid only during the call). */

@@ -34,6 +34,7 @@ int psxport_gte_capture = 0;
 int psxport_rtp_capture = 0;
 int psxport_gpu_capture = 0;
 unsigned psxport_gte_op[64] = {0};
+int psxport_mvmva_capture = 0;
 
 namespace {
 psxport_gte_cr_fn s_gte_cr_fn = nullptr;
@@ -63,6 +64,22 @@ void psxport_set_rtp_hook(psxport_rtp_fn fn)
 {
   s_rtp_fn = fn;
   psxport_rtp_capture = (fn != nullptr) ? 1 : 0;
+}
+
+namespace {
+psxport_mvmva_fn s_mvmva_fn = nullptr;
+}
+
+extern "C" void psxport_on_mvmva(int32_t vx, int32_t vy, int32_t vz, int32_t mac1, int32_t mac2, int32_t mac3)
+{
+  if (s_mvmva_fn)
+    s_mvmva_fn(vx, vy, vz, mac1, mac2, mac3);
+}
+
+void psxport_set_mvmva_hook(psxport_mvmva_fn fn)
+{
+  s_mvmva_fn = fn;
+  psxport_mvmva_capture = (fn != nullptr) ? 1 : 0;
 }
 
 extern "C" void psxport_on_gpu_poly(uint32_t cc, const uint32_t* cb, int32_t off_x, int32_t off_y)
