@@ -19,18 +19,31 @@ each object it computes a view-cone test
 Six `slti $v0, $v1, imm` sites with thresholds 0x370/0x358/0x358/0x370/0x350/0x368
 (three near/mid/far variants x two paths). Lower threshold = wider cull cone.
 
-## Patch
-Scale thresholds by ~0.72 (covers 16:9's 4/3 wider FOV plus margin). Verified:
-at the repro savestate the engine draws 13 objects instead of 5, the edge NPCs
-(fisherman) included; walking pop-ins drop from 12 to 5 in a 260-frame run.
+## Implementation: native override (runtime/games/tomba2.cpp)
+Scale thresholds by ~0.72 (covers 16:9's 4/3 wider FOV plus margin). Verified
+(as the original poke): at the repro savestate the engine draws 13 objects
+instead of 5, the edge NPCs (fisherman) included; walking pop-ins drop from 12
+to 5 in a 260-frame run.
 
-RAM pokes (overlay code -> conditional "old:new" form; only applied while the
-original word is present, so other overlays at the same addresses are safe):
+Now done as an **override**, not a RAM poke. `CullSlti` hooks each of the six
+`slti $v0,$v1,OLD` sites (PC + original-instruction signature, overlay-safe),
+computes `v0 = (v1 < NEW) ? 1 : 0` natively, and redirects past the stock
+instruction. RAM is never modified — the original `slti` stays resident and
+diffable, and the signature gate means the hook only fires when this overlay is
+mapped (boot stays byte-identical / deterministic; verified via RAMHASH).
+
+Sites and widened immediates (`slti $v0,$v1,OLD` -> compute with NEW):
+
+    0x800772D4  0x370 -> 0x278
+    0x80077368  0x358 -> 0x268
+    0x80077414  0x358 -> 0x268
+    0x800774A8  0x370 -> 0x278
+    0x8007753C  0x350 -> 0x260
+    0x800775D0  0x368 -> 0x270
+
+Superseded poke form (DuckStation-fork prototype, kept for reference):
 
     PSXPORT_POKE="800772D4=28620370:28620278;80077368=28620358:28620268;80077414=28620358:28620268;800774A8=28620370:28620278;8007753C=28620350:28620260;800775D0=28620368:28620270"
-
-Each entry: `slti $v0,$v1,OLD` -> `slti $v0,$v1,NEW` (same instruction, smaller
-immediate): 0x370->0x278, 0x358->0x268, 0x350->0x260, 0x368->0x270.
 
 Tuning: immediates scale linearly; raise them toward the originals if distant
 objects pop in too eagerly, lower further for ultrawide.

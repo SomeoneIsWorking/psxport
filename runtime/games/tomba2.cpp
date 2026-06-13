@@ -14,6 +14,49 @@ int RenderEntryHeartbeat(uint32_t, uint32_t*, uint32_t*)
   s_render_hits++;
   return PSXPORT_HOOK_CONTINUE;
 }
+
+// --- Object cull-cone widening (override; RE: patches/tomba2/cull-widen.md) --
+// The object enqueue-for-draw overlay tests v1 (cos-scaled dot/distance)
+// against a per-LOD threshold with `slti v0, v1, IMM` (v1 < IMM => culled).
+// The stock thresholds cull objects still partly visible at the screen edge,
+// worse under the widescreen FOV. We override each slti site: compute the
+// comparison against a widened (~0.72x) threshold natively, write v0, and
+// redirect past the original instruction. RAM is never modified — the stock
+// `slti` stays resident and diffable (this is an override, not the old poke),
+// and the instruction-word signature ensures we only fire when this overlay
+// (not some other code) is mapped at the address.
+struct CullSite
+{
+  uint32_t pc;
+  uint32_t instr;   // original `slti v0,v1,OLD` word (overlay signature)
+  int32_t new_imm;  // widened threshold (~0.72 * OLD), signed
+};
+const CullSite kCullSites[] = {
+  {0x800772D4, 0x28620370, 0x278}, // 0x370 -> 0x278
+  {0x80077368, 0x28620358, 0x268}, // 0x358 -> 0x268
+  {0x80077414, 0x28620358, 0x268}, // 0x358 -> 0x268
+  {0x800774A8, 0x28620370, 0x278}, // 0x370 -> 0x278
+  {0x8007753C, 0x28620350, 0x260}, // 0x350 -> 0x260
+  {0x800775D0, 0x28620368, 0x270}, // 0x368 -> 0x270
+};
+
+int CullSlti(uint32_t pc, uint32_t* gpr, uint32_t* redirect_pc)
+{
+  // pc arrives region-masked (0x1FFFFFFF); the registry masks site PCs too.
+  for (const CullSite& s : kCullSites)
+  {
+    if ((s.pc & 0x1FFFFFFF) == pc)
+    {
+      // slti v0, v1, new_imm  (signed; v0=GPR[2], v1=GPR[3])
+      gpr[2] = (static_cast<int32_t>(gpr[3]) < s.new_imm) ? 1u : 0u;
+      // Resume one instruction past the stock slti, in the SAME memory region
+      // the code is executing in (KSEG0/KUSEG) so the I-cache tag is unchanged.
+      *redirect_pc = (pc + 4) | (psxport_last_pc & 0xE0000000);
+      return PSXPORT_HOOK_REDIRECT;
+    }
+  }
+  return PSXPORT_HOOK_CONTINUE;
+}
 } // namespace
 
 void Tomba2_Install()
@@ -22,6 +65,10 @@ void Tomba2_Install()
   // overlay code, hence the instruction signature: addiu sp,sp,-0x20).
   // Nonzero hits per frame = the in-engine render loop is alive.
   psxport_add_hook(0x8003CCA4, 0x27BDFFE0, RenderEntryHeartbeat);
+
+  // Cull-cone widening override (replaces the PSXPORT_POKE patch).
+  for (const CullSite& s : kCullSites)
+    psxport_add_hook(s.pc, s.instr, CullSlti);
 }
 
 uint32_t Tomba2_GetAndResetRenderHits()
