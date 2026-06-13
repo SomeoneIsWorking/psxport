@@ -152,3 +152,65 @@ just past a streamed-title menu that this pass could not reliably open; they are
 with a concrete plan and the small tooling fix (deterministic screen-change detection)
 that will unblock them next pass. The first-level load is likely already covered by the
 existing instant-CD + BIOS-HLE layer — measure before adding anything.
+
+---
+
+## "Loading....." screen, fully characterized (2026-06-13) — and why a clean skip is hard
+
+Repro (reliable, headless): boot → hold-Start native intro skip → tap-Start abort the
+opening FMV → **title screen** (New Game / Load Game). Idle at the title; after a
+timeout the game shows a **black screen with "Loading....."** (growing dots), then rolls
+into the in-engine **attract demo** (Tomba in the forest/seesaw, HUD).
+
+### Measured: "Loading....." is an IDLE dwell, NOT CD-bound
+`cdclog` across the transition (psxport_frame stamps, one representative run):
+- f820–f1108: a short load burst — ~6 chunks of `Setloc→SeekL→ReadN→Pause`. The demo
+  data is resident by **f1108**.
+- **f1108 → f2914: ~1800 frames with ZERO CD activity** — drive fully idle, screen shows
+  "Loading.....", CPU pinned in the pace loop `0x80050CE4`.
+- f2914–f2971: final `Setloc/SeekL/ReadN` + `Setmode/ReadS` → demo XA stream starts.
+
+So the bulk of "Loading....." is a **pure idle dwell** (load already done at f1108);
+instant-CD cannot shrink it. `prof` in the window is ~93% game / 1.2% biosrom — it is the
+StrPlayer pace loop, **not** the BIOS. (NB: the OpenBIOS `_patch_card/_patch_card2` tty
+lines at f41–49 are a ONE-TIME `InitCARD` from the FMV overlay; they print right before
+the FMV wait and look correlated, but profiling shows the card path is ~0% of the wait —
+the delay is the StrPlayer/MDEC FMV+dwell, not card/SIO.)
+
+### The pace dwell (0x80050CE4) and its loop
+```
+80050CC8 lui  $v1,0x1f80
+80050CD0 lbu  $v1,0x235($v1)     ; v1 = threshold = *(0x1F800235)  (a byte, <=255)
+80050CCC lhu  $v0,-0x7f64($s6)   ; $s6=0x800F0000 -> counter *(0x800E809C) (vblank tick)
+80050CD8 sltu $v0,$v0,$v1
+80050CDC beqz $v0,0x80050CF8     ; counter>=threshold -> exit dwell
+80050CE4 lhu  $v0,-0x7f64($a0)   ; inner spin: reload counter (a0=0x800F0000)
+80050CEC sltu $v0,$v0,$v1
+80050CF0 bnez $v0,0x80050CE4     ; stay while counter<threshold
+...
+80050D00 lbu  $v1,0x19c($s5)     ; scene/command byte
+80050D08 beq  $v1,$s2,0x80050C7C ; outer loop: repeat while command unchanged
+```
+One dwell ≤255 frames; the ~1800f "Loading" hold is the **outer StrPlayer command loop**
+(0x80050C7C) grinding through multiple scripted pause commands until the command byte
+`*(s5+0x19c)` changes (next scene ready).
+
+### Why the simple skip can't work (the e94ea86 lesson, now root-caused)
+The **title screen, the opening FMV, the "Loading....." screen, AND the demo's own frame
+pacing all run through this SAME 0x80050CE4 loop with byte-identical CPU registers**
+(verified: `bt` at the title vs deep in the dwell → s4=800C0000, s5=1F800000, s6=800F0000,
+s2=1, threshold 0x86, all identical). So:
+- There is **no PC/register/drive-idle discriminator** between "Loading....." and the idle
+  menu. e94ea86 collapsed the loop whenever the drive was idle → it fast-forwarded the
+  menu's attract/demo countdown (the regression the user caught). **Reverted in 42a5d4b.**
+- A safe "skip Loading only" needs a **scene-content discriminator** — which command-list
+  / scene the StrPlayer is currently playing. The "Loading" text lives at **0x800107D4**
+  (present in a Loading-state RAM dump, absent at the title), but it is referenced
+  indirectly (string table / pointer), not via a direct `lui/addiu`, so the draw site
+  isn't trivially hookable.
+
+### Next step for a clean skip (not yet done)
+Identify the StrPlayer scene/command id for the Loading screen (RE the command-list the
+outer loop at 0x80050C7C walks, or find the indirect load of 0x800107D4 / the font-draw
+of the "Loading" glyphs), then gate a dwell-collapse on *that scene only*. Do NOT gate on
+drive-idle (re-breaks the menu). Until that discriminator exists, leave the dwell alone.
