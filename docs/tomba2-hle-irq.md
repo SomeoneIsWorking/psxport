@@ -216,3 +216,27 @@ working tree — `runtime/hle_kernel.cpp`, `hle_irq.cpp`, `hle_bios.h`, `main.cp
   logs the prior PC + the load that produced the target. The fix is likely a small
   missing field, not a redesign — the exception/SR protocol itself is sound (it runs
   clean for 800 frames and the tables-OFF run never storms).
+
+## After the intro renders: the HLE is missing the BIOS CD-filesystem + LoadExec API (2026-06-13, macOS test)
+On a real macOS HLE run the intro renders (SCEA after a dwell, then Whoopee), but:
+```
+CD timeout: CD_cw:(CdlNop) Sync=NoIntr, Ready=NoIntr
+[hle] UNIMPL B0(14) a0=2 a1=1F8010F4 a2=4 ra=80017B30
+[hle] UNIMPL A0(71) a0=1F8010F0 a1=FFFFFFFF a2=14 ra=80011368
+[hle] UNIMPL A0(51) a0=800253A4 a1=80200000 a2=0 ra=8001137C
+```
+Identified by disassembling the call-site trampolines (`li $t2,0xA0/0xB0; jr $t2;
+li $t1,N`) in an early HLE RAM dump (scratch/agent-hle/early_boot.bin):
+- **A0(0x51) = LoadExec** (wrapper 0x80012D2C). Args (filename/exec-hdr ptr 0x800253A4,
+  stackbase 0x80200000, stackoffset 0) → the intro **LoadExec's the next stage**.
+- **A0(0x71) = _96_init** (wrapper 0x80012D3C) → initialize the BIOS "cdrom:" file device.
+- **B0(0x14)** + **B0(0x15)** (wrappers 0x80017CCC/0x80017CDC) → PAD/kernel init.
+
+So both the CD timeout and the post-logo stall are the same gap: the game drives the
+PSX **BIOS CD-ROM filesystem API** (_96_init → open/read "cdrom:" files) and **LoadExec**
+to load/launch what follows the logo, and our HLE doesn't implement them (we only have
+the low-level cdromBlockReading override + instant-CD, not the file/exec API). NEXT
+(scoped): implement _96_init + the cdrom: file open/read path (reuse hle_iso's ISO9660
++ EXE loader from psxport_hle_boot) and A0(0x51) LoadExec (load a PS-X EXE mid-run onto
+the given stack and jump to it), plus the B0(0x14)/0x15 init stubs. The IRQ/exception
+core is solid now (f961 fixed); this is a fileio/exec layer on top.
