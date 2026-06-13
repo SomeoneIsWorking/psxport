@@ -62,6 +62,7 @@ int16_t g_buttons = 0; // bitmask by RETRO_DEVICE_ID_JOYPAD_*
 uint8_t* g_ram = nullptr;
 bool g_tomba2 = false;
 uint16_t g_inject_buttons = 0; // game-module scoped injections
+uint16_t g_repl_buttons = 0;   // REPL-held pad bits (press/release), for driving in
 bool g_module_turbo = false;   // game module requests fast-forward (load masks)
 
 // --- runtime logging -----------------------------------------------------
@@ -140,6 +141,48 @@ bool LoadInputScript(const char* path)
   }
   fclose(fp);
   return true;
+}
+
+// RETRO_DEVICE_ID_JOYPAD_* bit for a button name, or -1.
+int ButtonBit(const char* name)
+{
+  for (const auto& b : kButtons)
+  {
+    if (strcmp(name, b.name) == 0)
+      return static_cast<int>(b.id);
+  }
+  return -1;
+}
+
+// Savestates via the libretro serialize API (full machine state incl. VRAM).
+// Used to checkpoint a hand-driven gameplay position so RE / interpolation
+// work doesn't re-drive the boot+intro each session.
+bool SaveState(const char* path)
+{
+  const size_t sz = retro_serialize_size();
+  std::vector<uint8_t> buf(sz);
+  if (!retro_serialize(buf.data(), sz))
+    return false;
+  FILE* fp = fopen(path, "wb");
+  if (!fp)
+    return false;
+  const bool ok = fwrite(buf.data(), 1, sz, fp) == sz;
+  fclose(fp);
+  return ok;
+}
+
+bool LoadState(const char* path)
+{
+  FILE* fp = fopen(path, "rb");
+  if (!fp)
+    return false;
+  fseek(fp, 0, SEEK_END);
+  const long n = ftell(fp);
+  fseek(fp, 0, SEEK_SET);
+  std::vector<uint8_t> buf(n > 0 ? n : 0);
+  const bool read_ok = n > 0 && fread(buf.data(), 1, n, fp) == static_cast<size_t>(n);
+  fclose(fp);
+  return read_ok && retro_unserialize(buf.data(), n);
 }
 
 void LogCb(retro_log_level level, const char* fmt, ...)
@@ -301,6 +344,10 @@ void InputPollCb()
       g_ff_hold = true;
     else if (ev.type == SDL_KEYUP && ev.key.keysym.scancode == SDL_SCANCODE_TAB)
       g_ff_hold = false;
+    else if (ev.type == SDL_KEYDOWN && ev.key.keysym.scancode == SDL_SCANCODE_F5)
+      fprintf(stderr, "quicksave %s\n", SaveState("scratch/bin/quick.state") ? "ok" : "FAILED");
+    else if (ev.type == SDL_KEYDOWN && ev.key.keysym.scancode == SDL_SCANCODE_F9)
+      fprintf(stderr, "quickload %s\n", LoadState("scratch/bin/quick.state") ? "ok" : "FAILED");
     else if (ev.type == SDL_CONTROLLERDEVICEADDED && !g_pad)
       g_pad = SDL_GameControllerOpen(ev.cdevice.which);
   }
@@ -329,7 +376,7 @@ int16_t InputStateCb(unsigned port, unsigned device, unsigned, unsigned id)
 {
   if (port != 0 || device != RETRO_DEVICE_JOYPAD)
     return 0;
-  if (id < 16 && ((g_buttons | g_inject_buttons) & (1 << id)))
+  if (id < 16 && ((g_buttons | g_inject_buttons | g_repl_buttons) & (1 << id)))
     return 1;
   for (const InputEvent& ev : g_input_script)
   {
@@ -377,6 +424,8 @@ int main(int argc, char** argv)
 {
   const char* disc = nullptr;
   const char* inputscript = nullptr;
+  const char* loadstate = nullptr;
+  const char* savestate = nullptr; // saved on exit
   unsigned frames = 600;
   for (int i = 1; i < argc; i++)
   {
@@ -391,6 +440,10 @@ int main(int argc, char** argv)
       g_dump_interval = static_cast<unsigned>(strtoul(v, nullptr, 10));
     else if (const char* v = arg("-inputscript"))
       inputscript = v;
+    else if (const char* v = arg("-loadstate"))
+      loadstate = v;
+    else if (const char* v = arg("-savestate"))
+      savestate = v;
     else if (const char* v = arg("-bios"))
       g_system_dir = v;
     else if (strcmp(argv[i], "-play") == 0)
@@ -408,7 +461,10 @@ int main(int argc, char** argv)
   if (!disc)
   {
     fprintf(stderr,
-            "usage: %s <disc.chd> [-frames N] [-dumpdir DIR] [-dumpinterval N] [-inputscript FILE] [-bios DIR]\n",
+            "usage: %s <disc.chd> [-frames N] [-dumpdir DIR] [-dumpinterval N] [-inputscript FILE] [-bios DIR]\n"
+            "          [-loadstate FILE] [-savestate FILE] [-play] [-repl]\n"
+            "  -repl drive commands (stdin): run N | tap <Button> [N] | press/release <Button>\n"
+            "                                save/load <path> | r/w/w8 <addr> [..] | trace <pc> | bt | state\n",
             argv[0]);
     return 1;
   }
@@ -469,6 +525,14 @@ int main(int argc, char** argv)
   g_tomba2 = strstr(disc, "Tomba! 2") != nullptr;
   if (g_tomba2 && g_ram)
     Tomba2_Install();
+
+  if (loadstate)
+  {
+    if (LoadState(loadstate))
+      RtLog("state", "loaded");
+    else
+      fprintf(stderr, "WARN: failed to load state %s\n", loadstate);
+  }
 
   // RE aid: PSXPORT_RAMDUMP="frame:path;frame:path" — 2MB RAM snapshots
   struct RamDump
@@ -674,7 +738,49 @@ int main(int argc, char** argv)
       }
       else if (strcmp(cmd, "state") == 0)
       {
-        fprintf(stderr, "[repl] frame=%u last_pc=%08X\n", g_frame, psxport_last_pc);
+        fprintf(stderr, "[repl] frame=%u last_pc=%08X repl_buttons=%04X\n", g_frame, psxport_last_pc, g_repl_buttons);
+      }
+      else if ((strcmp(cmd, "press") == 0 || strcmp(cmd, "release") == 0) && sscanf(line, "%*s %31s", argbuf) == 1)
+      {
+        const int bit = ButtonBit(argbuf);
+        if (bit < 0)
+          fprintf(stderr, "[repl] ? button %s\n", argbuf);
+        else
+        {
+          if (cmd[1] == 'r') // pRess
+            g_repl_buttons |= (1 << bit);
+          else
+            g_repl_buttons &= ~(1 << bit);
+          fprintf(stderr, "[repl] buttons=%04X\n", g_repl_buttons);
+        }
+      }
+      else if (strcmp(cmd, "tap") == 0 && sscanf(line, "%*s %31s %u", argbuf, &a) >= 1)
+      {
+        // hold <button> for `a` frames (default 4), then release — one press
+        const int bit = ButtonBit(argbuf);
+        if (bit < 0)
+        {
+          fprintf(stderr, "[repl] ? button %s\n", argbuf);
+        }
+        else
+        {
+          const unsigned hold = a ? a : 4;
+          g_repl_buttons |= (1 << bit);
+          alarm(15);
+          for (unsigned i = 0; i < hold; i++, g_frame++)
+          {
+            per_frame();
+            retro_run();
+          }
+          g_repl_buttons &= ~(1 << bit);
+          alarm(0);
+          fprintf(stderr, "[repl] tapped %s, at frame %u\n", argbuf, g_frame);
+        }
+      }
+      else if ((strcmp(cmd, "save") == 0 || strcmp(cmd, "load") == 0) && sscanf(line, "%*s %63s", argbuf) == 1)
+      {
+        const bool ok = (cmd[0] == 's') ? SaveState(argbuf) : LoadState(argbuf);
+        fprintf(stderr, "[repl] %s %s %s\n", cmd, argbuf, ok ? "ok" : "FAILED");
       }
       else
       {
@@ -706,6 +812,14 @@ int main(int argc, char** argv)
       per_frame();
       retro_run();
     }
+  }
+
+  if (savestate)
+  {
+    if (SaveState(savestate))
+      fprintf(stderr, "saved state to %s\n", savestate);
+    else
+      fprintf(stderr, "WARN: failed to save state %s\n", savestate);
   }
 
   retro_unload_game();
