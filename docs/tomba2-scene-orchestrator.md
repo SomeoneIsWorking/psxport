@@ -145,16 +145,22 @@ the Whoopee jingle (ReadS/STRSND, consumer-paced by audio), NOT for the SCEA /
 asset-load phases (ReadN, CD-bound).
 
 **But** `psxport_cd_instant` already defaults to -1 (all implemented bits on:
-seek/reset/startup/ReadN-pacing) and SCEA *still* takes ~306 frames. The residual
-cost is the **per-command IRQ completion latency** across the 18 chunk cycles —
-not covered by the current bits, and not the raw read speed. So the routes to a
+seek/reset/startup/ReadN-pacing) and SCEA *still* takes ~306 frames. Frame-gap
+analysis of the CDC log refines the cause: the actual CD load bursts finish fast
+(chunks at f5–61, f146, f240–250) but there are large **idle gaps of 85–94
+frames between bursts where the CD is doing nothing** — i.e. SCEA is a few fast
+CD reads plus **fixed display-hold timers** in the VSync job VM. So even a
+perfectly instant CD cannot make SCEA zero-frame; the holds remain. The CD
+dependence the toggle test showed is real but is only part of the total. So the routes to a
 true instant logo skip are, in order of cleanliness:
-1. **Fast-forward while Start held** (implemented). Runs the CD-paced frames
-   faster; loads still complete, no corruption. Robust, ~sub-second.
-2. **Accelerate the CD command/IRQ cadence** in cdc.c (make Setloc/Seek/Pause and
-   the ReadN data-ready IRQ complete near-instantly for data — leave CDDA/STRSND
-   audio consumer-paced). This is the real "instant" lever; it's delicate
-   (determinism, the test battery) and is the next RE/impl step.
+1. **Fast-forward while Start held** (implemented). Runs both the CD-paced loads
+   AND the fixed display holds faster; loads still complete, no corruption.
+   Robust, ~sub-second. This is the recommended skip.
+2. **Find + zero the display-hold timers** in the job VM (the 85–94f gaps). Needs
+   disassembling the SCEA display job that the per-frame VSync callback runs; the
+   elapsed counters found so far (0x800654AC etc.) are free-running, not the gate.
+   This is the remaining RE for a zero-frame skip, and it must be combined with CD
+   acceleration to matter (the holds are only part of the total).
 
 Forcing scene state is a **dead end** (verified): poking `0x80076AC0` (advance
 event), `0x8006E0CC` (job-stack index), and the elapsed counter `0x800654AC`
