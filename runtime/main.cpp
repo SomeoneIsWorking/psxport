@@ -1011,6 +1011,7 @@ int main(int argc, char** argv)
   // that wrote it + value). Finds the code that owns a variable.
   if (const char* env = std::getenv("PSXPORT_WATCHW"))
     psxport_watch_addr = (static_cast<uint32_t>(strtoul(env, nullptr, 16)) & 0x1FFFFC);
+  psxport_pctrace_init(); // PSXPORT_PCTRACE="lo-hi" scoped PC trace ring
   // RE aid: PSXPORT_POKE="frame:addr=val;A..B:addr=val" — write a 32-bit word into
   // RAM at a frame (single) or every frame in [A,B] (range, to latch a gate against
   // the game rewriting it). addr/val are hex (PSX addr masked to 2MB, word-aligned).
@@ -1293,6 +1294,22 @@ int main(int argc, char** argv)
         for (int i = 0; i < 34; i++)
           fprintf(stderr, "  %-3s=%08X%s", kNames[i], gpr[i], (i % 4 == 3) ? "\n" : "");
         fprintf(stderr, "\n");
+      }
+      else if (strcmp(cmd, "pctrace") == 0 && sscanf(line, "%*s %1023s", argbuf2) == 1)
+      {
+        psxport_pctrace_dump(argbuf2);
+      }
+      else if (strcmp(cmd, "sr") == 0 && sscanf(line, "%*s %x %u", &a, &b) >= 1)
+      {
+        const unsigned n = (sscanf(line, "%*s %x %u", &a, &b) == 2) ? b : 1;
+        fprintf(stderr, "[repl] scratch %03X:", a & 0x3FF);
+        for (unsigned i = 0; i < n; i++) fprintf(stderr, " %02X", psxport_scratch8(a + i));
+        fprintf(stderr, "\n");
+      }
+      else if (strcmp(cmd, "sw8") == 0 && sscanf(line, "%*s %x %x", &a, &b) == 2)
+      {
+        psxport_scratch_poke8(a, static_cast<uint8_t>(b));
+        fprintf(stderr, "[repl] scratch[%03X] <- %02X\n", a & 0x3FF, b & 0xFF);
       }
       else if (strcmp(cmd, "irq") == 0)
       {

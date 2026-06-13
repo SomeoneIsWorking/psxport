@@ -203,6 +203,23 @@ int DwellSkip(uint32_t, uint32_t* gpr, uint32_t*)
   return PSXPORT_HOOK_CONTINUE;
 }
 
+// RE probe (PSXPORT_T2_STATEPROBE): the StrPlayer dispatch at 0x80050D00 reads
+// the clip state byte *(s5+0x19c). Log s5 + that byte once/frame to find the
+// real state variable (gpr[21]=s5; byte may be main-RAM or scratchpad).
+int StateProbe(uint32_t, uint32_t* gpr, uint32_t*)
+{
+  static unsigned lf = 0xFFFFFFFFu;
+  if (psxport_frame != lf) {
+    lf = psxport_frame;
+    const uint32_t s5 = gpr[21], addr = s5 + 0x19c;
+    uint8_t st;
+    if ((addr & 0x1FE00000u) == 0x1F800000u) st = psxport_scratch8(addr & 0x3FF);
+    else st = s_ram ? s_ram[addr & 0x1FFFFF] : 0xFF;
+    fprintf(stderr, "[state f%u] s5=%08X *(s5+0x19c=%08X)=%02X\n", psxport_frame, s5, addr, st);
+  }
+  return PSXPORT_HOOK_CONTINUE;
+}
+
 // Loading-screen skip. The StrPlayer overlay at 0x80050xxx frame-paces itself
 // with a spin at 0x80050CE4:
 //   80050CE4 lhu  v0,-0x7f64(a0)   ; a0=0x800f0000 -> *(0x800E809C) vblank counter
@@ -280,6 +297,9 @@ void Tomba2_Install()
   // never fast-forwards anything, until that ownership exists.
   if (std::getenv("PSXPORT_T2_LOADINGSKIP") != nullptr)
     psxport_add_hook(0x80050CE4, 0x9482809C, FmvDwellSkip); // collapse pace dwell on black screen
+
+  if (std::getenv("PSXPORT_T2_STATEPROBE") != nullptr)
+    psxport_add_hook(0x80050D00, 0x92A3019C, StateProbe);
 
   // Live object enumeration: hook the universal per-object cull chokepoint.
   s_objlog = std::getenv("PSXPORT_T2_OBJLOG") != nullptr;

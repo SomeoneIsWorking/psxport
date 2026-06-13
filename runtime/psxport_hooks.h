@@ -37,6 +37,13 @@ extern uint8_t* psxport_cov_bitmap; /* NULL = disabled */
    Consumed by the imported cdc.c. */
 extern int psxport_cd_instant;
 
+/* Scoped PC trace ring (PSXPORT_PCTRACE="lo-hi"). Captures executed PCs in range
+   for path-diffing a state machine. cpu.c pushes; REPL `pctrace <path>` dumps. */
+extern uint32_t psxport_pctrace_hi;
+void psxport_pctrace_init(void);
+void psxport_pctrace_push(uint32_t pc);
+void psxport_pctrace_dump(const char* path);
+
 /* CDC command/IRQ logging to stderr (PSXPORT_CDC_LOG=1). */
 extern int psxport_cdc_log;
 
@@ -131,6 +138,8 @@ uint32_t* psxport_cpu_gpr(void);
    interrupt-pending state. Used by the runtime's native BIOS exception handler
    (runtime/hle_irq.cpp) to read CAUSE/EPC and pop SR (RFE) on return. */
 uint32_t psxport_cpu_cop0(int reg);
+uint8_t psxport_scratch8(uint32_t off);          /* read CPU scratchpad byte */
+void psxport_scratch_poke8(uint32_t off, uint8_t v); /* poke CPU scratchpad byte */
 void psxport_cpu_set_cop0(int reg, uint32_t v);
 
 /* Generic IRQ-controller access (irq.c): I_STAT (status), I_MASK, and an

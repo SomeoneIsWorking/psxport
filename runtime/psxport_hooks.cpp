@@ -102,6 +102,45 @@ extern "C" void psxport_on_write(uint32_t addr, uint32_t val, uint32_t pc, int w
           psxport_frame, pc, ra, val, width, addr);
 }
 unsigned psxport_frame = 0;
+
+// --- Scoped PC trace ring (RE aid) -------------------------------------------
+// Captures every executed PC within [psxport_pctrace_lo, psxport_pctrace_hi)
+// into a ring buffer, so a function's exact execution path on one frame can be
+// dumped and diffed against another frame (e.g. a "waiting" vs "advancing"
+// iteration of a state machine). Enabled via PSXPORT_PCTRACE="lohex-hihex";
+// dumped with the REPL `pctrace <path>` command. Cheap: one range check per
+// instruction, push only in-range.
+uint32_t  psxport_pctrace_lo = 0, psxport_pctrace_hi = 0;
+uint32_t* g_pctrace = nullptr;
+uint32_t  g_pctrace_cap = 0, g_pctrace_idx = 0;
+bool      g_pctrace_wrapped = false;
+extern "C" void psxport_pctrace_init() {
+  const char* v = std::getenv("PSXPORT_PCTRACE");
+  if (!v || !*v) return;
+  unsigned lo = 0, hi = 0;
+  if (std::sscanf(v, "%x-%x", &lo, &hi) == 2 && hi > lo) {
+    psxport_pctrace_lo = lo; psxport_pctrace_hi = hi;
+    g_pctrace_cap = 1u << 22; // 4M entries (16 MB) — many frames of one function
+    g_pctrace = (uint32_t*)std::malloc(g_pctrace_cap * sizeof(uint32_t));
+    fprintf(stderr, "[pctrace] capturing PCs in [%08X,%08X) cap=%u\n", lo, hi, g_pctrace_cap);
+  }
+}
+extern "C" void psxport_pctrace_push(uint32_t pc) {
+  if (pc < psxport_pctrace_lo || pc >= psxport_pctrace_hi) return;
+  g_pctrace[g_pctrace_idx] = pc;
+  if (++g_pctrace_idx >= g_pctrace_cap) { g_pctrace_idx = 0; g_pctrace_wrapped = true; }
+}
+extern "C" void psxport_pctrace_dump(const char* path) {
+  if (!g_pctrace) { fprintf(stderr, "[pctrace] not enabled\n"); return; }
+  FILE* f = std::fopen(path, "w");
+  if (!f) { fprintf(stderr, "[pctrace] cannot open %s\n", path); return; }
+  uint32_t start = g_pctrace_wrapped ? g_pctrace_idx : 0;
+  uint32_t n = g_pctrace_wrapped ? g_pctrace_cap : g_pctrace_idx;
+  for (uint32_t i = 0; i < n; i++)
+    std::fprintf(f, "%08X\n", g_pctrace[(start + i) % g_pctrace_cap]);
+  std::fclose(f);
+  fprintf(stderr, "[pctrace] dumped %u PCs -> %s\n", n, path);
+}
 int psxport_gte_capture = 0;
 int psxport_rtp_capture = 0;
 int psxport_gpu_capture = 0;
