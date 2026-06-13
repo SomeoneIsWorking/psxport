@@ -93,6 +93,7 @@ bool g_widescreen = true;          // beetle_psx_widescreen_hack; PSXPORT_NOWIDE
 const char* g_ws_aspect = "16:9";  // beetle_psx_widescreen_hack_aspect_ratio
 float g_aspect = 4.0f / 3.0f;      // core-reported display aspect (updated from av_info)
 double g_fps = 59.94;              // core-reported native field rate (updated from av_info); the play loop's wall-clock pacing target
+bool g_screen_dark = false;        // last presented frame was a near-black load/transition mask (drives the Loading-screen skip)
 
 // --- runtime logging -----------------------------------------------------
 // Frame-stamped events to stderr. The emulated TTY (BIOS A0:3C / B0:3D
@@ -340,6 +341,16 @@ bool EnvironmentCb(unsigned cmd, void* data)
       const auto* av = static_cast<const retro_system_av_info*>(data);
       if (av && av->geometry.aspect_ratio > 0.0f)
         g_aspect = av->geometry.aspect_ratio;
+      // The core re-reports timing when the display mode toggles (e.g. interlace
+      // on/off). Keep the play loop's pacing target current — otherwise a stale
+      // g_fps mis-paces the game after a mode switch.
+      if (av && av->timing.fps > 1.0 && av->timing.fps != g_fps)
+      {
+        char m[64];
+        snprintf(m, sizeof(m), "timing change: fps %.3f -> %.3f", g_fps, av->timing.fps);
+        RtLog("disp", m);
+        g_fps = av->timing.fps;
+      }
       return true;
     }
     default:
@@ -485,6 +496,37 @@ void VideoCb(const void* data, unsigned width, unsigned height, size_t pitch)
       memcpy(g_last_fb.data() + static_cast<size_t>(y) * width * bpp, src + y * pitch, static_cast<size_t>(width) * bpp);
     g_last_fb_w = width;
     g_last_fb_h = height;
+
+    // Frame brightness for the Loading-screen detector: the "Loading....." mask is
+    // near-black, real content (title/menu, FMV, gameplay) is not. Sparse 8x8
+    // sampling keeps it cheap. Beetle outputs XRGB8888 (WANT_32BPP) here; the
+    // RGB1555 branch is for completeness.
+    uint64_t lsum = 0;
+    unsigned ln = 0;
+    const uint8_t* sp = static_cast<const uint8_t*>(data);
+    if (g_pixel_format == RETRO_PIXEL_FORMAT_XRGB8888)
+    {
+      for (unsigned y = 0; y < height; y += 8)
+        for (unsigned x = 0; x < width; x += 8)
+        {
+          const uint8_t* px = sp + static_cast<size_t>(y) * pitch + static_cast<size_t>(x) * 4;
+          lsum += px[0] + px[1] + px[2]; // B+G+R (ignore X/alpha)
+          ln += 3;
+        }
+      g_screen_dark = ln && (static_cast<double>(lsum) / ln) < 6.0; // 0..255 scale
+    }
+    else
+    {
+      for (unsigned y = 0; y < height; y += 8)
+        for (unsigned x = 0; x < width; x += 8)
+        {
+          uint16_t v;
+          memcpy(&v, sp + static_cast<size_t>(y) * pitch + static_cast<size_t>(x) * 2, 2);
+          lsum += ((v >> 10) & 0x1F) + ((v >> 5) & 0x1F) + (v & 0x1F);
+          ln += 3;
+        }
+      g_screen_dark = ln && (static_cast<double>(lsum) / ln) < 1.0; // 0..31 scale
+    }
   }
   if (data && !g_dump_dir.empty() && g_dump_interval && (g_frame % g_dump_interval) == 0)
     WriteFramePPM(data, width, height, pitch);
@@ -1107,7 +1149,10 @@ int main(int argc, char** argv)
       const bool skip_held =
         ((g_buttons | g_repl_buttons) & (1 << RETRO_DEVICE_ID_JOYPAD_START)) != 0;
       if (g_tomba2)
+      {
         Tomba2_SetSkipHeld(skip_held);
+        Tomba2_SetScreenDark(g_screen_dark); // gates the Loading-screen skip to black load masks
+      }
       g_module_turbo = false; // native skip replaced the Start-held fast-forward
     }
   };
@@ -1204,7 +1249,22 @@ int main(int argc, char** argv)
       }
       else if (strcmp(cmd, "state") == 0)
       {
-        fprintf(stderr, "[repl] frame=%u last_pc=%08X repl_buttons=%04X\n", g_frame, psxport_last_pc, g_repl_buttons);
+        fprintf(stderr, "[repl] frame=%u last_pc=%08X repl_buttons=%04X dark=%d\n", g_frame, psxport_last_pc,
+                g_repl_buttons, g_screen_dark ? 1 : 0);
+      }
+      else if (strcmp(cmd, "dumpram") == 0 && sscanf(line, "%*s %1023s", argbuf2) == 1)
+      {
+        // RE aid: snapshot full 2MB main RAM to a file, for diffing game state
+        // across known screens (find the scene/mode state variable).
+        FILE* fp = fopen(argbuf2, "wb");
+        if (fp)
+        {
+          fwrite(g_ram, 1, 2 * 1024 * 1024, fp);
+          fclose(fp);
+          fprintf(stderr, "[repl] dumpram -> %s\n", argbuf2);
+        }
+        else
+          fprintf(stderr, "[repl] dumpram: cannot open %s\n", argbuf2);
       }
       else if (strcmp(cmd, "shot") == 0 && sscanf(line, "%*s %1023s", argbuf2) == 1)
       {

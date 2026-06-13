@@ -15,13 +15,11 @@ uint32_t s_render_hits = 0;
 // Host "skip intro" input (Start), latched each frame by the frontend so the
 // PC-native intro overrides below can see it from inside the interpreter.
 bool s_skip_held = false;
-// Latched skip-mode for the inter-FMV "Whoopee Camp logo" hold. A single Start
-// *tap* during the hold is worthless if FmvDwellSkip only fires while Start is
-// physically held (measured: -8f vs -121f for held Start; see
-// docs/tomba2-fmv-skip.md). Latch on a Start press so one tap collapses the hold,
-// and clear it when FMV#2's prebuffer is satisfied (FmvSkipClear) so the movie
-// itself plays at native rate instead of being fast-forwarded.
-bool s_fmv_skip_latch = false;
+// Set by the frontend each frame: true when the last presented frame was a
+// near-black load/transition mask (the "Loading....." screen). The loading-screen
+// skip (FmvDwellSkip) collapses the StrPlayer pace dwell only while this holds, so
+// it never fast-forwards bright content (title/menu, FMV, gameplay).
+bool s_screen_dark = false;
 // Main RAM, stashed each frame from Tomba2_FrameTick so an override can read or
 // write game state (e.g. mark a logo's "done" flag) without the emulator path.
 uint8_t* s_ram = nullptr;
@@ -205,60 +203,40 @@ int DwellSkip(uint32_t, uint32_t* gpr, uint32_t*)
   return PSXPORT_HOOK_CONTINUE;
 }
 
-// Post-Whoopee FMV-stage frame-pacing dwell. In a loaded overlay at 0x80050xxx
-// the FMV/post-Whoopee loop frame-paces itself with a spin:
-// `while (*(0x800E809C) < threshold@0x1F800235)` at 0x80050CE4
+// Loading-screen skip. The StrPlayer overlay at 0x80050xxx frame-paces itself
+// with a spin at 0x80050CE4:
 //   80050CE4 lhu  v0,-0x7f64(a0)   ; a0=0x800f0000 -> *(0x800E809C) vblank counter
-//   80050CEC sltu v0,v0,v1         ; v1 = threshold
+//   80050CEC sltu v0,v0,v1         ; v1 = threshold @ *(0x1F800235)
 //   80050CF0 bnez v0,0x80050CE4    ; stay while counter < threshold
-// Redirect to the loop exit 0x80050CF8 so the wait elapses immediately (same
-// technique as DwellSkip; the loop's own work still runs each iteration). Fires
-// ONLY on a LATCH (s_fmv_skip_latch, set on a Start press in Tomba2_SetSkipHeld)
-// so a brief tap is enough, not a continuous hold; the latch is cleared at the
-// prebuffer-satisfied branch (FmvSkipClear) so FMV#2 plays at native rate.
-//
-// DO NOT collapse this loop on drive-idle. Earlier (e94ea86) it did, to make
-// "Loading..." labels vanish -- but 0x80050CE4 is the GENERIC per-frame pacer for
-// the whole 0x80050xxx overlay, including the MAIN MENU. Collapsing it every idle
-// frame runs menu logic at uncapped CPU speed, so the attract/demo countdown
-// fast-forwarded (menu jumped to the demo almost instantly). psxport_cd_drive_busy()
-// cannot distinguish a "Loading..." dwell from the menu's normal vsync pacing --
-// both are drive-idle in this same loop -- so an idle-collapse here is a
-// fast-forward of real interactive frames, which is exactly what we must not do.
+// This loop is the per-frame clock for the WHOLE overlay -- the title/menu, the
+// opening FMV, the "Loading....." screen, and the demo all pace through it with
+// identical CPU state (RE: docs/tomba2-waits.md). Collapsing it unconditionally
+// (or on drive-idle, e94ea86) fast-forwards the menu's attract/demo countdown and
+// the loading animation -- both are this same loop. So the ONLY safe trigger is
+// the displayed CONTENT: collapse the dwell exclusively while the screen is a
+// near-black load/transition mask (the "Loading....." screen is black but for the
+// text). The frontend measures frame brightness and pushes s_screen_dark; bright
+// content (title image, FMV video, gameplay) is never collapsed, so the menu
+// fast-forward cannot return and no visible animation is sped up. Redirecting to
+// the loop exit 0x80050CF8 makes the load mask's dwell elapse fast = the loading
+// screen is skipped with no input.
 int FmvDwellSkip(uint32_t pc, uint32_t* gpr, uint32_t* redirect_pc)
 {
-  if (s_skip_held)
-    s_fmv_skip_latch = true; // a press latches skip-mode (survives a tap)
-  // Gate on a latched skip AND an actively-reading drive. The drive-idle guard is
-  // what protects the menu: the menu's Start (confirm) sets the latch too, but the
-  // menu sits drive-idle in this same loop, so without the guard it would uncap and
-  // fast-forward the attract/demo countdown. Only the real FMV#2 prebuffer keeps the
-  // drive busy (XA streaming), so the collapse only ever touches that dead pre-roll.
-  if (!s_fmv_skip_latch || !psxport_cd_drive_busy())
-    return PSXPORT_HOOK_CONTINUE;
+  if (!s_screen_dark)
+    return PSXPORT_HOOK_CONTINUE; // visible content -> pace normally (never fast-forward)
   *redirect_pc = 0x50CF8 | (psxport_last_pc & 0xE0000000); // loop exit
   return PSXPORT_HOOK_REDIRECT;
-}
-
-// Prebuffer-satisfied branch target (0x8008A7B8, the `bnez $v1,0x8008a7b8` taken at
-// 0x8008A784 when the buffered ring position passes the prebuffer target). This is
-// the most direct "prebuffer done -> FMV#2 starting" signal, so we drop the
-// dwell-skip latch here: the still-logo hold is over and the movie should now run at
-// its native XA/MDEC rate (NOT fast-forwarded). Pure observer -- no register/PC
-// change -- so it cannot perturb the player. Signature lui $a0,0x8002 gates it to
-// the resident f839 player overlay.
-int FmvSkipClear(uint32_t, uint32_t*, uint32_t*)
-{
-  s_fmv_skip_latch = false;
-  return PSXPORT_HOOK_CONTINUE;
 }
 } // namespace
 
 void Tomba2_SetSkipHeld(bool held)
 {
   s_skip_held = held;
-  if (held)
-    s_fmv_skip_latch = true; // latch on any Start press so a brief tap collapses the FMV hold
+}
+
+void Tomba2_SetScreenDark(bool dark)
+{
+  s_screen_dark = dark;
 }
 
 void Tomba2_Install()
@@ -289,9 +267,19 @@ void Tomba2_Install()
     psxport_add_hook(0x80010ED0, 0x12A20019, SceaSkip);    // SCEA phase dispatch (beq $s5,$v0)
     psxport_add_hook(0x80011414, 0x3C028004, WhoopeeSkip); // Whoopee loop top (lui $v0,0x8004)
     psxport_add_hook(0x80012164, 0x10600008, DwellSkip);   // inter-stage 200f dwell (beqz $v1)
-    psxport_add_hook(0x80050CE4, 0x9482809C, FmvDwellSkip); // post-Whoopee FMV-stage frame dwell
-    psxport_add_hook(0x8008A7B8, 0x3C040280, FmvSkipClear); // prebuffer satisfied -> drop FMV dwell latch
   }
+
+  // STOPGAP, OFF by default (PSXPORT_T2_LOADINGSKIP=1 to enable): skip the
+  // "Loading....." screen by collapsing the StrPlayer pace dwell while the screen
+  // is a near-black load mask (FmvDwellSkip). This is INFERENCE, not state
+  // ownership: it cannot tell a Loading screen from a legitimately-dark FMV/
+  // cutscene, so on by default it could fast-forward dark story content -- which
+  // violates "never fast-forward". The correct fix is to RE Tomba2's top-level
+  // scene/mode state machine and gate the skip on the actual "is the loading
+  // screen up" state (see docs/tomba2-waits.md). Kept opt-in so the default build
+  // never fast-forwards anything, until that ownership exists.
+  if (std::getenv("PSXPORT_T2_LOADINGSKIP") != nullptr)
+    psxport_add_hook(0x80050CE4, 0x9482809C, FmvDwellSkip); // collapse pace dwell on black screen
 
   // Live object enumeration: hook the universal per-object cull chokepoint.
   s_objlog = std::getenv("PSXPORT_T2_OBJLOG") != nullptr;
