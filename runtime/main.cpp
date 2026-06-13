@@ -385,6 +385,91 @@ void WriteFramePPM(const void* data, unsigned width, unsigned height, size_t pit
   WriteFramePPMPath(data, width, height, pitch, path);
 }
 
+// Direct PNG export (no external libs, no python post-step): a self-contained
+// encoder — CRC32 for chunks, adler32 + a stored (uncompressed) DEFLATE stream
+// for IDAT. Same pixel extraction as the PPM writer. Used by the REPL `shot`
+// command when the path ends in .png.
+namespace {
+uint32_t png_crc_upd(uint32_t crc, const uint8_t* p, size_t n)
+{
+  for (size_t i = 0; i < n; i++)
+  {
+    crc ^= p[i];
+    for (int k = 0; k < 8; k++)
+      crc = (crc >> 1) ^ (0xEDB88320u & (uint32_t)(-(int32_t)(crc & 1)));
+  }
+  return crc;
+}
+void png_chunk(FILE* fp, const char* type, const uint8_t* data, size_t n)
+{
+  uint8_t hdr[4] = {(uint8_t)(n >> 24), (uint8_t)(n >> 16), (uint8_t)(n >> 8), (uint8_t)n};
+  fwrite(hdr, 1, 4, fp);
+  fwrite(type, 1, 4, fp);
+  if (n) fwrite(data, 1, n, fp);
+  uint32_t crc = png_crc_upd(0xFFFFFFFFu, (const uint8_t*)type, 4);
+  crc = png_crc_upd(crc, data, n) ^ 0xFFFFFFFFu;
+  uint8_t c[4] = {(uint8_t)(crc >> 24), (uint8_t)(crc >> 16), (uint8_t)(crc >> 8), (uint8_t)crc};
+  fwrite(c, 1, 4, fp);
+}
+}
+
+void WriteFramePNGPath(const void* data, unsigned width, unsigned height, size_t pitch,
+                       const char* path)
+{
+  FILE* fp = fopen(path, "wb");
+  if (!fp)
+    return;
+  // Raw image: one filter byte (0=None) + RGB triplets per scanline.
+  std::vector<uint8_t> raw;
+  raw.reserve(height * (1 + width * 3));
+  const uint8_t* row = static_cast<const uint8_t*>(data);
+  for (unsigned y = 0; y < height; y++, row += pitch)
+  {
+    raw.push_back(0);
+    for (unsigned x = 0; x < width; x++)
+    {
+      if (g_pixel_format == RETRO_PIXEL_FORMAT_XRGB8888)
+      {
+        const uint32_t px = reinterpret_cast<const uint32_t*>(row)[x];
+        raw.push_back((px >> 16) & 0xFF); raw.push_back((px >> 8) & 0xFF); raw.push_back(px & 0xFF);
+      }
+      else
+      {
+        const uint16_t px = reinterpret_cast<const uint16_t*>(row)[x];
+        raw.push_back(((px >> 10) & 0x1F) << 3); raw.push_back(((px >> 5) & 0x1F) << 3); raw.push_back((px & 0x1F) << 3);
+      }
+    }
+  }
+  // zlib stream wrapping raw in stored DEFLATE blocks (<=65535 each) + adler32.
+  std::vector<uint8_t> z;
+  z.push_back(0x78); z.push_back(0x01);
+  size_t off = 0;
+  while (off < raw.size())
+  {
+    size_t blk = raw.size() - off; if (blk > 65535) blk = 65535;
+    const bool last = (off + blk >= raw.size());
+    z.push_back(last ? 1 : 0);
+    z.push_back(blk & 0xFF); z.push_back((blk >> 8) & 0xFF);
+    z.push_back(~blk & 0xFF); z.push_back((~blk >> 8) & 0xFF);
+    z.insert(z.end(), raw.begin() + off, raw.begin() + off + blk);
+    off += blk;
+  }
+  uint32_t a = 1, b = 0;
+  for (uint8_t v : raw) { a = (a + v) % 65521; b = (b + a) % 65521; }
+  const uint32_t adler = (b << 16) | a;
+  z.push_back(adler >> 24); z.push_back(adler >> 16); z.push_back(adler >> 8); z.push_back(adler);
+
+  static const uint8_t sig[8] = {0x89, 'P', 'N', 'G', '\r', '\n', 0x1A, '\n'};
+  fwrite(sig, 1, 8, fp);
+  uint8_t ihdr[13] = {(uint8_t)(width >> 24), (uint8_t)(width >> 16), (uint8_t)(width >> 8), (uint8_t)width,
+                      (uint8_t)(height >> 24), (uint8_t)(height >> 16), (uint8_t)(height >> 8), (uint8_t)height,
+                      8, 2, 0, 0, 0}; // 8-bit, color type 2 (RGB)
+  png_chunk(fp, "IHDR", ihdr, 13);
+  png_chunk(fp, "IDAT", z.data(), z.size());
+  png_chunk(fp, "IEND", nullptr, 0);
+  fclose(fp);
+}
+
 void VideoCb(const void* data, unsigned width, unsigned height, size_t pitch)
 {
   if (data)
@@ -1104,14 +1189,22 @@ int main(int argc, char** argv)
       }
       else if (strcmp(cmd, "shot") == 0 && sscanf(line, "%*s %1023s", argbuf2) == 1)
       {
-        // Dump the last presented framebuffer (cached in VideoCb) to a PPM so the
-        // current screen can be eyeballed while driving interactively.
+        // Dump the last presented framebuffer (cached in VideoCb). Writes PNG when
+        // the path ends in .png (no python post-step), else PPM.
         if (g_last_fb.empty())
           fprintf(stderr, "[repl] no frame captured yet\n");
         else
         {
           const unsigned bpp = (g_pixel_format == RETRO_PIXEL_FORMAT_XRGB8888) ? 4 : 2;
-          WriteFramePPMPath(g_last_fb.data(), g_last_fb_w, g_last_fb_h, static_cast<size_t>(g_last_fb_w) * bpp, argbuf2);
+          const size_t pitch = static_cast<size_t>(g_last_fb_w) * bpp;
+          const size_t len = strlen(argbuf2);
+          auto lc = [](char c) { return (c >= 'A' && c <= 'Z') ? char(c + 32) : c; };
+          const bool png = len >= 4 && argbuf2[len - 4] == '.' && lc(argbuf2[len - 3]) == 'p' &&
+                           lc(argbuf2[len - 2]) == 'n' && lc(argbuf2[len - 1]) == 'g';
+          if (png)
+            WriteFramePNGPath(g_last_fb.data(), g_last_fb_w, g_last_fb_h, pitch, argbuf2);
+          else
+            WriteFramePPMPath(g_last_fb.data(), g_last_fb_w, g_last_fb_h, pitch, argbuf2);
           fprintf(stderr, "[repl] shot %ux%u -> %s\n", g_last_fb_w, g_last_fb_h, argbuf2);
         }
       }
