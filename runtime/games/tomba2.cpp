@@ -15,6 +15,13 @@ uint32_t s_render_hits = 0;
 // Host "skip intro" input (Start), latched each frame by the frontend so the
 // PC-native intro overrides below can see it from inside the interpreter.
 bool s_skip_held = false;
+// Latched skip-mode for the inter-FMV "Whoopee Camp logo" hold. A single Start
+// *tap* during the hold is worthless if FmvDwellSkip only fires while Start is
+// physically held (measured: -8f vs -121f for held Start; see
+// docs/tomba2-fmv-skip.md). Latch on a Start press so one tap collapses the hold,
+// and clear it when FMV#2's prebuffer is satisfied (FmvSkipClear) so the movie
+// itself plays at native rate instead of being fast-forwarded.
+bool s_fmv_skip_latch = false;
 // Main RAM, stashed each frame from Tomba2_FrameTick so an override can read or
 // write game state (e.g. mark a logo's "done" flag) without the emulator path.
 uint8_t* s_ram = nullptr;
@@ -204,28 +211,44 @@ int DwellSkip(uint32_t, uint32_t* gpr, uint32_t*)
 //   80050CE4 lhu  v0,-0x7f64(a0)   ; a0=0x800f0000 -> *(0x800E809C) vblank counter
 //   80050CEC sltu v0,v0,v1         ; v1 = threshold
 //   80050CF0 bnez v0,0x80050CE4    ; stay while counter < threshold
-// On Start, redirect to the loop exit 0x80050CF8 so the wait elapses immediately
-// (same technique as DwellSkip; the loop's own work still runs each iteration).
-// Collapses the dead black pre-roll between Whoopee and the visible FMV (~100f);
-// verified the movie itself stays intact and the run reaches the title/New Game.
+// Redirect to the loop exit 0x80050CF8 so the wait elapses immediately (same
+// technique as DwellSkip; the loop's own work still runs each iteration). Escaping
+// the per-frame pace dwell every frame lets the read/decode loop iterate faster,
+// accelerating the prebuffer of FMV#2 (measured -121f to FMV#2 ReadS, glitch-free;
+// docs/tomba2-fmv-skip.md). Fires on a LATCH (s_fmv_skip_latch, set on a Start
+// press in Tomba2_SetSkipHeld) so a brief tap is enough, not a continuous hold; the
+// latch is cleared at the prebuffer-satisfied branch (FmvSkipClear) so FMV#2 plays
+// at native rate rather than being fast-forwarded.
 int FmvDwellSkip(uint32_t pc, uint32_t* gpr, uint32_t* redirect_pc)
 {
-  if (psxport_bios_log)
-  {
-    uint32_t counter = 0;
-    if (s_ram) memcpy(&counter, s_ram + ((gpr[4] - 0x7f64) & 0x1FFFFF), 2);
-    fprintf(stderr, "[fmvdwell f%u] held=%d counter=%u threshold=%u rem=%d\n",
-            psxport_frame, (int)s_skip_held, counter & 0xFFFF, gpr[3] & 0xFFFF,
-            (int)(gpr[3] & 0xFFFF) - (int)(counter & 0xFFFF));
-  }
-  if (!s_skip_held)
+  if (s_skip_held)
+    s_fmv_skip_latch = true; // a press latches skip-mode (survives a tap)
+  if (!s_fmv_skip_latch)
     return PSXPORT_HOOK_CONTINUE;
   *redirect_pc = 0x50CF8 | (psxport_last_pc & 0xE0000000); // loop exit
   return PSXPORT_HOOK_REDIRECT;
 }
+
+// Prebuffer-satisfied branch target (0x8008A7B8, the `bnez $v1,0x8008a7b8` taken at
+// 0x8008A784 when the buffered ring position passes the prebuffer target). This is
+// the most direct "prebuffer done -> FMV#2 starting" signal, so we drop the
+// dwell-skip latch here: the still-logo hold is over and the movie should now run at
+// its native XA/MDEC rate (NOT fast-forwarded). Pure observer -- no register/PC
+// change -- so it cannot perturb the player. Signature lui $a0,0x8002 gates it to
+// the resident f839 player overlay.
+int FmvSkipClear(uint32_t, uint32_t*, uint32_t*)
+{
+  s_fmv_skip_latch = false;
+  return PSXPORT_HOOK_CONTINUE;
+}
 } // namespace
 
-void Tomba2_SetSkipHeld(bool held) { s_skip_held = held; }
+void Tomba2_SetSkipHeld(bool held)
+{
+  s_skip_held = held;
+  if (held)
+    s_fmv_skip_latch = true; // latch on any Start press so a brief tap collapses the FMV hold
+}
 
 void Tomba2_Install()
 {
@@ -256,6 +279,7 @@ void Tomba2_Install()
     psxport_add_hook(0x80011414, 0x3C028004, WhoopeeSkip); // Whoopee loop top (lui $v0,0x8004)
     psxport_add_hook(0x80012164, 0x10600008, DwellSkip);   // inter-stage 200f dwell (beqz $v1)
     psxport_add_hook(0x80050CE4, 0x9482809C, FmvDwellSkip); // post-Whoopee FMV-stage frame dwell
+    psxport_add_hook(0x8008A7B8, 0x3C040280, FmvSkipClear); // prebuffer satisfied -> drop FMV dwell latch
   }
 
   // Live object enumeration: hook the universal per-object cull chokepoint.
