@@ -29,6 +29,22 @@ int psxport_cd_instant = []() {
 int psxport_cdc_log = []() { const char* v = std::getenv("PSXPORT_CDC_LOG"); return (v && *v && *v != '0') ? 1 : 0; }();
 
 uint32_t psxport_last_pc = 0;
+
+// Write-watchpoint. Armed from PSXPORT_WATCHW in the frontend. Logs distinct
+// (pc,val) pairs to stderr so a store in a per-frame loop doesn't spam — each
+// new writing PC or new value prints once, which is exactly the transition log
+// you want when finding who drives a variable.
+uint32_t psxport_watch_addr = PSXPORT_WATCH_OFF;
+extern "C" void psxport_on_write(uint32_t addr, uint32_t val, uint32_t pc, int width)
+{
+  static uint32_t last_pc = 0xFFFFFFFFu, last_val = 0xDEADBEEFu;
+  if (pc == last_pc && val == last_val)
+    return;
+  last_pc = pc;
+  last_val = val;
+  fprintf(stderr, "[WATCHW] f%u pc=%08X writes %08X (w%d) -> [%08X]\n",
+          psxport_frame, pc, val, width, addr);
+}
 unsigned psxport_frame = 0;
 int psxport_gte_capture = 0;
 int psxport_rtp_capture = 0;

@@ -668,6 +668,40 @@ int main(int argc, char** argv)
       p = sep ? sep + 1 : path_start + ram_dumps.back().path.size();
     }
   }
+  // RE aid: PSXPORT_WATCHW="hexaddr" — log every CPU store to that word (the PC
+  // that wrote it + value). Finds the code that owns a variable.
+  if (const char* env = std::getenv("PSXPORT_WATCHW"))
+    psxport_watch_addr = (static_cast<uint32_t>(strtoul(env, nullptr, 16)) & 0x1FFFFC);
+  // RE aid: PSXPORT_POKE="frame:addr=val;A..B:addr=val" — write a 32-bit word into
+  // RAM at a frame (single) or every frame in [A,B] (range, to latch a gate against
+  // the game rewriting it). addr/val are hex (PSX addr masked to 2MB, word-aligned).
+  // Lets gate hypotheses be tested purely via env, then seen via PSXPORT_FRAMEDUMP.
+  struct Poke
+  {
+    unsigned start, end;
+    uint32_t word, val;
+  };
+  std::vector<Poke> pokes;
+  if (const char* env = std::getenv("PSXPORT_POKE"))
+  {
+    const char* p = env;
+    while (*p)
+    {
+      char* e;
+      const unsigned a = static_cast<unsigned>(strtoul(p, &e, 10));
+      unsigned b = a;
+      if (e[0] == '.' && e[1] == '.')
+        b = static_cast<unsigned>(strtoul(e + 2, &e, 10));
+      if (*e != ':')
+        break;
+      const uint32_t addr = static_cast<uint32_t>(strtoul(e + 1, &e, 16)) & 0x1FFFFF;
+      if (*e != '=')
+        break;
+      const uint32_t val = static_cast<uint32_t>(strtoul(e + 1, &e, 16));
+      pokes.push_back({a, b, addr >> 2, val});
+      p = (*e == ';') ? e + 1 : e;
+    }
+  }
   // RE aid: PSXPORT_FRAMEDUMP="frame:path.ppm;frame:path.ppm" — exact-frame framebuffer
   if (const char* env = std::getenv("PSXPORT_FRAMEDUMP"))
   {
@@ -684,7 +718,9 @@ int main(int argc, char** argv)
       p = sep ? sep + 1 : path_start + g_frame_dumps.back().second.size();
     }
   }
-  // RE aid: PSXPORT_MEMWATCH="hexaddr,hexaddr:path" — per-frame CSV of bytes
+  // RE aid: PSXPORT_MEMWATCH="hexaddr,hexaddr:path" — per-frame CSV of 32-bit words
+  // (aligned, hex). Gates are words, not bytes; reading bytes hides word values and
+  // wrap (a +1/frame counter's low byte looks like it "resets" at 256).
   std::vector<uint32_t> watch_addrs;
   FILE* watch_fp = nullptr;
   if (const char* env = std::getenv("PSXPORT_MEMWATCH"))
@@ -696,7 +732,7 @@ int main(int argc, char** argv)
       while (p < colon)
       {
         char* end;
-        watch_addrs.push_back(static_cast<uint32_t>(strtoul(p, &end, 16)) & 0x1FFFFF);
+        watch_addrs.push_back((static_cast<uint32_t>(strtoul(p, &end, 16)) & 0x1FFFFF) >> 2);
         p = (*end == ',') ? end + 1 : colon;
       }
       watch_fp = fopen(colon + 1, "w");
@@ -782,7 +818,7 @@ int main(int argc, char** argv)
       {
         fprintf(watch_fp, "%u", g_frame);
         for (const uint32_t a : watch_addrs)
-          fprintf(watch_fp, ",%u", g_ram[a]);
+          fprintf(watch_fp, ",%08x", reinterpret_cast<const uint32_t*>(g_ram)[a]);
         fprintf(watch_fp, "\n");
       }
       for (const RamDump& rd : ram_dumps)
@@ -796,6 +832,9 @@ int main(int argc, char** argv)
           }
         }
       }
+      for (const Poke& pk : pokes)
+        if (g_frame >= pk.start && g_frame <= pk.end)
+          reinterpret_cast<uint32_t*>(g_ram)[pk.word] = pk.val;
       g_inject_buttons = g_tomba2 ? Tomba2_FrameTick(g_ram) : 0;
       // Hold Start during the intro logos to fast-forward through them (they're
       // load masks — can't be jumped past, only sped up). Not automatic.

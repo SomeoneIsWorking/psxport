@@ -77,6 +77,15 @@ void psxport_on_gpu_flip(uint32_t value);
 /* Last emulated PC seen by the hook layer (watchdog diagnostics). */
 extern uint32_t psxport_last_pc;
 
+/* Write-watchpoint (RE aid): when psxport_watch_addr != PSXPORT_WATCH_OFF, every
+   CPU store whose target word (masked to 2MB) equals it reports the writing PC,
+   value and width to psxport_on_write. Finds the code that owns a variable — e.g.
+   the scene orchestrator that writes the scene-phase word. psxport_last_pc is the
+   store instruction's PC (on_pc runs per-instruction whenever hooks exist). */
+#define PSXPORT_WATCH_OFF 0xFFFFFFFFu
+extern uint32_t psxport_watch_addr; /* physical byte addr & 0x1FFFFC, or OFF */
+void psxport_on_write(uint32_t addr, uint32_t val, uint32_t pc, int width);
+
 /* Host frame counter (set by the frontend; stamps debug logs). */
 extern unsigned psxport_frame;
 
