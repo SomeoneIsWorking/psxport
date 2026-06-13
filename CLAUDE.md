@@ -34,10 +34,16 @@ CC-BY-NC-ND-4.0 — NON-distributable — so it was removed from this repo entir
 re-vendor it or commit any DuckStation source/binary.)
 
 ## PC port runtime (scope change #3, 2026-06-12)
-`runtime/` is the actual PC port: Beetle PSX (mednafen) sources imported into our
-build (vendor/beetle-psx submodule + patches/beetle-psx/, GPL-2 = distributable),
-interpreter-only, with a PC-keyed native-override layer (`runtime/psxport_hooks.*`,
-signature-checked for overlay safety) and per-game modules (`runtime/games/`).
+`runtime/` is the actual PC port: it compiles the Beetle PSX (mednafen) sources
+directly into `wide60rt` (GPL-2 = distributable), interpreter-only, with a
+PC-keyed native-override layer (`runtime/psxport_hooks.*`, signature-checked for
+overlay safety) and per-game modules (`runtime/games/`). Our Beetle changes live
+**directly in a committed fork** — the `vendor/beetle-psx` submodule points at our
+public fork (github.com/SomeoneIsWorking/beetle-psx-libretro, branch `psxport`),
+and we edit its source in place. Do NOT maintain Beetle changes as out-of-tree
+.patch files applied to a pristine upstream (the user dislikes that workflow —
+keep the fork). Beetle only carries generic emulator primitives + the hook
+call-sites; all HLE BIOS / game logic stays in `runtime/`.
 Build: `make -C runtime`.
 Run: `runtime/wide60rt <chd> -bios <dir> -play` (OpenBIOS as scph5501.bin works;
 `-fastboot` requires a retail BIOS — hangs under OpenBIOS).
