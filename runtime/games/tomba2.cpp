@@ -203,6 +203,22 @@ int DwellSkip(uint32_t, uint32_t* gpr, uint32_t*)
   return PSXPORT_HOOK_CONTINUE;
 }
 
+// Inter-FMV logo-hold skip. The StrPlayer holds the Whoopee logo (a streamed
+// clip) ~5.6s after FMV#1 by spinning in the wait loop at 0x801076B0:
+//   loop: if 0x80089bac(a0=2, ctx)==0 -> keep waiting; else -> dispatch the
+//   "advance to next clip" (0x8008CC30 with event word 0x1C0). RE chain:
+//   0x80050D00 state machine -> 0x8008179C/0x80050D44 -> ... -> this wait. The
+//   gate is purely a time/stream wait; FMV#2 reached early plays glitch-free
+//   (verified). Forcing the loop's exit branch (0x801076D8 `beqz v0`) by setting
+//   v0!=0 makes the StrPlayer advance immediately. Gated on Start so it's the
+//   user's "skip" — and only collapses this wait, no game state faked.
+int LogoSkip(uint32_t, uint32_t* gpr, uint32_t*)
+{
+  if (s_skip_held)
+    gpr[2] = 1; // $v0 != 0 -> wait loop exits -> advance to FMV#2
+  return PSXPORT_HOOK_CONTINUE;
+}
+
 // RE probe (PSXPORT_T2_STATEPROBE): the StrPlayer dispatch at 0x80050D00 reads
 // the clip state byte *(s5+0x19c). Log s5 + that byte once/frame to find the
 // real state variable (gpr[21]=s5; byte may be main-RAM or scratchpad).
@@ -300,6 +316,15 @@ void Tomba2_Install()
 
   if (std::getenv("PSXPORT_T2_STATEPROBE") != nullptr)
     psxport_add_hook(0x80050D00, 0x92A3019C, StateProbe);
+
+  // Inter-FMV logo-hold skip — WIP, opt-in (PSXPORT_T2_LOGOSKIP). 0x801076D8 is
+  // the advance EXECUTION (only runs at the natural advance frame), NOT the
+  // per-frame wait, so this hook does not yet skip the hold. The real gate is the
+  // data-driven "logo clip stream ended" check in the per-frame tick (RE'd to the
+  // advance chain 0x8010753C->0x801076B0->0x8008CC30, but the trigger is upstream
+  // and stream-end-driven). See journal 2026-06-14.
+  if (std::getenv("PSXPORT_T2_LOGOSKIP") != nullptr)
+    psxport_add_hook(0x801076D8, 0x1040FFFC, LogoSkip);
 
   // Live object enumeration: hook the universal per-object cull chokepoint.
   s_objlog = std::getenv("PSXPORT_T2_OBJLOG") != nullptr;

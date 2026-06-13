@@ -125,6 +125,8 @@ extern int psxport_bios_log;
    store instruction's PC (on_pc runs per-instruction whenever hooks exist). */
 #define PSXPORT_WATCH_OFF 0xFFFFFFFFu
 extern uint32_t psxport_watch_addr; /* physical byte addr & 0x1FFFFC, or OFF */
+extern const uint8_t* psxport_ram_ptr; /* main RAM, for watchpoint backtraces */
+void psxport_backtrace(void);           /* heuristic MIPS stack trace to stderr */
 void psxport_on_write(uint32_t addr, uint32_t val, uint32_t pc, int width);
 
 /* Host frame counter (set by the frontend; stamps debug logs). */

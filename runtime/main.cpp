@@ -902,6 +902,7 @@ int main(int argc, char** argv)
   }
 
   g_ram = static_cast<uint8_t*>(retro_get_memory_data(RETRO_MEMORY_SYSTEM_RAM));
+  psxport_ram_ptr = g_ram; // for watchpoint backtraces (PSXPORT_WATCHW_BT)
 
   // HLE BIOS (pure native, no MIPS ROM). Bring-up flag PSXPORT_HLE_BIOS=1.
   if (const char* v = std::getenv("PSXPORT_HLE_BIOS"))

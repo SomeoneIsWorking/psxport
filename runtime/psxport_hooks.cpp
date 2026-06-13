@@ -90,8 +90,40 @@ void psxport_prof_report(int top)
 // new writing PC or new value prints once, which is exactly the transition log
 // you want when finding who drives a variable.
 uint32_t psxport_watch_addr = PSXPORT_WATCH_OFF;
+const uint8_t* psxport_ram_ptr = nullptr; // set at init; for watchpoint backtraces
+
+// Heuristic MIPS stack backtrace: scan $sp upward for word-aligned text addresses
+// preceded by a jal/jalr (return addresses). Prints the call chain so a flag's
+// writer can be chased up to its decision site (vs poking the flag).
+void psxport_backtrace(void)
+{
+  const uint8_t* ram = psxport_ram_ptr;
+  if (!ram) return;
+  const uint32_t* gpr = psxport_cpu_gpr();
+  fprintf(stderr, "    bt: pc=%08X ra=%08X\n", psxport_last_pc, gpr[31]);
+  const uint32_t sp = gpr[29] & 0x1FFFFF;
+  int found = 0;
+  for (uint32_t off = 0; off < 0x1000 && found < 20; off += 4) {
+    if (sp + off + 4 > 0x200000) break;
+    uint32_t w; memcpy(&w, ram + sp + off, 4);
+    if ((w & 0xF0000003) == 0x80000000 && (w & 0x1FFFFF) >= 0x8000 && (w & 0x1FFFFF) < 0x1FFFF8) {
+      uint32_t prev; memcpy(&prev, ram + ((w - 8) & 0x1FFFFF), 4);
+      const bool is_jal = (prev >> 26) == 3;
+      const bool is_jalr = ((prev >> 26) == 0) && ((prev & 0x3F) == 9);
+      if (is_jal || is_jalr) {
+        char tgt[16] = "reg";
+        if (is_jal) snprintf(tgt, sizeof(tgt), "%08X", ((w - 8) & 0xF0000000) | ((prev & 0x3FFFFFF) << 2));
+        fprintf(stderr, "      sp+%03X ret=%08X (-> %s)\n", off, w, tgt);
+        found++;
+      }
+    }
+  }
+}
+
 extern "C" void psxport_on_write(uint32_t addr, uint32_t val, uint32_t pc, int width)
 {
+  static int s_bt = -1;
+  if (s_bt < 0) s_bt = std::getenv("PSXPORT_WATCHW_BT") ? 1 : 0;
   static uint32_t last_pc = 0xFFFFFFFFu, last_val = 0xDEADBEEFu;
   if (pc == last_pc && val == last_val)
     return;
@@ -100,6 +132,7 @@ extern "C" void psxport_on_write(uint32_t addr, uint32_t val, uint32_t pc, int w
   const uint32_t ra = psxport_cpu_gpr()[31]; // caller (return address)
   fprintf(stderr, "[WATCHW] f%u pc=%08X ra=%08X writes %08X (w%d) -> [%08X]\n",
           psxport_frame, pc, ra, val, width, addr);
+  if (s_bt) psxport_backtrace();
 }
 unsigned psxport_frame = 0;
 
