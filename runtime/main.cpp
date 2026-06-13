@@ -68,7 +68,7 @@ uint8_t* g_ram = nullptr;
 bool g_tomba2 = false;
 uint16_t g_inject_buttons = 0; // game-module scoped injections
 uint16_t g_repl_buttons = 0;   // REPL-held pad bits (press/release), for driving in
-bool g_module_turbo = false;   // game module requests fast-forward (load masks)
+bool g_module_turbo = false;   // game module requests fast-forward (Start-held intro skip)
 bool g_wide60 = false;         // reprojecting 60fps renderer (PSXPORT_WIDE60)
 
 // Display enhancements fed to the Beetle core as libretro options. The software
@@ -836,8 +836,10 @@ int main(int argc, char** argv)
         if (g_frame >= pk.start && g_frame <= pk.end)
           reinterpret_cast<uint32_t*>(g_ram)[pk.word] = pk.val;
       g_inject_buttons = g_tomba2 ? Tomba2_FrameTick(g_ram) : 0;
-      // Hold Start during the intro logos to fast-forward through them (they're
-      // load masks — can't be jumped past, only sped up). Not automatic.
+      // Hold Start during the intro to fast-forward through the logos (SCEA +
+      // Whoopee Camp). The scene orchestrator paces the intro by a VSync/CD
+      // ready-signal, so fast-forward is the clean skip; see Tomba2_WantTurbo and
+      // docs/tomba2-scene-orchestrator.md. Button-driven only, never automatic.
       const bool skip_held = (g_buttons & (1 << RETRO_DEVICE_ID_JOYPAD_START)) != 0;
       g_module_turbo = g_tomba2 && Tomba2_WantTurbo(g_ram, g_frame, skip_held);
     }

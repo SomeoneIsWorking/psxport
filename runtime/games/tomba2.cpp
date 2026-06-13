@@ -11,8 +11,11 @@
 
 namespace {
 uint32_t s_render_hits = 0;
-bool s_logo_skip = true;          // intro-logo skip (PSXPORT_T2_NOSKIP=1 disables)
-uint32_t s_last_logo_clock = 0;   // last logo audio-stream clock (tick detect)
+
+// Intro scene-phase word, driven by the orchestrator scene_update (0x8002C97C);
+// see docs/tomba2-scene-orchestrator.md. 0 = SCEA license screen, 1/2 = transition
+// + asset load, 3/4 = Whoopee Camp logo and the opening cutscene render loop.
+constexpr uint32_t kScenePhase = 0x675CC;
 
 int RenderEntryHeartbeat(uint32_t, uint32_t*, uint32_t*)
 {
@@ -141,9 +144,6 @@ void Tomba2_Install()
       psxport_add_hook(s.pc, s.instr, CullSlti);
   }
 
-  // Intro-logo skip is on by default; PSXPORT_T2_NOSKIP=1 disables it for RE.
-  s_logo_skip = std::getenv("PSXPORT_T2_NOSKIP") == nullptr;
-
   // Live object enumeration: hook the universal per-object cull chokepoint.
   s_objlog = std::getenv("PSXPORT_T2_OBJLOG") != nullptr;
   psxport_add_hook(0x8007712C, 0x00051400, ObjectCull);
@@ -168,38 +168,8 @@ uint32_t Tomba2_GetAndResetRenderHits()
   return v;
 }
 
-// Intro-logo skip (verified RE). 0x800253EC is the intro-sequence STEP the
-// license/logo loop polls: it stays 0 for the whole license + Whoopee Camp
-// jingle, the game sets it to 1 the instant the jingle finishes (natural
-// transition at frame ~1180 -> issues CD Pause, loads the next overlay), then
-// advances to 7 and the main overlay becomes resident at 0x8005082C.
-// Forcing 0->1 while the jingle is playing reproduces that exact transition
-// ~480 frames early (verified: forcing it at f700 cut the jingle at f701 and
-// ran the identical overlay-load sequence). We gate tightly so only the intro
-// logo is affected, never later streamed cutscenes (where the step is already
-// >0): act only while the step is still 0, the main overlay is NOT yet resident
-// (0x8005082C == 0), and the logo audio stream clock (0x8011824C) is ticking
-// (the jingle is actually playing). This is a state write, not a code patch —
-// it sets the flag to the same value the game itself writes at f1180.
-void LogoSkip(uint8_t* ram)
-{
-  uint32_t step, overlay, clock;
-  memcpy(&step, ram + 0x253EC, 4);
-  memcpy(&overlay, ram + 0x5082C, 4);
-  memcpy(&clock, ram + 0x11824C, 4);
-  const bool ticking = (clock != s_last_logo_clock);
-  s_last_logo_clock = clock;
-  if (step == 0 && overlay == 0 && ticking)
-  {
-    const uint32_t one = 1;
-    memcpy(ram + 0x253EC, &one, 4);
-  }
-}
-
 uint16_t Tomba2_FrameTick(uint8_t* ram)
 {
-  if (s_logo_skip)
-    LogoSkip(ram);
   // s_obj_ptr now holds the objects submitted during the previous retro_run.
   if (s_objlog && s_obj_n)
   {
@@ -229,27 +199,24 @@ uint16_t Tomba2_FrameTick(uint8_t* ram)
 
 bool Tomba2_WantTurbo(const uint8_t* ram, unsigned frame, bool skip_held)
 {
-  // The license text and Whoopee Camp logo are LOAD MASKS, not skippable
-  // segments (verified: input can't jump past the load; the segment-end code is
-  // absent from RAM until the loader finishes, then the logo runs out its
-  // jingle). So we never fast-forward automatically — only while the user holds
-  // the skip button, and only during the mask region:
+  // Skip the intro logos (SCEA license + Whoopee Camp) by fast-forwarding while
+  // the skip button is held — never automatically. The whole intro is paced by
+  // the kernel ready-signal (scene_update -> dwell gate -> advance pump, see
+  // docs/tomba2-scene-orchestrator.md), so running the emulation faster makes
+  // those dwells elapse AND lets the asset loaders finish. We deliberately do
+  // NOT force the scene-advance event: that races the loaders and reproduces the
+  // white-screen "Whoopee Camp doesn't play" bug. (That bug's other cause — the
+  // old auto-skip writing into the pointer at 0x800253EC — is now removed.)
+  (void)frame;
   if (!skip_held)
     return false;
-  // Skip-button held — fast-forward while either holds:
-  //  - the main game overlay is not yet resident (0x8005082C empty during
-  //    BIOS/license/early logo, game code from ~frame 1989), or
-  //  - the logo stream clock at 0x8011824C is still ticking (it advances
-  //    every frame during the logo segment and freezes at its end; verified
-  //    frozen during the in-engine intro cutscene).
-  // Frame cap as a safety net against later overlay swaps / streams.
-  if (frame > 6000)
-    return false;
-  uint32_t overlay, clock;
-  memcpy(&overlay, ram + 0x5082C, 4);
-  memcpy(&clock, ram + 0x11824C, 4);
-  static uint32_t last_clock = 0;
-  const bool ticking = (clock != last_clock);
-  last_clock = clock;
-  return overlay == 0 || ticking;
+  // The orchestrator drives the scene phase only during the attract/intro
+  // sequence. Phases 0..5 + 7 cover SCEA, the Whoopee Camp logo and the loads
+  // between them; phase 6 is the terminal/idle handoff. Once a state machine
+  // hasn't been initialised (game proper), the word reads outside 0..7. NOTE:
+  // the opening cutscene shares phase 3/4 with the logo, so a held Start also
+  // fast-forwards into the cutscene — that's acceptable "skip the intro".
+  uint32_t phase;
+  memcpy(&phase, ram + kScenePhase, 4);
+  return phase <= 5 || phase == 7;
 }
