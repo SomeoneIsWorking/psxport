@@ -139,6 +139,14 @@ void psxport_irq_ack(uint16_t bits);
    the psxport runtime, not here. */
 void psxport_cpu_set_pc(uint32_t pc);
 
+/* Generic emulator primitive: advance the core by exactly one PSX video field
+   (the body of libretro's retro_run, minus the frontend loop). Emits the frame
+   via the registered video/audio callbacks. The psxport runtime calls this from
+   its own play loop so it owns frame pacing (and can later insert interpolated
+   in-between frames for wide60), rather than delegating the loop to retro_run.
+   From libretro.c. */
+void psxport_emulate_frame(void);
+
 /* Diagnostics: registers + heuristic MIPS stack trace (scans the emulated
    stack for plausible return addresses: RAM text address preceded by a
    jal/jalr). ram = 2MB main RAM. */

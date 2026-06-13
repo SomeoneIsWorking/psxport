@@ -92,6 +92,7 @@ const char* g_internal_res = "4x"; // beetle_psx_internal_resolution; PSXPORT_IN
 bool g_widescreen = true;          // beetle_psx_widescreen_hack; PSXPORT_NOWIDE disables
 const char* g_ws_aspect = "16:9";  // beetle_psx_widescreen_hack_aspect_ratio
 float g_aspect = 4.0f / 3.0f;      // core-reported display aspect (updated from av_info)
+double g_fps = 59.94;              // core-reported native field rate (updated from av_info); the play loop's wall-clock pacing target
 
 // --- runtime logging -----------------------------------------------------
 // Frame-stamped events to stderr. The emulated TTY (BIOS A0:3C / B0:3D
@@ -825,10 +826,12 @@ int main(int argc, char** argv)
     retro_get_system_av_info(&av);
     if (av.geometry.aspect_ratio > 0.0f)
       g_aspect = av.geometry.aspect_ratio;
+    if (av.timing.fps > 1.0)
+      g_fps = av.timing.fps; // pace the play loop to the PSX's real field rate, not the monitor
     char msg[96];
-    snprintf(msg, sizeof(msg), "internal_res=%s widescreen=%s aspect=%.3f base=%ux%u",
+    snprintf(msg, sizeof(msg), "internal_res=%s widescreen=%s aspect=%.3f base=%ux%u fps=%.3f",
              g_internal_res ? g_internal_res : "1x", g_widescreen ? g_ws_aspect : "off", g_aspect,
-             av.geometry.base_width, av.geometry.base_height);
+             av.geometry.base_width, av.geometry.base_height, g_fps);
     RtLog("disp", msg);
   }
 
@@ -1277,16 +1280,63 @@ int main(int argc, char** argv)
   }
   else if (g_play)
   {
+    // psxport owns the play loop: drive Beetle one PSX field at a time via the
+    // generic primitive psxport_emulate_frame() (not retro_run), and pace to the
+    // core's real field rate g_fps using a monotonic wall clock. Vsync alone is
+    // NOT a correct throttle — it ties emulation speed to the monitor refresh, so
+    // a >60 Hz display fast-forwards the game; the limiter below makes speed
+    // independent of the panel. Tab (g_ff_hold) bypasses pacing on purpose.
+    const Uint64 perf_freq = SDL_GetPerformanceFrequency();
+    const double frame_ticks = (1.0 / g_fps) * static_cast<double>(perf_freq);
+    Uint64 deadline = SDL_GetPerformanceCounter();
+    // Optional: PSXPORT_FPSLOG=1 prints the measured present rate ~once a second,
+    // so the wall-clock pacing can be confirmed (should track g_fps, not the
+    // monitor refresh).
+    const bool fpslog = std::getenv("PSXPORT_FPSLOG") != nullptr;
+    Uint64 fps_t0 = SDL_GetPerformanceCounter();
+    unsigned fps_frames = 0;
     for (g_frame = 0; !g_quit; g_frame++)
     {
-      const unsigned steps = (g_ff_hold || g_module_turbo) ? 8 : 1;
+      const bool turbo = g_ff_hold || g_module_turbo;
+      const unsigned steps = turbo ? 8 : 1;
       for (unsigned s = 0; s < steps; s++, g_frame += (s < steps ? 1 : 0))
       {
         g_present_this_run = (s == steps - 1); // present/queue only the last
         per_frame();
-        retro_run();
+        psxport_emulate_frame();
       }
       g_present_this_run = true;
+
+      if (turbo)
+      {
+        deadline = SDL_GetPerformanceCounter(); // resync; no pacing while fast-forwarding
+        continue;
+      }
+      // Advance the deadline by exactly one frame so the long-run average rate is
+      // precisely g_fps regardless of per-frame jitter. Sleep most of the
+      // remainder (vsync present absorbs the last ~ms tear-free); if we fell more
+      // than a frame behind (a hitch), resync instead of trying to catch up.
+      deadline += static_cast<Uint64>(frame_ticks);
+      const Uint64 now = SDL_GetPerformanceCounter();
+      if (now < deadline)
+      {
+        const double rem_ms = static_cast<double>(deadline - now) * 1000.0 / static_cast<double>(perf_freq);
+        if (rem_ms > 1.0)
+          SDL_Delay(static_cast<Uint32>(rem_ms - 0.5));
+      }
+      else if (static_cast<double>(now - deadline) > frame_ticks)
+      {
+        deadline = now;
+      }
+
+      if (fpslog && ++fps_frames >= 120)
+      {
+        const Uint64 t = SDL_GetPerformanceCounter();
+        const double secs = static_cast<double>(t - fps_t0) / static_cast<double>(perf_freq);
+        fprintf(stderr, "[fps] %.2f (target %.2f)\n", fps_frames / secs, g_fps);
+        fps_t0 = t;
+        fps_frames = 0;
+      }
     }
   }
   else
