@@ -13,8 +13,9 @@ if(NOT TARGET zstd::libzstd_shared)
   set_target_properties(zstd::libzstd_shared PROPERTIES IMPORTED_LOCATION "${ZSTD_LIBRARY}")
 endif()
 
-add_subdirectory(vendor/duckstation/dep/lzma EXCLUDE_FROM_ALL)
-add_subdirectory(vendor/duckstation/dep/libchdr EXCLUDE_FROM_ALL)
+# libchdr (CHD access for tools/discdump) comes from the Beetle PSX submodule;
+# it bundles its own lzma (chdr-lzma). DuckStation was removed from this repo.
+add_subdirectory(vendor/beetle-psx/deps/libchdr EXCLUDE_FROM_ALL)
 
 add_subdirectory(common)
 add_subdirectory(tools)

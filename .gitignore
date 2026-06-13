@@ -24,3 +24,6 @@ scratch/
 runtime/obj/
 runtime/wide60rt
 bios/scph5501.bin
+
+# OpenBIOS source: reproducible build input (scripts/build-openbios.sh clones it); not vendored
+vendor/openbios-src/
