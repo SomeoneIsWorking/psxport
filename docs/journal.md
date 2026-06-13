@@ -1,5 +1,39 @@
 # Debug / progress journal
 
+## 2026-06-14 (later 2) — inter-FMV logo skip: deep RE, new tooling, NOT yet cracked
+**User's actual goal:** pressing Start during FMV#1 skips it, but then there's a
+**~5.6s gap to FMV#2** they want gone. Reproduced: skip FMV#1@f380 → FMV#2 ReadS@f719
+(=339 frames), the SAME fixed-duration hold as the no-input case (f842→f1181).
+- **Structure:** FMV#1 is played/skipped by the **boot EXE** (0x8001xxxx, ReadS
+  lastpc=0x80017E58). The logo + FMV#2 (OPS.STR) are the **MAIN.EXE StrPlayer**
+  (0x8008xxxx). After FMV#1 the StrPlayer holds the **Whoopee logo as a static load
+  mask** (screenshot: bright logo f880-1000, black f1120) while streaming the logo
+  clip (jingle) for its fixed duration, then advances to FMV#2.
+- **NEW TOOLING (committed):** scoped PC-trace ring (`PSXPORT_PCTRACE="lo-hi"` +
+  REPL `pctrace`), CPU-scratchpad access (REPL `sr`/`sw8`, accessors in cpu.c) —
+  games keep hot state in the scratchpad (0x1F800xxx), invisible to main-RAM tools;
+  DMA3-arm + CD-cmd-write issuing-PC logs; StateProbe (PSXPORT_T2_STATEPROBE).
+- **RE via pctrace (diff advancing frame vs waiting frame):** the advance runs a
+  code path absent on waiting frames → command-complete handler **0x80085Exx**
+  (clears flag *(0x800AAD1A)) → caller **0x80050D00** (StrPlayer state machine:
+  reads scratchpad state `*(s5+0x19c)=0x1F80019C`; s5=0x1F800000) → dispatch
+  **0x8008179C** → advance work (0x8008A6EC, 0x8008B4B8 load FMV#2 group + ReadS).
+- **The trigger is the logo clip's STREAM END** (last CD command completing), not a
+  pokeable flag. Every candidate is an EFFECT, verified by poking (no early FMV#2):
+  scratchpad state byte 0x1F80019C (0→2, but changes AFTER the ReadS), 0x800AC2D4
+  (active-stream count 3→4), 0x800AC299, 0x800BF8A7, main-RAM 1/frame counter
+  0x800A5ADC. Forcing the counter high BREAKS progression.
+- **Read acceleration = CONFIRMED DEAD END** (3 tests + journal): the reads are
+  clamped to the StrPlayer consumer-ack (one batch/vblank); forcing faster delivery
+  wedges the CD pipe (0 sectors), and the logo hold is real-time/audio-clocked, not
+  read-bound (XAFAST = 0 frame change).
+- **OPEN:** no clean override found. The advance is data-driven (stream end). NEXT
+  candidates: (a) find the StrPlayer command-list position / stream frame-count that
+  the command-complete handler checks for "last command", and force it; (b) make a
+  native override INVOKE the advance dispatch (0x8008179C path) directly on Start
+  during the logo. FMV#2 reached early is verified glitch-free (fmv-skip.md), so the
+  risk is only WHICH state to drive, not early playback.
+
 ## 2026-06-14 (later) — HLE FMV#2 stall FIXED (new threads seeded IEc=0); prebuffer is VBLANK-paced
 - **FIX (committed d3fd1a2):** `open_thread()` seeded a fresh thread's SR by copying
   the creator's saved TCB SR. Tomba2's StrPlayer OpenThreads the FMV#2 prebuffer thread
