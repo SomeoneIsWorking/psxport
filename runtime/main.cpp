@@ -40,6 +40,10 @@ std::string g_system_dir = ".";
 std::string g_dump_dir;
 unsigned g_dump_interval = 0;
 unsigned g_frame = 0;
+// RE aid: PSXPORT_FRAMEDUMP="frame:path.ppm;frame:path.ppm" — capture the exact
+// framebuffer at specific frames (works headless; honors PSXPORT_WIDE/_INTERNAL_RES
+// so the same moment can be captured under different display configs for analysis).
+std::vector<std::pair<unsigned, std::string>> g_frame_dumps;
 
 retro_pixel_format g_pixel_format = RETRO_PIXEL_FORMAT_0RGB1555;
 
@@ -259,10 +263,9 @@ bool EnvironmentCb(unsigned cmd, void* data)
   }
 }
 
-void WriteFramePPM(const void* data, unsigned width, unsigned height, size_t pitch)
+void WriteFramePPMPath(const void* data, unsigned width, unsigned height, size_t pitch,
+                       const char* path)
 {
-  char path[1024];
-  snprintf(path, sizeof(path), "%s/frame_%06u.ppm", g_dump_dir.c_str(), g_frame);
   FILE* fp = fopen(path, "wb");
   if (!fp)
     return;
@@ -293,10 +296,21 @@ void WriteFramePPM(const void* data, unsigned width, unsigned height, size_t pit
   fclose(fp);
 }
 
+void WriteFramePPM(const void* data, unsigned width, unsigned height, size_t pitch)
+{
+  char path[1024];
+  snprintf(path, sizeof(path), "%s/frame_%06u.ppm", g_dump_dir.c_str(), g_frame);
+  WriteFramePPMPath(data, width, height, pitch, path);
+}
+
 void VideoCb(const void* data, unsigned width, unsigned height, size_t pitch)
 {
   if (data && !g_dump_dir.empty() && g_dump_interval && (g_frame % g_dump_interval) == 0)
     WriteFramePPM(data, width, height, pitch);
+  if (data)
+    for (const auto& fd : g_frame_dumps)
+      if (fd.first == g_frame)
+        WriteFramePPMPath(data, width, height, pitch, fd.second.c_str());
 
   if (!g_play || !data || !g_present_this_run)
     return;
@@ -652,6 +666,22 @@ int main(int argc, char** argv)
       const char* sep = strchr(path_start, ';');
       ram_dumps.push_back({f, sep ? std::string(path_start, sep) : std::string(path_start)});
       p = sep ? sep + 1 : path_start + ram_dumps.back().path.size();
+    }
+  }
+  // RE aid: PSXPORT_FRAMEDUMP="frame:path.ppm;frame:path.ppm" — exact-frame framebuffer
+  if (const char* env = std::getenv("PSXPORT_FRAMEDUMP"))
+  {
+    const char* p = env;
+    while (*p)
+    {
+      char* end;
+      const unsigned f = static_cast<unsigned>(strtoul(p, &end, 10));
+      if (*end != ':')
+        break;
+      const char* path_start = end + 1;
+      const char* sep = strchr(path_start, ';');
+      g_frame_dumps.push_back({f, sep ? std::string(path_start, sep) : std::string(path_start)});
+      p = sep ? sep + 1 : path_start + g_frame_dumps.back().second.size();
     }
   }
   // RE aid: PSXPORT_MEMWATCH="hexaddr,hexaddr:path" — per-frame CSV of bytes
