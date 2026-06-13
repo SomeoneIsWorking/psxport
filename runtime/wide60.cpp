@@ -67,6 +67,18 @@ inline uint32_t SxyKey(int32_t sx, int32_t sy)
   return ((uint32_t)(sx & 0xFFFF) << 16) | (uint32_t)(sy & 0xFFFF);
 }
 
+// GP0 vertex coordinates are an 11-bit signed field (the GPU only reads 11
+// bits, like beetle's sign_x_to_s32(11, ...)); the upper bits of the packet
+// word are not part of the coordinate. Extract them the same way so they match
+// the GTE SXY (also clamped to [-1024,1023]).
+inline int16_t Coord11(uint32_t w)
+{
+  int32_t v = w & 0x7FF;
+  if (v & 0x400)
+    v -= 0x800;
+  return (int16_t)v;
+}
+
 void OnGteCr(unsigned which, uint32_t value)
 {
   if (which < 32)
@@ -129,8 +141,8 @@ void OnGpuPoly(uint32_t cc, const uint32_t* cb, int32_t /*off_x*/, int32_t /*off
   {
     p.color[i] = (gouraud && i > 0) ? (cb[w++] & 0xFFFFFF) : color0;
     const uint32_t xy = cb[w++];
-    p.x[i] = (int16_t)(xy & 0xFFFF);
-    p.y[i] = (int16_t)(xy >> 16);
+    p.x[i] = Coord11(xy);
+    p.y[i] = Coord11(xy >> 16);
     if (textured)
     {
       const uint32_t uv = cb[w++];
