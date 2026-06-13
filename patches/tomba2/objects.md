@@ -106,6 +106,18 @@ PRIOR flip-segment's projections. The <100% remainder is 2D geometry (UI / text 
 2D backgrounds) that never goes through RTPS — those correctly snap, not lerp.
 NEXT: hook the flip for proper frame boundaries, then match/interp/rasterize.
 
+UPDATE: flip boundaries done (GP1 0x05 tap). Flip-segmented join = ~56-65% of
+drawn vertices (78% peak). The unjoined ~35-44% splits into:
+ (a) ~120-140 polys/flip that DECODE to out-of-range coords (>11-bit) — GP0
+     polygon-variant decode edge cases in wide60 OnGpuPoly still to fix; and
+ (b) genuinely CPU-projected geometry (Tomba 2 computes terrain/background
+     screen coords on the CPU, not via GTE/RTPS — confirmed earlier), which a
+     pure-RTPS reprojection renderer cannot reach by construction.
+IMPLICATION: a pure-RTPS reprojection renderer covers only the GTE-projected
+subset for Tomba 2. Handling the rest needs either a CPU-projection tap (hard
+RE) or a screen-space fallback (hold/snap, or a global camera-shift estimate)
+for non-GTE polys. Decision pending.
+
 ## Status / next
 - [x] cull/submit chokepoint (0x8007712C) — enumerates all live objects by ptr
 - [x] full 0xC4 object struct mapped (pos 16.16 @+0x2c, rot matrix @+0x98,

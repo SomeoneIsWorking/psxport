@@ -59,6 +59,8 @@ std::vector<Poly> s_polys;
 
 // per-frame stats
 unsigned s_stat_polys = 0, s_stat_verts = 0, s_stat_joined = 0, s_stat_joined_prev = 0;
+unsigned s_unj_tex = 0, s_unj_flat = 0;
+long long s_unj_tex_area = 0, s_unj_flat_area = 0;
 
 inline uint32_t SxyKey(int32_t sx, int32_t sy)
 {
@@ -163,6 +165,29 @@ void OnGpuPoly(uint32_t cc, const uint32_t* cb, int32_t /*off_x*/, int32_t /*off
   }
   s_stat_polys++;
   s_polys.push_back(p);
+
+  // Diagnostic: classify unjoined polys (no vertex matched a projection). Is
+  // the unjoined remainder 2D UI (small/untextured) or CPU-projected terrain
+  // (large/textured)? Determines whether the RTPS-coverage cap matters.
+  bool any_joined = false;
+  for (int i = 0; i < nv; i++)
+    any_joined |= (p.xform_id[i] >= 0);
+  if (!any_joined)
+  {
+    int16_t minx = p.x[0], maxx = p.x[0], miny = p.y[0], maxy = p.y[0];
+    for (int i = 1; i < nv; i++)
+    {
+      minx = p.x[i] < minx ? p.x[i] : minx;
+      maxx = p.x[i] > maxx ? p.x[i] : maxx;
+      miny = p.y[i] < miny ? p.y[i] : miny;
+      maxy = p.y[i] > maxy ? p.y[i] : maxy;
+    }
+    const int area = (maxx - minx) * (maxy - miny);
+    if (textured)
+      s_unj_tex++, s_unj_tex_area += area;
+    else
+      s_unj_flat++, s_unj_flat_area += area;
+  }
 }
 
 // Display flip = frame boundary. The just-finished segment's draws (s_polys,
@@ -174,9 +199,11 @@ void OnFlip(uint32_t /*value*/)
 {
   if (s_verbose && s_stat_verts)
   {
-    fprintf(stderr, "[flip %6u] polys=%u verts=%u joined=%u (%.0f%%) sameSeg=%u xforms=%zu\n", s_flip_count,
-            s_stat_polys, s_stat_verts, s_stat_joined, s_stat_verts ? 100.0 * s_stat_joined / s_stat_verts : 0.0,
-            s_stat_joined_prev, s_xforms.size());
+    fprintf(stderr,
+            "[flip %6u] polys=%u verts=%u joined=%u (%.0f%%) | unjoined polys: tex=%u(area~%lld) flat=%u(area~%lld)\n",
+            s_flip_count, s_stat_polys, s_stat_verts, s_stat_joined,
+            s_stat_verts ? 100.0 * s_stat_joined / s_stat_verts : 0.0, s_unj_tex,
+            s_unj_tex ? s_unj_tex_area / s_unj_tex : 0, s_unj_flat, s_unj_flat ? s_unj_flat_area / s_unj_flat : 0);
   }
   s_flip_count++;
   // roll the projection window: this segment's projections become 'previous'
@@ -186,6 +213,8 @@ void OnFlip(uint32_t /*value*/)
   s_polys.clear();
   s_cur_xform = -1;
   s_stat_polys = s_stat_verts = s_stat_joined = s_stat_joined_prev = 0;
+  s_unj_tex = s_unj_flat = 0;
+  s_unj_tex_area = s_unj_flat_area = 0;
 }
 
 } // namespace
