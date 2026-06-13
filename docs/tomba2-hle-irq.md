@@ -263,3 +263,23 @@ INT1->DMA3(CDROM) path that needs faithful per-sector delivery, not instant-CD.
 
 Residual: one intermittent `CdlSetloc` Sync timeout (f848) despite assert_CD=1 — same
 delivery-race class.
+
+### FMV-ring rule-outs + the real shape (2026-06-13)
+- **Not the mode-0x2000 callback gap.** The HLE never invokes mode-0x2000 event
+  callbacks (hle_kernel.cpp:139,468 "NOT invoked"), but bioslog shows every OpenEvent
+  the game makes has **func=0** (classes F0000009/F0000011/F4000001, spec 0x04/0x20,
+  mode 0x2000) — they're WaitEvent/TestEvent events, NOT callbacks, and none are CDROM
+  (F0000003). So wiring callbacks won't help the FMV.
+- **Not instant-CD.** `cd 0` (instant-CD off) under HLE leaves it equally stuck.
+- **The shape:** the CDC raises ~1156 CD INTs (1123 INT1 data-ready) and they get acked
+  ~1156× (the game POLLS the response FIFO — reading it acks), yet only ~13 reach the
+  main exception (pending=0004) and only ~17 DMAs occur. So the game streams the FMV by
+  **polling the CD FIFO**, not the main CD IRQ, and is NOT DMAing each ready sector into
+  the StrPlayer ring buffer — so the ring never reaches its prebuffer target and the
+  StrPlayer spins in the wait at 0x8008AE6C (per-command counter @0x8010274C).
+- NEXT: trace the StrPlayer per-sector read/DMA issue path (0x8008AE00 issues the reads;
+  the read helper is ~0x8008B0C8 per docs/tomba2-fmv-skip.md) under HLE — find where the
+  per-sector CDROM DMA (DMA3) is gated/skipped: is the data-ready poll seeing beetle's
+  INT1? does the game arm DMA3 but it doesn't transfer? Watchpoint the ring write index
+  and the DMA3 CHCR. The fix is in the CD-streaming data path, not the event/IRQ core
+  (which now works).
