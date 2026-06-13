@@ -182,6 +182,43 @@ emulated VBLANK/IRQ/HW registers:
   `0x1F801074`; callback table @`0x800256F0`, mask `0xD` = VBLANK+CDROM+DMA).
 - **`0x800181E8`** = I_MASK halfword get/set.
 
+## HLE BIOS — the decisive fix for the Whoopee→FMV load dwell (2026-06-13)
+The residual Whoopee→FMV slowness was NOT game logic and NOT raw CD transfer.
+A PC-sampling profile of the black dwell (`prof N` in the REPL) is **0% game,
+~56% BIOS ROM, ~44% kernel RAM**: the CPU sits entirely in OpenBIOS
+`cdromBlockReading` (ROM `0xBFC03A9C`) doing a per-sector Setloc→SeekL→ReadN→
+Pause cadence with blocking `TestEvent` spins (`0xBFC05774`). `bioslog` showed
+the game read its 162 KiB main EXE (81 sectors → `0x80010000`) plus ISO
+metadata through this one routine.
+
+Fix = **HLE the BIOS routine** (runtime `BiosHleCdBlockRead`, hook at
+`0xBFC03A9C` sig `0x24A30096` = `addiu v1,a1,0x96` i.e. `sector+=150`):
+read the sectors from the CHD straight into PSX RAM at host speed
+(`psxport_hle_cd_read2048` in cdc.c), set `v0=count`, return to `ra`. The
+events it waits on are internal to the routine, so this is a complete
+emulation. **LBA mapping (critical):** `cdromBlockReading` adds 150 to form an
+absolute MSF, but SeekL→`AMSF_to_LBA`→`ABA_to_LBA` subtracts 150 again, so
+CDIF is handed the original filesystem LBA — read `lba+i`, **NOT** `lba+150`
+(the +150 overshoot reads garbage and wedges the load). User data = 2048 bytes
+at offset 24 of the 2352 raw sector (Mode2/Form1). Generic (OpenBIOS, not
+per-game), signature-checked; `PSXPORT_BIOS_HLE=0` opts out for RE/oracle.
+
+Two CDC pacing fixes landed alongside (submodule `2e7969b`): bit8 excludes only
+`MODE_STRSND` not the stray `MODE_CDDA` bit (the loader uses `Mode=0x01` data
+ReadN; real CD-DA plays via Play/DS_PLAYING which never sets
+`psxport_read_is_readn`); and the seek-arm rotational-settle term (~451584 cyc
+@1x) collapses to a small fixed delay for non-STRSND reads under instant-CD
+bit1.
+
+**Result (Start held):** EXE+metadata load instantly at f3–6, intro state
+machine done by f16, CDDA music `Play` at f16, FMV `ReadS`/XA stream at ~f29,
+FMV on screen at **f45** — vs content not appearing until **~f240** before
+(~160 frames / ~2.7 s removed). The FMV itself stays real-time XA (do not
+accelerate STRSND); `FmvDwellSkip` handles skipping it on held Start.
+Dead end removed: the bit64 "unbounded consumer-paced delivery" experiment
+deadlocked BIOS CD init (defer-forever when the consumer legitimately isn't
+draining) and is gone; bit8 already delivers consumer-paced without deadlock.
+
 ## Tooling added this session
 - **REPL `shot <path>`** (runtime/main.cpp): dump the current presented framebuffer
   to a PPM on demand while driving via `-repl`. VideoCb caches the last frame
