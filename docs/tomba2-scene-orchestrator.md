@@ -167,6 +167,39 @@ event), `0x8006E0CC` (job-stack index), and the elapsed counter `0x800654AC`
 during SCEA either no-ops (the VSync machinery re-manages the fields) or stalls
 (the job never reports done) — never a clean advance.
 
+## Job-VM dig: the hold is framework-driven, not a pokeable timer (2026-06-13)
+
+Followed the instruction to keep reversing the job VM toward a zero-frame skip.
+Findings, in order:
+
+- The SCEA hold (phase 0, ~f207–305, ~98 frames) is **not a spin-wait**: PC
+  coverage over a hold gap (f70–140) executes **5962 unique code words** vs ~2900
+  during a CD load burst. The game is doing real per-frame work in the gap.
+- The hold is **not a single frame counter**: no word counts *down* to 0 across
+  the hold; the up-counters that do exist (e.g. `0x800654AC`, 0→~95 over the hold)
+  are **free-running, not the gate** — poking `0x800654AC=1000` mid-SCEA did NOT
+  end it early (SCEA still advanced on time).
+- The advance at f305 is the **phase-0 handler itself** calling enqueue_advance
+  (watchpoint on the event struct: f305 write has `ra=0x8002C9F4`, inside the
+  handler). The handler only runs once the event is already pending, so the hold
+  is upstream in the async callback chain set up at f207 by `0x80039338`.
+- That setup registers handlers through an **OO dispatch**: `0x800319B0` does a
+  virtual call into a scene object at `[0x80078B84]` (method offsets 0x10/0x14/
+  0x18), and `0x8004725C` installs **GPU/DMA completion callbacks** (the
+  `[0x8008xxxx]=1` stubs at 0x8004718C–0x800471DC). The intro is an
+  object/method async state framework, not a flat timer loop.
+
+**Verdict:** there is no single timer/flag whose poke yields a clean zero-frame
+skip — the hold is real per-frame work dispatched through the engine's async
+object framework, part CD-load-bound and part display-hold. A zero-frame skip
+would require either driving the scene object's state machine through its own
+methods (re-implementing the transition the engine does), or hooking the
+streaming/decompression to complete in one frame — both are large, fragile,
+game-specific efforts. **Fast-forward (shipped) is the correct practical skip**:
+it collapses the framework's per-frame work to near-zero wall-clock while letting
+every load/decompress/transition complete exactly as the engine intends. This is
+the documented terminal conclusion of the job-VM investigation.
+
 ## Tooling used (reusable)
 - `PSXPORT_WATCHW="hexaddr"` — log every CPU store to a word (writing PC + value
   + caller `$ra`). Found the orchestrator from the scene-phase variable, and the
