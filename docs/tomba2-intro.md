@@ -309,3 +309,54 @@ expects a valid pointer/handle. Surfaced UNIMPL (return-0 stubs) at the crash:
 A0(0x44) FlushCache, A0(0x49), B0(0x15), B0(0x35), B0(0x57), C0(0x02)
 SysEnqIntRP, C0(0x03) SysDeqIntRP. Implement these (esp. the EnqIntRP/event/dev
 ones) next; the IRQ path itself is complete.
+
+## HLE BIOS Stage 4 — remaining syscalls + f1284 crash root cause (2026-06-13)
+Implemented the syscalls the intro hits past Stage 3 (all in `runtime/hle_kernel.cpp`,
+identified from the nocash psx-spx table):
+- **A0(0x44) FlushCache** — no-op (interpreter has no I-cache), v0=0.
+- **A0(0x49) GPU_cw(gp0)** — no-op v0=0 (game writes GP0/GP1 via MMIO directly;
+  this helper's result is unused; no generic GP0 accessor in this stage).
+- **B0(0x15) Krom2RawAdd** — return -1; Tomba2's int-init discards it.
+- **B0(0x35) FileWrite(fd,buf,len)** — fd 1/2 -> emit to TTY (stderr); return len.
+- **B0(0x57) GetB0Table** — returns a native HLE work page (0x8000F000). Tomba2's
+  int-init (0x80017D54) reads `table[+0x16C]` to reach a control struct Q and
+  derives BIOS pad-handler entry points `Q+0x884`/`Q+0x894` that it later `jr`s to.
+  We publish Q at 0x8000E000 with `jr $ra;nop` no-op stubs at +0x884/+0x894 (pad
+  is serviced natively, so these are correctly no-ops). Region 0x8000E000-0x10000
+  is BIOS-reserved + verified-zero in fresh and mid-intro RAM dumps.
+- **C0(0x02) SysEnqIntRP / C0(0x03) SysDeqIntRP** — maintain a real per-priority
+  singly-linked interrupt-handler chain in PSX RAM (elem->next at word0). NOTE:
+  Tomba2's root dispatcher (0x800182D8) reads I_STAT directly and does NOT walk
+  this chain, so for this game it is bookkeeping — but it's faithful, not a no-op.
+
+VERIFIED: with these syscalls (and the *pristine* Stage-3 hle_irq), the game now
+reaches the **FMV at 700x480 by f1000** exactly as the ROM-BIOS path does — the
+syscalls cause no regression. (Bisected: "pristine hle_irq + new hle_kernel" ->
+700x480; the syscalls were each checked individually.)
+
+### f1284 crash is NOT a missing syscall — it is a Stage-3 IRQ-prologue RACE
+The `UNHANDLED exception code=4 (ADEL) at epc=0x0000000E` is unchanged by the new
+syscalls (B0(0x57) returning a real table fixed the *jr-to-null-table* path the
+journal earlier suspected, but the crash persists). Root-caused with a write
+watchpoint on the corrupted stack slot:
+```
+f1283 pc=80019B98 ra=8001A188 writes 80018DF8 -> [001FFE74]   ; live frame slot
+f1283 pc=800182DC ra=80000040 writes 0000000E -> [001FFE74]   ; dispatcher clobbers it
+```
+0x800182DC is the dispatcher prologue (`sw $s1,0x14($sp)`), `ra=0x80000040` = our
+IRQ trampoline sentinel. The Stage-3 trampoline runs the game's root dispatcher as
+a subroutine **on the interrupted thread's $sp**. When a VBLANK IRQ lands in the
+1-instruction gap of a callee's prologue (between `addiu $sp,-N` and `sw $ra,..($sp)`),
+the not-yet-saved $ra slot is still dispatcher-reachable scratch; the dispatcher's
+own prologue write lands on it, so when that callee (0x8001A0C8) later runs its
+epilogue `lw $ra,0x34($sp); jr $ra` it jumps to 0x0000000E -> AdEL.
+
+Tried: a **dedicated IRQ/exception stack** (switch $sp to a private page on
+dispatch, restore on RFE — what the real BIOS does). It STOPS the f1284 crash but
+**regresses progression**: the game then never reaches 700x480 (stuck 280x240),
+because the dispatcher / its event callbacks depend on running on the interrupted
+stack (or the private stack interferes). So the SP-switch is the wrong shape here.
+Reverted; hle_irq.cpp left pristine. NEXT: a faithful fix needs to save the
+interrupted context to a separate area WITHOUT changing the SP the dispatcher
+runs on — e.g. only redirect the *return* path, or detect the prologue-gap race.
+The new syscalls are correct and kept; the IRQ-race is the standalone next blocker.

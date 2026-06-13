@@ -11,8 +11,12 @@
 //   B0(0x07) DeliverEvent  B0(0x08) OpenEvent   B0(0x09) CloseEvent
 //   B0(0x0A) WaitEvent     B0(0x0B) TestEvent   B0(0x0C) EnableEvent
 //   B0(0x0D) DisableEvent
-//   B0(0x18) ResetEntryInt B0(0x19) HookEntryInt B0(0x5B) ChangeClearPAD
+//   B0(0x15) Krom2RawAdd (ret discarded by Tomba2's int-init)
+//   B0(0x18) ResetEntryInt B0(0x19) HookEntryInt B0(0x35) FileWrite
+//   B0(0x57) GetB0Table    B0(0x5B) ChangeClearPAD
+//   A0(0x44) FlushCache    A0(0x49) GPU_cw
 //   C0(0x00) EnqueueTimerAndVblankIrqs  C0(0x01) EnqueueSyscallHandler
+//   C0(0x02) SysEnqIntRP   C0(0x03) SysDeqIntRP
 //   C0(0x07) InstallExceptionHandlers   C0(0x08) SysInitMemory
 //   C0(0x0A) ChangeClearRCnt            C0(0x0C) InitDefInt
 //   C0(0x12) InstallDevices             C0(0x1C) AdjustA0Table
@@ -27,6 +31,8 @@
 // not block (there is no scheduler to block on); it returns immediately.
 
 #include "hle_bios.h"
+#include <cstdio>
+#include <cstdlib>
 
 // ---------------------------------------------------------------------------
 // Heap allocator
@@ -166,6 +172,74 @@ static int ev_index(uint32_t id) {
 }
 
 // ---------------------------------------------------------------------------
+// Native HLE BIOS work area (laid down in otherwise-unused PSX RAM)
+// ---------------------------------------------------------------------------
+// The real BIOS keeps its jump tables and a per-process "kernel control" struct
+// in low RAM and exposes the table base via GetB0Table()/GetC0Table(). Tomba2's
+// interrupt-system init (0x80017D54) does:
+//     P = GetB0Table();  Q = *(P + 0x16C);
+//     handlerA = Q + 0x884;  handlerB = Q + 0x894;   // stored, then `jr`'d to
+//     clear 11 words at Q+0x594.. ; clear 9 words at Q+0x62C..
+// i.e. it derives BIOS-internal pad/callback handler entry points from a struct
+// reachable through the B0 table, and JUMPS to them on Enable/DisablePad. Under
+// a pure-HLE BIOS there is no ROM holding those handlers, so we publish a
+// self-consistent native work area: a B0-table-shaped page P whose [+0x16C] slot
+// points at a control struct Q, with a `jr $ra; nop` no-op stub physically at
+// Q+0x884 and Q+0x894 (the addresses the game jumps to). Pad input is serviced
+// natively in our runtime, so these BIOS pad handlers are correctly no-ops.
+//
+// Region 0x8000E000.. is BIOS-reserved and unused by the EXE (loads at
+// 0x80010000) — verified zero in fresh + mid-intro RAM dumps.
+static const uint32_t HLE_WORK_BASE = 0x8000E000u; // control struct Q
+static const uint32_t HLE_B0TABLE   = 0x8000F000u; // fake B0 jump table P
+static const uint32_t HLE_STUB_A    = HLE_WORK_BASE + 0x884u; // jr $ra; nop
+static const uint32_t HLE_STUB_B    = HLE_WORK_BASE + 0x894u;
+static bool s_work_inited = false;
+
+static void work_area_init(uint8_t* ram) {
+	if (s_work_inited) return;
+	s_work_inited = true;
+	// `jr $ra; nop` = 0x03E00008, 0x00000000 (MIPS, LE).
+	hle_w32(ram, HLE_STUB_A + 0, 0x03E00008u); hle_w32(ram, HLE_STUB_A + 4, 0);
+	hle_w32(ram, HLE_STUB_B + 0, 0x03E00008u); hle_w32(ram, HLE_STUB_B + 4, 0);
+	// B0 table P: slot at +0x16C points at the control struct Q. (The game only
+	// ever reads this one slot; the rest of the table page stays zero.)
+	hle_w32(ram, HLE_B0TABLE + 0x16Cu, HLE_WORK_BASE);
+}
+
+// ---------------------------------------------------------------------------
+// Interrupt-handler priority chain (C0:0x02 SysEnqIntRP / 0x03 SysDeqIntRP)
+// ---------------------------------------------------------------------------
+// SysEnqIntRP(priority, elem) links `elem` (a PSX struct {next, handler,
+// verifier, ...}) into the kernel's interrupt-handler chain for that priority
+// slot; SysDeqIntRP unlinks it. The real BIOS root handler walks these chains
+// calling each verifier/handler. Tomba2's own root dispatcher (0x800182D8,
+// invoked by hle_irq.cpp) reads I_STAT directly and does NOT walk this chain, so
+// for this game the chain is bookkeeping — but we maintain it faithfully (real
+// singly-linked list per priority, head kept in our native work area) rather
+// than no-op'ing, so any consumer that does walk it sees a consistent list.
+static const int HLE_NUM_PRIORITY = 4; // BIOS priorities 0..3
+static uint32_t s_int_chain_head[HLE_NUM_PRIORITY] = {0,0,0,0};
+
+static void sys_enq_int_rp(uint8_t* ram, uint32_t pri, uint32_t elem) {
+	if (pri >= (uint32_t)HLE_NUM_PRIORITY || elem == 0) return;
+	// Push onto the head: elem->next = head; head = elem. (elem->next is word[0].)
+	hle_w32(ram, elem + 0, s_int_chain_head[pri]);
+	s_int_chain_head[pri] = elem;
+}
+
+static void sys_deq_int_rp(uint8_t* ram, uint32_t pri, uint32_t elem) {
+	if (pri >= (uint32_t)HLE_NUM_PRIORITY || elem == 0) return;
+	uint32_t cur = s_int_chain_head[pri];
+	if (cur == elem) { s_int_chain_head[pri] = hle_r32(ram, elem + 0); return; }
+	while (cur) {
+		uint32_t next = hle_r32(ram, cur + 0);
+		if (next == elem) { hle_w32(ram, cur + 0, hle_r32(ram, elem + 0)); return; }
+		cur = next;
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Dispatcher for the stateful kernel functions. Returns 1 if handled (with
 // gpr[V0] set), 0 if not ours. Called from psxport_hle_syscall().
 // ---------------------------------------------------------------------------
@@ -205,6 +279,19 @@ extern "C" int psxport_hle_kernel(char table, uint32_t fnum, uint32_t* gpr, uint
 		}
 		case 0x39: // InitHeap(addr, size) -> void
 			heap_init(a0, a1);
+			gpr[HLE_R_V0] = 0;
+			return 1;
+		case 0x44: // FlushCache() -> void : flush the I-cache after self-modifying
+			// code / overlay loads. The interpreter has no host code cache, so
+			// there is nothing to invalidate; safe no-op.
+			gpr[HLE_R_V0] = 0;
+			return 1;
+		case 0x49: // GPU_cw(gp0cmd) -> void : send one command word to GP0. The
+			// game writes GP0/GP1 directly via MMIO for all its real drawing; this
+			// BIOS helper is used only for incidental commands and its result is
+			// not consumed. We have no generic GP0-write accessor in this stage, so
+			// model it as a no-op (does not affect the crash path or rendering of
+			// the game's own direct GPU writes). v0=0.
 			gpr[HLE_R_V0] = 0;
 			return 1;
 		case 0x72: // _96_remove() -> void : CD-device teardown counterpart of
@@ -294,6 +381,37 @@ extern "C" int psxport_hle_kernel(char table, uint32_t fnum, uint32_t* gpr, uint
 			return 1;
 		}
 
+		case 0x15: // Krom2RawAdd(shiftjis) -> kanji-ROM glyph ptr (-1 if invalid).
+			// Tomba2 calls this from its interrupt-system init (0x800179E0) but
+			// DISCARDS the return (the next instruction overwrites v0). There is no
+			// kanji font ROM under HLE; return -1 (the BIOS "invalid code" result),
+			// which is the safe sentinel for any caller that does inspect it.
+			gpr[HLE_R_V0] = 0xFFFFFFFFu;
+			return 1;
+
+		case 0x35: { // FileWrite(fd, buf, len) -> bytes written. Tomba2 uses this
+			// only as the BIOS write() backing TTY (fd 1/2) for debug strings. Emit
+			// stdout/stderr to our TTY sink (stderr); any other fd has no host file,
+			// so report the full count as written (success) without storing.
+			const uint32_t fd = a0, buf = a1, len = gpr[HLE_R_A2];
+			if (fd == 1 || fd == 2) {
+				for (uint32_t i = 0; i < len; i++) fputc(hle_r8(ram, buf + i), stderr);
+			}
+			gpr[HLE_R_V0] = len;
+			return 1;
+		}
+
+		case 0x57: { // GetB0Table() -> ptr to the BIOS B0 jump table. Tomba2 reads
+			// table[+0x16C] to reach a kernel control struct and derives pad-handler
+			// entry points (struct+0x884 / +0x894) it later `jr`s to. Publish our
+			// native work area so those derived pointers land on real `jr $ra`
+			// no-op stubs (pad input is serviced natively). Returning 0 here was the
+			// f1284 crash: table[+0x16C] read garbage -> jr to a junk address.
+			work_area_init(ram);
+			gpr[HLE_R_V0] = HLE_B0TABLE;
+			return 1;
+		}
+
 		case 0x17: // ReturnFromException() -> void. The real BIOS restores the
 			// saved register frame and RFEs. In our HLE, the game's root IRQ
 			// dispatcher calls this near its end, but it ALSO has a normal
@@ -344,6 +462,18 @@ extern "C" int psxport_hle_kernel(char table, uint32_t fnum, uint32_t* gpr, uint
 		case 0x12: // InstallDevices(ttyflag)
 		case 0x1C: // AdjustA0Table()
 			gpr[HLE_R_V0] = 0;
+			return 1;
+		case 0x02: // SysEnqIntRP(priority, elem) -> elem. Link the interrupt-handler
+			// element into our native priority chain (real singly-linked list kept
+			// in PSX RAM via elem->next). Tomba2's root dispatcher reads I_STAT
+			// directly and does not walk this chain, but we maintain it faithfully.
+			work_area_init(ram);
+			sys_enq_int_rp(ram, a0, a1);
+			gpr[HLE_R_V0] = a1;
+			return 1;
+		case 0x03: // SysDeqIntRP(priority, elem) -> elem. Unlink it from the chain.
+			sys_deq_int_rp(ram, a0, a1);
+			gpr[HLE_R_V0] = a1;
 			return 1;
 		case 0x0A: // ChangeClearRCnt(t, flag) -> old flag. Root-counter (timer)
 			// auto-clear toggle. No BIOS-driven root-counter handling here;
