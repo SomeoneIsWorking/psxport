@@ -1,5 +1,27 @@
 # Debug / progress journal
 
+## 2026-06-14 (later) — HLE FMV#2 stall FIXED (new threads seeded IEc=0); prebuffer is VBLANK-paced
+- **FIX (committed d3fd1a2):** `open_thread()` seeded a fresh thread's SR by copying
+  the creator's saved TCB SR. Tomba2's StrPlayer OpenThreads the FMV#2 prebuffer thread
+  from inside a critical section (IEc=0), so it inherited interrupts-disabled and spun
+  forever (the IEc=0 deadlock from the entry below). Fix: force 0x404 (IEp+IM-IP2 = the
+  LeaveCriticalSection enable mask) into the seeded SR. **Verified under pure HLE:** full
+  FMV#2 prebuffer (12 SeekL + ReadN cycles, ReadS@f1181), ~2445 sectors DMA'd, FMV#2
+  renders cleanly (Tomba jungle scene). Pinned via new PSXPORT_CS_LOG (Enter/Leave SR +
+  ChangeThread resumed-IEc) — the last op before the hang was `ChangeThread -> new TCB
+  resume=0x800499E8 newsr IEc0`.
+- **OPEN — the ~5s gap from Whoopee-skip to FMV#2 is a VBLANK-real-time-paced prebuffer**,
+  NOT CD-load-slow and NOT the CPU dwell. Measured: FMV#1 Pause@f842 -> FMV#2 ReadS@f1181
+  (~339f ≈ 5.6s). Reads are instant (instant-CD) but spaced 70->10f apart (ring-drain /
+  consumer-paced, the still-logo MDEC decode at VBLANK rate). The dispatch counter
+  0x800ABDE0 advances exactly 1/frame. **Forcing the 0x80050CE4 pace dwell (76.5% of CPU
+  during prebuffer) saved 0 frames** — so the gate is real-time VBLANK pacing, not CPU
+  spin (contradicts fmv-skip.md's "held-Start saves 120f"; that path also fired other
+  overrides). To make FMV#2 instant on PC needs a native lever on the game's per-frame
+  prebuffer pump rate or its completion gate — fmv-skip.md showed the gate vars resist
+  poking. NEXT: RE the StrPlayer script-processor command list (0x8008AE00, 2-byte
+  records) for a "hold N frames" opcode, or drive the VBLANK prebuffer callback faster.
+
 ## 2026-06-14 — HLE FMV#2 stall ROOT-CAUSED: interrupts stuck disabled (IEc=0), NOT a CD-ring bug
 - **Falsified the prior "FMV ring never fills / lossy CD-IRQ / per-sector DMA" framing**
   (docs/tomba2-hle-irq.md banner added). Frame-stamped probes prove FMV#1 streams fine:
