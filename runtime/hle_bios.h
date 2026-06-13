@@ -60,6 +60,13 @@ int psxport_hle_iso_find(const char* name, uint32_t* out_lba, uint32_t* out_size
 // gpr[29]+0x10, 0x14, ... (o32: first 4 args have reserved stack slots too).
 int psxport_hle_syscall(char table, uint32_t fnum, uint32_t* gpr, uint8_t* ram);
 
+// Stateful kernel services (heap A0:0x33-0x39, events B0:0x07-0x0D, and the
+// kernel-table installer no-ops on A0/B0/C0). Owns persistent native state (the
+// heap arena + event-control-block table), hence a separate translation unit
+// (hle_kernel.cpp). Same return contract as psxport_hle_syscall: 1 = handled
+// (gpr[V0] set), 0 = not ours. Routed to from psxport_hle_syscall().
+int psxport_hle_kernel(char table, uint32_t fnum, uint32_t* gpr, uint8_t* ram);
+
 #ifdef __cplusplus
 }
 #endif

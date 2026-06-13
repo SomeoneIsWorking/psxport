@@ -8,7 +8,11 @@
 
 BEETLE   := ../vendor/beetle-psx
 CORE_DIR := $(BEETLE)
-OBJDIR   := obj
+# Overridable so parallel builds don't clobber each other: e.g. two concurrent
+# agents can `make OBJDIR=obj_a EXE=wide60rt_a` and `make OBJDIR=obj_b EXE=wide60rt_b`
+# in the same checkout (no git worktree needed).
+OBJDIR   ?= obj
+EXE      ?= wide60rt
 
 HAVE_LIGHTREC = 0
 HAVE_CDROM    = 0
@@ -75,9 +79,9 @@ ALL_CXX := $(sort $(SOURCES_CXX))
 OBJS := $(patsubst $(BEETLE)/%.c,$(OBJDIR)/core/%.o,$(ALL_C)) \
         $(patsubst $(BEETLE)/%.cpp,$(OBJDIR)/core/%.o,$(ALL_CXX)) \
         $(OBJDIR)/main.o $(OBJDIR)/psxport_hooks.o $(OBJDIR)/wide60.o $(OBJDIR)/games/tomba2.o \
-        $(OBJDIR)/hle_iso.o $(OBJDIR)/hle_syscalls.o
+        $(OBJDIR)/hle_iso.o $(OBJDIR)/hle_syscalls.o $(OBJDIR)/hle_kernel.o
 
-wide60rt: $(OBJS)
+$(EXE): $(OBJS)
 	$(CXX) -o $@ $(OBJS) $(LDFLAGS)
 
 $(OBJDIR)/main.o: main.cpp
@@ -104,6 +108,10 @@ $(OBJDIR)/hle_syscalls.o: hle_syscalls.cpp hle_bios.h
 	@mkdir -p $(dir $@)
 	$(CXX) -c $(CXXFLAGS) -o $@ $<
 
+$(OBJDIR)/hle_kernel.o: hle_kernel.cpp hle_bios.h
+	@mkdir -p $(dir $@)
+	$(CXX) -c $(CXXFLAGS) -o $@ $<
+
 $(OBJDIR)/core/%.o: $(BEETLE)/%.c
 	@mkdir -p $(dir $@)
 	$(CC) -c $(CFLAGS) -o $@ $<
@@ -113,6 +121,6 @@ $(OBJDIR)/core/%.o: $(BEETLE)/%.cpp
 	$(CXX) -c $(CXXFLAGS) -o $@ $<
 
 clean:
-	rm -rf $(OBJDIR) wide60rt
+	rm -rf $(OBJDIR) $(EXE)
 
 .PHONY: clean

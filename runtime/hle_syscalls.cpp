@@ -17,7 +17,9 @@ static uint32_t s_rand_seed = 1;
 static inline uint8_t* hle_ptr(uint8_t* ram, uint32_t a) { return ram + (a & 0x1FFFFF); }
 
 int psxport_hle_syscall(char table, uint32_t fnum, uint32_t* gpr, uint8_t* ram) {
-	if (table != 'A') return 0;
+	// B0/C0 (and the stateful A0 heap/kernel functions, handled in the default
+	// case below) are owned by the kernel module.
+	if (table != 'A') return psxport_hle_kernel(table, fnum, gpr, ram);
 
 	const uint32_t a0 = gpr[HLE_R_A0];
 	const uint32_t a1 = gpr[HLE_R_A1];
@@ -201,9 +203,11 @@ int psxport_hle_syscall(char table, uint32_t fnum, uint32_t* gpr, uint8_t* ram) 
 		return 1;
 	}
 
-	// Heap services (malloc/free/InitHeap, 0x33-0x39) are owned by the core:
-	// report unhandled so it can route them.
+	// Heap services (malloc/free/calloc/realloc/InitHeap, 0x33-0x39) and the
+	// A0 kernel-table functions (_96_remove 0x72, EnqueueCdIntr 0xA2) are
+	// stateful: route them to the kernel module (returns 0 if it can't handle
+	// it either, so genuinely-unknown calls still get logged upstream).
 	default:
-		return 0;
+		return psxport_hle_kernel('A', fnum, gpr, ram);
 	}
 }
