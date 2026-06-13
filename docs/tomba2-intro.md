@@ -219,6 +219,35 @@ Dead end removed: the bit64 "unbounded consumer-paced delivery" experiment
 deadlocked BIOS CD init (defer-forever when the consumer legitimately isn't
 draining) and is gone; bit8 already delivers consumer-paced without deadlock.
 
+## Inter-FMV "Whoopee Camp logo" 6s gap (2026-06-13, IN PROGRESS)
+User report: "~6 seconds from pressing Enter at Whoopee to the next FMV." Mapped
+the real intro structure (natural, no input): SCEA "presents" text (f0-300) ->
+**FMV#1** (ReadS f334) -> FMV#1 ends (Pause f836) -> 698 KiB overlay load
+(instant via HLE, f839, lba=24 count=349 -> 0x80010000) -> **Whoopee Camp studio
+logo held ~390 frames (~6.5s)** -> **FMV#2** (ReadS f1232). The "Whoopee" the user
+skips is this *studio-logo hold*, not the earlier Whoopee animation.
+
+Root cause of the hold (profiled + watchpointed): it is NOT a load (the overlay
+is already instant) and NOT a simple display timer. During f926-1232 the game
+slow-**prebuffers FMV#2** via direct libcd `Setloc->SeekL->ReadN->Pause`, ONE
+sector per ~16 frames (~19 sectors total), interleaved with the FMV player's
+per-frame display callback (dispatcher `0x80086290` iterates 8 callback slots;
+the logo pace callback at `0x800506C4` cycles counter `0x800E809C` 0->1->2 every
+2 frames, gated by threshold `0x1F800235`). Each read completes in ~4 frames; the
+~12-frame spacing between reads is the GAME pacing itself (confirmed: not CD-speed
+bound -- reads finish fast under instant-CD). This read path does NOT go through
+OpenBIOS `cdromBlockReading`, so the BIOS HLE does not cover it -- it is the game's
+own libcd in the 698 KiB overlay.
+
+`FmvDwellSkip` (0x80050CE4) fires here (13.8M times) but only exits the inner
+1-vblank pace wait (counter 1->2); the logo's overall duration is gated by the
+prebuffer/state machine, so exiting it does not advance -- which is why held-Start
+does not skip this. User chose "skippable on Start." NEXT STEP: RE the FMV
+player's segment/advance state (around `0x800862D0`/`0x80050xxx` in the f839
+overlay; dump RAM at f1000 = scratch/bin/tomba2/ram_f1000.bin) to find the
+"logo done -> start FMV#2" gate and force it on Start. Tooling in place: `prof N`,
+`bioslog` (logs A0/B0/C0 + the HLE + FmvDwellSkip counter/threshold).
+
 ## Tooling added this session
 - **REPL `shot <path>`** (runtime/main.cpp): dump the current presented framebuffer
   to a PPM on demand while driving via `-repl`. VideoCb caches the last frame

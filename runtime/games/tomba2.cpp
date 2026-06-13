@@ -208,8 +208,16 @@ int DwellSkip(uint32_t, uint32_t* gpr, uint32_t*)
 // (same technique as DwellSkip; the loop's own work still runs each iteration).
 // Collapses the dead black pre-roll between Whoopee and the visible FMV (~100f);
 // verified the movie itself stays intact and the run reaches the title/New Game.
-int FmvDwellSkip(uint32_t pc, uint32_t*, uint32_t* redirect_pc)
+int FmvDwellSkip(uint32_t pc, uint32_t* gpr, uint32_t* redirect_pc)
 {
+  if (psxport_bios_log)
+  {
+    uint32_t counter = 0;
+    if (s_ram) memcpy(&counter, s_ram + ((gpr[4] - 0x7f64) & 0x1FFFFF), 2);
+    fprintf(stderr, "[fmvdwell f%u] held=%d counter=%u threshold=%u rem=%d\n",
+            psxport_frame, (int)s_skip_held, counter & 0xFFFF, gpr[3] & 0xFFFF,
+            (int)(gpr[3] & 0xFFFF) - (int)(counter & 0xFFFF));
+  }
   if (!s_skip_held)
     return PSXPORT_HOOK_CONTINUE;
   *redirect_pc = 0x50CF8 | (psxport_last_pc & 0xE0000000); // loop exit
