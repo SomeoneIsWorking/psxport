@@ -92,52 +92,66 @@ Verified (Start held from boot): sequencer reaches the post-Whoopee FMV stage at
 ~f505 vs ~f1181 baseline (~676 frames / ~11s earlier). With SCEA direct-skip,
 Whoopee is reached ~f396 vs f670 baseline.
 
-## OPEN: loads + paced sequencing are still slow (NEXT — make them PC-instant)
+## Loads: the inter-stage gaps were ARTIFICIAL CD delays (FIXED — instant on PC)
 
-Skipping the logos *unmasks* the inter-stage black/white gaps (SCEA→Whoopee
-≈234 frames even with the logo skipped; then the opening FMV streams in).
+Skipping the logos unmasks the inter-stage black/white gaps. Earlier notes guessed
+these were "the game pacing itself per frame, not disk" and that instant-CD "did not
+shrink the gap" — **both FALSIFIED this session.** The cause was two *artificial*
+CD-command completion delays the emulator models for physical-drive realism, which
+are meaningless on PC (no drive). Found via `cdclog` (the decisive tool — it prints
+every CD command per frame; static disasm of the loader gave only stale leads):
 
-**Measured cause (this is the important part): the gaps are the game PACING ITSELF
-one step per frame, NOT disk latency.** Evidence:
-- VSync-wait trace during the gap: the global frame counter `0x800267B4` ticks +1
-  per real frame and the game waits exactly 1 frame at a time (`0x80017FC4` called
-  with a0 = counter+1). There is NO far-target multi-frame dwell to "satisfy early".
-- `psxport_cd_instant` is a **bitmask** (bit0=1 misc, bit1=2 zero seek, bit2=4 short
-  startup, bit3=8 instant ReadN data). Full mask **15** reaches Whoopee at the SAME
-  f670 as native — making the disk instant does NOT shrink the gap. (Partial masks
-  2/8/10/14 desync the game so it never reaches Whoopee — instant-CD is fragile and
-  cannot be a blanket default.)
+1. **`ReadTOC` (state 5) = the ~53-frame SCEA→Whoopee gap.** The inter-stage machine
+   issues `ReadTOC` at f88; its result lands at f141. `PS_CDC_Command_ReadTOC` returns
+   `30,000,000` cycles (≈0.886s ≈53f) — its own comment calls this "a gross
+   approximation" of the physical TOC-scan time. On PC the TOC is already resident
+   (`CDIF_ReadTOC` is a memcpy). Earlier "instant-CD mask 15 didn't help" was correct
+   *because mask 15 had no ReadTOC bit* — the conclusion "not disk-bound" was the
+   error.
+2. **`Pause` completion = the Whoopee→FMV per-sector cost.** The asset loader does
+   `Setloc→SeekL→Setmode→ReadN→Pause` **per single sector**; `PS_CDC_Command_Pause`'s
+   ACK→COMPLETE delay is `(1,124,584 + …)·… + rand` ≈ ~1.1M cyc ≈ **2 frames every
+   Pause**. Hundreds of sectors × 2f = the bulk of the gap. Also "an approximation"
+   of drive spin-down; instant on PC.
+
+**FIXED (`vendor/beetle-psx/.../cdc.c`, gated on `psxport_cd_instant`):**
+- **bit 16** → `ReadTOC` returns a 50000-cyc ACK→COMPLETE headroom instead of 30M.
+- **bit 32** → `Pause` returns 50000-cyc headroom instead of ~1.1M.
+- The PC-port default is now the **full mask `0x3F`** (`runtime/main.cpp`); override
+  `PSXPORT_CD_INSTANT=0` for native HW timing in RE/oracle runs. Streaming (XA/STRSND)
+  audio keeps native pacing (bit 8 excludes it), so FMV audio is unaffected.
+
+**Verified, full pipeline, mask `0x3F`, no desync/crash:** boot → (logos skipped) →
+inter-stage machine completes **f70** (was f163) → FMV → title menu → New Game →
+opening story text → in-level 3D scene. The ~53f ReadTOC gap is gone; per-sector
+Pause cost dropped ~22×.
 
 ### Inter-stage state machine `0x80011a78` (keyed on `*(0x80025454)`, jump table @`0x80010054`)
 One call runs the whole load/transition, looping internally through states 1→0x13.
 Per-state timing (Start held, direct logo skip), via `PSXPORT_WATCHW=80025454`:
-- states 1–5 instant; **state 5→6 ≈53 frames** (REAL CD/load wait: state-5 handler
-  `0x80011D64` polls `0x800123b0` load-status + flags `0x8002544c` — LEFT INTACT,
-  forcing it races the loader = white screen).
+- **state 5→6**: was ≈53f = the `ReadTOC` above (now instant via bit 16). State-5
+  handler `0x80011D64` polls `0x800123b0` (which the game uses to await the TOC/queue
+  result); with ReadTOC instant the poll satisfies immediately — no race, no white
+  screen (the earlier "forcing it races the loader" fear was about poking the flag,
+  not about making the underlying CD op fast).
 - states 6–0xD instant; **state 0xE→0xF ≈200 frames** = a PURE timed dwell (handler
-  `0x80012148`: `wait until counter > *(0x80038498)+0xC8`, screen black).
+  `0x80012148`: `wait until counter > *(0x80038498)+0xC8`, screen black) — collapsed
+  by `DwellSkip` (below).
 - states 0xF–0x13 instant → state machine returns, Whoopee begins.
 
-**COLLAPSED (implemented):** `DwellSkip` @`0x80012164` forces state 0xE's own
-advance path on Start → Whoopee now enters **f163** vs f364 (and f670 no-skip). The
-remaining inter-stage time is just the ~53f real load.
+**COLLAPSED (implemented):** `DwellSkip` @`0x80012164` forces state 0xE's own advance
+path on Start. With the CD fixes + DwellSkip the machine now finishes ~f70.
 
-### FMV phase — NEXT FRONTIER (separate overlay subsystem)
-After the logos, the opening FMV plays. Skipping the logos unmasks its load (white/
-black, ~f163→~f740). Characterised:
-- **NOT disk-bound:** full instant-CD (mask 15) gives the SAME last-ReadN frame
-  (f743) and does not shrink it. It is per-frame-paced like the inter-stage machine.
-- Uses its OWN timing, not the intro VSync (`0x800267B4` reads 0 here; `0x80017E4C`/
-  `0x80017FC4` not called).
-- Runs from a **separate overlay**, NOT the 0x80010000 EXE: PCCOV intersection of two
-  FMV-load windows = code at **`0x80085000`–`0x8009A000`** (the StrPlayer/MDEC FMV
-  player) plus low kernel/libcd `0x80001000`–`0x80004000`. The FMV stream overwrites
-  the 0x80011xxx/0x80018xxx intro code, consistent with this.
-- The FMV is separately Start-skippable *while playing* (needs a press edge during
-  playback; a held-from-boot Start does not skip it).
-- **TODO:** RE the StrPlayer overlay's per-frame load/decode loop and collapse its
-  pacing dwells the same way (find the per-frame gate / timed wait, force-advance on
-  Start). This is a distinct subsystem and its own RE pass.
+### Whoopee→FMV — STILL HAS NON-CD TIME (open)
+With instant-CD, the residual Whoopee→FMV time is NOT CD: `cdclog` shows two spans
+with **zero CD commands** (≈f163→229 and ≈f234→315 in the explicit-0x3F+skip run)
+between the inter-stage machine and the FMV loader — i.e. game-paced CPU/GPU init,
+not disk. The FMV itself then streams (real-time XA). Open work: characterise the
+no-CD spans (VSync-paced init? a timed dwell like state 0xE?) and collapse them like
+DwellSkip; and make the FMV skippable on *held* Start (currently needs a press edge).
+The FMV player is a separate overlay at **`0x80085000`–`0x8009A000`** (StrPlayer/MDEC)
++ low kernel/libcd `0x80001000`–`0x80004000`; the FMV stream overwrites the
+0x80011xxx/0x80018xxx intro code.
 
 ### Timing/IRQ primitives — mapped, intentionally LEFT EMULATED (do not native-own)
 Owning these natively would fake hardware timing (a bandaid). They depend on the

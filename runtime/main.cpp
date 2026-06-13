@@ -587,8 +587,17 @@ int main(int argc, char** argv)
       SDL_PauseAudioDevice(g_audio, 0);
   }
 
-  if (psxport_cd_instant < 0) // env overrides; bits: 1=seek 2=reset 4=startup 8=ackpace
-    psxport_cd_instant = g_fast_cd ? 0xF : 0;
+  // Instant-CD default for the PC port: there is no physical drive on PC, so disc
+  // operations are instant. Full mask 0x3F = seek(1)+reset(2)+startup(4)+ReadN
+  // pacing(8)+ReadTOC(16)+Pause(32). Verified on Tomba2 through the whole pipeline
+  // (SCEA/Whoopee logos -> FMV -> title -> New Game -> in-level 3D) with no desync;
+  // collapses the artificial CD delays that made loads "take a while". Streaming
+  // (XA/STRSND) audio keeps native timing (bit 8 excludes it), so FMV audio is
+  // unaffected. Override with PSXPORT_CD_INSTANT=0 for native HW timing (RE / oracle
+  // runs that study real loading/CD behavior). -fastcd is now redundant (kept for
+  // back-compat). env (PSXPORT_CD_INSTANT) still wins when set.
+  if (psxport_cd_instant < 0)
+    psxport_cd_instant = 0x3F;
 
   // Display enhancements (widescreen + internal upscale) default ON for
   // interactive play, OFF for headless/RE runs — the wide60 reproject harness
