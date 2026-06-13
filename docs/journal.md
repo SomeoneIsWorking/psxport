@@ -53,8 +53,21 @@
   non-RTPS path (terrain/background = CPU-projected), not a coord nudge or timing
   miss. **User direction: RE + tap the CPU projection path too** (full fidelity,
   not a screen-space fallback).
-- NEXT: determine how terrain is transformed (GTE MVMVA vs pure CPU) -> locate &
-  tap that projection -> then matching/interp/rasterize/present.
+- MVMVA terrain hypothesis FALSIFIED (those ops are lighting, not projection) —
+  terrain is pure-CPU-projected, no GTE op to tap (do-not-retry).
+- **User scoped the renderer:** interpolate only camera + GTE 3D models (RTPS-
+  tappable), leave CPU-projected terrain + 2D UI at 30fps, NO FLICKER top
+  priority. (memory: wide60-scope-decision.)
+- **Core renderer op verified in C++:** wide60 retains per-joined-vertex local
+  coords + the producing transform (s_xforms_prev); ReprojectRTPS (R*V+TR then
+  the verified divide/screen-map) reproduces the game's captured object SXY on
+  **1755/1755 = 100%** of joined verts. So object screen positions can be
+  regenerated from (local, transform) in-runtime -> interpolation = lerp the
+  transform + reproject the same local verts.
+- NEXT: match each object's transform across flip-segments (nearest-TR), build
+  the in-between display list (frame-A polys; GTE-object verts reprojected at the
+  lerped transform; non-GTE polys unchanged = no flicker), rasterize + present
+  A / in-between / B at 60fps.
 
 ## 2026-06-13 — read pacing root-caused via driven debugging; full fast boot chain works
 - **The "stuck on Whoopee logo" class is solved.** Chain of findings, all via the REPL/

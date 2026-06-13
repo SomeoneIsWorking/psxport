@@ -46,13 +46,15 @@ struct Poly
   uint8_t u[4], v[4];
   uint32_t color[4];
   uint16_t clut, tpage;
-  int32_t xform_id[4]; // -1 if a vertex didn't join
+  int32_t xform_id[4];          // -1 if a vertex didn't join (CPU-projected/2D)
+  int16_t lx[4], ly[4], lz[4];  // local (model-space) coords from the join
 };
 
 uint32_t s_cr[32];          // live GTE control-register snapshot
 int32_t s_cur_xform = -1;   // current transform group index
 
-std::vector<Xform> s_xforms;
+std::vector<Xform> s_xforms;                      // this segment's transforms
+std::vector<Xform> s_xforms_prev;                 // previous segment's transforms
 std::unordered_map<uint32_t, VertRef> s_sxy_map;  // this frame: (sx<<16|sy) -> src
 std::unordered_map<uint32_t, VertRef> s_sxy_prev; // previous frame's map
 std::vector<Poly> s_polys;
@@ -148,21 +150,32 @@ uint32_t GteDivide(uint32_t H, uint32_t Z)
 }
 inline int32_t SatI(int32_t v, int32_t lo, int32_t hi) { return v < lo ? lo : v > hi ? hi : v; }
 
-// Project a view-space point (MAC1/2/3 = R*V+TR, the MVMVA result) to screen
-// using the current OFX/OFY/H, exactly as RTPS's divide+screen-map.
-bool ProjectViewSpace(int32_t mac1, int32_t mac2, int32_t mac3, int32_t& sx, int32_t& sy)
+// Project a view-space point (MAC1/2/3 = R*V+TR) to screen, exactly as RTPS's
+// divide + screen-map, using the given OFX/OFY/H.
+bool ProjectFromMac(int64_t mac1, int64_t mac2, int64_t mac3, int32_t ofx, int32_t ofy, uint16_t H, int32_t& sx,
+                    int32_t& sy)
 {
-  const int32_t sz = SatI(mac3, 0, 65535);
+  const int32_t sz = SatI((int32_t)mac3, 0, 65535);
   if (sz == 0)
     return false;
-  const int32_t ir1 = SatI(mac1, -32768, 32767);
-  const int32_t ir2 = SatI(mac2, -32768, 32767);
-  const int32_t ofx = (int32_t)s_cr[24], ofy = (int32_t)s_cr[25];
-  const uint16_t H = (uint16_t)s_cr[26];
+  const int32_t ir1 = SatI((int32_t)mac1, -32768, 32767);
+  const int32_t ir2 = SatI((int32_t)mac2, -32768, 32767);
   const int64_t hds = GteDivide(H, sz);
   sx = SatI((int32_t)((ofx + ir1 * hds) >> 16), -1024, 1023);
   sy = SatI((int32_t)((ofy + ir2 * hds) >> 16), -1024, 1023);
   return true;
+}
+
+// Full RTPS reprojection of a local (model-space) vertex through transform xf:
+// view = R*V + TR (>>12), then perspective divide + screen map. This is the core
+// renderer op — at the captured transform it must reproduce the game's SXY; at an
+// interpolated transform it yields the in-between position.
+bool ReprojectRTPS(const Xform& xf, int32_t lx, int32_t ly, int32_t lz, int32_t& sx, int32_t& sy)
+{
+  const int64_t m1 = (((int64_t)xf.TR[0]) << 12) + (int64_t)xf.R[0] * lx + (int64_t)xf.R[1] * ly + (int64_t)xf.R[2] * lz;
+  const int64_t m2 = (((int64_t)xf.TR[1]) << 12) + (int64_t)xf.R[3] * lx + (int64_t)xf.R[4] * ly + (int64_t)xf.R[5] * lz;
+  const int64_t m3 = (((int64_t)xf.TR[2]) << 12) + (int64_t)xf.R[6] * lx + (int64_t)xf.R[7] * ly + (int64_t)xf.R[8] * lz;
+  return ProjectFromMac(m1 >> 12, m2 >> 12, m3 >> 12, xf.ofx, xf.ofy, xf.H, sx, sy);
 }
 
 void OnRtpVertex(int32_t vx, int32_t vy, int32_t vz, int32_t sx, int32_t sy, uint32_t /*sf*/)
@@ -234,9 +247,13 @@ void OnGpuPoly(uint32_t cc, const uint32_t* cb, int32_t /*off_x*/, int32_t /*off
     const uint32_t key = SxyKey(p.x[i], p.y[i]);
     s_stat_verts++;
     auto it = s_sxy_prev.find(key);
+    p.lx[i] = p.ly[i] = p.lz[i] = 0;
     if (it != s_sxy_prev.end())
     {
       p.xform_id[i] = it->second.xform_id; // NB: indexes the previous segment
+      p.lx[i] = it->second.lx;
+      p.ly[i] = it->second.ly;
+      p.lz[i] = it->second.lz;
       s_stat_joined++;
     }
     else
@@ -310,11 +327,40 @@ void OnFlip(uint32_t /*value*/)
     fprintf(stderr, "\n  (0x01=RTPS 0x30=RTPT 0x06=NCLIP 0x12/0x13=MVMVA/NCDS 0x2D/2E=AVSZ)\n");
   }
 
+  // Verify the core renderer op: reproject each joined object vertex from its
+  // (local coords, transform) and confirm it reproduces the game's captured SXY.
+  // s_polys = this segment's draws; their xform_id indexes s_xforms_prev (the
+  // segment whose projections they joined against).
+  if (s_verbose && !s_xforms_prev.empty() && s_stat_joined > 1000)
+  {
+    unsigned checked = 0, exact = 0;
+    for (const Poly& p : s_polys)
+      for (int i = 0; i < p.nverts; i++)
+        if (p.xform_id[i] >= 0 && p.xform_id[i] < (int)s_xforms_prev.size())
+        {
+          int32_t rx, ry;
+          if (ReprojectRTPS(s_xforms_prev[p.xform_id[i]], p.lx[i], p.ly[i], p.lz[i], rx, ry))
+          {
+            checked++;
+            if (rx == p.x[i] && ry == p.y[i])
+              exact++;
+          }
+        }
+    static bool once = false;
+    if (!once && checked)
+    {
+      once = true;
+      fprintf(stderr, "  REPROJECT-VERIFY: %u/%u object verts reproduced exactly (%.1f%%)\n", exact, checked,
+              100.0 * exact / checked);
+    }
+  }
+
   s_flip_count++;
-  // roll the projection window: this segment's projections become 'previous'
+  // roll the windows: this segment's projections + transforms become 'previous'
   s_sxy_prev.swap(s_sxy_map);
+  s_xforms_prev.swap(s_xforms);
   s_sxy_map.clear();
-  s_xforms.clear(); // (transform list will be retained per-window once matching lands)
+  s_xforms.clear();
   s_polys.clear();
   s_cur_xform = -1;
   s_stat_polys = s_stat_verts = s_stat_joined = s_stat_joined_prev = 0;
