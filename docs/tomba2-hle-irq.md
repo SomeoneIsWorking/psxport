@@ -1,5 +1,16 @@
 # HLE BIOS — the f1284 IRQ crash root cause (2026-06-13)
 
+> **RESOLVED 2026-06-13 (commit 4ad7ff2).** The real bug was the branch-delay-slot
+> exception resume: on an IRQ taken in a `jr $ra` epilogue's delay slot, we resumed at
+> the branch TARGET (`bd ? TAR : epc`) and SKIPPED the delay-slot `addiu $sp,+N`, so the
+> frame never popped → `$sp` leaked by N → the function later read a stale return slot
+> and `jr`'d to 0 (the f961/f1284 derail). Fix: always resume at EPC (the branch), so the
+> branch+delay slot re-execute — faithful MIPS. Combined with the now-implemented kernel
+> thread model (`__globals`/Process/TCB + OpenThread/ChangeThread + TCB exception
+> save/restore), the HLE BIOS now **boots and renders the Whoopee Camp intro logo
+> stably** (was: derail). NEXT blocker: it holds at the intro logo instead of advancing
+> to the FMV/title — a separate issue. The analysis below is kept for the record.
+
 ## Symptom
 With `PSXPORT_HLE_BIOS=1`, Tomba!2 boots, runs to the opening-FMV stage (audio/XA
 plays, a 700×480 buffer is allocated — but it is NOT actually decoding video, per the
