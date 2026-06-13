@@ -736,6 +736,10 @@ int main(int argc, char** argv)
 
   if (g_hle_bios && g_ram)
   {
+    fprintf(stderr,
+            "[hle] *** PSXPORT_HLE_BIOS is WORK-IN-PROGRESS and NOT PLAYABLE yet ***\n"
+            "[hle] *** boots the EXE then black-screens (no IRQ/event delivery, stage 3).\n"
+            "[hle] *** to play, run WITHOUT PSXPORT_HLE_BIOS (uses the BIOS ROM).\n");
     // Trap every A0/B0/C0 syscall to the native BIOS; no ROM dispatcher exists.
     psxport_add_hook(0xA0, 0, HleSyscallHook);
     psxport_add_hook(0xB0, 0, HleSyscallHook);
