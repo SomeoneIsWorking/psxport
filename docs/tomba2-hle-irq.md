@@ -107,6 +107,21 @@ thread-model changes remain UNCOMMITTED (do not ship — verified still-broken).
 Tooling added this pass (committed): `PSXPORT_TRAP_LOWPC` (derail trap). Uncommitted
 debug instrumentation in hle_irq.cpp: `$sp` in the return log + ENTRY log near f960.
 
+### DECISIVE (2026-06-13): the thread model shifts the main thread's stack
+`PSXPORT_WATCHW=1FFF24` comparison:
+- **Baseline (committed, no thread model):** 0x801FFF24 is written **469×** with live
+  values (e.g. `pc=8001ADB0 val=0x801FFF70`, `pc=80011004/8/18` 153× each). The main
+  thread genuinely uses the `0x801FFFxx` stack.
+- **Thread model:** 0x801FFF24 is written **once** (f0, value 0) and never again.
+
+So the thread-model main thread runs on a **different / shifted stack** essentially
+from boot — it is not a late corruption. F later pops to `sp=0x801FFEF0` and reads the
+stale `0x801FFF24`(=0) → `jr 0`. ROOT to chase next: how the thread model sets the main
+thread's `$sp` — (a) thread[0]'s TCB `$sp` initialization at HLE boot, and/or (b) the
+exception entry/exit `$sp` save/restore (incl. the syscall path's `tcb_save`→
+`return_from_exception`/`tcb_load`, which restores `$sp` from the TCB). Diff the main
+thread's `$sp` at boot baseline-vs-thread-model to find where it first diverges.
+
 ## Empirical: partial `__globals` makes it WORSE — it's all-or-nothing (2026-06-13)
 Tried laying down a minimal kernel (just `__globals` @ 0x100 -> Process[0] -> a 4-slot
 TCB array @ 0x8000C000) + saving/restoring the interrupted register file via the
