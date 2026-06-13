@@ -230,6 +230,19 @@ void OnFlip(uint32_t /*value*/)
             s_flip_count, s_stat_verts, s_stat_joined, s_stat_verts ? 100.0 * s_stat_joined / s_stat_verts : 0.0,
             s_rtp_count, unjoined, s_near_unjoined, unjoined ? 100.0 * s_near_unjoined / unjoined : 0.0, s_unj_tex);
   }
+  // one-shot GTE opcode histogram on a 3D-content flip (RE: how is terrain
+  // transformed? RTPS/RTPT vs MVMVA vs none).
+  static bool op_dumped = false;
+  if (s_verbose && !op_dumped && s_stat_verts > 3000)
+  {
+    op_dumped = true;
+    fprintf(stderr, "  GTE op histogram (nonzero):");
+    for (int op = 0; op < 64; op++)
+      if (psxport_gte_op[op])
+        fprintf(stderr, " %02X=%u", op, psxport_gte_op[op]);
+    fprintf(stderr, "\n  (0x01=RTPS 0x30=RTPT 0x06=NCLIP 0x12/0x13=MVMVA/NCDS 0x2D/2E=AVSZ)\n");
+  }
+
   s_flip_count++;
   // roll the projection window: this segment's projections become 'previous'
   s_sxy_prev.swap(s_sxy_map);

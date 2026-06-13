@@ -114,9 +114,20 @@ drawn vertices (78% peak). The unjoined ~35-44% splits into:
      screen coords on the CPU, not via GTE/RTPS — confirmed earlier), which a
      pure-RTPS reprojection renderer cannot reach by construction.
 IMPLICATION: a pure-RTPS reprojection renderer covers only the GTE-projected
-subset for Tomba 2. Handling the rest needs either a CPU-projection tap (hard
-RE) or a screen-space fallback (hold/snap, or a global camera-shift estimate)
-for non-GTE polys. Decision pending.
+subset for Tomba 2. User direction: RE + tap the CPU projection path (full
+fidelity).
+
+## How the terrain is transformed: MVMVA + CPU perspective divide
+GTE op histogram (PSXPORT_WIDE60_LOG, ~3500 flips): RTPT(0x30)=19063,
+RTPS(0x01)=6166, **MVMVA(0x12)=13190**, NCLIP(0x06)=16689, AVSZ3/4=1842/3005.
+The heavy MVMVA use is the terrain: MVMVA does R*V+TR (into IR1/2/3 = view
+space) but NOT the perspective divide / screen mapping — the game does that on
+the CPU. That's why terrain verts never appear in the RTPS SXY capture.
+KEY CONSEQUENCE: the terrain projection is the SAME math as RTPS (R*V+TR then
+OFX/OFY + IR*(H/Z)), just split MVMVA(GTE)+divide(CPU). So our already-verified
+RTPS reprojection reproduces it too — feed it from MVMVA results instead of
+RTPS. NEXT: tap MVMVA (capture input vert + view-space result), reproject with
+our RTPS divide, and confirm terrain coverage jumps.
 
 ## Status / next
 - [x] cull/submit chokepoint (0x8007712C) — enumerates all live objects by ptr

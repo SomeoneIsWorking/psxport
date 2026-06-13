@@ -33,6 +33,7 @@ unsigned psxport_frame = 0;
 int psxport_gte_capture = 0;
 int psxport_rtp_capture = 0;
 int psxport_gpu_capture = 0;
+unsigned psxport_gte_op[64] = {0};
 
 namespace {
 psxport_gte_cr_fn s_gte_cr_fn = nullptr;

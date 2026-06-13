@@ -47,6 +47,10 @@ extern int psxport_cdc_log;
 extern int psxport_gte_capture;
 void psxport_on_gte_cr(unsigned which, uint32_t value);
 
+/* GTE opcode histogram (RE aid): when psxport_gte_capture != 0, GTE_Instruction
+   counts executed ops by (instr & 0x3F). Indexed 0..63. */
+extern unsigned psxport_gte_op[64];
+
 /* RTP vertex tap: when psxport_rtp_capture != 0, RTPS/RTPT report each
    projected vertex (input local + output screen) to psxport_on_rtp_vertex. */
 extern int psxport_rtp_capture;
