@@ -108,14 +108,36 @@ one step per frame, NOT disk latency.** Evidence:
   2/8/10/14 desync the game so it never reaches Whoopee — instant-CD is fragile and
   cannot be a blanket default.)
 
-So "instant load via faster disk" is NOT available here; the game advances its load/
-transition state machine (`0x80011a78`, keyed on `*(0x80025454)`, jump table
-@`0x80010054`) at a fixed per-frame rate regardless of data speed. Collapsing it
-requires either (a) forcing each state's own "advance" early (native, analogous to
-the logo skip, but many states + races the real loads) or (b) running the load-phase
-logic faster during the black window (a targeted turbo of just that phase — which is
-functionally fast-forward, the thing the user rejected for the logos). **This is a
-genuine native-vs-turbo tradeoff to decide before building.**
+### Inter-stage state machine `0x80011a78` (keyed on `*(0x80025454)`, jump table @`0x80010054`)
+One call runs the whole load/transition, looping internally through states 1→0x13.
+Per-state timing (Start held, direct logo skip), via `PSXPORT_WATCHW=80025454`:
+- states 1–5 instant; **state 5→6 ≈53 frames** (REAL CD/load wait: state-5 handler
+  `0x80011D64` polls `0x800123b0` load-status + flags `0x8002544c` — LEFT INTACT,
+  forcing it races the loader = white screen).
+- states 6–0xD instant; **state 0xE→0xF ≈200 frames** = a PURE timed dwell (handler
+  `0x80012148`: `wait until counter > *(0x80038498)+0xC8`, screen black).
+- states 0xF–0x13 instant → state machine returns, Whoopee begins.
+
+**COLLAPSED (implemented):** `DwellSkip` @`0x80012164` forces state 0xE's own
+advance path on Start → Whoopee now enters **f163** vs f364 (and f670 no-skip). The
+remaining inter-stage time is just the ~53f real load.
+
+### FMV phase — NEXT FRONTIER (separate overlay subsystem)
+After the logos, the opening FMV plays. Skipping the logos unmasks its load (white/
+black, ~f163→~f740). Characterised:
+- **NOT disk-bound:** full instant-CD (mask 15) gives the SAME last-ReadN frame
+  (f743) and does not shrink it. It is per-frame-paced like the inter-stage machine.
+- Uses its OWN timing, not the intro VSync (`0x800267B4` reads 0 here; `0x80017E4C`/
+  `0x80017FC4` not called).
+- Runs from a **separate overlay**, NOT the 0x80010000 EXE: PCCOV intersection of two
+  FMV-load windows = code at **`0x80085000`–`0x8009A000`** (the StrPlayer/MDEC FMV
+  player) plus low kernel/libcd `0x80001000`–`0x80004000`. The FMV stream overwrites
+  the 0x80011xxx/0x80018xxx intro code, consistent with this.
+- The FMV is separately Start-skippable *while playing* (needs a press edge during
+  playback; a held-from-boot Start does not skip it).
+- **TODO:** RE the StrPlayer overlay's per-frame load/decode loop and collapse its
+  pacing dwells the same way (find the per-frame gate / timed wait, force-advance on
+  Start). This is a distinct subsystem and its own RE pass.
 
 ### Timing/IRQ primitives — mapped, intentionally LEFT EMULATED (do not native-own)
 Owning these natively would fake hardware timing (a bandaid). They depend on the
