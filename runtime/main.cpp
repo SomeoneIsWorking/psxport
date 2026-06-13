@@ -148,6 +148,15 @@ int HleSyscallHook(uint32_t pc, uint32_t* gpr, uint32_t* redirect_pc)
                           (pc == 0xB0 && (fnum == 0x3D || fnum == 0x3F));
   if (!is_putchar && psxport_hle_syscall(table, fnum, gpr, g_ram))
   {
+    // ChangeThread (B0 0x10) is a cooperative context switch: it does not return
+    // to its caller but resumes a different thread. The kernel handler requested
+    // the switch; perform the TCB save/load + PC redirect here (we have the live
+    // gpr file + redirect_pc). The caller resumes at its $ra when switched back.
+    if (const uint32_t new_tcb = psxport_hle_take_pending_switch())
+    {
+      *redirect_pc = Hle_Irq_ThreadSwitch(g_ram, gpr, new_tcb, gpr[31]);
+      return PSXPORT_HOOK_REDIRECT;
+    }
     *redirect_pc = gpr[31];
     return PSXPORT_HOOK_REDIRECT;
   }
@@ -895,6 +904,11 @@ int main(int argc, char** argv)
     psxport_add_hook(0xC0, 0, HleSyscallHook);
     // Stage 3: native IRQ/exception delivery (vectors 0x80000080 / 0xBFC00180).
     Hle_Irq_Install(g_ram);
+    // Stage 4: the OpenBIOS kernel thread model (__globals + Process[] + TCB
+    // array). The front-end StrPlayer coroutine system drives the whole intro
+    // via OpenThread/ChangeThread + the syscall thread-switch protocol; the
+    // tables must exist before the EXE runs (boot/main thread = thread[0]).
+    psxport_hle_kernel_tables_init(g_ram);
     // Boot: load the disc's EXE into RAM and jump the CPU into it (skip the ROM).
     // The BIOS/boot policy lives here in the runtime; beetle only exposes the
     // generic CPU primitives (set_pc + the gpr file).

@@ -72,7 +72,45 @@ const uint32_t kSentinelRA = 0x80000040u;
 uint8_t* s_ram = nullptr;      // main RAM (set at install)
 uint32_t s_dispatcher = 0;     // resolved root IRQ dispatcher (cached)
 bool s_in_exception = false;   // re-entrancy guard (we don't nest IRQs)
-uint32_t s_saved_gpr[34];      // full interrupted register file (GPR0..31 + LO/HI)
+
+// TCB (Thread) field offsets — mirror common/kernel/threads.h + vectors.s. The
+// register frame ($k0 in vectors.s) is at TCB+8: GPR[i] at +8+i*4, returnPC at
+// +8+0x80=+0x88, hi +0x8C, lo +0x90, SR +0x94, Cause +0x98.
+enum {
+  TCB_GPR = 0x08, TCB_RETPC = 0x88, TCB_HI = 0x8C, TCB_LO = 0x90,
+  TCB_SR = 0x94, TCB_CAUSE = 0x98,
+};
+
+// Dedicated kernel exception stack (mirrors OpenBIOS g_exceptionStackPtr): the
+// handler chain / game dispatcher runs on THIS stack, not the interrupted
+// thread's $sp, so a thread switch mid-handler is clean. Placed in BIOS-reserved
+// RAM between the TCB array (ends 0x8000C400) and the work area (0x8000E000):
+// grows down from 0x8000DFF8 (0x800-word region), clear of both.
+const uint32_t kExcStackTop = 0x8000DFF8u;
+
+// Save the live register file (gpr[1..31] + lo/hi) plus returnPC/SR/Cause into
+// the given TCB, at the vectors.s offsets. r0 is not stored (always 0).
+void tcb_save(uint8_t* ram, uint32_t tcb, const uint32_t* gpr,
+              uint32_t return_pc, uint32_t sr, uint32_t cause) {
+  for (int i = 1; i < 32; i++) hle_w32(ram, tcb + TCB_GPR + (uint32_t)i * 4, gpr[i]);
+  hle_w32(ram, tcb + TCB_GPR, 0);          // r0
+  hle_w32(ram, tcb + TCB_LO, gpr[32]);     // LO (gpr[32])
+  hle_w32(ram, tcb + TCB_HI, gpr[33]);     // HI (gpr[33])
+  hle_w32(ram, tcb + TCB_RETPC, return_pc);
+  hle_w32(ram, tcb + TCB_SR, sr);
+  hle_w32(ram, tcb + TCB_CAUSE, cause);
+}
+
+// Load gpr[1..31] + lo/hi from the TCB into the live register file; return the
+// saved returnPC and (via *out_sr) the saved SR. Caller applies SR + resumes PC.
+uint32_t tcb_load(uint8_t* ram, uint32_t tcb, uint32_t* gpr, uint32_t* out_sr) {
+  for (int i = 1; i < 32; i++) gpr[i] = hle_r32(ram, tcb + TCB_GPR + (uint32_t)i * 4);
+  gpr[0] = 0;
+  gpr[32] = hle_r32(ram, tcb + TCB_LO);
+  gpr[33] = hle_r32(ram, tcb + TCB_HI);
+  if (out_sr) *out_sr = hle_r32(ram, tcb + TCB_SR);
+  return hle_r32(ram, tcb + TCB_RETPC);
+}
 
 // Resolve the game's root IRQ dispatcher from the HookEntryInt ExCB. word[0] is
 // the BIOS-vectored entry; scan forward a few instructions for its first `jal`
@@ -89,7 +127,6 @@ uint32_t resolve_dispatcher(const uint8_t* ram, uint32_t hentry) {
   }
   return 0;
 }
-uint32_t s_saved_epc = 0;      // captured PC to resume after the handler
 int s_log = 0;                 // PSXPORT_IRQ_LOG: trace every exception
 uint64_t s_irq_count = 0;
 
@@ -97,37 +134,91 @@ void irq_log_init() {
   if (const char* v = getenv("PSXPORT_IRQ_LOG")) s_log = atoi(v);
 }
 
-// Perform the return-from-exception: pop the SR interrupt/KU stack and resume at
-// the saved PC. Called from the sentinel hook after the game handler returns.
-void do_rfe_resume() {
-  uint32_t sr = psxport_cpu_cop0(CP0_SR);
-  // "Pop": new IEc/KUc come from IEp/KUp; the rest of the 6-bit stack shifts.
+// Outermost-IRQ interrupted-frame store. The game's root IRQ dispatcher runs as
+// a subroutine and may itself issue syscalls (Enter/ExitCriticalSection) that
+// re-enter the exception handler and transiently overwrite the SINGLE current
+// TCB slot with the mid-dispatcher frame. If we restored from the TCB at the
+// sentinel we'd resume that stale mid-dispatcher frame instead of the
+// interrupted thread (verified: garbage resume PC). So for the outermost IRQ we
+// stash the interrupted frame here and restore it at the sentinel UNLESS a
+// ChangeThread switched process[0].thread (then we load the new thread's TCB).
+uint32_t s_outer_gpr[34];   // interrupted GPR[0..31] + LO/HI
+uint32_t s_outer_pc = 0;    // interrupted resume PC
+uint32_t s_outer_sr = 0;    // interrupted (pushed) SR
+uint32_t s_outer_tcb = 0;   // process[0].thread at outermost IRQ entry
+
+// returnFromException (vectors.s): reload the *current* thread's TCB (which a
+// ChangeThread inside the handler may have swapped via process[0].thread), apply
+// its saved SR, RFE-pop the SR interrupt/KU stack, and resume at its returnPC.
+// `gpr` is the live CPU register file. Returns the resume PC (also redirected by
+// the caller). This is the single point where SR is popped and s_in_exception is
+// cleared, regardless of how many handlers ran.
+uint32_t return_from_exception(uint8_t* ram, uint32_t* gpr) {
+  const uint32_t tcb = psxport_hle_current_tcb(ram);
+  uint32_t sr = 0;
+  uint32_t resume_pc;
+  if (tcb) {
+    resume_pc = tcb_load(ram, tcb, gpr, &sr); // restores GPR[1..31]+lo/hi
+  } else {
+    // No kernel tables (shouldn't happen with HLE thread model active): fall
+    // back to the live SR + current PC so we at least RFE cleanly.
+    sr = psxport_cpu_cop0(CP0_SR);
+    resume_pc = psxport_cpu_cop0(CP0_EPC);
+  }
+  // Apply the saved (at-entry, pushed) SR, then RFE-pop it to the resumed state.
   sr = (sr & ~0x0Fu) | ((sr >> 2) & 0x0Fu);
   psxport_cpu_set_cop0(CP0_SR, sr);
   s_in_exception = false;
-  psxport_cpu_set_pc(s_saved_epc);
+  psxport_cpu_set_pc(resume_pc);
+  return resume_pc;
 }
 
-// Hook fired when the game's interrupt handler returns to our sentinel $ra.
+// Hook fired when the game's root IRQ dispatcher returns to our sentinel $ra.
+// This ends the outermost hardware interrupt. The dispatcher clobbered $ra to
+// route here and its callees trash caller-saved regs, so the full interrupted
+// register file must be restored — but NOT from the (possibly syscall-clobbered)
+// TCB. Restore from the host store, unless the dispatcher switched the current
+// thread (a StrPlayer ChangeThread), in which case resume the NEW thread's TCB.
 int ExceptionReturnHook(uint32_t /*pc*/, uint32_t* gpr, uint32_t* redirect_pc) {
-  if (s_log)
-    fprintf(stderr, "[irq f%u] handler returned -> resume EPC=%08X (sr<-pop, regs restored)\n",
-            psxport_frame, s_saved_epc);
-  // Restore the FULL interrupted register file. We clobbered $ra to route the
-  // dispatcher back to this sentinel (without restoring it, resuming at a
-  // `jr $ra` would jump to the sentinel and spin). Beyond $ra, the dispatcher's
-  // callees freely trash caller-saved regs ($v/$a/$t, LO/HI), which the
-  // interrupted instruction stream expects intact across the IRQ — hardware /
-  // the BIOS save+restore everything via the process register frame, so we do
-  // too. ($sp is left as the dispatcher restored it — it balances its own frame.)
-  for (int i = 1; i < 32; i++)
-    if (i != HLE_R_SP) gpr[i] = s_saved_gpr[i];
-  gpr[32] = s_saved_gpr[32]; // LO
-  gpr[33] = s_saved_gpr[33]; // HI
-  // We must not let the interpreter execute whatever sits at the sentinel. Pop
-  // SR and redirect to the resume PC ourselves.
-  do_rfe_resume();
-  *redirect_pc = s_saved_epc;
+  uint8_t* ram = s_ram;
+  const uint32_t cur = psxport_hle_current_tcb(ram);
+  uint32_t resume_pc, sr;
+  if (cur && cur != s_outer_tcb) {
+    // A ChangeThread inside the dispatcher switched threads: resume the new
+    // thread from its TCB frame (the StrPlayer coroutine handoff).
+    resume_pc = tcb_load(ram, cur, gpr, &sr);
+    if (s_log)
+      fprintf(stderr, "[irq f%u] handler returned -> SWITCHED to tcb=%08X resume=%08X\n",
+              psxport_frame, cur, resume_pc);
+  } else {
+    // No switch: restore the interrupted frame from the host store (the TCB may
+    // have been transiently clobbered by a mid-dispatcher syscall).
+    for (int i = 1; i < 32; i++) gpr[i] = s_outer_gpr[i];
+    gpr[0] = 0; gpr[32] = s_outer_gpr[32]; gpr[33] = s_outer_gpr[33];
+    resume_pc = s_outer_pc;
+    // SR: the KU/IE 6-bit stack (bits 0..5) comes from the at-entry saved SR and
+    // is RFE-popped; the interrupt-MASK bits (IM, bits 8..15) and other control
+    // bits must come from the LIVE SR, because the dispatcher legitimately
+    // enables/disables IRQ-mask lines (e.g. arming CD/DMA) that must persist
+    // across the return. Popping the at-entry SR wholesale reverts those mask
+    // changes and starves/storms the IRQ line (verified). So pop only the stack.
+    const uint32_t live = psxport_cpu_cop0(CP0_SR);
+    const uint32_t popped_stack = ((s_outer_sr >> 2) & 0x0Fu);
+    sr = (live & ~0x3Fu) | popped_stack;
+    psxport_cpu_set_cop0(CP0_SR, sr);
+    s_in_exception = false;
+    psxport_cpu_set_pc(resume_pc);
+    *redirect_pc = resume_pc;
+    if (s_log)
+      fprintf(stderr, "[irq f%u #%llu] return -> PC=%08X sp=%08X ra=%08X (host-restore)\n",
+              psxport_frame, (unsigned long long)s_irq_count, resume_pc, gpr[HLE_R_SP], gpr[HLE_R_RA]);
+    return PSXPORT_HOOK_REDIRECT;
+  }
+  sr = (sr & ~0x0Fu) | ((sr >> 2) & 0x0Fu); // RFE pop (thread-switch branch)
+  psxport_cpu_set_cop0(CP0_SR, sr);
+  s_in_exception = false;
+  psxport_cpu_set_pc(resume_pc);
+  *redirect_pc = resume_pc;
   return PSXPORT_HOOK_REDIRECT;
 }
 
@@ -144,6 +235,18 @@ int VsyncProbeHook(uint32_t /*pc*/, uint32_t* /*gpr*/, uint32_t* /*r*/) {
 }
 
 // The exception vector hook. Installed at 0x80000080 AND 0xBFC00180.
+//
+// Faithful TCB-based protocol (mirrors OpenBIOS vectors.s exceptionHandler +
+// handlers/syscall.c syscallVerifier + vectors.s returnFromException):
+//   1. Save the full interrupted register file (+ returnPC, hi/lo, SR, Cause)
+//      into the CURRENT thread's TCB (process[0].thread).
+//   2. SYSCALL (excode 8): emulate syscallVerifier on the SAVED TCB fields —
+//      advance returnPC+4; a0=1/2 toggle the saved SR critical-section bits;
+//      a0=3 swaps process[0].thread (cooperative thread switch). Then
+//      returnFromException (reload the now-current TCB + RFE).
+//   3. Hardware interrupt (excode 0): deliver events, run the game's root
+//      dispatcher on the dedicated exception stack with $ra = the sentinel,
+//      which calls returnFromException when the handler returns.
 int ExceptionHook(uint32_t /*pc*/, uint32_t* gpr, uint32_t* redirect_pc) {
   uint8_t* ram = s_ram;
   if (!ram)
@@ -151,43 +254,81 @@ int ExceptionHook(uint32_t /*pc*/, uint32_t* gpr, uint32_t* redirect_pc) {
 
   const uint32_t cause = psxport_cpu_cop0(CP0_CAUSE);
   const uint32_t excode = (cause >> 2) & 0x1F;
+  const uint32_t live_sr = psxport_cpu_cop0(CP0_SR); // at-entry (HW-pushed) SR
 
-  // EPC + branch-delay handling: beetle already wrote CP0.EPC (PC, minus 4 if in
-  // a branch delay slot) and CP0.TAR (the branch target) at exception entry. On
-  // resume we go to TAR if we were in a delay slot (CAUSE bit31 = BD), else EPC.
+  // EPC + branch-delay handling. beetle wrote CP0.EPC = the faulting PC, minus 4
+  // (i.e. the BRANCH instruction's address) if the fault was in a branch delay
+  // slot (CAUSE bit31 = BD). On RFE we ALWAYS resume at EPC: for a delay-slot
+  // exception that re-executes the branch AND its delay slot — exactly as real
+  // MIPS does. Resuming at the branch TARGET instead (the old `bd ? TAR : epc`)
+  // SKIPS the delay-slot instruction; when that slot is a function epilogue's
+  // `addiu $sp,+N` (e.g. `jr $ra` / `addiu $sp,0x28`), the frame is never popped,
+  // so $sp leaks by N and the function later reads a stale return slot and jr's
+  // to garbage (the f961 derail). EPC re-execution is the faithful, correct path.
   const uint32_t epc = psxport_cpu_cop0(CP0_EPC);
   const bool bd = (cause & 0x80000000u) != 0;
-  const uint32_t resume_pc = bd ? psxport_cpu_cop0(CP0_TAR) : epc;
+  const uint32_t resume_pc = epc;
 
-  if (excode == 8) {
-    // SYSCALL. The game's a0 selects: 0=NoFunction, 1=EnterCriticalSection
-    // (disable IRQs), 2=ExitCriticalSection (enable IRQs), 3=ChangeThreadSubFn.
-    // These manipulate the SR interrupt-enable that our RFE-pop would otherwise
-    // restore, so apply them to the *saved/popped* SR view: easiest correct
-    // model is to pop SR (return-from-exception) and then set/clear IEc on the
-    // resulting SR per a0. EPC for a syscall points AT the `syscall` instr, so
-    // resume one instruction past it.
-    uint32_t sr = psxport_cpu_cop0(CP0_SR);
-    sr = (sr & ~0x0Fu) | ((sr >> 2) & 0x0Fu); // RFE pop
-    const uint32_t a0 = gpr[HLE_R_A0];
-    // PSX BIOS uses cop0r12 = 0x401 for "interrupts enabled": IEc (bit0) +
-    // IM-IP2 (bit10, the hardware-interrupt mask line). Enter clears both, Exit
-    // sets both. Without IM-IP2 set, beetle's CPU_RecalcIPCache never raises a
-    // pending interrupt even though I_STAT/I_MASK have it — which is exactly why
-    // VBLANK was never delivered (SR was 0x...0001, IM bits all clear).
-    if (a0 == 1) { gpr[HLE_R_V0] = (sr & 0x401u) ? 1u : 0u; sr &= ~0x401u; }
-    else if (a0 == 2) { sr |= 0x401u; gpr[HLE_R_V0] = 1; }
+  // --- Nested hardware-interrupt guard (BEFORE touching the TCB). -----------
+  // On real hardware IEc=0 during the handler, so a 2nd IRQ cannot fire until
+  // RFE. Our dispatcher runs as a subroutine; if it briefly re-enables IEc a
+  // VBLANK can re-fire and beetle re-vectors here. We must NOT save this nested
+  // context into the TCB — that would clobber the outer interrupted thread's
+  // saved frame (causing the resume to load garbage). Instead mask it: pop SR
+  // but keep IEc=0, and resume the in-progress dispatcher PC unchanged so it
+  // runs to completion (acks I_STAT, returns to the sentinel for the single
+  // RFE). Syscalls (excode 8) are synchronous and balanced, so they are allowed
+  // to nest and save/restore the TCB normally (handled below).
+  if (excode == 0 && s_in_exception) {
+    uint32_t sr = (live_sr & ~0x0Fu) | ((live_sr >> 2) & 0x0Fu); // RFE pop
+    sr &= ~0x1u;                                                 // keep IEc=0
     psxport_cpu_set_cop0(CP0_SR, sr);
-    const uint32_t next = bd ? psxport_cpu_cop0(CP0_TAR) : (epc + 4);
-    if (s_log)
-      fprintf(stderr, "[irq f%u] SYSCALL a0=%u epc=%08X -> resume %08X\n",
-              psxport_frame, a0, epc, next);
-    *redirect_pc = next;
+    *redirect_pc = resume_pc;
     return PSXPORT_HOOK_REDIRECT;
   }
 
-  if (excode == 9) { // breakpoint: skip it
-    *redirect_pc = resume_pc;
+  // --- Exception entry: save the interrupted context into the current TCB. ---
+  // (vectors.s exceptionHandler: $k0 = processes[0].thread + 8; sw all regs.)
+  const uint32_t cur_tcb = psxport_hle_current_tcb(ram);
+  if (cur_tcb)
+    tcb_save(ram, cur_tcb, gpr, resume_pc, live_sr, cause);
+
+  if (excode == 8) {
+    // SYSCALL. a0 selects: 0=NoFunction, 1=EnterCriticalSection, 2=Leave-
+    // CriticalSection, 3=ChangeThreadSubFunction. syscallVerifier operates on
+    // the SAVED register frame, then returnFromException reloads it.
+    const uint32_t a0 = gpr[HLE_R_A0];
+    if (cur_tcb) {
+      // returnPC += 4 (skip the `syscall` instruction). For a syscall in a
+      // branch-delay slot the saved returnPC is already TAR (the branch target),
+      // and must NOT be advanced — only bump when we saved EPC, not TAR.
+      if (!bd) hle_w32(ram, cur_tcb + TCB_RETPC, hle_r32(ram, cur_tcb + TCB_RETPC) + 4);
+      uint32_t saved_sr = hle_r32(ram, cur_tcb + TCB_SR);
+      // Critical-section bits operate on the pushed SR: 0x404 = IEp(bit2) +
+      // IM-IP2(bit10). After returnFromException's RFE-pop, IEp -> IEc, so
+      // clearing 0x404 disables interrupts on resume and setting it enables them.
+      if (a0 == 1) { // EnterCriticalSection: v0 = were-enabled?; disable
+        hle_w32(ram, cur_tcb + TCB_GPR + HLE_R_V0 * 4,
+                (saved_sr & 0x404u) == 0x404u ? 1u : 0u);
+        hle_w32(ram, cur_tcb + TCB_SR, saved_sr & ~0x404u);
+      } else if (a0 == 2) { // LeaveCriticalSection: enable
+        hle_w32(ram, cur_tcb + TCB_SR, saved_sr | 0x404u);
+      } else if (a0 == 3) { // ChangeThreadSubFunction(a1 = target TCB)
+        // Set v0=1 in the OLD thread's frame (what it sees when switched back),
+        // then make a1 the current thread; returnFromException loads a1's frame.
+        hle_w32(ram, cur_tcb + TCB_GPR + HLE_R_V0 * 4, 1);
+        psxport_hle_set_current_tcb(ram, gpr[HLE_R_A1]);
+      }
+    }
+    if (s_log)
+      fprintf(stderr, "[irq f%u] SYSCALL a0=%u epc=%08X cur=%08X new=%08X\n",
+              psxport_frame, a0, epc, cur_tcb, psxport_hle_current_tcb(ram));
+    *redirect_pc = return_from_exception(ram, gpr);
+    return PSXPORT_HOOK_REDIRECT;
+  }
+
+  if (excode == 9) { // breakpoint: restore + resume (returnPC already = resume_pc)
+    *redirect_pc = return_from_exception(ram, gpr);
     return PSXPORT_HOOK_REDIRECT;
   }
 
@@ -199,46 +340,21 @@ int ExceptionHook(uint32_t /*pc*/, uint32_t* gpr, uint32_t* redirect_pc) {
       last = excode;
     }
     // Best effort: return-from-exception and resume; better than spinning.
-    uint32_t sr = psxport_cpu_cop0(CP0_SR);
-    sr = (sr & ~0x0Fu) | ((sr >> 2) & 0x0Fu);
-    psxport_cpu_set_cop0(CP0_SR, sr);
-    *redirect_pc = resume_pc;
+    *redirect_pc = return_from_exception(ram, gpr);
     return PSXPORT_HOOK_REDIRECT;
   }
 
-  // --- Hardware interrupt (ExcCode 0) ---------------------------------------
-  // Re-entrancy guard. On real hardware, taking an exception sets IEc=0, so a
-  // second IRQ cannot fire until the handler RFEs. Our handler runs the game
-  // dispatcher as a subroutine; if game code inside it briefly re-enables IEc
-  // (e.g. an Exit/EnterCriticalSection pair, or a nested event callback), a
-  // VBLANK can re-fire mid-dispatch and beetle re-vectors here — EPC pointing
-  // INTO the dispatcher. Re-invoking the dispatcher then corrupts its state and
-  // spins (the inner call sees the reentrancy flag set, never acks I_STAT, and
-  // the resume immediately re-faults). Faithful fix: mask it. Clear IEc and
-  // return to the interrupted dispatcher PC WITHOUT re-dispatching, so the
-  // in-progress dispatcher runs to completion (it acks I_STAT and returns to
-  // our sentinel, which does the single RFE).
-  if (s_in_exception) {
-    uint32_t sr = psxport_cpu_cop0(CP0_SR);
-    sr = (sr & ~0x0Fu) | ((sr >> 2) & 0x0Fu); // RFE pop
-    sr &= ~0x1u;                              // ...but keep IEc=0 (stay masked)
-    psxport_cpu_set_cop0(CP0_SR, sr);
-    *redirect_pc = resume_pc;
-    return PSXPORT_HOOK_REDIRECT;
-  }
-
+  // --- Hardware interrupt (ExcCode 0, outermost) ----------------------------
+  // (The nested-IRQ case is handled at the top, before any TCB save.)
   const uint16_t pending = psxport_irq_status() & psxport_irq_mask();
   s_irq_count++;
   if (s_log && (s_irq_count < 40 || (s_irq_count % 200) == 0))
-    fprintf(stderr, "[irq f%u #%llu] INT pending=%04X sr=%08X epc=%08X bd=%d handler=%08X\n",
+    fprintf(stderr, "[irq f%u #%llu] INT pending=%04X sr=%08X epc=%08X bd=%d handler=%08X cur=%08X\n",
             psxport_frame, (unsigned long long)s_irq_count, pending,
-            psxport_cpu_cop0(CP0_SR), epc, bd, psxport_hle_int_handler());
+            live_sr, epc, bd, psxport_hle_int_handler(), cur_tcb);
 
   // Pre-deliver the well-known BIOS event classes for each pending IRQ so any
-  // handler that TestEvent()s before clearing I_STAT sees the event fired. The
-  // mode-0x2000 callbacks are collected but NOT invoked here — the game's own
-  // root dispatcher (reached via the registered handler) invokes them in the
-  // correct order; invoking them twice would corrupt state. We only flag fired.
+  // handler that TestEvent()s before clearing I_STAT sees the event fired.
   for (const EventClass& ec : kEventClasses) {
     if (pending & (1u << ec.irq_bit)) {
       uint32_t funcs[8];
@@ -246,46 +362,77 @@ int ExceptionHook(uint32_t /*pc*/, uint32_t* gpr, uint32_t* redirect_pc) {
     }
   }
 
-  // Invoke the game's root IRQ dispatcher as a subroutine. It reads I_STAT,
-  // services the pending sources (incl. bumping the VBLANK frame counter the
-  // VSync wait spins on), ACKs I_STAT, and DeliverEvents — a complete service.
-  // We trampoline back through the sentinel which performs the RFE+resume.
-  //
-  // Resolving the dispatcher generically (no magic constant): HookEntryInt's
-  // arg (s_int_handler) is a kernel ExCB whose word[0] is the game's
-  // BIOS-vectored interrupt entry. That entry is NOT a normal callable function
-  // (the real BIOS jr's to it with full context already saved), but it tail-
-  // calls the actual dispatcher via a `jal` a few instructions in. We decode
-  // that jal target and call the dispatcher directly — it has a normal C
-  // prologue/epilogue (`addiu $sp,-N; sw $ra,..($sp); ...; jr $ra`), so calling
-  // it with $ra = our sentinel returns cleanly to the RFE epilogue.
+  // Invoke the game's root IRQ dispatcher as a subroutine on the dedicated
+  // exception stack (mirrors vectors.s switching $sp to g_exceptionStackPtr).
+  // It reads I_STAT, services the pending sources (bumps the VBLANK frame
+  // counter, ACKs I_STAT, DeliverEvents), then returns to our sentinel $ra,
+  // which calls returnFromException (reload the current TCB + RFE).
   const uint32_t hentry = psxport_hle_int_handler();
   const uint32_t disp = s_dispatcher ? s_dispatcher
                       : (s_dispatcher = resolve_dispatcher(ram, hentry));
   if (disp) {
     s_in_exception = true;
-    s_saved_epc = resume_pc;
-    for (int i = 0; i < 34; i++) s_saved_gpr[i] = gpr[i]; // full register file
+    // Stash the interrupted frame for the sentinel (see ExceptionReturnHook).
+    for (int i = 0; i < 34; i++) s_outer_gpr[i] = gpr[i];
+    s_outer_pc  = resume_pc;
+    s_outer_sr  = live_sr;
+    s_outer_tcb = cur_tcb;
     gpr[HLE_R_RA] = kSentinelRA; // dispatcher returns -> sentinel hook -> RFE
-    if (s_log && (s_irq_count < 10))
-      fprintf(stderr, "[irq f%u]   -> dispatcher %08X (ra=%08X)\n",
-              psxport_frame, disp, kSentinelRA);
+    // NOTE: run on the interrupted thread's $sp (as the baseline did and as the
+    // game's root dispatcher expects). vectors.s swaps to g_exceptionStackPtr,
+    // but that is for the OpenBIOS handler chain, not this game-supplied root
+    // dispatcher — swapping $sp here starved its I_STAT ack (verified IRQ storm).
+    if (s_log && s_irq_count < 16)
+      fprintf(stderr, "[irq f%u] ENTRY #%llu -> dispatcher %08X (sp=%08X epc=%08X)\n",
+              psxport_frame, (unsigned long long)s_irq_count, disp, gpr[HLE_R_SP], resume_pc);
     *redirect_pc = disp;
     return PSXPORT_HOOK_REDIRECT;
   }
 
-  // No usable game handler: ack nothing (we don't know which sources are safe to
-  // clear), just return-from-exception so we don't spin forever in the vector.
-  // If the source isn't acked the IRQ re-fires immediately — but without a
-  // handler there's nothing better to do. (Should not happen for Tomba2.)
-  uint32_t sr = psxport_cpu_cop0(CP0_SR);
-  sr = (sr & ~0x0Fu) | ((sr >> 2) & 0x0Fu);
-  psxport_cpu_set_cop0(CP0_SR, sr);
-  *redirect_pc = resume_pc;
+  // No usable game handler: return-from-exception so we don't spin in the vector.
+  *redirect_pc = return_from_exception(ram, gpr);
   return PSXPORT_HOOK_REDIRECT;
 }
 
 } // namespace
+
+static uint32_t s_pending_switch = 0; // ChangeThread (B0 0x10) requested TCB
+
+// Cooperative thread switch for ChangeThread (B0 0x10), called from
+// HleSyscallHook when a switch was requested. Save the caller's live context
+// into the CURRENT TCB with returnPC = caller_ra (where it resumes when switched
+// back), make new_tcb current, then load new_tcb's frame and return its
+// returnPC. This is the non-exception twin of the a0=3 syscall path: B0 0x10's
+// caller does not get control back until something switches its thread in again.
+uint32_t Hle_Irq_ThreadSwitch(uint8_t* ram, uint32_t* gpr,
+                              uint32_t new_tcb, uint32_t caller_ra) {
+  const uint32_t cur = psxport_hle_current_tcb(ram);
+  if (cur) {
+    // Save the caller's regs; it resumes at caller_ra with v0=1 (set by the B0
+    // 0x10 handler before this) when switched back. We are NOT in an exception
+    // here, so the live SR is the normal (un-pushed) form — store it pre-pushed
+    // so the eventual returnFromException/switch RFE-pop restores it intact.
+    const uint32_t live_sr = psxport_cpu_cop0(CP0_SR);
+    const uint32_t pushed = (live_sr & ~0x3Fu) | ((live_sr & 0x0Fu) << 2);
+    tcb_save(s_ram, cur, gpr, caller_ra, pushed, 0);
+  }
+  psxport_hle_set_current_tcb(ram, new_tcb);
+  uint32_t sr = 0;
+  const uint32_t resume_pc = tcb_load(s_ram, new_tcb, gpr, &sr);
+  // new_tcb's SR is stored pushed (from its last save / OpenThread seed); pop it.
+  sr = (sr & ~0x0Fu) | ((sr >> 2) & 0x0Fu);
+  psxport_cpu_set_cop0(CP0_SR, sr);
+  if (s_log)
+    fprintf(stderr, "[irq f%u] ChangeThread switch cur=%08X -> new=%08X resume=%08X\n",
+            psxport_frame, cur, new_tcb, resume_pc);
+  return resume_pc;
+}
+
+// --- ChangeThread request plumbing (called from hle_kernel.cpp B0 0x10) ------
+void psxport_hle_request_thread_switch(uint32_t tcb) { s_pending_switch = tcb; }
+uint32_t psxport_hle_take_pending_switch(void) {
+  uint32_t t = s_pending_switch; s_pending_switch = 0; return t;
+}
 
 // Install the Stage-3 IRQ/exception hooks. Called from main.cpp when the HLE
 // BIOS is active.

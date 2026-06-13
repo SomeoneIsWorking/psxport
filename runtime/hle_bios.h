@@ -67,6 +67,24 @@ int psxport_hle_syscall(char table, uint32_t fnum, uint32_t* gpr, uint8_t* ram);
 // (gpr[V0] set), 0 = not ours. Routed to from psxport_hle_syscall().
 int psxport_hle_kernel(char table, uint32_t fnum, uint32_t* gpr, uint8_t* ram);
 
+// ---- Kernel thread model (hle_kernel.cpp + hle_irq.cpp) ---------------------
+// OpenBIOS-style __globals + Process[] + TCB array, plus the cooperative thread
+// switch the front-end StrPlayer coroutine system relies on. See hle_kernel.cpp.
+void     psxport_hle_kernel_tables_init(uint8_t* ram); // lay down __globals/TCBs
+uint32_t psxport_hle_current_tcb(uint8_t* ram);        // process[0].thread
+void     psxport_hle_set_current_tcb(uint8_t* ram, uint32_t tcb);
+uint32_t psxport_hle_tcb_from_handle(uint32_t handle); // 0xFF0000NN -> TCB addr
+// ChangeThread (B0 0x10) requests a switch to `tcb`; the syscall trampoline
+// (HleSyscallHook) then calls Hle_Irq_ThreadSwitch to save the caller's context
+// into the current TCB, switch current, load the target TCB and redirect the PC.
+void     psxport_hle_request_thread_switch(uint32_t tcb);
+uint32_t psxport_hle_take_pending_switch(void);        // consume request (0=none)
+// Save the live caller register file into the *current* TCB (returnPC=caller_ra),
+// switch process[0].thread = new_tcb, load new_tcb into the live regs, and return
+// the PC to resume (new_tcb's returnPC). Used by HleSyscallHook for B0 0x10.
+uint32_t Hle_Irq_ThreadSwitch(uint8_t* ram, uint32_t* gpr,
+                              uint32_t new_tcb, uint32_t caller_ra);
+
 // ---- Stage 3: IRQ/exception delivery ---------------------------------------
 // The game registers its interrupt entry point via B0(0x19) HookEntryInt(addr).
 // hle_kernel.cpp records it; the native exception handler (hle_irq.cpp) invokes

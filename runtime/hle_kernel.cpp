@@ -208,6 +208,128 @@ static void work_area_init(uint8_t* ram) {
 }
 
 // ---------------------------------------------------------------------------
+// OpenBIOS kernel thread model — __globals + Process[] + TCB (Thread)[] array
+// ---------------------------------------------------------------------------
+// The real OpenBIOS kernel keeps a per-process current-thread pointer and a TCB
+// array, both reachable through __globals @ 0x80000100 (globals.h). Tomba!2's
+// front-end StrPlayer subsystem is a 2-thread coroutine system that drives the
+// whole intro/title/attract sequence via OpenThread/ChangeThread + the exception
+// (syscall) protocol. With __globals==0 the game's kernel-thread path read base
+// 0 and `jr`'d to garbage (the f1284 AdEL). Populating the tables *only* helps if
+// the entire thread model works (the verified all-or-nothing finding in
+// docs/tomba2-hle-irq.md), which is what this + the TCB-based exception protocol
+// in hle_irq.cpp implement.
+//
+// Layout (mirrors src/mips/openbios/kernel/{globals.h,threads.c} +
+// common/kernel/threads.h, all verified against title.bin in docs/tomba2-threads.md):
+//   __globals @ 0x80000100:
+//     +0x08 processes ptr   -> Process array (1 process; process[0].thread = cur)
+//     +0x0C processBlockSize = 1 * sizeof(Process) = 4
+//     +0x10 threads ptr     -> TCB array
+//     +0x14 threadBlockSize = 4 * sizeof(Thread) = 0x300
+//   struct Process { Thread* thread; }           (4 bytes)
+//   struct Thread (0xC0): +0x00 flags (0x1000 FREE, 0x4000 USED), +0x04 flags2,
+//     +0x08 GPR[0..31] (r0..ra), +0x88 returnPC, +0x8C hi, +0x90 lo, +0x94 SR,
+//     +0x98 Cause, +0x9C unknown[9].
+// Region 0x8000C000.. is BIOS-reserved, below the EXE (0x80010000) and the HLE
+// work area (0x8000E000) — verified zero in fresh + mid-intro RAM dumps. We lay
+// the Process array at HLE_GLOB_PROC and the 4-slot TCB array at HLE_TCB_BASE.
+const uint32_t HLE_GLOBALS    = 0x80000100u;        // __globals base
+const uint32_t HLE_GLOB_PROC  = 0x8000C000u;        // Process array
+const uint32_t HLE_TCB_BASE   = 0x8000C100u;        // TCB (Thread) array
+const uint32_t HLE_TCB_STRIDE = 0xC0u;              // sizeof(Thread)
+const int      HLE_TCB_COUNT  = 4;                  // 4 slots (title.bin verified)
+
+// Thread struct field offsets (relative to a TCB base).
+enum {
+	TCB_FLAGS    = 0x00, TCB_FLAGS2 = 0x04,
+	TCB_GPR      = 0x08,  // GPR[i] at TCB_GPR + i*4
+	TCB_RETPC    = 0x88, TCB_HI = 0x8C, TCB_LO = 0x90, TCB_SR = 0x94, TCB_CAUSE = 0x98,
+};
+enum { TCB_FLAG_FREE = 0x1000u, TCB_FLAG_USED = 0x4000u };
+
+static bool s_kernel_inited = false;
+
+// Lay down __globals + the Process/TCB arrays. Called once before the game's
+// kernel-thread path can run (from psxport_hle_kernel_tables_init at HLE boot).
+extern "C" void psxport_hle_kernel_tables_init(uint8_t* ram) {
+	if (s_kernel_inited) return;
+	s_kernel_inited = true;
+	// __globals (only the fields the game/kernel read; rest stay zero).
+	hle_w32(ram, HLE_GLOBALS + 0x08, HLE_GLOB_PROC);                // processes
+	hle_w32(ram, HLE_GLOBALS + 0x0C, 1u * 4u);                      // processBlockSize
+	hle_w32(ram, HLE_GLOBALS + 0x10, HLE_TCB_BASE);                 // threads
+	hle_w32(ram, HLE_GLOBALS + 0x14, (uint32_t)HLE_TCB_COUNT * HLE_TCB_STRIDE); // threadBlockSize
+	// TCB array: all FREE except slot 0 (the boot/main thread) = USED.
+	for (int i = 0; i < HLE_TCB_COUNT; i++)
+		hle_w32(ram, HLE_TCB_BASE + (uint32_t)i * HLE_TCB_STRIDE + TCB_FLAGS, TCB_FLAG_FREE);
+	hle_w32(ram, HLE_TCB_BASE + TCB_FLAGS, TCB_FLAG_USED);
+	// process[0].thread = &threads[0] (current thread).
+	hle_w32(ram, HLE_GLOB_PROC + 0, HLE_TCB_BASE);
+}
+
+// Current thread TCB address = *(*(__globals.processes)) = *( *(0x80000108) ).
+extern "C" uint32_t psxport_hle_current_tcb(uint8_t* ram) {
+	const uint32_t proc = hle_r32(ram, HLE_GLOBALS + 0x08);
+	if (!proc) return 0;
+	return hle_r32(ram, proc); // process[0].thread
+}
+
+// Set the current thread (process[0].thread = tcb). Used by ChangeThread / the
+// a0=3 syscall.
+extern "C" void psxport_hle_set_current_tcb(uint8_t* ram, uint32_t tcb) {
+	const uint32_t proc = hle_r32(ram, HLE_GLOBALS + 0x08);
+	if (proc) hle_w32(ram, proc, tcb);
+}
+
+// getFreeTCBslot (threads.c): first slot whose flags == FREE, else -1.
+static int free_tcb_slot(uint8_t* ram) {
+	for (int i = 0; i < HLE_TCB_COUNT; i++)
+		if (hle_r32(ram, HLE_TCB_BASE + (uint32_t)i * HLE_TCB_STRIDE + TCB_FLAGS) == TCB_FLAG_FREE)
+			return i;
+	return -1;
+}
+
+// OpenThread(pc, sp, gp) -> handle (0xFF0000NN), -1 if full. Mirrors threads.c
+// openThread: claim a FREE slot, mark USED, seed returnPC/sp/fp/gp. The thread
+// is *not* made current — ChangeThread does that. Other regs default 0; the
+// thread runs with the seeded entry context, exactly as the real kernel.
+static uint32_t open_thread(uint8_t* ram, uint32_t pc, uint32_t sp, uint32_t gp) {
+	int slot = free_tcb_slot(ram);
+	if (slot < 0) return 0xFFFFFFFFu;
+	const uint32_t tcb = HLE_TCB_BASE + (uint32_t)slot * HLE_TCB_STRIDE;
+	// Zero the register frame first (fresh thread starts clean).
+	for (uint32_t o = TCB_GPR; o <= TCB_CAUSE; o += 4) hle_w32(ram, tcb + o, 0);
+	hle_w32(ram, tcb + TCB_FLAGS, TCB_FLAG_USED);
+	hle_w32(ram, tcb + TCB_FLAGS2, 0x1000u);
+	hle_w32(ram, tcb + TCB_GPR + HLE_R_SP * 4, sp);  // sp = r29
+	hle_w32(ram, tcb + TCB_GPR + 30 * 4, sp);        // fp = r30
+	hle_w32(ram, tcb + TCB_GPR + HLE_R_GP * 4, gp);  // gp = r28
+	hle_w32(ram, tcb + TCB_RETPC, pc);
+	// A fresh thread must resume with interrupts enabled (the kernel hands new
+	// threads a sane SR). Seed SR = current thread's SR so it inherits the live
+	// interrupt-enable/KU state rather than resuming with IRQs masked.
+	const uint32_t cur = psxport_hle_current_tcb(ram);
+	if (cur) hle_w32(ram, tcb + TCB_SR, hle_r32(ram, cur + TCB_SR));
+	return 0xFF000000u | (uint32_t)slot;
+}
+
+// CloseThread(handle) -> 1. Mirrors threads.c closeThread: mark slot FREE.
+static uint32_t close_thread(uint8_t* ram, uint32_t handle) {
+	const uint32_t slot = handle & 0xFFFFu;
+	if (slot < (uint32_t)HLE_TCB_COUNT)
+		hle_w32(ram, HLE_TCB_BASE + slot * HLE_TCB_STRIDE + TCB_FLAGS, TCB_FLAG_FREE);
+	return 1;
+}
+
+// Resolve a ChangeThread handle (0xFF0000NN) to its TCB address.
+extern "C" uint32_t psxport_hle_tcb_from_handle(uint32_t handle) {
+	const uint32_t slot = handle & 0xFFFFu;
+	if (slot >= (uint32_t)HLE_TCB_COUNT) return 0;
+	return HLE_TCB_BASE + slot * HLE_TCB_STRIDE;
+}
+
+// ---------------------------------------------------------------------------
 // Interrupt-handler priority chain (C0:0x02 SysEnqIntRP / 0x03 SysDeqIntRP)
 // ---------------------------------------------------------------------------
 // SysEnqIntRP(priority, elem) links `elem` (a PSX struct {next, handler,
@@ -435,6 +557,31 @@ extern "C" int psxport_hle_kernel(char table, uint32_t fnum, uint32_t* gpr, uint
 			s_int_handler = a0;
 			gpr[HLE_R_V0] = 0;
 			return 1;
+		case 0x0E: { // OpenThread(pc, sp, gp) -> handle. Claims a FREE TCB slot,
+			// seeds its entry context. Mirrors threads.c openThread. The new
+			// thread is dormant until ChangeThread switches to it.
+			psxport_hle_kernel_tables_init(ram);
+			const uint32_t gp = gpr[HLE_R_A2];
+			gpr[HLE_R_V0] = open_thread(ram, a0, a1, gp);
+			return 1;
+		}
+		case 0x0F: // CloseThread(handle) -> 1. Marks the slot FREE.
+			gpr[HLE_R_V0] = close_thread(ram, a0);
+			return 1;
+		case 0x10: { // ChangeThread(handle) -> (context switch; does not return
+			// to caller). threads.c changeThread() does changeThreadSubFunction(
+			// &threads[id]) which is syscall a0=3: save the caller's context into
+			// the current TCB, set process[0].thread = &threads[id], restore the
+			// target TCB and resume it. We can't redirect PC from here, so request
+			// the switch; HleSyscallHook performs the TCB save/load + PC redirect
+			// (Hle_Irq_ThreadSwitch). v0=1 is the value the *caller* thread sees
+			// when something later switches back to it.
+			psxport_hle_kernel_tables_init(ram);
+			const uint32_t tcb = psxport_hle_tcb_from_handle(a0);
+			if (tcb) { psxport_hle_request_thread_switch(tcb); gpr[HLE_R_V0] = 1; }
+			else gpr[HLE_R_V0] = 0;
+			return 1;
+		}
 		case 0x5B: // ChangeClearPAD(int) -> void : toggles whether the BIOS pad
 			// handler auto-clears the pad buffer. Pad handling is not BIOS-driven
 			// in our runtime; benign no-op.
