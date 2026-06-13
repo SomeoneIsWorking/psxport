@@ -49,21 +49,26 @@
   it reaches the post-logo milestone at f2451 vs f1352 baseline (SLOWER: the
   intro's sequencing is tied to the audio playing in real time). DEAD END: no
   CD-timing change shortens the logo. Reverted (cdc.c back to committed).
-- **Logo gate RE'd: `0x800253EC` is the intro-sequence STEP** the license/logo
-  loop polls. Natural timeline: 0 for the whole license+Whoopee-Camp jingle ->
-  1 the instant the jingle ends (f1180, issues CD Pause + loads next overlay) ->
-  7 -> main overlay resident at 0x8005082C (f1263). Found by per-frame MEMWATCH of
-  flag candidates around the f1181 transition (253EC flips one frame BEFORE the
-  Pause and latches; everything else toggles per-frame, oscillates, or flips after
-  = downstream). **Forcing 0->1 reproduces the exact transition early** (verified:
-  poked at f700 -> Pause at f701 + identical overlay-load sequence). Implemented as
-  an auto skip in the module (LogoSkip): set 253EC=1 while step==0 AND overlay==0
-  AND the logo audio clock (0x8011824C) is ticking — tightly scoped to the intro
-  logo, never later cutscenes (step already >0). Result: 253EC->1 at f690 (was
-  f1180), overlay resident at f771 (was f1263), ~490 frames cut, deterministic, no
-  crash, full test-wide60 battery still 100%. PSXPORT_T2_NOSKIP=1 disables.
-  (Supersedes the auto-turbo load-mask handling; the "logos are unskippable load
-  masks" note below is FALSIFIED — they were skippable via the step gate all along.)
+- **FALSIFIED: "`0x800253EC` is the intro STEP".** The earlier RE used byte-level
+  MEMWATCH (the tool logged single bytes, not words). The byte at 0x253EC is 0x10
+  and looked flag-like; the actual 32-bit word is **0x26A60010 — a constant
+  pointer**. The auto-skip (LogoSkip) wrote 1 into it whenever the logo audio
+  clock ticked, which in -play **corrupts that pointer mid-intro** = the user's
+  "Whoopee Camp doesn't play" bug. Headless never tripped it (no audio sink, clock
+  frozen at 0). Removed entirely. Lesson: MEMWATCH now logs aligned 32-bit words
+  in hex.
+- **Real intro state machine RE'd + decompiled — see
+  `docs/tomba2-scene-orchestrator.md`.** Found with the new write-watchpoint
+  (`PSXPORT_WATCHW`): the scene-phase word is **`0x800675CC`** (0=SCEA license,
+  1/2=transition+load, 3/4=Whoopee Camp logo + opening cutscene loop), driven by
+  `scene_update` (0x8002C97C) dispatching through jump table 0x8004CDC0. Each scene
+  holds until an advance event (`0x80076AC0`) fires; the event is paced by the
+  kernel ready-signal `0x80047174` (VSync/CD) via the advance pump (0x8003AAA4).
+  **Forcing the event races the loaders** (reproduces the white screen), so the
+  clean skip is to fast-forward the ready-signal-paced dwells. Implemented:
+  **Start-held fast-forward** of the intro (Tomba2_WantTurbo, scoped to phases via
+  0x800675CC). Whoopee Camp now plays; holding Start skips SCEA + Whoopee (and the
+  shared-phase opening cutscene). test-wide60 still 100%.
 - **Dynamic resolution (play window).** Window now sizes to ~85% of desktop height
   at 4:3 (was fixed 960x720); framebuffer rescaled to the window every present with
   correct PSX 4:3 aspect (letterbox), adapting live to resize. F11 = fullscreen,
