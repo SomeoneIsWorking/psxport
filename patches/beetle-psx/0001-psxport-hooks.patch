@@ -207,7 +207,7 @@ index c07d4f8..1eef7b5 100644
     //
     opf = instr & 0x3F;
 diff --git a/mednafen/psx/gte.c b/mednafen/psx/gte.c
-index b6377e9..4334c1e 100644
+index b6377e9..d123dd0 100644
 --- a/mednafen/psx/gte.c
 +++ b/mednafen/psx/gte.c
 @@ -27,6 +27,10 @@
@@ -221,17 +221,63 @@ index b6377e9..4334c1e 100644
  #include "gte.h"
  
  extern bool psx_gte_overclock;
-@@ -488,6 +492,13 @@ void GTE_WriteCR(unsigned int which, uint32_t value)
+@@ -488,6 +492,14 @@ void GTE_WriteCR(unsigned int which, uint32_t value)
  
     if (which == 31)
           CR[31] = (value & 0x7ffff000) | ((value & 0x7f87e000) ? (1 << 31) : 0);
 +
 +#ifdef PSXPORT_HOOKS
-+   /* psxport: tap the rotation matrix (0-4) + translation (5-7) writes, which
-+      together are the per-object/camera transform fed to RTPS projection. */
-+   if (psxport_gte_capture && which < 8)
++   /* psxport: tap the rotation matrix (0-4) + translation (5-7) writes, plus the
++      screen-projection params OFX/OFY/H (24/25/26) — together the per-object /
++      camera transform fed to RTPS projection. */
++   if (psxport_gte_capture && (which < 8 || (which >= 24 && which <= 26)))
 +      psxport_on_gte_cr(which, CR[which]);
 +#endif
  }
  
  uint32_t GTE_ReadCR(unsigned int which)
+@@ -1313,6 +1325,22 @@ static INLINE void TransformDQ(int64_t h_div_sz)
+    SET_IR(0, Lm_H(((int64_t)DQB + DQA * h_div_sz) >> 12));
+ }
+ 
++#ifdef PSXPORT_HOOKS
++/* psxport: report the just-projected vertex idx (input local V from DR, output
++   screen coords from XY_FIFO(3)) to the renderer-capture layer. */
++static INLINE void psxport_capture_rtp(unsigned idx, uint32_t sf)
++{
++   if (!psxport_rtp_capture)
++      return;
++   const int32_t vx = (int16_t)(DR[2 * idx] & 0xFFFF);
++   const int32_t vy = (int16_t)(DR[2 * idx] >> 16);
++   const int32_t vz = (int16_t)(DR[2 * idx + 1] & 0xFFFF);
++   const int32_t sx = (int16_t)(XY_FIFO(3) & 0xFFFF);
++   const int32_t sy = (int16_t)(XY_FIFO(3) >> 16);
++   psxport_on_rtp_vertex(vx, vy, vz, sx, sy, sf);
++}
++#endif
++
+ static INLINE int32_t RTPS(uint32_t instr)
+ {
+  int64_t h_div_sz;
+@@ -1329,6 +1357,10 @@ static INLINE int32_t RTPS(uint32_t instr)
+  TransformXY(h_div_sz, precise_h_div_sz, precise_z);
+  TransformDQ(h_div_sz);
+ 
++#ifdef PSXPORT_HOOKS
++ psxport_capture_rtp(0, sf);
++#endif
++
+  return(15);
+ }
+ 
+@@ -1353,6 +1385,10 @@ static INLINE int32_t RTPT(uint32_t instr)
+ 
+   if(i == 2)
+    TransformDQ(h_div_sz);
++
++#ifdef PSXPORT_HOOKS
++  psxport_capture_rtp(i, sf);
++#endif
+  }
+ 
+  return(23);

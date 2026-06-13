@@ -38,13 +38,15 @@ int ObjectCull(uint32_t, uint32_t* gpr, uint32_t*)
 // CR0-4 pack the 3x3 rotation matrix (s16, 1.0=0x1000); CR5-7 = translation
 // TRX/TRY/TRZ (s32). The game loads a transform then projects; TRZ (which==7)
 // is the natural "transform complete" marker. We assemble and count these.
-uint32_t s_gte_cr[8];
+uint32_t s_gte_cr[32]; // 0-7 = rot matrix + TR; 24/25/26 = OFX/OFY/H
 unsigned s_gte_xforms = 0; // transforms (TRZ writes) this frame
 bool s_gtelog = false;
+FILE* s_rtpdump = nullptr; // PSXPORT_T2_RTPDUMP: (transform,V)->SXY tuples
 
 void GteCrConsumer(unsigned which, uint32_t value)
 {
-  s_gte_cr[which & 7] = value;
+  if (which < 32)
+    s_gte_cr[which] = value;
   if (which == 7) // translation complete = one loaded transform
   {
     if (s_gtelog && s_gte_xforms < 6)
@@ -58,6 +60,20 @@ void GteCrConsumer(unsigned which, uint32_t value)
     }
     s_gte_xforms++;
   }
+}
+
+// Dump (full transform, input local vertex) -> game output SXY, one row per
+// projected vertex, for offline verification of our reprojection RTPS.
+void RtpConsumer(int32_t vx, int32_t vy, int32_t vz, int32_t sx, int32_t sy, uint32_t sf)
+{
+  if (!s_rtpdump)
+    return;
+  const int16_t r11 = s_gte_cr[0], r12 = s_gte_cr[0] >> 16, r13 = s_gte_cr[1], r21 = s_gte_cr[1] >> 16;
+  const int16_t r22 = s_gte_cr[2], r23 = s_gte_cr[2] >> 16, r31 = s_gte_cr[3], r32 = s_gte_cr[3] >> 16;
+  const int16_t r33 = s_gte_cr[4];
+  fprintf(s_rtpdump, "%u,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%u,%d,%d,%d,%d,%d\n", psxport_frame, r11, r12,
+          r13, r21, r22, r23, r31, r32, r33, (int32_t)s_gte_cr[5], (int32_t)s_gte_cr[6], (int32_t)s_gte_cr[7],
+          (int32_t)s_gte_cr[24], (int32_t)s_gte_cr[25], (uint16_t)s_gte_cr[26], sf, vx, vy, vz, sx, sy);
 }
 
 // --- Object cull-cone widening (override; RE: patches/tomba2/cull-widen.md) --
@@ -121,7 +137,14 @@ void Tomba2_Install()
 
   // GTE transform capture (camera + object transforms used for projection).
   s_gtelog = std::getenv("PSXPORT_T2_GTELOG") != nullptr;
-  if (s_gtelog || std::getenv("PSXPORT_T2_GTE") != nullptr)
+  if (const char* rtp = std::getenv("PSXPORT_T2_RTPDUMP"))
+  {
+    s_rtpdump = std::fopen(rtp, "w");
+    if (s_rtpdump)
+      std::fprintf(s_rtpdump, "frame,r11,r12,r13,r21,r22,r23,r31,r32,r33,trx,try,trz,ofx,ofy,h,sf,vx,vy,vz,sx,sy\n");
+    psxport_set_rtp_hook(RtpConsumer);
+  }
+  if (s_gtelog || s_rtpdump || std::getenv("PSXPORT_T2_GTE") != nullptr)
     psxport_set_gte_cr_hook(GteCrConsumer);
 }
 

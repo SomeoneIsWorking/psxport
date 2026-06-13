@@ -47,6 +47,11 @@ extern int psxport_cdc_log;
 extern int psxport_gte_capture;
 void psxport_on_gte_cr(unsigned which, uint32_t value);
 
+/* RTP vertex tap: when psxport_rtp_capture != 0, RTPS/RTPT report each
+   projected vertex (input local + output screen) to psxport_on_rtp_vertex. */
+extern int psxport_rtp_capture;
+void psxport_on_rtp_vertex(int32_t vx, int32_t vy, int32_t vz, int32_t sx, int32_t sy, uint32_t sf);
+
 /* Last emulated PC seen by the hook layer (watchdog diagnostics). */
 extern uint32_t psxport_last_pc;
 
@@ -69,10 +74,18 @@ void psxport_dump_cpu_state(const uint8_t* ram);
 void psxport_add_hook(uint32_t pc, uint32_t expected_instr, psxport_hook_fn fn);
 void psxport_clear_hooks();
 
-/* Register a consumer for GTE control-register writes (0..7). Setting a non-null
-   fn enables capture; null disables. */
+/* Register a consumer for GTE control-register writes (0..7, plus 24/25/26 =
+   OFX/OFY/H). Setting a non-null fn enables capture; null disables. */
 typedef void (*psxport_gte_cr_fn)(unsigned which, uint32_t value);
 void psxport_set_gte_cr_hook(psxport_gte_cr_fn fn);
+
+/* Register a consumer for projected vertices (RTPS/RTPT). For each projected
+   vertex: the input local vertex (vx,vy,vz, s16) and the game's output screen
+   coords (sx,sy, s16), plus the shift flag sf (0 or 12). The transform in
+   effect is whatever the CR hook last reported. Used to build/verify the
+   reprojecting renderer. Setting a non-null fn enables capture. */
+typedef void (*psxport_rtp_fn)(int32_t vx, int32_t vy, int32_t vz, int32_t sx, int32_t sy, uint32_t sf);
+void psxport_set_rtp_hook(psxport_rtp_fn fn);
 #endif
 
 #endif

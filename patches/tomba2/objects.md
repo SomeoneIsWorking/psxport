@@ -79,11 +79,25 @@ The wrapper reads the camera from scratchpad 0x1F8000D2/D6/DA (pos); the
 authoritative camera transform (position + 3x3 rotation matrix, = the GTE
 rotation matrix + TR loaded before RTPS) is the next RE target.
 
+## Reprojecting renderer — projection core PROVEN (chosen approach: from-scratch)
+RTP vertex tap (psxport_set_rtp_hook, via RTPS/RTPT in gte.c) reports each
+projected vertex as (input local V) + (game output screen SX,SY); the transform
+in effect comes from the GTE CR tap. PSXPORT_T2_RTPDUMP=<csv> dumps full tuples
+(R, TR, OFX, OFY, H, sf, V, SXY). tools/reproject.py faithfully reimplements the
+GTE RTPS (exact DivTable/CalcRecip reciprocal, the dist/Z divide, Lm_B IR sat,
+Lm_G screen sat) and **reproduces the game's SX/SY on 6,348,755/6,348,755 = 100%
+of captured vertices** (frame 14130-ish scene, all rotations + edge cases). So we
+can re-project the same geometry at an interpolated (R,TR) faithfully — the
+projection half of the custom renderer is done. Remaining: cross-frame transform
+matching, transform interpolation (TR linear, R nlerp/slerp), textured
+rasterization (VRAM as texsrc), present the extra frame.
+
 ## Status / next
 - [x] cull/submit chokepoint (0x8007712C) — enumerates all live objects by ptr
 - [x] full 0xC4 object struct mapped (pos 16.16 @+0x2c, rot matrix @+0x98,
       handler @+0x1c, model ptr @+0xc0, linked-list @+0x24)
 - [x] pointer stability verified; pool-slot reuse on scene change = snap
+- [x] faithful reprojection RTPS verified 100% bit-exact (tools/reproject.py)
 - [x] camera/object transforms captured via GTE tap (psxport_set_gte_cr_hook):
       CR0-4 = 3x3 rotation matrix (s16, 1.0=0x1000), CR5-7 = translation TR.
       KEY: TR is CAMERA-RELATIVE — it changes every frame as the camera moves

@@ -23,8 +23,17 @@
   0x32/0x36 (s16 X/Y/Z), type at +0x0c, visible flag at +0x01. Camera world pos
   in scratchpad 0x1F8000D2/D6/DA. Pointer is stable per-entity across frames =
   the object ID; pool-slot reuse on scene change = snap, not lerp.
-- NEXT: rotation + model-pointer struct fields; per-frame snapshot override
-  (prev/cur keyed by pointer); a moving-object scene; then the custom renderer.
+- **Renderer chosen: from-scratch reprojection** (user pick over re-running the
+  game's renderer). GTE tap extended to forward OFX/OFY/H (CR24-26); new RTP
+  vertex tap (psxport_set_rtp_hook, RTPS/RTPT in gte.c) reports
+  (local V, transform) -> game screen SXY. PSXPORT_T2_RTPDUMP dumps tuples.
+- **Projection core PROVEN faithful:** tools/reproject.py reimplements GTE RTPS
+  (DivTable/CalcRecip, dist/Z divide, IR + screen saturation) and reproduces the
+  game's SX/SY on **6,348,755 / 6,348,755 = 100%** of captured vertices. We can
+  reproject the same geometry at an interpolated (R,TR) bit-faithfully.
+- NEXT (renderer remaining): cross-frame transform matching (nearest-TR / order),
+  transform interpolation (TR linear, R nlerp), textured rasterization sampling
+  VRAM, present the synthesized in-between frame at 60fps.
 
 ## 2026-06-13 — read pacing root-caused via driven debugging; full fast boot chain works
 - **The "stuck on Whoopee logo" class is solved.** Chain of findings, all via the REPL/
