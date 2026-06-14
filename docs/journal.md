@@ -22,10 +22,19 @@ Target flow: PC boot -> SCEA -> WhoopeeCamp FMV -> OP FMV -> main menu. FMVs don
   0x801062e4, 0x8010637c}` (the 0x80106xxx OVERLAY region = intro sequencer FUN_801064f0 etc.,
   loaded from disc, interpreted — partially decompiled in scratch/decomp/overlay.c).
   `PTR_FUN_800a3ed8` = `0x800499e8` (resident).
-- **NEXT:** RE the 0x80106xxx stage flow (SCEA draw + per-frame structure + the
-  SCEA->WhoopeeCamp->OP->menu transitions), then build the PC-driven boot: native engine runs
-  FUN_80050b08's init, then a native frame loop drives each stage (call leaf draw/update,
-  native FMV for the two movies), no scheduler. New harness mode `dumplba <lba> <nbytes> <out>`.
+- **Stage entries are NOT in ram_f1000_all.c decomp** — disassemble from the RAM snapshot
+  `scratch/bin/tomba2/ram_f1000.bin` with `python3 tools/disasm.py <dump> <a> <b>` (capstone).
+  **Stage 0 = 0x8010649c = the PROLOGUE of the intro sequencer**; overlay.c's FUN_801064f0
+  (0x801064f0) is just its TAIL (the do/while loop — Ghidra split the function). Stage 0
+  sets up a task obj (stack@sp+0x190), calls FUN_80081218 + FUN_80080f6c, then resolves
+  OPN.BIN/START.BIN/IDX/XA files and runs the state machine that chains stages via
+  FUN_80052078(param) -> restart task at PTR_LAB_800a3ecc[param]. Stages 1,2 = 0x801062e4,
+  0x8010637c (disasm next). The 0x80106xxx overlay (OPN.BIN) is resident in ram_f1000.bin.
+- **NEXT (step by step):** (1) disasm stages 1/2 (0x801062e4, 0x8010637c) + find where SCEA
+  is drawn and the SCEA->WhoopeeCamp->OP->menu transitions live; (2) build the PC-driven boot:
+  native engine runs FUN_80050b08's init calls, then a native frame loop drives each stage
+  (call leaf draw/update via rec_dispatch/interp, native FMV for the two movies), no scheduler.
+  Harness `dumplba <lba> <nbytes> <out>` extracts any sector range.
 
 ## 2026-06-14 (later 29) — FMV FULLY WORKING (video+audio+speed); next: boot -> main menu
 FMV is done — video, audio, and speed all correct (verified on-screen by user: WhoopeeCamp
