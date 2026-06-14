@@ -86,11 +86,20 @@ The recompiler input is **NOT the boot EXE `SCUS_944.54`**. Measured:
     add/addi treated as wrapping; computed `jr` (switch tables) → `rec_dispatch` (jump-table
     recovery is a later pass); inter-function data blobs are emitted as dead "functions"
     (correct but wasteful — exclude later).
-- **S2 — runtime skeleton (next).** Load `MAIN.EXE` image into `g_ram` at `0x80010000`; set
-  entry/SP/GP; entry trampoline `func_800896E0`; HLE BIOS — kernel syscalls + the A0/B0/C0
-  call vectors (route `rec_dispatch` misses at `0xA0/0xB0/0xC0` to HLE). Stand up **S4 diff
-  harness vs Beetle** in parallel (methodology: harness before logic) so each function is
-  diffable from boot.
+- **S2 — runtime skeleton. STARTED (boot driver + recon).** `runtime/recomp/boot.c` loads
+  `MAIN.EXE` into `g_ram`, sets SP/GP/ra-sentinel, enters `func_800896E0`. Emitter now
+  **discovers direct-`jal` targets** (fixpoint, data-bounded) → seeds functions Ghidra missed
+  (1597→1598; fixed the `0x80089860` miss). Dispatch misses route to runtime
+  `rec_dispatch_miss`. **The core runs from boot.** Boot HLE surface, measured in order:
+    - `A0:0x39` InitHeap, `B0:0x19`, `B0:0x5B`, `C0:0x0A` ChangeClearRCnt, `A0:0x72`, `B0:0x35`
+    - one still-missing **indirect** function `0x8009A8E8` (reached via `jalr`, not direct
+      `jal` — needs a fn-pointer/indirect seed pass or manual seed).
+    - hardware regs touched: I_MASK/I_STAT (`0x1F8010 74/70`), DMA (`0x1F8010F0`), Timer1
+      (`0x1F8011 10/14`), CDROM (`0x1F8018 00/03`), **GPUSTAT `0x1F801814` ready-poll**
+      (spins because `mem.c` returns 0 — first thing the GPU/timer stub must satisfy).
+  - **NEXT:** implement the ~6 boot BIOS calls (A0/B0/C0 HLE table), seed `0x8009A8E8`, and a
+    minimal GPU/timer status so the ready-poll advances. Build **S4 diff harness vs Beetle**
+    alongside (methodology: harness before more logic) to verify each step bit-exact.
 - **S1 — emitter.** ops → C against a modeled `R3000` state (regs + memory accessors);
   one C function per Ghidra-mapped function, block labels + `goto` for intra-fn branches,
   **dispatch table** keyed by address for indirect calls/jumps (seed indirect-only targets).

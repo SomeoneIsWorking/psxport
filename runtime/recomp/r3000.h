@@ -31,7 +31,8 @@ void     mem_swr(uint32_t a, uint32_t v);
 // ---- Dispatch & traps -----------------------------------------------------
 // Indirect call/jump target -> recompiled function (generated rec_dispatch),
 // falling back to HLE/overlay routing for non-recompiled addresses.
-void rec_dispatch(R3000* c, uint32_t addr);
+void rec_dispatch(R3000* c, uint32_t addr);       // generated: address -> recompiled fn
+void rec_dispatch_miss(R3000* c, uint32_t addr);  // runtime: BIOS/overlay/computed target
 void rec_syscall(R3000* c, uint32_t code);
 void rec_break(R3000* c, uint32_t code);
 

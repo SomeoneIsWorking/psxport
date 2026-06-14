@@ -44,6 +44,21 @@ mem.c,stubs.c}` (R3000 state, flat 2 MB RAM+scratchpad, lwl/lwr/swl/swr, R3000 d
 - NEXT (S2): load MAIN.EXE into g_ram, entry trampoline `func_800896E0`, HLE syscalls +
   A0/B0/C0 vectors; stand up S4 diff harness vs Beetle in parallel.
 
+## 2026-06-14 (later 12) — S2 started: recompiled core RUNS from boot; HLE surface mapped
+`runtime/recomp/boot.c` loads MAIN.EXE into g_ram, enters `func_800896E0`. Emitter now
+discovers direct-`jal` targets (fixpoint, stops at first UNKNOWN so data doesn't inject
+seeds) → caught a Ghidra-missed fn `0x80089860` (1597→1598). Dispatch misses route to
+runtime `rec_dispatch_miss`. **The core executes real boot code.** Measured boot needs:
+- BIOS (in order): `A0:0x39` InitHeap, `B0:0x19`, `B0:0x5B`, `C0:0x0A` ChangeClearRCnt,
+  `A0:0x72`, `B0:0x35`. Then indirect fn `0x8009A8E8` (via `jalr` — direct-jal discovery
+  can't see it; needs a fn-ptr/indirect seed or manual add).
+- HW regs: I_MASK/I_STAT, DMA DPCR, Timer1, CDROM, and a **GPUSTAT `0x1F801814` ready-poll**
+  that spins (mem.c returns 0). Minimal GPU/timer status needed to advance.
+- NEXT: A0/B0/C0 HLE table for those ~6 calls + seed `0x8009A8E8` + minimal GPU/timer
+  status; stand up S4 diff harness vs Beetle to verify bit-exact. Build: `tools/recomp/
+  build.sh` (leaf tests); boot recon: compile boot.c instead of test_leaf.c, run under
+  `timeout`.
+
 ## 2026-06-14 (later 8) — CORRECTION to "later 7" RE map (overlay sequencer decompiled)
 Read the overlay decomp (`scratch/decomp/overlay.c` = `FUN_801064f0`) + the worker/scheduler
 chain from the full decomp. Three labels in "later 7" are **WRONG** — fixing them so the next

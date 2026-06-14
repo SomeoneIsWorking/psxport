@@ -261,6 +261,29 @@ def ghidra_funcs(text_lo, text_hi, decomp="scratch/decomp/ram_f1000_all.c"):
         if text_lo <= int(x, 16) < text_hi})
 
 
+def discover_funcs(exe, seeds):
+    """Grow the function set by following direct `jal` targets to a fixpoint. Each function
+    body is scanned only up to its first UNKNOWN word (real code is 0% unknown), so trailing
+    jump-table/constant data doesn't inject spurious seeds. Catches functions Ghidra missed
+    that are reached by a direct call (the recompiler's 'seed indirect-only targets' rule)."""
+    lo, hi = exe.load, exe.text_end
+    funcs = set(seeds)
+    changed = True
+    while changed:
+        changed = False
+        ordered = sorted(funcs)
+        for idx, a in enumerate(ordered):
+            end = ordered[idx + 1] if idx + 1 < len(ordered) else hi
+            for x in range(a, end, 4):
+                ins = decode(x, exe.word(x))
+                if ins.kind == D.UNKNOWN:
+                    break  # start of trailing data
+                if ins.op == "jal" and lo <= ins.target < hi and ins.target not in funcs:
+                    funcs.add(ins.target)
+                    changed = True
+    return sorted(funcs)
+
+
 def main():
     if len(sys.argv) < 3:
         sys.exit("usage: emit.py <MAIN.EXE> <out.c> [--limit N]")
@@ -270,10 +293,9 @@ def main():
     if "--limit" in sys.argv:
         limit = int(sys.argv[sys.argv.index("--limit") + 1])
 
-    funcs = ghidra_funcs(exe.load, exe.text_end)
-    if exe.entry not in funcs:
-        funcs.append(exe.entry)
-        funcs.sort()
+    seeds = set(ghidra_funcs(exe.load, exe.text_end)) | {exe.entry}
+    funcs = discover_funcs(exe, seeds)
+    print(f"functions: {len(seeds)} seeds (Ghidra+entry) -> {len(funcs)} after jal discovery")
     funcset = set(funcs)
     if limit:
         funcs = funcs[:limit]
@@ -293,15 +315,13 @@ def main():
     for a in funcs:
         emit_func(exe, a, nxt_of[a], funcset, out)
 
-    # Dispatch table (generated): address -> recompiled function.
-    out.append("#include <stdio.h>")
+    # Dispatch table (generated): address -> recompiled function. Misses (BIOS vectors,
+    # overlay code, computed targets) route to the hand-written runtime hook.
     out.append("void rec_dispatch(R3000* c, uint32_t addr) {")
     out.append("  switch (addr & 0x1FFFFFFFu) {")
     for a in funcs:
         out.append(f"    case 0x{a & 0x1FFFFFFF:08X}u: func_{a:08X}(c); return;")
-    out.append("    default:")
-    out.append('      fprintf(stderr, "[dispatch] no recompiled fn @ 0x%08X\\n", addr);')
-    out.append("      return;")
+    out.append("    default: rec_dispatch_miss(c, addr); return;")
     out.append("  }")
     out.append("}")
 
