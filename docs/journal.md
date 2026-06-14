@@ -105,6 +105,34 @@ Mapped the exact functions to override for native-file CD (no emulation), all re
   command-wait + FUN_8008c1ec to complete synchronously from file; native VBlank/event for
   WaitEvent; verify boot → title/FMV. Override targets all in docs/recomp_port_plan.md.
 
+## 2026-06-14 (later 16) — S3 CD DONE: native by-LBA reads, CdInit/timeouts gone; boot → VSync
+Implemented the native CD backend + overrides. **Boot now runs CdInit and CD commands
+natively (no controller, no IRQ handshake) and advances past CD into graphics/event init.**
+- **Disc backend `runtime/recomp/disc.c`** (libchdr, prebuilt `build/.../libchdr-static.a`):
+  `disc_read_sector(lba, out2048)` = hunk-cached CHD read, extracts the 2048-B user data
+  (mode-aware offset), same as `tools/discdump.cpp`. Disc path via PSXPORT_TOMBA2_DISC /
+  PSXPORT_DISC / `.env`. **Verified standalone:** LBA 16 = `CD001` (ISO PVD), LBA 23 = `PS-X`
+  (MAIN.EXE header) — correct bytes by LBA.
+- **CD overrides `runtime/recomp/cd_override.c`** (recomp-overrides; bodies kept alive):
+  `0x8008B2D8` CdInit → v0=0 (drive ready, skip HW handshake; caller still installs libcd
+  callbacks); `0x8008AC34` CdCommand → 0, `0x8008A6EC` CdSync → 2 (the spin-on-DAT_800ac298
+  waiters, now moot — every data read is native); `0x8008C1EC` `FUN_8008c1ec(blocks,lba,buf)`
+  → reads blocks×2048 from the disc straight into buf, returns 1. Registered by
+  `cd_overrides_init()` from boot.c. build.sh links libchdr+lzma+miniz+zstd.
+- **Result:** the `CD timeout` / `CdInit: Init failed` spin is GONE. Boot proceeds: ResetGraph
+  → **`VSync: timeout`** (next blocker) + event/thread/pad/card BIOS calls now surfacing
+  (B0:0x08 OpenEvent, 0x0A WaitEvent, 0x0C EnableEvent, 0x0E OpenThread, 0x4A/4B card,
+  C0:0x02/03 SysEnqIntRP, A0:0x70 _bu_init). No `FUN_8008c1ec` read fires yet — the game
+  stalls at VSync before it mounts the CD filesystem, so the override read is verified by the
+  standalone backend test, not yet end-to-end in-game.
+- **NEXT (S3 cont.): native VBlank/VSync + events.** `FUN_80085900` is libetc VSync; the
+  vblank counter is **`DAT_800abde0`**; `FUN_80085a78(target)` spins until it reaches target
+  → `VSync: timeout` because no IRQ increments it. Fix = a native frame source: override
+  `FUN_80085900` to advance `DAT_800abde0` per VSync(0) and return it for VSync(-1); implement
+  the event table (OpenEvent/EnableEvent/TestEvent/WaitEvent) in hle.c + deliver VBlank per
+  frame tick (transcribe from the proven wide60 hle_kernel.cpp). Then the game should mount the
+  CD FS (FUN_8008bbe8 → FUN_8008c1ec reads) and we verify the native read path end-to-end.
+
 ## 2026-06-14 (later 8) — CORRECTION to "later 7" RE map (overlay sequencer decompiled)
 Read the overlay decomp (`scratch/decomp/overlay.c` = `FUN_801064f0`) + the worker/scheduler
 chain from the full decomp. Three labels in "later 7" are **WRONG** — fixing them so the next

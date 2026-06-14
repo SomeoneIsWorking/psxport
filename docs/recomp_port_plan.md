@@ -129,7 +129,14 @@ VBlank-driven `WaitEvent` similarly handled natively (a native frame/event sourc
   `rec_func_index`. Body stays alive (A/B toggle + diffable), overrides fire on direct AND
   indirect calls, **super-call** = call `gen_func_X`. Verified in `test_leaf.c` (replace,
   fire, super-call, toggle-off — all pass).
-- **S3 — native CD/file backend (next). Override targets pinned (all recompiled fns):**
+- **S3 — native CD/file backend. CD PORTION DONE (2026-06-14, "later 16").** Implemented:
+  `runtime/recomp/disc.c` (libchdr by-LBA `disc_read_sector`, verified CD001@16 / PS-X@23) +
+  `runtime/recomp/cd_override.c` overriding CdInit `0x8008B2D8`→0, CdCommand `0x8008AC34`→0,
+  CdSync `0x8008A6EC`→2, read `0x8008C1EC`→native blocks×2048 read. CD timeout/Init-failed
+  spin gone; boot advances to `VSync: timeout`. **Remaining S3: native VBlank/VSync + event
+  table** (override libetc VSync `FUN_80085900`/counter `DAT_800abde0`; events in hle.c) so the
+  game mounts the CD FS and the native read path is exercised end-to-end. Original pinned
+  targets below (all recompiled fns):
   - `0x8008B2D8` **CdInit** (the boot blocker — emits `CD_init`, then `CD_cw`/`CD timeout`
     polling CD I/O regs `0x1F8018xx` with no IRQ → spins). Override → report drive ready.
   - `0x8008AC34` CD command-write (`CD_cw`), `0x8008A6EC` low-level command+wait (`CD timeout`

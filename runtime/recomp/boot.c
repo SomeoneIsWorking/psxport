@@ -36,6 +36,8 @@ int main(int argc, char** argv) {
   const char* path = argc > 1 ? argv[1] : "scratch/bin/tomba2/MAIN.EXE";
   R3000 c = {0};
   load_exe(path, &c);
+  void cd_overrides_init(void);
+  cd_overrides_init();      // native CD: drive-ready + by-LBA read (S3)
   c.r[4] = 1; c.r[5] = 0;   // a0=argc-ish, a1=argv (BIOS sets these; minimal)
   func_800896E0(&c);
   fprintf(stderr, "[exit] entry function returned to top level\n");
