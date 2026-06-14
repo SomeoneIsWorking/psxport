@@ -74,6 +74,15 @@ int main(int argc, char** argv) {
     native_fmv_play("MOVIE/OP.STR");     // Tomba!2 opening
   }
 
+  // PC-PSX hybrid native game driver (milestone: init prefix). Runs crt0 + the game-main
+  // init calls natively (no scheduler). PSXPORT_NATIVE_BOOT=1 to enable.
+  if (getenv("PSXPORT_NATIVE_BOOT")) {
+    void native_boot_run(R3000*);
+    native_boot_run(&c);
+    fprintf(stderr, "[boot] native_boot_run returned\n");
+    return 0;
+  }
+
   // TODO(next milestone): hand off to the game proper. The resident game runtime is a
   // cooperative coroutine task system; running its recompiled code without BIOS threads /
   // ucontext needs a resumable-execution design (pending). func_800896E0() is intentionally
