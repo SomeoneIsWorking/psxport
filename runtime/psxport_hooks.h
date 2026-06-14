@@ -104,6 +104,11 @@ int psxport_cd_read_sectors(int32_t lba, int count, uint8_t* dst);
    from an idle "Loading..." spin-dwell. From cdc.c. */
 int psxport_cd_drive_busy(void);
 
+/* Generic disc primitive: 1 if CD-XA ADPCM streaming (STRSND) is enabled in the
+   current Setmode. Distinguishes a silent streamed clip (logo still, STRSND off)
+   from a real FMV with audio (STRSND on). From cdc.c. */
+int psxport_cd_strsnd_on(void);
+
 /* Generic disc primitive: set the CD-ROM interrupt-enable mask (the PSX CD
    1F801802.idx1 register the BIOS CdInit sets). A pure-HLE BIOS that skips the
    ROM CdInit must call this (v=0x1F) so the CDC asserts IRQ_CD on command/data

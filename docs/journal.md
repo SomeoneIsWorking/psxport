@@ -1,5 +1,84 @@
 # Debug / progress journal
 
+## 2026-06-14 (later 4) — inter-FMV logo skip IMPLEMENTED + verified (dwell-escape, STRSND-gated)
+**Shipped:** `LogoHoldSkip` in runtime/games/tomba2.cpp — a Start-gated native override
+that collapses the silent logo hold. **Verified result: FMV#2 ReadS f719 -> f598 (-121f)
+when Start is held during the hold**, FMV#2 renders cleanly (Tomba jungle/character scene,
+meanRGB (40.4,18.9,1.1)->(81.4,40.0,22.3), matches known-good baseline), plays to completion
+(jungle scene still streaming at f1300, no hang), and **no regression** (Start NOT held =
+natural f719). Default ON (gated with the other intro skips via PSXPORT_T2_NOINTROSKIP).
+- **Hook:** PC `0x80050CE4`, sig `0x9482809C` (the per-frame StrPlayer pace-dwell body),
+  redirect to loop-exit `0x80050CF8` — the SAME lever as the loading-screen FmvDwellSkip.
+  Fires only when `s_skip_held && !psxport_cd_strsnd_on()`.
+- **Phase gate = STRSND (CD-XA audio) OFF.** The silent logo hold runs STRSND-off (Setmode
+  0x80/0xA0); every real FMV/cutscene streams audio (STRSND-on, 0xC0). New generic primitive
+  `psxport_cd_strsnd_on()` (cdc.c) exposes it. Verified: holding Start through FMV#2 does NOT
+  fast-forward it (same f598 start, full duration) — the gate protects real movies.
+- **CORRECTS "(later 3)"'s claim that forcing the dwell saved 0 frames.** That was tested via
+  PSXPORT_REA_FORCEDWELL on a different build/probe. Measured directly on the f719 skip path,
+  escaping the 0x80050CE4 dwell DOES accelerate the consume: f719->f598. (fmv-skip.md's
+  "held-Start saves ~120f" was right.) The residual f324->f598 is genuine consumer pacing
+  (still-logo decoded 1 frame/VBLANK) — the safe floor; forcing past it underruns.
+- **Approach 1 (read genuine EOF early) RULED OUT, newly tested:** redirecting the consume
+  Setloc to the real EOF LBA 11492 makes the StrPlayer re-seek 11492 forever without advancing
+  — its advance is gated on its OWN consumed-sector bookkeeping, not on physically reading EOF.
+  Same failure family as forging an XA EOF submode. Do not retry disc-position fakery.
+- **Approach 3 (drive the SM) unnecessary:** RE confirmed the inner SM 0x80106F80 is DORMANT
+  during the hold (first ticks f709), states 1/2/3 are pass-through increments (jumptable
+  @0x801062C4 all -> 0x80107034), state 0 = CD poll 0x80089bac(a0=0xE), state 4 @0x80107054 =
+  advance. The SM only wakes once the consume completes, so the consume rate IS the gate; the
+  dwell-escape addresses it directly. Tooling: added `[setloc f%u] lba= pc=` log (cdc_log).
+
+## 2026-06-14 (later 3) — inter-FMV logo hold: DATA-bound, NOT audio/time; mechanism mapped
+**Question answered:** is the ~317f logo hold (skip FMV#1@f380 -> FMV#2 ReadS@f719)
+DATA-bound or TIME/AUDIO-bound? **Answer: DATA-bound (stream-position-driven), NOT
+audio- or display-clock-bound.** Evidence (all `wide60rt_reA`, instant-CD default):
+- **NO audio of any kind plays during the hold.** Setmode during FMV#1=0xC0 (STRSND on,
+  XA processed every ~3f); during the hold Mode=0x80/0xA0 (**STRSND OFF**, zero `[xa]`
+  sectors); FMV#2 (f719) Mode back to 0xC0. The CD-DA `Play`@f311 was Paused@f322. So
+  the "logo jingle" hypothesis is FALSIFIED — the reads are plain data ReadN.
+- **Display-clock collapse saves 0 frames.** Forced the per-frame pace dwell 0x80050CE4
+  to always elapse (PSXPORT_REA_FORCEDWELL probe): FMV#2 ReadS STILL at f719, identical.
+  So the hold is NOT gated by the StrPlayer's display counter (0x800E809C vs threshold
+  0x1F800235=2). (Re-confirms fmv-skip.md's instant-CD/dwell findings on THIS skip path.)
+- **Fixed 401 sectors** DMA'd during the StrPlayer hold phase (reproducible to the word
+  across runs). Setloc LBAs creep slowly through TWO interleaved logo streams (~LBA
+  1879-1908 and ~6565-6717, advancing 1904->1905->1906->1908 over f388-f522 = consumer-
+  throttled), then JUMP to LBA 152238 (OPS.STR = FMV#2) at f719. The hold ends when the
+  logo streams reach their descriptor end-LBA -> advance to next playlist entry.
+- **Read pacing** during active stretches is ~2-3 sectors/frame (consumer-paced, real-
+  VBLANK-clocked); reads are instant when issued (instant-CD), the long idle gaps (e.g.
+  f455-f526) are the CPU spinning 62% in the dwell + ~11% in an RLE/decode loop at
+  0x80044E14 — i.e. decoding/displaying the still logo, not waiting on disk.
+
+**Per-frame decision chain (execution mapped, not a single pokeable gate):**
+- The StrPlayer playlist is a `'\'`(0x5C)-delimited name list; the walker at **0x8008B8F0**
+  tokenizes it and calls **0x8008BF50(a0=N)** to activate the Nth stream (a0=2 f387,
+  a0=3 f402, **a0=4 @f717** -> activates FMV#2 -> ReadS f719). 0x8008BF50 stores N to
+  0x800AC2D4 (the 3->4 the lead saw; poking it is INERT, re-confirmed).
+- The actual advance is driven by the FMV#2-overlay state machine at **0x80106388**
+  (outer state `[obj+0x48]`, obj=`*(0x1F800138)`, jumptable @0x8010622C) and inner SM
+  **0x80106F80** (state `[obj+0x4a]`, jumptable @0x801062C4; state 4 @0x80107054 does the
+  playlist-advance). This dispatcher is DORMANT during the hold — first runs f654 (one
+  tick) then f709+ — because the StrPlayer stream scheduler only ticks the next segment's
+  SM when the current (logo) segment's data is consumed. The hold proper (f386-f707) is
+  the logo-stream consume; the SM spin-up (f709-f719) is the tail.
+- Inner state 0 (0x80106FF0) spins `0x80089bac(a0=0xE)` until nonzero = a CD-command-
+  complete poll (0x8008AC34 reads per-channel state 0x800ABC00+ch*4, issues via 0x8008A6EC).
+  So the terminal gate is CD-command/stream-position state, consistent with data-bound.
+
+**Forceability:** no clean single-flag lever (stream-count 0x800AC2D4 poke INERT; scratch
+state 0x1F80019C is a downstream effect, written by 0x80050DA8 each frame, ->2 only at
+f724 AFTER ReadS). The advance is genuinely data-position-driven. The forceable approach
+remains the lead's option (b): a native override that DRIVES the segment advance (set the
+logo streams' end-reached / invoke 0x8008BF50(a0=4) + the 0x80106xxx outer-state advance)
+on Start. FMV#2 reached early is verified glitch-free (fmv-skip.md), so risk is only WHICH
+state to drive. NOT YET implemented — needs the logo-stream descriptor end-LBA field RE'd
+to set "logo consumed" cleanly, OR drive the 0x80106388 outer-SM transition directly.
+**Tooling added (kept):** PSXPORT_PCTRACE_EXCL="lo-hi" excludes a hot spin sub-range from
+the pctrace ring (so the dwell 0x80050CE4 can't flood it). Probes used then reverted:
+cdc.c [setmode]/[setloc]/[xa] logs (gated on PSXPORT_CDC_LOG), tomba2 PSXPORT_REA_FORCEDWELL.
+
 ## 2026-06-14 (later 2) — inter-FMV logo skip: deep RE, new tooling, NOT yet cracked
 **User's actual goal:** pressing Start during FMV#1 skips it, but then there's a
 **~5.6s gap to FMV#2** they want gone. Reproduced: skip FMV#1@f380 → FMV#2 ReadS@f719

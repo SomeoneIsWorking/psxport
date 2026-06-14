@@ -144,6 +144,10 @@ unsigned psxport_frame = 0;
 // dumped with the REPL `pctrace <path>` command. Cheap: one range check per
 // instruction, push only in-range.
 uint32_t  psxport_pctrace_lo = 0, psxport_pctrace_hi = 0;
+// Optional exclusion sub-range [excl_lo,excl_hi): PCs in it are NOT recorded, so a
+// hot spin loop (e.g. StrPlayer pace dwell 0x80050CE4) can't flood the ring and bury
+// the once-per-frame divergence we're hunting. Set PSXPORT_PCTRACE_EXCL="lo-hi".
+uint32_t  psxport_pctrace_excl_lo = 0, psxport_pctrace_excl_hi = 0;
 uint32_t* g_pctrace = nullptr;
 uint32_t  g_pctrace_cap = 0, g_pctrace_idx = 0;
 bool      g_pctrace_wrapped = false;
@@ -157,9 +161,18 @@ extern "C" void psxport_pctrace_init() {
     g_pctrace = (uint32_t*)std::malloc(g_pctrace_cap * sizeof(uint32_t));
     fprintf(stderr, "[pctrace] capturing PCs in [%08X,%08X) cap=%u\n", lo, hi, g_pctrace_cap);
   }
+  const char* e = std::getenv("PSXPORT_PCTRACE_EXCL");
+  if (e && *e) {
+    unsigned elo = 0, ehi = 0;
+    if (std::sscanf(e, "%x-%x", &elo, &ehi) == 2 && ehi > elo) {
+      psxport_pctrace_excl_lo = elo; psxport_pctrace_excl_hi = ehi;
+      fprintf(stderr, "[pctrace] excluding PCs in [%08X,%08X)\n", elo, ehi);
+    }
+  }
 }
 extern "C" void psxport_pctrace_push(uint32_t pc) {
   if (pc < psxport_pctrace_lo || pc >= psxport_pctrace_hi) return;
+  if (pc >= psxport_pctrace_excl_lo && pc < psxport_pctrace_excl_hi) return;
   g_pctrace[g_pctrace_idx] = pc;
   if (++g_pctrace_idx >= g_pctrace_cap) { g_pctrace_idx = 0; g_pctrace_wrapped = true; }
 }

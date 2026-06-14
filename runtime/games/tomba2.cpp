@@ -203,20 +203,36 @@ int DwellSkip(uint32_t, uint32_t* gpr, uint32_t*)
   return PSXPORT_HOOK_CONTINUE;
 }
 
-// Inter-FMV logo-hold skip. The StrPlayer holds the Whoopee logo (a streamed
-// clip) ~5.6s after FMV#1 by spinning in the wait loop at 0x801076B0:
-//   loop: if 0x80089bac(a0=2, ctx)==0 -> keep waiting; else -> dispatch the
-//   "advance to next clip" (0x8008CC30 with event word 0x1C0). RE chain:
-//   0x80050D00 state machine -> 0x8008179C/0x80050D44 -> ... -> this wait. The
-//   gate is purely a time/stream wait; FMV#2 reached early plays glitch-free
-//   (verified). Forcing the loop's exit branch (0x801076D8 `beqz v0`) by setting
-//   v0!=0 makes the StrPlayer advance immediately. Gated on Start so it's the
-//   user's "skip" — and only collapses this wait, no game state faked.
-int LogoSkip(uint32_t, uint32_t* gpr, uint32_t*)
+// Inter-FMV logo-hold skip (Start-gated). Between the two opening FMVs the
+// StrPlayer holds the Whoopee-Camp studio logo as a *silent* streamed MDEC clip
+// (~317 frames; skip FMV#1@f380 -> FMV#2 ReadS@f719). RE (docs/tomba2-fmv-skip.md,
+// journal 2026-06-14): the hold is the StrPlayer consuming the logo clip's data,
+// paced per-VBLANK by the still-image decode/ring drain; it advances to FMV#2
+// through its OWN logic once the clip's sectors are consumed (the inner overlay
+// SM 0x80106F80 reaches its state-4 playlist-advance at f717). There is NO single
+// pokeable "logo done" gate -- every flag (clip-state byte 0x1F80019C, stream
+// count 0x800AC2D4, the prebuffer counters) is a derived EFFECT, and faking the
+// disc position (Setloc->EOF, or forging an XA EOF submode) desyncs the player's
+// own sector bookkeeping so it re-seeks forever (both verified, RULED OUT).
+//
+// The ONE clean lever is the per-frame pace dwell 0x80050CE4 (the same loop the
+// loading-screen FmvDwellSkip targets): escaping it lets the consume/decode loop
+// iterate more per frame, so the clip is consumed -- and the advance fires --
+// sooner. Measured: collapsing the dwell while Start is held moves FMV#2 ReadS
+// f719 -> f598 (-121f), and FMV#2 renders cleanly (no underrun). The residual
+// f324->f598 is genuine consumer pacing (the still logo being decoded one frame
+// per VBLANK) -- forcing past THAT underruns, so f598 is the safe floor.
+//
+// PHASE GATE (so it can't fast-forward a real cutscene): fire ONLY when Start is
+// held AND CD-XA audio streaming (STRSND) is OFF. The silent logo hold runs with
+// STRSND off (Setmode 0x80/0xA0); every real FMV/cutscene streams audio (STRSND
+// on, 0xC0). So a held Start during an actual movie's consume never collapses it.
+int LogoHoldSkip(uint32_t pc, uint32_t*, uint32_t* redirect_pc)
 {
-  if (s_skip_held)
-    gpr[2] = 1; // $v0 != 0 -> wait loop exits -> advance to FMV#2
-  return PSXPORT_HOOK_CONTINUE;
+  if (!s_skip_held || psxport_cd_strsnd_on())
+    return PSXPORT_HOOK_CONTINUE; // not skipping, or a real (audio) FMV -> pace normally
+  *redirect_pc = 0x50CF8 | (psxport_last_pc & 0xE0000000); // pace-loop exit (same as FmvDwellSkip)
+  return PSXPORT_HOOK_REDIRECT;
 }
 
 // RE probe (PSXPORT_T2_STATEPROBE): the StrPlayer dispatch at 0x80050D00 reads
@@ -317,14 +333,13 @@ void Tomba2_Install()
   if (std::getenv("PSXPORT_T2_STATEPROBE") != nullptr)
     psxport_add_hook(0x80050D00, 0x92A3019C, StateProbe);
 
-  // Inter-FMV logo-hold skip — WIP, opt-in (PSXPORT_T2_LOGOSKIP). 0x801076D8 is
-  // the advance EXECUTION (only runs at the natural advance frame), NOT the
-  // per-frame wait, so this hook does not yet skip the hold. The real gate is the
-  // data-driven "logo clip stream ended" check in the per-frame tick (RE'd to the
-  // advance chain 0x8010753C->0x801076B0->0x8008CC30, but the trigger is upstream
-  // and stream-end-driven). See journal 2026-06-14.
-  if (std::getenv("PSXPORT_T2_LOGOSKIP") != nullptr)
-    psxport_add_hook(0x801076D8, 0x1040FFFC, LogoSkip);
+  // Inter-FMV logo-hold skip: Start collapses the silent logo hold's per-frame
+  // pace dwell so the StrPlayer advances to FMV#2 early (f719 -> f598), through
+  // its own logic. Default ON (inert unless Start held AND STRSND off, i.e. the
+  // silent logo hold -- never a real audio FMV); opt out with the same
+  // PSXPORT_T2_NOINTROSKIP that gates the other intro skips.
+  if (s_introskip)
+    psxport_add_hook(0x80050CE4, 0x9482809C, LogoHoldSkip);
 
   // Live object enumeration: hook the universal per-object cull chokepoint.
   s_objlog = std::getenv("PSXPORT_T2_OBJLOG") != nullptr;
