@@ -19,6 +19,7 @@
 
 void gen_func_800788AC(R3000*);    // recomp body (super-call)
 void gpu_present(void);            // native GPU: present the displayed VRAM region
+void spu_audio_frame(void);        // SPU: advance the mixer one frame + feed the audio device
 
 #define DISPLAY_COUNTER 0x800E809Cu   // DAT_800e809c (u16) — the dwell's vblank counter
 #define VBLANK_QUOTA    0x1F800235u   // DAT_1f800235 (u8)  — vblanks per displayed frame
@@ -27,6 +28,7 @@ static void ov_frame_update(R3000* c) {
   gen_func_800788AC(c);                              // real per-frame state update
   mem_w16(DISPLAY_COUNTER, mem_r8(VBLANK_QUOTA));    // satisfy the pacing dwell immediately
   gpu_present();                                     // one rendered frame per loop iteration
+  spu_audio_frame();                                 // advance + feed audio (sole spu_update driver)
 }
 
 void games_tomba2_init(void) {

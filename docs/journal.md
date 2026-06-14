@@ -330,6 +330,31 @@ PM-mode session: two developer subagents lifted **MDEC** (`mdec_beetle.c`) and *
   ready but never fed. **NEXT:** wire the StrPlayer streaming read natively (feed stream sectors
   → MDEC decode → VRAM upload), the intro-sequencing path the earlier "later 4-8" work mapped.
 
+## 2026-06-14 (later 25) — MDEC placement + SPU audio integrated; one-shot run.sh (macOS+Linux)
+PM sprint, two more developer subagents (both delivered + verified):
+- **MDEC DMA-out macroblock placement** (mdec_beetle.c): `mdec_dma_out` now PLACES each word at
+  `buf[i + offs]` matching Beetle's DMA1 `CH_MDEC_OUT` (verified: `i+offs` is an exact
+  permutation of [0,total), stride 6=24bpp / 4=16bpp; value-for-value vs a reference scatter).
+  PM wired DMA1 in mem.c to clear+drain+copy the full post-scatter region (the interleave
+  reaches forward; copy the whole MADR transfer, not the return count).
+- **SPU audio output** (spu_audio.c, SDL): `spu_audio_init` (44100/S16/stereo, lazy, gated by
+  PSXPORT_NOAUDIO) + `spu_audio_frame` (advance 564480 sys-clocks = 735 frames, drain, queue,
+  4-frame cap). PM wired the SPU register file `0x1F801C00-1FFF` + DMA4 in mem.c, `spu_init`/
+  `spu_audio_init` at boot, `spu_audio_frame` once per frame (sole spu_update driver).
+- Builds clean, leaf tests pass, no boot regression. (MDEC/SPU end-to-end output is untestable
+  until the intro streams — see below — but both are wired + unit-verified.)
+- **`run.sh` (repo root) — fully automated, macOS + Linux:** resolves the disc (arg / env /
+  .env / *.chd drop-in), CMake-builds libchdr + discdump, extracts MAIN.EXE, recompiles the
+  core + builds the native runtime, launches in an SDL window. macOS-aware: `_XOPEN_SOURCE=700`
+  (ucontext), pkg-config sdl2, getconf/sysctl cores, no `timeout`/GNU-isms, brew hints.
+  Verified end-to-end on Linux (builds `scratch/bin/tomba2_port`, runs, CD reads). Knobs:
+  PSXPORT_NOAUDIO / PSXPORT_NOWINDOW / PSXPORT_GPU_DUMP / CC.
+- **Critical-path status (visible output):** the StrPlayer **streaming** read (`FUN_8008c960`)
+  is NEVER reached — the game inits MDEC (`FUN_8009C620`) but the interpreted intro overlay
+  (START.BIN) stalls before chaining to load/play the logo, so no FMV. Only 5 CD reads ever.
+  This is the deep intro-sequencing blocker ("later 2-8"); needs further RE of what the
+  interpreted sequencer waits on (logic/state vs an interp-correctness gap). Single-owner next.
+
 ## 2026-06-14 (later 8) — CORRECTION to "later 7" RE map (overlay sequencer decompiled)
 Read the overlay decomp (`scratch/decomp/overlay.c` = `FUN_801064f0`) + the worker/scheduler
 chain from the full decomp. Three labels in "later 7" are **WRONG** — fixing them so the next

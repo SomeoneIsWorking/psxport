@@ -31,11 +31,17 @@ void     mdec_write(uint32_t addr, uint32_t val);
 uint32_t mdec_read(uint32_t addr);
 void     mdec_dma_in(const uint32_t* words, int count);
 int      mdec_dma_out(uint32_t* words, int count);
+// SPU (native, lifted from Beetle via spu_beetle.c). DMA channel 4 = SPU-RAM transfer.
+void     spu_write(uint32_t addr, uint32_t val);
+uint32_t spu_read(uint32_t addr);
+void     spu_dma_write(const uint32_t* words, int count);
+int      spu_dma_read(uint32_t* words, int count);
 
 static uint32_t s_dma0_madr, s_dma0_bcr, s_dma0_chcr;  // DMA0 MDEC-in
 static uint32_t s_dma1_madr, s_dma1_bcr, s_dma1_chcr;  // DMA1 MDEC-out
 static uint32_t s_dma2_madr, s_dma2_bcr, s_dma2_chcr;  // DMA2 GPU
-static uint32_t s_dma_buf[0x10000];                    // staging for MDEC block DMA
+static uint32_t s_dma4_madr, s_dma4_bcr, s_dma4_chcr;  // DMA4 SPU
+static uint32_t s_dma_buf[0x10000];                    // staging for block DMA
 
 static int dma_block_words(uint32_t bcr) {  // sync-mode-1 block DMA total word count
   uint32_t bs = bcr & 0xFFFF, bc = bcr >> 16;
@@ -53,6 +59,10 @@ static uint32_t io_read(uint32_t a, uint32_t bytes) {
   }
   if (p == 0x1F801810) return 0;                 // GPUREAD (VRAM-store path: minimal)
   if (p == 0x1F801820 || p == 0x1F801824) return mdec_read(p);  // MDEC0 data / MDEC1 status
+  if (p >= 0x1F801C00 && p <= 0x1F801FFF) return spu_read(p);    // SPU register file
+  if (p == 0x1F8010C0) return s_dma4_madr;
+  if (p == 0x1F8010C4) return s_dma4_bcr;
+  if (p == 0x1F8010C8) return s_dma4_chcr;
   if (p == 0x1F801080) return s_dma0_madr;
   if (p == 0x1F801084) return s_dma0_bcr;
   if (p == 0x1F801088) return s_dma0_chcr;
@@ -71,6 +81,25 @@ static void io_write(uint32_t a, uint32_t v, uint32_t bytes) {
   if (p == 0x1F801810) { gpu_gp0(v); return; }    // GP0 (direct)
   if (p == 0x1F801814) { gpu_gp1(v); return; }    // GP1 (display/control)
   if (p == 0x1F801820 || p == 0x1F801824) { mdec_write(p, v); return; }  // MDEC0 cmd / MDEC1 ctrl
+  if (p >= 0x1F801C00 && p <= 0x1F801FFF) { spu_write(p, v); return; }    // SPU register file
+  if (p == 0x1F8010C0) { s_dma4_madr = v; return; }
+  if (p == 0x1F8010C4) { s_dma4_bcr = v; return; }
+  if (p == 0x1F8010C8) {                           // DMA4 CHCR: SPU-RAM transfer
+    s_dma4_chcr = v;
+    if (v & 0x01000000u) {
+      int n = dma_block_words(s_dma4_bcr); if (n > 0x10000) n = 0x10000;
+      uint32_t a = s_dma4_madr & 0x1FFFFC;
+      if (v & 1) {                                 // RAM -> SPU
+        for (int i = 0; i < n; i++) s_dma_buf[i] = mem_r32(a + i * 4);
+        spu_dma_write(s_dma_buf, n);
+      } else {                                     // SPU -> RAM
+        int got = spu_dma_read(s_dma_buf, n);
+        for (int i = 0; i < got; i++) mem_w32(a + i * 4, s_dma_buf[i]);
+      }
+      s_dma4_chcr &= ~0x01000000u;
+    }
+    return;
+  }
   if (p == 0x1F801080) { s_dma0_madr = v; return; }
   if (p == 0x1F801084) { s_dma0_bcr = v; return; }
   if (p == 0x1F801088) {                           // DMA0 CHCR: MDEC-in (RAM -> MDEC)
@@ -90,9 +119,10 @@ static void io_write(uint32_t a, uint32_t v, uint32_t bytes) {
     s_dma1_chcr = v;
     if (v & 0x01000000u) {
       int n = dma_block_words(s_dma1_bcr); if (n > 0x10000) n = 0x10000;
-      int got = mdec_dma_out(s_dma_buf, n);
-      uint32_t a = s_dma1_madr & 0x1FFFFC;
-      for (int i = 0; i < got; i++) mem_w32(a + i * 4, s_dma_buf[i]);
+      for (int i = 0; i < n; i++) s_dma_buf[i] = 0;     // clear: mdec_dma_out scatters into buf
+      mdec_dma_out(s_dma_buf, n);                       // places macroblock words at buf[i+offs]
+      uint32_t a = s_dma1_madr & 0x1FFFFC;              // copy the whole post-scatter region
+      for (int i = 0; i < n; i++) mem_w32(a + i * 4, s_dma_buf[i]);
       s_dma1_chcr &= ~0x01000000u;
     }
     return;

@@ -31,7 +31,7 @@ SDL_LIBS="$(pkg-config --libs sdl2)"
 
 echo "[1/3] decode test"; python3 tools/recomp/test_decode.py >/dev/null && echo "  decoder ok"
 echo "[2/3] emit"; python3 tools/recomp/emit.py "$MAIN" "$GEN"
-RUNTIME="$RT/mem.c $RT/stubs.c $RT/hle.c $RT/threads.c $RT/interp.c $RT/gpu_native.c $MED_SRC"
+RUNTIME="$RT/mem.c $RT/stubs.c $RT/hle.c $RT/threads.c $RT/interp.c $RT/gpu_native.c $RT/spu_audio.c $MED_SRC"
 CD="$RT/disc.c $RT/cd_override.c $RT/timing.c $RT/games_tomba2.c"
 echo "[3/3] compile core + runtime, run leaf test + boot"
 $CC $CFLAGS $MED_INC $SDL_CFLAGS "$GEN" $RUNTIME "$RT/test_leaf.c" -o scratch/bin/test_leaf $SDL_LIBS
