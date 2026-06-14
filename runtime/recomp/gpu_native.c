@@ -210,8 +210,16 @@ static void gp0_exec(void) {
     int w, h;
     if (size == 0) { uint32_t wh = s_fifo[idx++]; w = wh & 0x3FF; h = (wh >> 16) & 0x1FF; }
     else { w = h = (size == 1) ? 1 : (size == 2) ? 8 : 16; }
-    for (int dy = 0; dy < h; dy++)
-      for (int dx = 0; dx < w; dx++) {
+    // Clip the iteration to the drawing area up front: off-screen sprites otherwise spin
+    // w*h sample_tex calls for pixels put_px_b would discard (an off-screen/garbage sprite
+    // could burn millions of iterations and wedge the frame).
+    int dx0 = 0, dx1 = w, dy0 = 0, dy1 = h;
+    if (s_da_x0 - x - s_off_x > dx0) dx0 = s_da_x0 - x - s_off_x;
+    if (s_da_x1 - x - s_off_x + 1 < dx1) dx1 = s_da_x1 - x - s_off_x + 1;
+    if (s_da_y0 - y - s_off_y > dy0) dy0 = s_da_y0 - y - s_off_y;
+    if (s_da_y1 - y - s_off_y + 1 < dy1) dy1 = s_da_y1 - y - s_off_y + 1;
+    for (int dy = dy0; dy < dy1; dy++)
+      for (int dx = dx0; dx < dx1; dx++) {
         if (textured) {
           uint16_t t = sample_tex(u0 + dx, v0 + dy);
           if (t == 0) continue;                     // transparent texel
@@ -387,13 +395,23 @@ uint16_t gpu_vram_peek(int x, int y) { return *vram(x, y); }
 void gpu_dma2_linked_list(uint32_t madr) {
   s_dma2++;
   uint32_t addr = madr & 0x1FFFFC;
-  for (int guard = 0; guard < 0x100000; guard++) {
+  // A valid ordering table is bounded (its entry count + linked primitives). A far larger node
+  // count means a malformed/cyclic next-pointer chain — cap it (so it can't wedge) and log the
+  // first offending case for diagnosis instead of spinning to the old 1M guard.
+  int guard;
+  for (guard = 0; guard < 0x10000; guard++) {
     uint32_t hdr = mem_r32(addr);
     int n = hdr >> 24;
     for (int i = 0; i < n; i++) gpu_gp0(mem_r32(addr + 4 + i * 4));
     uint32_t next = hdr & 0xFFFFFF;
     if (next == 0xFFFFFF || next == 0) break;
     addr = next & 0x1FFFFC;
+  }
+  if (guard >= 0x10000) {
+    static int warned = 0;
+    if (!warned++) fprintf(stderr, "[gpu] WARN: OT traversal hit %d-node cap from madr=0x%08X "
+                           "(last addr=0x%08X) — malformed/cyclic ordering table\n",
+                           guard, madr, addr);
   }
 }
 // DMA channel 2 block mode: `count` words from `madr` (to/from GP0). to_gpu=1 -> GP0 writes.

@@ -171,6 +171,12 @@ static void ov_game_main(R3000* c) {
     hle_deliver_event(0xF2000003u, 0xFFFFFFFFu);
     hle_deliver_event(0xF0000001u, 0xFFFFFFFFu);
     hle_deliver_event(0xF0000009u, 0xFFFFFFFFu);
+    // Per-frame draw/display-env setup (LAB_80050c6c top): the env struct pair for the current
+    // back buffer is at 0x800e80a8 + DAT_1f800135*0x2070 (the Ghidra `+uVar1*0x81c` is word
+    // arithmetic: 0x81c*4 = 0x2070 bytes); FUN_80081458 clears its ordering table.
+    uint32_t envp = 0x800e80a8u + (uint32_t)mem_r8(0x1f800135) * 0x2070u;
+    mem_w32(0x800ed8c8, envp);                               // PTR_DAT_800ed8c8
+    rc2(c, 0x80081458, envp, 0x800);                         // ClearOTagR(ot, 0x800)
     mem_w16(0x800e809c, 0);                                  // DAT_800e809c = 0 (dwell counter)
     mem_w32(0x800bf4f4, mem_r32(0x800bf544));                // framebuffer ptr swap
     mem_w32(0x800bf544, (mem_r8(0x1f800135) * 0x14000 + 0x800bfe68) & 0xffffff);
@@ -178,6 +184,14 @@ static void ov_game_main(R3000* c) {
     native_scheduler_step(c);                                // <- replaces FUN_80051e60
     rc1(c, 0x80080f6c, 0);                                   // draw sync
     rc0(c, 0x800506d0);                                      // task sleep-countdown (re-arm 1->2)
+    // Buffer flip + display env (LAB_80050c6c, DAT_1f80019c==0 branch): submit this frame's
+    // draw env / display env / ordering table to the GPU, then flip the double buffer.
+    if (mem_r16(0x1f80019c) == 0) {
+      rc1(c, 0x8008179c, envp + 0x2000);                    // PutDispEnv  (env+0x2000)
+      rc1(c, 0x800815d0, envp + 0x2014);                    // PutDrawEnv  (env+0x2014)
+      rc1(c, 0x80081560, envp + 0x1ffc);                    // DrawOTag (submit the OT head)
+      mem_w8(0x1f800135, 1 - mem_r8(0x1f800135));           // flip back/front buffer
+    }
     if (f < 10 || (f % 30) == 0)
       fprintf(stderr, "[native_boot]   frame %u: t0[st=%u e=0x%08X s48=%u] t1[st=%u] t2[st=%u] "
                       "f135=%u\n", f, mem_r16(TASKBASE), mem_r32(TASKBASE + 0xc),
