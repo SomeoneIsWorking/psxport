@@ -29,10 +29,27 @@ START.BIN manifest `\BIN\{START,DEMO,GAME}.BIN`:
   at base 0x80106228 (resyncs past data/jump-tables). Extract overlays with
   `scratch/bin/fmv_compare dumplba <lba> <size> <out>`. Reference dumps in
   `scratch/decomp/{START,DEMO,GAME}.bin.asm`; overlay bins in `scratch/bin/overlays/`.
-- **NEXT:** decode DEMO's states 0-3,5-7 (what draws SCEA/title, where input picks the menu
-  item into obj+0x6b) and GAME's handlers; then build the native PC driver (hybrid): run
-  `FUN_80050b08` init calls, then a native frame loop = native re-impl of each stage's per-frame
-  state machine calling the recomp leaf draw/update fns (CD/wait already native), no scheduler.
+- **DEMO state machine** (obj+0x48 = state; jump table @0x8010622c; common tail incr obj+0x198
+  then `FUN_80051f80` yield then loop). Decoded from scratch/decomp/DEMO.bin.asm:
+  - **s0** `0x801063c0`: `FUN_80045080(0x80108f9c,2)`; `FUN_80044bd4(FUN_80044f58,2,0,0)` (run
+    loader); `FUN_8007982c`+`FUN_80075240`+`FUN_8001cf00(1)` (gfx/audio setup); -> s1.
+  - **s1** `0x8010641c`: `FUN_80106f80(0)` (load/fade poll) -> if done s2; watches DAT_800e7e68.
+  - **s2** `0x80106464`: `FUN_8010696c()` = title input/decision -> 1: s7; 2: branch on obj+0x68
+    -> s3 or s4 (clears obj+0x50/0x6b, the menu result).
+  - **s3** `0x801064e8`: `FUN_80106ac4()` -> 1: s7; 2: obj+0x68==1 -> s5 (DAT_1f800134=0) else s6
+    (`FUN_800750d8(1)`); 3: back to s2.
+  - **s4** `0x80106580`: `FUN_8007bf20(0,0,0)`; reads **menu result obj+0x6b**: ==1 -> s2/obj+0x68=1;
+    ==2 -> s2/obj+0x68=0; **==7 -> s5 + DAT_1f800134=1** (start GAME).
+  - **s5** `0x801065dc`: `FUN_80052078(2)` -> load GAME.BIN, restart task 0 at stage 2.
+  - **s6** `0x801065ec`: `FUN_8007b45c`; if obj+0x50==3 `FUN_80106824(1)`+`FUN_80106690(1)`;
+    `FUN_8001cf2c`/`FUN_80075a80`. **s7** `0x80106668` (tail, undisassembled here).
+  Leaf fns the native DEMO driver must call: FUN_8010696c, 80106ac4, 8007bf20, 80106824,
+  80106690, 80106f80, 80045080, 80044bd4(FUN_80044f58), 8007982c, 80075240, 8001cf00/8001cf2c,
+  80075a80, 800750d8.
+- **NEXT:** decode DEMO s7 + GAME's handlers (FUN_801086e0/720/784); then build the native PC
+  driver (hybrid): run `FUN_80050b08` init calls, then a native frame loop = native re-impl of
+  each stage's per-frame state machine calling the recomp leaf draw/update fns (CD/wait already
+  native), no scheduler. Exploit "leaf tasks complete synchronously" — call them directly.
 
 ## 2026-06-14 (later 30) — DIRECTION: PC-PSX HYBRID (PC drives recomp logic); boot RE started
 **User architecture decision** (see memory `psxport-hybrid-architecture`): psxport is a PC-PSX
