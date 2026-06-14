@@ -295,10 +295,13 @@ def main():
 
     # Functions reached only indirectly (jalr through a function pointer) — invisible to
     # direct-jal discovery, found empirically via boot dispatch-misses. Documented seeds.
+    # NOTE: 0x8009A8E8/ADC4/AA4C were NOT functions — they are mid-function jump-table
+    # (switch) labels inside the printf/format-parser at 0x8009A76C, surfaced as misses
+    # because computed `jr` is routed to rec_dispatch (no in-function jump-table recovery
+    # yet). The real entry is seeded instead; the parser still needs jump-table recovery
+    # OR a native printf override to work (see docs/recomp_port_plan.md).
     EXTRA_SEEDS = {
-        0x8009A8E8,  # called via jalr during boot (after B0:0x35), Ghidra-unmarked
-        0x8009ADC4,  # CD init helper (jalr), reached after CD_init
-        0x8009AA4C,  # CD timeout/retry helper (jalr)
+        0x8009A76C,  # printf/format-parser, reached only via fn-pointer (jalr), Ghidra-missed
     }
     seeds = set(ghidra_funcs(exe.load, exe.text_end)) | {exe.entry} | EXTRA_SEEDS
     funcs = discover_funcs(exe, seeds)

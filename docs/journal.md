@@ -90,6 +90,21 @@ blocks@LBA), `FUN_8008bf50`/`FUN_8008b8f0` (CdSearchFile), read-SM `FUN_8008c294
   read/resolve/complete fns to use it synchronously; native VBlank/event source for
   WaitEvent. Then verify boot reaches title/FMV. Plan: docs/recomp_port_plan.md.
 
+## 2026-06-14 (later 15) — CD override targets pinned; seed mistake corrected
+Mapped the exact functions to override for native-file CD (no emulation), all recompiled:
+- **`0x8008B2D8` CdInit** = boot blocker (emits CD_init then CD_cw/CD timeout polling CD I/O
+  regs with no IRQ → spins). `0x8008AC34` CD_cw, **`0x8008A6EC`** low-level command+wait
+  (CD-timeout chokepoint). `FUN_8008c1ec` read-N@LBA, `FUN_8008c294` read-SM/done
+  `0x800AC308`, `CdSearchFile 0x8008b8f0`.
+- **Corrected my mistake:** `0x8009A8E8/ADC4/AA4C` were NOT functions — they're mid-function
+  jump-table labels inside the **printf/format-parser at `0x8009A76C`** (indirect-only,
+  Ghidra-missed), surfaced as misses because computed `jr` → rec_dispatch (no jump-table
+  recovery). Replaced those seeds with the real entry. Parser still needs jump-table recovery
+  OR a native printf override (the PC-native fix). Not the boot blocker (just debug logging).
+- NEXT (S3): native by-LBA disc backend (discdump image / libchdr) + override CdInit +
+  command-wait + FUN_8008c1ec to complete synchronously from file; native VBlank/event for
+  WaitEvent; verify boot → title/FMV. Override targets all in docs/recomp_port_plan.md.
+
 ## 2026-06-14 (later 8) — CORRECTION to "later 7" RE map (overlay sequencer decompiled)
 Read the overlay decomp (`scratch/decomp/overlay.c` = `FUN_801064f0`) + the worker/scheduler
 chain from the full decomp. Three labels in "later 7" are **WRONG** — fixing them so the next

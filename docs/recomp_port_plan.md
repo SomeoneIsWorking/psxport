@@ -129,10 +129,22 @@ VBlank-driven `WaitEvent` similarly handled natively (a native frame/event sourc
   `rec_func_index`. Body stays alive (A/B toggle + diffable), overrides fire on direct AND
   indirect calls, **super-call** = call `gen_func_X`. Verified in `test_leaf.c` (replace,
   fire, super-call, toggle-off — all pass).
-- **S3 — native CD/file backend (next).** A by-LBA disc-data reader (native file; e.g.
-  `discdump image` → flat 2048-B/LBA image, or read the CHD via libchdr at runtime), then
-  override the CD-read/resolve/complete functions above to use it synchronously. Then native
-  VBlank/event source for `WaitEvent`. Verify boot advances to title/FMV.
+- **S3 — native CD/file backend (next). Override targets pinned (all recompiled fns):**
+  - `0x8008B2D8` **CdInit** (the boot blocker — emits `CD_init`, then `CD_cw`/`CD timeout`
+    polling CD I/O regs `0x1F8018xx` with no IRQ → spins). Override → report drive ready.
+  - `0x8008AC34` CD command-write (`CD_cw`), `0x8008A6EC` low-level command+wait (`CD timeout`
+    chokepoint — every command waits here). Override → complete synchronously, success.
+  - `FUN_8008c1ec(blocks, startLBA, buffer)` read-N-blocks → native by-LBA read from a disc
+    image; `FUN_8008c294` read-complete SM / done flag `0x800AC308` → set synchronously;
+    `CdSearchFile 0x8008b8f0` path→descriptor (already RE'd).
+  - Backend: `discdump image` → flat 2048-B/LBA data image, or libchdr at runtime. Then native
+    VBlank/event source for `WaitEvent`. Verify boot advances to title/FMV.
+  - **Separate gap (not the boot blocker):** the printf/format-parser `0x8009A76C` (indirect,
+    Ghidra-missed) has an internal computed-`jr` **jump table** that the recompiler routes to
+    rec_dispatch (no in-function jump-table recovery yet) → debug-printf misbehaves. Fix via
+    (a) emitter jump-table recovery, or (b) a **native printf override** (cleaner, PC-native).
+    The earlier `0x8009A8E8/ADC4/AA4C` "seeds" were mid-switch labels (mistake) — corrected to
+    seed the real entry.
 - **S4 — diff harness vs Beetle** (parallel): verify recomp bodies bit-exact (overrides off).
 - Emitter TODO: automatic indirect-pointer (`lui`+`addiu`) seed scan to end CD-helper
   hand-seeding.
