@@ -29,6 +29,10 @@ static void rc3(R3000* c, uint32_t fn, uint32_t a0, uint32_t a1, uint32_t a2) {
   c->r[4] = a0; c->r[5] = a1; c->r[6] = a2; rec_dispatch(c, fn);
 }
 
+// Native per-frame stage step (replaces the scheduler call FUN_80051e60). Runs the current
+// stage's state-machine one iteration per frame. Phase A: stub (loop-mechanics bring-up).
+static void native_stage_step(R3000* c) { (void)c; }
+
 // Native override of game-main FUN_80050b08: init prefix, then (later) native frame loop.
 static void ov_game_main(R3000* c) {
   fprintf(stderr, "[native_boot] FUN_80050b08 override: running init prefix\n");
@@ -75,9 +79,26 @@ static void ov_game_main(R3000* c) {
   fprintf(stderr, "[native_boot] after FUN_800499e8: START.BIN count@0x80106228=%u "
                   "entry-word@0x8010649c=0x%08X (expect 0x27BDFE38); task0 state=%u entry=0x%08X\n",
           mem_r32(0x80106228), mem_r32(0x8010649c), mem_r16(0x801fe000), mem_r32(0x801fe00c));
-  // TODO(next): native frame loop replacing LAB_80050c6c — per frame run FUN_800788ac (tick),
-  // step the current stage's state machine natively, present (FUN_800506d0). For now return so
-  // boot.c can report the init result.
+  // --- native frame loop (replaces LAB_80050c6c). Per frame, faithful to the game-main loop
+  // body but with the scheduler call FUN_80051e60 replaced by native stage stepping (added
+  // incrementally). FUN_800788ac is overridden (ov_frame_update): real per-frame update +
+  // gpu_present + audio + satisfies the vblank pacing dwell. PSXPORT_NATIVE_FRAMES caps the
+  // run (headless). ---
+  uint32_t nframes = 120;
+  const char* nf = getenv("PSXPORT_NATIVE_FRAMES");
+  if (nf) nframes = (uint32_t)strtoul(nf, 0, 0);
+  fprintf(stderr, "[native_boot] entering native frame loop (%u frames)\n", nframes);
+  for (uint32_t f = 0; f < nframes; f++) {
+    mem_w16(0x800e809c, 0);                                  // DAT_800e809c = 0 (dwell counter)
+    mem_w32(0x800bf4f4, mem_r32(0x800bf544));                // framebuffer ptr swap
+    mem_w32(0x800bf544, (mem_r8(0x1f800135) * 0x14000 + 0x800bfe68) & 0xffffff);
+    rc0(c, 0x800788ac);                                      // tick + present + audio (override)
+    native_stage_step(c);                                    // <- replaces FUN_80051e60
+    rc1(c, 0x80080f6c, 0);                                   // draw sync
+    rc0(c, 0x800506d0);                                      // task sleep-countdown
+  }
+  fprintf(stderr, "[native_boot] frame loop done; task0 state=%u entry=0x%08X obj+0x48=%u\n",
+          mem_r16(0x801fe000), mem_r32(0x801fe00c), mem_r16(mem_r32(0x1f800138) + 0x48));
 }
 
 // Wired from boot.c when PSXPORT_NATIVE_BOOT is set. Registers the main override and enters
