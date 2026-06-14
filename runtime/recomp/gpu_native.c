@@ -352,6 +352,8 @@ static void present_window(void) {}
 // PSXPORT_GPU_WINDOW=1 shows a live SDL window.
 static int s_frame = 0;
 void gpu_present(void) {
+  void watchdog_pet(void);
+  watchdog_pet();             // frame-progress heartbeat (see watchdog.c)
   present_window();
   const char* dir = getenv("PSXPORT_GPU_DUMP");
   if (g_log) fprintf(stderr, "[gpu] frame %d: %ld prims, %ld gp0words, %ld dma2, disp %dx%d @ (%d,%d)\n",

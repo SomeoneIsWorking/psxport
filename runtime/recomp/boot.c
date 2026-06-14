@@ -35,6 +35,8 @@ static void load_exe(const char* path, R3000* c) {
 int main(int argc, char** argv) {
   const char* path = argc > 1 ? argv[1] : "scratch/bin/tomba2/MAIN.EXE";
   R3000 c = {0};
+  void watchdog_init(void);
+  watchdog_init();            // PSXPORT_WATCHDOG=<sec>: abort+backtrace if a frame stalls
   load_exe(path, &c);
   void cd_overrides_init(void);
   void timing_init(void);

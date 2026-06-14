@@ -95,7 +95,7 @@ CFLAGS="-O2 -w -D_XOPEN_SOURCE=700 $INC $(pkg-config --cflags sdl2) -DPSXPORT_SD
 SRC="$(ls generated/shard_*.c) \
   $RT/mem.c $RT/stubs.c $RT/hle.c $RT/threads.c $RT/interp.c $RT/gpu_native.c $RT/spu_audio.c $RT/pad_input.c $RT/memcard.c $RT/native_fmv.c \
   $MED/psx/gte.c $RT/gte_beetle.c $MED/psx/mdec.c $RT/mdec_beetle.c $MED/psx/spu.c $RT/spu_beetle.c \
-  $RT/disc.c $RT/cd_override.c $RT/timing.c $RT/games_tomba2.c $RT/sync_overrides.c $RT/native_boot.c $RT/boot.c"
+  $RT/disc.c $RT/cd_override.c $RT/timing.c $RT/games_tomba2.c $RT/sync_overrides.c $RT/native_boot.c $RT/watchdog.c $RT/boot.c"
 
 say "building the native port in parallel (-j$JOBS; first time compiles the recompiled core)…"
 OBJ=scratch/obj; mkdir -p "$OBJ"
@@ -105,7 +105,8 @@ export -f compile_one; export CC CFLAGS OBJ
 printf '%s\n' $SRC | xargs -P"$JOBS" -I{} bash -c 'compile_one "$@"' _ {} || die "compile failed"
 OBJS=""; for s in $SRC; do OBJS="$OBJS $OBJ/$(echo "$s" | tr '/.' '__').o"; done
 # shellcheck disable=SC2086
-$CC $OBJS $CHD_LIBS $(pkg-config --libs sdl2) -lpthread -lm -o scratch/bin/tomba2_port || die "link failed"
+# -rdynamic: export symbols so the watchdog's backtrace shows function names (watchdog.c).
+$CC -rdynamic $OBJS $CHD_LIBS $(pkg-config --libs sdl2) -lpthread -lm -o scratch/bin/tomba2_port || die "link failed"
 
 # ---- 5. run ------------------------------------------------------------------------
 say "launching Tomba! 2 (native PC port)…"
