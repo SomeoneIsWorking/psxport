@@ -165,6 +165,32 @@ via gdb backtrace (the recomp uses the native C stack, so `bt` names the game fn
   Tooling note: **gdb attach + `bt` is the spin locator** for the recomp (C stack == game
   call stack); build `boot_dbg` with `-O1 -g`.
 
+## 2026-06-14 (later 18) — "don't dwell": main loop runs per-frame work; next = BIOS threads
+**User steer (saved to memory [[recomp-port-busywaits]]): port HW busy-waits to PC behavior
+("make it not dwell"), don't simulate the VBlank IRQ to satisfy them.** Applied: dropped the
+vblank-callback capture/seed/pump idea; instead `games_tomba2.c` overrides the per-frame state
+update `FUN_800788ac` (sole caller = the main loop, runs once per iteration before the dwell)
+to super-call its body then set the display counter `DAT_800e809c` to the quota `DAT_1f800235`
+— so the pace-dwell `0x80050CE4` falls through on its first check. (Exactly the state the real
+VBlank handler — cb `0x800506B4`, a pure counter increment — would have produced, computed
+directly. Host present loop will pace frames later.) `timing.c` VSyncCallback override is now a
+clean no-op. **Result: the StrPlayer main loop `FUN_80050b08` runs its per-frame work** —
+gdb samples hit varied real fns each tick (libgpu `80083364`/`80081458`, StrPlayer dispatch
+`8008179C`, scheduler `80051E60`, memcpy `8009A3E0`); StrPlayer state `DAT_1f80019c`=0.
+- **NEXT BLOCKER pinned — BIOS thread context switch.** Still **zero CD reads**: the intro/
+  loader **task** (`FUN_800499e8`, registered via `FUN_80051f14(0,…)`) never starts. The
+  cooperative scheduler `FUN_80051e60` runs tasks via **BIOS threads**, not custom coroutines:
+  disasm of the "context-switch primitives" shows they are plain libapi gate stubs —
+  `FUN_80080860`=OpenThread(B0:0x0E), **`FUN_80080880`=ChangeThread(B0:0x10)**,
+  `FUN_80080890`/`a0`=Enter/ExitCriticalSection(syscall a0=1/2). The scheduler does
+  `state2→ChangeThread(handle)`, `state3→{EnterCS; handle=OpenThread(pc,sp,gp); ExitCS;
+  ChangeThread}`. **Our ChangeThread is a NO-OP** (later-17 STOPGAP) → tasks never run.
+  FIX = real BIOS threads: give each PSX thread its own **native stack (ucontext/makecontext)**;
+  OpenThread creates a context that will enter `gen_func_<pc>`; ChangeThread `swapcontext`s;
+  the boot/main thread is also a context. This is the static-recomp coroutine subsystem — the
+  one genuinely hard piece. Tooling: gdb attach + `bt` locates the spin/return (C stack == game
+  stack); `break gen_func_<addr>` checks whether a fn is reached.
+
 ## 2026-06-14 (later 8) — CORRECTION to "later 7" RE map (overlay sequencer decompiled)
 Read the overlay decomp (`scratch/decomp/overlay.c` = `FUN_801064f0`) + the worker/scheduler
 chain from the full decomp. Three labels in "later 7" are **WRONG** — fixing them so the next

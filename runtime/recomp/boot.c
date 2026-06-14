@@ -38,8 +38,10 @@ int main(int argc, char** argv) {
   load_exe(path, &c);
   void cd_overrides_init(void);
   void timing_init(void);
+  void games_tomba2_init(void);
   cd_overrides_init();      // native CD: drive-ready + by-LBA read (S3)
   timing_init();            // native VBlank/VSync source (S3)
+  games_tomba2_init();      // Tomba2 per-game overrides (vblank pacing pump)
   c.r[4] = 1; c.r[5] = 0;   // a0=argc-ish, a1=argv (BIOS sets these; minimal)
   func_800896E0(&c);
   fprintf(stderr, "[exit] entry function returned to top level\n");

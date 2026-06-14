@@ -14,6 +14,13 @@ void hle_deliver_event(uint32_t ev_class, uint32_t spec);
 
 static uint32_t g_vblank = 0;
 
+// 0x80085BB0 FUN_80085bb0 VSyncCallback(func): no-op. The original routes the per-vblank
+// callback through the libapi interrupt vector we don't model; we don't deliver preemptive
+// VBlank IRQs at all — the game's vblank busy-waits are ported to PC behavior natively
+// (see games_tomba2.c), so registering the callback is unnecessary and its unmodeled-vector
+// deref is skipped.
+static void ov_vsync_callback(R3000* c) { c->r[V0] = 0; }
+
 static void frame_tick(void) {
   // Deliver the VBlank event to whichever class the game opened it under (RCnt3 vblank, or
   // the libapi vblank class); broad spec so any opened+enabled vblank EvCB matches.
@@ -42,5 +49,6 @@ static void ov_vsync(R3000* c) {
 uint32_t timing_vblank(void) { return g_vblank; }
 
 void timing_init(void) {
-  rec_set_override(0x80085900u, ov_vsync);
+  rec_set_override(0x80085900u, ov_vsync);   // VSync core
+  rec_set_override(0x80085BB0u, ov_vsync_callback);  // VSyncCallback registrar
 }
