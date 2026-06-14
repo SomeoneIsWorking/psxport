@@ -12,6 +12,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef PSXPORT_SDL
+#include <SDL.h>
+#endif
 
 #define VRAM_W 1024
 #define VRAM_H 512
@@ -259,9 +262,44 @@ void gpu_gp1(uint32_t w) {
   }
 }
 
-// Present: copy the displayed VRAM region to an RGB buffer. PSXPORT_GPU_DUMP=dir dumps PPMs.
+// Optional live window (PSXPORT_GPU_WINDOW=1). Headless builds without SDL just no-op.
+#ifdef PSXPORT_SDL
+static SDL_Window* s_win; static SDL_Renderer* s_ren; static SDL_Texture* s_tex;
+static int s_tex_w, s_tex_h, s_win_on = -1;
+static void present_window(void) {
+  if (s_win_on < 0) s_win_on = getenv("PSXPORT_GPU_WINDOW") ? 1 : 0;
+  if (!s_win_on) return;
+  if (!s_win) {
+    SDL_Init(SDL_INIT_VIDEO);
+    s_win = SDL_CreateWindow("Tomba! 2 (native PC port)", SDL_WINDOWPOS_CENTERED,
+                             SDL_WINDOWPOS_CENTERED, s_disp_w * 3, s_disp_h * 3, SDL_WINDOW_RESIZABLE);
+    s_ren = SDL_CreateRenderer(s_win, -1, SDL_RENDERER_ACCELERATED);
+  }
+  if (!s_tex || s_tex_w != s_disp_w || s_tex_h != s_disp_h) {
+    if (s_tex) SDL_DestroyTexture(s_tex);
+    s_tex = SDL_CreateTexture(s_ren, SDL_PIXELFORMAT_ABGR8888, SDL_TEXTUREACCESS_STREAMING,
+                              s_disp_w, s_disp_h);
+    s_tex_w = s_disp_w; s_tex_h = s_disp_h;
+  }
+  static uint32_t buf[VRAM_W * VRAM_H];
+  for (int y = 0; y < s_disp_h; y++)
+    for (int x = 0; x < s_disp_w; x++) {
+      uint16_t p = *vram(s_disp_x + x, s_disp_y + y);
+      buf[y * s_disp_w + x] = 0xFF000000u | (((p >> 10) & 31) << 19) | (((p >> 5) & 31) << 11) | ((p & 31) << 3);
+    }
+  SDL_UpdateTexture(s_tex, NULL, buf, s_disp_w * 4);
+  SDL_RenderClear(s_ren); SDL_RenderCopy(s_ren, s_tex, NULL, NULL); SDL_RenderPresent(s_ren);
+  SDL_Event e; while (SDL_PollEvent(&e)) if (e.type == SDL_QUIT) exit(0);
+}
+#else
+static void present_window(void) {}
+#endif
+
+// Present: copy the displayed VRAM region to an RGB buffer. PSXPORT_GPU_DUMP=dir dumps PPMs;
+// PSXPORT_GPU_WINDOW=1 shows a live SDL window.
 static int s_frame = 0;
 void gpu_present(void) {
+  present_window();
   const char* dir = getenv("PSXPORT_GPU_DUMP");
   if (g_log) fprintf(stderr, "[gpu] frame %d: %ld prims, %ld gp0words, %ld dma2, disp %dx%d @ (%d,%d)\n",
                      s_frame, s_prims, s_gp0_words, s_dma2, s_disp_w, s_disp_h, s_disp_x, s_disp_y);

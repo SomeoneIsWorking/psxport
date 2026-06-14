@@ -43,7 +43,11 @@ int main(int argc, char** argv) {
   void threads_register_overrides(void);
   void gte_init(void);
   void gpu_native_init(void);
+  void mdec_init(void);
+  void spu_init(void);
   gte_init();               // GTE (COP2) coprocessor, lifted from Beetle
+  mdec_init();              // MDEC video decoder (FMV), lifted from Beetle
+  spu_init();               // SPU audio, lifted from Beetle
   gpu_native_init();        // native GPU renderer (parses the game's GP0 stream)
   cd_overrides_init();      // native CD: drive-ready + by-LBA read (S3)
   timing_init();            // native VBlank/VSync source (S3)

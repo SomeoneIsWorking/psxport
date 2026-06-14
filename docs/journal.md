@@ -307,6 +307,29 @@ the lift pattern + GTE stay; GTE projects the geometry whose 2D primitives we th
   sprites/rects, lines) + software rasterizer with VRAM texture+CLUT sampling + GP1 display +
   present (PPM dump headless / SDL window). Built ground-up so resolution/widescreen are ours.
 
+## 2026-06-14 (later 24) — MDEC + SPU lifted (parallel subagents) + SDL window; all integrated
+PM-mode session: two developer subagents lifted **MDEC** (`mdec_beetle.c`) and **SPU**
+(`spu_beetle.c`) from Beetle in parallel, each following the `gte_beetle.c` template
+(compile the Beetle .c as-is + thin adapter + faithful externs). Both verified standalone
+(MDEC status correct post-reset; SPU produced exactly 735 stereo frames/NTSC). PM integrated:
+- **MDEC** wired in mem.c: regs MDEC0 `0x1F801820` (data) / MDEC1 `0x1F801824` (ctrl/status);
+  **DMA0** (MDEC-in, RAM→decoder) and **DMA1** (MDEC-out, decoder→RAM), block-mode. `mdec_init`
+  from boot. (Note: `mdec_dma_out` drains linearly — ignores the per-word macroblock scatter
+  offset; if FMV pixels come out mis-ordered, switch DMA1 to `MDEC_DMARead(&offs)` placement.)
+- **SPU** wired into the build + `spu_init` (register/DMA4/audio-pull wiring + an SDL audio
+  sink is the remaining step; module links & runs). STOPGAPs noted in spu_beetle.c: IRQ_Assert
+  and CDC_GetCDAudioSample (CD-DA) need routing later.
+- **SDL live window** (`gpu_native.c`, `PSXPORT_GPU_WINDOW=1`): the native framebuffer in a
+  real window (3× scale), SDL always linked, opens on demand. Headless PPM dump still works.
+- **Dedup:** the three adapters each defined `MDFNSS_StateAction` → multiple-definition link
+  error; kept one copy (gte_beetle.c), removed the others. Builds clean, leaf tests pass, no
+  boot regression (START.BIN still loads, scheduler runs).
+- **WHY no FMV yet:** the logo plays through the StrPlayer's **async streaming** CD path
+  (`FUN_8008c960` ReadN + per-sector IRQ callbacks → MDEC), which we have NOT overridden — only
+  the synchronous reads (`FUN_8008c1ec`, `FUN_8001db8c`) are native. So MDEC is integrated and
+  ready but never fed. **NEXT:** wire the StrPlayer streaming read natively (feed stream sectors
+  → MDEC decode → VRAM upload), the intro-sequencing path the earlier "later 4-8" work mapped.
+
 ## 2026-06-14 (later 8) — CORRECTION to "later 7" RE map (overlay sequencer decompiled)
 Read the overlay decomp (`scratch/decomp/overlay.c` = `FUN_801064f0`) + the worker/scheduler
 chain from the full decomp. Three labels in "later 7" are **WRONG** — fixing them so the next

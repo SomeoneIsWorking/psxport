@@ -26,8 +26,21 @@ void gpu_gp0(uint32_t w);
 void gpu_gp1(uint32_t w);
 void gpu_dma2_linked_list(uint32_t madr);
 void gpu_dma2_block(uint32_t madr, int count, int to_gpu);
+// MDEC (native, lifted from Beetle via mdec_beetle.c). DMA0 = in (compressed), DMA1 = out (pixels).
+void     mdec_write(uint32_t addr, uint32_t val);
+uint32_t mdec_read(uint32_t addr);
+void     mdec_dma_in(const uint32_t* words, int count);
+int      mdec_dma_out(uint32_t* words, int count);
 
-static uint32_t s_dma2_madr, s_dma2_bcr, s_dma2_chcr;  // GPU DMA channel registers
+static uint32_t s_dma0_madr, s_dma0_bcr, s_dma0_chcr;  // DMA0 MDEC-in
+static uint32_t s_dma1_madr, s_dma1_bcr, s_dma1_chcr;  // DMA1 MDEC-out
+static uint32_t s_dma2_madr, s_dma2_bcr, s_dma2_chcr;  // DMA2 GPU
+static uint32_t s_dma_buf[0x10000];                    // staging for MDEC block DMA
+
+static int dma_block_words(uint32_t bcr) {  // sync-mode-1 block DMA total word count
+  uint32_t bs = bcr & 0xFFFF, bc = bcr >> 16;
+  return (int)(bs * (bc ? bc : 1));
+}
 
 static uint32_t io_read(uint32_t a, uint32_t bytes) {
   const uint32_t p = a & 0x1FFFFFFF;
@@ -39,6 +52,13 @@ static uint32_t io_read(uint32_t a, uint32_t bytes) {
     return 0x1C000000u | toggle;
   }
   if (p == 0x1F801810) return 0;                 // GPUREAD (VRAM-store path: minimal)
+  if (p == 0x1F801820 || p == 0x1F801824) return mdec_read(p);  // MDEC0 data / MDEC1 status
+  if (p == 0x1F801080) return s_dma0_madr;
+  if (p == 0x1F801084) return s_dma0_bcr;
+  if (p == 0x1F801088) return s_dma0_chcr;
+  if (p == 0x1F801090) return s_dma1_madr;
+  if (p == 0x1F801094) return s_dma1_bcr;
+  if (p == 0x1F801098) return s_dma1_chcr;
   if (p == 0x1F8010A0) return s_dma2_madr;        // DMA2 MADR
   if (p == 0x1F8010A4) return s_dma2_bcr;         // DMA2 BCR
   if (p == 0x1F8010A8) return s_dma2_chcr;        // DMA2 CHCR (busy bit already cleared)
@@ -50,6 +70,33 @@ static void io_write(uint32_t a, uint32_t v, uint32_t bytes) {
   const uint32_t p = a & 0x1FFFFFFF;
   if (p == 0x1F801810) { gpu_gp0(v); return; }    // GP0 (direct)
   if (p == 0x1F801814) { gpu_gp1(v); return; }    // GP1 (display/control)
+  if (p == 0x1F801820 || p == 0x1F801824) { mdec_write(p, v); return; }  // MDEC0 cmd / MDEC1 ctrl
+  if (p == 0x1F801080) { s_dma0_madr = v; return; }
+  if (p == 0x1F801084) { s_dma0_bcr = v; return; }
+  if (p == 0x1F801088) {                           // DMA0 CHCR: MDEC-in (RAM -> MDEC)
+    s_dma0_chcr = v;
+    if (v & 0x01000000u) {
+      int n = dma_block_words(s_dma0_bcr); if (n > 0x10000) n = 0x10000;
+      uint32_t a = s_dma0_madr & 0x1FFFFC;
+      for (int i = 0; i < n; i++) s_dma_buf[i] = mem_r32(a + i * 4);
+      mdec_dma_in(s_dma_buf, n);
+      s_dma0_chcr &= ~0x01000000u;
+    }
+    return;
+  }
+  if (p == 0x1F801090) { s_dma1_madr = v; return; }
+  if (p == 0x1F801094) { s_dma1_bcr = v; return; }
+  if (p == 0x1F801098) {                           // DMA1 CHCR: MDEC-out (MDEC -> RAM)
+    s_dma1_chcr = v;
+    if (v & 0x01000000u) {
+      int n = dma_block_words(s_dma1_bcr); if (n > 0x10000) n = 0x10000;
+      int got = mdec_dma_out(s_dma_buf, n);
+      uint32_t a = s_dma1_madr & 0x1FFFFC;
+      for (int i = 0; i < got; i++) mem_w32(a + i * 4, s_dma_buf[i]);
+      s_dma1_chcr &= ~0x01000000u;
+    }
+    return;
+  }
   if (p == 0x1F8010A0) { s_dma2_madr = v; return; }
   if (p == 0x1F8010A4) { s_dma2_bcr = v; return; }
   if (p == 0x1F8010A8) {                           // DMA2 CHCR: start triggers the transfer
