@@ -16,6 +16,13 @@ uint16_t Tomba2_FrameTick(uint8_t* ram);
 /// path (runtime/games/tomba2.cpp; RE: docs/tomba2-intro.md).
 void Tomba2_SetSkipHeld(bool held);
 
+/// True while the StrPlayer's SILENT inter-FMV logo hold is being collapsed by
+/// the dwell-skip hook (Start held + STRSND off). The frontend fast-forwards the
+/// emulated frame only during this verified-silent, invisible consume to skip the
+/// residual per-VBLANK MDEC decode of the logo clip. Signature-gated so it can
+/// never engage during gameplay.
+bool Tomba2_LogoHoldTurbo();
+
 /// Tell the module whether the last presented frame was a near-black
 /// load/transition mask (the "Loading....." screen). The loading-screen skip
 /// collapses the StrPlayer pace dwell only while this is true, so it never

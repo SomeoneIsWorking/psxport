@@ -1,5 +1,23 @@
 # Debug / progress journal
 
+## 2026-06-14 (later 5) — inter-FMV logo hold residual COLLAPSED via scoped fast-forward
+The dwell-skip (later-4) got the hold f719->f598 (-121f) but left a ~3.3s residual =
+the StrPlayer's per-VBLANK MDEC decode of the (invisible, skipped) logo clip's ~210
+data frames (profile under dwell-skip: spread decode work 0x800834A0/0x8008B6D0 MDEC
+poll/0x80044E5x RLE/0x8009A3F0 copy; one frame per VBLANK; no pokeable flag — the clean
+"drive the advance" attempts all re-seek-loop). User-directed override: re-enable the
+existing `g_module_turbo` (8x emulated frames/present, pacing bypassed) SCOPED to the
+verified-silent hold: `g_tomba2 && Tomba2_LogoHoldTurbo() && !psxport_cd_strsnd_on()`.
+Tomba2_LogoHoldTurbo() = the dwell-skip hook (signature-gated to the StrPlayer overlay,
+never gameplay) fired within 45 emulated frames (bridges read/decode frames between
+pace-dwells); STRSND-off is the hard cutoff (FMV#2 turns CD-XA audio on -> turbo ends
+the same step). play-loop batch rewritten to re-check turbo per step & break on drop.
+**Safe, not general turbo:** runs the SAME emulated frames unpaced, so FMV#2 state at
+f598 is identical -> plays bit-for-bit the same, just sooner. Verified: turbo ON
+continuously f388->598, off f599; no-Start path unchanged (FMV#2 f1181); -play boots
+clean. **Wall-clock (-play): hold ~3.5s -> ~1.1s** (floor = emu speed ~190fps for the
+210-frame consume). Combined intro gap (FMV#1-skip + dwell-skip + turbo): **5.6s -> ~1.1s**.
+
 ## 2026-06-14 (later 4) — inter-FMV logo skip IMPLEMENTED + verified (dwell-escape, STRSND-gated)
 **Shipped:** `LogoHoldSkip` in runtime/games/tomba2.cpp — a Start-gated native override
 that collapses the silent logo hold. **Verified result: FMV#2 ReadS f719 -> f598 (-121f)

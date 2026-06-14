@@ -227,10 +227,12 @@ int DwellSkip(uint32_t, uint32_t* gpr, uint32_t*)
 // held AND CD-XA audio streaming (STRSND) is OFF. The silent logo hold runs with
 // STRSND off (Setmode 0x80/0xA0); every real FMV/cutscene streams audio (STRSND
 // on, 0xC0). So a held Start during an actual movie's consume never collapses it.
+uint32_t s_logohold_frame = 0xFFFFFFFFu; // last frame the silent-hold skip fired
 int LogoHoldSkip(uint32_t pc, uint32_t*, uint32_t* redirect_pc)
 {
   if (!s_skip_held || psxport_cd_strsnd_on())
     return PSXPORT_HOOK_CONTINUE; // not skipping, or a real (audio) FMV -> pace normally
+  s_logohold_frame = psxport_frame; // mark: we are collapsing the silent logo hold now
   *redirect_pc = 0x50CF8 | (psxport_last_pc & 0xE0000000); // pace-loop exit (same as FmvDwellSkip)
   return PSXPORT_HOOK_REDIRECT;
 }
@@ -286,6 +288,25 @@ void Tomba2_SetSkipHeld(bool held)
 void Tomba2_SetScreenDark(bool dark)
 {
   s_screen_dark = dark;
+}
+
+// True while the StrPlayer's SILENT inter-FMV logo hold is being collapsed (the
+// LogoHoldSkip dwell hook fired within the last couple of emulated frames). The
+// frontend uses this to fast-forward the EMULATED frame ONLY during that
+// verified-silent, invisible consume (the residual the dwell-skip can't reach is
+// the per-VBLANK MDEC decode of the logo clip). Tied to the signature-gated hook
+// firing, so it can never engage during gameplay; and the frontend additionally
+// requires STRSND off, so it cuts the instant FMV#2's audio starts.
+bool Tomba2_LogoHoldTurbo()
+{
+  // The dwell-skip hook only fires on the StrPlayer's pace-dwell frames, not the
+  // read/decode frames between them (gaps up to ~30f during the hold), so bridge
+  // those: stay "in the hold" for a window after the last fire. The hard cutoff
+  // is the frontend's STRSND-off check (FMV#2 turns CD-XA audio on), and the hook
+  // only fires in the StrPlayer overlay (never gameplay), so a generous window is
+  // safe — past the intro it goes stale and the turbo never re-engages.
+  return s_skip_held && s_logohold_frame != 0xFFFFFFFFu &&
+         (psxport_frame - s_logohold_frame) <= 45u;
 }
 
 void Tomba2_Install()

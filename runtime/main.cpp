@@ -1188,7 +1188,15 @@ int main(int argc, char** argv)
         Tomba2_SetSkipHeld(skip_held);
         Tomba2_SetScreenDark(g_screen_dark); // gates the Loading-screen skip to black load masks
       }
-      g_module_turbo = false; // native skip replaced the Start-held fast-forward
+      // Fast-forward the emulated frame ONLY while the StrPlayer's SILENT
+      // inter-FMV logo hold is being collapsed: Start held, the signature-gated
+      // dwell-skip hook firing (so never gameplay), AND CD-XA audio (STRSND) off
+      // (so it stops the instant FMV#2's audio starts). The dwell-skip already
+      // moves FMV#2 f719->f598; this skips the residual per-VBLANK MDEC decode of
+      // the (invisible, skipped) logo clip — taking FMV#2 to ~f430. Scoped, not
+      // general turbo. (Old Start-held whole-intro turbo was retired for the
+      // native logo skips; this is the narrow residual it can't reach.)
+      g_module_turbo = g_tomba2 && Tomba2_LogoHoldTurbo() && !psxport_cd_strsnd_on();
     }
   };
 
@@ -1435,13 +1443,22 @@ int main(int argc, char** argv)
     unsigned fps_frames = 0;
     for (g_frame = 0; !g_quit; g_frame++)
     {
-      const bool turbo = g_ff_hold || g_module_turbo;
-      const unsigned steps = turbo ? 8 : 1;
-      for (unsigned s = 0; s < steps; s++, g_frame += (s < steps ? 1 : 0))
+      // Run 1..8 emulated frames per present. >1 only while Tab (g_ff_hold) or the
+      // silent logo-hold turbo (g_module_turbo, set in per_frame) is active; the
+      // batch ends the same step the condition does, re-checked each step, so
+      // FMV#2's audio is never fast-forwarded. Present/queue audio only on the
+      // last step.
+      bool turbo = false;
+      for (unsigned s = 0;; s++)
       {
-        g_present_this_run = (s == steps - 1); // present/queue only the last
-        per_frame();
+        per_frame();                                  // updates g_module_turbo
+        turbo = g_ff_hold || g_module_turbo;
+        const bool last = !turbo || s >= 7;
+        g_present_this_run = last;
         psxport_emulate_frame();
+        if (last)
+          break;
+        g_frame++;
       }
       g_present_this_run = true;
 
