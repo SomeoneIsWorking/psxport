@@ -144,18 +144,85 @@ bool DumpFile(ChdDisc& disc, const IsoFile& f, const fs::path& outpath,
   return out.good();
 }
 
+bool GetRootDir(ChdDisc& disc, uint32_t* lba, uint32_t* size)
+{
+  uint8_t sec[kUserDataSize];
+  if (!disc.ReadSector(16, sec) || std::memcmp(sec + 1, "CD001", 5) != 0)
+  {
+    std::fprintf(stderr, "no ISO9660 PVD at LBA 16\n");
+    return false;
+  }
+  const uint8_t* root = sec + 156;
+  *lba = ReadLE32(root + 2);
+  *size = ReadLE32(root + 10);
+  return true;
+}
+
+// Recursively print the ISO9660 directory tree (files: full path, LBA, size).
+void ListTree(ChdDisc& disc, uint32_t dir_lba, uint32_t dir_size, const std::string& prefix)
+{
+  const uint32_t nsec = (dir_size + kUserDataSize - 1) / kUserDataSize;
+  std::vector<uint8_t> buf((size_t)nsec * kUserDataSize);
+  for (uint32_t i = 0; i < nsec; i++)
+    if (!disc.ReadSector(dir_lba + i, buf.data() + (size_t)i * kUserDataSize))
+      return;
+
+  // Directory records never straddle a 2048-byte sector boundary.
+  for (uint32_t s = 0; s < buf.size(); s += kUserDataSize)
+  {
+    uint32_t pos = s;
+    while (pos < s + kUserDataSize)
+    {
+      const uint8_t len = buf[pos];
+      if (len == 0)
+        break;  // remainder of this sector is padding
+      const uint8_t flags = buf[pos + 25];
+      const uint8_t nlen = buf[pos + 32];
+      const uint32_t e_lba = ReadLE32(&buf[pos + 2]);
+      const uint32_t e_size = ReadLE32(&buf[pos + 10]);
+      std::string name((const char*)&buf[pos + 33], nlen);
+      pos += len;
+      if (nlen == 1 && (name[0] == 0 || name[0] == 1))
+        continue;  // "." and ".."
+      const std::string disp = NormalizeName(name);
+      if (flags & 0x02)  // directory
+      {
+        std::printf("%s%s/\n", prefix.c_str(), disp.c_str());
+        ListTree(disc, e_lba, e_size, prefix + disp + "/");
+      }
+      else
+      {
+        std::printf("%s%-16s  LBA %-7u  %u bytes\n", prefix.c_str(), disp.c_str(),
+                    e_lba, e_size);
+      }
+    }
+  }
+}
+
 }  // namespace
 
 int main(int argc, char** argv)
 {
-  const auto disc_path = psxport::ResolveDiscPath(argc > 1 ? argv[1] : "");
+  // `discdump list [disc.chd]`          prints the full ISO9660 file tree.
+  // `discdump get <NAME> [disc] [out]`  extracts one root-dir file by name.
+  const std::string mode = argc > 1 ? argv[1] : "";
+  const bool list_mode = mode == "list";
+  const bool get_mode = mode == "get";
+  const std::string get_name = (get_mode && argc > 2) ? argv[2] : "";
+  const int disc_argi = list_mode ? 2 : (get_mode ? 3 : 1);
+  const auto disc_path =
+      psxport::ResolveDiscPath(argc > disc_argi ? argv[disc_argi] : "");
   if (!disc_path)
   {
     std::fprintf(stderr, "no disc image (arg, PSXPORT_DISC, or *.chd drop-in)\n");
     return 1;
   }
-  const fs::path outdir = argc > 2 ? argv[2] : "scratch/bin";
-  fs::create_directories(outdir);
+  // In extract mode an optional outdir follows the disc arg; list mode has no outdir.
+  const int outdir_argi = disc_argi + 1;
+  const fs::path outdir = (!list_mode && argc > outdir_argi) ? argv[outdir_argi]
+                                                             : fs::path("scratch/bin");
+  if (!list_mode)
+    fs::create_directories(outdir);
 
   ChdDisc disc;
   if (!disc.Open(*disc_path))
@@ -164,6 +231,36 @@ int main(int argc, char** argv)
     return 1;
   }
   std::printf("disc: %s\n", disc_path->c_str());
+
+  if (list_mode)
+  {
+    uint32_t rlba, rsize;
+    if (!GetRootDir(disc, &rlba, &rsize))
+      return 1;
+    std::printf("root dir LBA %u, %u bytes\n\n", rlba, rsize);
+    ListTree(disc, rlba, rsize, "");
+    return 0;
+  }
+
+  if (get_mode)
+  {
+    if (get_name.empty())
+    {
+      std::fprintf(stderr, "usage: discdump get <NAME> [disc] [outdir]\n");
+      return 1;
+    }
+    IsoFile f;
+    if (!FindRootFile(disc, get_name, &f))
+    {
+      std::fprintf(stderr, "%s not found in root dir\n", get_name.c_str());
+      return 1;
+    }
+    const fs::path out = outdir / NormalizeName(get_name);
+    if (!DumpFile(disc, f, out))
+      return 1;
+    std::printf("dumped %s (%u bytes, LBA %u)\n", out.c_str(), f.size, f.lba);
+    return 0;
+  }
 
   IsoFile cnf;
   if (!FindRootFile(disc, "SYSTEM.CNF", &cnf))

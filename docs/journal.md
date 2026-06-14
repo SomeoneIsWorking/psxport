@@ -16,6 +16,19 @@ GPL-2 Beetle fork**, diffed bit-exact against Beetle as oracle. Faithful-first, 
   the RESIDENT image (0% unknown), not the boot EXE. NEXT: recursive ISO9660 lister (extend
   `tools/discdump`) to find the on-disc main executable + overlay files = clean static inputs.
 
+## 2026-06-14 (later 10) — recompiler input found: MAIN.EXE (validated 99.9% vs RAM)
+Added `discdump list` (recursive ISO9660 tree) + `discdump get <NAME>`. Disc tree shows the
+real game executable: **`MAIN.EXE`** (root, LBA 23, 716800 B) — entry `0x800896E0`, load
+`0x80010000`, text `0xAE800`, SP `0x801FFFF0`. Extracted to `scratch/bin/tomba2/MAIN.EXE`.
+- **Validated:** MAIN.EXE text vs resident RAM_f1000 = **99.9% identical** (262/178688 diffs =
+  runtime data writes); **all 1596 in-range Ghidra fns decode 0% unknown** from the clean
+  file. So MAIN.EXE IS the recompiler input; `SCUS_944.54` is just the boot stub that loads it.
+- Overlays load above MAIN's text end `0x800BE800` (`jal 0x8011534C`, intro SM `0x80106xxx`)
+  from `BIN/*.BIN` — later concern. FMVs are `MOVIE/{LOGO,OP,END}.STR`. Full disc map in
+  `docs/recomp_port_plan.md`.
+- NEXT (S1): emitter — recursive-descent decode from `0x800896E0` (+1596 fn-entry seeds) →
+  C per function, dispatch table, modeled R3000 state + memory accessors.
+
 ## 2026-06-14 (later 8) — CORRECTION to "later 7" RE map (overlay sequencer decompiled)
 Read the overlay decomp (`scratch/decomp/overlay.c` = `FUN_801064f0`) + the worker/scheduler
 chain from the full decomp. Three labels in "later 7" are **WRONG** — fixing them so the next

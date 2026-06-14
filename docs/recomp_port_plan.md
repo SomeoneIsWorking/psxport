@@ -60,8 +60,22 @@ The recompiler input is **NOT the boot EXE `SCUS_944.54`**. Measured:
   + `test_decode.py` (8/8). Decoder verified **0% unknown over 28480 words of real game code**
   (Ghidra fn bodies decoded from the RAM snapshot). Coverage = full R3000A + COP0 + COP2/GTE
   move/op/load/store.
-- **S0.5 — disc file tree + true static input.** Recursive ISO9660 lister; identify the
-  on-disc main executable + overlays; settle the recompiler's per-image front-end. ← *next*
+- **S0.5 — disc file tree + true static input. DONE.** Added `discdump list` (recursive
+  ISO9660 tree) + `discdump get <NAME>` (extract any root file). **Recompiler input =
+  `MAIN.EXE`** (root, LBA 23, 716800 B): entry `0x800896E0`, load `0x80010000`, text
+  `0xAE800` (714752 B), SP `0x801FFFF0`, GP `0`. **99.9% identical** to resident RAM_f1000
+  (262/178688 diffs = runtime data writes); **all 1596 Ghidra fns in range decode 0%
+  unknown** from the clean file. `SCUS_944.54` is just the licensed boot stub that loads
+  `MAIN.EXE`.
+  - **Overlays** load *above* MAIN's text end `0x800BE800` (seen: `jal 0x8011534C`, intro SM
+    `0x80106xxx`) from `BIN/*.BIN` — a later front-end concern; MAIN.EXE is the core.
+  - **Disc map** (file → LBA, size): `MAIN.EXE` 23/716800; `SCUS_944.54` 152155/167936;
+    `BIN/A00..A0L.BIN` (area data) + `BIN/{OPN,SOP,START,DEMO,GAME,CRD}.BIN` (overlays/seq);
+    `CD/{TOMBA2.DAT,IMG,IDX,SND, SWDATA.BIN}` + `CD/{BGM,DEMO,VOICE}.XA` (stream data/audio);
+    `MOVIE/{LOGO,OP,END}.STR` (FMVs — the logo-hold = `LOGO.STR`); `ZZZ.DAT`.
+- **S1 — emitter (next).** Recursive-descent decode from MAIN's entry `0x800896E0` (+ the 1596
+  Ghidra fn entries as seeds for indirect-only targets); emit C per function w/ block labels +
+  dispatch table. Model `R3000` state + memory accessors.
 - **S1 — emitter.** ops → C against a modeled `R3000` state (regs + memory accessors);
   one C function per Ghidra-mapped function, block labels + `goto` for intra-fn branches,
   **dispatch table** keyed by address for indirect calls/jumps (seed indirect-only targets).
