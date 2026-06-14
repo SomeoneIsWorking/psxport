@@ -273,8 +273,22 @@ our stub silently zeroed it, so any 3D was inert.
   (= IR1·H/IR3 = 64·256/256), the projection is bit-correct. Builds clean, leaf tests pass, no
   boot regression. (No GTE ops fire during the 2D logo intro — expected; GTE is gameplay 3D.)
 - **Lift pattern established** (compile the Beetle C module as-is + a thin adapter + faithful
-  externs) for the remaining peripheral tier: **GPU** (gpu.c/polygon/sprite/line + DMA2 +
-  VRAM + display — the big one, needed for visible output), then MDEC, SPU, pad.
+  externs) for the remaining peripheral tier: **GPU** (the big one, needed for visible output),
+  then MDEC, SPU, pad.
+- **GPU lift SCOPED (next):** software path is viable — `rhi_intf.c` defaults `rhi_type =
+  RHI_SOFTWARE` and the GL/Vulkan backends are `#ifdef HAVE_OPENGL/HAVE_VULKAN` (omit those
+  defines → software only, headless). Files: `gpu.c` (command processor, 95KB) +
+  `rhi_intf.c` (renderer dispatch) + `gpu_polygon.c`/`gpu_sprite.c`/`gpu_line.c`/
+  `gpu_polygon_sub.c` (software rasterizer). `gpu.c` interface: `GPU_Write(ts,A,V)` (GP0/GP1),
+  `GPU_Read(ts,A)` (GPUREAD/GPUSTAT), `GPU_WriteDMA/ReadDMA/DMACanWrite` (GPU DMA),
+  `GPU_Update(ts)` (scanline timing), `GPU_StartFrame(espec)` (render to a surface),
+  `GPU_Init/Power`. **Shim surface ~54 externs** (gpu.c) + rhi_intf.c's settings/libretro deps:
+  IRQ_Assert, TIMER_* (dot/hretrace/vblank), PSX_SetEventNT/EventCycles, ReadMem (→ our
+  mem_r32 for DMA), PGXP_* (off), psx_gpu_* config globals, rhi_lib_* (omit). **Wiring work:**
+  route mem.c 0x1F801810/14 ↔ GPU_Write/Read; model **DMA channel 2** (GPU DMA, the
+  ordering-table linked-list walker the game uses — `FUN_80082d04` submits OTs) feeding
+  GPU_WriteDMA; provide the VRAM/scanout surface + a present/dump path; feed a synthetic
+  timestamp (we pace via VSync, not cycles). Largest single lift; needs iterative verification.
 
 ## 2026-06-14 (later 8) — CORRECTION to "later 7" RE map (overlay sequencer decompiled)
 Read the overlay decomp (`scratch/decomp/overlay.c` = `FUN_801064f0`) + the worker/scheduler
