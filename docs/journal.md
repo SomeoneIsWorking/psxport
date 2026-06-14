@@ -1,5 +1,33 @@
 # Debug / progress journal
 
+## 2026-06-14 (later 28) — FMV compare harness vs oracle: VLC proven correct; quant-order fix
+Built `tools/fmv_compare` (commit `2d41a68`) per user request. Our FMV pipeline already runs
+the decoded run/level stream through mednafen's MDEC (the oracle) for IDCT/YCbCr, so the only
+non-oracle code is the STR-demux + BS/MPEG-1 VLC (`bs_decode_frame`). The harness reads a real
+STR frame off the disc and diffs our VLC output against an INDEPENDENT reference decoder
+(fresh Table B-14 transcription as bit strings, independent bit reader/escape/sign), word-for-
+word, first divergence → (block,coeff). An `idcttest` mode links the REAL mednafen MDEC and
+decodes synthetic blocks to verify the quant+IDCT table uploads.
+- **VLC is CORRECT (verified):** LOGO frames 5/40 + OP frame 70 all MATCH the reference
+  (3600/7001/12731 codes identical). The earlier "identical ramp across blocks" was real
+  content, not a bug. Earlier fear of a DC-prediction/VLC bug = WRONG, ruled out.
+- **Tables reconstruct correctly (idcttest):** DC-only block → flat; single AC coeff → clean
+  cosine ramp. (Orientation looks "transposed" but that is mednafen's internal Coeff/ZigZag
+  convention, self-consistent with how the game feeds it — NOT our bug. Don't re-chase it.)
+- **FIX (quant order):** the quant matrix was uploaded RASTER, but mednafen stores it linearly
+  (mdec.c:844) and dequantizes via `QMatrix[CoeffIndex]` (scan order, mdec.c:703) → it must be
+  ZIGZAG/scan order: `qz[scan]=quant_raster[ZigZag[scan]]`. DC (idx0) unaffected (ZigZag[0]=0);
+  AC got the wrong per-frequency weight. Now reordered in `mdec_upload_tables`.
+- **Harness gotcha (fixed):** for the synthetic test, sample a macroblock well past FIFO
+  warm-up and index `px[(mb*16)*WIDTH + ...]` (row stride!) — an early off-by-stride read hit a
+  no-AC block and falsely showed "AC dropped".
+- **STILL RESIDUAL:** real frames remain visibly blocky (recognizable but heavy). VLC + core
+  tables are verified-correct, so the residual is DOWNSTREAM: suspect the MDEC FIFO feed/drain
+  interleave (`mdec_decode_to_rgb555` burst loop) and/or the chroma (Cb/Cr 8x8) path. The
+  `idcttest` showed an odd/even-row wrinkle on the single-AC block worth chasing there. Use the
+  harness (extend `idcttest`) to nail it. `bs_decode_frame`/`mdec_decode_to_rgb555` are now
+  non-static for harness use.
+
 ## 2026-06-14 (later 27) — DIRECTION: NO threading / NO ucontext; PC-native intro boot
 **User (emphatic): "no threading", "you can't use ucontext", "boot the game PC native way."**
 The intro wedge was diagnosed, then the whole emulated-thread approach was dropped.
