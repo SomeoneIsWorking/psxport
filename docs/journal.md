@@ -1,5 +1,32 @@
 # Debug / progress journal
 
+## 2026-06-14 (later 30) — DIRECTION: PC-PSX HYBRID (PC drives recomp logic); boot RE started
+**User architecture decision** (see memory `psxport-hybrid-architecture`): psxport is a PC-PSX
+HYBRID. PC-native engine owns boot/graphics/FMV/audio/input and is the DRIVING FORCE — it owns
+the frame loop and **calls the game's RE'd per-frame entry points directly**, never blocked by
+PSX threading/waits/IRQ ping-pong (all stripped). Game LOGIC (AI/quests/player/menu) stays
+recomp. Execution model = "PC loop calls RE'd per-frame entry points": reimplement the control
+flow (sequencing / per-frame state machine) natively, call the game's leaf logic functions
+(draw, per-object update) which are normal recompiled functions that return. NOT running the
+infinite-loop yielding tasks as-is (needs ucontext, ruled out). SCEA is game-drawn (not BIOS).
+Target flow: PC boot -> SCEA -> WhoopeeCamp FMV -> OP FMV -> main menu. FMVs done.
+- **Boot RE so far:** game main = `FUN_80050b08` (init calls: FUN_80089788/80085b20/800898a0/
+  80080bf0(3)/.../80085900(3)/8001cc00/800520e0/80085900(1)/**80051e00**(sched init)/
+  **80051f14(0,FUN_800499e8)**(register first task)/80085bb0; then the scheduler loop at
+  LAB_80050c6c: per-frame FUN_800788ac(tick)+FUN_80051e60(scheduler)+vblank-wait+FUN_800506d0,
+  branching on DAT_1f80019c). The PC engine should run the INIT calls then replace the loop.
+- **First task** `FUN_800499e8` resolves `\BIN\START.BIN`, then `FUN_80052078(0)`.
+- **START.BIN is a FILE MANIFEST**, not code (extracted via new harness `dumplba`): count=6 +
+  paths `\CD\SWDATA.BIN \CD\TOMBA2.{SND,DAT,IMG,IDX}` then many `\BIN\A0*.BIN` overlay files.
+- **Stage-entry table** `PTR_LAB_800a3ecc[0..2]` (MAIN.EXE data @0x800a3ecc) = `{0x8010649c,
+  0x801062e4, 0x8010637c}` (the 0x80106xxx OVERLAY region = intro sequencer FUN_801064f0 etc.,
+  loaded from disc, interpreted — partially decompiled in scratch/decomp/overlay.c).
+  `PTR_FUN_800a3ed8` = `0x800499e8` (resident).
+- **NEXT:** RE the 0x80106xxx stage flow (SCEA draw + per-frame structure + the
+  SCEA->WhoopeeCamp->OP->menu transitions), then build the PC-driven boot: native engine runs
+  FUN_80050b08's init, then a native frame loop drives each stage (call leaf draw/update,
+  native FMV for the two movies), no scheduler. New harness mode `dumplba <lba> <nbytes> <out>`.
+
 ## 2026-06-14 (later 29) — FMV FULLY WORKING (video+audio+speed); next: boot -> main menu
 FMV is done — video, audio, and speed all correct (verified on-screen by user: WhoopeeCamp
 logo + Tomba render cleanly, with sound, correct rate, clean to the corners).

@@ -308,6 +308,14 @@ int main(int argc, char** argv) {
     return diffs?3:0; }
   if (argc >= 5 && !strcmp(argv[1],"framemap")) {
     framemap((uint32_t)strtoul(argv[2],0,0),(uint32_t)strtoul(argv[3],0,0),atoi(argv[4])); return 0; }
+  if (argc >= 5 && !strcmp(argv[1],"dumplba")) {     // dumplba <lba> <nbytes> <out>: extract a region
+    if (!disc_open()) return 1;
+    uint32_t lba=(uint32_t)strtoul(argv[2],0,0), nb=(uint32_t)strtoul(argv[3],0,0);
+    FILE* o=fopen(argv[4],"wb"); if(!o){perror(argv[4]);return 1;}
+    uint8_t s[2048]; uint32_t done=0;
+    for (uint32_t k=0; done<nb; k++){ if(!disc_read_sector(lba+k,s)) break;
+      uint32_t w = nb-done<2048?nb-done:2048; fwrite(s,1,w,o); done+=w; }
+    fclose(o); fprintf(stderr,"wrote %u bytes from LBA %u to %s\n",done,lba,argv[4]); return 0; }
   if (argc >= 4 && !strcmp(argv[1],"strscan")) {     // strscan <lba> <nsectors>: dump CD-XA framing
     if (!disc_open()) return 1;
     uint32_t lba=(uint32_t)strtoul(argv[2],0,0), n=(uint32_t)strtoul(argv[3],0,0);
