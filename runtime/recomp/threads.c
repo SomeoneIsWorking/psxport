@@ -60,8 +60,8 @@ void threads_init(R3000* c) {
 static void thread_entry(void) {
   int i = s_cur;                       // s_cur was set to this thread by thread_change
   rec_dispatch(s_cpu, s_thr[i].entry_pc);   // c->r already holds this thread's regs
-  s_thr[i].used = 0;                   // thread finished -> free slot, hand control to main
-  s_cur = 0; load_regs(0, s_cpu);
+  s_thr[i].used = 0;                   // thread finished -> slot free (stack freed on reuse,
+  s_cur = 0; load_regs(0, s_cpu);      // never here: we're still running on this stack)
   setcontext(&s_thr[0].uctx);          // resume main where it last switched away
 }
 
@@ -71,7 +71,8 @@ uint32_t thread_open(R3000* c) {
   for (; i < THR_MAX; i++) if (!s_thr[i].used) break;
   if (i >= THR_MAX) return 0xFFFFFFFFu;
   Thread* t = &s_thr[i];
-  t->used = 1; t->started = 0; t->entry_pc = c->r[4];   // a0=pc
+  if (t->stack && i != s_cur) { free(t->stack); t->stack = 0; }  // reclaim a closed thread's
+  t->used = 1; t->started = 0; t->entry_pc = c->r[4];   // a0=pc  // stack here, never live
   for (int k = 0; k < 34; k++) t->regs[k] = 0;
   t->regs[29] = c->r[5];   // sp = a1
   t->regs[28] = c->r[6];   // gp = a2
@@ -84,10 +85,12 @@ uint32_t thread_open(R3000* c) {
   return THR_BASE + (uint32_t)i;
 }
 
-// B0:0x0F CloseThread(handle) -> 1.
+// B0:0x0F CloseThread(handle) -> 1. A thread routinely closes ITSELF then ChangeThreads
+// away, so we must NOT free its native stack here (we're still executing on it -> munmap
+// crash). Just free the slot; the stack is reclaimed when the slot is reused (thread_open).
 uint32_t thread_close(R3000* c) {
   int i = handle_index(c->r[4]);
-  if (i > 0) { free(s_thr[i].stack); s_thr[i].stack = 0; s_thr[i].used = 0; }
+  if (i > 0) s_thr[i].used = 0;
   return 1;
 }
 

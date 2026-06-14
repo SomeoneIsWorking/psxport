@@ -51,9 +51,31 @@ static void ov_cd_read(R3000* c) {
   c->r[V0] = 1;  // bool: success
 }
 
+// 0x8001DB8C FUN_8001db8c(a0=dest, a1=lba, a2=size_bytes): the engine's file loader. The
+// real body spawns a reader sub-task (FUN_8001db38 -> FUN_8001d940) that issues a raw libcd
+// ReadN and copies sectors in a per-sector IRQ callback (FUN_8001d7c4, plain CdGetSector copy,
+// no decompression) — an async streaming path our no-IRQ overrides can't feed. Replace it
+// with a native consecutive-sector read of the same bytes: ceil(size/2048) sectors from `lba`
+// into `dest`, copying exactly `size` bytes. Returns param_3 (size), as the original does.
+static void ov_cd_loadfile(R3000* c) {
+  uint32_t dest = c->r[A0], lba = c->r[A1], size = c->r[A2];
+  uint8_t sec[2048];
+  uint32_t done = 0;
+  for (uint32_t i = 0; done < size; i++) {
+    if (!disc_read_sector(lba + i, sec)) break;
+    uint32_t n = size - done < 2048 ? size - done : 2048;
+    for (uint32_t j = 0; j < n; j++) mem_w8(dest + done + j, sec[j]);
+    done += n;
+  }
+  if (g_cd_verbose)
+    fprintf(stderr, "[cd] loadfile %u B @ LBA %u -> 0x%08X\n", size, lba, dest);
+  c->r[V0] = size;
+}
+
 void cd_overrides_init(void) {
   if (getenv("PSXPORT_CD_VERBOSE")) g_cd_verbose = 1;
   rec_set_override(0x8008B2D8u, ov_cdinit);
+  rec_set_override(0x8001DB8Cu, ov_cd_loadfile);
   rec_set_override(0x8008AC34u, ov_cd_command);
   rec_set_override(0x8008A6ECu, ov_cd_sync);
   rec_set_override(0x8008C1ECu, ov_cd_read);

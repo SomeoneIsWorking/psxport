@@ -214,6 +214,29 @@ thread). `FUN_80051f14` creates each task with `OpenThread(entry, stack, gp)`.
   reads = dir only). Find what consumes the descriptor to load+run START.BIN (likely the next
   scheduler task / StrPlayer state advance), and confirm boot progresses toward the title/FMV.
 
+## 2026-06-14 (later 20) — native file load (FUN_8001db8c); START.BIN loads; overlay exec is next
+Boot now loads the first code overlay natively and reaches the **overlay-execution** boundary.
+- **The engine's file loader is `FUN_8001db8c(dest, lba, size)`** — NOT FUN_8008c1ec. Its real
+  body spawns a reader sub-task (`FUN_8001db38`→`FUN_8001d940`) that issues a raw libcd ReadN
+  and copies sectors in a per-sector IRQ callback (`FUN_8001d7c4` = plain `CdGetSector` copy,
+  no decompression). That async/IRQ path can't be fed by our no-IRQ overrides → the reader
+  looped forever (remaining-count never hit 0). **Overrode `FUN_8001db8c`** (cd_override.c) to
+  read `ceil(size/2048)` consecutive sectors from `lba` into `dest` natively, copying exactly
+  `size` bytes — faithful (the callback was a plain copy). `FUN_8008a110` confirmed the
+  descriptor LBA is absolute (`(min*60+sec)*75+frame-150`).
+- **Thread bug fixed:** tasks `CloseThread(self)` then `ChangeThread` away (`FUN_80052078`);
+  freeing the live native stack in thread_close → SIGSEGV in munmap. Now thread_close just
+  frees the slot; the stack is reclaimed on slot reuse (thread_open), never while live.
+- **VERIFIED:** `[cd] loadfile 1648 B @ LBA 1904 -> 0x80106228` — `\BIN\START.BIN` loads to the
+  intro-overlay region. No crash.
+- **NEXT SUBSYSTEM — overlay code execution.** START.BIN (1648 B) at `0x80106228` IS MIPS code
+  (the intro sequencer `FUN_801064f0` lives inside it). The game jumps into it → **miss
+  `0x8010649C`**: the `0x80106xxx` overlay region is ABOVE MAIN.EXE's text (`0x800BE800`) and
+  was never recompiled. Options: (a) statically recompile the overlay files (START/OPN/GAME/…
+  .BIN) with overlay-aware dispatch (they may share the `0x80106xxx` load address → only one
+  resident at a time); (b) a hybrid in-RAM MIPS interpreter as the rec_dispatch-miss fallback
+  (also clears the printf/SetVideoMode jump-table misses). Decide + implement next.
+
 ## 2026-06-14 (later 8) — CORRECTION to "later 7" RE map (overlay sequencer decompiled)
 Read the overlay decomp (`scratch/decomp/overlay.c` = `FUN_801064f0`) + the worker/scheduler
 chain from the full decomp. Three labels in "later 7" are **WRONG** — fixing them so the next
