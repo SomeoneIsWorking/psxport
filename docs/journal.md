@@ -1,5 +1,31 @@
 # Debug / progress journal
 
+## 2026-06-14 (later 29) — FMV FULLY WORKING (video+audio+speed); next: boot -> main menu
+FMV is done — video, audio, and speed all correct (verified on-screen by user: WhoopeeCamp
+logo + Tomba render cleanly, with sound, correct rate, clean to the corners).
+- **Column-major macroblocks** (`911bf4a`'s predecessor `9ddb98f`): the game emits MDEC
+  macroblocks COLUMN-major (emit index k -> row=k%mby, col=k/mby); we placed row-major ->
+  sheared/spread frames. Found via the `framemap` ASCII oracle (synthetic row-major tiling
+  tests all passed; only a real frame showed the shear, stride=mby). Don't re-chase.
+- **XA-ADPCM audio** (`911bf4a`): STR interleaves CD-XA audio sectors (submode 0x04, Form2);
+  player dropped them. `xa_decode_sector` transcribed from mednafen cdc.c (oracle), dedicated
+  SDL device at 37800Hz. `disc_read_raw` exposes the raw 2352B sector (the XA subheader).
+  Sound oracle `tools/fmv_compare xacmp` = bit-exact vs independent reference (0/250k diff).
+- **Speed**: paced to the AUDIO/media clock (was a fixed-15fps guess = too slow).
+- **Bottom-right black bits**: final <0x20-word MDEC remainder fell to a linear data-port
+  read (no voffs scatter); `mdec_dma_out_rest` drains it scatter-aware (MDEC_DMARead isn't
+  gated by the 0x20 burst, mdec.c:899). Drain now 100% scattered.
+- FMV harness modes: `<lba> <size> <frame#>` (VLC diff), `idcttest` (table self-test +
+  placement tests), `framemap` (ASCII luma map), `strscan` (CD-XA framing), `xacmp` (sound).
+
+**NEXT — user's target flow:** PC boot -> SCEA -> FMV#1 (WhoopeeCamp/LOGO.STR) -> FMV#2
+(Tomba/OP.STR, Start to skip) -> **main menu**. FMVs done; SCEA + the main menu are the gap.
+The main menu is interactive GAME code built on the cooperative task scheduler (FUN_80051e60 +
+OpenThread/ChangeThread, which we stubbed to no-ops). Reaching it needs that scheduler working
+WITHOUT ucontext/threading (per user) — i.e. run cooperative tasks via the hybrid interpreter,
+which holds explicit PSX CPU state (PC/regs/SP-in-g_ram) so a yield = save/restore a state
+struct (no native stack, no ucontext). Investigate interp.c + scheduler next.
+
 ## 2026-06-14 (later 28) — FMV compare harness vs oracle: VLC proven correct; quant-order fix
 Built `tools/fmv_compare` (commit `2d41a68`) per user request. Our FMV pipeline already runs
 the decoded run/level stream through mednafen's MDEC (the oracle) for IDCT/YCbCr, so the only
