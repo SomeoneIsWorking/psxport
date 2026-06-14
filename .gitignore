@@ -31,3 +31,8 @@ vendor/openbios-src/
 # parallel-build artifacts (make OBJDIR=obj_x EXE=wide60rt_x)
 runtime/obj_*/
 runtime/wide60rt_*
+
+# recompiler generated output (regenerable; never hand-edit)
+/generated/
+__pycache__/
+*.pyc

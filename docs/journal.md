@@ -1,5 +1,21 @@
 # Debug / progress journal
 
+## 2026-06-14 (later 9) — DIRECTION CHANGE: native PC port (static recomp); decoder S0 done
+**User: "new direction — port to PC, no PSX emulation, no PSX BIOS."** wide60/emulator path
+paused; full plan in `docs/recomp_port_plan.md`. Approach = instruction-level static
+recompiler (MIPS R3000A → C), HLE BIOS, peripherals (GTE/GPU/SPU/MDEC/CD) **lifted from the
+GPL-2 Beetle fork**, diffed bit-exact against Beetle as oracle. Faithful-first, then wide60.
+- **S0 decoder DONE + validated:** `tools/recomp/{psexe.py,decode.py,test_decode.py}` (8/8,
+  anchored to the real Tomba2 entry words). Full R3000A + COP0 + COP2/GTE coverage. Verified
+  **0% unknown over 28480 words** of real game code.
+- **CRITICAL input finding:** the recompiler input is **NOT the boot EXE `SCUS_944.54`**.
+  Boot-EXE text `[0x80010000,0x80038800)` differs from frame-1000 RAM in **98.8%** of words
+  (EXE `0xFFFFFFFF` vs RAM `27BDFFD8` real prologue at `0x8001FC50`). The boot EXE is a
+  **loader stub**; the real game = a **resident core + overlays loaded from the CD** over
+  `0x80010000+` (spans past boot text — `jal 0x8011534C`). The 1886-fn Ghidra decomp matches
+  the RESIDENT image (0% unknown), not the boot EXE. NEXT: recursive ISO9660 lister (extend
+  `tools/discdump`) to find the on-disc main executable + overlay files = clean static inputs.
+
 ## 2026-06-14 (later 8) — CORRECTION to "later 7" RE map (overlay sequencer decompiled)
 Read the overlay decomp (`scratch/decomp/overlay.c` = `FUN_801064f0`) + the worker/scheduler
 chain from the full decomp. Three labels in "later 7" are **WRONG** — fixing them so the next
