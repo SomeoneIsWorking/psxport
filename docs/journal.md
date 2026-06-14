@@ -1,5 +1,48 @@
 # Debug / progress journal
 
+## 2026-06-14 (later 7) — FULL DECOMPILATION + StrPlayer playback architecture mapped
+**Did what the user asked: "decompile everything with tools."** Built headless-Ghidra
+decompilation tooling (committed): `tools/decomp.sh` + `tools/ghidra_decomp.py` (all 1886
+MAIN.EXE functions → `scratch/decomp/ram_f1000_all.c`) and `tools/ghidra_overlay.py`
+(force-disassemble a fn-ptr-only overlay range). Also **ripped out the turbo** (committed):
+`g_module_turbo` + `Tomba2_LogoHoldTurbo` gone; `-play` fast-forwards only on manual Tab.
+
+**StrPlayer playback architecture (from the decompiled C):**
+- **Main loop `FUN_80050b08`** (resident, 0x80050b08): infinite per-frame loop. Per frame:
+  graphics + `FUN_800506d0()` (timer-array tick) then dispatches on **state `DAT_1f80019c`**
+  (scratchpad 0x1F80019C): 0 = display current stream frame (`FUN_8008179c` = PutDispEnv etc.,
+  these 0x80080xxx/0x80081xxx are **libgpu wrappers**, not the demux); 2 = display one more +
+  set state 1; **3 = stream end → outer loop restarts = advance to next playlist entry**.
+  The dwell is the `do {} while (DAT_800e809c < DAT_1f800235)` vblank wait at ~0x80050ce4.
+- **Cooperative task scheduler:** task array at **`0x801fe000`** (state byte at offset 0:
+  1=timed,2=ready,3/4=running; stride 0x38/0x70). `FUN_800506d0` decrements timers (1→2 on
+  expiry); `FUN_80051e60` dispatches (2→4 start `FUN_80080880`, 3→step). `obj = *(0x1F800138)`
+  is the current task iterator (journal "obj+0x48" = overlay SM state).
+- **Playing a stream = `FUN_8008c1ec(blocks, startLBA, buffer)`**: BCD-converts LBA →
+  `Setloc`(cmd2) → `FUN_8008c960`(start stream) → which calls **`FUN_8008c5d8`** (read setup:
+  sets `DAT_800ac2e4`=blocks, `DAT_800ac2f8`=remaining, registers read-cb `FUN_8008c294`).
+- **Read SM `FUN_8008c294`** (per CD-read-complete): decrements `DAT_800ac2f8` (remaining); on
+  0 → sets **`DAT_800ac308`=1 (done)** and fires completion cb `PTR_FUN_800abf24`=`FUN_800899bc`.
+- **Activator `0x8008BF50`(a0=N)** reads a 44-byte descriptor from the table at **`0x80102d44`**
+  (record N) and calls `FUN_8008c1ec` → plays stream N. The playlist overlay SM `0x80106xxx`
+  calls the walker `0x8008B8F0` → activator on advance.
+
+**Why the advance isn't yet forceable (measured):** the logo's CD *read* finishes by ~f1060
+(`DAT_800ac2f8`=0, `DAT_800ac304` freezes at 0x772) — the ~250f to f1310 is the logo **MDEC
+video task playing out at VBLANK rate**, a separate task in the **overlay `0x80106xxx`**. That
+task's completion is what calls the activator for FMV#2. `FUN_8008c294`/`FUN_8008c1ec`/
+`FUN_8008c960`/`FUN_800899bc` are all **advance-only** (coverage) = they are FMV#2's read, not
+the logo's. Forcing state `DAT_1f80019c`=3 is **inert** (re-confirmed, hammered 80f). The
+logo-task completion trigger lives in the overlay SM, which **does not cleanly decompile** in
+Ghidra's default MIPS mode (GTE/cop2 "bad instruction data").
+
+**NEXT (well-scoped):** decompile the overlay with a **GTE/cop2-aware** Ghidra processor (PSX
+variant) from a *hold-phase* dump (logo overlay resident, e.g. `hle_hold_f950.bin`), find the
+logo MDEC-video task's end-of-stream → it calls the walker/activator(FMV#2). Then the native
+override is: on Start during the silent hold, drive that task's completion (or directly call
+the activator for the FMV#2 descriptor index, found from the 0x80102d44 table) — the game then
+plays FMV#2 through its OWN code. Verify FMV#2 plays clean AND advances to title afterward.
+
 ## 2026-06-14 (later 6) — REALITY CHECK on HLE: intro-skip + turbo do NOTHING; logo hold is VBLANK-paced ~370f; all low-level forces fail
 **User report (ground truth): "skipping FMV#1 still waits 5 seconds till FMV#2." Plus
 directive: HLE BIOS, RE, PC-native overrides — NO emulator turbo.** Investigated entirely
