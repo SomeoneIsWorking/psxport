@@ -76,6 +76,16 @@ void cd_overrides_init(void) {
   if (getenv("PSXPORT_CD_VERBOSE")) g_cd_verbose = 1;
   rec_set_override(0x8008B2D8u, ov_cdinit);
   rec_set_override(0x8001DB8Cu, ov_cd_loadfile);
+  // 0x8001DC40 FUN_8001dc40(a0=dest, a1=lba, a2=size_bytes): the intro sequencer's loader
+  // variant. Same (dest, lba, size_bytes) contract as FUN_8001db8c — it sets the identical
+  // _DAT_1f8001f8/f0/f4 read state — but runs the reader INLINE (calls FUN_8001d940 directly,
+  // no spawned sub-task / no DAT_801fe070 busy-wait guard). The real body falls into the same
+  // async/IRQ ReadN path (FUN_8001d940) that spins on _DAT_1f8001f4, decremented only by the
+  // un-fired per-sector IRQ callback FUN_8001d7c4 — so the intro loader coroutine
+  // (FUN_80044f58/FUN_8004514c) stalls forever. The inline variant has no guard to clear, so
+  // the same native synchronous read body applies verbatim: copy `size` bytes from `lba` into
+  // `dest`, return size. Callers set their own done-flag (DAT_1f80019b) after the call.
+  rec_set_override(0x8001DC40u, ov_cd_loadfile);
   rec_set_override(0x8008AC34u, ov_cd_command);
   rec_set_override(0x8008A6ECu, ov_cd_sync);
   rec_set_override(0x8008C1ECu, ov_cd_read);
