@@ -75,6 +75,21 @@ boot ready-poll. Emitter EXTRA_SEEDS for jalr-reached fns `0x8009A8E8/ADC4/AA4C`
   IRQ → invoke s_int_handler like wide60 hle_irq.cpp; implement events). Plus S4 diff harness
   vs Beetle, and an auto indirect-pointer (lui+addiu) seed scan to end CD-helper whack-a-mole.
 
+## 2026-06-14 (later 14) — DIRECTION: no CD/HW emulation; native overrides infra DONE
+User refined: "no CD code, no emulation, pure PC native." → don't emulate CD/IRQ; **override
+the game's CD/streaming fns with native file I/O, synchronous completion**. This is the
+recomp-overrides path. Override points already RE'd this session: `FUN_8008c1ec` (read
+blocks@LBA), `FUN_8008bf50`/`FUN_8008b8f0` (CdSearchFile), read-SM `FUN_8008c294`/done flag
+`0x800AC308`/completion `FUN_800899bc`, low-level `CD_cw` loop (`0x8009Axxx`).
+- **Override infrastructure DONE + validated:** emitter emits `gen_func_X` (recomp body) +
+  `func_X` wrapper checking a runtime override slot; `rec_set_override(addr,fn)`/
+  `rec_func_index`. Body kept alive (A/B + diffable), overrides fire on direct+indirect
+  calls, super-call = `gen_func_X`. `test_leaf.c` verifies replace/fire/super-call/toggle-off
+  (all pass). Matches recomp-overrides skill (runtime table, not compile-time exclusion).
+- NEXT (S3): native by-LBA disc backend (flat image or libchdr) + override the CD
+  read/resolve/complete fns to use it synchronously; native VBlank/event source for
+  WaitEvent. Then verify boot reaches title/FMV. Plan: docs/recomp_port_plan.md.
+
 ## 2026-06-14 (later 8) — CORRECTION to "later 7" RE map (overlay sequencer decompiled)
 Read the overlay decomp (`scratch/decomp/overlay.c` = `FUN_801064f0`) + the worker/scheduler
 chain from the full decomp. Three labels in "later 7" are **WRONG** — fixing them so the next

@@ -108,12 +108,34 @@ The recompiler input is **NOT the boot EXE `SCUS_944.54`**. Measured:
   - **S5 BOUNDARY reached (honest):** further progress needs real **peripheral + IRQ/event
     delivery** — the CD retry loop and `WaitEvent` block on CD-complete / VBlank IRQs that
     nothing generates yet. Faking "event fired" / CD-done would be a bandaid (forbidden).
-- **S3/S5 — peripherals + IRQ (next big phase).** Lift CD + VBlank/timer + GPU/SPU from
-  Beetle; wire IRQ delivery to invoke the game's registered handler (`s_int_handler` from
-  HookEntryInt) as a subroutine (cf. wide60 `hle_irq.cpp`); implement the event subsystem
-  (Open/Enable/Wait/Test/DeliverEvent) so VBlank/CD events fire. Also: **S4 diff harness vs
-  Beetle** to verify bit-exact, and an **automatic indirect-pointer (`lui`+`addiu`) seed
-  scan** in the emitter to stop hand-seeding the CD driver's `jalr` helpers.
+## DIRECTION REFINED (2026-06-14): no CD/hardware emulation — native file I/O via overrides
+User: "no CD code, no emulation, pure PC native." So we **do NOT** emulate the CD controller
+or deliver CD/VBlank IRQs. Instead we **override the game's CD/streaming functions with native
+C** that reads disc data directly from a file and completes **synchronously** (no IRQ
+handshake). The deep CD/StrPlayer RE from earlier this session names the override points:
+- `FUN_8008c1ec(blocks, startLBA, buffer)` — core "read N blocks from LBA"; override → native
+  read from the disc image by LBA, synchronous.
+- `FUN_8008bf50` (CdSearchFile dir-cache reader) / `FUN_8008b8f0` (path→descriptor) — already
+  RE'd; may override at the file-resolve level instead/also.
+- read-complete SM `FUN_8008c294` → done flag `0x800AC308`; completion cb
+  `FUN_800899bc` — the override sets the done state / invokes the completion path the game
+  polls, so its CD-driver wait loops fall through immediately.
+- low-level CD-command/init (`CD_cw`/`CD timeout` loop, fns `0x8009Axxx`) — override the
+  init/command primitive to report success without hardware.
+VBlank-driven `WaitEvent` similarly handled natively (a native frame/event source, not IRQ).
+
+- **S2.5 — override infrastructure. DONE/validated.** Emitter now emits `gen_func_X` (recomp
+  body) + `func_X` wrapper checking a runtime override slot; `rec_set_override(addr, fn)` +
+  `rec_func_index`. Body stays alive (A/B toggle + diffable), overrides fire on direct AND
+  indirect calls, **super-call** = call `gen_func_X`. Verified in `test_leaf.c` (replace,
+  fire, super-call, toggle-off — all pass).
+- **S3 — native CD/file backend (next).** A by-LBA disc-data reader (native file; e.g.
+  `discdump image` → flat 2048-B/LBA image, or read the CHD via libchdr at runtime), then
+  override the CD-read/resolve/complete functions above to use it synchronously. Then native
+  VBlank/event source for `WaitEvent`. Verify boot advances to title/FMV.
+- **S4 — diff harness vs Beetle** (parallel): verify recomp bodies bit-exact (overrides off).
+- Emitter TODO: automatic indirect-pointer (`lui`+`addiu`) seed scan to end CD-helper
+  hand-seeding.
 - **S1 — emitter.** ops → C against a modeled `R3000` state (regs + memory accessors);
   one C function per Ghidra-mapped function, block labels + `goto` for intra-fn branches,
   **dispatch table** keyed by address for indirect calls/jumps (seed indirect-only targets).

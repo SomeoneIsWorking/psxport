@@ -33,6 +33,13 @@ void     mem_swr(uint32_t a, uint32_t v);
 // falling back to HLE/overlay routing for non-recompiled addresses.
 void rec_dispatch(R3000* c, uint32_t addr);       // generated: address -> recompiled fn
 void rec_dispatch_miss(R3000* c, uint32_t addr);  // runtime: BIOS/overlay/computed target
+
+// Native overrides (recomp-overrides): register a hand-written native fn keyed by the
+// original function's entry address. The generated wrapper func_<addr> runs the override
+// if registered, else the recomp body gen_func_<addr> (extern that for super-calls).
+typedef void (*OverrideFn)(R3000*);
+void rec_set_override(uint32_t addr, OverrideFn fn);
+int  rec_func_index(uint32_t addr);
 void rec_syscall(R3000* c, uint32_t code);
 void rec_break(R3000* c, uint32_t code);
 

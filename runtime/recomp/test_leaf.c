@@ -33,6 +33,26 @@ int main(void) {
   check("800269EC.v0", c.r[2], 1u);
   check("800269EC.mem", mem_r8(0x800BF80Fu), 1u);
 
+  // 4) override mechanism: register a native override for 0x80089A30 and confirm the
+  //    wrapper runs it instead of the recomp body; then a super-call wrapping the body.
+  extern void gen_func_80089A30(R3000*);
+  static int ov_hit = 0;
+  void native_ov(R3000* x) { ov_hit = 1; x->r[2] = 0xCAFEu; }
+  void wrap_ov(R3000* x) { gen_func_80089A30(x); x->r[2] += 1; }  // super-call + augment
+
+  rec_set_override(0x80089A30u, native_ov);
+  R3000 c2 = {0}; func_80089A30(&c2);
+  check("ovr.replaces", c2.r[2], 0xCAFEu);
+  check("ovr.fired", (uint32_t)ov_hit, 1u);
+
+  rec_set_override(0x80089A30u, wrap_ov);
+  R3000 c3 = {0}; func_80089A30(&c3);
+  check("ovr.supercall", c3.r[2], 0x800ABFD5u);  // body 0x800ABFD4 + 1
+
+  rec_set_override(0x80089A30u, 0);              // toggle off -> recomp body again
+  R3000 c4 = {0}; func_80089A30(&c4);
+  check("ovr.toggleoff", c4.r[2], 0x800ABFD4u);
+
   printf("\n%s\n", fails ? "FAILED" : "all leaf tests passed");
   return fails ? 1 : 0;
 }
