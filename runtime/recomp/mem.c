@@ -18,14 +18,30 @@ static inline uint8_t* host_ptr(uint32_t a, uint32_t bytes) {
   return 0;
 }
 
-static uint32_t io_log_r(uint32_t a, uint32_t bytes) {
-  // S1 stub: surface stray I/O reads so they're visible, return 0.
-  fprintf(stderr, "[mem] unhandled I/O read%u @ 0x%08X\n", bytes * 8, a);
+// Minimal I/O model (S2): just enough to keep boot moving until the real peripheral
+// modules (GPU/SPU/CD/DMA/timers, lifted from Beetle) land in S5. Documented, not magic.
+static int g_io_verbose = 0;  // PSXPORT_IO_VERBOSE=1 to log every stray access
+
+static uint32_t io_read(uint32_t a, uint32_t bytes) {
+  const uint32_t p = a & 0x1FFFFFFF;
+  // GPUSTAT (0x1F801814): report the GPU permanently "ready" so the boot ready-poll
+  // (waits on cmd/VRAM/DMA-ready bits 26-28) advances; toggle bit 31 (drawing even/odd
+  // line) each read so vsync/odd-even spin loops also progress. No real GPU yet.
+  if (p == 0x1F801814) {
+    static uint32_t toggle = 0;
+    toggle ^= 0x80000000u;
+    return 0x1C000000u | toggle;  // bits 26/27/28 ready + alternating bit31
+  }
+  if (g_io_verbose)
+    fprintf(stderr, "[io] read%u @ 0x%08X -> 0\n", bytes * 8, a);
   return 0;
 }
-static void io_log_w(uint32_t a, uint32_t v, uint32_t bytes) {
-  fprintf(stderr, "[mem] unhandled I/O write%u @ 0x%08X = 0x%08X\n", bytes * 8, a, v);
+static void io_write(uint32_t a, uint32_t v, uint32_t bytes) {
+  if (g_io_verbose)
+    fprintf(stderr, "[io] write%u @ 0x%08X = 0x%08X\n", bytes * 8, a, v);
 }
+#define io_log_r(a, b) io_read((a), (b))
+#define io_log_w(a, v, b) io_write((a), (v), (b))
 
 uint8_t mem_r8(uint32_t a) {
   uint8_t* p = host_ptr(a, 1);

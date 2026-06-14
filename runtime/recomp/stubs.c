@@ -15,11 +15,4 @@ void     gte_op(R3000* c, uint32_t insn)        { (void)c; (void)insn; }
 uint32_t cop0_mfc(R3000* c, uint32_t reg)       { (void)c; (void)reg; return 0; }
 void     cop0_mtc(R3000* c, uint32_t reg, uint32_t v) { (void)c; (void)reg; (void)v; }
 
-void rec_syscall(R3000* c, uint32_t code) {
-  (void)c;
-  fprintf(stderr, "[syscall] code %u (unimplemented)\n", code);
-}
-void rec_break(R3000* c, uint32_t code) {
-  (void)c;
-  fprintf(stderr, "[break] code %u\n", code);
-}
+// rec_syscall / rec_break live in hle.c (kernel concern).

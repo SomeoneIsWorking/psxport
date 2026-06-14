@@ -293,7 +293,14 @@ def main():
     if "--limit" in sys.argv:
         limit = int(sys.argv[sys.argv.index("--limit") + 1])
 
-    seeds = set(ghidra_funcs(exe.load, exe.text_end)) | {exe.entry}
+    # Functions reached only indirectly (jalr through a function pointer) — invisible to
+    # direct-jal discovery, found empirically via boot dispatch-misses. Documented seeds.
+    EXTRA_SEEDS = {
+        0x8009A8E8,  # called via jalr during boot (after B0:0x35), Ghidra-unmarked
+        0x8009ADC4,  # CD init helper (jalr), reached after CD_init
+        0x8009AA4C,  # CD timeout/retry helper (jalr)
+    }
+    seeds = set(ghidra_funcs(exe.load, exe.text_end)) | {exe.entry} | EXTRA_SEEDS
     funcs = discover_funcs(exe, seeds)
     print(f"functions: {len(seeds)} seeds (Ghidra+entry) -> {len(funcs)} after jal discovery")
     funcset = set(funcs)

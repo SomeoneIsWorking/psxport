@@ -59,6 +59,22 @@ runtime `rec_dispatch_miss`. **The core executes real boot code.** Measured boot
   build.sh` (leaf tests); boot recon: compile boot.c instead of test_leaf.c, run under
   `timeout`.
 
+## 2026-06-14 (later 13) — S2: recompiled core boots through BIOS into CD/event subsystems
+`runtime/recomp/hle.c` = recomp-native HLE BIOS (transcribed faithfully from the proven
+`hle_kernel.cpp`): heap A0:0x33-0x39, HookEntryInt, FileWrite→stderr, GetB0/C0Table,
+ChangeClearPAD, GPU_cw, C0 installers, and `syscall` Enter/ExitCriticalSection via `$a0`.
+`mem.c` reports GPUSTAT (`0x1F801814`) permanently ready (+toggling bit31) to clear the
+boot ready-poll. Emitter EXTRA_SEEDS for jalr-reached fns `0x8009A8E8/ADC4/AA4C`.
+- **Verified**: boot runs deep real game code — heap init → HookEntryInt → CD init (emits
+  `CD_init`/`CD_cw`/`CD timeout` via FileWrite) → past GPU handshake → OpenEvent/EnableEvent/
+  WaitEvent loop + CD-command retry loop. Reproduce: `tools/recomp/build.sh` (leaf tests +
+  boot). Leaf tests still pass.
+- **S5 boundary (honest stop):** the CD-retry + WaitEvent loops block on CD-complete / VBlank
+  **IRQs that nothing generates yet**. Faking "event fired"/CD-done = bandaid (refused).
+- NEXT (big phase): peripheral + IRQ/event delivery (lift CD/VBlank/GPU/SPU from Beetle; wire
+  IRQ → invoke s_int_handler like wide60 hle_irq.cpp; implement events). Plus S4 diff harness
+  vs Beetle, and an auto indirect-pointer (lui+addiu) seed scan to end CD-helper whack-a-mole.
+
 ## 2026-06-14 (later 8) — CORRECTION to "later 7" RE map (overlay sequencer decompiled)
 Read the overlay decomp (`scratch/decomp/overlay.c` = `FUN_801064f0`) + the worker/scheduler
 chain from the full decomp. Three labels in "later 7" are **WRONG** — fixing them so the next

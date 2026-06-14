@@ -15,6 +15,10 @@ mkdir -p generated scratch/bin
 
 echo "[1/3] decode test"; python3 tools/recomp/test_decode.py >/dev/null && echo "  decoder ok"
 echo "[2/3] emit"; python3 tools/recomp/emit.py "$MAIN" "$GEN"
-echo "[3/3] compile + leaf test"
-$CC $CFLAGS "$GEN" "$RT/mem.c" "$RT/stubs.c" "$RT/test_leaf.c" -o scratch/bin/test_leaf
+RUNTIME="$RT/mem.c $RT/stubs.c $RT/hle.c"
+echo "[3/3] compile core + runtime, run leaf test + boot"
+$CC $CFLAGS "$GEN" $RUNTIME "$RT/test_leaf.c" -o scratch/bin/test_leaf
 ./scratch/bin/test_leaf
+echo "--- boot (6s cap) ---"
+$CC $CFLAGS "$GEN" $RUNTIME "$RT/boot.c" -o scratch/bin/boot
+timeout 6 ./scratch/bin/boot 2>&1 | awk '!seen[$0]++' | head -12 || true

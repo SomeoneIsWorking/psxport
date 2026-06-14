@@ -97,9 +97,23 @@ The recompiler input is **NOT the boot EXE `SCUS_944.54`**. Measured:
     - hardware regs touched: I_MASK/I_STAT (`0x1F8010 74/70`), DMA (`0x1F8010F0`), Timer1
       (`0x1F8011 10/14`), CDROM (`0x1F8018 00/03`), **GPUSTAT `0x1F801814` ready-poll**
       (spins because `mem.c` returns 0 — first thing the GPU/timer stub must satisfy).
-  - **NEXT:** implement the ~6 boot BIOS calls (A0/B0/C0 HLE table), seed `0x8009A8E8`, and a
-    minimal GPU/timer status so the ready-poll advances. Build **S4 diff harness vs Beetle**
-    alongside (methodology: harness before more logic) to verify each step bit-exact.
+  - **DONE:** `runtime/recomp/hle.c` — recomp-native HLE (heap A0:0x33-0x39, HookEntryInt,
+    FileWrite→stderr, GetB0/C0Table, ChangeClearPAD, GPU_cw, C0 installers, `syscall`
+    Enter/ExitCriticalSection via `$a0`), transcribed faithfully from the proven
+    `hle_kernel.cpp`. `mem.c` reports GPUSTAT `0x1F801814` permanently ready (+toggling bit31)
+    to clear the ready-poll. Seeds: `0x8009A8E8/ADC4/AA4C`.
+  - **Boot now executes deep real game code** (verified): heap init → HookEntryInt → CD init
+    (prints `CD_init`/`CD_cw`/`CD timeout` via FileWrite) → past GPU handshake → OpenEvent/
+    EnableEvent/**WaitEvent** loop + CD-command retry loop.
+  - **S5 BOUNDARY reached (honest):** further progress needs real **peripheral + IRQ/event
+    delivery** — the CD retry loop and `WaitEvent` block on CD-complete / VBlank IRQs that
+    nothing generates yet. Faking "event fired" / CD-done would be a bandaid (forbidden).
+- **S3/S5 — peripherals + IRQ (next big phase).** Lift CD + VBlank/timer + GPU/SPU from
+  Beetle; wire IRQ delivery to invoke the game's registered handler (`s_int_handler` from
+  HookEntryInt) as a subroutine (cf. wide60 `hle_irq.cpp`); implement the event subsystem
+  (Open/Enable/Wait/Test/DeliverEvent) so VBlank/CD events fire. Also: **S4 diff harness vs
+  Beetle** to verify bit-exact, and an **automatic indirect-pointer (`lui`+`addiu`) seed
+  scan** in the emitter to stop hand-seeding the CD driver's `jalr` helpers.
 - **S1 — emitter.** ops → C against a modeled `R3000` state (regs + memory accessors);
   one C function per Ghidra-mapped function, block labels + `goto` for intra-fn branches,
   **dispatch table** keyed by address for indirect calls/jumps (seed indirect-only targets).

@@ -30,14 +30,7 @@ static void load_exe(const char* path, R3000* c) {
           path, entry, load, tsize, c->r[29]);
 }
 
-static int g_miss = 0;
-void rec_dispatch_miss(R3000* c, uint32_t addr) {
-  uint32_t a = addr & 0x1FFFFFFF;
-  const char* b = a==0xA0?"A0":a==0xB0?"B0":a==0xC0?"C0":0;
-  if (b) fprintf(stderr, "[miss %3d] BIOS %s fn=0x%02X\n", g_miss, b, c->r[9] & 0xFF);
-  else   fprintf(stderr, "[miss %3d] addr 0x%08X\n", g_miss, addr);
-  if (++g_miss >= 150) { fprintf(stderr, "-- miss budget reached --\n"); exit(0); }
-}
+// rec_dispatch_miss now lives in hle.c (routes A0/B0/C0 to the HLE BIOS).
 
 int main(int argc, char** argv) {
   const char* path = argc > 1 ? argv[1] : "scratch/bin/tomba2/MAIN.EXE";
@@ -45,6 +38,6 @@ int main(int argc, char** argv) {
   load_exe(path, &c);
   c.r[4] = 1; c.r[5] = 0;   // a0=argc-ish, a1=argv (BIOS sets these; minimal)
   func_800896E0(&c);
-  fprintf(stderr, "[exit] entry returned normally after %d misses\n", g_miss);
+  fprintf(stderr, "[exit] entry function returned to top level\n");
   return 0;
 }
