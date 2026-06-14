@@ -24,6 +24,8 @@ static int g_io_verbose = 0;  // PSXPORT_IO_VERBOSE=1 to log every stray access
 
 void gpu_gp0(uint32_t w);
 void gpu_gp1(uint32_t w);
+uint32_t cdc_read(uint32_t p);
+void     cdc_write(uint32_t p, uint8_t v);
 void gpu_dma2_linked_list(uint32_t madr);
 void gpu_dma2_block(uint32_t madr, int count, int to_gpu);
 // MDEC (native, lifted from Beetle via mdec_beetle.c). DMA0 = in (compressed), DMA1 = out (pixels).
@@ -57,6 +59,7 @@ static uint32_t io_read(uint32_t a, uint32_t bytes) {
     toggle ^= 0x80000000u;
     return 0x1C000000u | toggle;
   }
+  if (p >= 0x1F801800 && p <= 0x1F801803) return cdc_read(p);   // CD controller registers
   if (p == 0x1F801810) return 0;                 // GPUREAD (VRAM-store path: minimal)
   if (p == 0x1F801820 || p == 0x1F801824) return mdec_read(p);  // MDEC0 data / MDEC1 status
   // SPUSTAT (0x1F801DAE read): report idle/transfer-complete — bits 0x7FF cleared. The libspu
@@ -86,6 +89,7 @@ static uint32_t io_read(uint32_t a, uint32_t bytes) {
 }
 static void io_write(uint32_t a, uint32_t v, uint32_t bytes) {
   const uint32_t p = a & 0x1FFFFFFF;
+  if (p >= 0x1F801800 && p <= 0x1F801803) { cdc_write(p, (uint8_t)v); return; }  // CD controller
   if (p == 0x1F801810) { gpu_gp0(v); return; }    // GP0 (direct)
   if (p == 0x1F801814) { gpu_gp1(v); return; }    // GP1 (display/control)
   if (p == 0x1F801820 || p == 0x1F801824) { mdec_write(p, v); return; }  // MDEC0 cmd / MDEC1 ctrl

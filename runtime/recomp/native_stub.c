@@ -96,24 +96,32 @@ static void ov_stub_cdsync(R3000* c)   { zero_result8(c->r[A1_]); c->r[V0_] = 2;
 static void ov_stub_cddatasync(R3000* c) { c->r[V0_] = 0; }
 
 // --- Stub libetc VSync ---------------------------------------------------------------------
-// No VBlank IRQ is delivered, so the stub's VSync count DAT_800267B4 never advances and its
-// vblank WAIT (0x80017FC4: spin until count >= a0, else "VSync: timeout") never completes. Mirror
-// timing.c for MAIN: satisfy the wait by advancing the native frame clock to the requested count,
-// then deliver the VBlank events and PRESENT one displayed frame (the stub draws + flips display
-// per vblank; the native GPU shows it). This is the boot stub's frame heartbeat — where SCEA
-// becomes visible. DAT_800267B4 is the libetc VSync counter the public VSync(mode) reads back.
+// The stub's public VSync(mode) (0x80017E4C) measures frame timing off hardware we don't model
+// (GPUSTAT 0x1F801814, Timer1 0x1F801110) and waits on the VBlank IRQ count — none of which
+// advance, so its fades/holds spin and it polls GPUSTAT forever. Replace the whole function with
+// the native frame model (mirrors timing.c's ov_vsync for MAIN.EXE):
+//   mode > 0  -> wait `mode` frames;  mode == 0 -> wait one frame
+//   mode < 0  -> "query current count" — but the stub's timed holds BUSY-POLL VSync(-1) expecting
+//                the VBlank IRQ to advance the count in the background (e.g. SCEA state 9 loops
+//                until VSync(-1) > start+3). We deliver no preemptive IRQ, so in this cooperative
+//                model EVERY VSync call ticks one frame: a query-poll loop then makes progress and
+//                keeps presenting. (A query advancing one frame is harmless to elapsed measurements
+//                and is exactly what lets those wait loops terminate.)
+// Each call advances the native frame clock, delivers the VBlank events, and PRESENTS one frame
+// (the stub has drawn + flipped its display) — the heartbeat that makes SCEA visible and its timed
+// hold/fade progress. DAT_800267B4 is the count SCEA also reads directly.
 #define STUB_VBLANK_COUNT 0x800267B4u
 void gpu_present(void);
 void hle_deliver_event(uint32_t ev_class, uint32_t spec);
-static void ov_stub_vsyncwait(R3000* c) {
-  uint32_t target = c->r[A0_];                       // wait until VSync count >= target
-  uint32_t cur = mem_r32(STUB_VBLANK_COUNT);
-  if ((int32_t)(cur - target) < 0) cur = target;     // reach the target (the IRQ would have)
-  else cur += 1;                                      // already past: still advance one frame
-  mem_w32(STUB_VBLANK_COUNT, cur);
-  hle_deliver_event(0xF2000003u, 0xFFFFFFFFu);        // VBlank event classes (RCnt3 / libapi)
+static uint32_t g_stub_vblank;
+static void ov_stub_vsync(R3000* c) {
+  int32_t mode = (int32_t)c->r[A0_];
+  g_stub_vblank += (mode > 0) ? (uint32_t)mode : 1u;   // every call ticks >=1 frame
+  hle_deliver_event(0xF2000003u, 0xFFFFFFFFu);         // VBlank event classes (RCnt3 / libapi)
   hle_deliver_event(0xF0000001u, 0xFFFFFFFFu);
-  gpu_present();                                      // show this frame (pets the watchdog)
+  gpu_present();                                        // show this frame (pets the watchdog)
+  mem_w32(STUB_VBLANK_COUNT, g_stub_vblank);
+  c->r[V0_] = g_stub_vblank;
 }
 
 // Register a stub override on BOTH the recompiled path (stub_set_override, function-index keyed —
@@ -128,7 +136,7 @@ static void stub_cd_overrides_init(void) {
   stub_override(0x8001A0C0u, ov_stub_cd_cw);      // CD_cw (command engine; entry precedes prologue)
   stub_override(0x80019B78u, ov_stub_cdsync);     // CdSync
   stub_override(0x8001A944u, ov_stub_cddatasync); // CdDataSync
-  stub_override(0x80017FC4u, ov_stub_vsyncwait);  // libetc VSync vblank-count wait
+  stub_override(0x80017E4Cu, ov_stub_vsync);      // libetc public VSync(mode)
 }
 
 void native_stub_run(R3000* c, const char* main_exe_path) {

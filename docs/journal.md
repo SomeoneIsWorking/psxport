@@ -1,6 +1,6 @@
 # Debug / progress journal
 
-## 2026-06-15 (later 35) — STUB RECOMPILED + run as the real entry; reached the SCEA raw-CD driver
+## 2026-06-15 (later 35) — AUTHENTIC BOOT WORKS: recompiled stub draws SCEA → LoadExec → MAIN title
 Replaced the FAKE native_fmv intro with the AUTHENTIC boot: the disc's boot executable SCUS_944.54
 is now **recompiled** and run as the real PSX entry, drawing toward SCEA, then handing to native
 MAIN boot (later 33). One faithful path — no boot-mode env toggles (user directive).
@@ -30,19 +30,27 @@ MAIN boot (later 33). One faithful path — no boot-mode env toggles (user direc
   in interp.c, consulted by `call_addr` AND by `rec_dispatch_miss` before it enters the interpreter)
   for interpreter-run stub fns. `native_stub.c::stub_override()` registers in both. Watchdog now also
   reports the interp PC and catches SIGSEGV/SIGABRT/SIGBUS with a backtrace.
-- **CURRENT BLOCKER — the SCEA state machine drives the CD controller at the REGISTER level.** crt0
-  → 0x800111B4 (SCEA driver) → 0x80011A78 (state machine: jump table @0x80010054, 20 states,
-  runs to completion polling) → 0x800123B0. That fn pokes the **CD controller regs 0x1F801800–
-  0x1F801803** directly (pointers baked in stub .data @0x80025434/38/3C/40) and polls the IRQ-flag
-  reg (0x1F801803 & 7 = CD response code: 1=DataReady 2=Complete 3=Ack 5=DiskError). Our runtime
-  doesn't emulate the CD controller → reads 0 → the state machine loops forever (no frame presents).
-- **KEY: the SCEA image is EMBEDDED in the stub** — a 4-bit-CLUT TIM @0x8001FB5C (the only TIM in
-  the stub). So the SCEA CD commands are disc/region CHECKS, not data reads. The remaining work is
-  to satisfy the stub's raw-CD handshake — either (a) override 0x800123B0 natively to return the CD
-  response codes the state machine expects (reproduce the protocol), or (b) minimal CD-controller
-  register emulation (0x1F801800–3 command/response FIFO + IRQ, authentic; Beetle has it). Then SCEA
-  draws the embedded TIM and LoadExec hands to native MAIN boot. Headless repro:
-  `PSXPORT_NOWINDOW=1 PSXPORT_WATCHDOG=10 ./run.sh` → stuck interp PC 0x800123bc.
+- **SCEA NOW RENDERS → LoadExec → native MAIN boot (full authentic chain works).** The SCEA state
+  machine (crt0 → 0x800111B4 → 0x80011A78, jump table @0x80010054, 20 states) drives the **CD
+  controller at the REGISTER level** (0x800123B0 pokes 0x1F801800–0x1F801803 via pointers baked in
+  stub .data @0x80025434/38/3C/40; polls the IRQ-flag reg low 3 bits = CD response 1=DataReady
+  2=Complete 3=Ack 5=DiskError). Implemented a **native CD controller** (runtime/recomp/cdc_native.c,
+  wired into mem.c io_read/io_write for 0x1F801800–3): index banking, param/response/data FIFOs, an
+  interrupt queue (INT3-ack-then-INT2-complete), and the command set SCEA issues — GetTN(0x13),
+  Init(0x0A), GetTD(0x14), ReadTOC(0x1E), **GetID(0x1A) → returns "SCEA" (licensed/America)**,
+  Setloc(0x02), Setmode(0x0E); data reads served from disc.c. Commands complete SYNCHRONOUSLY (ready
+  on the next poll) — correct for code that busy-polls without advancing time. The SCEA image is an
+  embedded 4-bit-CLUT TIM @0x8001FB5C (no data load needed).
+- **VSync: override the PUBLIC VSync(mode) 0x80017E4C** (not the low-level wait) — the stub's timed
+  holds BUSY-POLL VSync(-1) expecting a preemptive VBlank IRQ to tick the count; we deliver none, so
+  in our cooperative model EVERY VSync call (incl. query) ticks one frame + delivers VBlank events +
+  `gpu_present()`. That makes the holds/fades progress and the screen visible. (mirrors timing.c.)
+- **VERIFIED on-screen:** SCEA "Sony Computer Entertainment America" renders
+  (scratch/screenshots/scea_logo.png), holds, fades; the stub then issues `LoadExec(cdrom:\MAIN.EXE;1)`
+  which we intercept → reload MAIN + native MAIN boot → **TOMBA!2 title renders**
+  (scratch/screenshots/post_handoff.png). Headless: `PSXPORT_NOWINDOW=1 PSXPORT_GPU_DUMP=dir
+  PSXPORT_WATCHDOG=20 ./run.sh`. Remaining = the later-33 native-MAIN residuals (malformed OT, DEMO
+  needs pad input, OP movie strNext streaming) — unchanged by this work.
 
 ## 2026-06-14 (later 34) — REAL BOOT PATH laid out (oracle call-trace): SCEA = the SCUS boot stub
 **User correction:** SCEA is NOT an FMV and the port's `native_fmv_play` intro is a FAKE boot.

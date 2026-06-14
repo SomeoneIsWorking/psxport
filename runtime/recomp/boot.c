@@ -56,6 +56,8 @@ int main(int argc, char** argv) {
   spu_init();               // SPU audio core, lifted from Beetle
   spu_audio_init();         // SDL audio output sink (PSXPORT_NOAUDIO to disable)
   gpu_native_init();        // native GPU renderer (parses the game's GP0 stream)
+  void cdc_init(void);
+  cdc_init();               // native CD controller registers (0x1F801800-3) for raw-CD code
   cd_overrides_init();      // native CD: drive-ready + by-LBA read (S3)
   timing_init();            // native VBlank/VSync source (S3)
   games_tomba2_init();      // Tomba2 per-game overrides (vblank pacing)
