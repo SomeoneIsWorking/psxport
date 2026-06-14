@@ -1,5 +1,51 @@
 # Debug / progress journal
 
+## 2026-06-14 (later 6) — REALITY CHECK on HLE: intro-skip + turbo do NOTHING; logo hold is VBLANK-paced ~370f; all low-level forces fail
+**User report (ground truth): "skipping FMV#1 still waits 5 seconds till FMV#2." Plus
+directive: HLE BIOS, RE, PC-native overrides — NO emulator turbo.** Investigated entirely
+on the **HLE BIOS path** (`PSXPORT_HLE_BIOS=1`, instant CD, `-repl`). Findings, all measured:
+
+- **The whole intro-skip (incl. the "later 5" turbo) was tuned to the OpenBIOS ROM path and
+  does NOTHING under HLE.** HLE no-input timeline: FMV#1 (boot EXE) ReadS f413 → Pause f931;
+  StrPlayer logo hold f944 → **FMV#2 ReadS f1318** (~370f ≈ 6s gap). Held-Start-from-boot
+  gives the IDENTICAL f413/f1318 — the SCEA/Whoopee/Dwell/LogoHold hooks don't move anything
+  under HLE, and **FMV#1 itself is not Start-skippable under HLE** (tap at f500 → still Pause
+  f931). (`g_module_turbo` only acts in the `-play` loop; in `-repl` the dwell-hook still runs.)
+- **CAVEAT that invalidated earlier "held-Start" repl tests:** REPL button names are
+  **case-sensitive** (`press Start`, not `START`). My first held tests used `START` → no-op.
+- **Dwell-escape (0x80050CE4) caps at ~−105f under HLE.** New knob forcing the 0x80050CE4
+  pace-loop exit *unconditionally* (every reached frame): FMV#2 f1318 → **f1213 only**. So the
+  display pace dwell is NOT the gate; the consumer-paced ring fill is. This is the hard ceiling
+  of the entire dwell-escape family — it can never collapse the ~370f hold.
+- **Forcing the prebuffer-wait gate DESYNCS (FMV#2 never comes).** The gate is
+  `0x8008A784 bnez v1,0x8008A7B8` (advance when ring pos > target, else wait ≤60f). Hooking it
+  to force v1=1 (always "buffer ready") → **no cmd 1B at all** through f1400. Same failure
+  family as faking disc EOF / poking 0x80102748. Do not retry forcing this gate.
+- **The StrPlayer state byte `*(0x1F80019C)` is 0 for the ENTIRE hold** (→1→2 only at f1318).
+  Dispatcher `0x80050D00`: state 0 → calls per-frame driver `0x8008179C` EVERY frame; the
+  advance decision is INSIDE 0x8008179C's consume logic (callee chain incl. status flag
+  *(0x800ABE20) and the FMV#2 load 0x8008A6EC/0x8008B4B8). That is exactly why poking the
+  state byte is inert — 0 is the *active* driver state, not a "waiting" state.
+- **Mechanism (re-confirmed via PCCOV coverage-diff wait-frame vs advance-frame):** the
+  advance frame uniquely runs the playlist walker `0x8008B8F0`, activator `0x8008BF50` (called
+  from walker @0x8008BA60), and the FMV#2 overlay init/SM `0x80106xxx` (0x801064F0 parses the
+  '\'-playlists; walker called from 6 sites 0x80106514..0x801066F0). The overlay SM is dormant
+  during the hold and wakes only when the logo segment is consumed → it then drives the advance.
+- **Savestates are UNRELIABLE under HLE** (retro_serialize captures Beetle state but NOT the
+  runtime-side HLE BIOS thread/callback state) → on load the StrPlayer desyncs (0 CD cmds).
+  Fast-iteration must run from boot (instant-CD makes f0→f1318 a few seconds).
+
+**Bottom line:** the ~370f logo hold is ~265 logo frames displayed one-per-real-VBLANK
+(consumer-paced) — NOT removable by escaping any spin (that needs more VBLANKs = turbo) and
+NOT forceable at any low-level gate (all desync). The ONLY clean native skip is to **cut the
+logo SEGMENT short** (drive the overlay-SM advance, or shorten the logo stream's
+length/frame-count so it consumes in ~1 frame and the game advances through its OWN code).
+That is the documented next step and remains uncracked — needs the consume counter / logo
+stream length field RE'd (scratchpad-aware watchpoint; PSXPORT_WATCHW is main-RAM only).
+**Tooling proven useful this session: `PSXPORT_PCCOV="s-e:path;s-e:path"` coverage-diff** (set
+difference of executed PCs between a waiting window and the advance window — pinpointed the
+advance-only functions). Experiments reverted (dead ends): force-dwell, force-prebuffer-gate.
+
 ## 2026-06-14 (later 5) — inter-FMV logo hold residual COLLAPSED via scoped fast-forward
 The dwell-skip (later-4) got the hold f719->f598 (-121f) but left a ~3.3s residual =
 the StrPlayer's per-VBLANK MDEC decode of the (invisible, skipped) logo clip's ~210
