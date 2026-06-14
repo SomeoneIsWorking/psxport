@@ -61,6 +61,15 @@ if [ ! -f "$MAIN" ]; then
 fi
 [ -f "$MAIN" ] || die "could not extract MAIN.EXE"
 
+# The disc's boot executable (SCUS_944.54): the real PSX entry point. It draws the SCEA screen,
+# then LoadExec's MAIN.EXE — we run it as the authentic boot (runtime/recomp/native_stub.c).
+STUB=scratch/bin/tomba2/SCUS_944.54
+if [ ! -f "$STUB" ]; then
+  say "extracting the boot stub SCUS_944.54 from the disc…"
+  "$DISCDUMP" get SCUS_944.54 "$DISC" scratch/bin/tomba2 >/dev/null 2>&1 || true
+fi
+[ -f "$STUB" ] || die "could not extract the boot stub SCUS_944.54"
+
 # Stage overlays (\BIN\{START,DEMO,GAME}.BIN): runtime-loaded game code whose `jal`s into
 # resident MAIN.EXE seed the recompiler (emit.py --overlays). Game data — gitignored scratch.
 OVL=scratch/bin/overlays
@@ -73,9 +82,9 @@ done
 GEN=generated/tomba2_rec.c
 RT=runtime/recomp
 mkdir -p generated scratch/bin
-if [ ! -f "$GEN" ] || [ "$MAIN" -nt "$GEN" ] || [ tools/recomp/emit.py -nt "$GEN" ]; then
-  say "recompiling MAIN.EXE -> C…"
-  python3 tools/recomp/emit.py "$MAIN" "$GEN" --overlays "$OVL" >/dev/null
+if [ ! -f "$GEN" ] || [ "$MAIN" -nt "$GEN" ] || [ "$STUB" -nt "$GEN" ] || [ tools/recomp/emit.py -nt "$GEN" ]; then
+  say "recompiling MAIN.EXE + boot stub -> C…"
+  python3 tools/recomp/emit.py "$MAIN" "$GEN" --overlays "$OVL" --stub "$STUB" >/dev/null
 fi
 
 # libchdr static libs (versions vary across platforms — locate them).
@@ -92,10 +101,10 @@ INC="-I$RT -Igenerated -I$MED -I$MED/psx -Ivendor/beetle-psx/libretro-common/inc
 # _XOPEN_SOURCE: makecontext/swapcontext (native threads) need it on macOS/glibc.
 CFLAGS="-O2 -g -w -D_XOPEN_SOURCE=700 $INC $(pkg-config --cflags sdl2) -DPSXPORT_SDL"
 # All TUs: the recompiled core is split into generated/shard_*.c so they compile in parallel.
-SRC="$(ls generated/shard_*.c) \
+SRC="$(ls generated/shard_*.c) $(ls generated/stub_shard_*.c) generated/stub_disp.c \
   $RT/mem.c $RT/stubs.c $RT/hle.c $RT/threads.c $RT/interp.c $RT/gpu_native.c $RT/spu_audio.c $RT/pad_input.c $RT/memcard.c $RT/native_fmv.c \
   $MED/psx/gte.c $RT/gte_beetle.c $MED/psx/mdec.c $RT/mdec_beetle.c $MED/psx/spu.c $RT/spu_beetle.c \
-  $RT/disc.c $RT/cd_override.c $RT/timing.c $RT/games_tomba2.c $RT/sync_overrides.c $RT/native_boot.c $RT/watchdog.c $RT/boot.c"
+  $RT/disc.c $RT/cd_override.c $RT/timing.c $RT/games_tomba2.c $RT/sync_overrides.c $RT/native_boot.c $RT/native_stub.c $RT/watchdog.c $RT/boot.c"
 
 say "building the native port in parallel (-j$JOBS; first time compiles the recompiled core)…"
 OBJ=scratch/obj; mkdir -p "$OBJ"

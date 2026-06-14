@@ -1,5 +1,49 @@
 # Debug / progress journal
 
+## 2026-06-15 (later 35) — STUB RECOMPILED + run as the real entry; reached the SCEA raw-CD driver
+Replaced the FAKE native_fmv intro with the AUTHENTIC boot: the disc's boot executable SCUS_944.54
+is now **recompiled** and run as the real PSX entry, drawing toward SCEA, then handing to native
+MAIN boot (later 33). One faithful path — no boot-mode env toggles (user directive).
+- **Recompiler emits the stub as a SEPARATE module** (`emit.py --stub`, STUB_NAMES). The stub
+  overlaps MAIN.EXE's address space (both load @0x80010000; stub text 0x10000–0x38800, entry
+  0x80018B6C), so a shared `func_<addr>` namespace would collide. emit.py was refactored into
+  `emit_module(exe, out_dir, Names, …)`: MAIN keeps `func/rec_dispatch/rec_set_override/g_override`;
+  the stub gets `stub_func/stub_dispatch/stub_set_override/g_stub_override` + its own
+  `stub_shard_*.c`/`stub_disp.c`/`stub_decls.h`. Both share `rec_dispatch_miss` (BIOS/interp) on a
+  dispatch miss. 214 stub fns recompiled from the entry's jal graph; the rest run via the interp on
+  the stub's RAM bytes (hybrid, same as MAIN). run.sh extracts SCUS_944.54 + passes `--stub`.
+- **boot.c**: removed the `native_fmv_play("LOGO.STR"/"OP.STR")` fake intro. Single path →
+  `native_stub_run(&c, MAIN.EXE path)` (runtime/recomp/native_stub.c): loads the stub over MAIN's
+  low text, `stub_dispatch(c, 0x80018B6C)`; intercepts the stub's **LoadExec (BIOS A0:0x51)** via
+  `g_loadexec_hook` → reloads MAIN.EXE (restoring the text the stub overwrote, as the real boot
+  does) + longjmps out → `native_boot_run` takes over. (The stub loads MAIN by name through BIOS
+  LoadExec — wrapper @0x80011340 calls the A0(0x51) trampoline with `cdrom:\MAIN.EXE;1`.)
+- **Stub libcd/libetc overrides** (mirror cd_override.c/timing.c for the stub's own PSY-Q copies):
+  CD_cw **0x8001A0C0** (NOTE: entry is 2 insns BEFORE the `addiu sp` prologue @0x8001A0C8 — the
+  trace `… -> 8001A0C0` is ground truth, overriding 0x8001A0C8 silently no-ops) → success; CdSync
+  0x80019B78 → 2; CdDataSync 0x8001A944 → done; VSync vblank-wait 0x80017FC4 → advance the native
+  frame clock (counter DAT_800267B4) + deliver VBlank events + `gpu_present()`. With these, CD init
+  passes cleanly (no more "CD timeout"/"Init failed") and ResetGraph runs.
+- **Override plumbing for the stub**: `rec_set_override` is keyed by recompiled-function INDEX, so
+  it can't target non-recompiled stub fns. Added (a) `stub_set_override` (the stub module's
+  index-keyed table, for recompiled stub fns) and (b) `rec_set_interp_override` (a raw-address table
+  in interp.c, consulted by `call_addr` AND by `rec_dispatch_miss` before it enters the interpreter)
+  for interpreter-run stub fns. `native_stub.c::stub_override()` registers in both. Watchdog now also
+  reports the interp PC and catches SIGSEGV/SIGABRT/SIGBUS with a backtrace.
+- **CURRENT BLOCKER — the SCEA state machine drives the CD controller at the REGISTER level.** crt0
+  → 0x800111B4 (SCEA driver) → 0x80011A78 (state machine: jump table @0x80010054, 20 states,
+  runs to completion polling) → 0x800123B0. That fn pokes the **CD controller regs 0x1F801800–
+  0x1F801803** directly (pointers baked in stub .data @0x80025434/38/3C/40) and polls the IRQ-flag
+  reg (0x1F801803 & 7 = CD response code: 1=DataReady 2=Complete 3=Ack 5=DiskError). Our runtime
+  doesn't emulate the CD controller → reads 0 → the state machine loops forever (no frame presents).
+- **KEY: the SCEA image is EMBEDDED in the stub** — a 4-bit-CLUT TIM @0x8001FB5C (the only TIM in
+  the stub). So the SCEA CD commands are disc/region CHECKS, not data reads. The remaining work is
+  to satisfy the stub's raw-CD handshake — either (a) override 0x800123B0 natively to return the CD
+  response codes the state machine expects (reproduce the protocol), or (b) minimal CD-controller
+  register emulation (0x1F801800–3 command/response FIFO + IRQ, authentic; Beetle has it). Then SCEA
+  draws the embedded TIM and LoadExec hands to native MAIN boot. Headless repro:
+  `PSXPORT_NOWINDOW=1 PSXPORT_WATCHDOG=10 ./run.sh` → stuck interp PC 0x800123bc.
+
 ## 2026-06-14 (later 34) — REAL BOOT PATH laid out (oracle call-trace): SCEA = the SCUS boot stub
 **User correction:** SCEA is NOT an FMV and the port's `native_fmv_play` intro is a FAKE boot.
 Used the oracle (Beetle wide60rt, real BIOS) with a new **streaming call trace**

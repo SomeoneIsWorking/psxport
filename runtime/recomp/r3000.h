@@ -39,6 +39,9 @@ void rec_dispatch_miss(R3000* c, uint32_t addr);  // runtime: BIOS/overlay/compu
 // if registered, else the recomp body gen_func_<addr> (extern that for super-calls).
 typedef void (*OverrideFn)(R3000*);
 void rec_set_override(uint32_t addr, OverrideFn fn);
+// Override a NON-recompiled (interpreted) address — the boot stub / overlays. Keyed by raw
+// address (rec_set_override is keyed by recompiled-function index, which stub code lacks).
+void rec_set_interp_override(uint32_t addr, OverrideFn fn);
 int  rec_func_index(uint32_t addr);
 void rec_syscall(R3000* c, uint32_t code);
 void rec_break(R3000* c, uint32_t code);

@@ -66,29 +66,13 @@ int main(int argc, char** argv) {
   threads_register_overrides();
   c.r[4] = 1; c.r[5] = 0;   // a0=argc-ish, a1=argv (BIOS sets these; minimal)
 
-  // PC-native boot: drive the intro ourselves with the native FMV player — no PSX
-  // cooperative-task scheduler, no BIOS threads. SCEA + Woopee Camp logos live in
-  // MOVIE/LOGO.STR; the Tomba!2 opening is MOVIE/OP.STR. Each is skippable with Start
-  // (Enter / controller Start). PSXPORT_SKIP_INTRO=1 bypasses the intro entirely.
-  int native_fmv_play(const char* path);
-  if (!getenv("PSXPORT_SKIP_INTRO")) {
-    native_fmv_play("MOVIE/LOGO.STR");   // SCEA + Woopee Camp
-    native_fmv_play("MOVIE/OP.STR");     // Tomba!2 opening
-  }
-
-  // PC-PSX hybrid native game driver (milestone: init prefix). Runs crt0 + the game-main
-  // init calls natively (no scheduler). PSXPORT_NATIVE_BOOT=1 to enable.
-  if (getenv("PSXPORT_NATIVE_BOOT")) {
-    void native_boot_run(R3000*);
-    native_boot_run(&c);
-    fprintf(stderr, "[boot] native_boot_run returned\n");
-    return 0;
-  }
-
-  // TODO(next milestone): hand off to the game proper. The resident game runtime is a
-  // cooperative coroutine task system; running its recompiled code without BIOS threads /
-  // ucontext needs a resumable-execution design (pending). func_800896E0() is intentionally
-  // NOT entered here — it would run that scheduler, which we are removing.
-  fprintf(stderr, "[boot] native intro complete\n");
+  // Replicate the REAL PSX boot path. The disc's boot executable is the SCUS_944.54 *stub* (not
+  // MAIN.EXE): it draws the SCEA "…America Presents" screen itself, then BIOS-LoadExec's
+  // cdrom:\MAIN.EXE;1 and jumps to MAIN's entry. We run the stub as the real entry (interpreted —
+  // it isn't recompiled) and intercept its LoadExec to hand off to the native MAIN boot
+  // (native_boot.c, later 33/34). See docs/journal.md "later 34" + [[psxport-scea-boot-stub]].
+  void native_stub_run(R3000*, const char* main_exe_path);
+  native_stub_run(&c, path);              // stub draws SCEA, then hands off to native MAIN boot
+  fprintf(stderr, "[boot] native_stub_run returned\n");
   return 0;
 }

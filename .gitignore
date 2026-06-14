@@ -39,3 +39,4 @@ __pycache__/
 
 # Ghidra-derived function list (optional local speed seed; never committed — keep repo public-clean)
 tools/recomp/tomba2_funcs.txt
+.claude/

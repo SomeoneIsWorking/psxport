@@ -178,7 +178,23 @@ BRANCH_COND = {
 }
 
 
-def emit_func(exe, lo, hi, funcset, out, name):
+class Names:
+    """Symbol naming for one emitted module. A second EXE (the boot stub) that overlaps MAIN.EXE's
+    address space gets its OWN module — distinct wrapper/body/dispatch/override symbols + output
+    files — so func_<addr> never collides between the two images. Both share rec_dispatch_miss
+    (BIOS/interp) for dispatch misses."""
+    def __init__(self, gen, wrap, dispatch, index, setov, ovtab, decls, shardpfx, disp):
+        self.gen, self.wrap, self.dispatch = gen, wrap, dispatch
+        self.index, self.setov, self.ovtab = index, setov, ovtab
+        self.decls, self.shardpfx, self.disp = decls, shardpfx, disp
+
+MAIN_NAMES = Names("gen_func", "func", "rec_dispatch", "rec_func_index", "rec_set_override",
+                   "g_override", "rec_decls.h", "shard", "shard_disp")
+STUB_NAMES = Names("stub_gen_func", "stub_func", "stub_dispatch", "stub_func_index",
+                   "stub_set_override", "g_stub_override", "stub_decls.h", "stub_shard", "stub_disp")
+
+
+def emit_func(exe, lo, hi, funcset, out, name, N):
     """Emit one C function covering [lo, hi) under the given C name (the pure recomp body)."""
     ins = {a: decode(a, exe.word(a)) for a in range(lo, hi, 4)}
 
@@ -204,7 +220,7 @@ def emit_func(exe, lo, hi, funcset, out, name):
             slot = ins.get(a + 4)
             ds_c = emit_simple(slot) if (slot and slot.kind not in
                    (D.BRANCH, D.JUMP, D.JUMPR)) else "/* DS */"
-            out.extend(emit_control(i, ds_c, funcset, labels))
+            out.extend(emit_control(i, ds_c, funcset, labels, N))
             a += 8
         else:
             s = emit_simple(i)
@@ -216,11 +232,12 @@ def emit_func(exe, lo, hi, funcset, out, name):
     out.append("")
 
 
-def call_or_dispatch(target, funcset):
-    return f"func_{target:08X}(c);" if target in funcset else f"rec_dispatch(c, 0x{target:08X}u);"
+def call_or_dispatch(target, funcset, N):
+    return (f"{N.wrap}_{target:08X}(c);" if target in funcset
+            else f"{N.dispatch}(c, 0x{target:08X}u);")
 
 
-def emit_control(i, ds_c, funcset, labels):
+def emit_control(i, ds_c, funcset, labels, N):
     """Lines for a control instruction `i` whose delay-slot C is `ds_c`."""
     L = []
     if i.kind == D.BRANCH:
@@ -230,28 +247,28 @@ def emit_control(i, ds_c, funcset, labels):
         if i.target in labels:
             tgt = f"goto L_{i.target:08X};"
         else:
-            tgt = "{ " + call_or_dispatch(i.target, funcset) + " return; }"
+            tgt = "{ " + call_or_dispatch(i.target, funcset, N) + " return; }"
         L.append(f"  {{ int _t = ({cond}); {ds_c} if (_t) {tgt} }}")
         return L
     if i.kind == D.JUMP:
         if i.op == "jal":
             L.append(f"  {R(31)} = 0x{i.addr + 8:08X}u;")
-            L.append(f"  {ds_c} {call_or_dispatch(i.target, funcset)}")
+            L.append(f"  {ds_c} {call_or_dispatch(i.target, funcset, N)}")
         else:  # j
             if i.target in labels:
                 L.append(f"  {ds_c} goto L_{i.target:08X};")
             else:
-                L.append(f"  {ds_c} {call_or_dispatch(i.target, funcset)} return;")
+                L.append(f"  {ds_c} {call_or_dispatch(i.target, funcset, N)} return;")
         return L
     # JUMPR
     if i.op == "jr":
         if i.rs == 31:
             L.append(f"  {ds_c} return;")
         else:
-            L.append(f"  {ds_c} rec_dispatch(c, {R(i.rs)}); return;")
+            L.append(f"  {ds_c} {N.dispatch}(c, {R(i.rs)}); return;")
     else:  # jalr rd, rs
         L.append(f"  {R(i.rd)} = 0x{i.addr + 8:08X}u;")
-        L.append(f"  {ds_c} rec_dispatch(c, {R(i.rs)});")
+        L.append(f"  {ds_c} {N.dispatch}(c, {R(i.rs)});")
     return L
 
 
@@ -315,9 +332,70 @@ def discover_funcs(exe, seeds):
     return sorted(funcs)
 
 
+def emit_module(exe, out_dir, N, seeds, ov_dir=None, limit=None, shards=8):
+    """Discover the recompiled function set for `exe` and emit its module (shards + dispatch TU +
+    decls header) under the symbol/file names in `N`. Shared by the MAIN.EXE module and the boot-
+    stub module; the stub gets distinct names so its func_<addr> don't collide with MAIN's."""
+    ov = overlay_funcs(exe, ov_dir)
+    if ov:
+        print(f"[{N.wrap}] overlay seeds: {len(ov)} resident fns reached from {ov_dir}")
+    seeds = set(seeds) | ov
+    if os.environ.get("PSXPORT_USE_GHIDRA"):
+        seeds |= set(ghidra_funcs(exe.load, exe.text_end))
+    funcs = discover_funcs(exe, seeds)
+    print(f"[{N.wrap}] functions: {len(seeds)} seeds -> {len(funcs)} recompiled after jal "
+          f"discovery (rest run via the interpreter)")
+    funcset = set(funcs)
+    if limit:
+        funcs = funcs[:limit]
+
+    ordered = sorted(funcset)
+    nxt_of = {f: (ordered[k + 1] if k + 1 < len(ordered) else exe.text_end)
+              for k, f in enumerate(ordered)}
+    idx = {a: k for k, a in enumerate(funcs)}
+
+    hdr = ["// GENERATED by tools/recomp/emit.py — DO NOT EDIT.", "#pragma once",
+           '#include "r3000.h"', ""]
+    for a in funcs:
+        hdr.append(f"void {N.gen}_{a:08X}(R3000*); void {N.wrap}_{a:08X}(R3000*);")
+    hdr.append(f"extern OverrideFn {N.ovtab}[];")
+    hdr.append(f"void {N.dispatch}(R3000* c, uint32_t addr);")
+    hdr.append(f"void {N.setov}(uint32_t addr, OverrideFn fn);")
+    open(os.path.join(out_dir, N.decls), "w").write("\n".join(hdr) + "\n")
+
+    shard = [["// GENERATED — DO NOT EDIT.", f'#include "{N.decls}"', ""] for _ in range(shards)]
+    for k, a in enumerate(funcs):
+        emit_func(exe, a, nxt_of[a], funcset, shard[k % shards], f"{N.gen}_{a:08X}", N)
+    for s in range(shards):
+        open(os.path.join(out_dir, f"{N.shardpfx}_{s}.c"), "w").write("\n".join(shard[s]) + "\n")
+
+    # Dispatch TU: override table + wrappers + the address->fn switches. Overrides super-call the
+    # gen body directly to run the original without re-entering the wrapper. Dispatch misses fall
+    # to the shared rec_dispatch_miss (BIOS vectors / overlay / computed targets via interp).
+    d = ["// GENERATED — DO NOT EDIT.", f'#include "{N.decls}"', "",
+         f"OverrideFn {N.ovtab}[{max(1, len(funcs))}];"]
+    for a in funcs:
+        i = idx[a]
+        d.append(f"void {N.wrap}_{a:08X}(R3000* c) {{ if ({N.ovtab}[{i}]) {{ {N.ovtab}[{i}](c); "
+                 f"return; }} {N.gen}_{a:08X}(c); }}")
+    d.append(f"int {N.index}(uint32_t addr) {{\n  switch (addr & 0x1FFFFFFFu) {{")
+    for a in funcs:
+        d.append(f"    case 0x{a & 0x1FFFFFFF:08X}u: return {idx[a]};")
+    d.append("    default: return -1;\n  }\n}")
+    d.append(f"void {N.setov}(uint32_t addr, OverrideFn fn) "
+             f"{{ int i = {N.index}(addr); if (i >= 0) {N.ovtab}[i] = fn; }}")
+    d.append(f"void {N.dispatch}(R3000* c, uint32_t addr) {{\n  switch (addr & 0x1FFFFFFFu) {{")
+    for a in funcs:
+        d.append(f"    case 0x{a & 0x1FFFFFFF:08X}u: {N.wrap}_{a:08X}(c); return;")
+    d.append("    default: rec_dispatch_miss(c, addr); return;\n  }\n}")
+    open(os.path.join(out_dir, f"{N.disp}.c"), "w").write("\n".join(d) + "\n")
+    print(f"[{N.wrap}] emitted {len(funcs)} functions -> {out_dir}/{N.shardpfx}_*.c "
+          f"({shards} shards) + {N.decls}")
+
+
 def main():
     if len(sys.argv) < 3:
-        sys.exit("usage: emit.py <MAIN.EXE> <out.c> [--limit N]")
+        sys.exit("usage: emit.py <MAIN.EXE> <out.c> [--overlays DIR] [--stub SCUS.EXE] [--limit N]")
     exe = psexe.load(sys.argv[1])
     out_path = sys.argv[2]
     limit = None
@@ -356,70 +434,22 @@ def main():
     # is run by the hybrid interpreter (interp.c) at runtime, faithfully. (Set PSXPORT_USE_GHIDRA=1
     # to additionally seed from the Ghidra decomp / committed list, recompiling more for speed.)
     seeds = {exe.entry} | EXTRA_SEEDS
-    # Resident functions reached only from the stage overlays (binary-derived seeds).
     ov_dir = sys.argv[sys.argv.index("--overlays") + 1] if "--overlays" in sys.argv else None
-    ov = overlay_funcs(exe, ov_dir)
-    if ov:
-        print(f"overlay seeds: {len(ov)} resident fns reached from {ov_dir}")
-    seeds |= ov
-    if os.environ.get("PSXPORT_USE_GHIDRA"):
-        seeds |= set(ghidra_funcs(exe.load, exe.text_end))
-    funcs = discover_funcs(exe, seeds)
-    print(f"functions: {len(seeds)} seeds -> {len(funcs)} recompiled after jal discovery "
-          f"(rest run via the interpreter)")
-    funcset = set(funcs)
-    if limit:
-        funcs = funcs[:limit]
-
-    ordered = sorted(funcset)
-    nxt_of = {f: (ordered[k + 1] if k + 1 < len(ordered) else exe.text_end)
-              for k, f in enumerate(ordered)}
-    idx = {a: k for k, a in enumerate(funcs)}
     out_dir = os.path.dirname(out_path) or "."
-    # Output is split into SHARDS translation units so the build can compile them in parallel
-    # (the recompiled core is large; one TU was the build bottleneck). Layout:
-    #   rec_decls.h   — forward decls of every gen_func_X / func_X + the override-table extern
-    #   shard_<n>.c   — gen_func_X bodies, round-robin across shards
-    #   shard_disp.c  — override table, func_X wrappers, rec_func_index/set_override/dispatch
+    # Output is split into SHARDS translation units so the build compiles them in parallel.
     SHARDS = max(1, int(os.environ.get("PSXPORT_SHARDS", "8")))
+    emit_module(exe, out_dir, MAIN_NAMES, seeds, ov_dir, limit, SHARDS)
 
-    hdr = ["// GENERATED by tools/recomp/emit.py — DO NOT EDIT.", "#pragma once",
-           '#include "r3000.h"', ""]
-    # Per function a pure recomp body gen_func_X and a wrapper func_X (the wrapper checks a
-    # runtime override slot then calls the body — body stays alive for A/B + diffing).
-    for a in funcs:
-        hdr.append(f"void gen_func_{a:08X}(R3000*); void func_{a:08X}(R3000*);")
-    hdr.append("extern OverrideFn g_override[];")
-    open(os.path.join(out_dir, "rec_decls.h"), "w").write("\n".join(hdr) + "\n")
-
-    shard = [["// GENERATED — DO NOT EDIT.", '#include "rec_decls.h"', ""] for _ in range(SHARDS)]
-    for k, a in enumerate(funcs):
-        emit_func(exe, a, nxt_of[a], funcset, shard[k % SHARDS], name=f"gen_func_{a:08X}")
-    for s in range(SHARDS):
-        open(os.path.join(out_dir, f"shard_{s}.c"), "w").write("\n".join(shard[s]) + "\n")
-
-    # Dispatch TU: override table + wrappers + the address->fn switches. Overrides super-call
-    # gen_func_X directly to run the original body without re-entering the wrapper.
-    d = ["// GENERATED — DO NOT EDIT.", '#include "rec_decls.h"', "",
-         f"OverrideFn g_override[{len(funcs)}];"]
-    for a in funcs:
-        i = idx[a]
-        d.append(f"void func_{a:08X}(R3000* c) {{ if (g_override[{i}]) {{ g_override[{i}](c); return; }} gen_func_{a:08X}(c); }}")
-    d.append("int rec_func_index(uint32_t addr) {\n  switch (addr & 0x1FFFFFFFu) {")
-    for a in funcs:
-        d.append(f"    case 0x{a & 0x1FFFFFFF:08X}u: return {idx[a]};")
-    d.append("    default: return -1;\n  }\n}")
-    d.append("void rec_set_override(uint32_t addr, OverrideFn fn) "
-             "{ int i = rec_func_index(addr); if (i >= 0) g_override[i] = fn; }")
-    d.append("void rec_dispatch(R3000* c, uint32_t addr) {\n  switch (addr & 0x1FFFFFFFu) {")
-    for a in funcs:
-        d.append(f"    case 0x{a & 0x1FFFFFFF:08X}u: func_{a:08X}(c); return;")
-    d.append("    default: rec_dispatch_miss(c, addr); return;\n  }\n}")
-    open(os.path.join(out_dir, "shard_disp.c"), "w").write("\n".join(d) + "\n")
+    # The disc's boot stub (SCUS_944.54): the real PSX entry — draws SCEA, then LoadExec's MAIN.
+    # It overlaps MAIN.EXE's address space, so it is emitted as a SEPARATE module (STUB_NAMES) with
+    # its own dispatch/override symbols (stub_dispatch/stub_set_override) — see native_stub.c. Its
+    # only seed is its entry; discovery follows the stub's own jal graph.
+    if "--stub" in sys.argv:
+        stub = psexe.load(sys.argv[sys.argv.index("--stub") + 1])
+        emit_module(stub, out_dir, STUB_NAMES, {stub.entry}, None, None, shards=2)
 
     # Stub the old monolith path so a stale copy is never compiled.
     open(out_path, "w").write("// recompiled core is split into shard_*.c — see rec_decls.h\n")
-    print(f"emitted {len(funcs)} functions -> {out_dir}/shard_*.c ({SHARDS} shards) + rec_decls.h")
 
 
 if __name__ == "__main__":

@@ -20,6 +20,18 @@ void rec_syscall(R3000* c, uint32_t code);
 void rec_break(R3000* c, uint32_t code);
 void rec_interp(R3000* c, uint32_t pc);
 
+// Diagnostics: the PC currently being interpreted (read by the watchdog on a stall to report
+// WHERE the interpreter is spinning). Optional call trace (PSXPORT_INTERP_TRACE=<path>) logs
+// jal/jalr targets — used to follow the boot stub and find where it wedges.
+volatile uint32_t g_interp_pc = 0;
+static FILE* g_trace_fp = 0;
+void interp_trace_open(const char* path) {
+  if (path && *path) { g_trace_fp = fopen(path, "w"); if (!g_trace_fp) perror(path); }
+}
+static inline void trace_call(uint32_t from, uint32_t to) {
+  if (g_trace_fp) fprintf(g_trace_fp, "%08X -> %08X\n", from, to);
+}
+
 #define RS(i)  (((i) >> 21) & 31)
 #define RT(i)  (((i) >> 16) & 31)
 #define RD(i)  (((i) >> 11) & 31)
@@ -38,7 +50,28 @@ static int is_recompiled(uint32_t a) {
   uint32_t p = a & 0x1FFFFFFF;
   return rec_func_index(a) >= 0 || p == 0xA0 || p == 0xB0 || p == 0xC0;
 }
+// Raw-address override table for NON-recompiled (interpreted) code — the boot stub and overlays.
+// rec_set_override / g_override are keyed by recompiled-function INDEX (rec_func_index), so they
+// can't target stub/overlay addresses (index == -1). This parallel table is keyed by raw address
+// and consulted by call_addr below, letting native_stub.c replace the stub's libcd/libetc waits.
+#define MAX_IOV 64
+static struct { uint32_t addr; OverrideFn fn; } g_iov[MAX_IOV];
+static int g_iov_n;
+void rec_set_interp_override(uint32_t addr, OverrideFn fn) {
+  for (int i = 0; i < g_iov_n; i++) if (g_iov[i].addr == addr) { g_iov[i].fn = fn; return; }
+  if (g_iov_n < MAX_IOV) { g_iov[g_iov_n].addr = addr; g_iov[g_iov_n].fn = fn; g_iov_n++; }
+}
+static OverrideFn interp_override_for(uint32_t a) {
+  for (int i = 0; i < g_iov_n; i++) if (g_iov[i].addr == a) return g_iov[i].fn;
+  return 0;
+}
+// Public accessor so rec_dispatch_miss can apply an interp override at the moment it would ENTER
+// the interpreter (a recompiled `jalr`/dispatch into a non-recompiled stub fn lands here, not via
+// call_addr). Keyed by full KSEG0 address.
+OverrideFn rec_interp_override_for(uint32_t a) { return interp_override_for(a); }
 static void call_addr(R3000* c, uint32_t a) {
+  OverrideFn ov = interp_override_for(a);
+  if (ov) { ov(c); return; }                 // native replacement (returns to caller, sets v0)
   if (is_recompiled(a)) rec_dispatch(c, a);
   else rec_interp(c, a);
 }
@@ -134,6 +167,7 @@ static void exec_simple(R3000* c, uint32_t in) {
 // Interpret from `pc` until the function returns (jr ra) or tail-jumps into recompiled code.
 void rec_interp(R3000* c, uint32_t pc) {
   for (;;) {
+    g_interp_pc = pc;
     uint32_t in = mem_r32(pc);
     uint32_t op = in >> 26;
 
@@ -141,7 +175,7 @@ void rec_interp(R3000* c, uint32_t pc) {
       uint32_t tgt = TGT(in, pc);
       if (op == 0x03) c->r[31] = pc + 8;             // jal links ra
       exec_simple(c, mem_r32(pc + 4));               // delay slot
-      if (op == 0x03) { call_addr(c, tgt); pc += 8; continue; }  // jal: call, resume after DS
+      if (op == 0x03) { trace_call(pc, tgt); call_addr(c, tgt); pc += 8; continue; }  // jal: call, resume after DS
       if (is_recompiled(tgt)) { rec_dispatch(c, tgt); return; }  // j tail-call into recomp
       pc = tgt; continue;                            // j within interpreted code
     }
@@ -152,7 +186,7 @@ void rec_interp(R3000* c, uint32_t pc) {
       exec_simple(c, mem_r32(pc + 4));               // delay slot
       if (FN(in) == 0x09) {                          // jalr: link + call + resume
         if (rd) c->r[rd] = link;
-        call_addr(c, tgt); pc += 8; continue;
+        trace_call(pc, tgt); call_addr(c, tgt); pc += 8; continue;
       }
       if (RS(in) == 31) return;                      // jr ra: return to caller
       if (is_recompiled(tgt)) { rec_dispatch(c, tgt); return; }  // computed tail-call

@@ -5,6 +5,7 @@
 // match the wide60 HLE that provably boots Tomba!2; not reimplemented from guesswork.
 #include "r3000.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 // MIPS o32 register indices (== c->r[]).
@@ -99,6 +100,12 @@ uint32_t thread_open(R3000* c);
 uint32_t thread_close(R3000* c);
 void     thread_change(R3000* c, uint32_t handle);
 
+// LoadExec (A0:0x51) interceptor. The disc's boot stub uses LoadExec to load+exec
+// cdrom:\MAIN.EXE;1; native_stub installs a hook here that loads MAIN.EXE into RAM and hands
+// control to the native MAIN boot (instead of jumping into the stub's loaded image). NULL
+// outside stub boot (then LoadExec is reported UNIMPL, as before).
+void (*g_loadexec_hook)(R3000*) = 0;
+
 // Dispatch one A0/B0/C0 BIOS call. Returns 1 if handled (c->r[V0] set), 0 otherwise.
 static int recomp_hle(char table, uint32_t fn, R3000* c) {
   uint32_t a0 = c->r[A0], a1 = c->r[A1], a2 = c->r[A2];
@@ -121,7 +128,9 @@ static int recomp_hle(char table, uint32_t fn, R3000* c) {
       case 0x44: c->r[V0] = 0; return 1;                              // FlushCache (no-op)
       case 0x49: c->r[V0] = 0; return 1;                              // GPU_cw(gp0): GP0
         // command word — drops to the (not-yet-wired) GPU; harmless until S5 renderer.
+      case 0x51: if (g_loadexec_hook) { g_loadexec_hook(c); return 1; } return 0;  // LoadExec
       case 0x70: c->r[V0] = 0; return 1;                              // _bu_init (card) no-op
+      case 0x71: c->r[V0] = 0; return 1;                              // _96_init (CD device) no-op
       case 0x72: c->r[V0] = 0; return 1;                              // _96_remove (no-op)
       default: return 0;
     }
@@ -202,6 +211,7 @@ void rec_break(R3000* c, uint32_t code) {
 }
 
 void rec_interp(R3000* c, uint32_t pc);  // hybrid fallback (interp.c)
+OverrideFn rec_interp_override_for(uint32_t a);  // native override for an interpreted addr (interp.c)
 
 static int g_miss = 0;
 void rec_dispatch_miss(R3000* c, uint32_t addr) {
@@ -213,9 +223,15 @@ void rec_dispatch_miss(R3000* c, uint32_t addr) {
     fprintf(stderr, "[hle] UNIMPL %c0:0x%02X\n", tbl, fn);
     return;
   }
-  // Non-recompiled code in RAM (loaded overlay, or an in-function computed-jump/jump-table
+  // Non-recompiled code in RAM (loaded overlay, the boot stub, or an in-function computed-jump
   // target the recompiler routed here): run it with the hybrid interpreter. Skip the low
-  // exception/scratchpad region (< 0x10000) which is never a call target.
-  if (a >= 0x10000 && a < 0x200000) { rec_interp(c, addr); return; }
+  // exception/scratchpad region (< 0x10000) which is never a call target. First honor a native
+  // interp override for this address (the boot stub's libcd waits are replaced this way) — a
+  // recompiled jalr into a non-recompiled stub fn enters here, bypassing call_addr's check.
+  if (a >= 0x10000 && a < 0x200000) {
+    OverrideFn ov = rec_interp_override_for(addr);
+    if (ov) { ov(c); return; }
+    rec_interp(c, addr); return;
+  }
   fprintf(stderr, "[miss %d] addr 0x%08X (no recompiled fn / overlay)\n", g_miss++, addr);
 }
