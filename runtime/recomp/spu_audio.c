@@ -12,6 +12,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <time.h>
 #ifdef PSXPORT_SDL
 #include <SDL.h>
 #endif
@@ -108,7 +109,32 @@ void spu_audio_frame(void)
    // Advance the mixer by exactly one video frame of system clocks. spu_render drains
    // whatever the SPU finished; sized to a full frame's worth plus headroom.
    static int16_t buf[2 * (SPU_FRAMES_PER_VIDEO_FRAME + 64)];
-   spu_update(SPU_CLOCKS_PER_VIDEO_FRAME);
+
+   // Diagnostics: PSXPORT_SPU_PROF=1 prints the average spu_update() wall time every
+   // 60 frames so the mixer's true per-frame cost can be observed in context.
+   static int s_prof = -1;
+   if (s_prof < 0) s_prof = getenv("PSXPORT_SPU_PROF") ? 1 : 0;
+   if (s_prof)
+   {
+      static double accum_ms, loop_ms; static int n;
+      static struct timespec prev; static int have_prev;
+      struct timespec a, b;
+      clock_gettime(CLOCK_MONOTONIC, &a);
+      if (have_prev)
+         loop_ms += (a.tv_sec - prev.tv_sec) * 1e3 + (a.tv_nsec - prev.tv_nsec) / 1e6;
+      spu_update(SPU_CLOCKS_PER_VIDEO_FRAME);
+      clock_gettime(CLOCK_MONOTONIC, &b);
+      accum_ms += (b.tv_sec - a.tv_sec) * 1e3 + (b.tv_nsec - a.tv_nsec) / 1e6;
+      prev = a; have_prev = 1;
+      if (++n >= 60) {
+         fprintf(stderr, "[spu_prof] spu_update %.4f ms | full frame iter %.4f ms | spu share %.1f%%\n",
+                 accum_ms / n, loop_ms / n, loop_ms > 0 ? 100.0 * accum_ms / loop_ms : 0.0);
+         accum_ms = 0; loop_ms = 0; n = 0;
+      }
+   }
+   else
+      spu_update(SPU_CLOCKS_PER_VIDEO_FRAME);
+
    int frames = spu_render(buf, SPU_FRAMES_PER_VIDEO_FRAME + 64);
    if (frames <= 0)
       return;
