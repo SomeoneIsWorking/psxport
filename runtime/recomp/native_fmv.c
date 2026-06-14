@@ -67,7 +67,37 @@ void gpu_gp1(uint32_t w);
 void gpu_present(void);
 void gpu_native_init(void);
 
+void     pad_poll_sdl(void);                                // pad_input.c (host input)
+uint16_t pad_buttons(void);                                 // active-low PSX button mask
+#define PAD_START 0x0008u                                   // Start button bit (active-low)
+
 static int fmv_resolve_path(const char* path, uint32_t* out_lba, uint32_t* out_size);
+
+// Per-frame host sync for native FMV playback: poll input, pace to the target rate, and
+// report whether the player should stop because Start was *pressed* this frame. Start is
+// edge-detected (released -> pressed) across the whole intro so a Start held into the next
+// movie does not instantly skip it. PSXPORT_FMV_FPS overrides the pace (default 15 fps, the
+// usual PSX STR rate); 0 = uncapped. Returns 1 to skip, 0 to keep playing.
+static int s_fmv_start_prev = 0;   // 1 = Start was down on the previous polled frame
+static int fmv_frame_sync(void) {
+#ifdef PSXPORT_SDL
+  pad_poll_sdl();
+  int start_now = (pad_buttons() & PAD_START) == 0;   // active-low: bit clear = pressed
+  int pressed = start_now && !s_fmv_start_prev;        // rising edge only
+  s_fmv_start_prev = start_now;
+
+  int fps = 15;
+  { const char* e = getenv("PSXPORT_FMV_FPS"); if (e && *e) fps = atoi(e); }
+  if (fps > 0) {
+    extern void SDL_Delay(uint32_t);                   // avoid an SDL.h include here
+    SDL_Delay((uint32_t)(1000 / fps));
+  }
+  return pressed;
+#else
+  (void)s_fmv_start_prev;
+  return 0;                                            // headless: never skip
+#endif
+}
 
 #define SECTOR_USER   2048u
 #define SUBHDR_LEN    32u
@@ -573,7 +603,10 @@ int native_fmv_play_lba(uint32_t lba, uint32_t size_bytes) {
           fprintf(stderr, "[fmv]   mdec -> %d pixels; cksum=%lu first %04x %04x %04x %04x\n",
                   np, cks, pixels[0], pixels[1], pixels[2], pixels[3]);
         }
-        if (np > 0) { present_rgb555(pixels, fwidth, fheight); frames++; }
+        if (np > 0) {
+          present_rgb555(pixels, fwidth, fheight); frames++;
+          if (fmv_frame_sync()) { fprintf(stderr, "[fmv] skipped by Start at frame %d\n", frames); break; }
+        }
       }
       cur_frame = -1; expected_chunks = 0; got_chunks = 0; paylen = 0;
       if (max_frames && frames >= max_frames) break;

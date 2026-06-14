@@ -63,7 +63,21 @@ int main(int argc, char** argv) {
   threads_init(&c);         // native BIOS threads (ucontext); main = slot 0
   threads_register_overrides();
   c.r[4] = 1; c.r[5] = 0;   // a0=argc-ish, a1=argv (BIOS sets these; minimal)
-  func_800896E0(&c);
-  fprintf(stderr, "[exit] entry function returned to top level\n");
+
+  // PC-native boot: drive the intro ourselves with the native FMV player — no PSX
+  // cooperative-task scheduler, no BIOS threads. SCEA + Woopee Camp logos live in
+  // MOVIE/LOGO.STR; the Tomba!2 opening is MOVIE/OP.STR. Each is skippable with Start
+  // (Enter / controller Start). PSXPORT_SKIP_INTRO=1 bypasses the intro entirely.
+  int native_fmv_play(const char* path);
+  if (!getenv("PSXPORT_SKIP_INTRO")) {
+    native_fmv_play("MOVIE/LOGO.STR");   // SCEA + Woopee Camp
+    native_fmv_play("MOVIE/OP.STR");     // Tomba!2 opening
+  }
+
+  // TODO(next milestone): hand off to the game proper. The resident game runtime is a
+  // cooperative coroutine task system; running its recompiled code without BIOS threads /
+  // ucontext needs a resumable-execution design (pending). func_800896E0() is intentionally
+  // NOT entered here — it would run that scheduler, which we are removing.
+  fprintf(stderr, "[boot] native intro complete\n");
   return 0;
 }
