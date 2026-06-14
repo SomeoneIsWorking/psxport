@@ -42,7 +42,9 @@ int main(int argc, char** argv) {
   void threads_init(R3000*);
   void threads_register_overrides(void);
   void gte_init(void);
+  void gpu_native_init(void);
   gte_init();               // GTE (COP2) coprocessor, lifted from Beetle
+  gpu_native_init();        // native GPU renderer (parses the game's GP0 stream)
   cd_overrides_init();      // native CD: drive-ready + by-LBA read (S3)
   timing_init();            // native VBlank/VSync source (S3)
   games_tomba2_init();      // Tomba2 per-game overrides (vblank pacing)

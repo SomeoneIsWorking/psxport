@@ -18,25 +18,52 @@ static inline uint8_t* host_ptr(uint32_t a, uint32_t bytes) {
   return 0;
 }
 
-// Minimal I/O model (S2): just enough to keep boot moving until the real peripheral
-// modules (GPU/SPU/CD/DMA/timers, lifted from Beetle) land in S5. Documented, not magic.
+// I/O model. The GPU ports + DMA channel 2 route to the NATIVE renderer (gpu_native.c):
+// the game's GP0 primitive stream is rendered by our own rasterizer, not a PSX GPU emulator.
 static int g_io_verbose = 0;  // PSXPORT_IO_VERBOSE=1 to log every stray access
+
+void gpu_gp0(uint32_t w);
+void gpu_gp1(uint32_t w);
+void gpu_dma2_linked_list(uint32_t madr);
+void gpu_dma2_block(uint32_t madr, int count, int to_gpu);
+
+static uint32_t s_dma2_madr, s_dma2_bcr, s_dma2_chcr;  // GPU DMA channel registers
 
 static uint32_t io_read(uint32_t a, uint32_t bytes) {
   const uint32_t p = a & 0x1FFFFFFF;
-  // GPUSTAT (0x1F801814): report the GPU permanently "ready" so the boot ready-poll
-  // (waits on cmd/VRAM/DMA-ready bits 26-28) advances; toggle bit 31 (drawing even/odd
-  // line) each read so vsync/odd-even spin loops also progress. No real GPU yet.
+  // GPUSTAT (0x1F801814 read): report ready — DMA/cmd-ready (bit 26), VRAM-ready (27),
+  // DMA-ready (28); toggle bit 31 (even/odd line) so odd/even spin loops also progress.
   if (p == 0x1F801814) {
     static uint32_t toggle = 0;
     toggle ^= 0x80000000u;
-    return 0x1C000000u | toggle;  // bits 26/27/28 ready + alternating bit31
+    return 0x1C000000u | toggle;
   }
+  if (p == 0x1F801810) return 0;                 // GPUREAD (VRAM-store path: minimal)
+  if (p == 0x1F8010A0) return s_dma2_madr;        // DMA2 MADR
+  if (p == 0x1F8010A4) return s_dma2_bcr;         // DMA2 BCR
+  if (p == 0x1F8010A8) return s_dma2_chcr;        // DMA2 CHCR (busy bit already cleared)
   if (g_io_verbose)
     fprintf(stderr, "[io] read%u @ 0x%08X -> 0\n", bytes * 8, a);
   return 0;
 }
 static void io_write(uint32_t a, uint32_t v, uint32_t bytes) {
+  const uint32_t p = a & 0x1FFFFFFF;
+  if (p == 0x1F801810) { gpu_gp0(v); return; }    // GP0 (direct)
+  if (p == 0x1F801814) { gpu_gp1(v); return; }    // GP1 (display/control)
+  if (p == 0x1F8010A0) { s_dma2_madr = v; return; }
+  if (p == 0x1F8010A4) { s_dma2_bcr = v; return; }
+  if (p == 0x1F8010A8) {                           // DMA2 CHCR: start triggers the transfer
+    s_dma2_chcr = v;
+    if (v & 0x01000000u) {                         // start/busy
+      int sync = (v >> 9) & 3, to_gpu = v & 1;
+      if (sync == 2) gpu_dma2_linked_list(s_dma2_madr);            // ordering-table linked list
+      else if (sync == 1) gpu_dma2_block(s_dma2_madr,              // block: BC = blocks*size
+               (int)((s_dma2_bcr & 0xFFFF) * (s_dma2_bcr >> 16)), to_gpu);
+      else gpu_dma2_block(s_dma2_madr, (int)(s_dma2_bcr & 0xFFFF), to_gpu);  // immediate
+      s_dma2_chcr &= ~0x01000000u;                 // clear busy -> game's DMA-done poll passes
+    }
+    return;
+  }
   if (g_io_verbose)
     fprintf(stderr, "[io] write%u @ 0x%08X = 0x%08X\n", bytes * 8, a, v);
 }

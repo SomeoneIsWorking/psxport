@@ -290,6 +290,23 @@ our stub silently zeroed it, so any 3D was inert.
   GPU_WriteDMA; provide the VRAM/scanout surface + a present/dump path; feed a synthetic
   timestamp (we pace via VSync, not cycles). Largest single lift; needs iterative verification.
 
+## 2026-06-14 (later 23) — DIRECTION: NATIVE rendering, not PSX-GPU emulation (user)
+**User: "make the game itself do PC native rendering instead of PSX emulated rendering."** So
+we do NOT lift Beetle's PSX GPU (that's emulated rendering). Instead the game submits its draw
+primitives as GP0 command packets (its output protocol) via **GPU DMA channel 2 walking
+ordering-table linked lists**; we parse that stream and rasterize it with **our own native
+renderer** to a window, at our chosen resolution. No PSX GPU hardware emulation. This is the
+from-scratch native renderer the wide60 plan already chose, and it makes widescreen/60fps
+natural. (The Beetle-GPU-lift scoping in "later 22" is therefore superseded for rendering — but
+the lift pattern + GTE stay; GTE projects the geometry whose 2D primitives we then draw.)
+- **Intercept point:** GPU DMA2 (`0x1F8010A0/A4/A8`) linked-list walker → GP0 packet parser;
+  direct GP0/GP1 (`0x1F801810/14`) writes; GPUSTAT reads report DMA/cmd ready (game polls
+  `&0x4000000`). Game submits OTs via libgpu (`FUN_80082d04`/`FUN_80082fb4` queue+DMA).
+- **Native GPU module (building):** VRAM (1024×512×16b for textures + framebuffer) + GP0
+  parser (draw-env/texpage/clut, fill, VRAM load/store/copy, flat/gouraud/textured tri+quad,
+  sprites/rects, lines) + software rasterizer with VRAM texture+CLUT sampling + GP1 display +
+  present (PPM dump headless / SDL window). Built ground-up so resolution/widescreen are ours.
+
 ## 2026-06-14 (later 8) — CORRECTION to "later 7" RE map (overlay sequencer decompiled)
 Read the overlay decomp (`scratch/decomp/overlay.c` = `FUN_801064f0`) + the worker/scheduler
 chain from the full decomp. Three labels in "later 7" are **WRONG** — fixing them so the next
