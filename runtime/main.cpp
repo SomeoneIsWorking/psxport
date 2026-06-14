@@ -1012,6 +1012,7 @@ int main(int argc, char** argv)
   if (const char* env = std::getenv("PSXPORT_WATCHW"))
     psxport_watch_addr = (static_cast<uint32_t>(strtoul(env, nullptr, 16)) & 0x1FFFFC);
   psxport_pctrace_init(); // PSXPORT_PCTRACE="lo-hi" scoped PC trace ring
+  psxport_calltrace_init(); // PSXPORT_CALLTRACE="lo-hi[:path]" boot call-path trace
   // RE aid: PSXPORT_POKE="frame:addr=val;A..B:addr=val" — write a 32-bit word into
   // RAM at a frame (single) or every frame in [A,B] (range, to latch a gate against
   // the game rewriting it). addr/val are hex (PSX addr masked to 2MB, word-aligned).
@@ -1488,6 +1489,7 @@ int main(int argc, char** argv)
   {
     for (g_frame = 0; g_frame < frames; g_frame++)
     {
+      psxport_calltrace_frame(g_frame);
       per_frame();
       retro_run();
     }

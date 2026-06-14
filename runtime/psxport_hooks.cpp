@@ -187,6 +187,40 @@ extern "C" void psxport_pctrace_dump(const char* path) {
   std::fclose(f);
   fprintf(stderr, "[pctrace] dumped %u PCs -> %s\n", n, path);
 }
+// --- Streaming call trace (RE aid) -------------------------------------------
+// Logs every jal/jalr target (function entry) landing in [lo,hi) to a file, with
+// "# frame N" markers, so the game's actual boot CALL PATH (function sequence) can
+// be read end-to-end. Sparse (only calls), so it holds the whole boot, unlike the
+// per-instruction pctrace ring. Enable: PSXPORT_CALLTRACE="lohex-hihex[:path]".
+uint32_t psxport_calltrace_on = 0;
+static FILE* g_ct = nullptr;
+static uint32_t g_ct_lo = 0, g_ct_hi = 0, g_ct_n = 0, g_ct_max = 4000000;
+extern "C" void psxport_calltrace_init() {
+  const char* v = std::getenv("PSXPORT_CALLTRACE");
+  if (!v || !*v) return;
+  unsigned lo = 0, hi = 0; char path[512] = "scratch/logs/calltrace.txt";
+  if (std::sscanf(v, "%x-%x:%511s", &lo, &hi, path) >= 2 && hi > lo) {
+    g_ct_lo = lo; g_ct_hi = hi;
+    g_ct = std::fopen(path, "w");
+    psxport_calltrace_on = (g_ct != nullptr);
+    fprintf(stderr, "[calltrace] %s calls into [%08X,%08X) -> %s\n",
+            g_ct ? "logging" : "FAILED", lo, hi, path);
+  }
+}
+extern "C" void psxport_calltrace(uint32_t pc, uint32_t instr, const uint32_t* gpr) {
+  if (!g_ct || g_ct_n >= g_ct_max) return;
+  uint32_t op = instr >> 26, tgt;
+  if (op == 3) tgt = (pc & 0xF0000000u) | ((instr & 0x03FFFFFFu) << 2);   // jal
+  else if (op == 0 && (instr & 0x3F) == 9) tgt = gpr[(instr >> 21) & 31]; // jalr
+  else return;
+  if (tgt < g_ct_lo || tgt >= g_ct_hi) return;
+  std::fprintf(g_ct, "%08X %08X\n", pc, tgt);
+  g_ct_n++;
+}
+extern "C" void psxport_calltrace_frame(int frame) {
+  if (g_ct) std::fprintf(g_ct, "# frame %d\n", frame);
+}
+
 int psxport_gte_capture = 0;
 int psxport_rtp_capture = 0;
 int psxport_gpu_capture = 0;

@@ -90,7 +90,7 @@ MED=vendor/beetle-psx/mednafen
 # -Igenerated: the recompiled shards include "rec_decls.h".
 INC="-I$RT -Igenerated -I$MED -I$MED/psx -Ivendor/beetle-psx/libretro-common/include -Ivendor/beetle-psx -Ivendor/beetle-psx/deps/libchdr/include"
 # _XOPEN_SOURCE: makecontext/swapcontext (native threads) need it on macOS/glibc.
-CFLAGS="-O2 -w -D_XOPEN_SOURCE=700 $INC $(pkg-config --cflags sdl2) -DPSXPORT_SDL"
+CFLAGS="-O2 -g -w -D_XOPEN_SOURCE=700 $INC $(pkg-config --cflags sdl2) -DPSXPORT_SDL"
 # All TUs: the recompiled core is split into generated/shard_*.c so they compile in parallel.
 SRC="$(ls generated/shard_*.c) \
   $RT/mem.c $RT/stubs.c $RT/hle.c $RT/threads.c $RT/interp.c $RT/gpu_native.c $RT/spu_audio.c $RT/pad_input.c $RT/memcard.c $RT/native_fmv.c \

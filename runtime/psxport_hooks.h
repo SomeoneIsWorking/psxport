@@ -44,6 +44,13 @@ void psxport_pctrace_init(void);
 void psxport_pctrace_push(uint32_t pc);
 void psxport_pctrace_dump(const char* path);
 
+/* Streaming call trace (PSXPORT_CALLTRACE="lo-hi[:path]"): logs jal/jalr targets in
+   range with "# frame N" markers, so the boot call path can be read end-to-end. */
+extern uint32_t psxport_calltrace_on;
+void psxport_calltrace_init(void);
+void psxport_calltrace(uint32_t pc, uint32_t instr, const uint32_t* gpr);
+void psxport_calltrace_frame(int frame);
+
 /* CDC command/IRQ logging to stderr (PSXPORT_CDC_LOG=1). */
 extern int psxport_cdc_log;
 
