@@ -191,6 +191,29 @@ gdb samples hit varied real fns each tick (libgpu `80083364`/`80081458`, StrPlay
   one genuinely hard piece. Tooling: gdb attach + `bt` locates the spin/return (C stack == game
   stack); `break gen_func_<addr>` checks whether a fn is reached.
 
+## 2026-06-14 (later 19) — NATIVE BIOS THREADS (ucontext): loader task runs; CD reads in-game
+**The hard piece — native BIOS thread context switch — is in (`runtime/recomp/threads.c`),
+and the native CD read path is now verified END-TO-END inside the running game.** The
+cooperative scheduler's tasks are BIOS threads; disasm confirmed the "coroutine primitives"
+are libapi gate stubs: `FUN_80080860`=OpenThread, `FUN_80080870`=CloseThread,
+`FUN_80080880`=ChangeThread; a task yields via `ChangeThread(0xFF000000)` (the main/scheduler
+thread). `FUN_80051f14` creates each task with `OpenThread(entry, stack, gp)`.
+- **threads.c:** each PSX thread gets its own **native stack via ucontext**; `ChangeThread`
+  saves the running thread's R3000 regs, restores the target's, and `swapcontext`s to the
+  target's native stack (main = slot 0; handles 0xFF0000NN). A fresh thread starts in a
+  trampoline that `rec_dispatch`es its entry PC and, on return, switches back to main. The
+  single shared R3000 is register-swapped across switches. Overrides the three gate stubs;
+  hle.c B0:0x0E/0x0F/0x10 route to the same impl. Replaces the later-17 ChangeThread no-op.
+- **VERIFIED:** boot now runs the loader task `FUN_800499e8`, which `CdSearchFile`s
+  `\BIN\START.BIN` → our native `FUN_8008c1ec` → real disc reads **LBA 16 (ISO PVD), 18 (path
+  table), 373 (dir sector)** — correct bytes, the override read path exercised by real game
+  code at last. Cooperative scheduling is healthy (gdb: clean `swapcontext` from
+  `FUN_80051f80`, threads round-robining, per-frame memcpy `8009A3E0`).
+- **NEXT:** the loader task only *resolves* `\BIN\START.BIN` (stores its descriptor
+  `DAT_800be1e0`=LBA) then yields; the actual file-content ReadN hasn't fired yet (still 3
+  reads = dir only). Find what consumes the descriptor to load+run START.BIN (likely the next
+  scheduler task / StrPlayer state advance), and confirm boot progresses toward the title/FMV.
+
 ## 2026-06-14 (later 8) — CORRECTION to "later 7" RE map (overlay sequencer decompiled)
 Read the overlay decomp (`scratch/decomp/overlay.c` = `FUN_801064f0`) + the worker/scheduler
 chain from the full decomp. Three labels in "later 7" are **WRONG** — fixing them so the next

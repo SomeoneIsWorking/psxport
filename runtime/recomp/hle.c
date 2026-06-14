@@ -94,28 +94,10 @@ static void work_area_init(void) {
 
 static uint32_t s_int_handler = 0;  // B0:0x19 HookEntryInt — game IRQ entry (recorded)
 
-// ---- BIOS threads (B0:0x0E/0x0F/0x10) -----------------------------------------------
-// LIMITATION: the static-recomp core uses the native C call stack, so a true BIOS
-// ChangeThread (swap PC+regs to resume another thread) cannot be done by switching a
-// register struct the way the wide60 interpreter does. OpenThread hands back a handle
-// and records the entry PC; ChangeThread currently does NOT context-switch (stays on the
-// current native stack). This is enough only while boot is straight-line; once the game
-// actually relies on ChangeThread/coroutines (StrPlayer FMV prebuffer, the 0x80080860
-// green-thread primitives) this needs a real coroutine override (ucontext/separate stack).
-// STOPGAP: ChangeThread = no-op until the boot path is observed to need a real switch,
-// because faking a switch wrongly is worse than not switching; revisit when boot reaches it.
-enum { THREAD_MAX = 8 };
-static uint32_t s_thread_pc[THREAD_MAX];
-static int s_nthreads = 0;
-static uint32_t thread_open(R3000* c) {
-  if (s_nthreads >= THREAD_MAX) return 0xFFFFFFFFu;
-  int i = s_nthreads++;
-  s_thread_pc[i] = c->r[A1];  // a1 = entry PC (a2=sp, a3=gp) — recorded, not yet resumed
-  return 0xFF000000u + (uint32_t)i;
-}
-static void thread_change(R3000* c, uint32_t handle) {
-  (void)c; (void)handle;  // no real context switch yet (see LIMITATION above)
-}
+// BIOS threads are implemented natively (per-thread ucontext stacks) in threads.c.
+uint32_t thread_open(R3000* c);
+uint32_t thread_close(R3000* c);
+void     thread_change(R3000* c, uint32_t handle);
 
 // Dispatch one A0/B0/C0 BIOS call. Returns 1 if handled (c->r[V0] set), 0 otherwise.
 static int recomp_hle(char table, uint32_t fn, R3000* c) {
@@ -177,7 +159,7 @@ static int recomp_hle(char table, uint32_t fn, R3000* c) {
         c->r[V0] = len; return 1;
       }
       case 0x0E: c->r[V0] = thread_open(c); return 1;                 // OpenThread
-      case 0x0F: c->r[V0] = 1; return 1;                              // CloseThread (no-op)
+      case 0x0F: c->r[V0] = thread_close(c); return 1;                // CloseThread
       case 0x10: thread_change(c, a0); c->r[V0] = a0; return 1;       // ChangeThread
       case 0x4A: c->r[V0] = 0; return 1;                              // stopCard / card no-op
       case 0x4B: c->r[V0] = 1; return 1;                              // cardInfo -> present
