@@ -81,7 +81,6 @@ uint8_t* g_ram = nullptr;
 bool g_tomba2 = false;
 uint16_t g_inject_buttons = 0; // game-module scoped injections
 uint16_t g_repl_buttons = 0;   // REPL-held pad bits (press/release), for driving in
-bool g_module_turbo = false;   // game module requests fast-forward (Start-held intro skip)
 bool g_wide60 = false;         // reprojecting 60fps renderer (PSXPORT_WIDE60)
 
 // Display enhancements fed to the Beetle core as libretro options. The software
@@ -1188,15 +1187,6 @@ int main(int argc, char** argv)
         Tomba2_SetSkipHeld(skip_held);
         Tomba2_SetScreenDark(g_screen_dark); // gates the Loading-screen skip to black load masks
       }
-      // Fast-forward the emulated frame ONLY while the StrPlayer's SILENT
-      // inter-FMV logo hold is being collapsed: Start held, the signature-gated
-      // dwell-skip hook firing (so never gameplay), AND CD-XA audio (STRSND) off
-      // (so it stops the instant FMV#2's audio starts). The dwell-skip already
-      // moves FMV#2 f719->f598; this skips the residual per-VBLANK MDEC decode of
-      // the (invisible, skipped) logo clip — taking FMV#2 to ~f430. Scoped, not
-      // general turbo. (Old Start-held whole-intro turbo was retired for the
-      // native logo skips; this is the narrow residual it can't reach.)
-      g_module_turbo = g_tomba2 && Tomba2_LogoHoldTurbo() && !psxport_cd_strsnd_on();
     }
   };
 
@@ -1443,16 +1433,16 @@ int main(int argc, char** argv)
     unsigned fps_frames = 0;
     for (g_frame = 0; !g_quit; g_frame++)
     {
-      // Run 1..8 emulated frames per present. >1 only while Tab (g_ff_hold) or the
-      // silent logo-hold turbo (g_module_turbo, set in per_frame) is active; the
-      // batch ends the same step the condition does, re-checked each step, so
-      // FMV#2's audio is never fast-forwarded. Present/queue audio only on the
-      // last step.
+      // Run 1..8 emulated frames per present. >1 only while Tab (g_ff_hold) is
+      // held (manual user fast-forward); the batch ends the same step Tab is
+      // released, re-checked each step. Present/queue audio only on the last
+      // step. (No game-module turbo: emulator fast-forward is never used to hide
+      // a game wait — those are skipped natively. See docs/journal.md "later 6".)
       bool turbo = false;
       for (unsigned s = 0;; s++)
       {
-        per_frame();                                  // updates g_module_turbo
-        turbo = g_ff_hold || g_module_turbo;
+        per_frame();
+        turbo = g_ff_hold;
         const bool last = !turbo || s >= 7;
         g_present_this_run = last;
         psxport_emulate_frame();
