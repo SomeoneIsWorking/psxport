@@ -1,5 +1,39 @@
 # Debug / progress journal
 
+## 2026-06-14 (later 31) — STAGE MAP NAILED: START/DEMO/GAME overlays; corrects "later 30"
+The 3 stage entries in `PTR_LAB_800a3ecc[0..2]` = `{0x8010649c, 0x801062e4, 0x8010637c}` are
+entry points into THREE SEPARATE overlay files, all loaded RAW to the **same base 0x80106228**
+(so only one is resident at a time — that's why stages 1/2 are NOT disassemblable from
+`ram_f1000.bin`; at that snapshot 0x801062e4/0x8010637c hold START.BIN's *string/data* bytes,
+not code). `FUN_80052078(stage)` = `FUN_800450bc` reads `(&DAT_800be1e0)[stage*2]` (lba,size)
+to `0x80106228` then restarts task 0 at `PTR_LAB_800a3ecc[stage]`. The 3 files come from the
+START.BIN manifest `\BIN\{START,DEMO,GAME}.BIN`:
+- **Stage 0 = `\BIN\START.BIN`** (LBA 1904, 1648 B) → entry `0x8010649c` = intro/boot
+  sequencer (`FUN_801064f0` is its tail). Loads asset manifests (OPN/CRD/SOP/A0*.BIN,
+  TOMBA2.{IDX,IMG,DAT,SND}, SWDATA.BIN, VOICE/DEMO/BGM.XA), registers loader tasks, then
+  state 3 → `FUN_80052078(1)` → DEMO.
+- **Stage 1 = `\BIN\DEMO.BIN`** (LBA 1879, 5372 B) → entry `0x801062e4` = **title/menu +
+  attract** sequencer. 8-state jump table @`0x8010622c`. State 4 (`0x80106580`) reads the menu
+  result `obj+0x6b`: ==7 → set `DAT_1f800134=1`, go state 5 (`0x801065dc`) → `FUN_80052078(2)`
+  = **start GAME**; ==1/2 → state 2.
+- **Stage 2 = `\BIN\GAME.BIN`** (LBA 1882, 11636 B) → entry `0x8010637c` = **gameplay**
+  sequencer. Sub-state from `DAT_1f800134`; per-frame loop (incr `obj+0x198`, `FUN_80051f80`
+  yield) dispatching state handlers `FUN_801086e0/720/784` (all inside GAME.BIN). GAME→...
+  `FUN_80052078` at `0x80108a48` (back to a stage).
+- **CORRECTIONS to "later 30":** (a) the 0x80106xxx resident overlay is **START.BIN, not
+  OPN.BIN** (OPN.BIN is just one asset START.BIN loads; verified: extracted START.BIN is
+  byte-identical to ram_f1000@0x80106228, 0 diffs, entry word `27bdfe38`). (b) START.BIN is
+  BOTH the manifest AND code (one overlay). (c) "disasm stages 1/2 from ram_f1000" is a dead
+  end — extract the files instead.
+- **Tooling:** `tools/disasm_overlay.py <bin> [start] [end] [--base=]` disassembles an overlay
+  at base 0x80106228 (resyncs past data/jump-tables). Extract overlays with
+  `scratch/bin/fmv_compare dumplba <lba> <size> <out>`. Reference dumps in
+  `scratch/decomp/{START,DEMO,GAME}.bin.asm`; overlay bins in `scratch/bin/overlays/`.
+- **NEXT:** decode DEMO's states 0-3,5-7 (what draws SCEA/title, where input picks the menu
+  item into obj+0x6b) and GAME's handlers; then build the native PC driver (hybrid): run
+  `FUN_80050b08` init calls, then a native frame loop = native re-impl of each stage's per-frame
+  state machine calling the recomp leaf draw/update fns (CD/wait already native), no scheduler.
+
 ## 2026-06-14 (later 30) — DIRECTION: PC-PSX HYBRID (PC drives recomp logic); boot RE started
 **User architecture decision** (see memory `psxport-hybrid-architecture`): psxport is a PC-PSX
 HYBRID. PC-native engine owns boot/graphics/FMV/audio/input and is the DRIVING FORCE — it owns
