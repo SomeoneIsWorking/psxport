@@ -259,6 +259,23 @@ rec_dispatch (`is_recompiled` check). Also clears the in-function jump-table mis
   display), MDEC (FMV video), SPU (audio), pad input** — to be lifted from the Beetle GPL-2 fork
   per the plan. GPU first (so output is visible/verifiable). These are the large remaining tier.
 
+## 2026-06-14 (later 22) — GTE (COP2) LIFTED from Beetle: real geometry coprocessor
+First peripheral-tier lift: the **GTE is now Beetle's real implementation**, not a no-op stub.
+All the game's geometry (RTPS/RTPT projection, NCLIP, matrix/color/depth) flows through COP2;
+our stub silently zeroed it, so any 3D was inert.
+- **`runtime/recomp/gte_beetle.c`** compiles `vendor/beetle-psx/mednafen/psx/gte.c` as-is and
+  adapts it to our interface: `gte_op`→`GTE_Instruction`, `gte_read/write_data`→`GTE_ReadDR/
+  WriteDR`, ctrl→`GTE_ReadCR/WriteCR` (1:1). Faithful-first shims for the externs gte.c needs
+  (PGXP off `gMode=0`/no-op NCLIP, savestate stub, **widescreen GTE-scale hack OFF** — that's
+  the wide60 tier later). `gte_init()` (GTE_Init+Power) called from boot. stubs.c keeps only
+  COP0. build.sh adds the mednafen/libretro-common include paths.
+- **VERIFIED:** standalone RTPS — identity rotation, vertex (64,0,256), H=256 → **SX=64**
+  (= IR1·H/IR3 = 64·256/256), the projection is bit-correct. Builds clean, leaf tests pass, no
+  boot regression. (No GTE ops fire during the 2D logo intro — expected; GTE is gameplay 3D.)
+- **Lift pattern established** (compile the Beetle C module as-is + a thin adapter + faithful
+  externs) for the remaining peripheral tier: **GPU** (gpu.c/polygon/sprite/line + DMA2 +
+  VRAM + display — the big one, needed for visible output), then MDEC, SPU, pad.
+
 ## 2026-06-14 (later 8) — CORRECTION to "later 7" RE map (overlay sequencer decompiled)
 Read the overlay decomp (`scratch/decomp/overlay.c` = `FUN_801064f0`) + the worker/scheduler
 chain from the full decomp. Three labels in "later 7" are **WRONG** — fixing them so the next

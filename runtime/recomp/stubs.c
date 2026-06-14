@@ -4,14 +4,8 @@
 #include "r3000.h"
 #include <stdio.h>
 
-static uint32_t g_gte_data[64], g_gte_ctrl[64];
-
-uint32_t gte_read_data(uint32_t reg)            { return g_gte_data[reg & 63]; }
-void     gte_write_data(uint32_t reg, uint32_t v) { g_gte_data[reg & 63] = v; }
-uint32_t gte_read_ctrl(uint32_t reg)            { return g_gte_ctrl[reg & 63]; }
-void     gte_write_ctrl(uint32_t reg, uint32_t v) { g_gte_ctrl[reg & 63] = v; }
-void     gte_op(R3000* c, uint32_t insn)        { (void)c; (void)insn; }
-
+// GTE (COP2) is now the real Beetle implementation — see gte_beetle.c. COP0 stays minimal
+// here (HLE BIOS handles exceptions; the game only touches a few COP0 regs).
 uint32_t cop0_mfc(R3000* c, uint32_t reg)       { (void)c; (void)reg; return 0; }
 void     cop0_mtc(R3000* c, uint32_t reg, uint32_t v) { (void)c; (void)reg; (void)v; }
 
