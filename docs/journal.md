@@ -1,5 +1,44 @@
 # Debug / progress journal
 
+## 2026-06-14 (later 33) — TITLE SCREEN RENDERS natively (full hybrid boot: init→sched→DEMO→draw)
+The PC-PSX hybrid boot now reaches and RENDERS the Tomba!2 title screen
+(scratch/screenshots/nb5_f20.png) with NO PSX scheduler/threads/ucontext — verified on-screen.
+Chain: crt0 → native init prefix → native cooperative scheduler runs START (loads assets via
+the task1/task2 loader handshake) → FUN_80052078(1) → DEMO stage → DEMO draws the title.
+- **Native cooperative scheduler (no ucontext)** — `runtime/recomp/native_boot.c` +
+  `rec_coro_run` (interp.c). Each task is a resumable coroutine: a yield captures the PSX
+  register context and longjmps out; resume restores it and continues at the captured PC. The
+  PSX stack lives per-task in g_ram (obj+8), so no native stack/ucontext is needed. `rec_coro_run`
+  is a FLAT interpreter (PSX calls chain via the PSX stack, not the C stack), so it can resume
+  mid-call-chain; native overrides + BIOS are still invoked as C. **ChangeThread (FUN_80080880,
+  ov_switch) is THE switch primitive**: yield (FUN_80051f80,state1) / task-end (FUN_80051fb4,
+  state0) / stage-transition (FUN_80052078,state3) all set state then ChangeThread → capture+
+  longjmp. native_scheduler_step walks the 3 task slots like FUN_80051e60; FUN_800506d0 re-arms
+  a yielded task 1→2 each frame. Per frame it delivers VBlank + sound-DMA(0xF0000009) events the
+  game's TestEvent waits poll.
+- **Recompiler now seeds from the overlays** (emit.py --overlays): functions reached only from
+  the stage overlays (FUN_80044bd4 the task registrar, etc.) were Ghidra/jal-invisible → ran in
+  the interpreter, un-overridable. emit.py scans START/DEMO/GAME.BIN for jal targets into resident
+  text (109 fns; 1118→1220 recompiled). discdump `get` does nested paths (BIN/X.BIN).
+- **Rendering wiring** — the native loop now does the draw/display-env handling it had omitted:
+  per frame ClearOTagR the back buffer's OT + set PTR_DAT_800ed8c8 (env pair @ 0x800e80a8 +
+  DAT_1f800135*0x2070 — Ghidra `+uVar1*0x81c` is WORD arithmetic = 0x2070 bytes; wrong stride
+  was corrupting the odd buffer), and on DAT_1f80019c==0 submit PutDispEnv/PutDrawEnv/DrawOTag +
+  flip. GPU hardening: sprite/rect blit clips its dx/dy to the drawing area up front (an
+  off-screen sprite was burning w*h sample_tex calls and wedging the frame); OT traversal capped
+  at 0x10000 nodes with a malformed/cyclic warning.
+- **TOOL: frame-progress watchdog** (`runtime/recomp/watchdog.c`, PSXPORT_WATCHDOG=<sec>) — SIGALRM
+  fires if no frame presents within N sec, dumps the stuck backtrace (backtrace_symbols_fd, link
+  -rdynamic, build -g) and _exit. Found both wedges above precisely. Use it for any boot hang.
+- **RESIDUALS (next):** (1) a MALFORMED/CYCLIC ordering table — DrawOTag from the OT head
+  (madr=0x800ea0a4) chains a next-ptr into 0x800bfe68 and hits the 0x10000 cap EVERY frame →
+  slow. Root-cause the OT the game builds vs the OT I ClearOTagR/DrawOTag (PTR_DAT_800ed8c8) —
+  likely DEMO draws into a different OT, or AddPrim/primitive-buffer setup I'm missing. (2)
+  non-fatal "time out in strNext()" CD-stream warning (attract-demo stream; CdReadyCallback not
+  driven). (3) DEMO sits at title state (obj+0x48=2) — advancing to the menu/game needs pad input
+  (obj+0x6b; ==7 → GAME) and/or the strNext stream. Run headless: PSXPORT_NATIVE_BOOT=1
+  PSXPORT_SKIP_INTRO=1 PSXPORT_GPU_DUMP=dir PSXPORT_WATCHDOG=8 PSXPORT_NATIVE_FRAMES=N.
+
 ## 2026-06-14 (later 32) — NATIVE HYBRID DRIVER stood up: init prefix + 1st stage transition
 Built `runtime/recomp/native_boot.c` (PSXPORT_NATIVE_BOOT=1, wired in boot.c). The PC engine
 now drives game-main natively instead of running the infinite PSX scheduler:
