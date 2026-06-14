@@ -59,6 +59,14 @@ static uint32_t io_read(uint32_t a, uint32_t bytes) {
   }
   if (p == 0x1F801810) return 0;                 // GPUREAD (VRAM-store path: minimal)
   if (p == 0x1F801820 || p == 0x1F801824) return mdec_read(p);  // MDEC0 data / MDEC1 status
+  // SPUSTAT (0x1F801DAE read): report idle/transfer-complete — bits 0x7FF cleared. The libspu
+  // reset (FUN_80096BF0) spins `while (SPUSTAT & 0x7FF)` and the SPU-RAM upload (FUN_80096E70)
+  // spins `while (SPUSTAT & 0x400)` (DMA/data-transfer busy), bailing to "SPU T_O" on timeout —
+  // those busy bits are cleared by the transfer-done IRQ the no-IRQ runtime never raises, and our
+  // SPU DMA4 (io_write below) completes synchronously, so the transfer is always already done.
+  // Returning 0 makes every `& 0x7FF`/`& 0x400` poll fall through on its first check (mirrors the
+  // GPUSTAT ready-fake above). Only the SPUSTAT word is faked; all other SPU regs go to Beetle.
+  if (p == 0x1F801DAE) return 0;
   if (p >= 0x1F801C00 && p <= 0x1F801FFF) return spu_read(p);    // SPU register file
   if (p == 0x1F8010C0) return s_dma4_madr;
   if (p == 0x1F8010C4) return s_dma4_bcr;

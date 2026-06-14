@@ -308,6 +308,22 @@ def main():
     # OR a native printf override to work (see docs/recomp_port_plan.md).
     EXTRA_SEEDS = {
         0x8009A76C,  # printf/format-parser, reached only via fn-pointer (jalr), Ghidra-missed
+        # --- native-override targets: seed so the func_<addr> wrapper exists and
+        #     rec_set_override(addr,fn) reaches them (rec_set_override only works on RECOMPILED
+        #     entries). libcard B0-vector I/O trampolines, overridden by memcard.c for native
+        #     synchronous card file I/O (see runtime/recomp/memcard.c). All three are already
+        #     reachable via direct jal (so this is a harmless no-op today), seeded proactively
+        #     so the override contract never depends on jal-discovery happening to reach them.
+        0x8009BAF0,  # _card_read   (B0:0x4E) — override target (memcard.c ov_card_read)
+        0x8009C600,  # _card_write  (B0:0x4F) — override target (memcard.c ov_card_write)
+        0x8009C610,  # _card_status (B0:0x5C) — override target (memcard.c ov_card_status)
+        # NOTE: 0x80003A4C (per-VBlank pad read FUN_80003a4c) is intentionally NOT seeded here.
+        # It lives at 0x80003A4C, BELOW MAIN.EXE's text [0x80010000,0x800BE800) — it is part of
+        # the boot-stub/resident low-text SIO driver loaded at runtime, NOT present in MAIN.EXE
+        # (our recompiler input). emit.py can only recompile addresses inside MAIN.EXE's text, so
+        # seeding it would raise (decode of an out-of-text vaddr) and break the build. The pad
+        # override must therefore be wired differently (it cannot use rec_set_override on a
+        # not-in-input address); see report / pad_input.c wiring.
     }
     # Seed purely from the BINARY — the entry point + indirectly-reached helpers — and grow the
     # recompiled set by following direct jal targets (discover_funcs). No Ghidra / external

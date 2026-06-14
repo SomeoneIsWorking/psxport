@@ -27,6 +27,7 @@ static int s_off_x, s_off_y;                                 // draw offset
 static int s_tp_x, s_tp_y;        // texpage base (64-px / 256-line units -> *64 / *256)
 static int s_tp_mode;             // texture color mode: 0=4bpp,1=8bpp,2=15bpp
 static int s_tp_blend;            // semi-transparency mode 0..3
+static int s_tp_dither;           // ordered-dither enable (E1 bit 9)
 static int s_tw_mx, s_tw_my, s_tw_ox, s_tw_oy;  // texture window mask/offset (8px units)
 static int s_clut_x, s_clut_y;    // CLUT base (per-primitive, from packet)
 
@@ -43,6 +44,25 @@ static long s_gp0_words = 0, s_dma2 = 0;  // diagnostics: GP0 words + DMA2 trigg
 static inline int clampi(int v, int lo, int hi) { return v < lo ? lo : v > hi ? hi : v; }
 static inline uint16_t to555(uint8_t r, uint8_t g, uint8_t b) {
   return (uint16_t)((r >> 3) | ((g >> 3) << 5) | ((b >> 3) << 10));
+}
+
+// ---- Semi-transparency (blend) ------------------------------------------------------
+// PSX blends a source pixel (foreground, F) over the existing VRAM pixel (background, B)
+// in 5-bit-per-channel space, using one of four modes selected by the texpage blend bits
+// (s_tp_blend, also reachable per-poly via the prim's texpage). The formulas (per channel):
+//   mode0: B/2 + F/2   mode1: B + F   mode2: B - F   mode3: B + F/4
+// All results saturate to [0,31]. blend555() takes already-5-bit dest (existing VRAM 555,
+// mask bit stripped) and 5-bit source channels, returns the blended 555 word.
+static inline int sat5(int v) { return v < 0 ? 0 : v > 31 ? 31 : v; }
+static inline uint16_t blend555(uint16_t bg, int fr, int fg, int fb, int mode) {
+  int br = bg & 31, bgn = (bg >> 5) & 31, bb = (bg >> 10) & 31, rr, rg, rb;
+  switch (mode) {
+    case 0: rr = (br + fr) >> 1; rg = (bgn + fg) >> 1; rb = (bb + fb) >> 1; break;
+    case 1: rr = sat5(br + fr); rg = sat5(bgn + fg); rb = sat5(bb + fb); break;
+    case 2: rr = sat5(br - fr); rg = sat5(bgn - fg); rb = sat5(bb - fb); break;
+    default: rr = sat5(br + (fr >> 2)); rg = sat5(bgn + (fg >> 2)); rb = sat5(bb + (fb >> 2)); break;
+  }
+  return (uint16_t)(rr | (rg << 5) | (rb << 10));
 }
 
 // Sample a texel at texture coords (u,v) through the current texpage/CLUT. Returns 0 if the
@@ -62,13 +82,36 @@ static uint16_t sample_tex(int u, int v) {
   return *vram(s_clut_x + idx, s_clut_y);
 }
 
-static inline void put_px(int x, int y, uint8_t r, uint8_t g, uint8_t b) {
+// Write one pixel. If `semi` is set, blend the source (r,g,b) over the existing VRAM pixel
+// using the current texpage blend mode (s_tp_blend); otherwise overwrite. The mask bit is
+// always set on the written pixel (we don't model mask-test reads).
+static inline void put_px_b(int x, int y, uint8_t r, uint8_t g, uint8_t b, int semi) {
   if (x < s_da_x0 || x > s_da_x1 || y < s_da_y0 || y > s_da_y1) return;
-  *vram(x, y) = to555(r, g, b) | 0x8000;  // mask bit set (we don't model mask-test reads)
+  uint16_t out;
+  if (semi) out = blend555(*vram(x, y) & 0x7FFF, r >> 3, g >> 3, b >> 3, s_tp_blend);
+  else out = to555(r, g, b);
+  *vram(x, y) = out | 0x8000;
+}
+static inline void put_px(int x, int y, uint8_t r, uint8_t g, uint8_t b) { put_px_b(x, y, r, g, b, 0); }
+
+// PSX ordered 4x4 dither matrix (applied to 8-bit channels before 5-bit truncation, when
+// the texpage dither bit is set, on gouraud + texture-modulated pixels). We add the per-pixel
+// bias then clamp to [0,255] so the subsequent >>3 truncation effectively rounds.
+static const int s_dither4[4][4] = {
+  { -4,  0, -3,  1 },
+  {  2, -2,  3, -1 },
+  { -3,  1, -4,  0 },
+  {  3, -1,  2, -2 },
+};
+static inline uint8_t dith(int v, int x, int y) {
+  v += s_dither4[y & 3][x & 3];
+  return (uint8_t)(v < 0 ? 0 : v > 255 ? 255 : v);
 }
 
-// Rasterize a gouraud/textured triangle (barycentric). `tex` selects textured sampling.
-static void tri(Vtx a, Vtx b, Vtx c, int tex, int shade) {
+// Rasterize a gouraud/textured triangle (barycentric). `tex` selects textured sampling,
+// `semi` requests semi-transparency: untextured prims blend on every pixel; textured prims
+// blend per-texel, gated by the texel's bit15 (PSX semi-transparency-mask bit).
+static void tri(Vtx a, Vtx b, Vtx c, int tex, int shade, int semi) {
   a.x += s_off_x; a.y += s_off_y; b.x += s_off_x; b.y += s_off_y; c.x += s_off_x; c.y += s_off_y;
   int minx = clampi((a.x < b.x ? (a.x < c.x ? a.x : c.x) : (b.x < c.x ? b.x : c.x)), s_da_x0, s_da_x1);
   int maxx = clampi((a.x > b.x ? (a.x > c.x ? a.x : c.x) : (b.x > c.x ? b.x : c.x)), s_da_x0, s_da_x1);
@@ -88,19 +131,25 @@ static void tri(Vtx a, Vtx b, Vtx c, int tex, int shade) {
       long l1 = (long)((c.x-x)*(a.y-y)-(c.y-y)*(a.x-x));
       long l2 = aa - l0 - l1;
       uint8_t r, g, bl;
+      int px_semi = semi;                           // whether THIS pixel blends
+      int dithered = 0;                             // PSX dithers gouraud + modulated-texture
       if (tex) {
         int u = (int)((l0*a.u + l1*b.u + l2*c.u) / aa);
         int v = (int)((l0*a.v + l1*b.v + l2*c.v) / aa);
         uint16_t t = sample_tex(u, v);
         if (t == 0) continue;                       // transparent texel
+        // PSX: a textured pixel blends only when its bit15 is set AND the prim semi bit is set.
+        px_semi = semi && (t & 0x8000);
         r = (t & 31) << 3; g = ((t >> 5) & 31) << 3; bl = ((t >> 10) & 31) << 3;
-        if (shade) { r = r * a.r / 128; g = g * a.g / 128; bl = bl * a.b / 128; }  // texture*color
+        if (shade) { r = r * a.r / 128; g = g * a.g / 128; bl = bl * a.b / 128; dithered = 1; }  // texture*color
       } else if (shade) {
         r = (uint8_t)((l0*a.r + l1*b.r + l2*c.r) / aa);
         g = (uint8_t)((l0*a.g + l1*b.g + l2*c.g) / aa);
         bl = (uint8_t)((l0*a.b + l1*b.b + l2*c.b) / aa);
+        dithered = 1;
       } else { r = a.r; g = a.g; bl = a.b; }
-      put_px(x, y, r, g, bl);
+      if (s_tp_dither && dithered) { r = dith(r, x, y); g = dith(g, x, y); bl = dith(bl, x, y); }
+      put_px_b(x, y, r, g, bl, px_semi);
     }
 }
 
@@ -122,6 +171,7 @@ static void set_texpage(uint16_t tp) {
   s_tp_y = ((tp >> 4) & 1) * 256;
   s_tp_blend = (tp >> 5) & 3;
   s_tp_mode = (tp >> 7) & 3; if (s_tp_mode > 2) s_tp_mode = 2;
+  s_tp_dither = (tp >> 9) & 1;     // ordered 4x4 dither enable
 }
 static void set_clut(uint16_t cl) { s_clut_x = (cl & 0x3F) * 16; s_clut_y = (cl >> 6) & 0x1FF; }
 
@@ -130,8 +180,7 @@ static void gp0_exec(void) {
   uint32_t c = s_fifo[0];
   uint8_t op = c >> 24;
   if (op >= 0x20 && op <= 0x3F) {            // polygon
-    int gouraud = op & 0x10, quad = op & 0x08, textured = op & 0x04, semi = op & 0x02;
-    (void)semi;
+    int gouraud = op & 0x10, quad = op & 0x08, textured = op & 0x04, semi = (op & 0x02) ? 1 : 0;
     int nv = quad ? 4 : 3;
     Vtx v[4]; int idx = 1;
     for (int i = 0; i < nv; i++) {
@@ -148,11 +197,11 @@ static void gp0_exec(void) {
       }
     }
     int shade = gouraud || !textured;       // flat-untextured uses the command color
-    tri(v[0], v[1], v[2], textured, shade);
-    if (quad) tri(v[1], v[2], v[3], textured, shade);
+    tri(v[0], v[1], v[2], textured, shade, semi);
+    if (quad) tri(v[1], v[2], v[3], textured, shade, semi);
     s_prims++;
   } else if (op >= 0x60 && op <= 0x7F) {     // rectangle / sprite
-    int textured = op & 0x04, size = (op >> 3) & 3;
+    int textured = op & 0x04, semi = (op & 0x02) ? 1 : 0, size = (op >> 3) & 3;
     uint8_t cr = cmd_r(c), cg = cmd_g(c), cb = cmd_b(c);
     int idx = 1;
     uint32_t xy = s_fifo[idx++]; int x = cx(xy), y = cy(xy);
@@ -165,9 +214,11 @@ static void gp0_exec(void) {
       for (int dx = 0; dx < w; dx++) {
         if (textured) {
           uint16_t t = sample_tex(u0 + dx, v0 + dy);
-          if (t == 0) continue;
-          put_px(x + dx + s_off_x, y + dy + s_off_y, (t & 31) << 3, ((t >> 5) & 31) << 3, ((t >> 10) & 31) << 3);
-        } else put_px(x + dx + s_off_x, y + dy + s_off_y, cr, cg, cb);
+          if (t == 0) continue;                     // transparent texel
+          // texel bit15 gates per-pixel blending (same rule as textured polygons)
+          int px_semi = semi && (t & 0x8000);
+          put_px_b(x + dx + s_off_x, y + dy + s_off_y, (t & 31) << 3, ((t >> 5) & 31) << 3, ((t >> 10) & 31) << 3, px_semi);
+        } else put_px_b(x + dx + s_off_x, y + dy + s_off_y, cr, cg, cb, semi);
       }
     s_prims++;
   } else if (op == 0x02) {                   // fill rectangle (in VRAM, ignores clip/offset)
@@ -178,11 +229,12 @@ static void gp0_exec(void) {
     for (int dy = 0; dy < h; dy++) for (int dx = 0; dx < w; dx++) *vram(x + dx, y + dy) = col;
   } else if (op >= 0x40 && op <= 0x5F) {     // line (flat/gouraud) — draw as thin segments
     // minimal: endpoints only (poly-lines rare in this title); draw a 1px Bresenham
+    int semi = (op & 0x02) ? 1 : 0;
     uint8_t cr = cmd_r(c), cg = cmd_g(c), cb = cmd_b(c);
     uint32_t a = s_fifo[1], b = s_fifo[(op & 0x10) ? 3 : 2];
     int x0 = cx(a), y0 = cy(a), x1 = cx(b), y1 = cy(b);
     int dx = abs(x1 - x0), dy = -abs(y1 - y0), sx = x0 < x1 ? 1 : -1, sy = y0 < y1 ? 1 : -1, e = dx + dy;
-    for (;;) { put_px(x0 + s_off_x, y0 + s_off_y, cr, cg, cb); if (x0 == x1 && y0 == y1) break;
+    for (;;) { put_px_b(x0 + s_off_x, y0 + s_off_y, cr, cg, cb, semi); if (x0 == x1 && y0 == y1) break;
       int e2 = 2 * e; if (e2 >= dy) { e += dy; x0 += sx; } if (e2 <= dx) { e += dx; y0 += sy; } }
     s_prims++;
   }
@@ -322,6 +374,10 @@ void gpu_present(void) {
 }
 
 void gpu_native_init(void) { if (getenv("PSXPORT_GPU_LOG")) g_log = 1; }
+
+// Read-only VRAM inspection accessor (raw 16-bit 555+mask word). Used by the offline GPU-QA
+// harness to assert exact rasterized/blended values; harmless in production (read-only).
+uint16_t gpu_vram_peek(int x, int y) { return *vram(x, y); }
 
 // DMA channel 2 (GPU): walk an ordering-table linked list from `madr`, feeding each node's
 // GP0 words to the parser. Header word: bits[24..31]=word count, bits[0..23]=next node addr
