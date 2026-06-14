@@ -158,6 +158,71 @@ bool GetRootDir(ChdDisc& disc, uint32_t* lba, uint32_t* size)
   return true;
 }
 
+// Find one entry (file or subdir) by name within a single directory extent.
+bool FindDirEntry(ChdDisc& disc, uint32_t dir_lba, uint32_t dir_size,
+                  const std::string& want, bool want_dir, IsoFile* out)
+{
+  const uint32_t nsec = (dir_size + kUserDataSize - 1) / kUserDataSize;
+  std::vector<uint8_t> buf((size_t)nsec * kUserDataSize);
+  for (uint32_t i = 0; i < nsec; i++)
+    if (!disc.ReadSector(dir_lba + i, buf.data() + (size_t)i * kUserDataSize))
+      return false;
+  const std::string wn = NormalizeName(want);
+  for (uint32_t s = 0; s < buf.size(); s += kUserDataSize)
+  {
+    uint32_t pos = s;
+    while (pos < s + kUserDataSize)
+    {
+      const uint8_t len = buf[pos];
+      if (len == 0)
+        break;
+      const uint8_t flags = buf[pos + 25];
+      const uint8_t nlen = buf[pos + 32];
+      std::string name((const char*)&buf[pos + 33], nlen);
+      const uint32_t e_lba = ReadLE32(&buf[pos + 2]);
+      const uint32_t e_size = ReadLE32(&buf[pos + 10]);
+      pos += len;
+      if (nlen == 1 && (name[0] == 0 || name[0] == 1))
+        continue;
+      if ((bool)(flags & 0x02) == want_dir && NormalizeName(name) == wn)
+      {
+        out->lba = e_lba;
+        out->size = e_size;
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+// Find a file by a (possibly nested) path like "BIN/START.BIN", descending subdirectories.
+bool FindFileInTree(ChdDisc& disc, const std::string& path, IsoFile* out)
+{
+  uint32_t lba, size;
+  if (!GetRootDir(disc, &lba, &size))
+    return false;
+  std::vector<std::string> parts;
+  for (size_t i = 0, j; i < path.size(); i = j + 1)
+  {
+    j = path.find('/', i);
+    if (j == std::string::npos)
+      j = path.size();
+    if (j > i)
+      parts.emplace_back(path.substr(i, j - i));
+  }
+  if (parts.empty())
+    return false;
+  for (size_t k = 0; k + 1 < parts.size(); k++)
+  {
+    IsoFile d;
+    if (!FindDirEntry(disc, lba, size, parts[k], true, &d))
+      return false;
+    lba = d.lba;
+    size = d.size;
+  }
+  return FindDirEntry(disc, lba, size, parts.back(), false, out);
+}
+
 // Recursively print the ISO9660 directory tree (files: full path, LBA, size).
 void ListTree(ChdDisc& disc, uint32_t dir_lba, uint32_t dir_size, const std::string& prefix)
 {
@@ -250,12 +315,16 @@ int main(int argc, char** argv)
       return 1;
     }
     IsoFile f;
-    if (!FindRootFile(disc, get_name, &f))
+    const bool nested = get_name.find('/') != std::string::npos;
+    const bool found = nested ? FindFileInTree(disc, get_name, &f)
+                              : FindRootFile(disc, get_name, &f);
+    if (!found)
     {
-      std::fprintf(stderr, "%s not found in root dir\n", get_name.c_str());
+      std::fprintf(stderr, "%s not found\n", get_name.c_str());
       return 1;
     }
-    const fs::path out = outdir / NormalizeName(get_name);
+    const std::string base = get_name.substr(get_name.find_last_of('/') + 1);
+    const fs::path out = outdir / NormalizeName(base);
     if (!DumpFile(disc, f, out))
       return 1;
     std::printf("dumped %s (%u bytes, LBA %u)\n", out.c_str(), f.size, f.lba);

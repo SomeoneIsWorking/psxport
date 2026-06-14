@@ -52,7 +52,7 @@ DISCDUMP=build/tools/discdump
 [ -x "$DISCDUMP" ] || DISCDUMP=build/tools/discdump.exe
 [ -x "$DISCDUMP" ] || die "discdump build failed"
 
-# ---- 3. extract MAIN.EXE (the recompiler input) ------------------------------------
+# ---- 3. extract MAIN.EXE (the recompiler input) + the stage overlays ----------------
 MAIN=scratch/bin/tomba2/MAIN.EXE
 if [ ! -f "$MAIN" ]; then
   say "extracting MAIN.EXE from the disc…"
@@ -61,13 +61,21 @@ if [ ! -f "$MAIN" ]; then
 fi
 [ -f "$MAIN" ] || die "could not extract MAIN.EXE"
 
+# Stage overlays (\BIN\{START,DEMO,GAME}.BIN): runtime-loaded game code whose `jal`s into
+# resident MAIN.EXE seed the recompiler (emit.py --overlays). Game data — gitignored scratch.
+OVL=scratch/bin/overlays
+mkdir -p "$OVL"
+for b in START DEMO GAME; do
+  [ -f "$OVL/$b.BIN" ] || "$DISCDUMP" get "BIN/$b.BIN" "$DISC" "$OVL" >/dev/null 2>&1 || true
+done
+
 # ---- 4. recompile the game core + build the native runtime -------------------------
 GEN=generated/tomba2_rec.c
 RT=runtime/recomp
 mkdir -p generated scratch/bin
 if [ ! -f "$GEN" ] || [ "$MAIN" -nt "$GEN" ] || [ tools/recomp/emit.py -nt "$GEN" ]; then
   say "recompiling MAIN.EXE -> C…"
-  python3 tools/recomp/emit.py "$MAIN" "$GEN" >/dev/null
+  python3 tools/recomp/emit.py "$MAIN" "$GEN" --overlays "$OVL" >/dev/null
 fi
 
 # libchdr static libs (versions vary across platforms — locate them).

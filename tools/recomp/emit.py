@@ -267,6 +267,31 @@ def ghidra_funcs(text_lo, text_hi, decomp="scratch/decomp/ram_f1000_all.c"):
         if text_lo <= int(x, 16) < text_hi})
 
 
+def overlay_funcs(exe, overlay_dir, base=0x80106228):
+    """Seed resident functions that are reached ONLY from the stage overlays (\\BIN\\*.BIN, loaded
+    raw to `base` at runtime and run by the interpreter). Those overlays `jal` into resident
+    MAIN.EXE functions (the cooperative scheduler, file loaders, etc.) that direct-jal discovery
+    within MAIN.EXE never sees — e.g. FUN_80044bd4. We scan each overlay's words for `jal` targets
+    landing in MAIN.EXE text whose first word decodes as a real instruction (filters data/jump-
+    table false positives), and seed them; discover_funcs then follows their call graph. Pure
+    binary input (the overlays are game data, like MAIN.EXE) — no Ghidra. Skipped if absent."""
+    lo, hi = exe.load, exe.text_end
+    if not overlay_dir or not os.path.isdir(overlay_dir):
+        return set()
+    targets = set()
+    for fn in sorted(os.listdir(overlay_dir)):
+        if not fn.upper().endswith(".BIN"):
+            continue
+        data = open(os.path.join(overlay_dir, fn), "rb").read()
+        for off in range(0, len(data) - 3, 4):
+            w = int.from_bytes(data[off:off + 4], "little")
+            ins = decode(base + off, w)
+            if ins.op == "jal" and lo <= ins.target < hi:
+                if decode(ins.target, exe.word(ins.target)).kind != D.UNKNOWN:
+                    targets.add(ins.target)
+    return targets
+
+
 def discover_funcs(exe, seeds):
     """Grow the function set by following direct `jal` targets to a fixpoint. Each function
     body is scanned only up to its first UNKNOWN word (real code is 0% unknown), so trailing
@@ -331,6 +356,12 @@ def main():
     # is run by the hybrid interpreter (interp.c) at runtime, faithfully. (Set PSXPORT_USE_GHIDRA=1
     # to additionally seed from the Ghidra decomp / committed list, recompiling more for speed.)
     seeds = {exe.entry} | EXTRA_SEEDS
+    # Resident functions reached only from the stage overlays (binary-derived seeds).
+    ov_dir = sys.argv[sys.argv.index("--overlays") + 1] if "--overlays" in sys.argv else None
+    ov = overlay_funcs(exe, ov_dir)
+    if ov:
+        print(f"overlay seeds: {len(ov)} resident fns reached from {ov_dir}")
+    seeds |= ov
     if os.environ.get("PSXPORT_USE_GHIDRA"):
         seeds |= set(ghidra_funcs(exe.load, exe.text_end))
     funcs = discover_funcs(exe, seeds)
