@@ -1,5 +1,43 @@
 # Debug / progress journal
 
+## 2026-06-14 (later 27) — DIRECTION: NO threading / NO ucontext; PC-native intro boot
+**User (emphatic): "no threading", "you can't use ucontext", "boot the game PC native way."**
+The intro wedge was diagnosed, then the whole emulated-thread approach was dropped.
+- **Root cause of the intro wedge (the ucontext path):** the game runs a cooperative task
+  scheduler (`FUN_80051e60`) over task objs at `0x801fe000` (stride 0x38; state word at
+  obj+0: 0=free 1=sleeping 2=runnable 3=restart-at-new-entry 4=running). The intro sequencer
+  (`FUN_801064f0`, idx0) is an infinite SM on its OWN obj+0x48; at inner-state 1 it calls
+  `FUN_80044bd4(FUN_8004514c,1,1,0)` which (param_4==0) **busy-waits `while(DAT_1f80019b==0)
+  FUN_80051f80(1)` for the loader to signal done**. The loader (`FUN_8004514c`, idx2/801fe070)
+  yields at state=1 inside a sub-call and **never reaches `DAT_1f80019b=1; FUN_80051fb4()`**,
+  so the flag stays 0 → registrar spins forever → sequencer frozen at inner-state 2 → intro
+  never advances. Confirmed via the obj+0x48/state trace in threads.c (PSXPORT_THR_TRACE).
+  The native CD/file loads all SUCCEED (12 reads incl START.BIN@1904 + 326KB@LBA9684); the
+  wedge is the cooperative-task completion handshake, not I/O.
+- **Decision:** the game's runtime IS a coroutine task system (infinite-loop tasks that yield/
+  resume mid-function each frame) — running that recompiled code faithfully needs stack
+  save/restore (ucontext/fibers). Per user we are NOT doing that. So we **do not run the
+  game's intro scheduler at all** — drive the intro natively.
+- **Done (commit `b60c3d4`):**
+  - `threads.c`: ucontext coroutine layer **removed**; OpenThread/CloseThread/ChangeThread are
+    now no-op stubs (scheduler no longer run).
+  - `boot.c`: native intro — `native_fmv_play("MOVIE/LOGO.STR")` (SCEA + Woopee Camp) then
+    `("MOVIE/OP.STR")` (Tomba!2 opening). `func_800896E0` (scheduler entry) NOT entered.
+    `PSXPORT_SKIP_INTRO=1` bypasses.
+  - `native_fmv.c`: per-frame Start-skip (rising-edge) + pacing (`PSXPORT_FMV_FPS`, default 15).
+  - `run.sh`: **native_fmv.c was never in the build** (FMV player was dead code, 0 callers) —
+    added to SRC; added `-lm` (IDCT cos/lround).
+  - Disc map: `MOVIE/LOGO.STR` LBA 11491 (2.6MB), `MOVIE/OP.STR` LBA 152238 (20.7MB),
+    `MOVIE/END.STR` LBA 162374.
+- **Verified:** builds, boots, both FMVs demux→VLC→MDEC→present end-to-end (300 MBs/frame,
+  320x240), zero threads/ucontext. Frames in `scratch/screenshots/intro2/`.
+- **KNOWN BUG (next):** `bs_decode_frame` DC-coefficient prediction is wrong — early frames
+  wash out (pale), later frames show the real scene with vertical banding (OP visibly a dark
+  red scene; LOGO mostly white). Pre-existing decoder bug (from the e75f1fd FMV commit), only
+  now exercised. Decode-quality pass is the next task.
+- **OPEN (future milestone):** post-intro hand-off (title/gameplay) is the game's task system;
+  running it without threading/ucontext needs a resumable-execution design (undecided).
+
 ## 2026-06-14 (later 9) — DIRECTION CHANGE: native PC port (static recomp); decoder S0 done
 **User: "new direction — port to PC, no PSX emulation, no PSX BIOS."** wide60/emulator path
 paused; full plan in `docs/recomp_port_plan.md`. Approach = instruction-level static
