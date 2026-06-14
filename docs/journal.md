@@ -1,5 +1,30 @@
 # Debug / progress journal
 
+## 2026-06-14 (later 34) — REAL BOOT PATH laid out (oracle call-trace): SCEA = the SCUS boot stub
+**User correction:** SCEA is NOT an FMV and the port's `native_fmv_play` intro is a FAKE boot.
+Used the oracle (Beetle wide60rt, real BIOS) with a new **streaming call trace**
+(`PSXPORT_CALLTRACE="lo-hi[:path]"`, runtime/psxport_hooks.cpp + Beetle cpu.c; logs jal/jalr
+targets in range with `# frame N` markers) to get the REAL boot call path. See memory
+[[psxport-scea-boot-stub]] + [[psxport-use-oracle-trace]].
+- **Finding (definitive):** across all 400 boot frames, 100% of calls execute in `0x80018xxx` =
+  **SCUS_944.54 (the boot stub)** code; game-main `FUN_80050b08` is NEVER reached in that window.
+  0x80018B6C decodes as valid code in SCUS, garbage in MAIN.EXE → it's the stub running. SCUS holds
+  the PSX license string ("Sony Computer Entertainment Inc. for North America area") + `MAIN.EXE;1`.
+- **Real boot path:** BIOS → **SCUS_944.54 stub draws the SCEA "…America Presents" screen** (high-
+  res 700×480, TIM/font — not ASCII, not FMV, not BIOS) + loads MAIN.EXE → MAIN crt0 (0x800896E0)
+  → game-main FUN_80050b08 → START → DEMO (Whoopee logo + OP movie FUN_80106f80) → menu.
+- **Why the port has no SCEA:** `runtime/recomp/boot.c` loads MAIN.EXE DIRECTLY and enters game-
+  main — it starts at the MAIN.EXE step, skipping the entire stub (SCEA). The native_fmv intro was
+  a fake stand-in.
+- **NEXT — replicate authentically:** run **SCUS_944.54 as the real entry** (like the BIOS does):
+  load it to 0x80010000, run from its header entry (interpret via rec_interp/rec_coro_run — it's
+  not recompiled; or add it as a 2nd recomp input). It draws SCEA itself, then loads MAIN.EXE and
+  jumps to 0x800896E0 → the existing native MAIN boot (later 33) takes over for Whoopee→OP→menu.
+  Blocker to expect: the stub's MAIN.EXE LOADER uses BIOS/its-own file I/O at stub addresses (NOT
+  the MAIN.EXE cd_override addresses) — wire native CD/BIOS-file-read for the stub's loader. Trace
+  the stub's load path with PSXPORT_CALLTRACE to find its file-I/O calls. REMOVE the fake
+  native_fmv_play intro from boot.c.
+
 ## 2026-06-14 (later 33) — TITLE SCREEN RENDERS natively (full hybrid boot: init→sched→DEMO→draw)
 The PC-PSX hybrid boot now reaches and RENDERS the Tomba!2 title screen
 (scratch/screenshots/nb5_f20.png) with NO PSX scheduler/threads/ucontext — verified on-screen.
