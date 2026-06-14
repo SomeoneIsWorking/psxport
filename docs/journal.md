@@ -133,6 +133,38 @@ natively (no controller, no IRQ handshake) and advances past CD into graphics/ev
   frame tick (transcribe from the proven wide60 hle_kernel.cpp). Then the game should mount the
   CD FS (FUN_8008bbe8 → FUN_8008c1ec reads) and we verify the native read path end-to-end.
 
+## 2026-06-14 (later 17) — events+VSync+threads HLE'd: boot REACHES the StrPlayer main loop
+Implemented the rest of S3's "native VBlank/event" surface; **boot now runs into the resident
+StrPlayer main loop `FUN_80050b08` (the per-frame game loop)** — verified deterministically
+via gdb backtrace (the recomp uses the native C stack, so `bt` names the game fn:
+`gen_func_80050B08 <- gen_func_800896E0 <- main`, identical across 3 runs). Leaf tests pass.
+- **Events in `hle.c`** (transcribed from proven wide60 hle_kernel.cpp): B0:0x07 DeliverEvent,
+  0x08 OpenEvent, 0x09 Close, 0x0A WaitEvent (can't block → reports ready+clears `fired`),
+  0x0B TestEvent (read+clear), 0x0C Enable, 0x0D Disable. 16 EvCB slots, id base 0xF1000000.
+  Plus B0:0x12-0x16 pad no-ops, 0x4A/0x4B card, C0:0x02/0x03 SysEnq/DeqIntRP→elem, A0:0x70
+  _bu_init.
+- **Native VSync `runtime/recomp/timing.c`**: overrides libetc VSync `FUN_80085900` — VSync(0)
+  advances a native frame clock into `DAT_800abde0`, VSync(-1) queries it. Killed the
+  `VSync: timeout` spin (`FUN_80085a78`).
+- **BIOS threads (hle.c, STOPGAP):** OpenThread hands back a handle + records entry PC;
+  **ChangeThread is a NO-OP** — the static-recomp core runs on the native C stack, so a real
+  PC+reg context switch isn't possible by swapping a struct (unlike the wide60 interpreter).
+  Fine while boot is straight-line; the StrPlayer FMV prebuffer thread + the 0x80080860
+  green-thread coroutine primitives will need a real coroutine override (ucontext/sep stack).
+- **CURRENT BLOCKER (next):** the main loop spins at the per-frame **vblank pace-dwell
+  `0x80050CE4`** = `do {} while (DAT_800e809c < DAT_1f800235)`. `DAT_800e809c` (display-frame
+  counter, 0x800E809C) is bumped by the game's **VBlank ISR callback**, registered at
+  `0x80050C58` via `FUN_80085bb0` = libetc **VSyncCallback** (routes to the libapi interrupt
+  vector `*(0x800abda0+0x14)(4, cb)` — UNMODELED, so nothing increments it). The callback is
+  `&LAB_800506b4`, a **mid-function label** (not a recompiled entry → can't just rec_dispatch
+  to it). FIX OPTIONS: (a) override `FUN_80085bb0` to capture the cb addr(es) + seed
+  `0x800506b4` as a callable entry (emitter seed) and pump the cb once per frame between the
+  counter reset (0x80050C?? sets DAT_800e809c=0) and the dwell — natural pump point is the
+  pre-dwell call `FUN_80080f6c(0)`; (b) model the libapi interrupt vector + a frame tick that
+  invokes registered class-4 (vblank) callbacks. (a) is the localized, PC-native route.
+  Tooling note: **gdb attach + `bt` is the spin locator** for the recomp (C stack == game
+  call stack); build `boot_dbg` with `-O1 -g`.
+
 ## 2026-06-14 (later 8) — CORRECTION to "later 7" RE map (overlay sequencer decompiled)
 Read the overlay decomp (`scratch/decomp/overlay.c` = `FUN_801064f0`) + the worker/scheduler
 chain from the full decomp. Three labels in "later 7" are **WRONG** — fixing them so the next

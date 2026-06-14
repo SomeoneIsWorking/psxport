@@ -22,7 +22,7 @@ CHD_LIBS="$CHDR/libchdr-static.a $CHDR/deps/lzma-25.01/libchdr-lzma.a \
 echo "[1/3] decode test"; python3 tools/recomp/test_decode.py >/dev/null && echo "  decoder ok"
 echo "[2/3] emit"; python3 tools/recomp/emit.py "$MAIN" "$GEN"
 RUNTIME="$RT/mem.c $RT/stubs.c $RT/hle.c"
-CD="$RT/disc.c $RT/cd_override.c"
+CD="$RT/disc.c $RT/cd_override.c $RT/timing.c"
 echo "[3/3] compile core + runtime, run leaf test + boot"
 $CC $CFLAGS "$GEN" $RUNTIME "$RT/test_leaf.c" -o scratch/bin/test_leaf
 ./scratch/bin/test_leaf
