@@ -18,6 +18,9 @@
 #include "r3000.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <setjmp.h>
+
+void rec_coro_run(R3000* c, uint32_t pc); // flat coroutine interpreter (resumable, see interp.c)
 
 // Call recompiled/overridden game fn `fn` with up to 3 args; runs to its `jr ra` and returns.
 static void rc0(R3000* c, uint32_t fn) { rec_dispatch(c, fn); }
@@ -29,9 +32,79 @@ static void rc3(R3000* c, uint32_t fn, uint32_t a0, uint32_t a1, uint32_t a2) {
   c->r[4] = a0; c->r[5] = a1; c->r[6] = a2; rec_dispatch(c, fn);
 }
 
-// Native per-frame stage step (replaces the scheduler call FUN_80051e60). Runs the current
-// stage's state-machine one iteration per frame. Phase A: stub (loop-mechanics bring-up).
-static void native_stage_step(R3000* c) { (void)c; }
+// --- Native cooperative scheduler (replaces FUN_80051e60) without ucontext ------------------
+// Tomba2 runs up to 3 cooperative tasks (objs @0x801fe000, stride 0x70): task0 = the stage
+// sequencer (START/DEMO/GAME), task1/2 = sub-tasks it spawns (asset loaders etc.). Each is an
+// infinite/looping routine that yields via FUN_80051f80 once per frame. We run each as a
+// resumable coroutine WITHOUT ucontext: a yield SAVES the PSX register context into the task's
+// slot (the PSX stack lives in g_ram per-task at obj+8, untouched) and longjmps out of the
+// interpreter call chain; we resume by restoring that context and continuing at the captured
+// return address. This is the "later 29" design — a yield is a save/restore of a state struct,
+// no native stack. native_scheduler_step mirrors FUN_80051e60: one pass over the 3 slots,
+// running state==2 (runnable, resume) and state==3 (restart, fresh entry) tasks; the yield sets
+// state=1 and FUN_800506d0 (called later in the frame) re-arms 1->2. This makes the cooperative
+// handshakes work — e.g. task0's FUN_80044bd4 busy-waits (yielding) for DAT_1f80019b while the
+// loader it spawned (task1) runs to completion across frames and sets the flag.
+#define TASKBASE 0x801fe000u   // task obj table base (slot i at +i*0x70)
+#define TASKSTRIDE 0x70u
+#define CUR_TASK 0x1f800138u   // DAT_1f800138: scheduler "current task" ptr
+
+static jmp_buf g_yield_jmp;    // longjmp target = the setjmp in native_scheduler_step
+static R3000   g_task_ctx[3];  // saved register context per task slot
+static int     g_in_stage;     // 1 while inside a task run (gates the yield override)
+static int     g_cur_slot;     // task slot currently running (for the yield capture)
+static int     g_task_started[3];  // slot has a live coroutine context (else state==2 == fresh)
+
+// FUN_80080880 ChangeThread override = the universal task-switch primitive. Every cooperative
+// switch funnels through it: FUN_80051f80 (yield, state=1), FUN_80051fb4 (task end, state=0) and
+// FUN_80052078 (stage transition, state=3) all set the task state then call ChangeThread to stop
+// running. While running a task we capture the full register context for the slot and longjmp
+// back to the scheduler; the task resumes (state 2 after FUN_800506d0 re-arms a yield, or fresh
+// at state 3) or ends (state 0). Outside a task run (init / pre-stage FUN_800499e8) it is a
+// no-op returning the handle, exactly as the stubbed thread layer did. The caller (FUN_80051f80
+// etc.) has already run its real body, so register side effects it needs on resume (e.g. it
+// leaves v0=0x1f800000 for the stage loop head's `lw t0,0x138(v0)`) are captured.
+static void ov_switch(R3000* c) {
+  if (!g_in_stage) { c->r[2] = c->r[4]; return; }   // no-op: return the handle arg in v0
+  g_task_ctx[g_cur_slot] = *c;      // r29=task SP, r31=return addr (resume point)
+  longjmp(g_yield_jmp, 1);
+}
+
+// One scheduler pass over the 3 task slots (replaces FUN_80051e60).
+static void native_scheduler_step(R3000* c) {
+  R3000 loop = *c;                            // frame-loop context (gp etc. for fresh tasks)
+  for (int i = 0; i < 3; i++) {
+    uint32_t base = TASKBASE + (uint32_t)i * TASKSTRIDE;
+    uint32_t st = mem_r16(base);
+    if (st == 0) { g_task_started[i] = 0; continue; }   // free
+    uint32_t resume_pc;
+    // state==3 (restart at new entry) or state==2 on a slot with no live context (freshly
+    // registered by FUN_80051f14) => fresh entry. state==2 with a live context => resume.
+    if (st == 3 || (st == 2 && !g_task_started[i])) {
+      resume_pc = mem_r32(base + 0xc);        // task entry
+      g_task_ctx[i] = loop;                   // inherit gp; fresh sp/ra below
+      g_task_ctx[i].r[29] = mem_r32(base + 8);// per-task PSX stack top (obj+8)
+      g_task_ctx[i].r[31] = 0xDEAD0000u;      // sentinel return
+      g_task_started[i] = 1;
+    } else if (st == 2) {                     // runnable: resume after the previous yield
+      resume_pc = g_task_ctx[i].r[31];
+    } else {
+      continue;                               // sleeping this frame (state==1)
+    }
+    mem_w16(base, 4);                         // running
+    mem_w32(CUR_TASK, base);
+    g_cur_slot = i;
+    *c = g_task_ctx[i];
+    g_in_stage = 1;
+    if (setjmp(g_yield_jmp) == 0) {
+      rec_coro_run(c, resume_pc);             // runs until ov_yield longjmps back here
+      mem_w16(base, 0);                        // returned (jr ra sentinel): task ended -> free
+      g_task_started[i] = 0;
+    }
+    g_in_stage = 0;
+  }
+  *c = loop;                                  // restore the frame-loop context
+}
 
 // Native override of game-main FUN_80050b08: init prefix, then (later) native frame loop.
 static void ov_game_main(R3000* c) {
@@ -84,21 +157,35 @@ static void ov_game_main(R3000* c) {
   // incrementally). FUN_800788ac is overridden (ov_frame_update): real per-frame update +
   // gpu_present + audio + satisfies the vblank pacing dwell. PSXPORT_NATIVE_FRAMES caps the
   // run (headless). ---
+  rec_set_override(0x80080880u, ov_switch);    // ChangeThread -> native task switch (capture+longjmp)
+
   uint32_t nframes = 120;
   const char* nf = getenv("PSXPORT_NATIVE_FRAMES");
   if (nf) nframes = (uint32_t)strtoul(nf, 0, 0);
   fprintf(stderr, "[native_boot] entering native frame loop (%u frames)\n", nframes);
+  void hle_deliver_event(uint32_t ev_class, uint32_t spec);
   for (uint32_t f = 0; f < nframes; f++) {
+    // Per-frame IRQ-driven events the game's waits poll via TestEvent (we deliver no preemptive
+    // IRQs): VBlank classes + the sound-DMA-complete class 0xF0000009 (its callback FUN_80097030
+    // would normally fire it; native SPU DMA is synchronous, so signal it ready each frame).
+    hle_deliver_event(0xF2000003u, 0xFFFFFFFFu);
+    hle_deliver_event(0xF0000001u, 0xFFFFFFFFu);
+    hle_deliver_event(0xF0000009u, 0xFFFFFFFFu);
     mem_w16(0x800e809c, 0);                                  // DAT_800e809c = 0 (dwell counter)
     mem_w32(0x800bf4f4, mem_r32(0x800bf544));                // framebuffer ptr swap
     mem_w32(0x800bf544, (mem_r8(0x1f800135) * 0x14000 + 0x800bfe68) & 0xffffff);
     rc0(c, 0x800788ac);                                      // tick + present + audio (override)
-    native_stage_step(c);                                    // <- replaces FUN_80051e60
+    native_scheduler_step(c);                                // <- replaces FUN_80051e60
     rc1(c, 0x80080f6c, 0);                                   // draw sync
-    rc0(c, 0x800506d0);                                      // task sleep-countdown
+    rc0(c, 0x800506d0);                                      // task sleep-countdown (re-arm 1->2)
+    if (f < 10 || (f % 30) == 0)
+      fprintf(stderr, "[native_boot]   frame %u: t0[st=%u e=0x%08X s48=%u] t1[st=%u] t2[st=%u] "
+                      "f135=%u\n", f, mem_r16(TASKBASE), mem_r32(TASKBASE + 0xc),
+              mem_r16(TASKBASE + 0x48), mem_r16(TASKBASE + 0x70), mem_r16(TASKBASE + 0xe0),
+              mem_r8(0x1f800135));
   }
   fprintf(stderr, "[native_boot] frame loop done; task0 state=%u entry=0x%08X obj+0x48=%u\n",
-          mem_r16(0x801fe000), mem_r32(0x801fe00c), mem_r16(mem_r32(0x1f800138) + 0x48));
+          mem_r16(TASKBASE), mem_r32(TASKBASE + 0xc), mem_r16(TASKBASE + 0x48));
 }
 
 // Wired from boot.c when PSXPORT_NATIVE_BOOT is set. Registers the main override and enters

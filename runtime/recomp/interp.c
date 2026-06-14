@@ -43,6 +43,15 @@ static void call_addr(R3000* c, uint32_t a) {
   else rec_interp(c, a);
 }
 
+// Native override registered for `addr` (rec_set_override), or NULL. Used by the coroutine
+// interpreter to invoke hand-written overrides (CD, yield, ...) instead of flat-interpreting.
+extern OverrideFn g_override[];
+static OverrideFn override_for(uint32_t a) {
+  int i = rec_func_index(a);
+  return i >= 0 ? g_override[i] : 0;
+}
+static int is_bios(uint32_t a) { uint32_t p = a & 0x1FFFFFFF; return p==0xA0||p==0xB0||p==0xC0; }
+
 // Execute one non-control instruction (delay-slot-safe; no branches/jumps/loads-delay).
 static void exec_simple(R3000* c, uint32_t in) {
   uint32_t op = in >> 26;
@@ -167,6 +176,79 @@ void rec_interp(R3000* c, uint32_t pc) {
       continue;
     }
     // non-control instruction
+    exec_simple(c, in);
+    pc += 4;
+  }
+}
+
+// ---- Flat coroutine interpreter (rec_coro_run) -------------------------------------------
+// Runs one cooperative task as a resumable coroutine WITHOUT using the host C stack for PSX
+// calls (so a yield can longjmp out and a later call resume mid-chain — see native_boot.c).
+// Unlike rec_interp (which mirrors PSX calls onto the C stack and treats `jr ra` as a C
+// return), this is FLAT: jal/jalr set the link reg and JUMP (the called code maintains the PSX
+// stack in g_ram itself); `jr` JUMPS to its target and keeps looping. The loop only exits when
+// `jr ra` targets the sentinel 0xDEAD0000 (the task's top-level function returned == task
+// ended). Native overrides (yield, CD, ...) and BIOS vectors are still invoked as C (an
+// override may longjmp out, e.g. the yield); everything else is interpreted flat. This is the
+// ucontext-free coroutine model: PSX state (PC via the link/stack, regs, SP-in-g_ram) is all
+// that a yield needs to save/restore.
+#define CORO_SENTINEL 0xDEAD0000u
+void rec_dispatch_miss(R3000* c, uint32_t addr);
+
+// Invoke a call target natively if it is an override/BIOS (returns 1), else 0 (caller jumps).
+static int coro_native_call(R3000* c, uint32_t tgt) {
+  OverrideFn ov = override_for(tgt);
+  if (ov) { ov(c); return 1; }
+  if (is_bios(tgt)) { rec_dispatch_miss(c, tgt); return 1; }
+  return 0;
+}
+
+void rec_coro_run(R3000* c, uint32_t pc) {
+  for (;;) {
+    uint32_t in = mem_r32(pc);
+    uint32_t op = in >> 26;
+
+    if (op == 0x02 || op == 0x03) {                  // j / jal
+      uint32_t tgt = TGT(in, pc);
+      if (op == 0x03) c->r[31] = pc + 8;
+      exec_simple(c, mem_r32(pc + 4));               // delay slot
+      if (op == 0x03 && coro_native_call(c, tgt)) { pc = c->r[31]; continue; }
+      pc = tgt; continue;                            // flat call/jump
+    }
+    if (op == 0x00 && (FN(in) == 0x08 || FN(in) == 0x09)) {  // jr / jalr
+      uint32_t tgt = c->r[RS(in)];
+      uint32_t link = pc + 8, rd = RD(in);
+      int is_jalr = FN(in) == 0x09, is_ra = RS(in) == 31;
+      exec_simple(c, mem_r32(pc + 4));               // delay slot
+      if (is_jalr) {
+        if (rd) c->r[rd] = link;
+        if (coro_native_call(c, tgt)) { pc = c->r[31]; continue; }
+        pc = tgt; continue;                          // flat indirect call
+      }
+      if (is_ra) {                                   // return
+        if (tgt == CORO_SENTINEL) return;            // task's top function returned -> ended
+        pc = tgt; continue;                          // flat return up the PSX call chain
+      }
+      if (coro_native_call(c, tgt)) { pc = c->r[31]; continue; }  // computed tail-call
+      pc = tgt; continue;                            // computed jump (switch table etc.)
+    }
+    if (op == 0x01 || op == 0x04 || op == 0x05 || op == 0x06 || op == 0x07) {  // branches
+      int t;
+      uint32_t rs = RS(in), rt = RT(in);
+      uint32_t tgt = pc + 4 + (SIMM(in) << 2);
+      if (op == 0x04) t = (c->r[rs] == c->r[rt]);
+      else if (op == 0x05) t = (c->r[rs] != c->r[rt]);
+      else if (op == 0x06) t = ((int32_t)c->r[rs] <= 0);
+      else if (op == 0x07) t = ((int32_t)c->r[rs] > 0);
+      else {
+        uint32_t sub = rt;
+        t = (sub & 1) ? ((int32_t)c->r[rs] >= 0) : ((int32_t)c->r[rs] < 0);
+        if (sub & 0x10) c->r[31] = pc + 8;
+      }
+      exec_simple(c, mem_r32(pc + 4));
+      pc = t ? tgt : pc + 8;
+      continue;
+    }
     exec_simple(c, in);
     pc += 4;
   }
