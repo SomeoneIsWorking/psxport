@@ -302,8 +302,9 @@ static int bs_decode_ac(BitReader* b, int* run, int* level) {
 
 // Decode an entire BS frame into the MDEC run-level code stream.
 // Returns number of 16-bit codes written, or negative on error.
-static int bs_decode_frame(const uint8_t* payload, uint32_t payload_size,
-                           int width, int height, uint16_t* codes, int max_codes) {
+// Non-static so the FMV compare harness (tools/fmv_compare) can call our exact VLC path.
+int bs_decode_frame(const uint8_t* payload, uint32_t payload_size,
+                    int width, int height, uint16_t* codes, int max_codes) {
   if (payload_size < 8) return -1;
   uint16_t bs_q = (uint16_t)(payload[4] | (payload[5] << 8));
   int qscale = bs_q & 0x3F;
@@ -385,17 +386,33 @@ static const uint8_t s_quant_default[64] = {
   27, 29, 35, 38, 46, 56, 69, 83,
 };
 
+// mednafen's MDEC ZigZag scan (mdec.c). The quant table is consumed in SCAN order
+// (dequant uses QMatrix[CoeffIndex]; mdec stores the uploaded table linearly, mdec.c:844),
+// so the table must be uploaded in zigzag/scan order: qz[scan] = quant_raster[ZigZag[scan]].
+// s_quant_default is the raster-order MPEG intra matrix; uploading it raw applied the wrong
+// per-frequency weight to every AC coefficient (DC at index 0 is unaffected: ZigZag[0]==0) —
+// the cause of the "DC clean, AC banded" artifact. Reorder it here.
+static const uint8_t MDEC_ZIGZAG[64] = {
+  0x00,0x08,0x01,0x02,0x09,0x10,0x18,0x11,0x0a,0x03,0x04,0x0b,0x12,0x19,0x20,0x28,
+  0x21,0x1a,0x13,0x0c,0x05,0x06,0x0d,0x14,0x1b,0x22,0x29,0x30,0x38,0x31,0x2a,0x23,
+  0x1c,0x15,0x0e,0x07,0x0f,0x16,0x1d,0x24,0x2b,0x32,0x39,0x3a,0x33,0x2c,0x25,0x1e,
+  0x17,0x1f,0x26,0x2d,0x34,0x3b,0x3c,0x35,0x2e,0x27,0x2f,0x36,0x3d,0x3e,0x37,0x3f,
+};
+
 static void mdec_upload_tables(void) {
   // ---- cmd 2: SetIqTab (quant matrix). bit0=1 -> load both luma+chroma (32 words). ----
-  // Pack 4 bytes per 32-bit word; 64 luma + 64 chroma bytes = 32 words.
+  // Pack 4 bytes per 32-bit word; 64 luma + 64 chroma bytes = 32 words. Reorder raster ->
+  // zigzag so QMatrix[CoeffIndex] (scan order) holds the right per-frequency weight.
+  uint8_t qz[64];
+  for (int p = 0; p < 64; p++) qz[p] = s_quant_default[MDEC_ZIGZAG[p]];
   uint32_t qcmd = (2u << 29) | 1u;     // (Command>>29)==2, bit0 set => 0x10+0x10 words
   mdec_write(MDEC0, qcmd);
   uint32_t qwords[32];
-  for (int i = 0; i < 16; i++) {       // luma 64 bytes
-    qwords[i] = (uint32_t)s_quant_default[i*4+0]
-              | ((uint32_t)s_quant_default[i*4+1] << 8)
-              | ((uint32_t)s_quant_default[i*4+2] << 16)
-              | ((uint32_t)s_quant_default[i*4+3] << 24);
+  for (int i = 0; i < 16; i++) {       // luma 64 bytes (zigzag order)
+    qwords[i] = (uint32_t)qz[i*4+0]
+              | ((uint32_t)qz[i*4+1] << 8)
+              | ((uint32_t)qz[i*4+2] << 16)
+              | ((uint32_t)qz[i*4+3] << 24);
   }
   for (int i = 0; i < 16; i++) qwords[16+i] = qwords[i];   // chroma = same default
   mdec_dma_in(qwords, 32);
@@ -438,8 +455,8 @@ static void mdec_upload_tables(void) {
 // ====================================================================================
 // MDEC feed (16bpp) + RGB555 extraction
 // ====================================================================================
-static int mdec_decode_to_rgb555(const uint16_t* codes, int ncodes,
-                                 int width, int height, uint16_t* pixels) {
+int mdec_decode_to_rgb555(const uint16_t* codes, int ncodes,
+                          int width, int height, uint16_t* pixels) {
   mdec_write(MDEC1, 0x80000000);              // reset
   mdec_write(MDEC1, (1u << 30) | (1u << 29)); // enable DMA in + out
   mdec_upload_tables();                        // load quant + IDCT (else output is black)
