@@ -289,7 +289,7 @@ static int bs_decode_ac(BitReader* b, int* run, int* level) {
     for (unsigned i = 0; i < sizeof(s_vlc)/sizeof(s_vlc[0]); i++) {
       if (s_vlc[i].len == n && s_vlc[i].code == v) {
         br_skip(b, n);
-        int s = (int)br_get(b, 1);
+        int s = (int)br_get(b, 1);   // sign bit: 0 = positive, 1 = negative (MPEG-1 convention)
         int lv = s_vlc[i].level;
         *run = s_vlc[i].run;
         *level = s ? -lv : lv;
@@ -308,6 +308,14 @@ static int bs_decode_frame(const uint8_t* payload, uint32_t payload_size,
   uint16_t bs_q = (uint16_t)(payload[4] | (payload[5] << 8));
   int qscale = bs_q & 0x3F;
   if (qscale == 0) qscale = 1;
+  if (getenv("PSXPORT_FMV_DEBUG")) {
+    uint16_t magic = (uint16_t)(payload[2] | (payload[3] << 8));
+    uint16_t ver   = (uint16_t)(payload[6] | (payload[7] << 8));
+    static int once = 0;
+    if (!once) { once = 1;
+      fprintf(stderr, "[fmv] BS hdr: nwords=%u magic=%04x qscale=%d version=%u\n",
+              (unsigned)(payload[0] | (payload[1] << 8)), magic, qscale, ver); }
+  }
 
   BitReader br;
   br_init(&br, payload + 8, payload_size - 8);
@@ -328,6 +336,8 @@ static int bs_decode_frame(const uint8_t* payload, uint32_t payload_size,
     if (out >= max_codes) return out;
     codes[out++] = (uint16_t)(((qscale & 0x3F) << 10) | (dc & 0x3FF));
 
+    static int dconly = -1;
+    if (dconly < 0) dconly = getenv("PSXPORT_FMV_DCONLY") ? 1 : 0;
     for (;;) {
       int run, level;
       int r = bs_decode_ac(&br, &run, &level);
@@ -338,7 +348,8 @@ static int bs_decode_frame(const uint8_t* payload, uint32_t payload_size,
       }
       if (r < 0) return (out > 0) ? out : -2;
       if (out >= max_codes) return out;
-      codes[out++] = (uint16_t)(((run & 0x3F) << 10) | (level & 0x3FF));
+      if (!dconly)                        // DCONLY: consume AC bits (keep sync) but drop the code
+        codes[out++] = (uint16_t)(((run & 0x3F) << 10) | (level & 0x3FF));
     }
   }
   return out;
@@ -405,12 +416,13 @@ static void mdec_upload_tables(void) {
     for (int x = 0; x < 8; x++) {
       double cu = (u == 0) ? (1.0 / sqrt(2.0)) : 1.0;
       double v = cu * cos((2.0 * x + 1.0) * u * M_PI / 16.0);
-      // Scale so that after MDEC's two passes (each multiply then (+0x4000)>>15) the
-      // gain is unity. mdec stores val>>3, so we pre-multiply by 8. The per-pass *>>15
-      // with a sqrt(2)*... basis matches a scale of 0x5A82 (=cos(pi/4)*2^16) on the basis.
-      int iv = (int)lround(v * 0x5A82) ; // ~= basis * 23170
-      // mdec.c does (int16)(word) >> 3 when storing, so we shift up by 3 to compensate.
-      iv <<= 3;
+      // mednafen mdec.c stores IDCTMatrix = (int16)uploaded >> 3 (mdec.c:869), so the value
+      // we upload must be round(basis * 2^15) — this is the canonical PSX BIOS table whose
+      // u=0 entries are 0x5A82 (= round(cos(pi/4) * 32768) = 23170). Earlier code uploaded
+      // round(basis * 0x5A82) << 3, which for u=0 is 16384<<3 = 131072 and SATURATES to
+      // 0x7FFF; nearly every entry clamped, giving the wrong IDCT gain (washed-out flat
+      // blocks + banding). 2^15 is the correct, non-saturating scale.
+      int iv = (int)lround(v * 32768.0);
       if (iv >  32767) iv =  32767;
       if (iv < -32768) iv = -32768;
       idct[u * 8 + x] = (int16_t)iv;
@@ -497,19 +509,28 @@ static int mdec_decode_to_rgb555(const uint16_t* codes, int ncodes,
   int produced = got;                            // words actually drained
   if (getenv("PSXPORT_FMV_DEBUG"))
     fprintf(stderr, "[fmv]   drained %d/%d words (%d macroblocks)\n", got, total_words, got/128);
-  int blocks_avail = produced / 128;             // 128 words per 16x16 MB
+  int blocks_avail = produced / 128;             // 128 (32-bit) words per 16x16 MB
   int blk = 0;
   for (int by = 0; by < mby; by++) {
     for (int bx = 0; bx < mbx; bx++) {
       if (blk >= blocks_avail) goto done;
-      const uint16_t* src = mb + blk * 256;      // 256 px in this block
-      for (int yy = 0; yy < 16; yy++) {
-        int fy = by * 16 + yy;
-        if (fy >= height) break;
-        for (int xx = 0; xx < 16; xx++) {
-          int fx = bx * 16 + xx;
-          if (fx >= width) break;
-          pixels[fy * width + fx] = src[yy * 16 + xx];
+      // A 16bpp macroblock is NOT a 16x16 raster: mednafen emits it as four 8x8 luma
+      // sub-blocks in sequence (mdec.c case 3, ybn 0..3) = Y0 top-left, Y1 top-right,
+      // Y2 bottom-left, Y3 bottom-right. Each sub-block is 8x8 raster (64 px). Place each
+      // into its quadrant; reading the 256 px as one 16x16 raster scrambles the quadrants.
+      const uint16_t* src = mb + blk * 256;      // 256 px = 4 sub-blocks of 64 px
+      for (int sub = 0; sub < 4; sub++) {
+        int qx = (sub & 1) * 8;                  // sub 0,2 -> left;  1,3 -> right
+        int qy = (sub >> 1) * 8;                 // sub 0,1 -> top;   2,3 -> bottom
+        const uint16_t* sb = src + sub * 64;
+        for (int yy = 0; yy < 8; yy++) {
+          int fy = by * 16 + qy + yy;
+          if (fy >= height) break;
+          for (int xx = 0; xx < 8; xx++) {
+            int fx = bx * 16 + qx + xx;
+            if (fx >= width) break;
+            pixels[fy * width + fx] = sb[yy * 8 + xx];
+          }
         }
       }
       blk++;
