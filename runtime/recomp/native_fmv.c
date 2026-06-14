@@ -514,9 +514,13 @@ int mdec_decode_to_rgb555(const uint16_t* codes, int ncodes,
   // sub-0x20 remainder can sit in the OutFIFO (the bottom-right macroblock's last words). On
   // real PSX the game reads that tail via the MDEC data port; we do the same with mdec_read,
   // appending linearly (this only affects the final partial block's intra-block row order).
+  int got_before_tail = got;
   while (got < total_words && (mdec_read(MDEC1) & 0x80000000u) == 0) {  // bit31=OutFIFO empty
     outbuf[got++] = mdec_read(MDEC0);
   }
+  if (getenv("PSXPORT_FMV_DEBUG"))
+    fprintf(stderr, "[fmv]   drain: %d scattered + %d tail-linear = %d/%d total\n",
+            got_before_tail, got - got_before_tail, got, total_words);
 
   // Tile 16x16 macroblocks (each 128 words = 256 px, raster within the block) into the frame.
   memset(pixels, 0, (size_t)width * height * 2);
@@ -527,33 +531,30 @@ int mdec_decode_to_rgb555(const uint16_t* codes, int ncodes,
   if (getenv("PSXPORT_FMV_DEBUG"))
     fprintf(stderr, "[fmv]   drained %d/%d words (%d macroblocks)\n", got, total_words, got/128);
   int blocks_avail = produced / 128;             // 128 (32-bit) words per 16x16 MB
-  int blk = 0;
-  for (int by = 0; by < mby; by++) {
-    for (int bx = 0; bx < mbx; bx++) {
-      if (blk >= blocks_avail) goto done;
-      // A 16bpp macroblock is NOT a 16x16 raster: mednafen emits it as four 8x8 luma
-      // sub-blocks in sequence (mdec.c case 3, ybn 0..3) = Y0 top-left, Y1 top-right,
-      // Y2 bottom-left, Y3 bottom-right. Each sub-block is 8x8 raster (64 px). Place each
-      // into its quadrant; reading the 256 px as one 16x16 raster scrambles the quadrants.
-      const uint16_t* src = mb + blk * 256;      // 256 px = 4 sub-blocks of 64 px
-      for (int sub = 0; sub < 4; sub++) {
-        int qx = (sub & 1) * 8;                  // sub 0,2 -> left;  1,3 -> right
-        int qy = (sub >> 1) * 8;                 // sub 0,1 -> top;   2,3 -> bottom
-        const uint16_t* sb = src + sub * 64;
-        for (int yy = 0; yy < 8; yy++) {
-          int fy = by * 16 + qy + yy;
-          if (fy >= height) break;
-          for (int xx = 0; xx < 8; xx++) {
-            int fx = bx * 16 + qx + xx;
-            if (fx >= width) break;
-            pixels[fy * width + fx] = sb[yy * 8 + xx];
-          }
-        }
+  // Each 128-word (256 px) group is a 16x16 RASTER macroblock: mednafen emits four 8x8 Y
+  // sub-blocks and mdec_dma_out's voffs scatter (RAMOffsetWWS=4) lays them out as a 16x16
+  // raster (verified via PSXPORT_MDEC_OFFS). The game emits macroblocks COLUMN-MAJOR
+  // (top->bottom within a column, then the next column right): emit index k -> source
+  // (row=k%mby, col=k/mby). Placing them row-major sheared the frame (verified: a horizontal
+  // logo feature landed at emit stride mby=15). PSXPORT_FMV_ROWMAJOR forces the old order
+  // for A/B testing.
+  int rowmajor = getenv("PSXPORT_FMV_ROWMAJOR") ? 1 : 0;
+  for (int blk = 0; blk < blocks_avail; blk++) {
+    int bx, by;
+    if (rowmajor) { by = blk / mbx; bx = blk % mbx; }
+    else          { bx = blk / mby; by = blk % mby; }   // column-major emit order
+    if (bx >= mbx || by >= mby) continue;
+    const uint16_t* src = mb + blk * 256;
+    for (int yy = 0; yy < 16; yy++) {
+      int fy = by * 16 + yy;
+      if (fy >= height) break;
+      for (int xx = 0; xx < 16; xx++) {
+        int fx = bx * 16 + xx;
+        if (fx >= width) break;
+        pixels[fy * width + fx] = src[yy * 16 + xx];
       }
-      blk++;
     }
   }
-done:
   return width * height;   // pixel count
 }
 

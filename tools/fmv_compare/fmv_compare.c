@@ -199,11 +199,59 @@ static void idct_test(void) {
   fprintf(stderr,"[idcttest] 1-AC(scanpos1=raster(1,0)) MB#8 Y0 8x8 green ((v>>5)&31):\n");
   for (int y=0;y<8;y++){ fprintf(stderr,"  ");
     for(int x=0;x<8;x++){ int v=px[(8*16)*16+y*16+x]; fprintf(stderr,"%3d ",((v>>5)&31)); } fprintf(stderr,"\n"); }
+  // (3) macroblock placement, WIDE frame: 320x16 = 20 MBs in ONE row, MB k DC=20+k*2.
+  // Read each MB center; must increase monotonically LEFT->RIGHT. (The old 16-wide test only
+  // exercised vertical order and missed horizontal-stride bugs — this catches the FMV spread.)
+  static uint16_t codesW[64*20]; static uint16_t pxW[320*16];
+  o = 0;
+  for (int m=0;m<20;m++){ int dc=20+m*2; o=put_block(codesW,o,0,0,0,0); o=put_block(codesW,o,0,0,0,0);
+    for(int y=0;y<4;y++) o=put_block(codesW,o,dc,0,0,0); }
+  mdec_decode_to_rgb555(codesW, o, 320, 16, pxW);
+  fprintf(stderr,"[idcttest] MB-placement WIDE (320x16): per-MB center green L->R (expect monotonic):\n  ");
+  for (int m=0;m<20;m++){ int v=pxW[(8)*320 + m*16+8]; fprintf(stderr,"%d ",((v>>5)&31)); }
+  fprintf(stderr,"\n");
+  // (4) MULTI-ROW placement: 320x48 = 3 rows x 20 cols = 60 MBs, MB k (emit/raster order)
+  // DC=20+k. Print the 3x20 grid of per-MB center green. Must read as a raster ramp
+  // (row0: cols 0..19 lowest, row2 highest). Catches a row-stride / row-order bug.
+  static uint16_t codesG[64*60]; static uint16_t pxG[320*48];
+  o = 0;
+  for (int m=0;m<60;m++){ int dc=12+m; o=put_block(codesG,o,0,0,0,0); o=put_block(codesG,o,0,0,0,0);
+    for(int y=0;y<4;y++) o=put_block(codesG,o,dc,0,0,0); }
+  mdec_decode_to_rgb555(codesG, o, 320, 48, pxG);
+  fprintf(stderr,"[idcttest] MB-placement GRID (320x48, 3x20, DC ramps in raster order):\n");
+  for (int ry=0;ry<3;ry++){ fprintf(stderr,"  ");
+    for (int rx=0;rx<20;rx++){ int v=pxG[(ry*16+8)*320 + rx*16+8]; fprintf(stderr,"%2d ",((v>>5)&31)); }
+    fprintf(stderr,"\n"); }
+}
+
+// Decode a real STR frame through our full pipeline (VLC + mdec_decode_to_rgb555 = same tiling
+// the player uses) and print a coarse ASCII brightness map of the resulting `pixels`. This
+// shows DIRECTLY whether content macroblocks land contiguously or are spread across the frame.
+static void framemap(uint32_t lba, uint32_t size, int want) {
+  if (!disc_open()) { fprintf(stderr,"disc_open failed\n"); return; }
+  static uint8_t payload[1<<20]; int w=320,h=240;
+  int paylen = demux_frame(lba,size,want,payload,sizeof payload,&w,&h);
+  if (paylen<0){ fprintf(stderr,"frame %d not found\n",want); return; }
+  static uint16_t codes[1<<20]; static uint16_t px[1024*512];
+  int n = bs_decode_frame(payload,(uint32_t)paylen,w,h,codes,(int)(sizeof codes/2));
+  mdec_decode_to_rgb555(codes,n,w,h,px);
+  fprintf(stderr,"frame %d: %dx%d, %d codes -> ASCII luma map (each cell = 8x8 px avg):\n",want,w,h,n);
+  // Downsample to (w/8) x (h/8). chars: ' '=bright(white bg) ... '#'=dark(content).
+  const char* ramp = " .:-=+*#%@";
+  for (int cy=0; cy<h; cy+=8){ fprintf(stderr,"  ");
+    for (int cx=0; cx<w; cx+=8){ long s=0,c=0;
+      for(int y=cy;y<cy+8&&y<h;y++)for(int x=cx;x<cx+8&&x<w;x++){int v=px[y*w+x];
+        int g=(v>>5)&31; s+=g; c++; }
+      int avg = c? (int)(s/c):0; int idx = 9 - (avg*9/31); if(idx<0)idx=0; if(idx>9)idx=9;
+      fputc(ramp[idx], stderr); }
+    fputc('\n', stderr); }
 }
 
 int main(int argc, char** argv) {
   if (argc >= 2 && !strcmp(argv[1],"idcttest")) { idct_test(); return 0; }
-  if (argc < 4) { fprintf(stderr, "usage: %s <lba> <size_bytes> <frame#>  |  %s idcttest\n", argv[0], argv[0]); return 2; }
+  if (argc >= 5 && !strcmp(argv[1],"framemap")) {
+    framemap((uint32_t)strtoul(argv[2],0,0),(uint32_t)strtoul(argv[3],0,0),atoi(argv[4])); return 0; }
+  if (argc < 4) { fprintf(stderr, "usage: %s <lba> <size> <frame#> | %s idcttest | %s framemap <lba> <size> <frame#>\n", argv[0], argv[0], argv[0]); return 2; }
   uint32_t lba = (uint32_t)strtoul(argv[1],0,0), size = (uint32_t)strtoul(argv[2],0,0);
   int want = atoi(argv[3]);
   if (!disc_open()) { fprintf(stderr,"disc_open failed (set PSXPORT_TOMBA2_DISC/.env)\n"); return 1; }
