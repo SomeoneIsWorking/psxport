@@ -79,18 +79,25 @@ ZSTD_A="$(find_a 'libzstd.a')"; [ -n "$ZSTD_A" ] && CHD_LIBS="$CHD_LIBS $ZSTD_A"
 
 MED=vendor/beetle-psx/mednafen
 # libchdr headers live in the source tree; its compiled .a is under build/ (CHDR_DIR above).
-INC="-I$RT -I$MED -I$MED/psx -Ivendor/beetle-psx/libretro-common/include -Ivendor/beetle-psx -Ivendor/beetle-psx/deps/libchdr/include"
+# -Igenerated: the recompiled shards include "rec_decls.h".
+INC="-I$RT -Igenerated -I$MED -I$MED/psx -Ivendor/beetle-psx/libretro-common/include -Ivendor/beetle-psx -Ivendor/beetle-psx/deps/libchdr/include"
 # _XOPEN_SOURCE: makecontext/swapcontext (native threads) need it on macOS/glibc.
 CFLAGS="-O2 -w -D_XOPEN_SOURCE=700 $INC $(pkg-config --cflags sdl2) -DPSXPORT_SDL"
-SRC="$GEN \
+# All TUs: the recompiled core is split into generated/shard_*.c so they compile in parallel.
+SRC="$(ls generated/shard_*.c) \
   $RT/mem.c $RT/stubs.c $RT/hle.c $RT/threads.c $RT/interp.c $RT/gpu_native.c $RT/spu_audio.c \
   $MED/psx/gte.c $RT/gte_beetle.c $MED/psx/mdec.c $RT/mdec_beetle.c $MED/psx/spu.c $RT/spu_beetle.c \
   $RT/disc.c $RT/cd_override.c $RT/timing.c $RT/games_tomba2.c $RT/boot.c"
 
-say "building the native port (this compiles the ~7MB recompiled core; ~1-2 min first time)…"
+say "building the native port in parallel (-j$JOBS; first time compiles the recompiled core)…"
+OBJ=scratch/obj; mkdir -p "$OBJ"
+compile_one() { o="$OBJ/$(echo "$1" | tr '/.' '__').o"; $CC $CFLAGS -c "$1" -o "$o" || { echo "FAILED: $1" >&2; exit 1; }; }
+export -f compile_one; export CC CFLAGS OBJ
 # shellcheck disable=SC2086
-$CC $CFLAGS $SRC $CHD_LIBS $(pkg-config --libs sdl2) -lpthread -o scratch/bin/tomba2_port \
-  || die "build failed"
+printf '%s\n' $SRC | xargs -P"$JOBS" -I{} bash -c 'compile_one "$@"' _ {} || die "compile failed"
+OBJS=""; for s in $SRC; do OBJS="$OBJS $OBJ/$(echo "$s" | tr '/.' '__').o"; done
+# shellcheck disable=SC2086
+$CC $OBJS $CHD_LIBS $(pkg-config --libs sdl2) -lpthread -o scratch/bin/tomba2_port || die "link failed"
 
 # ---- 5. run ------------------------------------------------------------------------
 say "launching Tomba! 2 (native PC port)…"

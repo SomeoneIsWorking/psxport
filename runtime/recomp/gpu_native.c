@@ -110,9 +110,10 @@ static int s_fcount, s_fneed;
 // VRAM transfer state (GP0 0xA0 CPU->VRAM)
 static int s_xfer, s_xfer_x, s_xfer_y, s_xfer_w, s_xfer_h, s_xfer_px;
 
-static inline uint8_t cmd_r(uint32_t c) { return (c >> 16) & 0xFF; }
+// GP0 command-word color packs as 0x00BBGGRR — R in the low byte, B in the high byte.
+static inline uint8_t cmd_r(uint32_t c) { return c & 0xFF; }
 static inline uint8_t cmd_g(uint32_t c) { return (c >> 8) & 0xFF; }
-static inline uint8_t cmd_b(uint32_t c) { return c & 0xFF; }
+static inline uint8_t cmd_b(uint32_t c) { return (c >> 16) & 0xFF; }
 static inline int cx(uint32_t w) { int v = w & 0x7FF; return v >= 0x400 ? v - 0x800 : v; }
 static inline int cy(uint32_t w) { int v = (w >> 16) & 0x7FF; return v >= 0x400 ? v - 0x800 : v; }
 

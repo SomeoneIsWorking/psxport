@@ -355,6 +355,31 @@ PM sprint, two more developer subagents (both delivered + verified):
   This is the deep intro-sequencing blocker ("later 2-8"); needs further RE of what the
   interpreted sequencer waits on (logic/state vs an interp-correctness gap). Single-owner next.
 
+## 2026-06-14 (later 26) — DITCH GHIDRA (binary-only) + parallel shard build + run.sh; R/B fix
+Reproducibility + build-speed sprint (user-driven). The build now needs **only the repo + the
+ROM** — no Ghidra, no committed decomp-derived data.
+- **Binary-only recompilation:** `emit.py` seeds purely from the binary now — `{entry} | EXTRA_
+  SEEDS`, grown by `discover_funcs` (direct-jal fixpoint). 1154 functions recompiled; the ~445
+  reached only via function pointers run through the hybrid interpreter (faithful). **Verified
+  identical boot** to the Ghidra-seeded build (same CD reads, START.BIN@1904) — and the printf
+  jump-table now prints clean strings (`ResetGraph:jtb=…`, `MDEC_in_sync timeout:`) since the
+  interpreter handles it. `PSXPORT_USE_GHIDRA=1` (+ local scratch decomp) still available to
+  recompile more for speed; default doesn't touch Ghidra. Repo audited clean: scratch/ (decomp
+  dump) gitignored, the optional address list gitignored — only our own Ghidra *tooling* scripts
+  remain (don't ship decomp output).
+- **Parallel build:** `emit.py` splits output into `generated/rec_decls.h` + 8 `shard_<n>.c`
+  (gen_func bodies, round-robin) + `shard_disp.c` (override table + wrappers + dispatch
+  switches). `run.sh` compiles all TUs to .o with `xargs -P` then links (`-j16` observed); old
+  monolith path stubbed. `PSXPORT_SHARDS` tunable.
+- **`run.sh` (repo root): one command, repo + ROM only.** CMake-builds libchdr/discdump,
+  extracts MAIN.EXE, binary-only recompiles, parallel-builds, launches the SDL window. macOS
+  fixes from user testing: committed func-list dependency removed (was the Mac blocker),
+  libchdr *header* path (source tree) vs *.a (build/), no pipefail+`ls`/`head` footgun. Verified
+  end-to-end on Linux; built + ran the game loop.
+- **Rasterizer R/B-swap fixed** (gpu_native.c `cmd_r`/`cmd_b`): GP0 color packs `0x00BBGGRR`
+  (R=low byte). Found by the GPU-QA subagent (which otherwise proved the rasterizer's geometry/
+  fill/gouraud all pixel-correct). build.sh leaf tests pass; no boot regression.
+
 ## 2026-06-14 (later 8) — CORRECTION to "later 7" RE map (overlay sequencer decompiled)
 Read the overlay decomp (`scratch/decomp/overlay.c` = `FUN_801064f0`) + the worker/scheduler
 chain from the full decomp. Three labels in "later 7" are **WRONG** — fixing them so the next
