@@ -1,5 +1,38 @@
 # Debug / progress journal
 
+## 2026-06-14 (later 32) — NATIVE HYBRID DRIVER stood up: init prefix + 1st stage transition
+Built `runtime/recomp/native_boot.c` (PSXPORT_NATIVE_BOOT=1, wired in boot.c). The PC engine
+now drives game-main natively instead of running the infinite PSX scheduler:
+- **Approach:** override game-main `FUN_80050b08` with `ov_game_main`. crt0 `func_800896E0`
+  runs its BSS-zero/SP/gp/heap setup and calls main, which lands in our override. The override
+  runs the ~25 init calls (transcribed 1:1 from FUN_80050b08:31275-31299) via `rec_dispatch`,
+  NOT the scheduler loop. Helpers rc0/rc1/rc2/rc3 set a0..a2 then dispatch.
+- **VERIFIED (RAM probes):** (1) init prefix runs clean — ResetGraph fires, no break during it
+  (the `[break] code 1` after is crt0 post-main, expected). Scheduler state correct: task0
+  state=2 runnable, entry=0x800499E8, name=A0F.BIN stack; tasks 1/2 free. (2) Running task 0's
+  initial entry FUN_800499e8 natively (after `mem_w32(0x1f800138,0x801fe000)` to point the
+  scheduler "current task" at task0) resolves \BIN\START.BIN and FUN_80052078(0) loads the
+  overlay raw to 0x80106228 via the native CD override: count@0x80106228=6,
+  entry-word@0x8010649c=0x27BDFE38 (exact), task0 state=3 entry=0x8010649C.
+- **KEY mechanic:** with BIOS threads stubbed to no-ops, FUN_80051f80 (yield) / ChangeThread
+  just return — so a NON-looping task fn (FUN_800499e8) called via rec_dispatch runs straight to
+  completion. But the stage SEQUENCERS (FUN_801064f0 / DEMO / GAME entries) are infinite
+  do/while(true) loops whose only exit is the scheduler's state==3 RESTART — with no-op
+  ChangeThread they'd spin forever. So they MUST be reimplemented natively as per-frame state
+  machines (one obj+0x48 iteration per frame == one original yield), called from a native frame
+  loop that replaces the scheduler call FUN_80051e60 in LAB_80050c6c.
+- **Game-main loop body (LAB_80050c6c), to reimplement natively:** per frame — DAT_800e809c=0;
+  framebuffer ptr swap (DAT_800bf544/4f4 from DAT_1f800135); FUN_800788ac (tick, overridden by
+  ov_frame_update); **FUN_80051e60 (scheduler -> replace with native stage step)**; FUN_80080f6c(0)
+  (draw sync); busy-wait DAT_800e809c<DAT_1f800235 (vblank); FUN_800506d0 (present); buffer swap
+  on DAT_1f80019c (0=swap+continue, 2=swap, 3=stay).
+- **NEXT:** native frame loop + native step of stage 0 (START, FUN_801064f0): its loop loads
+  asset manifests (OPN/A0*/TOMBA2.* into DAT_800be118/1e0/0f0), registers loader tasks
+  FUN_80044f58/FUN_8004514c (run them directly — they complete synchronously w/ native CD), then
+  transitions to DEMO. Then native DEMO step (the s0-s7 SM, leaf fns listed in "later 31") to
+  reach the title/menu on-screen; then GAME. Drive native FMVs at the right point (START plays
+  OPN, the menu->game uses the existing native_fmv path).
+
 ## 2026-06-14 (later 31) — STAGE MAP NAILED: START/DEMO/GAME overlays; corrects "later 30"
 The 3 stage entries in `PTR_LAB_800a3ecc[0..2]` = `{0x8010649c, 0x801062e4, 0x8010637c}` are
 entry points into THREE SEPARATE overlay files, all loaded RAW to the **same base 0x80106228**
