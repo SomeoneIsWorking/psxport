@@ -237,6 +237,28 @@ Boot now loads the first code overlay natively and reaches the **overlay-executi
   resident at a time); (b) a hybrid in-RAM MIPS interpreter as the rec_dispatch-miss fallback
   (also clears the printf/SetVideoMode jump-table misses). Decide + implement next.
 
+## 2026-06-14 (later 21) — HYBRID INTERPRETER: overlays run; game executes intro logic
+**Overlay code execution solved with a hybrid fallback interpreter (`runtime/recomp/interp.c`).**
+The static recomp covers MAIN.EXE's resident text; overlays load from disc at runtime above it
+(0x80106xxx) and swap at shared addresses, so they can't be statically recompiled ahead of
+time. `rec_interp(c, pc)` runs any non-recompiled RAM code directly from g_ram using the SAME
+runtime + the SAME instruction semantics as the emitter (so interpreted == recompiled). Wired
+as the `rec_dispatch_miss` fallback for code addresses in [0x10000,0x200000): a jal/jr/jalr
+into non-recompiled RAM enters the interpreter; a call back into a recompiled fn routes to
+rec_dispatch (`is_recompiled` check). Also clears the in-function jump-table misses (printf
+0x8009A8E8, SetVideoMode 0x80091E18) by interpreting from the computed target.
+- **VERIFIED:** the START.BIN overlay (incl. intro sequencer `FUN_801064f0`) now executes — no
+  misses, no `[interp] bad opcode`. It runs `CdSearchFile` for the next playlist file (new read
+  LBA 1905), and the game progresses through its **timer-paced task schedule** (task-0 state
+  1→2 as its timer expires over ~8s). Leaf tests still pass. The recomp core stays 100%
+  recompiled; only dynamically-loaded overlay code is interpreted (legit hybrid execution).
+- **STATE: the game boots MAIN.EXE and runs its full software stack** — HLE BIOS, libcd (native
+  file I/O), libetc VSync, events, the cooperative scheduler on real native threads, overlay
+  load + execution, and the StrPlayer main loop drawing each frame. It advances the intro logic
+  but invisibly: the next subsystems are the **output/IO peripherals — GPU (rasterizer +
+  display), MDEC (FMV video), SPU (audio), pad input** — to be lifted from the Beetle GPL-2 fork
+  per the plan. GPU first (so output is visible/verifiable). These are the large remaining tier.
+
 ## 2026-06-14 (later 8) — CORRECTION to "later 7" RE map (overlay sequencer decompiled)
 Read the overlay decomp (`scratch/decomp/overlay.c` = `FUN_801064f0`) + the worker/scheduler
 chain from the full decomp. Three labels in "later 7" are **WRONG** — fixing them so the next

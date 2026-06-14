@@ -201,6 +201,8 @@ void rec_break(R3000* c, uint32_t code) {
   (void)c;
 }
 
+void rec_interp(R3000* c, uint32_t pc);  // hybrid fallback (interp.c)
+
 static int g_miss = 0;
 void rec_dispatch_miss(R3000* c, uint32_t addr) {
   uint32_t a = addr & 0x1FFFFFFF;
@@ -211,5 +213,9 @@ void rec_dispatch_miss(R3000* c, uint32_t addr) {
     fprintf(stderr, "[hle] UNIMPL %c0:0x%02X\n", tbl, fn);
     return;
   }
+  // Non-recompiled code in RAM (loaded overlay, or an in-function computed-jump/jump-table
+  // target the recompiler routed here): run it with the hybrid interpreter. Skip the low
+  // exception/scratchpad region (< 0x10000) which is never a call target.
+  if (a >= 0x10000 && a < 0x200000) { rec_interp(c, addr); return; }
   fprintf(stderr, "[miss %d] addr 0x%08X (no recompiled fn / overlay)\n", g_miss++, addr);
 }
