@@ -63,11 +63,18 @@ static void ov_game_main(R3000* c) {
   rc1(c, 0x80085bb0, 0x800506b4);           // register the vsync callback LAB_800506b4
 
   fprintf(stderr, "[native_boot] init prefix complete\n");
-  for (int i = 0; i < 3; i++) {
-    uint32_t b = 0x801fe000 + i * 0x70;
-    fprintf(stderr, "[native_boot]   task%d: state=%u name=0x%08X handle=0x%08X entry=0x%08X\n",
-            i, mem_r16(b), mem_r32(b + 8), mem_r32(b + 4), mem_r32(b + 0xc));
-  }
+
+  // --- task 0 initial entry: FUN_800499e8 resolves \BIN\START.BIN and FUN_80052078(0) loads
+  // the stage-0 overlay to 0x80106228 + restarts task 0 at stage 0 (0x8010649c). It yields once
+  // (FUN_80051f80, a no-op with threads stubbed) so it runs straight to completion here. The
+  // scheduler's "current task" ptr DAT_1f800138 is normally set by FUN_80051e60; set it to task0
+  // so FUN_80052078/FUN_800450bc operate on task 0. ---
+  mem_w32(0x1f800138, 0x801fe000);
+  rc0(c, 0x800499e8);
+  // START.BIN loaded raw to 0x80106228: [0]=manifest count (6); entry word @0x8010649c.
+  fprintf(stderr, "[native_boot] after FUN_800499e8: START.BIN count@0x80106228=%u "
+                  "entry-word@0x8010649c=0x%08X (expect 0x27BDFE38); task0 state=%u entry=0x%08X\n",
+          mem_r32(0x80106228), mem_r32(0x8010649c), mem_r16(0x801fe000), mem_r32(0x801fe00c));
   // TODO(next): native frame loop replacing LAB_80050c6c — per frame run FUN_800788ac (tick),
   // step the current stage's state machine natively, present (FUN_800506d0). For now return so
   // boot.c can report the init result.
