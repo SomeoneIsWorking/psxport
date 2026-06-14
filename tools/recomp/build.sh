@@ -33,7 +33,7 @@ echo "[1/3] decode test"; python3 tools/recomp/test_decode.py >/dev/null && echo
 echo "[2/3] emit"; python3 tools/recomp/emit.py "$MAIN" "$GEN"
 GENSRC="$(ls generated/shard_*.c)"   # recompiled core, split into shards for parallel compile
 RUNTIME="$RT/mem.c $RT/stubs.c $RT/hle.c $RT/threads.c $RT/interp.c $RT/gpu_native.c $RT/spu_audio.c $MED_SRC"
-CD="$RT/disc.c $RT/cd_override.c $RT/timing.c $RT/games_tomba2.c"
+CD="$RT/disc.c $RT/cd_override.c $RT/timing.c $RT/games_tomba2.c $RT/sync_overrides.c"
 echo "[3/3] compile core + runtime, run leaf test + boot"
 $CC $CFLAGS $MED_INC $SDL_CFLAGS $GENSRC $RUNTIME "$RT/test_leaf.c" -o scratch/bin/test_leaf $SDL_LIBS
 ./scratch/bin/test_leaf

@@ -87,7 +87,7 @@ CFLAGS="-O2 -w -D_XOPEN_SOURCE=700 $INC $(pkg-config --cflags sdl2) -DPSXPORT_SD
 SRC="$(ls generated/shard_*.c) \
   $RT/mem.c $RT/stubs.c $RT/hle.c $RT/threads.c $RT/interp.c $RT/gpu_native.c $RT/spu_audio.c \
   $MED/psx/gte.c $RT/gte_beetle.c $MED/psx/mdec.c $RT/mdec_beetle.c $MED/psx/spu.c $RT/spu_beetle.c \
-  $RT/disc.c $RT/cd_override.c $RT/timing.c $RT/games_tomba2.c $RT/boot.c"
+  $RT/disc.c $RT/cd_override.c $RT/timing.c $RT/games_tomba2.c $RT/sync_overrides.c $RT/boot.c"
 
 say "building the native port in parallel (-j$JOBS; first time compiles the recompiled core)…"
 OBJ=scratch/obj; mkdir -p "$OBJ"
