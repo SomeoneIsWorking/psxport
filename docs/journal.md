@@ -29,6 +29,21 @@ real game executable: **`MAIN.EXE`** (root, LBA 23, 716800 B) — entry `0x80089
 - NEXT (S1): emitter — recursive-descent decode from `0x800896E0` (+1596 fn-entry seeds) →
   C per function, dispatch table, modeled R3000 state + memory accessors.
 
+## 2026-06-14 (later 11) — S1 emitter done: full core compiles, leaf semantics verified
+`tools/recomp/emit.py` translates MAIN.EXE → C: **all 1597 functions** → `generated/
+tomba2_rec.c` (6.6 MB), **compiles clean** (3.5 MB .o). Runtime: `runtime/recomp/{r3000.h,
+mem.c,stubs.c}` (R3000 state, flat 2 MB RAM+scratchpad, lwl/lwr/swl/swr, R3000 div sem).
+- Emitter handles delay slots, intra-fn goto/labels (only for emitted addrs; data-region
+  branch targets route to rec_dispatch → no undefined labels — this was the one compile bug,
+  caused by data blobs in inter-fn gaps), direct-call vs rec_dispatch, generated dispatch.
+- **Verified** on 3 hand-checked leaf fns incl. delay-slot effects (`test_leaf.c`, all pass):
+  `0x80089A30`→v0=0x800ABFD4 (lui+DS addiu), `0x800535D4`→mem8(a0+374)+1, `0x800269EC`→v0=1
+  +store. Reproduce: `tools/recomp/build.sh`.
+- Faithful-first simplifications to verify via harness: no load-delay; add==addu; computed
+  `jr`→rec_dispatch (switch-table recovery later); data blobs emitted as dead fns.
+- NEXT (S2): load MAIN.EXE into g_ram, entry trampoline `func_800896E0`, HLE syscalls +
+  A0/B0/C0 vectors; stand up S4 diff harness vs Beetle in parallel.
+
 ## 2026-06-14 (later 8) — CORRECTION to "later 7" RE map (overlay sequencer decompiled)
 Read the overlay decomp (`scratch/decomp/overlay.c` = `FUN_801064f0`) + the worker/scheduler
 chain from the full decomp. Three labels in "later 7" are **WRONG** — fixing them so the next

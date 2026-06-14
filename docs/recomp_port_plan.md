@@ -73,9 +73,24 @@ The recompiler input is **NOT the boot EXE `SCUS_944.54`**. Measured:
     `BIN/A00..A0L.BIN` (area data) + `BIN/{OPN,SOP,START,DEMO,GAME,CRD}.BIN` (overlays/seq);
     `CD/{TOMBA2.DAT,IMG,IDX,SND, SWDATA.BIN}` + `CD/{BGM,DEMO,VOICE}.XA` (stream data/audio);
     `MOVIE/{LOGO,OP,END}.STR` (FMVs — the logo-hold = `LOGO.STR`); `ZZZ.DAT`.
-- **S1 — emitter (next).** Recursive-descent decode from MAIN's entry `0x800896E0` (+ the 1596
-  Ghidra fn entries as seeds for indirect-only targets); emit C per function w/ block labels +
-  dispatch table. Model `R3000` state + memory accessors.
+- **S1 — emitter. DONE/validated.** `tools/recomp/emit.py` emits all **1597** functions
+  (Ghidra boundaries as units; entry seeded) → `generated/tomba2_rec.c` (6.6 MB), which
+  **compiles cleanly** (3.5 MB .o). Runtime model `runtime/recomp/{r3000.h,mem.c}` (R3000
+  state, flat 2 MB RAM + scratchpad, unaligned lwl/lwr/swl/swr, R3000 div semantics);
+  `stubs.c` for GTE/COP0/syscall (S2/S3). Emitter handles **delay slots**, intra-fn
+  `goto`/labels (only for emitted addresses; data-region targets route to `rec_dispatch`,
+  so no undefined labels), direct calls vs `rec_dispatch`, generated dispatch table.
+  **Semantics verified** on 3 hand-checked leaf functions incl. delay-slot effects
+  (`runtime/recomp/test_leaf.c`, all pass). Reproduce: `tools/recomp/build.sh`.
+  - Documented faithful-first simplifications (verify via harness): load-delay not modeled;
+    add/addi treated as wrapping; computed `jr` (switch tables) → `rec_dispatch` (jump-table
+    recovery is a later pass); inter-function data blobs are emitted as dead "functions"
+    (correct but wasteful — exclude later).
+- **S2 — runtime skeleton (next).** Load `MAIN.EXE` image into `g_ram` at `0x80010000`; set
+  entry/SP/GP; entry trampoline `func_800896E0`; HLE BIOS — kernel syscalls + the A0/B0/C0
+  call vectors (route `rec_dispatch` misses at `0xA0/0xB0/0xC0` to HLE). Stand up **S4 diff
+  harness vs Beetle** in parallel (methodology: harness before logic) so each function is
+  diffable from boot.
 - **S1 — emitter.** ops → C against a modeled `R3000` state (regs + memory accessors);
   one C function per Ghidra-mapped function, block labels + `goto` for intra-fn branches,
   **dispatch table** keyed by address for indirect calls/jumps (seed indirect-only targets).

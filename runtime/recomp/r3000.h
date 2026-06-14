@@ -1,0 +1,52 @@
+// R3000A runtime model for the static-recompiled MAIN.EXE.
+// The recompiler emits one C function per game function, all operating on a shared
+// R3000 state + flat memory. This header is the ABI between generated code (sacrosanct)
+// and the hand-written runtime (memory, dispatch, HLE BIOS, GTE).
+#pragma once
+#include <stdint.h>
+#include <string.h>
+
+typedef struct R3000 {
+  uint32_t r[32];   // GPRs; r[0] is hardwired 0 (generated code never writes it)
+  uint32_t hi, lo;  // mult/div result registers
+} R3000;
+
+// ---- Memory (mem.c) -------------------------------------------------------
+// PSX 2 MB main RAM, mirrored across KUSEG/KSEG0/KSEG1; 1 KB scratchpad.
+extern uint8_t g_ram[0x200000];
+extern uint8_t g_scratch[0x400];
+
+uint8_t  mem_r8 (uint32_t a);
+uint16_t mem_r16(uint32_t a);
+uint32_t mem_r32(uint32_t a);
+void     mem_w8 (uint32_t a, uint8_t  v);
+void     mem_w16(uint32_t a, uint16_t v);
+void     mem_w32(uint32_t a, uint32_t v);
+// Unaligned word access (lwl/lwr/swl/swr): merge with the current register/memory.
+uint32_t mem_lwl(uint32_t cur, uint32_t a);
+uint32_t mem_lwr(uint32_t cur, uint32_t a);
+void     mem_swl(uint32_t a, uint32_t v);
+void     mem_swr(uint32_t a, uint32_t v);
+
+// ---- Dispatch & traps -----------------------------------------------------
+// Indirect call/jump target -> recompiled function (generated rec_dispatch),
+// falling back to HLE/overlay routing for non-recompiled addresses.
+void rec_dispatch(R3000* c, uint32_t addr);
+void rec_syscall(R3000* c, uint32_t code);
+void rec_break(R3000* c, uint32_t code);
+
+// ---- COP0 (minimal) -------------------------------------------------------
+uint32_t cop0_mfc(R3000* c, uint32_t reg);
+void     cop0_mtc(R3000* c, uint32_t reg, uint32_t v);
+
+// ---- COP2 / GTE -----------------------------------------------------------
+uint32_t gte_read_data (uint32_t reg);
+void     gte_write_data(uint32_t reg, uint32_t v);
+uint32_t gte_read_ctrl (uint32_t reg);
+void     gte_write_ctrl(uint32_t reg, uint32_t v);
+void     gte_op(R3000* c, uint32_t insn);
+
+// Signed-division helper with R3000 div-by-zero / overflow semantics (mem.c-adjacent
+// in cpu_support.c) — kept as functions so the emitter stays a thin templater.
+void cpu_div (R3000* c, uint32_t n, uint32_t d);
+void cpu_divu(R3000* c, uint32_t n, uint32_t d);
