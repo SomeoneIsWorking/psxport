@@ -1,5 +1,33 @@
 # Debug / progress journal
 
+## 2026-06-14 (later 8) — CORRECTION to "later 7" RE map (overlay sequencer decompiled)
+Read the overlay decomp (`scratch/decomp/overlay.c` = `FUN_801064f0`) + the worker/scheduler
+chain from the full decomp. Three labels in "later 7" are **WRONG** — fixing them so the next
+session doesn't chase a non-existent activator:
+- **`FUN_8008BF50` is the CD directory-cache reader for `CdSearchFile`, NOT a "stream
+  activator."** Given a path-component dir-record index it calls `FUN_8008c1ec(1, descriptor,
+  buf)` to read **one** directory sector and parse `0x2c`-stride dir records out of the table
+  at **`0x80102d44`** (= the **directory-record** table, `0x2c`=dir-record size — NOT a
+  stream-descriptor table). `FUN_8008c1ec` is a generic "read N blocks from LBA into buf"
+  (1 block = a dir sector; many blocks = a stream). So "later 7"'s `0x8008BF50(a0=N) → plays
+  stream N` and "descriptor table `0x80102d44`" are both wrong. Do not drive `0x8008BF50` to
+  trigger FMV#2 — it just reads a directory.
+- **`FUN_80051E60`** = cooperative task **dispatcher** over `0x801fe000` (stride `0x38`);
+  `FUN_80080860/80/90/a0` are **context-switch coroutine primitives** (task create/start/resume
+  — green threads), NOT libgpu draw wrappers as labeled.
+- **`FUN_801064F0`** = intro/opening **sequencer**: resolves `\BIN\OPN.BIN` (×25 entries),
+  `\BIN\START.BIN` (×3), `\CD\TOMBA2.IDX` (×5), `VOICE/DEMO/BGM.XA` via `CdSearchFile`
+  (`FUN_8008b8f0`); stores descriptors at `DAT_800be118`/`DAT_800be1e0`/`DAT_800be0f0`; then
+  bootstraps loader coroutines (`FUN_80044f58`, `FUN_8004514c` via registrar `FUN_80044bd4`)
+  on a state byte at `obj+0x48` (`_DAT_1f800138`). The `obj+0x48` transitions are
+  **unconditional** (load bootstrap), so this SM is NOT the consumer-paced logo gate.
+**Corrected model:** the logo→FMV#2 hand-off is a **coroutine task playing the logo MDEC
+stream**; when it yields end-of-stream the sequencer advances to the next playlist entry. The
+real skip target remains (per "later 6"): the **logo stream's frame-count / length field** so
+the segment consumes in ~1 frame and the game advances through its OWN code. Candidate: the
+OPN.BIN descriptor for the logo segment (`FUN_8008a110` yields LBA; size = field+4). Not yet
+pinned to a writable counter.
+
 ## 2026-06-14 (later 7) — FULL DECOMPILATION + StrPlayer playback architecture mapped
 **Did what the user asked: "decompile everything with tools."** Built headless-Ghidra
 decompilation tooling (committed): `tools/decomp.sh` + `tools/ghidra_decomp.py` (all 1886
