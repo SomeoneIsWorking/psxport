@@ -50,6 +50,7 @@ void     mdec_write(uint32_t addr, uint32_t val);
 uint32_t mdec_read(uint32_t addr);
 void     mdec_dma_in(const uint32_t* words, int count);
 int      mdec_dma_out(uint32_t* buf, int count);
+int      mdec_dma_out_rest(uint32_t* buf, int count);       // scatter-aware end-of-frame tail drain
 int      mdec_dma_can_read(void);
 int      mdec_dma_can_write(void);
 void     MDEC_Run(int32_t clocks);                          // Beetle mdec.c (clock pump)
@@ -73,31 +74,9 @@ uint16_t pad_buttons(void);                                 // active-low PSX bu
 
 static int fmv_resolve_path(const char* path, uint32_t* out_lba, uint32_t* out_size);
 
-// Per-frame host sync for native FMV playback: poll input, pace to the target rate, and
-// report whether the player should stop because Start was *pressed* this frame. Start is
-// edge-detected (released -> pressed) across the whole intro so a Start held into the next
-// movie does not instantly skip it. PSXPORT_FMV_FPS overrides the pace (default 15 fps, the
-// usual PSX STR rate); 0 = uncapped. Returns 1 to skip, 0 to keep playing.
-static int s_fmv_start_prev = 0;   // 1 = Start was down on the previous polled frame
-static int fmv_frame_sync(void) {
-#ifdef PSXPORT_SDL
-  pad_poll_sdl();
-  int start_now = (pad_buttons() & PAD_START) == 0;   // active-low: bit clear = pressed
-  int pressed = start_now && !s_fmv_start_prev;        // rising edge only
-  s_fmv_start_prev = start_now;
-
-  int fps = 15;
-  { const char* e = getenv("PSXPORT_FMV_FPS"); if (e && *e) fps = atoi(e); }
-  if (fps > 0) {
-    extern void SDL_Delay(uint32_t);                   // avoid an SDL.h include here
-    SDL_Delay((uint32_t)(1000 / fps));
-  }
-  return pressed;
-#else
-  (void)s_fmv_start_prev;
-  return 0;                                            // headless: never skip
-#endif
-}
+// Start-skip edge state, shared by the FMV pacing (fmv_pace, below). 1 = Start was down on the
+// previous polled frame; edge-detected so a Start held across one movie doesn't skip the next.
+static int s_fmv_start_prev = 0;
 
 #define SECTOR_USER   2048u
 #define SUBHDR_LEN    32u
@@ -514,13 +493,15 @@ int mdec_decode_to_rgb555(const uint16_t* codes, int ncodes,
   // sub-0x20 remainder can sit in the OutFIFO (the bottom-right macroblock's last words). On
   // real PSX the game reads that tail via the MDEC data port; we do the same with mdec_read,
   // appending linearly (this only affects the final partial block's intra-block row order).
+  // Drain the final sub-0x20 remainder WITH the voffs scatter (mdec_dma_out_rest), so the last
+  // macroblock's tail lands at its real raster positions instead of linearly (which produced
+  // garbage/black bits in the bottom-right macroblock).
   int got_before_tail = got;
-  while (got < total_words && (mdec_read(MDEC1) & 0x80000000u) == 0) {  // bit31=OutFIFO empty
-    outbuf[got++] = mdec_read(MDEC0);
-  }
+  int tail = mdec_dma_out_rest(outbuf + got, total_words - got);
+  got += tail;
   if (getenv("PSXPORT_FMV_DEBUG"))
-    fprintf(stderr, "[fmv]   drain: %d scattered + %d tail-linear = %d/%d total\n",
-            got_before_tail, got - got_before_tail, got, total_words);
+    fprintf(stderr, "[fmv]   drain: %d scattered + %d tail-scatter = %d/%d total\n",
+            got_before_tail, tail, got, total_words);
 
   // Tile 16x16 macroblocks (each 128 words = 256 px, raster within the block) into the frame.
   memset(pixels, 0, (size_t)width * height * 2);
@@ -578,6 +559,115 @@ static void present_rgb555(const uint16_t* pixels, int width, int height) {
 }
 
 // ====================================================================================
+// CD-XA ADPCM audio decode (STR movies interleave XA audio sectors with MDEC video).
+// Algorithm transcribed from mednafen psx/cdc.c (PS_CDC_XA_ProcessSector / DecodeXAADPCM) =
+// the project oracle: 18 sound groups/sector, 8 units/group (4-bit), 28 samples/unit, with
+// a 2-tap IIR (filter weights) over a per-channel 2-sample history that persists across
+// sectors. coding byte (subheader[3]): bit0 stereo, bit2 set => 18900Hz else 37800Hz,
+// bit4 set => 8-bit (we handle both via unit_index_shift).
+// ====================================================================================
+int disc_read_raw(uint32_t lba, uint8_t* out, uint32_t n);   // disc.c (raw 2352B sector)
+
+static const int32_t XA_W[16][2] = {
+  {0,0},{60,0},{115,-52},{98,-55},{122,-60} };   // mednafen DecodeXAADPCM weights
+
+static void xa_decode_unit(const uint8_t* in, int16_t* out, int shift, int filter) {
+  for (int i = 0; i < 28; i++) {
+    int32_t s = (int16_t)(in[i] << 8); s >>= shift;
+    s += (out[i-1] * XA_W[filter][0] + out[i-2] * XA_W[filter][1]) >> 6;
+    if (s < -32768) s = -32768; else if (s > 32767) s = 32767;
+    out[i] = (int16_t)s;
+  }
+}
+
+// Decode one XA audio sector (raw 2352B). Writes interleaved S16 stereo to `out`
+// (out[2*n]=L, out[2*n+1]=R); returns stereo frame count (<=2016). `hist[ch][0..1]` is the
+// per-channel history that MUST persist across sectors. `*freq` set to the sample rate.
+// Non-static so the sound oracle (tools/fmv_compare) can diff it against a reference.
+int xa_decode_sector(const uint8_t* raw, int16_t* out, int16_t hist[2][2], int* freq) {
+  int coding = raw[19];                          // subheader coding byte (raw = sync12+hdr4+subhdr8+...)
+  int ishift = (coding & 0x10) ? 0 : 1;          // unit_index_shift: 1 for 4-bit, 0 for 8-bit
+  int stereo = coding & 0x01;
+  int units  = 4 << ishift;                      // 8 (4-bit) / 4 (8-bit)
+  if (freq) *freq = (coding & 0x04) ? 18900 : 37800;
+  static int16_t ch[2][2016 + 8];
+  int cp[2] = {0,0};
+  for (int group = 0; group < 18; group++) {
+    const uint8_t* sg = raw + 24 + group * 128;  // 16 param bytes + 112 sample bytes
+    for (int unit = 0; unit < units; unit++) {
+      int param  = sg[(unit & 3) | ((unit & 4) << 1)];
+      int pcopy  = sg[4 | (unit & 3) | ((unit & 4) << 1)];
+      uint8_t ib[28];
+      for (int i = 0; i < 28; i++) {
+        uint8_t t = sg[16 + i * 4 + (unit >> ishift)];
+        if (ishift) { t <<= (unit & 1) ? 0 : 4; t &= 0xf0; }
+        ib[i] = t;
+      }
+      int ocn = (unit & 1) && stereo;
+      int16_t ob[2 + 28];
+      ob[0] = hist[ocn][0]; ob[1] = hist[ocn][1];
+      xa_decode_unit(ib, ob + 2, param & 0x0F, param >> 4);
+      hist[ocn][0] = ob[28]; hist[ocn][1] = ob[29];
+      if (param != pcopy) memset(ob, 0, sizeof ob);  // corruption guard (mednafen parity)
+      if (stereo) { for (int s = 0; s < 28; s++) ch[ocn][cp[ocn]++] = ob[2 + s]; }
+      else { for (int s = 0; s < 28; s++) { ch[0][cp[0]++] = ob[2+s]; ch[1][cp[1]++] = ob[2+s]; } }
+    }
+  }
+  int n = cp[0];
+  for (int i = 0; i < n; i++) { out[2*i] = ch[0][i]; out[2*i+1] = ch[1][i]; }
+  return n;
+}
+
+// ---- FMV audio output (dedicated SDL device at the XA rate) + audio-master pacing --------
+#ifdef PSXPORT_SDL
+#include <SDL.h>
+static SDL_AudioDeviceID s_fmv_dev = 0;
+static int s_fmv_freq = 0, s_fmv_bytes_per_frame = 4;   // S16 stereo
+static void fmv_audio_open(int freq) {
+  if (getenv("PSXPORT_NOAUDIO")) return;
+  if (s_fmv_dev && s_fmv_freq == freq) { SDL_ClearQueuedAudio(s_fmv_dev); return; }
+  if (s_fmv_dev) { SDL_CloseAudioDevice(s_fmv_dev); s_fmv_dev = 0; }
+  if (SDL_InitSubSystem(SDL_INIT_AUDIO) != 0) return;
+  SDL_AudioSpec want, have; SDL_memset(&want, 0, sizeof want);
+  want.freq = freq; want.format = AUDIO_S16SYS; want.channels = 2; want.samples = 2048;
+  s_fmv_dev = SDL_OpenAudioDevice(NULL, 0, &want, &have, 0);   // 0 = no changes; SDL converts
+  if (s_fmv_dev) { s_fmv_freq = freq; SDL_PauseAudioDevice(s_fmv_dev, 0); }
+}
+static void fmv_audio_queue(const int16_t* pcm, int frames) {
+  if (s_fmv_dev) SDL_QueueAudio(s_fmv_dev, pcm, (uint32_t)frames * 4);
+}
+static uint32_t fmv_audio_backlog_bytes(void) {
+  return s_fmv_dev ? SDL_GetQueuedAudioSize(s_fmv_dev) : 0;
+}
+static void fmv_audio_close(void) { if (s_fmv_dev) { SDL_ClearQueuedAudio(s_fmv_dev); } }
+
+// Pace playback to the AUDIO/media clock: media_frames audio sample-pairs at `freq` Hz define
+// the elapsed media time; sleep until wall-clock catches up. This is the real PSX rate (the
+// fixed-15fps guess was too slow). Polls input and returns 1 if Start was pressed (skip).
+// uncapped (PSXPORT_FMV_FPS=0) disables pacing for fast headless dumps.
+static int fmv_pace(long media_frames, int freq, uint32_t t0, int uncapped) {
+  pad_poll_sdl();
+  int pressed = ((pad_buttons() & PAD_START) == 0) && !s_fmv_start_prev;
+  s_fmv_start_prev = (pad_buttons() & PAD_START) == 0;
+  if (uncapped || freq <= 0) return pressed;
+  uint32_t target = (uint32_t)((long long)media_frames * 1000 / freq);
+  while ((int)(SDL_GetTicks() - t0) < (int)target) {
+    SDL_Delay(2);
+    pad_poll_sdl();
+    if (((pad_buttons() & PAD_START) == 0) && !s_fmv_start_prev) pressed = 1;
+    s_fmv_start_prev = (pad_buttons() & PAD_START) == 0;
+  }
+  return pressed;
+}
+#else
+static void fmv_audio_open(int freq) { (void)freq; }
+static void fmv_audio_queue(const int16_t* p, int n) { (void)p; (void)n; }
+static uint32_t fmv_audio_backlog_bytes(void) { return 0; }
+static void fmv_audio_close(void) {}
+static int fmv_pace(long m, int f, uint32_t t, int u) { (void)m;(void)f;(void)t;(void)u; return 0; }
+#endif
+
+// ====================================================================================
 // STR demux + top-level play
 // ====================================================================================
 int native_fmv_play_lba(uint32_t lba, uint32_t size_bytes) {
@@ -601,13 +691,38 @@ int native_fmv_play_lba(uint32_t lba, uint32_t size_bytes) {
   int max_frames = 0;
   { const char* mf = getenv("PSXPORT_FMV_MAXFRAMES"); if (mf && *mf) max_frames = atoi(mf); }
 
-  uint8_t sbuf[SECTOR_USER];
+  // Audio: STR interleaves XA-ADPCM sectors with the video sectors. Decode them, play through
+  // a dedicated SDL device at the XA rate, and pace VIDEO to the audio/media clock (the real
+  // PSX rate). uncapped = PSXPORT_FMV_FPS=0 (headless dumps: no pacing, no audio device).
+  int uncapped = 0; { const char* f = getenv("PSXPORT_FMV_FPS"); if (f && atoi(f) == 0 && *f) uncapped = 1; }
+  int xa_freq = 37800;
+  int16_t xa_hist[2][2] = {{0,0},{0,0}};
+  static int16_t xa_pcm[2016 * 2];
+  long media_frames = 0;                       // cumulative audio sample-pairs = media clock
+  s_fmv_start_prev = 1;                         // assume Start may be held from a prior movie
+  uint32_t t0 = 0;
+#ifdef PSXPORT_SDL
+  t0 = SDL_GetTicks();
+#endif
+  int skipped = 0;
+  uint8_t raw[2352];
   while (sec < nsectors) {
-    if (!disc_read_sector(lba + sec, sbuf)) break;
+    if (!disc_read_raw(lba + sec, raw, 2352)) break;
     sec++;
+    int submode = raw[18];
 
+    if (submode & 0x04) {                       // XA-ADPCM audio sector
+      int n = xa_decode_sector(raw, xa_pcm, xa_hist, &xa_freq);
+      if (sec == 1 || media_frames == 0) fmv_audio_open(xa_freq);
+      fmv_audio_queue(xa_pcm, n);
+      media_frames += n;
+      if (fmv_pace(media_frames, xa_freq, t0, uncapped)) { skipped = 1; break; }
+      continue;
+    }
+
+    const uint8_t* sbuf = raw + 24;             // Form1 video user data
     uint16_t magic = (uint16_t)(sbuf[0] | (sbuf[1] << 8));
-    if (magic != 0x0160) continue;          // not a video data sector (XA/padding)
+    if (magic != 0x0160) continue;              // not a video data sector (padding)
 
     int chunk_idx = sbuf[4]  | (sbuf[5]  << 8);
     int nchunks   = sbuf[6]  | (sbuf[7]  << 8);
@@ -620,7 +735,7 @@ int native_fmv_play_lba(uint32_t lba, uint32_t size_bytes) {
       expected_chunks = nchunks; got_chunks = 0;
       fwidth = w ? w : 320; fheight = h ? h : 240;
     }
-    if (cur_frame != framenum) continue;     // out of sync; wait for next chunk-0
+    if (cur_frame != framenum) continue;        // out of sync; wait for next chunk-0
 
     uint32_t plen = SECTOR_USER - SUBHDR_LEN;
     if (paylen + plen <= sizeof(payload)) {
@@ -637,20 +752,21 @@ int native_fmv_play_lba(uint32_t lba, uint32_t size_bytes) {
                 framenum, fwidth, fheight, paylen, ncodes);
       if (ncodes > 0) {
         int np = mdec_decode_to_rgb555(codes, ncodes, fwidth, fheight, pixels);
-        if (getenv("PSXPORT_FMV_DEBUG")) {
-          unsigned long cks = 0; for (int k = 0; k < fwidth*fheight; k++) cks += pixels[k]*(k+1);
-          fprintf(stderr, "[fmv]   mdec -> %d pixels; cksum=%lu first %04x %04x %04x %04x\n",
-                  np, cks, pixels[0], pixels[1], pixels[2], pixels[3]);
-        }
         if (np > 0) {
           present_rgb555(pixels, fwidth, fheight); frames++;
-          if (fmv_frame_sync()) { fprintf(stderr, "[fmv] skipped by Start at frame %d\n", frames); break; }
+          // Pace video to the audio/media clock (no audio sector here, so just gate on it).
+          if (fmv_pace(media_frames, xa_freq, t0, uncapped)) { skipped = 1; break; }
         }
       }
       cur_frame = -1; expected_chunks = 0; got_chunks = 0; paylen = 0;
       if (max_frames && frames >= max_frames) break;
     }
   }
+  if (skipped) fprintf(stderr, "[fmv] skipped by Start at frame %d\n", frames);
+  if (getenv("PSXPORT_FMV_DEBUG"))
+    fprintf(stderr, "[fmv] done: %d video frames, %ld audio sample-pairs (%.2fs @ %dHz)\n",
+            frames, media_frames, media_frames / (double)(xa_freq ? xa_freq : 37800), xa_freq);
+  fmv_audio_close();
   return frames;
 }
 

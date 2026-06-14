@@ -115,6 +115,24 @@ int mdec_dma_out(uint32_t* buf, int count) {
   return i;
 }
 
+// Drain the remaining OutFIFO words WITH the voffs scatter, ignoring the 0x20 DMA-burst gate
+// (MDEC_DMARead reads whenever OutFIFO is non-empty, mdec.c:899; only MDEC_DMACanRead enforces
+// the 0x20 burst). This is the END-OF-FRAME remainder (< 0x20 words) that DMACanRead won't
+// release but that still belongs to the last macroblock's raster positions. Caller passes
+// `buf` already advanced by the words drained so far (so i + offs is the cumulative dest).
+// Without this the tail fell to a linear data-port read -> wrong positions -> garbage/black
+// bits in the bottom-right macroblock.
+int mdec_dma_out_rest(uint32_t* buf, int count) {
+  int i;
+  for (i = 0; i < count; i++) {
+    if (MDEC_Read(0, 0x1F801824u) & 0x80000000u) break;   // status bit31 = OutFIFO empty
+    uint32_t offs;
+    uint32_t v = MDEC_DMARead(&offs);
+    buf[i + (int32_t)offs] = v;
+  }
+  return i;
+}
+
 // Status helpers wrapping Beetle's DMA-readiness predicates, for a caller that gates its own
 // DMA0/DMA1 transfers (>= 0x20 words available and the matching enable bit set in Control).
 bool mdec_dma_can_write(void) { return MDEC_DMACanWrite(); }

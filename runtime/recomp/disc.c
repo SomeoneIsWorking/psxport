@@ -88,3 +88,21 @@ int disc_read_sector(uint32_t lba, uint8_t* out) {
   memcpy(out, raw + data_off, USER_DATA);
   return 1;
 }
+
+// Copy the first `n` bytes of the raw 2352-byte CD sector (sync+header+subheader+data).
+// Needed for CD-XA framing: the Mode2 subheader at raw[16..23] (submode raw[18], coding
+// raw[19]) distinguishes XA-ADPCM audio (Form2, 2324B) from MDEC video (Form1, 2048B)
+// sectors, which disc_read_sector() hides. Returns 1 on success. n is clamped to 2352.
+int disc_read_raw(uint32_t lba, uint8_t* out, uint32_t n) {
+  if (!s_chd && !disc_open()) return 0;
+  if (n > 2352u) n = 2352u;
+  uint32_t hunk = lba / s_frames_per_hunk;
+  uint32_t off = (lba % s_frames_per_hunk) * RAW_FRAME;
+  if (hunk >= s_hunk_count) return 0;
+  if (hunk != s_cached_hunk) {
+    if (chd_read(s_chd, hunk, s_hunk_buf) != CHDERR_NONE) return 0;
+    s_cached_hunk = hunk;
+  }
+  memcpy(out, s_hunk_buf + off, n);
+  return 1;
+}

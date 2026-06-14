@@ -21,6 +21,7 @@
 // --- from the runtime ---------------------------------------------------------------
 int disc_open(void);                                   // disc.c
 int disc_read_sector(uint32_t lba, uint8_t* out2048);  // disc.c
+int disc_read_raw(uint32_t lba, uint8_t* out, uint32_t n); // disc.c (raw 2352B sector)
 int bs_decode_frame(const uint8_t* payload, uint32_t payload_size,
                     int width, int height, uint16_t* codes, int max_codes);  // native_fmv.c (OURS)
 int mdec_decode_to_rgb555(const uint16_t* codes, int ncodes,
@@ -247,10 +248,85 @@ static void framemap(uint32_t lba, uint32_t size, int want) {
     fputc('\n', stderr); }
 }
 
+// Our XA decoder under test (native_fmv.c).
+int xa_decode_sector(const uint8_t* raw, int16_t* out, int16_t hist[2][2], int* freq);
+
+// INDEPENDENT reference XA-ADPCM decode (separate transcription of the CD-XA spec), to diff
+// against our xa_decode_sector. Decodes one 2352B sector -> interleaved S16 stereo (4-bit
+// stereo path). Returns stereo frame count. `h` = per-channel 2-sample history (persists).
+static int xa_ref(const uint8_t* raw, int16_t* out, int h[2][2]) {
+  static const int W[5][2] = {{0,0},{60,0},{115,-52},{98,-55},{122,-60}};
+  int coding = raw[19]; if (coding & 0x10) return -1;       // ref only handles 4-bit
+  int stereo = coding & 1;
+  int16_t L[2016], R[2016]; int nl=0, nr=0;
+  for (int g = 0; g < 18; g++) {
+    const uint8_t* sg = raw + 24 + g*128;
+    for (int u = 0; u < 8; u++) {
+      int pidx = (u & 3) | ((u & 4) << 1);
+      int p = sg[pidx], pc = sg[4 + pidx];
+      int sh = p & 0x0F, fl = p >> 4;
+      int ch = (u & 1) && stereo;          // 0=L,1=R
+      int s1 = h[ch][0], s2 = h[ch][1];
+      int16_t smp[28];
+      for (int i = 0; i < 28; i++) {
+        int nib = sg[16 + i*4 + (u >> 1)];
+        nib = (u & 1) ? (nib & 0xF0) : ((nib << 4) & 0xF0);  // high/low nibble -> hi 4 bits
+        int v = (int16_t)(nib << 8); v >>= sh;
+        v += (s1 * W[fl][0] + s2 * W[fl][1]) >> 6;
+        if (v < -32768) v = -32768; else if (v > 32767) v = 32767;
+        smp[i] = v; s2 = s1; s1 = v;
+      }
+      h[ch][0] = s1; h[ch][1] = s2;
+      if (p != pc) { memset(smp, 0, sizeof smp); /* note: history already advanced, matches ours? */ }
+      if (stereo) { if (ch) for(int i=0;i<28;i++) R[nr++]=smp[i]; else for(int i=0;i<28;i++) L[nl++]=smp[i]; }
+      else        { for(int i=0;i<28;i++){ L[nl++]=smp[i]; R[nr++]=smp[i]; } }
+    }
+  }
+  for (int i = 0; i < nl; i++) { out[2*i]=L[i]; out[2*i+1]=R[i]; }
+  return nl;
+}
+
 int main(int argc, char** argv) {
   if (argc >= 2 && !strcmp(argv[1],"idcttest")) { idct_test(); return 0; }
+  if (argc >= 4 && !strcmp(argv[1],"xacmp")) {     // xacmp <lba> <nsectors>: sound oracle
+    if (!disc_open()) return 1;
+    uint32_t lba=(uint32_t)strtoul(argv[2],0,0), n=(uint32_t)strtoul(argv[3],0,0);
+    uint8_t raw[2352]; int16_t ours[2016*2], ref[2016*2];
+    int16_t ho[2][2]={{0,0},{0,0}}; int hr[2][2]={{0,0},{0,0}};
+    int asec=0, maxdiff=0; long diffs=0, samples=0;
+    for (uint32_t s=0;s<n;s++){ if(!disc_read_raw(lba+s,raw,2352)) break;
+      if (!(raw[18]&0x04)) continue;                // audio sectors only
+      int fq; int no=xa_decode_sector(raw,ours,ho,&fq);
+      int nr=xa_ref(raw,ref,hr); asec++;
+      if (no!=nr){ fprintf(stderr,"sector %u: count mismatch ours=%d ref=%d\n",lba+s,no,nr); continue; }
+      for (int i=0;i<no*2;i++){ int d=ours[i]-ref[i]; if(d<0)d=-d; if(d>maxdiff)maxdiff=d; if(d)diffs++; samples++; }
+    }
+    fprintf(stderr,"xacmp: %d audio sectors, %ld samples, %ld differing, max|diff|=%d\n",
+            asec, samples, diffs, maxdiff);
+    fprintf(stderr, diffs? "MISMATCH (our XA decode diverges from the reference)\n"
+                         : "MATCH (XA decode bit-exact vs independent reference)\n");
+    return diffs?3:0; }
   if (argc >= 5 && !strcmp(argv[1],"framemap")) {
     framemap((uint32_t)strtoul(argv[2],0,0),(uint32_t)strtoul(argv[3],0,0),atoi(argv[4])); return 0; }
+  if (argc >= 4 && !strcmp(argv[1],"strscan")) {     // strscan <lba> <nsectors>: dump CD-XA framing
+    if (!disc_open()) return 1;
+    uint32_t lba=(uint32_t)strtoul(argv[2],0,0), n=(uint32_t)strtoul(argv[3],0,0);
+    uint8_t raw[2352]; int vid=0,aud=0,other=0;
+    for (uint32_t s=0;s<n;s++){ if(!disc_read_raw(lba+s,raw,2352)) break;
+      int mode=raw[15], sm=raw[18], coding=raw[19];
+      uint16_t vmagic = raw[24]|(raw[25]<<8);   // STR video magic in user data
+      const char* kind = (sm&0x04)?"AUDIO":(sm&0x08)?"DATA":(vmagic==0x0160)?"VIDEO":"?";
+      if (sm&0x04) aud++; else if (vmagic==0x0160) vid++; else other++;
+      if (s<24) fprintf(stderr,"  sec %u: mode%d submode=%02x coding=%02x ch=%d vmagic=%04x -> %s\n",
+                        lba+s, mode, sm, coding, raw[17], vmagic, kind);
+    }
+    fprintf(stderr,"totals over %u: video=%d audio=%d other=%d\n", n, vid, aud, other);
+    // decode the coding byte of the first audio sector
+    for (uint32_t s=0;s<n;s++){ if(!disc_read_raw(lba+s,raw,2352)) break;
+      if (raw[18]&0x04){ int c=raw[19];
+        fprintf(stderr,"first AUDIO sec %u: coding=%02x -> %s, %s, %d-bit\n", lba+s, c,
+          (c&1)?"stereo":"mono", (c&4)?"18900Hz":"37800Hz", (c&0x10)?"8":"4"); break; } }
+    return 0; }
   if (argc < 4) { fprintf(stderr, "usage: %s <lba> <size> <frame#> | %s idcttest | %s framemap <lba> <size> <frame#>\n", argv[0], argv[0], argv[0]); return 2; }
   uint32_t lba = (uint32_t)strtoul(argv[1],0,0), size = (uint32_t)strtoul(argv[2],0,0);
   int want = atoi(argv[3]);
