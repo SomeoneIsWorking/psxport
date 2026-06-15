@@ -1,5 +1,32 @@
 # Debug / progress journal
 
+## 2026-06-15 (later 58) — AUDIO TEMPO FIX: per-vblank work was running 1× per logic frame instead of quota× → audio at HALF real-time tempo windowed (user heard the menu-cursor tick too slow). later-54's "tick once" reasoning corrected.
+User (windowed, ground truth): "menu cursor movement audio is playing at wrong tick … should be
+faster tick." Diagnosis confirmed it's a general half-tempo bug, not menu-specific.
+
+### Root cause (corrects later-54)
+`spu_audio_frame()` advances the SPU by exactly ONE 1/60 s field (one vblank). later-54 ticked the
+libsnd sequencer ONCE per `ov_frame_update` to "match" that one field. But **one `ov_frame_update` is
+one LOGIC frame**, which spans `DAT_1f800235` (=quota=2 for Tomba2's 30 fps) vblanks of wall time. So
+the per-vblank work — BOTH the sequencer tick AND the SPU field advance — was running 1× when it must
+run quota× to hold the hardware 60 Hz rate in real time. Result: windowed (paced to quota/60 s per
+frame) the SPU was fed at half rate and the sequencer ticked at 30 Hz → **everything at half tempo**.
+The headless WAV HID this: its timeline is field-count, not wall-clock, so 1 tick : 1 field is still
+60:60 = correct-sounding (why later-54's WAV check passed and the user OK'd that capture).
+
+### Fix (`games_tomba2.c` ov_frame_update)
+Run the per-vblank work `quota` times per logic frame: `for (v=0; v<quota; v++) { seq_tick;
+spu_audio_frame(); }`. Adaptive — a true-60fps scene (quota=1) ticks once. Keeps the tick:field ratio
+(hence BGM tempo) unchanged; fixes real-time playback. PSXPORT_T2_NOSEQTICK still opts out the tick.
+
+### Verified (headless)
+- WAV for 3200 frames is now **106.67 s** (was 53.33 s, later-54) = 2 fields/frame for quota=2 — the
+  SPU now advances at real-time rate. tick:field ratio unchanged ⇒ BGM tempo preserved.
+- **VRAM at f3000 byte-identical** to the pre-change baseline — the change is audio-isolated, no
+  rendering regression. (Sequencer ticked 2× changes only audio RAM/SPU state, not the GPU path.)
+- **Tempo correctness in real-time needs the USER's ears (windowed).** The headless WAV cannot certify
+  wall-clock tempo (that's exactly what masked the bug). User to confirm the cursor tick now sounds right.
+
 ## 2026-06-15 (later 57) — 60fps: OBJECT→PRIMITIVE JOIN validated on the native path (92–99% of gameplay polys tag to an object). The design's #1 open risk is retired.
 Built milestone 2 of the 60fps tier: the object-identity join the matcher is founded on.
 

@@ -50,23 +50,29 @@ void rec_dispatch(R3000*, uint32_t);  // hybrid call: recomp body if emitted, el
 
 static void ov_frame_update(R3000* c) {
   gen_func_800788AC(c);                              // real per-frame state update
-  // Tick the BGM sequencer at the SPU's clock rate. On hardware it ticks once per VBlank IRQ
-  // (60 Hz NTSC); the SPU plays in realtime, so the faithful ratio is ONE tick per SPU field.
-  // spu_audio_frame() below advances the SPU exactly one 1/60 s field per ov_frame_update, so we
-  // tick ONCE here (NOT VBLANK_QUOTA=2 times — that is the game's 30 fps *display* pacing, which
-  // is independent of audio tempo relative to SPU time; ticking twice plays the music 2x fast).
-  // Guard on the sequencer pointer being initialized + a sane code address so we never call
-  // through a null/garbage pointer before SsStart sets up libsnd. Opt out (A/B): PSXPORT_T2_NOSEQTICK.
-  if (!getenv("PSXPORT_T2_NOSEQTICK")) {
-    uint32_t seqfn = mem_r32(SEQ_FUNC_PTR);
-    if ((seqfn & 0x1FFFFFFFu) >= 0x10000u && (seqfn & 0x1FFFFFFFu) < 0x200000u)
-      rec_dispatch(c, SEQ_TICK_WRAPPER);
+  // Per-VBLANK audio work. On hardware the libsnd sequencer ticks once per VBlank IRQ (60 Hz NTSC)
+  // and the SPU plays in realtime. One ov_frame_update is one *logic frame*, which on hardware spans
+  // DAT_1f800235 (=quota) VBlanks (=2 => Tomba2's 30 fps). So the per-vblank work — the sequencer
+  // tick AND the SPU's 1/60 s field advance (spu_audio_frame) — must run `quota` times per logic
+  // frame to stay at the hardware 60 Hz rate in real time. later-54 ran BOTH once (matching each
+  // other but at half real-time); windowed that plays audio at HALF tempo — the user heard the
+  // menu-cursor tick too slow (the headless WAV hid it: its timeline is field-count, not wall-clock,
+  // so 1 tick/1 field there is still 60:60 = correct-sounding). Running both quota× fixes real-time
+  // playback and keeps the WAV's tick:field ratio unchanged (just a longer, more correct duration).
+  // Sequencer guard: pointer initialized + sane code address (never call through null pre-SsStart).
+  // Opt out (A/B): PSXPORT_T2_NOSEQTICK. Adaptive: a true-60fps scene (quota=1) ticks once.
+  int quota = mem_r8(VBLANK_QUOTA); if (quota < 1) quota = 1;
+  uint32_t seqfn = mem_r32(SEQ_FUNC_PTR);
+  int seq_ok = !getenv("PSXPORT_T2_NOSEQTICK")
+               && (seqfn & 0x1FFFFFFFu) >= 0x10000u && (seqfn & 0x1FFFFFFFu) < 0x200000u;
+  for (int v = 0; v < quota; v++) {                  // once per VBlank this logic frame spans
+    if (seq_ok) rec_dispatch(c, SEQ_TICK_WRAPPER);   // libsnd per-vblank tick (user cb + SsSeqCalled)
+    spu_audio_frame();                               // advance SPU one 1/60 s field + feed device
   }
   mem_w16(DISPLAY_COUNTER, mem_r8(VBLANK_QUOTA));    // satisfy the pacing dwell immediately
   wide60_frame_commit();                             // wide60: this frame's geometry is projected
   gpu_present();                                     // one rendered frame per loop iteration
-  spu_audio_frame();                                 // advance + feed audio (sole spu_update driver)
-  gpu_pace_frame();                                  // throttle to ~30fps when windowed (1 call/frame)
+  gpu_pace_frame();                                  // throttle to game pace when windowed (1 call/frame)
 }
 
 // wide60 object tag: the universal per-object cull/LOD dispatcher (a0 = object*, once per logic
