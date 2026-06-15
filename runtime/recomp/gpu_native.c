@@ -128,25 +128,32 @@ static inline uint8_t dith(int v, int x, int y) {
   return (uint8_t)(v < 0 ? 0 : v > 255 ? 255 : v);
 }
 
-// Rasterize a gouraud/textured triangle (barycentric). `tex` selects textured sampling,
-// `semi` requests semi-transparency: untextured prims blend on every pixel; textured prims
-// blend per-texel, gated by the texel's bit15 (PSX semi-transparency-mask bit).
-static void tri(Vtx a, Vtx b, Vtx c, int tex, int shade, int semi) {
-  a.x += s_off_x; a.y += s_off_y; b.x += s_off_x; b.y += s_off_y; c.x += s_off_x; c.y += s_off_y;
-  int minx = clampi((a.x < b.x ? (a.x < c.x ? a.x : c.x) : (b.x < c.x ? b.x : c.x)), s_da_x0, s_da_x1);
-  int maxx = clampi((a.x > b.x ? (a.x > c.x ? a.x : c.x) : (b.x > c.x ? b.x : c.x)), s_da_x0, s_da_x1);
-  int miny = clampi((a.y < b.y ? (a.y < c.y ? a.y : c.y) : (b.y < c.y ? b.y : c.y)), s_da_y0, s_da_y1);
-  int maxy = clampi((a.y > b.y ? (a.y > c.y ? a.y : c.y) : (b.y > c.y ? b.y : c.y)), s_da_y0, s_da_y1);
-  int area = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
-  if (area == 0) return;
-  for (int y = miny; y <= maxy; y++)
-    for (int x = minx; x <= maxx; x++) {
-      int w0 = (b.x - a.x) * (y - a.y) - (b.y - a.y) * (x - a.x);
-      int w1 = (c.x - b.x) * (y - b.y) - (c.y - b.y) * (x - b.x);
-      int w2 = (a.x - c.x) * (y - c.y) - (a.y - c.y) * (x - c.x);
-      if (area > 0 ? (w0 < 0 || w1 < 0 || w2 < 0) : (w0 > 0 || w1 > 0 || w2 > 0)) continue;
-      // barycentric (l1->b weight etc.); use w2,w0,w1 for a,b? recompute clean weights:
-      long aa = (long)((b.x-a.x)*(c.y-a.y)-(b.y-a.y)*(c.x-a.x)); if (aa==0) continue;
+// ---- mednafen-exact triangle coverage (integer scanline edge-walk) ------------------
+// To match the oracle's rasterizer COVERAGE exactly (which pixels a triangle claims), we
+// replicate Beetle/mednafen's gpu_polygon.c edge-walk verbatim, rather than a half-space
+// test. mednafen walks scanlines computing a fixed-point left/right edge per row and fills
+// the span [x_start, x_bound) (left/top inclusive, right/bottom exclusive). A generic
+// top-left half-space rule gets the DIRECTION right but not the exact sub-pixel endpoint
+// rounding (MakePolyXFP/Step), so abutting prims still mis-claim a pixel here and there
+// (journal: text-banner residual — our coverage over-claimed one edge, under-claimed
+// another). Porting the exact integer math removes that variable entirely. These three
+// helpers are mednafen's fixed-point edge primitives (COORD_FBS world, 32-frac fixed point).
+static inline int64_t MakePolyXFP(int x) {
+  return ((int64_t)x << 32) + (((int64_t)1 << 32) - (1 << 11));
+}
+static inline int64_t MakePolyXFPStep(int dx, int dy) {   // dy is always > 0 at our call sites
+  int64_t dx_ex = (int64_t)dx << 32;
+  if (dx_ex < 0) dx_ex -= dy - 1;
+  if (dx_ex > 0) dx_ex += dy - 1;
+  return dx_ex / dy;
+}
+static inline int GetPolyXFP_Int(int64_t xfp) { return (int)(xfp >> 32); }
+
+// Shade + write ONE covered pixel of triangle (a,b,c) at integer screen (x,y). Coverage is
+// decided by the caller (tri()); this only does the per-pixel math, which stays barycentric
+// off the ORIGINAL (unsorted) a,b,c and the doubled signed area `aa` — already validated to
+// match Beetle's per-pixel output (modulation/UV-round/dither). `tex`/`shade`/`semi` as tri().
+static inline void tri_px(Vtx a, Vtx b, Vtx c, int x, int y, int tex, int shade, int semi, int raw, long aa) {
       long l0 = (long)((b.x-x)*(c.y-y)-(b.y-y)*(c.x-x));
       long l1 = (long)((c.x-x)*(a.y-y)-(c.y-y)*(a.x-x));
       long l2 = aa - l0 - l1;
@@ -167,25 +174,32 @@ static void tri(Vtx a, Vtx b, Vtx c, int tex, int shade, int semi) {
         int v = (int)((sv + den/2) / den);
         uint16_t t = sample_tex(u, v);
         pt_u = u; pt_v = v; pt_t = t;
-        if (t == 0) continue;                       // transparent texel
+        if (t == 0) return;                         // transparent texel — skip this pixel
         // PSX: a textured pixel blends only when its bit15 is set AND the prim semi bit is set.
         px_semi = semi && (t & 0x8000);
         r = (t & 31) << 3; g = ((t >> 5) & 31) << 3; bl = ((t >> 10) & 31) << 3;
-        // texture*color modulation (texel * vertexcolor / 128). PSX textured polygons ALWAYS
-        // modulate the texel by the vertex color, INTERPOLATED per pixel across the face (the
-        // command color for flat-shaded prims, where all vertices carry it). The modulation color
-        // must therefore be the barycentric-interpolated (cr,cg,cb), NOT vertex A's color held flat
-        // — using v0 flat collapses a gouraud gradient (e.g. a soft shadow quad: dark center vertex,
-        // bright edges) into a uniform block (journal later 44: black-wedge shadow). PSX hardware
-        // SATURATES the product to 0xFF; doing it in uint8_t wraps mod 256, turning a bright grass
-        // texel red, so compute wide and clamp (the grass red-block bug, journal later 42).
-        int cr = (int)((l0*a.r + l1*b.r + l2*c.r) / aa);
-        int cg = (int)((l0*a.g + l1*b.g + l2*c.g) / aa);
-        int cb = (int)((l0*a.b + l1*b.b + l2*c.b) / aa);
-        pt_cr = cr; pt_cg = cg; pt_cb = cb;
-        int rr = r * cr / 128, gg = g * cg / 128, bb = bl * cb / 128;
-        r = rr > 255 ? 255 : rr; g = gg > 255 ? 255 : gg; bl = bb > 255 ? 255 : bb;
-        dithered = 1;
+        // RAW TEXTURE (PSX poly cmd bit0 = texture-blend-disable): output the texel verbatim — NO
+        // modulation by vertex color and NO dither. Beetle's TM0 template path does exactly this
+        // (journal: the op-2D banner-board residual — ours modulated raw texel 2E12 by the command
+        // color (168,72,31) → near-black, while Beetle left it raw (18,16,11)). Same bit0 gating
+        // the sprite path already honors (commit fb0c228); the polygon path was missing it.
+        if (!raw) {
+          // texture*color modulation (texel * vertexcolor / 128). PSX textured polygons modulate
+          // the texel by the vertex color, INTERPOLATED per pixel across the face (the command color
+          // for flat-shaded prims, where all vertices carry it). The modulation color must be the
+          // barycentric-interpolated (cr,cg,cb), NOT vertex A's color held flat — using v0 flat
+          // collapses a gouraud gradient (a soft shadow quad: dark center vertex, bright edges) into
+          // a uniform block (journal later 44: black-wedge shadow). PSX hardware SATURATES the
+          // product to 0xFF; doing it in uint8_t wraps mod 256, turning a bright grass texel red, so
+          // compute wide and clamp (the grass red-block bug, journal later 42).
+          int cr = (int)((l0*a.r + l1*b.r + l2*c.r) / aa);
+          int cg = (int)((l0*a.g + l1*b.g + l2*c.g) / aa);
+          int cb = (int)((l0*a.b + l1*b.b + l2*c.b) / aa);
+          pt_cr = cr; pt_cg = cg; pt_cb = cb;
+          int rr = r * cr / 128, gg = g * cg / 128, bb = bl * cb / 128;
+          r = rr > 255 ? 255 : rr; g = gg > 255 ? 255 : gg; bl = bb > 255 ? 255 : bb;
+          dithered = 1;
+        } else { pt_cr = pt_cg = pt_cb = 128; }   // raw: undithered texel, modulation color = neutral
       } else if (shade) {
         r = (uint8_t)((l0*a.r + l1*b.r + l2*c.r) / aa);
         g = (uint8_t)((l0*a.g + l1*b.g + l2*c.g) / aa);
@@ -219,7 +233,84 @@ static void tri(Vtx a, Vtx b, Vtx c, int tex, int shade, int semi) {
         }
       }
       put_px_b(x, y, r, g, bl, px_semi);
+}
+
+// Rasterize a gouraud/textured triangle. `tex` selects textured sampling, `semi` requests
+// semi-transparency. Coverage = mednafen's exact integer edge-walk (so it matches the oracle
+// pixel-for-pixel); per-pixel shading = tri_px (barycentric off the original a,b,c).
+static void tri(Vtx a, Vtx b, Vtx c, int tex, int shade, int semi, int raw) {
+  a.x += s_off_x; a.y += s_off_y; b.x += s_off_x; b.y += s_off_y; c.x += s_off_x; c.y += s_off_y;
+  long aa = (long)((b.x-a.x)*(c.y-a.y)-(b.y-a.y)*(c.x-a.x));
+  if (aa == 0) return;                          // degenerate (zero area)
+
+  // --- Exact port of mednafen's DEFINE_DrawTriangle coverage (gpu_polygon.c). Operates on a
+  // y-sorted copy of the vertices; shading (tri_px) still uses the original a,b,c order. ---
+  int vx[3] = { a.x, b.x, c.x }, vy[3] = { a.y, b.y, c.y };
+  unsigned cvtemp;                               // "core vertex" select (rasterisation order)
+  if (vx[1] <= vx[0]) cvtemp = (vx[2] <= vx[1]) ? (1u << 2) : (1u << 1);
+  else if (vx[2] < vx[0]) cvtemp = (1u << 2);
+  else cvtemp = (1u << 0);
+  #define VSWAP(i,j) do { int t; t=vx[i];vx[i]=vx[j];vx[j]=t; t=vy[i];vy[i]=vy[j];vy[j]=t; } while (0)
+  if (vy[2] < vy[1]) { VSWAP(2,1); cvtemp = ((cvtemp>>1)&0x2)|((cvtemp<<1)&0x4)|(cvtemp&0x1); }
+  if (vy[1] < vy[0]) { VSWAP(1,0); cvtemp = ((cvtemp>>1)&0x1)|((cvtemp<<1)&0x2)|(cvtemp&0x4); }
+  if (vy[2] < vy[1]) { VSWAP(2,1); cvtemp = ((cvtemp>>1)&0x2)|((cvtemp<<1)&0x4)|(cvtemp&0x1); }
+  #undef VSWAP
+  unsigned core_vertex = cvtemp >> 1;
+  if (vy[0] == vy[2]) return;                    // 0-height after sort
+
+  int64_t base_coord = MakePolyXFP(vx[0]);
+  int64_t base_step  = MakePolyXFPStep(vx[2]-vx[0], vy[2]-vy[0]);
+  int64_t bound_coord_us, bound_coord_ls;
+  int right_facing;
+  if (vy[1] == vy[0]) { bound_coord_us = 0; right_facing = (vx[1] > vx[0]); }
+  else { bound_coord_us = MakePolyXFPStep(vx[1]-vx[0], vy[1]-vy[0]); right_facing = (bound_coord_us > base_step); }
+  bound_coord_ls = (vy[2] == vy[1]) ? 0 : MakePolyXFPStep(vx[2]-vx[1], vy[2]-vy[1]);
+
+  unsigned vo = core_vertex ? 1 : 0;
+  unsigned vp = (core_vertex == 2) ? 3 : 0;
+  struct { int64_t x_coord[2], x_step[2]; int y_coord, y_bound, dec_mode; } tp[2];
+  { int k = vo;
+    tp[k].y_coord = vy[0 ^ vo]; tp[k].y_bound = vy[1 ^ vo];
+    tp[k].x_coord[right_facing] = MakePolyXFP(vx[0 ^ vo]);
+    tp[k].x_step[right_facing] = bound_coord_us;
+    tp[k].x_coord[!right_facing] = base_coord + (int64_t)(vy[vo]-vy[0]) * base_step;
+    tp[k].x_step[!right_facing] = base_step;
+    tp[k].dec_mode = (vo != 0); }
+  { int k = vo ^ 1;
+    tp[k].y_coord = vy[1 ^ vp]; tp[k].y_bound = vy[2 ^ vp];
+    tp[k].x_coord[right_facing] = MakePolyXFP(vx[1 ^ vp]);
+    tp[k].x_step[right_facing] = bound_coord_ls;
+    tp[k].x_coord[!right_facing] = base_coord + (int64_t)(vy[1 ^ vp]-vy[0]) * base_step;
+    tp[k].x_step[!right_facing] = base_step;
+    tp[k].dec_mode = (vp != 0); }
+
+  for (int i = 0; i < 2; i++) {
+    int yi = tp[i].y_coord, yb = tp[i].y_bound;
+    int64_t lc = tp[i].x_coord[0], ls = tp[i].x_step[0];
+    int64_t rc = tp[i].x_coord[1], rs = tp[i].x_step[1];
+    if (tp[i].dec_mode) {
+      while (yi > yb) {
+        yi--; lc -= ls; rc -= rs;
+        if (yi < s_da_y0) break;
+        if (yi > s_da_y1) continue;
+        int xs = GetPolyXFP_Int(lc), xb = GetPolyXFP_Int(rc);
+        if (xs < s_da_x0) xs = s_da_x0;
+        if (xb > s_da_x1 + 1) xb = s_da_x1 + 1;
+        for (int x = xs; x < xb; x++) tri_px(a, b, c, x, yi, tex, shade, semi, raw, aa);
+      }
+    } else {
+      while (yi < yb) {
+        if (yi > s_da_y1) break;
+        if (yi >= s_da_y0) {
+          int xs = GetPolyXFP_Int(lc), xb = GetPolyXFP_Int(rc);
+          if (xs < s_da_x0) xs = s_da_x0;
+          if (xb > s_da_x1 + 1) xb = s_da_x1 + 1;
+          for (int x = xs; x < xb; x++) tri_px(a, b, c, x, yi, tex, shade, semi, raw, aa);
+        }
+        yi++; lc += ls; rc += rs;
+      }
     }
+  }
 }
 
 // ---- GP0 command FIFO ---------------------------------------------------------------
@@ -290,6 +381,7 @@ static void gp0_exec(void) {
   uint8_t op = c >> 24;
   if (op >= 0x20 && op <= 0x3F) {            // polygon
     int gouraud = op & 0x10, quad = op & 0x08, textured = op & 0x04, semi = (op & 0x02) ? 1 : 0;
+    int raw = textured && (op & 0x01);      // bit0 = texture-blend-disable (raw texel, no modulation)
     int nv = quad ? 4 : 3;
     Vtx v[4]; int idx = 1;
     for (int i = 0; i < nv; i++) {
@@ -339,8 +431,8 @@ static void gp0_exec(void) {
     }
     prov_begin(op, textured ? 1 : 0, semi, v[0].r, v[0].g, v[0].b,
                v[0].x + s_off_x, v[0].y + s_off_y, v[0].u, v[0].v);
-    tri(v[0], v[1], v[2], textured, shade, semi);
-    if (quad) tri(v[1], v[2], v[3], textured, shade, semi);
+    tri(v[0], v[1], v[2], textured, shade, semi, raw);
+    if (quad) tri(v[1], v[2], v[3], textured, shade, semi, raw);
     s_prims++;
   } else if (op >= 0x60 && op <= 0x7F) {     // rectangle / sprite
     int textured = op & 0x04, semi = (op & 0x02) ? 1 : 0, size = (op >> 3) & 3;

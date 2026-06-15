@@ -1,5 +1,53 @@
 # Debug / progress journal
 
+## 2026-06-15 (later 51) — rasterizer fidelity: exact mednafen coverage + raw-texture poly bit → 2.57%→0.29% (a grass frame to 0.000%)
+Continued the oracle GP0 differ chase (handoff scratch/handoff.md). Drove the GAME back-buffer
+real-divergence (|Δ|>3, dither-filtered, region 0,256,320,240 on the f3000 banner frame) from the
+later-45 residual **2.57% → 0.29%**, and a fresh live-captured grass frame to **0.000% (pixel-identical
+to Beetle)**. Two root causes, both found via the differ + per-pixel PIXTRACE on both renderers, never
+eyeballing:
+
+### 1. Triangle coverage — ported mednafen's EXACT integer scanline edge-walk (the #1 handoff lead)
+The absdiff was dominated by the "Go to the Burning House!" text-banner letter edges. PIXTRACE @64,308
+(both renderers): our dark banner-board prim covered the pixel and overwrote the white letter; Beetle's
+same prim stopped one pixel short. Our `tri()` used a half-space test keeping every pixel with all
+edge-functions `wi>=0` — i.e. RIGHT/BOTTOM edges inclusive — so prims were one pixel "fat" and a later
+prim mis-claimed a shared edge. A generic top-left fill rule got the direction right (2.57%→2.11%) but
+not mednafen's exact sub-pixel endpoint rounding, so it over-fixed some edges and under-fixed others
+(PIXTRACE @104,299 then showed ours MISSING a white pixel Beetle drew). Real fix: replicate Beetle/
+mednafen's `DEFINE_DrawTriangle` verbatim — y-sort + core-vertex select, `MakePolyXFP`/`MakePolyXFPStep`
+fixed-point edges, per-scanline span `[GetPolyXFP_Int(lc), GetPolyXFP_Int(rc))` (left/top inclusive,
+right/bottom exclusive). Coverage now matches the oracle pixel-for-pixel. Kept our (already oracle-
+validated) barycentric per-pixel shading by extracting it into `tri_px()` and driving it from the
+ported walk (coverage and shading decoupled). **2.57% → 1.06%.**
+
+### 2. Raw-texture polygons (GP0 cmd bit0 = texture-blend-disable) — the polygon path ignored it
+The remaining residual had a systematic spike: 321 px at exactly |Δ|=9, all where Beetle output a
+constant raw texel (e.g. 2E12 = (18,16,11)) while ours output a darker, dithered value. POLYDUMP @105,304
+identified the prim: **op 0x2D** (textured quad, bit0 set). For polygons, bit0=1 means RAW TEXTURE —
+output the texel verbatim, NO modulation by vertex/command color and NO dither. Beetle's TM0 template
+does this; our polygon path always modulated (texel × color / 128) + dithered, so a raw texel 2E12 got
+multiplied by the command color (168,72,31) → near-black. This is the SAME bit0 gating the sprite path
+already honored (commit fb0c228); the polygon path was missing it. Fix (gpu_native.c): pass a `raw` flag
+(`textured && (op&1)`) into `tri`/`tri_px`; when set, skip modulation and dither. **1.06% → 0.29%.**
+
+### Residual = the affine/edge model floor (NOT chased further — diffuse, sub-pixel)
+The leftover 0.29% (220 px on the banner frame) is diffuse single-pixel speckle, no structure. PIXTRACE
+spot-checks: @8,359 the SAME prim samples a different texel (ours 1A12 vs Beetle 53DE) — affine-UV
+sub-texel difference, our per-pixel barycentric UV vs Beetle's incremental fixed-point DDA can land on
+adjacent texels at scattered pixels; @288,350 a 4th prim covers a boundary pixel in Beetle but not ours
+(residual edge case). Eliminating these would require porting Beetle's per-pixel DDA interpolation
+(CalcIDeltas + i_group stepping) wholesale for shading too — a large change for ~0.2%; left as the model
+limit. The fresh live grass frame (no banner) is already 0.000%.
+
+VERIFIED (oracle ground truth, headless): differ on f3000 banner frame 2.57%→0.29%; fresh live-captured
+f3000 grass frame ours-vs-Beetle = **0.000% IDENTICAL**. Live port (scratch/bin/tomba2_port via run.sh)
+rebuilt, ran headless to f3200, reaches GAME and renders — no crash/regression (the diff covers the whole
+back buffer: grass/sprites/shadow all unregressed, all improved). Note: the live port is built by run.sh
+(compiles runtime/recomp/*.c incl. gpu_native.c with the recompiled shards), NOT `make -C runtime` (that
+Makefile's OBJS omits recomp/; it's a stale/secondary path). The differ's replay_ours uses gpu_native.c
+standalone via tools/gpu_differ/build.sh.
+
 ## 2026-06-15 (later 50) — FIXED the menu-load flicker: only flip the double buffer when a frame drew
 User: "flicker is not acceptable." Tooling (GPU_DUMP per-frame luma + GPU_LOG prim counts) pinned it:
 during the ~17-frame menu-load gap after the FMVs the game produces NO draw prims (it's streaming in
