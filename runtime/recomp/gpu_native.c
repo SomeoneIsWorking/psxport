@@ -255,10 +255,11 @@ static void gp0_exec(void) {
         }
         static int n = 0;
         if (hit && n++ < 2000)
-          fprintf(stderr, "[polydump] f%d op=%02X tex=%d gou=%d clut=(%d,%d) tp=(%d,%d) col=(%d,%d,%d) "
-                  "uv0=(%d,%d) V[(%d,%d)(%d,%d)(%d,%d)(%d,%d)] off=(%d,%d)\n",
-                  s_frame, op, textured?1:0, gouraud?1:0, s_clut_x, s_clut_y, s_tp_x, s_tp_y,
-                  v[0].r, v[0].g, v[0].b, v[0].u, v[0].v,
+          fprintf(stderr, "[polydump] f%d node=%08X op=%02X tex=%d gou=%d clut=(%d,%d) tp=(%d,%d) "
+                  "cols[(%d,%d,%d)(%d,%d,%d)(%d,%d,%d)(%d,%d,%d)] "
+                  "V[(%d,%d)(%d,%d)(%d,%d)(%d,%d)] off=(%d,%d)\n",
+                  s_frame, s_cur_node, op, textured?1:0, gouraud?1:0, s_clut_x, s_clut_y, s_tp_x, s_tp_y,
+                  v[0].r,v[0].g,v[0].b, v[1].r,v[1].g,v[1].b, v[2].r,v[2].g,v[2].b, v[3].r,v[3].g,v[3].b,
                   v[0].x,v[0].y, v[1].x,v[1].y, v[2].x,v[2].y, v[3].x,v[3].y, s_off_x, s_off_y);
       } }
     if (s_reddbg && textured && s_cw_x >= 0 && s_clut_x == s_cw_x && s_clut_y == s_cw_y) {
@@ -283,6 +284,20 @@ static void gp0_exec(void) {
     int w, h;
     if (size == 0) { uint32_t wh = s_fifo[idx++]; w = wh & 0x3FF; h = (wh >> 16) & 0x1FF; }
     else { w = h = (size == 1) ? 1 : (size == 2) ? 8 : 16; }
+    // PSXPORT_POLYDUMP (+POLYAT): also log sprites/rects, so the garbage-block source can be a sprite.
+    { static int pd = -2, pax = -1, pay = -1;
+      if (pd == -2) { const char* e = getenv("PSXPORT_POLYDUMP"); pd = e ? atoi(e) : -1;
+        const char* pa = getenv("PSXPORT_POLYAT"); if (pa) sscanf(pa, "%d,%d", &pax, &pay); }
+      if (pd >= 0 && s_frame == pd) {
+        int X=x+s_off_x, Y=y+s_off_y;
+        int hit = (pax < 0) || (pax>=X && pax<X+w && pay>=Y && pay<Y+h);
+        static int n = 0;
+        if (hit && n++ < 2000)
+          fprintf(stderr, "[polydump] f%d node=%08X SPRITE op=%02X tex=%d semi=%d clut=(%d,%d) tp=(%d,%d) "
+                  "col=(%d,%d,%d) at=(%d,%d) %dx%d uv0=(%d,%d) off=(%d,%d)\n",
+                  s_frame, s_cur_node, op, textured?1:0, semi, s_clut_x, s_clut_y, s_tp_x, s_tp_y,
+                  cr, cg, cb, x, y, w, h, u0, v0, s_off_x, s_off_y);
+      } }
     // Clip the iteration to the drawing area up front: off-screen sprites otherwise spin
     // w*h sample_tex calls for pixels put_px_b would discard (an off-screen/garbage sprite
     // could burn millions of iterations and wedge the frame).

@@ -1,5 +1,38 @@
 # Debug / progress journal
 
+## 2026-06-15 (later 41b) — narrowing the real grass garbage (user confirmed both our frames are wrong)
+Follow-up to later-41 after the user confirmed the DEMO frame (f02790) is ALSO wrong (only the oracle
+is clean) — i.e. the bug is in our grass-level rendering generally, present in both DEMO attract and
+GAME. Narrowed but NOT yet root-caused. Honest state:
+- **The garbage = tiny static red/garish specks amid correct green grass**, e.g. VRAM pixel 0x9078 =
+  (192,24,32) red at a fixed screen spot, with green grass (clut 816,224 = all greens, byte-identical
+  to oracle) immediately around it. Clusters of these specks read as "scattered blocks". The dark
+  faceting is the same thing at the dark end.
+- **Not wrong vertex colors / not wrong terrain VRAM.** The terrain prims covering a red speck are
+  gouraud-textured with NORMAL gray-blue vertex colors and a pure-green palette (no red anywhere); the
+  terrain texpages + cluts are byte-identical to the oracle. So the red is NOT produced by the grass
+  prim. (The all-red (240,0,0) prims I first found at DEMO (121,96) were **Tomba's own model**, not
+  garbage — don't chase those.)
+- **There IS a real VRAM divergence, but it's minor and the wrong color:** a ~355-sprite layer (16x16,
+  op 0x7C, clut (1008,250-255), tp (896,0)) is drawn every frame; its palettes (1008,253/254/255)
+  differ from the oracle by 6-15 entries — but only as **subtle cyan-shade shifts** (e.g.
+  (200,240,248) vs (160,240,248)), all cyan/white, never red. So that divergence is real but does NOT
+  explain the red specks.
+- **Leading hypothesis (unconfirmed): the red specks are STALE framebuffer VRAM revealed through gaps
+  in our terrain coverage.** A red speck sits where no opaque terrain triangle lands (bbox overlaps but
+  the triangle misses), so an earlier draw shows through; the oracle either fully covers it or clears
+  the buffer and we don't. NOT yet proven — the double-buffer (GAME prims alternate off=(0,0)/(0,256);
+  the displayed front buffer was drawn the prior native frame) confounded every pixel→prim correlation
+  this session, so each "red pixel → covering prim" lookup dead-ended on a non-red palette.
+- **NEXT (do this fresh, systematically):** (1) settle the offset/buffer mapping first (dump the BACK
+  buffer that frame N draws at off=(0,256) → VRAM y+256, and only correlate within that buffer). (2)
+  Decide stale-vs-drawn with a sentinel: fill VRAM with a unique color at boot — if the specks take the
+  sentinel they're uncovered/stale (fix = framebuffer clear / terrain coverage), if they stay they're
+  actively drawn (find the prim, incl. lines op 0x40-0x5F and the 0x7C sprite layer). (3) Add a sprite
+  hook to the oracle (wide60rt currently hooks only polys) for a true prim-by-prim our-vs-oracle diff.
+- **Tool added:** PSXPORT_POLYDUMP/POLYAT now also covers the sprite/rect path (GP0 0x60-0x7F), logs
+  the OT node addr, and logs all 4 vertex colors for polys.
+
 ## 2026-06-15 (later 41) — later-40 FALSIFIED: the clut-(880,507) quad is the DEMO intro subtitle, not the level bug
 Picked up the handoff (kill the "spurious title-overlay quad"). Traced the clut-(880,507) op-2D
 quad end to end and **falsified later-40's root cause.** The real on-grass garbage in the playable
