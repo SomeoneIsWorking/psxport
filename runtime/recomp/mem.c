@@ -254,7 +254,11 @@ void mem_swr(uint32_t a, uint32_t v) {
   const uint32_t base = a & ~3u;
   const uint32_t sh = (a & 3) * 8;
   const uint32_t aligned = mem_r32(base);
-  const uint32_t keep = sh ? (0x00FFFFFFu >> (32 - sh)) : 0;
+  // keep = the low `sh` bits (bytes BELOW the store address, which SWR must preserve).
+  // Was 0x00FFFFFFu (wrong): that zeroed the preserved low byte(s) on every unaligned SWR,
+  // corrupting unaligned word stores — i.e. the SWL/SWR memcpy/decompression idiom — which
+  // garbled gameplay assets wholesale (journal later-59). Correct mask is 0xFFFFFFFF>>(32-sh).
+  const uint32_t keep = sh ? (0xFFFFFFFFu >> (32 - sh)) : 0;
   mem_w32(base, (aligned & keep) | (v << sh));
 }
 

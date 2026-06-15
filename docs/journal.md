@@ -1,5 +1,38 @@
 # Debug / progress journal
 
+## 2026-06-15 (later 60) — corruption RULED-OUT list grows: NOT unaligned-SWR (latent SWR bug found+fixed but never hit), NOT CD-read, NOT XA-interleave. Corruption is in the gameplay texture UPLOAD/VRAM-content path; data loads correctly.
+Continued from later-59. The corruption is in the VRAM texture atlas content (gpu_differ replays from
+the trace's INITIAL VRAM and both renderers reproduce the garbage ⇒ it's baked into VRAM by prior
+uploads, not per-frame rasterization).
+
+### Found + fixed a REAL but LATENT bug: `mem_swr` preserve-mask (mem.c)
+`mem_swr`'s keep-mask was `0x00FFFFFFu >> (32-sh)` — wrong; it zeroed the low bytes SWR must PRESERVE
+on every unaligned store (verified vs canonical LE tables, `scratch/bin/uatest`: k=1/2/3 gave
+e.g. `ADBEEF00` vs correct `ADBEEF88`). Fixed to `0xFFFFFFFFu >> (32-sh)`. LWL/LWR/SWL verified
+CORRECT. BUT: **instrumenting (PSXPORT_UASWR_DBG) shows unaligned SWR is hit ZERO times in the demo**,
+and post-fix demo frames are **byte-identical** to pre-fix (`cmp` f3345/f3386/f5000/f4600) — so this
+fix does NOT change the corruption. Kept anyway (real correctness fix; a future unaligned SWR would
+corrupt). NOT the cause.
+
+### Ruled out (do not re-chase)
+- **Rasterizer** (later-59: gpu_differ front-buffer IDENTICAL to Beetle on f3360+f5000).
+- **CD data read**: reads happen (big level loads 188K/333K/448K → staging 0x8018A000/82000/58000;
+  single-sector stream → 0x800EF478). Sectors at the gameplay LBAs are all **Mode2 Form1 DATA**
+  (submode 0x08), consecutive — so consecutive-sector reading is correct; loaded bytes = the disc
+  bytes the oracle also reads. Tool: `scratch/bin/secprobe` (links disc.c, prints submode per LBA).
+- **XA interleaving** of the texture region: falsified (no Form2 audio sectors interleaved there).
+- **Unaligned SWR**: never hit (above).
+Staging RAM at a gameplay frame looks like real data (89–94% nonzero, high uniqueness) — but proving
+it correct needs a SAME-SCENE compare vs the oracle (level data is static once loaded, so that
+compare is alignment-insensitive — the decisive next test).
+
+### Next (root cause — still open)
+Compare the **static texture-staging RAM** (0x80158000/0x8018A000/0x80182000) and/or the GP0 0xA0
+upload payloads between recomp and oracle **at the same loaded scene** (level data is loaded once and
+static ⇒ no frame alignment needed). If RAM matches → corruption is in the upload/CLUT computation;
+if RAM differs → recomp corrupts it post-load (decompression/processing). The clean 2D screens vs
+corrupt 3D-gameplay split still implicates the interpreted overlay (DEMO.BIN/GAME.BIN) gameplay path.
+
 ## 2026-06-15 (later 59) — GAMEPLAY CORRUPTION ISOLATED: it is NOT the rasterizer — the recompiled CPU/HLE produces a PROGRESSIVELY-CORRUPT GP0 stream (bad RAM-sourced texture/CLUT data). Beetle reproduces our garbage byte-near-identically; the oracle running the real game is clean.
 User (windowed, ground truth): in-game graphics "grow more and more garbage as you play" — garbage
 blocks, missing sprites, melted geometry; fishing-rod teleports in the non-FMV intro cutscene. Also
