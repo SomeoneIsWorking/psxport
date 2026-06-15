@@ -1,5 +1,25 @@
 # Debug / progress journal
 
+## 2026-06-15 (later 47) — WIRED the intro FMVs: SCEA→Woopee→OP→Menu now plays
+Next intro issue (user): FMVs didn't play — boot went SCEA→Menu instead of SCEA→Woopee→OP→Menu.
+Tooling diagnosis: a headless stage-log run showed "time out in strNext()" in the DEMO stage — the
+game's own STR streaming (StrPlayer/strNext) times out under our runtime (we don't feed CD-streamed
+FMV sectors), so the movies were skipped to a black gap. The self-contained native FMV player
+(native_fmv.c, native_fmv_play) was fully implemented + decode-verified but had ZERO callers — never
+wired into the boot flow.
+- **Fix (native_boot.c native_boot_run):** before crt0, play `MOVIE/LOGO.STR` (Whoopee Camp logo)
+  then `MOVIE/OP.STR` (opening) via native_fmv_play(). Gated by PSXPORT_NO_FMV (set it for headless
+  gameplay/differ tests — FMVs otherwise add frames and shift the global gpu-frame counter).
+- **Verified via headless GPU_DUMP + analysis (not eyeballing):** LOGO decodes to the pink/yellow
+  "Whoopee Camp" logo on white (first ~40 frames are its white fade-in, then content); OP decodes to
+  coherent Tomba video; after the FMVs the game boots START→DEMO and renders the TITLE MENU ("TOMBA!2
+  THE EVIL SWINE RETURN", New Game/Load Game). Full chain SCEA→Woopee→OP→Menu confirmed
+  (scratch/screenshots/fmv_view_logo.png, fmv_view_op.png, seq_menu.png).
+- GOTCHA: native_fmv_play paces to audio by default; PSXPORT_FMV_FPS=0 = uncapped (headless dumps);
+  PSXPORT_FMV_MAXFRAMES=N caps frames (fast checks). Movies are Start-skippable.
+- Residual (not chased): the DEMO attract still logs "time out in strNext()" (its own in-attract
+  stream); harmless — the game proceeds to the menu. Separate from the intro FMVs.
+
 ## 2026-06-15 (later 46) — FIXED the SCEA screen: clipped "Presents" + unnatural blink
 User flagged the intro sequence is wrong (SCEA→Woopee→OP→Menu; ours does SCEA→Menu, FMVs skipped)
 and to fix issues IN ORDER, comparing via TOOLING vs the oracle (never eyeballing). First issue =

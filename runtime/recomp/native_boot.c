@@ -263,6 +263,18 @@ static void ov_game_main(R3000* c) {
 // crt0; crt0's call to FUN_80050b08 lands in ov_game_main.
 void native_boot_run(R3000* c) {
   void func_800896E0(R3000*);
+  // Intro FMVs: the real boot is SCEA (stub) -> Whoopee logo -> opening movie -> title/menu. The
+  // game's own STR streaming (strNext) TIMES OUT under our runtime (we don't feed CD-streamed FMV
+  // sectors to its StrPlayer — see "time out in strNext()" in the DEMO stage), so the movies are
+  // skipped to a black gap. Play them here with our self-contained native FMV player (native_fmv.c)
+  // before booting MAIN, restoring SCEA->Woopee->OP->menu. PSXPORT_NO_FMV skips them (headless
+  // gameplay tests that need to reach GAME fast / with stable frame numbers).
+  int native_fmv_play(const char*);
+  if (!getenv("PSXPORT_NO_FMV")) {
+    fprintf(stderr, "[native_boot] playing intro FMVs (Whoopee logo, opening)\n");
+    native_fmv_play("MOVIE/LOGO.STR");
+    native_fmv_play("MOVIE/OP.STR");
+  }
   rec_set_override(0x80050b08u, ov_game_main);
   fprintf(stderr, "[native_boot] entering crt0 func_800896E0\n");
   func_800896E0(c);
