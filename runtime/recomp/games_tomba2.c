@@ -103,8 +103,7 @@ static void ov_object_cull(R3000* c) {
 //   src (ctrl byte 0 / len 0 terminates).  mode!=0 -> back-ref copy `len` bytes from dest+offset
 //   [mode], BYTE-granular so overlapping copies replicate (RLE), exactly as the original loop.
 #define LZ_OFFTAB_BASE 0x800153C8u
-static void ov_lz_decompress(R3000* c) {
-  const uint32_t desc = c->r[4], dst = c->r[5], src0 = c->r[6], srclen = c->r[7];
+static uint32_t lz_decompress(uint32_t desc, uint32_t dst, uint32_t src0, uint32_t srclen) {
   const uint32_t src_end = src0 + srclen;
   const int32_t stride = (int16_t)mem_r16(desc + 4);
   int32_t offtab[8];
@@ -125,13 +124,47 @@ static void ov_lz_decompress(R3000* c) {
       for (uint32_t k = 0; k < len; k++) mem_w8(out++, mem_r8(src++));
     }
   }
-  c->r[2] = out - dst;                                // v0 = total bytes written
+  return out - dst;                                   // total bytes written
+}
+static void ov_lz_decompress(R3000* c) {
+  c->r[2] = lz_decompress(c->r[4], c->r[5], c->r[6], c->r[7]);
+}
+
+// PC-owned texture-group unpacker — replaces recompiled FUN_80044E84 (0x80044E84). Verified by
+// disassembly: a0 = descriptor table base, a1 = scratch-end anchor (0x1FD000). Layout: [count:4]
+// then [pad:4] then `count` 12-byte entries each { stride:2(@+4 from entry head), field:2(@+6),
+// srclen:4(@+8) }; source data starts 0x800 after the table base and advances by srclen per entry.
+// For each entry: dst = anchor - 2*stride*field (outputs stack ending at the anchor — transient
+// scratch), decompress the entry's image there, then upload it (FUN_80081218) and run the post
+// step (FUN_80080f6c). Non-gameplay (asset unpack) → PC-owned, calling the native decompressor
+// directly; the two gfx-library sub-calls still route through the recomp/dispatch for now.
+void rec_dispatch(R3000*, uint32_t);
+static void ov_unpack_group(R3000* c) {
+  const uint32_t table = c->r[4], anchor = c->r[5];
+  const int32_t count = (int32_t)mem_r32(table);
+  uint32_t entry = table + 4;            // first 12-byte descriptor entry
+  uint32_t src = table + 0x800;          // packed source data follows the table
+  for (int32_t i = 0; i < count; i++) {
+    const uint32_t desc   = entry;
+    const int32_t  stride = (int16_t)mem_r16(desc + 4);
+    const int32_t  field  = (int16_t)mem_r16(desc + 6);
+    const uint32_t srclen = mem_r32(desc + 8);
+    const uint32_t dst    = anchor - (uint32_t)(2 * stride * field);
+    lz_decompress(desc, dst, src, srclen);            // native decompress into transient scratch
+    src   += srclen;
+    entry += 12;
+    c->r[4] = desc; c->r[5] = dst; rec_dispatch(c, 0x80081218u);  // FUN_80081218(desc, dst): upload
+    c->r[4] = 0;                         rec_dispatch(c, 0x80080F6Cu);  // FUN_80080f6c(0): post step
+  }
 }
 
 void games_tomba2_init(void) {
   rec_set_override(0x800788ACu, ov_frame_update);
-  // PC-owned decompressor (A/B: PSXPORT_LZ_RECOMP=1 keeps the recomp body for comparison).
-  if (!getenv("PSXPORT_LZ_RECOMP")) rec_set_override(0x80044D8Cu, ov_lz_decompress);
+  // PC-owned asset codecs (A/B: PSXPORT_LZ_RECOMP=1 keeps the recomp bodies for comparison).
+  if (!getenv("PSXPORT_LZ_RECOMP")) {
+    rec_set_override(0x80044D8Cu, ov_lz_decompress);  // LZ image decompressor
+    rec_set_override(0x80044E84u, ov_unpack_group);   // texture-group unpacker (drives the above)
+  }
   wide60_init();
   if (g_wide60_on)                                 // object-tag dispatcher only when capturing
     rec_set_override(0x8007712Cu, ov_object_cull);

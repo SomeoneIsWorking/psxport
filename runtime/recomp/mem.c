@@ -25,11 +25,13 @@ static void cw_check(uint32_t a, uint32_t v, int width) {
   }
   extern volatile uint32_t g_interp_pc;
   uint32_t p = a & 0x1FFFFFFF;
-  if (s_cw_hi && p >= s_cw_lo && p < s_cw_hi && s_cw_n < 12) {
+  if (s_cw_hi && p >= s_cw_lo && p < s_cw_hi) {
     s_cw_n++;
-    fprintf(stderr, "[cw] store w%d [%08X]=%08X  interp_pc=%08X\n", width, 0x80000000u|p, v, g_interp_pc);
-    void* bt[32]; int n = backtrace(bt, 32); backtrace_symbols_fd(bt, n, 2);
-    fprintf(stderr, "----\n");
+    if (getenv("PSXPORT_CW_BT") && s_cw_n <= 24) {
+      fprintf(stderr, "[cw] #%d store w%d [%08X]=%08X  interp_pc=%08X\n", s_cw_n, width, 0x80000000u|p, v, g_interp_pc);
+      void* bt[32]; int n = backtrace(bt, 32); backtrace_symbols_fd(bt, n, 2);
+      fprintf(stderr, "----\n");
+    }
   }
 }
 

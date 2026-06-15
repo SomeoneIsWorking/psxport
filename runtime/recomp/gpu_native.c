@@ -375,6 +375,21 @@ static void clutwatch_xfer(const char* tag, int rx, int ry, int rw, int rh) {
   else clutwatch_dump(tag, rx, ry, rw, rh);
 }
 
+// PSXPORT_TEXWATCH="x0,y0,x1,y1" — log every A0 CPU->VRAM upload or 0x80 VRAM->VRAM copy whose
+// DEST rect overlaps the watched VRAM rect (e.g. a character's texpage), with frame, dest rect,
+// DMA source addr, and the first source/dest bytes. Traces exactly when a model's texture pixels
+// change and what data fed them (gameplay sprite/CLUT corruption hunt).
+static int s_tw_init = 0, s_tw_x0 = -1, s_tw_y0 = 0, s_tw_x1 = 0, s_tw_y1 = 0;
+static int texwatch_overlap(int rx, int ry, int rw, int rh) {
+  if (!s_tw_init) {
+    s_tw_init = 1;
+    const char* e = getenv("PSXPORT_TEXWATCH");
+    if (e) sscanf(e, "%d,%d,%d,%d", &s_tw_x0, &s_tw_y0, &s_tw_x1, &s_tw_y1);
+  }
+  if (s_tw_x0 < 0) return 0;
+  return rx < s_tw_x1 && rx + rw > s_tw_x0 && ry < s_tw_y1 && ry + rh > s_tw_y0;
+}
+
 // Execute a complete GP0 primitive packet held in s_fifo[0..s_fcount).
 static void gp0_exec(void) {
   uint32_t c = s_fifo[0];
@@ -651,12 +666,23 @@ void gpu_gp0(uint32_t w) {
         fprintf(stderr, "[upload] f%d A0 dest=(%d,%d) %dx%d src=0x%08X\n",
                 s_frame, s_xfer_x, s_xfer_y, s_xfer_w, s_xfer_h, 0x80000000u | g_dma_src);
       }
+      if (texwatch_overlap(s_xfer_x, s_xfer_y, s_xfer_w, s_xfer_h)) {
+        extern uint32_t g_dma_src;
+        uint32_t src = 0x80000000u | g_dma_src;
+        fprintf(stderr, "[texwatch] f%d A0 dest=(%d,%d) %dx%d src=0x%08X srcbytes:",
+                s_frame, s_xfer_x, s_xfer_y, s_xfer_w, s_xfer_h, src);
+        for (int k = 0; k < 12; k++) fprintf(stderr, " %02X", mem_r8(g_dma_src + k));
+        fprintf(stderr, "\n");
+      }
     } else if (op == 0x80) {                     // VRAM->VRAM copy
       int sx = s_fifo[1] & 0x3FF, sy = (s_fifo[1] >> 16) & 0x1FF;
       int dx = s_fifo[2] & 0x3FF, dy = (s_fifo[2] >> 16) & 0x1FF;
       int w2 = s_fifo[3] & 0x3FF, h2 = (s_fifo[3] >> 16) & 0x1FF;
       for (int y = 0; y < h2; y++) for (int x = 0; x < w2; x++) *vram(dx + x, dy + y) = *vram(sx + x, sy + y);
       clutwatch_xfer("80copy", dx, dy, w2, h2);
+      if (texwatch_overlap(dx, dy, w2, h2))
+        fprintf(stderr, "[texwatch] f%d 80copy src=(%d,%d) dest=(%d,%d) %dx%d\n",
+                s_frame, sx, sy, dx, dy, w2, h2);
     } else if (op != 0xC0) {
       gp0_exec();
     }
