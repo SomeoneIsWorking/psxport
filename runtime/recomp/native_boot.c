@@ -174,6 +174,26 @@ static void ov_game_main(R3000* c) {
   void hle_deliver_event(uint32_t ev_class, uint32_t spec);
   void pad_service_frame(void);
   for (uint32_t f = 0; nframes == 0 || f < nframes; f++) {
+    // TRANSPLANT harness (PSXPORT_TRANSPLANT="frame:ramfile:vramfile"): at logic frame `frame`,
+    // overwrite our RAM (and VRAM if given) with the oracle's CLEAN green-field dump, then let the
+    // frame loop CONTINUE. Tests the accumulation hypothesis directly: if our per-frame logic is
+    // correct the next frames stay clean (match the oracle); if buggy they re-corrupt from a known
+    // -good start, so we can watch the corruption begin instead of it being masked. RAM is dropped
+    // at the TOP of the iteration (before FUN_800788AC), so our update runs on the oracle's state.
+    { static int tf = -2; static char rf[256], vf[256];
+      if (tf == -2) { tf = -1; rf[0] = vf[0] = 0; const char* e = getenv("PSXPORT_TRANSPLANT");
+        if (e) { char buf[600]; snprintf(buf, sizeof buf, "%s", e);
+          char* c1 = strchr(buf, ':'); if (c1) { *c1 = 0; tf = atoi(buf);
+            char* c2 = strchr(c1 + 1, ':'); if (c2) { *c2 = 0; snprintf(vf, sizeof vf, "%s", c2 + 1); }
+            snprintf(rf, sizeof rf, "%s", c1 + 1); } } }
+      if (tf >= 0 && (int)f == tf) {
+        extern uint8_t g_ram[]; int gpu_native_load_vram(const char*);
+        FILE* mf = fopen(rf, "rb");
+        if (mf) { size_t n = fread(g_ram, 1, 0x200000, mf); fclose(mf);
+                  fprintf(stderr, "[transplant] loaded RAM %zu B from %s at lf%u\n", n, rf, f); }
+        else fprintf(stderr, "[transplant] FAILED to open %s\n", rf);
+        if (vf[0]) gpu_native_load_vram(vf);
+      } }
     // Per-frame IRQ-driven events the game's waits poll via TestEvent (we deliver no preemptive
     // IRQs): VBlank classes + the sound-DMA-complete class 0xF0000009 (its callback FUN_80097030
     // would normally fire it; native SPU DMA is synchronous, so signal it ready each frame).

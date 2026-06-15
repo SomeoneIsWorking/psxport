@@ -1,5 +1,39 @@
 # Debug / progress journal
 
+## 2026-06-15 (later 65) — CORRUPTION ISOLATED TO VRAM TEXTURE CONTENT via a state-transplant harness. RAM + per-frame logic + per-frame CLUTs are all CORRECT; the scene-load atlas textures baked into VRAM are wrong.
+Built a transplant harness (PSXPORT_TRANSPLANT="frame:ramfile:vramfile", native_boot.c +
+gpu_native_load_vram) that drops the ORACLE's clean green-field state into our RUNNING port at a
+logic-frame boundary and CONTINUES. The user predicted "transplant will mask the bug" — correct, and
+that masking IS the diagnostic.
+
+### Oracle dumps (green-field, frame 7000): scratch/raw/oracle_ram_7000.bin + oracle_vram_7000.bin
+(oracle: PSXPORT_RAMDUMP=7000:.. + PSXPORT_VRAMDUMP=7000:.. ; wide60rt <disc> -bios scratch/bios -frames 7100)
+
+### Results (transplant at our logic frame 1680; effect visible from present f4267 — boot turbo makes
+the logic→present map nonlinear, so find the transplant point by first-diff vs baseline, not by math)
+- **Full transplant (RAM+VRAM) → CLEAN.** Our per-frame logic renders a perfect green-field (Tomba on
+  grass) and STAYS clean for 78+ frames. ⟹ the per-frame rendering/logic is CORRECT; it does not
+  corrupt good state.
+- **RAM-only transplant → byte-identical to the no-transplant baseline (ZERO render effect).** The
+  game RAM state is NOT the differentiator (our logic re-derives the same scene; transplanted RAM
+  doesn't rebuild the already-built VRAM). ⟹ game RAM state is fine.
+- **VRAM-only transplant → CLEAN (same as full).** Replacing ONLY our VRAM with the oracle's fixes the
+  render completely.
+⟹ **The corruption is entirely in our VRAM TEXTURE CONTENT.** And since the VRAM-only run KEPT our RAM
+yet the per-frame 16x1 CLUT re-uploads (5315/run, sourced from our RAM 0x801FCDC0) did NOT re-corrupt
+the clean VRAM over 78 frames, **the per-frame CLUTs are also correct.** The wrong data is the
+SCENE-LOAD ATLAS textures (the big 256x256/192x256/… uploads), baked into VRAM once at load.
+
+### So the bug is in the scene-load texture pipeline: decompress → upload
+Upload is faithful (later-63, native). So either the DECOMPRESSED output is wrong, or textures are
+placed at wrong VRAM coords, or the descriptor that drives it is wrong. NOTE this re-opens the
+decompressor: later-61 only proved native==recomp==interp (consistency across OUR engines), never
+correctness vs the oracle — and the "clean-C is faithfulness-independent" argument only covers
+load-delay (now ruled out), not other subtle bugs or wrong INPUT addressing. NEXT: diff our green-field
+VRAM ATLAS region (camera-independent, loaded once) against the oracle's to see WHICH texpages are
+corrupt, then trace which decompress/upload call produced them. (Atlas is scene-static so this compare
+is alignment-SAFE, unlike the framebuffer.)
+
 ## 2026-06-15 (later 64) — LOAD-DELAY RULED OUT as the corruption cause (measured, not assumed). Zero genuine load-delay hazards in the executed rendering code. New tooling: PSXPORT_LDHAZARD detector + PSXPORT_VRAMDUMP.
 The prime remaining hypothesis (interp.c:13 "no load-delay slot") was that the interpreter's
 omission of the R3000 load-delay slot makes game-logic draw-param code compute wrong UVs/CLUT/geom.

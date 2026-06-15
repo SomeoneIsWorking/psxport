@@ -324,6 +324,15 @@ static int s_xfer, s_xfer_x, s_xfer_y, s_xfer_w, s_xfer_h, s_xfer_px;
 // library does not need to be a faithful recomp. `src` is a RAM (or physical) address holding
 // w*h contiguous 16-bit pixels, row-major; mem_r16 masks the region so KSEG0/physical both work.
 // Identical effect to the GP0 0xA0 stream below, minus the FIFO/DMA round-trip.
+// Transplant harness: overwrite our full VRAM from a raw 1024x512x16 dump (oracle's, via
+// PSXPORT_VRAMDUMP). Lets us drop the oracle's clean green-field VRAM into our running port and
+// watch whether our continued execution keeps it clean or re-corrupts (accumulation test).
+int gpu_native_load_vram(const char* path) {
+  FILE* f = fopen(path, "rb"); if (!f) return 0;
+  size_t n = fread(s_vram, 2, (size_t)VRAM_W * VRAM_H, f); fclose(f);
+  fprintf(stderr, "[transplant] loaded VRAM %zu px from %s\n", n, path);
+  return n == (size_t)VRAM_W * VRAM_H;
+}
 void gpu_native_load_image(int x, int y, int w, int h, uint32_t src) {
   for (int v = 0; v < h; v++)
     for (int u = 0; u < w; u++)
