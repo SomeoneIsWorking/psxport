@@ -19,6 +19,8 @@
 #include <stdlib.h>
 
 void gen_func_800788AC(R3000*);    // recomp body (super-call)
+void wide60_frame_commit(void);    // wide60: per-logic-frame fence (rate detect / interp)
+void wide60_init(void);            // wide60: read PSXPORT_WIDE60
 void gpu_present(void);            // native GPU: present the displayed VRAM region
 void gpu_pace_frame(void);         // native GPU: throttle to game pace when windowed (no-op headless)
 void spu_audio_frame(void);        // SPU: advance the mixer one frame + feed the audio device
@@ -58,6 +60,7 @@ static void ov_frame_update(R3000* c) {
       rec_dispatch(c, SEQ_TICK_WRAPPER);
   }
   mem_w16(DISPLAY_COUNTER, mem_r8(VBLANK_QUOTA));    // satisfy the pacing dwell immediately
+  wide60_frame_commit();                             // wide60: this frame's geometry is projected
   gpu_present();                                     // one rendered frame per loop iteration
   spu_audio_frame();                                 // advance + feed audio (sole spu_update driver)
   gpu_pace_frame();                                  // throttle to ~30fps when windowed (1 call/frame)
@@ -65,4 +68,5 @@ static void ov_frame_update(R3000* c) {
 
 void games_tomba2_init(void) {
   rec_set_override(0x800788ACu, ov_frame_update);
+  wide60_init();
 }

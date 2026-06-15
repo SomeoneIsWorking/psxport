@@ -1,5 +1,36 @@
 # Debug / progress journal
 
+## 2026-06-15 (later 56) — 60fps tier started: MEASURED Tomba2 = 30 fps (was only "believed"). Rate detector live in the port, gated, faithful path byte-identical.
+Pivoted from widescreen (blocked, later-55) to the 60fps interpolation tier
+(`docs/wide60_recomp_60fps.md`). First milestone = actually measure the logic rate.
+
+### New file `runtime/recomp/wide60.c` (gated PSXPORT_WIDE60; additive)
+Owns the wide60 capture/rate-detector/(future)matcher+synthesizer. Milestone-1 content:
+- `wide60_geom_xy()` — folds the GTE's projected SXY (DR12/13/14 after RTPS/RTPT, tapped in
+  `gte_beetle.c` `gte_op`) into a per-frame FNV-1a fingerprint. SXY output is **parity-invariant**
+  (depends only on logic inputs, not the double-buffer draw target) — the right cadence signal.
+- `wide60_frame_commit()` — per-logic-frame fence, called from `games_tomba2.c` `ov_frame_update`
+  (the proven once-per-logic-iteration chokepoint). Feeds the lrate_proto detector: counts
+  consecutive `ov_frame_update` calls with an identical projected-geometry set; modal run-length =
+  content-change period. A frame with zero GTE ops (FMV/menu) folds a constant = HOLD (no spurious change).
+
+### Measured (headless to f5500, gameplay; `scratch/logs/wide60_rate.log`)
+**modal-period = 1 call/change, engine vblank quota (DAT_1f800235) = 2 vbl/frame → content ~30.0 fps.**
+Votes unanimously period-1 (p1=3601, p2=p3=p4=0) — every logic iteration produces a fresh projected
+set. So Tomba2's logic IS 30 fps and each frame is intended for 2 vblanks. **For 60 fps: synthesize
+exactly ONE in-between per logic frame** (lerp transforms at t=0.5, reproject). This retires the
+long-standing "Tomba2 framerate unverified — measure, don't assume" (CLAUDE.md).
+
+### Faithful-path safety
+With PSXPORT_WIDE60 unset, all taps are no-ops; VRAM at f3000 is **byte-identical** to the
+pre-change baseline (`cmp` PASS). The 0.000% raster / audio fix are untouched.
+
+### Next (60fps, remaining)
+Per-object transform capture (tag RTP ops via the `0x8007712C` dispatcher → object id), primitive
+capture/match by object id in `gpu_native.c`, the lerp+reproject synthesizer, and `gpu_replay_list`
+to rasterize in-betweens. Then host-pace 60 Hz present. No-flicker rule: unmatched geometry held at
+frame A, never half-interpolated.
+
 ## 2026-06-15 (later 55) — WIDESCREEN blocker found: VRAM is packed (textures abut the 320-wide FB) → the design doc's "wider buffer, square pixels, no stretch" is architecturally impossible. Measured the GTE projects ~14% of verts past the 4:3 edges.
 Started the wide60 widescreen tier (handoff: do widescreen first). Built two RE tools and ran them
 against real gameplay; the result overturns the central premise of `docs/wide60_recomp_widescreen.md`.

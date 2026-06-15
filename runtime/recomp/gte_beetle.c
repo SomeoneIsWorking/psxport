@@ -67,7 +67,16 @@ void ws_sx_dump(const char* tag) {
   s_sx_n = s_sx_oob_lo = s_sx_oob_hi = 0;
 }
 
+extern int g_wide60_on;                            // wide60.c: gates the geometry fingerprint
+void wide60_geom_xy(uint32_t sxy);
 void     gte_op(R3000* c, uint32_t insn)         { (void)c; GTE_Instruction(insn);
                                                    unsigned op = insn & 0x3F;
-                                                   if (op == 0x01 || op == 0x30) ws_sx_record(); }
+                                                   if (op == 0x01 || op == 0x30) {
+                                                     ws_sx_record();          // self-gated (PSXPORT_WS_SXHIST)
+                                                     if (g_wide60_on) {       // fold projected SXY
+                                                       wide60_geom_xy(GTE_ReadDR(12));
+                                                       wide60_geom_xy(GTE_ReadDR(13));
+                                                       wide60_geom_xy(GTE_ReadDR(14));
+                                                     }
+                                                   } }
 void     gte_init(void)                          { GTE_Init(); GTE_Power(); }
