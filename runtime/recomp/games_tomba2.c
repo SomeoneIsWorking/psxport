@@ -158,12 +158,33 @@ static void ov_unpack_group(R3000* c) {
   }
 }
 
+// PC-native CPU->VRAM upload — replaces the game's libgs-style upload library FUN_80081218
+// (0x80081218). RE (verified empirically vs the A0 upload log, later-62/63): a0 = descriptor
+// { x:s16@0, y:s16@2, w:s16@4, h:s16@6 }, a1 = source pixel data (w*h contiguous 16-bit pixels,
+// row-major). The recomp body ENQUEUES an entry into the GsSortObject ring at 0x800A5AC8 (head/
+// tail @0x800A5AC8/5ACC) which is DMA'd to the GPU later as a 0xA0 packet. It is the SINGLE
+// chokepoint for BOTH the scene-load texture atlas (256x256/192x256/… into the texpages the
+// characters sample) AND every per-frame 16x1 CLUT — 5300+ calls per attract run. The user's
+// directive: the GPU library must be PC-native, not a faithful recomp. So we write the rect
+// straight into native VRAM here and DO NOT enqueue (the later ring flush/sync then no-ops over
+// an empty ring). Ordering is preserved: the upload still happens before this frame's draws are
+// processed, and CLUTs are double-buffered across frames (parity-alternated slots), so no draw
+// reads a slot mid-overwrite. A/B: PSXPORT_LZ_RECOMP=1 keeps the recomp upload library.
+void gpu_native_load_image(int x, int y, int w, int h, uint32_t src);
+static void ov_upload_image(R3000* c) {
+  const uint32_t desc = c->r[4], src = c->r[5];
+  const int x = (int16_t)mem_r16(desc + 0), y = (int16_t)mem_r16(desc + 2);
+  const int w = (int16_t)mem_r16(desc + 4), h = (int16_t)mem_r16(desc + 6);
+  if (w > 0 && h > 0) gpu_native_load_image(x, y, w, h, src);
+}
+
 void games_tomba2_init(void) {
   rec_set_override(0x800788ACu, ov_frame_update);
   // PC-owned asset codecs (A/B: PSXPORT_LZ_RECOMP=1 keeps the recomp bodies for comparison).
   if (!getenv("PSXPORT_LZ_RECOMP")) {
     rec_set_override(0x80044D8Cu, ov_lz_decompress);  // LZ image decompressor
     rec_set_override(0x80044E84u, ov_unpack_group);   // texture-group unpacker (drives the above)
+    rec_set_override(0x80081218u, ov_upload_image);   // PC-native CPU->VRAM upload (libgs upload lib)
   }
   wide60_init();
   if (g_wide60_on)                                 // object-tag dispatcher only when capturing

@@ -1,5 +1,45 @@
 # Debug / progress journal
 
+## 2026-06-15 (later 63) — GPU UPLOAD LIBRARY now PC-native (user directive: "PC-native GPU, not faithful"). RULES OUT the upload library as the corruption source — fully native upload reproduces the SAME garbage byte-near-identically.
+User directive (corrects later-62's "faithfully port the vtable"): the GPU library should be **PC-native,
+not a faithful recomp**. So instead of byte-translating the libgs vtable, I replaced the upload entry
+point with a native VRAM blit and tested whether the corruption changes.
+
+### What was done
+- **FUN_80081218 (0x80081218) → `ov_upload_image` (games_tomba2.c) + `gpu_native_load_image`
+  (gpu_native.c).** Empirically RE'd (PSXPORT_UL_PROBE + the A0 UPLOADLOG, exact match): a0 =
+  descriptor { x:s16@0, y:s16@2, w:s16@4, h:s16@6 }, a1 = source = w*h contiguous 16-bit pixels,
+  row-major. The recomp body ENQUEUES into the GsSortObject ring @0x800A5AC8 (head/tail @5AC8/5ACC,
+  mod 0x40), DMA'd later as a GP0 0xA0 packet. **It is the SINGLE chokepoint for BOTH the scene-load
+  texture atlas (256x256/192x256/128x256… into the character texpages) AND every per-frame 16x1 CLUT
+  — 5315 CLUT + ~25 atlas calls per attract run.** Native impl writes the rect straight to s_vram and
+  does NOT enqueue (later ring flush/sync no-ops over the empty ring). A/B: PSXPORT_LZ_RECOMP=1 keeps
+  the recomp upload library. The unpacker (ov_unpack_group) routes its uploads here too → the whole
+  decompress→upload asset path is now PC-owned.
+
+### RESULT — upload library RULED OUT as the corruption source
+A/B over 5187 presented frames (native vs PSXPORT_LZ_RECOMP=1), `cmp` each PPM:
+- **5038 byte-identical; 149 differ, all in the green-field demo f3270–3775, by ~0.4% (≈300px/76800).**
+- The differing pixels are a CLUT upload-TIMING offset (native writes immediately at the enqueue call;
+  recomp defers to the ring flush — likely a 1-frame CLUT lag, so native is plausibly *more* correct).
+- **The corruption is UNCHANGED.** f03360 (striped grass/black blocks/garbled char) and f03720
+  (magenta+RGB-noise striped pillars) are visually identical native vs recomp; f03720 is byte-identical.
+  ⟹ a fully PC-native upload reproduces the same garbage ⟹ **the upload library is not the cause.**
+
+### So where is the bug now (narrowed)
+Source texture data in RAM is correct (later-60: ==oracle 100%); decompressor byte-perfect
+(later-61); upload faithful (this entry); rasterizer faithful (later-59). The garbage is
+"uninitialized VRAM sampled as texture" (magenta + RGB noise). With correct textures + correct
+upload + correct raster, that leaves the **DRAW STREAM PARAMETERS** (UVs / texpage / CLUT-index /
+geometry) computed by the **interpreted gameplay overlay** — i.e. either wrong draw params, or
+MISSING uploads (the overlay logic that decides what/where to upload computed wrong). Prime suspect
+remains the interpreter's faithful-first quirks (no load-delay slot, add==addu — interp.c:13) that
+both our engines share but the oracle does not; the gameplay overlays run THROUGH this flat
+interpreter (interp.c:3). NOTE the decompressor ran clean through that same interpreter, so the quirk
+is path-specific (geometry/UV code may have load-delay deps the codec does not). NEXT: determine
+whether our VRAM atlas is correct vs oracle at the green-field scene (static, scene-alignable) — if
+yes, the bug is in draw params (interpreter arithmetic), if no, in upload placement.
+
 ## 2026-06-15 (later 62) — porting non-gameplay subsystems to native (user goal). Decompressor + texture-unpacker now PC-owned & verified byte-identical. Next subsystem mapped: the libgs-style gfx/upload vtable.
 Per the user's directive ("have anything EXCEPT gameplay logic PC-owned"), porting the asset/gfx
 library out of recomp+interp into native C, one subsystem at a time, A/B-verified vs the recomp body

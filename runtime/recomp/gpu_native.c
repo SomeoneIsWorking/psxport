@@ -319,6 +319,19 @@ static int s_fcount, s_fneed;
 // VRAM transfer state (GP0 0xA0 CPU->VRAM)
 static int s_xfer, s_xfer_x, s_xfer_y, s_xfer_w, s_xfer_h, s_xfer_px;
 
+// PC-native CPU->VRAM upload. The game's libgs-style upload library (FUN_80081218 and the
+// GsSortObject ring at 0x800A5AC8) is replaced by writing the rect directly here, so the GPU
+// library does not need to be a faithful recomp. `src` is a RAM (or physical) address holding
+// w*h contiguous 16-bit pixels, row-major; mem_r16 masks the region so KSEG0/physical both work.
+// Identical effect to the GP0 0xA0 stream below, minus the FIFO/DMA round-trip.
+void gpu_native_load_image(int x, int y, int w, int h, uint32_t src) {
+  for (int v = 0; v < h; v++)
+    for (int u = 0; u < w; u++)
+      *vram(x + u, y + v) = mem_r16(src + (uint32_t)((v * w + u) * 2));
+  if (getenv("PSXPORT_UPLOADLOG"))
+    fprintf(stderr, "[upload] f%d NATIVE dest=(%d,%d) %dx%d src=0x%08X\n", s_frame, x, y, w, h, src);
+}
+
 // GP0 command-word color packs as 0x00BBGGRR — R in the low byte, B in the high byte.
 static inline uint8_t cmd_r(uint32_t c) { return c & 0xFF; }
 static inline uint8_t cmd_g(uint32_t c) { return (c >> 8) & 0xFF; }
