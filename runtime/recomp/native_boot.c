@@ -92,6 +92,9 @@ static void native_scheduler_step(R3000* c) {
       continue;                               // sleeping this frame (state==1)
     }
     mem_w16(base, 4);                         // running
+    if (getenv("PSXPORT_SCHEDDBG"))
+      fprintf(stderr, "[sched] slot %d st_in=%u resume_pc=0x%08X ra=0x%08X sp=0x%08X\n",
+              i, st, resume_pc, g_task_ctx[i].r[31], g_task_ctx[i].r[29]);
     mem_w32(CUR_TASK, base);
     g_cur_slot = i;
     *c = g_task_ctx[i];
@@ -237,6 +240,13 @@ static void ov_game_main(R3000* c) {
   }
   fprintf(stderr, "[native_boot] frame loop done; task0 state=%u entry=0x%08X obj+0x48=%u\n",
           mem_r16(TASKBASE), mem_r32(TASKBASE + 0xc), mem_r16(TASKBASE + 0x48));
+  const char* rd = getenv("PSXPORT_RAMDUMP");
+  if (rd) {
+    extern uint8_t g_ram[];
+    FILE* f = fopen(rd, "wb");
+    if (f) { fwrite(g_ram, 1, 0x200000, f); fclose(f);
+             fprintf(stderr, "[native_boot] dumped 2MB RAM -> %s\n", rd); }
+  }
 }
 
 // Wired from boot.c when PSXPORT_NATIVE_BOOT is set. Registers the main override and enters

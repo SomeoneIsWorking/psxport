@@ -404,6 +404,7 @@ void gpu_present(void) {
   if (g_log) fprintf(stderr, "[gpu] frame %d: %ld prims, %ld gp0words, %ld dma2, disp %dx%d @ (%d,%d)\n",
                      s_frame, s_prims, s_gp0_words, s_dma2, s_disp_w, s_disp_h, s_disp_x, s_disp_y);
   if (dir) {
+    if (s_frame == 0) { char cmd[600]; snprintf(cmd, sizeof cmd, "mkdir -p '%s'", dir); int r = system(cmd); (void)r; }
     char path[512]; snprintf(path, sizeof path, "%s/f%05d.ppm", dir, s_frame);
     FILE* f = fopen(path, "wb");
     if (f) {

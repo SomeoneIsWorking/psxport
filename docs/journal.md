@@ -1,5 +1,58 @@
 # Debug / progress journal
 
+## 2026-06-15 (later 38) — REAL PLAYABLE GAMEPLAY: async area-reader fix → level loads, plays, MOVES
+later 37 OVERCLAIMED. The level-intro renders once (gpu ~f2850, native frame ~224) and then the
+screen goes **permanently black** — the GAME state machine freezes at sm[48=2 4a=1 4c=2 4e=8] and
+the framebuffer (VRAM x<320) stays black while the texture pages (x≥320) stay loaded
+(`nonblack=252298` constant). later-37 only ran 240 native frames (the level appears at the very
+END of that window) and misread the brief 4e-leaf cycling (9,10,7,8) as a "live game loop". It is
+not — it halts at 8. (The 19 "CdRead: retry" log lines are all BOOT-time and do NOT grow during the
+black region — a red herring; ruled out.) **This session fixes the real freeze; the game now loads
+the level, renders sustained animating gameplay, takes input, and Tomba MOVES.**
+- **Root cause — the engine's ASYNC area-data reader never completes (no-IRQ), so the level-load
+  flag is never set.** The 4e=8 leaf (GAME.bin `FUN_80106f68`) is a clean wait: `if
+  (DAT_1f80019b == 0) return;` (yield, loop) else advance to 4a=1/4c=2/4e=6. `DAT_1f80019b` is the
+  area-load done flag. It is set by `FUN_8001db38` (task1's body) **only after `FUN_8001d940`
+  RETURNS** (task+0x6c is already 1). `FUN_8001d940` (engine streaming reader) issues a raw libcd
+  ReadN and loops (yielding each frame) until the remaining WORD count `_DAT_1f8001f4` hits 0 — but
+  that count is decremented only by the per-sector data-ready IRQ callback `FUN_8001d7c4` (a plain
+  CdGetSector copy into `_DAT_1f8001f8`). Our no-IRQ runtime never fires it ⇒ count never 0 ⇒
+  reader never returns ⇒ flag never set ⇒ the 4e=8 wait spins (cooperatively — yields each frame, so
+  no hard spin; the native loop keeps running, screen black).
+- **Why the existing CD overrides missed it.** cd_override.c already replaces the *synchronous*
+  loaders `FUN_8001db8c` / `FUN_8001dc40` with native reads. But the level uses the *async* path:
+  `FUN_80044cd4` (fire-and-forget) / `FUN_80044bd4` (spawn+yield-wait) set `_DAT_1f8001f0`(LBA) /
+  `_DAT_1f8001f4`(words) / `_DAT_1f8001f8`(dest) and spawn task1 with entry `FUN_8001db38` →
+  `FUN_8001d940` **directly** (`FUN_80051f14(1, FUN_8001db38)`), bypassing the overridden loaders.
+- **Fix — `ov_cd_async_read` (cd_override.c, overrides `FUN_8001D940`).** Do the read natively &
+  synchronously: copy `_DAT_1f8001f4 * 4` bytes from consecutive sectors at LBA `_DAT_1f8001f0`
+  into `_DAT_1f8001f8` (word-granular, exactly as `FUN_8001d7c4` does: 0x200 words = 1 sector =
+  2048 B; dest advances by words*4, no sector padding), then zero the count and set the position
+  tracker `DAT_800be0e0 = last sector`. The reader returns immediately, `FUN_8001db38` sets
+  `DAT_1f80019b = 1`, task1 ends, and the GAME advances. (`FUN_8001D940` is recompiled — index 14 —
+  so the override fires even though task1 runs in the flat interpreter: interpreted `jal 0x8001d940`
+  → `call_addr` → `is_recompiled` → `rec_dispatch` → `func_8001D940` → `g_override[14]`.)
+- **RESULT (verified, headless, FORCE_BUTTONS=FFF7):** at native frame 224 the 4e=8 wait now
+  advances (4e=8→6, 4c→1→2, then normal play). Over a 1500-native-frame run (4156 gpu frames),
+  **0 near-black frames** in the gameplay region (≥f2900, 1256 frames); scene non-black count varies
+  continuously (26k↔71k) = real animation. Frame dumps show a fully rendered jungle level (Tomba,
+  trees, house, sky — scratch/screenshots/fix/s03200.png), not the old intro flash.
+- **Interactive control + movement VERIFIED.** Pulsing Start in-level opens the in-game pause menu
+  (Options / Load data / Quit game — scratch/screenshots/long2/late.png), which only appears during
+  real gameplay. Holding Right (PSXPORT_FORCE_HOLD=FFDF FORCE_HOLD_AT=240) scrolls the level: the
+  scene moves to a new area between f2950 and f3150 (scratch/screenshots/move/m02950.png vs
+  m03150.png). So menu→load→level→play→move all work on input.
+- **Tools added this session (durable, env-gated):** `PSXPORT_SCHEDDBG` (native_boot.c — per-slot
+  task resume_pc/ra/sp each scheduler step; THE way to locate a cooperative yield-wait: a parked
+  task resumes at 0x80051FA4, then read its caller RA off the task stack at sp+0x10 to find the
+  real waiting loop). `PSXPORT_RAMDUMP=<path>` (native_boot.c — dumps 2MB main RAM at end of run;
+  then `tools/disasm.py <dump> <start> <end>` to read live overlay code, e.g. the 0x8011xxxx level
+  overlay absent from the GAME.bin.asm dump). gpu_native.c now `mkdir -p`s PSXPORT_GPU_DUMP (was a
+  silent no-op when the dir didn't exist).
+- **NEXT:** (1) Audio (tests run PSXPORT_NOAUDIO — verify SPU/XA in real play). (2) wide60: the
+  paced 30fps → 60 interpolation (project headline; see [[wide60-scope-decision]]). (3) Play deeper
+  — confirm no later async-read or event stalls in subsequent areas/levels.
+
 ## 2026-06-15 (later 37) — GAME RENDERS GAMEPLAY: CD-streaming spin fixed → level loads + draws
 The GAME-black residual from later 36 is **fixed** — the in-game level now loads and renders
 actual 3D gameplay (scratch/screenshots/game_fix/view_2850.png: a Tomba2 jungle level — foliage,

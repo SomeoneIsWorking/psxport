@@ -101,8 +101,46 @@ static void ov_cd_loadfile(R3000* c) {
   c->r[V0] = size;
 }
 
+// 0x8001D940 FUN_8001d940: the engine's ASYNC streaming reader. It is spawned as task1 (its body
+// FUN_8001db38 -> FUN_8001d940) by the area-data loaders FUN_80044cd4 (fire-and-forget) and
+// FUN_80044bd4 (spawn + yield-wait), NOT through FUN_8001db8c/FUN_8001dc40 — so the synchronous
+// overrides above do not cover it. The real body issues a raw libcd ReadN, then loops (yielding
+// each frame) until the remaining word count _DAT_1f8001f4 reaches 0; that count is decremented
+// only by the per-sector data-ready IRQ callback FUN_8001d7c4 (a plain CdGetSector copy into
+// _DAT_1f8001f8). Our no-IRQ runtime never fires that callback, so the count never hits 0, the
+// reader never returns, FUN_8001db38 never sets the load-done flag DAT_1f80019b, and the GAME
+// state machine's level-load wait (outer state s48=2 -> 4a=1/4c=2/4e=8 leaf @ FUN_80106f68,
+// which polls DAT_1f80019b) spins forever — the level-intro renders once, then the screen stays
+// black. FIX (recomp-overrides, mirrors ov_cd_loadfile): do the read natively & synchronously.
+// _DAT_1f8001f4 is in 32-bit WORDS (0x200 words = 1 sector = 2048 B); copy words*4 bytes from
+// consecutive sectors starting at LBA _DAT_1f8001f0 into _DAT_1f8001f8, exactly word-granular as
+// FUN_8001d7c4 does (dest advances by words*4, no sector padding). Then zero the remaining count
+// and advance dest/position trackers to the post-read state so FUN_8001d940's caller FUN_8001db38
+// (task+0x6c is already 1 = success) sets DAT_1f80019b and ends task1.
+static void ov_cd_async_read(R3000* c) {
+  (void)c;
+  uint32_t lba   = mem_r32(0x1f8001f0);
+  uint32_t words = mem_r32(0x1f8001f4);
+  uint32_t dest  = mem_r32(0x1f8001f8);
+  uint32_t bytes = words * 4u;
+  uint8_t sec[2048];
+  uint32_t done = 0, nsec = 0;
+  for (; done < bytes; nsec++) {
+    if (!disc_read_sector(lba + nsec, sec)) break;
+    uint32_t n = bytes - done < 2048 ? bytes - done : 2048;
+    for (uint32_t j = 0; j < n; j++) mem_w8(dest + done + j, sec[j]);
+    done += n;
+  }
+  mem_w32(0x1f8001f4, 0);                  // remaining count consumed (callback would zero it)
+  mem_w32(0x1f8001f8, dest + done);        // dest advanced, as FUN_8001d7c4 leaves it
+  if (nsec) mem_w32(0x800be0e0, lba + nsec - 1);  // DAT_800be0e0 = last sector read (pos tracker)
+  if (g_cd_verbose)
+    fprintf(stderr, "[cd] async read %u words (%u B) @ LBA %u -> 0x%08X\n", words, bytes, lba, dest);
+}
+
 void cd_overrides_init(void) {
   if (getenv("PSXPORT_CD_VERBOSE")) g_cd_verbose = 1;
+  rec_set_override(0x8001D940u, ov_cd_async_read);   // engine async streaming reader (task1)
   rec_set_override(0x8008B2D8u, ov_cdinit);
   rec_set_override(0x8001DB8Cu, ov_cd_loadfile);
   // 0x8001DC40 FUN_8001dc40(a0=dest, a1=lba, a2=size_bytes): the intro sequencer's loader
