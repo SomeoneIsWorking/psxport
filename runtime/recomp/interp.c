@@ -44,6 +44,71 @@ static inline void trace_call(uint32_t from, uint32_t to) {
 
 #define W(n, v) do { uint32_t _n = (n); if (_n) c->r[_n] = (v); } while (0)
 
+// ---- R3000 load-delay hazard DETECTOR (PSXPORT_LDHAZARD) ------------------------------------
+// Our interpreter omits the load-delay slot (interp.c head): a load's target reg is visible to
+// the immediately-following instruction, whereas real R3000 (and the mednafen oracle) make that
+// instruction read the OLD value. Compiler-scheduled code fills the slot (nop / independent op),
+// so the hazard should be ABSENT. This detector counts cases where instruction I reads a GPR
+// that instruction I-1 loaded into — i.e. where our no-delay model can diverge from hardware.
+// Logs the first hits with PC so we can see whether the corrupt rendering path even has them.
+// Returns the GPR a load writes (target), or 0 if `in` is not a GPR-target load.
+static int ld_target(uint32_t in) {
+  uint32_t op = in >> 26;
+  if (op >= 0x20 && op <= 0x26) return RT(in);          // lb lh lwl lw lbu lhu lwr
+  if (op == 0x10 && RS(in) == 0x00) return RT(in);      // mfc0
+  if (op == 0x12 && (RS(in) == 0x00 || RS(in) == 0x02)) return RT(in); // mfc2 / cfc2
+  return 0;
+}
+// Does `in` read GPR r as a source operand?
+static int reads_gpr(uint32_t in, int r) {
+  if (r == 0) return 0;
+  uint32_t op = in >> 26, f = FN(in);
+  switch (op) {
+    case 0x00: // SPECIAL
+      switch (f) {
+        case 0x00: case 0x02: case 0x03: return RT(in) == r;            // sll srl sra (rt, sh imm)
+        case 0x08: return RS(in) == r;                                  // jr
+        case 0x09: return RS(in) == r;                                  // jalr
+        case 0x10: case 0x12: return 0;                                 // mfhi mflo
+        case 0x11: case 0x13: return RS(in) == r;                       // mthi mtlo
+        default:   return RS(in) == r || RT(in) == r;                   // arith/logic/shiftv/mul/div
+      }
+    case 0x0F: return 0;                                                // lui
+    case 0x08: case 0x09: case 0x0A: case 0x0B: case 0x0C: case 0x0D: case 0x0E:
+      return RS(in) == r;                                               // addi.. ori.. (rs)
+    case 0x20: case 0x21: case 0x23: case 0x24: case 0x25: return RS(in) == r;   // loads: base
+    case 0x22: case 0x26: return RS(in) == r || RT(in) == r;            // lwl/lwr: base + merge
+    case 0x28: case 0x29: case 0x2B: case 0x2A: case 0x2E:              // stores
+      return RS(in) == r || RT(in) == r;
+    case 0x04: case 0x05: return RS(in) == r || RT(in) == r;            // beq bne
+    case 0x06: case 0x07: case 0x01: return RS(in) == r;                // blez bgtz regimm
+    case 0x10: return RS(in) == 0x04 && RT(in) == r;                    // mtc0 (rt)
+    case 0x12: return (RS(in) == 0x04 || RS(in) == 0x06) && RT(in) == r; // mtc2/ctc2 (rt)
+    case 0x32: return RS(in) == r;                                      // lwc2 base
+    case 0x3A: return RS(in) == r;                                      // swc2 base
+    default: return 0;
+  }
+}
+static int g_ldhaz = -1;
+static long g_ldhaz_n = 0;
+static uint32_t g_ld_last_in = 0, g_ld_last_pc = 0;   // last instruction in EXECUTION order
+// Check the just-fetched instruction (`in`@`pc`, about to execute) against the previously
+// executed one, then make it the new "last". Called in execution order — INCLUDING delay slots —
+// so a load in a jump/branch delay slot is checked against the branch TARGET (the real next op).
+static inline void ldhaz_step(uint32_t in, uint32_t pc) {
+  if (g_ldhaz < 0) g_ldhaz = getenv("PSXPORT_LDHAZARD") ? 1 : 0;
+  if (g_ldhaz) {
+    uint32_t p = g_ld_last_in; int t = ld_target(p);
+    // Skip the lwl/lwr unaligned-merge idiom (same rt): our no-delay model merges correctly.
+    int merge = ((p >> 26) == 0x22 && (in >> 26) == 0x26 && RT(p) == RT(in)) ||
+                ((p >> 26) == 0x26 && (in >> 26) == 0x22 && RT(p) == RT(in));
+    if (t && !merge && reads_gpr(in, t) && g_ldhaz_n++ < 60)
+      fprintf(stderr, "[ldhaz] load r%d @%08X (%08X) -> read by next @%08X (%08X)\n",
+              t, g_ld_last_pc, p, pc, in);
+  }
+  g_ld_last_in = in; g_ld_last_pc = pc;
+}
+
 // Is `addr` a recompiled function or a BIOS vector? Then a call routes to rec_dispatch;
 // otherwise it is non-recompiled RAM code we interpret.
 int rec_func_index(uint32_t addr);
@@ -279,10 +344,12 @@ void rec_coro_run(R3000* c, uint32_t pc) {
     }
     uint32_t in = mem_r32(pc);
     uint32_t op = in >> 26;
+    ldhaz_step(in, pc);                              // load-delay hazard detector (execution order)
 
     if (op == 0x02 || op == 0x03) {                  // j / jal
       uint32_t tgt = TGT(in, pc);
       if (op == 0x03) c->r[31] = pc + 8;
+      ldhaz_step(mem_r32(pc + 4), pc + 4);            // delay slot executes next
       exec_simple(c, mem_r32(pc + 4));               // delay slot
       // A native override / BIOS vector must win on EITHER a `jal` call or a tail-`j` into it,
       // else the flat interpreter re-runs a function the PC side owns (e.g. the LZ decompressor
@@ -295,6 +362,7 @@ void rec_coro_run(R3000* c, uint32_t pc) {
       uint32_t tgt = c->r[RS(in)];
       uint32_t link = pc + 8, rd = RD(in);
       int is_jalr = FN(in) == 0x09, is_ra = RS(in) == 31;
+      ldhaz_step(mem_r32(pc + 4), pc + 4);            // delay slot executes next
       exec_simple(c, mem_r32(pc + 4));               // delay slot
       if (is_jalr) {
         if (rd) c->r[rd] = link;
@@ -321,6 +389,7 @@ void rec_coro_run(R3000* c, uint32_t pc) {
         t = (sub & 1) ? ((int32_t)c->r[rs] >= 0) : ((int32_t)c->r[rs] < 0);
         if (sub & 0x10) c->r[31] = pc + 8;
       }
+      ldhaz_step(mem_r32(pc + 4), pc + 4);            // delay slot executes next
       exec_simple(c, mem_r32(pc + 4));
       pc = t ? tgt : pc + 8;
       continue;

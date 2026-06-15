@@ -845,6 +845,15 @@ void gpu_present(void) {
   const char* dir = getenv("PSXPORT_GPU_DUMP");
   if (g_log) fprintf(stderr, "[gpu] frame %d: %ld prims, %ld gp0words, %ld dma2, disp %dx%d @ (%d,%d)\n",
                      s_frame, s_prims, s_gp0_words, s_dma2, s_disp_w, s_disp_h, s_disp_x, s_disp_y);
+  // PSXPORT_VRAMDUMP="frame:path" — dump our full 1024x512x16 VRAM at `frame` (raw u16, no header),
+  // matching the oracle's PSXPORT_VRAMDUMP (main.cpp) so the texture/CLUT ATLAS can be diffed across
+  // engines at a scene-aligned frame (the atlas is uploaded once at scene load = static per scene).
+  { static int vf = -2; static char vp[256];
+    if (vf == -2) { const char* e = getenv("PSXPORT_VRAMDUMP"); vf = -1;
+      if (e) { const char* col = strchr(e, ':'); if (col) { vf = atoi(e); snprintf(vp, sizeof vp, "%s", col + 1); } } }
+    if (vf >= 0 && s_frame == vf) { FILE* f = fopen(vp, "wb");
+      if (f) { fwrite(s_vram, 2, (size_t)VRAM_W * VRAM_H, f); fclose(f);
+               fprintf(stderr, "[vramdump] f%d -> %s (1024x512x16)\n", s_frame, vp); } } }
   if (dir) {
     if (s_frame == 0) { char cmd[600]; snprintf(cmd, sizeof cmd, "mkdir -p '%s'", dir); int r = system(cmd); (void)r; }
     char path[512]; snprintf(path, sizeof path, "%s/f%05d.ppm", dir, s_frame);

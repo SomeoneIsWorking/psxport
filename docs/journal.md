@@ -1,5 +1,47 @@
 # Debug / progress journal
 
+## 2026-06-15 (later 64) — LOAD-DELAY RULED OUT as the corruption cause (measured, not assumed). Zero genuine load-delay hazards in the executed rendering code. New tooling: PSXPORT_LDHAZARD detector + PSXPORT_VRAMDUMP.
+The prime remaining hypothesis (interp.c:13 "no load-delay slot") was that the interpreter's
+omission of the R3000 load-delay slot makes game-logic draw-param code compute wrong UVs/CLUT/geom.
+**Tested it directly — it is NOT the cause.**
+
+### Detector (PSXPORT_LDHAZARD, interp.c) — counts REAL divergences
+A load-delay divergence is: instruction I-1 loads a GPR, and the very next executed instruction I
+reads that GPR (so our no-delay model gives the new value, hardware/oracle gives the old). The
+detector follows TRUE execution order, INCLUDING jump/branch delay slots (a load in a delay slot is
+checked against the branch TARGET, not the memory-next word). It excludes the benign lwl/lwr
+unaligned-merge idiom (our no-delay model already merges those correctly: lwl commits, lwr merges).
+- **Runtime, full attract incl. green-field (f3360) AND dungeon (f5000), 2600 logic frames: 0
+  genuine hazards.** The overlays (gameplay logic, rec_coro_run) have NONE.
+- **Static scan of all of MAIN.EXE (scratch/ldscan.py): 44 raw hits, ALL in the DATA region**
+  (addresses ≥0x800A0000; highest recompiled function is 0x8009D06C) — pointer/asset tables misread
+  as code, not real instructions. Zero in actual code.
+- Why: the SN/GCC toolchain fills every load-delay slot (nop or an independent op), so compiler
+  output never reads a load target in the next slot. Only hand-asm would, and the lwl/lwr pairs
+  (the only load→next-reads-target cases that DO occur) are handled correctly already.
+⟹ Adding faithful load-delay would be effort + regression risk for a NON-cause. Do not implement it
+to "fix" the corruption. (It's still legit CPU correctness if we go interpreter-only, but it won't
+change a pixel here.) RULED OUT — do not re-chase.
+
+### Also this session
+- **PSXPORT_VRAMDUMP="frame:path"** added to gpu_native.c (raw 1024x512x16), matching the oracle's
+  same-named knob (main.cpp). Cross-engine VRAM diff at green-field (ours f3360 vs oracle f7000):
+  atlas region differs, but that is the alignment ghost (different demo moment) — ours actually has
+  MORE nonzero than the oracle in the atlas; NO black/missing-upload cells (cellcmp.py). Inconclusive
+  for the bug (the documented alignment block), but rules out "a texture is missing from VRAM".
+- Confirmed (POLYDUMP f3360 + f3720): every textured poly's texpage lands inside an uploaded atlas
+  region (x≥320) → texpage selection is CORRECT. Some per-frame CLUTs are real palettes (1008,255),
+  some are uniform 0x1084 (800,198 / 496,488) — uniform-palette = suspect but not yet pinned.
+
+### Where the bug stands (elimination)
+Ruled out: rasterizer, CD-read, XA, unaligned-SWR, raw-load, decompressor, **upload library**
+(later-63), **load-delay** (this entry). Texpages correct; atlas content correct by argument
+(native decompressor is faithfulness-independent yet byte-identical to recomp/interp). Remaining:
+wrong UVs / wrong CLUT-INDEX per poly / wrong per-frame CLUT CONTENT / wrong vertex geometry —
+all computed by interpreted game logic — OR a wrong/missing HLE the render path relies on. The
+decisive tool is still a scene-aligned oracle lockstep (find FIRST RAM divergence via a shared
+logic-frame counter); cross-moment VRAM/RAM diff stays blocked.
+
 ## 2026-06-15 (later 63) — GPU UPLOAD LIBRARY now PC-native (user directive: "PC-native GPU, not faithful"). RULES OUT the upload library as the corruption source — fully native upload reproduces the SAME garbage byte-near-identically.
 User directive (corrects later-62's "faithfully port the vtable"): the GPU library should be **PC-native,
 not a faithful recomp**. So instead of byte-translating the libgs vtable, I replaced the upload entry
