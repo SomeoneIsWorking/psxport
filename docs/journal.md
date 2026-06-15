@@ -1,5 +1,63 @@
 # Debug / progress journal
 
+## 2026-06-15 (later 55) — WIDESCREEN blocker found: VRAM is packed (textures abut the 320-wide FB) → the design doc's "wider buffer, square pixels, no stretch" is architecturally impossible. Measured the GTE projects ~14% of verts past the 4:3 edges.
+Started the wide60 widescreen tier (handoff: do widescreen first). Built two RE tools and ran them
+against real gameplay; the result overturns the central premise of `docs/wide60_recomp_widescreen.md`.
+
+### Tools built (permanent)
+- `tools/vram_png.py` — dump a raw 1024×512 16bpp VRAM (`PSXPORT_VRAMDUMP_AT`) to PNG, optional
+  magenta outline of the displayed region. Used to read the live VRAM layout.
+- `gte_beetle.c` `ws_sx_record`/`ws_sx_dump` (gated `PSXPORT_WS_SXHIST`) — histogram the screen-X the
+  GTE writes to SXY-FIFO per RTPS/RTPT, dumped every 500 frames from `gpu_present`. Measures how much
+  geometry the GTE projects outside the 320-wide window.
+
+### What the GTE projects (gameplay f3000–5500, `scratch/logs/sxhist.log`)
+Display window is [0,320). Of all projected vertices: **~10–15% land at SX<0, ~24–36% at SX≥320.**
+Per-bucket (f5000): near-left band `[-64,0)` ≈ 3%, near-right band `[320,384)` ≈ 11%. So the GTE
+DOES project substantial world geometry just past the 4:3 edges (with spikes at the saturation
+extremes = behind-camera / off-screen rejects). Wide geometry is *computed* — the open question was
+only whether it's drawable.
+
+### The blocker (decisive — `scratch/screenshots/vram_f5000.png`)
+The VRAM is **fully packed**: two 320-wide framebuffers stacked at (0,0) and (0,256) (~224 tall;
+display flips between them — vramscan), and the **texture/CLUT atlas fills x≥320 immediately to the
+right of the FBs**, across all rows. The only free VRAM is the thin vertical bands rows 224–255 /
+480–511 — horizontal, not usable to widen a FB. Therefore:
+- **You cannot widen the framebuffer to 427 in place** — x∈[320,427) is the live texture atlas;
+  drawing world geometry there corrupts the textures it then samples.
+- **The doc §5 "present a WS_WIDTH-wide region centered on the display origin" is wrong** — copying
+  VRAM [s_disp_x−53 .. +374] copies the texture atlas as the right third of the screen (garbage).
+- **The doc §1 IR1×0.75 multiply is ALSO wrong for a square present** — it squishes content 0.75×
+  horizontally; presented 1:1 that's a thin/squished world (confirmed by first-principles + the
+  prototype's own numbers). The 0.75 multiply only makes sense paired with a downstream 1.333×
+  STRETCH (the Beetle hack) — which the doc explicitly set out to avoid.
+
+### What real hor+ widescreen actually requires here (none are an autonomous win)
+1. **Squish-stretch (Beetle hack, the only one that fits packed VRAM):** keep the 320 FB, apply the
+   IR1×0.75 multiply (more world squished into 320), present-STRETCH 320→16:9. Fits VRAM, standard
+   PSX-widescreen technique. Quality = native-h-res stretched (acceptable, not "better-than-Beetle").
+   STILL needs the cull-cone widen to populate the new edge bands.
+2. **Separate wide FB backing store (what the doc imagined "owning the rasterizer" buys):** render FB
+   draws into our own 640-wide off-screen buffer at recentered coords while textures stay in s_vram.
+   Feasible (we own gpu_native.c) but doubles rasterization and must mirror FB read-backs; and STILL
+   needs the cull-cone widen.
+3. **Relocate the texture atlas to free FB columns:** rewrite every texpage/CLUT coord the game
+   programs — deep, fragile per-game RE.
+
+**Common unavoidable dependency: the per-game CULL-CONE widen.** The six `slti` sites (§2 of the doc)
+gate draw-enqueue in *world/camera* space, so the squish/recenter does NOT bring culled edge geometry
+back — without widening them the new edge bands stay empty regardless of present strategy. And cull
+widening is the exact change that previously caused walk-through ghosts (needs the visibility/activation
+split RE **and the user's eyes** to validate — not completable while the user is away).
+
+### Decision
+Widescreen is NOT an autonomous-completable win: it forces the squish-stretch approach (overturning the
+doc) and is hard-blocked on a risky per-game cull RE that needs user validation. Recorded here; the doc
+is corrected. **Pivoting this session to the 60 fps interpolation tier** (`wide60_recomp_60fps.md`),
+which renders into the existing FB (no VRAM-packing wall), is gated/additive (faithful path stays
+byte-identical), and has a proven RE basis — the tractable, verifiable deliverable. First 60fps
+milestone: actually MEASURE Tomba2's logic rate (a long-standing project unknown) via the rate detector.
+
 ## 2026-06-15 (later 54) — AUDIO FIXED: native libsnd sequencer tick → port plays SPU-voice music (was all-zeros)
 Implemented the later-53 fix (user picked "native sequencer tick"). The port now produces music.
 

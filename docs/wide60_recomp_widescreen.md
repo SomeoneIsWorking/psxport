@@ -1,5 +1,26 @@
 # wide60 — widescreen for the native recomp port (Tomba! 2)
 
+> **⚠️ CORRECTION (2026-06-15, journal later-55 — READ THIS FIRST).** The central premise below
+> (§1/§5: "we own present, so widen the framebuffer to 427 and present square pixels, NO stretch")
+> is **architecturally impossible for Tomba2** and is falsified by measurement:
+> - **VRAM is fully packed.** Two 320-wide framebuffers sit at (0,0)/(0,256); the **texture atlas
+>   fills x≥320 right next to them** (`scratch/screenshots/vram_f5000.png`). There is NO horizontal
+>   room to widen the FB — drawing into x∈[320,427) corrupts the live textures. §5's "copy a
+>   WS_WIDTH-wide region centered on the display origin" copies the texture atlas as the screen's
+>   right third (garbage).
+> - **The §1 IR1×0.75 multiply SQUISHES** (0.75× horizontal); presented 1:1 it's a thin world. It is
+>   only correct paired with a downstream **1.333× stretch** — i.e. the very Beetle hack this doc set
+>   out to replace. The prototype `proj_widen.c` numbers actually demonstrate the squish.
+>
+> **What real hor+ widescreen requires here** (none autonomous-completable): (1) squish-stretch
+> (Beetle hack — the only one that fits packed VRAM), or (2) a separate wide off-screen FB backing
+> store in our rasterizer, or (3) relocating the texture atlas. **All three still require the §2
+> per-game cull-cone widen** (the cull is world/camera-space, so no present trick recovers the edge
+> geometry), which is the risky change that caused walk-through ghosts and needs the user's eyes.
+> §2 (cull RE) and the measurement tooling below still stand; §1/§5's "better-than-Beetle, no-stretch"
+> framing does not. Treat this doc's mechanism sections as the cull/HUD/terrain RE record, not the
+> present strategy.
+
 **Status:** design + RE hook map. No runtime code changed by this doc (another stream owns
 `gte_beetle.c` / `gpu_native.c`). Prototype proving the projection math: `scratch/wsdev/proj_widen.c`.
 
