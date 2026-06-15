@@ -353,14 +353,16 @@ static void gp0_exec(void) {
           if (t == 0) continue;                     // transparent texel
           // texel bit15 gates per-pixel blending (same rule as textured polygons)
           int px_semi = semi && (t & 0x8000);
-          // Textured rectangles/sprites modulate the texel by the command color (texel*color/128,
-          // saturated to 0xFF) exactly like textured polygons — there is no raw-texture rectangle
-          // variant. Omitting this rendered every tinted sprite at full brightness (e.g. a green-
-          // glowing item showing raw/purple). Same saturation rule as the polygon path (later 42).
-          int sr = ((t & 31) << 3) * cr / 128, sg = (((t >> 5) & 31) << 3) * cg / 128,
-              sb = (((t >> 10) & 31) << 3) * cb / 128;
-          put_px_b(x + dx + s_off_x, y + dy + s_off_y,
-                   sr > 255 ? 255 : sr, sg > 255 ? 255 : sg, sb > 255 ? 255 : sb, px_semi);
+          int tr = (t & 31) << 3, tg = ((t >> 5) & 31) << 3, tb = ((t >> 10) & 31) << 3;
+          // Texture mode is gated by command bit0, matching the oracle's sprite decode table
+          // (beetle gpu_common.h: 0x64/0x66 = TM1 modulate, 0x65/0x67 = TM0 raw). bit0=0 -> modulate
+          // texel by command color (saturated); bit0=1 -> raw texel. (An earlier change modulated
+          // unconditionally and wrongly tinted raw 0x65 sprites — e.g. turned a blue item green.)
+          if (!(op & 1)) {
+            tr = tr * cr / 128; tg = tg * cg / 128; tb = tb * cb / 128;
+            if (tr > 255) tr = 255; if (tg > 255) tg = 255; if (tb > 255) tb = 255;
+          }
+          put_px_b(x + dx + s_off_x, y + dy + s_off_y, tr, tg, tb, px_semi);
         } else put_px_b(x + dx + s_off_x, y + dy + s_off_y, cr, cg, cb, semi);
       }
     s_prims++;
