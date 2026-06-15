@@ -100,12 +100,16 @@ bool g_screen_dark = false;        // last presented frame was a near-black load
 // (journal later 39/40): does the oracle's level draw a poly at our red-quad spot (43,172), and
 // with which clut? Determines extra-prim vs wrong-clut.
 int g_pw_frame = -1;
+int g_pw_frame_hi = -1;            // PSXPORT_POLYWATCH="lo-hi" watches a frame range
+int g_pw_clutx = -1, g_pw_cluty = -1;  // PSXPORT_POLYCLUT="x,y" restricts logging to one CLUT
 static void polywatch_hook(uint32_t cc, const uint32_t* cb, int32_t ox, int32_t oy) {
-  if (g_pw_frame < 0 || (int)g_frame != g_pw_frame) return;
+  int lo = g_pw_frame, hi = g_pw_frame_hi >= 0 ? g_pw_frame_hi : g_pw_frame;
+  if (lo < 0 || (int)g_frame < lo || (int)g_frame > hi) return;
   int textured = cc & 0x4; if (!textured) return;
   int gouraud = cc & 0x10, quad = cc & 0x08;
   uint32_t clut = cb[2] >> 16;
   int clx = (clut & 0x3F) * 16, cly = (clut >> 6) & 0x1FF;
+  if (g_pw_clutx >= 0 && (clx != g_pw_clutx || cly != g_pw_cluty)) return;
   uint32_t tpw = cb[4 + ((cc >> 4) & 1)] >> 16;   // gouraud-textured shifts texpage word by 1
   int tpx = (tpw & 0xF) * 64, tpy = ((tpw >> 4) & 1) * 256;
   // per-vertex stride: xy (+uv if textured) (+color if gouraud); v0's color is in cb[0].
@@ -933,6 +937,8 @@ int main(int argc, char** argv)
 
   if (const char* pw = std::getenv("PSXPORT_POLYWATCH")) {
     g_pw_frame = atoi(pw);
+    if (const char* dash = std::strchr(pw, '-')) g_pw_frame_hi = atoi(dash + 1);
+    if (const char* pc = std::getenv("PSXPORT_POLYCLUT")) sscanf(pc, "%d,%d", &g_pw_clutx, &g_pw_cluty);
     psxport_set_gpu_poly_hook(polywatch_hook);
   }
 

@@ -41,6 +41,8 @@ typedef struct { int x, y; uint8_t r, g, b; int u, v; } Vtx;
 static int g_log = 0;             // PSXPORT_GPU_LOG
 static long s_prims = 0;          // primitives drawn since last present
 static long s_gp0_words = 0, s_dma2 = 0;  // diagnostics: GP0 words + DMA2 triggers per frame
+static uint32_t s_cur_node = 0;   // REDDBG: RAM addr of the OT node currently being fed to GP0
+static int s_frame;               // present-frame counter (defined below); forward tentative def
 
 static inline int clampi(int v, int lo, int hi) { return v < lo ? lo : v > hi ? hi : v; }
 static inline uint16_t to555(uint8_t r, uint8_t g, uint8_t b) {
@@ -196,7 +198,6 @@ static void set_clut(uint16_t cl) { s_clut_x = (cl & 0x3F) * 16; s_clut_y = (cl 
 // in order, with the resulting 16-entry palette. Reveals whether the right palette is written
 // then overwritten, or never written, and by which transfer.
 static int s_cw_x = -1, s_cw_y = 0, s_cw_pending = 0;
-static int s_frame;   // present-frame counter (defined below); forward tentative def
 static void clutwatch_dump(const char* tag, int rx, int ry, int rw, int rh) {
   fprintf(stderr, "[clutwatch] %s f%d rect=(%d,%d %dx%d) covers (%d,%d) palette:",
           tag, s_frame, rx, ry, rw, rh, s_cw_x, s_cw_y);
@@ -239,12 +240,33 @@ static void gp0_exec(void) {
       }
     }
     int shade = gouraud || !textured;       // flat-untextured uses the command color
+    // PSXPORT_POLYDUMP=frame — log every poly at `frame` (our port side, to compare vs oracle
+    // polywatch). Finds the garbage-block prims in the GAME level.
+    { static int pd = -2, pax = -1, pay = -1;
+      if (pd == -2) { const char* e = getenv("PSXPORT_POLYDUMP"); pd = e ? atoi(e) : -1;
+        const char* pa = getenv("PSXPORT_POLYAT"); if (pa) sscanf(pa, "%d,%d", &pax, &pay); }
+      if (pd >= 0 && s_frame == pd) {
+        int hit = (pax < 0);   // no point filter -> log all
+        if (pax >= 0) {        // log only prims whose screen bbox (incl offset) covers (pax,pay)
+          int xmin=99999,xmax=-99999,ymin=99999,ymax=-99999;
+          for (int i=0;i<nv;i++){ int X=v[i].x+s_off_x,Y=v[i].y+s_off_y;
+            if(X<xmin)xmin=X; if(X>xmax)xmax=X; if(Y<ymin)ymin=Y; if(Y>ymax)ymax=Y; }
+          hit = (pax>=xmin && pax<=xmax && pay>=ymin && pay<=ymax);
+        }
+        static int n = 0;
+        if (hit && n++ < 2000)
+          fprintf(stderr, "[polydump] f%d op=%02X tex=%d gou=%d clut=(%d,%d) tp=(%d,%d) col=(%d,%d,%d) "
+                  "uv0=(%d,%d) V[(%d,%d)(%d,%d)(%d,%d)(%d,%d)] off=(%d,%d)\n",
+                  s_frame, op, textured?1:0, gouraud?1:0, s_clut_x, s_clut_y, s_tp_x, s_tp_y,
+                  v[0].r, v[0].g, v[0].b, v[0].u, v[0].v,
+                  v[0].x,v[0].y, v[1].x,v[1].y, v[2].x,v[2].y, v[3].x,v[3].y, s_off_x, s_off_y);
+      } }
     if (s_reddbg && textured && s_cw_x >= 0 && s_clut_x == s_cw_x && s_clut_y == s_cw_y) {
       static int n = 0;
       if (n++ < 12)
-        fprintf(stderr, "[redpkt] f%d op=%02X nv=%d gou=%d semi=%d clut=(%d,%d) tp=(%d,%d) blend=%d mode=%d "
+        fprintf(stderr, "[redpkt] f%d stage=%08X node=0x%08X op=%02X nv=%d gou=%d semi=%d clut=(%d,%d) tp=(%d,%d) blend=%d mode=%d "
                 "V[(%d,%d)uv(%d,%d) (%d,%d)uv(%d,%d) (%d,%d)uv(%d,%d)%s] off=(%d,%d)\n",
-                s_frame, op, nv, gouraud, semi, s_clut_x, s_clut_y, s_tp_x, s_tp_y, s_tp_blend, s_tp_mode,
+                s_frame, mem_r32(0x801fe00c), s_cur_node, op, nv, gouraud, semi, s_clut_x, s_clut_y, s_tp_x, s_tp_y, s_tp_blend, s_tp_mode,
                 v[0].x,v[0].y,v[0].u,v[0].v, v[1].x,v[1].y,v[1].u,v[1].v, v[2].x,v[2].y,v[2].u,v[2].v,
                 quad?" +q":"", s_off_x, s_off_y);
     }
@@ -456,6 +478,13 @@ void gpu_present(void) {
             s_frame, s_disp_x, s_disp_y, s_disp_w, s_disp_h, nz, minx, miny, maxx, maxy);
   }
   present_window();
+  { const char* vd = getenv("PSXPORT_VRAMDUMP_AT");   // "frame:path" — dump our 1024x512x16 VRAM
+    if (vd) { int fr = atoi(vd); const char* col = strchr(vd, ':');
+      if (col && s_frame == fr) { FILE* vf = fopen(col + 1, "wb");
+        if (vf) { fwrite(s_vram, 2, VRAM_W * VRAM_H, vf); fclose(vf);
+                  fprintf(stderr, "[gpu] VRAM dump f%d -> %s\n", s_frame, col + 1); } } } }
+  if (getenv("PSXPORT_STAGETL") && (s_frame % 200) == 0)
+    fprintf(stderr, "[stagetl] gpu f%d task0entry=%08X\n", s_frame, mem_r32(0x801fe00c));
   const char* dir = getenv("PSXPORT_GPU_DUMP");
   if (g_log) fprintf(stderr, "[gpu] frame %d: %ld prims, %ld gp0words, %ld dma2, disp %dx%d @ (%d,%d)\n",
                      s_frame, s_prims, s_gp0_words, s_dma2, s_disp_w, s_disp_h, s_disp_x, s_disp_y);
@@ -524,6 +553,7 @@ void gpu_dma2_linked_list(uint32_t madr) {
   for (guard = 0; guard < 0x10000; guard++) {
     uint32_t hdr = mem_r32(addr);
     int n = hdr >> 24;
+    s_cur_node = 0x80000000u | addr;
     for (int i = 0; i < n; i++) gpu_gp0(mem_r32(addr + 4 + i * 4));
     uint32_t next = hdr & 0xFFFFFF;
     if (next == 0xFFFFFF || next == 0) break;

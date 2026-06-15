@@ -5,6 +5,7 @@
 // access is a memcpy.
 #include "r3000.h"
 #include <stdio.h>
+#include <stdlib.h>
 
 uint8_t g_ram[0x200000];
 uint8_t g_scratch[0x400];
@@ -206,8 +207,24 @@ void mem_w16(uint32_t a, uint16_t v) {
   uint8_t* p = host_ptr(a, 2);
   if (p) memcpy(p, &v, 2); else io_log_w(a, v, 2);
 }
+// PSXPORT_WWATCH=lo,hi — log the interpreter PC of any store landing in [lo,hi). Used to find
+// the game code that builds a specific primitive/struct in RAM (e.g. the spurious red quad).
+extern volatile uint32_t g_interp_pc;
+static int      s_ww_init = 0;
+static uint32_t s_ww_lo = 0, s_ww_hi = 0;
+static void wwatch_check(uint32_t a, uint32_t v) {
+  if (!s_ww_init) {
+    s_ww_init = 1;
+    const char* w = getenv("PSXPORT_WWATCH");
+    if (w) { unsigned long lo=0, hi=0; if (sscanf(w, "%lx,%lx", &lo, &hi) == 2) { s_ww_lo=lo; s_ww_hi=hi; } }
+  }
+  uint32_t ka = a | 0x80000000u;
+  if (s_ww_hi && ka >= s_ww_lo && ka < s_ww_hi)
+    fprintf(stderr, "[wwatch] store [%08X]=%08X by pc=%08X stage=%08X\n", ka, v, g_interp_pc, mem_r32(0x801fe00c));
+}
 void mem_w32(uint32_t a, uint32_t v) {
   uint8_t* p = host_ptr(a, 4);
+  wwatch_check(a, v);
   if (p) memcpy(p, &v, 4); else io_log_w(a, v, 4);
 }
 

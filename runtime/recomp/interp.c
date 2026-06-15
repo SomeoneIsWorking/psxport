@@ -264,6 +264,19 @@ void rec_coro_run(R3000* c, uint32_t pc) {
         iters = 0; lo = hi = pc;
       }
     }
+    g_interp_pc = pc;
+    // PSXPORT_SPRITEDBG: when the sprite-flush routine copies the red-quad clut template
+    // (0x7EF71100) into the OT (store at 0x8007E67C), dump the renderer's working registers so
+    // the owning sprite object ($a3/$t5) and its descriptor list ($a2) can be identified.
+    // PSXPORT_TEXTDBG: log every call to the text/sprite-row drawer 0x8007E998 (a0=x, a1=y, a3=glyph),
+    // with the caller ra — to trace which overlay code draws a given 2D text/banner element.
+    if (pc == 0x8007E998 && getenv("PSXPORT_TEXTDBG")) {
+      static int n = 0;
+      if (n++ < 30)
+        fprintf(stderr, "[textdbg] 8007E998(x=%d y=%d a2=%08X a3=%08X) ra=%08X stage=%08X\n",
+                (int)(int16_t)c->r[4], (int)(int16_t)c->r[5], c->r[6], c->r[7], c->r[31],
+                mem_r32(0x801fe00c));
+    }
     uint32_t in = mem_r32(pc);
     uint32_t op = in >> 26;
 

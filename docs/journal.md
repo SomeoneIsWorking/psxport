@@ -1,6 +1,58 @@
 # Debug / progress journal
 
+## 2026-06-15 (later 41) — later-40 FALSIFIED: the clut-(880,507) quad is the DEMO intro subtitle, not the level bug
+Picked up the handoff (kill the "spurious title-overlay quad"). Traced the clut-(880,507) op-2D
+quad end to end and **falsified later-40's root cause.** The real on-grass garbage in the playable
+level is a *different* artifact that is NOT yet root-caused. Do not re-chase the clut-880,507 quad.
+
+- **The clut-(880,507) quad is the DEMO-stage intro NARRATION SUBTITLE, and it renders CORRECTLY.**
+  Built by the resident sprite/text renderer `FUN_8007E1B8` from a glyph string (descriptor base
+  0x80158000, glyph idx ~149-164) at screen (43,172). It is the on-screen story text
+  "Tomba is living peacefully in the country when Zippo finds a mysterious…" overlaid on the attract
+  demo (scratch/screenshots/redcheck/f02790.png — readable cream text, not red dots).
+- **It is drawn ONLY during the DEMO stage, never during GAME (the decisive correlation).** Stage =
+  task0 entry @0x801fe00c: 0x801062E4 = DEMO, 0x8010637C = GAME. With `PSXPORT_WWATCH=800BFEDC,800BFEE0`
+  (logs the store of the uv0|clut word 0x7EF71100) every one of the 16 builds is `pc=8007E67C
+  stage=801062E4` (DEMO); **zero** in GAME. redpkt confirms: at the GPU frames where the quad emits
+  (≈f2690-2800) `stage=0x801062E4`. The oracle draws clut-(880,507) **nowhere** at the level
+  (`PSXPORT_POLYWATCH=6900-7400 PSXPORT_POLYCLUT=880,507` → no hits). So the quad is correct title/intro
+  content, present in our DEMO, absent (correctly) from GAME. later-40's "title overlay leaks into the
+  level" is **wrong** — there is no clut-880,507 prim in the level at all.
+- **Stage timeline (PSXPORT_STAGETL, per gpu frame):** gpu f0-2600 task0entry=0 (boot/FMV/intro),
+  ≈f2700 DEMO (intro narration over attract gameplay), f2800+ GAME (playable level). The earlier
+  native-frame↔gpu-frame guesses in the handoff were off; trust STAGETL.
+- **THE ACTUAL BUG (still open): scattered garish red/pink/purple/blue blocks on the GAME grass.**
+  Confirmed a real divergence — the oracle's same level (scratch/screenshots/redcheck/oracle_level.png,
+  oracle f7290) renders **clean** grass; ours (f03000.png/f03255.png) has scattered garish rectangles
+  on the grass (Tomba's area). This is what the user actually sees; it is NOT the subtitle quad.
+- **It is NOT a texture-VRAM divergence.** Dumped our VRAM at the level (`PSXPORT_VRAMDUMP_AT=3000:path`)
+  and diffed vs the oracle's (scratch/bin/oracle_vram.bin) across the level texpages
+  (576,0)/(448,256)/(768,0)/(960,256) and clut rows — **~0% diff (byte-identical)**. One garish grass
+  pixel (121,101 magenta 168,0,128) is covered by an op-3C clut-(816,236) tp-(768,0) gouraud prim
+  whose palette has NO magenta (yellows/browns/cyans/black, all == oracle) — so that prim can't be the
+  source. The magenta must come from another prim/path not yet pinned: the **sprite path** (GP0
+  0x60-0x7F, not in polydump), an op-2D prim with a magenta clut, or a semi-transparent blend artifact.
+- **NEXT (real fix):** pin the garish prim source — extend the dump to the GP0 0x60-0x7F sprite path,
+  and do an **offset-aware** prim-by-prim compare of our level display list vs the oracle's
+  (PSXPORT_POLYDUMP/POLYAT here vs PSXPORT_POLYWATCH on wide60rt). Mind the double buffer: GAME prims
+  alternate off=(0,0)/(0,256); the *displayed* frame (disp @0,0) is the off=(0,0) set, drawn the prior
+  native frame — so a prim dumped at frame N with off=(0,256) shows at N+1. Find the extra/wrong prim,
+  then root-cause (UV/vertex divergence from game logic, or a sprite-path rasterizer subtlety).
+- **Tools added this session (durable, env-gated):** `PSXPORT_WWATCH=lo,hi` (mem.c — logs interp PC +
+  stage of any store landing in [lo,hi); finds who builds a RAM/OT struct; needs the new per-insn
+  `g_interp_pc` tracking now also in the coro interpreter). `PSXPORT_POLYDUMP=frame` [+ `PSXPORT_POLYAT=x,y`]
+  (gpu_native.c — dump every poly at a frame: op/clut/tp/col/uv/verts/off, optionally only prims whose
+  screen bbox covers (x,y)). `PSXPORT_VRAMDUMP_AT="frame:path"` (gpu_native.c — our 1024x512x16 VRAM at
+  a frame, to diff vs the oracle dump). `PSXPORT_STAGETL` (gpu_native.c — per-gpu-frame stage timeline).
+  `PSXPORT_RAMDUMP_FRAME=N` (native_boot.c — mid-run RAM dump; the 0x8010/0x8011xxxx overlay at gameplay
+  differs from end-of-run). `PSXPORT_TEXTDBG` (interp.c — calls to the 2D text/row drawer 0x8007E998).
+  redpkt now logs `node=` (OT RAM addr) + `stage=`. Oracle `PSXPORT_POLYWATCH` now takes a `lo-hi`
+  range and `PSXPORT_POLYCLUT=x,y` filter (main.cpp).
+
 ## 2026-06-15 (later 40) — GRASS RED-BLOCKS root cause: our port draws an EXTRA title-overlay quad
+**[SUPERSEDED by later 41 — this diagnosis is WRONG. The clut-(880,507) quad is the DEMO intro
+subtitle and renders correctly; it is never drawn in the GAME level. The real on-grass garbage is a
+separate, still-open bug. Kept below for the trail, but do not act on its NEXT.]**
 Continued the later-39 oracle compare and **falsified its "wrong CLUT contents" hypothesis**, then
 root-caused for real. The red blocks are NOT a VRAM or rasterizer bug — our port emits a spurious
 primitive the real game doesn't.

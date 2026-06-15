@@ -232,6 +232,16 @@ static void ov_game_main(R3000* c) {
               "f0=%u f1f800224=0x%08X\n",
               mem_r32(0x1f8001f8), mem_r32(0x1f8001f4), mem_r32(0x1f8001f0), mem_r32(0x1f800224));
     }
+    // PSXPORT_RAMDUMP_FRAME=N — dump RAM mid-run at native frame N (overlay state during gameplay
+    // differs from end-of-run; needed to disasm the LIVE level/stage overlay at 0x8010/0x8011xxxx).
+    { const char* rdf = getenv("PSXPORT_RAMDUMP_FRAME");
+      if (rdf && f == (uint32_t)strtoul(rdf, 0, 0)) {
+        extern uint8_t g_ram[];
+        const char* rd = getenv("PSXPORT_RAMDUMP"); if (!rd) rd = "scratch/bin/midrun_ram.bin";
+        FILE* mf = fopen(rd, "wb");
+        if (mf) { fwrite(g_ram, 1, 0x200000, mf); fclose(mf);
+                  fprintf(stderr, "[native_boot] mid-run RAM dump @frame %u -> %s\n", f, rd); }
+      } }
     if (f < 10 || (f % 30) == 0)
       fprintf(stderr, "[native_boot]   frame %u: t0[st=%u e=0x%08X s48=%u] t1[st=%u] t2[st=%u] "
                       "f135=%u\n", f, mem_r16(TASKBASE), mem_r32(TASKBASE + 0xc),
