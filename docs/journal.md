@@ -1,5 +1,38 @@
 # Debug / progress journal
 
+## 2026-06-15 (later 62) — porting non-gameplay subsystems to native (user goal). Decompressor + texture-unpacker now PC-owned & verified byte-identical. Next subsystem mapped: the libgs-style gfx/upload vtable.
+Per the user's directive ("have anything EXCEPT gameplay logic PC-owned"), porting the asset/gfx
+library out of recomp+interp into native C, one subsystem at a time, A/B-verified vs the recomp body
+(PSXPORT_LZ_RECOMP=1) until the gameplay 2D-sprite corruption surfaces/resolves.
+
+### Done this session (committed, each byte-identical to recomp over the full attract run)
+- **LZ image decompressor** FUN_80044D8C → `ov_lz_decompress`/`lz_decompress` (games_tomba2.c).
+- **Texture-group unpacker** FUN_80044E84 → `ov_unpack_group`. Reads descriptor table (count +
+  12-byte entries {stride@+4, field@+6, srclen@+8}; packed source 0x800 past the table); per entry
+  dst = anchor − 2*stride*field, native-decompress, then FUN_80081218 (upload) + FUN_80080f6c.
+  NOTE: both ports are behaviour-neutral so far (frames identical) — they don't fix the corruption;
+  they're steps toward full PC ownership. The recomp is faithful, so the divergence is elsewhere.
+
+### NEXT subsystem mapped: the gfx/upload library (libgs/GsSortObject-style vtable)
+- The gfx context object is the STATIC struct at **0x800A5958** (pointer cached at 0x800A5998; state
+  byte at 0x800A59A2, =0/1/2 selects handlers). Its function-pointer fields (read from a RAM dump):
+  - obj+0x08 = **0x80082D04** ← the actual upload method (FUN_80081218 calls this with
+    a0=mem_r32(obj+0x20)=0x80082734, a1=descriptor, a2=8, a3=dst).
+  - obj+0x0C = 0x80082504, obj+0x1C = 0x80082970, obj+0x20 = 0x80082734, obj+0x3C = 0x80083364
+    (used by FUN_80080f6c).
+- FUN_80081218 also calls FUN_80080fd4(template=0x8001BF2C, descriptor) first — a 3-way state
+  machine on 0x800A59A2 → handlers 0x80081010 / 0x8008109c / 0x800810e0.
+- To PC-own the upload path: port FUN_80081218 + FUN_80080fd4 + FUN_80080f6c and the method
+  0x80082D04 (and whatever it dispatches). This is the prime remaining non-gameplay subsystem and the
+  most likely home of the corruption (or an HLE/recomp quirk it relies on). Tooling: PSXPORT_TEXWATCH
+  (VRAM-rect upload trace), PSXPORT_CW (RAM store watchpoint), PSXPORT_UPLOADLOG.
+
+### Obstacle to differential debugging (documented, do not re-fight)
+Cross-engine RAM/VRAM compare is blocked by frame-alignment: our native-boot frame numbering ≠ the
+oracle's, and the attract demo's dynamic CLUT/area cycling means our f3340 ≠ oracle f7000 for dynamic
+state (static level data DOES align 100%, but front-buffer/CLUT do not → 0% at arbitrary frames).
+So verify ports by A/B (native vs recomp, same engine) + visual, not by oracle RAM diff.
+
 ## 2026-06-15 (later 61) — DECOMPRESSOR RULED OUT (recomp==interp==native byte-identical); 0x801FCDC0 is transient scratch not the live CLUT; loaded data is disc-correct. New direction (user): port ALL non-gameplay-logic to native.
 Chased the per-frame CLUT at 0x801FCDC0. Findings, including a falsified hypothesis (kept honest):
 
