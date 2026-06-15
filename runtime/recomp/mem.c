@@ -6,9 +6,32 @@
 #include "r3000.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <execinfo.h>
 
 uint8_t g_ram[0x200000];
 uint8_t g_scratch[0x400];
+
+// PSXPORT_CW="lo,hi" — host-backtrace watchpoint: when ANY store (8/16/32) lands in physical
+// byte range [lo,hi), dump a C backtrace (recompiled fn names need -rdynamic). Finds the runtime
+// code that clobbers a region the decompressor wrote correctly (gameplay CLUT/texture corruption).
+static int      s_cw_init = 0;
+static uint32_t s_cw_lo = 0, s_cw_hi = 0;
+static int      s_cw_n = 0;
+static void cw_check(uint32_t a, uint32_t v, int width) {
+  if (!s_cw_init) {
+    s_cw_init = 1;
+    const char* w = getenv("PSXPORT_CW");
+    if (w) { unsigned long lo=0, hi=0; if (sscanf(w, "%lx,%lx", &lo, &hi) == 2) { s_cw_lo=lo; s_cw_hi=hi; } }
+  }
+  extern volatile uint32_t g_interp_pc;
+  uint32_t p = a & 0x1FFFFFFF;
+  if (s_cw_hi && p >= s_cw_lo && p < s_cw_hi && s_cw_n < 12) {
+    s_cw_n++;
+    fprintf(stderr, "[cw] store w%d [%08X]=%08X  interp_pc=%08X\n", width, 0x80000000u|p, v, g_interp_pc);
+    void* bt[32]; int n = backtrace(bt, 32); backtrace_symbols_fd(bt, n, 2);
+    fprintf(stderr, "----\n");
+  }
+}
 
 // Map a virtual address to a RAM/scratchpad host pointer, or NULL for I/O.
 // KUSEG/KSEG0/KSEG1 all alias the same physical space: strip the top 3 bits.
@@ -201,10 +224,12 @@ uint32_t mem_r32(uint32_t a) {
 }
 void mem_w8(uint32_t a, uint8_t v) {
   uint8_t* p = host_ptr(a, 1);
+  cw_check(a, v, 1);
   if (p) *p = v; else io_log_w(a, v, 1);
 }
 void mem_w16(uint32_t a, uint16_t v) {
   uint8_t* p = host_ptr(a, 2);
+  cw_check(a, v, 2);
   if (p) memcpy(p, &v, 2); else io_log_w(a, v, 2);
 }
 // PSXPORT_WWATCH=lo,hi — log the interpreter PC of any store landing in [lo,hi). Used to find
@@ -225,6 +250,7 @@ static void wwatch_check(uint32_t a, uint32_t v) {
 void mem_w32(uint32_t a, uint32_t v) {
   uint8_t* p = host_ptr(a, 4);
   wwatch_check(a, v);
+  cw_check(a, v, 4);
   if (p) memcpy(p, &v, 4); else io_log_w(a, v, 4);
 }
 

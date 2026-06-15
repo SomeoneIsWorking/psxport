@@ -1,5 +1,50 @@
 # Debug / progress journal
 
+## 2026-06-15 (later 61) — DECOMPRESSOR RULED OUT (recomp==interp==native byte-identical); 0x801FCDC0 is transient scratch not the live CLUT; loaded data is disc-correct. New direction (user): port ALL non-gameplay-logic to native.
+Chased the per-frame CLUT at 0x801FCDC0. Findings, including a falsified hypothesis (kept honest):
+
+### What the corruption looks like (user ground-truth, windowed + headless repro)
+2D effect sprites corrupt and ACCUMULATE: gems → water splashes → eventually "busted" (magenta
+polys + RGB-noise stripes = uninitialized memory sampled as texture). 3D chars/terrain often clean;
+it's the 2D sprite/CLUT path. Reproduces headless: f5000 dungeon demo = character is a rainbow blob,
+2D counter garbled (`scratch/frames/view_05000.png`). "Corrupted differently each time" windowed =
+OS-threading races (user: don't chase determinism; headless IS deterministic).
+
+### FALSIFIED hypothesis (do NOT repeat): "decompressor recomp-vs-interp divergence"
+`gen_func_80044D8C` is the LZ image decompressor (2D predictors: offset[i]=base+2*factor*stride from
+the static table @0x800153C8; ctrl byte → len=ctrl>>3, mode=ctrl&7; mode0=literal, else back-ref).
+I caught it (PSXPORT_CW host-backtrace store watchpoint, added to mem.c) writing ZEROS to 0x801FCDC0
+via the flat interpreter, while the recompiled path wrote the correct CLUT — looked like a
+recomp-vs-interp divergence. **It is NOT.** Rendered frames are BYTE-IDENTICAL across the entire
+5947-frame attract run whether the decompressor runs native, recompiled, or flat-interpreted
+(`scratch/frames/{after,before}` cmp: 5947 same / 0 differ). The "zeros at 0x1FCDC0" is a TRANSIENT
+decompression-scratch leftover — the unpacker `gen_func_80044E84` sets dst = anchor(0x1FD000) −
+2*stride*field, decompresses each texture into that (intentionally overlapping) scratch, then
+immediately uploads it to VRAM via `0x80081218` (vtable dispatch through the gfx object @0x800A5998).
+The LIVE CLUTs/textures are in VRAM, not RAM — comparing 0x1FCDC0 in a RAM dump was an alignment ghost.
+
+### Ruled out / verified this session
+- **Decompressor** (recomp==interp==native, byte-identical over the whole run). NOT the cause.
+- **Loaded compressed source is disc-correct**: scratch 0x8018A000 at f3340 == disc LBA 2636 100%
+  (tool `scratch/bin/srccmp` — links disc.c, compares a RAM-dump region to disc sectors).
+- 0x80158000 / 0x80182000 static level data == oracle 100% (scene base aligns). 0x8018A000 is a
+  REUSED per-area scratch (loaded many times from different LBAs) → cross-frame RAM compare there is
+  meaningless (dynamic; our demo-moment ≠ oracle's for the dynamic CLUT cycling).
+
+### Changes kept (verified, aligned with the new goal)
+- **LZ decompressor is now PC-owned** (`ov_lz_decompress` in games_tomba2.c; A/B via
+  PSXPORT_LZ_RECOMP=1). Verified byte-identical to recomp over the full run. First step of the goal,
+  but does NOT fix the corruption by itself.
+- **interp.c rec_coro_run**: tail-`j` (op 0x02) now routes through coro_native_call, so native
+  overrides / BIOS vectors fire on tail-jumps too (were bypassed — only jal/jalr/jr checked).
+
+### Direction (user): "have anything EXCEPT gameplay logic PC-owned"
+Port the texture/gfx/upload library to native C and keep going until the corruption surfaces or
+resolves. NEXT native targets: unpacker 0x80044E84, upload 0x80081218, the gfx object @0x800A5998
+(libgs/libgpu-style; method table at obj+8/+1c/+20, obj+0x3c). Root cause still OPEN — likely in the
+gfx/upload library, or a shared recomp+interp faithful-first quirk (no load-delay slot, add==addu)
+that both engines share but the oracle doesn't.
+
 ## 2026-06-15 (later 60) — corruption RULED-OUT list grows: NOT unaligned-SWR (latent SWR bug found+fixed but never hit), NOT CD-read, NOT XA-interleave. Corruption is in the gameplay texture UPLOAD/VRAM-content path; data loads correctly.
 Continued from later-59. The corruption is in the VRAM texture atlas content (gpu_differ replays from
 the trace's INITIAL VRAM and both renderers reproduce the garbage ⇒ it's baked into VRAM by prior

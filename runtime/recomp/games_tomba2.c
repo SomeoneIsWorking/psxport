@@ -17,9 +17,11 @@
 // (When a host present loop exists it will pace frames; this just removes the busy-wait.)
 #include "r3000.h"
 #include <stdlib.h>
+#include <stdio.h>
 
 void gen_func_800788AC(R3000*);    // recomp body (super-call)
 void gen_func_8007712C(R3000*);    // recomp body of the per-object cull/LOD dispatcher
+void gen_func_80044D8C(R3000*);    // DEBUG: LZ decompressor (CLUT/texture build)
 void wide60_frame_commit(void);    // wide60: per-logic-frame fence (rate detect / interp)
 void wide60_init(void);            // wide60: read PSXPORT_WIDE60
 extern uint32_t g_current_object;  // wide60: object* whose RTP ops are being tagged
@@ -85,8 +87,51 @@ static void ov_object_cull(R3000* c) {
   g_current_object = prev;
 }
 
+// PC-owned LZ image decompressor — replaces recompiled FUN_80044D8C (0x80044D8C). This routine
+// rebuilds the per-frame CLUTs (0x801FCDC0) and sprite/texture data from compressed area assets.
+// It was the source of the gameplay 2D-sprite corruption: the SAME function gave correct output
+// when recompiled but ZEROS when flat-interpreted by the coroutine interpreter (rec_coro_run) at
+// runtime — a recompiler-vs-interpreter divergence. A pure decompressor belongs to the PC side,
+// so we own it natively here (one implementation, reached identically from both engines).
+//
+// ABI (matches the MIPS at 0x80044D8C, verified by disassembly):
+//   a0=descriptor, a1=dest, a2=src, a3=srclen. Returns v0 = bytes written.
+//   Setup: build 8 back-ref offsets from the static table at 0x800153C8, scaled by the per-call
+//   stride at desc+4:  offset[i] = base[i] + 2*(factor[i]*stride)  (2D image predictors: mode 1 =
+//   previous byte, modes 2-7 = previous-row neighbours; row pitch = stride).
+//   Stream of control bytes: len=ctrl>>3, mode=ctrl&7.  mode==0 -> literal copy `len` bytes from
+//   src (ctrl byte 0 / len 0 terminates).  mode!=0 -> back-ref copy `len` bytes from dest+offset
+//   [mode], BYTE-granular so overlapping copies replicate (RLE), exactly as the original loop.
+#define LZ_OFFTAB_BASE 0x800153C8u
+static void ov_lz_decompress(R3000* c) {
+  const uint32_t desc = c->r[4], dst = c->r[5], src0 = c->r[6], srclen = c->r[7];
+  const uint32_t src_end = src0 + srclen;
+  const int32_t stride = (int16_t)mem_r16(desc + 4);
+  int32_t offtab[8];
+  for (int i = 0; i < 8; i++) {
+    const int32_t base   = (int32_t)mem_r32(LZ_OFFTAB_BASE + i * 8 + 0);
+    const int32_t factor = (int32_t)mem_r32(LZ_OFFTAB_BASE + i * 8 + 4);
+    offtab[i] = base + 2 * (factor * stride);
+  }
+  uint32_t src = src0, out = dst;
+  while (src < src_end) {
+    const uint8_t ctrl = mem_r8(src++);
+    const uint32_t len = ctrl >> 3, mode = ctrl & 7u;
+    if (mode != 0) {                                  // back-reference into the output so far
+      uint32_t bsrc = out + (uint32_t)offtab[mode];
+      for (uint32_t k = 0; k < len; k++) mem_w8(out++, mem_r8(bsrc++));
+    } else {                                          // literal run from the source
+      if (len == 0) break;                            // terminator
+      for (uint32_t k = 0; k < len; k++) mem_w8(out++, mem_r8(src++));
+    }
+  }
+  c->r[2] = out - dst;                                // v0 = total bytes written
+}
+
 void games_tomba2_init(void) {
   rec_set_override(0x800788ACu, ov_frame_update);
+  // PC-owned decompressor (A/B: PSXPORT_LZ_RECOMP=1 keeps the recomp body for comparison).
+  if (!getenv("PSXPORT_LZ_RECOMP")) rec_set_override(0x80044D8Cu, ov_lz_decompress);
   wide60_init();
   if (g_wide60_on)                                 // object-tag dispatcher only when capturing
     rec_set_override(0x8007712Cu, ov_object_cull);

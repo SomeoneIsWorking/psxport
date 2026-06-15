@@ -284,7 +284,11 @@ void rec_coro_run(R3000* c, uint32_t pc) {
       uint32_t tgt = TGT(in, pc);
       if (op == 0x03) c->r[31] = pc + 8;
       exec_simple(c, mem_r32(pc + 4));               // delay slot
-      if (op == 0x03 && coro_native_call(c, tgt)) { pc = c->r[31]; continue; }
+      // A native override / BIOS vector must win on EITHER a `jal` call or a tail-`j` into it,
+      // else the flat interpreter re-runs a function the PC side owns (e.g. the LZ decompressor
+      // 0x80044D8C) and can diverge from it. coro_native_call only fires for exact override/BIOS
+      // addresses, so a plain local `j` (label inside interpreted code) falls through unchanged.
+      if (coro_native_call(c, tgt)) { pc = c->r[31]; continue; }
       pc = tgt; continue;                            // flat call/jump
     }
     if (op == 0x00 && (FN(in) == 0x08 || FN(in) == 0x09)) {  // jr / jalr
