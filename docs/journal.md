@@ -50,8 +50,20 @@ render bug.
   30fps). Gated on PSXPORT_GPU_WINDOW != "0" (run.sh sets it to "0" headless — must check the VALUE,
   getenv presence is truthy for "0"); PSXPORT_NOPACE disables (fast-forward). Verified: windowed
   120 frames in ~5s (~30fps, reaches GAME, no crash); headless 3000 frames in ~1.0s (unpaced).
+- **GAME progresses through real game flow.** Frame dumps show: title menu (Start Game/Options) →
+  "Please wait" load → GAME stage → the **level intro cutscene with story text** ("Tomba is living
+  peacefully in the country when Zippo finds a mysterious letter addressed to Tomba." —
+  scratch/screenshots/move_test/mv_2847.png) → pulsed Start advances the dialogue → the level view
+  (the clean jungle scene, view_2850). So menu/load/cutscene/level all work; input drives the flow.
+- **Input test hooks (pad_input.c).** `PSXPORT_FORCE_BUTTONS=<hex>` pulses an active-low mask (edges,
+  for menus/dialogue). New: `PSXPORT_FORCE_HOLD=<hex>` + `PSXPORT_FORCE_HOLD_AT=<frame>` HOLD a mask
+  continuously from a native frame onward (movement input) — e.g. reach GAME via FFF7 then hold Right
+  (FFDF) in-level. NB holding a non-confirm button in a cutscene freezes it (no Start edge to advance
+  the text), so to reach interactive play, keep pulsing the confirm button until control begins.
 - **NEXT — interactivity + audio:**
-  1. Verify real pad-driven control (walk Tomba) windowed; see where the post-level fade leads.
+  1. Reach interactive control: pulse the confirm button past the intro cutscene(s) until Tomba is
+     player-controlled, then verify movement (windowed with a controller is the natural check;
+     headless, FORCE_HOLD a direction once control begins and watch the scene scroll).
   2. Audio (tests run PSXPORT_NOAUDIO).
   3. wide60: interpolate the paced 30fps to 60 (the project's headline feature).
 

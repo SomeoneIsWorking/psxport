@@ -187,7 +187,9 @@ void pad_service_frame(void) {
   static int s_force_init = 0;
   static int s_force_on = 0;
   static uint16_t s_force_mask = PAD_NONE;
-  static uint32_t s_fc = 0;       // internal frame counter for the pulse
+  static uint32_t s_fc = 0;       // internal frame counter for the pulse (== native frame index)
+  static uint16_t s_hold_mask = PAD_NONE;  // headless test hook: a HELD (not pulsed) mask...
+  static uint32_t s_hold_at = 0;           // ...applied from this native frame onward
   if (s_have_window < 0) s_have_window = getenv("PSXPORT_GPU_WINDOW") ? 1 : 0;
 #ifdef PSXPORT_SDL
   if (s_have_window) pad_poll_sdl();             // host keyboard/gamepad -> s_buttons
@@ -195,12 +197,22 @@ void pad_service_frame(void) {
   if (!s_force_init) {                           // headless test hook: pulse an active-low mask
     const char* force = getenv("PSXPORT_FORCE_BUTTONS");
     if (force) { s_force_on = 1; s_force_mask = (uint16_t)strtoul(force, 0, 16); }
+    // Second phase: HOLD a mask continuously from PSXPORT_FORCE_HOLD_AT onward (overrides the
+    // pulse). Lets a headless run reach a state via pulsed Start, then hold a direction in-level
+    // (a held direction is what the game reads for movement) — for interactivity testing.
+    const char* hold = getenv("PSXPORT_FORCE_HOLD");
+    if (hold) { s_force_on = 1; s_hold_mask = (uint16_t)strtoul(hold, 0, 16);
+                const char* at = getenv("PSXPORT_FORCE_HOLD_AT"); s_hold_at = at ? strtoul(at, 0, 0) : 0; }
     s_force_init = 1;
   }
   // Pulse the forced buttons (pressed 8 frames, released 24) so each press is a fresh EDGE the
   // game's current&~prev input logic (FUN_800788ac) actually sees — a continuous hold would edge
-  // only once. Lets a headless run drive menus deterministically without a host controller.
-  if (s_force_on) pad_set_buttons((s_fc % 32u) < 8u ? s_force_mask : PAD_NONE);
+  // only once. Lets a headless run drive menus deterministically without a host controller. Once
+  // past FORCE_HOLD_AT, hold FORCE_HOLD continuously instead (movement input).
+  if (s_force_on) {
+    if (s_hold_mask != PAD_NONE && s_fc >= s_hold_at) pad_set_buttons(s_hold_mask);
+    else pad_set_buttons((s_fc % 32u) < 8u ? s_force_mask : PAD_NONE);
+  }
   s_fc++;
 
   uint8_t pk[4];
