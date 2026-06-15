@@ -65,5 +65,6 @@ Never commit CHDs. CLI arg > `PSXPORT_DISC` (env / `.env`) > `*.chd` drop-in.
 - No magic constant offsets in patches — every patched instruction/value is documented
   with what the original code does and why the change is correct (see global "No
   bandaids").
-- Single `main` branch; verified milestones committed (no remote configured yet).
+- Single `main` branch; verified milestones committed AND pushed to `origin`
+  (github.com/SomeoneIsWorking/psxport.git).
 - Verification = observed behavior in the emulator on real gameplay, cited.
