@@ -847,6 +847,21 @@ void gpu_pace_frame(void) {
 // Present: copy the displayed VRAM region to an RGB buffer. PSXPORT_GPU_DUMP=dir dumps PPMs;
 // PSXPORT_GPU_WINDOW=1 shows a live SDL window.
 static int s_frame = 0;
+// REPL `shot <path>`: write the currently-displayed VRAM region to a PPM so I can SEE where the
+// interactive driver is (title / menu / attract / gameplay) instead of guessing from stage numbers.
+void gpu_native_shot(const char* path) {
+  FILE* f = fopen(path, "wb");
+  if (!f) { fprintf(stderr, "[shot] cannot open %s\n", path); return; }
+  fprintf(f, "P6\n%d %d\n255\n", s_disp_w, s_disp_h);
+  for (int y = 0; y < s_disp_h; y++)
+    for (int x = 0; x < s_disp_w; x++) {
+      uint16_t p = *vram(s_disp_x + x, s_disp_y + y);
+      uint8_t rgb[3] = { (uint8_t)((p & 31) << 3), (uint8_t)(((p >> 5) & 31) << 3), (uint8_t)(((p >> 10) & 31) << 3) };
+      fwrite(rgb, 1, 3, f);
+    }
+  fclose(f);
+  fprintf(stderr, "[shot] f%d -> %s (%dx%d disp@%d,%d)\n", s_frame, path, s_disp_w, s_disp_h, s_disp_x, s_disp_y);
+}
 void gpu_present(void) {
   void watchdog_pet(void);
   watchdog_pet();             // frame-progress heartbeat (see watchdog.c)
