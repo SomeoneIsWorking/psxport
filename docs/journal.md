@@ -1,5 +1,35 @@
 # Debug / progress journal
 
+## 2026-06-16 (later 74) — BGM: USER-CONFIRMED it's the SPU music MIX (not the output path). Sequenced BGM songs are OPEN but never ACTIVATED — the per-sequence play flag (struct+0x98 bit0) is clear, so SsSeqCalled skips them (read ptr frozen). Jingle/SFX work. Built interactive REPL + watchpoints + screenshots to drive both cores.
+Tooling built (user request): native-port REPL (PSXPORT_REPL, FIFO-driven, persistent) mirroring the
+oracle's `-repl`; commands run/r/rw/w/w8/watch/unwatch/hits/press/release/tap/regs/seq/shot/stage;
+runtime memory watchpoints (mem_set_watch, reports writer PC); `shot <path>` (gpu_native_shot → PPM);
+tools/repl2.py drives native|oracle|both. Oracle gained `watch`/`unwatch`.
+
+### Headless samples → USER GROUND TRUTH (scratch/wav/{menu,navigated}_sample.wav)
+Generated headless SPU captures; user listened: **NO sequenced BGM** in menu or gameplay (only the
+fisherman FMV music + a quest jingle + SFX/footsteps/pause-menu). So headless == windowed: the SPU
+music MIX lacks BGM → it is NOT a windowed-output-path bug. The jingle + SFX DO play → the
+sequencer/SPU CAN make sound; only the BGM SONGS are silent.
+
+### Root-cause localization (via the REPL at the menu)
+- The menu BGM sequence (struct 0 @0x800BE3D8) is OPEN with a real SEQ data ptr (0x80182380, in the
+  verified-correct level-data region) and L/R volumes set — but its read pointers DO NOT ADVANCE over
+  200 frames (frozen). 
+- SsSeqCalled (0x80090BD0) only advances a sequence if **struct+0x98 bit0** (the active/play flag) is
+  set. struct 0's flag @0x800BE470 = **0x00000000** (clear) → skipped → frozen → silent.
+- So the BGM songs are allocated/opened (playmask 0xC3FF, 14 open — identical to the oracle) but never
+  ACTIVATED: the per-sequence play flag is never set (SsSeqPlay/activation not firing for them), while
+  the jingle/SFX sequences DO get activated.
+
+### NEXT (the fix)
+Find what SETS struct+0x98 bit0 (SsSeqPlay-equivalent) for a BGM song and why our port never calls it
+for the menu/gameplay BGM (the jingle/SFX path works). Drive the oracle to a steady-BGM scene
+(read structs 7-13 play flags too — slots 0-6 were clear at the pig scene), find which struct is the
+active BGM there (flag bit0 set), then watch that flag's writer PC in the oracle (= the activator),
+and check why our port's path doesn't reach it. Likely the scene/menu BGM-start code our boot path
+skips, or an SsSeqPlay precondition. Tools ready: REPL `watch` on struct+0x98 in both cores.
+
 ## 2026-06-15 (later 73) — BGM: the libsnd sequencer INFRASTRUCTURE is correct (state matches the oracle); dialogue issue RETRACTED. Missing BGM is in finer per-sequence state, needs a GAME-stage sequence-table compare vs the oracle.
 User refined the symptom: Menu (no BGM) → Story cutscene (no BGM) → **Fisherman (BGM plays)** →
 Gameplay (no BGM). Only the fisherman has BGM = it's FMV/XA (native_fmv), everything else is the
