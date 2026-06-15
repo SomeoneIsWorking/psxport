@@ -22,6 +22,9 @@ void gpu_prov_dump(int vx, int vy);   // PSXPORT_PROVAT must be set so provenanc
 uint8_t  mem_r8 (uint32_t a) { (void)a; return 0; }
 uint16_t mem_r16(uint32_t a) { (void)a; return 0; }
 uint32_t mem_r32(uint32_t a) { (void)a; return 0; }
+// wide60 taps (gated PSXPORT_WIDE60, off here) referenced by gpu_native.c's GP0/present path; stub.
+void     wide60_join_poly(int px, int py) { (void)px; (void)py; }
+void     ws_sx_dump(const char* tag)      { (void)tag; }
 void     watchdog_pet(void)  {}
 
 int main(int argc, char** argv) {

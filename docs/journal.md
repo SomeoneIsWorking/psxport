@@ -1,5 +1,51 @@
 # Debug / progress journal
 
+## 2026-06-15 (later 59) — GAMEPLAY CORRUPTION ISOLATED: it is NOT the rasterizer — the recompiled CPU/HLE produces a PROGRESSIVELY-CORRUPT GP0 stream (bad RAM-sourced texture/CLUT data). Beetle reproduces our garbage byte-near-identically; the oracle running the real game is clean.
+User (windowed, ground truth): in-game graphics "grow more and more garbage as you play" — garbage
+blocks, missing sprites, melted geometry; fishing-rod teleports in the non-FMV intro cutscene. Also
+asked to **sync native vs oracle at attract** and observe. (Audio: attract has NO BGM in BOTH native
+and oracle = normal; only the real game has gameplay BGM — that's the SEPARATE streamed-CD-audio gap,
+later-54, untouched here. Menu-cursor tempo (later-58) USER-CONFIRMED correct.)
+
+### Repro (headless attract — corrects the handoff's "attract renders coherently")
+The attract **gameplay DEMO** reproduces it; the early intro (SCEA, character cutscenes, TOMBA 2
+title) is coherent, but once the DEMO starts the scene is corrupt and **worsens over frames**.
+- Native recomp port (`scratch/bin/tomba2_port`), headless 2500 logic frames → ~5087 presents:
+  green-field demo lightly wrong by f~3345 (striped ground, garbled character, a black block),
+  dungeon demo HEAVILY garbled by f5000 (character = vertical magenta/yellow rainbow bar).
+  `scratch/logs/native_progression.png`, `native_fishing.png`, `native2_late.png`,
+  `native2_f05000_full.png`.
+- Oracle (`wide60rt`, full Beetle interpreter on the same disc) renders the SAME demo scene **clean**
+  — smooth grass, clean sprites, no stripes/blocks: `scratch/logs/oracle_007000.png`. So the real
+  game's draw stream is correct; ours is not.
+
+### Decisive isolation (gpu_differ on captured GP0 traces — `tools/gpu_differ/`)
+Captured our live GP0 stream at f3360 and f5000 (`PSXPORT_GPUTRACE`), replayed each through BOTH our
+rasterizer (`replay_ours`) and Beetle (`wide60rt -gpureplay`), diffed VRAM:
+- f3360: front buffer **IDENTICAL**, back buffer 165 px small-Δ (UV-round/dither residual, later-44).
+- f5000 (heavily corrupted live): front buffer **IDENTICAL**, back buffer 248 px small-Δ only.
+- Rendering both replays to PNG vs the LIVE frame: **all three identical, INCLUDING the garbled
+  character** (`scratch/logs/replay_vs_live_5000.png`). Beetle faithfully reproduces our garbage from
+  our own GP0 words.
+⟹ **The rasterizer is correct.** The corruption is in the GP0 word stream itself, which is built from
+main RAM (`gpu_dma2_*` read via `mem_r32`). The draw commands are structurally fine (POLYDUMP f5000:
+textured gouraud tris, sane texpage/CLUT/geometry for the character) → the corruption is in the
+**texture/CLUT DATA in VRAM**, uploaded from RAM. It **degrades over time** ⟹ progressive **RAM
+corruption by the recompiled MAIN.EXE / native HLE** (a recompiler mistranslation or a missing/wrong
+HLE the game relies on for memory/texture management). This is upstream of the GPU entirely.
+
+### Tooling fixed
+`tools/gpu_differ/replay_ours.c`: added stubs for `wide60_join_poly`/`ws_sx_dump` (added to
+gpu_native.c by later-55/57) so the standalone differ links again. `tools/gpu_differ/build.sh` now
+builds clean.
+
+### Next (root cause — NOT yet found)
+Need a **differential RAM trace** vs the oracle to find the FIRST divergence (frame + address), then
+map to the mistranslated instruction / missing HLE. No lockstep recomp-vs-oracle RAM harness exists
+yet; the hard part is determinism/alignment (different engines: recomp C vs mednafen interpreter —
+timers/RNG/uninit RAM differ benignly). Build that next. Do NOT re-chase the rasterizer — it is ruled
+out, bit-near-exact vs Beetle on real captured gameplay (f3360 + f5000).
+
 ## 2026-06-15 (later 58) — AUDIO TEMPO FIX: per-vblank work was running 1× per logic frame instead of quota× → audio at HALF real-time tempo windowed (user heard the menu-cursor tick too slow). later-54's "tick once" reasoning corrected.
 User (windowed, ground truth): "menu cursor movement audio is playing at wrong tick … should be
 faster tick." Diagnosis confirmed it's a general half-tempo bug, not menu-specific.
