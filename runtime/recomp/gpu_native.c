@@ -702,9 +702,20 @@ void gpu_gp0(uint32_t w) {
       int w2 = s_fifo[3] & 0x3FF, h2 = (s_fifo[3] >> 16) & 0x1FF;
       for (int y = 0; y < h2; y++) for (int x = 0; x < w2; x++) *vram(dx + x, dy + y) = *vram(sx + x, sy + y);
       clutwatch_xfer("80copy", dx, dy, w2, h2);
-      if (texwatch_overlap(dx, dy, w2, h2))
+      if (texwatch_overlap(dx, dy, w2, h2)) {
         fprintf(stderr, "[texwatch] f%d 80copy src=(%d,%d) dest=(%d,%d) %dx%d node=0x%08X words=%08X,%08X,%08X,%08X\n",
                 s_frame, sx, sy, dx, dy, w2, h2, s_cur_node, s_fifo[0], s_fifo[1], s_fifo[2], s_fifo[3]);
+        // Dump RAM + the OT node neighbourhood the first time the atlas-clobbering copy fires, so the
+        // malformed node and the chain that reaches it can be examined offline.
+        if (getenv("PSXPORT_CLOBBERDUMP")) { static int done = 0; if (!done++) {
+          extern uint8_t g_ram[]; uint32_t na = s_cur_node & 0x1FFFFF;
+          fprintf(stderr, "[clobber] node@0x%08X neighbourhood:\n", s_cur_node);
+          for (int k = -8; k <= 16; k++) fprintf(stderr, "  [%+d] 0x%08X: %08X\n", k,
+                  0x80000000u | ((na + k*4) & 0x1FFFFF), mem_r32(0x80000000u | ((na + k*4) & 0x1FFFFF)));
+          FILE* mf = fopen(getenv("PSXPORT_CLOBBERDUMP"), "wb");
+          if (mf) { fwrite(g_ram, 1, 0x200000, mf); fclose(mf);
+                    fprintf(stderr, "[clobber] RAM dumped -> %s\n", getenv("PSXPORT_CLOBBERDUMP")); } } }
+      }
     } else if (op != 0xC0) {
       gp0_exec();
     }

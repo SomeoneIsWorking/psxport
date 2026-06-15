@@ -19,6 +19,7 @@ void gpu_prov_dump(int vx, int vy);   // PSXPORT_PROVAT must be set so provenanc
 
 // gpu_native.c references these only outside the GP0 path (DMA walk / window pacing / watchdog),
 // which the differ never drives. Stub them so the renderer links standalone.
+uint8_t  g_ram[0x200000];   // referenced by gpu_native.c debug dumps; unused in replay
 uint8_t  mem_r8 (uint32_t a) { (void)a; return 0; }
 uint16_t mem_r16(uint32_t a) { (void)a; return 0; }
 uint32_t mem_r32(uint32_t a) { (void)a; return 0; }

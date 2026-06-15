@@ -1,5 +1,30 @@
 # Debug / progress journal
 
+## 2026-06-15 (later 71) — CONFIRMED the clobber is a corrupted ORDERING-TABLE entry in RAM, NOT our GPU. gpu_differ at the ACTUAL clobber frame (f3265): replaying the same word stream through OUR renderer AND Beetle both clobber the atlas identically. So the bad VRAM-copy is in the display-list words from RAM; the fix is upstream (whatever builds/corrupts the OT).
+gpu_differ (later-59) had only ever tested f3360/f5000, never the f3265 clobber. Tested it now:
+- PSXPORT_GPUTRACE="3265:…" captures the 10815-word GP0 stream fed at f3265 (post-DMA-traversal).
+- replay_ours vs `wide60rt -gpureplay` of that SAME stream: atlas (320,0) 92% same, (576,0) 100% same
+  (the 8% is the known UV-round/dither residual, later-44). BOTH renderers execute the copy and clobber
+  the atlas. ⟹ the bad 0x80 copy is genuinely in the word stream from RAM; our GPU/parser is faithful
+  (re-confirmed). The clobber word 0x8040333D lives at 0x800D8FD4 as a DATA word (last word of a
+  gouraud-tri, immediately followed by a 0x090D8044 OT header) — i.e. the OT stream is structured so a
+  data word lands at a command boundary and is executed as a MoveImage.
+
+### Where this leaves the fix
+The display list (ordering table) our interpreted game-logic/HLE builds at ~f3265 is corrupted (a
+node count / next-pointer / buffer is wrong, so the DMA feeds a misaligned stream that decodes a data
+word as an atlas-clobbering VRAM copy). The OT lives in 0x800Cxxxx-0x800Exxxx, exactly the dynamic
+region that diverges from the oracle (later-60). This is upstream of the GPU entirely.
+
+### NEXT (unavoidable: from-boot OT-corruption hunt)
+The transplant masks accumulation, so go from-boot. Find what writes the bad OT: PSXPORT_CW watchpoint
+on the OT buffer around f3265 (filter to the offending node/words), or sequence-diff the OT-build path
+(ClearOTagR @0x80081458 / AddPrim / the draw-enqueue) vs the oracle. Identify the routine that
+mis-builds the list (a wrong word-count in a primitive, a stale double-buffer OT index DAT_1f800135,
+or an HLE memcpy/alloc that overruns the OT) and PC-own/fix it. NO bandaid (do not just skip the copy).
+Tooling: gpu_differ now builds again (replay_ours.c defines g_ram); PSXPORT_TEXWATCH logs node+words;
+PSXPORT_CLOBBERDUMP dumps RAM at the clobber.
+
 ## 2026-06-15 (later 70) — the clobbering copy is a MALFORMED OT NODE (garbage words read as a VRAM copy). Bad words come from the OT in RAM, not our GPU parser. Root cause = a bad OT node our port builds and the oracle doesn't.
 The f3265 atlas-clobbering 80copy (later-69) is node **0x800D4B9C**, raw words
 **8040333D, 34383838, 005A0040, 38FF322E**. A real libgpu MoveImage cmd word is 0x80000000; this is
