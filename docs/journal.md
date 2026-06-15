@@ -1,5 +1,39 @@
 # Debug / progress journal
 
+## 2026-06-15 (later 42) — FIXED: grass red-blocks = uint8 overflow in texture-color modulation
+Root-caused and fixed the scattered garish blocks on the grass (the bug later-39/40/41 circled but
+never landed). **It was our rasterizer all along — a saturation bug in gouraud-textured modulation.**
+- **Root cause (gpu_native.c `tri()`):** `r = r * a.r / 128` etc. with `r,g,bl` as `uint8_t`. PSX
+  modulation is `texel * vertexcolor / 128` **saturated to 0xFF**; doing it in `uint8_t` instead
+  WRAPS mod 256. A bright texel channel under a bright (>128) vertex color overflows 255 and wraps to
+  a small value — so a bright-green grass texel becomes red. Exact reproduction: green grass texel
+  (136,192,24) × vertex color (187,187,197) → R=198, G=192·187/128=**280→wraps to 24**, B=36 →
+  output (192,24,32) = 0x9078 = the exact red pixel observed. Scattered because only the brightest
+  texel+brightest-vertex combos exceed 255.
+- **The fix:** compute the modulation wide (int) and clamp each channel to 255. One-liner, the only
+  modulation site (the untextured gouraud path interpolates within the vertex-color range, no
+  overflow). Sprites (GP0 0x60-0x7F) don't modulate by command color in our path — a separate
+  faithfulness gap, not this bug; left as-is.
+- **Verified:** grass-region garish pixels (lower-right, away from the legit-colorful banner/Tomba/
+  house) went **402 → 0** at f03000/f03255; the level renders clean green grass matching the oracle
+  (scratch/screenshots/redfix/f03000.png — clean, "Go to the Burning House!" quest banner + Tomba +
+  items all correct). Level still loads, reaches GAME, and plays (no regression).
+- **How the provenance tool cracked it (after a session of dead ends):** added `PSXPORT_PROVAT=x,y[:frame]`
+  — a per-pixel "last writer" buffer (gid + frame + prim metadata) stamped in `put_px_b`, queried in
+  DISPLAY space at present time. That sidesteps the double-buffer offset that had defeated every prior
+  pixel→prim correlation, and immediately showed: the red pixel was actively drawn (age 1 frame, not
+  stale) by a 4bpp gouraud prim using the all-GREEN grass palette — which is impossible unless the
+  arithmetic mangles a green texel. From there the overflow was a 2-minute check. Lesson: build the
+  provenance tool FIRST next time a "which prim drew this pixel" question comes up.
+- **Earlier-session wrong leads (now closed):** the clut-(880,507) quad is the DEMO intro subtitle
+  (later-41, fine); the (240,0,0) prims were Tomba's own model (later-41b); the clut-(1008,25x)
+  palette diffs are minor cyan-shade shifts (later-41b, not this bug). All red herrings — the one real
+  bug was the modulation overflow.
+- **Durable tooling added across the session:** PSXPORT_PROVAT (per-pixel prim provenance + stale
+  detection), PSXPORT_POLYDUMP/POLYAT (poly+sprite dump with vertex colors, OT node, point filter),
+  PSXPORT_VRAMDUMP_AT, PSXPORT_STAGETL, PSXPORT_RAMDUMP_FRAME, PSXPORT_WWATCH (+coro g_interp_pc),
+  PSXPORT_TEXTDBG; oracle POLYWATCH range + POLYCLUT.
+
 ## 2026-06-15 (later 41b) — narrowing the real grass garbage (user confirmed both our frames are wrong)
 Follow-up to later-41 after the user confirmed the DEMO frame (f02790) is ALSO wrong (only the oracle
 is clean) — i.e. the bug is in our grass-level rendering generally, present in both DEMO attract and

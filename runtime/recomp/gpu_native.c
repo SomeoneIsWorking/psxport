@@ -44,6 +44,20 @@ static long s_gp0_words = 0, s_dma2 = 0;  // diagnostics: GP0 words + DMA2 trigg
 static uint32_t s_cur_node = 0;   // REDDBG: RAM addr of the OT node currently being fed to GP0
 static int s_frame;               // present-frame counter (defined below); forward tentative def
 
+// ---- Per-pixel primitive provenance (PSXPORT_PROVAT="x,y[:frame]") --------------------------
+// Records, for every VRAM pixel, the global id of the primitive that last wrote it. A wrong
+// DISPLAYED pixel can then be traced to the exact prim that produced it — or shown to be STALE
+// (last written many frames ago = revealed through a terrain/coverage gap, never overdrawn this
+// frame). Queried in DISPLAY space at present time, which sidesteps the GPU double-buffer offset
+// entirely (no more guessing which buffer / which native frame drew the shown pixel).
+static uint32_t s_prov[VRAM_W * VRAM_H];   // gid of last writer per pixel (0 = never written)
+static uint32_t s_prim_gid = 0;            // monotonic primitive counter
+static int      s_prov_on = -1;            // lazily: 1 if PSXPORT_PROVAT set, else 0
+typedef struct { uint32_t gid, frame, node; int clut_x, clut_y, tp_x, tp_y, x0, y0, u0, v0;
+                 uint8_t op, r, g, b, semi, tex, mode; } ProvMeta;
+#define PROVRING 16384
+static ProvMeta s_provmeta[PROVRING];      // gid -> prim details (ring; older gids evicted)
+
 static inline int clampi(int v, int lo, int hi) { return v < lo ? lo : v > hi ? hi : v; }
 static inline uint16_t to555(uint8_t r, uint8_t g, uint8_t b) {
   return (uint16_t)((r >> 3) | ((g >> 3) << 5) | ((b >> 3) << 10));
@@ -94,6 +108,7 @@ static inline void put_px_b(int x, int y, uint8_t r, uint8_t g, uint8_t b, int s
   if (semi) out = blend555(*vram(x, y) & 0x7FFF, r >> 3, g >> 3, b >> 3, s_tp_blend);
   else out = to555(r, g, b);
   *vram(x, y) = out | 0x8000;
+  if (s_prov_on > 0) s_prov[(y & 511) * VRAM_W + (x & 1023)] = s_prim_gid;
 }
 static inline void put_px(int x, int y, uint8_t r, uint8_t g, uint8_t b) { put_px_b(x, y, r, g, b, 0); }
 
@@ -144,7 +159,15 @@ static void tri(Vtx a, Vtx b, Vtx c, int tex, int shade, int semi) {
         // PSX: a textured pixel blends only when its bit15 is set AND the prim semi bit is set.
         px_semi = semi && (t & 0x8000);
         r = (t & 31) << 3; g = ((t >> 5) & 31) << 3; bl = ((t >> 10) & 31) << 3;
-        if (shade) { r = r * a.r / 128; g = g * a.g / 128; bl = bl * a.b / 128; dithered = 1; }  // texture*color
+        // texture*color modulation (texel * vertexcolor / 128). PSX hardware SATURATES the result
+        // to 0xFF; doing the arithmetic in uint8_t wraps mod 256 instead, so a bright texel under a
+        // bright (>128) vertex color overflows and wraps to a small value — e.g. a bright-green grass
+        // texel turns red. Compute wide and clamp to 255 (the grass red-block bug, journal later 42).
+        if (shade) {
+          int rr = r * a.r / 128, gg = g * a.g / 128, bb = bl * a.b / 128;
+          r = rr > 255 ? 255 : rr; g = gg > 255 ? 255 : gg; bl = bb > 255 ? 255 : bb;
+          dithered = 1;
+        }
       } else if (shade) {
         r = (uint8_t)((l0*a.r + l1*b.r + l2*c.r) / aa);
         g = (uint8_t)((l0*a.g + l1*b.g + l2*c.g) / aa);
@@ -192,6 +215,20 @@ static void set_texpage(uint16_t tp) {
   s_tp_dither = (tp >> 9) & 1;     // ordered 4x4 dither enable
 }
 static void set_clut(uint16_t cl) { s_clut_x = (cl & 0x3F) * 16; s_clut_y = (cl >> 6) & 0x1FF; }
+
+// Begin a primitive for provenance tracking: bump the global id and record this prim's details
+// (frame/node/op/clut/texpage/color/first-vertex) so put_px_b can stamp each pixel it writes.
+static void prov_begin(uint8_t op, int tex, int semi, uint8_t r, uint8_t g, uint8_t b,
+                       int x0, int y0, int u0, int v0) {
+  if (s_prov_on < 0) s_prov_on = getenv("PSXPORT_PROVAT") ? 1 : 0;
+  if (!s_prov_on) return;
+  s_prim_gid++;
+  ProvMeta* m = &s_provmeta[s_prim_gid % PROVRING];
+  m->gid = s_prim_gid; m->frame = (uint32_t)s_frame; m->node = s_cur_node; m->op = op;
+  m->clut_x = s_clut_x; m->clut_y = s_clut_y; m->tp_x = s_tp_x; m->tp_y = s_tp_y;
+  m->x0 = x0; m->y0 = y0; m->u0 = u0; m->v0 = v0; m->r = r; m->g = g; m->b = b;
+  m->semi = (uint8_t)semi; m->tex = (uint8_t)tex; m->mode = (uint8_t)s_tp_mode;
+}
 
 // PSXPORT_CLUTWATCH[=x,y] — log every VRAM upload whose rect covers a watched CLUT point
 // (default 880,507 = the wrong grass palette found via the oracle compare, journal later 39),
@@ -271,6 +308,8 @@ static void gp0_exec(void) {
                 v[0].x,v[0].y,v[0].u,v[0].v, v[1].x,v[1].y,v[1].u,v[1].v, v[2].x,v[2].y,v[2].u,v[2].v,
                 quad?" +q":"", s_off_x, s_off_y);
     }
+    prov_begin(op, textured ? 1 : 0, semi, v[0].r, v[0].g, v[0].b,
+               v[0].x + s_off_x, v[0].y + s_off_y, v[0].u, v[0].v);
     tri(v[0], v[1], v[2], textured, shade, semi);
     if (quad) tri(v[1], v[2], v[3], textured, shade, semi);
     s_prims++;
@@ -298,6 +337,7 @@ static void gp0_exec(void) {
                   s_frame, s_cur_node, op, textured?1:0, semi, s_clut_x, s_clut_y, s_tp_x, s_tp_y,
                   cr, cg, cb, x, y, w, h, u0, v0, s_off_x, s_off_y);
       } }
+    prov_begin(op, textured ? 1 : 0, semi, cr, cg, cb, x + s_off_x, y + s_off_y, u0, v0);
     // Clip the iteration to the drawing area up front: off-screen sprites otherwise spin
     // w*h sample_tex calls for pixels put_px_b would discard (an off-screen/garbage sprite
     // could burn millions of iterations and wedge the frame).
@@ -493,6 +533,35 @@ void gpu_present(void) {
             s_frame, s_disp_x, s_disp_y, s_disp_w, s_disp_h, nz, minx, miny, maxx, maxy);
   }
   present_window();
+  // PSXPORT_PROVAT="x,y[:frame]" — at present time, report (in DISPLAY space, so the double buffer
+  // is irrelevant) which primitive last wrote each pixel in a 7x7 box around (x,y), with how many
+  // frames ago it was drawn. A wrong pixel whose writer is the current frame = actively drawn (the
+  // listed prim is the culprit); whose writer is many frames old = STALE, revealed through a gap.
+  { const char* pa = getenv("PSXPORT_PROVAT");
+    if (pa) {
+      int qx = -1, qy = -1, qf = -1; sscanf(pa, "%d,%d", &qx, &qy);
+      const char* col = strchr(pa, ':'); if (col) qf = atoi(col + 1);
+      if (qx >= 0 && (qf < 0 ? (s_frame % 200 == 0) : s_frame == qf)) {
+        fprintf(stderr, "[provat] f%d display (%d,%d) +/-3  (disp@%d,%d)\n",
+                s_frame, qx, qy, s_disp_x, s_disp_y);
+        for (int dy = -3; dy <= 3; dy++) for (int dx = -3; dx <= 3; dx++) {
+          int vx = s_disp_x + qx + dx, vy = s_disp_y + qy + dy;
+          uint16_t p = *vram(vx, vy);
+          uint32_t gid = s_prov[(vy & 511) * VRAM_W + (vx & 1023)];
+          ProvMeta* m = &s_provmeta[gid % PROVRING];
+          int valid = (m->gid == gid && gid != 0);
+          fprintf(stderr, "  (%+d,%+d) vram(%d,%d)=%04X rgb(%d,%d,%d)", dx, dy, vx, vy, p,
+                  (p & 31) << 3, ((p >> 5) & 31) << 3, ((p >> 10) & 31) << 3);
+          if (!gid) fprintf(stderr, "  <never written>\n");
+          else if (!valid) fprintf(stderr, "  gid=%u <evicted: drawn long ago = STALE>\n", gid);
+          else fprintf(stderr, "  gid=%u age=%dframes op=%02X tex=%d mode=%d semi=%d clut=(%d,%d) tp=(%d,%d) "
+                       "primcol=(%d,%d,%d) node=%08X v0=(%d,%d) uv0=(%d,%d)\n",
+                       gid, (int)((uint32_t)s_frame - m->frame), m->op, m->tex, m->mode, m->semi,
+                       m->clut_x, m->clut_y, m->tp_x, m->tp_y, m->r, m->g, m->b, m->node,
+                       m->x0, m->y0, m->u0, m->v0);
+        }
+      }
+    } }
   { const char* vd = getenv("PSXPORT_VRAMDUMP_AT");   // "frame:path" — dump our 1024x512x16 VRAM
     if (vd) { int fr = atoi(vd); const char* col = strchr(vd, ':');
       if (col && s_frame == fr) { FILE* vf = fopen(col + 1, "wb");
