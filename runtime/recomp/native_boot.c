@@ -200,7 +200,16 @@ static void ov_game_main(R3000* c) {
       rc1(c, 0x8008179c, envp + 0x2000);                    // PutDispEnv  (env+0x2000)
       rc1(c, 0x800815d0, envp + 0x2014);                    // PutDrawEnv  (env+0x2014)
       rc1(c, 0x80081560, envp + 0x1ffc);                    // DrawOTag (submit the OT head)
-      mem_w8(0x1f800135, 1 - mem_r8(0x1f800135));           // flip back/front buffer
+      // Flip the double buffer ONLY if this frame actually drew into the back buffer. During a
+      // multi-frame asset load (e.g. the menu loading after the FMVs) the game produces no draw
+      // prims for ~15 frames while it streams in a background image; flipping anyway alternates the
+      // display between the one buffer with content and the still-black other buffer = visible
+      // flicker. Holding the last completed front buffer until a real frame is drawn removes it
+      // (same "never present an undrawn buffer" rule as the SCEA blink fix, journal later-46/50).
+      // Steady gameplay/menus draw every frame (prims>0), so the flip is unaffected there.
+      int gpu_prims_since_present(void);
+      if (gpu_prims_since_present() > 0)
+        mem_w8(0x1f800135, 1 - mem_r8(0x1f800135));         // flip back/front buffer
     }
     static uint32_t s_last_entry = 0; static uint32_t s_last_sm = 0xFFFFFFFF;
     uint32_t t0e = mem_r32(TASKBASE + 0xc), s48 = mem_r16(TASKBASE + 0x48);

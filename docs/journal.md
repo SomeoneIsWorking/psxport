@@ -1,5 +1,21 @@
 # Debug / progress journal
 
+## 2026-06-15 (later 50) — FIXED the menu-load flicker: only flip the double buffer when a frame drew
+User: "flicker is not acceptable." Tooling (GPU_DUMP per-frame luma + GPU_LOG prim counts) pinned it:
+during the ~17-frame menu-load gap after the FMVs the game produces NO draw prims (it's streaming in
+a background image), but the native frame loop (native_boot.c) flipped the display double buffer
+EVERY frame, alternating the display between the one buffer that has content and the still-black
+other buffer → black/content/black/content flicker. In steady gameplay/menus every frame draws
+(prims>0) so the flip is normal; only the load gap flickered.
+- **Fix:** gate the buffer flip on `gpu_prims_since_present() > 0` (new accessor in gpu_native.c) —
+  only flip to a buffer we actually drew this frame; otherwise HOLD the last completed front buffer.
+  Same "never present an undrawn buffer" rule as the SCEA blink (later-46). During the load the
+  display now holds the last good frame (the last OP FMV frame in the real flow) until the menu is
+  drawn, instead of flickering.
+- **Verified headless:** menu-load region went from alternating black/content to steady (no
+  interspersed black), then the title menu renders cleanly; GAME stage still reached and renders the
+  level — no regression to gameplay (which draws every frame).
+
 ## 2026-06-15 (later 49) — SCEA: Start-skip + stop the CD reads (kill the "CdRead: retry" loop)
 User asks: SCEA skippable via Start; and SCEA should do NO CD reads — just cut to the LOGO FMV when
 it ends. Both done (native_stub.c).

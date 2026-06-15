@@ -707,6 +707,10 @@ void gpu_native_init(void) {
 // harness to assert exact rasterized/blended values; harmless in production (read-only).
 uint16_t gpu_vram_peek(int x, int y) { return *vram(x, y); }
 
+// Primitives drawn since the last gpu_present() (reset each present). The native frame loop uses
+// this to avoid flipping the double buffer to a buffer it didn't draw this frame (menu-load flicker).
+int gpu_prims_since_present(void) { return (int)s_prims; }
+
 // Bulk VRAM load/save (1024x512x16). Used by the offline GP0 differ harness (tools/gpu_differ):
 // seed s_vram with a captured initial VRAM, replay a GP0 word stream via gpu_gp0(), then read back
 // the rasterized result for a pixel-exact compare against Beetle on the identical input.
