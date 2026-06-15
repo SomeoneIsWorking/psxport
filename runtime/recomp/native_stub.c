@@ -116,10 +116,19 @@ void hle_deliver_event(uint32_t ev_class, uint32_t spec);
 static uint32_t g_stub_vblank;
 static void ov_stub_vsync(R3000* c) {
   int32_t mode = (int32_t)c->r[A0_];
+  if (getenv("PSXPORT_VSYNCLOG")) fprintf(stderr, "[vsync] mode=%d count=%u\n", mode, g_stub_vblank);
   g_stub_vblank += (mode > 0) ? (uint32_t)mode : 1u;   // every call ticks >=1 frame
   hle_deliver_event(0xF2000003u, 0xFFFFFFFFu);         // VBlank event classes (RCnt3 / libapi)
   hle_deliver_event(0xF0000001u, 0xFFFFFFFFu);
-  gpu_present();                                        // show this frame (pets the watchdog)
+  // PRESENT only on a real frame-wait (mode>=0), NOT on busy-poll queries (VSync(-1)). The SCEA
+  // stub's per-frame body is: VSync(0) [frame boundary] -> clear framebuffer -> busy-poll VSync(-1)
+  // (timing/CD) -> draw -> loop. Presenting on the polls flashes the just-cleared (black) buffer
+  // BETWEEN complete frames — the unnatural SCEA blink (journal later-46). Real HW refreshes the
+  // display only at the VBlank frame boundary (VSync(0)), never mid-draw, so the cleared state is
+  // never shown. The count still advances on every call so the busy-poll loops still terminate;
+  // poll calls just pet the watchdog instead of presenting.
+  if (mode >= 0) gpu_present();                         // show the completed frame (pets watchdog)
+  else { void watchdog_pet(void); watchdog_pet(); }
   mem_w32(STUB_VBLANK_COUNT, g_stub_vblank);
   c->r[V0_] = g_stub_vblank;
 }

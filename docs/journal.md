@@ -1,5 +1,32 @@
 # Debug / progress journal
 
+## 2026-06-15 (later 46) — FIXED the SCEA screen: clipped "Presents" + unnatural blink
+User flagged the intro sequence is wrong (SCEA→Woopee→OP→Menu; ours does SCEA→Menu, FMVs skipped)
+and to fix issues IN ORDER, comparing via TOOLING vs the oracle (never eyeballing). First issue =
+the SCEA "Sony Computer Entertainment America / Presents" screen. Two distinct bugs, both fixed:
+
+1. **"Presents" line clipped + text mispositioned.** Tooling: dumped our SCEA VRAM
+   (PSXPORT_VRAMDUMP_AT) and the oracle's (PSXPORT_VRAMDUMP) — BYTE-similar content; both lines
+   present in VRAM at y≈205-258, centered for a 480-line display. Our render only showed line 1 at
+   the bottom. Root cause: SCEA runs in **480i** (GP1(0x08)=0x27: interlace bit5 + VRes-480 bit2),
+   GP1(0x07) vertical range = 234 scanlines, but in 480i the field is shown twice so the displayed
+   VRAM height is 2×(y1-y0)≈468. Our gpu_gp1 set s_disp_h = y1-y0 = 234, clipping the bottom
+   (y≈245-258 = "Presents"). Fix (gpu_native.c gpu_gp1): track interlace+VRes from GP1(0x08) and
+   double s_disp_h in 480i. 240p stages (DEMO/GAME, GP1(0x08)=0x01) unaffected.
+2. **Unnatural flicker.** Tooling: per-frame mean-luma of the GPU_DUMP showed every 4th frame fully
+   BLACK (≈76/305) between text frames. Correlating GPU_LOG (per-present prim/word counts) with a
+   new PSXPORT_VSYNCLOG: the stub's per-frame body is VSync(0)[frame boundary] → clear framebuffer →
+   busy-poll VSync(-1)×3 (timing/CD) → draw → loop. Our ov_stub_vsync presented on EVERY VSync call,
+   so the VSync(-1) poll fired right after the clear and BEFORE the redraw → presented the cleared
+   (black) buffer. Real HW refreshes only at the VBlank frame boundary (VSync(0)), never mid-draw.
+   Fix (native_stub.c ov_stub_vsync): present ONLY on mode>=0 (real frame-waits); mode<0 polls just
+   advance the count (so loops still terminate) + pet the watchdog. After: black frames 76→5, and
+   the 5 are only the fade-in (f1-3) / fade-out (f304-5) boundaries — no interspersed flicker; the
+   brightness sequence is a smooth fade matching the oracle.
+New gated debug tools: PSXPORT_GP1LOG (GP1 command log), PSXPORT_VSYNCLOG (stub VSync mode log).
+NEXT (per user): FMVs don't play — SCEA→Menu instead of SCEA→Woopee→OP→Menu. A verified native FMV
+player exists (native_fmv.c); the START-stage path that should play \Woopee\OP STR FMVs is skipped.
+
 ## 2026-06-15 (later 45) — FIXED the UV sampling residual: affine UV now round-to-nearest
 Follow-on to later-44, using the differ to land its named #1 residual. PSX/Beetle sample the texel
 NEAREST to the affine (u,v) — Beetle seeds its affine interpolant with a +0.5-texel bias

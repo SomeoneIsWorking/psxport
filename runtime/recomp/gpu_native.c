@@ -35,6 +35,8 @@ static int s_clut_x, s_clut_y;    // CLUT base (per-primitive, from packet)
 // ---- Display control (GP1) ----------------------------------------------------------
 static int s_disp_x, s_disp_y;    // VRAM top-left of the displayed region
 static int s_disp_w = 320, s_disp_h = 240;
+static int s_disp_vy0, s_disp_vy1 = 240;  // GP1(0x07) vertical display range (scanlines)
+static int s_disp_480i;           // GP1(0x08): interlace + 480-line vertical resolution
 
 typedef struct { int x, y; uint8_t r, g, b; int u, v; } Vtx;
 
@@ -540,10 +542,21 @@ void gpu_gp0(uint32_t w) {
 // GP1 display/control commands.
 void gpu_gp1(uint32_t w) {
   uint8_t op = w >> 24;
+  if (getenv("PSXPORT_GP1LOG"))
+    fprintf(stderr, "[gp1] f%d %02X %06X\n", s_frame, op, w & 0xFFFFFF);
   switch (op) {
     case 0x05: s_disp_x = w & 0x3FF; s_disp_y = (w >> 10) & 0x1FF; break;          // display area start
-    case 0x07: { int y0 = w & 0x3FF, y1 = (w >> 10) & 0x3FF; s_disp_h = (y1 - y0) ? (y1 - y0) : 240; break; }
-    case 0x08: s_disp_w = ((w & 3) == 0) ? 256 : ((w & 3) == 1) ? 320 : ((w & 3) == 2) ? 512 : 640; break;
+    case 0x07:  // vertical display range (scanlines). In 480i the field is shown twice (two VRAM
+      // lines per scanline), so the displayed VRAM height is (y1-y0)*2 — without the doubling the
+      // bottom of a 480-line framebuffer is clipped (the SCEA "Presents" line, journal later-46).
+      s_disp_vy0 = w & 0x3FF; s_disp_vy1 = (w >> 10) & 0x3FF;
+      { int n = s_disp_vy1 - s_disp_vy0; if (n <= 0) n = 240; s_disp_h = s_disp_480i ? n * 2 : n; }
+      break;
+    case 0x08:  // display mode: horizontal res (bits0-1, bit6=368), interlace (bit5), VRes 480 (bit2)
+      s_disp_w = ((w & 3) == 0) ? 256 : ((w & 3) == 1) ? 320 : ((w & 3) == 2) ? 512 : 640;
+      s_disp_480i = ((w & 0x20) && (w & 0x04)) ? 1 : 0;
+      { int n = s_disp_vy1 - s_disp_vy0; if (n <= 0) n = 240; s_disp_h = s_disp_480i ? n * 2 : n; }
+      break;
     default: break;
   }
 }
