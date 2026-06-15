@@ -26,12 +26,26 @@ Staging RAM at a gameplay frame looks like real data (89–94% nonzero, high uni
 it correct needs a SAME-SCENE compare vs the oracle (level data is static once loaded, so that
 compare is alignment-insensitive — the decisive next test).
 
-### Next (root cause — still open)
-Compare the **static texture-staging RAM** (0x80158000/0x8018A000/0x80182000) and/or the GP0 0xA0
-upload payloads between recomp and oracle **at the same loaded scene** (level data is loaded once and
-static ⇒ no frame alignment needed). If RAM matches → corruption is in the upload/CLUT computation;
-if RAM differs → recomp corrupts it post-load (decompression/processing). The clean 2D screens vs
-corrupt 3D-gameplay split still implicates the interpreted overlay (DEMO.BIN/GAME.BIN) gameplay path.
+### RESULT of the same-scene RAM compare: LOADED DATA IS BYTE-PERFECT (load/decompress ruled out)
+Dumped recomp RAM at a green-field gameplay frame and oracle RAM at its green-field frame (7000), then
+compared. The texture/level-data staging regions **0x80158000 / 0x8018A000 / 0x80182000 match the
+oracle at 100.0%** (768 KB byte-identical across two different engines ⇒ same scene AND correct data).
+**So the loaded+decompressed texture data in RAM is correct; load/decompress is NOT the bug.** Tools:
+recomp `PSXPORT_RAMDUMP_FRAME=N PSXPORT_RAMDUMP=path`; oracle `PSXPORT_RAMDUMP=frame:path`.
+
+Full 2 MB aligned diff: only the **dynamic object/game-state region 0x800C0000–0x800E0000 (~68–77%)**
+and low kernel RAM (0x0–0x10000, 22%) diverge — but that is almost certainly **frame-WITHIN-scene**
+difference (the demo animates; I can align to the scene via static data, not to the exact frame), not
+corruption. So the RAM diff is inconclusive for the corruption itself.
+
+### Next (root cause — still open, now sharply narrowed)
+Loaded data correct + rasterizer correct ⇒ the corruption is in the **texture UPLOAD to VRAM**: the
+upload sources correct RAM but lands wrong (wrong DMA source addr, wrong VRAM dest x/y, wrong
+width/stride), or the CLUT/processing between correct-RAM and the GP0 0xA0 stream is wrong. NEXT:
+instrument the GP0 0xA0 / `gpu_dma2_block` path to log (VRAM dest, source madr, w×h) during the
+green-field uploads; check whether the source RAM region is the 100%-correct one and whether the dest
+coords/stride are right. The clean-2D vs corrupt-3D split still implicates the interpreted overlay
+gameplay path. (mem_swr fix from this entry is committed but is NOT the cause.)
 
 ## 2026-06-15 (later 59) — GAMEPLAY CORRUPTION ISOLATED: it is NOT the rasterizer — the recompiled CPU/HLE produces a PROGRESSIVELY-CORRUPT GP0 stream (bad RAM-sourced texture/CLUT data). Beetle reproduces our garbage byte-near-identically; the oracle running the real game is clean.
 User (windowed, ground truth): in-game graphics "grow more and more garbage as you play" — garbage
