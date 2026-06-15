@@ -1,5 +1,40 @@
 # Debug / progress journal
 
+## 2026-06-15 (later 36) — INPUT WORKS + OTC DMA fix → title→menu→GAME stage loads (no hang)
+Two native-MAIN residuals from later-33 fixed; the boot now drives title → menu → **GAME stage**
+on real pad input. Verified headless (state log + frame dumps).
+- **Pad input was entirely dead in the native MAIN loop.** The game reads its slot-0 pad packet
+  from the FIXED global `DAT_800BF4F8` (status/id/btnlo/btnhi) in `FUN_800524b4`; that buffer is
+  filled per-VBlank by the SIO read `FUN_80003A4C`, hooked into the VBlank IRQ by StartPAD. Our
+  no-IRQ runtime never fires it, AND `FUN_80003A4C`/`FUN_800040c4` (InitPAD) live in low text
+  (0x80004xxx) BELOW MAIN.EXE so they're dead interp misses — the SIO pointer table at `0x0000AEC8`
+  stays NULL (verified aec8==0 at boot), buffer status stays 0xFF (no-pad). FIX: new
+  `pad_service_frame()` (pad_input.c), called once per frame in the native loop BEFORE the game
+  reads input — polls host SDL input and writes the standard digital packet (status 0, id 0x41,
+  buttons) straight to the fixed buffers `DAT_800BF4F8`/`51A` (the addrs `FUN_800520e0` passes to
+  InitPAD via `FUN_80088b00`). Slot1 forced to 0xFF (no 2nd pad). Headless test hook
+  `PSXPORT_FORCE_BUTTONS=<active-low-hex>` PULSES the mask (8 on / 24 off) so each press is a fresh
+  EDGE the game's `cur & ~prev` logic (`FUN_800788ac`: `DAT_800e7e68 = ecf54 & ~ecf56`) sees.
+- **THE big fix — OTC DMA (DMA channel 6) was unimplemented → malformed/cyclic OT → render hang.**
+  `ClearOTagR` (FUN_80081458) builds the reverse-linked empty ordering table NOT in CPU code but by
+  firing the **OTC DMA**: its libgpu-vtable worker `FUN_80082424` sets D6_MADR=&ot[n-1], D6_BCR=n,
+  then writes `0x11000002` to D6_CHCR (0x1F8010E8). mem.c had no channel-6 handler, so the OT was
+  never linked — entries kept stale values and the head pointed into the prim bump-buffer at
+  0x800bfe68, where 4 menu prims formed a 4-node CYCLE (9C→88→7C→68→9C…). DrawOTag then walked the
+  65536-node cap EVERY frame; harmless at the near-empty title but at the menu it drew huge prims
+  65536× = effective hang (gdb caught it spinning in put_px_b under gpu_dma2_linked_list). FIX:
+  implement OTC in mem.c io_write (0x1F8010E0/E4/E8): write n words descending from MADR, each →
+  next-lower entry, lowest → 0x00FFFFFF terminator; clear CHCR busy so the lib's poll passes. After
+  this the OT is a clean ~0x800-entry list ending at the 0xa5a60 sentinel — no cycle, no cap.
+- **RESULT (verified, headless, PSXPORT_FORCE_BUTTONS=FFF7 = pulsed Start):** START→DEMO(title s2)
+  → Start edge → s3 (menu) → Start → s5 (`FUN_80052078(2)` = load GAME) → **stage=GAME(0x8010637C)
+  at frame 66**, GAME's own state machine ticking (demo_state 5→2). No OT warning, no hang,
+  baseline (no input) still parks cleanly at the title. The interactive loop now runs until the
+  window closes (PSXPORT_NATIVE_FRAMES caps headless; default 120 headless, unbounded windowed).
+- **NEXT:** the GAME stage renders BLACK so far — drive/inspect GAME's per-frame state machine
+  (FUN_801086e0/720/784, GAME.BIN) + whatever assets/CD-stream it needs (the strNext attract stream
+  still times out non-fatally). That's the path to actual on-screen gameplay.
+
 ## 2026-06-15 (later 35) — AUTHENTIC BOOT WORKS: recompiled stub draws SCEA → LoadExec → MAIN title
 Replaced the FAKE native_fmv intro with the AUTHENTIC boot: the disc's boot executable SCUS_944.54
 is now **recompiled** and run as the real PSX entry, drawing toward SCEA, then handing to native

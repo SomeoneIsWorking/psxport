@@ -43,6 +43,7 @@ static uint32_t s_dma0_madr, s_dma0_bcr, s_dma0_chcr;  // DMA0 MDEC-in
 static uint32_t s_dma1_madr, s_dma1_bcr, s_dma1_chcr;  // DMA1 MDEC-out
 static uint32_t s_dma2_madr, s_dma2_bcr, s_dma2_chcr;  // DMA2 GPU
 static uint32_t s_dma4_madr, s_dma4_bcr, s_dma4_chcr;  // DMA4 SPU
+static uint32_t s_dma6_madr, s_dma6_bcr, s_dma6_chcr;  // DMA6 OTC (ordering-table clear)
 static uint32_t s_dma_buf[0x10000];                    // staging for block DMA
 
 static int dma_block_words(uint32_t bcr) {  // sync-mode-1 block DMA total word count
@@ -83,6 +84,9 @@ static uint32_t io_read(uint32_t a, uint32_t bytes) {
   if (p == 0x1F8010A0) return s_dma2_madr;        // DMA2 MADR
   if (p == 0x1F8010A4) return s_dma2_bcr;         // DMA2 BCR
   if (p == 0x1F8010A8) return s_dma2_chcr;        // DMA2 CHCR (busy bit already cleared)
+  if (p == 0x1F8010E0) return s_dma6_madr;        // DMA6 OTC MADR
+  if (p == 0x1F8010E4) return s_dma6_bcr;         // DMA6 OTC BCR
+  if (p == 0x1F8010E8) return s_dma6_chcr;        // DMA6 OTC CHCR (busy bit already cleared)
   if (g_io_verbose)
     fprintf(stderr, "[io] read%u @ 0x%08X -> 0\n", bytes * 8, a);
   return 0;
@@ -150,6 +154,27 @@ static void io_write(uint32_t a, uint32_t v, uint32_t bytes) {
                (int)((s_dma2_bcr & 0xFFFF) * (s_dma2_bcr >> 16)), to_gpu);
       else gpu_dma2_block(s_dma2_madr, (int)(s_dma2_bcr & 0xFFFF), to_gpu);  // immediate
       s_dma2_chcr &= ~0x01000000u;                 // clear busy -> game's DMA-done poll passes
+    }
+    return;
+  }
+  if (p == 0x1F8010E0) { s_dma6_madr = v; return; }
+  if (p == 0x1F8010E4) { s_dma6_bcr = v; return; }
+  if (p == 0x1F8010E8) {                           // DMA6 CHCR: OTC (ordering-table clear)
+    s_dma6_chcr = v;
+    // OTC builds a reverse-linked empty ordering table in RAM (this is what ClearOTagR/ClearOTag
+    // use: FUN_80082424 sets MADR=&ot[n-1] (highest entry), BCR=n, then writes 0x11000002 here).
+    // It writes n words descending from MADR: each entry -> the next-LOWER entry, and the lowest
+    // entry -> 0x00FFFFFF (terminator). DrawOTag(&ot[n-1]) then walks ot[n-1]..ot[0]->end. Without
+    // this, the OT entries keep stale values -> a malformed/cyclic chain (DrawOTag never ends).
+    if (v & 0x01000000u) {                         // start/busy
+      uint32_t n = s_dma6_bcr & 0xFFFF; if (n == 0) n = 0x10000;
+      uint32_t madr = s_dma6_madr & 0x1FFFFC;      // highest entry address (&ot[n-1])
+      for (uint32_t i = 0; i < n; i++) {
+        uint32_t addr = madr - i * 4;
+        uint32_t word = (i == n - 1) ? 0x00FFFFFFu : ((addr - 4) & 0x00FFFFFFu);
+        mem_w32(addr, word);
+      }
+      s_dma6_chcr &= ~0x01000000u;                 // clear busy -> ClearOTagR's busy-poll passes
     }
     return;
   }

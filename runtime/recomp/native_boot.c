@@ -159,12 +159,18 @@ static void ov_game_main(R3000* c) {
   // run (headless). ---
   rec_set_override(0x80080880u, ov_switch);    // ChangeThread -> native task switch (capture+longjmp)
 
-  uint32_t nframes = 120;
+  // Frame budget: an explicit PSXPORT_NATIVE_FRAMES always wins (headless tests). Otherwise, when
+  // a window is up this is the real interactive game loop — run until the user closes the window
+  // (SDL_QUIT -> exit(0) in present_window); headless with no cap defaults to 120 (CI/smoke).
+  uint32_t nframes = 0;   // 0 == run until window close
   const char* nf = getenv("PSXPORT_NATIVE_FRAMES");
   if (nf) nframes = (uint32_t)strtoul(nf, 0, 0);
-  fprintf(stderr, "[native_boot] entering native frame loop (%u frames)\n", nframes);
+  else if (!getenv("PSXPORT_GPU_WINDOW")) nframes = 120;
+  fprintf(stderr, "[native_boot] entering native frame loop (%s)\n",
+          nframes ? "capped" : "interactive (until window close)");
   void hle_deliver_event(uint32_t ev_class, uint32_t spec);
-  for (uint32_t f = 0; f < nframes; f++) {
+  void pad_service_frame(void);
+  for (uint32_t f = 0; nframes == 0 || f < nframes; f++) {
     // Per-frame IRQ-driven events the game's waits poll via TestEvent (we deliver no preemptive
     // IRQs): VBlank classes + the sound-DMA-complete class 0xF0000009 (its callback FUN_80097030
     // would normally fire it; native SPU DMA is synchronous, so signal it ready each frame).
@@ -180,6 +186,7 @@ static void ov_game_main(R3000* c) {
     mem_w16(0x800e809c, 0);                                  // DAT_800e809c = 0 (dwell counter)
     mem_w32(0x800bf4f4, mem_r32(0x800bf544));                // framebuffer ptr swap
     mem_w32(0x800bf544, (mem_r8(0x1f800135) * 0x14000 + 0x800bfe68) & 0xffffff);
+    pad_service_frame();                                     // host input -> game pad buffer (pre-read)
     rc0(c, 0x800788ac);                                      // tick + present + audio (override)
     native_scheduler_step(c);                                // <- replaces FUN_80051e60
     rc1(c, 0x80080f6c, 0);                                   // draw sync
@@ -191,6 +198,14 @@ static void ov_game_main(R3000* c) {
       rc1(c, 0x800815d0, envp + 0x2014);                    // PutDrawEnv  (env+0x2014)
       rc1(c, 0x80081560, envp + 0x1ffc);                    // DrawOTag (submit the OT head)
       mem_w8(0x1f800135, 1 - mem_r8(0x1f800135));           // flip back/front buffer
+    }
+    static uint32_t s_last_entry = 0; static uint32_t s_last_s48 = 0xFFFF;
+    uint32_t t0e = mem_r32(TASKBASE + 0xc), s48 = mem_r16(TASKBASE + 0x48);
+    if (t0e != s_last_entry || s48 != s_last_s48) {
+      const char* stg = t0e == 0x8010649Cu ? "START" : t0e == 0x801062E4u ? "DEMO" :
+                        t0e == 0x8010637Cu ? "GAME" : "?";
+      fprintf(stderr, "[native_boot]   frame %u: stage=%s(0x%08X) demo_state=%u\n", f, stg, t0e, s48);
+      s_last_entry = t0e; s_last_s48 = s48;
     }
     if (f < 10 || (f % 30) == 0)
       fprintf(stderr, "[native_boot]   frame %u: t0[st=%u e=0x%08X s48=%u] t1[st=%u] t2[st=%u] "

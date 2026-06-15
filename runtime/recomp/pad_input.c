@@ -165,4 +165,54 @@ void pad_overrides_init(void) {
   rec_set_override(0x80003A4Cu, ov_pad_read);   // per-VBlank pad read (no-op until 0x80003A4C is recompilable)
 }
 
+// Per-frame native pad service. The real console fills the slot pad buffers from the per-VBlank
+// SIO read (FUN_80003A4C, hooked into the VBlank IRQ by StartPAD). Our no-IRQ runtime never fires
+// that, so FUN_80003A4C is dead and the buffers would stay at their init value (0xFF/no-pad),
+// making FUN_800524b4 read "no controller". The native frame loop (native_boot.c) calls this once
+// per frame, BEFORE the game reads input (FUN_800788ac -> FUN_800524b4), to do exactly what the
+// VBlank read would: poll host input, then write the standard digital packet into every registered
+// slot buffer. Slot buffer pointers live in the SIO driver's table at 0x0000AEC8 (+slot*4), set by
+// FUN_800040c4 (via FUN_80088b00, called from the pad init FUN_800520e0 in the boot prefix).
+//
+// NOTE on the buffer address: FUN_800040c4 is the SIO driver's InitPAD, which lives in low text
+// (0x80004xxx) BELOW MAIN.EXE and is never present/run in this port, so the runtime pointer table
+// at 0x0000AEC8 stays NULL (verified: aec8==0 at boot). But the game reads its slot-0 packet from a
+// FIXED, known address: FUN_800520e0 registers &DAT_800BF4F8 (slot0) / &DAT_800BF51A (slot1) via
+// FUN_80088b00, and FUN_800524b4 reads DAT_800BF4F8 directly. So we write the packet to those fixed
+// buffers (and, if the pointer table ever does get populated, to whatever it points at too).
+#define PAD_SLOT0_BUF 0x800BF4F8u
+#define PAD_SLOT1_BUF 0x800BF51Au
+void pad_service_frame(void) {
+  static int s_have_window = -1;
+  static int s_force_init = 0;
+  static int s_force_on = 0;
+  static uint16_t s_force_mask = PAD_NONE;
+  static uint32_t s_fc = 0;       // internal frame counter for the pulse
+  if (s_have_window < 0) s_have_window = getenv("PSXPORT_GPU_WINDOW") ? 1 : 0;
+#ifdef PSXPORT_SDL
+  if (s_have_window) pad_poll_sdl();             // host keyboard/gamepad -> s_buttons
+#endif
+  if (!s_force_init) {                           // headless test hook: pulse an active-low mask
+    const char* force = getenv("PSXPORT_FORCE_BUTTONS");
+    if (force) { s_force_on = 1; s_force_mask = (uint16_t)strtoul(force, 0, 16); }
+    s_force_init = 1;
+  }
+  // Pulse the forced buttons (pressed 8 frames, released 24) so each press is a fresh EDGE the
+  // game's current&~prev input logic (FUN_800788ac) actually sees — a continuous hold would edge
+  // only once. Lets a headless run drive menus deterministically without a host controller.
+  if (s_force_on) pad_set_buttons((s_fc % 32u) < 8u ? s_force_mask : PAD_NONE);
+  s_fc++;
+
+  uint8_t pk[4];
+  pad_fill_buffer(pk);
+  uint32_t bufs[2] = { PAD_SLOT0_BUF, PAD_SLOT1_BUF };       // fixed game pad buffers
+  for (int slot = 0; slot < 2; slot++) {
+    uint32_t b = mem_r32(0x0000AEC8u + (uint32_t)slot * 4u); // registered ptr (NULL in this port)
+    if (!b) b = bufs[slot];                                  // fall back to the fixed buffer
+    for (int i = 0; i < 4; i++) mem_w8(b + i, pk[i]);
+  }
+  // Slot 1: report "no controller" so single-pad logic ignores it (status 0xFF).
+  mem_w8(PAD_SLOT1_BUF, 0xFF);
+}
+
 #endif // PSXPORT_PAD_NO_OVERRIDES

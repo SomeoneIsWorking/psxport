@@ -395,6 +395,29 @@ uint16_t gpu_vram_peek(int x, int y) { return *vram(x, y); }
 void gpu_dma2_linked_list(uint32_t madr) {
   s_dma2++;
   uint32_t addr = madr & 0x1FFFFC;
+  // PSXPORT_OTDBG: on a chain that fails to terminate within an OT's worth of nodes (cyclic =
+  // malformed), dump its first 40 nodes once for diagnosis. (Empty OTs are ~0x800 link-only nodes
+  // that DO terminate at the sentinel; a true cycle never terminates.)
+  if (getenv("PSXPORT_OTDBG")) {
+    static int dumped = 0;
+    uint32_t a = madr & 0x1FFFFC; int term = 0;
+    for (int k = 0; k < 4096; k++) {
+      uint32_t next = mem_r32(a) & 0xFFFFFF;
+      if (next == 0xFFFFFF || next == 0) { term = 1; break; }
+      a = next & 0x1FFFFC;
+    }
+    if (!term && !dumped++) {
+      a = madr & 0x1FFFFC;
+      fprintf(stderr, "[otdbg] MALFORMED OT from madr=0x%08X:\n", 0x80000000u | (madr & 0x1FFFFC));
+      for (int k = 0; k < 40; k++) {
+        uint32_t hdr = mem_r32(a); uint32_t next = hdr & 0xFFFFFF; int n = hdr >> 24;
+        fprintf(stderr, "  [%2d] @0x%08X hdr=0x%08X (n=%d) -> 0x%08X\n",
+                k, 0x80000000u | a, hdr, n, 0x80000000u | (next & 0x1FFFFC));
+        if (next == 0xFFFFFF || next == 0) break;
+        a = next & 0x1FFFFC;
+      }
+    }
+  }
   // A valid ordering table is bounded (its entry count + linked primitives). A far larger node
   // count means a malformed/cyclic next-pointer chain — cap it (so it can't wedge) and log the
   // first offending case for diagnosis instead of spinning to the old 1M guard.
