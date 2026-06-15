@@ -33,11 +33,15 @@ render bug.
   advances normally (0x50 1→4, then 0x4c/0x4a/0x4e cycling = live game loop, no spin), VRAMSCAN
   framebuffer bbox goes (0,0)-(1023,511) (was all x≥320 = textures only), and frame dumps show the
   title menu, a "Please wait" load, then a **rendered 3D level**.
-- **NEXT — flicker (double-buffer/present timing).** Dumped frames alternate scene↔near-black
-  (f2850 nonblack≈63k, f2890=0). GAME logic draws at its ~30fps logic rate but we `gpu_present`
-  every loop iteration, so every other present shows the stale/cleared back buffer. Fix the
-  present↔logic-rate pacing (only present a freshly-composed buffer). This is the [[wide60]]
-  "no flicker" top priority. The black-render blocker itself is solved.
+- **Rendering is SMOOTH (no flicker).** Consecutive frame dumps show the scene-pixel count
+  ramping continuously (f2840..f2855 ≈47k→63k, then back down) as the camera pans / level
+  animates — NOT a per-frame scene↔black alternation. The occasional all-black dump (f2890) is a
+  normal fade transition, not a dropped buffer. (Earlier "flicker" suspicion was sampling-bias —
+  the sampled frames happened to land on fade endpoints. Corrected.)
+- **NEXT — confirm interactivity + reach steady gameplay.** The level renders and animates under
+  the pulsed-Start test input; next is real pad-driven control (walk Tomba) and seeing what the
+  post-level fade leads to. Also: the flat interp makes GAME slow (~native frame 224 in the dump
+  run) — recompile GAME.BIN/SOP.BIN hot fns (emit.py overlays) for playable speed.
 
 ## 2026-06-15 (later 36) — INPUT WORKS + OTC DMA fix → title→menu→GAME stage loads (no hang)
 Two native-MAIN residuals from later-33 fixed; the boot now drives title → menu → **GAME stage**
