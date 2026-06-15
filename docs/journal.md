@@ -1,5 +1,23 @@
 # Debug / progress journal
 
+## 2026-06-15 (later 49) — SCEA: Start-skip + stop the CD reads (kill the "CdRead: retry" loop)
+User asks: SCEA skippable via Start; and SCEA should do NO CD reads — just cut to the LOGO FMV when
+it ends. Both done (native_stub.c).
+- **Start-skip:** ov_stub_vsync polls host input (pad_poll_sdl when windowed; pad_buttons() bit 0x0008
+  = Start, active-low); on Start it does the MAIN.EXE hand-off immediately (load_exe_image +
+  longjmp(g_stub_exit), same as ov_loadexec) — skipping the fades. PSXPORT_SCEA_SKIP forces it
+  (headless/always); PSXPORT_NOSKIP disables. Verified: PSXPORT_SCEA_SKIP=1 hands off on the first
+  VSync → straight to FMV/DEMO (also skips the CD-init retries).
+- **No CD reads:** the "CdRead: retry..." spam (~20×) came from the stub's CdRead (0x8001BA64),
+  whose caller (0x8001B89C) retries while the CD-status word (CD struct 0x80026BF8 +20 = 0x80026C0C)
+  is negative — and our runtime serves the stub no CD data. RE'd it: caller `bgez`-checks that word;
+  the original success path stores the VSync count there. Replaced CdRead with a no-op that writes a
+  positive status (mimics success) so the caller stops retrying. The SCEA screen needs no CD data
+  (FMVs play natively, MAIN is LoadExec'd from file). Verified headless: "CdRead: retry" count 20→0,
+  SCEA still renders both lines correctly, reaches LOGO FMV → DEMO.
+NEXT: the menu-load double-buffer flicker (firm "not acceptable") — fix the game-loop flip to not
+present an undrawn buffer.
+
 ## 2026-06-15 (later 48) — SCEA fade pacing (real-vblank model) + the "headless still headed" bug
 1. **PSXPORT_NOWINDOW didn't actually go headless.** present_window() gated the SDL window on mere
    getenv PRESENCE: `s_win_on = getenv("PSXPORT_GPU_WINDOW") ? 1 : 0`. But run.sh ALWAYS sets that

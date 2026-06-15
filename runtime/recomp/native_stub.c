@@ -134,6 +134,22 @@ static void ov_stub_vsync(R3000* c) {
     const char* w = getenv("PSXPORT_GPU_WINDOW");      // run.sh sets "0" headless, "1" windowed
     windowed = (w && atoi(w) != 0 && !getenv("PSXPORT_NOPACE")) ? 1 : 0;
   }
+
+  // SCEA skip: pressing Start jumps straight to the MAIN.EXE hand-off (skipping the fades), exactly
+  // as ov_loadexec does. PSXPORT_SCEA_SKIP forces it (headless test / always-skip). Start is PSX
+  // button bit 0x0008, active-low (0 == pressed) in the host pad mask.
+  static int skip_dis = -1; if (skip_dis < 0) skip_dis = getenv("PSXPORT_NOSKIP") ? 1 : 0;
+  if (!skip_dis) {
+    uint16_t pad_buttons(void);
+#ifdef PSXPORT_SDL
+    if (windowed) { void pad_poll_sdl(void); pad_poll_sdl(); }   // refresh host input
+#endif
+    if (getenv("PSXPORT_SCEA_SKIP") || (pad_buttons() & 0x0008u) == 0) {
+      fprintf(stderr, "[stub] SCEA skipped (Start) -> hand off to MAIN\n");
+      load_exe_image(g_main_path, g_boot_ctx);
+      longjmp(g_stub_exit, 1);
+    }
+  }
 #ifdef PSXPORT_SDL
   if (windowed) {
     // Real-vblank model (matches hardware): the VSync count advances at 60 Hz of REAL time via the
@@ -167,6 +183,20 @@ static void ov_stub_vsync(R3000* c) {
   c->r[V0_] = g_stub_vblank;
 }
 
+// --- Stub CdRead: make SCEA do NO CD reads ----------------------------------------------------
+// The SCEA stub's CdRead (0x8001BA64) preloads CD data the screen doesn't actually need — we play
+// the intro FMVs natively and LoadExec MAIN from file, so no real CD stream reaches the stub. Its
+// caller (0x8001B89C) retries while the CD-status word (CD struct @0x80026BF8, +20 = 0x80026C0C) is
+// negative — producing the endless "CdRead: retry..." spam. Replace CdRead with a no-op that writes
+// a SUCCESS status (a positive value, exactly as the original success path stores the VSync count)
+// so the caller's `bgez` sees success and stops retrying; SCEA then just ends and cuts to the LOGO
+// FMV. (User-requested: "make SCEA not do CD reads.")
+#define STUB_CD_STATUS 0x80026C0Cu
+static void ov_stub_cdread(R3000* c) {
+  mem_w32(STUB_CD_STATUS, g_stub_vblank ? g_stub_vblank : 1u);
+  c->r[V0_] = mem_r32(STUB_CD_STATUS);
+}
+
 // Register a stub override on BOTH the recompiled path (stub_set_override, function-index keyed —
 // fires when the fn is reached via a direct call) and the interpreter path (rec_set_interp_override,
 // raw-address keyed — fires when reached via a function pointer / non-recompiled caller). One of
@@ -180,6 +210,7 @@ static void stub_cd_overrides_init(void) {
   stub_override(0x80019B78u, ov_stub_cdsync);     // CdSync
   stub_override(0x8001A944u, ov_stub_cddatasync); // CdDataSync
   stub_override(0x80017E4Cu, ov_stub_vsync);      // libetc public VSync(mode)
+  stub_override(0x8001BA64u, ov_stub_cdread);     // CdRead -> no-op success (no CD reads in SCEA)
 }
 
 void native_stub_run(R3000* c, const char* main_exe_path) {
