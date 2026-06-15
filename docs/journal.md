@@ -1,5 +1,48 @@
 # Debug / progress journal
 
+## 2026-06-15 (later 54) — AUDIO FIXED: native libsnd sequencer tick → port plays SPU-voice music (was all-zeros)
+Implemented the later-53 fix (user picked "native sequencer tick"). The port now produces music.
+
+### What it was (one more RE step past later-53)
+- The libsnd setup is `FUN_80090750 = SsSetTickMode`; runtime globals (read from a loaded state via
+  the REPL): tick mode `DAT_800ac424 = 5`, sequencer pointer `DAT_800ac42c = 0x80090BD0`
+  (`SsSeqCalled`), user-cb `DAT_800ac430 = 0x80086288`, `DAT_800ac434 = 0`. The VBlank IRQ runs the
+  tick **wrapper `FUN_800909c0`** = (optional user cb) + `(*SsSeqCalled)()`.
+- **Neither `0x800909c0` nor `0x80090bd0` is emitted by the static recompiler** — they're only ever
+  reached through the IRQ callback pointer, never a direct `jal`, so the indirect-call discovery
+  never saw them (classic recomp coverage gap). They run fine through the hybrid interpreter.
+
+### Fix (games_tomba2.c `ov_frame_update`)
+Call `rec_dispatch(c, 0x800909C0)` once per `ov_frame_update` (→ interpreter, bit-identical, runs
+the wrapper to its `jr ra`). This is "port the HW interrupt work to PC" (the busy-wait-porting
+rule), NOT IRQ simulation. Guarded on the sequencer pointer `mem_r32(0x800AC42C)` being a sane code
+address so we never call through null before `SsStart`. Opt out (A/B): `PSXPORT_T2_NOSEQTICK`.
+- **Tick rate = ONCE per `ov_frame_update`, NOT VBLANK_QUOTA(=2) times.** `spu_audio_frame()`
+  advances the SPU exactly one 1/60 s field per call (3200 frames = 53.33 s audio = 60 fields/s),
+  and on hardware the sequencer ticks once per VBlank (60 Hz realtime) while the SPU plays
+  realtime — so the faithful ratio is 1 tick per SPU field. The quota=2 is the game's 30 fps
+  *display* pacing and is irrelevant to audio tempo vs SPU time; ticking twice plays music 2x fast
+  (first cut did this — fixed).
+
+### Verified (headless, `scratch/logs/ours_seqtick1x.log`, `scratch/wav/ours_seqtick1x.wav`)
+- Port `PSXPORT_SPU_DBG`: per-note KON went from **~10 (init only) → thousands** (val=2000,1000,00CC,
+  0010,0020,0003,…); `spu_render peak` 0 → 4691…21270 every frame.
+- WAV: was **all-zeros**; now 53.33 s, **RMS ~4267, 94% non-silent, peak 21270** — same loudness
+  band as the oracle's KON menu music (~3000, later-53). Reaches frame 3200 / gameplay, no crash.
+- TEMPO is reasoned-correct (1 tick / SPU field = hardware 60 Hz). **User should confirm audibly**
+  (windowed run, no `PSXPORT_NOAUDIO`) — the only thing a headless RMS check can't certify is the
+  exact musical tempo/pitch.
+
+### Tooling hygiene
+`vendor/beetle-psx spu.c` oracle SPU trace is now gated on `#ifdef __LIBRETRO__` (oracle-only) — the
+same spu.c links into the port too, which has its own `spu_beetle.c` log; this stops double-logging
+and keeps the port build free of the oracle-only `PSX_CPU` reference.
+
+### Still open (smaller, separate)
+FMV/menu CD audio through the SPU (`CDC_GetCDAudioSample` stub) is still silent on the SPU path, but
+FMVs play via `native_fmv.c` (own device). If a scene wants CD-DA track 2 / XA mixed through the SPU
+during gameplay, that remains a separate, smaller gap (later-53 candidate #1) — not the music bug.
+
 ## 2026-06-15 (later 53) — AUDIO root cause PINNED via oracle: music sequencer is TIMER-IRQ-driven; the port delivers no preemptive IRQ → silent. (corrects later-52's candidate order)
 Built the missing oracle-audio tooling and used it to pin the silent-port root cause. The
 answer corrects later-52's prioritisation: it is **candidate #3 (an IRQ-driven sequencer the
