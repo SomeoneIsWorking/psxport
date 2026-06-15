@@ -25,6 +25,7 @@ static inline uint16_t* vram(int x, int y) { return &s_vram[(y & 511) * VRAM_W +
 static int s_da_x0, s_da_y0, s_da_x1 = 1023, s_da_y1 = 511;  // draw clip area
 static int s_off_x, s_off_y;                                 // draw offset
 static int s_tp_x, s_tp_y;        // texpage base (64-px / 256-line units -> *64 / *256)
+static int s_reddbg;              // PSXPORT_REDDBG: dark-red output anomaly probe
 static int s_tp_mode;             // texture color mode: 0=4bpp,1=8bpp,2=15bpp
 static int s_tp_blend;            // semi-transparency mode 0..3
 static int s_tp_dither;           // ordered-dither enable (E1 bit 9)
@@ -149,6 +150,21 @@ static void tri(Vtx a, Vtx b, Vtx c, int tex, int shade, int semi) {
         dithered = 1;
       } else { r = a.r; g = a.g; bl = a.b; }
       if (s_tp_dither && dithered) { r = dith(r, x, y); g = dith(g, x, y); bl = dith(bl, x, y); }
+      // REDDBG: dark-red output anomaly probe (grass blocks). Log the prim's params once.
+      if (s_reddbg && tex && r >= 64 && g < 24 && bl < 24 && x >= s_da_x0 && x <= s_da_x1) {
+        static int n = 0;
+        if (n++ < 6) {
+          int uu = (int)((l0*a.u + l1*b.u + l2*c.u) / aa);
+          int vv = (int)((l0*a.v + l1*b.v + l2*c.v) / aa);
+          fprintf(stderr, "[reddbg] @(%d,%d) out=(%d,%d,%d) tpmode=%d clut=(%d,%d) tp=(%d,%d) uv=(%d,%d)\n",
+                  x, y, r, g, bl, s_tp_mode, s_clut_x, s_clut_y, s_tp_x, s_tp_y, uu, vv);
+          fprintf(stderr, "[reddbg]   palette[16]@(%d,%d):", s_clut_x, s_clut_y);
+          for (int k = 0; k < 16; k++) fprintf(stderr, " %04X", *vram(s_clut_x + k, s_clut_y));
+          fprintf(stderr, "\n[reddbg]   texrow@(%d,%d) words:", s_tp_x + (uu>>2), s_tp_y + vv);
+          for (int k = 0; k < 8; k++) fprintf(stderr, " %04X", *vram(s_tp_x + (uu>>2) + k, s_tp_y + vv));
+          fprintf(stderr, "\n");
+        }
+      }
       put_px_b(x, y, r, g, bl, px_semi);
     }
 }
@@ -421,7 +437,7 @@ void gpu_present(void) {
   s_frame++; s_prims = 0; s_gp0_words = 0; s_dma2 = 0;
 }
 
-void gpu_native_init(void) { if (getenv("PSXPORT_GPU_LOG")) g_log = 1; }
+void gpu_native_init(void) { if (getenv("PSXPORT_GPU_LOG")) g_log = 1; if (getenv("PSXPORT_REDDBG")) s_reddbg = 1; }
 
 // Read-only VRAM inspection accessor (raw 16-bit 555+mask word). Used by the offline GPU-QA
 // harness to assert exact rasterized/blended values; harmless in production (read-only).

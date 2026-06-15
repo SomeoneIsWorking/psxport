@@ -1,5 +1,38 @@
 # Debug / progress journal
 
+## 2026-06-15 (later 39) — ORACLE COMPARE: grass "red blocks" = wrong CLUT contents at (880,507)
+User reported graphical errors in the now-playable level. Ran the **oracle** (Beetle/mednafen
+`runtime/wide60rt`, real GPU) on the same disc to the same first jungle level and compared against
+our native renderer (gpu_native.c, our OWN rasterizer). Result: our grass has scattered **dark-red
+blocks**; the oracle's grass is **clean green grass-blade fringe** (scratch/screenshots/compare_grass.png,
+oracle frame scratch/frames/oracle2/frame_007290.ppm). So the red blocks are a real bug in OUR
+rendering, not game content.
+- **Oracle run recipe (reaches the level in ~7300 emulated frames):**
+  `PSXPORT_NOWIDE=1 PSXPORT_INTERNAL_RES=1x runtime/wide60rt "$TOMBA2_CHD" -bios bios -frames 12000
+  -inputscript scratch/oracle_input.txt -dumpdir scratch/frames/oracle2 -dumpinterval 30`, where
+  oracle_input.txt pulses Start (`<f> <f+8> Start` every 40 frames) to skip logos + select the menu.
+  OpenBIOS works (no -fastboot). Oracle renders at 350x240; ours 320x224 — fine for visual compare.
+- **Root-caused with a new probe `PSXPORT_REDDBG`** (gpu_native.c — logs a textured prim's
+  mode/clut/texpage/uv + the 16 CLUT entries + the sampled texture row whenever it writes a dark-red
+  pixel). The red blocks are: textured 4bpp polys, **neutral modulation color (0x808080)**, blend off,
+  clut=(880,507), texpage=(832,256). The fringe texture is fine (indices 1 and 15: palette[1]=0x0000
+  = transparent → grass shows through; palette[15] = the fringe color). The bug is the **CLUT
+  contents**: our VRAM palette at (880,507) = `0000×8, 03FF, 7380, 7BBF, 727F, 699F, 60BF, 2C32, 0408`
+  — a pink/purple/yellow set with **zero green**; palette[15]=0x0408 is the dark red we draw. The
+  CLUT pointer + texture indices come from the SAME game GP0 packet on both runtimes, yet the oracle
+  renders green ⇒ the oracle's VRAM at (880,507) holds a GREEN palette and ours holds this pink one.
+  So our VRAM CLUT at (880,507) is WRONG (stale/overwritten/mis-placed) — a texture/CLUT **VRAM
+  upload or ordering** bug, NOT a rasterizer-logic error (sample_tex / blend / texwindow are correct).
+- **Ruled out:** `shade = gouraud || !textured` (gpu_native.c:199) skips command-color modulation for
+  flat-textured polys — a real faithfulness gap, but NOT the cause here (the modulation color is the
+  neutral 0x808080, so it's a no-op for these prims). Worth fixing separately for correctness.
+- **NEXT (this bug):** find why (880,507) holds the wrong palette. Likely a VRAM CPU→VRAM transfer
+  (GP0 0xA0) or DMA placed the grass palette elsewhere / a later upload overwrote it, due to our
+  synchronous-CD + custom-scheduler upload ORDER differing from hardware. To pin it, either (a) add a
+  VRAM dump to wide60rt (libretro GPU_RAM) and diff VRAM at (880,507)/(832,256) vs ours, or (b) log
+  every CPU→VRAM/DMA write that touches the (880,507) CLUT row in our runtime and check what lands
+  there last. Then fix at the transfer/ordering level.
+
 ## 2026-06-15 (later 38) — REAL PLAYABLE GAMEPLAY: async area-reader fix → level loads, plays, MOVES
 later 37 OVERCLAIMED. The level-intro renders once (gpu ~f2850, native frame ~224) and then the
 screen goes **permanently black** — the GAME state machine freezes at sm[48=2 4a=1 4c=2 4e=8] and
