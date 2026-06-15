@@ -191,6 +191,32 @@ static void set_texpage(uint16_t tp) {
 }
 static void set_clut(uint16_t cl) { s_clut_x = (cl & 0x3F) * 16; s_clut_y = (cl >> 6) & 0x1FF; }
 
+// PSXPORT_CLUTWATCH[=x,y] — log every VRAM upload whose rect covers a watched CLUT point
+// (default 880,507 = the wrong grass palette found via the oracle compare, journal later 39),
+// in order, with the resulting 16-entry palette. Reveals whether the right palette is written
+// then overwritten, or never written, and by which transfer.
+static int s_cw_x = -1, s_cw_y = 0, s_cw_pending = 0;
+static int s_frame;   // present-frame counter (defined below); forward tentative def
+static void clutwatch_dump(const char* tag, int rx, int ry, int rw, int rh) {
+  fprintf(stderr, "[clutwatch] %s f%d rect=(%d,%d %dx%d) covers (%d,%d) palette:",
+          tag, s_frame, rx, ry, rw, rh, s_cw_x, s_cw_y);
+  for (int k = 0; k < 16; k++) fprintf(stderr, " %04X", *vram(s_cw_x + k, s_cw_y));
+  fprintf(stderr, "\n");
+}
+static int clutwatch_covers(int rx, int ry, int rw, int rh) {
+  if (s_cw_x < 0) return 0;
+  return s_cw_y >= ry && s_cw_y < ry + rh && s_cw_x >= rx && s_cw_x < rx + rw;
+}
+// For 0xA0 the pixels stream in AFTER setup, so mark pending and dump on completion; for 0x80 the
+// copy already happened, so dump immediately.
+static void clutwatch_xfer(const char* tag, int rx, int ry, int rw, int rh) {
+  if (!clutwatch_covers(rx, ry, rw, rh)) return;
+  if (tag[0] == 'A') { s_cw_pending = 1; fprintf(stderr,
+      "[clutwatch] A0 upload START f%d rect=(%d,%d %dx%d) covers (%d,%d)\n",
+      s_frame, rx, ry, rw, rh, s_cw_x, s_cw_y); }
+  else clutwatch_dump(tag, rx, ry, rw, rh);
+}
+
 // Execute a complete GP0 primitive packet held in s_fifo[0..s_fcount).
 static void gp0_exec(void) {
   uint32_t c = s_fifo[0];
@@ -213,6 +239,15 @@ static void gp0_exec(void) {
       }
     }
     int shade = gouraud || !textured;       // flat-untextured uses the command color
+    if (s_reddbg && textured && s_cw_x >= 0 && s_clut_x == s_cw_x && s_clut_y == s_cw_y) {
+      static int n = 0;
+      if (n++ < 12)
+        fprintf(stderr, "[redpkt] f%d op=%02X nv=%d gou=%d semi=%d clut=(%d,%d) tp=(%d,%d) blend=%d mode=%d "
+                "V[(%d,%d)uv(%d,%d) (%d,%d)uv(%d,%d) (%d,%d)uv(%d,%d)%s] off=(%d,%d)\n",
+                s_frame, op, nv, gouraud, semi, s_clut_x, s_clut_y, s_tp_x, s_tp_y, s_tp_blend, s_tp_mode,
+                v[0].x,v[0].y,v[0].u,v[0].v, v[1].x,v[1].y,v[1].u,v[1].v, v[2].x,v[2].y,v[2].u,v[2].v,
+                quad?" +q":"", s_off_x, s_off_y);
+    }
     tri(v[0], v[1], v[2], textured, shade, semi);
     if (quad) tri(v[1], v[2], v[3], textured, shade, semi);
     s_prims++;
@@ -290,7 +325,10 @@ void gpu_gp0(uint32_t w) {
       if (py < s_xfer_h) *vram(s_xfer_x + px, s_xfer_y + py) = (k ? (w >> 16) : w) & 0xFFFF;
       s_xfer_px++;
     }
-    if (s_xfer_px >= s_xfer_w * s_xfer_h) s_xfer = 0;
+    if (s_xfer_px >= s_xfer_w * s_xfer_h) {
+      s_xfer = 0;
+      if (s_cw_pending) { clutwatch_dump("A0 DONE", s_xfer_x, s_xfer_y, s_xfer_w, s_xfer_h); s_cw_pending = 0; }
+    }
     return;
   }
   if (s_fcount == 0) {
@@ -319,11 +357,13 @@ void gpu_gp0(uint32_t w) {
       s_xfer_w = ((s_fifo[2] & 0x3FF) ? (s_fifo[2] & 0x3FF) : 1024);
       s_xfer_h = (((s_fifo[2] >> 16) & 0x1FF) ? ((s_fifo[2] >> 16) & 0x1FF) : 512);
       s_xfer_px = 0; s_xfer = 1;
+      clutwatch_xfer("A0", s_xfer_x, s_xfer_y, s_xfer_w, s_xfer_h);
     } else if (op == 0x80) {                     // VRAM->VRAM copy
       int sx = s_fifo[1] & 0x3FF, sy = (s_fifo[1] >> 16) & 0x1FF;
       int dx = s_fifo[2] & 0x3FF, dy = (s_fifo[2] >> 16) & 0x1FF;
       int w2 = s_fifo[3] & 0x3FF, h2 = (s_fifo[3] >> 16) & 0x1FF;
       for (int y = 0; y < h2; y++) for (int x = 0; x < w2; x++) *vram(dx + x, dy + y) = *vram(sx + x, sy + y);
+      clutwatch_xfer("80copy", dx, dy, w2, h2);
     } else if (op != 0xC0) {
       gp0_exec();
     }
@@ -437,7 +477,12 @@ void gpu_present(void) {
   s_frame++; s_prims = 0; s_gp0_words = 0; s_dma2 = 0;
 }
 
-void gpu_native_init(void) { if (getenv("PSXPORT_GPU_LOG")) g_log = 1; if (getenv("PSXPORT_REDDBG")) s_reddbg = 1; }
+void gpu_native_init(void) {
+  if (getenv("PSXPORT_GPU_LOG")) g_log = 1;
+  if (getenv("PSXPORT_REDDBG")) s_reddbg = 1;
+  const char* cw = getenv("PSXPORT_CLUTWATCH");
+  if (cw) { s_cw_x = 880; s_cw_y = 507; int x, y; if (sscanf(cw, "%d,%d", &x, &y) == 2) { s_cw_x = x; s_cw_y = y; } }
+}
 
 // Read-only VRAM inspection accessor (raw 16-bit 555+mask word). Used by the offline GPU-QA
 // harness to assert exact rasterized/blended values; harmless in production (read-only).

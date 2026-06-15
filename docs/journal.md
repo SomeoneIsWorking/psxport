@@ -1,5 +1,50 @@
 # Debug / progress journal
 
+## 2026-06-15 (later 40) — GRASS RED-BLOCKS root cause: our port draws an EXTRA title-overlay quad
+Continued the later-39 oracle compare and **falsified its "wrong CLUT contents" hypothesis**, then
+root-caused for real. The red blocks are NOT a VRAM or rasterizer bug — our port emits a spurious
+primitive the real game doesn't.
+- **The offending prim (our port, via PSXPORT_REDDBG + CLUTWATCH):** a flat RAW-textured quad
+  `op=0x2D` (textured+quad+raw, opaque, no gouraud), clut=(880,507), texpage=(832,256), screen
+  (43,172)-(139,188), uv (0,17)-(96,33) — a fixed-screen 96x16 strip at the bottom-left. The
+  texture is mostly index 1 (palette[1]=0x0000 = transparent) with sparse index 15
+  (palette[15]=0x0408 = dark red) ⇒ "scattered red dots". Drawn EVERY level frame at the same
+  screen position (a 2D overlay, not a GTE world object).
+- **VRAM is byte-identical to the oracle (hypothesis killed).** Added `PSXPORT_VRAMDUMP="frame:path"`
+  to wide60rt (dumps mednafen's native 1024x512x16 `GPU_get_vram()` at 1x). At the level
+  (oracle frame 7290) the oracle's palette @(880,507) = `...2C32 0408` and texture @(833,273) =
+  `FFF1 FFFF 1111...` — EXACTLY ours. So the texture/CLUT contents are correct; palette[15]=red is
+  correct data. The "pink/no-green palette" in later-39 is real but is NOT a grass palette and NOT
+  wrongly placed — it's just unused-at-the-level data sitting in a reused VRAM slot.
+- **The oracle does NOT draw this quad at the level (the decisive test).** Added `PSXPORT_POLYWATCH=frame`
+  to wide60rt (registers the psxport_on_gpu_poly hook; logs every textured GP0 poly at `frame` with
+  decoded clut/texpage + first 3 screen verts). At the oracle's level (f7290, 924 textured polys),
+  the geometry around (43,172) is **gouraud-textured grass terrain** (cc=34/3E/3C, clut 800,210 /
+  352,496 / 496,488 — none is clut 880,507, none is a flat cc=2D quad). So the oracle's level does
+  not emit our red quad. The oracle DOES emit exactly this prim (cc=2D, clut 880,507, screen 43,172)
+  — but only at **frames 1286-1324 = the TITLE SCREEN** (scratch/frames/oracle2/e1290.png). So the
+  red-dot quad is a **title-screen 2D overlay element**.
+- **Conclusion (verified):** our port draws a TITLE/menu 2D overlay quad DURING the level; the real
+  game only draws it on the title. Since our port HLE-boots and uses a custom stage state machine
+  (native_boot.c / FUN_80052078 transitions), a title/menu overlay object is not torn down when
+  transitioning to GAME, so its per-frame draw persists into the level. It's a **game-logic /
+  object-state divergence**, NOT GPU (sample_tex/blend/texwindow and all VRAM contents are correct).
+  NB our port does NOT draw this quad at OUR title (redpkt's first hits are all level frames) — it
+  appears ONLY at the level, consistent with state that's mis-set during the HLE stage transition.
+- **Tools added this session (durable, env-gated):** `PSXPORT_REDDBG` + `PSXPORT_CLUTWATCH=x,y`
+  (gpu_native.c — REDDBG logs the prim params + palette + texrow on a dark-red pixel, and (with
+  CLUTWATCH set) the full GP0 packet `[redpkt]` for polys using the watched clut; CLUTWATCH alone
+  logs VRAM uploads covering the watched CLUT row). `PSXPORT_VRAMDUMP="frame:path"` and
+  `PSXPORT_POLYWATCH=frame` (wide60rt/main.cpp — oracle VRAM dump + per-frame textured-poly list).
+  Oracle-to-level recipe: see later-39.
+- **NEXT (the fix):** find the title/menu 2D-overlay object that emits the clut-(880,507) quad and
+  why it stays active at the level. Approaches: (a) in GAME.bin, find the draw code that builds this
+  fixed-screen quad (search for the clut/uv constants or the (43,172) screen coords) and trace what
+  object/flag gates it; (b) check the stage-transition teardown (FUN_80052078 / the title→GAME
+  object-list reset) — our custom scheduler likely skips a clear that the real boot does. Then
+  deactivate/clear that object on entering GAME. Compare our display list vs the oracle's
+  (PSXPORT_POLYWATCH) to confirm the extra prim is gone after the fix.
+
 ## 2026-06-15 (later 39) — ORACLE COMPARE: grass "red blocks" = wrong CLUT contents at (880,507)
 User reported graphical errors in the now-playable level. Ran the **oracle** (Beetle/mednafen
 `runtime/wide60rt`, real GPU) on the same disc to the same first jungle level and compared against

@@ -18,6 +18,7 @@
 
 #include "libretro.h"
 #include "psxport_hooks.h"
+extern "C" uint16_t* GPU_get_vram(void);   // mednafen GPU native VRAM (gpu.c) — for VRAM dump
 #include "hle_bios.h"
 #include "wide60.h"
 #include "games/tomba2.h"
@@ -93,6 +94,29 @@ const char* g_ws_aspect = "16:9";  // beetle_psx_widescreen_hack_aspect_ratio
 float g_aspect = 4.0f / 3.0f;      // core-reported display aspect (updated from av_info)
 double g_fps = 59.94;              // core-reported native field rate (updated from av_info); the play loop's wall-clock pacing target
 bool g_screen_dark = false;        // last presented frame was a near-black load/transition mask (drives the Loading-screen skip)
+
+// PSXPORT_POLYWATCH=frame — log every textured GP0 poly the oracle emits at that frame, with its
+// clut/texpage + first 3 screen verts (correctly strided). For the grass red-block hunt
+// (journal later 39/40): does the oracle's level draw a poly at our red-quad spot (43,172), and
+// with which clut? Determines extra-prim vs wrong-clut.
+int g_pw_frame = -1;
+static void polywatch_hook(uint32_t cc, const uint32_t* cb, int32_t ox, int32_t oy) {
+  if (g_pw_frame < 0 || (int)g_frame != g_pw_frame) return;
+  int textured = cc & 0x4; if (!textured) return;
+  int gouraud = cc & 0x10, quad = cc & 0x08;
+  uint32_t clut = cb[2] >> 16;
+  int clx = (clut & 0x3F) * 16, cly = (clut >> 6) & 0x1FF;
+  uint32_t tpw = cb[4 + ((cc >> 4) & 1)] >> 16;   // gouraud-textured shifts texpage word by 1
+  int tpx = (tpw & 0xF) * 64, tpy = ((tpw >> 4) & 1) * 256;
+  // per-vertex stride: xy (+uv if textured) (+color if gouraud); v0's color is in cb[0].
+  int stride = (textured ? 1 : 0) + (gouraud ? 1 : 0) + 1;
+  int x0 = (int16_t)(cb[1] & 0xFFFF), y0 = (int16_t)(cb[1] >> 16);
+  int x1 = (int16_t)(cb[1 + stride] & 0xFFFF), y1 = (int16_t)(cb[1 + stride] >> 16);
+  int x2 = (int16_t)(cb[1 + 2 * stride] & 0xFFFF), y2 = (int16_t)(cb[1 + 2 * stride] >> 16);
+  fprintf(stderr, "[polywatch] f%u cc=%02X quad=%d gou=%d clut=(%d,%d) tp=(%d,%d) "
+          "scr[(%d,%d)(%d,%d)(%d,%d)] off=(%d,%d)\n",
+          g_frame, cc, quad ? 1 : 0, gouraud ? 1 : 0, clx, cly, tpx, tpy, x0, y0, x1, y1, x2, y2, ox, oy);
+}
 
 // --- runtime logging -----------------------------------------------------
 // Frame-stamped events to stderr. The emulated TTY (BIOS A0:3C / B0:3D
@@ -558,6 +582,28 @@ void VideoCb(const void* data, unsigned width, unsigned height, size_t pitch)
       if (fd.first == g_frame)
         WriteFramePPMPath(data, width, height, pitch, fd.second.c_str());
 
+  // PSXPORT_VRAMDUMP="frame:path" — dump the oracle's native 1024x512x16 VRAM at `frame`
+  // (software renderer, upscale 1x). For comparing texture/CLUT contents against our native
+  // port's VRAM (journal later 39: the grass red-blocks = wrong CLUT at (880,507)).
+  {
+    static int s_vd_frame = -2; static std::string s_vd_path;
+    if (s_vd_frame == -2) {
+      s_vd_frame = -1;
+      if (const char* e = std::getenv("PSXPORT_VRAMDUMP")) {
+        const char* colon = strchr(e, ':');
+        if (colon) { s_vd_frame = atoi(e); s_vd_path = colon + 1; }
+      }
+    }
+    if (s_vd_frame >= 0 && (int)g_frame == s_vd_frame) {
+      uint16_t* vr = GPU_get_vram();
+      if (vr) {
+        FILE* f = fopen(s_vd_path.c_str(), "wb");
+        if (f) { fwrite(vr, 2, 1024u * 512u, f); fclose(f);
+                 fprintf(stderr, "[vramdump] f%u -> %s (1024x512x16)\n", g_frame, s_vd_path.c_str()); }
+      }
+    }
+  }
+
   if (!g_play || !data || !g_present_this_run)
     return;
   if (!g_texture || g_tex_w != width || g_tex_h != height)
@@ -883,6 +929,11 @@ int main(int argc, char** argv)
   {
     fprintf(stderr, "retro_load_game failed for %s\n", disc);
     return 1;
+  }
+
+  if (const char* pw = std::getenv("PSXPORT_POLYWATCH")) {
+    g_pw_frame = atoi(pw);
+    psxport_set_gpu_poly_hook(polywatch_hook);
   }
 
   // Pick up the core's display aspect (widescreen hack changes it from 4:3).
