@@ -1,5 +1,24 @@
 # Debug / progress journal
 
+## 2026-06-15 (later 43) — FIXED: sprite tinting = textured rectangles ignored the command color
+Follow-on to later-42 (user confirmed "sprite tinting has issues"). Textured rectangles/sprites
+(GP0 0x60-0x7F) on PSX modulate the texel by the command color (texel*color/128, saturated, 0x80 =
+neutral) — there is NO raw-texture rectangle variant. Our sprite path wrote the **raw texel** and
+ignored (cr,cg,cb), so any non-neutral-tinted sprite rendered at full brightness / wrong hue.
+- **Found via tooling, not guesswork.** POLYDUMP (sprite path) showed that at a GAME frame 352/355
+  textured sprites are neutral (128,128,128 = passthrough, unaffected) and a few carry a real tint —
+  e.g. three 32x24 HUD-ish item sprites with command color (39,248,0) (heavy green). PROVAT on one
+  (display (157,207), f3060) showed the output pixel = 0xB929 (72,72,112) raw purple = the un-modulated
+  texel, drawn by op=65 primcol=(39,248,0). A green-glowing item was rendering purple.
+- **The fix (gpu_native.c sprite path):** modulate texel by (cr,cg,cb) with saturation, same rule as
+  the polygon path. Neutral sprites (color 128) are unchanged (texel*128/128 = texel).
+- **Verified via tooling + visual:** after the fix PROVAT on the same pixel = 0x8222 (16,136,0) =
+  exactly texel*(39,248,0)/128 then 5-bit-quantized (21,139,0 -> 16,136,0). The item now renders green
+  (scratch/screenshots/spritefix/f03060_hud.png — green spiky item; was blue/purple). Grass still clean
+  (later-42 grass-garish stays 0), level still loads/plays/reaches GAME — no regression.
+- Remaining GPU faithfulness notes (not bugs hit yet): mask-bit test on VRAM reads is not modeled;
+  sprite/poly blend modes assume the standard set. Revisit if a specific effect looks wrong.
+
 ## 2026-06-15 (later 42) — FIXED: grass red-blocks = uint8 overflow in texture-color modulation
 Root-caused and fixed the scattered garish blocks on the grass (the bug later-39/40/41 circled but
 never landed). **It was our rasterizer all along — a saturation bug in gouraud-textured modulation.**

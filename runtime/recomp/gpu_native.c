@@ -353,7 +353,14 @@ static void gp0_exec(void) {
           if (t == 0) continue;                     // transparent texel
           // texel bit15 gates per-pixel blending (same rule as textured polygons)
           int px_semi = semi && (t & 0x8000);
-          put_px_b(x + dx + s_off_x, y + dy + s_off_y, (t & 31) << 3, ((t >> 5) & 31) << 3, ((t >> 10) & 31) << 3, px_semi);
+          // Textured rectangles/sprites modulate the texel by the command color (texel*color/128,
+          // saturated to 0xFF) exactly like textured polygons — there is no raw-texture rectangle
+          // variant. Omitting this rendered every tinted sprite at full brightness (e.g. a green-
+          // glowing item showing raw/purple). Same saturation rule as the polygon path (later 42).
+          int sr = ((t & 31) << 3) * cr / 128, sg = (((t >> 5) & 31) << 3) * cg / 128,
+              sb = (((t >> 10) & 31) << 3) * cb / 128;
+          put_px_b(x + dx + s_off_x, y + dy + s_off_y,
+                   sr > 255 ? 255 : sr, sg > 255 ? 255 : sg, sb > 255 ? 255 : sb, px_semi);
         } else put_px_b(x + dx + s_off_x, y + dy + s_off_y, cr, cg, cb, semi);
       }
     s_prims++;
