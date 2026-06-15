@@ -154,8 +154,15 @@ static void tri(Vtx a, Vtx b, Vtx c, int tex, int shade, int semi) {
       int pt_u = 0, pt_v = 0; uint16_t pt_t = 0;    // PSXPORT_PIXTRACE capture
       int pt_cr = a.r, pt_cg = a.g, pt_cb = a.b;    // interpolated modulation color (set below)
       if (tex) {
-        int u = (int)((l0*a.u + l1*b.u + l2*c.u) / aa);
-        int v = (int)((l0*a.v + l1*b.v + l2*c.v) / aa);
+        // Affine UV, ROUND-TO-NEAREST (not truncate): PSX/Beetle add a +0.5-texel bias before the
+        // integer truncation (gpu_polygon.c affine seed `+(1<<(COORD_FBS-1))`), i.e. sample the
+        // nearest texel. Truncating instead biases sampling half a texel toward the origin, picking a
+        // neighbouring texel at fractional coords (journal later-44 residual). Round in sign-
+        // normalized form since `aa` (doubled area) may be negative.
+        long su = l0*a.u + l1*b.u + l2*c.u, sv = l0*a.v + l1*b.v + l2*c.v, den = aa;
+        if (den < 0) { su = -su; sv = -sv; den = -den; }
+        int u = (int)((su + den/2) / den);
+        int v = (int)((sv + den/2) / den);
         uint16_t t = sample_tex(u, v);
         pt_u = u; pt_v = v; pt_t = t;
         if (t == 0) continue;                       // transparent texel

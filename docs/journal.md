@@ -1,5 +1,18 @@
 # Debug / progress journal
 
+## 2026-06-15 (later 45) — FIXED the UV sampling residual: affine UV now round-to-nearest
+Follow-on to later-44, using the differ to land its named #1 residual. PSX/Beetle sample the texel
+NEAREST to the affine (u,v) — Beetle seeds its affine interpolant with a +0.5-texel bias
+(`+(1<<(COORD_FBS-1))`, gpu_polygon.c) then truncates = round-to-nearest. Our `tri()` integer-divided
+the barycentric UV sum and TRUNCATED, biasing every sample half a texel toward the origin and picking
+a neighbouring texel at fractional coords. **Fix (gpu_native.c):** round the affine UV to nearest
+(add half the divisor, sign-normalized since `aa` may be negative). Verified via the differ on the
+f3000 grass frame: GAME back-buffer real-divergence (|Δ|>3, dither filtered) **17.0% → 2.57%**; total
+(incl. dither) 64% → 42%. Live port rebuilt, reaches GAME, renders clean & sharper, no regression
+(scratch/screenshots/differ_f3000/live_uv_full.png). REMAINING residual: the ~2.6% |Δ|>3 is now
+diffuse (triangle-edge coverage: our top-left fill rule vs Beetle's), and the ~40% |Δ|≤3 is the
+dither-matrix mismatch (our custom s_dither4 vs Beetle dither_table/DitherLUT) — next differ targets.
+
 ## 2026-06-15 (later 44) — BUILT the GP0 differ + FIXED the "shadow = black wedge" bug
 Two deliverables (handoff scratch/handoff.md), both done & verified.
 
