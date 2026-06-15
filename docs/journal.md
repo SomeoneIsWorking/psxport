@@ -32,6 +32,9 @@ address so we never call through null before `SsStart`. Opt out (A/B): `PSXPORT_
 - TEMPO is reasoned-correct (1 tick / SPU field = hardware 60 Hz). **User should confirm audibly**
   (windowed run, no `PSXPORT_NOAUDIO`) — the only thing a headless RMS check can't certify is the
   exact musical tempo/pitch.
+- **No rendering regression:** full 1 MB VRAM dumped (`PSXPORT_VRAMDUMP_AT`) at f600 (menu) and
+  f3000 (gameplay grass) is **byte-identical** with the sequencer tick ON vs `PSXPORT_T2_NOSEQTICK`
+  — the fix is isolated to audio; geometry/raster (the 0.000% later-51/52 result) is untouched.
 
 ### Tooling hygiene
 `vendor/beetle-psx spu.c` oracle SPU trace is now gated on `#ifdef __LIBRETRO__` (oracle-only) — the
