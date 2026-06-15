@@ -24,22 +24,31 @@ across scenes — the rasterizer matches the oracle everywhere sampled. (scratch
   SPU-RAM DMA/data-port transfers, per-frame spu_render peak — to separate a mixing bug from a
   driver/IRQ problem.
 
-### FINDING: the port is SILENT in gameplay — root cause = sound driver isn't sequencing
+### FINDING: the port is SILENT — VERIFIED facts + an HONEST (not-yet-pinned) root cause
 A 55 s headless gameplay capture (incl. the f3000 grass scene) is **all zeros**. PSXPORT_SPU_DBG
-shows the SPU is healthy: enabled (SPUCNT bit15=1), master volume 0x3FFF, SPU RAM uploaded (359
-DMA writes × 256 words ≈ 368 KB), voices keyed on. BUT over 2500 frames only **5 KON writes occur,
-all the all-24-voices init pattern (0x188=FFFF / 0x18A=00FF) — ZERO per-note key-ons**. So the
-game's sound engine never sequences notes → every mixed frame peaks at 0. Two contributors:
-1. The sound driver/sequencer isn't being ticked. PSX sound engines typically update on a periodic
-   IRQ (hardware Timer or the SPU IRQ). `IRQ_Assert` is a stubbed no-op (spu_beetle.c STOPGAP) and
-   the per-frame sound-update entry isn't driven, so the sequencer never advances.
-2. CD-DA / streamed music is stubbed to silence (`CDC_GetCDAudioSample` returns 0).
-PROPER FIX (NOT a bandaid, deferred — subsystem-sized, flagged for the user): RE the game's
-sound-engine update entry and drive it per frame (as we drive graphics), and/or wire the Timer/SPU
-IRQ into the runtime's interrupt controller; then connect a CD-DA source for streamed music. This
-was NOT attempted yet — naming it rather than hacking. GOTCHA recorded: runs must go through run.sh
-(it sets disc/BIOS/MAIN env); invoking scratch/bin/tomba2_port directly does NOT boot the game (no
-SPU activity), which briefly masked the upload activity during triage.
+shows the SPU itself is healthy: enabled (SPUCNT bit15=1), master volume 0x3FFF, SPU RAM uploaded
+(359 DMA writes × 256 words ≈ 368 KB), voices keyed on at init. VERIFIED facts:
+- Over 2500 frames only **5 KON writes, all the all-24-voices init pattern (0x188=FFFF/0x18A=00FF)
+  — ZERO per-note key-ons**. The SPU mixes 735 zero samples/frame.
+- Steady SPUCNT = C020 / C0A0: **SPU-IRQ-enable (bit6) = 0** and **CD-audio-enable (bit0) = 0**.
+  So the sound path is NOT driven by the SPU IRQ (this DISPROVES my first guess that the stubbed
+  `IRQ_Assert` was the cause) and CD audio is not steadily mixed through the SPU here either (bit0
+  flips to 1 only briefly — C001/C0A1, a few times).
+- The game's registered VBlank callback (0x800506B4, per games_tomba2.c) only increments the pacing
+  counter — so the sequencer is NOT the VBlank callback either. (Don't chase "wire VSyncCallback".)
+ROOT CAUSE NOT YET PINNED (deliberately not guessing / not bandaiding). Remaining candidates, in
+order, for the next focused audio-RE session:
+1. The music is likely STREAMED (XA-ADPCM / CD-DA) — that whole path (CD sector stream → SPU CD
+   input / MDEC-audio) is stubbed: `CDC_GetCDAudioSample` returns silence. This is the most concrete
+   known gap and probably the bulk of the missing audio.
+2. SFX are SPU-sequenced; in the FORCED-INPUT (FFF7) attract state the game may simply trigger no
+   SFX (no per-note KON because no SFX event), which would be partly EXPECTED, not a bug. Needs a
+   run with real SFX-triggering input to tell "broken" from "nothing to play".
+3. If a sequencer IS expected to run and doesn't, suspect a hardware Timer (RootCounter) IRQ tick we
+   don't deliver — verify by checking Timer setup + whether a sound-update runs off it.
+NOT attempted: any fix. Naming it per "no bandaids" rather than shipping a speculative call. GOTCHA
+recorded: runs must go through run.sh (sets disc/BIOS/MAIN env); invoking scratch/bin/tomba2_port
+directly does NOT boot the game, which briefly masked the SPU-RAM upload activity during triage.
 
 ## 2026-06-15 (later 51) — rasterizer fidelity: exact mednafen coverage + raw-texture poly bit → 2.57%→0.29% (a grass frame to 0.000%)
 Continued the oracle GP0 differ chase (handoff scratch/handoff.md). Drove the GAME back-buffer
