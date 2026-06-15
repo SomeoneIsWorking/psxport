@@ -213,6 +213,16 @@ extern "C" void psxport_calltrace(uint32_t pc, uint32_t instr, const uint32_t* g
   if (op == 3) tgt = (pc & 0xF0000000u) | ((instr & 0x03FFFFFFu) << 2);   // jal
   else if (op == 0 && (instr & 0x3F) == 9) tgt = gpr[(instr >> 21) & 31]; // jalr
   else return;
+  // Loader/streaming trace: log asset-load + unpack calls with args so the oracle's load/unpack LBA
+  // sequence can be diffed vs the native port (atlas-corruption RE). FUN_8001db8c(dest,lba,size) /
+  // FUN_8001dc40 loadfile; FUN_80044E84(table,anchor) unpack. Always logged (ignores the range).
+  if (tgt == 0x8001db8c || tgt == 0x8001dc40 || tgt == 0x80044e84) {
+    const char* nm = tgt == 0x80044e84 ? "UNPACK" : "loadfile";
+    std::fprintf(g_ct, "%08X -> %08X %s a0=%08X a1=%08X a2=%08X\n",
+                 pc, tgt, nm, gpr[4], gpr[5], gpr[6]);
+    g_ct_n++;
+    return;
+  }
   if (tgt < g_ct_lo || tgt >= g_ct_hi) return;
   std::fprintf(g_ct, "%08X %08X\n", pc, tgt);
   g_ct_n++;

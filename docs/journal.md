@@ -1,5 +1,38 @@
 # Debug / progress journal
 
+## 2026-06-15 (later 69) — DECOMPRESSOR/LOAD/UPLOAD ALL CORRECT. The atlas is decompressed byte-perfect then CLOBBERED by a VRAM→VRAM copy (80copy dest=(64,90) 558x255 @f3265). The corruption is a spurious/mistimed VRAM copy, not the asset pipeline.
+Big correction to later-66/67/68 (the reused-scratch made the input look wrong; it is not).
+
+### The decompressor is FAITHFUL — atlas is correct right after unpack
+- The oracle does the SAME load+unpack sequence we do (oracle calltrace via PSXPORT_CALLTRACE +
+  psxport_hooks.cpp loader logging): same LBAs unpacked (6613/6625/6717/6774), 2020 loaded-not-unpacked
+  — IDENTICAL to ours. So NOT a sequencing bug; 2020 is not the atlas.
+- The decompressor offset table @0x800153C8 is byte-identical ours vs oracle.
+- **Texpage (320,0) right after our 6625 unpack (present f2591) is 100.0% identical to the oracle**
+  (oracle_vram_7000). So our decompress+upload of the atlas is byte-perfect. (later-66/67's "input
+  52.9%/wrong" was the reused-scratch 0x18A000 ghost — the LIVE input matches the disc 100%.)
+
+### …then it gets CLOBBERED
+- Our (320,0) at present f4267 is only 4.7% == its f2591 self ⟹ overwritten between f2591 and f4267.
+- PSXPORT_TEXWATCH="320,0,512,256": exactly ONE write hits the atlas in that window —
+  **f3265 80copy src=(56,56) dest=(64,90) 558x255** (a VRAM→VRAM block copy). dest (64,90)+558x255
+  spans x64-622 y90-345, swallowing the atlas texpages (320,0)-(512,256). This single copy accounts
+  for the whole (320,0) change.
+
+### So the real bug
+A VRAM→VRAM copy overwrites the already-correct atlas. The decompressor/CD-read/upload are all
+RULED OUT (byte-perfect). The copy either (a) shouldn't run / has wrong coords/size in our port, or
+(b) is mistimed (ordering vs the atlas load — sync-vs-async CD), or (c) its source (56,56) holds
+garbage in our port. The oracle's atlas survives at f7000, so the oracle either doesn't do this copy,
+does it before the atlas load, or to different coords.
+
+### NEXT
+Capture the oracle's GP0 0x80 (VRAM→VRAM) copies (hook GPU in wide60rt, or gpudump) around the
+green-field demo and compare to ours: same copy? same coords/size? same timing relative to the atlas
+unpack? Then find what issues our f3265 copy (GP0 0x80 origin in the OT / a libgpu MoveImage) and why
+it lands on the atlas. Tools added: psxport_hooks.cpp loader/unpack calltrace (oracle), the early/late
+VRAM compare recipe (PSXPORT_VRAMDUMP at two frames), PSXPORT_TEXWATCH.
+
 ## 2026-06-15 (later 68) — mapping the loader/streaming dispatcher; two load paths found. Need the ORACLE's load/unpack LBA sequence to pin the correct atlas (reused-scratch ambiguity). User directive: PORT the loader+streaming to PC-native.
 Caller (ra) logging on ov_cd_loadfile + ov_unpack_group: the load+unpack path that fills the atlas is
 **FUN_80044f58** (loadfile call ra=0x80045008 i.e. the jal at 0x80045000→FUN_8001dc40; unpack
