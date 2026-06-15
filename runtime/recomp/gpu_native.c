@@ -646,6 +646,11 @@ void gpu_gp0(uint32_t w) {
       s_xfer_h = (((s_fifo[2] >> 16) & 0x1FF) ? ((s_fifo[2] >> 16) & 0x1FF) : 512);
       s_xfer_px = 0; s_xfer = 1;
       clutwatch_xfer("A0", s_xfer_x, s_xfer_y, s_xfer_w, s_xfer_h);
+      if (getenv("PSXPORT_UPLOADLOG")) {
+        extern uint32_t g_dma_src;
+        fprintf(stderr, "[upload] f%d A0 dest=(%d,%d) %dx%d src=0x%08X\n",
+                s_frame, s_xfer_x, s_xfer_y, s_xfer_w, s_xfer_h, 0x80000000u | g_dma_src);
+      }
     } else if (op == 0x80) {                     // VRAM->VRAM copy
       int sx = s_fifo[1] & 0x3FF, sy = (s_fifo[1] >> 16) & 0x1FF;
       int dx = s_fifo[2] & 0x3FF, dy = (s_fifo[2] >> 16) & 0x1FF;
@@ -907,8 +912,10 @@ void gpu_dma2_linked_list(uint32_t madr) {
   }
 }
 // DMA channel 2 block mode: `count` words from `madr` (to/from GP0). to_gpu=1 -> GP0 writes.
+uint32_t g_dma_src;   // last block-DMA source (UPLOADLOG: which RAM fed a CPU->VRAM upload)
 void gpu_dma2_block(uint32_t madr, int count, int to_gpu) {
   s_dma2++;
   uint32_t addr = madr & 0x1FFFFC;
+  g_dma_src = addr;
   for (int i = 0; i < count; i++) { if (to_gpu) gpu_gp0(mem_r32(addr)); addr += 4; }
 }

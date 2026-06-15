@@ -38,14 +38,27 @@ and low kernel RAM (0x0–0x10000, 22%) diverge — but that is almost certainly
 difference (the demo animates; I can align to the scene via static data, not to the exact frame), not
 corruption. So the RAM diff is inconclusive for the corruption itself.
 
-### Next (root cause — still open, now sharply narrowed)
-Loaded data correct + rasterizer correct ⇒ the corruption is in the **texture UPLOAD to VRAM**: the
-upload sources correct RAM but lands wrong (wrong DMA source addr, wrong VRAM dest x/y, wrong
-width/stride), or the CLUT/processing between correct-RAM and the GP0 0xA0 stream is wrong. NEXT:
-instrument the GP0 0xA0 / `gpu_dma2_block` path to log (VRAM dest, source madr, w×h) during the
-green-field uploads; check whether the source RAM region is the 100%-correct one and whether the dest
-coords/stride are right. The clean-2D vs corrupt-3D split still implicates the interpreted overlay
-gameplay path. (mem_swr fix from this entry is committed but is NOT the cause.)
+### Upload path mapped (new tooling: PSXPORT_UPLOADLOG in gpu_native.c — logs A0 dest/dims + DMA src)
+- Intro/title (CLEAN): per-frame **full-frame 320×240 CPU→VRAM uploads to (0,0)** from 0x8001FB9C
+  (pre-rendered frames — that's why the intro path is clean; no per-poly texturing).
+- Green-field gameplay: **textures uploaded ONCE at scene-load** (f3054) to the atlas texpages the
+  character samples — e.g. dest (576,0) 256×256, (896,0) 128×256, (832,0) 64×256 — streamed from a
+  **high-RAM DMA staging area 0x801Fxxxx** (0x801FC800/FC600/FC580…). Then **CLUTs (16×1) re-uploaded
+  EVERY gameplay frame** from **0x801FCDC0** to the exact CLUT slots the character uses
+  ((1008,227),(1008,255),(800,190),(816,205)…).
+- CRUCIAL: the texture/CLUT DMA source (0x801Fxxxx) is a **DIFFERENT region** from the raw level-data
+  staging (0x80158000/8A000/82000) that matched the oracle 100%. So the raw load is correct, but the
+  **processing step that fills the 0x801Fxxxx DMA buffer (decompress / CLUT build)** is unverified and
+  is now the prime suspect — it runs in the interpreted gameplay overlay (DEMO.BIN/GAME.BIN).
+
+### Next (root cause — still open)
+Verify the 0x801Fxxxx DMA-staging contents (texture pixels + the per-frame CLUT at 0x801FCDC0) against
+the oracle. Needs EXACT-frame alignment (this buffer is rebuilt per frame / per load), not just
+scene-alignment — find the game's logic-frame counter (a RAM word incrementing once/logic-frame,
+identical in both engines until divergence) and dump both at the same value, OR break on the
+fill routine. Then diff the staged texture/CLUT bytes: a mismatch pins the mistranslated
+processing instruction. (mem_swr fix is committed but is NOT the cause; rasterizer, CD-read,
+XA-interleave, unaligned-SWR, and raw-load all ruled out.)
 
 ## 2026-06-15 (later 59) — GAMEPLAY CORRUPTION ISOLATED: it is NOT the rasterizer — the recompiled CPU/HLE produces a PROGRESSIVELY-CORRUPT GP0 stream (bad RAM-sourced texture/CLUT data). Beetle reproduces our garbage byte-near-identically; the oracle running the real game is clean.
 User (windowed, ground truth): in-game graphics "grow more and more garbage as you play" — garbage
