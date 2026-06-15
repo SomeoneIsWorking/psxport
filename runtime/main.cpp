@@ -1414,6 +1414,18 @@ int main(int argc, char** argv)
         psxport_add_hook(a, 0, TraceHookFn);
         fprintf(stderr, "[repl] tracing %08X\n", a);
       }
+      else if (strcmp(cmd, "watch") == 0 && sscanf(line, "%*s %x", &a) == 1)
+      {
+        // Write-watchpoint (parity with the native port's `watch`): log every store to this word
+        // with the writer's CPU PC (cpu.c, via psxport_watch_addr). One word; use `unwatch` to clear.
+        psxport_watch_addr = a & 0x1FFFFC;
+        fprintf(stderr, "[repl] watch %08X\n", 0x80000000u | psxport_watch_addr);
+      }
+      else if (strcmp(cmd, "unwatch") == 0)
+      {
+        psxport_watch_addr = PSXPORT_WATCH_OFF;
+        fprintf(stderr, "[repl] unwatch\n");
+      }
       else if (strcmp(cmd, "bt") == 0)
       {
         psxport_dump_cpu_state(g_ram);
