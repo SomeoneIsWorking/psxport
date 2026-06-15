@@ -284,9 +284,12 @@ void gpu_gp0(uint32_t w) {
       case 0x01: return;                         // clear cache
       case 0xE1: set_texpage(w & 0xFFFF); return;
       case 0xE2: s_tw_mx = w & 31; s_tw_my = (w >> 5) & 31; s_tw_ox = (w >> 10) & 31; s_tw_oy = (w >> 15) & 31; return;
-      case 0xE3: s_da_x0 = w & 0x3FF; s_da_y0 = (w >> 10) & 0x1FF; return;
-      case 0xE4: s_da_x1 = w & 0x3FF; s_da_y1 = (w >> 10) & 0x1FF; return;
-      case 0xE5: s_off_x = ((int)(w & 0x7FF) << 21) >> 21; s_off_y = ((int)((w >> 11) & 0x7FF) << 21) >> 21; return;
+      case 0xE3: s_da_x0 = w & 0x3FF; s_da_y0 = (w >> 10) & 0x1FF;
+        if (getenv("PSXPORT_ENVDBG")) fprintf(stderr, "[env] E3 clip_tl=(%d,%d)\n", s_da_x0, s_da_y0); return;
+      case 0xE4: s_da_x1 = w & 0x3FF; s_da_y1 = (w >> 10) & 0x1FF;
+        if (getenv("PSXPORT_ENVDBG")) fprintf(stderr, "[env] E4 clip_br=(%d,%d)\n", s_da_x1, s_da_y1); return;
+      case 0xE5: s_off_x = ((int)(w & 0x7FF) << 21) >> 21; s_off_y = ((int)((w >> 11) & 0x7FF) << 21) >> 21;
+        if (getenv("PSXPORT_ENVDBG")) fprintf(stderr, "[env] E5 offset=(%d,%d)\n", s_off_x, s_off_y); return;
       case 0xE6: return;                         // mask settings (mask-test not modeled)
       default: break;
     }
@@ -362,6 +365,13 @@ static int s_frame = 0;
 void gpu_present(void) {
   void watchdog_pet(void);
   watchdog_pet();             // frame-progress heartbeat (see watchdog.c)
+  if (getenv("PSXPORT_VRAMSCAN")) {
+    int minx=99999,miny=99999,maxx=-1,maxy=-1; long nz=0;
+    for (int y=0;y<512;y++) for (int x=0;x<1024;x++) if (*vram(x,y)&0x7FFF) {
+      nz++; if(x<minx)minx=x; if(x>maxx)maxx=x; if(y<miny)miny=y; if(y>maxy)maxy=y; }
+    fprintf(stderr, "[vramscan] f%d disp@(%d,%d) %dx%d  nonblack=%ld bbox=(%d,%d)-(%d,%d)\n",
+            s_frame, s_disp_x, s_disp_y, s_disp_w, s_disp_h, nz, minx, miny, maxx, maxy);
+  }
   present_window();
   const char* dir = getenv("PSXPORT_GPU_DUMP");
   if (g_log) fprintf(stderr, "[gpu] frame %d: %ld prims, %ld gp0words, %ld dma2, disp %dx%d @ (%d,%d)\n",

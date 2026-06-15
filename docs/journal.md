@@ -31,9 +31,20 @@ on real pad input. Verified headless (state log + frame dumps).
   at frame 66**, GAME's own state machine ticking (demo_state 5→2). No OT warning, no hang,
   baseline (no input) still parks cleanly at the title. The interactive loop now runs until the
   window closes (PSXPORT_NATIVE_FRAMES caps headless; default 120 headless, unbounded windowed).
-- **NEXT:** the GAME stage renders BLACK so far — drive/inspect GAME's per-frame state machine
-  (FUN_801086e0/720/784, GAME.BIN) + whatever assets/CD-stream it needs (the strNext attract stream
-  still times out non-fatally). That's the path to actual on-screen gameplay.
+- **NEXT — GAME renders BLACK (residual).** GAME IS running (its sequencer ticks in the flat interp
+  at pc≈0x80108a64, GAME.BIN) and IS drawing: per-frame GPU log shows a big VRAM upload (~15.4k
+  gp0words = level textures) then ~29 prims/frame; `PSXPORT_ENVDBG` confirms the draw env is correct
+  (clip (0,0)-(319,239) off (0,0) / clip (0,256)-(319,495) off (0,256), alternating double-buffer).
+  BUT `PSXPORT_VRAMSCAN` shows all non-black VRAM is at x≥320 (the texture pages); the framebuffer
+  region x=0..319 (both buffers) is ENTIRELY black. So the 29 prims don't rasterize into the
+  framebuffer — GAME is most likely still at an early loading/fade state (or an asset it needs
+  didn't load: the strNext attract stream times out, and there's an early "file not found" + UNIMPL
+  B0:0x18). NB the flat interp makes GAME slow (~native-frame 130 in ~100s), so 120 native frames
+  doesn't get far past the load. Tools added this session for the chase: `PSXPORT_VRAMSCAN` (whole-
+  VRAM non-black bbox per present), `PSXPORT_ENVDBG` (GP0 E3/E4/E5 draw-clip/offset), `PSXPORT_OTDBG`
+  (cyclic-OT chain dump). Next: drive GAME further (more native frames / recompile GAME.BIN fns for
+  speed), find what it waits on to leave the load (CD/strNext/asset), and confirm whether prims are
+  clipped-out vs sampling-black.
 
 ## 2026-06-15 (later 35) — AUTHENTIC BOOT WORKS: recompiled stub draws SCEA → LoadExec → MAIN title
 Replaced the FAKE native_fmv intro with the AUTHENTIC boot: the disc's boot executable SCUS_944.54
