@@ -703,8 +703,8 @@ void gpu_gp0(uint32_t w) {
       for (int y = 0; y < h2; y++) for (int x = 0; x < w2; x++) *vram(dx + x, dy + y) = *vram(sx + x, sy + y);
       clutwatch_xfer("80copy", dx, dy, w2, h2);
       if (texwatch_overlap(dx, dy, w2, h2))
-        fprintf(stderr, "[texwatch] f%d 80copy src=(%d,%d) dest=(%d,%d) %dx%d\n",
-                s_frame, sx, sy, dx, dy, w2, h2);
+        fprintf(stderr, "[texwatch] f%d 80copy src=(%d,%d) dest=(%d,%d) %dx%d node=0x%08X words=%08X,%08X,%08X,%08X\n",
+                s_frame, sx, sy, dx, dy, w2, h2, s_cur_node, s_fifo[0], s_fifo[1], s_fifo[2], s_fifo[3]);
     } else if (op != 0xC0) {
       gp0_exec();
     }

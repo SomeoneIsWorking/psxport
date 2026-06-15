@@ -1,5 +1,37 @@
 # Debug / progress journal
 
+## 2026-06-15 (later 70) — the clobbering copy is a MALFORMED OT NODE (garbage words read as a VRAM copy). Bad words come from the OT in RAM, not our GPU parser. Root cause = a bad OT node our port builds and the oracle doesn't.
+The f3265 atlas-clobbering 80copy (later-69) is node **0x800D4B9C**, raw words
+**8040333D, 34383838, 005A0040, 38FF322E**. A real libgpu MoveImage cmd word is 0x80000000; this is
+0x8040333D with ASCII-ish operands (0x34383838="8884", 0x2E=".", 0x3D="=") ⟹ these are DATA/garbage
+words being read as a GP0 0x80 VRAM→VRAM copy (which lands on the atlas: dest (64,90) 558x255).
+gpu_differ (later-59) already showed Beetle reproduces our garbage from our own captured GP0 WORDS, so
+our GPU parser is fine — **the bad words are in the OT (game RAM)**, fed to GP0 by the DMA. So our port
+builds (or corrupts) a bad OT node at ~f3265 that the oracle does not (the OT region 0x800Cxxxx-0x800Exxxx
+is exactly where our RAM diverges from the oracle, later-60).
+
+### Reconciles every prior result
+- VRAM-only transplant clean (later-65): the clobber (f3265 ≈ present 3265) happened BEFORE the
+  transplant (logic 1680 ≈ present 4267); the transplant replaced the clobbered atlas with clean and the
+  one-time clobber didn't recur ⟹ stayed clean. RAM-only no effect: the VRAM damage was already done and
+  RAM transplant doesn't repaint VRAM.
+- Decompressor/load/upload byte-perfect (later-69): the atlas WAS correct (f2591 == oracle 100%); the
+  clobber is the only corruption.
+
+### The real bug, restated
+A malformed OT node (0x800D4B9C) appears in our display list around f3265 and decodes as a spurious
+VRAM copy that overwrites the atlas. It is upstream of the GPU — in the interpreted game logic / HLE
+that builds or owns that OT buffer (a wrong word-count, a stale/garbage pointer, or a buffer the OT
+node refs that got clobbered). This is the SAME class as the long-standing "dynamic region
+0x800C-0x800E diverges from oracle."
+
+### NEXT (the from-boot divergence hunt — the call-sequence harness the user approved)
+The transplant masks accumulation, so go from-boot: find the FIRST frame the OT (or its source struct)
+diverges from the oracle, via a sequence-keyed differential (log the OT-build / AddPrim / the function
+that emits node 0x800D4B9C's command, sequence-numbered, in both engines; diff). Identify the
+instruction/HLE that writes the bad word. Watch 0x800D4B9C-area stores around f3265 (PSXPORT_CW /
+oracle PSXPORT_WATCHW). The owning routine, once found, gets PC-owned per the user directive.
+
 ## 2026-06-15 (later 69) — DECOMPRESSOR/LOAD/UPLOAD ALL CORRECT. The atlas is decompressed byte-perfect then CLOBBERED by a VRAM→VRAM copy (80copy dest=(64,90) 558x255 @f3265). The corruption is a spurious/mistimed VRAM copy, not the asset pipeline.
 Big correction to later-66/67/68 (the reused-scratch made the input look wrong; it is not).
 
