@@ -54,7 +54,7 @@ static uint32_t s_prov[VRAM_W * VRAM_H];   // gid of last writer per pixel (0 = 
 static uint32_t s_prim_gid = 0;            // monotonic primitive counter
 static int      s_prov_on = -1;            // lazily: 1 if PSXPORT_PROVAT set, else 0
 typedef struct { uint32_t gid, frame, node; int clut_x, clut_y, tp_x, tp_y, x0, y0, u0, v0;
-                 uint8_t op, r, g, b, semi, tex, mode; } ProvMeta;
+                 uint8_t op, r, g, b, semi, tex, mode, blend; } ProvMeta;
 #define PROVRING 16384
 static ProvMeta s_provmeta[PROVRING];      // gid -> prim details (ring; older gids evicted)
 
@@ -151,23 +151,32 @@ static void tri(Vtx a, Vtx b, Vtx c, int tex, int shade, int semi) {
       uint8_t r, g, bl;
       int px_semi = semi;                           // whether THIS pixel blends
       int dithered = 0;                             // PSX dithers gouraud + modulated-texture
+      int pt_u = 0, pt_v = 0; uint16_t pt_t = 0;    // PSXPORT_PIXTRACE capture
+      int pt_cr = a.r, pt_cg = a.g, pt_cb = a.b;    // interpolated modulation color (set below)
       if (tex) {
         int u = (int)((l0*a.u + l1*b.u + l2*c.u) / aa);
         int v = (int)((l0*a.v + l1*b.v + l2*c.v) / aa);
         uint16_t t = sample_tex(u, v);
+        pt_u = u; pt_v = v; pt_t = t;
         if (t == 0) continue;                       // transparent texel
         // PSX: a textured pixel blends only when its bit15 is set AND the prim semi bit is set.
         px_semi = semi && (t & 0x8000);
         r = (t & 31) << 3; g = ((t >> 5) & 31) << 3; bl = ((t >> 10) & 31) << 3;
-        // texture*color modulation (texel * vertexcolor / 128). PSX hardware SATURATES the result
-        // to 0xFF; doing the arithmetic in uint8_t wraps mod 256 instead, so a bright texel under a
-        // bright (>128) vertex color overflows and wraps to a small value — e.g. a bright-green grass
-        // texel turns red. Compute wide and clamp to 255 (the grass red-block bug, journal later 42).
-        if (shade) {
-          int rr = r * a.r / 128, gg = g * a.g / 128, bb = bl * a.b / 128;
-          r = rr > 255 ? 255 : rr; g = gg > 255 ? 255 : gg; bl = bb > 255 ? 255 : bb;
-          dithered = 1;
-        }
+        // texture*color modulation (texel * vertexcolor / 128). PSX textured polygons ALWAYS
+        // modulate the texel by the vertex color, INTERPOLATED per pixel across the face (the
+        // command color for flat-shaded prims, where all vertices carry it). The modulation color
+        // must therefore be the barycentric-interpolated (cr,cg,cb), NOT vertex A's color held flat
+        // — using v0 flat collapses a gouraud gradient (e.g. a soft shadow quad: dark center vertex,
+        // bright edges) into a uniform block (journal later 44: black-wedge shadow). PSX hardware
+        // SATURATES the product to 0xFF; doing it in uint8_t wraps mod 256, turning a bright grass
+        // texel red, so compute wide and clamp (the grass red-block bug, journal later 42).
+        int cr = (int)((l0*a.r + l1*b.r + l2*c.r) / aa);
+        int cg = (int)((l0*a.g + l1*b.g + l2*c.g) / aa);
+        int cb = (int)((l0*a.b + l1*b.b + l2*c.b) / aa);
+        pt_cr = cr; pt_cg = cg; pt_cb = cb;
+        int rr = r * cr / 128, gg = g * cg / 128, bb = bl * cb / 128;
+        r = rr > 255 ? 255 : rr; g = gg > 255 ? 255 : gg; bl = bb > 255 ? 255 : bb;
+        dithered = 1;
       } else if (shade) {
         r = (uint8_t)((l0*a.r + l1*b.r + l2*c.r) / aa);
         g = (uint8_t)((l0*a.g + l1*b.g + l2*c.g) / aa);
@@ -175,6 +184,16 @@ static void tri(Vtx a, Vtx b, Vtx c, int tex, int shade, int semi) {
         dithered = 1;
       } else { r = a.r; g = a.g; bl = a.b; }
       if (s_tp_dither && dithered) { r = dith(r, x, y); g = dith(g, x, y); bl = dith(bl, x, y); }
+      // PSXPORT_PIXTRACE="vx,vy": dump every prim that writes this absolute VRAM pixel (post-offset),
+      // with its sampled texel + interpolated color + modulated output — for per-pixel-math diffing
+      // against Beetle's gpu_polygon.c (which carries the matching [pixtrace beetle] log).
+      { static int tx = -2, ty; if (tx == -2) { const char* e = getenv("PSXPORT_PIXTRACE");
+          if (e) sscanf(e, "%d,%d", &tx, &ty); else tx = -1; }
+        if (tx >= 0 && x == tx && y == ty)
+          fprintf(stderr, "[pixtrace ours] (%d,%d) tex=%d shade=%d semi=%d px_semi=%d blend=%d dith=%d "
+                  "uv=(%d,%d) texel=%04X out8=(%d,%d,%d) out5=(%d,%d,%d) vcol=(%d,%d,%d)\n",
+                  x, y, tex, shade, semi, px_semi, s_tp_blend, (s_tp_dither && dithered),
+                  pt_u, pt_v, pt_t, r, g, bl, r >> 3, g >> 3, bl >> 3, pt_cr, pt_cg, pt_cb); }
       // REDDBG: dark-red output anomaly probe (grass blocks). Log the prim's params once.
       if (s_reddbg && tex && r >= 64 && g < 24 && bl < 24 && x >= s_da_x0 && x <= s_da_x1) {
         static int n = 0;
@@ -228,6 +247,7 @@ static void prov_begin(uint8_t op, int tex, int semi, uint8_t r, uint8_t g, uint
   m->clut_x = s_clut_x; m->clut_y = s_clut_y; m->tp_x = s_tp_x; m->tp_y = s_tp_y;
   m->x0 = x0; m->y0 = y0; m->u0 = u0; m->v0 = v0; m->r = r; m->g = g; m->b = b;
   m->semi = (uint8_t)semi; m->tex = (uint8_t)tex; m->mode = (uint8_t)s_tp_mode;
+  m->blend = (uint8_t)s_tp_blend;
 }
 
 // PSXPORT_CLUTWATCH[=x,y] — log every VRAM upload whose rect covers a watched CLUT point
@@ -402,9 +422,62 @@ static int gp0_len(uint32_t c) {
   return 1;                                      // env / nop / single-word
 }
 
+// ---- GP0 trace capture (PSXPORT_GPUTRACE="frame[:path]") ------------------------------------
+// Records, for ONE target frame, a snapshot of VRAM at frame start plus the EXACT GP0 word stream
+// fed to gpu_gp0() during that frame. Replaying that file through BOTH our renderer and Beetle's
+// (tools/gpu_differ) from the identical initial VRAM makes any output-VRAM difference a pure
+// rasterizer-fidelity difference — no live game-state alignment needed (the whole point: our HLE
+// port and the full-emulation oracle run at different timings, so we can't align by frame number;
+// feeding the same primitive stream to both rasterizers sidesteps that entirely).
+//
+// File format ("GP0TRC01"): magic[8], u32 frame, u32 word_count, u32 vram_w(1024), u32 vram_h(512),
+// then vram_w*vram_h u16 (initial VRAM), then word_count u32 (the GP0 stream, in feed order).
+static int        s_trace_on = -1;       // -1 lazy, 0 off, 1 armed
+static int        s_trace_frame = -1;    // target frame
+static const char* s_trace_path = "scratch/bin/gp0trace.bin";
+static uint16_t*  s_trace_init;          // VRAM snapshot at frame start
+static uint32_t*  s_trace_words;         // captured GP0 words (grown)
+static size_t     s_trace_cap, s_trace_n;
+static int        s_trace_inited, s_trace_done;
+
+static void trace_record(uint32_t w) {
+  if (s_trace_on < 0) {
+    const char* e = getenv("PSXPORT_GPUTRACE");
+    s_trace_on = e ? 1 : 0;
+    if (e) { s_trace_frame = atoi(e); const char* c = strchr(e, ':'); if (c) s_trace_path = c + 1; }
+  }
+  if (s_trace_on <= 0 || s_trace_done || s_frame != s_trace_frame) return;
+  if (!s_trace_inited) {
+    s_trace_init = (uint16_t*)malloc(sizeof(uint16_t) * VRAM_W * VRAM_H);
+    memcpy(s_trace_init, s_vram, sizeof(uint16_t) * VRAM_W * VRAM_H);
+    s_trace_inited = 1;
+  }
+  if (s_trace_n >= s_trace_cap) {
+    s_trace_cap = s_trace_cap ? s_trace_cap * 2 : 65536;
+    s_trace_words = (uint32_t*)realloc(s_trace_words, s_trace_cap * sizeof(uint32_t));
+  }
+  s_trace_words[s_trace_n++] = w;
+}
+
+static void trace_flush(void) {  // called from gpu_present while s_frame is still the target
+  if (s_trace_on <= 0 || s_trace_done || !s_trace_inited || s_frame != s_trace_frame) return;
+  FILE* f = fopen(s_trace_path, "wb");
+  if (f) {
+    uint32_t meta[4] = { (uint32_t)s_trace_frame, (uint32_t)s_trace_n, VRAM_W, VRAM_H };
+    fwrite("GP0TRC01", 1, 8, f);
+    fwrite(meta, 4, 4, f);
+    fwrite(s_trace_init, 2, VRAM_W * VRAM_H, f);
+    fwrite(s_trace_words, 4, s_trace_n, f);
+    fclose(f);
+    fprintf(stderr, "[gputrace] f%d -> %s (%zu words)\n", s_frame, s_trace_path, s_trace_n);
+  }
+  s_trace_done = 1;
+}
+
 // One word into the GP0 port (direct write or DMA).
 void gpu_gp0(uint32_t w) {
   s_gp0_words++;
+  trace_record(w);
   if (s_xfer) {                                  // CPU->VRAM pixel stream (2 px/word)
     for (int k = 0; k < 2; k++) {
       int px = s_xfer_px % s_xfer_w, py = s_xfer_px / s_xfer_w;
@@ -534,6 +607,7 @@ static int s_frame = 0;
 void gpu_present(void) {
   void watchdog_pet(void);
   watchdog_pet();             // frame-progress heartbeat (see watchdog.c)
+  trace_flush();              // PSXPORT_GPUTRACE: write this frame's GP0 trace (no-op unless armed)
   if (getenv("PSXPORT_VRAMSCAN")) {
     int minx=99999,miny=99999,maxx=-1,maxy=-1; long nz=0;
     for (int y=0;y<512;y++) for (int x=0;x<1024;x++) if (*vram(x,y)&0x7FFF) {
@@ -609,6 +683,29 @@ void gpu_native_init(void) {
 // Read-only VRAM inspection accessor (raw 16-bit 555+mask word). Used by the offline GPU-QA
 // harness to assert exact rasterized/blended values; harmless in production (read-only).
 uint16_t gpu_vram_peek(int x, int y) { return *vram(x, y); }
+
+// Bulk VRAM load/save (1024x512x16). Used by the offline GP0 differ harness (tools/gpu_differ):
+// seed s_vram with a captured initial VRAM, replay a GP0 word stream via gpu_gp0(), then read back
+// the rasterized result for a pixel-exact compare against Beetle on the identical input.
+void gpu_vram_load(const uint16_t* src) { memcpy(s_vram, src, sizeof(s_vram)); }
+void gpu_vram_save(uint16_t* dst)       { memcpy(dst, s_vram, sizeof(s_vram)); }
+
+// Provenance query at an ABSOLUTE VRAM coord (the differ replays into the back buffer at
+// off=(0,256), so query e.g. vram y = display y + 256 — no double-buffer confound, unlike the
+// live-run PROVAT). Requires PSXPORT_PROVAT to be set so put_px_b stamped s_prov during replay.
+void gpu_prov_dump(int vx, int vy) {
+  uint16_t p = *vram(vx, vy);
+  uint32_t gid = s_prov[(vy & 511) * VRAM_W + (vx & 1023)];
+  ProvMeta* m = &s_provmeta[gid % PROVRING];
+  fprintf(stderr, "[prov] vram(%d,%d)=%04X rgb(%d,%d,%d) ", vx, vy, p,
+          (p & 31) << 3, ((p >> 5) & 31) << 3, ((p >> 10) & 31) << 3);
+  if (!gid) { fprintf(stderr, "<never written>\n"); return; }
+  if (m->gid != gid) { fprintf(stderr, "gid=%u <evicted>\n", gid); return; }
+  fprintf(stderr, "gid=%u op=%02X tex=%d texmode=%d semi=%d blend=%d clut=(%d,%d) tp=(%d,%d) "
+          "primcol=(%d,%d,%d) v0=(%d,%d) uv0=(%d,%d)\n",
+          gid, m->op, m->tex, m->mode, m->semi, m->blend, m->clut_x, m->clut_y, m->tp_x, m->tp_y,
+          m->r, m->g, m->b, m->x0, m->y0, m->u0, m->v0);
+}
 
 // DMA channel 2 (GPU): walk an ordering-table linked list from `madr`, feeding each node's
 // GP0 words to the parser. Header word: bits[24..31]=word count, bits[0..23]=next node addr

@@ -1,5 +1,60 @@
 # Debug / progress journal
 
+## 2026-06-15 (later 44) — BUILT the GP0 differ + FIXED the "shadow = black wedge" bug
+Two deliverables (handoff scratch/handoff.md), both done & verified.
+
+### 1. The cross-renderer GP0 differ (tools/gpu_differ/) — feeds IDENTICAL GP0 to both rasterizers
+The whole point: our HLE port and the full-emulation oracle run at different timings/states, so you
+CANNOT align by frame number (this trap defeated every earlier screenshot compare). Instead capture
+one frame's GP0 word stream + its start-of-frame VRAM from our port, replay it through BOTH our
+renderer and Beetle's from the same initial VRAM, and diff the output VRAM — any pixel difference is
+then a pure rasterizer-fidelity difference (modulation/blend/dither/coverage), no alignment needed.
+- **Capture** (our port): `PSXPORT_GPUTRACE="FRAME[:path]"` (gpu_native.c) writes file `GP0TRC01` =
+  initial VRAM + exact GP0 word stream for that gpu frame.
+- **Beetle replay**: `wide60rt -gpureplay TRACE OUT` (main.cpp + `GPU_ReplayBegin` in gpu.c) seeds
+  Beetle VRAM, replays words via `GPU_WriteDMA`, dumps Beetle VRAM. Software/1x only.
+- **Ours replay**: `tools/gpu_differ/build.sh` → `scratch/bin/replay_ours TRACE OUT [VX VY]` links
+  gpu_native.c standalone (stub mem_r*). `+VX VY` with `PSXPORT_PROVAT=1` prints the prim our
+  renderer used to write that pixel (via new `gpu_prov_dump`).
+- **Diff**: `tools/gpu_differ/diff.py OURS BEETLE [--region X,Y,W,H] [--tol N] [--ppm DIR]`.
+  `--tol N` filters per-channel |Δ|≤N (dither/rounding noise) so real bugs surface.
+- **Per-pixel math trace** (both renderers): `PSXPORT_PIXTRACE="VX,VY"` dumps the sampled texel +
+  interpolated vertex color + modulated output for every prim writing that pixel — `[pixtrace ours]`
+  (gpu_native.c) and `[pixtrace beetle]` (gpu_polygon.c). This is the per-pixel ground-truth differ.
+- GOTCHA: gpu_polygon.c/gpu_sprite.c are `#include`d into gpu.c; the Makefile does NOT track that
+  dep, so editing them needs `touch vendor/beetle-psx/mednafen/psx/gpu.c` before `make -C runtime`.
+
+### 2. The bug: gouraud-textured modulation used vertex-A's color FLAT (not interpolated)
+- The "soft shadow" Tomba/items cast on the grass is NOT a semi-transparent blend (the handoff's
+  premise was WRONG). It's a **gouraud-textured OPAQUE quad** (GP0 op 0x3C, semi=0) that darkens the
+  ground texture by a dark-at-center / bright-at-edges vertex-color gradient (PROVAT in the replay →
+  op=3C tex=1 semi=0; PIXTRACE confirmed).
+- **Root cause (gpu_native.c `tri()`):** the textured-modulation path computed `texel * a.r / 128`
+  using `a.r` = the FIRST vertex's color held CONSTANT across the whole primitive, instead of the
+  per-pixel barycentric-INTERPOLATED color (which the untextured gouraud path already did right). So
+  the whole shadow quad was flat-modulated by v0's dark color (32,32,32) → a uniform near-black
+  wedge, instead of a smooth gradient with grass showing through at the bright end. PSX (and Beetle's
+  `ModTexel`, fed the interpolated r,g,b) ALWAYS modulate a textured polygon by the interpolated
+  vertex color (flat-shaded prims carry the command color in every vertex, so this covers them too).
+- **The fix:** interpolate (cr,cg,cb) via the same barycentric weights and modulate by that; dropped
+  the `if (shade)` gate so flat-textured polys also modulate by their (uniform) command color — both
+  match Beetle. Saturation-clamp (later-42) preserved.
+- **Verified via the differ (oracle ground truth, not arithmetic/eyeball):**
+  - Visual: the black wedge is gone; ours now shows soft darkened grass = Beetle
+    (scratch/screenshots/differ_f3000/shadow_ours_fixed.png vs shadow_beetle.png).
+  - Quantified: back-buffer real-divergence (|Δ|>3, dither filtered) **41.4% → 17.0%**; shadow region
+    **48.2% → 17.5%**.
+  - Per-pixel: PIXTRACE on interior shadow pixels shows ours' interpolated modulation color now MATCHES
+    Beetle's (@130,455 exact (165,165,174); @140,452 (164,165,183) vs (164,165,184)).
+  - Live port (real gameplay) rebuilt, reaches GAME, renders clean (live_fixed_full.png); grass
+    (later-42) and sprites (later-43) unregressed.
+- **RESIDUAL (next lead, NOT this bug):** the remaining ~17% is dominated by **UV sub-texel sampling**
+  — Beetle adds a +0.5 round-to-nearest bias to affine u/v before truncation (gpu_polygon.c ~L688/697)
+  while our `sample_tex` truncates, so we sample a neighbouring texel at fractional coords (PIXTRACE:
+  same screen pixel, ours texel 0942 vs Beetle 0901). Plus the dither matrix differs (ours custom
+  s_dither4 vs Beetle dither_table/DitherLUT). Both are pervasive low-amplitude fidelity gaps; fix UV
+  rounding first (likely the biggest remaining win), then dither, using the differ.
+
 ## 2026-06-15 (later 43) — FIXED: sprite tinting = textured rectangles ignored the command color
 Follow-on to later-42 (user confirmed "sprite tinting has issues"). Textured rectangles/sprites
 (GP0 0x60-0x7F) on PSX modulate the texel by the command color (texel*color/128, saturated, 0x80 =

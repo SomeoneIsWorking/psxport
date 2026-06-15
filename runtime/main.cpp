@@ -19,6 +19,8 @@
 #include "libretro.h"
 #include "psxport_hooks.h"
 extern "C" uint16_t* GPU_get_vram(void);   // mednafen GPU native VRAM (gpu.c) — for VRAM dump
+extern "C" void GPU_WriteDMA(uint32_t V, uint32_t addr);  // feed one GP0 word (DMA path)
+extern "C" void GPU_ReplayBegin(void);     // arm the GPU to replay a captured GP0 stream (gpu.c)
 #include "hle_bios.h"
 #include "wide60.h"
 #include "games/tomba2.h"
@@ -794,9 +796,46 @@ void WatchdogAlarm(int)
 }
 } // namespace
 
+// GP0 differ (tools/gpu_differ): replay a captured GP0 word stream through Beetle's GPU from the
+// identical initial VRAM our port captured, then dump the resulting VRAM. Comparing this against
+// our renderer's replay of the SAME trace makes any pixel difference a pure rasterizer-fidelity
+// difference (blend/modulation), with no live game-state alignment. Trace format = "GP0TRC01"
+// (see runtime/recomp/gpu_native.c). Requires 1x internal resolution (GPU.vram is then a flat
+// 1024x512 u16 matching the trace layout) — do not set PSXPORT_INTERNAL_RES.
+static int RunGpuReplay(const char* trace_path, const char* out_path)
+{
+  FILE* f = fopen(trace_path, "rb");
+  if (!f) { fprintf(stderr, "[gpureplay] cannot open trace %s\n", trace_path); return 1; }
+  char magic[8] = {0}; uint32_t meta[4] = {0};
+  if (fread(magic, 1, 8, f) != 8 || memcmp(magic, "GP0TRC01", 8) != 0 ||
+      fread(meta, 4, 4, f) != 4) { fprintf(stderr, "[gpureplay] bad trace header\n"); fclose(f); return 1; }
+  uint32_t frame = meta[0], nwords = meta[1], vw = meta[2], vh = meta[3];
+  if (vw != 1024 || vh != 512) { fprintf(stderr, "[gpureplay] unexpected VRAM dims %ux%u\n", vw, vh); fclose(f); return 1; }
+  std::vector<uint16_t> init(vw * vh);
+  std::vector<uint32_t> words(nwords);
+  if (fread(init.data(), 2, vw * vh, f) != vw * vh ||
+      fread(words.data(), 4, nwords, f) != nwords) { fprintf(stderr, "[gpureplay] truncated trace\n"); fclose(f); return 1; }
+  fclose(f);
+
+  uint16_t* vram = GPU_get_vram();
+  if (!vram) { fprintf(stderr, "[gpureplay] no GPU VRAM (renderer not software/1x?)\n"); return 1; }
+  memcpy(vram, init.data(), (size_t)vw * vh * 2);   // seed Beetle VRAM = our port's frame-start VRAM
+  GPU_ReplayBegin();
+  for (uint32_t i = 0; i < nwords; i++) GPU_WriteDMA(words[i], 0);
+
+  FILE* o = fopen(out_path, "wb");
+  if (!o) { fprintf(stderr, "[gpureplay] cannot open out %s\n", out_path); return 1; }
+  fwrite(GPU_get_vram(), 2, (size_t)vw * vh, o);
+  fclose(o);
+  fprintf(stderr, "[gpureplay] replayed f%u (%u words) -> %s\n", frame, nwords, out_path);
+  return 0;
+}
+
 int main(int argc, char** argv)
 {
   const char* disc = nullptr;
+  const char* gpureplay_trace = nullptr;
+  const char* gpureplay_out = nullptr;
   const char* inputscript = nullptr;
   const char* loadstate = nullptr;
   const char* savestate = nullptr; // saved on exit
@@ -828,6 +867,8 @@ int main(int argc, char** argv)
       g_fast_boot = true;
     else if (strcmp(argv[i], "-slowcd") == 0)
       g_fast_cd = false;
+    else if (strcmp(argv[i], "-gpureplay") == 0 && i + 2 < argc)
+      { gpureplay_trace = argv[++i]; gpureplay_out = argv[++i]; }
 
     else if (argv[i][0] != '-')
       disc = argv[i];
@@ -934,6 +975,11 @@ int main(int argc, char** argv)
     fprintf(stderr, "retro_load_game failed for %s\n", disc);
     return 1;
   }
+
+  // GP0 differ: if -gpureplay was given, the GPU is now initialized (software, 1x). Replay the
+  // captured stream into Beetle's VRAM and exit — no game boot needed.
+  if (gpureplay_trace)
+    return RunGpuReplay(gpureplay_trace, gpureplay_out);
 
   if (const char* pw = std::getenv("PSXPORT_POLYWATCH")) {
     g_pw_frame = atoi(pw);
