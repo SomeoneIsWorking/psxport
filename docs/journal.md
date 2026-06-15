@@ -1,5 +1,37 @@
 # Debug / progress journal
 
+## 2026-06-15 (later 57) — 60fps: OBJECT→PRIMITIVE JOIN validated on the native path (92–99% of gameplay polys tag to an object). The design's #1 open risk is retired.
+Built milestone 2 of the 60fps tier: the object-identity join the matcher is founded on.
+
+### Mechanism (all in `wide60.c` + thin taps, gated PSXPORT_WIDE60)
+- `games_tomba2.c` `ov_object_cull` overrides the per-object cull/LOD dispatcher **0x8007712C**
+  (a0=object*, once/logic-frame per live drawable): sets `g_current_object = a0`, super-calls
+  `gen_func_8007712C` unchanged, restores. Registered only when wide60 is on.
+- `gte_beetle.c` `gte_op` RTP tap → `wide60_rtp(op)`: for each SXY the GTE just pushed (DR14 for
+  RTPS, DR12/13/14 for RTPT) it stamps an **SXY→object grid** (epoch-stamped 1024×512, no per-frame
+  memset) with `g_current_object`. So every projected vertex carries the object whose cull-subtree
+  projected it.
+- `gpu_native.c` `gp0_exec` polygon tap → `wide60_join_poly(v0.x,v0.y)`: joins each drawn poly's
+  lead vertex to a captured SXY (±2px). Packet vertex coords are pre-draw-offset = the same space as
+  the SXY-FIFO (confirmed), so the join is direct.
+
+### Result (headless gameplay to f5000, `scratch/logs/wide60_join.log`)
+**poly-join = 92–99% across gameplay** (f1000 98.1%, f2500 99.0%, f5000 98.1%; dips to ~77% on a
+menu/transition frame). I.e. nearly all drawn 3D geometry is object-matchable; the unjoined remainder
+is CPU-projected terrain / 2D HUD that snaps by design. This is the native-path confirmation the doc
+asked for (emulator-era was 97%-within-2px). Caveat: a high join RATE proves viability, not that each
+join picks the *correct* object vs a coincidental nearby SXY — within-object disambiguation
+(draw-order + prim type + texpage + CLUT/uv-low) is the matcher's job (next milestone).
+
+### Faithful-path safety
+PSXPORT_WIDE60 unset → cull override not registered, all taps no-op; VRAM at f3000 byte-identical to
+the pre-wide60 baseline (`cmp` PASS).
+
+### Next (60fps, remaining)
+Per-frame primitive capture (full display list A/B), the matcher (object-id key → token key → snap),
+the transform-lerp+reproject (or screen-XY-lerp fallback) synthesizer, `gpu_replay_list` for the
+in-between, and 60 Hz host present. No-flicker rule: unmatched geometry held at frame A.
+
 ## 2026-06-15 (later 56) — 60fps tier started: MEASURED Tomba2 = 30 fps (was only "believed"). Rate detector live in the port, gated, faithful path byte-identical.
 Pivoted from widescreen (blocked, later-55) to the 60fps interpolation tier
 (`docs/wide60_recomp_60fps.md`). First milestone = actually measure the logic rate.

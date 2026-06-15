@@ -19,8 +19,11 @@
 #include <stdlib.h>
 
 void gen_func_800788AC(R3000*);    // recomp body (super-call)
+void gen_func_8007712C(R3000*);    // recomp body of the per-object cull/LOD dispatcher
 void wide60_frame_commit(void);    // wide60: per-logic-frame fence (rate detect / interp)
 void wide60_init(void);            // wide60: read PSXPORT_WIDE60
+extern uint32_t g_current_object;  // wide60: object* whose RTP ops are being tagged
+extern int g_wide60_on;            // wide60: capture enabled (PSXPORT_WIDE60)
 void gpu_present(void);            // native GPU: present the displayed VRAM region
 void gpu_pace_frame(void);         // native GPU: throttle to game pace when windowed (no-op headless)
 void spu_audio_frame(void);        // SPU: advance the mixer one frame + feed the audio device
@@ -66,7 +69,19 @@ static void ov_frame_update(R3000* c) {
   gpu_pace_frame();                                  // throttle to ~30fps when windowed (1 call/frame)
 }
 
+// wide60 object tag: the universal per-object cull/LOD dispatcher (a0 = object*, once per logic
+// frame for every live drawable). Every RTP op fired in its call tree is tagged with this object's
+// stable pool-pointer id (the join key). Super-call the recomp body unchanged; clear on exit.
+static void ov_object_cull(R3000* c) {
+  uint32_t prev = g_current_object;
+  g_current_object = c->r[4];                      // a0 = object* (MIPS arg register $a0)
+  gen_func_8007712C(c);
+  g_current_object = prev;
+}
+
 void games_tomba2_init(void) {
   rec_set_override(0x800788ACu, ov_frame_update);
   wide60_init();
+  if (g_wide60_on)                                 // object-tag dispatcher only when capturing
+    rec_set_override(0x8007712Cu, ov_object_cull);
 }

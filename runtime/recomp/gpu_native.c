@@ -398,6 +398,7 @@ static void gp0_exec(void) {
       }
     }
     int shade = gouraud || !textured;       // flat-untextured uses the command color
+    { void wide60_join_poly(int, int); wide60_join_poly(v[0].x, v[0].y); }  // wide60: object join
     // PSXPORT_POLYDUMP=frame — log every poly at `frame` (our port side, to compare vs oracle
     // polywatch). Finds the garbage-block prims in the GAME level.
     { static int pd = -2, pax = -1, pay = -1;
