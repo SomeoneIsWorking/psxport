@@ -44,6 +44,7 @@ static int g_log = 0;             // PSXPORT_GPU_LOG
 static long s_prims = 0;          // primitives drawn since last present
 static long s_gp0_words = 0, s_dma2 = 0;  // diagnostics: GP0 words + DMA2 triggers per frame
 static uint32_t s_cur_node = 0;   // REDDBG: RAM addr of the OT node currently being fed to GP0
+static uint32_t g_ot_madr = 0;    // last OT DMA root (for the clobber analyzer)
 static int s_frame;               // present-frame counter (defined below); forward tentative def
 
 // ---- Per-pixel primitive provenance (PSXPORT_PROVAT="x,y[:frame]") --------------------------
@@ -314,8 +315,9 @@ static void tri(Vtx a, Vtx b, Vtx c, int tex, int shade, int semi, int raw) {
 }
 
 // ---- GP0 command FIFO ---------------------------------------------------------------
-static uint32_t s_fifo[16];
+static uint32_t s_fifo[256];   // big enough for variable-length poly-lines (many vertices)
 static int s_fcount, s_fneed;
+static int s_pl, s_pl_g;       // poly-line in progress (variable length); s_pl_g = gouraud
 // VRAM transfer state (GP0 0xA0 CPU->VRAM)
 static int s_xfer, s_xfer_x, s_xfer_y, s_xfer_w, s_xfer_h, s_xfer_px;
 
@@ -531,15 +533,26 @@ static void gp0_exec(void) {
     int x = xy & 0x3F0, y = (xy >> 16) & 0x1FF, w = ((wh & 0x3FF) + 0xF) & ~0xF, h = (wh >> 16) & 0x1FF;
     uint16_t col = to555(cr, cg, cb);
     for (int dy = 0; dy < h; dy++) for (int dx = 0; dx < w; dx++) *vram(x + dx, y + dy) = col;
-  } else if (op >= 0x40 && op <= 0x5F) {     // line (flat/gouraud) — draw as thin segments
-    // minimal: endpoints only (poly-lines rare in this title); draw a 1px Bresenham
-    int semi = (op & 0x02) ? 1 : 0;
-    uint8_t cr = cmd_r(c), cg = cmd_g(c), cb = cmd_b(c);
-    uint32_t a = s_fifo[1], b = s_fifo[(op & 0x10) ? 3 : 2];
-    int x0 = cx(a), y0 = cy(a), x1 = cx(b), y1 = cy(b);
-    int dx = abs(x1 - x0), dy = -abs(y1 - y0), sx = x0 < x1 ? 1 : -1, sy = y0 < y1 ? 1 : -1, e = dx + dy;
-    for (;;) { put_px_b(x0 + s_off_x, y0 + s_off_y, cr, cg, cb, semi); if (x0 == x1 && y0 == y1) break;
-      int e2 = 2 * e; if (e2 >= dy) { e += dy; x0 += sx; } if (e2 <= dx) { e += dx; y0 += sy; } }
+  } else if (op >= 0x40 && op <= 0x5F) {     // line / poly-line (flat or gouraud)
+    int semi = (op & 0x02) ? 1 : 0, gouraud = (op & 0x10) ? 1 : 0;
+    // Collect the vertex list from s_fifo (cmd carries v0's colour). Single lines have 2 verts;
+    // poly-lines have N (gouraud: cmd,xy0,(c,xy)*; mono: cmd,xy0,xy*). Then draw each segment.
+    uint8_t r0 = cmd_r(c), g0 = cmd_g(c), b0 = cmd_b(c);
+    int vx[64], vy[64]; uint8_t vr[64], vg[64], vb[64]; int nv = 0, i = 1;
+    vx[0] = cx(s_fifo[i]); vy[0] = cy(s_fifo[i]); vr[0] = r0; vg[0] = g0; vb[0] = b0; nv = 1; i++;
+    while (i < s_fcount && nv < 64) {
+      uint8_t r = r0, g = g0, b = b0;
+      if (gouraud) { if (i >= s_fcount) break; uint32_t col = s_fifo[i++]; r = cmd_r(col); g = cmd_g(col); b = cmd_b(col); }
+      if (i >= s_fcount) break;
+      vx[nv] = cx(s_fifo[i]); vy[nv] = cy(s_fifo[i]); vr[nv] = r; vg[nv] = g; vb[nv] = b; nv++; i++;
+    }
+    for (int s = 0; s + 1 < nv; s++) {        // Bresenham per segment, flat colour = start vertex
+      int x0 = vx[s], y0 = vy[s], x1 = vx[s+1], y1 = vy[s+1];
+      uint8_t cr = vr[s], cg = vg[s], cb = vb[s];
+      int dx = abs(x1 - x0), dy = -abs(y1 - y0), sx = x0 < x1 ? 1 : -1, sy = y0 < y1 ? 1 : -1, e = dx + dy;
+      for (;;) { put_px_b(x0 + s_off_x, y0 + s_off_y, cr, cg, cb, semi); if (x0 == x1 && y0 == y1) break;
+        int e2 = 2 * e; if (e2 >= dy) { e += dy; x0 += sx; } if (e2 <= dx) { e += dx; y0 += sy; } }
+    }
     s_prims++;
   }
   // env commands (E1..E6) handled in gpu_gp0 directly (single-word).
@@ -557,7 +570,8 @@ static int gp0_len(uint32_t c) {
   if (op >= 0x60 && op <= 0x7F) { int n = 2; if (op & 4) n++; if (((op >> 3) & 3) == 0) n++; return n; }
   if (op >= 0x40 && op <= 0x5F) return (op & 0x10) ? 4 : 3;  // (poly-line term not modeled)
   if (op == 0x02) return 3;                      // fill
-  if (op == 0xA0 || op == 0xC0 || op == 0x80) return 3;  // VRAM xfer headers
+  if (op == 0x80) return 4;                       // VRAM->VRAM copy: cmd + src + dst + size
+  if (op == 0xA0 || op == 0xC0) return 3;        // CPU<->VRAM xfer headers (pixels stream after)
   return 1;                                      // env / nop / single-word
 }
 
@@ -672,9 +686,31 @@ void gpu_gp0(uint32_t w) {
       case 0xE6: return;                         // mask settings (mask-test not modeled)
       default: break;
     }
+    // Poly-lines (op 0x48-0x4F mono / 0x58-0x5F gouraud — line group 0x40-0x5F with bit 0x08) are
+    // VARIABLE length: a vertex list terminated by a word with (w & 0xF000F000)==0x50005000
+    // (0x55555555). gp0_len can't know the length from the first word, so accumulate until the
+    // terminator. Mishandling this (treating it as a fixed 3/4-word single line) drifts the whole
+    // GP0 parse and makes a later data word decode as a spurious VRAM copy (atlas corruption).
+    s_pl = (op >= 0x40 && op <= 0x5F && (op & 0x08)) ? 1 : 0;
+    s_pl_g = (op & 0x10) ? 1 : 0;
     s_fneed = gp0_len(w);
   }
   s_fifo[s_fcount++] = w;
+  if (s_pl) {
+    int idx = s_fcount - 1;                          // index of the word just stored
+    // A terminator may appear at a vertex-START slot, only after the mandatory 2 vertices:
+    //   gouraud: color slots = even indices >= 4 (cmd,xy0,c1,xy1, then c2/term,xy2,...)
+    //   mono:    xy slots    = indices >= 3        (cmd,xy0,xy1, then xy2/term,...)
+    int term_slot = s_pl_g ? (idx >= 4 && !(idx & 1)) : (idx >= 3);
+    if (term_slot && (w & 0xF000F000u) == 0x50005000u) {
+      s_fcount = idx;                                // drop the terminator; render cmd+vertices
+      gp0_exec();
+      s_fcount = 0; s_fneed = 0; s_pl = 0;
+      return;
+    }
+    if (s_fcount >= 250) { s_fcount = 0; s_fneed = 0; s_pl = 0; }  // safety: never overflow s_fifo
+    return;
+  }
   if (s_fcount >= s_fneed) {
     uint8_t op = s_fifo[0] >> 24;
     if (op == 0xA0) {                            // CPU->VRAM: set up the pixel stream
@@ -709,7 +745,7 @@ void gpu_gp0(uint32_t w) {
         // malformed node and the chain that reaches it can be examined offline.
         if (getenv("PSXPORT_CLOBBERDUMP")) { static int done = 0; if (!done++) {
           extern uint8_t g_ram[]; uint32_t na = s_cur_node & 0x1FFFFF;
-          fprintf(stderr, "[clobber] node@0x%08X neighbourhood:\n", s_cur_node);
+          fprintf(stderr, "[clobber] OT root madr=0x%08X node@0x%08X neighbourhood:\n", 0x80000000u|g_ot_madr, s_cur_node);
           for (int k = -8; k <= 16; k++) fprintf(stderr, "  [%+d] 0x%08X: %08X\n", k,
                   0x80000000u | ((na + k*4) & 0x1FFFFF), mem_r32(0x80000000u | ((na + k*4) & 0x1FFFFF)));
           FILE* mf = fopen(getenv("PSXPORT_CLOBBERDUMP"), "wb");
@@ -935,6 +971,7 @@ void gpu_prov_dump(int vx, int vy) {
 // (0xFFFFFF = end).
 void gpu_dma2_linked_list(uint32_t madr) {
   s_dma2++;
+  g_ot_madr = madr & 0x1FFFFC;
   uint32_t addr = madr & 0x1FFFFC;
   // PSXPORT_OTDBG: on a chain that fails to terminate within an OT's worth of nodes (cyclic =
   // malformed), dump its first 40 nodes once for diagnosis. (Empty OTs are ~0x800 link-only nodes

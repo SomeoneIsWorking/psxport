@@ -1,5 +1,34 @@
 # Debug / progress journal
 
+## 2026-06-15 (later 72) — GRAPHICS CORRUPTION FIXED (user-verified). Root cause: our GPU never handled VARIABLE-LENGTH POLY-LINES — it consumed a fixed 3/4 words, drifting the whole GP0 parse so a later data word decoded as an atlas-clobbering VRAM copy.
+THE BUG WAS IN OUR PC GPU after all (gpu_native.c gp0_len / FIFO). gpu_differ misled me (later-59/71):
+its captured INITIAL VRAM at f3265 was ALREADY clobbered by the prior frame, so both renderers
+"reproduced" the garbage — it never tested a clean start.
+
+### Root cause (offline OT analysis, scratch/otanalyze.py)
+Walking the real ordering table from its root (0x800EC114) and parsing with CORRECT lengths: the drift
+originates at OT node 0x800DDF00, command 0x5EF8F8F8 = **op 0x5E, a gouraud poly-line** (4 vertices =
+9 words, = the node's count). PSX poly-lines (line group 0x40-0x5F with bit 0x08; 0x48-0x4F mono,
+0x58-0x5F gouraud) are VARIABLE length — a vertex list terminated by a word with
+(w & 0xF000F000)==0x50005000 (0x55555555). Our gp0_len returned a fixed 4 ("poly-line term not
+modeled"), consuming 4 of 9 words → parse drifts by 5 → ~3000 words later a data word (0x8040333D)
+lands at a command boundary and is executed as a GP0 0x80 VRAM->VRAM copy onto the atlas (later-69/70).
+
+### Fix (gpu_native.c)
+- gp0_len: 0x80 (VRAM->VRAM copy) is 4 words, not 3 (was grouped with A0/C0 headers — also a real bug).
+- gpu_gp0: detect poly-lines at command start and ACCUMULATE words until the terminator (vertex-start
+  slots: gouraud even idx>=4, mono idx>=3), then render. s_fifo grown 16->256 (poly-lines are long).
+- gp0_exec line branch rewritten to draw N-1 segments over the full vertex list (single lines = 2
+  verts = 1 segment, unchanged).
+**USER-VERIFIED: graphics are fine now** (green-field/dungeon/gameplay all render correctly).
+
+### Remaining issues (user ground-truth, next)
+- Missing BGM almost everywhere (only the fisherman "pull Tomba from water" cutscene BGM plays); menu
+  BGM also missing (earlier "menu has no BGM = vanilla" was WRONG).
+- Missing dialogue at the start of gameplay (Tomba & Zippo dialogue doesn't play).
+- User hypothesis: we may be initializing/running in DEMO mode (would explain missing dialogue, and
+  possibly the BGM triggers). Investigate a DEMO-vs-GAME mode flag.
+
 ## 2026-06-15 (later 71) — CONFIRMED the clobber is a corrupted ORDERING-TABLE entry in RAM, NOT our GPU. gpu_differ at the ACTUAL clobber frame (f3265): replaying the same word stream through OUR renderer AND Beetle both clobber the atlas identically. So the bad VRAM-copy is in the display-list words from RAM; the fix is upstream (whatever builds/corrupts the OT).
 gpu_differ (later-59) had only ever tested f3360/f5000, never the f3265 clobber. Tested it now:
 - PSXPORT_GPUTRACE="3265:…" captures the 10815-word GP0 stream fed at f3265 (post-DMA-traversal).
