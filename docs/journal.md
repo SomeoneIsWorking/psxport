@@ -1,5 +1,73 @@
 # Debug / progress journal
 
+## 2026-06-15 (later 53) — AUDIO root cause PINNED via oracle: music sequencer is TIMER-IRQ-driven; the port delivers no preemptive IRQ → silent. (corrects later-52's candidate order)
+Built the missing oracle-audio tooling and used it to pin the silent-port root cause. The
+answer corrects later-52's prioritisation: it is **candidate #3 (an IRQ-driven sequencer the
+port never ticks)**, NOT candidate #1 (streamed CD music). Evidence, all cited below, gathered
+with the new tooling.
+
+### New tooling (committed)
+- **Oracle WAV capture — `PSXPORT_WAV=path` in `runtime/main.cpp`** (`AudioBatchCb`): dumps the
+  FULL-Beetle (`wide60rt`) mixed 44100 Hz stereo to WAV, headless, independent of `-play`/SDL.
+  Same format the port's `spu_audio.c` writes, so `tools/audio_differ/compare.py` diffs them
+  directly. This is the ground-truth reference the handoff said was needed.
+- **Oracle SPU trace — `PSXPORT_SPU_DBG=1` in `vendor/beetle-psx/mednafen/psx/spu.c`** (fork):
+  logs KON (with the interrupted CPU `BACKED_PC` of the writer), SPUCNT (enable/cdaudio/irq/xfer
+  on change), and a per-10s `CDmix` counter (how many output samples actually had CD-audio
+  enabled + nonzero). Mirrors the port's `PSXPORT_SPU_DBG`. Env-gated, harmless when unset.
+- Port-side `PSXPORT_SPU_DBG` extended (`spu_beetle.c`): now also counts voice-region/KOFF/CDVol
+  writes + periodic SUMMARY, and logs the SPUCNT CD-audio bit.
+
+### What the oracle does (ground truth — `wide60rt`, real Beetle, boots Tomba2 normally)
+Headless boot, Start held to skip logos (`scratch/inputs-skipintro-long.txt`), 9000 frames /150s
+(`scratch/wav/oracle_boot_long.wav`, `scratch/logs/oracle_boot_long.log`):
+- **0–100s = the opening FMVs**: heavy XA CD-audio. `CDmix` climbs to ~3.25M nonzero CD samples;
+  SPUCNT briefly C001/C081 (cdaudio bit0=1) during playback. This is FMV/STR audio.
+- **~120–160s = post-FMV menu/attract**: `CDmix` PLATEAUS (≈no new CD audio) yet per-10s RMS is
+  ~2800–3200 at 78–99% non-silent (`scratch/win_rms.py`). So that audio is **SPU-VOICE music,
+  not CD audio** — confirmed by 96 per-note KON events in this run.
+- **KON writer PC histogram: 54×`pc=80050CE8`, 7×`80050CEC`, 6×`80050CE4`** — i.e. every per-note
+  key-on is written while the CPU is parked in the **per-frame pace-dwell loop `0x80050CE4`**.
+  That can only happen from a **preemptive interrupt handler** firing during the dwell.
+
+### Why the port is silent (the mechanism)
+- The game installs a custom IRQ dispatcher (`FUN_800016e4`) that services VBLANK, GPU, CDROM,
+  DMA, **Timer0 (0xf0000005), Timer1/2 (0xf0000006), SIO, and SPU (0xf0000009)** event classes.
+  The music sequencer runs inside one of the **Timer/SPU IRQ** handlers (it fires during the
+  dwell — see the KON PCs above).
+- The port models **only VBLANK** (`timing.c` delivers `0xF2000003/0xF0000001` once per `VSync`).
+  It delivers **no Timer IRQ and no SPU IRQ**, and it **collapses the pace-dwell** itself
+  (`games_tomba2.c ov_frame_update` sets the vblank counter so the dwell falls through). So the
+  sequencer ISR has neither a trigger nor the dwell to fire in → **zero per-note KON → the SPU
+  mixes silence** (verified: port `spu_render peak=0` every gameplay frame; only the all-voices
+  init KON pattern + 162 KOFF housekeeping writes ever fire — `scratch/logs/audio_base.log`).
+- **FMV audio is NOT this bug and already works**: the port decodes FMV XA natively in
+  `native_fmv.c` through a *dedicated* SDL device, not the SPU mixer / `CDC_GetCDAudioSample`.
+  So the FMVs (the most audio-rich part) play; the gap is the SPU-VOICE in-game/menu music.
+
+### Disproven / corrected
+- **later-52 candidate #1 (streamed CD music is the bulk gap) — WRONG ordering.** The non-FMV
+  music is SPU-voice (KON), not CD audio. `CDC_GetCDAudioSample` being stubbed only costs FMV
+  CD-audio-through-SPU (which the port routes around natively anyway). Wiring it would not bring
+  back the menu/gameplay music.
+- **VBlank callback `0x800506b4` is confirmed (disassembled, `generated/shard_6.c`) to be ONLY
+  `lhu/addiu/sh` on the dwell counter `0x800E809C`** — a pure counter bump, NOT the sequencer.
+  The journal was right about that; the sequencer is a *different*, Timer/SPU-IRQ handler.
+
+### The proper fix (named; not yet implemented — scope decision for the user)
+Make the port run Tomba2's sound-engine tick. Two routes:
+1. **Preferred (matches the port's "port the busy-wait to PC, don't simulate the HW" rule):** find
+   the sequencer tick entry (the libsnd `SsSeqCalled`-equivalent the Timer ISR calls) and invoke
+   it from `ov_frame_update` at the timer's configured rate. Needs one more RE step (the EvCB
+   registration for `0xf0000005/6` → callback addr) + the tick rate (so tempo is correct — naive
+   once-per-frame would play slow).
+2. **More faithful but bigger:** actually deliver the Timer (and SPU) IRQ events per frame at the
+   modelled timer rate so the game's own dispatcher runs the ISR. This re-introduces preemptive
+   IRQ delivery the port deliberately stripped — larger, with regression risk to the tuned HLE
+   boot, so it needs sign-off.
+Both need the timer rate to get tempo right; that is why this is a scoped subsystem task, not a
+one-liner. Validate either against `oracle_boot_long.wav` (the menu-music window) via the differ.
+
 ## 2026-06-15 (later 52) — multi-frame GPU sweep (GPU is solid everywhere) + audio tooling + audio is SILENT (root-caused)
 User: "you only compared the first few things… also add audio and audio compare tooling." Did both.
 

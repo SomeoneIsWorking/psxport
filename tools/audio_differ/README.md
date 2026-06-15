@@ -29,10 +29,21 @@ mode), KON key-on masks, SPU-RAM DMA/data-port transfers, and per-frame `spu_ren
 to tell "SPU mixed silence" (a mixing bug) from "the game never keyed a voice / never uploaded
 samples" (a higher-level driver/IRQ problem).
 
-## Known gap (journal later-52)
-The port is currently **silent** in headless gameplay. `PSXPORT_SPU_DBG` shows the SPU is enabled,
-master volume set, and SPU RAM uploaded — but only the all-voices init KON fires (5 in 2500 frames);
-**no per-note key-ons**, i.e. the game's sound driver isn't sequencing. Plus CD-DA (streamed music)
-is stubbed to silence (`CDC_GetCDAudioSample`). Fixing audio = drive the sound-engine update / wire
-its IRQ + connect a CD-DA source — a subsystem task, not yet done.
+## Oracle capture (the ground-truth reference)
+`wide60rt` (full Beetle) also honors `PSXPORT_WAV` (added in `runtime/main.cpp`), headless:
+```
+PSXPORT_WAV=scratch/wav/oracle.wav runtime/wide60rt <disc.chd> -bios scratch/bios \
+  -frames 9000 -inputscript scratch/inputs-skipintro-long.txt
+```
+`PSXPORT_SPU_DBG=1` on `wide60rt` (instrumented `mednafen/psx/spu.c`) logs oracle KON (with the
+writer's CPU PC), SPUCNT, and a per-10s `CDmix` counter (CD-audio-enabled / nonzero samples).
+
+## Root cause (journal later-53 — corrects later-52)
+The port's silence is **candidate #3, not #1**: Tomba2's in-game/menu music is **SPU-voice
+(KON-driven) and runs inside a Timer/SPU-IRQ handler** that fires during the per-frame pace-dwell
+(oracle KON writer PC = the dwell loop `0x80050CE4`). The port models only VBLANK and delivers no
+Timer/SPU IRQ (and collapses the dwell), so the sequencer ISR never runs → zero per-note KON →
+silent SPU. FMV/XA audio is separate (`native_fmv.c`, own SDL device) and already works; the
+stubbed `CDC_GetCDAudioSample` is NOT the menu/gameplay-music gap. Fix = run the sequencer tick
+per frame at the timer rate (see later-53). Not yet implemented.
 ```

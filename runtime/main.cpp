@@ -642,9 +642,43 @@ void VideoCb(const void* data, unsigned width, unsigned height, size_t pitch)
   SDL_RenderPresent(g_renderer);
 }
 
+// Oracle audio capture (PSXPORT_WAV=path): dump the full-Beetle mixed 44100 Hz stereo
+// int16 output to a WAV — works headless (independent of -play / SDL device), so it is
+// the ground-truth reference for the native port's own PSXPORT_WAV capture (spu_audio.c).
+// Header sizes are patched at exit (atexit). Same format the port writes, so
+// tools/audio_differ/compare.py diffs them directly.
+static FILE* g_wav = nullptr;
+static uint32_t g_wav_bytes = 0;
+static void wav_finalize()
+{
+  if (!g_wav) return;
+  uint32_t data_len = g_wav_bytes, riff_len = 36 + data_len;
+  fseek(g_wav, 4, SEEK_SET);  fwrite(&riff_len, 4, 1, g_wav);
+  fseek(g_wav, 40, SEEK_SET); fwrite(&data_len, 4, 1, g_wav);
+  fclose(g_wav); g_wav = nullptr;
+}
+static void wav_open(const char* path)
+{
+  g_wav = fopen(path, "wb");
+  if (!g_wav) return;
+  const uint32_t rate = 44100, byte_rate = 44100 * 4; const uint16_t ch = 2, bits = 16, blk = 4, fmt = 1;
+  const uint32_t z = 0, sub1 = 16; const uint16_t two = 2;
+  fwrite("RIFF", 1, 4, g_wav); fwrite(&z, 4, 1, g_wav); fwrite("WAVE", 1, 4, g_wav);
+  fwrite("fmt ", 1, 4, g_wav); fwrite(&sub1, 4, 1, g_wav); fwrite(&fmt, 2, 1, g_wav); fwrite(&two, 2, 1, g_wav);
+  fwrite(&rate, 4, 1, g_wav); fwrite(&byte_rate, 4, 1, g_wav); fwrite(&blk, 2, 1, g_wav); fwrite(&bits, 2, 1, g_wav);
+  fwrite("data", 1, 4, g_wav); fwrite(&z, 4, 1, g_wav);
+  (void)ch;
+  atexit(wav_finalize);
+}
+
 void AudioSampleCb(int16_t, int16_t) {}
 size_t AudioBatchCb(const int16_t* data, size_t frames)
 {
+  // PSXPORT_WAV: capture the oracle's mixed PCM regardless of the SDL device.
+  static int wav_inited = 0;
+  if (!wav_inited) { wav_inited = 1; if (const char* wp = std::getenv("PSXPORT_WAV")) wav_open(wp); }
+  if (g_wav) { fwrite(data, 1, frames * 4, g_wav); g_wav_bytes += static_cast<uint32_t>(frames * 4); }
+
   if (g_audio && g_present_this_run)
   {
     // keep latency bounded: drop if more than ~100ms is already queued

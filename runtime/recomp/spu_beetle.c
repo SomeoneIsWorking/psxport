@@ -108,10 +108,23 @@ void spu_write(uint32_t addr, uint32_t val)
       static long n; uint32_t off = addr & 0x3FF;
       n++;
       static long datacnt; static uint32_t lastaddr;
+      // Per-category counters to separate "driver never runs its note path" from
+      // "driver runs but keys nothing". Voice regs are 0x000..0x17F (24 voices x 0x10);
+      // pitch is voice*0x10+0x04, ADSR is +0x06/+0x08, start-addr +0x06... we just count.
+      static long voice_w, koff_w, vol_w, cdvol_w;
+      if      (off < 0x180)                voice_w++;          // any of the 24 voices
+      else if (off == 0x18C || off == 0x18E) koff_w++;          // KOFF (key-off)
+      else if (off == 0x1B0 || off == 0x1B2) cdvol_w++;         // CD input volume L/R
+      else if (off == 0x180 || off == 0x182) vol_w++;           // main volume L/R
       if (off == 0x188 || off == 0x18A) fprintf(stderr, "[spudbg] KON off=%03X val=%04X (writes=%ld)\n", off, val & 0xFFFF, n);
-      else if (off == 0x1AA) fprintf(stderr, "[spudbg] SPUCNT=%04X enable=%d xfermode=%d (writes=%ld)\n", val & 0xFFFF, (val >> 15) & 1, (val >> 4) & 3, n);
+      else if (off == 0x18C || off == 0x18E) fprintf(stderr, "[spudbg] KOFF off=%03X val=%04X (writes=%ld)\n", off, val & 0xFFFF, n);
+      else if (off == 0x1AA) fprintf(stderr, "[spudbg] SPUCNT=%04X enable=%d cdaudio=%d xfermode=%d (writes=%ld)\n", val & 0xFFFF, (val >> 15) & 1, val & 1, (val >> 4) & 3, n);
+      else if (off == 0x1B0 || off == 0x1B2) fprintf(stderr, "[spudbg] CDVOL off=%03X val=%04X (writes=%ld)\n", off, val & 0xFFFF, n);
       else if (off == 0x1A6) { lastaddr = (val & 0xFFFF) << 3; fprintf(stderr, "[spudbg] SPU xfer ADDR=0x%05X\n", lastaddr); }
       else if (off == 0x1A8) { datacnt++; if ((datacnt % 1000) == 1) fprintf(stderr, "[spudbg] SPU DATA-port write #%ld (val=%04X)\n", datacnt, val & 0xFFFF); }
+      if ((n % 20000) == 0)
+         fprintf(stderr, "[spudbg] SUMMARY writes=%ld voice=%ld koff=%ld mainvol=%ld cdvol=%ld\n",
+                 n, voice_w, koff_w, vol_w, cdvol_w);
    }
    SPU_Write(0, addr & 0x3FF, (uint16_t)val);
 }
