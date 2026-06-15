@@ -145,7 +145,8 @@ static void ov_unpack_group(R3000* c) {
   uint32_t entry = table + 4;            // first 12-byte descriptor entry
   uint32_t src = table + 0x800;          // packed source data follows the table
   int dbg = getenv("PSXPORT_UNPACKLOG") != 0;
-  if (dbg) fprintf(stderr, "[unpack] table=0x%08X count=%d src0=0x%08X\n", table, count, src);
+  if (dbg) fprintf(stderr, "[unpack] table=0x%08X count=%d src0=0x%08X ra=0x%08X\n",
+                   table, count, src, c->r[31]);
   // PSXPORT_UNPACKDUMP=dir — dump the LIVE compressed input (table + 0x30000 bytes) the moment the
   // unpacker reads it, sequence-numbered, so it can be checked against the disc / oracle exactly.
   { const char* dd = getenv("PSXPORT_UNPACKDUMP");

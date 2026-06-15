@@ -1,5 +1,29 @@
 # Debug / progress journal
 
+## 2026-06-15 (later 68) — mapping the loader/streaming dispatcher; two load paths found. Need the ORACLE's load/unpack LBA sequence to pin the correct atlas (reused-scratch ambiguity). User directive: PORT the loader+streaming to PC-native.
+Caller (ra) logging on ov_cd_loadfile + ov_unpack_group: the load+unpack path that fills the atlas is
+**FUN_80044f58** (loadfile call ra=0x80045008 i.e. the jal at 0x80045000→FUN_8001dc40; unpack
+ra=0x8004501C i.e. jal 0x80044e84 @0x80045014, anchor 0x1fd000, then a 42-word descriptor copy to
+0x800fb178/0x8010-4e90). Our run unpacks ONLY 6625→(320,0) and 6774→(576,0) via this path. The
+LBA-2020 load comes from a DIFFERENT site (ra=0x80045430 = jal FUN_8001dc40 @0x80045428) and is
+followed by 0x80045558/0x80045258 processing — NOT the FUN_80044E84 unpacker.
+
+### Open ambiguity (must resolve before fixing)
+"Oracle atlas = LBA 2020" (later-67) was inferred from oracle 0x18A000 @f7000 = LBA 2021, but 0x18A000
+is REUSED scratch — at f7000 it may just hold the LAST load (2020), while the live atlas was
+decompressed from an EARLIER load since overwritten. So I do NOT yet know the correct atlas source.
+Two live hypotheses: (a) demo-SEQUENCE divergence — our port streams/unpacks DIFFERENT areas
+(6625/6774) than the oracle by the same scene point (our sync CD vs async timing, or skipped-intro
+demo state); (b) a later load+unpack the oracle does and we miss. Both are streaming-sequence bugs.
+
+### Plan (user: port the loader+streaming to PC-native)
+1. Instrument the ORACLE (wide60rt, psxport hooks) to log every loadfile (FUN_8001db8c/dc40) and
+   unpack (FUN_80044E84) with LBA/dest/size, run to the green-field hut, and DIFF the sequence vs ours
+   (scratch/logs/ra.log) → find the first divergence (which area/atlas, when).
+2. Then PC-own the loader+unpack sequencing (it's asset-streaming infra, not game logic) so the right
+   atlas is unpacked deterministically when its load completes — instead of relying on the async
+   IRQ/state-machine our no-IRQ port desyncs. Verify: green-field renders clean with NO transplant.
+
 ## 2026-06-15 (later 67) — ROOT CAUSE: the correct atlas (LBA 2020) is LOADED but NEVER UNPACKED. Our texpages keep a PRIOR area's atlas. Load→unpack streaming desync (synchronous native CD, missing async completion trigger).
 Nailed it (continuing later-66). The oracle's green-field atlas decompresses from **disc LBA 2021**
 (discscan on oracle_ram_7000 @0x18A800 = 100% consecutive from LBA 2021; i.e. ov_loadfile of LBA 2020

@@ -97,7 +97,7 @@ static void ov_cd_loadfile(R3000* c) {
     done += n;
   }
   if (g_cd_verbose)
-    fprintf(stderr, "[cd] loadfile %u B @ LBA %u -> 0x%08X\n", size, lba, dest);
+    fprintf(stderr, "[cd] loadfile %u B @ LBA %u -> 0x%08X ra=0x%08X\n", size, lba, dest, c->r[31]);
   c->r[V0] = size;
 }
 
