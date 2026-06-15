@@ -1,5 +1,44 @@
 # Debug / progress journal
 
+## 2026-06-15 (later 37) — GAME RENDERS GAMEPLAY: CD-streaming spin fixed → level loads + draws
+The GAME-black residual from later 36 is **fixed** — the in-game level now loads and renders
+actual 3D gameplay (scratch/screenshots/game_fix/view_2850.png: a Tomba2 jungle level — foliage,
+water, character). Root cause was a non-yielding busy-wait in the CD *streaming* reader, not a
+render bug.
+- **Root cause — `FUN_8001cfc8` (CD streaming task, slot 2) busy-spun forever, wedging the whole
+  frame.** When GAME enters its load sub-state it spawns the area/XA streaming task
+  `FUN_8001cfc8` (via `FUN_8001d364`→`FUN_8001d2a8`→`FUN_80051f14(2,…)`). That task SEEKS the
+  drive to a target sector and then polls the drive head position — `FUN_8001ce90(0x10)` =
+  **GetlocL** → result MSF → `FUN_8008a110` (MSF→LBA) — looping until the head reaches the target
+  window [task2+0x54 .. +0x58]. We serve all CD data synchronously and model **no drive motion**,
+  so our CD-command override left the GetlocL result MSF **zeroed**; `FUN_8008a110(00:00:00)` =
+  −150 = 0xFFFFFF6A is never in range → the poll loop (which does NOT yield) spins forever, so
+  `native_scheduler_step` never returns → the frame loop is stuck at native frame 71, no present,
+  black screen. (The GAME logic in slot 0 had already advanced fine; it only *looked* like a
+  render/state hang.)
+- **Found with a new durable tool — `PSXPORT_SPINDBG`** (interp.c): rec_coro_run counts
+  iterations; if it runs ~80M without yielding/returning it dumps the looping pc window + branch
+  regs (+ the CD-stream contract). It pinned the spin to the FUN_8001cfc8 GetlocL poll
+  (pc 0x8001CE04..0x8008A188, a0=0xFFFFFF6A). Keep this — it localizes any future non-yielding
+  busy-wait instantly (gdb shows pc `<optimized out>`).
+- **Fix — `ov_cd_cmd_stream` (cd_override.c, overrides `FUN_8001CE90`):** report the drive AT the
+  requested sector immediately (we don't model seek latency). For GetlocL (cmd 0x10) fill the
+  result buffer with the BCD MSF of the stream's target start LBA (task2+0x54), so the head is
+  "in range"; FUN_8001cfc8 then proceeds into its normal per-frame **yielding** read loop instead
+  of spinning. Other streaming commands report success (matches our synchronous-CD model). Only
+  the FUN_8001ce90 wrapper is intercepted — FUN_8001d940's reader calls FUN_8001ce04 directly and
+  is untouched. NB: this stream copies no data to RAM (dest/words = 0 — it's XA/auto-routed), so
+  not modeling its payload is correct for level data; only the seek-position needed unblocking.
+- **RESULT (verified, headless, FORCE_BUTTONS=FFF7):** past frame 71 the GAME state machine
+  advances normally (0x50 1→4, then 0x4c/0x4a/0x4e cycling = live game loop, no spin), VRAMSCAN
+  framebuffer bbox goes (0,0)-(1023,511) (was all x≥320 = textures only), and frame dumps show the
+  title menu, a "Please wait" load, then a **rendered 3D level**.
+- **NEXT — flicker (double-buffer/present timing).** Dumped frames alternate scene↔near-black
+  (f2850 nonblack≈63k, f2890=0). GAME logic draws at its ~30fps logic rate but we `gpu_present`
+  every loop iteration, so every other present shows the stale/cleared back buffer. Fix the
+  present↔logic-rate pacing (only present a freshly-composed buffer). This is the [[wide60]]
+  "no flicker" top priority. The black-render blocker itself is solved.
+
 ## 2026-06-15 (later 36) — INPUT WORKS + OTC DMA fix → title→menu→GAME stage loads (no hang)
 Two native-MAIN residuals from later-33 fixed; the boot now drives title → menu → **GAME stage**
 on real pad input. Verified headless (state log + frame dumps).

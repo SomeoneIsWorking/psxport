@@ -14,6 +14,7 @@
 // div/mult via cpu_div/mult helpers; GTE via gte_op/gte_read/write.
 #include "r3000.h"
 #include <stdio.h>
+#include <stdlib.h>
 
 void rec_dispatch(R3000* c, uint32_t addr);
 void rec_syscall(R3000* c, uint32_t code);
@@ -238,7 +239,31 @@ static int coro_native_call(R3000* c, uint32_t tgt) {
 }
 
 void rec_coro_run(R3000* c, uint32_t pc) {
+  // Spin detector (PSXPORT_SPINDBG): a non-yielding busy-wait in game code loops here forever
+  // (never returns to the scheduler, never calls a native override that longjmps). Track the
+  // pc range over a window; if we run a huge number of iterations without leaving a tiny pc
+  // window, the game is busy-waiting — dump the loop range + the branch's register operands so
+  // the wait condition can be identified and ported to PC.
+  static int spindbg = -1;
+  if (spindbg < 0) spindbg = getenv("PSXPORT_SPINDBG") ? 1 : 0;
+  unsigned long iters = 0; uint32_t lo = pc, hi = pc;
   for (;;) {
+    if (spindbg) {
+      if (pc < lo) lo = pc; if (pc > hi) hi = pc;
+      if (++iters >= 80000000UL) {
+        fprintf(stderr, "[spindbg] busy-loop: pc window 0x%08X..0x%08X (cur 0x%08X) "
+                "regs: v0=%08X v1=%08X a0=%08X a1=%08X t0=%08X t1=%08X s0=%08X s1=%08X\n",
+                lo, hi, pc, c->r[2], c->r[3], c->r[4], c->r[5], c->r[8], c->r[9],
+                c->r[16], c->r[17]);
+        // CD-streaming contract (FUN_8001cfc8 task slot 2): start/end LBA = task2 obj
+        // (0x801fe0e0) +0x54/+0x58, dest/words at _DAT_1f8001f8/f4, plus the stream flags.
+        fprintf(stderr, "[spindbg]   stream: startLBA=%u endLBA=%u chan=%u be0e4=0x%02X "
+                "dest=0x%08X words=%u f0=%u\n",
+                mem_r32(0x801fe134), mem_r32(0x801fe138), mem_r8(0x801fe146),
+                mem_r8(0x800be0e4), mem_r32(0x1f8001f8), mem_r32(0x1f8001f4), mem_r32(0x1f8001f0));
+        iters = 0; lo = hi = pc;
+      }
+    }
     uint32_t in = mem_r32(pc);
     uint32_t op = in >> 26;
 

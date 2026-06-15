@@ -37,6 +37,35 @@ static void ov_cd_command(R3000* c) { zero_result(c->r[A2]); c->r[V0] = 0; }
 // 0x8008A6EC FUN_8008a6ec(noblock, result) CdSync -> 2 (status: complete/ready).
 static void ov_cd_sync(R3000* c) { zero_result(c->r[A1]); c->r[V0] = 2; }
 
+// 0x8001CE90 FUN_8001ce90(cmd, param, result) — the engine's streaming-path CD-command
+// wrapper (FUN_8001ce90 -> FUN_8001ce04 -> FUN_80089ce8/FUN_80089b44). Used by the CD
+// *streaming* reader FUN_8001cfc8 (task slot 2), which seeks the drive to a target sector
+// and then polls the drive position (cmd 0x10 = GetlocL) until the head reaches the target
+// window [task+0x54 .. task+0x58]. We serve all CD data synchronously and model NO drive
+// motion, so the real FUN_8001ce04 result path leaves the position MSF zeroed -> the position
+// (FUN_8008a110 of 00:00:00 = -150) is never in range -> FUN_8001cfc8 busy-spins forever in a
+// non-yielding poll, wedging the whole frame (verified: PSXPORT_SPINDBG caught it spinning in
+// FUN_8001cfc8 at GetlocL with a0=FFFFFF6A = FUN_8008a110(zeroed MSF)). FIX: report the drive
+// AT the requested sector immediately (no seek latency in our model). For GetlocL we fill the
+// result buffer with the BCD MSF of the stream's target start LBA (task+0x54), so the head is
+// "in range"; FUN_8001cfc8 then proceeds into its normal per-frame *yielding* read loop instead
+// of spinning. All other streaming commands report success (our synchronous-CD model). This
+// only intercepts the FUN_8001ce90 wrapper — FUN_8001d940's reader calls FUN_8001ce04 directly
+// and is unaffected.
+static void ov_cd_cmd_stream(R3000* c) {
+  uint32_t cmd = c->r[A0] & 0xFF, result = c->r[A2];
+  if (cmd == 0x10 && result) {                  // GetlocL: report position = target sector
+    uint32_t task = mem_r32(0x1f800138);
+    int32_t lba = (int32_t)mem_r32(task + 0x54);
+    int t = lba + 150;                          // FUN_8008a00c: LBA -> MSF (sector = lba+150)
+    int frame = t % 75, rem = t / 75, sec = rem % 60, min = rem / 60;
+    mem_w8(result + 0, (min % 10) + ((min / 10) << 4));   // BCD min
+    mem_w8(result + 1, (sec % 10) + ((sec / 10) << 4));   // BCD sec
+    mem_w8(result + 2, (frame % 10) + ((frame / 10) << 4));// BCD frame
+  }
+  c->r[V0] = 0;                                 // command succeeded
+}
+
 // 0x8008C1EC FUN_8008c1ec(a0=blocks, a1=lba, a2=buf): native synchronous read.
 static int  g_cd_verbose = 0;  // PSXPORT_CD_VERBOSE=1
 static void ov_cd_read(R3000* c) {
@@ -88,5 +117,6 @@ void cd_overrides_init(void) {
   rec_set_override(0x8001DC40u, ov_cd_loadfile);
   rec_set_override(0x8008AC34u, ov_cd_command);
   rec_set_override(0x8008A6ECu, ov_cd_sync);
+  rec_set_override(0x8001CE90u, ov_cd_cmd_stream);   // streaming CD-cmd wrapper (GetlocL pos)
   rec_set_override(0x8008C1ECu, ov_cd_read);
 }

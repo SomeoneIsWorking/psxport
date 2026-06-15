@@ -199,13 +199,35 @@ static void ov_game_main(R3000* c) {
       rc1(c, 0x80081560, envp + 0x1ffc);                    // DrawOTag (submit the OT head)
       mem_w8(0x1f800135, 1 - mem_r8(0x1f800135));           // flip back/front buffer
     }
-    static uint32_t s_last_entry = 0; static uint32_t s_last_s48 = 0xFFFF;
+    static uint32_t s_last_entry = 0; static uint32_t s_last_sm = 0xFFFFFFFF;
     uint32_t t0e = mem_r32(TASKBASE + 0xc), s48 = mem_r16(TASKBASE + 0x48);
-    if (t0e != s_last_entry || s48 != s_last_s48) {
+    // GAME runs a 4-level nested state machine (task +0x48/4a/4c/4e). Track all of it so a
+    // stuck leaf is visible, not just the outer s48.
+    uint32_t sm = (mem_r16(TASKBASE+0x48)<<24)|(mem_r16(TASKBASE+0x4a)<<16)|
+                  (mem_r16(TASKBASE+0x4c)<<8)|mem_r16(TASKBASE+0x4e)
+                  ^ (mem_r16(TASKBASE+0x50)<<12)^(mem_r16(TASKBASE+0x52)<<4);
+    if (t0e != s_last_entry || sm != s_last_sm) {
       const char* stg = t0e == 0x8010649Cu ? "START" : t0e == 0x801062E4u ? "DEMO" :
                         t0e == 0x8010637Cu ? "GAME" : "?";
-      fprintf(stderr, "[native_boot]   frame %u: stage=%s(0x%08X) demo_state=%u\n", f, stg, t0e, s48);
-      s_last_entry = t0e; s_last_s48 = s48;
+      fprintf(stderr, "[native_boot]   frame %u: stage=%s(0x%08X) sm[48=%u 4a=%u 4c=%u 4e=%u 50=%u 52=%u]"
+              " @0x80109450=%08X\n",
+              f, stg, t0e, mem_r16(TASKBASE+0x48), mem_r16(TASKBASE+0x4a),
+              mem_r16(TASKBASE+0x4c), mem_r16(TASKBASE+0x4e), mem_r16(TASKBASE+0x50),
+              mem_r16(TASKBASE+0x52), mem_r32(0x80109450));
+      s_last_entry = t0e; s_last_sm = sm;
+    }
+    // One-shot: when GAME has settled, dump the CD-streaming contract (FUN_8001cfc8, task
+    // slot 2). task2 obj @0x801fe0e0; +0x54=start LBA, +0x58=end LBA (= globals
+    // DAT_801fe134/138). DAT_801fe146=channel/type. _DAT_1f8001f8=dest, _DAT_1f8001f4=words.
+    if (getenv("PSXPORT_STREAMDBG") && t0e == 0x8010637Cu && f == 75) {
+      fprintf(stderr, "[streamdbg] task2 obj @0x801fe0e0 state=%u entry=0x%08X\n",
+              mem_r16(0x801fe0e0), mem_r32(0x801fe0ec));
+      fprintf(stderr, "[streamdbg] startLBA(+54/801fe134)=%u endLBA(+58/801fe138)=%u "
+              "chan(801fe146)=%u be0e4=0x%02X\n",
+              mem_r32(0x801fe134), mem_r32(0x801fe138), mem_r8(0x801fe146), mem_r8(0x800be0e4));
+      fprintf(stderr, "[streamdbg] dest(_DAT_1f8001f8)=0x%08X words(_DAT_1f8001f4)=%u "
+              "f0=%u f1f800224=0x%08X\n",
+              mem_r32(0x1f8001f8), mem_r32(0x1f8001f4), mem_r32(0x1f8001f0), mem_r32(0x1f800224));
     }
     if (f < 10 || (f % 30) == 0)
       fprintf(stderr, "[native_boot]   frame %u: t0[st=%u e=0x%08X s48=%u] t1[st=%u] t2[st=%u] "
