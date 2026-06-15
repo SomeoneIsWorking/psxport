@@ -16,6 +16,8 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <string.h>
+#include <stdio.h>
+#include <stdlib.h>
 
 // ---------------------------------------------------------------------------
 // Beetle SPU API (mednafen/psx/spu.h), declared locally to avoid pulling the
@@ -100,6 +102,17 @@ void spu_init(void)
 
 void spu_write(uint32_t addr, uint32_t val)
 {
+   // PSXPORT_SPU_DBG: surface whether the game drives the SPU at all (silent-output triage).
+   // Logs total writes, key-on (KON 0x1F801D88/8A), and SPUCNT (0x1F801DAA, bit15 = SPU enable).
+   if (getenv("PSXPORT_SPU_DBG")) {
+      static long n; uint32_t off = addr & 0x3FF;
+      n++;
+      static long datacnt; static uint32_t lastaddr;
+      if (off == 0x188 || off == 0x18A) fprintf(stderr, "[spudbg] KON off=%03X val=%04X (writes=%ld)\n", off, val & 0xFFFF, n);
+      else if (off == 0x1AA) fprintf(stderr, "[spudbg] SPUCNT=%04X enable=%d xfermode=%d (writes=%ld)\n", val & 0xFFFF, (val >> 15) & 1, (val >> 4) & 3, n);
+      else if (off == 0x1A6) { lastaddr = (val & 0xFFFF) << 3; fprintf(stderr, "[spudbg] SPU xfer ADDR=0x%05X\n", lastaddr); }
+      else if (off == 0x1A8) { datacnt++; if ((datacnt % 1000) == 1) fprintf(stderr, "[spudbg] SPU DATA-port write #%ld (val=%04X)\n", datacnt, val & 0xFFFF); }
+   }
    SPU_Write(0, addr & 0x3FF, (uint16_t)val);
 }
 
@@ -113,6 +126,10 @@ uint32_t spu_read(uint32_t addr)
 // caller's word block.
 void spu_dma_write(const uint32_t *words, int count)
 {
+   if (getenv("PSXPORT_SPU_DBG")) {
+      static long calls, total; calls++; total += count;
+      fprintf(stderr, "[spudbg] SPU-RAM DMA write: %d words (call %ld, total %ld words)\n", count, calls, total);
+   }
    int i;
    for (i = 0; i < count; i++)
       SPU_WriteDMA(words[i]);
@@ -145,6 +162,13 @@ int spu_render(int16_t *out, int max_frames)
       n = (uint32_t)max_frames;
 
    memcpy(out, IntermediateBuffer, (size_t)n * 2 * sizeof(int16_t));
+
+   if (getenv("PSXPORT_SPU_DBG")) {
+      static long fr; int peak = 0;
+      for (uint32_t i = 0; i < n * 2; i++) { int v = out[i]; if (v < 0) v = -v; if (v > peak) peak = v; }
+      if ((++fr % 60) == 0 || peak > 0)
+         fprintf(stderr, "[spudbg] spu_render frame %ld: %u stereo samples, peak=%d\n", fr, n, peak);
+   }
 
    if (n < avail)
    {

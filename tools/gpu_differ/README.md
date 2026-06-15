@@ -21,6 +21,19 @@ variable entirely.
    PSXPORT_NATIVE_FRAMES=4000 PSXPORT_GPUTRACE=3000:scratch/bin/gp0trace_f3000.bin ./run.sh
    ```
 
+   **Multi-frame sweep (one run, many scenes):** pass a comma-separated frame list and a path
+   PREFIX; each frame is written to `<prefix>_f<N>.bin`. The run is deterministic under
+   `PSXPORT_FORCE_BUTTONS`, so frame N is reproducible. Use this to validate the rasterizer across
+   menu + several gameplay scenes, not just one frame:
+   ```
+   PSXPORT_GPUTRACE="600,1000,1400,1800,2200,2600,3000,3150:scratch/bin/sweep/t" ... ./run.sh
+   ```
+   Then loop each trace through the oracle + ours + diff (`for t in <prefix>_f*.bin; do wide60rt …
+   -gpureplay "$t" beetle.vram; replay_ours "$t" ours.vram; diff.py ours.vram beetle.vram …; done`).
+   Note the GAME double-buffers:
+   the frame being drawn alternates between the back buffer at VRAM (0,256) and the front at (0,0), so
+   diff BOTH `--region 0,256,320,240` and `0,0,320,240` and take whichever holds this frame's draws.
+
 2. **Replay through Beetle** (the oracle binary, software renderer, 1x — do NOT set
    `PSXPORT_INTERNAL_RES`). Seeds Beetle's VRAM with the captured initial VRAM, replays the words
    via `GPU_WriteDMA`, dumps Beetle's resulting VRAM:

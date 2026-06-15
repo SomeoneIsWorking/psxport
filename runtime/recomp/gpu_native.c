@@ -533,23 +533,44 @@ static int gp0_len(uint32_t c) {
 //
 // File format ("GP0TRC01"): magic[8], u32 frame, u32 word_count, u32 vram_w(1024), u32 vram_h(512),
 // then vram_w*vram_h u16 (initial VRAM), then word_count u32 (the GP0 stream, in feed order).
+// PSXPORT_GPUTRACE="frame[,frame...][:path]". A single frame writes to `path` exactly (default
+// scratch/bin/gp0trace.bin) — back-compat with the differ pipeline. A comma-separated LIST writes
+// one file per frame at "<path>_f<N>.bin" (so a single deterministic run captures many scenes; the
+// game is deterministic under PSXPORT_FORCE_BUTTONS, so frame N is reproducible). Targets are kept
+// in feed order; we capture them one at a time as s_frame reaches each.
+#define TRACE_MAX 64
 static int        s_trace_on = -1;       // -1 lazy, 0 off, 1 armed
-static int        s_trace_frame = -1;    // target frame
+static int        s_trace_frames[TRACE_MAX]; // target frames
+static int        s_trace_count;         // number of targets
+static int        s_trace_idx;           // index of the target currently being captured
+static int        s_trace_multi;         // 1 if a list (per-frame filenames), 0 if single exact path
 static const char* s_trace_path = "scratch/bin/gp0trace.bin";
 static uint16_t*  s_trace_init;          // VRAM snapshot at frame start
 static uint32_t*  s_trace_words;         // captured GP0 words (grown)
 static size_t     s_trace_cap, s_trace_n;
-static int        s_trace_inited, s_trace_done;
+static int        s_trace_inited;
+
+static void trace_init_env(void) {
+  const char* e = getenv("PSXPORT_GPUTRACE");
+  s_trace_on = e ? 1 : 0;
+  if (!e) return;
+  const char* c = strchr(e, ':');
+  if (c) s_trace_path = c + 1;
+  s_trace_multi = (strchr(e, ',') != NULL);
+  const char* p = e;
+  while (*p && p != c && s_trace_count < TRACE_MAX) {
+    s_trace_frames[s_trace_count++] = atoi(p);
+    const char* nc = strchr(p, ',');
+    if (!nc || (c && nc > c)) break;
+    p = nc + 1;
+  }
+}
 
 static void trace_record(uint32_t w) {
-  if (s_trace_on < 0) {
-    const char* e = getenv("PSXPORT_GPUTRACE");
-    s_trace_on = e ? 1 : 0;
-    if (e) { s_trace_frame = atoi(e); const char* c = strchr(e, ':'); if (c) s_trace_path = c + 1; }
-  }
-  if (s_trace_on <= 0 || s_trace_done || s_frame != s_trace_frame) return;
+  if (s_trace_on < 0) trace_init_env();
+  if (s_trace_on <= 0 || s_trace_idx >= s_trace_count || s_frame != s_trace_frames[s_trace_idx]) return;
   if (!s_trace_inited) {
-    s_trace_init = (uint16_t*)malloc(sizeof(uint16_t) * VRAM_W * VRAM_H);
+    if (!s_trace_init) s_trace_init = (uint16_t*)malloc(sizeof(uint16_t) * VRAM_W * VRAM_H);
     memcpy(s_trace_init, s_vram, sizeof(uint16_t) * VRAM_W * VRAM_H);
     s_trace_inited = 1;
   }
@@ -561,18 +582,24 @@ static void trace_record(uint32_t w) {
 }
 
 static void trace_flush(void) {  // called from gpu_present while s_frame is still the target
-  if (s_trace_on <= 0 || s_trace_done || !s_trace_inited || s_frame != s_trace_frame) return;
-  FILE* f = fopen(s_trace_path, "wb");
+  if (s_trace_on <= 0 || s_trace_idx >= s_trace_count || !s_trace_inited ||
+      s_frame != s_trace_frames[s_trace_idx]) return;
+  char namebuf[512];
+  const char* path = s_trace_path;
+  if (s_trace_multi) { snprintf(namebuf, sizeof namebuf, "%s_f%d.bin", s_trace_path, s_frame); path = namebuf; }
+  FILE* f = fopen(path, "wb");
   if (f) {
-    uint32_t meta[4] = { (uint32_t)s_trace_frame, (uint32_t)s_trace_n, VRAM_W, VRAM_H };
+    uint32_t meta[4] = { (uint32_t)s_frame, (uint32_t)s_trace_n, VRAM_W, VRAM_H };
     fwrite("GP0TRC01", 1, 8, f);
     fwrite(meta, 4, 4, f);
     fwrite(s_trace_init, 2, VRAM_W * VRAM_H, f);
     fwrite(s_trace_words, 4, s_trace_n, f);
     fclose(f);
-    fprintf(stderr, "[gputrace] f%d -> %s (%zu words)\n", s_frame, s_trace_path, s_trace_n);
+    fprintf(stderr, "[gputrace] f%d -> %s (%zu words)\n", s_frame, path, s_trace_n);
   }
-  s_trace_done = 1;
+  s_trace_idx++;            // advance to the next target frame; reset the per-frame capture
+  s_trace_inited = 0;
+  s_trace_n = 0;
 }
 
 // One word into the GP0 port (direct write or DMA).

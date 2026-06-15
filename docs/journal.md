@@ -1,5 +1,46 @@
 # Debug / progress journal
 
+## 2026-06-15 (later 52) — multi-frame GPU sweep (GPU is solid everywhere) + audio tooling + audio is SILENT (root-caused)
+User: "you only compared the first few things… also add audio and audio compare tooling." Did both.
+
+### GPU: validated across 8 scenes, not just one frame — no new structural bugs
+Extended PSXPORT_GPUTRACE to capture a COMMA-SEPARATED frame LIST in one deterministic run
+(`"600,1000,..,3150:prefix"` → `prefix_f<N>.bin`; single-frame exact-path form unchanged, differ
+pipeline intact). Swept f600..f3150 (menu→gameplay), replayed each through ours + Beetle, diffed
+both buffers. Result: **the drawn buffer is 0.000% (pixel-identical to the oracle) on ALL 8 frames**
+(back buffer 0,256 when it holds the frame; the other buffer shows the same ≤0.4% sub-pixel
+affine/edge floor from later-51). So after later-51 there are NO new structural GPU divergences
+across scenes — the rasterizer matches the oracle everywhere sampled. (scratch/bin/sweep/, diff_all.sh.)
+
+### Audio tooling added (user ask)
+- **PSXPORT_WAV=path** (spu_audio.c): dumps the SPU's mixed 44100 Hz stereo output to WAV,
+  INDEPENDENT of SDL — works headless / under PSXPORT_NOAUDIO (the mixer is advanced + drained
+  regardless; refactored spu_audio_frame so the SPU runs when EITHER the SDL device OR a WAV
+  capture is active). Header patched at exit, ~10 min cap.
+- **tools/audio_differ/compare.py**: `stats` (duration, RMS/peak, silence %, first-audible — flags
+  all-zeros) and `diff` (xcorr-align ours-vs-oracle then loudness/peak deltas; alignment-free like
+  the GP0 differ since HLE vs full-emu don't sample-align). Pure stdlib.
+- **PSXPORT_SPU_DBG=1** (spu_beetle.c): register-write count, SPUCNT (enable+xfer mode), KON masks,
+  SPU-RAM DMA/data-port transfers, per-frame spu_render peak — to separate a mixing bug from a
+  driver/IRQ problem.
+
+### FINDING: the port is SILENT in gameplay — root cause = sound driver isn't sequencing
+A 55 s headless gameplay capture (incl. the f3000 grass scene) is **all zeros**. PSXPORT_SPU_DBG
+shows the SPU is healthy: enabled (SPUCNT bit15=1), master volume 0x3FFF, SPU RAM uploaded (359
+DMA writes × 256 words ≈ 368 KB), voices keyed on. BUT over 2500 frames only **5 KON writes occur,
+all the all-24-voices init pattern (0x188=FFFF / 0x18A=00FF) — ZERO per-note key-ons**. So the
+game's sound engine never sequences notes → every mixed frame peaks at 0. Two contributors:
+1. The sound driver/sequencer isn't being ticked. PSX sound engines typically update on a periodic
+   IRQ (hardware Timer or the SPU IRQ). `IRQ_Assert` is a stubbed no-op (spu_beetle.c STOPGAP) and
+   the per-frame sound-update entry isn't driven, so the sequencer never advances.
+2. CD-DA / streamed music is stubbed to silence (`CDC_GetCDAudioSample` returns 0).
+PROPER FIX (NOT a bandaid, deferred — subsystem-sized, flagged for the user): RE the game's
+sound-engine update entry and drive it per frame (as we drive graphics), and/or wire the Timer/SPU
+IRQ into the runtime's interrupt controller; then connect a CD-DA source for streamed music. This
+was NOT attempted yet — naming it rather than hacking. GOTCHA recorded: runs must go through run.sh
+(it sets disc/BIOS/MAIN env); invoking scratch/bin/tomba2_port directly does NOT boot the game (no
+SPU activity), which briefly masked the upload activity during triage.
+
 ## 2026-06-15 (later 51) — rasterizer fidelity: exact mednafen coverage + raw-texture poly bit → 2.57%→0.29% (a grass frame to 0.000%)
 Continued the oracle GP0 differ chase (handoff scratch/handoff.md). Drove the GAME back-buffer
 real-divergence (|Δ|>3, dither-filtered, region 0,256,320,240 on the f3000 banner frame) from the

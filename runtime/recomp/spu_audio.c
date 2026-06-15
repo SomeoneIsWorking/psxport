@@ -47,6 +47,46 @@ static SDL_AudioDeviceID s_dev;   // 0 = not open / failed / disabled
 #endif
 static int s_state = 0;           // 0 = uninit, 1 = enabled+open, -1 = disabled/failed
 
+// ---- WAV capture (PSXPORT_WAV=path) -------------------------------------------------
+// Dumps the SPU's mixed 44100 Hz stereo int16 output to a WAV file, INDEPENDENT of SDL —
+// works headless / under PSXPORT_NOAUDIO (the SPU is still advanced + drained, the samples
+// are just written to disk instead of, or as well as, played). This is the audio analog of
+// the GPU VRAM dump: it lets the produced audio be inspected/compared offline (the SPU lift
+// is Beetle's own spu.c, so a faithful run should match the oracle's mix). Header sizes are
+// patched at exit. Capped so a runaway run can't fill the disk.
+static FILE*    s_wav;            // open WAV file, or NULL
+static uint32_t s_wav_bytes;      // PCM bytes written so far
+#define WAV_MAX_BYTES (600u * 44100u * 2u * 2u)   // ~10 min of stereo s16
+
+static void wav_le16(FILE* f, uint16_t v) { fputc(v & 0xFF, f); fputc((v >> 8) & 0xFF, f); }
+static void wav_le32(FILE* f, uint32_t v) { for (int i = 0; i < 4; i++) fputc((v >> (8*i)) & 0xFF, f); }
+
+static void wav_close(void) {
+   if (!s_wav) return;
+   uint32_t data = s_wav_bytes, riff = 36 + data;
+   fseek(s_wav, 4, SEEK_SET);  wav_le32(s_wav, riff);      // RIFF chunk size
+   fseek(s_wav, 40, SEEK_SET); wav_le32(s_wav, data);      // data chunk size
+   fclose(s_wav); s_wav = NULL;
+   fprintf(stderr, "[spu_wav] wrote %u PCM bytes (%.2f s)\n", data, data / (44100.0 * 4.0));
+}
+
+static void wav_open(const char* path) {
+   s_wav = fopen(path, "wb");
+   if (!s_wav) { fprintf(stderr, "[spu_wav] cannot open %s\n", path); return; }
+   fwrite("RIFF", 1, 4, s_wav); wav_le32(s_wav, 0);        // size patched at close
+   fwrite("WAVE", 1, 4, s_wav);
+   fwrite("fmt ", 1, 4, s_wav); wav_le32(s_wav, 16);
+   wav_le16(s_wav, 1);          // PCM
+   wav_le16(s_wav, 2);          // stereo
+   wav_le32(s_wav, 44100);      // sample rate
+   wav_le32(s_wav, 44100 * 2 * 2); // byte rate
+   wav_le16(s_wav, 2 * 2);      // block align
+   wav_le16(s_wav, 16);         // bits/sample
+   fwrite("data", 1, 4, s_wav); wav_le32(s_wav, 0);        // size patched at close
+   atexit(wav_close);
+   fprintf(stderr, "[spu_wav] capturing SPU output -> %s\n", path);
+}
+
 // Open the SDL2 audio device (44100 Hz, AUDIO_S16SYS, stereo). Idempotent: subsequent
 // calls are no-ops. Honors PSXPORT_NOAUDIO (force-disable) and gracefully disables if
 // SDL can't init/open a device.
@@ -54,6 +94,9 @@ void spu_audio_init(void)
 {
    if (s_state != 0)
       return;                     // already decided (enabled or disabled)
+
+   // WAV capture is independent of the SDL device: it works even headless / under NOAUDIO.
+   { const char* wp = getenv("PSXPORT_WAV"); if (wp && !s_wav) wav_open(wp); }
 
    if (getenv("PSXPORT_NOAUDIO"))
    {
@@ -102,8 +145,14 @@ void spu_audio_init(void)
 // queueing, letting the device drain and resync latency.
 void spu_audio_frame(void)
 {
+   // We advance + drain the SPU when SOMETHING consumes it: the SDL device (playback) OR a
+   // WAV capture (PSXPORT_WAV, works headless). If neither is active, leave the SPU idle.
 #ifdef PSXPORT_SDL
-   if (s_state != 1 || s_dev == 0)
+   int sdl_on = (s_state == 1 && s_dev != 0);
+#else
+   int sdl_on = 0;
+#endif
+   if (!sdl_on && !s_wav)
       return;
 
    // Advance the mixer by exactly one video frame of system clocks. spu_render drains
@@ -139,6 +188,17 @@ void spu_audio_frame(void)
    if (frames <= 0)
       return;
 
+   // WAV capture: append the drained PCM (every frame, regardless of SDL). Capped.
+   if (s_wav && s_wav_bytes < WAV_MAX_BYTES)
+   {
+      size_t bytes = (size_t)frames * 2 * sizeof(int16_t);
+      fwrite(buf, 1, bytes, s_wav);
+      s_wav_bytes += (uint32_t)bytes;
+   }
+
+#ifdef PSXPORT_SDL
+   if (!sdl_on)
+      return;
    // Drop (don't queue) when the backlog is already too deep — keeps latency bounded.
    if ((int)SDL_GetQueuedAudioSize(s_dev) > AUDIO_QUEUE_CAP_BYTES)
       return;
@@ -150,7 +210,5 @@ void spu_audio_frame(void)
    if (getenv("PSXPORT_AUDIO_LOG"))
       fprintf(stderr, "[spu_audio] rendered %d frames, queued=%u bytes\n",
               frames, SDL_GetQueuedAudioSize(s_dev));
-#else
-   // No SDL: nothing to play.
 #endif
 }
