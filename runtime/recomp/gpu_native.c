@@ -359,6 +359,33 @@ static void present_window(void) {
 static void present_window(void) {}
 #endif
 
+// Frame pacing: the native game loop (ov_game_main) runs UNTHROTTLED — at thousands of fps.
+// That's right for headless tests but unplayable windowed. When a window is up we throttle to
+// the game's own pace: DAT_1f800235 is the engine's vblank quota (vblanks at 60 Hz per displayed
+// frame; =2 => 30 fps, Tomba2's logic rate). PSXPORT_NOPACE disables (fast-forward); headless
+// (no window) is never paced so tests stay fast. SDL timing keeps it portable (a window implies
+// SDL is up). Called ONCE per native game-frame from ov_frame_update — NOT from gpu_present,
+// which the boot stub also drives many times per frame (pacing those would stall the boot).
+void gpu_pace_frame(void) {
+#ifdef PSXPORT_SDL
+  static int on = -1;
+  if (on < 0) {
+    const char* w = getenv("PSXPORT_GPU_WINDOW");   // NB: run.sh sets this to "0" headless, so
+    on = (w && atoi(w) != 0 && !getenv("PSXPORT_NOPACE")) ? 1 : 0;  // check the VALUE, not presence
+  }
+  if (!on) return;
+  uint8_t mem_r8(uint32_t);
+  int quota = mem_r8(0x1F800235u); if (quota < 1) quota = 2;   // vblanks per frame (default 30fps)
+  double interval = quota * 1000.0 / 60.0;                     // ms per displayed frame
+  static double next = -1;
+  double now = (double)SDL_GetTicks();
+  if (next < 0) next = now;
+  next += interval;
+  if (next > now) SDL_Delay((unsigned)(next - now));
+  else if (now - next > interval) next = now;                  // resync after a hitch (no debt)
+#endif
+}
+
 // Present: copy the displayed VRAM region to an RGB buffer. PSXPORT_GPU_DUMP=dir dumps PPMs;
 // PSXPORT_GPU_WINDOW=1 shows a live SDL window.
 static int s_frame = 0;

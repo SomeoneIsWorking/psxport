@@ -38,10 +38,22 @@ render bug.
   animates — NOT a per-frame scene↔black alternation. The occasional all-black dump (f2890) is a
   normal fade transition, not a dropped buffer. (Earlier "flicker" suspicion was sampling-bias —
   the sampled frames happened to land on fade endpoints. Corrected.)
-- **NEXT — confirm interactivity + reach steady gameplay.** The level renders and animates under
-  the pulsed-Start test input; next is real pad-driven control (walk Tomba) and seeing what the
-  post-level fade leads to. Also: the flat interp makes GAME slow (~native frame 224 in the dump
-  run) — recompile GAME.BIN/SOP.BIN hot fns (emit.py overlays) for playable speed.
+- **Speed is a NON-ISSUE — the interp runs GAME at ~3000 fps headless** (measured: 3000 native
+  frames incl. boot in ~1.0s; a 100000-frame run completes cleanly, no spin). The earlier
+  "~13fps / recompile overlays for speed" guess was WRONG — it was confounded by PSXPORT_GPU_DUMP
+  PPM disk I/O (one file write per present) and tool-call timing, not interp cost. Do NOT invest
+  in recompiling GAME.BIN/SOP.BIN for speed; the flat interp is ~50× faster than needed for 60fps.
+- **Frame pacing DONE — windowed now runs at the game's rate (~30fps), headless stays full speed.**
+  `gpu_pace_frame()` (gpu_native.c), called once per native game-frame from `ov_frame_update`
+  (games_tomba2.c, NOT from gpu_present — the boot stub drives many presents/frame and pacing
+  those stalled the boot), SDL_Delay-throttles to the engine's vblank quota DAT_1f800235 (=2 =>
+  30fps). Gated on PSXPORT_GPU_WINDOW != "0" (run.sh sets it to "0" headless — must check the VALUE,
+  getenv presence is truthy for "0"); PSXPORT_NOPACE disables (fast-forward). Verified: windowed
+  120 frames in ~5s (~30fps, reaches GAME, no crash); headless 3000 frames in ~1.0s (unpaced).
+- **NEXT — interactivity + audio:**
+  1. Verify real pad-driven control (walk Tomba) windowed; see where the post-level fade leads.
+  2. Audio (tests run PSXPORT_NOAUDIO).
+  3. wide60: interpolate the paced 30fps to 60 (the project's headline feature).
 
 ## 2026-06-15 (later 36) — INPUT WORKS + OTC DMA fix → title→menu→GAME stage loads (no hang)
 Two native-MAIN residuals from later-33 fixed; the boot now drives title → menu → **GAME stage**

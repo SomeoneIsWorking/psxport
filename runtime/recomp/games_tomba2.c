@@ -19,6 +19,7 @@
 
 void gen_func_800788AC(R3000*);    // recomp body (super-call)
 void gpu_present(void);            // native GPU: present the displayed VRAM region
+void gpu_pace_frame(void);         // native GPU: throttle to game pace when windowed (no-op headless)
 void spu_audio_frame(void);        // SPU: advance the mixer one frame + feed the audio device
 
 #define DISPLAY_COUNTER 0x800E809Cu   // DAT_800e809c (u16) — the dwell's vblank counter
@@ -29,6 +30,7 @@ static void ov_frame_update(R3000* c) {
   mem_w16(DISPLAY_COUNTER, mem_r8(VBLANK_QUOTA));    // satisfy the pacing dwell immediately
   gpu_present();                                     // one rendered frame per loop iteration
   spu_audio_frame();                                 // advance + feed audio (sole spu_update driver)
+  gpu_pace_frame();                                  // throttle to ~30fps when windowed (1 call/frame)
 }
 
 void games_tomba2_init(void) {
