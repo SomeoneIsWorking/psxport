@@ -1,5 +1,37 @@
 # Debug / progress journal
 
+## 2026-06-15 (later 73) — BGM: the libsnd sequencer INFRASTRUCTURE is correct (state matches the oracle); dialogue issue RETRACTED. Missing BGM is in finer per-sequence state, needs a GAME-stage sequence-table compare vs the oracle.
+User refined the symptom: Menu (no BGM) → Story cutscene (no BGM) → **Fisherman (BGM plays)** →
+Gameplay (no BGM). Only the fisherman has BGM = it's FMV/XA (native_fmv), everything else is the
+libsnd SEQUENCER → so ALL sequenced BGM is silent, one common cause ("fix menu, fix the rest").
+**Dialogue is a NON-ISSUE** (user retracted): the "missing dialogue" was the fisherman-cutscene
+dialog; the user's spam-Start runs just got stuck on it; vanilla Start skips it. Drop it.
+
+### Method (user directive): track GAME STATE, not output (no WAV/RMS — that's [[track-game-state-not-output]])
+SsSeqCalled (0x80090BD0) reads the libsnd state: **0x801054B0** = open-seq count, **0x80104C28** =
+playing bitmask, **0x80104C30** = sequence table, **0x800AC424** = tick mode, **0x800AC42C** =
+SsSeqCalled ptr. Probe: PSXPORT_SEQDBG (native_boot.c). Reach GAME headless via
+PSXPORT_FORCE_BUTTONS=FFF7 (pulse Start; active-low mask) — confirmed reaches GAME stage.
+
+### Finding: sequencer infra is CORRECT — not the bug
+- OURS over START→DEMO→GAME: open=14, playmask=0xC3FF, tickmode=5, seqfn=0x80090BD0 — STABLE the
+  whole run (only changes at f0→f3 during boot).
+- ORACLE @ green-field DEMO (oracle_ram_7000): **identical** — open=14, playmask=0xC3FF, tickmode=5,
+  seqfn=0x80090BD0.
+⟹ The sequencer is set up and "playing" identically to the oracle. BUT the DEMO is correctly SILENT
+in both with this same 0xC3FF — so playmask is TOO COARSE to indicate audible BGM (14 slots stay
+allocated; per-scene the game swaps the SEQ song / ramps per-slot volume). The missing BGM is in the
+FINER state: which SEQ song / volume each slot plays, or whether the VAB (instrument samples) is in
+SPU RAM. later-54's headless "music" (RMS) was likely these always-allocated slots, not real per-scene BGM.
+
+### NEXT
+RE the sequence struct (table @0x80104C30, stride from SsSeqCalled's loop) → per-slot {SEQ data ptr,
+volume, current song}. Dump it from OURS at GAME (FORCE_BUTTONS=FFF7) AND the ORACLE at GAME
+(-inputscript pulse-Start), diff → find which song/volume/VAB differs. Also verify the VAB reached SPU
+RAM (the game's SsVabTransfer → SPU data-port/DMA). The native port has NO loadstate, so GAME must be
+reached via input each time (oracle has -loadstate, but the oracle plays BGM correctly so it can't
+show OUR bug — only serves as the reference state to diff against).
+
 ## 2026-06-15 (later 72) — GRAPHICS CORRUPTION FIXED (user-verified). Root cause: our GPU never handled VARIABLE-LENGTH POLY-LINES — it consumed a fixed 3/4 words, drifting the whole GP0 parse so a later data word decoded as an atlas-clobbering VRAM copy.
 THE BUG WAS IN OUR PC GPU after all (gpu_native.c gp0_len / FIFO). gpu_differ misled me (later-59/71):
 its captured INITIAL VRAM at f3265 was ALREADY clobbered by the prior frame, so both renderers

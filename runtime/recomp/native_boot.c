@@ -231,6 +231,20 @@ static void ov_game_main(R3000* c) {
       if (gpu_prims_since_present() > 0)
         mem_w8(0x1f800135, 1 - mem_r8(0x1f800135));         // flip back/front buffer
     }
+    // PSXPORT_SEQDBG — libsnd sequencer STATE trace (from SsSeqCalled @0x80090BD0): is any BGM
+    // sequence OPEN/PLAYING? 0x801054B0=open-seq count, 0x80104C28=playing bitmask, 0x800AC424=tick
+    // mode, 0x800AC42C=SsSeqCalled ptr. If these never go nonzero, no song is ever started → the
+    // missing-BGM root cause is upstream (song open/play not happening), not the SPU/tick.
+    if (getenv("PSXPORT_SEQDBG")) {
+      static uint32_t ls = 0xFFFFFFFF;
+      uint32_t st = (mem_r16(0x801054B0) << 16) | (mem_r32(0x80104C28) & 0xFFFF);
+      if (st != ls) {
+        fprintf(stderr, "[seqdbg] f%u open=%d playmask=0x%04X tickmode=%d seqfn=0x%08X stage=0x%08X\n",
+                f, (int16_t)mem_r16(0x801054B0), mem_r32(0x80104C28) & 0xFFFF,
+                mem_r8(0x800AC424), mem_r32(0x800AC42C), mem_r32(TASKBASE + 0xc));
+        ls = st;
+      }
+    }
     static uint32_t s_last_entry = 0; static uint32_t s_last_sm = 0xFFFFFFFF;
     uint32_t t0e = mem_r32(TASKBASE + 0xc), s48 = mem_r16(TASKBASE + 0x48);
     // GAME runs a 4-level nested state machine (task +0x48/4a/4c/4e). Track all of it so a
