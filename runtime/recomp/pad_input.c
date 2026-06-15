@@ -182,6 +182,16 @@ void pad_overrides_init(void) {
 // buffers (and, if the pointer table ever does get populated, to whatever it points at too).
 #define PAD_SLOT0_BUF 0x800BF4F8u
 #define PAD_SLOT1_BUF 0x800BF51Au
+
+// REPL pad control (native-port -repl): a held active-low mask + a tap countdown. The REPL sets
+// these; pad_service_frame applies them so the interactive driver can press/hold/tap buttons.
+static uint16_t s_repl_hold = PAD_NONE;   // bits cleared = held down
+static uint16_t s_repl_tap  = PAD_NONE;   // active-low mask pressed for s_repl_tap_n frames
+static int      s_repl_tap_n = 0;
+static int      s_repl_on = 0;
+void pad_repl_hold(uint16_t active_low_mask)  { s_repl_on = 1; s_repl_hold = active_low_mask; }
+void pad_repl_tap(uint16_t active_low_mask, int n) { s_repl_on = 1; s_repl_tap = active_low_mask; s_repl_tap_n = n; }
+
 void pad_service_frame(void) {
   static int s_have_window = -1;
   static int s_force_init = 0;
@@ -212,6 +222,11 @@ void pad_service_frame(void) {
   if (s_force_on) {
     if (s_hold_mask != PAD_NONE && s_fc >= s_hold_at) pad_set_buttons(s_hold_mask);
     else pad_set_buttons((s_fc % 32u) < 8u ? s_force_mask : PAD_NONE);
+  }
+  // REPL pad control: a tap (countdown) overrides the held mask while active.
+  if (s_repl_on) {
+    if (s_repl_tap_n > 0) { pad_set_buttons(s_repl_tap); s_repl_tap_n--; }
+    else pad_set_buttons(s_repl_hold);
   }
   s_fc++;
 

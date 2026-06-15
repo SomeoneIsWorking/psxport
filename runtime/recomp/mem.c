@@ -17,6 +17,14 @@ uint8_t g_scratch[0x400];
 static int      s_cw_init = 0;
 static uint32_t s_cw_lo = 0, s_cw_hi = 0;
 static int      s_cw_n = 0;
+// Runtime-settable store watchpoint (used by the native-port REPL `watch lo hi`). Each write into
+// [lo,hi) is logged with value + the interp PC (and optional host backtrace via PSXPORT_CW_BT).
+// The REPL reads s_cw_n to report how many hits a `run` produced. lo/hi are PHYSICAL (a & 0x1FFFFFFF).
+void mem_set_watch(uint32_t lo, uint32_t hi) {
+  s_cw_init = 1; s_cw_lo = lo & 0x1FFFFFFF; s_cw_hi = hi & 0x1FFFFFFF; s_cw_n = 0;
+  fprintf(stderr, "[cw] watch [%08X,%08X)\n", 0x80000000u | s_cw_lo, 0x80000000u | s_cw_hi);
+}
+int  mem_watch_hits(void) { return s_cw_n; }
 static void cw_check(uint32_t a, uint32_t v, int width) {
   if (!s_cw_init) {
     s_cw_init = 1;
@@ -27,10 +35,9 @@ static void cw_check(uint32_t a, uint32_t v, int width) {
   uint32_t p = a & 0x1FFFFFFF;
   if (s_cw_hi && p >= s_cw_lo && p < s_cw_hi) {
     s_cw_n++;
-    if (getenv("PSXPORT_CW_BT") && s_cw_n <= 24) {
+    if (s_cw_n <= 64) {
       fprintf(stderr, "[cw] #%d store w%d [%08X]=%08X  interp_pc=%08X\n", s_cw_n, width, 0x80000000u|p, v, g_interp_pc);
-      void* bt[32]; int n = backtrace(bt, 32); backtrace_symbols_fd(bt, n, 2);
-      fprintf(stderr, "----\n");
+      if (getenv("PSXPORT_CW_BT")) { void* bt[32]; int n = backtrace(bt, 32); backtrace_symbols_fd(bt, n, 2); fprintf(stderr, "----\n"); }
     }
   }
 }

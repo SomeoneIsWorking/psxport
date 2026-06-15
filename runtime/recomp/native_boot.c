@@ -18,6 +18,7 @@
 #include "r3000.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <setjmp.h>
 
 void rec_coro_run(R3000* c, uint32_t pc); // flat coroutine interpreter (resumable, see interp.c)
@@ -110,6 +111,58 @@ static void native_scheduler_step(R3000* c) {
 }
 
 // Native override of game-main FUN_80050b08: init prefix, then (later) native frame loop.
+// ---- Interactive REPL (PSXPORT_REPL=1) — drive the native port from stdin --------------------
+// Mirrors the oracle's (wide60rt -repl) command set so one driver can step BOTH cores and diff.
+// Commands: run N | r addr [len] | rw addr [words] | w addr val | w8 addr val | watch lo hi |
+//   unwatch | hits | press/release <btn> | tap <btn> [frames] | regs | seq | quit. Memory is the
+//   game's address space (mem_r*/mem_w*); watchpoints via mem_set_watch (reported during `run`).
+void mem_set_watch(uint32_t lo, uint32_t hi);
+int  mem_watch_hits(void);
+void pad_repl_hold(uint16_t active_low_mask);
+void pad_repl_tap(uint16_t active_low_mask, int n);
+static uint16_t repl_btn(const char* n) {     // name -> active-HIGH PSX pad bit
+  if (!strcmp(n,"start"))    return 0x0008; if (!strcmp(n,"select")) return 0x0001;
+  if (!strcmp(n,"x")||!strcmp(n,"cross"))  return 0x4000;
+  if (!strcmp(n,"o")||!strcmp(n,"circle")) return 0x2000;
+  if (!strcmp(n,"triangle")||!strcmp(n,"t")) return 0x1000;
+  if (!strcmp(n,"square")||!strcmp(n,"sq"))  return 0x8000;
+  if (!strcmp(n,"up"))    return 0x0010; if (!strcmp(n,"down"))  return 0x0040;
+  if (!strcmp(n,"left"))  return 0x0080; if (!strcmp(n,"right")) return 0x0020;
+  return (uint16_t)strtoul(n, 0, 16);
+}
+// Read+execute REPL commands until a `run N` (returns N) or quit/EOF (returns -1).
+static long native_repl_read(R3000* c, uint32_t f) {
+  static uint16_t held = 0xFFFF;              // active-low held mask (all released)
+  char line[256];
+  fprintf(stderr, "[repl] frame=%u ready\n", f); fflush(stderr);
+  while (fgets(line, sizeof line, stdin)) {
+    char cmd[24] = {0}, arg[32] = {0}; unsigned a = 0, b = 0;
+    if (sscanf(line, "%23s", cmd) != 1) continue;
+    if (!strcmp(cmd, "quit") || !strcmp(cmd, "q")) return -1;
+    else if (!strcmp(cmd, "run") && sscanf(line, "%*s %u", &a) == 1) return (long)a;
+    else if (!strcmp(cmd, "r") && sscanf(line, "%*s %x %u", &a, &b) >= 1) {
+      if (!b) b = 16; fprintf(stderr, "[repl] %08X:", a);
+      for (unsigned i = 0; i < b && i < 256; i++) fprintf(stderr, " %02X", mem_r8(a + i)); fprintf(stderr, "\n");
+    } else if (!strcmp(cmd, "rw") && sscanf(line, "%*s %x %u", &a, &b) >= 1) {
+      if (!b) b = 8; fprintf(stderr, "[repl] %08X:", a);
+      for (unsigned i = 0; i < b && i < 64; i++) fprintf(stderr, " %08X", mem_r32(a + i * 4)); fprintf(stderr, "\n");
+    } else if (!strcmp(cmd, "w") && sscanf(line, "%*s %x %x", &a, &b) == 2) { mem_w32(a, b); fprintf(stderr, "[repl] ok\n"); }
+    else if (!strcmp(cmd, "w8") && sscanf(line, "%*s %x %x", &a, &b) == 2) { mem_w8(a, (uint8_t)b); fprintf(stderr, "[repl] ok\n"); }
+    else if (!strcmp(cmd, "watch") && sscanf(line, "%*s %x %x", &a, &b) == 2) mem_set_watch(a, b);
+    else if (!strcmp(cmd, "unwatch")) { mem_set_watch(0, 0); fprintf(stderr, "[repl] unwatch\n"); }
+    else if (!strcmp(cmd, "hits")) fprintf(stderr, "[repl] watch hits=%d\n", mem_watch_hits());
+    else if (!strcmp(cmd, "press") && sscanf(line, "%*s %31s", arg) == 1)   { held &= ~repl_btn(arg); pad_repl_hold(held); fprintf(stderr, "[repl] held=%04X\n", held); }
+    else if (!strcmp(cmd, "release") && sscanf(line, "%*s %31s", arg) == 1) { held |= repl_btn(arg);  pad_repl_hold(held); fprintf(stderr, "[repl] held=%04X\n", held); }
+    else if (!strcmp(cmd, "tap") && sscanf(line, "%*s %31s %u", arg, &a) >= 1) { if (!a) a = 4; pad_repl_tap((uint16_t)(0xFFFF & ~repl_btn(arg)), (int)a); fprintf(stderr, "[repl] tap %s %u\n", arg, a); }
+    else if (!strcmp(cmd, "regs")) { for (int i = 0; i < 32; i++) { fprintf(stderr, " r%-2d=%08X", i, c->r[i]); if ((i & 3) == 3) fprintf(stderr, "\n"); } fprintf(stderr, " hi=%08X lo=%08X\n", c->hi, c->lo); }
+    else if (!strcmp(cmd, "seq")) fprintf(stderr, "[repl] seq open=%d playmask=%04X tickmode=%d seqfn=%08X stage=%08X\n",
+                                          (int16_t)mem_r16(0x801054B0), mem_r32(0x80104C28) & 0xFFFF, mem_r8(0x800AC424), mem_r32(0x800AC42C), mem_r32(0x801fe00c));
+    else fprintf(stderr, "[repl] ? %s\n", cmd);
+    fflush(stderr);
+  }
+  return -1;  // EOF
+}
+
 static void ov_game_main(R3000* c) {
   fprintf(stderr, "[native_boot] FUN_80050b08 override: running init prefix\n");
 
@@ -165,15 +218,25 @@ static void ov_game_main(R3000* c) {
   // Frame budget: an explicit PSXPORT_NATIVE_FRAMES always wins (headless tests). Otherwise, when
   // a window is up this is the real interactive game loop — run until the user closes the window
   // (SDL_QUIT -> exit(0) in present_window); headless with no cap defaults to 120 (CI/smoke).
-  uint32_t nframes = 0;   // 0 == run until window close
+  uint32_t nframes = 0;   // 0 == run until window close / REPL quit
   const char* nf = getenv("PSXPORT_NATIVE_FRAMES");
-  if (nf) nframes = (uint32_t)strtoul(nf, 0, 0);
+  int repl_mode = getenv("PSXPORT_REPL") != 0;
+  if (repl_mode) nframes = 0;                       // REPL drives frame count via `run N`
+  else if (nf) nframes = (uint32_t)strtoul(nf, 0, 0);
   else if (!getenv("PSXPORT_GPU_WINDOW")) nframes = 120;
   fprintf(stderr, "[native_boot] entering native frame loop (%s)\n",
           nframes ? "capped" : "interactive (until window close)");
   void hle_deliver_event(uint32_t ev_class, uint32_t spec);
   void pad_service_frame(void);
+  long repl_budget = 0;   // frames remaining in the current REPL `run N`
   for (uint32_t f = 0; nframes == 0 || f < nframes; f++) {
+    // REPL: when the run-budget is exhausted, block reading stdin commands until a `run N` refills
+    // it (immediate commands — r/w/watch/input/regs/seq — execute between frames). Quit/EOF breaks.
+    if (repl_mode) {
+      while (repl_budget <= 0) { repl_budget = native_repl_read(c, f); if (repl_budget < 0) break; }
+      if (repl_budget < 0) break;
+      repl_budget--;
+    }
     // TRANSPLANT harness (PSXPORT_TRANSPLANT="frame:ramfile:vramfile"): at logic frame `frame`,
     // overwrite our RAM (and VRAM if given) with the oracle's CLEAN green-field dump, then let the
     // frame loop CONTINUE. Tests the accumulation hypothesis directly: if our per-frame logic is
