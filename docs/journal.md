@@ -39,6 +39,19 @@ HLE the game relies on for memory/texture management). This is upstream of the G
 gpu_native.c by later-55/57) so the standalone differ links again. `tools/gpu_differ/build.sh` now
 builds clean.
 
+### Refinement (user ground-truth, 2026-06-15 — corrects "starts clean")
+The gameplay demo is **corrupt from its FIRST frame** (f3345 already striped/garbled/black-block), not
+"starts clean then degrades" — it's corrupt the instant gameplay textures come into use, then worsens.
+Dividing line confirmed by capture: **SCEA screen, character close-up cutscenes, and the TOMBA 2 title
+all render CLEAN**; only the **3D gameplay demos** corrupt (green-field AND dungeon both corrupt from
+their first frames — `scratch/logs/transition.png` shows clean title f4150–4400 → already-corrupt
+dungeon f4450+). User also reports the corruption hits **everything roughly together** (player +
+terrain + sprites), not one sprite-load path first ⟹ **wholesale** corruption of a shared
+texture/VRAM region, not a single sprite pipeline. Clean 2D screens use big flat sprites / few
+textures; corrupt scenes are the 3D gameplay path (many textured polys + streamed sprite uploads),
+which runs largely from the recompiled **DEMO.BIN/GAME.BIN overlays** — a prime suspect (overlay
+recompilation or the gameplay texture-upload path). Whether corruption resets on scene load = TBD.
+
 ### Next (root cause — NOT yet found)
 Need a **differential RAM trace** vs the oracle to find the FIRST divergence (frame + address), then
 map to the mistranslated instruction / missing HLE. No lockstep recomp-vs-oracle RAM harness exists
