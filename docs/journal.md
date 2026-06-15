@@ -1,5 +1,40 @@
 # Debug / progress journal
 
+## 2026-06-15 (later 67) — ROOT CAUSE: the correct atlas (LBA 2020) is LOADED but NEVER UNPACKED. Our texpages keep a PRIOR area's atlas. Load→unpack streaming desync (synchronous native CD, missing async completion trigger).
+Nailed it (continuing later-66). The oracle's green-field atlas decompresses from **disc LBA 2021**
+(discscan on oracle_ram_7000 @0x18A800 = 100% consecutive from LBA 2021; i.e. ov_loadfile of LBA 2020
+table + 2021 data). We DO load LBA 2020 (cd.log: "loadfile 448512 B @ LBA 2020 -> 0x8018A000").
+
+### The smoking gun (one run, CD_VERBOSE + UNPACKLOG + UPLOADLOG)
+Across the WHOLE attract run there are exactly **two** atlas (count=10) unpacks, both from the WRONG
+source, and the atlas texpages are uploaded exactly twice:
+- LBA 6625 → unpack → upload (320,0) 192x256  (f2590)
+- LBA 6774 → unpack → upload (576,0) 256x256  (f3054)
+- **LBA 2020 (the correct atlas) is loaded (line ~2421) and then NO count=10 unpack ever follows it.**
+So our VRAM atlas at (320,0)/(576,0) holds the decompressed LBA 6625/6774 textures (a PRIOR area),
+never the hut atlas (LBA 2020). The oracle unpacks LBA 2020 by its frame 7000; we never do. Our
+logic-frame 1681 ≈ oracle 7000 (same area, level data identical), so we SHOULD have unpacked it by
+then. Same disc data (our LBA-2020 load == oracle's LBA-2021 input), same decompressor ⟹ if we
+unpacked it we'd get the clean atlas.
+
+### Root cause class: CD-streaming / load→unpack sequencing desync
+The atlas unpack is triggered by game logic AFTER the load completes. Our native CD is SYNCHRONOUS
+(ov_loadfile / ov_cd_read complete instantly) and we deliver NO preemptive IRQ; the real game streams
+asynchronously and sequences load→unpack via completion callbacks / a state machine (cf. the CD
+streaming contract notes, FUN_8001d7c4 per-sector IRQ callback that our no-IRQ runtime never fires).
+The instant-vs-async timing desyncs that state machine, so the geometry advances to the hut scene
+while its atlas is loaded-but-unpacked (or the unpack trigger is missed entirely). This is consistent
+with the user's "accumulates as you play" — each new area whose atlas-unpack trigger is missed keeps a
+stale/wrong atlas; effect sprites etc. degrade as more areas stream.
+
+### NEXT (the fix)
+Find what triggers the count=10 atlas unpack (FUN_80044E84) after a loadfile in the real game — the
+event/callback/flag the game polls — and ensure it fires in our port when the corresponding load
+completes (deliver the completion event, or drive the unpack from the load-complete path). Verify:
+after the fix, a count=10 unpack from LBA 2020 should appear and upload to (320,0)/(576,0), and the
+green-field render should match the oracle WITHOUT any transplant. Trace via the loadfile→unpack
+caller chain (who calls FUN_80044E84, gated on which flag) and the LBA-2020 loadfile's caller.
+
 ## 2026-06-15 (later 66) — corruption traced to the ATLAS LOAD: decompressor input is the WRONG DATA for the scene, though our CD read is faithful-to-disc (consecutive 100%). The atlas load targets the wrong disc location.
 Continuing later-65 (corruption = VRAM atlas content). Traced the atlas pipeline backward.
 
