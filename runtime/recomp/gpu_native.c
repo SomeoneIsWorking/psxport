@@ -566,7 +566,10 @@ void gpu_gp1(uint32_t w) {
 static SDL_Window* s_win; static SDL_Renderer* s_ren; static SDL_Texture* s_tex;
 static int s_tex_w, s_tex_h, s_win_on = -1;
 static void present_window(void) {
-  if (s_win_on < 0) s_win_on = getenv("PSXPORT_GPU_WINDOW") ? 1 : 0;
+  // Check the VALUE, not mere presence: run.sh always SETS PSXPORT_GPU_WINDOW (to "0" headless),
+  // and getenv("...")!=NULL is truthy for "0" too — so a presence test opened a window even with
+  // PSXPORT_NOWINDOW=1 (the "still running headed" bug). Match gpu_pace_frame: atoi(w)!=0.
+  if (s_win_on < 0) { const char* w = getenv("PSXPORT_GPU_WINDOW"); s_win_on = (w && atoi(w) != 0) ? 1 : 0; }
   if (!s_win_on) return;
   if (!s_win) {
     SDL_Init(SDL_INIT_VIDEO);

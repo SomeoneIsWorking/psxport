@@ -22,6 +22,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <setjmp.h>
+#ifdef PSXPORT_SDL
+#include <SDL.h>   // SDL_GetTicks/SDL_Delay — pace the SCEA stub to real 60 Hz when windowed
+#endif
 
 // The boot stub is recompiled as its OWN module (emit.py --stub: STUB_NAMES) with distinct
 // dispatch/override symbols, since it overlaps MAIN.EXE's address space. stub_dispatch runs a
@@ -117,18 +120,49 @@ static uint32_t g_stub_vblank;
 static void ov_stub_vsync(R3000* c) {
   int32_t mode = (int32_t)c->r[A0_];
   if (getenv("PSXPORT_VSYNCLOG")) fprintf(stderr, "[vsync] mode=%d count=%u\n", mode, g_stub_vblank);
-  g_stub_vblank += (mode > 0) ? (uint32_t)mode : 1u;   // every call ticks >=1 frame
+  void watchdog_pet(void);
   hle_deliver_event(0xF2000003u, 0xFFFFFFFFu);         // VBlank event classes (RCnt3 / libapi)
   hle_deliver_event(0xF0000001u, 0xFFFFFFFFu);
+
   // PRESENT only on a real frame-wait (mode>=0), NOT on busy-poll queries (VSync(-1)). The SCEA
   // stub's per-frame body is: VSync(0) [frame boundary] -> clear framebuffer -> busy-poll VSync(-1)
   // (timing/CD) -> draw -> loop. Presenting on the polls flashes the just-cleared (black) buffer
-  // BETWEEN complete frames — the unnatural SCEA blink (journal later-46). Real HW refreshes the
-  // display only at the VBlank frame boundary (VSync(0)), never mid-draw, so the cleared state is
-  // never shown. The count still advances on every call so the busy-poll loops still terminate;
-  // poll calls just pet the watchdog instead of presenting.
-  if (mode >= 0) gpu_present();                         // show the completed frame (pets watchdog)
-  else { void watchdog_pet(void); watchdog_pet(); }
+  // between complete frames (the SCEA blink, journal later-46). Real HW refreshes the display only
+  // at the VBlank frame boundary, never mid-draw.
+  static int windowed = -1;
+  if (windowed < 0) {
+    const char* w = getenv("PSXPORT_GPU_WINDOW");      // run.sh sets "0" headless, "1" windowed
+    windowed = (w && atoi(w) != 0 && !getenv("PSXPORT_NOPACE")) ? 1 : 0;
+  }
+#ifdef PSXPORT_SDL
+  if (windowed) {
+    // Real-vblank model (matches hardware): the VSync count advances at 60 Hz of REAL time via the
+    // VBlank IRQ, independent of how often the stub polls. Deriving the count from a per-call
+    // increment (headless path below) inflates it by the busy-poll rate, so SCEA's count-timed fades
+    // and holds run far too fast (journal later-48). Here the count tracks elapsed real time, and a
+    // frame-wait sleeps to the next 60 Hz boundary before presenting — authentic fade/hold speed.
+    static double t0 = -1, next = 0;
+    double now = (double)SDL_GetTicks();
+    if (t0 < 0) { t0 = now; next = now; }
+    if (mode >= 0) {                                   // frame-wait: pace to the vblank, then present
+      int frames = (mode > 0) ? mode : 1;
+      next += frames * 1000.0 / 60.0;
+      if (next > now) { SDL_Delay((unsigned)(next - now)); now = (double)SDL_GetTicks(); }
+      else if (now - next > 1000.0) next = now;        // resync after a long stall (no debt)
+      gpu_present();                                   // show the completed frame (pets watchdog)
+    } else {
+      watchdog_pet();                                  // poll: no present, no artificial count tick
+    }
+    g_stub_vblank = (uint32_t)((now - t0) * 60.0 / 1000.0);   // count == real vblanks elapsed
+    mem_w32(STUB_VBLANK_COUNT, g_stub_vblank);
+    c->r[V0_] = g_stub_vblank;
+    return;
+  }
+#endif
+  // Headless / unpaced: advance per call (fast) so tests run at full speed; present on frame-waits.
+  g_stub_vblank += (mode > 0) ? (uint32_t)mode : 1u;
+  if (mode >= 0) gpu_present();
+  else watchdog_pet();
   mem_w32(STUB_VBLANK_COUNT, g_stub_vblank);
   c->r[V0_] = g_stub_vblank;
 }

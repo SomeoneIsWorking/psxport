@@ -1,5 +1,25 @@
 # Debug / progress journal
 
+## 2026-06-15 (later 48) — SCEA fade pacing (real-vblank model) + the "headless still headed" bug
+1. **PSXPORT_NOWINDOW didn't actually go headless.** present_window() gated the SDL window on mere
+   getenv PRESENCE: `s_win_on = getenv("PSXPORT_GPU_WINDOW") ? 1 : 0`. But run.sh ALWAYS sets that
+   var (to "0" when headless), and "0" is a non-NULL string → truthy → a window opened even under
+   PSXPORT_NOWINDOW=1. Fix (gpu_native.c): check the VALUE (`atoi(w)!=0`), matching gpu_pace_frame.
+   Now headless runs open no window / no SDL video init.
+2. **SCEA fades/holds ran far too fast (headed).** The stub times its fades by the VBlank count
+   (DAT_800267B4 / VSync return). ov_stub_vsync advanced that count by 1 per CALL, but the stub
+   busy-polls VSync(-1) many times per frame, so the count raced ahead at the poll rate and
+   count-timed fades blew through in a few real frames. Fix (native_stub.c): when windowed, use a
+   real-vblank model — the count = elapsed real time × 60/1000 (exactly like the hardware VBlank IRQ,
+   independent of poll rate), and a frame-wait (mode>=0) sleeps to the next 60 Hz boundary before
+   presenting. Headless keeps the fast per-call path (tests stay fast). Verified headless: no
+   regression (305 SCEA frames, smooth 57-step fade-in, reaches DEMO). The real-time fade SPEED is a
+   windowed-only behavior — needs on-device confirmation (can't be timed headless).
+NEXT: issue still open — menu-load flicker after skipping OP. Tooling (seq_check dump) shows the
+DEMO menu-load presents ALTERNATING black/content frames (~f347-355: black,52,black,52,…) =
+double-buffer flicker in the native game loop (ov_frame_update flips to an undrawn buffer during the
+load). Same CLASS as the SCEA single-buffer blink (later-46) but in the GAME loop; fix there next.
+
 ## 2026-06-15 (later 47) — WIRED the intro FMVs: SCEA→Woopee→OP→Menu now plays
 Next intro issue (user): FMVs didn't play — boot went SCEA→Menu instead of SCEA→Woopee→OP→Menu.
 Tooling diagnosis: a headless stage-log run showed "time out in strNext()" in the DEMO stage — the
