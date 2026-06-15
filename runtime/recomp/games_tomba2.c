@@ -144,12 +144,24 @@ static void ov_unpack_group(R3000* c) {
   const int32_t count = (int32_t)mem_r32(table);
   uint32_t entry = table + 4;            // first 12-byte descriptor entry
   uint32_t src = table + 0x800;          // packed source data follows the table
+  int dbg = getenv("PSXPORT_UNPACKLOG") != 0;
+  if (dbg) fprintf(stderr, "[unpack] table=0x%08X count=%d src0=0x%08X\n", table, count, src);
+  // PSXPORT_UNPACKDUMP=dir — dump the LIVE compressed input (table + 0x30000 bytes) the moment the
+  // unpacker reads it, sequence-numbered, so it can be checked against the disc / oracle exactly.
+  { const char* dd = getenv("PSXPORT_UNPACKDUMP");
+    if (dd) { static int seq = 0; char p[300]; snprintf(p, sizeof p, "%s/unpack_%03d_c%d.bin", dd, seq++, count);
+      FILE* uf = fopen(p, "wb"); if (uf) { extern uint8_t g_ram[];
+        fwrite(&g_ram[table & 0x1FFFFF], 1, 0x30000, uf); fclose(uf);
+        fprintf(stderr, "[unpack] dumped live input -> %s (table=0x%08X count=%d)\n", p, table, count); } } }
   for (int32_t i = 0; i < count; i++) {
     const uint32_t desc   = entry;
     const int32_t  stride = (int16_t)mem_r16(desc + 4);
     const int32_t  field  = (int16_t)mem_r16(desc + 6);
     const uint32_t srclen = mem_r32(desc + 8);
     const uint32_t dst    = anchor - (uint32_t)(2 * stride * field);
+    if (dbg) fprintf(stderr, "[unpack]  e%d dst=(%d,%d) %dx%d src=0x%08X len=%u srcbytes:"
+                     " %02X %02X %02X %02X\n", i, (int16_t)mem_r16(desc), (int16_t)mem_r16(desc+2),
+                     stride, field, src, srclen, mem_r8(src), mem_r8(src+1), mem_r8(src+2), mem_r8(src+3));
     lz_decompress(desc, dst, src, srclen);            // native decompress into transient scratch
     src   += srclen;
     entry += 12;

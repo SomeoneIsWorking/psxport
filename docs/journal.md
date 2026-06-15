@@ -1,5 +1,43 @@
 # Debug / progress journal
 
+## 2026-06-15 (later 66) — corruption traced to the ATLAS LOAD: decompressor input is the WRONG DATA for the scene, though our CD read is faithful-to-disc (consecutive 100%). The atlas load targets the wrong disc location.
+Continuing later-65 (corruption = VRAM atlas content). Traced the atlas pipeline backward.
+
+### The atlas is decompressed from 0x8018A000 by the unpacker (FUN_80044E84)
+PSXPORT_UNPACKLOG/UNPACKDUMP (games_tomba2.c): the green-field atlas is a count=10 unpack group at
+table 0x8018A000, data at +0x800, decompressed to the 0x1Exxxx scratch then uploaded to the texpages
+(576,0 256x256, 320,0 192x256, …). 0x8018A000 is REUSED scratch (5 unpacks/run: c2,c10,c2,c10,c2,
+filled by ov_loadfile from LBAs 6613/6625/6717/6774/2020 — so static LBA compares there are unreliable;
+capture LIVE in the override instead).
+
+### The decompressor INPUT is wrong, but our READ is faithful to the disc
+- Same-scene RAM compare (ours logic-frame 1681 vs oracle frame 7000, same area — level data
+  0x158000/0x182000 == oracle 100%): the compressed-atlas region **0x18A000 is only 52.9% == oracle.**
+- BUT our LIVE unpacker input (captured in the override, scratch/raw/unpackdump/unpack_*_c10.bin)
+  matches the disc **CONSECUTIVELY 99.99%/100%** (data@+0x800 == disc LBA 6626 / 6775; tool
+  scratch/bin/discscan: finds the best first-sector LBA then measures consecutive match). ⟹ our
+  ov_loadfile reads exactly the disc's consecutive bytes — **the CD read is faithful** (re-confirms
+  later-60; submode 0x08 is just this disc's data convention, NOT XA interleave — the verified-good
+  level load at LBA 1908 is also submode 0x08).
+
+### So we load faithful-but-WRONG data
+The data at LBA 6625/6775 is read correctly but it is NOT the atlas this scene needs: the oracle's
+atlas (oracle_vram_7000) renders OUR geometry CLEANLY (later-65 VRAM-only transplant), and we are in
+the SAME area (level data identical), so the correct atlas for our scene == the oracle's. We loaded a
+different one. ⟹ the bug is the **LBA/file our atlas loadfile targets** (FUN_8001db8c a1=lba) — wrong
+disc location for this area's atlas — OR a demo/sequence divergence selecting a different atlas. NOTE
+the dynamic game-state region (0x800C0000+) diverges from the oracle (different demo MOMENT, same
+area), so a sequence/timing divergence that changes WHICH atlas is live is plausible and must be
+checked.
+
+### NEXT
+Instrument the oracle's ov_loadfile-equivalent (FUN_8001db8c @0x8001db8c) to log dest/lba/size, run to
+the green-field hut scene, and diff the load sequence vs ours (scratch/logs/cd.log). Find where our
+atlas LBA (or the area-load order) first diverges from the oracle's, then trace WHY (the LBA is
+computed by interpreted game logic from a directory/manifest — a wrong directory entry, wrong file
+handle, or an earlier state divergence). Tools added: PSXPORT_UNPACKLOG/UNPACKDUMP (games_tomba2.c),
+scratch/bin/discscan (find a buffer's disc LBA + consecutive match).
+
 ## 2026-06-15 (later 65) — CORRUPTION ISOLATED TO VRAM TEXTURE CONTENT via a state-transplant harness. RAM + per-frame logic + per-frame CLUTs are all CORRECT; the scene-load atlas textures baked into VRAM are wrong.
 Built a transplant harness (PSXPORT_TRANSPLANT="frame:ramfile:vramfile", native_boot.c +
 gpu_native_load_vram) that drops the ORACLE's clean green-field state into our RUNNING port at a
