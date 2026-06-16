@@ -34,6 +34,7 @@ static inline uint16_t* fb(int x, int y) { return &s_fb_base[(y & 511) * VRAM_W 
 static int s_da_x0, s_da_y0, s_da_x1 = 1023, s_da_y1 = 511;  // draw clip area
 static int s_off_x, s_off_y;                                 // draw offset
 int gpu_vk_enabled(void);                                    // gpu_vk.c (declared early for the gp0 tee)
+void gpu_vk_dirty(int, int, int, int);                       // mark a SW-written VRAM region to mirror to VK
 static int s_tp_x, s_tp_y;        // texpage base (64-px / 256-line units -> *64 / *256)
 static int s_reddbg;              // PSXPORT_REDDBG: dark-red output anomaly probe
 static int s_tp_mode;             // texture color mode: 0=4bpp,1=8bpp,2=15bpp
@@ -494,30 +495,28 @@ static void gp0_exec(void) {
       wide60_cap_poly(op, nv, xs, ys, us, vs, rs, gs, bs, s_off_x, s_off_y,
                       s_tp_x, s_tp_y, s_tp_mode, s_tp_blend, s_tp_dither, s_clut_x, s_clut_y);
     }
-    // VK backend (M2b): tee UNTEXTURED polys (flat/gouraud) to the GPU rasterizer, in absolute VRAM
-    // coords (post draw-offset, matching the SW tri()). Textured/semi prims come in M3.
-    if (gpu_vk_enabled() && !textured && !semi) {
-      void gpu_vk_draw_tri(int,int,int,int,int, int,int,int,int,int, int,int,int,int,int);
-      gpu_vk_draw_tri(v[0].x+s_off_x, v[0].y+s_off_y, v[0].r, v[0].g, v[0].b,
-                      v[1].x+s_off_x, v[1].y+s_off_y, v[1].r, v[1].g, v[1].b,
-                      v[2].x+s_off_x, v[2].y+s_off_y, v[2].r, v[2].g, v[2].b);
-      if (nv == 4) gpu_vk_draw_tri(v[1].x+s_off_x, v[1].y+s_off_y, v[1].r, v[1].g, v[1].b,
-                                   v[2].x+s_off_x, v[2].y+s_off_y, v[2].r, v[2].g, v[2].b,
-                                   v[3].x+s_off_x, v[3].y+s_off_y, v[3].r, v[3].g, v[3].b);
-    }
-    // VK backend (M3): tee TEXTURED opaque polys -> GPU textured rasterizer (CLUT-in-shader).
-    if (gpu_vk_enabled() && textured && !semi) {
+    // VK backend (M5): tee polys to the GPU rasterizer in absolute VRAM coords. Opaque textured/
+    // untextured -> opaque batch; semi -> semi batch (mode 3 = untextured flat). VK owns these now.
+    if (gpu_vk_enabled()) {
       void gpu_vk_draw_tritri(const int*,const int*,const int*,const int*,const unsigned char*,
-                              const unsigned char*,const unsigned char*,int,int,int,int,int,int,
-                              int,int,int,int,int,int,int,int);
+                              const unsigned char*,const unsigned char*,int,int,int,int,int,int,int,int,int,int,int,int,int,int);
+      void gpu_vk_draw_semi(const int*,const int*,const int*,const int*,const unsigned char*,
+                            const unsigned char*,const unsigned char*,int,int,int,int,int,int,int,int,int,int,int,int,int,int,int);
       int xs[4], ys[4], us[4], vs[4]; unsigned char rs[4], gs[4], bs[4];
       for (int i = 0; i < nv; i++) { xs[i]=v[i].x+s_off_x; ys[i]=v[i].y+s_off_y; us[i]=v[i].u; vs[i]=v[i].v;
                                      rs[i]=v[i].r; gs[i]=v[i].g; bs[i]=v[i].b; }
-      gpu_vk_draw_tritri(xs, ys, us, vs, rs, gs, bs, s_tp_x, s_tp_y, s_tp_mode, raw?1:0, s_clut_x, s_clut_y,
-                         s_tw_mx, s_tw_my, s_tw_ox, s_tw_oy, s_da_x0, s_da_y0, s_da_x1, s_da_y1);
-      if (nv == 4) gpu_vk_draw_tritri(&xs[1], &ys[1], &us[1], &vs[1], &rs[1], &gs[1], &bs[1],
-                                      s_tp_x, s_tp_y, s_tp_mode, raw?1:0, s_clut_x, s_clut_y,
-                                      s_tw_mx, s_tw_my, s_tw_ox, s_tw_oy, s_da_x0, s_da_y0, s_da_x1, s_da_y1);
+      int mode = textured ? s_tp_mode : 3, rw = raw ? 1 : 0;
+      if (semi) {
+        gpu_vk_draw_semi(xs, ys, us, vs, rs, gs, bs, s_tp_x, s_tp_y, mode, rw, s_clut_x, s_clut_y,
+                         s_tw_mx, s_tw_my, s_tw_ox, s_tw_oy, s_da_x0, s_da_y0, s_da_x1, s_da_y1, s_tp_blend);
+        if (nv == 4) gpu_vk_draw_semi(&xs[1], &ys[1], &us[1], &vs[1], &rs[1], &gs[1], &bs[1], s_tp_x, s_tp_y, mode, rw,
+                         s_clut_x, s_clut_y, s_tw_mx, s_tw_my, s_tw_ox, s_tw_oy, s_da_x0, s_da_y0, s_da_x1, s_da_y1, s_tp_blend);
+      } else {
+        gpu_vk_draw_tritri(xs, ys, us, vs, rs, gs, bs, s_tp_x, s_tp_y, mode, rw, s_clut_x, s_clut_y,
+                           s_tw_mx, s_tw_my, s_tw_ox, s_tw_oy, s_da_x0, s_da_y0, s_da_x1, s_da_y1);
+        if (nv == 4) gpu_vk_draw_tritri(&xs[1], &ys[1], &us[1], &vs[1], &rs[1], &gs[1], &bs[1], s_tp_x, s_tp_y, mode, rw,
+                           s_clut_x, s_clut_y, s_tw_mx, s_tw_my, s_tw_ox, s_tw_oy, s_da_x0, s_da_y0, s_da_x1, s_da_y1);
+      }
     }
     // PSXPORT_POLYDUMP=frame — log every poly at `frame` (our port side, to compare vs oracle
     // polywatch). Finds the garbage-block prims in the GAME level.
@@ -552,8 +551,10 @@ static void gp0_exec(void) {
     }
     prov_begin(op, textured ? 1 : 0, semi, v[0].r, v[0].g, v[0].b,
                v[0].x + s_off_x, v[0].y + s_off_y, v[0].u, v[0].v);
-    tri(v[0], v[1], v[2], textured, shade, semi, raw);
-    if (quad) tri(v[1], v[2], v[3], textured, shade, semi, raw);
+    if (!gpu_vk_enabled()) {                  // VK owns poly raster now (tee'd above); SW does the rest
+      tri(v[0], v[1], v[2], textured, shade, semi, raw);
+      if (quad) tri(v[1], v[2], v[3], textured, shade, semi, raw);
+    }
     s_prims++;
   } else if (op >= 0x60 && op <= 0x7F) {     // rectangle / sprite
     int textured = op & 0x04, semi = (op & 0x02) ? 1 : 0, size = (op >> 3) & 3;
@@ -589,27 +590,28 @@ static void gp0_exec(void) {
     // bit0=1 -> raw texel; bit0=0 -> modulate by command color (beetle sprite decode table:
     // 0x64/0x66 = TM1 modulate, 0x65/0x67 = TM0 raw). Modulating unconditionally once wrongly
     // tinted raw 0x65 sprites (turned a blue item green).
-    raster_sprite(op, x, y, u0, v0, w, h, cr, cg, cb, textured, semi);
-    // VK backend (M4): tee opaque rects/sprites as two triangles (textured or solid).
-    if (gpu_vk_enabled() && !semi) {
+    if (!gpu_vk_enabled()) raster_sprite(op, x, y, u0, v0, w, h, cr, cg, cb, textured, semi);  // VK owns it (tee'd below)
+    // VK backend (M5): tee rects/sprites as two triangles (opaque or semi; mode 3 = untextured solid).
+    if (gpu_vk_enabled()) {
+      void gpu_vk_draw_tritri(const int*,const int*,const int*,const int*,const unsigned char*,
+                              const unsigned char*,const unsigned char*,int,int,int,int,int,int,int,int,int,int,int,int,int,int);
+      void gpu_vk_draw_semi(const int*,const int*,const int*,const int*,const unsigned char*,
+                            const unsigned char*,const unsigned char*,int,int,int,int,int,int,int,int,int,int,int,int,int,int,int);
       int X = x + s_off_x, Y = y + s_off_y;
       int qx[4] = { X, X+w, X, X+w }, qy[4] = { Y, Y, Y+h, Y+h };
-      if (textured) {
-        void gpu_vk_draw_tritri(const int*,const int*,const int*,const int*,const unsigned char*,
-                                const unsigned char*,const unsigned char*,int,int,int,int,int,int,
-                                int,int,int,int,int,int,int,int);
-        int qu[4] = { u0, u0+w, u0, u0+w }, qv[4] = { v0, v0, v0+h, v0+h };
-        unsigned char qr[4]={cr,cr,cr,cr}, qg[4]={cg,cg,cg,cg}, qb[4]={cb,cb,cb,cb};
-        int rw = op & 1;
-        gpu_vk_draw_tritri(qx, qy, qu, qv, qr, qg, qb, s_tp_x, s_tp_y, s_tp_mode, rw, s_clut_x, s_clut_y,
-                           s_tw_mx, s_tw_my, s_tw_ox, s_tw_oy, s_da_x0, s_da_y0, s_da_x1, s_da_y1);
-        gpu_vk_draw_tritri(&qx[1], &qy[1], &qu[1], &qv[1], &qr[1], &qg[1], &qb[1],
-                           s_tp_x, s_tp_y, s_tp_mode, rw, s_clut_x, s_clut_y,
-                           s_tw_mx, s_tw_my, s_tw_ox, s_tw_oy, s_da_x0, s_da_y0, s_da_x1, s_da_y1);
+      int qu[4] = { u0, u0+w, u0, u0+w }, qv[4] = { v0, v0, v0+h, v0+h };
+      unsigned char qr[4]={cr,cr,cr,cr}, qg[4]={cg,cg,cg,cg}, qb[4]={cb,cb,cb,cb};
+      int mode = textured ? s_tp_mode : 3, rw = op & 1;
+      if (semi) {
+        gpu_vk_draw_semi(qx, qy, qu, qv, qr, qg, qb, s_tp_x, s_tp_y, mode, rw, s_clut_x, s_clut_y,
+                         s_tw_mx, s_tw_my, s_tw_ox, s_tw_oy, s_da_x0, s_da_y0, s_da_x1, s_da_y1, s_tp_blend);
+        gpu_vk_draw_semi(&qx[1], &qy[1], &qu[1], &qv[1], &qr[1], &qg[1], &qb[1], s_tp_x, s_tp_y, mode, rw,
+                         s_clut_x, s_clut_y, s_tw_mx, s_tw_my, s_tw_ox, s_tw_oy, s_da_x0, s_da_y0, s_da_x1, s_da_y1, s_tp_blend);
       } else {
-        void gpu_vk_draw_tri(int,int,int,int,int, int,int,int,int,int, int,int,int,int,int);
-        gpu_vk_draw_tri(qx[0],qy[0],cr,cg,cb, qx[1],qy[1],cr,cg,cb, qx[2],qy[2],cr,cg,cb);
-        gpu_vk_draw_tri(qx[1],qy[1],cr,cg,cb, qx[2],qy[2],cr,cg,cb, qx[3],qy[3],cr,cg,cb);
+        gpu_vk_draw_tritri(qx, qy, qu, qv, qr, qg, qb, s_tp_x, s_tp_y, mode, rw, s_clut_x, s_clut_y,
+                           s_tw_mx, s_tw_my, s_tw_ox, s_tw_oy, s_da_x0, s_da_y0, s_da_x1, s_da_y1);
+        gpu_vk_draw_tritri(&qx[1], &qy[1], &qu[1], &qv[1], &qr[1], &qg[1], &qb[1], s_tp_x, s_tp_y, mode, rw,
+                           s_clut_x, s_clut_y, s_tw_mx, s_tw_my, s_tw_ox, s_tw_oy, s_da_x0, s_da_y0, s_da_x1, s_da_y1);
       }
     }
     s_prims++;
@@ -619,6 +621,7 @@ static void gp0_exec(void) {
     int x = xy & 0x3F0, y = (xy >> 16) & 0x1FF, w = ((wh & 0x3FF) + 0xF) & ~0xF, h = (wh >> 16) & 0x1FF;
     uint16_t col = to555(cr, cg, cb);
     for (int dy = 0; dy < h; dy++) for (int dx = 0; dx < w; dx++) *vram(x + dx, y + dy) = col;
+    if (gpu_vk_enabled()) gpu_vk_dirty(x, y, w, h);   // mirror fill to VK
   } else if (op >= 0x40 && op <= 0x5F) {     // line / poly-line (flat or gouraud)
     int semi = (op & 0x02) ? 1 : 0, gouraud = (op & 0x10) ? 1 : 0;
     // Collect the vertex list from s_fifo (cmd carries v0's colour). Single lines have 2 verts;
@@ -834,6 +837,7 @@ void gpu_gp0(uint32_t w) {
       s_xfer_w = ((s_fifo[2] & 0x3FF) ? (s_fifo[2] & 0x3FF) : 1024);
       s_xfer_h = (((s_fifo[2] >> 16) & 0x1FF) ? ((s_fifo[2] >> 16) & 0x1FF) : 512);
       s_xfer_px = 0; s_xfer = 1;
+      if (gpu_vk_enabled()) gpu_vk_dirty(s_xfer_x, s_xfer_y, s_xfer_w, s_xfer_h);   // mirror upload to VK
       clutwatch_xfer("A0", s_xfer_x, s_xfer_y, s_xfer_w, s_xfer_h);
       if (getenv("PSXPORT_UPLOADLOG")) {
         extern uint32_t g_dma_src;
@@ -853,6 +857,7 @@ void gpu_gp0(uint32_t w) {
       int dx = s_fifo[2] & 0x3FF, dy = (s_fifo[2] >> 16) & 0x1FF;
       int w2 = s_fifo[3] & 0x3FF, h2 = (s_fifo[3] >> 16) & 0x1FF;
       for (int y = 0; y < h2; y++) for (int x = 0; x < w2; x++) *vram(dx + x, dy + y) = *vram(sx + x, sy + y);
+      if (gpu_vk_enabled()) gpu_vk_dirty(dx, dy, w2, h2);   // mirror VRAM->VRAM copy to VK
       clutwatch_xfer("80copy", dx, dy, w2, h2);
       if (texwatch_overlap(dx, dy, w2, h2)) {
         fprintf(stderr, "[texwatch] f%d 80copy src=(%d,%d) dest=(%d,%d) %dx%d node=0x%08X words=%08X,%08X,%08X,%08X\n",
@@ -1134,6 +1139,7 @@ void gpu_present_ex(int do_blit) {
       fclose(f);
     }
   }
+  { void gpu_vk_dump(int,int,int,int,int); gpu_vk_dump(s_disp_x, s_disp_y, s_disp_w, s_disp_h, s_frame); }  // PSXPORT_VK_SHOT
   { void gpu_vk_frame_end(const uint16_t*, int); gpu_vk_frame_end(s_vram, s_frame); }  // VK: diff + batch reset
   s_frame++; s_prims = 0; s_gp0_words = 0; s_dma2 = 0;
 }
