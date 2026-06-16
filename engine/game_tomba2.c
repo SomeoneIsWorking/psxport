@@ -216,4 +216,6 @@ void games_tomba2_init(void) {
   wide60_init();
   if (g_wide60_on || getenv("PSXPORT_OBJLOG"))     // object-tag dispatcher (wide60 capture or objlog RE)
     rec_set_override(0x8007712Cu, ov_object_cull);
+  void engine_tomba2_init(void);
+  engine_tomba2_init();                            // native engine layer (Phase 1: object-list walk)
 }

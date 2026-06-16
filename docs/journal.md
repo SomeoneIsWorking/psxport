@@ -1,5 +1,18 @@
 # Debug / progress journal
 
+## 2026-06-16 (later-85) — Phase 1: native entity-list walk LANDED (FUN_8007a904), default-on, oracle bit-identical.
+First native engine-layer function: `engine/engine_tomba2.c` reimplements the per-frame object driver
+`FUN_8007a904` in native C — walks both entity lists (heads 0x800fb168/0x800f2624) via next@+0x24,
+clears render_flag@+1, calls each node's handler@+0x1c via `rec_dispatch` (gameplay STAYS PSX). `next`
+read before the handler runs (handler may unlink the node) and held in a host local. Second list head
+re-read fresh after list 1 (matches the recomp reload).
+- **Verified faithful:** VRAM bit-identical (1 MB `cmp` PASS) native-walk vs recomp body at frames 4000
+  AND 4720 of real gameplay; default(native)==recomp-fallback at f4000. Visits 110-157 nodes/frame.
+- **Default-on** (the native engine owns the walk); `PSXPORT_RECOMP_OBJWALK=1` restores the recomp body
+  as the oracle. `PSXPORT_ENGINE_DBG=1` logs node counts. This is the seam the user wanted: native
+  engine driving PSX gameplay handlers in guest memory. Next: snapshot per-node pos for interpolation
+  (the obj-pointer-keyed approach from later-84), then native cull/render submission.
+
 ## 2026-06-16 (later-84) — DIRECTION: Tomba2Engine native-engine port. Entity list RE'd + runtime-validated. Repo reorg + 72 GB cleanup.
 User redirected the project: reimplement Tomba!2's **engine layer** in native C (gameplay logic STAYS
 recompiled PSX in guest memory; the native engine reads entity structs from guest RAM). Repo reframed
