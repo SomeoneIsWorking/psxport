@@ -37,7 +37,34 @@ over"). The user nailed it: that voice line gates cutscene advancement.
   native engine's advancing read head) while streaming → the wait terminates, clips play once and the
   scene advances. Marked `// STOPGAP` in cd_override.c.
 
-### NEXT — port FUN_8001cfc8 to native C (engine→PC; gameplay stays on recomp)
+### later-78b — the dialog/voice chain RE'd (stopgap did NOT fix fisherman; user confirms)
+The voice line gates cutscene advancement via the **voice TASK**, not a flag:
+- Dialog/cutscene script (recomp, e.g. FUN_80043a40) plays a voice line by index via the engine
+  voice APIs: **FUN_8001d71c / FUN_8001d364 / FUN_8001d41c / FUN_8001d0e0** → all funnel to
+  **FUN_8001d2a8(chan, start_lba, end_lba, flags)** which sets task-2 fields + `DAT_800be0e4` and
+  (re)registers task slot 2 (FUN_80051f14 → entry FUN_8001cfc8, state=2). Clip channel/LBA come from
+  tables PTR_DAT_8001005c.. + `_DAT_1f800220/224`.
+- **The cutscene waits `while (DAT_801fe0e0 != 0)`** (ram_f1000_all.c:24287, 40208, 41958).
+  `DAT_801fe0e0` = task slot 2's state byte (0x801fe000 + 2*0x70). It advances ONLY when the voice
+  task ENDS (state→0). FUN_8001cf2c = stop voice (DAT_800be0e4=0 + CD pause).
+- Suspect (not yet reproduced headless): our native scheduler keys fresh-vs-resume on `g_task_started`,
+  NOT on the task ENTRY changing. FUN_80051f14 re-registers slot 2 (state=2, NEW entry) on each
+  voice-play; if the slot's previous coroutine context is still "started", the scheduler RESUMES the old
+  pc instead of entering the new entry → wrong clip / never-ends → cutscene stuck / "first note repeats".
+- REPRO GAP: fast-forward nav (tap x / tap start) manually advances the dialog and MASKS the bug; only 4
+  XA STARTs seen headless, clips progress. Need to reach the fisherman scream and let it AUTO-advance
+  (no input). Ask the user how to reliably trigger it, or compare vs oracle at that exact beat.
+
+### NEXT — port the voice-streaming engine to native C (engine→PC; gameplay/script stays on recomp)
+Port FUN_8001d2a8 (+ the by-index APIs) and FUN_8001cf2c to drive xa_stream DIRECTLY and DROP the task-2
+coroutine FUN_8001cfc8 entirely (no scheduler interaction → no re-register fragility, no GetlocL fake):
+- xa_stream: add play(chan,start,end,loop) [idempotent if same clip already active → no ring reset/
+  repeat] + busy() [1 while play_lba<=end & active].
+- Override FUN_8001d2a8 → xa_stream_play; FUN_8001cf2c → xa_stream_stop. DROP spawning task slot 2.
+- The cutscene polls `DAT_801fe0e0 != 0` (task-2 state): since we no longer run task 2, MAINTAIN that
+  byte natively = (xa_stream_busy() ? running : 0) so the existing recomp wait still works. (Set it on
+  play, clear it when the clip finishes.) Verify clip plays once + scene auto-advances; compare vs oracle.
+Old single-function plan (kept for reference):
 Per the locked architecture (engine on PC, gameplay on recomp/interp), the streaming reader is ENGINE
 and should be native, eliminating the faked GetlocL poll. Plan:
 1. Add a **native task-stepper** path to `native_scheduler_step` (native_boot.c): when a slot's entry
