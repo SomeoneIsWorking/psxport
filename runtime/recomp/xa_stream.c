@@ -41,6 +41,18 @@ static int      s_filter_set;             // a Setfilter was issued
 static uint8_t  s_filter_file, s_filter_chan;
 static int      s_dbg = -1;
 
+// ---- native voice/BGM clip state (xa_stream_play, the engine port of FUN_8001cfc8) ------
+// The game's voice/BGM streaming used a PSX task (slot 2, FUN_8001cfc8) that issued the CD
+// commands and busy-polled GetlocL for the clip end. We replace that whole task with a native
+// clip player: the engine voice APIs (FUN_8001d2a8) call xa_stream_play() directly, we own task
+// slot 2, and signal completion (clip head past end) so the cutscene's `while(DAT_801fe0e0!=0)`
+// wait advances. No PSX coroutine, no faked GetlocL.
+static int      s_owns_slot2;             // 1 while we're the native owner of voice task slot 2
+static uint32_t s_end_lba;                // clip end LBA (0 = open-ended, e.g. CdControl path)
+static uint32_t s_clip_start;             // clip start LBA (for idempotency + loop restart)
+static uint8_t  s_clip_chan;              // clip channel (for idempotency)
+static int      s_loop;                   // loop the clip when the head passes the end
+
 // Decoded-sample ring (interleaved S16 stereo) at the XA source rate. Sized well above one
 // sector (2016 frames) so we never overflow: we only decode when the ring is nearly drained.
 #define XA_RING_FRAMES 16384
@@ -92,7 +104,33 @@ void xa_stream_start(void) {
 void xa_stream_stop(void) {
   if (s_active && s_dbg) fprintf(stderr, "[xa] STOP @ LBA %u\n", s_lba);
   s_active = 0;
+  s_owns_slot2 = 0;
 }
+
+// ---- native voice/BGM clip player (engine port of the FUN_8001cfc8 task) ----------------
+// Play the XA clip on `chan` spanning [start..end] (CHD LBAs), looping if `loop`. Called by
+// the FUN_8001d2a8 override (which all the by-index voice APIs funnel through). Idempotent: a
+// repeat call for the clip already playing is a no-op, so the dialog re-issuing "play line N"
+// every frame can NOT reset the ring (that was the "first note repeats" bug). Marks us the
+// owner of task slot 2 so the native scheduler skips the (now unused) recomp coroutine and the
+// cutscene's `while (DAT_801fe0e0 != 0)` wait is driven by clip completion below.
+void xa_stream_play(uint8_t chan, uint32_t start, uint32_t end, int loop) {
+  if (s_dbg < 0) s_dbg = getenv("PSXPORT_XA_DBG") ? atoi(getenv("PSXPORT_XA_DBG")) : 0;
+  if (s_active && s_owns_slot2 && chan == s_clip_chan && start == s_clip_start) {
+    s_owns_slot2 = 1;                       // same clip already playing: idempotent
+    return;
+  }
+  s_filter_set = 1; s_filter_file = 1; s_filter_chan = chan;   // game always uses file 1
+  s_mode = 0xC8;                            // Speed | ADPCM | SF-filter (as the game sets)
+  s_lba = start; s_end_lba = end; s_clip_start = start; s_clip_chan = chan; s_loop = loop;
+  xa_reset_buffers();
+  s_active = 1; s_owns_slot2 = 1;
+  if (s_dbg) fprintf(stderr, "[xa] PLAY clip chan=%u [%u..%u] loop=%d\n", chan, start, end, loop);
+}
+
+int  xa_stream_owns_slot2(void) { return s_owns_slot2; }
+int  xa_stream_voice_busy(void) { return s_owns_slot2 && s_active; }
+void xa_stream_voice_release(void) { s_owns_slot2 = 0; }
 
 // Current drive-head LBA while streaming, for the engine's GetlocL position poll
 // (FUN_8001cfc8 waits for the head to pass the clip's end LBA to know the voice/BGM clip
@@ -107,6 +145,12 @@ int xa_stream_play_lba(uint32_t* lba) {
 // the LBA); stops the stream at end-of-file / non-Mode2 / read failure. Returns frames added.
 static int xa_decode_next_sector(void) {
   uint8_t raw[2352];
+  // Clip end: when the read head passes the clip's end LBA, the clip is done. Loop clips
+  // restart at the start; one-shot clips stop (which clears busy -> cutscene advances).
+  if (s_end_lba && s_lba > s_end_lba) {
+    if (s_loop) { s_lba = s_clip_start; s_hist[0][0]=s_hist[0][1]=s_hist[1][0]=s_hist[1][1]=0; }
+    else { if (s_dbg) fprintf(stderr, "[xa] clip done @ LBA %u (end %u)\n", s_lba, s_end_lba); s_active = 0; return 0; }
+  }
   for (int guard = 0; guard < 64; guard++) {     // bounded scan past any interleaved data sectors
     if (!disc_read_raw(s_lba, raw, 2352)) { s_active = 0; return 0; }
     uint8_t modebyte = raw[15];                   // CD header: 12 sync + min/sec/frame/MODE

@@ -29,6 +29,7 @@ void xa_stream_setloc(uint8_t amm, uint8_t ass, uint8_t asect);
 void xa_stream_start(void);
 void xa_stream_stop(void);
 int  xa_stream_play_lba(uint32_t* lba);
+void xa_stream_play(uint8_t chan, uint32_t start, uint32_t end, int loop);
 
 // 0x8008B2D8 FUN_8008b2d8: low-level CdInit -> success (drive ready), no HW handshake.
 static void ov_cdinit(R3000* c) { c->r[V0] = 0; }
@@ -107,15 +108,10 @@ static void ov_cd_cmd_stream(R3000* c) {
     // terminates — the voice/BGM line plays once, then the scene advances (and pauses us).
     // When not streaming this is a data seek/load: report the target sector (head "arrived",
     // no seek latency in our synchronous-CD model).
-    // STOPGAP: the proper fix is to PORT the engine streaming-reader FUN_8001cfc8 to native C
-    // (it's engine, not gameplay) as a native scheduler task-stepper driven directly by
-    // xa_stream — eliminating this faked GetlocL position poll entirely. See docs/journal.md
-    // (2026-06-16 later-78) for the full RE + plan. Kept until then so cutscenes advance.
-    uint32_t lba;
-    if (!xa_stream_play_lba(&lba)) {
-      uint32_t task = mem_r32(0x1f800138);
-      lba = mem_r32(task + 0x54);
-    }
+    // (XA voice/BGM no longer polls this — it's ported native via FUN_8001d2a8 -> xa_stream_play,
+    // see ov_voice_play. This path remains only for any data-streaming GetlocL.)
+    uint32_t task = mem_r32(0x1f800138);
+    uint32_t lba = mem_r32(task + 0x54);
     int t = (int)lba + 150;                     // FUN_8008a00c: LBA -> MSF (sector = lba+150)
     int frame = t % 75, rem = t / 75, sec = rem % 60, min = rem / 60;
     mem_w8(result + 0, (min % 10) + ((min / 10) << 4));   // BCD min
@@ -197,8 +193,32 @@ static void ov_cd_async_read(R3000* c) {
     fprintf(stderr, "[cd] async read %u words (%u B) @ LBA %u -> 0x%08X\n", words, bytes, lba, dest);
 }
 
+// 0x8001D2A8 FUN_8001d2a8(chan, start_lba, end_lba, flags): the engine's voice/BGM clip player.
+// It set task-2 fields + spawned the FUN_8001cfc8 streaming-reader coroutine (slot 2) which issued
+// the CD commands and busy-polled GetlocL for the clip end; the cutscene then waited
+// `while (DAT_801fe0e0 != 0)` (task-2 state). We PORT this engine subsystem to native: play the
+// clip directly via xa_stream (no PSX task, no CD-register poll) and own task slot 2 — the native
+// scheduler skips the unused coroutine and clears DAT_801fe0e0 when the clip finishes (native_boot).
+// All the by-index voice APIs (FUN_8001d71c/d364/d41c/d0e0) funnel through here, so this one
+// override covers them. flags bit0 = loop. (Bug it fixes: the recomp coroutine + our scheduler's
+// fresh-vs-resume handling mishandled re-registered clips, so a new line never started and the
+// cutscene hung on the old clip — the fisherman "AAAGH repeats / scene stuck".)
+static void ov_voice_play(R3000* c) {
+  uint8_t  chan  = (uint8_t)(c->r[A0] & 0xFF);
+  uint32_t start = c->r[A1], end = c->r[A2];
+  int      loop  = (int)(c->r[7] & 1);              // a3 = flags
+  xa_stream_play(chan, start, end, loop);
+  mem_w16(0x801fe0e0, 2);                            // task-2 state = running (cutscene wait gate)
+}
+// 0x8001CF2C FUN_8001cf2c: stop the current voice/BGM clip.
+static void ov_voice_stop(R3000* c) {
+  (void)c; xa_stream_stop(); mem_w16(0x801fe0e0, 0);
+}
+
 void cd_overrides_init(void) {
   if (getenv("PSXPORT_CD_VERBOSE")) g_cd_verbose = 1;
+  rec_set_override(0x8001D2A8u, ov_voice_play);      // engine voice/BGM clip player -> native xa_stream
+  rec_set_override(0x8001CF2Cu, ov_voice_stop);      // stop voice/BGM -> native
   rec_set_override(0x8001D940u, ov_cd_async_read);   // engine async streaming reader (task1)
   rec_set_override(0x8008B2D8u, ov_cdinit);
   rec_set_override(0x8001DB8Cu, ov_cd_loadfile);

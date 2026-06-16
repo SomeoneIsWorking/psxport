@@ -23,6 +23,13 @@
 
 void rec_coro_run(R3000* c, uint32_t pc); // flat coroutine interpreter (resumable, see interp.c)
 
+// Native XA voice/BGM clip player (xa_stream.c) owns task slot 2 — it replaced the FUN_8001cfc8
+// streaming-reader coroutine. The scheduler skips slot 2 while owned and reflects clip completion
+// into the task-2 state byte (the cutscene waits `while (DAT_801fe0e0 != 0)`).
+int  xa_stream_owns_slot2(void);
+int  xa_stream_voice_busy(void);
+void xa_stream_voice_release(void);
+
 // Call recompiled/overridden game fn `fn` with up to 3 args; runs to its `jr ra` and returns.
 static void rc0(R3000* c, uint32_t fn) { rec_dispatch(c, fn); }
 static void rc1(R3000* c, uint32_t fn, uint32_t a0) { c->r[4] = a0; rec_dispatch(c, fn); }
@@ -76,6 +83,15 @@ static void native_scheduler_step(R3000* c) {
   R3000 loop = *c;                            // frame-loop context (gp etc. for fresh tasks)
   for (int i = 0; i < 3; i++) {
     uint32_t base = TASKBASE + (uint32_t)i * TASKSTRIDE;
+    // Task slot 2 = XA voice/BGM. When the native clip player owns it, do NOT run the (now unused)
+    // FUN_8001cfc8 recomp coroutine; instead reflect clip state into the task-2 state byte so the
+    // cutscene's `while (DAT_801fe0e0 != 0)` wait advances exactly when the clip finishes.
+    if (i == 2 && xa_stream_owns_slot2()) {
+      if (xa_stream_voice_busy()) mem_w16(base, 2);     // still playing -> stay "running"
+      else { mem_w16(base, 0); xa_stream_voice_release(); }  // clip done -> free -> cutscene advances
+      g_task_started[2] = 0;
+      continue;
+    }
     uint32_t st = mem_r16(base);
     if (st == 0) { g_task_started[i] = 0; continue; }   // free
     uint32_t resume_pc;

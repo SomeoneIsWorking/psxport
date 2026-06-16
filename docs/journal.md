@@ -37,6 +37,26 @@ over"). The user nailed it: that voice line gates cutscene advancement.
   native engine's advancing read head) while streaming → the wait terminates, clips play once and the
   scene advances. Marked `// STOPGAP` in cd_override.c.
 
+### later-78c — FIXED: voice-streaming engine ported native (drop the FUN_8001cfc8 task)
+Implemented the native port. Verified interactively (drive like a player → prologue → hands-off):
+voice lines now ADVANCE one-by-one (chan22 clips 12771→15875+, each new line starts fresh) and
+task-2 state tracks clip completion, instead of sticking on the first clip forever.
+- ROOT CAUSE confirmed live: read task-2 fields mid-stall — they said clip = LBA 13923..14243 chan22,
+  but xa_stream was still playing the OLD clip (12771). The dialog re-registered slot 2 with a new
+  clip, but the native scheduler resumed the STALE FUN_8001cfc8 coroutine (it keys fresh-vs-resume on
+  g_task_started, not on the entry/re-register), so the new clip's Setloc/ReadS never fired → old
+  stream's head never reached the new end (14243) → `while (DAT_801fe0e0 != 0)` hung → "AAAGH repeats".
+- FIX (engine→PC): override `FUN_8001d2a8` (the voice/BGM clip player all by-index APIs funnel through)
+  → `xa_stream_play(chan,start,end,loop)` (idempotent per clip → re-issuing the same line can't reset
+  the ring); override `FUN_8001cf2c` → `xa_stream_stop`. We OWN task slot 2: `native_scheduler_step`
+  skips the now-unused FUN_8001cfc8 coroutine and writes the task-2 state byte (2 while
+  `xa_stream_voice_busy()`, 0 when the clip's head passes its end) so the cutscene wait advances.
+  Clip end/loop handled in xa_decode_next_sector. GetlocL stopgap reverted (that poll no longer runs).
+- Slot 2 is exclusively FUN_8001cfc8, registered ONLY by FUN_8001d2a8 (verified) → safe to own.
+- NOTE: XA is a single stream (one channel to SPU at a time) — BGM (chan4, loop) and voice (chan22)
+  can't sound simultaneously; the game interleaves them by switching the clip, which our single-ring
+  player matches. Pending user ear-check on the captured WAV (scratch/wav/fish_native_clean.wav).
+
 ### later-78b — the dialog/voice chain RE'd (stopgap did NOT fix fisherman; user confirms)
 The voice line gates cutscene advancement via the **voice TASK**, not a flag:
 - Dialog/cutscene script (recomp, e.g. FUN_80043a40) plays a voice line by index via the engine
