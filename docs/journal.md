@@ -3717,3 +3717,24 @@ a PC game, don't squish anything." Replaced with a genuinely native renderer-sid
   DEDICATED FB image (the cram-into-VRAM-rows trick caps FBW at 1024; the semi-blend frag samples one
   combined sampler for textures<512 AND the FB blend-dest, so a separate FB needs a 2nd sampler binding
   + frag change). (2) shaders/lighting — wants an RGBA8 FB + post passes (same dedicated-FB refactor).
+
+## 2026-06-17 (later-94) — MEMORY CARD now works (was hung on "Checking MEMORY CARD..."). PC-native, zero delay.
+User: "memory card doesn't work." Symptom (reproduced via tools/drive.py: title -> Load Game -> slot):
+the Load screen hung forever on "Checking MEMORY CARD...".
+- **Root cause 1 — card I/O primitives were UNIMPL in the HLE.** memcard.c set rec_set_override on BIOS
+  addresses 0x8009xxxx, but those addresses NEVER execute in this pure-HLE-BIOS build — the game's
+  statically-linked libcard/libmcrd calls the BIOS via the `li t0,0xB0; jr t0` trampoline, which funnels
+  to rec_dispatch_miss -> recomp_hle (hle.c). recomp_hle only handled B0:0x4A/0x4B; _card_read(B0:0x4E),
+  _card_write(B0:0x4F), _card_status(B0:0x5C), _card_info(B0:0x4C), _card_chan(B0:0x50), and the A0-table
+  _card_info(A0:0xAB)/_card_load(A0:0xAC) all fell through to "UNIMPL". Fix: `card_hle_a0`/`card_hle_b0`
+  in memcard.c, dispatched from the A0/B0 default cases in hle.c; they do SYNCHRONOUS host-file I/O
+  (card_read_frame/card_write_frame) = PC-native, zero delay. Dead rec_set_override calls removed.
+- **Root cause 2 — completion delivered to the WRONG event class.** libcard completion is event-based;
+  this HLE has no SIO IRQ, so the override must DeliverEvent the completion itself. Captured (PSXPORT_EV_LOG)
+  the game's "checking" loop: it TestEvents the **SwCARD class 0xF4000001** (NOT HwCARD 0xF0000011) every
+  frame for spec EvSpIOE(0x0004). `card_deliver_complete` now fires SwCARD+HwCARD EvSpIOE (NOT NEW/0x2000,
+  which would mean unformatted -> format prompt). hle_deliver_event only fires open+ENABLED matching slots.
+- **VERIFIED (drive.py):** Load -> "Select slot" (slot 1/2 detected) -> select slot 1 -> reads dir frame 63
+  -> **"No data for Tomba!2"** (correct for an empty card; was a hang). scratch/screenshots/card_final.png.
+  Card file = scratch/saves/tomba2.mcr (128 KB). OPEN: WRITE/save round-trip not yet tested end-to-end
+  (needs a save-point playthrough) — but it's the same now-proven completion path (B0:0x4F + SwCARD IOE).

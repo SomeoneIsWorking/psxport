@@ -160,6 +160,33 @@ enum { V0 = 2, A0 = 4, A1 = 5, A2 = 6 };
 
 static int g_card_verbose = 0;           // PSXPORT_CARD_VERBOSE=1
 
+// Deliver the libcard I/O-complete event so a caller waiting on it (TestEvent spin / WaitEvent) wakes.
+// Our I/O is synchronous, so completion is "now". EvSpIOE (0x0004) = I/O end. Delivered to the standard
+// card event classes (HwCARD/SwCARD); an unmatched class is a harmless no-op (hle_deliver_event only
+// fires OPEN events whose class+spec match). Confirmed classes recorded in the journal once captured.
+extern void hle_deliver_event(uint32_t ev_class, uint32_t spec);
+static void card_deliver_complete(void) {
+  // Tomba2 uses libmcrd: its "Checking MEMORY CARD" loop TestEvents the SwCARD class (0xF4000001) for
+  // completion (captured: it polls specs IOE/NEW/TIMOUT/ERROR every frame). Our I/O is synchronous, so
+  // signal SUCCESS via EvSpIOE (0x0004) on SwCARD (and HwCARD for any lower-level waiter). NOT NEW
+  // (0x2000) — that would mean "unformatted/new card" and trigger a format prompt.
+  hle_deliver_event(0xF4000001u, 0x0004u);   // SwCARD, EvSpIOE — libmcrd completion (the game polls this)
+  hle_deliver_event(0xF0000011u, 0x0004u);   // HwCARD, EvSpIOE — BIOS-level completion
+}
+
+// A0 libcard table (_card_info / _card_load) — Tomba2's "Checking MEMORY CARD" uses A0:0xAB, not the B0
+// path. The card is host-backed and always present/healthy, so accept and deliver the detect/complete
+// event so the caller's event-wait falls through immediately (PC-native, zero delay).
+int card_hle_a0(uint32_t fn, R3000* c) {
+  switch (fn) {
+    case 0xABu:   // _card_info(port)
+    case 0xACu:   // _card_load(slot)
+      if (g_card_verbose) fprintf(stderr, "[card] A0:0x%02X(a0=%X a1=%X a2=%X)\n", fn, c->r[A0], c->r[A1], c->r[A2]);
+      card_deliver_complete(); c->r[V0] = 1; return 1;
+    default: return 0;
+  }
+}
+
 // B0:0x4E _card_read(chan, sector, buf): read frame `sector` (128 B) into g_ram[buf].
 // Returns 1 (issue accepted) like the BIOS; the actual data is delivered immediately so the
 // caller's subsequent _card_status spin completes at once.
@@ -186,12 +213,38 @@ static void ov_card_write(R3000* c) {
 // already completed synchronously, always report bit0 set (transfer complete, no error).
 static void ov_card_status(R3000* c) { c->r[V0] = 1; }
 
+// B0:0x4C _card_info(chan): the BIOS issues a "get card info" and delivers a completion event; the
+// card is always present + healthy here (host-backed), so accept and deliver completion immediately.
+static void ov_card_info(R3000* c) { card_deliver_complete(); c->r[V0] = 1; }
+
+// B0 libcard dispatch — these run through the HLE B0 vector (the game's statically-linked libcard
+// wrappers call B0:idx via the `li t0,0xB0; jr t0` trampoline -> rec_dispatch_miss -> recomp_hle ->
+// here). They complete SYNCHRONOUSLY against the host file (PC-native, zero delay) and deliver the
+// libcard completion event so the caller's event-wait / status-spin falls through at once. Returns 1
+// if handled. (The old rec_set_override on BIOS addresses 0x8009xxxx was DEAD — those addresses are
+// never executed in this pure-HLE-BIOS build; the trampoline funnels everything through recomp_hle.)
+int card_hle_b0(uint32_t fn, R3000* c) {
+  switch (fn) {
+    case 0x4Cu: case 0x4Eu: case 0x4Fu: case 0x50u: case 0x5Cu:
+      if (g_card_verbose) fprintf(stderr, "[card] B0:0x%02X(a0=%X a1=%X a2=%X)\n", fn, c->r[A0], c->r[A1], c->r[A2]);
+      break;
+    default: return 0;
+  }
+  switch (fn) {
+    case 0x4Cu: ov_card_info(c);   return 1;   // _card_info(chan)
+    case 0x4Eu: ov_card_read(c);   card_deliver_complete(); return 1;   // _card_read(chan,sector,buf)
+    case 0x4Fu: ov_card_write(c);  card_deliver_complete(); return 1;   // _card_write(chan,sector,buf)
+    case 0x50u: c->r[V0] = 0;      return 1;   // _card_chan() -> active channel (single card = 0)
+    case 0x5Cu: ov_card_status(c); return 1;   // _card_status(chan)
+    default: return 0;
+  }
+}
+
 void card_overrides_init(void) {
   if (getenv("PSXPORT_CARD_VERBOSE")) g_card_verbose = 1;
   card_init();
-  rec_set_override(0x8009BAF0u, ov_card_read);    // _card_read  (B0:0x4E)
-  rec_set_override(0x8009C600u, ov_card_write);   // _card_write (B0:0x4F)
-  rec_set_override(0x8009C610u, ov_card_status);  // _card_status(B0:0x5C)
+  // Card B0 indices are serviced in the HLE B0 dispatch (recomp_hle -> card_hle_b0); no address
+  // overrides (those BIOS addresses never run in the pure-HLE build).
 }
 
 #endif // PSXPORT_CARD_NO_OVERRIDES

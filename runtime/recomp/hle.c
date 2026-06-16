@@ -132,7 +132,11 @@ static int recomp_hle(char table, uint32_t fn, R3000* c) {
       case 0x70: c->r[V0] = 0; return 1;                              // _bu_init (card) no-op
       case 0x71: c->r[V0] = 0; return 1;                              // _96_init (CD device) no-op
       case 0x72: c->r[V0] = 0; return 1;                              // _96_remove (no-op)
-      default: return 0;
+      default: {
+        int card_hle_a0(uint32_t, R3000*);     // native libcard A0 (_card_info/_card_load)
+        if (card_hle_a0(fn, c)) return 1;
+        return 0;
+      }
     }
   }
   if (table == 'B') {
@@ -175,7 +179,11 @@ static int recomp_hle(char table, uint32_t fn, R3000* c) {
       case 0x56: work_area_init(); c->r[V0] = HLE_C0TABLE; return 1;  // GetC0Table
       case 0x57: work_area_init(); c->r[V0] = HLE_B0TABLE; return 1;  // GetB0Table
       case 0x5B: c->r[V0] = 0; return 1;                              // ChangeClearPAD (no-op)
-      default: return 0;
+      default: {
+        int card_hle_b0(uint32_t, R3000*);     // native libcard (_card_read/write/status/info/chan)
+        if (card_hle_b0(fn, c)) return 1;
+        return 0;
+      }
     }
   }
   if (table == 'C') {
