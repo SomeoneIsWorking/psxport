@@ -1,5 +1,38 @@
 # Debug / progress journal
 
+## 2026-06-16 (later-80) — wide60 60fps: full primitive capture + cross-frame MATCHER built & displacement-verified (the handoff's stated next milestone). Foundation for the in-between synthesizer.
+Continued the 60fps tier from later-57 (object→primitive join). Built milestones 3 (full capture) and
+the matcher, all in `runtime/recomp/wide60.c` + read-only taps in `gpu_native.c gp0_exec` (gated PSXPORT_WIDE60).
+
+### Mechanism
+- **Full primitive capture (PrimFrame A/B).** Every completed GP0 poly (`wide60_cap_poly`) and
+  sprite/rect (`wide60_cap_sprite`) is teed into the current frame's `Prim[]` buffer: op, nv, per-vertex
+  (x,y packet-coords / u,v / rgb), E5 draw-offset, texpage, color-mode, CLUT, and the joined obj id
+  (`grid_get` of the lead vertex; sprites/lines = obj 0 → snap). Double-buffered A(prev)/B(cur), swapped
+  in `wide60_frame_commit`. PRIM_MAX=8192 (measured ≤~1400/frame, with headroom; overflow flagged).
+- **Matcher (`wide60_match`, run per logic frame).** Key = **obj + op + texpage + color-mode + CLUT**;
+  greedy "first unused A prim with equal key, in A draw order" → pairs the k-th same-key prim in B with
+  the k-th in A. `s_match[i]` = A index or −1 (snap). obj 0 never matches.
+
+### Verified (headless, gameplay f500–f5000)
+- **poly-join 92–99%** (reconfirms later-57). **lerp match 49–96%** of all prims (the rest = sprites/HUD/
+  terrain that snap by design + joined polys whose mesh genuinely changed). **Median cross-frame
+  displacement of matched pairs = 2–9 px** — i.e. matches are genuinely the same primitive one logic
+  frame apart, exactly what's interpolatable. (p90 saturates the 15px histogram ceiling = the fast-motion
+  tail the synth's displacement gate will snap.)
+- **KEY-CHOICE dead end (don't revisit):** dropping texpage/CLUT and keying on obj+op alone (relying on
+  draw-order ordinal) is WORSE — median displacement jumps to 15+px because per-tri LOD/cull shifts the
+  ordinals. The "CLUT high halves alternate by parity, don't key on them" warning applied to the OBJECT-LESS
+  offline fingerprint matcher; with obj as the anchor, texpage/CLUT *refine* the match (verified by the
+  displacement histogram). Richer key kept.
+- **Faithful path safe:** VRAM at f3000 **byte-identical** with PSXPORT_WIDE60 ON vs OFF (`cmp` PASS) —
+  capture/match only READS, never touches s_vram.
+
+### Next (remaining, needs the USER's eyes for flicker)
+The in-between SYNTHESIZER + present ordering: replay B's captured list rasterizing lerp(A,B,0.5) for
+matched prims (snap the rest, plus a displacement gate), skip VRAM-upload ops on in-betweens, present
+in-between then B, host-pace 60 Hz. No-flicker is TOP priority — do NOT declare done on headless alone.
+
 ## 2026-06-16 (later-79) — FIXED (user-verified): "ingame music plays over the dialog" in the prologue. Cause: the looping ingame-music XA (chan4) is started by the gameplay state machine, which on real HW only fires AFTER the CD-paced scene load — by then the dialog owns the audio. Our INSTANT CD reads fire it during the dialog, so it overlaps the dialog tone. Fix (per user directive — keep instant CD, mod the CD-speed-dependent behavior in PC code): suppress the looping ingame-music XA while a dialog tone is the current song, resume it after. Identifications corrected: **song 4-7 = sequenced dialog tones** (user-ID: 4=regular, 6=worry), **chan4 XA = ingame/area music**, **chan22 XA = dialog voice**, **chan7 XA = prologue narration**. FOLLOW-UPS FIXED in later-79b/79c: the resumed music starting at full volume (now fades in via the game's own CD-volume ramp) and a ~1-frame music "blip" at the dialog start (later-79b cut synchronously; later-79c found the fade-in still leaked one FULL-volume frame and fixed it by flushing the SPU CDVOL register on the snap — USER-VERIFIED PERFECT). STILL OPEN: fade-OUT entering indoors is abrupt (not yet captured — see later-79c).
 
 ### later-79 CORRECTION of the mid-investigation notes below

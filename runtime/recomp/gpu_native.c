@@ -18,6 +18,7 @@
 
 #define VRAM_W 1024
 #define VRAM_H 512
+extern int g_wide60_on;           // wide60: capture/synth enabled (PSXPORT_WIDE60); 0 = faithful path
 static uint16_t s_vram[VRAM_W * VRAM_H];
 static inline uint16_t* vram(int x, int y) { return &s_vram[(y & 511) * VRAM_W + (x & 1023)]; }
 
@@ -438,6 +439,16 @@ static void gp0_exec(void) {
     }
     int shade = gouraud || !textured;       // flat-untextured uses the command color
     { void wide60_join_poly(int, int); wide60_join_poly(v[0].x, v[0].y); }  // wide60: object join
+    if (g_wide60_on) {                       // wide60: tee the full primitive into PrimFrame B
+      void wide60_cap_poly(int, int, const int*, const int*, const int*, const int*,
+                           const unsigned char*, const unsigned char*, const unsigned char*,
+                           int, int, int, int, int, int, int, int);
+      int xs[4], ys[4], us[4], vs[4]; unsigned char rs[4], gs[4], bs[4];
+      for (int i = 0; i < nv; i++) { xs[i]=v[i].x; ys[i]=v[i].y; us[i]=v[i].u; vs[i]=v[i].v;
+                                     rs[i]=v[i].r; gs[i]=v[i].g; bs[i]=v[i].b; }
+      wide60_cap_poly(op, nv, xs, ys, us, vs, rs, gs, bs, s_off_x, s_off_y,
+                      s_tp_x, s_tp_y, s_tp_mode, s_tp_blend, s_clut_x, s_clut_y);
+    }
     // PSXPORT_POLYDUMP=frame — log every poly at `frame` (our port side, to compare vs oracle
     // polywatch). Finds the garbage-block prims in the GAME level.
     { static int pd = -2, pax = -1, pay = -1;
@@ -499,6 +510,12 @@ static void gp0_exec(void) {
                   cr, cg, cb, x, y, w, h, u0, v0, s_off_x, s_off_y);
       } }
     prov_begin(op, textured ? 1 : 0, semi, cr, cg, cb, x + s_off_x, y + s_off_y, u0, v0);
+    if (g_wide60_on) {                       // wide60: tee the sprite/rect into PrimFrame B (snaps)
+      void wide60_cap_sprite(int, int, int, int, int, int, int, int, int, int,
+                             int, int, int, int, int, int, int, int);
+      wide60_cap_sprite(op, x, y, u0, v0, w, h, cr, cg, cb, s_off_x, s_off_y,
+                        s_tp_x, s_tp_y, s_tp_mode, s_tp_blend, s_clut_x, s_clut_y);
+    }
     // Clip the iteration to the drawing area up front: off-screen sprites otherwise spin
     // w*h sample_tex calls for pixels put_px_b would discard (an off-screen/garbage sprite
     // could burn millions of iterations and wedge the frame).
