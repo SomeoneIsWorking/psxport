@@ -635,8 +635,26 @@ static void gp0_exec(void) {
       if (i >= s_fcount) break;
       vx[nv] = cx(s_fifo[i]); vy[nv] = cy(s_fifo[i]); vr[nv] = r; vg[nv] = g; vb[nv] = b; nv++; i++;
     }
+    void gpu_vk_draw_tritri(const int*,const int*,const int*,const int*,const unsigned char*,
+                            const unsigned char*,const unsigned char*,int,int,int,int,int,int,int,int,int,int,int,int,int,int);
+    void gpu_vk_draw_semi(const int*,const int*,const int*,const int*,const unsigned char*,
+                          const unsigned char*,const unsigned char*,int,int,int,int,int,int,int,int,int,int,int,int,int,int,int);
     for (int s = 0; s + 1 < nv; s++) {        // flat colour = start vertex
-      raster_line(vx[s], vy[s], vx[s+1], vy[s+1], vr[s], vg[s], vb[s], semi);
+      if (!gpu_vk_enabled())
+        raster_line(vx[s], vy[s], vx[s+1], vy[s+1], vr[s], vg[s], vb[s], semi);
+      else {                                   // VK: tee the segment as a 1px-thick quad (mode 3 flat)
+        int x0=vx[s]+s_off_x, y0=vy[s]+s_off_y, x1=vx[s+1]+s_off_x, y1=vy[s+1]+s_off_y;
+        int ox = (abs(x1-x0) >= abs(y1-y0)) ? 0 : 1, oy = ox ? 0 : 1;
+        int xa[4]={x0,x1,x0+ox,x1+ox}, ya[4]={y0,y1,y0+oy,y1+oy}, zu[4]={0,0,0,0};
+        unsigned char rr[4]={vr[s],vr[s+1],vr[s],vr[s+1]}, gg[4]={vg[s],vg[s+1],vg[s],vg[s+1]}, bb[4]={vb[s],vb[s+1],vb[s],vb[s+1]};
+        int o1[3]={0,1,2}, o2[3]={1,2,3};      // tris (p0,p1,p0') and (p1,p0',p1')
+        for (int t = 0; t < 2; t++) { int* o = t ? o2 : o1;
+          int X[3]={xa[o[0]],xa[o[1]],xa[o[2]]}, Y[3]={ya[o[0]],ya[o[1]],ya[o[2]]};
+          unsigned char R[3]={rr[o[0]],rr[o[1]],rr[o[2]]}, G[3]={gg[o[0]],gg[o[1]],gg[o[2]]}, B[3]={bb[o[0]],bb[o[1]],bb[o[2]]};
+          if (semi) gpu_vk_draw_semi(X,Y,zu,zu,R,G,B, 0,0,3,0,0,0, 0,0,0,0, s_da_x0,s_da_y0,s_da_x1,s_da_y1, s_tp_blend);
+          else      gpu_vk_draw_tritri(X,Y,zu,zu,R,G,B, 0,0,3,0,0,0, 0,0,0,0, s_da_x0,s_da_y0,s_da_x1,s_da_y1);
+        }
+      }
       if (g_wide60_on) {                       // wide60: tee each segment (snaps; obj 0) so the interp
         void wide60_cap_line(int, int, int, int, int, int, int, int, int);   // frame keeps the line
         wide60_cap_line(op, vx[s], vy[s], vx[s+1], vy[s+1], vr[s], vg[s], vb[s], semi);
