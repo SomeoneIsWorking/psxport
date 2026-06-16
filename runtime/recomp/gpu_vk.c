@@ -134,7 +134,7 @@ static void wide_init(void) {
   const char* w = getenv("PSXPORT_WIDE");
   s_wide = (w && atoi(w) != 0) ? 1 : 0;
   const char* ss = getenv("PSXPORT_SS");
-  s_ss = ss ? atoi(ss) : 1; if (s_ss < 1) s_ss = 1; if (s_ss > 2) s_ss = 2;   // FBH<=FB_MAXH
+  s_ss = ss ? atoi(ss) : 2; if (s_ss < 1) s_ss = 1; if (s_ss > 2) s_ss = 2;   // default 2x (856x480, fills the image); FBH<=FB_MAXH
 }
 
 int gpu_vk_enabled(void) {
