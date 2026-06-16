@@ -1,5 +1,31 @@
 # Debug / progress journal
 
+## 2026-06-16 (later-84) — DIRECTION: Tomba2Engine native-engine port. Entity list RE'd + runtime-validated. Repo reorg + 72 GB cleanup.
+User redirected the project: reimplement Tomba!2's **engine layer** in native C (gameplay logic STAYS
+recompiled PSX in guest memory; the native engine reads entity structs from guest RAM). Repo reframed
+as **Tomba2Engine**; N64Recomp-style framework/game split, boundary-first in-tree (engine/ = game,
+runtime/recomp/ = common PSX platform → future psxport submodule). See CLAUDE.md, docs/engine_re.md,
+plan <local-notes>/plans/fancy-tinkering-kite.md, memory [[tomba2engine-native-engine-pivot]].
+
+### Engine RE — the entity system (Phase 0 done)
+- **Entity list = two doubly-linked lists** of 0xD0 pool nodes; heads `DAT_800fb168`/`DAT_800f2624`.
+  Node: render_flag@+1, state@+4, type@+0xc, **handler fn-ptr@+0x1c**, prev@+0x20, **next@+0x24**,
+  pos@+0x2e/32/36. Walk = **`FUN_8007a904`**: per list, follow next@+0x24, clear +1, call handler@+0x1c(node).
+  Found by searching gameplay RAM dumps for the handler address bytes (handlers are per-object fn ptrs,
+  not a type-indexed table — that's why static xref found nothing).
+- **Runtime-validated** (`PSXPORT_OBJLOG=1`, field scene): the cull/object path FIRES in gameplay
+  (212k calls/4700 frames) — **CORRECTS the later-82 claim "cull doesn't fire"**, which was DEMO-only.
+  Objects carry real 3D world positions keyed by their pool-slot pointer (type 02/03,
+  e.g. obj=800fc5c0 pos=(4750,-1500,5000)). ≥2 pools observed (strides 0x88 and 0xD0).
+- **Interpolation insight (supersedes the GTE-fingerprint approach):** the **object pointer is a stable
+  cross-frame identity** (pool slot) with a real position — snapshot per-object pos each logic frame and
+  interpolate that, instead of fingerprinting GTE transforms. This is the Phase-4 path once the native
+  entity walk (Phase 1) owns the list. (wide60.c per-prim gating fix `b2de253` stays meanwhile.)
+
+### Cleanup
+tools/clean.sh (allowlist of regenerable dumps; preserves RE assets/state/bios/bin/obj) — freed ~72 GB.
+Dropped a stray tracked 16 MB Beetle savestate (`hold`).
+
 ## 2026-06-16 (later-83) — wide60 reprojection: FIXED user-reported "terrible" live output (smearing + flicker + TRIPLED weapon HUD icon). Root cause = global screen-XY remap with no per-prim object gating. Tooling-proven.
 User ran `PSXPORT_WIDE60=1 ./run.sh` on the later-82 reprojection code: "terrible" — stretched/smeared
 polys, flicker, and the bottom weapon-icon HUD drawn DOUBLED/TRIPLED. (Diagnosed via tooling per user
