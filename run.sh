@@ -100,12 +100,13 @@ MED=vendor/beetle-psx/mednafen
 # -Igenerated: the recompiled shards include "rec_decls.h".
 INC="-I$RT -I$ENG -Igenerated -I$MED -I$MED/psx -Ivendor/beetle-psx/libretro-common/include -Ivendor/beetle-psx -Ivendor/beetle-psx/deps/libchdr/include"
 # _XOPEN_SOURCE: makecontext/swapcontext (native threads) need it on macOS/glibc.
-CFLAGS="-O2 -g -w -D_XOPEN_SOURCE=700 $INC $(pkg-config --cflags sdl2) -DPSXPORT_SDL"
+CFLAGS="-O2 -g -w -D_XOPEN_SOURCE=700 $INC $(pkg-config --cflags sdl2 vulkan 2>/dev/null) -DPSXPORT_SDL"
+tools/gen_vk_shaders.sh   # compile+embed the Vulkan present shaders (gpu_vk_shaders.h) before gpu_vk.c
 # All TUs: the recompiled core is split into generated/shard_*.c so they compile in parallel.
 SRC="$(ls generated/shard_*.c) $(ls generated/stub_shard_*.c) generated/stub_disp.c \
   $RT/mem.c $RT/stubs.c $RT/hle.c $RT/threads.c $RT/interp.c $RT/gpu_native.c $RT/spu_audio.c $RT/pad_input.c $RT/memcard.c $RT/native_fmv.c \
   $MED/psx/gte.c $RT/gte_beetle.c $MED/psx/mdec.c $RT/mdec_beetle.c $MED/psx/spu.c $RT/spu_beetle.c \
-  $RT/disc.c $RT/cd_override.c $RT/cdc_native.c $RT/xa_stream.c $RT/timing.c $ENG/game_tomba2.c $ENG/wide60.c $ENG/engine_tomba2.c $RT/sync_overrides.c $RT/native_boot.c $RT/native_stub.c $RT/watchdog.c $RT/boot.c"
+  $RT/disc.c $RT/cd_override.c $RT/cdc_native.c $RT/xa_stream.c $RT/timing.c $RT/gpu_vk.c $ENG/game_tomba2.c $ENG/wide60.c $ENG/engine_tomba2.c $RT/sync_overrides.c $RT/native_boot.c $RT/native_stub.c $RT/watchdog.c $RT/boot.c"
 
 say "building the native port in parallel (-j$JOBS; first time compiles the recompiled core)…"
 OBJ=scratch/obj; mkdir -p "$OBJ"
@@ -116,7 +117,7 @@ printf '%s\n' $SRC | xargs -P"$JOBS" -I{} bash -c 'compile_one "$@"' _ {} || die
 OBJS=""; for s in $SRC; do OBJS="$OBJS $OBJ/$(echo "$s" | tr '/.' '__').o"; done
 # shellcheck disable=SC2086
 # -rdynamic: export symbols so the watchdog's backtrace shows function names (watchdog.c).
-$CC -rdynamic $OBJS $CHD_LIBS $(pkg-config --libs sdl2) -lpthread -lm -o scratch/bin/tomba2_port || die "link failed"
+$CC -rdynamic $OBJS $CHD_LIBS $(pkg-config --libs sdl2 vulkan) -lpthread -lm -o scratch/bin/tomba2_port || die "link failed"
 
 # ---- 5. run ------------------------------------------------------------------------
 say "launching Tomba! 2 (native PC port)…"

@@ -888,8 +888,11 @@ static void ensure_window(void) {
 }
 // Blit one display-sized region [sx,sy .. +disp_w,disp_h] of `src` (s_vram or s_interp) to the window,
 // fit to a 4:3 rect with black bars — never stretched (correct PSX pixel aspect for 2D / FMV / any res).
+int  gpu_vk_enabled(void);                                   // gpu_vk.c — Vulkan present backend (M0)
+void gpu_vk_present(const uint16_t*, int, int, int, int);
 static void blit_src(const uint16_t* src, int sx, int sy) {
   if (!win_enabled()) return;
+  if (gpu_vk_enabled()) { gpu_vk_present(src, sx, sy, s_disp_w, s_disp_h); return; }  // HW path
   ensure_window();
   static uint32_t buf[VRAM_W * VRAM_H];
   for (int y = 0; y < s_disp_h; y++)
