@@ -1,5 +1,35 @@
 # Debug / progress journal
 
+## 2026-06-16 (later-83) — wide60 reprojection: FIXED user-reported "terrible" live output (smearing + flicker + TRIPLED weapon HUD icon). Root cause = global screen-XY remap with no per-prim object gating. Tooling-proven.
+User ran `PSXPORT_WIDE60=1 ./run.sh` on the later-82 reprojection code: "terrible" — stretched/smeared
+polys, flicker, and the bottom weapon-icon HUD drawn DOUBLED/TRIPLED. (Diagnosed via tooling per user
+directive, not by eyeballing — see the new sdbg counters.)
+
+### ROOT CAUSE (confirmed, `PSXPORT_WIDE60_SDBG` per-frame counters in wide60_synthesize)
+`wide60_build_remap` builds a **global old-SXY → interp-SXY hash table**; `wide60_synthesize` remapped
+**any** captured prim vertex whose packet (x,y) hit a key — with NO notion of whether that prim is a
+3D/GTE object. PSX sprites/rects/lines + CPU-projected polys are screen-space (never RTP'd), but their
+coords can COLLIDE with a real 3D vertex's SXY in the table, so they got dragged to interpolated
+positions. Measured on gameplay (f471+, every frame): `sprite_remap` 1–4/frame (= the tripled HUD icon),
+`line_remap` 1–2, and **poly partial-remap 4–103/frame, varying wildly** (= stretched tris = smearing;
+the frame-to-frame variation = flicker). The old per-prim object join (`Prim.obj` via the grid) was
+computed at capture but UNUSED by the transform-based synth — that's the regression.
+
+### FIX (wide60.c wide60_synthesize) — ALL-OR-NOTHING per primitive
+- Sprites (nv==1) + lines (nv==2): **always snap**, never consult the remap (they're always 2D).
+- Polygons: remap only if **EVERY** vertex resolved in the table (whole prim belongs to one matched+
+  interpolated object); else snap the WHOLE prim. No mixed/partial vertices → no stretch. A CPU-projected
+  2D poly won't have all corners coincide with distinct 3D SXYs → snaps. Snapped prims = 30fps fallback.
+- VERIFIED by tooling: `sprite_remap=0 line_remap=0` across all 5943 frames of the headless run (was
+  1–4/frame). Offline f2500 dump (`PSXPORT_WIDE60_SYNTH=2500`) unchanged-good: in-between complete (bg,
+  rails, DEMO text, orbs), character at midpoint, no holes. Faithful path untouched (synth is WIDE60-only).
+- **Kept as committed tooling:** `PSXPORT_WIDE60_SDBG=1` runs the synth every headless frame and prints
+  per-frame remap-correctness counts (poly full/partial/none, sprite/line remaps, collisions-snapped).
+- OPEN / next: user must eyeball LIVE (`PSXPORT_WIDE60=1 ./run.sh`) — the confirmed artifact sources are
+  gone, but residual judder is possible since ~10–30% of 3D polys/frame fall back to snap (partial
+  coverage: their object was gated by the TR-teleport gate, or they span objects). If too many 3D polys
+  snap, investigate WHY coverage is partial (gate too tight? per-vertex object association needed?).
+
 ## 2026-06-16 (later-82) — wide60 60fps RE-ARCHITECTED to the per-game GTE-transform tier (user-directed; screen-space plane interp REJECTED). Native graphical-object capture + cross-frame matching VERIFIED.
 **User rejected screen-space primitive interpolation** ("you are doing this blindly; reverse engineer the
 game's camera and objects and interpolate those, not individual planes"; then "port the game's graphical
