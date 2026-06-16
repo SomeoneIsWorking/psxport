@@ -590,7 +590,10 @@ int xa_decode_sector(const uint8_t* raw, int16_t* out, int16_t hist[2][2], int* 
   int stereo = coding & 0x01;
   int units  = 4 << ishift;                      // 8 (4-bit) / 4 (8-bit)
   if (freq) *freq = (coding & 0x04) ? 18900 : 37800;
-  static int16_t ch[2][2016 + 8];
+  // Per-channel sample buffer. MONO sectors put ALL units on one channel: 4-bit mono =
+  // 18 groups * 8 units * 28 = 4032 samples/sector (vs 2016 per channel when stereo splits
+  // them). Size for the mono max, else mono voice (e.g. Tomba2 dialog, 18900Hz mono) overflows.
+  static int16_t ch[2][4032 + 8];
   int cp[2] = {0,0};
   for (int group = 0; group < 18; group++) {
     const uint8_t* sg = raw + 24 + group * 128;  // 16 param bytes + 112 sample bytes
@@ -697,7 +700,7 @@ int native_fmv_play_lba(uint32_t lba, uint32_t size_bytes) {
   int uncapped = 0; { const char* f = getenv("PSXPORT_FMV_FPS"); if (f && atoi(f) == 0 && *f) uncapped = 1; }
   int xa_freq = 37800;
   int16_t xa_hist[2][2] = {{0,0},{0,0}};
-  static int16_t xa_pcm[2016 * 2];
+  static int16_t xa_pcm[4032 * 2];   // mono sectors yield up to 4032 frames (see xa_decode_sector)
   long media_frames = 0;                       // cumulative audio sample-pairs = media clock
   s_fmv_start_prev = 1;                         // assume Start may be held from a prior movie
   uint32_t t0 = 0;

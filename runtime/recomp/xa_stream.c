@@ -163,7 +163,7 @@ static int xa_decode_next_sector(void) {
     if (pass && s_filter_set && (s_mode & 0x08))  // SF filter: match subheader file+channel
       pass = (file == s_filter_file && chan == s_filter_chan);
     if (pass) {
-      static int16_t pcm[2016 * 2];
+      static int16_t pcm[4032 * 2];   // mono sectors yield up to 4032 frames (see xa_decode_sector)
       int freq = s_src_freq;
       int n = xa_decode_sector(raw, pcm, s_hist, &freq);
       s_src_freq = freq;

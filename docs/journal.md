@@ -37,6 +37,16 @@ over"). The user nailed it: that voice line gates cutscene advancement.
   native engine's advancing read head) while streaming → the wait terminates, clips play once and the
   scene advances. Marked `// STOPGAP` in cd_override.c.
 
+### later-78d — BUG: mono XA overflowed the decode buffers (voice was silent/garbled)
+User: no voice in the WAV / "sounds the same as when XA was broken". Per-sector log showed the
+chan22 voice = **mono 18900Hz → n=4032 frames/sector** (mono puts ALL units on one channel: 18*8*28),
+but the decode buffers were sized for 2016 STEREO frames: `xa_decode_sector`'s internal
+`ch[2][2016+8]` and the callers' `pcm[2016*2]` / `xa_pcm[2016*2]`. The 4032-frame mono sector
+overflowed them → corrupted state (seen as `wr=678508593` garbage right after a mono sector) → no
+coherent voice. FIX: size all three for the mono max (4032): `ch[2][4032+8]`, `pcm[4032*2]`,
+`xa_pcm[4032*2]` (native_fmv.c + xa_stream.c). After: wr increments 4032,8064,12096… cleanly.
+(Stereo 37800 FMV audio never hit this; mono voice did.)
+
 ### later-78c — FIXED: voice-streaming engine ported native (drop the FUN_8001cfc8 task)
 Implemented the native port. Verified interactively (drive like a player → prologue → hands-off):
 voice lines now ADVANCE one-by-one (chan22 clips 12771→15875+, each new line starts fresh) and
