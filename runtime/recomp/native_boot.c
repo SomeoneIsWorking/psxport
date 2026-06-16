@@ -174,7 +174,15 @@ static long native_repl_read(R3000* c, uint32_t f) {
     else if (!strcmp(cmd, "press") && sscanf(line, "%*s %31s", arg) == 1)   { held &= ~repl_btn(arg); pad_repl_hold(held); fprintf(stderr, "[repl] held=%04X\n", held); }
     else if (!strcmp(cmd, "release") && sscanf(line, "%*s %31s", arg) == 1) { held |= repl_btn(arg);  pad_repl_hold(held); fprintf(stderr, "[repl] held=%04X\n", held); }
     else if (!strcmp(cmd, "tap") && sscanf(line, "%*s %31s %u", arg, &a) >= 1) { if (!a) a = 4; pad_repl_tap((uint16_t)(0xFFFF & ~repl_btn(arg)), (int)a); fprintf(stderr, "[repl] tap %s %u\n", arg, a); }
-    else if (!strcmp(cmd, "shot") && sscanf(line, "%*s %31s", arg) == 1) { void gpu_native_shot(const char*); gpu_native_shot(arg); }
+    else if (!strcmp(cmd, "shot")) { char path[200] = {0}; if (sscanf(line, "%*s %199s", path) == 1) { void gpu_native_shot(const char*); gpu_native_shot(path); } }
+    else if (!strcmp(cmd, "dumpram")) {
+      char path[200] = {0};
+      if (sscanf(line, "%*s %199s", path) == 1) {
+        extern uint8_t g_ram[]; FILE* fp = fopen(path, "wb");
+        if (fp) { fwrite(g_ram, 1, 0x200000, fp); fclose(fp); fprintf(stderr, "[repl] dumpram -> %s\n", path); }
+        else fprintf(stderr, "[repl] dumpram: cannot open %s\n", path);
+      }
+    }
     else if (!strcmp(cmd, "stage")) fprintf(stderr, "[repl] stage=%08X sm48=%d\n", mem_r32(0x801fe00c), (int)mem_r16(0x801fe048));
     else if (!strcmp(cmd, "regs")) { for (int i = 0; i < 32; i++) { fprintf(stderr, " r%-2d=%08X", i, c->r[i]); if ((i & 3) == 3) fprintf(stderr, "\n"); } fprintf(stderr, " hi=%08X lo=%08X\n", c->hi, c->lo); }
     else if (!strcmp(cmd, "seq")) fprintf(stderr, "[repl] seq open=%d playmask=%04X tickmode=%d seqfn=%08X stage=%08X\n",

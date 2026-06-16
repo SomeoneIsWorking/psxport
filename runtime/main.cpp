@@ -998,7 +998,11 @@ int main(int argc, char** argv)
   retro_set_input_state(InputStateCb);
 
   signal(SIGALRM, WatchdogAlarm);
-  alarm(5);
+  // In interactive REPL mode the loop BLOCKS on fgets between commands (no frame progress),
+  // so a global idle watchdog would kill it at the prompt. `run`/`tap`/`prof` self-arm their
+  // own alarm() around the work, so leave the global watchdog disarmed for -repl.
+  if (!g_repl)
+    alarm(5);
 
   retro_init();
 

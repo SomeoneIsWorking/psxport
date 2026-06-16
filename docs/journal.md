@@ -1,5 +1,50 @@
 # Debug / progress journal
 
+## 2026-06-16 (later 76) — Missing BGM PINNED to the OPENING PROLOGUE cutscene (post-New-Game narration). Its BGM-start never fires in our port (zero writes to the song byte 0x800bed80 across the whole prologue); the oracle holds song 4 throughout. Title=correctly silent; gameplay BGM (song 2/3) works. Built interactive driver + BGM inspector tools; oracle now drivable (watchdog fix).
+User ground truth (corrected this session): the **title/menu** has NO BGM and that's CORRECT (the user
+had confused it with the unimplemented memory-card/Load page). The **gameplay** field BGM (song 2/3,
+FUN_80025588 via stage handlers) WORKS. The bug is the **opening prologue cutscene** that plays right
+after New Game (narration: "Tomba is living peacefully…", "Tabby disappeared", "Is she safe?", over
+village→cliff→fisherman scenes). It must have BGM and ours is silent.
+
+### Evidence (interactive, clean navigation — NOT forced-Start spam)
+- Drove the native port like a player via tools/drive.py (tap x to confirm NewGame→StartGame, then
+  hands-off). Watched 0x800bed78 (sound-cmd queue count) + 0x800bed80 (current song): across the whole
+  prologue, **0x800bed80 is NEVER written** (stays 0xFF). Only volume bytes 0x800bed7c-7f and the
+  0x800bed82 flag are touched. So the prologue's BGM-start (FUN_80074BF8) is never reached.
+- Oracle reference = scratch/state/newgame.sav (the fisherman cliff scene, part of the same prologue):
+  0x800bed80 = **4**, held steady 600+ frames with NO re-writes → the oracle starts song 4 once at
+  prologue start and sustains it. (tools/drive.py oracle + tools/bgm.py.)
+- Earlier FORCE_BUTTONS=FFF7 runs DID fire song 4 at f166 — that was an artifact of Start-spam advancing
+  scene state differently (Start in gameplay = pause = stops BGM). Disregard those; clean nav is the
+  truth: prologue BGM never triggers.
+
+### Mechanism recap (still true, later-75)
+BGM machinery works: FUN_80074BF8(idx) sets 0x800bed80 + SsSeqPlay; SsSeqCalled ticks; SEQ→SPU produces
+audio. So this is purely a TRIGGER problem: the prologue cutscene never issues its "play song 4" command.
+
+### NEXT — find + port the prologue BGM trigger (compare vs oracle)
+The prologue scene loads (narration renders) but its BGM-start isn't issued. Candidate: the prologue
+map/scene-load BGM selector or the cutscene/event script's music cue runs in the oracle but is skipped
+by our native boot/scheduler (native_boot.c hand-codes the frame loop + replaces FUN_80051e60). Find in
+the oracle exactly what calls FUN_80074BF8 for song 4 at prologue start (need the oracle AT prologue
+start — blocked: oracle title-menu input via REPL tap does NOT navigate the menu, cause TBD; cold-boot
+through FMVs is slow). Then check whether our native scheduler runs that code path / its precondition.
+
+### Tooling built/fixed this session (use these; extend as needed)
+- **tools/drive.py** — persistent INTERACTIVE driver for native|oracle via a FIFO (O_RDWR keeps it open).
+  `start [native|oracle] [headed] [ENV=val…]`, `send "cmd" …`, `out [N]`, `stop`. Drive like a player,
+  observe between commands. Native: FMVs off + BGMDBG by default. `headed` opens a window (SDL; needs a
+  display — windowing in this sandbox didn't show for the user, headless is the norm).
+- **tools/bgm.py** — BGM/libsnd state inspector for ANY 2MB RAM dump (oracle snapshots OR our dumps):
+  `dump`/`slots`/`callers`. The reliable way to diff BGM state across cores/scenes.
+- **native REPL**: added `dumpram <path>`; fixed `shot`/`dumpram` path truncation (was %31s).
+- **PSXPORT_FORCE_STOP_AT=N** (pad_input.c): cease forced input at frame N (reach a scene via Start, then
+  go hands-off so Start-pause doesn't poison the capture).
+- **Oracle watchdog fix** (main.cpp): with -repl, the global idle SIGALRM watchdog killed the process at
+  the blocking prompt — now disarmed for -repl (run/tap self-arm). The oracle is now interactively drivable.
+- Gotcha: oracle REPL tap/press does NOT move the title menu (input not reaching it); root cause TBD.
+
 ## 2026-06-16 (later 75) — BGM: later-74 FALSIFIED. The libsnd sequencer ACTIVATES BGM, the read pointer ADVANCES, and it PRODUCES AUDIO (WAV-confirmed). Not "frozen/never activated." The real issue is SCENE-SPECIFIC: some scenes' BGM is started+sustained (fisherman intro = audible), others (menu / steady gameplay) are not started or get stopped. Bug moved upstream to scene/stage BGM-trigger logic, NOT the SPU/sequencer.
 **later-74's whole premise is wrong** and so is memory [[track-game-state-not-output]]'s "songs OPEN but never ACTIVATED." Evidence, all from the native port (PSXPORT_BGMDBG diag in native_boot.c: overrides on FUN_80074BF8/FUN_80074E48 + a per-frame slot-tick probe):
 

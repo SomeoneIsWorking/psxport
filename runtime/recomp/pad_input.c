@@ -219,7 +219,13 @@ void pad_service_frame(void) {
   // game's current&~prev input logic (FUN_800788ac) actually sees — a continuous hold would edge
   // only once. Lets a headless run drive menus deterministically without a host controller. Once
   // past FORCE_HOLD_AT, hold FORCE_HOLD continuously instead (movement input).
-  if (s_force_on) {
+  // PSXPORT_FORCE_STOP_AT=N: cease ALL forced input at frame N (release everything). Lets a run
+  // pulse Start to drive through attract/menu/intro to a target scene, then go fully hands-off so
+  // the scene's own BGM/state isn't disturbed by phantom presses (Start in gameplay = pause menu,
+  // which stops BGM — that artifact poisoned earlier BGM captures).
+  static long s_stop_at = -2;
+  if (s_stop_at == -2) { const char* e = getenv("PSXPORT_FORCE_STOP_AT"); s_stop_at = e ? atol(e) : -1; }
+  if (s_force_on && !(s_stop_at >= 0 && (long)s_fc >= s_stop_at)) {
     if (s_hold_mask != PAD_NONE && s_fc >= s_hold_at) pad_set_buttons(s_hold_mask);
     else pad_set_buttons((s_fc % 32u) < 8u ? s_force_mask : PAD_NONE);
   }
