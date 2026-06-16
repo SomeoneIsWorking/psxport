@@ -29,6 +29,7 @@ void rec_coro_run(R3000* c, uint32_t pc); // flat coroutine interpreter (resumab
 int  xa_stream_owns_slot2(void);
 int  xa_stream_voice_busy(void);
 void xa_dialog_coord(R3000* c);          // dialog-vs-ingame-music coordination (cd_override.c)
+void xa_audio_trace(const char* tag);    // CD-vol fade + XA lifecycle trace (cd_override.c)
 void xa_stream_voice_release(void);
 
 // Call recompiled/overridden game fn `fn` with up to 3 args; runs to its `jr ra` and returns.
@@ -132,7 +133,7 @@ static void native_scheduler_step(R3000* c) {
 // FUN_80074E48() stops the current BGM (sets 0x800bed80=0xFFFF). Tomba2's gameplay BGM is silent
 // in this port because the start IS reached (idx written) but an immediate STOP clears it. Log
 // each call with the caller (ra), arg, and the index before/after to find the spurious stopper.
-static volatile uint32_t g_bgm_frame = 0;
+volatile uint32_t g_bgm_frame = 0;   // current logic frame (extern: cd_override.c trace)
 void gen_func_80074BF8(R3000*);
 void gen_func_80074E48(R3000*);
 void xa_music_cut_if_dialog(void);   // cd_override.c: stop looping ingame music when a dialog tone starts
@@ -383,9 +384,12 @@ static void ov_game_main(R3000* c) {
     mem_w32(0x800bf4f4, mem_r32(0x800bf544));                // framebuffer ptr swap
     mem_w32(0x800bf544, (mem_r8(0x1f800135) * 0x14000 + 0x800bfe68) & 0xffffff);
     pad_service_frame();                                     // host input -> game pad buffer (pre-read)
+    xa_audio_trace("pre");                                   // CD-vol fade state BEFORE tick+mix
     rc0(c, 0x800788ac);                                      // tick + present + audio (override)
+    xa_audio_trace("post");                                  // CD-vol fade state AFTER tick+mix
     native_scheduler_step(c);                                // <- replaces FUN_80051e60
     xa_dialog_coord(c);                                      // dialogs stop/restore ingame music (instant-CD mod)
+    xa_audio_trace("coord");                                 // CD-vol fade state AFTER coord
     rc1(c, 0x80080f6c, 0);                                   // draw sync
     rc0(c, 0x800506d0);                                      // task sleep-countdown (re-arm 1->2)
     // Buffer flip + display env (LAB_80050c6c, DAT_1f80019c==0 branch): submit this frame's

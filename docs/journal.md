@@ -1,6 +1,6 @@
 # Debug / progress journal
 
-## 2026-06-16 (later-79) — FIXED (user-verified): "ingame music plays over the dialog" in the prologue. Cause: the looping ingame-music XA (chan4) is started by the gameplay state machine, which on real HW only fires AFTER the CD-paced scene load — by then the dialog owns the audio. Our INSTANT CD reads fire it during the dialog, so it overlaps the dialog tone. Fix (per user directive — keep instant CD, mod the CD-speed-dependent behavior in PC code): suppress the looping ingame-music XA while a dialog tone is the current song, resume it after. Identifications corrected: **song 4-7 = sequenced dialog tones** (user-ID: 4=regular, 6=worry), **chan4 XA = ingame/area music**, **chan22 XA = dialog voice**, **chan7 XA = prologue narration**. FOLLOW-UPS FIXED in later-79b: the resumed music starting at full volume (now fades in via the game's own CD-volume ramp) and a ~1-frame music "blip" at the dialog start (now cut synchronously at the song-start).
+## 2026-06-16 (later-79) — FIXED (user-verified): "ingame music plays over the dialog" in the prologue. Cause: the looping ingame-music XA (chan4) is started by the gameplay state machine, which on real HW only fires AFTER the CD-paced scene load — by then the dialog owns the audio. Our INSTANT CD reads fire it during the dialog, so it overlaps the dialog tone. Fix (per user directive — keep instant CD, mod the CD-speed-dependent behavior in PC code): suppress the looping ingame-music XA while a dialog tone is the current song, resume it after. Identifications corrected: **song 4-7 = sequenced dialog tones** (user-ID: 4=regular, 6=worry), **chan4 XA = ingame/area music**, **chan22 XA = dialog voice**, **chan7 XA = prologue narration**. FOLLOW-UPS FIXED in later-79b/79c: the resumed music starting at full volume (now fades in via the game's own CD-volume ramp) and a ~1-frame music "blip" at the dialog start (later-79b cut synchronously; later-79c found the fade-in still leaked one FULL-volume frame and fixed it by flushing the SPU CDVOL register on the snap — USER-VERIFIED PERFECT). STILL OPEN: fade-OUT entering indoors is abrupt (not yet captured — see later-79c).
 
 ### later-79 CORRECTION of the mid-investigation notes below
 The measurement notes in this entry are accurate as DATA but two interpretations in them are WRONG and are corrected here:
@@ -79,6 +79,30 @@ written. Combined with the fade-in, any residual sub-frame leak is at ~0.6 % vol
 **baseline (stashed) stalls identically**, so it's the pre-existing open BGM-timing bug (commit a42289d),
 not from this change. The post-dialog resume couldn't be observed headless (dialog stall); the resume uses
 the identical `music_fade_in` path. Pending: user ear-check via `./run.sh`.
+
+### later-79c — later-79b fade-in was INCOMPLETE: it still leaked one FULL-volume frame (user ear-confirmed). Root cause found via frame-by-frame trace; fixed by flushing the SPU CDVOL register on the snap. Now USER-VERIFIED PERFECT.
+later-79b snapped only the *guest* fade-current `DAT_800be224`=0. But the game's per-frame ramp
+`FUN_80075824` writes the SPU CDVOL **register** (0x1F801DB0/DB2 → Beetle spu.c case 0x30/0x32, `CDVol[]`)
+from `cur` exactly **once per frame**, and on the music-(re)start frame it had ALREADY run with the old
+(full) `cur` *before* `music_fade_in` fired — so the started XA mixed at full for that one frame, then
+dropped and climbed. That leading full frame = the user's "1-frame blip" and "starts loud then drops to
+zero then climbs."
+- **Diagnosis tooling (gated, kept):** `xa_audio_trace()` (cd_override.c, PSXPORT_XA_DBG) logs the fade
+  vars + XA lifecycle per frame at `pre`/`post`/`coord` points (native_boot.c, around `rc0(0x800788ac)`);
+  `[xamix]` (spu.c, PSXPORT_XAMIX_DBG, env cached) logs the CDVOL actually applied to live XA samples.
+  The trace nailed it: at chan4 start `[xamix] CDVolL=25480` (full) for the start frame, then 198/198…
+- **Fix (cd_override.c `music_fade_in`):** in addition to `DAT_800be224`=0, write the SPU CDVOL register
+  to 0 directly — `mem_w16(0x1f801db0,0); mem_w16(0x1f801db2,0)` (routes io_write→spu_write→SPU_Write).
+  This mutes the start frame's mix; next frame the game's ramp rewrites CDVOL from cur=0 and climbs.
+  `ov_voice_play` runs mid-tick (after `FUN_80075824`), so the register write lands before that frame's
+  SPU mix. **Verified:** start frame now mixes at `CDVolL=0` (was 25480), then 198/795/1591… climbing;
+  **user ear-confirmed "absolutely perfect, to the last minute detail."**
+- **STILL OPEN — fade-OUT (entering indoors) is abrupt.** Not yet captured: in both traces the music
+  stayed at full through the transition and the game never set CDVOL target→0, then the stream was
+  STOPped at full `cur` and immediately restarted (loop/scene re-trigger), so no fade-out path was
+  exercised. Need a clean "enter indoors" capture to see whether the game arms `FUN_80026470` (target 0)
+  and the stream is killed before the ramp reaches 0 (→ defer `xa_stream_stop` until cur≈0), or the game
+  never fades here at all. Don't fix blind.
 
 ## 2026-06-16 (later 78) — FIXED later-77: in-game XA-ADPCM streaming implemented natively (prologue BGM + voice now audible, WAV-confirmed). Fisherman-scream "first note repeats / cutscene won't advance" ROOT-CAUSED to FUN_8001cfc8's faked GetlocL position wait; interim stopgap in place, native engine-port planned.
 **New native subsystem `runtime/recomp/xa_stream.c`** (in build: added to run.sh + tools/build_port.sh).

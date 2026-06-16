@@ -236,7 +236,38 @@ static void cd_to_spu_mix(R3000* c, int on) { c->r[A0] = on ? 1 : 0; rec_dispatc
 // target), so the game's own ramp climbs it back up = a ~2s fade-in. Caller MUST only do this when
 // the music is the sole XA user — CDVOL also scales the dialog VOICE (chan22), so zeroing it while
 // a voice plays would mute the voice too.
-static void music_fade_in(void) { mem_w16(0x800be224, 0); }
+//
+// Snapping only `cur` is NOT enough: the game's per-frame ramp FUN_80075824 writes the SPU CDVOL
+// register (0x1F801DB0/DB2 — Beetle spu.c case 0x30/0x32, CDVol[0]/[1]) from `cur` ONCE per frame,
+// and on the music-(re)start frame it already ran with the OLD (full) `cur` before this snap — so
+// that one frame still mixes the freshly-started XA at full volume (verified: PSXPORT_XA_DBG showed
+// CDVOL=25480 for the start frame, then 198 and climbing). That leading full-volume frame is the
+// audible "1-frame blip" / "starts loud then drops to zero then climbs". So ALSO write the SPU CDVOL
+// register to 0 directly here, muting the start frame's mix; the next frame the ramp rewrites it from
+// cur=0 and climbs. mem_w16 to 0x1F801DBx routes through io_write -> spu_write -> SPU_Write (mem.c).
+static void music_fade_in(void) {
+  mem_w16(0x800be224, 0);   // game's fade CURRENT = 0 (its per-frame ramp climbs it back up)
+  mem_w16(0x1f801db0, 0);   // SPU CDVOL L = 0 NOW, so THIS frame's XA mix is silent (no loud blip)
+  mem_w16(0x1f801db2, 0);   // SPU CDVOL R = 0
+}
+
+// Diagnostic: trace the game's CD-volume fade state + XA stream lifecycle, on change only.
+// tgt/cur = DAT_800be222/224 (fade target/current), mas = DAT_800be220 (master),
+// 19a/137 = state bytes gating FUN_80075824's ramp, song = 0x800bed80, gate = 0x801fe0e0.
+extern volatile uint32_t g_bgm_frame;
+void xa_audio_trace(const char* tag) {
+  if (!getenv("PSXPORT_XA_DBG")) return;
+  static int t=1<<30,cur,mas,s19a,s137,song,act,lp,gate;
+  int nt=(int16_t)mem_r16(0x800be222), ncur=(int16_t)mem_r16(0x800be224), nmas=(int16_t)mem_r16(0x800be220);
+  int n19a=mem_r8(0x1f80019a), n137=mem_r8(0x1f800137);
+  int nsong=mem_r16(0x800bed80)&0xffff, nact=xa_stream_is_active(), nlp=xa_stream_is_looping();
+  int ngate=mem_r16(0x801fe0e0)&0xffff;
+  if (nt!=t||ncur!=cur||nmas!=mas||n19a!=s19a||n137!=s137||nsong!=song||nact!=act||nlp!=lp||ngate!=gate) {
+    fprintf(stderr,"[xa f%u %-5s] tgt=%d cur=%d mas=%d 19a=%d 137=%d song=%d act=%d loop=%d gate=%d\n",
+            g_bgm_frame,tag,nt,ncur,nmas,n19a,n137,nsong,nact,nlp,ngate);
+    t=nt;cur=ncur;mas=nmas;s19a=n19a;s137=n137;song=nsong;act=nact;lp=nlp;gate=ngate;
+  }
+}
 
 static void ov_voice_play(R3000* c) {
   uint8_t  chan  = (uint8_t)(c->r[A0] & 0xFF);
