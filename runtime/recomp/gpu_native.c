@@ -33,6 +33,7 @@ static inline uint16_t* fb(int x, int y) { return &s_fb_base[(y & 511) * VRAM_W 
 // ---- Draw state (set by GP0 env commands E1..E6) ------------------------------------
 static int s_da_x0, s_da_y0, s_da_x1 = 1023, s_da_y1 = 511;  // draw clip area
 static int s_off_x, s_off_y;                                 // draw offset
+int gpu_vk_enabled(void);                                    // gpu_vk.c (declared early for the gp0 tee)
 static int s_tp_x, s_tp_y;        // texpage base (64-px / 256-line units -> *64 / *256)
 static int s_reddbg;              // PSXPORT_REDDBG: dark-red output anomaly probe
 static int s_tp_mode;             // texture color mode: 0=4bpp,1=8bpp,2=15bpp
@@ -492,6 +493,17 @@ static void gp0_exec(void) {
                                      rs[i]=v[i].r; gs[i]=v[i].g; bs[i]=v[i].b; }
       wide60_cap_poly(op, nv, xs, ys, us, vs, rs, gs, bs, s_off_x, s_off_y,
                       s_tp_x, s_tp_y, s_tp_mode, s_tp_blend, s_tp_dither, s_clut_x, s_clut_y);
+    }
+    // VK backend (M2b): tee UNTEXTURED polys (flat/gouraud) to the GPU rasterizer, in absolute VRAM
+    // coords (post draw-offset, matching the SW tri()). Textured/semi prims come in M3.
+    if (gpu_vk_enabled() && !textured && !semi) {
+      void gpu_vk_draw_tri(int,int,int,int,int, int,int,int,int,int, int,int,int,int,int);
+      gpu_vk_draw_tri(v[0].x+s_off_x, v[0].y+s_off_y, v[0].r, v[0].g, v[0].b,
+                      v[1].x+s_off_x, v[1].y+s_off_y, v[1].r, v[1].g, v[1].b,
+                      v[2].x+s_off_x, v[2].y+s_off_y, v[2].r, v[2].g, v[2].b);
+      if (nv == 4) gpu_vk_draw_tri(v[1].x+s_off_x, v[1].y+s_off_y, v[1].r, v[1].g, v[1].b,
+                                   v[2].x+s_off_x, v[2].y+s_off_y, v[2].r, v[2].g, v[2].b,
+                                   v[3].x+s_off_x, v[3].y+s_off_y, v[3].r, v[3].g, v[3].b);
     }
     // PSXPORT_POLYDUMP=frame — log every poly at `frame` (our port side, to compare vs oracle
     // polywatch). Finds the garbage-block prims in the GAME level.
@@ -1086,6 +1098,7 @@ void gpu_present_ex(int do_blit) {
       fclose(f);
     }
   }
+  { void gpu_vk_frame_end(const uint16_t*, int); gpu_vk_frame_end(s_vram, s_frame); }  // VK: diff + batch reset
   s_frame++; s_prims = 0; s_gp0_words = 0; s_dma2 = 0;
 }
 void gpu_present(void) { gpu_present_ex(1); }

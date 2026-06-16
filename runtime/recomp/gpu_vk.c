@@ -605,6 +605,75 @@ static void tri_render_and_readback(uint16_t* out) {
   memcpy(out, s_rb_ptr, (size_t)VRAM_W * VRAM_H * 2);
 }
 
+// Render the batched tris on top of `bg` (the SW VRAM) and read the result back into `out`. Shared by
+// the live diff: where VK's rasterization matches SW's, out==bg; mismatches reveal rule deltas.
+static void tri_over_bg_readback(const uint16_t* bg, uint16_t* out) {
+  memcpy(s_stage_ptr, bg, (size_t)VRAM_W * VRAM_H * 2);
+  VKC(vkWaitForFences(s_dev, 1, &s_fence, VK_TRUE, UINT64_MAX));
+  VKC(vkResetFences(s_dev, 1, &s_fence));
+  VKC(vkResetCommandBuffer(s_cmd, 0));
+  VkCommandBufferBeginInfo bi = { VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO };
+  bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+  VKC(vkBeginCommandBuffer(s_cmd, &bi));
+  img_barrier(s_tex_undef ? VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+              VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+              VK_PIPELINE_STAGE_TRANSFER_BIT, 0, VK_ACCESS_TRANSFER_WRITE_BIT);
+  s_tex_undef = 0;
+  VkBufferImageCopy bc = {0};
+  bc.imageSubresource = (VkImageSubresourceLayers){ VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+  bc.imageExtent = (VkExtent3D){ VRAM_W, VRAM_H, 1 };
+  vkCmdCopyBufferToImage(s_cmd, s_stage, s_tex, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &bc);
+  img_barrier(VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+              VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+              VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
+  VkRenderPassBeginInfo rp = { VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
+  rp.renderPass = s_vram_rpass; rp.framebuffer = s_vram_fb; rp.renderArea.extent = (VkExtent2D){ VRAM_W, VRAM_H };
+  vkCmdBeginRenderPass(s_cmd, &rp, VK_SUBPASS_CONTENTS_INLINE);
+  VkViewport vpt = { 0, 0, VRAM_W, VRAM_H, 0.0f, 1.0f }; VkRect2D sc = { {0,0}, { VRAM_W, VRAM_H } };
+  vkCmdSetViewport(s_cmd, 0, 1, &vpt); vkCmdSetScissor(s_cmd, 0, 1, &sc);
+  vkCmdBindPipeline(s_cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, s_tri_pipe);
+  VkDeviceSize off = 0; vkCmdBindVertexBuffers(s_cmd, 0, 1, &s_vbuf, &off);
+  if (s_tri_n) vkCmdDraw(s_cmd, s_tri_n, 1, 0, 0);
+  vkCmdEndRenderPass(s_cmd);
+  img_barrier(VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+              VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+              VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT);
+  vkCmdCopyImageToBuffer(s_cmd, s_tex, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, s_rb, 1, &bc);
+  s_tex_undef = 1;
+  VKC(vkEndCommandBuffer(s_cmd));
+  VkSubmitInfo su = { VK_STRUCTURE_TYPE_SUBMIT_INFO };
+  su.commandBufferCount = 1; su.pCommandBuffers = &s_cmd;
+  VKC(vkQueueSubmit(s_queue, 1, &su, s_fence));
+  VKC(vkWaitForFences(s_dev, 1, &s_fence, VK_TRUE, UINT64_MAX));
+  memcpy(out, s_rb_ptr, (size_t)VRAM_W * VRAM_H * 2);
+}
+
+// Per-frame: PSXPORT_VK_DIFF=frame -> diff this frame's tee'd untextured tris (VK) vs SW VRAM. Always
+// resets the batch. `frame` is the SW frame counter; `svram` is the SW VRAM (source of truth).
+void gpu_vk_frame_end(const uint16_t* svram, int frame) {
+  if (!gpu_vk_enabled() || !s_inited) { s_tri_n = 0; return; }
+  static int dframe = -2;
+  if (dframe == -2) { const char* e = getenv("PSXPORT_VK_DIFF"); dframe = e ? atoi(e) : -1; }
+  if (dframe >= 0 && frame == dframe) {
+    if (!s_tri_n) { fprintf(stderr, "[vk_diff] f%d: no untextured tris this frame\n", frame); s_tri_n = 0; return; }
+    static uint16_t got[VRAM_W * VRAM_H];
+    tri_over_bg_readback(svram, got);
+    long diff = 0; for (int i = 0; i < VRAM_W * VRAM_H; i++) if (got[i] != svram[i]) diff++;
+    fprintf(stderr, "[vk_diff] f%d  tris=%d  mismatched VRAM px (VK vs SW)=%ld (%.4f%%)\n",
+            frame, s_tri_n / 3, diff, 100.0 * diff / (VRAM_W * VRAM_H));
+    FILE* f = fopen("scratch/screenshots/vk_diff.ppm", "wb");
+    if (f) { int W = 384, H = 256, oy = 256;     // a display-sized window, diffs highlighted red
+      fprintf(f, "P6\n%d %d\n255\n", W, H);
+      for (int y = 0; y < H; y++) for (int x = 0; x < W; x++) {
+        int i = (y + oy) * VRAM_W + x; uint16_t p = got[i]; unsigned char c[3];
+        if (got[i] != svram[i]) { c[0] = 255; c[1] = c[2] = 0; }
+        else { c[0] = ((p)&31)<<3; c[1] = ((p>>5)&31)<<3; c[2] = ((p>>10)&31)<<3; }
+        fwrite(c, 1, 3, f); }
+      fclose(f); fprintf(stderr, "[vk_diff] wrote scratch/screenshots/vk_diff.ppm (diffs=red)\n"); }
+  }
+  s_tri_n = 0;
+}
+
 // PSXPORT_VK_TRITEST=1: headless-ish self-test of the triangle rasterizer. Draws a known flat tri and a
 // gouraud tri, reads back, checks expected pixels, prints PASS/FAIL, exits. Validates the GPU raster path.
 void gpu_vk_tritest(void) {
@@ -623,6 +692,14 @@ void gpu_vk_tritest(void) {
   fprintf(stderr, "[vk_tritest] flat(40,40)=0x%04x (want 0x001f)  bg(50,400)=0x%04x (want 0)  "
           "gouraud(445,305)=0x%04x r=%d g=%d b=%d  => %s\n",
           inside_flat, outside, g_corner, gr, gg, gb, ok ? "PASS" : "FAIL");
+  // dump the GPU-rendered region (0,0)-(480,480) as a PPM for visual confirmation
+  FILE* f = fopen("scratch/screenshots/vk_tritest.ppm", "wb");
+  if (f) { int W = 480, H = 480; fprintf(f, "P6\n%d %d\n255\n", W, H);
+    for (int y = 0; y < H; y++) for (int x = 0; x < W; x++) {
+      uint16_t p = vram[y * VRAM_W + x];
+      unsigned char rgb[3] = { (unsigned char)(((p)&31)<<3), (unsigned char)(((p>>5)&31)<<3), (unsigned char)(((p>>10)&31)<<3) };
+      fwrite(rgb, 1, 3, f); }
+    fclose(f); fprintf(stderr, "[vk_tritest] wrote scratch/screenshots/vk_tritest.ppm\n"); }
   exit(ok ? 0 : 3);
 }
 #else
@@ -630,6 +707,7 @@ void gpu_vk_tritest(void) {
 int  gpu_vk_enabled(void) { return 0; }
 void gpu_vk_present(const uint16_t* src, int sx, int sy, int w, int h) { (void)src;(void)sx;(void)sy;(void)w;(void)h; }
 void gpu_vk_tritest(void) {}
+void gpu_vk_frame_end(const uint16_t* svram, int frame) { (void)svram; (void)frame; }
 void gpu_vk_draw_tri(int a,int b,int c,int d,int e,int f,int g,int h,int i,int j,int k,int l,int m,int n,int o) {
   (void)a;(void)b;(void)c;(void)d;(void)e;(void)f;(void)g;(void)h;(void)i;(void)j;(void)k;(void)l;(void)m;(void)n;(void)o;
 }

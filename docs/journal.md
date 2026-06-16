@@ -1,5 +1,21 @@
 # Debug / progress journal
 
+## 2026-06-17 (later-88) — HW renderer M0–M2 + M2b: Vulkan present + GPU VRAM image + triangle rasterizer; finding: Tomba2 is texture-dominated.
+Built the Vulkan/MoltenVK renderer foundation (approved plan; runtime/recomp/gpu_vk.c, PSXPORT_VK=1):
+- **M0**: SDL_Vulkan swapchain + fullscreen-quad present (SW still rasterizes s_vram, VK presents it).
+- **M1**: VRAM as a device image (R16_UINT 1024x512 = 1555); present samples it + unpacks in-shader.
+- **M2**: GPU triangle pipeline (flat/gouraud) drawing into the VRAM image; readback. Self-test
+  PSXPORT_VK_TRITEST=1 PASSES (flat fill 0x001f exact, gouraud interpolated, clear correct).
+- **M2b**: tee UNTEXTURED polys from gp0_exec into gpu_vk_draw_tri (absolute VRAM coords) + a per-frame
+  VK-vs-SW diff (PSXPORT_VK_DIFF=frame: upload SW VRAM as bg, draw VK tris on top, readback, count
+  mismatches, dump scratch/screenshots/vk_diff.ppm).
+- **FINDING:** gameplay frames have **zero untextured polys** (f2500/f4500 both "no untextured tris").
+  Tomba2 draws virtually everything TEXTURED. So M2 coverage on this game is ~nil — the untextured
+  rasterizer is a validated foundation, but **M3 (textured tris + CLUT-in-shader + semi-transparency)
+  is the milestone that actually renders Tomba2**. Pivot the renderer effort there next.
+- Verified: builds/link with -lvulkan; headless unaffected (VK only with a window); windowed VK up
+  (1280x720, RADV); present + self-test + diff-harness all run clean. SW path + default untouched.
+
 ## 2026-06-16 (later-87) — ROOT-CAUSED the WIDE60 "tripled weapon icon": the re-rasterized in-between is LOSSY. Interim fix: present the real frame when not interpolating.
 User: the tripling happens ONLY with PSXPORT_WIDE60=1 (the port), and is the only thing broken.
 Diagnosed via the offline A/in-between/B dump at the field scene (f4720, spiky-ball enemies in water):
