@@ -72,9 +72,11 @@ static void ov_frame_update(R3000* c) {
     spu_audio_frame();                               // advance SPU one 1/60 s field + feed device
   }
   mem_w16(DISPLAY_COUNTER, mem_r8(VBLANK_QUOTA));    // satisfy the pacing dwell immediately
-  wide60_frame_commit();                             // wide60: this frame's geometry is projected
-  gpu_present();                                     // one rendered frame per loop iteration
-  gpu_pace_frame();                                  // throttle to game pace when windowed (1 call/frame)
+  // wide60 (when enabled) OWNS presentation: it presents the previous real frame + the interpolated
+  // frame (60 fps, 1 frame behind) and paces both halves — see wide60_present. The faithful path
+  // presents frame B once and paces a full frame.
+  wide60_frame_commit();
+  if (!g_wide60_on) { gpu_present(); gpu_pace_frame(); }
 }
 
 // wide60 object tag: the universal per-object cull/LOD dispatcher (a0 = object*, once per logic

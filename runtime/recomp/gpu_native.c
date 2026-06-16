@@ -22,6 +22,14 @@ extern int g_wide60_on;           // wide60: capture/synth enabled (PSXPORT_WIDE
 static uint16_t s_vram[VRAM_W * VRAM_H];
 static inline uint16_t* vram(int x, int y) { return &s_vram[(y & 511) * VRAM_W + (x & 1023)]; }
 
+// wide60 60fps layer: a SEPARATE off-screen framebuffer the interpolated frame is rasterized into,
+// so the 60fps tier sits ON TOP of the renderer and NEVER writes the game's VRAM. put_px_b writes
+// (and its blend-reads) go to s_fb_base — normally s_vram, switched to s_interp only while synthesizing
+// the in-between; sample_tex always reads s_vram, so textures still come from the live atlas.
+static uint16_t s_interp[VRAM_W * VRAM_H];
+static uint16_t* s_fb_base = s_vram;
+static inline uint16_t* fb(int x, int y) { return &s_fb_base[(y & 511) * VRAM_W + (x & 1023)]; }
+
 // ---- Draw state (set by GP0 env commands E1..E6) ------------------------------------
 static int s_da_x0, s_da_y0, s_da_x1 = 1023, s_da_y1 = 511;  // draw clip area
 static int s_off_x, s_off_y;                                 // draw offset
@@ -109,9 +117,9 @@ static uint16_t sample_tex(int u, int v) {
 static inline void put_px_b(int x, int y, uint8_t r, uint8_t g, uint8_t b, int semi) {
   if (x < s_da_x0 || x > s_da_x1 || y < s_da_y0 || y > s_da_y1) return;
   uint16_t out;
-  if (semi) out = blend555(*vram(x, y) & 0x7FFF, r >> 3, g >> 3, b >> 3, s_tp_blend);
+  if (semi) out = blend555(*fb(x, y) & 0x7FFF, r >> 3, g >> 3, b >> 3, s_tp_blend);
   else out = to555(r, g, b);
-  *vram(x, y) = out | 0x8000;
+  *fb(x, y) = out | 0x8000;
   if (s_prov_on > 0) s_prov[(y & 511) * VRAM_W + (x & 1023)] = s_prim_gid;
 }
 static inline void put_px(int x, int y, uint8_t r, uint8_t g, uint8_t b) { put_px_b(x, y, r, g, b, 0); }
@@ -415,6 +423,42 @@ static int texwatch_overlap(int rx, int ry, int rw, int rh) {
   return rx < s_tw_x1 && rx + rw > s_tw_x0 && ry < s_tw_y1 && ry + rh > s_tw_y0;
 }
 
+// Rasterize one sprite/rect with the CURRENT draw state (s_off, s_da clip, texpage via sample_tex,
+// command color). Shared by gp0_exec and the wide60 in-between synthesizer so both go through the
+// exact same texel/blend/clip logic. (op bit0 = raw-texel select; semi = semi-transparency.)
+static void raster_sprite(int op, int x, int y, int u0, int v0, int w, int h,
+                          uint8_t cr, uint8_t cg, uint8_t cb, int textured, int semi) {
+  // Clip the iteration to the drawing area up front: off-screen sprites otherwise spin w*h
+  // sample_tex calls for pixels put_px_b would discard (could burn millions of iterations).
+  int dx0 = 0, dx1 = w, dy0 = 0, dy1 = h;
+  if (s_da_x0 - x - s_off_x > dx0) dx0 = s_da_x0 - x - s_off_x;
+  if (s_da_x1 - x - s_off_x + 1 < dx1) dx1 = s_da_x1 - x - s_off_x + 1;
+  if (s_da_y0 - y - s_off_y > dy0) dy0 = s_da_y0 - y - s_off_y;
+  if (s_da_y1 - y - s_off_y + 1 < dy1) dy1 = s_da_y1 - y - s_off_y + 1;
+  for (int dy = dy0; dy < dy1; dy++)
+    for (int dx = dx0; dx < dx1; dx++) {
+      if (textured) {
+        uint16_t t = sample_tex(u0 + dx, v0 + dy);
+        if (t == 0) continue;                     // transparent texel
+        int px_semi = semi && (t & 0x8000);
+        int tr = (t & 31) << 3, tg = ((t >> 5) & 31) << 3, tb = ((t >> 10) & 31) << 3;
+        if (!(op & 1)) {                          // bit0=0 -> modulate texel by command color
+          tr = tr * cr / 128; tg = tg * cg / 128; tb = tb * cb / 128;
+          if (tr > 255) tr = 255; if (tg > 255) tg = 255; if (tb > 255) tb = 255;
+        }
+        put_px_b(x + dx + s_off_x, y + dy + s_off_y, tr, tg, tb, px_semi);
+      } else put_px_b(x + dx + s_off_x, y + dy + s_off_y, cr, cg, cb, semi);
+    }
+}
+
+// Rasterize one flat line segment with the CURRENT draw state (s_off, clip). Shared by gp0_exec and
+// the wide60 synthesizer so poly-lines are reproduced in the interpolated frame (else they flicker).
+static void raster_line(int x0, int y0, int x1, int y1, uint8_t cr, uint8_t cg, uint8_t cb, int semi) {
+  int dx = abs(x1 - x0), dy = -abs(y1 - y0), sx = x0 < x1 ? 1 : -1, sy = y0 < y1 ? 1 : -1, e = dx + dy;
+  for (;;) { put_px_b(x0 + s_off_x, y0 + s_off_y, cr, cg, cb, semi); if (x0 == x1 && y0 == y1) break;
+    int e2 = 2 * e; if (e2 >= dy) { e += dy; x0 += sx; } if (e2 <= dx) { e += dx; y0 += sy; } }
+}
+
 // Execute a complete GP0 primitive packet held in s_fifo[0..s_fcount).
 static void gp0_exec(void) {
   uint32_t c = s_fifo[0];
@@ -442,12 +486,12 @@ static void gp0_exec(void) {
     if (g_wide60_on) {                       // wide60: tee the full primitive into PrimFrame B
       void wide60_cap_poly(int, int, const int*, const int*, const int*, const int*,
                            const unsigned char*, const unsigned char*, const unsigned char*,
-                           int, int, int, int, int, int, int, int);
+                           int, int, int, int, int, int, int, int, int);
       int xs[4], ys[4], us[4], vs[4]; unsigned char rs[4], gs[4], bs[4];
       for (int i = 0; i < nv; i++) { xs[i]=v[i].x; ys[i]=v[i].y; us[i]=v[i].u; vs[i]=v[i].v;
                                      rs[i]=v[i].r; gs[i]=v[i].g; bs[i]=v[i].b; }
       wide60_cap_poly(op, nv, xs, ys, us, vs, rs, gs, bs, s_off_x, s_off_y,
-                      s_tp_x, s_tp_y, s_tp_mode, s_tp_blend, s_clut_x, s_clut_y);
+                      s_tp_x, s_tp_y, s_tp_mode, s_tp_blend, s_tp_dither, s_clut_x, s_clut_y);
     }
     // PSXPORT_POLYDUMP=frame — log every poly at `frame` (our port side, to compare vs oracle
     // polywatch). Finds the garbage-block prims in the GAME level.
@@ -516,33 +560,10 @@ static void gp0_exec(void) {
       wide60_cap_sprite(op, x, y, u0, v0, w, h, cr, cg, cb, s_off_x, s_off_y,
                         s_tp_x, s_tp_y, s_tp_mode, s_tp_blend, s_clut_x, s_clut_y);
     }
-    // Clip the iteration to the drawing area up front: off-screen sprites otherwise spin
-    // w*h sample_tex calls for pixels put_px_b would discard (an off-screen/garbage sprite
-    // could burn millions of iterations and wedge the frame).
-    int dx0 = 0, dx1 = w, dy0 = 0, dy1 = h;
-    if (s_da_x0 - x - s_off_x > dx0) dx0 = s_da_x0 - x - s_off_x;
-    if (s_da_x1 - x - s_off_x + 1 < dx1) dx1 = s_da_x1 - x - s_off_x + 1;
-    if (s_da_y0 - y - s_off_y > dy0) dy0 = s_da_y0 - y - s_off_y;
-    if (s_da_y1 - y - s_off_y + 1 < dy1) dy1 = s_da_y1 - y - s_off_y + 1;
-    for (int dy = dy0; dy < dy1; dy++)
-      for (int dx = dx0; dx < dx1; dx++) {
-        if (textured) {
-          uint16_t t = sample_tex(u0 + dx, v0 + dy);
-          if (t == 0) continue;                     // transparent texel
-          // texel bit15 gates per-pixel blending (same rule as textured polygons)
-          int px_semi = semi && (t & 0x8000);
-          int tr = (t & 31) << 3, tg = ((t >> 5) & 31) << 3, tb = ((t >> 10) & 31) << 3;
-          // Texture mode is gated by command bit0, matching the oracle's sprite decode table
-          // (beetle gpu_common.h: 0x64/0x66 = TM1 modulate, 0x65/0x67 = TM0 raw). bit0=0 -> modulate
-          // texel by command color (saturated); bit0=1 -> raw texel. (An earlier change modulated
-          // unconditionally and wrongly tinted raw 0x65 sprites — e.g. turned a blue item green.)
-          if (!(op & 1)) {
-            tr = tr * cr / 128; tg = tg * cg / 128; tb = tb * cb / 128;
-            if (tr > 255) tr = 255; if (tg > 255) tg = 255; if (tb > 255) tb = 255;
-          }
-          put_px_b(x + dx + s_off_x, y + dy + s_off_y, tr, tg, tb, px_semi);
-        } else put_px_b(x + dx + s_off_x, y + dy + s_off_y, cr, cg, cb, semi);
-      }
+    // bit0=1 -> raw texel; bit0=0 -> modulate by command color (beetle sprite decode table:
+    // 0x64/0x66 = TM1 modulate, 0x65/0x67 = TM0 raw). Modulating unconditionally once wrongly
+    // tinted raw 0x65 sprites (turned a blue item green).
+    raster_sprite(op, x, y, u0, v0, w, h, cr, cg, cb, textured, semi);
     s_prims++;
   } else if (op == 0x02) {                   // fill rectangle (in VRAM, ignores clip/offset)
     uint8_t cr = cmd_r(c), cg = cmd_g(c), cb = cmd_b(c);
@@ -563,16 +584,46 @@ static void gp0_exec(void) {
       if (i >= s_fcount) break;
       vx[nv] = cx(s_fifo[i]); vy[nv] = cy(s_fifo[i]); vr[nv] = r; vg[nv] = g; vb[nv] = b; nv++; i++;
     }
-    for (int s = 0; s + 1 < nv; s++) {        // Bresenham per segment, flat colour = start vertex
-      int x0 = vx[s], y0 = vy[s], x1 = vx[s+1], y1 = vy[s+1];
-      uint8_t cr = vr[s], cg = vg[s], cb = vb[s];
-      int dx = abs(x1 - x0), dy = -abs(y1 - y0), sx = x0 < x1 ? 1 : -1, sy = y0 < y1 ? 1 : -1, e = dx + dy;
-      for (;;) { put_px_b(x0 + s_off_x, y0 + s_off_y, cr, cg, cb, semi); if (x0 == x1 && y0 == y1) break;
-        int e2 = 2 * e; if (e2 >= dy) { e += dy; x0 += sx; } if (e2 <= dx) { e += dx; y0 += sy; } }
+    for (int s = 0; s + 1 < nv; s++) {        // flat colour = start vertex
+      raster_line(vx[s], vy[s], vx[s+1], vy[s+1], vr[s], vg[s], vb[s], semi);
+      if (g_wide60_on) {                       // wide60: tee each segment (snaps; obj 0) so the interp
+        void wide60_cap_line(int, int, int, int, int, int, int, int, int);   // frame keeps the line
+        wide60_cap_line(op, vx[s], vy[s], vx[s+1], vy[s+1], vr[s], vg[s], vb[s], semi);
+      }
     }
     s_prims++;
   }
   // env commands (E1..E6) handled in gpu_gp0 directly (single-word).
+}
+
+// ---- wide60 in-between synthesizer: direct-draw entry points -------------------------
+// The 60fps tier (wide60.c) re-rasterizes a lerped copy of the captured display list into the SEPARATE
+// s_interp buffer (see gpu_w60_begin_interp). These reuse the SAME tri()/raster_sprite() path as
+// gp0_exec (no GP0 re-encode round-trip), driven by explicit decoded state; textures read from VRAM.
+void gpu_w60_draw_poly(int op, int nv, const int* xs, const int* ys, const int* us, const int* vs,
+                       const unsigned char* rs, const unsigned char* gs, const unsigned char* bs,
+                       int tp_x, int tp_y, int mode, int blend, int dither, int clut_x, int clut_y) {
+  int gouraud = op & 0x10, textured = op & 0x04, semi = (op & 0x02) ? 1 : 0;
+  int raw = textured && (op & 0x01);
+  s_tp_x = tp_x; s_tp_y = tp_y; s_tp_mode = mode; s_tp_blend = blend; s_tp_dither = dither;
+  s_clut_x = clut_x; s_clut_y = clut_y;
+  Vtx v[4];
+  for (int i = 0; i < nv; i++) { v[i].x=xs[i]; v[i].y=ys[i]; v[i].u=us[i]; v[i].v=vs[i];
+                                 v[i].r=rs[i]; v[i].g=gs[i]; v[i].b=bs[i]; }
+  int shade = gouraud || !textured;
+  tri(v[0], v[1], v[2], textured, shade, semi, raw);
+  if (nv == 4) tri(v[1], v[2], v[3], textured, shade, semi, raw);
+}
+void gpu_w60_draw_sprite(int op, int x, int y, int u0, int v0, int w, int h,
+                         int r, int g, int b, int tp_x, int tp_y, int mode, int blend,
+                         int clut_x, int clut_y) {
+  int textured = op & 0x04, semi = (op & 0x02) ? 1 : 0;
+  s_tp_x = tp_x; s_tp_y = tp_y; s_tp_mode = mode; s_tp_blend = blend;
+  s_clut_x = clut_x; s_clut_y = clut_y;
+  raster_sprite(op, x, y, u0, v0, w, h, (uint8_t)r, (uint8_t)g, (uint8_t)b, textured, semi);
+}
+void gpu_w60_draw_line(int x0, int y0, int x1, int y1, int r, int g, int b, int semi) {
+  raster_line(x0, y0, x1, y1, (uint8_t)r, (uint8_t)g, (uint8_t)b, semi);
 }
 
 // Words needed to complete the packet beginning with command word `c`.
@@ -799,19 +850,33 @@ void gpu_gp1(uint32_t w) {
 }
 
 // Optional live window (PSXPORT_GPU_WINDOW=1). Headless builds without SDL just no-op.
+// The output is fit to the screen at a fixed 4:3 display aspect with letterbox/pillarbox bars —
+// NEVER stretched. PSX always scans its framebuffer (whatever the horizontal res: 256/320/512/640)
+// out to the same 4:3 screen area, so mapping disp_w×disp_h into a 4:3 rect reproduces the correct
+// pixel aspect and keeps 2D art / FMVs un-stretched regardless of window size. (This is the display
+// scaler, independent of the — currently blocked — widescreen GEOMETRY tier; we do not widen here.)
 #ifdef PSXPORT_SDL
 static SDL_Window* s_win; static SDL_Renderer* s_ren; static SDL_Texture* s_tex;
 static int s_tex_w, s_tex_h, s_win_on = -1;
-static void present_window(void) {
+static int win_enabled(void) {
   // Check the VALUE, not mere presence: run.sh always SETS PSXPORT_GPU_WINDOW (to "0" headless),
   // and getenv("...")!=NULL is truthy for "0" too — so a presence test opened a window even with
-  // PSXPORT_NOWINDOW=1 (the "still running headed" bug). Match gpu_pace_frame: atoi(w)!=0.
+  // PSXPORT_NOWINDOW=1 (the "still running headed" bug). Match gpu_pace_subframe: atoi(w)!=0.
   if (s_win_on < 0) { const char* w = getenv("PSXPORT_GPU_WINDOW"); s_win_on = (w && atoi(w) != 0) ? 1 : 0; }
-  if (!s_win_on) return;
+  return s_win_on;
+}
+static void ensure_window(void) {
   if (!s_win) {
     SDL_Init(SDL_INIT_VIDEO);
+    SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "1");   // linear filter for a smooth upscale
+    // Default: borderless fullscreen at the desktop resolution ("adapt to screen"). PSXPORT_WINDOWED=1
+    // opens a resizable 3x window instead (handy for dev). The 4:3 fit below applies to both.
+    int windowed = getenv("PSXPORT_WINDOWED") && atoi(getenv("PSXPORT_WINDOWED")) != 0;
+    Uint32 flags = windowed ? SDL_WINDOW_RESIZABLE : SDL_WINDOW_FULLSCREEN_DESKTOP;
     s_win = SDL_CreateWindow("Tomba! 2 (native PC port)", SDL_WINDOWPOS_CENTERED,
-                             SDL_WINDOWPOS_CENTERED, s_disp_w * 3, s_disp_h * 3, SDL_WINDOW_RESIZABLE);
+                             SDL_WINDOWPOS_CENTERED, s_disp_w * 3, s_disp_h * 3, flags);
+    // No PRESENTVSYNC: the manual pacer (gpu_pace_subframe) is the single timing authority, so the
+    // loop runs at the right wall-clock rate (and audio stays realtime) on ANY monitor refresh rate.
     s_ren = SDL_CreateRenderer(s_win, -1, SDL_RENDERER_ACCELERATED);
   }
   if (!s_tex || s_tex_w != s_disp_w || s_tex_h != s_disp_h) {
@@ -820,19 +885,70 @@ static void present_window(void) {
                               s_disp_w, s_disp_h);
     s_tex_w = s_disp_w; s_tex_h = s_disp_h;
   }
+}
+// Blit one display-sized region [sx,sy .. +disp_w,disp_h] of `src` (s_vram or s_interp) to the window,
+// fit to a 4:3 rect with black bars — never stretched (correct PSX pixel aspect for 2D / FMV / any res).
+static void blit_src(const uint16_t* src, int sx, int sy) {
+  if (!win_enabled()) return;
+  ensure_window();
   static uint32_t buf[VRAM_W * VRAM_H];
   for (int y = 0; y < s_disp_h; y++)
     for (int x = 0; x < s_disp_w; x++) {
-      uint16_t p = *vram(s_disp_x + x, s_disp_y + y);
+      uint16_t p = src[((sy + y) & 511) * VRAM_W + ((sx + x) & 1023)];
       buf[y * s_disp_w + x] = 0xFF000000u | (((p >> 10) & 31) << 19) | (((p >> 5) & 31) << 11) | ((p & 31) << 3);
     }
   SDL_UpdateTexture(s_tex, NULL, buf, s_disp_w * 4);
-  SDL_RenderClear(s_ren); SDL_RenderCopy(s_ren, s_tex, NULL, NULL); SDL_RenderPresent(s_ren);
-  SDL_Event e; while (SDL_PollEvent(&e)) if (e.type == SDL_QUIT) exit(0);
+  int ow = 0, oh = 0; SDL_GetRendererOutputSize(s_ren, &ow, &oh);
+  SDL_Rect dst;
+  if (ow * 3 >= oh * 4) { dst.h = oh; dst.w = oh * 4 / 3; }   // screen wider than 4:3 -> pillarbox
+  else                  { dst.w = ow; dst.h = ow * 3 / 4; }   // screen taller than 4:3 -> letterbox
+  dst.x = (ow - dst.w) / 2; dst.y = (oh - dst.h) / 2;
+  SDL_SetRenderDrawColor(s_ren, 0, 0, 0, 255);
+  SDL_RenderClear(s_ren); SDL_RenderCopy(s_ren, s_tex, NULL, &dst); SDL_RenderPresent(s_ren);
+  SDL_Event e;
+  while (SDL_PollEvent(&e)) {
+    if (e.type == SDL_QUIT) exit(0);
+    if (e.type == SDL_KEYDOWN && e.key.keysym.scancode == SDL_SCANCODE_ESCAPE) exit(0);
+  }
 }
+static void present_window(void) { blit_src(s_vram, s_disp_x, s_disp_y); }   // the live front buffer
+// wide60: present the previous real frame straight from VRAM (read-only), and the interpolated frame
+// from the separate s_interp buffer. Both blit a display-sized region at the given VRAM origin.
+void gpu_w60_blit_vram(int dx, int dy)   { blit_src(s_vram,   dx, dy); }
+void gpu_w60_blit_interp(int dx, int dy) { blit_src(s_interp, dx, dy); }
 #else
 static void present_window(void) {}
+void gpu_w60_blit_vram(int dx, int dy)   { (void)dx; (void)dy; }
+void gpu_w60_blit_interp(int dx, int dy) { (void)dx; (void)dy; }
 #endif
+
+// wide60 headless validation: dump a display-sized region of a buffer to a PPM (P6). Used by the
+// synth dumptest to compare prev / interpolated / current frames offline.
+static void shot_buf(const uint16_t* src, int dx, int dy, const char* path) {
+  FILE* f = fopen(path, "wb"); if (!f) return;
+  fprintf(f, "P6\n%d %d\n255\n", s_disp_w, s_disp_h);
+  for (int y = 0; y < s_disp_h; y++)
+    for (int x = 0; x < s_disp_w; x++) {
+      uint16_t p = src[((dy + y) & 511) * VRAM_W + ((dx + x) & 1023)];
+      uint8_t rgb[3] = { (uint8_t)((p & 31) << 3), (uint8_t)(((p >> 5) & 31) << 3), (uint8_t)(((p >> 10) & 31) << 3) };
+      fwrite(rgb, 1, 3, f);
+    }
+  fclose(f);
+}
+void gpu_w60_shot_vram(int dx, int dy, const char* path)   { shot_buf(s_vram,   dx, dy, path); }
+void gpu_w60_shot_interp(int dx, int dy, const char* path) { shot_buf(s_interp, dx, dy, path); }
+
+// wide60: redirect the rasterizer's framebuffer writes to the separate s_interp buffer, clear the
+// target display region, and set the draw env. The interpolated display list is then rasterized via
+// the normal gpu_w60_draw_* path (textures still read from VRAM). end_interp restores VRAM as target.
+void gpu_w60_begin_interp(int off_x, int off_y, int cx0, int cy0, int cx1, int cy1) {
+  s_fb_base = s_interp;
+  for (int y = cy0; y <= cy1; y++)
+    for (int x = cx0; x <= cx1; x++) s_interp[(y & 511) * VRAM_W + (x & 1023)] = 0;
+  s_off_x = off_x; s_off_y = off_y;
+  s_da_x0 = cx0; s_da_y0 = cy0; s_da_x1 = cx1; s_da_y1 = cy1;
+}
+void gpu_w60_end_interp(void) { s_fb_base = s_vram; }
 
 // Frame pacing: the native game loop (ov_game_main) runs UNTHROTTLED — at thousands of fps.
 // That's right for headless tests but unplayable windowed. When a window is up we throttle to
@@ -841,7 +957,10 @@ static void present_window(void) {}
 // (no window) is never paced so tests stay fast. SDL timing keeps it portable (a window implies
 // SDL is up). Called ONCE per native game-frame from ov_frame_update — NOT from gpu_present,
 // which the boot stub also drives many times per frame (pacing those would stall the boot).
-void gpu_pace_frame(void) {
+// Pace 1/`parts` of a logic frame: parts=1 → one full logic frame (30fps faithful path); parts=2 →
+// half a logic frame (wide60 presents twice per logic frame for 60fps). The shared `next` accumulator
+// advances by exactly one logic frame's worth per logic frame either way, so audio stays realtime.
+void gpu_pace_subframe(int parts) {
 #ifdef PSXPORT_SDL
   static int on = -1;
   if (on < 0) {
@@ -849,17 +968,21 @@ void gpu_pace_frame(void) {
     on = (w && atoi(w) != 0 && !getenv("PSXPORT_NOPACE")) ? 1 : 0;  // check the VALUE, not presence
   }
   if (!on) return;
+  if (parts < 1) parts = 1;
   uint8_t mem_r8(uint32_t);
   int quota = mem_r8(0x1F800235u); if (quota < 1) quota = 2;   // vblanks per frame (default 30fps)
-  double interval = quota * 1000.0 / 60.0;                     // ms per displayed frame
+  double interval = quota * 1000.0 / 60.0 / parts;             // ms for this sub-frame
   static double next = -1;
   double now = (double)SDL_GetTicks();
   if (next < 0) next = now;
   next += interval;
   if (next > now) SDL_Delay((unsigned)(next - now));
   else if (now - next > interval) next = now;                  // resync after a hitch (no debt)
+#else
+  (void)parts;
 #endif
 }
+void gpu_pace_frame(void) { gpu_pace_subframe(1); }
 
 // Present: copy the displayed VRAM region to an RGB buffer. PSXPORT_GPU_DUMP=dir dumps PPMs;
 // PSXPORT_GPU_WINDOW=1 shows a live SDL window.
@@ -879,7 +1002,10 @@ void gpu_native_shot(const char* path) {
   fclose(f);
   fprintf(stderr, "[shot] f%d -> %s (%dx%d disp@%d,%d)\n", s_frame, path, s_disp_w, s_disp_h, s_disp_x, s_disp_y);
 }
-void gpu_present(void) {
+// gpu_present_ex: the per-frame present + bookkeeping. `do_blit` blits the live front buffer to the
+// window; wide60 passes 0 (it owns presentation: it blits the previous real frame + the interpolated
+// frame itself) but still wants the bookkeeping (watchdog, s_frame++, diagnostics).
+void gpu_present_ex(int do_blit) {
   void watchdog_pet(void);
   watchdog_pet();             // frame-progress heartbeat (see watchdog.c)
   trace_flush();              // PSXPORT_GPUTRACE: write this frame's GP0 trace (no-op unless armed)
@@ -890,7 +1016,7 @@ void gpu_present(void) {
     fprintf(stderr, "[vramscan] f%d disp@(%d,%d) %dx%d  nonblack=%ld bbox=(%d,%d)-(%d,%d)\n",
             s_frame, s_disp_x, s_disp_y, s_disp_w, s_disp_h, nz, minx, miny, maxx, maxy);
   }
-  present_window();
+  if (do_blit) present_window();
   { void ws_sx_dump(const char*);   // widescreen RE (later-55): dump GTE screen-X histogram
     if (getenv("PSXPORT_WS_SXHIST") && s_frame > 0 && (s_frame % 500) == 0) {
       char t[32]; snprintf(t, sizeof t, "f%d", s_frame); ws_sx_dump(t); } }
@@ -959,6 +1085,7 @@ void gpu_present(void) {
   }
   s_frame++; s_prims = 0; s_gp0_words = 0; s_dma2 = 0;
 }
+void gpu_present(void) { gpu_present_ex(1); }
 
 void gpu_native_init(void) {
   if (getenv("PSXPORT_GPU_LOG")) g_log = 1;

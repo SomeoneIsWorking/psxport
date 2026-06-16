@@ -1,5 +1,75 @@
 # Debug / progress journal
 
+## 2026-06-16 (later-82) — wide60 60fps RE-ARCHITECTED to the per-game GTE-transform tier (user-directed; screen-space plane interp REJECTED). Native graphical-object capture + cross-frame matching VERIFIED.
+**User rejected screen-space primitive interpolation** ("you are doing this blindly; reverse engineer the
+game's camera and objects and interpolate those, not individual planes"; then "port the game's graphical
+objects into PC native such as camera and models, then interpolate them"). Did the RE:
+
+### RE findings (PSXPORT_W60_GTEDBG instrumentation, demo scene f2500)
+- The **0x8007712C cull dispatcher does NOT fire** in these scenes — `g_current_object` stays 0. So the
+  earlier "object join 92-99%" (later-57) was joining EVERYTHING to one sentinel = a single mega-blob —
+  THE ROOT CAUSE of the smearing in the screen-space approach. **Falsifies the object-join premise.**
+- The real object identity is the **GTE TRANSFORM**: each run of RTPS/RTPT sharing one (R = rotation
+  matrix CR0-4, TR = translation CR5-7 = the model-view, camera baked in) is one object. ~34-121 distinct
+  transforms/frame: identity-rotation+large-TR = world props/background; varied-rotation+small-TR clusters
+  = the character (one transform per animated bone, 30-70 RTPS each); one 1535-RTPS group = the terrain.
+- Camera has **identity rotation** here (2.5D); motion is in TR (e.g. TRZ 2624→2656 between f2500/f2501).
+  Projection consts OFX/OFY/H constant. Local input verts (DR0/DR1) are **model-space, frame-invariant**.
+
+### Architecture (the per-game tier, per CLAUDE.md)
+Group geometry by GTE transform = native object. Cross-frame **identity = local-vertex fingerprint** (mesh
+invariant; only transform moves). **Interpolate the transform** (R + TR) at t=0.5; **re-project** the local
+verts through the real Beetle GTE → old-SXY→new-SXY map → remap B's captured prim vertices. Unmapped prims
+(CPU-projected terrain edges / 2D HUD) snap = 30fps. Perspective-correct ⇒ no smears, no gaps.
+
+### VERIFIED foundation (headless, gameplay f500-f5000) — `wide60.c` XObj capture
+`wide60_rtp`→`xobj_rtp` groups RTPS by transform into native `XObj{R,TR,fingerprint,nrtps}`, double-buffered
+A/B. **objects/frame = 24-121; cross-frame match by fingerprint = 87-94%; TR delta avg 70-940, max ~5700**
+(interpolatable). 0-object frames = FMV/load (no interp). Faithful path unchanged.
+
+### Next (this is the active work)
+Reprojection: save GTE state → for each matched object write interp(R_A,R_B)/interp(TR_A,TR_B) → RTPS each
+local vert → build SXY remap → restore GTE → render in-between by remapping prim verts. **The screen-space
+synth (wide60_synthesize lerp, prim matcher, per-object decide, shape gate) is SUPERSEDED** — kept only
+until reprojection lands, then removed.
+
+## 2026-06-16 (later-81) — wide60 60fps: in-between SYNTHESIZER + live present, rebuilt to the user's mandated architecture. PLAYABLE windowed (awaiting user flicker check). Also: fit-to-screen 4:3 display scaling.
+**User correction (a first cut that rendered the in-between INTO the game's back VRAM buffer was
+rejected as "terrible").** The 60fps layer must NOT write VRAM — it sits ON TOP of the PC renderer.
+Rebuilt per [[wide60-60fps-architecture]]:
+- **Separate framebuffer.** Interp is rasterized into `s_interp` (gpu_native.c), NOT VRAM. A write-target
+  redirect `s_fb_base` (used by `put_px_b`) points at s_interp only during synth; `sample_tex` always
+  reads VRAM, so textures come from the live atlas. `gpu_w60_begin_interp` clears the target region +
+  sets env; `gpu_w60_draw_poly/sprite` reuse the SAME `tri()`/`raster_sprite()` path (extracted a shared
+  `raster_sprite` helper from gp0_exec). `gpu_present` split into `gpu_present_ex(do_blit)` so wide60 runs
+  bookkeeping without the front blit.
+- **Cadence = 1 frame behind.** Per 30fps logic frame present TWO frames: the PREVIOUS real frame (intact
+  in the back VRAM buffer, blitted read-only) then the INTERP frame (s_interp). Current is held → becomes
+  "previous" next frame. Stream: A, lerp(A,B), B, lerp(B,C), C… = 60fps. `wide60_present()` owns it; gated
+  to windowed + animating (geom>0) + actually double-buffering (front_y flips), else one faithful present.
+  Pacing: `gpu_pace_subframe(2)` twice (the shared accumulator advances one logic frame, so audio stays
+  realtime); faithful path unchanged at `gpu_pace_subframe(1)`.
+- **Interp = object-vertex lerp at t=0.5** (matched within a displacement gate, default 48px L1; else snap);
+  UV/color/state kept from B (avoids UV-parity smear). Full list redrawn over a cleared region → background
+  + HUD reproduced, no holes (verified via the offline dump).
+- **Display scaling (`present_window`→`blit_src`):** fit output to the screen at fixed **4:3** with
+  letterbox/pillarbox bars — never stretch 2D/FMV. Default borderless **fullscreen-desktop** ("adapt to
+  screen"); `PSXPORT_WINDOWED=1` = resizable window; ESC/close quits; linear upscale filter.
+
+### Verified
+- **Faithful path byte-identical** with PSXPORT_WIDE60 off (VRAM f3000 `cmp` PASS) — the `put_px_b`→`fb()`
+  and `raster_sprite` extraction are behavior-preserving.
+- **Offline dump** (`PSXPORT_WIDE60_SYNTH=2500`): the interp frame in s_interp is COMPLETE (full bg, rails,
+  DEMO text) with the character at the interpolated midpoint between A and B. scratch/screenshots/w60_*.png.
+- Headless WIDE60 run completes (else-branch single present, no crash).
+
+### OPEN / next (NEEDS THE USER's eyes — windowed)
+- **Play + flicker check:** `PSXPORT_WIDE60=1 ./run.sh`. Watch for smoothness + ZERO flicker. Do not
+  declare done on headless alone.
+- Known approximations to revisit if artifacts show: per-prim clip not captured (uses full front-buffer
+  clip); lines (0x40–0x5F) / fills (0x02) not captured → if a scene draws bg via those they'd be missing in
+  the interp (clear-to-black shows through). The DEMO scene was complete with poly+sprite only.
+
 ## 2026-06-16 (later-80) — wide60 60fps: full primitive capture + cross-frame MATCHER built & displacement-verified (the handoff's stated next milestone). Foundation for the in-between synthesizer.
 Continued the 60fps tier from later-57 (object→primitive join). Built milestones 3 (full capture) and
 the matcher, all in `runtime/recomp/wide60.c` + read-only taps in `gpu_native.c gp0_exec` (gated PSXPORT_WIDE60).
