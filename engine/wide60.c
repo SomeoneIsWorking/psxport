@@ -48,12 +48,12 @@ static void grid_put(int sx, int sy, uint32_t obj) {
   int i = y * GW + x;
   s_obj_grid[i] = obj; s_obj_stamp[i] = s_epoch;
 }
-static uint32_t grid_get(int px, int py) {  // ±2px search; returns obj (0 = no join)
-  for (int dy = -2; dy <= 2; dy++)
+static uint32_t grid_get(int px, int py) {  // ±2px search; returns the source object's node pointer
+  for (int dy = -2; dy <= 2; dy++)          // (0 = no object near here / CPU-projected → caller snaps)
     for (int dx = -2; dx <= 2; dx++) {
       int x = (px + dx) & (GW - 1), y = (py + dy) & (GH - 1);
       int i = y * GW + x;
-      if (s_obj_stamp[i] == s_epoch) return s_obj_grid[i] ? s_obj_grid[i] : 0xFFFFFFFFu /*tagged@obj0*/;
+      if (s_obj_stamp[i] == s_epoch && s_obj_grid[i]) return s_obj_grid[i];
     }
   return 0;
 }
@@ -232,8 +232,10 @@ static void wide60_build_remap(void) {
 }
 
 // gte_op RTP tap. op 0x01 = RTPS (one new SXY, DR14); 0x30 = RTPT (three, DR12/13/14).
+long s_rtp_calls = 0, s_rtp_with_obj = 0;   // diag: how many RTPS carry an object context
 void wide60_rtp(uint32_t op) {
   if (!g_wide60_on) return;
+  s_rtp_calls++; if (g_current_object) s_rtp_with_obj++;
   xobj_rtp(op);                 // capture this vertex's GTE transform-group (native object)
   unsigned lo = (op == 0x30) ? 12 : 14, hi = 14;
   for (unsigned r = lo; r <= hi; r++) {
@@ -331,11 +333,16 @@ void wide60_cap_line(int op, int x0, int y0, int x1, int y1, int r, int g, int b
 
 // ---- in-between synthesizer ----------------------------------------------------------
 // Re-rasterize frame B's captured display list into the SEPARATE s_interp buffer at the FRONT origin
-// (ON TOP of the renderer, VRAM untouched). Each prim vertex's screen position is REMAPPED through the
-// transform-reprojection table (wide60_build_remap): a vertex that belonged to an interpolated object
-// gets its re-projected (interpolated-transform) position; CPU-projected / 2D / unmatched vertices keep
-// B's position (snap). The whole list is redrawn over a cleared region (background + HUD reproduced, no
-// holes). Textures read from VRAM. Call before the A/B swap.
+// (ON TOP of the renderer, VRAM untouched). Each prim is rigidly TRANSLATED by its source object's
+// half screen-motion (ocen_delta, keyed by the node pointer Prim.obj); obj==0 / unmatched → snap.
+// Whole list redrawn over a cleared region (background + HUD reproduced, no holes); textures from VRAM.
+//
+// STATUS (2026-06-16): the per-object translation math is correct, but Prim.obj is currently always 0
+// in gameplay — the render-time RTPS is a SEPARATE pass with no object context (measured: rtp/frame
+// ~3268, rtp_with_obj=0), so the cull/handler-walk tag never reaches the drawn geometry. It therefore
+// falls back to all-snap (clean, no artifacts, but no interpolation). UNBLOCK: tag draws by object at
+// the real render pass — cleanest via the planned native (VK) renderer, which knows what it draws.
+// See docs/journal.md later-86.
 void gpu_w60_begin_interp(int, int, int, int, int, int);
 void gpu_w60_end_interp(void);
 void gpu_w60_draw_poly(int, int, const int*, const int*, const int*, const int*,
@@ -347,45 +354,72 @@ void gpu_w60_draw_line(int, int, int, int, int, int, int, int);
 
 static int w60_front_off_y(void) { return s_nB > 0 ? s_pB[0].off_y : 0; }
 
+// ---- per-object screen-centroid motion (interpolation key = the node pointer) --------
+// Each captured poly is tagged with its source object's pool-slot pointer (Prim.obj, from the
+// cull-dispatcher tap g_current_object). An object's screen motion = the delta of its prim-centroid
+// between this frame (B) and the previous (A), matched by that POINTER — a stable engine identity
+// (no GTE fingerprints, no screen-XY collisions). The in-between translates each matched object's
+// prims to the midpoint (A+B)/2. obj==0 (2D/HUD/CPU-projected) and sprites/lines → snap (30fps).
+#define OCEN_SZ 8192
+typedef struct { uint32_t obj; int32_t sx, sy, n; } ObjCen;
+static ObjCen s_oc0[OCEN_SZ], s_oc1[OCEN_SZ];
+static ObjCen* s_ocA = s_oc0;          // previous frame's per-object centroids
+static ObjCen* s_ocB = s_oc1;          // current frame's
+static int s_ocen_gate = -1;           // PSXPORT_WIDE60_GATE: max per-object screen motion (px L1)
+
+static ObjCen* ocen_slot(ObjCen* t, uint32_t obj) {   // open-addressing; obj != 0
+  uint32_t h = obj * 2654435761u;
+  for (int i = 0; i < OCEN_SZ; i++) { ObjCen* s = &t[(h + i) & (OCEN_SZ - 1)];
+    if (s->obj == 0 || s->obj == obj) return s; }
+  return 0;
+}
+static void ocen_build(ObjCen* t, Prim* prims, int n) {   // accumulate per-object vertex centroids
+  for (int i = 0; i < OCEN_SZ; i++) { t[i].obj = 0; t[i].sx = t[i].sy = t[i].n = 0; }
+  for (int i = 0; i < n; i++) { Prim* P = &prims[i];
+    if (P->obj == 0 || P->nv < 3) continue;            // only object-tagged polys carry GTE motion
+    ObjCen* s = ocen_slot(t, P->obj); if (!s) continue;
+    s->obj = P->obj;
+    for (int k = 0; k < P->nv; k++) { s->sx += P->x[k]; s->sy += P->y[k]; s->n++; }
+  }
+}
+static int ocen_centroid(ObjCen* t, uint32_t obj, int* cx, int* cy) {
+  ObjCen* s = ocen_slot(t, obj);
+  if (!s || s->obj != obj || s->n == 0) return 0;
+  *cx = s->sx / s->n; *cy = s->sy / s->n; return 1;
+}
+// This object's B→midpoint translation (dx,dy), or (0,0) if unmatched / over the teleport gate.
+static int ocen_delta(uint32_t obj, int* dx, int* dy) {
+  *dx = *dy = 0;
+  int bx, by, ax, ay;
+  if (obj == 0 || !ocen_centroid(s_ocB, obj, &bx, &by) || !ocen_centroid(s_ocA, obj, &ax, &ay))
+    return 0;
+  int mx = bx - ax, my = by - ay;
+  if (s_ocen_gate < 0) { const char* g = getenv("PSXPORT_WIDE60_GATE"); s_ocen_gate = g ? atoi(g) : 64; }
+  if (abs(mx) + abs(my) > s_ocen_gate) return 0;       // scene cut / teleport → snap (no smear)
+  *dx = -mx / 2; *dy = -my / 2;                         // B shifted back to (A+B)/2
+  return 1;
+}
+
 static int s_sdbg = -1;
 static void wide60_synthesize(void) {
   if (s_nB == 0) return;
   if (s_sdbg < 0) s_sdbg = getenv("PSXPORT_WIDE60_SDBG") ? 1 : 0;
-  long d_prims = 0, d_sprite_remap = 0, d_line_remap = 0, d_poly_full = 0, d_poly_partial = 0,
-       d_poly_none = 0, d_obj0_remap = 0;   // obj0 = should-snap prim that nonetheless got remapped
+  long d_prims = 0, d_obj_translated = 0, d_snapped = 0, d_tagged = 0;  // sdbg: interpolation outcome
   int fy = w60_front_off_y();
   gpu_w60_begin_interp(0, fy, 0, fy, 319, fy + 239);     // target=s_interp, clear region, set env
   for (int i = 0; i < s_nB; i++) {
     Prim* B = &s_pB[i];
     int xs[4], ys[4], us[4], vs[4]; unsigned char rs[4], gs[4], bs[4];
-    int rx[4], ry[4], nremap = 0;
+    // Per-OBJECT 2D screen translation to the midpoint, keyed by the node pointer (Prim.obj). The whole
+    // primitive moves rigidly by its object's half-motion — no per-vertex remap, so 2D/HUD/unmatched
+    // prims (obj 0 → dx=dy=0) simply snap, and a matched object can never stretch or duplicate.
+    int dx, dy, moved = ocen_delta(B->obj, &dx, &dy);
     for (int k = 0; k < B->nv; k++) {
-      int32_t key = (int32_t)(((uint32_t)(uint16_t)B->y[k] << 16) | (uint16_t)B->x[k]);
-      int32_t nw;
-      if (remap_get(key, &nw)) { rx[k] = (int16_t)(nw & 0xFFFF); ry[k] = (int16_t)(nw >> 16); nremap++; }
-      else { rx[k] = B->x[k]; ry[k] = B->y[k]; }
-    }
-    // ALL-OR-NOTHING per primitive: only polygons (3D/GTE-projected) may be remapped, and only when
-    // EVERY vertex resolved to a matched+interpolated object's SXY. Sprites/rects (nv==1) and lines
-    // (nv==2) are always 2D screen-space — never RTP'd — so they always snap. A poly with any missing
-    // vertex (unmatched object, or a CPU-projected 2D poly whose corners merely collide with a 3D SXY)
-    // also snaps WHOLE. This prevents 2D-HUD/line false remaps (tripled icon) and partial-vertex
-    // stretching (smears), and makes the remap parity-stable (flicker). Snapped prims = 30fps fallback.
-    int use_remap = (B->nv >= 3) && (nremap == B->nv);
-    for (int k = 0; k < B->nv; k++) {
-      if (use_remap) { xs[k] = rx[k]; ys[k] = ry[k]; }
-      else           { xs[k] = B->x[k]; ys[k] = B->y[k]; }
+      xs[k] = B->x[k] + dx; ys[k] = B->y[k] + dy;
       us[k] = B->u[k]; vs[k] = B->v[k]; rs[k] = B->r[k]; gs[k] = B->g[k]; bs[k] = B->b[k];
     }
-    if (s_sdbg) {
-      d_prims++;
-      // counts reflect the NEW all-or-nothing decision: *_remap = prims actually remapped now;
-      // partial/none = table-collisions that are correctly snapped (the avoided-bug proof).
-      if (!use_remap && nremap > 0) d_obj0_remap++;       // had a table hit but correctly snapped
-      if (B->nv == 1) { if (use_remap) d_sprite_remap++; }
-      else if (B->nv == 2) { if (use_remap) d_line_remap++; }
-      else { if (use_remap) d_poly_full++; else if (nremap == 0) d_poly_none++; else d_poly_partial++; }
-    }
+    if (s_sdbg) { d_prims++; if (moved) d_obj_translated++; else d_snapped++;
+                  if (B->obj) d_tagged++; }
     if (B->nv == 1)
       gpu_w60_draw_sprite(B->op, xs[0], ys[0], us[0], vs[0], B->w, B->h, rs[0], gs[0], bs[0],
                           B->tp_x, B->tp_y, B->mode, B->blend, B->clut_x, B->clut_y);
@@ -397,10 +431,10 @@ static void wide60_synthesize(void) {
   }
   gpu_w60_end_interp();
   if (s_sdbg)
-    fprintf(stderr, "[w60-sdbg] f%ld prims=%ld  poly[full=%ld partial=%ld none=%ld]  "
-            "sprite_remap=%ld line_remap=%ld  OBJ0_REMAPPED(should-snap)=%ld\n",
-            s_fence, d_prims, d_poly_full, d_poly_partial, d_poly_none,
-            d_sprite_remap, d_line_remap, d_obj0_remap);
+    fprintf(stderr, "[w60-sdbg] f%ld prims=%ld  tagged=%ld  translated=%ld  snapped=%ld  "
+            "rtp=%ld rtp_with_obj=%ld\n",
+            s_fence, d_prims, d_tagged, d_obj_translated, d_snapped, s_rtp_calls, s_rtp_with_obj);
+  s_rtp_calls = s_rtp_with_obj = 0;
 }
 
 // PSXPORT_WIDE60_SYNTH=frame — headless validation: at logic fence `frame`, dump A (prev real frame =
@@ -473,21 +507,17 @@ void wide60_frame_commit(void) {
   rate_tick(&s_rd, set_hash);
   s_fence++;
 
-  // Transform-level interpolation: match this frame's native objects (B) to the previous frame (A) by
-  // fingerprint, then interpolate each matched transform and re-project its verts → the SXY remap. ALL
-  // of this uses s_xB(B)+s_xA(A) and the current vert pool, so it must run BEFORE xobj_commit swaps them.
-  xobj_match();
-  wide60_build_remap();
+  // Object interpolation: tag each poly with its source object (pool-slot pointer) at capture, then
+  // here compute this frame's per-object screen centroids (B) and match to last frame (A) BY POINTER.
+  // The synth translates each matched object's prims to the midpoint. Must run before the A/B swap.
+  ocen_build(s_ocB, s_pB, s_nB);
   if (s_sdbg < 0) s_sdbg = getenv("PSXPORT_WIDE60_SDBG") ? 1 : 0;
-  if (s_sdbg) wide60_synthesize();   // per-frame remap-correctness stats (headless diagnostic only)
+  if (s_sdbg) wide60_synthesize();   // per-frame interpolation stats (headless diagnostic only)
   wide60_synth_dumptest();   // PSXPORT_WIDE60_SYNTH: offline A/in-between/B dump (no live-path change)
   wide60_present();          // owns presentation: 60fps pair (prev + interpolated) or faithful single
 
-  if ((s_fence % 500) == 0) xobj_report();
-  xobj_commit();             // swap native-object A/B + reset the vert pool
-
-  // Prim capture: B (just rendered) is no longer needed as A (the matcher is transform-based now), but
-  // keep the double-buffer swap so s_pB is a clean buffer next frame.
+  // Swap per-object centroids (B→A) and the prim double-buffer (so s_pB is clean next frame).
+  { ObjCen* t = s_ocA; s_ocA = s_ocB; s_ocB = t; }
   { Prim* t = s_pA; s_pA = s_pB; s_pB = t; s_nA = s_nB; s_nB = 0; }
 
   s_frame_hash = 1469598103934665603ull;

@@ -22,15 +22,21 @@
 extern uint32_t mem_r32(uint32_t);
 extern void     mem_w8(uint32_t, uint8_t);
 extern void     rec_dispatch(R3000* c, uint32_t addr);   // hybrid call: recomp body if emitted, else interp
+extern uint32_t g_current_object;                        // wide60: tag the object a handler's geometry belongs to
 void            gen_func_8007A904(R3000*);               // the recomp body (oracle / super-call)
 
 static int  s_dbg   = -1;
 static long s_walks = 0;
 
-// Call one node's handler exactly as the recomp does: a0 = node, jalr *(node+0x1c).
+// Call one node's handler exactly as the recomp does: a0 = node, jalr *(node+0x1c). Tag g_current_object
+// = node around the WHOLE handler so wide60 attributes ALL geometry it submits to this entity (the
+// interpolation identity), independent of whether projection happens inside the cull subtree.
 static inline void call_handler(R3000* c, uint32_t node) {
+  uint32_t prev = g_current_object;
+  g_current_object = node;
   c->r[4] = node;                                  // $a0
   rec_dispatch(c, mem_r32(node + T2OBJ_HANDLER));
+  g_current_object = prev;
 }
 
 static void walk_list(R3000* c, uint32_t head, long* count) {

@@ -1,5 +1,23 @@
 # Debug / progress journal
 
+## 2026-06-16 (later-86) — Phase 4 object interpolation: reworked to node-pointer identity; BLOCKED by decoupled render pass (key finding). Falls back to safe all-snap.
+Replaced wide60's GTE-fingerprint matcher with **per-object 2D screen-translation keyed by the entity's
+pool-slot pointer** (the stable identity from later-84): each captured poly tagged with `Prim.obj`
+(= `g_current_object`), per-object screen centroid matched across frames by pointer, prims translated to
+the midpoint (`engine/wide60.c` ocen_* + native-walk `call_handler` sets g_current_object=node around
+each handler). The translation math is correct and can't smear/dupe (rigid per-object move, gated).
+- **BLOCKED (measured, decisive):** `rtp/frame ≈ 3268` but **`rtp_with_obj = 0`** — the render-time GTE
+  RTPS fire in a **separate pass with NO object context**; neither the cull dispatcher (LOD math only,
+  no RTPS) nor the `FUN_8007a904` handler walk brackets the drawn geometry. So `Prim.obj` stays 0 →
+  everything snaps. (Generalizes later-82's "g_current_object stays 0".) Current behavior: clean
+  all-snap (no smear/flicker/dupes; 60fps cadence shows each real frame ~twice = judder, not true
+  in-between). Opt-in (PSXPORT_WIDE60); default faithful path untouched.
+- **UNBLOCK paths:** (a) RE the render pass and set object context where per-object RTPS happens; or
+  (b) **get object-tagged draws from the planned native (VK/MoltenVK) renderer** — it knows which entity
+  each draw belongs to, so interpolation falls out. (b) is cleaner and aligns with the next track.
+- grid_get sentinel fixed (was returning 0xFFFFFFFF for obj-0 cells, which masked this in the old
+  approach — "join 92-99%" was joining everything to one blob). Now returns 0 → honest snap.
+
 ## 2026-06-16 (later-85) — Phase 1: native entity-list walk LANDED (FUN_8007a904), default-on, oracle bit-identical.
 First native engine-layer function: `engine/engine_tomba2.c` reimplements the per-frame object driver
 `FUN_8007a904` in native C — walks both entity lists (heads 0x800fb168/0x800f2624) via next@+0x24,
