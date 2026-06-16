@@ -3652,3 +3652,16 @@ SEND renders for the user to eyeball, don't naive-pixel-diff. M4 sprites tee'd (
 - REMAINING for VK to BE the renderer (M5): VK owns VRAM (CPU uploads, VRAM->VRAM copies, fills, lines),
   semi-transparency (4 blend modes — needs VK-owned VRAM to matter), then present from VK VRAM + retire
   SW (default-on). Until then VK renders the tee'd prims over the uploaded SW VRAM (validated identical).
+
+## 2026-06-17 (later-91) — HW renderer COMPLETE: Vulkan is the DEFAULT renderer; SW retired to oracle/fallback.
+M5 finished. VK owns VRAM and renders every PSX primitive type (polys, sprites, lines-as-quads, fills/
+copies/uploads via dirty-region mirroring, semi-transparency 4 blend modes). gpu_vk_enabled() now
+DEFAULTS ON for windowed runs; PSXPORT_SW_GPU=1 (or PSXPORT_VK=0) forces the SW rasterizer (the proven
+oracle). Headless always stays SW (no window -> no VK). Validated: 5000-frame windowed run across boot/
+title/ship-demo/field-demo/tutorial = ZERO validation errors (RADV); frames render indistinguishably
+from SW (user-confirmed "looks great"). PSXPORT_VK_SHOT=frame dumps the live VK frame.
+- Architecture per frame: mirror SW-written dirty regions -> snapshot textures -> OPAQUE pass ->
+  snapshot post-opaque framebuffer -> SEMI pass (samples snapshot as texture + blend dest) -> present.
+- OPEN (refinements, not blockers): strict per-op draw order (currently opaque-batch then semi-batch =
+  standard separation, fine for Tomba2); residual reduction (off-by-1 dither/rounding); perf numbers.
+- This is the foundation the user wanted before widescreen + object interpolation.

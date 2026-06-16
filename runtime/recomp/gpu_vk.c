@@ -115,9 +115,14 @@ void gpu_vk_dirty(int x, int y, int w, int h) {
 
 int gpu_vk_enabled(void) {
   if (s_vk_on < 0) {
-    const char* v = getenv("PSXPORT_VK");
+    // VK is the DEFAULT renderer for windowed runs. PSXPORT_SW_GPU=1 (or PSXPORT_VK=0) forces the SW
+    // rasterizer (the oracle / fallback). Headless (no window) always stays SW.
     const char* w = getenv("PSXPORT_GPU_WINDOW");
-    s_vk_on = (v && atoi(v) != 0 && w && atoi(w) != 0) ? 1 : 0;
+    const char* sw = getenv("PSXPORT_SW_GPU");
+    const char* v = getenv("PSXPORT_VK");
+    int win = w && atoi(w) != 0;
+    int want = (sw && atoi(sw) != 0) ? 0 : (v ? (atoi(v) != 0) : 1);   // default on; SW_GPU/VK=0 disables
+    s_vk_on = (win && want) ? 1 : 0;
   }
   return s_vk_on && !s_failed;
 }
