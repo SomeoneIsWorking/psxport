@@ -564,9 +564,11 @@ void gpu_vk_present(const uint16_t* src, int sx, int sy, int w, int h) {
   rp.renderArea.extent = s_extent; rp.clearValueCount = 1; rp.pClearValues = &clear;
   vkCmdBeginRenderPass(s_cmd, &rp, VK_SUBPASS_CONTENTS_INLINE);
 
-  // letterbox/pillarbox to a 4:3 rect within the swapchain extent (never stretch)
+  // fit to the display aspect (4:3 normally, 16:9 when PSXPORT_WIDE squishes the GTE projection)
+  static int wide = -1; if (wide < 0) wide = getenv("PSXPORT_WIDE") ? 1 : 0;
+  int aw = wide ? 16 : 4, ah = wide ? 9 : 3;
   int ow = s_extent.width, oh = s_extent.height, dw, dh;
-  if (ow * 3 >= oh * 4) { dh = oh; dw = oh * 4 / 3; } else { dw = ow; dh = ow * 3 / 4; }
+  if (ow * ah >= oh * aw) { dh = oh; dw = oh * aw / ah; } else { dw = ow; dh = ow * ah / aw; }
   VkViewport vpt = { (float)((ow - dw) / 2), (float)((oh - dh) / 2), (float)dw, (float)dh, 0.0f, 1.0f };
   VkRect2D sc = { {0, 0}, s_extent };
   vkCmdSetViewport(s_cmd, 0, 1, &vpt); vkCmdSetScissor(s_cmd, 0, 1, &sc);

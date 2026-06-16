@@ -3665,3 +3665,17 @@ from SW (user-confirmed "looks great"). PSXPORT_VK_SHOT=frame dumps the live VK 
 - OPEN (refinements, not blockers): strict per-op draw order (currently opaque-batch then semi-batch =
   standard separation, fine for Tomba2); residual reduction (off-by-1 dither/rounding); perf numbers.
 - This is the foundation the user wanted before widescreen + object interpolation.
+
+## 2026-06-17 (later-92) — Widescreen WORKS on Tomba2 (falsifies the old "ineffective" note) + extended culling.
+With the native VK renderer owning display, the GTE widescreen hack works on Tomba2:
+- **PSXPORT_WIDE=1**: gte_init() sets widescreen_hack=1 + aspect 16:9 (squish projected X around centre);
+  gpu_vk present fits 16:9 instead of 4:3 -> wider horizontal FOV. (Old later-era note "ineffective on
+  Tomba2" was on the oracle; FALSIFIED here.) 2D/sprites bypass the GTE (HUD-stretch is the next per-game item).
+- **PSXPORT_CULL=1 (extended culling, user-requested):** the game's FUN_8007712c culls each object by
+  distance AND a FOV cone (depth/dist < ~0x370 ≈ ±77°) — over-culls (pop-in; widescreen edges dropped).
+  ov_object_cull (game_tomba2.c) now, after the game's cull, RE-INCLUDES objects it dropped that are
+  within an extended distance (PSXPORT_CULL_FAR, def 0x6000 ≈ 3.4x the 0x1c00 max) + wider cone
+  (PSXPORT_CULL_FOV, def 0x80 vs 0x370): mark visible@+1, return 1. Near/behind culling kept intact.
+  Verified: more right-edge structure/objects render in widescreen. Tunable via the two envs.
+- OPEN: HUD stretch under 16:9 (sprites need un-stretch/reposition); the re-included far objects rely on
+  the +1 visible flag driving the draw (works in test); tune thresholds with the user.

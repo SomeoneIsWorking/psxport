@@ -86,8 +86,17 @@ static void ov_frame_update(R3000* c) {
 // pos@+0x2e/32/36). Empirically maps the active-object pool/list for the native entity
 // manager (Phase 1) — more reliable than static-tracing the overlay handler dispatch.
 extern uint8_t mem_r8(uint32_t);
+extern void    mem_w8(uint32_t, uint8_t);
 static int s_objlog = -1;
 static inline uint16_t obj_r16(uint32_t a) { return (uint16_t)(mem_r8(a) | (mem_r8(a + 1) << 8)); }
+
+// Extended culling (PSXPORT_CULL=1): the game's FUN_8007712c culls each object by distance AND by a
+// FOV cone (depth/dist < ~0x370 ≈ ±77°). That over-culls — distant objects pop in, and in widescreen
+// the wider edges get dropped. After the game's cull runs, re-include objects it dropped that are
+// within an EXTENDED distance + WIDER FOV cone (just mark visible@+1 + return 1). RE: docs/engine_re.md.
+static int s_cull = -1, s_cull_far, s_cull_fov;
+static unsigned isqrt32(unsigned v) { unsigned r = 0, b = 1u << 30; while (b > v) b >>= 2;
+  while (b) { if (v >= r + b) { v -= r + b; r = (r >> 1) + b; } else r >>= 1; b >>= 2; } return r; }
 
 static void ov_object_cull(R3000* c) {
   uint32_t prev = g_current_object;
@@ -97,7 +106,20 @@ static void ov_object_cull(R3000* c) {
   if (s_objlog)
     fprintf(stderr, "[objlog] obj=%08x type=%02x pos=(%d,%d,%d)\n", o, mem_r8(o + 0x0c),
             (int16_t)obj_r16(o + 0x2e), (int16_t)obj_r16(o + 0x32), (int16_t)obj_r16(o + 0x36));
-  gen_func_8007712C(c);
+  int p2 = (int16_t)c->r[5], p3 = (int16_t)c->r[6], p4 = (int16_t)c->r[7];   // pos - camera (s16 each)
+  gen_func_8007712C(c);                            // the game's cull (sets +1 visible flag, queues)
+  if (s_cull < 0) { s_cull = getenv("PSXPORT_CULL") ? 1 : 0;
+    const char* f = getenv("PSXPORT_CULL_FAR"); s_cull_far = f ? atoi(f) : 0x6000;   // ~3.4x the 0x1c00 max
+    const char* v = getenv("PSXPORT_CULL_FOV"); s_cull_fov = v ? atoi(v) : 0x80; }   // wider cone (vs 0x370)
+  if (s_cull && mem_r8(o + 1) == 0) {              // the game CULLED it — reconsider with extended bounds
+    unsigned dist = isqrt32((unsigned)(p2*p2 + p3*p3 + p4*p4)) & 0xFFFF;
+    if (dist >= 0x200 && dist <= (unsigned)s_cull_far) {   // keep near/behind culling intact
+      int fx = (int16_t)obj_r16(0x1F8000E8), fy = (int16_t)obj_r16(0x1F8000EA), fz = (int16_t)obj_r16(0x1F8000EC);
+      long depth = (long)fx*p2 + (long)fy*p3 + (long)fz*p4, den = ((long)dist * 0x1000) >> 10;
+      if (den < 1) den = 1;
+      if (depth / den >= s_cull_fov) { mem_w8(o + 1, 1); c->r[2] = 1; }   // re-include: mark visible
+    }
+  }
   g_current_object = prev;
 }
 
@@ -214,7 +236,7 @@ void games_tomba2_init(void) {
     rec_set_override(0x80081218u, ov_upload_image);   // PC-native CPU->VRAM upload (libgs upload lib)
   }
   wide60_init();
-  if (g_wide60_on || getenv("PSXPORT_OBJLOG"))     // object-tag dispatcher (wide60 capture or objlog RE)
+  if (g_wide60_on || getenv("PSXPORT_OBJLOG") || getenv("PSXPORT_CULL"))   // cull tap: wide60 / objlog / extended-cull
     rec_set_override(0x8007712Cu, ov_object_cull);
   void engine_tomba2_init(void);
   engine_tomba2_init();                            // native engine layer (Phase 1: object-list walk)
