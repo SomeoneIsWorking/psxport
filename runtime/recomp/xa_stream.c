@@ -130,6 +130,10 @@ void xa_stream_play(uint8_t chan, uint32_t start, uint32_t end, int loop) {
 
 int  xa_stream_owns_slot2(void) { return s_owns_slot2; }
 int  xa_stream_voice_busy(void) { return s_owns_slot2 && s_active; }
+// For the dialog-vs-ingame-music coordination in cd_override.c: distinguish a LOOPING clip
+// (ingame/background music) from a one-shot (voice/narration), and whether anything streams.
+int  xa_stream_is_looping(void) { return s_active && s_loop; }
+int  xa_stream_is_active(void)  { return s_active; }
 void xa_stream_voice_release(void) { s_owns_slot2 = 0; }
 
 // Current drive-head LBA while streaming, for the engine's GetlocL position poll

@@ -28,6 +28,7 @@ void rec_coro_run(R3000* c, uint32_t pc); // flat coroutine interpreter (resumab
 // into the task-2 state byte (the cutscene waits `while (DAT_801fe0e0 != 0)`).
 int  xa_stream_owns_slot2(void);
 int  xa_stream_voice_busy(void);
+void xa_dialog_coord(R3000* c);          // dialog-vs-ingame-music coordination (cd_override.c)
 void xa_stream_voice_release(void);
 
 // Call recompiled/overridden game fn `fn` with up to 3 args; runs to its `jr ra` and returns.
@@ -166,6 +167,51 @@ static uint16_t repl_btn(const char* n) {     // name -> active-HIGH PSX pad bit
   if (!strcmp(n,"left"))  return 0x0080; if (!strcmp(n,"right")) return 0x0020;
   return (uint16_t)strtoul(n, 0, 16);
 }
+// ---- REPL music-dump helpers (build a labeled track library to identify each tune) -------
+// Sequenced BGM is rendered through the live SPU (use `wav PATH` then `bgm N` then `run`);
+// XA tracks (CD-streamed music/voice) are decoded straight off the disc here, since they
+// never touch the sequencer. Both write standard 44100/native-rate stereo S16 WAVs.
+int  xa_decode_sector(const uint8_t* raw, int16_t* out, int16_t hist[2][2], int* freq);
+int  disc_read_raw(uint32_t lba, uint8_t* out, uint32_t n);
+void spu_wav_reopen(const char* path);
+
+static void repl_wav_write(const char* path, const int16_t* pcm, uint32_t frames, int rate) {
+  FILE* fp = fopen(path, "wb");
+  if (!fp) { fprintf(stderr, "[repl] wav write: cannot open %s\n", path); return; }
+  uint32_t data = frames * 4u, riff = 36u + data, brate = (uint32_t)rate * 4u, fmtlen = 16;
+  uint16_t pcm1 = 1, ch2 = 2, ba = 4, bits = 16; uint32_t r = (uint32_t)rate;
+  fwrite("RIFF", 1, 4, fp); fwrite(&riff, 4, 1, fp); fwrite("WAVE", 1, 4, fp);
+  fwrite("fmt ", 1, 4, fp); fwrite(&fmtlen, 4, 1, fp);
+  fwrite(&pcm1, 2, 1, fp); fwrite(&ch2, 2, 1, fp); fwrite(&r, 4, 1, fp);
+  fwrite(&brate, 4, 1, fp); fwrite(&ba, 2, 1, fp); fwrite(&bits, 2, 1, fp);
+  fwrite("data", 1, 4, fp); fwrite(&data, 4, 1, fp);
+  fwrite(pcm, 4, frames, fp); fclose(fp);
+  fprintf(stderr, "[repl] xadump -> %s (%u frames @ %d Hz, %.2fs)\n", path, frames, rate, frames / (double)rate);
+}
+
+// Decode ~`secs` of the XA stream on subheader channel `chan` starting at CHD `start_lba`,
+// write a WAV at the stream's native rate. Skips interleaved non-matching/non-audio sectors.
+static void repl_xadump(uint8_t chan, uint32_t start_lba, const char* path, int secs) {
+  static int16_t out[400000];                 // ~4.5s of 44100 stereo; XA max 37800*secs
+  uint8_t raw[2352]; int16_t hist[2][2] = {{0,0},{0,0}}; int freq = 37800;
+  uint32_t frames = 0, lba = start_lba, cap = 0;
+  for (int guard = 0; guard < 20000; guard++) {
+    if (!disc_read_raw(lba, raw, 2352)) break;
+    if (raw[15] != 2) break;                   // ran off the Mode2 stream
+    uint8_t fchan = raw[17], submode = raw[18];
+    lba++;
+    if (!(submode & 0x04) || fchan != chan) { if (submode & 0x80) break; continue; }  // not our audio
+    int16_t pcm[4032 * 2]; int f2 = freq;
+    int n = xa_decode_sector(raw, pcm, hist, &f2); freq = f2;
+    if (!cap) cap = (uint32_t)freq * (uint32_t)secs;
+    for (int i = 0; i < n && frames < cap && frames < 200000; i++) {
+      out[2 * frames] = pcm[2 * i]; out[2 * frames + 1] = pcm[2 * i + 1]; frames++;
+    }
+    if (frames >= cap || (submode & 0x80)) break;
+  }
+  repl_wav_write(path, out, frames, freq);
+}
+
 // Read+execute REPL commands until a `run N` (returns N) or quit/EOF (returns -1).
 static long native_repl_read(R3000* c, uint32_t f) {
   static uint16_t held = 0xFFFF;              // active-low held mask (all released)
@@ -199,6 +245,11 @@ static long native_repl_read(R3000* c, uint32_t f) {
         else fprintf(stderr, "[repl] dumpram: cannot open %s\n", path);
       }
     }
+    else if (!strcmp(cmd, "wav")) { char path[200] = {0}; if (sscanf(line, "%*s %199s", path) == 1) spu_wav_reopen(path); }
+    else if (!strcmp(cmd, "bgm") && sscanf(line, "%*s %u", &a) == 1) { rc1(c, 0x80074BF8u, a); fprintf(stderr, "[repl] bgm %u (song@800bed80=%04X)\n", a, mem_r16(0x800bed80)); }
+    else if (!strcmp(cmd, "bgmstop")) { rc0(c, 0x80074E48u); fprintf(stderr, "[repl] bgmstop\n"); }
+    else if (!strcmp(cmd, "xadump")) { unsigned ch = 0, lba = 0, secs = 3; char path[200] = {0};
+      if (sscanf(line, "%*s %u %u %199s %u", &ch, &lba, path, &secs) >= 3) repl_xadump((uint8_t)ch, lba, path, secs ? (int)secs : 3); }
     else if (!strcmp(cmd, "stage")) fprintf(stderr, "[repl] stage=%08X sm48=%d\n", mem_r32(0x801fe00c), (int)mem_r16(0x801fe048));
     else if (!strcmp(cmd, "regs")) { for (int i = 0; i < 32; i++) { fprintf(stderr, " r%-2d=%08X", i, c->r[i]); if ((i & 3) == 3) fprintf(stderr, "\n"); } fprintf(stderr, " hi=%08X lo=%08X\n", c->hi, c->lo); }
     else if (!strcmp(cmd, "seq")) fprintf(stderr, "[repl] seq open=%d playmask=%04X tickmode=%d seqfn=%08X stage=%08X\n",
@@ -326,6 +377,7 @@ static void ov_game_main(R3000* c) {
     pad_service_frame();                                     // host input -> game pad buffer (pre-read)
     rc0(c, 0x800788ac);                                      // tick + present + audio (override)
     native_scheduler_step(c);                                // <- replaces FUN_80051e60
+    xa_dialog_coord(c);                                      // dialogs stop/restore ingame music (instant-CD mod)
     rc1(c, 0x80080f6c, 0);                                   // draw sync
     rc0(c, 0x800506d0);                                      // task sleep-countdown (re-arm 1->2)
     // Buffer flip + display env (LAB_80050c6c, DAT_1f80019c==0 branch): submit this frame's

@@ -1,5 +1,55 @@
 # Debug / progress journal
 
+## 2026-06-16 (later-79) — FIXED (user-verified): "ingame music plays over the dialog" in the prologue. Cause: the looping ingame-music XA (chan4) is started by the gameplay state machine, which on real HW only fires AFTER the CD-paced scene load — by then the dialog owns the audio. Our INSTANT CD reads fire it during the dialog, so it overlaps the dialog tone. Fix (per user directive — keep instant CD, mod the CD-speed-dependent behavior in PC code): suppress the looping ingame-music XA while a dialog tone is the current song, resume it after. Identifications corrected: **song 4-7 = sequenced dialog tones** (user-ID: 4=regular, 6=worry), **chan4 XA = ingame/area music**, **chan22 XA = dialog voice**, **chan7 XA = prologue narration**. OPEN: resumed ingame music starts at full volume; should fade in from 0 (separate timing issue).
+
+### later-79 CORRECTION of the mid-investigation notes below
+The measurement notes in this entry are accurate as DATA but two interpretations in them are WRONG and are corrected here:
+1. "song 4 = field BGM that plays through the dialog" — FALSE. song 4 is the **regular dialog tone**; it's *supposed* to play during the dialog. The thing wrongly overlapping it is the **chan4 XA ingame music**, a different SPU path.
+2. "holding DAT_801fe0e0 / the gate fix is refuted" — the gate IS the mechanism: the ingame music is started by FUN_8005f2f0/FUN_800624b4 (gameplay handlers) at the FUN_80074f24 call (ram_f1000_all.c:40267/41983), and those handlers are held by `if (DAT_801fe0e0 != 0) … return`. Instant loads let the handler reach the music-start during a gate gap. (We did NOT implement a raw gate-hold — see the FIX — but the gate was the right lever to reason about.)
+3. The "model CD latency" fix was **rejected by the user**: instant CD reads are a required PC feature (PC disk speed, not CD speed); every CD-speed-dependent function gets MODDED in PC code instead.
+
+### later-79 — oracle A/B of the prologue→fisherman timeline (the decisive measurement)
+Drove BOTH cores to the prologue narration and sampled `0x800bed80` (current song) + `0x801fe0e0`
+(voice task-2 gate) frame-by-frame. **Oracle menu nav fix:** REPL `tap` does NOT register at the
+title menu, but **held press works** — `press Cross / run 30 / release Cross` selected NewGame then
+StartGame (updates docs/diff-driver.md "known gap"). Reusable oracle state saved at the prologue:
+`scratch/state/prologue.sav`.
+
+ORACLE timeline (ground truth):
+- prologue narration (chan7): gate `0x801fe0e0`=1 **continuously** ~f6360→~f8460 (~2100 frames), song=FFFF.
+- narration ends → gate→0 at ~f8520, song still FFFF.
+- **~300-frame pause, gate stays 0**, then song→**04** at ~f8820 (field BGM starts WHILE gate=0).
+- fisherman "Aaaaahhh!" scream + dialog: gate **toggles** 1/0 per voice line from ~f9300 onward
+  (f9300-9360 up, 9420-9660 down, 9720-10080 up, …) — and **song stays 04 the entire time**.
+
+=> In the real game the sequenced field BGM (song 4) **correctly plays underneath the whole fisherman
+dialog**; it is NOT gated off during the cutscene. song 4 even starts BEFORE the first dialog line, in
+a gate-0 window after the narration. **This REFUTES later-78e's plan** (hold `DAT_801fe0e0` nonzero to
+delay song 4 — that would make the port DIVERGE from the oracle). song 4 is not gated by the voice task.
+
+PORT timeline (same scene, native frames): narration gate=2 ~f267→~f1360 (~1093f, ≈HALF the oracle's),
+then at f1390 gate→0 and **within 4 frames** song4 + chan4-loop fire together (f1394), chan22 scream
+~f1640. The oracle's ~300f post-narration pause is collapsed to ~4f, so song4 and the cutscene start
+simultaneously — what the user hears as "song 4 during the cutscene."
+
+### later-79 ROOT CAUSE (confirmed with PSXPORT_CD_VERBOSE)
+At narration-end the game loads the fisherman scene: a burst of large `FUN_8001db8c`/`FUN_8001dc40`
+loadfiles — 285096 + 188416 + 231424 + 448512 B … (~1.4 MB) — issued right at f1390. The port serves
+these **synchronously and instantly** (cd_override.c `ov_cd_loadfile`/`ov_cd_async_read`), so the whole
+load finishes in ~4 frames; the game then starts song4 the instant the load-done flag is set. In the
+oracle the same ~1.4 MB takes real CD time (~5 s ≈ ~300 frames at 2× ≈ the measured f8520→f8820 gap).
+**The game uses CD load latency as implicit pacing; the port's zero-latency CD I/O removes it.** This is
+an architectural consequence of the "no CD emulation / synchronous reads" design, not a localized bug.
+(The narration being ~2× too short is a related, separate pacing gap — likely XA/stream consumption rate
+— and is NOT yet root-caused; the post-narration collapse above is the dominant audible effect.)
+
+### later-79 — RE of the trigger + the implemented fix
+- **What starts the ingame music:** `FUN_80074f24(DAT_800bf870)` (→ `FUN_800750d8`/`FUN_8001d364` → `FUN_8001d2a8(chan4,[84515..97979],loop=1)`), called from the gameplay handlers `FUN_8005f2f0` (case 6, :40267) and `FUN_800624b4` (:41983). Those handlers are held by `if (DAT_801fe0e0 != 0) { FUN_8001cf2c(); return; }`. The dialog routine `FUN_801464c0` (overlay, 0x80146xxx — INTERPRETED, not in the Ghidra decomp; disassembled live from a RAM dump with capstone) is just the **voice player** (line index → channel → `FUN_8001d2a8`); it does not stop the music.
+- **Oracle ground truth (cold-boot WAV; savestate XA does NOT replay):** narration (chan7) → **~8 s silence** (real CD load) → dialog tone + voice, with **NO ingame music** (chan4 cross-corr ≈0.087 vs dialog-tone 0.31; the 8 s silence rules out a looping chan4). So the ingame music is correctly absent during the prologue dialog. `scratch/wav/oracle_scene.wav`, segments in `scratch/wav/music/`.
+- **The mod (cd_override.c + xa_stream.c + native_boot.c):** a looping XA clip = ingame/area music; one-shot clips = voice/narration. While a dialog tone is the current song (`0x800bed80` in 4..7), `ov_voice_play` defers a looping clip (remembers it, doesn't start it / doesn't set the gate) and `xa_dialog_coord` (per-frame, from native_scheduler_step) stops any looping XA that's sounding; once the dialog tone clears and the XA stream is free it resumes the remembered ingame-music clip. Voice clips are untouched. USER-VERIFIED correct (dialog now = tone + voice only; ingame music returns after).
+- **Music identification library** (for future audio bugs): `scratch/wav/music/` — `seq_00..13.wav` (sequenced songs, rendered via new REPL `bgm N` + `wav PATH`) and `xa_chan{4,7,22}_*.wav` (XA tracks, via new REPL `xadump chan lba PATH`). chan4=ingame music, song4=regular dialog, song6=worry dialog (user-identified).
+- **OPEN (next):** resumed ingame music starts at full volume; the real game fades it in from 0 (another instant-CD timing casualty — the volume ramp). Investigate the XA/CD volume fade and mod it PC-side.
+
 ## 2026-06-16 (later 78) — FIXED later-77: in-game XA-ADPCM streaming implemented natively (prologue BGM + voice now audible, WAV-confirmed). Fisherman-scream "first note repeats / cutscene won't advance" ROOT-CAUSED to FUN_8001cfc8's faked GetlocL position wait; interim stopgap in place, native engine-port planned.
 **New native subsystem `runtime/recomp/xa_stream.c`** (in build: added to run.sh + tools/build_port.sh).
 Decodes CD-XA from the ReadS-streamed sectors and feeds the SPU CD-audio input via

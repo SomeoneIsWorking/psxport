@@ -87,6 +87,16 @@ static void wav_open(const char* path) {
    fprintf(stderr, "[spu_wav] capturing SPU output -> %s\n", path);
 }
 
+// REPL music-dump helper: switch the SPU WAV capture to a new file mid-run (finalize the
+// current one, start a fresh one). Lets each BGM track be rendered to its own WAV in one
+// session. Enabling capture here also makes spu_audio_frame advance+drain the SPU every
+// frame even headless (the `!s_wav` early-out no longer trips), so the song actually renders.
+void spu_wav_reopen(const char* path) {
+   wav_close();
+   s_wav_bytes = 0;
+   wav_open(path);
+}
+
 // Open the SDL2 audio device (44100 Hz, AUDIO_S16SYS, stereo). Idempotent: subsequent
 // calls are no-ops. Honors PSXPORT_NOAUDIO (force-disable) and gracefully disables if
 // SDL can't init/open a device.

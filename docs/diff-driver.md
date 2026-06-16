@@ -52,10 +52,11 @@ tools/bgm.py callers <ram> <hexaddr> # jal callers + data-word refs (RE aid)
   start / FUN_80074E48 stop with caller `ra`, plus a per-frame `[bgmtick]` read-ptr-advance probe.
 
 ## Known gaps / TODO — extend the tools as needed
-- **Oracle title-menu input via REPL `tap`/`press` does NOT navigate the menu** (cause TBD). So driving
-  the oracle from cold boot / title to a fresh scene is currently blocked; use the savestates above, or
-  fix this (it's the main lever for catching first-time triggers like the prologue BGM-start). When
-  fixed, document it here.
+- **Oracle title menu: use a HELD press, not `tap` (SOLVED, later-79).** REPL `tap Cross` does NOT
+  register at the title menu, but a held press does: `press Cross` / `run 30` / `release Cross` selects
+  the highlighted item. Cold-boot route: run ~6000f to the title (NewGame highlighted) → held Cross →
+  menu becomes StartGame/Options → held Cross → prologue narration. Reusable oracle savestate at the
+  prologue: `scratch/state/prologue.sav` (`load scratch/state/prologue.sav`).
 - `drive.py` drain heuristic (quiet-for-settle) can return early on slow oracle runs — `out` re-reads.
 - Add a `dump`/diff convenience to drive.py (auto dumpram both cores + bgm.py diff) when that recurs.
 

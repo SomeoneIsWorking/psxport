@@ -203,17 +203,55 @@ static void ov_cd_async_read(R3000* c) {
 // override covers them. flags bit0 = loop. (Bug it fixes: the recomp coroutine + our scheduler's
 // fresh-vs-resume handling mishandled re-registered clips, so a new line never started and the
 // cutscene hung on the old clip — the fisherman "AAAGH repeats / scene stuck".)
+// ---- dialog-vs-ingame-music coordination (PC mod, instant-CD-safe) ----------------------------
+// The ingame/area background music is a LOOPING XA clip; a dialog uses sequenced "dialog-tone"
+// songs (current-song byte 0x800bed80 in 4..7 — regular/worry/etc, user-identified) plus
+// one-shot voice clips, all on the single XA stream. On real hardware the area-music start fires
+// from the gameplay state machine only AFTER the CD-paced scene load, by which time the dialog
+// has the stream/gate, so the looping music never overlapped the dialog tone. With our instant
+// CD reads the area-music start fires immediately (during the dialog gap), so the loop overlaps
+// the dialog tone — the audible bug. Mod: while a dialog tone is the current song, keep the
+// looping ingame music suppressed and remembered; resume it once the dialog ends. One-shot voice
+// clips are unaffected (they ARE the dialog audio).
+int  xa_stream_is_looping(void);
+int  xa_stream_is_active(void);
+static int      s_pending_music;          // a looping ingame-music clip is deferred/remembered
+static uint8_t  s_pm_chan;
+static uint32_t s_pm_start, s_pm_end;
+static int dialog_tone_active(void) {
+  uint32_t s = mem_r16(0x800bed80) & 0xFFFF;
+  return s >= 4 && s <= 7;
+}
+// Enable CD->SPU mixing (libsnd SpuSetCommonAttr via FUN_8001cf00(1)); needed for the SPU to
+// actually mix the decoded XA (Beetle spu.c gates on SPUControl bit0).
+static void cd_to_spu_mix(R3000* c, int on) { c->r[A0] = on ? 1 : 0; rec_dispatch(c, 0x8001cf00u); }
+
 static void ov_voice_play(R3000* c) {
   uint8_t  chan  = (uint8_t)(c->r[A0] & 0xFF);
   uint32_t start = c->r[A1], end = c->r[A2];
   int      loop  = (int)(c->r[7] & 1);              // a3 = flags
+  if (getenv("PSXPORT_XA_DBG"))
+    fprintf(stderr, "[voice_play] chan=%u [%u..%u] loop=%d ra=%08X\n", chan, start, end, loop, c->r[31]);
+  if (loop) {                                       // looping clip == ingame/area background music
+    s_pending_music = 1; s_pm_chan = chan; s_pm_start = start; s_pm_end = end;
+    if (dialog_tone_active()) return;               // suppress during a dialog; resumed by xa_dialog_coord
+  }
   xa_stream_play(chan, start, end, loop);
   mem_w16(0x801fe0e0, 2);                            // task-2 state = running (cutscene wait gate)
-  // CRITICAL: enable CD->SPU audio mixing. Beetle spu.c only mixes the decoded XA when
-  // SPUControl bit0 is set; the original FUN_8001cfc8 enabled it via FUN_8001cf00(1) when the
-  // clip started playing. We dropped that coroutine, so call it here (libsnd SpuSetCommonAttr
-  // CD-mix on) — without it the XA decodes but is silently dropped from the mix.
-  c->r[A0] = 1; rec_dispatch(c, 0x8001cf00u);
+  cd_to_spu_mix(c, 1);
+}
+
+// Called once per frame (native_scheduler_step). Enforces "dialogs stop the ingame music":
+// stop a looping ingame-music clip while a dialog tone is up; resume the remembered clip once
+// the dialog ends and the XA stream is free (no voice playing).
+void xa_dialog_coord(R3000* c) {
+  if (dialog_tone_active()) {
+    if (xa_stream_is_looping()) xa_stream_stop();    // dialog up: silence ingame music (kept pending)
+  } else if (s_pending_music && !xa_stream_is_active()) {
+    xa_stream_play(s_pm_chan, s_pm_start, s_pm_end, 1);   // dialog over: resume ingame music
+    mem_w16(0x801fe0e0, 2);
+    cd_to_spu_mix(c, 1);
+  }
 }
 // 0x8001CF2C FUN_8001cf2c: stop the current voice/BGM clip.
 static void ov_voice_stop(R3000* c) {
