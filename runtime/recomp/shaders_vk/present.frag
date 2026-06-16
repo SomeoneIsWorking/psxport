@@ -7,7 +7,7 @@ layout(set = 0, binding = 0) uniform usampler2D u_vram;
 layout(push_constant) uniform PC { ivec4 disp; } pc;   // x, y, w, h (VRAM texels)
 void main() {
     ivec2 t = pc.disp.xy + ivec2(v_uv * vec2(pc.disp.zw));
-    t = clamp(t, ivec2(0), ivec2(1023, 511));
+    t = clamp(t, ivec2(0), ivec2(1023, 991));   // image is IMG_H(992) tall (VRAM 512 + scratch FB)
     uint p = texelFetch(u_vram, t, 0).r;
     o_col = vec4(float(p & 31u) / 31.0, float((p >> 5) & 31u) / 31.0, float((p >> 10) & 31u) / 31.0, 1.0);
 }

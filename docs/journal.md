@@ -3679,3 +3679,31 @@ With the native VK renderer owning display, the GTE widescreen hack works on Tom
   Verified: more right-edge structure/objects render in widescreen. Tunable via the two envs.
 - OPEN: HUD stretch under 16:9 (sprites need un-stretch/reposition); the re-included far objects rely on
   the +1 visible flag driving the draw (works in test); tune thresholds with the user.
+
+## 2026-06-17 (later-93) — PC-native widescreen: TRUE wider FOV, NO squish/stretch (replaces the rejected hack).
+User REJECTED the old PSXPORT_WIDE (Beetle GTE squish-X 0.75 + display-stretch 4:3->16:9): "we are making
+a PC game, don't squish anything." Replaced with a genuinely native renderer-side widescreen:
+- **Key insight (no squish):** keep the GTE's NATIVE projection scale; to show a wider FOV, just
+  RE-CENTER the framebuffer-local view into a WIDER target. Math: widescreen_x = native_x + (FBW-320)/2
+  (a constant shift, NOT a 0.75 scale) — same per-unit scale (full horizontal resolution preserved),
+  +54px of world on each side. The GTE already projects geometry past the 4:3 edges (measured earlier:
+  ~11% in the right band); it was only being clipped. So widescreen = native projection + widened clip
+  + wider target. widescreen_hack now hard-OFF in gte_beetle.c.
+- **Where the wide image lives (VRAM is fully packed — can't widen in place):** the VK R16_UINT image is
+  grown VRAM_H(512) -> IMG_H(992); rows [512, 992) are a VK-only scratch framebuffer (FB_Y0=512, up to
+  856x480 = 16:9 @ 2x). gpu_vk.c relocates the tee'd geometry into the FB via a VERTEX push-constant
+  transform (tritex.vert): local = i_pos - i_da.xy (da.xy = active framebuffer origin), fb =
+  ((local.x+WIDE_OFF)*ss + fb_x0, FB_Y0 + local.y*ss); clip overridden to the FB rect so wide geometry
+  isn't dropped. Textures still sampled from VRAM rows <512 (unchanged). Present samples the 16:9 FB 1:1
+  (no stretch). Reuses the whole existing pipeline (image/renderpass/snapshot/semi); non-wide path is
+  byte-identical (verified: f1500 nowide == baseline). PSXPORT_SS (1..2) supersamples (FB 856x480).
+- **Cull coupled to widescreen (the user's point: "I thought we ported the culling and adjusted it"):**
+  the static terrain/water TILES also go through the per-object cull, so the wider FOV needs a wider
+  re-include cone + farther distance or the new edges/corners stay black. ov_object_cull now AUTO-widens
+  when PSXPORT_WIDE is on (PSXPORT_WIDE implies cull, defaults fov 0x00 / far 0x8000 vs 0x80 / 0x6000 for
+  plain CULL). Fills the deep-water horizon + side bands; only the water tile-grid's TRUE outer edge
+  leaves tiny corner wedges (would need bg-plane extension to kill — deferred).
+- Validation-layer clean (RADV). User-shown f1500/f3000/f700: correct proportions, more world each side,
+  HUD at native scale + centered (NOT stretched). OPEN/next (user: "all of these"): SSAA downsample
+  present shader, HUD edge-anchoring (2D sprite path), shaders/lighting. WATCH: aggressive cull can cause
+  entity walk-through ghosts (journal later-52) — needs playtesting now that the user is engaged.

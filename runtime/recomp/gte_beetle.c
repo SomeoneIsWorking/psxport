@@ -76,7 +76,8 @@ void     gte_op(R3000* c, uint32_t insn)         { (void)c; GTE_Instruction(insn
                                                      if (g_wide60_on) wide60_rtp(op);
                                                    } }
 void     gte_init(void)                          { GTE_Init(); GTE_Power();
-  // PSXPORT_WIDE=1: enable the GTE widescreen-scale hack (squish projected X around the screen centre;
-  // the display then stretches 4:3->16:9 -> wider horizontal FOV). 2D/sprites bypass the GTE (HUD fix
-  // is the per-game tier). widescreen_hack_aspect_ratio_setting: 1 = 16:9 (0.75x).
-  if (getenv("PSXPORT_WIDE")) { widescreen_hack = 1; widescreen_hack_aspect_ratio_setting = 1; } }
+  // PSXPORT_WIDE is PC-native widescreen now: the GTE keeps its NATIVE projection (NO squish) and the
+  // renderer (gpu_vk) re-centers the geometry into a wider scratch framebuffer at a true wider FOV.
+  // The old emulator squish-X + display-stretch hack (widescreen_hack=1) is intentionally NOT used —
+  // it loses horizontal resolution and stretches the 2D HUD (user rejected it). Keep the hack OFF. }
+  widescreen_hack = 0; }

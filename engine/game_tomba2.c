@@ -108,9 +108,15 @@ static void ov_object_cull(R3000* c) {
             (int16_t)obj_r16(o + 0x2e), (int16_t)obj_r16(o + 0x32), (int16_t)obj_r16(o + 0x36));
   int p2 = (int16_t)c->r[5], p3 = (int16_t)c->r[6], p4 = (int16_t)c->r[7];   // pos - camera (s16 each)
   gen_func_8007712C(c);                            // the game's cull (sets +1 visible flag, queues)
-  if (s_cull < 0) { s_cull = getenv("PSXPORT_CULL") ? 1 : 0;
-    const char* f = getenv("PSXPORT_CULL_FAR"); s_cull_far = f ? atoi(f) : 0x6000;   // ~3.4x the 0x1c00 max
-    const char* v = getenv("PSXPORT_CULL_FOV"); s_cull_fov = v ? atoi(v) : 0x80; }   // wider cone (vs 0x370)
+  if (s_cull < 0) {
+    // Widescreen widens the horizontal FOV ~1.34x, so the re-include cone+distance MUST widen to match
+    // or the new edge/corner geometry (incl. the static terrain/water tiles, which also go through this
+    // per-object cull) is dropped -> black wedges. Couple the defaults to PSXPORT_WIDE: wide => widest
+    // cone (fov 0) + extended far; plain CULL keeps the conservative 4:3 values. Both env-overridable.
+    int wide = getenv("PSXPORT_WIDE") && atoi(getenv("PSXPORT_WIDE")) != 0;
+    s_cull = (getenv("PSXPORT_CULL") || wide) ? 1 : 0;
+    const char* f = getenv("PSXPORT_CULL_FAR"); s_cull_far = f ? atoi(f) : (wide ? 0x8000 : 0x6000);
+    const char* v = getenv("PSXPORT_CULL_FOV"); s_cull_fov = v ? atoi(v) : (wide ? 0x00 : 0x80); }
   if (s_cull && mem_r8(o + 1) == 0) {              // the game CULLED it — reconsider with extended bounds
     unsigned dist = isqrt32((unsigned)(p2*p2 + p3*p3 + p4*p4)) & 0xFFFF;
     if (dist >= 0x200 && dist <= (unsigned)s_cull_far) {   // keep near/behind culling intact

@@ -20,6 +20,14 @@
 
 #define VRAM_W 1024
 #define VRAM_H 512
+// The R16_UINT image is taller than PSX VRAM (512): rows [VRAM_H, IMG_H) are a VK-only scratch
+// framebuffer used for PC-native widescreen / higher-res rendering. PSX VRAM is fully packed
+// (two 320 framebuffers + the texture atlas at x>=320), so the wide/hi-res 3D cannot be drawn
+// in place — we relocate the tee'd geometry into this scratch FB (no VRAM conflict; textures are
+// still sampled from rows <512). FB origin (0, FB_Y0); max FB = 856x480 (16:9 at 2x supersample).
+#define FB_Y0   VRAM_H
+#define FB_MAXH 480
+#define IMG_H   (VRAM_H + FB_MAXH)   // 992
 #define MAX_SWAP 8
 
 #define VKC(x) do { VkResult _r = (x); if (_r != VK_SUCCESS) { \
@@ -111,6 +119,22 @@ void gpu_vk_dirty(int x, int y, int w, int h) {
   if (x + w > VRAM_W) w = VRAM_W - x; if (y + h > VRAM_H) h = VRAM_H - y;
   if (w <= 0 || h <= 0) return;
   s_dirty[s_dirty_n++] = (VkRect){ x, y, w, h };
+}
+
+// PC-native widescreen / supersample state. When s_wide, the tee'd geometry is relocated into the
+// scratch FB (rows >=FB_Y0) at a TRUE wider horizontal FOV (no GTE squish, no present stretch): the
+// native projection is kept and re-centered into a wider buffer, so MORE world shows on each side
+// (the GTE already projects geometry past the 4:3 edges; it was just being clipped). s_ss supersamples.
+static int s_wide = -1, s_ss = 1;
+#define WIDE_OFF 54                       // (FBW/ss - 320)/2 — center the native 320 view in the 428-wide FB
+static int FBW(void) { return 428 * s_ss; }
+static int FBH(void) { return 240 * s_ss; }
+static void wide_init(void) {
+  if (s_wide >= 0) return;
+  const char* w = getenv("PSXPORT_WIDE");
+  s_wide = (w && atoi(w) != 0) ? 1 : 0;
+  const char* ss = getenv("PSXPORT_SS");
+  s_ss = ss ? atoi(ss) : 1; if (s_ss < 1) s_ss = 1; if (s_ss > 2) s_ss = 2;   // FBH<=FB_MAXH
 }
 
 int gpu_vk_enabled(void) {
@@ -311,10 +335,13 @@ static void init_vk(void) {
   VkDescriptorSetLayoutCreateInfo dli = { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
   dli.bindingCount = 1; dli.pBindings = &b;
   VKC(vkCreateDescriptorSetLayout(s_dev, &dli, 0, &s_dsl));
-  VkPushConstantRange pcr = { VK_SHADER_STAGE_FRAGMENT_BIT, 0, 16 };   // ivec4 display rect (x,y,w,h)
+  VkPushConstantRange pcr[2] = {
+    { VK_SHADER_STAGE_FRAGMENT_BIT, 0, 16 },    // present: ivec4 display rect (x,y,w,h)
+    { VK_SHADER_STAGE_VERTEX_BIT, 16, 32 },     // tri/tritex: VPC wa,wb (wide/supersample transform)
+  };
   VkPipelineLayoutCreateInfo pli = { VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
   pli.setLayoutCount = 1; pli.pSetLayouts = &s_dsl;
-  pli.pushConstantRangeCount = 1; pli.pPushConstantRanges = &pcr;
+  pli.pushConstantRangeCount = 2; pli.pPushConstantRanges = pcr;
   VKC(vkCreatePipelineLayout(s_dev, &pli, 0, &s_pll));
 
   // graphics pipeline: fullscreen triangle, no vertex input, dynamic viewport/scissor
@@ -386,7 +413,7 @@ static void create_vram(void) {
   s_tex_undef = 1;
   VkImageCreateInfo ii = { VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO };
   ii.imageType = VK_IMAGE_TYPE_2D; ii.format = VK_FORMAT_R16_UINT;
-  ii.extent = (VkExtent3D){ VRAM_W, VRAM_H, 1 }; ii.mipLevels = 1; ii.arrayLayers = 1;
+  ii.extent = (VkExtent3D){ VRAM_W, IMG_H, 1 }; ii.mipLevels = 1; ii.arrayLayers = 1;
   ii.samples = VK_SAMPLE_COUNT_1_BIT; ii.tiling = VK_IMAGE_TILING_OPTIMAL;
   ii.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
              VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
@@ -454,10 +481,18 @@ static void poll_quit(void) {
   }
 }
 
-// Present the display region [sx,sy .. +w,h] of `src` (s_vram or s_interp) via Vulkan, fit to 4:3.
+// Push the vertex-stage wide/supersample transform (VPC). `enabled` lets diagnostic passes force the
+// identity (non-wide) transform while still satisfying the shader's img_h dependency.
+static void push_wide(int enabled) {
+  int32_t va[8] = { enabled, FB_Y0, s_ss, IMG_H,   WIDE_OFF, FBW(), FBH(), 0 /*fb_x0*/ };
+  vkCmdPushConstants(s_cmd, s_pll, VK_SHADER_STAGE_VERTEX_BIT, 16, 32, va);
+}
+
+// Present the display region [sx,sy .. +w,h] of `src` (s_vram or s_interp) via Vulkan, fit to aspect.
 void gpu_vk_present(const uint16_t* src, int sx, int sy, int w, int h) {
   if (!gpu_vk_enabled()) return;
   if (!s_inited) init_vk();
+  wide_init();
 
   // Mirror the whole CPU VRAM (s_vram/s_interp) into the GPU R16_UINT image (M1: SW still rasterizes;
   // M2+ will draw into this image directly and skip the upload for drawn regions). The display region
@@ -500,10 +535,11 @@ void gpu_vk_present(const uint16_t* src, int sx, int sy, int w, int h) {
   // M5: render this frame's tee'd geometry into VK VRAM (over the uploaded SW VRAM = textures/bg),
   // then present from VK VRAM. Textured prims sample a snapshot (s_vram_tex) of the uploaded VRAM.
   VkRenderPassBeginInfo grp = { VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
-  grp.renderPass = s_vram_rpass; grp.framebuffer = s_vram_fb; grp.renderArea.extent = (VkExtent2D){ VRAM_W, VRAM_H };
-  VkViewport gv = { 0, 0, VRAM_W, VRAM_H, 0.0f, 1.0f }; VkRect2D gs = { {0,0}, { VRAM_W, VRAM_H } };
+  grp.renderPass = s_vram_rpass; grp.framebuffer = s_vram_fb; grp.renderArea.extent = (VkExtent2D){ VRAM_W, IMG_H };
+  VkViewport gv = { 0, 0, VRAM_W, IMG_H, 0.0f, 1.0f }; VkRect2D gs = { {0,0}, { VRAM_W, IMG_H } };
   VkDeviceSize go = 0;
-  VkImageCopy ic = { { VK_IMAGE_ASPECT_COLOR_BIT,0,0,1 }, {0,0,0}, { VK_IMAGE_ASPECT_COLOR_BIT,0,0,1 }, {0,0,0}, { VRAM_W, VRAM_H, 1 } };
+  // full-image copy (s_tex -> snapshot) for the semi blend dest: must include the scratch FB rows.
+  VkImageCopy ic = { { VK_IMAGE_ASPECT_COLOR_BIT,0,0,1 }, {0,0,0}, { VK_IMAGE_ASPECT_COLOR_BIT,0,0,1 }, {0,0,0}, { VRAM_W, IMG_H, 1 } };
   if (s_tri_n || s_tex_n || s_semi_n) {
     // snapshot the uploaded VRAM -> vram_tex (the textures) for the opaque pass
     img_barrier_on(s_vram_tex, s_vram_tex_undef ? VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
@@ -520,6 +556,12 @@ void gpu_vk_present(const uint16_t* src, int sx, int sy, int w, int h) {
     // OPAQUE pass
     vkCmdBeginRenderPass(s_cmd, &grp, VK_SUBPASS_CONTENTS_INLINE);
     vkCmdSetViewport(s_cmd, 0, 1, &gv); vkCmdSetScissor(s_cmd, 0, 1, &gs);
+    if (s_wide) {   // clear the scratch FB (the game's clear/fill targets VRAM, not the FB) before drawing
+      VkClearAttachment ca = { VK_IMAGE_ASPECT_COLOR_BIT, 0, {{{0,0,0,1}}} };
+      VkClearRect cr = { { { 0, FB_Y0 }, { (uint32_t)FBW(), (uint32_t)FBH() } }, 0, 1 };
+      vkCmdClearAttachments(s_cmd, 1, &ca, 1, &cr);
+    }
+    push_wide(s_wide);
     vkCmdBindDescriptorSets(s_cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, s_pll, 0, 1, &s_dset_tex, 0, 0);
     if (s_tri_n) { vkCmdBindPipeline(s_cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, s_tri_pipe);
                    vkCmdBindVertexBuffers(s_cmd, 0, 1, &s_vbuf, &go); vkCmdDraw(s_cmd, s_tri_n, 1, 0, 0); }
@@ -564,9 +606,10 @@ void gpu_vk_present(const uint16_t* src, int sx, int sy, int w, int h) {
   rp.renderArea.extent = s_extent; rp.clearValueCount = 1; rp.pClearValues = &clear;
   vkCmdBeginRenderPass(s_cmd, &rp, VK_SUBPASS_CONTENTS_INLINE);
 
-  // fit to the display aspect (4:3 normally, 16:9 when PSXPORT_WIDE squishes the GTE projection)
-  static int wide = -1; if (wide < 0) wide = getenv("PSXPORT_WIDE") ? 1 : 0;
-  int aw = wide ? 16 : 4, ah = wide ? 9 : 3;
+  // Wide: present the 16:9 scratch FB 1:1 (no stretch — it was rendered at a true wider FOV). Else
+  // present the PSX display region fit to 4:3.
+  if (s_wide) { sx = 0; sy = FB_Y0; w = FBW(); h = FBH(); }
+  int aw = s_wide ? 16 : 4, ah = s_wide ? 9 : 3;
   int ow = s_extent.width, oh = s_extent.height, dw, dh;
   if (ow * ah >= oh * aw) { dh = oh; dw = oh * aw / ah; } else { dw = ow; dh = ow * ah / aw; }
   VkViewport vpt = { (float)((ow - dw) / 2), (float)((oh - dh) / 2), (float)dw, (float)dh, 0.0f, 1.0f };
@@ -628,7 +671,7 @@ void create_tri_pipeline(void) {
 
   VkFramebufferCreateInfo fi = { VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO };
   fi.renderPass = s_vram_rpass; fi.attachmentCount = 1; fi.pAttachments = &s_tex_view;
-  fi.width = VRAM_W; fi.height = VRAM_H; fi.layers = 1;
+  fi.width = VRAM_W; fi.height = IMG_H; fi.layers = 1;
   VKC(vkCreateFramebuffer(s_dev, &fi, 0, &s_vram_fb));
 
   VkShaderModule vs = make_shader(spv_tri_vert, spv_tri_vert_len);
@@ -667,7 +710,7 @@ void create_tri_pipeline(void) {
   vkDestroyShaderModule(s_dev, vs, 0); vkDestroyShaderModule(s_dev, fs, 0);
 
   make_hostbuf(sizeof(TriVtx) * TRI_CAP, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, &s_vbuf, &s_vbuf_mem, &s_vbuf_ptr);
-  make_hostbuf((VkDeviceSize)VRAM_W * VRAM_H * 2, VK_BUFFER_USAGE_TRANSFER_DST_BIT, &s_rb, &s_rb_mem, &s_rb_ptr);
+  make_hostbuf((VkDeviceSize)VRAM_W * IMG_H * 2, VK_BUFFER_USAGE_TRANSFER_DST_BIT, &s_rb, &s_rb_mem, &s_rb_ptr);
 
   // textured pipeline (TexVtx input, samples the VRAM snapshot, renders to the VRAM render pass)
   VkShaderModule tvs = make_shader(spv_tritex_vert, spv_tritex_vert_len);
@@ -772,6 +815,7 @@ static void tri_render_and_readback(uint16_t* out) {
   VkViewport vpt = { 0, 0, VRAM_W, VRAM_H, 0.0f, 1.0f };
   VkRect2D sc = { {0,0}, { VRAM_W, VRAM_H } };
   vkCmdSetViewport(s_cmd, 0, 1, &vpt); vkCmdSetScissor(s_cmd, 0, 1, &sc);
+  push_wide(0);
   vkCmdBindPipeline(s_cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, s_tri_pipe);
   VkDeviceSize off = 0; vkCmdBindVertexBuffers(s_cmd, 0, 1, &s_vbuf, &off);
   if (s_tri_n) vkCmdDraw(s_cmd, s_tri_n, 1, 0, 0);
@@ -844,6 +888,7 @@ static void tri_over_bg_readback(const uint16_t* bg, uint16_t* out) {
   vkCmdBeginRenderPass(s_cmd, &rp, VK_SUBPASS_CONTENTS_INLINE);
   VkViewport vpt = { 0, 0, VRAM_W, VRAM_H, 0.0f, 1.0f }; VkRect2D sc = { {0,0}, { VRAM_W, VRAM_H } };
   vkCmdSetViewport(s_cmd, 0, 1, &vpt); vkCmdSetScissor(s_cmd, 0, 1, &sc);
+  push_wide(0);
   vkCmdBindDescriptorSets(s_cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, s_pll, 0, 1, &s_dset_tex, 0, 0);
   VkDeviceSize off = 0;
   if (s_tri_n) { vkCmdBindPipeline(s_cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, s_tri_pipe);
@@ -870,6 +915,7 @@ void gpu_vk_dump(int sx, int sy, int w, int h, int frame) {
   if (!gpu_vk_enabled() || !s_inited) return;
   static int sf = -2; if (sf == -2) { const char* e = getenv("PSXPORT_VK_SHOT"); sf = e ? atoi(e) : -1; }
   if (sf < 0 || frame != sf) return;
+  if (s_wide) { sx = 0; sy = FB_Y0; w = FBW(); h = FBH(); }   // wide: dump the scratch FB
   VKC(vkWaitForFences(s_dev, 1, &s_fence, VK_TRUE, UINT64_MAX)); VKC(vkResetFences(s_dev, 1, &s_fence));
   VKC(vkResetCommandBuffer(s_cmd, 0));
   VkCommandBufferBeginInfo bi = { VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO };
@@ -878,7 +924,7 @@ void gpu_vk_dump(int sx, int sy, int w, int h, int frame) {
               VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
               VK_ACCESS_SHADER_READ_BIT, VK_ACCESS_TRANSFER_READ_BIT);
   VkBufferImageCopy bc = {0}; bc.imageSubresource = (VkImageSubresourceLayers){ VK_IMAGE_ASPECT_COLOR_BIT,0,0,1 };
-  bc.imageExtent = (VkExtent3D){ VRAM_W, VRAM_H, 1 };
+  bc.imageExtent = (VkExtent3D){ VRAM_W, IMG_H, 1 };   // include the scratch FB rows (>=512)
   vkCmdCopyImageToBuffer(s_cmd, s_tex, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, s_rb, 1, &bc);
   img_barrier(VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
               VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
@@ -889,7 +935,7 @@ void gpu_vk_dump(int sx, int sy, int w, int h, int frame) {
   const uint16_t* vram = (const uint16_t*)s_rb_ptr;
   FILE* f = fopen("scratch/screenshots/vk_live.ppm", "wb"); if (!f) return;
   fprintf(f, "P6\n%d %d\n255\n", w, h);
-  for (int y = 0; y < h; y++) for (int x = 0; x < w; x++) { uint16_t p = vram[((sy+y)&511)*VRAM_W + ((sx+x)&1023)];
+  for (int y = 0; y < h; y++) for (int x = 0; x < w; x++) { uint16_t p = vram[((sy+y)%IMG_H)*VRAM_W + ((sx+x)&1023)];
     unsigned char c[3] = { (unsigned char)((p&31)<<3), (unsigned char)(((p>>5)&31)<<3), (unsigned char)(((p>>10)&31)<<3) };
     fwrite(c, 1, 3, f); }
   fclose(f); fprintf(stderr, "[vk_shot] f%d wrote scratch/screenshots/vk_live.ppm\n", frame);
