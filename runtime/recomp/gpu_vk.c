@@ -54,7 +54,7 @@ static VkDescriptorSet s_dset;
 static VkSampler       s_sampler;
 static VkCommandPool   s_cpool;
 static VkCommandBuffer s_cmd;
-static VkSemaphore     s_sem_acq, s_sem_rel;
+static VkSemaphore     s_sem_acq, s_sem_rel[MAX_SWAP];   // release: one per swapchain image (spec-correct reuse)
 static VkFence         s_fence;
 
 // GPU VRAM image (R16_UINT 1024x512) + host-visible staging (upload) + readback
@@ -124,6 +124,8 @@ static VkShaderModule make_shader(const uint32_t* code, unsigned len) {
 }
 
 static void create_vram(void);   // forward decl: defined after init_vk, called from it
+static void img_barrier_on(VkImage, VkImageLayout, VkImageLayout, VkPipelineStageFlags,
+                           VkPipelineStageFlags, VkAccessFlags, VkAccessFlags);
 
 static void create_swapchain(void) {
   VkSurfaceCapabilitiesKHR caps;
@@ -345,7 +347,7 @@ static void init_vk(void) {
   VKC(vkAllocateCommandBuffers(s_dev, &cai, &s_cmd));
   VkSemaphoreCreateInfo sci = { VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO };
   VKC(vkCreateSemaphore(s_dev, &sci, 0, &s_sem_acq));
-  VKC(vkCreateSemaphore(s_dev, &sci, 0, &s_sem_rel));
+  for (int i = 0; i < MAX_SWAP; i++) VKC(vkCreateSemaphore(s_dev, &sci, 0, &s_sem_rel[i]));
   VkFenceCreateInfo fci = { VK_STRUCTURE_TYPE_FENCE_CREATE_INFO, 0, VK_FENCE_CREATE_SIGNALED_BIT };
   VKC(vkCreateFence(s_dev, &fci, 0, &s_fence));
 
@@ -461,9 +463,40 @@ void gpu_vk_present(const uint16_t* src, int sx, int sy, int w, int h) {
   bc.imageSubresource = (VkImageSubresourceLayers){ VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
   bc.imageExtent = (VkExtent3D){ VRAM_W, VRAM_H, 1 };
   vkCmdCopyBufferToImage(s_cmd, s_stage, s_tex, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &bc);
-  img_barrier(VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-              VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-              VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
+  // M5: render this frame's tee'd geometry into VK VRAM (over the uploaded SW VRAM = textures/bg),
+  // then present from VK VRAM. Textured prims sample a snapshot (s_vram_tex) of the uploaded VRAM.
+  if (s_tri_n || s_tex_n) {
+    img_barrier_on(s_vram_tex, s_vram_tex_undef ? VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                   VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_SHADER_READ_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
+    s_vram_tex_undef = 0;
+    vkCmdCopyBufferToImage(s_cmd, s_stage, s_vram_tex, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &bc);
+    img_barrier_on(s_vram_tex, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                   VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                   VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
+    img_barrier(VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
+    VkRenderPassBeginInfo grp = { VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
+    grp.renderPass = s_vram_rpass; grp.framebuffer = s_vram_fb; grp.renderArea.extent = (VkExtent2D){ VRAM_W, VRAM_H };
+    vkCmdBeginRenderPass(s_cmd, &grp, VK_SUBPASS_CONTENTS_INLINE);
+    VkViewport gv = { 0, 0, VRAM_W, VRAM_H, 0.0f, 1.0f }; VkRect2D gs = { {0,0}, { VRAM_W, VRAM_H } };
+    vkCmdSetViewport(s_cmd, 0, 1, &gv); vkCmdSetScissor(s_cmd, 0, 1, &gs);
+    vkCmdBindDescriptorSets(s_cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, s_pll, 0, 1, &s_dset_tex, 0, 0);
+    VkDeviceSize go = 0;
+    if (s_tri_n) { vkCmdBindPipeline(s_cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, s_tri_pipe);
+                   vkCmdBindVertexBuffers(s_cmd, 0, 1, &s_vbuf, &go); vkCmdDraw(s_cmd, s_tri_n, 1, 0, 0); }
+    if (s_tex_n) { vkCmdBindPipeline(s_cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, s_tritex_pipe);
+                   vkCmdBindVertexBuffers(s_cmd, 0, 1, &s_tvbuf, &go); vkCmdDraw(s_cmd, s_tex_n, 1, 0, 0); }
+    vkCmdEndRenderPass(s_cmd);
+    img_barrier(VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
+  } else {
+    img_barrier(VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
+  }
 
   VkClearValue clear = {{{0, 0, 0, 1}}};
   VkRenderPassBeginInfo rp = { VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
@@ -489,11 +522,11 @@ void gpu_vk_present(const uint16_t* src, int sx, int sy, int w, int h) {
   VkSubmitInfo su = { VK_STRUCTURE_TYPE_SUBMIT_INFO };
   su.waitSemaphoreCount = 1; su.pWaitSemaphores = &s_sem_acq; su.pWaitDstStageMask = &wait;
   su.commandBufferCount = 1; su.pCommandBuffers = &s_cmd;
-  su.signalSemaphoreCount = 1; su.pSignalSemaphores = &s_sem_rel;
+  su.signalSemaphoreCount = 1; su.pSignalSemaphores = &s_sem_rel[idx];
   VKC(vkQueueSubmit(s_queue, 1, &su, s_fence));
 
   VkPresentInfoKHR pr = { VK_STRUCTURE_TYPE_PRESENT_INFO_KHR };
-  pr.waitSemaphoreCount = 1; pr.pWaitSemaphores = &s_sem_rel;
+  pr.waitSemaphoreCount = 1; pr.pWaitSemaphores = &s_sem_rel[idx];
   pr.swapchainCount = 1; pr.pSwapchains = &s_swap; pr.pImageIndices = &idx;
   VkResult pres = vkQueuePresentKHR(s_queue, &pr);
   if (pres == VK_ERROR_OUT_OF_DATE_KHR || pres == VK_SUBOPTIMAL_KHR) recreate_swapchain();
