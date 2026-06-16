@@ -94,6 +94,8 @@ static VkShaderModule make_shader(const uint32_t* code, unsigned len) {
   VkShaderModule m; VKC(vkCreateShaderModule(s_dev, &ci, 0, &m)); return m;
 }
 
+static void create_vram(void);   // forward decl: defined after init_vk, called from it
+
 static void create_swapchain(void) {
   VkSurfaceCapabilitiesKHR caps;
   VKC(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(s_phys, s_surf, &caps));
@@ -256,8 +258,10 @@ static void init_vk(void) {
   VkDescriptorSetLayoutCreateInfo dli = { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
   dli.bindingCount = 1; dli.pBindings = &b;
   VKC(vkCreateDescriptorSetLayout(s_dev, &dli, 0, &s_dsl));
+  VkPushConstantRange pcr = { VK_SHADER_STAGE_FRAGMENT_BIT, 0, 16 };   // ivec4 display rect (x,y,w,h)
   VkPipelineLayoutCreateInfo pli = { VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
   pli.setLayoutCount = 1; pli.pSetLayouts = &s_dsl;
+  pli.pushConstantRangeCount = 1; pli.pPushConstantRanges = &pcr;
   VKC(vkCreatePipelineLayout(s_dev, &pli, 0, &s_pll));
 
   // graphics pipeline: fullscreen triangle, no vertex input, dynamic viewport/scissor
@@ -291,7 +295,7 @@ static void init_vk(void) {
 
   // sampler + descriptor pool + set
   VkSamplerCreateInfo si = { VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO };
-  si.magFilter = si.minFilter = VK_FILTER_LINEAR;
+  si.magFilter = si.minFilter = VK_FILTER_NEAREST;   // R16_UINT VRAM: integer texture (no linear filter)
   si.addressModeU = si.addressModeV = si.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
   VKC(vkCreateSampler(s_dev, &si, 0, &s_sampler));
   VkDescriptorPoolSize ps = { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1 };
@@ -315,24 +319,22 @@ static void init_vk(void) {
   VkFenceCreateInfo fci = { VK_STRUCTURE_TYPE_FENCE_CREATE_INFO, 0, VK_FENCE_CREATE_SIGNALED_BIT };
   VKC(vkCreateFence(s_dev, &fci, 0, &s_fence));
 
+  create_vram();
   create_swapchain();
-  fprintf(stderr, "[gpu_vk] Vulkan present backend up (%ux%u, %u swap images)\n",
+  fprintf(stderr, "[gpu_vk] Vulkan present backend up (%ux%u, %u swap images; VRAM 1024x512 R16_UINT)\n",
           s_extent.width, s_extent.height, s_swap_n);
 }
 
-// (re)create the display-region texture + staging buffer when the display size changes.
-static void ensure_tex(int w, int h) {
-  if (s_tex && s_tex_w == w && s_tex_h == h) return;
-  if (s_tex) { vkDeviceWaitIdle(s_dev);
-    vkDestroyImageView(s_dev, s_tex_view, 0); vkDestroyImage(s_dev, s_tex, 0); vkFreeMemory(s_dev, s_tex_mem, 0);
-    vkDestroyBuffer(s_dev, s_stage, 0); vkUnmapMemory(s_dev, s_stage_mem); vkFreeMemory(s_dev, s_stage_mem, 0); }
-  s_tex_w = w; s_tex_h = h; s_tex_undef = 1;
-
+// The GPU VRAM image: R16_UINT 1024x512 = PSX VRAM (1555), created once. Render target for the GPU
+// rasterizer (M2+), sampled by the present pass, transfer src/dst for upload/readback.
+static void create_vram(void) {
+  s_tex_undef = 1;
   VkImageCreateInfo ii = { VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO };
-  ii.imageType = VK_IMAGE_TYPE_2D; ii.format = VK_FORMAT_R8G8B8A8_UNORM;
-  ii.extent = (VkExtent3D){ w, h, 1 }; ii.mipLevels = 1; ii.arrayLayers = 1;
+  ii.imageType = VK_IMAGE_TYPE_2D; ii.format = VK_FORMAT_R16_UINT;
+  ii.extent = (VkExtent3D){ VRAM_W, VRAM_H, 1 }; ii.mipLevels = 1; ii.arrayLayers = 1;
   ii.samples = VK_SAMPLE_COUNT_1_BIT; ii.tiling = VK_IMAGE_TILING_OPTIMAL;
-  ii.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+  ii.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
+             VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
   ii.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
   VKC(vkCreateImage(s_dev, &ii, 0, &s_tex));
   VkMemoryRequirements mr; vkGetImageMemoryRequirements(s_dev, s_tex, &mr);
@@ -341,11 +343,11 @@ static void ensure_tex(int w, int h) {
   VKC(vkAllocateMemory(s_dev, &ma, 0, &s_tex_mem));
   VKC(vkBindImageMemory(s_dev, s_tex, s_tex_mem, 0));
   VkImageViewCreateInfo vi = { VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO };
-  vi.image = s_tex; vi.viewType = VK_IMAGE_VIEW_TYPE_2D; vi.format = VK_FORMAT_R8G8B8A8_UNORM;
+  vi.image = s_tex; vi.viewType = VK_IMAGE_VIEW_TYPE_2D; vi.format = VK_FORMAT_R16_UINT;
   vi.subresourceRange = (VkImageSubresourceRange){ VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
   VKC(vkCreateImageView(s_dev, &vi, 0, &s_tex_view));
 
-  s_stage_sz = (VkDeviceSize)w * h * 4;
+  s_stage_sz = (VkDeviceSize)VRAM_W * VRAM_H * 2;   // uint16 per texel
   VkBufferCreateInfo bi = { VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO };
   bi.size = s_stage_sz; bi.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT; bi.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
   VKC(vkCreateBuffer(s_dev, &bi, 0, &s_stage));
@@ -386,15 +388,11 @@ static void poll_quit(void) {
 void gpu_vk_present(const uint16_t* src, int sx, int sy, int w, int h) {
   if (!gpu_vk_enabled()) return;
   if (!s_inited) init_vk();
-  ensure_tex(w, h);
 
-  // VRAM (1555) region -> RGBA8 staging (same expansion as the SW blit)
-  uint32_t* dst = (uint32_t*)s_stage_ptr;
-  for (int y = 0; y < h; y++)
-    for (int x = 0; x < w; x++) {
-      uint16_t p = src[((sy + y) & (VRAM_H - 1)) * VRAM_W + ((sx + x) & (VRAM_W - 1))];
-      dst[y * w + x] = 0xFF000000u | ((p & 31) << 3) | (((p >> 5) & 31) << 11) | (((p >> 10) & 31) << 19);
-    }
+  // Mirror the whole CPU VRAM (s_vram/s_interp) into the GPU R16_UINT image (M1: SW still rasterizes;
+  // M2+ will draw into this image directly and skip the upload for drawn regions). The display region
+  // [sx,sy,w,h] is selected at sample time via the present push constant.
+  memcpy(s_stage_ptr, src, (size_t)VRAM_W * VRAM_H * 2);
 
   VKC(vkWaitForFences(s_dev, 1, &s_fence, VK_TRUE, UINT64_MAX));
   uint32_t idx;
@@ -415,7 +413,7 @@ void gpu_vk_present(const uint16_t* src, int sx, int sy, int w, int h) {
   s_tex_undef = 0;
   VkBufferImageCopy bc = {0};
   bc.imageSubresource = (VkImageSubresourceLayers){ VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
-  bc.imageExtent = (VkExtent3D){ w, h, 1 };
+  bc.imageExtent = (VkExtent3D){ VRAM_W, VRAM_H, 1 };
   vkCmdCopyBufferToImage(s_cmd, s_stage, s_tex, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &bc);
   img_barrier(VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
               VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
@@ -435,6 +433,8 @@ void gpu_vk_present(const uint16_t* src, int sx, int sy, int w, int h) {
   vkCmdSetViewport(s_cmd, 0, 1, &vpt); vkCmdSetScissor(s_cmd, 0, 1, &sc);
   vkCmdBindPipeline(s_cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, s_pipe);
   vkCmdBindDescriptorSets(s_cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, s_pll, 0, 1, &s_dset, 0, 0);
+  int32_t disp[4] = { sx, sy, w, h };   // VRAM display region the present pass samples
+  vkCmdPushConstants(s_cmd, s_pll, VK_SHADER_STAGE_FRAGMENT_BIT, 0, 16, disp);
   vkCmdDraw(s_cmd, 3, 1, 0, 0);
   vkCmdEndRenderPass(s_cmd);
   VKC(vkEndCommandBuffer(s_cmd));
