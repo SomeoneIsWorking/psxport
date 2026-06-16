@@ -81,6 +81,21 @@ typedef struct { float x, y, r, g, b; } TriVtx;
 #define TRI_CAP 196608                // max batched vertices (= 65536 tris)
 static int             s_tri_n;
 
+// M3 textured rasterizer: a VRAM snapshot image the texture sampler reads (avoids render/sample feedback
+// loop), its descriptor set, the textured pipeline, and a textured-vertex batch.
+typedef struct { float x, y, u, v, r, g, b; int32_t tp[4], clut[4], tw[4], da[4]; } TexVtx;  // 92 bytes
+#define TEX_CAP 196608
+static VkImage         s_vram_tex;    // texture-source snapshot (copy of VRAM before a draw batch)
+static VkDeviceMemory  s_vram_tex_mem;
+static VkImageView     s_vram_tex_view;
+static int             s_vram_tex_undef;
+static VkDescriptorSet s_dset_tex;    // binding0 = s_vram_tex
+static VkPipeline      s_tritex_pipe;
+static VkBuffer        s_tvbuf;
+static VkDeviceMemory  s_tvbuf_mem;
+static void*           s_tvbuf_ptr;
+static int             s_tex_n;
+
 int gpu_vk_enabled(void) {
   if (s_vk_on < 0) {
     const char* v = getenv("PSXPORT_VK");
@@ -312,13 +327,14 @@ static void init_vk(void) {
   si.magFilter = si.minFilter = VK_FILTER_NEAREST;   // R16_UINT VRAM: integer texture (no linear filter)
   si.addressModeU = si.addressModeV = si.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
   VKC(vkCreateSampler(s_dev, &si, 0, &s_sampler));
-  VkDescriptorPoolSize ps = { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1 };
+  VkDescriptorPoolSize ps = { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2 };
   VkDescriptorPoolCreateInfo dpi = { VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO };
-  dpi.maxSets = 1; dpi.poolSizeCount = 1; dpi.pPoolSizes = &ps;
+  dpi.maxSets = 2; dpi.poolSizeCount = 1; dpi.pPoolSizes = &ps;
   VKC(vkCreateDescriptorPool(s_dev, &dpi, 0, &s_dpool));
   VkDescriptorSetAllocateInfo dai = { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO };
   dai.descriptorPool = s_dpool; dai.descriptorSetCount = 1; dai.pSetLayouts = &s_dsl;
-  VKC(vkAllocateDescriptorSets(s_dev, &dai, &s_dset));
+  VKC(vkAllocateDescriptorSets(s_dev, &dai, &s_dset));        // binding0 = VRAM image (present)
+  VKC(vkAllocateDescriptorSets(s_dev, &dai, &s_dset_tex));    // binding0 = VRAM snapshot (textured sampling)
 
   // command pool + buffer, sync
   VkCommandPoolCreateInfo cpi = { VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO };
@@ -379,6 +395,21 @@ static void create_vram(void) {
   wr.dstSet = s_dset; wr.dstBinding = 0; wr.descriptorCount = 1;
   wr.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; wr.pImageInfo = &di;
   vkUpdateDescriptorSets(s_dev, 1, &wr, 0, 0);
+
+  // VRAM snapshot image (texture source for the textured pipeline; copied from VRAM before a batch).
+  VkImageCreateInfo ti = ii; ti.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+  VKC(vkCreateImage(s_dev, &ti, 0, &s_vram_tex));
+  VkMemoryRequirements tr; vkGetImageMemoryRequirements(s_dev, s_vram_tex, &tr);
+  VkMemoryAllocateInfo tm = { VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO };
+  tm.allocationSize = tr.size; tm.memoryTypeIndex = mem_type(tr.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+  VKC(vkAllocateMemory(s_dev, &tm, 0, &s_vram_tex_mem));
+  VKC(vkBindImageMemory(s_dev, s_vram_tex, s_vram_tex_mem, 0));
+  VkImageViewCreateInfo tv = vi; tv.image = s_vram_tex;
+  VKC(vkCreateImageView(s_dev, &tv, 0, &s_vram_tex_view));
+  s_vram_tex_undef = 1;
+  VkDescriptorImageInfo tdi = { s_sampler, s_vram_tex_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+  VkWriteDescriptorSet twr = wr; twr.dstSet = s_dset_tex; twr.pImageInfo = &tdi;
+  vkUpdateDescriptorSets(s_dev, 1, &twr, 0, 0);
 }
 
 static void img_barrier(VkImageLayout from, VkImageLayout to, VkPipelineStageFlags ss, VkPipelineStageFlags ds,
@@ -542,6 +573,31 @@ void create_tri_pipeline(void) {
 
   make_hostbuf(sizeof(TriVtx) * TRI_CAP, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, &s_vbuf, &s_vbuf_mem, &s_vbuf_ptr);
   make_hostbuf((VkDeviceSize)VRAM_W * VRAM_H * 2, VK_BUFFER_USAGE_TRANSFER_DST_BIT, &s_rb, &s_rb_mem, &s_rb_ptr);
+
+  // textured pipeline (TexVtx input, samples the VRAM snapshot, renders to the VRAM render pass)
+  VkShaderModule tvs = make_shader(spv_tritex_vert, spv_tritex_vert_len);
+  VkShaderModule tfs = make_shader(spv_tritex_frag, spv_tritex_frag_len);
+  VkPipelineShaderStageCreateInfo tst[2] = {
+    { VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, 0, 0, VK_SHADER_STAGE_VERTEX_BIT, tvs, "main", 0 },
+    { VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, 0, 0, VK_SHADER_STAGE_FRAGMENT_BIT, tfs, "main", 0 },
+  };
+  VkVertexInputBindingDescription tvbd = { 0, sizeof(TexVtx), VK_VERTEX_INPUT_RATE_VERTEX };
+  VkVertexInputAttributeDescription tvad[7] = {
+    { 0, 0, VK_FORMAT_R32G32_SFLOAT,       0 },   // pos
+    { 1, 0, VK_FORMAT_R32G32_SFLOAT,       8 },   // uv
+    { 2, 0, VK_FORMAT_R32G32B32_SFLOAT,    16 },  // col
+    { 3, 0, VK_FORMAT_R32G32B32A32_SINT,   28 },  // tp (tpx,tpy,mode,raw)
+    { 4, 0, VK_FORMAT_R32G32B32A32_SINT,   44 },  // clut (clutx,cluty,-,-)
+    { 5, 0, VK_FORMAT_R32G32B32A32_SINT,   60 },  // tw (mask_x,mask_y,off_x,off_y)
+    { 6, 0, VK_FORMAT_R32G32B32A32_SINT,   76 },  // da (x0,y0,x1,y1)
+  };
+  VkPipelineVertexInputStateCreateInfo tvi = { VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO };
+  tvi.vertexBindingDescriptionCount = 1; tvi.pVertexBindingDescriptions = &tvbd;
+  tvi.vertexAttributeDescriptionCount = 7; tvi.pVertexAttributeDescriptions = tvad;
+  gp.pStages = tst; gp.pVertexInputState = &tvi;   // reuse ia/vp/rs/ms/cb/ds/layout/renderPass from above
+  VKC(vkCreateGraphicsPipelines(s_dev, VK_NULL_HANDLE, 1, &gp, 0, &s_tritex_pipe));
+  vkDestroyShaderModule(s_dev, tvs, 0); vkDestroyShaderModule(s_dev, tfs, 0);
+  make_hostbuf(sizeof(TexVtx) * TEX_CAP, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, &s_tvbuf, &s_tvbuf_mem, &s_tvbuf_ptr);
 }
 
 // Append one triangle (VRAM coords + per-vertex RGB 0..255) to the batch.
@@ -553,6 +609,25 @@ void gpu_vk_draw_tri(int x0,int y0,int r0,int g0,int b0, int x1,int y1,int r1,in
   v[1] = (TriVtx){ x1, y1, r1/255.f, g1/255.f, b1/255.f };
   v[2] = (TriVtx){ x2, y2, r2/255.f, g2/255.f, b2/255.f };
   s_tri_n += 3;
+}
+
+// Append one TEXTURED triangle: per-vertex pos/uv/color (rgb 0..255) + shared page/CLUT/mode/raw state.
+void gpu_vk_draw_tritri(const int* xs, const int* ys, const int* us, const int* vs,
+                        const unsigned char* rs, const unsigned char* gs, const unsigned char* bs,
+                        int tpx, int tpy, int mode, int raw, int clutx, int cluty,
+                        int twmx, int twmy, int twox, int twoy,
+                        int dax0, int day0, int dax1, int day1) {
+  if (!s_inited || s_tex_n + 3 > TEX_CAP) return;
+  TexVtx* t = (TexVtx*)s_tvbuf_ptr + s_tex_n;
+  for (int i = 0; i < 3; i++) {
+    t[i].x = xs[i]; t[i].y = ys[i]; t[i].u = us[i]; t[i].v = vs[i];
+    t[i].r = rs[i]/255.f; t[i].g = gs[i]/255.f; t[i].b = bs[i]/255.f;
+    t[i].tp[0] = tpx; t[i].tp[1] = tpy; t[i].tp[2] = mode; t[i].tp[3] = raw;
+    t[i].clut[0] = clutx; t[i].clut[1] = cluty; t[i].clut[2] = t[i].clut[3] = 0;
+    t[i].tw[0] = twmx; t[i].tw[1] = twmy; t[i].tw[2] = twox; t[i].tw[3] = twoy;
+    t[i].da[0] = dax0; t[i].da[1] = day0; t[i].da[2] = dax1; t[i].da[3] = day1;
+  }
+  s_tex_n += 3;
 }
 
 // Self-test: clear VRAM, draw batched tris into it, read back. Returns the readback (uint16 VRAM).
@@ -605,8 +680,19 @@ static void tri_render_and_readback(uint16_t* out) {
   memcpy(out, s_rb_ptr, (size_t)VRAM_W * VRAM_H * 2);
 }
 
-// Render the batched tris on top of `bg` (the SW VRAM) and read the result back into `out`. Shared by
-// the live diff: where VK's rasterization matches SW's, out==bg; mismatches reveal rule deltas.
+static void img_barrier_on(VkImage im, VkImageLayout from, VkImageLayout to, VkPipelineStageFlags ss,
+                           VkPipelineStageFlags ds, VkAccessFlags sa, VkAccessFlags da) {
+  VkImageMemoryBarrier b = { VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
+  b.oldLayout = from; b.newLayout = to; b.image = im;
+  b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+  b.subresourceRange = (VkImageSubresourceRange){ VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+  b.srcAccessMask = sa; b.dstAccessMask = da;
+  vkCmdPipelineBarrier(s_cmd, ss, ds, 0, 0, 0, 0, 0, 1, &b);
+}
+
+// Render the batched tris (untextured + textured) on top of `bg` (the SW VRAM) and read the result back.
+// Textured prims sample a SNAPSHOT of `bg` (s_vram_tex) — same textures SW used — so where VK's
+// rasterization/sampling matches SW, out==bg; mismatches reveal rule deltas. Avoids render/sample loop.
 static void tri_over_bg_readback(const uint16_t* bg, uint16_t* out) {
   memcpy(s_stage_ptr, bg, (size_t)VRAM_W * VRAM_H * 2);
   VKC(vkWaitForFences(s_dev, 1, &s_fence, VK_TRUE, UINT64_MAX));
@@ -615,26 +701,42 @@ static void tri_over_bg_readback(const uint16_t* bg, uint16_t* out) {
   VkCommandBufferBeginInfo bi = { VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO };
   bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
   VKC(vkBeginCommandBuffer(s_cmd, &bi));
+  VkBufferImageCopy bc = {0};
+  bc.imageSubresource = (VkImageSubresourceLayers){ VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+  bc.imageExtent = (VkExtent3D){ VRAM_W, VRAM_H, 1 };
+
+  // upload bg into the render target
   img_barrier(s_tex_undef ? VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
               VK_PIPELINE_STAGE_TRANSFER_BIT, 0, VK_ACCESS_TRANSFER_WRITE_BIT);
   s_tex_undef = 0;
-  VkBufferImageCopy bc = {0};
-  bc.imageSubresource = (VkImageSubresourceLayers){ VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
-  bc.imageExtent = (VkExtent3D){ VRAM_W, VRAM_H, 1 };
   vkCmdCopyBufferToImage(s_cmd, s_stage, s_tex, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &bc);
   img_barrier(VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
               VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
               VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
+  // snapshot bg into the texture-source image (sampled by the textured pipeline)
+  img_barrier_on(s_vram_tex, s_vram_tex_undef ? VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                 VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                 VK_PIPELINE_STAGE_TRANSFER_BIT, 0, VK_ACCESS_TRANSFER_WRITE_BIT);
+  s_vram_tex_undef = 0;
+  vkCmdCopyBufferToImage(s_cmd, s_stage, s_vram_tex, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &bc);
+  img_barrier_on(s_vram_tex, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                 VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                 VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
+
   VkRenderPassBeginInfo rp = { VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
   rp.renderPass = s_vram_rpass; rp.framebuffer = s_vram_fb; rp.renderArea.extent = (VkExtent2D){ VRAM_W, VRAM_H };
   vkCmdBeginRenderPass(s_cmd, &rp, VK_SUBPASS_CONTENTS_INLINE);
   VkViewport vpt = { 0, 0, VRAM_W, VRAM_H, 0.0f, 1.0f }; VkRect2D sc = { {0,0}, { VRAM_W, VRAM_H } };
   vkCmdSetViewport(s_cmd, 0, 1, &vpt); vkCmdSetScissor(s_cmd, 0, 1, &sc);
-  vkCmdBindPipeline(s_cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, s_tri_pipe);
-  VkDeviceSize off = 0; vkCmdBindVertexBuffers(s_cmd, 0, 1, &s_vbuf, &off);
-  if (s_tri_n) vkCmdDraw(s_cmd, s_tri_n, 1, 0, 0);
+  vkCmdBindDescriptorSets(s_cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, s_pll, 0, 1, &s_dset_tex, 0, 0);
+  VkDeviceSize off = 0;
+  if (s_tri_n) { vkCmdBindPipeline(s_cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, s_tri_pipe);
+                 vkCmdBindVertexBuffers(s_cmd, 0, 1, &s_vbuf, &off); vkCmdDraw(s_cmd, s_tri_n, 1, 0, 0); }
+  if (s_tex_n) { vkCmdBindPipeline(s_cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, s_tritex_pipe);
+                 vkCmdBindVertexBuffers(s_cmd, 0, 1, &s_tvbuf, &off); vkCmdDraw(s_cmd, s_tex_n, 1, 0, 0); }
   vkCmdEndRenderPass(s_cmd);
+
   img_barrier(VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
               VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
               VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT);
@@ -655,12 +757,12 @@ void gpu_vk_frame_end(const uint16_t* svram, int frame) {
   static int dframe = -2;
   if (dframe == -2) { const char* e = getenv("PSXPORT_VK_DIFF"); dframe = e ? atoi(e) : -1; }
   if (dframe >= 0 && frame == dframe) {
-    if (!s_tri_n) { fprintf(stderr, "[vk_diff] f%d: no untextured tris this frame\n", frame); s_tri_n = 0; return; }
+    if (!s_tri_n && !s_tex_n) { fprintf(stderr, "[vk_diff] f%d: no tris this frame\n", frame); s_tri_n = s_tex_n = 0; return; }
     static uint16_t got[VRAM_W * VRAM_H];
     tri_over_bg_readback(svram, got);
     long diff = 0; for (int i = 0; i < VRAM_W * VRAM_H; i++) if (got[i] != svram[i]) diff++;
-    fprintf(stderr, "[vk_diff] f%d  tris=%d  mismatched VRAM px (VK vs SW)=%ld (%.4f%%)\n",
-            frame, s_tri_n / 3, diff, 100.0 * diff / (VRAM_W * VRAM_H));
+    fprintf(stderr, "[vk_diff] f%d  untex_tris=%d tex_tris=%d  mismatched VRAM px (VK vs SW)=%ld (%.4f%%)\n",
+            frame, s_tri_n / 3, s_tex_n / 3, diff, 100.0 * diff / (VRAM_W * VRAM_H));
     FILE* f = fopen("scratch/screenshots/vk_diff.ppm", "wb");
     if (f) { int W = 384, H = 256, oy = 256;     // a display-sized window, diffs highlighted red
       fprintf(f, "P6\n%d %d\n255\n", W, H);
@@ -671,7 +773,7 @@ void gpu_vk_frame_end(const uint16_t* svram, int frame) {
         fwrite(c, 1, 3, f); }
       fclose(f); fprintf(stderr, "[vk_diff] wrote scratch/screenshots/vk_diff.ppm (diffs=red)\n"); }
   }
-  s_tri_n = 0;
+  s_tri_n = 0; s_tex_n = 0;
 }
 
 // PSXPORT_VK_TRITEST=1: headless-ish self-test of the triangle rasterizer. Draws a known flat tri and a
@@ -710,5 +812,13 @@ void gpu_vk_tritest(void) {}
 void gpu_vk_frame_end(const uint16_t* svram, int frame) { (void)svram; (void)frame; }
 void gpu_vk_draw_tri(int a,int b,int c,int d,int e,int f,int g,int h,int i,int j,int k,int l,int m,int n,int o) {
   (void)a;(void)b;(void)c;(void)d;(void)e;(void)f;(void)g;(void)h;(void)i;(void)j;(void)k;(void)l;(void)m;(void)n;(void)o;
+}
+void gpu_vk_draw_tritri(const int* xs, const int* ys, const int* us, const int* vs,
+                        const unsigned char* rs, const unsigned char* gs, const unsigned char* bs,
+                        int tpx, int tpy, int mode, int raw, int clutx, int cluty,
+                        int twmx, int twmy, int twox, int twoy,
+                        int dax0, int day0, int dax1, int day1) {
+  (void)xs;(void)ys;(void)us;(void)vs;(void)rs;(void)gs;(void)bs;(void)tpx;(void)tpy;(void)mode;(void)raw;
+  (void)clutx;(void)cluty;(void)twmx;(void)twmy;(void)twox;(void)twoy;(void)dax0;(void)day0;(void)dax1;(void)day1;
 }
 #endif

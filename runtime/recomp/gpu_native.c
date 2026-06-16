@@ -505,6 +505,20 @@ static void gp0_exec(void) {
                                    v[2].x+s_off_x, v[2].y+s_off_y, v[2].r, v[2].g, v[2].b,
                                    v[3].x+s_off_x, v[3].y+s_off_y, v[3].r, v[3].g, v[3].b);
     }
+    // VK backend (M3): tee TEXTURED opaque polys -> GPU textured rasterizer (CLUT-in-shader).
+    if (gpu_vk_enabled() && textured && !semi) {
+      void gpu_vk_draw_tritri(const int*,const int*,const int*,const int*,const unsigned char*,
+                              const unsigned char*,const unsigned char*,int,int,int,int,int,int,
+                              int,int,int,int,int,int,int,int);
+      int xs[4], ys[4], us[4], vs[4]; unsigned char rs[4], gs[4], bs[4];
+      for (int i = 0; i < nv; i++) { xs[i]=v[i].x+s_off_x; ys[i]=v[i].y+s_off_y; us[i]=v[i].u; vs[i]=v[i].v;
+                                     rs[i]=v[i].r; gs[i]=v[i].g; bs[i]=v[i].b; }
+      gpu_vk_draw_tritri(xs, ys, us, vs, rs, gs, bs, s_tp_x, s_tp_y, s_tp_mode, raw?1:0, s_clut_x, s_clut_y,
+                         s_tw_mx, s_tw_my, s_tw_ox, s_tw_oy, s_da_x0, s_da_y0, s_da_x1, s_da_y1);
+      if (nv == 4) gpu_vk_draw_tritri(&xs[1], &ys[1], &us[1], &vs[1], &rs[1], &gs[1], &bs[1],
+                                      s_tp_x, s_tp_y, s_tp_mode, raw?1:0, s_clut_x, s_clut_y,
+                                      s_tw_mx, s_tw_my, s_tw_ox, s_tw_oy, s_da_x0, s_da_y0, s_da_x1, s_da_y1);
+    }
     // PSXPORT_POLYDUMP=frame — log every poly at `frame` (our port side, to compare vs oracle
     // polywatch). Finds the garbage-block prims in the GAME level.
     { static int pd = -2, pax = -1, pay = -1;

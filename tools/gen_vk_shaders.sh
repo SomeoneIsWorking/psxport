@@ -35,5 +35,7 @@ PY
   emit present.frag spv_present_frag
   emit tri.vert spv_tri_vert
   emit tri.frag spv_tri_frag
+  emit tritex.vert spv_tritex_vert
+  emit tritex.frag spv_tritex_frag
 } > "$OUT"
 echo "[gen_vk_shaders] wrote $OUT"

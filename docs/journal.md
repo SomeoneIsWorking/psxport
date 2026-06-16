@@ -3625,3 +3625,20 @@ cdc.c [setmode]/[setloc]/[xa] logs (gated on PSXPORT_CDC_LOG), tomba2 PSXPORT_RE
 - Phase-2 feature targets (recorded now, implemented only after faithful base):
   widescreen (projection-level) + interpolated 60 fps via per-object transform
   interpolation (n64recomp style).
+
+## 2026-06-17 (later-89) — HW renderer M3: textured GPU rasterization (CLUT-in-shader) renders Tomba2; draw-area clip fix.
+Textured triangle pipeline (tritex.vert/frag): samples a VRAM snapshot (avoids render/sample feedback
+loop) with 4/8/16bpp + CLUT lookup + texture-window, affine (noperspective) UV, per-pixel modulation,
+transparent-texel discard, exactly matching SW sample_tex's addressing. Per-prim state (texpage, CLUT,
+window, draw-area) carried as flat vertex attributes -> one draw call. Tee'd from gp0_exec (textured
+opaque polys). Diff harness (PSXPORT_VK_DIFF) draws untextured + textured over the uploaded SW VRAM.
+- **Renders correctly:** title screen + the in-engine demo scene (structure/lava/character/HUD) all
+  render via the GPU textured path, visually matching SW.
+- **DRAW-AREA CLIP was the key fix:** SW clips polys to s_da_*; VK didn't, so polys overdrew the atlas/
+  top region (big spurious block). Per-prim draw-area discard in the shader: f3000 demo 19.0% -> 14.4%
+  mismatch. Texture window added (no measurable change on this scene; correct to have).
+- **Residual ~14% on the busy demo** = sub-pixel edge-coverage + UV/color rounding differences on ~944
+  small tris (GPU pixel-center vs SW integer-coord rasterization) — visually invisible (scene matches),
+  same class as the SW-vs-Beetle residual. Reducing it = matching SW's exact fill/rounding rules (later).
+- OPEN: semi-transparency (4 blend modes; skipped in the tee), sprites/rects/lines/fills (M4), then
+  switch present to VK VRAM (M5). PSXPORT_VK=1 windowed; SW path + default untouched.
