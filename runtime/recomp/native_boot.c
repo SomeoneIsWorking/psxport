@@ -110,6 +110,26 @@ static void native_scheduler_step(R3000* c) {
   *c = loop;                                  // restore the frame-loop context
 }
 
+// ---- BGM start/stop diagnostic (PSXPORT_BGMDBG=1) --------------------------------------------
+// FUN_80074BF8(idx) starts BGM #idx (writes the current-song index 0x800bed80, plays the seq);
+// FUN_80074E48() stops the current BGM (sets 0x800bed80=0xFFFF). Tomba2's gameplay BGM is silent
+// in this port because the start IS reached (idx written) but an immediate STOP clears it. Log
+// each call with the caller (ra), arg, and the index before/after to find the spurious stopper.
+static volatile uint32_t g_bgm_frame = 0;
+void gen_func_80074BF8(R3000*);
+void gen_func_80074E48(R3000*);
+static void ov_bgm_start(R3000* c) {
+  fprintf(stderr, "[bgmdbg] f%u BGM_START(idx=0x%02X) ra=%08X  idx@800bed80(before)=0x%04X\n",
+          g_bgm_frame, c->r[4] & 0xFF, c->r[31], mem_r16(0x800bed80));
+  gen_func_80074BF8(c);
+  fprintf(stderr, "[bgmdbg]   -> idx@800bed80(after)=0x%04X\n", mem_r16(0x800bed80));
+}
+static void ov_bgm_stop(R3000* c) {
+  fprintf(stderr, "[bgmdbg] f%u BGM_STOP ra=%08X  idx@800bed80(before)=0x%04X\n",
+          g_bgm_frame, c->r[31], mem_r16(0x800bed80));
+  gen_func_80074E48(c);
+}
+
 // Native override of game-main FUN_80050b08: init prefix, then (later) native frame loop.
 // ---- Interactive REPL (PSXPORT_REPL=1) — drive the native port from stdin --------------------
 // Mirrors the oracle's (wide60rt -repl) command set so one driver can step BOTH cores and diff.
@@ -216,6 +236,10 @@ static void ov_game_main(R3000* c) {
   // gpu_present + audio + satisfies the vblank pacing dwell. PSXPORT_NATIVE_FRAMES caps the
   // run (headless). ---
   rec_set_override(0x80080880u, ov_switch);    // ChangeThread -> native task switch (capture+longjmp)
+  if (getenv("PSXPORT_BGMDBG")) {              // diag: trace BGM start/stop callers
+    rec_set_override(0x80074BF8u, ov_bgm_start);
+    rec_set_override(0x80074E48u, ov_bgm_stop);
+  }
 
   // Frame budget: an explicit PSXPORT_NATIVE_FRAMES always wins (headless tests). Otherwise, when
   // a window is up this is the real interactive game loop — run until the user closes the window
@@ -232,6 +256,7 @@ static void ov_game_main(R3000* c) {
   void pad_service_frame(void);
   long repl_budget = 0;   // frames remaining in the current REPL `run N`
   for (uint32_t f = 0; nframes == 0 || f < nframes; f++) {
+    g_bgm_frame = f;
     // REPL: when the run-budget is exhausted, block reading stdin commands until a `run N` refills
     // it (immediate commands — r/w/watch/input/regs/seq — execute between frames). Quit/EOF breaks.
     if (repl_mode) {
@@ -308,6 +333,25 @@ static void ov_game_main(R3000* c) {
                 f, (int16_t)mem_r16(0x801054B0), mem_r32(0x80104C28) & 0xFFFF,
                 mem_r8(0x800AC424), mem_r32(0x800AC42C), mem_r32(TASKBASE + 0xc));
         ls = st;
+      }
+    }
+    // BGM-active probe (PSXPORT_BGMDBG): each frame scan the 14 libsnd sequence slots
+    // (0x800be3d8 + i*0xB0) for the active/play flag (+0x98 bit0). For any active slot, log
+    // its read pointer (+0x00) vs base (+0x04) — if the read ptr ADVANCES frame-to-frame the
+    // sequence is genuinely ticking (audible); if it stays == base the SsSeqCalled tick isn't
+    // advancing it (frozen, the handoff's hypothesis). Scene-independent: catches any window
+    // where a BGM is active, without needing to reach a specific scene.
+    if (getenv("PSXPORT_BGMDBG")) {
+      static uint32_t s_rd[14];
+      for (int i = 0; i < 14; i++) {
+        uint32_t s = 0x800be3d8u + (uint32_t)i * 0xB0u;
+        uint32_t flag = mem_r32(s + 0x98), rd = mem_r32(s);
+        if ((flag & 1) && rd != s_rd[i]) {
+          fprintf(stderr, "[bgmtick] f%u slot%d active rdptr=%08X base=%08X (%+d)\n",
+                  f, i, rd, mem_r32(s + 4), (int)(rd - mem_r32(s + 4)));
+          s_rd[i] = rd;
+        }
+        if (!(flag & 1)) s_rd[i] = 0;
       }
     }
     static uint32_t s_last_entry = 0; static uint32_t s_last_sm = 0xFFFFFFFF;

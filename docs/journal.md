@@ -1,5 +1,48 @@
 # Debug / progress journal
 
+## 2026-06-16 (later 75) — BGM: later-74 FALSIFIED. The libsnd sequencer ACTIVATES BGM, the read pointer ADVANCES, and it PRODUCES AUDIO (WAV-confirmed). Not "frozen/never activated." The real issue is SCENE-SPECIFIC: some scenes' BGM is started+sustained (fisherman intro = audible), others (menu / steady gameplay) are not started or get stopped. Bug moved upstream to scene/stage BGM-trigger logic, NOT the SPU/sequencer.
+**later-74's whole premise is wrong** and so is memory [[track-game-state-not-output]]'s "songs OPEN but never ACTIVATED." Evidence, all from the native port (PSXPORT_BGMDBG diag in native_boot.c: overrides on FUN_80074BF8/FUN_80074E48 + a per-frame slot-tick probe):
+
+### How BGM actually works here (RE'd this session)
+- **FUN_80074BF8(idx)** = "play BGM #idx": stores idx to the current-song byte **0x800bed80**, looks up
+  seq table @0x800b6e68 (idx*8 → {seq_no, loopcount}), calls **SsSeqPlay** (public 0x80090560 → worker
+  0x800905e0; sets the per-seq struct ptrs + **+0x98 bit0**). idx 0xFF = "no song".
+- **FUN_80074E48** = "stop current BGM": if 0x800bed80 != -1, SsSeqStop then sets 0x800bed80 = 0xFFFF.
+  FUN_80074BC4 (callers all overlay/stage code) is "stop-all-sound" → calls it on scene transitions.
+- **FUN_80075A80** = per-frame sound-command service (callers = stage handlers 0x80106480..0x80108d4c):
+  processes a command queue; a request byte @0x800be22a drives start/stop of BGM.
+- SsSeqCalled (0x80090BD0) advances any slot with +0x98 bit0 set. Slot struct = (lw 0x80104c30) +
+  i*0xB0; flag @ +0x98; read ptr @ +0x00, SEQ base @ +0x04. Active BGM slot for the newgame scene = **slot 4**.
+
+### Proof the chain works (native port, PSXPORT_NO_FMV=1, FORCE_BUTTONS=FFF7)
+- f166 BGM_START(idx=4) fires (ra=0x80074608). **slot 4 read ptr ADVANCES** every frame: base
+  0x8018245C → +84 over f166-225 (logged by the [bgmtick] probe). f260 BGM_START(idx=2): slot 2 read
+  ptr advances +167. So sequences DO activate and tick.
+- **WAV capture (scratch/wav/bgm_nofmv.wav, PSXPORT_WAV, FMVs OFF) has real signal**: RMS 3000-4700 at
+  t≈5.5-7.5s (= f166-225, the idx-4 BGM) and t≈9s (idx-2). So the SEQ→SPU→mix path produces audio.
+  (Reaching scenes via FORCE_BUTTONS=FFF7 (pulse Start) — and disabling intro FMVs with PSXPORT_NO_FMV=1
+   so the capture/frame-timing isn't the FMV player. Without NO_FMV you're capturing the FMVs, not the game.)
+- Oracle reference (newgame.sav, fisherman scene): 0x800bed80 = **4**, stable 1500+ frames, no rewrites
+  → the oracle holds BGM 4 at that steady scene. Native at f166 ALSO starts BGM 4 (matches).
+
+### What's actually wrong (the narrowed target)
+The intro/fisherman BGM plays in our port (audio confirmed) — consistent with the user hearing it. The
+silent cases are **specific scenes**: the **menu** and **steady gameplay** (grassy field). There, either
+the stage's BGM-start (FUN_80074BF8 via a stage handler) never fires, or a spurious stop/scene-state
+divergence kills it. The 0/1 start/stop oscillation I first saw was an ARTIFACT of forced-Start spam
+(Start = pause menu, which stops BGM); not a real bug. NEXT: reach the menu and steady gameplay with NO
+spurious input (REPL, minimal taps, no pause), confirm whether their BGM-start fires, and if not, find the
+stage-handler precondition our native scheduler/boot path doesn't satisfy. Compare the per-frame command
+queue @0x800be22a / stage handler calls of FUN_80075A80 vs the oracle at the same scene.
+
+### Gotchas / tooling this session
+- **PSXPORT_NO_FMV=1** to skip intro FMVs (else screenshots/WAV/frame-timing are the native_fmv player).
+- Oracle REPL `tap`/`press` did NOT advance the title menu from title.sav nor newgame.sav this session
+  (input not reaching the menu, or those states idle waiting on stalled CD stream) — could not navigate
+  the oracle live; used the RAM-dump snapshots (scratch/bin/tomba2/state/{demo,newgame,title}.bin) and
+  newgame.sav idle instead. Native FORCE_BUTTONS=FFF7 DOES drive menus.
+- PSXPORT_BGMDBG=1: logs every BGM start/stop with caller ra + the per-frame [bgmtick] read-ptr probe.
+
 ## 2026-06-16 (later 74) — BGM: USER-CONFIRMED it's the SPU music MIX (not the output path). Sequenced BGM songs are OPEN but never ACTIVATED — the per-sequence play flag (struct+0x98 bit0) is clear, so SsSeqCalled skips them (read ptr frozen). Jingle/SFX work. Built interactive REPL + watchpoints + screenshots to drive both cores.
 Tooling built (user request): native-port REPL (PSXPORT_REPL, FIFO-driven, persistent) mirroring the
 oracle's `-repl`; commands run/r/rw/w/w8/watch/unwatch/hits/press/release/tap/regs/seq/shot/stage;
