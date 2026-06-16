@@ -1,6 +1,6 @@
 # Debug / progress journal
 
-## 2026-06-16 (later-79) — FIXED (user-verified): "ingame music plays over the dialog" in the prologue. Cause: the looping ingame-music XA (chan4) is started by the gameplay state machine, which on real HW only fires AFTER the CD-paced scene load — by then the dialog owns the audio. Our INSTANT CD reads fire it during the dialog, so it overlaps the dialog tone. Fix (per user directive — keep instant CD, mod the CD-speed-dependent behavior in PC code): suppress the looping ingame-music XA while a dialog tone is the current song, resume it after. Identifications corrected: **song 4-7 = sequenced dialog tones** (user-ID: 4=regular, 6=worry), **chan4 XA = ingame/area music**, **chan22 XA = dialog voice**, **chan7 XA = prologue narration**. OPEN: resumed ingame music starts at full volume; should fade in from 0 (separate timing issue).
+## 2026-06-16 (later-79) — FIXED (user-verified): "ingame music plays over the dialog" in the prologue. Cause: the looping ingame-music XA (chan4) is started by the gameplay state machine, which on real HW only fires AFTER the CD-paced scene load — by then the dialog owns the audio. Our INSTANT CD reads fire it during the dialog, so it overlaps the dialog tone. Fix (per user directive — keep instant CD, mod the CD-speed-dependent behavior in PC code): suppress the looping ingame-music XA while a dialog tone is the current song, resume it after. Identifications corrected: **song 4-7 = sequenced dialog tones** (user-ID: 4=regular, 6=worry), **chan4 XA = ingame/area music**, **chan22 XA = dialog voice**, **chan7 XA = prologue narration**. FOLLOW-UPS FIXED in later-79b: the resumed music starting at full volume (now fades in via the game's own CD-volume ramp) and a ~1-frame music "blip" at the dialog start (now cut synchronously at the song-start).
 
 ### later-79 CORRECTION of the mid-investigation notes below
 The measurement notes in this entry are accurate as DATA but two interpretations in them are WRONG and are corrected here:
@@ -48,7 +48,37 @@ an architectural consequence of the "no CD emulation / synchronous reads" design
 - **Oracle ground truth (cold-boot WAV; savestate XA does NOT replay):** narration (chan7) → **~8 s silence** (real CD load) → dialog tone + voice, with **NO ingame music** (chan4 cross-corr ≈0.087 vs dialog-tone 0.31; the 8 s silence rules out a looping chan4). So the ingame music is correctly absent during the prologue dialog. `scratch/wav/oracle_scene.wav`, segments in `scratch/wav/music/`.
 - **The mod (cd_override.c + xa_stream.c + native_boot.c):** a looping XA clip = ingame/area music; one-shot clips = voice/narration. While a dialog tone is the current song (`0x800bed80` in 4..7), `ov_voice_play` defers a looping clip (remembers it, doesn't start it / doesn't set the gate) and `xa_dialog_coord` (per-frame, from native_scheduler_step) stops any looping XA that's sounding; once the dialog tone clears and the XA stream is free it resumes the remembered ingame-music clip. Voice clips are untouched. USER-VERIFIED correct (dialog now = tone + voice only; ingame music returns after).
 - **Music identification library** (for future audio bugs): `scratch/wav/music/` — `seq_00..13.wav` (sequenced songs, rendered via new REPL `bgm N` + `wav PATH`) and `xa_chan{4,7,22}_*.wav` (XA tracks, via new REPL `xadump chan lba PATH`). chan4=ingame music, song4=regular dialog, song6=worry dialog (user-identified).
-- **OPEN (next):** resumed ingame music starts at full volume; the real game fades it in from 0 (another instant-CD timing casualty — the volume ramp). Investigate the XA/CD volume fade and mod it PC-side.
+- **OPEN (next):** resumed ingame music starts at full volume; the real game fades it in from 0 (another instant-CD timing casualty — the volume ramp). Investigate the XA/CD volume fade and mod it PC-side. → DONE in later-79b.
+
+### later-79b — fade-in + the 1-frame "blip", both PC-side (register-verified)
+Two follow-ups from later-79, fixed in the same instant-CD-mod spirit.
+
+**The fade mechanism (RE'd):** the game fades XA loudness via the **CD-volume** SpuCommonAttr (mask
+`0xc0` = CDVOLL/CDVOLR → SPU regs 0x1B0/0x1B2 → Beetle `spu.c` scales the XA by `CDVol>>15`, spu.c:1400).
+Per-frame `FUN_80075824(&DAT_800be1f8)` ramps a fade **current** `DAT_800be224` toward a **target**
+`DAT_800be222` by 0x100/frame (×2 if `DAT_1f800137==2`), scaled by master `DAT_800be220`; `FUN_80075cec`
+sets the target (neg arg snaps both); the scene-transition fades are `FUN_80026470` (out, target 0) /
+`FUN_800264bc` (in: snap to ~0, target 0x47ff). Verified live (PSXPORT_CDVOL_DBG, new gated log in spu.c):
+in gameplay CDVol sits flat at 25484 (= master, current `DAT_800be224`=0x7fff), i.e. the ramp runs but is
+already at target — so a (re)started clip plays at full, no fade. The dialog VOICE (chan22) is the SAME XA
+stream and is ALSO scaled by CDVol, so the fade may only be applied when the music is the sole XA user.
+
+**Fade-in fix (cd_override.c `music_fade_in`):** on ingame-music (re)start (`ov_voice_play` loop path +
+`xa_dialog_coord` resume) snap the fade-current `DAT_800be224`=0 and leave the target; the game's own
+per-frame ramp climbs it back (~128f ≈ 2.1 s) = a faithful fade-in using the vanilla mechanism/rate.
+Verified: at chan4 start CDVol drops 25480→**198** (first ramp step from 0) and climbs.
+
+**1-frame "blip" fix (native_boot.c `ov_bgm_start` → cd_override.c `xa_music_cut_if_dialog`):** the
+per-frame `xa_dialog_coord` stops the looping music one frame AFTER the audio is mixed (frame loop:
+`rc0(0x800788ac)` audio mix at line 378 runs BEFORE `native_scheduler_step`/`xa_dialog_coord` at 379-380),
+so a dialog-tone start leaked ~1 frame of music. Now the BGM-start override (always-on; logging still
+gated by PSXPORT_BGMDBG) cuts the looping XA **synchronously** the instant a dialog-tone song (4-7) is
+written. Combined with the fade-in, any residual sub-frame leak is at ~0.6 % volume (inaudible).
+
+**Not a regression:** the "house is on fire" (song 6) dialog stalls headless at `DAT_801fe0e0`=2 — but
+**baseline (stashed) stalls identically**, so it's the pre-existing open BGM-timing bug (commit a42289d),
+not from this change. The post-dialog resume couldn't be observed headless (dialog stall); the resume uses
+the identical `music_fade_in` path. Pending: user ear-check via `./run.sh`.
 
 ## 2026-06-16 (later 78) — FIXED later-77: in-game XA-ADPCM streaming implemented natively (prologue BGM + voice now audible, WAV-confirmed). Fisherman-scream "first note repeats / cutscene won't advance" ROOT-CAUSED to FUN_8001cfc8's faked GetlocL position wait; interim stopgap in place, native engine-port planned.
 **New native subsystem `runtime/recomp/xa_stream.c`** (in build: added to run.sh + tools/build_port.sh).

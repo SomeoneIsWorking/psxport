@@ -226,6 +226,18 @@ static int dialog_tone_active(void) {
 // actually mix the decoded XA (Beetle spu.c gates on SPUControl bit0).
 static void cd_to_spu_mix(R3000* c, int on) { c->r[A0] = on ? 1 : 0; rec_dispatch(c, 0x8001cf00u); }
 
+// Fade the ingame music IN from silence using the GAME'S OWN CD-volume ramp. The game keeps a
+// CD-volume fade pair: target DAT_800be222 and current DAT_800be224 (the SpuCommonAttr CDVOL the
+// per-frame audio update FUN_80075824 ramps current->target by 0x100/frame, then writes to SPU
+// reg 0x1B0/0x1B2, which Beetle spu.c uses to scale the XA — see spu.c CDVol). At steady state
+// both sit at 0x7fff (full). On real hardware the area music only started after the CD-paced
+// scene load, by which point this fade had been (re)armed; with instant CD the music (re)starts
+// at the steady full level — the "starts too loud" bug. Mod: snap the fade CURRENT to 0 (leave the
+// target), so the game's own ramp climbs it back up = a ~2s fade-in. Caller MUST only do this when
+// the music is the sole XA user — CDVOL also scales the dialog VOICE (chan22), so zeroing it while
+// a voice plays would mute the voice too.
+static void music_fade_in(void) { mem_w16(0x800be224, 0); }
+
 static void ov_voice_play(R3000* c) {
   uint8_t  chan  = (uint8_t)(c->r[A0] & 0xFF);
   uint32_t start = c->r[A1], end = c->r[A2];
@@ -239,18 +251,38 @@ static void ov_voice_play(R3000* c) {
   xa_stream_play(chan, start, end, loop);
   mem_w16(0x801fe0e0, 2);                            // task-2 state = running (cutscene wait gate)
   cd_to_spu_mix(c, 1);
+  if (loop) music_fade_in();                         // ingame music fades in from 0 (instant-CD mod)
+}
+
+// Called from the BGM-start override (ov_bgm_start) right after the song index is written, i.e. at
+// the instant a dialog tone begins — synchronously, before this frame's audio mix. Stops the looping
+// ingame music so it can't leak a frame past the dialog start (the per-frame xa_dialog_coord below
+// would otherwise stop it one frame late, after the mix). Keeps it remembered (s_pending_music) so
+// xa_dialog_coord resumes it when the dialog ends.
+void xa_music_cut_if_dialog(void) {
+  if (dialog_tone_active() && xa_stream_is_looping()) xa_stream_stop();
 }
 
 // Called once per frame (native_scheduler_step). Enforces "dialogs stop the ingame music":
 // stop a looping ingame-music clip while a dialog tone is up; resume the remembered clip once
 // the dialog ends and the XA stream is free (no voice playing).
 void xa_dialog_coord(R3000* c) {
+  if (getenv("PSXPORT_XA_DBG")) {
+    static uint32_t prev = 0xDEAD; static int pa = -1, pl = -1;
+    uint32_t s = mem_r16(0x800bed80) & 0xFFFF; int a = xa_stream_is_active(), l = xa_stream_is_looping();
+    if (s != prev || a != pa || l != pl) {
+      fprintf(stderr, "[coord] song=%u tone=%d xa_active=%d loop=%d pending=%d\n",
+              s, dialog_tone_active(), a, l, s_pending_music);
+      prev = s; pa = a; pl = l;
+    }
+  }
   if (dialog_tone_active()) {
     if (xa_stream_is_looping()) xa_stream_stop();    // dialog up: silence ingame music (kept pending)
   } else if (s_pending_music && !xa_stream_is_active()) {
     xa_stream_play(s_pm_chan, s_pm_start, s_pm_end, 1);   // dialog over: resume ingame music
     mem_w16(0x801fe0e0, 2);
     cd_to_spu_mix(c, 1);
+    music_fade_in();                                      // resumed music fades in from 0 (no voice now)
   }
 }
 // 0x8001CF2C FUN_8001cf2c: stop the current voice/BGM clip.

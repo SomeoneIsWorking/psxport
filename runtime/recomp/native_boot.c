@@ -135,15 +135,23 @@ static void native_scheduler_step(R3000* c) {
 static volatile uint32_t g_bgm_frame = 0;
 void gen_func_80074BF8(R3000*);
 void gen_func_80074E48(R3000*);
+void xa_music_cut_if_dialog(void);   // cd_override.c: stop looping ingame music when a dialog tone starts
+static int s_bgmdbg = -1;
 static void ov_bgm_start(R3000* c) {
-  fprintf(stderr, "[bgmdbg] f%u BGM_START(idx=0x%02X) ra=%08X  idx@800bed80(before)=0x%04X\n",
-          g_bgm_frame, c->r[4] & 0xFF, c->r[31], mem_r16(0x800bed80));
+  if (s_bgmdbg < 0) s_bgmdbg = (getenv("PSXPORT_BGMDBG") ? atoi(getenv("PSXPORT_BGMDBG")) : 0);
+  if (s_bgmdbg) fprintf(stderr, "[bgmdbg] f%u BGM_START(idx=0x%02X) ra=%08X  idx@800bed80(before)=0x%04X\n",
+                        g_bgm_frame, c->r[4] & 0xFF, c->r[31], mem_r16(0x800bed80));
   gen_func_80074BF8(c);
-  fprintf(stderr, "[bgmdbg]   -> idx@800bed80(after)=0x%04X\n", mem_r16(0x800bed80));
+  // Dialog-tone songs (current-song 4..7) cut the looping ingame music SYNCHRONOUSLY here — at the
+  // song-start, before this frame's audio mix — so it can't leak a frame past the dialog start
+  // (the per-frame xa_dialog_coord stop is one frame late vs the audio mix). Instant-CD mod.
+  xa_music_cut_if_dialog();
+  if (s_bgmdbg) fprintf(stderr, "[bgmdbg]   -> idx@800bed80(after)=0x%04X\n", mem_r16(0x800bed80));
 }
 static void ov_bgm_stop(R3000* c) {
-  fprintf(stderr, "[bgmdbg] f%u BGM_STOP ra=%08X  idx@800bed80(before)=0x%04X\n",
-          g_bgm_frame, c->r[31], mem_r16(0x800bed80));
+  if (s_bgmdbg < 0) s_bgmdbg = (getenv("PSXPORT_BGMDBG") ? atoi(getenv("PSXPORT_BGMDBG")) : 0);
+  if (s_bgmdbg) fprintf(stderr, "[bgmdbg] f%u BGM_STOP ra=%08X  idx@800bed80(before)=0x%04X\n",
+                        g_bgm_frame, c->r[31], mem_r16(0x800bed80));
   gen_func_80074E48(c);
 }
 
@@ -311,10 +319,10 @@ static void ov_game_main(R3000* c) {
   // gpu_present + audio + satisfies the vblank pacing dwell. PSXPORT_NATIVE_FRAMES caps the
   // run (headless). ---
   rec_set_override(0x80080880u, ov_switch);    // ChangeThread -> native task switch (capture+longjmp)
-  if (getenv("PSXPORT_BGMDBG")) {              // diag: trace BGM start/stop callers
-    rec_set_override(0x80074BF8u, ov_bgm_start);
-    rec_set_override(0x80074E48u, ov_bgm_stop);
-  }
+  // Always on: ov_bgm_start cuts the looping ingame music when a dialog tone starts (instant-CD mod);
+  // both also trace BGM start/stop callers under PSXPORT_BGMDBG.
+  rec_set_override(0x80074BF8u, ov_bgm_start);
+  rec_set_override(0x80074E48u, ov_bgm_stop);
 
   // Frame budget: an explicit PSXPORT_NATIVE_FRAMES always wins (headless tests). Otherwise, when
   // a window is up this is the real interactive game loop — run until the user closes the window
