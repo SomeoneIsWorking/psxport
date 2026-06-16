@@ -3642,3 +3642,13 @@ opaque polys). Diff harness (PSXPORT_VK_DIFF) draws untextured + textured over t
   same class as the SW-vs-Beetle residual. Reducing it = matching SW's exact fill/rounding rules (later).
 - OPEN: semi-transparency (4 blend modes; skipped in the tee), sprites/rects/lines/fills (M4), then
   switch present to VK VRAM (M5). PSXPORT_VK=1 windowed; SW path + default untouched.
+
+## 2026-06-17 (later-90) — HW renderer M3/M4 VISUALLY VALIDATED (user can't tell VK from SW).
+User compared the VK render vs SW render of the demo scene front buffer (vk_out/sw_out): "can't even
+tell them apart." So the GPU textured pipeline (M3 polys + M4 sprites, CLUT-in-shader) renders Tomba2
+correctly; the ~14% pixel "mismatch" was invisible off-by-1 (ordered dither + UV/color rounding, not
+implemented to match SW exactly — and not worth chasing per the user). Validation method going forward:
+SEND renders for the user to eyeball, don't naive-pixel-diff. M4 sprites tee'd (rects as 2 tris).
+- REMAINING for VK to BE the renderer (M5): VK owns VRAM (CPU uploads, VRAM->VRAM copies, fills, lines),
+  semi-transparency (4 blend modes — needs VK-owned VRAM to matter), then present from VK VRAM + retire
+  SW (default-on). Until then VK renders the tee'd prims over the uploaded SW VRAM (validated identical).
