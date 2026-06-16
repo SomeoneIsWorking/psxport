@@ -1,5 +1,23 @@
 # Debug / progress journal
 
+## 2026-06-16 (later-87) — ROOT-CAUSED the WIDE60 "tripled weapon icon": the re-rasterized in-between is LOSSY. Interim fix: present the real frame when not interpolating.
+User: the tripling happens ONLY with PSXPORT_WIDE60=1 (the port), and is the only thing broken.
+Diagnosed via the offline A/in-between/B dump at the field scene (f4720, spiky-ball enemies in water):
+- **A (prev real) = 1 ball, B (cur real) = 1 ball, but the in-between (s_interp) = 3 balls.** Prim count
+  ~1325 = one frame (NOT multi-frame accumulation). Ball-region prims are all `obj=0` (untagged, per
+  later-86), so the synth snaps everything — yet the in-between still differs from VRAM.
+- **ROOT CAUSE:** `wide60_synthesize` rebuilds the in-between by re-rasterizing only the captured GP0
+  poly/sprite/line subset into a cleared buffer. It does NOT reproduce occluders the real frame uses
+  (semi-transparent water over the balls, fills, uncaptured ops, exact blend/draw-order/mask), so
+  objects that are hidden/dimmed in the true frame REAPPEAR in the in-between → spurious extra copies.
+  The "capture display list + re-rasterize" approach is fundamentally lossy. (Generalizes the later-81
+  "uncaptured prim types" caveat.) The correct fix is the native renderer (own every draw + occlusion).
+- **INTERIM FIX (engine/wide60.c):** `wide60_synthesize` returns the #prims actually interpolated;
+  `wide60_present` blits the LOSSY s_interp only when that's >0, else presents the REAL current frame
+  (back buffer A, then real front B). Since interpolation is blocked (obj tags unavailable → moved=0
+  always), WIDE60 now shows real frames = NO tripling, at the cost of no true in-between until the
+  native renderer supplies object-tagged draws. Headless unaffected (faithful branch). NEEDS live check.
+
 ## 2026-06-16 (later-86) — Phase 4 object interpolation: reworked to node-pointer identity; BLOCKED by decoupled render pass (key finding). Falls back to safe all-snap.
 Replaced wide60's GTE-fingerprint matcher with **per-object 2D screen-translation keyed by the entity's
 pool-slot pointer** (the stable identity from later-84): each captured poly tagged with `Prim.obj`

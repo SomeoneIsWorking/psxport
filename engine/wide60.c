@@ -401,10 +401,13 @@ static int ocen_delta(uint32_t obj, int* dx, int* dy) {
 }
 
 static int s_sdbg = -1;
-static void wide60_synthesize(void) {
-  if (s_nB == 0) return;
+// Returns the number of prims actually translated (interpolated). 0 ⇒ nothing moved, so the caller
+// should present the REAL frame instead of this (lossy) re-rasterized in-between (see wide60_present).
+static long wide60_synthesize(void) {
+  if (s_nB == 0) return 0;
   if (s_sdbg < 0) s_sdbg = getenv("PSXPORT_WIDE60_SDBG") ? 1 : 0;
   long d_prims = 0, d_obj_translated = 0, d_snapped = 0, d_tagged = 0;  // sdbg: interpolation outcome
+  long moved_count = 0;
   int fy = w60_front_off_y();
   gpu_w60_begin_interp(0, fy, 0, fy, 319, fy + 239);     // target=s_interp, clear region, set env
   for (int i = 0; i < s_nB; i++) {
@@ -418,6 +421,7 @@ static void wide60_synthesize(void) {
       xs[k] = B->x[k] + dx; ys[k] = B->y[k] + dy;
       us[k] = B->u[k]; vs[k] = B->v[k]; rs[k] = B->r[k]; gs[k] = B->g[k]; bs[k] = B->b[k];
     }
+    if (moved) moved_count++;
     if (s_sdbg) { d_prims++; if (moved) d_obj_translated++; else d_snapped++;
                   if (B->obj) d_tagged++; }
     if (B->nv == 1)
@@ -435,6 +439,7 @@ static void wide60_synthesize(void) {
             "rtp=%ld rtp_with_obj=%ld\n",
             s_fence, d_prims, d_tagged, d_obj_translated, d_snapped, s_rtp_calls, s_rtp_with_obj);
   s_rtp_calls = s_rtp_with_obj = 0;
+  return moved_count;
 }
 
 // PSXPORT_WIDE60_SYNTH=frame — headless validation: at logic fence `frame`, dump A (prev real frame =
@@ -476,8 +481,13 @@ static void wide60_present(void) {
   if (win && flipped && s_frame_geom > 0 && s_nB > 0) {
     gpu_w60_blit_vram(0, fy ^ 256);   // present the previous real frame (lives in the back buffer)
     gpu_pace_subframe(2);
-    wide60_synthesize();              // interpolated frame -> s_interp (front origin), VRAM untouched
-    gpu_w60_blit_interp(0, fy);
+    long moved = wide60_synthesize(); // interpolated frame -> s_interp (front origin), VRAM untouched
+    // The re-rasterized in-between is LOSSY (re-draws only the captured GP0 subset; missing occluders/
+    // fills/blend-order make hidden objects reappear → spurious copies). Only trust it when objects were
+    // actually interpolated; otherwise present the REAL current frame (no artifacts). Real interpolation
+    // needs object-tagged draws from the native renderer (see docs/journal.md later-86/87).
+    if (moved > 0) gpu_w60_blit_interp(0, fy);
+    else           gpu_w60_blit_vram(0, fy);   // real current frame
     gpu_pace_subframe(2);
     gpu_present_ex(0);                // bookkeeping only (watchdog, s_frame++, diagnostics; no blit)
   } else {
