@@ -760,18 +760,21 @@ void gpu_vk_frame_end(const uint16_t* svram, int frame) {
     if (!s_tri_n && !s_tex_n) { fprintf(stderr, "[vk_diff] f%d: no tris this frame\n", frame); s_tri_n = s_tex_n = 0; return; }
     static uint16_t got[VRAM_W * VRAM_H];
     tri_over_bg_readback(svram, got);
-    long diff = 0; for (int i = 0; i < VRAM_W * VRAM_H; i++) if (got[i] != svram[i]) diff++;
-    fprintf(stderr, "[vk_diff] f%d  untex_tris=%d tex_tris=%d  mismatched VRAM px (VK vs SW)=%ld (%.4f%%)\n",
-            frame, s_tri_n / 3, s_tex_n / 3, diff, 100.0 * diff / (VRAM_W * VRAM_H));
-    FILE* f = fopen("scratch/screenshots/vk_diff.ppm", "wb");
-    if (f) { int W = 384, H = 256, oy = 256;     // a display-sized window, diffs highlighted red
+    fprintf(stderr, "[vk_diff] f%d  untex_tris=%d tex_tris=%d  -> wrote vk_out.ppm + sw_out.ppm\n",
+            frame, s_tri_n / 3, s_tex_n / 3);
+    // Dump the actual VK render and the SW render of the front framebuffer region, side by eye.
+    const char* names[2] = { "scratch/screenshots/vk_out.ppm", "scratch/screenshots/sw_out.ppm" };
+    const uint16_t* srcs[2] = { got, svram };
+    for (int s = 0; s < 2; s++) {
+      FILE* f = fopen(names[s], "wb"); if (!f) continue;
+      int W = 320, H = 240, ox = 0, oy = 256;     // Tomba2 front framebuffer (x 0..319, y 256..495)
       fprintf(f, "P6\n%d %d\n255\n", W, H);
       for (int y = 0; y < H; y++) for (int x = 0; x < W; x++) {
-        int i = (y + oy) * VRAM_W + x; uint16_t p = got[i]; unsigned char c[3];
-        if (got[i] != svram[i]) { c[0] = 255; c[1] = c[2] = 0; }
-        else { c[0] = ((p)&31)<<3; c[1] = ((p>>5)&31)<<3; c[2] = ((p>>10)&31)<<3; }
+        uint16_t p = srcs[s][(y + oy) * VRAM_W + (x + ox)];
+        unsigned char c[3] = { (unsigned char)(((p)&31)<<3), (unsigned char)(((p>>5)&31)<<3), (unsigned char)(((p>>10)&31)<<3) };
         fwrite(c, 1, 3, f); }
-      fclose(f); fprintf(stderr, "[vk_diff] wrote scratch/screenshots/vk_diff.ppm (diffs=red)\n"); }
+      fclose(f);
+    }
   }
   s_tri_n = 0; s_tex_n = 0;
 }

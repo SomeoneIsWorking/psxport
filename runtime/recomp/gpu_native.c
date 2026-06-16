@@ -590,6 +590,28 @@ static void gp0_exec(void) {
     // 0x64/0x66 = TM1 modulate, 0x65/0x67 = TM0 raw). Modulating unconditionally once wrongly
     // tinted raw 0x65 sprites (turned a blue item green).
     raster_sprite(op, x, y, u0, v0, w, h, cr, cg, cb, textured, semi);
+    // VK backend (M4): tee opaque rects/sprites as two triangles (textured or solid).
+    if (gpu_vk_enabled() && !semi) {
+      int X = x + s_off_x, Y = y + s_off_y;
+      int qx[4] = { X, X+w, X, X+w }, qy[4] = { Y, Y, Y+h, Y+h };
+      if (textured) {
+        void gpu_vk_draw_tritri(const int*,const int*,const int*,const int*,const unsigned char*,
+                                const unsigned char*,const unsigned char*,int,int,int,int,int,int,
+                                int,int,int,int,int,int,int,int);
+        int qu[4] = { u0, u0+w, u0, u0+w }, qv[4] = { v0, v0, v0+h, v0+h };
+        unsigned char qr[4]={cr,cr,cr,cr}, qg[4]={cg,cg,cg,cg}, qb[4]={cb,cb,cb,cb};
+        int rw = op & 1;
+        gpu_vk_draw_tritri(qx, qy, qu, qv, qr, qg, qb, s_tp_x, s_tp_y, s_tp_mode, rw, s_clut_x, s_clut_y,
+                           s_tw_mx, s_tw_my, s_tw_ox, s_tw_oy, s_da_x0, s_da_y0, s_da_x1, s_da_y1);
+        gpu_vk_draw_tritri(&qx[1], &qy[1], &qu[1], &qv[1], &qr[1], &qg[1], &qb[1],
+                           s_tp_x, s_tp_y, s_tp_mode, rw, s_clut_x, s_clut_y,
+                           s_tw_mx, s_tw_my, s_tw_ox, s_tw_oy, s_da_x0, s_da_y0, s_da_x1, s_da_y1);
+      } else {
+        void gpu_vk_draw_tri(int,int,int,int,int, int,int,int,int,int, int,int,int,int,int);
+        gpu_vk_draw_tri(qx[0],qy[0],cr,cg,cb, qx[1],qy[1],cr,cg,cb, qx[2],qy[2],cr,cg,cb);
+        gpu_vk_draw_tri(qx[1],qy[1],cr,cg,cb, qx[2],qy[2],cr,cg,cb, qx[3],qy[3],cr,cg,cb);
+      }
+    }
     s_prims++;
   } else if (op == 0x02) {                   // fill rectangle (in VRAM, ignores clip/offset)
     uint8_t cr = cmd_r(c), cg = cmd_g(c), cb = cmd_b(c);
