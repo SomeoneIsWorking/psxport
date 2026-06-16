@@ -1,5 +1,79 @@
 # Debug / progress journal
 
+## 2026-06-16 (later 78) — FIXED later-77: in-game XA-ADPCM streaming implemented natively (prologue BGM + voice now audible, WAV-confirmed). Fisherman-scream "first note repeats / cutscene won't advance" ROOT-CAUSED to FUN_8001cfc8's faked GetlocL position wait; interim stopgap in place, native engine-port planned.
+**New native subsystem `runtime/recomp/xa_stream.c`** (in build: added to run.sh + tools/build_port.sh).
+Decodes CD-XA from the ReadS-streamed sectors and feeds the SPU CD-audio input via
+`CDC_GetCDAudioSample()` (Beetle spu.c calls it per 44.1kHz sample, scaled by the game's `CDVol`,
+gated on `SPUControl` bit0 — both game-set). The silence stub that used to live in spu_beetle.c is
+gone; xa_stream.c owns that symbol now. Decode is **pull-driven** (decode-on-consumption → self-paces
+to realtime, advances the disc LBA exactly as audio is consumed). Resamples XA 37800/18900 → 44100 with
+a fractional phase accumulator + linear interp. `xa_decode_sector()` (mednafen-parity) is reused from
+native_fmv.c. Debug: `PSXPORT_XA_DBG=1` (events) / `=2` (per-sector). `PSXPORT_CDCMD_DBG=1` logs both
+CD-command wrappers.
+
+### How the game drives in-game XA (observed via PSXPORT_CDCMD_DBG, both wrappers)
+TWO CD-command wrappers; cutscene XA uses the engine-streaming one:
+- libcd `CdControl` = `FUN_8008AC34` → `ov_cd_command`. Boot/menu (Setmode 0x80/0xC0, a short clip).
+- **engine streaming = `FUN_8001CE90` → `ov_cd_cmd_stream`. Cutscene voice/BGM goes HERE:**
+  Setmode **0xC8** (Speed|ADPCM|SF-filter), Setfilter file=1/chan=N, Setloc→LBA, ReadS. Both wrappers
+  now route Setmode/Setfilter/Setloc/ReadS/Pause to xa_stream. Prologue narration = file1/chan7 @ LBA
+  66515; fisherman-scene voice clips = file1/chan4 @ 84515, chan22 @ 12771, etc. (interleaved, every
+  8th sector is the selected channel). VERIFIED: prologue WAV has real BGM+voice from ~t=8s (RMS
+  1700-4400) where it was silent before; xa_stream decodes continuously, LBA advances, no loop in the
+  engine itself.
+
+### Fisherman "AAAGH repeats / cutscene stuck" — ROOT CAUSE (RE'd FUN_8001cfc8, the engine streaming reader, task slot 2)
+`FUN_8001cfc8` plays a clip [start..end] on file1/chan(task+0x66): Setloc start, ReadS, then **polls
+GetlocL (cmd 0x10) and yields each frame WHILE head <= task+0x58 (clip end)**; when head > end it pauses
+(`FUN_8001ce90(9)`) + `DAT_800be0e4=0` + ends the task (advancing the cutscene), OR if task+0x67==1 loops
+the clip. Our `ov_cd_cmd_stream` faked GetlocL as a STATIC position (clip start) → `head <= end` always
+true → the wait never ends → cutscene never advances, clip runs on / re-triggers ("first note over and
+over"). The user nailed it: that voice line gates cutscene advancement.
+- Task params (RE'd): `FUN_8001d2a8(chan, start_lba, end_lba, flags)` writes them DIRECTLY into the
+  slot-2 task struct — `DAT_801fe134/138/146/147` ARE task2 (`0x801fe0e0`) `+0x54`(start)/`+0x58`(end)/
+  `+0x66`(chan)/`+0x67`(loop). Helpers: `FUN_8008a00c` LBA→BCD MSF (msf=lba+150); `FUN_8008a110` BCD
+  MSF→LBA(−150); `FUN_8001ceb0(0xC8,..)` ensures Setmode 0xC8; `FUN_8001cf00(0/1)` CD-event enable.
+- **Interim stopgap (committed):** `ov_cd_cmd_stream` GetlocL now reports `xa_stream_play_lba()` (the
+  native engine's advancing read head) while streaming → the wait terminates, clips play once and the
+  scene advances. Marked `// STOPGAP` in cd_override.c.
+
+### NEXT — port FUN_8001cfc8 to native C (engine→PC; gameplay stays on recomp)
+Per the locked architecture (engine on PC, gameplay on recomp/interp), the streaming reader is ENGINE
+and should be native, eliminating the faked GetlocL poll. Plan:
+1. Add a **native task-stepper** path to `native_scheduler_step` (native_boot.c): when a slot's entry
+   is a known native engine task (0x8001cfc8), call a native stepper instead of `rec_coro_run`; treat
+   its return as YIELD (set task state 1, re-armed by FUN_800506d0) or DONE (state 0).
+2. Native `cd_stream_task` state machine using xa_stream: read chan/start/end/loop from the task
+   struct; setfilter(1,chan)+setloc(start)+start; each frame check abort (`DAT_800be0e4 & 0x10`) and
+   `xa play_lba > end` → done (pause, `DAT_800be0e4=0`, end) or loop (restart). Add a by-LBA
+   `xa_stream_setloc` variant (we have the LBA, not BCD). Skip the PSX CD-event plumbing (FUN_8001cf00
+   etc.) — xa_stream is self-contained — but replicate `task+0x6f=2` and the DAT_800be0e4 side effects.
+3. Verify parity vs the stopgap build (clip plays once, scene advances) and vs the oracle.
+
+## 2026-06-16 (later 77) — ROOT CAUSE (oracle-confirmed): the port has NO in-game XA-ADPCM (CD-streamed) audio. That's BOTH the opening-cutscene BGM AND the missing voice acting. Sequenced BGM (gameplay) works; XA does not.
+Got the oracle to the SAME prologue scene (cold boot + tap Start/Cross navigates New Game; the stale
+title.sav does NOT take input — its frontio/SIO state is stale, cold boot is the reliable path) and
+diffed: at the prologue narration the **oracle ALSO has song=0xFF / no active libsnd slot** (tools/bgm.py
+on scratch/bin/orc_prologue.bin). So the prologue's audio is NOT sequenced → it's **XA-ADPCM CD audio**.
+- `runtime/recomp/cdc_native.c`: CD `SetFilter`(0x0D)/`Play`(0x03)/`Setmode`(0x0E) just ACK; `ReadN/ReadS`
+  only `load_sector()` data files. There is **no XA-ADPCM decode → SPU CD-audio input** path at all.
+  `disc.c` even says "(XA/STR) is a later front-end concern." FMVs get XA via native_fmv.c, but in-game
+  streamed audio (cutscene BGM + dialog voice) is unimplemented.
+- So the user's two symptoms — opening-cutscene "Tomba is living peacefully" BGM missing AND dialog voice
+  acting missing — are the SAME gap: in-game XA streaming.
+
+### Oracle navigation FIXED (for the tooling): cold boot, not title.sav
+Injected input DOES reach the emulated pad (verified: PSXPORT_INPUTDBG in vendor input.c logs
+`player0 type=1 buttons=…`). The stale title.sav just ignores it. Cold-boot + tap Start (skip FMVs) +
+Cross navigates to New Game reliably. main.cpp watchdog disarmed under -repl so the oracle idles at the
+prompt. tools/drive.py drives it.
+
+### NEXT — implement in-game XA-ADPCM streaming (the fix)
+Decode XA-ADPCM (Mode2/Form2, 2324B, subheader submode/coding at raw[18/19] — framing already noted in
+disc.c) from the CD sectors the game ReadS-streams with the XA filter set (CdlSetfilter + Setmode XA
+bit), and mix into the SPU's CD-audio input (SPU CD volume / the mednafen spu.c CD input path used for
+CDDA/XA). Gate on the SetFilter/file+channel. Verify vs the oracle at the prologue (audible BGM + voice).
+
 ## 2026-06-16 (later 76) — Missing BGM PINNED to the OPENING PROLOGUE cutscene (post-New-Game narration). Its BGM-start never fires in our port (zero writes to the song byte 0x800bed80 across the whole prologue); the oracle holds song 4 throughout. Title=correctly silent; gameplay BGM (song 2/3) works. Built interactive driver + BGM inspector tools; oracle now drivable (watchdog fix).
 User ground truth (corrected this session): the **title/menu** has NO BGM and that's CORRECT (the user
 had confused it with the unimplemented memory-card/Load page). The **gameplay** field BGM (song 2/3,
@@ -23,12 +97,12 @@ village→cliff→fisherman scenes). It must have BGM and ours is silent.
 BGM machinery works: FUN_80074BF8(idx) sets 0x800bed80 + SsSeqPlay; SsSeqCalled ticks; SEQ→SPU produces
 audio. So this is purely a TRIGGER problem: the prologue cutscene never issues its "play song 4" command.
 
-### REFINEMENT (same session, interactive): song 4 starts LATE, not never
-Running the native prologue all the way through: the narration text cards (village "living peacefully",
-cliff, "kidnapped?") play **silent for ~1174 frames (~39 s)**, THEN at f1174 the post-narration game
-scene (Tomba-in-tree) loads and **song 4 starts** (BGM_START idx=4, ra=0x80074608) and plays correctly.
-So song 4 is the FISHERMAN/first-map BGM (matches oracle newgame.sav = post-narration, song 4), and it
-works in our port — just late. The missing-BGM scene is the **narration cards that precede it**.
+### CORRECTION (user): the narration cards are a DISTINCT silent scene — song 4 is a SEPARATE scene
+My earlier "song 4 starts late" was WRONG (user corrected). What happened: I let the silent narration
+("Tomba is living peacefully" / "kidnapped?" cards) run ~39 s; it then ADVANCED into the *separate*
+fisherman/Tomba-in-tree scene, which correctly plays song 4. Those are different scenes. The narration
+cards are their OWN scene and must have their OWN BGM (NOT song 4) — and it's missing/silent. Do not
+conflate the two: the fisherman BGM (song 4) working says nothing about the narration cards' BGM.
 - The song-4 trigger FUN_80074590(0x72) lives at 0x8011a120 — but that overlay is NOT loaded during the
   narration (0x8011a118 = zeros in scratch/bin/native_prologue.bin); it loads with the game scene at f1174.
 - So either (a) the real game starts the narration's BGM via a DIFFERENT (earlier) trigger we don't fire,

@@ -44,9 +44,26 @@ and we edit its source in place. Do NOT maintain Beetle changes as out-of-tree
 .patch files applied to a pristine upstream (the user dislikes that workflow —
 keep the fork). Beetle only carries generic emulator primitives + the hook
 call-sites; all HLE BIOS / game logic stays in `runtime/`.
-Build: `make -C runtime`.
-Run: `runtime/wide60rt <chd> -bios <dir> -play` (OpenBIOS as scph5501.bin works;
-`-fastboot` requires a retail BIOS — hangs under OpenBIOS).
+
+## TWO binaries — do not confuse them (this trips up every fresh session)
+There are two completely separate executables built from different sources:
+- **The native PORT — `scratch/bin/tomba2_port` — IS THE THING UNDER TEST.** It is the
+  recompiled MAIN.EXE (`generated/shard_*.c` from `tools/recomp/emit.py`) linked with the
+  hand-written runtime in **`runtime/recomp/*.c`** (HLE BIOS, GPU/SPU/CD/pad natives, native
+  boot, XA streaming, …). **NO Makefile builds it.** Build it with:
+    - `./run.sh [disc.chd]` — full: extract MAIN.EXE, recompile, compile every TU, link, **and run**.
+    - `tools/build_port.sh [files…|all]` — **incremental** compile+relink only (no run, ~0.5s for
+      one file). Use this in a fix loop. Object cache: `scratch/obj/`. Keep its SRC list in sync
+      with run.sh step 4 when you add a `runtime/recomp/*.c` file.
+  Drive/observe it with `tools/drive.py` (does NOT build — runs the existing binary). See
+  `docs/diff-driver.md`.
+- **The ORACLE — `runtime/wide60rt` — is the Beetle reference emulator**, full emulation of the
+  real disc, used to validate the port. Built by **`make -C runtime`** (this is the *only* thing
+  that Makefile builds — it is NOT the port). Run: `runtime/wide60rt <chd> -bios <dir> -play`
+  (OpenBIOS as scph5501.bin works; `-fastboot` needs a retail BIOS — hangs under OpenBIOS).
+
+Full project map (modules, CD-command flow, build/drive cheat-sheet): **`docs/project-map.md`** —
+read it before grepping around.
 
 ## Layout
 - `runtime/` — the PC port (see above); `runtime/games/` per-game modules.

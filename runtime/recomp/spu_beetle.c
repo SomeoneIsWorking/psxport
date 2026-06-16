@@ -64,18 +64,12 @@ void IRQ_Assert(int which, bool asserted)
    (void)asserted;
 }
 
-// CD-DA audio source. spu.c calls this once per output sample to fetch the stereo CD
+// CD-DA / CD-XA audio source. spu.c calls this once per output sample to fetch the stereo CD
 // audio pair (then mixes it under CDVol/SPUControl). Contract (from PS_CDC::GetCDAudio):
-// both channels are always written, clamped to -32768..32767. With no CD audio playing —
-// the faithful default for a self-contained SPU with the CDC not yet wired — the source
-// is silence. The PM replaces this when the CDC/disc audio path is connected.
-// STOPGAP: feed real CD-DA from the runtime CDC because streamed/Red-Book audio mixes
-// here; deferred to PM wiring. Faithful default (silence) until then.
-void CDC_GetCDAudioSample(int32_t *samples)
-{
-   samples[0] = 0;
-   samples[1] = 0;
-}
+// both channels are always written, clamped to -32768..32767. The real implementation lives
+// in xa_stream.c (native in-game XA-ADPCM streaming) — that module owns this symbol so it can
+// pull/resample the decoded XA ring. (It returns silence when nothing is streaming, which is
+// the same faithful default the old stub here provided.)
 
 // MDFNSS_StateAction (savestate, unused) is defined once in gte_beetle.c — shared across the
 // lifted Beetle modules to avoid a multiple-definition link error.

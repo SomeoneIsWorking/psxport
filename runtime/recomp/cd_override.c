@@ -21,6 +21,15 @@ enum { V0 = 2, A0 = 4, A1 = 5, A2 = 6 };
 
 int disc_read_sector(uint32_t lba, uint8_t* out);
 
+// Native in-game XA-ADPCM streaming (xa_stream.c). The CdControl wrapper below feeds it the
+// streaming commands the game uses for cutscene BGM / voice (Setmode XA bit, Setloc, ReadS).
+void xa_stream_setmode(uint8_t mode);
+void xa_stream_setfilter(uint8_t file, uint8_t chan);
+void xa_stream_setloc(uint8_t amm, uint8_t ass, uint8_t asect);
+void xa_stream_start(void);
+void xa_stream_stop(void);
+int  xa_stream_play_lba(uint32_t* lba);
+
 // 0x8008B2D8 FUN_8008b2d8: low-level CdInit -> success (drive ready), no HW handshake.
 static void ov_cdinit(R3000* c) { c->r[V0] = 0; }
 
@@ -33,7 +42,30 @@ static void ov_cdinit(R3000* c) { c->r[V0] = 0; }
 static void zero_result(uint32_t p) { if (p) for (int i = 0; i < 8; i++) mem_w8(p + i, 0); }
 
 // 0x8008AC34 FUN_8008ac34(cmd, param, result, mode) CdCommand -> 0 (success).
-static void ov_cd_command(R3000* c) { zero_result(c->r[A2]); c->r[V0] = 0; }
+static void ov_cd_command(R3000* c) {
+  if (getenv("PSXPORT_CDCMD_DBG")) {
+    uint32_t cmd = c->r[A0] & 0xFF, param = c->r[A1];
+    uint8_t p[4] = {0,0,0,0};
+    if (param) for (int i = 0; i < 4; i++) p[i] = (uint8_t)mem_r8(param + i);
+    fprintf(stderr, "[cdcmd] cmd=0x%02X param=[%02X %02X %02X %02X] mode=%u ra=0x%08X\n",
+            cmd, p[0], p[1], p[2], p[3], c->r[7], c->r[31]);
+  }
+  // In-game XA-ADPCM streaming: the game drives cutscene BGM / voice through these controller
+  // commands. We don't model the controller (data is read natively elsewhere), so route the
+  // streaming-relevant ones to the native XA engine; everything else still just ACKs.
+  uint32_t cmd = c->r[A0] & 0xFF, param = c->r[A1];
+  uint8_t p0 = param ? (uint8_t)mem_r8(param) : 0;
+  switch (cmd) {
+    case 0x0E: xa_stream_setmode(p0); break;                                  // Setmode
+    case 0x0D: xa_stream_setfilter(p0, param ? (uint8_t)mem_r8(param + 1) : 0); break;  // Setfilter
+    case 0x02: if (param) xa_stream_setloc(p0, (uint8_t)mem_r8(param + 1),     // Setloc
+                                           (uint8_t)mem_r8(param + 2)); break;
+    case 0x06: case 0x1B: xa_stream_start(); break;                           // ReadN / ReadS
+    case 0x08: case 0x09: xa_stream_stop(); break;                            // Stop / Pause
+    default: break;
+  }
+  zero_result(c->r[A2]); c->r[V0] = 0;
+}
 // 0x8008A6EC FUN_8008a6ec(noblock, result) CdSync -> 2 (status: complete/ready).
 static void ov_cd_sync(R3000* c) { zero_result(c->r[A1]); c->r[V0] = 2; }
 
@@ -54,10 +86,37 @@ static void ov_cd_sync(R3000* c) { zero_result(c->r[A1]); c->r[V0] = 2; }
 // and is unaffected.
 static void ov_cd_cmd_stream(R3000* c) {
   uint32_t cmd = c->r[A0] & 0xFF, result = c->r[A2];
-  if (cmd == 0x10 && result) {                  // GetlocL: report position = target sector
-    uint32_t task = mem_r32(0x1f800138);
-    int32_t lba = (int32_t)mem_r32(task + 0x54);
-    int t = lba + 150;                          // FUN_8008a00c: LBA -> MSF (sector = lba+150)
+  if (getenv("PSXPORT_CDCMD_DBG")) {
+    uint32_t pp = c->r[A1]; uint8_t p[4] = {0,0,0,0};
+    if (pp) for (int i = 0; i < 4; i++) p[i] = (uint8_t)mem_r8(pp + i);
+    fprintf(stderr, "[cdstream] cmd=0x%02X param=[%02X %02X %02X %02X] ra=0x%08X\n",
+            cmd, p[0], p[1], p[2], p[3], c->r[31]);
+  }
+  { uint32_t pp = c->r[A1]; uint8_t p0 = pp ? (uint8_t)mem_r8(pp) : 0;
+    switch (cmd) {
+      case 0x0E: xa_stream_setmode(p0); break;
+      case 0x0D: xa_stream_setfilter(p0, pp ? (uint8_t)mem_r8(pp + 1) : 0); break;
+      case 0x02: if (pp) xa_stream_setloc(p0, (uint8_t)mem_r8(pp+1), (uint8_t)mem_r8(pp+2)); break;
+      case 0x06: case 0x1B: xa_stream_start(); break;
+      case 0x08: case 0x09: xa_stream_stop(); break;
+      default: break;
+    } }
+  if (cmd == 0x10 && result) {                  // GetlocL: report the drive-head position.
+    // While XA audio is streaming, report the native XA engine's ADVANCING read position so
+    // the cutscene's clip-end wait (FUN_8001cfc8: yield while head <= task+0x58) actually
+    // terminates — the voice/BGM line plays once, then the scene advances (and pauses us).
+    // When not streaming this is a data seek/load: report the target sector (head "arrived",
+    // no seek latency in our synchronous-CD model).
+    // STOPGAP: the proper fix is to PORT the engine streaming-reader FUN_8001cfc8 to native C
+    // (it's engine, not gameplay) as a native scheduler task-stepper driven directly by
+    // xa_stream — eliminating this faked GetlocL position poll entirely. See docs/journal.md
+    // (2026-06-16 later-78) for the full RE + plan. Kept until then so cutscenes advance.
+    uint32_t lba;
+    if (!xa_stream_play_lba(&lba)) {
+      uint32_t task = mem_r32(0x1f800138);
+      lba = mem_r32(task + 0x54);
+    }
+    int t = (int)lba + 150;                     // FUN_8008a00c: LBA -> MSF (sector = lba+150)
     int frame = t % 75, rem = t / 75, sec = rem % 60, min = rem / 60;
     mem_w8(result + 0, (min % 10) + ((min / 10) << 4));   // BCD min
     mem_w8(result + 1, (sec % 10) + ((sec / 10) << 4));   // BCD sec
