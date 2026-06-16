@@ -26,18 +26,38 @@ funcs are already native (`ov_open_thread`/`ov_change_thread`/`ov_switch`, `runt
 **Gameplay (entity update + render submission) runs inside the main gameplay task** — its body is the
 next RE target (see Open items).
 
-## Object / entity model (the drawable struct)
-Confirmed fields (offsets from the object pointer = `param_1` in the cull/submit code):
+## Object / entity model — the entity LIST + node (RESOLVED via RAM-dump search)
+The active entities are a **doubly-linked list of pool nodes, stride 0xD0 (208 bytes)** (found by
+searching gameplay RAM dumps `scratch/bin/{level_ram,ours_ram_gf}.bin` for the handler address bytes;
+verified the prev/next chain). **Two lists** (objects spawn into one or the other; init `:55858/55860`,
+insert `:55976–56167`):
+- head **`DAT_800fb168`** (0x800fb168) and head **`DAT_800f2624`** (0x800f2624).
+
+Node fields (offsets from the node = the handler's `param_1`):
 | off | type   | meaning |
 |-----|--------|---------|
-| +1  | u8     | per-frame render flag (cull sets it 0 at entry of `FUN_8007712c`) |
-| +0xc| u8     | **entity type** (switch key in cull + handler dispatch) |
+| +1  | u8     | per-frame render flag (cleared by the walk + by cull `FUN_8007712c`) |
+| +4  | u8     | per-type state/substate (e.g. `FUN_80040558` switches on `param_1[4]`) |
+| +0xc| u8     | **entity type** (cull switch) |
 | +0xe| u16    | model id (`& 0x3fff`), set by `FUN_80077b38` |
+| +0x1c| ptr   | **handler fn pointer** (per-type update/render; called with node in a0 — gameplay code, stays PSX) |
+| +0x20| ptr   | **prev** node |
+| +0x24| ptr   | **next** node (list walk follows this) |
+| +0x28| u16×2 | low = state (0x0002 = active?), high = per-object id |
 | +0x2e| u16   | **position X** |
 | +0x32| u16   | **position Y** |
 | +0x36| u16   | **position Z** |
-| +0x38| ptr   | model-data pointer (set by `FUN_80077b38` from a table: `*(table + idx*4)`) |
-(Struct size + remaining fields: TODO — read a handler end-to-end.)
+| +0x38| ptr   | model-data pointer (set by `FUN_80077b38` from a table) |
+
+### The entity-list walk — `FUN_8007a904` (the engine's per-frame object driver)
+```c
+for (n = DAT_800fb168; n; n = *(n+0x24)) { *(n+1) = 0; (*(handler@n+0x1c))(n); }  // list 1
+for (n = DAT_800f2624; n; n = *(n+0x24)) { *(n+1) = 0; (*(handler@n+0x1c))(n); }  // list 2
+```
+Clears the render flag, then calls each node's handler (the PSX gameplay/render routine). A second
+walk of `DAT_800f2624` exists at `:18660` (likely a separate pass). **This is the native entity
+manager's target (Phase 1):** reimplement the walk in native C, call each handler via `rec_dispatch`
+(gameplay stays PSX), and snapshot node transforms across frames for correct object interpolation.
 
 ## Per-object cull / LOD + submit
 - **Cull/LOD** `FUN_8007712c` (`:54440`, override `ov_object_cull`): args = (obj*, dx, dy, dz) where
@@ -66,9 +86,11 @@ Confirmed fields (offsets from the object pointer = `param_1` in the cull/submit
 - Full basis (right/up) + projection consts (GTE OFX/OFY/H): TODO — read the GTE setup at frame start.
 
 ## Open RE items (next, in order)
-1. **The entity list + its walk** inside the main gameplay task: the loop that visits every active
-   object and calls its `+0xc`-type handler. Leads: the handler funcs above; trace their callers up to
-   the iterator. This is the single most important unknown for Phase 1 (native entity manager).
-2. The per-type handler **dispatch table** (function-pointer array indexed by `+0xc`?).
-3. Object struct full layout + lifecycle (spawn/free, where the pool lives).
+1. ~~The entity list + its walk~~ — **DONE** (above): lists `DAT_800fb168`/`DAT_800f2624`, walk
+   `FUN_8007a904`, node layout. Handlers are per-object fn pointers @ +0x1c (not a type-indexed table).
+2. Find `FUN_8007a904`'s caller (frame placement) — it has no static caller (called via task/overlay).
+   Confirm at runtime (objlog / a tap) that it's the per-logic-frame object driver.
+3. Object node full lifecycle: spawn/link (`:55976–56167`) and free; the pool base/extent.
 4. Camera basis + GTE projection setup (for native render submission, Phase 3).
+5. Whether handlers call the cull/submit path (`FUN_8007712c`) in field scenes, or a different render
+   path (the journal noted the cull dispatcher didn't fire in the demo). `PSXPORT_OBJLOG=1` answers this.

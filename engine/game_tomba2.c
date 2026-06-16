@@ -82,9 +82,21 @@ static void ov_frame_update(R3000* c) {
 // wide60 object tag: the universal per-object cull/LOD dispatcher (a0 = object*, once per logic
 // frame for every live drawable). Every RTP op fired in its call tree is tagged with this object's
 // stable pool-pointer id (the join key). Super-call the recomp body unchanged; clear on exit.
+// PSXPORT_OBJLOG=1: dump every object the cull dispatcher visits (addr + type@+0xc +
+// pos@+0x2e/32/36). Empirically maps the active-object pool/list for the native entity
+// manager (Phase 1) — more reliable than static-tracing the overlay handler dispatch.
+extern uint8_t mem_r8(uint32_t);
+static int s_objlog = -1;
+static inline uint16_t obj_r16(uint32_t a) { return (uint16_t)(mem_r8(a) | (mem_r8(a + 1) << 8)); }
+
 static void ov_object_cull(R3000* c) {
   uint32_t prev = g_current_object;
-  g_current_object = c->r[4];                      // a0 = object* (MIPS arg register $a0)
+  uint32_t o = c->r[4];                            // a0 = object* (MIPS arg register $a0)
+  g_current_object = o;
+  if (s_objlog < 0) s_objlog = getenv("PSXPORT_OBJLOG") ? 1 : 0;
+  if (s_objlog)
+    fprintf(stderr, "[objlog] obj=%08x type=%02x pos=(%d,%d,%d)\n", o, mem_r8(o + 0x0c),
+            (int16_t)obj_r16(o + 0x2e), (int16_t)obj_r16(o + 0x32), (int16_t)obj_r16(o + 0x36));
   gen_func_8007712C(c);
   g_current_object = prev;
 }
@@ -202,6 +214,6 @@ void games_tomba2_init(void) {
     rec_set_override(0x80081218u, ov_upload_image);   // PC-native CPU->VRAM upload (libgs upload lib)
   }
   wide60_init();
-  if (g_wide60_on)                                 // object-tag dispatcher only when capturing
+  if (g_wide60_on || getenv("PSXPORT_OBJLOG"))     // object-tag dispatcher (wide60 capture or objlog RE)
     rec_set_override(0x8007712Cu, ov_object_cull);
 }

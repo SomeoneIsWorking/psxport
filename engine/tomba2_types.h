@@ -9,36 +9,31 @@
 #include <stdint.h>
 
 // ---- the drawable entity (object) ----------------------------------------------------
-// Accessed as a raw pointer in the cull/submit code (FUN_8007712c & the submit wrappers).
-// Layout is PARTIAL — only the confirmed fields are named; the rest is opaque padding until RE'd.
-// Do NOT assume sizeof matches the game's object yet (full size is an open RE item).
-typedef struct Tomba2Object {
-  uint8_t  _pad0;        // +0x00
-  uint8_t  render_flag;  // +0x01  cleared to 0 at cull entry each frame
-  uint8_t  _pad2[10];    // +0x02
-  uint8_t  type;         // +0x0c  entity type (cull switch + handler dispatch key)
-  uint8_t  _pad0d;       // +0x0d
-  uint16_t model_id;     // +0x0e  & 0x3fff (set by FUN_80077b38)
-  uint8_t  _pad10[0x1c]; // +0x10
-  uint16_t pos_x;        // +0x2e
-  uint16_t _pad30;       // +0x30
-  uint16_t pos_y;        // +0x32
-  uint16_t _pad34;       // +0x34
-  uint16_t pos_z;        // +0x36
-  uint8_t  _pad38a;      // shadow: +0x38 is a pointer; kept opaque below
-} Tomba2Object;          // INCOMPLETE — see docs/engine_re.md "Open RE items"
+// Active entities = a doubly-linked list of pool nodes, stride 0xD0 (208 B). Two lists, heads
+// T2_OBJLIST_HEAD_1/2. The engine walks them in FUN_8007a904 (native target, Phase 1). Confirmed
+// from gameplay RAM dumps + the cull/submit code; see docs/engine_re.md. Use the offset constants
+// (T2OBJ_*) to read guest RAM — they're authoritative; the struct below is partial/opaque-padded.
+#define T2OBJ_STRIDE 0xD0u         // bytes per pool node
 
-// Field-offset constants (authoritative until the struct is fully RE'd — use these, not the struct
-// above, when reading game RAM, to avoid mis-sized padding bugs).
 enum {
-  T2OBJ_RENDER_FLAG = 0x01,
-  T2OBJ_TYPE        = 0x0c,
-  T2OBJ_MODEL_ID    = 0x0e,  // u16, & 0x3fff
+  T2OBJ_RENDER_FLAG = 0x01,  // u8  cleared each frame by the walk + cull
+  T2OBJ_STATE       = 0x04,  // u8  per-type substate (handlers switch on it)
+  T2OBJ_TYPE        = 0x0c,  // u8  entity type (cull switch)
+  T2OBJ_MODEL_ID    = 0x0e,  // u16 & 0x3fff
+  T2OBJ_HANDLER     = 0x1c,  // ptr per-type update/render fn (called with node in a0; gameplay = PSX)
+  T2OBJ_PREV        = 0x20,  // ptr prev node
+  T2OBJ_NEXT        = 0x24,  // ptr next node (list walk follows this; 0 = end)
+  T2OBJ_ID          = 0x2a,  // u16 per-object id (high half of the u16 pair at +0x28; +0x28=state)
   T2OBJ_POS_X       = 0x2e,  // u16
   T2OBJ_POS_Y       = 0x32,  // u16
   T2OBJ_POS_Z       = 0x36,  // u16
   T2OBJ_MODEL_PTR   = 0x38,  // ptr to model data
 };
+
+// Entity-list heads (guest globals) + the engine's per-frame object walk.
+#define T2_OBJLIST_HEAD_1 0x800FB168u  // DAT_800fb168
+#define T2_OBJLIST_HEAD_2 0x800F2624u  // DAT_800f2624
+#define T2_OBJWALK_FN     0x8007A904u  // FUN_8007a904: walks both lists, calls each handler@+0x1c
 
 // ---- camera (PSX scratchpad/IO mirror addresses, RE'd) -------------------------------
 #define T2_CAM_POS_X   0x1F8000D2u  // u16
