@@ -598,6 +598,9 @@ static void gp0_exec(void) {
       void gpu_vk_draw_semi(const int*,const int*,const int*,const int*,const unsigned char*,
                             const unsigned char*,const unsigned char*,int,int,int,int,int,int,int,int,int,int,int,int,int,int,int);
       int X = x + s_off_x, Y = y + s_off_y;
+      // widescreen: anchor the sprite to its proportional screen position (HUD edge-anchoring) instead
+      // of letting the renderer center it. No-op when not wide. (s_da_x0 = active framebuffer origin.)
+      { int gpu_vk_sprite_anchor_dx(int); X += gpu_vk_sprite_anchor_dx((X - s_da_x0) + w/2); }
       int qx[4] = { X, X+w, X, X+w }, qy[4] = { Y, Y, Y+h, Y+h };
       int qu[4] = { u0, u0+w, u0, u0+w }, qv[4] = { v0, v0, v0+h, v0+h };
       unsigned char qr[4]={cr,cr,cr,cr}, qg[4]={cg,cg,cg,cg}, qb[4]={cb,cb,cb,cb};

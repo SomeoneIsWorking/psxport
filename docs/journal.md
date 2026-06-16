@@ -3707,3 +3707,13 @@ a PC game, don't squish anything." Replaced with a genuinely native renderer-sid
   HUD at native scale + centered (NOT stretched). OPEN/next (user: "all of these"): SSAA downsample
   present shader, HUD edge-anchoring (2D sprite path), shaders/lighting. WATCH: aggressive cull can cause
   entity walk-through ghosts (journal later-52) — needs playtesting now that the user is engaged.
+- **later-93b (same session):** PSXPORT_SS now defaults to 2 (FB 856x480 = fills the image exactly;
+  sharper than 428x240 upscaled to the window). **HUD edge-anchoring done** (gpu_vk_sprite_anchor_dx,
+  wired in the gp0 0x60-0x7F sprite tee in gpu_native.c): 2D sprites bypass the GTE, so instead of the
+  renderer centering them, each sprite shifts by (Xc-160)*(FBW/ss-320)/320 native px before the ss scale
+  — Xc=160 stays centered, Xc=0 pins to the new left edge, Xc=320 to the right. Native size preserved.
+  Verified f3000: score/items move to the corner (cmp_hud_left.png). Inert when not wide.
+- **STILL OPEN (user: "all of these"):** (1) true hi-res beyond the 1024-wide image cap — needs a
+  DEDICATED FB image (the cram-into-VRAM-rows trick caps FBW at 1024; the semi-blend frag samples one
+  combined sampler for textures<512 AND the FB blend-dest, so a separate FB needs a 2nd sampler binding
+  + frag change). (2) shaders/lighting — wants an RGBA8 FB + post passes (same dedicated-FB refactor).

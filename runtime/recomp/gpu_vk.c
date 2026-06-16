@@ -488,6 +488,17 @@ static void push_wide(int enabled) {
   vkCmdPushConstants(s_cmd, s_pll, VK_SHADER_STAGE_VERTEX_BIT, 16, 32, va);
 }
 
+// HUD edge-anchoring for 2D sprites (gp0 0x60-0x7F). 3D polys widen via the FOV (filling the new side
+// bands); 2D sprites bypass the GTE, so the vertex transform would just CENTER them. Instead, anchor each
+// sprite to its proportional screen position at NATIVE size: a sprite centered at screen-x Xc shifts by
+// `dx` native px (added before the ss scale) so Xc=160 stays centered, Xc=0 pins to the new left edge,
+// Xc=320 to the new right edge. dx = (Xc-160) * (FBW/ss - 320)/320. Returns 0 when not wide.
+int gpu_vk_sprite_anchor_dx(int center_local_x) {
+  wide_init();
+  if (!s_wide) return 0;
+  return ((center_local_x - 160) * (FBW() / s_ss - 320)) / 320;
+}
+
 // Present the display region [sx,sy .. +w,h] of `src` (s_vram or s_interp) via Vulkan, fit to aspect.
 void gpu_vk_present(const uint16_t* src, int sx, int sy, int w, int h) {
   if (!gpu_vk_enabled()) return;
@@ -1001,6 +1012,7 @@ void gpu_vk_tritest(void) {
 #else
 #include <stdint.h>
 int  gpu_vk_enabled(void) { return 0; }
+int  gpu_vk_sprite_anchor_dx(int center_local_x) { (void)center_local_x; return 0; }
 void gpu_vk_present(const uint16_t* src, int sx, int sy, int w, int h) { (void)src;(void)sx;(void)sy;(void)w;(void)h; }
 void gpu_vk_tritest(void) {}
 void gpu_vk_frame_end(const uint16_t* svram, int frame) { (void)svram; (void)frame; }
