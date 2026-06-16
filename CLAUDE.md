@@ -1,87 +1,65 @@
-# psxport — "wide60": generic PSX widescreen + interpolated-60fps layer
+# Tomba2Engine — a PC-native reimplementation of Tomba! 2's engine
 
-**Goal (refined 2026-06-12; originally a static-recomp port — that's dead):** a reusable
-system that turns PSX games into widescreen + 60 fps **without changing game logic**,
-built on a modified Beetle PSX runtime (`runtime/`, vendored `vendor/beetle-psx`, GPL-2).
-Per-game reverse engineering is expected but must be *minimized*: generic emulator-side
-mechanisms first, per-game work reduced to a small config/patch layer.
+**Goal (2026-06-16):** turn Tomba! 2 into a real **PC-native engine port** — Tomba! 2's *own*
+game engine, reimplemented in native C, running the real game content. Not an emulator, not a
+recompiled-MIPS blob with I/O bolted on. Reference/oracle for every lift = the recompiled MIPS body.
 
-## Architecture: generic tier + per-game tier
-PSX geometry is CPU/GTE-transformed; the GPU only sees projected 2D primitives. Hence:
-- **60 fps, generic tier — primitive-level interpolation:** capture consecutive logic
-  frames' display lists, match primitives across frames (draw order + prim type +
-  texpage keys), lerp vertices to synthesize intermediate frames. Mismatches snap, not
-  lerp. Needs a logic-rate detector (frames between display-list changes) — which also
-  *measures* each game's real framerate instead of assuming it.
-- **60 fps, per-game tier — GTE transform tagging:** hook GTE rotation/translation
-  register writes, tag transforms per game object (per-game RE captured in a config
-  file), interpolate at transform level where the generic matcher fails.
-- **Widescreen, generic tier:** the emulator's GTE widescreen hack (the
-  standard mednafen/Beetle GTE-scale approach).
-- **Widescreen, per-game tier:** small EXE/memory patches fixing culling and HUD.
+**Scope boundary (important):** the **gameplay logic** (per-entity AI, physics, game rules) STAYS as
+recompiled PSX code running in **PSX guest memory** — we do NOT reimplement it. We reimplement the
+**engine layer** in native C: the main loop, entity-list iteration, per-object cull/LOD, render
+submission, camera, and the 60fps interpolation + widescreen. The native engine **reads the entity
+structs out of guest RAM and calls into PSX gameplay code** where needed. This is the layer that makes
+object interpolation correct (we own the real entity list → no GTE-transform-fingerprint guessing) and
+it drops any "lift the whole game" phase.
 
-Test games (CHDs live outside the repo — never commit; locations via `.env`):
-- **Crash Bash (USA)** — `SCUS_945.70`, entry `0x8002E7B0`, load `0x80010000`, size
-  `0x69000`. Native framerate unverified — measure, don't assume.
-- **Tomba! 2 (USA)** — `SCUS_944.54` (167936 B, disc LBA 152155). Believed 30 fps —
-  measure.
+Active plan: `<local-notes>/plans/fancy-tinkering-kite.md`. Engine RE: `docs/engine_re.md` (read first).
+Findings/dead-ends: `docs/journal.md`. Project map / build cheat-sheet: `docs/project-map.md`.
 
-## Licensing (distributable)
-The runtime is built on **Beetle PSX (GPL-2, distributable)**; our fork lives in the
-`vendor/beetle-psx` submodule (public). Game patches (.cht/PPF) are fine to publish.
-(Historical note: a DuckStation fork was once used as an RE lab/oracle. DuckStation is
-CC-BY-NC-ND-4.0 — NON-distributable — so it was removed from this repo entirely; do not
-re-vendor it or commit any DuckStation source/binary.)
+## Repo structure — framework vs game (N64Recomp model, boundary-first)
+End state (like N64Recomp/Zelda64Recomp): a **generic, reusable PSX→PC framework** as a submodule, and
+**Tomba2Engine** as the game repo on top. We are establishing that boundary **in-tree first**, keeping
+one build, then extracting the common PSX part into its own repo (gh authed as `SomeoneIsWorking`).
+- `engine/` — **Tomba2Engine, the game-specific native engine + RE.** game_tomba2.c (engine hooks /
+  native overrides), wide60.c (60fps interpolation), tomba2_types.h, and the native engine modules
+  being lifted (engine_tomba2.c …). This is the heart of the project.
+- `runtime/recomp/` — **common PSX→PC platform** (future `psxport` submodule): R3000 interp + recomp
+  glue (mem, interp, hle, threads, timing, boot, native_boot/stub, watchdog, stubs, sync_overrides),
+  PSX hardware natives (gpu_native, spu_*, gte_beetle, mdec_beetle, cdc_native, disc, pad_input,
+  memcard), and the CD/XA/FMV subsystems (cd_override, xa_stream, native_fmv — generic mechanisms with
+  game-tunable hooks; their game-specific bits get hooked out as the boundary firms up).
+- `runtime/` (root: main.cpp, wide60.cpp/h, Makefile) — the **Beetle oracle** frontend (separate from
+  the port). Also slated to move out of `runtime/` into its own home during the cleanup.
+- `tools/` — recompiler (`recomp/emit.py`), `discdump`, `drive.py` (diff driver), bgm/frame tooling.
+- `generated/` — recompiled Tomba! 2 MAIN.EXE (`shard_*.c`); gitignored, rebuilt by run.sh.
+- `vendor/beetle-psx` — our committed Beetle PSX fork (GPL-2), submodule. `docs/`, `patches/`,
+  `common/` (.env reader), `scratch/` (gitignored artifacts by type — **never /tmp**, RAM tmpfs ~6 GB).
 
-## PC port runtime (scope change #3, 2026-06-12)
-`runtime/` is the actual PC port: it compiles the Beetle PSX (mednafen) sources
-directly into `wide60rt` (GPL-2 = distributable), interpreter-only, with a
-PC-keyed native-override layer (`runtime/psxport_hooks.*`, signature-checked for
-overlay safety) and per-game modules (`runtime/games/`). Our Beetle changes live
-**directly in a committed fork** — the `vendor/beetle-psx` submodule points at our
-public fork (github.com/SomeoneIsWorking/beetle-psx-libretro, branch `psxport`),
-and we edit its source in place. Do NOT maintain Beetle changes as out-of-tree
-.patch files applied to a pristine upstream (the user dislikes that workflow —
-keep the fork). Beetle only carries generic emulator primitives + the hook
-call-sites; all HLE BIOS / game logic stays in `runtime/`.
-
-## TWO binaries — do not confuse them (this trips up every fresh session)
-There are two completely separate executables built from different sources:
-- **The native PORT — `scratch/bin/tomba2_port` — IS THE THING UNDER TEST.** It is the
-  recompiled MAIN.EXE (`generated/shard_*.c` from `tools/recomp/emit.py`) linked with the
-  hand-written runtime in **`runtime/recomp/*.c`** (HLE BIOS, GPU/SPU/CD/pad natives, native
-  boot, XA streaming, …). **NO Makefile builds it.** Build it with:
+## TWO binaries — do not confuse them (trips up every fresh session)
+- **The native PORT — `scratch/bin/tomba2_port` — IS THE THING UNDER TEST.** Recompiled MAIN.EXE
+  (`generated/shard_*.c` from `tools/recomp/emit.py`) linked with the native engine (`engine/*.c`) +
+  the PSX platform (`runtime/recomp/*.c`). **NO Makefile builds it.**
     - `./run.sh [disc.chd]` — full: extract MAIN.EXE, recompile, compile every TU, link, **and run**.
-    - `tools/build_port.sh [files…|all]` — **incremental** compile+relink only (no run, ~0.5s for
-      one file). Use this in a fix loop. Object cache: `scratch/obj/`. Keep its SRC list in sync
-      with run.sh step 4 when you add a `runtime/recomp/*.c` file.
-  Drive/observe it with `tools/drive.py` (does NOT build — runs the existing binary). See
-  `docs/diff-driver.md`.
-- **The ORACLE — `runtime/wide60rt` — is the Beetle reference emulator**, full emulation of the
-  real disc, used to validate the port. Built by **`make -C runtime`** (this is the *only* thing
-  that Makefile builds — it is NOT the port). Run: `runtime/wide60rt <chd> -bios <dir> -play`
-  (OpenBIOS as scph5501.bin works; `-fastboot` needs a retail BIOS — hangs under OpenBIOS).
+    - `tools/build_port.sh [files…|all]` — incremental compile+relink, no run (~0.5s/file). Object
+      cache `scratch/obj/`. **Keep its SRC list in sync with run.sh** when adding an `engine/*.c` or
+      `runtime/recomp/*.c` file.
+  Drive/observe with `tools/drive.py` (does NOT build). See `docs/diff-driver.md`.
+- **The ORACLE — `runtime/wide60rt`** — Beetle reference emulator, full emulation of the real disc,
+  used to validate the port. Built by **`make -C runtime`** (the only thing that Makefile builds — NOT
+  the port). Run: `runtime/wide60rt <chd> -bios <dir> -play` (OpenBIOS as scph5501.bin works).
 
-Full project map (modules, CD-command flow, build/drive cheat-sheet): **`docs/project-map.md`** —
-read it before grepping around.
-
-## Layout
-- `runtime/` — the PC port (see above); `runtime/games/` per-game modules.
-- `tools/` — offline tools (`discdump`: CHD → SYSTEM.CNF + boot EXE via libchdr).
-- `patches/` — per-game patch sources + built patch files.
-- `common/` — shared `.env` reader (`PSXPORT_DISC` etc.).
-- `docs/journal.md` — findings, dead ends, current state. Read before re-deriving.
-- `scratch/` — gitignored artifacts by type (`bin/ screenshots/ raw/ wav/ logs/`).
-  **Never /tmp** (RAM tmpfs, ~6 GB quota).
-- `build/` (our tools) — gitignored.
-
-## Disc provisioning
-Never commit CHDs. CLI arg > `PSXPORT_DISC` (env / `.env`) > `*.chd` drop-in.
+## Methodology — oracle-validated incremental lift
+Extend the existing override pattern inward from I/O to the engine: `rec_set_override(addr, ov_fn)`
+keeps the recomp body callable as the oracle/super-call; A/B toggle. Every lifted function is gated on
+**RAM/state equivalence vs the recomp body on real gameplay** (diff via `tools/drive.py` + the Beetle
+oracle), never "looks right". Determinism check first. The game stays playable at every step (un-lifted
+functions keep running as recomp).
 
 ## Hard rules
-- No magic constant offsets in patches — every patched instruction/value is documented
-  with what the original code does and why the change is correct (see global "No
-  bandaids").
-- Single `main` branch; verified milestones committed AND pushed to `origin`
-  (github.com/SomeoneIsWorking/psxport.git).
-- Verification = observed behavior in the emulator on real gameplay, cited.
+- **No bandaids / no magic constant offsets** — name the root cause; every lifted function / patched
+  value is documented with the RE that justifies it (see global "No bandaids").
+- **Single `main` branch**; verified milestones committed AND pushed to `origin`. (Remote is currently
+  `github.com/SomeoneIsWorking/psxport.git`; will become Tomba2Engine + a psxport-framework submodule.)
+- **Verification = observed behavior on real gameplay, cited** (RAM/state probes preferred over
+  screenshots; diff against the oracle, never reason from the port alone).
+- Never commit CHDs or machine-specific paths. Disc: CLI arg > `PSXPORT_TOMBA2_DISC` (.env) > `*.chd`.
+- Beetle changes live in the committed fork (`vendor/beetle-psx`), NOT out-of-tree .patch files.

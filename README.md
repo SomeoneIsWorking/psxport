@@ -1,23 +1,26 @@
-# psxport — Tomba! 2 native PC port
+# Tomba2Engine — a PC-native reimplementation of Tomba! 2's engine
 
-A **real, native PC port** of the PlayStation game *Tomba! 2: The Evil Swine Return*,
-built by **static recompilation**. The game's original MIPS R3000A machine code is
-translated to native C and compiled into a native executable that runs directly on your
-CPU.
+A **real, native PC port** of the PlayStation game *Tomba! 2: The Evil Swine Return*. The
+game's original MIPS R3000A machine code is statically recompiled to native C; on top of
+that, **Tomba! 2's own game engine is being reimplemented in native C** — the main loop,
+entity-list iteration, per-object cull/LOD, render submission, camera, and 60fps
+interpolation + widescreen.
 
-**This is not an emulator.** There is no PSX-on-PC interpreter layer running the whole
-game, no "run the disc in a virtual console." The game's code becomes your platform's
-code. The few things a PSX game genuinely needs from its hardware — geometry math, video
-decode, audio, disc I/O, the BIOS — are provided as **native modules** that the
-recompiled game calls directly.
+**This is not an emulator.** There is no PSX-on-PC interpreter running the whole game. The
+**engine** is native PC code; the **gameplay logic** (per-entity AI, physics, game rules)
+stays as recompiled PSX code in PSX guest memory, which the native engine reads from and
+calls into. The hardware a PSX game needs — geometry math, video decode, audio, disc I/O,
+the BIOS — is provided as native modules.
 
-> **Status: pre-release / engine boots, no visible frame yet.** The recompiled core
-> boots `MAIN.EXE` and runs the full game engine (HLE BIOS, native CD/file I/O, the
-> cooperative scheduler on real native threads, overlay code, GTE geometry, and the
-> StrPlayer main loop driving per-frame work). The native GPU rasterizer, MDEC video
-> decoder, and SPU audio are wired in. **Reaching visible in-game output (the intro FMV /
-> first rendered frame) is still work-in-progress** — it is gated on reverse-engineering
-> the intro-sequencing path. See [Status](#status) for the honest details.
+The reusable PSX→PC framework underneath (recompiler + PSX hardware natives + BIOS HLE +
+diff harness) is being separated out, N64Recomp-style, into its own submodule so future
+game ports can reuse it; **Tomba2Engine** is the game repo on top.
+
+> **Status: playable in-engine; native-engine reimplementation underway.** The recompiled
+> core boots and runs gameplay (HLE BIOS, native CD/file I/O, cooperative scheduler on real
+> threads, GTE geometry, GPU/MDEC/SPU, FMV, XA audio, BGM). Current work: lifting the
+> engine layer (object manager + render submission) to native C, validated per-function
+> against the recompiled body as an oracle. See `docs/engine_re.md` and `docs/journal.md`.
 
 ---
 
