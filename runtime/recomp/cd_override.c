@@ -209,10 +209,16 @@ static void ov_voice_play(R3000* c) {
   int      loop  = (int)(c->r[7] & 1);              // a3 = flags
   xa_stream_play(chan, start, end, loop);
   mem_w16(0x801fe0e0, 2);                            // task-2 state = running (cutscene wait gate)
+  // CRITICAL: enable CD->SPU audio mixing. Beetle spu.c only mixes the decoded XA when
+  // SPUControl bit0 is set; the original FUN_8001cfc8 enabled it via FUN_8001cf00(1) when the
+  // clip started playing. We dropped that coroutine, so call it here (libsnd SpuSetCommonAttr
+  // CD-mix on) — without it the XA decodes but is silently dropped from the mix.
+  c->r[A0] = 1; rec_dispatch(c, 0x8001cf00u);
 }
 // 0x8001CF2C FUN_8001cf2c: stop the current voice/BGM clip.
 static void ov_voice_stop(R3000* c) {
-  (void)c; xa_stream_stop(); mem_w16(0x801fe0e0, 0);
+  xa_stream_stop(); mem_w16(0x801fe0e0, 0);
+  c->r[A0] = 0; rec_dispatch(c, 0x8001cf00u);        // CD->SPU mix off
 }
 
 void cd_overrides_init(void) {
