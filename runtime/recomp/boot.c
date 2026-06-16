@@ -34,6 +34,8 @@ static void load_exe(const char* path, R3000* c) {
 
 int main(int argc, char** argv) {
   const char* path = argc > 1 ? argv[1] : "scratch/bin/tomba2/MAIN.EXE";
+  void gpu_vk_tritest(void);
+  gpu_vk_tritest();           // PSXPORT_VK_TRITEST=1: GPU triangle-rasterizer self-test, then exit
   R3000 c = {0};
   void watchdog_init(void);
   watchdog_init();            // PSXPORT_WATCHDOG=<sec>: abort+backtrace if a frame stalls

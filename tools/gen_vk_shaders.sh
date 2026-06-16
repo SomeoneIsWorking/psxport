@@ -10,7 +10,7 @@ OUT=runtime/recomp/gpu_vk_shaders.h
 command -v glslc >/dev/null || { echo "gen_vk_shaders: glslc not found (install the Vulkan SDK)" >&2; exit 1; }
 
 # up-to-date check
-newest=$(ls -t "$SH"/present.vert "$SH"/present.frag tools/gen_vk_shaders.sh 2>/dev/null | head -1)
+newest=$(ls -t "$SH"/*.vert "$SH"/*.frag tools/gen_vk_shaders.sh 2>/dev/null | head -1)
 [ -f "$OUT" ] && [ "$OUT" -nt "$newest" ] && exit 0
 
 tmp="$(mktemp -d)"
@@ -33,5 +33,7 @@ PY
   echo "#include <stdint.h>"
   emit present.vert spv_present_vert
   emit present.frag spv_present_frag
+  emit tri.vert spv_tri_vert
+  emit tri.frag spv_tri_frag
 } > "$OUT"
 echo "[gen_vk_shaders] wrote $OUT"

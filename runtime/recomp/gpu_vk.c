@@ -57,8 +57,8 @@ static VkCommandBuffer s_cmd;
 static VkSemaphore     s_sem_acq, s_sem_rel;
 static VkFence         s_fence;
 
-// display-region texture (RGBA8) + host-visible staging
-static int             s_tex_w, s_tex_h, s_tex_undef;
+// GPU VRAM image (R16_UINT 1024x512) + host-visible staging (upload) + readback
+static int             s_tex_undef;
 static VkImage         s_tex;
 static VkDeviceMemory  s_tex_mem;
 static VkImageView     s_tex_view;
@@ -66,6 +66,20 @@ static VkBuffer        s_stage;
 static VkDeviceMemory  s_stage_mem;
 static void*           s_stage_ptr;
 static VkDeviceSize    s_stage_sz;
+static VkBuffer        s_rb;          // readback buffer (VRAM image -> host, for VK-vs-SW diff)
+static VkDeviceMemory  s_rb_mem;
+static void*           s_rb_ptr;
+
+// M2 triangle rasterizer: render pass over the VRAM image + pipeline + batched vertex buffer
+static VkRenderPass    s_vram_rpass;
+static VkFramebuffer   s_vram_fb;
+static VkPipeline      s_tri_pipe;
+static VkBuffer        s_vbuf;        // host-visible vertex batch
+static VkDeviceMemory  s_vbuf_mem;
+static void*           s_vbuf_ptr;
+typedef struct { float x, y, r, g, b; } TriVtx;
+#define TRI_CAP 196608                // max batched vertices (= 65536 tris)
+static int             s_tri_n;
 
 int gpu_vk_enabled(void) {
   if (s_vk_on < 0) {
@@ -320,6 +334,7 @@ static void init_vk(void) {
   VKC(vkCreateFence(s_dev, &fci, 0, &s_fence));
 
   create_vram();
+  void create_tri_pipeline(void); create_tri_pipeline();
   create_swapchain();
   fprintf(stderr, "[gpu_vk] Vulkan present backend up (%ux%u, %u swap images; VRAM 1024x512 R16_UINT)\n",
           s_extent.width, s_extent.height, s_swap_n);
@@ -455,8 +470,167 @@ void gpu_vk_present(const uint16_t* src, int sx, int sy, int w, int h) {
 
   poll_quit();
 }
+
+// ---- M2: GPU triangle rasterizer (flat/gouraud) into the VRAM image --------------------
+static void make_hostbuf(VkDeviceSize sz, VkBufferUsageFlags use, VkBuffer* buf, VkDeviceMemory* mem, void** ptr) {
+  VkBufferCreateInfo bi = { VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO };
+  bi.size = sz; bi.usage = use; bi.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+  VKC(vkCreateBuffer(s_dev, &bi, 0, buf));
+  VkMemoryRequirements mr; vkGetBufferMemoryRequirements(s_dev, *buf, &mr);
+  VkMemoryAllocateInfo ma = { VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO };
+  ma.allocationSize = mr.size; ma.memoryTypeIndex = mem_type(mr.memoryTypeBits,
+      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+  VKC(vkAllocateMemory(s_dev, &ma, 0, mem));
+  VKC(vkBindBufferMemory(s_dev, *buf, *mem, 0));
+  VKC(vkMapMemory(s_dev, *mem, 0, sz, 0, ptr));
+}
+
+void create_tri_pipeline(void) {
+  // render pass over the VRAM image: LOAD existing contents, draw, store; stays COLOR_ATTACHMENT layout.
+  VkAttachmentDescription at = {0};
+  at.format = VK_FORMAT_R16_UINT; at.samples = VK_SAMPLE_COUNT_1_BIT;
+  at.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD; at.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+  at.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE; at.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+  at.initialLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+  at.finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+  VkAttachmentReference ar = { 0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL };
+  VkSubpassDescription sp = {0}; sp.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+  sp.colorAttachmentCount = 1; sp.pColorAttachments = &ar;
+  VkRenderPassCreateInfo rpi = { VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO };
+  rpi.attachmentCount = 1; rpi.pAttachments = &at; rpi.subpassCount = 1; rpi.pSubpasses = &sp;
+  VKC(vkCreateRenderPass(s_dev, &rpi, 0, &s_vram_rpass));
+
+  VkFramebufferCreateInfo fi = { VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO };
+  fi.renderPass = s_vram_rpass; fi.attachmentCount = 1; fi.pAttachments = &s_tex_view;
+  fi.width = VRAM_W; fi.height = VRAM_H; fi.layers = 1;
+  VKC(vkCreateFramebuffer(s_dev, &fi, 0, &s_vram_fb));
+
+  VkShaderModule vs = make_shader(spv_tri_vert, spv_tri_vert_len);
+  VkShaderModule fs = make_shader(spv_tri_frag, spv_tri_frag_len);
+  VkPipelineShaderStageCreateInfo st[2] = {
+    { VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, 0, 0, VK_SHADER_STAGE_VERTEX_BIT, vs, "main", 0 },
+    { VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, 0, 0, VK_SHADER_STAGE_FRAGMENT_BIT, fs, "main", 0 },
+  };
+  VkVertexInputBindingDescription vbd = { 0, sizeof(TriVtx), VK_VERTEX_INPUT_RATE_VERTEX };
+  VkVertexInputAttributeDescription vad[2] = {
+    { 0, 0, VK_FORMAT_R32G32_SFLOAT, 0 },            // pos (VRAM coords)
+    { 1, 0, VK_FORMAT_R32G32B32_SFLOAT, 8 },         // rgb 0..1
+  };
+  VkPipelineVertexInputStateCreateInfo vi = { VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO };
+  vi.vertexBindingDescriptionCount = 1; vi.pVertexBindingDescriptions = &vbd;
+  vi.vertexAttributeDescriptionCount = 2; vi.pVertexAttributeDescriptions = vad;
+  VkPipelineInputAssemblyStateCreateInfo ia = { VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO };
+  ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+  VkPipelineViewportStateCreateInfo vp = { VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO };
+  vp.viewportCount = 1; vp.scissorCount = 1;
+  VkPipelineRasterizationStateCreateInfo rs = { VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO };
+  rs.polygonMode = VK_POLYGON_MODE_FILL; rs.cullMode = VK_CULL_MODE_NONE; rs.lineWidth = 1.0f;
+  VkPipelineMultisampleStateCreateInfo ms = { VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO };
+  ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+  VkPipelineColorBlendAttachmentState cba = {0}; cba.colorWriteMask = 0xF;   // R16_UINT: opaque (no blend)
+  VkPipelineColorBlendStateCreateInfo cb = { VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO };
+  cb.attachmentCount = 1; cb.pAttachments = &cba;
+  VkDynamicState dyn[2] = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
+  VkPipelineDynamicStateCreateInfo ds = { VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO };
+  ds.dynamicStateCount = 2; ds.pDynamicStates = dyn;
+  VkGraphicsPipelineCreateInfo gp = { VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO };
+  gp.stageCount = 2; gp.pStages = st; gp.pVertexInputState = &vi; gp.pInputAssemblyState = &ia;
+  gp.pViewportState = &vp; gp.pRasterizationState = &rs; gp.pMultisampleState = &ms;
+  gp.pColorBlendState = &cb; gp.pDynamicState = &ds; gp.layout = s_pll; gp.renderPass = s_vram_rpass;
+  VKC(vkCreateGraphicsPipelines(s_dev, VK_NULL_HANDLE, 1, &gp, 0, &s_tri_pipe));
+  vkDestroyShaderModule(s_dev, vs, 0); vkDestroyShaderModule(s_dev, fs, 0);
+
+  make_hostbuf(sizeof(TriVtx) * TRI_CAP, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, &s_vbuf, &s_vbuf_mem, &s_vbuf_ptr);
+  make_hostbuf((VkDeviceSize)VRAM_W * VRAM_H * 2, VK_BUFFER_USAGE_TRANSFER_DST_BIT, &s_rb, &s_rb_mem, &s_rb_ptr);
+}
+
+// Append one triangle (VRAM coords + per-vertex RGB 0..255) to the batch.
+void gpu_vk_draw_tri(int x0,int y0,int r0,int g0,int b0, int x1,int y1,int r1,int g1,int b1,
+                     int x2,int y2,int r2,int g2,int b2) {
+  if (!s_inited || s_tri_n + 3 > TRI_CAP) return;
+  TriVtx* v = (TriVtx*)s_vbuf_ptr + s_tri_n;
+  v[0] = (TriVtx){ x0, y0, r0/255.f, g0/255.f, b0/255.f };
+  v[1] = (TriVtx){ x1, y1, r1/255.f, g1/255.f, b1/255.f };
+  v[2] = (TriVtx){ x2, y2, r2/255.f, g2/255.f, b2/255.f };
+  s_tri_n += 3;
+}
+
+// Self-test: clear VRAM, draw batched tris into it, read back. Returns the readback (uint16 VRAM).
+static void tri_render_and_readback(uint16_t* out) {
+  VKC(vkWaitForFences(s_dev, 1, &s_fence, VK_TRUE, UINT64_MAX));
+  VKC(vkResetFences(s_dev, 1, &s_fence));
+  VKC(vkResetCommandBuffer(s_cmd, 0));
+  VkCommandBufferBeginInfo bi = { VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO };
+  bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+  VKC(vkBeginCommandBuffer(s_cmd, &bi));
+
+  img_barrier(s_tex_undef ? VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+              VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+              VK_PIPELINE_STAGE_TRANSFER_BIT, 0, VK_ACCESS_TRANSFER_WRITE_BIT);
+  s_tex_undef = 0;
+  VkClearColorValue ccv = { .uint32 = {0,0,0,0} };
+  VkImageSubresourceRange rng = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+  vkCmdClearColorImage(s_cmd, s_tex, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &ccv, 1, &rng);
+  img_barrier(VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+              VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+              VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
+
+  VkRenderPassBeginInfo rp = { VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
+  rp.renderPass = s_vram_rpass; rp.framebuffer = s_vram_fb;
+  rp.renderArea.extent = (VkExtent2D){ VRAM_W, VRAM_H };
+  vkCmdBeginRenderPass(s_cmd, &rp, VK_SUBPASS_CONTENTS_INLINE);
+  VkViewport vpt = { 0, 0, VRAM_W, VRAM_H, 0.0f, 1.0f };
+  VkRect2D sc = { {0,0}, { VRAM_W, VRAM_H } };
+  vkCmdSetViewport(s_cmd, 0, 1, &vpt); vkCmdSetScissor(s_cmd, 0, 1, &sc);
+  vkCmdBindPipeline(s_cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, s_tri_pipe);
+  VkDeviceSize off = 0; vkCmdBindVertexBuffers(s_cmd, 0, 1, &s_vbuf, &off);
+  if (s_tri_n) vkCmdDraw(s_cmd, s_tri_n, 1, 0, 0);
+  vkCmdEndRenderPass(s_cmd);
+
+  img_barrier(VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+              VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+              VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT);
+  VkBufferImageCopy bc = {0};
+  bc.imageSubresource = (VkImageSubresourceLayers){ VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+  bc.imageExtent = (VkExtent3D){ VRAM_W, VRAM_H, 1 };
+  vkCmdCopyImageToBuffer(s_cmd, s_tex, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, s_rb, 1, &bc);
+  // leave it TRANSFER_SRC; next present's barrier expects SHADER_READ — mark undef so it re-barriers.
+  s_tex_undef = 1;
+
+  VKC(vkEndCommandBuffer(s_cmd));
+  VkSubmitInfo su = { VK_STRUCTURE_TYPE_SUBMIT_INFO };
+  su.commandBufferCount = 1; su.pCommandBuffers = &s_cmd;
+  VKC(vkQueueSubmit(s_queue, 1, &su, s_fence));
+  VKC(vkWaitForFences(s_dev, 1, &s_fence, VK_TRUE, UINT64_MAX));
+  memcpy(out, s_rb_ptr, (size_t)VRAM_W * VRAM_H * 2);
+}
+
+// PSXPORT_VK_TRITEST=1: headless-ish self-test of the triangle rasterizer. Draws a known flat tri and a
+// gouraud tri, reads back, checks expected pixels, prints PASS/FAIL, exits. Validates the GPU raster path.
+void gpu_vk_tritest(void) {
+  if (!getenv("PSXPORT_VK_TRITEST")) return;
+  if (!s_inited) init_vk();
+  s_tri_n = 0;
+  gpu_vk_draw_tri( 10,10, 255,0,0,  200,10, 255,0,0,  10,200, 255,0,0);    // flat red, big right-triangle
+  gpu_vk_draw_tri(300,300, 255,0,0, 460,300, 0,255,0, 300,460, 0,0,255);   // gouraud r/g/b corners
+  static uint16_t vram[VRAM_W * VRAM_H];
+  tri_render_and_readback(vram);
+  uint16_t inside_flat = vram[40 * VRAM_W + 40];        // inside flat tri -> red 0x001F
+  uint16_t outside     = vram[400 * VRAM_W + 50];       // background -> 0
+  uint16_t g_corner    = vram[305 * VRAM_W + 445];      // inside, near green vertex (460,300) -> green-dominant
+  int gr = g_corner & 31, gg = (g_corner >> 5) & 31, gb = (g_corner >> 10) & 31;
+  int ok = (inside_flat == 0x001F) && (outside == 0x0000) && (gg > gr && gg > gb && gg > 16);
+  fprintf(stderr, "[vk_tritest] flat(40,40)=0x%04x (want 0x001f)  bg(50,400)=0x%04x (want 0)  "
+          "gouraud(445,305)=0x%04x r=%d g=%d b=%d  => %s\n",
+          inside_flat, outside, g_corner, gr, gg, gb, ok ? "PASS" : "FAIL");
+  exit(ok ? 0 : 3);
+}
 #else
 #include <stdint.h>
 int  gpu_vk_enabled(void) { return 0; }
 void gpu_vk_present(const uint16_t* src, int sx, int sy, int w, int h) { (void)src;(void)sx;(void)sy;(void)w;(void)h; }
+void gpu_vk_tritest(void) {}
+void gpu_vk_draw_tri(int a,int b,int c,int d,int e,int f,int g,int h,int i,int j,int k,int l,int m,int n,int o) {
+  (void)a;(void)b;(void)c;(void)d;(void)e;(void)f;(void)g;(void)h;(void)i;(void)j;(void)k;(void)l;(void)m;(void)n;(void)o;
+}
 #endif
