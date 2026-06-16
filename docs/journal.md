@@ -23,7 +23,28 @@ village→cliff→fisherman scenes). It must have BGM and ours is silent.
 BGM machinery works: FUN_80074BF8(idx) sets 0x800bed80 + SsSeqPlay; SsSeqCalled ticks; SEQ→SPU produces
 audio. So this is purely a TRIGGER problem: the prologue cutscene never issues its "play song 4" command.
 
-### NEXT — find + port the prologue BGM trigger (compare vs oracle)
+### REFINEMENT (same session, interactive): song 4 starts LATE, not never
+Running the native prologue all the way through: the narration text cards (village "living peacefully",
+cliff, "kidnapped?") play **silent for ~1174 frames (~39 s)**, THEN at f1174 the post-narration game
+scene (Tomba-in-tree) loads and **song 4 starts** (BGM_START idx=4, ra=0x80074608) and plays correctly.
+So song 4 is the FISHERMAN/first-map BGM (matches oracle newgame.sav = post-narration, song 4), and it
+works in our port — just late. The missing-BGM scene is the **narration cards that precede it**.
+- The song-4 trigger FUN_80074590(0x72) lives at 0x8011a120 — but that overlay is NOT loaded during the
+  narration (0x8011a118 = zeros in scratch/bin/native_prologue.bin); it loads with the game scene at f1174.
+- So either (a) the real game starts the narration's BGM via a DIFFERENT (earlier) trigger we don't fire,
+  or (b) our narration phase is far too long / stalled (~39 s) and runs before the map+BGM load, whereas
+  in the oracle the map/BGM is up during the (shorter) narration. Need the oracle AT the narration cards
+  to decide — and that's blocked on oracle menu navigation (below).
+
+### BLOCKER to resolve first: oracle menu navigation
+Injected input (REPL tap/press, g_repl_buttons set & confirmed) does NOT reach the game in the oracle:
+the title menu cursor (0x801fe068) doesn't move and the candidate pad buffer (0x800bf4f8) stays 0xFFFF.
+Likely the OpenBIOS pad-poll path isn't seeing InputStateCb (or the game's real pad buffer is elsewhere).
+Until fixed, can't drive the oracle from title→NewGame to the narration for a clean diff. Fixing this is
+the highest-leverage next step (unblocks "always compare vs oracle"). Workaround refs: newgame.sav is
+POST-narration only.
+
+### NEXT — find + port the prologue/narration BGM trigger (compare vs oracle)
 The prologue scene loads (narration renders) but its BGM-start isn't issued. Candidate: the prologue
 map/scene-load BGM selector or the cutscene/event script's music cue runs in the oracle but is skipped
 by our native boot/scheduler (native_boot.c hand-codes the frame loop + replaces FUN_80051e60). Find in
