@@ -37,6 +37,31 @@ over"). The user nailed it: that voice line gates cutscene advancement.
   native engine's advancing read head) while streaming → the wait terminates, clips play once and the
   scene advances. Marked `// STOPGAP` in cd_override.c.
 
+### later-78e — XA audio ORACLE-VERIFIED; OPEN: gameplay BGM starts during the fisherman cutscene
+XA in-game audio now works AND is oracle-verified: drove the oracle (cold boot, Start to skip FMVs,
+Cross to select StartGame) to the prologue narration ("Tomba is living peacefully…") and captured its
+audio (scratch/wav/oracle_cold.wav, narration ~263-291s). Extracted both narration segments and ran
+tools/audio_differ/compare.py diff vs the port (scratch/wav/port_cdfix.wav, narration ~15-23s):
+**corr=0.954, RMS ratio 0.894** — the music+VO content MATCHES the oracle. (Two bugs fixed to get here:
+mono-XA buffer overflow [later-78d], and the dropped CD->SPU enable [FUN_8001cf00(1)] that left
+SPUControl bit0=0 so the decoded XA was discarded by spu.c.) User confirms: fisherman dialog + other
+audio fixed.
+
+OPEN (user report): the **sequenced gameplay BGM starts too early — during the fisherman cutscene**,
+should wait until it ends. Observed in port: `FUN_80074BF8(idx=4)` fires at ~f1554 (0x800bed80→4) while
+the cutscene's XA (chan4 loop music + chan22 voice lines) is still playing. The gameplay-vs-cutscene
+gate is `DAT_801fe0e0 != 0` (voice-task-alive): handlers FUN_8005f2f0 (case1 @40208) and FUN_800624b4
+(case2 @41958) do `if (DAT_801fe0e0 != 0) { FUN_8001cf2c(); return; }` — i.e. don't run gameplay while a
+voice clip plays. Our native voice port (later-78c) sets DAT_801fe0e0=2 only WHILE a clip is mid-play and
+0 otherwise, so between clips / before the first clip the gameplay slips through and starts song 4.
+User's framing: "cutscenes stop gameplay, maybe that stop didn't work."
+NEXT (needs oracle A/B): watch when the oracle writes 0x800bed80 (song 4) relative to the cutscene, and
+what keeps gameplay blocked across the WHOLE cutscene in the real game (candidate: the chan4 XA loop keeps
+task slot 2 alive continuously; our single-ring player drops it when a chan22 voice line replaces chan4
+and doesn't resume → DAT_801fe0e0 gaps). Likely fix: hold the cutscene "voice/stream active" state for the
+whole cutscene (don't 0 it between lines), or resume the looped chan4 music after each voice line. Confirm
+the exact gating against the oracle before changing — do NOT guess (user rule: verify vs oracle).
+
 ### later-78d — BUG: mono XA overflowed the decode buffers (voice was silent/garbled)
 User: no voice in the WAV / "sounds the same as when XA was broken". Per-sector log showed the
 chan22 voice = **mono 18900Hz → n=4032 frames/sector** (mono puts ALL units on one channel: 18*8*28),
