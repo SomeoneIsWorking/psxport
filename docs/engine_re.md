@@ -155,28 +155,34 @@ black-boxed. The layer is small and standard (libgpu), dispatched via a jump-tab
 (the libgpu "GPU sys" struct; entries are fn-ptrs at +0x08 DMA-send, +0x14 DrawOTagEnv, +0x2c ClearOTagR,
 +0x3c DrawOTag/DrawSync).
 
-**Per-frame loop** `FUN_80050b08` (0x80050b08):
+**Per-frame loop** `FUN_80050b08` (0x80050b08) — function names CORRECTED from each libgpu fn's debug
+string (earlier draft mislabeled DrawSync/DrawOTag/PutDrawEnv):
 ```
 parity = DAT_1f800135 (0/1);  drawbuf base = 0x800bfe68 + parity*0x14000 (DAT_800bf544)
 ctx = &DAT_800e80a8 + parity*0x81c              // per-buffer GPU context (DRAWENV+DISPENV+OT head)
 FUN_80081458(ctx, 0x800)   = ClearOTagR(OT, 2048 entries)   // reset ordering table
 FUN_800788ac()             = input + sub-tick
 FUN_80051e60()             = task scheduler -> BUILDS the OT (entity handlers AddPrim into it)
-FUN_80080f6c(0)            = DrawOTag(OT)        // DMA the built OT to the GPU
+FUN_80080f6c(0)            = DrawSync(0)         // WAIT for previous frame's draw to finish (not the draw!)
 wait DAT_800e809c >= DAT_1f800235               // vblank gate: 1 = 60fps, 2 = 30fps  (<-- 60fps lever)
 FUN_800506d0()
-swap: FUN_80081560(ctx+0x1ffc)=PutDrawEnv (draw-area CLIP+offset),
-      FUN_800815d0(ctx+0x2014)=PutDispEnv (display area),  flip parity
+swap: FUN_8008179c(ctx+0x2000)=PutDispEnv (display area, GP1),
+      FUN_800815d0(ctx+0x2014)=PutDrawEnv (draw-area CLIP+offset),
+      FUN_80081560(ctx+0x1ffc)=DrawOTag(OT)     // <-- THE actual draw: kick the OT DMA to the GPU
+      flip parity
 ```
-libgpu primitives (all via the 0x800A5998 table): `FUN_80080f6c`=DrawOTag, `FUN_80081458`=ClearOTagR,
-`FUN_800810f0`=ClearImage, `FUN_80081180`=ClearImage2 (GP0 fill bit 0x80000000), `FUN_80081218`=LoadImage
-(CPU→VRAM), `FUN_80081278`=StoreImage (VRAM→CPU), `FUN_800812d8`=MoveImage (VRAM→VRAM copy),
-`FUN_80081560`=PutDrawEnv, `FUN_800815d0`=PutDispEnv, `FUN_80081504`=DrawSync+DrawOTagEnv.
+libgpu (all via the 0x800A5998 table; names from debug strings): `FUN_80080f6c`=**DrawSync** (table+0x3c),
+`FUN_80081560`=**DrawOTag** (table+0x18, the OT draw kick → our gpu_dma2_linked_list), `FUN_800815d0`=
+**PutDrawEnv** (builds the 0x40-byte env packet at struct+0x1c via FUN_80081fb0, sends via table+8),
+`FUN_8008179c`=**PutDispEnv** (GP1 display cmds via table+0x10), `FUN_80081690`=DrawOTagEnv,
+`FUN_80081458`=ClearOTagR (table+0x2c), `FUN_800810f0`=ClearImage, `FUN_80081180`=ClearImage2 (fill bit
+0x80000000), `FUN_80081218`=LoadImage (CPU→VRAM), `FUN_80081278`=StoreImage, `FUN_800812d8`=MoveImage.
 - **60fps lever (native, real):** `DAT_1f800235` is the vblank-count target the loop waits for (1 vs 2).
   Our native loop owns this wait → drive at 60 by gating on 1 and interpolating object transforms (the
   entity-list snapshot, Phase-1). Not a renderer trick.
-- **Widescreen lever (native, real):** PutDrawEnv (ctx+0x1ffc, draw-area clip) + PutDispEnv (ctx+0x2014)
-  + the GTE OFX (FUN_800509B4). Widen all three → genuine wider FOV. (Supersede the rejected FB re-center.)
+- **Widescreen lever (native, real):** PutDrawEnv (FUN_800815d0, ctx+0x2014 — draw-area clip+offset) +
+  PutDispEnv (FUN_8008179c, ctx+0x2000 — display area) + the GTE OFX (now native, ov_set_geom_offset).
+  Widen all three → genuine wider FOV. (Supersedes the rejected FB re-center.)
 - **MoveImage (FUN_800812d8) = VRAM→VRAM copy** — the likely water-reflection / fade-buffer mechanism;
   prime suspect for the broken water (reflection copy) AND a place our GP0 emulator can drift. RE next.
 
@@ -187,6 +193,11 @@ libgpu primitives (all via the 0x800A5998 table): `FUN_80080f6c`=DrawOTag, `FUN_
   recomp body (PSXPORT_GEOM_RECOMP=1 A/B). The engine's projection config is now PC-native — the widescreen
   FOV lever (widen OFX + draw-env clip) lives in our code. (Also owned earlier: LoadImage upload
   ov_upload_image 0x80081218; LZ/group asset codecs.)
+- **DrawOTag** (later-99): `ov_draw_otag` (0x80081560) → native `gpu_dma2_linked_list` (walk OT, decode
+  each primitive, rasterize). The engine's per-frame DRAW SUBMISSION now goes straight through our native
+  renderer, not the DMA-register emulation. VERIFIED **0-pixel-diff** vs recomp (PSXPORT_OT_RECOMP=1) at
+  f1500 (514-poly scene). Next: PutDrawEnv (FUN_800815d0) + PutDispEnv (FUN_8008179c) → full native screen
+  geometry, then enable widescreen (wide OFX + wide clip + wide render target).
 
 ### Native ownership plan (reimplement libgpu, keep recomp body as oracle via rec_set_override)
 1. Own **DrawOTag** (FUN_80080f6c): walk the ordering table in native C, decode each primitive packet by

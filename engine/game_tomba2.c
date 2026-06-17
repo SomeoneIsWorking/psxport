@@ -254,12 +254,22 @@ static void ov_set_geom_screen(R3000* c) {       // SetGeomScreen(h) — project
   if (!logged++) fprintf(stderr, "[geom] native SetGeomScreen H=%u (CR26=%08X)\n", c->r[4], gte_read_ctrl(26));
 }
 
+// Native ownership of DrawOTag (libgpu FUN_80081560, the per-frame draw kick): the recomp body just
+// programs the GPU linked-list DMA to walk the ordering table at a0 — which our renderer already does
+// natively in gpu_dma2_linked_list (walk OT -> decode each primitive -> rasterize). Overriding it routes
+// the draw straight through our native walk (synchronous), instead of the DMA-register emulation dance.
+// This is the engine's draw submission, owned. Faithful-first: PSXPORT_OT_RECOMP=1 keeps the recomp body.
+void gpu_dma2_linked_list(uint32_t madr);
+static void ov_draw_otag(R3000* c) { gpu_dma2_linked_list(c->r[4]); }
+
 void games_tomba2_init(void) {
   rec_set_override(0x800788ACu, ov_frame_update);
   if (!getenv("PSXPORT_GEOM_RECOMP")) {           // own the GTE projection setup natively (faithful-first)
     rec_set_override(0x800846D0u, ov_set_geom_offset);
     rec_set_override(0x800846F0u, ov_set_geom_screen);
   }
+  if (!getenv("PSXPORT_OT_RECOMP"))               // own DrawOTag (the per-frame draw kick) natively
+    rec_set_override(0x80081560u, ov_draw_otag);
   // PC-owned asset codecs (A/B: PSXPORT_LZ_RECOMP=1 keeps the recomp bodies for comparison).
   if (!getenv("PSXPORT_LZ_RECOMP")) {
     rec_set_override(0x80044D8Cu, ov_lz_decompress);  // LZ image decompressor
