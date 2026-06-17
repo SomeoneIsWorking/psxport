@@ -245,6 +245,22 @@ This is the port ACCOUNTING for every draw instead of blind GP0 rasterization. F
   transition) or the **FMV→engine handoff** (./run.sh has FMV on; drive.py SW path with NO_FMV is clean).
   NEXT: reproduce on the VK path (PSXPORT_VK_SHOT across the prologue entry) to pin the exact present-path
   frame, then fix our presentation — a renderer bug we own, distinct from the engine.
+  - **later: reproduced on VK + characterised (live drive, PSXPORT_AUTO_NEWGAME=2 + debug-server step).**
+    The glitch is a 1-2 frame brightness OUTLIER in the dark fade-in: a single FULL-BRIGHT frame on the
+    otherwise near-black ramp (caught once at displayed-mean 1→57→2 between black neighbours; also a
+    black-then-bright pair in the user's run). **It is INTERMITTENT** — two full step-through passes
+    showed a clean smooth ramp with no flash. It was DETERMINISTIC before the buffer-flip hack was
+    removed (commit b1f029a) and became intermittent after → the locus is the **flip/present timing**,
+    not the engine fade (SW ramps correctly). Working hypothesis: VK renders frame N's tee'd geometry at
+    frame N+1's present (1 frame behind SW, which rasterizes during DrawOTag), and with the now-
+    unconditional double-buffer flip there's a race in which buffer/modulation the swapchain scans out
+    during the fast ramp → an occasional stale full-bright (pre-fade) or just-cleared (black) buffer.
+    NEXT: catch it in-situ (the step-drive flags displayed>>buf0/buf256) and confirm whether the present
+    sampled a buffer/region the current frame didn't draw; then make the VK present frame-accurate
+    (present the SAME frame's geometry, not 1-behind) so swap + render stay in lockstep.
+  - **Tooling for this (committed):** PSXPORT_AUTO_NEWGAME=2 boots straight to the prologue and auto-
+    pauses; debug-server `pause`/`step`/`play` (also keyboard P / '.'), `vkshot`/`vkvram` (reliable while
+    paused — the loop re-presents each tick), `swvkcap` + tools/swvk_diff.py + tools/perceptual.py.
 
 ## Open RE items (next, in order)
 1. ~~The entity list + its walk~~ — **DONE** (above): lists `DAT_800fb168`/`DAT_800f2624`, walk
