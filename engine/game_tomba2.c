@@ -233,8 +233,33 @@ static void ov_upload_image(R3000* c) {
   if (w > 0 && h > 0) gpu_native_load_image(x, y, w, h, src);
 }
 
+// --- Native ownership of the GTE projection setters (libgte) -------------------------------------
+// The engine configures its projection via libgte SetGeomOffset/SetGeomScreen (RE: docs/engine_re.md,
+// FUN_800509B4 -> screen center (160,120), focal length H=350). We reimplement them in native C
+// (byte-identical to gen_func_800846D0/800846F0) so the PROJECTION is ours: this is the genuine
+// widescreen FOV lever (widen OFX + the draw-env clip; no squish, no renderer re-center) and the
+// reference point the 60fps/hi-res paths build on. Faithful-first: PSXPORT_GEOM_RECOMP=1 keeps the
+// recomp bodies for A/B. A one-time log prints the configured projection to confirm equivalence.
+static void ov_set_geom_offset(R3000* c) {       // SetGeomOffset(ofx, ofy)
+  uint32_t ofx = c->r[4], ofy = c->r[5];
+  gte_write_ctrl(24, ofx << 16);                 // OFX
+  gte_write_ctrl(25, ofy << 16);                 // OFY
+  static int logged = 0;
+  if (!logged++) fprintf(stderr, "[geom] native SetGeomOffset OFX=%u OFY=%u (CR24=%08X CR25=%08X)\n",
+                         ofx, ofy, gte_read_ctrl(24), gte_read_ctrl(25));
+}
+static void ov_set_geom_screen(R3000* c) {       // SetGeomScreen(h) — projection-plane distance (FOV)
+  gte_write_ctrl(26, c->r[4]);                   // H
+  static int logged = 0;
+  if (!logged++) fprintf(stderr, "[geom] native SetGeomScreen H=%u (CR26=%08X)\n", c->r[4], gte_read_ctrl(26));
+}
+
 void games_tomba2_init(void) {
   rec_set_override(0x800788ACu, ov_frame_update);
+  if (!getenv("PSXPORT_GEOM_RECOMP")) {           // own the GTE projection setup natively (faithful-first)
+    rec_set_override(0x800846D0u, ov_set_geom_offset);
+    rec_set_override(0x800846F0u, ov_set_geom_screen);
+  }
   // PC-owned asset codecs (A/B: PSXPORT_LZ_RECOMP=1 keeps the recomp bodies for comparison).
   if (!getenv("PSXPORT_LZ_RECOMP")) {
     rec_set_override(0x80044D8Cu, ov_lz_decompress);  // LZ image decompressor

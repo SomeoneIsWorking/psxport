@@ -180,6 +180,14 @@ libgpu primitives (all via the 0x800A5998 table): `FUN_80080f6c`=DrawOTag, `FUN_
 - **MoveImage (FUN_800812d8) = VRAM→VRAM copy** — the likely water-reflection / fade-buffer mechanism;
   prime suspect for the broken water (reflection copy) AND a place our GP0 emulator can drift. RE next.
 
+### Ported to native C so far (faithful-first, oracle-gated)
+- **GTE projection setters** (later-99): `ov_set_geom_offset` (0x800846D0 SetGeomOffset) + `ov_set_geom_screen`
+  (0x800846F0 SetGeomScreen) in engine/game_tomba2.c. Native writes CR24=OFX<<16, CR25=OFY<<16, CR26=H.
+  VERIFIED byte-identical: logs OFX=160/OFY=120/H=350, and the rendered frame is **0-pixel-diff** vs the
+  recomp body (PSXPORT_GEOM_RECOMP=1 A/B). The engine's projection config is now PC-native — the widescreen
+  FOV lever (widen OFX + draw-env clip) lives in our code. (Also owned earlier: LoadImage upload
+  ov_upload_image 0x80081218; LZ/group asset codecs.)
+
 ### Native ownership plan (reimplement libgpu, keep recomp body as oracle via rec_set_override)
 1. Own **DrawOTag** (FUN_80080f6c): walk the ordering table in native C, decode each primitive packet by
    type (POLY_F/FT/G/GT, SPRT, TILE, LINE, the env/copy packets), submit to our renderer WITH semantics
