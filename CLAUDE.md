@@ -14,6 +14,8 @@ it drops any "lift the whole game" phase.
 
 Active plan: `<local-notes>/plans/fancy-tinkering-kite.md`. Engine RE: `docs/engine_re.md` (read first).
 Findings/dead-ends: `docs/journal.md`. Project map / build cheat-sheet: `docs/project-map.md`.
+**Graphics/render debugging: `docs/gfx-debug.md` (skill `gfx-debug`) — READ FIRST before any rendering
+bug or comparison tooling; it has the tool catalog + the mandatory render-diff-first workflow.**
 
 ## Repo structure — framework vs game (N64Recomp model, boundary-first)
 End state (like N64Recomp/Zelda64Recomp): a **generic, reusable PSX→PC framework** as a submodule, and
@@ -61,5 +63,14 @@ functions keep running as recomp).
   `github.com/SomeoneIsWorking/psxport.git`; will become Tomba2Engine + a psxport-framework submodule.)
 - **Verification = observed behavior on real gameplay, cited** (RAM/state probes preferred over
   screenshots; diff against the oracle, never reason from the port alone).
+- **Rendering bugs: render-level diff FIRST, eyeball LAST.** For any "renders wrong" issue the order is
+  (1) `gpu_differ` — replay the captured GP0 stream through OUR rasterizer and Beetle and diff the VRAM
+  (pure rasterizer diff, no state alignment); (2) GP0/state inspection (`PSXPORT_SCENEDUMP`/`PROVAT`/
+  `GTEPROBE`); (3) eyeballing a screenshot / whole-frame pixel-diff ONLY as a last resort when stuck and
+  a human judgment is genuinely needed. Stills hide bugs (water "looked fine" while broken). NEVER
+  screenshot-compare port-vs-oracle by frame/latch — they drift. See `docs/gfx-debug.md`.
+- **Improve the tools when they fall short — don't hand-grind or reinvent.** Grep `docs/gfx-debug.md` +
+  `tools/` before building anything; extend the existing tool; update the doc + skill in the same change.
+  (A session lost track of `gpu_differ` and built a worse screenshot tool — this rule prevents that.)
 - Never commit CHDs or machine-specific paths. Disc: CLI arg > `PSXPORT_TOMBA2_DISC` (.env) > `*.chd`.
 - Beetle changes live in the committed fork (`vendor/beetle-psx`), NOT out-of-tree .patch files.

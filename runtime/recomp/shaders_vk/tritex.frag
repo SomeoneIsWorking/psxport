@@ -8,16 +8,8 @@ layout(location = 2) flat in ivec4 v_tp;     // tpx, tpy, mode, raw
 layout(location = 3) flat in ivec4 v_clut;   // clutx, cluty, semi, blend
 layout(location = 4) flat in ivec4 v_tw;     // texture window
 layout(location = 5) flat in ivec4 v_da;     // draw-area clip
-layout(location = 6) flat in vec3  v_normal; // view-space per-face normal (0 = unlit)
-layout(location = 7) in float v_depth;       // view-space Z
 layout(set = 0, binding = 0) uniform usampler2D u_vram;
 layout(location = 0) out uint o_px;
-// Native lighting engine (replaces Tomba2's baked-color+GTE-depth-cue model, see docs/engine_re.md).
-// l0 = (light dir xyz [view space], mode: 0=off 1=directional 2=normal-viz);
-// l1 = (ambient, diffuse, fogStart, fogEnd); l2 = (fog tint rgb, fogEnable).
-layout(push_constant) uniform LPC {
-    layout(offset = 48) vec4 l0; vec4 l1; vec4 l2;
-} L;
 
 uint vram_at(int x, int y) { return texelFetch(u_vram, ivec2(x & 1023, y & 511), 0).r; }
 
@@ -46,31 +38,6 @@ void main() {
             tb = min(31u, uint(float(tb)*v_col.b*(255.0/128.0)+0.5));
         }
         texel = tr | (tg<<5) | (tb<<10) | (stp<<15);
-    }
-
-    // --- Native lighting: modulate the SOURCE color (before semi-blend). Only lit 3D faces have a
-    // non-zero normal; 2D sprites/HUD/lines (normal=0) pass through untouched. ----------------------
-    int lmode = int(L.l0.w + 0.5);
-    bool lit = lmode != 0 && dot(v_normal, v_normal) > 1e-6;
-    bool fog = L.l2.w > 0.5;
-    if (lit || fog) {
-        uint a = texel & 0x8000u;
-        vec3 c = vec3(float(texel & 31u), float((texel>>5)&31u), float((texel>>10)&31u)) / 31.0;
-        if (lit) {
-            vec3 N = normalize(v_normal);
-            if (lmode == 2) {                         // debug: visualize the reconstructed normal
-                c = N * 0.5 + 0.5;
-            } else {                                  // directional diffuse + ambient
-                float d = max(0.0, dot(N, normalize(L.l0.xyz)));
-                c *= (L.l1.x + L.l1.y * d);
-            }
-        }
-        if (fog) {                                    // native distance fog toward l2.rgb tint
-            float f = clamp((v_depth - L.l1.z) / max(1.0, L.l1.w - L.l1.z), 0.0, 1.0);
-            c = mix(c, L.l2.xyz, f);
-        }
-        c = clamp(c, 0.0, 1.0);
-        texel = uint(c.r*31.+0.5) | (uint(c.g*31.+0.5)<<5) | (uint(c.b*31.+0.5)<<10) | a;
     }
 
     // semi-transparency: textured blends only STP-set texels; untextured always blends.

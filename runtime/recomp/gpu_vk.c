@@ -16,7 +16,6 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
-#include <math.h>
 #include "gpu_vk_shaders.h"   // generated: spv_present_vert / spv_present_frag (tools/gen_vk_shaders.sh)
 
 #define VRAM_W 1024
@@ -92,8 +91,7 @@ static int             s_tri_n;
 
 // M3 textured rasterizer: a VRAM snapshot image the texture sampler reads (avoids render/sample feedback
 // loop), its descriptor set, the textured pipeline, and a textured-vertex batch.
-typedef struct { float x, y, u, v, r, g, b; float nx, ny, nz, depth;
-                 int32_t tp[4], clut[4], tw[4], da[4]; } TexVtx;  // 108 bytes (nx..depth = native lighting)
+typedef struct { float x, y, u, v, r, g, b; int32_t tp[4], clut[4], tw[4], da[4]; } TexVtx;  // 92 bytes
 #define TEX_CAP 196608
 static VkImage         s_vram_tex;    // texture-source snapshot (copy of VRAM before a draw batch)
 static VkDeviceMemory  s_vram_tex_mem;
@@ -136,7 +134,7 @@ static void wide_init(void) {
   const char* w = getenv("PSXPORT_WIDE");
   s_wide = (w && atoi(w) != 0) ? 1 : 0;
   const char* ss = getenv("PSXPORT_SS");
-  s_ss = ss ? atoi(ss) : 1; if (s_ss < 1) s_ss = 1; if (s_ss > 2) s_ss = 2;   // default 1 (native): supersampling is a rejected trick (see pc-native-not-emulator-hacks)
+  s_ss = ss ? atoi(ss) : 1; if (s_ss < 1) s_ss = 1; if (s_ss > 2) s_ss = 2;   // default 1 (native): supersampling is a rejected trick
 }
 
 int gpu_vk_enabled(void) {
@@ -337,14 +335,13 @@ static void init_vk(void) {
   VkDescriptorSetLayoutCreateInfo dli = { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
   dli.bindingCount = 1; dli.pBindings = &b;
   VKC(vkCreateDescriptorSetLayout(s_dev, &dli, 0, &s_dsl));
-  VkPushConstantRange pcr[3] = {
+  VkPushConstantRange pcr[2] = {
     { VK_SHADER_STAGE_FRAGMENT_BIT, 0, 16 },    // present: ivec4 display rect (x,y,w,h)
     { VK_SHADER_STAGE_VERTEX_BIT, 16, 32 },     // tri/tritex: VPC wa,wb (wide/supersample transform)
-    { VK_SHADER_STAGE_FRAGMENT_BIT, 48, 48 },   // tritex: LPC l0,l1,l2 (native lighting/fog)
   };
   VkPipelineLayoutCreateInfo pli = { VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
   pli.setLayoutCount = 1; pli.pSetLayouts = &s_dsl;
-  pli.pushConstantRangeCount = 3; pli.pPushConstantRanges = pcr;
+  pli.pushConstantRangeCount = 2; pli.pPushConstantRanges = pcr;
   VKC(vkCreatePipelineLayout(s_dev, &pli, 0, &s_pll));
 
   // graphics pipeline: fullscreen triangle, no vertex input, dynamic viewport/scissor
@@ -491,14 +488,6 @@ static void push_wide(int enabled) {
   vkCmdPushConstants(s_cmd, s_pll, VK_SHADER_STAGE_VERTEX_BIT, 16, 32, va);
 }
 
-// Native lighting params (fragment LPC at offset 48): l0 = (dir.xyz [view space], mode 0=off/1=lit/2=viz);
-// l1 = (ambient, diffuse, fogStart, fogEnd); l2 = (fogTint.rgb, fogEnable). Set via gpu_vk_set_light.
-static float s_light[12] = { 0,0,0,0,  1,0,0,0,  0,0,0,0 };
-void gpu_vk_set_light(const float* l12) { memcpy(s_light, l12, sizeof s_light); }
-static void push_light(void) {
-  vkCmdPushConstants(s_cmd, s_pll, VK_SHADER_STAGE_FRAGMENT_BIT, 48, 48, s_light);
-}
-
 // HUD edge-anchoring for 2D sprites (gp0 0x60-0x7F). 3D polys widen via the FOV (filling the new side
 // bands); 2D sprites bypass the GTE, so the vertex transform would just CENTER them. Instead, anchor each
 // sprite to its proportional screen position at NATIVE size: a sprite centered at screen-x Xc shifts by
@@ -583,7 +572,7 @@ void gpu_vk_present(const uint16_t* src, int sx, int sy, int w, int h) {
       VkClearRect cr = { { { 0, FB_Y0 }, { (uint32_t)FBW(), (uint32_t)FBH() } }, 0, 1 };
       vkCmdClearAttachments(s_cmd, 1, &ca, 1, &cr);
     }
-    push_wide(s_wide); push_light();
+    push_wide(s_wide);
     vkCmdBindDescriptorSets(s_cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, s_pll, 0, 1, &s_dset_tex, 0, 0);
     if (s_tri_n) { vkCmdBindPipeline(s_cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, s_tri_pipe);
                    vkCmdBindVertexBuffers(s_cmd, 0, 1, &s_vbuf, &go); vkCmdDraw(s_cmd, s_tri_n, 1, 0, 0); }
@@ -742,20 +731,18 @@ void create_tri_pipeline(void) {
     { VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, 0, 0, VK_SHADER_STAGE_FRAGMENT_BIT, tfs, "main", 0 },
   };
   VkVertexInputBindingDescription tvbd = { 0, sizeof(TexVtx), VK_VERTEX_INPUT_RATE_VERTEX };
-  VkVertexInputAttributeDescription tvad[9] = {
+  VkVertexInputAttributeDescription tvad[7] = {
     { 0, 0, VK_FORMAT_R32G32_SFLOAT,       0 },   // pos
     { 1, 0, VK_FORMAT_R32G32_SFLOAT,       8 },   // uv
     { 2, 0, VK_FORMAT_R32G32B32_SFLOAT,    16 },  // col
-    { 7, 0, VK_FORMAT_R32G32B32_SFLOAT,    28 },  // normal (view space; 0=unlit)
-    { 8, 0, VK_FORMAT_R32_SFLOAT,          40 },  // depth (view Z)
-    { 3, 0, VK_FORMAT_R32G32B32A32_SINT,   44 },  // tp (tpx,tpy,mode,raw)
-    { 4, 0, VK_FORMAT_R32G32B32A32_SINT,   60 },  // clut (clutx,cluty,-,-)
-    { 5, 0, VK_FORMAT_R32G32B32A32_SINT,   76 },  // tw (mask_x,mask_y,off_x,off_y)
-    { 6, 0, VK_FORMAT_R32G32B32A32_SINT,   92 },  // da (x0,y0,x1,y1)
+    { 3, 0, VK_FORMAT_R32G32B32A32_SINT,   28 },  // tp (tpx,tpy,mode,raw)
+    { 4, 0, VK_FORMAT_R32G32B32A32_SINT,   44 },  // clut (clutx,cluty,-,-)
+    { 5, 0, VK_FORMAT_R32G32B32A32_SINT,   60 },  // tw (mask_x,mask_y,off_x,off_y)
+    { 6, 0, VK_FORMAT_R32G32B32A32_SINT,   76 },  // da (x0,y0,x1,y1)
   };
   VkPipelineVertexInputStateCreateInfo tvi = { VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO };
   tvi.vertexBindingDescriptionCount = 1; tvi.pVertexBindingDescriptions = &tvbd;
-  tvi.vertexAttributeDescriptionCount = 9; tvi.pVertexAttributeDescriptions = tvad;
+  tvi.vertexAttributeDescriptionCount = 7; tvi.pVertexAttributeDescriptions = tvad;
   gp.pStages = tst; gp.pVertexInputState = &tvi;   // reuse ia/vp/rs/ms/cb/ds/layout/renderPass from above
   VKC(vkCreateGraphicsPipelines(s_dev, VK_NULL_HANDLE, 1, &gp, 0, &s_tritex_pipe));
   vkDestroyShaderModule(s_dev, tvs, 0); vkDestroyShaderModule(s_dev, tfs, 0);
@@ -775,79 +762,41 @@ void gpu_vk_draw_tri(int x0,int y0,int r0,int g0,int b0, int x1,int y1,int r1,in
 }
 
 // Append one TEXTURED triangle: per-vertex pos/uv/color (rgb 0..255) + shared page/CLUT/mode/raw state.
-// vp{x,y,z} = the 3 vertices' VIEW-SPACE positions (from PGXP) for native lighting; NULL = unlit (2D).
-static void tex_emit(TexVtx* t, const float* xs, const float* ys, const int* us, const int* vs,
+static void tex_emit(TexVtx* t, const int* xs, const int* ys, const int* us, const int* vs,
                      const unsigned char* rs, const unsigned char* gs, const unsigned char* bs,
-                     const float* vpx, const float* vpy, const float* vpz,
                      int tpx, int tpy, int mode, int raw, int clutx, int cluty,
                      int twmx, int twmy, int twox, int twoy, int dax0, int day0, int dax1, int day1,
                      int semi, int blend) {
-  // per-face normal from the view-space triangle (cross of two edges), oriented toward the camera
-  // (origin): the visible side. depth = mean view-Z. Unlit (vp==NULL) -> zero normal, frag skips it.
-  float nx = 0, ny = 0, nz = 0;
-  if (vpx) {
-    float e1x=vpx[1]-vpx[0], e1y=vpy[1]-vpy[0], e1z=vpz[1]-vpz[0];
-    float e2x=vpx[2]-vpx[0], e2y=vpy[2]-vpy[0], e2z=vpz[2]-vpz[0];
-    nx = e1y*e2z - e1z*e2y; ny = e1z*e2x - e1x*e2z; nz = e1x*e2y - e1y*e2x;
-    float cx=(vpx[0]+vpx[1]+vpx[2])/3, cy=(vpy[0]+vpy[1]+vpy[2])/3, cz=(vpz[0]+vpz[1]+vpz[2])/3;
-    if (nx*cx + ny*cy + nz*cz > 0) { nx=-nx; ny=-ny; nz=-nz; }   // flip to face the camera at origin
-    float len = sqrtf(nx*nx + ny*ny + nz*nz);
-    if (len > 1e-6f) { nx/=len; ny/=len; nz/=len; } else { nx=ny=nz=0; }
-  }
   for (int i = 0; i < 3; i++) {
     t[i].x = xs[i]; t[i].y = ys[i]; t[i].u = us[i]; t[i].v = vs[i];
     t[i].r = rs[i]/255.f; t[i].g = gs[i]/255.f; t[i].b = bs[i]/255.f;
-    t[i].nx = nx; t[i].ny = ny; t[i].nz = nz; t[i].depth = vpz ? vpz[i] : 0.f;
     t[i].tp[0] = tpx; t[i].tp[1] = tpy; t[i].tp[2] = mode; t[i].tp[3] = raw;
     t[i].clut[0] = clutx; t[i].clut[1] = cluty; t[i].clut[2] = semi; t[i].clut[3] = blend;
     t[i].tw[0] = twmx; t[i].tw[1] = twmy; t[i].tw[2] = twox; t[i].tw[3] = twoy;
     t[i].da[0] = dax0; t[i].da[1] = day0; t[i].da[2] = dax1; t[i].da[3] = day1;
   }
 }
-// Float-position triangle (PGXP vertex-smoothing path). vp{x,y,z} = view-space verts for lighting (NULL=2D).
-void gpu_vk_draw_tritri_f(const float* xs, const float* ys, const int* us, const int* vs,
-                          const unsigned char* rs, const unsigned char* gs, const unsigned char* bs,
-                          const float* vpx, const float* vpy, const float* vpz,
-                          int tpx, int tpy, int mode, int raw, int clutx, int cluty,
-                          int twmx, int twmy, int twox, int twoy,
-                          int dax0, int day0, int dax1, int day1) {
-  if (!s_inited || s_tex_n + 3 > TEX_CAP) return;
-  tex_emit((TexVtx*)s_tvbuf_ptr + s_tex_n, xs, ys, us, vs, rs, gs, bs, vpx, vpy, vpz, tpx, tpy, mode, raw, clutx, cluty,
-           twmx, twmy, twox, twoy, dax0, day0, dax1, day1, 0, 0);
-  s_tex_n += 3;
-}
 void gpu_vk_draw_tritri(const int* xs, const int* ys, const int* us, const int* vs,
                         const unsigned char* rs, const unsigned char* gs, const unsigned char* bs,
                         int tpx, int tpy, int mode, int raw, int clutx, int cluty,
                         int twmx, int twmy, int twox, int twoy,
                         int dax0, int day0, int dax1, int day1) {
-  float fx[3] = { (float)xs[0], (float)xs[1], (float)xs[2] };
-  float fy[3] = { (float)ys[0], (float)ys[1], (float)ys[2] };
-  gpu_vk_draw_tritri_f(fx, fy, us, vs, rs, gs, bs, 0, 0, 0, tpx, tpy, mode, raw, clutx, cluty,
-                       twmx, twmy, twox, twoy, dax0, day0, dax1, day1);
+  if (!s_inited || s_tex_n + 3 > TEX_CAP) return;
+  tex_emit((TexVtx*)s_tvbuf_ptr + s_tex_n, xs, ys, us, vs, rs, gs, bs, tpx, tpy, mode, raw, clutx, cluty,
+           twmx, twmy, twox, twoy, dax0, day0, dax1, day1, 0, 0);
+  s_tex_n += 3;
 }
 // Semi-transparent triangle (mode 3 = untextured flat). Drawn AFTER opaque, blending against the
 // framebuffer snapshot, per `blend` (0=avg,1=add,2=sub,3=add/4).
-void gpu_vk_draw_semi_f(const float* xs, const float* ys, const int* us, const int* vs,
-                        const unsigned char* rs, const unsigned char* gs, const unsigned char* bs,
-                        const float* vpx, const float* vpy, const float* vpz,
-                        int tpx, int tpy, int mode, int raw, int clutx, int cluty,
-                        int twmx, int twmy, int twox, int twoy,
-                        int dax0, int day0, int dax1, int day1, int blend) {
-  if (!s_inited || s_semi_n + 3 > TEX_CAP) return;
-  tex_emit((TexVtx*)s_semibuf_ptr + s_semi_n, xs, ys, us, vs, rs, gs, bs, vpx, vpy, vpz, tpx, tpy, mode, raw, clutx, cluty,
-           twmx, twmy, twox, twoy, dax0, day0, dax1, day1, 1, blend);
-  s_semi_n += 3;
-}
 void gpu_vk_draw_semi(const int* xs, const int* ys, const int* us, const int* vs,
                       const unsigned char* rs, const unsigned char* gs, const unsigned char* bs,
                       int tpx, int tpy, int mode, int raw, int clutx, int cluty,
                       int twmx, int twmy, int twox, int twoy,
                       int dax0, int day0, int dax1, int day1, int blend) {
-  float fx[3] = { (float)xs[0], (float)xs[1], (float)xs[2] };
-  float fy[3] = { (float)ys[0], (float)ys[1], (float)ys[2] };
-  gpu_vk_draw_semi_f(fx, fy, us, vs, rs, gs, bs, 0, 0, 0, tpx, tpy, mode, raw, clutx, cluty,
-                     twmx, twmy, twox, twoy, dax0, day0, dax1, day1, blend);
+  if (!s_inited || s_semi_n + 3 > TEX_CAP) return;
+  tex_emit((TexVtx*)s_semibuf_ptr + s_semi_n, xs, ys, us, vs, rs, gs, bs, tpx, tpy, mode, raw, clutx, cluty,
+           twmx, twmy, twox, twoy, dax0, day0, dax1, day1, 1, blend);
+  s_semi_n += 3;
 }
 
 // Self-test: clear VRAM, draw batched tris into it, read back. Returns the readback (uint16 VRAM).
@@ -877,7 +826,7 @@ static void tri_render_and_readback(uint16_t* out) {
   VkViewport vpt = { 0, 0, VRAM_W, VRAM_H, 0.0f, 1.0f };
   VkRect2D sc = { {0,0}, { VRAM_W, VRAM_H } };
   vkCmdSetViewport(s_cmd, 0, 1, &vpt); vkCmdSetScissor(s_cmd, 0, 1, &sc);
-  push_wide(0); push_light();
+  push_wide(0);
   vkCmdBindPipeline(s_cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, s_tri_pipe);
   VkDeviceSize off = 0; vkCmdBindVertexBuffers(s_cmd, 0, 1, &s_vbuf, &off);
   if (s_tri_n) vkCmdDraw(s_cmd, s_tri_n, 1, 0, 0);
@@ -950,7 +899,7 @@ static void tri_over_bg_readback(const uint16_t* bg, uint16_t* out) {
   vkCmdBeginRenderPass(s_cmd, &rp, VK_SUBPASS_CONTENTS_INLINE);
   VkViewport vpt = { 0, 0, VRAM_W, VRAM_H, 0.0f, 1.0f }; VkRect2D sc = { {0,0}, { VRAM_W, VRAM_H } };
   vkCmdSetViewport(s_cmd, 0, 1, &vpt); vkCmdSetScissor(s_cmd, 0, 1, &sc);
-  push_wide(0); push_light();
+  push_wide(0);
   vkCmdBindDescriptorSets(s_cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, s_pll, 0, 1, &s_dset_tex, 0, 0);
   VkDeviceSize off = 0;
   if (s_tri_n) { vkCmdBindPipeline(s_cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, s_tri_pipe);
@@ -1087,22 +1036,4 @@ void gpu_vk_draw_semi(const int* xs, const int* ys, const int* us, const int* vs
   (void)xs;(void)ys;(void)us;(void)vs;(void)rs;(void)gs;(void)bs;(void)tpx;(void)tpy;(void)mode;(void)raw;
   (void)clutx;(void)cluty;(void)twmx;(void)twmy;(void)twox;(void)twoy;(void)dax0;(void)day0;(void)dax1;(void)day1;(void)blend;
 }
-void gpu_vk_draw_tritri_f(const float* xs, const float* ys, const int* us, const int* vs,
-                          const unsigned char* rs, const unsigned char* gs, const unsigned char* bs,
-                          const float* vpx, const float* vpy, const float* vpz,
-                          int tpx, int tpy, int mode, int raw, int clutx, int cluty,
-                          int twmx, int twmy, int twox, int twoy,
-                          int dax0, int day0, int dax1, int day1) {
-  (void)xs;(void)ys;(void)us;(void)vs;(void)rs;(void)gs;(void)bs;(void)vpx;(void)vpy;(void)vpz;(void)tpx;(void)tpy;(void)mode;(void)raw;
-  (void)clutx;(void)cluty;(void)twmx;(void)twmy;(void)twox;(void)twoy;(void)dax0;(void)day0;(void)dax1;(void)day1;
-}
-void gpu_vk_draw_semi_f(const float* xs, const float* ys, const int* us, const int* vs, const unsigned char* rs,
-                        const unsigned char* gs, const unsigned char* bs,
-                        const float* vpx, const float* vpy, const float* vpz, int tpx, int tpy, int mode, int raw,
-                        int clutx, int cluty, int twmx, int twmy, int twox, int twoy,
-                        int dax0, int day0, int dax1, int day1, int blend) {
-  (void)xs;(void)ys;(void)us;(void)vs;(void)rs;(void)gs;(void)bs;(void)vpx;(void)vpy;(void)vpz;(void)tpx;(void)tpy;(void)mode;(void)raw;
-  (void)clutx;(void)cluty;(void)twmx;(void)twmy;(void)twox;(void)twoy;(void)dax0;(void)day0;(void)dax1;(void)day1;(void)blend;
-}
-void gpu_vk_set_light(const float* l12) { (void)l12; }
 #endif

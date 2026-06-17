@@ -3858,3 +3858,13 @@ Direction: stop black-boxing the graphics; reimplement the engine's draw path in
   cause not yet found (suspect a change between later-93 and now). Reverted the wide experiment to keep the
   tree clean; widescreen is off by default (./run.sh = 4:3, unaffected). NEXT: isolate the wide-FB bars
   (bisect gpu_vk since later-93 / compare live-window vs VK_SHOT), then re-land native widescreen on OFX.
+- **later-99b — wide bars ROOT-CAUSED + tricks removed:** bisected — wide is CLEAN at SS=2, BARS at SS=1.
+  The vertical bars are a wide-FB rasterization gap at native 1x (the 320→428 +54-shifted geometry leaves
+  periodic 1px column gaps that SS=2 covers); NOT my OFX/DrawOTag change (bars persist with both reverted).
+  My SS default 2→1 exposed it. Action: **reset the renderer (gpu_vk.c/gpu_native.c/shaders) to the clean
+  pre-session state (e6de790), removing the user-rejected PGXP + lighting tricks entirely**; re-applied only
+  SS=1 default + the scene classifier (RE tool). Native projection + DrawOTag overrides (game_tomba2) kept,
+  re-verified **0-pixel-diff** vs recomp on the default path. Default ./run.sh = 4:3 native, clean, no tricks.
+  OPEN: widescreen still needs the 1x wide-FB gap fixed (gap-free without SS) before re-enabling — the gap
+  mechanism (1px columns at 1:1 raster of the +54-shifted geometry) is the next renderer target.
+  (gte_beetle still defines PGXP_pushSXYZ2f — required by Beetle's gte.c — but its cache is now unused/dead.)

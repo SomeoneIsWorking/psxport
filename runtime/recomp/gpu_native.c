@@ -498,43 +498,23 @@ static void gp0_exec(void) {
     // VK backend (M5): tee polys to the GPU rasterizer in absolute VRAM coords. Opaque textured/
     // untextured -> opaque batch; semi -> semi batch (mode 3 = untextured flat). VK owns these now.
     if (gpu_vk_enabled()) {
-      void gpu_vk_draw_tritri_f(const float*,const float*,const int*,const int*,const unsigned char*,
-                                const unsigned char*,const unsigned char*,const float*,const float*,const float*,
-                                int,int,int,int,int,int,int,int,int,int,int,int,int,int);
-      void gpu_vk_draw_semi_f(const float*,const float*,const int*,const int*,const unsigned char*,
-                              const unsigned char*,const unsigned char*,const float*,const float*,const float*,
-                              int,int,int,int,int,int,int,int,int,int,int,int,int,int,int);
-      // Vertex smoothing (PGXP): replace each integer screen vertex with the GTE's subpixel-precise
-      // projected position (cached in gte_beetle.c, keyed by the packed int SXY) so 3D geometry stops
-      // wobbling. Cache miss -> integer fallback. Gated PSXPORT_PGXP (default on; =0 for A/B vs oracle).
-      int pgxp_lookup(int, int, float*, float*, float*);
-      int pgxp_lookup_view(int, int, float*, float*, float*);
-      static int s_pgxp_on = -1;
-      if (s_pgxp_on < 0) { const char* e = getenv("PSXPORT_PGXP"); s_pgxp_on = (e && atoi(e)) ? 1 : 0; }  // default OFF: value-keyed vertex smoothing is a rejected GP0-stream trick
-      float xs[4], ys[4]; int us[4], vs[4]; unsigned char rs[4], gs[4], bs[4];
-      // view-space positions for native lighting (per-face normal): all verts must hit the PGXP cache
-      // or we pass NULL (unlit, integer fallback). 2D HUD bypasses the GTE so it never hits -> stays unlit.
-      float vpx[4], vpy[4], vpz[4]; int have_view = s_pgxp_on;
-      for (int i = 0; i < nv; i++) {
-        float px, py;
-        if (s_pgxp_on && pgxp_lookup(v[i].x, v[i].y, &px, &py, 0)) { xs[i] = px + s_off_x; ys[i] = py + s_off_y; }
-        else { xs[i] = (float)(v[i].x + s_off_x); ys[i] = (float)(v[i].y + s_off_y); }
-        if (have_view && !pgxp_lookup_view(v[i].x, v[i].y, &vpx[i], &vpy[i], &vpz[i])) have_view = 0;
-        us[i]=v[i].u; vs[i]=v[i].v; rs[i]=v[i].r; gs[i]=v[i].g; bs[i]=v[i].b;
-      }
-      const float *lx = have_view ? vpx : 0, *ly = have_view ? vpy : 0, *lz = have_view ? vpz : 0;
+      void gpu_vk_draw_tritri(const int*,const int*,const int*,const int*,const unsigned char*,
+                              const unsigned char*,const unsigned char*,int,int,int,int,int,int,int,int,int,int,int,int,int,int);
+      void gpu_vk_draw_semi(const int*,const int*,const int*,const int*,const unsigned char*,
+                            const unsigned char*,const unsigned char*,int,int,int,int,int,int,int,int,int,int,int,int,int,int,int);
+      int xs[4], ys[4], us[4], vs[4]; unsigned char rs[4], gs[4], bs[4];
+      for (int i = 0; i < nv; i++) { xs[i]=v[i].x+s_off_x; ys[i]=v[i].y+s_off_y; us[i]=v[i].u; vs[i]=v[i].v;
+                                     rs[i]=v[i].r; gs[i]=v[i].g; bs[i]=v[i].b; }
       int mode = textured ? s_tp_mode : 3, rw = raw ? 1 : 0;
       if (semi) {
-        gpu_vk_draw_semi_f(xs, ys, us, vs, rs, gs, bs, lx, ly, lz, s_tp_x, s_tp_y, mode, rw, s_clut_x, s_clut_y,
+        gpu_vk_draw_semi(xs, ys, us, vs, rs, gs, bs, s_tp_x, s_tp_y, mode, rw, s_clut_x, s_clut_y,
                          s_tw_mx, s_tw_my, s_tw_ox, s_tw_oy, s_da_x0, s_da_y0, s_da_x1, s_da_y1, s_tp_blend);
-        if (nv == 4) gpu_vk_draw_semi_f(&xs[1], &ys[1], &us[1], &vs[1], &rs[1], &gs[1], &bs[1],
-                         lx?lx+1:0, ly?ly+1:0, lz?lz+1:0, s_tp_x, s_tp_y, mode, rw,
+        if (nv == 4) gpu_vk_draw_semi(&xs[1], &ys[1], &us[1], &vs[1], &rs[1], &gs[1], &bs[1], s_tp_x, s_tp_y, mode, rw,
                          s_clut_x, s_clut_y, s_tw_mx, s_tw_my, s_tw_ox, s_tw_oy, s_da_x0, s_da_y0, s_da_x1, s_da_y1, s_tp_blend);
       } else {
-        gpu_vk_draw_tritri_f(xs, ys, us, vs, rs, gs, bs, lx, ly, lz, s_tp_x, s_tp_y, mode, rw, s_clut_x, s_clut_y,
+        gpu_vk_draw_tritri(xs, ys, us, vs, rs, gs, bs, s_tp_x, s_tp_y, mode, rw, s_clut_x, s_clut_y,
                            s_tw_mx, s_tw_my, s_tw_ox, s_tw_oy, s_da_x0, s_da_y0, s_da_x1, s_da_y1);
-        if (nv == 4) gpu_vk_draw_tritri_f(&xs[1], &ys[1], &us[1], &vs[1], &rs[1], &gs[1], &bs[1],
-                           lx?lx+1:0, ly?ly+1:0, lz?lz+1:0, s_tp_x, s_tp_y, mode, rw,
+        if (nv == 4) gpu_vk_draw_tritri(&xs[1], &ys[1], &us[1], &vs[1], &rs[1], &gs[1], &bs[1], s_tp_x, s_tp_y, mode, rw,
                            s_clut_x, s_clut_y, s_tw_mx, s_tw_my, s_tw_ox, s_tw_oy, s_da_x0, s_da_y0, s_da_x1, s_da_y1);
       }
     }
@@ -1182,32 +1162,6 @@ void gpu_present_ex(int do_blit) {
   }
   { void gpu_vk_dump(int,int,int,int,int); gpu_vk_dump(s_disp_x, s_disp_y, s_disp_w, s_disp_h, s_frame); }  // PSXPORT_VK_SHOT
   { void gpu_vk_frame_end(const uint16_t*, int); gpu_vk_frame_end(s_vram, s_frame); }  // VK: diff + batch reset
-  { void gte_probe_dump(const char*); static int gp = -1;   // PSXPORT_GTEPROBE=frame: dump GTE/lighting RE probe once
-    if (gp == -2) {} else { if (gp == -1) { const char* e = getenv("PSXPORT_GTEPROBE"); gp = e ? atoi(e) : -2; }
-      if (gp >= 0 && s_frame == gp) { char t[24]; snprintf(t,sizeof t,"f%d",s_frame); gte_probe_dump(t); gp = -2; } } }
-  // Native lighting engine config (one-shot, env-driven). PSXPORT_LIGHT: 0=off 1=directional 2=normal-viz.
-  // LIGHT_DIR="x,y,z" (view space, default upper-left toward camera), LIGHT_AMB / LIGHT_DIFF scalars,
-  // FOG=1 + FOG_NEAR/FOG_FAR/FOG_RGB for native distance fog. See docs/engine_re.md (lighting model).
-  { void gpu_vk_set_light(const float*); static int done = 0;
-    if (!done) { done = 1;
-      float L[12] = {0,0,0,0, 1,0,0,0, 0,0,0,0};
-      const char* m = getenv("PSXPORT_LIGHT");
-      if (m) { float dx=-0.4f,dy=-0.6f,dz=-0.7f, amb=0.55f, diff=0.6f;
-        const char* d = getenv("PSXPORT_LIGHT_DIR"); if (d) sscanf(d, "%f,%f,%f", &dx,&dy,&dz);
-        const char* a = getenv("PSXPORT_LIGHT_AMB"); if (a) amb = atof(a);
-        const char* df = getenv("PSXPORT_LIGHT_DIFF"); if (df) diff = atof(df);
-        L[0]=dx; L[1]=dy; L[2]=dz; L[3]=(float)atoi(m); L[4]=amb; L[5]=diff;
-      }
-      const char* fg = getenv("PSXPORT_FOG");
-      if (fg && atoi(fg)) { float n=200, f=2000, fr=0,fgc=0,fb=0;
-        const char* nn=getenv("PSXPORT_FOG_NEAR"); if(nn) n=atof(nn);
-        const char* ff=getenv("PSXPORT_FOG_FAR");  if(ff) f=atof(ff);
-        const char* rg=getenv("PSXPORT_FOG_RGB");  if(rg) sscanf(rg,"%f,%f,%f",&fr,&fgc,&fb);
-        L[6]=n; L[7]=f; L[8]=fr; L[9]=fgc; L[10]=fb; L[11]=1;
-      }
-      gpu_vk_set_light(L);
-    } }
-  { void pgxp_frame_reset(void); pgxp_frame_reset(); }   // drop this frame's PGXP subpixel cache
   s_frame++; s_prims = 0; s_gp0_words = 0; s_dma2 = 0;
 }
 void gpu_present(void) { gpu_present_ex(1); }
@@ -1250,70 +1204,46 @@ void gpu_prov_dump(int vx, int vy) {
           m->r, m->g, m->b, m->x0, m->y0, m->u0, m->v0);
 }
 
-// --- Native scene accounting (graphics OWNERSHIP, later-99) -------------------------------------
-// A read-only walk of the SAME ordering table DrawOTag DMAs, classifying every primitive into the
-// engine-meaningful categories — so the port can ACCOUNT for each draw instead of blindly rasterizing
-// the GP0 byte stream. Especially: VRAM->VRAM copies (MoveImage = reflection/fade buffers), VRAM fills,
-// and full-screen flat/semi overlays (the fade tiles) + draw-area/offset env state. PSXPORT_SCENEDUMP=N.
-static int gp0_cmd_len(uint8_t op, uint32_t c0) {
-  if (op >= 0x20 && op <= 0x3F) {                 // polygon
-    int nv = (op & 0x08) ? 4 : 3, per = 1 + ((op & 0x04) ? 1 : 0) + ((op & 0x10) ? 1 : 0);
-    return 1 + nv * per - ((op & 0x10) ? 1 : 0);  // gouraud reuses cmd word for v0 colour
-  }
-  if (op >= 0x40 && op <= 0x5F) return 0;          // line / poly-line: variable (terminated) — skip len
-  if (op >= 0x60 && op <= 0x7F) {                  // rect/sprite
-    int t = (op & 0x04) ? 1 : 0, sz = (op >> 3) & 3;
-    return 1 + 1 + t + (sz == 0 ? 1 : 0);          // cmd + xy + (uv) + (wh if size 0)
-  }
-  if (op == 0x02) return 3;                        // fill
-  if (op >= 0x80 && op <= 0x9F) return 4;          // VRAM->VRAM copy
-  if (op >= 0xA0 && op <= 0xBF) return 3;          // CPU->VRAM (header; data follows separately)
-  if (op >= 0xC0 && op <= 0xDF) return 3;          // VRAM->CPU
-  if (op >= 0xE1 && op <= 0xE6) return 1;          // env
+// --- Native scene accounting (graphics OWNERSHIP) -----------------------------------------------
+// Read-only walk of the same OT DrawOTag DMAs, classifying every primitive into engine-meaningful
+// categories so the port can ACCOUNT for each draw (VRAM copies = reflection/fade buffers, fills,
+// large/semi overlays = fade tiles, env). PSXPORT_SCENEDUMP=N. (later-99)
+static int gp0_cmd_len(uint8_t op) {
+  if (op >= 0x20 && op <= 0x3F) { int nv = (op & 0x08) ? 4 : 3, per = 1 + ((op & 0x04) ? 1 : 0) + ((op & 0x10) ? 1 : 0);
+    return 1 + nv * per - ((op & 0x10) ? 1 : 0); }
+  if (op >= 0x40 && op <= 0x5F) return 0;
+  if (op >= 0x60 && op <= 0x7F) { int t = (op & 0x04) ? 1 : 0, sz = (op >> 3) & 3; return 1 + 1 + t + (sz == 0 ? 1 : 0); }
+  if (op == 0x02) return 3;
+  if (op >= 0x80 && op <= 0x9F) return 4;
+  if (op >= 0xA0 && op <= 0xDF) return 3;
   return 1;
 }
 static void gpu_scene_dump(uint32_t madr) {
   uint32_t addr = madr & 0x1FFFFC;
-  int ax0 = 0, ay0 = 0, ax1 = 1023, ay1 = 511, ox = 0, oy = 0;     // tracked draw-area + offset (env)
   int npoly = 0, nrect = 0, nline = 0, nfill = 0, ncopy = 0, nup = 0, nenv = 0;
   fprintf(stderr, "[scene] f%d OT@0x%08X — classified display list:\n", s_frame, 0x80000000u | addr);
   for (int g = 0; g < 0x10000; g++) {
-    uint32_t hdr = mem_r32(addr); int n = hdr >> 24;
-    int i = 0;
-    while (i < n) {                                  // a node may pack several GP0 commands (DR_* env)
+    uint32_t hdr = mem_r32(addr); int n = hdr >> 24, i = 0;
+    while (i < n) {
       uint32_t c = mem_r32(addr + 4 + i * 4); uint8_t op = c >> 24;
-      int len = gp0_cmd_len(op, c); if (len <= 0) { break; }   // variable (lines) — stop scanning node
+      int len = gp0_cmd_len(op); if (len <= 0) break;
       uint32_t w1 = (i + 1 < n) ? mem_r32(addr + 4 + (i + 1) * 4) : 0;
       uint32_t w2 = (i + 2 < n) ? mem_r32(addr + 4 + (i + 2) * 4) : 0;
-      if (op == 0xE3) { ax0 = c & 0x3FF; ay0 = (c >> 10) & 0x1FF; nenv++; }
-      else if (op == 0xE4) { ax1 = c & 0x3FF; ay1 = (c >> 10) & 0x1FF; nenv++; }
-      else if (op == 0xE5) { ox = ((int)(c & 0x7FF) << 21) >> 21; oy = ((int)((c >> 11) & 0x7FF) << 21) >> 21; nenv++; }
-      else if (op >= 0xE1 && op <= 0xE6) nenv++;
-      else if (op == 0x02) { nfill++;
-        fprintf(stderr, "  FILL  rgb=(%d,%d,%d) at(%d,%d) %dx%d\n", c&0xFF,(c>>8)&0xFF,(c>>16)&0xFF,
-                w1&0x3FF,(w1>>16)&0x1FF, w2&0x3FF,(w2>>16)&0x1FF); }
-      else if (op >= 0x80 && op <= 0x9F) { ncopy++;
-        uint32_t w3 = (i+3<n)?mem_r32(addr+4+(i+3)*4):0;
-        fprintf(stderr, "  COPY  VRAM->VRAM src(%d,%d) -> dst(%d,%d) %dx%d  [reflection/fade-buffer]\n",
-                w1&0x3FF,(w1>>16)&0x1FF, w2&0x3FF,(w2>>16)&0x1FF, w3&0x3FF,(w3>>16)&0x1FF); }
+      if (op == 0x02) { nfill++; fprintf(stderr, "  FILL rgb=(%d,%d,%d) at(%d,%d) %dx%d\n",
+          c&0xFF,(c>>8)&0xFF,(c>>16)&0xFF, w1&0x3FF,(w1>>16)&0x1FF, w2&0x3FF,(w2>>16)&0x1FF); }
+      else if (op >= 0x80 && op <= 0x9F) { ncopy++; uint32_t w3 = (i+3<n)?mem_r32(addr+4+(i+3)*4):0;
+        fprintf(stderr, "  COPY src(%d,%d)->dst(%d,%d) %dx%d [reflection/fade]\n",
+          w1&0x3FF,(w1>>16)&0x1FF, w2&0x3FF,(w2>>16)&0x1FF, w3&0x3FF,(w3>>16)&0x1FF); }
       else if (op >= 0xA0 && op <= 0xBF) nup++;
+      else if (op >= 0xE1 && op <= 0xE6) nenv++;
       else if (op >= 0x20 && op <= 0x3F) { npoly++;
-        int semi = (op>>1)&1, tex=(op>>2)&1;
-        // poly v0 xy = word after cmd (mono) — flag big/semi flat overlays (fade candidates)
-        int vx = (int)(w1 & 0x7FF); if (vx>=0x400) vx-=0x800; int vy=(int)((w1>>16)&0x7FF); if(vy>=0x400) vy-=0x800;
-        if (semi && !tex) fprintf(stderr, "  POLY  semi flat rgb=(%d,%d,%d) v0=(%d,%d) off=(%d,%d) clip[%d,%d-%d,%d]  [fade/overlay?]\n",
-                c&0xFF,(c>>8)&0xFF,(c>>16)&0xFF, vx,vy, ox,oy, ax0,ay0,ax1,ay1); }
-      else if (op >= 0x60 && op <= 0x7F) { nrect++;
-        int semi=(op>>1)&1, w=(((op>>3)&3)==0)?(int)(w2&0x3FF):(((op>>3)&3)==1?1:(((op>>3)&3)==2?8:16));
-        int rx=(int)(w1&0x7FF); if(rx>=0x400) rx-=0x800; int ry=(int)((w1>>16)&0x7FF); if(ry>=0x400) ry-=0x800;
-        if (w >= 256) fprintf(stderr, "  RECT  %s rgb=(%d,%d,%d) at(%d,%d) w~%d off=(%d,%d)  [large/overlay?]\n",
-                semi?"semi":"opaque", c&0xFF,(c>>8)&0xFF,(c>>16)&0xFF, rx,ry, w, ox,oy); }
+        if (((op>>1)&1) && !((op>>2)&1)) fprintf(stderr, "  POLY semi flat rgb=(%d,%d,%d) [fade/overlay?]\n",
+          c&0xFF,(c>>8)&0xFF,(c>>16)&0xFF); }
+      else if (op >= 0x60 && op <= 0x7F) nrect++;
       else if (op >= 0x40 && op <= 0x5F) { nline++; break; }
       i += len;
     }
-    uint32_t next = hdr & 0xFFFFFF;
-    if (next == 0xFFFFFF || next == 0) break;
-    addr = next & 0x1FFFFC;
+    uint32_t next = hdr & 0xFFFFFF; if (next == 0xFFFFFF || next == 0) break; addr = next & 0x1FFFFC;
   }
   fprintf(stderr, "[scene] f%d totals: poly=%d rect=%d line=%d fill=%d vramcopy=%d upload=%d env=%d\n",
           s_frame, npoly, nrect, nline, nfill, ncopy, nup, nenv);

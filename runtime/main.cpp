@@ -1496,6 +1496,15 @@ int main(int argc, char** argv)
         else
           fprintf(stderr, "[repl] dumpram: cannot open %s\n", argbuf2);
       }
+      else if (strcmp(cmd, "dumpvram") == 0 && sscanf(line, "%*s %1023s", argbuf2) == 1)
+      {
+        // Snapshot the native 1024x512x16 GPU VRAM — pairs with `dumpram` to capture the FULL
+        // game state at a scene, for transplanting into the port (state-synced render compare).
+        uint16_t* vr = GPU_get_vram();
+        FILE* fp = vr ? fopen(argbuf2, "wb") : nullptr;
+        if (fp) { fwrite(vr, 2, 1024 * 512, fp); fclose(fp); fprintf(stderr, "[repl] dumpvram -> %s\n", argbuf2); }
+        else fprintf(stderr, "[repl] dumpvram: %s\n", vr ? "cannot open file" : "no VRAM (needs 1x SW)");
+      }
       else if (strcmp(cmd, "shot") == 0 && sscanf(line, "%*s %1023s", argbuf2) == 1)
       {
         // Dump the last presented framebuffer (cached in VideoCb). Writes PNG when
