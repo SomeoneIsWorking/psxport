@@ -43,6 +43,8 @@ void gpu_native_shot(const char* path);
 int  gpu_sbs_get(void);
 void gpu_sbs_set(int on);
 int  gpu_frame_no(void);
+int  gpu_vk_enabled(void);
+void gpu_vk_shot(const char* path);
 
 // --- main<->server handoff: a single pending request, serviced on the main thread once per frame --
 static pthread_mutex_t s_mtx  = PTHREAD_MUTEX_INITIALIZER;
@@ -90,10 +92,17 @@ static void dbg_exec(FILE* out, const char* line) {
   } else if (!strcmp(cmd, "provat") && sscanf(line, "%*s %u %u", &a, &b) == 2) {
     gpu_provat_display(out, (int)a, (int)b);
   } else if (!strcmp(cmd, "shot")) {
+    // Capture what is actually PRESENTED: VK readback when VK is the active renderer, else the SW
+    // display region. (Under VK the SW s_vram has only uploads, not the rasterized geometry.)
     char path[256] = "scratch/screenshots/dbg.ppm";
     sscanf(line, "%*s %255s", path);
-    gpu_native_shot(path);
-    fprintf(out, "shot -> %s\n", path);
+    if (gpu_vk_enabled()) { gpu_vk_shot(path); fprintf(out, "shot (VK) -> %s\n", path); }
+    else                  { gpu_native_shot(path); fprintf(out, "shot (SW) -> %s\n", path); }
+  } else if (!strcmp(cmd, "vkshot")) {
+    char path[256] = "scratch/screenshots/dbg_vk.ppm";
+    sscanf(line, "%*s %255s", path);
+    gpu_vk_shot(path);
+    fprintf(out, "vkshot -> %s\n", path);
   } else if (!strcmp(cmd, "gputrace")) {
     char path[256] = "scratch/bin/dbg_gp0.bin";
     sscanf(line, "%*s %255s", path);

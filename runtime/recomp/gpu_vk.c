@@ -113,6 +113,7 @@ typedef struct { int x, y, w, h; } VkRect;
 #define DIRTY_CAP 4096
 static VkRect s_dirty[DIRTY_CAP];
 static int    s_dirty_n;
+static int s_last_sx, s_last_sy, s_last_w = 320, s_last_h = 240;   // last-presented region (gpu_vk_shot)
 void gpu_vk_dirty(int x, int y, int w, int h) {
   if (s_dirty_n >= DIRTY_CAP || w <= 0 || h <= 0) return;
   if (x < 0) { w += x; x = 0; } if (y < 0) { h += y; y = 0; }
@@ -620,6 +621,7 @@ void gpu_vk_present(const uint16_t* src, int sx, int sy, int w, int h) {
   // Wide: present the 16:9 scratch FB 1:1 (no stretch — it was rendered at a true wider FOV). Else
   // present the PSX display region fit to 4:3.
   if (s_wide) { sx = 0; sy = FB_Y0; w = FBW(); h = FBH(); }
+  s_last_sx = sx; s_last_sy = sy; s_last_w = w; s_last_h = h;   // for on-demand gpu_vk_shot (debug server)
   int aw = s_wide ? 16 : 4, ah = s_wide ? 9 : 3;
   int ow = s_extent.width, oh = s_extent.height, dw, dh;
   if (ow * ah >= oh * aw) { dh = oh; dw = oh * aw / ah; } else { dw = ow; dh = ow * ah / aw; }
@@ -947,6 +949,13 @@ static void vk_dump_to(const char* path, int sx, int sy, int w, int h) {
     fwrite(c, 1, 3, f); }
   fclose(f);
 }
+// On-demand VK readback for the live debug server (dbg_server.c `vkshot`): dump the last-presented
+// VK-rendered region to `path` as a PPM — i.e. exactly what VK put on screen this frame.
+void gpu_vk_shot(const char* path) {
+  if (!gpu_vk_enabled() || !s_inited) { fprintf(stderr, "[vk_shot] VK not active\n"); return; }
+  vk_dump_to(path, s_last_sx, s_last_sy, s_last_w, s_last_h);
+  fprintf(stderr, "[vk_shot] wrote %s (%dx%d @ %d,%d)\n", path, s_last_w, s_last_h, s_last_sx, s_last_sy);
+}
 // PSXPORT_VK_SHOT=frame -> single dump to scratch/screenshots/vk_live.ppm.
 // PSXPORT_VK_SHOTSEQ="first:last:step:dir" -> dump EVERY step-th frame in [first,last] to
 // dir/vk_<frame>.ppm. The sequence is what catches intermittent/flickering bugs (e.g. water that
@@ -1030,6 +1039,7 @@ void gpu_vk_present(const uint16_t* src, int sx, int sy, int w, int h) { (void)s
 void gpu_vk_tritest(void) {}
 void gpu_vk_frame_end(const uint16_t* svram, int frame) { (void)svram; (void)frame; }
 void gpu_vk_dump(int sx, int sy, int w, int h, int frame) { (void)sx;(void)sy;(void)w;(void)h;(void)frame; }
+void gpu_vk_shot(const char* path) { (void)path; }
 void gpu_vk_dirty(int x, int y, int w, int h) { (void)x;(void)y;(void)w;(void)h; }
 void gpu_vk_draw_tri(int a,int b,int c,int d,int e,int f,int g,int h,int i,int j,int k,int l,int m,int n,int o) {
   (void)a;(void)b;(void)c;(void)d;(void)e;(void)f;(void)g;(void)h;(void)i;(void)j;(void)k;(void)l;(void)m;(void)n;(void)o;

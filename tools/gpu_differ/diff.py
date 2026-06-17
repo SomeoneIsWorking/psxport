@@ -63,6 +63,29 @@ def main():
     total = w * h
     print(f"region ({x0},{y0}) {w}x{h} = {total} px  |  differing: {len(diffs)} "
           f"({100.0*len(diffs)/total:.3f}%)  mask-compared={a.mask}")
+
+    # --ppm always writes ours/beetle/absdiff (even on an identical region) so the render can be
+    # VIEWED, not just diffed (e.g. "is the puddle actually drawn by SW?"). Written before the
+    # identical-early-return below.
+    if a.ppm:
+        import os
+        os.makedirs(a.ppm, exist_ok=True)
+        def write_ppm(name, fn):
+            with open(os.path.join(a.ppm, name), "wb") as f:
+                f.write(f"P6\n{w} {h}\n255\n".encode())
+                buf = bytearray()
+                for y in range(y0, y0 + h):
+                    for x in range(x0, x0 + w):
+                        buf += bytes(fn(A[y*VW+x], B[y*VW+x]))
+                f.write(buf)
+        write_ppm("ours.ppm",   lambda pa, pb: [c << 3 for c in rgb(pa)])
+        write_ppm("beetle.ppm", lambda pa, pb: [c << 3 for c in rgb(pb)])
+        def adf(pa, pb):
+            ra, ga, ba = rgb(pa & 0x7FFF); rb, gb, bb = rgb(pb & 0x7FFF)
+            return [min(255, abs(ra-rb) << 5), min(255, abs(ga-gb) << 5), min(255, abs(ba-bb) << 5)]
+        write_ppm("absdiff.ppm", adf)
+        print(f"wrote {a.ppm}/ours.ppm beetle.ppm absdiff.ppm")
+
     if not diffs:
         print("IDENTICAL ✓")
         return
@@ -79,26 +102,6 @@ def main():
         ra, ga, ba = rgb(pa); rb, gb, bb = rgb(pb)
         print(f"  ({x:4d},{y:3d})  ours={pa&0x7FFF:04X}({ra:2d},{ga:2d},{ba:2d}) "
               f"beetle={pb&0x7FFF:04X}({rb:2d},{gb:2d},{bb:2d})  d={d}")
-
-    if a.ppm:
-        import os
-        os.makedirs(a.ppm, exist_ok=True)
-        def write_ppm(name, fn):
-            with open(os.path.join(a.ppm, name), "wb") as f:
-                f.write(f"P6\n{w} {h}\n255\n".encode())
-                buf = bytearray()
-                for y in range(y0, y0 + h):
-                    for x in range(x0, x0 + w):
-                        buf += bytes(fn(A[y*VW+x], B[y*VW+x]))
-                f.write(buf)
-        write_ppm("ours.ppm",   lambda pa, pb: [c << 3 for c in rgb(pa)])
-        write_ppm("beetle.ppm", lambda pa, pb: [c << 3 for c in rgb(pb)])
-        # absdiff: amplify x4 so subtle blend diffs are visible
-        def adf(pa, pb):
-            ra, ga, ba = rgb(pa & 0x7FFF); rb, gb, bb = rgb(pb & 0x7FFF)
-            return [min(255, abs(ra-rb) << 5), min(255, abs(ga-gb) << 5), min(255, abs(ba-bb) << 5)]
-        write_ppm("absdiff.ppm", adf)
-        print(f"wrote {a.ppm}/ours.ppm beetle.ppm absdiff.ppm")
 
 if __name__ == "__main__":
     main()
