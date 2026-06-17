@@ -510,7 +510,7 @@ static void gp0_exec(void) {
       int pgxp_lookup(int, int, float*, float*, float*);
       int pgxp_lookup_view(int, int, float*, float*, float*);
       static int s_pgxp_on = -1;
-      if (s_pgxp_on < 0) { const char* e = getenv("PSXPORT_PGXP"); s_pgxp_on = (e && !atoi(e)) ? 0 : 1; }
+      if (s_pgxp_on < 0) { const char* e = getenv("PSXPORT_PGXP"); s_pgxp_on = (e && atoi(e)) ? 1 : 0; }  // default OFF: value-keyed vertex smoothing is a rejected GP0-stream trick
       float xs[4], ys[4]; int us[4], vs[4]; unsigned char rs[4], gs[4], bs[4];
       // view-space positions for native lighting (per-face normal): all verts must hit the PGXP cache
       // or we pass NULL (unlit, integer fallback). 2D HUD bypasses the GTE so it never hits -> stays unlit.
