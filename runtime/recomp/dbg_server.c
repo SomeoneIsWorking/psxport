@@ -27,6 +27,8 @@
 #include <stdint.h>
 #include <pthread.h>
 #include <unistd.h>
+#include <time.h>
+#include <errno.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
@@ -210,42 +212,53 @@ void dbg_server_service(void) {
   pthread_mutex_unlock(&s_mtx);
 }
 
-// Submit one command to the main thread and block (this server thread only) for the result.
+// Submit one command to the main thread and block (this server thread only) for the result. Uses a
+// timed wait so a slow/hung frame can never permanently wedge the server thread — on timeout it
+// abandons the request and returns an error line, keeping the accept loop responsive.
 static char* dbg_submit(const char* line, size_t* out_len) {
+  struct timespec ts; clock_gettime(CLOCK_REALTIME, &ts); ts.tv_sec += 4;
   pthread_mutex_lock(&s_mtx);
-  while (s_req_pending || s_resp_ready) pthread_cond_wait(&s_done, &s_mtx);  // serialize
+  while (s_req_pending || s_resp_ready)
+    if (pthread_cond_timedwait(&s_done, &s_mtx, &ts) == ETIMEDOUT) { pthread_mutex_unlock(&s_mtx); goto timeout; }
   snprintf(s_cmd, sizeof s_cmd, "%s", line);
   s_req_pending = 1; s_resp_ready = 0;
-  while (!s_resp_ready) pthread_cond_wait(&s_done, &s_mtx);
+  while (!s_resp_ready)
+    if (pthread_cond_timedwait(&s_done, &s_mtx, &ts) == ETIMEDOUT) {
+      s_req_pending = 0;                       // abandon: main may service a stale slot harmlessly
+      pthread_mutex_unlock(&s_mtx); goto timeout;
+    }
   char* buf = s_resp_buf; *out_len = s_resp_len;
   s_resp_buf = NULL; s_resp_ready = 0;
   pthread_cond_broadcast(&s_done);           // wake any other server thread waiting to submit
   pthread_mutex_unlock(&s_mtx);
   return buf;
+timeout:;
+  const char* msg = "(debug server: command timed out — game frozen or busy)\n";
+  char* b = malloc(strlen(msg) + 1); if (b) strcpy(b, msg); *out_len = b ? strlen(msg) : 0;
+  return b;
 }
 
+// ONE command per connection (tools/dbgclient.py opens a fresh connection per command, so this is
+// fully compatible) — robust: a finished or half-open client can never wedge the accept loop in a
+// blocking read for "more lines". A recv timeout is the backstop if a client connects but stalls.
 static void serve_conn(int fd) {
-  char in[1024]; size_t fill = 0;
-  for (;;) {
+  struct timeval tv = { 3, 0 };
+  setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
+  char in[1024]; size_t fill = 0; char* nl = NULL;
+  while (fill < sizeof in - 1) {                    // read until the first newline (one command)
     ssize_t n = read(fd, in + fill, sizeof in - 1 - fill);
     if (n <= 0) break;
     fill += (size_t)n; in[fill] = 0;
-    char* nl;
-    while ((nl = memchr(in, '\n', fill)) != NULL) {
-      *nl = 0;
-      char line[512]; snprintf(line, sizeof line, "%s", in);
-      // strip a trailing CR
-      size_t ll = strlen(line); if (ll && line[ll - 1] == '\r') line[ll - 1] = 0;
-      size_t rest = fill - (size_t)(nl + 1 - in);
-      memmove(in, nl + 1, rest); fill = rest; in[fill] = 0;
-      if (!line[0]) continue;
-      size_t rl = 0; char* resp = dbg_submit(line, &rl);
-      if (resp && rl) { (void)!write(fd, resp, rl); }
-      free(resp);
-      const char* end = "---END---\n";
-      (void)!write(fd, end, strlen(end));
-    }
-    if (fill >= sizeof in - 1) fill = 0;   // overlong line with no newline: drop
+    if ((nl = memchr(in, '\n', fill)) != NULL) break;
+  }
+  if (nl) *nl = 0; else in[fill] = 0;
+  char line[512]; snprintf(line, sizeof line, "%s", in);
+  size_t ll = strlen(line); if (ll && line[ll - 1] == '\r') line[ll - 1] = 0;
+  if (line[0]) {
+    size_t rl = 0; char* resp = dbg_submit(line, &rl);
+    if (resp && rl) (void)!write(fd, resp, rl);
+    free(resp);
+    (void)!write(fd, "---END---\n", 10);
   }
   close(fd);
 }
