@@ -232,6 +232,21 @@ libgpu (all via the 0x800A5998 table; names from debug strings): `FUN_80080f6c`=
   handling the quad reorder and culled-prim pollution. Retires the value-keyed `pgxp_lookup` cache. Verify:
   per-vertex hit rate ~100% for 3D polys (a miss = a 2D/screen-space prim, the free 2D/3D class), and
   rendering 0-diff vs the current PGXP path. Then Phase 2 = PC-native render targets + real depth (view-Z).
+- **Attach infrastructure BUILT + measured; capture point is the open piece** (later-100c, `PSXPORT_ATTACH`).
+  Implemented in gte_beetle.c: `projprim_push/lookup/reset/has_node` (per-frame float store hashed by packet
+  node) + `projprim_capture` (at `gte_op`, reuses the 0-diff `proj_native_vertex`), and a renderer-side
+  verifier in gpu_native.c `gp0_exec` (per-poly-vtx hit/miss by `(s_cur_node, sx, sy)`, reset each present).
+  **Finding:** capturing the node as `mem_r32(0x800bf544)` covers only the RESIDENT project-and-submit fns →
+  **~30% poly-vtx hit rate, and ~95% of misses are NODE-ABSENT.** The dominant overlay projection fns write
+  into the SAME primitive-buffer region (resident packets at ~phys 0xD3xxx, overlay packets at ~0xD9xxx) but
+  via a DIFFERENT running pool-pointer global — so a single hardcoded pool pointer is the wrong (fragile,
+  non-function-agnostic) capture point. **NEXT (decisive): capture by the SXY word's guest ADDRESS, not via
+  any pool-pointer global.** The projection fns store the packed XY_FIFO word to packet memory (resident via
+  recomp stores, overlay via interp stores — both funnel through `mem_w32`). Plan: at `gte_op` push each
+  vertex's packed SXY+float into a small pending ring; hook `mem_w32` (gated) to match a stored value against
+  the pending ring when the target is in the prim-pool region → record float keyed by that store ADDRESS; on
+  the render side track each GP0 word's source guest address (parallel `s_fifo_addr[]` set in
+  `gpu_dma2_linked_list`) and look up float by the vertex word's address. Fully function/pool-agnostic.
 
 ### Native ownership plan (reimplement libgpu, keep recomp body as oracle via rec_set_override)
 1. Own **DrawOTag** (FUN_80080f6c): walk the ordering table in native C, decode each primitive packet by

@@ -322,6 +322,70 @@ void rtpcaller_dump(const char* tag) {
   }
 }
 
+// --- Native projected-prim store (Phase 1 attach-at-submission) ---------------------------------
+// Keyed by the GPU packet base (= the global DAT_800bf544 the project-and-submit fns write SXY into,
+// which IS the OT node DrawOTag later decodes as s_cur_node). Per projected vertex we store its float
+// screen/view-space/depth alongside its integer (sx,sy). The renderer matches a packet vertex to its
+// float by (node, sx, sy): node disambiguates globally (collision-free address), (sx,sy) disambiguates
+// the <=4 verts within one packet (collision-free in practice). Function-agnostic — works for every
+// projection routine (incl. the runtime-overlay ones) since they all funnel SXY through DAT_800bf544.
+#define PP_MAX  65536
+#define PP_HASH 16384
+typedef struct { uint32_t node; int sx, sy; float px, py, pz, vx, vy, vz; int next; } PpEnt;
+static PpEnt s_pp[PP_MAX];
+static int   s_pp_head[PP_HASH];
+static int   s_pp_n = 0, s_pp_inited = 0, s_pp_overflow = 0;
+static inline uint32_t pp_hash(uint32_t node) { return ((node >> 2) * 2654435761u) >> 18 & (PP_HASH - 1); }
+void projprim_reset(void) {
+  s_pp_n = 0; s_pp_overflow = 0;
+  for (int i = 0; i < PP_HASH; i++) s_pp_head[i] = -1;
+  s_pp_inited = 1;
+}
+static void projprim_push(uint32_t node, const ProjVtx* p) {
+  if (!s_pp_inited) projprim_reset();
+  node &= 0x1FFFFC;
+  if (s_pp_n >= PP_MAX) { s_pp_overflow = 1; return; }
+  uint32_t h = pp_hash(node);
+  PpEnt* e = &s_pp[s_pp_n];
+  e->node = node; e->sx = p->sx; e->sy = p->sy;
+  e->px = p->px; e->py = p->py; e->pz = p->pz; e->vx = p->vx; e->vy = p->vy; e->vz = p->vz;
+  e->next = s_pp_head[h]; s_pp_head[h] = s_pp_n++;
+}
+// Renderer hook (gpu_native.c): float for the packet vertex at (node, sx, sy). 1 = hit.
+int projprim_lookup(uint32_t node, int sx, int sy,
+                    float* px, float* py, float* pz, float* vx, float* vy, float* vz) {
+  if (!s_pp_inited) return 0;
+  node &= 0x1FFFFC;
+  for (int i = s_pp_head[pp_hash(node)]; i >= 0; i = s_pp[i].next) {
+    PpEnt* e = &s_pp[i];
+    if (e->node == node && e->sx == sx && e->sy == sy) {
+      if (px) *px = e->px; if (py) *py = e->py; if (pz) *pz = e->pz;
+      if (vx) *vx = e->vx; if (vy) *vy = e->vy; if (vz) *vz = e->vz;
+      return 1;
+    }
+  }
+  return 0;
+}
+int  projprim_overflowed(void) { return s_pp_overflow; }
+int  projprim_count(void)      { return s_pp_n; }
+int  projprim_has_node(uint32_t node) {        // diagnostic: is this packet base in the store at all?
+  if (!s_pp_inited) return 0;
+  node &= 0x1FFFFC;
+  for (int i = s_pp_head[pp_hash(node)]; i >= 0; i = s_pp[i].next) if (s_pp[i].node == node) return 1;
+  return 0;
+}
+
+// Capture each projected vertex into the store (gated by PSXPORT_ATTACH; reuses proj_native_vertex,
+// which is 0-diff vs the GTE). node = current packet base = DAT_800bf544 (0x800bf544 holds the ptr).
+static int s_attach = -1;
+static void projprim_capture(uint32_t insn, int rtpt) {
+  uint32_t mem_r32(uint32_t);
+  uint32_t node = mem_r32(0x800bf544);
+  ProjVtx p;
+  int nv = rtpt ? 3 : 1;
+  for (int i = 0; i < nv; i++) { proj_native_vertex(i, insn, &p); projprim_push(node, &p); }
+}
+
 void     gte_op(R3000* c, uint32_t insn)         { GTE_Instruction(insn);
                                                    unsigned op = insn & 0x3F;
                                                    if (s_gteprobe < 0) { const char* e = getenv("PSXPORT_GTEPROBE"); s_gteprobe = e ? atoi(e) : 0; }
@@ -332,6 +396,9 @@ void     gte_op(R3000* c, uint32_t insn)         { GTE_Instruction(insn);
                                                      if (g_wide60_on) wide60_rtp(op);
                                                      if (s_projprobe < 0) { s_projprobe = getenv("PSXPORT_PROJPROBE") ? 1 : 0;
                                                                             if (s_projprobe && !s_divtab_init) proj_divtab_init(); }
+                                                     if (s_attach < 0) { s_attach = getenv("PSXPORT_ATTACH") ? 1 : 0;
+                                                                         if (s_attach && !s_divtab_init) proj_divtab_init(); }
+                                                     if (s_attach > 0) projprim_capture(insn, op == 0x30);
                                                      if (s_projprobe > 0) {
                                                        // Compare native projection to Beetle's outputs. After RTPS the single vertex
                                                        // is in XY_FIFO(3)=DR15 / Z_FIFO(3)=DR19 / IR=DR9-11. After RTPT the 3 verts

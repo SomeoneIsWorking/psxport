@@ -57,6 +57,7 @@ static uint32_t s_prim_order = 0; // per-frame OT submission index of the curren
 static long s_gp0_words = 0, s_dma2 = 0;  // diagnostics: GP0 words + DMA2 triggers per frame
 static uint32_t s_cur_node = 0;   // REDDBG: RAM addr of the OT node currently being fed to GP0
 uint32_t g_ot_madr = 0;           // last OT DMA root (extern in internal header)
+long g_attach_hit = 0, g_attach_miss = 0, g_attach_nodeabsent = 0;  // Phase-1 attach: hit/miss diag (PSXPORT_ATTACH)
 
 // Fade-flash diagnostic (PSXPORT_FADEDBG="a:b"): per-frame max emitted prim brightness + how the
 // scene is drawn, to settle whether a bright fade frame is in the GP0 (engine emits it) or invented
@@ -514,6 +515,15 @@ static void gp0_exec(void) {
         if (i == 0) set_clut((uv >> 16) & 0xFFFF);
         if (i == 1) set_texpage((uv >> 16) & 0xFFFF);
       }
+    }
+    // Phase-1 attach verification: match each poly vertex to its native float by (node, sx, sy).
+    if (getenv("PSXPORT_ATTACH")) {
+      int projprim_lookup(uint32_t,int,int,float*,float*,float*,float*,float*,float*);
+      int projprim_has_node(uint32_t);
+      extern long g_attach_hit, g_attach_miss, g_attach_nodeabsent;
+      for (int i = 0; i < nv; i++)
+        if (projprim_lookup(s_cur_node, v[i].x, v[i].y, 0,0,0,0,0,0)) g_attach_hit++;
+        else { g_attach_miss++; if (!projprim_has_node(s_cur_node)) g_attach_nodeabsent++; }
     }
     int shade = gouraud || !textured;       // flat-untextured uses the command color
     { int mr=0,mg=0,mb=0,xmn=99999,xmx=-99999,ymn=99999,ymx=-99999;
@@ -1080,6 +1090,21 @@ void gpu_present_ex(int do_blit) {
       char t[32]; snprintf(t, sizeof t, "f%d", s_frame); proj_probe_dump(t); } }
   { void rtpcaller_dump(const char*);    // Phase-1: pin RTP caller sites (PSXPORT_RTPCALLER)
     if (getenv("PSXPORT_RTPCALLER") && s_frame == 400) rtpcaller_dump("f400"); }
+  // Phase-1 attach: report the packet-keyed float-store hit rate, then reset for the next frame.
+  // Reset happens here (after this frame's DrawOTag/lookups, before next frame's projections).
+  { void projprim_reset(void); int projprim_count(void), projprim_overflowed(void);
+    if (getenv("PSXPORT_ATTACH")) {
+      extern long g_attach_hit, g_attach_miss;
+      extern long g_attach_nodeabsent;
+      if (s_frame > 0 && (s_frame % 200) == 0)
+        fprintf(stderr, "[attach f%d] store=%d%s  poly-vtx hit=%ld miss=%ld (%.2f%%)  miss-node-absent=%ld\n",
+                s_frame, projprim_count(), projprim_overflowed() ? " OVERFLOW" : "",
+                g_attach_hit, g_attach_miss,
+                (g_attach_hit + g_attach_miss) ? 100.0 * g_attach_hit / (g_attach_hit + g_attach_miss) : 0.0,
+                g_attach_nodeabsent);
+      g_attach_hit = g_attach_miss = g_attach_nodeabsent = 0;
+      projprim_reset();
+    } }
   // PSXPORT_PROVAT="x,y[:frame]" — at present time, report (in DISPLAY space, so the double buffer
   // is irrelevant) which primitive last wrote each pixel in a 7x7 box around (x,y), with how many
   // frames ago it was drawn. A wrong pixel whose writer is the current frame = actively drawn (the
