@@ -33,16 +33,21 @@ headless. Pairs with `gfx-debug.md` (the debug workflow + tool catalog) and `con
     (`gpu_vk_set_order`). Opaque writes depth (compare `GREATER_OR_EQUAL`, clear 0.0); semi tests, no
     write. Reproduces painter/OT order. This is the faithful oracle.
   - **`PSXPORT_NATIVE_DEPTH` (Phase 2, real per-vertex depth):** for a prim whose every vertex resolves
-    to a projected 3D vertex, `gp0_exec` looks up the native view-space depth (`projprim_lookup`→`pz`,
+    to a projected 3D vertex, `gp0_exec` looks up the native view-space depth (`projprim_lookup_pz`→`pz`,
     `proj_pz_to_ord` → inverse-depth in [0,1]) and hands it per-vertex via `gpu_vk_set_vd`; the D32
     buffer then does true per-pixel occlusion. The single buffer is partitioned: **3D world** in
     `[0, NATIVE_3D_MAX=0.9375]`, **2D/HUD overlay** (any vertex misses the lookup → screen-space prim)
     in `(0.9375, 1]` via `gpu_vk_set_order_2d`, so UI composites over the world. **Env-gated, default off.**
-    NOTE (open): real depth currently introduces face z-fighting/flicker — iterate with the tool below.
-  - The depth path depends on the **attach infra** (the float scene data keyed by packet address). That
-    infra is enabled by `PSXPORT_ATTACH` **or** `PSXPORT_NATIVE_DEPTH` (`attach_enabled()`, gte_beetle.c);
-    both halves must be on — the gte_op capture (gte_beetle.c) AND the store hook (mem.c). See
-    memory `tomba2-native-projection` / engine_re.md later-100.
+  - **Depth source = the OWNED submit path (engine/engine_submit.c), NOT a measurement hack.** Because the
+    engine builds each GPU packet itself (the native POLY_GT3/GT4 submit), it records every vertex's real
+    SZ (view-Z) keyed by the packet vertex word's ADDRESS (`projprim_set_pz`, gte_beetle.c); the renderer
+    looks it up by the OT read address. Exact + deterministic. The table is reset each frame. This
+    REPLACED the old "attach" infra (gte_op SXY-ring capture + value-matched mem.c store hook) — that
+    correlated depth and was unreliable (same-pixel ambiguity, cross-frame staleness), now deleted.
+    `attach_enabled()` (= `PSXPORT_NATIVE_DEPTH || PSXPORT_SBS`) gates the recording + reset.
+    OPEN: only OWNED-submit prims carry real depth; prims from not-yet-ported overlay submitters fall to
+    the 2D band, and 3D-projected overlay banners (e.g. a hint sign drawn on-top by OT order) get their
+    true geometric depth and so sit behind nearer world geo — overlay-vs-world depth semantics, next.
 
 ## Running it
 - **Windowed (VK default):** `PSXPORT_GPU_WINDOW=1 … ./scratch/bin/tomba2_port MAIN.EXE` (needs `DISPLAY`).

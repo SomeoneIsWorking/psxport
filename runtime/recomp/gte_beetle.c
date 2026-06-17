@@ -339,84 +339,51 @@ void rtpcaller_dump(const char* tag) {
   }
 }
 
-// --- Native projected-prim store (Phase 1 attach-at-submission), keyed by SXY-word guest ADDRESS ----
-// Function/pool-agnostic. The projection routines (resident + runtime-overlay) all STORE the packed
-// XY_FIFO word to the packet's vertex slot. We capture float per vertex keyed by THAT store address:
-//   1. at gte_op, push each projected vertex's packed SXY + float into a small pending ring;
-//   2. attach_store_hook() (called from mem_w32 for stores into the prim-pool region) matches a stored
-//      value against the pending ring and records the float keyed by the store ADDRESS (last-write-wins,
-//      so a culled-then-reused slot resolves to the surviving prim);
-//   3. the renderer (gpu_native gp0_exec) looks the float up by each vertex word's guest read address.
-// The value-match is bounded to the tiny pending window (a few recently-projected verts), and the RESULT
-// is address-exact — so this has none of the global value-collision fragility of the old PGXP-lite cache.
+// --- Native per-vertex depth, recorded BY the owned submit path (engine/engine_submit.c) ------------
+// The engine that builds each GPU packet knows the real view-space Z of every vertex it projects, so it
+// records that depth keyed by the vertex word's guest ADDRESS in the packet (pkt+8/+20/+32[/+44] for a
+// POLY_GT3/GT4). The renderer (gpu_native gp0_exec) looks it up by each packet vertex word's read
+// address (s_fifo_addr). Exact and deterministic by construction. This REPLACED the value-keyed "attach"
+// ring (capture-at-gte_op + value-match-at-store), which could only CORRELATE projected SXY back to a
+// depth and was unreliable (same-pixel verts ambiguous; whole-frame staleness) — a measurement hack.
 #define PP_MAX  65536
 #define PP_HASH 16384
-typedef struct { uint32_t addr; float px, py, pz, vx, vy, vz; int next; } PpEnt;
+typedef struct { uint32_t addr; float pz; int next; } PpEnt;
 static PpEnt s_pp[PP_MAX];
 static int   s_pp_head[PP_HASH];
 static int   s_pp_n = 0, s_pp_inited = 0, s_pp_overflow = 0;
 static inline uint32_t pp_hash(uint32_t addr) { return ((addr >> 2) * 2654435761u) >> 18 & (PP_HASH - 1); }
-void projprim_reset(void) {
+void projprim_reset(void) {           // per-frame: drop last frame's depths so none are read stale
   s_pp_n = 0; s_pp_overflow = 0;
   for (int i = 0; i < PP_HASH; i++) s_pp_head[i] = -1;
   s_pp_inited = 1;
 }
-static void projprim_set(uint32_t addr, const ProjVtx* p) {   // record/overwrite float at a store address
+void projprim_set_pz(uint32_t addr, float pz) {   // engine_submit records a vertex's view-Z at its addr
   if (!s_pp_inited) projprim_reset();
   addr &= 0x1FFFFC;
-  for (int i = s_pp_head[pp_hash(addr)]; i >= 0; i = s_pp[i].next) if (s_pp[i].addr == addr) {  // overwrite
-    s_pp[i].px=p->px; s_pp[i].py=p->py; s_pp[i].pz=p->pz; s_pp[i].vx=p->vx; s_pp[i].vy=p->vy; s_pp[i].vz=p->vz; return;
-  }
-  if (s_pp_n >= PP_MAX) { s_pp_overflow = 1; return; }
   uint32_t h = pp_hash(addr);
+  for (int i = s_pp_head[h]; i >= 0; i = s_pp[i].next) if (s_pp[i].addr == addr) { s_pp[i].pz = pz; return; }
+  if (s_pp_n >= PP_MAX) { s_pp_overflow = 1; return; }
   PpEnt* e = &s_pp[s_pp_n];
-  e->addr = addr; e->px=p->px; e->py=p->py; e->pz=p->pz; e->vx=p->vx; e->vy=p->vy; e->vz=p->vz;
-  e->next = s_pp_head[h]; s_pp_head[h] = s_pp_n++;
+  e->addr = addr; e->pz = pz; e->next = s_pp_head[h]; s_pp_head[h] = s_pp_n++;
 }
-// Renderer hook (gpu_native.c): float for the packet vertex word at guest address `addr`. 1 = hit.
-int projprim_lookup(uint32_t addr, float* px, float* py, float* pz, float* vx, float* vy, float* vz) {
+int projprim_lookup_pz(uint32_t addr, float* pz) {   // renderer: depth for the packet vertex word at addr
   if (!s_pp_inited) return 0;
   addr &= 0x1FFFFC;
   for (int i = s_pp_head[pp_hash(addr)]; i >= 0; i = s_pp[i].next) if (s_pp[i].addr == addr) {
-    PpEnt* e = &s_pp[i];
-    if (px) *px=e->px; if (py) *py=e->py; if (pz) *pz=e->pz; if (vx) *vx=e->vx; if (vy) *vy=e->vy; if (vz) *vz=e->vz;
-    return 1;
-  }
+    if (pz) *pz = s_pp[i].pz; return 1; }
   return 0;
 }
 int  projprim_overflowed(void) { return s_pp_overflow; }
 int  projprim_count(void)      { return s_pp_n; }
 
-// Pending ring: SXY-keyed floats awaiting their store. Small window (the body stores each vertex's SXY
-// shortly after projecting it). Match-and-consume on the store hook.
-#define PR_N 32
-static struct { uint32_t packed; ProjVtx p; int used; } s_pr[PR_N];
-static int s_pr_head = 0;
+// The native-depth path is active (NATIVE_DEPTH renderer or the SBS A/B view) — gates the engine's depth
+// recording + the per-frame reset. (PSXPORT_ATTACH and its value-keyed ring are retired.)
 static int s_attach = -1;
-// The attach capture+store infra feeds the Phase-1 verifier (PSXPORT_ATTACH), the Phase-2 native-depth
-// renderer (PSXPORT_NATIVE_DEPTH), and the SBS depth A/B view (PSXPORT_SBS); any one enables it (else
-// projprim is never populated and every depth lookup misses).
-static int attach_env(void) { return (cfg_on("PSXPORT_ATTACH") || cfg_on("PSXPORT_NATIVE_DEPTH") || cfg_on("PSXPORT_SBS")) ? 1 : 0; }
-static void projprim_capture(uint32_t insn, int rtpt) {
-  ProjVtx p;
-  int nv = rtpt ? 3 : 1;
-  for (int i = 0; i < nv; i++) {
-    proj_native_vertex(i, insn, &p);
-    uint32_t packed = ((uint32_t)(p.sx & 0xFFFF)) | ((uint32_t)(p.sy & 0xFFFF) << 16);  // == the XY_FIFO word stored
-    s_pr[s_pr_head].packed = packed; s_pr[s_pr_head].p = p; s_pr[s_pr_head].used = 1;
-    s_pr_head = (s_pr_head + 1) % PR_N;
-  }
-}
-// Called from mem_w32 (gated) for stores landing in the primitive-pool region. If the stored word
-// matches a pending projected SXY, record that vertex's float keyed by the store address.
-void attach_store_hook(uint32_t addr, uint32_t v) {
-  if (s_attach <= 0) return;
-  for (int k = 0; k < PR_N; k++) {
-    int i = (s_pr_head + k) % PR_N;   // scan oldest-first (matches the body's project-then-store order)
-    if (s_pr[i].used && s_pr[i].packed == v) { projprim_set(addr, &s_pr[i].p); s_pr[i].used = 0; return; }
-  }
-}
-int attach_enabled(void) { if (s_attach < 0) s_attach = attach_env(); return s_attach > 0; }
+int attach_enabled(void) { if (s_attach < 0) s_attach = (cfg_on("PSXPORT_NATIVE_DEPTH") || cfg_on("PSXPORT_SBS")) ? 1 : 0;
+                           return s_attach > 0; }
+// engine_submit sets the projection-plane H (read from CR26) so proj_pz_to_ord normalizes depth correctly.
+void proj_set_H(uint16_t h) { s_proj_H = h; }
 
 void     gte_op(R3000* c, uint32_t insn)         { GTE_Instruction(insn);
                                                    unsigned op = insn & 0x3F;
@@ -428,9 +395,6 @@ void     gte_op(R3000* c, uint32_t insn)         { GTE_Instruction(insn);
                                                      if (g_wide60_on) wide60_rtp(op);
                                                      if (s_projprobe < 0) { s_projprobe = cfg_on("PSXPORT_PROJPROBE") ? 1 : 0;
                                                                             if (s_projprobe && !s_divtab_init) proj_divtab_init(); }
-                                                     if (s_attach < 0) { s_attach = attach_env();  // ATTACH or NATIVE_DEPTH
-                                                                         if (s_attach && !s_divtab_init) proj_divtab_init(); }
-                                                     if (s_attach > 0) projprim_capture(insn, op == 0x30);
                                                      if (s_projprobe > 0) {
                                                        // Compare native projection to Beetle's outputs. After RTPS the single vertex
                                                        // is in XY_FIFO(3)=DR15 / Z_FIFO(3)=DR19 / IR=DR9-11. After RTPT the 3 verts

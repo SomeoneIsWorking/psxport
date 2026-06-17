@@ -103,8 +103,14 @@ computes the projection and can carry the real per-vertex view-Z straight to the
   `idx∈[4,2047]`** (else the prim is dropped). Verified the min/max by exhaustively tracing both bodies.
 - **Note:** the recomp bodies are slightly **nondeterministic** run-to-run (≈300px at one field frame —
   uninitialised packet padding the GPU re-reads); the native versions are deterministic and match a
-  freshly-captured recomp run exactly. NEXT: overlay/menu submit fns (`0x80109C80`,`0x801099B4`,…) + the
-  Phase-2 depth emission (carry view-Z to the renderer, delete the projprim/attach ring).
+  freshly-captured recomp run exactly.
+- **Phase-2 depth — DONE for the owned prims.** Each owned submit records the vertex SZ (view-Z) keyed by
+  the packet word address (`projprim_set_pz`); the renderer reads it (`projprim_lookup_pz` →
+  `proj_pz_to_ord`) for true D32 occlusion under `PSXPORT_NATIVE_DEPTH`/`PSXPORT_SBS`. The value-keyed
+  "attach" ring (gte_op capture + mem.c store hook) is **deleted**. Deterministic; fixed the water
+  punch-through/flicker. OPEN: (1) overlay/menu submit fns (`0x80109C80`,`0x801099B4`,…) — their 3D prims
+  miss the depth table → 2D band; (2) 3D-projected overlay banners (hint signs) now sit behind nearer
+  world geo (true depth vs the artist's OT-on-top) — overlay-vs-world depth semantics to resolve.
 
 ## Camera
 - Position (u16): `_DAT_1f8000d2` (X), `_DAT_1f8000d6` (Y), `_DAT_1f8000da` (Z).

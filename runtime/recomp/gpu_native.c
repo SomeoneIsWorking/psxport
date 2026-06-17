@@ -58,7 +58,6 @@ static uint32_t s_prim_order = 0; // per-frame OT submission index of the curren
 static long s_gp0_words = 0, s_dma2 = 0;  // diagnostics: GP0 words + DMA2 triggers per frame
 static uint32_t s_cur_node = 0;   // REDDBG: RAM addr of the OT node currently being fed to GP0
 uint32_t g_ot_madr = 0;           // last OT DMA root (extern in internal header)
-long g_attach_hit = 0, g_attach_miss = 0, g_attach_nodeabsent = 0;  // Phase-1 attach: hit/miss diag (PSXPORT_ATTACH)
 long g_nd_3d = 0, g_nd_2d = 0;   // Phase-2 native-depth diag: prims drawn with real depth vs OT-order band
 
 // Fade-flash diagnostic (PSXPORT_FADEDBG="a:b"): per-frame max emitted prim brightness + how the
@@ -521,17 +520,6 @@ static void gp0_exec(void) {
         if (i == 1) set_texpage((uv >> 16) & 0xFFFF);
       }
     }
-    // Phase-1 attach verification: match each poly vertex to its native float by the vertex word's
-    // guest ADDRESS (function/pool-agnostic). A miss with addr==0 = not from the OT walk (2D/direct).
-    if (cfg_on("PSXPORT_ATTACH")) {
-      int projprim_lookup(uint32_t,float*,float*,float*,float*,float*,float*);
-      extern long g_attach_hit, g_attach_miss, g_attach_nodeabsent;
-      // A miss with a valid OT address = a 2D screen-space poly (no GTE projection) — the free 2D/3D
-      // class. (Confirmed: residual misses are op-2F axis-aligned textured UI quads.) addr==0 = direct/FMV.
-      for (int i = 0; i < nv; i++)
-        if (vaddr[i] && projprim_lookup(vaddr[i], 0,0,0,0,0,0)) g_attach_hit++;
-        else { g_attach_miss++; if (!vaddr[i]) g_attach_nodeabsent++; }
-    }
     int shade = gouraud || !textured;       // flat-untextured uses the command color
     { int mr=0,mg=0,mb=0,xmn=99999,xmx=-99999,ymn=99999,ymx=-99999;
       for (int i=0;i<nv;i++){ if(v[i].r>mr)mr=v[i].r; if(v[i].g>mg)mg=v[i].g; if(v[i].b>mb)mb=v[i].b;
@@ -576,12 +564,12 @@ static void gp0_exec(void) {
       if (s_sbs < 0) s_sbs = cfg_on("PSXPORT_SBS") ? 1 : 0;
       float dep[4]; int is3d = 0;
       if (s_ndepth || s_sbs) {
-        int projprim_lookup(uint32_t,float*,float*,float*,float*,float*,float*);
+        int projprim_lookup_pz(uint32_t, float*);
         float proj_pz_to_ord(float);
         is3d = 1;
         for (int i = 0; i < nv; i++) {
           float pz;
-          if (vaddr[i] && projprim_lookup(vaddr[i], 0,0,&pz,0,0,0)) dep[i] = proj_pz_to_ord(pz);
+          if (vaddr[i] && projprim_lookup_pz(vaddr[i], &pz)) dep[i] = proj_pz_to_ord(pz);
           else { is3d = 0; break; }
         }
         if (!is3d) { if (s_sbs) gpu_vk_set_order_2d_n(ord_idx); else gpu_vk_set_order_2d(ord_idx); }  // 2D/HUD band
@@ -1138,24 +1126,14 @@ void gpu_present_ex(int do_blit) {
       char t[32]; snprintf(t, sizeof t, "f%d", s_frame); proj_probe_dump(t); } }
   { void rtpcaller_dump(const char*);    // Phase-1: pin RTP caller sites (PSXPORT_RTPCALLER)
     if (cfg_dbg("rtpcaller") && s_frame == 400) rtpcaller_dump("f400"); }
-  // Phase-1 attach: report the packet-keyed float-store hit rate, then reset for the next frame.
-  // Reset happens here (after this frame's DrawOTag/lookups, before next frame's projections).
-  { void projprim_reset(void); int projprim_count(void), projprim_overflowed(void);
-    if (cfg_on("PSXPORT_ATTACH")) {
-      extern long g_attach_hit, g_attach_miss;
-      extern long g_attach_nodeabsent;
-      if (s_frame > 0 && (s_frame % 200) == 0)
-        fprintf(stderr, "[attach f%d] store=%d%s  poly-vtx hit=%ld miss=%ld (%.2f%%)  miss-no-addr(2D/direct)=%ld\n",
-                s_frame, projprim_count(), projprim_overflowed() ? " OVERFLOW" : "",
-                g_attach_hit, g_attach_miss,
-                (g_attach_hit + g_attach_miss) ? 100.0 * g_attach_hit / (g_attach_hit + g_attach_miss) : 0.0,
-                g_attach_nodeabsent);
-      g_attach_hit = g_attach_miss = g_attach_nodeabsent = 0;
-      projprim_reset();
-    } }
+  // Reset the per-vertex depth table EVERY frame the native-depth path is live (NATIVE_DEPTH or SBS),
+  // here — after this frame's DrawOTag/lookups, before next frame's projections record into it — so a
+  // vertex word never reads an OLD frame's depth. The engine (engine_submit.c) repopulates it each frame.
+  { int attach_enabled(void); void projprim_reset(void);
+    if (attach_enabled()) projprim_reset(); }
   { if (cfg_on("PSXPORT_NATIVE_DEPTH") || cfg_on("PSXPORT_SBS")) {
       extern long g_nd_3d, g_nd_2d;
-      if (s_frame > 0 && (s_frame % 60) == 0)
+      if (cfg_dbg("ndepth") && s_frame > 0 && (s_frame % 60) == 0)
         fprintf(stderr, "[ndepth f%d] real-depth(3D) prims=%ld  OT-band(2D) prims=%ld  3D%%=%.1f\n",
                 s_frame, g_nd_3d, g_nd_2d, (g_nd_3d+g_nd_2d) ? 100.0*g_nd_3d/(g_nd_3d+g_nd_2d) : 0.0);
       g_nd_3d = g_nd_2d = 0;

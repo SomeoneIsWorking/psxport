@@ -32,6 +32,17 @@ static int s_submit_recomp = -1;   // PSXPORT_SUBMIT_RECOMP=1 -> keep the recomp
 static int submit_recomp(void) { if (s_submit_recomp < 0) s_submit_recomp = cfg_on("PSXPORT_SUBMIT_RECOMP") ? 1 : 0;
                                  return s_submit_recomp; }
 
+// PC-native per-vertex depth (Phase 2): because we OWN the projection, we know each vertex's real
+// view-space Z (the SZ the GTE just produced) — record it keyed by the packet vertex word's address so
+// the renderer's D32 depth buffer does true per-pixel occlusion (PSXPORT_NATIVE_DEPTH / the SBS A/B
+// view) instead of OT-submission order. No correlation, no value-matching: the engine that emits the
+// vertex writes the depth for the exact address it stored the SXY to. Off (faithful) by default.
+int  attach_enabled(void);                       // native-depth path live (gte_beetle.c)
+void projprim_set_pz(uint32_t addr, float pz);   // record a vertex's view-Z at its packet word address
+void proj_set_H(uint16_t h);                     // tell proj_pz_to_ord the projection-plane H (CR26)
+static int s_depth = -1;
+static int depth_on(void) { if (s_depth < 0) s_depth = attach_enabled() ? 1 : 0; return s_depth; }
+
 // GTE opcodes used by the submit path (cop2 instruction encodings, matching the recomp bodies).
 #define GTE_RTPS  0x4A180001u   // project 1 vertex (V0)            -> SXY2/SZ3
 #define GTE_RTPT  0x4A280030u   // project 3 vertices (V0,V1,V2)    -> SXY0/1/2, SZ1/2/3
@@ -71,6 +82,7 @@ static uint32_t ot_compress(uint32_t otz) {
 static void submit_poly_gt3(R3000* c) {
   uint32_t rec = c->r[4], ot = c->r[5], count = c->r[6];
   uint32_t pkt = mem_r32(PKT_POOL_PTR);
+  int depth = depth_on(); if (depth) proj_set_H((uint16_t)gte_read_ctrl(26));
   for (uint32_t i = 0; i < count; i++, rec += 36) {
     // load the 3 model vertices into the GTE input regs (V0..V2), then project all three (RTPT).
     uint32_t vz01 = mem_r32(rec + 20);
@@ -104,6 +116,11 @@ static void submit_poly_gt3(R3000* c) {
     uint32_t otaddr = ot + (idx << 2);
     mem_w32(pkt + 0, mem_r32(otaddr) | 0x09000000u);  // tag: link old head + length (9 words)
     mem_w32(otaddr, pkt);                          // OT head -> this packet
+    if (depth) {                                   // record each vertex's real view-Z at its packet addr
+      projprim_set_pz(pkt + 8,  (float)(int32_t)gte_read_data(17));   // SXY0 -> SZ0
+      projprim_set_pz(pkt + 20, (float)(int32_t)gte_read_data(18));   // SXY1 -> SZ1
+      projprim_set_pz(pkt + 32, (float)(int32_t)gte_read_data(19));   // SXY2 -> SZ2
+    }
     pkt += 40;
   }
   mem_w32(PKT_POOL_PTR, pkt);
@@ -123,6 +140,7 @@ void ov_submit_poly_gt3(R3000* c) {
 static void submit_poly_gt4(R3000* c) {
   uint32_t rec = c->r[4], ot = c->r[5], count = c->r[6];
   uint32_t pkt = mem_r32(PKT_POOL_PTR);
+  int depth = depth_on(); if (depth) proj_set_H((uint16_t)gte_read_ctrl(26));
   for (uint32_t i = 0; i < count; i++, rec += 44) {
     // project the lone 4th vertex (V3) first (RTPS): result SXY in DR14.
     uint32_t code2 = mem_r32(rec + 4);
@@ -166,6 +184,12 @@ static void submit_poly_gt4(R3000* c) {
     uint32_t otaddr = ot + (idx << 2);
     mem_w32(pkt + 0, mem_r32(otaddr) | 0x0C000000u);  // tag: link old head + length (12 words)
     mem_w32(otaddr, pkt);                          // OT head -> this packet
+    if (depth) {                                   // SZ FIFO after RTPS(V3)+RTPT(V0,V1,V2): DR16=SZ3,17-19=SZ0-2
+      projprim_set_pz(pkt + 8,  (float)(int32_t)gte_read_data(17));   // SXY0 -> SZ0
+      projprim_set_pz(pkt + 20, (float)(int32_t)gte_read_data(18));   // SXY1 -> SZ1
+      projprim_set_pz(pkt + 32, (float)(int32_t)gte_read_data(19));   // SXY2 -> SZ2
+      projprim_set_pz(pkt + 44, (float)(int32_t)gte_read_data(16));   // SXY3 -> SZ3
+    }
     pkt += 52;
   }
   mem_w32(PKT_POOL_PTR, pkt);
