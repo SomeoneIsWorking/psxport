@@ -24,10 +24,11 @@
 // framebuffer used for PC-native widescreen / higher-res rendering. PSX VRAM is fully packed
 // (two 320 framebuffers + the texture atlas at x>=320), so the wide/hi-res 3D cannot be drawn
 // in place — we relocate the tee'd geometry into this scratch FB (no VRAM conflict; textures are
-// still sampled from rows <512). FB origin (0, FB_Y0); max FB = 856x480 (16:9 at 2x supersample).
+// still sampled from rows <512). FB origin (0, FB_Y0); max FB = 960x720 (4:3 at 3x internal res, or
+// 856x480 16:9 at 2x). Width is capped by VRAM_W (1024): 320*3=960 / 428*2=856 both fit.
 #define FB_Y0   VRAM_H
-#define FB_MAXH 480
-#define IMG_H   (VRAM_H + FB_MAXH)   // 992
+#define FB_MAXH 720
+#define IMG_H   (VRAM_H + FB_MAXH)   // 1232
 #define MAX_SWAP 8
 
 #define VKC(x) do { VkResult _r = (x); if (_r != VK_SUCCESS) { \
@@ -167,20 +168,27 @@ void gpu_vk_dirty(int x, int y, int w, int h) {
   s_dirty[s_dirty_n++] = (VkRect){ x, y, w, h };
 }
 
-// PC-native widescreen / supersample state. When s_wide, the tee'd geometry is relocated into the
-// scratch FB (rows >=FB_Y0) at a TRUE wider horizontal FOV (no GTE squish, no present stretch): the
-// native projection is kept and re-centered into a wider buffer, so MORE world shows on each side
-// (the GTE already projects geometry past the 4:3 edges; it was just being clipped). s_ss supersamples.
-static int s_wide = -1, s_ss = 1;
-#define WIDE_OFF 54                       // (FBW/ss - 320)/2 — center the native 320 view in the 428-wide FB
-static int FBW(void) { return 428 * s_ss; }
-static int FBH(void) { return 240 * s_ss; }
+// PC-native widescreen + NATIVE higher internal resolution. When s_wide, the tee'd geometry is
+// relocated into the scratch FB (rows >=FB_Y0) at a TRUE wider horizontal FOV (no GTE squish, no
+// present stretch): the native projection is kept and re-centered into a wider buffer, so MORE world
+// shows on each side. PSXPORT_IRES=N renders that FB at N x (320|428)x240 by SCALING THE RASTERIZATION
+// VIEWPORT — the engine's own submitted geometry, just sampled denser (crisp 3D edges + texel
+// sampling), NOT the rejected supersample-and-downscale FB-cram. Width is capped by VRAM_W=1024:
+// 4:3 -> ires<=3 (960), 16:9 -> ires<=2 (856). use_fb() == "render via the scaled scratch FB".
+static int s_wide = -1, s_ires = 1;
+#define WIDE_OFF 54                       // (FBW/ires - 320)/2 — center the native 320 view in 428-wide FB
+static int FBW(void) { return (s_wide ? 428 : 320) * s_ires; }
+static int FBH(void) { return 240 * s_ires; }
+static int use_fb(void) { return s_wide || s_ires > 1; }   // 3D goes through the scaled scratch FB
 static void wide_init(void) {
   if (s_wide >= 0) return;
   const char* w = getenv("PSXPORT_WIDE");
   s_wide = (w && atoi(w) != 0) ? 1 : 0;
-  const char* ss = getenv("PSXPORT_SS");
-  s_ss = ss ? atoi(ss) : 1; if (s_ss < 1) s_ss = 1; if (s_ss > 2) s_ss = 2;   // default 1 (native): supersampling is a rejected trick
+  // PSXPORT_IRES = native internal-resolution scale (1 = faithful PSX 320x240). Accept the legacy
+  // PSXPORT_SS name too. Clamp to what fits VRAM_W: 4:3 -> 3, 16:9 -> 2.
+  const char* ir = getenv("PSXPORT_IRES"); if (!ir) ir = getenv("PSXPORT_SS");
+  s_ires = ir ? atoi(ir) : 1; if (s_ires < 1) s_ires = 1;
+  int cap = s_wide ? 2 : 3; if (s_ires > cap) s_ires = cap;
 }
 
 int gpu_vk_enabled(void) {
@@ -530,7 +538,9 @@ static void poll_quit(void) {
 // Push the vertex-stage wide/supersample transform (VPC). `enabled` lets diagnostic passes force the
 // identity (non-wide) transform while still satisfying the shader's img_h dependency.
 static void push_wide(int enabled) {
-  int32_t va[8] = { enabled, FB_Y0, s_ss, IMG_H,   WIDE_OFF, FBW(), FBH(), 0 /*fb_x0*/ };
+  // ss = internal-res scale; the horizontal re-center (WIDE_OFF) applies only in 16:9, so 4:3 hi-res
+  // just scales the native view by s_ires with no FOV change.
+  int32_t va[8] = { enabled, FB_Y0, s_ires, IMG_H,   s_wide ? WIDE_OFF : 0, FBW(), FBH(), 0 /*fb_x0*/ };
   vkCmdPushConstants(s_cmd, s_pll, VK_SHADER_STAGE_VERTEX_BIT, 16, 32, va);
 }
 
@@ -542,7 +552,7 @@ static void push_wide(int enabled) {
 int gpu_vk_sprite_anchor_dx(int center_local_x) {
   wide_init();
   if (!s_wide) return 0;
-  return ((center_local_x - 160) * (FBW() / s_ss - 320)) / 320;
+  return ((center_local_x - 160) * (FBW() / s_ires - 320)) / 320;
 }
 
 // Present the display region [sx,sy .. +w,h] of `src` (s_vram or s_interp) via Vulkan, fit to aspect.
@@ -628,12 +638,12 @@ void gpu_vk_present(const uint16_t* src, int sx, int sy, int w, int h) {
     { VkClearAttachment dca = { VK_IMAGE_ASPECT_DEPTH_BIT, 0, {{{0}}} }; dca.clearValue.depthStencil.depth = 0.0f;
       VkClearRect dcr = { { { 0, 0 }, { VRAM_W, IMG_H } }, 0, 1 };
       vkCmdClearAttachments(s_cmd, 1, &dca, 1, &dcr); }
-    if (s_wide) {   // clear the scratch FB (the game's clear/fill targets VRAM, not the FB) before drawing
+    if (use_fb()) {   // clear the scratch FB (the game's clear/fill targets VRAM, not the FB) before drawing
       VkClearAttachment ca = { VK_IMAGE_ASPECT_COLOR_BIT, 0, {{{0,0,0,1}}} };
       VkClearRect cr = { { { 0, FB_Y0 }, { (uint32_t)FBW(), (uint32_t)FBH() } }, 0, 1 };
       vkCmdClearAttachments(s_cmd, 1, &ca, 1, &cr);
     }
-    push_wide(s_wide);
+    push_wide(use_fb());
     vkCmdBindDescriptorSets(s_cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, s_pll, 0, 1, &s_dset_tex, 0, 0);
     if (s_tri_n) { vkCmdBindPipeline(s_cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, s_tri_pipe);
                    vkCmdBindVertexBuffers(s_cmd, 0, 1, &s_vbuf, &go); vkCmdDraw(s_cmd, s_tri_n, 1, 0, 0); }
@@ -683,9 +693,9 @@ void gpu_vk_present(const uint16_t* src, int sx, int sy, int w, int h) {
   rp.renderArea.extent = s_extent; rp.clearValueCount = 1; rp.pClearValues = &clear;
   vkCmdBeginRenderPass(s_cmd, &rp, VK_SUBPASS_CONTENTS_INLINE);
 
-  // Wide: present the 16:9 scratch FB 1:1 (no stretch — it was rendered at a true wider FOV). Else
-  // present the PSX display region fit to 4:3.
-  if (s_wide) { sx = 0; sy = FB_Y0; w = FBW(); h = FBH(); }
+  // Present the scaled scratch FB (wide 16:9 OR 4:3 hi-res) — it was rendered denser at native FOV/scale,
+  // so present 1:1 region->window. Else present the PSX display region. Aspect stays 4:3 unless wide.
+  if (use_fb()) { sx = 0; sy = FB_Y0; w = FBW(); h = FBH(); }
   s_last_sx = sx; s_last_sy = sy; s_last_w = w; s_last_h = h;   // for on-demand gpu_vk_shot (debug server)
   int aw = s_wide ? 16 : 4, ah = s_wide ? 9 : 3;
   int ow = s_extent.width, oh = s_extent.height, dw, dh;
@@ -1100,7 +1110,7 @@ void gpu_vk_dump(int sx, int sy, int w, int h, int frame) {
   if (qa == -2) { qa = -1; const char* e = getenv("PSXPORT_VK_SHOTSEQ");
     if (e && sscanf(e, "%d:%d:%d:%255s", &qa, &qb, &qstep, qdir) == 4 && qstep > 0) {} else qa = -1; }
   int dsx = sx, dsy = sy, dw = w, dh = h;
-  if (s_wide) { dsx = 0; dsy = FB_Y0; dw = FBW(); dh = FBH(); }   // wide: dump the scratch FB
+  if (use_fb()) { dsx = 0; dsy = FB_Y0; dw = FBW(); dh = FBH(); }   // scaled scratch FB (wide / hi-res)
   if (sf >= 0 && frame == sf) { vk_dump_to("scratch/screenshots/vk_live.ppm", dsx, dsy, dw, dh);
     fprintf(stderr, "[vk_shot] f%d wrote scratch/screenshots/vk_live.ppm\n", frame); }
   if (qa >= 0 && frame >= qa && frame <= qb && ((frame - qa) % qstep) == 0) {

@@ -104,10 +104,12 @@ Screen X = OFX + IR1·H/Sz, screen Y = OFY + IR2·H/Sz.
   wider horizontal FOV, computed by the engine's own projection. 2D HUD (drawn in screen space, bypasses
   GTE) is repositioned separately. **TODO:** find the draw-environment / clip-rect (screen width) setup —
   near the double-buffer/OT setup `FUN_80081458` / disp-env; needed to widen the clip to match OFX.
-- **Higher res (native, not supersampling):** our native renderer rasterizes the engine's submitted
-  geometry; render the FB at NxN of 320×240 (or 428×240) by scaling the rasterization viewport — the
-  geometry is the same engine output, just sampled denser. (Distinct from the rejected supersample-and-
-  downscale FB-cram trick.)
+- **Higher res (native, not supersampling) — IMPLEMENTED (`PSXPORT_IRES=N`, default 1 = faithful):**
+  the VK backend rasterizes the engine's submitted geometry into the scratch FB at N×(320|428)×240 by
+  scaling the rasterization viewport (`gpu_vk.c` `s_ires`/`use_fb`/`push_wide`, shader already maps
+  framebuffer-local×scale). Same engine output, sampled denser — crisp 3D edges; textures still sampled
+  from PSX-res VRAM. Caps within the 1024-wide VRAM image: 4:3 → 3×, 16:9 → 2×. A dedicated >1024 render
+  target would lift the cap (next). Distinct from the rejected supersample-and-downscale FB-cram trick.
 
 ## Water — drawn via a NON-GTE path (RE in progress, later-98)
 Observed during the lighting work (normal-viz): terrain/ground polys get a reconstructed per-face normal
