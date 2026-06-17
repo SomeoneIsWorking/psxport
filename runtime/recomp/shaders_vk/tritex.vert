@@ -8,17 +8,22 @@ layout(location = 3) in ivec4 i_tp;     // tpx, tpy (VRAM px base of page), mode
 layout(location = 4) in ivec4 i_clut;   // clutx, cluty (VRAM px), -, -
 layout(location = 5) in ivec4 i_tw;     // texture window: mask_x, mask_y, off_x, off_y (8px units)
 layout(location = 6) in ivec4 i_da;     // draw-area clip: x0, y0, x1, y1 (VRAM px)
+layout(location = 7) in vec3  i_normal; // view-space per-face normal (0,0,0 = unlit: 2D/HUD)
+layout(location = 8) in float i_depth;  // view-space Z (for native fog)
 layout(location = 0) out vec3 v_col;
 layout(location = 1) noperspective out vec2 v_uv;
 layout(location = 2) flat out ivec4 v_tp;
 layout(location = 3) flat out ivec4 v_clut;
 layout(location = 4) flat out ivec4 v_tw;
 layout(location = 5) flat out ivec4 v_da;
+layout(location = 6) flat out vec3  v_normal;
+layout(location = 7) out float v_depth;
 // PC-native widescreen / supersample transform (vertex push constant, offset 16 to clear the
 // fragment present push at 0). wa=(enabled, fb_y0, ss, img_h); wb=(wide_off, fbw, fbh, fb_x0).
 layout(push_constant) uniform VPC { layout(offset = 16) ivec4 wa; ivec4 wb; } w;
 void main() {
     v_col = i_col; v_uv = i_uv; v_tp = i_tp; v_clut = i_clut; v_tw = i_tw;
+    v_normal = i_normal; v_depth = i_depth;
     float ny = float(w.wa.w) * 0.5;   // image is IMG_H tall; map VRAM y -> NDC over the full image
     if (w.wa.x != 0) {
         // Relocate into the scratch FB at a wider FOV: keep native projection scale (no squish), just

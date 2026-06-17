@@ -3781,3 +3781,31 @@ of every `gte_op(...)` immediate in `generated/shard_*.c`. **Full model now in d
   enabling native directional/point lighting, normal shading, SSAO, and a replacement per-pixel fog (tint
   from CR21-23). No need to fight any existing dynamic lighting (there is none). NEXT: pick the lighting
   style + build the normal-reconstruction + shader path (scope question to user).
+
+## 2026-06-17 (later-97) — NATIVE LIGHTING ENGINE: normal+depth reconstruction + directional light + fog.
+User scope (AskUserQuestion): "Full pipeline (normals first)" — build the shared normal/depth
+reconstruction, then layer directional light + fog + AO. Built the foundation + first two layers:
+- **View-space position capture (gte_beetle.c):** PGXP cache now also stores the GTE's view-space vertex
+  (IR1/IR2/IR3 = rotation·V + translation, read via GTE_ReadDR(9/10/11) at PGXP_pushSXYZ2f time, where
+  TransformXY hasn't touched IR yet). New `pgxp_lookup_view(sx,sy,...)`. This is the ONLY normal source —
+  the game has no GTE lighting (later-96).
+- **Per-face normal (gpu_vk.c tex_emit):** for each triangle with 3 view-space verts (looked up in the
+  polygon tee, gpu_native.c), normal = normalize(cross(e1,e2)), oriented toward the camera at the origin
+  (flip if dot(N, faceCenter) > 0). depth = view Z. Passed as new TexVtx fields nx/ny/nz/depth (vertex
+  attrs loc 7/8). 2D sprites/lines/HUD pass NULL view -> zero normal -> shader leaves them untouched (they
+  bypass the GTE so they'd never hit the cache anyway). If ANY vert misses the cache, the whole tri is unlit.
+- **Shaders (tritex.vert/frag):** frag gets a fragment push-constant LPC (offset 48): l0=(dir.xyz view
+  space, mode 0=off/1=directional/2=normal-viz), l1=(ambient,diffuse,fogNear,fogFar), l2=(fogTint.rgb,
+  fogEnable). Lighting modulates the SOURCE color (unpacked from 555 -> float -> relight -> repack) BEFORE
+  the semi-blend. Output is still R16_UINT 555 (5-bit) — quality ceiling until the dedicated-RGBA8-FB
+  refactor (handoff). Native fog = mix(color, tint, depth ramp).
+- **Config (gpu_native.c, env one-shot):** PSXPORT_LIGHT=0/1/2, PSXPORT_LIGHT_DIR="x,y,z",
+  PSXPORT_LIGHT_AMB / PSXPORT_LIGHT_DIFF, PSXPORT_FOG=1 + FOG_NEAR/FAR/RGB. Default OFF (byte-identical to
+  later-96 unless enabled). `gpu_vk_set_light()` pushes the LPC each tritex batch.
+- **VALIDATED:** normal-viz (PSXPORT_LIGHT=2, scratch/screenshots/normviz_1500.png) shows the 3D world
+  cleanly colored by face orientation — vertical tower uniformly green, ground red, catapult/barrel faceted
+  = reconstruction is CORRECT. Directional light (=1) shades the world (tower left-dark/right-bright, grass
+  gradient), 2D HUD + water untouched; RMSE vs unlit 0.04. Validation-layer clean. By-eye (no oracle — this
+  is a new PC-native feature Beetle lacks). OPEN/NEXT: SSAO (needs depth attachment + dedicated FB), world-
+  space light (transform dir by the GTE rotation matrix CR0-4 so the sun is camera-stable), RGBA8 FB to lift
+  the 5-bit banding, smooth (per-vertex) normals if flat shading looks too faceted.

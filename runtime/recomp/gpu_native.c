@@ -499,32 +499,42 @@ static void gp0_exec(void) {
     // untextured -> opaque batch; semi -> semi batch (mode 3 = untextured flat). VK owns these now.
     if (gpu_vk_enabled()) {
       void gpu_vk_draw_tritri_f(const float*,const float*,const int*,const int*,const unsigned char*,
-                                const unsigned char*,const unsigned char*,int,int,int,int,int,int,int,int,int,int,int,int,int,int);
+                                const unsigned char*,const unsigned char*,const float*,const float*,const float*,
+                                int,int,int,int,int,int,int,int,int,int,int,int,int,int);
       void gpu_vk_draw_semi_f(const float*,const float*,const int*,const int*,const unsigned char*,
-                              const unsigned char*,const unsigned char*,int,int,int,int,int,int,int,int,int,int,int,int,int,int,int);
+                              const unsigned char*,const unsigned char*,const float*,const float*,const float*,
+                              int,int,int,int,int,int,int,int,int,int,int,int,int,int,int);
       // Vertex smoothing (PGXP): replace each integer screen vertex with the GTE's subpixel-precise
       // projected position (cached in gte_beetle.c, keyed by the packed int SXY) so 3D geometry stops
       // wobbling. Cache miss -> integer fallback. Gated PSXPORT_PGXP (default on; =0 for A/B vs oracle).
       int pgxp_lookup(int, int, float*, float*, float*);
+      int pgxp_lookup_view(int, int, float*, float*, float*);
       static int s_pgxp_on = -1;
       if (s_pgxp_on < 0) { const char* e = getenv("PSXPORT_PGXP"); s_pgxp_on = (e && !atoi(e)) ? 0 : 1; }
       float xs[4], ys[4]; int us[4], vs[4]; unsigned char rs[4], gs[4], bs[4];
+      // view-space positions for native lighting (per-face normal): all verts must hit the PGXP cache
+      // or we pass NULL (unlit, integer fallback). 2D HUD bypasses the GTE so it never hits -> stays unlit.
+      float vpx[4], vpy[4], vpz[4]; int have_view = s_pgxp_on;
       for (int i = 0; i < nv; i++) {
         float px, py;
         if (s_pgxp_on && pgxp_lookup(v[i].x, v[i].y, &px, &py, 0)) { xs[i] = px + s_off_x; ys[i] = py + s_off_y; }
         else { xs[i] = (float)(v[i].x + s_off_x); ys[i] = (float)(v[i].y + s_off_y); }
+        if (have_view && !pgxp_lookup_view(v[i].x, v[i].y, &vpx[i], &vpy[i], &vpz[i])) have_view = 0;
         us[i]=v[i].u; vs[i]=v[i].v; rs[i]=v[i].r; gs[i]=v[i].g; bs[i]=v[i].b;
       }
+      const float *lx = have_view ? vpx : 0, *ly = have_view ? vpy : 0, *lz = have_view ? vpz : 0;
       int mode = textured ? s_tp_mode : 3, rw = raw ? 1 : 0;
       if (semi) {
-        gpu_vk_draw_semi_f(xs, ys, us, vs, rs, gs, bs, s_tp_x, s_tp_y, mode, rw, s_clut_x, s_clut_y,
+        gpu_vk_draw_semi_f(xs, ys, us, vs, rs, gs, bs, lx, ly, lz, s_tp_x, s_tp_y, mode, rw, s_clut_x, s_clut_y,
                          s_tw_mx, s_tw_my, s_tw_ox, s_tw_oy, s_da_x0, s_da_y0, s_da_x1, s_da_y1, s_tp_blend);
-        if (nv == 4) gpu_vk_draw_semi_f(&xs[1], &ys[1], &us[1], &vs[1], &rs[1], &gs[1], &bs[1], s_tp_x, s_tp_y, mode, rw,
+        if (nv == 4) gpu_vk_draw_semi_f(&xs[1], &ys[1], &us[1], &vs[1], &rs[1], &gs[1], &bs[1],
+                         lx?lx+1:0, ly?ly+1:0, lz?lz+1:0, s_tp_x, s_tp_y, mode, rw,
                          s_clut_x, s_clut_y, s_tw_mx, s_tw_my, s_tw_ox, s_tw_oy, s_da_x0, s_da_y0, s_da_x1, s_da_y1, s_tp_blend);
       } else {
-        gpu_vk_draw_tritri_f(xs, ys, us, vs, rs, gs, bs, s_tp_x, s_tp_y, mode, rw, s_clut_x, s_clut_y,
+        gpu_vk_draw_tritri_f(xs, ys, us, vs, rs, gs, bs, lx, ly, lz, s_tp_x, s_tp_y, mode, rw, s_clut_x, s_clut_y,
                            s_tw_mx, s_tw_my, s_tw_ox, s_tw_oy, s_da_x0, s_da_y0, s_da_x1, s_da_y1);
-        if (nv == 4) gpu_vk_draw_tritri_f(&xs[1], &ys[1], &us[1], &vs[1], &rs[1], &gs[1], &bs[1], s_tp_x, s_tp_y, mode, rw,
+        if (nv == 4) gpu_vk_draw_tritri_f(&xs[1], &ys[1], &us[1], &vs[1], &rs[1], &gs[1], &bs[1],
+                           lx?lx+1:0, ly?ly+1:0, lz?lz+1:0, s_tp_x, s_tp_y, mode, rw,
                            s_clut_x, s_clut_y, s_tw_mx, s_tw_my, s_tw_ox, s_tw_oy, s_da_x0, s_da_y0, s_da_x1, s_da_y1);
       }
     }
@@ -1175,6 +1185,28 @@ void gpu_present_ex(int do_blit) {
   { void gte_probe_dump(const char*); static int gp = -1;   // PSXPORT_GTEPROBE=frame: dump GTE/lighting RE probe once
     if (gp == -2) {} else { if (gp == -1) { const char* e = getenv("PSXPORT_GTEPROBE"); gp = e ? atoi(e) : -2; }
       if (gp >= 0 && s_frame == gp) { char t[24]; snprintf(t,sizeof t,"f%d",s_frame); gte_probe_dump(t); gp = -2; } } }
+  // Native lighting engine config (one-shot, env-driven). PSXPORT_LIGHT: 0=off 1=directional 2=normal-viz.
+  // LIGHT_DIR="x,y,z" (view space, default upper-left toward camera), LIGHT_AMB / LIGHT_DIFF scalars,
+  // FOG=1 + FOG_NEAR/FOG_FAR/FOG_RGB for native distance fog. See docs/engine_re.md (lighting model).
+  { void gpu_vk_set_light(const float*); static int done = 0;
+    if (!done) { done = 1;
+      float L[12] = {0,0,0,0, 1,0,0,0, 0,0,0,0};
+      const char* m = getenv("PSXPORT_LIGHT");
+      if (m) { float dx=-0.4f,dy=-0.6f,dz=-0.7f, amb=0.55f, diff=0.6f;
+        const char* d = getenv("PSXPORT_LIGHT_DIR"); if (d) sscanf(d, "%f,%f,%f", &dx,&dy,&dz);
+        const char* a = getenv("PSXPORT_LIGHT_AMB"); if (a) amb = atof(a);
+        const char* df = getenv("PSXPORT_LIGHT_DIFF"); if (df) diff = atof(df);
+        L[0]=dx; L[1]=dy; L[2]=dz; L[3]=(float)atoi(m); L[4]=amb; L[5]=diff;
+      }
+      const char* fg = getenv("PSXPORT_FOG");
+      if (fg && atoi(fg)) { float n=200, f=2000, fr=0,fgc=0,fb=0;
+        const char* nn=getenv("PSXPORT_FOG_NEAR"); if(nn) n=atof(nn);
+        const char* ff=getenv("PSXPORT_FOG_FAR");  if(ff) f=atof(ff);
+        const char* rg=getenv("PSXPORT_FOG_RGB");  if(rg) sscanf(rg,"%f,%f,%f",&fr,&fgc,&fb);
+        L[6]=n; L[7]=f; L[8]=fr; L[9]=fgc; L[10]=fb; L[11]=1;
+      }
+      gpu_vk_set_light(L);
+    } }
   { void pgxp_frame_reset(void); pgxp_frame_reset(); }   // drop this frame's PGXP subpixel cache
   s_frame++; s_prims = 0; s_gp0_words = 0; s_dma2 = 0;
 }

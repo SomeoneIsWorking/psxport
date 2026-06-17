@@ -37,7 +37,10 @@ uint32_t gMode = 0;                             // PGXP mode 0 = off
 #define PGXP_BITS 15
 #define PGXP_SIZE (1 << PGXP_BITS)
 #define PGXP_MASK (PGXP_SIZE - 1)
-typedef struct { uint32_t key; float x, y, z; uint8_t valid; } PgxpEnt;
+// vx/vy/vz = the GTE's view-space vertex (IR1/IR2/IR3 = rotation*vertex + translation), captured at
+// projection time. The renderer reconstructs per-face normals from these (cross product) for native
+// lighting — Tomba2 has no GTE lighting of its own (later-96), so this is the only normal source.
+typedef struct { uint32_t key; float x, y, z; float vx, vy, vz; uint8_t valid; } PgxpEnt;
 static PgxpEnt s_pgxp[PGXP_SIZE];
 
 static inline uint32_t pgxp_key(int sx, int sy) {
@@ -53,7 +56,13 @@ void PGXP_pushSXYZ2f(float x, float y, float z, uint32_t v) {
   int sx = (int16_t)(v & 0xFFFF), sy = (int16_t)(v >> 16);
   uint32_t key = pgxp_key(sx, sy);
   PgxpEnt* e = &s_pgxp[pgxp_slot(key)];
-  e->key = key; e->x = x; e->y = y; e->z = z; e->valid = 1;
+  e->key = key; e->x = x; e->y = y; e->z = z;
+  // IR1/IR2/IR3 (data regs 9/10/11) still hold this vertex in view space at push time (TransformXY
+  // doesn't touch them) — capture for renderer-side normal reconstruction.
+  e->vx = (float)(int16_t)GTE_ReadDR(9);
+  e->vy = (float)(int16_t)GTE_ReadDR(10);
+  e->vz = (float)(int16_t)GTE_ReadDR(11);
+  e->valid = 1;
 }
 
 // Renderer hook: fetch the subpixel coords for an integer vertex (sx,sy). Returns 1 on a cache hit.
@@ -62,6 +71,17 @@ int pgxp_lookup(int sx, int sy, float* px, float* py, float* pz) {
   PgxpEnt* e = &s_pgxp[pgxp_slot(key)];
   if (e->valid && e->key == key) {
     if (px) *px = e->x; if (py) *py = e->y; if (pz) *pz = e->z;
+    return 1;
+  }
+  return 0;
+}
+
+// Renderer hook: fetch the view-space vertex (for native lighting). Returns 1 on a cache hit.
+int pgxp_lookup_view(int sx, int sy, float* vx, float* vy, float* vz) {
+  uint32_t key = pgxp_key(sx, sy);
+  PgxpEnt* e = &s_pgxp[pgxp_slot(key)];
+  if (e->valid && e->key == key) {
+    if (vx) *vx = e->vx; if (vy) *vy = e->vy; if (vz) *vz = e->vz;
     return 1;
   }
   return 0;
