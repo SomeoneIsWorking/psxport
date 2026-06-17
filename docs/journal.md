@@ -3763,3 +3763,21 @@ in gte_beetle.c. Implemented it for real instead of leaving 3D snapped-to-intege
   exactly the expected signature. widescreen_hack is OFF so precise_x is native (no squish baked in).
   NOTE: wobble reduction is a TEMPORAL effect — stills can't show it; user judges in motion. OPEN: if
   motion reveals mis-snap (value-key collisions), add PGXP-proper RAM-address tracking (handoff note).
+
+## 2026-06-17 (later-96) — Lighting/shading model REVERSE-ENGINEERED (groundwork for a native lighting engine).
+User goal: RE the game's rendering/lighting so we can intercept + replace it PC-native (e.g. a real
+lighting engine instead of the PSX one). Built `PSXPORT_GTEPROBE=<frame>` (gte_beetle.c): dumps the GTE
+ops that ACTUALLY execute + a lighting/fog control-register snapshot; corroborated by a static histogram
+of every `gte_op(...)` immediate in `generated/shard_*.c`. **Full model now in docs/engine_re.md.** Result:
+- **NO dynamic GTE lighting at all** — `NCDS/NCDT/NCCS/NCCT/NCS/NCT/CC/CDP` = 0 executions, 0 call-sites.
+  No light sources, no normal·light-matrix shading.
+- **Vertex colors are BAKED** in model data; **`GPF`** (very high count) scales them by a scalar IR0
+  (per-object brightness / fade). **`DPCS`/`DPCT` depth-cue = the atmosphere "lighting":** color lerped
+  toward **FarColor (CR21-23)** by `IR0=DQB+DQA·H/Sz`. FarColor is **scene-tinted** — f1500 water=(0,0,0)
+  fade-to-black, f3000 lava=(1280,0,0) red; DQA=6/DQB=0 both. (RTPS/RTPT/MVMVA/NCLIP/AVSZ run as expected.)
+- **Interception point:** final per-vertex RGB → GP0 gouraud polys → gpu_native gp0_exec tee (rs/gs/bs).
+- **Unlock for native lighting:** PGXP (later-95) already caches per-vertex screen x/y + precise_z, so we
+  can unproject to view-space position and derive per-FACE normals (edge cross-product) IN THE RENDERER —
+  enabling native directional/point lighting, normal shading, SSAO, and a replacement per-pixel fog (tint
+  from CR21-23). No need to fight any existing dynamic lighting (there is none). NEXT: pick the lighting
+  style + build the normal-reconstruction + shader path (scope question to user).

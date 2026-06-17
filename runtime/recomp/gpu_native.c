@@ -1172,6 +1172,9 @@ void gpu_present_ex(int do_blit) {
   }
   { void gpu_vk_dump(int,int,int,int,int); gpu_vk_dump(s_disp_x, s_disp_y, s_disp_w, s_disp_h, s_frame); }  // PSXPORT_VK_SHOT
   { void gpu_vk_frame_end(const uint16_t*, int); gpu_vk_frame_end(s_vram, s_frame); }  // VK: diff + batch reset
+  { void gte_probe_dump(const char*); static int gp = -1;   // PSXPORT_GTEPROBE=frame: dump GTE/lighting RE probe once
+    if (gp == -2) {} else { if (gp == -1) { const char* e = getenv("PSXPORT_GTEPROBE"); gp = e ? atoi(e) : -2; }
+      if (gp >= 0 && s_frame == gp) { char t[24]; snprintf(t,sizeof t,"f%d",s_frame); gte_probe_dump(t); gp = -2; } } }
   { void pgxp_frame_reset(void); pgxp_frame_reset(); }   // drop this frame's PGXP subpixel cache
   s_frame++; s_prims = 0; s_gp0_words = 0; s_dma2 = 0;
 }

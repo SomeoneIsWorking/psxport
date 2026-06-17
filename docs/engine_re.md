@@ -85,6 +85,34 @@ manager's target (Phase 1):** reimplement the walk in native C, call each handle
 - Forward vector (s16): `_DAT_1f8000e8/ea/ec` (used in the cull depth dot product).
 - Full basis (right/up) + projection consts (GTE OFX/OFY/H): TODO — read the GTE setup at frame start.
 
+## Lighting / shading model (RESOLVED — later-96, via GTE op histogram + control-reg snapshot)
+Tooling: `PSXPORT_GTEPROBE=<frame>` (gte_beetle.c) dumps the GTE ops that ACTUALLY execute + a
+lighting/fog control-register snapshot. Static-callsite histogram across `generated/shard_*.c` agrees.
+
+**There is NO dynamic GTE lighting.** The hardware per-vertex lighting ops `NCDS/NCDT/NCCS/NCCT/NCS/
+NCT/CC/CDP` execute **zero** times (and have zero call-sites). So no normal·light-matrix shading, no
+light sources. What the GTE actually runs (f1500/f3000 counts): `RTPS/RTPT` (projection), `MVMVA`
+(transforms), `NCLIP` (backface sign), `AVSZ3/4` (OT depth), `GPF` (interpolate IR·IR0), and
+`DPCS/DPCT` (depth-cue). Implications for the shading model:
+- **Vertex colors are BAKED** into the model data (artist-painted per-vertex RGB), not computed.
+- **`GPF` (highest count after RTP) scales the baked color by a scalar IR0** — the per-object/global
+  brightness + fade-in/out factor. (GPF: MAC = IR0·IR → color FIFO.)
+- **Atmosphere = GTE depth-cue FOG (`DPCS`/`DPCT`)**: final vertex color is interpolated toward the
+  **FarColor (CR21-23)** by a depth factor `IR0 = DQB + DQA·(H/Sz)` (`DQA=cr27`, `DQB=cr28`). The
+  FarColor is **scene-tinted**: f1500 (water/dusk) = (0,0,0) fade-to-black; f3000 (lava) = (1280,0,0)
+  red glow. DQA=6, DQB=0 in both. This depth-cue IS "the game's lighting/atmosphere".
+
+**Where final color enters the GPU (the interception point):** the computed per-vertex RGB lands in the
+**GP0 gouraud-polygon packets** → captured in `gpu_native.c` gp0_exec polygon tee as `rs/gs/bs`
+(op 0x20-0x3F). That is the universal sink regardless of how the game derived the color.
+
+**What a native lighting engine needs that the PSX stream doesn't directly give: per-vertex normals /
+3D position.** Now available: PGXP (later-95) caches per-vertex screen (x,y) + **precise_z** (view-space
+Z). Unproject (screen + z via H/OFX/OFY, CR24-26) → view-space position per vertex → per-FACE normal by
+cross product of triangle edges. That unlocks PC-native directional/point lighting, normal-based
+shading, SSAO, and a replacement per-pixel fog (read the scene FarColor from CR21-23 for the tint),
+all replacing/augmenting the baked color + GTE depth-cue. (Camera basis: see Camera section / CR24-31.)
+
 ## Open RE items (next, in order)
 1. ~~The entity list + its walk~~ — **DONE** (above): lists `DAT_800fb168`/`DAT_800f2624`, walk
    `FUN_8007a904`, node layout. Handlers are per-object fn pointers @ +0x1c (not a type-indexed table).

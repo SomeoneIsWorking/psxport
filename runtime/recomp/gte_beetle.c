@@ -117,8 +117,44 @@ void ws_sx_dump(const char* tag) {
 
 extern int g_wide60_on;                            // wide60.c: gates the capture taps
 void wide60_rtp(uint32_t op);                      // wide60.c: fold fingerprint + tag SXY->object
+
+// --- GTE/lighting RE probe (PSXPORT_GTEPROBE=N) -------------------------------------------------
+// Logs which GTE commands ACTUALLY execute (static call-site counts in generated/ aren't run-weighted)
+// and snapshots the lighting/fog control registers, to pin down Tomba2's shading model. Finding so far:
+// NO NC*/CC/CDP ops => no GTE dynamic per-vertex lighting; colors are baked + DPCS/DPCT depth-cue FOG.
+static long s_gte_hist[64];
+static int  s_gteprobe = -1, s_gteprobe_done = 0;
+static const char* gte_name(unsigned fn) {
+  switch (fn) {
+    case 0x01:return"RTPS"; case 0x06:return"NCLIP"; case 0x0C:return"OP"; case 0x10:return"DPCS";
+    case 0x11:return"INTPL"; case 0x12:return"MVMVA"; case 0x13:return"NCDS"; case 0x14:return"CDP";
+    case 0x16:return"NCDT"; case 0x1B:return"NCCS"; case 0x1C:return"CC"; case 0x1E:return"NCS";
+    case 0x20:return"NCT"; case 0x28:return"SQR"; case 0x29:return"DCPL"; case 0x2A:return"DPCT";
+    case 0x2D:return"AVSZ3"; case 0x2E:return"AVSZ4"; case 0x30:return"RTPT"; case 0x3D:return"GPF";
+    case 0x3E:return"GPL"; case 0x3F:return"NCCT"; default:return"?";
+  }
+}
+void gte_probe_dump(const char* tag) {
+  if (s_gteprobe <= 0) return;
+  fprintf(stderr, "[gteprobe %s] executed GTE ops:\n", tag);
+  for (unsigned fn = 0; fn < 64; fn++) if (s_gte_hist[fn])
+    fprintf(stderr, "    %-6s(0x%02X) = %ld\n", gte_name(fn), fn, s_gte_hist[fn]);
+  // lighting/fog control-register snapshot (cop2 CR numbering)
+  fprintf(stderr, "  LightMatrix(LLM cr8-12): %08X %08X %08X %08X %08X\n",
+          GTE_ReadCR(8),GTE_ReadCR(9),GTE_ReadCR(10),GTE_ReadCR(11),GTE_ReadCR(12));
+  fprintf(stderr, "  BackColor(RBK/GBK/BBK cr13-15): %d %d %d\n",
+          (int32_t)GTE_ReadCR(13),(int32_t)GTE_ReadCR(14),(int32_t)GTE_ReadCR(15));
+  fprintf(stderr, "  LightColorMtx(LCM cr16-20): %08X %08X %08X %08X %08X\n",
+          GTE_ReadCR(16),GTE_ReadCR(17),GTE_ReadCR(18),GTE_ReadCR(19),GTE_ReadCR(20));
+  fprintf(stderr, "  FarColor(RFC/GFC/BFC cr21-23): %d %d %d   [fog target]\n",
+          (int32_t)GTE_ReadCR(21),(int32_t)GTE_ReadCR(22),(int32_t)GTE_ReadCR(23));
+  fprintf(stderr, "  DepthCue DQA(cr27)=%d DQB(cr28)=%d   [IR0 = DQB + DQA*h/sz -> fog factor]\n",
+          (int16_t)GTE_ReadCR(27),(int32_t)GTE_ReadCR(28));
+}
 void     gte_op(R3000* c, uint32_t insn)         { (void)c; GTE_Instruction(insn);
                                                    unsigned op = insn & 0x3F;
+                                                   if (s_gteprobe < 0) { const char* e = getenv("PSXPORT_GTEPROBE"); s_gteprobe = e ? atoi(e) : 0; }
+                                                   if (s_gteprobe > 0) s_gte_hist[op]++;
                                                    if (op == 0x01 || op == 0x30) {
                                                      ws_sx_record();          // self-gated (PSXPORT_WS_SXHIST)
                                                      if (g_wide60_on) wide60_rtp(op);
