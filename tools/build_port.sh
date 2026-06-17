@@ -45,7 +45,11 @@ export -f compile_one objof; export CC CFLAGS OBJ
 TODO=""
 for s in $SRC; do
   o="$(objof "$s")"
-  if [ "$FORCE" = "all" ] || [ ! -f "$o" ] || [ "$s" -nt "$o" ] || printf '%s' " $FORCE " | grep -qF " $s "; then
+  # gpu_vk.c embeds the generated SPIR-V header — recompile it when that header changes too, else a
+  # shader-only edit relinks a STALE object with old bytecode (cost a long debug session once).
+  hdr_dep=""; case "$s" in *gpu_vk.c) hdr_dep="$RT/gpu_vk_shaders.h";; esac
+  if [ "$FORCE" = "all" ] || [ ! -f "$o" ] || [ "$s" -nt "$o" ] || \
+     { [ -n "$hdr_dep" ] && [ "$hdr_dep" -nt "$o" ]; } || printf '%s' " $FORCE " | grep -qF " $s "; then
     TODO="$TODO $s"
   fi
 done

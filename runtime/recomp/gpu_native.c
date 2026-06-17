@@ -559,6 +559,7 @@ static void gp0_exec(void) {
       void gpu_vk_draw_semi(const int*,const int*,const int*,const int*,const unsigned char*,
                             const unsigned char*,const unsigned char*,int,int,int,int,int,int,int,int,int,int,int,int,int,int,int);
       void gpu_vk_set_vd(const float*); void gpu_vk_set_order_2d(unsigned);
+      void gpu_vk_set_vd_n(const float*); void gpu_vk_set_order_2d_n(unsigned);
       int xs[4], ys[4], us[4], vs[4]; unsigned char rs[4], gs[4], bs[4];
       for (int i = 0; i < nv; i++) { xs[i]=v[i].x+s_off_x; ys[i]=v[i].y+s_off_y; us[i]=v[i].u; vs[i]=v[i].v;
                                      rs[i]=v[i].r; gs[i]=v[i].g; bs[i]=v[i].b; }
@@ -567,10 +568,14 @@ static void gp0_exec(void) {
       // native projection when every vertex resolves to a projected (3D) vertex; the D32 buffer then
       // does true per-pixel occlusion instead of OT/painter order. A poly with any unprojected vertex
       // is a 2D/HUD prim -> OT-order depth in the overlay band (over the 3D world). Faithful-off.
-      static int s_ndepth = -1;
+      // PSXPORT_SBS renders BOTH depth modes in one frame: it computes native depth too, but routes it
+      // to the SEPARATE native channel (set_vd_n / set_order_2d_n) leaving the default OT .ord intact,
+      // so the renderer can draw left=default / right=native. NATIVE_DEPTH replaces the single channel.
+      static int s_ndepth = -1, s_sbs = -1;
       if (s_ndepth < 0) s_ndepth = cfg_on("PSXPORT_NATIVE_DEPTH") ? 1 : 0;
+      if (s_sbs < 0) s_sbs = cfg_on("PSXPORT_SBS") ? 1 : 0;
       float dep[4]; int is3d = 0;
-      if (s_ndepth) {
+      if (s_ndepth || s_sbs) {
         int projprim_lookup(uint32_t,float*,float*,float*,float*,float*,float*);
         float proj_pz_to_ord(float);
         is3d = 1;
@@ -579,25 +584,26 @@ static void gp0_exec(void) {
           if (vaddr[i] && projprim_lookup(vaddr[i], 0,0,&pz,0,0,0)) dep[i] = proj_pz_to_ord(pz);
           else { is3d = 0; break; }
         }
-        if (!is3d) gpu_vk_set_order_2d(ord_idx);   // 2D/HUD overlay band, OT-ordered
+        if (!is3d) { if (s_sbs) gpu_vk_set_order_2d_n(ord_idx); else gpu_vk_set_order_2d(ord_idx); }  // 2D/HUD band
         extern long g_nd_3d, g_nd_2d; if (is3d) g_nd_3d++; else g_nd_2d++;
       }
+      #define SBS_OR_ND_SETVD(p) do { if (is3d) { if (s_sbs) gpu_vk_set_vd_n(p); else gpu_vk_set_vd(p); } } while (0)
       if (semi) {
         { void gpu_vk_semi_group(int,int,int,int);   // OT-order grouping (overlap -> fresh fb snapshot)
           int bx0=xs[0],by0=ys[0],bx1=xs[0],by1=ys[0];
           for (int i=1;i<nv;i++){ if(xs[i]<bx0)bx0=xs[i]; if(xs[i]>bx1)bx1=xs[i]; if(ys[i]<by0)by0=ys[i]; if(ys[i]>by1)by1=ys[i]; }
           gpu_vk_semi_group(bx0, by0, bx1, by1); }
-        if (is3d) gpu_vk_set_vd(dep);
+        SBS_OR_ND_SETVD(dep);
         gpu_vk_draw_semi(xs, ys, us, vs, rs, gs, bs, s_tp_x, s_tp_y, mode, rw, s_clut_x, s_clut_y,
                          s_tw_mx, s_tw_my, s_tw_ox, s_tw_oy, s_da_x0, s_da_y0, s_da_x1, s_da_y1, s_tp_blend);
-        if (nv == 4) { if (is3d) gpu_vk_set_vd(&dep[1]);
+        if (nv == 4) { SBS_OR_ND_SETVD(&dep[1]);
           gpu_vk_draw_semi(&xs[1], &ys[1], &us[1], &vs[1], &rs[1], &gs[1], &bs[1], s_tp_x, s_tp_y, mode, rw,
                          s_clut_x, s_clut_y, s_tw_mx, s_tw_my, s_tw_ox, s_tw_oy, s_da_x0, s_da_y0, s_da_x1, s_da_y1, s_tp_blend); }
       } else {
-        if (is3d) gpu_vk_set_vd(dep);
+        SBS_OR_ND_SETVD(dep);
         gpu_vk_draw_tritri(xs, ys, us, vs, rs, gs, bs, s_tp_x, s_tp_y, mode, rw, s_clut_x, s_clut_y,
                            s_tw_mx, s_tw_my, s_tw_ox, s_tw_oy, s_da_x0, s_da_y0, s_da_x1, s_da_y1);
-        if (nv == 4) { if (is3d) gpu_vk_set_vd(&dep[1]);
+        if (nv == 4) { SBS_OR_ND_SETVD(&dep[1]);
           gpu_vk_draw_tritri(&xs[1], &ys[1], &us[1], &vs[1], &rs[1], &gs[1], &bs[1], s_tp_x, s_tp_y, mode, rw,
                            s_clut_x, s_clut_y, s_tw_mx, s_tw_my, s_tw_ox, s_tw_oy, s_da_x0, s_da_y0, s_da_x1, s_da_y1); }
       }
@@ -682,8 +688,11 @@ static void gp0_exec(void) {
       unsigned ord_idx = s_prim_order++;
       gpu_vk_set_order(ord_idx);          // OT submission order -> depth (preserve opaque/semi order)
       // sprites/rects are screen-space (no GTE projection) -> 2D overlay band under PSXPORT_NATIVE_DEPTH.
-      { static int s_ndepth = -1; if (s_ndepth < 0) s_ndepth = cfg_on("PSXPORT_NATIVE_DEPTH") ? 1 : 0;
-        void gpu_vk_set_order_2d(unsigned); if (s_ndepth) gpu_vk_set_order_2d(ord_idx); }
+      { static int s_ndepth = -1, s_sbs = -1;
+        if (s_ndepth < 0) s_ndepth = cfg_on("PSXPORT_NATIVE_DEPTH") ? 1 : 0;
+        if (s_sbs < 0) s_sbs = cfg_on("PSXPORT_SBS") ? 1 : 0;
+        void gpu_vk_set_order_2d(unsigned); void gpu_vk_set_order_2d_n(unsigned);
+        if (s_sbs) gpu_vk_set_order_2d_n(ord_idx); else if (s_ndepth) gpu_vk_set_order_2d(ord_idx); }
       void gpu_vk_draw_tritri(const int*,const int*,const int*,const int*,const unsigned char*,
                               const unsigned char*,const unsigned char*,int,int,int,int,int,int,int,int,int,int,int,int,int,int);
       void gpu_vk_draw_semi(const int*,const int*,const int*,const int*,const unsigned char*,
@@ -1144,7 +1153,7 @@ void gpu_present_ex(int do_blit) {
       g_attach_hit = g_attach_miss = g_attach_nodeabsent = 0;
       projprim_reset();
     } }
-  { if (cfg_on("PSXPORT_NATIVE_DEPTH")) {
+  { if (cfg_on("PSXPORT_NATIVE_DEPTH") || cfg_on("PSXPORT_SBS")) {
       extern long g_nd_3d, g_nd_2d;
       if (s_frame > 0 && (s_frame % 60) == 0)
         fprintf(stderr, "[ndepth f%d] real-depth(3D) prims=%ld  OT-band(2D) prims=%ld  3D%%=%.1f\n",

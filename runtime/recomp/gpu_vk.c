@@ -73,6 +73,28 @@ static int             s_tex_undef;
 static VkImage         s_tex;
 static VkDeviceMemory  s_tex_mem;
 static VkImageView     s_tex_view;
+// PSXPORT_SBS: a SECOND full-resolution VRAM image. Each present renders the frame's geometry twice —
+// s_tex with default OT-order depth, s_tex_b with native per-vertex depth — then the windowed present
+// composites them side by side (left pane samples s_tex, right pane s_tex_b). No shared-image seam.
+static VkImage         s_tex_b;
+static VkDeviceMemory  s_tex_b_mem;
+static VkImageView     s_tex_b_view;
+static VkFramebuffer   s_vram_fb_b;        // render pass framebuffer over s_tex_b (+ its own depth)
+static VkDescriptorSet s_dset_b;           // present descriptor: binding0 = s_tex_b
+
+// A render Panel: one self-contained view of the frame. It owns its PERSISTENT VRAM color image, depth
+// buffer, render-pass framebuffer and present descriptor, and renders independently (its own dirty-VRAM
+// upload + own depth occlusion). PSXPORT_SBS composes two panels — [0] default OT depth, [1] native
+// per-vertex depth — with NO shared mutable render state (which previously made them render identically:
+// a per-frame copy of panel 0 destroyed panel 1's persistent native framebuffer). `native` selects the
+// depth channel via the pipeline specialization constant (s_tritex_pipe[native]).
+typedef struct {
+  VkImage         color; VkFramebuffer fb; VkDescriptorSet dset_present; VkImage depth;
+  int             color_undef, depth_undef, native;
+} Panel;
+static Panel s_panels[2];
+static int   s_npanels = 1;
+
 static VkBuffer        s_stage;
 static VkDeviceMemory  s_stage_mem;
 static void*           s_stage_ptr;
@@ -84,11 +106,11 @@ static void*           s_rb_ptr;
 // M2 triangle rasterizer: render pass over the VRAM image + pipeline + batched vertex buffer
 static VkRenderPass    s_vram_rpass;
 static VkFramebuffer   s_vram_fb;
-static VkPipeline      s_tri_pipe;
+static VkPipeline      s_tri_pipe[2];   // [0]=default OT depth, [1]=native depth (SBS_NATIVE spec const)
 static VkBuffer        s_vbuf;        // host-visible vertex batch
 static VkDeviceMemory  s_vbuf_mem;
 static void*           s_vbuf_ptr;
-typedef struct { float x, y, r, g, b, ord; } TriVtx;
+typedef struct { float x, y, r, g, b, ord, ordn; } TriVtx;
 #define TRI_CAP 196608                // max batched vertices (= 65536 tris)
 static int             s_tri_n;
 
@@ -103,7 +125,14 @@ static VkImage         s_depth;
 static VkDeviceMemory  s_depth_mem;
 static VkImageView     s_depth_view;
 static int             s_depth_undef = 1;
-static VkPipeline      s_tritex_semi_pipe;   // textured pipeline, depth-test GREATER_EQUAL, NO depth write
+// PSXPORT_SBS panel B owns its OWN depth buffer. The two panes render in one command buffer; a SHARED
+// depth image has a write-after-write hazard between the two render passes (no barrier between them), so
+// the second pane inherited the first's depth/occlusion (both panes looked identical). Isolated.
+static VkImage         s_depth_b;
+static VkDeviceMemory  s_depth_b_mem;
+static VkImageView     s_depth_b_view;
+static int             s_depth_b_undef = 1;
+static VkPipeline      s_tritex_semi_pipe[2];   // textured semi, depth-test GREATER_EQUAL no write; [native]
 static float           s_cur_ord;            // current prim's normalized depth (set by gpu_vk_set_order)
 // Phase 2 (PSXPORT_NATIVE_DEPTH): per-vertex REAL depth for the current triangle. When non-NULL it
 // overrides the per-prim OT-order s_cur_ord, so gl_Position.z carries the native view-space depth (from
@@ -111,25 +140,35 @@ static float           s_cur_ord;            // current prim's normalized depth 
 // the gp0 tee AFTER gpu_vk_set_order (which clears it, so 2D/sprite prims fall back to OT order).
 static const float*    s_vd;
 void gpu_vk_set_vd(const float* d3) { s_vd = d3; }
+// PSXPORT_SBS second (native) depth channel: every vertex carries BOTH the default-mode depth (.ord)
+// and the native-mode depth (.ordn) so one geometry batch renders both ways (left=ord, right=ordn).
+// In a normal (non-SBS) run the native channel mirrors the default one (ordn == ord), so it is inert.
+static const float*    s_vdn;
+static float           s_cur_ordn;
+void gpu_vk_set_vd_n(const float* d3) { s_vdn = d3; }
 // Single shared D32 buffer is partitioned into a 3D WORLD band [0, NATIVE_3D_MAX] (real per-vertex
 // depth) and a 2D OVERLAY band (NATIVE_3D_MAX, 1] (OT-ordered) so HUD/UI composites over the 3D world.
 // (Interim until Phase 2 routes 3D and 2D to separate targets; not an offset to align pixels.)
 #define NATIVE_3D_MAX 0.9375f
-void gpu_vk_set_order(unsigned idx) { s_cur_ord = (float)(idx + 1) / 65536.0f; if (s_cur_ord > 1.0f) s_cur_ord = 1.0f; s_vd = 0; }
+void gpu_vk_set_order(unsigned idx) { s_cur_ord = (float)(idx + 1) / 65536.0f; if (s_cur_ord > 1.0f) s_cur_ord = 1.0f;
+                                      s_cur_ordn = s_cur_ord; s_vd = 0; s_vdn = 0; }
 // 2D/HUD prim under PSXPORT_NATIVE_DEPTH: OT order, biased into the overlay band above the 3D world.
 void gpu_vk_set_order_2d(unsigned idx) { float t = (float)(idx + 1) / 65536.0f; if (t > 1.0f) t = 1.0f;
                                          s_cur_ord = NATIVE_3D_MAX + (1.0f - NATIVE_3D_MAX) * t; s_vd = 0; }
+// Same overlay-band bias, but for the SBS native channel only (leaves the default .ord untouched).
+void gpu_vk_set_order_2d_n(unsigned idx) { float t = (float)(idx + 1) / 65536.0f; if (t > 1.0f) t = 1.0f;
+                                           s_cur_ordn = NATIVE_3D_MAX + (1.0f - NATIVE_3D_MAX) * t; s_vdn = 0; }
 
 // M3 textured rasterizer: a VRAM snapshot image the texture sampler reads (avoids render/sample feedback
 // loop), its descriptor set, the textured pipeline, and a textured-vertex batch.
-typedef struct { float x, y, u, v, r, g, b; int32_t tp[4], clut[4], tw[4], da[4]; float ord; } TexVtx;  // 96 bytes
+typedef struct { float x, y, u, v, r, g, b; int32_t tp[4], clut[4], tw[4], da[4]; float ord, ordn; } TexVtx;  // 100 bytes
 #define TEX_CAP 196608
 static VkImage         s_vram_tex;    // texture-source snapshot (copy of VRAM before a draw batch)
 static VkDeviceMemory  s_vram_tex_mem;
 static VkImageView     s_vram_tex_view;
 static int             s_vram_tex_undef;
 static VkDescriptorSet s_dset_tex;    // binding0 = s_vram_tex
-static VkPipeline      s_tritex_pipe;
+static VkPipeline      s_tritex_pipe[2];   // [0]=default OT depth, [1]=native depth
 static VkBuffer        s_tvbuf;
 static VkDeviceMemory  s_tvbuf_mem;
 static void*           s_tvbuf_ptr;
@@ -455,14 +494,15 @@ static void init_vk(void) {
   si.magFilter = si.minFilter = VK_FILTER_NEAREST;   // R16_UINT VRAM: integer texture (no linear filter)
   si.addressModeU = si.addressModeV = si.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
   VKC(vkCreateSampler(s_dev, &si, 0, &s_sampler));
-  VkDescriptorPoolSize ps = { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2 };
+  VkDescriptorPoolSize ps = { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 3 };
   VkDescriptorPoolCreateInfo dpi = { VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO };
-  dpi.maxSets = 2; dpi.poolSizeCount = 1; dpi.pPoolSizes = &ps;
+  dpi.maxSets = 3; dpi.poolSizeCount = 1; dpi.pPoolSizes = &ps;
   VKC(vkCreateDescriptorPool(s_dev, &dpi, 0, &s_dpool));
   VkDescriptorSetAllocateInfo dai = { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO };
   dai.descriptorPool = s_dpool; dai.descriptorSetCount = 1; dai.pSetLayouts = &s_dsl;
   VKC(vkAllocateDescriptorSets(s_dev, &dai, &s_dset));        // binding0 = VRAM image (present)
   VKC(vkAllocateDescriptorSets(s_dev, &dai, &s_dset_tex));    // binding0 = VRAM snapshot (textured sampling)
+  VKC(vkAllocateDescriptorSets(s_dev, &dai, &s_dset_b));      // binding0 = SBS native-depth VRAM image (present)
 
   // command pool + buffer, sync
   VkCommandPoolCreateInfo cpi = { VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO };
@@ -479,6 +519,7 @@ static void init_vk(void) {
 
   create_vram();
   void create_tri_pipeline(void); create_tri_pipeline();
+  void panels_init(void); panels_init();
   if (!s_headless) create_swapchain();
   else fprintf(stderr, "[gpu_vk] headless offscreen render up (VRAM 1024x512 R16_UINT, no swapchain)\n");
   fprintf(stderr, "[gpu_vk] Vulkan present backend up (%ux%u, %u swap images; VRAM 1024x512 R16_UINT)\n",
@@ -525,6 +566,19 @@ static void create_vram(void) {
   wr.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; wr.pImageInfo = &di;
   vkUpdateDescriptorSets(s_dev, 1, &wr, 0, 0);
 
+  // PSXPORT_SBS second image (same format/usage as s_tex) + its present descriptor.
+  VKC(vkCreateImage(s_dev, &ii, 0, &s_tex_b));
+  VkMemoryRequirements mrb; vkGetImageMemoryRequirements(s_dev, s_tex_b, &mrb);
+  VkMemoryAllocateInfo mab = { VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO };
+  mab.allocationSize = mrb.size; mab.memoryTypeIndex = mem_type(mrb.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+  VKC(vkAllocateMemory(s_dev, &mab, 0, &s_tex_b_mem));
+  VKC(vkBindImageMemory(s_dev, s_tex_b, s_tex_b_mem, 0));
+  VkImageViewCreateInfo vib = vi; vib.image = s_tex_b;
+  VKC(vkCreateImageView(s_dev, &vib, 0, &s_tex_b_view));
+  VkDescriptorImageInfo dib = { s_sampler, s_tex_b_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+  VkWriteDescriptorSet wrb = wr; wrb.dstSet = s_dset_b; wrb.pImageInfo = &dib;
+  vkUpdateDescriptorSets(s_dev, 1, &wrb, 0, 0);
+
   // VRAM snapshot image (texture source for the textured pipeline; copied from VRAM before a batch).
   VkImageCreateInfo ti = ii; ti.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
   VKC(vkCreateImage(s_dev, &ti, 0, &s_vram_tex));
@@ -563,7 +617,8 @@ static void poll_quit(void) {
 // identity (non-wide) transform while still satisfying the shader's img_h dependency.
 static void push_wide(int enabled) {
   // ss = internal-res scale; the horizontal re-center (WIDE_OFF) applies only in 16:9, so 4:3 hi-res
-  // just scales the native view by s_ires with no FOV change.
+  // just scales the native view by s_ires with no FOV change. (The PSXPORT_SBS depth select is a
+  // pipeline specialization constant, not a push constant — see SBS_NATIVE in the shaders.)
   int32_t va[8] = { enabled, FB_Y0, s_ires, IMG_H,   s_wide ? WIDE_OFF : 0, FBW(), FBH(), 0 /*fb_x0*/ };
   vkCmdPushConstants(s_cmd, s_pll, VK_SHADER_STAGE_VERTEX_BIT, 16, 32, va);
 }
@@ -579,11 +634,144 @@ int gpu_vk_sprite_anchor_dx(int center_local_x) {
   return ((center_local_x - 160) * (FBW() / s_ires - 320)) / 320;
 }
 
+// Render this frame's tee'd geometry over the freshly uploaded VRAM in `tgt`/`fb`. `native` picks the
+// depth channel (0 = default OT .ord, 1 = native .ordn) for the PSXPORT_SBS split. `tgt` must enter in
+// TRANSFER_DST (uploaded VRAM) and leaves in SHADER_READ_ONLY (ready to sample). Shares depth + s_vram_tex.
+// Bind each Panel's per-target resources. Panel 0 wraps the primary VRAM image (also used by the
+// readback / self-test paths); Panel 1 is the SBS native-depth target. Called once after the images,
+// framebuffers and descriptors exist.
+void panels_init(void) {
+  s_panels[0] = (Panel){ s_tex,   s_vram_fb,   s_dset,   s_depth,   1, 1, 0 };
+  s_panels[1] = (Panel){ s_tex_b, s_vram_fb_b, s_dset_b, s_depth_b, 1, 1, 1 };
+}
+
+// Mirror this frame's SW-written VRAM (s_stage) into a Panel's PERSISTENT color image: a full copy on
+// first use, then only the dirty regions (uploads/copies/fills) — the rendered framebuffer stays owned
+// by the panel across frames. Each panel uploads independently so its persistent framebuffer is its own.
+static void panel_upload(Panel* p) {
+  img_barrier_on(p->color, p->color_undef ? VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                 VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                 VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_SHADER_READ_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
+  if (p->color_undef) {
+    VkBufferImageCopy bc = {0};
+    bc.imageSubresource = (VkImageSubresourceLayers){ VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+    bc.imageExtent = (VkExtent3D){ VRAM_W, VRAM_H, 1 };
+    vkCmdCopyBufferToImage(s_cmd, s_stage, p->color, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &bc);
+  } else {
+    for (int d = 0; d < s_dirty_n; d++) {
+      VkBufferImageCopy r = {0};
+      r.bufferOffset = ((VkDeviceSize)s_dirty[d].y * VRAM_W + s_dirty[d].x) * 2;
+      r.bufferRowLength = VRAM_W;
+      r.imageSubresource = (VkImageSubresourceLayers){ VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+      r.imageOffset = (VkOffset3D){ s_dirty[d].x, s_dirty[d].y, 0 };
+      r.imageExtent = (VkExtent3D){ s_dirty[d].w, s_dirty[d].h, 1 };
+      vkCmdCopyBufferToImage(s_cmd, s_stage, p->color, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &r);
+    }
+  }
+  p->color_undef = 0;
+}
+
+// Render this frame's tee'd geometry into one Panel (over its freshly uploaded persistent VRAM). The
+// panel's `native` picks the depth-channel pipeline variant. `p->color` enters in TRANSFER_DST (just
+// uploaded) and leaves in SHADER_READ_ONLY (ready to sample). The texture/blend snapshot (s_vram_tex)
+// is shared scratch, serialized by its layout barriers.
+static void panel_render(Panel* p) {
+  VkImage tgt = p->color, depth = p->depth; VkFramebuffer fb = p->fb; int native = p->native;
+  VkRenderPassBeginInfo grp = { VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
+  grp.renderPass = s_vram_rpass; grp.framebuffer = fb; grp.renderArea.extent = (VkExtent2D){ VRAM_W, IMG_H };
+  VkViewport gv = { 0, 0, VRAM_W, IMG_H, 0.0f, 1.0f }; VkRect2D gs = { {0,0}, { VRAM_W, IMG_H } };
+  VkDeviceSize go = 0;
+  VkImageCopy ic = { { VK_IMAGE_ASPECT_COLOR_BIT,0,0,1 }, {0,0,0}, { VK_IMAGE_ASPECT_COLOR_BIT,0,0,1 }, {0,0,0}, { VRAM_W, IMG_H, 1 } };
+  VkBufferImageCopy bc = {0};
+  bc.imageSubresource = (VkImageSubresourceLayers){ VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+  bc.imageExtent = (VkExtent3D){ VRAM_W, VRAM_H, 1 };
+  if (s_tri_n || s_tex_n || s_semi_n) {
+    // snapshot the uploaded VRAM -> vram_tex (the textures) for the opaque pass
+    img_barrier_on(s_vram_tex, s_vram_tex_undef ? VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                   VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_SHADER_READ_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
+    s_vram_tex_undef = 0;
+    vkCmdCopyBufferToImage(s_cmd, s_stage, s_vram_tex, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &bc);
+    img_barrier_on(s_vram_tex, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                   VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                   VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
+    img_barrier_on(tgt, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
+    if (p->depth_undef) {   // first use: UNDEFINED -> DEPTH_STENCIL_ATTACHMENT_OPTIMAL (stays there)
+      VkImageMemoryBarrier b = { VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
+      b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED; b.newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+      b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED; b.image = depth;
+      b.subresourceRange = (VkImageSubresourceRange){ VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1 };
+      b.dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT;
+      vkCmdPipelineBarrier(s_cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
+                           0, 0, 0, 0, 0, 1, &b);
+      p->depth_undef = 0;
+    }
+    // OPAQUE pass
+    vkCmdBeginRenderPass(s_cmd, &grp, VK_SUBPASS_CONTENTS_INLINE);
+    vkCmdSetViewport(s_cmd, 0, 1, &gv); vkCmdSetScissor(s_cmd, 0, 1, &gs);
+    // Clear the depth buffer each frame; the render pass LOADs it so opaque->semi share it.
+    { VkClearAttachment dca = { VK_IMAGE_ASPECT_DEPTH_BIT, 0, {{{0}}} }; dca.clearValue.depthStencil.depth = 0.0f;
+      VkClearRect dcr = { { { 0, 0 }, { VRAM_W, IMG_H } }, 0, 1 };
+      vkCmdClearAttachments(s_cmd, 1, &dca, 1, &dcr); }
+    if (use_fb()) {   // clear the scratch FB (the game's clear/fill targets VRAM, not the FB) before drawing
+      VkClearAttachment ca = { VK_IMAGE_ASPECT_COLOR_BIT, 0, {{{0,0,0,1}}} };
+      VkClearRect cr = { { { 0, FB_Y0 }, { (uint32_t)FBW(), (uint32_t)FBH() } }, 0, 1 };
+      vkCmdClearAttachments(s_cmd, 1, &ca, 1, &cr);
+    }
+    push_wide(use_fb());
+    vkCmdBindDescriptorSets(s_cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, s_pll, 0, 1, &s_dset_tex, 0, 0);
+    if (s_tri_n) { vkCmdBindPipeline(s_cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, s_tri_pipe[native]);
+                   vkCmdBindVertexBuffers(s_cmd, 0, 1, &s_vbuf, &go); vkCmdDraw(s_cmd, s_tri_n, 1, 0, 0); }
+    if (s_tex_n) { vkCmdBindPipeline(s_cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, s_tritex_pipe[native]);
+                   vkCmdBindVertexBuffers(s_cmd, 0, 1, &s_tvbuf, &go); vkCmdDraw(s_cmd, s_tex_n, 1, 0, 0); }
+    vkCmdEndRenderPass(s_cmd);
+    // SEMI pass, OT-order-correct: each overlap-group with a FRESH framebuffer snapshot.
+    for (int g = 0; g <= s_semi_grp_n && s_semi_n; g++) {
+      int gstart = (g == 0) ? 0 : s_semi_grp[g - 1];
+      int gend   = (g < s_semi_grp_n) ? s_semi_grp[g] : s_semi_n;
+      if (gend <= gstart) continue;
+      img_barrier_on(tgt, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                  VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                  VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT);
+      img_barrier_on(s_vram_tex, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                     VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                     VK_ACCESS_SHADER_READ_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
+      vkCmdCopyImage(s_cmd, tgt, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, s_vram_tex, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &ic);
+      img_barrier_on(s_vram_tex, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                     VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                     VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
+      img_barrier_on(tgt, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                  VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                  VK_ACCESS_TRANSFER_READ_BIT, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
+      vkCmdBeginRenderPass(s_cmd, &grp, VK_SUBPASS_CONTENTS_INLINE);
+      vkCmdSetViewport(s_cmd, 0, 1, &gv); vkCmdSetScissor(s_cmd, 0, 1, &gs);
+      vkCmdBindDescriptorSets(s_cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, s_pll, 0, 1, &s_dset_tex, 0, 0);
+      vkCmdBindPipeline(s_cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, s_tritex_semi_pipe[native]);   // depth-test, NO write
+      vkCmdBindVertexBuffers(s_cmd, 0, 1, &s_semibuf, &go); vkCmdDraw(s_cmd, gend - gstart, 1, gstart, 0);
+      vkCmdEndRenderPass(s_cmd);
+    }
+    img_barrier_on(tgt, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
+  } else {
+    img_barrier_on(tgt, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
+  }
+}
+
 // Present the display region [sx,sy .. +w,h] of `src` (s_vram or s_interp) via Vulkan, fit to aspect.
 void gpu_vk_present(const uint16_t* src, int sx, int sy, int w, int h) {
   if (!gpu_vk_enabled()) return;
   if (!s_inited) init_vk();
   wide_init();
+  // PSXPORT_SBS: split-screen depth A/B. Render the frame into TWO full-res images — s_tex with default
+  // OT-order depth, s_tex_b with native per-vertex depth — then composite them side by side (left pane =
+  // default, right pane = native) so you can SEE the native-depth bug against the correct render.
+  static int s_sbs = -1;
+  if (s_sbs < 0) s_sbs = cfg_on("PSXPORT_SBS") ? 1 : 0;
 
   // Mirror the whole CPU VRAM (s_vram/s_interp) into the GPU R16_UINT image (M1: SW still rasterizes;
   // M2+ will draw into this image directly and skip the upload for drawn regions). The display region
@@ -604,114 +792,11 @@ void gpu_vk_present(const uint16_t* src, int sx, int sy, int w, int h) {
   bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
   VKC(vkBeginCommandBuffer(s_cmd, &bi));
 
-  img_barrier(s_tex_undef ? VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-              VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-              VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
-              VK_ACCESS_SHADER_READ_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
-  VkBufferImageCopy bc = {0};
-  bc.imageSubresource = (VkImageSubresourceLayers){ VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
-  bc.imageExtent = (VkExtent3D){ VRAM_W, VRAM_H, 1 };
-  if (s_tex_undef) {                          // first frame: initialize the whole VK VRAM from s_vram
-    vkCmdCopyBufferToImage(s_cmd, s_stage, s_tex, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &bc);
-  } else {                                    // mirror only SW-written regions (uploads/copies/fills);
-    for (int d = 0; d < s_dirty_n; d++) {     // the framebuffer stays VK-owned/persistent
-      VkBufferImageCopy r = {0};
-      r.bufferOffset = ((VkDeviceSize)s_dirty[d].y * VRAM_W + s_dirty[d].x) * 2;
-      r.bufferRowLength = VRAM_W;
-      r.imageSubresource = (VkImageSubresourceLayers){ VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
-      r.imageOffset = (VkOffset3D){ s_dirty[d].x, s_dirty[d].y, 0 };
-      r.imageExtent = (VkExtent3D){ s_dirty[d].w, s_dirty[d].h, 1 };
-      vkCmdCopyBufferToImage(s_cmd, s_stage, s_tex, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &r);
-    }
-  }
-  s_tex_undef = 0;
-  // M5: render this frame's tee'd geometry into VK VRAM (over the uploaded SW VRAM = textures/bg),
-  // then present from VK VRAM. Textured prims sample a snapshot (s_vram_tex) of the uploaded VRAM.
-  VkRenderPassBeginInfo grp = { VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
-  grp.renderPass = s_vram_rpass; grp.framebuffer = s_vram_fb; grp.renderArea.extent = (VkExtent2D){ VRAM_W, IMG_H };
-  VkViewport gv = { 0, 0, VRAM_W, IMG_H, 0.0f, 1.0f }; VkRect2D gs = { {0,0}, { VRAM_W, IMG_H } };
-  VkDeviceSize go = 0;
-  // full-image copy (s_tex -> snapshot) for the semi blend dest: must include the scratch FB rows.
-  VkImageCopy ic = { { VK_IMAGE_ASPECT_COLOR_BIT,0,0,1 }, {0,0,0}, { VK_IMAGE_ASPECT_COLOR_BIT,0,0,1 }, {0,0,0}, { VRAM_W, IMG_H, 1 } };
+  // Each Panel uploads its OWN persistent VRAM then renders independently (own depth occlusion, own
+  // pipeline depth-channel). PSXPORT_SBS = 2 panels (default + native); otherwise just the primary one.
+  s_npanels = s_sbs ? 2 : 1;
   s_dbg_tri = s_tri_n; s_dbg_tex = s_tex_n; s_dbg_semi = s_semi_n;   // snapshot for gpu_vk_stats (vkstats probe)
-  if (s_tri_n || s_tex_n || s_semi_n) {
-    // snapshot the uploaded VRAM -> vram_tex (the textures) for the opaque pass
-    img_barrier_on(s_vram_tex, s_vram_tex_undef ? VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                   VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_SHADER_READ_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
-    s_vram_tex_undef = 0;
-    vkCmdCopyBufferToImage(s_cmd, s_stage, s_vram_tex, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &bc);
-    img_barrier_on(s_vram_tex, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                   VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                   VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
-    img_barrier(VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-                VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
-    if (s_depth_undef) {   // first use: UNDEFINED -> DEPTH_STENCIL_ATTACHMENT_OPTIMAL (stays there)
-      VkImageMemoryBarrier b = { VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
-      b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED; b.newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-      b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED; b.image = s_depth;
-      b.subresourceRange = (VkImageSubresourceRange){ VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1 };
-      b.dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT;
-      vkCmdPipelineBarrier(s_cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
-                           0, 0, 0, 0, 0, 1, &b);
-      s_depth_undef = 0;
-    }
-    // OPAQUE pass
-    vkCmdBeginRenderPass(s_cmd, &grp, VK_SUBPASS_CONTENTS_INLINE);
-    vkCmdSetViewport(s_cmd, 0, 1, &gv); vkCmdSetScissor(s_cmd, 0, 1, &gs);
-    // Clear the depth (OT-order) buffer each frame; the render pass LOADs it so opaque->semi share it.
-    { VkClearAttachment dca = { VK_IMAGE_ASPECT_DEPTH_BIT, 0, {{{0}}} }; dca.clearValue.depthStencil.depth = 0.0f;
-      VkClearRect dcr = { { { 0, 0 }, { VRAM_W, IMG_H } }, 0, 1 };
-      vkCmdClearAttachments(s_cmd, 1, &dca, 1, &dcr); }
-    if (use_fb()) {   // clear the scratch FB (the game's clear/fill targets VRAM, not the FB) before drawing
-      VkClearAttachment ca = { VK_IMAGE_ASPECT_COLOR_BIT, 0, {{{0,0,0,1}}} };
-      VkClearRect cr = { { { 0, FB_Y0 }, { (uint32_t)FBW(), (uint32_t)FBH() } }, 0, 1 };
-      vkCmdClearAttachments(s_cmd, 1, &ca, 1, &cr);
-    }
-    push_wide(use_fb());
-    vkCmdBindDescriptorSets(s_cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, s_pll, 0, 1, &s_dset_tex, 0, 0);
-    if (s_tri_n) { vkCmdBindPipeline(s_cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, s_tri_pipe);
-                   vkCmdBindVertexBuffers(s_cmd, 0, 1, &s_vbuf, &go); vkCmdDraw(s_cmd, s_tri_n, 1, 0, 0); }
-    if (s_tex_n) { vkCmdBindPipeline(s_cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, s_tritex_pipe);
-                   vkCmdBindVertexBuffers(s_cmd, 0, 1, &s_tvbuf, &go); vkCmdDraw(s_cmd, s_tex_n, 1, 0, 0); }
-    vkCmdEndRenderPass(s_cmd);
-    // SEMI pass, OT-order-correct: draw each overlap-group with a FRESH framebuffer snapshot so a later
-    // group blends against the earlier groups' results (stacked fade tiles accumulate, as on hardware).
-    for (int g = 0; g <= s_semi_grp_n && s_semi_n; g++) {
-      int gstart = (g == 0) ? 0 : s_semi_grp[g - 1];
-      int gend   = (g < s_semi_grp_n) ? s_semi_grp[g] : s_semi_n;
-      if (gend <= gstart) continue;
-      // snapshot the current framebuffer (+ atlas) -> vram_tex: semi prims sample it for BOTH the
-      // texture and the blend destination (now includes prior groups' semi writes).
-      img_barrier(VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                  VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                  VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT);
-      img_barrier_on(s_vram_tex, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                     VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                     VK_ACCESS_SHADER_READ_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
-      vkCmdCopyImage(s_cmd, s_tex, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, s_vram_tex, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &ic);
-      img_barrier_on(s_vram_tex, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                     VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                     VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
-      img_barrier(VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                  VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-                  VK_ACCESS_TRANSFER_READ_BIT, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
-      vkCmdBeginRenderPass(s_cmd, &grp, VK_SUBPASS_CONTENTS_INLINE);
-      vkCmdSetViewport(s_cmd, 0, 1, &gv); vkCmdSetScissor(s_cmd, 0, 1, &gs);
-      vkCmdBindDescriptorSets(s_cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, s_pll, 0, 1, &s_dset_tex, 0, 0);
-      vkCmdBindPipeline(s_cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, s_tritex_semi_pipe);   // depth-test, NO write
-      vkCmdBindVertexBuffers(s_cmd, 0, 1, &s_semibuf, &go); vkCmdDraw(s_cmd, gend - gstart, 1, gstart, 0);
-      vkCmdEndRenderPass(s_cmd);
-    }
-    img_barrier(VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
-  } else {
-    img_barrier(VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
-  }
+  for (int i = 0; i < s_npanels; i++) { panel_upload(&s_panels[i]); panel_render(&s_panels[i]); }
 
   // Headless (offscreen): the frame is fully rendered into s_tex; there is no swapchain to present to.
   // End + submit the geometry command buffer (signaling s_fence) and return; vk_dump/readback reads s_tex.
@@ -735,16 +820,21 @@ void gpu_vk_present(const uint16_t* src, int sx, int sy, int w, int h) {
   if (use_fb()) { sx = 0; sy = FB_Y0; w = FBW(); h = FBH(); }
   s_last_sx = sx; s_last_sy = sy; s_last_w = w; s_last_h = h;   // for on-demand gpu_vk_shot (debug server)
   int aw = s_wide ? 16 : 4, ah = s_wide ? 9 : 3;
-  int ow = s_extent.width, oh = s_extent.height, dw, dh;
-  if (ow * ah >= oh * aw) { dh = oh; dw = oh * aw / ah; } else { dw = ow; dh = ow * ah / aw; }
-  VkViewport vpt = { (float)((ow - dw) / 2), (float)((oh - dh) / 2), (float)dw, (float)dh, 0.0f, 1.0f };
+  int ow = s_extent.width, oh = s_extent.height;
+  int npanes = s_sbs ? 2 : 1;                          // SBS: left pane = s_tex (default), right = s_tex_b (native)
   VkRect2D sc = { {0, 0}, s_extent };
-  vkCmdSetViewport(s_cmd, 0, 1, &vpt); vkCmdSetScissor(s_cmd, 0, 1, &sc);
+  vkCmdSetScissor(s_cmd, 0, 1, &sc);
   vkCmdBindPipeline(s_cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, s_pipe);
-  vkCmdBindDescriptorSets(s_cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, s_pll, 0, 1, &s_dset, 0, 0);
-  int32_t disp[4] = { sx, sy, w, h };   // VRAM display region the present pass samples
+  int32_t disp[4] = { sx, sy, w, h };   // VRAM display region the present pass samples (same for both panes)
   vkCmdPushConstants(s_cmd, s_pll, VK_SHADER_STAGE_FRAGMENT_BIT, 0, 16, disp);
-  vkCmdDraw(s_cmd, 3, 1, 0, 0);
+  for (int p = 0; p < npanes; p++) {
+    int paneW = ow / npanes, paneX = p * paneW, dw, dh;   // fit display aspect within each pane
+    if (paneW * ah >= oh * aw) { dh = oh; dw = oh * aw / ah; } else { dw = paneW; dh = paneW * ah / aw; }
+    VkViewport vpt = { (float)(paneX + (paneW - dw) / 2), (float)((oh - dh) / 2), (float)dw, (float)dh, 0.0f, 1.0f };
+    vkCmdSetViewport(s_cmd, 0, 1, &vpt);
+    vkCmdBindDescriptorSets(s_cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, s_pll, 0, 1, &s_panels[p].dset_present, 0, 0);
+    vkCmdDraw(s_cmd, 3, 1, 0, 0);
+  }
   vkCmdEndRenderPass(s_cmd);
   VKC(vkEndCommandBuffer(s_cmd));
 
@@ -797,7 +887,16 @@ void create_tri_pipeline(void) {
     VkImageViewCreateInfo dv = { VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO };
     dv.image = s_depth; dv.viewType = VK_IMAGE_VIEW_TYPE_2D; dv.format = VK_FORMAT_D32_SFLOAT;
     dv.subresourceRange = (VkImageSubresourceRange){ VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1 };
-    VKC(vkCreateImageView(s_dev, &dv, 0, &s_depth_view)); }
+    VKC(vkCreateImageView(s_dev, &dv, 0, &s_depth_view));
+    // PSXPORT_SBS panel B's own depth buffer (same create info).
+    VKC(vkCreateImage(s_dev, &di, 0, &s_depth_b));
+    VkMemoryRequirements drb; vkGetImageMemoryRequirements(s_dev, s_depth_b, &drb);
+    VkMemoryAllocateInfo dmb = { VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO };
+    dmb.allocationSize = drb.size; dmb.memoryTypeIndex = mem_type(drb.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    VKC(vkAllocateMemory(s_dev, &dmb, 0, &s_depth_b_mem));
+    VKC(vkBindImageMemory(s_dev, s_depth_b, s_depth_b_mem, 0));
+    VkImageViewCreateInfo dvb = dv; dvb.image = s_depth_b;
+    VKC(vkCreateImageView(s_dev, &dvb, 0, &s_depth_b_view)); }
 
   // render pass over the VRAM image: LOAD existing contents, draw, store; stays COLOR_ATTACHMENT layout.
   // Depth attachment LOADs too (it is explicitly cleared at the start of the opaque pass via
@@ -826,7 +925,19 @@ void create_tri_pipeline(void) {
   fi.renderPass = s_vram_rpass; fi.attachmentCount = 2; fi.pAttachments = fbviews;
   fi.width = VRAM_W; fi.height = IMG_H; fi.layers = 1;
   VKC(vkCreateFramebuffer(s_dev, &fi, 0, &s_vram_fb));
+  VkImageView fbviews_b[2] = { s_tex_b_view, s_depth_b_view };   // PSXPORT_SBS: s_tex_b + its OWN depth
+  VkFramebufferCreateInfo fib = fi; fib.pAttachments = fbviews_b;
+  VKC(vkCreateFramebuffer(s_dev, &fib, 0, &s_vram_fb_b));
 
+  // PSXPORT_SBS depth-channel select as a vertex-stage SPECIALIZATION CONSTANT (SBS_NATIVE, constant_id
+  // 0): bake it into the pipeline so each Panel binds its OWN variant — no shared push-constant state to
+  // bleed between the two panes (which silently made them render identically).
+  static const int32_t sbs_val[2] = { 0, 1 };
+  static const VkSpecializationMapEntry sme = { 0, 0, sizeof(int32_t) };
+  VkSpecializationInfo spec[2] = {
+    { 1, &sme, sizeof(int32_t), &sbs_val[0] },
+    { 1, &sme, sizeof(int32_t), &sbs_val[1] },
+  };
   VkShaderModule vs = make_shader(spv_tri_vert, spv_tri_vert_len);
   VkShaderModule fs = make_shader(spv_tri_frag, spv_tri_frag_len);
   VkPipelineShaderStageCreateInfo st[2] = {
@@ -834,14 +945,15 @@ void create_tri_pipeline(void) {
     { VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, 0, 0, VK_SHADER_STAGE_FRAGMENT_BIT, fs, "main", 0 },
   };
   VkVertexInputBindingDescription vbd = { 0, sizeof(TriVtx), VK_VERTEX_INPUT_RATE_VERTEX };
-  VkVertexInputAttributeDescription vad[3] = {
+  VkVertexInputAttributeDescription vad[4] = {
     { 0, 0, VK_FORMAT_R32G32_SFLOAT, 0 },            // pos (VRAM coords)
     { 1, 0, VK_FORMAT_R32G32B32_SFLOAT, 8 },         // rgb 0..1
     { 2, 0, VK_FORMAT_R32_SFLOAT, 20 },              // ord (OT submission order -> depth)
+    { 3, 0, VK_FORMAT_R32_SFLOAT, 24 },              // ordn (PSXPORT_SBS native depth)
   };
   VkPipelineVertexInputStateCreateInfo vi = { VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO };
   vi.vertexBindingDescriptionCount = 1; vi.pVertexBindingDescriptions = &vbd;
-  vi.vertexAttributeDescriptionCount = 3; vi.pVertexAttributeDescriptions = vad;
+  vi.vertexAttributeDescriptionCount = 4; vi.pVertexAttributeDescriptions = vad;
   VkPipelineInputAssemblyStateCreateInfo ia = { VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO };
   ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
   VkPipelineViewportStateCreateInfo vp = { VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO };
@@ -868,7 +980,9 @@ void create_tri_pipeline(void) {
   gp.pViewportState = &vp; gp.pRasterizationState = &rs; gp.pMultisampleState = &ms;
   gp.pColorBlendState = &cb; gp.pDynamicState = &ds; gp.pDepthStencilState = &dpo;
   gp.layout = s_pll; gp.renderPass = s_vram_rpass;
-  VKC(vkCreateGraphicsPipelines(s_dev, VK_NULL_HANDLE, 1, &gp, 0, &s_tri_pipe));
+  for (int nv2 = 0; nv2 < 2; nv2++) { st[0].pSpecializationInfo = &spec[nv2];   // [0]=default, [1]=native
+    VKC(vkCreateGraphicsPipelines(s_dev, VK_NULL_HANDLE, 1, &gp, 0, &s_tri_pipe[nv2])); }
+  st[0].pSpecializationInfo = 0;
   vkDestroyShaderModule(s_dev, vs, 0); vkDestroyShaderModule(s_dev, fs, 0);
 
   make_hostbuf(sizeof(TriVtx) * TRI_CAP, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, &s_vbuf, &s_vbuf_mem, &s_vbuf_ptr);
@@ -882,7 +996,7 @@ void create_tri_pipeline(void) {
     { VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, 0, 0, VK_SHADER_STAGE_FRAGMENT_BIT, tfs, "main", 0 },
   };
   VkVertexInputBindingDescription tvbd = { 0, sizeof(TexVtx), VK_VERTEX_INPUT_RATE_VERTEX };
-  VkVertexInputAttributeDescription tvad[8] = {
+  VkVertexInputAttributeDescription tvad[9] = {
     { 0, 0, VK_FORMAT_R32G32_SFLOAT,       0 },   // pos
     { 1, 0, VK_FORMAT_R32G32_SFLOAT,       8 },   // uv
     { 2, 0, VK_FORMAT_R32G32B32_SFLOAT,    16 },  // col
@@ -891,15 +1005,18 @@ void create_tri_pipeline(void) {
     { 5, 0, VK_FORMAT_R32G32B32A32_SINT,   60 },  // tw (mask_x,mask_y,off_x,off_y)
     { 6, 0, VK_FORMAT_R32G32B32A32_SINT,   76 },  // da (x0,y0,x1,y1)
     { 7, 0, VK_FORMAT_R32_SFLOAT,          92 },  // ord (OT submission order -> depth)
+    { 8, 0, VK_FORMAT_R32_SFLOAT,          96 },  // ordn (PSXPORT_SBS native depth)
   };
   VkPipelineVertexInputStateCreateInfo tvi = { VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO };
   tvi.vertexBindingDescriptionCount = 1; tvi.pVertexBindingDescriptions = &tvbd;
-  tvi.vertexAttributeDescriptionCount = 8; tvi.pVertexAttributeDescriptions = tvad;
+  tvi.vertexAttributeDescriptionCount = 9; tvi.pVertexAttributeDescriptions = tvad;
   gp.pStages = tst; gp.pVertexInputState = &tvi;   // reuse ia/vp/rs/ms/cb/ds/layout/renderPass from above
-  gp.pDepthStencilState = &dpo;                     // opaque-textured: depth test + write
-  VKC(vkCreateGraphicsPipelines(s_dev, VK_NULL_HANDLE, 1, &gp, 0, &s_tritex_pipe));
-  gp.pDepthStencilState = &dps;                     // semi-textured: depth test, NO write
-  VKC(vkCreateGraphicsPipelines(s_dev, VK_NULL_HANDLE, 1, &gp, 0, &s_tritex_semi_pipe));
+  for (int nv2 = 0; nv2 < 2; nv2++) { tst[0].pSpecializationInfo = &spec[nv2];   // [0]=default, [1]=native
+    gp.pDepthStencilState = &dpo;                   // opaque-textured: depth test + write
+    VKC(vkCreateGraphicsPipelines(s_dev, VK_NULL_HANDLE, 1, &gp, 0, &s_tritex_pipe[nv2]));
+    gp.pDepthStencilState = &dps;                   // semi-textured: depth test, NO write
+    VKC(vkCreateGraphicsPipelines(s_dev, VK_NULL_HANDLE, 1, &gp, 0, &s_tritex_semi_pipe[nv2])); }
+  tst[0].pSpecializationInfo = 0;
   vkDestroyShaderModule(s_dev, tvs, 0); vkDestroyShaderModule(s_dev, tfs, 0);
   make_hostbuf(sizeof(TexVtx) * TEX_CAP, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, &s_tvbuf, &s_tvbuf_mem, &s_tvbuf_ptr);
   make_hostbuf(sizeof(TexVtx) * TEX_CAP, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, &s_semibuf, &s_semibuf_mem, &s_semibuf_ptr);
@@ -910,9 +1027,9 @@ void gpu_vk_draw_tri(int x0,int y0,int r0,int g0,int b0, int x1,int y1,int r1,in
                      int x2,int y2,int r2,int g2,int b2) {
   if (!s_inited || s_tri_n + 3 > TRI_CAP) return;
   TriVtx* v = (TriVtx*)s_vbuf_ptr + s_tri_n;
-  v[0] = (TriVtx){ x0, y0, r0/255.f, g0/255.f, b0/255.f, s_vd ? s_vd[0]*NATIVE_3D_MAX : s_cur_ord };
-  v[1] = (TriVtx){ x1, y1, r1/255.f, g1/255.f, b1/255.f, s_vd ? s_vd[1]*NATIVE_3D_MAX : s_cur_ord };
-  v[2] = (TriVtx){ x2, y2, r2/255.f, g2/255.f, b2/255.f, s_vd ? s_vd[2]*NATIVE_3D_MAX : s_cur_ord };
+  v[0] = (TriVtx){ x0, y0, r0/255.f, g0/255.f, b0/255.f, s_vd ? s_vd[0]*NATIVE_3D_MAX : s_cur_ord, s_vdn ? s_vdn[0]*NATIVE_3D_MAX : s_cur_ordn };
+  v[1] = (TriVtx){ x1, y1, r1/255.f, g1/255.f, b1/255.f, s_vd ? s_vd[1]*NATIVE_3D_MAX : s_cur_ord, s_vdn ? s_vdn[1]*NATIVE_3D_MAX : s_cur_ordn };
+  v[2] = (TriVtx){ x2, y2, r2/255.f, g2/255.f, b2/255.f, s_vd ? s_vd[2]*NATIVE_3D_MAX : s_cur_ord, s_vdn ? s_vdn[2]*NATIVE_3D_MAX : s_cur_ordn };
   s_tri_n += 3;
 }
 
@@ -930,6 +1047,7 @@ static void tex_emit(TexVtx* t, const int* xs, const int* ys, const int* us, con
     t[i].tw[0] = twmx; t[i].tw[1] = twmy; t[i].tw[2] = twox; t[i].tw[3] = twoy;
     t[i].da[0] = dax0; t[i].da[1] = day0; t[i].da[2] = dax1; t[i].da[3] = day1;
     t[i].ord = s_vd ? s_vd[i] * NATIVE_3D_MAX : s_cur_ord;   // per-vertex real depth (3D band) else OT-order
+    t[i].ordn = s_vdn ? s_vdn[i] * NATIVE_3D_MAX : s_cur_ordn;   // PSXPORT_SBS native channel (right half)
   }
 }
 void gpu_vk_draw_tritri(const int* xs, const int* ys, const int* us, const int* vs,
@@ -983,7 +1101,7 @@ static void tri_render_and_readback(uint16_t* out) {
   VkRect2D sc = { {0,0}, { VRAM_W, VRAM_H } };
   vkCmdSetViewport(s_cmd, 0, 1, &vpt); vkCmdSetScissor(s_cmd, 0, 1, &sc);
   push_wide(0);
-  vkCmdBindPipeline(s_cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, s_tri_pipe);
+  vkCmdBindPipeline(s_cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, s_tri_pipe[0]);
   VkDeviceSize off = 0; vkCmdBindVertexBuffers(s_cmd, 0, 1, &s_vbuf, &off);
   if (s_tri_n) vkCmdDraw(s_cmd, s_tri_n, 1, 0, 0);
   vkCmdEndRenderPass(s_cmd);
@@ -1058,9 +1176,9 @@ static void tri_over_bg_readback(const uint16_t* bg, uint16_t* out) {
   push_wide(0);
   vkCmdBindDescriptorSets(s_cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, s_pll, 0, 1, &s_dset_tex, 0, 0);
   VkDeviceSize off = 0;
-  if (s_tri_n) { vkCmdBindPipeline(s_cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, s_tri_pipe);
+  if (s_tri_n) { vkCmdBindPipeline(s_cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, s_tri_pipe[0]);
                  vkCmdBindVertexBuffers(s_cmd, 0, 1, &s_vbuf, &off); vkCmdDraw(s_cmd, s_tri_n, 1, 0, 0); }
-  if (s_tex_n) { vkCmdBindPipeline(s_cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, s_tritex_pipe);
+  if (s_tex_n) { vkCmdBindPipeline(s_cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, s_tritex_pipe[0]);
                  vkCmdBindVertexBuffers(s_cmd, 0, 1, &s_tvbuf, &off); vkCmdDraw(s_cmd, s_tex_n, 1, 0, 0); }
   vkCmdEndRenderPass(s_cmd);
 
@@ -1079,18 +1197,20 @@ static void tri_over_bg_readback(const uint16_t* bg, uint16_t* out) {
 
 // Read back the live VK-rendered VRAM (display/FB region) and write it to `path` as a PPM.
 // Read the full VK VRAM image (s_tex) back into the host buffer s_rb_ptr (uint16, VRAM_W x IMG_H).
+VkImage s_rb_img;   // which image vk_readback_to_rb copies (0 = s_tex); set per dump (SBS diag)
 static void vk_readback_to_rb(void) {
+  VkImage img = s_rb_img ? s_rb_img : s_tex;
   VKC(vkWaitForFences(s_dev, 1, &s_fence, VK_TRUE, UINT64_MAX)); VKC(vkResetFences(s_dev, 1, &s_fence));
   VKC(vkResetCommandBuffer(s_cmd, 0));
   VkCommandBufferBeginInfo bi = { VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO };
   bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT; VKC(vkBeginCommandBuffer(s_cmd, &bi));
-  img_barrier(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+  img_barrier_on(img, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
               VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
               VK_ACCESS_SHADER_READ_BIT, VK_ACCESS_TRANSFER_READ_BIT);
   VkBufferImageCopy bc = {0}; bc.imageSubresource = (VkImageSubresourceLayers){ VK_IMAGE_ASPECT_COLOR_BIT,0,0,1 };
   bc.imageExtent = (VkExtent3D){ VRAM_W, IMG_H, 1 };   // include the scratch FB rows (>=512)
-  vkCmdCopyImageToBuffer(s_cmd, s_tex, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, s_rb, 1, &bc);
-  img_barrier(VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+  vkCmdCopyImageToBuffer(s_cmd, img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, s_rb, 1, &bc);
+  img_barrier_on(img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
               VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
               VK_ACCESS_TRANSFER_READ_BIT, VK_ACCESS_SHADER_READ_BIT);
   VKC(vkEndCommandBuffer(s_cmd));
@@ -1151,7 +1271,10 @@ void gpu_vk_dump(int sx, int sy, int w, int h, int frame) {
   if (sf >= 0 && frame == sf) { vk_dump_to("scratch/screenshots/vk_live.ppm", dsx, dsy, dw, dh);
     fprintf(stderr, "[vk_shot] f%d wrote scratch/screenshots/vk_live.ppm\n", frame); }
   if (qa >= 0 && frame >= qa && frame <= qb && ((frame - qa) % qstep) == 0) {
-    char p[320]; snprintf(p, sizeof p, "%s/vk_%05d.ppm", qdir, frame); vk_dump_to(p, dsx, dsy, dw, dh); }
+    char p[320]; snprintf(p, sizeof p, "%s/vk_%05d.ppm", qdir, frame); vk_dump_to(p, dsx, dsy, dw, dh);
+    if (cfg_on("PSXPORT_SBS")) {   // DIAG: also dump the native-depth pane (s_tex_b)
+      char pb[320]; snprintf(pb, sizeof pb, "%s/vk_%05d_b.ppm", qdir, frame);
+      s_rb_img = s_tex_b; vk_dump_to(pb, dsx, dsy, dw, dh); s_rb_img = 0; } }
   if (s_rawdump_frame >= 0 && frame == s_rawdump_frame) { vk_rawdump_now(s_rawdump_path); s_rawdump_frame = -1; }
 }
 
@@ -1224,7 +1347,9 @@ void gpu_vk_dump(int sx, int sy, int w, int h, int frame) { (void)sx;(void)sy;(v
 void gpu_vk_shot(const char* path) { (void)path; }
 void gpu_vk_set_order(unsigned idx) { (void)idx; }
 void gpu_vk_set_order_2d(unsigned idx) { (void)idx; }
+void gpu_vk_set_order_2d_n(unsigned idx) { (void)idx; }
 void gpu_vk_set_vd(const float* d3) { (void)d3; }
+void gpu_vk_set_vd_n(const float* d3) { (void)d3; }
 void gpu_vk_rawdump_arm(const char* path, int frame) { (void)path;(void)frame; }
 void gpu_vk_vram_region(const char* path, int x, int y, int w, int h) { (void)path;(void)x;(void)y;(void)w;(void)h; }
 void gpu_vk_stats(int* tri, int* tex, int* semi) { if(tri)*tri=0; if(tex)*tex=0; if(semi)*semi=0; }

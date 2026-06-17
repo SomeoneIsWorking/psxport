@@ -62,3 +62,21 @@ verified: two identical headless runs are pixel-identical (`ctl% = 0.00`).
 
 This is a VK-vs-VK diff (depth A/B). It complements `gpu_differ` (ours-SW vs Beetle on identical GP0),
 which does NOT cover the VK path or the depth model — keep using gpu_differ for rasterizer fidelity.
+
+## `PSXPORT_SBS` — live side-by-side depth A/B (drive the game, compare both modes in one window)
+`PSXPORT_SBS=1` renders the frame into TWO panes in one window: **left = default OT depth, right =
+`NATIVE_DEPTH`**, full-res each, no seam. Implemented with **object-oriented `Panel`s** (gpu_vk.c): each
+Panel owns its PERSISTENT VRAM color image, depth buffer, framebuffer and present descriptor, and renders
+independently — `panel_upload()` mirrors the dirty VRAM into *its own* image, `panel_render()` draws with
+its depth-channel pipeline. Two depth channels per vertex (`.ord` = OT, `.ordn` = native, from gpu_native
+`gpu_vk_set_vd_n`/`set_order_2d_n`); the channel is a **pipeline specialization constant** (`SBS_NATIVE`,
+`s_tritex_pipe[native]`), NOT a push constant. Headless `PSXPORT_VK_SHOTSEQ` dumps `vk_*.ppm` (pane 0) +
+`vk_*_b.ppm` (pane 1) for verification. `PSXPORT_SBS` implies the attach infra (gte_beetle `attach_env`).
+- **Dead-ends that cost a long session (do NOT retry):** (1) one shared image with an instanced/compressed
+  split → seam bleed from off-screen-x geometry; (2) a per-frame `vkCmdCopyImage(s_tex→s_tex_b)` to seed
+  pane 1 → pane 1's *background* came from the default render, so it always looked identical; (3) a shared
+  depth buffer or a push-constant depth select → state bled between the two passes (pane 2 mirrored pane 1).
+  The fix for all of them is the same: **fully independent Panels, no shared mutable render state.**
+- **Build gotcha (FIXED):** `tools/build_port.sh` now treats `gpu_vk_shaders.h` as a dependency of
+  `gpu_vk.c`. Before, a shader-only edit regenerated the embedded SPIR-V header but did NOT recompile
+  `gpu_vk.c`, so the binary silently ran STALE shader bytecode (burned a long debugging session).

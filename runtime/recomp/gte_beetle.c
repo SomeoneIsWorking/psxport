@@ -393,10 +393,10 @@ int  projprim_count(void)      { return s_pp_n; }
 static struct { uint32_t packed; ProjVtx p; int used; } s_pr[PR_N];
 static int s_pr_head = 0;
 static int s_attach = -1;
-// The attach capture+store infra feeds BOTH the Phase-1 verifier (PSXPORT_ATTACH) and the Phase-2
-// native-depth renderer (PSXPORT_NATIVE_DEPTH); either one enables it (else projprim is never populated
-// and every depth lookup misses).
-static int attach_env(void) { return (cfg_on("PSXPORT_ATTACH") || cfg_on("PSXPORT_NATIVE_DEPTH")) ? 1 : 0; }
+// The attach capture+store infra feeds the Phase-1 verifier (PSXPORT_ATTACH), the Phase-2 native-depth
+// renderer (PSXPORT_NATIVE_DEPTH), and the SBS depth A/B view (PSXPORT_SBS); any one enables it (else
+// projprim is never populated and every depth lookup misses).
+static int attach_env(void) { return (cfg_on("PSXPORT_ATTACH") || cfg_on("PSXPORT_NATIVE_DEPTH") || cfg_on("PSXPORT_SBS")) ? 1 : 0; }
 static void projprim_capture(uint32_t insn, int rtpt) {
   ProjVtx p;
   int nv = rtpt ? 3 : 1;
