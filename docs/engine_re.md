@@ -213,7 +213,7 @@ libgpu (all via the 0x800A5998 table; names from debug strings): `FUN_80080f6c`=
   (`XY_FIFO(2)=XY_FIFO(3)` runs after `(3)=new`), so after an RTPT the 3 verts read back at DR12/DR13/DR14
   (DR15==DR14), NOT DR13-15; the Z_FIFO shifts cleanly so its verts are at DR17/18/19. This replaces the
   value-keyed PGXP-lite cache as the depth/subpixel source.
-- **Projection+submit call sites pinned** (later-100b, probe `PSXPORT_RTPCALLER` = RA histogram at each RTP
+- **Projection+submit call sites pinned** (later-100b, probe `PSXPORT_DEBUG=rtpcaller` = RA histogram at each RTP
   + jal-target decode). The RTP-containing project-and-submit functions, by call frequency at the field:
   `0x80109C80` (4689, overlay) and `0x801099B4` (2025, overlay) DOMINATE; resident `0x8007FDB0` (1504, the
   triangle fn) + `0x8008007C` (880, the quad fn — projects the 4th vertex via RTPS, then the triangle via
@@ -375,7 +375,7 @@ This is the port ACCOUNTING for every draw instead of blind GP0 rasterization. F
 3. Object node full lifecycle: spawn/link (`:55976–56167`) and free; the pool base/extent.
 4. Camera basis + GTE projection setup (for native render submission, Phase 3).
 5. Whether handlers call the cull/submit path (`FUN_8007712c`) in field scenes, or a different render
-   path (the journal noted the cull dispatcher didn't fire in the demo). `PSXPORT_OBJLOG=1` answers this.
+   path (the journal noted the cull dispatcher didn't fire in the demo). `PSXPORT_DEBUG=obj` answers this.
 6. ~~Projection setup~~ — **DONE** (later-98): `gen_func_800509B4`, OFX/OFY/H = 160/120/350. Widescreen
    lever identified. Remaining: the draw-environment/clip-rect width setup (to widen the clip with OFX).
 7. **Water draw path** (broken in port): NOT GTE-projected (separate layer). Identify via provenance +

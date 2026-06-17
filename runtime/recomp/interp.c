@@ -13,6 +13,7 @@
 // Faithful-first simplifications match the emitter: no load-delay slot; add==addu; signed
 // div/mult via cpu_div/mult helpers; GTE via gte_op/gte_read/write.
 #include "r3000.h"
+#include "cfg.h"
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -96,7 +97,7 @@ static uint32_t g_ld_last_in = 0, g_ld_last_pc = 0;   // last instruction in EXE
 // executed one, then make it the new "last". Called in execution order — INCLUDING delay slots —
 // so a load in a jump/branch delay slot is checked against the branch TARGET (the real next op).
 static inline void ldhaz_step(uint32_t in, uint32_t pc) {
-  if (g_ldhaz < 0) g_ldhaz = getenv("PSXPORT_LDHAZARD") ? 1 : 0;
+  if (g_ldhaz < 0) g_ldhaz = cfg_dbg("ldhazard") ? 1 : 0;
   if (g_ldhaz) {
     uint32_t p = g_ld_last_in; int t = ld_target(p);
     // Skip the lwl/lwr unaligned-merge idiom (same rt): our no-delay model merges correctly.
@@ -310,7 +311,7 @@ void rec_coro_run(R3000* c, uint32_t pc) {
   // window, the game is busy-waiting — dump the loop range + the branch's register operands so
   // the wait condition can be identified and ported to PC.
   static int spindbg = -1;
-  if (spindbg < 0) spindbg = getenv("PSXPORT_SPINDBG") ? 1 : 0;
+  if (spindbg < 0) spindbg = cfg_dbg("spin") ? 1 : 0;
   unsigned long iters = 0; uint32_t lo = pc, hi = pc;
   for (;;) {
     if (spindbg) {
@@ -335,7 +336,7 @@ void rec_coro_run(R3000* c, uint32_t pc) {
     // the owning sprite object ($a3/$t5) and its descriptor list ($a2) can be identified.
     // PSXPORT_TEXTDBG: log every call to the text/sprite-row drawer 0x8007E998 (a0=x, a1=y, a3=glyph),
     // with the caller ra — to trace which overlay code draws a given 2D text/banner element.
-    if (pc == 0x8007E998 && getenv("PSXPORT_TEXTDBG")) {
+    if (pc == 0x8007E998 && cfg_dbg("text")) {
       static int n = 0;
       if (n++ < 30)
         fprintf(stderr, "[textdbg] 8007E998(x=%d y=%d a2=%08X a3=%08X) ra=%08X stage=%08X\n",

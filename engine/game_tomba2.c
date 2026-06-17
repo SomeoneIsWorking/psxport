@@ -16,6 +16,7 @@
 // produced (the cb at 0x800506B4 only increments that counter), computed directly.
 // (When a host present loop exists it will pace frames; this just removes the busy-wait.)
 #include "r3000.h"
+#include "cfg.h"
 #include <stdlib.h>
 #include <stdio.h>
 
@@ -65,7 +66,7 @@ static void ov_frame_update(R3000* c) {
   // Opt out (A/B): PSXPORT_T2_NOSEQTICK. Adaptive: a true-60fps scene (quota=1) ticks once.
   int quota = mem_r8(VBLANK_QUOTA); if (quota < 1) quota = 1;
   uint32_t seqfn = mem_r32(SEQ_FUNC_PTR);
-  int seq_ok = !getenv("PSXPORT_T2_NOSEQTICK")
+  int seq_ok = !cfg_on("PSXPORT_T2_NOSEQTICK")
                && (seqfn & 0x1FFFFFFFu) >= 0x10000u && (seqfn & 0x1FFFFFFFu) < 0x200000u;
   for (int v = 0; v < quota; v++) {                  // once per VBlank this logic frame spans
     if (seq_ok) rec_dispatch(c, SEQ_TICK_WRAPPER);   // libsnd per-vblank tick (user cb + SsSeqCalled)
@@ -102,7 +103,7 @@ static void ov_object_cull(R3000* c) {
   uint32_t prev = g_current_object;
   uint32_t o = c->r[4];                            // a0 = object* (MIPS arg register $a0)
   g_current_object = o;
-  if (s_objlog < 0) s_objlog = getenv("PSXPORT_OBJLOG") ? 1 : 0;
+  if (s_objlog < 0) s_objlog = cfg_dbg("obj") ? 1 : 0;
   if (s_objlog)
     fprintf(stderr, "[objlog] obj=%08x type=%02x pos=(%d,%d,%d)\n", o, mem_r8(o + 0x0c),
             (int16_t)obj_r16(o + 0x2e), (int16_t)obj_r16(o + 0x32), (int16_t)obj_r16(o + 0x36));
@@ -113,10 +114,10 @@ static void ov_object_cull(R3000* c) {
     // or the new edge/corner geometry (incl. the static terrain/water tiles, which also go through this
     // per-object cull) is dropped -> black wedges. Couple the defaults to PSXPORT_WIDE: wide => widest
     // cone (fov 0) + extended far; plain CULL keeps the conservative 4:3 values. Both env-overridable.
-    int wide = getenv("PSXPORT_WIDE") && atoi(getenv("PSXPORT_WIDE")) != 0;
-    s_cull = (getenv("PSXPORT_CULL") || wide) ? 1 : 0;
-    const char* f = getenv("PSXPORT_CULL_FAR"); s_cull_far = f ? atoi(f) : (wide ? 0x8000 : 0x6000);
-    const char* v = getenv("PSXPORT_CULL_FOV"); s_cull_fov = v ? atoi(v) : (wide ? 0x00 : 0x80); }
+    int wide = cfg_str("PSXPORT_WIDE") && atoi(cfg_str("PSXPORT_WIDE")) != 0;
+    s_cull = (cfg_on("PSXPORT_CULL") || wide) ? 1 : 0;
+    const char* f = cfg_str("PSXPORT_CULL_FAR"); s_cull_far = f ? atoi(f) : (wide ? 0x8000 : 0x6000);
+    const char* v = cfg_str("PSXPORT_CULL_FOV"); s_cull_fov = v ? atoi(v) : (wide ? 0x00 : 0x80); }
   if (s_cull && mem_r8(o + 1) == 0) {              // the game CULLED it — reconsider with extended bounds
     unsigned dist = isqrt32((unsigned)(p2*p2 + p3*p3 + p4*p4)) & 0xFFFF;
     if (dist >= 0x200 && dist <= (unsigned)s_cull_far) {   // keep near/behind culling intact
@@ -186,12 +187,12 @@ static void ov_unpack_group(R3000* c) {
   const int32_t count = (int32_t)mem_r32(table);
   uint32_t entry = table + 4;            // first 12-byte descriptor entry
   uint32_t src = table + 0x800;          // packed source data follows the table
-  int dbg = getenv("PSXPORT_UNPACKLOG") != 0;
+  int dbg = cfg_dbg("unpack") != 0;
   if (dbg) fprintf(stderr, "[unpack] table=0x%08X count=%d src0=0x%08X ra=0x%08X\n",
                    table, count, src, c->r[31]);
   // PSXPORT_UNPACKDUMP=dir — dump the LIVE compressed input (table + 0x30000 bytes) the moment the
   // unpacker reads it, sequence-numbered, so it can be checked against the disc / oracle exactly.
-  { const char* dd = getenv("PSXPORT_UNPACKDUMP");
+  { const char* dd = cfg_str("PSXPORT_UNPACKDUMP");
     if (dd) { static int seq = 0; char p[300]; snprintf(p, sizeof p, "%s/unpack_%03d_c%d.bin", dd, seq++, count);
       FILE* uf = fopen(p, "wb"); if (uf) { extern uint8_t g_ram[];
         fwrite(&g_ram[table & 0x1FFFFF], 1, 0x30000, uf); fclose(uf);
@@ -264,20 +265,20 @@ static void ov_draw_otag(R3000* c) { gpu_dma2_linked_list(c->r[4]); }
 
 void games_tomba2_init(void) {
   rec_set_override(0x800788ACu, ov_frame_update);
-  if (!getenv("PSXPORT_GEOM_RECOMP")) {           // own the GTE projection setup natively (faithful-first)
+  if (!cfg_on("PSXPORT_GEOM_RECOMP")) {           // own the GTE projection setup natively (faithful-first)
     rec_set_override(0x800846D0u, ov_set_geom_offset);
     rec_set_override(0x800846F0u, ov_set_geom_screen);
   }
-  if (!getenv("PSXPORT_OT_RECOMP"))               // own DrawOTag (the per-frame draw kick) natively
+  if (!cfg_on("PSXPORT_OT_RECOMP"))               // own DrawOTag (the per-frame draw kick) natively
     rec_set_override(0x80081560u, ov_draw_otag);
   // PC-owned asset codecs (A/B: PSXPORT_LZ_RECOMP=1 keeps the recomp bodies for comparison).
-  if (!getenv("PSXPORT_LZ_RECOMP")) {
+  if (!cfg_on("PSXPORT_LZ_RECOMP")) {
     rec_set_override(0x80044D8Cu, ov_lz_decompress);  // LZ image decompressor
     rec_set_override(0x80044E84u, ov_unpack_group);   // texture-group unpacker (drives the above)
     rec_set_override(0x80081218u, ov_upload_image);   // PC-native CPU->VRAM upload (libgs upload lib)
   }
   wide60_init();
-  if (g_wide60_on || getenv("PSXPORT_OBJLOG") || getenv("PSXPORT_CULL"))   // cull tap: wide60 / objlog / extended-cull
+  if (g_wide60_on || cfg_dbg("obj") || cfg_on("PSXPORT_CULL"))   // cull tap: wide60 / objlog / extended-cull
     rec_set_override(0x8007712Cu, ov_object_cull);
   void engine_tomba2_init(void);
   engine_tomba2_init();                            // native engine layer (Phase 1: object-list walk)

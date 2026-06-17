@@ -43,7 +43,7 @@ wrappers, and the cutscene XA path uses the second one:**
   `FUN_8001cfc8`/task) → `ov_cd_cmd_stream`. **In-game cutscene XA-ADPCM streaming goes through
   HERE** (Setmode 0xC8 = Speed+ADPCM+SF-filter, Setfilter file/chan, Setloc, ReadS).
 - Both wrappers route the streaming-relevant commands to the native XA engine `xa_stream.c`
-  (Setmode/Setfilter/Setloc/ReadS/Pause). Debug both with `PSXPORT_CDCMD_DBG=1` (logs every command
+  (Setmode/Setfilter/Setloc/ReadS/Pause). Debug both with `PSXPORT_DEBUG=cdcmd` (logs every command
   + params from both wrappers).
 - `ov_cd_cmd_stream` also fakes `GetlocL` (cmd 0x10) drive position — the streaming reader polls it.
   See its comment; during XA it must report the **advancing** play position (else the cutscene,
@@ -55,6 +55,14 @@ Decodes CD-XA from the ReadS-streamed sectors and feeds the SPU's CD-audio input
 `CDVol` + gated on `SPUControl` bit0 — both game-set). Pull-driven (decode on consumption →
 self-paces to realtime). `xa_decode_sector()` lives in `native_fmv.c`. The SPU mixes XA only when
 the game enabled CD audio; sequenced (libsnd) BGM is a SEPARATE working path. Debug: `PSXPORT_XA_DBG=1`.
+
+## Rendering, present, and config — see the dedicated docs
+- **`docs/render-arch.md`** — the GP0→screen path, SW vs VK rasterizer split, the present dispatch
+  (`blit_src`→`gpu_vk_present`), headless **offscreen VK** (`PSXPORT_VK_HEADLESS`), the depth model
+  (OT-order default vs `PSXPORT_NATIVE_DEPTH` real per-vertex depth), and the VK render-diff tool
+  `tools/vk_depth_diff.sh`. Read before touching graphics/VK.
+- **`docs/config.md`** — the `cfg` module (`cfg_on/cfg_int/cfg_str/cfg_dbg`); ALL diagnostics are now the
+  single `PSXPORT_DEBUG=chan,chan` var (channel table + old→new map). Don't add raw `getenv("PSXPORT_…")`.
 
 ## Where state/notes live
 - `docs/journal.md` — chronological findings + dead ends (read the head before re-deriving).

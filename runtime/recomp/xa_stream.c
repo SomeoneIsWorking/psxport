@@ -24,6 +24,7 @@
 // XA runs at 37800 (or 18900) Hz; we resample to the SPU's 44100 Hz with a fractional phase
 // accumulator + linear interpolation.
 #include <stdint.h>
+#include "cfg.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -68,7 +69,7 @@ static void xa_reset_buffers(void) {
 }
 
 void xa_stream_setmode(uint8_t mode) {
-  if (s_dbg < 0) s_dbg = getenv("PSXPORT_XA_DBG") ? atoi(getenv("PSXPORT_XA_DBG")) : 0;
+  if (s_dbg < 0) s_dbg = cfg_str("PSXPORT_XA_DBG") ? atoi(cfg_str("PSXPORT_XA_DBG")) : 0;
   s_mode = mode;
   // If XA-ADPCM output (bit6) was turned off mid-stream, stop feeding the SPU.
   if (s_active && !(mode & 0x40)) { s_active = 0; if (s_dbg) fprintf(stderr, "[xa] stop (XA bit cleared, mode=%02X)\n", mode); }
@@ -90,7 +91,7 @@ void xa_stream_setloc(uint8_t amm, uint8_t ass, uint8_t asect) {
 }
 
 void xa_stream_start(void) {
-  if (s_dbg < 0) s_dbg = getenv("PSXPORT_XA_DBG") ? atoi(getenv("PSXPORT_XA_DBG")) : 0;
+  if (s_dbg < 0) s_dbg = cfg_str("PSXPORT_XA_DBG") ? atoi(cfg_str("PSXPORT_XA_DBG")) : 0;
   if (!(s_mode & 0x40)) {            // ReadS without XA-ADPCM enabled = data read (not our concern)
     if (s_dbg) fprintf(stderr, "[xa] ReadS but XA bit not set (mode=%02X) - ignoring\n", s_mode);
     return;
@@ -118,7 +119,7 @@ void xa_stream_stop(void) {
 // (Offline decode of any [start..end] clip to WAV — for loop-point analysis — lives in the standalone
 // tools/xa_wavdump.c, so the runtime stays clean.)
 void xa_stream_play(uint8_t chan, uint32_t start, uint32_t end, int loop) {
-  if (s_dbg < 0) s_dbg = getenv("PSXPORT_XA_DBG") ? atoi(getenv("PSXPORT_XA_DBG")) : 0;
+  if (s_dbg < 0) s_dbg = cfg_str("PSXPORT_XA_DBG") ? atoi(cfg_str("PSXPORT_XA_DBG")) : 0;
   if (s_active && s_owns_slot2 && chan == s_clip_chan && start == s_clip_start) {
     s_owns_slot2 = 1;                       // same clip already playing: idempotent
     return;

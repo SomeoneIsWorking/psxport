@@ -17,6 +17,7 @@
 //   0x1F801803  W bank0: request (BFRD want-data) W bank1: ack/reset IRQ flags
 //               R bank0/2: interrupt enable      R bank1/3: interrupt flag (pending IRQ type)
 #include "r3000.h"
+#include "cfg.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -151,4 +152,4 @@ void cdc_write(uint32_t p, uint8_t v) {
   }
 }
 
-void cdc_init(void) { s_verbose = getenv("PSXPORT_CDC_VERBOSE") ? 1 : 0; }
+void cdc_init(void) { s_verbose = cfg_dbg("cdc") ? 1 : 0; }

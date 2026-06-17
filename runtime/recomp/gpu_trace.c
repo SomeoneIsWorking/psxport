@@ -18,6 +18,7 @@
 // trace_record() is called per GP0 word from gpu_gp0(); trace_flush() once per frame from
 // gpu_present_ex(); gpu_gputrace_arm() arms an on-demand single-frame capture (live debug server).
 #include "gpu_native_internal.h"
+#include "cfg.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -35,7 +36,7 @@ static size_t     s_trace_cap, s_trace_n;
 static int        s_trace_inited;
 
 static void trace_init_env(void) {
-  const char* e = getenv("PSXPORT_GPUTRACE");
+  const char* e = cfg_str("PSXPORT_GPUTRACE");
   s_trace_on = e ? 1 : 0;
   if (!e) return;
   const char* c = strchr(e, ':');

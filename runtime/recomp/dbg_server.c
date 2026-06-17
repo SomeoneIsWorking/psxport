@@ -22,6 +22,7 @@
 // Drive it from the repo with tools/dbgclient.py (or `nc 127.0.0.1 5959`).
 #define _GNU_SOURCE
 #include <stdio.h>
+#include "cfg.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
@@ -285,7 +286,7 @@ static void* dbg_thread(void* arg) {
 
 // Start the debug server thread if PSXPORT_DEBUG_SERVER is set (=1 -> default port, =<n> -> port n).
 void dbg_server_start(void) {
-  const char* e = getenv("PSXPORT_DEBUG_SERVER");
+  const char* e = cfg_str("PSXPORT_DEBUG_SERVER");
   if (!e || !atoi(e)) return;
   int port = atoi(e); if (port == 1) port = 5959;
   gpu_provat_enable();                 // so `provat` works at any time (not gated on PSXPORT_PROVAT)

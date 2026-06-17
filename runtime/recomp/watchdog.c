@@ -7,6 +7,7 @@
 // Build note: backtrace symbol names need -rdynamic at link time (run.sh adds it). Without it
 // you still get addresses — resolve with `addr2line -e scratch/bin/tomba2_port <addr>`.
 #include <signal.h>
+#include "cfg.h"
 #include <unistd.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -61,7 +62,7 @@ void watchdog_init(void) {
   sigaction(SIGABRT, &fa, 0);
   sigaction(SIGBUS, &fa, 0);
 
-  const char* s = getenv("PSXPORT_WATCHDOG");
+  const char* s = cfg_str("PSXPORT_WATCHDOG");
   g_secs = s ? atoi(s) : 0;
   if (g_secs <= 0) return;
   struct sigaction sa = {0};

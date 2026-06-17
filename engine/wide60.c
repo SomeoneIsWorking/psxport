@@ -12,6 +12,7 @@
 //   captured SXY by vertex coords (±2px). Report the join rate: the fraction of drawn polys that are
 //   object-matchable (3D models) vs. unjoinable (CPU-projected terrain / 2D HUD → will snap).
 #include <stdint.h>
+#include "cfg.h"
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -207,7 +208,7 @@ static int remap_get(int32_t key, int32_t* out) {
 static void wide60_build_remap(void) {
   if (!s_rm_init) remap_reset(); else remap_reset();
   if (s_nxB == 0) return;
-  if (s_disp_gate < 0) { const char* g = getenv("PSXPORT_WIDE60_GATE"); s_disp_gate = g ? atoi(g) : 48; }
+  if (s_disp_gate < 0) { const char* g = cfg_str("PSXPORT_WIDE60_GATE"); s_disp_gate = g ? atoi(g) : 48; }
   // save the GTE transform registers we overwrite (projection consts CR24-26 are left intact)
   uint32_t save[8]; for (int i = 0; i < 8; i++) save[i] = GTE_ReadCR(i);
   for (int i = 0; i < s_nxB; i++) {
@@ -394,7 +395,7 @@ static int ocen_delta(uint32_t obj, int* dx, int* dy) {
   if (obj == 0 || !ocen_centroid(s_ocB, obj, &bx, &by) || !ocen_centroid(s_ocA, obj, &ax, &ay))
     return 0;
   int mx = bx - ax, my = by - ay;
-  if (s_ocen_gate < 0) { const char* g = getenv("PSXPORT_WIDE60_GATE"); s_ocen_gate = g ? atoi(g) : 64; }
+  if (s_ocen_gate < 0) { const char* g = cfg_str("PSXPORT_WIDE60_GATE"); s_ocen_gate = g ? atoi(g) : 64; }
   if (abs(mx) + abs(my) > s_ocen_gate) return 0;       // scene cut / teleport → snap (no smear)
   *dx = -mx / 2; *dy = -my / 2;                         // B shifted back to (A+B)/2
   return 1;
@@ -405,7 +406,7 @@ static int s_sdbg = -1;
 // should present the REAL frame instead of this (lossy) re-rasterized in-between (see wide60_present).
 static long wide60_synthesize(void) {
   if (s_nB == 0) return 0;
-  if (s_sdbg < 0) s_sdbg = getenv("PSXPORT_WIDE60_SDBG") ? 1 : 0;
+  if (s_sdbg < 0) s_sdbg = cfg_dbg("wide60") ? 1 : 0;
   long d_prims = 0, d_obj_translated = 0, d_snapped = 0, d_tagged = 0;  // sdbg: interpolation outcome
   long moved_count = 0;
   int fy = w60_front_off_y();
@@ -449,7 +450,7 @@ void gpu_w60_shot_vram(int, int, const char*);
 void gpu_w60_shot_interp(int, int, const char*);
 static void wide60_synth_dumptest(void) {
   static int tf = -2;
-  if (tf == -2) { const char* e = getenv("PSXPORT_WIDE60_SYNTH"); tf = e ? atoi(e) : -1; }
+  if (tf == -2) { const char* e = cfg_str("PSXPORT_WIDE60_SYNTH"); tf = e ? atoi(e) : -1; }
   if (tf < 0 || s_fence != tf || s_nB == 0) return;
   int fy = w60_front_off_y(), by = fy ^ 256;
   gpu_w60_shot_vram(0, by, "scratch/screenshots/w60_A.ppm");        // previous real frame
@@ -473,7 +474,7 @@ static int s_prev_front_y = -1;    // last frame's front-buffer y (for flip dete
 
 static void wide60_present(void) {
   static int win = -1;
-  if (win < 0) { const char* w = getenv("PSXPORT_GPU_WINDOW"); win = (w && atoi(w) != 0) ? 1 : 0; }
+  if (win < 0) { const char* w = cfg_str("PSXPORT_GPU_WINDOW"); win = (w && atoi(w) != 0) ? 1 : 0; }
   void gpu_w60_blit_vram(int, int); void gpu_w60_blit_interp(int, int);
   int fy = w60_front_off_y();
   int flipped = (fy != s_prev_front_y);
@@ -521,7 +522,7 @@ void wide60_frame_commit(void) {
   // here compute this frame's per-object screen centroids (B) and match to last frame (A) BY POINTER.
   // The synth translates each matched object's prims to the midpoint. Must run before the A/B swap.
   ocen_build(s_ocB, s_pB, s_nB);
-  if (s_sdbg < 0) s_sdbg = getenv("PSXPORT_WIDE60_SDBG") ? 1 : 0;
+  if (s_sdbg < 0) s_sdbg = cfg_dbg("wide60") ? 1 : 0;
   if (s_sdbg) wide60_synthesize();   // per-frame interpolation stats (headless diagnostic only)
   wide60_synth_dumptest();   // PSXPORT_WIDE60_SYNTH: offline A/in-between/B dump (no live-path change)
   wide60_present();          // owns presentation: 60fps pair (prev + interpolated) or faithful single
@@ -536,6 +537,6 @@ void wide60_frame_commit(void) {
 }
 
 void wide60_init(void) {
-  g_wide60_on = getenv("PSXPORT_WIDE60") ? 1 : 0;
+  g_wide60_on = cfg_on("PSXPORT_WIDE60") ? 1 : 0;
   if (g_wide60_on) fprintf(stderr, "[wide60] enabled (rate detect + object join)\n");
 }

@@ -10,6 +10,7 @@
 // Cross-platform: MoltenVK-ready (portability enumeration/subset added only when the loader reports it).
 #ifdef PSXPORT_SDL
 #include <SDL2/SDL.h>
+#include "cfg.h"
 #include <SDL2/SDL_vulkan.h>
 #include <vulkan/vulkan.h>
 #include <stdint.h>
@@ -41,6 +42,7 @@ static int s_failed = 0;
 static SDL_Window*     s_win;
 static VkInstance      s_inst;
 static VkSurfaceKHR    s_surf;
+static int             s_headless = 0;   // offscreen render (no window/swapchain) for the VK render-diff
 static VkPhysicalDevice s_phys;
 static VkDevice        s_dev;
 static uint32_t        s_qfam;
@@ -103,7 +105,20 @@ static VkImageView     s_depth_view;
 static int             s_depth_undef = 1;
 static VkPipeline      s_tritex_semi_pipe;   // textured pipeline, depth-test GREATER_EQUAL, NO depth write
 static float           s_cur_ord;            // current prim's normalized depth (set by gpu_vk_set_order)
-void gpu_vk_set_order(unsigned idx) { s_cur_ord = (float)(idx + 1) / 65536.0f; if (s_cur_ord > 1.0f) s_cur_ord = 1.0f; }
+// Phase 2 (PSXPORT_NATIVE_DEPTH): per-vertex REAL depth for the current triangle. When non-NULL it
+// overrides the per-prim OT-order s_cur_ord, so gl_Position.z carries the native view-space depth (from
+// proj_pz_to_ord) and the D32 buffer does true per-pixel occlusion instead of painter/OT order. Set by
+// the gp0 tee AFTER gpu_vk_set_order (which clears it, so 2D/sprite prims fall back to OT order).
+static const float*    s_vd;
+void gpu_vk_set_vd(const float* d3) { s_vd = d3; }
+// Single shared D32 buffer is partitioned into a 3D WORLD band [0, NATIVE_3D_MAX] (real per-vertex
+// depth) and a 2D OVERLAY band (NATIVE_3D_MAX, 1] (OT-ordered) so HUD/UI composites over the 3D world.
+// (Interim until Phase 2 routes 3D and 2D to separate targets; not an offset to align pixels.)
+#define NATIVE_3D_MAX 0.9375f
+void gpu_vk_set_order(unsigned idx) { s_cur_ord = (float)(idx + 1) / 65536.0f; if (s_cur_ord > 1.0f) s_cur_ord = 1.0f; s_vd = 0; }
+// 2D/HUD prim under PSXPORT_NATIVE_DEPTH: OT order, biased into the overlay band above the 3D world.
+void gpu_vk_set_order_2d(unsigned idx) { float t = (float)(idx + 1) / 65536.0f; if (t > 1.0f) t = 1.0f;
+                                         s_cur_ord = NATIVE_3D_MAX + (1.0f - NATIVE_3D_MAX) * t; s_vd = 0; }
 
 // M3 textured rasterizer: a VRAM snapshot image the texture sampler reads (avoids render/sample feedback
 // loop), its descriptor set, the textured pipeline, and a textured-vertex batch.
@@ -182,11 +197,11 @@ static int FBH(void) { return 240 * s_ires; }
 static int use_fb(void) { return s_wide || s_ires > 1; }   // 3D goes through the scaled scratch FB
 static void wide_init(void) {
   if (s_wide >= 0) return;
-  const char* w = getenv("PSXPORT_WIDE");
+  const char* w = cfg_str("PSXPORT_WIDE");
   s_wide = (w && atoi(w) != 0) ? 1 : 0;
   // PSXPORT_IRES = native internal-resolution scale (1 = faithful PSX 320x240). Accept the legacy
   // PSXPORT_SS name too. Clamp to what fits VRAM_W: 4:3 -> 3, 16:9 -> 2.
-  const char* ir = getenv("PSXPORT_IRES"); if (!ir) ir = getenv("PSXPORT_SS");
+  const char* ir = cfg_str("PSXPORT_IRES"); if (!ir) ir = cfg_str("PSXPORT_SS");
   s_ires = ir ? atoi(ir) : 1; if (s_ires < 1) s_ires = 1;
   int cap = s_wide ? 2 : 3; if (s_ires > cap) s_ires = cap;
 }
@@ -195,12 +210,15 @@ int gpu_vk_enabled(void) {
   if (s_vk_on < 0) {
     // VK is the DEFAULT renderer for windowed runs. PSXPORT_SW_GPU=1 (or PSXPORT_VK=0) forces the SW
     // rasterizer (the oracle / fallback). Headless (no window) always stays SW.
-    const char* w = getenv("PSXPORT_GPU_WINDOW");
-    const char* sw = getenv("PSXPORT_SW_GPU");
-    const char* v = getenv("PSXPORT_VK");
+    const char* w = cfg_str("PSXPORT_GPU_WINDOW");
+    const char* sw = cfg_str("PSXPORT_SW_GPU");
+    const char* v = cfg_str("PSXPORT_VK");
     int win = w && atoi(w) != 0;
     int want = (sw && atoi(sw) != 0) ? 0 : (v ? (atoi(v) != 0) : 1);   // default on; SW_GPU/VK=0 disables
-    s_vk_on = (win && want) ? 1 : 0;
+    // PSXPORT_VK_HEADLESS=1: offscreen VK (no window/swapchain) so the renderer runs headless and
+    // deterministically — the foundation for the VK render-diff tool (default vs NATIVE_DEPTH).
+    s_headless = (cfg_on("PSXPORT_VK_HEADLESS") && want) ? 1 : 0;
+    s_vk_on = (s_headless || (win && want)) ? 1 : 0;
   }
   return s_vk_on && !s_failed;
 }
@@ -284,17 +302,20 @@ static void recreate_swapchain(void) {
 
 static void init_vk(void) {
   s_inited = 1;
-  SDL_Init(SDL_INIT_VIDEO);
-  int windowed = getenv("PSXPORT_WINDOWED") && atoi(getenv("PSXPORT_WINDOWED")) != 0;
-  Uint32 flags = SDL_WINDOW_VULKAN | (windowed ? SDL_WINDOW_RESIZABLE : SDL_WINDOW_FULLSCREEN_DESKTOP);
-  s_win = SDL_CreateWindow("Tomba! 2 (Vulkan)", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-                           960, 720, flags);
-  if (!s_win) { fprintf(stderr, "[gpu_vk] SDL_CreateWindow(VULKAN) failed: %s\n", SDL_GetError()); exit(2); }
-
-  // instance extensions: SDL surface exts (+ portability enumeration if the loader has it)
-  unsigned ext_n = 0; SDL_Vulkan_GetInstanceExtensions(s_win, &ext_n, 0);
-  const char* exts[16]; if (ext_n > 12) ext_n = 12;
-  SDL_Vulkan_GetInstanceExtensions(s_win, &ext_n, exts);
+  // instance extensions: SDL surface exts (+ portability enumeration if the loader has it). Headless
+  // (offscreen) needs no window/surface extensions at all.
+  const char* exts[16]; unsigned ext_n = 0;
+  if (!s_headless) {
+    SDL_Init(SDL_INIT_VIDEO);
+    int windowed = cfg_str("PSXPORT_WINDOWED") && atoi(cfg_str("PSXPORT_WINDOWED")) != 0;
+    Uint32 flags = SDL_WINDOW_VULKAN | (windowed ? SDL_WINDOW_RESIZABLE : SDL_WINDOW_FULLSCREEN_DESKTOP);
+    s_win = SDL_CreateWindow("Tomba! 2 (Vulkan)", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
+                             960, 720, flags);
+    if (!s_win) { fprintf(stderr, "[gpu_vk] SDL_CreateWindow(VULKAN) failed: %s\n", SDL_GetError()); exit(2); }
+    SDL_Vulkan_GetInstanceExtensions(s_win, &ext_n, 0);
+    if (ext_n > 12) ext_n = 12;
+    SDL_Vulkan_GetInstanceExtensions(s_win, &ext_n, exts);
+  }
   uint32_t avail_n = 0; vkEnumerateInstanceExtensionProperties(0, &avail_n, 0);
   VkExtensionProperties* avail = malloc(sizeof *avail * avail_n);
   vkEnumerateInstanceExtensionProperties(0, &avail_n, avail);
@@ -312,11 +333,11 @@ static void init_vk(void) {
   ici.enabledExtensionCount = ext_n; ici.ppEnabledExtensionNames = exts;
   VKC(vkCreateInstance(&ici, 0, &s_inst));
 
-  if (!SDL_Vulkan_CreateSurface(s_win, s_inst, &s_surf)) {
+  if (!s_headless && !SDL_Vulkan_CreateSurface(s_win, s_inst, &s_surf)) {
     fprintf(stderr, "[gpu_vk] SDL_Vulkan_CreateSurface failed: %s\n", SDL_GetError()); exit(2);
   }
 
-  // pick a physical device with a graphics+present queue family + swapchain extension
+  // pick a physical device with a graphics(+present, unless headless) queue family
   uint32_t pn = 0; vkEnumeratePhysicalDevices(s_inst, &pn, 0);
   VkPhysicalDevice* phys = malloc(sizeof *phys * pn);
   vkEnumeratePhysicalDevices(s_inst, &pn, phys);
@@ -327,8 +348,9 @@ static void init_vk(void) {
     VkQueueFamilyProperties* qf = malloc(sizeof *qf * qn);
     vkGetPhysicalDeviceQueueFamilyProperties(phys[i], &qn, qf);
     for (uint32_t q = 0; q < qn; q++) {
-      VkBool32 present = 0; vkGetPhysicalDeviceSurfaceSupportKHR(phys[i], q, s_surf, &present);
-      if ((qf[q].queueFlags & VK_QUEUE_GRAPHICS_BIT) && present) {
+      VkBool32 present = 0;
+      if (!s_headless) vkGetPhysicalDeviceSurfaceSupportKHR(phys[i], q, s_surf, &present);
+      if ((qf[q].queueFlags & VK_QUEUE_GRAPHICS_BIT) && (s_headless || present)) {
         s_phys = phys[i]; s_qfam = q; break;
       }
     }
@@ -344,7 +366,7 @@ static void init_vk(void) {
   free(de);
 
   const char* dexts[2]; uint32_t dext_n = 0;
-  dexts[dext_n++] = VK_KHR_SWAPCHAIN_EXTENSION_NAME;
+  if (!s_headless) dexts[dext_n++] = VK_KHR_SWAPCHAIN_EXTENSION_NAME;   // no swapchain offscreen
   if (dev_portability) dexts[dext_n++] = "VK_KHR_portability_subset";
 
   float prio = 1.0f;
@@ -360,7 +382,8 @@ static void init_vk(void) {
   VkAttachmentDescription at = {0};
   // format set after we know the swapchain format; create swapchain format first:
   // (we need the format before the render pass; query it here)
-  { uint32_t fn = 0; vkGetPhysicalDeviceSurfaceFormatsKHR(s_phys, s_surf, &fn, 0);
+  if (s_headless) { s_swap_fmt = VK_FORMAT_B8G8R8A8_UNORM; }   // unused present format; render pass needs one
+  else { uint32_t fn = 0; vkGetPhysicalDeviceSurfaceFormatsKHR(s_phys, s_surf, &fn, 0);
     VkSurfaceFormatKHR fmts[32]; if (fn > 32) fn = 32;
     vkGetPhysicalDeviceSurfaceFormatsKHR(s_phys, s_surf, &fn, fmts);
     s_swap_fmt = fmts[0].format;
@@ -456,7 +479,8 @@ static void init_vk(void) {
 
   create_vram();
   void create_tri_pipeline(void); create_tri_pipeline();
-  create_swapchain();
+  if (!s_headless) create_swapchain();
+  else fprintf(stderr, "[gpu_vk] headless offscreen render up (VRAM 1024x512 R16_UINT, no swapchain)\n");
   fprintf(stderr, "[gpu_vk] Vulkan present backend up (%ux%u, %u swap images; VRAM 1024x512 R16_UINT)\n",
           s_extent.width, s_extent.height, s_swap_n);
 }
@@ -567,10 +591,12 @@ void gpu_vk_present(const uint16_t* src, int sx, int sy, int w, int h) {
   memcpy(s_stage_ptr, src, (size_t)VRAM_W * VRAM_H * 2);
 
   VKC(vkWaitForFences(s_dev, 1, &s_fence, VK_TRUE, UINT64_MAX));
-  uint32_t idx;
-  VkResult acq = vkAcquireNextImageKHR(s_dev, s_swap, UINT64_MAX, s_sem_acq, VK_NULL_HANDLE, &idx);
-  if (acq == VK_ERROR_OUT_OF_DATE_KHR) { recreate_swapchain(); return; }
-  if (acq != VK_SUCCESS && acq != VK_SUBOPTIMAL_KHR) { fprintf(stderr, "[gpu_vk] acquire %d\n", acq); exit(2); }
+  uint32_t idx = 0;
+  if (!s_headless) {
+    VkResult acq = vkAcquireNextImageKHR(s_dev, s_swap, UINT64_MAX, s_sem_acq, VK_NULL_HANDLE, &idx);
+    if (acq == VK_ERROR_OUT_OF_DATE_KHR) { recreate_swapchain(); return; }
+    if (acq != VK_SUCCESS && acq != VK_SUBOPTIMAL_KHR) { fprintf(stderr, "[gpu_vk] acquire %d\n", acq); exit(2); }
+  }
   VKC(vkResetFences(s_dev, 1, &s_fence));
 
   VKC(vkResetCommandBuffer(s_cmd, 0));
@@ -685,6 +711,17 @@ void gpu_vk_present(const uint16_t* src, int sx, int sy, int w, int h) {
     img_barrier(VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                 VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
                 VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
+  }
+
+  // Headless (offscreen): the frame is fully rendered into s_tex; there is no swapchain to present to.
+  // End + submit the geometry command buffer (signaling s_fence) and return; vk_dump/readback reads s_tex.
+  if (s_headless) {
+    VKC(vkEndCommandBuffer(s_cmd));
+    VkSubmitInfo su = { VK_STRUCTURE_TYPE_SUBMIT_INFO };
+    su.commandBufferCount = 1; su.pCommandBuffers = &s_cmd;
+    VKC(vkQueueSubmit(s_queue, 1, &su, s_fence));
+    s_last_sx = sx; s_last_sy = sy; s_last_w = w; s_last_h = h;
+    return;
   }
 
   VkClearValue clear = {{{0, 0, 0, 1}}};
@@ -825,7 +862,7 @@ void create_tri_pipeline(void) {
   VkPipelineDepthStencilStateCreateInfo dpo = { VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO };
   dpo.depthTestEnable = VK_TRUE; dpo.depthWriteEnable = VK_TRUE; dpo.depthCompareOp = VK_COMPARE_OP_GREATER_OR_EQUAL;
   VkPipelineDepthStencilStateCreateInfo dps = dpo; dps.depthWriteEnable = VK_FALSE;  // semi: test, no write
-  if (getenv("PSXPORT_VK_NODEPTH")) { dpo.depthTestEnable = VK_FALSE; dps.depthTestEnable = VK_FALSE; }  // A/B
+  if (cfg_on("PSXPORT_VK_NODEPTH")) { dpo.depthTestEnable = VK_FALSE; dps.depthTestEnable = VK_FALSE; }  // A/B
   VkGraphicsPipelineCreateInfo gp = { VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO };
   gp.stageCount = 2; gp.pStages = st; gp.pVertexInputState = &vi; gp.pInputAssemblyState = &ia;
   gp.pViewportState = &vp; gp.pRasterizationState = &rs; gp.pMultisampleState = &ms;
@@ -873,9 +910,9 @@ void gpu_vk_draw_tri(int x0,int y0,int r0,int g0,int b0, int x1,int y1,int r1,in
                      int x2,int y2,int r2,int g2,int b2) {
   if (!s_inited || s_tri_n + 3 > TRI_CAP) return;
   TriVtx* v = (TriVtx*)s_vbuf_ptr + s_tri_n;
-  v[0] = (TriVtx){ x0, y0, r0/255.f, g0/255.f, b0/255.f, s_cur_ord };
-  v[1] = (TriVtx){ x1, y1, r1/255.f, g1/255.f, b1/255.f, s_cur_ord };
-  v[2] = (TriVtx){ x2, y2, r2/255.f, g2/255.f, b2/255.f, s_cur_ord };
+  v[0] = (TriVtx){ x0, y0, r0/255.f, g0/255.f, b0/255.f, s_vd ? s_vd[0]*NATIVE_3D_MAX : s_cur_ord };
+  v[1] = (TriVtx){ x1, y1, r1/255.f, g1/255.f, b1/255.f, s_vd ? s_vd[1]*NATIVE_3D_MAX : s_cur_ord };
+  v[2] = (TriVtx){ x2, y2, r2/255.f, g2/255.f, b2/255.f, s_vd ? s_vd[2]*NATIVE_3D_MAX : s_cur_ord };
   s_tri_n += 3;
 }
 
@@ -892,7 +929,7 @@ static void tex_emit(TexVtx* t, const int* xs, const int* ys, const int* us, con
     t[i].clut[0] = clutx; t[i].clut[1] = cluty; t[i].clut[2] = semi; t[i].clut[3] = blend;
     t[i].tw[0] = twmx; t[i].tw[1] = twmy; t[i].tw[2] = twox; t[i].tw[3] = twoy;
     t[i].da[0] = dax0; t[i].da[1] = day0; t[i].da[2] = dax1; t[i].da[3] = day1;
-    t[i].ord = s_cur_ord;
+    t[i].ord = s_vd ? s_vd[i] * NATIVE_3D_MAX : s_cur_ord;   // per-vertex real depth (3D band) else OT-order
   }
 }
 void gpu_vk_draw_tritri(const int* xs, const int* ys, const int* us, const int* vs,
@@ -1105,9 +1142,9 @@ void gpu_vk_vram_region(const char* path, int x, int y, int w, int h) {
 // blinks across frames) instead of cherry-picking one frame — see docs/gfx-debug.md.
 void gpu_vk_dump(int sx, int sy, int w, int h, int frame) {
   if (!gpu_vk_enabled() || !s_inited) return;
-  static int sf = -2; if (sf == -2) { const char* e = getenv("PSXPORT_VK_SHOT"); sf = e ? atoi(e) : -1; }
+  static int sf = -2; if (sf == -2) { const char* e = cfg_str("PSXPORT_VK_SHOT"); sf = e ? atoi(e) : -1; }
   static int qa = -2, qb, qstep; static char qdir[256];
-  if (qa == -2) { qa = -1; const char* e = getenv("PSXPORT_VK_SHOTSEQ");
+  if (qa == -2) { qa = -1; const char* e = cfg_str("PSXPORT_VK_SHOTSEQ");
     if (e && sscanf(e, "%d:%d:%d:%255s", &qa, &qb, &qstep, qdir) == 4 && qstep > 0) {} else qa = -1; }
   int dsx = sx, dsy = sy, dw = w, dh = h;
   if (use_fb()) { dsx = 0; dsy = FB_Y0; dw = FBW(); dh = FBH(); }   // scaled scratch FB (wide / hi-res)
@@ -1123,7 +1160,7 @@ void gpu_vk_dump(int sx, int sy, int w, int h, int frame) {
 void gpu_vk_frame_end(const uint16_t* svram, int frame) {
   if (!gpu_vk_enabled() || !s_inited) { s_tri_n = 0; return; }
   static int dframe = -2;
-  if (dframe == -2) { const char* e = getenv("PSXPORT_VK_DIFF"); dframe = e ? atoi(e) : -1; }
+  if (dframe == -2) { const char* e = cfg_str("PSXPORT_VK_DIFF"); dframe = e ? atoi(e) : -1; }
   if (dframe >= 0 && frame == dframe) {
     if (!s_tri_n && !s_tex_n) { fprintf(stderr, "[vk_diff] f%d: no tris this frame\n", frame); s_tri_n = s_tex_n = 0; return; }
     static uint16_t got[VRAM_W * VRAM_H];
@@ -1151,7 +1188,7 @@ void gpu_vk_frame_end(const uint16_t* svram, int frame) {
 // PSXPORT_VK_TRITEST=1: headless-ish self-test of the triangle rasterizer. Draws a known flat tri and a
 // gouraud tri, reads back, checks expected pixels, prints PASS/FAIL, exits. Validates the GPU raster path.
 void gpu_vk_tritest(void) {
-  if (!getenv("PSXPORT_VK_TRITEST")) return;
+  if (!cfg_on("PSXPORT_VK_TRITEST")) return;
   if (!s_inited) init_vk();
   s_tri_n = 0;
   gpu_vk_draw_tri( 10,10, 255,0,0,  200,10, 255,0,0,  10,200, 255,0,0);    // flat red, big right-triangle
@@ -1186,6 +1223,8 @@ void gpu_vk_frame_end(const uint16_t* svram, int frame) { (void)svram; (void)fra
 void gpu_vk_dump(int sx, int sy, int w, int h, int frame) { (void)sx;(void)sy;(void)w;(void)h;(void)frame; }
 void gpu_vk_shot(const char* path) { (void)path; }
 void gpu_vk_set_order(unsigned idx) { (void)idx; }
+void gpu_vk_set_order_2d(unsigned idx) { (void)idx; }
+void gpu_vk_set_vd(const float* d3) { (void)d3; }
 void gpu_vk_rawdump_arm(const char* path, int frame) { (void)path;(void)frame; }
 void gpu_vk_vram_region(const char* path, int x, int y, int w, int h) { (void)path;(void)x;(void)y;(void)w;(void)h; }
 void gpu_vk_stats(int* tri, int* tex, int* semi) { if(tri)*tri=0; if(tex)*tex=0; if(semi)*semi=0; }

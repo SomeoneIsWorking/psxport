@@ -5,6 +5,7 @@
 // the few externs gte.c references (PGXP off, widescreen off, savestate unused) so the math
 // matches the oracle exactly. The widescreen GTE-scale hack stays OFF here (wide60 tier later).
 #include "r3000.h"
+#include "cfg.h"
 #include <stdint.h>
 #include <stdbool.h>
 
@@ -114,7 +115,7 @@ static long s_sx_hist[16];   // buckets of 64px from -256..+704 (display is [0,3
 static long s_sx_n, s_sx_oob_lo, s_sx_oob_hi;
 static int  s_sxhist_on = -1;
 static void ws_sx_record(void) {
-  if (s_sxhist_on < 0) s_sxhist_on = getenv("PSXPORT_WS_SXHIST") ? 1 : 0;
+  if (s_sxhist_on < 0) s_sxhist_on = cfg_dbg("sxhist") ? 1 : 0;
   if (!s_sxhist_on) return;
   for (unsigned r = 12; r <= 14; r++) {
     int16_t sx = (int16_t)(GTE_ReadDR(r) & 0xFFFF);
@@ -185,8 +186,23 @@ void gte_probe_dump(const char* tag) {
 
 typedef struct { int ir1, ir2, ir3, sz, sx, sy; float px, py, pz, vx, vy, vz; } ProjVtx;
 
-static uint8_t s_divtab[0x101];
-static int     s_divtab_init = 0;
+static uint8_t  s_divtab[0x101];
+static int      s_divtab_init = 0;
+static uint16_t s_proj_H = 0;          // last projection-plane H (CR26); used by proj_pz_to_ord
+
+// Phase 2: map a native view-space depth `pz` (= max(H/2, sz), so pz in [H/2, 65535]) into a
+// normalized [0,1] depth value for the renderer's D32 buffer. The value is AFFINE in 1/pz, so it
+// interpolates linearly in screen space (gl_Position.w==1 in the VK vertex shader -> no perspective
+// divide on z); nearer (smaller pz) -> larger value, matching the renderer's GREATER_OR_EQUAL compare
+// + 0.0 clear (nearer wins). Not OT submission order: this is true per-vertex perspective depth.
+float proj_pz_to_ord(float pz) {
+  float nearp = (s_proj_H ? (float)s_proj_H * 0.5f : 1.0f);  // near plane = H/2 (the proj pz clamp floor)
+  if (nearp < 1.0f) nearp = 1.0f;
+  if (pz < nearp) pz = nearp;
+  float inv_near = 1.0f / nearp, inv_far = 1.0f / 65535.0f;
+  float ord = (1.0f / pz - inv_far) / (inv_near - inv_far);
+  return ord < 0.0f ? 0.0f : (ord > 1.0f ? 1.0f : ord);
+}
 static void proj_divtab_init(void) {                       // mirrors GTE_Init's DivTable build
   for (uint32_t d = 0x8000; d < 0x10000; d += 0x80) {
     uint32_t xa = 512;
@@ -252,6 +268,7 @@ static void proj_native_vertex(unsigned vidx, uint32_t insn, ProjVtx* out) {
 
   const int32_t OFX = (int32_t)gte_read_ctrl(24), OFY = (int32_t)gte_read_ctrl(25);
   const uint16_t H = (uint16_t)gte_read_ctrl(26);
+  s_proj_H = H;                                             // remember the projection plane for depth-normalize
   int64_t h_div_sz = proj_divide(H, (uint32_t)out->sz);    // integer UNR division (matches gameplay)
   out->sx = proj_clampi((int32_t)(((int64_t)OFX + out->ir1 * h_div_sz) >> 16), -1024, 1023);  // Lm_G
   out->sy = proj_clampi((int32_t)(((int64_t)OFY + out->ir2 * h_div_sz) >> 16), -1024, 1023);
@@ -303,7 +320,7 @@ void proj_probe_dump(const char* tag) {
 static struct { uint32_t ra; long n; } s_rtpcaller[64];
 static int s_rtpcaller_on = -1;
 static void rtpcaller_record(uint32_t ra) {
-  if (s_rtpcaller_on < 0) s_rtpcaller_on = getenv("PSXPORT_RTPCALLER") ? 1 : 0;
+  if (s_rtpcaller_on < 0) s_rtpcaller_on = cfg_dbg("rtpcaller") ? 1 : 0;
   if (!s_rtpcaller_on) return;
   for (int i = 0; i < 64; i++) { if (s_rtpcaller[i].n == 0) { s_rtpcaller[i].ra = ra; s_rtpcaller[i].n = 1; return; }
                                  if (s_rtpcaller[i].ra == ra) { s_rtpcaller[i].n++; return; } }
@@ -376,6 +393,10 @@ int  projprim_count(void)      { return s_pp_n; }
 static struct { uint32_t packed; ProjVtx p; int used; } s_pr[PR_N];
 static int s_pr_head = 0;
 static int s_attach = -1;
+// The attach capture+store infra feeds BOTH the Phase-1 verifier (PSXPORT_ATTACH) and the Phase-2
+// native-depth renderer (PSXPORT_NATIVE_DEPTH); either one enables it (else projprim is never populated
+// and every depth lookup misses).
+static int attach_env(void) { return (cfg_on("PSXPORT_ATTACH") || cfg_on("PSXPORT_NATIVE_DEPTH")) ? 1 : 0; }
 static void projprim_capture(uint32_t insn, int rtpt) {
   ProjVtx p;
   int nv = rtpt ? 3 : 1;
@@ -395,19 +416,19 @@ void attach_store_hook(uint32_t addr, uint32_t v) {
     if (s_pr[i].used && s_pr[i].packed == v) { projprim_set(addr, &s_pr[i].p); s_pr[i].used = 0; return; }
   }
 }
-int attach_enabled(void) { if (s_attach < 0) s_attach = getenv("PSXPORT_ATTACH") ? 1 : 0; return s_attach > 0; }
+int attach_enabled(void) { if (s_attach < 0) s_attach = attach_env(); return s_attach > 0; }
 
 void     gte_op(R3000* c, uint32_t insn)         { GTE_Instruction(insn);
                                                    unsigned op = insn & 0x3F;
-                                                   if (s_gteprobe < 0) { const char* e = getenv("PSXPORT_GTEPROBE"); s_gteprobe = e ? atoi(e) : 0; }
+                                                   if (s_gteprobe < 0) { const char* e = cfg_str("PSXPORT_GTEPROBE"); s_gteprobe = e ? atoi(e) : 0; }
                                                    if (s_gteprobe > 0) s_gte_hist[op]++;
                                                    if (op == 0x01 || op == 0x30) {
                                                      ws_sx_record();          // self-gated (PSXPORT_WS_SXHIST)
                                                      rtpcaller_record(c->r[31]);   // self-gated (PSXPORT_RTPCALLER)
                                                      if (g_wide60_on) wide60_rtp(op);
-                                                     if (s_projprobe < 0) { s_projprobe = getenv("PSXPORT_PROJPROBE") ? 1 : 0;
+                                                     if (s_projprobe < 0) { s_projprobe = cfg_on("PSXPORT_PROJPROBE") ? 1 : 0;
                                                                             if (s_projprobe && !s_divtab_init) proj_divtab_init(); }
-                                                     if (s_attach < 0) { s_attach = getenv("PSXPORT_ATTACH") ? 1 : 0;
+                                                     if (s_attach < 0) { s_attach = attach_env();  // ATTACH or NATIVE_DEPTH
                                                                          if (s_attach && !s_divtab_init) proj_divtab_init(); }
                                                      if (s_attach > 0) projprim_capture(insn, op == 0x30);
                                                      if (s_projprobe > 0) {

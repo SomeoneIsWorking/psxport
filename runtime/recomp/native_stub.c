@@ -18,6 +18,7 @@
 // we load MAIN.EXE into RAM and longjmp out of the stub interpreter, then enter the native MAIN
 // boot (native_boot.c), which takes over for Whoopee/OP/menu (later 33).
 #include "r3000.h"
+#include "cfg.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -119,7 +120,7 @@ void hle_deliver_event(uint32_t ev_class, uint32_t spec);
 static uint32_t g_stub_vblank;
 static void ov_stub_vsync(R3000* c) {
   int32_t mode = (int32_t)c->r[A0_];
-  if (getenv("PSXPORT_VSYNCLOG")) fprintf(stderr, "[vsync] mode=%d count=%u\n", mode, g_stub_vblank);
+  if (cfg_dbg("vsync")) fprintf(stderr, "[vsync] mode=%d count=%u\n", mode, g_stub_vblank);
   void watchdog_pet(void);
   hle_deliver_event(0xF2000003u, 0xFFFFFFFFu);         // VBlank event classes (RCnt3 / libapi)
   hle_deliver_event(0xF0000001u, 0xFFFFFFFFu);
@@ -131,20 +132,20 @@ static void ov_stub_vsync(R3000* c) {
   // at the VBlank frame boundary, never mid-draw.
   static int windowed = -1;
   if (windowed < 0) {
-    const char* w = getenv("PSXPORT_GPU_WINDOW");      // run.sh sets "0" headless, "1" windowed
-    windowed = (w && atoi(w) != 0 && !getenv("PSXPORT_NOPACE")) ? 1 : 0;
+    const char* w = cfg_str("PSXPORT_GPU_WINDOW");      // run.sh sets "0" headless, "1" windowed
+    windowed = (w && atoi(w) != 0 && !cfg_on("PSXPORT_NOPACE")) ? 1 : 0;
   }
 
   // SCEA skip: pressing Start jumps straight to the MAIN.EXE hand-off (skipping the fades), exactly
   // as ov_loadexec does. PSXPORT_SCEA_SKIP forces it (headless test / always-skip). Start is PSX
   // button bit 0x0008, active-low (0 == pressed) in the host pad mask.
-  static int skip_dis = -1; if (skip_dis < 0) skip_dis = getenv("PSXPORT_NOSKIP") ? 1 : 0;
+  static int skip_dis = -1; if (skip_dis < 0) skip_dis = cfg_on("PSXPORT_NOSKIP") ? 1 : 0;
   if (!skip_dis) {
     uint16_t pad_buttons(void);
 #ifdef PSXPORT_SDL
     if (windowed) { void pad_poll_sdl(void); pad_poll_sdl(); }   // refresh host input
 #endif
-    if (getenv("PSXPORT_SCEA_SKIP") || (pad_buttons() & 0x0008u) == 0) {
+    if (cfg_on("PSXPORT_SCEA_SKIP") || (pad_buttons() & 0x0008u) == 0) {
       fprintf(stderr, "[stub] SCEA skipped (Start) -> hand off to MAIN\n");
       load_exe_image(g_main_path, g_boot_ctx);
       longjmp(g_stub_exit, 1);
@@ -218,7 +219,7 @@ void native_stub_run(R3000* c, const char* main_exe_path) {
   g_boot_ctx  = c;
   g_loadexec_hook = ov_loadexec;
   stub_cd_overrides_init();
-  interp_trace_open(getenv("PSXPORT_INTERP_TRACE"));
+  interp_trace_open(cfg_str("PSXPORT_INTERP_TRACE"));
 
   // The stub (the disc's boot executable) lives next to MAIN.EXE — same directory, name
   // SCUS_944.54 (extracted by run.sh via `discdump get`). It loads to 0x80010000 (over MAIN's low

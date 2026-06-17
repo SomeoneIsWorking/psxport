@@ -9,6 +9,7 @@
 // VRAM is 1024x512 16-bit (5-5-5 BGR + mask), holding both textures (sampled by textured
 // primitives via texpage+CLUT) and the framebuffer regions the game composes & displays.
 #include "r3000.h"
+#include "cfg.h"
 #include "gpu_native_internal.h"   // shared VRAM/state/helpers (also used by gpu_trace.c, gpu_debug.c)
 #include <stdio.h>
 #include <stdlib.h>
@@ -58,6 +59,7 @@ static long s_gp0_words = 0, s_dma2 = 0;  // diagnostics: GP0 words + DMA2 trigg
 static uint32_t s_cur_node = 0;   // REDDBG: RAM addr of the OT node currently being fed to GP0
 uint32_t g_ot_madr = 0;           // last OT DMA root (extern in internal header)
 long g_attach_hit = 0, g_attach_miss = 0, g_attach_nodeabsent = 0;  // Phase-1 attach: hit/miss diag (PSXPORT_ATTACH)
+long g_nd_3d = 0, g_nd_2d = 0;   // Phase-2 native-depth diag: prims drawn with real depth vs OT-order band
 
 // Fade-flash diagnostic (PSXPORT_FADEDBG="a:b"): per-frame max emitted prim brightness + how the
 // scene is drawn, to settle whether a bright fade frame is in the GP0 (engine emits it) or invented
@@ -77,7 +79,7 @@ static void fade_note_size(int w, int h, int semi) { if (semi && w >= 160 && h >
 // fade overlay tiles stack (VK draws them all vs one snapshot, so stacked tiles don't accumulate).
 extern int s_frame;
 static void semi_dump(const char* kind, int blend, int r, int g, int b, int x0, int y0, int x1, int y1, int offy) {
-  static int sf = -2; if (sf == -2) { const char* e = getenv("PSXPORT_SEMIDUMP"); sf = e ? atoi(e) : -1; }
+  static int sf = -2; if (sf == -2) { const char* e = cfg_str("PSXPORT_SEMIDUMP"); sf = e ? atoi(e) : -1; }
   if (sf >= 0 && s_frame == sf)
     fprintf(stderr, "[semidump] f%d %s blend=%d col=(%d,%d,%d) bbox=(%d,%d)-(%d,%d) offY=%d\n",
             s_frame, kind, blend, r, g, b, x0, y0, x1, y1, offy);
@@ -249,7 +251,7 @@ static inline void tri_px(Vtx a, Vtx b, Vtx c, int x, int y, int tex, int shade,
       // PSXPORT_PIXTRACE="vx,vy": dump every prim that writes this absolute VRAM pixel (post-offset),
       // with its sampled texel + interpolated color + modulated output — for per-pixel-math diffing
       // against Beetle's gpu_polygon.c (which carries the matching [pixtrace beetle] log).
-      { static int tx = -2, ty; if (tx == -2) { const char* e = getenv("PSXPORT_PIXTRACE");
+      { static int tx = -2, ty; if (tx == -2) { const char* e = cfg_str("PSXPORT_PIXTRACE");
           if (e) sscanf(e, "%d,%d", &tx, &ty); else tx = -1; }
         if (tx >= 0 && x == tx && y == ty)
           fprintf(stderr, "[pixtrace ours] (%d,%d) tex=%d shade=%d semi=%d px_semi=%d blend=%d dith=%d "
@@ -385,7 +387,7 @@ void gpu_native_load_image(int x, int y, int w, int h, uint32_t src) {
   // SEMI pass samples the post-opaque s_tex (dirty regions only) — so a SEMI-transparent textured
   // prim whose texture arrived here read zeros and discarded (the invisible in-game puddle water).
   if (gpu_vk_enabled()) gpu_vk_dirty(x, y, w, h);
-  if (getenv("PSXPORT_UPLOADLOG"))
+  if (cfg_dbg("upload"))
     fprintf(stderr, "[upload] f%d NATIVE dest=(%d,%d) %dx%d src=0x%08X\n", s_frame, x, y, w, h, src);
 }
 
@@ -409,7 +411,7 @@ static void set_clut(uint16_t cl) { s_clut_x = (cl & 0x3F) * 16; s_clut_y = (cl 
 // (frame/node/op/clut/texpage/color/first-vertex) so put_px_b can stamp each pixel it writes.
 static void prov_begin(uint8_t op, int tex, int semi, uint8_t r, uint8_t g, uint8_t b,
                        int x0, int y0, int u0, int v0) {
-  if (s_prov_on < 0) s_prov_on = getenv("PSXPORT_PROVAT") ? 1 : 0;
+  if (s_prov_on < 0) s_prov_on = cfg_str("PSXPORT_PROVAT") ? 1 : 0;
   if (!s_prov_on) return;
   s_prim_gid++;
   ProvMeta* m = &s_provmeta[s_prim_gid % PROVRING];
@@ -453,7 +455,7 @@ static int s_tw_init = 0, s_tw_x0 = -1, s_tw_y0 = 0, s_tw_x1 = 0, s_tw_y1 = 0;
 static int texwatch_overlap(int rx, int ry, int rw, int rh) {
   if (!s_tw_init) {
     s_tw_init = 1;
-    const char* e = getenv("PSXPORT_TEXWATCH");
+    const char* e = cfg_str("PSXPORT_TEXWATCH");
     if (e) sscanf(e, "%d,%d,%d,%d", &s_tw_x0, &s_tw_y0, &s_tw_x1, &s_tw_y1);
   }
   if (s_tw_x0 < 0) return 0;
@@ -521,7 +523,7 @@ static void gp0_exec(void) {
     }
     // Phase-1 attach verification: match each poly vertex to its native float by the vertex word's
     // guest ADDRESS (function/pool-agnostic). A miss with addr==0 = not from the OT walk (2D/direct).
-    if (getenv("PSXPORT_ATTACH")) {
+    if (cfg_on("PSXPORT_ATTACH")) {
       int projprim_lookup(uint32_t,float*,float*,float*,float*,float*,float*);
       extern long g_attach_hit, g_attach_miss, g_attach_nodeabsent;
       // A miss with a valid OT address = a 2D screen-space poly (no GTE projection) — the free 2D/3D
@@ -550,36 +552,61 @@ static void gp0_exec(void) {
     // VK backend (M5): tee polys to the GPU rasterizer in absolute VRAM coords. Opaque textured/
     // untextured -> opaque batch; semi -> semi batch (mode 3 = untextured flat). VK owns these now.
     if (gpu_vk_enabled()) {
-      gpu_vk_set_order(s_prim_order++);   // OT submission order -> depth (preserve opaque/semi order)
+      unsigned ord_idx = s_prim_order++;
+      gpu_vk_set_order(ord_idx);           // OT submission order -> depth (preserve opaque/semi order)
       void gpu_vk_draw_tritri(const int*,const int*,const int*,const int*,const unsigned char*,
                               const unsigned char*,const unsigned char*,int,int,int,int,int,int,int,int,int,int,int,int,int,int);
       void gpu_vk_draw_semi(const int*,const int*,const int*,const int*,const unsigned char*,
                             const unsigned char*,const unsigned char*,int,int,int,int,int,int,int,int,int,int,int,int,int,int,int);
+      void gpu_vk_set_vd(const float*); void gpu_vk_set_order_2d(unsigned);
       int xs[4], ys[4], us[4], vs[4]; unsigned char rs[4], gs[4], bs[4];
       for (int i = 0; i < nv; i++) { xs[i]=v[i].x+s_off_x; ys[i]=v[i].y+s_off_y; us[i]=v[i].u; vs[i]=v[i].v;
                                      rs[i]=v[i].r; gs[i]=v[i].g; bs[i]=v[i].b; }
       int mode = textured ? s_tp_mode : 3, rw = raw ? 1 : 0;
+      // Phase 2 (PSXPORT_NATIVE_DEPTH): hand the renderer per-vertex REAL view-space depth from the
+      // native projection when every vertex resolves to a projected (3D) vertex; the D32 buffer then
+      // does true per-pixel occlusion instead of OT/painter order. A poly with any unprojected vertex
+      // is a 2D/HUD prim -> OT-order depth in the overlay band (over the 3D world). Faithful-off.
+      static int s_ndepth = -1;
+      if (s_ndepth < 0) s_ndepth = cfg_on("PSXPORT_NATIVE_DEPTH") ? 1 : 0;
+      float dep[4]; int is3d = 0;
+      if (s_ndepth) {
+        int projprim_lookup(uint32_t,float*,float*,float*,float*,float*,float*);
+        float proj_pz_to_ord(float);
+        is3d = 1;
+        for (int i = 0; i < nv; i++) {
+          float pz;
+          if (vaddr[i] && projprim_lookup(vaddr[i], 0,0,&pz,0,0,0)) dep[i] = proj_pz_to_ord(pz);
+          else { is3d = 0; break; }
+        }
+        if (!is3d) gpu_vk_set_order_2d(ord_idx);   // 2D/HUD overlay band, OT-ordered
+        extern long g_nd_3d, g_nd_2d; if (is3d) g_nd_3d++; else g_nd_2d++;
+      }
       if (semi) {
         { void gpu_vk_semi_group(int,int,int,int);   // OT-order grouping (overlap -> fresh fb snapshot)
           int bx0=xs[0],by0=ys[0],bx1=xs[0],by1=ys[0];
           for (int i=1;i<nv;i++){ if(xs[i]<bx0)bx0=xs[i]; if(xs[i]>bx1)bx1=xs[i]; if(ys[i]<by0)by0=ys[i]; if(ys[i]>by1)by1=ys[i]; }
           gpu_vk_semi_group(bx0, by0, bx1, by1); }
+        if (is3d) gpu_vk_set_vd(dep);
         gpu_vk_draw_semi(xs, ys, us, vs, rs, gs, bs, s_tp_x, s_tp_y, mode, rw, s_clut_x, s_clut_y,
                          s_tw_mx, s_tw_my, s_tw_ox, s_tw_oy, s_da_x0, s_da_y0, s_da_x1, s_da_y1, s_tp_blend);
-        if (nv == 4) gpu_vk_draw_semi(&xs[1], &ys[1], &us[1], &vs[1], &rs[1], &gs[1], &bs[1], s_tp_x, s_tp_y, mode, rw,
-                         s_clut_x, s_clut_y, s_tw_mx, s_tw_my, s_tw_ox, s_tw_oy, s_da_x0, s_da_y0, s_da_x1, s_da_y1, s_tp_blend);
+        if (nv == 4) { if (is3d) gpu_vk_set_vd(&dep[1]);
+          gpu_vk_draw_semi(&xs[1], &ys[1], &us[1], &vs[1], &rs[1], &gs[1], &bs[1], s_tp_x, s_tp_y, mode, rw,
+                         s_clut_x, s_clut_y, s_tw_mx, s_tw_my, s_tw_ox, s_tw_oy, s_da_x0, s_da_y0, s_da_x1, s_da_y1, s_tp_blend); }
       } else {
+        if (is3d) gpu_vk_set_vd(dep);
         gpu_vk_draw_tritri(xs, ys, us, vs, rs, gs, bs, s_tp_x, s_tp_y, mode, rw, s_clut_x, s_clut_y,
                            s_tw_mx, s_tw_my, s_tw_ox, s_tw_oy, s_da_x0, s_da_y0, s_da_x1, s_da_y1);
-        if (nv == 4) gpu_vk_draw_tritri(&xs[1], &ys[1], &us[1], &vs[1], &rs[1], &gs[1], &bs[1], s_tp_x, s_tp_y, mode, rw,
-                           s_clut_x, s_clut_y, s_tw_mx, s_tw_my, s_tw_ox, s_tw_oy, s_da_x0, s_da_y0, s_da_x1, s_da_y1);
+        if (nv == 4) { if (is3d) gpu_vk_set_vd(&dep[1]);
+          gpu_vk_draw_tritri(&xs[1], &ys[1], &us[1], &vs[1], &rs[1], &gs[1], &bs[1], s_tp_x, s_tp_y, mode, rw,
+                           s_clut_x, s_clut_y, s_tw_mx, s_tw_my, s_tw_ox, s_tw_oy, s_da_x0, s_da_y0, s_da_x1, s_da_y1); }
       }
     }
     // PSXPORT_POLYDUMP=frame — log every poly at `frame` (our port side, to compare vs oracle
     // polywatch). Finds the garbage-block prims in the GAME level.
     { static int pd = -2, pax = -1, pay = -1;
-      if (pd == -2) { const char* e = getenv("PSXPORT_POLYDUMP"); pd = e ? atoi(e) : -1;
-        const char* pa = getenv("PSXPORT_POLYAT"); if (pa) sscanf(pa, "%d,%d", &pax, &pay); }
+      if (pd == -2) { const char* e = cfg_str("PSXPORT_POLYDUMP"); pd = e ? atoi(e) : -1;
+        const char* pa = cfg_str("PSXPORT_POLYAT"); if (pa) sscanf(pa, "%d,%d", &pax, &pay); }
       if (pd >= 0 && s_frame == pd) {
         int hit = (pax < 0);   // no point filter -> log all
         if (pax >= 0) {        // log only prims whose screen bbox (incl offset) covers (pax,pay)
@@ -625,8 +652,8 @@ static void gp0_exec(void) {
     else { w = h = (size == 1) ? 1 : (size == 2) ? 8 : 16; }
     // PSXPORT_POLYDUMP (+POLYAT): also log sprites/rects, so the garbage-block source can be a sprite.
     { static int pd = -2, pax = -1, pay = -1;
-      if (pd == -2) { const char* e = getenv("PSXPORT_POLYDUMP"); pd = e ? atoi(e) : -1;
-        const char* pa = getenv("PSXPORT_POLYAT"); if (pa) sscanf(pa, "%d,%d", &pax, &pay); }
+      if (pd == -2) { const char* e = cfg_str("PSXPORT_POLYDUMP"); pd = e ? atoi(e) : -1;
+        const char* pa = cfg_str("PSXPORT_POLYAT"); if (pa) sscanf(pa, "%d,%d", &pax, &pay); }
       if (pd >= 0 && s_frame == pd) {
         int X=x+s_off_x, Y=y+s_off_y;
         int hit = (pax < 0) || (pax>=X && pax<X+w && pay>=Y && pay<Y+h);
@@ -652,7 +679,11 @@ static void gp0_exec(void) {
     if (!gpu_vk_enabled()) raster_sprite(op, x, y, u0, v0, w, h, cr, cg, cb, textured, semi);  // VK owns it (tee'd below)
     // VK backend (M5): tee rects/sprites as two triangles (opaque or semi; mode 3 = untextured solid).
     if (gpu_vk_enabled()) {
-      gpu_vk_set_order(s_prim_order++);   // OT submission order -> depth (preserve opaque/semi order)
+      unsigned ord_idx = s_prim_order++;
+      gpu_vk_set_order(ord_idx);          // OT submission order -> depth (preserve opaque/semi order)
+      // sprites/rects are screen-space (no GTE projection) -> 2D overlay band under PSXPORT_NATIVE_DEPTH.
+      { static int s_ndepth = -1; if (s_ndepth < 0) s_ndepth = cfg_on("PSXPORT_NATIVE_DEPTH") ? 1 : 0;
+        void gpu_vk_set_order_2d(unsigned); if (s_ndepth) gpu_vk_set_order_2d(ord_idx); }
       void gpu_vk_draw_tritri(const int*,const int*,const int*,const int*,const unsigned char*,
                               const unsigned char*,const unsigned char*,int,int,int,int,int,int,int,int,int,int,int,int,int,int);
       void gpu_vk_draw_semi(const int*,const int*,const int*,const int*,const unsigned char*,
@@ -806,11 +837,11 @@ void gpu_gp0(uint32_t w) {
       case 0xE1: set_texpage(w & 0xFFFF); return;
       case 0xE2: s_tw_mx = w & 31; s_tw_my = (w >> 5) & 31; s_tw_ox = (w >> 10) & 31; s_tw_oy = (w >> 15) & 31; return;
       case 0xE3: s_da_x0 = w & 0x3FF; s_da_y0 = (w >> 10) & 0x1FF;
-        if (getenv("PSXPORT_ENVDBG")) fprintf(stderr, "[env] E3 clip_tl=(%d,%d)\n", s_da_x0, s_da_y0); return;
+        if (cfg_dbg("env")) fprintf(stderr, "[env] E3 clip_tl=(%d,%d)\n", s_da_x0, s_da_y0); return;
       case 0xE4: s_da_x1 = w & 0x3FF; s_da_y1 = (w >> 10) & 0x1FF;
-        if (getenv("PSXPORT_ENVDBG")) fprintf(stderr, "[env] E4 clip_br=(%d,%d)\n", s_da_x1, s_da_y1); return;
+        if (cfg_dbg("env")) fprintf(stderr, "[env] E4 clip_br=(%d,%d)\n", s_da_x1, s_da_y1); return;
       case 0xE5: s_off_x = ((int)(w & 0x7FF) << 21) >> 21; s_off_y = ((int)((w >> 11) & 0x7FF) << 21) >> 21;
-        if (getenv("PSXPORT_ENVDBG")) fprintf(stderr, "[env] E5 offset=(%d,%d)\n", s_off_x, s_off_y); return;
+        if (cfg_dbg("env")) fprintf(stderr, "[env] E5 offset=(%d,%d)\n", s_off_x, s_off_y); return;
       case 0xE6: return;                         // mask settings (mask-test not modeled)
       default: break;
     }
@@ -849,7 +880,7 @@ void gpu_gp0(uint32_t w) {
       s_xfer_px = 0; s_xfer = 1;
       if (gpu_vk_enabled()) gpu_vk_dirty(s_xfer_x, s_xfer_y, s_xfer_w, s_xfer_h);   // mirror upload to VK
       clutwatch_xfer("A0", s_xfer_x, s_xfer_y, s_xfer_w, s_xfer_h);
-      if (getenv("PSXPORT_UPLOADLOG")) {
+      if (cfg_dbg("upload")) {
         extern uint32_t g_dma_src;
         fprintf(stderr, "[upload] f%d A0 dest=(%d,%d) %dx%d src=0x%08X\n",
                 s_frame, s_xfer_x, s_xfer_y, s_xfer_w, s_xfer_h, 0x80000000u | g_dma_src);
@@ -874,14 +905,14 @@ void gpu_gp0(uint32_t w) {
                 s_frame, sx, sy, dx, dy, w2, h2, s_cur_node, s_fifo[0], s_fifo[1], s_fifo[2], s_fifo[3]);
         // Dump RAM + the OT node neighbourhood the first time the atlas-clobbering copy fires, so the
         // malformed node and the chain that reaches it can be examined offline.
-        if (getenv("PSXPORT_CLOBBERDUMP")) { static int done = 0; if (!done++) {
+        if (cfg_str("PSXPORT_CLOBBERDUMP")) { static int done = 0; if (!done++) {
           extern uint8_t g_ram[]; uint32_t na = s_cur_node & 0x1FFFFF;
           fprintf(stderr, "[clobber] OT root madr=0x%08X node@0x%08X neighbourhood:\n", 0x80000000u|g_ot_madr, s_cur_node);
           for (int k = -8; k <= 16; k++) fprintf(stderr, "  [%+d] 0x%08X: %08X\n", k,
                   0x80000000u | ((na + k*4) & 0x1FFFFF), mem_r32(0x80000000u | ((na + k*4) & 0x1FFFFF)));
-          FILE* mf = fopen(getenv("PSXPORT_CLOBBERDUMP"), "wb");
+          FILE* mf = fopen(cfg_str("PSXPORT_CLOBBERDUMP"), "wb");
           if (mf) { fwrite(g_ram, 1, 0x200000, mf); fclose(mf);
-                    fprintf(stderr, "[clobber] RAM dumped -> %s\n", getenv("PSXPORT_CLOBBERDUMP")); } } }
+                    fprintf(stderr, "[clobber] RAM dumped -> %s\n", cfg_str("PSXPORT_CLOBBERDUMP")); } } }
       }
     } else if (op != 0xC0) {
       gp0_exec();
@@ -893,7 +924,7 @@ void gpu_gp0(uint32_t w) {
 // GP1 display/control commands.
 void gpu_gp1(uint32_t w) {
   uint8_t op = w >> 24;
-  if (getenv("PSXPORT_GP1LOG"))
+  if (cfg_dbg("gp1"))
     fprintf(stderr, "[gp1] f%d %02X %06X\n", s_frame, op, w & 0xFFFFFF);
   switch (op) {
     case 0x05: s_disp_x = w & 0x3FF; s_disp_y = (w >> 10) & 0x1FF; break;          // display area start
@@ -925,7 +956,7 @@ static int win_enabled(void) {
   // Check the VALUE, not mere presence: run.sh always SETS PSXPORT_GPU_WINDOW (to "0" headless),
   // and getenv("...")!=NULL is truthy for "0" too — so a presence test opened a window even with
   // PSXPORT_NOWINDOW=1 (the "still running headed" bug). Match gpu_pace_subframe: atoi(w)!=0.
-  if (s_win_on < 0) { const char* w = getenv("PSXPORT_GPU_WINDOW"); s_win_on = (w && atoi(w) != 0) ? 1 : 0; }
+  if (s_win_on < 0) { const char* w = cfg_str("PSXPORT_GPU_WINDOW"); s_win_on = (w && atoi(w) != 0) ? 1 : 0; }
   return s_win_on;
 }
 static void ensure_window(void) {
@@ -934,7 +965,7 @@ static void ensure_window(void) {
     SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "1");   // linear filter for a smooth upscale
     // Default: borderless fullscreen at the desktop resolution ("adapt to screen"). PSXPORT_WINDOWED=1
     // opens a resizable 3x window instead (handy for dev). The 4:3 fit below applies to both.
-    int windowed = getenv("PSXPORT_WINDOWED") && atoi(getenv("PSXPORT_WINDOWED")) != 0;
+    int windowed = cfg_str("PSXPORT_WINDOWED") && atoi(cfg_str("PSXPORT_WINDOWED")) != 0;
     Uint32 flags = windowed ? SDL_WINDOW_RESIZABLE : SDL_WINDOW_FULLSCREEN_DESKTOP;
     s_win = SDL_CreateWindow("Tomba! 2 (native PC port)", SDL_WINDOWPOS_CENTERED,
                              SDL_WINDOWPOS_CENTERED, s_disp_w * 3, s_disp_h * 3, flags);
@@ -954,8 +985,10 @@ static void ensure_window(void) {
 int  gpu_vk_enabled(void);                                   // gpu_vk.c — Vulkan present backend (M0)
 void gpu_vk_present(const uint16_t*, int, int, int, int);
 static void blit_src(const uint16_t* src, int sx, int sy) {
+  // VK first: headless offscreen VK (PSXPORT_VK_HEADLESS) renders without a window, so it must run even
+  // when win_enabled() is false. The SW window path below needs a real window.
+  if (gpu_vk_enabled()) { gpu_vk_present(src, sx, sy, s_disp_w, s_disp_h); return; }  // HW path (incl. headless)
   if (!win_enabled()) return;
-  if (gpu_vk_enabled()) { gpu_vk_present(src, sx, sy, s_disp_w, s_disp_h); return; }  // HW path
   ensure_window();
   static uint32_t buf[VRAM_W * VRAM_H];
   for (int y = 0; y < s_disp_h; y++)
@@ -1035,8 +1068,8 @@ void gpu_pace_subframe(int parts) {
 #ifdef PSXPORT_SDL
   static int on = -1;
   if (on < 0) {
-    const char* w = getenv("PSXPORT_GPU_WINDOW");   // NB: run.sh sets this to "0" headless, so
-    on = (w && atoi(w) != 0 && !getenv("PSXPORT_NOPACE")) ? 1 : 0;  // check the VALUE, not presence
+    const char* w = cfg_str("PSXPORT_GPU_WINDOW");   // NB: run.sh sets this to "0" headless, so
+    on = (w && atoi(w) != 0 && !cfg_on("PSXPORT_NOPACE")) ? 1 : 0;  // check the VALUE, not presence
   }
   if (!on) return;
   if (parts < 1) parts = 1;
@@ -1080,7 +1113,7 @@ void gpu_present_ex(int do_blit) {
   void watchdog_pet(void);
   watchdog_pet();             // frame-progress heartbeat (see watchdog.c)
   trace_flush();              // PSXPORT_GPUTRACE: write this frame's GP0 trace (no-op unless armed)
-  if (getenv("PSXPORT_VRAMSCAN")) {
+  if (cfg_dbg("vramscan")) {
     int minx=99999,miny=99999,maxx=-1,maxy=-1; long nz=0;
     for (int y=0;y<512;y++) for (int x=0;x<1024;x++) if (*vram(x,y)&0x7FFF) {
       nz++; if(x<minx)minx=x; if(x>maxx)maxx=x; if(y<miny)miny=y; if(y>maxy)maxy=y; }
@@ -1089,17 +1122,17 @@ void gpu_present_ex(int do_blit) {
   }
   if (do_blit) present_window();
   { void ws_sx_dump(const char*);   // widescreen RE (later-55): dump GTE screen-X histogram
-    if (getenv("PSXPORT_WS_SXHIST") && s_frame > 0 && (s_frame % 500) == 0) {
+    if (cfg_dbg("sxhist") && s_frame > 0 && (s_frame % 500) == 0) {
       char t[32]; snprintf(t, sizeof t, "f%d", s_frame); ws_sx_dump(t); } }
   { void proj_probe_dump(const char*);   // Phase-1: native-projection 0-diff verifier (PSXPORT_PROJPROBE)
-    if (getenv("PSXPORT_PROJPROBE") && s_frame > 0 && (s_frame % 200) == 0) {
+    if (cfg_on("PSXPORT_PROJPROBE") && s_frame > 0 && (s_frame % 200) == 0) {
       char t[32]; snprintf(t, sizeof t, "f%d", s_frame); proj_probe_dump(t); } }
   { void rtpcaller_dump(const char*);    // Phase-1: pin RTP caller sites (PSXPORT_RTPCALLER)
-    if (getenv("PSXPORT_RTPCALLER") && s_frame == 400) rtpcaller_dump("f400"); }
+    if (cfg_dbg("rtpcaller") && s_frame == 400) rtpcaller_dump("f400"); }
   // Phase-1 attach: report the packet-keyed float-store hit rate, then reset for the next frame.
   // Reset happens here (after this frame's DrawOTag/lookups, before next frame's projections).
   { void projprim_reset(void); int projprim_count(void), projprim_overflowed(void);
-    if (getenv("PSXPORT_ATTACH")) {
+    if (cfg_on("PSXPORT_ATTACH")) {
       extern long g_attach_hit, g_attach_miss;
       extern long g_attach_nodeabsent;
       if (s_frame > 0 && (s_frame % 200) == 0)
@@ -1111,32 +1144,39 @@ void gpu_present_ex(int do_blit) {
       g_attach_hit = g_attach_miss = g_attach_nodeabsent = 0;
       projprim_reset();
     } }
+  { if (cfg_on("PSXPORT_NATIVE_DEPTH")) {
+      extern long g_nd_3d, g_nd_2d;
+      if (s_frame > 0 && (s_frame % 60) == 0)
+        fprintf(stderr, "[ndepth f%d] real-depth(3D) prims=%ld  OT-band(2D) prims=%ld  3D%%=%.1f\n",
+                s_frame, g_nd_3d, g_nd_2d, (g_nd_3d+g_nd_2d) ? 100.0*g_nd_3d/(g_nd_3d+g_nd_2d) : 0.0);
+      g_nd_3d = g_nd_2d = 0;
+    } }
   // PSXPORT_PROVAT="x,y[:frame]" — at present time, report (in DISPLAY space, so the double buffer
   // is irrelevant) which primitive last wrote each pixel in a 7x7 box around (x,y), with how many
   // frames ago it was drawn. A wrong pixel whose writer is the current frame = actively drawn (the
   // listed prim is the culprit); whose writer is many frames old = STALE, revealed through a gap.
-  { const char* pa = getenv("PSXPORT_PROVAT");
+  { const char* pa = cfg_str("PSXPORT_PROVAT");
     if (pa) {
       int qx = -1, qy = -1, qf = -1; sscanf(pa, "%d,%d", &qx, &qy);
       const char* col = strchr(pa, ':'); if (col) qf = atoi(col + 1);
       if (qx >= 0 && (qf < 0 ? (s_frame % 200 == 0) : s_frame == qf))
         gpu_provat_display(stderr, qx, qy);
     } }
-  { const char* vd = getenv("PSXPORT_VRAMDUMP_AT");   // "frame:path" — dump our 1024x512x16 VRAM
+  { const char* vd = cfg_str("PSXPORT_VRAMDUMP_AT");   // "frame:path" — dump our 1024x512x16 VRAM
     if (vd) { int fr = atoi(vd); const char* col = strchr(vd, ':');
       if (col && s_frame == fr) { FILE* vf = fopen(col + 1, "wb");
         if (vf) { fwrite(s_vram, 2, VRAM_W * VRAM_H, vf); fclose(vf);
                   fprintf(stderr, "[gpu] VRAM dump f%d -> %s\n", s_frame, col + 1); } } } }
-  if (getenv("PSXPORT_STAGETL") && (s_frame % 200) == 0)
+  if (cfg_dbg("stage") && (s_frame % 200) == 0)
     fprintf(stderr, "[stagetl] gpu f%d task0entry=%08X\n", s_frame, mem_r32(0x801fe00c));
-  const char* dir = getenv("PSXPORT_GPU_DUMP");
+  const char* dir = cfg_str("PSXPORT_GPU_DUMP");
   if (g_log) fprintf(stderr, "[gpu] frame %d: %ld prims, %ld gp0words, %ld dma2, disp %dx%d @ (%d,%d)\n",
                      s_frame, s_prims, s_gp0_words, s_dma2, s_disp_w, s_disp_h, s_disp_x, s_disp_y);
   // PSXPORT_VRAMDUMP="frame:path" — dump our full 1024x512x16 VRAM at `frame` (raw u16, no header),
   // matching the oracle's PSXPORT_VRAMDUMP (main.cpp) so the texture/CLUT ATLAS can be diffed across
   // engines at a scene-aligned frame (the atlas is uploaded once at scene load = static per scene).
   { static int vf = -2; static char vp[256];
-    if (vf == -2) { const char* e = getenv("PSXPORT_VRAMDUMP"); vf = -1;
+    if (vf == -2) { const char* e = cfg_str("PSXPORT_VRAMDUMP"); vf = -1;
       if (e) { const char* col = strchr(e, ':'); if (col) { vf = atoi(e); snprintf(vp, sizeof vp, "%s", col + 1); } } }
     if (vf >= 0 && s_frame == vf) { FILE* f = fopen(vp, "wb");
       if (f) { fwrite(s_vram, 2, (size_t)VRAM_W * VRAM_H, f); fclose(f);
@@ -1158,7 +1198,7 @@ void gpu_present_ex(int do_blit) {
   }
   { void gpu_vk_dump(int,int,int,int,int); gpu_vk_dump(s_disp_x, s_disp_y, s_disp_w, s_disp_h, s_frame); }  // PSXPORT_VK_SHOT
   { static int fa = -2, fb = -2;   // PSXPORT_FADEDBG="a:b": per-frame brightness/draw log over [a,b]
-    if (fa == -2) { const char* e = getenv("PSXPORT_FADEDBG"); fa = fb = -1;
+    if (fa == -2) { const char* e = cfg_str("PSXPORT_FADEDBG"); fa = fb = -1;
       if (e) { fa = atoi(e); const char* col = strchr(e, ':'); fb = col ? atoi(col + 1) : fa + 200; } }
     if (fa >= 0 && s_frame >= fa && s_frame <= fb)
       fprintf(stderr, "[fadedbg] f%d disp=(%d,%d) drawY=%d maxcol=%d nprim=%d nsemi=%d semi[%d..%d] bigsemi=%d\n",
@@ -1172,9 +1212,9 @@ void gpu_present_ex(int do_blit) {
 void gpu_present(void) { gpu_present_ex(1); }
 
 void gpu_native_init(void) {
-  if (getenv("PSXPORT_GPU_LOG")) g_log = 1;
-  if (getenv("PSXPORT_REDDBG")) s_reddbg = 1;
-  const char* cw = getenv("PSXPORT_CLUTWATCH");
+  if (cfg_dbg("gpu")) g_log = 1;
+  if (cfg_dbg("red")) s_reddbg = 1;
+  const char* cw = cfg_str("PSXPORT_CLUTWATCH");
   if (cw) { s_cw_x = 880; s_cw_y = 507; int x, y; if (sscanf(cw, "%d,%d", &x, &y) == 2) { s_cw_x = x; s_cw_y = y; } }
 }
 
@@ -1204,7 +1244,7 @@ int gpu_frame_no(void) { return s_frame; }
 // VK present pass shows VK on the left half, SW on the right half, so the two can be compared live.
 // gpu_native owns the flag (the tee is here); gpu_vk.c reads it for the dual present.
 static int s_sbs_on = -1;
-int  gpu_sbs_get(void) { if (s_sbs_on < 0) { const char* e = getenv("PSXPORT_SBS"); s_sbs_on = (e && atoi(e)) ? 1 : 0; } return s_sbs_on; }
+int  gpu_sbs_get(void) { if (s_sbs_on < 0) { const char* e = cfg_str("PSXPORT_SBS"); s_sbs_on = (e && atoi(e)) ? 1 : 0; } return s_sbs_on; }
 void gpu_sbs_set(int on) { s_sbs_on = on ? 1 : 0; }
 
 // Diagnostic dumps (gpu_prov_dump / gpu_provat_display / gpu_scene_dump[_now]) live in gpu_debug.c.
@@ -1213,7 +1253,7 @@ void gpu_sbs_set(int on) { s_sbs_on = on ? 1 : 0; }
 // GP0 words to the parser. Header word: bits[24..31]=word count, bits[0..23]=next node addr
 // (0xFFFFFF = end).
 void gpu_dma2_linked_list(uint32_t madr) {
-  { static int sd = -2; if (sd == -2) { const char* e = getenv("PSXPORT_SCENEDUMP"); sd = e ? atoi(e) : -1; }
+  { static int sd = -2; if (sd == -2) { const char* e = cfg_str("PSXPORT_SCENEDUMP"); sd = e ? atoi(e) : -1; }
     if (sd >= 0 && s_frame == sd) gpu_scene_dump(stderr, madr); }
   s_dma2++;
   g_ot_madr = madr & 0x1FFFFC;
@@ -1221,7 +1261,7 @@ void gpu_dma2_linked_list(uint32_t madr) {
   // PSXPORT_OTDBG: on a chain that fails to terminate within an OT's worth of nodes (cyclic =
   // malformed), dump its first 40 nodes once for diagnosis. (Empty OTs are ~0x800 link-only nodes
   // that DO terminate at the sentinel; a true cycle never terminates.)
-  if (getenv("PSXPORT_OTDBG")) {
+  if (cfg_dbg("ot")) {
     static int dumped = 0;
     uint32_t a = madr & 0x1FFFFC; int term = 0;
     for (int k = 0; k < 4096; k++) {

@@ -14,6 +14,9 @@ it drops any "lift the whole game" phase.
 
 Active plan: `<local-notes>/plans/fancy-tinkering-kite.md`. Engine RE: `docs/engine_re.md` (read first).
 Findings/dead-ends: `docs/journal.md`. Project map / build cheat-sheet: `docs/project-map.md`.
+**Render/present pipeline (SW vs VK, depth, headless offscreen VK, the VK render-diff tool):
+`docs/render-arch.md`. Config & debug flags (the `cfg` module + the single `PSXPORT_DEBUG=chan` var —
+do NOT add raw `getenv`): `docs/config.md`.** Read both before touching graphics or adding a flag.
 **Graphics/render debugging: `docs/gfx-debug.md` (skill `gfx-debug`) — READ FIRST before any rendering
 bug or comparison tooling; it has the tool catalog + the mandatory render-diff-first workflow.**
 

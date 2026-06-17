@@ -10,6 +10,7 @@
 // Disabled (silent no-op) if PSXPORT_NOAUDIO is set or the SDL device fails to open
 // (e.g. headless host with no audio backend). Init is lazy + idempotent.
 #include <stdint.h>
+#include "cfg.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
@@ -106,9 +107,9 @@ void spu_audio_init(void)
       return;                     // already decided (enabled or disabled)
 
    // WAV capture is independent of the SDL device: it works even headless / under NOAUDIO.
-   { const char* wp = getenv("PSXPORT_WAV"); if (wp && !s_wav) wav_open(wp); }
+   { const char* wp = cfg_str("PSXPORT_WAV"); if (wp && !s_wav) wav_open(wp); }
 
-   if (getenv("PSXPORT_NOAUDIO"))
+   if (cfg_on("PSXPORT_NOAUDIO"))
    {
       s_state = -1;
       return;
@@ -172,7 +173,7 @@ void spu_audio_frame(void)
    // Diagnostics: PSXPORT_SPU_PROF=1 prints the average spu_update() wall time every
    // 60 frames so the mixer's true per-frame cost can be observed in context.
    static int s_prof = -1;
-   if (s_prof < 0) s_prof = getenv("PSXPORT_SPU_PROF") ? 1 : 0;
+   if (s_prof < 0) s_prof = cfg_dbg("spuprof") ? 1 : 0;
    if (s_prof)
    {
       static double accum_ms, loop_ms; static int n;
@@ -212,7 +213,7 @@ void spu_audio_frame(void)
    // PSXPORT_AUDIO_RATE=1: measure effective production rate (samples/wall-sec) + drop count. If
    // production > 44100/s the SPU (and the XA stream) is advancing faster than realtime -> backlog
    // overflows, frames get dropped, and the music skips ahead = loops early.
-   { static int on = -1; if (on < 0) on = getenv("PSXPORT_AUDIO_RATE") ? 1 : 0;
+   { static int on = -1; if (on < 0) on = cfg_dbg("audiorate") ? 1 : 0;
      if (on) { static double t0; static long samp, drops, calls; static int have;
        struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
        double now = ts.tv_sec + ts.tv_nsec/1e9; if (!have) { t0 = now; have = 1; }
@@ -230,7 +231,7 @@ void spu_audio_frame(void)
 
    // Diagnostics: PSXPORT_AUDIO_LOG=1 reports the device backlog each frame so the queue
    // can be observed to grow / stay bounded (used by the smoke test; off by default).
-   if (getenv("PSXPORT_AUDIO_LOG"))
+   if (cfg_dbg("audio"))
       fprintf(stderr, "[spu_audio] rendered %d frames, queued=%u bytes\n",
               frames, SDL_GetQueuedAudioSize(s_dev));
 #endif

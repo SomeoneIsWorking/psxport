@@ -6,6 +6,7 @@
 // direct native reads of this image. Pure data path: form/mode-2 audio/video framing
 // (XA/STR) is a later front-end concern; data files are mode2/form1 with 2048 user bytes.
 #include "r3000.h"
+#include "cfg.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -45,9 +46,9 @@ static char* env_from_dotenv(const char* key) {
   return found;
 }
 static char* resolve_disc_path(void) {
-  const char* e = getenv("PSXPORT_TOMBA2_DISC");
+  const char* e = cfg_str("PSXPORT_TOMBA2_DISC");
   if (e && *e) return dup_trim(e);
-  e = getenv("PSXPORT_DISC");
+  e = cfg_str("PSXPORT_DISC");
   if (e && *e) return dup_trim(e);
   char* d = env_from_dotenv("PSXPORT_TOMBA2_DISC");
   if (d) return d;

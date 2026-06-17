@@ -16,6 +16,7 @@
 // MILESTONE 1 (this file, current): run the init prefix and confirm it executes cleanly via
 // PC/RAM probes. The native frame loop + per-stage stepping land next.
 #include "r3000.h"
+#include "cfg.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -112,7 +113,7 @@ static void native_scheduler_step(R3000* c) {
       continue;                               // sleeping this frame (state==1)
     }
     mem_w16(base, 4);                         // running
-    if (getenv("PSXPORT_SCHEDDBG"))
+    if (cfg_dbg("sched"))
       fprintf(stderr, "[sched] slot %d st_in=%u resume_pc=0x%08X ra=0x%08X sp=0x%08X\n",
               i, st, resume_pc, g_task_ctx[i].r[31], g_task_ctx[i].r[29]);
     mem_w32(CUR_TASK, base);
@@ -140,7 +141,7 @@ void gen_func_80074E48(R3000*);
 void xa_music_cut_if_dialog(void);   // cd_override.c: stop looping ingame music when a dialog tone starts
 static int s_bgmdbg = -1;
 static void ov_bgm_start(R3000* c) {
-  if (s_bgmdbg < 0) s_bgmdbg = (getenv("PSXPORT_BGMDBG") ? atoi(getenv("PSXPORT_BGMDBG")) : 0);
+  if (s_bgmdbg < 0) s_bgmdbg = (cfg_str("PSXPORT_BGMDBG") ? atoi(cfg_str("PSXPORT_BGMDBG")) : 0);
   if (s_bgmdbg) fprintf(stderr, "[bgmdbg] f%u BGM_START(idx=0x%02X) ra=%08X  idx@800bed80(before)=0x%04X\n",
                         g_bgm_frame, c->r[4] & 0xFF, c->r[31], mem_r16(0x800bed80));
   gen_func_80074BF8(c);
@@ -151,7 +152,7 @@ static void ov_bgm_start(R3000* c) {
   if (s_bgmdbg) fprintf(stderr, "[bgmdbg]   -> idx@800bed80(after)=0x%04X\n", mem_r16(0x800bed80));
 }
 static void ov_bgm_stop(R3000* c) {
-  if (s_bgmdbg < 0) s_bgmdbg = (getenv("PSXPORT_BGMDBG") ? atoi(getenv("PSXPORT_BGMDBG")) : 0);
+  if (s_bgmdbg < 0) s_bgmdbg = (cfg_str("PSXPORT_BGMDBG") ? atoi(cfg_str("PSXPORT_BGMDBG")) : 0);
   if (s_bgmdbg) fprintf(stderr, "[bgmdbg] f%u BGM_STOP ra=%08X  idx@800bed80(before)=0x%04X\n",
                         g_bgm_frame, c->r[31], mem_r16(0x800bed80));
   gen_func_80074E48(c);
@@ -330,11 +331,11 @@ static void ov_game_main(R3000* c) {
   // a window is up this is the real interactive game loop — run until the user closes the window
   // (SDL_QUIT -> exit(0) in present_window); headless with no cap defaults to 120 (CI/smoke).
   uint32_t nframes = 0;   // 0 == run until window close / REPL quit
-  const char* nf = getenv("PSXPORT_NATIVE_FRAMES");
-  int repl_mode = getenv("PSXPORT_REPL") != 0;
+  const char* nf = cfg_str("PSXPORT_NATIVE_FRAMES");
+  int repl_mode = cfg_on("PSXPORT_REPL") != 0;
   if (repl_mode) nframes = 0;                       // REPL drives frame count via `run N`
   else if (nf) nframes = (uint32_t)strtoul(nf, 0, 0);
-  else if (!getenv("PSXPORT_GPU_WINDOW")) nframes = 120;
+  else if (!cfg_str("PSXPORT_GPU_WINDOW")) nframes = 120;
   fprintf(stderr, "[native_boot] entering native frame loop (%s)\n",
           nframes ? "capped" : "interactive (until window close)");
   void hle_deliver_event(uint32_t ev_class, uint32_t spec);
@@ -358,7 +359,7 @@ static void ov_game_main(R3000* c) {
     // -good start, so we can watch the corruption begin instead of it being masked. RAM is dropped
     // at the TOP of the iteration (before FUN_800788AC), so our update runs on the oracle's state.
     { static int tf = -2; static char rf[256], vf[256];
-      if (tf == -2) { tf = -1; rf[0] = vf[0] = 0; const char* e = getenv("PSXPORT_TRANSPLANT");
+      if (tf == -2) { tf = -1; rf[0] = vf[0] = 0; const char* e = cfg_str("PSXPORT_TRANSPLANT");
         if (e) { char buf[600]; snprintf(buf, sizeof buf, "%s", e);
           char* c1 = strchr(buf, ':'); if (c1) { *c1 = 0; tf = atoi(buf);
             char* c2 = strchr(c1 + 1, ':'); if (c2) { *c2 = 0; snprintf(vf, sizeof vf, "%s", c2 + 1); }
@@ -389,12 +390,12 @@ static void ov_game_main(R3000* c) {
     // PSXPORT_AUTO_NEWGAME: own the title->New Game navigation so we boot straight into the post-New
     // Game prologue cutscene (stage 0x8010637C) deterministically — no fighting the attract loop. The
     // menu confirm is Cross (0x4000); pulse it at the title (DEMO overlay) until task0 enters GAME.
-    { static int ang = -1; if (ang < 0) ang = getenv("PSXPORT_AUTO_NEWGAME") ? 1 : 0;
+    { static int ang = -1; if (ang < 0) ang = cfg_str("PSXPORT_AUTO_NEWGAME") ? 1 : 0;
       if (ang == 1) {
         if (mem_r32(0x801fe00c) != 0x8010637Cu) {
           if ((f % 12u) == 0) pad_repl_tap((uint16_t)(0xFFFF & ~0x4000), 6);   // tap Cross
         } else { void dbg_set_paused(int); fprintf(stderr, "[autonewgame] reached GAME (prologue) at frame %u — auto-paused\n", f);
-                 ang = 2; if (getenv("PSXPORT_AUTO_NEWGAME") && atoi(getenv("PSXPORT_AUTO_NEWGAME")) >= 2) dbg_set_paused(1); }
+                 ang = 2; if (cfg_str("PSXPORT_AUTO_NEWGAME") && atoi(cfg_str("PSXPORT_AUTO_NEWGAME")) >= 2) dbg_set_paused(1); }
       } }
     // PSXPORT_AUTO_GAMEPLAY=1: state-gated auto-navigator that OWNS the title->newgame->cutscene->field
     // path and then goes HANDS-OFF. The post-newgame fisherman dialog cutscene advances only on Start
@@ -402,7 +403,7 @@ static void ov_game_main(R3000* c) {
     // open the pause menu (which stops the BGM). So: pulse Start until the chan4 area music has been
     // looping continuously (= field reached, cutscene gate cleared), then RELEASE input. =2 also pauses.
     { static int gnav = -1, sustain = 0;
-      if (gnav < 0) gnav = getenv("PSXPORT_AUTO_GAMEPLAY") ? 1 : 0;
+      if (gnav < 0) gnav = cfg_str("PSXPORT_AUTO_GAMEPLAY") ? 1 : 0;
       if (gnav == 1) {
         int xa_stream_is_looping(void); void pad_repl_release(void);
         if (xa_stream_is_looping()) sustain++; else sustain = 0;   // resets whenever dialog stops chan4
@@ -410,7 +411,7 @@ static void ov_game_main(R3000* c) {
           pad_repl_release();
           fprintf(stderr, "[autogameplay] field reached (chan4 looping %d frames) at frame %u — input released\n", sustain, f);
           gnav = 2;
-          if (atoi(getenv("PSXPORT_AUTO_GAMEPLAY")) >= 2) { void dbg_set_paused(int); dbg_set_paused(1); }
+          if (atoi(cfg_str("PSXPORT_AUTO_GAMEPLAY")) >= 2) { void dbg_set_paused(int); dbg_set_paused(1); }
         } else if ((f % 24u) == 0) {
           pad_repl_tap((uint16_t)(0xFFFF & ~0x0008), 6);           // pulse Start (0x0008): title + dialog advance
         }
@@ -451,7 +452,7 @@ static void ov_game_main(R3000* c) {
     // sequence OPEN/PLAYING? 0x801054B0=open-seq count, 0x80104C28=playing bitmask, 0x800AC424=tick
     // mode, 0x800AC42C=SsSeqCalled ptr. If these never go nonzero, no song is ever started → the
     // missing-BGM root cause is upstream (song open/play not happening), not the SPU/tick.
-    if (getenv("PSXPORT_SEQDBG")) {
+    if (cfg_dbg("seq")) {
       static uint32_t ls = 0xFFFFFFFF;
       uint32_t st = (mem_r16(0x801054B0) << 16) | (mem_r32(0x80104C28) & 0xFFFF);
       if (st != ls) {
@@ -467,7 +468,7 @@ static void ov_game_main(R3000* c) {
     // sequence is genuinely ticking (audible); if it stays == base the SsSeqCalled tick isn't
     // advancing it (frozen, the handoff's hypothesis). Scene-independent: catches any window
     // where a BGM is active, without needing to reach a specific scene.
-    if (getenv("PSXPORT_BGMDBG")) {
+    if (cfg_str("PSXPORT_BGMDBG")) {
       static uint32_t s_rd[14];
       for (int i = 0; i < 14; i++) {
         uint32_t s = 0x800be3d8u + (uint32_t)i * 0xB0u;
@@ -500,7 +501,7 @@ static void ov_game_main(R3000* c) {
     // One-shot: when GAME has settled, dump the CD-streaming contract (FUN_8001cfc8, task
     // slot 2). task2 obj @0x801fe0e0; +0x54=start LBA, +0x58=end LBA (= globals
     // DAT_801fe134/138). DAT_801fe146=channel/type. _DAT_1f8001f8=dest, _DAT_1f8001f4=words.
-    if (getenv("PSXPORT_STREAMDBG") && t0e == 0x8010637Cu && f == 75) {
+    if (cfg_dbg("stream") && t0e == 0x8010637Cu && f == 75) {
       fprintf(stderr, "[streamdbg] task2 obj @0x801fe0e0 state=%u entry=0x%08X\n",
               mem_r16(0x801fe0e0), mem_r32(0x801fe0ec));
       fprintf(stderr, "[streamdbg] startLBA(+54/801fe134)=%u endLBA(+58/801fe138)=%u "
@@ -512,10 +513,10 @@ static void ov_game_main(R3000* c) {
     }
     // PSXPORT_RAMDUMP_FRAME=N — dump RAM mid-run at native frame N (overlay state during gameplay
     // differs from end-of-run; needed to disasm the LIVE level/stage overlay at 0x8010/0x8011xxxx).
-    { const char* rdf = getenv("PSXPORT_RAMDUMP_FRAME");
+    { const char* rdf = cfg_str("PSXPORT_RAMDUMP_FRAME");
       if (rdf && f == (uint32_t)strtoul(rdf, 0, 0)) {
         extern uint8_t g_ram[];
-        const char* rd = getenv("PSXPORT_RAMDUMP"); if (!rd) rd = "scratch/bin/midrun_ram.bin";
+        const char* rd = cfg_str("PSXPORT_RAMDUMP"); if (!rd) rd = "scratch/bin/midrun_ram.bin";
         FILE* mf = fopen(rd, "wb");
         if (mf) { fwrite(g_ram, 1, 0x200000, mf); fclose(mf);
                   fprintf(stderr, "[native_boot] mid-run RAM dump @frame %u -> %s\n", f, rd); }
@@ -529,7 +530,7 @@ static void ov_game_main(R3000* c) {
   }
   fprintf(stderr, "[native_boot] frame loop done; task0 state=%u entry=0x%08X obj+0x48=%u\n",
           mem_r16(TASKBASE), mem_r32(TASKBASE + 0xc), mem_r16(TASKBASE + 0x48));
-  const char* rd = getenv("PSXPORT_RAMDUMP");
+  const char* rd = cfg_str("PSXPORT_RAMDUMP");
   if (rd) {
     extern uint8_t g_ram[];
     FILE* f = fopen(rd, "wb");
@@ -541,6 +542,7 @@ static void ov_game_main(R3000* c) {
 // Wired from boot.c when PSXPORT_NATIVE_BOOT is set. Registers the main override and enters
 // crt0; crt0's call to FUN_80050b08 lands in ov_game_main.
 void native_boot_run(R3000* c) {
+  { void cfg_dump(void); cfg_dump(); }   // log active PSXPORT_* config once (see docs/config.md)
   void func_800896E0(R3000*);
   // Intro FMVs: the real boot is SCEA (stub) -> Whoopee logo -> opening movie -> title/menu. The
   // game's own STR streaming (strNext) TIMES OUT under our runtime (we don't feed CD-streamed FMV
@@ -549,7 +551,7 @@ void native_boot_run(R3000* c) {
   // before booting MAIN, restoring SCEA->Woopee->OP->menu. PSXPORT_NO_FMV skips them (headless
   // gameplay tests that need to reach GAME fast / with stable frame numbers).
   int native_fmv_play(const char*);
-  if (!getenv("PSXPORT_NO_FMV")) {
+  if (!cfg_on("PSXPORT_NO_FMV")) {
     fprintf(stderr, "[native_boot] playing intro FMVs (Whoopee logo, opening)\n");
     native_fmv_play("MOVIE/LOGO.STR");
     native_fmv_play("MOVIE/OP.STR");

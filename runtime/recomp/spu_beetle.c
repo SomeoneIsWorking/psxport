@@ -14,6 +14,7 @@
 //   MDFNSS_StateAction(...)    — savestate (unused)
 // Each is shimmed faithful-first below; none pull in another .c file.
 #include <stdint.h>
+#include "cfg.h"
 #include <stdbool.h>
 #include <string.h>
 #include <stdio.h>
@@ -98,7 +99,7 @@ void spu_write(uint32_t addr, uint32_t val)
 {
    // PSXPORT_SPU_DBG: surface whether the game drives the SPU at all (silent-output triage).
    // Logs total writes, key-on (KON 0x1F801D88/8A), and SPUCNT (0x1F801DAA, bit15 = SPU enable).
-   if (getenv("PSXPORT_SPU_DBG")) {
+   if (cfg_dbg("spu")) {
       static long n; uint32_t off = addr & 0x3FF;
       n++;
       static long datacnt; static uint32_t lastaddr;
@@ -133,7 +134,7 @@ uint32_t spu_read(uint32_t addr)
 // caller's word block.
 void spu_dma_write(const uint32_t *words, int count)
 {
-   if (getenv("PSXPORT_SPU_DBG")) {
+   if (cfg_dbg("spu")) {
       static long calls, total; calls++; total += count;
       fprintf(stderr, "[spudbg] SPU-RAM DMA write: %d words (call %ld, total %ld words)\n", count, calls, total);
    }
@@ -170,7 +171,7 @@ int spu_render(int16_t *out, int max_frames)
 
    memcpy(out, IntermediateBuffer, (size_t)n * 2 * sizeof(int16_t));
 
-   if (getenv("PSXPORT_SPU_DBG")) {
+   if (cfg_dbg("spu")) {
       static long fr; int peak = 0;
       for (uint32_t i = 0; i < n * 2; i++) { int v = out[i]; if (v < 0) v = -v; if (v > peak) peak = v; }
       if ((++fr % 60) == 0 || peak > 0)

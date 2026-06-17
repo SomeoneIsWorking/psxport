@@ -14,6 +14,7 @@
 //     bytes from the disc image at lba straight into buf, return 1 (its bool success value).
 //     This bypasses the whole FUN_8008c960/c5d8/cafc/ac34 command+IRQ machinery for data.
 #include "r3000.h"
+#include "cfg.h"
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -44,7 +45,7 @@ static void zero_result(uint32_t p) { if (p) for (int i = 0; i < 8; i++) mem_w8(
 
 // 0x8008AC34 FUN_8008ac34(cmd, param, result, mode) CdCommand -> 0 (success).
 static void ov_cd_command(R3000* c) {
-  if (getenv("PSXPORT_CDCMD_DBG")) {
+  if (cfg_dbg("cdcmd")) {
     uint32_t cmd = c->r[A0] & 0xFF, param = c->r[A1];
     uint8_t p[4] = {0,0,0,0};
     if (param) for (int i = 0; i < 4; i++) p[i] = (uint8_t)mem_r8(param + i);
@@ -87,7 +88,7 @@ static void ov_cd_sync(R3000* c) { zero_result(c->r[A1]); c->r[V0] = 2; }
 // and is unaffected.
 static void ov_cd_cmd_stream(R3000* c) {
   uint32_t cmd = c->r[A0] & 0xFF, result = c->r[A2];
-  if (getenv("PSXPORT_CDCMD_DBG")) {
+  if (cfg_dbg("cdcmd")) {
     uint32_t pp = c->r[A1]; uint8_t p[4] = {0,0,0,0};
     if (pp) for (int i = 0; i < 4; i++) p[i] = (uint8_t)mem_r8(pp + i);
     fprintf(stderr, "[cdstream] cmd=0x%02X param=[%02X %02X %02X %02X] ra=0x%08X\n",
@@ -256,7 +257,7 @@ static void music_fade_in(void) {
 // 19a/137 = state bytes gating FUN_80075824's ramp, song = 0x800bed80, gate = 0x801fe0e0.
 extern volatile uint32_t g_bgm_frame;
 void xa_audio_trace(const char* tag) {
-  if (!getenv("PSXPORT_XA_DBG")) return;
+  if (!cfg_str("PSXPORT_XA_DBG")) return;
   static int t=1<<30,cur,mas,s19a,s137,song,act,lp,gate;
   int nt=(int16_t)mem_r16(0x800be222), ncur=(int16_t)mem_r16(0x800be224), nmas=(int16_t)mem_r16(0x800be220);
   int n19a=mem_r8(0x1f80019a), n137=mem_r8(0x1f800137);
@@ -273,7 +274,7 @@ static void ov_voice_play(R3000* c) {
   uint8_t  chan  = (uint8_t)(c->r[A0] & 0xFF);
   uint32_t start = c->r[A1], end = c->r[A2];
   int      loop  = (int)(c->r[7] & 1);              // a3 = flags
-  if (getenv("PSXPORT_XA_DBG"))
+  if (cfg_str("PSXPORT_XA_DBG"))
     fprintf(stderr, "[voice_play] chan=%u [%u..%u] loop=%d ra=%08X\n", chan, start, end, loop, c->r[31]);
   if (loop) {                                       // looping clip == ingame/area background music
     s_pending_music = 1; s_pm_chan = chan; s_pm_start = start; s_pm_end = end;
@@ -298,7 +299,7 @@ void xa_music_cut_if_dialog(void) {
 // stop a looping ingame-music clip while a dialog tone is up; resume the remembered clip once
 // the dialog ends and the XA stream is free (no voice playing).
 void xa_dialog_coord(R3000* c) {
-  if (getenv("PSXPORT_XA_DBG")) {
+  if (cfg_str("PSXPORT_XA_DBG")) {
     static uint32_t prev = 0xDEAD; static int pa = -1, pl = -1;
     uint32_t s = mem_r16(0x800bed80) & 0xFFFF; int a = xa_stream_is_active(), l = xa_stream_is_looping();
     if (s != prev || a != pa || l != pl) {
@@ -323,7 +324,7 @@ static void ov_voice_stop(R3000* c) {
 }
 
 void cd_overrides_init(void) {
-  if (getenv("PSXPORT_CD_VERBOSE")) g_cd_verbose = 1;
+  if (cfg_dbg("cd")) g_cd_verbose = 1;
   rec_set_override(0x8001D2A8u, ov_voice_play);      // engine voice/BGM clip player -> native xa_stream
   rec_set_override(0x8001CF2Cu, ov_voice_stop);      // stop voice/BGM -> native
   rec_set_override(0x8001D940u, ov_cd_async_read);   // engine async streaming reader (task1)

@@ -14,6 +14,7 @@
 // back to the recomp body (the oracle) for diffing. Verified native==recomp: VRAM bit-identical at
 // frames 4000 and 4720 of real gameplay (1 MB cmp PASS each) — see docs/journal.md.
 #include "r3000.h"
+#include "cfg.h"
 #include "tomba2_types.h"
 #include <stdint.h>
 #include <stdlib.h>
@@ -55,15 +56,15 @@ static void ov_objwalk(R3000* c) {
   walk_list(c, mem_r32(T2_OBJLIST_HEAD_1), &nodes);
   walk_list(c, mem_r32(T2_OBJLIST_HEAD_2), &nodes);
 
-  if (s_dbg < 0) s_dbg = getenv("PSXPORT_ENGINE_DBG") ? 1 : 0;
+  if (s_dbg < 0) s_dbg = cfg_dbg("engine") ? 1 : 0;
   if (s_dbg && (s_walks % 300) == 0)
     fprintf(stderr, "[engine] objwalk #%ld: %ld nodes\n", s_walks, nodes);
   s_walks++;
 }
 
 void engine_tomba2_init(void) {
-  if (getenv("PSXPORT_RECOMP_OBJWALK")) return;    // oracle fallback: keep the recomp FUN_8007a904
+  if (cfg_on("PSXPORT_RECOMP_OBJWALK")) return;    // oracle fallback: keep the recomp FUN_8007a904
   rec_set_override(T2_OBJWALK_FN, ov_objwalk);     // 0x8007A904 — native engine owns the object walk
-  if (getenv("PSXPORT_ENGINE_DBG"))
+  if (cfg_dbg("engine"))
     fprintf(stderr, "[engine] native object-list walk active (FUN_8007a904)\n");
 }

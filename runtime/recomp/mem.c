@@ -4,6 +4,7 @@
 // DMA/timers, lifted from Beetle) in S5. Host is little-endian (PSX is LE), so word
 // access is a memcpy.
 #include "r3000.h"
+#include "cfg.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <execinfo.h>
@@ -28,7 +29,7 @@ int  mem_watch_hits(void) { return s_cw_n; }
 static void cw_check(uint32_t a, uint32_t v, int width) {
   if (!s_cw_init) {
     s_cw_init = 1;
-    const char* w = getenv("PSXPORT_CW");
+    const char* w = cfg_str("PSXPORT_CW");
     if (w) { unsigned long lo=0, hi=0; if (sscanf(w, "%lx,%lx", &lo, &hi) == 2) { s_cw_lo=lo; s_cw_hi=hi; } }
   }
   extern volatile uint32_t g_interp_pc;
@@ -37,7 +38,7 @@ static void cw_check(uint32_t a, uint32_t v, int width) {
     s_cw_n++;
     if (s_cw_n <= 64) {
       fprintf(stderr, "[cw] #%d store w%d [%08X]=%08X  interp_pc=%08X\n", s_cw_n, width, 0x80000000u|p, v, g_interp_pc);
-      if (getenv("PSXPORT_CW_BT")) { void* bt[32]; int n = backtrace(bt, 32); backtrace_symbols_fd(bt, n, 2); fprintf(stderr, "----\n"); }
+      if (cfg_str("PSXPORT_CW_BT")) { void* bt[32]; int n = backtrace(bt, 32); backtrace_symbols_fd(bt, n, 2); fprintf(stderr, "----\n"); }
     }
   }
 }
@@ -249,7 +250,7 @@ static uint32_t s_ww_lo = 0, s_ww_hi = 0;
 static void wwatch_check(uint32_t a, uint32_t v) {
   if (!s_ww_init) {
     s_ww_init = 1;
-    const char* w = getenv("PSXPORT_WWATCH");
+    const char* w = cfg_str("PSXPORT_WWATCH");
     if (w) { unsigned long lo=0, hi=0; if (sscanf(w, "%lx,%lx", &lo, &hi) == 2) { s_ww_lo=lo; s_ww_hi=hi; } }
   }
   uint32_t ka = a | 0x80000000u;
@@ -261,9 +262,10 @@ void mem_w32(uint32_t a, uint32_t v) {
   wwatch_check(a, v);
   cw_check(a, v, 4);
   if (p) memcpy(p, &v, 4); else io_log_w(a, v, 4);
-  // Phase-1 attach (PSXPORT_ATTACH): catch the projection routines storing a packed SXY word into a
-  // GPU primitive packet, so the native float for that vertex can be keyed by its packet address.
-  { static int att = -1; if (att < 0) att = getenv("PSXPORT_ATTACH") ? 1 : 0;
+  // Phase-1 attach (PSXPORT_ATTACH or PSXPORT_NATIVE_DEPTH): catch the projection routines storing a
+  // packed SXY word into a GPU primitive packet, so the native float for that vertex can be keyed by
+  // its packet address. attach_enabled() = either flag (NATIVE_DEPTH needs the same capture infra).
+  { static int att = -1; int attach_enabled(void); if (att < 0) att = attach_enabled();
     if (att) { uint32_t pa = a & 0x1FFFFF;       // primitive-pool buffers live ~0xBFE68..0xE7E68
       if (pa >= 0xB0000 && pa < 0xF0000) { void attach_store_hook(uint32_t, uint32_t); attach_store_hook(a, v); } } }
 }

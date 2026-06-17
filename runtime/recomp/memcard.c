@@ -35,6 +35,7 @@
 // _card_status always reports "complete" so the spin falls through on its first check.
 
 #include "r3000.h"
+#include "cfg.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -74,7 +75,7 @@ static char* mc_env_from_dotenv(const char* key) {
   return found;
 }
 static char* mc_resolve_path(void) {
-  const char* e = getenv("PSXPORT_TOMBA2_CARD");
+  const char* e = cfg_str("PSXPORT_TOMBA2_CARD");
   if (e && *e) return mc_dup_trim(e);
   char* d = mc_env_from_dotenv("PSXPORT_TOMBA2_CARD");
   if (d) return d;
@@ -241,7 +242,7 @@ int card_hle_b0(uint32_t fn, R3000* c) {
 }
 
 void card_overrides_init(void) {
-  if (getenv("PSXPORT_CARD_VERBOSE")) g_card_verbose = 1;
+  if (cfg_dbg("card")) g_card_verbose = 1;
   card_init();
   // Card B0 indices are serviced in the HLE B0 dispatch (recomp_hle -> card_hle_b0); no address
   // overrides (those BIOS addresses never run in the pure-HLE build).

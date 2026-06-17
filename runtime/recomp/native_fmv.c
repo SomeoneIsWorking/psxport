@@ -37,6 +37,7 @@
 //
 // Self-contained module; the PM wires native_fmv_play() into the game flow.
 #include <stdint.h>
+#include "cfg.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -288,7 +289,7 @@ int bs_decode_frame(const uint8_t* payload, uint32_t payload_size,
   uint16_t bs_q = (uint16_t)(payload[4] | (payload[5] << 8));
   int qscale = bs_q & 0x3F;
   if (qscale == 0) qscale = 1;
-  if (getenv("PSXPORT_FMV_DEBUG")) {
+  if (cfg_dbg("fmv")) {
     uint16_t magic = (uint16_t)(payload[2] | (payload[3] << 8));
     uint16_t ver   = (uint16_t)(payload[6] | (payload[7] << 8));
     static int once = 0;
@@ -317,7 +318,7 @@ int bs_decode_frame(const uint8_t* payload, uint32_t payload_size,
     codes[out++] = (uint16_t)(((qscale & 0x3F) << 10) | (dc & 0x3FF));
 
     static int dconly = -1;
-    if (dconly < 0) dconly = getenv("PSXPORT_FMV_DCONLY") ? 1 : 0;
+    if (dconly < 0) dconly = cfg_on("PSXPORT_FMV_DCONLY") ? 1 : 0;
     for (;;) {
       int run, level;
       int r = bs_decode_ac(&br, &run, &level);
@@ -499,7 +500,7 @@ int mdec_decode_to_rgb555(const uint16_t* codes, int ncodes,
   int got_before_tail = got;
   int tail = mdec_dma_out_rest(outbuf + got, total_words - got);
   got += tail;
-  if (getenv("PSXPORT_FMV_DEBUG"))
+  if (cfg_dbg("fmv"))
     fprintf(stderr, "[fmv]   drain: %d scattered + %d tail-scatter = %d/%d total\n",
             got_before_tail, tail, got, total_words);
 
@@ -509,7 +510,7 @@ int mdec_decode_to_rgb555(const uint16_t* codes, int ncodes,
   int mbx = (width + 15) / 16;
   int mby = (height + 15) / 16;
   int produced = got;                            // words actually drained
-  if (getenv("PSXPORT_FMV_DEBUG"))
+  if (cfg_dbg("fmv"))
     fprintf(stderr, "[fmv]   drained %d/%d words (%d macroblocks)\n", got, total_words, got/128);
   int blocks_avail = produced / 128;             // 128 (32-bit) words per 16x16 MB
   // Each 128-word (256 px) group is a 16x16 RASTER macroblock: mednafen emits four 8x8 Y
@@ -519,7 +520,7 @@ int mdec_decode_to_rgb555(const uint16_t* codes, int ncodes,
   // (row=k%mby, col=k/mby). Placing them row-major sheared the frame (verified: a horizontal
   // logo feature landed at emit stride mby=15). PSXPORT_FMV_ROWMAJOR forces the old order
   // for A/B testing.
-  int rowmajor = getenv("PSXPORT_FMV_ROWMAJOR") ? 1 : 0;
+  int rowmajor = cfg_on("PSXPORT_FMV_ROWMAJOR") ? 1 : 0;
   for (int blk = 0; blk < blocks_avail; blk++) {
     int bx, by;
     if (rowmajor) { by = blk / mbx; bx = blk % mbx; }
@@ -627,7 +628,7 @@ int xa_decode_sector(const uint8_t* raw, int16_t* out, int16_t hist[2][2], int* 
 static SDL_AudioDeviceID s_fmv_dev = 0;
 static int s_fmv_freq = 0, s_fmv_bytes_per_frame = 4;   // S16 stereo
 static void fmv_audio_open(int freq) {
-  if (getenv("PSXPORT_NOAUDIO")) return;
+  if (cfg_on("PSXPORT_NOAUDIO")) return;
   if (s_fmv_dev && s_fmv_freq == freq) { SDL_ClearQueuedAudio(s_fmv_dev); return; }
   if (s_fmv_dev) { SDL_CloseAudioDevice(s_fmv_dev); s_fmv_dev = 0; }
   if (SDL_InitSubSystem(SDL_INIT_AUDIO) != 0) return;
@@ -692,12 +693,12 @@ int native_fmv_play_lba(uint32_t lba, uint32_t size_bytes) {
   // Optional dev cap: PSXPORT_FMV_MAXFRAMES bounds how many frames to play (0/unset = all).
   // Used by the standalone proof to decode just the first frame quickly; harmless in prod.
   int max_frames = 0;
-  { const char* mf = getenv("PSXPORT_FMV_MAXFRAMES"); if (mf && *mf) max_frames = atoi(mf); }
+  { const char* mf = cfg_str("PSXPORT_FMV_MAXFRAMES"); if (mf && *mf) max_frames = atoi(mf); }
 
   // Audio: STR interleaves XA-ADPCM sectors with the video sectors. Decode them, play through
   // a dedicated SDL device at the XA rate, and pace VIDEO to the audio/media clock (the real
   // PSX rate). uncapped = PSXPORT_FMV_FPS=0 (headless dumps: no pacing, no audio device).
-  int uncapped = 0; { const char* f = getenv("PSXPORT_FMV_FPS"); if (f && atoi(f) == 0 && *f) uncapped = 1; }
+  int uncapped = 0; { const char* f = cfg_str("PSXPORT_FMV_FPS"); if (f && atoi(f) == 0 && *f) uncapped = 1; }
   int xa_freq = 37800;
   int16_t xa_hist[2][2] = {{0,0},{0,0}};
   static int16_t xa_pcm[4032 * 2];   // mono sectors yield up to 4032 frames (see xa_decode_sector)
@@ -750,7 +751,7 @@ int native_fmv_play_lba(uint32_t lba, uint32_t size_bytes) {
     if (expected_chunks > 0 && got_chunks >= expected_chunks) {
       int ncodes = bs_decode_frame(payload, paylen, fwidth, fheight, codes,
                                    (int)(sizeof(codes)/sizeof(codes[0])));
-      if (getenv("PSXPORT_FMV_DEBUG"))
+      if (cfg_dbg("fmv"))
         fprintf(stderr, "[fmv] frame %d: %dx%d, %u payload bytes, %d codes\n",
                 framenum, fwidth, fheight, paylen, ncodes);
       if (ncodes > 0) {
@@ -766,7 +767,7 @@ int native_fmv_play_lba(uint32_t lba, uint32_t size_bytes) {
     }
   }
   if (skipped) fprintf(stderr, "[fmv] skipped by Start at frame %d\n", frames);
-  if (getenv("PSXPORT_FMV_DEBUG"))
+  if (cfg_dbg("fmv"))
     fprintf(stderr, "[fmv] done: %d video frames, %ld audio sample-pairs (%.2fs @ %dHz)\n",
             frames, media_frames, media_frames / (double)(xa_freq ? xa_freq : 37800), xa_freq);
   fmv_audio_close();

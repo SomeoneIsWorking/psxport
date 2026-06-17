@@ -1,0 +1,62 @@
+# Configuration & debug flags — `cfg` module + the single `PSXPORT_DEBUG` channel var
+
+Read this before adding a new `getenv("PSXPORT_…")`. The repo accumulated ~105 ad-hoc env flags, each
+with its own `static int x=-1; if(x<0) x=getenv(...)` boilerplate. That is now centralized.
+
+## The rule: don't call `getenv` — use `cfg` (`runtime/recomp/cfg.h`)
+```c
+#include "cfg.h"
+cfg_on("PSXPORT_FOO")     // boolean config/feature flag: env present and != "0" -> 1   (cached)
+cfg_int("PSXPORT_FOO", d) // integer-valued flag (frame number, scale, port…), default d (cached)
+cfg_str("PSXPORT_FOO")    // string-valued flag (paths, "x,y" coords); NULL if unset    (cached)
+cfg_dbg("chan")           // is debug CHANNEL `chan` on? driven by ONE var PSXPORT_DEBUG=chan,chan…
+```
+- Every lookup reads the environment **once** and caches. In hot paths (per-prim / per-GTE-op /
+  per-store) still keep a local `static int x=-1; if(x<0) x=cfg_*(…)` so there is no per-call scan.
+- `-w` is on in the build, so an int/pointer mix-up (e.g. mapping a *valued* flag to `cfg_dbg`) is **not**
+  warned — but `-Wint-conversion` is still an **error**, so the compiler catches that specific mistake.
+  Still: classify before you wire (boolean → `cfg_on`/`cfg_dbg`; anything whose value is read → `cfg_str`/`cfg_int`).
+- `cfg_dump()` logs every active `PSXPORT_*` var once (boot-time visibility).
+
+## Debug output is ONE variable now: `PSXPORT_DEBUG=chanA,chanB` (or `=all`)
+~31 boolean `*_DBG` / `*LOG` / `*WATCH` / `VERBOSE` flags were collapsed into named channels. Set them
+together: `PSXPORT_DEBUG=spu,cdcmd,bgm`. Old → new channel:
+
+| old env flag | channel | | old env flag | channel |
+|---|---|---|---|---|
+| `PSXPORT_AUDIO_LOG`    | `audio`   | | `PSXPORT_REDDBG`      | `red`       |
+| `PSXPORT_AUDIO_RATE`   | `audiorate`| | `PSXPORT_RTPCALLER`  | `rtpcaller` |
+| `PSXPORT_CARD_VERBOSE` | `card`    | | `PSXPORT_SCHEDDBG`   | `sched`     |
+| `PSXPORT_CDCMD_DBG`    | `cdcmd`   | | `PSXPORT_SEQDBG`     | `seq`       |
+| `PSXPORT_CDC_VERBOSE`  | `cdc`     | | `PSXPORT_SPINDBG`    | `spin`      |
+| `PSXPORT_CD_VERBOSE`   | `cd`      | | `PSXPORT_SPU_DBG`    | `spu`       |
+| `PSXPORT_ENGINE_DBG`   | `engine`  | | `PSXPORT_SPU_PROF`   | `spuprof`   |
+| `PSXPORT_ENVDBG`       | `env`     | | `PSXPORT_STAGETL`    | `stage`     |
+| `PSXPORT_FMV_DEBUG`    | `fmv`     | | `PSXPORT_STREAMDBG`  | `stream`    |
+| `PSXPORT_GP1LOG`       | `gp1`     | | `PSXPORT_TEXTDBG`    | `text`      |
+| `PSXPORT_GPU_LOG`      | `gpu`     | | `PSXPORT_UNPACKLOG`  | `unpack`    |
+| `PSXPORT_LDHAZARD`     | `ldhazard`| | `PSXPORT_UPLOADLOG`  | `upload`    |
+| `PSXPORT_OBJLOG`       | `obj`     | | `PSXPORT_VSYNCLOG`   | `vsync`     |
+| `PSXPORT_OTDBG`        | `ot`      | | `PSXPORT_VRAMSCAN`   | `vramscan`  |
+| `PSXPORT_CDCMD_DBG`    | `cdcmd`   | | `PSXPORT_WIDE60_SDBG`| `wide60`    |
+| (so e.g. `PSXPORT_CDCMD_DBG=1` → `PSXPORT_DEBUG=cdcmd`) | | | `PSXPORT_WS_SXHIST` | `sxhist` |
+
+## Flags that kept their own var (they carry a VALUE, not just on/off)
+These stay as `PSXPORT_*` (read via `cfg_int`/`cfg_str`) because they take a frame number, coords, path,
+or level — they can't be a bare channel:
+- **Renderer / mode:** `VK` (default on), `SW_GPU`, `VK_NODEPTH`, `VK_TRITEST`, `VK_HEADLESS`,
+  `GPU_WINDOW`, `WINDOWED`, `IRES`, `WIDE`, `WIDE60`, `WIDE60_GATE`, `WIDE60_SYNTH`, `NATIVE_DEPTH`,
+  `ATTACH`, `PROJPROBE`, `CULL`/`CULL_FAR`/`CULL_FOV`, `*_RECOMP` (`OT_/LZ_/GEOM_/RECOMP_OBJWALK`), `TRANSPLANT`.
+- **Boot / automation:** `NO_FMV`, `NOAUDIO`, `NOPACE`, `NOSKIP`, `NATIVE_FRAMES`, `AUTO_GAMEPLAY`,
+  `AUTO_NEWGAME`, `SCEA_SKIP`, `WATCHDOG`, `REPL`, `DEBUG_SERVER`, `T2_NOSEQTICK`, `FMV_*`, `FORCE_*`.
+- **Paths:** `TOMBA2_DISC`, `TOMBA2_CARD`, `DISC`.
+- **Valued diagnostics (still named, gfx-debug.md documents them):** `SCENEDUMP`, `PROVAT`, `GTEPROBE`,
+  `POLYDUMP`/`POLYAT`, `FADEDBG`, `SEMIDUMP`, `VK_SHOT`/`VK_SHOTSEQ`, `VK_DIFF`, `GPUTRACE`,
+  `VRAMDUMP`/`VRAMDUMP_AT`, `RAMDUMP`/`RAMDUMP_FRAME`, `CLOBBERDUMP`, `CLUTWATCH`, `WWATCH`, `CW`/`CW_BT`,
+  `XA_DBG` (level), `BGMDBG` (level), `GPU_DUMP`, `WAV`, `SS`, `SBS`.
+
+## Adding a new flag
+- A new on/off **diagnostic** → add a `cfg_dbg("yourchan")` call; document the channel in the table above.
+  Do NOT add a new `PSXPORT_*_DBG` var.
+- A new **config/feature** toggle → `cfg_on("PSXPORT_YOUR_FLAG")`; a valued one → `cfg_int`/`cfg_str`.
+- Then list it here. The goal is to keep the count down — prefer a channel over a new variable.

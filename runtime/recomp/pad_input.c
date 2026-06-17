@@ -30,6 +30,7 @@
 // unit-tested standalone. The PM wires it into hle.c/mem.c (see report).
 
 #include <stdint.h>
+#include "cfg.h"
 
 // PSX digital button bits, active-low (0 = pressed). Default = nothing pressed.
 #define PAD_NONE 0xFFFFu
@@ -212,19 +213,19 @@ void pad_service_frame(void) {
   static uint32_t s_fc = 0;       // internal frame counter for the pulse (== native frame index)
   static uint16_t s_hold_mask = PAD_NONE;  // headless test hook: a HELD (not pulsed) mask...
   static uint32_t s_hold_at = 0;           // ...applied from this native frame onward
-  if (s_have_window < 0) s_have_window = getenv("PSXPORT_GPU_WINDOW") ? 1 : 0;
+  if (s_have_window < 0) s_have_window = cfg_str("PSXPORT_GPU_WINDOW") ? 1 : 0;
 #ifdef PSXPORT_SDL
   if (s_have_window) pad_poll_sdl();             // host keyboard/gamepad -> s_buttons
 #endif
   if (!s_force_init) {                           // headless test hook: pulse an active-low mask
-    const char* force = getenv("PSXPORT_FORCE_BUTTONS");
+    const char* force = cfg_str("PSXPORT_FORCE_BUTTONS");
     if (force) { s_force_on = 1; s_force_mask = (uint16_t)strtoul(force, 0, 16); }
     // Second phase: HOLD a mask continuously from PSXPORT_FORCE_HOLD_AT onward (overrides the
     // pulse). Lets a headless run reach a state via pulsed Start, then hold a direction in-level
     // (a held direction is what the game reads for movement) — for interactivity testing.
-    const char* hold = getenv("PSXPORT_FORCE_HOLD");
+    const char* hold = cfg_str("PSXPORT_FORCE_HOLD");
     if (hold) { s_force_on = 1; s_hold_mask = (uint16_t)strtoul(hold, 0, 16);
-                const char* at = getenv("PSXPORT_FORCE_HOLD_AT"); s_hold_at = at ? strtoul(at, 0, 0) : 0; }
+                const char* at = cfg_str("PSXPORT_FORCE_HOLD_AT"); s_hold_at = at ? strtoul(at, 0, 0) : 0; }
     s_force_init = 1;
   }
   // Pulse the forced buttons (pressed 8 frames, released 24) so each press is a fresh EDGE the
@@ -236,7 +237,7 @@ void pad_service_frame(void) {
   // the scene's own BGM/state isn't disturbed by phantom presses (Start in gameplay = pause menu,
   // which stops BGM — that artifact poisoned earlier BGM captures).
   static long s_stop_at = -2;
-  if (s_stop_at == -2) { const char* e = getenv("PSXPORT_FORCE_STOP_AT"); s_stop_at = e ? atol(e) : -1; }
+  if (s_stop_at == -2) { const char* e = cfg_str("PSXPORT_FORCE_STOP_AT"); s_stop_at = e ? atol(e) : -1; }
   if (s_force_on && !(s_stop_at >= 0 && (long)s_fc >= s_stop_at)) {
     if (s_hold_mask != PAD_NONE && s_fc >= s_hold_at) pad_set_buttons(s_hold_mask);
     else pad_set_buttons((s_fc % 32u) < 8u ? s_force_mask : PAD_NONE);
