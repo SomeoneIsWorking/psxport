@@ -498,23 +498,33 @@ static void gp0_exec(void) {
     // VK backend (M5): tee polys to the GPU rasterizer in absolute VRAM coords. Opaque textured/
     // untextured -> opaque batch; semi -> semi batch (mode 3 = untextured flat). VK owns these now.
     if (gpu_vk_enabled()) {
-      void gpu_vk_draw_tritri(const int*,const int*,const int*,const int*,const unsigned char*,
-                              const unsigned char*,const unsigned char*,int,int,int,int,int,int,int,int,int,int,int,int,int,int);
-      void gpu_vk_draw_semi(const int*,const int*,const int*,const int*,const unsigned char*,
-                            const unsigned char*,const unsigned char*,int,int,int,int,int,int,int,int,int,int,int,int,int,int,int);
-      int xs[4], ys[4], us[4], vs[4]; unsigned char rs[4], gs[4], bs[4];
-      for (int i = 0; i < nv; i++) { xs[i]=v[i].x+s_off_x; ys[i]=v[i].y+s_off_y; us[i]=v[i].u; vs[i]=v[i].v;
-                                     rs[i]=v[i].r; gs[i]=v[i].g; bs[i]=v[i].b; }
+      void gpu_vk_draw_tritri_f(const float*,const float*,const int*,const int*,const unsigned char*,
+                                const unsigned char*,const unsigned char*,int,int,int,int,int,int,int,int,int,int,int,int,int,int);
+      void gpu_vk_draw_semi_f(const float*,const float*,const int*,const int*,const unsigned char*,
+                              const unsigned char*,const unsigned char*,int,int,int,int,int,int,int,int,int,int,int,int,int,int,int);
+      // Vertex smoothing (PGXP): replace each integer screen vertex with the GTE's subpixel-precise
+      // projected position (cached in gte_beetle.c, keyed by the packed int SXY) so 3D geometry stops
+      // wobbling. Cache miss -> integer fallback. Gated PSXPORT_PGXP (default on; =0 for A/B vs oracle).
+      int pgxp_lookup(int, int, float*, float*, float*);
+      static int s_pgxp_on = -1;
+      if (s_pgxp_on < 0) { const char* e = getenv("PSXPORT_PGXP"); s_pgxp_on = (e && !atoi(e)) ? 0 : 1; }
+      float xs[4], ys[4]; int us[4], vs[4]; unsigned char rs[4], gs[4], bs[4];
+      for (int i = 0; i < nv; i++) {
+        float px, py;
+        if (s_pgxp_on && pgxp_lookup(v[i].x, v[i].y, &px, &py, 0)) { xs[i] = px + s_off_x; ys[i] = py + s_off_y; }
+        else { xs[i] = (float)(v[i].x + s_off_x); ys[i] = (float)(v[i].y + s_off_y); }
+        us[i]=v[i].u; vs[i]=v[i].v; rs[i]=v[i].r; gs[i]=v[i].g; bs[i]=v[i].b;
+      }
       int mode = textured ? s_tp_mode : 3, rw = raw ? 1 : 0;
       if (semi) {
-        gpu_vk_draw_semi(xs, ys, us, vs, rs, gs, bs, s_tp_x, s_tp_y, mode, rw, s_clut_x, s_clut_y,
+        gpu_vk_draw_semi_f(xs, ys, us, vs, rs, gs, bs, s_tp_x, s_tp_y, mode, rw, s_clut_x, s_clut_y,
                          s_tw_mx, s_tw_my, s_tw_ox, s_tw_oy, s_da_x0, s_da_y0, s_da_x1, s_da_y1, s_tp_blend);
-        if (nv == 4) gpu_vk_draw_semi(&xs[1], &ys[1], &us[1], &vs[1], &rs[1], &gs[1], &bs[1], s_tp_x, s_tp_y, mode, rw,
+        if (nv == 4) gpu_vk_draw_semi_f(&xs[1], &ys[1], &us[1], &vs[1], &rs[1], &gs[1], &bs[1], s_tp_x, s_tp_y, mode, rw,
                          s_clut_x, s_clut_y, s_tw_mx, s_tw_my, s_tw_ox, s_tw_oy, s_da_x0, s_da_y0, s_da_x1, s_da_y1, s_tp_blend);
       } else {
-        gpu_vk_draw_tritri(xs, ys, us, vs, rs, gs, bs, s_tp_x, s_tp_y, mode, rw, s_clut_x, s_clut_y,
+        gpu_vk_draw_tritri_f(xs, ys, us, vs, rs, gs, bs, s_tp_x, s_tp_y, mode, rw, s_clut_x, s_clut_y,
                            s_tw_mx, s_tw_my, s_tw_ox, s_tw_oy, s_da_x0, s_da_y0, s_da_x1, s_da_y1);
-        if (nv == 4) gpu_vk_draw_tritri(&xs[1], &ys[1], &us[1], &vs[1], &rs[1], &gs[1], &bs[1], s_tp_x, s_tp_y, mode, rw,
+        if (nv == 4) gpu_vk_draw_tritri_f(&xs[1], &ys[1], &us[1], &vs[1], &rs[1], &gs[1], &bs[1], s_tp_x, s_tp_y, mode, rw,
                            s_clut_x, s_clut_y, s_tw_mx, s_tw_my, s_tw_ox, s_tw_oy, s_da_x0, s_da_y0, s_da_x1, s_da_y1);
       }
     }
@@ -1162,6 +1172,7 @@ void gpu_present_ex(int do_blit) {
   }
   { void gpu_vk_dump(int,int,int,int,int); gpu_vk_dump(s_disp_x, s_disp_y, s_disp_w, s_disp_h, s_frame); }  // PSXPORT_VK_SHOT
   { void gpu_vk_frame_end(const uint16_t*, int); gpu_vk_frame_end(s_vram, s_frame); }  // VK: diff + batch reset
+  { void pgxp_frame_reset(void); pgxp_frame_reset(); }   // drop this frame's PGXP subpixel cache
   s_frame++; s_prims = 0; s_gp0_words = 0; s_dma2 = 0;
 }
 void gpu_present(void) { gpu_present_ex(1); }

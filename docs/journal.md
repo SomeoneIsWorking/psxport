@@ -3738,3 +3738,28 @@ the Load screen hung forever on "Checking MEMORY CARD...".
   -> **"No data for Tomba!2"** (correct for an empty card; was a hang). scratch/screenshots/card_final.png.
   Card file = scratch/saves/tomba2.mcr (128 KB). OPEN: WRITE/save round-trip not yet tested end-to-end
   (needs a save-point playthrough) — but it's the same now-proven completion path (B0:0x4F + SwCARD IOE).
+
+## 2026-06-17 (later-95) — Vertex smoothing (PGXP subpixel) — kills the PS1 vertex wobble, PC-native.
+PSX projected 3D vertices to INTEGER screen coords, so geometry jitters as the camera/object moves
+(the classic PS1 "wobble"). Beetle's GTE ALREADY computes the subpixel-precise projected coords
+(gte.c TransformXY -> precise_x/y/z) and hands them to PGXP_pushSXYZ2f — which was a dead no-op stub
+in gte_beetle.c. Implemented it for real instead of leaving 3D snapped-to-integer:
+- **gte_beetle.c:** PGXP_pushSXYZ2f now caches (precise_x,y,z) in a 32K-entry hash, keyed by the
+  packed integer SXY (`v` = XY_FIFO[3]) the game copies verbatim into its GP0 vertex packets. Exposes
+  `pgxp_lookup(sx,sy,&px,&py,&pz)` (1=hit) and `pgxp_frame_reset()`. **Value-keyed PGXP-lite:** on a
+  key collision lookup just misses -> integer fallback, so a wrong match can only cost smoothing, never
+  correctness. **Reset every presented frame** (gpu_native gpu_present_ex) so a stale precise value from
+  a prior frame can't be re-applied to a freshly integer-placed vertex (the cross-frame-wobble trap).
+- **gpu_vk.c:** added float-position draw entries `gpu_vk_draw_tritri_f`/`gpu_vk_draw_semi_f` (TexVtx.x
+  was already float; the vertex shader already divides floats). The old int entries are now thin
+  wrappers that widen to float -> one impl. (+ stubs in the no-VK build.)
+- **gpu_native.c:** ONLY the polygon tee (op 0x20-0x3F = GTE-projected 3D) looks up the precise coords
+  by each vertex's integer (v[i].x,v[i].y) and passes FLOAT subpixel positions (+s_off). Sprites
+  (0x60-0x7F, bypass the GTE / 2D HUD) and lines stay integer — correct, they have no GTE-precise coord.
+  Gated PSXPORT_PGXP (default ON; =0 = exact old integer behavior for A/B vs the oracle).
+- **VALIDATED (f1500 swing/water, f3000 lava):** geometry fully intact, nothing warped/missing in either
+  scene. On-vs-off diff (scratch/screenshots/pgxp_diff_1500.png): differences are concentrated on the
+  POLYGON EDGES of every 3D primitive = subpixel vertex repositioning (proves broad cache-hit coverage),
+  exactly the expected signature. widescreen_hack is OFF so precise_x is native (no squish baked in).
+  NOTE: wobble reduction is a TEMPORAL effect — stills can't show it; user judges in motion. OPEN: if
+  motion reveals mis-snap (value-key collisions), add PGXP-proper RAM-address tracking (handoff note).

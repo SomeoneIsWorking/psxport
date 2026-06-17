@@ -762,7 +762,7 @@ void gpu_vk_draw_tri(int x0,int y0,int r0,int g0,int b0, int x1,int y1,int r1,in
 }
 
 // Append one TEXTURED triangle: per-vertex pos/uv/color (rgb 0..255) + shared page/CLUT/mode/raw state.
-static void tex_emit(TexVtx* t, const int* xs, const int* ys, const int* us, const int* vs,
+static void tex_emit(TexVtx* t, const float* xs, const float* ys, const int* us, const int* vs,
                      const unsigned char* rs, const unsigned char* gs, const unsigned char* bs,
                      int tpx, int tpy, int mode, int raw, int clutx, int cluty,
                      int twmx, int twmy, int twox, int twoy, int dax0, int day0, int dax1, int day1,
@@ -776,27 +776,48 @@ static void tex_emit(TexVtx* t, const int* xs, const int* ys, const int* us, con
     t[i].da[0] = dax0; t[i].da[1] = day0; t[i].da[2] = dax1; t[i].da[3] = day1;
   }
 }
-void gpu_vk_draw_tritri(const int* xs, const int* ys, const int* us, const int* vs,
-                        const unsigned char* rs, const unsigned char* gs, const unsigned char* bs,
-                        int tpx, int tpy, int mode, int raw, int clutx, int cluty,
-                        int twmx, int twmy, int twox, int twoy,
-                        int dax0, int day0, int dax1, int day1) {
+// Float-position triangle (vertex-smoothing path): subpixel x/y straight from the PGXP cache.
+void gpu_vk_draw_tritri_f(const float* xs, const float* ys, const int* us, const int* vs,
+                          const unsigned char* rs, const unsigned char* gs, const unsigned char* bs,
+                          int tpx, int tpy, int mode, int raw, int clutx, int cluty,
+                          int twmx, int twmy, int twox, int twoy,
+                          int dax0, int day0, int dax1, int day1) {
   if (!s_inited || s_tex_n + 3 > TEX_CAP) return;
   tex_emit((TexVtx*)s_tvbuf_ptr + s_tex_n, xs, ys, us, vs, rs, gs, bs, tpx, tpy, mode, raw, clutx, cluty,
            twmx, twmy, twox, twoy, dax0, day0, dax1, day1, 0, 0);
   s_tex_n += 3;
 }
+void gpu_vk_draw_tritri(const int* xs, const int* ys, const int* us, const int* vs,
+                        const unsigned char* rs, const unsigned char* gs, const unsigned char* bs,
+                        int tpx, int tpy, int mode, int raw, int clutx, int cluty,
+                        int twmx, int twmy, int twox, int twoy,
+                        int dax0, int day0, int dax1, int day1) {
+  float fx[3] = { (float)xs[0], (float)xs[1], (float)xs[2] };
+  float fy[3] = { (float)ys[0], (float)ys[1], (float)ys[2] };
+  gpu_vk_draw_tritri_f(fx, fy, us, vs, rs, gs, bs, tpx, tpy, mode, raw, clutx, cluty,
+                       twmx, twmy, twox, twoy, dax0, day0, dax1, day1);
+}
 // Semi-transparent triangle (mode 3 = untextured flat). Drawn AFTER opaque, blending against the
 // framebuffer snapshot, per `blend` (0=avg,1=add,2=sub,3=add/4).
+void gpu_vk_draw_semi_f(const float* xs, const float* ys, const int* us, const int* vs,
+                        const unsigned char* rs, const unsigned char* gs, const unsigned char* bs,
+                        int tpx, int tpy, int mode, int raw, int clutx, int cluty,
+                        int twmx, int twmy, int twox, int twoy,
+                        int dax0, int day0, int dax1, int day1, int blend) {
+  if (!s_inited || s_semi_n + 3 > TEX_CAP) return;
+  tex_emit((TexVtx*)s_semibuf_ptr + s_semi_n, xs, ys, us, vs, rs, gs, bs, tpx, tpy, mode, raw, clutx, cluty,
+           twmx, twmy, twox, twoy, dax0, day0, dax1, day1, 1, blend);
+  s_semi_n += 3;
+}
 void gpu_vk_draw_semi(const int* xs, const int* ys, const int* us, const int* vs,
                       const unsigned char* rs, const unsigned char* gs, const unsigned char* bs,
                       int tpx, int tpy, int mode, int raw, int clutx, int cluty,
                       int twmx, int twmy, int twox, int twoy,
                       int dax0, int day0, int dax1, int day1, int blend) {
-  if (!s_inited || s_semi_n + 3 > TEX_CAP) return;
-  tex_emit((TexVtx*)s_semibuf_ptr + s_semi_n, xs, ys, us, vs, rs, gs, bs, tpx, tpy, mode, raw, clutx, cluty,
-           twmx, twmy, twox, twoy, dax0, day0, dax1, day1, 1, blend);
-  s_semi_n += 3;
+  float fx[3] = { (float)xs[0], (float)xs[1], (float)xs[2] };
+  float fy[3] = { (float)ys[0], (float)ys[1], (float)ys[2] };
+  gpu_vk_draw_semi_f(fx, fy, us, vs, rs, gs, bs, tpx, tpy, mode, raw, clutx, cluty,
+                     twmx, twmy, twox, twoy, dax0, day0, dax1, day1, blend);
 }
 
 // Self-test: clear VRAM, draw batched tris into it, read back. Returns the readback (uint16 VRAM).
@@ -1033,6 +1054,21 @@ void gpu_vk_draw_semi(const int* xs, const int* ys, const int* us, const int* vs
                       const unsigned char* gs, const unsigned char* bs, int tpx, int tpy, int mode, int raw,
                       int clutx, int cluty, int twmx, int twmy, int twox, int twoy,
                       int dax0, int day0, int dax1, int day1, int blend) {
+  (void)xs;(void)ys;(void)us;(void)vs;(void)rs;(void)gs;(void)bs;(void)tpx;(void)tpy;(void)mode;(void)raw;
+  (void)clutx;(void)cluty;(void)twmx;(void)twmy;(void)twox;(void)twoy;(void)dax0;(void)day0;(void)dax1;(void)day1;(void)blend;
+}
+void gpu_vk_draw_tritri_f(const float* xs, const float* ys, const int* us, const int* vs,
+                          const unsigned char* rs, const unsigned char* gs, const unsigned char* bs,
+                          int tpx, int tpy, int mode, int raw, int clutx, int cluty,
+                          int twmx, int twmy, int twox, int twoy,
+                          int dax0, int day0, int dax1, int day1) {
+  (void)xs;(void)ys;(void)us;(void)vs;(void)rs;(void)gs;(void)bs;(void)tpx;(void)tpy;(void)mode;(void)raw;
+  (void)clutx;(void)cluty;(void)twmx;(void)twmy;(void)twox;(void)twoy;(void)dax0;(void)day0;(void)dax1;(void)day1;
+}
+void gpu_vk_draw_semi_f(const float* xs, const float* ys, const int* us, const int* vs, const unsigned char* rs,
+                        const unsigned char* gs, const unsigned char* bs, int tpx, int tpy, int mode, int raw,
+                        int clutx, int cluty, int twmx, int twmy, int twox, int twoy,
+                        int dax0, int day0, int dax1, int day1, int blend) {
   (void)xs;(void)ys;(void)us;(void)vs;(void)rs;(void)gs;(void)bs;(void)tpx;(void)tpy;(void)mode;(void)raw;
   (void)clutx;(void)cluty;(void)twmx;(void)twmy;(void)twox;(void)twoy;(void)dax0;(void)day0;(void)dax1;(void)day1;(void)blend;
 }

@@ -22,7 +22,55 @@ bool     psx_gte_overclock = false;
 uint8_t  widescreen_hack = 0;                   // GTE widescreen-scale hack OFF (faithful)
 uint8_t  widescreen_hack_aspect_ratio_setting = 0;
 uint32_t gMode = 0;                             // PGXP mode 0 = off
-void  PGXP_pushSXYZ2f(float x, float y, float z, uint32_t v) { (void)x;(void)y;(void)z;(void)v; }
+
+// --- PGXP subpixel cache (vertex-smoothing / PSX-wobble fix) -------------------------------------
+// PSX projected vertices to INTEGER screen coords, so 3D geometry jitters ("wobbles") as the
+// camera/object moves — the classic PS1 look. Beetle's GTE already computes the SUBPIXEL-precise
+// projected x/y/z (gte.c TransformXY: precise_x/precise_y/precise_z) and hands them to this hook,
+// keyed `v` = the packed integer SXY the game then copies verbatim into its GP0 vertex packets.
+// We cache (precise_x,y,z) keyed by that packed int; the GPU tee (gpu_native.c) looks the precise
+// coords back up by each vertex's integer (sx,sy) and rasterizes with FLOAT positions instead of
+// the integer-snapped ones. This is value-keyed "PGXP-lite": on a key collision we simply fall
+// back to the integer coords (a miss), so a wrong match can only ever cost smoothing, not correctness.
+// The cache is reset each presented frame (pgxp_frame_reset) so a stale precise value from a prior
+// frame can't be re-applied to a freshly-placed integer vertex (kills cross-frame wobble artifacts).
+#define PGXP_BITS 15
+#define PGXP_SIZE (1 << PGXP_BITS)
+#define PGXP_MASK (PGXP_SIZE - 1)
+typedef struct { uint32_t key; float x, y, z; uint8_t valid; } PgxpEnt;
+static PgxpEnt s_pgxp[PGXP_SIZE];
+
+static inline uint32_t pgxp_key(int sx, int sy) {
+  // canonical 22-bit key = 11-bit signed sx | sy, matching the GP0 vertex word's usable range
+  return ((uint32_t)(sy & 0x7FF) << 11) | (uint32_t)(sx & 0x7FF);
+}
+static inline uint32_t pgxp_slot(uint32_t key) {
+  uint32_t h = key * 2654435761u;        // Knuth multiplicative hash
+  return (h >> (32 - PGXP_BITS)) & PGXP_MASK;
+}
+
+void PGXP_pushSXYZ2f(float x, float y, float z, uint32_t v) {
+  int sx = (int16_t)(v & 0xFFFF), sy = (int16_t)(v >> 16);
+  uint32_t key = pgxp_key(sx, sy);
+  PgxpEnt* e = &s_pgxp[pgxp_slot(key)];
+  e->key = key; e->x = x; e->y = y; e->z = z; e->valid = 1;
+}
+
+// Renderer hook: fetch the subpixel coords for an integer vertex (sx,sy). Returns 1 on a cache hit.
+int pgxp_lookup(int sx, int sy, float* px, float* py, float* pz) {
+  uint32_t key = pgxp_key(sx, sy);
+  PgxpEnt* e = &s_pgxp[pgxp_slot(key)];
+  if (e->valid && e->key == key) {
+    if (px) *px = e->x; if (py) *py = e->y; if (pz) *pz = e->z;
+    return 1;
+  }
+  return 0;
+}
+
+void pgxp_frame_reset(void) {
+  for (uint32_t i = 0; i < PGXP_SIZE; i++) s_pgxp[i].valid = 0;
+}
+
 int   PGXP_NCLIP_valid(uint32_t a, uint32_t b, uint32_t c)   { (void)a;(void)b;(void)c; return 0; }
 float PGXP_NCLIP(void)                                        { return 0.0f; }
 int   MDFNSS_StateAction(void* st, int load, int data_only, void* sf, const char* name) {
