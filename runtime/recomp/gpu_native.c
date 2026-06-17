@@ -57,7 +57,7 @@ static uint32_t s_prim_order = 0; // per-frame OT submission index of the curren
 static long s_gp0_words = 0, s_dma2 = 0;  // diagnostics: GP0 words + DMA2 triggers per frame
 static uint32_t s_cur_node = 0;   // REDDBG: RAM addr of the OT node currently being fed to GP0
 uint32_t g_ot_madr = 0;           // last OT DMA root (extern in internal header)
-long g_attach_hit = 0, g_attach_miss = 0, g_attach_nodeabsent = 0;  // Phase-1 attach: hit/miss diag (PSXPORT_ATTACH)
+long g_attach_hit = 0, g_attach_miss = 0;  // Phase-1 attach: per-poly-vtx float-store hit/miss (PSXPORT_ATTACH)
 
 // Fade-flash diagnostic (PSXPORT_FADEDBG="a:b"): per-frame max emitted prim brightness + how the
 // scene is drawn, to settle whether a bright fade frame is in the GP0 (engine emits it) or invented
@@ -354,6 +354,8 @@ static void tri(Vtx a, Vtx b, Vtx c, int tex, int shade, int semi, int raw) {
 
 // ---- GP0 command FIFO ---------------------------------------------------------------
 static uint32_t s_fifo[256];   // big enough for variable-length poly-lines (many vertices)
+static uint32_t s_fifo_addr[256];  // guest source address of each FIFO word (0 = not from the OT walk)
+static uint32_t s_gp0_src;     // source guest addr of the word about to be fed to gpu_gp0 (Phase-1 attach)
 static int s_fcount, s_fneed;
 static int s_pl, s_pl_g;       // poly-line in progress (variable length); s_pl_g = gouraud
 // VRAM transfer state (GP0 0xA0 CPU->VRAM)
@@ -502,11 +504,12 @@ static void gp0_exec(void) {
     int gouraud = op & 0x10, quad = op & 0x08, textured = op & 0x04, semi = (op & 0x02) ? 1 : 0;
     int raw = textured && (op & 0x01);      // bit0 = texture-blend-disable (raw texel, no modulation)
     int nv = quad ? 4 : 3;
-    Vtx v[4]; int idx = 1;
+    Vtx v[4]; int idx = 1; uint32_t xyaddr[4];
     for (int i = 0; i < nv; i++) {
       uint8_t cr, cg, cb;
       if (gouraud) { uint32_t col = (i == 0) ? c : s_fifo[idx++]; cr = cmd_r(col); cg = cmd_g(col); cb = cmd_b(col); }
       else { cr = cmd_r(c); cg = cmd_g(c); cb = cmd_b(c); }
+      xyaddr[i] = s_fifo_addr[idx];            // guest address this vertex's XY word came from
       uint32_t xy = s_fifo[idx++];
       v[i].x = cx(xy); v[i].y = cy(xy); v[i].r = cr; v[i].g = cg; v[i].b = cb;
       if (textured) {
@@ -516,14 +519,12 @@ static void gp0_exec(void) {
         if (i == 1) set_texpage((uv >> 16) & 0xFFFF);
       }
     }
-    // Phase-1 attach verification: match each poly vertex to its native float by (node, sx, sy).
+    // Phase-1 attach verification: match each poly vertex to its native float by the XY word's guest addr.
     if (getenv("PSXPORT_ATTACH")) {
-      int projprim_lookup(uint32_t,int,int,float*,float*,float*,float*,float*,float*);
-      int projprim_has_node(uint32_t);
-      extern long g_attach_hit, g_attach_miss, g_attach_nodeabsent;
+      int projprim_lookup(uint32_t,float*,float*,float*,float*,float*,float*);
+      extern long g_attach_hit, g_attach_miss;
       for (int i = 0; i < nv; i++)
-        if (projprim_lookup(s_cur_node, v[i].x, v[i].y, 0,0,0,0,0,0)) g_attach_hit++;
-        else { g_attach_miss++; if (!projprim_has_node(s_cur_node)) g_attach_nodeabsent++; }
+        if (xyaddr[i] && projprim_lookup(xyaddr[i], 0,0,0,0,0,0)) g_attach_hit++; else g_attach_miss++;
     }
     int shade = gouraud || !textured;       // flat-untextured uses the command color
     { int mr=0,mg=0,mb=0,xmn=99999,xmx=-99999,ymn=99999,ymx=-99999;
@@ -818,6 +819,7 @@ void gpu_gp0(uint32_t w) {
     s_pl_g = (op & 0x10) ? 1 : 0;
     s_fneed = gp0_len(w);
   }
+  s_fifo_addr[s_fcount] = s_gp0_src;   // remember where this word came from (for attach address-keying)
   s_fifo[s_fcount++] = w;
   if (s_pl) {
     int idx = s_fcount - 1;                          // index of the word just stored
@@ -1095,14 +1097,12 @@ void gpu_present_ex(int do_blit) {
   { void projprim_reset(void); int projprim_count(void), projprim_overflowed(void);
     if (getenv("PSXPORT_ATTACH")) {
       extern long g_attach_hit, g_attach_miss;
-      extern long g_attach_nodeabsent;
       if (s_frame > 0 && (s_frame % 200) == 0)
-        fprintf(stderr, "[attach f%d] store=%d%s  poly-vtx hit=%ld miss=%ld (%.2f%%)  miss-node-absent=%ld\n",
+        fprintf(stderr, "[attach f%d] store=%d%s  poly-vtx hit=%ld miss=%ld (%.2f%%)\n",
                 s_frame, projprim_count(), projprim_overflowed() ? " OVERFLOW" : "",
                 g_attach_hit, g_attach_miss,
-                (g_attach_hit + g_attach_miss) ? 100.0 * g_attach_hit / (g_attach_hit + g_attach_miss) : 0.0,
-                g_attach_nodeabsent);
-      g_attach_hit = g_attach_miss = g_attach_nodeabsent = 0;
+                (g_attach_hit + g_attach_miss) ? 100.0 * g_attach_hit / (g_attach_hit + g_attach_miss) : 0.0);
+      g_attach_hit = g_attach_miss = 0;
       projprim_reset();
     } }
   // PSXPORT_PROVAT="x,y[:frame]" — at present time, report (in DISPLAY space, so the double buffer
@@ -1243,7 +1243,8 @@ void gpu_dma2_linked_list(uint32_t madr) {
     uint32_t hdr = mem_r32(addr);
     int n = hdr >> 24;
     s_cur_node = 0x80000000u | addr;
-    for (int i = 0; i < n; i++) gpu_gp0(mem_r32(addr + 4 + i * 4));
+    for (int i = 0; i < n; i++) { s_gp0_src = addr + 4 + i * 4; gpu_gp0(mem_r32(addr + 4 + i * 4)); }
+    s_gp0_src = 0;   // words from other sources (DMA block / direct GP0) aren't address-attributable
     uint32_t next = hdr & 0xFFFFFF;
     if (next == 0xFFFFFF || next == 0) break;
     addr = next & 0x1FFFFC;

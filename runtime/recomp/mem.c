@@ -261,6 +261,11 @@ void mem_w32(uint32_t a, uint32_t v) {
   wwatch_check(a, v);
   cw_check(a, v, 4);
   if (p) memcpy(p, &v, 4); else io_log_w(a, v, 4);
+  // Phase-1 attach (PSXPORT_ATTACH): catch the projection routines storing a packed SXY word into a
+  // GPU primitive packet, so the native float for that vertex can be keyed by its packet address.
+  { static int att = -1; if (att < 0) att = getenv("PSXPORT_ATTACH") ? 1 : 0;
+    if (att) { uint32_t pa = a & 0x1FFFFF;       // primitive-pool buffers live ~0xBFE68..0xE7E68
+      if (pa >= 0xB0000 && pa < 0xF0000) { void attach_store_hook(uint32_t, uint32_t); attach_store_hook(a, v); } } }
 }
 
 // lwl/lwr/swl/swr: little-endian unaligned word merge.

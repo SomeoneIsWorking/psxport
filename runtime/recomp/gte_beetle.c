@@ -322,69 +322,80 @@ void rtpcaller_dump(const char* tag) {
   }
 }
 
-// --- Native projected-prim store (Phase 1 attach-at-submission) ---------------------------------
-// Keyed by the GPU packet base (= the global DAT_800bf544 the project-and-submit fns write SXY into,
-// which IS the OT node DrawOTag later decodes as s_cur_node). Per projected vertex we store its float
-// screen/view-space/depth alongside its integer (sx,sy). The renderer matches a packet vertex to its
-// float by (node, sx, sy): node disambiguates globally (collision-free address), (sx,sy) disambiguates
-// the <=4 verts within one packet (collision-free in practice). Function-agnostic — works for every
-// projection routine (incl. the runtime-overlay ones) since they all funnel SXY through DAT_800bf544.
+// --- Native projected-prim store (Phase 1 attach-at-submission), keyed by SXY-word guest ADDRESS ----
+// Function/pool-agnostic. The projection routines (resident + runtime-overlay) all STORE the packed
+// XY_FIFO word to the packet's vertex slot. We capture float per vertex keyed by THAT store address:
+//   1. at gte_op, push each projected vertex's packed SXY + float into a small pending ring;
+//   2. attach_store_hook() (called from mem_w32 for stores into the prim-pool region) matches a stored
+//      value against the pending ring and records the float keyed by the store ADDRESS (last-write-wins,
+//      so a culled-then-reused slot resolves to the surviving prim);
+//   3. the renderer (gpu_native gp0_exec) looks the float up by each vertex word's guest read address.
+// The value-match is bounded to the tiny pending window (a few recently-projected verts), and the RESULT
+// is address-exact — so this has none of the global value-collision fragility of the old PGXP-lite cache.
 #define PP_MAX  65536
 #define PP_HASH 16384
-typedef struct { uint32_t node; int sx, sy; float px, py, pz, vx, vy, vz; int next; } PpEnt;
+typedef struct { uint32_t addr; float px, py, pz, vx, vy, vz; int next; } PpEnt;
 static PpEnt s_pp[PP_MAX];
 static int   s_pp_head[PP_HASH];
 static int   s_pp_n = 0, s_pp_inited = 0, s_pp_overflow = 0;
-static inline uint32_t pp_hash(uint32_t node) { return ((node >> 2) * 2654435761u) >> 18 & (PP_HASH - 1); }
+static inline uint32_t pp_hash(uint32_t addr) { return ((addr >> 2) * 2654435761u) >> 18 & (PP_HASH - 1); }
 void projprim_reset(void) {
   s_pp_n = 0; s_pp_overflow = 0;
   for (int i = 0; i < PP_HASH; i++) s_pp_head[i] = -1;
   s_pp_inited = 1;
 }
-static void projprim_push(uint32_t node, const ProjVtx* p) {
+static void projprim_set(uint32_t addr, const ProjVtx* p) {   // record/overwrite float at a store address
   if (!s_pp_inited) projprim_reset();
-  node &= 0x1FFFFC;
+  addr &= 0x1FFFFC;
+  for (int i = s_pp_head[pp_hash(addr)]; i >= 0; i = s_pp[i].next) if (s_pp[i].addr == addr) {  // overwrite
+    s_pp[i].px=p->px; s_pp[i].py=p->py; s_pp[i].pz=p->pz; s_pp[i].vx=p->vx; s_pp[i].vy=p->vy; s_pp[i].vz=p->vz; return;
+  }
   if (s_pp_n >= PP_MAX) { s_pp_overflow = 1; return; }
-  uint32_t h = pp_hash(node);
+  uint32_t h = pp_hash(addr);
   PpEnt* e = &s_pp[s_pp_n];
-  e->node = node; e->sx = p->sx; e->sy = p->sy;
-  e->px = p->px; e->py = p->py; e->pz = p->pz; e->vx = p->vx; e->vy = p->vy; e->vz = p->vz;
+  e->addr = addr; e->px=p->px; e->py=p->py; e->pz=p->pz; e->vx=p->vx; e->vy=p->vy; e->vz=p->vz;
   e->next = s_pp_head[h]; s_pp_head[h] = s_pp_n++;
 }
-// Renderer hook (gpu_native.c): float for the packet vertex at (node, sx, sy). 1 = hit.
-int projprim_lookup(uint32_t node, int sx, int sy,
-                    float* px, float* py, float* pz, float* vx, float* vy, float* vz) {
+// Renderer hook (gpu_native.c): float for the packet vertex word at guest address `addr`. 1 = hit.
+int projprim_lookup(uint32_t addr, float* px, float* py, float* pz, float* vx, float* vy, float* vz) {
   if (!s_pp_inited) return 0;
-  node &= 0x1FFFFC;
-  for (int i = s_pp_head[pp_hash(node)]; i >= 0; i = s_pp[i].next) {
+  addr &= 0x1FFFFC;
+  for (int i = s_pp_head[pp_hash(addr)]; i >= 0; i = s_pp[i].next) if (s_pp[i].addr == addr) {
     PpEnt* e = &s_pp[i];
-    if (e->node == node && e->sx == sx && e->sy == sy) {
-      if (px) *px = e->px; if (py) *py = e->py; if (pz) *pz = e->pz;
-      if (vx) *vx = e->vx; if (vy) *vy = e->vy; if (vz) *vz = e->vz;
-      return 1;
-    }
+    if (px) *px=e->px; if (py) *py=e->py; if (pz) *pz=e->pz; if (vx) *vx=e->vx; if (vy) *vy=e->vy; if (vz) *vz=e->vz;
+    return 1;
   }
   return 0;
 }
 int  projprim_overflowed(void) { return s_pp_overflow; }
 int  projprim_count(void)      { return s_pp_n; }
-int  projprim_has_node(uint32_t node) {        // diagnostic: is this packet base in the store at all?
-  if (!s_pp_inited) return 0;
-  node &= 0x1FFFFC;
-  for (int i = s_pp_head[pp_hash(node)]; i >= 0; i = s_pp[i].next) if (s_pp[i].node == node) return 1;
-  return 0;
-}
 
-// Capture each projected vertex into the store (gated by PSXPORT_ATTACH; reuses proj_native_vertex,
-// which is 0-diff vs the GTE). node = current packet base = DAT_800bf544 (0x800bf544 holds the ptr).
+// Pending ring: SXY-keyed floats awaiting their store. Small window (the body stores each vertex's SXY
+// shortly after projecting it). Match-and-consume on the store hook.
+#define PR_N 32
+static struct { uint32_t packed; ProjVtx p; int used; } s_pr[PR_N];
+static int s_pr_head = 0;
 static int s_attach = -1;
 static void projprim_capture(uint32_t insn, int rtpt) {
-  uint32_t mem_r32(uint32_t);
-  uint32_t node = mem_r32(0x800bf544);
   ProjVtx p;
   int nv = rtpt ? 3 : 1;
-  for (int i = 0; i < nv; i++) { proj_native_vertex(i, insn, &p); projprim_push(node, &p); }
+  for (int i = 0; i < nv; i++) {
+    proj_native_vertex(i, insn, &p);
+    uint32_t packed = ((uint32_t)(p.sx & 0xFFFF)) | ((uint32_t)(p.sy & 0xFFFF) << 16);  // == the XY_FIFO word stored
+    s_pr[s_pr_head].packed = packed; s_pr[s_pr_head].p = p; s_pr[s_pr_head].used = 1;
+    s_pr_head = (s_pr_head + 1) % PR_N;
+  }
 }
+// Called from mem_w32 (gated) for stores landing in the primitive-pool region. If the stored word
+// matches a pending projected SXY, record that vertex's float keyed by the store address.
+void attach_store_hook(uint32_t addr, uint32_t v) {
+  if (s_attach <= 0) return;
+  for (int k = 0; k < PR_N; k++) {
+    int i = (s_pr_head - 1 - k + 2 * PR_N) % PR_N;   // scan newest-first
+    if (s_pr[i].used && s_pr[i].packed == v) { projprim_set(addr, &s_pr[i].p); s_pr[i].used = 0; return; }
+  }
+}
+int attach_enabled(void) { if (s_attach < 0) s_attach = getenv("PSXPORT_ATTACH") ? 1 : 0; return s_attach > 0; }
 
 void     gte_op(R3000* c, uint32_t insn)         { GTE_Instruction(insn);
                                                    unsigned op = insn & 0x3F;
