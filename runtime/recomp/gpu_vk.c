@@ -114,6 +114,13 @@ typedef struct { int x, y, w, h; } VkRect;
 static VkRect s_dirty[DIRTY_CAP];
 static int    s_dirty_n;
 static int s_last_sx, s_last_sy, s_last_w = 320, s_last_h = 240;   // last-presented region (gpu_vk_shot)
+static int s_dbg_tri, s_dbg_tex, s_dbg_semi;   // last frame's batched vertex counts (vkstats probe)
+// Report the last frame's VK batched vertex counts (opaque-flat tris, opaque-textured tris, semi
+// tris). Lets the debug server tell apart "semi prims never batched" (tee bug) from "batched but
+// not visible" (semi pass / shader bug) — e.g. the missing semi-transparent puddle water.
+void gpu_vk_stats(int* tri, int* tex, int* semi) {
+  if (tri) *tri = s_dbg_tri; if (tex) *tex = s_dbg_tex; if (semi) *semi = s_dbg_semi;
+}
 void gpu_vk_dirty(int x, int y, int w, int h) {
   if (s_dirty_n >= DIRTY_CAP || w <= 0 || h <= 0) return;
   if (x < 0) { w += x; x = 0; } if (y < 0) { h += y; y = 0; }
@@ -552,6 +559,7 @@ void gpu_vk_present(const uint16_t* src, int sx, int sy, int w, int h) {
   VkDeviceSize go = 0;
   // full-image copy (s_tex -> snapshot) for the semi blend dest: must include the scratch FB rows.
   VkImageCopy ic = { { VK_IMAGE_ASPECT_COLOR_BIT,0,0,1 }, {0,0,0}, { VK_IMAGE_ASPECT_COLOR_BIT,0,0,1 }, {0,0,0}, { VRAM_W, IMG_H, 1 } };
+  s_dbg_tri = s_tri_n; s_dbg_tex = s_tex_n; s_dbg_semi = s_semi_n;   // snapshot for gpu_vk_stats (vkstats probe)
   if (s_tri_n || s_tex_n || s_semi_n) {
     // snapshot the uploaded VRAM -> vram_tex (the textures) for the opaque pass
     img_barrier_on(s_vram_tex, s_vram_tex_undef ? VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
@@ -956,6 +964,13 @@ void gpu_vk_shot(const char* path) {
   vk_dump_to(path, s_last_sx, s_last_sy, s_last_w, s_last_h);
   fprintf(stderr, "[vk_shot] wrote %s (%dx%d @ %d,%d)\n", path, s_last_w, s_last_h, s_last_sx, s_last_sy);
 }
+// Read back an ARBITRARY VK VRAM region (e.g. a texture atlas page) to a PPM — to verify a texture
+// is actually present in the VK image (s_tex) where the semi pass samples it. (debug server `vkvram`)
+void gpu_vk_vram_region(const char* path, int x, int y, int w, int h) {
+  if (!gpu_vk_enabled() || !s_inited) { fprintf(stderr, "[vk_vram] VK not active\n"); return; }
+  vk_dump_to(path, x, y, w, h);
+  fprintf(stderr, "[vk_vram] wrote %s (%dx%d @ %d,%d)\n", path, w, h, x, y);
+}
 // PSXPORT_VK_SHOT=frame -> single dump to scratch/screenshots/vk_live.ppm.
 // PSXPORT_VK_SHOTSEQ="first:last:step:dir" -> dump EVERY step-th frame in [first,last] to
 // dir/vk_<frame>.ppm. The sequence is what catches intermittent/flickering bugs (e.g. water that
@@ -1040,6 +1055,8 @@ void gpu_vk_tritest(void) {}
 void gpu_vk_frame_end(const uint16_t* svram, int frame) { (void)svram; (void)frame; }
 void gpu_vk_dump(int sx, int sy, int w, int h, int frame) { (void)sx;(void)sy;(void)w;(void)h;(void)frame; }
 void gpu_vk_shot(const char* path) { (void)path; }
+void gpu_vk_vram_region(const char* path, int x, int y, int w, int h) { (void)path;(void)x;(void)y;(void)w;(void)h; }
+void gpu_vk_stats(int* tri, int* tex, int* semi) { if(tri)*tri=0; if(tex)*tex=0; if(semi)*semi=0; }
 void gpu_vk_dirty(int x, int y, int w, int h) { (void)x;(void)y;(void)w;(void)h; }
 void gpu_vk_draw_tri(int a,int b,int c,int d,int e,int f,int g,int h,int i,int j,int k,int l,int m,int n,int o) {
   (void)a;(void)b;(void)c;(void)d;(void)e;(void)f;(void)g;(void)h;(void)i;(void)j;(void)k;(void)l;(void)m;(void)n;(void)o;

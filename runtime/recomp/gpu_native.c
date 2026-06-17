@@ -350,6 +350,12 @@ void gpu_native_load_image(int x, int y, int w, int h, uint32_t src) {
   for (int v = 0; v < h; v++)
     for (int u = 0; u < w; u++)
       *vram(x + u, y + v) = mem_r16(src + (uint32_t)((v * w + u) * 2));
+  // Mirror the upload into the VK VRAM image, exactly like the GP0 0xA0 / VRAM-copy / fill paths.
+  // This native upload is a VRAM-writing path too; without the mirror its textures land only in the
+  // SW s_vram. The VK opaque pass samples a full s_vram snapshot so it still saw them, but the VK
+  // SEMI pass samples the post-opaque s_tex (dirty regions only) — so a SEMI-transparent textured
+  // prim whose texture arrived here read zeros and discarded (the invisible in-game puddle water).
+  if (gpu_vk_enabled()) gpu_vk_dirty(x, y, w, h);
   if (getenv("PSXPORT_UPLOADLOG"))
     fprintf(stderr, "[upload] f%d NATIVE dest=(%d,%d) %dx%d src=0x%08X\n", s_frame, x, y, w, h, src);
 }

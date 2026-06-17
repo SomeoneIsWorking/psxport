@@ -45,6 +45,8 @@ void gpu_sbs_set(int on);
 int  gpu_frame_no(void);
 int  gpu_vk_enabled(void);
 void gpu_vk_shot(const char* path);
+void gpu_vk_stats(int* tri, int* tex, int* semi);
+void gpu_vk_vram_region(const char* path, int x, int y, int w, int h);
 
 // --- main<->server handoff: a single pending request, serviced on the main thread once per frame --
 static pthread_mutex_t s_mtx  = PTHREAD_MUTEX_INITIALIZER;
@@ -70,7 +72,9 @@ static void dbg_exec(FILE* out, const char* line) {
       "  stage            scene/stage latches\n"
       "  scene            classified display list of the current frame\n"
       "  provat <x> <y>   which prim drew each displayed pixel around (x,y)\n"
-      "  shot [path]      screenshot of the presented display region (PPM)\n"
+      "  shot [path]      screenshot of the presented output (VK readback if VK active, else SW)\n"
+      "  vkshot [path]    force a VK-rendered readback to PPM\n"
+      "  vkstats          last frame's VK batched vertex counts (flat/textured/semi)\n"
       "  gputrace [path]  arm a gpu_differ GP0 capture of the next frame\n"
       "  sbs [0|1]        toggle/set Vulkan-vs-Software side-by-side view\n"
       "  frame            current present-frame counter\n");
@@ -103,6 +107,15 @@ static void dbg_exec(FILE* out, const char* line) {
     sscanf(line, "%*s %255s", path);
     gpu_vk_shot(path);
     fprintf(out, "vkshot -> %s\n", path);
+  } else if (!strcmp(cmd, "vkstats")) {
+    int tri = 0, tex = 0, semi = 0; gpu_vk_stats(&tri, &tex, &semi);
+    fprintf(out, "vk last-frame verts: flat-tri=%d (%d tris) textured=%d (%d tris) semi=%d (%d tris)\n",
+            tri, tri/3, tex, tex/3, semi, semi/3);
+  } else if (!strcmp(cmd, "vkvram")) {
+    unsigned x = 0, y = 0, w = 64, h = 64; char path[256] = "scratch/screenshots/dbg_vkvram.ppm";
+    sscanf(line, "%*s %u %u %u %u %255s", &x, &y, &w, &h, path);
+    gpu_vk_vram_region(path, (int)x, (int)y, (int)w, (int)h);
+    fprintf(out, "vkvram (%u,%u %ux%u) -> %s\n", x, y, w, h, path);
   } else if (!strcmp(cmd, "gputrace")) {
     char path[256] = "scratch/bin/dbg_gp0.bin";
     sscanf(line, "%*s %255s", path);
