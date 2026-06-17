@@ -80,6 +80,32 @@ manager's target (Phase 1):** reimplement the walk in native C, call each handle
 - Per-type handlers (call the wrappers with their obj*): e.g. `:21274 :27367 :28376` → `FUN_8007778c`;
   `:45944 :45991 :46120` → `FUN_80077a4c`. These are the entity update/render routines (Phase 2 targets).
 
+## Geometry SUBMIT — `0x8007FDB0` (POLY_GT3 tri) + `0x8008007C` (POLY_GT4 quad) — NATIVE-OWNED (engine_submit.c)
+These are the resident routines that turn a model's pre-built primitive-record list into GPU packets in
+the OT. Both are now reimplemented natively in `engine/engine_submit.c` (`ov_submit_poly_gt3/4`),
+**0-diff vs the recomp body on the field** (A/B: `PSXPORT_SUBMIT_RECOMP=1` keeps the recomp bodies).
+This is the deletion of the reason the value-keyed "attach" depth-recovery hack existed — the engine now
+computes the projection and can carry the real per-vertex view-Z straight to the renderer (Phase 2).
+- **Caller** `gen_func_800803DC` (`0x800803DC`): `r16 = mem_r32(geomblk+0)` packs counts (low16 = tri
+  count, high16 = quad count); `a0 = geomblk+16` (record array). Calls tri-submit `(a0, OTbase, triN)`,
+  then quad-submit `(ret, OTbase, quadN)` — **tri-submit RETURNS a0 advanced past its records** (= quad
+  array base), so the return value matters. Records are tri[] then quad[], contiguous.
+- **Global** packet-pool write pointer `0x800BF544` (advanced past each committed packet; written back).
+- **Triangle** (`0x8007FDB0`): 36-byte record `{+0 rgb0|code, +4 rgb1(rgb2=rgb1<<4), +8 uv0|clut,
+  +12 uv1|tpage, +16 VXY0, +20 VZ0|VZ1, +24 VXY1, +28 VXY2, +32 VZ2|uv2}` → load V0..V2, **RTPT**, FLAG
+  test, **NCLIP** backface (MAC0>0), frustum cull (drop iff all SX≥320 or all SY≥240 — right/bottom
+  only), OT-z, → 40-byte **POLY_GT3** `{tag,rgb0,SXY0,uv0,rgb1,SXY1,uv1,rgb2,SXY2,uv2}`, OT tag len 9.
+- **Quad** (`0x8008007C`): 44-byte record, project the lone 4th vertex (V3) via **RTPS** first, then the
+  front tri (V0,V1,V2) via **RTPT**; 4-vertex frustum cull; → 52-byte **POLY_GT4**, OT tag len 12.
+- **OT-bucket depth** (the `>>2` order-stat): record code byte `(code>>24)&3` selects **type 1 = farthest
+  (max SZ)**, **type 2 = nearest (min SZ)**, **else = hardware AVSZ3/AVSZ4 average** (SZ FIFO: tri DR17-19,
+  quad DR16-19). Then a log-compress `idx=(otz>>(sh&31))+(sh<<9), sh=otz>>10` and a **drawable clamp
+  `idx∈[4,2047]`** (else the prim is dropped). Verified the min/max by exhaustively tracing both bodies.
+- **Note:** the recomp bodies are slightly **nondeterministic** run-to-run (≈300px at one field frame —
+  uninitialised packet padding the GPU re-reads); the native versions are deterministic and match a
+  freshly-captured recomp run exactly. NEXT: overlay/menu submit fns (`0x80109C80`,`0x801099B4`,…) + the
+  Phase-2 depth emission (carry view-Z to the renderer, delete the projprim/attach ring).
+
 ## Camera
 - Position (u16): `_DAT_1f8000d2` (X), `_DAT_1f8000d6` (Y), `_DAT_1f8000da` (Z).
 - Forward vector (s16): `_DAT_1f8000e8/ea/ec` (used in the cull depth dot product).

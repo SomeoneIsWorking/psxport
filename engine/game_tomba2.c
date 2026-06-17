@@ -277,6 +277,11 @@ void games_tomba2_init(void) {
     rec_set_override(0x80044E84u, ov_unpack_group);   // texture-group unpacker (drives the above)
     rec_set_override(0x80081218u, ov_upload_image);   // PC-native CPU->VRAM upload (libgs upload lib)
   }
+  if (!cfg_on("PSXPORT_SUBMIT_RECOMP")) {          // own the geometry submit path natively (faithful-first)
+    void ov_submit_poly_gt3(R3000*), ov_submit_poly_gt4(R3000*);
+    rec_set_override(0x8007FDB0u, ov_submit_poly_gt3);   // POLY_GT3 (gouraud-textured triangle) submit
+    rec_set_override(0x8008007Cu, ov_submit_poly_gt4);   // POLY_GT4 (gouraud-textured quad) submit
+  }
   wide60_init();
   if (g_wide60_on || cfg_dbg("obj") || cfg_on("PSXPORT_CULL"))   // cull tap: wide60 / objlog / extended-cull
     rec_set_override(0x8007712Cu, ov_object_cull);
