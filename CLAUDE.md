@@ -16,7 +16,9 @@ Active plan: `<local-notes>/plans/fancy-tinkering-kite.md`. Engine RE: `docs/eng
 Findings/dead-ends: `docs/journal.md`. Project map / build cheat-sheet: `docs/project-map.md`.
 **Render/present pipeline (SW vs VK, depth, headless offscreen VK, the VK render-diff tool):
 `docs/render-arch.md`. Config & debug flags (the `cfg` module + the single `PSXPORT_DEBUG=chan` var —
-do NOT add raw `getenv`): `docs/config.md`.** Read both before touching graphics or adding a flag.
+do NOT add raw `getenv`): `docs/config.md`. How to DRIVE the game (input/automation/debug-server/
+reaching a scene): `docs/driving-the-game.md`.** Read these before touching graphics, adding a flag, or
+driving the game — don't re-derive them.
 **Graphics/render debugging: `docs/gfx-debug.md` (skill `gfx-debug`) — READ FIRST before any rendering
 bug or comparison tooling; it has the tool catalog + the mandatory render-diff-first workflow.**
 

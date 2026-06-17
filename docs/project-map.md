@@ -63,6 +63,9 @@ the game enabled CD audio; sequenced (libsnd) BGM is a SEPARATE working path. De
   `tools/vk_depth_diff.sh`. Read before touching graphics/VK.
 - **`docs/config.md`** — the `cfg` module (`cfg_on/cfg_int/cfg_str/cfg_dbg`); ALL diagnostics are now the
   single `PSXPORT_DEBUG=chan,chan` var (channel table + old→new map). Don't add raw `getenv("PSXPORT_…")`.
+- **`docs/driving-the-game.md`** — how to DRIVE the port to a scene: pad button bits, the automation flags
+  (`AUTO_GAMEPLAY`/`AUTO_NEWGAME`/`FORCE_*`), the live debug server (`tools/dbgclient.py`), scene-state
+  signals, and the headless-120-frame-cap / `pkill -f` gotchas. Read before driving the game.
 
 ## Where state/notes live
 - `docs/journal.md` — chronological findings + dead ends (read the head before re-deriving).
