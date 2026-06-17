@@ -8,6 +8,7 @@ layout(location = 3) in ivec4 i_tp;     // tpx, tpy (VRAM px base of page), mode
 layout(location = 4) in ivec4 i_clut;   // clutx, cluty (VRAM px), -, -
 layout(location = 5) in ivec4 i_tw;     // texture window: mask_x, mask_y, off_x, off_y (8px units)
 layout(location = 6) in ivec4 i_da;     // draw-area clip: x0, y0, x1, y1 (VRAM px)
+layout(location = 7) in float i_ord;    // OT submission order as depth [0,1] (later prim = greater)
 layout(location = 0) out vec3 v_col;
 layout(location = 1) noperspective out vec2 v_uv;
 layout(location = 2) flat out ivec4 v_tp;
@@ -28,9 +29,9 @@ void main() {
         vec2 fb = vec2((local.x + float(w.wb.x)) * ss + float(w.wb.w),
                        float(w.wa.y) + local.y * ss);
         v_da = ivec4(w.wb.w, w.wa.y, w.wb.w + w.wb.y - 1, w.wa.y + w.wb.z - 1);   // clip = FB rect
-        gl_Position = vec4(fb.x / 512.0 - 1.0, fb.y / ny - 1.0, 0.0, 1.0);
+        gl_Position = vec4(fb.x / 512.0 - 1.0, fb.y / ny - 1.0, i_ord, 1.0);
     } else {
         v_da = i_da;
-        gl_Position = vec4(i_pos.x / 512.0 - 1.0, i_pos.y / ny - 1.0, 0.0, 1.0);
+        gl_Position = vec4(i_pos.x / 512.0 - 1.0, i_pos.y / ny - 1.0, i_ord, 1.0);
     }
 }

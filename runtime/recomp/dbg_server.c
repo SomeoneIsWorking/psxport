@@ -47,6 +47,35 @@ int  gpu_vk_enabled(void);
 void gpu_vk_shot(const char* path);
 void gpu_vk_stats(int* tri, int* tex, int* semi);
 void gpu_vk_vram_region(const char* path, int x, int y, int w, int h);
+void gpu_vk_rawdump_arm(const char* path, int frame);
+// pad input (pad_input.c) — lets the debug server DRIVE the game (press/release/tap/hold)
+void pad_repl_hold(uint16_t active_low_mask);
+void pad_repl_tap(uint16_t active_low_mask, int n);
+
+// PSX pad: name -> active-HIGH bit (mirrors the REPL mapping in native_boot.c).
+static unsigned dbg_btn(const char* n) {
+  if (!strcmp(n,"start"))  return 0x0008; if (!strcmp(n,"select")) return 0x0001;
+  if (!strcmp(n,"x")||!strcmp(n,"cross"))    return 0x4000;
+  if (!strcmp(n,"o")||!strcmp(n,"circle"))   return 0x2000;
+  if (!strcmp(n,"triangle")||!strcmp(n,"t")) return 0x1000;
+  if (!strcmp(n,"square")||!strcmp(n,"sq"))  return 0x8000;
+  if (!strcmp(n,"up")) return 0x0010; if (!strcmp(n,"down"))  return 0x0040;
+  if (!strcmp(n,"left"))return 0x0080; if (!strcmp(n,"right")) return 0x0020;
+  return (unsigned)strtoul(n, 0, 16);
+}
+static unsigned short s_held = 0xFFFF;   // active-low held mask (all released)
+
+// --- Pause / frame-step (so transient bad frames can be inspected one frame at a time) -----------
+// All set/read on the MAIN thread (dbg_exec runs inside dbg_server_service); the frame loop polls
+// these to gate the game advance. paused = freeze; step = run exactly N more frames then re-freeze.
+static int s_paused = 0;
+static int s_step   = 0;
+int  dbg_is_paused(void)    { return s_paused; }
+int  dbg_step_pending(void) { return s_step > 0; }
+void dbg_consume_step(void) { if (s_step > 0) s_step--; }
+void dbg_set_paused(int p)  { s_paused = p ? 1 : 0; s_step = 0; }   // e.g. auto-pause at a scene entry
+void dbg_toggle_pause(void) { s_paused = !s_paused; s_step = 0; }    // keyboard P
+void dbg_add_step(int n)    { s_paused = 1; s_step += n; }           // keyboard . (freeze + advance n)
 
 // --- main<->server handoff: a single pending request, serviced on the main thread once per frame --
 static pthread_mutex_t s_mtx  = PTHREAD_MUTEX_INITIALIZER;
@@ -76,8 +105,15 @@ static void dbg_exec(FILE* out, const char* line) {
       "  vkshot [path]    force a VK-rendered readback to PPM\n"
       "  vkstats          last frame's VK batched vertex counts (flat/textured/semi)\n"
       "  gputrace [path]  arm a gpu_differ GP0 capture of the next frame\n"
+      "  swvkcap [prefix] capture one frame's GP0 + VK raw VRAM for tools/swvk_diff.py\n"
+      "  press/release B  hold/release a pad button (up/down/left/right/x/o/triangle/square/start/select)\n"
+      "  tap B [n]        tap a button for n frames (default 4)\n"
+      "  hold <hex>       set the raw active-low pad mask\n"
       "  sbs [0|1]        toggle/set Vulkan-vs-Software side-by-side view\n"
-      "  frame            current present-frame counter\n");
+      "  pause            freeze the game (window holds last frame)\n"
+      "  step [n]         advance exactly n frames then re-freeze (default 1)\n"
+      "  play|resume      unfreeze\n"
+      "  frame            current present-frame counter + paused state\n");
   } else if (!strcmp(cmd, "r") && sscanf(line, "%*s %x %u", &a, &b) >= 1) {
     if (!b) b = 16; if (b > 256) b = 256;
     fprintf(out, "%08X:", a);
@@ -121,12 +157,36 @@ static void dbg_exec(FILE* out, const char* line) {
     sscanf(line, "%*s %255s", path);
     int tf = gpu_gputrace_arm(path);
     fprintf(out, "gputrace armed for frame %d -> %s (appears after one frame)\n", tf, path);
+  } else if (!strcmp(cmd, "swvkcap")) {
+    // Capture the SAME frame for an aligned SW-vs-VK diff: the GP0 stream (+ initial VRAM) AND the
+    // VK-rendered VRAM. tools/swvk_diff.py replays the GP0 through SW and diffs it against the VK raw.
+    char pre[200] = "scratch/swvk/cap"; sscanf(line, "%*s %199s", pre);
+    char gp0[256], vk[256];
+    snprintf(gp0, sizeof gp0, "%s.gp0", pre); snprintf(vk, sizeof vk, "%s_vk.vram", pre);
+    int tf = gpu_gputrace_arm(gp0); gpu_vk_rawdump_arm(vk, tf);
+    fprintf(out, "swvkcap frame %d -> %s (GP0) + %s (VK raw); run tools/swvk_diff.py %s\n", tf, gp0, vk, pre);
+  } else if (!strcmp(cmd, "press") && sscanf(line, "%*s %31s", arg) == 1) {
+    s_held &= ~(unsigned short)dbg_btn(arg); pad_repl_hold(s_held); fprintf(out, "held=%04X\n", s_held);
+  } else if (!strcmp(cmd, "release") && sscanf(line, "%*s %31s", arg) == 1) {
+    s_held |= (unsigned short)dbg_btn(arg); pad_repl_hold(s_held); fprintf(out, "held=%04X\n", s_held);
+  } else if (!strcmp(cmd, "tap") && sscanf(line, "%*s %31s %u", arg, &a) >= 1) {
+    if (!a) a = 4; pad_repl_tap((unsigned short)(0xFFFF & ~dbg_btn(arg)), (int)a);
+    fprintf(out, "tap %s %u\n", arg, a);
+  } else if (!strcmp(cmd, "hold") && sscanf(line, "%*s %x", &a) == 1) {
+    s_held = (unsigned short)a; pad_repl_hold(s_held); fprintf(out, "held=%04X\n", s_held);
   } else if (!strcmp(cmd, "sbs")) {
     if (sscanf(line, "%*s %u", &a) == 1) gpu_sbs_set((int)a);
     else gpu_sbs_set(!gpu_sbs_get());
     fprintf(out, "sbs=%d (Vulkan|Software side-by-side)\n", gpu_sbs_get());
+  } else if (!strcmp(cmd, "pause")) {
+    s_paused = 1; s_step = 0; fprintf(out, "paused at frame %d\n", gpu_frame_no());
+  } else if (!strcmp(cmd, "play") || !strcmp(cmd, "resume")) {
+    s_paused = 0; s_step = 0; fprintf(out, "resumed\n");
+  } else if (!strcmp(cmd, "step")) {
+    a = 0; sscanf(line, "%*s %u", &a); if (!a) a = 1;
+    s_paused = 1; s_step += (int)a; fprintf(out, "step +%u (frame %d)\n", a, gpu_frame_no());
   } else if (!strcmp(cmd, "frame")) {
-    fprintf(out, "frame=%d\n", gpu_frame_no());
+    fprintf(out, "frame=%d paused=%d\n", gpu_frame_no(), s_paused);
   } else {
     fprintf(out, "? %s  (try 'help')\n", line);
   }

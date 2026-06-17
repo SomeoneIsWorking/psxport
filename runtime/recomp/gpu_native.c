@@ -34,6 +34,7 @@ static int s_da_x0, s_da_y0, s_da_x1 = 1023, s_da_y1 = 511;  // draw clip area
 static int s_off_x, s_off_y;                                 // draw offset
 int gpu_vk_enabled(void);                                    // gpu_vk.c (declared early for the gp0 tee)
 void gpu_vk_dirty(int, int, int, int);                       // mark a SW-written VRAM region to mirror to VK
+void gpu_vk_set_order(unsigned idx);                         // OT submission order of the next VK prim (depth)
 static int s_tp_x, s_tp_y;        // texpage base (64-px / 256-line units -> *64 / *256)
 static int s_reddbg;              // PSXPORT_REDDBG: dark-red output anomaly probe
 static int s_tp_mode;             // texture color mode: 0=4bpp,1=8bpp,2=15bpp
@@ -52,6 +53,7 @@ typedef struct { int x, y; uint8_t r, g, b; int u, v; } Vtx;
 
 static int g_log = 0;             // PSXPORT_GPU_LOG
 static long s_prims = 0;          // primitives drawn since last present
+static uint32_t s_prim_order = 0; // per-frame OT submission index of the current prim (VK depth order)
 static long s_gp0_words = 0, s_dma2 = 0;  // diagnostics: GP0 words + DMA2 triggers per frame
 static uint32_t s_cur_node = 0;   // REDDBG: RAM addr of the OT node currently being fed to GP0
 uint32_t g_ot_madr = 0;           // last OT DMA root (extern in internal header)
@@ -504,6 +506,7 @@ static void gp0_exec(void) {
     // VK backend (M5): tee polys to the GPU rasterizer in absolute VRAM coords. Opaque textured/
     // untextured -> opaque batch; semi -> semi batch (mode 3 = untextured flat). VK owns these now.
     if (gpu_vk_enabled()) {
+      gpu_vk_set_order(s_prim_order++);   // OT submission order -> depth (preserve opaque/semi order)
       void gpu_vk_draw_tritri(const int*,const int*,const int*,const int*,const unsigned char*,
                               const unsigned char*,const unsigned char*,int,int,int,int,int,int,int,int,int,int,int,int,int,int);
       void gpu_vk_draw_semi(const int*,const int*,const int*,const int*,const unsigned char*,
@@ -599,6 +602,7 @@ static void gp0_exec(void) {
     if (!gpu_vk_enabled()) raster_sprite(op, x, y, u0, v0, w, h, cr, cg, cb, textured, semi);  // VK owns it (tee'd below)
     // VK backend (M5): tee rects/sprites as two triangles (opaque or semi; mode 3 = untextured solid).
     if (gpu_vk_enabled()) {
+      gpu_vk_set_order(s_prim_order++);   // OT submission order -> depth (preserve opaque/semi order)
       void gpu_vk_draw_tritri(const int*,const int*,const int*,const int*,const unsigned char*,
                               const unsigned char*,const unsigned char*,int,int,int,int,int,int,int,int,int,int,int,int,int,int);
       void gpu_vk_draw_semi(const int*,const int*,const int*,const int*,const unsigned char*,
@@ -1075,6 +1079,7 @@ void gpu_present_ex(int do_blit) {
   { void gpu_vk_dump(int,int,int,int,int); gpu_vk_dump(s_disp_x, s_disp_y, s_disp_w, s_disp_h, s_frame); }  // PSXPORT_VK_SHOT
   { void gpu_vk_frame_end(const uint16_t*, int); gpu_vk_frame_end(s_vram, s_frame); }  // VK: diff + batch reset
   s_frame++; s_prims = 0; s_gp0_words = 0; s_dma2 = 0;
+  s_prim_order = 0;   // restart the per-frame OT submission order (VK depth) for the next frame
 }
 void gpu_present(void) { gpu_present_ex(1); }
 

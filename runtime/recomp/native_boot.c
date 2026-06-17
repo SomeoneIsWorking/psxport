@@ -20,6 +20,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <setjmp.h>
+#include <unistd.h>   // usleep (debug-server pause/step idle wait)
 
 void rec_coro_run(R3000* c, uint32_t pc); // flat coroutine interpreter (resumable, see interp.c)
 
@@ -385,6 +386,23 @@ static void ov_game_main(R3000* c) {
     mem_w16(0x800e809c, 0);                                  // DAT_800e809c = 0 (dwell counter)
     mem_w32(0x800bf4f4, mem_r32(0x800bf544));                // framebuffer ptr swap
     mem_w32(0x800bf544, (mem_r8(0x1f800135) * 0x14000 + 0x800bfe68) & 0xffffff);
+    // PSXPORT_AUTO_NEWGAME: own the title->New Game navigation so we boot straight into the post-New
+    // Game prologue cutscene (stage 0x8010637C) deterministically — no fighting the attract loop. The
+    // menu confirm is Cross (0x4000); pulse it at the title (DEMO overlay) until task0 enters GAME.
+    { static int ang = -1; if (ang < 0) ang = getenv("PSXPORT_AUTO_NEWGAME") ? 1 : 0;
+      if (ang == 1) {
+        if (mem_r32(0x801fe00c) != 0x8010637Cu) {
+          if ((f % 12u) == 0) pad_repl_tap((uint16_t)(0xFFFF & ~0x4000), 6);   // tap Cross
+        } else { fprintf(stderr, "[autonewgame] reached GAME (prologue) at frame %u\n", f); ang = 2; }
+      } }
+    // PSXPORT_DEBUG_SERVER pause/step: when frozen, do NOT advance the game — just pump host input
+    // (keeps the window alive) and service debug commands so `step`/`play` can arrive. A `step` runs
+    // exactly one real frame then re-freezes, so transient bad frames can be inspected one at a time.
+    { int dbg_is_paused(void), dbg_step_pending(void); void dbg_consume_step(void);
+      while (dbg_is_paused()) {
+        if (dbg_step_pending()) { dbg_consume_step(); break; }   // run exactly one frame
+        pad_service_frame(); dbg_server_service(); usleep(15000);
+      } }
     pad_service_frame();                                     // host input -> game pad buffer (pre-read)
     xa_audio_trace("pre");                                   // CD-vol fade state BEFORE tick+mix
     rc0(c, 0x800788ac);                                      // tick + present + audio (override)

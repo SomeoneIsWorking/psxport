@@ -85,13 +85,28 @@ static VkPipeline      s_tri_pipe;
 static VkBuffer        s_vbuf;        // host-visible vertex batch
 static VkDeviceMemory  s_vbuf_mem;
 static void*           s_vbuf_ptr;
-typedef struct { float x, y, r, g, b; } TriVtx;
+typedef struct { float x, y, r, g, b, ord; } TriVtx;
 #define TRI_CAP 196608                // max batched vertices (= 65536 tris)
 static int             s_tri_n;
 
+// --- Depth-ordered semi-transparency (preserve OT submission order across the opaque/semi split) ---
+// The VK rasterizer batches opaque then semi into two passes, which loses the back-to-front OT order
+// between an opaque prim and a semi prim. Each prim carries its OT submission index as a depth value
+// (.ord, [0,1], later = greater); opaque writes depth (compare GREATER_EQUAL), semi tests depth
+// without writing — so a semi prim is rejected wherever a LATER-submitted opaque prim already drew
+// (e.g. background water correctly hidden behind foreground terrain), and still blends where it is in
+// front. gpu_vk_set_order(idx) is called per prim from the gp0 tee before each draw.
+static VkImage         s_depth;
+static VkDeviceMemory  s_depth_mem;
+static VkImageView     s_depth_view;
+static int             s_depth_undef = 1;
+static VkPipeline      s_tritex_semi_pipe;   // textured pipeline, depth-test GREATER_EQUAL, NO depth write
+static float           s_cur_ord;            // current prim's normalized depth (set by gpu_vk_set_order)
+void gpu_vk_set_order(unsigned idx) { s_cur_ord = (float)(idx + 1) / 65536.0f; if (s_cur_ord > 1.0f) s_cur_ord = 1.0f; }
+
 // M3 textured rasterizer: a VRAM snapshot image the texture sampler reads (avoids render/sample feedback
 // loop), its descriptor set, the textured pipeline, and a textured-vertex batch.
-typedef struct { float x, y, u, v, r, g, b; int32_t tp[4], clut[4], tw[4], da[4]; } TexVtx;  // 92 bytes
+typedef struct { float x, y, u, v, r, g, b; int32_t tp[4], clut[4], tw[4], da[4]; float ord; } TexVtx;  // 96 bytes
 #define TEX_CAP 196608
 static VkImage         s_vram_tex;    // texture-source snapshot (copy of VRAM before a draw batch)
 static VkDeviceMemory  s_vram_tex_mem;
@@ -573,9 +588,23 @@ void gpu_vk_present(const uint16_t* src, int sx, int sy, int w, int h) {
     img_barrier(VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                 VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
                 VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
+    if (s_depth_undef) {   // first use: UNDEFINED -> DEPTH_STENCIL_ATTACHMENT_OPTIMAL (stays there)
+      VkImageMemoryBarrier b = { VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
+      b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED; b.newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+      b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED; b.image = s_depth;
+      b.subresourceRange = (VkImageSubresourceRange){ VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1 };
+      b.dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT;
+      vkCmdPipelineBarrier(s_cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
+                           0, 0, 0, 0, 0, 1, &b);
+      s_depth_undef = 0;
+    }
     // OPAQUE pass
     vkCmdBeginRenderPass(s_cmd, &grp, VK_SUBPASS_CONTENTS_INLINE);
     vkCmdSetViewport(s_cmd, 0, 1, &gv); vkCmdSetScissor(s_cmd, 0, 1, &gs);
+    // Clear the depth (OT-order) buffer each frame; the render pass LOADs it so opaque->semi share it.
+    { VkClearAttachment dca = { VK_IMAGE_ASPECT_DEPTH_BIT, 0, {{{0}}} }; dca.clearValue.depthStencil.depth = 0.0f;
+      VkClearRect dcr = { { { 0, 0 }, { VRAM_W, IMG_H } }, 0, 1 };
+      vkCmdClearAttachments(s_cmd, 1, &dca, 1, &dcr); }
     if (s_wide) {   // clear the scratch FB (the game's clear/fill targets VRAM, not the FB) before drawing
       VkClearAttachment ca = { VK_IMAGE_ASPECT_COLOR_BIT, 0, {{{0,0,0,1}}} };
       VkClearRect cr = { { { 0, FB_Y0 }, { (uint32_t)FBW(), (uint32_t)FBH() } }, 0, 1 };
@@ -607,7 +636,7 @@ void gpu_vk_present(const uint16_t* src, int sx, int sy, int w, int h) {
       vkCmdBeginRenderPass(s_cmd, &grp, VK_SUBPASS_CONTENTS_INLINE);
       vkCmdSetViewport(s_cmd, 0, 1, &gv); vkCmdSetScissor(s_cmd, 0, 1, &gs);
       vkCmdBindDescriptorSets(s_cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, s_pll, 0, 1, &s_dset_tex, 0, 0);
-      vkCmdBindPipeline(s_cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, s_tritex_pipe);
+      vkCmdBindPipeline(s_cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, s_tritex_semi_pipe);   // depth-test, NO write
       vkCmdBindVertexBuffers(s_cmd, 0, 1, &s_semibuf, &go); vkCmdDraw(s_cmd, s_semi_n, 1, 0, 0);
       vkCmdEndRenderPass(s_cmd);
     }
@@ -676,22 +705,50 @@ static void make_hostbuf(VkDeviceSize sz, VkBufferUsageFlags use, VkBuffer* buf,
 }
 
 void create_tri_pipeline(void) {
+  // Depth image (D32) for OT-order depth: same extent as the VRAM image. DEPTH_STENCIL attachment +
+  // TRANSFER_DST (so it can be cleared via the render pass). Persists across the opaque->semi passes.
+  { VkImageCreateInfo di = { VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO };
+    di.imageType = VK_IMAGE_TYPE_2D; di.format = VK_FORMAT_D32_SFLOAT;
+    di.extent = (VkExtent3D){ VRAM_W, IMG_H, 1 }; di.mipLevels = 1; di.arrayLayers = 1;
+    di.samples = VK_SAMPLE_COUNT_1_BIT; di.tiling = VK_IMAGE_TILING_OPTIMAL;
+    di.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+    di.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    VKC(vkCreateImage(s_dev, &di, 0, &s_depth));
+    VkMemoryRequirements dr; vkGetImageMemoryRequirements(s_dev, s_depth, &dr);
+    VkMemoryAllocateInfo dm = { VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO };
+    dm.allocationSize = dr.size; dm.memoryTypeIndex = mem_type(dr.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    VKC(vkAllocateMemory(s_dev, &dm, 0, &s_depth_mem));
+    VKC(vkBindImageMemory(s_dev, s_depth, s_depth_mem, 0));
+    VkImageViewCreateInfo dv = { VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO };
+    dv.image = s_depth; dv.viewType = VK_IMAGE_VIEW_TYPE_2D; dv.format = VK_FORMAT_D32_SFLOAT;
+    dv.subresourceRange = (VkImageSubresourceRange){ VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1 };
+    VKC(vkCreateImageView(s_dev, &dv, 0, &s_depth_view)); }
+
   // render pass over the VRAM image: LOAD existing contents, draw, store; stays COLOR_ATTACHMENT layout.
-  VkAttachmentDescription at = {0};
-  at.format = VK_FORMAT_R16_UINT; at.samples = VK_SAMPLE_COUNT_1_BIT;
-  at.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD; at.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-  at.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE; at.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-  at.initialLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-  at.finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+  // Depth attachment LOADs too (it is explicitly cleared at the start of the opaque pass via
+  // vkCmdClearAttachments, so the opaque->semi passes share one persistent depth buffer).
+  VkAttachmentDescription at[2] = {{0},{0}};
+  at[0].format = VK_FORMAT_R16_UINT; at[0].samples = VK_SAMPLE_COUNT_1_BIT;
+  at[0].loadOp = VK_ATTACHMENT_LOAD_OP_LOAD; at[0].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+  at[0].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE; at[0].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+  at[0].initialLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+  at[0].finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+  at[1].format = VK_FORMAT_D32_SFLOAT; at[1].samples = VK_SAMPLE_COUNT_1_BIT;
+  at[1].loadOp = VK_ATTACHMENT_LOAD_OP_LOAD; at[1].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+  at[1].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE; at[1].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+  at[1].initialLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+  at[1].finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
   VkAttachmentReference ar = { 0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL };
+  VkAttachmentReference dr = { 1, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL };
   VkSubpassDescription sp = {0}; sp.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-  sp.colorAttachmentCount = 1; sp.pColorAttachments = &ar;
+  sp.colorAttachmentCount = 1; sp.pColorAttachments = &ar; sp.pDepthStencilAttachment = &dr;
   VkRenderPassCreateInfo rpi = { VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO };
-  rpi.attachmentCount = 1; rpi.pAttachments = &at; rpi.subpassCount = 1; rpi.pSubpasses = &sp;
+  rpi.attachmentCount = 2; rpi.pAttachments = at; rpi.subpassCount = 1; rpi.pSubpasses = &sp;
   VKC(vkCreateRenderPass(s_dev, &rpi, 0, &s_vram_rpass));
 
+  VkImageView fbviews[2] = { s_tex_view, s_depth_view };
   VkFramebufferCreateInfo fi = { VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO };
-  fi.renderPass = s_vram_rpass; fi.attachmentCount = 1; fi.pAttachments = &s_tex_view;
+  fi.renderPass = s_vram_rpass; fi.attachmentCount = 2; fi.pAttachments = fbviews;
   fi.width = VRAM_W; fi.height = IMG_H; fi.layers = 1;
   VKC(vkCreateFramebuffer(s_dev, &fi, 0, &s_vram_fb));
 
@@ -702,13 +759,14 @@ void create_tri_pipeline(void) {
     { VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, 0, 0, VK_SHADER_STAGE_FRAGMENT_BIT, fs, "main", 0 },
   };
   VkVertexInputBindingDescription vbd = { 0, sizeof(TriVtx), VK_VERTEX_INPUT_RATE_VERTEX };
-  VkVertexInputAttributeDescription vad[2] = {
+  VkVertexInputAttributeDescription vad[3] = {
     { 0, 0, VK_FORMAT_R32G32_SFLOAT, 0 },            // pos (VRAM coords)
     { 1, 0, VK_FORMAT_R32G32B32_SFLOAT, 8 },         // rgb 0..1
+    { 2, 0, VK_FORMAT_R32_SFLOAT, 20 },              // ord (OT submission order -> depth)
   };
   VkPipelineVertexInputStateCreateInfo vi = { VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO };
   vi.vertexBindingDescriptionCount = 1; vi.pVertexBindingDescriptions = &vbd;
-  vi.vertexAttributeDescriptionCount = 2; vi.pVertexAttributeDescriptions = vad;
+  vi.vertexAttributeDescriptionCount = 3; vi.pVertexAttributeDescriptions = vad;
   VkPipelineInputAssemblyStateCreateInfo ia = { VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO };
   ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
   VkPipelineViewportStateCreateInfo vp = { VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO };
@@ -723,10 +781,17 @@ void create_tri_pipeline(void) {
   VkDynamicState dyn[2] = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
   VkPipelineDynamicStateCreateInfo ds = { VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO };
   ds.dynamicStateCount = 2; ds.pDynamicStates = dyn;
+  // Depth state: OT order is the depth. Opaque writes depth, compare GREATER_OR_EQUAL (later prim =
+  // greater ord wins, matching painter's order). The semi variant tests the same way but does NOT
+  // write, so semi is rejected behind later opaque yet never occludes anything itself.
+  VkPipelineDepthStencilStateCreateInfo dpo = { VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO };
+  dpo.depthTestEnable = VK_TRUE; dpo.depthWriteEnable = VK_TRUE; dpo.depthCompareOp = VK_COMPARE_OP_GREATER_OR_EQUAL;
+  VkPipelineDepthStencilStateCreateInfo dps = dpo; dps.depthWriteEnable = VK_FALSE;  // semi: test, no write
   VkGraphicsPipelineCreateInfo gp = { VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO };
   gp.stageCount = 2; gp.pStages = st; gp.pVertexInputState = &vi; gp.pInputAssemblyState = &ia;
   gp.pViewportState = &vp; gp.pRasterizationState = &rs; gp.pMultisampleState = &ms;
-  gp.pColorBlendState = &cb; gp.pDynamicState = &ds; gp.layout = s_pll; gp.renderPass = s_vram_rpass;
+  gp.pColorBlendState = &cb; gp.pDynamicState = &ds; gp.pDepthStencilState = &dpo;
+  gp.layout = s_pll; gp.renderPass = s_vram_rpass;
   VKC(vkCreateGraphicsPipelines(s_dev, VK_NULL_HANDLE, 1, &gp, 0, &s_tri_pipe));
   vkDestroyShaderModule(s_dev, vs, 0); vkDestroyShaderModule(s_dev, fs, 0);
 
@@ -741,7 +806,7 @@ void create_tri_pipeline(void) {
     { VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, 0, 0, VK_SHADER_STAGE_FRAGMENT_BIT, tfs, "main", 0 },
   };
   VkVertexInputBindingDescription tvbd = { 0, sizeof(TexVtx), VK_VERTEX_INPUT_RATE_VERTEX };
-  VkVertexInputAttributeDescription tvad[7] = {
+  VkVertexInputAttributeDescription tvad[8] = {
     { 0, 0, VK_FORMAT_R32G32_SFLOAT,       0 },   // pos
     { 1, 0, VK_FORMAT_R32G32_SFLOAT,       8 },   // uv
     { 2, 0, VK_FORMAT_R32G32B32_SFLOAT,    16 },  // col
@@ -749,12 +814,16 @@ void create_tri_pipeline(void) {
     { 4, 0, VK_FORMAT_R32G32B32A32_SINT,   44 },  // clut (clutx,cluty,-,-)
     { 5, 0, VK_FORMAT_R32G32B32A32_SINT,   60 },  // tw (mask_x,mask_y,off_x,off_y)
     { 6, 0, VK_FORMAT_R32G32B32A32_SINT,   76 },  // da (x0,y0,x1,y1)
+    { 7, 0, VK_FORMAT_R32_SFLOAT,          92 },  // ord (OT submission order -> depth)
   };
   VkPipelineVertexInputStateCreateInfo tvi = { VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO };
   tvi.vertexBindingDescriptionCount = 1; tvi.pVertexBindingDescriptions = &tvbd;
-  tvi.vertexAttributeDescriptionCount = 7; tvi.pVertexAttributeDescriptions = tvad;
+  tvi.vertexAttributeDescriptionCount = 8; tvi.pVertexAttributeDescriptions = tvad;
   gp.pStages = tst; gp.pVertexInputState = &tvi;   // reuse ia/vp/rs/ms/cb/ds/layout/renderPass from above
+  gp.pDepthStencilState = &dpo;                     // opaque-textured: depth test + write
   VKC(vkCreateGraphicsPipelines(s_dev, VK_NULL_HANDLE, 1, &gp, 0, &s_tritex_pipe));
+  gp.pDepthStencilState = &dps;                     // semi-textured: depth test, NO write
+  VKC(vkCreateGraphicsPipelines(s_dev, VK_NULL_HANDLE, 1, &gp, 0, &s_tritex_semi_pipe));
   vkDestroyShaderModule(s_dev, tvs, 0); vkDestroyShaderModule(s_dev, tfs, 0);
   make_hostbuf(sizeof(TexVtx) * TEX_CAP, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, &s_tvbuf, &s_tvbuf_mem, &s_tvbuf_ptr);
   make_hostbuf(sizeof(TexVtx) * TEX_CAP, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, &s_semibuf, &s_semibuf_mem, &s_semibuf_ptr);
@@ -765,9 +834,9 @@ void gpu_vk_draw_tri(int x0,int y0,int r0,int g0,int b0, int x1,int y1,int r1,in
                      int x2,int y2,int r2,int g2,int b2) {
   if (!s_inited || s_tri_n + 3 > TRI_CAP) return;
   TriVtx* v = (TriVtx*)s_vbuf_ptr + s_tri_n;
-  v[0] = (TriVtx){ x0, y0, r0/255.f, g0/255.f, b0/255.f };
-  v[1] = (TriVtx){ x1, y1, r1/255.f, g1/255.f, b1/255.f };
-  v[2] = (TriVtx){ x2, y2, r2/255.f, g2/255.f, b2/255.f };
+  v[0] = (TriVtx){ x0, y0, r0/255.f, g0/255.f, b0/255.f, s_cur_ord };
+  v[1] = (TriVtx){ x1, y1, r1/255.f, g1/255.f, b1/255.f, s_cur_ord };
+  v[2] = (TriVtx){ x2, y2, r2/255.f, g2/255.f, b2/255.f, s_cur_ord };
   s_tri_n += 3;
 }
 
@@ -784,6 +853,7 @@ static void tex_emit(TexVtx* t, const int* xs, const int* ys, const int* us, con
     t[i].clut[0] = clutx; t[i].clut[1] = cluty; t[i].clut[2] = semi; t[i].clut[3] = blend;
     t[i].tw[0] = twmx; t[i].tw[1] = twmy; t[i].tw[2] = twox; t[i].tw[3] = twoy;
     t[i].da[0] = dax0; t[i].da[1] = day0; t[i].da[2] = dax1; t[i].da[3] = day1;
+    t[i].ord = s_cur_ord;
   }
 }
 void gpu_vk_draw_tritri(const int* xs, const int* ys, const int* us, const int* vs,
@@ -932,7 +1002,8 @@ static void tri_over_bg_readback(const uint16_t* bg, uint16_t* out) {
 }
 
 // Read back the live VK-rendered VRAM (display/FB region) and write it to `path` as a PPM.
-static void vk_dump_to(const char* path, int sx, int sy, int w, int h) {
+// Read the full VK VRAM image (s_tex) back into the host buffer s_rb_ptr (uint16, VRAM_W x IMG_H).
+static void vk_readback_to_rb(void) {
   VKC(vkWaitForFences(s_dev, 1, &s_fence, VK_TRUE, UINT64_MAX)); VKC(vkResetFences(s_dev, 1, &s_fence));
   VKC(vkResetCommandBuffer(s_cmd, 0));
   VkCommandBufferBeginInfo bi = { VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO };
@@ -949,6 +1020,9 @@ static void vk_dump_to(const char* path, int sx, int sy, int w, int h) {
   VKC(vkEndCommandBuffer(s_cmd));
   VkSubmitInfo su = { VK_STRUCTURE_TYPE_SUBMIT_INFO }; su.commandBufferCount = 1; su.pCommandBuffers = &s_cmd;
   VKC(vkQueueSubmit(s_queue, 1, &su, s_fence)); VKC(vkWaitForFences(s_dev, 1, &s_fence, VK_TRUE, UINT64_MAX));
+}
+static void vk_dump_to(const char* path, int sx, int sy, int w, int h) {
+  vk_readback_to_rb();
   const uint16_t* vram = (const uint16_t*)s_rb_ptr;
   FILE* f = fopen(path, "wb"); if (!f) return;
   fprintf(f, "P6\n%d %d\n255\n", w, h);
@@ -956,6 +1030,21 @@ static void vk_dump_to(const char* path, int sx, int sy, int w, int h) {
     unsigned char c[3] = { (unsigned char)((p&31)<<3), (unsigned char)(((p>>5)&31)<<3), (unsigned char)(((p>>10)&31)<<3) };
     fwrite(c, 1, 3, f); }
   fclose(f);
+}
+// Dump the full VK VRAM as RAW uint16 (VRAM_W x VRAM_H, no header) — the same format replay_ours
+// writes and tools/gpu_differ/diff.py reads. Lets the SW-vs-VK hook diff the VK render against a SW
+// replay of the identical GP0 stream. Armed for a target frame so it lands on the captured frame.
+static int  s_rawdump_frame = -1;
+static char s_rawdump_path[512];
+void gpu_vk_rawdump_arm(const char* path, int frame) {
+  snprintf(s_rawdump_path, sizeof s_rawdump_path, "%s", path); s_rawdump_frame = frame;
+}
+static void vk_rawdump_now(const char* path) {
+  vk_readback_to_rb();
+  FILE* f = fopen(path, "wb"); if (!f) { fprintf(stderr, "[vk_raw] cannot open %s\n", path); return; }
+  fwrite(s_rb_ptr, 2, (size_t)VRAM_W * VRAM_H, f);   // first VRAM_H rows = PSX VRAM (matches diff.py)
+  fclose(f);
+  fprintf(stderr, "[vk_raw] wrote %s (%dx%d raw u16)\n", path, VRAM_W, VRAM_H);
 }
 // On-demand VK readback for the live debug server (dbg_server.c `vkshot`): dump the last-presented
 // VK-rendered region to `path` as a PPM — i.e. exactly what VK put on screen this frame.
@@ -987,6 +1076,7 @@ void gpu_vk_dump(int sx, int sy, int w, int h, int frame) {
     fprintf(stderr, "[vk_shot] f%d wrote scratch/screenshots/vk_live.ppm\n", frame); }
   if (qa >= 0 && frame >= qa && frame <= qb && ((frame - qa) % qstep) == 0) {
     char p[320]; snprintf(p, sizeof p, "%s/vk_%05d.ppm", qdir, frame); vk_dump_to(p, dsx, dsy, dw, dh); }
+  if (s_rawdump_frame >= 0 && frame == s_rawdump_frame) { vk_rawdump_now(s_rawdump_path); s_rawdump_frame = -1; }
 }
 
 // Per-frame: PSXPORT_VK_DIFF=frame -> diff this frame's tee'd untextured tris (VK) vs SW VRAM. Always
@@ -1055,6 +1145,8 @@ void gpu_vk_tritest(void) {}
 void gpu_vk_frame_end(const uint16_t* svram, int frame) { (void)svram; (void)frame; }
 void gpu_vk_dump(int sx, int sy, int w, int h, int frame) { (void)sx;(void)sy;(void)w;(void)h;(void)frame; }
 void gpu_vk_shot(const char* path) { (void)path; }
+void gpu_vk_set_order(unsigned idx) { (void)idx; }
+void gpu_vk_rawdump_arm(const char* path, int frame) { (void)path;(void)frame; }
 void gpu_vk_vram_region(const char* path, int x, int y, int w, int h) { (void)path;(void)x;(void)y;(void)w;(void)h; }
 void gpu_vk_stats(int* tri, int* tex, int* semi) { if(tri)*tri=0; if(tex)*tex=0; if(semi)*semi=0; }
 void gpu_vk_dirty(int x, int y, int w, int h) { (void)x;(void)y;(void)w;(void)h; }

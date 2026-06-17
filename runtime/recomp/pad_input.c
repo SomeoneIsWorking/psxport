@@ -91,6 +91,15 @@ void pad_poll_sdl(void) {
     if (KEYDOWN(SDL_SCANCODE_E))     mask &= ~0x0800u; // R1
     if (KEYDOWN(SDL_SCANCODE_1))     mask &= ~0x0100u; // L2
     if (KEYDOWN(SDL_SCANCODE_3))     mask &= ~0x0200u; // R2
+    // Debug pause / frame-step keys (edge-detected so one keypress = one action). P toggles
+    // pause/play; '.' (period) freezes and advances exactly one frame. Handled here because
+    // pad_poll_sdl runs every frame in BOTH the running loop and the paused wait. (dbg_server.c)
+    { void dbg_toggle_pause(void); void dbg_add_step(int);
+      static int prev_p = 0, prev_step = 0;
+      int p = KEYDOWN(SDL_SCANCODE_P), st = KEYDOWN(SDL_SCANCODE_PERIOD);
+      if (p && !prev_p)   dbg_toggle_pause();
+      if (st && !prev_step) dbg_add_step(1);
+      prev_p = p; prev_step = st; }
     #undef KEYDOWN
   }
 
