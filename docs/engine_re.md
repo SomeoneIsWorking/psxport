@@ -261,6 +261,21 @@ This is the port ACCOUNTING for every draw instead of blind GP0 rasterization. F
   - **Tooling for this (committed):** PSXPORT_AUTO_NEWGAME=2 boots straight to the prologue and auto-
     pauses; debug-server `pause`/`step`/`play` (also keyboard P / '.'), `vkshot`/`vkvram` (reliable while
     paused — the loop re-presents each tick), `swvkcap` + tools/swvk_diff.py + tools/perceptual.py.
+  - **later: PINNED the symptom precisely (it is DETERMINISTIC on the first pass through the prologue
+    fade, NOT a race — the earlier "intermittent" reading was stepping a stale frame range).** At the
+    flash the display origin is (0,256) and **framebuffer (0,256) holds the cutscene scene at FULL
+    brightness (mean ~57)** while framebuffer (0,0) holds the dim fade (~3); the next frame the display
+    origin flips to (0,0) (dim). So the two double-buffers diverge wildly DURING the fade — one carries a
+    full-bright render of the scene (looks like the post-fade image: "Tomba is living peacefully…"), the
+    other the early-fade dim render. Confirmed `disp=(x,y)` via the debug-server `frame` command + per-
+    buffer `vkvram`. The user confirms the SW renderer fades smoothly, so this is **VK-specific: one
+    double-buffer retains / receives a full-bright render of the scene that isn't re-dimmed in lockstep
+    with the other.** RULED OUT (tested, no effect on the flash): the prims>0 flip hack; moving the
+    present after DrawOTag (1-frame batch offset); a synchronous present (vertex-buffer reuse race).
+    NEXT (decisive, not yet done): drive the SW renderer (PSXPORT_SW_GPU=1) to the same prologue frame
+    and read framebuffer (0,256) — if SW has it dim there, the bug is VK redrawing/retaining that buffer
+    full-bright (likely the persistent s_tex + how the cutscene's per-buffer redraw maps to VK's
+    upload/tee path); compare the two renderers' per-buffer brightness across the fade.
 
 ## Open RE items (next, in order)
 1. ~~The entity list + its walk~~ — **DONE** (above): lists `DAT_800fb168`/`DAT_800f2624`, walk

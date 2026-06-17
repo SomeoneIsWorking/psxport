@@ -188,7 +188,8 @@ static void dbg_exec(FILE* out, const char* line) {
     a = 0; sscanf(line, "%*s %u", &a); if (!a) a = 1;
     s_paused = 1; s_step += (int)a; fprintf(out, "step +%u (frame %d)\n", a, gpu_frame_no());
   } else if (!strcmp(cmd, "frame")) {
-    fprintf(out, "frame=%d paused=%d\n", gpu_frame_no(), s_paused);
+    extern int s_disp_x, s_disp_y;   // current display origin (gpu_native) — which VRAM region shows
+    fprintf(out, "frame=%d paused=%d disp=(%d,%d)\n", gpu_frame_no(), s_paused, s_disp_x, s_disp_y);
   } else {
     fprintf(out, "? %s  (try 'help')\n", line);
   }
