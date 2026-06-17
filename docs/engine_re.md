@@ -276,6 +276,17 @@ This is the port ACCOUNTING for every draw instead of blind GP0 rasterization. F
     and read framebuffer (0,256) — if SW has it dim there, the bug is VK redrawing/retaining that buffer
     full-bright (likely the persistent s_tex + how the cutscene's per-buffer redraw maps to VK's
     upload/tee path); compare the two renderers' per-buffer brightness across the fade.
+  - **later2: SW renderer CONFIRMED smooth (PSXPORT_SW_GPU=1, same drive): no brightness spike, ramp
+    0→62; VK spikes to ~57 at the same frame. So definitively VK-specific.** Causes RULED OUT by A/B
+    (flash unchanged): flip hack; present-after-DrawOTag (no 1-frame batch offset); synchronous present
+    (vertex-buffer reuse race); the OT-order DEPTH ordering (PSXPORT_VK_NODEPTH=1 — flash persists).
+    Remaining mechanism: VK's persistent s_tex framebuffer (0,256) carries a FULL-BRIGHT render of the
+    cutscene scene during the dim early fade, while SW's (0,256) is dim — i.e. VK populates/retains that
+    buffer differently from SW for the same GP0 (the geometry is tee'd to VK and rendered into s_tex; the
+    background/clear is uploaded from s_vram). NEXT: at the flash frame, dump SW s_vram (0,256) AND VK
+    s_tex (0,256) for the SAME captured GP0 (extend swvkcap to also raw-dump s_vram) and diff which
+    primitives/region differ; check whether the cutscene actually redraws (0,256) every frame or leaves
+    it stale (then VK retains the old full-bright render where SW's last redraw was dim).
 
 ## Open RE items (next, in order)
 1. ~~The entity list + its walk~~ — **DONE** (above): lists `DAT_800fb168`/`DAT_800f2624`, walk

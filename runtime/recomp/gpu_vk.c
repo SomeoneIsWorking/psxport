@@ -787,6 +787,7 @@ void create_tri_pipeline(void) {
   VkPipelineDepthStencilStateCreateInfo dpo = { VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO };
   dpo.depthTestEnable = VK_TRUE; dpo.depthWriteEnable = VK_TRUE; dpo.depthCompareOp = VK_COMPARE_OP_GREATER_OR_EQUAL;
   VkPipelineDepthStencilStateCreateInfo dps = dpo; dps.depthWriteEnable = VK_FALSE;  // semi: test, no write
+  if (getenv("PSXPORT_VK_NODEPTH")) { dpo.depthTestEnable = VK_FALSE; dps.depthTestEnable = VK_FALSE; }  // A/B
   VkGraphicsPipelineCreateInfo gp = { VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO };
   gp.stageCount = 2; gp.pStages = st; gp.pVertexInputState = &vi; gp.pInputAssemblyState = &ia;
   gp.pViewportState = &vp; gp.pRasterizationState = &rs; gp.pMultisampleState = &ms;
