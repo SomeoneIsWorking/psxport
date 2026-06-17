@@ -393,15 +393,19 @@ static void ov_game_main(R3000* c) {
       if (ang == 1) {
         if (mem_r32(0x801fe00c) != 0x8010637Cu) {
           if ((f % 12u) == 0) pad_repl_tap((uint16_t)(0xFFFF & ~0x4000), 6);   // tap Cross
-        } else { fprintf(stderr, "[autonewgame] reached GAME (prologue) at frame %u\n", f); ang = 2; }
+        } else { void dbg_set_paused(int); fprintf(stderr, "[autonewgame] reached GAME (prologue) at frame %u — auto-paused\n", f);
+                 ang = 2; if (getenv("PSXPORT_AUTO_NEWGAME") && atoi(getenv("PSXPORT_AUTO_NEWGAME")) >= 2) dbg_set_paused(1); }
       } }
     // PSXPORT_DEBUG_SERVER pause/step: when frozen, do NOT advance the game — just pump host input
     // (keeps the window alive) and service debug commands so `step`/`play` can arrive. A `step` runs
     // exactly one real frame then re-freezes, so transient bad frames can be inspected one at a time.
-    { int dbg_is_paused(void), dbg_step_pending(void); void dbg_consume_step(void);
+    { int dbg_is_paused(void), dbg_step_pending(void); void dbg_consume_step(void); void gpu_repaint(void);
       while (dbg_is_paused()) {
         if (dbg_step_pending()) { dbg_consume_step(); break; }   // run exactly one frame
-        pad_service_frame(); dbg_server_service(); usleep(15000);
+        pad_service_frame();      // pump host input (keeps the window responsive)
+        gpu_repaint();            // re-present current frame: window stays live + readback is accurate
+        dbg_server_service();     // receive step/play/capture commands
+        usleep(15000);
       } }
     pad_service_frame();                                     // host input -> game pad buffer (pre-read)
     xa_audio_trace("pre");                                   // CD-vol fade state BEFORE tick+mix
@@ -418,16 +422,11 @@ static void ov_game_main(R3000* c) {
       rc1(c, 0x8008179c, envp + 0x2000);                    // PutDispEnv  (env+0x2000)
       rc1(c, 0x800815d0, envp + 0x2014);                    // PutDrawEnv  (env+0x2014)
       rc1(c, 0x80081560, envp + 0x1ffc);                    // DrawOTag (submit the OT head)
-      // Flip the double buffer ONLY if this frame actually drew into the back buffer. During a
-      // multi-frame asset load (e.g. the menu loading after the FMVs) the game produces no draw
-      // prims for ~15 frames while it streams in a background image; flipping anyway alternates the
-      // display between the one buffer with content and the still-black other buffer = visible
-      // flicker. Holding the last completed front buffer until a real frame is drawn removes it
-      // (same "never present an undrawn buffer" rule as the SCEA blink fix, journal later-46/50).
-      // Steady gameplay/menus draw every frame (prims>0), so the flip is unaffected there.
-      int gpu_prims_since_present(void);
-      if (gpu_prims_since_present() > 0)
-        mem_w8(0x1f800135, 1 - mem_r8(0x1f800135));         // flip back/front buffer
+      // Swap the double buffer every frame, faithful to the game-main loop (LAB_80050c6c, the
+      // DAT_1f80019c==0 branch swaps unconditionally — DAT_1f800135 = 1 - DAT_1f800135). The game
+      // draws BOTH framebuffers' worth of content across its frames; the display/draw env pair
+      // selected by the parity is what governs what shows, so the swap must always track it.
+      mem_w8(0x1f800135, 1 - mem_r8(0x1f800135));           // flip back/front buffer
     }
     // PSXPORT_SEQDBG — libsnd sequencer STATE trace (from SsSeqCalled @0x80090BD0): is any BGM
     // sequence OPEN/PLAYING? 0x801054B0=open-seq count, 0x80104C28=playing bitmask, 0x800AC424=tick

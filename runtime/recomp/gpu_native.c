@@ -923,12 +923,17 @@ static void blit_src(const uint16_t* src, int sx, int sy) {
   }
 }
 static void present_window(void) { blit_src(s_vram, s_disp_x, s_disp_y); }   // the live front buffer
+// Re-present the CURRENT frame without advancing game logic — used by the debug-server pause loop so
+// the window stays live AND the VK readback reflects exactly what's on screen (vkshot reads the same
+// region this presents). No s_frame++ / batch reset (those belong to gpu_present_ex).
+void gpu_repaint(void) { present_window(); }
 // wide60: present the previous real frame straight from VRAM (read-only), and the interpolated frame
 // from the separate s_interp buffer. Both blit a display-sized region at the given VRAM origin.
 void gpu_w60_blit_vram(int dx, int dy)   { blit_src(s_vram,   dx, dy); }
 void gpu_w60_blit_interp(int dx, int dy) { blit_src(s_interp, dx, dy); }
 #else
 static void present_window(void) {}
+void gpu_repaint(void) {}
 void gpu_w60_blit_vram(int dx, int dy)   { (void)dx; (void)dy; }
 void gpu_w60_blit_interp(int dx, int dy) { (void)dx; (void)dy; }
 #endif
