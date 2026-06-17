@@ -298,12 +298,37 @@ void proj_probe_dump(const char* tag) {
   s_pp_maxd_ir = s_pp_maxd_sz = s_pp_maxd_sx = s_pp_maxd_sy = 0;
 }
 
-void     gte_op(R3000* c, uint32_t insn)         { (void)c; GTE_Instruction(insn);
+// PSXPORT_RTPCALLER: histogram the return address (RA=r[31]) at each RTPS/RTPT — pins the submit/handler
+// call sites that build POLY packets from the projection, the targets for attach-at-submission.
+static struct { uint32_t ra; long n; } s_rtpcaller[64];
+static int s_rtpcaller_on = -1;
+static void rtpcaller_record(uint32_t ra) {
+  if (s_rtpcaller_on < 0) s_rtpcaller_on = getenv("PSXPORT_RTPCALLER") ? 1 : 0;
+  if (!s_rtpcaller_on) return;
+  for (int i = 0; i < 64; i++) { if (s_rtpcaller[i].n == 0) { s_rtpcaller[i].ra = ra; s_rtpcaller[i].n = 1; return; }
+                                 if (s_rtpcaller[i].ra == ra) { s_rtpcaller[i].n++; return; } }
+}
+void rtpcaller_dump(const char* tag) {
+  if (s_rtpcaller_on != 1) return;
+  uint32_t mem_r32(uint32_t);
+  fprintf(stderr, "[rtpcaller %s] RA histogram (caller return site -> jal target = projection fn):\n", tag);
+  for (int i = 0; i < 64 && s_rtpcaller[i].n; i++) {
+    // the jal that set RA is at RA-8 (RA = jal_addr + 8, MIPS branch-delay). Decode its target.
+    uint32_t jal = mem_r32(s_rtpcaller[i].ra - 8);
+    uint32_t tgt = ((jal >> 26) == 3) ? (((s_rtpcaller[i].ra - 8) & 0xF0000000u) | ((jal & 0x03FFFFFFu) << 2))
+                                      : 0;  // 0 = not a jal (jalr / inlined)
+    fprintf(stderr, "    RA=0x%08X  %8ld   jal[%08X]->fn=0x%08X\n",
+            s_rtpcaller[i].ra, s_rtpcaller[i].n, jal, tgt);
+  }
+}
+
+void     gte_op(R3000* c, uint32_t insn)         { GTE_Instruction(insn);
                                                    unsigned op = insn & 0x3F;
                                                    if (s_gteprobe < 0) { const char* e = getenv("PSXPORT_GTEPROBE"); s_gteprobe = e ? atoi(e) : 0; }
                                                    if (s_gteprobe > 0) s_gte_hist[op]++;
                                                    if (op == 0x01 || op == 0x30) {
                                                      ws_sx_record();          // self-gated (PSXPORT_WS_SXHIST)
+                                                     rtpcaller_record(c->r[31]);   // self-gated (PSXPORT_RTPCALLER)
                                                      if (g_wide60_on) wide60_rtp(op);
                                                      if (s_projprobe < 0) { s_projprobe = getenv("PSXPORT_PROJPROBE") ? 1 : 0;
                                                                             if (s_projprobe && !s_divtab_init) proj_divtab_init(); }

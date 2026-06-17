@@ -212,9 +212,26 @@ libgpu (all via the 0x800A5998 table; names from debug strings): `FUN_80080f6c`=
   cross-checks). **Gotcha (RE'd here):** Beetle's XY_FIFO push writes the new vertex into BOTH slots 2 & 3
   (`XY_FIFO(2)=XY_FIFO(3)` runs after `(3)=new`), so after an RTPT the 3 verts read back at DR12/DR13/DR14
   (DR15==DR14), NOT DR13-15; the Z_FIFO shifts cleanly so its verts are at DR17/18/19. This replaces the
-  value-keyed PGXP-lite cache as the depth/subpixel source. NEXT (Phase 1 cont.): attach this float prim
-  AT SUBMISSION (own the submit wrappers `FUN_8007778c`… so the renderer gets float depth per prim without
-  the screen-coord lookup), then Phase 2 = PC-native render targets + real depth from this view-space Z.
+  value-keyed PGXP-lite cache as the depth/subpixel source.
+- **Projection+submit call sites pinned** (later-100b, probe `PSXPORT_RTPCALLER` = RA histogram at each RTP
+  + jal-target decode). The RTP-containing project-and-submit functions, by call frequency at the field:
+  `0x80109C80` (4689, overlay) and `0x801099B4` (2025, overlay) DOMINATE; resident `0x8007FDB0` (1504, the
+  triangle fn) + `0x8008007C` (880, the quad fn — projects the 4th vertex via RTPS, then the triangle via
+  RTPT, so execution order ≠ packet order); `0x80027768` (16). So there are 5+ distinct projection routines
+  and the two dominant ones live in **runtime-loaded overlay code (not statically disassemblable)** → owning
+  each function's packet layout is impractical. BUT all of them write the projected SXY into the **shared
+  primitive pool via the global `DAT_800bf544`** (decomp `FUN_8007fdb0`/`FUN_8008007c`: `DAT_800bf544[2/5/8]
+  = getCopReg(2,0xc/0xd/0xe)` = XY_FIFO, then OT-link `*DAT_800bf544 = old|0x9000000` and advance). That base
+  IS the OT node, i.e. == `s_cur_node` (masked) when DrawOTag later decodes the packet (gpu_native.c:1220).
+  **DESIGN for attach-at-submission (function-agnostic, no layout/RE of the overlay fns needed):** at the
+  `gte_op` RTP chokepoint read `P = mem_r32(0x800bf544)` (the packet being built; stable across a packet's
+  multiple RTPs, advances when the packet is committed) and append the projected vertex's (int sx,sy + float
+  screen/viewpos/depth) to a per-frame list keyed by `P & 0x1FFFFC`. In `gp0_exec` poly decode, for the
+  packet at `s_cur_node`, match each packet vertex to its float by `(sx,sy)` among that packet's ≤4
+  candidates — globally collision-free (packet address) and intra-packet collision-free (only 3-4 verts),
+  handling the quad reorder and culled-prim pollution. Retires the value-keyed `pgxp_lookup` cache. Verify:
+  per-vertex hit rate ~100% for 3D polys (a miss = a 2D/screen-space prim, the free 2D/3D class), and
+  rendering 0-diff vs the current PGXP path. Then Phase 2 = PC-native render targets + real depth (view-Z).
 
 ### Native ownership plan (reimplement libgpu, keep recomp body as oracle via rec_set_override)
 1. Own **DrawOTag** (FUN_80080f6c): walk the ordering table in native C, decode each primitive packet by
