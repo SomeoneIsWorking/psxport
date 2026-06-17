@@ -3809,3 +3809,30 @@ reconstruction, then layer directional light + fog + AO. Built the foundation + 
   is a new PC-native feature Beetle lacks). OPEN/NEXT: SSAO (needs depth attachment + dedicated FB), world-
   space light (transform dir by the GTE rotation matrix CR0-4 so the sun is camera-stable), RGBA8 FB to lift
   the 5-bit banding, smooth (per-vertex) normals if flat shading looks too faceted.
+
+## 2026-06-17 (later-98) — DIRECTION RESET: no GP0-stream tricks; RE the engine, port it native.
+User rejected the renderer-side tricks I'd been adding (supersampling, PGXP value-keyed vertex smoothing,
+lighting read out of the emulated GTE): "I don't want super sampling or other tricks, I want you to reverse
+engineer and port the game engine to PC native so we can tweak those natively." Then: build tooling that
+runs BOTH cores side-by-side synced on a GAME STATE (attract/demo start), not frame numbers — but RE the
+game more FIRST. Memories: [[pc-native-not-emulator-hacks]] (updated), [[dual-core-state-synced-diff]] (new).
+- **De-tricked the defaults:** PSXPORT_SS=1 (native res), PSXPORT_PGXP=0 (the value-keyed smoothing was the
+  likely water-grid breaker). Trick code kept only as opt-in env flags pending the native port. (uncommitted)
+- **RE win — projection setup found (docs/engine_re.md):** `gen_func_800509B4` (0x800509B4) does InitGeom +
+  `SetGeomOffset(160,120)` + `SetGeomScreen(350)` → screen center (160,120), focal length H=350, 320×240.
+  This is the **native widescreen lever**: override to OFX=214 + widen draw-env/clip to 428, keep OFY/H →
+  the GTE projects a genuinely wider FOV, no squish, no renderer re-center. (Found by histogramming
+  gte_write_ctrl reg targets in generated/: OFX/OFY/H written at exactly 2 sites.)
+- **Water:** established (from the lighting normal-viz) that water is NOT GTE-projected — it's a separate
+  screen-space layer (terrain gets normals, water doesn't). The user reports it rendering wrong (green
+  smear). NOT yet root-caused. NEXT RE: provenance (`PSXPORT_PROVAT`) on a water pixel → owning node/handler
+  → read in decomp; compare vs oracle at a synced game state (dual-core harness).
+- **Dual-core harness BUILT (`tools/dualcore.py`):** runs port + oracle together, each on its own FIFO,
+  gates both to a guest-RAM **state latch** (not frame number). Found the right latch: **0x800BE258==2**
+  = scene/field active (port in-demo=2, oracle title=0); the stage word 0x801fe00c is too coarse
+  (0x801062E4 = attract = title AND demo both; 0x8010649C = START/logo). `sync`/`step`/`shot` (side-by-side
+  + diff heatmap). **Limitation found:** the latch catches the scene-LOAD edge (oracle shot can be black)
+  and the two cores' attract demos are NOT frame-locked — equal `step` drifts (port demo cycles back to
+  title while oracle still mid-scene). NEXT: a `loadram` port REPL cmd to load an identical 2MB guest-RAM
+  water-scene snapshot into BOTH cores (oracle `-loadstate`), so both rebuild the same frame from RAM →
+  drift-free render compare. THEN root-cause the water. (docs/diff-driver.md updated.)

@@ -83,7 +83,41 @@ manager's target (Phase 1):** reimplement the walk in native C, call each handle
 ## Camera
 - Position (u16): `_DAT_1f8000d2` (X), `_DAT_1f8000d6` (Y), `_DAT_1f8000da` (Z).
 - Forward vector (s16): `_DAT_1f8000e8/ea/ec` (used in the cull depth dot product).
-- Full basis (right/up) + projection consts (GTE OFX/OFY/H): TODO — read the GTE setup at frame start.
+- Full basis (right/up): per-object rotation matrix is loaded to GTE CR0-4 + translation CR5-7 right
+  before each RTPS/RTPT (96 / 54 static ctc2 sites) — the per-object transform, the Phase-3 native target.
+
+## Projection setup — `gen_func_800509B4` (0x800509B4) = the NATIVE WIDESCREEN lever (RESOLVED later-98)
+Found by histogramming `gte_write_ctrl(reg,…)` in `generated/`: OFX/OFY/H (CR24/25/26) are written at
+exactly 2 sites — libgte `InitGeom` defaults + this one real config. The engine's projection config:
+```
+gen_func_800509B4 (0x800509B4):
+  InitGeom (gen_func_80083FF8 / 0x80083FF8): ZSF3(cr29)=341, ZSF4(cr30)=256, H(cr26)=1000,
+      DQA(cr27)=-4194, DQB(cr28)=320<<16, OFX/OFY=0  (libgte reset; H+depth-cue overwritten next)
+  SetGeomOffset(160,120)  (gen_func_800846D0 / 0x800846D0): OFX(cr24)=160<<16, OFY(cr25)=120<<16
+  SetGeomScreen(350)      (gen_func_800846F0 / 0x800846F0): H(cr26)=350; also caches H=350 @0x801003F8
+```
+So the GTE projection is: **screen center (OFX,OFY)=(160,120), focal length H=350**, screen 320×240.
+Screen X = OFX + IR1·H/Sz, screen Y = OFY + IR2·H/Sz.
+- **NATIVE widescreen (no squish, no renderer trick):** override `gen_func_800509B4` to set **OFX=214**
+  (=428/2 for 16:9) and **widen the draw-environment + clip rect to 428** (keep OFY=120, H=350 → identical
+  vertical FOV and per-unit scale). The GTE then projects vertices across the wider screen → genuinely
+  wider horizontal FOV, computed by the engine's own projection. 2D HUD (drawn in screen space, bypasses
+  GTE) is repositioned separately. **TODO:** find the draw-environment / clip-rect (screen width) setup —
+  near the double-buffer/OT setup `FUN_80081458` / disp-env; needed to widen the clip to match OFX.
+- **Higher res (native, not supersampling):** our native renderer rasterizes the engine's submitted
+  geometry; render the FB at NxN of 320×240 (or 428×240) by scaling the rasterization viewport — the
+  geometry is the same engine output, just sampled denser. (Distinct from the rejected supersample-and-
+  downscale FB-cram trick.)
+
+## Water — drawn via a NON-GTE path (RE in progress, later-98)
+Observed during the lighting work (normal-viz): terrain/ground polys get a reconstructed per-face normal
+(they go through RTPS/RTPT), but the **water surface does NOT** — it renders as a flat unlit layer. So the
+water is **not GTE-projected 3D**; it's a separate screen-space / fixed-projection layer (likely a scrolling
+textured surface and/or a framebuffer-reflection effect). The user reports it rendering wrong (green smeared
+streaks instead of blue reflective water). **NEXT RE:** identify the water's draw — point the provenance
+tool (`PSXPORT_PROVAT="x,y"`, gpu_native.c) at a water pixel to get the prim op/texpage/CLUT + owning node
++ handler addr, then read that handler in the decomp. Compare to the oracle at the SAME game-state (dual-
+core harness, below), NOT by frame number.
 
 ## Lighting / shading model (RESOLVED — later-96, via GTE op histogram + control-reg snapshot)
 Tooling: `PSXPORT_GTEPROBE=<frame>` (gte_beetle.c) dumps the GTE ops that ACTUALLY execute + a
@@ -113,6 +147,58 @@ cross product of triangle edges. That unlocks PC-native directional/point lighti
 shading, SSAO, and a replacement per-pixel fog (read the scene FarColor from CR21-23 for the tint),
 all replacing/augmenting the baked color + GTE depth-cue. (Camera basis: see Camera section / CR24-31.)
 
+## Graphics pipeline — the REAL draw path (libgpu), the ownership target (later-99)
+Today the recompiled game runs **Sony libgpu** → writes GP0/GP1 → our GPU emulator (gpu_native/gpu_vk)
+just rasterizes the resulting byte stream. "Owning the graphics" = reimplementing the libgpu layer in
+native C (game calls into OUR DrawOTag/PutDrawEnv/primitive code), so every draw is understood, not
+black-boxed. The layer is small and standard (libgpu), dispatched via a jump-table at **0x800A5998**
+(the libgpu "GPU sys" struct; entries are fn-ptrs at +0x08 DMA-send, +0x14 DrawOTagEnv, +0x2c ClearOTagR,
++0x3c DrawOTag/DrawSync).
+
+**Per-frame loop** `FUN_80050b08` (0x80050b08):
+```
+parity = DAT_1f800135 (0/1);  drawbuf base = 0x800bfe68 + parity*0x14000 (DAT_800bf544)
+ctx = &DAT_800e80a8 + parity*0x81c              // per-buffer GPU context (DRAWENV+DISPENV+OT head)
+FUN_80081458(ctx, 0x800)   = ClearOTagR(OT, 2048 entries)   // reset ordering table
+FUN_800788ac()             = input + sub-tick
+FUN_80051e60()             = task scheduler -> BUILDS the OT (entity handlers AddPrim into it)
+FUN_80080f6c(0)            = DrawOTag(OT)        // DMA the built OT to the GPU
+wait DAT_800e809c >= DAT_1f800235               // vblank gate: 1 = 60fps, 2 = 30fps  (<-- 60fps lever)
+FUN_800506d0()
+swap: FUN_80081560(ctx+0x1ffc)=PutDrawEnv (draw-area CLIP+offset),
+      FUN_800815d0(ctx+0x2014)=PutDispEnv (display area),  flip parity
+```
+libgpu primitives (all via the 0x800A5998 table): `FUN_80080f6c`=DrawOTag, `FUN_80081458`=ClearOTagR,
+`FUN_800810f0`=ClearImage, `FUN_80081180`=ClearImage2 (GP0 fill bit 0x80000000), `FUN_80081218`=LoadImage
+(CPU→VRAM), `FUN_80081278`=StoreImage (VRAM→CPU), `FUN_800812d8`=MoveImage (VRAM→VRAM copy),
+`FUN_80081560`=PutDrawEnv, `FUN_800815d0`=PutDispEnv, `FUN_80081504`=DrawSync+DrawOTagEnv.
+- **60fps lever (native, real):** `DAT_1f800235` is the vblank-count target the loop waits for (1 vs 2).
+  Our native loop owns this wait → drive at 60 by gating on 1 and interpolating object transforms (the
+  entity-list snapshot, Phase-1). Not a renderer trick.
+- **Widescreen lever (native, real):** PutDrawEnv (ctx+0x1ffc, draw-area clip) + PutDispEnv (ctx+0x2014)
+  + the GTE OFX (FUN_800509B4). Widen all three → genuine wider FOV. (Supersede the rejected FB re-center.)
+- **MoveImage (FUN_800812d8) = VRAM→VRAM copy** — the likely water-reflection / fade-buffer mechanism;
+  prime suspect for the broken water (reflection copy) AND a place our GP0 emulator can drift. RE next.
+
+### Native ownership plan (reimplement libgpu, keep recomp body as oracle via rec_set_override)
+1. Own **DrawOTag** (FUN_80080f6c): walk the ordering table in native C, decode each primitive packet by
+   type (POLY_F/FT/G/GT, SPRT, TILE, LINE, the env/copy packets), submit to our renderer WITH semantics
+   (so we know "this is the fade tile", "this is water", "this is HUD"). The recomp libgpu stays callable
+   for A/B diff. This is the single highest-leverage step — it converts the GP0 black box into an
+   understood scene graph.
+2. Own **PutDrawEnv/PutDispEnv** + the GTE projection (FUN_800509B4) → native widescreen.
+3. Own **MoveImage/LoadImage/StoreImage** (VRAM↔VRAM/CPU) → fixes reflection/copy effects (water, fades).
+4. Own the **OT clear/build** + the entity-list walk (Phase-1) → native 60fps interpolation.
+
+## Fades (intro cutscene "flashes full visibility on fade-in") — RE target
+Symptom: during a story-cutscene fade-IN, one frame shows the scene at FULL brightness before the fade
+takes over. Tomba2 has no GPU global brightness; a fade is either (a) the GTE color scalar (GPF, IR0 —
+later-96: GPF scales baked vertex colors by a per-frame brightness/fade factor), or (b) a full-screen
+semi-transparent TILE drawn over the scene. The flash = the fade factor/overlay is one frame late or
+mis-initialized in our path. **To fix it properly we must own DrawOTag** (see plan #1): then we see the
+fade primitive/var directly each frame and can compare its first-frame value vs the oracle. Tracked as
+the concrete proof that we now understand the draw path.
+
 ## Open RE items (next, in order)
 1. ~~The entity list + its walk~~ — **DONE** (above): lists `DAT_800fb168`/`DAT_800f2624`, walk
    `FUN_8007a904`, node layout. Handlers are per-object fn pointers @ +0x1c (not a type-indexed table).
@@ -122,3 +208,14 @@ all replacing/augmenting the baked color + GTE depth-cue. (Camera basis: see Cam
 4. Camera basis + GTE projection setup (for native render submission, Phase 3).
 5. Whether handlers call the cull/submit path (`FUN_8007712c`) in field scenes, or a different render
    path (the journal noted the cull dispatcher didn't fire in the demo). `PSXPORT_OBJLOG=1` answers this.
+6. ~~Projection setup~~ — **DONE** (later-98): `gen_func_800509B4`, OFX/OFY/H = 160/120/350. Widescreen
+   lever identified. Remaining: the draw-environment/clip-rect width setup (to widen the clip with OFX).
+7. **Water draw path** (broken in port): NOT GTE-projected (separate layer). Identify via provenance +
+   dual-core state-synced diff. The immediate user-visible regression.
+
+## Dual-core differential harness (planned tooling — sync on GAME STATE, not frame number)
+Per user direction: run the port and the Beetle oracle (`runtime/wide60rt`) and compare at the SAME game
+state (e.g. attract/demo start), because their boot timings differ so frame numbers don't align. Sync via
+an observable guest-RAM latch — e.g. the stage var `native_boot` prints as `stage=DEMO 0x801062E4`, or the
+documented scene latch `0x800BE258==2`. Gate both cores to that latch, then diff GP0 stream / VRAM /
+framebuffer there. Extends the existing `tools/drive.py` + `docs/diff-driver.md`.

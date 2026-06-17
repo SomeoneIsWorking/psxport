@@ -34,6 +34,29 @@ Native buttons lowercase (`start x o ...`); oracle Capitalized (`Start Cross ...
 Note: a slow run (oracle boot/FMVs) can make `send` return before it finishes — use `out` to re-read,
 or just send the next command (the process persists). Convert PPM shots with PIL to view.
 
+### `tools/dualcore.py` — DUAL-CORE harness: run port + oracle together, SYNC ON GAME STATE, diff (later-98)
+Runs BOTH cores at once (own FIFO each, `scratch/dual/{port,oracle}`) and gates them to the same
+guest-RAM **state latch**, not a frame number (their boot timings differ). Default latch =
+**`0x800BE258 == 2`** (scene/field active incl. the attract demo; `==0` at title). The stage word
+`0x801fe00c` is too coarse (`0x801062E4` = attract = BOTH title and the playing demo; `0x8010649C` = the
+START/logo stage).
+```
+tools/dualcore.py start [oraclestate=PATH]   # launch both (oracle warm-start from a .sav optional)
+tools/dualcore.py stage                        # print each core's stage + scene latch
+tools/dualcore.py sync [ADDR:VAL] [cap=N]      # advance each until RAM[ADDR]==VAL (default 800be258:2)
+tools/dualcore.py step N                        # advance BOTH N frames
+tools/dualcore.py shot NAME                     # shot both -> NAME_sbs.png (side-by-side) + NAME_diff.png
+tools/dualcore.py send port|oracle "cmd" ...    # raw REPL to one core
+tools/dualcore.py stop
+```
+**KNOWN LIMITATION (later-98):** latching on `0x800BE258==2` lands at the scene-LOAD edge (oracle shot
+can be black) and the two cores' **attract demos are NOT frame-locked** — equal `step` drifts (the port's
+native-boot demo cycles back to title while the oracle is still mid-scene). For a faithful water/render
+compare, prefer loading an **identical guest-RAM snapshot** of a water scene into BOTH cores (oracle:
+`-loadstate` .sav; port: needs a `loadram` REPL cmd — TODO — that memcpy's a 2MB dump into g_ram, then
+both engines rebuild the same frame from RAM). That sidesteps demo drift entirely. Until then, use `step`
+to hunt a visually-matching moment and judge the water region by eye.
+
 ### `tools/bgm.py` — BGM / libsnd state inspector for ANY 2MB RAM dump
 Works on oracle scene snapshots (`scratch/bin/tomba2/state/*.bin`) and native `dumpram`/`PSXPORT_RAMDUMP`
 dumps — the reliable, navigation-free way to diff sound state across cores/scenes.
