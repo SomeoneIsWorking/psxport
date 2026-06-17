@@ -5,6 +5,9 @@ This exists because driving the game keeps getting re-figured-out. Pairs with `t
 (title→New Game menu RE), `tomba2-scene-state.md` (state signals), `render-arch.md`, `config.md`.
 
 ## 0. Gotchas that waste time
+- **Headless is silent automatically** — audio opens only for a real window (`PSXPORT_GPU_WINDOW`); a
+  headless / `PSXPORT_VK_HEADLESS` run never touches the sound device. (`PSXPORT_NOAUDIO` still mutes a
+  windowed run. WAV capture `PSXPORT_WAV` is independent and works headless.)
 - **Headless exits at 120 frames unless you set `PSXPORT_NATIVE_FRAMES=N`.** For a long/interactive run
   set it high (e.g. `=100000`). For a capture, set it just past your last frame.
 - **Never `pkill -f tomba2_port` from a shell** whose own command line contains "tomba2_port" — `-f`

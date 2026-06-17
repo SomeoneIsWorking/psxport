@@ -109,11 +109,16 @@ void spu_audio_init(void)
    // WAV capture is independent of the SDL device: it works even headless / under NOAUDIO.
    { const char* wp = cfg_str("PSXPORT_WAV"); if (wp && !s_wav) wav_open(wp); }
 
-   if (cfg_on("PSXPORT_NOAUDIO"))
-   {
-      s_state = -1;
-      return;
-   }
+   // Headless implies no audio — there's no point driving the sound device for an automated/offscreen
+   // run (it just makes noise). Audio opens ONLY for a real on-screen window. `PSXPORT_NOAUDIO` stays as
+   // an explicit mute for windowed runs. (WAV capture above is independent and still works headless.)
+   { const char* w = cfg_str("PSXPORT_GPU_WINDOW");
+     int windowed = w && atoi(w) != 0;
+     if (cfg_on("PSXPORT_NOAUDIO") || !windowed || cfg_on("PSXPORT_VK_HEADLESS"))
+     {
+        s_state = -1;
+        return;
+     } }
 
 #ifdef PSXPORT_SDL
    if (SDL_InitSubSystem(SDL_INIT_AUDIO) != 0)
