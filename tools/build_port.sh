@@ -29,7 +29,7 @@ tools/gen_vk_shaders.sh   # compile+embed the Vulkan present shaders (gpu_vk_sha
 
 # Same source list as run.sh step 4 (keep in sync).
 SRC="$(ls generated/shard_*.c) $(ls generated/stub_shard_*.c) generated/stub_disp.c \
-  $RT/mem.c $RT/stubs.c $RT/hle.c $RT/threads.c $RT/interp.c $RT/gpu_native.c $RT/spu_audio.c $RT/pad_input.c $RT/memcard.c $RT/native_fmv.c \
+  $RT/mem.c $RT/stubs.c $RT/hle.c $RT/threads.c $RT/interp.c $RT/gpu_native.c $RT/gpu_trace.c $RT/gpu_debug.c $RT/spu_audio.c $RT/pad_input.c $RT/memcard.c $RT/native_fmv.c \
   $MED/psx/gte.c $RT/gte_beetle.c $MED/psx/mdec.c $RT/mdec_beetle.c $MED/psx/spu.c $RT/spu_beetle.c \
   $RT/disc.c $RT/cd_override.c $RT/cdc_native.c $RT/xa_stream.c $RT/timing.c $RT/gpu_vk.c $ENG/game_tomba2.c $ENG/wide60.c $ENG/engine_tomba2.c $RT/sync_overrides.c $RT/native_boot.c $RT/dbg_server.c $RT/native_stub.c $RT/watchdog.c $RT/boot.c"
 

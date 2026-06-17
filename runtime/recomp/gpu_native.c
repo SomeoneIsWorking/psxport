@@ -9,6 +9,7 @@
 // VRAM is 1024x512 16-bit (5-5-5 BGR + mask), holding both textures (sampled by textured
 // primitives via texpage+CLUT) and the framebuffer regions the game composes & displays.
 #include "r3000.h"
+#include "gpu_native_internal.h"   // shared VRAM/state/helpers (also used by gpu_trace.c, gpu_debug.c)
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -16,11 +17,9 @@
 #include <SDL.h>
 #endif
 
-#define VRAM_W 1024
-#define VRAM_H 512
 extern int g_wide60_on;           // wide60: capture/synth enabled (PSXPORT_WIDE60); 0 = faithful path
-static uint16_t s_vram[VRAM_W * VRAM_H];
-static inline uint16_t* vram(int x, int y) { return &s_vram[(y & 511) * VRAM_W + (x & 1023)]; }
+uint16_t s_vram[VRAM_W * VRAM_H]; // canonical definition (extern in gpu_native_internal.h)
+// VRAM_W/VRAM_H and vram() now live in gpu_native_internal.h
 
 // wide60 60fps layer: a SEPARATE off-screen framebuffer the interpolated frame is rasterized into,
 // so the 60fps tier sits ON TOP of the renderer and NEVER writes the game's VRAM. put_px_b writes
@@ -44,7 +43,7 @@ static int s_tw_mx, s_tw_my, s_tw_ox, s_tw_oy;  // texture window mask/offset (8
 static int s_clut_x, s_clut_y;    // CLUT base (per-primitive, from packet)
 
 // ---- Display control (GP1) ----------------------------------------------------------
-static int s_disp_x, s_disp_y;    // VRAM top-left of the displayed region
+int s_disp_x, s_disp_y;           // VRAM top-left of displayed region (extern in internal header)
 static int s_disp_w = 320, s_disp_h = 240;
 static int s_disp_vy0, s_disp_vy1 = 240;  // GP1(0x07) vertical display range (scanlines)
 static int s_disp_480i;           // GP1(0x08): interlace + 480-line vertical resolution
@@ -55,8 +54,8 @@ static int g_log = 0;             // PSXPORT_GPU_LOG
 static long s_prims = 0;          // primitives drawn since last present
 static long s_gp0_words = 0, s_dma2 = 0;  // diagnostics: GP0 words + DMA2 triggers per frame
 static uint32_t s_cur_node = 0;   // REDDBG: RAM addr of the OT node currently being fed to GP0
-static uint32_t g_ot_madr = 0;    // last OT DMA root (for the clobber analyzer)
-static int s_frame;               // present-frame counter (defined below); forward tentative def
+uint32_t g_ot_madr = 0;           // last OT DMA root (extern in internal header)
+// s_frame is defined below (int s_frame = 0;) and declared extern in gpu_native_internal.h
 
 // ---- Per-pixel primitive provenance (PSXPORT_PROVAT="x,y[:frame]") --------------------------
 // Records, for every VRAM pixel, the global id of the primitive that last wrote it. A wrong
@@ -64,14 +63,13 @@ static int s_frame;               // present-frame counter (defined below); forw
 // (last written many frames ago = revealed through a terrain/coverage gap, never overdrawn this
 // frame). Queried in DISPLAY space at present time, which sidesteps the GPU double-buffer offset
 // entirely (no more guessing which buffer / which native frame drew the shown pixel).
-static uint32_t s_prov[VRAM_W * VRAM_H];   // gid of last writer per pixel (0 = never written)
+// ProvMeta / PROVRING and the s_prov / s_provmeta / s_prov_on state live in gpu_native_internal.h
+// (shared with gpu_debug.c, which formats the provenance/scene dumps). Canonical defs here:
+uint32_t s_prov[VRAM_W * VRAM_H];          // gid of last writer per pixel (0 = never written)
 static uint32_t s_prim_gid = 0;            // monotonic primitive counter
-static int      s_prov_on = -1;            // lazily: 1 if PSXPORT_PROVAT set, else 0
-typedef struct { uint32_t gid, frame, node; int clut_x, clut_y, tp_x, tp_y, x0, y0, u0, v0;
-                 uint8_t op, r, g, b, semi, tex, mode, blend; } ProvMeta;
-#define PROVRING 16384
-static ProvMeta s_provmeta[PROVRING];      // gid -> prim details (ring; older gids evicted)
-void gpu_provat_display(FILE* out, int qx, int qy);   // present-time provenance at display coords
+int      s_prov_on = -1;                   // lazily: 1 if PSXPORT_PROVAT set, else 0
+ProvMeta s_provmeta[PROVRING];             // gid -> prim details (ring; older gids evicted)
+void gpu_provat_display(FILE* out, int qx, int qy);   // present-time provenance at display coords (gpu_debug.c)
 void gpu_provat_enable(void);                          // turn on per-pixel provenance stamping
 
 static inline int clampi(int v, int lo, int hi) { return v < lo ? lo : v > hi ? hi : v; }
@@ -717,101 +715,8 @@ static int gp0_len(uint32_t c) {
   return 1;                                      // env / nop / single-word
 }
 
-// ---- GP0 trace capture (PSXPORT_GPUTRACE="frame[:path]") ------------------------------------
-// Records, for ONE target frame, a snapshot of VRAM at frame start plus the EXACT GP0 word stream
-// fed to gpu_gp0() during that frame. Replaying that file through BOTH our renderer and Beetle's
-// (tools/gpu_differ) from the identical initial VRAM makes any output-VRAM difference a pure
-// rasterizer-fidelity difference — no live game-state alignment needed (the whole point: our HLE
-// port and the full-emulation oracle run at different timings, so we can't align by frame number;
-// feeding the same primitive stream to both rasterizers sidesteps that entirely).
-//
-// File format ("GP0TRC01"): magic[8], u32 frame, u32 word_count, u32 vram_w(1024), u32 vram_h(512),
-// then vram_w*vram_h u16 (initial VRAM), then word_count u32 (the GP0 stream, in feed order).
-// PSXPORT_GPUTRACE="frame[,frame...][:path]". A single frame writes to `path` exactly (default
-// scratch/bin/gp0trace.bin) — back-compat with the differ pipeline. A comma-separated LIST writes
-// one file per frame at "<path>_f<N>.bin" (so a single deterministic run captures many scenes; the
-// game is deterministic under PSXPORT_FORCE_BUTTONS, so frame N is reproducible). Targets are kept
-// in feed order; we capture them one at a time as s_frame reaches each.
-#define TRACE_MAX 64
-static int        s_trace_on = -1;       // -1 lazy, 0 off, 1 armed
-static int        s_trace_frames[TRACE_MAX]; // target frames
-static int        s_trace_count;         // number of targets
-static int        s_trace_idx;           // index of the target currently being captured
-static int        s_trace_multi;         // 1 if a list (per-frame filenames), 0 if single exact path
-static const char* s_trace_path = "scratch/bin/gp0trace.bin";
-static uint16_t*  s_trace_init;          // VRAM snapshot at frame start
-static uint32_t*  s_trace_words;         // captured GP0 words (grown)
-static size_t     s_trace_cap, s_trace_n;
-static int        s_trace_inited;
-
-static void trace_init_env(void) {
-  const char* e = getenv("PSXPORT_GPUTRACE");
-  s_trace_on = e ? 1 : 0;
-  if (!e) return;
-  const char* c = strchr(e, ':');
-  if (c) s_trace_path = c + 1;
-  s_trace_multi = (strchr(e, ',') != NULL);
-  const char* p = e;
-  while (*p && p != c && s_trace_count < TRACE_MAX) {
-    s_trace_frames[s_trace_count++] = atoi(p);
-    const char* nc = strchr(p, ',');
-    if (!nc || (c && nc > c)) break;
-    p = nc + 1;
-  }
-}
-
-static void trace_record(uint32_t w) {
-  if (s_trace_on < 0) trace_init_env();
-  if (s_trace_on <= 0 || s_trace_idx >= s_trace_count || s_frame != s_trace_frames[s_trace_idx]) return;
-  if (!s_trace_inited) {
-    if (!s_trace_init) s_trace_init = (uint16_t*)malloc(sizeof(uint16_t) * VRAM_W * VRAM_H);
-    memcpy(s_trace_init, s_vram, sizeof(uint16_t) * VRAM_W * VRAM_H);
-    s_trace_inited = 1;
-  }
-  if (s_trace_n >= s_trace_cap) {
-    s_trace_cap = s_trace_cap ? s_trace_cap * 2 : 65536;
-    s_trace_words = (uint32_t*)realloc(s_trace_words, s_trace_cap * sizeof(uint32_t));
-  }
-  s_trace_words[s_trace_n++] = w;
-}
-
-static void trace_flush(void) {  // called from gpu_present while s_frame is still the target
-  if (s_trace_on <= 0 || s_trace_idx >= s_trace_count || !s_trace_inited ||
-      s_frame != s_trace_frames[s_trace_idx]) return;
-  char namebuf[512];
-  const char* path = s_trace_path;
-  if (s_trace_multi) { snprintf(namebuf, sizeof namebuf, "%s_f%d.bin", s_trace_path, s_frame); path = namebuf; }
-  FILE* f = fopen(path, "wb");
-  if (f) {
-    uint32_t meta[4] = { (uint32_t)s_frame, (uint32_t)s_trace_n, VRAM_W, VRAM_H };
-    fwrite("GP0TRC01", 1, 8, f);
-    fwrite(meta, 4, 4, f);
-    fwrite(s_trace_init, 2, VRAM_W * VRAM_H, f);
-    fwrite(s_trace_words, 4, s_trace_n, f);
-    fclose(f);
-    fprintf(stderr, "[gputrace] f%d -> %s (%zu words)\n", s_frame, path, s_trace_n);
-  }
-  s_trace_idx++;            // advance to the next target frame; reset the per-frame capture
-  s_trace_inited = 0;
-  s_trace_n = 0;
-}
-
-// On-demand GP0-trace arm for the live debug server (dbg_server.c): capture the NEXT present frame's
-// GP0 stream + start-VRAM to `path` (single exact file, gpu_differ format). Mirrors the PSXPORT_GPUTRACE
-// path but armed at runtime for s_frame+1 instead of from the env. Returns the target frame number.
-static char s_trace_arm_path[512];
-int gpu_gputrace_arm(const char* path) {
-  snprintf(s_trace_arm_path, sizeof s_trace_arm_path, "%s", path && *path ? path : "scratch/bin/dbg_gp0.bin");
-  s_trace_path = s_trace_arm_path;
-  s_trace_multi = 0;
-  s_trace_count = 1;
-  s_trace_idx = 0;
-  s_trace_frames[0] = s_frame + 1;   // next frame (this one's stream is already partly fed)
-  s_trace_inited = 0;
-  s_trace_n = 0;
-  s_trace_on = 1;
-  return s_frame + 1;
-}
+// ---- GP0 trace capture lives in gpu_trace.c (PSXPORT_GPUTRACE + gpu_gputrace_arm). It exposes
+// trace_record() (per GP0 word, below) and trace_flush() (per frame, gpu_present_ex). ----
 
 // One word into the GP0 port (direct write or DMA).
 void gpu_gp0(uint32_t w) {
@@ -1082,7 +987,7 @@ void gpu_pace_frame(void) { gpu_pace_subframe(1); }
 
 // Present: copy the displayed VRAM region to an RGB buffer. PSXPORT_GPU_DUMP=dir dumps PPMs;
 // PSXPORT_GPU_WINDOW=1 shows a live SDL window.
-static int s_frame = 0;
+int s_frame = 0;   // present-frame counter (extern in gpu_native_internal.h)
 // REPL `shot <path>`: write the currently-displayed VRAM region to a PPM so I can SEE where the
 // interactive driver is (title / menu / attract / gameplay) instead of guessing from stage numbers.
 void gpu_native_shot(const char* path) {
@@ -1188,23 +1093,6 @@ int gpu_prims_since_present(void) { return (int)s_prims; }
 void gpu_vram_load(const uint16_t* src) { memcpy(s_vram, src, sizeof(s_vram)); }
 void gpu_vram_save(uint16_t* dst)       { memcpy(dst, s_vram, sizeof(s_vram)); }
 
-// Provenance query at an ABSOLUTE VRAM coord (the differ replays into the back buffer at
-// off=(0,256), so query e.g. vram y = display y + 256 — no double-buffer confound, unlike the
-// live-run PROVAT). Requires PSXPORT_PROVAT to be set so put_px_b stamped s_prov during replay.
-void gpu_prov_dump(int vx, int vy) {
-  uint16_t p = *vram(vx, vy);
-  uint32_t gid = s_prov[(vy & 511) * VRAM_W + (vx & 1023)];
-  ProvMeta* m = &s_provmeta[gid % PROVRING];
-  fprintf(stderr, "[prov] vram(%d,%d)=%04X rgb(%d,%d,%d) ", vx, vy, p,
-          (p & 31) << 3, ((p >> 5) & 31) << 3, ((p >> 10) & 31) << 3);
-  if (!gid) { fprintf(stderr, "<never written>\n"); return; }
-  if (m->gid != gid) { fprintf(stderr, "gid=%u <evicted>\n", gid); return; }
-  fprintf(stderr, "gid=%u op=%02X tex=%d texmode=%d semi=%d blend=%d clut=(%d,%d) tp=(%d,%d) "
-          "primcol=(%d,%d,%d) v0=(%d,%d) uv0=(%d,%d)\n",
-          gid, m->op, m->tex, m->mode, m->semi, m->blend, m->clut_x, m->clut_y, m->tp_x, m->tp_y,
-          m->r, m->g, m->b, m->x0, m->y0, m->u0, m->v0);
-}
-
 // Enable per-pixel provenance stamping unconditionally (the live debug server turns this on at
 // startup so `provat` works at any time without PSXPORT_PROVAT). Cheap: one extra store per pixel.
 void gpu_provat_enable(void) { s_prov_on = 1; }
@@ -1220,79 +1108,7 @@ static int s_sbs_on = -1;
 int  gpu_sbs_get(void) { if (s_sbs_on < 0) { const char* e = getenv("PSXPORT_SBS"); s_sbs_on = (e && atoi(e)) ? 1 : 0; } return s_sbs_on; }
 void gpu_sbs_set(int on) { s_sbs_on = on ? 1 : 0; }
 
-// Present-time provenance at DISPLAY coords (qx,qy): report, for the 7x7 box around it, which prim
-// last wrote each displayed pixel (op/clut/texpage/color/age). Writes to `out`. Used by both the
-// PSXPORT_PROVAT env path and the live debug server (dbg_server.c). Display space sidesteps the
-// double-buffer offset. Requires provenance stamping (PSXPORT_PROVAT or gpu_provat_enable()).
-void gpu_provat_display(FILE* out, int qx, int qy) {
-  fprintf(out, "[provat] f%d display (%d,%d) +/-3  (disp@%d,%d)\n", s_frame, qx, qy, s_disp_x, s_disp_y);
-  if (s_prov_on <= 0) { fprintf(out, "  (provenance was off; now enabled — re-query after a frame)\n");
-                        s_prov_on = 1; return; }
-  for (int dy = -3; dy <= 3; dy++) for (int dx = -3; dx <= 3; dx++) {
-    int vx = s_disp_x + qx + dx, vy = s_disp_y + qy + dy;
-    uint16_t p = *vram(vx, vy);
-    uint32_t gid = s_prov[(vy & 511) * VRAM_W + (vx & 1023)];
-    ProvMeta* m = &s_provmeta[gid % PROVRING];
-    int valid = (m->gid == gid && gid != 0);
-    fprintf(out, "  (%+d,%+d) vram(%d,%d)=%04X rgb(%d,%d,%d)", dx, dy, vx, vy, p,
-            (p & 31) << 3, ((p >> 5) & 31) << 3, ((p >> 10) & 31) << 3);
-    if (!gid) fprintf(out, "  <never written>\n");
-    else if (!valid) fprintf(out, "  gid=%u <evicted: drawn long ago = STALE>\n", gid);
-    else fprintf(out, "  gid=%u age=%dframes op=%02X tex=%d mode=%d semi=%d clut=(%d,%d) tp=(%d,%d) "
-                 "primcol=(%d,%d,%d) node=%08X v0=(%d,%d) uv0=(%d,%d)\n",
-                 gid, (int)((uint32_t)s_frame - m->frame), m->op, m->tex, m->mode, m->semi,
-                 m->clut_x, m->clut_y, m->tp_x, m->tp_y, m->r, m->g, m->b, m->node,
-                 m->x0, m->y0, m->u0, m->v0);
-  }
-}
-
-// --- Native scene accounting (graphics OWNERSHIP) -----------------------------------------------
-// Read-only walk of the same OT DrawOTag DMAs, classifying every primitive into engine-meaningful
-// categories so the port can ACCOUNT for each draw (VRAM copies = reflection/fade buffers, fills,
-// large/semi overlays = fade tiles, env). PSXPORT_SCENEDUMP=N. (later-99)
-static int gp0_cmd_len(uint8_t op) {
-  if (op >= 0x20 && op <= 0x3F) { int nv = (op & 0x08) ? 4 : 3, per = 1 + ((op & 0x04) ? 1 : 0) + ((op & 0x10) ? 1 : 0);
-    return 1 + nv * per - ((op & 0x10) ? 1 : 0); }
-  if (op >= 0x40 && op <= 0x5F) return 0;
-  if (op >= 0x60 && op <= 0x7F) { int t = (op & 0x04) ? 1 : 0, sz = (op >> 3) & 3; return 1 + 1 + t + (sz == 0 ? 1 : 0); }
-  if (op == 0x02) return 3;
-  if (op >= 0x80 && op <= 0x9F) return 4;
-  if (op >= 0xA0 && op <= 0xDF) return 3;
-  return 1;
-}
-static void gpu_scene_dump(FILE* out, uint32_t madr) {
-  uint32_t addr = madr & 0x1FFFFC;
-  int npoly = 0, nrect = 0, nline = 0, nfill = 0, ncopy = 0, nup = 0, nenv = 0;
-  fprintf(out, "[scene] f%d OT@0x%08X — classified display list:\n", s_frame, 0x80000000u | addr);
-  for (int g = 0; g < 0x10000; g++) {
-    uint32_t hdr = mem_r32(addr); int n = hdr >> 24, i = 0;
-    while (i < n) {
-      uint32_t c = mem_r32(addr + 4 + i * 4); uint8_t op = c >> 24;
-      int len = gp0_cmd_len(op); if (len <= 0) break;
-      uint32_t w1 = (i + 1 < n) ? mem_r32(addr + 4 + (i + 1) * 4) : 0;
-      uint32_t w2 = (i + 2 < n) ? mem_r32(addr + 4 + (i + 2) * 4) : 0;
-      if (op == 0x02) { nfill++; fprintf(out, "  FILL rgb=(%d,%d,%d) at(%d,%d) %dx%d\n",
-          c&0xFF,(c>>8)&0xFF,(c>>16)&0xFF, w1&0x3FF,(w1>>16)&0x1FF, w2&0x3FF,(w2>>16)&0x1FF); }
-      else if (op >= 0x80 && op <= 0x9F) { ncopy++; uint32_t w3 = (i+3<n)?mem_r32(addr+4+(i+3)*4):0;
-        fprintf(out, "  COPY src(%d,%d)->dst(%d,%d) %dx%d [reflection/fade]\n",
-          w1&0x3FF,(w1>>16)&0x1FF, w2&0x3FF,(w2>>16)&0x1FF, w3&0x3FF,(w3>>16)&0x1FF); }
-      else if (op >= 0xA0 && op <= 0xBF) nup++;
-      else if (op >= 0xE1 && op <= 0xE6) nenv++;
-      else if (op >= 0x20 && op <= 0x3F) { npoly++;
-        if (((op>>1)&1) && !((op>>2)&1)) fprintf(out, "  POLY semi flat rgb=(%d,%d,%d) [fade/overlay?]\n",
-          c&0xFF,(c>>8)&0xFF,(c>>16)&0xFF); }
-      else if (op >= 0x60 && op <= 0x7F) nrect++;
-      else if (op >= 0x40 && op <= 0x5F) { nline++; break; }
-      i += len;
-    }
-    uint32_t next = hdr & 0xFFFFFF; if (next == 0xFFFFFF || next == 0) break; addr = next & 0x1FFFFC;
-  }
-  fprintf(out, "[scene] f%d totals: poly=%d rect=%d line=%d fill=%d vramcopy=%d upload=%d env=%d\n",
-          s_frame, npoly, nrect, nline, nfill, ncopy, nup, nenv);
-}
-// On-demand scene dump for the live debug server (dbg_server.c): classify the CURRENT frame's
-// last-submitted OT (g_ot_madr, set by gpu_dma2_linked_list) into `out`.
-void gpu_scene_dump_now(FILE* out) { gpu_scene_dump(out, g_ot_madr); }
+// Diagnostic dumps (gpu_prov_dump / gpu_provat_display / gpu_scene_dump[_now]) live in gpu_debug.c.
 
 // DMA channel 2 (GPU): walk an ordering-table linked list from `madr`, feeding each node's
 // GP0 words to the parser. Header word: bits[24..31]=word count, bits[0..23]=next node addr
