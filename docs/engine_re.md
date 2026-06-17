@@ -199,6 +199,20 @@ mis-initialized in our path. **To fix it properly we must own DrawOTag** (see pl
 fade primitive/var directly each frame and can compare its first-frame value vs the oracle. Tracked as
 the concrete proof that we now understand the draw path.
 
+## Scene accounting — native classified display list (OWNERSHIP step 1, later-99)
+`PSXPORT_SCENEDUMP=N` (gpu_native.c `gpu_scene_dump`): a read-only walk of the same OT DrawOTag DMAs,
+classifying every primitive (poly/rect/line/fill/VRAM-copy/upload/env) + tracking draw-area/offset, and
+logging the categories where effects live (VRAM→VRAM copies, fills, large/semi overlays = fade tiles).
+This is the port ACCOUNTING for every draw instead of blind GP0 rasterization. Findings (f1500 water/demo):
+- **TWO DrawOTag passes per frame:** (1) a tiny setup OT — `FILL (0,0,0) 320x240 @ (0,256)` = back-buffer
+  clear (y=256 is the parity-1 framebuffer); (2) the main OT = **514 polys + 389 rects + 11 env**, ~1 tiny
+  (2x1) VRAM copy.
+- **Water is ordinary TEXTURED GEOMETRY, not a framebuffer-reflection copy** (the only VRAM→VRAM copy is
+  degenerate 2x1). REFUTES the earlier "reflection effect" hypothesis. The broken-water artifact the user
+  saw was almost certainly the PGXP value-keyed vertex-smoothing trick tearing the water's dense textured
+  grid — now disabled by default (bf69890). The water polys are among the 514; next attribute them by
+  screen region + texpage/CLUT (extend SCENEDUMP with a region filter) to confirm vs the oracle.
+
 ## Open RE items (next, in order)
 1. ~~The entity list + its walk~~ — **DONE** (above): lists `DAT_800fb168`/`DAT_800f2624`, walk
    `FUN_8007a904`, node layout. Handlers are per-object fn pointers @ +0x1c (not a type-indexed table).

@@ -1250,10 +1250,81 @@ void gpu_prov_dump(int vx, int vy) {
           m->r, m->g, m->b, m->x0, m->y0, m->u0, m->v0);
 }
 
+// --- Native scene accounting (graphics OWNERSHIP, later-99) -------------------------------------
+// A read-only walk of the SAME ordering table DrawOTag DMAs, classifying every primitive into the
+// engine-meaningful categories — so the port can ACCOUNT for each draw instead of blindly rasterizing
+// the GP0 byte stream. Especially: VRAM->VRAM copies (MoveImage = reflection/fade buffers), VRAM fills,
+// and full-screen flat/semi overlays (the fade tiles) + draw-area/offset env state. PSXPORT_SCENEDUMP=N.
+static int gp0_cmd_len(uint8_t op, uint32_t c0) {
+  if (op >= 0x20 && op <= 0x3F) {                 // polygon
+    int nv = (op & 0x08) ? 4 : 3, per = 1 + ((op & 0x04) ? 1 : 0) + ((op & 0x10) ? 1 : 0);
+    return 1 + nv * per - ((op & 0x10) ? 1 : 0);  // gouraud reuses cmd word for v0 colour
+  }
+  if (op >= 0x40 && op <= 0x5F) return 0;          // line / poly-line: variable (terminated) — skip len
+  if (op >= 0x60 && op <= 0x7F) {                  // rect/sprite
+    int t = (op & 0x04) ? 1 : 0, sz = (op >> 3) & 3;
+    return 1 + 1 + t + (sz == 0 ? 1 : 0);          // cmd + xy + (uv) + (wh if size 0)
+  }
+  if (op == 0x02) return 3;                        // fill
+  if (op >= 0x80 && op <= 0x9F) return 4;          // VRAM->VRAM copy
+  if (op >= 0xA0 && op <= 0xBF) return 3;          // CPU->VRAM (header; data follows separately)
+  if (op >= 0xC0 && op <= 0xDF) return 3;          // VRAM->CPU
+  if (op >= 0xE1 && op <= 0xE6) return 1;          // env
+  return 1;
+}
+static void gpu_scene_dump(uint32_t madr) {
+  uint32_t addr = madr & 0x1FFFFC;
+  int ax0 = 0, ay0 = 0, ax1 = 1023, ay1 = 511, ox = 0, oy = 0;     // tracked draw-area + offset (env)
+  int npoly = 0, nrect = 0, nline = 0, nfill = 0, ncopy = 0, nup = 0, nenv = 0;
+  fprintf(stderr, "[scene] f%d OT@0x%08X — classified display list:\n", s_frame, 0x80000000u | addr);
+  for (int g = 0; g < 0x10000; g++) {
+    uint32_t hdr = mem_r32(addr); int n = hdr >> 24;
+    int i = 0;
+    while (i < n) {                                  // a node may pack several GP0 commands (DR_* env)
+      uint32_t c = mem_r32(addr + 4 + i * 4); uint8_t op = c >> 24;
+      int len = gp0_cmd_len(op, c); if (len <= 0) { break; }   // variable (lines) — stop scanning node
+      uint32_t w1 = (i + 1 < n) ? mem_r32(addr + 4 + (i + 1) * 4) : 0;
+      uint32_t w2 = (i + 2 < n) ? mem_r32(addr + 4 + (i + 2) * 4) : 0;
+      if (op == 0xE3) { ax0 = c & 0x3FF; ay0 = (c >> 10) & 0x1FF; nenv++; }
+      else if (op == 0xE4) { ax1 = c & 0x3FF; ay1 = (c >> 10) & 0x1FF; nenv++; }
+      else if (op == 0xE5) { ox = ((int)(c & 0x7FF) << 21) >> 21; oy = ((int)((c >> 11) & 0x7FF) << 21) >> 21; nenv++; }
+      else if (op >= 0xE1 && op <= 0xE6) nenv++;
+      else if (op == 0x02) { nfill++;
+        fprintf(stderr, "  FILL  rgb=(%d,%d,%d) at(%d,%d) %dx%d\n", c&0xFF,(c>>8)&0xFF,(c>>16)&0xFF,
+                w1&0x3FF,(w1>>16)&0x1FF, w2&0x3FF,(w2>>16)&0x1FF); }
+      else if (op >= 0x80 && op <= 0x9F) { ncopy++;
+        uint32_t w3 = (i+3<n)?mem_r32(addr+4+(i+3)*4):0;
+        fprintf(stderr, "  COPY  VRAM->VRAM src(%d,%d) -> dst(%d,%d) %dx%d  [reflection/fade-buffer]\n",
+                w1&0x3FF,(w1>>16)&0x1FF, w2&0x3FF,(w2>>16)&0x1FF, w3&0x3FF,(w3>>16)&0x1FF); }
+      else if (op >= 0xA0 && op <= 0xBF) nup++;
+      else if (op >= 0x20 && op <= 0x3F) { npoly++;
+        int semi = (op>>1)&1, tex=(op>>2)&1;
+        // poly v0 xy = word after cmd (mono) — flag big/semi flat overlays (fade candidates)
+        int vx = (int)(w1 & 0x7FF); if (vx>=0x400) vx-=0x800; int vy=(int)((w1>>16)&0x7FF); if(vy>=0x400) vy-=0x800;
+        if (semi && !tex) fprintf(stderr, "  POLY  semi flat rgb=(%d,%d,%d) v0=(%d,%d) off=(%d,%d) clip[%d,%d-%d,%d]  [fade/overlay?]\n",
+                c&0xFF,(c>>8)&0xFF,(c>>16)&0xFF, vx,vy, ox,oy, ax0,ay0,ax1,ay1); }
+      else if (op >= 0x60 && op <= 0x7F) { nrect++;
+        int semi=(op>>1)&1, w=(((op>>3)&3)==0)?(int)(w2&0x3FF):(((op>>3)&3)==1?1:(((op>>3)&3)==2?8:16));
+        int rx=(int)(w1&0x7FF); if(rx>=0x400) rx-=0x800; int ry=(int)((w1>>16)&0x7FF); if(ry>=0x400) ry-=0x800;
+        if (w >= 256) fprintf(stderr, "  RECT  %s rgb=(%d,%d,%d) at(%d,%d) w~%d off=(%d,%d)  [large/overlay?]\n",
+                semi?"semi":"opaque", c&0xFF,(c>>8)&0xFF,(c>>16)&0xFF, rx,ry, w, ox,oy); }
+      else if (op >= 0x40 && op <= 0x5F) { nline++; break; }
+      i += len;
+    }
+    uint32_t next = hdr & 0xFFFFFF;
+    if (next == 0xFFFFFF || next == 0) break;
+    addr = next & 0x1FFFFC;
+  }
+  fprintf(stderr, "[scene] f%d totals: poly=%d rect=%d line=%d fill=%d vramcopy=%d upload=%d env=%d\n",
+          s_frame, npoly, nrect, nline, nfill, ncopy, nup, nenv);
+}
+
 // DMA channel 2 (GPU): walk an ordering-table linked list from `madr`, feeding each node's
 // GP0 words to the parser. Header word: bits[24..31]=word count, bits[0..23]=next node addr
 // (0xFFFFFF = end).
 void gpu_dma2_linked_list(uint32_t madr) {
+  { static int sd = -2; if (sd == -2) { const char* e = getenv("PSXPORT_SCENEDUMP"); sd = e ? atoi(e) : -1; }
+    if (sd >= 0 && s_frame == sd) gpu_scene_dump(madr); }
   s_dma2++;
   g_ot_madr = madr & 0x1FFFFC;
   uint32_t addr = madr & 0x1FFFFC;
