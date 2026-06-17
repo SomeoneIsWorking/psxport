@@ -27,6 +27,22 @@ uint32_t mem_r32(uint32_t a) { (void)a; return 0; }
 void     wide60_join_poly(int px, int py) { (void)px; (void)py; }
 void     ws_sx_dump(const char* tag)      { (void)tag; }
 void     watchdog_pet(void)  {}
+// VK backend + wide60 capture hooks gpu_native.c grew since this tool was written. The differ runs the
+// SOFTWARE rasterizer only (gpu_vk_enabled()==0, g_wide60_on==0), so these are never CALLED — they just
+// need to LINK. Empty-param defs link by symbol name regardless of the call sites' prototypes.
+int  g_wide60_on = 0;
+int  gpu_vk_enabled(void) { return 0; }
+int  gpu_vk_sprite_anchor_dx(int x) { (void)x; return 0; }
+void gpu_vk_draw_tritri() {}
+void gpu_vk_draw_semi() {}
+void gpu_vk_dirty() {}
+void gpu_vk_present() {}
+void gpu_vk_frame_end() {}
+void gpu_vk_dump() {}
+void wide60_cap_poly() {}
+void wide60_cap_sprite() {}
+void wide60_cap_line() {}
+void wide60_rtp() {}
 
 int main(int argc, char** argv) {
   if (argc < 3) { fprintf(stderr, "usage: %s <trace.bin> <out.vram>\n", argv[0]); return 2; }
