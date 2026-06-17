@@ -45,6 +45,7 @@ re-reason"; this is its project-specific enforcement.)
 | `PSXPORT_POLYDUMP=F` (+`POLYAT=x,y`) | Log every poly/sprite at frame F (optionally only those covering a point). gpu_native.c. | env |
 | state capture | **port:** `dumpram`, transplant `PSXPORT_TRANSPLANT="F:ram:vram"`, `gpu_vram_load`. **oracle:** `dumpram`, `dumpvram` (REPL), `-loadstate`/`-savestate`, `PSXPORT_VRAMDUMP`, `PSXPORT_FRAMEDUMP`. | REPL / env |
 | screenshots | port `shot PATH` (SW) or `PSXPORT_VK_SHOT=F` → `scratch/screenshots/vk_live.ppm` (VK); oracle `shot PATH`. | LAST-RESORT visual only |
+| **live debug server** | **NON-BLOCKING** TCP server (`runtime/recomp/dbg_server.c`) — inspect the port WHILE the user plays live (windowed), unlike the blocking `PSXPORT_REPL` FIFO. Commands serviced on the main thread once/frame. `r`/`rw`/`stage`/`scene` (on-demand `gpu_scene_dump`)/`provat x y` (on-demand `gpu_provat_display`)/`shot [path]`/`gputrace [path]` (arm a gpu_differ capture of the next frame)/`sbs [0\|1]` (VK-vs-SW side-by-side present)/`frame`. | run with `PSXPORT_DEBUG_SERVER=1` (port 5959); drive with `tools/dbgclient.py <cmd...>` or interactively (`tools/dbgclient.py`) |
 
 ## Honest tool limits (fix these when they block you — don't work around by eyeballing)
 - **`gpu_differ`/oracle replay needs Beetle SW @ 1x** (flat VRAM). Don't set `PSXPORT_INTERNAL_RES`.

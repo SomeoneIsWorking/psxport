@@ -338,6 +338,8 @@ static void ov_game_main(R3000* c) {
           nframes ? "capped" : "interactive (until window close)");
   void hle_deliver_event(uint32_t ev_class, uint32_t spec);
   void pad_service_frame(void);
+  void dbg_server_start(void); void dbg_server_service(void);
+  dbg_server_start();     // PSXPORT_DEBUG_SERVER: non-blocking live TCP debug server (dbg_server.c)
   long repl_budget = 0;   // frames remaining in the current REPL `run N`
   for (uint32_t f = 0; nframes == 0 || f < nframes; f++) {
     g_bgm_frame = f;
@@ -487,6 +489,7 @@ static void ov_game_main(R3000* c) {
                       "f135=%u\n", f, mem_r16(TASKBASE), mem_r32(TASKBASE + 0xc),
               mem_r16(TASKBASE + 0x48), mem_r16(TASKBASE + 0x70), mem_r16(TASKBASE + 0xe0),
               mem_r8(0x1f800135));
+    dbg_server_service();   // service one queued live-debug-server command (non-blocking)
   }
   fprintf(stderr, "[native_boot] frame loop done; task0 state=%u entry=0x%08X obj+0x48=%u\n",
           mem_r16(TASKBASE), mem_r32(TASKBASE + 0xc), mem_r16(TASKBASE + 0x48));

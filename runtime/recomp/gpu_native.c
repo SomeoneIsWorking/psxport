@@ -71,6 +71,8 @@ typedef struct { uint32_t gid, frame, node; int clut_x, clut_y, tp_x, tp_y, x0, 
                  uint8_t op, r, g, b, semi, tex, mode, blend; } ProvMeta;
 #define PROVRING 16384
 static ProvMeta s_provmeta[PROVRING];      // gid -> prim details (ring; older gids evicted)
+void gpu_provat_display(FILE* out, int qx, int qy);   // present-time provenance at display coords
+void gpu_provat_enable(void);                          // turn on per-pixel provenance stamping
 
 static inline int clampi(int v, int lo, int hi) { return v < lo ? lo : v > hi ? hi : v; }
 static inline uint16_t to555(uint8_t r, uint8_t g, uint8_t b) {
@@ -794,6 +796,23 @@ static void trace_flush(void) {  // called from gpu_present while s_frame is sti
   s_trace_n = 0;
 }
 
+// On-demand GP0-trace arm for the live debug server (dbg_server.c): capture the NEXT present frame's
+// GP0 stream + start-VRAM to `path` (single exact file, gpu_differ format). Mirrors the PSXPORT_GPUTRACE
+// path but armed at runtime for s_frame+1 instead of from the env. Returns the target frame number.
+static char s_trace_arm_path[512];
+int gpu_gputrace_arm(const char* path) {
+  snprintf(s_trace_arm_path, sizeof s_trace_arm_path, "%s", path && *path ? path : "scratch/bin/dbg_gp0.bin");
+  s_trace_path = s_trace_arm_path;
+  s_trace_multi = 0;
+  s_trace_count = 1;
+  s_trace_idx = 0;
+  s_trace_frames[0] = s_frame + 1;   // next frame (this one's stream is already partly fed)
+  s_trace_inited = 0;
+  s_trace_n = 0;
+  s_trace_on = 1;
+  return s_frame + 1;
+}
+
 // One word into the GP0 port (direct write or DMA).
 void gpu_gp0(uint32_t w) {
   s_gp0_words++;
@@ -1105,26 +1124,8 @@ void gpu_present_ex(int do_blit) {
     if (pa) {
       int qx = -1, qy = -1, qf = -1; sscanf(pa, "%d,%d", &qx, &qy);
       const char* col = strchr(pa, ':'); if (col) qf = atoi(col + 1);
-      if (qx >= 0 && (qf < 0 ? (s_frame % 200 == 0) : s_frame == qf)) {
-        fprintf(stderr, "[provat] f%d display (%d,%d) +/-3  (disp@%d,%d)\n",
-                s_frame, qx, qy, s_disp_x, s_disp_y);
-        for (int dy = -3; dy <= 3; dy++) for (int dx = -3; dx <= 3; dx++) {
-          int vx = s_disp_x + qx + dx, vy = s_disp_y + qy + dy;
-          uint16_t p = *vram(vx, vy);
-          uint32_t gid = s_prov[(vy & 511) * VRAM_W + (vx & 1023)];
-          ProvMeta* m = &s_provmeta[gid % PROVRING];
-          int valid = (m->gid == gid && gid != 0);
-          fprintf(stderr, "  (%+d,%+d) vram(%d,%d)=%04X rgb(%d,%d,%d)", dx, dy, vx, vy, p,
-                  (p & 31) << 3, ((p >> 5) & 31) << 3, ((p >> 10) & 31) << 3);
-          if (!gid) fprintf(stderr, "  <never written>\n");
-          else if (!valid) fprintf(stderr, "  gid=%u <evicted: drawn long ago = STALE>\n", gid);
-          else fprintf(stderr, "  gid=%u age=%dframes op=%02X tex=%d mode=%d semi=%d clut=(%d,%d) tp=(%d,%d) "
-                       "primcol=(%d,%d,%d) node=%08X v0=(%d,%d) uv0=(%d,%d)\n",
-                       gid, (int)((uint32_t)s_frame - m->frame), m->op, m->tex, m->mode, m->semi,
-                       m->clut_x, m->clut_y, m->tp_x, m->tp_y, m->r, m->g, m->b, m->node,
-                       m->x0, m->y0, m->u0, m->v0);
-        }
-      }
+      if (qx >= 0 && (qf < 0 ? (s_frame % 200 == 0) : s_frame == qf))
+        gpu_provat_display(stderr, qx, qy);
     } }
   { const char* vd = getenv("PSXPORT_VRAMDUMP_AT");   // "frame:path" — dump our 1024x512x16 VRAM
     if (vd) { int fr = atoi(vd); const char* col = strchr(vd, ':');
@@ -1204,6 +1205,47 @@ void gpu_prov_dump(int vx, int vy) {
           m->r, m->g, m->b, m->x0, m->y0, m->u0, m->v0);
 }
 
+// Enable per-pixel provenance stamping unconditionally (the live debug server turns this on at
+// startup so `provat` works at any time without PSXPORT_PROVAT). Cheap: one extra store per pixel.
+void gpu_provat_enable(void) { s_prov_on = 1; }
+
+int gpu_frame_no(void) { return s_frame; }
+
+// --- Vulkan-vs-Software side-by-side (SBS) present mode -----------------------------------------
+// When on (PSXPORT_SBS=1 or `sbs 1` via the debug server), the rasterization tee runs BOTH renderers
+// for every frame — the SW rasterizer into s_vram AND the VK rasterizer into its GPU image — and the
+// VK present pass shows VK on the left half, SW on the right half, so the two can be compared live.
+// gpu_native owns the flag (the tee is here); gpu_vk.c reads it for the dual present.
+static int s_sbs_on = -1;
+int  gpu_sbs_get(void) { if (s_sbs_on < 0) { const char* e = getenv("PSXPORT_SBS"); s_sbs_on = (e && atoi(e)) ? 1 : 0; } return s_sbs_on; }
+void gpu_sbs_set(int on) { s_sbs_on = on ? 1 : 0; }
+
+// Present-time provenance at DISPLAY coords (qx,qy): report, for the 7x7 box around it, which prim
+// last wrote each displayed pixel (op/clut/texpage/color/age). Writes to `out`. Used by both the
+// PSXPORT_PROVAT env path and the live debug server (dbg_server.c). Display space sidesteps the
+// double-buffer offset. Requires provenance stamping (PSXPORT_PROVAT or gpu_provat_enable()).
+void gpu_provat_display(FILE* out, int qx, int qy) {
+  fprintf(out, "[provat] f%d display (%d,%d) +/-3  (disp@%d,%d)\n", s_frame, qx, qy, s_disp_x, s_disp_y);
+  if (s_prov_on <= 0) { fprintf(out, "  (provenance was off; now enabled — re-query after a frame)\n");
+                        s_prov_on = 1; return; }
+  for (int dy = -3; dy <= 3; dy++) for (int dx = -3; dx <= 3; dx++) {
+    int vx = s_disp_x + qx + dx, vy = s_disp_y + qy + dy;
+    uint16_t p = *vram(vx, vy);
+    uint32_t gid = s_prov[(vy & 511) * VRAM_W + (vx & 1023)];
+    ProvMeta* m = &s_provmeta[gid % PROVRING];
+    int valid = (m->gid == gid && gid != 0);
+    fprintf(out, "  (%+d,%+d) vram(%d,%d)=%04X rgb(%d,%d,%d)", dx, dy, vx, vy, p,
+            (p & 31) << 3, ((p >> 5) & 31) << 3, ((p >> 10) & 31) << 3);
+    if (!gid) fprintf(out, "  <never written>\n");
+    else if (!valid) fprintf(out, "  gid=%u <evicted: drawn long ago = STALE>\n", gid);
+    else fprintf(out, "  gid=%u age=%dframes op=%02X tex=%d mode=%d semi=%d clut=(%d,%d) tp=(%d,%d) "
+                 "primcol=(%d,%d,%d) node=%08X v0=(%d,%d) uv0=(%d,%d)\n",
+                 gid, (int)((uint32_t)s_frame - m->frame), m->op, m->tex, m->mode, m->semi,
+                 m->clut_x, m->clut_y, m->tp_x, m->tp_y, m->r, m->g, m->b, m->node,
+                 m->x0, m->y0, m->u0, m->v0);
+  }
+}
+
 // --- Native scene accounting (graphics OWNERSHIP) -----------------------------------------------
 // Read-only walk of the same OT DrawOTag DMAs, classifying every primitive into engine-meaningful
 // categories so the port can ACCOUNT for each draw (VRAM copies = reflection/fade buffers, fills,
@@ -1218,10 +1260,10 @@ static int gp0_cmd_len(uint8_t op) {
   if (op >= 0xA0 && op <= 0xDF) return 3;
   return 1;
 }
-static void gpu_scene_dump(uint32_t madr) {
+static void gpu_scene_dump(FILE* out, uint32_t madr) {
   uint32_t addr = madr & 0x1FFFFC;
   int npoly = 0, nrect = 0, nline = 0, nfill = 0, ncopy = 0, nup = 0, nenv = 0;
-  fprintf(stderr, "[scene] f%d OT@0x%08X — classified display list:\n", s_frame, 0x80000000u | addr);
+  fprintf(out, "[scene] f%d OT@0x%08X — classified display list:\n", s_frame, 0x80000000u | addr);
   for (int g = 0; g < 0x10000; g++) {
     uint32_t hdr = mem_r32(addr); int n = hdr >> 24, i = 0;
     while (i < n) {
@@ -1229,15 +1271,15 @@ static void gpu_scene_dump(uint32_t madr) {
       int len = gp0_cmd_len(op); if (len <= 0) break;
       uint32_t w1 = (i + 1 < n) ? mem_r32(addr + 4 + (i + 1) * 4) : 0;
       uint32_t w2 = (i + 2 < n) ? mem_r32(addr + 4 + (i + 2) * 4) : 0;
-      if (op == 0x02) { nfill++; fprintf(stderr, "  FILL rgb=(%d,%d,%d) at(%d,%d) %dx%d\n",
+      if (op == 0x02) { nfill++; fprintf(out, "  FILL rgb=(%d,%d,%d) at(%d,%d) %dx%d\n",
           c&0xFF,(c>>8)&0xFF,(c>>16)&0xFF, w1&0x3FF,(w1>>16)&0x1FF, w2&0x3FF,(w2>>16)&0x1FF); }
       else if (op >= 0x80 && op <= 0x9F) { ncopy++; uint32_t w3 = (i+3<n)?mem_r32(addr+4+(i+3)*4):0;
-        fprintf(stderr, "  COPY src(%d,%d)->dst(%d,%d) %dx%d [reflection/fade]\n",
+        fprintf(out, "  COPY src(%d,%d)->dst(%d,%d) %dx%d [reflection/fade]\n",
           w1&0x3FF,(w1>>16)&0x1FF, w2&0x3FF,(w2>>16)&0x1FF, w3&0x3FF,(w3>>16)&0x1FF); }
       else if (op >= 0xA0 && op <= 0xBF) nup++;
       else if (op >= 0xE1 && op <= 0xE6) nenv++;
       else if (op >= 0x20 && op <= 0x3F) { npoly++;
-        if (((op>>1)&1) && !((op>>2)&1)) fprintf(stderr, "  POLY semi flat rgb=(%d,%d,%d) [fade/overlay?]\n",
+        if (((op>>1)&1) && !((op>>2)&1)) fprintf(out, "  POLY semi flat rgb=(%d,%d,%d) [fade/overlay?]\n",
           c&0xFF,(c>>8)&0xFF,(c>>16)&0xFF); }
       else if (op >= 0x60 && op <= 0x7F) nrect++;
       else if (op >= 0x40 && op <= 0x5F) { nline++; break; }
@@ -1245,16 +1287,19 @@ static void gpu_scene_dump(uint32_t madr) {
     }
     uint32_t next = hdr & 0xFFFFFF; if (next == 0xFFFFFF || next == 0) break; addr = next & 0x1FFFFC;
   }
-  fprintf(stderr, "[scene] f%d totals: poly=%d rect=%d line=%d fill=%d vramcopy=%d upload=%d env=%d\n",
+  fprintf(out, "[scene] f%d totals: poly=%d rect=%d line=%d fill=%d vramcopy=%d upload=%d env=%d\n",
           s_frame, npoly, nrect, nline, nfill, ncopy, nup, nenv);
 }
+// On-demand scene dump for the live debug server (dbg_server.c): classify the CURRENT frame's
+// last-submitted OT (g_ot_madr, set by gpu_dma2_linked_list) into `out`.
+void gpu_scene_dump_now(FILE* out) { gpu_scene_dump(out, g_ot_madr); }
 
 // DMA channel 2 (GPU): walk an ordering-table linked list from `madr`, feeding each node's
 // GP0 words to the parser. Header word: bits[24..31]=word count, bits[0..23]=next node addr
 // (0xFFFFFF = end).
 void gpu_dma2_linked_list(uint32_t madr) {
   { static int sd = -2; if (sd == -2) { const char* e = getenv("PSXPORT_SCENEDUMP"); sd = e ? atoi(e) : -1; }
-    if (sd >= 0 && s_frame == sd) gpu_scene_dump(madr); }
+    if (sd >= 0 && s_frame == sd) gpu_scene_dump(stderr, madr); }
   s_dma2++;
   g_ot_madr = madr & 0x1FFFFC;
   uint32_t addr = madr & 0x1FFFFC;
