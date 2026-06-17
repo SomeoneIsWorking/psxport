@@ -1075,6 +1075,9 @@ void gpu_present_ex(int do_blit) {
   { void ws_sx_dump(const char*);   // widescreen RE (later-55): dump GTE screen-X histogram
     if (getenv("PSXPORT_WS_SXHIST") && s_frame > 0 && (s_frame % 500) == 0) {
       char t[32]; snprintf(t, sizeof t, "f%d", s_frame); ws_sx_dump(t); } }
+  { void proj_probe_dump(const char*);   // Phase-1: native-projection 0-diff verifier (PSXPORT_PROJPROBE)
+    if (getenv("PSXPORT_PROJPROBE") && s_frame > 0 && (s_frame % 200) == 0) {
+      char t[32]; snprintf(t, sizeof t, "f%d", s_frame); proj_probe_dump(t); } }
   // PSXPORT_PROVAT="x,y[:frame]" — at present time, report (in DISPLAY space, so the double buffer
   // is irrelevant) which primitive last wrote each pixel in a 7x7 box around (x,y), with how many
   // frames ago it was drawn. A wrong pixel whose writer is the current frame = actively drawn (the

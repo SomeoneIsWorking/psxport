@@ -200,6 +200,21 @@ libgpu (all via the 0x800A5998 table; names from debug strings): `FUN_80080f6c`=
   renderer, not the DMA-register emulation. VERIFIED **0-pixel-diff** vs recomp (PSXPORT_OT_RECOMP=1) at
   f1500 (514-poly scene). Next: PutDrawEnv (FUN_800815d0) + PutDispEnv (FUN_8008179c) → full native screen
   geometry, then enable widescreen (wide OFX + wide clip + wide render target).
+- **Native projection — RTPS/RTPT in native C** (later-100, plan atomic-riding-sparkle Phase 1): the GTE
+  per-vertex projection (matrix·vertex → view-space IR1/2/3, depth SZ, integer screen SX/SY) is now
+  reimplemented in native C in `runtime/recomp/gte_beetle.c` (`proj_native_vertex`, mirroring
+  mednafen/psx/gte.c: MultiplyMatrixByVector_PT + UNR `Divide`/`CalcRecip`/DivTable + TransformXY clamps).
+  It ALSO emits the FLOAT data the integer GP0 packet throws away — subpixel screen (precise_x/y) +
+  view-space pos + depth — which the renderer needs and the OT-reordered GP0 stream can't carry. **VERIFIED
+  0-diff** vs Beetle's GTE on real gameplay (the field, `PSXPORT_AUTO_GAMEPLAY=1`): over 1.28M verts/frame,
+  IR=0-diff, SZ=0-diff, SX/SY=0-diff, and our float screen rounds to the integer projection 100%. Probe:
+  `PSXPORT_PROJPROBE=1` (read-only verifier, gameplay untouched — the real GTE still runs; this only
+  cross-checks). **Gotcha (RE'd here):** Beetle's XY_FIFO push writes the new vertex into BOTH slots 2 & 3
+  (`XY_FIFO(2)=XY_FIFO(3)` runs after `(3)=new`), so after an RTPT the 3 verts read back at DR12/DR13/DR14
+  (DR15==DR14), NOT DR13-15; the Z_FIFO shifts cleanly so its verts are at DR17/18/19. This replaces the
+  value-keyed PGXP-lite cache as the depth/subpixel source. NEXT (Phase 1 cont.): attach this float prim
+  AT SUBMISSION (own the submit wrappers `FUN_8007778c`… so the renderer gets float depth per prim without
+  the screen-coord lookup), then Phase 2 = PC-native render targets + real depth from this view-space Z.
 
 ### Native ownership plan (reimplement libgpu, keep recomp body as oracle via rec_set_override)
 1. Own **DrawOTag** (FUN_80080f6c): walk the ordering table in native C, decode each primitive packet by

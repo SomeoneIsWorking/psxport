@@ -171,6 +171,133 @@ void gte_probe_dump(const char* tag) {
   fprintf(stderr, "  DepthCue DQA(cr27)=%d DQB(cr28)=%d   [IR0 = DQB + DQA*h/sz -> fog factor]\n",
           (int16_t)GTE_ReadCR(27),(int32_t)GTE_ReadCR(28));
 }
+// --- Native projection (Phase 1): reimplement RTPS/RTPT in native C, oracle-gate it ----------------
+// The engine projects every vertex through the GTE (RTPS/RTPT) and then copies the integer screen
+// coords into GP0 packets. To OWN the projection (plan atomic-riding-sparkle, Phase 1) we recompute it
+// here in native C from the loaded matrix + input vertex, producing both the integer outputs (to prove
+// 0-diff vs Beetle's GTE — i.e. our math IS the engine's projection, so gameplay stays untouched) and
+// the FLOAT view-space pos / screen / depth that the renderer needs and that the GP0 packet drops.
+// This replaces the value-keyed PGXP-lite cache as the source of subpixel/depth (which gets attached at
+// submission in a later step); here it is a read-only verifier. The integer half exactly mirrors
+// mednafen/psx/gte.c (MultiplyMatrixByVector_PT + Divide/UNR + TransformXY), so a 0-diff result proves
+// the reimplementation is faithful. Gated on PSXPORT_PROJPROBE (read-only, no effect on output).
+#include <compat/intrinsics.h>   // compat_clz_u16, matching Beetle's Divide() shift-bias
+
+typedef struct { int ir1, ir2, ir3, sz, sx, sy; float px, py, pz, vx, vy, vz; } ProjVtx;
+
+static uint8_t s_divtab[0x101];
+static int     s_divtab_init = 0;
+static void proj_divtab_init(void) {                       // mirrors GTE_Init's DivTable build
+  for (uint32_t d = 0x8000; d < 0x10000; d += 0x80) {
+    uint32_t xa = 512;
+    for (int i = 1; i < 5; i++) xa = (xa * (1024 * 512 - ((d >> 7) * xa))) >> 18;
+    s_divtab[(d >> 7) & 0xFF] = ((xa + 1) >> 1) - 0x101;
+  }
+  s_divtab[0x100] = s_divtab[0xFF];
+  s_divtab_init = 1;
+}
+static int32_t proj_recip(uint16_t divisor) {              // mirrors CalcRecip
+  int32_t x   = 0x101 + s_divtab[(((divisor & 0x7FFF) + 0x40) >> 7)];
+  int32_t t   = (((int32_t)divisor * -x) + 0x80) >> 8;
+  return ((x * (131072 + t)) + 0x80) >> 8;
+}
+static uint32_t proj_divide(uint32_t dividend, uint32_t divisor) {  // mirrors Divide (UNR)
+  if ((divisor * 2) > dividend) {
+    unsigned s = compat_clz_u16((uint16_t)divisor);
+    dividend <<= s; divisor <<= s;
+    uint32_t r = (uint32_t)(((uint64_t)dividend * proj_recip((uint16_t)(divisor | 0x8000)) + 32768) >> 16);
+    return r > 0x1FFFF ? 0x1FFFF : r;
+  }
+  return 0x1FFFF;                                          // Z <= H/2 -> clip
+}
+static inline int64_t proj_a_mv(int64_t v) {               // A_MV: 44-bit signed wrap (no flags here)
+  return (int64_t)((uint64_t)v << 20) >> 20;
+}
+static inline int32_t proj_clampi(int32_t v, int32_t lo, int32_t hi) {
+  return v < lo ? lo : (v > hi ? hi : v);
+}
+
+// Recompute one vertex's projection from a snapshot of the GTE control/data regs (read post-instruction;
+// neither matrix CR0-7 nor the input V regs DR0-5 are touched by RTP, so reading after is exact).
+static void proj_native_vertex(unsigned vidx, uint32_t insn, ProjVtx* out) {
+  const uint32_t sf = (insn & (1 << 19)) ? 12 : 0;
+  const int      lm = (insn >> 10) & 1;
+  // rotation matrix RT (CR0-4) and translation TR (CR5-7), exactly as MultiplyMatrixByVector_PT packs.
+  const uint32_t c0 = gte_read_ctrl(0), c1 = gte_read_ctrl(1), c2 = gte_read_ctrl(2),
+                 c3 = gte_read_ctrl(3), c4 = gte_read_ctrl(4);
+  const int32_t RT[3][3] = {
+    { (int16_t)c0,        (int16_t)(c0 >> 16), (int16_t)c1 },
+    { (int16_t)(c1 >> 16), (int16_t)c2,        (int16_t)(c2 >> 16) },
+    { (int16_t)c3,        (int16_t)(c3 >> 16), (int16_t)c4 } };
+  const int64_t TR[3] = { (int32_t)gte_read_ctrl(5), (int32_t)gte_read_ctrl(6), (int32_t)gte_read_ctrl(7) };
+  // input vertex V[vidx] from data regs (Vectors macro): DR[2v]=lo:VX hi:VY, DR[2v+1] lo:VZ
+  const uint32_t dlo = gte_read_data(2 * vidx), dhi = gte_read_data(2 * vidx + 1);
+  const int32_t  V[3] = { (int16_t)dlo, (int16_t)(dlo >> 16), (int16_t)dhi };
+
+  int32_t mac[3]; int64_t tmp2_unshifted = 0;
+  for (int i = 0; i < 3; i++) {
+    int64_t t = TR[i] << 12;
+    t = proj_a_mv(t + (int64_t)RT[i][0] * V[0]);
+    t = proj_a_mv(t + (int64_t)RT[i][1] * V[1]);
+    t = proj_a_mv(t + (int64_t)RT[i][2] * V[2]);
+    if (i == 2) tmp2_unshifted = t;                        // for IR3 PTZ / SZ (uses tmp>>12)
+    mac[i] = (int32_t)(t >> sf);
+  }
+  const int32_t lo_b = -32768 + (lm << 15);
+  out->ir1 = proj_clampi(mac[0], lo_b, 32767);             // Lm_B
+  out->ir2 = proj_clampi(mac[1], lo_b, 32767);
+  out->ir3 = proj_clampi(mac[2], lo_b, 32767);             // Lm_B_PTZ (clamp identical; ftv only flags)
+  out->sz  = proj_clampi((int32_t)(tmp2_unshifted >> 12), 0, 65535);  // Lm_D unchained
+  out->vx  = (float)out->ir1; out->vy = (float)out->ir2; out->vz = (float)out->ir3;  // view-space (IR)
+
+  const int32_t OFX = (int32_t)gte_read_ctrl(24), OFY = (int32_t)gte_read_ctrl(25);
+  const uint16_t H = (uint16_t)gte_read_ctrl(26);
+  int64_t h_div_sz = proj_divide(H, (uint32_t)out->sz);    // integer UNR division (matches gameplay)
+  out->sx = proj_clampi((int32_t)(((int64_t)OFX + out->ir1 * h_div_sz) >> 16), -1024, 1023);  // Lm_G
+  out->sy = proj_clampi((int32_t)(((int64_t)OFY + out->ir2 * h_div_sz) >> 16), -1024, 1023);
+  // float (subpixel) screen + depth — the data we keep that the integer GP0 packet throws away.
+  float pz = (float)H * 0.5f; if ((float)out->sz > pz) pz = (float)out->sz;
+  float ph = (float)H / pz;
+  float fofx = (float)OFX / 65536.0f, fofy = (float)OFY / 65536.0f;
+  out->px = fofx + (float)out->ir1 * ph;
+  out->py = fofy + (float)out->ir2 * ph;
+  if (out->px < -1024.f) out->px = -1024.f; if (out->px > 1023.f) out->px = 1023.f;
+  if (out->py < -1024.f) out->py = -1024.f; if (out->py > 1023.f) out->py = 1023.f;
+  out->pz = pz;
+}
+
+// Verification accumulators (PSXPORT_PROJPROBE).
+static int  s_projprobe = -1;
+static long s_pp_verts, s_pp_bad_ir, s_pp_bad_sz, s_pp_bad_sx, s_pp_bad_sy;
+static int  s_pp_maxd_ir, s_pp_maxd_sz, s_pp_maxd_sx, s_pp_maxd_sy;
+static long s_pp_subpix_le1;   // how often round(precise) is within 1px of the integer screen coord
+static void proj_probe_one(unsigned vidx, uint32_t insn, int b_ir1, int b_ir2, int b_ir3, int b_sz,
+                           int b_sx, int b_sy) {
+  ProjVtx p; proj_native_vertex(vidx, insn, &p);
+  s_pp_verts++;
+  int dir = 0;
+  if (p.ir1 != b_ir1) dir = abs(p.ir1 - b_ir1) > dir ? abs(p.ir1 - b_ir1) : dir;
+  if (p.ir2 != b_ir2) { int d = abs(p.ir2 - b_ir2); if (d > dir) dir = d; }
+  if (p.ir3 != b_ir3) { int d = abs(p.ir3 - b_ir3); if (d > dir) dir = d; }
+  if (dir) { s_pp_bad_ir++; if (dir > s_pp_maxd_ir) s_pp_maxd_ir = dir; }
+  int dsz = abs(p.sz - b_sz); if (dsz) { s_pp_bad_sz++; if (dsz > s_pp_maxd_sz) s_pp_maxd_sz = dsz; }
+  int dsx = abs(p.sx - b_sx); if (dsx) { s_pp_bad_sx++; if (dsx > s_pp_maxd_sx) s_pp_maxd_sx = dsx; }
+  int dsy = abs(p.sy - b_sy); if (dsy) { s_pp_bad_sy++; if (dsy > s_pp_maxd_sy) s_pp_maxd_sy = dsy; }
+  // sanity: our subpixel float, rounded, should land within 1px of the integer projection
+  int rx = (int)(p.px < 0 ? p.px - 0.5f : p.px + 0.5f), ry = (int)(p.py < 0 ? p.py - 0.5f : p.py + 0.5f);
+  if (abs(rx - b_sx) <= 1 && abs(ry - b_sy) <= 1) s_pp_subpix_le1++;
+}
+void proj_probe_dump(const char* tag) {
+  if (s_projprobe <= 0 || s_pp_verts == 0) return;
+  fprintf(stderr, "[projprobe %s] verts=%ld  IR diff=%ld(max%d) SZ diff=%ld(max%d) "
+          "SX diff=%ld(max%d) SY diff=%ld(max%d)  subpix<=1px=%ld(%.2f%%)\n",
+          tag, s_pp_verts, s_pp_bad_ir, s_pp_maxd_ir, s_pp_bad_sz, s_pp_maxd_sz,
+          s_pp_bad_sx, s_pp_maxd_sx, s_pp_bad_sy, s_pp_maxd_sy,
+          s_pp_subpix_le1, 100.0 * s_pp_subpix_le1 / s_pp_verts);
+  s_pp_verts = s_pp_bad_ir = s_pp_bad_sz = s_pp_bad_sx = s_pp_bad_sy = s_pp_subpix_le1 = 0;
+  s_pp_maxd_ir = s_pp_maxd_sz = s_pp_maxd_sx = s_pp_maxd_sy = 0;
+}
+
 void     gte_op(R3000* c, uint32_t insn)         { (void)c; GTE_Instruction(insn);
                                                    unsigned op = insn & 0x3F;
                                                    if (s_gteprobe < 0) { const char* e = getenv("PSXPORT_GTEPROBE"); s_gteprobe = e ? atoi(e) : 0; }
@@ -178,6 +305,32 @@ void     gte_op(R3000* c, uint32_t insn)         { (void)c; GTE_Instruction(insn
                                                    if (op == 0x01 || op == 0x30) {
                                                      ws_sx_record();          // self-gated (PSXPORT_WS_SXHIST)
                                                      if (g_wide60_on) wide60_rtp(op);
+                                                     if (s_projprobe < 0) { s_projprobe = getenv("PSXPORT_PROJPROBE") ? 1 : 0;
+                                                                            if (s_projprobe && !s_divtab_init) proj_divtab_init(); }
+                                                     if (s_projprobe > 0) {
+                                                       // Compare native projection to Beetle's outputs. After RTPS the single vertex
+                                                       // is in XY_FIFO(3)=DR15 / Z_FIFO(3)=DR19 / IR=DR9-11. After RTPT the 3 verts
+                                                       // land in XY DR12,DR13,DR14 (DR15==DR14, see push quirk below) and Z DR17-19;
+                                                       // IR holds only the last vertex.
+                                                       if (op == 0x01) {
+                                                         uint32_t xy = gte_read_data(15), z = gte_read_data(19);
+                                                         proj_probe_one(0, insn, (int16_t)gte_read_data(9), (int16_t)gte_read_data(10),
+                                                                        (int16_t)gte_read_data(11), (uint16_t)z, (int16_t)xy, (int16_t)(xy >> 16));
+                                                       } else {
+                                                         // XY_FIFO push duplicates the new value into slots 2 & 3 (gte.c TransformXY:
+                                                         // XY_FIFO(2)=XY_FIFO(3) runs after (3)=new), so after 3 pushes v0,v1,v2 land in
+                                                         // DR12,DR13,DR14 (DR15==DR14). Z_FIFO shifts cleanly: v0,v1,v2 -> DR17,DR18,DR19.
+                                                         for (unsigned i = 0; i < 3; i++) {
+                                                           uint32_t xy = gte_read_data(12 + i), z = gte_read_data(17 + i);
+                                                           // IR1-3 only valid for the last vertex; pass native's own for the others so
+                                                           // the IR check is meaningful only on vertex 2 (others compare native vs native).
+                                                           int bir1, bir2, bir3;
+                                                           if (i == 2) { bir1 = (int16_t)gte_read_data(9); bir2 = (int16_t)gte_read_data(10); bir3 = (int16_t)gte_read_data(11); }
+                                                           else { ProjVtx t; proj_native_vertex(i, insn, &t); bir1 = t.ir1; bir2 = t.ir2; bir3 = t.ir3; }
+                                                           proj_probe_one(i, insn, bir1, bir2, bir3, (uint16_t)z, (int16_t)xy, (int16_t)(xy >> 16));
+                                                         }
+                                                       }
+                                                     }
                                                    } }
 void     gte_init(void)                          { GTE_Init(); GTE_Power();
   // PSXPORT_WIDE is PC-native widescreen now: the GTE keeps its NATIVE projection (NO squish) and the
