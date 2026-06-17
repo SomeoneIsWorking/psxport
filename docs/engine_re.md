@@ -213,6 +213,20 @@ This is the port ACCOUNTING for every draw instead of blind GP0 rasterization. F
   grid — now disabled by default (bf69890). The water polys are among the 514; next attribute them by
   screen region + texpage/CLUT (extend SCENEDUMP with a region filter) to confirm vs the oracle.
 
+## Issue root-causes (understood via the scene classifier + frame-stepping, later-99)
+- **Broken water** — ROOT CAUSE: the PGXP value-keyed vertex-smoothing TRICK was tearing the water's
+  dense textured grid (collisions snapped grid verts to wrong subpixel positions). Water is ordinary
+  textured geometry (scene classifier: no reflection copy). FIX: PGXP default-off (bf69890). Not a game bug.
+- **Intro story-cutscene "flashes full visibility on fade-in"** — the cutscene is the post-NewGame prologue
+  (stage 0x8010637C; "Tomba jumps into the sea"). Frame-stepped the fade-in in the port's SW path: the
+  panel (drawn as ~3 sprites/rects, NO full-screen overlay, NO fill) brightens as a **smooth monotonic
+  ramp** (mean 0.006→0.32 over ~30f) — i.e. the engine fades by **ramping the sprites' modulation color**
+  0→full, and it does so CORRECTLY. So the flash is NOT in the game's fade logic — it is renderer-side:
+  the **VK present path** (1-frame-behind/batched present, or stale frame at the title→black→fade
+  transition) or the **FMV→engine handoff** (./run.sh has FMV on; drive.py SW path with NO_FMV is clean).
+  NEXT: reproduce on the VK path (PSXPORT_VK_SHOT across the prologue entry) to pin the exact present-path
+  frame, then fix our presentation — a renderer bug we own, distinct from the engine.
+
 ## Open RE items (next, in order)
 1. ~~The entity list + its walk~~ — **DONE** (above): lists `DAT_800fb168`/`DAT_800f2624`, walk
    `FUN_8007a904`, node layout. Handlers are per-object fn pointers @ +0x1c (not a type-indexed table).
