@@ -287,6 +287,27 @@ This is the port ACCOUNTING for every draw instead of blind GP0 rasterization. F
     s_tex (0,256) for the SAME captured GP0 (extend swvkcap to also raw-dump s_vram) and diff which
     primitives/region differ; check whether the cutscene actually redraws (0,256) every frame or leaves
     it stale (then VK retains the old full-bright render where SW's last redraw was dim).
+  - **SOLVED (2026-06-17): ROOT CAUSE = VK lost OT-order accumulation of OVERLAPPING semi-transparent
+    prims.** The fade is NOT GPF/modulation — the cutscene scene is drawn at FULL vertex colour every
+    frame and a full-screen SUBTRACTIVE semi tile (blend mode 2, `scene − fg`) darkens it; `fg` ramps
+    248→123 so the scene fades IN from black. The flash is the ONE handoff frame between the panel
+    fade-OUT and the scene fade-IN, where TWO stacked full-screen subtractive tiles are emitted
+    (`PSXPORT_SEMIDUMP`: `blend=2 col=(255) fullscreen` then `blend=2 col=(8) fullscreen`). SW
+    rasterizes them sequentially → `scene−255−8 = black`. VK drew ALL semi prims in ONE pass sampling a
+    single PRE-semi framebuffer snapshot, so the two tiles did NOT accumulate — each subtracted from the
+    same bright scene and the later (−8) tile OVERWROTE the (−255) tile → `scene−8 ≈ full bright` → a
+    one-frame flash on the buffer it drew (displayed the next frame at disp=(0,256)). Diagnosed with two
+    new env-gated, renderer-independent probes in gpu_native.c: **`PSXPORT_FADEDBG="a:b"`** (per-frame
+    max prim colour, semi colour range, bigsemi count, disp/draw origin) and **`PSXPORT_SEMIDUMP=frame`**
+    (each semi prim's blend mode + colour + bbox). The GP0 colour ramp is identical under SW and VK, so
+    these settle "engine vs renderer" without VK. **FIX (gpu_vk.c + gpu_native.c):** partition the semi
+    batch into overlap GROUPS (`gpu_vk_semi_group(bbox)` per semi prim; a prim that overlaps the current
+    group's accumulated bbox starts a new group) and draw each group with its OWN fresh framebuffer
+    snapshot, so a later group blends against earlier groups' results — exactly the sequential PSX/SW
+    order. Non-overlapping semis (e.g. water tiles) stay ONE group → no extra cost. **VERIFIED:** VK fade
+    now ramps smoothly f345→f400 (mean 0→12.7) tracking SW frame-for-frame, no spike (was ~57 at the
+    flash frame); residual VK/SW drift ~10% from f382 on is the known dither/subpixel-rounding residual,
+    not the flash.
 
 ## Open RE items (next, in order)
 1. ~~The entity list + its walk~~ — **DONE** (above): lists `DAT_800fb168`/`DAT_800f2624`, walk

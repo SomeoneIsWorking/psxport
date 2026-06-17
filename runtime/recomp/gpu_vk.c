@@ -122,6 +122,29 @@ static VkBuffer        s_semibuf;     // SEMI-transparent prims (drawn after opa
 static VkDeviceMemory  s_semibuf_mem;
 static void*           s_semibuf_ptr;
 static int             s_semi_n;
+// OT-order-correct semi blending: VK draws all semi prims in one pass sampling ONE pre-semi snapshot,
+// so OVERLAPPING semi prims don't accumulate (each blends against the same scene; the later one
+// overwrites) — unlike the sequential PSX/SW rasterizer. That broke stacked full-screen subtractive
+// fade tiles (intro fade flash). Fix: partition the semi batch into GROUPS where no prim overlaps an
+// earlier prim in the same group, then draw each group with its own fresh framebuffer snapshot so a
+// later group sees the earlier groups' blends. Non-overlapping semis (water tiles) stay one group.
+#define SEMI_GRP_CAP 2048
+static int s_semi_grp[SEMI_GRP_CAP];   // vertex-index at which each NEW group starts (group 0 = index 0)
+static int s_semi_grp_n;
+static int s_sg_x0, s_sg_y0, s_sg_x1, s_sg_y1, s_sg_valid;   // current group's accumulated bbox (abs coords)
+// Called once per SEMI prim (before its triangles are appended) with the prim's ABSOLUTE bbox. Starts a
+// new group whenever the prim overlaps the current group's accumulated bbox.
+void gpu_vk_semi_group(int x0, int y0, int x1, int y1) {
+  if (!s_sg_valid) { s_sg_x0=x0; s_sg_y0=y0; s_sg_x1=x1; s_sg_y1=y1; s_sg_valid=1; return; }
+  int overlap = (x0 < s_sg_x1 && s_sg_x0 < x1 && y0 < s_sg_y1 && s_sg_y0 < y1);  // strict (touching edges OK)
+  if (overlap) {
+    if (s_semi_grp_n < SEMI_GRP_CAP) s_semi_grp[s_semi_grp_n++] = s_semi_n;   // boundary = this prim's first vertex
+    s_sg_x0=x0; s_sg_y0=y0; s_sg_x1=x1; s_sg_y1=y1;   // restart accumulated bbox at this prim
+  } else {
+    if (x0 < s_sg_x0) s_sg_x0=x0; if (y0 < s_sg_y0) s_sg_y0=y0;
+    if (x1 > s_sg_x1) s_sg_x1=x1; if (y1 > s_sg_y1) s_sg_y1=y1;
+  }
+}
 // Dirty VRAM regions written by SW this frame (CPU->VRAM uploads, VRAM copies, fills) — mirrored from
 // s_vram into the PERSISTENT VK VRAM image at present (the framebuffer region stays VK-owned/persistent).
 typedef struct { int x, y, w, h; } VkRect;
@@ -617,9 +640,14 @@ void gpu_vk_present(const uint16_t* src, int sx, int sy, int w, int h) {
     if (s_tex_n) { vkCmdBindPipeline(s_cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, s_tritex_pipe);
                    vkCmdBindVertexBuffers(s_cmd, 0, 1, &s_tvbuf, &go); vkCmdDraw(s_cmd, s_tex_n, 1, 0, 0); }
     vkCmdEndRenderPass(s_cmd);
-    if (s_semi_n) {
-      // snapshot the post-opaque framebuffer (+ atlas) -> vram_tex: semi prims sample it for BOTH the
-      // texture and the blend destination.
+    // SEMI pass, OT-order-correct: draw each overlap-group with a FRESH framebuffer snapshot so a later
+    // group blends against the earlier groups' results (stacked fade tiles accumulate, as on hardware).
+    for (int g = 0; g <= s_semi_grp_n && s_semi_n; g++) {
+      int gstart = (g == 0) ? 0 : s_semi_grp[g - 1];
+      int gend   = (g < s_semi_grp_n) ? s_semi_grp[g] : s_semi_n;
+      if (gend <= gstart) continue;
+      // snapshot the current framebuffer (+ atlas) -> vram_tex: semi prims sample it for BOTH the
+      // texture and the blend destination (now includes prior groups' semi writes).
       img_barrier(VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                   VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
                   VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT);
@@ -637,7 +665,7 @@ void gpu_vk_present(const uint16_t* src, int sx, int sy, int w, int h) {
       vkCmdSetViewport(s_cmd, 0, 1, &gv); vkCmdSetScissor(s_cmd, 0, 1, &gs);
       vkCmdBindDescriptorSets(s_cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, s_pll, 0, 1, &s_dset_tex, 0, 0);
       vkCmdBindPipeline(s_cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, s_tritex_semi_pipe);   // depth-test, NO write
-      vkCmdBindVertexBuffers(s_cmd, 0, 1, &s_semibuf, &go); vkCmdDraw(s_cmd, s_semi_n, 1, 0, 0);
+      vkCmdBindVertexBuffers(s_cmd, 0, 1, &s_semibuf, &go); vkCmdDraw(s_cmd, gend - gstart, 1, gstart, 0);
       vkCmdEndRenderPass(s_cmd);
     }
     img_barrier(VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
@@ -1107,6 +1135,7 @@ void gpu_vk_frame_end(const uint16_t* svram, int frame) {
     }
   }
   s_tri_n = 0; s_tex_n = 0; s_semi_n = 0; s_dirty_n = 0;
+  s_semi_grp_n = 0; s_sg_valid = 0;
 }
 
 // PSXPORT_VK_TRITEST=1: headless-ish self-test of the triangle rasterizer. Draws a known flat tri and a
@@ -1151,6 +1180,7 @@ void gpu_vk_rawdump_arm(const char* path, int frame) { (void)path;(void)frame; }
 void gpu_vk_vram_region(const char* path, int x, int y, int w, int h) { (void)path;(void)x;(void)y;(void)w;(void)h; }
 void gpu_vk_stats(int* tri, int* tex, int* semi) { if(tri)*tri=0; if(tex)*tex=0; if(semi)*semi=0; }
 void gpu_vk_dirty(int x, int y, int w, int h) { (void)x;(void)y;(void)w;(void)h; }
+void gpu_vk_semi_group(int x0, int y0, int x1, int y1) { (void)x0;(void)y0;(void)x1;(void)y1; }
 void gpu_vk_draw_tri(int a,int b,int c,int d,int e,int f,int g,int h,int i,int j,int k,int l,int m,int n,int o) {
   (void)a;(void)b;(void)c;(void)d;(void)e;(void)f;(void)g;(void)h;(void)i;(void)j;(void)k;(void)l;(void)m;(void)n;(void)o;
 }

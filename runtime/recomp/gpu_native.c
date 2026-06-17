@@ -57,6 +57,30 @@ static uint32_t s_prim_order = 0; // per-frame OT submission index of the curren
 static long s_gp0_words = 0, s_dma2 = 0;  // diagnostics: GP0 words + DMA2 triggers per frame
 static uint32_t s_cur_node = 0;   // REDDBG: RAM addr of the OT node currently being fed to GP0
 uint32_t g_ot_madr = 0;           // last OT DMA root (extern in internal header)
+
+// Fade-flash diagnostic (PSXPORT_FADEDBG="a:b"): per-frame max emitted prim brightness + how the
+// scene is drawn, to settle whether a bright fade frame is in the GP0 (engine emits it) or invented
+// by VK. Works identically under SW and VK (same tee'd colors), so one playthrough pins the locus.
+static int s_fade_maxc = 0, s_fade_npoly = 0, s_fade_nsemi = 0, s_fade_lasty = 0;
+static int s_fade_semimax = -1, s_fade_semimin = 999, s_fade_bigsemi = 0;
+static void fade_note(int r, int g, int b, int offy, int semi) {
+  int m = r > g ? r : g; if (b > m) m = b;
+  if (m > s_fade_maxc) s_fade_maxc = m;
+  s_fade_npoly++; if (semi) { s_fade_nsemi++;
+    if (m > s_fade_semimax) s_fade_semimax = m; if (m < s_fade_semimin) s_fade_semimin = m; }
+  s_fade_lasty = offy;
+}
+// flag a semi prim wider than ~half the screen (a full-screen fade overlay tile)
+static void fade_note_size(int w, int h, int semi) { if (semi && w >= 160 && h >= 120) s_fade_bigsemi++; }
+// PSXPORT_SEMIDUMP=frame: log each SEMI prim (blend mode + color + bbox) at `frame`, to see how the
+// fade overlay tiles stack (VK draws them all vs one snapshot, so stacked tiles don't accumulate).
+extern int s_frame;
+static void semi_dump(const char* kind, int blend, int r, int g, int b, int x0, int y0, int x1, int y1, int offy) {
+  static int sf = -2; if (sf == -2) { const char* e = getenv("PSXPORT_SEMIDUMP"); sf = e ? atoi(e) : -1; }
+  if (sf >= 0 && s_frame == sf)
+    fprintf(stderr, "[semidump] f%d %s blend=%d col=(%d,%d,%d) bbox=(%d,%d)-(%d,%d) offY=%d\n",
+            s_frame, kind, blend, r, g, b, x0, y0, x1, y1, offy);
+}
 // s_frame is defined below (int s_frame = 0;) and declared extern in gpu_native_internal.h
 
 // ---- Per-pixel primitive provenance (PSXPORT_PROVAT="x,y[:frame]") --------------------------
@@ -492,6 +516,11 @@ static void gp0_exec(void) {
       }
     }
     int shade = gouraud || !textured;       // flat-untextured uses the command color
+    { int mr=0,mg=0,mb=0,xmn=99999,xmx=-99999,ymn=99999,ymx=-99999;
+      for (int i=0;i<nv;i++){ if(v[i].r>mr)mr=v[i].r; if(v[i].g>mg)mg=v[i].g; if(v[i].b>mb)mb=v[i].b;
+        if(v[i].x<xmn)xmn=v[i].x; if(v[i].x>xmx)xmx=v[i].x; if(v[i].y<ymn)ymn=v[i].y; if(v[i].y>ymx)ymx=v[i].y; }
+      fade_note(mr, mg, mb, s_off_y, semi); fade_note_size(xmx-xmn, ymx-ymn, semi);
+      if (semi) semi_dump("poly", s_tp_blend, mr, mg, mb, xmn, ymn, xmx, ymx, s_off_y); }
     { void wide60_join_poly(int, int); wide60_join_poly(v[0].x, v[0].y); }  // wide60: object join
     if (g_wide60_on) {                       // wide60: tee the full primitive into PrimFrame B
       void wide60_cap_poly(int, int, const int*, const int*, const int*, const int*,
@@ -516,6 +545,10 @@ static void gp0_exec(void) {
                                      rs[i]=v[i].r; gs[i]=v[i].g; bs[i]=v[i].b; }
       int mode = textured ? s_tp_mode : 3, rw = raw ? 1 : 0;
       if (semi) {
+        { void gpu_vk_semi_group(int,int,int,int);   // OT-order grouping (overlap -> fresh fb snapshot)
+          int bx0=xs[0],by0=ys[0],bx1=xs[0],by1=ys[0];
+          for (int i=1;i<nv;i++){ if(xs[i]<bx0)bx0=xs[i]; if(xs[i]>bx1)bx1=xs[i]; if(ys[i]<by0)by0=ys[i]; if(ys[i]>by1)by1=ys[i]; }
+          gpu_vk_semi_group(bx0, by0, bx1, by1); }
         gpu_vk_draw_semi(xs, ys, us, vs, rs, gs, bs, s_tp_x, s_tp_y, mode, rw, s_clut_x, s_clut_y,
                          s_tw_mx, s_tw_my, s_tw_ox, s_tw_oy, s_da_x0, s_da_y0, s_da_x1, s_da_y1, s_tp_blend);
         if (nv == 4) gpu_vk_draw_semi(&xs[1], &ys[1], &us[1], &vs[1], &rs[1], &gs[1], &bs[1], s_tp_x, s_tp_y, mode, rw,
@@ -589,6 +622,8 @@ static void gp0_exec(void) {
                   s_frame, s_cur_node, op, textured?1:0, semi, s_clut_x, s_clut_y, s_tp_x, s_tp_y,
                   cr, cg, cb, x, y, w, h, u0, v0, s_off_x, s_off_y);
       } }
+    fade_note(cr, cg, cb, s_off_y, semi); fade_note_size(w, h, semi);
+    if (semi) semi_dump("sprite", s_tp_blend, cr, cg, cb, x, y, x + w, y + h, s_off_y);
     prov_begin(op, textured ? 1 : 0, semi, cr, cg, cb, x + s_off_x, y + s_off_y, u0, v0);
     if (g_wide60_on) {                       // wide60: tee the sprite/rect into PrimFrame B (snaps)
       void wide60_cap_sprite(int, int, int, int, int, int, int, int, int, int,
@@ -616,6 +651,7 @@ static void gp0_exec(void) {
       unsigned char qr[4]={cr,cr,cr,cr}, qg[4]={cg,cg,cg,cg}, qb[4]={cb,cb,cb,cb};
       int mode = textured ? s_tp_mode : 3, rw = op & 1;
       if (semi) {
+        { void gpu_vk_semi_group(int,int,int,int); gpu_vk_semi_group(X, Y, X+w, Y+h); }  // OT-order grouping
         gpu_vk_draw_semi(qx, qy, qu, qv, qr, qg, qb, s_tp_x, s_tp_y, mode, rw, s_clut_x, s_clut_y,
                          s_tw_mx, s_tw_my, s_tw_ox, s_tw_oy, s_da_x0, s_da_y0, s_da_x1, s_da_y1, s_tp_blend);
         gpu_vk_draw_semi(&qx[1], &qy[1], &qu[1], &qv[1], &qr[1], &qg[1], &qb[1], s_tp_x, s_tp_y, mode, rw,
@@ -661,6 +697,9 @@ static void gp0_exec(void) {
         int xa[4]={x0,x1,x0+ox,x1+ox}, ya[4]={y0,y1,y0+oy,y1+oy}, zu[4]={0,0,0,0};
         unsigned char rr[4]={vr[s],vr[s+1],vr[s],vr[s+1]}, gg[4]={vg[s],vg[s+1],vg[s],vg[s+1]}, bb[4]={vb[s],vb[s+1],vb[s],vb[s+1]};
         int o1[3]={0,1,2}, o2[3]={1,2,3};      // tris (p0,p1,p0') and (p1,p0',p1')
+        if (semi) { void gpu_vk_semi_group(int,int,int,int);   // OT-order grouping for the segment quad
+          int bx0=x0<x1?x0:x1, bx1=x0<x1?x1:x0, by0=y0<y1?y0:y1, by1=y0<y1?y1:y0;
+          gpu_vk_semi_group(bx0, by0, bx1+ox, by1+oy); }
         for (int t = 0; t < 2; t++) { int* o = t ? o2 : o1;
           int X[3]={xa[o[0]],xa[o[1]],xa[o[2]]}, Y[3]={ya[o[0]],ya[o[1]],ya[o[2]]};
           unsigned char R[3]={rr[o[0]],rr[o[1]],rr[o[2]]}, G[3]={gg[o[0]],gg[o[1]],gg[o[2]]}, B[3]={bb[o[0]],bb[o[1]],bb[o[2]]};
@@ -1082,6 +1121,14 @@ void gpu_present_ex(int do_blit) {
     }
   }
   { void gpu_vk_dump(int,int,int,int,int); gpu_vk_dump(s_disp_x, s_disp_y, s_disp_w, s_disp_h, s_frame); }  // PSXPORT_VK_SHOT
+  { static int fa = -2, fb = -2;   // PSXPORT_FADEDBG="a:b": per-frame brightness/draw log over [a,b]
+    if (fa == -2) { const char* e = getenv("PSXPORT_FADEDBG"); fa = fb = -1;
+      if (e) { fa = atoi(e); const char* col = strchr(e, ':'); fb = col ? atoi(col + 1) : fa + 200; } }
+    if (fa >= 0 && s_frame >= fa && s_frame <= fb)
+      fprintf(stderr, "[fadedbg] f%d disp=(%d,%d) drawY=%d maxcol=%d nprim=%d nsemi=%d semi[%d..%d] bigsemi=%d\n",
+              s_frame, s_disp_x, s_disp_y, s_fade_lasty, s_fade_maxc, s_fade_npoly, s_fade_nsemi,
+              s_fade_semimin == 999 ? -1 : s_fade_semimin, s_fade_semimax, s_fade_bigsemi); }
+  s_fade_maxc = 0; s_fade_npoly = 0; s_fade_nsemi = 0; s_fade_semimax = -1; s_fade_semimin = 999; s_fade_bigsemi = 0;
   { void gpu_vk_frame_end(const uint16_t*, int); gpu_vk_frame_end(s_vram, s_frame); }  // VK: diff + batch reset
   s_frame++; s_prims = 0; s_gp0_words = 0; s_dma2 = 0;
   s_prim_order = 0;   // restart the per-frame OT submission order (VK depth) for the next frame
