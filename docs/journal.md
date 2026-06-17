@@ -3836,3 +3836,25 @@ game more FIRST. Memories: [[pc-native-not-emulator-hacks]] (updated), [[dual-co
   title while oracle still mid-scene). NEXT: a `loadram` port REPL cmd to load an identical 2MB guest-RAM
   water-scene snapshot into BOTH cores (oracle `-loadstate`), so both rebuild the same frame from RAM →
   drift-free render compare. THEN root-cause the water. (docs/diff-driver.md updated.)
+
+## 2026-06-17 (later-99) — Graphics OWNERSHIP: scene classifier + first engine fns ported native (0-diff).
+Direction: stop black-boxing the graphics; reimplement the engine's draw path in native C. Done + verified:
+- **Scene classifier** (PSXPORT_SCENEDUMP, gpu_native.c): native read-only OT walk classifying every prim
+  (poly/rect/fill/VRAM-copy/env). The port now ACCOUNTS for each draw. Finding: 2 DrawOTag/frame (clear +
+  main), water = textured GEOMETRY (no reflection copy) → broken water was the PGXP trick (now off).
+- **GTE projection ported native** (game_tomba2.c ov_set_geom_offset/ov_set_geom_screen, 0x800846D0/F0):
+  writes CR24/25/26 directly; OFX=160/OFY=120/H=350. **0-pixel-diff** vs recomp (PSXPORT_GEOM_RECOMP=1).
+- **DrawOTag ported native** (ov_draw_otag, 0x80081560 → our gpu_dma2_linked_list): the per-frame draw
+  submission routes through our native OT walk. **0-pixel-diff** vs recomp (PSXPORT_OT_RECOMP=1) at f1500.
+- **libgpu fn labels corrected** from debug strings: FUN_80080f6c=DrawSync (NOT DrawOTag), 80081560=DrawOTag,
+  800815d0=PutDrawEnv, 8008179c=PutDispEnv. engine_re.md fixed.
+- **Fade flash root-caused**: the engine's prologue fade-in is a SMOOTH modulation-color ramp (frame-stepped,
+  no overlay) — so the flash is RENDERER-side (VK present / FMV handoff), not the engine.
+- **Widescreen (native) attempt — REVERTED, blocked:** moved the horizontal shift into the engine projection
+  (OFX 160→214, WIDE_OFF→0) — math-equivalent to the proven later-93 re-center, and OFX is correct
+  (CR24=0x00D60000, 428x240). BUT the VK wide-FB shows **regular vertical black bars**, and the PROVEN
+  later-93 config (WIDE_OFF=54, OFX=160) shows them TOO → a **pre-existing VK wide-FB regression** (capture
+  or render), NOT my OFX change. Readback buffer is correctly sized (VRAM_W*IMG_H), so not a shot-size bug;
+  cause not yet found (suspect a change between later-93 and now). Reverted the wide experiment to keep the
+  tree clean; widescreen is off by default (./run.sh = 4:3, unaffected). NEXT: isolate the wide-FB bars
+  (bisect gpu_vk since later-93 / compare live-window vs VK_SHOT), then re-land native widescreen on OFX.
