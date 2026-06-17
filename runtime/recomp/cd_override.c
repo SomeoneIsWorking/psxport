@@ -154,6 +154,7 @@ static void ov_cd_loadfile(R3000* c) {
   }
   if (g_cd_verbose)
     fprintf(stderr, "[cd] loadfile %u B @ LBA %u -> 0x%08X ra=0x%08X\n", size, lba, dest, c->r[31]);
+  rec_overlay_loaded(dest, size);  // scan the freshly-loaded bytes for owned overlay library fns
   c->r[V0] = size;
 }
 
@@ -192,6 +193,7 @@ static void ov_cd_async_read(R3000* c) {
   if (nsec) mem_w32(0x800be0e0, lba + nsec - 1);  // DAT_800be0e0 = last sector read (pos tracker)
   if (g_cd_verbose)
     fprintf(stderr, "[cd] async read %u words (%u B) @ LBA %u -> 0x%08X\n", words, bytes, lba, dest);
+  rec_overlay_loaded(dest, bytes); // scan the freshly-loaded bytes for owned overlay library fns
 }
 
 // 0x8001D2A8 FUN_8001d2a8(chan, start_lba, end_lba, flags): the engine's voice/BGM clip player.

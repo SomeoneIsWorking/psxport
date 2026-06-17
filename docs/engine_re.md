@@ -108,9 +108,32 @@ computes the projection and can carry the real per-vertex view-Z straight to the
   the packet word address (`projprim_set_pz`); the renderer reads it (`projprim_lookup_pz` →
   `proj_pz_to_ord`) for true D32 occlusion under `PSXPORT_NATIVE_DEPTH`/`PSXPORT_SBS`. The value-keyed
   "attach" ring (gte_op capture + mem.c store hook) is **deleted**. Deterministic; fixed the water
-  punch-through/flicker. OPEN: (1) overlay/menu submit fns (`0x80109C80`,`0x801099B4`,…) — their 3D prims
-  miss the depth table → 2D band; (2) 3D-projected overlay banners (hint signs) now sit behind nearer
-  world geo (true depth vs the artist's OT-on-top) — overlay-vs-world depth semantics to resolve.
+  punch-through/flicker.
+- **Overlay ownership via SCAN-ON-LOAD (later, this is the general mechanism).** The SAME GT3/GT4 submit
+  library is also present in **runtime-loaded overlays** at per-scene-reused addresses (it ran interpreted
+  → no depth). Owned generically: `rec_overlay_loaded(base,size)` (called by the CD loaders ov_cd_loadfile/
+  ov_cd_async_read) clears prior scan-overrides and calls `engine_scan_overlay` (engine_submit.c), which
+  scans the freshly-loaded bytes for the submit signature (packet-pool load `lui 0x800C`+`lw 0xF544`,
+  RTPT, OT tag-len `lui 0x0900`=GT3 / `lui 0x0C00`=GT4) and registers the native impl via
+  `rec_set_interp_override_auto` at each entry. Scan-on-LOAD (not per-call: classify-on-every-call was far
+  too slow + thrashed). The flat interp now honours interp-overrides (coro_native_call → interp_override_for).
+  VERIFIED 0-diff vs fully-interpreted (`PSXPORT_SUBMIT_RECOMP=1`) at f470/f560/f600. `PSXPORT_DEBUG=submit`
+  logs each owned overlay submitter; `PSXPORT_NO_OVERLAY_OWN=1` is the A/B.
+- **OPEN — full field depth coverage needs MORE submit VARIANTS.** Measured (`PSXPORT_DEBUG=ndepth` +
+  the 2D-band op histogram + depth records-made/hit/miss counters): in the field only ~30% of gouraud-
+  textured world polys get native depth; ~70% (op 0x3C GT4 + 0x34 GT3 + 0x2D flat-textured FT4) fall to the
+  2D band because they come from submitters that record NO depth. These are NOT the GT3/GT4 library — they
+  are **distinct submit variants**, e.g. `0x80027768` (recompiled MAIN): a GT4-packet builder with
+  **byte-packed 8-bit vertex records** (`lbu`+`<<8`, verts built on the stack) and a **per-call X position
+  offset** (`addu vx,vx,a1`) — a different record format/ABI, so the generic native GT3/GT4 impl CANNOT own
+  it (owning it crashed: wrong return ptr → caller jumps into data). Other resident copies found by an
+  op-fingerprint scan of the f560 RAM image: `0x8003B320`/`0x8003C8F4` (GT3), `0x8013CDD4`/`0x8013DD34`
+  (overlay). Each distinct variant needs its own RE (record format, args, packet, cull, depth) + native
+  port + 0-diff, then own resident copies via `rec_set_override` and overlay copies via the scan (extend
+  classify_submit's signature per variant). NOTE the recompiled submitters are NOT covered by scan-on-load
+  (that only sees CD-loaded overlays) — own them by fixed address.
+- OPEN: 3D-projected overlay banners (hint signs) now sit behind nearer world geo (true depth vs the
+  artist's OT-on-top) — overlay-vs-world depth semantics to resolve.
 
 ## Camera
 - Position (u16): `_DAT_1f8000d2` (X), `_DAT_1f8000d6` (Y), `_DAT_1f8000da` (Z).

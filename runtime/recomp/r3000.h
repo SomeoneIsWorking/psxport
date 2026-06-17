@@ -42,6 +42,13 @@ void rec_set_override(uint32_t addr, OverrideFn fn);
 // Override a NON-recompiled (interpreted) address — the boot stub / overlays. Keyed by raw
 // address (rec_set_override is keyed by recompiled-function index, which stub code lacks).
 void rec_set_interp_override(uint32_t addr, OverrideFn fn);
+// Scan-on-load ownership of runtime-loaded overlay library fns whose addresses are reused per-scene:
+// the loader calls rec_overlay_loaded(base,size) after copying an overlay in; that clears the prior
+// scan's overrides and invokes the engine's load hook, which scans [base,base+size) for known
+// library-fn signatures and registers each with rec_set_interp_override_auto(addr, fn).
+void rec_set_interp_override_auto(uint32_t addr, OverrideFn fn);
+void rec_set_overlay_load_hook(void (*fn)(uint32_t base, uint32_t size));
+void rec_overlay_loaded(uint32_t base, uint32_t size);
 int  rec_func_index(uint32_t addr);
 void rec_syscall(R3000* c, uint32_t code);
 void rec_break(R3000* c, uint32_t code);

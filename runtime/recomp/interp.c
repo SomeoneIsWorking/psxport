@@ -121,16 +121,36 @@ static int is_recompiled(uint32_t a) {
 // rec_set_override / g_override are keyed by recompiled-function INDEX (rec_func_index), so they
 // can't target stub/overlay addresses (index == -1). This parallel table is keyed by raw address
 // and consulted by call_addr below, letting native_stub.c replace the stub's libcd/libetc waits.
-#define MAX_IOV 64
-static struct { uint32_t addr; OverrideFn fn; } g_iov[MAX_IOV];
+#define MAX_IOV 256
+static struct { uint32_t addr; OverrideFn fn; int isauto; } g_iov[MAX_IOV];
 static int g_iov_n;
-void rec_set_interp_override(uint32_t addr, OverrideFn fn) {
-  for (int i = 0; i < g_iov_n; i++) if (g_iov[i].addr == addr) { g_iov[i].fn = fn; return; }
-  if (g_iov_n < MAX_IOV) { g_iov[g_iov_n].addr = addr; g_iov[g_iov_n].fn = fn; g_iov_n++; }
+static void iov_add(uint32_t addr, OverrideFn fn, int isauto) {
+  for (int i = 0; i < g_iov_n; i++) if (g_iov[i].addr == addr) { g_iov[i].fn = fn; g_iov[i].isauto = isauto; return; }
+  if (g_iov_n < MAX_IOV) { g_iov[g_iov_n].addr = addr; g_iov[g_iov_n].fn = fn; g_iov[g_iov_n].isauto = isauto; g_iov_n++; }
 }
+void rec_set_interp_override(uint32_t addr, OverrideFn fn) { iov_add(addr, fn, 0); }
+// Auto (scan-registered) overlay override: the engine scans a freshly-loaded overlay ONCE for known
+// library-fn signatures and registers each here (isauto=1). Cleared on the next overlay load (the
+// address is only stable while that code is resident — per-scene reuse). Done at load time, so the
+// per-call path stays a plain g_iov lookup — no per-call classification (that was far too slow).
+void rec_set_interp_override_auto(uint32_t addr, OverrideFn fn) { iov_add(addr, fn, 1); }
 static OverrideFn interp_override_for(uint32_t a) {
   for (int i = 0; i < g_iov_n; i++) if (g_iov[i].addr == a) return g_iov[i].fn;
   return 0;
+}
+// Drop every scan-registered (overlay) override, so a re-scan of the newly loaded overlay re-owns
+// the (possibly relocated) library fns. Called by rec_overlay_loaded before the engine re-scans.
+static void iov_flush_auto(void) {
+  int w = 0;
+  for (int i = 0; i < g_iov_n; i++) if (!g_iov[i].isauto) g_iov[w++] = g_iov[i];
+  g_iov_n = w;
+}
+// The engine's "an overlay was just loaded into [base,base+size)" hook (scans for owned library fns).
+static void (*g_overlay_load_hook)(uint32_t base, uint32_t size);
+void rec_set_overlay_load_hook(void (*fn)(uint32_t, uint32_t)) { g_overlay_load_hook = fn; }
+void rec_overlay_loaded(uint32_t base, uint32_t size) {
+  iov_flush_auto();                                // stale overlay overrides gone; re-own from scratch
+  if (g_overlay_load_hook) g_overlay_load_hook(base, size);
 }
 // Public accessor so rec_dispatch_miss can apply an interp override at the moment it would ENTER
 // the interpreter (a recompiled `jalr`/dispatch into a non-recompiled stub fn lands here, not via
@@ -298,7 +318,8 @@ void rec_dispatch_miss(R3000* c, uint32_t addr);
 
 // Invoke a call target natively if it is an override/BIOS (returns 1), else 0 (caller jumps).
 static int coro_native_call(R3000* c, uint32_t tgt) {
-  OverrideFn ov = override_for(tgt);
+  OverrideFn ov = override_for(tgt);              // recompiled-fn-index override (resident fns)
+  if (!ov) ov = interp_override_for(tgt);         // raw-address override + autodetect (overlay fns)
   if (ov) { ov(c); return 1; }
   if (is_bios(tgt)) { rec_dispatch_miss(c, tgt); return 1; }
   return 0;

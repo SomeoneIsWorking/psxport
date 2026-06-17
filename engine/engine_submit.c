@@ -200,3 +200,55 @@ void ov_submit_poly_gt4(R3000* c) {
   if (submit_recomp()) { gen_func_8008007C(c); return; }
   submit_poly_gt4(c);
 }
+
+// --- Auto-ownership of the SAME submit library when it appears in a runtime-loaded overlay --------
+// The two resident submit fns above are also present, the same ALGORITHM (verified — only register
+// allocation / scheduling / relocated internal calls differ), in per-area render overlays at
+// addresses REUSED across scenes (e.g. the field's resident-region GAME overlay). They run
+// interpreted and so don't carry native depth. Rather than hardcode per-scene addresses (fragile: a
+// later scene can load different code there), the loader calls rec_overlay_loaded(base,size) after
+// each overlay copy; we scan the freshly-loaded bytes ONCE for the submit library's signature and
+// register the matching native impl at each entry (scan-on-load — no per-call cost). The override is
+// cleared on the next overlay load, so an address is only ever owned while the real submit code is
+// resident. Signature is POLY_GT3/GT4-specific (packet-pool load + RTPT + the OT tag-length
+// immediate 9/12 words), so other primitive submitters (flat/sprite/line) won't match.
+static OverrideFn classify_submit(uint32_t addr) {
+  int has_pool = 0, has_rtpt = 0, gt3 = 0, gt4 = 0, prev_lui800c = 0;
+  for (int i = 0; i < 320; i++) {            // entry .. first jr $ra (single epilogue in these fns)
+    uint32_t w = mem_r32(addr + i * 4);
+    if (w == 0x03E00008u) break;             // jr $ra -> function end
+    if ((w >> 26) == 0x0Fu && (w & 0xFFFFu) == 0x800Cu) { prev_lui800c = 1; continue; }   // lui $r,0x800C
+    if (prev_lui800c && (w >> 26) == 0x23u && (w & 0xFFFFu) == 0xF544u) has_pool = 1;      // lw $r,-0xABC(.) = &DAT_800bf544
+    prev_lui800c = 0;
+    if (w == 0x4A280030u) has_rtpt = 1;                                  // RTPT (project the front tri)
+    if ((w >> 26) == 0x0Fu && (w & 0xFFFFu) == 0x0900u) gt3 = 1;         // lui $r,0x0900 -> POLY_GT3 tag len 9
+    if ((w >> 26) == 0x0Fu && (w & 0xFFFFu) == 0x0C00u) gt4 = 1;         // lui $r,0x0C00 -> POLY_GT4 tag len 12
+  }
+  if (!has_pool || !has_rtpt) return 0;
+  return gt4 ? ov_submit_poly_gt4 : gt3 ? ov_submit_poly_gt3 : 0;
+}
+// Scan a just-loaded overlay [base,base+size) for submit-library fns. The packet-pool load
+// (lui $r,0x800C ; lw $r2,-0xABC(...)) appears only in the submit fns; for each, backtrack to the
+// function entry (after the previous fn's `jr $ra`+delay slot) and classify+register there.
+static void engine_scan_overlay(uint32_t base, uint32_t size) {
+  uint32_t lo = base & ~3u, hi = (base + size) & ~3u;
+  for (uint32_t a = lo; a + 4 <= hi; a += 4) {
+    if ((mem_r32(a) >> 26) != 0x0Fu || (mem_r32(a) & 0xFFFFu) != 0x800Cu) continue;   // lui $r,0x800C
+    if ((mem_r32(a + 4) >> 26) != 0x23u || (mem_r32(a + 4) & 0xFFFFu) != 0xF544u) continue; // lw ...,0xF544
+    uint32_t entry = lo;                     // backtrack to the fn entry = just past previous `jr $ra`
+    for (uint32_t b = a; b > lo && b > a - 64; b -= 4)
+      if (mem_r32(b - 4) == 0x03E00008u) { entry = b + 4; break; }  // (b-4)=jr ra, (b)=delay slot, entry=b+4
+    OverrideFn fn = classify_submit(entry);
+    if (fn) {
+      rec_set_interp_override_auto(entry, fn);
+      if (cfg_dbg("submit"))
+        fprintf(stderr, "[submit] own overlay %s @ 0x%08X (in load 0x%08X+0x%X)\n",
+                fn == ov_submit_poly_gt4 ? "GT4" : "GT3", entry, base, size);
+    }
+  }
+}
+void engine_submit_register_autodetect(void) {
+  if (submit_recomp()) return;               // A/B: keep all overlay submitters interpreted too
+  if (cfg_on("PSXPORT_NO_OVERLAY_OWN")) return;   // A/B: measure overlay-ownership depth contribution
+  rec_set_overlay_load_hook(engine_scan_overlay);
+}

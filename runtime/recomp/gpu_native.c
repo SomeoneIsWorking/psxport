@@ -59,6 +59,7 @@ static long s_gp0_words = 0, s_dma2 = 0;  // diagnostics: GP0 words + DMA2 trigg
 static uint32_t s_cur_node = 0;   // REDDBG: RAM addr of the OT node currently being fed to GP0
 uint32_t g_ot_madr = 0;           // last OT DMA root (extern in internal header)
 long g_nd_3d = 0, g_nd_2d = 0;   // Phase-2 native-depth diag: prims drawn with real depth vs OT-order band
+long g_nd2d_hist[256];           // op histogram of prims that fall to the 2D band (ndepth diag)
 
 // Fade-flash diagnostic (PSXPORT_FADEDBG="a:b"): per-frame max emitted prim brightness + how the
 // scene is drawn, to settle whether a bright fade frame is in the GP0 (engine emits it) or invented
@@ -573,6 +574,8 @@ static void gp0_exec(void) {
           else { is3d = 0; break; }
         }
         if (!is3d) { if (s_sbs) gpu_vk_set_order_2d_n(ord_idx); else gpu_vk_set_order_2d(ord_idx); }  // 2D/HUD band
+        if (!is3d && cfg_dbg("ndepth")) {   // categorize what lands in the 2D band: op + gouraud/quad/tex
+          extern long g_nd2d_hist[256]; g_nd2d_hist[op]++; }
         extern long g_nd_3d, g_nd_2d; if (is3d) g_nd_3d++; else g_nd_2d++;
       }
       #define SBS_OR_ND_SETVD(p) do { if (is3d) { if (s_sbs) gpu_vk_set_vd_n(p); else gpu_vk_set_vd(p); } } while (0)
@@ -1124,8 +1127,11 @@ void gpu_present_ex(int do_blit) {
   { void proj_probe_dump(const char*);   // Phase-1: native-projection 0-diff verifier (PSXPORT_PROJPROBE)
     if (cfg_on("PSXPORT_PROJPROBE") && s_frame > 0 && (s_frame % 200) == 0) {
       char t[32]; snprintf(t, sizeof t, "f%d", s_frame); proj_probe_dump(t); } }
-  { void rtpcaller_dump(const char*);    // Phase-1: pin RTP caller sites (PSXPORT_RTPCALLER)
-    if (cfg_dbg("rtpcaller") && s_frame == 400) rtpcaller_dump("f400"); }
+  { void rtpcaller_dump(const char*); void rtpcaller_reset(void);  // Phase-1: pin RTP caller sites
+    // Window the histogram to the LAST 50 frames so a dump reflects only the CURRENT scene's submitters
+    // (a cumulative-since-boot count is dominated by the title/menu phase before the field is reached).
+    if (cfg_dbg("rtpcaller") && s_frame > 0 && (s_frame % 50) == 0) {
+      char t[24]; snprintf(t, sizeof t, "f%d(last50)", s_frame); rtpcaller_dump(t); rtpcaller_reset(); } }
   // Reset the per-vertex depth table EVERY frame the native-depth path is live (NATIVE_DEPTH or SBS),
   // here — after this frame's DrawOTag/lookups, before next frame's projections record into it — so a
   // vertex word never reads an OLD frame's depth. The engine (engine_submit.c) repopulates it each frame.
@@ -1136,6 +1142,19 @@ void gpu_present_ex(int do_blit) {
       if (cfg_dbg("ndepth") && s_frame > 0 && (s_frame % 60) == 0)
         fprintf(stderr, "[ndepth f%d] real-depth(3D) prims=%ld  OT-band(2D) prims=%ld  3D%%=%.1f\n",
                 s_frame, g_nd_3d, g_nd_2d, (g_nd_3d+g_nd_2d) ? 100.0*g_nd_3d/(g_nd_3d+g_nd_2d) : 0.0);
+      { extern long g_pp_set, g_pp_hit, g_pp_miss;
+        fprintf(stderr, "    depth records made=%ld  lookups hit=%ld miss=%ld\n", g_pp_set, g_pp_hit, g_pp_miss);
+        g_pp_set = g_pp_hit = g_pp_miss = 0; }
+      extern long g_nd2d_hist[256];
+      if (cfg_dbg("ndepth") && s_frame > 0 && (s_frame % 60) == 0) {
+        for (int o = 0; o < 256; o++) if (g_nd2d_hist[o]) {
+          int gour=o&0x10, quad=o&0x08, tex=o&0x04, semi=o&0x02;
+          const char* k = (o>=0x60&&o<0x80) ? "SPRITE" : (o>=0x40&&o<0x60) ? "LINE" :
+                          (o>=0x20&&o<0x40) ? "POLY" : (o>=0x80) ? "BLIT" : "misc";
+          fprintf(stderr, "    2D-band op 0x%02X x%ld  [%s%s%s%s %s]\n", o, g_nd2d_hist[o],
+                  gour?"G":"-", quad?"4":"3", tex?"T":"-", semi?"s":"-", k); }
+        for (int o = 0; o < 256; o++) g_nd2d_hist[o] = 0;
+      }
       g_nd_3d = g_nd_2d = 0;
     } }
   // PSXPORT_PROVAT="x,y[:frame]" — at present time, report (in DISPLAY space, so the double buffer

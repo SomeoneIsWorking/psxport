@@ -338,6 +338,7 @@ void rtpcaller_dump(const char* tag) {
             s_rtpcaller[i].ra, s_rtpcaller[i].n, jal, tgt);
   }
 }
+void rtpcaller_reset(void) { for (int i = 0; i < 64; i++) { s_rtpcaller[i].ra = 0; s_rtpcaller[i].n = 0; } }
 
 // --- Native per-vertex depth, recorded BY the owned submit path (engine/engine_submit.c) ------------
 // The engine that builds each GPU packet knows the real view-space Z of every vertex it projects, so it
@@ -358,7 +359,9 @@ void projprim_reset(void) {           // per-frame: drop last frame's depths so 
   for (int i = 0; i < PP_HASH; i++) s_pp_head[i] = -1;
   s_pp_inited = 1;
 }
+extern long g_pp_set;
 void projprim_set_pz(uint32_t addr, float pz) {   // engine_submit records a vertex's view-Z at its addr
+  g_pp_set++;
   if (!s_pp_inited) projprim_reset();
   addr &= 0x1FFFFC;
   uint32_t h = pp_hash(addr);
@@ -367,11 +370,13 @@ void projprim_set_pz(uint32_t addr, float pz) {   // engine_submit records a ver
   PpEnt* e = &s_pp[s_pp_n];
   e->addr = addr; e->pz = pz; e->next = s_pp_head[h]; s_pp_head[h] = s_pp_n++;
 }
+long g_pp_set, g_pp_hit, g_pp_miss;   // ndepth diag: depth records made / lookups hit / lookups missed
 int projprim_lookup_pz(uint32_t addr, float* pz) {   // renderer: depth for the packet vertex word at addr
   if (!s_pp_inited) return 0;
   addr &= 0x1FFFFC;
   for (int i = s_pp_head[pp_hash(addr)]; i >= 0; i = s_pp[i].next) if (s_pp[i].addr == addr) {
-    if (pz) *pz = s_pp[i].pz; return 1; }
+    if (pz) *pz = s_pp[i].pz; g_pp_hit++; return 1; }
+  g_pp_miss++;
   return 0;
 }
 int  projprim_overflowed(void) { return s_pp_overflow; }
