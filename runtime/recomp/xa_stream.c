@@ -96,6 +96,7 @@ void xa_stream_start(void) {
     return;
   }
   xa_reset_buffers();
+  s_end_lba = 0; s_loop = 0;         // open-ended CdControl stream: no clip end -> EOF terminates it
   s_active = 1;
   if (s_dbg) fprintf(stderr, "[xa] START streaming @ LBA %u (mode=%02X filter=%d)\n",
                      s_lba, s_mode, s_filter_set);
@@ -114,6 +115,8 @@ void xa_stream_stop(void) {
 // every frame can NOT reset the ring (that was the "first note repeats" bug). Marks us the
 // owner of task slot 2 so the native scheduler skips the (now unused) recomp coroutine and the
 // cutscene's `while (DAT_801fe0e0 != 0)` wait is driven by clip completion below.
+// (Offline decode of any [start..end] clip to WAV — for loop-point analysis — lives in the standalone
+// tools/xa_wavdump.c, so the runtime stays clean.)
 void xa_stream_play(uint8_t chan, uint32_t start, uint32_t end, int loop) {
   if (s_dbg < 0) s_dbg = getenv("PSXPORT_XA_DBG") ? atoi(getenv("PSXPORT_XA_DBG")) : 0;
   if (s_active && s_owns_slot2 && chan == s_clip_chan && start == s_clip_start) {
@@ -152,7 +155,9 @@ static int xa_decode_next_sector(void) {
   // Clip end: when the read head passes the clip's end LBA, the clip is done. Loop clips
   // restart at the start; one-shot clips stop (which clears busy -> cutscene advances).
   if (s_end_lba && s_lba > s_end_lba) {
-    if (s_loop) { s_lba = s_clip_start; s_hist[0][0]=s_hist[0][1]=s_hist[1][0]=s_hist[1][1]=0; }
+    if (s_loop) { if (s_dbg) fprintf(stderr, "[xa] LOOP chan=%u back to %u (passed end %u, span=%u sectors)\n",
+                                     s_clip_chan, s_clip_start, s_end_lba, s_end_lba - s_clip_start);
+                  s_lba = s_clip_start; s_hist[0][0]=s_hist[0][1]=s_hist[1][0]=s_hist[1][1]=0; }
     else { if (s_dbg) fprintf(stderr, "[xa] clip done @ LBA %u (end %u)\n", s_lba, s_end_lba); s_active = 0; return 0; }
   }
   for (int guard = 0; guard < 64; guard++) {     // bounded scan past any interleaved data sectors
@@ -179,10 +184,17 @@ static int xa_decode_next_sector(void) {
       s_wr += (uint32_t)n;
       if (s_dbg > 1) fprintf(stderr, "[xa]  sector LBA %u file=%u chan=%u submode=%02X n=%d freq=%d (wr=%u rd=%u)\n",
                              s_lba - 1, file, chan, submode, n, freq, s_wr, (uint32_t)s_rd);
-      if (eof) { if (s_dbg) fprintf(stderr, "[xa] EOF @ LBA %u\n", s_lba - 1); s_active = 0; }
+      // EOF (submode bit7) ends only an OPEN-ENDED stream. A BOUNDED clip ([start..end], e.g. the
+      // looping area music) ends strictly at end_lba (handled above): EOF markers inside the range
+      // belong to OTHER files/channels interleaved in the same stream and must NOT cut our clip.
+      if (eof && !s_end_lba) { if (s_dbg) fprintf(stderr, "[xa] EOF @ LBA %u\n", s_lba - 1); s_active = 0; }
       return n;
     }
-    if (eof) { if (s_dbg) fprintf(stderr, "[xa] EOF (non-audio) @ LBA %u\n", s_lba - 1); s_active = 0; return 0; }
+    // Ditto for an EOF on a NON-matching (other channel's) sector: a spurious interleaved EOF (e.g. a
+    // narration/voice file ending mid-range) was killing the chan4 music ~18 s early (LBA 95338 of the
+    // [84515..97979] area-music clip) -> the dialog-coord resume restarted it from the top = "loops
+    // early". For a bounded clip, ignore it and keep scanning toward end_lba.
+    if (eof && !s_end_lba) { if (s_dbg) fprintf(stderr, "[xa] EOF (non-audio) @ LBA %u\n", s_lba - 1); s_active = 0; return 0; }
   }
   return 0;   // 64 consecutive non-passing sectors: give up this pump, try again next sample
 }

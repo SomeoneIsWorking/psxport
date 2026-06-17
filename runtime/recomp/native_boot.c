@@ -396,6 +396,25 @@ static void ov_game_main(R3000* c) {
         } else { void dbg_set_paused(int); fprintf(stderr, "[autonewgame] reached GAME (prologue) at frame %u — auto-paused\n", f);
                  ang = 2; if (getenv("PSXPORT_AUTO_NEWGAME") && atoi(getenv("PSXPORT_AUTO_NEWGAME")) >= 2) dbg_set_paused(1); }
       } }
+    // PSXPORT_AUTO_GAMEPLAY=1: state-gated auto-navigator that OWNS the title->newgame->cutscene->field
+    // path and then goes HANDS-OFF. The post-newgame fisherman dialog cutscene advances only on Start
+    // EDGES (not Cross) and otherwise hard-stalls headless; once in the field, continued Start would
+    // open the pause menu (which stops the BGM). So: pulse Start until the chan4 area music has been
+    // looping continuously (= field reached, cutscene gate cleared), then RELEASE input. =2 also pauses.
+    { static int gnav = -1, sustain = 0;
+      if (gnav < 0) gnav = getenv("PSXPORT_AUTO_GAMEPLAY") ? 1 : 0;
+      if (gnav == 1) {
+        int xa_stream_is_looping(void); void pad_repl_release(void);
+        if (xa_stream_is_looping()) sustain++; else sustain = 0;   // resets whenever dialog stops chan4
+        if (sustain >= 150) {                                      // ~5 s of uninterrupted area music = field
+          pad_repl_release();
+          fprintf(stderr, "[autogameplay] field reached (chan4 looping %d frames) at frame %u — input released\n", sustain, f);
+          gnav = 2;
+          if (atoi(getenv("PSXPORT_AUTO_GAMEPLAY")) >= 2) { void dbg_set_paused(int); dbg_set_paused(1); }
+        } else if ((f % 24u) == 0) {
+          pad_repl_tap((uint16_t)(0xFFFF & ~0x0008), 6);           // pulse Start (0x0008): title + dialog advance
+        }
+      } }
     // PSXPORT_DEBUG_SERVER pause/step: when frozen, do NOT advance the game — just pump host input
     // (keeps the window alive) and service debug commands so `step`/`play` can arrive. A `step` runs
     // exactly one real frame then re-freezes, so transient bad frames can be inspected one at a time.

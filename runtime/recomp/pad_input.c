@@ -200,6 +200,9 @@ static int      s_repl_tap_n = 0;
 static int      s_repl_on = 0;
 void pad_repl_hold(uint16_t active_low_mask)  { s_repl_on = 1; s_repl_hold = active_low_mask; }
 void pad_repl_tap(uint16_t active_low_mask, int n) { s_repl_on = 1; s_repl_tap = active_low_mask; s_repl_tap_n = n; }
+// Fully relinquish REPL pad control (s_repl_on=0) so neither a held mask nor a stale PAD_NONE keeps
+// overriding host/FORCE input. Used by the state-gated auto-navigator to go hands-off in gameplay.
+void pad_repl_release(void) { s_repl_on = 0; s_repl_hold = PAD_NONE; s_repl_tap = PAD_NONE; s_repl_tap_n = 0; }
 
 void pad_service_frame(void) {
   static int s_have_window = -1;

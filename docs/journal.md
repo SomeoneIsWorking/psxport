@@ -1,5 +1,33 @@
 # Debug / progress journal
 
+## 2026-06-17 — chan4 area music "loops ~18 s early" FIXED (spurious interleaved EOF)
+User report: the gameplay area music after the fisherman cutscene (chan4 XA, clip [84515..97979]
+loop=1, = 89.76 s) loops noticeably earlier than it should (~90 s expected). RE'd via offline +
+runtime diagnostics:
+- **Data/loop point is CORRECT.** Standalone `tools/xa_wavdump` (no game boot; opens the CHD and
+  decodes any chan/[start..end] with the same xa_decode_sector as the port) renders the chan4 song:
+  89.76 s to end 97979, and the user confirmed ~90 s is right. So NOT an end_lba/data error.
+- **Steady-state audio is realtime** (PSXPORT_AUDIO_RATE meter: ~44100 samples/s, no sustained queue
+  drops). So NOT a global playback-rate drift either.
+- **ROOT CAUSE (runtime):** `xa_decode_next_sector` terminated the stream on ANY EOF submode bit
+  (raw[18] & 0x80), including EOF on a NON-matching interleaved sector. The [84515..97979] range has
+  a non-audio sector at **LBA 95338** carrying EOF (an unrelated file/channel's end-of-file). That
+  killed the chan4 music ~18 s early (95338-84515 = 10823 of 13464 sectors ~= 72 s), and the
+  dialog-coord resume (`cd_override.c` `xa_dialog_coord`) restarted it from the top -> "loops early".
+  Caught live: a repeating `[xa] EOF (non-audio) @ LBA 95338` -> `xa_active=0` -> `[xa] PLAY clip chan=4`
+  cycle in the field.
+- **FIX (`xa_stream.c`):** a BOUNDED clip (`s_end_lba != 0`) ends strictly at `end_lba` (already the
+  `s_lba > s_end_lba` loop) - EOF markers from other interleaved channels inside the range are ignored.
+  EOF still terminates an OPEN-ENDED stream (`s_end_lba == 0`); `xa_stream_start` now clears
+  `s_end_lba`/`s_loop` so a stale clip end can't make an open-ended stream look bounded.
+- **VERIFIED:** runtime now logs `[xa] LOOP chan=4 ... span=13464 sectors` (full clip), no 95338 stop;
+  a captured field SPU WAV autocorrelates to a **90.02 s** loop period (was ~72 s).
+- **Tooling added (reusable):** `tools/xa_wavdump.c` (+`build_xa_wavdump.sh`) offline XA extractor;
+  `PSXPORT_AUTO_GAMEPLAY=1` state-gated navigator in native_boot.c (pulses **Start** - the fisherman
+  dialog cutscene advances on Start edges and otherwise hard-stalls headless at sm[4e=9]; releases
+  input once chan4 area music loops continuously = field) + `pad_repl_release()`; `[xa] LOOP` log;
+  `PSXPORT_AUDIO_RATE` production-rate meter.
+
 ## 2026-06-17 (later-88) — HW renderer M0–M2 + M2b: Vulkan present + GPU VRAM image + triangle rasterizer; finding: Tomba2 is texture-dominated.
 Built the Vulkan/MoltenVK renderer foundation (approved plan; runtime/recomp/gpu_vk.c, PSXPORT_VK=1):
 - **M0**: SDL_Vulkan swapchain + fullscreen-quad present (SW still rasterizes s_vram, VK presents it).

@@ -209,6 +209,19 @@ void spu_audio_frame(void)
 #ifdef PSXPORT_SDL
    if (!sdl_on)
       return;
+   // PSXPORT_AUDIO_RATE=1: measure effective production rate (samples/wall-sec) + drop count. If
+   // production > 44100/s the SPU (and the XA stream) is advancing faster than realtime -> backlog
+   // overflows, frames get dropped, and the music skips ahead = loops early.
+   { static int on = -1; if (on < 0) on = getenv("PSXPORT_AUDIO_RATE") ? 1 : 0;
+     if (on) { static double t0; static long samp, drops, calls; static int have;
+       struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
+       double now = ts.tv_sec + ts.tv_nsec/1e9; if (!have) { t0 = now; have = 1; }
+       samp += frames; calls++;
+       if ((int)SDL_GetQueuedAudioSize(s_dev) > AUDIO_QUEUE_CAP_BYTES) drops++;
+       double dt = now - t0;
+       if (dt >= 2.0) { fprintf(stderr, "[audio_rate] %.0f samples/s (want 44100), %ld calls/%.1fs, drops=%ld, backlog=%u\n",
+                                samp/dt, calls, dt, drops, SDL_GetQueuedAudioSize(s_dev));
+                        t0 = now; samp = 0; calls = 0; drops = 0; } } }
    // Drop (don't queue) when the backlog is already too deep — keeps latency bounded.
    if ((int)SDL_GetQueuedAudioSize(s_dev) > AUDIO_QUEUE_CAP_BYTES)
       return;
