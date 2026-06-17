@@ -391,7 +391,7 @@ static void projprim_capture(uint32_t insn, int rtpt) {
 void attach_store_hook(uint32_t addr, uint32_t v) {
   if (s_attach <= 0) return;
   for (int k = 0; k < PR_N; k++) {
-    int i = (s_pr_head - 1 - k + 2 * PR_N) % PR_N;   // scan newest-first
+    int i = (s_pr_head + k) % PR_N;   // scan oldest-first (matches the body's project-then-store order)
     if (s_pr[i].used && s_pr[i].packed == v) { projprim_set(addr, &s_pr[i].p); s_pr[i].used = 0; return; }
   }
 }

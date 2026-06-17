@@ -240,13 +240,22 @@ libgpu (all via the 0x800A5998 table; names from debug strings): `FUN_80080f6c`=
   **~30% poly-vtx hit rate, and ~95% of misses are NODE-ABSENT.** The dominant overlay projection fns write
   into the SAME primitive-buffer region (resident packets at ~phys 0xD3xxx, overlay packets at ~0xD9xxx) but
   via a DIFFERENT running pool-pointer global — so a single hardcoded pool pointer is the wrong (fragile,
-  non-function-agnostic) capture point. **NEXT (decisive): capture by the SXY word's guest ADDRESS, not via
-  any pool-pointer global.** The projection fns store the packed XY_FIFO word to packet memory (resident via
-  recomp stores, overlay via interp stores — both funnel through `mem_w32`). Plan: at `gte_op` push each
-  vertex's packed SXY+float into a small pending ring; hook `mem_w32` (gated) to match a stored value against
-  the pending ring when the target is in the prim-pool region → record float keyed by that store ADDRESS; on
-  the render side track each GP0 word's source guest address (parallel `s_fifo_addr[]` set in
-  `gpu_dma2_linked_list`) and look up float by the vertex word's address. Fully function/pool-agnostic.
+  non-function-agnostic) capture point. **SOLVED (later-100d): capture by the SXY word's guest ADDRESS.** The
+  projection fns store the packed XY_FIFO word to packet memory (resident via recomp stores, overlay via
+  interp stores — BOTH funnel through `mem_w32`). Implemented (keyed by ADDRESS now, not node): at `gte_op`
+  push each vertex's packed SXY + native float into a small pending ring (`s_pr`, 32 deep); `attach_store_hook`
+  (called from `mem_w32` for stores into the prim-pool region phys 0xB0000–0xF0000, gated) match-and-consumes
+  the pending ring oldest-first and records the float keyed by the store ADDRESS (`projprim_set`, last-write-
+  wins so a culled-then-reused slot resolves to the surviving prim); the render side tracks each GP0 word's
+  source guest address (`s_fifo_addr[]`, set from `s_gp0_src` in the `gpu_dma2_linked_list` OT walk) and
+  `gp0_exec` looks the float up by each vertex word's address (`projprim_lookup`). **VERIFIED (PSXPORT_ATTACH,
+  field):** poly-vtx hit **100%** of GTE-projected (3D) polys (f400/f600 = 0 miss); the only misses are
+  op-2F axis-aligned textured UI quads = 2D screen-space prims with no projection — the FREE 2D/3D class (a
+  miss with a valid OT addr = 2D; addr==0 = direct/FMV). Fully function/pool-agnostic (covers the dominant
+  overlay projection fns), no global value-collision (the value-match is bounded to the tiny pending window;
+  the RESULT is address-exact). The dormant value-keyed `pgxp_lookup` is now superseded. **NEXT: Phase 2** —
+  feed `projprim_lookup`'s view-space Z into a PC-native render target + real depth buffer; route 3D (hit) vs
+  2D (miss) prims into separate passes; composite.
 
 ### Native ownership plan (reimplement libgpu, keep recomp body as oracle via rec_set_override)
 1. Own **DrawOTag** (FUN_80080f6c): walk the ordering table in native C, decode each primitive packet by
