@@ -921,12 +921,8 @@ static void tri_over_bg_readback(const uint16_t* bg, uint16_t* out) {
   memcpy(out, s_rb_ptr, (size_t)VRAM_W * VRAM_H * 2);
 }
 
-// PSXPORT_VK_SHOT=frame -> dump the live VK-rendered VRAM (display region) to a PPM, to eyeball.
-void gpu_vk_dump(int sx, int sy, int w, int h, int frame) {
-  if (!gpu_vk_enabled() || !s_inited) return;
-  static int sf = -2; if (sf == -2) { const char* e = getenv("PSXPORT_VK_SHOT"); sf = e ? atoi(e) : -1; }
-  if (sf < 0 || frame != sf) return;
-  if (s_wide) { sx = 0; sy = FB_Y0; w = FBW(); h = FBH(); }   // wide: dump the scratch FB
+// Read back the live VK-rendered VRAM (display/FB region) and write it to `path` as a PPM.
+static void vk_dump_to(const char* path, int sx, int sy, int w, int h) {
   VKC(vkWaitForFences(s_dev, 1, &s_fence, VK_TRUE, UINT64_MAX)); VKC(vkResetFences(s_dev, 1, &s_fence));
   VKC(vkResetCommandBuffer(s_cmd, 0));
   VkCommandBufferBeginInfo bi = { VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO };
@@ -944,12 +940,29 @@ void gpu_vk_dump(int sx, int sy, int w, int h, int frame) {
   VkSubmitInfo su = { VK_STRUCTURE_TYPE_SUBMIT_INFO }; su.commandBufferCount = 1; su.pCommandBuffers = &s_cmd;
   VKC(vkQueueSubmit(s_queue, 1, &su, s_fence)); VKC(vkWaitForFences(s_dev, 1, &s_fence, VK_TRUE, UINT64_MAX));
   const uint16_t* vram = (const uint16_t*)s_rb_ptr;
-  FILE* f = fopen("scratch/screenshots/vk_live.ppm", "wb"); if (!f) return;
+  FILE* f = fopen(path, "wb"); if (!f) return;
   fprintf(f, "P6\n%d %d\n255\n", w, h);
   for (int y = 0; y < h; y++) for (int x = 0; x < w; x++) { uint16_t p = vram[((sy+y)%IMG_H)*VRAM_W + ((sx+x)&1023)];
     unsigned char c[3] = { (unsigned char)((p&31)<<3), (unsigned char)(((p>>5)&31)<<3), (unsigned char)(((p>>10)&31)<<3) };
     fwrite(c, 1, 3, f); }
-  fclose(f); fprintf(stderr, "[vk_shot] f%d wrote scratch/screenshots/vk_live.ppm\n", frame);
+  fclose(f);
+}
+// PSXPORT_VK_SHOT=frame -> single dump to scratch/screenshots/vk_live.ppm.
+// PSXPORT_VK_SHOTSEQ="first:last:step:dir" -> dump EVERY step-th frame in [first,last] to
+// dir/vk_<frame>.ppm. The sequence is what catches intermittent/flickering bugs (e.g. water that
+// blinks across frames) instead of cherry-picking one frame — see docs/gfx-debug.md.
+void gpu_vk_dump(int sx, int sy, int w, int h, int frame) {
+  if (!gpu_vk_enabled() || !s_inited) return;
+  static int sf = -2; if (sf == -2) { const char* e = getenv("PSXPORT_VK_SHOT"); sf = e ? atoi(e) : -1; }
+  static int qa = -2, qb, qstep; static char qdir[256];
+  if (qa == -2) { qa = -1; const char* e = getenv("PSXPORT_VK_SHOTSEQ");
+    if (e && sscanf(e, "%d:%d:%d:%255s", &qa, &qb, &qstep, qdir) == 4 && qstep > 0) {} else qa = -1; }
+  int dsx = sx, dsy = sy, dw = w, dh = h;
+  if (s_wide) { dsx = 0; dsy = FB_Y0; dw = FBW(); dh = FBH(); }   // wide: dump the scratch FB
+  if (sf >= 0 && frame == sf) { vk_dump_to("scratch/screenshots/vk_live.ppm", dsx, dsy, dw, dh);
+    fprintf(stderr, "[vk_shot] f%d wrote scratch/screenshots/vk_live.ppm\n", frame); }
+  if (qa >= 0 && frame >= qa && frame <= qb && ((frame - qa) % qstep) == 0) {
+    char p[320]; snprintf(p, sizeof p, "%s/vk_%05d.ppm", qdir, frame); vk_dump_to(p, dsx, dsy, dw, dh); }
 }
 
 // Per-frame: PSXPORT_VK_DIFF=frame -> diff this frame's tee'd untextured tris (VK) vs SW VRAM. Always
