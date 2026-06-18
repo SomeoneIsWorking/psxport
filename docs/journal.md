@@ -5280,3 +5280,39 @@ corruption (which the deterministic headless path doesn't reproduce in any confi
 the on-screen exploding-tris needs a user `./run.sh` observation. Remaining host conversions (#2 terrain
 scratchpad 0x1F800090 + SCR matrix-build, #3 build_xform node+0x98, #4 submit_perobj_render 0x1F80028C)
 are the next writes to move host. A/B: `PSXPORT_DL_GUESTPKT=1` reverts to guest packets.
+
+## later-140 — OWN the present/compose pipeline: 2D screens present from VRAM, not the empty scratch FB
+User report (real ./run.sh, ground truth): EVERYTHING on screen is broken — SCEA, FMVs, menu, gameplay.
+My headless shots looked perfect. Root cause found by reproducing the user's EXACT config: their persisted
+`psxport_settings.ini` has `ires_auto=1` → internal-res 2-3 → `use_fb()` (the hi-res scratch-FB path). My
+headless shots ran ui=0 (no settings load) → ires=1 → the simple path. DIFFERENT RENDER PATH. (The "good
+shots while screen is broken" was the key clue — the user spotted it.)
+
+THE BUG (gpu_vk.c present/compose): the scaled scratch FB (rows ≥ FB_Y0) holds ONLY tee'd geometry (the
+vertex shader relocates it there when use_fb). Pure-2D screens (SCEA/FMV/title/menu) are VRAM-RESIDENT —
+an uploaded image displayed via the display area, NO tee'd geometry — so the scratch FB is EMPTY for them,
+yet the present sampled the scratch FB whenever use_fb() → black/garbled 2D screens. The 4:3-pillarbox path
+that should have caught this was gated on `gpu_vk_wide_engine()` (wide only), so 4:3 + hi-res fell through.
+
+THE FIX (own the FB-vs-VRAM decision with ONE consistent predicate): `frame_via_fb() = use_fb() &&
+gpu_seen3d_this_frame()` — a frame's content is in the scratch FB only when hi-res/wide is configured AND
+the frame actually drew 3D. Added `gpu_seen3d_this_frame()` (gpu_native.c) = THIS frame's s_seen3d (the OT
+walk tees before present, so it's final — no 1-frame lag, unlike the old s_prev_had3d pillarbox gate).
+Replaced use_fb() with frame_via_fb() at every render+present decision site: the scratch-FB clear +
+push_wide relocation (panel_render), the present sample region + aspect (2D frame → native VRAM region at
+4:3; 3D frame → scratch FB at the selected aspect), the headless readback, the SSAO screen map, and
+gpu_vk_dump. So relocation and present always agree.
+
+VERIFIED (headless, real-disc boot path): SCEA @ires=2 — was text shoved bottom-left + mostly black; now
+centered + complete. 3D field @ires=2 — renders hi-res 640×480 crisp from the scratch FB (unchanged).
+ires=1 path BYTE-UNCHANGED (frame_via_fb==false at 4:3/ires1, same as old use_fb==false) → headless 4:3
+tooling unaffected. Runs to f800 @ires=2, no hang.
+
+IMPORTANT framing correction (later-138/139 were chasing the wrong thing): this breakage is 100% host-side
+C++ in gpu_vk.c — it never touches guest memory. So "writing guest memory corrupts the game; move
+everything to host to fix it" (the later-138 handoff premise) is FALSIFIED for the on-screen corruption.
+The corruption is in the native render/present layer itself. SEPARATE STILL-OPEN issue: the ocean
+exploded-geometry (spiky stretched tris) reproduces even at ires=1 with ALL native overrides off (pure
+interpreter) — so it's a 3D render/geometry bug (rasterizer/GTE) or a real scene, to be settled by
+gpu_differ + the Beetle oracle (the mandated render-diff-first path). NOT guest-memory, NOT interp-vs-recomp
+(verified 0-diff, later-103). Do not "switch back to the recompiler" — it would change nothing here.

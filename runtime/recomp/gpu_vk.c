@@ -308,6 +308,13 @@ static int W_ires(void) {
 static int FBW(void) { return wide_native_w() * s_ires; }
 static int FBH(void) { return 240 * s_ires; }
 static int use_fb(void) { return s_wide || s_ires > 1; }   // 3D goes through the scaled scratch FB
+// Does THIS frame's content live in the scaled scratch FB? Only when hi-res/wide is configured AND the
+// frame actually drew 3D geometry (which is what gets relocated into the FB). A pure-2D screen (SCEA /
+// FMV / title / menu — a VRAM-resident image, no tee'd 3D) has an EMPTY scratch FB, so it must render +
+// present from the native VRAM display region at 4:3 instead. Render (push_wide / FB clear) and present
+// (sample region + aspect) both key off THIS so they stay consistent.
+int gpu_seen3d_this_frame(void);
+static int frame_via_fb(void) { return use_fb() && gpu_seen3d_this_frame(); }
 static void wide_init(void) { mods_init(); }
 
 // ---- Genuine engine-level widescreen ("no faking") ---------------------------------------------
@@ -800,12 +807,12 @@ static void panel_render(Panel* p) {
     { VkClearAttachment dca = { VK_IMAGE_ASPECT_DEPTH_BIT, 0, {{{0}}} }; dca.clearValue.depthStencil.depth = 0.0f;
       VkClearRect dcr = { { { 0, 0 }, { VRAM_W, IMG_H } }, 0, 1 };
       vkCmdClearAttachments(s_cmd, 1, &dca, 1, &dcr); }
-    if (use_fb()) {   // clear the scratch FB (the game's clear/fill targets VRAM, not the FB) before drawing
+    if (frame_via_fb()) {   // clear the scratch FB (the game's clear/fill targets VRAM, not the FB) before drawing
       VkClearAttachment ca = { VK_IMAGE_ASPECT_COLOR_BIT, 0, {{{0,0,0,1}}} };
       VkClearRect cr = { { { 0, FB_Y0 }, { (uint32_t)FBW(), (uint32_t)FBH() } }, 0, 1 };
       vkCmdClearAttachments(s_cmd, 1, &ca, 1, &cr);
     }
-    push_wide(use_fb());
+    push_wide(frame_via_fb());   // relocate into the FB only for 3D frames; 2D screens stay 1:1 in VRAM
     vkCmdBindDescriptorSets(s_cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, s_pll, 0, 1, &s_dset_tex, 0, 0);
     if (s_tri_n) { vkCmdBindPipeline(s_cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, s_tri_pipe[native]);
                    vkCmdBindVertexBuffers(s_cmd, 0, 1, &s_vbuf, &go); vkCmdDraw(s_cmd, s_tri_n, 1, 0, 0); }
@@ -1005,7 +1012,7 @@ static void ssao_pass(void) {
   // screen map: VRAM pixel -> PSX screen coord. Faithful = (vram - present_origin); wide/hi-res FB =
   // (vram - fb_origin)/ires — inverse of the tritex.vert relocation (no wide_off: content is placed 1:1).
   float org_x, org_y, off_x = 0.0f, off_y = 0.0f, inv_scale = 1.0f;
-  if (use_fb()) { org_x = 0.0f; org_y = (float)FB_Y0; inv_scale = 1.0f / (float)s_ires; }
+  if (frame_via_fb()) { org_x = 0.0f; org_y = (float)FB_Y0; inv_scale = 1.0f / (float)s_ires; }
   else          { org_x = (float)s_present_sx; org_y = (float)s_present_sy; }
   int viz = cfg_int("PSXPORT_SSAO_VIZ", 0);   // 1=AO factor; 2=normal; 3=lit (any deferred-viz)
   int flags = (ssao_on() ? 1 : 0) | (light_on() ? 2 : 0);
@@ -1102,7 +1109,7 @@ void gpu_vk_present(const uint16_t* src, int sx, int sy, int w, int h) {
     // the scaled scratch FB, so report THAT region (mirrors the windowed use_fb() override below and
     // gpu_vk_dump). Without this, a headless wide shot crops to the 4:3 (320) display region and the
     // widescreen margin is invisible even though it's rendered.
-    if (use_fb()) { sx = 0; sy = FB_Y0; w = FBW(); h = FBH(); }
+    if (frame_via_fb()) { sx = 0; sy = FB_Y0; w = FBW(); h = FBH(); }
     s_last_sx = sx; s_last_sy = sy; s_last_w = w; s_last_h = h;
     return;
   }
@@ -1113,20 +1120,17 @@ void gpu_vk_present(const uint16_t* src, int sx, int sy, int w, int h) {
   rp.renderArea.extent = s_extent; rp.clearValueCount = 1; rp.pClearValues = &clear;
   vkCmdBeginRenderPass(s_cmd, &rp, VK_SUBPASS_CONTENTS_INLINE);
 
-  // Genuine-wide is a GAMEPLAY feature: a fullscreen-2D screen (SCEA/FMV/title/menu = no 3D last frame)
-  // is authored for 4:3, so PILLARBOX it (sample only the 4:3 FB region + letterbox 4:3) instead of
-  // stretching the 320 content across the wide frame. That's the PC-game behavior, and it stops the wide
-  // 2D-scale from mangling those screens. (1-frame lag at scene transitions is invisible.)
-  int gpu_had3d_last_frame(void);
-  int pillarbox_2d = gpu_vk_wide_engine() && !gpu_had3d_last_frame();
-  // Present the scaled scratch FB (wide 16:9 OR 4:3 hi-res) — it was rendered denser at native FOV/scale,
-  // so present 1:1 region->window. Else present the PSX display region. Aspect stays 4:3 unless wide.
-  if (use_fb()) { sx = 0; sy = FB_Y0; w = pillarbox_2d ? 320 * s_ires : FBW(); h = FBH(); }
+  // A 3D frame's content is in the scaled scratch FB (rendered denser at native FOV/scale) -> present that
+  // FB region 1:1 at the SELECTED aspect. A 2D-only frame (SCEA/FMV/title/menu - VRAM-resident, no 3D) has
+  // an EMPTY scratch FB -> present the native PSX display region [sx,sy,w,h] at 4:3. This is the PC-game
+  // behavior and is what keeps hi-res/wide from mangling those fullscreen-2D screens.
+  int via_fb = frame_via_fb();
+  if (via_fb) { sx = 0; sy = FB_Y0; w = FBW(); h = FBH(); }
   s_last_sx = sx; s_last_sy = sy; s_last_w = w; s_last_h = h;   // for on-demand gpu_vk_shot (debug server)
-  // Fit the scratch FB into the window at the SELECTED aspect (letterbox to 4:3/16:9/21:9); AUTO fills the
-  // window exactly (its FB aspect already == the window aspect). aw:ah = the aspect we letterbox to.
+  // Fit the sampled region into the window: a 2D screen always letterboxes to 4:3; a 3D frame uses the
+  // selected aspect (AUTO fills the window; wide uses its native wide width). aw:ah = the letterbox aspect.
   int aw, ah;
-  if (pillarbox_2d)                 { aw = 4; ah = 3; }                   // fullscreen-2D screen -> 4:3 pillarbox
+  if (!via_fb)                      { aw = 4; ah = 3; }                   // fullscreen-2D screen -> 4:3 pillarbox
   else if (g_mods.aspect == ASPECT_AUTO) { aw = win_w(); ah = win_h(); }
   else if (s_wide)                  { aw = wide_native_w(); ah = 240; }   // 16:9 -> 428:240, 21:9 -> 560:240
   else                              { aw = 4; ah = 3; }
@@ -1583,7 +1587,7 @@ void gpu_vk_dump(int sx, int sy, int w, int h, int frame) {
       char cmd[320]; snprintf(cmd, sizeof cmd, "mkdir -p '%s'", qdir); int r = system(cmd); (void)r;
     } else qa = -1; }
   int dsx = sx, dsy = sy, dw = w, dh = h;
-  if (use_fb()) { dsx = 0; dsy = FB_Y0; dw = FBW(); dh = FBH(); }   // scaled scratch FB (wide / hi-res)
+  if (frame_via_fb()) { dsx = 0; dsy = FB_Y0; dw = FBW(); dh = FBH(); }   // scaled scratch FB (3D frame)
   if (sf >= 0 && frame == sf) { vk_dump_to("scratch/screenshots/vk_live.ppm", dsx, dsy, dw, dh);
     fprintf(stderr, "[vk_shot] f%d wrote scratch/screenshots/vk_live.ppm\n", frame); }
   if (qa >= 0 && frame >= qa && frame <= qb && ((frame - qa) % qstep) == 0) {

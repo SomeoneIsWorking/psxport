@@ -63,6 +63,10 @@ static int s_prev_had3d = 0;      // did LAST frame draw any 3D? = "this is a ga
                                   // pillarbox genuine-wide on fullscreen-2D screens (SCEA/FMV/title/menu):
                                   // widen only gameplay; 2D-only frames present 4:3 (the PC-game behavior).
 int gpu_had3d_last_frame(void) { return s_prev_had3d; }
+// THIS frame's 3D status (the OT walk that tees geometry runs before present, so s_seen3d is final by
+// the time the present/compose pipeline queries it — no 1-frame lag). A frame with no tee'd 3D is a
+// VRAM-resident 2D screen (SCEA/FMV/title/menu); it has nothing in the scaled scratch FB.
+int gpu_seen3d_this_frame(void) { return s_seen3d; }
 static long s_gp0_words = 0, s_dma2 = 0;  // diagnostics: GP0 words + DMA2 triggers per frame
 static uint32_t s_cur_node = 0;   // REDDBG: RAM addr of the OT node currently being fed to GP0
 uint32_t g_ot_madr = 0;           // last OT DMA root (extern in internal header)
