@@ -4686,3 +4686,39 @@ OT/pool for owned prims (WATCH: semi-transparent owned prims need painter order 
 native buckets with the guest OT's inline 2D prims — measure bucket sharing first). Then walk the active-
 entity pool list natively (stride 0xD0, §32) and emit each object's prims straight into the native DL,
 dropping the extended-cull `mem_w8(o+1,1)` shared write (collision mechanism #1) at the source.
+
+## later-126 — MEASURE owned-vs-guest OT bucket sharing → reprioritize the "native render memory" plan
+Handoff NEXT step "measure bucket sharing first" (the precondition for native per-bucket ordering, step 2b).
+Added `PSXPORT_DEBUG=bucket` (gpu_native.c, read-only re-walk of the OT, zero cost off): a maximal run of
+consecutive POOL-region nodes between two OT-array bucket-anchor nodes = exactly one bucket's prim chain;
+tally owned (native-DL 3D) vs guest (inline-2D) prims per run, count buckets that hold BOTH.
+
+**Field scene result:**
+- **4:3:**  owned=508 guest=428 | owned-only buckets=276, guest-only=9, **MIXED=0**.
+- **16:9:** owned=766 guest=430 | owned-only=446, guest-only=7, **MIXED=2**.
+So at 4:3 owned 3D and guest 2D never share a bucket, but in 16:9 the +258 wide-frustum-re-included owned
+prims push **2 buckets to hold both** (those prims were culled at 4:3, leaving the bucket guest-only).
+
+**Consequence — the plan is reprioritized (honest reassessment, NOT the original step order):**
+1. **Overflow (later-124 mechanism #2) is already neutralized by later-125.** Owned prims now cost 4 B
+   each, so even a pathological dense wide scene (~5000 owned ×4 B + ~430 guest ×52 B ≈ 42 KB) stays well
+   under the 0x14000 (81920 B) pool buffer. The reason step 2b existed (prevent overflow) is largely moot.
+2. **Naive native per-bucket ordering (step 2b) would now be INCORRECT in widescreen** — the 2 mixed
+   buckets need owned/guest insertion order preserved, which only the guest OT currently encodes. Standalone
+   2b buys merge complexity, not safety. Deprioritized; it falls out cleanly only AFTER step 3 removes guest
+   3D prims.
+3. **The geometry submit is ALREADY native** (engine_submit → native DL, later-123): a re-included wide
+   object's prims already flow into the native display list. The wide re-include's only guest touch is
+   `mem_w8(o+1,1)` (game_tomba2.c ov_object_cull) — and the entity walk `FUN_8007a904` calls every node's
+   handler EVERY frame regardless; +1 is the per-frame RENDER flag (cleared each frame), gating whether the
+   handler's submit path proceeds — NOT persistent gameplay state the logic reads back (unlike the CONFIRMED
+   GTE-OFX collision, already reverted). There is no native shortcut to submit a re-included object without
+   its handler (the handler builds the primitive-record list the submit consumes), so the +1 poke IS the
+   minimal mechanism.
+
+**Therefore the next real question is EMPIRICAL, not "implement step 3 blind":** does forcing submission of
+wide-margin culled objects (the +1 re-include) actually perturb gameplay LOGIC ("sometimes worse"), or only
+add the intended extra render prims? That must be MEASURED (drive wide vs 4:3 to a dense scene, diff game
+state vs the oracle) before committing to a large native-object-render rewrite. If it does NOT diverge, the
+collision concern is fully addressed by later-125 + the reverted OFX, and approach-B's value is purely the
+long-term native-port goal, not corruption avoidance. Probe `PSXPORT_DEBUG=bucket` kept for that work.

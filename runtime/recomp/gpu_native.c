@@ -1378,6 +1378,31 @@ void gpu_dma2_linked_list(uint32_t madr) {
     fprintf(stderr, "[pool] f%d madr=0x%08X nodes=%d pool=0x%08X hi=0x%08X\n",
             s_frame, 0x80000000u | g_ot_madr, nodes, pool, (uint32_t)mx);
   }
+  // PSXPORT_DEBUG=bucket: do owned (native-DL 3D) prims and guest (inline-2D) packets ever share an OT
+  // bucket? Decides whether native per-bucket ordering (later-125 NEXT step 2b) can reproduce the draw
+  // order exactly or needs per-bucket owned/guest merge logic. A maximal run of consecutive POOL-region
+  // nodes between two OT-array (bucket-anchor) nodes is exactly one bucket's prim chain. Re-walk (probe
+  // only) and tally owned vs guest per run.
+  if (cfg_dbg("bucket")) {
+    uint32_t ot_lo = g_ot_madr - 0x1ffcu, ot_hi = ot_lo + 0x2000u;   // main OT array [ctx, ctx+0x2000)
+    uint32_t a = g_ot_madr;
+    int run_o = 0, run_g = 0, mixed = 0, ob = 0, gb = 0, tot_o = 0, tot_g = 0;
+    for (int k = 0; k < 0x10000; k++) {
+      uint32_t hdr = mem_r32(a);
+      if (a >= ot_lo && a < ot_hi) {                 // bucket boundary -> close the current run
+        if (run_o && run_g) mixed++; else if (run_o) ob++; else if (run_g) gb++;
+        run_o = run_g = 0;
+      } else if (ndl_lookup(a)) { run_o++; tot_o++; }   // owned native prim (1-word tag in pool)
+      else { run_g++; tot_g++; }                        // guest inline-2D packet
+      uint32_t next = hdr & 0xFFFFFF;
+      if (next == 0xFFFFFF || next == 0) break;
+      a = next & 0x1FFFFC;
+    }
+    if (run_o && run_g) mixed++; else if (run_o) ob++; else if (run_g) gb++;
+    if (tot_o + tot_g > 20)                          // the main OT only (skip the 1-node setup OT)
+      fprintf(stderr, "[bucket] f%d madr=0x%08X prims owned=%d guest=%d | buckets owned-only=%d "
+              "guest-only=%d MIXED=%d\n", s_frame, 0x80000000u | g_ot_madr, tot_o, tot_g, ob, gb, mixed);
+  }
   ndl_mark_consumed();   // this draw consumed the native list; the next submit starts a fresh frame
   if (guard >= 0x10000) {
     static int warned = 0;
