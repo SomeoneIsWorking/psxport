@@ -1098,6 +1098,11 @@ void gpu_vk_present(const uint16_t* src, int sx, int sy, int w, int h) {
     VkSubmitInfo su = { VK_STRUCTURE_TYPE_SUBMIT_INFO };
     su.commandBufferCount = 1; su.pCommandBuffers = &s_cmd;
     VKC(vkQueueSubmit(s_queue, 1, &su, s_fence));
+    // Headless readback (vkshot / gpu_vk_shot) reads s_last_*; when wide/hi-res the geometry rendered into
+    // the scaled scratch FB, so report THAT region (mirrors the windowed use_fb() override below and
+    // gpu_vk_dump). Without this, a headless wide shot crops to the 4:3 (320) display region and the
+    // widescreen margin is invisible even though it's rendered.
+    if (use_fb()) { sx = 0; sy = FB_Y0; w = FBW(); h = FBH(); }
     s_last_sx = sx; s_last_sy = sy; s_last_w = w; s_last_h = h;
     return;
   }
