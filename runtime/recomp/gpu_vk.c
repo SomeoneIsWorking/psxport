@@ -611,7 +611,9 @@ static void init_vk(void) {
   create_vram();
   void create_tri_pipeline(void); create_tri_pipeline();
   void panels_init(void); panels_init();
-  if (deferred_on() || ui_infra()) create_ssao();   // UI keeps the deferred infra ready for live toggles
+  // Native depth is ALWAYS on now, so the deferred infra (SSAO/light) can ALWAYS be ready -> they toggle
+  // live from the overlay with no launch flag (the old PSXPORT_UI gate is obsolete). Skip only under SBS.
+  if (!sbs_on()) create_ssao();
   if (!s_headless) create_swapchain();
   // ImGui mod-toggle overlay (windowed only; needs the swapchain + present render pass).
   if (g_mods.ui && !s_headless)

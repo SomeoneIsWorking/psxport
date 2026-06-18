@@ -86,47 +86,44 @@ static void build_ui(void) {
 
   const char* aspects[] = { "4:3", "16:9", "21:9", "Auto (window)" };
   int am = g_mods.aspect;
-  if (ImGui::Combo("Aspect", &am, aspects, 4)) g_mods.aspect = am;
+  if (ImGui::Combo("Aspect", &am, aspects, 4)) { g_mods.aspect = am; mods_save(); }
 
   int nw = 320, ir = 1, fbw = 320, fbh = 240, ww = 0, wh = 0, cap = 3;
   gpu_vk_video_status(&nw, &ir, &fbw, &fbh, &ww, &wh, &cap);
   bool ia = g_mods.ires_auto != 0;
-  if (ImGui::Checkbox("Auto internal res", &ia)) g_mods.ires_auto = ia;
+  if (ImGui::Checkbox("Auto internal res", &ia)) { g_mods.ires_auto = ia; mods_save(); }
   if (g_mods.ires_auto) {
     ImGui::SameLine(); ImGui::TextDisabled("(%dx)", ir);    // computed from window size
   } else {
     int iv = g_mods.ires;
-    if (ImGui::SliderInt("Internal res", &iv, 1, cap < 1 ? 1 : cap))
-      g_mods.ires = iv < 1 ? 1 : (iv > 3 ? 3 : iv);
+    if (ImGui::SliderInt("Internal res", &iv, 1, cap < 1 ? 1 : cap)) {
+      g_mods.ires = iv < 1 ? 1 : (iv > 3 ? 3 : iv); mods_save(); }
   }
   ImGui::TextDisabled("Render %dx%d  |  window %dx%d", fbw, fbh, ww, wh);
 
   bool fps60 = g_fps60_on != 0;
-  if (ImGui::Checkbox("60fps interpolation", &fps60)) g_fps60_on = fps60;
+  if (ImGui::Checkbox("60fps interpolation", &fps60)) { g_fps60_on = fps60; mods_save(); }
 
   ImGui::Separator();
-  // SSAO/light need the native-depth/deferred path, which is opt-in (it changes the depth model and is
-  // not yet faithful for every submit path). Grey them out unless launched with PSXPORT_UI=1.
-  bool effects = cfg_on("PSXPORT_UI") != 0;
-  if (!effects) { ImGui::BeginDisabled(); }
+  // Native per-pixel depth is always on, so SSAO/light toggle LIVE — no launch flag (the deferred infra
+  // is always created). Changing any setting persists it (mods_save).
   bool ssao = g_mods.ssao != 0;
-  if (ImGui::Checkbox("Ambient occlusion (SSAO)", &ssao)) g_mods.ssao = ssao;
-  if (effects && g_mods.ssao) {
-    ImGui::SliderFloat("AO strength", &g_mods.ssao_strength, 0.0f, 2.0f);
-    ImGui::SliderFloat("AO radius (px)", &g_mods.ssao_radius, 1.0f, 20.0f);
-    ImGui::SliderFloat("AO bias", &g_mods.ssao_bias, 0.0f, 0.1f, "%.3f");
-    ImGui::SliderFloat("AO range", &g_mods.ssao_range, 0.02f, 0.6f, "%.3f");
+  if (ImGui::Checkbox("Ambient occlusion (SSAO)", &ssao)) { g_mods.ssao = ssao; mods_save(); }
+  if (g_mods.ssao) {
+    if (ImGui::SliderFloat("AO strength", &g_mods.ssao_strength, 0.0f, 2.0f)) mods_save();
+    if (ImGui::SliderFloat("AO radius (px)", &g_mods.ssao_radius, 1.0f, 20.0f)) mods_save();
+    if (ImGui::SliderFloat("AO bias", &g_mods.ssao_bias, 0.0f, 0.1f, "%.3f")) mods_save();
+    if (ImGui::SliderFloat("AO range", &g_mods.ssao_range, 0.02f, 0.6f, "%.3f")) mods_save();
   }
 
   ImGui::Separator();
   bool light = g_mods.light != 0;
-  if (ImGui::Checkbox("Directional light", &light)) g_mods.light = light;
-  if (effects && g_mods.light) {
-    ImGui::SliderFloat3("Light dir (view)", g_mods.light_dir, -1.0f, 1.0f);
-    ImGui::SliderFloat("Ambient", &g_mods.light_ambient, 0.0f, 1.5f);
-    ImGui::SliderFloat("Diffuse", &g_mods.light_diffuse, 0.0f, 1.5f);
+  if (ImGui::Checkbox("Directional light", &light)) { g_mods.light = light; mods_save(); }
+  if (g_mods.light) {
+    if (ImGui::SliderFloat3("Light dir (view)", g_mods.light_dir, -1.0f, 1.0f)) mods_save();
+    if (ImGui::SliderFloat("Ambient", &g_mods.light_ambient, 0.0f, 1.5f)) mods_save();
+    if (ImGui::SliderFloat("Diffuse", &g_mods.light_diffuse, 0.0f, 1.5f)) mods_save();
   }
-  if (!effects) { ImGui::EndDisabled(); ImGui::TextDisabled("(SSAO/light need PSXPORT_UI=1 at launch)"); }
   ImGui::PopItemWidth();
   ImGui::End();
 }

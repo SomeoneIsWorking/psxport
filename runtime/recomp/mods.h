@@ -20,7 +20,10 @@ typedef struct {
   float light_dir[3], light_ambient, light_diffuse;
 } ModState;
 extern ModState g_mods;
-void mods_init(void);  // populate from cfg once (idempotent; safe to call from any first-use site)
+void mods_init(void);  // populate once: settings file (if present) else cfg/env (idempotent)
+void mods_save(void);  // persist the live settings to the settings file (called by the overlay on change)
+void mods_load(void);  // load the settings file into g_mods if it exists (called by mods_init)
+int  g_fps60_on_get(void); // fps60 state for persistence (engine/fps60.c owns g_fps60_on)
 #ifdef __cplusplus
 }
 #endif

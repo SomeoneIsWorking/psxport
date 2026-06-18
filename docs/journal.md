@@ -4454,3 +4454,16 @@ User: "there is terrain on the right in the real game — do more RE, port more 
   gameplay frames; and the present PILLARBOXES 2D-only frames (sample the 4:3 FB region + letterbox 4:3)
   instead of stretching 320 across the wide frame. Verified: SCEA text back to native size
   (`scratch/screenshots/v2_title.png`); field still genuine-wide. 1-frame transition lag is invisible.
+
+## later-120 — overlay = real PC-game settings: SSAO/light live (no env gate) + persistence
+User: "AO and Dynamic light need UI at launch? stop with stupid ENV gating. IMGUI settings don't persist.
+Make this a PC game." Fixed:
+- **SSAO/light toggle LIVE, no launch flag.** The PSXPORT_UI gate on the deferred infra only existed
+  because native depth used to be opt-in — it's ALWAYS ON now (later-118), so the deferred infra is always
+  created (`create_ssao` unconditional, skip only under SBS) and the overlay no longer greys out SSAO/light.
+- **Settings persist** (`mods_save`/`mods_load`, mods.c) to `psxport_settings.ini` (gitignored; path via
+  PSXPORT_SETTINGS). Every overlay change saves; `mods_init` restores on a windowed run AFTER env seeding
+  (saved choice wins). Headless/tooling (ui==0) stays env-driven + deterministic so the render-diff harness
+  is unaffected. Persists aspect, internal-res(+auto), SSAO/light(+params), 60fps.
+- OPEN: live-toggling aspect/internal-res "completely breaks the game" (user) — investigating next with a
+  headless aspect-switch diagnostic (don't guess).
