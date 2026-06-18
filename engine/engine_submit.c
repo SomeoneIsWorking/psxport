@@ -307,7 +307,7 @@ static void submit_poly_gt3(R3000* c) {
 }
 
 void ov_submit_poly_gt3(R3000* c) {
-  if (submit_recomp()) { rec_super_call(c, 0x8007FDB0u); return; }
+  if (submit_recomp() || cfg_on("PSXPORT_GT3_RECOMP")) { rec_super_call(c, 0x8007FDB0u); return; }
   submit_poly_gt3(c);
 }
 
@@ -394,7 +394,7 @@ static void submit_poly_gt4(R3000* c) {
 }
 
 void ov_submit_poly_gt4(R3000* c) {
-  if (submit_recomp()) { rec_super_call(c, 0x8008007Cu); return; }
+  if (submit_recomp() || cfg_on("PSXPORT_GT4_RECOMP")) { rec_super_call(c, 0x8008007Cu); return; }
   submit_poly_gt4(c);
 }
 
@@ -526,7 +526,7 @@ static void submit_poly_gt4_bp(R3000* c) {
 }
 
 void ov_submit_poly_gt4_bp(R3000* c) {
-  if (submit_recomp()) { rec_super_call(c, 0x80027768u); return; }
+  if (submit_recomp() || cfg_on("PSXPORT_GT4BP_RECOMP")) { rec_super_call(c, 0x80027768u); return; }
   submit_poly_gt4_bp(c);
 }
 
@@ -631,38 +631,39 @@ static void submit_perobj_flush(R3000* c) {
     uint32_t cmd = mem_r32(node + 0xC0 + i * 4);
     uint32_t geomblk = mem_r32(cmd + 0x40);
     if (geomblk == 0) goto next;
-    // obj translation (cmd+0x2c/0x30/0x34) → scratch 0x1F8000C0/C2/C4 (input V0 for the translation MVMVA)
-    mem_w16(SCR + 0xC0, mem_r16(cmd + 0x2C));
-    mem_w16(SCR + 0xC2, mem_r16(cmd + 0x30));
-    mem_w16(SCR + 0xC4, mem_r16(cmd + 0x34));
-    // camera rotation (scratch 0x1F8000F8, 5 words) → CR0-4
+    // HOST-MEMORY compose (never writes guest RAM): all intermediates are C locals; the only writes are
+    // to the GTE control/data registers (hardware, not guest RAM). Reads from guest (camera matrix, the
+    // object cmd matrix/translation, the camera translation offset) are fine.
+    // camera rotation (guest scratch 0x1F8000F8, 5 words, READ) → CR0-4
     gte_write_ctrl(0, mem_r32(SCR + 0xF8)); gte_write_ctrl(1, mem_r32(SCR + 0xFC));
     gte_write_ctrl(2, mem_r32(SCR + 0x100)); gte_write_ctrl(3, mem_r32(SCR + 0x104));
     gte_write_ctrl(4, mem_r32(SCR + 0x108));
-    // compose camera-rotation × object-local matrix, one MVMVA per column (cmd+0x18/+0x1a/+0x1c)
+    // compose camera-rotation × object-local matrix, one MVMVA per column (cmd+0x18/+0x1a/+0x1c) → host
+    uint16_t hm[9];   // composed rotation, 3 cols interleaved: hm[col]=row0, hm[3+col]=row1, hm[6+col]=row2
     for (int col = 0; col < 3; col++) {
       uint32_t cc = cmd + 0x18 + col;
       gte_write_data(9,  mem_r16(cc + 0));
       gte_write_data(10, mem_r16(cc + 6));
       gte_write_data(11, mem_r16(cc + 12));
       gte_op(c, MVMVA_ROTCOL);
-      mem_w16(SCR + 0  + col * 2, gte_read_data(9));     // composed rot, 3 cols interleaved
-      mem_w16(SCR + 6  + col * 2, gte_read_data(10));
-      mem_w16(SCR + 12 + col * 2, gte_read_data(11));
+      hm[col]     = (uint16_t)gte_read_data(9);
+      hm[3 + col] = (uint16_t)gte_read_data(10);
+      hm[6 + col] = (uint16_t)gte_read_data(11);
     }
-    // transform the object translation by the camera, then add the camera translation offset
-    gte_write_data(0, mem_r32(SCR + 0xC0));              // VXY0 = (transX, transY)
-    gte_write_data(1, mem_r32(SCR + 0xC4));              // VZ0  = transZ
+    // transform the object translation (cmd+0x2c/30/34) by the camera, then add the camera translation
+    gte_write_data(0, (uint32_t)mem_r16(cmd + 0x2C) | ((uint32_t)mem_r16(cmd + 0x30) << 16));  // VXY0
+    gte_write_data(1, (uint32_t)mem_r16(cmd + 0x34));                                            // VZ0
     gte_op(c, MVMVA_TRANS);
-    mem_w32(SCR + 20, gte_read_data(25) + mem_r32(SCR + 0x10C));   // + camera trans X
-    mem_w32(SCR + 24, gte_read_data(26) + mem_r32(SCR + 0x110));   // + camera trans Y
-    mem_w32(SCR + 28, gte_read_data(27) + mem_r32(SCR + 0x114));   // + camera trans Z
-    // load the composed transform: rotation → CR0-4, translation → CR5-7
-    gte_write_ctrl(0, mem_r32(SCR + 0));  gte_write_ctrl(1, mem_r32(SCR + 4));
-    gte_write_ctrl(2, mem_r32(SCR + 8));  gte_write_ctrl(3, mem_r32(SCR + 12));
-    gte_write_ctrl(4, mem_r32(SCR + 16));
-    gte_write_ctrl(5, mem_r32(SCR + 20)); gte_write_ctrl(6, mem_r32(SCR + 24));
-    gte_write_ctrl(7, mem_r32(SCR + 28));
+    uint32_t trx = gte_read_data(25) + mem_r32(SCR + 0x10C);
+    uint32_t try_ = gte_read_data(26) + mem_r32(SCR + 0x110);
+    uint32_t trz = gte_read_data(27) + mem_r32(SCR + 0x114);
+    // load the composed transform from host: rotation → CR0-4 (packed halfwords), translation → CR5-7
+    gte_write_ctrl(0, (uint32_t)hm[0] | ((uint32_t)hm[1] << 16));
+    gte_write_ctrl(1, (uint32_t)hm[2] | ((uint32_t)hm[3] << 16));
+    gte_write_ctrl(2, (uint32_t)hm[4] | ((uint32_t)hm[5] << 16));
+    gte_write_ctrl(3, (uint32_t)hm[6] | ((uint32_t)hm[7] << 16));
+    gte_write_ctrl(4, (uint32_t)hm[8]);
+    gte_write_ctrl(5, trx); gte_write_ctrl(6, try_); gte_write_ctrl(7, trz);
     // OT base: node[0xd]&0xf == 4 selects a per-command sub-bucket (cmd[0x3f]*4 offset), else the base
     uint32_t otbase = otbase_ptr;
     if ((mem_r8(node + 0xD) & 0xF) == 4)
@@ -787,32 +788,35 @@ static void submit_terrain(R3000* c) {
   mem_w32(SCR + 0x1C4, (uint32_t)mem_r8(A2_PARAM + 1) << 2);
   mem_w32(SCR + 0x1C8, (uint32_t)mem_r8(A2_PARAM + 2) << 2);
   c->r[4] = SCR; c->r[5] = SCR + 0x1C0; rec_dispatch(c, 0x80084520u);
-  // compose camera-rotation (0x1F8000F8 → CR0-4) × the object matrix (3 MVMVA columns), as 8003CDD8 does
+  // HOST-MEMORY compose: read the object matrix the build wrote (SCR cols, READ), compose with the camera
+  // in host C locals, load only the GTE regs (hardware). No guest-RAM writes here.
   gte_write_ctrl(0, mem_r32(SCR + 0xF8)); gte_write_ctrl(1, mem_r32(SCR + 0xFC));
   gte_write_ctrl(2, mem_r32(SCR + 0x100)); gte_write_ctrl(3, mem_r32(SCR + 0x104));
   gte_write_ctrl(4, mem_r32(SCR + 0x108));
+  uint16_t hm[9];
   for (int col = 0; col < 3; col++) {
     uint32_t cc = SCR + col * 2;
     gte_write_data(9,  mem_r16(cc + 0));
     gte_write_data(10, mem_r16(cc + 6));
     gte_write_data(11, mem_r16(cc + 12));
     gte_op(c, MVMVA_ROTCOL);
-    mem_w16(cc + 0,  gte_read_data(9));
-    mem_w16(cc + 6,  gte_read_data(10));
-    mem_w16(cc + 12, gte_read_data(11));
+    hm[col]     = (uint16_t)gte_read_data(9);
+    hm[3 + col] = (uint16_t)gte_read_data(10);
+    hm[6 + col] = (uint16_t)gte_read_data(11);
   }
   // transform the object translation (node+72/76) by the camera, add the camera translation offset
   gte_write_data(0, mem_r32(node + 72)); gte_write_data(1, mem_r32(node + 76));
   gte_op(c, MVMVA_TRANS);
-  mem_w32(SCR + 20, gte_read_data(25) + mem_r32(SCR + 0x10C));
-  mem_w32(SCR + 24, gte_read_data(26) + mem_r32(SCR + 0x110));
-  mem_w32(SCR + 28, gte_read_data(27) + mem_r32(SCR + 0x114));
-  // load composed rotation → CR0-4, translation → CR5-7
-  gte_write_ctrl(0, mem_r32(SCR + 0));  gte_write_ctrl(1, mem_r32(SCR + 4));
-  gte_write_ctrl(2, mem_r32(SCR + 8));  gte_write_ctrl(3, mem_r32(SCR + 12));
-  gte_write_ctrl(4, mem_r32(SCR + 16));
-  gte_write_ctrl(5, mem_r32(SCR + 20)); gte_write_ctrl(6, mem_r32(SCR + 24));
-  gte_write_ctrl(7, mem_r32(SCR + 28));
+  uint32_t trx = gte_read_data(25) + mem_r32(SCR + 0x10C);
+  uint32_t try_ = gte_read_data(26) + mem_r32(SCR + 0x110);
+  uint32_t trz = gte_read_data(27) + mem_r32(SCR + 0x114);
+  // load composed rotation → CR0-4 (packed host halfwords), translation → CR5-7
+  gte_write_ctrl(0, (uint32_t)hm[0] | ((uint32_t)hm[1] << 16));
+  gte_write_ctrl(1, (uint32_t)hm[2] | ((uint32_t)hm[3] << 16));
+  gte_write_ctrl(2, (uint32_t)hm[4] | ((uint32_t)hm[5] << 16));
+  gte_write_ctrl(3, (uint32_t)hm[6] | ((uint32_t)hm[7] << 16));
+  gte_write_ctrl(4, (uint32_t)hm[8]);
+  gte_write_ctrl(5, trx); gte_write_ctrl(6, try_); gte_write_ctrl(7, trz);
   // submit the terrain prim records via the owned byte-packed GT4 submitter
   c->r[4] = MVMVA_TERRAIN_GEOMBLK; c->r[5] = 0; c->r[6] = 0; c->r[7] = 0;
   rec_dispatch(c, 0x80027768u);
