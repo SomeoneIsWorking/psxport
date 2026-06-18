@@ -146,10 +146,19 @@ void gpu_vk_set_vd(const float* d3) { s_vd = d3; }
 static const float*    s_vdn;
 static float           s_cur_ordn;
 void gpu_vk_set_vd_n(const float* d3) { s_vdn = d3; }
-// Single shared D32 buffer is partitioned into a 3D WORLD band [0, NATIVE_3D_MAX] (real per-vertex
-// depth) and a 2D OVERLAY band (NATIVE_3D_MAX, 1] (OT-ordered) so HUD/UI composites over the 3D world.
+// Single shared D32 buffer is partitioned into THREE depth bands (nearer = larger ord = wins, with a
+// 0.0 clear): a 2D BACKGROUND band [0, NATIVE_3D_MIN) for non-projected backdrop layers (water/sky),
+// the 3D WORLD band [NATIVE_3D_MIN, NATIVE_3D_MAX] (real per-vertex depth), and a 2D OVERLAY band
+// (NATIVE_3D_MAX, 1] for HUD/UI/banners that composite OVER the 3D world. The background band is why
+// the ocean no longer punches through the terrain: Tomba2's water/sky are screen-space 2D layers (no
+// GTE projection — see engine_re.md), so without their own FAR band they fell into the near overlay
+// band and occluded the whole world. Background vs HUD is split by OT order (a 2D prim drawn before
+// any 3D prim this frame is a backdrop; after, it's HUD) — see gpu_native.c s_seen3d.
 // (Interim until Phase 2 routes 3D and 2D to separate targets; not an offset to align pixels.)
+#define NATIVE_3D_MIN 0.0625f
 #define NATIVE_3D_MAX 0.9375f
+// Map a normalized per-vertex 3D depth d in [0,1] into the 3D WORLD band [NATIVE_3D_MIN, NATIVE_3D_MAX].
+static inline float ord3d(float d) { return NATIVE_3D_MIN + d * (NATIVE_3D_MAX - NATIVE_3D_MIN); }
 void gpu_vk_set_order(unsigned idx) { s_cur_ord = (float)(idx + 1) / 65536.0f; if (s_cur_ord > 1.0f) s_cur_ord = 1.0f;
                                       s_cur_ordn = s_cur_ord; s_vd = 0; s_vdn = 0; }
 // 2D/HUD prim under PSXPORT_NATIVE_DEPTH: OT order, biased into the overlay band above the 3D world.
@@ -158,6 +167,12 @@ void gpu_vk_set_order_2d(unsigned idx) { float t = (float)(idx + 1) / 65536.0f; 
 // Same overlay-band bias, but for the SBS native channel only (leaves the default .ord untouched).
 void gpu_vk_set_order_2d_n(unsigned idx) { float t = (float)(idx + 1) / 65536.0f; if (t > 1.0f) t = 1.0f;
                                            s_cur_ordn = NATIVE_3D_MAX + (1.0f - NATIVE_3D_MAX) * t; s_vdn = 0; }
+// 2D BACKGROUND prim (drawn before any 3D this frame): OT order biased into the FAR band BELOW the 3D
+// world, so the backdrop (water/sky) sits behind the terrain instead of occluding it.
+void gpu_vk_set_order_2d_bg(unsigned idx) { float t = (float)(idx + 1) / 65536.0f; if (t > 1.0f) t = 1.0f;
+                                            s_cur_ord = NATIVE_3D_MIN * t; s_vd = 0; }
+void gpu_vk_set_order_2d_bg_n(unsigned idx) { float t = (float)(idx + 1) / 65536.0f; if (t > 1.0f) t = 1.0f;
+                                              s_cur_ordn = NATIVE_3D_MIN * t; s_vdn = 0; }
 
 // M3 textured rasterizer: a VRAM snapshot image the texture sampler reads (avoids render/sample feedback
 // loop), its descriptor set, the textured pipeline, and a textured-vertex batch.
@@ -1027,9 +1042,9 @@ void gpu_vk_draw_tri(int x0,int y0,int r0,int g0,int b0, int x1,int y1,int r1,in
                      int x2,int y2,int r2,int g2,int b2) {
   if (!s_inited || s_tri_n + 3 > TRI_CAP) return;
   TriVtx* v = (TriVtx*)s_vbuf_ptr + s_tri_n;
-  v[0] = (TriVtx){ x0, y0, r0/255.f, g0/255.f, b0/255.f, s_vd ? s_vd[0]*NATIVE_3D_MAX : s_cur_ord, s_vdn ? s_vdn[0]*NATIVE_3D_MAX : s_cur_ordn };
-  v[1] = (TriVtx){ x1, y1, r1/255.f, g1/255.f, b1/255.f, s_vd ? s_vd[1]*NATIVE_3D_MAX : s_cur_ord, s_vdn ? s_vdn[1]*NATIVE_3D_MAX : s_cur_ordn };
-  v[2] = (TriVtx){ x2, y2, r2/255.f, g2/255.f, b2/255.f, s_vd ? s_vd[2]*NATIVE_3D_MAX : s_cur_ord, s_vdn ? s_vdn[2]*NATIVE_3D_MAX : s_cur_ordn };
+  v[0] = (TriVtx){ x0, y0, r0/255.f, g0/255.f, b0/255.f, s_vd ? ord3d(s_vd[0]) : s_cur_ord, s_vdn ? ord3d(s_vdn[0]) : s_cur_ordn };
+  v[1] = (TriVtx){ x1, y1, r1/255.f, g1/255.f, b1/255.f, s_vd ? ord3d(s_vd[1]) : s_cur_ord, s_vdn ? ord3d(s_vdn[1]) : s_cur_ordn };
+  v[2] = (TriVtx){ x2, y2, r2/255.f, g2/255.f, b2/255.f, s_vd ? ord3d(s_vd[2]) : s_cur_ord, s_vdn ? ord3d(s_vdn[2]) : s_cur_ordn };
   s_tri_n += 3;
 }
 
@@ -1046,8 +1061,8 @@ static void tex_emit(TexVtx* t, const int* xs, const int* ys, const int* us, con
     t[i].clut[0] = clutx; t[i].clut[1] = cluty; t[i].clut[2] = semi; t[i].clut[3] = blend;
     t[i].tw[0] = twmx; t[i].tw[1] = twmy; t[i].tw[2] = twox; t[i].tw[3] = twoy;
     t[i].da[0] = dax0; t[i].da[1] = day0; t[i].da[2] = dax1; t[i].da[3] = day1;
-    t[i].ord = s_vd ? s_vd[i] * NATIVE_3D_MAX : s_cur_ord;   // per-vertex real depth (3D band) else OT-order
-    t[i].ordn = s_vdn ? s_vdn[i] * NATIVE_3D_MAX : s_cur_ordn;   // PSXPORT_SBS native channel (right half)
+    t[i].ord = s_vd ? ord3d(s_vd[i]) : s_cur_ord;   // per-vertex real depth (3D band) else OT-order band
+    t[i].ordn = s_vdn ? ord3d(s_vdn[i]) : s_cur_ordn;   // PSXPORT_SBS native channel (right half)
   }
 }
 void gpu_vk_draw_tritri(const int* xs, const int* ys, const int* us, const int* vs,

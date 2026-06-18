@@ -55,6 +55,9 @@ typedef struct { int x, y; uint8_t r, g, b; int u, v; } Vtx;
 static int g_log = 0;             // PSXPORT_GPU_LOG
 static long s_prims = 0;          // primitives drawn since last present
 static uint32_t s_prim_order = 0; // per-frame OT submission index of the current prim (VK depth order)
+static int s_seen3d = 0;          // has any GTE-projected (3D) prim been teed yet this frame? Non-3D
+                                  // prims before the first 3D one are backdrop (water/sky) -> FAR band;
+                                  // after, they are HUD/UI -> near overlay band (native-depth bands).
 static long s_gp0_words = 0, s_dma2 = 0;  // diagnostics: GP0 words + DMA2 triggers per frame
 static uint32_t s_cur_node = 0;   // REDDBG: RAM addr of the OT node currently being fed to GP0
 uint32_t g_ot_madr = 0;           // last OT DMA root (extern in internal header)
@@ -573,7 +576,13 @@ static void gp0_exec(void) {
           if (vaddr[i] && projprim_lookup_pz(vaddr[i], &pz)) dep[i] = proj_pz_to_ord(pz);
           else { is3d = 0; break; }
         }
-        if (!is3d) { if (s_sbs) gpu_vk_set_order_2d_n(ord_idx); else gpu_vk_set_order_2d(ord_idx); }  // 2D/HUD band
+        if (is3d) s_seen3d = 1;            // a projected world prim has now been drawn this frame
+        if (!is3d) {                        // 2D prim: backdrop (before any 3D = FAR band) vs HUD (after)
+          void gpu_vk_set_order_2d_bg(unsigned); void gpu_vk_set_order_2d_bg_n(unsigned);
+          int bg = !s_seen3d;
+          if (s_sbs) { if (bg) gpu_vk_set_order_2d_bg_n(ord_idx); else gpu_vk_set_order_2d_n(ord_idx); }
+          else       { if (bg) gpu_vk_set_order_2d_bg(ord_idx);   else gpu_vk_set_order_2d(ord_idx); }
+        }
         if (!is3d && cfg_dbg("ndepth")) {   // categorize what lands in the 2D band: op + gouraud/quad/tex
           extern long g_nd2d_hist[256]; g_nd2d_hist[op]++; }
         extern long g_nd_3d, g_nd_2d; if (is3d) g_nd_3d++; else g_nd_2d++;
@@ -683,7 +692,10 @@ static void gp0_exec(void) {
         if (s_ndepth < 0) s_ndepth = cfg_on("PSXPORT_NATIVE_DEPTH") ? 1 : 0;
         if (s_sbs < 0) s_sbs = cfg_on("PSXPORT_SBS") ? 1 : 0;
         void gpu_vk_set_order_2d(unsigned); void gpu_vk_set_order_2d_n(unsigned);
-        if (s_sbs) gpu_vk_set_order_2d_n(ord_idx); else if (s_ndepth) gpu_vk_set_order_2d(ord_idx); }
+        void gpu_vk_set_order_2d_bg(unsigned); void gpu_vk_set_order_2d_bg_n(unsigned);
+        int bg = !s_seen3d;   // sprite/rect before any 3D prim = backdrop -> FAR band; after = HUD
+        if (s_sbs) { if (bg) gpu_vk_set_order_2d_bg_n(ord_idx); else gpu_vk_set_order_2d_n(ord_idx); }
+        else if (s_ndepth) { if (bg) gpu_vk_set_order_2d_bg(ord_idx); else gpu_vk_set_order_2d(ord_idx); } }
       void gpu_vk_draw_tritri(const int*,const int*,const int*,const int*,const unsigned char*,
                               const unsigned char*,const unsigned char*,int,int,int,int,int,int,int,int,int,int,int,int,int,int);
       void gpu_vk_draw_semi(const int*,const int*,const int*,const int*,const unsigned char*,
@@ -1214,6 +1226,7 @@ void gpu_present_ex(int do_blit) {
   { void gpu_vk_frame_end(const uint16_t*, int); gpu_vk_frame_end(s_vram, s_frame); }  // VK: diff + batch reset
   s_frame++; s_prims = 0; s_gp0_words = 0; s_dma2 = 0;
   s_prim_order = 0;   // restart the per-frame OT submission order (VK depth) for the next frame
+  s_seen3d = 0;       // restart backdrop-vs-HUD discrimination (no 3D prim seen yet next frame)
 }
 void gpu_present(void) { gpu_present_ex(1); }
 

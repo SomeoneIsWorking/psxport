@@ -166,15 +166,24 @@ Screen X = OFX + IR1·H/Sz, screen Y = OFY + IR2·H/Sz.
   from PSX-res VRAM. Caps within the 1024-wide VRAM image: 4:3 → 3×, 16:9 → 2×. A dedicated >1024 render
   target would lift the cap (next). Distinct from the rejected supersample-and-downscale FB-cram trick.
 
-## Water — drawn via a NON-GTE path (RE in progress, later-98)
+## Water + sky — drawn via a NON-GTE (screen-space 2D) path; native-depth handling (later-98, later-104)
 Observed during the lighting work (normal-viz): terrain/ground polys get a reconstructed per-face normal
 (they go through RTPS/RTPT), but the **water surface does NOT** — it renders as a flat unlit layer. So the
-water is **not GTE-projected 3D**; it's a separate screen-space / fixed-projection layer (likely a scrolling
-textured surface and/or a framebuffer-reflection effect). The user reports it rendering wrong (green smeared
-streaks instead of blue reflective water). **NEXT RE:** identify the water's draw — point the provenance
-tool (`PSXPORT_PROVAT="x,y"`, gpu_native.c) at a water pixel to get the prim op/texpage/CLUT + owning node
-+ handler addr, then read that handler in the decomp. Compare to the oracle at the SAME game-state (dual-
-core harness, below), NOT by frame number.
+water (and the sky backdrop) is **not GTE-projected 3D**; it's a separate screen-space / fixed-projection
+layer (a scrolling textured surface and/or a framebuffer-reflection effect).
+
+**Consequence for native depth (later-104, FIXED):** because the water/sky have no projection records,
+the native-depth tee classifies them `is3d=0`. With the old two-band D32 model (3D world + a NEAR 2D
+overlay band for HUD) the backdrops fell into the NEAR band and **occluded the entire 3D world** (water
+over terrain). Fix = a **3-band depth model**: a FAR 2D-background band [0, 0.0625) for backdrops, the
+3D world band [0.0625, 0.9375], and the NEAR 2D-overlay band (0.9375, 1] for HUD. Background vs HUD is
+split by OT submission order (drawn before any 3D prim this frame = backdrop → far band; after = HUD →
+near band; per-frame `s_seen3d` in gpu_native.c). The backdrops now sit behind the world correctly.
+
+The water's *appearance* (the prior "green smeared streaks vs blue reflective water" report) is a
+separate question about the reflection/MoveImage copy; to RE it, point `PSXPORT_PROVAT="x,y"` at a water
+pixel for the prim op/texpage/CLUT + owning node, then read that handler in the decomp (compare to the
+oracle at the SAME game-state, not by frame number).
 
 ## Lighting / shading model (RESOLVED — later-96, via GTE op histogram + control-reg snapshot)
 Tooling: `PSXPORT_GTEPROBE=<frame>` (gte_beetle.c) dumps the GTE ops that ACTUALLY execute + a

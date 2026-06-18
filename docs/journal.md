@@ -4030,3 +4030,40 @@ the interpreter-only pivot) from run.sh + build_port.sh, and refreshed the stale
 NEXT (handoff remainder): #2 SBS visual verify (PSXPORT_SBS shotseq not writing — debug gpu_vk.c
 gpu_vk_shotseq), #3 overlay-banner depth semantics (ASK user), #4 optional generated/ include trim
 (done for the build scripts; rec_decls.h is no longer included by any linked TU).
+
+## later-104 — DONE: native-depth occlusion fixed (3-band depth model) + SBS visual verify
+Handoff #2 (visual verify) + #3 (depth semantics, user steer: "more ownership"). The SBS A/B dump
+(now working — fixed a silent `fopen` failure in gpu_vk.c gpu_vk_dump: it never `mkdir`'d the
+PSXPORT_VK_SHOTSEQ dir) revealed that **task #6's "98% native-depth coverage" did NOT yield correct
+occlusion**: with PSXPORT_NATIVE_DEPTH=1 the **entire foreground (terrain/hut/trees/Tomba) was occluded
+by the water+sky background** — only the GTE-projected 3D objects (fruit, bird) survived. Reproduced in
+the real single-channel NATIVE_DEPTH (not just an SBS artifact).
+
+**Root cause:** the native-depth D32 buffer had only TWO bands — 3D world [0, 0.9375] (real per-vertex
+depth) and a 2D OVERLAY band (0.9375, 1] for HUD. But Tomba2's **water and sky are screen-space 2D
+layers with NO GTE projection** (engine_re.md "Water/reflection"), so every backdrop prim was `is3d=0`
+and got dumped into the NEAR overlay band (nearest, wins) → it covered the whole 3D world. The overlay
+band is right for HUD (composite OVER the world) but wrong for backdrops (must sit BEHIND it).
+
+**Fix — 3-band depth model** (gpu_vk.c + gpu_native.c tee): split the non-3D prims into
+- **2D BACKGROUND band [0, NATIVE_3D_MIN=0.0625)** — backdrops (water/sky), FAR, behind the world,
+- **3D WORLD band [0.0625, 0.9375]** — real per-vertex depth (proj_pz_to_ord remapped via `ord3d()`),
+- **2D OVERLAY band (0.9375, 1]** — HUD/UI/banners, NEAR, over the world (unchanged).
+
+Background vs HUD is split by **OT submission order**: a 2D prim drawn BEFORE any 3D prim this frame is
+a backdrop (`gpu_vk_set_order_2d_bg{,_n}` → far band); AFTER, it's HUD (overlay band). Tracked by a
+per-frame `s_seen3d` flag (reset with s_prim_order). This matches the painter/OT semantics (backdrops
+are submitted first, HUD last) and is what "owning more" of the depth means — the backdrop now gets a
+deliberate native far depth instead of an accidental near one.
+
+**Verified:** PSXPORT_NATIVE_DEPTH=1 now renders the full field correctly (water behind terrain, HUD
+banner "Go to the Burning House!" on top); SBS A/B panels match across field frames 500/550/600. The
+only intended difference is true-3D depth on objects (floating fruit now correctly occludes/shows vs
+foliage by real Z, not OT order). **Faithful gate intact: 0 u16 VRAM diff** at f540 (the depth bands
+only touch the VK render path, never the software rasterizer / s_vram).
+
+Residual / next: the OT-order backdrop-vs-HUD split is a heuristic (a backdrop drawn AFTER a 3D prim, or
+a HUD drawn before one, would be misbanded) — fine for the static field; revisit if a scene interleaves
+them. Foreground objects vs tree-canopy foliage now occlude by true Z (a look change from the OT
+original) — the banner-style "OT-on-top intent" question (handoff #3) is now concrete and may want a
+per-layer call.
