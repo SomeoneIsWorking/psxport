@@ -4356,3 +4356,39 @@ runs ~7× the native-loop frame — at native-frame 420 s_frame≈3006; dumped a
 - **Next (audit step 2/3):** own the projection config (OFX lever) + the clip (PutDrawEnv) engine-side,
   default-OFF behind `PSXPORT_WIDE_ENGINE` so 4:3 stays byte-identical (0-diff gate), then the shader places
   wide content 1:1 (drop WIDE_OFF centering). 2D water/sky/HUD (B4) + frustum cull (B3) remain after.
+
+## later-117 — GENUINE engine-level wide FOV (audit step 3): OFX lever, default-OFF, 4:3 byte-identical
+Implemented the first "no faking" widescreen lever: the ENGINE projects a genuinely wider horizontal FOV
+(via Beetle's GTE) instead of the present-time FB spread. Gated `PSXPORT_WIDE_ENGINE` (default OFF) so the
+faithful 4:3 path is untouched (the 0-diff gate).
+- **OFX widen** in the already-owned `ov_set_geom_offset` (engine/game_tomba2.c): the gameplay projection
+  center is 160 (=320/2); when `gpu_vk_wide_engine()` is on, substitute the aspect center (214 @16:9 =
+  428/2) so CR24 drives Beetle's RTPS/RTPT to project across the wider screen. Only the gameplay config
+  (ofx==160) is widened; InitGeom's reset (ofx==0) is left alone. Verified: headless logs
+  `[geom] WIDE_ENGINE OFX 160 -> 214` + `CR24=00D60000` (wide), and the default run keeps `OFX=160`
+  `CR24=00A00000` with NO WIDE_ENGINE line — 4:3 path provably untouched.
+- **1:1 placement** in `gpu_vk.c push_wide`: WIDE_OFF (the 320-in-428 re-center) is the SPREAD; in
+  wide-engine the projection is already wide, so pass wide_off=0 → content placed 1:1 in the scratch FB.
+  For the non-wide-engine path the expression is byte-identical (`s_wide ? WIDE_OFF() : 0`), so the
+  existing FB-hack path is unchanged (no regression).
+- **Accessors** in gpu_vk.c: `gpu_vk_wide_engine()` (PSXPORT_WIDE_ENGINE && aspect!=4:3),
+  `gpu_vk_wide_engine_ofx()` (wide_native_w/2), `gpu_vk_wide_engine_w()` (wide clip width).
+- **Verified (headless VK shot at the field, s_frame=2900, `scratch/screenshots/field_{43,wide169,fbhack169}.png`):**
+  - 4:3 (320×224): faithful scene, correct.
+  - genuine-wide 16:9 (428×240): the 3D world is genuinely WIDER — terrain+structure on the far left and
+    more ocean on the right that are OFF-SCREEN in 4:3 are now visible, with correct (un-stretched)
+    proportions. ASYMMETRIC because the screen-space 2D (the "Go to the Burning House!" banner / HUD) is
+    still anchored at 320 → it's cut off on the right. That asymmetry is the proof it's a real FOV widen,
+    not a stretch.
+  - FB-hack 16:9 (428×240, the old default): SYMMETRIC, banner fully centered = the whole 4:3 frame
+    uniformly stretched (the "fake").
+- **Known remaining artifacts (the next audit steps, NOT regressions):** (1) vertical sky/backdrop stripes
+  appear in BOTH 16:9 paths (pre-existing — the non-wide-engine code path is byte-identical to before my
+  change, and it has them too) = the screen-space 2D sky/water layer (**B4**) not yet widened; (2) the HUD
+  banner pinned/cut at 320 (**B4**); (3) side geometry that the 4:3 frustum culled is still absent on the
+  extreme sides (**B3**). None block the 3D-FOV foundation.
+- **NEXT:** B4 — own the 2D water/sky/HUD submit and widen/anchor it to the aspect (kill the stripes + the
+  cut HUD); then B3 frustum cull; then own PutDrawEnv/PutDispEnv to widen the clip engine-side (step 2,
+  currently the VK shader clips to the FB rect so it's not blocking); then retire the FB spread (step 6).
+- **Corrects memory [[tomba2-mods-status]]:** "Widescreen DONE/works (true wider FOV, no stretch)" was
+  FALSE — that was the FB-hack stretch. Genuine wide is in progress behind PSXPORT_WIDE_ENGINE.

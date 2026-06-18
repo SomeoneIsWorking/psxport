@@ -239,8 +239,18 @@ static void ov_upload_image(R3000* c) {
 // widescreen FOV lever (widen OFX + the draw-env clip; no squish, no renderer re-center) and the
 // reference point the 60fps/hi-res paths build on. Faithful-first: PSXPORT_GEOM_RECOMP=1 keeps the
 // recomp bodies for A/B. A one-time log prints the configured projection to confirm equivalence.
+int gpu_vk_wide_engine(void), gpu_vk_wide_engine_ofx(void);
 static void ov_set_geom_offset(R3000* c) {       // SetGeomOffset(ofx, ofy)
   uint32_t ofx = c->r[4], ofy = c->r[5];
+  // Genuine engine-level widescreen (audit step 3, "no faking"): the gameplay projection center is 160
+  // (=320/2). When PSXPORT_WIDE_ENGINE is on, widen it to the aspect center (214 @16:9) so Beetle's GTE
+  // projects a genuinely wider horizontal FOV — NOT the present-time FB spread. Only the gameplay config
+  // (ofx==160) is widened; InitGeom's reset (ofx==0) is left alone. Default off -> 4:3 byte-identical.
+  if (ofx == 160 && gpu_vk_wide_engine()) {
+    uint32_t wofx = (uint32_t)gpu_vk_wide_engine_ofx();
+    static int wlog = 0; if (!wlog++) fprintf(stderr, "[geom] WIDE_ENGINE OFX %u -> %u (genuine wide FOV)\n", ofx, wofx);
+    ofx = wofx;
+  }
   gte_write_ctrl(24, ofx << 16);                 // OFX
   gte_write_ctrl(25, ofy << 16);                 // OFY
   static int logged = 0;

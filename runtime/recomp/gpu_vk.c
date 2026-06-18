@@ -310,6 +310,20 @@ static int FBW(void) { return wide_native_w() * s_ires; }
 static int FBH(void) { return 240 * s_ires; }
 static int use_fb(void) { return s_wide || s_ires > 1; }   // 3D goes through the scaled scratch FB
 static void wide_init(void) { mods_init(); }
+
+// ---- Genuine engine-level widescreen (audit step 2/3: "no faking") -----------------------------
+// PSXPORT_WIDE_ENGINE=1 switches widescreen from the present-time FB SPREAD (push_wide centers the fixed
+// 320 projection in a wider FB) to a REAL wider frame: the engine projects with a wider OFX (genuine
+// horizontal FOV via Beetle's GTE) and the wide content is rasterized 1:1 into the scratch FB (no
+// WIDE_OFF re-center). Default OFF so 4:3 stays byte-identical (the 0-diff gate). Still WIP: the 2D
+// water/sky/HUD (B4) and the frustum cull (B3) are not yet widened, so the extra side bands show gaps /
+// edge-stuck 2D until those steps land — this flag is the in-progress genuine path, not the default.
+int gpu_vk_wide_engine(void) {
+  static int v = -1; if (v < 0) { mods_init(); v = cfg_on("PSXPORT_WIDE_ENGINE") ? 1 : 0; }
+  return v && g_mods.aspect != ASPECT_4_3;
+}
+int gpu_vk_wide_engine_ofx(void) { return wide_native_w() / 2; }   // wide projection center (214 @16:9)
+int gpu_vk_wide_engine_w(void)   { return wide_native_w(); }       // wide draw-clip width (428 @16:9)
 // Effective video status for the overlay (computed values, incl. auto). Any out ptr may be NULL.
 void gpu_vk_video_status(int* native_w, int* ires, int* fbw, int* fbh, int* ww, int* wh, int* ires_cap) {
   wide_init();
@@ -701,7 +715,10 @@ static void push_wide(int enabled) {
   // ss = internal-res scale; the horizontal re-center (WIDE_OFF) applies only in 16:9, so 4:3 hi-res
   // just scales the native view by s_ires with no FOV change. (The PSXPORT_SBS depth select is a
   // pipeline specialization constant, not a push constant — see SBS_NATIVE in the shaders.)
-  int32_t va[8] = { enabled, FB_Y0, s_ires, IMG_H,   s_wide ? WIDE_OFF() : 0, FBW(), FBH(), 0 /*fb_x0*/ };
+  // WIDE_OFF centers the fixed 320 projection in the wider FB (the present-time SPREAD). In the genuine
+  // engine-wide path the projection is ALREADY wide (OFX widened), so place it 1:1 with no re-center.
+  int wide_off = (s_wide && !gpu_vk_wide_engine()) ? WIDE_OFF() : 0;
+  int32_t va[8] = { enabled, FB_Y0, s_ires, IMG_H,   wide_off, FBW(), FBH(), 0 /*fb_x0*/ };
   vkCmdPushConstants(s_cmd, s_pll, VK_SHADER_STAGE_VERTEX_BIT, 16, 32, va);
 }
 
