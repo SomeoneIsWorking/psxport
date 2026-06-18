@@ -460,6 +460,12 @@ functions — they're reached only from overlay code + a jump table. Layout:
 - **Other menus nearby** (same draw lib, separate flows): `FUN_8007ee74` "Continue / Load data / Quit
   game" (death/continue), `FUN_8007ed5c` Save prompt, `FUN_8007ef60` "OK to quit game?".
 
+## Engine ownership status → `docs/engine-ownership-audit.md`
+The actionable map of what the native engine OWNS vs. what still runs as recompiled MIPS (the "black box"),
+why widescreen corrupts (clip+cull+2D layers stay 4:3 while we fake the FB wide), and the prioritized,
+oracle-gated port plan to own the render/camera/submit layer for REAL widescreen. **Read it before render/
+camera/widescreen work.** (Gameplay logic stays the recomp oracle by design.)
+
 ## Open RE items (next, in order)
 1. ~~The entity list + its walk~~ — **DONE** (above): lists `DAT_800fb168`/`DAT_800f2624`, walk
    `FUN_8007a904`, node layout. Handlers are per-object fn pointers @ +0x1c (not a type-indexed table).

@@ -4296,3 +4296,25 @@ VK run** — plain `./run.sh` brings the menu up and F1 toggles it; no flag. `PS
   auto-ires verified (Render 560x240, ires auto-capped 1x; `scratch/screenshots/aspect_menu.png`).
   KNOWN: pushing the FOV to 21:9 on the seaside scene shows a garbled band where the game submits no
   geometry for the extra-wide sides (a content/FOV limit of ultra-wide, NOT the 16:9 path) — needs a look.
+
+## later-114 — REGRESSION fix (native-depth default) + engine-ownership audit (widescreen is a hack)
+User: "the game becomes completely corrupted [widescreen] — most of the engine is still a black box; port
+the render/camera layer." Two things:
+- **Regression I caused, now fixed (`796740b`):** later-113 routed the native-depth/deferred path through
+  `g_mods.ui` and defaulted it ON for windowed → every plain `./run.sh` ran the incomplete native-depth
+  model over the whole game = corruption. **A menu being available must never change rendering correctness.**
+  Decoupled: overlay stays default-on; native-depth/deferred (gpu_native gates, gte_beetle attach_enabled,
+  ui_infra) revert to opt-in via `PSXPORT_UI` env (off on plain `./run.sh`). SSAO/light greyed in the overlay
+  unless `PSXPORT_UI=1`. Verified plain windowed run renders the field scene FAITHFULLY (HUD+char+env intact,
+  `scratch/screenshots/faithful_scene.png`).
+- **Honest correction:** my "21:9 = content limit" was an eyeballed guess (the project bans that). Real root
+  cause: **widescreen is a renderer-side HACK** — we render the native 4:3 projection into a wider FB and
+  spread verts in a shader, while the engine still CLIPS (PutDrawEnv `0x800815D0`) and CULLS
+  (`0x8007712C`) to 4:3 and draws water/sky/HUD as screen-space 2D. So wide → empty/garbled sides. Fix = own
+  the view at the SOURCE (OFX via `gen_func_800509B4`, the clip, the frustum, the 2D layers), which our
+  already-owned `proj_native_vertex` (0-diff) + per-vertex depth then render correctly.
+- **Deliverable (user picked "audit first"): `docs/engine-ownership-audit.md`** — full map of what's owned
+  (DrawOTag, projection math+depth, resident submit, asset upload) vs the black box (PutDrawEnv/PutDispEnv,
+  projection-config, frustum cull, 2D water/sky/HUD, overlay emitters, VRAM copies, camera basis), why
+  widescreen corrupts, and a prioritized, oracle-gated port plan (diagnose → PutDrawEnv/Env → OFX config →
+  frustum cull → 2D layers → retire the FB hack). Scope confirmed: gameplay logic STAYS the recomp oracle.
