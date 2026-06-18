@@ -4820,3 +4820,42 @@ native DL (engine_submit owned path) — leaving the handler's visibility-gated 
 model-data format at +0x38 and the per-object transform load (the 96/54 ctc2 sites, engine_re.md §Camera) so
 the native path can project+submit identically to the handler's submit. Per user direction (2026-06-18): full
 RE + PC-native port (no guest pokes); new PC-native code (incl. the margin renderer) is written in C++/OOP.
+
+## later-129 — approach-B-as-written INVALIDATED: margin geometry is handler-procedural, not data-driven
+Step 2 RE (the native object→prim render). New probe `PSXPORT_DEBUG=cullobj` (game_tomba2.c) logs each
+re-included margin object: addr, type, model id (+0xe), model-data ptr (+0x38), pos. entity_walk.py extended
+to print +0xe/+0x38/+0x28 per node.
+
+**Finding — the margin objects have NO readable model data:**
+- The wide re-include touches ~78 obj/frame (0x02/03/04/05/09). The dominant **type 0x04 (18/frame) all have
+  model=0x0000, mdata=0x00000000** — AND so do the VISIBLE, on-screen type-0x04 objects in the 4:3 dump
+  (state=0x0001, centre positions). So mdata=0 is NOT a "culled → not yet lazily loaded" artifact: type-0x04
+  geometry genuinely does not flow through the +0x38 model-data pointer. Only 2 of 58 type-0x04 nodes carry
+  any mdata. **This falsifies the handoff/journal approach-B step 2** ("read the object's model-data ptr
+  (+0x38) … and emit its prims") for the dominant margin type.
+- The 18 re-included type-0x04 objects use **9 distinct handlers** (mostly overlay 0x8013xxxx:
+  0x80138fc8 x5, 0x8013259c x4, …, + resident 0x80073cd8/0x800739ac/0x800741dc). Geometry is built
+  procedurally INSIDE each handler's visible branch (the submit 0x800803DC consumes a geomblk the handler
+  builds from model state + the per-object GTE transform), not from a generic model-data struct.
+
+**Submit-chain RE (how a handler renders, for completeness):** handler → submit wrapper (e.g. FUN_8007778C:
+computes pos−camera, clears mode, calls cull 0x8007712C which sets the +1 visible flag) → returns to handler
+→ handler reads +1 and, ONLY if visible, builds the geomblk + calls the submit caller 0x800803DC → native
+GT3/GT4 (8007FDB0/8008007C). The geomblk is built in the visible branch (NOT when culled), so there is no
+pre-built per-object prim list to grab for a culled object. For dynamic handlers the gameplay state-advance
+lives in that SAME visible branch → render and logic are entangled there.
+
+**Consequence — the fork (planned approach is dead, alternatives differ):**
+- (A) Full native per-object render: RE+port each margin handler's procedural geometry. Dozens of bespoke
+  handlers, much of it per-scene overlay → very large, low-leverage. Not viable as the general path.
+- (B) **Transactional region-scoped re-include (recommended):** re-include (set +1) so the game's OWN handler
+  renders the margin object into the native DL, but journal all guest writes during the re-included visible
+  branch and UNDO those landing OUTSIDE the render-buffer regions (the later-125 memory map: pool
+  0x800BFE68+, ctx/OT 0x800E80A8+). Keeps the added prims, discards the gameplay perturbation — GENERIC
+  (handler/scene-agnostic), faithful (gameplay state provably identical), and not a magic-byte bandaid (it
+  undoes the WHOLE gameplay region, not cherry-picked bytes). Margin objects render at their "culled/frozen"
+  animation state = consistent with how 4:3 leaves them un-ticked. Needs interpreter write-journaling around
+  the entity walk — real but bounded.
+- (C) accept genuine-wide as-is (cosmetic edge perturbation); (D) faithful narrow-cull = CULL_FAR=0 (0-diff,
+  but empty edge wedges). Both already available.
+Probes kept: PSXPORT_DEBUG=cullobj/cullinc, PSXPORT_CULL_ONLY_TYPE/_SKIP_TYPE.

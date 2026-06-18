@@ -136,6 +136,15 @@ static void ov_object_cull(R3000* c) {
       long depth = (long)fx*p2 + (long)fy*p3 + (long)fz*p4, den = ((long)dist * 0x1000) >> 10;
       if (den < 1) den = 1;
       if (depth / den >= cull_fov) { mem_w8(o + 1, 1); c->r[2] = 1;     // re-include: mark visible
+        // MEASUREMENT (PSXPORT_DEBUG=cullobj): identify WHAT the margin re-include renders — obj addr,
+        // type, model id (+0xe & 0x3fff), model-data ptr (+0x38), pos. Decides static-world vs per-object
+        // architecture for approach B. One line per re-include; grep a single frame.
+        if (cfg_dbg("cullobj")) {
+          extern int s_frame;
+          fprintf(stderr, "[cullobj] f%d obj=%08x type=%02x model=%04x mdata=%08x pos=(%d,%d,%d)\n",
+                  s_frame, o, otype, obj_r16(o + 0x0e) & 0x3fff, mem_r8(o+0x38)|(mem_r8(o+0x39)<<8)|(mem_r8(o+0x3a)<<16)|(mem_r8(o+0x3b)<<24),
+                  (int16_t)obj_r16(o + 0x2e), (int16_t)obj_r16(o + 0x32), (int16_t)obj_r16(o + 0x36));
+        }
         // MEASUREMENT (PSXPORT_DEBUG=cullinc): per-type tally of objects the wide re-include actually
         // marks visible, per frame. Distinguishes a genuinely static-safe type from a vacuous 0-diff
         // (a type with no culled margin members to re-include). s_frame from gpu_native.

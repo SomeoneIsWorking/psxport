@@ -47,10 +47,14 @@ def main():
             print(f"    handler 0x{hnd:08x}  x{c}")
 
     if show_nodes:
-        print("\n=== nodes ===")
+        print("\n=== nodes (type | node | model+0xe | mdata+0x38 | state+0x28 | pos) ===")
         for typ in sorted(by_type_nodes):
             for lname, n, pos in by_type_nodes[typ]:
-                print(f"  type 0x{typ:02x} {lname} node=0x{n:08x} pos={pos}")
+                model = r16(n + 0x0e) & 0x3fff
+                mdata = r32(n + 0x38)
+                state = r16(n + 0x28)
+                print(f"  type 0x{typ:02x} node=0x{n:08x} model=0x{model:04x} mdata=0x{mdata:08x} "
+                      f"state=0x{state:04x} pos={pos}")
 
 if __name__ == "__main__":
     main()
