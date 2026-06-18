@@ -28,7 +28,8 @@ void rec_interp(R3000* c, uint32_t pc);
 volatile uint32_t g_interp_pc = 0;
 static FILE* g_trace_fp = 0;
 void interp_trace_open(const char* path) {
-  if (path && *path) { g_trace_fp = fopen(path, "w"); if (!g_trace_fp) perror(path); }
+  if (path && *path) { g_trace_fp = fopen(path, "w"); if (!g_trace_fp) perror(path);
+    else setvbuf(g_trace_fp, 0, _IOLBF, 0); }
 }
 static inline void trace_call(uint32_t from, uint32_t to) {
   if (g_trace_fp) fprintf(g_trace_fp, "%08X -> %08X\n", from, to);
@@ -138,18 +139,26 @@ static OverrideFn interp_override_for(uint32_t a) {
   for (int i = 0; i < g_iov_n; i++) if (g_iov[i].addr == a) return g_iov[i].fn;
   return 0;
 }
-// Drop every scan-registered (overlay) override, so a re-scan of the newly loaded overlay re-owns
-// the (possibly relocated) library fns. Called by rec_overlay_loaded before the engine re-scans.
-static void iov_flush_auto(void) {
+// Drop scan-registered (overlay) overrides whose address lies in the just-loaded region [base,base+size)
+// — only those were overwritten by the new load and need re-scanning. Overrides OUTSIDE the loaded
+// region stay valid: a data/asset overlay loading elsewhere must NOT wipe a code overlay's submitters
+// (the old flush-everything dropped them silently, so a later load left the field's submitters un-owned
+// — the depth-coverage bug). Compared in physical space (KSEG-agnostic).
+static void iov_flush_auto_range(uint32_t base, uint32_t size) {
+  uint32_t lo = base & 0x1FFFFFFFu, hi = lo + size;
   int w = 0;
-  for (int i = 0; i < g_iov_n; i++) if (!g_iov[i].isauto) g_iov[w++] = g_iov[i];
+  for (int i = 0; i < g_iov_n; i++) {
+    uint32_t a = g_iov[i].addr & 0x1FFFFFFFu;
+    if (g_iov[i].isauto && a >= lo && a < hi) continue;   // overwritten by this load -> drop, re-scan
+    g_iov[w++] = g_iov[i];
+  }
   g_iov_n = w;
 }
 // The engine's "an overlay was just loaded into [base,base+size)" hook (scans for owned library fns).
 static void (*g_overlay_load_hook)(uint32_t base, uint32_t size);
 void rec_set_overlay_load_hook(void (*fn)(uint32_t, uint32_t)) { g_overlay_load_hook = fn; }
 void rec_overlay_loaded(uint32_t base, uint32_t size) {
-  iov_flush_auto();                                // stale overlay overrides gone; re-own from scratch
+  iov_flush_auto_range(base, size);               // drop only the overrides this load overwrote
   if (g_overlay_load_hook) g_overlay_load_hook(base, size);
 }
 // Public accessor so rec_dispatch_miss can apply an interp override at the moment it would ENTER
@@ -163,13 +172,10 @@ static void call_addr(R3000* c, uint32_t a) {
   else rec_interp(c, a);
 }
 
-// Native override registered for `addr` (rec_set_override), or NULL. Used by the coroutine
-// interpreter to invoke hand-written overrides (CD, yield, ...) instead of flat-interpreting.
-extern OverrideFn g_override[];
-static OverrideFn override_for(uint32_t a) {
-  int i = rec_func_index(a);
-  return i >= 0 ? g_override[i] : 0;
-}
+// Native override registered for `addr` (rec_set_override / rec_set_interp_override — one unified
+// address-keyed table now), or NULL. Used by the coroutine interpreter to invoke hand-written
+// overrides (CD, yield, submit, ...) instead of interpreting the original bytes.
+static OverrideFn override_for(uint32_t a) { return interp_override_for(a); }
 static int is_bios(uint32_t a) { uint32_t p = a & 0x1FFFFFFF; return p==0xA0||p==0xB0||p==0xC0; }
 
 // Execute one non-control instruction (delay-slot-safe; no branches/jumps/loads-delay).
@@ -251,6 +257,10 @@ static void exec_simple(R3000* c, uint32_t in) {
   }
 }
 
+// Invoke a call target natively if it is an override/BIOS (returns 1), else 0 (defined below; used by
+// both interpreters so `j`/`jr` tail-calls honor overrides, not just `jal`/`jalr`).
+static int coro_native_call(R3000* c, uint32_t tgt);
+
 // Interpret from `pc` until the function returns (jr ra) or tail-jumps into recompiled code.
 void rec_interp(R3000* c, uint32_t pc) {
   for (;;) {
@@ -263,8 +273,11 @@ void rec_interp(R3000* c, uint32_t pc) {
       if (op == 0x03) c->r[31] = pc + 8;             // jal links ra
       exec_simple(c, mem_r32(pc + 4));               // delay slot
       if (op == 0x03) { trace_call(pc, tgt); call_addr(c, tgt); pc += 8; continue; }  // jal: call, resume after DS
-      if (is_recompiled(tgt)) { rec_dispatch(c, tgt); return; }  // j tail-call into recomp
-      pc = tgt; continue;                            // j within interpreted code
+      // plain `j`: a tail-call to a native override / BIOS must win here too (a submitter is often
+      // tail-called, not jal'd) — else the override is bypassed and the original body interpreted.
+      // For a local label (no override / not BIOS) this falls through to a same-frame jump.
+      if (coro_native_call(c, tgt)) return;          // tail-call into override/BIOS -> run + return
+      pc = tgt; continue;                            // j within interpreted code (local label / interp tail)
     }
     if (op == 0x00 && (FN(in) == 0x08 || FN(in) == 0x09)) {  // jr / jalr
       uint32_t tgt = c->r[RS(in)];
@@ -276,8 +289,8 @@ void rec_interp(R3000* c, uint32_t pc) {
         trace_call(pc, tgt); call_addr(c, tgt); pc += 8; continue;
       }
       if (RS(in) == 31) return;                      // jr ra: return to caller
-      if (is_recompiled(tgt)) { rec_dispatch(c, tgt); return; }  // computed tail-call
-      pc = tgt; continue;                            // computed jump within interpreted code
+      if (coro_native_call(c, tgt)) return;          // computed tail-call into override/BIOS -> run + return
+      pc = tgt; continue;                            // computed jump within interpreted code (switch table etc.)
     }
     if (op == 0x01 || op == 0x04 || op == 0x05 || op == 0x06 || op == 0x07) {  // branches
       int t;

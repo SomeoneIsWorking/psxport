@@ -22,9 +22,8 @@
 
 extern uint32_t mem_r32(uint32_t);
 extern void     mem_w8(uint32_t, uint8_t);
-extern void     rec_dispatch(R3000* c, uint32_t addr);   // hybrid call: recomp body if emitted, else interp
+extern void     rec_dispatch(R3000* c, uint32_t addr);   // run a function by address (override or interp)
 extern uint32_t g_current_object;                        // wide60: tag the object a handler's geometry belongs to
-void            gen_func_8007A904(R3000*);               // the recomp body (oracle / super-call)
 
 static int  s_dbg   = -1;
 static long s_walks = 0;

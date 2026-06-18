@@ -136,15 +136,14 @@ static void native_scheduler_step(R3000* c) {
 // in this port because the start IS reached (idx written) but an immediate STOP clears it. Log
 // each call with the caller (ra), arg, and the index before/after to find the spurious stopper.
 volatile uint32_t g_bgm_frame = 0;   // current logic frame (extern: cd_override.c trace)
-void gen_func_80074BF8(R3000*);
-void gen_func_80074E48(R3000*);
+void rec_super_call(R3000*, uint32_t);   // interpret the original PSX body (A/B oracle / super-call)
 void xa_music_cut_if_dialog(void);   // cd_override.c: stop looping ingame music when a dialog tone starts
 static int s_bgmdbg = -1;
 static void ov_bgm_start(R3000* c) {
   if (s_bgmdbg < 0) s_bgmdbg = (cfg_str("PSXPORT_BGMDBG") ? atoi(cfg_str("PSXPORT_BGMDBG")) : 0);
   if (s_bgmdbg) fprintf(stderr, "[bgmdbg] f%u BGM_START(idx=0x%02X) ra=%08X  idx@800bed80(before)=0x%04X\n",
                         g_bgm_frame, c->r[4] & 0xFF, c->r[31], mem_r16(0x800bed80));
-  gen_func_80074BF8(c);
+  rec_super_call(c, 0x80074BF8u);
   // Dialog-tone songs (current-song 4..7) cut the looping ingame music SYNCHRONOUSLY here — at the
   // song-start, before this frame's audio mix — so it can't leak a frame past the dialog start
   // (the per-frame xa_dialog_coord stop is one frame late vs the audio mix). Instant-CD mod.
@@ -155,7 +154,7 @@ static void ov_bgm_stop(R3000* c) {
   if (s_bgmdbg < 0) s_bgmdbg = (cfg_str("PSXPORT_BGMDBG") ? atoi(cfg_str("PSXPORT_BGMDBG")) : 0);
   if (s_bgmdbg) fprintf(stderr, "[bgmdbg] f%u BGM_STOP ra=%08X  idx@800bed80(before)=0x%04X\n",
                         g_bgm_frame, c->r[31], mem_r16(0x800bed80));
-  gen_func_80074E48(c);
+  rec_super_call(c, 0x80074E48u);
 }
 
 // Native override of game-main FUN_80050b08: init prefix, then (later) native frame loop.
@@ -543,7 +542,6 @@ static void ov_game_main(R3000* c) {
 // crt0; crt0's call to FUN_80050b08 lands in ov_game_main.
 void native_boot_run(R3000* c) {
   { void cfg_dump(void); cfg_dump(); }   // log active PSXPORT_* config once (see docs/config.md)
-  void func_800896E0(R3000*);
   // Intro FMVs: the real boot is SCEA (stub) -> Whoopee logo -> opening movie -> title/menu. The
   // game's own STR streaming (strNext) TIMES OUT under our runtime (we don't feed CD-streamed FMV
   // sectors to its StrPlayer — see "time out in strNext()" in the DEMO stage), so the movies are
@@ -557,7 +555,7 @@ void native_boot_run(R3000* c) {
     native_fmv_play("MOVIE/OP.STR");
   }
   rec_set_override(0x80050b08u, ov_game_main);
-  fprintf(stderr, "[native_boot] entering crt0 func_800896E0\n");
-  func_800896E0(c);
+  fprintf(stderr, "[native_boot] entering crt0 0x800896E0 (interpreted)\n");
+  rec_dispatch(c, 0x800896E0u);
   fprintf(stderr, "[native_boot] returned from crt0\n");
 }

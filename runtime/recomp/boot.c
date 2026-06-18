@@ -7,8 +7,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-void func_800896E0(R3000*);  // MAIN.EXE entry
-
 static uint32_t rd32(const uint8_t* p) { return p[0] | p[1]<<8 | p[2]<<16 | (uint32_t)p[3]<<24; }
 
 static void load_exe(const char* path, R3000* c) {

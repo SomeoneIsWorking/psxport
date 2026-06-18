@@ -78,13 +78,16 @@ for b in START DEMO GAME; do
   [ -f "$OVL/$b.BIN" ] || "$DISCDUMP" get "BIN/$b.BIN" "$DISC" "$OVL" >/dev/null 2>&1 || true
 done
 
-# ---- 4. recompile the game core + build the native runtime -------------------------
+# ---- 4. (analysis only) recompile to C, then build the native runtime ---------------
+# The interpreter-only runtime does NOT link the recompiled C — MAIN.EXE + the stub run from RAM via
+# the interpreter. emit.py is kept as an OFFLINE analysis aid (readable pseudo-C for RE); regenerate
+# generated/ only when asked (PSXPORT_RECOMP=1) so a normal run doesn't depend on the recompiler.
 GEN=generated/tomba2_rec.c
 RT=runtime/recomp       # common PSX->PC platform (future psxport submodule)
 ENG=engine              # Tomba2Engine — game-specific native engine + RE
 mkdir -p generated scratch/bin
-if [ ! -f "$GEN" ] || [ "$MAIN" -nt "$GEN" ] || [ "$STUB" -nt "$GEN" ] || [ tools/recomp/emit.py -nt "$GEN" ]; then
-  say "recompiling MAIN.EXE + boot stub -> C…"
+if [ -n "$PSXPORT_RECOMP" ] && { [ ! -f "$GEN" ] || [ "$MAIN" -nt "$GEN" ] || [ "$STUB" -nt "$GEN" ] || [ tools/recomp/emit.py -nt "$GEN" ]; }; then
+  say "recompiling MAIN.EXE + boot stub -> C (analysis aid)…"
   python3 tools/recomp/emit.py "$MAIN" "$GEN" --overlays "$OVL" --stub "$STUB" >/dev/null
 fi
 
@@ -102,8 +105,10 @@ INC="-I$RT -I$ENG -Igenerated -I$MED -I$MED/psx -Ivendor/beetle-psx/libretro-com
 # _XOPEN_SOURCE: makecontext/swapcontext (native threads) need it on macOS/glibc.
 CFLAGS="-O2 -g -w -D_XOPEN_SOURCE=700 $INC $(pkg-config --cflags sdl2 vulkan 2>/dev/null) -DPSXPORT_SDL"
 tools/gen_vk_shaders.sh   # compile+embed the Vulkan present shaders (gpu_vk_shaders.h) before gpu_vk.c
-# All TUs: the recompiled core is split into generated/shard_*.c so they compile in parallel.
-SRC="$(ls generated/shard_*.c) $(ls generated/stub_shard_*.c) generated/stub_disp.c \
+# All TUs. Interpreter-only runtime: MAIN.EXE + the boot stub run from RAM via the interpreter
+# (runtime/recomp/dispatch.c + interp.c); the recompiled generated/shard_*.c are NOT linked (the
+# recompiler is kept only as an offline analysis aid). See docs/journal.md later-101.
+SRC="$RT/dispatch.c \
   $RT/cfg.c $RT/mem.c $RT/stubs.c $RT/hle.c $RT/threads.c $RT/interp.c $RT/gpu_native.c $RT/gpu_trace.c $RT/gpu_debug.c $RT/spu_audio.c $RT/pad_input.c $RT/memcard.c $RT/native_fmv.c \
   $MED/psx/gte.c $RT/gte_beetle.c $MED/psx/mdec.c $RT/mdec_beetle.c $MED/psx/spu.c $RT/spu_beetle.c \
   $RT/disc.c $RT/cd_override.c $RT/cdc_native.c $RT/xa_stream.c $RT/timing.c $RT/gpu_vk.c $ENG/game_tomba2.c $ENG/wide60.c $ENG/engine_tomba2.c $ENG/engine_submit.c $RT/sync_overrides.c $RT/native_boot.c $RT/dbg_server.c $RT/native_stub.c $RT/watchdog.c $RT/boot.c"

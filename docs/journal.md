@@ -3947,3 +3947,41 @@ are the overlay variant above.
 (one address-keyed), hand-written `rec_dispatch` = override-or-interp-from-RAM, `rec_super_call(c,addr)` =
 interpret original bytes, stop linking generated/shard_*.c, route MAIN entry through interp, then unify
 the two interpreters. Verify boot→field→runs + frame rate + depth coverage jump.
+
+## later-102 — DONE: interpreter-only runtime LANDED + full field depth coverage (task #6)
+Executed the later-101 decision. The runtime no longer links the recompiler: MAIN.EXE and the boot
+stub both run from g_ram via the interpreter. New `runtime/recomp/dispatch.c` replaces the generated
+dispatch infra (rec_dispatch / rec_set_override / rec_func_index / stub_dispatch / stub_set_override +
+`rec_super_call` = interpret the original body for A/B oracle). One address-keyed override table
+(rec_set_override now routes to the same g_iov as rec_set_interp_override). build_port.sh + run.sh drop
+generated/shard_*.c + stub_shard_*.c; emit.py is analysis-only (run.sh gates it behind PSXPORT_RECOMP=1).
+~9 `gen_func_XXXX(c)` super-calls → `rec_super_call(c,0xADDR)`; MAIN entry `func_800896E0(c)` →
+`rec_dispatch(c,0x800896E0)`.
+
+**Verified:**
+- Boots stub→MAIN→field, runs the native frame loop, clean exit. ZERO bad opcodes.
+- **0 u16 VRAM diff** at field f560: interp-only MAIN == the old recompiled build (bit-identical), and
+  native overlay-owned == fully-interpreted (PSXPORT_SUBMIT_RECOMP=1).
+- **Speed: ~1.45s / 565 headless frames (~390 fps)** — same as the recompiled build; the speed risk is
+  dead. (The earlier 5-min "spin" was the BIOS bug below, not slowness.)
+
+**Three real bugs fixed on the way (all latent seam bugs of the old split):**
+1. `rec_dispatch` must route BIOS vectors (`li $t2,0xA0; jr $t2`) to `rec_dispatch_miss` (HLE), NOT
+   interpret code at 0xA0. (The old generated rec_dispatch did this via its `default:`.) This was the
+   boot crash into string data.
+2. `rec_interp` only honored overrides on `jal`/`jalr`, NOT on plain `j` / computed `jr` TAIL-CALLS —
+   so a tail-called native override (submitters are tail-called) was bypassed and the original body
+   interpreted. Now both interpreters check `coro_native_call` on every transfer.
+3. `rec_overlay_loaded` flushed ALL auto (scan) overrides on EVERY overlay load — so a later data/asset
+   overlay silently wiped the GAME code-overlay's submitter overrides, leaving the field's dominant
+   submitters un-owned. THIS is why the prior session saw "owning overlays changed depth by ZERO."
+   Fixed: `iov_flush_auto_range(base,size)` drops only overrides INSIDE the just-loaded region.
+
+**Result — task #6 SOLVED:** with the overlay submitters (`0x8013FB88` GT3, `0x8013FE58` GT4, …) now
+actually firing as native with depth, field depth coverage jumped **records made 634→1807, misses
+428→34** (~30% → ~98% real per-vertex depth; the residual 34 are genuine 2D UI). Faithful 0-diff holds.
+
+NEXT: (a) optional — unify the two interpreter loops (rec_interp recursive + rec_coro_run flat) into
+one (they share exec_simple; this is the remaining "two things"); (b) build the SBS depth pic for the
+user to judge visuals; (c) overlay-banner depth semantics (design call). Recompiler now lives only as
+the offline Ghidra-like analysis aid (generated/, PSXPORT_RECOMP=1 to regen).

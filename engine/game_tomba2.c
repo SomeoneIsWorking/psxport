@@ -20,9 +20,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 
-void gen_func_800788AC(R3000*);    // recomp body (super-call)
-void gen_func_8007712C(R3000*);    // recomp body of the per-object cull/LOD dispatcher
-void gen_func_80044D8C(R3000*);    // DEBUG: LZ decompressor (CLUT/texture build)
+void rec_super_call(R3000*, uint32_t);   // interpret the original PSX body (super-call / A/B oracle)
 void wide60_frame_commit(void);    // wide60: per-logic-frame fence (rate detect / interp)
 void wide60_init(void);            // wide60: read PSXPORT_WIDE60
 extern uint32_t g_current_object;  // wide60: object* whose RTP ops are being tagged
@@ -52,7 +50,7 @@ void rec_dispatch(R3000*, uint32_t);  // hybrid call: recomp body if emitted, el
 #define SEQ_FUNC_PTR     0x800AC42Cu  // DAT_800ac42c: SsSeqCalled pointer (0 until SsStart inits)
 
 static void ov_frame_update(R3000* c) {
-  gen_func_800788AC(c);                              // real per-frame state update
+  rec_super_call(c, 0x800788ACu);                    // real per-frame state update
   // Per-VBLANK audio work. On hardware the libsnd sequencer ticks once per VBlank IRQ (60 Hz NTSC)
   // and the SPU plays in realtime. One ov_frame_update is one *logic frame*, which on hardware spans
   // DAT_1f800235 (=quota) VBlanks (=2 => Tomba2's 30 fps). So the per-vblank work — the sequencer
@@ -108,7 +106,7 @@ static void ov_object_cull(R3000* c) {
     fprintf(stderr, "[objlog] obj=%08x type=%02x pos=(%d,%d,%d)\n", o, mem_r8(o + 0x0c),
             (int16_t)obj_r16(o + 0x2e), (int16_t)obj_r16(o + 0x32), (int16_t)obj_r16(o + 0x36));
   int p2 = (int16_t)c->r[5], p3 = (int16_t)c->r[6], p4 = (int16_t)c->r[7];   // pos - camera (s16 each)
-  gen_func_8007712C(c);                            // the game's cull (sets +1 visible flag, queues)
+  rec_super_call(c, 0x8007712Cu);                  // the game's cull (sets +1 visible flag, queues)
   if (s_cull < 0) {
     // Widescreen widens the horizontal FOV ~1.34x, so the re-include cone+distance MUST widen to match
     // or the new edge/corner geometry (incl. the static terrain/water tiles, which also go through this

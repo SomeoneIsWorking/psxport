@@ -22,8 +22,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 
-void gen_func_8007FDB0(R3000*);   // recomp body (A/B oracle / super-call)
-void gen_func_8008007C(R3000*);   // recomp body (quad)
+void rec_super_call(R3000*, uint32_t);   // interpret the original PSX body (A/B oracle / super-call)
 
 #define PKT_POOL_PTR 0x800BF544u   // DAT_800bf544: current free GPU-packet write pointer
 #define COL_MASK     0xFFF0F0F0u   // low-nibble-per-byte clear applied to packet RGB words
@@ -132,7 +131,7 @@ static void submit_poly_gt3(R3000* c) {
 }
 
 void ov_submit_poly_gt3(R3000* c) {
-  if (submit_recomp()) { gen_func_8007FDB0(c); return; }
+  if (submit_recomp()) { rec_super_call(c, 0x8007FDB0u); return; }
   submit_poly_gt3(c);
 }
 
@@ -201,7 +200,7 @@ static void submit_poly_gt4(R3000* c) {
 }
 
 void ov_submit_poly_gt4(R3000* c) {
-  if (submit_recomp()) { gen_func_8008007C(c); return; }
+  if (submit_recomp()) { rec_super_call(c, 0x8008007Cu); return; }
   submit_poly_gt4(c);
 }
 
@@ -227,8 +226,6 @@ void ov_submit_poly_gt4(R3000* c) {
 // Faithful-first: this reproduces the recomp body's writes/cull/return exactly (0-diff gate); when the
 // native-depth path is live it additionally records each vertex's real view-Z (the SZ FIFO) keyed by
 // its packet SXY-word address, exactly like the GT3/GT4 library above.
-void gen_func_80027768(R3000* c);            // recomp body (A/B oracle / super-call)
-
 #define OTBASE_PTR   0x800ED8C8u             // *this = the active ordering-table base for these variants
 #define IR0_SCRATCH  0x1F800090u             // depth-cue interpolation factor (IR0) staged in scratchpad
 #define GTE_DPCT     0x4AF8002Au             // depth-cue 3 colors (rgb0,rgb1,rgb2) toward FAR_COLOR
@@ -316,7 +313,7 @@ static void submit_poly_gt4_bp(R3000* c) {
 }
 
 void ov_submit_poly_gt4_bp(R3000* c) {
-  if (submit_recomp()) { gen_func_80027768(c); return; }
+  if (submit_recomp()) { rec_super_call(c, 0x80027768u); return; }
   submit_poly_gt4_bp(c);
 }
 
