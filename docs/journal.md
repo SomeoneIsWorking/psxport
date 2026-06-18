@@ -5038,3 +5038,16 @@ commands so RE no longer needs a recompiled one-shot probe — `w8/w16/w32 A V` 
 live), `ents` (walk both entity lists: addr type pos handler rflag cmds geomblk), `node A` (decode one
 node), `geomblk G S` (model-table lookup). `dbg_server_service` now takes the frame `R3000* c` for `call`.
 `runtime/recomp/r3000.h` is now `extern "C"`-guarded so engine/*.cpp link the C ABI symbols.
+
+## later-134b — gameplay 0-diff PROVEN (node-aware diff) + headless FMV fix (probes 77s→1.4s)
+- **`tools/node_diff.py`** (new): walks the live entity list (heads 0x800fb168/0x800f2624, stride 0xD0)
+  in a RAM dump and splits each node's diff into GAMEPLAY fields (node+0..0x98) vs RENDER cache
+  (node+0x98..0xd0). Verdict on 4:3 vs 16:9-native @f438: **GAMEPLAY 0-DIFF** across all 153 nodes (0
+  bytes); the only node diffs are 127 B of render-matrix cache in 7 nodes; everything else (20144 B) is
+  outside nodes = render pools + command-struct transforms + the 2 render-pool write pointers. So the
+  native margin renderer perturbs ZERO gameplay state — resolves later-134 open item (a). This is the
+  authoritative "gameplay 0-diff" gate (supersedes eyeballing ram_region_diff addresses).
+- **Headless FMV fix:** the intro FMVs were played back in REAL TIME even headless → a field probe took
+  ~77s. Now headless skips the intro FMVs (native_boot.c) and auto-uncaps any in-game FMV (native_fmv.c);
+  a plain headless field probe is ~1.4s, deterministic (field @present-frame 328, rcmd=124), no flag.
+  Standard recipe in docs/driving-the-game.md §0.
