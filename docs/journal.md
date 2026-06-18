@@ -4119,3 +4119,34 @@ object's transform and RE-SUBMIT the display list through the NATIVE VK renderer
 D32 depth), so occlusion is correct — no lossy s_interp re-rasterize. Present frame-behind: A, lerp(A,B),
 B… NEXT: wire build_remap's per-vertex SXY remap into a native-renderer re-submit + a motion-scene visual
 check (idle field has motion but driving Tomba/camera pan shows it best).
+
+## later-107 — 60fps: restored the SEPARATE-LAYER synth (user architecture: layer on top, NO resubmit)
+User correction: "interp60 should be a separate layer that lives on top. no resubmit." (Matches
+[[wide60-60fps-architecture]] + the later-83 design — I had wrongly proposed re-submitting through the
+native renderer.) The current code had REGRESSED from the proven later-83 build_remap path to the
+ocen per-object centroid path, which is blocked (Prim.obj=0 → all snap → 30fps). Restored the correct
+design in fps60_synthesize:
+- `fps60_build_remap()` now runs in frame_commit (after xobj_match, before xobj_commit): interpolate
+  each 100%-matched object's GTE transform to the midpoint, reproject its verts through the REAL Beetle
+  GTE → an old-SXY → interp-SXY table.
+- synthesize() ALL-OR-NOTHING per prim (later-83): a poly remaps only if EVERY vertex resolves in the
+  table (whole prim = one interpolated object); sprites/lines + partial/2D prims SNAP. Re-rasterizes into
+  the SEPARATE s_interp buffer ON TOP (VRAM untouched) — not a resubmit. Removed the dead ocen machinery.
+
+**Result:** interpolation ACTIVATES — field synth f600 = 927 prims, **528 remapped / 399 snapped** (was
+0/927). Object match 100%, gated by PSXPORT_FPS60 (faithful path 0 u16 VRAM diff at f540, verified).
+
+**Two open problems found (the real remaining work):**
+1. **Re-raster fidelity.** On a STATIC field frame (A==B, mean|A−B|=0) the synthesized in-between still
+   differs from the real frame by **mean ~8.24/255 (~3%)** — the separate-layer re-rasterizer does NOT
+   faithfully reproduce the frame (missing non-captured GP0 ops: background fills, VRAM-copy/water
+   reflection, semi-transparency order). So with motion OR not, the in-between shimmers vs the real
+   frames. THIS is the blocker for the separate-layer approach: the re-raster must reproduce the full
+   frame (capture+replay ALL draw ops, correct blend/occlusion), or the present must show the in-between
+   only on real motion. NEXT.
+2. **Headless motion validation is hard.** The idle field is fully static (A==B) and the new
+   `PSXPORT_AUTO_WALK=l/r/u/d` (native_boot.c — holds a D-pad dir after field-reached, a deterministic
+   motion scene) did NOT visibly move the character (TRdelta a constant 369/frame = ambient anim only;
+   A==B persisted). Need to confirm the held input reaches the game / the char can walk here, or pick a
+   scene with real camera pan, to validate interpolation visually. Live eyeball (`PSXPORT_FPS60=1
+   ./run.sh`) remains the documented check.

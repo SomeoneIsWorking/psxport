@@ -414,17 +414,28 @@ static long fps60_synthesize(void) {
   for (int i = 0; i < s_nB; i++) {
     Prim* B = &s_pB[i];
     int xs[4], ys[4], us[4], vs[4]; unsigned char rs[4], gs[4], bs[4];
-    // Per-OBJECT 2D screen translation to the midpoint, keyed by the node pointer (Prim.obj). The whole
-    // primitive moves rigidly by its object's half-motion — no per-vertex remap, so 2D/HUD/unmatched
-    // prims (obj 0 → dx=dy=0) simply snap, and a matched object can never stretch or duplicate.
-    int dx, dy, moved = ocen_delta(B->obj, &dx, &dy);
     for (int k = 0; k < B->nv; k++) {
-      xs[k] = B->x[k] + dx; ys[k] = B->y[k] + dy;
       us[k] = B->u[k]; vs[k] = B->v[k]; rs[k] = B->r[k]; gs[k] = B->g[k]; bs[k] = B->b[k];
     }
+    // ALL-OR-NOTHING SXY remap (later-83): a poly moves to the interpolated midpoint ONLY if EVERY
+    // vertex resolves in the GTE-transform remap table (the whole prim belongs to one matched+
+    // interpolated object). Sprites/lines (2D) and any poly with an unresolved vertex (CPU-projected /
+    // HUD / spans objects) SNAP unchanged — no partial/mixed remap, so nothing stretches or duplicates.
+    // The remap key is the packed SXY (SX low, SY high) the GTE produced = the captured packet coords.
+    int moved = 0;
+    if (B->nv >= 3) {
+      int rx[4], ry[4], all = 1;
+      for (int k = 0; k < B->nv; k++) {
+        int32_t key = (int32_t)((uint32_t)(uint16_t)B->x[k] | ((uint32_t)(uint16_t)B->y[k] << 16));
+        int32_t nsxy;
+        if (remap_get(key, &nsxy)) { rx[k] = (int16_t)(nsxy & 0xFFFF); ry[k] = (int16_t)((uint32_t)nsxy >> 16); }
+        else { all = 0; break; }
+      }
+      if (all) { for (int k = 0; k < B->nv; k++) { xs[k] = rx[k]; ys[k] = ry[k]; } moved = 1; }
+    }
+    if (!moved) for (int k = 0; k < B->nv; k++) { xs[k] = B->x[k]; ys[k] = B->y[k]; }
     if (moved) moved_count++;
-    if (s_sdbg) { d_prims++; if (moved) d_obj_translated++; else d_snapped++;
-                  if (B->obj) d_tagged++; }
+    if (s_sdbg) { d_prims++; if (moved) d_obj_translated++; else d_snapped++; if (B->nv >= 3) d_tagged++; }
     if (B->nv == 1)
       gpu_fps60_draw_sprite(B->op, xs[0], ys[0], us[0], vs[0], B->w, B->h, rs[0], gs[0], bs[0],
                           B->tp_x, B->tp_y, B->mode, B->blend, B->clut_x, B->clut_y);
@@ -521,7 +532,6 @@ void fps60_frame_commit(void) {
   // Object interpolation: tag each poly with its source object (pool-slot pointer) at capture, then
   // here compute this frame's per-object screen centroids (B) and match to last frame (A) BY POINTER.
   // The synth translates each matched object's prims to the midpoint. Must run before the A/B swap.
-  ocen_build(s_ocB, s_pB, s_nB);
   if (s_sdbg < 0) s_sdbg = cfg_dbg("fps60") ? 1 : 0;
   // GTE-transform object matching (the camera+model identity that does NOT need the per-poly object
   // tag). Match this frame's transform-groups (B) to last frame's (A) by local-vertex fingerprint, then
@@ -529,13 +539,15 @@ void fps60_frame_commit(void) {
   // identity + transform deltas — the foundation for re-submit interpolation. Must run before xobj_commit.
   xobj_match();
   if (s_sdbg) xobj_report();
+  fps60_build_remap();              // interpolate each matched object's transform + reproject its verts
+                                    // through the real GTE -> old-SXY -> interp-SXY table. BEFORE commit
+                                    // (needs s_xB + the per-frame vertex pool, which commit resets).
   xobj_commit();                    // swap s_xA/s_xB + reset the per-frame local-vertex pool
   if (s_sdbg) fps60_synthesize();   // per-frame interpolation stats (headless diagnostic only)
   fps60_synth_dumptest();   // PSXPORT_FPS60_SYNTH: offline A/in-between/B dump (no live-path change)
   fps60_present();          // owns presentation: 60fps pair (prev + interpolated) or faithful single
 
-  // Swap per-object centroids (B→A) and the prim double-buffer (so s_pB is clean next frame).
-  { ObjCen* t = s_ocA; s_ocA = s_ocB; s_ocB = t; }
+  // Swap the prim double-buffer (so s_pB is clean next frame).
   { Prim* t = s_pA; s_pA = s_pB; s_pB = t; s_nA = s_nB; s_nB = 0; }
 
   s_frame_hash = 1469598103934665603ull;

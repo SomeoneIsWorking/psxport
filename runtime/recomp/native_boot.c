@@ -414,7 +414,14 @@ static void ov_game_main(R3000* c) {
         } else if ((f % 24u) == 0) {
           pad_repl_tap((uint16_t)(0xFFFF & ~0x0008), 6);           // pulse Start (0x0008): title + dialog advance
         }
-      } }
+      }
+      // PSXPORT_AUTO_WALK=<dir>: once the field is reached, HOLD a D-pad direction so the character
+      // walks and the camera pans — a deterministic MOTION scene for validating fps60 interpolation
+      // (the idle field is fully static, A==B). dir: l/r/u/d (default right). Active-low pad mask.
+      if (gnav == 2) { const char* w = cfg_str("PSXPORT_AUTO_WALK");
+        if (w) { uint16_t btn = 0x0020;                              // right
+          if (*w=='l') btn=0x0080; else if (*w=='u') btn=0x0010; else if (*w=='d') btn=0x0040;
+          pad_repl_hold((uint16_t)(0xFFFF & ~btn)); } } }
     // PSXPORT_DEBUG_SERVER pause/step: when frozen, do NOT advance the game — just pump host input
     // (keeps the window alive) and service debug commands so `step`/`play` can arrive. A `step` runs
     // exactly one real frame then re-freezes, so transient bad frames can be inspected one at a time.
