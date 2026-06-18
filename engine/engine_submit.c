@@ -530,6 +530,126 @@ void ov_submit_poly_gt4_bp(R3000* c) {
   submit_poly_gt4_bp(c);
 }
 
+// =====================================================================================================
+// NATIVE PER-OBJECT RENDER FLUSH — gen_func_8003CDD8 (THE world/margin render submission, later-133).
+//
+// This is the heart of "make it a PC game": the engine's per-object render — composing the camera ×
+// object-local transform and dispatching each object's persistent render-command list to the geometry
+// submitter — reimplemented in native C so NO guest render code runs (no gen_func_8003CDD8, no
+// gen_func_8003F698 dispatcher, no gen_func_800803DC) and NO guest packet/VRAM is touched beyond the
+// 1-word OT ordering node the native submitters already own. Decoded byte-for-byte from the recomp body
+// (docs/engine_re.md "Deferred render pipeline" / journal later-133):
+//
+//   gen_func_8003CDD8(a0=node, a1=flag): for each render command in the node's persistent list
+//   (count at node+8 / node+9, cmd-ptr ARRAY at node+0xc0[i]):
+//     - geomblk = cmd+0x40; skip the command if it is 0.
+//     - COMPOSE the GTE transform: camera-rotation (scratch 0x1F8000F8 → CR0-4) × the object-local
+//       matrix (cmd+0x18, 3 columns at +0x18/+0x1a/+0x1c, each col 3 halfwords at +0,+6,+0xc) via one
+//       MVMVA (0x4A49E012, mx=0 rotation, v=3 IR vector) per column → composed rotation matrix.
+//     - TRANSFORM the object translation (cmd+0x2c/0x30/0x34) by the camera (MVMVA 0x4A486012, v=0 V0)
+//       then ADD the camera translation offset (scratch 0x1F80010C/110/114) → composed translation.
+//     - Load the composed rotation into CR0-4 and translation into CR5-7.
+//     - Dispatch geomblk to the per-mode renderer with OT base *0x800ED8C8 (+cmd[0x3f]*4 when
+//       node[0xd]&0xf == 4) and the flush flag.
+//
+// The MVMVA matrix math stays a platform primitive (gte_op → the Beetle GTE), exactly as the recomp
+// body called it, so the composed CR0-7 are bit-identical. The scratchpad temps (0x1F8000xx) are the
+// SAME the recomp body uses — pure CPU scratch, not render packet/VRAM. The dispatch routes the common
+// world path natively (native_dispatch → native_gt3gt4 → the native ov_submit_poly_gt3/gt4 above);
+// the per-scene OVERLAY submitter variants (mode-table entries other than the GT3/GT4 path) are NOT yet
+// owned, so for those modes the original per-mode renderer is invoked (rec_dispatch) — the documented
+// next RE target (engine_re "OPEN — full field depth coverage"). A/B: PSXPORT_PEROBJ_RECOMP=1.
+#define SCR          0x1F800000u             // PSX scratchpad base (the engine's GTE-compose temp area)
+#define MODE_BYTE    0x800BF870u             // *this = render-mode select (DAT_800bf870, 0..0x15)
+#define MODE_FORCE   0x1F800234u             // *this != 0 forces the generic GT3/GT4 path
+#define MODE_TABLE   0x80015268u             // 22-entry jump table: mode → per-mode renderer
+#define MVMVA_ROTCOL 0x4A49E012u             // MVMVA: camera-rot(CR0-4) × IR vector → composed col
+#define MVMVA_TRANS  0x4A486012u             // MVMVA: camera-rot × V0 (object translation)
+
+void rec_dispatch(R3000*, uint32_t);         // interpret/run a guest fn (unowned overlay-variant modes)
+
+// gen_func_800803DC's first body (the generic GT3/GT4 renderer): split the geomblk's packed prim counts
+// (low16 tri, high16 quad), point past the 16-byte header to the record array, and run the two native
+// submitters in sequence (tri-submit returns the advanced record pointer = the quad array base).
+static void native_gt3gt4(R3000* c, uint32_t geomblk, uint32_t otbase) {
+  uint32_t counts = mem_r32(geomblk + 0);
+  c->r[4] = geomblk + 16; c->r[5] = otbase; c->r[6] = counts & 0xFFFFu;
+  ov_submit_poly_gt3(c);
+  c->r[4] = c->r[2];      c->r[5] = otbase; c->r[6] = counts >> 16;
+  ov_submit_poly_gt4(c);
+}
+
+// gen_func_8003F698: route geomblk to the per-mode renderer. The generic GT3/GT4 path (forced flag /
+// force-byte / mode≥22 / a table entry that IS gen_func_800803DC) is owned natively; any other mode
+// (a per-scene overlay submitter variant we don't own yet) runs its original per-mode renderer.
+static void native_dispatch(R3000* c, uint32_t geomblk, uint32_t otbase, uint32_t flag) {
+  if (mem_r8(MODE_FORCE) != 0 || (flag & 1u)) { native_gt3gt4(c, geomblk, otbase); return; }
+  uint32_t mode = mem_r8(MODE_BYTE);
+  if (mode >= 22) { native_gt3gt4(c, geomblk, otbase); return; }
+  uint32_t tgt = mem_r32(MODE_TABLE + mode * 4);
+  if (tgt == 0x800803DCu) { native_gt3gt4(c, geomblk, otbase); return; }
+  c->r[4] = geomblk; c->r[5] = otbase; c->r[6] = flag;   // unowned overlay variant — original renderer
+  rec_dispatch(c, tgt);
+}
+
+static void submit_perobj_flush(R3000* c) {
+  uint32_t node = c->r[4], flag = c->r[5];
+  if (mem_r8(node + 8) == 0) return;
+  if (mem_r8(node + 9) == 0) return;
+  uint32_t otbase_ptr = mem_r32(OTBASE_PTR);              // *0x800ED8C8
+  int i = 0;
+  while (i < (int)mem_r8(node + 8)) {
+    uint32_t cmd = mem_r32(node + 0xC0 + i * 4);
+    uint32_t geomblk = mem_r32(cmd + 0x40);
+    if (geomblk == 0) goto next;
+    // obj translation (cmd+0x2c/0x30/0x34) → scratch 0x1F8000C0/C2/C4 (input V0 for the translation MVMVA)
+    mem_w16(SCR + 0xC0, mem_r16(cmd + 0x2C));
+    mem_w16(SCR + 0xC2, mem_r16(cmd + 0x30));
+    mem_w16(SCR + 0xC4, mem_r16(cmd + 0x34));
+    // camera rotation (scratch 0x1F8000F8, 5 words) → CR0-4
+    gte_write_ctrl(0, mem_r32(SCR + 0xF8)); gte_write_ctrl(1, mem_r32(SCR + 0xFC));
+    gte_write_ctrl(2, mem_r32(SCR + 0x100)); gte_write_ctrl(3, mem_r32(SCR + 0x104));
+    gte_write_ctrl(4, mem_r32(SCR + 0x108));
+    // compose camera-rotation × object-local matrix, one MVMVA per column (cmd+0x18/+0x1a/+0x1c)
+    for (int col = 0; col < 3; col++) {
+      uint32_t cc = cmd + 0x18 + col;
+      gte_write_data(9,  mem_r16(cc + 0));
+      gte_write_data(10, mem_r16(cc + 6));
+      gte_write_data(11, mem_r16(cc + 12));
+      gte_op(c, MVMVA_ROTCOL);
+      mem_w16(SCR + 0  + col * 2, gte_read_data(9));     // composed rot, 3 cols interleaved
+      mem_w16(SCR + 6  + col * 2, gte_read_data(10));
+      mem_w16(SCR + 12 + col * 2, gte_read_data(11));
+    }
+    // transform the object translation by the camera, then add the camera translation offset
+    gte_write_data(0, mem_r32(SCR + 0xC0));              // VXY0 = (transX, transY)
+    gte_write_data(1, mem_r32(SCR + 0xC4));              // VZ0  = transZ
+    gte_op(c, MVMVA_TRANS);
+    mem_w32(SCR + 20, gte_read_data(25) + mem_r32(SCR + 0x10C));   // + camera trans X
+    mem_w32(SCR + 24, gte_read_data(26) + mem_r32(SCR + 0x110));   // + camera trans Y
+    mem_w32(SCR + 28, gte_read_data(27) + mem_r32(SCR + 0x114));   // + camera trans Z
+    // load the composed transform: rotation → CR0-4, translation → CR5-7
+    gte_write_ctrl(0, mem_r32(SCR + 0));  gte_write_ctrl(1, mem_r32(SCR + 4));
+    gte_write_ctrl(2, mem_r32(SCR + 8));  gte_write_ctrl(3, mem_r32(SCR + 12));
+    gte_write_ctrl(4, mem_r32(SCR + 16));
+    gte_write_ctrl(5, mem_r32(SCR + 20)); gte_write_ctrl(6, mem_r32(SCR + 24));
+    gte_write_ctrl(7, mem_r32(SCR + 28));
+    // OT base: node[0xd]&0xf == 4 selects a per-command sub-bucket (cmd[0x3f]*4 offset), else the base
+    uint32_t otbase = otbase_ptr;
+    if ((mem_r8(node + 0xD) & 0xF) == 4)
+      otbase = otbase_ptr + (((int32_t)(int8_t)mem_r8(cmd + 0x3F)) << 2);
+    native_dispatch(c, geomblk, otbase, flag);
+  next:
+    i++;
+    if (i >= (int)mem_r8(node + 9)) break;
+  }
+}
+
+void ov_perobj_flush(R3000* c) {
+  if (cfg_on("PSXPORT_PEROBJ_RECOMP")) { rec_super_call(c, 0x8003CDD8u); return; }
+  submit_perobj_flush(c);
+}
+
 // --- Auto-ownership of the SAME submit library when it appears in a runtime-loaded overlay --------
 // The two resident submit fns above are also present, the same ALGORITHM (verified — only register
 // allocation / scheduling / relocated internal calls differ), in per-area render overlays at

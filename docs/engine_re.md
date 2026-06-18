@@ -131,6 +131,12 @@ only mode 3 / ≥9). `*0x800BF870` is a GLOBAL set before/within a flush pass, s
   margin plan reads `node+0xc0` (its persistent cmd) for a culled margin object and adds it to the flush list,
   WITHOUT poking `+1` (which also ticks gameplay). Probes: `PSXPORT_DEBUG=cmdenq`/`flush`/`enq`,
   `PSXPORT_WWATCH=lo,hi` (word-store PC tap; NB byte stores like `list+8` count are not caught).
+- **NATIVE-OWNED (later-135) — `gen_func_8003CDD8` (the per-object flush), `gen_func_8003F698`
+  (dispatcher generic path) and `gen_func_800803DC` are now reimplemented in C** (`engine/engine_submit.c`
+  `submit_perobj_flush`/`native_dispatch`/`native_gt3gt4`, registered on `0x8003CDD8`). The world render
+  submission runs with NO guest render code; **VRAM byte-identical** vs the recomp body (headless field
+  f328, A/B `PSXPORT_PEROBJ_RECOMP=1`). Only the per-scene overlay submitter variants (mode-table
+  `0x8013xxxx`) + the resident byte-packed `0x80027768` are still recomp (next RE). See journal later-135.
 - **CORRECTION (later-133/134) — THE OBJECT NODE *IS* its render-command list, and rendering is per-object.**
   `node+0xc0` is the BASE of a cmd-pointer ARRAY (count at `node+8`), not a single ptr. Each visible object
   is rendered by **`gen_func_8003CCA4(node)`** (per-object render dispatch by `node+0xd` via jump table

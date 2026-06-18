@@ -405,6 +405,14 @@ void games_tomba2_init(void) {
     rec_set_override(0x80027768u, ov_submit_poly_gt4_bp);// byte-packed POLY_GT4 (field's dominant emitter)
     engine_submit_register_autodetect();                 // + own the same library in runtime-loaded overlays
   }
+  // Own the PER-OBJECT render flush natively (gen_func_8003CDD8 — the world/margin render submission):
+  // compose the camera×object transform + dispatch the geomblk to the native submitter, with NO guest
+  // render code (later-133). A/B: PSXPORT_PEROBJ_RECOMP=1 keeps the recomp body. (PSXPORT_DEBUG=flush2
+  // re-overrides the same addr below with the probe, which super-calls the recomp body.)
+  if (!cfg_on("PSXPORT_PEROBJ_RECOMP")) {
+    void ov_perobj_flush(R3000*);
+    rec_set_override(0x8003CDD8u, ov_perobj_flush);
+  }
   fps60_init();
   // cull tap: ALWAYS registered — genuine-wide is the default wide path and the overlay can toggle aspect
   // LIVE, so the widened-frustum re-include must be available without a launch flag. ov_object_cull is a

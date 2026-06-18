@@ -5051,3 +5051,37 @@ node), `geomblk G S` (model-table lookup). `dbg_server_service` now takes the fr
   ~77s. Now headless skips the intro FMVs (native_boot.c) and auto-uncaps any in-game FMV (native_fmv.c);
   a plain headless field probe is ~1.4s, deterministic (field @present-frame 328, rcmd=124), no flag.
   Standard recipe in docs/driving-the-game.md §0.
+
+## later-135 — NATIVE per-object render FLUSH (`gen_func_8003CDD8`) — world render submission is now PC-native, 0-diff
+The major world/margin render flush — the per-object transform composition + dispatch that turns each
+visible object's persistent render-command list into projected geometry — is reimplemented in native C
+(`engine/engine_submit.c` `submit_perobj_flush` / `ov_perobj_flush`, registered on `0x8003CDD8` in
+games_tomba2_init). This is the core of "make it a PC game": for the dominant world path NO guest render
+code runs — not `gen_func_8003CDD8`, not the dispatcher `gen_func_8003F698`, not `gen_func_800803DC`.
+- **What it does (decoded byte-for-byte from the recomp body, later-133):** per render command in the
+  node's persistent list (count `node+8`/`node+9`, cmd-ptr array `node+0xc0[i]`, geomblk `cmd+0x40`):
+  compose camera-rotation (scratch `0x1F8000F8`→CR0-4) × object-local matrix (`cmd+0x18`, 3 cols at
+  +0x18/+0x1a/+0x1c, halfwords @+0/+6/+0xc) via one MVMVA `0x4A49E012` per column; transform the object
+  translation (`cmd+0x2c/0x30/0x34`) by the camera (MVMVA `0x4A486012`) + add the camera translation
+  offset (`0x1F80010C/110/114`); load composed rot→CR0-4, trans→CR5-7; dispatch geomblk with OT base
+  `*0x800ED8C8` (+`cmd[0x3f]*4` when `node[0xd]&0xf==4`) and the flush flag. The MVMVA math stays a
+  platform primitive (gte_op → Beetle GTE) so the composed CR0-7 are bit-identical.
+- **`native_dispatch` (replaces `gen_func_8003F698`):** the generic GT3/GT4 path (forced-flag / force-byte
+  `*0x1F800234` / mode≥22 / a mode-table `0x80015268[mode]` entry == `gen_func_800803DC`) is owned
+  natively via `native_gt3gt4` (replaces `gen_func_800803DC`: split geomblk+0 tri/quad counts, run the
+  already-native `ov_submit_poly_gt3/gt4`). Per-scene OVERLAY submitter variants (other mode-table
+  entries — the `0x8013xxxx` ones) are NOT owned yet → those modes still run their original per-mode
+  renderer via rec_dispatch. That + the byte-packed `0x80027768` are the documented next RE targets
+  (engine_re "OPEN — full field depth coverage").
+- **0-DIFF GATE (the real verification, NOT a screenshot):** headless field @present-frame 328, 16:9,
+  `PSXPORT_VRAMDUMP=328:…` → native flush vs `PSXPORT_PEROBJ_RECOMP=1` (recomp body) → **VRAM
+  byte-identical** (`cmp` clean; 135946 non-zero px / 21602 distinct values — a real field, not blank).
+  The override is registered ONLY in the native run, so identical output proves the native flush genuinely
+  carries the render (a dead override would blank the world). A/B flag: `PSXPORT_PEROBJ_RECOMP=1`.
+- **Relation to the margin (later-134):** the margin's `gen_func_8003CCA4(node)` call now routes its
+  per-object submission through this native flush; the remaining guest calls (`8003CCA4` transform
+  dispatch, `80051C8C` transform build) are gameplay-0-diff (node_diff) and are the next lift so the
+  margin needs no guest render at all.
+- **NEXT:** own `gen_func_8003CCA4` (per-object render dispatch, jump table `0x80014ec8` by `node+0xd`) +
+  `gen_func_80051C8C` (transform build) natively → fully native per-object render; then the overlay
+  submitter variants (`0x8013xxxx`, `0x80027768` resident) for full field depth + native margin.
