@@ -670,6 +670,24 @@ void ov_perobj_flush(R3000* c) {
   submit_perobj_flush(c);
 }
 
+// PSXPORT_DEBUG=subcnt — submitter call-counter. Registered (super-call) on candidate submit fns to see
+// which actually fire per scene + how often, so the un-owned variants worth porting are picked by data,
+// not guesswork. One slot per registered address; per-present-frame counts flushed on frame change.
+static uint32_t s_subcnt[8], s_subaddr[8]; static int s_subn, s_sub_lastf = -1;
+static void subcnt_tick(R3000* c, uint32_t addr) {
+  int slot = -1; for (int i = 0; i < s_subn; i++) if (s_subaddr[i] == addr) { slot = i; break; }
+  if (slot < 0 && s_subn < 8) { slot = s_subn; s_subaddr[s_subn++] = addr; }
+  if (s_frame != s_sub_lastf) {
+    if (s_sub_lastf >= 0) { fprintf(stderr, "[subcnt] f%d", s_sub_lastf);
+      for (int i = 0; i < s_subn; i++) { fprintf(stderr, " %08x=%u", s_subaddr[i], s_subcnt[i]); s_subcnt[i] = 0; } }
+    s_sub_lastf = s_frame;
+  }
+  if (slot >= 0) s_subcnt[slot]++;
+  rec_super_call(c, addr);
+}
+void ov_subcnt_b320(R3000* c) { subcnt_tick(c, 0x8003B320u); }
+void ov_subcnt_c8f4(R3000* c) { subcnt_tick(c, 0x8003C8F4u); }
+
 // --- Auto-ownership of the SAME submit library when it appears in a runtime-loaded overlay --------
 // The two resident submit fns above are also present, the same ALGORITHM (verified — only register
 // allocation / scheduling / relocated internal calls differ), in per-area render overlays at

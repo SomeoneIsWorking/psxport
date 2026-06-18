@@ -432,6 +432,9 @@ void games_tomba2_init(void) {
   if (cfg_dbg("flush2")) { void ov_flush2_probe(R3000*); rec_set_override(0x8003CDD8u, ov_flush2_probe); }
   // Command-enqueue tap (PSXPORT_DEBUG=cmdenq): gen_func_80051B70, validates obj/(group,sub)→geomblk. later-132.
   if (cfg_dbg("cmdenq")) { void ov_cmdenq_probe(R3000*); rec_set_override(0x80051B04u, ov_cmdenq_probe); }
+  // Submitter call-counter (PSXPORT_DEBUG=subcnt): which un-owned submit variants fire per scene. Gated.
+  if (cfg_dbg("subcnt")) { void ov_subcnt_b320(R3000*), ov_subcnt_c8f4(R3000*);
+    rec_set_override(0x8003B320u, ov_subcnt_b320); rec_set_override(0x8003C8F4u, ov_subcnt_c8f4); }
   void engine_tomba2_init(void);
   engine_tomba2_init();                            // native engine layer (Phase 1: object-list walk)
 }
