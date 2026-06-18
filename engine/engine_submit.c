@@ -54,6 +54,44 @@ static int submit_recomp(void) { if (s_submit_recomp < 0) s_submit_recomp = cfg_
 int gpu_vk_wide_engine(void), gpu_vk_wide_engine_w(void);
 static int submit_xmax(void) { return gpu_vk_wide_engine() ? gpu_vk_wide_engine_w() : 320; }
 
+// PSXPORT_DEBUG=geomblk — geometry-record CAPTURE probe. Dumps the RAW primitive records of every geomblk
+// submitted through the three natively-owned submitters (GT3 0x8007FDB0, GT4 0x8008007C, GT4bp 0x80027768).
+// The raw record bytes are the canonical INPUT a native render-half must reproduce byte-for-byte (the 0-diff
+// gate). stride = per-prim record size (36 GT3 / 44 GT4 / 36 GT4bp).
+//
+// IMPORTANT — object attribution is NOT available from here (journal later-130). Geometry SUBMISSION is a
+// DEFERRED FLUSH phase, decoupled from the per-object entity walk: at the field, all owned submits run with
+// g_current_object == 0 (outside any handler's node_call context) and AFTER every per-object cull. So neither
+// the walk-tap (g_current_object → 0 at flush) nor the cull-tap (g_render_object → stuck at the last-culled
+// object) names the geomblk's source object. We log both as weak context only; true attribution needs tapping
+// the geomblk ENQUEUE site (where a handler registers its render command, while g_current_object = its node).
+// At the field the owned path carries the world/map renderer's geometry; the 78 margin objects enqueue via
+// UN-owned submitter variants and are invisible here. Off by default; pure logging, no state change.
+extern uint32_t g_current_object, g_render_object;
+extern int s_frame;
+static int s_geomblk = -1, s_geomblk_frame = -2;
+static inline int geomblk_on(void) {
+  if (s_geomblk < 0) s_geomblk = cfg_dbg("geomblk") ? 1 : 0;
+  if (!s_geomblk) return 0;
+  // Optional single-frame gate (PSXPORT_GEOMBLK_FRAME=<s_frame>): bound the firehose to one present frame so
+  // a 2900-frame headless run to the field doesn't emit gigabytes. Unset = every frame.
+  if (s_geomblk_frame == -2) { const char* f = cfg_str("PSXPORT_GEOMBLK_FRAME"); s_geomblk_frame = f ? atoi(f) : -1; }
+  return s_geomblk_frame < 0 || s_frame == s_geomblk_frame;
+}
+static void geomblk_dump(const char* kind, uint32_t rec, uint32_t count, uint32_t stride) {
+  if (!geomblk_on()) return;
+  uint32_t o = g_render_object;                    // weak hint: last-culled object (see header — not the source)
+  uint32_t handler = o ? mem_r32(o + 0x1c) : 0;
+  uint8_t  type    = o ? mem_r8(o + 0x0c) : 0xff;
+  fprintf(stderr, "[geomblk] f%d cur=%08x lastcull=%08x type=%02x handler=%08x %s n=%u\n",
+          s_frame, g_current_object, o, type, handler, kind, count);
+  for (uint32_t i = 0; i < count; i++) {
+    fprintf(stderr, "[geomblk]   rec%u:", i);
+    for (uint32_t b = 0; b < stride; b++) fprintf(stderr, "%s%02x", (b & 3) ? "" : " ", mem_r8(rec + i*stride + b));
+    fprintf(stderr, "\n");
+  }
+}
+
 // PC-native per-vertex depth (Phase 2): because we OWN the projection, we know each vertex's real
 // view-space Z (the SZ the GTE just produced) — record it keyed by the packet vertex word's address so
 // the renderer's D32 depth buffer does true per-pixel occlusion (PSXPORT_NATIVE_DEPTH / the SBS A/B
@@ -110,6 +148,7 @@ static void submit_poly_gt3(R3000* c) {
   uint32_t pkt = mem_r32(PKT_POOL_PTR);
   int depth = depth_on(); if (depth) proj_set_H((uint16_t)gte_read_ctrl(26));
   int dl = ndl_active();                           // build into a native prim instead of a guest packet
+  geomblk_dump("GT3", rec, count, 36);             // capture probe (oracle): raw records keyed by render obj
   uint32_t W[16];
   for (uint32_t i = 0; i < count; i++, rec += 36) {
     PkTgt P; if (dl) { memset(W, 0, sizeof W); P.w = W; P.guest = 0; } else { P.w = 0; P.guest = pkt; }
@@ -184,6 +223,7 @@ static void submit_poly_gt4(R3000* c) {
   uint32_t pkt = mem_r32(PKT_POOL_PTR);
   int depth = depth_on(); if (depth) proj_set_H((uint16_t)gte_read_ctrl(26));
   int dl = ndl_active();
+  geomblk_dump("GT4", rec, count, 44);             // capture probe (oracle): raw records keyed by render obj
   uint32_t W[16];
   for (uint32_t i = 0; i < count; i++, rec += 44) {
     PkTgt P; if (dl) { memset(W, 0, sizeof W); P.w = W; P.guest = 0; } else { P.w = 0; P.guest = pkt; }
@@ -305,6 +345,10 @@ static void submit_poly_gt4_bp(R3000* c) {
   uint32_t otbase = mem_r32(OTBASE_PTR);
   int depth = depth_on(); if (depth) proj_set_H((uint16_t)gte_read_ctrl(26));
   int dl = ndl_active();
+  if (geomblk_on()) {                              // count the control-terminated record list, then dump
+    uint32_t n = 0, r = rec; for (;;) { n++; if ((int32_t)mem_r32(r + 4) <= 0) break; r += 36; }
+    geomblk_dump("GT4bp", rec, n, 36);
+  }
   uint32_t W[16];
   for (;;) {
     PkTgt P; if (dl) { memset(W, 0, sizeof W); P.w = W; P.guest = 0; } else { P.w = 0; P.guest = pkt; }

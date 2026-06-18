@@ -24,6 +24,10 @@ void rec_super_call(R3000*, uint32_t);   // interpret the original PSX body (sup
 void fps60_frame_commit(void);    // fps60: per-logic-frame fence (rate detect / interp)
 void fps60_init(void);            // fps60: read PSXPORT_FPS60
 extern uint32_t g_current_object;  // fps60: object* whose RTP ops are being tagged
+// geomblk capture probe (engine_submit.c): the LAST object the cull ran on. Unlike g_current_object this is
+// NOT restored on return — a handler calls its cull (FUN_8007712c) then immediately submits its geometry, so
+// across that submit g_render_object identifies the rendering object. Pure probe key; no gameplay effect.
+uint32_t g_render_object = 0;
 extern int g_fps60_on;            // fps60: capture enabled (PSXPORT_FPS60)
 void gpu_present(void);            // native GPU: present the displayed VRAM region
 void gpu_pace_frame(void);         // native GPU: throttle to game pace when windowed (no-op headless)
@@ -102,6 +106,8 @@ static void ov_object_cull(R3000* c) {
   uint32_t prev = g_current_object;
   uint32_t o = c->r[4];                            // a0 = object* (MIPS arg register $a0)
   g_current_object = o;
+  g_render_object  = o;                            // probe key: NOT restored — the submit that follows is o's
+
   if (s_objlog < 0) s_objlog = cfg_dbg("obj") ? 1 : 0;
   if (s_objlog)
     fprintf(stderr, "[objlog] obj=%08x type=%02x pos=(%d,%d,%d)\n", o, mem_r8(o + 0x0c),

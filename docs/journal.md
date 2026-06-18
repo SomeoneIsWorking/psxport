@@ -4859,3 +4859,40 @@ lives in that SAME visible branch → render and logic are entangled there.
 - (C) accept genuine-wide as-is (cosmetic edge perturbation); (D) faithful narrow-cull = CULL_FAR=0 (0-diff,
   but empty edge wedges). Both already available.
 Probes kept: PSXPORT_DEBUG=cullobj/cullinc, PSXPORT_CULL_ONLY_TYPE/_SKIP_TYPE.
+
+## later-130 — approach-A step-1 PREMISE FALSIFIED: geometry submission is a DEFERRED FLUSH (not per-handler)
+Attempted handoff step 1 (the per-object geomblk capture ORACLE). Built `PSXPORT_DEBUG=geomblk`
+(engine_submit.c) + `PSXPORT_GEOMBLK_FRAME=<s_frame>` gate: dumps the raw primitive records of every geomblk
+through the three natively-owned submitters (GT3 0x8007FDB0, GT4 0x8008007C, GT4bp 0x80027768). The probe
+WORKS — at the field (s_frame 2900, 16:9) it captured 256 geomblks (256 GT3 + 256 GT4 calls via caller
+0x800803DC, + 1 GT4bp), 2008 records. But the handoff's **keying premise is false**, which kills step 1
+as specified and reframes approach A:
+
+**Geometry SUBMISSION is a DEFERRED FLUSH PHASE, decoupled from the per-object entity walk.** Two independent
+object taps both FAIL to name a submitted geomblk's source object:
+- cull-tap (`g_render_object`, set in ov_object_cull, NOT restored): all 256 geomblks key to ONE object
+  (800f0e80) — the last object that went through cull before the flush, not the source of each geomblk.
+- walk-tap (`g_current_object`, set per-node by the active native walk ov_objwalk, restored after each
+  handler): all 256 key to **0x00000000** — i.e. submission runs OUTSIDE any handler's node_call context.
+- Ordering proof: every per-object cull (`cullobj` re-includes, 78 obj/frame) completes BEFORE the first
+  owned submit (0 cullobj lines after the first geomblk line). So handlers do NOT "cull then immediately
+  submit" (later-129's chain description is wrong as a temporal claim) — handlers ENQUEUE geometry during
+  the walk; a separate FLUSH phase (g_current_object==0, after the whole walk) drains it via GT3/GT4.
+
+**Object 800f0e80 = the field's world/map renderer** (type 0x03, model=0/mdata=0, pos≈camera). At the field
+the entire owned-submit path is ITS geometry. The **78 margin objects produce ZERO owned-path geometry** —
+they enqueue via UN-owned submitter variants (the dominant overlay margin handler 0x80138fc8 calls the cull
+wrapper 0x8007778c + a tree of shared helpers 0x80073328/0x80077ebc/0x8007703c, never the owned caller
+0x800803DC), submitted through interpreted variants (engine_re OPEN list: 0x8003B320/0x8003C8F4 GT3,
+0x8013CDD4/0x8013DD34 overlay) that the probe can't see.
+
+**Consequence for approach A (user's chosen direction):** it is heavier than later-129 already framed.
+To build even the step-1 ORACLE for a margin handler you must FIRST (a) tap the geomblk ENQUEUE site to
+recover object→geomblk attribution (deferred-flush, so neither cull/walk tap suffices), AND (b) own/RE the
+un-owned submitter variant(s) the margin handlers use. THEN per-handler RE the procedural geometry through a
+deep shared-helper call tree. Per-handler, per-scene, ~9+ handlers — exactly the "very large, low-leverage,
+not viable as the general path" later-129 warned of, now with two added prerequisites. This **reinforces
+later-129's recommendation of approach B** (transactional region-scoped re-include): generic, handler/scene-
+agnostic, needs none of the per-handler RE — it lets the game's own deferred-flush render the margin and just
+undoes the gameplay-region writes. DECISION SURFACED TO USER (2026-06-18).
+Probe kept: `PSXPORT_DEBUG=geomblk` (+`PSXPORT_GEOMBLK_FRAME`); g_render_object exported from game_tomba2.c.
