@@ -5151,8 +5151,22 @@ code runs — not `gen_func_8003CDD8`, not the dispatcher `gen_func_8003F698`, n
 - The full FIELD render path is now native C end-to-end (walk → dispatch → flush+native_dispatch →
   terrain → transform-build → owned submitters), 0-diff vs recomp, no hang, deterministic. Per-override
   A/B gates added: `PSXPORT_NO_{FLUSH,DISP,WALK,TERRAIN,XFORM}=1`.
-- **NEXT (in order):** (1) native widescreen margin (replace the guest-flush margin_render.cpp; all its
-  callees — 80051C8C, 8003CCA4 — are now native). (2) drive to scenes using `0x8003B320`/`0x8003C8F4`/
+- **Widescreen-visibility finding (don't re-chase):** at the standard headless field frames, 16:9 s_vram
+  is BYTE-IDENTICAL to 4:3. That is EXPECTED, not a bug: `ov_set_geom_offset` deliberately keeps OFX=160
+  (widening the shared GTE CR24 corrupts the game's own RTPS read-backs), so widescreen is done by the
+  WIDE CULL in engine_submit (`submit_xmax`→428, keep geometry projecting into [320,428]) — NOT a wider
+  FOV. So 16:9 differs from 4:3 ONLY when the scene actually has geometry in the [320,428] margin band;
+  the auto-gameplay field frames tested have none. The render-submission ports are verified faithful
+  regardless (0-diff vs recomp in BOTH aspects). True wider-FOV widescreen would need the native-projection
+  path (proj_native_vertex, memory note) wired into the owned submitters — a separate design step.
+- **Remaining render work is NOT clean recomp-sourced ports anymore (assessed this session):** the
+  per-mode renderers the dispatcher delegates to (`0x80146478` mode0, `0x80132DC0`, `0x8013xxxx`…) are
+  OVERLAY/interpreted (not in MAIN.EXE recomp) → need the overlay-scan mechanism or RAM RE; the camera
+  matrix builder `gen_func_800939A0` is a 308-line subtree with 8 callees and is camera-CONTROL coupled
+  (gameplay-scope — keep recomp). So the next steps need a direction decision, not just another lift.
+- **NEXT (options, need a pick):** (a) native wider-FOV widescreen via proj_native_vertex in the owned
+  submitters (the real visible payoff); (b) own the per-mode overlay renderers via overlay-scan; (c) drive
+  to scenes using `0x8003B320`/`0x8003C8F4`/
   overlay `0x8013xxxx` and port those submit variants. (3) own `gen_func_80051C8C` (transform build,
   interpreted-only — RE from RAM). (4) native widescreen margin (replace the guest-flush margin_render.cpp).
 - Probes added this session: `PSXPORT_DEBUG=pdisp` (dispatch coverage), `subcnt` (submitter call counts),
