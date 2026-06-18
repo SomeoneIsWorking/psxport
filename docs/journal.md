@@ -4515,3 +4515,41 @@ spread"), so the ONLY widescreen path is the genuine wider-FOV engine frame.
   this change (no sprite_anchor_dx undefined-ref). Left as-is.
 - **NEXT (handoff B/C):** live per-frame OFX re-apply so an overlay aspect change reprojects instantly
   (currently only at the next SetGeomOffset); then windowed verify of the pause-menu / 2D-over-3D in wide.
+
+## later-122 — DIRECTION RESET (user, emphatic): make it a PC GAME — port the engine to PC; guest = AI + level data ONLY
+User, across several messages this session: "Make this a PC game. Port MORE of the game code to PC. Guest
+memory is only used for enemy AI and level data. You are still writing to guest memory. Reverse Engineer
+and port the game." Hard steer away from: FB-hack widescreen (deleted earlier this session), poking shared
+guest GTE state (CR24/OFX) to fake wide, save/restore "isolation" tricks, and oracle-diff/PROJPROBE as a
+working style. The bar is OWN the engine code in native C.
+
+**Committed this session (clean baseline):**
+- `7452f0c`..`338c21d`: deleted the FB-hack widescreen (genuine path was already default).
+- `<this>`: **keep guest GTE faithful** — reverted the later-117 global OFX (CR24) widen. ROOT CAUSE of
+  the "our changes corrupt the game": OFX is SHARED GTE state the GAME's OWN logic reads back (gameplay
+  RTPS → on-screen tests / placement / cull consume the projected SXY). Widening it globally shifted those
+  read-backs → corrupted gameplay. So widescreen must NEVER touch guest GTE state.
+
+**RE finding — WHY render data is in guest RAM (the thing to port out):** it is NOT laziness. The ordering
+table (OT) interleaves PRIMITIVES with PERSISTENT GP0 STATE (draw-offset GP0 0xE5, draw-area/clip 0xE3/E4,
+texture-window 0xE2, plus env/tpage packets — SCENEDUMP: main field OT ≈ 514 poly + 389 rect + 11 env) and
+`DrawOTag` processes them IN SUBMISSION ORDER at draw time. A primitive's effective state depends on the
+state-packets that precede it in the OT. Consequences:
+- You CANNOT snapshot GP0 state at SUBMIT time and pull prims out of the OT — state changes mid-OT (the 11
+  env packets), so submit-time state ≠ draw-time state. The native display list must be built/ordered the
+  way DrawOTag walks, carrying each prim's draw-time state.
+- The address-keyed depth bridge (`projprim_set_pz(pkt+8,…)` in engine_submit → renderer
+  `projprim_lookup_pz(vaddr)` keyed by the guest packet word address) is a SYMPTOM of packets living in
+  guest RAM; a native prim carries its float view-Z directly and the bridge disappears.
+- Prims enter the OT via INLINE AddPrim (`prim->tag=ot[idx]; ot[idx]=prim`) inside the game's per-entity
+  render handlers — there is no AddPrim function to override. So fully removing guest-packet writes means
+  owning the whole primitive-submission path (all libgpu AddPrim builders + the env packets), i.e. the
+  classified native display list of engine_re.md "Native ownership plan" step 1.
+
+**NEXT (the port, not pokes):** own DrawOTag as a NATIVE classified display list — reimplement the libgpu
+primitive builders so prims+env flow into PC-native structs (carrying draw-time state + native view-Z),
+render that list directly via gpu_vk_draw_*; keep the recomp body as A/B oracle. Then widescreen = native
+projection (proj_native_vertex with a render-OFX) on the native list, guest GTE untouched. Open snag for
+the native-projection step: proj_native_vertex is 0-diff at the GTE-op hook (PROJPROBE) but diverged in
+BOTH X and Y when called from the submit call-site (e.g. native 012F00B2 vs gte 015F00B7) — a register/
+call-context bug to nail before relying on native projection in the submit.
