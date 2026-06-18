@@ -305,25 +305,19 @@ static int W_ires(void) {
 }
 #define s_wide (W_wide())
 #define s_ires (W_ires())
-static int WIDE_OFF(void) { return (wide_native_w() - 320) / 2; }   // center the native 320 view in the wide FB
 static int FBW(void) { return wide_native_w() * s_ires; }
 static int FBH(void) { return 240 * s_ires; }
 static int use_fb(void) { return s_wide || s_ires > 1; }   // 3D goes through the scaled scratch FB
 static void wide_init(void) { mods_init(); }
 
-// ---- Genuine engine-level widescreen (audit step 2/3: "no faking") -----------------------------
-// PSXPORT_WIDE_ENGINE=1 switches widescreen from the present-time FB SPREAD (push_wide centers the fixed
-// 320 projection in a wider FB) to a REAL wider frame: the engine projects with a wider OFX (genuine
-// horizontal FOV via Beetle's GTE) and the wide content is rasterized 1:1 into the scratch FB (no
-// WIDE_OFF re-center). Default OFF so 4:3 stays byte-identical (the 0-diff gate). Still WIP: the 2D
-// water/sky/HUD (B4) and the frustum cull (B3) are not yet widened, so the extra side bands show gaps /
-// edge-stuck 2D until those steps land — this flag is the in-progress genuine path, not the default.
+// ---- Genuine engine-level widescreen ("no faking") ---------------------------------------------
+// Widescreen is a REAL wider frame, not a present-time spread: the engine projects with a wider OFX
+// (genuine horizontal FOV via Beetle's GTE, see ov_set_geom_offset) and the wide content is rasterized
+// 1:1 into the scratch FB. There is no FB-hack centering path anymore — any non-4:3 aspect IS the
+// genuine-wide path. (4:3 stays byte-identical: this returns 0, so OFX/cull/2D-scale are all untouched.)
 int gpu_vk_wide_engine(void) {
-  // Genuine PC-native wide (real wider FOV + native FB, NO present-time spread) is THE wide path now.
-  // The legacy FB-hack (push_wide centering / WIDE_OFF / sprite_anchor spread) is retired; opt back into
-  // it only for A/B comparison with PSXPORT_WIDE_FBHACK=1.
-  static int v = -1; if (v < 0) { mods_init(); v = cfg_on("PSXPORT_WIDE_FBHACK") ? 0 : 1; }
-  return v && g_mods.aspect != ASPECT_4_3;
+  mods_init();
+  return g_mods.aspect != ASPECT_4_3;
 }
 int gpu_vk_wide_engine_ofx(void) { return wide_native_w() / 2; }   // wide projection center (214 @16:9)
 int gpu_vk_wide_engine_w(void)   { return wide_native_w(); }       // wide draw-clip width (428 @16:9)
@@ -717,25 +711,12 @@ static void poll_quit(void) {
 // Push the vertex-stage wide/supersample transform (VPC). `enabled` lets diagnostic passes force the
 // identity (non-wide) transform while still satisfying the shader's img_h dependency.
 static void push_wide(int enabled) {
-  // ss = internal-res scale; the horizontal re-center (WIDE_OFF) applies only in 16:9, so 4:3 hi-res
-  // just scales the native view by s_ires with no FOV change. (The PSXPORT_SBS depth select is a
-  // pipeline specialization constant, not a push constant — see SBS_NATIVE in the shaders.)
-  // WIDE_OFF centers the fixed 320 projection in the wider FB (the present-time SPREAD). In the genuine
-  // engine-wide path the projection is ALREADY wide (OFX widened), so place it 1:1 with no re-center.
-  int wide_off = (s_wide && !gpu_vk_wide_engine()) ? WIDE_OFF() : 0;
-  int32_t va[8] = { enabled, FB_Y0, s_ires, IMG_H,   wide_off, FBW(), FBH(), 0 /*fb_x0*/ };
+  // ss = internal-res scale. There is no horizontal re-center: 4:3 hi-res just scales the native view by
+  // s_ires (no FOV change), and genuine-wide places the already-wider projection 1:1 in the scratch FB.
+  // (The PSXPORT_SBS depth select is a pipeline specialization constant, not a push constant — see
+  // SBS_NATIVE in the shaders.) wb.x is reserved (kept 0) to preserve the push-constant layout.
+  int32_t va[8] = { enabled, FB_Y0, s_ires, IMG_H,   0 /*reserved*/, FBW(), FBH(), 0 /*fb_x0*/ };
   vkCmdPushConstants(s_cmd, s_pll, VK_SHADER_STAGE_VERTEX_BIT, 16, 32, va);
-}
-
-// HUD edge-anchoring for 2D sprites (gp0 0x60-0x7F). 3D polys widen via the FOV (filling the new side
-// bands); 2D sprites bypass the GTE, so the vertex transform would just CENTER them. Instead, anchor each
-// sprite to its proportional screen position at NATIVE size: a sprite centered at screen-x Xc shifts by
-// `dx` native px (added before the ss scale) so Xc=160 stays centered, Xc=0 pins to the new left edge,
-// Xc=320 to the new right edge. dx = (Xc-160) * (FBW/ss - 320)/320. Returns 0 when not wide.
-int gpu_vk_sprite_anchor_dx(int center_local_x) {
-  wide_init();
-  if (!s_wide) return 0;
-  return ((center_local_x - 160) * (FBW() / s_ires - 320)) / 320;
 }
 
 // Render this frame's tee'd geometry over the freshly uploaded VRAM in `tgt`/`fb`. `native` picks the
@@ -1022,9 +1003,9 @@ static void ssao_pass(void) {
     s_logged = 1;
   }
   // screen map: VRAM pixel -> PSX screen coord. Faithful = (vram - present_origin); wide/hi-res FB =
-  // ((vram - fb_origin)/ires - wide_off) — inverse of the tritex.vert relocation.
+  // (vram - fb_origin)/ires — inverse of the tritex.vert relocation (no wide_off: content is placed 1:1).
   float org_x, org_y, off_x = 0.0f, off_y = 0.0f, inv_scale = 1.0f;
-  if (use_fb()) { org_x = 0.0f; org_y = (float)FB_Y0; inv_scale = 1.0f / (float)s_ires; off_x = s_wide ? (float)WIDE_OFF() : 0.0f; }
+  if (use_fb()) { org_x = 0.0f; org_y = (float)FB_Y0; inv_scale = 1.0f / (float)s_ires; }
   else          { org_x = (float)s_present_sx; org_y = (float)s_present_sy; }
   int viz = cfg_int("PSXPORT_SSAO_VIZ", 0);   // 1=AO factor; 2=normal; 3=lit (any deferred-viz)
   int flags = (ssao_on() ? 1 : 0) | (light_on() ? 2 : 0);
@@ -1669,7 +1650,6 @@ void gpu_vk_tritest(void) {
 #else
 #include <stdint.h>
 int  gpu_vk_enabled(void) { return 0; }
-int  gpu_vk_sprite_anchor_dx(int center_local_x) { (void)center_local_x; return 0; }
 void gpu_vk_present(const uint16_t* src, int sx, int sy, int w, int h) { (void)src;(void)sx;(void)sy;(void)w;(void)h; }
 void gpu_vk_tritest(void) {}
 void gpu_vk_frame_end(const uint16_t* svram, int frame) { (void)svram; (void)frame; }

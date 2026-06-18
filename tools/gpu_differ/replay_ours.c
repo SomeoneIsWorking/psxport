@@ -32,7 +32,6 @@ void     watchdog_pet(void)  {}
 // need to LINK. Empty-param defs link by symbol name regardless of the call sites' prototypes.
 int  g_fps60_on = 0;
 int  gpu_vk_enabled(void) { return 0; }
-int  gpu_vk_sprite_anchor_dx(int x) { (void)x; return 0; }
 void gpu_vk_draw_tritri() {}
 void gpu_vk_draw_semi() {}
 void gpu_vk_dirty() {}

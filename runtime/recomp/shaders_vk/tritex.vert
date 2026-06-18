@@ -21,18 +21,18 @@ layout(location = 5) flat out ivec4 v_da;
 // .ord, 1 = native .ordn.
 layout(constant_id = 0) const int SBS_NATIVE = 0;
 // PC-native widescreen / supersample transform (vertex push constant, offset 16 to clear the
-// fragment present push at 0). wa=(enabled, fb_y0, ss, img_h); wb=(wide_off, fbw, fbh, fb_x0).
+// fragment present push at 0). wa=(enabled, fb_y0, ss, img_h); wb=(reserved, fbw, fbh, fb_x0).
 layout(push_constant) uniform VPC { layout(offset = 16) ivec4 wa; ivec4 wb; } w;
 void main() {
     v_col = i_col; v_uv = i_uv; v_tp = i_tp; v_clut = i_clut; v_tw = i_tw;
     float ny = float(w.wa.w) * 0.5;   // image is IMG_H tall; map VRAM y -> NDC over the full image
     float fx, fy;
     if (w.wa.x != 0) {
-        // Relocate into the scratch FB at a wider FOV: keep native projection scale (no squish), just
-        // re-center the framebuffer-local view into the wider FB. da.xy is the active framebuffer origin.
+        // Relocate into the scratch FB: keep native projection scale (no squish), placing the
+        // framebuffer-local view 1:1 into the (wider/hi-res) FB. da.xy is the active framebuffer origin.
         float ss = float(w.wa.z);
         vec2 local = i_pos - vec2(i_da.xy);
-        fx = (local.x + float(w.wb.x)) * ss + float(w.wb.w);
+        fx = local.x * ss + float(w.wb.w);
         fy = float(w.wa.y) + local.y * ss;
         v_da = ivec4(w.wb.w, w.wa.y, w.wb.w + w.wb.y - 1, w.wa.y + w.wb.z - 1);   // clip = FB rect
     } else {

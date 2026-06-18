@@ -717,18 +717,15 @@ static void gp0_exec(void) {
                             const unsigned char*,const unsigned char*,int,int,int,int,int,int,int,int,int,int,int,int,int,int,int);
       int X = x + s_off_x, Y = y + s_off_y;
       int XL = X, XR = X + w;
-      // Widescreen 2D handling. The genuine engine-wide path (PSXPORT_WIDE_ENGINE) widens the 3D world at
-      // the projection (OFX); 2D sprites (sky/water backdrop + HUD) bypass the GTE, so they must be widened
-      // here. Scale the whole 2D plane uniformly to the wide width around the framebuffer origin (s_da_x0)
-      // so a tiled backdrop fills the frame with NO gaps (the per-sprite anchor-SPREAD below gapped
-      // adjacent tiles -> vertical stripes). NOTE: stepping stone — this scales HUD size too; the proper
-      // split (backdrop scales, HUD anchors at native size) needs always-on 3D/2D classification (B4).
-      { int gpu_vk_wide_engine(void), gpu_vk_wide_engine_w(void), gpu_vk_sprite_anchor_dx(int);
+      // Widescreen 2D handling. Genuine engine-wide widens the 3D world at the projection (OFX); 2D
+      // sprites (sky/water backdrop + HUD) bypass the GTE, so they must be widened here. Scale the whole
+      // 2D plane uniformly to the wide width around the framebuffer origin (s_da_x0) so a tiled backdrop
+      // fills the frame with NO gaps. NOTE: stepping stone — this scales HUD size too; the proper split
+      // (backdrop scales, HUD anchors at native size) needs the always-on 3D/2D classification (B4).
+      { int gpu_vk_wide_engine(void), gpu_vk_wide_engine_w(void);
         if (gpu_vk_wide_engine() && s_prev_had3d) {       // only widen 2D on gameplay frames (else pillarbox)
           int o = s_da_x0, ww = gpu_vk_wide_engine_w();   // map native [0,320] about origin -> [0,ww]
           XL = o + (XL - o) * ww / 320; XR = o + (XR - o) * ww / 320;
-        } else if (!gpu_vk_wide_engine()) {               // FB-hack path: per-sprite edge-anchor (unchanged)
-          int dx = gpu_vk_sprite_anchor_dx((X - s_da_x0) + w/2); XL += dx; XR += dx;
         } }
       int qx[4] = { XL, XR, XL, XR }, qy[4] = { Y, Y, Y+h, Y+h };
       int qu[4] = { u0, u0+w, u0, u0+w }, qv[4] = { v0, v0, v0+h, v0+h };

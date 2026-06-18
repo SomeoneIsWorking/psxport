@@ -4491,3 +4491,27 @@ User: "NO FB HACK. PC NATIVE FB. toggling resolution/widescreen breaks the game.
   too. (2) Live-OFX-toggle: OFX is widened in ov_set_geom_offset when the game calls SetGeomOffset (scene
   setup) — a live aspect toggle mid-scene won't reproject the 3D until the next SetGeomOffset; re-apply OFX
   per-frame from the current aspect. (3) pause-menu / 2D-overlay-over-3D in wide — verify windowed first.
+
+## later-122 — DELETE the FB-hack widescreen code (user: "NO FB HACK. PC NATIVE FB")
+Genuine-wide became the default wide path in later-121; the legacy present-time FB-spread was already
+DEAD code behind the `PSXPORT_WIDE_FBHACK` opt-out. Removed it entirely (audit step 6 "retire the FB
+spread"), so the ONLY widescreen path is the genuine wider-FOV engine frame.
+- **Removed:** `WIDE_OFF()` (the 320-in-428 re-center) and every use of it; the `push_wide` wide_off
+  push-constant value (slot kept as reserved 0 to preserve the 32-byte VPC layout); `tritex.vert`'s
+  `+ w.wb.x` re-center term (now `fx = local.x*ss + fb_x0`); the deferred screen-map `off_x = s_wide ?
+  WIDE_OFF : 0` term; `gpu_vk_sprite_anchor_dx()` + its 2D-sprite FB-hack caller branch in gpu_native.c
+  (and the VK-disabled stub + the gpu_differ stub); the `PSXPORT_WIDE_FBHACK` opt-out itself.
+  `gpu_vk_wide_engine()` is now simply `g_mods.aspect != ASPECT_4_3`.
+- **Verified — 4:3 byte-identical (the 0-diff gate):** every removed term was provably already 0 on the
+  4:3 path (s_wide=0 ⇒ WIDE_OFF branch=0, sprite_anchor_dx returns 0 when !s_wide, off_x=0). Empirically
+  the 4:3 headless field shot logs NO WIDE_ENGINE line and depth records=1807 / miss=34 — EXACTLY the
+  later-118 4:3 stats, i.e. depth-attach coverage unchanged (`scratch/screenshots/postdelete_43.png`,
+  faithful full-banner field).
+- **Verified — genuine-wide unchanged:** 16:9 headless field logs `WIDE_ENGINE OFX 160 -> 214`, depth
+  records=2370 / miss=30, renders the real wider FOV + native depth + filled 2D backdrop/HUD
+  (`scratch/screenshots/postdelete_wide.png`, matches the later-121 def2_field).
+- **Note:** the gpu_differ replay tool (`tools/gpu_differ/build.sh`) has PRE-EXISTING link rot (missing
+  cfg_str/cfg_dbg/proj_probe_dump/rtpcaller_*/gpu_scene_dump stubs that gpu_native.c grew) — unrelated to
+  this change (no sprite_anchor_dx undefined-ref). Left as-is.
+- **NEXT (handoff B/C):** live per-frame OFX re-apply so an overlay aspect change reprojects instantly
+  (currently only at the next SetGeomOffset); then windowed verify of the pause-menu / 2D-over-3D in wide.
