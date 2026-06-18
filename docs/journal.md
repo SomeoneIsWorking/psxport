@@ -5209,3 +5209,35 @@ PSXPORT_DEBUG=ndepth`, made/hit/miss per present frame):
   interpreted-only — RE from RAM). (4) native widescreen margin (replace the guest-flush margin_render.cpp).
 - Probes added this session: `PSXPORT_DEBUG=pdisp` (dispatch coverage), `subcnt` (submitter call counts),
   `ccase` (8003CCA4 case histogram), `rwalk` (phase-2 walk caller). All gated, zero cost off.
+
+## later-138 — HOST-MEMORY render conversion (the core directive: read guest, NEVER write guest)
+User directive (ground truth, observed live via `./run.sh` 4:3+VK+native-depth): the native render
+**corrupts both gameplay and visuals** (character models explode into stretched tris; gameplay diverges)
+because it WRITES guest memory that the still-recompiled guest logic reads. The PC engine must live in
+HOST memory — read guest, never modify it. GTE control/data regs are HARDWARE (not guest RAM) → writing
+CR0-7/data for projection is fine. "Faithful-first byte-identical guest writes" is the WRONG methodology
+here. (Diagnosis confirmed the divergence is config-induced — VK_HEADLESS is deterministic per-config but
+changing the render config changes the gameplay scene reached → the render alters guest state. The native
+submitters (native_dl) write the guest OT/pool differently than recomp; that is the gameplay-diverging
+write. Memory: [[engine-host-memory-never-write-guest]].)
+
+**Converted to host this session (committed):**
+- `submit_perobj_flush` COMPOSE: camera×object transform now in host C locals (`uint16 hm[9]` + trx/try/trz)
+  instead of the PSX scratchpad 0x1F800000. Renders identically.
+- `submit_terrain` COMPOSE: same host conversion.
+- `submit_terrain` sway-angle temps: host (drop the 0x800A2014 main-RAM writes). Runs to f800.
+
+**STILL writing guest (the remaining "port more to host" work, in impact order):**
+1. **THE main corruption — the submitters' guest OT/pool** (native_dl): each owned prim writes a 1-word OT
+   node + advances the pool ptr 0x800BF544 (guest). This is what diverges gameplay. FIX = native ORDERING:
+   submitters append the NativePrim to a HOST per-bucket list; `ov_draw_otag` renders the host 3D list +
+   walks the guest OT for the game's inline 2D prims. OPEN risk: the 3D/2D OT interleave order (the game
+   builds 2D in the same OT by bucket) — needs care so 2D HUD/shadows stay ordered vs 3D. This is the
+   documented [[tomba2-native-display-list]] "native per-bucket ordering" next step.
+2. terrain: IR0 stage 0x1F800090 (read by the 0x80027768 submitter) + the SCR matrix-build args; the
+   matrix-build sub-fns 80085480/80084520 write SCR — porting them host (~euler→matrix, ~350 lines incl.
+   80084D10/EB0/85050) removes those.
+3. `build_xform` (80051C8C): writes node+0x98 matrix (read by the flush via cmd+0x18/80051464) — needs the
+   matrix to flow host (build into a host map keyed by node; flush reads host).
+4. `submit_perobj_render`: 0x1F80028C "current render object" — read by un-ported guest per-mode renderers;
+   remove when those are host.
