@@ -582,12 +582,32 @@ static void native_gt3gt4(R3000* c, uint32_t geomblk, uint32_t otbase) {
 // gen_func_8003F698: route geomblk to the per-mode renderer. The generic GT3/GT4 path (forced flag /
 // force-byte / mode≥22 / a table entry that IS gen_func_800803DC) is owned natively; any other mode
 // (a per-scene overlay submitter variant we don't own yet) runs its original per-mode renderer.
+// PSXPORT_DEBUG=pdisp — per-mode dispatch coverage: count native (generic GT3/GT4) vs fallback
+// (unowned overlay-variant) dispatches per present frame, and which mode/target the fallbacks use.
+// Tells us how much of the field's render still flows through interpreted per-mode renderers (the next
+// ownership target). Pure counting, no state change.
+static void pdisp_count(int native, uint32_t mode, uint32_t tgt) {
+  static int s_pd = -1; if (s_pd < 0) s_pd = cfg_dbg("pdisp") ? 1 : 0;
+  if (!s_pd) return;
+  static int last_f = -1, nat = 0, fb = 0; static uint32_t fbmode[32] = {0};
+  if (s_frame != last_f) {
+    if (last_f >= 0) {
+      fprintf(stderr, "[pdisp] f%d native=%d fallback=%d", last_f, nat, fb);
+      for (int m = 0; m < 32; m++) if (fbmode[m]) fprintf(stderr, " m%d=%u", m, fbmode[m]);
+      fprintf(stderr, "\n");
+    }
+    last_f = s_frame; nat = fb = 0; for (int m = 0; m < 32; m++) fbmode[m] = 0;
+  }
+  if (native) nat++; else { fb++; if (mode < 32) fbmode[mode]++; }
+}
+
 static void native_dispatch(R3000* c, uint32_t geomblk, uint32_t otbase, uint32_t flag) {
-  if (mem_r8(MODE_FORCE) != 0 || (flag & 1u)) { native_gt3gt4(c, geomblk, otbase); return; }
+  if (mem_r8(MODE_FORCE) != 0 || (flag & 1u)) { pdisp_count(1, 0, 0); native_gt3gt4(c, geomblk, otbase); return; }
   uint32_t mode = mem_r8(MODE_BYTE);
-  if (mode >= 22) { native_gt3gt4(c, geomblk, otbase); return; }
+  if (mode >= 22) { pdisp_count(1, mode, 0); native_gt3gt4(c, geomblk, otbase); return; }
   uint32_t tgt = mem_r32(MODE_TABLE + mode * 4);
-  if (tgt == 0x800803DCu) { native_gt3gt4(c, geomblk, otbase); return; }
+  if (tgt == 0x800803DCu) { pdisp_count(1, mode, tgt); native_gt3gt4(c, geomblk, otbase); return; }
+  pdisp_count(0, mode, tgt);
   c->r[4] = geomblk; c->r[5] = otbase; c->r[6] = flag;   // unowned overlay variant — original renderer
   rec_dispatch(c, tgt);
 }

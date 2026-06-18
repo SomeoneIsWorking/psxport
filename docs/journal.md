@@ -5073,12 +5073,21 @@ code runs — not `gen_func_8003CDD8`, not the dispatcher `gen_func_8003F698`, n
   entries — the `0x8013xxxx` ones) are NOT owned yet → those modes still run their original per-mode
   renderer via rec_dispatch. That + the byte-packed `0x80027768` are the documented next RE targets
   (engine_re "OPEN — full field depth coverage").
-- **0-DIFF GATE (the real verification, NOT a screenshot):** headless field @present-frame 328, 16:9,
-  `PSXPORT_VRAMDUMP=328:…` → native flush vs `PSXPORT_PEROBJ_RECOMP=1` (recomp body) → **VRAM
-  byte-identical** (`cmp` clean; 135946 non-zero px / 21602 distinct values — a real field, not blank).
-  The override is registered ONLY in the native run, so identical output proves the native flush genuinely
-  carries the render (a dead override would blank the world). A/B flag: `PSXPORT_PEROBJ_RECOMP=1`.
-  Cross-checked robust (not a lucky single match): VRAM byte-identical at 4:3 f328, 16:9 f328, 16:9 f345.
+- **0-DIFF GATE (the real verification, NOT a screenshot):** headless field, 16:9, `PSXPORT_VRAMDUMP`
+  → native flush vs `PSXPORT_PEROBJ_RECOMP=1` (recomp body) → **VRAM byte-identical**. A/B flag:
+  `PSXPORT_PEROBJ_RECOMP=1`.
+- **CORRECTION on the gate frame (don't trust f328):** `PSXPORT_DEBUG=pdisp` (dispatch-coverage probe,
+  engine_submit.c) revealed `gen_func_8003CDD8` / native_dispatch is NOT exercised until **s_frame≈393**
+  — at the standard f328 the playable field is mid-LOAD and the world is drawn by the direct submitters
+  (the byte-packed `0x80027768` etc.), not the per-object deferred flush. So the f328/f345 VRAM matches
+  were VACUOUS (toggling PEROBJ_RECOMP changed nothing there). The VALID gate is a frame where the flush
+  fires: **f410, native=17 dispatches/frame → VRAM byte-identical** native-vs-recomp. (Lesson: gate a lift
+  at a frame where the probe confirms the lifted code actually runs, not just "the field is on screen".)
+- **pdisp finding — the per-object world flush is FULLY native at the field:** every present frame f393+
+  shows `native=17 fallback=0` — all 17 per-object flush dispatches take the native generic GT3/GT4 path
+  (`native_gt3gt4`); ZERO fall to an unowned overlay-variant per-mode renderer. So no guest per-mode
+  renderer runs in the field's per-object flush. (The bulk terrain comes via the separately-owned
+  byte-packed `0x80027768`, a different submit path, not via `8003CDD8`.) Probe: `PSXPORT_DEBUG=pdisp`.
 - **Relation to the margin (later-134):** the margin's `gen_func_8003CCA4(node)` call now routes its
   per-object submission through this native flush; the remaining guest calls (`8003CCA4` transform
   dispatch, `80051C8C` transform build) are gameplay-0-diff (node_diff) and are the next lift so the
