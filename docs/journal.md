@@ -4967,3 +4967,74 @@ pc=0x8003AEA8 for the static layer). Then: build `engine/margin_render.{hpp,cpp}
 objects' cmds to that list. Validate 0-diff vs the rcmd capture (mode+transform+geomblk byte-identical when
 the object is genuinely visible). New probe: `PSXPORT_DEBUG=cmdenq` (taps leaf 0x80051B04; use at the SPAWN
 frame, not steady-state). Probes: rcmd/geomblk/flush/enq/cmdenq + PSXPORT_WWATCH.
+
+## later-133 — the OBJECT NODE *IS* its render-command list; per-object flush = `gen_func_8003CDD8` (THE mechanism)
+later-132's "node+0xc0 = the single persistent command, just re-append it to a flush list" is **INCOMPLETE/
+misleading** — corrected here by tapping the MAJOR flush. Findings (probes `flush2`, `rcmd ra=`, disasm):
+- **The minor flush 0x8003F174 is NOT the world/margin path.** It drains only ONE list (0x800fb218, the
+  8015ca04x24 static-decor layer) - count=24 in 4:3 / 16:9-on / 16:9-off ALIKE (it never carries the margin).
+  The rcmd dispatcher-caller histogram at f2900: **ra=8003d07c -> 100 cmds (world+margin)**, ra=8003f230 -> 24
+  (static). The world/margin flush is the function at **ra 0x8003d07c = `gen_func_8003CDD8`**.
+- **`gen_func_8003CDD8(a0=list, a1=flag)` is called ONCE PER VISIBLE OBJECT, and the `list` arg == the object
+  NODE address.** Each object node embeds its own render-command list: **count at node+8, cmd-ptr ARRAY at
+  node+0xc0[i]** (loop 0x8003ce40: `cmd = node[0xc0 + i*4]`, `geomblk = cmd+0x40`, skip if 0). So node+0xc0 is
+  the *base of an array*, not a single ptr (for count=1 objects it looks like a single ptr -> later-132's view).
+- **The flush COMPOSES the transform itself:** camera rotation (`0x1f8000f8`) x object-local matrix
+  (`cmd+0x18`) via a GTE matmul (cop2 0x4a49e012), and object translation from `cmd+0x2c/0x30/0x34` -> GTE
+  CR5-7. So `cmd+0x18` is the OBJECT-LOCAL matrix (often near-identity) - NOT the camera-composed GTE matrix
+  the rcmd oracle prints. That's why node+0xc0's `cmd+0x18` did NOT match the rcmd `M=`. The dispatcher gets
+  a0=geomblk, a1=OTbase(global `*0x800ED8C8`), a2=flag(=a1 of the flush). Margin objects: flag=0.
+- **PROOF margin = the +24 via per-object flushes:** 16:9-on has 22 `gen_func_8003CDD8` calls at f2900, 16:9-off
+  has 12; the **10 ON-only lists ARE the re-included objects** (list base == cullobj object addr) and their
+  command geomblks are EXACTLY the +24 margin set (800fc6c8 count=12 = the 801e682c..801e6e88 instanced series;
+  800fe5a8 count=4; + 8 count-1 lists = 24). No node+0xc0 reconstruction needed.
+- **WHY poke-+1 perturbs (quantified, `tools/ram_region_diff.py`):** 4:3-vs-16:9-no-reinclude = **4 gameplay
+  bytes** (render pointers 0x800BF4F4/0x800BF544 only) -> widening the projection alone is gameplay 0-diff.
+  4:3-vs-16:9-WITH-reinclude = **5638 gameplay bytes** (object structs @0x800EDxxx/0x800EExxx) -> poking +1 runs
+  the handlers' VISIBLE branch (animation/state), perturbing gameplay. Confirms later-128; rules out poke-+1.
+- **NATIVE PLAN (clean, no reconstruction):** in `ov_object_cull`, when an object is re-include-eligible (wide
+  frustum), DON'T poke +1 - COLLECT the node. After the entity walk, call `gen_func_8003CDD8(node, 0)` per
+  collected node. Renders the persistent per-node command list (camera x object composed by the flush) into
+  the OT, touching only render scratch (OT/packet pool) -> gameplay 0-diff AND margin renders.
+- **NEXT:** implement `engine/margin_render.{hpp,cpp}` (collect-in-cull + flush-after-walk), validate via rcmd
+  that the +24 appear byte-identical AND `ram_region_diff` 4:3-vs-16:9 = ~0 gameplay bytes. Open risk to check
+  empirically: whether a CULLED object's `cmd+0x2c` translation is stale (visible branch may update it) - rcmd
+  byte-match is the test; if stale, refresh from node pos / call the transform-build first.
+  Probe added: `PSXPORT_DEBUG=flush2` (taps `gen_func_8003CDD8`); rcmd now also logs `ra=` (dispatcher caller).
+
+## later-134 — native widescreen margin IMPLEMENTED (engine/margin_render.cpp) + RE REPL tooling
+Built the native margin renderer on the later-133 mechanism. Result: the +24 margin commands render with
+the base world byte-identical and gameplay perturbation collapsed from 5638 B (poke) to 597 B (all render-
+cache). Plus an RE REPL (debug-server commands) so future RE doesn't need a recompile-a-probe loop.
+
+**`engine/margin_render.cpp` (C++/OOP `MarginRenderer`):**
+- `ov_object_cull` (game_tomba2.c): when the wide frustum re-includes an object, instead of poking +1 it
+  calls `margin_collect(node)` (default; `PSXPORT_MARGIN_POKE=1` = old +1 fallback). Filter: entity type
+  `node+0xc == 0x03` (world-geometry) — later-133 proved ONLY type-03 re-included nodes actually render,
+  and they reproduce EXACTLY the +24. Collecting all 58 re-include-eligible nodes over-rendered (+185).
+- After the entity walk (`ov_objwalk`, engine_tomba2.c) → `margin_render_flush(c)`: per collected node,
+  `gen_func_80051C8C(node)` (build the CURRENT transform — culled objects never had it built → otherwise a
+  degenerate zero-rotation matrix) then `gen_func_8003CCA4(node)` (the per-object render dispatch). Touches
+  only render scratch (node+0x98 matrix cache, cmd+0x18 transform, OT/packet pool) — no gameplay logic.
+- **Verified (rcmd oracle, f2900, 16:9):** native = 124 cmds = 100 base + 24 margin. The base 100 are
+  **byte-identical** to 16:9-no-reinclude (`comm` diff = 0 → zero perturbation). The +24 margin geomblks
+  match the real re-include exactly; **translation byte-identical**; rotation matches for 16/24. The other
+  8 are ANIMATED objects where the +1 poke ORACLE is itself perturbed (it ticks the animation), so native
+  (frozen current state) is the correct value, not the poke — rcmd-vs-poke is NOT a valid oracle for those.
+- **Gameplay gate (`tools/ram_region_diff.py`, 4:3 vs 16:9-native @f438): 597 "OTHER" bytes, ALL render-
+  derived** — two clusters: node render-matrix cache (node+0x98..0xb5, e.g. 0x800f0524 = node 800f048c+0x98)
+  and the command-struct transforms (cmd+0x18..0x3c, the 0x800f6exx..0x800f75xx command pool). NONE touch
+  gameplay fields (position +0x2e/32/36, state, AI, timers). vs 5638 B for poke. The matrix is derived from
+  (unchanged) position/rotation — building it earlier (while in the wide margin) has no gameplay feedback.
+- **OPEN:** (a) classify node+0x98..0xc4 + the command pool as RENDER in ram_region_diff so the gate reads a
+  clean 0 (they are render state living in the node/cmd pools). (b) The widescreen PRESENT still crops to the
+  4:3 display region (engine_re "widen draw-env + clip rect to 428" TODO) — so a headless screenshot won't
+  SHOW the margin yet even though it's in the OT; that's a separate present-pipeline task, not the margin RE.
+  (c) confirm the 8 animated objects render at the correct (frozen) pose once present width is fixed.
+
+**RE REPL (runtime/recomp/dbg_server.c, PSXPORT_DEBUG_SERVER=1, client tools/dbgclient.py):** added live
+commands so RE no longer needs a recompiled one-shot probe — `w8/w16/w32 A V` (poke), `call A [a0..a3]`
+(run a guest fn on the live CPU ctx via rec_dispatch, reports v0/v1 — e.g. test 0x80051C8C/0x80051B04
+live), `ents` (walk both entity lists: addr type pos handler rflag cmds geomblk), `node A` (decode one
+node), `geomblk G S` (model-table lookup). `dbg_server_service` now takes the frame `R3000* c` for `call`.
+`runtime/recomp/r3000.h` is now `extern "C"`-guarded so engine/*.cpp link the C ABI symbols.

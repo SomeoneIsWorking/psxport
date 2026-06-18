@@ -6,6 +6,12 @@
 #include <stdint.h>
 #include <string.h>
 
+// This is a C ABI header (generated code + runtime are C). Guard for C++ consumers (e.g. the native
+// engine modules engine/*.cpp) so they link against the C symbols rather than C++-mangled names.
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 typedef struct R3000 {
   uint32_t r[32];   // GPRs; r[0] is hardwired 0 (generated code never writes it)
   uint32_t hi, lo;  // mult/div result registers
@@ -68,3 +74,7 @@ void     gte_op(R3000* c, uint32_t insn);
 // in cpu_support.c) — kept as functions so the emitter stays a thin templater.
 void cpu_div (R3000* c, uint32_t n, uint32_t d);
 void cpu_divu(R3000* c, uint32_t n, uint32_t d);
+
+#ifdef __cplusplus
+}
+#endif

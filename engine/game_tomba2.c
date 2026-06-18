@@ -17,6 +17,7 @@
 // (When a host present loop exists it will pace frames; this just removes the busy-wait.)
 #include "r3000.h"
 #include "cfg.h"
+#include "margin_render.hpp"
 #include <stdlib.h>
 #include <stdio.h>
 
@@ -141,14 +142,25 @@ static void ov_object_cull(R3000* c) {
       int fx = (int16_t)obj_r16(0x1F8000E8), fy = (int16_t)obj_r16(0x1F8000EA), fz = (int16_t)obj_r16(0x1F8000EC);
       long depth = (long)fx*p2 + (long)fy*p3 + (long)fz*p4, den = ((long)dist * 0x1000) >> 10;
       if (den < 1) den = 1;
-      if (depth / den >= cull_fov) { mem_w8(o + 1, 1); c->r[2] = 1;     // re-include: mark visible
+      if (depth / den >= cull_fov) {
+        // NATIVE MARGIN (default, later-133): render this culled object via a post-walk per-node flush
+        // instead of poking +1. Poking +1 runs the handler's VISIBLE branch -> gameplay perturbation
+        // (5638 B). Collecting + flushing the node's persistent command list touches only render scratch
+        // -> margin renders, gameplay 0-diff. A/B: PSXPORT_MARGIN_POKE=1 keeps the old +1 re-include.
+        if (margin_native_enabled()) { margin_collect(o); }
+        else { mem_w8(o + 1, 1); c->r[2] = 1; }                          // re-include: mark visible
         // MEASUREMENT (PSXPORT_DEBUG=cullobj): identify WHAT the margin re-include renders — obj addr,
         // type, model id (+0xe & 0x3fff), model-data ptr (+0x38), pos. Decides static-world vs per-object
         // architecture for approach B. One line per re-include; grep a single frame.
         if (cfg_dbg("cullobj")) {
           extern int s_frame;
-          fprintf(stderr, "[cullobj] f%d obj=%08x type=%02x model=%04x mdata=%08x pos=(%d,%d,%d)\n",
+          uint32_t cmd = mem_r32(o + 0xc0);                       // persistent render-command ptr (later-132)
+          uint32_t gb  = cmd ? mem_r32(cmd + 0x40) : 0;           // its geomblk
+          fprintf(stderr, "[cullobj] f%d obj=%08x type=%02x model=%04x mdata=%08x cmd=%08x geomblk=%08x x18=",
                   s_frame, o, otype, obj_r16(o + 0x0e) & 0x3fff, mem_r8(o+0x38)|(mem_r8(o+0x39)<<8)|(mem_r8(o+0x3a)<<16)|(mem_r8(o+0x3b)<<24),
+                  cmd, gb);
+          for (int j = 0; j < 8; j++) fprintf(stderr, "%s%08x", j ? "," : "", cmd ? mem_r32(cmd + 0x18 + j*4) : 0);
+          fprintf(stderr, " pos=(%d,%d,%d)\n",
                   (int16_t)obj_r16(o + 0x2e), (int16_t)obj_r16(o + 0x32), (int16_t)obj_r16(o + 0x36));
         }
         // MEASUREMENT (PSXPORT_DEBUG=cullinc): per-type tally of objects the wide re-include actually
@@ -408,6 +420,8 @@ void games_tomba2_init(void) {
   // Flush tap (PSXPORT_DEBUG=flush): dump the command-struct addresses (list+0xc0[i]) the flush drains, to
   // trace the still-open render-command enqueue. later-131. Gated (super-call).
   if (cfg_dbg("flush")) { void ov_flush_probe(R3000*); rec_set_override(0x8003F174u, ov_flush_probe); }
+  // Major flush tap (PSXPORT_DEBUG=flush2): the world/margin flush gen_func_8003CDD8 (later-133). Gated.
+  if (cfg_dbg("flush2")) { void ov_flush2_probe(R3000*); rec_set_override(0x8003CDD8u, ov_flush2_probe); }
   // Command-enqueue tap (PSXPORT_DEBUG=cmdenq): gen_func_80051B70, validates obj/(group,sub)→geomblk. later-132.
   if (cfg_dbg("cmdenq")) { void ov_cmdenq_probe(R3000*); rec_set_override(0x80051B04u, ov_cmdenq_probe); }
   void engine_tomba2_init(void);

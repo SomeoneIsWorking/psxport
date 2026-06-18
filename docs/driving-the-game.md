@@ -50,6 +50,19 @@ Launch with `PSXPORT_DEBUG_SERVER=1` (port 5959) **and a high `PSXPORT_NATIVE_FR
 - `vkshot [path]` (headless VK readback → PPM), `shot [path]` (SW), `gputrace [path]` (arm a gpu_differ capture).
 - `pause` / `play` / `step`.
 
+### RE commands (later-134) — inspect/poke/call live, no recompile-a-probe loop
+- `w8 A V` / `w16 A V` / `w32 A V` — poke a byte/half/word into guest RAM (hex addr + value).
+- `call A [a0 a1 a2 a3]` — run the guest function at A on the live CPU context (rec_dispatch), report
+  `v0`/`v1`. SIDE EFFECTS ARE REAL (runs at the frame boundary). E.g. `call 80051c8c <node>` builds an
+  object's transform; `call 80051b04 <cmd> <group> <sub>` exercises the geomblk leaf.
+- `ents` — walk BOTH entity lists (heads 0x800fb168 / 0x800f2624): per node `addr type pos handler
+  rflag cmds geomblk`. The fastest way to see what's spawned + each object's render-command count.
+- `node A` — decode one entity node (type/state/rflag/handler/pos/rot/model/cmd-list at node+0xc0[]).
+- `geomblk G S` — model-table lookup `T=*(0x800ECF58+G*4); geomblk=T+*(T+S*4+4)` (the data-driven
+  geometry resolver, RE later-132).
+- Headless-present NOTE: `vkshot` crops to the 4:3 display region; widescreen present width (428) is a
+  separate TODO, so the wide margin is in the OT but won't SHOW in a shot yet — verify it via `rcmd`.
+
 ## 4. Scene-state signals (RE — to know WHERE you are without screenshots)
 - `*(u8)0x800BE258` — **0** = StrPlayer/overlay (logos/title/Loading); **2** (sticky) = 3D engine live
   (gameplay OR attract demo).

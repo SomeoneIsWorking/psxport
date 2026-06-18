@@ -105,8 +105,8 @@ static void geomblk_dump(const char* kind, uint32_t rec, uint32_t count, uint32_
 void ov_render_cmd_probe(R3000* c) {
   if (cfg_dbg("rcmd") && probe_frame_ok()) {
     uint8_t mode = mem_r8(0x800BF870u);
-    fprintf(stderr, "[rcmd] f%d mode=%02x geomblk=%08x ot=%08x flag=%08x M=",
-            s_frame, mode, c->r[4], c->r[5], c->r[6]);
+    fprintf(stderr, "[rcmd] f%d mode=%02x geomblk=%08x ot=%08x flag=%08x ra=%08x M=",
+            s_frame, mode, c->r[4], c->r[5], c->r[6], c->r[31]);
     for (int i = 0; i < 8; i++) fprintf(stderr, "%s%08x", i ? "," : "", (uint32_t)gte_read_ctrl(i));
     fprintf(stderr, "\n");
   }
@@ -145,6 +145,30 @@ void ov_flush_probe(R3000* c) {
     }
   }
   rec_super_call(c, 0x8003F174u);
+}
+
+// PSXPORT_DEBUG=flush2 — the MAJOR flush tap (gen_func_8003CDD8). later-133: the dispatcher-caller histogram
+// (rcmd ra=8003d07c, 100 cmds) traced the world/margin flush to this function, NOT the minor 0x8003F174
+// (24 static-decor cmds, ra=8003f230). Args: a0=command list, a1=OT base. Loop (0x8003ce40): count=list+8,
+// cmd = list[0xc0 + i*4], geomblk=cmd+0x40; the GTE transform is camera(0x1f8000f8) × object-matrix(cmd+0x18)
+// composed at flush, translation from cmd+0x2c/0x30/0x34. Dumps each command STRUCT address + its geomblk +
+// the object-local matrix/translation so the +24 margin command structs can be located (compare ON vs OFF)
+// and their stability/persistence + the per-frame append site established. Super-calls original.
+void ov_flush2_probe(R3000* c) {
+  if (cfg_dbg("flush2") && probe_frame_ok()) {
+    uint32_t list = c->r[4];
+    uint32_t count = mem_r8(list + 8);
+    fprintf(stderr, "[flush2] f%d list=%08x count=%u ot=%08x\n", s_frame, list, count, c->r[5]);
+    for (uint32_t i = 0; i < count; i++) {
+      uint32_t cmd = mem_r32(list + 0xc0 + i*4);
+      uint32_t gb  = cmd ? mem_r32(cmd + 0x40) : 0;
+      fprintf(stderr, "[flush2]   cmd[%u]=%08x geomblk=%08x objM=%08x,%08x,%08x trans=%04x,%04x,%04x\n",
+              i, cmd, gb,
+              cmd ? mem_r32(cmd + 0x18) : 0, cmd ? mem_r32(cmd + 0x1c) : 0, cmd ? mem_r32(cmd + 0x20) : 0,
+              cmd ? mem_r16(cmd + 0x2c) : 0, cmd ? mem_r16(cmd + 0x30) : 0, cmd ? mem_r16(cmd + 0x34) : 0);
+    }
+  }
+  rec_super_call(c, 0x8003CDD8u);
 }
 
 // PSXPORT_DEBUG=cmdenq — render-command ENQUEUE tap (later-132). gen_func_80051B70 enqueues one object's

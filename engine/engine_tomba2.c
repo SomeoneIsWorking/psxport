@@ -16,6 +16,7 @@
 #include "r3000.h"
 #include "cfg.h"
 #include "tomba2_types.h"
+#include "margin_render.hpp"
 #include <stdint.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -54,6 +55,11 @@ static void ov_objwalk(R3000* c) {
   long nodes = 0;
   walk_list(c, mem_r32(T2_OBJLIST_HEAD_1), &nodes);
   walk_list(c, mem_r32(T2_OBJLIST_HEAD_2), &nodes);
+
+  // Native widescreen margin (later-133): render the objects the wide frustum re-included (collected by
+  // ov_object_cull during the walk) via per-node flushes here — after all handlers ran, before the OT is
+  // submitted. No +1 poke -> the handlers stayed in their culled branch -> gameplay 0-diff.
+  margin_render_flush(c);
 
   if (s_dbg < 0) s_dbg = cfg_dbg("engine") ? 1 : 0;
   if (s_dbg && (s_walks % 300) == 0)
