@@ -5078,6 +5078,7 @@ code runs — not `gen_func_8003CDD8`, not the dispatcher `gen_func_8003F698`, n
   byte-identical** (`cmp` clean; 135946 non-zero px / 21602 distinct values — a real field, not blank).
   The override is registered ONLY in the native run, so identical output proves the native flush genuinely
   carries the render (a dead override would blank the world). A/B flag: `PSXPORT_PEROBJ_RECOMP=1`.
+  Cross-checked robust (not a lucky single match): VRAM byte-identical at 4:3 f328, 16:9 f328, 16:9 f345.
 - **Relation to the margin (later-134):** the margin's `gen_func_8003CCA4(node)` call now routes its
   per-object submission through this native flush; the remaining guest calls (`8003CCA4` transform
   dispatch, `80051C8C` transform build) are gameplay-0-diff (node_diff) and are the next lift so the
