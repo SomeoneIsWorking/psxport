@@ -776,17 +776,20 @@ static void submit_terrain(R3000* c) {
   gte_write_ctrl(21, 0); gte_write_ctrl(22, 0); gte_write_ctrl(23, 0);
   uint32_t ir0 = (uint32_t)((128 - (int16_t)mem_r16(node + 78)) << 5);
   int32_t a80 = (int16_t)mem_r16(node + 80);
-  int32_t p1 = (int32_t)(int16_t)mem_r16(node + 64) * a80;
-  mem_w8(A2_PARAM + 0, (uint8_t)(p1 >> 11));
-  int32_t p2 = (int32_t)(int16_t)mem_r16(node + 66) * a80;
+  // HOST: the two sway-angle bytes are terrain-internal temps — compute them in host (no 0x800A2014
+  // main-RAM writes). The middle byte is set elsewhere → READ it (mem_r8). They scale <<2 into the
+  // secondary-rotation args. (IR0 + the SCR matrix-build args still go to guest scratch until the
+  // submitter/matrix-build sub-fns are host — see the function note.)
+  uint8_t sway0 = (uint8_t)(((int32_t)(int16_t)mem_r16(node + 64) * a80) >> 11);
+  uint8_t sway2 = (uint8_t)(((int32_t)(int16_t)mem_r16(node + 66) * a80) >> 11);
+  uint8_t sway1 = mem_r8(A2_PARAM + 1);                 // external (read-only here)
   mem_w32(IR0_STAGE, ir0);
-  mem_w8(A2_PARAM + 2, (uint8_t)(p2 >> 11));
   // build object rotation matrix at scratch SCR from the node's euler angles (node+84/86/88)
   c->r[4] = node + 84; c->r[5] = SCR; rec_dispatch(c, 0x80085480u);
-  // secondary sway rotation by the two computed angle bytes (+ the middle byte from the build)
-  mem_w32(SCR + 0x1C0, (uint32_t)mem_r8(A2_PARAM + 0) << 2);
-  mem_w32(SCR + 0x1C4, (uint32_t)mem_r8(A2_PARAM + 1) << 2);
-  mem_w32(SCR + 0x1C8, (uint32_t)mem_r8(A2_PARAM + 2) << 2);
+  // secondary sway rotation by the host-computed angle bytes (scaled <<2)
+  mem_w32(SCR + 0x1C0, (uint32_t)sway0 << 2);
+  mem_w32(SCR + 0x1C4, (uint32_t)sway1 << 2);
+  mem_w32(SCR + 0x1C8, (uint32_t)sway2 << 2);
   c->r[4] = SCR; c->r[5] = SCR + 0x1C0; rec_dispatch(c, 0x80084520u);
   // HOST-MEMORY compose: read the object matrix the build wrote (SCR cols, READ), compose with the camera
   // in host C locals, load only the GTE regs (hardware). No guest-RAM writes here.
