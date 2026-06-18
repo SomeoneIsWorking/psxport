@@ -601,15 +601,24 @@ static void pdisp_count(int native, uint32_t mode, uint32_t tgt) {
   if (native) nat++; else { fb++; if (mode < 32) fbmode[mode]++; }
 }
 
+// The mode dispatcher gen_func_8003F698 indexes a 22-entry table @0x80015268 by *0x800BF870; the entries
+// are the dispatcher's OWN internal case-label addresses (0x8003F6xx), NOT renderer function pointers —
+// each label then calls the real per-mode renderer. The GENERIC GT3/GT4 path is the label 0x8003F788
+// (modes 3 + 9..0x13, and the force/flag/mode≥22 early-outs all branch here → func_800803DC). So we own
+// the generic path natively (native_gt3gt4) ONLY when it is provably generic; for any other mode we MUST
+// run the real dispatcher gen_func_8003F698 (it owns its internal jump table + the per-mode renderers we
+// haven't lifted) — dispatching to the raw table entry ourselves would jump into the middle of 8003F698
+// and execute garbage (the f434 margin hang, found via gdb on the live process).
+#define DISPATCH_GENERIC 0x8003F788u             // mode-table entry = the generic GT3/GT4 case label
 static void native_dispatch(R3000* c, uint32_t geomblk, uint32_t otbase, uint32_t flag) {
   if (mem_r8(MODE_FORCE) != 0 || (flag & 1u)) { pdisp_count(1, 0, 0); native_gt3gt4(c, geomblk, otbase); return; }
   uint32_t mode = mem_r8(MODE_BYTE);
   if (mode >= 22) { pdisp_count(1, mode, 0); native_gt3gt4(c, geomblk, otbase); return; }
   uint32_t tgt = mem_r32(MODE_TABLE + mode * 4);
-  if (tgt == 0x800803DCu) { pdisp_count(1, mode, tgt); native_gt3gt4(c, geomblk, otbase); return; }
+  if (tgt == DISPATCH_GENERIC) { pdisp_count(1, mode, tgt); native_gt3gt4(c, geomblk, otbase); return; }
   pdisp_count(0, mode, tgt);
-  c->r[4] = geomblk; c->r[5] = otbase; c->r[6] = flag;   // unowned overlay variant — original renderer
-  rec_dispatch(c, tgt);
+  c->r[4] = geomblk; c->r[5] = otbase; c->r[6] = flag;   // unowned mode — run the REAL dispatcher
+  rec_dispatch(c, 0x8003F698u);
 }
 
 static void submit_perobj_flush(R3000* c) {
@@ -811,6 +820,32 @@ static void submit_terrain(R3000* c) {
 void ov_terrain(R3000* c) {
   if (cfg_on("PSXPORT_PEROBJ_RECOMP")) { rec_super_call(c, 0x8002AB5Cu); return; }
   submit_terrain(c);
+}
+
+// NATIVE per-object TRANSFORM BUILD — gen_func_80051C8C (later-135). Build the object's render matrix
+// cache at node+0x98 each frame: seed an identity (0x1000 diagonal), apply the three euler rotations
+// (node+0x54/56/58 via the matrix primitives 80084D10/EB0/85050), set the translation node+0xac/b0/b4
+// from the gameplay position node+0x2e/32/36, then propagate to the command struct (80051464). The
+// per-object flush (8003CDD8) reads this matrix (cmd+0x18); the widescreen margin calls this before its
+// render (its last remaining guest call). Interpreted-only (fn-ptr reached) → seeded + decoded. We own
+// the orchestration + memory writes; the rotation/propagate leaves stay primitives (rec_dispatch), as
+// the recomp body calls them. A/B: PSXPORT_PEROBJ_RECOMP=1.
+static void build_xform(R3000* c) {
+  uint32_t node = c->r[4];
+  mem_w32(node + 152, 0x1000); mem_w32(node + 156, 0); mem_w32(node + 160, 0x1000);
+  mem_w32(node + 164, 0);      mem_w32(node + 168, 0x1000); mem_w32(node + 172, 0);
+  mem_w32(node + 176, 0);      mem_w32(node + 180, 0);
+  c->r[4] = (uint32_t)(int16_t)mem_r16(node + 84); c->r[5] = node + 152; rec_dispatch(c, 0x80084D10u);
+  c->r[4] = (uint32_t)(int16_t)mem_r16(node + 86); c->r[5] = node + 152; rec_dispatch(c, 0x80084EB0u);
+  c->r[4] = (uint32_t)(int16_t)mem_r16(node + 88); c->r[5] = node + 152; rec_dispatch(c, 0x80085050u);
+  mem_w32(node + 172, (uint32_t)(int16_t)mem_r16(node + 46));
+  mem_w32(node + 176, (uint32_t)(int16_t)mem_r16(node + 50));
+  mem_w32(node + 180, (uint32_t)(int16_t)mem_r16(node + 54));
+  c->r[4] = node; rec_dispatch(c, 0x80051464u);
+}
+void ov_build_xform(R3000* c) {
+  if (cfg_on("PSXPORT_PEROBJ_RECOMP")) { rec_super_call(c, 0x80051C8Cu); return; }
+  build_xform(c);
 }
 
 // PSXPORT_DEBUG=subcnt — submitter call-counter. Registered (super-call) on candidate submit fns to see

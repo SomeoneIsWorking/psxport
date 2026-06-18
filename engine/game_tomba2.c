@@ -411,10 +411,12 @@ void games_tomba2_init(void) {
   // re-overrides the same addr below with the probe, which super-calls the recomp body.)
   if (!cfg_on("PSXPORT_PEROBJ_RECOMP")) {
     void ov_perobj_flush(R3000*), ov_perobj_render(R3000*), ov_render_walk(R3000*), ov_terrain(R3000*);
-    rec_set_override(0x8003CDD8u, ov_perobj_flush);
-    rec_set_override(0x8003CCA4u, ov_perobj_render);   // per-object render dispatch (flush-only case native)
-    rec_set_override(0x8003C048u, ov_render_walk);     // phase-2 render-list walk (own-when-handleable)
-    rec_set_override(0x8002AB5Cu, ov_terrain);         // field terrain/map renderer (node+24 of t32 node)
+    if (!cfg_on("PSXPORT_NO_FLUSH"))  rec_set_override(0x8003CDD8u, ov_perobj_flush);
+    if (!cfg_on("PSXPORT_NO_DISP"))   rec_set_override(0x8003CCA4u, ov_perobj_render);  // per-object render dispatch
+    if (!cfg_on("PSXPORT_NO_WALK"))   rec_set_override(0x8003C048u, ov_render_walk);    // phase-2 render-list walk
+    if (!cfg_on("PSXPORT_NO_TERRAIN")) rec_set_override(0x8002AB5Cu, ov_terrain);       // field terrain renderer
+    void ov_build_xform(R3000*);
+    if (!cfg_on("PSXPORT_NO_XFORM")) rec_set_override(0x80051C8Cu, ov_build_xform);     // per-object transform builder
   }
   fps60_init();
   // cull tap: ALWAYS registered — genuine-wide is the default wide path and the overlay can toggle aspect

@@ -5132,12 +5132,27 @@ code runs — not `gen_func_8003CDD8`, not the dispatcher `gen_func_8003F698`, n
   submit the terrain geomblk `0x800A1AE8` via the already-owned byte-packed `0x80027768`. **VRAM
   byte-identical** native vs full recomp @f410 AND @f420; deterministic (2 runs identical). With this the
   ENTIRE field render — list walk → per-object dispatch → flush → terrain → submit — is native C.
-- **Seeded for RE (emit.py EXTRA_SEEDS):** `0x8002AB5C` + `0x80051C8C` (interpreted-only, fn-ptr-reached)
-  now emit readable C in generated/. `80051C8C` (transform build: init node+0x98 identity, 3 euler rots
-  `80084D10/EB0/85050`, translation node+0xac from pos node+0x2e, propagate `80051464`) is decoded and
-  ready to port — that completes the native widescreen margin (it's the last guest call margin makes).
-- **NEXT (in order):** (1) own `gen_func_80051C8C` (transform build) → native widescreen margin (replace
-  the guest-flush margin_render.cpp). (2) drive to scenes using `0x8003B320`/`0x8003C8F4`/
+- **`gen_func_80051C8C` (per-object TRANSFORM BUILD) now OWNED** (`build_xform`): init node+0x98 identity
+  (0x1000 diagonal), 3 euler rotations (`80084D10/EB0/85050`, kept as matrix primitives), translation
+  node+0xac/b0/b4 from position node+0x2e/32/36, propagate to the command struct (`80051464`).
+  Interpreted-only → seeded + decoded + ported. VRAM byte-identical native vs recomp @f450 (where it
+  fires), deterministic. This is the last guest call the margin makes.
+- **CRITICAL BUG fixed (native_dispatch) — found by live gdb on the hung process.** A single-frame VRAM
+  diff (f410) does NOT prove the game keeps RUNNING: full-native HUNG at ~f434 while recomp reached f600.
+  gdb backtrace: `margin_render_flush → 8003CCA4(native) → submit_perobj_flush → native_dispatch →
+  rec_interp(pc=0x1F49E010 garbage)`. Root cause: the mode-table `0x80015268[mode]` entries are the
+  dispatcher `gen_func_8003F698`'s OWN internal case-label addresses (`0x8003F6xx`), NOT renderer fn
+  pointers; my fallback `rec_dispatch(tgt)` jumped into the MIDDLE of 8003F698 → ran garbage. Dormant at
+  the field (always generic, `fallback=0`); the margin (mode=0, flag=0) triggered it. Also my "generic"
+  sentinel was wrong (`0x800803DC` vs the real label `0x8003F788`). Fix: for unowned modes run the REAL
+  dispatcher `gen_func_8003F698` (it owns its internal jump table); native fast-path only when provably
+  generic (`tgt==0x8003F788` / force / flag&1 / mode≥22). After the fix full-native reaches f600, VRAM
+  0-diff at f410 + f450. **LESSON: verify the game PROGRESSES (runs to f600), not just one frame's pixels.**
+- The full FIELD render path is now native C end-to-end (walk → dispatch → flush+native_dispatch →
+  terrain → transform-build → owned submitters), 0-diff vs recomp, no hang, deterministic. Per-override
+  A/B gates added: `PSXPORT_NO_{FLUSH,DISP,WALK,TERRAIN,XFORM}=1`.
+- **NEXT (in order):** (1) native widescreen margin (replace the guest-flush margin_render.cpp; all its
+  callees — 80051C8C, 8003CCA4 — are now native). (2) drive to scenes using `0x8003B320`/`0x8003C8F4`/
   overlay `0x8013xxxx` and port those submit variants. (3) own `gen_func_80051C8C` (transform build,
   interpreted-only — RE from RAM). (4) native widescreen margin (replace the guest-flush margin_render.cpp).
 - Probes added this session: `PSXPORT_DEBUG=pdisp` (dispatch coverage), `subcnt` (submitter call counts),
