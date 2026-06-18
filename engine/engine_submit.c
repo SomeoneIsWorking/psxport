@@ -786,7 +786,8 @@ void ov_rlist_probe(R3000* c) {
     for (; n && guard < 64; n = mem_r32(n + 36), guard++) {
       uint8_t live = mem_r8(n + 1), t = mem_r8(n + 0xB);
       uint32_t tgt = (t < 33) ? mem_r32(0x80014DB8u + t * 4) : 0;
-      fprintf(stderr, " [%08x l%u t%u→%08x]", n, live, t, tgt);
+      uint32_t rfn = mem_r32(n + 24);      // the node's own render fn ptr (used by the default case)
+      fprintf(stderr, " [%08x l%u t%u→%08x rfn=%08x]", n, live, t, tgt, rfn);
     }
     fprintf(stderr, "\n");
   }

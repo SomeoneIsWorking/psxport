@@ -411,6 +411,12 @@ def main():
     # OR a native printf override to work (see docs/recomp_port_plan.md).
     EXTRA_SEEDS = {
         0x8009A76C,  # printf/format-parser, reached only via fn-pointer (jalr), Ghidra-missed
+        # --- engine render functions reached ONLY via a function pointer (so direct-jal discovery
+        #     misses them) — seeded to EMIT readable C for the native-engine RE/port (later-135). The
+        #     runtime is interpreter-only, so seeding doesn't change execution; it makes the body
+        #     available in generated/ for RE (and rec_set_override works on them by address regardless).
+        0x8002AB5C,  # field terrain/map renderer — node+24 render-fn ptr of the t32 render-list node
+        0x80051C8C,  # per-object transform builder (node+0x98 matrix from euler angles + position)
         # --- native-override targets: seed so the func_<addr> wrapper exists and
         #     rec_set_override(addr,fn) reaches them (rec_set_override only works on RECOMPILED
         #     entries). libcard B0-vector I/O trampolines, overridden by memcard.c for native
