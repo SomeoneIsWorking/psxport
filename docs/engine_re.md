@@ -1,9 +1,11 @@
 # Tomba! 2 engine RE — the game's own engine (for the native reimplementation)
 
-Living doc for the native-engine port (plan: reimplement Tomba2's engine in PC-native C, oracle =
-the recompiled MIPS body). Source for all line refs: `scratch/decomp/ram_f1000_all.c` (Ghidra decomp of
-MAIN.EXE). Addresses are PSX RAM virtual addresses. **Verify against the recomp body before relying on
-any field — decomp is point-in-time.**
+Living doc for the native-engine port (plan: reimplement Tomba2's engine in PC-native C). **Runtime is
+INTERPRETER-ONLY (later-103):** un-owned code runs the real PSX binary on the flat interpreter; the static
+recompiler is an offline analysis aid only. The **verification oracle is the Beetle emulator**
+(`runtime/wide60rt`). Source for all line refs: `scratch/decomp/ram_f1000_all.c` (Ghidra decomp of
+MAIN.EXE). Addresses are PSX RAM virtual addresses. **Verify against the oracle (or the original interpreted
+path) before relying on any field — decomp is point-in-time.**
 
 ## Top-level control flow
 - **Main loop** `FUN_80050b08` (`:31269`, override `ov_game_main`). After GPU/double-buffer + lib init,
@@ -461,10 +463,10 @@ functions — they're reached only from overlay code + a jump table. Layout:
   game" (death/continue), `FUN_8007ed5c` Save prompt, `FUN_8007ef60` "OK to quit game?".
 
 ## Engine ownership status → `docs/engine-ownership-audit.md`
-The actionable map of what the native engine OWNS vs. what still runs as recompiled MIPS (the "black box"),
-why widescreen corrupts (clip+cull+2D layers stay 4:3 while we fake the FB wide), and the prioritized,
+The actionable map of what the native engine OWNS vs. what still runs **on the interpreter** (the "black
+box"), why widescreen corrupts (clip+cull+2D layers stay 4:3 while we fake the FB wide), and the prioritized,
 oracle-gated port plan to own the render/camera/submit layer for REAL widescreen. **Read it before render/
-camera/widescreen work.** (Gameplay logic stays the recomp oracle by design.)
+camera/widescreen work.** (Gameplay logic stays interpreted — the Beetle emulator is the oracle, by design.)
 
 ## Open RE items (next, in order)
 1. ~~The entity list + its walk~~ — **DONE** (above): lists `DAT_800fb168`/`DAT_800f2624`, walk

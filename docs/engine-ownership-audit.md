@@ -1,21 +1,34 @@
-# Engine ownership audit — what the native engine owns vs. what is still a recomp black box
+# Engine ownership audit — what the native engine owns vs. what still runs on the interpreter
 
 Written 2026-06-18 (later-114) in response to: "the game becomes completely corrupted [in widescreen],
 which tells me most of the game engine is still a black box — port the render/camera layer."
 
-**Direction (user-confirmed):** own the **render + camera + submit pipeline** natively so widescreen and
-PC effects are REAL (the game renders a true wider frustum), not framebuffer hacks. **Gameplay logic
-(per-entity AI, physics, rules) STAYS as the recompiled MIPS in guest RAM** — it is our bit-exact oracle,
-not a black box; reimplementing it by hand would be enormous and would throw away the thing that proves
-each native piece correct. This audit maps what is owned, what is NOT, why widescreen corrupts, and the
-order to close the gaps. **Read `docs/engine_re.md` first** — this is its actionable index, not a re-derivation.
+**Architecture (do not get this wrong — later-103):** the port is **interpreter-only**. The real MAIN.EXE
++ runtime overlays are loaded into guest RAM and executed by the **flat interpreter** (`interp.c`
+`interp_flat`; `rec_coro_run`/`rec_interp` are thin wrappers). The static recompiler (`tools/recomp/emit.py`
+→ `generated/`) is an **OFFLINE analysis aid only** (`PSXPORT_RECOMP=1`) — it is NOT linked into the runtime
+and NOT in the execution path. So everything that isn't a PC-native override **runs on the interpreter**, not
+recompiled code. "Owning" a function = replacing its interpreted execution with native C via
+`rec_set_override`. The **verification ORACLE is the Beetle emulator** (`runtime/wide60rt`), not recomp.
+
+**Direction (user-confirmed, later-115): FULL ownership of the engine layer — NO faking.** Own the entire
+**render + camera + submit + loop pipeline** natively, and **retire every renderer-side fake**: the
+FB-widescreen hack (`push_wide` / `WIDE_OFF` / the wide scratch FB) and the sprite-anchor FB hack
+(`gpu_vk_sprite_anchor_dx`) all go away once the engine itself produces a genuinely wider frame. Widescreen
+and PC effects must come from a real wider frustum, not a post-stretch. **Gameplay logic (per-entity AI,
+physics, rules) STAYS running on the interpreter (the real PSX code in guest RAM)** — it is our bit-exact
+oracle, not a black box; reimplementing it by hand would be enormous and throw away what proves each native
+piece correct. This audit maps what is owned, what is NOT, why widescreen corrupts, and the order to close
+the gaps. **Read `docs/engine_re.md` first** — this is its actionable index, not a re-derivation.
 
 ## How "ownership" works (so the plan is concrete)
-Every render call the recompiled game makes goes through **Sony libgpu**, dispatched via a fn-ptr table at
-**`0x800A5998`** (the "GPU sys" struct). We take a function over with `rec_set_override(addr, native_fn)`,
-which KEEPS the recomp body callable as a super-call → A/B-diffable. A function is "owned" only when its
-native version is **0-pixel / 0-state diff vs the recomp body on real gameplay** (`PSXPORT_*_RECOMP=1`
-toggles per subsystem; verify with the oracle, never by eye — `docs/gfx-debug.md`).
+Every render call the game makes (executing on our interpreter) goes through **Sony libgpu**, dispatched via
+a fn-ptr table at **`0x800A5998`** (the "GPU sys" struct). We take a function over with
+`rec_set_override(addr, native_fn)`; `rec_super_call` re-runs the ORIGINAL function on the interpreter, so it
+stays callable for A/B comparison. A function is "owned" only when its native version is **0-pixel / 0-state
+diff vs. the original (interpreted) path AND the Beetle oracle on real gameplay**. The legacy-named
+`PSXPORT_*_RECOMP=1` flags just **disable the native override** (run the original on the interpreter) for
+that A/B. Verify with the oracle, never by eye — `docs/gfx-debug.md`.
 
 ---
 
@@ -39,12 +52,13 @@ submit emitters, asset upload, and the frame fence. **The projection numbers and
 
 ---
 
-## B. NOT OWNED — still recompiled MIPS (the black box), by subsystem
+## B. NOT OWNED — still running on the interpreter (the black box), by subsystem
+These functions still execute as the original PSX code on the flat interpreter (no native override yet).
 Ordered by how directly each blocks faithful widescreen/effects.
 
 ### B1. Screen geometry: PutDrawEnv + PutDispEnv  ← THE widescreen blocker
 - **`0x800815D0` PutDrawEnv** (draw-area CLIP rect + draw offset) and **`0x8008179C` PutDispEnv** (display
-  area, GP1) are still recomp. They set the **320-wide clip**. Our current "widescreen" never widens this —
+  area, GP1) still run on the interpreter. They set the **320-wide clip**. Our current "widescreen" never widens this —
   it renders the native 4:3 output into a wider scratch FB and spreads vertices in a shader. That is the
   hack. Owning these two (+ widening the clip to match a wider OFX) makes the GPU itself accept a wider frame.
 
@@ -62,21 +76,21 @@ Ordered by how directly each blocks faithful widescreen/effects.
 ### B4. Screen-space 2D layers: water / sky backdrop + HUD sprites
 - Water + sky are **NOT GTE-projected** — fixed screen-space layers (`engine_re.md` "Water + sky"). HUD/UI
   sprites (GP0 `0x60-0x7F`) likewise bypass the GTE. In widescreen these must be widened/edge-anchored at the
-  SOURCE (their submit), not via the FB shader hack `gpu_vk_sprite_anchor_dx`. Currently recomp + FB-hack.
+  SOURCE (their submit), not via the FB shader hack `gpu_vk_sprite_anchor_dx`. Currently interpreted + FB-hack.
 
 ### B5. The dominant projection-and-submit OVERLAY emitters
 - `0x80109C80` (4689/frame) and `0x801099B4` (2025/frame) are **runtime-loaded overlay code**, not statically
   disassemblable, and emit most field polys. We own their DEPTH function-agnostically (attach-by-address,
-  100%), but the **packet build/submit is still their recomp**. Fine for faithful render; matters if widescreen
+  100%), but the **packet build/submit still runs interpreted**. Fine for faithful render; matters if widescreen
   needs per-emitter awareness. Likely handled generically by B1–B3, not per-function.
 
 ### B6. VRAM copies + OT lifecycle (lower urgency)
 - **MoveImage `0x800812D8`**, **StoreImage `0x80081278`**, **ClearImage `0x800810F0/180`**, **ClearOTagR
-  `0x80081458`** (OT clear/build) — still recomp. Own these for fade/copy effects and native OT building
+  `0x80081458`** (OT clear/build) — still interpreted. Own these for fade/copy effects and native OT building
   (also the path to clean 60fps interpolation). Not a widescreen blocker.
 
 ### B7. Camera basis / per-object transform load (Phase 3)
-- The per-object rotation matrix → GTE CR0-7 before each RTP (96/54 static ctc2 sites) is still recomp. Owning
+- The per-object rotation matrix → GTE CR0-7 before each RTP (96/54 static ctc2 sites) still runs interpreted. Owning
   it is the native entity-transform path (interpolation), not needed for widescreen.
 
 ---
@@ -111,7 +125,7 @@ any of this: reproduce + characterize the corruption with the render tooling, no
    then camera-basis/per-object transform (B7) for native interpolation.
 
 ## E. Verification protocol (every step)
-- **Faithful-first:** each new override keeps the recomp body; a `PSXPORT_*_RECOMP=1` flag A/B-toggles it.
+- **Faithful-first:** each new override keeps the original (interpreted) path callable via rec_super_call; a `PSXPORT_*_RECOMP=1` flag A/B-toggles it.
 - **Gate = 0-diff vs oracle on real gameplay** (RAM/GP0/VRAM diff via `tools/drive.py` + Beetle; render-diff
   via `gpu_differ`), at 4:3 BEFORE enabling any widen. Widescreen "looks right" is never the gate.
 - Default stays faithful (no mod forces a render change); widescreen is opt-in until it is 0-diff at 4:3 and

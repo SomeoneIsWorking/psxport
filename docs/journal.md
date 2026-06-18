@@ -4317,4 +4317,16 @@ the render/camera layer." Two things:
   (DrawOTag, projection math+depth, resident submit, asset upload) vs the black box (PutDrawEnv/PutDispEnv,
   projection-config, frustum cull, 2D water/sky/HUD, overlay emitters, VRAM copies, camera basis), why
   widescreen corrupts, and a prioritized, oracle-gated port plan (diagnose → PutDrawEnv/Env → OFX config →
-  frustum cull → 2D layers → retire the FB hack). Scope confirmed: gameplay logic STAYS the recomp oracle.
+  frustum cull → 2D layers → retire the FB hack). Scope confirmed: gameplay logic STAYS interpreted (the
+  Beetle emulator is the oracle). **Terminology correction (user caught it):** the runtime is
+  INTERPRETER-ONLY (later-103) — un-owned code runs on the flat interpreter, NOT recompiled; the recompiler
+  is an offline analysis aid. Fixed the audit + engine_re.md wording ("recomp MIPS" → "interpreter").
+
+## later-115 — DIRECTIVE: full ownership of the engine layer, no faking (respawn-driven)
+User: "the next step is full ownership of the game engine, no faking anything, respawn when you need to."
+= execute the WHOLE `docs/engine-ownership-audit.md` plan to completion: own the entire render/camera/submit/
+loop layer natively, RETIRE every renderer-side fake (the FB-widescreen hack `push_wide`/`WIDE_OFF`/aspect
+scratch FB, the sprite-anchor FB hack), so widescreen/effects come from a genuinely wider engine frame.
+Gameplay logic stays interpreted (oracle = Beetle). Handed off to a fresh session via `cci respawn` with
+`scratch/handoff.md` to run the audit plan with full context budget. First task there: diagnose the wide
+corruption with SCENEDUMP/PROVAT vs the oracle, then own PutDrawEnv/PutDispEnv (0-diff @4:3) → OFX config.
