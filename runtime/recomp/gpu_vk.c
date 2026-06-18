@@ -195,6 +195,17 @@ static int ssao_on(void) {
   if (v < 0) v = (cfg_on("PSXPORT_SSAO") && !cfg_on("PSXPORT_SBS")) ? 1 : 0;
   return v;
 }
+// PSXPORT_LIGHT: PC-native directional light from a depth-reconstructed normal (shares the deferred pass
+// with SSAO). Disabled under SBS (single-panel only). proj getters feed the normal reconstruction.
+float proj_plane_h(void);
+void  proj_screen_center(float* cx, float* cy);
+static int light_on(void) {
+  static int v = -1;
+  if (v < 0) v = (cfg_on("PSXPORT_LIGHT") && !cfg_on("PSXPORT_SBS")) ? 1 : 0;
+  return v;
+}
+static int deferred_on(void) { return ssao_on() || light_on(); }
+static int s_present_sx, s_present_sy;   // this frame's faithful display origin (for the LIGHT screen map)
 
 // M3 textured rasterizer: a VRAM snapshot image the texture sampler reads (avoids render/sample feedback
 // loop), its descriptor set, the textured pipeline, and a textured-vertex batch.
@@ -559,7 +570,7 @@ static void init_vk(void) {
   create_vram();
   void create_tri_pipeline(void); create_tri_pipeline();
   void panels_init(void); panels_init();
-  if (ssao_on()) create_ssao();
+  if (deferred_on()) create_ssao();
   if (!s_headless) create_swapchain();
   else fprintf(stderr, "[gpu_vk] headless offscreen render up (VRAM 1024x512 R16_UINT, no swapchain)\n");
   fprintf(stderr, "[gpu_vk] Vulkan present backend up (%ux%u, %u swap images; VRAM 1024x512 R16_UINT)\n",
@@ -770,7 +781,7 @@ static void panel_render(Panel* p) {
     // PSXPORT_SSAO: darken opaque 3D creases NOW, before the translucent pass composites UI/water on top
     // (only the primary panel; SSAO is disabled under PSXPORT_SBS). s_tex/s_depth are in their attachment
     // layouts here; ssao_pass round-trips them through shader-read and restores them for the semi pass.
-    if (ssao_on() && tgt == s_tex) ssao_pass();
+    if (deferred_on() && tgt == s_tex) ssao_pass();
     // SEMI pass, OT-order-correct: each overlap-group with a FRESH framebuffer snapshot.
     for (int g = 0; g <= s_semi_grp_n && s_semi_n; g++) {
       int gstart = (g == 0) ? 0 : s_semi_grp[g - 1];
@@ -861,7 +872,7 @@ static void create_ssao(void) {
   VkDescriptorSetLayoutCreateInfo dli = { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
   dli.bindingCount = 2; dli.pBindings = b;
   VKC(vkCreateDescriptorSetLayout(s_dev, &dli, 0, &s_ssao_dsl));
-  VkPushConstantRange pcr = { VK_SHADER_STAGE_FRAGMENT_BIT, 0, 48 };   // p0(vec4) p1(vec4) p2(ivec4)
+  VkPushConstantRange pcr = { VK_SHADER_STAGE_FRAGMENT_BIT, 0, 112 };  // p0..p6 (7 × 16B): AO + LIGHT params
   VkPipelineLayoutCreateInfo pli = { VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
   pli.setLayoutCount = 1; pli.pSetLayouts = &s_ssao_dsl; pli.pushConstantRangeCount = 1; pli.pPushConstantRanges = &pcr;
   VKC(vkCreatePipelineLayout(s_dev, &pli, 0, &s_ssao_pll));
@@ -921,12 +932,13 @@ static void depth_barrier(VkImageLayout from, VkImageLayout to, VkPipelineStageF
   vkCmdPipelineBarrier(s_cmd, ss, ds, 0, 0, 0, 0, 0, 1, &b);
 }
 
-// PSXPORT_SSAO pass, recorded into s_cmd by panel_render BETWEEN the opaque and semi passes — AO is a
-// property of the OPAQUE geometry; the translucent pass (UI/water) must composite OVER the AO'd world,
-// not be darkened by it (the menu's semi fill doesn't write depth, so the depth buffer under it is the
-// 3D terrain — running AO after it would wrongly darken the UI). Entry: s_tex in COLOR_ATTACHMENT, s_depth
-// in DEPTH_STENCIL_ATTACHMENT. Reads color+depth, writes the AO'd color into s_ssao_img, copies it back
-// into s_tex. Exit: s_tex back in COLOR_ATTACHMENT, s_depth back in DEPTH_STENCIL (for the semi pass).
+// DEFERRED shading pass (PSXPORT_SSAO and/or PSXPORT_LIGHT), recorded into s_cmd by panel_render BETWEEN
+// the opaque and semi passes — AO + lighting are properties of the OPAQUE geometry; the translucent pass
+// (UI/water) must composite OVER the shaded world, not be shaded by it (the menu's semi fill writes no
+// depth, so the depth buffer under it is the 3D terrain — shading after it would wrongly darken the UI).
+// Entry: s_tex in COLOR_ATTACHMENT, s_depth in DEPTH_STENCIL_ATTACHMENT. Reads color+depth, writes the
+// shaded color into s_ssao_img, copies it back into s_tex. Exit: s_tex back in COLOR_ATTACHMENT, s_depth
+// back in DEPTH_STENCIL (for the semi pass).
 static void ssao_pass(void) {
   // s_tex: color attachment (opaque output) -> shader-read (sample as the AO source)
   img_barrier_on(s_tex, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
@@ -936,24 +948,50 @@ static void ssao_pass(void) {
   depth_barrier(VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                 VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
                 VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
-  // push constants: depth-linearize + AO params (env-tunable; logged once)
-  float nearp = proj_near_pz();
+  // push constants: depth-linearize + AO + directional-light params (env-tunable; logged once).
+  float nearp = proj_near_pz(), H = proj_plane_h();
   float inv_near = 1.0f / (nearp < 1.0f ? 1.0f : nearp), inv_far = 1.0f / 65535.0f;
-  static int s_logged = 0;
-  static float strength, radius, bias_frac, range_frac;
-  if (!s_logged) {
+  float cx, cy; proj_screen_center(&cx, &cy);
+  // Read the env-tunable params ONCE (statics), then log ONCE the engine has set a real projection plane
+  // (early frames have H/cx/cy at defaults; logging then would mislead — the values used at draw time are
+  // re-read fresh from the getters each call, so the log is purely informational).
+  static int s_params = 0, s_logged = 0;
+  static float strength, radius, bias_frac, range_frac, lx, ly, lz, ambient, diffuse;
+  if (!s_params) {
     const char* s = cfg_str("PSXPORT_SSAO_STRENGTH"); strength   = s ? (float)atof(s) : 1.0f;
     const char* r = cfg_str("PSXPORT_SSAO_RADIUS");   radius     = (r ? (float)atof(r) : 5.0f) * (float)s_ires;
     const char* b = cfg_str("PSXPORT_SSAO_BIAS");     bias_frac  = b ? (float)atof(b) : 0.01f;
     const char* g = cfg_str("PSXPORT_SSAO_RANGE");    range_frac = g ? (float)atof(g) : 0.15f;
-    fprintf(stderr, "[ssao] strength=%.2f radius=%.1fpx bias=%.3f range=%.3f (near pz=%.1f)\n",
-            strength, radius, bias_frac, range_frac, nearp);
+    // Light direction = the TO-LIGHT vector in VIEW space (x right, y DOWN, z into screen). Default:
+    // upper-left, slightly toward the camera. PSXPORT_LIGHT_DIR="x,y,z" overrides.
+    lx = -0.4f; ly = -0.7f; lz = -0.5f;
+    const char* d = cfg_str("PSXPORT_LIGHT_DIR"); if (d) sscanf(d, "%f,%f,%f", &lx, &ly, &lz);
+    const char* a = cfg_str("PSXPORT_LIGHT_AMBIENT");  ambient = a ? (float)atof(a) : 0.65f;
+    const char* df = cfg_str("PSXPORT_LIGHT_DIFFUSE"); diffuse = df ? (float)atof(df) : 0.5f;
+    s_params = 1;
+  }
+  if (!s_logged && H > 1.5f) {
+    fprintf(stderr, "[deferred] ssao=%d light=%d | ssao strength=%.2f radius=%.1fpx bias=%.3f range=%.3f"
+            " | light dir=(%.2f,%.2f,%.2f) amb=%.2f diff=%.2f | near pz=%.1f H=%.0f cx=%.1f cy=%.1f\n",
+            ssao_on(), light_on(), strength, radius, bias_frac, range_frac, lx, ly, lz, ambient, diffuse,
+            nearp, H, cx, cy);
     s_logged = 1;
   }
-  struct { float p0[4], p1[4]; int32_t p2[4]; } pc;
+  // screen map: VRAM pixel -> PSX screen coord. Faithful = (vram - present_origin); wide/hi-res FB =
+  // ((vram - fb_origin)/ires - wide_off) — inverse of the tritex.vert relocation.
+  float org_x, org_y, off_x = 0.0f, off_y = 0.0f, inv_scale = 1.0f;
+  if (use_fb()) { org_x = 0.0f; org_y = (float)FB_Y0; inv_scale = 1.0f / (float)s_ires; off_x = s_wide ? (float)WIDE_OFF : 0.0f; }
+  else          { org_x = (float)s_present_sx; org_y = (float)s_present_sy; }
+  int viz = cfg_int("PSXPORT_SSAO_VIZ", 0);   // 1=AO factor; 2=normal; 3=lit (any deferred-viz)
+  int flags = (ssao_on() ? 1 : 0) | (light_on() ? 2 : 0);
+  struct { float p0[4], p1[4]; int32_t p2[4]; float p3[4], p4[4], p5[4], p6[4]; } pc;
   pc.p0[0] = inv_near; pc.p0[1] = inv_far; pc.p0[2] = strength; pc.p0[3] = radius;
   pc.p1[0] = bias_frac; pc.p1[1] = range_frac; pc.p1[2] = NATIVE_3D_MIN; pc.p1[3] = NATIVE_3D_MAX;
-  pc.p2[0] = VRAM_W; pc.p2[1] = IMG_H; pc.p2[2] = cfg_int("PSXPORT_SSAO_VIZ", 0); pc.p2[3] = 0;
+  pc.p2[0] = VRAM_W; pc.p2[1] = IMG_H; pc.p2[2] = viz; pc.p2[3] = flags;
+  pc.p3[0] = lx; pc.p3[1] = ly; pc.p3[2] = lz; pc.p3[3] = diffuse;
+  pc.p4[0] = ambient; pc.p4[1] = cx; pc.p4[2] = cy; pc.p4[3] = H;
+  pc.p5[0] = org_x; pc.p5[1] = org_y; pc.p5[2] = off_x; pc.p5[3] = off_y;
+  pc.p6[0] = inv_scale; pc.p6[1] = 0.0f; pc.p6[2] = 0.0f; pc.p6[3] = 0.0f;
 
   VkRenderPassBeginInfo rp = { VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
   rp.renderPass = s_ssao_rpass; rp.framebuffer = s_ssao_fb; rp.renderArea.extent = (VkExtent2D){ VRAM_W, IMG_H };
@@ -987,6 +1025,7 @@ void gpu_vk_present(const uint16_t* src, int sx, int sy, int w, int h) {
   if (!gpu_vk_enabled()) return;
   if (!s_inited) init_vk();
   wide_init();
+  s_present_sx = sx; s_present_sy = sy;   // faithful display origin (pre use_fb override) for the LIGHT screen map
   // PSXPORT_SBS: split-screen depth A/B. Render the frame into TWO full-res images — s_tex with default
   // OT-order depth, s_tex_b with native per-vertex depth — then composite them side by side (left pane =
   // default, right pane = native) so you can SEE the native-depth bug against the correct render.

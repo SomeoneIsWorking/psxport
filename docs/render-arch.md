@@ -49,11 +49,19 @@ headless. Pairs with `gfx-debug.md` (the debug workflow + tool catalog) and `con
     the 2D band, and 3D-projected overlay banners (e.g. a hint sign drawn on-top by OT order) get their
     true geometric depth and so sit behind nearer world geo — overlay-vs-world depth semantics, next.
 
-## `PSXPORT_SSAO` — PC-native screen-space ambient occlusion (post pass)
-A fullscreen AO pass run **inside `panel_render`, between the opaque and semi passes** (gpu_vk.c
-`ssao_pass`). AO is a property of the OPAQUE geometry: running it before the translucent pass means UI/
-water composite OVER the AO'd world instead of being darkened by it (the menu's semi fill writes no
-depth, so the depth buffer under it is the 3D terrain — AO *after* it would wrongly darken the UI).
+## `PSXPORT_SSAO` / `PSXPORT_LIGHT` — PC-native deferred shading (one post pass)
+A fullscreen deferred pass run **inside `panel_render`, between the opaque and semi passes** (gpu_vk.c
+`ssao_pass`; shaders_vk/ssao.frag) that applies ambient occlusion (`PSXPORT_SSAO`) and/or a directional
+light (`PSXPORT_LIGHT`) reconstructed PURELY from the depth buffer — no PSX GTE hooks, no per-face PGXP
+normals. Both are properties of the OPAQUE geometry: running before the translucent pass means UI/water
+composite OVER the shaded world instead of being shaded by it (the menu's semi fill writes no depth, so
+the depth buffer under it is the 3D terrain — shading *after* it would wrongly darken the UI).
+- **Directional light:** reconstruct view-space position per depth pixel `P = ((sx-cx)*pz/H,
+  (sy-cy)*pz/H, pz)` (cx,cy,H from gte_beetle `proj_screen_center`/`proj_plane_h`; the VRAM→screen map
+  handles faithful + wide/hi-res-FB modes — inverse of the tritex.vert relocation), then the surface
+  normal = `normalize(cross(dPdx, dPdy))` with a closer-neighbour pick to avoid bleeding a normal across
+  a silhouette. Shade = `ambient + diffuse·max(0, N·L)`, applied to the baked color as albedo. This is
+  the standard deferred reconstruction (the "proper" PC-native way), NOT the rejected PGXP per-face hack.
 - **Inputs:** the 3-band native depth (`s_depth`, made SAMPLED) + the opaque color (`s_tex`). SSAO
   **implies `PSXPORT_NATIVE_DEPTH`** (it needs real per-vertex depth) — the gate is OR'd into the
   native-depth checks (gpu_native.c / gte_beetle `attach_enabled`). Disabled under `PSXPORT_SBS`.
@@ -67,12 +75,14 @@ depth, so the depth buffer under it is the 3D terrain — AO *after* it would wr
   concavities/contacts (center recedes behind the line through its neighbours) darken. Pairs touching a
   non-3D pixel (silhouette vs sky/UI) are skipped → no edge halos. 16 fixed taps (2 rings × 4 pairs),
   no per-pixel rotation → no noise → no blur pass needed.
-- **Output:** AO'd color → `s_ssao_img` → copied back into `s_tex`, so present/dump pick it up with no
-  extra wiring. Faithful: SSAO only touches the VK path, never `s_vram`; default off.
-- **Tuning (env):** `PSXPORT_SSAO_STRENGTH` (def 1.0), `_RADIUS` (px, def 5 × IRES), `_BIAS` (def 0.01,
-  frac of view-Z), `_RANGE` (def 0.15). `PSXPORT_SSAO_VIZ=1` renders the AO factor as grayscale on 3D
-  pixels (white=lit, dark=occluded) with 2D/sky in original color — the single-run correctness check
-  (cross-run pixel A/B is unreliable: AUTO_GAMEPLAY scene state drifts between processes).
+- **Output:** shaded color → `s_ssao_img` → copied back into `s_tex`, so present/dump pick it up with no
+  extra wiring. Faithful: the pass only touches the VK path, never `s_vram`; default off.
+- **Tuning (env):** AO — `PSXPORT_SSAO_STRENGTH` (def 1.0), `_RADIUS` (px, def 5 × IRES), `_BIAS` (def
+  0.01, frac of view-Z), `_RANGE` (def 0.15). Light — `PSXPORT_LIGHT_DIR`="x,y,z" (to-light, view space;
+  def -0.4,-0.7,-0.5), `_AMBIENT` (def 0.65), `_DIFFUSE` (def 0.5).
+- **Verify single-run** (cross-run pixel A/B is unreliable: AUTO_GAMEPLAY scene state drifts between
+  processes). `PSXPORT_SSAO_VIZ` = 1: AO factor grayscale; 2: reconstructed normal as RGB; 3: lit factor
+  grayscale — all on 3D pixels only, 2D/sky in original color (confirms the band gating + the math).
 
 ## Running it
 - **Windowed (VK default):** `PSXPORT_GPU_WINDOW=1 … ./scratch/bin/tomba2_port MAIN.EXE` (needs `DISPLAY`).

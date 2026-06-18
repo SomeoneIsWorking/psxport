@@ -189,6 +189,7 @@ typedef struct { int ir1, ir2, ir3, sz, sx, sy; float px, py, pz, vx, vy, vz; } 
 static uint8_t  s_divtab[0x101];
 static int      s_divtab_init = 0;
 static uint16_t s_proj_H = 0;          // last projection-plane H (CR26); used by proj_pz_to_ord
+static float    s_proj_cx = 160.0f, s_proj_cy = 120.0f;   // screen projection center (OFX/OFY >> 16); for PSXPORT_LIGHT normal reconstruction
 
 // Phase 2: map a native view-space depth `pz` (= max(H/2, sz), so pz in [H/2, 65535]) into a
 // normalized [0,1] depth value for the renderer's D32 buffer. The value is AFFINE in 1/pz, so it
@@ -276,6 +277,7 @@ static void proj_native_vertex(unsigned vidx, uint32_t insn, ProjVtx* out) {
   float pz = (float)H * 0.5f; if ((float)out->sz > pz) pz = (float)out->sz;
   float ph = (float)H / pz;
   float fofx = (float)OFX / 65536.0f, fofy = (float)OFY / 65536.0f;
+  s_proj_cx = fofx; s_proj_cy = fofy;                      // remember the projection center for PSXPORT_LIGHT
   out->px = fofx + (float)out->ir1 * ph;
   out->py = fofy + (float)out->ir2 * ph;
   if (out->px < -1024.f) out->px = -1024.f; if (out->px > 1023.f) out->px = 1023.f;
@@ -385,13 +387,17 @@ int  projprim_count(void)      { return s_pp_n; }
 // The native-depth path is active (NATIVE_DEPTH renderer or the SBS A/B view) — gates the engine's depth
 // recording + the per-frame reset. (PSXPORT_ATTACH and its value-keyed ring are retired.)
 static int s_attach = -1;
-int attach_enabled(void) { if (s_attach < 0) s_attach = (cfg_on("PSXPORT_NATIVE_DEPTH") || cfg_on("PSXPORT_SBS") || cfg_on("PSXPORT_SSAO")) ? 1 : 0;
+int attach_enabled(void) { if (s_attach < 0) s_attach = (cfg_on("PSXPORT_NATIVE_DEPTH") || cfg_on("PSXPORT_SBS") || cfg_on("PSXPORT_SSAO") || cfg_on("PSXPORT_LIGHT")) ? 1 : 0;
                            return s_attach > 0; }
 // engine_submit sets the projection-plane H (read from CR26) so proj_pz_to_ord normalizes depth correctly.
 void proj_set_H(uint16_t h) { s_proj_H = h; }
 // Near-plane view-Z used by proj_pz_to_ord (= H/2, clamped >=1). SSAO needs it to invert the banded
 // depth back to a linear view-space Z (1/pz is affine in the stored depth — see proj_pz_to_ord).
 float proj_near_pz(void) { float n = s_proj_H ? (float)s_proj_H * 0.5f : 1.0f; return n < 1.0f ? 1.0f : n; }
+// Projection plane distance H (CR26) and screen center (OFX/OFY) — PSXPORT_LIGHT reconstructs view-space
+// position from a depth pixel as P = ((sx-cx)*pz/H, (sy-cy)*pz/H, pz), then the surface normal from it.
+float proj_plane_h(void) { return s_proj_H ? (float)s_proj_H : 1.0f; }
+void  proj_screen_center(float* cx, float* cy) { if (cx) *cx = s_proj_cx; if (cy) *cy = s_proj_cy; }
 
 void     gte_op(R3000* c, uint32_t insn)         { GTE_Instruction(insn);
                                                    unsigned op = insn & 0x3F;

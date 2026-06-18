@@ -565,7 +565,7 @@ static void gp0_exec(void) {
       // so the renderer can draw left=default / right=native. NATIVE_DEPTH replaces the single channel.
       static int s_ndepth = -1, s_sbs = -1;
       // SSAO implies the native-depth path (it needs the real per-vertex depth buffer to read).
-      if (s_ndepth < 0) s_ndepth = (cfg_on("PSXPORT_NATIVE_DEPTH") || cfg_on("PSXPORT_SSAO")) ? 1 : 0;
+      if (s_ndepth < 0) s_ndepth = (cfg_on("PSXPORT_NATIVE_DEPTH") || cfg_on("PSXPORT_SSAO") || cfg_on("PSXPORT_LIGHT")) ? 1 : 0;
       if (s_sbs < 0) s_sbs = cfg_on("PSXPORT_SBS") ? 1 : 0;
       float dep[4]; int is3d = 0;
       if (s_ndepth || s_sbs) {
@@ -690,7 +690,7 @@ static void gp0_exec(void) {
       gpu_vk_set_order(ord_idx);          // OT submission order -> depth (preserve opaque/semi order)
       // sprites/rects are screen-space (no GTE projection) -> 2D overlay band under PSXPORT_NATIVE_DEPTH.
       { static int s_ndepth = -1, s_sbs = -1;
-        if (s_ndepth < 0) s_ndepth = (cfg_on("PSXPORT_NATIVE_DEPTH") || cfg_on("PSXPORT_SSAO")) ? 1 : 0;
+        if (s_ndepth < 0) s_ndepth = (cfg_on("PSXPORT_NATIVE_DEPTH") || cfg_on("PSXPORT_SSAO") || cfg_on("PSXPORT_LIGHT")) ? 1 : 0;
         if (s_sbs < 0) s_sbs = cfg_on("PSXPORT_SBS") ? 1 : 0;
         void gpu_vk_set_order_2d(unsigned); void gpu_vk_set_order_2d_n(unsigned);
         void gpu_vk_set_order_2d_bg(unsigned); void gpu_vk_set_order_2d_bg_n(unsigned);
@@ -1150,7 +1150,7 @@ void gpu_present_ex(int do_blit) {
   // vertex word never reads an OLD frame's depth. The engine (engine_submit.c) repopulates it each frame.
   { int attach_enabled(void); void projprim_reset(void);
     if (attach_enabled()) projprim_reset(); }
-  { if (cfg_on("PSXPORT_NATIVE_DEPTH") || cfg_on("PSXPORT_SBS") || cfg_on("PSXPORT_SSAO")) {
+  { if (cfg_on("PSXPORT_NATIVE_DEPTH") || cfg_on("PSXPORT_SBS") || cfg_on("PSXPORT_SSAO") || cfg_on("PSXPORT_LIGHT")) {
       extern long g_nd_3d, g_nd_2d;
       if (cfg_dbg("ndepth") && s_frame > 0 && (s_frame % 60) == 0)
         fprintf(stderr, "[ndepth f%d] real-depth(3D) prims=%ld  OT-band(2D) prims=%ld  3D%%=%.1f\n",

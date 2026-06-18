@@ -4191,3 +4191,28 @@ sample/copy (only the pre-existing headless present-rpass PRESENT_SRC_KHR VUID r
 SSAO only touches the VK path, never s_vram; default off → SW/oracle path byte-identical.
 Tunables (env, logged once): SSAO_STRENGTH=1.0, _RADIUS=5px×IRES, _BIAS=0.01, _RANGE=0.15. Next: user
 live-tune the look; then task #2 (better lighting, rebuild fresh).
+
+## later-110 — DONE: PC-native directional lighting (PSXPORT_LIGHT), deferred normals from depth
+Task #2. User steer on the prior (rejected) lighting: "I don't remember but if it was rejected either
+the agent did it or it wasn't PC native like it was hacky." So: do it the PROPER PC-native way, not the
+old PGXP per-face-normal hack (value-keyed cache, entangled in the forward tritex pass). Built a
+DEFERRED directional light that **reconstructs real geometric normals from the depth buffer** —
+shares the SSAO deferred pass (ssao.frag + gpu_vk.c ssao_pass, now AO+light), gated PSXPORT_LIGHT
+(implies NATIVE_DEPTH via the same gates; disabled under SBS). No GTE/PGXP coupling.
+
+How: per depth pixel reconstruct view pos P = ((sx-cx)*pz/H, (sy-cy)*pz/H, pz) — cx,cy,H from new
+gte_beetle getters proj_screen_center()/proj_plane_h() (H = CR26, set each frame by engine_submit
+proj_set_H; center = OFX/OFY, standard 160/120). VRAM→screen map handles faithful AND wide/hi-res-FB
+(inverse of tritex.vert relocation: origin/inv_scale/wide_off). Normal = normalize(cross(dPdx,dPdy))
+with a closer-neighbour pick (don't bleed a normal across a silhouette), oriented to face the camera
+(view -Z). Shade = ambient + diffuse·max(0,N·L), applied to the baked color as albedo. Light dir =
+to-light vector in view space.
+
+Verified (single deterministic run; cross-run pixel A/B unreliable as for SSAO): PSXPORT_SSAO_VIZ=2
+shows the reconstructed normals = COHERENT per-surface (flat ground uniform, hut faces distinct, sky/UI
+excluded) — proves H/cx/cy correct (a wrong H would collapse all normals to camera-facing). VIZ=3 = lit
+factor. Lit screenshots: terrain/foliage gain real directional FORM, conservative by default (amb .65 /
+diff .5 → subtle, doesn't crush baked art); composes with SSAO; UI/sky untouched. Vulkan validation
+ZERO new VUIDs (only the pre-existing headless present-rpass PRESENT_SRC). Faithful gate: only VK path,
+default off. Tunables: PSXPORT_LIGHT_DIR="x,y,z"/_AMBIENT/_DIFFUSE. Both PC-native mods (SSAO+LIGHT)
+now done; user to live-tune the look. Hi-res/widescreen/SSAO/lighting all landed; 60fps still parked.
