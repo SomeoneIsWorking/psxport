@@ -4755,3 +4755,15 @@ the proper path is the native object→prim render of the static margin geometry
 culled exactly as 4:3 does. Prereq RE: classify which entity types (+0xc) are static-world vs dynamic, and
 whether the static ones can be projected+emitted natively from their model/transform without their handler.
 Probes kept: `tools/ram_region_diff.py`, `PSXPORT_RAMDUMP_FRAME`, `PSXPORT_CULL_FAR=0` (re-include A/B).
+
+### later-127 addendum — entity-type taxonomy (field, first pass)
+Type (+0xc) histogram of the field's two object lists (4:3 dump):
+- list1 (head 0x800FB168, 106 nodes): type 0x02=34, **0x04=58 (the bulk)**, 0x05=10, 0x09=4.
+- list2 (head 0x800F2624, 47 nodes):  type 0x03=24, 0x06=23.
+The position-divergence (re-include perturbation) hit types **0x02, 0x05, 0x06** (dynamic — ticked/activated
+by being forced visible). The dominant **type 0x04 did NOT diverge** → static-world candidate (the terrain/
+ground tiles we WANT rendered wider). So the re-include conflates two effects: (a) re-including STATIC
+geometry = logic-safe + desired; (b) ticking DYNAMIC objects = the perturbation. Inference from ONE frame is
+not proof a type is static (a static object never diverges, but so could an identically-ticked dynamic one)
+— the taxonomy must be confirmed by examining each type's handler (+0x1c) before relying on it. This is the
+prerequisite RE for the native static-margin render (approach B).
