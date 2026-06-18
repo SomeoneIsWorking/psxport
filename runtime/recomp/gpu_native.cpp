@@ -1,3 +1,5 @@
+#include "core.h"
+#include "c_subsys.h"
 // Native GPU — PC rendering of the game's own draw primitives (NOT PSX-GPU emulation).
 //
 // The game emits GP0 command packets (polygons/sprites/lines + VRAM transfers + draw-env)
@@ -389,10 +391,10 @@ int gpu_native_load_vram(const char* path) {
   fprintf(stderr, "[transplant] loaded VRAM %zu px from %s\n", n, path);
   return n == (size_t)VRAM_W * VRAM_H;
 }
-void gpu_native_load_image(int x, int y, int w, int h, uint32_t src) {
+void gpu_native_load_image(Core* core, int x, int y, int w, int h, uint32_t src) {
   for (int v = 0; v < h; v++)
     for (int u = 0; u < w; u++)
-      *vram(x + u, y + v) = mem_r16(src + (uint32_t)((v * w + u) * 2));
+      *vram(x + u, y + v) = core->mem_r16(src + (uint32_t)((v * w + u) * 2));
   // Mirror the upload into the VK VRAM image, exactly like the GP0 0xA0 / VRAM-copy / fill paths.
   // This native upload is a VRAM-writing path too; without the mirror its textures land only in the
   // SW s_vram. The VK opaque pass samples a full s_vram snapshot so it still saw them, but the VK
@@ -517,7 +519,7 @@ static void raster_line(int x0, int y0, int x1, int y1, uint8_t cr, uint8_t cg, 
 static const NativePrim* s_ndl_cur = 0;
 
 // Execute a complete GP0 primitive packet held in s_fifo[0..s_fcount).
-static void gp0_exec(void) {
+static void gp0_exec(Core* core) {
   uint32_t c = s_fifo[0];
   uint8_t op = c >> 24;
   if (op >= 0x20 && op <= 0x3F) {            // polygon
@@ -664,7 +666,7 @@ static void gp0_exec(void) {
       if (n++ < 12)
         fprintf(stderr, "[redpkt] f%d stage=%08X node=0x%08X op=%02X nv=%d gou=%d semi=%d clut=(%d,%d) tp=(%d,%d) blend=%d mode=%d "
                 "V[(%d,%d)uv(%d,%d) (%d,%d)uv(%d,%d) (%d,%d)uv(%d,%d)%s] off=(%d,%d)\n",
-                s_frame, mem_r32(0x801fe00c), s_cur_node, op, nv, gouraud, semi, s_clut_x, s_clut_y, s_tp_x, s_tp_y, s_tp_blend, s_tp_mode,
+                s_frame, core->mem_r32(0x801fe00c), s_cur_node, op, nv, gouraud, semi, s_clut_x, s_clut_y, s_tp_x, s_tp_y, s_tp_blend, s_tp_mode,
                 v[0].x,v[0].y,v[0].u,v[0].v, v[1].x,v[1].y,v[1].u,v[1].v, v[2].x,v[2].y,v[2].u,v[2].v,
                 quad?" +q":"", s_off_x, s_off_y);
     }
@@ -863,7 +865,7 @@ static int gp0_len(uint32_t c) {
 // trace_record() (per GP0 word, below) and trace_flush() (per frame, gpu_present_ex). ----
 
 // One word into the GP0 port (direct write or DMA).
-void gpu_gp0(uint32_t w) {
+void gpu_gp0(Core* core, uint32_t w) {
   s_gp0_words++;
   trace_record(w);
   if (s_xfer) {                                  // CPU->VRAM pixel stream (2 px/word)
@@ -913,7 +915,7 @@ void gpu_gp0(uint32_t w) {
     int term_slot = s_pl_g ? (idx >= 4 && !(idx & 1)) : (idx >= 3);
     if (term_slot && (w & 0xF000F000u) == 0x50005000u) {
       s_fcount = idx;                                // drop the terminator; render cmd+vertices
-      gp0_exec();
+      gp0_exec(core);
       s_fcount = 0; s_fneed = 0; s_pl = 0;
       return;
     }
@@ -939,7 +941,7 @@ void gpu_gp0(uint32_t w) {
         uint32_t src = 0x80000000u | g_dma_src;
         fprintf(stderr, "[texwatch] f%d A0 dest=(%d,%d) %dx%d src=0x%08X srcbytes:",
                 s_frame, s_xfer_x, s_xfer_y, s_xfer_w, s_xfer_h, src);
-        for (int k = 0; k < 12; k++) fprintf(stderr, " %02X", mem_r8(g_dma_src + k));
+        for (int k = 0; k < 12; k++) fprintf(stderr, " %02X", core->mem_r8(g_dma_src + k));
         fprintf(stderr, "\n");
       }
     } else if (op == 0x80) {                     // VRAM->VRAM copy
@@ -955,16 +957,16 @@ void gpu_gp0(uint32_t w) {
         // Dump RAM + the OT node neighbourhood the first time the atlas-clobbering copy fires, so the
         // malformed node and the chain that reaches it can be examined offline.
         if (cfg_str("PSXPORT_CLOBBERDUMP")) { static int done = 0; if (!done++) {
-          extern uint8_t g_ram[]; uint32_t na = s_cur_node & 0x1FFFFF;
+          uint32_t na = s_cur_node & 0x1FFFFF;
           fprintf(stderr, "[clobber] OT root madr=0x%08X node@0x%08X neighbourhood:\n", 0x80000000u|g_ot_madr, s_cur_node);
           for (int k = -8; k <= 16; k++) fprintf(stderr, "  [%+d] 0x%08X: %08X\n", k,
-                  0x80000000u | ((na + k*4) & 0x1FFFFF), mem_r32(0x80000000u | ((na + k*4) & 0x1FFFFF)));
+                  0x80000000u | ((na + k*4) & 0x1FFFFF), core->mem_r32(0x80000000u | ((na + k*4) & 0x1FFFFF)));
           FILE* mf = fopen(cfg_str("PSXPORT_CLOBBERDUMP"), "wb");
-          if (mf) { fwrite(g_ram, 1, 0x200000, mf); fclose(mf);
+          if (mf) { fwrite(core->ram, 1, 0x200000, mf); fclose(mf);
                     fprintf(stderr, "[clobber] RAM dumped -> %s\n", cfg_str("PSXPORT_CLOBBERDUMP")); } } }
       }
     } else if (op != 0xC0) {
-      gp0_exec();
+      gp0_exec(core);
     }
     s_fcount = 0; s_fneed = 0;
   }
@@ -1113,7 +1115,7 @@ void gpu_fps60_end_interp(void) { s_fb_base = s_vram; }
 // Pace 1/`parts` of a logic frame: parts=1 → one full logic frame (30fps faithful path); parts=2 →
 // half a logic frame (fps60 presents twice per logic frame for 60fps). The shared `next` accumulator
 // advances by exactly one logic frame's worth per logic frame either way, so audio stays realtime.
-void gpu_pace_subframe(int parts) {
+void gpu_pace_subframe(Core* core, int parts) {
 #ifdef PSXPORT_SDL
   static int on = -1;
   if (on < 0) {
@@ -1122,8 +1124,7 @@ void gpu_pace_subframe(int parts) {
   }
   if (!on) return;
   if (parts < 1) parts = 1;
-  uint8_t mem_r8(uint32_t);
-  int quota = mem_r8(0x1F800235u); if (quota < 1) quota = 2;   // vblanks per frame (default 30fps)
+  int quota = core->mem_r8(0x1F800235u); if (quota < 1) quota = 2;   // vblanks per frame (default 30fps)
   double interval = quota * 1000.0 / 60.0 / parts;             // ms for this sub-frame
   static double next = -1;
   double now = (double)SDL_GetTicks();
@@ -1135,7 +1136,7 @@ void gpu_pace_subframe(int parts) {
   (void)parts;
 #endif
 }
-void gpu_pace_frame(void) { gpu_pace_subframe(1); }
+void gpu_pace_frame(Core* core) { gpu_pace_subframe(core, 1); }
 
 // Present: copy the displayed VRAM region to an RGB buffer. PSXPORT_GPU_DUMP=dir dumps PPMs;
 // PSXPORT_GPU_WINDOW=1 shows a live SDL window.
@@ -1158,8 +1159,7 @@ void gpu_native_shot(const char* path) {
 // gpu_present_ex: the per-frame present + bookkeeping. `do_blit` blits the live front buffer to the
 // window; fps60 passes 0 (it owns presentation: it blits the previous real frame + the interpolated
 // frame itself) but still wants the bookkeeping (watchdog, s_frame++, diagnostics).
-void gpu_present_ex(int do_blit) {
-  void watchdog_pet(void);
+void gpu_present_ex(Core* core, int do_blit) {
   watchdog_pet();             // frame-progress heartbeat (see watchdog.c)
   trace_flush();              // PSXPORT_GPUTRACE: write this frame's GP0 trace (no-op unless armed)
   if (cfg_dbg("vramscan")) {
@@ -1176,11 +1176,11 @@ void gpu_present_ex(int do_blit) {
   { void proj_probe_dump(const char*);   // Phase-1: native-projection 0-diff verifier (PSXPORT_PROJPROBE)
     if (cfg_on("PSXPORT_PROJPROBE") && s_frame > 0 && (s_frame % 200) == 0) {
       char t[32]; snprintf(t, sizeof t, "f%d", s_frame); proj_probe_dump(t); } }
-  { void rtpcaller_dump(const char*); void rtpcaller_reset(void);  // Phase-1: pin RTP caller sites
+  { void rtpcaller_dump(Core*, const char*); void rtpcaller_reset(void);  // Phase-1: pin RTP caller sites
     // Window the histogram to the LAST 50 frames so a dump reflects only the CURRENT scene's submitters
     // (a cumulative-since-boot count is dominated by the title/menu phase before the field is reached).
     if (cfg_dbg("rtpcaller") && s_frame > 0 && (s_frame % 50) == 0) {
-      char t[24]; snprintf(t, sizeof t, "f%d(last50)", s_frame); rtpcaller_dump(t); rtpcaller_reset(); } }
+      char t[24]; snprintf(t, sizeof t, "f%d(last50)", s_frame); rtpcaller_dump(core, t); rtpcaller_reset(); } }
   // Reset the per-vertex depth table EVERY frame the native-depth path is live (NATIVE_DEPTH or SBS),
   // here — after this frame's DrawOTag/lookups, before next frame's projections record into it — so a
   // vertex word never reads an OLD frame's depth. The engine (engine_submit.c) repopulates it each frame.
@@ -1224,7 +1224,7 @@ void gpu_present_ex(int do_blit) {
         if (vf) { fwrite(s_vram, 2, VRAM_W * VRAM_H, vf); fclose(vf);
                   fprintf(stderr, "[gpu] VRAM dump f%d -> %s\n", s_frame, col + 1); } } } }
   if (cfg_dbg("stage") && (s_frame % 200) == 0)
-    fprintf(stderr, "[stagetl] gpu f%d task0entry=%08X\n", s_frame, mem_r32(0x801fe00c));
+    fprintf(stderr, "[stagetl] gpu f%d task0entry=%08X\n", s_frame, core->mem_r32(0x801fe00c));
   const char* dir = cfg_str("PSXPORT_GPU_DUMP");
   if (g_log) fprintf(stderr, "[gpu] frame %d: %ld prims, %ld gp0words, %ld dma2, disp %dx%d @ (%d,%d)\n",
                      s_frame, s_prims, s_gp0_words, s_dma2, s_disp_w, s_disp_h, s_disp_x, s_disp_y);
@@ -1267,7 +1267,7 @@ void gpu_present_ex(int do_blit) {
   s_prev_had3d = s_seen3d;   // remember whether this frame was a gameplay (3D) frame (wide pillarbox gate)
   s_seen3d = 0;       // restart backdrop-vs-HUD discrimination (no 3D prim seen yet next frame)
 }
-void gpu_present(void) { gpu_present_ex(1); }
+void gpu_present(Core* core) { gpu_present_ex(core, 1); }
 
 void gpu_native_init(void) {
   if (cfg_dbg("gpu")) g_log = 1;
@@ -1306,20 +1306,21 @@ int  gpu_sbs_get(void) { if (s_sbs_on < 0) { const char* e = cfg_str("PSXPORT_SB
 void gpu_sbs_set(int on) { s_sbs_on = on ? 1 : 0; }
 
 // Diagnostic dumps (gpu_prov_dump / gpu_provat_display / gpu_scene_dump[_now]) live in gpu_debug.c.
+void gpu_scene_dump(Core*, FILE*, uint32_t);
 
 // Render a native-display-list prim linked at OT node `addr` (phys), if one is. The owned node carries
 // a ZERO-LENGTH guest tag (no payload words for the walk to decode); its real packet words + per-vertex
 // view-Z live in the native arena. Load the packet words into the FIFO and run the normal primitive
 // path so every downstream behaviour (semi grouping, fade/fps60 capture, widescreen 2D) is identical,
 // but with s_ndl_cur set so the depth path uses the carried native view-Z (no address bridge).
-static void gp0_exec(void);
-static void ndl_render_node(uint32_t addr) {
+static void gp0_exec(Core* core);
+static void ndl_render_node(Core* core, uint32_t addr) {
   // Render every host prim bound to this OT bucket-anchor, head-first (LIFO = guest AddPrim draw order).
   for (NativePrim* np = ndl_lookup(addr); np; np = ndl_next(np)) {
     for (int i = 0; i < np->nwords; i++) { s_fifo[i] = np->words[i]; s_fifo_addr[i] = 0; }
     s_fcount = np->nwords;
     s_ndl_cur = np;
-    gp0_exec();
+    gp0_exec(core);
     s_ndl_cur = 0;
     s_fcount = 0;
   }
@@ -1328,9 +1329,9 @@ static void ndl_render_node(uint32_t addr) {
 // DMA channel 2 (GPU): walk an ordering-table linked list from `madr`, feeding each node's
 // GP0 words to the parser. Header word: bits[24..31]=word count, bits[0..23]=next node addr
 // (0xFFFFFF = end).
-void gpu_dma2_linked_list(uint32_t madr) {
+void gpu_dma2_linked_list(Core* core, uint32_t madr) {
   { static int sd = -2; if (sd == -2) { const char* e = cfg_str("PSXPORT_SCENEDUMP"); sd = e ? atoi(e) : -1; }
-    if (sd >= 0 && s_frame == sd) gpu_scene_dump(stderr, madr); }
+    if (sd >= 0 && s_frame == sd) gpu_scene_dump(core, stderr, madr); }
   s_dma2++;
   g_ot_madr = madr & 0x1FFFFC;
   uint32_t addr = madr & 0x1FFFFC;
@@ -1341,7 +1342,7 @@ void gpu_dma2_linked_list(uint32_t madr) {
     static int dumped = 0;
     uint32_t a = madr & 0x1FFFFC; int term = 0;
     for (int k = 0; k < 4096; k++) {
-      uint32_t next = mem_r32(a) & 0xFFFFFF;
+      uint32_t next = core->mem_r32(a) & 0xFFFFFF;
       if (next == 0xFFFFFF || next == 0) { term = 1; break; }
       a = next & 0x1FFFFC;
     }
@@ -1349,7 +1350,7 @@ void gpu_dma2_linked_list(uint32_t madr) {
       a = madr & 0x1FFFFC;
       fprintf(stderr, "[otdbg] MALFORMED OT from madr=0x%08X:\n", 0x80000000u | (madr & 0x1FFFFC));
       for (int k = 0; k < 40; k++) {
-        uint32_t hdr = mem_r32(a); uint32_t next = hdr & 0xFFFFFF; int n = hdr >> 24;
+        uint32_t hdr = core->mem_r32(a); uint32_t next = hdr & 0xFFFFFF; int n = hdr >> 24;
         fprintf(stderr, "  [%2d] @0x%08X hdr=0x%08X (n=%d) -> 0x%08X\n",
                 k, 0x80000000u | a, hdr, n, 0x80000000u | (next & 0x1FFFFC));
         if (next == 0xFFFFFF || next == 0) break;
@@ -1362,12 +1363,12 @@ void gpu_dma2_linked_list(uint32_t madr) {
   // first offending case for diagnosis instead of spinning to the old 1M guard.
   int guard;
   for (guard = 0; guard < 0x10000; guard++) {
-    uint32_t hdr = mem_r32(addr);
+    uint32_t hdr = core->mem_r32(addr);
     int n = hdr >> 24;
     s_cur_node = 0x80000000u | addr;
     for (int i = 0; i < n; i++) { s_gp0_src = addr + 4 + i * 4;   // guest addr of this word (Phase-1 attach)
-                                  gpu_gp0(mem_r32(addr + 4 + i * 4)); }
-    ndl_render_node(addr);   // owned native prim at this node (zero-length guest tag) -> render natively
+                                  gpu_gp0(core, core->mem_r32(addr + 4 + i * 4)); }
+    ndl_render_node(core, addr);   // owned native prim at this node (zero-length guest tag) -> render natively
     uint32_t next = hdr & 0xFFFFFF;
     if (next == 0xFFFFFF || next == 0) break;
     addr = next & 0x1FFFFC;
@@ -1378,7 +1379,7 @@ void gpu_dma2_linked_list(uint32_t madr) {
   // at the main draw; node count = OT entries the walk traversed. Compare 4:3 vs 16:9.
   if (cfg_dbg("pool")) {
     static int mx = 0; int nodes = guard + 1;
-    uint32_t pool = mem_r32(0x800BF544u);
+    uint32_t pool = core->mem_r32(0x800BF544u);
     if ((int)pool > mx) mx = (int)pool;
     fprintf(stderr, "[pool] f%d madr=0x%08X nodes=%d pool=0x%08X hi=0x%08X\n",
             s_frame, 0x80000000u | g_ot_madr, nodes, pool, (uint32_t)mx);
@@ -1393,7 +1394,7 @@ void gpu_dma2_linked_list(uint32_t madr) {
     uint32_t a = g_ot_madr;
     int run_o = 0, run_g = 0, mixed = 0, ob = 0, gb = 0, tot_o = 0, tot_g = 0;
     for (int k = 0; k < 0x10000; k++) {
-      uint32_t hdr = mem_r32(a);
+      uint32_t hdr = core->mem_r32(a);
       if (a >= ot_lo && a < ot_hi) {                 // bucket boundary -> close the current run
         if (run_o && run_g) mixed++; else if (run_o) ob++; else if (run_g) gb++;
         run_o = run_g = 0;
@@ -1418,9 +1419,9 @@ void gpu_dma2_linked_list(uint32_t madr) {
 }
 // DMA channel 2 block mode: `count` words from `madr` (to/from GP0). to_gpu=1 -> GP0 writes.
 uint32_t g_dma_src;   // last block-DMA source (UPLOADLOG: which RAM fed a CPU->VRAM upload)
-void gpu_dma2_block(uint32_t madr, int count, int to_gpu) {
+void gpu_dma2_block(Core* core, uint32_t madr, int count, int to_gpu) {
   s_dma2++;
   uint32_t addr = madr & 0x1FFFFC;
   g_dma_src = addr;
-  for (int i = 0; i < count; i++) { if (to_gpu) gpu_gp0(mem_r32(addr)); addr += 4; }
+  for (int i = 0; i < count; i++) { if (to_gpu) gpu_gp0(core, core->mem_r32(addr)); addr += 4; }
 }

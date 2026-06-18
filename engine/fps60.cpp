@@ -1,3 +1,9 @@
+#include "core.h"
+extern "C" {  // Beetle GTE (mednafen gte.c, compiled as C)
+  uint32_t GTE_ReadDR(unsigned); uint32_t GTE_ReadCR(unsigned);
+  void GTE_WriteDR(unsigned, uint32_t); void GTE_WriteCR(unsigned, uint32_t);
+  int32_t GTE_Instruction(uint32_t);
+}
 // fps60 — interpolated-60fps tier for the native PC port (design: docs/fps60_recomp_60fps.md).
 //
 // This file owns the capture buffers, the logic-rate detector, the object→primitive join, and
@@ -17,8 +23,6 @@
 #include <stdio.h>
 #include <string.h>
 
-uint8_t  mem_r8(uint32_t);
-uint32_t GTE_ReadDR(unsigned which);   // Beetle GTE data regs (SXY-FIFO = DR12/13/14)
 
 int g_fps60_on = 0;          // read by the gte_op tap; set by fps60_init from PSXPORT_FPS60
 uint32_t g_current_object = 0;// set by games_tomba2.c ov_object_cull during the cull subtree
@@ -59,7 +63,6 @@ static uint32_t grid_get(int px, int py) {  // ±2px search; returns the source 
   return 0;
 }
 
-uint32_t GTE_ReadCR(unsigned which);
 
 // ---- native graphical objects (GTE transform groups) ---------------------------------
 // The game's camera + models, ported to native: every run of RTPS/RTPT sharing one GTE transform
@@ -158,9 +161,6 @@ static void xobj_commit(void) {                 // swap A/B at frame end; reset 
 // Beetle GTE → an old-SXY→new-SXY remap. Rendering the in-between then just remaps B's prim vertices
 // through this table (unmapped verts = CPU/2D/unmatched → snap). This is the camera+object motion,
 // perspective-correct, with the game's own projection math.
-void     GTE_WriteCR(unsigned, uint32_t);
-void     GTE_WriteDR(unsigned, uint32_t);
-int32_t  GTE_Instruction(uint32_t);
 
 static int s_xmatch[XOBJ_MAX];   // B object i → A object index, or -1
 static int s_disp_gate = -1;     // PSXPORT_FPS60_GATE: max screen motion (px) to still interpolate
@@ -478,12 +478,10 @@ static void fps60_synth_dumptest(void) {
 // frame B is held — it becomes the "previous" (back buffer) next logic frame, so output lags by one
 // frame and the displayed stream is A, lerp(A,B), B, lerp(B,C), C… = 60 fps. SAFETY GATE: only when
 // windowed + animating + actually double-buffering (front_y flips), else one faithful present of B.
-void gpu_present_ex(int);
-void gpu_pace_subframe(int);
 
 static int s_prev_front_y = -1;    // last frame's front-buffer y (for flip detection)
 
-static void fps60_present(void) {
+static void fps60_present(Core* core) {
   static int win = -1;
   if (win < 0) { const char* w = cfg_str("PSXPORT_GPU_WINDOW"); win = (w && atoi(w) != 0) ? 1 : 0; }
   void gpu_fps60_blit_vram(int, int); void gpu_fps60_blit_interp(int, int);
@@ -492,7 +490,7 @@ static void fps60_present(void) {
   s_prev_front_y = fy;
   if (win && flipped && s_frame_geom > 0 && s_nB > 0) {
     gpu_fps60_blit_vram(0, fy ^ 256);   // present the previous real frame (lives in the back buffer)
-    gpu_pace_subframe(2);
+    gpu_pace_subframe(core, 2);
     long moved = fps60_synthesize(); // interpolated frame -> s_interp (front origin), VRAM untouched
     // The re-rasterized in-between is LOSSY (re-draws only the captured GP0 subset; missing occluders/
     // fills/blend-order make hidden objects reappear → spurious copies). Only trust it when objects were
@@ -500,11 +498,11 @@ static void fps60_present(void) {
     // needs object-tagged draws from the native renderer (see docs/journal.md later-86/87).
     if (moved > 0) gpu_fps60_blit_interp(0, fy);
     else           gpu_fps60_blit_vram(0, fy);   // real current frame
-    gpu_pace_subframe(2);
-    gpu_present_ex(0);                // bookkeeping only (watchdog, s_frame++, diagnostics; no blit)
+    gpu_pace_subframe(core, 2);
+    gpu_present_ex(core, 0);                // bookkeeping only (watchdog, s_frame++, diagnostics; no blit)
   } else {
-    gpu_present_ex(1);               // faithful single present of frame B (front buffer)
-    gpu_pace_subframe(1);
+    gpu_present_ex(core, 1);               // faithful single present of frame B (front buffer)
+    gpu_pace_subframe(core, 1);
   }
 }
 
@@ -523,7 +521,7 @@ static void rate_tick(RateDet* d, uint64_t set_hash) {
 }
 
 // ---- per-logic-frame fence (games_tomba2.c ov_frame_update) -------------------------
-void fps60_frame_commit(void) {
+void fps60_frame_commit(Core* core) {
   if (!g_fps60_on) return;
   uint64_t set_hash = (s_frame_geom > 0) ? s_frame_hash : 0xFFFFFFFFFFFFFFFFull;
   rate_tick(&s_rd, set_hash);
@@ -545,7 +543,7 @@ void fps60_frame_commit(void) {
   xobj_commit();                    // swap s_xA/s_xB + reset the per-frame local-vertex pool
   if (s_sdbg) fps60_synthesize();   // per-frame interpolation stats (headless diagnostic only)
   fps60_synth_dumptest();   // PSXPORT_FPS60_SYNTH: offline A/in-between/B dump (no live-path change)
-  fps60_present();          // owns presentation: 60fps pair (prev + interpolated) or faithful single
+  fps60_present(core);          // owns presentation: 60fps pair (prev + interpolated) or faithful single
 
   // Swap the prim double-buffer (so s_pB is clean next frame).
   { Prim* t = s_pA; s_pA = s_pB; s_pB = t; s_nA = s_nB; s_nB = 0; }

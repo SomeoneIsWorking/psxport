@@ -152,7 +152,7 @@ void pad_poll_sdl(void) {
 // not call FUN_80003a4c (no [miss] 0x80003A4C at boot), so this is inert for the
 // boot baseline either way. See report / docs/journal.md.
 #ifndef PSXPORT_PAD_NO_OVERRIDES
-#include "r3000.h"
+#include "core.h"
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -160,12 +160,12 @@ void pad_poll_sdl(void) {
 // pad buffer pointer for slot `slot` is at 0x0000AEC8 + slot*4 (FUN_800040c4 stores
 // them there; FUN_80003a4c reads them via &DAT_0000aec8 + slot*4).
 // FUN_80003a4c(slot): a0 = slot index.
-static void ov_pad_read(R3000* c) {
-  uint32_t b = mem_r32(0x0000AEC8u + c->r[4] * 4u);   // registered slot buffer ptr
+static void ov_pad_read(Core* c) {
+  uint32_t b = c->mem_r32(0x0000AEC8u + c->r[4] * 4u);   // registered slot buffer ptr
   if (b) {
     uint8_t pk[4];
     pad_fill_buffer(pk);
-    for (int i = 0; i < 4; i++) mem_w8(b + i, pk[i]);
+    for (int i = 0; i < 4; i++) c->mem_w8(b + i, pk[i]);
   }
   c->r[2] = 0;   // v0 = 0 (read complete / pad serviced)
 }
@@ -205,7 +205,7 @@ void pad_repl_tap(uint16_t active_low_mask, int n) { s_repl_on = 1; s_repl_tap =
 // overriding host/FORCE input. Used by the state-gated auto-navigator to go hands-off in gameplay.
 void pad_repl_release(void) { s_repl_on = 0; s_repl_hold = PAD_NONE; s_repl_tap = PAD_NONE; s_repl_tap_n = 0; }
 
-void pad_service_frame(void) {
+void pad_service_frame(Core* c) {
   static int s_have_window = -1;
   static int s_force_init = 0;
   static int s_force_on = 0;
@@ -253,12 +253,12 @@ void pad_service_frame(void) {
   pad_fill_buffer(pk);
   uint32_t bufs[2] = { PAD_SLOT0_BUF, PAD_SLOT1_BUF };       // fixed game pad buffers
   for (int slot = 0; slot < 2; slot++) {
-    uint32_t b = mem_r32(0x0000AEC8u + (uint32_t)slot * 4u); // registered ptr (NULL in this port)
+    uint32_t b = c->mem_r32(0x0000AEC8u + (uint32_t)slot * 4u); // registered ptr (NULL in this port)
     if (!b) b = bufs[slot];                                  // fall back to the fixed buffer
-    for (int i = 0; i < 4; i++) mem_w8(b + i, pk[i]);
+    for (int i = 0; i < 4; i++) c->mem_w8(b + i, pk[i]);
   }
   // Slot 1: report "no controller" so single-pad logic ignores it (status 0xFF).
-  mem_w8(PAD_SLOT1_BUF, 0xFF);
+  c->mem_w8(PAD_SLOT1_BUF, 0xFF);
 }
 
 #endif // PSXPORT_PAD_NO_OVERRIDES

@@ -15,14 +15,13 @@
 // through on its first check. This is exactly the state the real VBlank handler would have
 // produced (the cb at 0x800506B4 only increments that counter), computed directly.
 // (When a host present loop exists it will pace frames; this just removes the busy-wait.)
-#include "r3000.h"
+#include "core.h"
 #include "cfg.h"
 #include "margin_render.hpp"
 #include <stdlib.h>
 #include <stdio.h>
 
-void rec_super_call(R3000*, uint32_t);   // interpret the original PSX body (super-call / A/B oracle)
-void fps60_frame_commit(void);    // fps60: per-logic-frame fence (rate detect / interp)
+void rec_super_call(Core*, uint32_t);   // interpret the original PSX body (super-call / A/B oracle)
 void fps60_init(void);            // fps60: read PSXPORT_FPS60
 extern uint32_t g_current_object;  // fps60: object* whose RTP ops are being tagged
 // geomblk capture probe (engine_submit.c): the LAST object the cull ran on. Unlike g_current_object this is
@@ -30,10 +29,8 @@ extern uint32_t g_current_object;  // fps60: object* whose RTP ops are being tag
 // across that submit g_render_object identifies the rendering object. Pure probe key; no gameplay effect.
 uint32_t g_render_object = 0;
 extern int g_fps60_on;            // fps60: capture enabled (PSXPORT_FPS60)
-void gpu_present(void);            // native GPU: present the displayed VRAM region
-void gpu_pace_frame(void);         // native GPU: throttle to game pace when windowed (no-op headless)
-void spu_audio_frame(void);        // SPU: advance the mixer one frame + feed the audio device
-void rec_dispatch(R3000*, uint32_t);  // hybrid call: recomp body if emitted, else interpret
+extern "C" void spu_audio_frame(void);        // SPU: advance the mixer one frame + feed the audio device
+void rec_dispatch(Core*, uint32_t);  // hybrid call: recomp body if emitted, else interpret
 
 #define DISPLAY_COUNTER 0x800E809Cu   // DAT_800e809c (u16) — the dwell's vblank counter
 #define VBLANK_QUOTA    0x1F800235u   // DAT_1f800235 (u8)  — vblanks per displayed frame
@@ -54,7 +51,7 @@ void rec_dispatch(R3000*, uint32_t);  // hybrid call: recomp body if emitted, el
 #define SEQ_TICK_WRAPPER 0x800909C0u  // FUN_800909c0: per-vblank libsnd tick (user cb + SsSeqCalled)
 #define SEQ_FUNC_PTR     0x800AC42Cu  // DAT_800ac42c: SsSeqCalled pointer (0 until SsStart inits)
 
-static void ov_frame_update(R3000* c) {
+static void ov_frame_update(Core* c) {
   rec_super_call(c, 0x800788ACu);                    // real per-frame state update
   // Per-VBLANK audio work. On hardware the libsnd sequencer ticks once per VBlank IRQ (60 Hz NTSC)
   // and the SPU plays in realtime. One ov_frame_update is one *logic frame*, which on hardware spans
@@ -67,20 +64,20 @@ static void ov_frame_update(R3000* c) {
   // playback and keeps the WAV's tick:field ratio unchanged (just a longer, more correct duration).
   // Sequencer guard: pointer initialized + sane code address (never call through null pre-SsStart).
   // Opt out (A/B): PSXPORT_T2_NOSEQTICK. Adaptive: a true-60fps scene (quota=1) ticks once.
-  int quota = mem_r8(VBLANK_QUOTA); if (quota < 1) quota = 1;
-  uint32_t seqfn = mem_r32(SEQ_FUNC_PTR);
+  int quota = c->mem_r8(VBLANK_QUOTA); if (quota < 1) quota = 1;
+  uint32_t seqfn = c->mem_r32(SEQ_FUNC_PTR);
   int seq_ok = !cfg_on("PSXPORT_T2_NOSEQTICK")
                && (seqfn & 0x1FFFFFFFu) >= 0x10000u && (seqfn & 0x1FFFFFFFu) < 0x200000u;
   for (int v = 0; v < quota; v++) {                  // once per VBlank this logic frame spans
     if (seq_ok) rec_dispatch(c, SEQ_TICK_WRAPPER);   // libsnd per-vblank tick (user cb + SsSeqCalled)
     spu_audio_frame();                               // advance SPU one 1/60 s field + feed device
   }
-  mem_w16(DISPLAY_COUNTER, mem_r8(VBLANK_QUOTA));    // satisfy the pacing dwell immediately
+  c->mem_w16(DISPLAY_COUNTER, c->mem_r8(VBLANK_QUOTA));    // satisfy the pacing dwell immediately
   // fps60 (when enabled) OWNS presentation: it presents the previous real frame + the interpolated
   // frame (60 fps, 1 frame behind) and paces both halves — see fps60_present. The faithful path
   // presents frame B once and paces a full frame.
-  fps60_frame_commit();
-  if (!g_fps60_on) { gpu_present(); gpu_pace_frame(); }
+  fps60_frame_commit(c);
+  if (!g_fps60_on) { gpu_present(c); gpu_pace_frame(c); }
 }
 
 // fps60 object tag: the universal per-object cull/LOD dispatcher (a0 = object*, once per logic
@@ -89,11 +86,9 @@ static void ov_frame_update(R3000* c) {
 // PSXPORT_OBJLOG=1: dump every object the cull dispatcher visits (addr + type@+0xc +
 // pos@+0x2e/32/36). Empirically maps the active-object pool/list for the native entity
 // manager (Phase 1) — more reliable than static-tracing the overlay handler dispatch.
-extern uint8_t mem_r8(uint32_t);
-extern void    mem_w8(uint32_t, uint8_t);
 int gpu_vk_wide_engine(void);   // gpu_vk.c — genuine engine-wide active (PSXPORT_WIDE_ENGINE && aspect!=4:3)
 static int s_objlog = -1;
-static inline uint16_t obj_r16(uint32_t a) { return (uint16_t)(mem_r8(a) | (mem_r8(a + 1) << 8)); }
+static inline uint16_t obj_r16(Core* c, uint32_t a) { return (uint16_t)(c->mem_r8(a) | (c->mem_r8(a + 1) << 8)); }
 
 // Extended culling (PSXPORT_CULL=1): the game's FUN_8007712c culls each object by distance AND by a
 // FOV cone (depth/dist < ~0x370 ≈ ±77°). That over-culls — distant objects pop in, and in widescreen
@@ -103,7 +98,7 @@ static int s_cull = -1, s_cull_far, s_cull_fov;
 static unsigned isqrt32(unsigned v) { unsigned r = 0, b = 1u << 30; while (b > v) b >>= 2;
   while (b) { if (v >= r + b) { v -= r + b; r = (r >> 1) + b; } else r >>= 1; b >>= 2; } return r; }
 
-static void ov_object_cull(R3000* c) {
+static void ov_object_cull(Core* c) {
   uint32_t prev = g_current_object;
   uint32_t o = c->r[4];                            // a0 = object* (MIPS arg register $a0)
   g_current_object = o;
@@ -111,8 +106,8 @@ static void ov_object_cull(R3000* c) {
 
   if (s_objlog < 0) s_objlog = cfg_dbg("obj") ? 1 : 0;
   if (s_objlog)
-    fprintf(stderr, "[objlog] obj=%08x type=%02x pos=(%d,%d,%d)\n", o, mem_r8(o + 0x0c),
-            (int16_t)obj_r16(o + 0x2e), (int16_t)obj_r16(o + 0x32), (int16_t)obj_r16(o + 0x36));
+    fprintf(stderr, "[objlog] obj=%08x type=%02x pos=(%d,%d,%d)\n", o, c->mem_r8(o + 0x0c),
+            (int16_t)obj_r16(c, o + 0x2e), (int16_t)obj_r16(c, o + 0x32), (int16_t)obj_r16(c, o + 0x36));
   int p2 = (int16_t)c->r[5], p3 = (int16_t)c->r[6], p4 = (int16_t)c->r[7];   // pos - camera (s16 each)
   rec_super_call(c, 0x8007712Cu);                  // the game's cull (sets +1 visible flag, queues)
   // Genuine engine-wide widens the FOV at the projection, so the frustum cull MUST widen too or the new
@@ -133,13 +128,13 @@ static void ov_object_cull(R3000* c) {
   static int s_only = -2, s_skip = -2;
   if (s_only == -2) { const char* x = cfg_str("PSXPORT_CULL_ONLY_TYPE"); s_only = x ? (int)strtol(x,0,0) : -1;
                       const char* y = cfg_str("PSXPORT_CULL_SKIP_TYPE"); s_skip = y ? (int)strtol(y,0,0) : -1; }
-  int otype = mem_r8(o + 0x0c);
+  int otype = c->mem_r8(o + 0x0c);
   if (s_only >= 0 && otype != s_only) do_cull = 0;
   if (s_skip >= 0 && otype == s_skip) do_cull = 0;
-  if (do_cull && mem_r8(o + 1) == 0) {              // the game CULLED it — reconsider with extended bounds
+  if (do_cull && c->mem_r8(o + 1) == 0) {              // the game CULLED it — reconsider with extended bounds
     unsigned dist = isqrt32((unsigned)(p2*p2 + p3*p3 + p4*p4)) & 0xFFFF;
     if (dist >= 0x200 && dist <= (unsigned)cull_far) {   // keep near/behind culling intact
-      int fx = (int16_t)obj_r16(0x1F8000E8), fy = (int16_t)obj_r16(0x1F8000EA), fz = (int16_t)obj_r16(0x1F8000EC);
+      int fx = (int16_t)obj_r16(c, 0x1F8000E8), fy = (int16_t)obj_r16(c, 0x1F8000EA), fz = (int16_t)obj_r16(c, 0x1F8000EC);
       long depth = (long)fx*p2 + (long)fy*p3 + (long)fz*p4, den = ((long)dist * 0x1000) >> 10;
       if (den < 1) den = 1;
       if (depth / den >= cull_fov) {
@@ -147,21 +142,21 @@ static void ov_object_cull(R3000* c) {
         // instead of poking +1. Poking +1 runs the handler's VISIBLE branch -> gameplay perturbation
         // (5638 B). Collecting + flushing the node's persistent command list touches only render scratch
         // -> margin renders, gameplay 0-diff. A/B: PSXPORT_MARGIN_POKE=1 keeps the old +1 re-include.
-        if (margin_native_enabled()) { margin_collect(o); }
-        else { mem_w8(o + 1, 1); c->r[2] = 1; }                          // re-include: mark visible
+        if (margin_native_enabled()) { margin_collect(c, o); }
+        else { c->mem_w8(o + 1, 1); c->r[2] = 1; }                          // re-include: mark visible
         // MEASUREMENT (PSXPORT_DEBUG=cullobj): identify WHAT the margin re-include renders — obj addr,
         // type, model id (+0xe & 0x3fff), model-data ptr (+0x38), pos. Decides static-world vs per-object
         // architecture for approach B. One line per re-include; grep a single frame.
         if (cfg_dbg("cullobj")) {
           extern int s_frame;
-          uint32_t cmd = mem_r32(o + 0xc0);                       // persistent render-command ptr (later-132)
-          uint32_t gb  = cmd ? mem_r32(cmd + 0x40) : 0;           // its geomblk
+          uint32_t cmd = c->mem_r32(o + 0xc0);                       // persistent render-command ptr (later-132)
+          uint32_t gb  = cmd ? c->mem_r32(cmd + 0x40) : 0;           // its geomblk
           fprintf(stderr, "[cullobj] f%d obj=%08x type=%02x model=%04x mdata=%08x cmd=%08x geomblk=%08x x18=",
-                  s_frame, o, otype, obj_r16(o + 0x0e) & 0x3fff, mem_r8(o+0x38)|(mem_r8(o+0x39)<<8)|(mem_r8(o+0x3a)<<16)|(mem_r8(o+0x3b)<<24),
+                  s_frame, o, otype, obj_r16(c, o + 0x0e) & 0x3fff, c->mem_r8(o+0x38)|(c->mem_r8(o+0x39)<<8)|(c->mem_r8(o+0x3a)<<16)|(c->mem_r8(o+0x3b)<<24),
                   cmd, gb);
-          for (int j = 0; j < 8; j++) fprintf(stderr, "%s%08x", j ? "," : "", cmd ? mem_r32(cmd + 0x18 + j*4) : 0);
+          for (int j = 0; j < 8; j++) fprintf(stderr, "%s%08x", j ? "," : "", cmd ? c->mem_r32(cmd + 0x18 + j*4) : 0);
           fprintf(stderr, " pos=(%d,%d,%d)\n",
-                  (int16_t)obj_r16(o + 0x2e), (int16_t)obj_r16(o + 0x32), (int16_t)obj_r16(o + 0x36));
+                  (int16_t)obj_r16(c, o + 0x2e), (int16_t)obj_r16(c, o + 0x32), (int16_t)obj_r16(c, o + 0x36));
         }
         // MEASUREMENT (PSXPORT_DEBUG=cullinc): per-type tally of objects the wide re-include actually
         // marks visible, per frame. Distinguishes a genuinely static-safe type from a vacuous 0-diff
@@ -199,31 +194,31 @@ static void ov_object_cull(R3000* c) {
 //   src (ctrl byte 0 / len 0 terminates).  mode!=0 -> back-ref copy `len` bytes from dest+offset
 //   [mode], BYTE-granular so overlapping copies replicate (RLE), exactly as the original loop.
 #define LZ_OFFTAB_BASE 0x800153C8u
-static uint32_t lz_decompress(uint32_t desc, uint32_t dst, uint32_t src0, uint32_t srclen) {
+static uint32_t lz_decompress(Core* c, uint32_t desc, uint32_t dst, uint32_t src0, uint32_t srclen) {
   const uint32_t src_end = src0 + srclen;
-  const int32_t stride = (int16_t)mem_r16(desc + 4);
+  const int32_t stride = (int16_t)c->mem_r16(desc + 4);
   int32_t offtab[8];
   for (int i = 0; i < 8; i++) {
-    const int32_t base   = (int32_t)mem_r32(LZ_OFFTAB_BASE + i * 8 + 0);
-    const int32_t factor = (int32_t)mem_r32(LZ_OFFTAB_BASE + i * 8 + 4);
+    const int32_t base   = (int32_t)c->mem_r32(LZ_OFFTAB_BASE + i * 8 + 0);
+    const int32_t factor = (int32_t)c->mem_r32(LZ_OFFTAB_BASE + i * 8 + 4);
     offtab[i] = base + 2 * (factor * stride);
   }
   uint32_t src = src0, out = dst;
   while (src < src_end) {
-    const uint8_t ctrl = mem_r8(src++);
+    const uint8_t ctrl = c->mem_r8(src++);
     const uint32_t len = ctrl >> 3, mode = ctrl & 7u;
     if (mode != 0) {                                  // back-reference into the output so far
       uint32_t bsrc = out + (uint32_t)offtab[mode];
-      for (uint32_t k = 0; k < len; k++) mem_w8(out++, mem_r8(bsrc++));
+      for (uint32_t k = 0; k < len; k++) c->mem_w8(out++, c->mem_r8(bsrc++));
     } else {                                          // literal run from the source
       if (len == 0) break;                            // terminator
-      for (uint32_t k = 0; k < len; k++) mem_w8(out++, mem_r8(src++));
+      for (uint32_t k = 0; k < len; k++) c->mem_w8(out++, c->mem_r8(src++));
     }
   }
   return out - dst;                                   // total bytes written
 }
-static void ov_lz_decompress(R3000* c) {
-  c->r[2] = lz_decompress(c->r[4], c->r[5], c->r[6], c->r[7]);
+static void ov_lz_decompress(Core* c) {
+  c->r[2] = lz_decompress(c, c->r[4], c->r[5], c->r[6], c->r[7]);
 }
 
 // PC-owned texture-group unpacker — replaces recompiled FUN_80044E84 (0x80044E84). Verified by
@@ -234,10 +229,10 @@ static void ov_lz_decompress(R3000* c) {
 // scratch), decompress the entry's image there, then upload it (FUN_80081218) and run the post
 // step (FUN_80080f6c). Non-gameplay (asset unpack) → PC-owned, calling the native decompressor
 // directly; the two gfx-library sub-calls still route through the recomp/dispatch for now.
-void rec_dispatch(R3000*, uint32_t);
-static void ov_unpack_group(R3000* c) {
+void rec_dispatch(Core*, uint32_t);
+static void ov_unpack_group(Core* c) {
   const uint32_t table = c->r[4], anchor = c->r[5];
-  const int32_t count = (int32_t)mem_r32(table);
+  const int32_t count = (int32_t)c->mem_r32(table);
   uint32_t entry = table + 4;            // first 12-byte descriptor entry
   uint32_t src = table + 0x800;          // packed source data follows the table
   int dbg = cfg_dbg("unpack") != 0;
@@ -247,19 +242,19 @@ static void ov_unpack_group(R3000* c) {
   // unpacker reads it, sequence-numbered, so it can be checked against the disc / oracle exactly.
   { const char* dd = cfg_str("PSXPORT_UNPACKDUMP");
     if (dd) { static int seq = 0; char p[300]; snprintf(p, sizeof p, "%s/unpack_%03d_c%d.bin", dd, seq++, count);
-      FILE* uf = fopen(p, "wb"); if (uf) { extern uint8_t g_ram[];
-        fwrite(&g_ram[table & 0x1FFFFF], 1, 0x30000, uf); fclose(uf);
+      FILE* uf = fopen(p, "wb"); if (uf) { 
+        fwrite(&c->ram[table & 0x1FFFFF], 1, 0x30000, uf); fclose(uf);
         fprintf(stderr, "[unpack] dumped live input -> %s (table=0x%08X count=%d)\n", p, table, count); } } }
   for (int32_t i = 0; i < count; i++) {
     const uint32_t desc   = entry;
-    const int32_t  stride = (int16_t)mem_r16(desc + 4);
-    const int32_t  field  = (int16_t)mem_r16(desc + 6);
-    const uint32_t srclen = mem_r32(desc + 8);
+    const int32_t  stride = (int16_t)c->mem_r16(desc + 4);
+    const int32_t  field  = (int16_t)c->mem_r16(desc + 6);
+    const uint32_t srclen = c->mem_r32(desc + 8);
     const uint32_t dst    = anchor - (uint32_t)(2 * stride * field);
     if (dbg) fprintf(stderr, "[unpack]  e%d dst=(%d,%d) %dx%d src=0x%08X len=%u srcbytes:"
-                     " %02X %02X %02X %02X\n", i, (int16_t)mem_r16(desc), (int16_t)mem_r16(desc+2),
-                     stride, field, src, srclen, mem_r8(src), mem_r8(src+1), mem_r8(src+2), mem_r8(src+3));
-    lz_decompress(desc, dst, src, srclen);            // native decompress into transient scratch
+                     " %02X %02X %02X %02X\n", i, (int16_t)c->mem_r16(desc), (int16_t)c->mem_r16(desc+2),
+                     stride, field, src, srclen, c->mem_r8(src), c->mem_r8(src+1), c->mem_r8(src+2), c->mem_r8(src+3));
+    lz_decompress(c, desc, dst, src, srclen);            // native decompress into transient scratch
     src   += srclen;
     entry += 12;
     c->r[4] = desc; c->r[5] = dst; rec_dispatch(c, 0x80081218u);  // FUN_80081218(desc, dst): upload
@@ -279,12 +274,11 @@ static void ov_unpack_group(R3000* c) {
 // an empty ring). Ordering is preserved: the upload still happens before this frame's draws are
 // processed, and CLUTs are double-buffered across frames (parity-alternated slots), so no draw
 // reads a slot mid-overwrite. A/B: PSXPORT_LZ_RECOMP=1 keeps the recomp upload library.
-void gpu_native_load_image(int x, int y, int w, int h, uint32_t src);
-static void ov_upload_image(R3000* c) {
+static void ov_upload_image(Core* c) {
   const uint32_t desc = c->r[4], src = c->r[5];
-  const int x = (int16_t)mem_r16(desc + 0), y = (int16_t)mem_r16(desc + 2);
-  const int w = (int16_t)mem_r16(desc + 4), h = (int16_t)mem_r16(desc + 6);
-  if (w > 0 && h > 0) gpu_native_load_image(x, y, w, h, src);
+  const int x = (int16_t)c->mem_r16(desc + 0), y = (int16_t)c->mem_r16(desc + 2);
+  const int w = (int16_t)c->mem_r16(desc + 4), h = (int16_t)c->mem_r16(desc + 6);
+  if (w > 0 && h > 0) gpu_native_load_image(c, x, y, w, h, src);
 }
 
 // --- Native ownership of the GTE projection setters (libgte) -------------------------------------
@@ -294,7 +288,7 @@ static void ov_upload_image(R3000* c) {
 // widescreen FOV lever (widen OFX + the draw-env clip; no squish, no renderer re-center) and the
 // reference point the 60fps/hi-res paths build on. Faithful-first: PSXPORT_GEOM_RECOMP=1 keeps the
 // recomp bodies for A/B. A one-time log prints the configured projection to confirm equivalence.
-static void ov_set_geom_offset(R3000* c) {       // SetGeomOffset(ofx, ofy)
+static void ov_set_geom_offset(Core* c) {       // SetGeomOffset(ofx, ofy)
   // FAITHFUL: write the game's exact projection offset. We do NOT widen OFX here anymore — CR24 is
   // SHARED GTE state that the GAME's OWN logic reads back (its on-screen tests / placement run RTPS and
   // consume the projected SXY). Widening it globally shifted those read-backs and corrupted the game.
@@ -307,7 +301,7 @@ static void ov_set_geom_offset(R3000* c) {       // SetGeomOffset(ofx, ofy)
   if (!logged++) fprintf(stderr, "[geom] native SetGeomOffset OFX=%u OFY=%u (CR24=%08X CR25=%08X)\n",
                          ofx, ofy, gte_read_ctrl(24), gte_read_ctrl(25));
 }
-static void ov_set_geom_screen(R3000* c) {       // SetGeomScreen(h) — projection-plane distance (FOV)
+static void ov_set_geom_screen(Core* c) {       // SetGeomScreen(h) — projection-plane distance (FOV)
   gte_write_ctrl(26, c->r[4]);                   // H
   static int logged = 0;
   if (!logged++) fprintf(stderr, "[geom] native SetGeomScreen H=%u (CR26=%08X)\n", c->r[4], gte_read_ctrl(26));
@@ -318,8 +312,7 @@ static void ov_set_geom_screen(R3000* c) {       // SetGeomScreen(h) — project
 // natively in gpu_dma2_linked_list (walk OT -> decode each primitive -> rasterize). Overriding it routes
 // the draw straight through our native walk (synchronous), instead of the DMA-register emulation dance.
 // This is the engine's draw submission, owned. Faithful-first: PSXPORT_OT_RECOMP=1 keeps the recomp body.
-void gpu_dma2_linked_list(uint32_t madr);
-static void ov_draw_otag(R3000* c) { gpu_dma2_linked_list(c->r[4]); }
+static void ov_draw_otag(Core* c) { gpu_dma2_linked_list(c, c->r[4]); }
 
 // ---- Replace the game's in-game Options menu with our PC-native (ImGui) menu (later-112) ----
 // RE: the in-game pause menu is a task in the GAME overlay. Its body is the dispatcher at 0x8010810C,
@@ -341,19 +334,19 @@ static void ov_draw_otag(R3000* c) { gpu_dma2_linked_list(c->r[4]); }
 #define T2_SFX_FN      0x80074590u  // FUN_80074590 — the menu sound-effect trigger
 #define PAD_TRIANGLE   0x1000u
 #define PAD_CIRCLE     0x2000u
-void imgui_overlay_set_visible(int v);
-void imgui_overlay_set_options_mode(int v);
-int  imgui_overlay_inited(void);
+extern "C" void imgui_overlay_set_visible(int v);
+extern "C" void imgui_overlay_set_options_mode(int v);
+extern "C" int  imgui_overlay_inited(void);
 
 // Invoke a guest function with up to 3 args, preserving the override's a0-a2.
-static void t2_call3(R3000* c, uint32_t addr, uint32_t a0, uint32_t a1, uint32_t a2) {
+static void t2_call3(Core* c, uint32_t addr, uint32_t a0, uint32_t a1, uint32_t a2) {
   uint32_t s4 = c->r[4], s5 = c->r[5], s6 = c->r[6];
   c->r[4] = a0; c->r[5] = a1; c->r[6] = a2;
   rec_dispatch(c, addr);
   c->r[4] = s4; c->r[5] = s5; c->r[6] = s6;
 }
 
-static void ov_options_menu(R3000* c) {
+static void ov_options_menu(Core* c) {
   if (cfg_dbg("ui")) {                                // PSXPORT_DEBUG=ui: confirm the page-3 handler is reached
     static int n = 0; if (!n++) fprintf(stderr, "[ui] FUN_8007b45c reached (game Options selected)\n");
   }
@@ -362,18 +355,18 @@ static void ov_options_menu(R3000* c) {
   if (!announced++) fprintf(stderr, "[ui] in-game Options -> PC-native overlay (Circle=back, Triangle=close)\n");
   imgui_overlay_set_options_mode(1);
   imgui_overlay_set_visible(1);                       // OUR menu IS the options screen now (no game draw)
-  uint16_t edge = mem_r16(T2_PAD_EDGE);
-  uint32_t task = mem_r32(T2_TASK_PTR);
+  uint16_t edge = c->mem_r16(T2_PAD_EDGE);
+  uint32_t task = c->mem_r32(T2_TASK_PTR);
   if (edge & PAD_CIRCLE) {                            // back to the pause menu (FUN_8007b45c substate-0 cancel)
     t2_call3(c, T2_SFX_FN, 0x14, 0xFFF7, 0);
-    mem_w8(task + 0x6B, 1);
-    mem_w8(T2_MENU_CURSOR, 0);
-    mem_w8(T2_MENU_DIRTY, 1);
+    c->mem_w8(task + 0x6B, 1);
+    c->mem_w8(T2_MENU_CURSOR, 0);
+    c->mem_w8(T2_MENU_DIRTY, 1);
     imgui_overlay_set_options_mode(0);
     imgui_overlay_set_visible(0);
   } else if (edge & PAD_TRIANGLE) {                   // close the whole pause menu (FUN_8007b45c Triangle exit)
     t2_call3(c, T2_SFX_FN, 0x11, 0, 0);
-    mem_w8(task + 0x6B, 2);
+    c->mem_w8(task + 0x6B, 2);
     imgui_overlay_set_options_mode(0);
     imgui_overlay_set_visible(0);
   }
@@ -398,7 +391,7 @@ void games_tomba2_init(void) {
     rec_set_override(0x80081218u, ov_upload_image);   // PC-native CPU->VRAM upload (libgs upload lib)
   }
   if (!cfg_on("PSXPORT_SUBMIT_RECOMP")) {          // own the geometry submit path natively (faithful-first)
-    void ov_submit_poly_gt3(R3000*), ov_submit_poly_gt4(R3000*), ov_submit_poly_gt4_bp(R3000*),
+    void ov_submit_poly_gt3(Core*), ov_submit_poly_gt4(Core*), ov_submit_poly_gt4_bp(Core*),
          engine_submit_register_autodetect(void);
     rec_set_override(0x8007FDB0u, ov_submit_poly_gt3);   // POLY_GT3 (gouraud-textured triangle) submit
     rec_set_override(0x8008007Cu, ov_submit_poly_gt4);   // POLY_GT4 (gouraud-textured quad) submit
@@ -410,12 +403,12 @@ void games_tomba2_init(void) {
   // render code (later-133). A/B: PSXPORT_PEROBJ_RECOMP=1 keeps the recomp body. (PSXPORT_DEBUG=flush2
   // re-overrides the same addr below with the probe, which super-calls the recomp body.)
   if (!cfg_on("PSXPORT_PEROBJ_RECOMP")) {
-    void ov_perobj_flush(R3000*), ov_perobj_render(R3000*), ov_render_walk(R3000*), ov_terrain(R3000*);
+    void ov_perobj_flush(Core*), ov_perobj_render(Core*), ov_render_walk(Core*), ov_terrain(Core*);
     if (!cfg_on("PSXPORT_NO_FLUSH"))  rec_set_override(0x8003CDD8u, ov_perobj_flush);
     if (!cfg_on("PSXPORT_NO_DISP"))   rec_set_override(0x8003CCA4u, ov_perobj_render);  // per-object render dispatch
     if (!cfg_on("PSXPORT_NO_WALK"))   rec_set_override(0x8003C048u, ov_render_walk);    // phase-2 render-list walk
     if (!cfg_on("PSXPORT_NO_TERRAIN")) rec_set_override(0x8002AB5Cu, ov_terrain);       // field terrain renderer
-    void ov_build_xform(R3000*);
+    void ov_build_xform(Core*);
     if (!cfg_on("PSXPORT_NO_XFORM")) rec_set_override(0x80051C8Cu, ov_build_xform);     // per-object transform builder
   }
   fps60_init();
@@ -426,32 +419,32 @@ void games_tomba2_init(void) {
   // Render-command capture oracle (PSXPORT_DEBUG=rcmd): tap the deferred-flush mode dispatcher so every queued
   // render command (mode + GTE transform + geomblk) is dumped — the complete input for the native render port.
   // Gated: only registered when the channel is on (the super-call interprets the dispatcher subtree). later-130.
-  if (cfg_dbg("rcmd")) { void ov_render_cmd_probe(R3000*); rec_set_override(0x8003F698u, ov_render_cmd_probe); }
+  if (cfg_dbg("rcmd")) { void ov_render_cmd_probe(Core*); rec_set_override(0x8003F698u, ov_render_cmd_probe); }
   // Enqueue tap (PSXPORT_DEBUG=enq): the render-command push, called per-object in phase 1 → g_current_object
   // names the source object, the attribution the downstream oracle lacks. later-131. Gated (super-call).
-  if (cfg_dbg("enq")) { void ov_enqueue_probe(R3000*); rec_set_override(0x80077EBCu, ov_enqueue_probe); }
+  if (cfg_dbg("enq")) { void ov_enqueue_probe(Core*); rec_set_override(0x80077EBCu, ov_enqueue_probe); }
   // Flush tap (PSXPORT_DEBUG=flush): dump the command-struct addresses (list+0xc0[i]) the flush drains, to
   // trace the still-open render-command enqueue. later-131. Gated (super-call).
-  if (cfg_dbg("flush")) { void ov_flush_probe(R3000*); rec_set_override(0x8003F174u, ov_flush_probe); }
+  if (cfg_dbg("flush")) { void ov_flush_probe(Core*); rec_set_override(0x8003F174u, ov_flush_probe); }
   // Major flush tap (PSXPORT_DEBUG=flush2): the world/margin flush gen_func_8003CDD8 (later-133). Gated.
-  if (cfg_dbg("flush2")) { void ov_flush2_probe(R3000*); rec_set_override(0x8003CDD8u, ov_flush2_probe); }
+  if (cfg_dbg("flush2")) { void ov_flush2_probe(Core*); rec_set_override(0x8003CDD8u, ov_flush2_probe); }
   // Command-enqueue tap (PSXPORT_DEBUG=cmdenq): gen_func_80051B70, validates obj/(group,sub)→geomblk. later-132.
-  if (cfg_dbg("cmdenq")) { void ov_cmdenq_probe(R3000*); rec_set_override(0x80051B04u, ov_cmdenq_probe); }
+  if (cfg_dbg("cmdenq")) { void ov_cmdenq_probe(Core*); rec_set_override(0x80051B04u, ov_cmdenq_probe); }
   // Submitter call-counter (PSXPORT_DEBUG=subcnt): which un-owned submit variants fire per scene. Gated.
-  if (cfg_dbg("subcnt")) { void ov_subcnt_b320(R3000*), ov_subcnt_c8f4(R3000*);
+  if (cfg_dbg("subcnt")) { void ov_subcnt_b320(Core*), ov_subcnt_c8f4(Core*);
     rec_set_override(0x8003B320u, ov_subcnt_b320); rec_set_override(0x8003C8F4u, ov_subcnt_c8f4); }
   // Per-object dispatch case histogram (PSXPORT_DEBUG=ccase): which gen_func_8003CCA4 cases fire. Gated.
-  if (cfg_dbg("ccase")) { void ov_ccase_probe(R3000*); rec_set_override(0x8003CCA4u, ov_ccase_probe); }
+  if (cfg_dbg("ccase")) { void ov_ccase_probe(Core*); rec_set_override(0x8003CCA4u, ov_ccase_probe); }
   // Phase-2 render-walk caller counter (PSXPORT_DEBUG=rwalk): which orchestrator drives 8003CCA4. Gated.
   if (cfg_dbg("rwalk")) {
-    void ov_rwalk_b588(R3000*), ov_rwalk_bb50(R3000*), ov_rwalk_bcf4(R3000*),
-         ov_rwalk_bf00(R3000*), ov_rwalk_c048(R3000*), ov_rwalk_eec0(R3000*);
+    void ov_rwalk_b588(Core*), ov_rwalk_bb50(Core*), ov_rwalk_bcf4(Core*),
+         ov_rwalk_bf00(Core*), ov_rwalk_c048(Core*), ov_rwalk_eec0(Core*);
     rec_set_override(0x8003B588u, ov_rwalk_b588); rec_set_override(0x8003BB50u, ov_rwalk_bb50);
     rec_set_override(0x8003BCF4u, ov_rwalk_bcf4); rec_set_override(0x8003BF00u, ov_rwalk_bf00);
     rec_set_override(0x8003C048u, ov_rwalk_c048); rec_set_override(0x8003EEC0u, ov_rwalk_eec0);
   }
   // Render-list node-type dump (PSXPORT_DEBUG=rlist): the full type set 8003C048 must handle. Gated.
-  if (cfg_dbg("rlist")) { void ov_rlist_probe(R3000*); rec_set_override(0x8003C048u, ov_rlist_probe); }
+  if (cfg_dbg("rlist")) { void ov_rlist_probe(Core*); rec_set_override(0x8003C048u, ov_rlist_probe); }
   void engine_tomba2_init(void);
   engine_tomba2_init();                            // native engine layer (Phase 1: object-list walk)
 }

@@ -4,12 +4,13 @@
 // recomp GTE interface (r3000.h) to Beetle's GTE_* API and provides faithful-first stubs for
 // the few externs gte.c references (PGXP off, widescreen off, savestate unused) so the math
 // matches the oracle exactly. The widescreen GTE-scale hack stays OFF here (fps60 tier later).
-#include "r3000.h"
+#include "core.h"
 #include "cfg.h"
 #include <stdint.h>
 #include <stdbool.h>
 
 // Beetle GTE API (mednafen/psx/gte.h), declared locally to avoid pulling Beetle headers.
+extern "C" {   // mednafen GTE (gte.c, compiled as C)
 void     GTE_Init(void);
 void     GTE_Power(void);
 int32_t  GTE_Instruction(uint32_t instr);
@@ -17,6 +18,7 @@ void     GTE_WriteCR(unsigned which, uint32_t value);
 void     GTE_WriteDR(unsigned which, uint32_t value);
 uint32_t GTE_ReadCR(unsigned which);
 uint32_t GTE_ReadDR(unsigned which);
+}
 
 // Externs gte.c references — faithful-first values.
 bool     psx_gte_overclock = false;
@@ -53,7 +55,7 @@ static inline uint32_t pgxp_slot(uint32_t key) {
   return (h >> (32 - PGXP_BITS)) & PGXP_MASK;
 }
 
-void PGXP_pushSXYZ2f(float x, float y, float z, uint32_t v) {
+extern "C" void PGXP_pushSXYZ2f(float x, float y, float z, uint32_t v) {
   int sx = (int16_t)(v & 0xFFFF), sy = (int16_t)(v >> 16);
   uint32_t key = pgxp_key(sx, sy);
   PgxpEnt* e = &s_pgxp[pgxp_slot(key)];
@@ -92,9 +94,9 @@ void pgxp_frame_reset(void) {
   for (uint32_t i = 0; i < PGXP_SIZE; i++) s_pgxp[i].valid = 0;
 }
 
-int   PGXP_NCLIP_valid(uint32_t a, uint32_t b, uint32_t c)   { (void)a;(void)b;(void)c; return 0; }
-float PGXP_NCLIP(void)                                        { return 0.0f; }
-int   MDFNSS_StateAction(void* st, int load, int data_only, void* sf, const char* name) {
+extern "C" int   PGXP_NCLIP_valid(uint32_t a, uint32_t b, uint32_t c)   { (void)a;(void)b;(void)c; return 0; }
+extern "C" float PGXP_NCLIP(void)                                        { return 0.0f; }
+extern "C" int   MDFNSS_StateAction(void* st, int load, int data_only, void* sf, const char* name) {
   (void)st; (void)load; (void)data_only; (void)sf; (void)name; return 1;  // savestate unused
 }
 
@@ -327,13 +329,12 @@ static void rtpcaller_record(uint32_t ra) {
   for (int i = 0; i < 64; i++) { if (s_rtpcaller[i].n == 0) { s_rtpcaller[i].ra = ra; s_rtpcaller[i].n = 1; return; }
                                  if (s_rtpcaller[i].ra == ra) { s_rtpcaller[i].n++; return; } }
 }
-void rtpcaller_dump(const char* tag) {
+void rtpcaller_dump(Core* c, const char* tag) {
   if (s_rtpcaller_on != 1) return;
-  uint32_t mem_r32(uint32_t);
   fprintf(stderr, "[rtpcaller %s] RA histogram (caller return site -> jal target = projection fn):\n", tag);
   for (int i = 0; i < 64 && s_rtpcaller[i].n; i++) {
     // the jal that set RA is at RA-8 (RA = jal_addr + 8, MIPS branch-delay). Decode its target.
-    uint32_t jal = mem_r32(s_rtpcaller[i].ra - 8);
+    uint32_t jal = c->mem_r32(s_rtpcaller[i].ra - 8);
     uint32_t tgt = ((jal >> 26) == 3) ? (((s_rtpcaller[i].ra - 8) & 0xF0000000u) | ((jal & 0x03FFFFFFu) << 2))
                                       : 0;  // 0 = not a jal (jalr / inlined)
     fprintf(stderr, "    RA=0x%08X  %8ld   jal[%08X]->fn=0x%08X\n",
@@ -409,7 +410,7 @@ float proj_near_pz(void) { float n = s_proj_H ? (float)s_proj_H * 0.5f : 1.0f; r
 float proj_plane_h(void) { return s_proj_H ? (float)s_proj_H : 1.0f; }
 void  proj_screen_center(float* cx, float* cy) { if (cx) *cx = s_proj_cx; if (cy) *cy = s_proj_cy; }
 
-void     gte_op(R3000* c, uint32_t insn)         { GTE_Instruction(insn);
+void     gte_op(Core* c, uint32_t insn)         { GTE_Instruction(insn);
                                                    unsigned op = insn & 0x3F;
                                                    if (s_gteprobe < 0) { const char* e = cfg_str("PSXPORT_GTEPROBE"); s_gteprobe = e ? atoi(e) : 0; }
                                                    if (s_gteprobe > 0) s_gte_hist[op]++;

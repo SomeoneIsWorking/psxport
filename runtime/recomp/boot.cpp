@@ -1,24 +1,30 @@
-// S2 boot driver (reconnaissance): load MAIN.EXE into RAM, enter the recompiled entry
-// function, and log where execution first reaches the BIOS vectors / overlays. Dispatch
-// misses are counted and the run aborts at a budget so a missing-effect path can't spin.
-// This maps the HLE surface the boot path actually needs before implementing it.
-#include "r3000.h"
+// S2 boot driver: allocate ONE Core instance, load MAIN.EXE into its RAM, and run the boot stub
+// (which draws SCEA then hands off to the native MAIN boot). The runtime is now object-oriented —
+// the machine state lives in a `Core` (core.h), reached explicitly (no global). main() owns the
+// instance; everything it calls receives `c`.
+#include "core.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
+// C subsystems (compiled as C) reached across the boundary — declare with C linkage.
+extern "C" {
+  void watchdog_init(void); void mdec_init(void); void spu_init(void);
+  void spu_audio_init(void); void cdc_init(void);
+}
+
 static uint32_t rd32(const uint8_t* p) { return p[0] | p[1]<<8 | p[2]<<16 | (uint32_t)p[3]<<24; }
 
-static void load_exe(const char* path, R3000* c) {
+static void load_exe(const char* path, Core* c) {
   FILE* f = fopen(path, "rb");
   if (!f) { perror(path); exit(1); }
   fseek(f, 0, SEEK_END); long n = ftell(f); fseek(f, 0, SEEK_SET);
-  uint8_t* buf = malloc(n);
+  uint8_t* buf = (uint8_t*)malloc(n);
   if (fread(buf, 1, n, f) != (size_t)n) { fprintf(stderr, "short read\n"); exit(1); }
   fclose(f);
   uint32_t entry = rd32(buf+0x10), gp = rd32(buf+0x14);
   uint32_t load = rd32(buf+0x18), tsize = rd32(buf+0x1C), sp = rd32(buf+0x30);
-  memcpy(&g_ram[load & 0x1FFFFF], buf + 0x800, tsize);
+  memcpy(&c->ram[load & 0x1FFFFF], buf + 0x800, tsize);
   free(buf);
   c->r[28] = gp;                       // gp
   c->r[29] = sp ? sp : 0x801FFFF0u;    // sp
@@ -34,17 +40,17 @@ int main(int argc, char** argv) {
   const char* path = argc > 1 ? argv[1] : "scratch/bin/tomba2/MAIN.EXE";
   void gpu_vk_tritest(void);
   gpu_vk_tritest();           // PSXPORT_VK_TRITEST=1: GPU triangle-rasterizer self-test, then exit
-  R3000 c = {0};
+  Core* c = new Core();       // the emulator instance (2 MB RAM lives here, not on the stack)
   void watchdog_init(void);
   watchdog_init();            // PSXPORT_WATCHDOG=<sec>: abort+backtrace if a frame stalls
-  load_exe(path, &c);
+  load_exe(path, c);
   void cd_overrides_init(void);
   void timing_init(void);
   void games_tomba2_init(void);
   void sync_overrides_init(void);
   void pad_overrides_init(void);
   void card_overrides_init(void);
-  void threads_init(R3000*);
+  void threads_init(Core*);
   void threads_register_overrides(void);
   void gte_init(void);
   void gpu_native_init(void);
@@ -64,17 +70,17 @@ int main(int argc, char** argv) {
   sync_overrides_init();    // convert HW sync/wait stalls to native non-stall
   pad_overrides_init();     // native controller input (per-VBlank pad read override)
   card_overrides_init();    // native memory card (synchronous file-backed libcard I/O)
-  threads_init(&c);         // native BIOS threads (ucontext); main = slot 0
+  threads_init(c);          // native BIOS threads (ucontext); main = slot 0
   threads_register_overrides();
-  c.r[4] = 1; c.r[5] = 0;   // a0=argc-ish, a1=argv (BIOS sets these; minimal)
+  c->r[4] = 1; c->r[5] = 0;  // a0=argc-ish, a1=argv (BIOS sets these; minimal)
 
   // Replicate the REAL PSX boot path. The disc's boot executable is the SCUS_944.54 *stub* (not
   // MAIN.EXE): it draws the SCEA "…America Presents" screen itself, then BIOS-LoadExec's
   // cdrom:\MAIN.EXE;1 and jumps to MAIN's entry. We run the stub as the real entry (interpreted —
   // it isn't recompiled) and intercept its LoadExec to hand off to the native MAIN boot
   // (native_boot.c, later 33/34). See docs/journal.md "later 34" + [[psxport-scea-boot-stub]].
-  void native_stub_run(R3000*, const char* main_exe_path);
-  native_stub_run(&c, path);              // stub draws SCEA, then hands off to native MAIN boot
+  void native_stub_run(Core*, const char* main_exe_path);
+  native_stub_run(c, path);              // stub draws SCEA, then hands off to native MAIN boot
   fprintf(stderr, "[boot] native_stub_run returned\n");
   return 0;
 }

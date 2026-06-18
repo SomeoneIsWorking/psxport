@@ -17,7 +17,8 @@
 // Hand-off: the stub's LoadExec(cdrom:\MAIN.EXE;1, ...) is intercepted (hle.c g_loadexec_hook):
 // we load MAIN.EXE into RAM and longjmp out of the stub interpreter, then enter the native MAIN
 // boot (native_boot.c), which takes over for Whoopee/OP/menu (later 33).
-#include "r3000.h"
+#include "core.h"
+#include "c_subsys.h"
 #include "cfg.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -31,11 +32,11 @@
 // dispatch/override symbols, since it overlaps MAIN.EXE's address space. stub_dispatch runs a
 // stub function by address (hybrid: misses fall to the interpreter on the stub's RAM bytes);
 // stub_set_override installs a native body for a recompiled stub function (CD/etc.).
-void stub_dispatch(R3000* c, uint32_t addr);
+void stub_dispatch(Core* c, uint32_t addr);
 void stub_set_override(uint32_t addr, OverrideFn fn);
-void native_boot_run(R3000* c);
+void native_boot_run(Core* c);
 void interp_trace_open(const char* path);
-extern void (*g_loadexec_hook)(R3000*);
+extern void (*g_loadexec_hook)(Core*);
 
 static uint32_t rd32(const uint8_t* p) { return p[0] | p[1]<<8 | p[2]<<16 | (uint32_t)p[3]<<24; }
 
@@ -43,16 +44,16 @@ static uint32_t rd32(const uint8_t* p) { return p[0] | p[1]<<8 | p[2]<<16 | (uin
 // BIOS loader. Returns the entry PC. (Same contract as boot.c's load_exe; duplicated here so the
 // stub path is self-contained — the stub overwrites MAIN's low text, and the MAIN reload at
 // hand-off restores it, exactly as the real boot does.)
-static uint32_t load_exe_image(const char* path, R3000* c) {
+static uint32_t load_exe_image(const char* path, Core* c) {
   FILE* f = fopen(path, "rb");
   if (!f) { perror(path); exit(1); }
   fseek(f, 0, SEEK_END); long n = ftell(f); fseek(f, 0, SEEK_SET);
-  uint8_t* buf = malloc(n);
+  uint8_t* buf = (uint8_t*)malloc(n);
   if (fread(buf, 1, n, f) != (size_t)n) { fprintf(stderr, "short read %s\n", path); exit(1); }
   fclose(f);
   uint32_t entry = rd32(buf+0x10), gp = rd32(buf+0x14);
   uint32_t load = rd32(buf+0x18), tsize = rd32(buf+0x1C), sp = rd32(buf+0x30);
-  memcpy(&g_ram[load & 0x1FFFFF], buf + 0x800, tsize);
+  memcpy(&c->ram[load & 0x1FFFFF], buf + 0x800, tsize);
   free(buf);
   c->r[28] = gp;
   c->r[29] = sp ? sp : 0x801FFFF0u;
@@ -65,16 +66,16 @@ static uint32_t load_exe_image(const char* path, R3000* c) {
 
 static jmp_buf      g_stub_exit;        // longjmp target = the setjmp in native_stub_run
 static const char*  g_main_path;        // MAIN.EXE path (reloaded at LoadExec hand-off)
-static R3000*       g_boot_ctx;         // the boot R3000 (so the hook can reload MAIN into it)
+static Core*       g_boot_ctx;         // the boot Core (so the hook can reload MAIN into it)
 
 // LoadExec(cdrom:\MAIN.EXE;1, stackbase, stackoffset) interceptor. The real LoadExec loads the
 // named EXE and jumps to it (never returns). We instead reload MAIN.EXE (restoring the low text
 // the stub overwrote) and bail out of the stub interpreter; native_stub_run then enters the
 // native MAIN boot. a0 = filename ptr (logged for sanity).
-static void ov_loadexec(R3000* c) {
+static void ov_loadexec(Core* c) {
   uint32_t name = c->r[4];
   char fn[64]; int i = 0;
-  for (; i < 63; i++) { uint8_t ch = mem_r8(name + i); if (!ch) break; fn[i] = (char)ch; }
+  for (; i < 63; i++) { uint8_t ch = c->mem_r8(name + i); if (!ch) break; fn[i] = (char)ch; }
   fn[i] = 0;
   fprintf(stderr, "[stub] LoadExec(\"%s\") -> hand off to native MAIN boot\n", fn);
   load_exe_image(g_main_path, g_boot_ctx);     // reload MAIN.EXE image + registers
@@ -94,10 +95,10 @@ static void ov_loadexec(R3000* c) {
 //   * CdSync (0x80019B78, mode,result) — return 2 (status: complete), zero result(a1).
 //   * CdDataSync (0x8001A944, mode) — DMA-done wait — return 0 (already done).
 enum { V0_ = 2, A0_ = 4, A1_ = 5, A2_ = 6 };
-static void zero_result8(uint32_t p) { if (p) for (int i = 0; i < 8; i++) mem_w8(p + i, 0); }
-static void ov_stub_cd_cw(R3000* c)    { zero_result8(c->r[A2_]); c->r[V0_] = 0; }
-static void ov_stub_cdsync(R3000* c)   { zero_result8(c->r[A1_]); c->r[V0_] = 2; }
-static void ov_stub_cddatasync(R3000* c) { c->r[V0_] = 0; }
+static void zero_result8(Core* c, uint32_t p) { if (p) for (int i = 0; i < 8; i++) c->mem_w8(p + i, 0); }
+static void ov_stub_cd_cw(Core* c)    { zero_result8(c, c->r[A2_]); c->r[V0_] = 0; }
+static void ov_stub_cdsync(Core* c)   { zero_result8(c, c->r[A1_]); c->r[V0_] = 2; }
+static void ov_stub_cddatasync(Core* c) { c->r[V0_] = 0; }
 
 // --- Stub libetc VSync ---------------------------------------------------------------------
 // The stub's public VSync(mode) (0x80017E4C) measures frame timing off hardware we don't model
@@ -115,13 +116,11 @@ static void ov_stub_cddatasync(R3000* c) { c->r[V0_] = 0; }
 // (the stub has drawn + flipped its display) — the heartbeat that makes SCEA visible and its timed
 // hold/fade progress. DAT_800267B4 is the count SCEA also reads directly.
 #define STUB_VBLANK_COUNT 0x800267B4u
-void gpu_present(void);
 void hle_deliver_event(uint32_t ev_class, uint32_t spec);
 static uint32_t g_stub_vblank;
-static void ov_stub_vsync(R3000* c) {
+static void ov_stub_vsync(Core* c) {
   int32_t mode = (int32_t)c->r[A0_];
   if (cfg_dbg("vsync")) fprintf(stderr, "[vsync] mode=%d count=%u\n", mode, g_stub_vblank);
-  void watchdog_pet(void);
   hle_deliver_event(0xF2000003u, 0xFFFFFFFFu);         // VBlank event classes (RCnt3 / libapi)
   hle_deliver_event(0xF0000001u, 0xFFFFFFFFu);
 
@@ -166,21 +165,21 @@ static void ov_stub_vsync(R3000* c) {
       next += frames * 1000.0 / 60.0;
       if (next > now) { SDL_Delay((unsigned)(next - now)); now = (double)SDL_GetTicks(); }
       else if (now - next > 1000.0) next = now;        // resync after a long stall (no debt)
-      gpu_present();                                   // show the completed frame (pets watchdog)
+      gpu_present(c);                                   // show the completed frame (pets watchdog)
     } else {
       watchdog_pet();                                  // poll: no present, no artificial count tick
     }
     g_stub_vblank = (uint32_t)((now - t0) * 60.0 / 1000.0);   // count == real vblanks elapsed
-    mem_w32(STUB_VBLANK_COUNT, g_stub_vblank);
+    c->mem_w32(STUB_VBLANK_COUNT, g_stub_vblank);
     c->r[V0_] = g_stub_vblank;
     return;
   }
 #endif
   // Headless / unpaced: advance per call (fast) so tests run at full speed; present on frame-waits.
   g_stub_vblank += (mode > 0) ? (uint32_t)mode : 1u;
-  if (mode >= 0) gpu_present();
+  if (mode >= 0) gpu_present(c);
   else watchdog_pet();
-  mem_w32(STUB_VBLANK_COUNT, g_stub_vblank);
+  c->mem_w32(STUB_VBLANK_COUNT, g_stub_vblank);
   c->r[V0_] = g_stub_vblank;
 }
 
@@ -193,9 +192,9 @@ static void ov_stub_vsync(R3000* c) {
 // so the caller's `bgez` sees success and stops retrying; SCEA then just ends and cuts to the LOGO
 // FMV. (User-requested: "make SCEA not do CD reads.")
 #define STUB_CD_STATUS 0x80026C0Cu
-static void ov_stub_cdread(R3000* c) {
-  mem_w32(STUB_CD_STATUS, g_stub_vblank ? g_stub_vblank : 1u);
-  c->r[V0_] = mem_r32(STUB_CD_STATUS);
+static void ov_stub_cdread(Core* c) {
+  c->mem_w32(STUB_CD_STATUS, g_stub_vblank ? g_stub_vblank : 1u);
+  c->r[V0_] = c->mem_r32(STUB_CD_STATUS);
 }
 
 // Register a stub override on BOTH the recompiled path (stub_set_override, function-index keyed —
@@ -214,7 +213,7 @@ static void stub_cd_overrides_init(void) {
   stub_override(0x8001BA64u, ov_stub_cdread);     // CdRead -> no-op success (no CD reads in SCEA)
 }
 
-void native_stub_run(R3000* c, const char* main_exe_path) {
+void native_stub_run(Core* c, const char* main_exe_path) {
   g_main_path = main_exe_path;
   g_boot_ctx  = c;
   g_loadexec_hook = ov_loadexec;

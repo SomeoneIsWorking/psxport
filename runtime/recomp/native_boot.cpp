@@ -15,7 +15,8 @@
 //
 // MILESTONE 1 (this file, current): run the init prefix and confirm it executes cleanly via
 // PC/RAM probes. The native frame loop + per-stage stepping land next.
-#include "r3000.h"
+#include "core.h"
+#include "c_subsys.h"
 #include "cfg.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -23,24 +24,21 @@
 #include <setjmp.h>
 #include <unistd.h>   // usleep (debug-server pause/step idle wait)
 
-void rec_coro_run(R3000* c, uint32_t pc); // flat coroutine interpreter (resumable, see interp.c)
+void rec_coro_run(Core* c, uint32_t pc); // flat coroutine interpreter (resumable, see interp.c)
 
 // Native XA voice/BGM clip player (xa_stream.c) owns task slot 2 — it replaced the FUN_8001cfc8
 // streaming-reader coroutine. The scheduler skips slot 2 while owned and reflects clip completion
 // into the task-2 state byte (the cutscene waits `while (DAT_801fe0e0 != 0)`).
-int  xa_stream_owns_slot2(void);
-int  xa_stream_voice_busy(void);
-void xa_dialog_coord(R3000* c);          // dialog-vs-ingame-music coordination (cd_override.c)
-void xa_audio_trace(const char* tag);    // CD-vol fade + XA lifecycle trace (cd_override.c)
-void xa_stream_voice_release(void);
+void xa_dialog_coord(Core* c);          // dialog-vs-ingame-music coordination (cd_override.c)
+void xa_audio_trace(Core* c, const char* tag);    // CD-vol fade + XA lifecycle trace (cd_override.c)
 
 // Call recompiled/overridden game fn `fn` with up to 3 args; runs to its `jr ra` and returns.
-static void rc0(R3000* c, uint32_t fn) { rec_dispatch(c, fn); }
-static void rc1(R3000* c, uint32_t fn, uint32_t a0) { c->r[4] = a0; rec_dispatch(c, fn); }
-static void rc2(R3000* c, uint32_t fn, uint32_t a0, uint32_t a1) {
+static void rc0(Core* c, uint32_t fn) { rec_dispatch(c, fn); }
+static void rc1(Core* c, uint32_t fn, uint32_t a0) { c->r[4] = a0; rec_dispatch(c, fn); }
+static void rc2(Core* c, uint32_t fn, uint32_t a0, uint32_t a1) {
   c->r[4] = a0; c->r[5] = a1; rec_dispatch(c, fn);
 }
-static void rc3(R3000* c, uint32_t fn, uint32_t a0, uint32_t a1, uint32_t a2) {
+static void rc3(Core* c, uint32_t fn, uint32_t a0, uint32_t a1, uint32_t a2) {
   c->r[4] = a0; c->r[5] = a1; c->r[6] = a2; rec_dispatch(c, fn);
 }
 
@@ -49,7 +47,7 @@ static void rc3(R3000* c, uint32_t fn, uint32_t a0, uint32_t a1, uint32_t a2) {
 // sequencer (START/DEMO/GAME), task1/2 = sub-tasks it spawns (asset loaders etc.). Each is an
 // infinite/looping routine that yields via FUN_80051f80 once per frame. We run each as a
 // resumable coroutine WITHOUT ucontext: a yield SAVES the PSX register context into the task's
-// slot (the PSX stack lives in g_ram per-task at obj+8, untouched) and longjmps out of the
+// slot (the PSX stack lives in c->ram per-task at obj+8, untouched) and longjmps out of the
 // interpreter call chain; we resume by restoring that context and continuing at the captured
 // return address. This is the "later 29" design — a yield is a save/restore of a state struct,
 // no native stack. native_scheduler_step mirrors FUN_80051e60: one pass over the 3 slots,
@@ -62,7 +60,7 @@ static void rc3(R3000* c, uint32_t fn, uint32_t a0, uint32_t a1, uint32_t a2) {
 #define CUR_TASK 0x1f800138u   // DAT_1f800138: scheduler "current task" ptr
 
 static jmp_buf g_yield_jmp;    // longjmp target = the setjmp in native_scheduler_step
-static R3000   g_task_ctx[3];  // saved register context per task slot
+static Core   g_task_ctx[3];  // saved register context per task slot
 static int     g_in_stage;     // 1 while inside a task run (gates the yield override)
 static int     g_cur_slot;     // task slot currently running (for the yield capture)
 static int     g_task_started[3];  // slot has a live coroutine context (else state==2 == fresh)
@@ -76,35 +74,35 @@ static int     g_task_started[3];  // slot has a live coroutine context (else st
 // no-op returning the handle, exactly as the stubbed thread layer did. The caller (FUN_80051f80
 // etc.) has already run its real body, so register side effects it needs on resume (e.g. it
 // leaves v0=0x1f800000 for the stage loop head's `lw t0,0x138(v0)`) are captured.
-static void ov_switch(R3000* c) {
+static void ov_switch(Core* c) {
   if (!g_in_stage) { c->r[2] = c->r[4]; return; }   // no-op: return the handle arg in v0
   g_task_ctx[g_cur_slot] = *c;      // r29=task SP, r31=return addr (resume point)
   longjmp(g_yield_jmp, 1);
 }
 
 // One scheduler pass over the 3 task slots (replaces FUN_80051e60).
-static void native_scheduler_step(R3000* c) {
-  R3000 loop = *c;                            // frame-loop context (gp etc. for fresh tasks)
+static void native_scheduler_step(Core* c) {
+  Core loop = *c;                            // frame-loop context (gp etc. for fresh tasks)
   for (int i = 0; i < 3; i++) {
     uint32_t base = TASKBASE + (uint32_t)i * TASKSTRIDE;
     // Task slot 2 = XA voice/BGM. When the native clip player owns it, do NOT run the (now unused)
     // FUN_8001cfc8 recomp coroutine; instead reflect clip state into the task-2 state byte so the
     // cutscene's `while (DAT_801fe0e0 != 0)` wait advances exactly when the clip finishes.
     if (i == 2 && xa_stream_owns_slot2()) {
-      if (xa_stream_voice_busy()) mem_w16(base, 2);     // still playing -> stay "running"
-      else { mem_w16(base, 0); xa_stream_voice_release(); }  // clip done -> free -> cutscene advances
+      if (xa_stream_voice_busy()) c->mem_w16(base, 2);     // still playing -> stay "running"
+      else { c->mem_w16(base, 0); xa_stream_voice_release(); }  // clip done -> free -> cutscene advances
       g_task_started[2] = 0;
       continue;
     }
-    uint32_t st = mem_r16(base);
+    uint32_t st = c->mem_r16(base);
     if (st == 0) { g_task_started[i] = 0; continue; }   // free
     uint32_t resume_pc;
     // state==3 (restart at new entry) or state==2 on a slot with no live context (freshly
     // registered by FUN_80051f14) => fresh entry. state==2 with a live context => resume.
     if (st == 3 || (st == 2 && !g_task_started[i])) {
-      resume_pc = mem_r32(base + 0xc);        // task entry
+      resume_pc = c->mem_r32(base + 0xc);        // task entry
       g_task_ctx[i] = loop;                   // inherit gp; fresh sp/ra below
-      g_task_ctx[i].r[29] = mem_r32(base + 8);// per-task PSX stack top (obj+8)
+      g_task_ctx[i].r[29] = c->mem_r32(base + 8);// per-task PSX stack top (obj+8)
       g_task_ctx[i].r[31] = 0xDEAD0000u;      // sentinel return
       g_task_started[i] = 1;
     } else if (st == 2) {                     // runnable: resume after the previous yield
@@ -112,17 +110,17 @@ static void native_scheduler_step(R3000* c) {
     } else {
       continue;                               // sleeping this frame (state==1)
     }
-    mem_w16(base, 4);                         // running
+    c->mem_w16(base, 4);                         // running
     if (cfg_dbg("sched"))
       fprintf(stderr, "[sched] slot %d st_in=%u resume_pc=0x%08X ra=0x%08X sp=0x%08X\n",
               i, st, resume_pc, g_task_ctx[i].r[31], g_task_ctx[i].r[29]);
-    mem_w32(CUR_TASK, base);
+    c->mem_w32(CUR_TASK, base);
     g_cur_slot = i;
     *c = g_task_ctx[i];
     g_in_stage = 1;
     if (setjmp(g_yield_jmp) == 0) {
       rec_coro_run(c, resume_pc);             // runs until ov_yield longjmps back here
-      mem_w16(base, 0);                        // returned (jr ra sentinel): task ended -> free
+      c->mem_w16(base, 0);                        // returned (jr ra sentinel): task ended -> free
       g_task_started[i] = 0;
     }
     g_in_stage = 0;
@@ -136,24 +134,24 @@ static void native_scheduler_step(R3000* c) {
 // in this port because the start IS reached (idx written) but an immediate STOP clears it. Log
 // each call with the caller (ra), arg, and the index before/after to find the spurious stopper.
 volatile uint32_t g_bgm_frame = 0;   // current logic frame (extern: cd_override.c trace)
-void rec_super_call(R3000*, uint32_t);   // interpret the original PSX body (A/B oracle / super-call)
-void xa_music_cut_if_dialog(void);   // cd_override.c: stop looping ingame music when a dialog tone starts
+void rec_super_call(Core*, uint32_t);   // interpret the original PSX body (A/B oracle / super-call)
+void xa_music_cut_if_dialog(Core*);   // cd_override.c: stop looping ingame music when a dialog tone starts
 static int s_bgmdbg = -1;
-static void ov_bgm_start(R3000* c) {
+static void ov_bgm_start(Core* c) {
   if (s_bgmdbg < 0) s_bgmdbg = (cfg_str("PSXPORT_BGMDBG") ? atoi(cfg_str("PSXPORT_BGMDBG")) : 0);
   if (s_bgmdbg) fprintf(stderr, "[bgmdbg] f%u BGM_START(idx=0x%02X) ra=%08X  idx@800bed80(before)=0x%04X\n",
-                        g_bgm_frame, c->r[4] & 0xFF, c->r[31], mem_r16(0x800bed80));
+                        g_bgm_frame, c->r[4] & 0xFF, c->r[31], c->mem_r16(0x800bed80));
   rec_super_call(c, 0x80074BF8u);
   // Dialog-tone songs (current-song 4..7) cut the looping ingame music SYNCHRONOUSLY here — at the
   // song-start, before this frame's audio mix — so it can't leak a frame past the dialog start
   // (the per-frame xa_dialog_coord stop is one frame late vs the audio mix). Instant-CD mod.
-  xa_music_cut_if_dialog();
-  if (s_bgmdbg) fprintf(stderr, "[bgmdbg]   -> idx@800bed80(after)=0x%04X\n", mem_r16(0x800bed80));
+  xa_music_cut_if_dialog(c);
+  if (s_bgmdbg) fprintf(stderr, "[bgmdbg]   -> idx@800bed80(after)=0x%04X\n", c->mem_r16(0x800bed80));
 }
-static void ov_bgm_stop(R3000* c) {
+static void ov_bgm_stop(Core* c) {
   if (s_bgmdbg < 0) s_bgmdbg = (cfg_str("PSXPORT_BGMDBG") ? atoi(cfg_str("PSXPORT_BGMDBG")) : 0);
   if (s_bgmdbg) fprintf(stderr, "[bgmdbg] f%u BGM_STOP ra=%08X  idx@800bed80(before)=0x%04X\n",
-                        g_bgm_frame, c->r[31], mem_r16(0x800bed80));
+                        g_bgm_frame, c->r[31], c->mem_r16(0x800bed80));
   rec_super_call(c, 0x80074E48u);
 }
 
@@ -163,8 +161,6 @@ static void ov_bgm_stop(R3000* c) {
 // Commands: run N | r addr [len] | rw addr [words] | w addr val | w8 addr val | watch lo hi |
 //   unwatch | hits | press/release <btn> | tap <btn> [frames] | regs | seq | quit. Memory is the
 //   game's address space (mem_r*/mem_w*); watchpoints via mem_set_watch (reported during `run`).
-void mem_set_watch(uint32_t lo, uint32_t hi);
-int  mem_watch_hits(void);
 void pad_repl_hold(uint16_t active_low_mask);
 void pad_repl_tap(uint16_t active_low_mask, int n);
 static uint16_t repl_btn(const char* n) {     // name -> active-HIGH PSX pad bit
@@ -181,9 +177,6 @@ static uint16_t repl_btn(const char* n) {     // name -> active-HIGH PSX pad bit
 // Sequenced BGM is rendered through the live SPU (use `wav PATH` then `bgm N` then `run`);
 // XA tracks (CD-streamed music/voice) are decoded straight off the disc here, since they
 // never touch the sequencer. Both write standard 44100/native-rate stereo S16 WAVs.
-int  xa_decode_sector(const uint8_t* raw, int16_t* out, int16_t hist[2][2], int* freq);
-int  disc_read_raw(uint32_t lba, uint8_t* out, uint32_t n);
-void spu_wav_reopen(const char* path);
 
 static void repl_wav_write(const char* path, const int16_t* pcm, uint32_t frames, int rate) {
   FILE* fp = fopen(path, "wb");
@@ -223,7 +216,7 @@ static void repl_xadump(uint8_t chan, uint32_t start_lba, const char* path, int 
 }
 
 // Read+execute REPL commands until a `run N` (returns N) or quit/EOF (returns -1).
-static long native_repl_read(R3000* c, uint32_t f) {
+static long native_repl_read(Core* c, uint32_t f) {
   static uint16_t held = 0xFFFF;              // active-low held mask (all released)
   char line[256];
   fprintf(stderr, "[repl] frame=%u ready\n", f); fflush(stderr);
@@ -234,15 +227,15 @@ static long native_repl_read(R3000* c, uint32_t f) {
     else if (!strcmp(cmd, "run") && sscanf(line, "%*s %u", &a) == 1) return (long)a;
     else if (!strcmp(cmd, "r") && sscanf(line, "%*s %x %u", &a, &b) >= 1) {
       if (!b) b = 16; fprintf(stderr, "[repl] %08X:", a);
-      for (unsigned i = 0; i < b && i < 256; i++) fprintf(stderr, " %02X", mem_r8(a + i)); fprintf(stderr, "\n");
+      for (unsigned i = 0; i < b && i < 256; i++) fprintf(stderr, " %02X", c->mem_r8(a + i)); fprintf(stderr, "\n");
     } else if (!strcmp(cmd, "rw") && sscanf(line, "%*s %x %u", &a, &b) >= 1) {
       if (!b) b = 8; fprintf(stderr, "[repl] %08X:", a);
-      for (unsigned i = 0; i < b && i < 64; i++) fprintf(stderr, " %08X", mem_r32(a + i * 4)); fprintf(stderr, "\n");
-    } else if (!strcmp(cmd, "w") && sscanf(line, "%*s %x %x", &a, &b) == 2) { mem_w32(a, b); fprintf(stderr, "[repl] ok\n"); }
-    else if (!strcmp(cmd, "w8") && sscanf(line, "%*s %x %x", &a, &b) == 2) { mem_w8(a, (uint8_t)b); fprintf(stderr, "[repl] ok\n"); }
-    else if (!strcmp(cmd, "watch") && sscanf(line, "%*s %x %x", &a, &b) == 2) mem_set_watch(a, b);
-    else if (!strcmp(cmd, "unwatch")) { mem_set_watch(0, 0); fprintf(stderr, "[repl] unwatch\n"); }
-    else if (!strcmp(cmd, "hits")) fprintf(stderr, "[repl] watch hits=%d\n", mem_watch_hits());
+      for (unsigned i = 0; i < b && i < 64; i++) fprintf(stderr, " %08X", c->mem_r32(a + i * 4)); fprintf(stderr, "\n");
+    } else if (!strcmp(cmd, "w") && sscanf(line, "%*s %x %x", &a, &b) == 2) { c->mem_w32(a, b); fprintf(stderr, "[repl] ok\n"); }
+    else if (!strcmp(cmd, "w8") && sscanf(line, "%*s %x %x", &a, &b) == 2) { c->mem_w8(a, (uint8_t)b); fprintf(stderr, "[repl] ok\n"); }
+    else if (!strcmp(cmd, "watch") && sscanf(line, "%*s %x %x", &a, &b) == 2) c->mem_set_watch(a, b);
+    else if (!strcmp(cmd, "unwatch")) { c->mem_set_watch(0, 0); fprintf(stderr, "[repl] unwatch\n"); }
+    else if (!strcmp(cmd, "hits")) fprintf(stderr, "[repl] watch hits=%d\n", c->mem_watch_hits());
     else if (!strcmp(cmd, "press") && sscanf(line, "%*s %31s", arg) == 1)   { held &= ~repl_btn(arg); pad_repl_hold(held); fprintf(stderr, "[repl] held=%04X\n", held); }
     else if (!strcmp(cmd, "release") && sscanf(line, "%*s %31s", arg) == 1) { held |= repl_btn(arg);  pad_repl_hold(held); fprintf(stderr, "[repl] held=%04X\n", held); }
     else if (!strcmp(cmd, "tap") && sscanf(line, "%*s %31s %u", arg, &a) >= 1) { if (!a) a = 4; pad_repl_tap((uint16_t)(0xFFFF & ~repl_btn(arg)), (int)a); fprintf(stderr, "[repl] tap %s %u\n", arg, a); }
@@ -250,27 +243,27 @@ static long native_repl_read(R3000* c, uint32_t f) {
     else if (!strcmp(cmd, "dumpram")) {
       char path[200] = {0};
       if (sscanf(line, "%*s %199s", path) == 1) {
-        extern uint8_t g_ram[]; FILE* fp = fopen(path, "wb");
-        if (fp) { fwrite(g_ram, 1, 0x200000, fp); fclose(fp); fprintf(stderr, "[repl] dumpram -> %s\n", path); }
+        FILE* fp = fopen(path, "wb");
+        if (fp) { fwrite(c->ram, 1, 0x200000, fp); fclose(fp); fprintf(stderr, "[repl] dumpram -> %s\n", path); }
         else fprintf(stderr, "[repl] dumpram: cannot open %s\n", path);
       }
     }
     else if (!strcmp(cmd, "wav")) { char path[200] = {0}; if (sscanf(line, "%*s %199s", path) == 1) spu_wav_reopen(path); }
-    else if (!strcmp(cmd, "bgm") && sscanf(line, "%*s %u", &a) == 1) { rc1(c, 0x80074BF8u, a); fprintf(stderr, "[repl] bgm %u (song@800bed80=%04X)\n", a, mem_r16(0x800bed80)); }
+    else if (!strcmp(cmd, "bgm") && sscanf(line, "%*s %u", &a) == 1) { rc1(c, 0x80074BF8u, a); fprintf(stderr, "[repl] bgm %u (song@800bed80=%04X)\n", a, c->mem_r16(0x800bed80)); }
     else if (!strcmp(cmd, "bgmstop")) { rc0(c, 0x80074E48u); fprintf(stderr, "[repl] bgmstop\n"); }
     else if (!strcmp(cmd, "xadump")) { unsigned ch = 0, lba = 0, secs = 3; char path[200] = {0};
       if (sscanf(line, "%*s %u %u %199s %u", &ch, &lba, path, &secs) >= 3) repl_xadump((uint8_t)ch, lba, path, secs ? (int)secs : 3); }
-    else if (!strcmp(cmd, "stage")) fprintf(stderr, "[repl] stage=%08X sm48=%d\n", mem_r32(0x801fe00c), (int)mem_r16(0x801fe048));
+    else if (!strcmp(cmd, "stage")) fprintf(stderr, "[repl] stage=%08X sm48=%d\n", c->mem_r32(0x801fe00c), (int)c->mem_r16(0x801fe048));
     else if (!strcmp(cmd, "regs")) { for (int i = 0; i < 32; i++) { fprintf(stderr, " r%-2d=%08X", i, c->r[i]); if ((i & 3) == 3) fprintf(stderr, "\n"); } fprintf(stderr, " hi=%08X lo=%08X\n", c->hi, c->lo); }
     else if (!strcmp(cmd, "seq")) fprintf(stderr, "[repl] seq open=%d playmask=%04X tickmode=%d seqfn=%08X stage=%08X\n",
-                                          (int16_t)mem_r16(0x801054B0), mem_r32(0x80104C28) & 0xFFFF, mem_r8(0x800AC424), mem_r32(0x800AC42C), mem_r32(0x801fe00c));
+                                          (int16_t)c->mem_r16(0x801054B0), c->mem_r32(0x80104C28) & 0xFFFF, c->mem_r8(0x800AC424), c->mem_r32(0x800AC42C), c->mem_r32(0x801fe00c));
     else fprintf(stderr, "[repl] ? %s\n", cmd);
     fflush(stderr);
   }
   return -1;  // EOF
 }
 
-static void ov_game_main(R3000* c) {
+static void ov_game_main(Core* c) {
   fprintf(stderr, "[native_boot] FUN_80050b08 override: running init prefix\n");
 
   // --- init prefix, transcribed from FUN_80050b08 (no scheduler loop) ---
@@ -290,7 +283,7 @@ static void ov_game_main(R3000* c) {
   rc1(c, 0x800993a0, 1);
   // FUN_80089bac(0xe, &local_28, 0) with local_28[0] = 0x80 (a stack byte buffer).
   uint32_t buf = c->r[29] - 0x40;
-  mem_w8(buf, 0x80);
+  c->mem_w8(buf, 0x80);
   rc3(c, 0x80089bac, 0xe, buf, 0);
   rc1(c, 0x80085900, 3);
   rc0(c, 0x80075130);
@@ -309,12 +302,12 @@ static void ov_game_main(R3000* c) {
   // (FUN_80051f80, a no-op with threads stubbed) so it runs straight to completion here. The
   // scheduler's "current task" ptr DAT_1f800138 is normally set by FUN_80051e60; set it to task0
   // so FUN_80052078/FUN_800450bc operate on task 0. ---
-  mem_w32(0x1f800138, 0x801fe000);
+  c->mem_w32(0x1f800138, 0x801fe000);
   rc0(c, 0x800499e8);
   // START.BIN loaded raw to 0x80106228: [0]=manifest count (6); entry word @0x8010649c.
   fprintf(stderr, "[native_boot] after FUN_800499e8: START.BIN count@0x80106228=%u "
                   "entry-word@0x8010649c=0x%08X (expect 0x27BDFE38); task0 state=%u entry=0x%08X\n",
-          mem_r32(0x80106228), mem_r32(0x8010649c), mem_r16(0x801fe000), mem_r32(0x801fe00c));
+          c->mem_r32(0x80106228), c->mem_r32(0x8010649c), c->mem_r16(0x801fe000), c->mem_r32(0x801fe00c));
   // --- native frame loop (replaces LAB_80050c6c). Per frame, faithful to the game-main loop
   // body but with the scheduler call FUN_80051e60 replaced by native stage stepping (added
   // incrementally). FUN_800788ac is overridden (ov_frame_update): real per-frame update +
@@ -338,8 +331,8 @@ static void ov_game_main(R3000* c) {
   fprintf(stderr, "[native_boot] entering native frame loop (%s)\n",
           nframes ? "capped" : "interactive (until window close)");
   void hle_deliver_event(uint32_t ev_class, uint32_t spec);
-  void pad_service_frame(void);
-  void dbg_server_start(void); void dbg_server_service(R3000* c);
+  void pad_service_frame(Core*);
+  void dbg_server_start(void); void dbg_server_service(Core* c);
   dbg_server_start();     // PSXPORT_DEBUG_SERVER: non-blocking live TCP debug server (dbg_server.c)
   long repl_budget = 0;   // frames remaining in the current REPL `run N`
   for (uint32_t f = 0; nframes == 0 || f < nframes; f++) {
@@ -364,9 +357,9 @@ static void ov_game_main(R3000* c) {
             char* c2 = strchr(c1 + 1, ':'); if (c2) { *c2 = 0; snprintf(vf, sizeof vf, "%s", c2 + 1); }
             snprintf(rf, sizeof rf, "%s", c1 + 1); } } }
       if (tf >= 0 && (int)f == tf) {
-        extern uint8_t g_ram[]; int gpu_native_load_vram(const char*);
+        int gpu_native_load_vram(const char*);
         FILE* mf = fopen(rf, "rb");
-        if (mf) { size_t n = fread(g_ram, 1, 0x200000, mf); fclose(mf);
+        if (mf) { size_t n = fread(c->ram, 1, 0x200000, mf); fclose(mf);
                   fprintf(stderr, "[transplant] loaded RAM %zu B from %s at lf%u\n", n, rf, f); }
         else fprintf(stderr, "[transplant] FAILED to open %s\n", rf);
         if (vf[0]) gpu_native_load_vram(vf);
@@ -380,18 +373,18 @@ static void ov_game_main(R3000* c) {
     // Per-frame draw/display-env setup (LAB_80050c6c top): the env struct pair for the current
     // back buffer is at 0x800e80a8 + DAT_1f800135*0x2070 (the Ghidra `+uVar1*0x81c` is word
     // arithmetic: 0x81c*4 = 0x2070 bytes); FUN_80081458 clears its ordering table.
-    uint32_t envp = 0x800e80a8u + (uint32_t)mem_r8(0x1f800135) * 0x2070u;
-    mem_w32(0x800ed8c8, envp);                               // PTR_DAT_800ed8c8
+    uint32_t envp = 0x800e80a8u + (uint32_t)c->mem_r8(0x1f800135) * 0x2070u;
+    c->mem_w32(0x800ed8c8, envp);                               // PTR_DAT_800ed8c8
     rc2(c, 0x80081458, envp, 0x800);                         // ClearOTagR(ot, 0x800)
-    mem_w16(0x800e809c, 0);                                  // DAT_800e809c = 0 (dwell counter)
-    mem_w32(0x800bf4f4, mem_r32(0x800bf544));                // framebuffer ptr swap
-    mem_w32(0x800bf544, (mem_r8(0x1f800135) * 0x14000 + 0x800bfe68) & 0xffffff);
+    c->mem_w16(0x800e809c, 0);                                  // DAT_800e809c = 0 (dwell counter)
+    c->mem_w32(0x800bf4f4, c->mem_r32(0x800bf544));                // framebuffer ptr swap
+    c->mem_w32(0x800bf544, (c->mem_r8(0x1f800135) * 0x14000 + 0x800bfe68) & 0xffffff);
     // PSXPORT_AUTO_NEWGAME: own the title->New Game navigation so we boot straight into the post-New
     // Game prologue cutscene (stage 0x8010637C) deterministically — no fighting the attract loop. The
     // menu confirm is Cross (0x4000); pulse it at the title (DEMO overlay) until task0 enters GAME.
     { static int ang = -1; if (ang < 0) ang = cfg_str("PSXPORT_AUTO_NEWGAME") ? 1 : 0;
       if (ang == 1) {
-        if (mem_r32(0x801fe00c) != 0x8010637Cu) {
+        if (c->mem_r32(0x801fe00c) != 0x8010637Cu) {
           if ((f % 12u) == 0) pad_repl_tap((uint16_t)(0xFFFF & ~0x4000), 6);   // tap Cross
         } else { void dbg_set_paused(int); fprintf(stderr, "[autonewgame] reached GAME (prologue) at frame %u — auto-paused\n", f);
                  ang = 2; if (cfg_str("PSXPORT_AUTO_NEWGAME") && atoi(cfg_str("PSXPORT_AUTO_NEWGAME")) >= 2) dbg_set_paused(1); }
@@ -404,7 +397,7 @@ static void ov_game_main(R3000* c) {
     { static int gnav = -1, sustain = 0;
       if (gnav < 0) gnav = cfg_str("PSXPORT_AUTO_GAMEPLAY") ? 1 : 0;
       if (gnav == 1) {
-        int xa_stream_is_looping(void); void pad_repl_release(void);
+        void pad_repl_release(void);
         if (xa_stream_is_looping()) sustain++; else sustain = 0;   // resets whenever dialog stops chan4
         if (sustain >= 150) {                                      // ~5 s of uninterrupted area music = field
           pad_repl_release();
@@ -428,23 +421,23 @@ static void ov_game_main(R3000* c) {
     { int dbg_is_paused(void), dbg_step_pending(void); void dbg_consume_step(void); void gpu_repaint(void);
       while (dbg_is_paused()) {
         if (dbg_step_pending()) { dbg_consume_step(); break; }   // run exactly one frame
-        pad_service_frame();      // pump host input (keeps the window responsive)
+        pad_service_frame(c);      // pump host input (keeps the window responsive)
         gpu_repaint();            // re-present current frame: window stays live + readback is accurate
         dbg_server_service(c);    // receive step/play/capture commands
         usleep(15000);
       } }
-    pad_service_frame();                                     // host input -> game pad buffer (pre-read)
-    xa_audio_trace("pre");                                   // CD-vol fade state BEFORE tick+mix
+    pad_service_frame(c);                                     // host input -> game pad buffer (pre-read)
+    xa_audio_trace(c, "pre");                                   // CD-vol fade state BEFORE tick+mix
     rc0(c, 0x800788ac);                                      // tick + present + audio (override)
-    xa_audio_trace("post");                                  // CD-vol fade state AFTER tick+mix
+    xa_audio_trace(c, "post");                                  // CD-vol fade state AFTER tick+mix
     native_scheduler_step(c);                                // <- replaces FUN_80051e60
     xa_dialog_coord(c);                                      // dialogs stop/restore ingame music (instant-CD mod)
-    xa_audio_trace("coord");                                 // CD-vol fade state AFTER coord
+    xa_audio_trace(c, "coord");                                 // CD-vol fade state AFTER coord
     rc1(c, 0x80080f6c, 0);                                   // draw sync
     rc0(c, 0x800506d0);                                      // task sleep-countdown (re-arm 1->2)
     // Buffer flip + display env (LAB_80050c6c, DAT_1f80019c==0 branch): submit this frame's
     // draw env / display env / ordering table to the GPU, then flip the double buffer.
-    if (mem_r16(0x1f80019c) == 0) {
+    if (c->mem_r16(0x1f80019c) == 0) {
       rc1(c, 0x8008179c, envp + 0x2000);                    // PutDispEnv  (env+0x2000)
       rc1(c, 0x800815d0, envp + 0x2014);                    // PutDrawEnv  (env+0x2014)
       rc1(c, 0x80081560, envp + 0x1ffc);                    // DrawOTag (submit the OT head)
@@ -452,7 +445,7 @@ static void ov_game_main(R3000* c) {
       // DAT_1f80019c==0 branch swaps unconditionally — DAT_1f800135 = 1 - DAT_1f800135). The game
       // draws BOTH framebuffers' worth of content across its frames; the display/draw env pair
       // selected by the parity is what governs what shows, so the swap must always track it.
-      mem_w8(0x1f800135, 1 - mem_r8(0x1f800135));           // flip back/front buffer
+      c->mem_w8(0x1f800135, 1 - c->mem_r8(0x1f800135));           // flip back/front buffer
     }
     // PSXPORT_SEQDBG — libsnd sequencer STATE trace (from SsSeqCalled @0x80090BD0): is any BGM
     // sequence OPEN/PLAYING? 0x801054B0=open-seq count, 0x80104C28=playing bitmask, 0x800AC424=tick
@@ -460,11 +453,11 @@ static void ov_game_main(R3000* c) {
     // missing-BGM root cause is upstream (song open/play not happening), not the SPU/tick.
     if (cfg_dbg("seq")) {
       static uint32_t ls = 0xFFFFFFFF;
-      uint32_t st = (mem_r16(0x801054B0) << 16) | (mem_r32(0x80104C28) & 0xFFFF);
+      uint32_t st = (c->mem_r16(0x801054B0) << 16) | (c->mem_r32(0x80104C28) & 0xFFFF);
       if (st != ls) {
         fprintf(stderr, "[seqdbg] f%u open=%d playmask=0x%04X tickmode=%d seqfn=0x%08X stage=0x%08X\n",
-                f, (int16_t)mem_r16(0x801054B0), mem_r32(0x80104C28) & 0xFFFF,
-                mem_r8(0x800AC424), mem_r32(0x800AC42C), mem_r32(TASKBASE + 0xc));
+                f, (int16_t)c->mem_r16(0x801054B0), c->mem_r32(0x80104C28) & 0xFFFF,
+                c->mem_r8(0x800AC424), c->mem_r32(0x800AC42C), c->mem_r32(TASKBASE + 0xc));
         ls = st;
       }
     }
@@ -478,30 +471,30 @@ static void ov_game_main(R3000* c) {
       static uint32_t s_rd[14];
       for (int i = 0; i < 14; i++) {
         uint32_t s = 0x800be3d8u + (uint32_t)i * 0xB0u;
-        uint32_t flag = mem_r32(s + 0x98), rd = mem_r32(s);
+        uint32_t flag = c->mem_r32(s + 0x98), rd = c->mem_r32(s);
         if ((flag & 1) && rd != s_rd[i]) {
           fprintf(stderr, "[bgmtick] f%u slot%d active rdptr=%08X base=%08X (%+d)\n",
-                  f, i, rd, mem_r32(s + 4), (int)(rd - mem_r32(s + 4)));
+                  f, i, rd, c->mem_r32(s + 4), (int)(rd - c->mem_r32(s + 4)));
           s_rd[i] = rd;
         }
         if (!(flag & 1)) s_rd[i] = 0;
       }
     }
     static uint32_t s_last_entry = 0; static uint32_t s_last_sm = 0xFFFFFFFF;
-    uint32_t t0e = mem_r32(TASKBASE + 0xc), s48 = mem_r16(TASKBASE + 0x48);
+    uint32_t t0e = c->mem_r32(TASKBASE + 0xc), s48 = c->mem_r16(TASKBASE + 0x48);
     // GAME runs a 4-level nested state machine (task +0x48/4a/4c/4e). Track all of it so a
     // stuck leaf is visible, not just the outer s48.
-    uint32_t sm = (mem_r16(TASKBASE+0x48)<<24)|(mem_r16(TASKBASE+0x4a)<<16)|
-                  (mem_r16(TASKBASE+0x4c)<<8)|mem_r16(TASKBASE+0x4e)
-                  ^ (mem_r16(TASKBASE+0x50)<<12)^(mem_r16(TASKBASE+0x52)<<4);
+    uint32_t sm = (c->mem_r16(TASKBASE+0x48)<<24)|(c->mem_r16(TASKBASE+0x4a)<<16)|
+                  (c->mem_r16(TASKBASE+0x4c)<<8)|c->mem_r16(TASKBASE+0x4e)
+                  ^ (c->mem_r16(TASKBASE+0x50)<<12)^(c->mem_r16(TASKBASE+0x52)<<4);
     if (t0e != s_last_entry || sm != s_last_sm) {
       const char* stg = t0e == 0x8010649Cu ? "START" : t0e == 0x801062E4u ? "DEMO" :
                         t0e == 0x8010637Cu ? "GAME" : "?";
       fprintf(stderr, "[native_boot]   frame %u: stage=%s(0x%08X) sm[48=%u 4a=%u 4c=%u 4e=%u 50=%u 52=%u]"
               " @0x80109450=%08X\n",
-              f, stg, t0e, mem_r16(TASKBASE+0x48), mem_r16(TASKBASE+0x4a),
-              mem_r16(TASKBASE+0x4c), mem_r16(TASKBASE+0x4e), mem_r16(TASKBASE+0x50),
-              mem_r16(TASKBASE+0x52), mem_r32(0x80109450));
+              f, stg, t0e, c->mem_r16(TASKBASE+0x48), c->mem_r16(TASKBASE+0x4a),
+              c->mem_r16(TASKBASE+0x4c), c->mem_r16(TASKBASE+0x4e), c->mem_r16(TASKBASE+0x50),
+              c->mem_r16(TASKBASE+0x52), c->mem_r32(0x80109450));
       s_last_entry = t0e; s_last_sm = sm;
     }
     // One-shot: when GAME has settled, dump the CD-streaming contract (FUN_8001cfc8, task
@@ -509,45 +502,45 @@ static void ov_game_main(R3000* c) {
     // DAT_801fe134/138). DAT_801fe146=channel/type. _DAT_1f8001f8=dest, _DAT_1f8001f4=words.
     if (cfg_dbg("stream") && t0e == 0x8010637Cu && f == 75) {
       fprintf(stderr, "[streamdbg] task2 obj @0x801fe0e0 state=%u entry=0x%08X\n",
-              mem_r16(0x801fe0e0), mem_r32(0x801fe0ec));
+              c->mem_r16(0x801fe0e0), c->mem_r32(0x801fe0ec));
       fprintf(stderr, "[streamdbg] startLBA(+54/801fe134)=%u endLBA(+58/801fe138)=%u "
               "chan(801fe146)=%u be0e4=0x%02X\n",
-              mem_r32(0x801fe134), mem_r32(0x801fe138), mem_r8(0x801fe146), mem_r8(0x800be0e4));
+              c->mem_r32(0x801fe134), c->mem_r32(0x801fe138), c->mem_r8(0x801fe146), c->mem_r8(0x800be0e4));
       fprintf(stderr, "[streamdbg] dest(_DAT_1f8001f8)=0x%08X words(_DAT_1f8001f4)=%u "
               "f0=%u f1f800224=0x%08X\n",
-              mem_r32(0x1f8001f8), mem_r32(0x1f8001f4), mem_r32(0x1f8001f0), mem_r32(0x1f800224));
+              c->mem_r32(0x1f8001f8), c->mem_r32(0x1f8001f4), c->mem_r32(0x1f8001f0), c->mem_r32(0x1f800224));
     }
     // PSXPORT_RAMDUMP_FRAME=N — dump RAM mid-run at native frame N (overlay state during gameplay
     // differs from end-of-run; needed to disasm the LIVE level/stage overlay at 0x8010/0x8011xxxx).
     { const char* rdf = cfg_str("PSXPORT_RAMDUMP_FRAME");
       if (rdf && f == (uint32_t)strtoul(rdf, 0, 0)) {
-        extern uint8_t g_ram[];
+        
         const char* rd = cfg_str("PSXPORT_RAMDUMP"); if (!rd) rd = "scratch/bin/midrun_ram.bin";
         FILE* mf = fopen(rd, "wb");
-        if (mf) { fwrite(g_ram, 1, 0x200000, mf); fclose(mf);
+        if (mf) { fwrite(c->ram, 1, 0x200000, mf); fclose(mf);
                   fprintf(stderr, "[native_boot] mid-run RAM dump @frame %u -> %s\n", f, rd); }
       } }
     if (f < 10 || (f % 30) == 0)
       fprintf(stderr, "[native_boot]   frame %u: t0[st=%u e=0x%08X s48=%u] t1[st=%u] t2[st=%u] "
-                      "f135=%u\n", f, mem_r16(TASKBASE), mem_r32(TASKBASE + 0xc),
-              mem_r16(TASKBASE + 0x48), mem_r16(TASKBASE + 0x70), mem_r16(TASKBASE + 0xe0),
-              mem_r8(0x1f800135));
+                      "f135=%u\n", f, c->mem_r16(TASKBASE), c->mem_r32(TASKBASE + 0xc),
+              c->mem_r16(TASKBASE + 0x48), c->mem_r16(TASKBASE + 0x70), c->mem_r16(TASKBASE + 0xe0),
+              c->mem_r8(0x1f800135));
     dbg_server_service(c);  // service one queued live-debug-server command (non-blocking)
   }
   fprintf(stderr, "[native_boot] frame loop done; task0 state=%u entry=0x%08X obj+0x48=%u\n",
-          mem_r16(TASKBASE), mem_r32(TASKBASE + 0xc), mem_r16(TASKBASE + 0x48));
+          c->mem_r16(TASKBASE), c->mem_r32(TASKBASE + 0xc), c->mem_r16(TASKBASE + 0x48));
   const char* rd = cfg_str("PSXPORT_RAMDUMP");
   if (rd) {
-    extern uint8_t g_ram[];
+    
     FILE* f = fopen(rd, "wb");
-    if (f) { fwrite(g_ram, 1, 0x200000, f); fclose(f);
+    if (f) { fwrite(c->ram, 1, 0x200000, f); fclose(f);
              fprintf(stderr, "[native_boot] dumped 2MB RAM -> %s\n", rd); }
   }
 }
 
 // Wired from boot.c when PSXPORT_NATIVE_BOOT is set. Registers the main override and enters
 // crt0; crt0's call to FUN_80050b08 lands in ov_game_main.
-void native_boot_run(R3000* c) {
+void native_boot_run(Core* c) {
   { void cfg_dump(void); cfg_dump(); }   // log active PSXPORT_* config once (see docs/config.md)
   // Intro FMVs: the real boot is SCEA (stub) -> Whoopee logo -> opening movie -> title/menu. The
   // game's own STR streaming (strNext) TIMES OUT under our runtime (we don't feed CD-streamed FMV
@@ -555,7 +548,7 @@ void native_boot_run(R3000* c) {
   // skipped to a black gap. Play them here with our self-contained native FMV player (native_fmv.c)
   // before booting MAIN, restoring SCEA->Woopee->OP->menu. PSXPORT_NO_FMV skips them (headless
   // gameplay tests that need to reach GAME fast / with stable frame numbers).
-  int native_fmv_play(const char*);
+  int native_fmv_play(Core*, const char*);
   // Skip the intro FMVs when there's no viewer: PSXPORT_NO_FMV, OR any headless run (a headless probe
   // has nobody watching — playing/decoding the intro movies just burns wall-clock; a field probe went
   // from ~77s to ~1.4s). The in-game/cutscene FMVs that still play are also auto-uncapped in headless
@@ -565,8 +558,8 @@ void native_boot_run(R3000* c) {
   if (nf_ov && atoi(nf_ov) == 0 && *nf_ov) skip_fmv = 0;     // explicit PSXPORT_NO_FMV=0 forces FMVs on
   if (!skip_fmv) {
     fprintf(stderr, "[native_boot] playing intro FMVs (Whoopee logo, opening)\n");
-    native_fmv_play("MOVIE/LOGO.STR");
-    native_fmv_play("MOVIE/OP.STR");
+    native_fmv_play(c, "MOVIE/LOGO.STR");
+    native_fmv_play(c, "MOVIE/OP.STR");
   } else {
     fprintf(stderr, "[native_boot] skipping intro FMVs (headless/NO_FMV)\n");
   }

@@ -34,7 +34,7 @@
 // _card_chan/_card_info stay on their existing HLE stubs (they touch no blocking IRQ);
 // _card_status always reports "complete" so the spin falls through on its first check.
 
-#include "r3000.h"
+#include "core.h"
 #include "cfg.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -178,7 +178,7 @@ static void card_deliver_complete(void) {
 // A0 libcard table (_card_info / _card_load) — Tomba2's "Checking MEMORY CARD" uses A0:0xAB, not the B0
 // path. The card is host-backed and always present/healthy, so accept and deliver the detect/complete
 // event so the caller's event-wait falls through immediately (PC-native, zero delay).
-int card_hle_a0(uint32_t fn, R3000* c) {
+int card_hle_a0(uint32_t fn, Core* c) {
   switch (fn) {
     case 0xABu:   // _card_info(port)
     case 0xACu:   // _card_load(slot)
@@ -191,20 +191,20 @@ int card_hle_a0(uint32_t fn, R3000* c) {
 // B0:0x4E _card_read(chan, sector, buf): read frame `sector` (128 B) into g_ram[buf].
 // Returns 1 (issue accepted) like the BIOS; the actual data is delivered immediately so the
 // caller's subsequent _card_status spin completes at once.
-static void ov_card_read(R3000* c) {
+static void ov_card_read(Core* c) {
   uint32_t sector = c->r[A1], buf = c->r[A2];
   uint8_t f[CARD_FRAME_SIZE];
   card_read_frame(sector, f);
-  for (uint32_t i = 0; i < CARD_FRAME_SIZE; i++) mem_w8(buf + i, f[i]);
+  for (uint32_t i = 0; i < CARD_FRAME_SIZE; i++) c->mem_w8(buf + i, f[i]);
   if (g_card_verbose) fprintf(stderr, "[card] read  frame %u -> 0x%08X\n", sector, buf);
   c->r[V0] = 1;
 }
 
 // B0:0x4F _card_write(chan, sector, buf): write frame `sector` (128 B) from g_ram[buf].
-static void ov_card_write(R3000* c) {
+static void ov_card_write(Core* c) {
   uint32_t sector = c->r[A1], buf = c->r[A2];
   uint8_t f[CARD_FRAME_SIZE];
-  for (uint32_t i = 0; i < CARD_FRAME_SIZE; i++) f[i] = mem_r8(buf + i);
+  for (uint32_t i = 0; i < CARD_FRAME_SIZE; i++) f[i] = c->mem_r8(buf + i);
   card_write_frame(sector, f);
   if (g_card_verbose) fprintf(stderr, "[card] write frame %u <- 0x%08X\n", sector, buf);
   c->r[V0] = 1;
@@ -212,11 +212,11 @@ static void ov_card_write(R3000* c) {
 
 // B0:0x5C _card_status(chan): the game spins `while((status & 1) == 0)`; since our read/write
 // already completed synchronously, always report bit0 set (transfer complete, no error).
-static void ov_card_status(R3000* c) { c->r[V0] = 1; }
+static void ov_card_status(Core* c) { c->r[V0] = 1; }
 
 // B0:0x4C _card_info(chan): the BIOS issues a "get card info" and delivers a completion event; the
 // card is always present + healthy here (host-backed), so accept and deliver completion immediately.
-static void ov_card_info(R3000* c) { card_deliver_complete(); c->r[V0] = 1; }
+static void ov_card_info(Core* c) { card_deliver_complete(); c->r[V0] = 1; }
 
 // B0 libcard dispatch — these run through the HLE B0 vector (the game's statically-linked libcard
 // wrappers call B0:idx via the `li t0,0xB0; jr t0` trampoline -> rec_dispatch_miss -> recomp_hle ->
@@ -224,7 +224,7 @@ static void ov_card_info(R3000* c) { card_deliver_complete(); c->r[V0] = 1; }
 // libcard completion event so the caller's event-wait / status-spin falls through at once. Returns 1
 // if handled. (The old rec_set_override on BIOS addresses 0x8009xxxx was DEAD — those addresses are
 // never executed in this pure-HLE-BIOS build; the trampoline funnels everything through recomp_hle.)
-int card_hle_b0(uint32_t fn, R3000* c) {
+int card_hle_b0(uint32_t fn, Core* c) {
   switch (fn) {
     case 0x4Cu: case 0x4Eu: case 0x4Fu: case 0x50u: case 0x5Cu:
       if (g_card_verbose) fprintf(stderr, "[card] B0:0x%02X(a0=%X a1=%X a2=%X)\n", fn, c->r[A0], c->r[A1], c->r[A2]);

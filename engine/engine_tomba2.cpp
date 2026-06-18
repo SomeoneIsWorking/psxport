@@ -13,7 +13,7 @@
 // A/B TOGGLE: native walk is the DEFAULT (it IS the engine now); set PSXPORT_RECOMP_OBJWALK=1 to fall
 // back to the recomp body (the oracle) for diffing. Verified native==recomp: VRAM bit-identical at
 // frames 4000 and 4720 of real gameplay (1 MB cmp PASS each) — see docs/journal.md.
-#include "r3000.h"
+#include "core.h"
 #include "cfg.h"
 #include "tomba2_types.h"
 #include "margin_render.hpp"
@@ -21,9 +21,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 
-extern uint32_t mem_r32(uint32_t);
-extern void     mem_w8(uint32_t, uint8_t);
-extern void     rec_dispatch(R3000* c, uint32_t addr);   // run a function by address (override or interp)
+extern void     rec_dispatch(Core* c, uint32_t addr);   // run a function by address (override or interp)
 extern uint32_t g_current_object;                        // fps60: tag the object a handler's geometry belongs to
 
 static int  s_dbg   = -1;
@@ -32,18 +30,18 @@ static long s_walks = 0;
 // Call one node's handler exactly as the recomp does: a0 = node, jalr *(node+0x1c). Tag g_current_object
 // = node around the WHOLE handler so fps60 attributes ALL geometry it submits to this entity (the
 // interpolation identity), independent of whether projection happens inside the cull subtree.
-static inline void call_handler(R3000* c, uint32_t node) {
+static inline void call_handler(Core* c, uint32_t node) {
   uint32_t prev = g_current_object;
   g_current_object = node;
   c->r[4] = node;                                  // $a0
-  rec_dispatch(c, mem_r32(node + T2OBJ_HANDLER));
+  rec_dispatch(c, c->mem_r32(node + T2OBJ_HANDLER));
   g_current_object = prev;
 }
 
-static void walk_list(R3000* c, uint32_t head, long* count) {
+static void walk_list(Core* c, uint32_t head, long* count) {
   for (uint32_t n = head; n; ) {
-    uint32_t next = mem_r32(n + T2OBJ_NEXT);       // read next BEFORE the handler may unlink the node
-    mem_w8(n + T2OBJ_RENDER_FLAG, 0);              // engine clears the per-frame render flag
+    uint32_t next = c->mem_r32(n + T2OBJ_NEXT);       // read next BEFORE the handler may unlink the node
+    c->mem_w8(n + T2OBJ_RENDER_FLAG, 0);              // engine clears the per-frame render flag
     call_handler(c, n);
     n = next; (*count)++;
   }
@@ -51,10 +49,10 @@ static void walk_list(R3000* c, uint32_t head, long* count) {
 
 // Native FUN_8007a904. Second list head is re-read fresh after list 1 (handlers in list 1 may mutate
 // it) — matches the recomp body, which reloads DAT_800f2624 across the first loop.
-static void ov_objwalk(R3000* c) {
+static void ov_objwalk(Core* c) {
   long nodes = 0;
-  walk_list(c, mem_r32(T2_OBJLIST_HEAD_1), &nodes);
-  walk_list(c, mem_r32(T2_OBJLIST_HEAD_2), &nodes);
+  walk_list(c, c->mem_r32(T2_OBJLIST_HEAD_1), &nodes);
+  walk_list(c, c->mem_r32(T2_OBJLIST_HEAD_2), &nodes);
 
   // Native widescreen margin (later-133): render the objects the wide frustum re-included (collected by
   // ov_object_cull during the walk) via per-node flushes here — after all handlers ran, before the OT is

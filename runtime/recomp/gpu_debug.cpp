@@ -1,3 +1,4 @@
+#include "core.h"
 // gpu_debug.c — read-only diagnostic dumps of the native GPU state (carved out of gpu_native.c).
 //
 // These format human-readable views of the renderer's state for the debug tooling and the live debug
@@ -64,20 +65,20 @@ static int gp0_cmd_len(uint8_t op) {
   if (op >= 0xA0 && op <= 0xDF) return 3;
   return 1;
 }
-void gpu_scene_dump(FILE* out, uint32_t madr) {
+void gpu_scene_dump(Core* core, FILE* out, uint32_t madr) {
   uint32_t addr = madr & 0x1FFFFC;
   int npoly = 0, nrect = 0, nline = 0, nfill = 0, ncopy = 0, nup = 0, nenv = 0;
   fprintf(out, "[scene] f%d OT@0x%08X — classified display list:\n", s_frame, 0x80000000u | addr);
   for (int g = 0; g < 0x10000; g++) {
-    uint32_t hdr = mem_r32(addr); int n = hdr >> 24, i = 0;
+    uint32_t hdr = core->mem_r32(addr); int n = hdr >> 24, i = 0;
     while (i < n) {
-      uint32_t c = mem_r32(addr + 4 + i * 4); uint8_t op = c >> 24;
+      uint32_t c = core->mem_r32(addr + 4 + i * 4); uint8_t op = c >> 24;
       int len = gp0_cmd_len(op); if (len <= 0) break;
-      uint32_t w1 = (i + 1 < n) ? mem_r32(addr + 4 + (i + 1) * 4) : 0;
-      uint32_t w2 = (i + 2 < n) ? mem_r32(addr + 4 + (i + 2) * 4) : 0;
+      uint32_t w1 = (i + 1 < n) ? core->mem_r32(addr + 4 + (i + 1) * 4) : 0;
+      uint32_t w2 = (i + 2 < n) ? core->mem_r32(addr + 4 + (i + 2) * 4) : 0;
       if (op == 0x02) { nfill++; fprintf(out, "  FILL rgb=(%d,%d,%d) at(%d,%d) %dx%d\n",
           c&0xFF,(c>>8)&0xFF,(c>>16)&0xFF, w1&0x3FF,(w1>>16)&0x1FF, w2&0x3FF,(w2>>16)&0x1FF); }
-      else if (op >= 0x80 && op <= 0x9F) { ncopy++; uint32_t w3 = (i+3<n)?mem_r32(addr+4+(i+3)*4):0;
+      else if (op >= 0x80 && op <= 0x9F) { ncopy++; uint32_t w3 = (i+3<n)?core->mem_r32(addr+4+(i+3)*4):0;
         fprintf(out, "  COPY src(%d,%d)->dst(%d,%d) %dx%d [reflection/fade]\n",
           w1&0x3FF,(w1>>16)&0x1FF, w2&0x3FF,(w2>>16)&0x1FF, w3&0x3FF,(w3>>16)&0x1FF); }
       else if (op >= 0xA0 && op <= 0xBF) nup++;
@@ -96,4 +97,4 @@ void gpu_scene_dump(FILE* out, uint32_t madr) {
 }
 // On-demand scene dump for the live debug server (dbg_server.c): classify the CURRENT frame's
 // last-submitted OT (g_ot_madr, set by gpu_dma2_linked_list) into `out`.
-void gpu_scene_dump_now(FILE* out) { gpu_scene_dump(out, g_ot_madr); }
+void gpu_scene_dump_now(Core* core, FILE* out) { gpu_scene_dump(core, out, g_ot_madr); }

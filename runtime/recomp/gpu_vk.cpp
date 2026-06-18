@@ -1,3 +1,4 @@
+#include "core.h"
 // gpu_vk.c — Vulkan present backend (M0) for the Tomba2Engine port.
 //
 // M0 scope: take over PRESENTATION via Vulkan (SDL_Vulkan swapchain) — the software rasterizer in

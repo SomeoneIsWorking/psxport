@@ -1,3 +1,5 @@
+#include "core.h"
+#include "c_subsys.h"
 // Native FMV player for the Tomba!2 PC port.
 //
 // Plays PSX .STR movies (MOVIE/LOGO.STR, MOVIE/OP.STR) entirely with our own code,
@@ -44,17 +46,8 @@
 #include <math.h>
 
 // ---- runtime pieces we call (declared here to avoid header churn; do NOT modify them) ----
-int  disc_read_sector(uint32_t lba, uint8_t* out2048);     // disc.c
 
-void     mdec_init(void);                                   // mdec_beetle.c
-void     mdec_write(uint32_t addr, uint32_t val);
-uint32_t mdec_read(uint32_t addr);
-void     mdec_dma_in(const uint32_t* words, int count);
-int      mdec_dma_out(uint32_t* buf, int count);
-int      mdec_dma_out_rest(uint32_t* buf, int count);       // scatter-aware end-of-frame tail drain
 int      mdec_dma_can_read(void);
-int      mdec_dma_can_write(void);
-void     MDEC_Run(int32_t clocks);                          // Beetle mdec.c (clock pump)
 
 // Pump the MDEC decode state machine. Beetle's MDEC only advances its decode loop when it
 // is given clock cycles (MDEC_Run); mdec_write/mdec_dma_in call MDEC_Run(0), which never
@@ -64,9 +57,7 @@ void     MDEC_Run(int32_t clocks);                          // Beetle mdec.c (cl
 // completion. (This is the native equivalent of the scheduler ticking the MDEC event.)
 static void mdec_pump(void) { MDEC_Run(0x40000000); }
 
-void gpu_gp0(uint32_t w);                                   // gpu_native.c
 void gpu_gp1(uint32_t w);
-void gpu_present(void);
 void gpu_native_init(void);
 
 void     pad_poll_sdl(void);                                // pad_input.c (host input)
@@ -541,22 +532,22 @@ int mdec_decode_to_rgb555(const uint16_t* codes, int ncodes,
 }
 
 // Upload an RGB555 frame to VRAM(0,0) and present it.
-static void present_rgb555(const uint16_t* pixels, int width, int height) {
-  gpu_gp0(0xA0000000u);                              // CPU->VRAM
-  gpu_gp0(0);                                         // dest (y<<16)|x = (0,0)
-  gpu_gp0(((uint32_t)height << 16) | (uint32_t)width);
+static void present_rgb555(Core* core, const uint16_t* pixels, int width, int height) {
+  gpu_gp0(core, 0xA0000000u);                              // CPU->VRAM
+  gpu_gp0(core, 0);                                         // dest (y<<16)|x = (0,0)
+  gpu_gp0(core, ((uint32_t)height << 16) | (uint32_t)width);
   int npix = width * height;
   for (int i = 0; i < npix; i += 2) {
     uint32_t lo = pixels[i];
     uint32_t hi = (i + 1 < npix) ? pixels[i + 1] : 0;
-    gpu_gp0(lo | (hi << 16));
+    gpu_gp0(core, lo | (hi << 16));
   }
   // Display this region: start (0,0), hres, vrange (handler takes y1-y0 as height).
   gpu_gp1(0x05000000u);
   uint32_t hcode = (width == 256) ? 0 : (width == 320) ? 1 : (width == 512) ? 2 : 3;
   gpu_gp1(0x08000000u | hcode);
   gpu_gp1(0x07000000u | (((uint32_t)(16 + height) & 0x3FF) << 10) | 16u);
-  gpu_present();
+  gpu_present(core);
 }
 
 // ====================================================================================
@@ -567,7 +558,6 @@ static void present_rgb555(const uint16_t* pixels, int width, int height) {
 // sectors. coding byte (subheader[3]): bit0 stereo, bit2 set => 18900Hz else 37800Hz,
 // bit4 set => 8-bit (we handle both via unit_index_shift).
 // ====================================================================================
-int disc_read_raw(uint32_t lba, uint8_t* out, uint32_t n);   // disc.c (raw 2352B sector)
 
 static const int32_t XA_W[16][2] = {
   {0,0},{60,0},{115,-52},{98,-55},{122,-60} };   // mednafen DecodeXAADPCM weights
@@ -674,7 +664,7 @@ static int fmv_pace(long m, int f, uint32_t t, int u) { (void)m;(void)f;(void)t;
 // ====================================================================================
 // STR demux + top-level play
 // ====================================================================================
-int native_fmv_play_lba(uint32_t lba, uint32_t size_bytes) {
+int native_fmv_play_lba(Core* core, uint32_t lba, uint32_t size_bytes) {
   gpu_native_init();
   mdec_init();
 
@@ -761,7 +751,7 @@ int native_fmv_play_lba(uint32_t lba, uint32_t size_bytes) {
       if (ncodes > 0) {
         int np = mdec_decode_to_rgb555(codes, ncodes, fwidth, fheight, pixels);
         if (np > 0) {
-          present_rgb555(pixels, fwidth, fheight); frames++;
+          present_rgb555(core, pixels, fwidth, fheight); frames++;
           // Pace video to the audio/media clock (no audio sector here, so just gate on it).
           if (fmv_pace(media_frames, xa_freq, t0, uncapped)) { skipped = 1; break; }
         }
@@ -778,14 +768,14 @@ int native_fmv_play_lba(uint32_t lba, uint32_t size_bytes) {
   return frames;
 }
 
-int native_fmv_play(const char* path) {
+int native_fmv_play(Core* core, const char* path) {
   uint32_t lba = 0, size = 0;
   if (!fmv_resolve_path(path, &lba, &size)) {
     fprintf(stderr, "[fmv] could not resolve %s on disc\n", path);
     return -1;
   }
   fprintf(stderr, "[fmv] %s -> LBA %u, %u bytes\n", path, lba, size);
-  return native_fmv_play_lba(lba, size);
+  return native_fmv_play_lba(core, lba, size);
 }
 
 // ---- ISO9660 path resolution (walks directories via disc_read_sector) ----------------

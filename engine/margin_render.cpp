@@ -37,22 +37,22 @@ public:
   // the +24 margin commands (matching geomblks). Other types (02/04/05/09) carry command lists too but
   // their handlers render through different paths (or not at all in the margin), so flushing them
   // over-renders. The type is the correct semantic gate, not a magic offset.
-  void collect(uint32_t node) {
+  void collect(Core* c, uint32_t node) {
     if (node == 0) return;
-    if (mem_r8(node + 0xc) != T2_WORLDGEO_TYPE) return;   // only world-geometry objects render here
+    if (c->mem_r8(node + 0xc) != T2_WORLDGEO_TYPE) return;   // only world-geometry objects render here
     if (!seen_.insert(node).second) return;               // already collected this frame
     nodes_.push_back(node);
   }
 
   // Render every collected node's persistent command list, then reset for the next frame.
-  void flush(R3000* c) {
+  void flush(Core* c) {
     if (!nodes_.empty()) {
       // Preserve caller-saved arg registers around the dispatches (we are mid-walk-return).
       const uint32_t a0 = c->r[4], a1 = c->r[5], a2 = c->r[6], a3 = c->r[7];
       for (uint32_t node : nodes_) {
         if (dbg_ && s_frame == 2900)
           fprintf(stderr, "[margin]   node=%08x type=%02x cnt=%u\n",
-                  node, (unsigned)mem_r8(node + 0xc), (unsigned)mem_r8(node + 8));
+                  node, (unsigned)c->mem_r8(node + 0xc), (unsigned)c->mem_r8(node + 8));
         // Call the FULL per-object render dispatch (gen_func_8003CCA4): it builds the object's transform
         // (cmd+0x18, stale for a never-visible culled object) AND flushes the command list. Calling the
         // low-level flush gen_func_8003CDD8 directly produced a degenerate (zero-rotation) transform
@@ -82,7 +82,7 @@ MarginRenderer g_margin;
 
 }  // namespace
 
-extern "C" int margin_native_enabled(void) {
+int margin_native_enabled(void) {
   static int v = -1;
   if (v < 0) {
     // Default ON (this IS the widescreen margin path). PSXPORT_MARGIN_POKE=1 falls back to the old
@@ -93,10 +93,10 @@ extern "C" int margin_native_enabled(void) {
   return v;
 }
 
-extern "C" void margin_collect(uint32_t node) {
-  g_margin.collect(node);
+void margin_collect(Core* c, uint32_t node) {
+  g_margin.collect(c, node);
 }
 
-extern "C" void margin_render_flush(R3000* c) {
+void margin_render_flush(Core* c) {
   g_margin.flush(c);
 }

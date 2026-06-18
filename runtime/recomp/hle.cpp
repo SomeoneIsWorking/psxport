@@ -1,9 +1,9 @@
 // Recomp-native HLE BIOS (S2 boot subset). Transcribed from the proven wide60 HLE
-// (runtime/hle_kernel.cpp), adapted to operate directly on the R3000 register file and
+// (runtime/hle_kernel.cpp), adapted to operate directly on the Core register file and
 // g_ram via the recomp memory accessors. Scope: exactly the A0/B0/C0 calls the boot path
 // exercises; extended as the boot/diff harness reveals more. Faithful-first — semantics
 // match the wide60 HLE that provably boots Tomba!2; not reimplemented from guesswork.
-#include "r3000.h"
+#include "core.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -85,43 +85,43 @@ static uint32_t heap_block_size(uint32_t addr) {
 // Publish a self-consistent native page so those reads land on valid memory.
 enum { HLE_B0TABLE = 0x8000F000u, HLE_C0TABLE = 0x8000F800u, HLE_WORK_BASE = 0x8000E000u };
 static int s_work_ok = 0;
-static void work_area_init(void) {
+static void work_area_init(Core* c) {
   if (s_work_ok) return;
   s_work_ok = 1;
-  mem_w32(HLE_B0TABLE + 0x16Cu, HLE_WORK_BASE);
-  mem_w32(HLE_C0TABLE + 0, 0x03E00008u);  // jr $ra
-  mem_w32(HLE_C0TABLE + 4, 0);            // nop
+  c->mem_w32(HLE_B0TABLE + 0x16Cu, HLE_WORK_BASE);
+  c->mem_w32(HLE_C0TABLE + 0, 0x03E00008u);  // jr $ra
+  c->mem_w32(HLE_C0TABLE + 4, 0);            // nop
 }
 
 static uint32_t s_int_handler = 0;  // B0:0x19 HookEntryInt — game IRQ entry (recorded)
 
 // BIOS threads are implemented natively (per-thread ucontext stacks) in threads.c.
-uint32_t thread_open(R3000* c);
-uint32_t thread_close(R3000* c);
-void     thread_change(R3000* c, uint32_t handle);
+uint32_t thread_open(Core* c);
+uint32_t thread_close(Core* c);
+void     thread_change(Core* c, uint32_t handle);
 
 // LoadExec (A0:0x51) interceptor. The disc's boot stub uses LoadExec to load+exec
 // cdrom:\MAIN.EXE;1; native_stub installs a hook here that loads MAIN.EXE into RAM and hands
 // control to the native MAIN boot (instead of jumping into the stub's loaded image). NULL
 // outside stub boot (then LoadExec is reported UNIMPL, as before).
-void (*g_loadexec_hook)(R3000*) = 0;
+void (*g_loadexec_hook)(Core*) = 0;
 
 // Dispatch one A0/B0/C0 BIOS call. Returns 1 if handled (c->r[V0] set), 0 otherwise.
-static int recomp_hle(char table, uint32_t fn, R3000* c) {
+static int recomp_hle(char table, uint32_t fn, Core* c) {
   uint32_t a0 = c->r[A0], a1 = c->r[A1], a2 = c->r[A2];
   if (table == 'A') {
     switch (fn) {
       case 0x33: c->r[V0] = heap_alloc(a0); return 1;                 // malloc
       case 0x34: heap_free(a0); c->r[V0] = 0; return 1;               // free
       case 0x37: { uint32_t n = a0 * a1, p = heap_alloc(n);           // calloc
-                   if (p) for (uint32_t i = 0; i < n; i++) mem_w8(p + i, 0);
+                   if (p) for (uint32_t i = 0; i < n; i++) c->mem_w8(p + i, 0);
                    c->r[V0] = p; return 1; }
       case 0x38: { uint32_t old = a0, ns = a1;                        // realloc
                    if (!old) { c->r[V0] = heap_alloc(ns); return 1; }
                    if (!ns) { heap_free(old); c->r[V0] = 0; return 1; }
                    uint32_t np = heap_alloc(ns), os = heap_block_size(old);
                    if (np) { uint32_t n = os < ns ? os : ns;
-                             for (uint32_t i = 0; i < n; i++) mem_w8(np + i, mem_r8(old + i));
+                             for (uint32_t i = 0; i < n; i++) c->mem_w8(np + i, c->mem_r8(old + i));
                              heap_free(old); }
                    c->r[V0] = np; return 1; }
       case 0x39: heap_init(a0, a1); c->r[V0] = 0; return 1;           // InitHeap
@@ -133,7 +133,7 @@ static int recomp_hle(char table, uint32_t fn, R3000* c) {
       case 0x71: c->r[V0] = 0; return 1;                              // _96_init (CD device) no-op
       case 0x72: c->r[V0] = 0; return 1;                              // _96_remove (no-op)
       default: {
-        int card_hle_a0(uint32_t, R3000*);     // native libcard A0 (_card_info/_card_load)
+        int card_hle_a0(uint32_t, Core*);     // native libcard A0 (_card_info/_card_load)
         if (card_hle_a0(fn, c)) return 1;
         return 0;
       }
@@ -168,7 +168,7 @@ static int recomp_hle(char table, uint32_t fn, R3000* c) {
       case 0x19: s_int_handler = a0; c->r[V0] = 0; return 1;          // HookEntryInt
       case 0x35: {                                                    // FileWrite
         uint32_t fd = a0, buf = a1, len = a2;
-        if (fd == 1 || fd == 2) for (uint32_t i = 0; i < len; i++) fputc(mem_r8(buf + i), stderr);
+        if (fd == 1 || fd == 2) for (uint32_t i = 0; i < len; i++) fputc(c->mem_r8(buf + i), stderr);
         c->r[V0] = len; return 1;
       }
       case 0x0E: c->r[V0] = thread_open(c); return 1;                 // OpenThread
@@ -176,11 +176,11 @@ static int recomp_hle(char table, uint32_t fn, R3000* c) {
       case 0x10: thread_change(c, a0); c->r[V0] = a0; return 1;       // ChangeThread
       case 0x4A: c->r[V0] = 0; return 1;                              // stopCard / card no-op
       case 0x4B: c->r[V0] = 1; return 1;                              // cardInfo -> present
-      case 0x56: work_area_init(); c->r[V0] = HLE_C0TABLE; return 1;  // GetC0Table
-      case 0x57: work_area_init(); c->r[V0] = HLE_B0TABLE; return 1;  // GetB0Table
+      case 0x56: work_area_init(c); c->r[V0] = HLE_C0TABLE; return 1;  // GetC0Table
+      case 0x57: work_area_init(c); c->r[V0] = HLE_B0TABLE; return 1;  // GetB0Table
       case 0x5B: c->r[V0] = 0; return 1;                              // ChangeClearPAD (no-op)
       default: {
-        int card_hle_b0(uint32_t, R3000*);     // native libcard (_card_read/write/status/info/chan)
+        int card_hle_b0(uint32_t, Core*);     // native libcard (_card_read/write/status/info/chan)
         if (card_hle_b0(fn, c)) return 1;
         return 0;
       }
@@ -202,7 +202,7 @@ static int recomp_hle(char table, uint32_t fn, R3000* c) {
 // Boot uses Enter/ExitCriticalSection around setup. Thread ops (a0=3) need the recomp
 // thread model (not yet) — logged.
 static int s_irq_enabled = 1;
-void rec_syscall(R3000* c, uint32_t code) {
+void rec_syscall(Core* c, uint32_t code) {
   (void)code;
   switch (c->r[A0]) {
     case 0: c->r[V0] = 0; break;
@@ -213,16 +213,16 @@ void rec_syscall(R3000* c, uint32_t code) {
       c->r[V0] = 0;
   }
 }
-void rec_break(R3000* c, uint32_t code) {
+void rec_break(Core* c, uint32_t code) {
   fprintf(stderr, "[break] code %u\n", code);
   (void)c;
 }
 
-void rec_interp(R3000* c, uint32_t pc);  // hybrid fallback (interp.c)
+void rec_interp(Core* c, uint32_t pc);  // hybrid fallback (interp.c)
 OverrideFn rec_interp_override_for(uint32_t a);  // native override for an interpreted addr (interp.c)
 
 static int g_miss = 0;
-void rec_dispatch_miss(R3000* c, uint32_t addr) {
+void rec_dispatch_miss(Core* c, uint32_t addr) {
   uint32_t a = addr & 0x1FFFFFFF;
   char tbl = a == 0xA0 ? 'A' : a == 0xB0 ? 'B' : a == 0xC0 ? 'C' : 0;
   if (tbl) {

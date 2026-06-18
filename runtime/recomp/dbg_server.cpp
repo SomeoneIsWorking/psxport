@@ -42,8 +42,8 @@
 #endif
 
 // --- guest RAM + GPU primitives provided by the rest of the port ---------------------------------
-#include "r3000.h"                  // R3000, mem_*, rec_dispatch — for the RE commands (call/ents/node)
-void gpu_scene_dump_now(FILE* out);
+#include "core.h"                  // Core, mem_*, rec_dispatch — for the RE commands (call/ents/node)
+void gpu_scene_dump_now(Core* c, FILE* out);
 void gpu_provat_display(FILE* out, int qx, int qy);
 void gpu_provat_enable(void);
 int  gpu_gputrace_arm(const char* path);
@@ -94,7 +94,7 @@ static int    s_resp_ready;      // 1 once the main thread has produced a result
 static char*  s_resp_buf;        // malloc'd result (main -> server); server frees after sending
 static size_t s_resp_len;
 static int    s_started;
-static R3000* s_ctx;              // live CPU context (set per frame by dbg_server_service) for `call`
+static Core* s_ctx;              // live CPU context (set per frame by dbg_server_service) for `call`
 
 // Execute one command, writing its textual result into `out` (a memstream). MAIN THREAD ONLY.
 static void dbg_exec(FILE* out, const char* line) {
@@ -131,19 +131,19 @@ static void dbg_exec(FILE* out, const char* line) {
   } else if (!strcmp(cmd, "r") && sscanf(line, "%*s %x %u", &a, &b) >= 1) {
     if (!b) b = 16; if (b > 256) b = 256;
     fprintf(out, "%08X:", a);
-    for (unsigned i = 0; i < b; i++) fprintf(out, " %02X", mem_r8(a + i));
+    for (unsigned i = 0; i < b; i++) fprintf(out, " %02X", s_ctx->mem_r8(a + i));
     fprintf(out, "\n");
   } else if (!strcmp(cmd, "rw") && sscanf(line, "%*s %x %u", &a, &b) >= 1) {
     if (!b) b = 8; if (b > 64) b = 64;
     fprintf(out, "%08X:", a);
-    for (unsigned i = 0; i < b; i++) fprintf(out, " %08X", mem_r32(a + i * 4));
+    for (unsigned i = 0; i < b; i++) fprintf(out, " %08X", s_ctx->mem_r32(a + i * 4));
     fprintf(out, "\n");
   } else if (!strcmp(cmd, "w32") && sscanf(line, "%*s %x %x", &a, &b) == 2) {
-    mem_w32(a, b); fprintf(out, "[%08X] <- %08X\n", a, b);
+    s_ctx->mem_w32(a, b); fprintf(out, "[%08X] <- %08X\n", a, b);
   } else if (!strcmp(cmd, "w16") && sscanf(line, "%*s %x %x", &a, &b) == 2) {
-    mem_w16(a, (uint16_t)b); fprintf(out, "[%08X] <- %04X\n", a, b & 0xffff);
+    s_ctx->mem_w16(a, (uint16_t)b); fprintf(out, "[%08X] <- %04X\n", a, b & 0xffff);
   } else if (!strcmp(cmd, "w8") && sscanf(line, "%*s %x %x", &a, &b) == 2) {
-    mem_w8(a, (uint8_t)b); fprintf(out, "[%08X] <- %02X\n", a, b & 0xff);
+    s_ctx->mem_w8(a, (uint8_t)b); fprintf(out, "[%08X] <- %02X\n", a, b & 0xff);
   } else if (!strcmp(cmd, "call") && sscanf(line, "%*s %x", &a) == 1) {
     // Call a guest function on the live CPU context. RE aid: probe a function's effect/return live
     // (e.g. the transform-build 0x80051C8C, the geomblk leaf 0x80051B04) without recompiling a probe.
@@ -159,43 +159,43 @@ static void dbg_exec(FILE* out, const char* line) {
       for (int i = 0; i < 4; i++) s_ctx->r[4+i] = sv[i];   // restore a0-a3 (callee already used them)
     }
   } else if (!strcmp(cmd, "geomblk") && sscanf(line, "%*s %u %u", &a, &b) == 2) {
-    uint32_t T = mem_r32(0x800ECF58u + a*4);
-    uint32_t gb = T + mem_r32(T + b*4 + 4);
+    uint32_t T = s_ctx->mem_r32(0x800ECF58u + a*4);
+    uint32_t gb = T + s_ctx->mem_r32(T + b*4 + 4);
     fprintf(out, "group=%u sub=%u  T=%08X  geomblk=%08X\n", a, b, T, gb);
   } else if (!strcmp(cmd, "node") && sscanf(line, "%*s %x", &a) == 1) {
     fprintf(out, "node %08X: type=%02X state=%04X rflag=%02X handler=%08X\n", a,
-            mem_r8(a+0xc), mem_r16(a+0x28), mem_r8(a+1), mem_r32(a+0x1c));
+            s_ctx->mem_r8(a+0xc), s_ctx->mem_r16(a+0x28), s_ctx->mem_r8(a+1), s_ctx->mem_r32(a+0x1c));
     fprintf(out, "  pos=(%d,%d,%d) rot=(%d,%d,%d) model=%04X mdata=%08X\n",
-            (int16_t)mem_r16(a+0x2e), (int16_t)mem_r16(a+0x32), (int16_t)mem_r16(a+0x36),
-            (int16_t)mem_r16(a+0x54), (int16_t)mem_r16(a+0x56), (int16_t)mem_r16(a+0x58),
-            mem_r16(a+0xe) & 0x3fff, mem_r32(a+0x38));
-    unsigned cnt = mem_r8(a+8);
-    fprintf(out, "  cmds(node+8)=%u  next=%08X prev=%08X\n", cnt, mem_r32(a+0x24), mem_r32(a+0x20));
+            (int16_t)s_ctx->mem_r16(a+0x2e), (int16_t)s_ctx->mem_r16(a+0x32), (int16_t)s_ctx->mem_r16(a+0x36),
+            (int16_t)s_ctx->mem_r16(a+0x54), (int16_t)s_ctx->mem_r16(a+0x56), (int16_t)s_ctx->mem_r16(a+0x58),
+            s_ctx->mem_r16(a+0xe) & 0x3fff, s_ctx->mem_r32(a+0x38));
+    unsigned cnt = s_ctx->mem_r8(a+8);
+    fprintf(out, "  cmds(node+8)=%u  next=%08X prev=%08X\n", cnt, s_ctx->mem_r32(a+0x24), s_ctx->mem_r32(a+0x20));
     for (unsigned i = 0; i < cnt && i < 32; i++) {
-      uint32_t cmdp = mem_r32(a + 0xc0 + i*4);
-      fprintf(out, "    cmd[%u]=%08X geomblk=%08X\n", i, cmdp, cmdp ? mem_r32(cmdp+0x40) : 0);
+      uint32_t cmdp = s_ctx->mem_r32(a + 0xc0 + i*4);
+      fprintf(out, "    cmd[%u]=%08X geomblk=%08X\n", i, cmdp, cmdp ? s_ctx->mem_r32(cmdp+0x40) : 0);
     }
   } else if (!strcmp(cmd, "ents")) {
-    const uint32_t heads[2] = { mem_r32(0x800fb168u), mem_r32(0x800f2624u) };
+    const uint32_t heads[2] = { s_ctx->mem_r32(0x800fb168u), s_ctx->mem_r32(0x800f2624u) };
     int total = 0;
     for (int h = 0; h < 2; h++) {
       fprintf(out, "-- list %d head=%08X --\n", h, heads[h]);
       uint32_t n = heads[h];
-      for (int guard = 0; n && guard < 300; guard++, n = mem_r32(n + 0x24)) {
-        uint32_t cmd0 = mem_r8(n+8) ? mem_r32(n + 0xc0) : 0;
+      for (int guard = 0; n && guard < 300; guard++, n = s_ctx->mem_r32(n + 0x24)) {
+        uint32_t cmd0 = s_ctx->mem_r8(n+8) ? s_ctx->mem_r32(n + 0xc0) : 0;
         fprintf(out, "  %08X t=%02X pos=(%6d,%6d,%6d) h=%08X rf=%u cmds=%u gb0=%08X\n",
-                n, mem_r8(n+0xc),
-                (int16_t)mem_r16(n+0x2e), (int16_t)mem_r16(n+0x32), (int16_t)mem_r16(n+0x36),
-                mem_r32(n+0x1c), mem_r8(n+1), mem_r8(n+8), cmd0 ? mem_r32(cmd0+0x40) : 0);
+                n, s_ctx->mem_r8(n+0xc),
+                (int16_t)s_ctx->mem_r16(n+0x2e), (int16_t)s_ctx->mem_r16(n+0x32), (int16_t)s_ctx->mem_r16(n+0x36),
+                s_ctx->mem_r32(n+0x1c), s_ctx->mem_r8(n+1), s_ctx->mem_r8(n+8), cmd0 ? s_ctx->mem_r32(cmd0+0x40) : 0);
         total++;
       }
     }
     fprintf(out, "(%d nodes)\n", total);
   } else if (!strcmp(cmd, "stage")) {
     fprintf(out, "stage(0x801fe00c)=%08X sm48(0x801fe048)=%d scene-active(0x800BE258)=%08X\n",
-            mem_r32(0x801fe00c), (int)mem_r16(0x801fe048), mem_r32(0x800BE258));
+            s_ctx->mem_r32(0x801fe00c), (int)s_ctx->mem_r16(0x801fe048), s_ctx->mem_r32(0x800BE258));
   } else if (!strcmp(cmd, "scene")) {
-    gpu_scene_dump_now(out);
+    gpu_scene_dump_now(s_ctx, out);
   } else if (!strcmp(cmd, "provat") && sscanf(line, "%*s %u %u", &a, &b) == 2) {
     gpu_provat_display(out, (int)a, (int)b);
   } else if (!strcmp(cmd, "shot")) {
@@ -263,7 +263,7 @@ static void dbg_exec(FILE* out, const char* line) {
 // Called once per frame from the native frame loop. Services at most one queued command.
 // `c` is the live frame-loop CPU context, stored for the `call` command (runs guest fns at this
 // frame boundary). Pass NULL from sites without a context (the call command then reports "no context").
-void dbg_server_service(R3000* c) {
+void dbg_server_service(Core* c) {
   s_ctx = c;
   if (!s_started) return;
   pthread_mutex_lock(&s_mtx);
@@ -286,6 +286,7 @@ void dbg_server_service(R3000* c) {
 // abandons the request and returns an error line, keeping the accept loop responsive.
 static char* dbg_submit(const char* line, size_t* out_len) {
   struct timespec ts; clock_gettime(CLOCK_REALTIME, &ts); ts.tv_sec += 4;
+  char* buf = NULL;   // declared before any `goto timeout` so the jump doesn't cross its init (C++)
   pthread_mutex_lock(&s_mtx);
   while (s_req_pending || s_resp_ready)
     if (pthread_cond_timedwait(&s_done, &s_mtx, &ts) == ETIMEDOUT) { pthread_mutex_unlock(&s_mtx); goto timeout; }
@@ -296,7 +297,7 @@ static char* dbg_submit(const char* line, size_t* out_len) {
       s_req_pending = 0;                       // abandon: main may service a stale slot harmlessly
       pthread_mutex_unlock(&s_mtx); goto timeout;
     }
-  char* buf = s_resp_buf; *out_len = s_resp_len;
+  buf = s_resp_buf; *out_len = s_resp_len;
   s_resp_buf = NULL; s_resp_ready = 0;
   pthread_cond_broadcast(&s_done);           // wake any other server thread waiting to submit
   pthread_mutex_unlock(&s_mtx);

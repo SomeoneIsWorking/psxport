@@ -1,4 +1,4 @@
-// The runtime's ONE execution substrate: a flat R3000 interpreter that runs all guest code
+// The runtime's ONE execution substrate: a flat Core interpreter that runs all guest code
 // (the boot stub, MAIN.EXE, and the disc code overlays) directly from g_ram. The static
 // recompiler was dropped from the build (see docs/journal.md "later-101"); emit.py survives
 // only as an offline analysis aid. There is a single instruction core (exec_simple) and a
@@ -15,15 +15,15 @@
 //
 // Faithful-first simplifications match the emitter: no load-delay slot; add==addu; signed
 // div/mult via cpu_div/mult helpers; GTE via gte_op/gte_read/write.
-#include "r3000.h"
+#include "core.h"
 #include "cfg.h"
 #include <stdio.h>
 #include <stdlib.h>
 
-void rec_dispatch(R3000* c, uint32_t addr);
-void rec_syscall(R3000* c, uint32_t code);
-void rec_break(R3000* c, uint32_t code);
-void rec_interp(R3000* c, uint32_t pc);
+void rec_dispatch(Core* c, uint32_t addr);
+void rec_syscall(Core* c, uint32_t code);
+void rec_break(Core* c, uint32_t code);
+void rec_interp(Core* c, uint32_t pc);
 
 // Diagnostics: the PC currently being interpreted (read by the watchdog on a stall to report
 // WHERE the interpreter is spinning). Optional call trace (PSXPORT_INTERP_TRACE=<path>) logs
@@ -49,9 +49,9 @@ static inline void trace_call(uint32_t from, uint32_t to) {
 
 #define W(n, v) do { uint32_t _n = (n); if (_n) c->r[_n] = (v); } while (0)
 
-// ---- R3000 load-delay hazard DETECTOR (PSXPORT_LDHAZARD) ------------------------------------
+// ---- Core load-delay hazard DETECTOR (PSXPORT_LDHAZARD) ------------------------------------
 // Our interpreter omits the load-delay slot (interp.c head): a load's target reg is visible to
-// the immediately-following instruction, whereas real R3000 (and the mednafen oracle) make that
+// the immediately-following instruction, whereas real Core (and the mednafen oracle) make that
 // instruction read the OLD value. Compiler-scheduled code fills the slot (nop / independent op),
 // so the hazard should be ABSENT. This detector counts cases where instruction I reads a GPR
 // that instruction I-1 loaded into — i.e. where our no-delay model can diverge from hardware.
@@ -152,11 +152,11 @@ static void iov_flush_auto_range(uint32_t base, uint32_t size) {
   g_iov_n = w;
 }
 // The engine's "an overlay was just loaded into [base,base+size)" hook (scans for owned library fns).
-static void (*g_overlay_load_hook)(uint32_t base, uint32_t size);
-void rec_set_overlay_load_hook(void (*fn)(uint32_t, uint32_t)) { g_overlay_load_hook = fn; }
-void rec_overlay_loaded(uint32_t base, uint32_t size) {
+static void (*g_overlay_load_hook)(Core* c, uint32_t base, uint32_t size);
+void rec_set_overlay_load_hook(void (*fn)(Core*, uint32_t, uint32_t)) { g_overlay_load_hook = fn; }
+void rec_overlay_loaded(Core* c, uint32_t base, uint32_t size) {
   iov_flush_auto_range(base, size);               // drop only the overrides this load overwrote
-  if (g_overlay_load_hook) g_overlay_load_hook(base, size);
+  if (g_overlay_load_hook) g_overlay_load_hook(c, base, size);
 }
 // Public accessor so rec_dispatch_miss can apply an interp override at the moment it would ENTER
 // the interpreter (a recompiled `jalr`/dispatch into a non-recompiled stub fn lands here, not via
@@ -166,7 +166,7 @@ OverrideFn rec_interp_override_for(uint32_t a) { return interp_override_for(a); 
 static int is_bios(uint32_t a) { uint32_t p = a & 0x1FFFFFFF; return p==0xA0||p==0xB0||p==0xC0; }
 
 // Execute one non-control instruction (delay-slot-safe; no branches/jumps/loads-delay).
-static void exec_simple(R3000* c, uint32_t in) {
+static void exec_simple(Core* c, uint32_t in) {
   uint32_t op = in >> 26;
   if (in == 0) return;  // nop
   switch (op) {
@@ -210,18 +210,18 @@ static void exec_simple(R3000* c, uint32_t in) {
     case 0x0C: W(RT(in), c->r[RS(in)] & IMM(in)); break;                    // andi
     case 0x0D: W(RT(in), c->r[RS(in)] | IMM(in)); break;                    // ori
     case 0x0E: W(RT(in), c->r[RS(in)] ^ IMM(in)); break;                    // xori
-    case 0x20: W(RT(in), (uint32_t)(int8_t)mem_r8(c->r[RS(in)] + SIMM(in))); break;   // lb
-    case 0x24: W(RT(in), (uint32_t)mem_r8(c->r[RS(in)] + SIMM(in))); break;           // lbu
-    case 0x21: W(RT(in), (uint32_t)(int16_t)mem_r16(c->r[RS(in)] + SIMM(in))); break; // lh
-    case 0x25: W(RT(in), (uint32_t)mem_r16(c->r[RS(in)] + SIMM(in))); break;          // lhu
-    case 0x23: W(RT(in), mem_r32(c->r[RS(in)] + SIMM(in))); break;                    // lw
-    case 0x22: W(RT(in), mem_lwl(c->r[RT(in)], c->r[RS(in)] + SIMM(in))); break;      // lwl
-    case 0x26: W(RT(in), mem_lwr(c->r[RT(in)], c->r[RS(in)] + SIMM(in))); break;      // lwr
-    case 0x28: mem_w8(c->r[RS(in)] + SIMM(in), (uint8_t)c->r[RT(in)]); break;         // sb
-    case 0x29: mem_w16(c->r[RS(in)] + SIMM(in), (uint16_t)c->r[RT(in)]); break;       // sh
-    case 0x2B: mem_w32(c->r[RS(in)] + SIMM(in), c->r[RT(in)]); break;                 // sw
-    case 0x2A: mem_swl(c->r[RS(in)] + SIMM(in), c->r[RT(in)]); break;                 // swl
-    case 0x2E: mem_swr(c->r[RS(in)] + SIMM(in), c->r[RT(in)]); break;                 // swr
+    case 0x20: W(RT(in), (uint32_t)(int8_t)c->mem_r8(c->r[RS(in)] + SIMM(in))); break;   // lb
+    case 0x24: W(RT(in), (uint32_t)c->mem_r8(c->r[RS(in)] + SIMM(in))); break;           // lbu
+    case 0x21: W(RT(in), (uint32_t)(int16_t)c->mem_r16(c->r[RS(in)] + SIMM(in))); break; // lh
+    case 0x25: W(RT(in), (uint32_t)c->mem_r16(c->r[RS(in)] + SIMM(in))); break;          // lhu
+    case 0x23: W(RT(in), c->mem_r32(c->r[RS(in)] + SIMM(in))); break;                    // lw
+    case 0x22: W(RT(in), c->mem_lwl(c->r[RT(in)], c->r[RS(in)] + SIMM(in))); break;      // lwl
+    case 0x26: W(RT(in), c->mem_lwr(c->r[RT(in)], c->r[RS(in)] + SIMM(in))); break;      // lwr
+    case 0x28: c->mem_w8(c->r[RS(in)] + SIMM(in), (uint8_t)c->r[RT(in)]); break;         // sb
+    case 0x29: c->mem_w16(c->r[RS(in)] + SIMM(in), (uint16_t)c->r[RT(in)]); break;       // sh
+    case 0x2B: c->mem_w32(c->r[RS(in)] + SIMM(in), c->r[RT(in)]); break;                 // sw
+    case 0x2A: c->mem_swl(c->r[RS(in)] + SIMM(in), c->r[RT(in)]); break;                 // swl
+    case 0x2E: c->mem_swr(c->r[RS(in)] + SIMM(in), c->r[RT(in)]); break;                 // swr
     case 0x10: {  // COP0
       uint32_t fmt = RS(in);
       if (fmt == 0x00) W(RT(in), cop0_mfc(c, RD(in)));        // mfc0
@@ -238,8 +238,8 @@ static void exec_simple(R3000* c, uint32_t in) {
       else if (fmt == 0x06) gte_write_ctrl(RD(in), c->r[RT(in)]); // ctc2
       break;
     }
-    case 0x32: gte_write_data(RT(in), mem_r32(c->r[RS(in)] + SIMM(in))); break;       // lwc2
-    case 0x3A: mem_w32(c->r[RS(in)] + SIMM(in), gte_read_data(RT(in))); break;        // swc2
+    case 0x32: gte_write_data(RT(in), c->mem_r32(c->r[RS(in)] + SIMM(in))); break;       // lwc2
+    case 0x3A: c->mem_w32(c->r[RS(in)] + SIMM(in), gte_read_data(RT(in))); break;        // swc2
     default: fprintf(stderr, "[interp] bad opcode 0x%02X @ insn 0x%08X\n", op, in); break;
   }
 }
@@ -255,17 +255,17 @@ static void exec_simple(R3000* c, uint32_t in) {
 // everything else is interpreted flat. This is the ucontext-free model: all a yield must
 // save/restore is the PSX state (PC via the link/stack, regs, SP-in-g_ram).
 #define CORO_SENTINEL 0xDEAD0000u
-void rec_dispatch_miss(R3000* c, uint32_t addr);
+void rec_dispatch_miss(Core* c, uint32_t addr);
 
 // Invoke a call target natively if it is an override/BIOS (returns 1), else 0 (caller jumps).
-static int coro_native_call(R3000* c, uint32_t tgt) {
+static int coro_native_call(Core* c, uint32_t tgt) {
   OverrideFn ov = interp_override_for(tgt);       // unified address-keyed override (resident + overlay)
   if (ov) { ov(c); return 1; }
   if (is_bios(tgt)) { rec_dispatch_miss(c, tgt); return 1; }
   return 0;
 }
 
-static void interp_flat(R3000* c, uint32_t pc, uint32_t stop_ra) {
+static void interp_flat(Core* c, uint32_t pc, uint32_t stop_ra) {
   // Spin detector (PSXPORT_SPINDBG): a non-yielding busy-wait in game code loops here forever
   // (never returns to the scheduler, never calls a native override that longjmps). Track the
   // pc range over a window; if we run a huge number of iterations without leaving a tiny pc
@@ -292,8 +292,8 @@ static void interp_flat(R3000* c, uint32_t pc, uint32_t stop_ra) {
         // (0x801fe0e0) +0x54/+0x58, dest/words at _DAT_1f8001f8/f4, plus the stream flags.
         fprintf(stderr, "[spindbg]   stream: startLBA=%u endLBA=%u chan=%u be0e4=0x%02X "
                 "dest=0x%08X words=%u f0=%u\n",
-                mem_r32(0x801fe134), mem_r32(0x801fe138), mem_r8(0x801fe146),
-                mem_r8(0x800be0e4), mem_r32(0x1f8001f8), mem_r32(0x1f8001f4), mem_r32(0x1f8001f0));
+                c->mem_r32(0x801fe134), c->mem_r32(0x801fe138), c->mem_r8(0x801fe146),
+                c->mem_r8(0x800be0e4), c->mem_r32(0x1f8001f8), c->mem_r32(0x1f8001f4), c->mem_r32(0x1f8001f0));
         iters = 0; lo = hi = pc;
       }
     }
@@ -308,9 +308,9 @@ static void interp_flat(R3000* c, uint32_t pc, uint32_t stop_ra) {
       if (n++ < 30)
         fprintf(stderr, "[textdbg] 8007E998(x=%d y=%d a2=%08X a3=%08X) ra=%08X stage=%08X\n",
                 (int)(int16_t)c->r[4], (int)(int16_t)c->r[5], c->r[6], c->r[7], c->r[31],
-                mem_r32(0x801fe00c));
+                c->mem_r32(0x801fe00c));
     }
-    uint32_t in = mem_r32(pc);
+    uint32_t in = c->mem_r32(pc);
     uint32_t op = in >> 26;
     ldhaz_step(in, pc);                              // load-delay hazard detector (execution order)
 
@@ -326,8 +326,8 @@ static void interp_flat(R3000* c, uint32_t pc, uint32_t stop_ra) {
     if (op == 0x02 || op == 0x03) {                  // j / jal
       uint32_t tgt = TGT(in, pc);
       if (op == 0x03) { c->r[31] = pc + 8; trace_call(pc, tgt); }  // jal: link + optional call trace
-      ldhaz_step(mem_r32(pc + 4), pc + 4);            // delay slot executes next
-      exec_simple(c, mem_r32(pc + 4));               // delay slot
+      ldhaz_step(c->mem_r32(pc + 4), pc + 4);            // delay slot executes next
+      exec_simple(c, c->mem_r32(pc + 4));               // delay slot
       // A native override / BIOS vector must win on EITHER a `jal` call or a tail-`j` into it,
       // else the flat interpreter re-runs a function the PC side owns (e.g. the LZ decompressor
       // 0x80044D8C) and can diverge from it. coro_native_call only fires for exact override/BIOS
@@ -339,8 +339,8 @@ static void interp_flat(R3000* c, uint32_t pc, uint32_t stop_ra) {
       uint32_t tgt = c->r[RS(in)];
       uint32_t link = pc + 8, rd = RD(in);
       int is_jalr = FN(in) == 0x09, is_ra = RS(in) == 31;
-      ldhaz_step(mem_r32(pc + 4), pc + 4);            // delay slot executes next
-      exec_simple(c, mem_r32(pc + 4));               // delay slot
+      ldhaz_step(c->mem_r32(pc + 4), pc + 4);            // delay slot executes next
+      exec_simple(c, c->mem_r32(pc + 4));               // delay slot
       if (is_jalr) {
         if (rd) c->r[rd] = link;
         trace_call(pc, tgt);                         // optional call trace (PSXPORT_INTERP_TRACE)
@@ -367,8 +367,8 @@ static void interp_flat(R3000* c, uint32_t pc, uint32_t stop_ra) {
         t = (sub & 1) ? ((int32_t)c->r[rs] >= 0) : ((int32_t)c->r[rs] < 0);
         if (sub & 0x10) c->r[31] = pc + 8;
       }
-      ldhaz_step(mem_r32(pc + 4), pc + 4);            // delay slot executes next
-      exec_simple(c, mem_r32(pc + 4));
+      ldhaz_step(c->mem_r32(pc + 4), pc + 4);            // delay slot executes next
+      exec_simple(c, c->mem_r32(pc + 4));
       pc = t ? tgt : pc + 8;
       continue;
     }
@@ -385,7 +385,7 @@ static void interp_flat(R3000* c, uint32_t pc, uint32_t stop_ra) {
 // A cooperative TASK: native_boot.c enters its top function with ra=CORO_SENTINEL, then the loop
 // runs until that function returns (jr ra -> sentinel == task ended) or a native override
 // (ov_yield/CD) longjmps back to the scheduler.
-void rec_coro_run(R3000* c, uint32_t pc) { interp_flat(c, pc, CORO_SENTINEL); }
+void rec_coro_run(Core* c, uint32_t pc) { interp_flat(c, pc, CORO_SENTINEL); }
 
 // A SYNCHRONOUS nested call — call_addr's old recursive job, plus rec_super_call (interpret the
 // original PSX body for the A/B oracle) and the dispatch-miss RAM-code path. It must run the
@@ -395,7 +395,7 @@ void rec_coro_run(R3000* c, uint32_t pc) { interp_flat(c, pc, CORO_SENTINEL); }
 // of the old recursive rec_interp exactly. Nesting (e.g. an override calling rec_super_call mid
 // task) is safe: each invocation's PSX frames sit above the caller's, so only the target's own
 // `jr ra` reaches the sentinel and ends this run.
-void rec_interp(R3000* c, uint32_t pc) {
+void rec_interp(Core* c, uint32_t pc) {
   uint32_t saved_ra = c->r[31];
   c->r[31] = CORO_SENTINEL;
   interp_flat(c, pc, CORO_SENTINEL);

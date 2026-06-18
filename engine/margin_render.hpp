@@ -14,11 +14,7 @@
 #ifndef PSXPORT_MARGIN_RENDER_HPP
 #define PSXPORT_MARGIN_RENDER_HPP
 #include <stdint.h>
-#include "r3000.h"
-
-#ifdef __cplusplus
-extern "C" {
-#endif
+#include "core.h"
 
 // True when the native-margin path is active (default): collect-and-flush instead of poking +1.
 // A/B fallback PSXPORT_MARGIN_POKE=1 keeps the old +1 re-include (perturbs gameplay; for diffing).
@@ -26,13 +22,10 @@ int  margin_native_enabled(void);
 
 // Called from ov_object_cull for an object the wide frustum re-includes. Records the node for the
 // post-walk flush. Deduped per frame (the cull runs several times per object via the submit wrappers).
-void margin_collect(uint32_t node);
+// Takes the Core to read the node's type from this instance's RAM.
+void margin_collect(Core* c, uint32_t node);
 
 // Called from ov_objwalk AFTER both list walks. Renders each collected margin node via
 // gen_func_8003CDD8(node, 0), then clears the collection for the next frame.
-void margin_render_flush(R3000* c);
-
-#ifdef __cplusplus
-}
-#endif
+void margin_render_flush(Core* c);
 #endif

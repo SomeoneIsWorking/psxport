@@ -13,27 +13,20 @@
 //     (LBA->MSF, Setloc, ReadN, blocking wait via FUN_8008cafc). Override: read blocks*2048
 //     bytes from the disc image at lba straight into buf, return 1 (its bool success value).
 //     This bypasses the whole FUN_8008c960/c5d8/cafc/ac34 command+IRQ machinery for data.
-#include "r3000.h"
+#include "core.h"
+#include "c_subsys.h"
 #include "cfg.h"
 #include <stdio.h>
 #include <stdlib.h>
 
 enum { V0 = 2, A0 = 4, A1 = 5, A2 = 6 };
 
-int disc_read_sector(uint32_t lba, uint8_t* out);
 
 // Native in-game XA-ADPCM streaming (xa_stream.c). The CdControl wrapper below feeds it the
 // streaming commands the game uses for cutscene BGM / voice (Setmode XA bit, Setloc, ReadS).
-void xa_stream_setmode(uint8_t mode);
-void xa_stream_setfilter(uint8_t file, uint8_t chan);
-void xa_stream_setloc(uint8_t amm, uint8_t ass, uint8_t asect);
-void xa_stream_start(void);
-void xa_stream_stop(void);
-int  xa_stream_play_lba(uint32_t* lba);
-void xa_stream_play(uint8_t chan, uint32_t start, uint32_t end, int loop);
 
 // 0x8008B2D8 FUN_8008b2d8: low-level CdInit -> success (drive ready), no HW handshake.
-static void ov_cdinit(R3000* c) { c->r[V0] = 0; }
+static void ov_cdinit(Core* c) { c->r[V0] = 0; }
 
 // libcd command/sync primitives whose real bodies spin in a CD_cw / CD timeout loop on the
 // IRQ-set status DAT_800ac298 (never set — no controller). Since every DATA read is served
@@ -41,14 +34,14 @@ static void ov_cdinit(R3000* c) { c->r[V0] = 0; }
 // only need to report success so their waits fall through. We replace, not super-call: the
 // real bodies cannot return without the IRQ. Result bytes (drive status) the caller may copy
 // are zeroed — callers on the boot path branch on the return value, not the status bytes.
-static void zero_result(uint32_t p) { if (p) for (int i = 0; i < 8; i++) mem_w8(p + i, 0); }
+static void zero_result(Core* c, uint32_t p) { if (p) for (int i = 0; i < 8; i++) c->mem_w8(p + i, 0); }
 
 // 0x8008AC34 FUN_8008ac34(cmd, param, result, mode) CdCommand -> 0 (success).
-static void ov_cd_command(R3000* c) {
+static void ov_cd_command(Core* c) {
   if (cfg_dbg("cdcmd")) {
     uint32_t cmd = c->r[A0] & 0xFF, param = c->r[A1];
     uint8_t p[4] = {0,0,0,0};
-    if (param) for (int i = 0; i < 4; i++) p[i] = (uint8_t)mem_r8(param + i);
+    if (param) for (int i = 0; i < 4; i++) p[i] = (uint8_t)c->mem_r8(param + i);
     fprintf(stderr, "[cdcmd] cmd=0x%02X param=[%02X %02X %02X %02X] mode=%u ra=0x%08X\n",
             cmd, p[0], p[1], p[2], p[3], c->r[7], c->r[31]);
   }
@@ -56,20 +49,20 @@ static void ov_cd_command(R3000* c) {
   // commands. We don't model the controller (data is read natively elsewhere), so route the
   // streaming-relevant ones to the native XA engine; everything else still just ACKs.
   uint32_t cmd = c->r[A0] & 0xFF, param = c->r[A1];
-  uint8_t p0 = param ? (uint8_t)mem_r8(param) : 0;
+  uint8_t p0 = param ? (uint8_t)c->mem_r8(param) : 0;
   switch (cmd) {
     case 0x0E: xa_stream_setmode(p0); break;                                  // Setmode
-    case 0x0D: xa_stream_setfilter(p0, param ? (uint8_t)mem_r8(param + 1) : 0); break;  // Setfilter
-    case 0x02: if (param) xa_stream_setloc(p0, (uint8_t)mem_r8(param + 1),     // Setloc
-                                           (uint8_t)mem_r8(param + 2)); break;
+    case 0x0D: xa_stream_setfilter(p0, param ? (uint8_t)c->mem_r8(param + 1) : 0); break;  // Setfilter
+    case 0x02: if (param) xa_stream_setloc(p0, (uint8_t)c->mem_r8(param + 1),     // Setloc
+                                           (uint8_t)c->mem_r8(param + 2)); break;
     case 0x06: case 0x1B: xa_stream_start(); break;                           // ReadN / ReadS
     case 0x08: case 0x09: xa_stream_stop(); break;                            // Stop / Pause
     default: break;
   }
-  zero_result(c->r[A2]); c->r[V0] = 0;
+  zero_result(c, c->r[A2]); c->r[V0] = 0;
 }
 // 0x8008A6EC FUN_8008a6ec(noblock, result) CdSync -> 2 (status: complete/ready).
-static void ov_cd_sync(R3000* c) { zero_result(c->r[A1]); c->r[V0] = 2; }
+static void ov_cd_sync(Core* c) { zero_result(c, c->r[A1]); c->r[V0] = 2; }
 
 // 0x8001CE90 FUN_8001ce90(cmd, param, result) — the engine's streaming-path CD-command
 // wrapper (FUN_8001ce90 -> FUN_8001ce04 -> FUN_80089ce8/FUN_80089b44). Used by the CD
@@ -86,19 +79,19 @@ static void ov_cd_sync(R3000* c) { zero_result(c->r[A1]); c->r[V0] = 2; }
 // of spinning. All other streaming commands report success (our synchronous-CD model). This
 // only intercepts the FUN_8001ce90 wrapper — FUN_8001d940's reader calls FUN_8001ce04 directly
 // and is unaffected.
-static void ov_cd_cmd_stream(R3000* c) {
+static void ov_cd_cmd_stream(Core* c) {
   uint32_t cmd = c->r[A0] & 0xFF, result = c->r[A2];
   if (cfg_dbg("cdcmd")) {
     uint32_t pp = c->r[A1]; uint8_t p[4] = {0,0,0,0};
-    if (pp) for (int i = 0; i < 4; i++) p[i] = (uint8_t)mem_r8(pp + i);
+    if (pp) for (int i = 0; i < 4; i++) p[i] = (uint8_t)c->mem_r8(pp + i);
     fprintf(stderr, "[cdstream] cmd=0x%02X param=[%02X %02X %02X %02X] ra=0x%08X\n",
             cmd, p[0], p[1], p[2], p[3], c->r[31]);
   }
-  { uint32_t pp = c->r[A1]; uint8_t p0 = pp ? (uint8_t)mem_r8(pp) : 0;
+  { uint32_t pp = c->r[A1]; uint8_t p0 = pp ? (uint8_t)c->mem_r8(pp) : 0;
     switch (cmd) {
       case 0x0E: xa_stream_setmode(p0); break;
-      case 0x0D: xa_stream_setfilter(p0, pp ? (uint8_t)mem_r8(pp + 1) : 0); break;
-      case 0x02: if (pp) xa_stream_setloc(p0, (uint8_t)mem_r8(pp+1), (uint8_t)mem_r8(pp+2)); break;
+      case 0x0D: xa_stream_setfilter(p0, pp ? (uint8_t)c->mem_r8(pp + 1) : 0); break;
+      case 0x02: if (pp) xa_stream_setloc(p0, (uint8_t)c->mem_r8(pp+1), (uint8_t)c->mem_r8(pp+2)); break;
       case 0x06: case 0x1B: xa_stream_start(); break;
       case 0x08: case 0x09: xa_stream_stop(); break;
       default: break;
@@ -111,25 +104,25 @@ static void ov_cd_cmd_stream(R3000* c) {
     // no seek latency in our synchronous-CD model).
     // (XA voice/BGM no longer polls this — it's ported native via FUN_8001d2a8 -> xa_stream_play,
     // see ov_voice_play. This path remains only for any data-streaming GetlocL.)
-    uint32_t task = mem_r32(0x1f800138);
-    uint32_t lba = mem_r32(task + 0x54);
+    uint32_t task = c->mem_r32(0x1f800138);
+    uint32_t lba = c->mem_r32(task + 0x54);
     int t = (int)lba + 150;                     // FUN_8008a00c: LBA -> MSF (sector = lba+150)
     int frame = t % 75, rem = t / 75, sec = rem % 60, min = rem / 60;
-    mem_w8(result + 0, (min % 10) + ((min / 10) << 4));   // BCD min
-    mem_w8(result + 1, (sec % 10) + ((sec / 10) << 4));   // BCD sec
-    mem_w8(result + 2, (frame % 10) + ((frame / 10) << 4));// BCD frame
+    c->mem_w8(result + 0, (min % 10) + ((min / 10) << 4));   // BCD min
+    c->mem_w8(result + 1, (sec % 10) + ((sec / 10) << 4));   // BCD sec
+    c->mem_w8(result + 2, (frame % 10) + ((frame / 10) << 4));// BCD frame
   }
   c->r[V0] = 0;                                 // command succeeded
 }
 
 // 0x8008C1EC FUN_8008c1ec(a0=blocks, a1=lba, a2=buf): native synchronous read.
 static int  g_cd_verbose = 0;  // PSXPORT_CD_VERBOSE=1
-static void ov_cd_read(R3000* c) {
+static void ov_cd_read(Core* c) {
   uint32_t blocks = c->r[A0], lba = c->r[A1], buf = c->r[A2];
   uint8_t sec[2048];
   for (uint32_t i = 0; i < blocks; i++) {
     if (!disc_read_sector(lba + i, sec)) { c->r[V0] = 0; return; }  // bool: 0 = failure
-    for (uint32_t j = 0; j < 2048; j++) mem_w8(buf + i * 2048u + j, sec[j]);
+    for (uint32_t j = 0; j < 2048; j++) c->mem_w8(buf + i * 2048u + j, sec[j]);
   }
   if (g_cd_verbose)
     fprintf(stderr, "[cd] read %u blk @ LBA %u -> 0x%08X\n", blocks, lba, buf);
@@ -142,19 +135,19 @@ static void ov_cd_read(R3000* c) {
 // no decompression) — an async streaming path our no-IRQ overrides can't feed. Replace it
 // with a native consecutive-sector read of the same bytes: ceil(size/2048) sectors from `lba`
 // into `dest`, copying exactly `size` bytes. Returns param_3 (size), as the original does.
-static void ov_cd_loadfile(R3000* c) {
+static void ov_cd_loadfile(Core* c) {
   uint32_t dest = c->r[A0], lba = c->r[A1], size = c->r[A2];
   uint8_t sec[2048];
   uint32_t done = 0;
   for (uint32_t i = 0; done < size; i++) {
     if (!disc_read_sector(lba + i, sec)) break;
     uint32_t n = size - done < 2048 ? size - done : 2048;
-    for (uint32_t j = 0; j < n; j++) mem_w8(dest + done + j, sec[j]);
+    for (uint32_t j = 0; j < n; j++) c->mem_w8(dest + done + j, sec[j]);
     done += n;
   }
   if (g_cd_verbose)
     fprintf(stderr, "[cd] loadfile %u B @ LBA %u -> 0x%08X ra=0x%08X\n", size, lba, dest, c->r[31]);
-  rec_overlay_loaded(dest, size);  // scan the freshly-loaded bytes for owned overlay library fns
+  rec_overlay_loaded(c, dest, size);  // scan the freshly-loaded bytes for owned overlay library fns
   c->r[V0] = size;
 }
 
@@ -174,26 +167,26 @@ static void ov_cd_loadfile(R3000* c) {
 // FUN_8001d7c4 does (dest advances by words*4, no sector padding). Then zero the remaining count
 // and advance dest/position trackers to the post-read state so FUN_8001d940's caller FUN_8001db38
 // (task+0x6c is already 1 = success) sets DAT_1f80019b and ends task1.
-static void ov_cd_async_read(R3000* c) {
+static void ov_cd_async_read(Core* c) {
   (void)c;
-  uint32_t lba   = mem_r32(0x1f8001f0);
-  uint32_t words = mem_r32(0x1f8001f4);
-  uint32_t dest  = mem_r32(0x1f8001f8);
+  uint32_t lba   = c->mem_r32(0x1f8001f0);
+  uint32_t words = c->mem_r32(0x1f8001f4);
+  uint32_t dest  = c->mem_r32(0x1f8001f8);
   uint32_t bytes = words * 4u;
   uint8_t sec[2048];
   uint32_t done = 0, nsec = 0;
   for (; done < bytes; nsec++) {
     if (!disc_read_sector(lba + nsec, sec)) break;
     uint32_t n = bytes - done < 2048 ? bytes - done : 2048;
-    for (uint32_t j = 0; j < n; j++) mem_w8(dest + done + j, sec[j]);
+    for (uint32_t j = 0; j < n; j++) c->mem_w8(dest + done + j, sec[j]);
     done += n;
   }
-  mem_w32(0x1f8001f4, 0);                  // remaining count consumed (callback would zero it)
-  mem_w32(0x1f8001f8, dest + done);        // dest advanced, as FUN_8001d7c4 leaves it
-  if (nsec) mem_w32(0x800be0e0, lba + nsec - 1);  // DAT_800be0e0 = last sector read (pos tracker)
+  c->mem_w32(0x1f8001f4, 0);                  // remaining count consumed (callback would zero it)
+  c->mem_w32(0x1f8001f8, dest + done);        // dest advanced, as FUN_8001d7c4 leaves it
+  if (nsec) c->mem_w32(0x800be0e0, lba + nsec - 1);  // DAT_800be0e0 = last sector read (pos tracker)
   if (g_cd_verbose)
     fprintf(stderr, "[cd] async read %u words (%u B) @ LBA %u -> 0x%08X\n", words, bytes, lba, dest);
-  rec_overlay_loaded(dest, bytes); // scan the freshly-loaded bytes for owned overlay library fns
+  rec_overlay_loaded(c, dest, bytes); // scan the freshly-loaded bytes for owned overlay library fns
 }
 
 // 0x8001D2A8 FUN_8001d2a8(chan, start_lba, end_lba, flags): the engine's voice/BGM clip player.
@@ -216,18 +209,16 @@ static void ov_cd_async_read(R3000* c) {
 // the dialog tone — the audible bug. Mod: while a dialog tone is the current song, keep the
 // looping ingame music suppressed and remembered; resume it once the dialog ends. One-shot voice
 // clips are unaffected (they ARE the dialog audio).
-int  xa_stream_is_looping(void);
-int  xa_stream_is_active(void);
 static int      s_pending_music;          // a looping ingame-music clip is deferred/remembered
 static uint8_t  s_pm_chan;
 static uint32_t s_pm_start, s_pm_end;
-static int dialog_tone_active(void) {
-  uint32_t s = mem_r16(0x800bed80) & 0xFFFF;
+static int dialog_tone_active(Core* c) {
+  uint32_t s = c->mem_r16(0x800bed80) & 0xFFFF;
   return s >= 4 && s <= 7;
 }
 // Enable CD->SPU mixing (libsnd SpuSetCommonAttr via FUN_8001cf00(1)); needed for the SPU to
 // actually mix the decoded XA (Beetle spu.c gates on SPUControl bit0).
-static void cd_to_spu_mix(R3000* c, int on) { c->r[A0] = on ? 1 : 0; rec_dispatch(c, 0x8001cf00u); }
+static void cd_to_spu_mix(Core* c, int on) { c->r[A0] = on ? 1 : 0; rec_dispatch(c, 0x8001cf00u); }
 
 // Fade the ingame music IN from silence using the GAME'S OWN CD-volume ramp. The game keeps a
 // CD-volume fade pair: target DAT_800be222 and current DAT_800be224 (the SpuCommonAttr CDVOL the
@@ -248,23 +239,23 @@ static void cd_to_spu_mix(R3000* c, int on) { c->r[A0] = on ? 1 : 0; rec_dispatc
 // audible "1-frame blip" / "starts loud then drops to zero then climbs". So ALSO write the SPU CDVOL
 // register to 0 directly here, muting the start frame's mix; the next frame the ramp rewrites it from
 // cur=0 and climbs. mem_w16 to 0x1F801DBx routes through io_write -> spu_write -> SPU_Write (mem.c).
-static void music_fade_in(void) {
-  mem_w16(0x800be224, 0);   // game's fade CURRENT = 0 (its per-frame ramp climbs it back up)
-  mem_w16(0x1f801db0, 0);   // SPU CDVOL L = 0 NOW, so THIS frame's XA mix is silent (no loud blip)
-  mem_w16(0x1f801db2, 0);   // SPU CDVOL R = 0
+static void music_fade_in(Core* c) {
+  c->mem_w16(0x800be224, 0);   // game's fade CURRENT = 0 (its per-frame ramp climbs it back up)
+  c->mem_w16(0x1f801db0, 0);   // SPU CDVOL L = 0 NOW, so THIS frame's XA mix is silent (no loud blip)
+  c->mem_w16(0x1f801db2, 0);   // SPU CDVOL R = 0
 }
 
 // Diagnostic: trace the game's CD-volume fade state + XA stream lifecycle, on change only.
 // tgt/cur = DAT_800be222/224 (fade target/current), mas = DAT_800be220 (master),
 // 19a/137 = state bytes gating FUN_80075824's ramp, song = 0x800bed80, gate = 0x801fe0e0.
 extern volatile uint32_t g_bgm_frame;
-void xa_audio_trace(const char* tag) {
+void xa_audio_trace(Core* c, const char* tag) {
   if (!cfg_str("PSXPORT_XA_DBG")) return;
   static int t=1<<30,cur,mas,s19a,s137,song,act,lp,gate;
-  int nt=(int16_t)mem_r16(0x800be222), ncur=(int16_t)mem_r16(0x800be224), nmas=(int16_t)mem_r16(0x800be220);
-  int n19a=mem_r8(0x1f80019a), n137=mem_r8(0x1f800137);
-  int nsong=mem_r16(0x800bed80)&0xffff, nact=xa_stream_is_active(), nlp=xa_stream_is_looping();
-  int ngate=mem_r16(0x801fe0e0)&0xffff;
+  int nt=(int16_t)c->mem_r16(0x800be222), ncur=(int16_t)c->mem_r16(0x800be224), nmas=(int16_t)c->mem_r16(0x800be220);
+  int n19a=c->mem_r8(0x1f80019a), n137=c->mem_r8(0x1f800137);
+  int nsong=c->mem_r16(0x800bed80)&0xffff, nact=xa_stream_is_active(), nlp=xa_stream_is_looping();
+  int ngate=c->mem_r16(0x801fe0e0)&0xffff;
   if (nt!=t||ncur!=cur||nmas!=mas||n19a!=s19a||n137!=s137||nsong!=song||nact!=act||nlp!=lp||ngate!=gate) {
     fprintf(stderr,"[xa f%u %-5s] tgt=%d cur=%d mas=%d 19a=%d 137=%d song=%d act=%d loop=%d gate=%d\n",
             g_bgm_frame,tag,nt,ncur,nmas,n19a,n137,nsong,nact,nlp,ngate);
@@ -272,7 +263,7 @@ void xa_audio_trace(const char* tag) {
   }
 }
 
-static void ov_voice_play(R3000* c) {
+static void ov_voice_play(Core* c) {
   uint8_t  chan  = (uint8_t)(c->r[A0] & 0xFF);
   uint32_t start = c->r[A1], end = c->r[A2];
   int      loop  = (int)(c->r[7] & 1);              // a3 = flags
@@ -280,12 +271,12 @@ static void ov_voice_play(R3000* c) {
     fprintf(stderr, "[voice_play] chan=%u [%u..%u] loop=%d ra=%08X\n", chan, start, end, loop, c->r[31]);
   if (loop) {                                       // looping clip == ingame/area background music
     s_pending_music = 1; s_pm_chan = chan; s_pm_start = start; s_pm_end = end;
-    if (dialog_tone_active()) return;               // suppress during a dialog; resumed by xa_dialog_coord
+    if (dialog_tone_active(c)) return;               // suppress during a dialog; resumed by xa_dialog_coord
   }
   xa_stream_play(chan, start, end, loop);
-  mem_w16(0x801fe0e0, 2);                            // task-2 state = running (cutscene wait gate)
+  c->mem_w16(0x801fe0e0, 2);                            // task-2 state = running (cutscene wait gate)
   cd_to_spu_mix(c, 1);
-  if (loop) music_fade_in();                         // ingame music fades in from 0 (instant-CD mod)
+  if (loop) music_fade_in(c);                         // ingame music fades in from 0 (instant-CD mod)
 }
 
 // Called from the BGM-start override (ov_bgm_start) right after the song index is written, i.e. at
@@ -293,35 +284,35 @@ static void ov_voice_play(R3000* c) {
 // ingame music so it can't leak a frame past the dialog start (the per-frame xa_dialog_coord below
 // would otherwise stop it one frame late, after the mix). Keeps it remembered (s_pending_music) so
 // xa_dialog_coord resumes it when the dialog ends.
-void xa_music_cut_if_dialog(void) {
-  if (dialog_tone_active() && xa_stream_is_looping()) xa_stream_stop();
+void xa_music_cut_if_dialog(Core* c) {
+  if (dialog_tone_active(c) && xa_stream_is_looping()) xa_stream_stop();
 }
 
 // Called once per frame (native_scheduler_step). Enforces "dialogs stop the ingame music":
 // stop a looping ingame-music clip while a dialog tone is up; resume the remembered clip once
 // the dialog ends and the XA stream is free (no voice playing).
-void xa_dialog_coord(R3000* c) {
+void xa_dialog_coord(Core* c) {
   if (cfg_str("PSXPORT_XA_DBG")) {
     static uint32_t prev = 0xDEAD; static int pa = -1, pl = -1;
-    uint32_t s = mem_r16(0x800bed80) & 0xFFFF; int a = xa_stream_is_active(), l = xa_stream_is_looping();
+    uint32_t s = c->mem_r16(0x800bed80) & 0xFFFF; int a = xa_stream_is_active(), l = xa_stream_is_looping();
     if (s != prev || a != pa || l != pl) {
       fprintf(stderr, "[coord] song=%u tone=%d xa_active=%d loop=%d pending=%d\n",
-              s, dialog_tone_active(), a, l, s_pending_music);
+              s, dialog_tone_active(c), a, l, s_pending_music);
       prev = s; pa = a; pl = l;
     }
   }
-  if (dialog_tone_active()) {
+  if (dialog_tone_active(c)) {
     if (xa_stream_is_looping()) xa_stream_stop();    // dialog up: silence ingame music (kept pending)
   } else if (s_pending_music && !xa_stream_is_active()) {
     xa_stream_play(s_pm_chan, s_pm_start, s_pm_end, 1);   // dialog over: resume ingame music
-    mem_w16(0x801fe0e0, 2);
+    c->mem_w16(0x801fe0e0, 2);
     cd_to_spu_mix(c, 1);
-    music_fade_in();                                      // resumed music fades in from 0 (no voice now)
+    music_fade_in(c);                                      // resumed music fades in from 0 (no voice now)
   }
 }
 // 0x8001CF2C FUN_8001cf2c: stop the current voice/BGM clip.
-static void ov_voice_stop(R3000* c) {
-  xa_stream_stop(); mem_w16(0x801fe0e0, 0);
+static void ov_voice_stop(Core* c) {
+  xa_stream_stop(); c->mem_w16(0x801fe0e0, 0);
   c->r[A0] = 0; rec_dispatch(c, 0x8001cf00u);        // CD->SPU mix off
 }
 

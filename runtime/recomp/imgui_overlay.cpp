@@ -12,7 +12,7 @@ extern "C" {
 extern "C" int g_fps60_on;   // engine/fps60.c — the 60fps interpolation gate
 extern "C" int cfg_on(const char* name);   // cfg.c — env flag (PSXPORT_UI gates the SSAO/light infra)
 // Effective (computed, incl. auto) video status from the renderer; out ptrs may be NULL.
-extern "C" void gpu_vk_video_status(int* native_w, int* ires, int* fbw, int* fbh,
+void gpu_vk_video_status(int* native_w, int* ires, int* fbw, int* fbh,
                                     int* ww, int* wh, int* ires_cap);
 
 static bool            s_inited  = false;

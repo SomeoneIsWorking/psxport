@@ -1,3 +1,4 @@
+#include "core.h"
 // gpu_trace.c — GP0-stream capture for the cross-renderer differ (carved out of gpu_native.c).
 //
 // Records, for ONE target frame, a snapshot of VRAM at frame start plus the EXACT GP0 word stream
