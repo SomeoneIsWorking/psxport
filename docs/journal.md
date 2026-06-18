@@ -4939,3 +4939,31 @@ then trace back the writer of those cmd structs. That gives (a) object→command
 transform+geomblk derive from object state — so native C can build a margin object's command from its frozen
 state and enqueue it directly (no +1, no perturbation), each validated 0-diff vs the rcmd capture. Probes:
 `PSXPORT_DEBUG=rcmd`/`geomblk`/`enq` (+`PSXPORT_GEOMBLK_FRAME`).
+
+## later-132 — ENQUEUE + geomblk-table FOUND; render commands are PERSISTENT (built once)
+Found the render-command enqueue with `PSXPORT_WWATCH` (word-store PC tap, runtime/recomp/mem.c). Watching
+the command's geomblk word (cmd+0x40 at 0x800F9CA4 for the f2900 flush list 0x800fb218) caught the writer at
+**pc=0x80051B2C** — the leaf `gen_func_80051B04`, called from the enqueue `gen_func_80051B70` (which the
+margin handlers 0x80073cd8 / 0x80138fc8 both call). Decoded (docs/engine_re.md §Deferred render pipeline):
+- **Enqueue `gen_func_80051B70`**(a0=object, a1=group, a2=sub): allocates the cmd (`gen_func_8007AAE8`),
+  stores cmd ptr at **node+0xc0**, sets scale cmd+0x38/3a/3c=0x1000, header cmd+6=-1 / +0/2/4/8/a/c=0.
+- **Geomblk = data-driven table lookup** (leaf 0x80051B04): `geomblk = T + *(T+sub*4+4)`, `T =
+  *(0x800ECF58 + group*4)` — a two-level model table at 0x800ECF58. Deterministic from (group,sub).
+- **Transform** (`gen_func_80051C8C`): node+0x98 = rotation matrix (from node+0x54/56/58 via
+  0x80084D10/EB0/5050), node+0xac/b0/b4 = translation (from pos node+0x2e/32/36). Flush loads it to cmd+0x18.
+- **PERSISTENCE (the key correction):** cmd+0x40 was written **exactly ONCE in 2905 frames** → render
+  commands are NOT rebuilt per frame. They are built at spawn/scene-setup and kept at node+0xc0; per frame
+  only the transform updates + the flush renders. At steady-state f2900 the enqueue (0x80051B70 / leaf
+  0x80051B04) is NOT called (cmdenq probe = 0 hits) — consistent. The list 0x800fb218 (the 8015ca04×24 static
+  decor layer) is built once by `gen_func_8003AE28` (calls the leaf), not per-frame.
+- **Therefore the NATIVE margin plan simplifies:** for a culled margin object, read its PERSISTENT cmd at
+  node+0xc0 and add it to the appropriate flush list (or build a native equivalent from group/sub + the
+  table + the transform), WITHOUT poking +1. No per-frame geometry rebuild needed.
+
+**NEXT — the per-frame visibility→flush-list selection.** Find where a visible object's node+0xc0 cmd gets
+appended to a flush list each frame (the path the +1 flag gates; the list-count is a BYTE store so WWATCH
+won't catch it — watch the cmd-ptr array slot `list+0xc0+i*4`, a word store, as done here → populator
+pc=0x8003AEA8 for the static layer). Then: build `engine/margin_render.{hpp,cpp}` (C++) to add culled margin
+objects' cmds to that list. Validate 0-diff vs the rcmd capture (mode+transform+geomblk byte-identical when
+the object is genuinely visible). New probe: `PSXPORT_DEBUG=cmdenq` (taps leaf 0x80051B04; use at the SPAWN
+frame, not steady-state). Probes: rcmd/geomblk/flush/enq/cmdenq + PSXPORT_WWATCH.

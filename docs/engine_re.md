@@ -113,10 +113,24 @@ only mode 3 / ≥9). `*0x800BF870` is a GLOBAL set before/within a flush pass, s
   field, base/world commands carry flag=1, the widescreen-margin commands carry flag=0. The margin commands'
   geomblks are REAL (0x801exxxx model prim-lists) even though the node `+0x38` mdata is 0 — geometry is
   resolved at enqueue, not from `+0x38` (corrects later-129's "no model data").
-- **OBJECT ATTRIBUTION (the geomblk oracle's missing key) lives at the ENQUEUE site**, not the cull/walk tap:
-  whoever fills `cmd+0x40`(geomblk)/`cmd+0x18`(transform) and bumps `list+8` does it during phase 1 with
-  `g_current_object` = the source node. Tap THAT to map geomblk→object and to RE each handler's render-half.
-  OPEN: the enqueue function (writer of the command struct / `list+0xc0` array) — the next RE target.
+- **Command struct ENQUEUE — `gen_func_80051B70`** (and a multi/instanced loop variant ~0x80051A60, and a
+  layer-builder ~0x8003AE28): args `a0`=object node, `a1`=model group idx, `a2`=model sub idx. Allocates the
+  command (`gen_func_8007AAE8`), stores the cmd ptr at **node+0xc0** (the object→command link), clears the cmd
+  header (`+0/2/4/8/0xa/0xc`=0, `+6`=-1), sets scale `cmd+0x38/3a/3c`=0x1000, and resolves the geomblk via:
+- **Geomblk resolution (data-driven, leaf `gen_func_80051B04`):** `geomblk = T + *(T + sub*4 + 4)`, where
+  `T = *(0x800ECF58 + group*4)`. A **two-level model table at 0x800ECF58**: outer index = group, inner =
+  sub-model. Fully deterministic from the handler's `(group,sub)` selectors → the native render-half computes
+  the geomblk the same way (no guessing). Stored to `cmd+0x40`.
+- **Transform build — `gen_func_80051C8C`:** builds the object's matrix into `node+0x98` (rotation from
+  `node+0x54/56/58` via `gen_func_80084D10/80084EB0/80085050`) and translation `node+0xac/b0/b4` from position
+  `node+0x2e/32/36`. This matrix is what the flush loads (cmd+0x18) into the GTE before projecting.
+- **Commands are PERSISTENT, not per-frame (later-132, via `PSXPORT_WWATCH`):** `cmd+0x40` was written exactly
+  ONCE across 2905 frames — the render command (geomblk + base transform) is built at object spawn / scene
+  setup and kept at `node+0xc0`. Per frame only the transform translation/rotation updates + the flush runs.
+  So the `+1` re-include's effect = the (already-built) cmd of a re-included object being drawn; the NATIVE
+  margin plan reads `node+0xc0` (its persistent cmd) for a culled margin object and adds it to the flush list,
+  WITHOUT poking `+1` (which also ticks gameplay). Probes: `PSXPORT_DEBUG=cmdenq`/`flush`/`enq`,
+  `PSXPORT_WWATCH=lo,hi` (word-store PC tap; NB byte stores like `list+8` count are not caught).
 
 ## Geometry SUBMIT — `0x8007FDB0` (POLY_GT3 tri) + `0x8008007C` (POLY_GT4 quad) — NATIVE-OWNED (engine_submit.c)
 These are the resident routines that turn a model's pre-built primitive-record list into GPU packets in

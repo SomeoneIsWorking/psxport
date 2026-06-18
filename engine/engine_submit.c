@@ -147,6 +147,25 @@ void ov_flush_probe(R3000* c) {
   rec_super_call(c, 0x8003F174u);
 }
 
+// PSXPORT_DEBUG=cmdenq — render-command ENQUEUE tap (later-132). gen_func_80051B70 enqueues one object's
+// render command: a0=object node, a1=model group idx, a2=model sub idx. It stores the cmd ptr at node+0xc0,
+// allocs via 0x8007AAE8, and resolves the geomblk from the two-level model table @0x800ECF58 via leaf
+// 0x80051B04: geomblk = T + *(T + sub*4 + 4), where T = *(0x800ECF58 + group*4). We log obj + (group,sub) +
+// the geomblk we compute the SAME way, to validate the decode (cross-check vs rcmd geomblks) before porting.
+// Tapped at the LEAF resolver gen_func_80051B04(cmd=a0, group=a1, sub=a2): geomblk = T + *(T+sub*4+4),
+// T = *(0x800ECF58 + group*4), stored to cmd+0x40. Validates the two-level model-table decode (the f2900
+// commands enqueue through this leaf, not the single-object 0x80051B70). g_current_object names the object.
+void ov_cmdenq_probe(R3000* c) {
+  if (cfg_dbg("cmdenq") && probe_frame_ok()) {
+    uint32_t cmd = c->r[4], group = c->r[5], sub = c->r[6], o = g_current_object;
+    uint32_t T = mem_r32(0x800ECF58u + group*4);
+    uint32_t geomblk = T + mem_r32(T + sub*4 + 4);
+    fprintf(stderr, "[cmdenq] f%d obj=%08x type=%02x group=%u sub=%u T=%08x geomblk=%08x cmd=%08x\n",
+            s_frame, o, o ? mem_r8(o + 0x0c) : 0xff, group, sub, T, geomblk, cmd);
+  }
+  rec_super_call(c, 0x80051B04u);
+}
+
 // PC-native per-vertex depth (Phase 2): because we OWN the projection, we know each vertex's real
 // view-space Z (the SZ the GTE just produced) — record it keyed by the packet vertex word's address so
 // the renderer's D32 depth buffer does true per-pixel occlusion (PSXPORT_NATIVE_DEPTH / the SBS A/B

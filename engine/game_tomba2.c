@@ -408,6 +408,8 @@ void games_tomba2_init(void) {
   // Flush tap (PSXPORT_DEBUG=flush): dump the command-struct addresses (list+0xc0[i]) the flush drains, to
   // trace the still-open render-command enqueue. later-131. Gated (super-call).
   if (cfg_dbg("flush")) { void ov_flush_probe(R3000*); rec_set_override(0x8003F174u, ov_flush_probe); }
+  // Command-enqueue tap (PSXPORT_DEBUG=cmdenq): gen_func_80051B70, validates obj/(group,sub)→geomblk. later-132.
+  if (cfg_dbg("cmdenq")) { void ov_cmdenq_probe(R3000*); rec_set_override(0x80051B04u, ov_cmdenq_probe); }
   void engine_tomba2_init(void);
   engine_tomba2_init();                            // native engine layer (Phase 1: object-list walk)
 }
