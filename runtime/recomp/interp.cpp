@@ -38,6 +38,32 @@ static inline void trace_call(uint32_t from, uint32_t to) {
   if (g_trace_fp) fprintf(g_trace_fp, "%08X -> %08X\n", from, to);
 }
 
+// ---- Differential NATIVE-CALL tracer (PSXPORT_NCALL_TRACE=<path>) ---------------------------------
+// Every native override / BIOS call the interpreter makes is logged with its inputs (a0-a3) and
+// outputs (v0/v1). Since the interpreter + memory are deterministic and (after the OOP refactor)
+// byte-identical, two builds produce the SAME native-call sequence until a native function behaves
+// differently. Diffing two traces, the FIRST line with identical inputs but different outputs is the
+// exact override whose conversion broke (a different return value / register effect); the first line
+// with differing INPUTS means an earlier call's memory side-effect diverged. tools/ncall_diff.py
+// runs both builds and reports that first divergence. Zero cost when the env var is unset.
+static FILE* g_ncall_fp = 0;
+static long  g_ncall_seq = 0;
+static int   g_ncall_init = 0;
+static void ncall_open_once(void) {
+  if (g_ncall_init) return;
+  g_ncall_init = 1;
+  const char* p = cfg_str("PSXPORT_NCALL_TRACE");
+  if (p && *p) { g_ncall_fp = fopen(p, "w"); if (!g_ncall_fp) perror(p);
+                 else setvbuf(g_ncall_fp, 0, _IOLBF, 0); }
+}
+// kind: 'O' = address-keyed override, 'B' = BIOS vector. Logged AFTER the native fn runs.
+static inline void ncall_log(char kind, uint32_t tgt, uint32_t a0, uint32_t a1, uint32_t a2,
+                             uint32_t a3, uint32_t v0, uint32_t v1) {
+  if (!g_ncall_fp) return;
+  fprintf(g_ncall_fp, "%ld %c %08X  a:%08X %08X %08X %08X -> v:%08X %08X\n",
+          g_ncall_seq++, kind, tgt, a0, a1, a2, a3, v0, v1);
+}
+
 #define RS(i)  (((i) >> 21) & 31)
 #define RT(i)  (((i) >> 16) & 31)
 #define RD(i)  (((i) >> 11) & 31)
@@ -260,8 +286,20 @@ void rec_dispatch_miss(Core* c, uint32_t addr);
 // Invoke a call target natively if it is an override/BIOS (returns 1), else 0 (caller jumps).
 static int coro_native_call(Core* c, uint32_t tgt) {
   OverrideFn ov = interp_override_for(tgt);       // unified address-keyed override (resident + overlay)
-  if (ov) { ov(c); return 1; }
-  if (is_bios(tgt)) { rec_dispatch_miss(c, tgt); return 1; }
+  if (ov) {
+    if (!g_ncall_init) ncall_open_once();
+    uint32_t a0=c->r[4],a1=c->r[5],a2=c->r[6],a3=c->r[7];
+    ov(c);
+    ncall_log('O', tgt, a0,a1,a2,a3, c->r[2], c->r[3]);
+    return 1;
+  }
+  if (is_bios(tgt)) {
+    if (!g_ncall_init) ncall_open_once();
+    uint32_t a0=c->r[4],a1=c->r[5],a2=c->r[6],a3=c->r[7];
+    rec_dispatch_miss(c, tgt);
+    ncall_log('B', tgt, a0,a1,a2,a3, c->r[2], c->r[3]);
+    return 1;
+  }
   return 0;
 }
 
