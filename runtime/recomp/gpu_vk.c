@@ -1265,7 +1265,11 @@ void gpu_vk_dump(int sx, int sy, int w, int h, int frame) {
   static int sf = -2; if (sf == -2) { const char* e = cfg_str("PSXPORT_VK_SHOT"); sf = e ? atoi(e) : -1; }
   static int qa = -2, qb, qstep; static char qdir[256];
   if (qa == -2) { qa = -1; const char* e = cfg_str("PSXPORT_VK_SHOTSEQ");
-    if (e && sscanf(e, "%d:%d:%d:%255s", &qa, &qb, &qstep, qdir) == 4 && qstep > 0) {} else qa = -1; }
+    if (e && sscanf(e, "%d:%d:%d:%255s", &qa, &qb, &qstep, qdir) == 4 && qstep > 0) {
+      // Create the output dir up front — vk_dump_to just fopen("wb")s, so a missing dir would
+      // fail SILENTLY (the symptom of "shotseq wrote nothing"). Mirror the PSXPORT_GPU_DUMP path.
+      char cmd[320]; snprintf(cmd, sizeof cmd, "mkdir -p '%s'", qdir); int r = system(cmd); (void)r;
+    } else qa = -1; }
   int dsx = sx, dsy = sy, dw = w, dh = h;
   if (use_fb()) { dsx = 0; dsy = FB_Y0; dw = FBW(); dh = FBH(); }   // scaled scratch FB (wide / hi-res)
   if (sf >= 0 && frame == sf) { vk_dump_to("scratch/screenshots/vk_live.ppm", dsx, dsy, dw, dh);
