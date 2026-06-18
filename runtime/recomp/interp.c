@@ -1,14 +1,17 @@
-// Hybrid fallback interpreter for non-recompiled code (overlays + computed-jump targets).
+// The runtime's ONE execution substrate: a flat R3000 interpreter that runs all guest code
+// (the boot stub, MAIN.EXE, and the disc code overlays) directly from g_ram. The static
+// recompiler was dropped from the build (see docs/journal.md "later-101"); emit.py survives
+// only as an offline analysis aid. There is a single instruction core (exec_simple) and a
+// single control-flow loop (interp_flat); the two public entry points — rec_coro_run (a
+// cooperative task) and rec_interp (a synchronous nested call / super-call) — are thin
+// wrappers over it that differ only in their return sentinel. See the wrappers at the bottom.
 //
-// The static recompiler covers MAIN.EXE's resident text. Code overlays (START/OPN/GAME/...
-// .BIN) are loaded from disc at runtime ABOVE that text (0x80106xxx etc.) and swap at shared
-// addresses, so they can't all be statically recompiled ahead of time. This interpreter runs
-// any such code directly from g_ram, using the SAME runtime (mem/gte/hle/threads) and the
-// SAME instruction semantics as the emitter (tools/recomp/emit.py) so interpreted and
-// recompiled code are bit-identical. It is the rec_dispatch-miss fallback: a `jal`/`jr`/`jalr`
-// into non-recompiled RAM enters rec_interp; a call back into a recompiled function routes to
-// rec_dispatch. (Also resolves the in-function jump-table misses in MAIN.EXE — printf
-// 0x8009A76C, SetVideoMode 0x80091D70 — by interpreting from the computed target in RAM.)
+// The loop is FLAT (not C-recursive): jal/jalr set the link reg and JUMP; the called code keeps
+// its own frame on the PSX stack in g_ram and returns by `jr ra`. This lets a cooperative yield
+// longjmp out and resume mid-chain (native_boot.c), and means PSX call depth costs no C stack.
+// Native overrides and BIOS vectors are invoked as C (coro_native_call); everything else runs
+// interpreted. Instruction semantics match the emitter (tools/recomp/emit.py) bit-for-bit, so
+// the offline-recompiled C and the interpreter agree.
 //
 // Faithful-first simplifications match the emitter: no load-delay slot; add==addu; signed
 // div/mult via cpu_div/mult helpers; GTE via gte_op/gte_read/write.
@@ -111,17 +114,11 @@ static inline void ldhaz_step(uint32_t in, uint32_t pc) {
   g_ld_last_in = in; g_ld_last_pc = pc;
 }
 
-// Is `addr` a recompiled function or a BIOS vector? Then a call routes to rec_dispatch;
-// otherwise it is non-recompiled RAM code we interpret.
-int rec_func_index(uint32_t addr);
-static int is_recompiled(uint32_t a) {
-  uint32_t p = a & 0x1FFFFFFF;
-  return rec_func_index(a) >= 0 || p == 0xA0 || p == 0xB0 || p == 0xC0;
-}
-// Raw-address override table for NON-recompiled (interpreted) code — the boot stub and overlays.
-// rec_set_override / g_override are keyed by recompiled-function INDEX (rec_func_index), so they
-// can't target stub/overlay addresses (index == -1). This parallel table is keyed by raw address
-// and consulted by call_addr below, letting native_stub.c replace the stub's libcd/libetc waits.
+// The ONE address-keyed override table. Every native replacement — resident MAIN call sites
+// (rec_set_override), boot-stub libcd/libetc waits, and scan-registered overlay library fns —
+// registers here and is consulted by coro_native_call on every control transfer. (There is no
+// longer a separate recompiled-function-index table; the interpreter-only pivot collapsed the
+// index/address duality that previously split overrides into two tables.)
 #define MAX_IOV 256
 static struct { uint32_t addr; OverrideFn fn; int isauto; } g_iov[MAX_IOV];
 static int g_iov_n;
@@ -165,17 +162,7 @@ void rec_overlay_loaded(uint32_t base, uint32_t size) {
 // the interpreter (a recompiled `jalr`/dispatch into a non-recompiled stub fn lands here, not via
 // call_addr). Keyed by full KSEG0 address.
 OverrideFn rec_interp_override_for(uint32_t a) { return interp_override_for(a); }
-static void call_addr(R3000* c, uint32_t a) {
-  OverrideFn ov = interp_override_for(a);
-  if (ov) { ov(c); return; }                 // native replacement (returns to caller, sets v0)
-  if (is_recompiled(a)) rec_dispatch(c, a);
-  else rec_interp(c, a);
-}
 
-// Native override registered for `addr` (rec_set_override / rec_set_interp_override — one unified
-// address-keyed table now), or NULL. Used by the coroutine interpreter to invoke hand-written
-// overrides (CD, yield, submit, ...) instead of interpreting the original bytes.
-static OverrideFn override_for(uint32_t a) { return interp_override_for(a); }
 static int is_bios(uint32_t a) { uint32_t p = a & 0x1FFFFFFF; return p==0xA0||p==0xB0||p==0xC0; }
 
 // Execute one non-control instruction (delay-slot-safe; no branches/jumps/loads-delay).
@@ -257,88 +244,28 @@ static void exec_simple(R3000* c, uint32_t in) {
   }
 }
 
-// Invoke a call target natively if it is an override/BIOS (returns 1), else 0 (defined below; used by
-// both interpreters so `j`/`jr` tail-calls honor overrides, not just `jal`/`jalr`).
-static int coro_native_call(R3000* c, uint32_t tgt);
-
-// Interpret from `pc` until the function returns (jr ra) or tail-jumps into recompiled code.
-void rec_interp(R3000* c, uint32_t pc) {
-  for (;;) {
-    g_interp_pc = pc;
-    uint32_t in = mem_r32(pc);
-    uint32_t op = in >> 26;
-
-    if (op == 0x02 || op == 0x03) {                  // j / jal
-      uint32_t tgt = TGT(in, pc);
-      if (op == 0x03) c->r[31] = pc + 8;             // jal links ra
-      exec_simple(c, mem_r32(pc + 4));               // delay slot
-      if (op == 0x03) { trace_call(pc, tgt); call_addr(c, tgt); pc += 8; continue; }  // jal: call, resume after DS
-      // plain `j`: a tail-call to a native override / BIOS must win here too (a submitter is often
-      // tail-called, not jal'd) — else the override is bypassed and the original body interpreted.
-      // For a local label (no override / not BIOS) this falls through to a same-frame jump.
-      if (coro_native_call(c, tgt)) return;          // tail-call into override/BIOS -> run + return
-      pc = tgt; continue;                            // j within interpreted code (local label / interp tail)
-    }
-    if (op == 0x00 && (FN(in) == 0x08 || FN(in) == 0x09)) {  // jr / jalr
-      uint32_t tgt = c->r[RS(in)];
-      uint32_t link = (FN(in) == 0x09) ? (pc + 8) : 0;
-      uint32_t rd = RD(in);
-      exec_simple(c, mem_r32(pc + 4));               // delay slot
-      if (FN(in) == 0x09) {                          // jalr: link + call + resume
-        if (rd) c->r[rd] = link;
-        trace_call(pc, tgt); call_addr(c, tgt); pc += 8; continue;
-      }
-      if (RS(in) == 31) return;                      // jr ra: return to caller
-      if (coro_native_call(c, tgt)) return;          // computed tail-call into override/BIOS -> run + return
-      pc = tgt; continue;                            // computed jump within interpreted code (switch table etc.)
-    }
-    if (op == 0x01 || op == 0x04 || op == 0x05 || op == 0x06 || op == 0x07) {  // branches
-      int t;
-      uint32_t rs = RS(in), rt = RT(in);
-      uint32_t tgt = pc + 4 + (SIMM(in) << 2);
-      if (op == 0x04) t = (c->r[rs] == c->r[rt]);              // beq
-      else if (op == 0x05) t = (c->r[rs] != c->r[rt]);         // bne
-      else if (op == 0x06) t = ((int32_t)c->r[rs] <= 0);       // blez
-      else if (op == 0x07) t = ((int32_t)c->r[rs] > 0);        // bgtz
-      else {                                                   // REGIMM: bltz/bgez/bltzal/bgezal
-        uint32_t sub = rt;
-        t = (sub & 1) ? ((int32_t)c->r[rs] >= 0) : ((int32_t)c->r[rs] < 0);
-        if (sub & 0x10) c->r[31] = pc + 8;                     // *al link
-      }
-      exec_simple(c, mem_r32(pc + 4));               // delay slot
-      pc = t ? tgt : pc + 8;
-      continue;
-    }
-    // non-control instruction
-    exec_simple(c, in);
-    pc += 4;
-  }
-}
-
-// ---- Flat coroutine interpreter (rec_coro_run) -------------------------------------------
-// Runs one cooperative task as a resumable coroutine WITHOUT using the host C stack for PSX
-// calls (so a yield can longjmp out and a later call resume mid-chain — see native_boot.c).
-// Unlike rec_interp (which mirrors PSX calls onto the C stack and treats `jr ra` as a C
-// return), this is FLAT: jal/jalr set the link reg and JUMP (the called code maintains the PSX
-// stack in g_ram itself); `jr` JUMPS to its target and keeps looping. The loop only exits when
-// `jr ra` targets the sentinel 0xDEAD0000 (the task's top-level function returned == task
-// ended). Native overrides (yield, CD, ...) and BIOS vectors are still invoked as C (an
-// override may longjmp out, e.g. the yield); everything else is interpreted flat. This is the
-// ucontext-free coroutine model: PSX state (PC via the link/stack, regs, SP-in-g_ram) is all
-// that a yield needs to save/restore.
+// ---- The single flat interpreter loop ----------------------------------------------------
+// Runs guest code from `pc` WITHOUT using the host C stack for PSX calls (so a yield can longjmp
+// out and a later call resume mid-chain — see native_boot.c). jal/jalr set the link reg and
+// JUMP; the called code keeps its own frame on the PSX stack in g_ram and returns by `jr ra`.
+// The loop exits when a `jr ra` targets `stop_ra`: CORO_SENTINEL (0xDEAD0000) for a top-level
+// task (set by the scheduler in native_boot.c), or the same value pushed by rec_interp for a
+// synchronous nested call so it returns to its C caller. Native overrides (yield, CD, submit,
+// ...) and BIOS vectors are invoked as C (an override may longjmp out, e.g. the yield);
+// everything else is interpreted flat. This is the ucontext-free model: all a yield must
+// save/restore is the PSX state (PC via the link/stack, regs, SP-in-g_ram).
 #define CORO_SENTINEL 0xDEAD0000u
 void rec_dispatch_miss(R3000* c, uint32_t addr);
 
 // Invoke a call target natively if it is an override/BIOS (returns 1), else 0 (caller jumps).
 static int coro_native_call(R3000* c, uint32_t tgt) {
-  OverrideFn ov = override_for(tgt);              // recompiled-fn-index override (resident fns)
-  if (!ov) ov = interp_override_for(tgt);         // raw-address override + autodetect (overlay fns)
+  OverrideFn ov = interp_override_for(tgt);       // unified address-keyed override (resident + overlay)
   if (ov) { ov(c); return 1; }
   if (is_bios(tgt)) { rec_dispatch_miss(c, tgt); return 1; }
   return 0;
 }
 
-void rec_coro_run(R3000* c, uint32_t pc) {
+static void interp_flat(R3000* c, uint32_t pc, uint32_t stop_ra) {
   // Spin detector (PSXPORT_SPINDBG): a non-yielding busy-wait in game code loops here forever
   // (never returns to the scheduler, never calls a native override that longjmps). Track the
   // pc range over a window; if we run a huge number of iterations without leaving a tiny pc
@@ -348,6 +275,12 @@ void rec_coro_run(R3000* c, uint32_t pc) {
   if (spindbg < 0) spindbg = cfg_dbg("spin") ? 1 : 0;
   unsigned long iters = 0; uint32_t lo = pc, hi = pc;
   for (;;) {
+    // Exit the moment control reaches our return sentinel — by a `jr ra` (handled below) OR by a
+    // tail-call's implicit return (`pc = c->r[31]` after a native override, where ra was the
+    // inherited sentinel). The old recursive rec_interp returned to C on any tail-call into an
+    // override; the flat loop needs this top check to match it. stop_ra (CORO_SENTINEL 0xDEAD0000)
+    // is a poison address, never real code, so this is a no-op for normal flow in both callers.
+    if (pc == stop_ra) return;
     if (spindbg) {
       if (pc < lo) lo = pc; if (pc > hi) hi = pc;
       if (++iters >= 80000000UL) {
@@ -381,9 +314,18 @@ void rec_coro_run(R3000* c, uint32_t pc) {
     uint32_t op = in >> 26;
     ldhaz_step(in, pc);                              // load-delay hazard detector (execution order)
 
+    // `break` is a program trap. We HLE the BIOS, so there is no exception handler to resume
+    // into — the trap ENDS this run. In particular crt0 (0x800896E0) is `jal main; break`: on
+    // real PSX main never returns, but our native main (ov_game_main) returns after N headless
+    // frames, so control reaches that terminal break. The old recursive rec_interp escaped it by
+    // chance (it returned to C on the next `jr ra`, which fell through into a halt loop); the flat
+    // loop must treat the break itself as the halt. (A `break` never executes on a hot path here —
+    // the field run hits exactly one, this terminal — so ending the run on it is correct.)
+    if (op == 0x00 && FN(in) == 0x0D) { rec_break(c, (in >> 6) & 0xFFFFF); return; }
+
     if (op == 0x02 || op == 0x03) {                  // j / jal
       uint32_t tgt = TGT(in, pc);
-      if (op == 0x03) c->r[31] = pc + 8;
+      if (op == 0x03) { c->r[31] = pc + 8; trace_call(pc, tgt); }  // jal: link + optional call trace
       ldhaz_step(mem_r32(pc + 4), pc + 4);            // delay slot executes next
       exec_simple(c, mem_r32(pc + 4));               // delay slot
       // A native override / BIOS vector must win on EITHER a `jal` call or a tail-`j` into it,
@@ -401,11 +343,12 @@ void rec_coro_run(R3000* c, uint32_t pc) {
       exec_simple(c, mem_r32(pc + 4));               // delay slot
       if (is_jalr) {
         if (rd) c->r[rd] = link;
+        trace_call(pc, tgt);                         // optional call trace (PSXPORT_INTERP_TRACE)
         if (coro_native_call(c, tgt)) { pc = c->r[31]; continue; }
         pc = tgt; continue;                          // flat indirect call
       }
       if (is_ra) {                                   // return
-        if (tgt == CORO_SENTINEL) return;            // task's top function returned -> ended
+        if (tgt == stop_ra) return;                  // returned to our sentinel -> this run is done
         pc = tgt; continue;                          // flat return up the PSX call chain
       }
       if (coro_native_call(c, tgt)) { pc = c->r[31]; continue; }  // computed tail-call
@@ -432,4 +375,29 @@ void rec_coro_run(R3000* c, uint32_t pc) {
     exec_simple(c, in);
     pc += 4;
   }
+}
+
+// ---- The two public entry points: thin wrappers over the single flat loop -----------------
+// They differ only in the return sentinel. Folding the old recursive rec_interp into the flat
+// loop removes the second control-flow loop (and the index-vs-address override duality that went
+// with it) — leaving ONE interpreter.
+
+// A cooperative TASK: native_boot.c enters its top function with ra=CORO_SENTINEL, then the loop
+// runs until that function returns (jr ra -> sentinel == task ended) or a native override
+// (ov_yield/CD) longjmps back to the scheduler.
+void rec_coro_run(R3000* c, uint32_t pc) { interp_flat(c, pc, CORO_SENTINEL); }
+
+// A SYNCHRONOUS nested call — call_addr's old recursive job, plus rec_super_call (interpret the
+// original PSX body for the A/B oracle) and the dispatch-miss RAM-code path. It must run the
+// target to completion and return to its C caller. We push the sentinel as the return address
+// and run flat until the target returns to it; the target's own prologue/epilogue saves and
+// restores whatever ra holds, so on exit we put the caller's ra back — matching the net effect
+// of the old recursive rec_interp exactly. Nesting (e.g. an override calling rec_super_call mid
+// task) is safe: each invocation's PSX frames sit above the caller's, so only the target's own
+// `jr ra` reaches the sentinel and ends this run.
+void rec_interp(R3000* c, uint32_t pc) {
+  uint32_t saved_ra = c->r[31];
+  c->r[31] = CORO_SENTINEL;
+  interp_flat(c, pc, CORO_SENTINEL);
+  c->r[31] = saved_ra;
 }

@@ -23,7 +23,8 @@ MED=vendor/beetle-psx/mednafen
 OBJ=scratch/obj
 mkdir -p "$OBJ"
 
-INC="-I$RT -I$ENG -Igenerated -I$MED -I$MED/psx -Ivendor/beetle-psx/libretro-common/include -Ivendor/beetle-psx -Ivendor/beetle-psx/deps/libchdr/include"
+# No -Igenerated: the interpreter-only runtime links no recompiled shards (later-101).
+INC="-I$RT -I$ENG -I$MED -I$MED/psx -Ivendor/beetle-psx/libretro-common/include -Ivendor/beetle-psx -Ivendor/beetle-psx/deps/libchdr/include"
 CFLAGS="-O2 -g -w -D_XOPEN_SOURCE=700 $INC $(pkg-config --cflags sdl2 vulkan 2>/dev/null) -DPSXPORT_SDL"
 tools/gen_vk_shaders.sh   # compile+embed the Vulkan present shaders (gpu_vk_shaders.h) before gpu_vk.c
 

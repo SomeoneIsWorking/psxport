@@ -52,7 +52,7 @@ DISCDUMP=build/tools/discdump
 [ -x "$DISCDUMP" ] || DISCDUMP=build/tools/discdump.exe
 [ -x "$DISCDUMP" ] || die "discdump build failed"
 
-# ---- 3. extract MAIN.EXE (the recompiler input) + the stage overlays ----------------
+# ---- 3. extract MAIN.EXE (the interpreter runs it from RAM) + the stage overlays ----
 MAIN=scratch/bin/tomba2/MAIN.EXE
 if [ ! -f "$MAIN" ]; then
   say "extracting MAIN.EXE from the disc…"
@@ -70,8 +70,9 @@ if [ ! -f "$STUB" ]; then
 fi
 [ -f "$STUB" ] || die "could not extract the boot stub SCUS_944.54"
 
-# Stage overlays (\BIN\{START,DEMO,GAME}.BIN): runtime-loaded game code whose `jal`s into
-# resident MAIN.EXE seed the recompiler (emit.py --overlays). Game data — gitignored scratch.
+# Stage overlays (\BIN\{START,DEMO,GAME}.BIN): runtime-loaded game code the game pulls off the
+# disc into RAM; the interpreter runs them in place. (Also fed to emit.py --overlays when the
+# offline analysis recompiler is requested.) Game data — gitignored scratch.
 OVL=scratch/bin/overlays
 mkdir -p "$OVL"
 for b in START DEMO GAME; do
@@ -86,7 +87,7 @@ GEN=generated/tomba2_rec.c
 RT=runtime/recomp       # common PSX->PC platform (future psxport submodule)
 ENG=engine              # Tomba2Engine — game-specific native engine + RE
 mkdir -p generated scratch/bin
-if [ -n "$PSXPORT_RECOMP" ] && { [ ! -f "$GEN" ] || [ "$MAIN" -nt "$GEN" ] || [ "$STUB" -nt "$GEN" ] || [ tools/recomp/emit.py -nt "$GEN" ]; }; then
+if [ -n "${PSXPORT_RECOMP:-}" ] && { [ ! -f "$GEN" ] || [ "$MAIN" -nt "$GEN" ] || [ "$STUB" -nt "$GEN" ] || [ tools/recomp/emit.py -nt "$GEN" ]; }; then
   say "recompiling MAIN.EXE + boot stub -> C (analysis aid)…"
   python3 tools/recomp/emit.py "$MAIN" "$GEN" --overlays "$OVL" --stub "$STUB" >/dev/null
 fi
@@ -100,8 +101,9 @@ ZSTD_A="$(find_a 'libzstd.a')"; [ -n "$ZSTD_A" ] && CHD_LIBS="$CHD_LIBS $ZSTD_A"
 
 MED=vendor/beetle-psx/mednafen
 # libchdr headers live in the source tree; its compiled .a is under build/ (CHDR_DIR above).
-# -Igenerated: the recompiled shards include "rec_decls.h".
-INC="-I$RT -I$ENG -Igenerated -I$MED -I$MED/psx -Ivendor/beetle-psx/libretro-common/include -Ivendor/beetle-psx -Ivendor/beetle-psx/deps/libchdr/include"
+# (No -Igenerated: the interpreter-only runtime links no recompiled shards, so nothing in the
+# build includes generated/*. emit.py output is an offline analysis aid only — see later-101.)
+INC="-I$RT -I$ENG -I$MED -I$MED/psx -Ivendor/beetle-psx/libretro-common/include -Ivendor/beetle-psx -Ivendor/beetle-psx/deps/libchdr/include"
 # _XOPEN_SOURCE: makecontext/swapcontext (native threads) need it on macOS/glibc.
 CFLAGS="-O2 -g -w -D_XOPEN_SOURCE=700 $INC $(pkg-config --cflags sdl2 vulkan 2>/dev/null) -DPSXPORT_SDL"
 tools/gen_vk_shaders.sh   # compile+embed the Vulkan present shaders (gpu_vk_shaders.h) before gpu_vk.c
@@ -113,7 +115,7 @@ SRC="$RT/dispatch.c \
   $MED/psx/gte.c $RT/gte_beetle.c $MED/psx/mdec.c $RT/mdec_beetle.c $MED/psx/spu.c $RT/spu_beetle.c \
   $RT/disc.c $RT/cd_override.c $RT/cdc_native.c $RT/xa_stream.c $RT/timing.c $RT/gpu_vk.c $ENG/game_tomba2.c $ENG/wide60.c $ENG/engine_tomba2.c $ENG/engine_submit.c $RT/sync_overrides.c $RT/native_boot.c $RT/dbg_server.c $RT/native_stub.c $RT/watchdog.c $RT/boot.c"
 
-say "building the native port in parallel (-j$JOBS; first time compiles the recompiled core)…"
+say "building the native port in parallel (-j$JOBS)…"
 OBJ=scratch/obj; mkdir -p "$OBJ"
 compile_one() { o="$OBJ/$(echo "$1" | tr '/.' '__').o"; $CC $CFLAGS -c "$1" -o "$o" || { echo "FAILED: $1" >&2; exit 1; }; }
 export -f compile_one; export CC CFLAGS OBJ

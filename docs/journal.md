@@ -3985,3 +3985,48 @@ NEXT: (a) optional — unify the two interpreter loops (rec_interp recursive + r
 one (they share exec_simple; this is the remaining "two things"); (b) build the SBS depth pic for the
 user to judge visuals; (c) overlay-banner depth semantics (design call). Recompiler now lives only as
 the offline Ghidra-like analysis aid (generated/, PSXPORT_RECOMP=1 to regen).
+
+## later-103 — DONE: ONE interpreter loop (flat) + run.sh fix
+Executed handoff task #1 (the user's core remaining ask: "one interpreter"). `interp.c` had TWO
+control-flow loops sharing `exec_simple`: `rec_interp` (RECURSIVE — mirrors PSX calls on the C stack,
+`jr ra` = C return) for synchronous nested calls / `rec_super_call`, and `rec_coro_run` (FLAT/resumable
+— keeps the PSX stack in g_ram, exits at CORO_SENTINEL) for cooperative tasks. Collapsed them into a
+single flat core `interp_flat(c, pc, stop_ra)`; the two public entry points are now thin wrappers that
+differ only in the return sentinel:
+- `rec_coro_run(c,pc)` = `interp_flat(c, pc, CORO_SENTINEL)` (task; scheduler enters its top fn with
+  ra=CORO_SENTINEL).
+- `rec_interp(c,pc)` (synchronous): save ra, set ra=CORO_SENTINEL, `interp_flat(c,pc,CORO_SENTINEL)`,
+  restore ra. The target's own prologue/epilogue saves+restores whatever ra holds, so the net effect
+  matches the old recursive rec_interp exactly; nesting is safe (each invocation's PSX frames sit above
+  the caller's, so only the target's own `jr ra` hits the sentinel). Removed `call_addr`, `is_recompiled`,
+  `override_for` (the index-vs-address override duality is fully gone — coro_native_call does ONE
+  address-keyed lookup). `trace_call` (PSXPORT_INTERP_TRACE) re-wired into interp_flat's jal/jalr sites.
+
+**Two real bugs found+fixed turning the recursive loop flat (both latent gaps the C-stack model hid):**
+1. **crt0 terminal halt.** crt0 (0x800896E0) is `…; jal main(0x80050B08); break 0x1`. On real PSX main
+   never returns; our native main (ov_game_main) returns after N headless frames, so control reaches the
+   `break` at 0x80089784, falls into FUN_80089788 which saves/restores ra=0x80089784 and `jr ra` LOOPS
+   back to the break → 27M-line `[break] code 1` spin. The old recursive rec_interp escaped this by chance
+   (returned to C on the next `jr ra`). Root-cause fix (NOT an address special-case): a MIPS `break` is a
+   program trap and we HLE the BIOS — there is no handler to resume into, so `break` ENDS the run. Safe:
+   the field run executes exactly ONE break (this terminal), never on a hot path.
+2. **tail-call into an override at the sentinel level** (a top-level body that `j`/computed-`jr`s into an
+   override sets `pc = c->r[31]` = sentinel): added a top-of-loop `if (pc == stop_ra) return;` so reaching
+   the sentinel by ANY path ends the run (sentinel 0xDEAD0000 is poison, never real code → no-op for
+   normal flow).
+
+**Verified (unified build):** boots stub→MAIN→field, clean exit, ZERO bad opcodes, ONE break (terminal),
+clean shutdown ("returned from crt0" → "native_stub_run returned"). Depth coverage IDENTICAL 1807/34.
+**0 u16 VRAM diff** at field f540 on THREE axes: (a) unified-flat == committed-recursive build (proves
+the refactor changed nothing), (b) native-submit == PSXPORT_SUBMIT_RECOMP=1 fully-interpreted (faithful
+gate holds on the unified interp). Same ~390 headless fps.
+
+**Also fixed run.sh (was outdated/broken):** `[ -n "$PSXPORT_RECOMP" ]` under `set -eu` aborted EVERY
+normal run with "unbound variable" (the var is unset unless you ask for the analysis recompile) → now
+`${PSXPORT_RECOMP:-}`. Dropped the dead `-Igenerated` include (no linked TU includes generated/* since
+the interpreter-only pivot) from run.sh + build_port.sh, and refreshed the stale "recompiler input" /
+"compiles the recompiled core" comments. run.sh now builds+launches+exits cleanly end-to-end.
+
+NEXT (handoff remainder): #2 SBS visual verify (PSXPORT_SBS shotseq not writing — debug gpu_vk.c
+gpu_vk_shotseq), #3 overlay-banner depth semantics (ASK user), #4 optional generated/ include trim
+(done for the build scripts; rec_decls.h is no longer included by any linked TU).
