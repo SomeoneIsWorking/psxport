@@ -34,6 +34,13 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 
+// Portability: some platforms (e.g. macOS / clang under strict -std=c11, which sets __STRICT_ANSI__)
+// hide the BSD constant INADDR_LOOPBACK from <netinet/in.h>. It's a fixed value (127.0.0.1), so define
+// it ourselves when the header didn't — keeps the build working regardless of feature-test macros.
+#ifndef INADDR_LOOPBACK
+#define INADDR_LOOPBACK 0x7f000001u
+#endif
+
 // --- guest RAM + GPU primitives provided by the rest of the port ---------------------------------
 uint8_t  mem_r8(uint32_t);
 uint16_t mem_r16(uint32_t);
