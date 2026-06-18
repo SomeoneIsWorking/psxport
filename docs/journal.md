@@ -5241,3 +5241,42 @@ write. Memory: [[engine-host-memory-never-write-guest]].)
    matrix to flow host (build into a host map keyed by node; flush reads host).
 4. `submit_perobj_render`: 0x1F80028C "current render object" — read by un-ported guest per-mode renderers;
    remove when those are host.
+
+## later-139 — NATIVE ORDERING: owned submitters write ZERO guest OT/pool (the per-bucket host display list)
+Implemented the handoff's item #1. The owned GT3/GT4/GT4bp submitters (engine_submit.c, ndl_active path)
+no longer write the guest OT (the 1-word link node) or advance the guest packet-pool ptr 0x800BF544.
+Instead each owned prim is appended to a HOST per-bucket display list keyed by its OT bucket-ANCHOR
+address (`otaddr = ot_base + idx*4`), and the DrawOTag walk renders a bucket's host prims when it visits
+that anchor node. RULE #0 advanced: the dominant render path (190 prims/frame) now writes no guest memory.
+
+**Design (native_dl.{h,c} + gpu_native.c `ndl_render_node` + the 3 submitters):**
+- `NativePrim` re-keyed: `.node` is now the bucket-anchor phys addr (was the per-prim pool node addr);
+  added `.bnext` (intra-bucket LIFO chain). `ndl_alloc(otaddr)` prepends to that bucket's chain;
+  `ndl_lookup(addr)` returns the bucket head; `ndl_next` walks the chain.
+- Ordering is byte-identical to the old guest-OT merge by three facts: (1) ACROSS buckets the walk order
+  (back→front) is unchanged; (2) WITHIN a bucket the guest AddPrim prepends (LIFO, most-recent first), so
+  we prepend + render head-first; (3) **MIXED=0** (`PSXPORT_DEBUG=bucket`, measured: 77 owned-only + 6
+  guest-only buckets, 0 mixed) — a bucket holds EITHER host-3D OR guest-2D, never both, so host prims at
+  the anchor + guest 2D prims at their own pool nodes need no intra-bucket merge.
+- Submitters: dropped `mem_w32(pkt,…)`/`mem_w32(otaddr,pkt)`/`pkt+=4`; the pool-ptr writeback is now
+  `if (!dl) mem_w32(PKT_POOL_PTR, pkt)`. A0=`ndl_alloc(otaddr & 0x1FFFFC)` keyed to match the walk's
+  masked addr.
+
+**VERIFIED (not a vibe):**
+- Render byte-identical: VRAM dump @f410 native-ordering == `PSXPORT_DL_GUESTPKT=1` (full-guest-packet),
+  `cmp` = IDENTICAL.
+- Gameplay 0-diff vs FULL recomp (SUBMIT/PEROBJ_RECOMP + NO_FLUSH/DISP/WALK/TERRAIN/XFORM + OT_RECOMP):
+  `tools/node_diff.py` @f420/f440/f500/f560 = GAMEPLAY 0-DIFF every frame (only render-pool/cmd/global
+  bytes differ). Native f470 screenshot is pixel-for-pixel the same dark/underwater scene as recomp f470
+  (the "spiky tris" I first suspected were corruption are the real scene, present identically in recomp).
+- Runs to f800 (`PSXPORT_DEBUG=stage`), no hang.
+
+**HONEST CORRECTION to the handoff premise:** the handoff (+ memory note) claimed the submitter OT/pool
+writes were "THE main corruption." In the headless AUTO_GAMEPLAY path that is NOT demonstrable: node_diff
+shows `PSXPORT_DL_GUESTPKT=1` (submitters writing FULL guest packets) is ALSO gameplay-0-diff vs recomp at
+f500. So the OT/pool writes do not measurably diverge gameplay in the traversed scenes — removing them is
+correct per RULE #0 and regression-free, but it is NOT proven to be the fix for the user's interactive
+corruption (which the deterministic headless path doesn't reproduce in any config). Whether it resolves
+the on-screen exploding-tris needs a user `./run.sh` observation. Remaining host conversions (#2 terrain
+scratchpad 0x1F800090 + SCR matrix-build, #3 build_xform node+0x98, #4 submit_perobj_render 0x1F80028C)
+are the next writes to move host. A/B: `PSXPORT_DL_GUESTPKT=1` reverts to guest packets.

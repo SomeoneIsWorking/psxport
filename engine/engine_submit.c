@@ -286,13 +286,11 @@ static void submit_poly_gt3(R3000* c) {
     pz2 = (float)(int32_t)gte_read_data(19);       // SXY2 -> SZ2
     uint32_t otaddr = ot + (idx << 2);
     if (dl) {
-      mem_w32(pkt + 0, mem_r32(otaddr));           // node tag: link old head, LEN 0 (payload is native)
-      mem_w32(otaddr, pkt);                        // OT head -> this node
-      NativePrim* np = ndl_alloc(pkt & 0x1FFFFC);
+      // NATIVE ORDERING: append to the host per-bucket list keyed by the OT anchor — write NO guest OT/pool.
+      NativePrim* np = ndl_alloc(otaddr & 0x1FFFFC);
       if (np) { np->nwords = 9; np->npz = 3;
         for (int k = 0; k < 9; k++) np->words[k] = W[k + 1];   // W[1..9] = the 9 GP0 payload words
         np->pz[0] = pz0; np->pz[1] = pz1; np->pz[2] = pz2; }
-      pkt += 4;                                    // owned node = 1-word link tag only (payload is native) — not the full packet
     } else {
       mem_w32(pkt + 0, mem_r32(otaddr) | 0x09000000u);  // tag: link old head + length (9 words)
       mem_w32(otaddr, pkt);                        // OT head -> this packet
@@ -302,7 +300,7 @@ static void submit_poly_gt3(R3000* c) {
       pkt += 40;
     }
   }
-  mem_w32(PKT_POOL_PTR, pkt);
+  if (!dl) mem_w32(PKT_POOL_PTR, pkt);           // native ordering writes no guest pool
   c->r[2] = rec;                                   // return: record pointer advanced past the array
 }
 
@@ -372,13 +370,11 @@ static void submit_poly_gt4(R3000* c) {
     pz3 = (float)(int32_t)gte_read_data(16);        // SXY3 -> SZ3
     uint32_t otaddr = ot + (idx << 2);
     if (dl) {
-      mem_w32(pkt + 0, mem_r32(otaddr));           // node tag: link old head, LEN 0 (payload is native)
-      mem_w32(otaddr, pkt);
-      NativePrim* np = ndl_alloc(pkt & 0x1FFFFC);
+      // NATIVE ORDERING: append to the host per-bucket list keyed by the OT anchor — write NO guest OT/pool.
+      NativePrim* np = ndl_alloc(otaddr & 0x1FFFFC);
       if (np) { np->nwords = 12; np->npz = 4;
         for (int k = 0; k < 12; k++) np->words[k] = W[k + 1];  // W[1..12] = the 12 GP0 payload words
         np->pz[0] = pz0; np->pz[1] = pz1; np->pz[2] = pz2; np->pz[3] = pz3; }
-      pkt += 4;                                    // owned node = 1-word link tag only (payload is native) — not the full packet
     } else {
       mem_w32(pkt + 0, mem_r32(otaddr) | 0x0C000000u);  // tag: link old head + length (12 words)
       mem_w32(otaddr, pkt);                        // OT head -> this packet
@@ -389,7 +385,7 @@ static void submit_poly_gt4(R3000* c) {
       pkt += 52;
     }
   }
-  mem_w32(PKT_POOL_PTR, pkt);
+  if (!dl) mem_w32(PKT_POOL_PTR, pkt);           // native ordering writes no guest pool
   c->r[2] = rec;                                   // return: record pointer advanced past the array
 }
 
@@ -499,13 +495,11 @@ static void submit_poly_gt4_bp(R3000* c) {
           float pz3 = (float)(int32_t)gte_read_data(19);
           uint32_t otaddr = otbase + (idx << 2);
           if (dl) {
-            mem_w32(pkt + 0, mem_r32(otaddr));         // node tag: link old head, LEN 0 (payload native)
-            mem_w32(otaddr, pkt);
-            NativePrim* np = ndl_alloc(pkt & 0x1FFFFC);
+            // NATIVE ORDERING: append to the host per-bucket list keyed by the OT anchor — no guest OT/pool write.
+            NativePrim* np = ndl_alloc(otaddr & 0x1FFFFC);
             if (np) { np->nwords = 12; np->npz = 4;
               for (int k = 0; k < 12; k++) np->words[k] = W[k + 1];
               np->pz[0] = pz0; np->pz[1] = pz1; np->pz[2] = pz2; np->pz[3] = pz3; }
-            pkt += 4;                              // owned node = 1-word link tag only (payload is native) — not the full packet
           } else {
             mem_w32(pkt + 0, mem_r32(otaddr) | 0x0C000000u);  // tag: link old head + len 12 (GT4)
             mem_w32(otaddr, pkt);
@@ -521,7 +515,7 @@ static void submit_poly_gt4_bp(R3000* c) {
     if ((int32_t)ctl <= 0) break;                      // control sign marks the last record
     rec += 36;
   }
-  mem_w32(PKT_POOL_PTR, pkt);
+  if (!dl) mem_w32(PKT_POOL_PTR, pkt);           // native ordering writes no guest pool
   c->r[2] = 0x800C0000u;                               // return value the recomp body leaves in r2
 }
 

@@ -13,22 +13,26 @@
 // arena — carrying the native view-Z into the renderer's depth path, so the value-keyed "attach"
 // address bridge is gone (engine_re.md later-122).
 //
-// The OT *ordering* (the 1-word link node) still lives in guest RAM because the game's own inline
-// AddPrim handlers build the same OT; the render DATA (verts/colour/uv/depth) does not.
+// NATIVE ORDERING (later-138): the host engine writes NOTHING to the guest OT/packet pool. An owned
+// prim is appended to a HOST per-bucket display list keyed by its OT bucket-anchor address (otaddr =
+// ot_base + idx*4, the slot the guest AddPrim would have prepended into). The DrawOTag walk renders
+// each bucket's host prims when it visits that anchor node (gpu_native.c). The guest still owns the OT
+// ARRAY (ClearOTagR builds the anchor chain) and its OWN inline 2D prims (its AddPrim writes those into
+// the pool) — we read that chain but never write it, and never touch the pool ptr 0x800BF544. This
+// removes the gameplay-diverging guest writes the old "1-word link node + advance pool" scheme made.
 //
-// Pool footprint (later-125): because an owned prim's payload is native, its node consumes only the
-// ONE link-tag word in the guest packet pool (0x800BF544) — the submit advances the pool by 4 bytes,
-// not the full 40/52-byte packet. That removes the bulk of the pool pressure widescreen adds (the
-// extra-geometry the wide frustum re-includes no longer eats 40/52 B each → no pool overflow into the
-// alternate-parity OT at 0x800E80A8; pool extent map in docs/engine_re.md). Draw ORDER is unchanged:
-// the guest OT linked list is still the master order, so the merge with the game's inline 2D prims is
-// byte-identical. Moving the ordering itself native (per-bucket lists) is the next step.
+// Ordering is byte-identical to the old guest-OT merge: (1) ACROSS buckets the walk order (back→front)
+// is unchanged; (2) WITHIN a bucket the guest AddPrim prepends (LIFO, most-recent renders first), so we
+// prepend to the bucket list and render head-first — same order. (3) 3D-vs-2D interleave: measured
+// MIXED=0 (PSXPORT_DEBUG=bucket) — a bucket holds EITHER host-3D OR guest-2D, never both — so rendering
+// host prims at the anchor and guest prims at their own pool nodes needs no intra-bucket merge.
 #ifndef NATIVE_DL_H
 #define NATIVE_DL_H
 #include <stdint.h>
 
 typedef struct {
-  uint32_t node;       // guest OT node phys addr (madr & 0x1FFFFC) — the DrawOTag-walk lookup key
+  uint32_t node;       // OT bucket-anchor phys addr (otaddr & 0x1FFFFC) — the DrawOTag-walk lookup key
+  int32_t  bnext;      // next prim in THIS bucket (LIFO chain), -1 = end of bucket
   uint8_t  nwords;     // GP0 payload word count (9 = POLY_GT3, 12 = POLY_GT4)
   uint8_t  npz;        // valid per-vertex view-Z entries (3 = tri, 4 = quad)
   uint32_t words[16];  // the GP0 payload words — byte-identical to the guest packet that would've been
@@ -36,13 +40,16 @@ typedef struct {
 } NativePrim;
 
 // Native display list active (the port default). PSXPORT_DL_GUESTPKT=1 reverts the owned submit fns to
-// writing the full guest packet (the pre-port behaviour) for A/B verification.
+// writing the full guest packet into the guest OT (the pre-port behaviour) for A/B verification.
 int         ndl_active(void);
-// Begin a prim for guest OT `node`. Resets the per-frame list if it was just consumed by a DrawOTag
-// pass (lazy reset — robust to the engine's setup-OT + main-OT double draw). NULL on arena overflow.
-NativePrim* ndl_alloc(uint32_t node);
-// The owned prim linked at `node` (phys addr), or NULL if this node is an ordinary guest packet.
-NativePrim* ndl_lookup(uint32_t node);
+// Append a prim to the host display list for OT bucket-anchor `otaddr` (phys). Prepends to that
+// bucket's LIFO chain. Resets the per-frame list if it was just consumed by a DrawOTag pass (lazy
+// reset — robust to the engine's setup-OT + main-OT double draw). NULL on arena overflow.
+NativePrim* ndl_alloc(uint32_t otaddr);
+// Head prim of the host list for bucket-anchor `addr` (phys), or NULL if no host prims target it.
+NativePrim* ndl_lookup(uint32_t addr);
+// Next prim in `p`'s bucket chain, or NULL at the end.
+NativePrim* ndl_next(const NativePrim* p);
 // Mark the list consumed after a DrawOTag walk completes; the next ndl_alloc starts a fresh frame.
 void        ndl_mark_consumed(void);
 

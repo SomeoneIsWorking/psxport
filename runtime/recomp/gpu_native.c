@@ -1310,14 +1310,15 @@ void gpu_sbs_set(int on) { s_sbs_on = on ? 1 : 0; }
 // but with s_ndl_cur set so the depth path uses the carried native view-Z (no address bridge).
 static void gp0_exec(void);
 static void ndl_render_node(uint32_t addr) {
-  const NativePrim* np = ndl_lookup(addr);
-  if (!np) return;
-  for (int i = 0; i < np->nwords; i++) { s_fifo[i] = np->words[i]; s_fifo_addr[i] = 0; }
-  s_fcount = np->nwords;
-  s_ndl_cur = np;
-  gp0_exec();
-  s_ndl_cur = 0;
-  s_fcount = 0;
+  // Render every host prim bound to this OT bucket-anchor, head-first (LIFO = guest AddPrim draw order).
+  for (NativePrim* np = ndl_lookup(addr); np; np = ndl_next(np)) {
+    for (int i = 0; i < np->nwords; i++) { s_fifo[i] = np->words[i]; s_fifo_addr[i] = 0; }
+    s_fcount = np->nwords;
+    s_ndl_cur = np;
+    gp0_exec();
+    s_ndl_cur = 0;
+    s_fcount = 0;
+  }
 }
 
 // DMA channel 2 (GPU): walk an ordering-table linked list from `madr`, feeding each node's
