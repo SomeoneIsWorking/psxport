@@ -69,14 +69,17 @@ static int submit_xmax(void) { return gpu_vk_wide_engine() ? gpu_vk_wide_engine_
 // UN-owned submitter variants and are invisible here. Off by default; pure logging, no state change.
 extern uint32_t g_current_object, g_render_object;
 extern int s_frame;
-static int s_geomblk = -1, s_geomblk_frame = -2;
+// Optional single-frame gate (PSXPORT_GEOMBLK_FRAME=<s_frame>) shared by the geomblk + rcmd probes: bound the
+// firehose to one present frame so a 2900-frame headless run to the field doesn't emit gigabytes. Unset = every.
+static int s_probe_frame = -2;
+static inline int probe_frame_ok(void) {
+  if (s_probe_frame == -2) { const char* f = cfg_str("PSXPORT_GEOMBLK_FRAME"); s_probe_frame = f ? atoi(f) : -1; }
+  return s_probe_frame < 0 || s_frame == s_probe_frame;
+}
+static int s_geomblk = -1;
 static inline int geomblk_on(void) {
   if (s_geomblk < 0) s_geomblk = cfg_dbg("geomblk") ? 1 : 0;
-  if (!s_geomblk) return 0;
-  // Optional single-frame gate (PSXPORT_GEOMBLK_FRAME=<s_frame>): bound the firehose to one present frame so
-  // a 2900-frame headless run to the field doesn't emit gigabytes. Unset = every frame.
-  if (s_geomblk_frame == -2) { const char* f = cfg_str("PSXPORT_GEOMBLK_FRAME"); s_geomblk_frame = f ? atoi(f) : -1; }
-  return s_geomblk_frame < 0 || s_frame == s_geomblk_frame;
+  return s_geomblk && probe_frame_ok();
 }
 static void geomblk_dump(const char* kind, uint32_t rec, uint32_t count, uint32_t stride) {
   if (!geomblk_on()) return;
@@ -90,6 +93,24 @@ static void geomblk_dump(const char* kind, uint32_t rec, uint32_t count, uint32_
     for (uint32_t b = 0; b < stride; b++) fprintf(stderr, "%s%02x", (b & 3) ? "" : " ", mem_r8(rec + i*stride + b));
     fprintf(stderr, "\n");
   }
+}
+
+// PSXPORT_DEBUG=rcmd — RENDER-COMMAND capture probe (the complete oracle, later-130). Taps the deferred-flush
+// mode dispatcher gen_func_8003F698: every queued render command passes through here as a SELF-CONTAINED unit
+// — mode (*0x800BF870 → which submitter variant runs), geomblk (a0), OT base (a1), flag (a2), and the per-
+// object GTE transform the flush just loaded into the GTE control regs (CR0-7: CR0-4 rotation, CR5-7
+// translation). This is the full input a native render-half must reproduce, for ALL modes (incl. the overlay
+// variants the margin handlers feed), not just the natively-owned GT3/GT4 path the geomblk probe decodes.
+// Registered only when the channel is on (game_tomba2.c init), so zero cost otherwise; super-calls the original.
+void ov_render_cmd_probe(R3000* c) {
+  if (cfg_dbg("rcmd") && probe_frame_ok()) {
+    uint8_t mode = mem_r8(0x800BF870u);
+    fprintf(stderr, "[rcmd] f%d mode=%02x geomblk=%08x ot=%08x flag=%08x M=",
+            s_frame, mode, c->r[4], c->r[5], c->r[6]);
+    for (int i = 0; i < 8; i++) fprintf(stderr, "%s%08x", i ? "," : "", (uint32_t)gte_read_ctrl(i));
+    fprintf(stderr, "\n");
+  }
+  rec_super_call(c, 0x8003F698u);
 }
 
 // PC-native per-vertex depth (Phase 2): because we OWN the projection, we know each vertex's real

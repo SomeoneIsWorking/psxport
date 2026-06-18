@@ -398,7 +398,10 @@ void games_tomba2_init(void) {
   // LIVE, so the widened-frustum re-include must be available without a launch flag. ov_object_cull is a
   // faithful super-call + a wide-only re-include (no-op at 4:3), so registering it always is safe.
   rec_set_override(0x8007712Cu, ov_object_cull);
-  (void)0;
+  // Render-command capture oracle (PSXPORT_DEBUG=rcmd): tap the deferred-flush mode dispatcher so every queued
+  // render command (mode + GTE transform + geomblk) is dumped — the complete input for the native render port.
+  // Gated: only registered when the channel is on (the super-call interprets the dispatcher subtree). later-130.
+  if (cfg_dbg("rcmd")) { void ov_render_cmd_probe(R3000*); rec_set_override(0x8003F698u, ov_render_cmd_probe); }
   void engine_tomba2_init(void);
   engine_tomba2_init();                            // native engine layer (Phase 1: object-list walk)
 }

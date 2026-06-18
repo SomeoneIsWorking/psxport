@@ -108,6 +108,11 @@ the engine_re cull note "if DAT_800bf870==4 force mode 2" is THIS global), index
 7:0x8012e1a0  8:0x8012a9dc  9..0x13:GT3/GT4  0x14:0x80116b14  0x15:0x8010b1b8`. The `0x8013xxxx` entries are
 the per-scene OVERLAY submitter variants the margin handlers feed (NOT the natively-owned GT3/GT4 — that is
 only mode 3 / ≥9). `*0x800BF870` is a GLOBAL set before/within a flush pass, so one pass renders in one mode.
+- **Command struct fields (confirmed via `PSXPORT_DEBUG=rcmd`, later-131):** `+0x18` GTE transform (CR0-7),
+  `+0x40` geomblk ptr. `a2`/`flag` passed to the dispatcher: bit0 forces the generic GT3/GT4 path. At the
+  field, base/world commands carry flag=1, the widescreen-margin commands carry flag=0. The margin commands'
+  geomblks are REAL (0x801exxxx model prim-lists) even though the node `+0x38` mdata is 0 — geometry is
+  resolved at enqueue, not from `+0x38` (corrects later-129's "no model data").
 - **OBJECT ATTRIBUTION (the geomblk oracle's missing key) lives at the ENQUEUE site**, not the cull/walk tap:
   whoever fills `cmd+0x40`(geomblk)/`cmd+0x18`(transform) and bumps `list+8` does it during phase 1 with
   `g_current_object` = the source node. Tap THAT to map geomblk→object and to RE each handler's render-half.

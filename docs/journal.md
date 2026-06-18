@@ -4896,3 +4896,38 @@ later-129's recommendation of approach B** (transactional region-scoped re-inclu
 agnostic, needs none of the per-handler RE — it lets the game's own deferred-flush render the margin and just
 undoes the gameplay-region writes. DECISION SURFACED TO USER (2026-06-18).
 Probe kept: `PSXPORT_DEBUG=geomblk` (+`PSXPORT_GEOMBLK_FRAME`); g_render_object exported from game_tomba2.c.
+
+## later-131 — USER chose approach A (full native port). rcmd ORACLE built; margin = +24 render commands
+User (2026-06-18) rejected approach B (a journaling hack) and directed the **full PC-native port** ("the
+game is fully deterministic … find a PC-native solution … port the entire game if you have to"). Correct —
+the deferred render pipeline (later-130) makes A tractable, not the per-handler slog later-129 feared.
+
+**The real oracle — `PSXPORT_DEBUG=rcmd`** (engine_submit.c `ov_render_cmd_probe`, override on the mode
+dispatcher 0x8003F698, registered only when the channel is on): dumps every queued RENDER COMMAND as a
+self-contained unit — `mode` (*0x800BF870), `geomblk` (a0), `ot` (a1=*0x800ED8C8), `flag` (a2), and the
+**per-object GTE transform** the flush just loaded into GTE control regs (CR0-7: CR0-4 rotation matrix,
+CR5-7 translation). This is the COMPLETE input a native render-half must reproduce, for ALL modes (supersedes
+the GT3/GT4-only geomblk probe). Shares the `PSXPORT_GEOMBLK_FRAME` gate.
+
+**Field-frame render-command analysis (s_frame 2900, AUTO_GAMEPLAY, deterministic):**
+- 4:3 = 100 commands; 16:9+re-include = 124; 16:9 no-re-include (CULL_FAR=0) = 100. All mode=00 here
+  (renderer 0x80146478, which itself calls the owned GT3/GT4 → the 256 owned submits the geomblk probe saw
+  = these commands expanded). The map/world is ~100 transformed sub-model commands, NOT one blob.
+- **Re-include's effect (isolated: 16:9 with vs without, aspect held fixed): +24 NEW margin commands AND 24
+  EXISTING commands perturbed** (their transforms change — the later-128 gameplay perturbation, now seen at
+  the render-command level). No geomblk ever disappears. So the +1 poke is NOT cleanly separable: it adds the
+  margin AND ticks gameplay. **Native plan = enqueue ONLY the 24 margin commands (from the culled objects'
+  frozen state), never poke +1** → margin renders, the other 24 stay un-perturbed. This is precisely why A
+  (not B) is right.
+- **Margin objects DO have geometry — later-129's "no model data" is a RED HERRING.** The margin commands
+  carry real geomblks (0x801e41dc, 801e474c×3, 801e682c…801e6e88, 801e976c…801ea5d0, 801f734c/73b4, +
+  8015ca04×22 instanced). The static node field +0x38 (mdata) is 0, but the actual prim-list (geomblk) is
+  resolved at ENQUEUE, not read from +0x38. The data-driven render path is ALIVE.
+
+**NEXT (the one open RE) — the ENQUEUE site.** Find who writes the render-command struct (geomblk@+0x40,
+transform@+0x18, flag) and pushes it into the per-layer list (`list+0xc0` array, count `list+8`; layer table
+0x800EC188, 40×0x40; flush gen_func_8003F174, callers 0x80039f70/0x8003c0c8). That gives: (a) object→command
+attribution (the geomblk-oracle key), and (b) HOW transform+geomblk derive from the object struct — so native
+C can build a margin object's render command from its frozen state and enqueue it directly (no +1, no
+perturbation). Then port incrementally, each command 0-diff vs the rcmd capture. Probes:
+`PSXPORT_DEBUG=rcmd`/`geomblk` (+`PSXPORT_GEOMBLK_FRAME`).
