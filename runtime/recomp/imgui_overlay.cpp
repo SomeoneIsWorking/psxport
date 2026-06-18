@@ -10,6 +10,7 @@ extern "C" {
 #include "mods.h"
 }
 extern "C" int g_fps60_on;   // engine/fps60.c — the 60fps interpolation gate
+extern "C" int cfg_on(const char* name);   // cfg.c — env flag (PSXPORT_UI gates the SSAO/light infra)
 // Effective (computed, incl. auto) video status from the renderer; out ptrs may be NULL.
 extern "C" void gpu_vk_video_status(int* native_w, int* ires, int* fbw, int* fbh,
                                     int* ww, int* wh, int* ires_cap);
@@ -104,9 +105,13 @@ static void build_ui(void) {
   if (ImGui::Checkbox("60fps interpolation", &fps60)) g_fps60_on = fps60;
 
   ImGui::Separator();
+  // SSAO/light need the native-depth/deferred path, which is opt-in (it changes the depth model and is
+  // not yet faithful for every submit path). Grey them out unless launched with PSXPORT_UI=1.
+  bool effects = cfg_on("PSXPORT_UI") != 0;
+  if (!effects) { ImGui::BeginDisabled(); }
   bool ssao = g_mods.ssao != 0;
   if (ImGui::Checkbox("Ambient occlusion (SSAO)", &ssao)) g_mods.ssao = ssao;
-  if (g_mods.ssao) {
+  if (effects && g_mods.ssao) {
     ImGui::SliderFloat("AO strength", &g_mods.ssao_strength, 0.0f, 2.0f);
     ImGui::SliderFloat("AO radius (px)", &g_mods.ssao_radius, 1.0f, 20.0f);
     ImGui::SliderFloat("AO bias", &g_mods.ssao_bias, 0.0f, 0.1f, "%.3f");
@@ -116,11 +121,12 @@ static void build_ui(void) {
   ImGui::Separator();
   bool light = g_mods.light != 0;
   if (ImGui::Checkbox("Directional light", &light)) g_mods.light = light;
-  if (g_mods.light) {
+  if (effects && g_mods.light) {
     ImGui::SliderFloat3("Light dir (view)", g_mods.light_dir, -1.0f, 1.0f);
     ImGui::SliderFloat("Ambient", &g_mods.light_ambient, 0.0f, 1.5f);
     ImGui::SliderFloat("Diffuse", &g_mods.light_diffuse, 0.0f, 1.5f);
   }
+  if (!effects) { ImGui::EndDisabled(); ImGui::TextDisabled("(SSAO/light need PSXPORT_UI=1 at launch)"); }
   ImGui::PopItemWidth();
   ImGui::End();
 }

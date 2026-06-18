@@ -6,7 +6,6 @@
 // matches the oracle exactly. The widescreen GTE-scale hack stays OFF here (fps60 tier later).
 #include "r3000.h"
 #include "cfg.h"
-#include "mods.h"                  // g_mods.ui — overlay/native-depth gate (on by default windowed)
 #include <stdint.h>
 #include <stdbool.h>
 
@@ -388,8 +387,7 @@ int  projprim_count(void)      { return s_pp_n; }
 // The native-depth path is active (NATIVE_DEPTH renderer or the SBS A/B view) — gates the engine's depth
 // recording + the per-frame reset. (PSXPORT_ATTACH and its value-keyed ring are retired.)
 static int s_attach = -1;
-int attach_enabled(void) { if (s_attach < 0) { mods_init();
-                             s_attach = (cfg_on("PSXPORT_NATIVE_DEPTH") || cfg_on("PSXPORT_SBS") || cfg_on("PSXPORT_SSAO") || cfg_on("PSXPORT_LIGHT") || g_mods.ui) ? 1 : 0; }
+int attach_enabled(void) { if (s_attach < 0) s_attach = (cfg_on("PSXPORT_NATIVE_DEPTH") || cfg_on("PSXPORT_SBS") || cfg_on("PSXPORT_SSAO") || cfg_on("PSXPORT_LIGHT") || cfg_on("PSXPORT_UI")) ? 1 : 0;
                            return s_attach > 0; }
 // engine_submit sets the projection-plane H (read from CR26) so proj_pz_to_ord normalizes depth correctly.
 void proj_set_H(uint16_t h) { s_proj_H = h; }

@@ -201,7 +201,11 @@ float proj_plane_h(void);
 void  proj_screen_center(float* cx, float* cy);
 static int light_on(void)    { return g_mods.light && !sbs_on(); }
 static int deferred_on(void) { return ssao_on() || light_on(); }
-static int ui_infra(void)    { return g_mods.ui && !sbs_on(); }
+// The native-depth / deferred infra (for SSAO/light) is OPT-IN via the PSXPORT_UI env — NOT implied by
+// the overlay merely being available. Forcing native-depth on by default would change the faithful
+// render (native-depth is incomplete for not-yet-owned submit paths). The F1 overlay itself needs none
+// of this; SSAO/light just don't take effect unless launched with PSXPORT_UI=1 (or PSXPORT_SSAO/LIGHT).
+static int ui_infra(void)    { return cfg_on("PSXPORT_UI") && !sbs_on(); }
 static int s_present_sx, s_present_sy;   // this frame's faithful display origin (for the LIGHT screen map)
 
 // M3 textured rasterizer: a VRAM snapshot image the texture sampler reads (avoids render/sample feedback
