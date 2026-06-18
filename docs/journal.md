@@ -4095,3 +4095,27 @@ Feature readiness audit (asked "ready for hi-res/widescreen/60fps/lighting/AO mo
   current tritex.frag has no lighting/normals/fog. Needs fresh approach.
 - **Ambient occlusion** — not started; UNBLOCKED by the new 3-band depth (D32 s_depth attachment exists);
   needs a new SSAO pass + normals (reconstructable from depth) + composite into the 1555 uint VRAM.
+
+## later-106 — 60fps foundation VALIDATED: GTE-transform object matching is 100% on the field
+Activated the dormant GTE-transform object matcher in fps60_frame_commit (xobj_match + xobj_report +
+xobj_commit — were defined but never called, so s_xA stayed empty). This is the interpolation path that
+does NOT need the per-poly object tag (the ocen/Prim.obj path is blocked at rtp_with_obj=0). Each run of
+RTPS/RTPT sharing one GTE transform (CR0-7 = model-view, camera baked in) = one object; cross-frame
+identity = its local-vertex fingerprint.
+
+**Measured (idle field, PSXPORT_FPS60=1 PSXPORT_DEBUG=fps60):** objects=126/frame, **matched=126
+(100.0%)** every frame, TRdelta avg=369 max=3220 (GTE fixed units) — i.e. there IS real per-object motion
+even "idle" (ambient/water/idle-anim) for interpolation to smooth. So the object+camera identity
+foundation the user asked for ("interpolate game objects and camera between frames") is SOLID and proven
+on real gameplay. Cheap (126×126 ≈ 16k cmp/frame; only when PSXPORT_FPS60=1, default off → faithful path
+untouched).
+
+**Remaining to finish 60fps = the SYNTHESIS.** Two prior synth attempts: (a) ocen per-object 2D centroid
+translation — blocked (Prim.obj=0, all snap); (b) build_remap SXY reprojection re-rasterized into the
+separate s_interp buffer — looked "terrible/smeared" (later-86) because re-rasterizing the captured 2D
+GP0 SUBSET is lossy (missing occluders/fills → hidden geo reappears, no depth). The RIGHT approach now
+that we own the native renderer + 3-band native depth: for the in-between frame, interpolate each matched
+object's transform and RE-SUBMIT the display list through the NATIVE VK renderer (gpu_vk_draw_* with the
+D32 depth), so occlusion is correct — no lossy s_interp re-rasterize. Present frame-behind: A, lerp(A,B),
+B… NEXT: wire build_remap's per-vertex SXY remap into a native-renderer re-submit + a motion-scene visual
+check (idle field has motion but driving Tomba/camera pan shows it best).

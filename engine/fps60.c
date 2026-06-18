@@ -523,6 +523,13 @@ void fps60_frame_commit(void) {
   // The synth translates each matched object's prims to the midpoint. Must run before the A/B swap.
   ocen_build(s_ocB, s_pB, s_nB);
   if (s_sdbg < 0) s_sdbg = cfg_dbg("fps60") ? 1 : 0;
+  // GTE-transform object matching (the camera+model identity that does NOT need the per-poly object
+  // tag). Match this frame's transform-groups (B) to last frame's (A) by local-vertex fingerprint, then
+  // commit (B→A) for the next frame. Reported under PSXPORT_DEBUG=fps60 to validate cross-frame object
+  // identity + transform deltas — the foundation for re-submit interpolation. Must run before xobj_commit.
+  xobj_match();
+  if (s_sdbg) xobj_report();
+  xobj_commit();                    // swap s_xA/s_xB + reset the per-frame local-vertex pool
   if (s_sdbg) fps60_synthesize();   // per-frame interpolation stats (headless diagnostic only)
   fps60_synth_dumptest();   // PSXPORT_FPS60_SYNTH: offline A/in-between/B dump (no live-path change)
   fps60_present();          // owns presentation: 60fps pair (prev + interpolated) or faithful single
