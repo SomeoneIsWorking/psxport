@@ -4646,3 +4646,43 @@ still has headroom here — pool ends ~0xDEAEC, parity stride 0x14000), but it c
 direction; the pool/OT buffer EXTENT + a denser scene's high-water still need RE to find the overflow
 threshold. Probe kept (`cfg_dbg("pool")`, zero cost off). This is the empirical basis for moving the wide
 geometry OFF the game's buffers into engine-owned render memory (benefactor approach B).
+
+## later-125 — PORT: map the render-buffer memory layout + cut owned-prim pool footprint to its 1-word link tag
+Handoff step 1 (RE the memory map) + step 2a (engine-owned render memory, first increment). Directive
+later-124: move the wide/extra render off the game's FIXED buffers so our writes can't overflow into
+game-owned RAM (benefactor approach B). Prerequisite = knowing the buffer extents / overflow threshold.
+
+**Memory map RE'd (docs/engine_re.md "Render-buffer memory map"), confirmed empirically (PSXPORT_DEBUG=pool
+madr = the DrawOTag OT roots):** double-buffered by parity=DAT_1f800135.
+- packet pool: parity0 `[0x800BFE68,0x800D3E68)`, parity1 `[0x800D3E68,0x800E7E68)` — each 0x14000 B, a
+  per-frame BUMP allocator (write ptr DAT_800bf544) shared by the geometry submit AND inline AddPrim 2D.
+- ctx (OT + DISP/DRAW env): parity0 `0x800E80A8`, parity1 `0x800EA118` (stride 0x2070). OT = first 0x2000
+  (2048 entries, head/root @ctx+0x1ffc → 0x800EA0A4 / 0x800EC114, matching the probe's madr exactly).
+- **Overflow threshold:** parity1 pool past `0x800E7E68` → (0x240 gap) → ctx parity0's OT at `0x800E80A8`
+  — a pool overflow corrupts the *alternate* frame's ordering table (double-buffer cross-corruption), not
+  just its own packets. THIS is the mechanism behind later-124's "fixed-buffer overflow" hypothesis.
+
+**Root cause of the pool pressure (found while doing this):** the native display list (later-123) moved the
+render DATA out of guest RAM but STILL advanced the guest pool by the FULL packet size (40 B GT3 / 52 B GT4)
+per owned prim — even though an owned node's only guest footprint is its 1-word OT link tag (the walk reads
+0 payload words: `n=hdr>>24==0`, render comes from the native arena). So owned prims were burning ~10-13×
+the pool they actually use. NOT a bandaid — it is the correct footprint: an owned node IS one word.
+
+**Fix (engine_submit.c, all 3 owned submitters GT3/GT4/gt4_bp):** in the native-DL path advance the pool by
+4 B (the link tag), not 40/52. Guest-packet A/B path (PSXPORT_DL_GUESTPKT=1) unchanged. Draw ORDER unchanged
+(guest OT linked list stays the master order → the merge with inline 2D prims is identical).
+
+**VERIFIED (the gate) — headless field shot s_frame 2900, AUTO_GAMEPLAY:**
+- 4:3  `cmp` default vs DL_GUESTPKT=1 → **BYTE-IDENTICAL**; pool hi 0x000DB9B0 → **0x000D649C** (~31.5 KB →
+  ~9.8 KB used, **−69%**). Field renders correctly (Tomba/grass/trees/"Burning House" banner).
+- 16:9 `cmp` default vs DL_GUESTPKT=1 → **BYTE-IDENTICAL**; pool hi 0x000DEAEC → **0x000D68E4** (~44 KB →
+  ~10.9 KB, **−75%**). The +260 wide prims (ov_object_cull re-include) now add ~1 KB, not +12.7 KB.
+The widescreen pool-overflow pressure (later-124 mechanism #2) is effectively eliminated for owned geometry.
+
+**NEXT (handoff steps 2b/3, still open):** owned prims still link a 1-word node into the GUEST OT (ordering
+master) + use 1 word of the guest pool. To fully own render memory (benefactor approach B): give the native
+DL its OWN per-bucket ordering keyed by the OT idx the submit already computes, and stop touching the guest
+OT/pool for owned prims (WATCH: semi-transparent owned prims need painter order preserved when merging the
+native buckets with the guest OT's inline 2D prims — measure bucket sharing first). Then walk the active-
+entity pool list natively (stride 0xD0, §32) and emit each object's prims straight into the native DL,
+dropping the extended-cull `mem_w8(o+1,1)` shared write (collision mechanism #1) at the source.

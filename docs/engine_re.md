@@ -254,6 +254,32 @@ libgpu (all via the 0x800A5998 table; names from debug strings): `FUN_80080f6c`=
 - **MoveImage (FUN_800812d8) = VRAM→VRAM copy** — the likely water-reflection / fade-buffer mechanism;
   prime suspect for the broken water (reflection copy) AND a place our GP0 emulator can drift. RE next.
 
+### Render-buffer memory map — the packet pool + OT extent (later-125; the overflow threshold)
+RE'd to find the fixed-buffer overflow threshold behind the widescreen corruption (later-124 mechanism #2).
+All double-buffered by `parity = DAT_1f800135` (0/1), swapped each frame in native_boot.c. Addresses are
+guest-RAM (`0x800…`); each value confirmed empirically by the `PSXPORT_DEBUG=pool` probe (OT roots = the
+DrawOTag madr) at the field scene:
+```
+packet pool parity0   [0x800BFE68, 0x800D3E68)   0x14000 B   base = 0x800BFE68 (DAT_800bf544 reset)
+packet pool parity1   [0x800D3E68, 0x800E7E68)   0x14000 B   stride 0x14000   <-- pool buffers END 0x800E7E68
+gap / globals         [0x800E7E68, 0x800E80A8)   0x240 B     (incl. DAT_800e809c dwell counter @0x800E809C)
+ctx parity0           [0x800E80A8, 0x800EA118)   0x2070 B    = &DAT_800e80a8 + 0*0x2070
+  -> OT array         [0x800E80A8, 0x800EA0A8)   0x2000 B    2048 entries; DrawOTag root (head) @0x800EA0A4
+  -> DISP/DRAW env    [0x800EA0A8, 0x800EA118)               +0x2000 DISPENV, +0x2014 DRAWENV, setup-OT @+0x2030
+ctx parity1           [0x800EA118, 0x800EC188)   0x2070 B    OT head @0x800EC114, setup-OT node @0x800EC148
+```
+- The packet pool is a per-frame **bump allocator** (write ptr `DAT_800bf544`), shared by the engine's
+  geometry submit AND the inline `AddPrim` 2D path. It holds the primitive packets (40 B GT3 / 52 B GT4)
+  + the 1-word OT link tags. The OT array (2048 words) holds only bucket heads and does NOT grow per-prim.
+- **Overflow threshold:** parity1's pool overflowing past `0x800E7E68` lands (after the 0x240 gap) in
+  **ctx parity0's OT at 0x800E80A8** — i.e. a pool overflow corrupts the *alternate* frame's ordering
+  table (classic double-buffer cross-corruption → garbage / flicker), not just its own packets.
+- **Measured pressure (field scene):** 4:3 used ~31.5 KB/buffer (hi `0x000DB9B0`), 16:9 ~44 KB (the wide
+  frustum's `ov_object_cull` re-include = +260 prims / +12.7 KB). 46% headroom at this scene, but a denser
+  scene closes it. **later-125 fix:** native-DL owned prims now consume only their 1-word link tag (4 B,
+  not 40/52 B) → 4:3 pool drops to ~9.8 KB (`0x000D649C`, −69%), removing the overflow pressure entirely
+  while staying byte-identical. See native_dl.h.
+
 ### Ported to native C so far (faithful-first, oracle-gated)
 - **GTE projection setters** (later-99): `ov_set_geom_offset` (0x800846D0 SetGeomOffset) + `ov_set_geom_screen`
   (0x800846F0 SetGeomScreen) in engine/game_tomba2.c. Native writes CR24=OFX<<16, CR25=OFY<<16, CR26=H.

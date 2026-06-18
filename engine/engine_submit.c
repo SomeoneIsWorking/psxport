@@ -155,14 +155,15 @@ static void submit_poly_gt3(R3000* c) {
       if (np) { np->nwords = 9; np->npz = 3;
         for (int k = 0; k < 9; k++) np->words[k] = W[k + 1];   // W[1..9] = the 9 GP0 payload words
         np->pz[0] = pz0; np->pz[1] = pz1; np->pz[2] = pz2; }
+      pkt += 4;                                    // owned node = 1-word link tag only (payload is native) — not the full packet
     } else {
       mem_w32(pkt + 0, mem_r32(otaddr) | 0x09000000u);  // tag: link old head + length (9 words)
       mem_w32(otaddr, pkt);                        // OT head -> this packet
       if (depth) {                                 // record each vertex's real view-Z at its packet addr
         projprim_set_pz(pkt + 8,  pz0); projprim_set_pz(pkt + 20, pz1); projprim_set_pz(pkt + 32, pz2);
       }
+      pkt += 40;
     }
-    pkt += 40;
   }
   mem_w32(PKT_POOL_PTR, pkt);
   c->r[2] = rec;                                   // return: record pointer advanced past the array
@@ -239,6 +240,7 @@ static void submit_poly_gt4(R3000* c) {
       if (np) { np->nwords = 12; np->npz = 4;
         for (int k = 0; k < 12; k++) np->words[k] = W[k + 1];  // W[1..12] = the 12 GP0 payload words
         np->pz[0] = pz0; np->pz[1] = pz1; np->pz[2] = pz2; np->pz[3] = pz3; }
+      pkt += 4;                                    // owned node = 1-word link tag only (payload is native) — not the full packet
     } else {
       mem_w32(pkt + 0, mem_r32(otaddr) | 0x0C000000u);  // tag: link old head + length (12 words)
       mem_w32(otaddr, pkt);                        // OT head -> this packet
@@ -246,8 +248,8 @@ static void submit_poly_gt4(R3000* c) {
         projprim_set_pz(pkt + 8,  pz0); projprim_set_pz(pkt + 20, pz1);
         projprim_set_pz(pkt + 32, pz2); projprim_set_pz(pkt + 44, pz3);
       }
+      pkt += 52;
     }
-    pkt += 52;
   }
   mem_w32(PKT_POOL_PTR, pkt);
   c->r[2] = rec;                                   // return: record pointer advanced past the array
@@ -361,6 +363,7 @@ static void submit_poly_gt4_bp(R3000* c) {
             if (np) { np->nwords = 12; np->npz = 4;
               for (int k = 0; k < 12; k++) np->words[k] = W[k + 1];
               np->pz[0] = pz0; np->pz[1] = pz1; np->pz[2] = pz2; np->pz[3] = pz3; }
+            pkt += 4;                              // owned node = 1-word link tag only (payload is native) — not the full packet
           } else {
             mem_w32(pkt + 0, mem_r32(otaddr) | 0x0C000000u);  // tag: link old head + len 12 (GT4)
             mem_w32(otaddr, pkt);
@@ -368,8 +371,8 @@ static void submit_poly_gt4_bp(R3000* c) {
               projprim_set_pz(pkt + 8,  pz0); projprim_set_pz(pkt + 20, pz1);
               projprim_set_pz(pkt + 32, pz2); projprim_set_pz(pkt + 44, pz3);
             }
+            pkt += 52;
           }
-          pkt += 52;
         }
       }
     }

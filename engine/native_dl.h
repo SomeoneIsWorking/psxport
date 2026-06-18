@@ -15,6 +15,14 @@
 //
 // The OT *ordering* (the 1-word link node) still lives in guest RAM because the game's own inline
 // AddPrim handlers build the same OT; the render DATA (verts/colour/uv/depth) does not.
+//
+// Pool footprint (later-125): because an owned prim's payload is native, its node consumes only the
+// ONE link-tag word in the guest packet pool (0x800BF544) — the submit advances the pool by 4 bytes,
+// not the full 40/52-byte packet. That removes the bulk of the pool pressure widescreen adds (the
+// extra-geometry the wide frustum re-includes no longer eats 40/52 B each → no pool overflow into the
+// alternate-parity OT at 0x800E80A8; pool extent map in docs/engine_re.md). Draw ORDER is unchanged:
+// the guest OT linked list is still the master order, so the merge with the game's inline 2D prims is
+// byte-identical. Moving the ordering itself native (per-bucket lists) is the next step.
 #ifndef NATIVE_DL_H
 #define NATIVE_DL_H
 #include <stdint.h>
