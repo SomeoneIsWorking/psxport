@@ -17,6 +17,10 @@ void imgui_overlay_event(const SDL_Event* e);   // feed every SDL event (also to
 void imgui_overlay_new_frame(void);             // CPU: SDL/VK NewFrame + build the toggle window
 void imgui_overlay_render(VkCommandBuffer cmd); // record the draw data into cmd (inside the present rpass)
 int  imgui_overlay_inited(void);
+void imgui_overlay_set_visible(int v);          // force show/hide (used when it replaces the game's Options menu)
+// Options-mode: the overlay is currently standing in for the game's in-game Options menu. Suppresses the
+// `~`/F1 toggle (the game owns exit via Circle/Triangle) and shows the in-game back/close hint instead.
+void imgui_overlay_set_options_mode(int v);
 #ifdef __cplusplus
 }
 #endif

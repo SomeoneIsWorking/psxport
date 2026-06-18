@@ -59,10 +59,10 @@ Launch with `PSXPORT_DEBUG_SERVER=1` (port 5959) **and a high `PSXPORT_NATIVE_FR
 ## 5. OPEN: reaching free-roam playable gameplay headless
 `AUTO_GAMEPLAY` lands (post-intro, stage GAME) on the seaside→green-field with quest banner "Go to the
 Burning House" and an **auto-appearing menu "Options / Load data / Quit game"** (feather cursor on
-"Options"). Observed (2026-06-17, headless): this menu appears WITHOUT input (~f700) and does NOT respond
-to forced **Start / Circle / Down** (cursor doesn't move) — so either forced input isn't reaching this
-state's handler, or it's a stuck/save-prompt state, NOT normal interactive gameplay. **Unresolved:** how
-to drive past this into controllable free-roam. Candidates to try next: Cross to confirm a menu item;
-verify forced input actually reaches the menu handler (it works during boot/title); check whether this is
-a memory-card/save prompt the port's memcard stub mishandles. If you (the user) know the intended
-sequence, capture it here.
+"Options"). This menu appears WITHOUT input (~f700). The earlier note that it "does NOT respond to forced
+Start/Circle/Down" is **partly falsified (later-112): forced Cross (0x4000) at this menu DOES select the
+cursor item** — with the cursor on "Options" it enters the Options submenu (page 3 → `FUN_8007b45c`;
+verified via the `ov_options_menu` override hit, `PSXPORT_DEBUG=ui`). So this IS the live in-game pause
+menu, not a stuck/save-prompt state. Its state machine is RE'd in `docs/engine_re.md` "In-game pause /
+Options menu" (page byte `task+0x6B`, dispatch table `0x801062EC`). **Still open:** driving from this menu
+into controllable *free-roam* (cleanly closing it back to play).

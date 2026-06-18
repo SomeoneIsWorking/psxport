@@ -431,6 +431,35 @@ This is the port ACCOUNTING for every draw instead of blind GP0 rasterization. F
     flash frame); residual VK/SW drift ~10% from f382 on is the known dither/subpixel-rounding residual,
     not the flash.
 
+## In-game pause / Options menu — state machine (RESOLVED later-112; replaced by our menu)
+The in-game **pause menu** ("Options / Load data / Quit game") runs as a **task in the GAME overlay**
+(0x80108xxx), which is why the main MAIN.EXE decomp (`ram_f1000_all.c`) has no caller for the draw
+functions — they're reached only from overlay code + a jump table. Layout:
+- **Task body / page dispatcher** `0x8010810C`: reads the **page byte `task+0x6B`** (task ptr =
+  `*(u32)0x1F800138`, the scheduler's current-task pointer), bounds-checks `< 0xC`, then jumps through a
+  **12-entry function-pointer table at `0x801062EC`** (`handler = table[page]`).
+  | page | handler | role |
+  |---|---|---|
+  | 1 | `0x8010829C`→`FUN_8007eae4` | **main pause menu** draw "Options / Load data / Quit game" |
+  | 2 | `0x801084A4` | close (resets `task+0x6B=0`, clears `DAT_1f800136`) |
+  | 3 | `0x801082C0`→**`FUN_8007b45c`** | **the Options submenu controller** (the menu we replace) |
+- **Main-menu handler** (page 1) reads button **edges `DAT_800e7e68`** (u16, active-high; Up=0x10,
+  Down=0x40 move cursor `DAT_800bf808`; **Cross=0x4000** confirms). On Cross over "Options" (cursor 0)
+  it sets `task+0x6B = cursor+3 = 3` → next frame the dispatcher enters the Options controller.
+- **Options controller `FUN_8007b45c`** (0x8007b45c, NOT in the decomp dump — disasm via
+  `tools/recomp/decode.py`): draws "Select Options" (`FUN_8007f104`: **Messages / Sound / Screen adjust /
+  Controls** — the options the user deemed not worth keeping), dispatches its own sub-screens by
+  `task+0x50` (table `0x80016E78`, 5 entries). Exits: **Triangle (0x1000)** → `task+0x6B=2` (close);
+  **Circle (0x2000)** in the list → `task+0x6B=1` (back to the pause menu), resets cursor, sets
+  `DAT_1f800136=1`. Menu SFX = `FUN_80074590(id, a1, 0)` (Circle: `0x14,0xFFF7`; Triangle/back: `0x11,0`).
+- **Replacement** (later-112, `engine/game_tomba2.c` `ov_options_menu`, gated `PSXPORT_UI`):
+  `rec_set_override(0x8007B45C, …)` shows our ImGui overlay instead of the game's options and owns the
+  same Circle→page1 / Triangle→page2 back-nav + SFX. Faithful fallback: if the overlay isn't up
+  (headless/window-less) it super-calls the real `FUN_8007b45c`. Verified the hook is reached
+  (`PSXPORT_DEBUG=ui` + AUTO_GAMEPLAY → forced Cross at the auto-appearing menu logs the hit).
+- **Other menus nearby** (same draw lib, separate flows): `FUN_8007ee74` "Continue / Load data / Quit
+  game" (death/continue), `FUN_8007ed5c` Save prompt, `FUN_8007ef60` "OK to quit game?".
+
 ## Open RE items (next, in order)
 1. ~~The entity list + its walk~~ — **DONE** (above): lists `DAT_800fb168`/`DAT_800f2624`, walk
    `FUN_8007a904`, node layout. Handlers are per-object fn pointers @ +0x1c (not a type-indexed table).

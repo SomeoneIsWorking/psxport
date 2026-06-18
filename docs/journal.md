@@ -4245,3 +4245,30 @@ Verified: builds+links clean; windowed `PSXPORT_UI=1 PSXPORT_GPU_WINDOW=1` bring
 screenshot confirms). Game render path with UI on is fine (headless UI=1 field frames bright). Faithful:
 default off. NOTE the default ImGui font has no em-dash glyph (use ASCII in labels). Run windowed:
 `PSXPORT_UI=1 PSXPORT_GPU_WINDOW=1 ./run.sh` (or add PSXPORT_WINDOWED=1).
+
+## later-112 — DONE: replace the game's in-game Options menu with our PC-native (ImGui) menu
+User: "The game has an options menu but it doesn't have any options worth keeping. We can replace it
+with a much richer menu." → RE'd the in-game pause/Options menu and hooked it to show our overlay.
+
+- **RE (full state machine in `docs/engine_re.md` "In-game pause / Options menu"):** the pause menu is a
+  **task in the GAME overlay**; body/dispatcher `0x8010810C` indexes a 12-entry table at `0x801062EC` by
+  the page byte `task+0x6B` (task = `*(u32)0x1F800138`). Page 1 = main menu "Options / Load data / Quit
+  game" (`FUN_8007eae4`); Cross over "Options" sets page→3. Page 3 (`0x801082C0`) calls **`FUN_8007b45c`**
+  = the Options submenu (Messages / Sound / Screen adjust / Controls = `FUN_8007f104` — the options the
+  user discarded). Disassembled `FUN_8007b45c` via `tools/recomp/decode.py` (it's outside the decomp
+  dump): Triangle→page 2 (close), Circle→page 1 (back), SFX `FUN_80074590`.
+- **Hook (`engine/game_tomba2.c` `ov_options_menu`, gated `PSXPORT_UI`):** `rec_set_override(0x8007B45C,…)`
+  — while page 3 runs, force our overlay visible (options-mode) instead of drawing the game's options, and
+  own the same back-nav: **Circle** → `task+0x6B=1` + cursor reset + SFX `(0x14,0xFFF7)`; **Triangle** →
+  `task+0x6B=2` + SFX `(0x11,0)`. **Faithful fallback:** if the overlay isn't inited (headless/window-less)
+  it super-calls the real `FUN_8007b45c` so nothing is lost. Added `imgui_overlay_set_visible/_options_mode`
+  to the overlay (suppresses `~`/F1 toggle in options-mode; shows "Circle: back  Triangle: close" hint).
+- **Verified:** hook is reached — headless `PSXPORT_AUTO_GAMEPLAY=1 PSXPORT_UI=1 PSXPORT_DEBUG=ui` with a
+  forced Cross at the auto-appearing pause menu (~f720) logs `[ui] FUN_8007b45c reached`. (This also
+  CORRECTS docs/driving-the-game §5: the auto-appearing menu DOES respond to forced Cross — it selects
+  "Options".) **Windowed verified:** `PSXPORT_UI=1 PSXPORT_GPU_WINDOW=1 PSXPORT_AUTO_GAMEPLAY=1` +
+  forced Cross → the overlay path runs (`[ui] in-game Options -> PC-native overlay`) and the cropped
+  screenshot (`scratch/screenshots/options_overlay_crop.png`) shows OUR menu (title + "Circle: back
+  Triangle: close" hint + the mod toggles) standing in for the game's options screen. SDL window opens
+  top-left (0,0), 960x720 — NOT centered (earlier centered-crop assumption was wrong; the overlay is at
+  ~(20,20)).

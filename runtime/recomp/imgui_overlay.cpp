@@ -13,6 +13,7 @@ extern "C" int g_fps60_on;   // engine/fps60.c — the 60fps interpolation gate
 
 static bool            s_inited  = false;
 static bool            s_visible = true;
+static bool            s_options_mode = false;   // true while we stand in for the game's in-game Options menu
 static VkDevice        s_dev     = VK_NULL_HANDLE;
 static VkDescriptorPool s_pool   = VK_NULL_HANDLE;
 
@@ -63,16 +64,20 @@ void imgui_overlay_shutdown(void) {
 void imgui_overlay_event(const SDL_Event* e) {
   if (!s_inited || !e) return;
   ImGui_ImplSDL2_ProcessEvent(e);
-  if (e->type == SDL_KEYDOWN &&
+  // In options-mode the game owns visibility (Circle/Triangle exit) — don't let `~`/F1 fight it.
+  if (!s_options_mode && e->type == SDL_KEYDOWN &&
       (e->key.keysym.scancode == SDL_SCANCODE_GRAVE || e->key.keysym.scancode == SDL_SCANCODE_F1))
     s_visible = !s_visible;
 }
+
+void imgui_overlay_set_visible(int v) { s_visible = (v != 0); }
+void imgui_overlay_set_options_mode(int v) { s_options_mode = (v != 0); }
 
 static void build_ui(void) {
   ImGui::SetNextWindowSize(ImVec2(330, 0), ImGuiCond_FirstUseEver);
   ImGui::SetNextWindowPos(ImVec2(20, 20), ImGuiCond_FirstUseEver);
   ImGui::Begin("Tomba2Engine - PC-native mods");   // ASCII only (default font has no em-dash glyph)
-  ImGui::TextDisabled("` or F1 to hide");
+  ImGui::TextDisabled(s_options_mode ? "Circle: back    Triangle: close" : "` or F1 to hide");
   ImGui::PushItemWidth(120.0f);   // keep sliders compact so their labels aren't clipped
 
   bool wide = g_mods.wide != 0;
