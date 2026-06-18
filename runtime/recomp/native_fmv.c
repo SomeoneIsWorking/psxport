@@ -698,7 +698,11 @@ int native_fmv_play_lba(uint32_t lba, uint32_t size_bytes) {
   // Audio: STR interleaves XA-ADPCM sectors with the video sectors. Decode them, play through
   // a dedicated SDL device at the XA rate, and pace VIDEO to the audio/media clock (the real
   // PSX rate). uncapped = PSXPORT_FMV_FPS=0 (headless dumps: no pacing, no audio device).
-  int uncapped = 0; { const char* f = cfg_str("PSXPORT_FMV_FPS"); if (f && atoi(f) == 0 && *f) uncapped = 1; }
+  // AUTO-UNCAP HEADLESS: a headless run has no viewer, so real-time FMV pacing only wastes wall-clock
+  // (it was making a field probe take ~77s instead of ~1.4s). Fast-forward the FMV unless the user
+  // explicitly set an FMV_FPS. Same principle as the windowed-gated gpu_pace/stub pacing.
+  int uncapped = 0; { const char* f = cfg_str("PSXPORT_FMV_FPS"); if (f && *f) uncapped = (atoi(f) == 0);
+                      else if (cfg_on("PSXPORT_VK_HEADLESS")) uncapped = 1; }
   int xa_freq = 37800;
   int16_t xa_hist[2][2] = {{0,0},{0,0}};
   static int16_t xa_pcm[4032 * 2];   // mono sectors yield up to 4032 frames (see xa_decode_sector)

@@ -5,6 +5,12 @@ This exists because driving the game keeps getting re-figured-out. Pairs with `t
 (title→New Game menu RE), `tomba2-scene-state.md` (state signals), `render-arch.md`, `config.md`.
 
 ## 0. Gotchas that waste time
+- **Headless runs auto-SKIP the intro FMVs and fast-forward in-game FMVs** (later-134). A field probe is
+  ~1.4s, not ~77s — the intro movie used to be played back in REAL TIME even headless. Just use
+  `PSXPORT_VK_HEADLESS=1`; no flag needed. (`PSXPORT_NO_FMV=0` forces FMVs back on if ever required.)
+  Standard fast field probe: `PSXPORT_DEBUG=<chan> PSXPORT_GEOMBLK_FRAME=600 PSXPORT_ASPECT=16:9
+  PSXPORT_VK_HEADLESS=1 PSXPORT_AUTO_GAMEPLAY=1 PSXPORT_NATIVE_FRAMES=620 PSXPORT_NOAUDIO=1` → field at
+  present-frame 328, stable thereafter.
 - **Headless is silent automatically** — audio opens only for a real window (`PSXPORT_GPU_WINDOW`); a
   headless / `PSXPORT_VK_HEADLESS` run never touches the sound device. (`PSXPORT_NOAUDIO` still mutes a
   windowed run. WAV capture `PSXPORT_WAV` is independent and works headless.)

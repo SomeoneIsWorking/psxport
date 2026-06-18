@@ -556,10 +556,19 @@ void native_boot_run(R3000* c) {
   // before booting MAIN, restoring SCEA->Woopee->OP->menu. PSXPORT_NO_FMV skips them (headless
   // gameplay tests that need to reach GAME fast / with stable frame numbers).
   int native_fmv_play(const char*);
-  if (!cfg_on("PSXPORT_NO_FMV")) {
+  // Skip the intro FMVs when there's no viewer: PSXPORT_NO_FMV, OR any headless run (a headless probe
+  // has nobody watching — playing/decoding the intro movies just burns wall-clock; a field probe went
+  // from ~77s to ~1.4s). The in-game/cutscene FMVs that still play are also auto-uncapped in headless
+  // (native_fmv.c) so they fast-forward. Set PSXPORT_NO_FMV=0 explicitly to force them on if ever needed.
+  int skip_fmv = cfg_on("PSXPORT_NO_FMV") || cfg_on("PSXPORT_VK_HEADLESS");
+  const char* nf_ov = cfg_str("PSXPORT_NO_FMV");
+  if (nf_ov && atoi(nf_ov) == 0 && *nf_ov) skip_fmv = 0;     // explicit PSXPORT_NO_FMV=0 forces FMVs on
+  if (!skip_fmv) {
     fprintf(stderr, "[native_boot] playing intro FMVs (Whoopee logo, opening)\n");
     native_fmv_play("MOVIE/LOGO.STR");
     native_fmv_play("MOVIE/OP.STR");
+  } else {
+    fprintf(stderr, "[native_boot] skipping intro FMVs (headless/NO_FMV)\n");
   }
   rec_set_override(0x80050b08u, ov_game_main);
   fprintf(stderr, "[native_boot] entering crt0 0x800896E0 (interpreted)\n");
