@@ -4159,3 +4159,35 @@ buffers in the field — see later-107). Do NOT keep iterating fps60 until the u
 Fresh session continues the OTHER mods (handoff: scratch/handoff.md): (1) ambient occlusion / SSAO —
 unblocked by the 3-band native depth (D32 s_depth exists); (2) better lighting — rebuild fresh (the
 9d81ff8 lighting was removed in 8e959e9; read that first). Hi-res + widescreen already DONE (later-105).
+
+## later-109 — DONE: PC-native SSAO (PSXPORT_SSAO), curvature model, between opaque & semi
+Task #1 from the handoff. Built a screen-space ambient-occlusion post pass over the VK renderer, gated
+`PSXPORT_SSAO` (implies NATIVE_DEPTH; OR'd into the native-depth gates in gpu_native.c + gte_beetle
+attach_enabled; disabled under SBS). New: `shaders_vk/ssao.frag` (+present.vert reused as its vertex
+stage), gpu_vk.c `create_ssao`/`ssao_pass` (own R16_UINT target s_ssao_img, color-only rpass ending in
+TRANSFER_SRC, 2-binding descriptor color+depth, pipeline), s_depth gets SAMPLED_BIT, gte_beetle
+`proj_near_pz()` getter. AO'd color → s_ssao_img → copied back into s_tex (present/dump pick it up free).
+Depth linearize: stored depth = ord3d(proj_pz_to_ord(pz)), affine in 1/pz → undo band remap + affine
+to view-Z; only the 3D band [MIN,MAX] is touched (sky/backdrop/HUD pass through).
+
+**Two real findings (not tuning), each fixed at the root:**
+1. **Naive "is the neighbour closer" AO washed the whole TILTED ground** (21% of pixels darkened, a
+   uniform smear on the grass). Root cause: a tilted plane always has a "closer" downhill neighbour →
+   false occlusion. Fix = **curvature AO via opposite-neighbour pairs**: a flat/tilted plane has
+   center == average(opposite neighbours) → 0 AO; only genuine concavities darken. Dropped to 2.7%,
+   concentrated on creases/foliage/contacts.
+2. **AO darkened the 2D menu UI.** Root cause: the menu's blue fill is SEMI-transparent → writes no
+   depth → the depth buffer under it is the 3D terrain, so a post-everything AO pass saw "3D" there.
+   Fix = run SSAO **between the opaque and semi passes** (AO belongs to opaque geometry; translucent
+   UI/water composites OVER it). The menu now correctly shows the AO'd terrain *through* its glass and
+   is not itself darkened.
+
+**Verification (single deterministic run — cross-run pixel A/B is unreliable; AUTO_GAMEPLAY scene
+state drifts between processes, the same headless dead-end as fps60).** Added `PSXPORT_SSAO_VIZ=1`
+(AO factor as grayscale on 3D pixels, original color on 2D/sky) → confirmed on the field: UI menu +
+sky EXCLUDED (shown in color), 3D world AO-eligible, flat ground NOT washed, AO lands on hut/foliage/
+object creases + contacts. Vulkan validation layers: ZERO errors from the new rpass/barriers/depth-
+sample/copy (only the pre-existing headless present-rpass PRESENT_SRC_KHR VUID remains). Faithful gate:
+SSAO only touches the VK path, never s_vram; default off → SW/oracle path byte-identical.
+Tunables (env, logged once): SSAO_STRENGTH=1.0, _RADIUS=5px×IRES, _BIAS=0.01, _RANGE=0.15. Next: user
+live-tune the look; then task #2 (better lighting, rebuild fresh).

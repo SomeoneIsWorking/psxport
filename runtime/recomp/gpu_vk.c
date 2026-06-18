@@ -174,6 +174,28 @@ void gpu_vk_set_order_2d_bg(unsigned idx) { float t = (float)(idx + 1) / 65536.0
 void gpu_vk_set_order_2d_bg_n(unsigned idx) { float t = (float)(idx + 1) / 65536.0f; if (t > 1.0f) t = 1.0f;
                                               s_cur_ordn = NATIVE_3D_MIN * t; s_vdn = 0; }
 
+// --- PSXPORT_SSAO: PC-native screen-space ambient occlusion (post pass) -------------------------------
+// After the geometry pass, a fullscreen pass reads the color (s_tex) + native 3-band depth (s_depth),
+// darkens 3D-world creases/contacts, and writes into s_ssao_img; the result is copied back into s_tex so
+// present/dump see it with no further wiring. Gated by PSXPORT_SSAO (implies the native-depth path);
+// disabled under PSXPORT_SBS. Params are env-tunable for live eyeball tuning (logged at first use).
+float proj_near_pz(void);                 // gte_beetle.c: near-plane view-Z (= H/2) for depth linearize
+static VkImage         s_ssao_img;
+static VkDeviceMemory  s_ssao_mem;
+static VkImageView     s_ssao_view;
+static VkRenderPass    s_ssao_rpass;
+static VkFramebuffer   s_ssao_fb;
+static VkDescriptorSetLayout s_ssao_dsl;
+static VkPipelineLayout s_ssao_pll;
+static VkDescriptorPool s_ssao_dpool;
+static VkDescriptorSet s_ssao_dset;
+static VkPipeline      s_ssao_pipe;
+static int ssao_on(void) {
+  static int v = -1;
+  if (v < 0) v = (cfg_on("PSXPORT_SSAO") && !cfg_on("PSXPORT_SBS")) ? 1 : 0;
+  return v;
+}
+
 // M3 textured rasterizer: a VRAM snapshot image the texture sampler reads (avoids render/sample feedback
 // loop), its descriptor set, the textured pipeline, and a textured-vertex batch.
 typedef struct { float x, y, u, v, r, g, b; int32_t tp[4], clut[4], tw[4], da[4]; float ord, ordn; } TexVtx;  // 100 bytes
@@ -296,6 +318,8 @@ static VkShaderModule make_shader(const uint32_t* code, unsigned len) {
 }
 
 static void create_vram(void);   // forward decl: defined after init_vk, called from it
+static void create_ssao(void);   // PSXPORT_SSAO resources (post pass); created only when ssao_on()
+static void ssao_pass(void);     // PSXPORT_SSAO: AO between the opaque and semi passes (panel_render)
 static void img_barrier_on(VkImage, VkImageLayout, VkImageLayout, VkPipelineStageFlags,
                            VkPipelineStageFlags, VkAccessFlags, VkAccessFlags);
 
@@ -535,6 +559,7 @@ static void init_vk(void) {
   create_vram();
   void create_tri_pipeline(void); create_tri_pipeline();
   void panels_init(void); panels_init();
+  if (ssao_on()) create_ssao();
   if (!s_headless) create_swapchain();
   else fprintf(stderr, "[gpu_vk] headless offscreen render up (VRAM 1024x512 R16_UINT, no swapchain)\n");
   fprintf(stderr, "[gpu_vk] Vulkan present backend up (%ux%u, %u swap images; VRAM 1024x512 R16_UINT)\n",
@@ -742,6 +767,10 @@ static void panel_render(Panel* p) {
     if (s_tex_n) { vkCmdBindPipeline(s_cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, s_tritex_pipe[native]);
                    vkCmdBindVertexBuffers(s_cmd, 0, 1, &s_tvbuf, &go); vkCmdDraw(s_cmd, s_tex_n, 1, 0, 0); }
     vkCmdEndRenderPass(s_cmd);
+    // PSXPORT_SSAO: darken opaque 3D creases NOW, before the translucent pass composites UI/water on top
+    // (only the primary panel; SSAO is disabled under PSXPORT_SBS). s_tex/s_depth are in their attachment
+    // layouts here; ssao_pass round-trips them through shader-read and restores them for the semi pass.
+    if (ssao_on() && tgt == s_tex) ssao_pass();
     // SEMI pass, OT-order-correct: each overlap-group with a FRESH framebuffer snapshot.
     for (int g = 0; g <= s_semi_grp_n && s_semi_n; g++) {
       int gstart = (g == 0) ? 0 : s_semi_grp[g - 1];
@@ -775,6 +804,182 @@ static void panel_render(Panel* p) {
                 VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
                 VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
   }
+}
+
+// Build the PSXPORT_SSAO resources: a second R16_UINT image (the post-pass target), a color-only render
+// pass over it, a 2-binding descriptor (color = s_tex, depth = s_depth), the pipeline (present.vert
+// fullscreen tri + ssao.frag), and the framebuffer. Created once when ssao_on().
+static void create_ssao(void) {
+  // s_ssao_img: same R16_UINT geometry-buffer format; we render the AO'd color into it then copy back.
+  VkImageCreateInfo ii = { VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO };
+  ii.imageType = VK_IMAGE_TYPE_2D; ii.format = VK_FORMAT_R16_UINT;
+  ii.extent = (VkExtent3D){ VRAM_W, IMG_H, 1 }; ii.mipLevels = 1; ii.arrayLayers = 1;
+  ii.samples = VK_SAMPLE_COUNT_1_BIT; ii.tiling = VK_IMAGE_TILING_OPTIMAL;
+  ii.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+  ii.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+  VKC(vkCreateImage(s_dev, &ii, 0, &s_ssao_img));
+  VkMemoryRequirements mr; vkGetImageMemoryRequirements(s_dev, s_ssao_img, &mr);
+  VkMemoryAllocateInfo ma = { VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO };
+  ma.allocationSize = mr.size; ma.memoryTypeIndex = mem_type(mr.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+  VKC(vkAllocateMemory(s_dev, &ma, 0, &s_ssao_mem));
+  VKC(vkBindImageMemory(s_dev, s_ssao_img, s_ssao_mem, 0));
+  VkImageViewCreateInfo vi = { VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO };
+  vi.image = s_ssao_img; vi.viewType = VK_IMAGE_VIEW_TYPE_2D; vi.format = VK_FORMAT_R16_UINT;
+  vi.subresourceRange = (VkImageSubresourceRange){ VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+  VKC(vkCreateImageView(s_dev, &vi, 0, &s_ssao_view));
+
+  // render pass: write every pixel (DONT_CARE load), end in TRANSFER_SRC for the copy-back.
+  VkAttachmentDescription at = {0};
+  at.format = VK_FORMAT_R16_UINT; at.samples = VK_SAMPLE_COUNT_1_BIT;
+  at.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE; at.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+  at.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE; at.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+  at.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED; at.finalLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+  VkAttachmentReference ar = { 0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL };
+  VkSubpassDescription sp = {0}; sp.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+  sp.colorAttachmentCount = 1; sp.pColorAttachments = &ar;
+  VkSubpassDependency dep[2] = {{0},{0}};
+  dep[0].srcSubpass = VK_SUBPASS_EXTERNAL; dep[0].dstSubpass = 0;        // wait for the sampled inputs
+  dep[0].srcStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT; dep[0].dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+  dep[0].srcAccessMask = VK_ACCESS_SHADER_READ_BIT; dep[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+  dep[1].srcSubpass = 0; dep[1].dstSubpass = VK_SUBPASS_EXTERNAL;        // make the copy-back wait for the write
+  dep[1].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT; dep[1].dstStageMask = VK_PIPELINE_STAGE_TRANSFER_BIT;
+  dep[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT; dep[1].dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+  VkRenderPassCreateInfo rpi = { VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO };
+  rpi.attachmentCount = 1; rpi.pAttachments = &at; rpi.subpassCount = 1; rpi.pSubpasses = &sp;
+  rpi.dependencyCount = 2; rpi.pDependencies = dep;
+  VKC(vkCreateRenderPass(s_dev, &rpi, 0, &s_ssao_rpass));
+
+  VkFramebufferCreateInfo fi = { VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO };
+  fi.renderPass = s_ssao_rpass; fi.attachmentCount = 1; fi.pAttachments = &s_ssao_view;
+  fi.width = VRAM_W; fi.height = IMG_H; fi.layers = 1;
+  VKC(vkCreateFramebuffer(s_dev, &fi, 0, &s_ssao_fb));
+
+  // descriptor set layout: binding0 = color (usampler2D), binding1 = depth (sampler2D), both fragment.
+  VkDescriptorSetLayoutBinding b[2] = {{0},{0}};
+  b[0].binding = 0; b[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; b[0].descriptorCount = 1; b[0].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+  b[1].binding = 1; b[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; b[1].descriptorCount = 1; b[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+  VkDescriptorSetLayoutCreateInfo dli = { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
+  dli.bindingCount = 2; dli.pBindings = b;
+  VKC(vkCreateDescriptorSetLayout(s_dev, &dli, 0, &s_ssao_dsl));
+  VkPushConstantRange pcr = { VK_SHADER_STAGE_FRAGMENT_BIT, 0, 48 };   // p0(vec4) p1(vec4) p2(ivec4)
+  VkPipelineLayoutCreateInfo pli = { VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
+  pli.setLayoutCount = 1; pli.pSetLayouts = &s_ssao_dsl; pli.pushConstantRangeCount = 1; pli.pPushConstantRanges = &pcr;
+  VKC(vkCreatePipelineLayout(s_dev, &pli, 0, &s_ssao_pll));
+
+  VkDescriptorPoolSize psz = { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2 };
+  VkDescriptorPoolCreateInfo dpi = { VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO };
+  dpi.maxSets = 1; dpi.poolSizeCount = 1; dpi.pPoolSizes = &psz;
+  VKC(vkCreateDescriptorPool(s_dev, &dpi, 0, &s_ssao_dpool));
+  VkDescriptorSetAllocateInfo dai = { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO };
+  dai.descriptorPool = s_ssao_dpool; dai.descriptorSetCount = 1; dai.pSetLayouts = &s_ssao_dsl;
+  VKC(vkAllocateDescriptorSets(s_dev, &dai, &s_ssao_dset));
+  VkDescriptorImageInfo cdi = { s_sampler, s_tex_view,   VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+  VkDescriptorImageInfo ddi = { s_sampler, s_depth_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+  VkWriteDescriptorSet wr[2] = {{ VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET },{ VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET }};
+  wr[0].dstSet = s_ssao_dset; wr[0].dstBinding = 0; wr[0].descriptorCount = 1; wr[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; wr[0].pImageInfo = &cdi;
+  wr[1].dstSet = s_ssao_dset; wr[1].dstBinding = 1; wr[1].descriptorCount = 1; wr[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; wr[1].pImageInfo = &ddi;
+  vkUpdateDescriptorSets(s_dev, 2, wr, 0, 0);
+
+  VkShaderModule vs = make_shader(spv_present_vert, spv_present_vert_len);   // fullscreen tri (no vtx input)
+  VkShaderModule fs = make_shader(spv_ssao_frag, spv_ssao_frag_len);
+  VkPipelineShaderStageCreateInfo st[2] = {
+    { VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, 0, 0, VK_SHADER_STAGE_VERTEX_BIT, vs, "main", 0 },
+    { VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, 0, 0, VK_SHADER_STAGE_FRAGMENT_BIT, fs, "main", 0 },
+  };
+  VkPipelineVertexInputStateCreateInfo vin = { VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO };
+  VkPipelineInputAssemblyStateCreateInfo ia = { VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO };
+  ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+  VkPipelineViewportStateCreateInfo vp = { VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO };
+  vp.viewportCount = 1; vp.scissorCount = 1;
+  VkPipelineRasterizationStateCreateInfo rs = { VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO };
+  rs.polygonMode = VK_POLYGON_MODE_FILL; rs.cullMode = VK_CULL_MODE_NONE; rs.lineWidth = 1.0f;
+  VkPipelineMultisampleStateCreateInfo ms = { VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO };
+  ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+  VkPipelineColorBlendAttachmentState cba = {0}; cba.colorWriteMask = 0xF;
+  VkPipelineColorBlendStateCreateInfo cb = { VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO };
+  cb.attachmentCount = 1; cb.pAttachments = &cba;
+  VkDynamicState dyn[2] = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
+  VkPipelineDynamicStateCreateInfo ds = { VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO };
+  ds.dynamicStateCount = 2; ds.pDynamicStates = dyn;
+  VkGraphicsPipelineCreateInfo gp = { VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO };
+  gp.stageCount = 2; gp.pStages = st; gp.pVertexInputState = &vin; gp.pInputAssemblyState = &ia;
+  gp.pViewportState = &vp; gp.pRasterizationState = &rs; gp.pMultisampleState = &ms;
+  gp.pColorBlendState = &cb; gp.pDynamicState = &ds; gp.layout = s_ssao_pll; gp.renderPass = s_ssao_rpass;
+  VKC(vkCreateGraphicsPipelines(s_dev, VK_NULL_HANDLE, 1, &gp, 0, &s_ssao_pipe));
+  vkDestroyShaderModule(s_dev, vs, 0); vkDestroyShaderModule(s_dev, fs, 0);
+  fprintf(stderr, "[gpu_vk] PSXPORT_SSAO post pass up (R16_UINT %ux%u, 2-tap-ring depth AO)\n", VRAM_W, IMG_H);
+}
+
+// Depth-aspect image barrier (img_barrier_on is color-aspect only).
+static void depth_barrier(VkImageLayout from, VkImageLayout to, VkPipelineStageFlags ss,
+                          VkPipelineStageFlags ds, VkAccessFlags sa, VkAccessFlags da) {
+  VkImageMemoryBarrier b = { VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
+  b.oldLayout = from; b.newLayout = to; b.image = s_depth;
+  b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+  b.subresourceRange = (VkImageSubresourceRange){ VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1 };
+  b.srcAccessMask = sa; b.dstAccessMask = da;
+  vkCmdPipelineBarrier(s_cmd, ss, ds, 0, 0, 0, 0, 0, 1, &b);
+}
+
+// PSXPORT_SSAO pass, recorded into s_cmd by panel_render BETWEEN the opaque and semi passes — AO is a
+// property of the OPAQUE geometry; the translucent pass (UI/water) must composite OVER the AO'd world,
+// not be darkened by it (the menu's semi fill doesn't write depth, so the depth buffer under it is the
+// 3D terrain — running AO after it would wrongly darken the UI). Entry: s_tex in COLOR_ATTACHMENT, s_depth
+// in DEPTH_STENCIL_ATTACHMENT. Reads color+depth, writes the AO'd color into s_ssao_img, copies it back
+// into s_tex. Exit: s_tex back in COLOR_ATTACHMENT, s_depth back in DEPTH_STENCIL (for the semi pass).
+static void ssao_pass(void) {
+  // s_tex: color attachment (opaque output) -> shader-read (sample as the AO source)
+  img_barrier_on(s_tex, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                 VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                 VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
+  // depth: attachment -> shader-read (sample it in the AO pass)
+  depth_barrier(VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
+  // push constants: depth-linearize + AO params (env-tunable; logged once)
+  float nearp = proj_near_pz();
+  float inv_near = 1.0f / (nearp < 1.0f ? 1.0f : nearp), inv_far = 1.0f / 65535.0f;
+  static int s_logged = 0;
+  static float strength, radius, bias_frac, range_frac;
+  if (!s_logged) {
+    const char* s = cfg_str("PSXPORT_SSAO_STRENGTH"); strength   = s ? (float)atof(s) : 1.0f;
+    const char* r = cfg_str("PSXPORT_SSAO_RADIUS");   radius     = (r ? (float)atof(r) : 5.0f) * (float)s_ires;
+    const char* b = cfg_str("PSXPORT_SSAO_BIAS");     bias_frac  = b ? (float)atof(b) : 0.01f;
+    const char* g = cfg_str("PSXPORT_SSAO_RANGE");    range_frac = g ? (float)atof(g) : 0.15f;
+    fprintf(stderr, "[ssao] strength=%.2f radius=%.1fpx bias=%.3f range=%.3f (near pz=%.1f)\n",
+            strength, radius, bias_frac, range_frac, nearp);
+    s_logged = 1;
+  }
+  struct { float p0[4], p1[4]; int32_t p2[4]; } pc;
+  pc.p0[0] = inv_near; pc.p0[1] = inv_far; pc.p0[2] = strength; pc.p0[3] = radius;
+  pc.p1[0] = bias_frac; pc.p1[1] = range_frac; pc.p1[2] = NATIVE_3D_MIN; pc.p1[3] = NATIVE_3D_MAX;
+  pc.p2[0] = VRAM_W; pc.p2[1] = IMG_H; pc.p2[2] = cfg_int("PSXPORT_SSAO_VIZ", 0); pc.p2[3] = 0;
+
+  VkRenderPassBeginInfo rp = { VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
+  rp.renderPass = s_ssao_rpass; rp.framebuffer = s_ssao_fb; rp.renderArea.extent = (VkExtent2D){ VRAM_W, IMG_H };
+  vkCmdBeginRenderPass(s_cmd, &rp, VK_SUBPASS_CONTENTS_INLINE);
+  VkViewport vpt = { 0, 0, VRAM_W, IMG_H, 0.0f, 1.0f }; VkRect2D sc = { {0,0}, { VRAM_W, IMG_H } };
+  vkCmdSetViewport(s_cmd, 0, 1, &vpt); vkCmdSetScissor(s_cmd, 0, 1, &sc);
+  vkCmdPushConstants(s_cmd, s_ssao_pll, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof pc, &pc);
+  vkCmdBindDescriptorSets(s_cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, s_ssao_pll, 0, 1, &s_ssao_dset, 0, 0);
+  vkCmdBindPipeline(s_cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, s_ssao_pipe);
+  vkCmdDraw(s_cmd, 3, 1, 0, 0);
+  vkCmdEndRenderPass(s_cmd);   // s_ssao_img -> TRANSFER_SRC (render pass finalLayout)
+
+  // copy the AO'd color back into s_tex (the panel's render target), then resume rendering on it.
+  img_barrier_on(s_tex, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                 VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                 VK_ACCESS_SHADER_READ_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
+  VkImageCopy ic = { { VK_IMAGE_ASPECT_COLOR_BIT,0,0,1 }, {0,0,0}, { VK_IMAGE_ASPECT_COLOR_BIT,0,0,1 }, {0,0,0}, { VRAM_W, IMG_H, 1 } };
+  vkCmdCopyImage(s_cmd, s_ssao_img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, s_tex, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &ic);
+  // s_tex: transfer-dst -> color attachment (the semi pass / final present barrier continues from here)
+  img_barrier_on(s_tex, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                 VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                 VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
+  // depth: shader-read -> attachment (the semi pass depth-tests against it)
+  depth_barrier(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+                VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
+                VK_ACCESS_SHADER_READ_BIT, VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT);
 }
 
 // Present the display region [sx,sy .. +w,h] of `src` (s_vram or s_interp) via Vulkan, fit to aspect.
@@ -891,7 +1096,8 @@ void create_tri_pipeline(void) {
     di.imageType = VK_IMAGE_TYPE_2D; di.format = VK_FORMAT_D32_SFLOAT;
     di.extent = (VkExtent3D){ VRAM_W, IMG_H, 1 }; di.mipLevels = 1; di.arrayLayers = 1;
     di.samples = VK_SAMPLE_COUNT_1_BIT; di.tiling = VK_IMAGE_TILING_OPTIMAL;
-    di.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+    // SAMPLED so the PSXPORT_SSAO post pass can read the depth buffer (harmless when SSAO is off).
+    di.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
     di.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     VKC(vkCreateImage(s_dev, &di, 0, &s_depth));
     VkMemoryRequirements dr; vkGetImageMemoryRequirements(s_dev, s_depth, &dr);

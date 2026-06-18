@@ -37,5 +37,6 @@ PY
   emit tri.frag spv_tri_frag
   emit tritex.vert spv_tritex_vert
   emit tritex.frag spv_tritex_frag
+  emit ssao.frag spv_ssao_frag          # PSXPORT_SSAO post pass (reuses present.vert as its vertex stage)
 } > "$OUT"
 echo "[gen_vk_shaders] wrote $OUT"

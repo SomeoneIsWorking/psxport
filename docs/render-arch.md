@@ -49,6 +49,31 @@ headless. Pairs with `gfx-debug.md` (the debug workflow + tool catalog) and `con
     the 2D band, and 3D-projected overlay banners (e.g. a hint sign drawn on-top by OT order) get their
     true geometric depth and so sit behind nearer world geo — overlay-vs-world depth semantics, next.
 
+## `PSXPORT_SSAO` — PC-native screen-space ambient occlusion (post pass)
+A fullscreen AO pass run **inside `panel_render`, between the opaque and semi passes** (gpu_vk.c
+`ssao_pass`). AO is a property of the OPAQUE geometry: running it before the translucent pass means UI/
+water composite OVER the AO'd world instead of being darkened by it (the menu's semi fill writes no
+depth, so the depth buffer under it is the 3D terrain — AO *after* it would wrongly darken the UI).
+- **Inputs:** the 3-band native depth (`s_depth`, made SAMPLED) + the opaque color (`s_tex`). SSAO
+  **implies `PSXPORT_NATIVE_DEPTH`** (it needs real per-vertex depth) — the gate is OR'd into the
+  native-depth checks (gpu_native.c / gte_beetle `attach_enabled`). Disabled under `PSXPORT_SBS`.
+- **Depth linearize:** the stored depth = `ord3d(proj_pz_to_ord(pz))`; `proj_pz_to_ord` is AFFINE in
+  `1/pz`, so the shader undoes the band remap then the affine map to recover view-Z (needs the near
+  plane = `proj_near_pz()` = H/2). Only pixels inside the 3D band `[NATIVE_3D_MIN, NATIVE_3D_MAX]` are
+  touched; sky/backdrop/HUD bands pass through unchanged.
+- **AO model = CURVATURE via opposite-neighbour pairs** (`ssao.frag`), NOT "is the neighbour closer".
+  A flat surface (even steeply tilted) has center == the average of opposite neighbours → 0 AO; this is
+  what kills the false "the whole tilted ground darkens" wash a naive range-check produces. Only genuine
+  concavities/contacts (center recedes behind the line through its neighbours) darken. Pairs touching a
+  non-3D pixel (silhouette vs sky/UI) are skipped → no edge halos. 16 fixed taps (2 rings × 4 pairs),
+  no per-pixel rotation → no noise → no blur pass needed.
+- **Output:** AO'd color → `s_ssao_img` → copied back into `s_tex`, so present/dump pick it up with no
+  extra wiring. Faithful: SSAO only touches the VK path, never `s_vram`; default off.
+- **Tuning (env):** `PSXPORT_SSAO_STRENGTH` (def 1.0), `_RADIUS` (px, def 5 × IRES), `_BIAS` (def 0.01,
+  frac of view-Z), `_RANGE` (def 0.15). `PSXPORT_SSAO_VIZ=1` renders the AO factor as grayscale on 3D
+  pixels (white=lit, dark=occluded) with 2D/sky in original color — the single-run correctness check
+  (cross-run pixel A/B is unreliable: AUTO_GAMEPLAY scene state drifts between processes).
+
 ## Running it
 - **Windowed (VK default):** `PSXPORT_GPU_WINDOW=1 … ./scratch/bin/tomba2_port MAIN.EXE` (needs `DISPLAY`).
 - **Headless SW:** no `GPU_WINDOW` → SW rasterizer, no window (what `drive.py` uses).
