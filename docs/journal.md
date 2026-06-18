@@ -5102,6 +5102,20 @@ code runs — not `gen_func_8003CDD8`, not the dispatcher `gen_func_8003F698`, n
 - **`PSXPORT_DEBUG=subcnt` finding:** the un-owned GT3/GT4 variants `0x8003B320`/`0x8003C8F4` fire ZERO
   times at the field (they belong to other scenes — the f560 image). So the field's render is fully owned:
   native per-object dispatch+flush + the byte-packed `0x80027768` (bulk terrain) + the GT3/GT4 library.
-- **NEXT:** drive to the scenes that use `0x8003B320`/`0x8003C8F4`/overlay `0x8013xxxx` and port those
-  submit variants; own `gen_func_80051C8C` (transform build, interpreted-only — not in the recomp set, RE
-  from RAM); then the native widescreen margin (replace the guest-flush margin_render.cpp).
+- **Phase-2 render driver MAPPED (`PSXPORT_DEBUG=rwalk`) — `gen_func_8003C048`.** It is the ONLY phase-2
+  render-walk firing at the field (1×/frame → `8003CCA4`). Structure (shard_0): a linked-list walk —
+  head `*0x800F2624`, per node: skip if `node+1==0`, else dispatch by `node+0xb` (<33) through a 33-entry
+  jump table `@0x80014DB8`; advance `node = node+36`. Cases call `8003CCA4` (per-object render, OWNED),
+  `8003F174` (minor static-decor flush), `8003EF9C`/`80039F4C`/`8003C2D4`/`8003C464`/`8003C5F8`/`8003C788`
+  (resident render fns), several overlay renderers via rec_dispatch (`8012A43C`/`801295B4`/`80129114`/
+  `8013DD58`/`8011BE5C`), a big inline case that builds a matrix from `node+96..118` + calls `80084660/
+  80084690` then the GT3 variant `8003B320`, and a default `rec_dispatch(node+24)`. Owning it = replicate
+  the walk + the 33-case dispatch (cases have non-uniform/inline arg setup) — a multi-step lift, NOT a
+  clean single step; the per-object SUBMISSION (the meaty projection/packet work) is already native.
+- **NEXT (in order):** (1) own `gen_func_8003C048` (the master phase-2 flush walk) natively — replicate
+  the linked-list walk + jump-table dispatch, native for owned cases (8003CCA4), rec_dispatch/super-call
+  for unowned; 0-diff gate at f410 (where it fires). (2) drive to scenes using `0x8003B320`/`0x8003C8F4`/
+  overlay `0x8013xxxx` and port those submit variants. (3) own `gen_func_80051C8C` (transform build,
+  interpreted-only — RE from RAM). (4) native widescreen margin (replace the guest-flush margin_render.cpp).
+- Probes added this session: `PSXPORT_DEBUG=pdisp` (dispatch coverage), `subcnt` (submitter call counts),
+  `ccase` (8003CCA4 case histogram), `rwalk` (phase-2 walk caller). All gated, zero cost off.

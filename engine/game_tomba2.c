@@ -438,6 +438,14 @@ void games_tomba2_init(void) {
     rec_set_override(0x8003B320u, ov_subcnt_b320); rec_set_override(0x8003C8F4u, ov_subcnt_c8f4); }
   // Per-object dispatch case histogram (PSXPORT_DEBUG=ccase): which gen_func_8003CCA4 cases fire. Gated.
   if (cfg_dbg("ccase")) { void ov_ccase_probe(R3000*); rec_set_override(0x8003CCA4u, ov_ccase_probe); }
+  // Phase-2 render-walk caller counter (PSXPORT_DEBUG=rwalk): which orchestrator drives 8003CCA4. Gated.
+  if (cfg_dbg("rwalk")) {
+    void ov_rwalk_b588(R3000*), ov_rwalk_bb50(R3000*), ov_rwalk_bcf4(R3000*),
+         ov_rwalk_bf00(R3000*), ov_rwalk_c048(R3000*), ov_rwalk_eec0(R3000*);
+    rec_set_override(0x8003B588u, ov_rwalk_b588); rec_set_override(0x8003BB50u, ov_rwalk_bb50);
+    rec_set_override(0x8003BCF4u, ov_rwalk_bcf4); rec_set_override(0x8003BF00u, ov_rwalk_bf00);
+    rec_set_override(0x8003C048u, ov_rwalk_c048); rec_set_override(0x8003EEC0u, ov_rwalk_eec0);
+  }
   void engine_tomba2_init(void);
   engine_tomba2_init();                            // native engine layer (Phase 1: object-list walk)
 }

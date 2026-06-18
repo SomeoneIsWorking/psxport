@@ -714,6 +714,16 @@ static void subcnt_tick(R3000* c, uint32_t addr) {
 void ov_subcnt_b320(R3000* c) { subcnt_tick(c, 0x8003B320u); }
 void ov_subcnt_c8f4(R3000* c) { subcnt_tick(c, 0x8003C8F4u); }
 
+// PSXPORT_DEBUG=rwalk — phase-2 render-walk caller counter. The per-object render dispatch
+// gen_func_8003CCA4 is driven by one of several orchestrators (the render-layer/list drainers); count
+// which fire per scene so the phase-2 flush walk worth owning next is picked by data. Super-calls.
+void ov_rwalk_b588(R3000* c) { subcnt_tick(c, 0x8003B588u); }
+void ov_rwalk_bb50(R3000* c) { subcnt_tick(c, 0x8003BB50u); }
+void ov_rwalk_bcf4(R3000* c) { subcnt_tick(c, 0x8003BCF4u); }
+void ov_rwalk_bf00(R3000* c) { subcnt_tick(c, 0x8003BF00u); }
+void ov_rwalk_c048(R3000* c) { subcnt_tick(c, 0x8003C048u); }
+void ov_rwalk_eec0(R3000* c) { subcnt_tick(c, 0x8003EEC0u); }
+
 // PSXPORT_DEBUG=ccase — gen_func_8003CCA4 case histogram. The per-object render dispatch selects a
 // secondary effect pass by idx = node[0xd]&0xb (idx>=9 = no render). Logs the idx + the jump-table
 // target (0x80014ec8[idx]) so we know which cases (and which secondary-pass fns) actually fire at the
