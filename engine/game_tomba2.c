@@ -119,13 +119,38 @@ static void ov_object_cull(R3000* c) {
   int do_cull = cfg_on("PSXPORT_CULL") || wide;
   int cull_far = s_cull_far >= 0 ? s_cull_far : (wide ? 0x8000 : 0x6000);
   int cull_fov = s_cull_fov >= 0 ? s_cull_fov : (wide ? 0x00 : 0x80);
+  // MEASUREMENT (entity-type taxonomy RE, journal later-127 step 1; off by default): restrict the wide
+  // re-include to a single entity type (+0xc), or exclude one, so a 4:3-vs-16:9 gameplay RAM self-diff
+  // isolates whether re-including THAT type perturbs gameplay logic (static-world) or not (dynamic).
+  // PSXPORT_CULL_ONLY_TYPE=<n> re-includes only type n; PSXPORT_CULL_SKIP_TYPE=<n> re-includes all but n.
+  static int s_only = -2, s_skip = -2;
+  if (s_only == -2) { const char* x = cfg_str("PSXPORT_CULL_ONLY_TYPE"); s_only = x ? (int)strtol(x,0,0) : -1;
+                      const char* y = cfg_str("PSXPORT_CULL_SKIP_TYPE"); s_skip = y ? (int)strtol(y,0,0) : -1; }
+  int otype = mem_r8(o + 0x0c);
+  if (s_only >= 0 && otype != s_only) do_cull = 0;
+  if (s_skip >= 0 && otype == s_skip) do_cull = 0;
   if (do_cull && mem_r8(o + 1) == 0) {              // the game CULLED it — reconsider with extended bounds
     unsigned dist = isqrt32((unsigned)(p2*p2 + p3*p3 + p4*p4)) & 0xFFFF;
     if (dist >= 0x200 && dist <= (unsigned)cull_far) {   // keep near/behind culling intact
       int fx = (int16_t)obj_r16(0x1F8000E8), fy = (int16_t)obj_r16(0x1F8000EA), fz = (int16_t)obj_r16(0x1F8000EC);
       long depth = (long)fx*p2 + (long)fy*p3 + (long)fz*p4, den = ((long)dist * 0x1000) >> 10;
       if (den < 1) den = 1;
-      if (depth / den >= cull_fov) { mem_w8(o + 1, 1); c->r[2] = 1; }   // re-include: mark visible
+      if (depth / den >= cull_fov) { mem_w8(o + 1, 1); c->r[2] = 1;     // re-include: mark visible
+        // MEASUREMENT (PSXPORT_DEBUG=cullinc): per-type tally of objects the wide re-include actually
+        // marks visible, per frame. Distinguishes a genuinely static-safe type from a vacuous 0-diff
+        // (a type with no culled margin members to re-include). s_frame from gpu_native.
+        extern int s_frame; static long s_inc[256]; static int s_lf = -1;
+        if (cfg_dbg("cullinc")) {
+          if (s_frame != s_lf && s_lf >= 0) {
+            int any = 0; for (int t = 0; t < 256; t++) if (s_inc[t]) any = 1;
+            if (any) { fprintf(stderr, "[cullinc] f%d reincluded:", s_lf);
+              for (int t = 0; t < 256; t++) if (s_inc[t]) fprintf(stderr, " 0x%02x=%ld", t, s_inc[t]);
+              fprintf(stderr, "\n"); }
+            for (int t = 0; t < 256; t++) s_inc[t] = 0;
+          }
+          s_lf = s_frame; s_inc[otype & 0xff]++;
+        }
+      }
     }
   }
   g_current_object = prev;

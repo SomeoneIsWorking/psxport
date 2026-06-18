@@ -4767,3 +4767,56 @@ geometry = logic-safe + desired; (b) ticking DYNAMIC objects = the perturbation.
 not proof a type is static (a static object never diverges, but so could an identically-ticked dynamic one)
 — the taxonomy must be confirmed by examining each type's handler (+0x1c) before relying on it. This is the
 prerequisite RE for the native static-margin render (approach B).
+> **FALSIFIED by later-128** — the one-frame position inference above is WRONG. Per-type re-include
+> isolation + a re-include counter proved: **type 0x06 is never re-included (vacuous), type 0x04 DOES
+> perturb (422 B), and NO actually-re-included type is 0-diff.** Read later-128, not this addendum.
+
+## later-128 — CORRECTED entity-type taxonomy (proper per-type isolation, supersedes later-127 addendum)
+Did handoff step 1 properly: don't trust the one-frame position diff — per-type re-include + RAM self-diff,
+plus a re-include COUNTER (to catch vacuous 0-diffs) + handler disasm. New tools: `tools/entity_walk.py`
+(walks both entity lists, type→handler histogram), `PSXPORT_CULL_ONLY_TYPE`/`PSXPORT_CULL_SKIP_TYPE`
+(type-gate the wide re-include, measurement), `PSXPORT_DEBUG=cullinc` (per-frame per-type re-include tally).
+Method: deterministic AUTO_GAMEPLAY field, dump f438, 4:3 baseline = `ram43.bin`; ASPECT=16:9 with
+`CULL_ONLY_TYPE=t`; `tools/ram_region_diff.py` reports OTHER (gameplay) bytes. (`tools/build_port.sh`.)
+
+**Type → handler is MANY-to-one, not 1:1.** `entity_walk.py` on the 4:3 field dump: type 0x04 (58 nodes)
+spans **20 distinct handlers** (mostly overlay 0x8012/0x8013xxxx); 0x02→7 handlers, 0x06→4, etc. So `+0xc`
+is the **cull-switch discriminant** (FUN_8007712C branches on it only to pick per-type distance/FOV bands —
+0x04: cull<512, keep-no-FOV<7169, else FOV depth/dist<856; 0x02/05/09 have their own), NOT a behavior label.
+Static-vs-dynamic is a per-HANDLER property, decided by whether the handler's state-advance is gated on the
+cull/visible result.
+
+**Per-type re-include gameplay perturbation (OTHER bytes, 4:3 vs 16:9-only-type t):**
+| type | OTHER B | objs re-included/frame | verdict |
+|------|--------:|------------------------:|---------|
+| 0x02 | 3405 | 25 | dynamic |
+| 0x03 | 1276 | 10 | dynamic |
+| 0x04 |  422 | 18 | mostly-safe but NOT 0-diff (~23 B/obj) |
+| 0x05 |  461 | 23 | ~20 B/obj, NOT 0-diff |
+| 0x06 |    4 |  **0** | **VACUOUS — never re-included; 0-diff is meaningless** |
+| 0x09 | 1696 |  2 | very dynamic (~848 B/obj) |
+(The constant 4-byte floor = the packet-pool write ptr 0x800BF4F4/0x800BF544 — render state, not gameplay.)
+
+**Two later-127 conclusions FALSIFIED:** (a) 0x06 is NOT static/dynamic-relevant — it is simply **never in
+the wide re-include set** at this scene (its objects sit at z≈-32748, beyond cull_far regardless of FOV), so
+its "0-diff" is vacuous; the list2 0x06 position jitter later-127 saw under FULL re-include was a CROSS-OBJECT
+effect from other re-included types, not 0x06 ticking. (b) 0x04 is NOT clean-static — re-including it perturbs
+422 B (18 obj). **No entity type at the field scene is both non-vacuous AND 0-diff** → a type-gated re-include
+CANNOT losslessly fill the wide margin. This is positive proof that approach B (native render of the margin
+from object DATA, WITHOUT the +1 poke) is required, not a shortcut.
+
+**Mechanism (handler disasm, type-0x06 handler 0x8013c538 via tools/disasm_overlay.py on ram43.bin):** the
+handler runs its state machine (reads substate +0x4, writes +0x4e/+0x50.. arrays via jal 0x80032a44 loop,
+advances +0x4) UNCONDITIONALLY at the top — BEFORE any cull/submit call. So for 0x06 the cull/visible flag
+gates only the RENDER submit, not the logic; that is exactly why forcing it visible would be logic-safe — but
+moot, since 0x06 is never re-included here. The dynamic types instead gate their state-advance DOWNSTREAM of
+the cull result, so the +1 poke ticks them. Net rule: **re-include perturbs iff the handler's state-advance is
+gated on the cull/visible result.**
+
+**NEXT (approach B, native static-margin render):** the margin objects we must render natively are the
+actually-re-included set (0x02/03/04/05/09, ~78 obj/frame). To render them WITHOUT the +1 poke we read each
+object's model-data ptr (+0x38) + transform/pos (+0x2e/32/36) from guest RAM and emit prims straight into the
+native DL (engine_submit owned path) — leaving the handler's visibility-gated logic untouched. OPEN RE: the
+model-data format at +0x38 and the per-object transform load (the 96/54 ctc2 sites, engine_re.md §Camera) so
+the native path can project+submit identically to the handler's submit. Per user direction (2026-06-18): full
+RE + PC-native port (no guest pokes); new PC-native code (incl. the margin renderer) is written in C++/OOP.
