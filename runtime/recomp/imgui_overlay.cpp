@@ -10,6 +10,9 @@ extern "C" {
 #include "mods.h"
 }
 extern "C" int g_fps60_on;   // engine/fps60.c — the 60fps interpolation gate
+// Effective (computed, incl. auto) video status from the renderer; out ptrs may be NULL.
+extern "C" void gpu_vk_video_status(int* native_w, int* ires, int* fbw, int* fbh,
+                                    int* ww, int* wh, int* ires_cap);
 
 static bool            s_inited  = false;
 static bool            s_visible = true;
@@ -80,14 +83,22 @@ static void build_ui(void) {
   ImGui::TextDisabled(s_options_mode ? "Circle: back    Triangle: close" : "` or F1 to hide");
   ImGui::PushItemWidth(120.0f);   // keep sliders compact so their labels aren't clipped
 
-  bool wide = g_mods.wide != 0;
-  if (ImGui::Checkbox("Widescreen (16:9)", &wide)) {
-    g_mods.wide = wide;
-    if (g_mods.wide && g_mods.ires > 2) g_mods.ires = 2;   // VRAM_W cap
+  const char* aspects[] = { "4:3", "16:9", "21:9", "Auto (window)" };
+  int am = g_mods.aspect;
+  if (ImGui::Combo("Aspect", &am, aspects, 4)) g_mods.aspect = am;
+
+  int nw = 320, ir = 1, fbw = 320, fbh = 240, ww = 0, wh = 0, cap = 3;
+  gpu_vk_video_status(&nw, &ir, &fbw, &fbh, &ww, &wh, &cap);
+  bool ia = g_mods.ires_auto != 0;
+  if (ImGui::Checkbox("Auto internal res", &ia)) g_mods.ires_auto = ia;
+  if (g_mods.ires_auto) {
+    ImGui::SameLine(); ImGui::TextDisabled("(%dx)", ir);    // computed from window size
+  } else {
+    int iv = g_mods.ires;
+    if (ImGui::SliderInt("Internal res", &iv, 1, cap < 1 ? 1 : cap))
+      g_mods.ires = iv < 1 ? 1 : (iv > 3 ? 3 : iv);
   }
-  int ires = g_mods.ires, cap = g_mods.wide ? 2 : 3;
-  if (ImGui::SliderInt("Internal res", &ires, 1, cap))
-    g_mods.ires = ires < 1 ? 1 : (ires > cap ? cap : ires);
+  ImGui::TextDisabled("Render %dx%d  |  window %dx%d", fbw, fbh, ww, wh);
 
   bool fps60 = g_fps60_on != 0;
   if (ImGui::Checkbox("60fps interpolation", &fps60)) g_fps60_on = fps60;

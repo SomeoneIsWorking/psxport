@@ -273,7 +273,7 @@ static void ov_draw_otag(R3000* c) { gpu_dma2_linked_list(c->r[4]); }
 //   Circle (0x2000)   -> task+0x6B = 1 (back to the pause menu); SFX FUN_80074590(0x14, 0xFFF7, 0).
 //   Triangle (0x1000) -> task+0x6B = 2 (close the pause menu);   SFX FUN_80074590(0x11, 0, 0).
 // Faithful fallback: if our overlay isn't actually up (headless / window-less), super-call the real
-// menu so nothing is lost. Gated on PSXPORT_UI (the overlay only exists then).
+// menu so nothing is lost. The overlay is up by default for windowed runs (no flag needed).
 #define T2_PAD_EDGE    0x800E7E68u  // DAT_800e7e68 — this-frame pressed-button edges (u16, active-high)
 #define T2_TASK_PTR    0x1F800138u  // _DAT_1f800138 — current task struct pointer (scratchpad word)
 #define T2_MENU_CURSOR 0x800BF808u  // DAT_800bf808 — shared menu cursor byte
@@ -321,8 +321,10 @@ static void ov_options_menu(R3000* c) {
 
 void games_tomba2_init(void) {
   rec_set_override(0x800788ACu, ov_frame_update);
-  if (cfg_on("PSXPORT_UI"))                            // our richer menu replaces the game's in-game Options
-    rec_set_override(0x8007B45Cu, ov_options_menu);
+  // Replace the game's in-game Options menu with our overlay. Always registered: the override itself
+  // falls back to the real menu (super-call) when the overlay isn't up (headless / PSXPORT_UI=0), so
+  // this needs no flag — it activates whenever the overlay exists (windowed by default).
+  rec_set_override(0x8007B45Cu, ov_options_menu);
   if (!cfg_on("PSXPORT_GEOM_RECOMP")) {           // own the GTE projection setup natively (faithful-first)
     rec_set_override(0x800846D0u, ov_set_geom_offset);
     rec_set_override(0x800846F0u, ov_set_geom_screen);

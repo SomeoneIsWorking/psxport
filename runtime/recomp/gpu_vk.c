@@ -277,15 +277,43 @@ void gpu_vk_dirty(int x, int y, int w, int h) {
 // Live widescreen + internal-res, read from g_mods each frame (the overlay toggles them at runtime).
 // s_wide/s_ires are now accessors over g_mods (clamped: 4:3 -> ires<=3 (960px), 16:9 -> ires<=2 (856px),
 // both within VRAM_W=1024). wide_init() just seeds g_mods from cfg once.
-#define WIDE_OFF 54                       // (FBW/ires - 320)/2 — center the native 320 view in 428-wide FB
-static int W_wide(void) { return g_mods.wide; }
-static int W_ires(void) { int i = g_mods.ires, cap = g_mods.wide ? 2 : 3; return i < 1 ? 1 : (i > cap ? cap : i); }
+// Live window size (swapchain extent). 0 before the swapchain exists -> fall back to native 4:3.
+static int win_w(void) { return s_extent.width  ? (int)s_extent.width  : 320; }
+static int win_h(void) { return s_extent.height ? (int)s_extent.height : 240; }
+// Native (pre-ires) FB width for the current aspect mode. 4:3=320; 16:9=428; 21:9=560; AUTO = the live
+// window aspect (full, even, clamped to VRAM_W=1024). Height is always 240 (the FOV widens horizontally).
+static int wide_native_w(void) {
+  switch (g_mods.aspect) {
+    case ASPECT_16_9: return 428;                         // 240*16/9 ~= 426.7 -> 428
+    case ASPECT_21_9: return 560;                         // 240*21/9 == 560
+    case ASPECT_AUTO: { int w = (int)((240.0 * win_w()) / win_h() + 0.5); w &= ~1;
+                        if (w < 320) w = 320; if (w > VRAM_W) w = VRAM_W; return w; }
+    default:          return 320;                         // ASPECT_4_3
+  }
+}
+static int W_wide(void) { return g_mods.aspect != ASPECT_4_3; }
+// Internal-res scale. Manual: g_mods.ires. Auto: ~round(window_h/240). Always clamped so the scaled FB
+// width (wide_native_w*ires) stays within VRAM_W=1024 and ires in [1,3].
+static int W_ires(void) {
+  int nw = wide_native_w(), cap = VRAM_W / nw; if (cap < 1) cap = 1; if (cap > 3) cap = 3;
+  int i = g_mods.ires_auto ? (int)((double)win_h() / 240.0 + 0.5) : g_mods.ires;
+  return i < 1 ? 1 : (i > cap ? cap : i);
+}
 #define s_wide (W_wide())
 #define s_ires (W_ires())
-static int FBW(void) { return (s_wide ? 428 : 320) * s_ires; }
+static int WIDE_OFF(void) { return (wide_native_w() - 320) / 2; }   // center the native 320 view in the wide FB
+static int FBW(void) { return wide_native_w() * s_ires; }
 static int FBH(void) { return 240 * s_ires; }
 static int use_fb(void) { return s_wide || s_ires > 1; }   // 3D goes through the scaled scratch FB
 static void wide_init(void) { mods_init(); }
+// Effective video status for the overlay (computed values, incl. auto). Any out ptr may be NULL.
+void gpu_vk_video_status(int* native_w, int* ires, int* fbw, int* fbh, int* ww, int* wh, int* ires_cap) {
+  wide_init();
+  int nw = wide_native_w(), cap = VRAM_W / nw; if (cap < 1) cap = 1; if (cap > 3) cap = 3;
+  if (native_w) *native_w = nw;   if (ires) *ires = s_ires;  if (fbw) *fbw = FBW();
+  if (fbh) *fbh = FBH();          if (ww) *ww = win_w();      if (wh) *wh = win_h();
+  if (ires_cap) *ires_cap = cap;
+}
 
 int gpu_vk_enabled(void) {
   if (s_vk_on < 0) {
@@ -669,7 +697,7 @@ static void push_wide(int enabled) {
   // ss = internal-res scale; the horizontal re-center (WIDE_OFF) applies only in 16:9, so 4:3 hi-res
   // just scales the native view by s_ires with no FOV change. (The PSXPORT_SBS depth select is a
   // pipeline specialization constant, not a push constant — see SBS_NATIVE in the shaders.)
-  int32_t va[8] = { enabled, FB_Y0, s_ires, IMG_H,   s_wide ? WIDE_OFF : 0, FBW(), FBH(), 0 /*fb_x0*/ };
+  int32_t va[8] = { enabled, FB_Y0, s_ires, IMG_H,   s_wide ? WIDE_OFF() : 0, FBW(), FBH(), 0 /*fb_x0*/ };
   vkCmdPushConstants(s_cmd, s_pll, VK_SHADER_STAGE_VERTEX_BIT, 16, 32, va);
 }
 
@@ -970,7 +998,7 @@ static void ssao_pass(void) {
   // screen map: VRAM pixel -> PSX screen coord. Faithful = (vram - present_origin); wide/hi-res FB =
   // ((vram - fb_origin)/ires - wide_off) — inverse of the tritex.vert relocation.
   float org_x, org_y, off_x = 0.0f, off_y = 0.0f, inv_scale = 1.0f;
-  if (use_fb()) { org_x = 0.0f; org_y = (float)FB_Y0; inv_scale = 1.0f / (float)s_ires; off_x = s_wide ? (float)WIDE_OFF : 0.0f; }
+  if (use_fb()) { org_x = 0.0f; org_y = (float)FB_Y0; inv_scale = 1.0f / (float)s_ires; off_x = s_wide ? (float)WIDE_OFF() : 0.0f; }
   else          { org_x = (float)s_present_sx; org_y = (float)s_present_sy; }
   int viz = cfg_int("PSXPORT_SSAO_VIZ", 0);   // 1=AO factor; 2=normal; 3=lit (any deferred-viz)
   int flags = (ssao_on() ? 1 : 0) | (light_on() ? 2 : 0);
@@ -1069,7 +1097,12 @@ void gpu_vk_present(const uint16_t* src, int sx, int sy, int w, int h) {
   // so present 1:1 region->window. Else present the PSX display region. Aspect stays 4:3 unless wide.
   if (use_fb()) { sx = 0; sy = FB_Y0; w = FBW(); h = FBH(); }
   s_last_sx = sx; s_last_sy = sy; s_last_w = w; s_last_h = h;   // for on-demand gpu_vk_shot (debug server)
-  int aw = s_wide ? 16 : 4, ah = s_wide ? 9 : 3;
+  // Fit the scratch FB into the window at the SELECTED aspect (letterbox to 4:3/16:9/21:9); AUTO fills the
+  // window exactly (its FB aspect already == the window aspect). aw:ah = the aspect we letterbox to.
+  int aw, ah;
+  if (g_mods.aspect == ASPECT_AUTO) { aw = win_w(); ah = win_h(); }
+  else if (s_wide)                  { aw = wide_native_w(); ah = 240; }   // 16:9 -> 428:240, 21:9 -> 560:240
+  else                              { aw = 4; ah = 3; }
   int ow = s_extent.width, oh = s_extent.height;
   int npanes = s_sbs ? 2 : 1;                          // SBS: left pane = s_tex (default), right = s_tex_b (native)
   VkRect2D sc = { {0, 0}, s_extent };

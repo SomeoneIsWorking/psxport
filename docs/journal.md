@@ -4272,3 +4272,27 @@ with a much richer menu." → RE'd the in-game pause/Options menu and hooked it 
   Triangle: close" hint + the mod toggles) standing in for the game's options screen. SDL window opens
   top-left (0,0), 960x720 — NOT centered (earlier centered-crop assumption was wrong; the overlay is at
   ~(20,20)).
+
+## later-113 — overlay ON BY DEFAULT (windowed) + aspect modes {4:3,16:9,21:9,Auto} + auto internal-res
+User (frustrated): "you keep gating everything behind flags; I type ./run.sh and press F1 but no imgui
+shows." Root cause: the overlay init + native-depth/deferred infra were gated on `PSXPORT_UI`, which
+`./run.sh` never sets. Fix: **the overlay + its live-toggle infra are now ON BY DEFAULT for any WINDOWED
+VK run** — plain `./run.sh` brings the menu up and F1 toggles it; no flag. `PSXPORT_UI=0` opts out.
+- Decision lives in `mods_init()` (mods.c): `g_mods.ui = 1` when windowed (`PSXPORT_GPU_WINDOW` && !headless
+  && !SW && VK!=0), else 0; `PSXPORT_UI=1/0` forces. The native-depth gates (gpu_native.c ×3 lazy +
+  gte_beetle `attach_enabled`) now read **`g_mods.ui`** (not `cfg_on("PSXPORT_UI")`) and call the idempotent
+  `mods_init()` first so the value is set before the first GP0/GTE caches it (init-order safe). **Headless
+  stays faithful** (ui=0 → no native-depth) so the VK render-diff tooling is unchanged. Options-menu
+  override (0x8007B45C) is now always registered (its super-call fallback handles the no-overlay case).
+- **Aspect selector** replacing the wide checkbox: `g_mods.aspect` ∈ {4:3,16:9,21:9,Auto}. 4:3=320,
+  16:9=428, 21:9=560 native FB width; **Auto = the live window aspect** (`240*win_w/win_h`, even, ≤VRAM_W).
+  Present letterboxes to the selected aspect; Auto fills the window. `wide_native_w()`/`WIDE_OFF()` are now
+  dynamic (16:9 stays byte-identical: 428, off 54 — no regression to the known-good path).
+- **Auto internal-res** `g_mods.ires_auto`: ires ≈ round(window_h/240), clamped so `native_w*ires ≤ 1024`
+  (VRAM_W) and ≤3. Overlay shows the computed `(Nx)` + a "Render WxH | window WxH" status line.
+- Env: `PSXPORT_ASPECT=4:3|16:9|21:9|auto` (legacy `PSXPORT_WIDE=1`→16:9); `PSXPORT_IRES=N|auto`.
+- Verified: plain windowed run (only `PSXPORT_GPU_WINDOW=1`, NO `PSXPORT_UI`) → `[imgui] overlay up` +
+  screenshot `scratch/screenshots/default_ui.png` (Aspect 4:3, Render 320x240 | window 960x720). 21:9 +
+  auto-ires verified (Render 560x240, ires auto-capped 1x; `scratch/screenshots/aspect_menu.png`).
+  KNOWN: pushing the FOV to 21:9 on the seaside scene shows a garbled band where the game submits no
+  geometry for the extra-wide sides (a content/FOV limit of ultra-wide, NOT the 16:9 path) — needs a look.
