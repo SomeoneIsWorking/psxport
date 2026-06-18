@@ -670,6 +670,32 @@ void ov_perobj_flush(R3000* c) {
   submit_perobj_flush(c);
 }
 
+// NATIVE per-object render DISPATCH — gen_func_8003CCA4 (later-135). The phase-2 per-object render entry:
+// stash the current render object (scratch 0x1F80028C), compute the flush flag (= node[0xb]==0xf, the
+// "world" objects), select a case by idx = node[0xd]&0xb (idx>=9 → not rendered), and for the common
+// flush-only case (jump-table target 0x8003CD00) run the native per-object flush — NO guest render code.
+// The other cases add a secondary effect pass (gen_func_8003D584/8003F344/8003F3F4/8003F4C4/8003F594)
+// over the just-emitted packet range; those are not owned yet, so for them we super-call the recomp body
+// (which still calls the now-native func_8003CDD8 for the flush, then the secondary pass). At the field
+// only idx0 (flush-only) fires (PSXPORT_DEBUG=ccase: 1 call/frame, target 0x8003cd00). A/B: PEROBJ_RECOMP.
+static void submit_perobj_render(R3000* c) {
+  uint32_t node = c->r[4];
+  mem_w32(SCR + 0x28C, node);                          // current render object (read by downstream code)
+  uint32_t idx = mem_r8(node + 0xD) & 0xB;
+  if (idx >= 9) return;                                // not rendered
+  uint32_t flag = (mem_r8(node + 0xB) == 0xF) ? 1u : 0u;
+  uint32_t tgt = mem_r32(0x80014EC8u + idx * 4);
+  if (tgt == 0x8003CD00u) {                            // flush-only case → native flush, no guest render
+    c->r[4] = node; c->r[5] = flag; submit_perobj_flush(c);
+    return;
+  }
+  rec_super_call(c, 0x8003CCA4u);                      // case w/ a secondary effect pass — not owned yet
+}
+void ov_perobj_render(R3000* c) {
+  if (cfg_on("PSXPORT_PEROBJ_RECOMP")) { rec_super_call(c, 0x8003CCA4u); return; }
+  submit_perobj_render(c);
+}
+
 // PSXPORT_DEBUG=subcnt — submitter call-counter. Registered (super-call) on candidate submit fns to see
 // which actually fire per scene + how often, so the un-owned variants worth porting are picked by data,
 // not guesswork. One slot per registered address; per-present-frame counts flushed on frame change.
@@ -687,6 +713,24 @@ static void subcnt_tick(R3000* c, uint32_t addr) {
 }
 void ov_subcnt_b320(R3000* c) { subcnt_tick(c, 0x8003B320u); }
 void ov_subcnt_c8f4(R3000* c) { subcnt_tick(c, 0x8003C8F4u); }
+
+// PSXPORT_DEBUG=ccase — gen_func_8003CCA4 case histogram. The per-object render dispatch selects a
+// secondary effect pass by idx = node[0xd]&0xb (idx>=9 = no render). Logs the idx + the jump-table
+// target (0x80014ec8[idx]) so we know which cases (and which secondary-pass fns) actually fire at the
+// field — i.e. whether owning 8003CCA4 natively needs the secondary passes or is flush-only. Super-calls.
+static uint32_t s_cc[12], s_cctgt[12]; static int s_cc_lastf = -1;
+void ov_ccase_probe(R3000* c) {
+  uint32_t node = c->r[4];
+  uint32_t idx = mem_r8(node + 0xD) & 0xB;
+  if (s_frame != s_cc_lastf) {
+    if (s_cc_lastf >= 0) { fprintf(stderr, "[ccase] f%d", s_cc_lastf);
+      for (int i = 0; i < 12; i++) if (s_cc[i]) fprintf(stderr, " idx%d=%u(t=%08x)", i, s_cc[i], s_cctgt[i]);
+      fprintf(stderr, "\n"); }
+    s_cc_lastf = s_frame; for (int i = 0; i < 12; i++) s_cc[i] = 0;
+  }
+  if (idx < 12) { s_cc[idx]++; s_cctgt[idx] = (idx < 9) ? mem_r32(0x80014EC8u + idx * 4) : 0; }
+  rec_super_call(c, 0x8003CCA4u);
+}
 
 // --- Auto-ownership of the SAME submit library when it appears in a runtime-loaded overlay --------
 // The two resident submit fns above are also present, the same ALGORITHM (verified — only register

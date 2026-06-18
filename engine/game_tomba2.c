@@ -410,8 +410,9 @@ void games_tomba2_init(void) {
   // render code (later-133). A/B: PSXPORT_PEROBJ_RECOMP=1 keeps the recomp body. (PSXPORT_DEBUG=flush2
   // re-overrides the same addr below with the probe, which super-calls the recomp body.)
   if (!cfg_on("PSXPORT_PEROBJ_RECOMP")) {
-    void ov_perobj_flush(R3000*);
+    void ov_perobj_flush(R3000*), ov_perobj_render(R3000*);
     rec_set_override(0x8003CDD8u, ov_perobj_flush);
+    rec_set_override(0x8003CCA4u, ov_perobj_render);   // per-object render dispatch (flush-only case native)
   }
   fps60_init();
   // cull tap: ALWAYS registered — genuine-wide is the default wide path and the overlay can toggle aspect
@@ -435,6 +436,8 @@ void games_tomba2_init(void) {
   // Submitter call-counter (PSXPORT_DEBUG=subcnt): which un-owned submit variants fire per scene. Gated.
   if (cfg_dbg("subcnt")) { void ov_subcnt_b320(R3000*), ov_subcnt_c8f4(R3000*);
     rec_set_override(0x8003B320u, ov_subcnt_b320); rec_set_override(0x8003C8F4u, ov_subcnt_c8f4); }
+  // Per-object dispatch case histogram (PSXPORT_DEBUG=ccase): which gen_func_8003CCA4 cases fire. Gated.
+  if (cfg_dbg("ccase")) { void ov_ccase_probe(R3000*); rec_set_override(0x8003CCA4u, ov_ccase_probe); }
   void engine_tomba2_init(void);
   engine_tomba2_init();                            // native engine layer (Phase 1: object-list walk)
 }

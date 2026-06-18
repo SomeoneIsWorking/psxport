@@ -5092,6 +5092,16 @@ code runs — not `gen_func_8003CDD8`, not the dispatcher `gen_func_8003F698`, n
   per-object submission through this native flush; the remaining guest calls (`8003CCA4` transform
   dispatch, `80051C8C` transform build) are gameplay-0-diff (node_diff) and are the next lift so the
   margin needs no guest render at all.
-- **NEXT:** own `gen_func_8003CCA4` (per-object render dispatch, jump table `0x80014ec8` by `node+0xd`) +
-  `gen_func_80051C8C` (transform build) natively → fully native per-object render; then the overlay
-  submitter variants (`0x8013xxxx`, `0x80027768` resident) for full field depth + native margin.
+- **`gen_func_8003CCA4` (per-object render DISPATCH) now also native** (`submit_perobj_render`): stash
+  current render object (scratch `0x1F80028C`), flush flag = `node[0xb]==0xf`, case idx = `node[0xd]&0xb`
+  (≥9 = not rendered); the flush-only case (jump-table `0x80014ec8[idx]` target `0x8003CD00`) runs the
+  native flush — NO guest render. The secondary-effect-pass cases (`8003D584`/`8003F344`/`8003F3F4`/
+  `8003F4C4`/`8003F594`) super-call the recomp body (not owned yet). `PSXPORT_DEBUG=ccase`: at the field
+  8003CCA4 fires 1×/frame, idx0 (flush-only) → owning it is complete for the field. VRAM byte-identical
+  native (8003CDD8+8003CCA4) vs recomp @f410.
+- **`PSXPORT_DEBUG=subcnt` finding:** the un-owned GT3/GT4 variants `0x8003B320`/`0x8003C8F4` fire ZERO
+  times at the field (they belong to other scenes — the f560 image). So the field's render is fully owned:
+  native per-object dispatch+flush + the byte-packed `0x80027768` (bulk terrain) + the GT3/GT4 library.
+- **NEXT:** drive to the scenes that use `0x8003B320`/`0x8003C8F4`/overlay `0x8013xxxx` and port those
+  submit variants; own `gen_func_80051C8C` (transform build, interpreted-only — not in the recomp set, RE
+  from RAM); then the native widescreen margin (replace the guest-flush margin_render.cpp).
