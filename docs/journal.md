@@ -4722,3 +4722,36 @@ add the intended extra render prims? That must be MEASURED (drive wide vs 4:3 to
 state vs the oracle) before committing to a large native-object-render rewrite. If it does NOT diverge, the
 collision concern is fully addressed by later-125 + the reverted OFX, and approach-B's value is purely the
 long-term native-port goal, not corruption avoidance. Probe `PSXPORT_DEBUG=bucket` kept for that work.
+
+## later-127 — PROVEN: the widescreen re-include perturbs gameplay LOGIC (not just rendering)
+Answers later-126's open empirical question. Method: the port is deterministic, AUTO_GAMEPLAY gives
+identical scripted input, so a 4:3 vs 16:9 self-diff of guest RAM (PSXPORT_RAMDUMP_FRAME) isolates exactly
+the wide path. Tool: `tools/ram_region_diff.py` (buckets differing bytes by the later-125 render-buffer map
+vs everything else). Entity walk compares each node's gameplay fields (pos +0x2e/32/36, state +0x28, type
++0xc, handler +0x1c).
+
+**Determinism confirmed:** two identical 4:3 runs are byte-identical (cmp) — so any 4:3-vs-16:9 difference is
+real, not run-to-run noise.
+
+**Result (field, native frame 438):**
+- 4:3 vs 16:9: entity LIST heads + node count/order/type/state/handler all identical, BUT **14 objects'
+  POSITIONS diverge** (4 in list1 head 0x800FB168, 10 in list2 head 0x800F2624). list2 = ten type-0x06
+  objects (z≈-32748 parked, x jitters ±70 = being animated/ticked); list1 includes a type-0x05 that moved
+  far AND **two type-0x02 objects that go (0,0,0)→real position** = the re-include ACTIVATES dormant objects.
+- **Isolation (PSXPORT_CULL_FAR=0 disables the re-include, keeps wide projection): 4:3 vs 16:9 position-diff
+  drops to 0 in BOTH lists.** => the re-include `mem_w8(o+1,1)` in ov_object_cull (game_tomba2.c) is THE
+  cause. Wide native projection (OFX/clip) is logic-clean (later-122), as expected.
+
+**Conclusion — later-124 mechanism #1 is PROVEN, not hypothetical:** forcing culled objects render-visible
+makes the game TICK/ACTIVATE objects it meant to skip (many games only advance an object's
+animation/physics/spawn when it passes the cull). That is genuine gameplay-state perturbation — the
+"sometimes worse." Genuine-wide via the re-include is NOT faithful.
+
+**Plan, sharpened (supersedes the generic step-3 framing):** widescreen must render the wider *static* world
+content (terrain/water tiles, which also pass this per-object cull) NATIVELY from its data, WITHOUT poking
+dynamic objects to tick — benefactor approach B exactly ("keep the engine's own updates as the game did
+them; the WIDE part is native"). A naive type-filter on the re-include is rejected (magic-constant bandaid):
+the proper path is the native object→prim render of the static margin geometry, leaving dynamic entities
+culled exactly as 4:3 does. Prereq RE: classify which entity types (+0xc) are static-world vs dynamic, and
+whether the static ones can be projected+emitted natively from their model/transform without their handler.
+Probes kept: `tools/ram_region_diff.py`, `PSXPORT_RAMDUMP_FRAME`, `PSXPORT_CULL_FAR=0` (re-include A/B).
