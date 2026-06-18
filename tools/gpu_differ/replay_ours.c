@@ -31,6 +31,39 @@ void     watchdog_pet(void)  {}
 // SOFTWARE rasterizer only (gpu_vk_enabled()==0, g_fps60_on==0), so these are never CALLED — they just
 // need to LINK. Empty-param defs link by symbol name regardless of the call sites' prototypes.
 int  g_fps60_on = 0;
+// cfg (env flags) + scene-dump: gpu_native.c / native_dl.c reference these outside the GP0 replay path
+// (DL-mode select, SCENEDUMP). The differ replays a fixed stream with no flags, so return defaults.
+const char* cfg_str(const char* k) { (void)k; return 0; }
+int  cfg_on (const char* k) { (void)k; return 0; }
+int  cfg_dbg(const char* k) { (void)k; return 0; }
+void gpu_scene_dump() {}
+void proj_probe_dump() {}      // PSXPORT_PROJPROBE / RTP-caller probes (off in replay)
+void rtpcaller_dump() {}
+void rtpcaller_reset() {}
+// Native-depth / projprim infra (gte_beetle.c): the differ runs the SW rasterizer with native depth off,
+// so these only need to link. native_depth_on/attach_enabled return 0 → the depth lookups are never hit.
+int  g_pp_hit, g_pp_set, g_pp_miss;
+void projprim_reset() {}
+float projprim_lookup_pz() { return 0.0f; }
+float proj_pz_to_ord() { return 0.0f; }
+int  attach_enabled(void) { return 0; }
+int  native_depth_on(void) { return 0; }
+void trace_flush() {}             // GPU trace writer (capture-side only; replay doesn't re-trace)
+void trace_record() {}
+void trace_arm() {}
+void gpu_provat_display() {}      // PSXPORT_PROVAT pixel-provenance (off in replay)
+void gpu_prov_dump(int vx, int vy) { (void)vx; (void)vy; }   // provenance lives in gpu_debug.c (not linked here)
+// VK depth/order/semi hooks gpu_native.c tees to — never reached with gpu_vk_enabled()==0, link-only.
+void gpu_vk_semi_group() {}
+void gpu_vk_set_order() {}
+void gpu_vk_set_order_2d() {}
+void gpu_vk_set_order_2d_bg() {}
+void gpu_vk_set_order_2d_bg_n() {}
+void gpu_vk_set_order_2d_n() {}
+void gpu_vk_set_vd() {}
+void gpu_vk_set_vd_n() {}
+int  gpu_vk_wide_engine(void)   { return 0; }
+int  gpu_vk_wide_engine_w(void) { return 320; }
 int  gpu_vk_enabled(void) { return 0; }
 void gpu_vk_draw_tritri() {}
 void gpu_vk_draw_semi() {}

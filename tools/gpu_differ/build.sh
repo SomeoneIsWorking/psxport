@@ -5,7 +5,7 @@ set -eu
 cd "$(dirname "$0")/../.."
 CC="${CC:-cc}"
 mkdir -p scratch/bin
-$CC -O2 -g -w -Iruntime/recomp \
-  tools/gpu_differ/replay_ours.c runtime/recomp/gpu_native.c \
+$CC -O2 -g -w -Iruntime/recomp -Iengine \
+  tools/gpu_differ/replay_ours.c runtime/recomp/gpu_native.c engine/native_dl.c \
   -o scratch/bin/replay_ours
 echo "[build] scratch/bin/replay_ours"

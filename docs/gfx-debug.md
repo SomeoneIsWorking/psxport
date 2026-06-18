@@ -58,3 +58,14 @@ re-reason"; this is its project-specific enforcement.)
   gpu_differ stream replay (preferred). **Improve dualcore or prefer gpu_differ — do not fall back to
   eyeballing drifted screenshots.**
 - VK widescreen FB has a known 1x rasterization-gap (vertical bars); clean at SS=2. Separate from game.
+- **`replay_ours` links `gpu_native.c` standalone — keep its stub set in sync.** `gpu_native.c` keeps
+  growing external refs (native_dl, projprim/native-depth, VK depth/order hooks, trace, cfg, scene/prov
+  dumps); the differ runs the SW rasterizer only (`gpu_vk_enabled()==0`) so they just need to LINK.
+  `tools/gpu_differ/build.sh` now also compiles `engine/native_dl.c` with `-Iengine`, and
+  `replay_ours.c` stubs the cfg/projprim/VK/trace symbols. New link error after a `gpu_native.c` change
+  → add the stub there (it is NOT reached in replay), don't disable the diff.
+- **Native-ordering era (later-139+): capture 3D with `PSXPORT_DL_GUESTPKT=1`.** Owned 3D submitters now
+  build the HOST display list, not guest GP0 — so a plain `PSXPORT_GPUTRACE` has `poly=0` (only guest 2D
+  prims). `PSXPORT_DL_GUESTPKT=1` makes the submitters write full guest packets back into the OT stream
+  so `gpu_differ` sees the 3D geometry. (Used later-141 to prove the rasterizer faithful on the ocean
+  scene: ours-vs-Beetle = 0.76% / all d=3 dither residual.)
