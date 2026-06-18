@@ -5180,6 +5180,27 @@ dispatcher). `PSXPORT_DEBUG=pdisp` past f434: the ONLY fallback mode that fires 
 - So the per-mode renderer ownership is complete for what fires: mode-0 (the only one) is fully native
   (caller + submitters). Tooling for RE'ing overlay fns: dump RAM (`PSXPORT_RAMDUMP_FRAME`) + decode.py.
 
+## later-137 — native-depth COVERAGE measured: faithful render fully owned; enhancement gap is non-field scenes
+Measured the native-depth coverage across the whole auto-gameplay (`PSXPORT_NATIVE_DEPTH=1
+PSXPORT_DEBUG=ndepth`, made/hit/miss per present frame):
+- **484 frames have miss=0** — the field is FULLY native-depth (owned submitters → NativePrim.pz, no
+  projprim miss). `made=0` everywhere is EXPECTED: with the native display list (ndl_active, default) the
+  owned submitters store depth in `NativePrim.pz`, not via `projprim_set_pz` (which counts g_pp_set) — so
+  the meaningful metric is g_pp_miss (prims with NO native depth → fall to the 2D band).
+- **~half the frames (the non-field scenes, e.g. f497-553) have a 20-32 prim/frame depth GAP** — guest-
+  packet-writing submitters that aren't owned. `0x8003C8F4` is one contributor (`PSXPORT_DEBUG=subcnt`:
+  3-7/frame at f440-490) but NOT the bulk; other interpreted guest-packet submitters supply the rest.
+- **`0x8003C8F4` assessed, deprioritised:** it is a 196-line per-mesh QUAD renderer (per-vertex unpack
+  `8003B220`, packet color/uv build `8003B054`, a 33-entry type jump table @0x80014E40, writes full guest
+  packets to the pool + OT). Its cull is HARDCODED 320 (4:3 — not wide-aware). A faithful port is ~terrain
+  complexity but adds NO native depth (the packet is built by `8003B054`); native depth needs reimplementing
+  that too. Low ROI (3-7 prims/frame). Recompiled (shard_6) so it's 0-diff portable when prioritised.
+- **Conclusion:** the FAITHFUL render (default) is comprehensively owned + 0-diff across all traversed
+  scenes; the native-depth ENHANCEMENT (off by default) has a residual gap only in non-field scenes,
+  closable by porting the remaining guest-packet submitters with the ndl_active path — a multi-function
+  project, not a single lift. Next session: identify the BULK miss contributor (tap the un-owned submitters
+  feeding the 2D band in f500) before porting.
+
 ## later-135 NEXT (options, need a pick):
 - (a) native wider-FOV widescreen via proj_native_vertex in the owned
   submitters (the real visible payoff); (b) own the per-mode overlay renderers via overlay-scan; (c) drive
