@@ -32,19 +32,23 @@ headless. Pairs with `gfx-debug.md` (the debug workflow + tool catalog) and `con
   - **Default (OT order):** each prim gets one normalized depth `s_cur_ord = (OT_index+1)/65536`
     (`gpu_vk_set_order`). Opaque writes depth (compare `GREATER_OR_EQUAL`, clear 0.0); semi tests, no
     write. Reproduces painter/OT order. This is the faithful oracle.
-  - **`PSXPORT_NATIVE_DEPTH` (Phase 2, real per-vertex depth):** for a prim whose every vertex resolves
-    to a projected 3D vertex, `gp0_exec` looks up the native view-space depth (`projprim_lookup_pz`→`pz`,
-    `proj_pz_to_ord` → inverse-depth in [0,1]) and hands it per-vertex via `gpu_vk_set_vd`; the D32
-    buffer then does true per-pixel occlusion. The single buffer is partitioned: **3D world** in
-    `[0, NATIVE_3D_MAX=0.9375]`, **2D/HUD overlay** (any vertex misses the lookup → screen-space prim)
-    in `(0.9375, 1]` via `gpu_vk_set_order_2d`, so UI composites over the world. **Env-gated, default off.**
+  - **Native per-vertex depth (Phase 2) — NOW THE DEFAULT (`native_depth_on()`, always on):** for a prim
+    whose every vertex resolves to a projected 3D vertex, `gp0_exec` looks up the native view-space depth
+    (`projprim_lookup_pz`→`pz`, `proj_pz_to_ord` → inverse-depth in [0,1]) and hands it per-vertex via
+    `gpu_vk_set_vd`; the D32 buffer then does true per-pixel occlusion. The single buffer is partitioned:
+    **3D world** in `[0, NATIVE_3D_MAX=0.9375]`, **2D/HUD overlay** (any vertex misses the lookup →
+    screen-space prim) in `(0.9375, 1]` via `gpu_vk_set_order_2d`, so UI composites over the world.
+    **This is a PC GAME: real per-pixel depth is the default** (the OT-order painter's algorithm is the
+    PSX limitation, and genuine widescreen needs real depth). Opt OUT only to A/B-diff the faithful
+    OT-order oracle: **`PSXPORT_FAITHFUL_DEPTH=1`** (or legacy `PSXPORT_NATIVE_DEPTH=0`). The deferred
+    SHADING pass (SSAO/light) is separate and still opt-in. (later-118; field attach coverage ~100%.)
   - **Depth source = the OWNED submit path (engine/engine_submit.c), NOT a measurement hack.** Because the
     engine builds each GPU packet itself (the native POLY_GT3/GT4 submit), it records every vertex's real
     SZ (view-Z) keyed by the packet vertex word's ADDRESS (`projprim_set_pz`, gte_beetle.c); the renderer
     looks it up by the OT read address. Exact + deterministic. The table is reset each frame. This
     REPLACED the old "attach" infra (gte_op SXY-ring capture + value-matched mem.c store hook) — that
     correlated depth and was unreliable (same-pixel ambiguity, cross-frame staleness), now deleted.
-    `attach_enabled()` (= `PSXPORT_NATIVE_DEPTH || PSXPORT_SBS`) gates the recording + reset.
+    `attach_enabled()` (= `native_depth_on() || PSXPORT_SBS`) gates the recording + reset.
     OPEN: only OWNED-submit prims carry real depth; prims from not-yet-ported overlay submitters fall to
     the 2D band, and 3D-projected overlay banners (e.g. a hint sign drawn on-top by OT order) get their
     true geometric depth and so sit behind nearer world geo — overlay-vs-world depth semantics, next.

@@ -564,8 +564,8 @@ static void gp0_exec(void) {
       // to the SEPARATE native channel (set_vd_n / set_order_2d_n) leaving the default OT .ord intact,
       // so the renderer can draw left=default / right=native. NATIVE_DEPTH replaces the single channel.
       static int s_ndepth = -1, s_sbs = -1;
-      // SSAO implies the native-depth path (it needs the real per-vertex depth buffer to read).
-      if (s_ndepth < 0) s_ndepth = (cfg_on("PSXPORT_NATIVE_DEPTH") || cfg_on("PSXPORT_SSAO") || cfg_on("PSXPORT_LIGHT") || cfg_on("PSXPORT_UI")) ? 1 : 0;
+      int native_depth_on(void);            // PC-native per-pixel depth — ALWAYS ON (opt out: PSXPORT_FAITHFUL_DEPTH)
+      if (s_ndepth < 0) s_ndepth = native_depth_on();
       if (s_sbs < 0) s_sbs = cfg_on("PSXPORT_SBS") ? 1 : 0;
       float dep[4]; int is3d = 0;
       if (s_ndepth || s_sbs) {
@@ -689,8 +689,8 @@ static void gp0_exec(void) {
       unsigned ord_idx = s_prim_order++;
       gpu_vk_set_order(ord_idx);          // OT submission order -> depth (preserve opaque/semi order)
       // sprites/rects are screen-space (no GTE projection) -> 2D overlay band under PSXPORT_NATIVE_DEPTH.
-      { static int s_ndepth = -1, s_sbs = -1;
-        if (s_ndepth < 0) s_ndepth = (cfg_on("PSXPORT_NATIVE_DEPTH") || cfg_on("PSXPORT_SSAO") || cfg_on("PSXPORT_LIGHT") || cfg_on("PSXPORT_UI")) ? 1 : 0;
+      { static int s_ndepth = -1, s_sbs = -1; int native_depth_on(void);
+        if (s_ndepth < 0) s_ndepth = native_depth_on();
         if (s_sbs < 0) s_sbs = cfg_on("PSXPORT_SBS") ? 1 : 0;
         void gpu_vk_set_order_2d(unsigned); void gpu_vk_set_order_2d_n(unsigned);
         void gpu_vk_set_order_2d_bg(unsigned); void gpu_vk_set_order_2d_bg_n(unsigned);
@@ -702,10 +702,21 @@ static void gp0_exec(void) {
       void gpu_vk_draw_semi(const int*,const int*,const int*,const int*,const unsigned char*,
                             const unsigned char*,const unsigned char*,int,int,int,int,int,int,int,int,int,int,int,int,int,int,int);
       int X = x + s_off_x, Y = y + s_off_y;
-      // widescreen: anchor the sprite to its proportional screen position (HUD edge-anchoring) instead
-      // of letting the renderer center it. No-op when not wide. (s_da_x0 = active framebuffer origin.)
-      { int gpu_vk_sprite_anchor_dx(int); X += gpu_vk_sprite_anchor_dx((X - s_da_x0) + w/2); }
-      int qx[4] = { X, X+w, X, X+w }, qy[4] = { Y, Y, Y+h, Y+h };
+      int XL = X, XR = X + w;
+      // Widescreen 2D handling. The genuine engine-wide path (PSXPORT_WIDE_ENGINE) widens the 3D world at
+      // the projection (OFX); 2D sprites (sky/water backdrop + HUD) bypass the GTE, so they must be widened
+      // here. Scale the whole 2D plane uniformly to the wide width around the framebuffer origin (s_da_x0)
+      // so a tiled backdrop fills the frame with NO gaps (the per-sprite anchor-SPREAD below gapped
+      // adjacent tiles -> vertical stripes). NOTE: stepping stone — this scales HUD size too; the proper
+      // split (backdrop scales, HUD anchors at native size) needs always-on 3D/2D classification (B4).
+      { int gpu_vk_wide_engine(void), gpu_vk_wide_engine_w(void), gpu_vk_sprite_anchor_dx(int);
+        if (gpu_vk_wide_engine()) {
+          int o = s_da_x0, ww = gpu_vk_wide_engine_w();   // map native [0,320] about origin -> [0,ww]
+          XL = o + (XL - o) * ww / 320; XR = o + (XR - o) * ww / 320;
+        } else {                                          // FB-hack path: per-sprite edge-anchor (unchanged)
+          int dx = gpu_vk_sprite_anchor_dx((X - s_da_x0) + w/2); XL += dx; XR += dx;
+        } }
+      int qx[4] = { XL, XR, XL, XR }, qy[4] = { Y, Y, Y+h, Y+h };
       int qu[4] = { u0, u0+w, u0, u0+w }, qv[4] = { v0, v0, v0+h, v0+h };
       unsigned char qr[4]={cr,cr,cr,cr}, qg[4]={cg,cg,cg,cg}, qb[4]={cb,cb,cb,cb};
       int mode = textured ? s_tp_mode : 3, rw = op & 1;
@@ -1150,7 +1161,8 @@ void gpu_present_ex(int do_blit) {
   // vertex word never reads an OLD frame's depth. The engine (engine_submit.c) repopulates it each frame.
   { int attach_enabled(void); void projprim_reset(void);
     if (attach_enabled()) projprim_reset(); }
-  { if (cfg_on("PSXPORT_NATIVE_DEPTH") || cfg_on("PSXPORT_SBS") || cfg_on("PSXPORT_SSAO") || cfg_on("PSXPORT_LIGHT") || cfg_on("PSXPORT_UI")) {
+  { int native_depth_on(void);
+    if (native_depth_on() || cfg_on("PSXPORT_SBS")) {
       extern long g_nd_3d, g_nd_2d;
       if (cfg_dbg("ndepth") && s_frame > 0 && (s_frame % 60) == 0)
         fprintf(stderr, "[ndepth f%d] real-depth(3D) prims=%ld  OT-band(2D) prims=%ld  3D%%=%.1f\n",

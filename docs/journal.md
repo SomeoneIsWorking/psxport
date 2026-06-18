@@ -4392,3 +4392,33 @@ faithful 4:3 path is untouched (the 0-diff gate).
   currently the VK shader clips to the FB rect so it's not blocking); then retire the FB spread (step 6).
 - **Corrects memory [[tomba2-mods-status]]:** "Widescreen DONE/works (true wider FOV, no stretch)" was
   FALSE — that was the FB-hack stretch. Genuine wide is in progress behind PSXPORT_WIDE_ENGINE.
+
+## later-118 — PC-NATIVE per-pixel depth is now the DEFAULT (always-on), not opt-in (user directive)
+User (emphatic): "PC game native depth should ALWAYS be active. Genuine wide can't be genuine without
+native depth. Everything needs to be PC GAME." Acted on it.
+- **Root-cause of the opt-in:** the prior session (796740b) reverted native-depth to opt-in
+  (`PSXPORT_UI`/`NATIVE_DEPTH`) because defaulting it on "could corrupt not-yet-owned submit paths." That
+  was a PRECAUTIONARY revert (a bandaid), not a pinned bug — exactly the "gate it off instead of fixing the
+  cause" trap. Re-checked empirically: native depth renders the field, the boot/prologue cutscene, AND
+  genuine-wide 16:9 CORRECTLY (`scratch/screenshots/nd_{def43,boot,wide169}.png`). Field ndepth stats:
+  **depth records=1807, lookups hit=1807, miss=34** — the 34 misses are exactly the 2D sprites/HUD that
+  bypass the GTE (correctly classified 2D); 3D-vertex attach coverage is effectively 100%. No corruption.
+- **Change:** new `native_depth_on()` (gte_beetle.c) = the single gate, **default ON**. Opt OUT only for
+  oracle A/B diffing: `PSXPORT_FAITHFUL_DEPTH=1` (or legacy `PSXPORT_NATIVE_DEPTH=0`). Replaced the
+  scattered `cfg_on("NATIVE_DEPTH")||SSAO||LIGHT||UI` gates (gpu_native.c ×3, gte_beetle `attach_enabled`)
+  with it. The deferred SHADING pass (SSAO/light, `deferred_on()`/`ui_infra()`) stays OPT-IN — only the
+  per-pixel DEPTH model is now default. `s_seen3d` (backdrop-vs-HUD 2D classification) is therefore now
+  maintained every run, which the genuine-wide 2D work needs.
+- **Why it matters for wide:** the OT-order painter's algorithm assumes the authored 4:3 viewpoint; widen
+  the FOV and that order mis-occludes. Real per-pixel depth (D32, per-vertex view-Z) is correct at any FOV.
+
+## later-118b — genuine-wide 2D backdrop fills the frame (kills the vertical stripes)
+The genuine-wide 16:9 (later-117) showed vertical sky/backdrop STRIPES. Root cause (confirmed, not
+eyeballed): the screen-space 2D sprites (sky/water = 355 rects in the field) were spread apart by the
+per-sprite `gpu_vk_sprite_anchor_dx` FB-hack — adjacent backdrop tiles get DIFFERENT anchor shifts →
+gaps. Fix (gpu_native.c sprite path, gated `gpu_vk_wide_engine()`): in genuine-wide, scale the whole 2D
+plane uniformly to the wide width about the framebuffer origin (`XL/XR = o + (X-o)*wide_w/320`) so a tiled
+backdrop fills the frame contiguously (no gaps). Verified: `scratch/screenshots/field_wide169b.png` — sky
+gradient + ocean now fill the 16:9 frame cleanly, stripes gone. STEPPING STONE: this also scales HUD size;
+the proper split (backdrop scales to fill, HUD anchors at native size) uses the now-always-on `s_seen3d`
+bg/HUD flag — next. The HUD banner cut at 320 also remains (a clip item, B4/step2).
