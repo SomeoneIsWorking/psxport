@@ -4434,3 +4434,23 @@ still drop at the far-right edge (a clip/source-position item, B4 polish — not
 Together later-117/118/118b/118c: genuine-wide 16:9 now = real wider FOV + native per-pixel depth +
 2D backdrop/HUD scaled to fill, no stripes. Remaining: HUD right-edge polish, frustum cull side-gaps (B3),
 own PutDrawEnv clip (step2), then make genuine-wide the DEFAULT wide path + retire the FB spread (step6).
+
+## later-119 — genuine-wide: the missing RIGHT-SIDE TERRAIN (own the submit frustum cull) + 2D-screen pillarbox
+User: "there is terrain on the right in the real game — do more RE, port more of the engine." RE'd it.
+- **Root cause (engine-level, in code we OWN):** the geometry submit (`engine_submit.c` GT3 `0x8007FDB0`
+  / GT4 `0x8008007C`) frustum-culls a prim if ALL its verts have `SX >= 320` (off the 4:3 right edge).
+  In genuine-wide the screen extends to 428, so geometry projected into the [320,428) right band is
+  ON-screen but the engine's own submit DROPPED it -> ocean where terrain should be. Fix: `submit_xmax()`
+  = 428 (wide width) when `gpu_vk_wide_engine()`, else 320 (faithful). Applied to BOTH GT3 + GT4 culls.
+  (The byte-packed GT4 variant `submit_poly_gt4_bp` `0x80027768` has NO SX cull, so it was already wide;
+  the overlay-scanned submitters share the GT3/GT4 native impl, so they widen too.) Verified
+  `scratch/screenshots/v2_field.png`: the hut/structure + terrain on the right now appear (was ocean).
+  OPEN: un-owned recompiled submit variants (`0x8003B320`/`0x8003C8F4` etc., still interpreted) keep their
+  own 320 cull — if a scene's side geometry comes from those, port them too (engine_re.md OPEN list).
+- **2D-only screens pillarbox (PC-game behavior):** genuine-wide is a GAMEPLAY feature; fullscreen-2D
+  screens (SCEA/FMV/title/menu) are authored for 4:3 and the uniform 2D-scale mangled them (later: SCEA
+  text scaled+cut, boot cutscene black). Fix: track `s_prev_had3d` (did last frame draw any 3D = a
+  gameplay frame; `gpu_had3d_last_frame()`). The wide 2D-scale (sprite + poly paths) now only applies on
+  gameplay frames; and the present PILLARBOXES 2D-only frames (sample the 4:3 FB region + letterbox 4:3)
+  instead of stretching 320 across the wide frame. Verified: SCEA text back to native size
+  (`scratch/screenshots/v2_title.png`); field still genuine-wide. 1-frame transition lag is invisible.

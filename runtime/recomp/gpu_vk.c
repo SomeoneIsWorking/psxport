@@ -1114,14 +1114,21 @@ void gpu_vk_present(const uint16_t* src, int sx, int sy, int w, int h) {
   rp.renderArea.extent = s_extent; rp.clearValueCount = 1; rp.pClearValues = &clear;
   vkCmdBeginRenderPass(s_cmd, &rp, VK_SUBPASS_CONTENTS_INLINE);
 
+  // Genuine-wide is a GAMEPLAY feature: a fullscreen-2D screen (SCEA/FMV/title/menu = no 3D last frame)
+  // is authored for 4:3, so PILLARBOX it (sample only the 4:3 FB region + letterbox 4:3) instead of
+  // stretching the 320 content across the wide frame. That's the PC-game behavior, and it stops the wide
+  // 2D-scale from mangling those screens. (1-frame lag at scene transitions is invisible.)
+  int gpu_had3d_last_frame(void);
+  int pillarbox_2d = gpu_vk_wide_engine() && !gpu_had3d_last_frame();
   // Present the scaled scratch FB (wide 16:9 OR 4:3 hi-res) — it was rendered denser at native FOV/scale,
   // so present 1:1 region->window. Else present the PSX display region. Aspect stays 4:3 unless wide.
-  if (use_fb()) { sx = 0; sy = FB_Y0; w = FBW(); h = FBH(); }
+  if (use_fb()) { sx = 0; sy = FB_Y0; w = pillarbox_2d ? 320 * s_ires : FBW(); h = FBH(); }
   s_last_sx = sx; s_last_sy = sy; s_last_w = w; s_last_h = h;   // for on-demand gpu_vk_shot (debug server)
   // Fit the scratch FB into the window at the SELECTED aspect (letterbox to 4:3/16:9/21:9); AUTO fills the
   // window exactly (its FB aspect already == the window aspect). aw:ah = the aspect we letterbox to.
   int aw, ah;
-  if (g_mods.aspect == ASPECT_AUTO) { aw = win_w(); ah = win_h(); }
+  if (pillarbox_2d)                 { aw = 4; ah = 3; }                   // fullscreen-2D screen -> 4:3 pillarbox
+  else if (g_mods.aspect == ASPECT_AUTO) { aw = win_w(); ah = win_h(); }
   else if (s_wide)                  { aw = wide_native_w(); ah = 240; }   // 16:9 -> 428:240, 21:9 -> 560:240
   else                              { aw = 4; ah = 3; }
   int ow = s_extent.width, oh = s_extent.height;

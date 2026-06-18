@@ -58,6 +58,10 @@ static uint32_t s_prim_order = 0; // per-frame OT submission index of the curren
 static int s_seen3d = 0;          // has any GTE-projected (3D) prim been teed yet this frame? Non-3D
                                   // prims before the first 3D one are backdrop (water/sky) -> FAR band;
                                   // after, they are HUD/UI -> near overlay band (native-depth bands).
+static int s_prev_had3d = 0;      // did LAST frame draw any 3D? = "this is a gameplay (3D) frame". Used to
+                                  // pillarbox genuine-wide on fullscreen-2D screens (SCEA/FMV/title/menu):
+                                  // widen only gameplay; 2D-only frames present 4:3 (the PC-game behavior).
+int gpu_had3d_last_frame(void) { return s_prev_had3d; }
 static long s_gp0_words = 0, s_dma2 = 0;  // diagnostics: GP0 words + DMA2 triggers per frame
 static uint32_t s_cur_node = 0;   // REDDBG: RAM addr of the OT node currently being fed to GP0
 uint32_t g_ot_madr = 0;           // last OT DMA root (extern in internal header)
@@ -595,7 +599,7 @@ static void gp0_exec(void) {
       // (Needs the now-always-on is3d classification.) Stepping stone: scales HUD size too; backdrop-vs-HUD
       // split is the next refinement. Gated to wide-engine; no effect at 4:3 or the FB-hack path.
       { int gpu_vk_wide_engine(void), gpu_vk_wide_engine_w(void);
-        if (s_ndepth && !is3d && gpu_vk_wide_engine()) {   // s_ndepth -> is3d is meaningful (default)
+        if (s_ndepth && !is3d && gpu_vk_wide_engine() && s_prev_had3d) {  // 2D widen only on gameplay frames
           int o = s_da_x0, ww = gpu_vk_wide_engine_w();
           for (int i = 0; i < nv; i++) xs[i] = o + (xs[i] - o) * ww / 320; } }
       #define SBS_OR_ND_SETVD(p) do { if (is3d) { if (s_sbs) gpu_vk_set_vd_n(p); else gpu_vk_set_vd(p); } } while (0)
@@ -720,10 +724,10 @@ static void gp0_exec(void) {
       // adjacent tiles -> vertical stripes). NOTE: stepping stone — this scales HUD size too; the proper
       // split (backdrop scales, HUD anchors at native size) needs always-on 3D/2D classification (B4).
       { int gpu_vk_wide_engine(void), gpu_vk_wide_engine_w(void), gpu_vk_sprite_anchor_dx(int);
-        if (gpu_vk_wide_engine()) {
+        if (gpu_vk_wide_engine() && s_prev_had3d) {       // only widen 2D on gameplay frames (else pillarbox)
           int o = s_da_x0, ww = gpu_vk_wide_engine_w();   // map native [0,320] about origin -> [0,ww]
           XL = o + (XL - o) * ww / 320; XR = o + (XR - o) * ww / 320;
-        } else {                                          // FB-hack path: per-sprite edge-anchor (unchanged)
+        } else if (!gpu_vk_wide_engine()) {               // FB-hack path: per-sprite edge-anchor (unchanged)
           int dx = gpu_vk_sprite_anchor_dx((X - s_da_x0) + w/2); XL += dx; XR += dx;
         } }
       int qx[4] = { XL, XR, XL, XR }, qy[4] = { Y, Y, Y+h, Y+h };
@@ -1249,6 +1253,7 @@ void gpu_present_ex(int do_blit) {
   { void gpu_vk_frame_end(const uint16_t*, int); gpu_vk_frame_end(s_vram, s_frame); }  // VK: diff + batch reset
   s_frame++; s_prims = 0; s_gp0_words = 0; s_dma2 = 0;
   s_prim_order = 0;   // restart the per-frame OT submission order (VK depth) for the next frame
+  s_prev_had3d = s_seen3d;   // remember whether this frame was a gameplay (3D) frame (wide pillarbox gate)
   s_seen3d = 0;       // restart backdrop-vs-HUD discrimination (no 3D prim seen yet next frame)
 }
 void gpu_present(void) { gpu_present_ex(1); }

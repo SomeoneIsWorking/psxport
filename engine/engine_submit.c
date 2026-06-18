@@ -31,6 +31,14 @@ static int s_submit_recomp = -1;   // PSXPORT_SUBMIT_RECOMP=1 -> keep the recomp
 static int submit_recomp(void) { if (s_submit_recomp < 0) s_submit_recomp = cfg_on("PSXPORT_SUBMIT_RECOMP") ? 1 : 0;
                                  return s_submit_recomp; }
 
+// Right-edge frustum-cull threshold. The submit drops a prim only if ALL its verts are off the right of
+// the screen. In 4:3 that's SX>=320 (faithful). Genuine engine-wide (gpu_vk_wide_engine) extends the
+// screen to the wide width (428@16:9), so geometry projected into the [320,wide) right band is ON-screen
+// and MUST NOT be dropped — widen the threshold to the wide width. THIS is why the right-side terrain was
+// missing in wide: the engine's own submit culled it to 4:3. (Vertical 240 cull unchanged.) later-119.
+int gpu_vk_wide_engine(void), gpu_vk_wide_engine_w(void);
+static int submit_xmax(void) { return gpu_vk_wide_engine() ? gpu_vk_wide_engine_w() : 320; }
+
 // PC-native per-vertex depth (Phase 2): because we OWN the projection, we know each vertex's real
 // view-space Z (the SZ the GTE just produced) — record it keyed by the packet vertex word's address so
 // the renderer's D32 depth buffer does true per-pixel occlusion (PSXPORT_NATIVE_DEPTH / the SBS A/B
@@ -107,9 +115,10 @@ static void submit_poly_gt3(R3000* c) {
     mem_w32(pkt + 8,  gte_read_data(12));          // SXY0
     mem_w32(pkt + 20, gte_read_data(13));          // SXY1
     mem_w32(pkt + 32, gte_read_data(14));          // SXY2
-    // frustum cull (right/bottom edges only, as the original): drop if all 3 SX>=320 or all 3 SY>=240.
+    // frustum cull (right/bottom edges only, as the original): drop if all 3 SX>=xmax or all 3 SY>=240.
+    int xmax = submit_xmax();
     uint16_t sx0 = mem_r16(pkt + 8),  sx1 = mem_r16(pkt + 20), sx2 = mem_r16(pkt + 32);
-    if (sx0 >= 320 && sx1 >= 320 && sx2 >= 320) continue;
+    if (sx0 >= xmax && sx1 >= xmax && sx2 >= xmax) continue;
     uint16_t sy0 = mem_r16(pkt + 10), sy1 = mem_r16(pkt + 22), sy2 = mem_r16(pkt + 34);
     if (sy0 >= 240 && sy1 >= 240 && sy2 >= 240) continue;
     mem_w32(pkt + 28, (code << 4) & COL_MASK);     // rgb2
@@ -175,8 +184,9 @@ static void submit_poly_gt4(R3000* c) {
     mem_w32(pkt + 20, gte_read_data(13));          // SXY1
     mem_w32(pkt + 32, gte_read_data(14));          // SXY2
     // frustum cull (right/bottom edges) over all 4 verts.
+    int xmax = submit_xmax();
     uint16_t sx0 = mem_r16(pkt + 8), sx1 = mem_r16(pkt + 20), sx2 = mem_r16(pkt + 32), sx3 = mem_r16(pkt + 44);
-    if (sx0 >= 320 && sx1 >= 320 && sx2 >= 320 && sx3 >= 320) continue;
+    if (sx0 >= xmax && sx1 >= xmax && sx2 >= xmax && sx3 >= xmax) continue;
     uint16_t sy0 = mem_r16(pkt + 10), sy1 = mem_r16(pkt + 22), sy2 = mem_r16(pkt + 34), sy3 = mem_r16(pkt + 46);
     if (sy0 >= 240 && sy1 >= 240 && sy2 >= 240 && sy3 >= 240) continue;
     uint32_t idx = ot_compress(ot_depth(c, code2, 16, 4, GTE_AVSZ4));  // 4 SZ in DR16..19
