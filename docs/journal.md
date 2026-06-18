@@ -4924,10 +4924,18 @@ the GT3/GT4-only geomblk probe). Shares the `PSXPORT_GEOMBLK_FRAME` gate.
   8015ca04×22 instanced). The static node field +0x38 (mdata) is 0, but the actual prim-list (geomblk) is
   resolved at ENQUEUE, not read from +0x38. The data-driven render path is ALIVE.
 
-**NEXT (the one open RE) — the ENQUEUE site.** Find who writes the render-command struct (geomblk@+0x40,
-transform@+0x18, flag) and pushes it into the per-layer list (`list+0xc0` array, count `list+8`; layer table
-0x800EC188, 40×0x40; flush gen_func_8003F174, callers 0x80039f70/0x8003c0c8). That gives: (a) object→command
-attribution (the geomblk-oracle key), and (b) HOW transform+geomblk derive from the object struct — so native
-C can build a margin object's render command from its frozen state and enqueue it directly (no +1, no
-perturbation). Then port incrementally, each command 0-diff vs the rcmd capture. Probes:
-`PSXPORT_DEBUG=rcmd`/`geomblk` (+`PSXPORT_GEOMBLK_FRAME`).
+**ENQUEUE — partly found.** `PSXPORT_DEBUG=enq` taps `gen_func_80077EBC`: it pushes its `a0` onto a cap-40
+scratchpad list (write-ptr 0x1F800148, count 0x1F800150). At f2900 only **2** pushes, and `a0 == the object
+node itself` (a0+0x40 / a0+0x18 are object fields = 0, NOT geomblk/transform). So 0x80077EBC is an OBJECT-list
+push (one of several lists; sibling 0x80077EFC → 0x1F800154/0x15c cap 28), **not** the render-command enqueue.
+The render-COMMAND struct (transform@+0x18, geomblk@+0x40) that the flush `gen_func_8003F174` reads from
+`list+0xc0` is filled on a DIFFERENT path — still open.
+
+**NEXT (the one open RE) — the render-COMMAND enqueue.** Find who allocates+fills the command struct
+(snapshot the GTE matrix → cmd+0x18, store geomblk → cmd+0x40) and links it into the flush list (a0 to
+gen_func_8003F174; commands at `list+0xc0`, count `list+8`; layer table 0x800EC188 40×0x40; flush callers
+0x80039f70/0x8003c0c8). Approach: tap the flush 0x8003F174 to print the cmd addresses (list+0xc0[i]) + fields,
+then trace back the writer of those cmd structs. That gives (a) object→command attribution and (b) HOW
+transform+geomblk derive from object state — so native C can build a margin object's command from its frozen
+state and enqueue it directly (no +1, no perturbation), each validated 0-diff vs the rcmd capture. Probes:
+`PSXPORT_DEBUG=rcmd`/`geomblk`/`enq` (+`PSXPORT_GEOMBLK_FRAME`).

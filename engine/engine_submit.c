@@ -113,6 +113,22 @@ void ov_render_cmd_probe(R3000* c) {
   rec_super_call(c, 0x8003F698u);
 }
 
+// PSXPORT_DEBUG=enq — ENQUEUE tap (later-131 NEXT). The render-command PUSH gen_func_80077EBC appends its a0
+// to the per-frame render list (scratchpad write-ptr 0x1F800148, count 0x1F800150, cap 40). Called by the
+// per-object handlers during phase 1 (entity walk), so g_current_object names the SOURCE object — the
+// attribution the rcmd/geomblk oracle can't get downstream. We dump that object + the pushed pointer a0 and
+// its candidate command fields (a0+0x40 geomblk, a0+0x18 transform word) to confirm a0 IS the command struct
+// and to build the object→command→geomblk map needed to enqueue margin commands natively. Super-calls original.
+void ov_enqueue_probe(R3000* c) {
+  if (cfg_dbg("enq") && probe_frame_ok()) {
+    uint32_t a0 = c->r[4], o = g_current_object;
+    fprintf(stderr, "[enq] f%d obj=%08x type=%02x handler=%08x a0=%08x a0+40=%08x a0+18=%08x\n",
+            s_frame, o, o ? mem_r8(o + 0x0c) : 0xff, o ? mem_r32(o + 0x1c) : 0,
+            a0, mem_r32(a0 + 0x40), mem_r32(a0 + 0x18));
+  }
+  rec_super_call(c, 0x80077EBCu);
+}
+
 // PC-native per-vertex depth (Phase 2): because we OWN the projection, we know each vertex's real
 // view-space Z (the SZ the GTE just produced) — record it keyed by the packet vertex word's address so
 // the renderer's D32 depth buffer does true per-pixel occlusion (PSXPORT_NATIVE_DEPTH / the SBS A/B

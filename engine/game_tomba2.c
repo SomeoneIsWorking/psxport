@@ -402,6 +402,9 @@ void games_tomba2_init(void) {
   // render command (mode + GTE transform + geomblk) is dumped — the complete input for the native render port.
   // Gated: only registered when the channel is on (the super-call interprets the dispatcher subtree). later-130.
   if (cfg_dbg("rcmd")) { void ov_render_cmd_probe(R3000*); rec_set_override(0x8003F698u, ov_render_cmd_probe); }
+  // Enqueue tap (PSXPORT_DEBUG=enq): the render-command push, called per-object in phase 1 → g_current_object
+  // names the source object, the attribution the downstream oracle lacks. later-131. Gated (super-call).
+  if (cfg_dbg("enq")) { void ov_enqueue_probe(R3000*); rec_set_override(0x80077EBCu, ov_enqueue_probe); }
   void engine_tomba2_init(void);
   engine_tomba2_init();                            // native engine layer (Phase 1: object-list walk)
 }
