@@ -5164,7 +5164,24 @@ code runs — not `gen_func_8003CDD8`, not the dispatcher `gen_func_8003F698`, n
   OVERLAY/interpreted (not in MAIN.EXE recomp) → need the overlay-scan mechanism or RAM RE; the camera
   matrix builder `gen_func_800939A0` is a 308-line subtree with 8 callees and is camera-CONTROL coupled
   (gameplay-scope — keep recomp). So the next steps need a direction decision, not just another lift.
-- **NEXT (options, need a pick):** (a) native wider-FOV widescreen via proj_native_vertex in the owned
+## later-136 — per-mode overlay renderers: their geometry was ALREADY native; own the generic-caller wrapper too
+Investigated the dispatcher's per-mode renderers (the modes native_dispatch delegates to the guest
+dispatcher). `PSXPORT_DEBUG=pdisp` past f434: the ONLY fallback mode that fires is **mode 0** (renderer
+`0x80146478`), heavily — up to **90 dispatches/frame** at f497-553 (a render layer on top of the field).
+- **The mode-0 renderer `0x80146478` is structurally IDENTICAL to `gen_func_800803DC`** (disassembled from
+  a f500 RAM dump via tools/recomp/decode.py): a generic GT3/GT4 caller — `lw counts,0(a0); a0+=16;
+  jal <gt3>; jal <gt4>`. Its two submitters `0x801465EC`/`0x801467BC` are **ALREADY OWNED** by the
+  overlay-scan (`PSXPORT_DEBUG=submit`: "own overlay GT3/GT4 @ 0x801465EC/0x801467BC"). So mode-0's 90
+  prims/frame were **already natively submitted with native depth** — the meaningful part was done.
+- **Owned the thin generic-caller wrapper too** (engine_submit.c): extended `engine_scan_overlay` to detect
+  the caller signature (`addiu a0,a0,16` + `andi a2,s0,0xffff` + `srl a2,s0,16`) and register
+  `ov_gt3gt4_caller` (→ `native_gt3gt4`). Owns `0x80146478` (and any overlay's generic caller) on load.
+  **VRAM byte-identical @f500 caller-native vs interpreted** (A/B `PSXPORT_NO_CALLER_OWN=1`); runs to f600.
+- So the per-mode renderer ownership is complete for what fires: mode-0 (the only one) is fully native
+  (caller + submitters). Tooling for RE'ing overlay fns: dump RAM (`PSXPORT_RAMDUMP_FRAME`) + decode.py.
+
+## later-135 NEXT (options, need a pick):
+- (a) native wider-FOV widescreen via proj_native_vertex in the owned
   submitters (the real visible payoff); (b) own the per-mode overlay renderers via overlay-scan; (c) drive
   to scenes using `0x8003B320`/`0x8003C8F4`/
   overlay `0x8013xxxx` and port those submit variants. (3) own `gen_func_80051C8C` (transform build,

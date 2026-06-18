@@ -926,6 +926,26 @@ void ov_ccase_probe(R3000* c) {
 // cleared on the next overlay load, so an address is only ever owned while the real submit code is
 // resident. Signature is POLY_GT3/GT4-specific (packet-pool load + RTPT + the OT tag-length
 // immediate 9/12 words), so other primitive submitters (flat/sprite/line) won't match.
+// The generic GT3/GT4 CALLER (gen_func_800803DC and its per-scene overlay twins, e.g. the mode-0 render
+// 0x80146478): splits a geomblk's packed prim counts and runs the tri-submit then quad-submit. Its
+// submitters are already owned (scanned), so this just runs them natively instead of interpreting the
+// ~10-insn wrapper. a0 = geomblk, a1 = OT base — exactly native_gt3gt4's args.
+void ov_gt3gt4_caller(R3000* c) { native_gt3gt4(c, c->r[4], c->r[5]); }
+
+// Detect the generic-caller signature in [addr, jr ra): the distinctive triple is `addiu a0,a0,16`
+// (skip the 16-byte geomblk header) + `andi a2,s0,0xffff` (tri count) + `srl a2,s0,16` (quad count).
+static int classify_caller(uint32_t addr) {
+  int hdr = 0, tri = 0, quad = 0;
+  for (int i = 0; i < 64; i++) {
+    uint32_t w = mem_r32(addr + i * 4);
+    if (w == 0x03E00008u) break;             // jr $ra
+    if (w == 0x24840010u) hdr = 1;           // addiu a0,a0,16
+    if (w == 0x3206FFFFu) tri = 1;           // andi a2,s0,0xffff
+    if (w == 0x00103402u) quad = 1;          // srl  a2,s0,16
+  }
+  return hdr && tri && quad;
+}
+
 static OverrideFn classify_submit(uint32_t addr) {
   int has_pool = 0, has_rtpt = 0, gt3 = 0, gt4 = 0, prev_lui800c = 0;
   for (int i = 0; i < 320; i++) {            // entry .. first jr $ra (single epilogue in these fns)
@@ -946,7 +966,21 @@ static OverrideFn classify_submit(uint32_t addr) {
 // function entry (after the previous fn's `jr $ra`+delay slot) and classify+register there.
 static void engine_scan_overlay(uint32_t base, uint32_t size) {
   uint32_t lo = base & ~3u, hi = (base + size) & ~3u;
+  void ov_gt3gt4_caller(R3000*);
   for (uint32_t a = lo; a + 4 <= hi; a += 4) {
+    // (1) generic GT3/GT4 CALLER (e.g. the mode-0 render 0x80146478): anchor on `addiu a0,a0,16`,
+    //     backtrack to the fn entry, verify the caller signature, own it (runs the native submitters).
+    if (mem_r32(a) == 0x24840010u && !cfg_on("PSXPORT_NO_CALLER_OWN")) {
+      uint32_t entry = lo;
+      for (uint32_t b = a; b > lo && b > a - 64; b -= 4)
+        if (mem_r32(b - 4) == 0x03E00008u) { entry = b + 4; break; }
+      if (classify_caller(entry)) {
+        rec_set_interp_override_auto(entry, ov_gt3gt4_caller);
+        if (cfg_dbg("submit"))
+          fprintf(stderr, "[submit] own overlay CALLER @ 0x%08X (in load 0x%08X+0x%X)\n", entry, base, size);
+      }
+      continue;
+    }
     if ((mem_r32(a) >> 26) != 0x0Fu || (mem_r32(a) & 0xFFFFu) != 0x800Cu) continue;   // lui $r,0x800C
     if ((mem_r32(a + 4) >> 26) != 0x23u || (mem_r32(a + 4) & 0xFFFFu) != 0xF544u) continue; // lw ...,0xF544
     uint32_t entry = lo;                     // backtrack to the fn entry = just past previous `jr $ra`
