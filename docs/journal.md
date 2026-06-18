@@ -4587,3 +4587,62 @@ overflow / malformed-OT warnings. `scratch/screenshots/cmp_native.png`, `cmp_wid
 the sprite/tile/flat/line builders + the env packets (the field's 389 rects + 11 env still write guest
 packets via libgpu / inline AddPrim). Then PC-native projection on the native list (the proj_native_vertex
 submit-call-site register bug — later-122 open snag — must be nailed first).
+
+## later-124 — DIRECTION (user): the problem is WRITE-COLLISION, not "guest writes are forbidden"; benefactor is the reference architecture
+User correction to later-122's "no guest memory" framing: **"I might have been wrong to say no guest
+memory; but OUR writes always cause corruption — sometimes visual, sometimes worse. So we need to make
+the game able to use a different memory layout. To solve this we need much more game ownership and maybe a
+full port."** And: a sibling repo `~/repo/benefactor` (Amiga→PC) is **fully ported, runs fine, built from
+the ground up** — the model to follow.
+
+**Reframed root cause (the real one):** the bug is not "we touch guest RAM" — it is that our writes
+*collide with the game's own data*. Two confirmed/likely mechanisms:
+1. **Shared state the game reads back** — CONFIRMED (later-117/122): widening the GTE OFX (CR24) corrupted
+   gameplay because the game's own logic RTPS-projects and reads the SXY back. Reverted.
+2. **Fixed-size engine buffers we overflow** — HYPOTHESIS (the widescreen corruption): the packet pool
+   (`0x800BF544`) and the OT (2048 entries) are sized for the 4:3 frustum. Widescreen adds geometry (the
+   extended frustum cull `ov_object_cull` re-includes culled objects via `mem_w8(o+1,1)`, so the game's
+   own submit emits MORE prims), which can overflow the pool/OT into adjacent game-owned RAM → corruption.
+   The cull re-include ALSO forces the game to PROCESS objects it meant to skip → possible logic side
+   effects ("sometimes worse"). NOT yet measured — measure pool/OT high-water 4:3 vs wide to confirm.
+
+**benefactor lesson (instructions/widescreen-plan.md) — SAME problem class, decided answer:** the Amiga
+engine keeps only a screen-width wrap buffer in chip RAM; off-screen terrain is absent. Verdict: *"approach
+B (native tilemap render) is mandatory; no read-wider-from-page shortcut."* It renders the wider world
+with a **native renderer reading the game's DATA structures** (tilemap + tile-gfx pointer table + camera
+clamp `$107a/$107c`), into its OWN surface — the recompiled engine's chip-RAM updates stay as the game did
+them; the WIDE part is native. Architecture: native game loop (`game_loop.c`) + native renderer
+(`native_renderer.c`) reading game data + recompiled body behind overrides (`port/overrides/`).
+
+**CONSEQUENCE for Tomba2Engine (the plan, sharpened):** widescreen/effects without corruption require the
+PC engine to OWN the render of the extra/wider content from the game's DATA, not push the game's fixed
+pipeline harder. The native display list (later-123) is the right foundation — it is a PC-native render
+target for primitives. NEXT layers, in order:
+- **Engine-owned render memory:** owned prims should stop consuming the guest packet pool / guest OT
+  entirely (today the native DL still bumps the guest pool faithfully + links a guest OT node). Give the
+  native display list its OWN ordering (per-bucket native lists keyed by the OT idx the submit already
+  computes) so wide geometry can never overflow guest buffers. Watch: semi-transparent owned prims need
+  painter order (the native D32 depth handles opaque 3D ordering, NOT blend order).
+- **Native object→prim rendering (benefactor approach B):** the active entities are a doubly-linked pool
+  list (stride 0xD0, engine_re.md §32; `ov_object_cull` already receives each object*). Walk it natively
+  and emit each object's prims into the native DL directly — reading the object's model/transform from
+  guest RAM but NOT routing through the game's submit/pool. Then the wide margins are OURS, the game's
+  buffers are untouched, and the extended-cull `mem_w8` shared write can be DROPPED.
+- **Map the memory layout** (the user's "different memory layout"): RE the pool buffer base+extent and the
+  OT base/size so we know what is free and what the game reads back — the prerequisite to relocating/
+  expanding engine-owned buffers safely. (benefactor did exactly this: pages `$2B3EC` row-stride/extent,
+  camera clamp vars, level-data structs.)
+Reference repo: `~/repo/benefactor` (AGENTS.md, docs/codebase-layout.md, instructions/widescreen-plan.md).
+
+### later-124 measurement — widescreen pool/OT pressure CONFIRMED (PSXPORT_DEBUG=pool)
+Same field scene, headless, main OT (gpu_native.c `[pool]` probe):
+- **4:3:**  main OT = **2984** prims, packet-pool high-water = **0x0DB9B0**.
+- **16:9:** main OT = **3244** prims (**+260**, the `ov_object_cull` re-include), pool high-water =
+  **0x0DEAEC** (**+~12.6 KB**).
+So genuine-wide DOES make the GAME's own submit emit ~260 extra prims and push the shared packet pool
+~12.6 KB higher (extra load on buffers sized for 4:3) AND forces the game to process objects it culled
+(logic side-effect risk = the "sometimes worse"). NOT proof of overflow at THIS scene (the pool buffer
+still has headroom here — pool ends ~0xDEAEC, parity stride 0x14000), but it confirms the pressure
+direction; the pool/OT buffer EXTENT + a denser scene's high-water still need RE to find the overflow
+threshold. Probe kept (`cfg_dbg("pool")`, zero cost off). This is the empirical basis for moving the wide
+geometry OFF the game's buffers into engine-owned render memory (benefactor approach B).

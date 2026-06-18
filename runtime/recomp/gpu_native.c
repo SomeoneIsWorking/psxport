@@ -1368,6 +1368,16 @@ void gpu_dma2_linked_list(uint32_t madr) {
     addr = next & 0x1FFFFC;
   }
   s_gp0_src = 0;   // non-OT gpu_gp0 callers (direct GP0 / FMV / block) carry no packet address
+  // PSXPORT_DEBUG=pool: per-DrawOTag pool high-water + node count, to confirm the widescreen
+  // fixed-buffer-overflow hypothesis (later-124). Pool write ptr 0x800BF544 is the frame's high-water
+  // at the main draw; node count = OT entries the walk traversed. Compare 4:3 vs 16:9.
+  if (cfg_dbg("pool")) {
+    static int mx = 0; int nodes = guard + 1;
+    uint32_t pool = mem_r32(0x800BF544u);
+    if ((int)pool > mx) mx = (int)pool;
+    fprintf(stderr, "[pool] f%d madr=0x%08X nodes=%d pool=0x%08X hi=0x%08X\n",
+            s_frame, 0x80000000u | g_ot_madr, nodes, pool, (uint32_t)mx);
+  }
   ndl_mark_consumed();   // this draw consumed the native list; the next submit starts a fresh frame
   if (guard >= 0x10000) {
     static int warned = 0;
