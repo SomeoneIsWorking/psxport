@@ -86,6 +86,7 @@ static void ov_frame_update(R3000* c) {
 // manager (Phase 1) — more reliable than static-tracing the overlay handler dispatch.
 extern uint8_t mem_r8(uint32_t);
 extern void    mem_w8(uint32_t, uint8_t);
+int gpu_vk_wide_engine(void);   // gpu_vk.c — genuine engine-wide active (PSXPORT_WIDE_ENGINE && aspect!=4:3)
 static int s_objlog = -1;
 static inline uint16_t obj_r16(uint32_t a) { return (uint16_t)(mem_r8(a) | (mem_r8(a + 1) << 8)); }
 
@@ -112,7 +113,10 @@ static void ov_object_cull(R3000* c) {
     // or the new edge/corner geometry (incl. the static terrain/water tiles, which also go through this
     // per-object cull) is dropped -> black wedges. Couple the defaults to PSXPORT_WIDE: wide => widest
     // cone (fov 0) + extended far; plain CULL keeps the conservative 4:3 values. Both env-overridable.
-    int wide = cfg_str("PSXPORT_WIDE") && atoi(cfg_str("PSXPORT_WIDE")) != 0;
+    // Genuine engine-wide (gpu_vk_wide_engine) widens the FOV at the projection, so the frustum cull MUST
+    // widen too or the new side/corner geometry (incl. static terrain/water tiles) is dropped -> black
+    // wedges. Couple the extended cull to BOTH the genuine-wide path and the legacy FB-hack PSXPORT_WIDE.
+    int wide = (cfg_str("PSXPORT_WIDE") && atoi(cfg_str("PSXPORT_WIDE")) != 0) || gpu_vk_wide_engine();
     s_cull = (cfg_on("PSXPORT_CULL") || wide) ? 1 : 0;
     const char* f = cfg_str("PSXPORT_CULL_FAR"); s_cull_far = f ? atoi(f) : (wide ? 0x8000 : 0x6000);
     const char* v = cfg_str("PSXPORT_CULL_FOV"); s_cull_fov = v ? atoi(v) : (wide ? 0x00 : 0x80); }
@@ -356,7 +360,9 @@ void games_tomba2_init(void) {
     engine_submit_register_autodetect();                 // + own the same library in runtime-loaded overlays
   }
   fps60_init();
-  if (g_fps60_on || cfg_dbg("obj") || cfg_on("PSXPORT_CULL"))   // cull tap: fps60 / objlog / extended-cull
+  // cull tap: fps60 / objlog / extended-cull / genuine-wide (the wide FOV needs the widened frustum so
+  // side geometry the 4:3 cull dropped is re-included — see ov_object_cull).
+  if (g_fps60_on || cfg_dbg("obj") || cfg_on("PSXPORT_CULL") || cfg_on("PSXPORT_WIDE_ENGINE"))
     rec_set_override(0x8007712Cu, ov_object_cull);
   void engine_tomba2_init(void);
   engine_tomba2_init();                            // native engine layer (Phase 1: object-list walk)
