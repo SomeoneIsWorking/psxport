@@ -11,6 +11,7 @@
 #include "r3000.h"
 #include "cfg.h"
 #include "gpu_native_internal.h"   // shared VRAM/state/helpers (also used by gpu_trace.c, gpu_debug.c)
+#include "native_dl.h"             // native classified display list (engine_submit owns the build)
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -505,6 +506,12 @@ static void raster_line(int x0, int y0, int x1, int y1, uint8_t cr, uint8_t cg, 
     int e2 = 2 * e; if (e2 >= dy) { e += dy; x0 += sx; } if (e2 <= dx) { e += dx; y0 += sy; } }
 }
 
+// Native display list: the prim currently being rendered FROM the native arena (its packet words were
+// loaded into s_fifo by ndl_render_node). When set, the poly path takes each vertex's view-Z straight
+// from this prim (np->pz, parse order) instead of the value-keyed address bridge — the engine that
+// projected the vertex carries its real depth here directly. NULL for ordinary guest-packet decode.
+static const NativePrim* s_ndl_cur = 0;
+
 // Execute a complete GP0 primitive packet held in s_fifo[0..s_fcount).
 static void gp0_exec(void) {
   uint32_t c = s_fifo[0];
@@ -578,7 +585,10 @@ static void gp0_exec(void) {
         is3d = 1;
         for (int i = 0; i < nv; i++) {
           float pz;
-          if (vaddr[i] && projprim_lookup_pz(vaddr[i], &pz)) dep[i] = proj_pz_to_ord(pz);
+          if (s_ndl_cur) {                      // native display-list prim: depth carried directly
+            if (i < s_ndl_cur->npz) dep[i] = proj_pz_to_ord(s_ndl_cur->pz[i]);
+            else { is3d = 0; break; }
+          } else if (vaddr[i] && projprim_lookup_pz(vaddr[i], &pz)) dep[i] = proj_pz_to_ord(pz);
           else { is3d = 0; break; }
         }
         if (is3d) s_seen3d = 1;            // a projected world prim has now been drawn this frame
@@ -1293,6 +1303,23 @@ void gpu_sbs_set(int on) { s_sbs_on = on ? 1 : 0; }
 
 // Diagnostic dumps (gpu_prov_dump / gpu_provat_display / gpu_scene_dump[_now]) live in gpu_debug.c.
 
+// Render a native-display-list prim linked at OT node `addr` (phys), if one is. The owned node carries
+// a ZERO-LENGTH guest tag (no payload words for the walk to decode); its real packet words + per-vertex
+// view-Z live in the native arena. Load the packet words into the FIFO and run the normal primitive
+// path so every downstream behaviour (semi grouping, fade/fps60 capture, widescreen 2D) is identical,
+// but with s_ndl_cur set so the depth path uses the carried native view-Z (no address bridge).
+static void gp0_exec(void);
+static void ndl_render_node(uint32_t addr) {
+  const NativePrim* np = ndl_lookup(addr);
+  if (!np) return;
+  for (int i = 0; i < np->nwords; i++) { s_fifo[i] = np->words[i]; s_fifo_addr[i] = 0; }
+  s_fcount = np->nwords;
+  s_ndl_cur = np;
+  gp0_exec();
+  s_ndl_cur = 0;
+  s_fcount = 0;
+}
+
 // DMA channel 2 (GPU): walk an ordering-table linked list from `madr`, feeding each node's
 // GP0 words to the parser. Header word: bits[24..31]=word count, bits[0..23]=next node addr
 // (0xFFFFFF = end).
@@ -1335,11 +1362,13 @@ void gpu_dma2_linked_list(uint32_t madr) {
     s_cur_node = 0x80000000u | addr;
     for (int i = 0; i < n; i++) { s_gp0_src = addr + 4 + i * 4;   // guest addr of this word (Phase-1 attach)
                                   gpu_gp0(mem_r32(addr + 4 + i * 4)); }
+    ndl_render_node(addr);   // owned native prim at this node (zero-length guest tag) -> render natively
     uint32_t next = hdr & 0xFFFFFF;
     if (next == 0xFFFFFF || next == 0) break;
     addr = next & 0x1FFFFC;
   }
   s_gp0_src = 0;   // non-OT gpu_gp0 callers (direct GP0 / FMV / block) carry no packet address
+  ndl_mark_consumed();   // this draw consumed the native list; the next submit starts a fresh frame
   if (guard >= 0x10000) {
     static int warned = 0;
     if (!warned++) fprintf(stderr, "[gpu] WARN: OT traversal hit %d-node cap from madr=0x%08X "

@@ -4553,3 +4553,37 @@ projection (proj_native_vertex with a render-OFX) on the native list, guest GTE 
 the native-projection step: proj_native_vertex is 0-diff at the GTE-op hook (PROJPROBE) but diverged in
 BOTH X and Y when called from the submit call-site (e.g. native 012F00B2 vs gte 015F00B7) — a register/
 call-context bug to nail before relying on native projection in the submit.
+
+## later-123 — PORT: own the geometry submit as a NATIVE display list (render data OUT of guest RAM)
+The directive (later-122): make it a PC game, stop writing render data to guest memory, port the engine.
+The three native-owned geometry submit fns (engine_submit.c — POLY_GT3 `0x8007FDB0`, POLY_GT4
+`0x8008007C`, byte-packed GT4 field emitter `0x80027768` + the overlay auto-detected copies) projected via
+GTE but still **wrote the 40/52-byte GPU packet (verts/colour/uv) into guest RAM** and linked it into the
+guest OT. That packet IS the "render data in guest memory" — it is engine OUTPUT, not gameplay state.
+**Done — native classified display list (engine_re.md ownership plan step 1):**
+- New `engine/native_dl.{h,c}`: `NativePrim` (the would-be packet words + each vertex's real view-space Z,
+  which the integer guest packet always threw away) + a per-frame arena with a node-keyed open-addressing
+  lookup. Lazy reset on the first alloc after a DrawOTag consume — robust to the engine's setup-OT +
+  main-OT double draw (no ClearOTagR hook needed).
+- `engine_submit.c`: a `PkTgt` packet-target abstraction (`pk_w32/w16/w8/r16/r8`) lets the SAME submit
+  body write either a guest packet (A/B) or a native word buffer. Default path: build into the native
+  buffer, link a **ZERO-LENGTH** ordering node into the guest OT (ordering only — the game's inline
+  AddPrim builds the same OT, so the 1-word link is unavoidable and is NOT render data), push a
+  `NativePrim` carrying the packet words + per-vertex SZ. The value-keyed `projprim_set_pz` address bridge
+  is gone on this path.
+- `gpu_native.c`: the OT walk (`gpu_dma2_linked_list`) calls `ndl_render_node(addr)` per node — an owned
+  node (zero guest payload) loads its native packet words into the FIFO and runs the normal `gp0_exec`
+  path (so semi grouping / fade / fps60 capture / widescreen-2D are all identical) but with `s_ndl_cur`
+  set so the depth path takes view-Z straight from `np->pz` (parse order), no address bridge. `ndl_mark_
+  consumed()` after the walk.
+- A/B: `PSXPORT_DL_GUESTPKT=1` reverts to writing the full guest packet; `PSXPORT_SUBMIT_RECOMP=1` keeps
+  the recomp body.
+**VERIFIED byte-identical (the gate):** headless field shot (s_frame 2900, AUTO_GAMEPLAY) at BOTH 4:3
+(320x224) AND 16:9 (428x240) is `cmp`-identical native-DL vs DL_GUESTPKT — the render data moved out of
+guest RAM with ZERO pixel difference, and the carried native view-Z reproduces the depth ordering exactly.
+Field renders correctly (Tomba/grass/trees/"Burning House" banner; wide = genuine wider FOV). No arena
+overflow / malformed-OT warnings. `scratch/screenshots/cmp_native.png`, `cmp_wide_native.png`.
+**NEXT:** extend ownership to the remaining primitive builders so ALL render-data writes leave guest RAM:
+the sprite/tile/flat/line builders + the env packets (the field's 389 rects + 11 env still write guest
+packets via libgpu / inline AddPrim). Then PC-native projection on the native list (the proj_native_vertex
+submit-call-site register bug — later-122 open snag — must be nailed first).

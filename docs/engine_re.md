@@ -324,11 +324,16 @@ libgpu (all via the 0x800A5998 table; names from debug strings): `FUN_80080f6c`=
   2D (miss) prims into separate passes; composite.
 
 ### Native ownership plan (reimplement libgpu, keep recomp body as oracle via rec_set_override)
-1. Own **DrawOTag** (FUN_80080f6c): walk the ordering table in native C, decode each primitive packet by
-   type (POLY_F/FT/G/GT, SPRT, TILE, LINE, the env/copy packets), submit to our renderer WITH semantics
-   (so we know "this is the fade tile", "this is water", "this is HUD"). The recomp libgpu stays callable
-   for A/B diff. This is the single highest-leverage step — it converts the GP0 black box into an
-   understood scene graph.
+1. **IN PROGRESS — native classified display list (later-123).** The geometry submit fns now build a
+   PC-native `NativePrim` (engine/native_dl.{h,c}: would-be packet words + per-vertex view-Z) instead of
+   writing the GPU packet to guest RAM; they link only a zero-length ordering node into the guest OT.
+   `gpu_dma2_linked_list` renders owned nodes from the native arena via gp0_exec, taking depth from the
+   carried view-Z (no address bridge). DONE for POLY_GT3/GT4 + the byte-packed GT4 field emitter (the bulk
+   of 3D world geometry); VERIFIED 4:3 + 16:9 byte-identical (PSXPORT_DL_GUESTPKT A/B). **Remaining for
+   full DrawOTag ownership:** the sprite/tile/flat/line builders + env packets (the field's 389 rects + 11
+   env still write guest packets via libgpu / inline AddPrim) — once those emit NativePrims too, the OT
+   walk becomes a pure render of a fully-classified native scene graph and NO render data lives in guest
+   RAM. The recomp libgpu stays callable for A/B diff (PSXPORT_SUBMIT_RECOMP).
 2. Own **PutDrawEnv/PutDispEnv** + the GTE projection (FUN_800509B4) → native widescreen.
 3. Own **MoveImage/LoadImage/StoreImage** (VRAM↔VRAM/CPU) → fixes reflection/copy effects (water, fades).
 4. Own the **OT clear/build** + the entity-list walk (Phase-1) → native 60fps interpolation.

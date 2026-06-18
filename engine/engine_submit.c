@@ -19,13 +19,28 @@
 //   global packet-pool write pointer at 0x800BF544 (advanced past each committed packet).
 #include "r3000.h"
 #include "cfg.h"
+#include "native_dl.h"
 #include <stdlib.h>
 #include <stdio.h>
+#include <string.h>
 
 void rec_super_call(R3000*, uint32_t);   // interpret the original PSX body (A/B oracle / super-call)
 
 #define PKT_POOL_PTR 0x800BF544u   // DAT_800bf544: current free GPU-packet write pointer
 #define COL_MASK     0xFFF0F0F0u   // low-nibble-per-byte clear applied to packet RGB words
+
+// Packet write target. The submit code assembles a primitive packet either straight into GUEST RAM
+// (faithful pre-port behaviour; P.guest = the OT-pool node addr, P.w = NULL) or into a NATIVE word
+// buffer that becomes a NativePrim (the port default; P.w = the buffer). Offsets index packet bytes;
+// the native buffer mirrors the packet byte layout so the same 8/16/32-bit accesses line up on this
+// little-endian host (and the byte/halfword reads the cull does come back identical). The 1-word OT
+// link node still goes to guest RAM directly (not through this) since it is the engine's own ordering.
+typedef struct { uint32_t* w; uint32_t guest; } PkTgt;
+static inline void     pk_w32(PkTgt* p, uint32_t o, uint32_t v) { if (p->w) p->w[o >> 2] = v;             else mem_w32(p->guest + o, v); }
+static inline void     pk_w16(PkTgt* p, uint32_t o, uint16_t v) { if (p->w) ((uint16_t*)p->w)[o >> 1] = v; else mem_w16(p->guest + o, v); }
+static inline void     pk_w8 (PkTgt* p, uint32_t o, uint8_t  v) { if (p->w) ((uint8_t*)p->w)[o] = v;        else mem_w8(p->guest + o, v); }
+static inline uint16_t pk_r16(PkTgt* p, uint32_t o) { return p->w ? ((uint16_t*)p->w)[o >> 1] : mem_r16(p->guest + o); }
+static inline uint8_t  pk_r8 (PkTgt* p, uint32_t o) { return p->w ? ((uint8_t*)p->w)[o]       : mem_r8(p->guest + o); }
 
 static int s_submit_recomp = -1;   // PSXPORT_SUBMIT_RECOMP=1 -> keep the recomp body (A/B)
 static int submit_recomp(void) { if (s_submit_recomp < 0) s_submit_recomp = cfg_on("PSXPORT_SUBMIT_RECOMP") ? 1 : 0;
@@ -94,7 +109,11 @@ static void submit_poly_gt3(R3000* c) {
   uint32_t rec = c->r[4], ot = c->r[5], count = c->r[6];
   uint32_t pkt = mem_r32(PKT_POOL_PTR);
   int depth = depth_on(); if (depth) proj_set_H((uint16_t)gte_read_ctrl(26));
+  int dl = ndl_active();                           // build into a native prim instead of a guest packet
+  uint32_t W[16];
   for (uint32_t i = 0; i < count; i++, rec += 36) {
+    PkTgt P; if (dl) { memset(W, 0, sizeof W); P.w = W; P.guest = 0; } else { P.w = 0; P.guest = pkt; }
+    float pz0 = 0, pz1 = 0, pz2 = 0;
     // load the 3 model vertices into the GTE input regs (V0..V2), then project all three (RTPT).
     uint32_t vz01 = mem_r32(rec + 20);
     gte_write_data(0, mem_r32(rec + 16));          // VXY0
@@ -104,34 +123,44 @@ static void submit_poly_gt3(R3000* c) {
     gte_write_data(4, mem_r32(rec + 28));          // VXY2
     gte_write_data(5, mem_r32(rec + 32));          // VZ2 (low 16)
     uint32_t code = mem_r32(rec + 4);
-    mem_w32(pkt + 4,  mem_r32(rec + 0));           // rgb0|code
+    pk_w32(&P, 4,  mem_r32(rec + 0));              // rgb0|code
     gte_op(c, GTE_RTPT);
-    mem_w32(pkt + 12, mem_r32(rec + 8));           // uv0|clut
-    mem_w32(pkt + 24, mem_r32(rec + 12));          // uv1|tpage
+    pk_w32(&P, 12, mem_r32(rec + 8));              // uv0|clut
+    pk_w32(&P, 24, mem_r32(rec + 12));             // uv1|tpage
     if ((int32_t)gte_read_ctrl(31) < 0) continue;  // GTE FLAG: projection error/overflow -> drop
     gte_op(c, GTE_NCLIP);
-    mem_w32(pkt + 16, code & COL_MASK);            // rgb1
+    pk_w32(&P, 16, code & COL_MASK);               // rgb1
     if ((int32_t)gte_read_data(24) <= 0) continue; // MAC0 = signed area <= 0 -> backface -> drop
-    mem_w32(pkt + 8,  gte_read_data(12));          // SXY0
-    mem_w32(pkt + 20, gte_read_data(13));          // SXY1
-    mem_w32(pkt + 32, gte_read_data(14));          // SXY2
+    pk_w32(&P, 8,  gte_read_data(12));             // SXY0
+    pk_w32(&P, 20, gte_read_data(13));             // SXY1
+    pk_w32(&P, 32, gte_read_data(14));             // SXY2
     // frustum cull (right/bottom edges only, as the original): drop if all 3 SX>=xmax or all 3 SY>=240.
     int xmax = submit_xmax();
-    uint16_t sx0 = mem_r16(pkt + 8),  sx1 = mem_r16(pkt + 20), sx2 = mem_r16(pkt + 32);
+    uint16_t sx0 = pk_r16(&P, 8),  sx1 = pk_r16(&P, 20), sx2 = pk_r16(&P, 32);
     if (sx0 >= xmax && sx1 >= xmax && sx2 >= xmax) continue;
-    uint16_t sy0 = mem_r16(pkt + 10), sy1 = mem_r16(pkt + 22), sy2 = mem_r16(pkt + 34);
+    uint16_t sy0 = pk_r16(&P, 10), sy1 = pk_r16(&P, 22), sy2 = pk_r16(&P, 34);
     if (sy0 >= 240 && sy1 >= 240 && sy2 >= 240) continue;
-    mem_w32(pkt + 28, (code << 4) & COL_MASK);     // rgb2
+    pk_w32(&P, 28, (code << 4) & COL_MASK);        // rgb2
     uint32_t idx = ot_compress(ot_depth(c, code, 17, 3, GTE_AVSZ3));
     if ((int32_t)idx < 0) continue;                // out of OT range -> drop
-    mem_w16(pkt + 36, mem_r16(rec + 34));          // uv2 (high half of rec+32 word)
+    pk_w16(&P, 36, mem_r16(rec + 34));             // uv2 (high half of rec+32 word)
+    pz0 = (float)(int32_t)gte_read_data(17);       // SXY0 -> SZ0  (native per-vertex view-Z)
+    pz1 = (float)(int32_t)gte_read_data(18);       // SXY1 -> SZ1
+    pz2 = (float)(int32_t)gte_read_data(19);       // SXY2 -> SZ2
     uint32_t otaddr = ot + (idx << 2);
-    mem_w32(pkt + 0, mem_r32(otaddr) | 0x09000000u);  // tag: link old head + length (9 words)
-    mem_w32(otaddr, pkt);                          // OT head -> this packet
-    if (depth) {                                   // record each vertex's real view-Z at its packet addr
-      projprim_set_pz(pkt + 8,  (float)(int32_t)gte_read_data(17));   // SXY0 -> SZ0
-      projprim_set_pz(pkt + 20, (float)(int32_t)gte_read_data(18));   // SXY1 -> SZ1
-      projprim_set_pz(pkt + 32, (float)(int32_t)gte_read_data(19));   // SXY2 -> SZ2
+    if (dl) {
+      mem_w32(pkt + 0, mem_r32(otaddr));           // node tag: link old head, LEN 0 (payload is native)
+      mem_w32(otaddr, pkt);                        // OT head -> this node
+      NativePrim* np = ndl_alloc(pkt & 0x1FFFFC);
+      if (np) { np->nwords = 9; np->npz = 3;
+        for (int k = 0; k < 9; k++) np->words[k] = W[k + 1];   // W[1..9] = the 9 GP0 payload words
+        np->pz[0] = pz0; np->pz[1] = pz1; np->pz[2] = pz2; }
+    } else {
+      mem_w32(pkt + 0, mem_r32(otaddr) | 0x09000000u);  // tag: link old head + length (9 words)
+      mem_w32(otaddr, pkt);                        // OT head -> this packet
+      if (depth) {                                 // record each vertex's real view-Z at its packet addr
+        projprim_set_pz(pkt + 8,  pz0); projprim_set_pz(pkt + 20, pz1); projprim_set_pz(pkt + 32, pz2);
+      }
     }
     pkt += 40;
   }
@@ -153,17 +182,21 @@ static void submit_poly_gt4(R3000* c) {
   uint32_t rec = c->r[4], ot = c->r[5], count = c->r[6];
   uint32_t pkt = mem_r32(PKT_POOL_PTR);
   int depth = depth_on(); if (depth) proj_set_H((uint16_t)gte_read_ctrl(26));
+  int dl = ndl_active();
+  uint32_t W[16];
   for (uint32_t i = 0; i < count; i++, rec += 44) {
+    PkTgt P; if (dl) { memset(W, 0, sizeof W); P.w = W; P.guest = 0; } else { P.w = 0; P.guest = pkt; }
+    float pz0 = 0, pz1 = 0, pz2 = 0, pz3 = 0;
     // project the lone 4th vertex (V3) first (RTPS): result SXY in DR14.
     uint32_t code2 = mem_r32(rec + 4);
     gte_write_data(0, mem_r32(rec + 40));          // VXY3
     gte_write_data(1, mem_r32(rec + 36) >> 16);    // VZ3
-    mem_w32(pkt + 28, code2 & COL_MASK);           // rgb2
+    pk_w32(&P, 28, code2 & COL_MASK);              // rgb2
     gte_op(c, GTE_RTPS);
-    mem_w32(pkt + 40, (code2 << 4) & COL_MASK);    // rgb3
-    mem_w32(pkt + 24, mem_r32(rec + 12));          // uv1|tpage
+    pk_w32(&P, 40, (code2 << 4) & COL_MASK);       // rgb3
+    pk_w32(&P, 24, mem_r32(rec + 12));             // uv1|tpage
     if ((int32_t)gte_read_ctrl(31) < 0) continue;  // GTE FLAG: V3 projection error -> drop
-    mem_w32(pkt + 44, gte_read_data(14));          // SXY3
+    pk_w32(&P, 44, gte_read_data(14));             // SXY3
     // project the front triangle (V0,V1,V2) via RTPT.
     uint32_t vz01 = mem_r32(rec + 24);
     gte_write_data(0, mem_r32(rec + 20));          // VXY0
@@ -173,35 +206,46 @@ static void submit_poly_gt4(R3000* c) {
     gte_write_data(4, mem_r32(rec + 32));          // VXY2
     gte_write_data(5, mem_r32(rec + 36) & 0xFFFFu);// VZ2
     uint32_t code0 = mem_r32(rec + 0);
-    mem_w32(pkt + 4, code0 & COL_MASK);            // rgb0
+    pk_w32(&P, 4, code0 & COL_MASK);               // rgb0
     gte_op(c, GTE_RTPT);
-    mem_w32(pkt + 16, (code0 << 4) & COL_MASK);    // rgb1
+    pk_w32(&P, 16, (code0 << 4) & COL_MASK);       // rgb1
     if ((int32_t)gte_read_ctrl(31) < 0) continue;  // GTE FLAG -> drop
     gte_op(c, GTE_NCLIP);
-    mem_w32(pkt + 12, mem_r32(rec + 8));           // uv0|clut
+    pk_w32(&P, 12, mem_r32(rec + 8));              // uv0|clut
     if ((int32_t)gte_read_data(24) <= 0) continue; // backface (front-tri signed area <= 0) -> drop
-    mem_w32(pkt + 8,  gte_read_data(12));          // SXY0
-    mem_w32(pkt + 20, gte_read_data(13));          // SXY1
-    mem_w32(pkt + 32, gte_read_data(14));          // SXY2
+    pk_w32(&P, 8,  gte_read_data(12));             // SXY0
+    pk_w32(&P, 20, gte_read_data(13));             // SXY1
+    pk_w32(&P, 32, gte_read_data(14));             // SXY2
     // frustum cull (right/bottom edges) over all 4 verts.
     int xmax = submit_xmax();
-    uint16_t sx0 = mem_r16(pkt + 8), sx1 = mem_r16(pkt + 20), sx2 = mem_r16(pkt + 32), sx3 = mem_r16(pkt + 44);
+    uint16_t sx0 = pk_r16(&P, 8), sx1 = pk_r16(&P, 20), sx2 = pk_r16(&P, 32), sx3 = pk_r16(&P, 44);
     if (sx0 >= xmax && sx1 >= xmax && sx2 >= xmax && sx3 >= xmax) continue;
-    uint16_t sy0 = mem_r16(pkt + 10), sy1 = mem_r16(pkt + 22), sy2 = mem_r16(pkt + 34), sy3 = mem_r16(pkt + 46);
+    uint16_t sy0 = pk_r16(&P, 10), sy1 = pk_r16(&P, 22), sy2 = pk_r16(&P, 34), sy3 = pk_r16(&P, 46);
     if (sy0 >= 240 && sy1 >= 240 && sy2 >= 240 && sy3 >= 240) continue;
     uint32_t idx = ot_compress(ot_depth(c, code2, 16, 4, GTE_AVSZ4));  // 4 SZ in DR16..19
     if ((int32_t)idx < 0) continue;                // out of OT range -> drop
     uint32_t uv23 = mem_r32(rec + 16);
-    mem_w32(pkt + 36, uv23);                        // uv2 (low half used by GPU)
-    mem_w32(pkt + 48, uv23 >> 16);                  // uv3
+    pk_w32(&P, 36, uv23);                           // uv2 (low half used by GPU)
+    pk_w32(&P, 48, uv23 >> 16);                     // uv3
+    pz0 = (float)(int32_t)gte_read_data(17);        // SXY0 -> SZ0  (SZ FIFO: DR16=SZ3, DR17-19=SZ0-2)
+    pz1 = (float)(int32_t)gte_read_data(18);        // SXY1 -> SZ1
+    pz2 = (float)(int32_t)gte_read_data(19);        // SXY2 -> SZ2
+    pz3 = (float)(int32_t)gte_read_data(16);        // SXY3 -> SZ3
     uint32_t otaddr = ot + (idx << 2);
-    mem_w32(pkt + 0, mem_r32(otaddr) | 0x0C000000u);  // tag: link old head + length (12 words)
-    mem_w32(otaddr, pkt);                          // OT head -> this packet
-    if (depth) {                                   // SZ FIFO after RTPS(V3)+RTPT(V0,V1,V2): DR16=SZ3,17-19=SZ0-2
-      projprim_set_pz(pkt + 8,  (float)(int32_t)gte_read_data(17));   // SXY0 -> SZ0
-      projprim_set_pz(pkt + 20, (float)(int32_t)gte_read_data(18));   // SXY1 -> SZ1
-      projprim_set_pz(pkt + 32, (float)(int32_t)gte_read_data(19));   // SXY2 -> SZ2
-      projprim_set_pz(pkt + 44, (float)(int32_t)gte_read_data(16));   // SXY3 -> SZ3
+    if (dl) {
+      mem_w32(pkt + 0, mem_r32(otaddr));           // node tag: link old head, LEN 0 (payload is native)
+      mem_w32(otaddr, pkt);
+      NativePrim* np = ndl_alloc(pkt & 0x1FFFFC);
+      if (np) { np->nwords = 12; np->npz = 4;
+        for (int k = 0; k < 12; k++) np->words[k] = W[k + 1];  // W[1..12] = the 12 GP0 payload words
+        np->pz[0] = pz0; np->pz[1] = pz1; np->pz[2] = pz2; np->pz[3] = pz3; }
+    } else {
+      mem_w32(pkt + 0, mem_r32(otaddr) | 0x0C000000u);  // tag: link old head + length (12 words)
+      mem_w32(otaddr, pkt);                        // OT head -> this packet
+      if (depth) {
+        projprim_set_pz(pkt + 8,  pz0); projprim_set_pz(pkt + 20, pz1);
+        projprim_set_pz(pkt + 32, pz2); projprim_set_pz(pkt + 44, pz3);
+      }
     }
     pkt += 52;
   }
@@ -246,8 +290,8 @@ void ov_submit_poly_gt4(R3000* c) {
 // and not others, all yielding the same halfword).
 static inline uint32_t vcoord(uint32_t addr) { return ((uint32_t)mem_r8(addr) << 8) & 0xFFFFu; }
 // add the per-call U offset (a3) to the low (U) byte of a packet uv word, in place (mod 256).
-static inline void uoff_add(uint32_t pkt_uv, uint32_t uoff) {
-  mem_w8(pkt_uv, (uint8_t)(mem_r8(pkt_uv) + uoff));
+static inline void uoff_add(PkTgt* p, uint32_t off, uint32_t uoff) {
+  pk_w8(p, off, (uint8_t)(pk_r8(p, off) + uoff));
 }
 
 static void submit_poly_gt4_bp(R3000* c) {
@@ -258,7 +302,10 @@ static void submit_poly_gt4_bp(R3000* c) {
   uint32_t pkt  = mem_r32(PKT_POOL_PTR);
   uint32_t otbase = mem_r32(OTBASE_PTR);
   int depth = depth_on(); if (depth) proj_set_H((uint16_t)gte_read_ctrl(26));
+  int dl = ndl_active();
+  uint32_t W[16];
   for (;;) {
+    PkTgt P; if (dl) { memset(W, 0, sizeof W); P.w = W; P.guest = 0; } else { P.w = 0; P.guest = pkt; }
     uint32_t ctl = mem_r32(rec + 4);                   // control word (sign = last record)
     // front triangle (V0,V1,V2) -> RTPT
     gte_write_data(0, vcoord(rec + 0x1C) | (vcoord(rec + 0x1E) << 16));  // VXY0
@@ -269,25 +316,25 @@ static void submit_poly_gt4_bp(R3000* c) {
     gte_write_data(5, vcoord(rec + 0x17));                                // VZ2
     gte_op(c, GTE_RTPT);
     if ((int32_t)gte_read_ctrl(31) >= 0) {
-      mem_w32(pkt + 8,  gte_read_data(12));            // SXY0
-      mem_w32(pkt + 20, gte_read_data(13));            // SXY1
-      mem_w32(pkt + 32, gte_read_data(14));            // SXY2
+      pk_w32(&P, 8,  gte_read_data(12));               // SXY0
+      pk_w32(&P, 20, gte_read_data(13));               // SXY1
+      pk_w32(&P, 32, gte_read_data(14));               // SXY2
       // 4th vertex (V3) -> RTPS
       gte_write_data(0, vcoord(rec + 0x21) | (vcoord(rec + 0x23) << 16)); // VXY3
       gte_write_data(1, vcoord(rec + 0x1B));                               // VZ3
-      mem_w32(pkt + 12, mem_r32(rec + 0) + xoff);      // uv0|clut + CLUT bank
+      pk_w32(&P, 12, mem_r32(rec + 0) + xoff);         // uv0|clut + CLUT bank
       gte_op(c, GTE_RTPS);
       if ((int32_t)gte_read_ctrl(31) >= 0) {
-        mem_w32(pkt + 44, gte_read_data(14));          // SXY3
-        mem_w32(pkt + 24, ctl & 0x7FFFFFu);            // uv1|clut (control low 23 bits)
+        pk_w32(&P, 44, gte_read_data(14));             // SXY3
+        pk_w32(&P, 24, ctl & 0x7FFFFFu);               // uv1|clut (control low 23 bits)
         gte_op(c, GTE_AVSZ4);
         uint32_t idx = ot_compress((uint32_t)((int32_t)gte_read_data(7) + zoff));
         if ((int32_t)idx >= 0) {
           uint32_t uv = mem_r32(rec + 8);
-          mem_w32(pkt + 36, uv);                       // uv2
-          mem_w32(pkt + 48, (uint32_t)((int32_t)uv >> 16)); // uv3 (sign-extended high half)
-          uoff_add(pkt + 12, uoff); uoff_add(pkt + 24, uoff);
-          uoff_add(pkt + 36, uoff); uoff_add(pkt + 48, uoff);
+          pk_w32(&P, 36, uv);                          // uv2
+          pk_w32(&P, 48, (uint32_t)((int32_t)uv >> 16)); // uv3 (sign-extended high half)
+          uoff_add(&P, 12, uoff); uoff_add(&P, 24, uoff);
+          uoff_add(&P, 36, uoff); uoff_add(&P, 48, uoff);
           // depth-cued colors: DPCT(rgb0,rgb1,rgb2) then DPCS(rgb3)
           gte_write_data(8,  mem_r32(IR0_SCRATCH));    // IR0 (depth-cue factor)
           gte_write_data(20, mem_r32(rec + 0x0C));     // RGB0
@@ -295,21 +342,32 @@ static void submit_poly_gt4_bp(R3000* c) {
           gte_write_data(22, mem_r32(rec + 0x14));     // RGB2
           gte_write_data(6,  mem_r32(rec + 0x14));     // RGBC (= rgb2; written by the body)
           gte_op(c, GTE_DPCT);
-          mem_w32(pkt + 4,  gte_read_data(20));        // rgb0 out
-          mem_w32(pkt + 16, gte_read_data(21));        // rgb1 out
-          mem_w32(pkt + 28, gte_read_data(22));        // rgb2 out
-          mem_w8(pkt + 7, (ctl & 0x40000000u) ? 0x3E : 0x3C);  // code: semi-trans vs opaque GT4
+          pk_w32(&P, 4,  gte_read_data(20));           // rgb0 out
+          pk_w32(&P, 16, gte_read_data(21));           // rgb1 out
+          pk_w32(&P, 28, gte_read_data(22));           // rgb2 out
+          pk_w8(&P, 7, (ctl & 0x40000000u) ? 0x3E : 0x3C);  // code: semi-trans vs opaque GT4
           gte_write_data(6, mem_r32(rec + 0x18));      // RGB3 in
           gte_op(c, GTE_DPCS);
-          mem_w32(pkt + 40, gte_read_data(22));        // rgb3 out
+          pk_w32(&P, 40, gte_read_data(22));           // rgb3 out
+          float pz0 = (float)(int32_t)gte_read_data(16);   // SZ FIFO: DR16..19 = SZ0..3
+          float pz1 = (float)(int32_t)gte_read_data(17);
+          float pz2 = (float)(int32_t)gte_read_data(18);
+          float pz3 = (float)(int32_t)gte_read_data(19);
           uint32_t otaddr = otbase + (idx << 2);
-          mem_w32(pkt + 0, mem_r32(otaddr) | 0x0C000000u);  // tag: link old head + len 12 (GT4)
-          mem_w32(otaddr, pkt);
-          if (depth) {                                  // SZ FIFO after RTPT(V0..2)+RTPS(V3): DR16..19 = SZ0..3
-            projprim_set_pz(pkt + 8,  (float)(int32_t)gte_read_data(16));   // SXY0 -> SZ0
-            projprim_set_pz(pkt + 20, (float)(int32_t)gte_read_data(17));   // SXY1 -> SZ1
-            projprim_set_pz(pkt + 32, (float)(int32_t)gte_read_data(18));   // SXY2 -> SZ2
-            projprim_set_pz(pkt + 44, (float)(int32_t)gte_read_data(19));   // SXY3 -> SZ3
+          if (dl) {
+            mem_w32(pkt + 0, mem_r32(otaddr));         // node tag: link old head, LEN 0 (payload native)
+            mem_w32(otaddr, pkt);
+            NativePrim* np = ndl_alloc(pkt & 0x1FFFFC);
+            if (np) { np->nwords = 12; np->npz = 4;
+              for (int k = 0; k < 12; k++) np->words[k] = W[k + 1];
+              np->pz[0] = pz0; np->pz[1] = pz1; np->pz[2] = pz2; np->pz[3] = pz3; }
+          } else {
+            mem_w32(pkt + 0, mem_r32(otaddr) | 0x0C000000u);  // tag: link old head + len 12 (GT4)
+            mem_w32(otaddr, pkt);
+            if (depth) {
+              projprim_set_pz(pkt + 8,  pz0); projprim_set_pz(pkt + 20, pz1);
+              projprim_set_pz(pkt + 32, pz2); projprim_set_pz(pkt + 44, pz3);
+            }
           }
           pkt += 52;
         }
