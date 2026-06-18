@@ -410,10 +410,11 @@ void games_tomba2_init(void) {
   // render code (later-133). A/B: PSXPORT_PEROBJ_RECOMP=1 keeps the recomp body. (PSXPORT_DEBUG=flush2
   // re-overrides the same addr below with the probe, which super-calls the recomp body.)
   if (!cfg_on("PSXPORT_PEROBJ_RECOMP")) {
-    void ov_perobj_flush(R3000*), ov_perobj_render(R3000*), ov_render_walk(R3000*);
+    void ov_perobj_flush(R3000*), ov_perobj_render(R3000*), ov_render_walk(R3000*), ov_terrain(R3000*);
     rec_set_override(0x8003CDD8u, ov_perobj_flush);
     rec_set_override(0x8003CCA4u, ov_perobj_render);   // per-object render dispatch (flush-only case native)
     rec_set_override(0x8003C048u, ov_render_walk);     // phase-2 render-list walk (own-when-handleable)
+    rec_set_override(0x8002AB5Cu, ov_terrain);         // field terrain/map renderer (node+24 of t32 node)
   }
   fps60_init();
   // cull tap: ALWAYS registered — genuine-wide is the default wide path and the overlay can toggle aspect

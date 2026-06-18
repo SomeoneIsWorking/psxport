@@ -5123,7 +5123,21 @@ code runs — not `gen_func_8003CDD8`, not the dispatcher `gen_func_8003F698`, n
   object dispatch → camera×object transform → geometry submission — is now native C (the "entity-list
   iteration → render submission" engine layer from the project goal); the owned-leaf boundary is the
   node's render fn (`node+24`, terrain via the owned byte-packed `0x80027768`) + the per-object submitters.
-- **NEXT (in order):** (1) drive to scenes using `0x8003B320`/`0x8003C8F4`/
+- **`gen_func_8002AB5C` (field TERRAIN/map renderer) now OWNED** (`submit_terrain`) — the render fn
+  (`node+24`) of the t32 render-list node, the bulk map geometry. Was interpreted-only (reached via
+  fn-ptr); seeded into the RE set, decoded, ported. It is the per-object flush specialised for the
+  terrain strip: set FarColor=0 + IR0 depth-cue factor `(128-node[78])<<5` @0x1F800090, compute two sway
+  angle bytes @0x800A2014/2016, build the object matrix (euler `80085480` + secondary sway `80084520`,
+  kept as primitives), compose camera×object via the same 3 MVMVA columns + translation as 8003CDD8, then
+  submit the terrain geomblk `0x800A1AE8` via the already-owned byte-packed `0x80027768`. **VRAM
+  byte-identical** native vs full recomp @f410 AND @f420; deterministic (2 runs identical). With this the
+  ENTIRE field render — list walk → per-object dispatch → flush → terrain → submit — is native C.
+- **Seeded for RE (emit.py EXTRA_SEEDS):** `0x8002AB5C` + `0x80051C8C` (interpreted-only, fn-ptr-reached)
+  now emit readable C in generated/. `80051C8C` (transform build: init node+0x98 identity, 3 euler rots
+  `80084D10/EB0/85050`, translation node+0xac from pos node+0x2e, propagate `80051464`) is decoded and
+  ready to port — that completes the native widescreen margin (it's the last guest call margin makes).
+- **NEXT (in order):** (1) own `gen_func_80051C8C` (transform build) → native widescreen margin (replace
+  the guest-flush margin_render.cpp). (2) drive to scenes using `0x8003B320`/`0x8003C8F4`/
   overlay `0x8013xxxx` and port those submit variants. (3) own `gen_func_80051C8C` (transform build,
   interpreted-only — RE from RAM). (4) native widescreen margin (replace the guest-flush margin_render.cpp).
 - Probes added this session: `PSXPORT_DEBUG=pdisp` (dispatch coverage), `subcnt` (submitter call counts),

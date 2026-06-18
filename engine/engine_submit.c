@@ -745,6 +745,74 @@ void ov_render_walk(R3000* c) {
   submit_render_walk(c);
 }
 
+// NATIVE field TERRAIN renderer — gen_func_8002AB5C (later-135). The render fn (node+24) of the field's
+// t32 render-list node: the bulk map/terrain geometry. Interpreted-only (reached via fn-ptr; seeded into
+// the RE set). Decoded from the recomp body — it is structurally the per-object flush specialised for the
+// terrain strip: set the depth-cue, build the object matrix (euler + a secondary sway), compose it with
+// the camera via the same MVMVA columns as 8003CDD8, then submit the terrain prim records through the
+// already-owned byte-packed submitter 0x80027768. The matrix-build leaves (80085480 euler→matrix,
+// 80084520 secondary rotate) and the submit stay platform primitives (rec_dispatch / the owned override),
+// exactly as the recomp body calls them; we own the orchestration, scratch writes and GTE compose.
+//   - FarColor (CR21-23) = 0 (fog toward black); IR0 depth-cue factor (0x1F800090, read by 80027768) =
+//     (128 - node[78]) << 5.
+//   - two sway angle bytes at 0x800A2014/2016 = (node[64]*node[80])>>11 and (node[66]*node[80])>>11.
+//   - terrain geomblk = 0x800A1AE8 (fixed per-frame record buffer); a1=a2=a3=0.
+#define A2_PARAM     0x800A2014u             // 3-byte sway-angle param scratch (engine global)
+#define IR0_STAGE    0x1F800090u             // IR0 depth-cue factor staged for the 0x80027768 submitter
+#define MVMVA_TERRAIN_GEOMBLK 0x800A1AE8u    // terrain prim-record buffer (a0 to 80027768)
+static void submit_terrain(R3000* c) {
+  uint32_t node = c->r[4];
+  // depth-cue: FarColor=0, IR0 factor staged for the submitter
+  gte_write_ctrl(21, 0); gte_write_ctrl(22, 0); gte_write_ctrl(23, 0);
+  uint32_t ir0 = (uint32_t)((128 - (int16_t)mem_r16(node + 78)) << 5);
+  int32_t a80 = (int16_t)mem_r16(node + 80);
+  int32_t p1 = (int32_t)(int16_t)mem_r16(node + 64) * a80;
+  mem_w8(A2_PARAM + 0, (uint8_t)(p1 >> 11));
+  int32_t p2 = (int32_t)(int16_t)mem_r16(node + 66) * a80;
+  mem_w32(IR0_STAGE, ir0);
+  mem_w8(A2_PARAM + 2, (uint8_t)(p2 >> 11));
+  // build object rotation matrix at scratch SCR from the node's euler angles (node+84/86/88)
+  c->r[4] = node + 84; c->r[5] = SCR; rec_dispatch(c, 0x80085480u);
+  // secondary sway rotation by the two computed angle bytes (+ the middle byte from the build)
+  mem_w32(SCR + 0x1C0, (uint32_t)mem_r8(A2_PARAM + 0) << 2);
+  mem_w32(SCR + 0x1C4, (uint32_t)mem_r8(A2_PARAM + 1) << 2);
+  mem_w32(SCR + 0x1C8, (uint32_t)mem_r8(A2_PARAM + 2) << 2);
+  c->r[4] = SCR; c->r[5] = SCR + 0x1C0; rec_dispatch(c, 0x80084520u);
+  // compose camera-rotation (0x1F8000F8 → CR0-4) × the object matrix (3 MVMVA columns), as 8003CDD8 does
+  gte_write_ctrl(0, mem_r32(SCR + 0xF8)); gte_write_ctrl(1, mem_r32(SCR + 0xFC));
+  gte_write_ctrl(2, mem_r32(SCR + 0x100)); gte_write_ctrl(3, mem_r32(SCR + 0x104));
+  gte_write_ctrl(4, mem_r32(SCR + 0x108));
+  for (int col = 0; col < 3; col++) {
+    uint32_t cc = SCR + col * 2;
+    gte_write_data(9,  mem_r16(cc + 0));
+    gte_write_data(10, mem_r16(cc + 6));
+    gte_write_data(11, mem_r16(cc + 12));
+    gte_op(c, MVMVA_ROTCOL);
+    mem_w16(cc + 0,  gte_read_data(9));
+    mem_w16(cc + 6,  gte_read_data(10));
+    mem_w16(cc + 12, gte_read_data(11));
+  }
+  // transform the object translation (node+72/76) by the camera, add the camera translation offset
+  gte_write_data(0, mem_r32(node + 72)); gte_write_data(1, mem_r32(node + 76));
+  gte_op(c, MVMVA_TRANS);
+  mem_w32(SCR + 20, gte_read_data(25) + mem_r32(SCR + 0x10C));
+  mem_w32(SCR + 24, gte_read_data(26) + mem_r32(SCR + 0x110));
+  mem_w32(SCR + 28, gte_read_data(27) + mem_r32(SCR + 0x114));
+  // load composed rotation → CR0-4, translation → CR5-7
+  gte_write_ctrl(0, mem_r32(SCR + 0));  gte_write_ctrl(1, mem_r32(SCR + 4));
+  gte_write_ctrl(2, mem_r32(SCR + 8));  gte_write_ctrl(3, mem_r32(SCR + 12));
+  gte_write_ctrl(4, mem_r32(SCR + 16));
+  gte_write_ctrl(5, mem_r32(SCR + 20)); gte_write_ctrl(6, mem_r32(SCR + 24));
+  gte_write_ctrl(7, mem_r32(SCR + 28));
+  // submit the terrain prim records via the owned byte-packed GT4 submitter
+  c->r[4] = MVMVA_TERRAIN_GEOMBLK; c->r[5] = 0; c->r[6] = 0; c->r[7] = 0;
+  rec_dispatch(c, 0x80027768u);
+}
+void ov_terrain(R3000* c) {
+  if (cfg_on("PSXPORT_PEROBJ_RECOMP")) { rec_super_call(c, 0x8002AB5Cu); return; }
+  submit_terrain(c);
+}
+
 // PSXPORT_DEBUG=subcnt — submitter call-counter. Registered (super-call) on candidate submit fns to see
 // which actually fire per scene + how often, so the un-owned variants worth porting are picked by data,
 // not guesswork. One slot per registered address; per-present-frame counts flushed on frame change.
