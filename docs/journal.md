@@ -4422,3 +4422,15 @@ backdrop fills the frame contiguously (no gaps). Verified: `scratch/screenshots/
 gradient + ocean now fill the 16:9 frame cleanly, stripes gone. STEPPING STONE: this also scales HUD size;
 the proper split (backdrop scales to fill, HUD anchors at native size) uses the now-always-on `s_seen3d`
 bg/HUD flag — next. The HUD banner cut at 320 also remains (a clip item, B4/step2).
+
+## later-118c — genuine-wide: 2D HUD/overlay POLYS also widen (banner spreads across the frame)
+later-118b widened 2D SPRITES; the HUD banner is drawn as screen-space 2D POLYS (not sprites), so it
+stayed left-anchored/cut at 320. Now that native depth is always-on, the poly path has the `is3d`
+classification every run → a poly with is3d==0 is a screen-space 2D element. Fix (gpu_native.c poly path,
+gated `s_ndepth && !is3d && gpu_vk_wide_engine()`): scale its x to the wide width about the framebuffer
+origin, same transform as the 2D sprites. Verified `scratch/screenshots/field_wide169c.png`: the banner
+planks now spread across the 16:9 frame (vs left-clustered before). RESIDUAL: the last ~2 planks ("se!")
+still drop at the far-right edge (a clip/source-position item, B4 polish — not chased from a still).
+Together later-117/118/118b/118c: genuine-wide 16:9 now = real wider FOV + native per-pixel depth +
+2D backdrop/HUD scaled to fill, no stripes. Remaining: HUD right-edge polish, frustum cull side-gaps (B3),
+own PutDrawEnv clip (step2), then make genuine-wide the DEFAULT wide path + retire the FB spread (step6).

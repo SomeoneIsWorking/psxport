@@ -588,6 +588,16 @@ static void gp0_exec(void) {
           extern long g_nd2d_hist[256]; g_nd2d_hist[op]++; }
         extern long g_nd_3d, g_nd_2d; if (is3d) g_nd_3d++; else g_nd_2d++;
       }
+      // Genuine engine-wide: a poly with is3d==0 is a SCREEN-SPACE 2D element (HUD banner, full-screen
+      // overlay) drawn as polys rather than sprites. The 3D world widens via the projection (OFX); these
+      // 2D polys would stay left-anchored at 320 (the banner gets cut). Widen them like the 2D sprites:
+      // scale the 2D plane uniformly to the wide width about the framebuffer origin so they fill the frame.
+      // (Needs the now-always-on is3d classification.) Stepping stone: scales HUD size too; backdrop-vs-HUD
+      // split is the next refinement. Gated to wide-engine; no effect at 4:3 or the FB-hack path.
+      { int gpu_vk_wide_engine(void), gpu_vk_wide_engine_w(void);
+        if (s_ndepth && !is3d && gpu_vk_wide_engine()) {   // s_ndepth -> is3d is meaningful (default)
+          int o = s_da_x0, ww = gpu_vk_wide_engine_w();
+          for (int i = 0; i < nv; i++) xs[i] = o + (xs[i] - o) * ww / 320; } }
       #define SBS_OR_ND_SETVD(p) do { if (is3d) { if (s_sbs) gpu_vk_set_vd_n(p); else gpu_vk_set_vd(p); } } while (0)
       if (semi) {
         { void gpu_vk_semi_group(int,int,int,int);   // OT-order grouping (overlap -> fresh fb snapshot)
