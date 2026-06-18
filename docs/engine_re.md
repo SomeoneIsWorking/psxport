@@ -82,6 +82,37 @@ manager's target (Phase 1):** reimplement the walk in native C, call each handle
 - Per-type handlers (call the wrappers with their obj*): e.g. `:21274 :27367 :28376` → `FUN_8007778c`;
   `:45944 :45991 :46120` → `FUN_80077a4c`. These are the entity update/render routines (Phase 2 targets).
 
+## Deferred render pipeline — the render-command QUEUE + flush (later-130, the missing architecture)
+Geometry submission is NOT inline in the entity handlers. It is a **deferred two-phase** system (proved by
+`PSXPORT_DEBUG=geomblk`: all owned submits run with `g_current_object==0`, AFTER every per-object cull):
+- **Phase 1 (entity walk, `FUN_8007a904`):** each handler runs gameplay AND, if its object is visible,
+  ENQUEUES a **render command** into a per-frame render-command list (it does NOT project here).
+- **Phase 2 (flush):** a loop drains the command list, loading each command's GTE transform and dispatching
+  it to a per-mode renderer that does the actual projection + packet build (GT3/GT4 etc.).
+
+**Render-command list + flush loop** (`gen_func_8003F174`, and a sibling at `gen_func_8003F0xx`; callers
+0x8003d074/0x8003f138/0x8003f228): the list header has the command COUNT at `+8` (a second count/flag at
+`+9`); the commands are reached via a **pointer array at `list+0xc0`** (`lw 0xc0(cursor)`, cursor += 4 per
+iter). For each command struct `cmd`:
+- `cmd+0x18 .. +0x2c` = the **per-object GTE transform** (rotation matrix + translation), loaded straight
+  into the GTE control regs at flush via the `lwc2/ctc2` block — THIS is where the "96/54 ctc2 sites" live
+  for queued objects (the transform is captured into the command at enqueue, replayed here).
+- `cmd+0x40` = the **geomblk pointer** (the model's primitive-record list) → passed as `a0` to the dispatcher.
+- flush calls dispatcher `gen_func_8003F698(a0=geomblk, a1=*0x800ED8C8 OTbase, a2=flag)`.
+
+**Mode dispatcher `gen_func_8003F698`:** reads a render-mode byte `*0x800BF870` (`DAT_800bf870`, 0..0x15;
+the engine_re cull note "if DAT_800bf870==4 force mode 2" is THIS global), indexes a **22-entry jump table at
+0x80015268**, tail-calls the per-mode renderer. Early-outs to the generic GT3/GT4 path (mode→0x800803DC) when
+`*0x1F800234 != 0`, `a2&1`, or mode≥0x16. Table (mode → renderer):
+`0:0x80146478  1:0x80132dc0  2:0x8012555c  3:GT3/GT4(0x800803DC)  4:0x8013dafc  5:0x801362cc  6:0x8013d568
+7:0x8012e1a0  8:0x8012a9dc  9..0x13:GT3/GT4  0x14:0x80116b14  0x15:0x8010b1b8`. The `0x8013xxxx` entries are
+the per-scene OVERLAY submitter variants the margin handlers feed (NOT the natively-owned GT3/GT4 — that is
+only mode 3 / ≥9). `*0x800BF870` is a GLOBAL set before/within a flush pass, so one pass renders in one mode.
+- **OBJECT ATTRIBUTION (the geomblk oracle's missing key) lives at the ENQUEUE site**, not the cull/walk tap:
+  whoever fills `cmd+0x40`(geomblk)/`cmd+0x18`(transform) and bumps `list+8` does it during phase 1 with
+  `g_current_object` = the source node. Tap THAT to map geomblk→object and to RE each handler's render-half.
+  OPEN: the enqueue function (writer of the command struct / `list+0xc0` array) — the next RE target.
+
 ## Geometry SUBMIT — `0x8007FDB0` (POLY_GT3 tri) + `0x8008007C` (POLY_GT4 quad) — NATIVE-OWNED (engine_submit.c)
 These are the resident routines that turn a model's pre-built primitive-record list into GPU packets in
 the OT. Both are now reimplemented natively in `engine/engine_submit.c` (`ov_submit_poly_gt3/4`),
