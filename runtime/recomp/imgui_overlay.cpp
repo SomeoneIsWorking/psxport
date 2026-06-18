@@ -1,0 +1,127 @@
+// Dear ImGui mod-toggle overlay. Brings ImGui up on the port's existing Vulkan device + present render
+// pass and draws a small window that edits the LIVE mod state (g_mods, mods.h) and 60fps (g_fps60_on).
+// Toggle visibility with `~` (grave) or F1. C-callable bridge in imgui_overlay.h; built as C++ and
+// linked into the otherwise-C port (build_port.sh / run.sh compile .cpp with $CXX and link with $CXX).
+#include "imgui.h"
+#include "backends/imgui_impl_sdl2.h"
+#include "backends/imgui_impl_vulkan.h"
+#include "imgui_overlay.h"
+extern "C" {
+#include "mods.h"
+}
+extern "C" int g_fps60_on;   // engine/fps60.c — the 60fps interpolation gate
+
+static bool            s_inited  = false;
+static bool            s_visible = true;
+static VkDevice        s_dev     = VK_NULL_HANDLE;
+static VkDescriptorPool s_pool   = VK_NULL_HANDLE;
+
+static void check_vk(VkResult r) { (void)r; }
+
+void imgui_overlay_init(SDL_Window* win, VkInstance inst, VkPhysicalDevice phys, uint32_t qfam,
+                        VkDevice dev, VkQueue queue, VkRenderPass present_rpass,
+                        uint32_t min_image_count, uint32_t image_count) {
+  if (s_inited) return;
+  s_dev = dev;
+  // A small descriptor pool for ImGui (font atlas + any user textures).
+  VkDescriptorPoolSize ps = { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 16 };
+  VkDescriptorPoolCreateInfo dpi = { VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO };
+  dpi.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
+  dpi.maxSets = 16; dpi.poolSizeCount = 1; dpi.pPoolSizes = &ps;
+  if (vkCreateDescriptorPool(dev, &dpi, nullptr, &s_pool) != VK_SUCCESS) {
+    fprintf(stderr, "[imgui] descriptor pool create failed; overlay disabled\n");
+    return;
+  }
+  IMGUI_CHECKVERSION();
+  ImGui::CreateContext();
+  ImGui::GetIO().IniFilename = nullptr;   // don't write imgui.ini next to the binary
+  ImGui::StyleColorsDark();
+  ImGui_ImplSDL2_InitForVulkan(win);
+  ImGui_ImplVulkan_InitInfo ii = {};
+  ii.Instance = inst; ii.PhysicalDevice = phys; ii.Device = dev;
+  ii.QueueFamily = qfam; ii.Queue = queue; ii.DescriptorPool = s_pool;
+  ii.RenderPass = present_rpass; ii.Subpass = 0;
+  ii.MinImageCount = min_image_count < 2 ? 2 : min_image_count;
+  ii.ImageCount = image_count < ii.MinImageCount ? ii.MinImageCount : image_count;
+  ii.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
+  ii.CheckVkResultFn = check_vk;
+  ImGui_ImplVulkan_Init(&ii);
+  s_inited = true;
+  fprintf(stderr, "[imgui] overlay up (toggle with ` or F1)\n");
+}
+
+void imgui_overlay_shutdown(void) {
+  if (!s_inited) return;
+  vkDeviceWaitIdle(s_dev);
+  ImGui_ImplVulkan_Shutdown();
+  ImGui_ImplSDL2_Shutdown();
+  ImGui::DestroyContext();
+  if (s_pool) vkDestroyDescriptorPool(s_dev, s_pool, nullptr);
+  s_inited = false;
+}
+
+void imgui_overlay_event(const SDL_Event* e) {
+  if (!s_inited || !e) return;
+  ImGui_ImplSDL2_ProcessEvent(e);
+  if (e->type == SDL_KEYDOWN &&
+      (e->key.keysym.scancode == SDL_SCANCODE_GRAVE || e->key.keysym.scancode == SDL_SCANCODE_F1))
+    s_visible = !s_visible;
+}
+
+static void build_ui(void) {
+  ImGui::SetNextWindowSize(ImVec2(330, 0), ImGuiCond_FirstUseEver);
+  ImGui::SetNextWindowPos(ImVec2(20, 20), ImGuiCond_FirstUseEver);
+  ImGui::Begin("Tomba2Engine - PC-native mods");   // ASCII only (default font has no em-dash glyph)
+  ImGui::TextDisabled("` or F1 to hide");
+  ImGui::PushItemWidth(120.0f);   // keep sliders compact so their labels aren't clipped
+
+  bool wide = g_mods.wide != 0;
+  if (ImGui::Checkbox("Widescreen (16:9)", &wide)) {
+    g_mods.wide = wide;
+    if (g_mods.wide && g_mods.ires > 2) g_mods.ires = 2;   // VRAM_W cap
+  }
+  int ires = g_mods.ires, cap = g_mods.wide ? 2 : 3;
+  if (ImGui::SliderInt("Internal res", &ires, 1, cap))
+    g_mods.ires = ires < 1 ? 1 : (ires > cap ? cap : ires);
+
+  bool fps60 = g_fps60_on != 0;
+  if (ImGui::Checkbox("60fps interpolation", &fps60)) g_fps60_on = fps60;
+
+  ImGui::Separator();
+  bool ssao = g_mods.ssao != 0;
+  if (ImGui::Checkbox("Ambient occlusion (SSAO)", &ssao)) g_mods.ssao = ssao;
+  if (g_mods.ssao) {
+    ImGui::SliderFloat("AO strength", &g_mods.ssao_strength, 0.0f, 2.0f);
+    ImGui::SliderFloat("AO radius (px)", &g_mods.ssao_radius, 1.0f, 20.0f);
+    ImGui::SliderFloat("AO bias", &g_mods.ssao_bias, 0.0f, 0.1f, "%.3f");
+    ImGui::SliderFloat("AO range", &g_mods.ssao_range, 0.02f, 0.6f, "%.3f");
+  }
+
+  ImGui::Separator();
+  bool light = g_mods.light != 0;
+  if (ImGui::Checkbox("Directional light", &light)) g_mods.light = light;
+  if (g_mods.light) {
+    ImGui::SliderFloat3("Light dir (view)", g_mods.light_dir, -1.0f, 1.0f);
+    ImGui::SliderFloat("Ambient", &g_mods.light_ambient, 0.0f, 1.5f);
+    ImGui::SliderFloat("Diffuse", &g_mods.light_diffuse, 0.0f, 1.5f);
+  }
+  ImGui::PopItemWidth();
+  ImGui::End();
+}
+
+void imgui_overlay_new_frame(void) {
+  if (!s_inited) return;
+  ImGui_ImplVulkan_NewFrame();
+  ImGui_ImplSDL2_NewFrame();
+  ImGui::NewFrame();
+  if (s_visible) build_ui();
+  ImGui::Render();
+}
+
+void imgui_overlay_render(VkCommandBuffer cmd) {
+  if (!s_inited) return;
+  ImDrawData* dd = ImGui::GetDrawData();
+  if (dd) ImGui_ImplVulkan_RenderDrawData(dd, cmd);
+}
+
+int imgui_overlay_inited(void) { return s_inited ? 1 : 0; }

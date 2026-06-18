@@ -18,6 +18,8 @@
 #include <stdio.h>
 #include <string.h>
 #include "gpu_vk_shaders.h"   // generated: spv_present_vert / spv_present_frag (tools/gen_vk_shaders.sh)
+#include "mods.h"             // g_mods: live PC-native mod toggles (wide/ires/ssao/light), seeded from cfg
+#include "imgui_overlay.h"    // ImGui mod-toggle overlay (no-op until init'd; windowed only)
 
 #define VRAM_W 1024
 #define VRAM_H 512
@@ -190,21 +192,16 @@ static VkPipelineLayout s_ssao_pll;
 static VkDescriptorPool s_ssao_dpool;
 static VkDescriptorSet s_ssao_dset;
 static VkPipeline      s_ssao_pipe;
-static int ssao_on(void) {
-  static int v = -1;
-  if (v < 0) v = (cfg_on("PSXPORT_SSAO") && !cfg_on("PSXPORT_SBS")) ? 1 : 0;
-  return v;
-}
-// PSXPORT_LIGHT: PC-native directional light from a depth-reconstructed normal (shares the deferred pass
-// with SSAO). Disabled under SBS (single-panel only). proj getters feed the normal reconstruction.
+// AO/light are LIVE (g_mods, overlay-toggled). Disabled under SBS (single-panel only). proj getters feed
+// the LIGHT normal reconstruction. ui_infra() = the overlay needs the deferred infra + native-depth kept
+// on so SSAO/LIGHT can be toggled at runtime even if they started off.
+static int sbs_on(void)  { static int v = -1; if (v < 0) v = cfg_on("PSXPORT_SBS") ? 1 : 0; return v; }
+static int ssao_on(void) { return g_mods.ssao  && !sbs_on(); }
 float proj_plane_h(void);
 void  proj_screen_center(float* cx, float* cy);
-static int light_on(void) {
-  static int v = -1;
-  if (v < 0) v = (cfg_on("PSXPORT_LIGHT") && !cfg_on("PSXPORT_SBS")) ? 1 : 0;
-  return v;
-}
+static int light_on(void)    { return g_mods.light && !sbs_on(); }
 static int deferred_on(void) { return ssao_on() || light_on(); }
+static int ui_infra(void)    { return g_mods.ui && !sbs_on(); }
 static int s_present_sx, s_present_sy;   // this frame's faithful display origin (for the LIGHT screen map)
 
 // M3 textured rasterizer: a VRAM snapshot image the texture sampler reads (avoids render/sample feedback
@@ -277,21 +274,18 @@ void gpu_vk_dirty(int x, int y, int w, int h) {
 // VIEWPORT — the engine's own submitted geometry, just sampled denser (crisp 3D edges + texel
 // sampling), NOT the rejected supersample-and-downscale FB-cram. Width is capped by VRAM_W=1024:
 // 4:3 -> ires<=3 (960), 16:9 -> ires<=2 (856). use_fb() == "render via the scaled scratch FB".
-static int s_wide = -1, s_ires = 1;
+// Live widescreen + internal-res, read from g_mods each frame (the overlay toggles them at runtime).
+// s_wide/s_ires are now accessors over g_mods (clamped: 4:3 -> ires<=3 (960px), 16:9 -> ires<=2 (856px),
+// both within VRAM_W=1024). wide_init() just seeds g_mods from cfg once.
 #define WIDE_OFF 54                       // (FBW/ires - 320)/2 — center the native 320 view in 428-wide FB
+static int W_wide(void) { return g_mods.wide; }
+static int W_ires(void) { int i = g_mods.ires, cap = g_mods.wide ? 2 : 3; return i < 1 ? 1 : (i > cap ? cap : i); }
+#define s_wide (W_wide())
+#define s_ires (W_ires())
 static int FBW(void) { return (s_wide ? 428 : 320) * s_ires; }
 static int FBH(void) { return 240 * s_ires; }
 static int use_fb(void) { return s_wide || s_ires > 1; }   // 3D goes through the scaled scratch FB
-static void wide_init(void) {
-  if (s_wide >= 0) return;
-  const char* w = cfg_str("PSXPORT_WIDE");
-  s_wide = (w && atoi(w) != 0) ? 1 : 0;
-  // PSXPORT_IRES = native internal-resolution scale (1 = faithful PSX 320x240). Accept the legacy
-  // PSXPORT_SS name too. Clamp to what fits VRAM_W: 4:3 -> 3, 16:9 -> 2.
-  const char* ir = cfg_str("PSXPORT_IRES"); if (!ir) ir = cfg_str("PSXPORT_SS");
-  s_ires = ir ? atoi(ir) : 1; if (s_ires < 1) s_ires = 1;
-  int cap = s_wide ? 2 : 3; if (s_ires > cap) s_ires = cap;
-}
+static void wide_init(void) { mods_init(); }
 
 int gpu_vk_enabled(void) {
   if (s_vk_on < 0) {
@@ -391,6 +385,7 @@ static void recreate_swapchain(void) {
 
 static void init_vk(void) {
   s_inited = 1;
+  mods_init();   // seed the live mod state from cfg before any ssao_on()/ui_infra() decision below
   // instance extensions: SDL surface exts (+ portability enumeration if the loader has it). Headless
   // (offscreen) needs no window/surface extensions at all.
   const char* exts[16]; unsigned ext_n = 0;
@@ -570,8 +565,11 @@ static void init_vk(void) {
   create_vram();
   void create_tri_pipeline(void); create_tri_pipeline();
   void panels_init(void); panels_init();
-  if (deferred_on()) create_ssao();
+  if (deferred_on() || ui_infra()) create_ssao();   // UI keeps the deferred infra ready for live toggles
   if (!s_headless) create_swapchain();
+  // ImGui mod-toggle overlay (windowed only; needs the swapchain + present render pass).
+  if (g_mods.ui && !s_headless)
+    imgui_overlay_init(s_win, s_inst, s_phys, s_qfam, s_dev, s_queue, s_rpass, 2, s_swap_n);
   else fprintf(stderr, "[gpu_vk] headless offscreen render up (VRAM 1024x512 R16_UINT, no swapchain)\n");
   fprintf(stderr, "[gpu_vk] Vulkan present backend up (%ux%u, %u swap images; VRAM 1024x512 R16_UINT)\n",
           s_extent.width, s_extent.height, s_swap_n);
@@ -659,6 +657,7 @@ static void img_barrier(VkImageLayout from, VkImageLayout to, VkPipelineStageFla
 static void poll_quit(void) {
   SDL_Event e;
   while (SDL_PollEvent(&e)) {
+    imgui_overlay_event(&e);   // overlay mouse/keys (+ ` / F1 visibility toggle); no-op if not inited
     if (e.type == SDL_QUIT) exit(0);
     if (e.type == SDL_KEYDOWN && e.key.keysym.scancode == SDL_SCANCODE_ESCAPE) exit(0);
   }
@@ -952,24 +951,15 @@ static void ssao_pass(void) {
   float nearp = proj_near_pz(), H = proj_plane_h();
   float inv_near = 1.0f / (nearp < 1.0f ? 1.0f : nearp), inv_far = 1.0f / 65535.0f;
   float cx, cy; proj_screen_center(&cx, &cy);
-  // Read the env-tunable params ONCE (statics), then log ONCE the engine has set a real projection plane
-  // (early frames have H/cx/cy at defaults; logging then would mislead — the values used at draw time are
-  // re-read fresh from the getters each call, so the log is purely informational).
-  static int s_params = 0, s_logged = 0;
-  static float strength, radius, bias_frac, range_frac, lx, ly, lz, ambient, diffuse;
-  if (!s_params) {
-    const char* s = cfg_str("PSXPORT_SSAO_STRENGTH"); strength   = s ? (float)atof(s) : 1.0f;
-    const char* r = cfg_str("PSXPORT_SSAO_RADIUS");   radius     = (r ? (float)atof(r) : 5.0f) * (float)s_ires;
-    const char* b = cfg_str("PSXPORT_SSAO_BIAS");     bias_frac  = b ? (float)atof(b) : 0.01f;
-    const char* g = cfg_str("PSXPORT_SSAO_RANGE");    range_frac = g ? (float)atof(g) : 0.15f;
-    // Light direction = the TO-LIGHT vector in VIEW space (x right, y DOWN, z into screen). Default:
-    // upper-left, slightly toward the camera. PSXPORT_LIGHT_DIR="x,y,z" overrides.
-    lx = -0.4f; ly = -0.7f; lz = -0.5f;
-    const char* d = cfg_str("PSXPORT_LIGHT_DIR"); if (d) sscanf(d, "%f,%f,%f", &lx, &ly, &lz);
-    const char* a = cfg_str("PSXPORT_LIGHT_AMBIENT");  ambient = a ? (float)atof(a) : 0.65f;
-    const char* df = cfg_str("PSXPORT_LIGHT_DIFFUSE"); diffuse = df ? (float)atof(df) : 0.5f;
-    s_params = 1;
-  }
+  // Params are LIVE from g_mods (the overlay tunes them at runtime). Radius scales with internal-res so a
+  // pixel radius covers a consistent world area. Light dir = the TO-LIGHT vector in VIEW space (x right,
+  // y DOWN, z into screen). Log once, after the engine has set a real projection plane (early frames have
+  // H/cx/cy at defaults; logging then would mislead).
+  float strength = g_mods.ssao_strength, radius = g_mods.ssao_radius * (float)s_ires;
+  float bias_frac = g_mods.ssao_bias, range_frac = g_mods.ssao_range;
+  float lx = g_mods.light_dir[0], ly = g_mods.light_dir[1], lz = g_mods.light_dir[2];
+  float ambient = g_mods.light_ambient, diffuse = g_mods.light_diffuse;
+  static int s_logged = 0;
   if (!s_logged && H > 1.5f) {
     fprintf(stderr, "[deferred] ssao=%d light=%d | ssao strength=%.2f radius=%.1fpx bias=%.3f range=%.3f"
             " | light dir=(%.2f,%.2f,%.2f) amb=%.2f diff=%.2f | near pz=%.1f H=%.0f cx=%.1f cy=%.1f\n",
@@ -1026,6 +1016,7 @@ void gpu_vk_present(const uint16_t* src, int sx, int sy, int w, int h) {
   if (!s_inited) init_vk();
   wide_init();
   s_present_sx = sx; s_present_sy = sy;   // faithful display origin (pre use_fb override) for the LIGHT screen map
+  imgui_overlay_new_frame();   // CPU-build the mod-toggle UI for this frame (no-op if overlay not inited)
   // PSXPORT_SBS: split-screen depth A/B. Render the frame into TWO full-res images — s_tex with default
   // OT-order depth, s_tex_b with native per-vertex depth — then composite them side by side (left pane =
   // default, right pane = native) so you can SEE the native-depth bug against the correct render.
@@ -1094,6 +1085,7 @@ void gpu_vk_present(const uint16_t* src, int sx, int sy, int w, int h) {
     vkCmdBindDescriptorSets(s_cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, s_pll, 0, 1, &s_panels[p].dset_present, 0, 0);
     vkCmdDraw(s_cmd, 3, 1, 0, 0);
   }
+  imgui_overlay_render(s_cmd);   // draw the mod-toggle overlay on top (no-op if not inited)
   vkCmdEndRenderPass(s_cmd);
   VKC(vkEndCommandBuffer(s_cmd));
 

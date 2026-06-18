@@ -4216,3 +4216,32 @@ diff .5 → subtle, doesn't crush baked art); composes with SSAO; UI/sky untouch
 ZERO new VUIDs (only the pre-existing headless present-rpass PRESENT_SRC). Faithful gate: only VK path,
 default off. Tunables: PSXPORT_LIGHT_DIR="x,y,z"/_AMBIENT/_DIFFUSE. Both PC-native mods (SSAO+LIGHT)
 now done; user to live-tune the look. Hi-res/widescreen/SSAO/lighting all landed; 60fps still parked.
+
+## later-111 — DONE: Dear ImGui mod-toggle overlay (PSXPORT_UI) + live mod state
+User: "add imgui and a toggle for everything (wide/60/lighting/ao) then we'll RE the game's own options
+menu and move them there." Built the interim overlay; the game-options-menu RE is the NEXT step (move the
+toggles there later — this overlay is the stopgap UI).
+
+- **Vendored Dear ImGui** stable v1.91.9b into `vendor/imgui/` (core + SDL2 + Vulkan backends; MIT).
+- **Live mod state** `runtime/recomp/mods.{h,c}` — `g_mods` (ui/wide/ires/ssao/light + ssao & light
+  params), seeded once from cfg by mods_init(), then mutated LIVE by the overlay. gpu_vk.c now reads
+  g_mods EVERY frame (s_wide/s_ires became accessor macros over g_mods; ssao_on/light_on read g_mods;
+  ssao_pass params read g_mods live) so a toggle/slider takes effect immediately. 60fps = the existing
+  extern int g_fps60_on, flipped directly by the overlay.
+- **Overlay** `runtime/recomp/imgui_overlay.{h,cpp}` (C++; a C bridge header). Inits ImGui on the port's
+  EXISTING VK device + present render pass (no second device), draws into the swapchain inside the present
+  render pass (after the present quad, before EndRenderPass). Toggle visibility with ` or F1. Checkboxes:
+  Widescreen, 60fps, SSAO, Directional light; sliders: Internal res (1-3, capped 2 in wide), and the SSAO
+  / light params (shown when their toggle is on).
+- **Runtime-toggleable SSAO/LIGHT:** PSXPORT_UI forces the native-depth path + deferred-resource creation
+  ON (OR'd into the native-depth gates in gpu_native.c/gte_beetle.c, and create_ssao via ui_infra()), so
+  SSAO/LIGHT can be flipped on at runtime even if they started off. Disabled under SBS.
+- **Build:** the port is otherwise pure C; added C++ support to BOTH run.sh and tools/build_port.sh
+  (compile .cpp with $CXX, link with $CXX for libstdc++; -Ivendor/imgui[/backends]). New TUs: mods.c +
+  imgui_overlay.cpp + the 6 vendored imgui .cpp.
+
+Verified: builds+links clean; windowed `PSXPORT_UI=1 PSXPORT_GPU_WINDOW=1` brings the overlay up
+("[imgui] overlay up"), runs 30s+ with NO Vulkan validation errors / crash, all toggles render (cropped
+screenshot confirms). Game render path with UI on is fine (headless UI=1 field frames bright). Faithful:
+default off. NOTE the default ImGui font has no em-dash glyph (use ASCII in labels). Run windowed:
+`PSXPORT_UI=1 PSXPORT_GPU_WINDOW=1 ./run.sh` (or add PSXPORT_WINDOWED=1).

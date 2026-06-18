@@ -16,6 +16,7 @@ set -eu
 cd "$(dirname "$0")/.."
 
 CC="${CC:-cc}"
+CXX="${CXX:-c++}"   # ImGui overlay (imgui_overlay.cpp + vendored Dear ImGui) is C++
 JOBS="$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)"
 RT=runtime/recomp       # common PSX->PC platform (future psxport submodule)
 ENG=engine              # Tomba2Engine — the game-specific native engine + RE
@@ -26,13 +27,16 @@ mkdir -p "$OBJ"
 # No -Igenerated: the interpreter-only runtime links no recompiled shards (later-101).
 INC="-I$RT -I$ENG -I$MED -I$MED/psx -Ivendor/beetle-psx/libretro-common/include -Ivendor/beetle-psx -Ivendor/beetle-psx/deps/libchdr/include"
 CFLAGS="-O2 -g -w -D_XOPEN_SOURCE=700 $INC $(pkg-config --cflags sdl2 vulkan 2>/dev/null) -DPSXPORT_SDL"
+IMGUI=vendor/imgui
+CXXFLAGS="-O2 -g -w -std=c++17 $INC -I$IMGUI -I$IMGUI/backends $(pkg-config --cflags sdl2 vulkan 2>/dev/null) -DPSXPORT_SDL"
 tools/gen_vk_shaders.sh   # compile+embed the Vulkan present shaders (gpu_vk_shaders.h) before gpu_vk.c
 
-# Same source list as run.sh step 4 (keep in sync).
+# Same source list as run.sh step 4 (keep in sync). C++ TUs (.cpp) = ImGui overlay; compiled with $CXX.
 SRC="$RT/dispatch.c \
   $RT/cfg.c $RT/mem.c $RT/stubs.c $RT/hle.c $RT/threads.c $RT/interp.c $RT/gpu_native.c $RT/gpu_trace.c $RT/gpu_debug.c $RT/spu_audio.c $RT/pad_input.c $RT/memcard.c $RT/native_fmv.c \
   $MED/psx/gte.c $RT/gte_beetle.c $MED/psx/mdec.c $RT/mdec_beetle.c $MED/psx/spu.c $RT/spu_beetle.c \
-  $RT/disc.c $RT/cd_override.c $RT/cdc_native.c $RT/xa_stream.c $RT/timing.c $RT/gpu_vk.c $ENG/game_tomba2.c $ENG/fps60.c $ENG/engine_tomba2.c $ENG/engine_submit.c $RT/sync_overrides.c $RT/native_boot.c $RT/dbg_server.c $RT/native_stub.c $RT/watchdog.c $RT/boot.c"
+  $RT/disc.c $RT/cd_override.c $RT/cdc_native.c $RT/xa_stream.c $RT/timing.c $RT/gpu_vk.c $RT/mods.c $ENG/game_tomba2.c $ENG/fps60.c $ENG/engine_tomba2.c $ENG/engine_submit.c $RT/sync_overrides.c $RT/native_boot.c $RT/dbg_server.c $RT/native_stub.c $RT/watchdog.c $RT/boot.c \
+  $RT/imgui_overlay.cpp $IMGUI/imgui.cpp $IMGUI/imgui_draw.cpp $IMGUI/imgui_tables.cpp $IMGUI/imgui_widgets.cpp $IMGUI/backends/imgui_impl_sdl2.cpp $IMGUI/backends/imgui_impl_vulkan.cpp"
 
 objof() { echo "$OBJ/$(echo "$1" | tr '/.' '__').o"; }
 
@@ -40,8 +44,12 @@ FORCE=""
 [ "${1:-}" = "all" ] && FORCE="all" && shift || true
 for f in "$@"; do FORCE="$FORCE $f"; done
 
-compile_one() { o="$(objof "$1")"; $CC $CFLAGS -c "$1" -o "$o" || { echo "FAILED: $1" >&2; exit 1; }; }
-export -f compile_one objof; export CC CFLAGS OBJ
+compile_one() { o="$(objof "$1")";
+  case "$1" in
+    *.cpp|*.cc) $CXX $CXXFLAGS -c "$1" -o "$o" ;;
+    *)          $CC  $CFLAGS  -c "$1" -o "$o" ;;
+  esac || { echo "FAILED: $1" >&2; exit 1; }; }
+export -f compile_one objof; export CC CXX CFLAGS CXXFLAGS OBJ
 
 TODO=""
 for s in $SRC; do
@@ -68,5 +76,6 @@ ZSTD_A="$(find_a 'libzstd.a')"; [ -n "$ZSTD_A" ] && CHD_LIBS="$CHD_LIBS $ZSTD_A"
 
 OBJS=""; for s in $SRC; do OBJS="$OBJS $(objof "$s")"; done
 # shellcheck disable=SC2086
-$CC -rdynamic $OBJS $CHD_LIBS $(pkg-config --libs sdl2 vulkan) -lpthread -lm -o scratch/bin/tomba2_port || { echo "[build] link failed" >&2; exit 1; }
+# Link with $CXX so libstdc++ (ImGui) is pulled in.
+$CXX -rdynamic $OBJS $CHD_LIBS $(pkg-config --libs sdl2 vulkan) -lpthread -lm -o scratch/bin/tomba2_port || { echo "[build] link failed" >&2; exit 1; }
 echo "[build] linked scratch/bin/tomba2_port"
