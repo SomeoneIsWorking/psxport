@@ -68,11 +68,15 @@ static uint32_t ot_depth(R3000* c, uint32_t code, int zbase, int nz, uint32_t av
 
 // Logarithmic OT-bucket compression + range clamp, exactly as the recomp body. Returns the final OT
 // index, or 0xFFFFFFFF (negative) if out of the drawable range [4,2047] (prim culled, not linked).
+// Uses ARITHMETIC shifts to match the recomp bodies bit-for-bit when otz can be negative (the
+// byte-packed variants add a signed per-call OT-Z bias before this; for the non-negative AVSZ inputs
+// of the resident GT3/GT4 library this is identical to a logical shift).
 static uint32_t ot_compress(uint32_t otz) {
-  uint32_t sh = otz >> 10;
-  uint32_t idx = (otz >> (sh & 31)) + (sh << 9);
-  if ((uint32_t)(idx - 4) < 2044u) return idx;   // in range
-  return 0xFFFFFFFFu;                              // out of range -> -1 -> skip
+  int32_t z = (int32_t)otz;
+  int32_t sh = z >> 10;
+  int32_t idx = (z >> (sh & 31)) + (sh << 9);
+  if ((uint32_t)(idx - 4) < 2044u) return (uint32_t)idx;   // in range
+  return 0xFFFFFFFFu;                                       // out of range -> -1 -> skip
 }
 
 // gen_func_8007FDB0 — POLY_GT3 (gouraud-textured triangle) submit.
@@ -199,6 +203,121 @@ static void submit_poly_gt4(R3000* c) {
 void ov_submit_poly_gt4(R3000* c) {
   if (submit_recomp()) { gen_func_8008007C(c); return; }
   submit_poly_gt4(c);
+}
+
+// =====================================================================================================
+// Byte-packed POLY_GT4 submit variant — gen_func_80027768 (resident MAIN). A DISTINCT submitter from
+// the GT3/GT4 library above: it is the field's dominant world-poly emitter (~252 GT4/frame) and ran
+// interpreted, so it carried no native depth. Decoded from the recomp body (docs/engine_re.md):
+//   ABI:  a0 = record array; a1 = CLUT-Y bank offset (added <<22 to the uv0|clut word);
+//         a2 = OT-Z bias (sign-extended s16, added to AVSZ4 OTZ before the log-compress);
+//         a3 = U-texture offset (added to the U byte of all four uv words).
+//   NO count arg: the loop runs record-by-record and continues while the record's CONTROL word
+//   (rec+4) is > 0 (its sign marks the last record, which is still drawn).
+//   OT base is a GLOBAL (*0x800ED8C8), NOT an arg. IR0 depth-cue factor is read from scratchpad
+//   0x1F800090 each iteration. Returns r2 = 0x800C0000 (the body leaves the pool-base reg there).
+// Record (36 bytes): vertex X/Y/Z are SIGNED bytes scaled <<8 (a u16 GTE coord); the top byte of each
+//   RGB word doubles as that vertex's Z, so X/Y live in rec[0x1C..0x23] and Z in the RGB words:
+//     rec+0x00 uv0|clut(word) ->pkt+12   rec+0x04 control: low23 -> pkt+24 (uv1|clut), bit30 = semi-trans,
+//     value>0 = more records follow      rec+0x08 uv2(lo)|uv3(hi) -> pkt+36/+48
+//     rec+0x0C rgb0(+VZ0 in top byte) rec+0x10 rgb1(+VZ1) rec+0x14 rgb2(+VZ2) rec+0x18 rgb3(+VZ3)
+//     X: rec+0x1C=VX0 0x1D=VX1 0x20=VX2 0x21=VX3   Y: 0x1E=VY0 0x1F=VY1 0x22=VY2 0x23=VY3
+//     Z (top byte of the rgb word): 0x0F=VZ0 0x13=VZ1 0x17=VZ2 0x1B=VZ3
+//   Colors: DPCT depth-cues rgb0/rgb1/rgb2, DPCS depth-cues rgb3 (both toward FAR_COLOR via IR0).
+// Faithful-first: this reproduces the recomp body's writes/cull/return exactly (0-diff gate); when the
+// native-depth path is live it additionally records each vertex's real view-Z (the SZ FIFO) keyed by
+// its packet SXY-word address, exactly like the GT3/GT4 library above.
+void gen_func_80027768(R3000* c);            // recomp body (A/B oracle / super-call)
+
+#define OTBASE_PTR   0x800ED8C8u             // *this = the active ordering-table base for these variants
+#define IR0_SCRATCH  0x1F800090u             // depth-cue interpolation factor (IR0) staged in scratchpad
+#define GTE_DPCT     0x4AF8002Au             // depth-cue 3 colors (rgb0,rgb1,rgb2) toward FAR_COLOR
+#define GTE_DPCS     0x4A780010u             // depth-cue 1 color  (rgb)            toward FAR_COLOR
+
+// byte b at `addr`, scaled <<8 into a 16-bit GTE coordinate (signedness is irrelevant after the 16-bit
+// truncation: (b<<8)&0xFFFF == (sext8(b)<<8)&0xFFFF for any byte b — the recomp body sext's some lanes
+// and not others, all yielding the same halfword).
+static inline uint32_t vcoord(uint32_t addr) { return ((uint32_t)mem_r8(addr) << 8) & 0xFFFFu; }
+// add the per-call U offset (a3) to the low (U) byte of a packet uv word, in place (mod 256).
+static inline void uoff_add(uint32_t pkt_uv, uint32_t uoff) {
+  mem_w8(pkt_uv, (uint8_t)(mem_r8(pkt_uv) + uoff));
+}
+
+static void submit_poly_gt4_bp(R3000* c) {
+  uint32_t rec = c->r[4];
+  uint32_t xoff = c->r[5] << 22;                       // CLUT-Y bank offset
+  int32_t  zoff = (int32_t)(int16_t)c->r[6];           // OT-Z bias (sign-extended)
+  uint32_t uoff = c->r[7];                             // U-texture offset
+  uint32_t pkt  = mem_r32(PKT_POOL_PTR);
+  uint32_t otbase = mem_r32(OTBASE_PTR);
+  int depth = depth_on(); if (depth) proj_set_H((uint16_t)gte_read_ctrl(26));
+  for (;;) {
+    uint32_t ctl = mem_r32(rec + 4);                   // control word (sign = last record)
+    // front triangle (V0,V1,V2) -> RTPT
+    gte_write_data(0, vcoord(rec + 0x1C) | (vcoord(rec + 0x1E) << 16));  // VXY0
+    gte_write_data(1, vcoord(rec + 0x0F));                                // VZ0
+    gte_write_data(2, vcoord(rec + 0x1D) | (vcoord(rec + 0x1F) << 16));  // VXY1
+    gte_write_data(3, vcoord(rec + 0x13));                                // VZ1
+    gte_write_data(4, vcoord(rec + 0x20) | (vcoord(rec + 0x22) << 16));  // VXY2
+    gte_write_data(5, vcoord(rec + 0x17));                                // VZ2
+    gte_op(c, GTE_RTPT);
+    if ((int32_t)gte_read_ctrl(31) >= 0) {
+      mem_w32(pkt + 8,  gte_read_data(12));            // SXY0
+      mem_w32(pkt + 20, gte_read_data(13));            // SXY1
+      mem_w32(pkt + 32, gte_read_data(14));            // SXY2
+      // 4th vertex (V3) -> RTPS
+      gte_write_data(0, vcoord(rec + 0x21) | (vcoord(rec + 0x23) << 16)); // VXY3
+      gte_write_data(1, vcoord(rec + 0x1B));                               // VZ3
+      mem_w32(pkt + 12, mem_r32(rec + 0) + xoff);      // uv0|clut + CLUT bank
+      gte_op(c, GTE_RTPS);
+      if ((int32_t)gte_read_ctrl(31) >= 0) {
+        mem_w32(pkt + 44, gte_read_data(14));          // SXY3
+        mem_w32(pkt + 24, ctl & 0x7FFFFFu);            // uv1|clut (control low 23 bits)
+        gte_op(c, GTE_AVSZ4);
+        uint32_t idx = ot_compress((uint32_t)((int32_t)gte_read_data(7) + zoff));
+        if ((int32_t)idx >= 0) {
+          uint32_t uv = mem_r32(rec + 8);
+          mem_w32(pkt + 36, uv);                       // uv2
+          mem_w32(pkt + 48, (uint32_t)((int32_t)uv >> 16)); // uv3 (sign-extended high half)
+          uoff_add(pkt + 12, uoff); uoff_add(pkt + 24, uoff);
+          uoff_add(pkt + 36, uoff); uoff_add(pkt + 48, uoff);
+          // depth-cued colors: DPCT(rgb0,rgb1,rgb2) then DPCS(rgb3)
+          gte_write_data(8,  mem_r32(IR0_SCRATCH));    // IR0 (depth-cue factor)
+          gte_write_data(20, mem_r32(rec + 0x0C));     // RGB0
+          gte_write_data(21, mem_r32(rec + 0x10));     // RGB1
+          gte_write_data(22, mem_r32(rec + 0x14));     // RGB2
+          gte_write_data(6,  mem_r32(rec + 0x14));     // RGBC (= rgb2; written by the body)
+          gte_op(c, GTE_DPCT);
+          mem_w32(pkt + 4,  gte_read_data(20));        // rgb0 out
+          mem_w32(pkt + 16, gte_read_data(21));        // rgb1 out
+          mem_w32(pkt + 28, gte_read_data(22));        // rgb2 out
+          mem_w8(pkt + 7, (ctl & 0x40000000u) ? 0x3E : 0x3C);  // code: semi-trans vs opaque GT4
+          gte_write_data(6, mem_r32(rec + 0x18));      // RGB3 in
+          gte_op(c, GTE_DPCS);
+          mem_w32(pkt + 40, gte_read_data(22));        // rgb3 out
+          uint32_t otaddr = otbase + (idx << 2);
+          mem_w32(pkt + 0, mem_r32(otaddr) | 0x0C000000u);  // tag: link old head + len 12 (GT4)
+          mem_w32(otaddr, pkt);
+          if (depth) {                                  // SZ FIFO after RTPT(V0..2)+RTPS(V3): DR16..19 = SZ0..3
+            projprim_set_pz(pkt + 8,  (float)(int32_t)gte_read_data(16));   // SXY0 -> SZ0
+            projprim_set_pz(pkt + 20, (float)(int32_t)gte_read_data(17));   // SXY1 -> SZ1
+            projprim_set_pz(pkt + 32, (float)(int32_t)gte_read_data(18));   // SXY2 -> SZ2
+            projprim_set_pz(pkt + 44, (float)(int32_t)gte_read_data(19));   // SXY3 -> SZ3
+          }
+          pkt += 52;
+        }
+      }
+    }
+    if ((int32_t)ctl <= 0) break;                      // control sign marks the last record
+    rec += 36;
+  }
+  mem_w32(PKT_POOL_PTR, pkt);
+  c->r[2] = 0x800C0000u;                               // return value the recomp body leaves in r2
+}
+
+void ov_submit_poly_gt4_bp(R3000* c) {
+  if (submit_recomp()) { gen_func_80027768(c); return; }
+  submit_poly_gt4_bp(c);
 }
 
 // --- Auto-ownership of the SAME submit library when it appears in a runtime-loaded overlay --------

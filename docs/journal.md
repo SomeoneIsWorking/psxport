@@ -3896,3 +3896,54 @@ Direction: stop black-boxing the graphics; reimplement the engine's draw path in
   OPEN: widescreen still needs the 1x wide-FB gap fixed (gap-free without SS) before re-enabling — the gap
   mechanism (1px columns at 1:1 raster of the +54-shifted geometry) is the next renderer target.
   (gte_beetle still defines PGXP_pushSXYZ2f — required by Beetle's gte.c — but its cache is now unused/dead.)
+
+## later-101 — DECISION: consolidate to ONE execution substrate (interpreter-only runtime)
+**Context:** chasing task #6 (full field native depth) I instrumented the interpreter's GTE-op path
+(prologue back-scan attribution of *interpreted* RTPT/RTPS — reliable, unlike the prior session's
+"windowed jal-decode" RTPCALLER histogram, which was a red herring). Ground truth: the field's
+missing-depth world polys come from **interpreted OVERLAY submitters**, dominantly:
+- `0x8013FB88` GT3 (RTPT=187838 over 600f, ~313/f) — SAME record layout + algorithm as the resident
+  GT3 library `submit_poly_gt3`, only the color mask differs (0x00F0F0F0 vs 0xFFF0F0F0 — padding byte,
+  VRAM-identical).
+- `0x8013FE58` GT4 (RTPT=258542 RTPS=164519, ~431/f) — the GT4 sibling.
+- `0x801464C0`/`0x8013DD34`/`0x80109C80`… smaller.
+
+**The bug that motivated the pivot:** the scan-on-load DOES register native overrides for `0x8013FB88`
+/`0x8013FE58` (`[submit] own overlay GT3/GT4 @ …`), but they **never fire** — the body runs
+interpreted anyway (proven: the GTE probe counts them). Root cause = the recomp/interp SPLIT: two
+override tables (`g_override[]` by recomp-fn-INDEX for resident MAIN, `g_iov[]` by raw ADDRESS for
+overlays) and two interpreters (`rec_interp` flat + `rec_coro_run` coroutine). The override only fires
+on call paths that consult the right table; the overlay submitter is entered via a path that doesn't.
+Perverse allocation: the SLOW interpreter runs the HOTTEST code (the render submit firehose, which lives
+in overlays), while the recompiler runs resident bookkeeping.
+
+**Decision (user):** consolidate to a SINGLE substrate = **interpreter-only runtime**. Drop the
+recompiler from the runtime. Rationale: overlays are first-class in Tomba2 (the render path itself is
+overlay code) and the interpreter handles them for free; recompiler-only would mean *building*
+N64Recomp-style overlay relocation/dispatch. Interpreter-only deletes the most complexity (emit.py from
+the build, generated/, shard build, rec_dispatch, the index-vs-address override duality — the very seam
+that caused this bug). The real oracle stays Beetle (`wide60rt`). **Keep emit.py + generated C as a
+SEPARATE OFFLINE analysis tool** (Ghidra-like pseudo-C; it's exactly how the byte-packed variants were
+RE'd this session) — just not in the runtime.
+
+**Speed de-risked (the one real risk):** measured ~140.5M interpreted instructions / 600 field frames
+(~234K interp-inst/f, the overlay render firehose) at ~100–150M inst/sec. A worst-case FULLY-interpreted
+frame (~400–560K PSX inst total) ≈ 3–5ms — well inside the 16.7ms/60fps budget, and the firehose that
+dominates today's interp load is precisely what becomes native C. MAIN.EXE's raw bytes are ALREADY in
+g_ram (`boot.c load_exe` memcpy's text), so the interpreter can run MAIN directly — feasible.
+
+**Bonus:** interpreter-only is the proper root-cause fix for task #6 — with one address-keyed override
+table the scan-registered overlay GT3/GT4 overrides will actually fire and record depth, so the
+252+136/f misses should largely vanish for free.
+
+**Verified milestone kept (substrate-independent):** native byte-packed POLY_GT4 submit (`0x80027768`,
+`engine_submit.c ov_submit_poly_gt4_bp`), **0 u16 VRAM diff** vs `PSXPORT_SUBMIT_RECOMP=1` at field f560.
+ABI/record fully RE'd (a1=CLUT-Y<<22, a2=OT-Z bias s16, a3=U offset; no count, loop while ctl>0; OT base
+*0x800ED8C8; DPCT/DPCS depth-cue colors). Note: barely used in the field (~0.8 prim/f) — the field GT4s
+are the overlay variant above.
+
+**Migration scope (counted):** 23 `gen_func_` super-calls in runtime+engine → an interp super-call;
+14 `func_8…` direct refs; 49 override registrations (already address-based). Plan: unify override tables
+(one address-keyed), hand-written `rec_dispatch` = override-or-interp-from-RAM, `rec_super_call(c,addr)` =
+interpret original bytes, stop linking generated/shard_*.c, route MAIN entry through interp, then unify
+the two interpreters. Verify boot→field→runs + frame rate + depth coverage jump.
