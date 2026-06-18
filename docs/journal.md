@@ -4067,3 +4067,31 @@ a HUD drawn before one, would be misbanded) — fine for the static field; revis
 them. Foreground objects vs tree-canopy foliage now occlude by true Z (a look change from the OT
 original) — the banner-style "OT-on-top intent" question (handoff #3) is now concrete and may want a
 per-layer call.
+
+## later-105 — 60fps + widescreen SEPARATED (rename wide60 → fps60) + feature readiness
+User direction: finish 60fps, but first SEPARATE the widescreen and 60fps code (they were conflated
+under the "wide60" name even though widescreen lives in gpu_vk.c PSXPORT_WIDE/IRES and 60fps lives in
+engine/wide60.c). The two were already decoupled in code (neither references the other); the conflation
+was purely the name. Renamed the PORT's 60fps feature wide60 → fps60: `engine/wide60.c`→`engine/fps60.c`,
+`wide60_*`→`fps60_*`, `gpu_w60_*`→`gpu_fps60_*`, `g_wide60_on`→`g_fps60_on`, `PSXPORT_WIDE60[_GATE/_SYNTH/
+_SDBG]`→`PSXPORT_FPS60_*`, debug channel `wide60`→`fps60`. LEFT ALONE: the Beetle ORACLE's own
+`runtime/wide60.{cpp,h}` + the `wide60rt` binary (separate reference emulator), and provenance comments
+in hle.c/native_boot.c that cite the oracle's HLE. Verified pure-rename: full build OK, **0 u16 VRAM
+diff** at f540 (faithful gate), 60fps measures identically under PSXPORT_FPS60.
+
+Feature readiness audit (asked "ready for hi-res/widescreen/60fps/lighting/AO mods?"):
+- **Higher internal resolution** (PSXPORT_IRES=N, gpu_vk.c) — WORKS (verified: genuine denser
+  rasterization, crisp 3D edges; up to 3x 4:3 / 2x 16:9, VRAM_W-capped).
+- **Widescreen** (PSXPORT_WIDE) — WORKS (verified: true wider FOV, more world on the sides, no stretch;
+  HUD edge-anchoring). Native depth makes both render correctly now.
+- **60fps** (PSXPORT_FPS60) — full system built (capture/match/synth/frame-behind present) but **0%
+  interpolating**: measured live `rtp_with_obj=0 tagged=0`, all 927 field prims SNAP → presents the real
+  frame = 30fps. Blocker: the field's render-time RTPS has no object context. Unblock paths: (a) own the
+  field per-object render dispatch to tag draws, or (b) switch the synth to the already-built GTE-
+  transform SXY remap (xobj/wide60_build_remap, bypasses the tag) — note build_remap/xobj_match are NOT
+  currently called in fps60_frame_commit (dormant). Needs a MOTION scene to validate (idle field has
+  nothing to interpolate).
+- **Better lighting** — was built (9d81ff8) then REMOVED (8e959e9 "remove rejected renderer tricks");
+  current tritex.frag has no lighting/normals/fog. Needs fresh approach.
+- **Ambient occlusion** — not started; UNBLOCKED by the new 3-band depth (D32 s_depth attachment exists);
+  needs a new SSAO pass + normals (reconstructable from depth) + composite into the 1555 uint VRAM.

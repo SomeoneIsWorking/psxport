@@ -21,10 +21,10 @@
 #include <stdio.h>
 
 void rec_super_call(R3000*, uint32_t);   // interpret the original PSX body (super-call / A/B oracle)
-void wide60_frame_commit(void);    // wide60: per-logic-frame fence (rate detect / interp)
-void wide60_init(void);            // wide60: read PSXPORT_WIDE60
-extern uint32_t g_current_object;  // wide60: object* whose RTP ops are being tagged
-extern int g_wide60_on;            // wide60: capture enabled (PSXPORT_WIDE60)
+void fps60_frame_commit(void);    // fps60: per-logic-frame fence (rate detect / interp)
+void fps60_init(void);            // fps60: read PSXPORT_FPS60
+extern uint32_t g_current_object;  // fps60: object* whose RTP ops are being tagged
+extern int g_fps60_on;            // fps60: capture enabled (PSXPORT_FPS60)
 void gpu_present(void);            // native GPU: present the displayed VRAM region
 void gpu_pace_frame(void);         // native GPU: throttle to game pace when windowed (no-op headless)
 void spu_audio_frame(void);        // SPU: advance the mixer one frame + feed the audio device
@@ -71,14 +71,14 @@ static void ov_frame_update(R3000* c) {
     spu_audio_frame();                               // advance SPU one 1/60 s field + feed device
   }
   mem_w16(DISPLAY_COUNTER, mem_r8(VBLANK_QUOTA));    // satisfy the pacing dwell immediately
-  // wide60 (when enabled) OWNS presentation: it presents the previous real frame + the interpolated
-  // frame (60 fps, 1 frame behind) and paces both halves — see wide60_present. The faithful path
+  // fps60 (when enabled) OWNS presentation: it presents the previous real frame + the interpolated
+  // frame (60 fps, 1 frame behind) and paces both halves — see fps60_present. The faithful path
   // presents frame B once and paces a full frame.
-  wide60_frame_commit();
-  if (!g_wide60_on) { gpu_present(); gpu_pace_frame(); }
+  fps60_frame_commit();
+  if (!g_fps60_on) { gpu_present(); gpu_pace_frame(); }
 }
 
-// wide60 object tag: the universal per-object cull/LOD dispatcher (a0 = object*, once per logic
+// fps60 object tag: the universal per-object cull/LOD dispatcher (a0 = object*, once per logic
 // frame for every live drawable). Every RTP op fired in its call tree is tagged with this object's
 // stable pool-pointer id (the join key). Super-call the recomp body unchanged; clear on exit.
 // PSXPORT_OBJLOG=1: dump every object the cull dispatcher visits (addr + type@+0xc +
@@ -283,8 +283,8 @@ void games_tomba2_init(void) {
     rec_set_override(0x80027768u, ov_submit_poly_gt4_bp);// byte-packed POLY_GT4 (field's dominant emitter)
     engine_submit_register_autodetect();                 // + own the same library in runtime-loaded overlays
   }
-  wide60_init();
-  if (g_wide60_on || cfg_dbg("obj") || cfg_on("PSXPORT_CULL"))   // cull tap: wide60 / objlog / extended-cull
+  fps60_init();
+  if (g_fps60_on || cfg_dbg("obj") || cfg_on("PSXPORT_CULL"))   // cull tap: fps60 / objlog / extended-cull
     rec_set_override(0x8007712Cu, ov_object_cull);
   void engine_tomba2_init(void);
   engine_tomba2_init();                            // native engine layer (Phase 1: object-list walk)

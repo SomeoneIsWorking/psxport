@@ -38,7 +38,7 @@ together: `PSXPORT_DEBUG=spu,cdcmd,bgm`. Old → new channel:
 | `PSXPORT_LDHAZARD`     | `ldhazard`| | `PSXPORT_UPLOADLOG`  | `upload`    |
 | `PSXPORT_OBJLOG`       | `obj`     | | `PSXPORT_VSYNCLOG`   | `vsync`     |
 | `PSXPORT_OTDBG`        | `ot`      | | `PSXPORT_VRAMSCAN`   | `vramscan`  |
-| `PSXPORT_CDCMD_DBG`    | `cdcmd`   | | `PSXPORT_WIDE60_SDBG`| `wide60`    |
+| `PSXPORT_CDCMD_DBG`    | `cdcmd`   | | `PSXPORT_FPS60_SDBG` | `fps60`     |
 | (so e.g. `PSXPORT_CDCMD_DBG=1` → `PSXPORT_DEBUG=cdcmd`) | | | `PSXPORT_WS_SXHIST` | `sxhist` |
 
 ## Flags that kept their own var (they carry a VALUE, not just on/off)

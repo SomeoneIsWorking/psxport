@@ -23,14 +23,14 @@ uint8_t  g_ram[0x200000];   // referenced by gpu_native.c debug dumps; unused in
 uint8_t  mem_r8 (uint32_t a) { (void)a; return 0; }
 uint16_t mem_r16(uint32_t a) { (void)a; return 0; }
 uint32_t mem_r32(uint32_t a) { (void)a; return 0; }
-// wide60 taps (gated PSXPORT_WIDE60, off here) referenced by gpu_native.c's GP0/present path; stub.
-void     wide60_join_poly(int px, int py) { (void)px; (void)py; }
+// fps60 taps (gated PSXPORT_FPS60, off here) referenced by gpu_native.c's GP0/present path; stub.
+void     fps60_join_poly(int px, int py) { (void)px; (void)py; }
 void     ws_sx_dump(const char* tag)      { (void)tag; }
 void     watchdog_pet(void)  {}
-// VK backend + wide60 capture hooks gpu_native.c grew since this tool was written. The differ runs the
-// SOFTWARE rasterizer only (gpu_vk_enabled()==0, g_wide60_on==0), so these are never CALLED — they just
+// VK backend + fps60 capture hooks gpu_native.c grew since this tool was written. The differ runs the
+// SOFTWARE rasterizer only (gpu_vk_enabled()==0, g_fps60_on==0), so these are never CALLED — they just
 // need to LINK. Empty-param defs link by symbol name regardless of the call sites' prototypes.
-int  g_wide60_on = 0;
+int  g_fps60_on = 0;
 int  gpu_vk_enabled(void) { return 0; }
 int  gpu_vk_sprite_anchor_dx(int x) { (void)x; return 0; }
 void gpu_vk_draw_tritri() {}
@@ -39,10 +39,10 @@ void gpu_vk_dirty() {}
 void gpu_vk_present() {}
 void gpu_vk_frame_end() {}
 void gpu_vk_dump() {}
-void wide60_cap_poly() {}
-void wide60_cap_sprite() {}
-void wide60_cap_line() {}
-void wide60_rtp() {}
+void fps60_cap_poly() {}
+void fps60_cap_sprite() {}
+void fps60_cap_line() {}
+void fps60_rtp() {}
 
 int main(int argc, char** argv) {
   if (argc < 3) { fprintf(stderr, "usage: %s <trace.bin> <out.vram>\n", argv[0]); return 2; }

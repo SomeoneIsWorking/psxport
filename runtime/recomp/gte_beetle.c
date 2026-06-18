@@ -3,7 +3,7 @@
 // flows through here; our previous stub was a no-op, so any 3D was inert. This adapts the
 // recomp GTE interface (r3000.h) to Beetle's GTE_* API and provides faithful-first stubs for
 // the few externs gte.c references (PGXP off, widescreen off, savestate unused) so the math
-// matches the oracle exactly. The widescreen GTE-scale hack stays OFF here (wide60 tier later).
+// matches the oracle exactly. The widescreen GTE-scale hack stays OFF here (fps60 tier later).
 #include "r3000.h"
 #include "cfg.h"
 #include <stdint.h>
@@ -136,8 +136,8 @@ void ws_sx_dump(const char* tag) {
   s_sx_n = s_sx_oob_lo = s_sx_oob_hi = 0;
 }
 
-extern int g_wide60_on;                            // wide60.c: gates the capture taps
-void wide60_rtp(uint32_t op);                      // wide60.c: fold fingerprint + tag SXY->object
+extern int g_fps60_on;                            // fps60.c: gates the capture taps
+void fps60_rtp(uint32_t op);                      // fps60.c: fold fingerprint + tag SXY->object
 
 // --- GTE/lighting RE probe (PSXPORT_GTEPROBE=N) -------------------------------------------------
 // Logs which GTE commands ACTUALLY execute (static call-site counts in generated/ aren't run-weighted)
@@ -397,7 +397,7 @@ void     gte_op(R3000* c, uint32_t insn)         { GTE_Instruction(insn);
                                                    if (op == 0x01 || op == 0x30) {
                                                      ws_sx_record();          // self-gated (PSXPORT_WS_SXHIST)
                                                      rtpcaller_record(c->r[31]);   // self-gated (PSXPORT_RTPCALLER)
-                                                     if (g_wide60_on) wide60_rtp(op);
+                                                     if (g_fps60_on) fps60_rtp(op);
                                                      if (s_projprobe < 0) { s_projprobe = cfg_on("PSXPORT_PROJPROBE") ? 1 : 0;
                                                                             if (s_projprobe && !s_divtab_init) proj_divtab_init(); }
                                                      if (s_projprobe > 0) {

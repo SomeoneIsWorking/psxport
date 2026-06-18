@@ -1,7 +1,7 @@
-// wide60 — interpolated-60fps tier for the native PC port (design: docs/wide60_recomp_60fps.md).
+// fps60 — interpolated-60fps tier for the native PC port (design: docs/fps60_recomp_60fps.md).
 //
 // This file owns the capture buffers, the logic-rate detector, the object→primitive join, and
-// (later) the matcher + in-between synthesizer. GATED behind PSXPORT_WIDE60 and purely additive:
+// (later) the matcher + in-between synthesizer. GATED behind PSXPORT_FPS60 and purely additive:
 // when off, the taps in gte_beetle.c / gpu_native.c / games_tomba2.c are no-ops and the faithful
 // 4:3/30fps path is byte-identical.
 //
@@ -20,7 +20,7 @@
 uint8_t  mem_r8(uint32_t);
 uint32_t GTE_ReadDR(unsigned which);   // Beetle GTE data regs (SXY-FIFO = DR12/13/14)
 
-int g_wide60_on = 0;          // read by the gte_op tap; set by wide60_init from PSXPORT_WIDE60
+int g_fps60_on = 0;          // read by the gte_op tap; set by fps60_init from PSXPORT_FPS60
 uint32_t g_current_object = 0;// set by games_tomba2.c ov_object_cull during the cull subtree
 
 // ---- per-frame projected-geometry fingerprint (rate detector input) -----------------
@@ -97,7 +97,7 @@ static void xvert(int16_t vx, int16_t vy, int16_t vz, uint32_t sxy) {
   s_lvx[s_nv] = vx; s_lvy[s_nv] = vy; s_lvz[s_nv] = vz; s_osxy[s_nv] = (int32_t)sxy; s_nv++;
 }
 
-// Called per RTPS(0x01)/RTPT(0x30) from wide60_rtp, with the GTE holding this vertex's transform.
+// Called per RTPS(0x01)/RTPT(0x30) from fps60_rtp, with the GTE holding this vertex's transform.
 static void xobj_rtp(uint32_t insn) {
   uint32_t op = insn & 0x3F;
   if (op == 0x01) s_rtps_insn = insn;          // remember the game's RTPS flags for re-projection
@@ -163,7 +163,7 @@ void     GTE_WriteDR(unsigned, uint32_t);
 int32_t  GTE_Instruction(uint32_t);
 
 static int s_xmatch[XOBJ_MAX];   // B object i → A object index, or -1
-static int s_disp_gate = -1;     // PSXPORT_WIDE60_GATE: max screen motion (px) to still interpolate
+static int s_disp_gate = -1;     // PSXPORT_FPS60_GATE: max screen motion (px) to still interpolate
 
 static void xobj_match(void) {   // by fingerprint + identical vertex count (strong key)
   for (int i = 0; i < s_nxB; i++) {
@@ -205,10 +205,10 @@ static int remap_get(int32_t key, int32_t* out) {
 }
 
 // Build the remap: interpolate each matched object's transform and re-project its verts through the GTE.
-static void wide60_build_remap(void) {
+static void fps60_build_remap(void) {
   if (!s_rm_init) remap_reset(); else remap_reset();
   if (s_nxB == 0) return;
-  if (s_disp_gate < 0) { const char* g = cfg_str("PSXPORT_WIDE60_GATE"); s_disp_gate = g ? atoi(g) : 48; }
+  if (s_disp_gate < 0) { const char* g = cfg_str("PSXPORT_FPS60_GATE"); s_disp_gate = g ? atoi(g) : 48; }
   // save the GTE transform registers we overwrite (projection consts CR24-26 are left intact)
   uint32_t save[8]; for (int i = 0; i < 8; i++) save[i] = GTE_ReadCR(i);
   for (int i = 0; i < s_nxB; i++) {
@@ -234,8 +234,8 @@ static void wide60_build_remap(void) {
 
 // gte_op RTP tap. op 0x01 = RTPS (one new SXY, DR14); 0x30 = RTPT (three, DR12/13/14).
 long s_rtp_calls = 0, s_rtp_with_obj = 0;   // diag: how many RTPS carry an object context
-void wide60_rtp(uint32_t op) {
-  if (!g_wide60_on) return;
+void fps60_rtp(uint32_t op) {
+  if (!g_fps60_on) return;
   s_rtp_calls++; if (g_current_object) s_rtp_with_obj++;
   xobj_rtp(op);                 // capture this vertex's GTE transform-group (native object)
   unsigned lo = (op == 0x30) ? 12 : 14, hi = 14;
@@ -248,8 +248,8 @@ void wide60_rtp(uint32_t op) {
 }
 
 // gp0_exec polygon tap: join the packet's lead vertex to a captured SXY.
-void wide60_join_poly(int px, int py) {
-  if (!g_wide60_on) return;
+void fps60_join_poly(int px, int py) {
+  if (!g_fps60_on) return;
   if (grid_get(px, py)) s_join_hit++; else s_join_miss++;
 }
 
@@ -280,11 +280,11 @@ static int   s_nA = 0, s_nB = 0;
 static int   s_overflow = 0;    // set if a frame exceeded PRIM_MAX (report it)
 
 // Full capture for polygons (nv 3/4). xs/ys are packet coords; us/vs/rs/gs/bs per vertex.
-void wide60_cap_poly(int op, int nv, const int* xs, const int* ys, const int* us, const int* vs,
+void fps60_cap_poly(int op, int nv, const int* xs, const int* ys, const int* us, const int* vs,
                      const unsigned char* rs, const unsigned char* gs, const unsigned char* bs,
                      int off_x, int off_y, int tp_x, int tp_y, int mode, int blend, int dither,
                      int clut_x, int clut_y) {
-  if (!g_wide60_on) return;
+  if (!g_fps60_on) return;
   if (s_nB >= PRIM_MAX) { s_overflow = 1; return; }
   Prim* P = &s_pB[s_nB++];
   P->op = (uint8_t)op; P->nv = (uint8_t)nv; P->w = P->h = 0;
@@ -303,10 +303,10 @@ void wide60_cap_poly(int op, int nv, const int* xs, const int* ys, const int* us
 // Lighter capture for sprites/rects (nv==1) and lines (nv==2). These are CPU-projected / HUD /
 // 2D — they don't pass through the GTE, so obj=0 (snap) by design. Captured for completeness so
 // the in-between redraws the WHOLE display list (no holes).
-void wide60_cap_sprite(int op, int x, int y, int u, int v, int w, int h,
+void fps60_cap_sprite(int op, int x, int y, int u, int v, int w, int h,
                        int r, int g, int b, int off_x, int off_y,
                        int tp_x, int tp_y, int mode, int blend, int clut_x, int clut_y) {
-  if (!g_wide60_on) return;
+  if (!g_fps60_on) return;
   if (s_nB >= PRIM_MAX) { s_overflow = 1; return; }
   Prim* P = &s_pB[s_nB++];
   P->op = (uint8_t)op; P->nv = 1;
@@ -321,8 +321,8 @@ void wide60_cap_sprite(int op, int x, int y, int u, int v, int w, int h,
 
 // Line-segment capture (nv==2). Lines are CPU-projected / 2D (obj 0 → snap), captured so the interp
 // frame reproduces them (else they flicker on/off every other frame). Color is per-segment flat.
-void wide60_cap_line(int op, int x0, int y0, int x1, int y1, int r, int g, int b, int semi) {
-  if (!g_wide60_on) return;
+void fps60_cap_line(int op, int x0, int y0, int x1, int y1, int r, int g, int b, int semi) {
+  if (!g_fps60_on) return;
   if (s_nB >= PRIM_MAX) { s_overflow = 1; return; }
   Prim* P = &s_pB[s_nB++];
   P->op = (uint8_t)op; P->nv = 2;
@@ -344,16 +344,16 @@ void wide60_cap_line(int op, int x0, int y0, int x1, int y1, int r, int g, int b
 // falls back to all-snap (clean, no artifacts, but no interpolation). UNBLOCK: tag draws by object at
 // the real render pass — cleanest via the planned native (VK) renderer, which knows what it draws.
 // See docs/journal.md later-86.
-void gpu_w60_begin_interp(int, int, int, int, int, int);
-void gpu_w60_end_interp(void);
-void gpu_w60_draw_poly(int, int, const int*, const int*, const int*, const int*,
+void gpu_fps60_begin_interp(int, int, int, int, int, int);
+void gpu_fps60_end_interp(void);
+void gpu_fps60_draw_poly(int, int, const int*, const int*, const int*, const int*,
                        const unsigned char*, const unsigned char*, const unsigned char*,
                        int, int, int, int, int, int, int);
-void gpu_w60_draw_sprite(int, int, int, int, int, int, int, int, int, int,
+void gpu_fps60_draw_sprite(int, int, int, int, int, int, int, int, int, int,
                          int, int, int, int, int, int);
-void gpu_w60_draw_line(int, int, int, int, int, int, int, int);
+void gpu_fps60_draw_line(int, int, int, int, int, int, int, int);
 
-static int w60_front_off_y(void) { return s_nB > 0 ? s_pB[0].off_y : 0; }
+static int fps60_front_off_y(void) { return s_nB > 0 ? s_pB[0].off_y : 0; }
 
 // ---- per-object screen-centroid motion (interpolation key = the node pointer) --------
 // Each captured poly is tagged with its source object's pool-slot pointer (Prim.obj, from the
@@ -366,7 +366,7 @@ typedef struct { uint32_t obj; int32_t sx, sy, n; } ObjCen;
 static ObjCen s_oc0[OCEN_SZ], s_oc1[OCEN_SZ];
 static ObjCen* s_ocA = s_oc0;          // previous frame's per-object centroids
 static ObjCen* s_ocB = s_oc1;          // current frame's
-static int s_ocen_gate = -1;           // PSXPORT_WIDE60_GATE: max per-object screen motion (px L1)
+static int s_ocen_gate = -1;           // PSXPORT_FPS60_GATE: max per-object screen motion (px L1)
 
 static ObjCen* ocen_slot(ObjCen* t, uint32_t obj) {   // open-addressing; obj != 0
   uint32_t h = obj * 2654435761u;
@@ -395,7 +395,7 @@ static int ocen_delta(uint32_t obj, int* dx, int* dy) {
   if (obj == 0 || !ocen_centroid(s_ocB, obj, &bx, &by) || !ocen_centroid(s_ocA, obj, &ax, &ay))
     return 0;
   int mx = bx - ax, my = by - ay;
-  if (s_ocen_gate < 0) { const char* g = cfg_str("PSXPORT_WIDE60_GATE"); s_ocen_gate = g ? atoi(g) : 64; }
+  if (s_ocen_gate < 0) { const char* g = cfg_str("PSXPORT_FPS60_GATE"); s_ocen_gate = g ? atoi(g) : 64; }
   if (abs(mx) + abs(my) > s_ocen_gate) return 0;       // scene cut / teleport → snap (no smear)
   *dx = -mx / 2; *dy = -my / 2;                         // B shifted back to (A+B)/2
   return 1;
@@ -403,14 +403,14 @@ static int ocen_delta(uint32_t obj, int* dx, int* dy) {
 
 static int s_sdbg = -1;
 // Returns the number of prims actually translated (interpolated). 0 ⇒ nothing moved, so the caller
-// should present the REAL frame instead of this (lossy) re-rasterized in-between (see wide60_present).
-static long wide60_synthesize(void) {
+// should present the REAL frame instead of this (lossy) re-rasterized in-between (see fps60_present).
+static long fps60_synthesize(void) {
   if (s_nB == 0) return 0;
-  if (s_sdbg < 0) s_sdbg = cfg_dbg("wide60") ? 1 : 0;
+  if (s_sdbg < 0) s_sdbg = cfg_dbg("fps60") ? 1 : 0;
   long d_prims = 0, d_obj_translated = 0, d_snapped = 0, d_tagged = 0;  // sdbg: interpolation outcome
   long moved_count = 0;
-  int fy = w60_front_off_y();
-  gpu_w60_begin_interp(0, fy, 0, fy, 319, fy + 239);     // target=s_interp, clear region, set env
+  int fy = fps60_front_off_y();
+  gpu_fps60_begin_interp(0, fy, 0, fy, 319, fy + 239);     // target=s_interp, clear region, set env
   for (int i = 0; i < s_nB; i++) {
     Prim* B = &s_pB[i];
     int xs[4], ys[4], us[4], vs[4]; unsigned char rs[4], gs[4], bs[4];
@@ -426,38 +426,38 @@ static long wide60_synthesize(void) {
     if (s_sdbg) { d_prims++; if (moved) d_obj_translated++; else d_snapped++;
                   if (B->obj) d_tagged++; }
     if (B->nv == 1)
-      gpu_w60_draw_sprite(B->op, xs[0], ys[0], us[0], vs[0], B->w, B->h, rs[0], gs[0], bs[0],
+      gpu_fps60_draw_sprite(B->op, xs[0], ys[0], us[0], vs[0], B->w, B->h, rs[0], gs[0], bs[0],
                           B->tp_x, B->tp_y, B->mode, B->blend, B->clut_x, B->clut_y);
     else if (B->nv == 2)
-      gpu_w60_draw_line(xs[0], ys[0], xs[1], ys[1], rs[0], gs[0], bs[0], B->blend);
+      gpu_fps60_draw_line(xs[0], ys[0], xs[1], ys[1], rs[0], gs[0], bs[0], B->blend);
     else
-      gpu_w60_draw_poly(B->op, B->nv, xs, ys, us, vs, rs, gs, bs,
+      gpu_fps60_draw_poly(B->op, B->nv, xs, ys, us, vs, rs, gs, bs,
                         B->tp_x, B->tp_y, B->mode, B->blend, B->dither, B->clut_x, B->clut_y);
   }
-  gpu_w60_end_interp();
+  gpu_fps60_end_interp();
   if (s_sdbg)
-    fprintf(stderr, "[w60-sdbg] f%ld prims=%ld  tagged=%ld  translated=%ld  snapped=%ld  "
+    fprintf(stderr, "[fps60-sdbg] f%ld prims=%ld  tagged=%ld  translated=%ld  snapped=%ld  "
             "rtp=%ld rtp_with_obj=%ld\n",
             s_fence, d_prims, d_tagged, d_obj_translated, d_snapped, s_rtp_calls, s_rtp_with_obj);
   s_rtp_calls = s_rtp_with_obj = 0;
   return moved_count;
 }
 
-// PSXPORT_WIDE60_SYNTH=frame — headless validation: at logic fence `frame`, dump A (prev real frame =
+// PSXPORT_FPS60_SYNTH=frame — headless validation: at logic fence `frame`, dump A (prev real frame =
 // back buffer), the synthesized interpolated frame (from s_interp), and B (front buffer), so the
 // interpolation can be eyeballed (objects at intermediate positions) WITHOUT the live present path.
-void gpu_w60_shot_vram(int, int, const char*);
-void gpu_w60_shot_interp(int, int, const char*);
-static void wide60_synth_dumptest(void) {
+void gpu_fps60_shot_vram(int, int, const char*);
+void gpu_fps60_shot_interp(int, int, const char*);
+static void fps60_synth_dumptest(void) {
   static int tf = -2;
-  if (tf == -2) { const char* e = cfg_str("PSXPORT_WIDE60_SYNTH"); tf = e ? atoi(e) : -1; }
+  if (tf == -2) { const char* e = cfg_str("PSXPORT_FPS60_SYNTH"); tf = e ? atoi(e) : -1; }
   if (tf < 0 || s_fence != tf || s_nB == 0) return;
-  int fy = w60_front_off_y(), by = fy ^ 256;
-  gpu_w60_shot_vram(0, by, "scratch/screenshots/w60_A.ppm");        // previous real frame
-  wide60_synthesize();                                              // -> s_interp at front origin
-  gpu_w60_shot_interp(0, fy, "scratch/screenshots/w60_inbetween.ppm");
-  gpu_w60_shot_vram(0, fy, "scratch/screenshots/w60_B.ppm");        // current real frame
-  fprintf(stderr, "[wide60] synth dumptest f%d: A/inbetween/B -> scratch/screenshots/w60_*.ppm "
+  int fy = fps60_front_off_y(), by = fy ^ 256;
+  gpu_fps60_shot_vram(0, by, "scratch/screenshots/fps60_A.ppm");        // previous real frame
+  fps60_synthesize();                                              // -> s_interp at front origin
+  gpu_fps60_shot_interp(0, fy, "scratch/screenshots/fps60_inbetween.ppm");
+  gpu_fps60_shot_vram(0, fy, "scratch/screenshots/fps60_B.ppm");        // current real frame
+  fprintf(stderr, "[fps60] synth dumptest f%d: A/inbetween/B -> scratch/screenshots/fps60_*.ppm "
           "(front_y=%d back_y=%d, %d prims)\n", tf, fy, by, s_nB);
 }
 
@@ -472,23 +472,23 @@ void gpu_pace_subframe(int);
 
 static int s_prev_front_y = -1;    // last frame's front-buffer y (for flip detection)
 
-static void wide60_present(void) {
+static void fps60_present(void) {
   static int win = -1;
   if (win < 0) { const char* w = cfg_str("PSXPORT_GPU_WINDOW"); win = (w && atoi(w) != 0) ? 1 : 0; }
-  void gpu_w60_blit_vram(int, int); void gpu_w60_blit_interp(int, int);
-  int fy = w60_front_off_y();
+  void gpu_fps60_blit_vram(int, int); void gpu_fps60_blit_interp(int, int);
+  int fy = fps60_front_off_y();
   int flipped = (fy != s_prev_front_y);
   s_prev_front_y = fy;
   if (win && flipped && s_frame_geom > 0 && s_nB > 0) {
-    gpu_w60_blit_vram(0, fy ^ 256);   // present the previous real frame (lives in the back buffer)
+    gpu_fps60_blit_vram(0, fy ^ 256);   // present the previous real frame (lives in the back buffer)
     gpu_pace_subframe(2);
-    long moved = wide60_synthesize(); // interpolated frame -> s_interp (front origin), VRAM untouched
+    long moved = fps60_synthesize(); // interpolated frame -> s_interp (front origin), VRAM untouched
     // The re-rasterized in-between is LOSSY (re-draws only the captured GP0 subset; missing occluders/
     // fills/blend-order make hidden objects reappear → spurious copies). Only trust it when objects were
     // actually interpolated; otherwise present the REAL current frame (no artifacts). Real interpolation
     // needs object-tagged draws from the native renderer (see docs/journal.md later-86/87).
-    if (moved > 0) gpu_w60_blit_interp(0, fy);
-    else           gpu_w60_blit_vram(0, fy);   // real current frame
+    if (moved > 0) gpu_fps60_blit_interp(0, fy);
+    else           gpu_fps60_blit_vram(0, fy);   // real current frame
     gpu_pace_subframe(2);
     gpu_present_ex(0);                // bookkeeping only (watchdog, s_frame++, diagnostics; no blit)
   } else {
@@ -512,8 +512,8 @@ static void rate_tick(RateDet* d, uint64_t set_hash) {
 }
 
 // ---- per-logic-frame fence (games_tomba2.c ov_frame_update) -------------------------
-void wide60_frame_commit(void) {
-  if (!g_wide60_on) return;
+void fps60_frame_commit(void) {
+  if (!g_fps60_on) return;
   uint64_t set_hash = (s_frame_geom > 0) ? s_frame_hash : 0xFFFFFFFFFFFFFFFFull;
   rate_tick(&s_rd, set_hash);
   s_fence++;
@@ -522,10 +522,10 @@ void wide60_frame_commit(void) {
   // here compute this frame's per-object screen centroids (B) and match to last frame (A) BY POINTER.
   // The synth translates each matched object's prims to the midpoint. Must run before the A/B swap.
   ocen_build(s_ocB, s_pB, s_nB);
-  if (s_sdbg < 0) s_sdbg = cfg_dbg("wide60") ? 1 : 0;
-  if (s_sdbg) wide60_synthesize();   // per-frame interpolation stats (headless diagnostic only)
-  wide60_synth_dumptest();   // PSXPORT_WIDE60_SYNTH: offline A/in-between/B dump (no live-path change)
-  wide60_present();          // owns presentation: 60fps pair (prev + interpolated) or faithful single
+  if (s_sdbg < 0) s_sdbg = cfg_dbg("fps60") ? 1 : 0;
+  if (s_sdbg) fps60_synthesize();   // per-frame interpolation stats (headless diagnostic only)
+  fps60_synth_dumptest();   // PSXPORT_FPS60_SYNTH: offline A/in-between/B dump (no live-path change)
+  fps60_present();          // owns presentation: 60fps pair (prev + interpolated) or faithful single
 
   // Swap per-object centroids (B→A) and the prim double-buffer (so s_pB is clean next frame).
   { ObjCen* t = s_ocA; s_ocA = s_ocB; s_ocB = t; }
@@ -536,7 +536,7 @@ void wide60_frame_commit(void) {
   s_epoch++;                  // reset the SXY→obj grid for the next frame
 }
 
-void wide60_init(void) {
-  g_wide60_on = cfg_on("PSXPORT_WIDE60") ? 1 : 0;
-  if (g_wide60_on) fprintf(stderr, "[wide60] enabled (rate detect + object join)\n");
+void fps60_init(void) {
+  g_fps60_on = cfg_on("PSXPORT_FPS60") ? 1 : 0;
+  if (g_fps60_on) fprintf(stderr, "[fps60] enabled (rate detect + object join)\n");
 }
