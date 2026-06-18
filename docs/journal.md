@@ -4330,3 +4330,29 @@ scratch FB, the sprite-anchor FB hack), so widescreen/effects come from a genuin
 Gameplay logic stays interpreted (oracle = Beetle). Handed off to a fresh session via `cci respawn` with
 `scratch/handoff.md` to run the audit plan with full context budget. First task there: diagnose the wide
 corruption with SCENEDUMP/PROVAT vs the oracle, then own PutDrawEnv/PutDispEnv (0-diff @4:3) → OFX config.
+
+## later-116 — DIAGNOSIS (audit step 1): wide "corruption" is a pure present-time effect, engine output is aspect-invariant
+Fresh respawn session (handoff.md). Executed audit step 1 — characterize the wide corruption with the
+render tooling, NOT by eye (the prior "21:9 = content limit" eyeball was wrong). Method: drive headless to
+the field (`PSXPORT_AUTO_GAMEPLAY=1`, field reached ~native-frame 328) and classify the submitted OT with
+`PSXPORT_SCENEDUMP` at the SAME game-state across aspects. (Note: `s_frame` is the *present* counter and
+runs ~7× the native-loop frame — at native-frame 420 s_frame≈3006; dumped at s_frame=2900 = field.)
+- **Result — byte-identical OT at every aspect.** 4:3, 16:9, 21:9 all submit the same field display list:
+  `poly=531 rect=355 line=0 fill=0 vramcopy=1 env=9` (plus the env/clear OT `fill=1 env=6`). The engine
+  submits the EXACT same geometry regardless of `PSXPORT_ASPECT`.
+- **Conclusion (confirms audit B1/B3/B4, empirically):** the engine produces NO wider content. OFX stays
+  160, the clip stays 320, the frustum cull stays 4:3, and water/sky/HUD stay screen-space 320 — nothing in
+  the aspect path touches the engine's submission. Today's "widescreen" is entirely a **present-time shader
+  effect**: `gpu_vk.c` `push_wide` takes the fixed 320-wide projection and (per `tritex.vert` wide branch)
+  CENTERS it into a wider scratch FB (`local.x + WIDE_OFF`, WIDE_OFF=(428-320)/2=54), then the present
+  stretches that FB to the window. So 16:9 = 4:3 content stretched, not a wider FOV. That IS the "fake".
+- **Levers verified for the genuine fix:** (1) Beetle's GTE does the real RTPS/RTPT projection using CR24
+  (OFX) — `gte_op` runs `GTE_Instruction`; `proj_native_vertex` is only a PROJPROBE verifier, NOT the live
+  path. So setting CR24 wider (via the already-owned `ov_set_geom_offset`) genuinely widens the 3D FOV.
+  (2) the VK tee passes `s_da_*` (the clip) as `i_da` per-prim, and `gpu_gp0(0xE4…)` sets `s_da` — so the
+  clip can be widened engine-side and it propagates to the VK shader. (3) the VK scratch FB (`use_fb`) is
+  independent of PSX VRAM's 320-wide buffer layout, so genuine-wide content (X∈[0,428]) can be rasterized
+  there 1:1 without VRAM clobber — genuine-wide is inherently a VK feature (SW VRAM stays 4:3 = the oracle).
+- **Next (audit step 2/3):** own the projection config (OFX lever) + the clip (PutDrawEnv) engine-side,
+  default-OFF behind `PSXPORT_WIDE_ENGINE` so 4:3 stays byte-identical (0-diff gate), then the shader places
+  wide content 1:1 (drop WIDE_OFF centering). 2D water/sky/HUD (B4) + frustum cull (B3) remain after.
