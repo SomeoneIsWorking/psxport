@@ -410,9 +410,10 @@ void games_tomba2_init(void) {
   // render code (later-133). A/B: PSXPORT_PEROBJ_RECOMP=1 keeps the recomp body. (PSXPORT_DEBUG=flush2
   // re-overrides the same addr below with the probe, which super-calls the recomp body.)
   if (!cfg_on("PSXPORT_PEROBJ_RECOMP")) {
-    void ov_perobj_flush(R3000*), ov_perobj_render(R3000*);
+    void ov_perobj_flush(R3000*), ov_perobj_render(R3000*), ov_render_walk(R3000*);
     rec_set_override(0x8003CDD8u, ov_perobj_flush);
     rec_set_override(0x8003CCA4u, ov_perobj_render);   // per-object render dispatch (flush-only case native)
+    rec_set_override(0x8003C048u, ov_render_walk);     // phase-2 render-list walk (own-when-handleable)
   }
   fps60_init();
   // cull tap: ALWAYS registered — genuine-wide is the default wide path and the overlay can toggle aspect
@@ -446,6 +447,8 @@ void games_tomba2_init(void) {
     rec_set_override(0x8003BCF4u, ov_rwalk_bcf4); rec_set_override(0x8003BF00u, ov_rwalk_bf00);
     rec_set_override(0x8003C048u, ov_rwalk_c048); rec_set_override(0x8003EEC0u, ov_rwalk_eec0);
   }
+  // Render-list node-type dump (PSXPORT_DEBUG=rlist): the full type set 8003C048 must handle. Gated.
+  if (cfg_dbg("rlist")) { void ov_rlist_probe(R3000*); rec_set_override(0x8003C048u, ov_rlist_probe); }
   void engine_tomba2_init(void);
   engine_tomba2_init();                            // native engine layer (Phase 1: object-list walk)
 }

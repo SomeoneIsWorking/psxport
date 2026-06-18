@@ -5112,9 +5112,18 @@ code runs — not `gen_func_8003CDD8`, not the dispatcher `gen_func_8003F698`, n
   80084690` then the GT3 variant `8003B320`, and a default `rec_dispatch(node+24)`. Owning it = replicate
   the walk + the 33-case dispatch (cases have non-uniform/inline arg setup) — a multi-step lift, NOT a
   clean single step; the per-object SUBMISSION (the meaty projection/packet work) is already native.
-- **NEXT (in order):** (1) own `gen_func_8003C048` (the master phase-2 flush walk) natively — replicate
-  the linked-list walk + jump-table dispatch, native for owned cases (8003CCA4), rec_dispatch/super-call
-  for unowned; 0-diff gate at f410 (where it fires). (2) drive to scenes using `0x8003B320`/`0x8003C8F4`/
+- **`gen_func_8003C048` (the master phase-2 render-list WALK) now OWNED** (`submit_render_walk`): native
+  linked-list iteration (head `*0x800F2624`, next `node+36`), skip non-live (`node+1==0`), dispatch live
+  nodes by `node+0xb` (<33) via the `0x80014DB8` table. Own-when-fully-handleable: pre-scan the live
+  nodes; if every one resolves to an owned case run the native walk, else super-call the recomp body
+  (unfamiliar scenes always correct, never a fragile partial). Field cases (`PSXPORT_DEBUG=rlist`): two
+  live node-types — `t0→0x8003C0B4` (per-object render → native submit_perobj_render) and `t32→0x8003C29C`
+  (default → `rec_dispatch(node, *(node+24))`, the node's own render fn). **VRAM byte-identical** native
+  walk+dispatch+flush vs full recomp @f410. So the ENTIRE field phase-2 render path — list walk → per-
+  object dispatch → camera×object transform → geometry submission — is now native C (the "entity-list
+  iteration → render submission" engine layer from the project goal); the owned-leaf boundary is the
+  node's render fn (`node+24`, terrain via the owned byte-packed `0x80027768`) + the per-object submitters.
+- **NEXT (in order):** (1) drive to scenes using `0x8003B320`/`0x8003C8F4`/
   overlay `0x8013xxxx` and port those submit variants. (3) own `gen_func_80051C8C` (transform build,
   interpreted-only — RE from RAM). (4) native widescreen margin (replace the guest-flush margin_render.cpp).
 - Probes added this session: `PSXPORT_DEBUG=pdisp` (dispatch coverage), `subcnt` (submitter call counts),

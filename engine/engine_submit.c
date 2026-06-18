@@ -696,6 +696,55 @@ void ov_perobj_render(R3000* c) {
   submit_perobj_render(c);
 }
 
+// NATIVE phase-2 render-list WALK — gen_func_8003C048 (later-135). The master draining of the per-frame
+// render list: iterate the linked list (head *0x800F2624, next at node+36), skip non-live nodes
+// (node+1==0), and dispatch each live node by its render type (node+0xb, <33) through the 33-entry jump
+// table @0x80014DB8 to a per-type renderer. This is the engine's "entity-list iteration → render
+// submission" — the native-engine layer named in the project goal.
+//
+// Faithful-first + own-when-fully-handleable: we PRE-SCAN the live nodes; if EVERY one resolves to a
+// case we own natively, run the native walk; otherwise super-call the whole recomp body (so an unfamiliar
+// scene is always correct, never a fragile partial). The two cases that fire at the field
+// (PSXPORT_DEBUG=rlist):
+//   - table target 0x8003C0B4 = the per-object render case → native submit_perobj_render(node).
+//   - table target 0x8003C29C = the default case → rec_dispatch(node, *(node+24)) (the node's own render
+//     fn ptr; its leaf submit is owned where owned). Identical to the recomp default block.
+// Types ≥33 render nothing (the recomp skips them) → treated as handled no-ops. A/B: PEROBJ_RECOMP.
+#define RLIST_HEAD   0x800F2624u
+#define RLIST_TABLE  0x80014DB8u
+#define RCASE_PEROBJ 0x8003C0B4u             // jump-table target = the gen_func_8003CCA4 (per-object) case
+#define RCASE_DEFAULT 0x8003C29Cu            // jump-table target = the default case: rec_dispatch(node+24)
+
+static void submit_render_walk(R3000* c) {
+  uint32_t head = mem_r32(RLIST_HEAD);
+  if (head == 0) return;
+  // pre-scan: bail to the recomp body if any live node uses a case we don't own natively.
+  for (uint32_t n = head, g = 0; n && g < 256; n = mem_r32(n + 36), g++) {
+    if (mem_r8(n + 1) == 0) continue;
+    uint8_t t = mem_r8(n + 0xB);
+    if (t >= 33) continue;                            // renders nothing (recomp skips) — handled
+    uint32_t tgt = mem_r32(RLIST_TABLE + t * 4);
+    if (tgt != RCASE_PEROBJ && tgt != RCASE_DEFAULT) { rec_super_call(c, 0x8003C048u); return; }
+  }
+  // native walk: read `next` before dispatch (the recomp captures node+36 before the case runs).
+  for (uint32_t n = head; n; ) {
+    uint32_t next = mem_r32(n + 36);
+    if (mem_r8(n + 1) != 0) {
+      uint8_t t = mem_r8(n + 0xB);
+      if (t < 33) {
+        uint32_t tgt = mem_r32(RLIST_TABLE + t * 4);
+        if (tgt == RCASE_PEROBJ) { c->r[4] = n; submit_perobj_render(c); }
+        else                     { c->r[4] = n; rec_dispatch(c, mem_r32(n + 24)); }  // default case
+      }
+    }
+    n = next;
+  }
+}
+void ov_render_walk(R3000* c) {
+  if (cfg_on("PSXPORT_PEROBJ_RECOMP")) { rec_super_call(c, 0x8003C048u); return; }
+  submit_render_walk(c);
+}
+
 // PSXPORT_DEBUG=subcnt — submitter call-counter. Registered (super-call) on candidate submit fns to see
 // which actually fire per scene + how often, so the un-owned variants worth porting are picked by data,
 // not guesswork. One slot per registered address; per-present-frame counts flushed on frame change.
@@ -723,6 +772,26 @@ void ov_rwalk_bcf4(R3000* c) { subcnt_tick(c, 0x8003BCF4u); }
 void ov_rwalk_bf00(R3000* c) { subcnt_tick(c, 0x8003BF00u); }
 void ov_rwalk_c048(R3000* c) { subcnt_tick(c, 0x8003C048u); }
 void ov_rwalk_eec0(R3000* c) { subcnt_tick(c, 0x8003EEC0u); }
+
+// PSXPORT_DEBUG=rlist — dump the gen_func_8003C048 render-list node TYPES (node+0xb) + jump-table target
+// (0x80014DB8[type]) for every node in the list, so we know the full type set the field's phase-2 flush
+// walk must handle to be ownable natively. Walk: head *0x800F2624, skip node+1==0, advance node+36. Once
+// per frame (first call), then super-calls the original walk.
+void ov_rlist_probe(R3000* c) {
+  static int s_rl_last = -1;
+  if (s_frame != s_rl_last) {            // 1/frame gate (own latch)
+    s_rl_last = s_frame;
+    fprintf(stderr, "[rlist] f%d:", s_frame);
+    uint32_t n = mem_r32(0x800F2624u); int guard = 0;
+    for (; n && guard < 64; n = mem_r32(n + 36), guard++) {
+      uint8_t live = mem_r8(n + 1), t = mem_r8(n + 0xB);
+      uint32_t tgt = (t < 33) ? mem_r32(0x80014DB8u + t * 4) : 0;
+      fprintf(stderr, " [%08x l%u t%u→%08x]", n, live, t, tgt);
+    }
+    fprintf(stderr, "\n");
+  }
+  rec_super_call(c, 0x8003C048u);
+}
 
 // PSXPORT_DEBUG=ccase — gen_func_8003CCA4 case histogram. The per-object render dispatch selects a
 // secondary effect pass by idx = node[0xd]&0xb (idx>=9 = no render). Logs the idx + the jump-table
