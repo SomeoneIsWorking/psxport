@@ -129,6 +129,24 @@ void ov_enqueue_probe(R3000* c) {
   rec_super_call(c, 0x80077EBCu);
 }
 
+// PSXPORT_DEBUG=flush — render-command FLUSH tap (later-131 NEXT). Taps gen_func_8003F174: a0 = a command list
+// whose header has the command count at +8 and a command-pointer array at +0xc0. Dumps each command's ADDRESS
+// (list+0xc0[i]) + its geomblk (cmd+0x40) so the still-open render-command ENQUEUE can be traced (the writer
+// of those cmd structs). The cmd address is the thing the dispatcher/rcmd tap can't see. Super-calls original.
+void ov_flush_probe(R3000* c) {
+  if (cfg_dbg("flush") && probe_frame_ok()) {
+    uint32_t list = c->r[4];
+    uint32_t count = mem_r8(list + 8);
+    fprintf(stderr, "[flush] f%d list=%08x count=%u\n", s_frame, list, count);
+    for (uint32_t i = 0; i < count; i++) {
+      uint32_t cmd = mem_r32(list + 0xc0 + i*4);
+      fprintf(stderr, "[flush]   cmd[%u]=%08x geomblk=%08x x18=%08x\n",
+              i, cmd, cmd ? mem_r32(cmd + 0x40) : 0, cmd ? mem_r32(cmd + 0x18) : 0);
+    }
+  }
+  rec_super_call(c, 0x8003F174u);
+}
+
 // PC-native per-vertex depth (Phase 2): because we OWN the projection, we know each vertex's real
 // view-space Z (the SZ the GTE just produced) — record it keyed by the packet vertex word's address so
 // the renderer's D32 depth buffer does true per-pixel occlusion (PSXPORT_NATIVE_DEPTH / the SBS A/B

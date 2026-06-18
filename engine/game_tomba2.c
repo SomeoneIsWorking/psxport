@@ -405,6 +405,9 @@ void games_tomba2_init(void) {
   // Enqueue tap (PSXPORT_DEBUG=enq): the render-command push, called per-object in phase 1 → g_current_object
   // names the source object, the attribution the downstream oracle lacks. later-131. Gated (super-call).
   if (cfg_dbg("enq")) { void ov_enqueue_probe(R3000*); rec_set_override(0x80077EBCu, ov_enqueue_probe); }
+  // Flush tap (PSXPORT_DEBUG=flush): dump the command-struct addresses (list+0xc0[i]) the flush drains, to
+  // trace the still-open render-command enqueue. later-131. Gated (super-call).
+  if (cfg_dbg("flush")) { void ov_flush_probe(R3000*); rec_set_override(0x8003F174u, ov_flush_probe); }
   void engine_tomba2_init(void);
   engine_tomba2_init();                            // native engine layer (Phase 1: object-list walk)
 }
