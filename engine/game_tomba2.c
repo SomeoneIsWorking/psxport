@@ -108,25 +108,24 @@ static void ov_object_cull(R3000* c) {
             (int16_t)obj_r16(o + 0x2e), (int16_t)obj_r16(o + 0x32), (int16_t)obj_r16(o + 0x36));
   int p2 = (int16_t)c->r[5], p3 = (int16_t)c->r[6], p4 = (int16_t)c->r[7];   // pos - camera (s16 each)
   rec_super_call(c, 0x8007712Cu);                  // the game's cull (sets +1 visible flag, queues)
-  if (s_cull < 0) {
-    // Widescreen widens the horizontal FOV ~1.34x, so the re-include cone+distance MUST widen to match
-    // or the new edge/corner geometry (incl. the static terrain/water tiles, which also go through this
-    // per-object cull) is dropped -> black wedges. Couple the defaults to PSXPORT_WIDE: wide => widest
-    // cone (fov 0) + extended far; plain CULL keeps the conservative 4:3 values. Both env-overridable.
-    // Genuine engine-wide (gpu_vk_wide_engine) widens the FOV at the projection, so the frustum cull MUST
-    // widen too or the new side/corner geometry (incl. static terrain/water tiles) is dropped -> black
-    // wedges. Couple the extended cull to BOTH the genuine-wide path and the legacy FB-hack PSXPORT_WIDE.
-    int wide = (cfg_str("PSXPORT_WIDE") && atoi(cfg_str("PSXPORT_WIDE")) != 0) || gpu_vk_wide_engine();
-    s_cull = (cfg_on("PSXPORT_CULL") || wide) ? 1 : 0;
-    const char* f = cfg_str("PSXPORT_CULL_FAR"); s_cull_far = f ? atoi(f) : (wide ? 0x8000 : 0x6000);
-    const char* v = cfg_str("PSXPORT_CULL_FOV"); s_cull_fov = v ? atoi(v) : (wide ? 0x00 : 0x80); }
-  if (s_cull && mem_r8(o + 1) == 0) {              // the game CULLED it — reconsider with extended bounds
+  // Genuine engine-wide widens the FOV at the projection, so the frustum cull MUST widen too or the new
+  // side/corner geometry (incl. static terrain/water tiles, which also go through this per-object cull) is
+  // dropped -> black wedges. Re-evaluated LIVE each call (cached env overrides) so a live aspect toggle in
+  // the overlay takes effect immediately. Wide => widest cone (fov 0) + extended far; plain CULL keeps the
+  // conservative 4:3 values. Both env-overridable (PSXPORT_CULL_FAR / _FOV).
+  if (s_cull < 0) { const char* f = cfg_str("PSXPORT_CULL_FAR"); s_cull_far = f ? atoi(f) : -1;
+                    const char* v = cfg_str("PSXPORT_CULL_FOV"); s_cull_fov = v ? atoi(v) : -1; s_cull = 1; }
+  int wide = (cfg_str("PSXPORT_WIDE") && atoi(cfg_str("PSXPORT_WIDE")) != 0) || gpu_vk_wide_engine();
+  int do_cull = cfg_on("PSXPORT_CULL") || wide;
+  int cull_far = s_cull_far >= 0 ? s_cull_far : (wide ? 0x8000 : 0x6000);
+  int cull_fov = s_cull_fov >= 0 ? s_cull_fov : (wide ? 0x00 : 0x80);
+  if (do_cull && mem_r8(o + 1) == 0) {              // the game CULLED it — reconsider with extended bounds
     unsigned dist = isqrt32((unsigned)(p2*p2 + p3*p3 + p4*p4)) & 0xFFFF;
-    if (dist >= 0x200 && dist <= (unsigned)s_cull_far) {   // keep near/behind culling intact
+    if (dist >= 0x200 && dist <= (unsigned)cull_far) {   // keep near/behind culling intact
       int fx = (int16_t)obj_r16(0x1F8000E8), fy = (int16_t)obj_r16(0x1F8000EA), fz = (int16_t)obj_r16(0x1F8000EC);
       long depth = (long)fx*p2 + (long)fy*p3 + (long)fz*p4, den = ((long)dist * 0x1000) >> 10;
       if (den < 1) den = 1;
-      if (depth / den >= s_cull_fov) { mem_w8(o + 1, 1); c->r[2] = 1; }   // re-include: mark visible
+      if (depth / den >= cull_fov) { mem_w8(o + 1, 1); c->r[2] = 1; }   // re-include: mark visible
     }
   }
   g_current_object = prev;
@@ -360,10 +359,11 @@ void games_tomba2_init(void) {
     engine_submit_register_autodetect();                 // + own the same library in runtime-loaded overlays
   }
   fps60_init();
-  // cull tap: fps60 / objlog / extended-cull / genuine-wide (the wide FOV needs the widened frustum so
-  // side geometry the 4:3 cull dropped is re-included — see ov_object_cull).
-  if (g_fps60_on || cfg_dbg("obj") || cfg_on("PSXPORT_CULL") || cfg_on("PSXPORT_WIDE_ENGINE"))
-    rec_set_override(0x8007712Cu, ov_object_cull);
+  // cull tap: ALWAYS registered — genuine-wide is the default wide path and the overlay can toggle aspect
+  // LIVE, so the widened-frustum re-include must be available without a launch flag. ov_object_cull is a
+  // faithful super-call + a wide-only re-include (no-op at 4:3), so registering it always is safe.
+  rec_set_override(0x8007712Cu, ov_object_cull);
+  (void)0;
   void engine_tomba2_init(void);
   engine_tomba2_init();                            // native engine layer (Phase 1: object-list walk)
 }

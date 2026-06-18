@@ -319,7 +319,10 @@ static void wide_init(void) { mods_init(); }
 // water/sky/HUD (B4) and the frustum cull (B3) are not yet widened, so the extra side bands show gaps /
 // edge-stuck 2D until those steps land — this flag is the in-progress genuine path, not the default.
 int gpu_vk_wide_engine(void) {
-  static int v = -1; if (v < 0) { mods_init(); v = cfg_on("PSXPORT_WIDE_ENGINE") ? 1 : 0; }
+  // Genuine PC-native wide (real wider FOV + native FB, NO present-time spread) is THE wide path now.
+  // The legacy FB-hack (push_wide centering / WIDE_OFF / sprite_anchor spread) is retired; opt back into
+  // it only for A/B comparison with PSXPORT_WIDE_FBHACK=1.
+  static int v = -1; if (v < 0) { mods_init(); v = cfg_on("PSXPORT_WIDE_FBHACK") ? 0 : 1; }
   return v && g_mods.aspect != ASPECT_4_3;
 }
 int gpu_vk_wide_engine_ofx(void) { return wide_native_w() / 2; }   // wide projection center (214 @16:9)
@@ -1066,6 +1069,14 @@ void gpu_vk_present(const uint16_t* src, int sx, int sy, int w, int h) {
   if (!gpu_vk_enabled()) return;
   if (!s_inited) init_vk();
   wide_init();
+  // DIAG (PSXPORT_ASPECT_SWITCH="frame:aspect[:ires]"): emulate a LIVE overlay aspect/ires toggle at a
+  // given present-frame so the resize transition can be reproduced + captured headlessly (don't guess).
+  { static int sw = -2, swf, swa, swi = -1; static long fc = 0;
+    if (sw == -2) { const char* e = cfg_str("PSXPORT_ASPECT_SWITCH");
+      sw = (e && sscanf(e, "%d:%d:%d", &swf, &swa, &swi) >= 2) ? 1 : 0; }
+    if (sw == 1 && fc == swf) { g_mods.aspect = swa; if (swi >= 1) { g_mods.ires = swi; g_mods.ires_auto = 0; }
+      fprintf(stderr, "[aspectsw] f%ld -> aspect=%d ires=%d\n", fc, g_mods.aspect, g_mods.ires); }
+    fc++; }
   s_present_sx = sx; s_present_sy = sy;   // faithful display origin (pre use_fb override) for the LIGHT screen map
   imgui_overlay_new_frame();   // CPU-build the mod-toggle UI for this frame (no-op if overlay not inited)
   // PSXPORT_SBS: split-screen depth A/B. Render the frame into TWO full-res images — s_tex with default

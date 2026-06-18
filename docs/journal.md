@@ -4467,3 +4467,27 @@ Make this a PC game." Fixed:
   is unaffected. Persists aspect, internal-res(+auto), SSAO/light(+params), 60fps.
 - OPEN: live-toggling aspect/internal-res "completely breaks the game" (user) — investigating next with a
   headless aspect-switch diagnostic (don't guess).
+
+## later-121 — genuine-wide is the DEFAULT wide path (FB-hack retired); cull live; "toggle breaks" diagnosed
+User: "NO FB HACK. PC NATIVE FB. toggling resolution/widescreen breaks the game." Diagnosis + change:
+- **"Toggling breaks" = the FB-hack widescreen is inherently broken, NOT a transition bug.** Proved with
+  PSXPORT_ASPECT_SWITCH (new diag: switch aspect/ires at a present-frame headless): a FRESH FB-hack 16:9 at
+  f2860 is IDENTICAL to one toggled at f2850 — both show the FB-hack's broken output. So the user toggles
+  widescreen -> gets the broken FB-hack. Fix = make the GOOD path the default.
+- **Genuine-wide is now the DEFAULT wide path** (`gpu_vk_wide_engine()` default ON; legacy FB-spread is
+  opt-out `PSXPORT_WIDE_FBHACK=1` for A/B). So selecting 16:9/21:9 in the overlay (or PSXPORT_ASPECT) gives
+  the real wider FOV + native FB, no spread. Verified `scratch/screenshots/def2_field.png`: field renders
+  genuinely wide (FOV, right terrain, native depth, 2D filled) with NO flag.
+- **Frustum cull re-evaluated LIVE** (ov_object_cull): the wide decision is per-call (not cached once) and
+  the override is ALWAYS registered, so a live aspect toggle in the overlay takes effect immediately.
+- **DEAD END / my mistake:** tried to make PSXPORT_VK_SHOT dump the PRESENTED (pillarbox-cropped) region via
+  s_last_* — produced BLACK dumps headless (s_last_* not valid in the headless present path). REVERTED; the
+  shot dumps the full scratch FB (428) again. CONSEQUENCE: for PILLARBOXED 2D-only frames the shot shows the
+  full FB incl. off-screen margins that hold stale content — so the "right-side garbage" seen on the
+  pause-menu shots may be CROPPED-OUT margin the user never sees. Verify menu/2D-screens with a WINDOWED
+  shot, not the headless FB dump.
+- **OPEN:** (1) FB-hack code (WIDE_OFF centering, gpu_vk_sprite_anchor_dx, the push_wide wide_off branch) is
+  now DEAD (wide_engine default-on) — DELETE it (user: "NO FB HACK"); remove the PSXPORT_WIDE_FBHACK opt-out
+  too. (2) Live-OFX-toggle: OFX is widened in ov_set_geom_offset when the game calls SetGeomOffset (scene
+  setup) — a live aspect toggle mid-scene won't reproject the 3D until the next SetGeomOffset; re-apply OFX
+  per-frame from the current aspect. (3) pause-menu / 2D-overlay-over-3D in wide — verify windowed first.
