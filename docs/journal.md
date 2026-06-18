@@ -4150,3 +4150,12 @@ design in fps60_synthesize:
    A==B persisted). Need to confirm the held input reaches the game / the char can walk here, or pick a
    scene with real camera pan, to validate interpolation visually. Live eyeball (`PSXPORT_FPS60=1
    ./run.sh`) remains the documented check.
+
+## later-108 — STATUS: 60fps PARKED (waiting for user live-test); other mods handed to a fresh session
+60fps (PSXPORT_FPS60) is implemented (later-106/107) — separate layer, camera+3D-object interpolation,
+100% object match, 528/927 field prims reproject. **Parked waiting for the user to live-test**
+(`PSXPORT_FPS60=1 ./run.sh`); headless validation is a dead end (synth dumptest reads byte-identical VRAM
+buffers in the field — see later-107). Do NOT keep iterating fps60 until the user reports.
+Fresh session continues the OTHER mods (handoff: scratch/handoff.md): (1) ambient occlusion / SSAO —
+unblocked by the 3-band native depth (D32 s_depth exists); (2) better lighting — rebuild fresh (the
+9d81ff8 lighting was removed in 8e959e9; read that first). Hi-res + widescreen already DONE (later-105).
