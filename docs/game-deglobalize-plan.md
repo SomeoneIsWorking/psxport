@@ -87,10 +87,37 @@ Flag init-once-then-read tables case by case; when in doubt, move it (safe).
   diff expresses its per-core difference (terrain ON vs neutralized) as a **flag on Game read inside
   the override** (override has Core* c), NOT divergent tables — so no migration needed. Rationale
   documented in-code above `g_iov`. (No build/0-diff needed — comment-only change.)
-- **Next (order, small→large):**
-  gpu_native → gpu_trace → dbg_server → native_boot →
-  gpu_vk → gte/spu/mdec (Beetle FORK) → engine modules (fps60, engine_submit, native_path*, game_tomba2).
-  DONE/skip: timing, cd_override, hle (done); sync_overrides, threads, memcard (only config-caches).
+- **Next (order):** RENDER SUBSYSTEM (see "Render-subsystem migration" below) — gpu_native → gpu_vk →
+  gpu_trace → gpu_debug — THEN dbg_server → native_boot → gte/spu/mdec (Beetle FORK) → engine modules
+  (fps60, engine_submit, native_path*, game_tomba2). (mem 1 static, boot 1 — sweep at the end.)
+  DONE/skip: timing, cd_override, hle, pad_input, native_fmv, native_stub, interp (done); sync_overrides,
+  threads, memcard (only config-caches).
+
+## Render-subsystem migration (USER DECISION 2026-06-19: "migrate render fully first")
+Asked defer-vs-migrate for the renderer, the user chose **migrate render fully first** (honor "nothing
+file-scope global" literally; enables future per-core render-output diffing). Biggest chunk (~164 of
+~459 statics) and **cross-module**: the VRAM/display state is NOT mere file-scope statics — `s_vram`,
+`s_prov`, `s_disp_x/y` are plain globals exported via `runtime/recomp/gpu_native_internal.h` and
+consumed by gpu_native, gpu_vk, gpu_trace, gpu_debug.
+- **Design:** put ALL render state on a `GpuState` member of `Game` (VRAM `s_vram`+`s_interp`+`s_prov`,
+  `s_fb_base`, draw clip `s_da_*`, offset `s_off_*`, tex mode `s_tp_*`, CLUT `s_clut_*`, GP0 parse
+  `s_fcount/s_fneed/s_xfer*`, tex window `s_tw_*`, display `s_disp_*`, prim counters `s_prim_*`,
+  `s_seen3d/s_prev_had3d`, `s_ndl_cur`, …). Reach it via `core->game->gpu` from entry points that
+  already carry `Core*` (`gpu_gp0(Core*)`, `gp0_exec(Core*)`, `gpu_present(Core*)`).
+- **Threading crux:** LEAF helpers (`fb()`, `sample_tex`, GP0 sub-handlers, `blit_src`, `gpu_gp1` which
+  has NO Core*) carry no handle. Re-thread them to take `GpuState&`/`Core*` (mechanical but large in
+  gpu_native.cpp), and update the internal header + cross-file consumers (gpu_vk/gpu_trace/gpu_debug)
+  that read `s_vram`/`s_prov`. Existing OOP direction ([[oop-core-refactor-directive]], cpp-scope memory)
+  favors making the heavy GPU fns **methods of GpuState** — clean but a big rewrite; method-ize or pass
+  `GpuState&`.
+- **Stay SHARED (documented host-output singletons / config / diag, NOT machine state):** SDL window/
+  renderer/texture (`s_win/s_ren/s_tex/s_tex_w/s_tex_h/s_win_on`); Vulkan device/swapchain in gpu_vk are
+  the same category (host GPU singletons, one per process). Config-caches (`s_sbs_on`, `g_log`,
+  `s_reddbg`) and pure diagnostics (`s_prims`, `s_gp0_words`, `s_dma2`, `s_cur_node`, `s_fade_*`) stay
+  shared per policy. Document each in-code.
+- **GATE:** frame-50 0-diff (`scratch/abrun.sh` vs `deglob_baseline.bin`) AND a later FIELD-frame render
+  check (terrain runs in the field, not by frame 50) — capture a field frame headless before & after,
+  confirm identical (the "Render-path modules" gate note above).
 
 ## After de-globalization
 Build the dual-core diff: `Game a, b;` (b neutralizes the override under test, e.g. terrain → super-call),
