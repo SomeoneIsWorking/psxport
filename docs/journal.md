@@ -5444,3 +5444,31 @@ overrely on capstone"); trailing post-`jr ra` writes in those bodies are recompi
 **Tooling note:** `scratch/bin/tomba2/main_ram.bin` is a 2MB RAM-layout view of MAIN.EXE (body at file
 offset 0x10000) so `tools/disasm.py <main_ram.bin> <kseg0_addr> <end>` resolves 0x800xxxxx directly. But
 prefer the gen_func bodies over raw disasm.
+
+## later-151: subagent leaf batch (32 fns) + A/B RAM-equivalence GATE established
+
+Parallelized the clean-leaf grind across 3 subagents (engine/native_path_a1/a2/a3.cpp, each a
+games_native_path_aN_init wired into games_native_path_init; files added to build_port.sh + run.sh).
+32 leaves drafted. Then VERIFIED each against the interpreter with an A/B RAM diff — the real gate, since
+"reaches frame 39" is too weak for audio/math leaves not exercised by boot.
+
+**A/B harness (now the standard correctness gate for ported fns):**
+- Determinism first: two identical headless runs (`PSXPORT_AUTO_NEWGAME=1 PSXPORT_REPL=1`, `run 50; dumpram`)
+  → byte-identical 2 MB RAM. Confirmed deterministic.
+- Isolate a batch's effect: build WITH the ports vs WITHOUT (comment its init call), dump RAM at the same
+  point, `cmp -l`. A ported fn that's behaviorally equivalent to the interp body ⇒ **0 byte diff**.
+- Per-fn classification: enable one registration at a time (zsh: use an ARRAY `A=(...)`, not `$VAR` — zsh
+  doesn't word-split unquoted vars, which silently no-ops the loop), diff vs the all-interp baseline.
+
+**Result: 25 of 32 verified 0-diff (kept, enabled). 7 had real transcription bugs → DISABLED (left
+interpreted; correct, just not-yet-native) with `// TODO(verify):` notes naming the diff size + cause:**
+  a1: 800752B4 (167B, stride-12 band table @0x800BE238), 80097540 (2B, return edge case)
+  a2: 80090160 (80B, varint accumulate), 80082240 / 800822D8 (9B each, GP0 0xE3/0xE4 clip-word arg)
+  a3: 80094C10 (15B, fixed-point mixer/pan), 80077FB0 (4B, 16-bit sqrt → cascades to 0x800E806x)
+The bugs were all in the functions the subagents THEMSELVES flagged as highest-risk (good self-reporting),
+and were ~all address-computation / edge-case errors. 80075E04 kept: its only diff (2B @0x801FE980) is its
+OWN stack frame slot (sp-=8; save r10; read back; freed on return) — provably dead, correct return value.
+
+**Lesson:** subagents are viable for this mechanical transcription IF every output passes the A/B gate —
+do NOT trust "compiles + reaches prologue". The 7 buggy ones are the fix-queue (re-derive from gen_func,
+re-A/B to 0-diff, then re-enable). Burn-down 543 → 505. Reaches prologue at frame 39, A/B clean (1 benign).
