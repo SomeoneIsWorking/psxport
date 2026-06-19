@@ -5,14 +5,16 @@
 // VSync(-1) queries it. This is the standard static-recomp frame model: one logic frame per
 // VSync(0). Each tick also DeliverEvents the VBlank event class for any TestEvent-based waiter.
 #include "core.h"
+#include "game.h"
 #include <stdlib.h>
+#include <stdio.h>
 
 enum { A0 = 4, V0 = 2 };
 #define VBLANK_COUNT 0x800ABDE0u   // DAT_800abde0: libetc VSync counter (FUN_80085900 returns it)
 
 void hle_deliver_event(uint32_t ev_class, uint32_t spec);
 
-static uint32_t g_vblank = 0;
+// vblank counter now lives on the instance: c->game->timing.vblank (was the file-scope g_vblank)
 
 // 0x80085BB0 FUN_80085bb0 VSyncCallback(func): no-op. The original routes the per-vblank
 // callback through the libapi interrupt vector we don't model; we don't deliver preemptive
@@ -33,20 +35,21 @@ static void frame_tick(void) {
 //   mode == 1 -> return hblank delta (query, no wait) — dummy 0 here
 //   mode == 0 -> wait one vblank; mode > 1 -> wait `mode` vblanks. Advance the frame clock.
 static void ov_vsync(Core* c) {
+  uint32_t& vblank = c->game->timing.vblank;
   int32_t mode = (int32_t)c->r[A0];
   if (mode < 0) {
-    c->r[V0] = g_vblank;
+    c->r[V0] = vblank;
   } else if (mode == 1) {
     c->r[V0] = 0;
   } else {
-    g_vblank += (mode == 0) ? 1u : (uint32_t)mode;
-    c->r[V0] = g_vblank;
+    vblank += (mode == 0) ? 1u : (uint32_t)mode;
+    c->r[V0] = vblank;
     frame_tick();
   }
-  c->mem_w32(VBLANK_COUNT, g_vblank);
+  c->mem_w32(VBLANK_COUNT, vblank);
 }
 
-uint32_t timing_vblank(void) { return g_vblank; }
+uint32_t timing_vblank(Core* c) { return c->game->timing.vblank; }
 
 void timing_init(void) {
   rec_set_override(0x80085900u, ov_vsync);   // VSync core

@@ -18,11 +18,16 @@
 
 #ifdef __cplusplus
 
+class Game;   // the whole-machine owner (game.h); Core::game points back to it so any code holding a
+              // Core* reaches migrated subsystem state via c->game->... (de-globalization, 2026-06-19).
+
 class Core : public R3000 {
 public:
   // ---- Memory (2 MB main RAM mirrored across KUSEG/KSEG0/KSEG1; 1 KB scratchpad) ----
   uint8_t ram[0x200000];
   uint8_t scratch[0x400];
+
+  Game* game = nullptr;   // back-pointer to the owning Game (set by Game's constructor)
 
   Core();
 

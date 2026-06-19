@@ -3,6 +3,7 @@
 // the machine state lives in a `Core` (core.h), reached explicitly (no global). main() owns the
 // instance; everything it calls receives `c`.
 #include "core.h"
+#include "game.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -40,7 +41,8 @@ int main(int argc, char** argv) {
   const char* path = argc > 1 ? argv[1] : "scratch/bin/tomba2/MAIN.EXE";
   void gpu_vk_tritest(void);
   gpu_vk_tritest();           // PSXPORT_VK_TRITEST=1: GPU triangle-rasterizer self-test, then exit
-  Core* c = new Core();       // the emulator instance (2 MB RAM lives here, not on the stack)
+  Game* game = new Game();    // the whole machine (owns the Core + every subsystem's state — no globals)
+  Core* c = &game->core;      // the CPU/RAM handle threaded through the interp (2 MB RAM lives in Game)
   void watchdog_init(void);
   watchdog_init();            // PSXPORT_WATCHDOG=<sec>: abort+backtrace if a frame stalls
   load_exe(path, c);
