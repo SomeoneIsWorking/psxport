@@ -61,6 +61,26 @@ keeps the recomp body callable as the oracle/super-call; A/B toggle. Every lifte
 oracle), never "looks right". Determinism check first. The game stays playable at every step (un-lifted
 functions keep running as recomp).
 
+### RENDER is the EXCEPTION — render PC-native, do NOT transcribe the PSX pipeline (USER DIRECTIVE, anchor)
+The RAM/byte-equivalence gate above is for **gameplay logic**. For the **render submission** it is the
+WRONG gate — it forces you to replicate PSX behavior in C. **We are porting the game to PC, not replaying
+PSX on PC.** What the tree currently calls "native" render (`engine_submit.cpp` `submit_terrain`,
+`ov_submit_poly_gt4_bp`, `native_dl`) is in fact a **transcription of the PSX render path**: it reproduces
+the GTE matrix compose (MVMVA columns + CR0-7 packing), drives `gte_op` (emulated PSX GTE), and fills
+GP0 packet words "byte-identical to the guest packet." That replication IS the source of the render
+glitches (the terrain's tiny composed matrix → water garbage; mangled 2D/UI quads). **Do not chase those
+by patching the transcription.** Instead:
+- Render the game's CONTENT with a PC renderer: read the SCENE DATA the game already computes — camera/
+  view, per-object transform (node euler + translation + scale), model GEOMETRY (geomblk prim-lists:
+  positions/UVs/colors) — transform with **float matrices**, project, draw textured tris/quads via
+  `gpu_vk_draw_*_f` with a **real depth buffer**. NO GTE compose, NO `gte_op` for render, NO byte-packed
+  PSX packet.
+- The PSX render (recomp/interp) is the **VISUAL ORACLE only** — "what should the frame look like" — never
+  a byte-match target. Gate render work on the picture matching the oracle.
+- Still READ gameplay/scene state from guest RAM; never WRITE guest gameplay state (host-memory rule).
+- Applies to the whole render path (terrain, per-object, 2D/UI). First target: PC-native terrain
+  (`run.sh` ships `PSXPORT_NO_TERRAIN=1` as a stopgap until it works).
+
 ## Hard rules
 - **No bandaids / no magic constant offsets** — name the root cause; every lifted function / patched
   value is documented with the RE that justifies it (see global "No bandaids").
