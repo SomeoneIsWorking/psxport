@@ -86,6 +86,119 @@ static void ov_800963A0(Core* c) {
 // 0x80096370 — store (uint8_t)a0 to the global byte at 0x80105D28.
 static void ov_80096370(Core* c) { c->mem_w8(0x80105D28u, (uint8_t)c->r[4]); }
 
+// 0x80096390 — store u16 0 to the global at 0x80105CD8.
+static void ov_80096390(Core* c) { c->mem_w16(0x80105CD8u, 0); }
+
+// 0x8006D950 — *0x1F8000E0 (scratchpad) = *(a1+4).
+static void ov_8006D950(Core* c) { c->mem_w32(0x1F8000E0u, c->mem_r32(c->r[5] + 4)); }
+
+// 0x8006D934 — *0x1F8000DC = *(a1+0); *0x1F8000E4 = *(a1+8) (scratchpad).
+static void ov_8006D934(Core* c) {
+  c->mem_w32(0x1F8000DCu, c->mem_r32(c->r[5] + 0));
+  c->mem_w32(0x1F8000E4u, c->mem_r32(c->r[5] + 8));
+}
+
+// 0x80089B98 — get/set the global word at 0x800ABFC0 (returns old, writes a0).
+static void ov_80089B98(Core* c) { c->r[2] = c->mem_r32(0x800ABFC0u); c->mem_w32(0x800ABFC0u, c->r[4]); }
+
+// 0x80099478 — return (*0x800AC638 ^ 1) != 0  (i.e. *0x800AC638 != 1).
+static void ov_80099478(Core* c) { c->r[2] = ((c->mem_r32(0x800AC638u) ^ 1u) != 0u) ? 1u : 0u; }
+
+// 0x80082370 — libgpu primitive/tpage word: 0xE5000000 | ((a1&2047)<<11) | (a0&2047).
+static void ov_80082370(Core* c) { c->r[2] = 0xE5000000u | ((c->r[5] & 2047u) << 11) | (c->r[4] & 2047u); }
+
+// 0x80082220 — GPU draw-mode word: base 0xE1000000, |512 if a1!=0, plus (a2&2559)|1024 if a0!=0.
+static void ov_80082220(Core* c) {
+  uint32_t hi = 0xE1000000u | (c->r[5] != 0 ? 512u : 0u);
+  uint32_t lo = (c->r[6] & 2559u) | (c->r[4] != 0 ? 1024u : 0u);
+  c->r[2] = hi | lo;
+}
+
+// 0x8009A1D0 — table read: entry = *0x800AC604 + (a0<<4); *(u16*)a1 = *(u16*)(entry+12).
+static void ov_8009A1D0(Core* c) {
+  uint32_t e = c->mem_r32(0x800AC604u) + (c->r[4] << 4);
+  c->mem_w16(c->r[5], c->mem_r16(e + 12));
+}
+
+// 0x80097678 — read-modify-write the word at *0x800AC618: v = (v & 0xF0FFFFFF) | 0x02000000.
+static void ov_80097678(Core* c) {
+  uint32_t p = c->mem_r32(0x800AC618u);
+  c->mem_w32(p, (c->mem_r32(p) & 0xF0FFFFFFu) | 0x02000000u);
+}
+
+// 0x80099450 — *0x800AC638 = (a0 == 1) ? 0 : 1.
+static void ov_80099450(Core* c) { c->mem_w32(0x800AC638u, (c->r[4] == 1u) ? 0u : 1u); }
+
+// 0x80099370 — *0x800AC594 = a0; *0x800AC620 = (a0 == 1) ? 1 : 0.
+static void ov_80099370(Core* c) {
+  c->mem_w32(0x800AC594u, c->r[4]);
+  c->mem_w32(0x800AC620u, (c->r[4] == 1u) ? 1u : 0u);
+}
+
+// 0x8009A420 — memset(a0, (uint8_t)a1, a2) returning a0; returns 0 when a0==0 or (int)a2<=0.
+static void ov_8009A420(Core* c) {
+  uint32_t p = c->r[4]; int n = (int32_t)c->r[6];
+  if (p == 0 || n <= 0) { c->r[2] = 0; return; }
+  uint8_t v = (uint8_t)c->r[5]; c->r[2] = p;
+  for (int i = 0; i < n; i++) c->mem_w8(p + i, v);
+}
+
+// 0x8009A3E0 — memcpy(a0, a1, a2) returning a0 (0 if a0==0); no-op body when (int)a2<=0.
+static void ov_8009A3E0(Core* c) {
+  uint32_t d = c->r[4], s = c->r[5]; int n = (int32_t)c->r[6];
+  if (d == 0) { c->r[2] = 0; return; }
+  c->r[2] = d; if (n <= 0) return;
+  for (int i = 0; i < n; i++) c->mem_w8(d + i, c->mem_r8(s + i));
+}
+
+// 0x8009A450 — rand(): seed at 0x80105EE8; seed = seed*0x41C64E6D + 12345; return (seed>>16)&0x7FFF.
+// (0x8009A480, already ported, is the matching srand that writes this seed.)
+static void ov_8009A450(Core* c) {
+  uint32_t s = c->mem_r32(0x80105EE8u) * 0x41C64E6Du + 12345u;
+  c->mem_w32(0x80105EE8u, s);
+  c->r[2] = (s >> 16) & 0x7FFFu;
+}
+
+// 0x8009C1FC — copy a 28-word table from 0x8009C060 to low RAM 0xDF80 (installs a fixed block).
+static void ov_8009C1FC(Core* c) {
+  uint32_t s = 0x8009C060u, d = 0xDF80u;
+  for (int i = 0; i < 28; i++) { c->mem_w32(d, c->mem_r32(s)); s += 4; d += 4; }
+}
+
+// 0x8008CFF0 — zero the first word of `a1` stride-32 records starting at index a0 in the table at
+// *0x80102728: for (i=0; i<a1; i++) *(base + (a0+i)*32) = 0.
+static void ov_8008CFF0(Core* c) {
+  uint32_t a0 = c->r[4], n = c->r[5]; if (n == 0) return;
+  uint32_t base = c->mem_r32(0x80102728u);
+  for (uint32_t i = 0; i < n; i++) c->mem_w32(base + ((a0 + i) << 5), 0);
+}
+
+// 0x8006CBD0 — scatter 6 u16 fields from a1 into the scratchpad block at 0x1F8000D0 (+2,+6,+10)
+// and into the object at a0 (+58,+62,+66).
+static void ov_8006CBD0(Core* c) {
+  uint32_t a0 = c->r[4], a1 = c->r[5];
+  c->mem_w16(0x1F8000D2u, c->mem_r16(a1 + 0));
+  c->mem_w16(0x1F8000D6u, c->mem_r16(a1 + 2));
+  c->mem_w16(0x1F8000DAu, c->mem_r16(a1 + 4));
+  c->mem_w16(a0 + 58, c->mem_r16(a1 + 6));
+  c->mem_w16(a0 + 62, c->mem_r16(a1 + 8));
+  c->mem_w16(a0 + 66, c->mem_r16(a1 + 10));
+}
+
+// 0x800847B0 — reformat a {int,int} pair pack from a0 into a1: each 32-bit field is stored as a word
+// and then its low half-word is overwritten with a 16-bit value (a fixed-point pack). Order preserved
+// from the recompiled body (the w16 fixups intentionally follow the w32 stores).
+static void ov_800847B0(Core* c) {
+  uint32_t a0 = c->r[4], a1 = c->r[5];
+  uint32_t r9 = c->mem_r32(a0 + 0), r10 = c->mem_r32(a0 + 4);
+  c->mem_w32(a1 + 4, r9); c->mem_w32(a1 + 0, r10); c->mem_w16(a1 + 0, (uint16_t)r9);
+  uint32_t r11 = c->mem_r32(a0 + 8), r9b = c->mem_r32(a0 + 12);
+  c->mem_w32(a1 + 12, r11); c->mem_w32(a1 + 8, r9b);
+  c->mem_w16(a1 + 12, (uint16_t)r10); c->mem_w16(a1 + 8, (uint16_t)r11);
+  int16_t r10b = (int16_t)c->mem_r16(a0 + 16);
+  c->mem_w16(a1 + 4, (uint16_t)r9b); c->mem_w16(a1 + 16, (uint16_t)r10b);
+}
+
 // Register every hand-native boot→cutscene function. Called from games_tomba2_init at startup, before
 // ov_game_main runs the init prefix, so rec_dispatch routes these addresses to the native C++ bodies.
 void games_native_path_init(void) {
@@ -102,4 +215,22 @@ void games_native_path_init(void) {
   rec_set_override(0x80051794u, ov_80051794);
   rec_set_override(0x800963A0u, ov_800963A0);
   rec_set_override(0x80096370u, ov_80096370);
+  rec_set_override(0x80096390u, ov_80096390);
+  rec_set_override(0x8006D950u, ov_8006D950);
+  rec_set_override(0x8006D934u, ov_8006D934);
+  rec_set_override(0x80089B98u, ov_80089B98);
+  rec_set_override(0x80099478u, ov_80099478);
+  rec_set_override(0x80082370u, ov_80082370);
+  rec_set_override(0x80082220u, ov_80082220);
+  rec_set_override(0x8009A1D0u, ov_8009A1D0);
+  rec_set_override(0x80097678u, ov_80097678);
+  rec_set_override(0x80099450u, ov_80099450);
+  rec_set_override(0x80099370u, ov_80099370);
+  rec_set_override(0x8009A420u, ov_8009A420);
+  rec_set_override(0x8009A3E0u, ov_8009A3E0);
+  rec_set_override(0x8009A450u, ov_8009A450);
+  rec_set_override(0x8009C1FCu, ov_8009C1FC);
+  rec_set_override(0x8008CFF0u, ov_8008CFF0);
+  rec_set_override(0x8006CBD0u, ov_8006CBD0);
+  rec_set_override(0x800847B0u, ov_800847B0);
 }
