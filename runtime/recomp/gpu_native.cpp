@@ -383,6 +383,48 @@ void GpuState::set_texpage(uint16_t tp) {
 }
 void GpuState::set_clut(uint16_t cl) { s_clut_x = (cl & 0x3F) * 16; s_clut_y = (cl >> 6) & 0x1FF; }
 
+// PC-NATIVE world-quad draw (the render-PC-native path — NOT a PSX-packet transcription). Takes a quad
+// already projected to FLOAT screen coords + normalized per-vertex depth (proj_pz_to_ord) + decoded
+// UV/RGB/texpage/clut, and tees two triangles straight to the VK rasterizer with real per-pixel depth —
+// no GP0 packet, no OT, no guest write. The renderer's D32 buffer does true occlusion from the depth.
+// Used by engine/native_terrain.cpp. Free function (reaches the per-instance GPU state via core->game->gpu),
+// mirroring the geometry tee in gp0_exec (this file ~522-595) but fed float scene data instead of a packet.
+void gpu_draw_world_quad(Core* core, const float* px, const float* py, const float* depth,
+                         const int* u, const int* v, const uint8_t* r, const uint8_t* g,
+                         const uint8_t* b, uint16_t tp, uint16_t clut, int semi) {
+  if (!gpu_vk_enabled()) return;
+  GpuState& s = core->game->gpu;
+  s.set_texpage(tp);
+  s.set_clut(clut);
+  s.s_seen3d = 1;                              // a projected world prim has now been drawn this frame
+  int xs[4], ys[4], us[4], vs[4]; unsigned char rs[4], gs[4], bs[4];
+  for (int i = 0; i < 4; i++) {
+    xs[i] = (int)(px[i] < 0 ? px[i] - 0.5f : px[i] + 0.5f) + s.s_off_x;  // round, then draw offset
+    ys[i] = (int)(py[i] < 0 ? py[i] - 0.5f : py[i] + 0.5f) + s.s_off_y;
+    us[i] = u[i]; vs[i] = v[i]; rs[i] = r[i]; gs[i] = g[i]; bs[i] = b[i];
+  }
+  gpu_vk_set_order(core, s.s_prim_order++);    // OT submission order (2D fallback / faithful-depth path)
+  int mode = s.s_tp_mode;                       // textured terrain -> texpage color mode
+  if (semi) {
+    int bx0=xs[0],by0=ys[0],bx1=xs[0],by1=ys[0];
+    for (int i=1;i<4;i++){ if(xs[i]<bx0)bx0=xs[i]; if(xs[i]>bx1)bx1=xs[i]; if(ys[i]<by0)by0=ys[i]; if(ys[i]>by1)by1=ys[i]; }
+    gpu_vk_semi_group(core, bx0, by0, bx1, by1);
+    gpu_vk_set_vd(core, depth);
+    gpu_vk_draw_semi(core, xs, ys, us, vs, rs, gs, bs, s.s_tp_x, s.s_tp_y, mode, 0, s.s_clut_x, s.s_clut_y,
+                     s.s_tw_mx, s.s_tw_my, s.s_tw_ox, s.s_tw_oy, s.s_da_x0, s.s_da_y0, s.s_da_x1, s.s_da_y1, s.s_tp_blend);
+    gpu_vk_set_vd(core, &depth[1]);
+    gpu_vk_draw_semi(core, &xs[1], &ys[1], &us[1], &vs[1], &rs[1], &gs[1], &bs[1], s.s_tp_x, s.s_tp_y, mode, 0,
+                     s.s_clut_x, s.s_clut_y, s.s_tw_mx, s.s_tw_my, s.s_tw_ox, s.s_tw_oy, s.s_da_x0, s.s_da_y0, s.s_da_x1, s.s_da_y1, s.s_tp_blend);
+  } else {
+    gpu_vk_set_vd(core, depth);
+    gpu_vk_draw_tritri(core, xs, ys, us, vs, rs, gs, bs, s.s_tp_x, s.s_tp_y, mode, 0, s.s_clut_x, s.s_clut_y,
+                       s.s_tw_mx, s.s_tw_my, s.s_tw_ox, s.s_tw_oy, s.s_da_x0, s.s_da_y0, s.s_da_x1, s.s_da_y1);
+    gpu_vk_set_vd(core, &depth[1]);
+    gpu_vk_draw_tritri(core, &xs[1], &ys[1], &us[1], &vs[1], &rs[1], &gs[1], &bs[1], s.s_tp_x, s.s_tp_y, mode, 0,
+                       s.s_clut_x, s.s_clut_y, s.s_tw_mx, s.s_tw_my, s.s_tw_ox, s.s_tw_oy, s.s_da_x0, s.s_da_y0, s.s_da_x1, s.s_da_y1);
+  }
+}
+
 // Begin a primitive for provenance tracking: bump the global id and record this prim's details
 // (frame/node/op/clut/texpage/color/first-vertex) so put_px_b can stamp each pixel it writes.
 void GpuState::prov_begin(uint8_t op, int tex, int semi, uint8_t r, uint8_t g, uint8_t b,
@@ -1368,6 +1410,11 @@ void GpuState::gpu_dma2_block(Core* core, uint32_t madr, int count, int to_gpu) 
 // C-style call sites stable; each forwards to core->game->gpu (de-globalization, 2026-06-19). ----
 void gpu_gp0(Core* core, uint32_t w) { core->game->gpu.gpu_gp0(core, w); }
 void gpu_gp1(Core* core, uint32_t w) { core->game->gpu.gpu_gp1(w); }
+// PC-NATIVE single display: set the displayed VRAM origin directly (what GP1(0x05) would set), so the
+// present can scan a fixed page without going through the PSX disp-env / PutDispEnv struct dance. Used by
+// native_step_frame to display the single buffer the engine draws into. The display W/H are unchanged
+// (still driven by the mode/range GP1(0x07/0x08) the boot env sets once).
+void gpu_set_disp_origin(Core* core, int x, int y) { core->game->gpu.s_disp_x = x; core->game->gpu.s_disp_y = y; }
 void gpu_dma2_linked_list(Core* core, uint32_t madr) { core->game->gpu.gpu_dma2_linked_list(core, madr); }
 void gpu_dma2_block(Core* core, uint32_t madr, int count, int to_gpu) { core->game->gpu.gpu_dma2_block(core, madr, count, to_gpu); }
 void gpu_present(Core* core) { core->game->gpu.gpu_present(core); }

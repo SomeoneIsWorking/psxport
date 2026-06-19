@@ -5615,3 +5615,146 @@ gameplay-RAM diff is BLIND to this: submit_terrain works almost entirely in **sc
   rendering via the un-instrumented interpreted submitter and the two submitters (native ov_submit vs
   interpreted gen_func_80027768) may themselves differ — compare their VRAM output. NB: NO_TERRAIN
   super-call is a valid recomp oracle for the walk since the walk overrides stay active.
+
+## later-158: native terrain — ROOT CAUSE (it was GAMEPLAY corruption, NOT a render bug) + FIX
+
+**later-157's framing was WRONG and is hereby corrected.** The terrain "render bug" (water/garbage at
+the field) was NOT a render-pipeline problem. The water is the camera looking into the VOID because
+**Tomba fell through the terrain** — the native terrain corrupts the gameplay/collision state. (User
+ground-truth, 2026-06-19: "Tomba falls down the terrain, it's the gameplay that is broken… because
+native terrain submits wrong data to guest memory.") Chasing it as a render bug — and building a
+PC-native float terrain renderer — was a dead end: that float renderer came out **pixel-identical
+(magick compare AE=0)** to the faithful GTE transcription, proving the projection/compose was never the
+differentiator. The divergence vs the recomp oracle was two PORTING ERRORS in the native terrain body
+(engine_submit.cpp submit_terrain / terrain_prep_object_matrix, the 0x8002AB5C port), both found by
+diffing against the recompiled body gen_func_8002AB5C (generated/shard_4.c):
+
+1. **WRONG geometry buffer.** The recomp loads `lui 0x800A; addiu r4, -1304` = **0x8009FAE8** as the a0
+   to the submitter 0x80027768. The native code hardcoded **0x800A1AE8** (= 0x8009FAE8 + 0x2000). That
+   address is a FABRICATION — it is referenced by NO function in the whole recomp as a geomblk (all three
+   real callers of 0x80027768 — 0x8002AB5C/0x8002AE0C/0x8002B278 — pass -1304). So the native terrain
+   read the wrong buffer → wrong/garbage strip geometry. (Also why the PSXPORT_DEBUG=terrgte probe,
+   keyed on rec==0x800A1AE8, never fired for the recomp terrain — wrong key, not the "direct-JAL bypasses
+   override" theory of later-157. Direct JAL DOES route through coro_native_call→override, interp.cpp:446.)
+
+2. **GUEST WRITE the recomp never makes (the gameplay corruption).** The secondary sway-rotation needs 3
+   angle words staged for 0x80084520. The recomp body stages them on its OWN STACK FRAME (`r29 -= 56`;
+   words at r29+16/20/24) and passes that stack pointer. The native code wrote them to **scratchpad
+   0x1F8001C0/1C4/1C8** instead — a guest write the recomp NEVER makes — clobbering whatever live engine
+   state occupied 0x1F8001C0 → corrupted terrain collision → Tomba falls through. **This is why later-157's
+   A/B RAM gate said "0-diff": that gate diffs only the 2 MB MAIN RAM; the scratchpad (0x1F800000) is not
+   in it.** later-157 even flagged this blindness and still mis-framed the bug as render. Lesson: a
+   scratchpad guest write can corrupt gameplay invisibly to the main-RAM diff.
+
+**FIX (this session):** native terrain now matches the recomp body exactly — read geomblk 0x8009FAE8;
+stage the sway angles on a guest stack frame (r29-=56, write +16/20/24, restore) instead of scratchpad.
+run.sh stopgap dropped (NO_TERRAIN default 1→0; native terrain back on; set =1 to fall back to recomp).
+
+**PROCESS CORRECTIONS (user directives, 2026-06-19):** (a) Do NOT visually verify — the agent builds,
+the USER verifies via ./run.sh. Visual self-verification led this session to mis-assume "render bug" and
+build a useless PC-replication float renderer. (b) The goal is to RECREATE the game on PC, not replicate
+PSX on PC; a native function that byte-matches the recomp's PSX behavior but is still "poor PSX
+replication" is not the end state — but FIRST it must be CORRECT (match the recomp oracle's guest
+effects), which is what this fix does. The PC-native float terrain scaffold (engine/native_terrain.cpp,
+PSXPORT_TERRAIN_PC, default off) is left gated off; it is byte-identical to the transcription and adds
+nothing until the geometry is rebuilt from real PC-side data.
+
+## later-159: top-down PC-native engine port STARTED from the entry point + durable disassembler tool
+
+**Direction (user, 2026-06-19):** port the game ENGINE to PC (menu, level loading, asset loading,
+terrain, object placement, scene mgmt, render, main loop) — keep the CONTENT/LOGIC (enemy AI, character
+behavior, game physics/collision, quests) as recompiled PSX. CLAUDE.md rewritten to state this
+unambiguously ("THE BOUNDARY"). "Start from the game's main entry point and go from there."
+
+**Spine:** crt0 0x800896E0 → main FUN_80050b08 (=ov_game_main, native_boot.cpp) → init prefix → register
+task0 = stage sequencer FUN_800499e8 → native frame loop. The init prefix was a 1:1 rec_dispatch
+transcription (PSX-sim). Classified every init call platform-vs-engine (table in docs/engine_re.md).
+
+**Reimplemented PC-native this session (engine/engine_init.cpp):** FUN_80050a0c (engine frame-state:
+vblank ctr / buffer parity / frame divisor / swap-mode + DAT_80105ee8=0x45) and FUN_80050a80 (camera:
+identity matrix → scratch 0x1F8000F8 = the camera-rot the renderer reads, + cam fields). ov_game_main now
+calls eng_init_framestate/eng_init_camera instead of rc0(0x80050a0c)/rc0(0x80050a80). FUN_800509b4
+(display + GTE projection + PSX draw/disp double-buffer env) stays dispatched — next target. Started
+migrating engine logic OUT of the platform file native_boot.cpp INTO engine/.
+
+**Exact store WIDTHS matter** (a wrong width corrupts interface state the PSX content reads, later-158;
+Ghidra DAT_* hides them; 0x80050a0c isn't even in the recompiled set). Built a durable tool:
+**`tools/disas.py <addr> [--mem]`** — MIPS-I disassembler for MAIN.EXE that resolves lui+addiu/ori address
+builds and annotates each load/store with absolute target + width (sb/sh/sw). Verified it reproduces the
+hand-decoded widths. USE IT before reimplementing any engine fn.
+
+**Next:** finish init (800509b4 GTE part; 800520e0; font 80075130), then the named engine systems —
+level LOADING (FUN_800499e8 → FUN_80052078), object placement, main menu (DEMO state machine). UNVERIFIED
+by me — user verifies via ./run.sh (do NOT visually self-verify, later-158).
+
+## later-160: removed the game's own PSX double-buffering (single-buffered for the PC renderer)
+
+User: "remove the game's own double buffering too, it causes problems." The PSX engine flips a back/front
+parity (DAT_1f800135) every frame, selecting one of two VRAM pages: OT region 0x800e80a8 + parity*0x2070
+and packet pool 0x800bfe68 + parity*0x14000, with the display/draw env following parity (native_step_frame,
+native_boot.cpp). On PC that page-flip is pointless — the VK renderer composites a COMPLETE frame and the
+present provides display buffering — and it caused aliasing: the native display-list buckets are keyed by
+OT ADDRESS (ndl_alloc on otaddr & 0x1FFFFC), so they alternated between the two pages frame-to-frame, and
+the present could sample the page being drawn.
+
+Fix (native_step_frame): pin parity = 0 — one OT region, one packet pool, the same env every frame, and
+removed the `DAT_1f800135 = 1 - DAT_1f800135` flip. 0x1f800135 stays 0 (set by eng_init_framestate), so any
+guest reader sees a stable single buffer. Verified the parity/OT-ptr/pool-ptr are read ONLY via the
+pointers (*0x800ED8C8, *0x800BF544) that native_step_frame sets, and 0x1f800135 itself is referenced
+nowhere else in engine/ or runtime/ — so pinning is complete. UNVERIFIED by me — user verifies via ./run.sh.
+
+## later-161: FUN_800509b4 display init PC-native + single-buffer display fix (resolves later-160 hurt)
+
+Continued the top-down port. **eng_init_display** (engine/engine_init.cpp) reimplements FUN_800509b4
+PC-native: the GTE projection control regs (InitGeom = ZSF3/ZSF4/H/DQA/DQB + SetGeomOffset(160,120) +
+SetGeomScreen(350); the libgte cop2-exception-handler install FUN_80085810 is moot for our always-on
+native GTE) + DAT_801003f8=350. FUN_80050738 (PSX draw/disp env structs) still dispatched. ov_game_main
+calls eng_init_display instead of rc0(0x800509b4).
+
+**Fixed the later-160 single-buffer rendering hurt** (root-caused with tools/disas.py): PutDispEnv issues
+GP1(0x05) → present samples VRAM at (s_disp_x,s_disp_y). The PSX env pair draws region P but its disp env
+scans the OTHER region (so a flip shows the just-finished page). Pinned to one page, displaying disp-env
+`parity` scanned the region we NEVER draw (stale → the hurt). Fix (native_step_frame): draw with buffer
+`parity`'s draw env but DISPLAY with the opposite buffer's disp env (disp_envp = (1-parity)), which scans
+the very region we draw — one consistent, always-fully-drawn VRAM region. Next display step: a real
+PC-native single display env (native PutDispEnv/SetDefDispEnv), dropping the PSX env-struct dance entirely.
+
+## later-162: level/stage LOADER core PC-native (FUN_800450bc)
+
+Continued the top-down port into the engine system the user named ("level loading PC game"). Entry chain
+from main: task0 = stage sequencer FUN_800499e8 (resolve \BIN\START.BIN → disc LBA/size into the stage
+table DAT_800be1e0/e4) → FUN_80052078(stage) (restart task) → **FUN_800450bc(task, stage) = the overlay
+LOADER**, now reimplemented PC-native in **engine/engine_level.cpp** (`eng_load_stage`, override
+ov_load_stage @ 0x800450bc; A/B PSXPORT_LOADSTAGE_RECOMP=1; registered in games_tomba2_init).
+
+Loader logic: stage!=3 → load the overlay from the per-stage (LBA,size) pair at 0x800be1e0/0x800be1e4
+(stride 8) to 0x80106228 via the CD loader 0x8001db8c, then set the task entry from the stage-entry table
+0x800a3ecc; stage==3 → resident default entry *0x800a3ed8. Then *task=entry, task[1]=FUN_80080930().
+
+KEY: the PSX yields a frame after the load to wait for the async CD (FUN_80051f80(1)). Our overlay loader
+0x8001db8c is OVERRIDDEN by ov_cd_loadfile = SYNCHRONOUS (data present on return), so the yield is DROPPED
+— which also removes the only coroutine yield in the function, making the native reimpl safe (no longjmp
+out of the C frame). Verified via cd_override.cpp + tools/disas.py.
+
+NOT done (scheduler-coupled — left dispatched, they call the native loader): FUN_80052078 ends with
+ChangeTh(0xff000000) = ov_switch (captures context + LONGJMPs to the cooperative scheduler), and
+FUN_800499e8's file resolve is CD-platform. Reimplementing those natively needs the cooperative-scheduler
+longjmp handshake worked out first. Next engine targets the user named: object placement, main menu (the
+DEMO stage state machine @0x801062E4).
+
+## later-163: PC-native single display — dropped the PSX disp-env dance (resolves later-161 "still hurt")
+
+User (2026-06-20): the single-buffer change "hurt the rendering — many things don't render anymore", and
+asked to consolidate the PSX-ish render path with PC-native. later-161's fix (draw page `parity`, but
+DISPLAY via the opposite buffer's PSX disp-env struct, `disp_envp = (1-parity)`) was a band-aid: it kept
+the PSX env-pairing alive and only worked while the two structs lined up. It is now REPLACED by a fully
+PC-native display path in native_step_frame:
+- We own the present. It scans VRAM at (s_disp_x, s_disp_y). So set that origin DIRECTLY with the new
+  `gpu_set_disp_origin(c, 0, 0)` (gpu_native.cpp) — what GP1(0x05) would set — and drop `PutDispEnv`
+  entirely. No disp-env struct, no (1-parity) trick.
+- Still keep `PutDrawEnv(envp+0x2014)` (env0 = draw area/offset/clip at VRAM (0,0)) and `DrawOTag`; those
+  set the GP0(E3/E4/E5) draw state, not display.
+RE confirms env0 draws at VRAM (0,0) (SetDefDrawEnv x=0,y=0,w=320,h=240 @0x80050748), so displaying (0,0)
+shows the page we draw. The display W/H stay from the boot mode env (GP1 07/08). FUN_80050738 (the PSX
+env structs) is now only read for the draw env; the disp envs are dead. UNVERIFIED by me — user verifies
+via ./run.sh.

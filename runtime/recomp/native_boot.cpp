@@ -166,18 +166,28 @@ static void ov_bgm_stop(Core* c) {
 static void native_step_frame(Core* c, uint32_t f) {
   void hle_deliver_event(Core* c, uint32_t ev_class, uint32_t spec);
   void pad_service_frame(Core*);
+  void gpu_set_disp_origin(Core* c, int x, int y);
   (void)f;
   // Per-frame IRQ-driven events the game's waits poll via TestEvent (VBlank classes + sound-DMA-complete).
   hle_deliver_event(c, 0xF2000003u, 0xFFFFFFFFu);
   hle_deliver_event(c, 0xF0000001u, 0xFFFFFFFFu);
   hle_deliver_event(c, 0xF0000009u, 0xFFFFFFFFu);
-  // Per-frame draw/display-env setup (LAB_80050c6c top): env struct pair for the current back buffer.
-  uint32_t envp = 0x800e80a8u + (uint32_t)c->mem_r8(0x1f800135) * 0x2070u;
-  c->mem_w32(0x800ed8c8, envp);                               // PTR_DAT_800ed8c8
+  // SINGLE-BUFFERED (PC-native) — the game's own PSX double-buffering is REMOVED (user: "remove the
+  // game's own double buffering, it causes problems"). The PSX flips between two VRAM pages each frame:
+  // OT region 0x800e80a8 + parity*0x2070 and packet pool 0x800bfe68 + parity*0x14000, with the display/
+  // draw env following parity. That page-flip is pointless on PC — the VK renderer composites a COMPLETE
+  // frame and the present provides the display buffering — and it actively caused aliasing: the native
+  // display-list buckets are keyed by OT address (ndl_alloc on otaddr & 0x1FFFFC), so they alternated
+  // between the two pages, and the present could sample the page being drawn. Pin the back-buffer parity
+  // to 0: one OT region, one packet pool, the same env every frame, and NO flip below. 0x1f800135 stays
+  // 0 (set by eng_init_framestate), so any guest code that reads it also sees a stable single buffer.
+  const uint32_t parity = 0;                                 // was mem_r8(0x1f800135) — pinned single-buffer
+  uint32_t envp = 0x800e80a8u + parity * 0x2070u;            // the one VRAM region we DRAW into every frame
+  c->mem_w32(0x800ed8c8, envp);                               // PTR_DAT_800ed8c8 (OT base, now constant)
   rc2(c, 0x80081458, envp, 0x800);                            // ClearOTagR(ot, 0x800)
   c->mem_w16(0x800e809c, 0);                                  // DAT_800e809c = 0 (dwell counter)
-  c->mem_w32(0x800bf4f4, c->mem_r32(0x800bf544));             // framebuffer ptr swap
-  c->mem_w32(0x800bf544, (c->mem_r8(0x1f800135) * 0x14000 + 0x800bfe68) & 0xffffff);
+  c->mem_w32(0x800bf4f4, c->mem_r32(0x800bf544));             // keep last pool ptr (read by some submitters)
+  c->mem_w32(0x800bf544, (parity * 0x14000 + 0x800bfe68) & 0xffffff);   // packet pool (now constant)
   pad_service_frame(c);                                       // host input -> game pad buffer (pre-read)
   xa_audio_trace(c, "pre");                                   // CD-vol fade state BEFORE tick+mix
   rc0(c, 0x800788ac);                                         // tick + present + audio (override)
@@ -187,12 +197,16 @@ static void native_step_frame(Core* c, uint32_t f) {
   xa_audio_trace(c, "coord");                                 // CD-vol fade state AFTER coord
   rc1(c, 0x80080f6c, 0);                                      // draw sync
   rc0(c, 0x800506d0);                                         // task sleep-countdown (re-arm 1->2)
-  // Buffer flip + display env (LAB_80050c6c, DAT_1f80019c==0 branch): submit env/OT, flip double buffer.
+  // Display + OT submit (LAB_80050c6c, DAT_1f80019c==0 branch). Single-buffered, PC-native display.
+  // The PSX disp-env dance is GONE: we draw page `parity` (env0 → VRAM (0,0)) and tell the PC present to
+  // scan that very page DIRECTLY via gpu_set_disp_origin, instead of routing through PutDispEnv and the
+  // opposite buffer's disp-env struct (the later-161 (1-parity) trick — a band-aid over the env pairing
+  // that depended on the two structs lining up). One fixed page, drawn and displayed; nothing PSX in the
+  // display path. (env0's draw area starts at VRAM (0,0); the display W/H stay as the boot env's mode set.)
   if (c->mem_r16(0x1f80019c) == 0) {
-    rc1(c, 0x8008179c, envp + 0x2000);                        // PutDispEnv  (env+0x2000)
-    rc1(c, 0x800815d0, envp + 0x2014);                        // PutDrawEnv  (env+0x2014)
+    rc1(c, 0x800815d0, envp + 0x2014);                        // PutDrawEnv (draw area/offset/clip for page 0)
+    gpu_set_disp_origin(c, 0, 0);                             // PC-native: present scans the page we draw
     rc1(c, 0x80081560, envp + 0x1ffc);                        // DrawOTag (submit the OT head)
-    c->mem_w8(0x1f800135, 1 - c->mem_r8(0x1f800135));         // flip back/front buffer
   }
 }
 
@@ -315,9 +329,14 @@ static void ov_game_main(Core* c) {
   rc1(c, 0x80080d64, 0);
   rc1(c, 0x80080ed4, 1);
   rc1(c, 0x800865f0, 0);
-  rc0(c, 0x80050a0c);
-  rc0(c, 0x800509b4);
-  rc0(c, 0x80050a80);
+  // Engine frame-state + camera init reimplemented PC-native (engine/engine_init.cpp), replacing the
+  // 1:1 rec_dispatch transcription. FUN_800509b4 (display/GTE projection + PSX draw/disp double-buffer
+  // env) stays dispatched for now — it sets DAT_801003f8 = H that eng_init_camera reads, and entangles
+  // the PSX-GPU env, so it is the next target. (later-159, top-down engine port from main.)
+  void eng_init_framestate(Core*), eng_init_display(Core*), eng_init_camera(Core*);
+  eng_init_framestate(c);      // was rc0(c, 0x80050a0c)
+  eng_init_display(c);         // was rc0(c, 0x800509b4) — GTE projection + display (sets H=DAT_801003f8)
+  eng_init_camera(c);          // was rc0(c, 0x80050a80)
   rc0(c, 0x80096a70);
   rc1(c, 0x80099310, 0x1010);
   rc1(c, 0x800991b0, 0x20000);
