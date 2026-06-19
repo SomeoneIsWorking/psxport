@@ -167,14 +167,16 @@ Flag init-once-then-read tables case by case; when in doubt, move it (safe).
   `io_gpustat_toggle`. mem.cpp's `g_io_verbose` is diag-config (stays shared). boot.cpp has no file-scope
   variable statics. Gate: frame-50 RAM 0-diff ✓. (Other function-local statics across the tree are
   diag/config; the GPUSTAT toggle was the one piece of real machine state hiding as a function-local.)
-- **gte/spu/mdec (Beetle FORK — decision point):** the GTE/SPU/MDEC register state lives in the
-  vendored fork (mednafen/psx/gte.c `gteCONTROL`/`gteDATA`, spu.c, mdec.c) as file-scope globals, NOT in our
-  gte_beetle/spu_beetle/mdec_beetle wrappers. De-globalizing means EITHER (a) make the fork's state a
-  per-instance struct (modify the committed fork — most faithful to "nothing global", but touches vendored
-  code and all its internal refs), OR (b) snapshot/restore the fork globals around each core switch in the
-  dual-core harness (leaves the fork alone; the globals are still globals but the harness saves/restores
-  them so each core sees its own). (b) is far less invasive and is enough for the lockstep diff (only ONE
-  core runs at a time between switches). RECOMMEND (b) unless the user wants the fork itself de-globalized.
+- **gte/spu/mdec (Beetle FORK — DECIDED, do NOT de-globalize):** the GTE/SPU/MDEC register state lives in
+  the vendored fork (mednafen/psx/gte.c `gteCONTROL`/`gteDATA`, spu.c, mdec.c) as file-scope globals.
+  **USER DECISION (2026-06-19): mednafen is being CUT off later, so don't waste effort de-globalizing the
+  fork.** The dual-core harness will SNAPSHOT/RESTORE those globals around each a↔b core switch (only one
+  core runs between switches → sufficient for the lockstep diff). This is the only remaining file-scope
+  mutable state and it stays as-is.
+- **DE-GLOBALIZATION COMPLETE (2026-06-19):** every piece of OUR per-instance machine state is on `Game`
+  (Core + timing/cd/hle/pad/fmv/stub/sched + gpu/gpu_vk/ndl/fps60 + the GPUSTAT toggle on Core). The only
+  globals left are the Beetle fork (handled by harness snapshot/restore, being cut later) and documented
+  shared singletons (SDL/VK host devices, config-caches, diag/trace). Ready to build the dual-core diff.
 - **dbg_server.cpp (AUDIT — stays shared):** all file-scope statics are the HOST debug-interface singleton
   (one per process, not guest machine state, not in Core::ram): the server<->main handoff (s_mtx/s_done/
   s_cmd/s_req_pending/s_resp_*/s_started), pause/step driver controls (s_paused/s_step/s_held), and `s_ctx`
