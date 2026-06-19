@@ -82,9 +82,12 @@ Rationale: hand-retyping 779 funcs — many trivial leaves the recompiler alread
 PC-game character lives in the ENGINE layer (GTE projection, submit, camera, stage logic), which is
 where the hand-port effort goes.
 
-**BLOCKER for the substrate:** shards use the PRE-OOP ABI (`R3000* c`, bare `mem_r32(...)`); the current
-runtime is OOP (`Core`, `c->mem_r32`). Re-enabling requires: (1) update emit.py to emit `c->mem_r32`
-etc. (OOP ABI) — or a compatibility shim of free `mem_r32(c,...)`; (2) seed the 495 indirect addrs into
+**BLOCKER — RESOLVED + VERIFIED (commit 6832af2, 2026-06-19):** shards used the PRE-OOP ABI; emit.py now
+emits `void fn(Core* c)` + `c->mem_*(...)` and rec_decls.h includes core.h (which already declares the
+free gte_op/gte_read_data/cpu_div/cop0/rec_dispatch helpers + OverrideFn). Regenerated; **all 8 shards +
+shard_disp.c compile clean against the OOP Core** (verified: `c++ -std=c++17 -Iruntime/recomp -Igenerated
+... -c generated/shard_*.c`). generated/ is gitignored (rebuilt by run.sh / emit.py). Remaining re-enable
+steps: (1) DONE. (2) seed the 495 indirect addrs into
 emit.py; (3) regen + compile shards + link (run.sh §4 currently SKIPS linking — see later-101); (4)
 route `rec_dispatch`/`coro_native_call` to the recompiled `func_XXXX` switch for recompiled addrs, else
 interp; (5) reconcile the 72 address-keyed runtime overrides with the index-keyed `g_override[]` table
