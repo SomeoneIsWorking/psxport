@@ -777,13 +777,16 @@ static void submit_terrain(Core* c) {
   gte_write_ctrl(21, 0); gte_write_ctrl(22, 0); gte_write_ctrl(23, 0);
   uint32_t ir0 = (uint32_t)((128 - (int16_t)c->mem_r16(node + 78)) << 5);
   int32_t a80 = (int16_t)c->mem_r16(node + 80);
-  // HOST: the two sway-angle bytes are terrain-internal temps — compute them in host (no 0x800A2014
-  // main-RAM writes). The middle byte is set elsewhere → READ it (mem_r8). They scale <<2 into the
-  // secondary-rotation args. (IR0 + the SCR matrix-build args still go to guest scratch until the
-  // submitter/matrix-build sub-fns are host — see the function note.)
+  // The two sway-angle bytes (0x800A2014/2016) are written by the recomp terrain body and read back
+  // by it (scaled <<2) into the secondary-rotation args; the middle byte 0x800A2015 is set elsewhere.
+  // We write them to guest exactly as the recomp does (the no-guest-write rule was discarded — these
+  // are part of the function's faithful behavior, and leaving them stale was the only true-gameplay
+  // divergence vs the recomp body, root-caused via the A/B RAM diff). Compute, store, use.
   uint8_t sway0 = (uint8_t)(((int32_t)(int16_t)c->mem_r16(node + 64) * a80) >> 11);
   uint8_t sway2 = (uint8_t)(((int32_t)(int16_t)c->mem_r16(node + 66) * a80) >> 11);
-  uint8_t sway1 = c->mem_r8(A2_PARAM + 1);                 // external (read-only here)
+  c->mem_w8(A2_PARAM + 0, sway0);
+  c->mem_w8(A2_PARAM + 2, sway2);
+  uint8_t sway1 = c->mem_r8(A2_PARAM + 1);                 // external (set elsewhere)
   c->mem_w32(IR0_STAGE, ir0);
   // build object rotation matrix at scratch SCR from the node's euler angles (node+84/86/88)
   c->r[4] = node + 84; c->r[5] = SCR; rec_dispatch(c, 0x80085480u);
