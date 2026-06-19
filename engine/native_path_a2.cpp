@@ -122,30 +122,30 @@ static void ov_8008A110(Core* c) {
 // 0x80082240 / 0x800822D8 — build a GPU draw-area / clip primitive word. The two are byte-identical
 // except the command byte: 0x80082240 uses 0xE3000000, 0x800822D8 uses 0xE4000000 (set-draw-area-TL
 // vs set-draw-area-BR). Args a0,a1 are signed 16-bit X,Y clamped to a screen-mode-dependent range:
-//   X clamped to [0, *(0x800F59A4)-1] (signed 16-bit field at 0x800F0000+22948);
+//   X clamped to [0, *(0x800F59A4)-1] (signed 16-bit field at 0x800A0000+22948);
 //   Y clamped to [0, *(0x800F59A6)-1] (field at +22950).
 // A negative input clamps to 0; an input >= limit clamps to (limit-1); otherwise the in-range case
 // passes the raw arg through (the body uses original a0/a1 there — low-10-bit-identical to the
 // sign-extended value after the final &1023). The packed result is cmd | (Y&1023)<<10 | (X&1023).
 // (Fields read both signed (for the < test) and unsigned (for the upper clamp value), per the body.)
 static void clip_word(Core* c, uint32_t cmd) {
-  // X (a0) clamp against limit at 0x800F59A4
+  // X (a0) clamp against limit at 0x800A59A4
   int32_t x = (int16_t)c->r[4];
   uint32_t xout;
   if (x < 0) xout = 0;
   else {
-    int32_t lim_s = (int16_t)c->mem_r16(0x800F59A4u);   // signed limit
-    uint32_t lim_u = c->mem_r16(0x800F59A4u);            // unsigned limit
+    int32_t lim_s = (int16_t)c->mem_r16(0x800A59A4u);   // signed limit
+    uint32_t lim_u = c->mem_r16(0x800A59A4u);            // unsigned limit
     if ((lim_s - 1) < x) xout = lim_u - 1;               // above range → limit-1
     else xout = (uint32_t)x;
   }
-  // Y (a1) clamp against limit at 0x800F59A6
+  // Y (a1) clamp against limit at 0x800A59A6
   int32_t y = (int16_t)c->r[5];
   uint32_t yout;
   if (y < 0) yout = 0;
   else {
-    int32_t lim_s = (int16_t)c->mem_r16(0x800F59A6u);
-    uint32_t lim_u = c->mem_r16(0x800F59A6u);
+    int32_t lim_s = (int16_t)c->mem_r16(0x800A59A6u);
+    uint32_t lim_u = c->mem_r16(0x800A59A6u);
     if ((lim_s - 1) < y) yout = lim_u - 1;
     else yout = (uint32_t)y;
   }
@@ -452,8 +452,8 @@ void games_native_path_a2_init(void) {
   rec_set_override(0x8009A640u, ov_8009A640);
   rec_set_override(0x8008A00Cu, ov_8008A00C);
   rec_set_override(0x8008A110u, ov_8008A110);
-  // TODO(verify): rec_set_override(0x80082240u, ov_80082240); — DISABLED: A/B RAM-diff fails (9 bytes vs interp). GP0 0xE3 clip-word — low-10-bit arg pass-through wrong. Re-enable after fixing gen_func_80082240 + re-A/B.
-  // TODO(verify): rec_set_override(0x800822D8u, ov_800822D8); — DISABLED: A/B RAM-diff fails (9 bytes vs interp). GP0 0xE4 clip-word — same as 80082240. Re-enable after fixing gen_func_800822D8 + re-A/B.
+  rec_set_override(0x80082240u, ov_80082240);
+  rec_set_override(0x800822D8u, ov_800822D8);
   rec_set_override(0x80097A90u, ov_80097A90);
   // TODO(verify): rec_set_override(0x80090160u, ov_80090160); — DISABLED: A/B RAM-diff fails (80 bytes vs interp). varint stream consumer — wrong accumulation. Re-enable after fixing gen_func_80090160 + re-A/B.
   rec_set_override(0x8005082Cu, ov_8005082C);
