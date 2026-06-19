@@ -19,6 +19,7 @@
 // trace_record() is called per GP0 word from gpu_gp0(); trace_flush() once per frame from
 // gpu_present_ex(); gpu_gputrace_arm() arms an on-demand single-frame capture (live debug server).
 #include "gpu_native_internal.h"
+#include "game.h"
 #include "cfg.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -52,12 +53,13 @@ static void trace_init_env(void) {
   }
 }
 
-void trace_record(uint32_t w) {
+void trace_record(Core* core, uint32_t w) {
+  GpuState& g = core->game->gpu;
   if (s_trace_on < 0) trace_init_env();
-  if (s_trace_on <= 0 || s_trace_idx >= s_trace_count || s_frame != s_trace_frames[s_trace_idx]) return;
+  if (s_trace_on <= 0 || s_trace_idx >= s_trace_count || g.s_frame != s_trace_frames[s_trace_idx]) return;
   if (!s_trace_inited) {
     if (!s_trace_init) s_trace_init = (uint16_t*)malloc(sizeof(uint16_t) * VRAM_W * VRAM_H);
-    memcpy(s_trace_init, s_vram, sizeof(uint16_t) * VRAM_W * VRAM_H);
+    memcpy(s_trace_init, g.s_vram, sizeof(uint16_t) * VRAM_W * VRAM_H);
     s_trace_inited = 1;
   }
   if (s_trace_n >= s_trace_cap) {
@@ -67,7 +69,8 @@ void trace_record(uint32_t w) {
   s_trace_words[s_trace_n++] = w;
 }
 
-void trace_flush(void) {  // called from gpu_present while s_frame is still the target
+void trace_flush(Core* core) {  // called from gpu_present while s_frame is still the target
+  int s_frame = core->game->gpu.s_frame;
   if (s_trace_on <= 0 || s_trace_idx >= s_trace_count || !s_trace_inited ||
       s_frame != s_trace_frames[s_trace_idx]) return;
   char namebuf[512];
@@ -92,7 +95,8 @@ void trace_flush(void) {  // called from gpu_present while s_frame is still the 
 // GP0 stream + start-VRAM to `path` (single exact file, gpu_differ format). Mirrors the PSXPORT_GPUTRACE
 // path but armed at runtime for s_frame+1 instead of from the env. Returns the target frame number.
 static char s_trace_arm_path[512];
-int gpu_gputrace_arm(const char* path) {
+int gpu_gputrace_arm(Core* core, const char* path) {
+  int s_frame = core->game->gpu.s_frame;
   snprintf(s_trace_arm_path, sizeof s_trace_arm_path, "%s", path && *path ? path : "scratch/bin/dbg_gp0.bin");
   s_trace_path = s_trace_arm_path;
   s_trace_multi = 0;

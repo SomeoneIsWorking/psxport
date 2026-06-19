@@ -58,7 +58,7 @@ int      mdec_dma_can_read(void);
 // completion. (This is the native equivalent of the scheduler ticking the MDEC event.)
 static void mdec_pump(void) { MDEC_Run(0x40000000); }
 
-void gpu_gp1(uint32_t w);
+void gpu_gp1(Core*, uint32_t w);
 void gpu_native_init(void);
 
 void     pad_poll_sdl(Core*);                               // pad_input.cpp (host input)
@@ -543,10 +543,10 @@ static void present_rgb555(Core* core, const uint16_t* pixels, int width, int he
     gpu_gp0(core, lo | (hi << 16));
   }
   // Display this region: start (0,0), hres, vrange (handler takes y1-y0 as height).
-  gpu_gp1(0x05000000u);
+  gpu_gp1(core, 0x05000000u);
   uint32_t hcode = (width == 256) ? 0 : (width == 320) ? 1 : (width == 512) ? 2 : 3;
-  gpu_gp1(0x08000000u | hcode);
-  gpu_gp1(0x07000000u | (((uint32_t)(16 + height) & 0x3FF) << 10) | 16u);
+  gpu_gp1(core, 0x08000000u | hcode);
+  gpu_gp1(core, 0x07000000u | (((uint32_t)(16 + height) & 0x3FF) << 10) | 16u);
   gpu_present(core);
 }
 

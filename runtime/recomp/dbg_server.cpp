@@ -43,14 +43,15 @@
 
 // --- guest RAM + GPU primitives provided by the rest of the port ---------------------------------
 #include "core.h"                  // Core, mem_*, rec_dispatch — for the RE commands (call/ents/node)
+#include "game.h"                  // Core::game->gpu (render state is per-instance now)
 void gpu_scene_dump_now(Core* c, FILE* out);
-void gpu_provat_display(FILE* out, int qx, int qy);
-void gpu_provat_enable(void);
-int  gpu_gputrace_arm(const char* path);
-void gpu_native_shot(const char* path);
+void gpu_provat_display(Core* core, FILE* out, int qx, int qy);
+void gpu_provat_enable(Core* core);
+int  gpu_gputrace_arm(Core* core, const char* path);
+void gpu_native_shot(Core* core, const char* path);
 int  gpu_sbs_get(void);
 void gpu_sbs_set(int on);
-int  gpu_frame_no(void);
+int  gpu_frame_no(Core* core);
 int  gpu_vk_enabled(void);
 void gpu_vk_shot(const char* path);
 void gpu_vk_stats(int* tri, int* tex, int* semi);
@@ -197,14 +198,14 @@ static void dbg_exec(FILE* out, const char* line) {
   } else if (!strcmp(cmd, "scene")) {
     gpu_scene_dump_now(s_ctx, out);
   } else if (!strcmp(cmd, "provat") && sscanf(line, "%*s %u %u", &a, &b) == 2) {
-    gpu_provat_display(out, (int)a, (int)b);
+    gpu_provat_display(s_ctx, out, (int)a, (int)b);
   } else if (!strcmp(cmd, "shot")) {
     // Capture what is actually PRESENTED: VK readback when VK is the active renderer, else the SW
     // display region. (Under VK the SW s_vram has only uploads, not the rasterized geometry.)
     char path[256] = "scratch/screenshots/dbg.ppm";
     sscanf(line, "%*s %255s", path);
     if (gpu_vk_enabled()) { gpu_vk_shot(path); fprintf(out, "shot (VK) -> %s\n", path); }
-    else                  { gpu_native_shot(path); fprintf(out, "shot (SW) -> %s\n", path); }
+    else                  { gpu_native_shot(s_ctx, path); fprintf(out, "shot (SW) -> %s\n", path); }
   } else if (!strcmp(cmd, "vkshot")) {
     char path[256] = "scratch/screenshots/dbg_vk.ppm";
     sscanf(line, "%*s %255s", path);
@@ -222,7 +223,7 @@ static void dbg_exec(FILE* out, const char* line) {
   } else if (!strcmp(cmd, "gputrace")) {
     char path[256] = "scratch/bin/dbg_gp0.bin";
     sscanf(line, "%*s %255s", path);
-    int tf = gpu_gputrace_arm(path);
+    int tf = gpu_gputrace_arm(s_ctx, path);
     fprintf(out, "gputrace armed for frame %d -> %s (appears after one frame)\n", tf, path);
   } else if (!strcmp(cmd, "swvkcap")) {
     // Capture the SAME frame for an aligned SW-vs-VK diff: the GP0 stream (+ initial VRAM) AND the
@@ -230,7 +231,7 @@ static void dbg_exec(FILE* out, const char* line) {
     char pre[200] = "scratch/swvk/cap"; sscanf(line, "%*s %199s", pre);
     char gp0[256], vk[256];
     snprintf(gp0, sizeof gp0, "%s.gp0", pre); snprintf(vk, sizeof vk, "%s_vk.vram", pre);
-    int tf = gpu_gputrace_arm(gp0); gpu_vk_rawdump_arm(vk, tf);
+    int tf = gpu_gputrace_arm(s_ctx, gp0); gpu_vk_rawdump_arm(vk, tf);
     fprintf(out, "swvkcap frame %d -> %s (GP0) + %s (VK raw); run tools/swvk_diff.py %s\n", tf, gp0, vk, pre);
   } else if (!strcmp(cmd, "press") && sscanf(line, "%*s %31s", arg) == 1) {
     s_held &= ~(unsigned short)dbg_btn(arg); pad_repl_hold(s_ctx, s_held); fprintf(out, "held=%04X\n", s_held);
@@ -246,15 +247,14 @@ static void dbg_exec(FILE* out, const char* line) {
     else gpu_sbs_set(!gpu_sbs_get());
     fprintf(out, "sbs=%d (Vulkan|Software side-by-side)\n", gpu_sbs_get());
   } else if (!strcmp(cmd, "pause")) {
-    s_paused = 1; s_step = 0; fprintf(out, "paused at frame %d\n", gpu_frame_no());
+    s_paused = 1; s_step = 0; fprintf(out, "paused at frame %d\n", gpu_frame_no(s_ctx));
   } else if (!strcmp(cmd, "play") || !strcmp(cmd, "resume")) {
     s_paused = 0; s_step = 0; fprintf(out, "resumed\n");
   } else if (!strcmp(cmd, "step")) {
     a = 0; sscanf(line, "%*s %u", &a); if (!a) a = 1;
-    s_paused = 1; s_step += (int)a; fprintf(out, "step +%u (frame %d)\n", a, gpu_frame_no());
+    s_paused = 1; s_step += (int)a; fprintf(out, "step +%u (frame %d)\n", a, gpu_frame_no(s_ctx));
   } else if (!strcmp(cmd, "frame")) {
-    extern int s_disp_x, s_disp_y;   // current display origin (gpu_native) — which VRAM region shows
-    fprintf(out, "frame=%d paused=%d disp=(%d,%d)\n", gpu_frame_no(), s_paused, s_disp_x, s_disp_y);
+    fprintf(out, "frame=%d paused=%d disp=(%d,%d)\n", gpu_frame_no(s_ctx), s_paused, s_ctx->game->gpu.s_disp_x, s_ctx->game->gpu.s_disp_y);
   } else {
     fprintf(out, "? %s  (try 'help')\n", line);
   }
@@ -353,11 +353,11 @@ static void* dbg_thread(void* arg) {
 }
 
 // Start the debug server thread if PSXPORT_DEBUG_SERVER is set (=1 -> default port, =<n> -> port n).
-void dbg_server_start(void) {
+void dbg_server_start(Core* c) {
   const char* e = cfg_str("PSXPORT_DEBUG_SERVER");
   if (!e || !atoi(e)) return;
   int port = atoi(e); if (port == 1) port = 5959;
-  gpu_provat_enable();                 // so `provat` works at any time (not gated on PSXPORT_PROVAT)
+  gpu_provat_enable(c);                // so `provat` works at any time (not gated on PSXPORT_PROVAT)
   pthread_t t;
   if (pthread_create(&t, NULL, dbg_thread, (void*)(intptr_t)port) != 0) {
     fprintf(stderr, "[dbgsrv] pthread_create failed\n"); return;

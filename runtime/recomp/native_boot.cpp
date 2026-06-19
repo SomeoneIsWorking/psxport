@@ -245,7 +245,7 @@ static long native_repl_read(Core* c, uint32_t f) {
     else if (!strcmp(cmd, "press") && sscanf(line, "%*s %31s", arg) == 1)   { held &= ~repl_btn(arg); pad_repl_hold(c, held); fprintf(stderr, "[repl] held=%04X\n", held); }
     else if (!strcmp(cmd, "release") && sscanf(line, "%*s %31s", arg) == 1) { held |= repl_btn(arg);  pad_repl_hold(c, held); fprintf(stderr, "[repl] held=%04X\n", held); }
     else if (!strcmp(cmd, "tap") && sscanf(line, "%*s %31s %u", arg, &a) >= 1) { if (!a) a = 4; pad_repl_tap(c, (uint16_t)(0xFFFF & ~repl_btn(arg)), (int)a); fprintf(stderr, "[repl] tap %s %u\n", arg, a); }
-    else if (!strcmp(cmd, "shot")) { char path[200] = {0}; if (sscanf(line, "%*s %199s", path) == 1) { void gpu_native_shot(const char*); gpu_native_shot(path); } }
+    else if (!strcmp(cmd, "shot")) { char path[200] = {0}; if (sscanf(line, "%*s %199s", path) == 1) { void gpu_native_shot(Core*, const char*); gpu_native_shot(c, path); } }
     else if (!strcmp(cmd, "dumpram")) {
       char path[200] = {0};
       if (sscanf(line, "%*s %199s", path) == 1) {
@@ -338,8 +338,8 @@ static void ov_game_main(Core* c) {
           nframes ? "capped" : "interactive (until window close)");
   void hle_deliver_event(Core* c, uint32_t ev_class, uint32_t spec);
   void pad_service_frame(Core*);
-  void dbg_server_start(void); void dbg_server_service(Core* c);
-  dbg_server_start();     // PSXPORT_DEBUG_SERVER: non-blocking live TCP debug server (dbg_server.c)
+  void dbg_server_start(Core* c); void dbg_server_service(Core* c);
+  dbg_server_start(c);    // PSXPORT_DEBUG_SERVER: non-blocking live TCP debug server (dbg_server.c)
   long repl_budget = 0;   // frames remaining in the current REPL `run N`
   for (uint32_t f = 0; nframes == 0 || f < nframes; f++) {
     g_bgm_frame = f;
@@ -363,12 +363,12 @@ static void ov_game_main(Core* c) {
             char* c2 = strchr(c1 + 1, ':'); if (c2) { *c2 = 0; snprintf(vf, sizeof vf, "%s", c2 + 1); }
             snprintf(rf, sizeof rf, "%s", c1 + 1); } } }
       if (tf >= 0 && (int)f == tf) {
-        int gpu_native_load_vram(const char*);
+        int gpu_native_load_vram(Core*, const char*);
         FILE* mf = fopen(rf, "rb");
         if (mf) { size_t n = fread(c->ram, 1, 0x200000, mf); fclose(mf);
                   fprintf(stderr, "[transplant] loaded RAM %zu B from %s at lf%u\n", n, rf, f); }
         else fprintf(stderr, "[transplant] FAILED to open %s\n", rf);
-        if (vf[0]) gpu_native_load_vram(vf);
+        if (vf[0]) gpu_native_load_vram(c, vf);
       } }
     // Per-frame IRQ-driven events the game's waits poll via TestEvent (we deliver no preemptive
     // IRQs): VBlank classes + the sound-DMA-complete class 0xF0000009 (its callback FUN_80097030
@@ -430,11 +430,11 @@ static void ov_game_main(Core* c) {
     // PSXPORT_DEBUG_SERVER pause/step: when frozen, do NOT advance the game — just pump host input
     // (keeps the window alive) and service debug commands so `step`/`play` can arrive. A `step` runs
     // exactly one real frame then re-freezes, so transient bad frames can be inspected one at a time.
-    { int dbg_is_paused(void), dbg_step_pending(void); void dbg_consume_step(void); void gpu_repaint(void);
+    { int dbg_is_paused(void), dbg_step_pending(void); void dbg_consume_step(void); void gpu_repaint(Core*);
       while (dbg_is_paused()) {
         if (dbg_step_pending()) { dbg_consume_step(); break; }   // run exactly one frame
         pad_service_frame(c);      // pump host input (keeps the window responsive)
-        gpu_repaint();            // re-present current frame: window stays live + readback is accurate
+        gpu_repaint(c);           // re-present current frame: window stays live + readback is accurate
         dbg_server_service(c);    // receive step/play/capture commands
         usleep(15000);
       } }

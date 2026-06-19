@@ -68,26 +68,26 @@ static int submit_xmax(void) { return gpu_vk_wide_engine() ? gpu_vk_wide_engine_
 // At the field the owned path carries the world/map renderer's geometry; the 78 margin objects enqueue via
 // UN-owned submitter variants and are invisible here. Off by default; pure logging, no state change.
 extern uint32_t g_current_object, g_render_object;
-extern int s_frame;
-// Optional single-frame gate (PSXPORT_GEOMBLK_FRAME=<s_frame>) shared by the geomblk + rcmd probes: bound the
+int gpu_frame_no(Core*);
+// Optional single-frame gate (PSXPORT_GEOMBLK_FRAME=<frame>) shared by the geomblk + rcmd probes: bound the
 // firehose to one present frame so a 2900-frame headless run to the field doesn't emit gigabytes. Unset = every.
 static int s_probe_frame = -2;
-static inline int probe_frame_ok(void) {
+static inline int probe_frame_ok(Core* c) {
   if (s_probe_frame == -2) { const char* f = cfg_str("PSXPORT_GEOMBLK_FRAME"); s_probe_frame = f ? atoi(f) : -1; }
-  return s_probe_frame < 0 || s_frame == s_probe_frame;
+  return s_probe_frame < 0 || gpu_frame_no(c) == s_probe_frame;
 }
 static int s_geomblk = -1;
-static inline int geomblk_on(void) {
+static inline int geomblk_on(Core* c) {
   if (s_geomblk < 0) s_geomblk = cfg_dbg("geomblk") ? 1 : 0;
-  return s_geomblk && probe_frame_ok();
+  return s_geomblk && probe_frame_ok(c);
 }
 static void geomblk_dump(Core* c, const char* kind, uint32_t rec, uint32_t count, uint32_t stride) {
-  if (!geomblk_on()) return;
+  if (!geomblk_on(c)) return;
   uint32_t o = g_render_object;                    // weak hint: last-culled object (see header — not the source)
   uint32_t handler = o ? c->mem_r32(o + 0x1c) : 0;
   uint8_t  type    = o ? c->mem_r8(o + 0x0c) : 0xff;
   fprintf(stderr, "[geomblk] f%d cur=%08x lastcull=%08x type=%02x handler=%08x %s n=%u\n",
-          s_frame, g_current_object, o, type, handler, kind, count);
+          gpu_frame_no(c), g_current_object, o, type, handler, kind, count);
   for (uint32_t i = 0; i < count; i++) {
     fprintf(stderr, "[geomblk]   rec%u:", i);
     for (uint32_t b = 0; b < stride; b++) fprintf(stderr, "%s%02x", (b & 3) ? "" : " ", c->mem_r8(rec + i*stride + b));
@@ -103,10 +103,10 @@ static void geomblk_dump(Core* c, const char* kind, uint32_t rec, uint32_t count
 // variants the margin handlers feed), not just the natively-owned GT3/GT4 path the geomblk probe decodes.
 // Registered only when the channel is on (game_tomba2.c init), so zero cost otherwise; super-calls the original.
 void ov_render_cmd_probe(Core* c) {
-  if (cfg_dbg("rcmd") && probe_frame_ok()) {
+  if (cfg_dbg("rcmd") && probe_frame_ok(c)) {
     uint8_t mode = c->mem_r8(0x800BF870u);
     fprintf(stderr, "[rcmd] f%d mode=%02x geomblk=%08x ot=%08x flag=%08x ra=%08x M=",
-            s_frame, mode, c->r[4], c->r[5], c->r[6], c->r[31]);
+            gpu_frame_no(c), mode, c->r[4], c->r[5], c->r[6], c->r[31]);
     for (int i = 0; i < 8; i++) fprintf(stderr, "%s%08x", i ? "," : "", (uint32_t)gte_read_ctrl(i));
     fprintf(stderr, "\n");
   }
@@ -120,10 +120,10 @@ void ov_render_cmd_probe(Core* c) {
 // its candidate command fields (a0+0x40 geomblk, a0+0x18 transform word) to confirm a0 IS the command struct
 // and to build the object→command→geomblk map needed to enqueue margin commands natively. Super-calls original.
 void ov_enqueue_probe(Core* c) {
-  if (cfg_dbg("enq") && probe_frame_ok()) {
+  if (cfg_dbg("enq") && probe_frame_ok(c)) {
     uint32_t a0 = c->r[4], o = g_current_object;
     fprintf(stderr, "[enq] f%d obj=%08x type=%02x handler=%08x a0=%08x a0+40=%08x a0+18=%08x\n",
-            s_frame, o, o ? c->mem_r8(o + 0x0c) : 0xff, o ? c->mem_r32(o + 0x1c) : 0,
+            gpu_frame_no(c), o, o ? c->mem_r8(o + 0x0c) : 0xff, o ? c->mem_r32(o + 0x1c) : 0,
             a0, c->mem_r32(a0 + 0x40), c->mem_r32(a0 + 0x18));
   }
   rec_super_call(c, 0x80077EBCu);
@@ -134,10 +134,10 @@ void ov_enqueue_probe(Core* c) {
 // (list+0xc0[i]) + its geomblk (cmd+0x40) so the still-open render-command ENQUEUE can be traced (the writer
 // of those cmd structs). The cmd address is the thing the dispatcher/rcmd tap can't see. Super-calls original.
 void ov_flush_probe(Core* c) {
-  if (cfg_dbg("flush") && probe_frame_ok()) {
+  if (cfg_dbg("flush") && probe_frame_ok(c)) {
     uint32_t list = c->r[4];
     uint32_t count = c->mem_r8(list + 8);
-    fprintf(stderr, "[flush] f%d list=%08x count=%u\n", s_frame, list, count);
+    fprintf(stderr, "[flush] f%d list=%08x count=%u\n", gpu_frame_no(c), list, count);
     for (uint32_t i = 0; i < count; i++) {
       uint32_t cmd = c->mem_r32(list + 0xc0 + i*4);
       fprintf(stderr, "[flush]   cmd[%u]=%08x geomblk=%08x x18=%08x\n",
@@ -155,10 +155,10 @@ void ov_flush_probe(Core* c) {
 // the object-local matrix/translation so the +24 margin command structs can be located (compare ON vs OFF)
 // and their stability/persistence + the per-frame append site established. Super-calls original.
 void ov_flush2_probe(Core* c) {
-  if (cfg_dbg("flush2") && probe_frame_ok()) {
+  if (cfg_dbg("flush2") && probe_frame_ok(c)) {
     uint32_t list = c->r[4];
     uint32_t count = c->mem_r8(list + 8);
-    fprintf(stderr, "[flush2] f%d list=%08x count=%u ot=%08x\n", s_frame, list, count, c->r[5]);
+    fprintf(stderr, "[flush2] f%d list=%08x count=%u ot=%08x\n", gpu_frame_no(c), list, count, c->r[5]);
     for (uint32_t i = 0; i < count; i++) {
       uint32_t cmd = c->mem_r32(list + 0xc0 + i*4);
       uint32_t gb  = cmd ? c->mem_r32(cmd + 0x40) : 0;
@@ -180,12 +180,12 @@ void ov_flush2_probe(Core* c) {
 // T = *(0x800ECF58 + group*4), stored to cmd+0x40. Validates the two-level model-table decode (the f2900
 // commands enqueue through this leaf, not the single-object 0x80051B70). g_current_object names the object.
 void ov_cmdenq_probe(Core* c) {
-  if (cfg_dbg("cmdenq") && probe_frame_ok()) {
+  if (cfg_dbg("cmdenq") && probe_frame_ok(c)) {
     uint32_t cmd = c->r[4], group = c->r[5], sub = c->r[6], o = g_current_object;
     uint32_t T = c->mem_r32(0x800ECF58u + group*4);
     uint32_t geomblk = T + c->mem_r32(T + sub*4 + 4);
     fprintf(stderr, "[cmdenq] f%d obj=%08x type=%02x group=%u sub=%u T=%08x geomblk=%08x cmd=%08x\n",
-            s_frame, o, o ? c->mem_r8(o + 0x0c) : 0xff, group, sub, T, geomblk, cmd);
+            gpu_frame_no(c), o, o ? c->mem_r8(o + 0x0c) : 0xff, group, sub, T, geomblk, cmd);
   }
   rec_super_call(c, 0x80051B04u);
 }
@@ -439,7 +439,7 @@ static void submit_poly_gt4_bp(Core* c) {
   uint32_t otbase = c->mem_r32(OTBASE_PTR);
   int depth = depth_on(); if (depth) proj_set_H((uint16_t)gte_read_ctrl(26));
   int dl = ndl_active();
-  if (geomblk_on()) {                              // count the control-terminated record list, then dump
+  if (geomblk_on(c)) {                             // count the control-terminated record list, then dump
     uint32_t n = 0, r = rec; for (;;) { n++; if ((int32_t)c->mem_r32(r + 4) <= 0) break; r += 36; }
     geomblk_dump(c, "GT4bp", rec, n, 36);
   }
@@ -580,17 +580,17 @@ static void native_gt3gt4(Core* c, uint32_t geomblk, uint32_t otbase) {
 // (unowned overlay-variant) dispatches per present frame, and which mode/target the fallbacks use.
 // Tells us how much of the field's render still flows through interpreted per-mode renderers (the next
 // ownership target). Pure counting, no state change.
-static void pdisp_count(int native, uint32_t mode, uint32_t tgt) {
+static void pdisp_count(Core* c, int native, uint32_t mode, uint32_t tgt) {
   static int s_pd = -1; if (s_pd < 0) s_pd = cfg_dbg("pdisp") ? 1 : 0;
   if (!s_pd) return;
   static int last_f = -1, nat = 0, fb = 0; static uint32_t fbmode[32] = {0};
-  if (s_frame != last_f) {
+  if (gpu_frame_no(c) != last_f) {
     if (last_f >= 0) {
       fprintf(stderr, "[pdisp] f%d native=%d fallback=%d", last_f, nat, fb);
       for (int m = 0; m < 32; m++) if (fbmode[m]) fprintf(stderr, " m%d=%u", m, fbmode[m]);
       fprintf(stderr, "\n");
     }
-    last_f = s_frame; nat = fb = 0; for (int m = 0; m < 32; m++) fbmode[m] = 0;
+    last_f = gpu_frame_no(c); nat = fb = 0; for (int m = 0; m < 32; m++) fbmode[m] = 0;
   }
   if (native) nat++; else { fb++; if (mode < 32) fbmode[mode]++; }
 }
@@ -605,12 +605,12 @@ static void pdisp_count(int native, uint32_t mode, uint32_t tgt) {
 // and execute garbage (the f434 margin hang, found via gdb on the live process).
 #define DISPATCH_GENERIC 0x8003F788u             // mode-table entry = the generic GT3/GT4 case label
 static void native_dispatch(Core* c, uint32_t geomblk, uint32_t otbase, uint32_t flag) {
-  if (c->mem_r8(MODE_FORCE) != 0 || (flag & 1u)) { pdisp_count(1, 0, 0); native_gt3gt4(c, geomblk, otbase); return; }
+  if (c->mem_r8(MODE_FORCE) != 0 || (flag & 1u)) { pdisp_count(c, 1, 0, 0); native_gt3gt4(c, geomblk, otbase); return; }
   uint32_t mode = c->mem_r8(MODE_BYTE);
-  if (mode >= 22) { pdisp_count(1, mode, 0); native_gt3gt4(c, geomblk, otbase); return; }
+  if (mode >= 22) { pdisp_count(c, 1, mode, 0); native_gt3gt4(c, geomblk, otbase); return; }
   uint32_t tgt = c->mem_r32(MODE_TABLE + mode * 4);
-  if (tgt == DISPATCH_GENERIC) { pdisp_count(1, mode, tgt); native_gt3gt4(c, geomblk, otbase); return; }
-  pdisp_count(0, mode, tgt);
+  if (tgt == DISPATCH_GENERIC) { pdisp_count(c, 1, mode, tgt); native_gt3gt4(c, geomblk, otbase); return; }
+  pdisp_count(c, 0, mode, tgt);
   c->r[4] = geomblk; c->r[5] = otbase; c->r[6] = flag;   // unowned mode — run the REAL dispatcher
   rec_dispatch(c, 0x8003F698u);
 }
@@ -862,10 +862,10 @@ static uint32_t s_subcnt[8], s_subaddr[8]; static int s_subn, s_sub_lastf = -1;
 static void subcnt_tick(Core* c, uint32_t addr) {
   int slot = -1; for (int i = 0; i < s_subn; i++) if (s_subaddr[i] == addr) { slot = i; break; }
   if (slot < 0 && s_subn < 8) { slot = s_subn; s_subaddr[s_subn++] = addr; }
-  if (s_frame != s_sub_lastf) {
+  if (gpu_frame_no(c) != s_sub_lastf) {
     if (s_sub_lastf >= 0) { fprintf(stderr, "[subcnt] f%d", s_sub_lastf);
       for (int i = 0; i < s_subn; i++) { fprintf(stderr, " %08x=%u", s_subaddr[i], s_subcnt[i]); s_subcnt[i] = 0; } }
-    s_sub_lastf = s_frame;
+    s_sub_lastf = gpu_frame_no(c);
   }
   if (slot >= 0) s_subcnt[slot]++;
   rec_super_call(c, addr);
@@ -889,9 +889,9 @@ void ov_rwalk_eec0(Core* c) { subcnt_tick(c, 0x8003EEC0u); }
 // per frame (first call), then super-calls the original walk.
 void ov_rlist_probe(Core* c) {
   static int s_rl_last = -1;
-  if (s_frame != s_rl_last) {            // 1/frame gate (own latch)
-    s_rl_last = s_frame;
-    fprintf(stderr, "[rlist] f%d:", s_frame);
+  if (gpu_frame_no(c) != s_rl_last) {     // 1/frame gate (own latch)
+    s_rl_last = gpu_frame_no(c);
+    fprintf(stderr, "[rlist] f%d:", gpu_frame_no(c));
     uint32_t n = c->mem_r32(0x800F2624u); int guard = 0;
     for (; n && guard < 64; n = c->mem_r32(n + 36), guard++) {
       uint8_t live = c->mem_r8(n + 1), t = c->mem_r8(n + 0xB);
@@ -912,11 +912,11 @@ static uint32_t s_cc[12], s_cctgt[12]; static int s_cc_lastf = -1;
 void ov_ccase_probe(Core* c) {
   uint32_t node = c->r[4];
   uint32_t idx = c->mem_r8(node + 0xD) & 0xB;
-  if (s_frame != s_cc_lastf) {
+  if (gpu_frame_no(c) != s_cc_lastf) {
     if (s_cc_lastf >= 0) { fprintf(stderr, "[ccase] f%d", s_cc_lastf);
       for (int i = 0; i < 12; i++) if (s_cc[i]) fprintf(stderr, " idx%d=%u(t=%08x)", i, s_cc[i], s_cctgt[i]);
       fprintf(stderr, "\n"); }
-    s_cc_lastf = s_frame; for (int i = 0; i < 12; i++) s_cc[i] = 0;
+    s_cc_lastf = gpu_frame_no(c); for (int i = 0; i < 12; i++) s_cc[i] = 0;
   }
   if (idx < 12) { s_cc[idx]++; s_cctgt[idx] = (idx < 9) ? c->mem_r32(0x80014EC8u + idx * 4) : 0; }
   rec_super_call(c, 0x8003CCA4u);

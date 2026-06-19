@@ -7,7 +7,7 @@
 #include <cstdio>
 
 // mem_r8/mem_w8/rec_dispatch come from r3000.h (via margin_render.hpp).
-extern "C" int s_frame;                              // present-frame counter (gpu_native.c)
+int gpu_frame_no(Core*);                             // present-frame counter (gpu_native.cpp)
 
 // The per-object render dispatch. RE later-133: gen_func_8003CCA4(a0=node) builds the object's transform
 // (dispatching by node+0xd via the jump table @0x80014ec8) and calls the per-object flush
@@ -50,7 +50,7 @@ public:
       // Preserve caller-saved arg registers around the dispatches (we are mid-walk-return).
       const uint32_t a0 = c->r[4], a1 = c->r[5], a2 = c->r[6], a3 = c->r[7];
       for (uint32_t node : nodes_) {
-        if (dbg_ && s_frame == 2900)
+        if (dbg_ && gpu_frame_no(c) == 2900)
           fprintf(stderr, "[margin]   node=%08x type=%02x cnt=%u\n",
                   node, (unsigned)c->mem_r8(node + 0xc), (unsigned)c->mem_r8(node + 8));
         // Call the FULL per-object render dispatch (gen_func_8003CCA4): it builds the object's transform
@@ -65,7 +65,7 @@ public:
       }
       c->r[4] = a0; c->r[5] = a1; c->r[6] = a2; c->r[7] = a3;
 
-      if (dbg_) fprintf(stderr, "[margin] f%d rendered %zu margin nodes\n", s_frame, nodes_.size());
+      if (dbg_) fprintf(stderr, "[margin] f%d rendered %zu margin nodes\n", gpu_frame_no(c), nodes_.size());
     }
     nodes_.clear();
     seen_.clear();

@@ -87,7 +87,22 @@ Flag init-once-then-read tables case by case; when in doubt, move it (safe).
   diff expresses its per-core difference (terrain ON vs neutralized) as a **flag on Game read inside
   the override** (override has Core* c), NOT divergent tables — so no migration needed. Rationale
   documented in-code above `g_iov`. (No build/0-diff needed — comment-only change.)
-- **Next (order):** RENDER SUBSYSTEM (see "Render-subsystem migration" below) — gpu_native → gpu_vk →
+- **R1 (done):** gpu_native.cpp render machine state → `GpuState` on Game (`c->game->gpu`). ALL mutable
+  render state moved (VRAM `s_vram`+`s_interp`+`s_prov`/`s_provmeta`, draw clip/offset/texpage/CLUT/texwin,
+  display `s_disp_*`, GP0 FIFO+xfer, `s_prim_order`/`s_prim_gid`, `s_ndl_cur`, `s_frame`, `s_cur_node`,
+  `g_ot_madr`, `g_dma_src`). The rasterizer fns are now **methods of GpuState** (field names kept their
+  `s_`-spelling so bodies are byte-unchanged — a scripted signature-only transform, scratch/r1_gpu_native.py).
+  Public C API kept stable via thin free-fn wrappers forwarding to `core->game->gpu`. Threaded `Core*` into
+  the carved-out diag TUs (gpu_trace `trace_record`/`trace_flush`/`gputrace_arm`, gpu_debug `gpu_prov_dump`/
+  `gpu_provat_display`/`gpu_scene_dump*`) + dbg_server + fps60's synth path (`fps60_synthesize`/dumptest) +
+  the Core*-less `gpu_gp1`/`gpu_frame_no`/`gpu_native_*`/`gpu_repaint`/`gpu_fps60_*`. Cross-file `s_frame`
+  reads (engine_submit, margin_render, game_tomba2) → `gpu_frame_no(c)`. **DEFERRED to R2:** `s_seen3d`/
+  `s_prev_had3d` stay file-scope shared (read by gpu_vk's Core*-less present path; move when gpu_vk is
+  threaded). Diagnostics/host-singletons stay shared per policy (s_prims, s_fade_*, s_cw_*, texwatch,
+  s_sbs_on, SDL s_win/s_ren/s_tex, g_nd_*). Gates: frame-50 RAM 0-diff vs baseline ✓ AND field-frame 520
+  VK render byte-identical pre-vs-post ✓.
+- **Next (order):** RENDER SUBSYSTEM (see "Render-subsystem migration" below) — ~~gpu_native~~(R1 done) →
+  gpu_vk (R2, thread Core* through the present/draw pipeline; move s_seen3d/s_prev_had3d) →
   gpu_trace → gpu_debug — THEN dbg_server → native_boot → gte/spu/mdec (Beetle FORK) → engine modules
   (fps60, engine_submit, native_path*, game_tomba2). (mem 1 static, boot 1 — sweep at the end.)
   DONE/skip: timing, cd_override, hle, pad_input, native_fmv, native_stub, interp (done); sync_overrides,

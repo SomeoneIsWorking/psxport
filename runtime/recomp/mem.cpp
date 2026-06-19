@@ -14,7 +14,7 @@
 // gpu_gp0/gpu_gp1 live in the C++ renderer (gpu_native.cpp); gpu_gp0 takes the Core (CPU->VRAM
 // uploads + the DMA linked-list walk read this instance's RAM).
 void gpu_gp0(Core* core, uint32_t w);
-void gpu_gp1(uint32_t w);
+void gpu_gp1(Core*, uint32_t w);
 extern "C" {
 uint32_t cdc_read(uint32_t p);
 void     cdc_write(uint32_t p, uint8_t v);
@@ -121,7 +121,7 @@ void Core::io_write(uint32_t a, uint32_t v, uint32_t bytes) {
   const uint32_t p = a & 0x1FFFFFFF;
   if (p >= 0x1F801800 && p <= 0x1F801803) { cdc_write(p, (uint8_t)v); return; }  // CD controller
   if (p == 0x1F801810) { gpu_gp0(this, v); return; }    // GP0 (direct)
-  if (p == 0x1F801814) { gpu_gp1(v); return; }    // GP1 (display/control)
+  if (p == 0x1F801814) { gpu_gp1(this, v); return; }    // GP1 (display/control)
   if (p == 0x1F801820 || p == 0x1F801824) { mdec_write(p, v); return; }  // MDEC0 cmd / MDEC1 ctrl
   if (p >= 0x1F801C00 && p <= 0x1F801FFF) { spu_write(p, v); return; }    // SPU register file
   if (p == 0x1F8010C0) { s_dma4_madr = v; return; }

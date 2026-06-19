@@ -12,6 +12,7 @@
 // here, migrated ONE subsystem per phase, 0-diff-verified each step (see docs/game-deglobalize-plan.md).
 #pragma once
 #include "core.h"
+#include "gpu_native_internal.h"   // GpuState — the native GPU's per-instance render machine state
 #include <stdint.h>
 #include <setjmp.h>
 
@@ -80,6 +81,7 @@ public:
   PadState    pad;
   FmvState    fmv;
   StubState   stub;
+  GpuState    gpu;   // native GPU: VRAM + draw/display state + the rasterizer (gpu_native.cpp)
 
   Game() { core.game = this; }
 };

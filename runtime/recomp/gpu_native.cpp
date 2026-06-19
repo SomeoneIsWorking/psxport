@@ -1,4 +1,5 @@
 #include "core.h"
+#include "game.h"
 #include "c_subsys.h"
 // Native GPU — PC rendering of the game's own draw primitives (NOT PSX-GPU emulation).
 //
@@ -22,42 +23,24 @@
 #endif
 
 extern int g_fps60_on;           // fps60: capture/synth enabled (PSXPORT_FPS60); 0 = faithful path
-uint16_t s_vram[VRAM_W * VRAM_H]; // canonical definition (extern in gpu_native_internal.h)
 // VRAM_W/VRAM_H and vram() now live in gpu_native_internal.h
 
 // fps60 60fps layer: a SEPARATE off-screen framebuffer the interpolated frame is rasterized into,
 // so the 60fps tier sits ON TOP of the renderer and NEVER writes the game's VRAM. put_px_b writes
 // (and its blend-reads) go to s_fb_base — normally s_vram, switched to s_interp only while synthesizing
 // the in-between; sample_tex always reads s_vram, so textures still come from the live atlas.
-static uint16_t s_interp[VRAM_W * VRAM_H];
-static uint16_t* s_fb_base = s_vram;
-static inline uint16_t* fb(int x, int y) { return &s_fb_base[(y & 511) * VRAM_W + (x & 1023)]; }
 
 // ---- Draw state (set by GP0 env commands E1..E6) ------------------------------------
-static int s_da_x0, s_da_y0, s_da_x1 = 1023, s_da_y1 = 511;  // draw clip area
-static int s_off_x, s_off_y;                                 // draw offset
 int gpu_vk_enabled(void);                                    // gpu_vk.c (declared early for the gp0 tee)
 void gpu_vk_dirty(int, int, int, int);                       // mark a SW-written VRAM region to mirror to VK
 void gpu_vk_set_order(unsigned idx);                         // OT submission order of the next VK prim (depth)
-static int s_tp_x, s_tp_y;        // texpage base (64-px / 256-line units -> *64 / *256)
 static int s_reddbg;              // PSXPORT_REDDBG: dark-red output anomaly probe
-static int s_tp_mode;             // texture color mode: 0=4bpp,1=8bpp,2=15bpp
-static int s_tp_blend;            // semi-transparency mode 0..3
-static int s_tp_dither;           // ordered-dither enable (E1 bit 9)
-static int s_tw_mx, s_tw_my, s_tw_ox, s_tw_oy;  // texture window mask/offset (8px units)
-static int s_clut_x, s_clut_y;    // CLUT base (per-primitive, from packet)
 
 // ---- Display control (GP1) ----------------------------------------------------------
-int s_disp_x, s_disp_y;           // VRAM top-left of displayed region (extern in internal header)
-static int s_disp_w = 320, s_disp_h = 240;
-static int s_disp_vy0, s_disp_vy1 = 240;  // GP1(0x07) vertical display range (scanlines)
-static int s_disp_480i;           // GP1(0x08): interlace + 480-line vertical resolution
 
-typedef struct { int x, y; uint8_t r, g, b; int u, v; } Vtx;
 
 static int g_log = 0;             // PSXPORT_GPU_LOG
 static long s_prims = 0;          // primitives drawn since last present
-static uint32_t s_prim_order = 0; // per-frame OT submission index of the current prim (VK depth order)
 static int s_seen3d = 0;          // has any GTE-projected (3D) prim been teed yet this frame? Non-3D
                                   // prims before the first 3D one are backdrop (water/sky) -> FAR band;
                                   // after, they are HUD/UI -> near overlay band (native-depth bands).
@@ -70,8 +53,6 @@ int gpu_had3d_last_frame(void) { return s_prev_had3d; }
 // VRAM-resident 2D screen (SCEA/FMV/title/menu); it has nothing in the scaled scratch FB.
 int gpu_seen3d_this_frame(void) { return s_seen3d; }
 static long s_gp0_words = 0, s_dma2 = 0;  // diagnostics: GP0 words + DMA2 triggers per frame
-static uint32_t s_cur_node = 0;   // REDDBG: RAM addr of the OT node currently being fed to GP0
-uint32_t g_ot_madr = 0;           // last OT DMA root (extern in internal header)
 long g_nd_3d = 0, g_nd_2d = 0;   // Phase-2 native-depth diag: prims drawn with real depth vs OT-order band
 long g_nd2d_hist[256];           // op histogram of prims that fall to the 2D band (ndepth diag)
 
@@ -91,14 +72,12 @@ static void fade_note(int r, int g, int b, int offy, int semi) {
 static void fade_note_size(int w, int h, int semi) { if (semi && w >= 160 && h >= 120) s_fade_bigsemi++; }
 // PSXPORT_SEMIDUMP=frame: log each SEMI prim (blend mode + color + bbox) at `frame`, to see how the
 // fade overlay tiles stack (VK draws them all vs one snapshot, so stacked tiles don't accumulate).
-extern int s_frame;
-static void semi_dump(const char* kind, int blend, int r, int g, int b, int x0, int y0, int x1, int y1, int offy) {
+void GpuState::semi_dump(const char* kind, int blend, int r, int g, int b, int x0, int y0, int x1, int y1, int offy) {
   static int sf = -2; if (sf == -2) { const char* e = cfg_str("PSXPORT_SEMIDUMP"); sf = e ? atoi(e) : -1; }
   if (sf >= 0 && s_frame == sf)
     fprintf(stderr, "[semidump] f%d %s blend=%d col=(%d,%d,%d) bbox=(%d,%d)-(%d,%d) offY=%d\n",
             s_frame, kind, blend, r, g, b, x0, y0, x1, y1, offy);
 }
-// s_frame is defined below (int s_frame = 0;) and declared extern in gpu_native_internal.h
 
 // ---- Per-pixel primitive provenance (PSXPORT_PROVAT="x,y[:frame]") --------------------------
 // Records, for every VRAM pixel, the global id of the primitive that last wrote it. A wrong
@@ -108,10 +87,6 @@ static void semi_dump(const char* kind, int blend, int r, int g, int b, int x0, 
 // entirely (no more guessing which buffer / which native frame drew the shown pixel).
 // ProvMeta / PROVRING and the s_prov / s_provmeta / s_prov_on state live in gpu_native_internal.h
 // (shared with gpu_debug.c, which formats the provenance/scene dumps). Canonical defs here:
-uint32_t s_prov[VRAM_W * VRAM_H];          // gid of last writer per pixel (0 = never written)
-static uint32_t s_prim_gid = 0;            // monotonic primitive counter
-int      s_prov_on = -1;                   // lazily: 1 if PSXPORT_PROVAT set, else 0
-ProvMeta s_provmeta[PROVRING];             // gid -> prim details (ring; older gids evicted)
 void gpu_provat_display(FILE* out, int qx, int qy);   // present-time provenance at display coords (gpu_debug.c)
 void gpu_provat_enable(void);                          // turn on per-pixel provenance stamping
 
@@ -141,7 +116,7 @@ static inline uint16_t blend555(uint16_t bg, int fr, int fg, int fb, int mode) {
 
 // Sample a texel at texture coords (u,v) through the current texpage/CLUT. Returns 0 if the
 // texel is fully transparent (PSX: a 16-bit value of 0 = transparent).
-static uint16_t sample_tex(int u, int v) {
+uint16_t GpuState::sample_tex(int u, int v) {
   u = (u & ~(s_tw_mx * 8)) | ((s_tw_ox & s_tw_mx) * 8);  // texture window wrap
   v = (v & ~(s_tw_my * 8)) | ((s_tw_oy & s_tw_my) * 8);
   int bx = s_tp_x, by = s_tp_y;
@@ -159,7 +134,7 @@ static uint16_t sample_tex(int u, int v) {
 // Write one pixel. If `semi` is set, blend the source (r,g,b) over the existing VRAM pixel
 // using the current texpage blend mode (s_tp_blend); otherwise overwrite. The mask bit is
 // always set on the written pixel (we don't model mask-test reads).
-static inline void put_px_b(int x, int y, uint8_t r, uint8_t g, uint8_t b, int semi) {
+void GpuState::put_px_b(int x, int y, uint8_t r, uint8_t g, uint8_t b, int semi) {
   if (x < s_da_x0 || x > s_da_x1 || y < s_da_y0 || y > s_da_y1) return;
   uint16_t out;
   if (semi) out = blend555(*fb(x, y) & 0x7FFF, r >> 3, g >> 3, b >> 3, s_tp_blend);
@@ -167,7 +142,7 @@ static inline void put_px_b(int x, int y, uint8_t r, uint8_t g, uint8_t b, int s
   *fb(x, y) = out | 0x8000;
   if (s_prov_on > 0) s_prov[(y & 511) * VRAM_W + (x & 1023)] = s_prim_gid;
 }
-static inline void put_px(int x, int y, uint8_t r, uint8_t g, uint8_t b) { put_px_b(x, y, r, g, b, 0); }
+void GpuState::put_px(int x, int y, uint8_t r, uint8_t g, uint8_t b) { put_px_b(x, y, r, g, b, 0); }
 
 // PSX ordered 4x4 dither matrix (applied to 8-bit channels before 5-bit truncation, when
 // the texpage dither bit is set, on gouraud + texture-modulated pixels). We add the per-pixel
@@ -208,7 +183,7 @@ static inline int GetPolyXFP_Int(int64_t xfp) { return (int)(xfp >> 32); }
 // decided by the caller (tri()); this only does the per-pixel math, which stays barycentric
 // off the ORIGINAL (unsorted) a,b,c and the doubled signed area `aa` — already validated to
 // match Beetle's per-pixel output (modulation/UV-round/dither). `tex`/`shade`/`semi` as tri().
-static inline void tri_px(Vtx a, Vtx b, Vtx c, int x, int y, int tex, int shade, int semi, int raw, long aa) {
+void GpuState::tri_px(Vtx a, Vtx b, Vtx c, int x, int y, int tex, int shade, int semi, int raw, long aa) {
       long l0 = (long)((b.x-x)*(c.y-y)-(b.y-y)*(c.x-x));
       long l1 = (long)((c.x-x)*(a.y-y)-(c.y-y)*(a.x-x));
       long l2 = aa - l0 - l1;
@@ -293,7 +268,7 @@ static inline void tri_px(Vtx a, Vtx b, Vtx c, int x, int y, int tex, int shade,
 // Rasterize a gouraud/textured triangle. `tex` selects textured sampling, `semi` requests
 // semi-transparency. Coverage = mednafen's exact integer edge-walk (so it matches the oracle
 // pixel-for-pixel); per-pixel shading = tri_px (barycentric off the original a,b,c).
-static void tri(Vtx a, Vtx b, Vtx c, int tex, int shade, int semi, int raw) {
+void GpuState::tri(Vtx a, Vtx b, Vtx c, int tex, int shade, int semi, int raw) {
   a.x += s_off_x; a.y += s_off_y; b.x += s_off_x; b.y += s_off_y; c.x += s_off_x; c.y += s_off_y;
   long aa = (long)((b.x-a.x)*(c.y-a.y)-(b.y-a.y)*(c.x-a.x));
   if (aa == 0) return;                          // degenerate (zero area)
@@ -369,13 +344,7 @@ static void tri(Vtx a, Vtx b, Vtx c, int tex, int shade, int semi, int raw) {
 }
 
 // ---- GP0 command FIFO ---------------------------------------------------------------
-static uint32_t s_fifo[256];   // big enough for variable-length poly-lines (many vertices)
-static uint32_t s_fifo_addr[256];  // guest source address of each FIFO word (0 if not from the OT walk)
-static uint32_t s_gp0_src = 0;     // OT walk sets this to each word's guest addr before gpu_gp0 (Phase-1 attach)
-static int s_fcount, s_fneed;
-static int s_pl, s_pl_g;       // poly-line in progress (variable length); s_pl_g = gouraud
 // VRAM transfer state (GP0 0xA0 CPU->VRAM)
-static int s_xfer, s_xfer_x, s_xfer_y, s_xfer_w, s_xfer_h, s_xfer_px;
 
 // PC-native CPU->VRAM upload. The game's libgs-style upload library (FUN_80081218 and the
 // GsSortObject ring at 0x800A5AC8) is replaced by writing the rect directly here, so the GPU
@@ -385,13 +354,13 @@ static int s_xfer, s_xfer_x, s_xfer_y, s_xfer_w, s_xfer_h, s_xfer_px;
 // Transplant harness: overwrite our full VRAM from a raw 1024x512x16 dump (oracle's, via
 // PSXPORT_VRAMDUMP). Lets us drop the oracle's clean green-field VRAM into our running port and
 // watch whether our continued execution keeps it clean or re-corrupts (accumulation test).
-int gpu_native_load_vram(const char* path) {
+int GpuState::gpu_native_load_vram(const char* path) {
   FILE* f = fopen(path, "rb"); if (!f) return 0;
   size_t n = fread(s_vram, 2, (size_t)VRAM_W * VRAM_H, f); fclose(f);
   fprintf(stderr, "[transplant] loaded VRAM %zu px from %s\n", n, path);
   return n == (size_t)VRAM_W * VRAM_H;
 }
-void gpu_native_load_image(Core* core, int x, int y, int w, int h, uint32_t src) {
+void GpuState::gpu_native_load_image(Core* core, int x, int y, int w, int h, uint32_t src) {
   for (int v = 0; v < h; v++)
     for (int u = 0; u < w; u++)
       *vram(x + u, y + v) = core->mem_r16(src + (uint32_t)((v * w + u) * 2));
@@ -412,18 +381,18 @@ static inline uint8_t cmd_b(uint32_t c) { return (c >> 16) & 0xFF; }
 static inline int cx(uint32_t w) { int v = w & 0x7FF; return v >= 0x400 ? v - 0x800 : v; }
 static inline int cy(uint32_t w) { int v = (w >> 16) & 0x7FF; return v >= 0x400 ? v - 0x800 : v; }
 
-static void set_texpage(uint16_t tp) {
+void GpuState::set_texpage(uint16_t tp) {
   s_tp_x = (tp & 0xF) * 64;
   s_tp_y = ((tp >> 4) & 1) * 256;
   s_tp_blend = (tp >> 5) & 3;
   s_tp_mode = (tp >> 7) & 3; if (s_tp_mode > 2) s_tp_mode = 2;
   s_tp_dither = (tp >> 9) & 1;     // ordered 4x4 dither enable
 }
-static void set_clut(uint16_t cl) { s_clut_x = (cl & 0x3F) * 16; s_clut_y = (cl >> 6) & 0x1FF; }
+void GpuState::set_clut(uint16_t cl) { s_clut_x = (cl & 0x3F) * 16; s_clut_y = (cl >> 6) & 0x1FF; }
 
 // Begin a primitive for provenance tracking: bump the global id and record this prim's details
 // (frame/node/op/clut/texpage/color/first-vertex) so put_px_b can stamp each pixel it writes.
-static void prov_begin(uint8_t op, int tex, int semi, uint8_t r, uint8_t g, uint8_t b,
+void GpuState::prov_begin(uint8_t op, int tex, int semi, uint8_t r, uint8_t g, uint8_t b,
                        int x0, int y0, int u0, int v0) {
   if (s_prov_on < 0) s_prov_on = cfg_str("PSXPORT_PROVAT") ? 1 : 0;
   if (!s_prov_on) return;
@@ -441,7 +410,7 @@ static void prov_begin(uint8_t op, int tex, int semi, uint8_t r, uint8_t g, uint
 // in order, with the resulting 16-entry palette. Reveals whether the right palette is written
 // then overwritten, or never written, and by which transfer.
 static int s_cw_x = -1, s_cw_y = 0, s_cw_pending = 0;
-static void clutwatch_dump(const char* tag, int rx, int ry, int rw, int rh) {
+void GpuState::clutwatch_dump(const char* tag, int rx, int ry, int rw, int rh) {
   fprintf(stderr, "[clutwatch] %s f%d rect=(%d,%d %dx%d) covers (%d,%d) palette:",
           tag, s_frame, rx, ry, rw, rh, s_cw_x, s_cw_y);
   for (int k = 0; k < 16; k++) fprintf(stderr, " %04X", *vram(s_cw_x + k, s_cw_y));
@@ -453,7 +422,7 @@ static int clutwatch_covers(int rx, int ry, int rw, int rh) {
 }
 // For 0xA0 the pixels stream in AFTER setup, so mark pending and dump on completion; for 0x80 the
 // copy already happened, so dump immediately.
-static void clutwatch_xfer(const char* tag, int rx, int ry, int rw, int rh) {
+void GpuState::clutwatch_xfer(const char* tag, int rx, int ry, int rw, int rh) {
   if (!clutwatch_covers(rx, ry, rw, rh)) return;
   if (tag[0] == 'A') { s_cw_pending = 1; fprintf(stderr,
       "[clutwatch] A0 upload START f%d rect=(%d,%d %dx%d) covers (%d,%d)\n",
@@ -479,7 +448,7 @@ static int texwatch_overlap(int rx, int ry, int rw, int rh) {
 // Rasterize one sprite/rect with the CURRENT draw state (s_off, s_da clip, texpage via sample_tex,
 // command color). Shared by gp0_exec and the fps60 in-between synthesizer so both go through the
 // exact same texel/blend/clip logic. (op bit0 = raw-texel select; semi = semi-transparency.)
-static void raster_sprite(int op, int x, int y, int u0, int v0, int w, int h,
+void GpuState::raster_sprite(int op, int x, int y, int u0, int v0, int w, int h,
                           uint8_t cr, uint8_t cg, uint8_t cb, int textured, int semi) {
   // Clip the iteration to the drawing area up front: off-screen sprites otherwise spin w*h
   // sample_tex calls for pixels put_px_b would discard (could burn millions of iterations).
@@ -506,7 +475,7 @@ static void raster_sprite(int op, int x, int y, int u0, int v0, int w, int h,
 
 // Rasterize one flat line segment with the CURRENT draw state (s_off, clip). Shared by gp0_exec and
 // the fps60 synthesizer so poly-lines are reproduced in the interpolated frame (else they flicker).
-static void raster_line(int x0, int y0, int x1, int y1, uint8_t cr, uint8_t cg, uint8_t cb, int semi) {
+void GpuState::raster_line(int x0, int y0, int x1, int y1, uint8_t cr, uint8_t cg, uint8_t cb, int semi) {
   int dx = abs(x1 - x0), dy = -abs(y1 - y0), sx = x0 < x1 ? 1 : -1, sy = y0 < y1 ? 1 : -1, e = dx + dy;
   for (;;) { put_px_b(x0 + s_off_x, y0 + s_off_y, cr, cg, cb, semi); if (x0 == x1 && y0 == y1) break;
     int e2 = 2 * e; if (e2 >= dy) { e += dy; x0 += sx; } if (e2 <= dx) { e += dx; y0 += sy; } }
@@ -516,10 +485,9 @@ static void raster_line(int x0, int y0, int x1, int y1, uint8_t cr, uint8_t cg, 
 // loaded into s_fifo by ndl_render_node). When set, the poly path takes each vertex's view-Z straight
 // from this prim (np->pz, parse order) instead of the value-keyed address bridge — the engine that
 // projected the vertex carries its real depth here directly. NULL for ordinary guest-packet decode.
-static const NativePrim* s_ndl_cur = 0;
 
 // Execute a complete GP0 primitive packet held in s_fifo[0..s_fcount).
-static void gp0_exec(Core* core) {
+void GpuState::gp0_exec(Core* core) {
   uint32_t c = s_fifo[0];
   uint8_t op = c >> 24;
   if (op >= 0x20 && op <= 0x3F) {            // polygon
@@ -818,7 +786,7 @@ static void gp0_exec(Core* core) {
 // The 60fps tier (fps60.c) re-rasterizes a lerped copy of the captured display list into the SEPARATE
 // s_interp buffer (see gpu_fps60_begin_interp). These reuse the SAME tri()/raster_sprite() path as
 // gp0_exec (no GP0 re-encode round-trip), driven by explicit decoded state; textures read from VRAM.
-void gpu_fps60_draw_poly(int op, int nv, const int* xs, const int* ys, const int* us, const int* vs,
+void GpuState::gpu_fps60_draw_poly(int op, int nv, const int* xs, const int* ys, const int* us, const int* vs,
                        const unsigned char* rs, const unsigned char* gs, const unsigned char* bs,
                        int tp_x, int tp_y, int mode, int blend, int dither, int clut_x, int clut_y) {
   int gouraud = op & 0x10, textured = op & 0x04, semi = (op & 0x02) ? 1 : 0;
@@ -832,7 +800,7 @@ void gpu_fps60_draw_poly(int op, int nv, const int* xs, const int* ys, const int
   tri(v[0], v[1], v[2], textured, shade, semi, raw);
   if (nv == 4) tri(v[1], v[2], v[3], textured, shade, semi, raw);
 }
-void gpu_fps60_draw_sprite(int op, int x, int y, int u0, int v0, int w, int h,
+void GpuState::gpu_fps60_draw_sprite(int op, int x, int y, int u0, int v0, int w, int h,
                          int r, int g, int b, int tp_x, int tp_y, int mode, int blend,
                          int clut_x, int clut_y) {
   int textured = op & 0x04, semi = (op & 0x02) ? 1 : 0;
@@ -840,7 +808,7 @@ void gpu_fps60_draw_sprite(int op, int x, int y, int u0, int v0, int w, int h,
   s_clut_x = clut_x; s_clut_y = clut_y;
   raster_sprite(op, x, y, u0, v0, w, h, (uint8_t)r, (uint8_t)g, (uint8_t)b, textured, semi);
 }
-void gpu_fps60_draw_line(int x0, int y0, int x1, int y1, int r, int g, int b, int semi) {
+void GpuState::gpu_fps60_draw_line(int x0, int y0, int x1, int y1, int r, int g, int b, int semi) {
   raster_line(x0, y0, x1, y1, (uint8_t)r, (uint8_t)g, (uint8_t)b, semi);
 }
 
@@ -865,9 +833,9 @@ static int gp0_len(uint32_t c) {
 // trace_record() (per GP0 word, below) and trace_flush() (per frame, gpu_present_ex). ----
 
 // One word into the GP0 port (direct write or DMA).
-void gpu_gp0(Core* core, uint32_t w) {
+void GpuState::gpu_gp0(Core* core, uint32_t w) {
   s_gp0_words++;
-  trace_record(w);
+  trace_record(core, w);
   if (s_xfer) {                                  // CPU->VRAM pixel stream (2 px/word)
     for (int k = 0; k < 2; k++) {
       int px = s_xfer_px % s_xfer_w, py = s_xfer_px / s_xfer_w;
@@ -932,12 +900,10 @@ void gpu_gp0(Core* core, uint32_t w) {
       if (gpu_vk_enabled()) gpu_vk_dirty(s_xfer_x, s_xfer_y, s_xfer_w, s_xfer_h);   // mirror upload to VK
       clutwatch_xfer("A0", s_xfer_x, s_xfer_y, s_xfer_w, s_xfer_h);
       if (cfg_dbg("upload")) {
-        extern uint32_t g_dma_src;
         fprintf(stderr, "[upload] f%d A0 dest=(%d,%d) %dx%d src=0x%08X\n",
                 s_frame, s_xfer_x, s_xfer_y, s_xfer_w, s_xfer_h, 0x80000000u | g_dma_src);
       }
       if (texwatch_overlap(s_xfer_x, s_xfer_y, s_xfer_w, s_xfer_h)) {
-        extern uint32_t g_dma_src;
         uint32_t src = 0x80000000u | g_dma_src;
         fprintf(stderr, "[texwatch] f%d A0 dest=(%d,%d) %dx%d src=0x%08X srcbytes:",
                 s_frame, s_xfer_x, s_xfer_y, s_xfer_w, s_xfer_h, src);
@@ -973,7 +939,7 @@ void gpu_gp0(Core* core, uint32_t w) {
 }
 
 // GP1 display/control commands.
-void gpu_gp1(uint32_t w) {
+void GpuState::gpu_gp1(uint32_t w) {
   uint8_t op = w >> 24;
   if (cfg_dbg("gp1"))
     fprintf(stderr, "[gp1] f%d %02X %06X\n", s_frame, op, w & 0xFFFFFF);
@@ -1010,7 +976,7 @@ static int win_enabled(void) {
   if (s_win_on < 0) { const char* w = cfg_str("PSXPORT_GPU_WINDOW"); s_win_on = (w && atoi(w) != 0) ? 1 : 0; }
   return s_win_on;
 }
-static void ensure_window(void) {
+void GpuState::ensure_window() {
   if (!s_win) {
     SDL_Init(SDL_INIT_VIDEO);
     SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "1");   // linear filter for a smooth upscale
@@ -1035,7 +1001,7 @@ static void ensure_window(void) {
 // fit to a 4:3 rect with black bars — never stretched (correct PSX pixel aspect for 2D / FMV / any res).
 int  gpu_vk_enabled(void);                                   // gpu_vk.c — Vulkan present backend (M0)
 void gpu_vk_present(const uint16_t*, int, int, int, int);
-static void blit_src(const uint16_t* src, int sx, int sy) {
+void GpuState::blit_src(const uint16_t* src, int sx, int sy) {
   // VK first: headless offscreen VK (PSXPORT_VK_HEADLESS) renders without a window, so it must run even
   // when win_enabled() is false. The SW window path below needs a real window.
   if (gpu_vk_enabled()) { gpu_vk_present(src, sx, sy, s_disp_w, s_disp_h); return; }  // HW path (incl. headless)
@@ -1061,25 +1027,25 @@ static void blit_src(const uint16_t* src, int sx, int sy) {
     if (e.type == SDL_KEYDOWN && e.key.keysym.scancode == SDL_SCANCODE_ESCAPE) exit(0);
   }
 }
-static void present_window(void) { blit_src(s_vram, s_disp_x, s_disp_y); }   // the live front buffer
+void GpuState::present_window() { blit_src(s_vram, s_disp_x, s_disp_y); }   // the live front buffer
 // Re-present the CURRENT frame without advancing game logic — used by the debug-server pause loop so
 // the window stays live AND the VK readback reflects exactly what's on screen (vkshot reads the same
 // region this presents). No s_frame++ / batch reset (those belong to gpu_present_ex).
-void gpu_repaint(void) { present_window(); }
+void GpuState::gpu_repaint() { present_window(); }
 // fps60: present the previous real frame straight from VRAM (read-only), and the interpolated frame
 // from the separate s_interp buffer. Both blit a display-sized region at the given VRAM origin.
-void gpu_fps60_blit_vram(int dx, int dy)   { blit_src(s_vram,   dx, dy); }
-void gpu_fps60_blit_interp(int dx, int dy) { blit_src(s_interp, dx, dy); }
+void GpuState::gpu_fps60_blit_vram(int dx, int dy)   { blit_src(s_vram,   dx, dy); }
+void GpuState::gpu_fps60_blit_interp(int dx, int dy) { blit_src(s_interp, dx, dy); }
 #else
-static void present_window(void) {}
-void gpu_repaint(void) {}
-void gpu_fps60_blit_vram(int dx, int dy)   { (void)dx; (void)dy; }
-void gpu_fps60_blit_interp(int dx, int dy) { (void)dx; (void)dy; }
+void GpuState::present_window() {}
+void GpuState::gpu_repaint() {}
+void GpuState::gpu_fps60_blit_vram(int dx, int dy)   { (void)dx; (void)dy; }
+void GpuState::gpu_fps60_blit_interp(int dx, int dy) { (void)dx; (void)dy; }
 #endif
 
 // fps60 headless validation: dump a display-sized region of a buffer to a PPM (P6). Used by the
 // synth dumptest to compare prev / interpolated / current frames offline.
-static void shot_buf(const uint16_t* src, int dx, int dy, const char* path) {
+void GpuState::shot_buf(const uint16_t* src, int dx, int dy, const char* path) {
   FILE* f = fopen(path, "wb"); if (!f) return;
   fprintf(f, "P6\n%d %d\n255\n", s_disp_w, s_disp_h);
   for (int y = 0; y < s_disp_h; y++)
@@ -1090,20 +1056,20 @@ static void shot_buf(const uint16_t* src, int dx, int dy, const char* path) {
     }
   fclose(f);
 }
-void gpu_fps60_shot_vram(int dx, int dy, const char* path)   { shot_buf(s_vram,   dx, dy, path); }
-void gpu_fps60_shot_interp(int dx, int dy, const char* path) { shot_buf(s_interp, dx, dy, path); }
+void GpuState::gpu_fps60_shot_vram(int dx, int dy, const char* path)   { shot_buf(s_vram,   dx, dy, path); }
+void GpuState::gpu_fps60_shot_interp(int dx, int dy, const char* path) { shot_buf(s_interp, dx, dy, path); }
 
 // fps60: redirect the rasterizer's framebuffer writes to the separate s_interp buffer, clear the
 // target display region, and set the draw env. The interpolated display list is then rasterized via
 // the normal gpu_fps60_draw_* path (textures still read from VRAM). end_interp restores VRAM as target.
-void gpu_fps60_begin_interp(int off_x, int off_y, int cx0, int cy0, int cx1, int cy1) {
+void GpuState::gpu_fps60_begin_interp(int off_x, int off_y, int cx0, int cy0, int cx1, int cy1) {
   s_fb_base = s_interp;
   for (int y = cy0; y <= cy1; y++)
     for (int x = cx0; x <= cx1; x++) s_interp[(y & 511) * VRAM_W + (x & 1023)] = 0;
   s_off_x = off_x; s_off_y = off_y;
   s_da_x0 = cx0; s_da_y0 = cy0; s_da_x1 = cx1; s_da_y1 = cy1;
 }
-void gpu_fps60_end_interp(void) { s_fb_base = s_vram; }
+void GpuState::gpu_fps60_end_interp() { s_fb_base = s_vram; }
 
 // Frame pacing: the native game loop (ov_game_main) runs UNTHROTTLED — at thousands of fps.
 // That's right for headless tests but unplayable windowed. When a window is up we throttle to
@@ -1140,10 +1106,9 @@ void gpu_pace_frame(Core* core) { gpu_pace_subframe(core, 1); }
 
 // Present: copy the displayed VRAM region to an RGB buffer. PSXPORT_GPU_DUMP=dir dumps PPMs;
 // PSXPORT_GPU_WINDOW=1 shows a live SDL window.
-int s_frame = 0;   // present-frame counter (extern in gpu_native_internal.h)
 // REPL `shot <path>`: write the currently-displayed VRAM region to a PPM so I can SEE where the
 // interactive driver is (title / menu / attract / gameplay) instead of guessing from stage numbers.
-void gpu_native_shot(const char* path) {
+void GpuState::gpu_native_shot(const char* path) {
   FILE* f = fopen(path, "wb");
   if (!f) { fprintf(stderr, "[shot] cannot open %s\n", path); return; }
   fprintf(f, "P6\n%d %d\n255\n", s_disp_w, s_disp_h);
@@ -1159,9 +1124,9 @@ void gpu_native_shot(const char* path) {
 // gpu_present_ex: the per-frame present + bookkeeping. `do_blit` blits the live front buffer to the
 // window; fps60 passes 0 (it owns presentation: it blits the previous real frame + the interpolated
 // frame itself) but still wants the bookkeeping (watchdog, s_frame++, diagnostics).
-void gpu_present_ex(Core* core, int do_blit) {
+void GpuState::gpu_present_ex(Core* core, int do_blit) {
   watchdog_pet();             // frame-progress heartbeat (see watchdog.c)
-  trace_flush();              // PSXPORT_GPUTRACE: write this frame's GP0 trace (no-op unless armed)
+  trace_flush(core);          // PSXPORT_GPUTRACE: write this frame's GP0 trace (no-op unless armed)
   if (cfg_dbg("vramscan")) {
     int minx=99999,miny=99999,maxx=-1,maxy=-1; long nz=0;
     for (int y=0;y<512;y++) for (int x=0;x<1024;x++) if (*vram(x,y)&0x7FFF) {
@@ -1216,7 +1181,7 @@ void gpu_present_ex(Core* core, int do_blit) {
       int qx = -1, qy = -1, qf = -1; sscanf(pa, "%d,%d", &qx, &qy);
       const char* col = strchr(pa, ':'); if (col) qf = atoi(col + 1);
       if (qx >= 0 && (qf < 0 ? (s_frame % 200 == 0) : s_frame == qf))
-        gpu_provat_display(stderr, qx, qy);
+        gpu_provat_display(core, stderr, qx, qy);
     } }
   { const char* vd = cfg_str("PSXPORT_VRAMDUMP_AT");   // "frame:path" — dump our 1024x512x16 VRAM
     if (vd) { int fr = atoi(vd); const char* col = strchr(vd, ':');
@@ -1267,7 +1232,7 @@ void gpu_present_ex(Core* core, int do_blit) {
   s_prev_had3d = s_seen3d;   // remember whether this frame was a gameplay (3D) frame (wide pillarbox gate)
   s_seen3d = 0;       // restart backdrop-vs-HUD discrimination (no 3D prim seen yet next frame)
 }
-void gpu_present(Core* core) { gpu_present_ex(core, 1); }
+void GpuState::gpu_present(Core* core) { gpu_present_ex(core, 1); }
 
 void gpu_native_init(void) {
   if (cfg_dbg("gpu")) g_log = 1;
@@ -1278,7 +1243,7 @@ void gpu_native_init(void) {
 
 // Read-only VRAM inspection accessor (raw 16-bit 555+mask word). Used by the offline GPU-QA
 // harness to assert exact rasterized/blended values; harmless in production (read-only).
-uint16_t gpu_vram_peek(int x, int y) { return *vram(x, y); }
+uint16_t GpuState::gpu_vram_peek(int x, int y) { return *vram(x, y); }
 
 // Primitives drawn since the last gpu_present() (reset each present). The native frame loop uses
 // this to avoid flipping the double buffer to a buffer it didn't draw this frame (menu-load flicker).
@@ -1287,14 +1252,14 @@ int gpu_prims_since_present(void) { return (int)s_prims; }
 // Bulk VRAM load/save (1024x512x16). Used by the offline GP0 differ harness (tools/gpu_differ):
 // seed s_vram with a captured initial VRAM, replay a GP0 word stream via gpu_gp0(), then read back
 // the rasterized result for a pixel-exact compare against Beetle on the identical input.
-void gpu_vram_load(const uint16_t* src) { memcpy(s_vram, src, sizeof(s_vram)); }
-void gpu_vram_save(uint16_t* dst)       { memcpy(dst, s_vram, sizeof(s_vram)); }
+void GpuState::gpu_vram_load(const uint16_t* src) { memcpy(s_vram, src, sizeof(s_vram)); }
+void GpuState::gpu_vram_save(uint16_t* dst)       { memcpy(dst, s_vram, sizeof(s_vram)); }
 
 // Enable per-pixel provenance stamping unconditionally (the live debug server turns this on at
 // startup so `provat` works at any time without PSXPORT_PROVAT). Cheap: one extra store per pixel.
-void gpu_provat_enable(void) { s_prov_on = 1; }
+void GpuState::gpu_provat_enable() { s_prov_on = 1; }
 
-int gpu_frame_no(void) { return s_frame; }
+int GpuState::gpu_frame_no() { return s_frame; }
 
 // --- Vulkan-vs-Software side-by-side (SBS) present mode -----------------------------------------
 // When on (PSXPORT_SBS=1 or `sbs 1` via the debug server), the rasterization tee runs BOTH renderers
@@ -1313,8 +1278,7 @@ void gpu_scene_dump(Core*, FILE*, uint32_t);
 // view-Z live in the native arena. Load the packet words into the FIFO and run the normal primitive
 // path so every downstream behaviour (semi grouping, fade/fps60 capture, widescreen 2D) is identical,
 // but with s_ndl_cur set so the depth path uses the carried native view-Z (no address bridge).
-static void gp0_exec(Core* core);
-static void ndl_render_node(Core* core, uint32_t addr) {
+void GpuState::ndl_render_node(Core* core, uint32_t addr) {
   // Render every host prim bound to this OT bucket-anchor, head-first (LIFO = guest AddPrim draw order).
   for (NativePrim* np = ndl_lookup(addr); np; np = ndl_next(np)) {
     for (int i = 0; i < np->nwords; i++) { s_fifo[i] = np->words[i]; s_fifo_addr[i] = 0; }
@@ -1329,7 +1293,7 @@ static void ndl_render_node(Core* core, uint32_t addr) {
 // DMA channel 2 (GPU): walk an ordering-table linked list from `madr`, feeding each node's
 // GP0 words to the parser. Header word: bits[24..31]=word count, bits[0..23]=next node addr
 // (0xFFFFFF = end).
-void gpu_dma2_linked_list(Core* core, uint32_t madr) {
+void GpuState::gpu_dma2_linked_list(Core* core, uint32_t madr) {
   { static int sd = -2; if (sd == -2) { const char* e = cfg_str("PSXPORT_SCENEDUMP"); sd = e ? atoi(e) : -1; }
     if (sd >= 0 && s_frame == sd) gpu_scene_dump(core, stderr, madr); }
   s_dma2++;
@@ -1418,10 +1382,36 @@ void gpu_dma2_linked_list(Core* core, uint32_t madr) {
   }
 }
 // DMA channel 2 block mode: `count` words from `madr` (to/from GP0). to_gpu=1 -> GP0 writes.
-uint32_t g_dma_src;   // last block-DMA source (UPLOADLOG: which RAM fed a CPU->VRAM upload)
-void gpu_dma2_block(Core* core, uint32_t madr, int count, int to_gpu) {
+void GpuState::gpu_dma2_block(Core* core, uint32_t madr, int count, int to_gpu) {
   s_dma2++;
   uint32_t addr = madr & 0x1FFFFC;
   g_dma_src = addr;
   for (int i = 0; i < count; i++) { if (to_gpu) gpu_gp0(core, core->mem_r32(addr)); addr += 4; }
 }
+
+// ---- Public GPU API: thin free-function wrappers over the per-instance GpuState methods. Keep the
+// C-style call sites stable; each forwards to core->game->gpu (de-globalization, 2026-06-19). ----
+void gpu_gp0(Core* core, uint32_t w) { core->game->gpu.gpu_gp0(core, w); }
+void gpu_gp1(Core* core, uint32_t w) { core->game->gpu.gpu_gp1(w); }
+void gpu_dma2_linked_list(Core* core, uint32_t madr) { core->game->gpu.gpu_dma2_linked_list(core, madr); }
+void gpu_dma2_block(Core* core, uint32_t madr, int count, int to_gpu) { core->game->gpu.gpu_dma2_block(core, madr, count, to_gpu); }
+void gpu_present(Core* core) { core->game->gpu.gpu_present(core); }
+void gpu_present_ex(Core* core, int do_blit) { core->game->gpu.gpu_present_ex(core, do_blit); }
+void gpu_native_load_image(Core* core, int x, int y, int w, int h, uint32_t src) { core->game->gpu.gpu_native_load_image(core, x, y, w, h, src); }
+int  gpu_native_load_vram(Core* core, const char* path) { return core->game->gpu.gpu_native_load_vram(path); }
+void gpu_native_shot(Core* core, const char* path) { core->game->gpu.gpu_native_shot(path); }
+void gpu_repaint(Core* core) { core->game->gpu.gpu_repaint(); }
+int  gpu_frame_no(Core* core) { return core->game->gpu.gpu_frame_no(); }
+void gpu_provat_enable(Core* core) { core->game->gpu.gpu_provat_enable(); }
+uint16_t gpu_vram_peek(Core* core, int x, int y) { return core->game->gpu.gpu_vram_peek(x, y); }
+void gpu_vram_load(Core* core, const uint16_t* src) { core->game->gpu.gpu_vram_load(src); }
+void gpu_vram_save(Core* core, uint16_t* dst) { core->game->gpu.gpu_vram_save(dst); }
+void gpu_fps60_draw_poly(Core* core, int op, int nv, const int* xs, const int* ys, const int* us, const int* vs, const unsigned char* rs, const unsigned char* gs, const unsigned char* bs, int tp_x, int tp_y, int mode, int blend, int dither, int clut_x, int clut_y) { core->game->gpu.gpu_fps60_draw_poly(op, nv, xs, ys, us, vs, rs, gs, bs, tp_x, tp_y, mode, blend, dither, clut_x, clut_y); }
+void gpu_fps60_draw_sprite(Core* core, int op, int x, int y, int u0, int v0, int w, int h, int r, int g, int b, int tp_x, int tp_y, int mode, int blend, int clut_x, int clut_y) { core->game->gpu.gpu_fps60_draw_sprite(op, x, y, u0, v0, w, h, r, g, b, tp_x, tp_y, mode, blend, clut_x, clut_y); }
+void gpu_fps60_draw_line(Core* core, int x0, int y0, int x1, int y1, int r, int g, int b, int semi) { core->game->gpu.gpu_fps60_draw_line(x0, y0, x1, y1, r, g, b, semi); }
+void gpu_fps60_begin_interp(Core* core, int off_x, int off_y, int cx0, int cy0, int cx1, int cy1) { core->game->gpu.gpu_fps60_begin_interp(off_x, off_y, cx0, cy0, cx1, cy1); }
+void gpu_fps60_end_interp(Core* core) { core->game->gpu.gpu_fps60_end_interp(); }
+void gpu_fps60_blit_vram(Core* core, int dx, int dy) { core->game->gpu.gpu_fps60_blit_vram(dx, dy); }
+void gpu_fps60_blit_interp(Core* core, int dx, int dy) { core->game->gpu.gpu_fps60_blit_interp(dx, dy); }
+void gpu_fps60_shot_vram(Core* core, int dx, int dy, const char* path) { core->game->gpu.gpu_fps60_shot_vram(dx, dy, path); }
+void gpu_fps60_shot_interp(Core* core, int dx, int dy, const char* path) { core->game->gpu.gpu_fps60_shot_interp(dx, dy, path); }

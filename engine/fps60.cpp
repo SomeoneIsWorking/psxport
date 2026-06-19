@@ -344,14 +344,14 @@ void fps60_cap_line(int op, int x0, int y0, int x1, int y1, int r, int g, int b,
 // falls back to all-snap (clean, no artifacts, but no interpolation). UNBLOCK: tag draws by object at
 // the real render pass — cleanest via the planned native (VK) renderer, which knows what it draws.
 // See docs/journal.md later-86.
-void gpu_fps60_begin_interp(int, int, int, int, int, int);
-void gpu_fps60_end_interp(void);
-void gpu_fps60_draw_poly(int, int, const int*, const int*, const int*, const int*,
+void gpu_fps60_begin_interp(Core*, int, int, int, int, int, int);
+void gpu_fps60_end_interp(Core*);
+void gpu_fps60_draw_poly(Core*, int, int, const int*, const int*, const int*, const int*,
                        const unsigned char*, const unsigned char*, const unsigned char*,
                        int, int, int, int, int, int, int);
-void gpu_fps60_draw_sprite(int, int, int, int, int, int, int, int, int, int,
+void gpu_fps60_draw_sprite(Core*, int, int, int, int, int, int, int, int, int, int,
                          int, int, int, int, int, int);
-void gpu_fps60_draw_line(int, int, int, int, int, int, int, int);
+void gpu_fps60_draw_line(Core*, int, int, int, int, int, int, int, int);
 
 static int fps60_front_off_y(void) { return s_nB > 0 ? s_pB[0].off_y : 0; }
 
@@ -404,13 +404,13 @@ static int ocen_delta(uint32_t obj, int* dx, int* dy) {
 static int s_sdbg = -1;
 // Returns the number of prims actually translated (interpolated). 0 ⇒ nothing moved, so the caller
 // should present the REAL frame instead of this (lossy) re-rasterized in-between (see fps60_present).
-static long fps60_synthesize(void) {
+static long fps60_synthesize(Core* core) {
   if (s_nB == 0) return 0;
   if (s_sdbg < 0) s_sdbg = cfg_dbg("fps60") ? 1 : 0;
   long d_prims = 0, d_obj_translated = 0, d_snapped = 0, d_tagged = 0;  // sdbg: interpolation outcome
   long moved_count = 0;
   int fy = fps60_front_off_y();
-  gpu_fps60_begin_interp(0, fy, 0, fy, 319, fy + 239);     // target=s_interp, clear region, set env
+  gpu_fps60_begin_interp(core, 0, fy, 0, fy, 319, fy + 239);     // target=s_interp, clear region, set env
   for (int i = 0; i < s_nB; i++) {
     Prim* B = &s_pB[i];
     int xs[4], ys[4], us[4], vs[4]; unsigned char rs[4], gs[4], bs[4];
@@ -437,15 +437,15 @@ static long fps60_synthesize(void) {
     if (moved) moved_count++;
     if (s_sdbg) { d_prims++; if (moved) d_obj_translated++; else d_snapped++; if (B->nv >= 3) d_tagged++; }
     if (B->nv == 1)
-      gpu_fps60_draw_sprite(B->op, xs[0], ys[0], us[0], vs[0], B->w, B->h, rs[0], gs[0], bs[0],
+      gpu_fps60_draw_sprite(core, B->op, xs[0], ys[0], us[0], vs[0], B->w, B->h, rs[0], gs[0], bs[0],
                           B->tp_x, B->tp_y, B->mode, B->blend, B->clut_x, B->clut_y);
     else if (B->nv == 2)
-      gpu_fps60_draw_line(xs[0], ys[0], xs[1], ys[1], rs[0], gs[0], bs[0], B->blend);
+      gpu_fps60_draw_line(core, xs[0], ys[0], xs[1], ys[1], rs[0], gs[0], bs[0], B->blend);
     else
-      gpu_fps60_draw_poly(B->op, B->nv, xs, ys, us, vs, rs, gs, bs,
+      gpu_fps60_draw_poly(core, B->op, B->nv, xs, ys, us, vs, rs, gs, bs,
                         B->tp_x, B->tp_y, B->mode, B->blend, B->dither, B->clut_x, B->clut_y);
   }
-  gpu_fps60_end_interp();
+  gpu_fps60_end_interp(core);
   if (s_sdbg)
     fprintf(stderr, "[fps60-sdbg] f%ld prims=%ld  tagged=%ld  translated=%ld  snapped=%ld  "
             "rtp=%ld rtp_with_obj=%ld\n",
@@ -457,17 +457,17 @@ static long fps60_synthesize(void) {
 // PSXPORT_FPS60_SYNTH=frame — headless validation: at logic fence `frame`, dump A (prev real frame =
 // back buffer), the synthesized interpolated frame (from s_interp), and B (front buffer), so the
 // interpolation can be eyeballed (objects at intermediate positions) WITHOUT the live present path.
-void gpu_fps60_shot_vram(int, int, const char*);
-void gpu_fps60_shot_interp(int, int, const char*);
-static void fps60_synth_dumptest(void) {
+void gpu_fps60_shot_vram(Core*, int, int, const char*);
+void gpu_fps60_shot_interp(Core*, int, int, const char*);
+static void fps60_synth_dumptest(Core* core) {
   static int tf = -2;
   if (tf == -2) { const char* e = cfg_str("PSXPORT_FPS60_SYNTH"); tf = e ? atoi(e) : -1; }
   if (tf < 0 || s_fence != tf || s_nB == 0) return;
   int fy = fps60_front_off_y(), by = fy ^ 256;
-  gpu_fps60_shot_vram(0, by, "scratch/screenshots/fps60_A.ppm");        // previous real frame
-  fps60_synthesize();                                              // -> s_interp at front origin
-  gpu_fps60_shot_interp(0, fy, "scratch/screenshots/fps60_inbetween.ppm");
-  gpu_fps60_shot_vram(0, fy, "scratch/screenshots/fps60_B.ppm");        // current real frame
+  gpu_fps60_shot_vram(core, 0, by, "scratch/screenshots/fps60_A.ppm");  // previous real frame
+  fps60_synthesize(core);                                          // -> s_interp at front origin
+  gpu_fps60_shot_interp(core, 0, fy, "scratch/screenshots/fps60_inbetween.ppm");
+  gpu_fps60_shot_vram(core, 0, fy, "scratch/screenshots/fps60_B.ppm");  // current real frame
   fprintf(stderr, "[fps60] synth dumptest f%d: A/inbetween/B -> scratch/screenshots/fps60_*.ppm "
           "(front_y=%d back_y=%d, %d prims)\n", tf, fy, by, s_nB);
 }
@@ -484,20 +484,20 @@ static int s_prev_front_y = -1;    // last frame's front-buffer y (for flip dete
 static void fps60_present(Core* core) {
   static int win = -1;
   if (win < 0) { const char* w = cfg_str("PSXPORT_GPU_WINDOW"); win = (w && atoi(w) != 0) ? 1 : 0; }
-  void gpu_fps60_blit_vram(int, int); void gpu_fps60_blit_interp(int, int);
+  void gpu_fps60_blit_vram(Core*, int, int); void gpu_fps60_blit_interp(Core*, int, int);
   int fy = fps60_front_off_y();
   int flipped = (fy != s_prev_front_y);
   s_prev_front_y = fy;
   if (win && flipped && s_frame_geom > 0 && s_nB > 0) {
-    gpu_fps60_blit_vram(0, fy ^ 256);   // present the previous real frame (lives in the back buffer)
+    gpu_fps60_blit_vram(core, 0, fy ^ 256);   // present the previous real frame (lives in the back buffer)
     gpu_pace_subframe(core, 2);
-    long moved = fps60_synthesize(); // interpolated frame -> s_interp (front origin), VRAM untouched
+    long moved = fps60_synthesize(core); // interpolated frame -> s_interp (front origin), VRAM untouched
     // The re-rasterized in-between is LOSSY (re-draws only the captured GP0 subset; missing occluders/
     // fills/blend-order make hidden objects reappear → spurious copies). Only trust it when objects were
     // actually interpolated; otherwise present the REAL current frame (no artifacts). Real interpolation
     // needs object-tagged draws from the native renderer (see docs/journal.md later-86/87).
-    if (moved > 0) gpu_fps60_blit_interp(0, fy);
-    else           gpu_fps60_blit_vram(0, fy);   // real current frame
+    if (moved > 0) gpu_fps60_blit_interp(core, 0, fy);
+    else           gpu_fps60_blit_vram(core, 0, fy);   // real current frame
     gpu_pace_subframe(core, 2);
     gpu_present_ex(core, 0);                // bookkeeping only (watchdog, s_frame++, diagnostics; no blit)
   } else {
@@ -541,8 +541,8 @@ void fps60_frame_commit(Core* core) {
                                     // through the real GTE -> old-SXY -> interp-SXY table. BEFORE commit
                                     // (needs s_xB + the per-frame vertex pool, which commit resets).
   xobj_commit();                    // swap s_xA/s_xB + reset the per-frame local-vertex pool
-  if (s_sdbg) fps60_synthesize();   // per-frame interpolation stats (headless diagnostic only)
-  fps60_synth_dumptest();   // PSXPORT_FPS60_SYNTH: offline A/in-between/B dump (no live-path change)
+  if (s_sdbg) fps60_synthesize(core);   // per-frame interpolation stats (headless diagnostic only)
+  fps60_synth_dumptest(core);   // PSXPORT_FPS60_SYNTH: offline A/in-between/B dump (no live-path change)
   fps60_present(core);          // owns presentation: 60fps pair (prev + interpolated) or faithful single
 
   // Swap the prim double-buffer (so s_pB is clean next frame).

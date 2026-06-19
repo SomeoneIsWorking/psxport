@@ -6,15 +6,17 @@
 // classified SCENE display list (poly/rect/fill/VRAM-copy/env accounting for an ordering table). They
 // read the shared GPU state defined in gpu_native.c via gpu_native_internal.h; they never mutate VRAM.
 #include "gpu_native_internal.h"
+#include "game.h"
 #include <stdio.h>
 
 // Provenance query at an ABSOLUTE VRAM coord (the differ replays into the back buffer at off=(0,256),
 // so query e.g. vram y = display y + 256 — no double-buffer confound, unlike the live-run PROVAT).
 // Requires PSXPORT_PROVAT to be set so put_px_b stamped s_prov during replay.
-void gpu_prov_dump(int vx, int vy) {
-  uint16_t p = *vram(vx, vy);
-  uint32_t gid = s_prov[(vy & 511) * VRAM_W + (vx & 1023)];
-  ProvMeta* m = &s_provmeta[gid % PROVRING];
+void gpu_prov_dump(Core* core, int vx, int vy) {
+  GpuState& g = core->game->gpu;
+  uint16_t p = *g.vram(vx, vy);
+  uint32_t gid = g.s_prov[(vy & 511) * VRAM_W + (vx & 1023)];
+  ProvMeta* m = &g.s_provmeta[gid % PROVRING];
   fprintf(stderr, "[prov] vram(%d,%d)=%04X rgb(%d,%d,%d) ", vx, vy, p,
           (p & 31) << 3, ((p >> 5) & 31) << 3, ((p >> 10) & 31) << 3);
   if (!gid) { fprintf(stderr, "<never written>\n"); return; }
@@ -29,15 +31,17 @@ void gpu_prov_dump(int vx, int vy) {
 // last wrote each displayed pixel (op/clut/texpage/color/age). Writes to `out`. Used by both the
 // PSXPORT_PROVAT env path and the live debug server (dbg_server.c). Display space sidesteps the
 // double-buffer offset. Requires provenance stamping (PSXPORT_PROVAT or gpu_provat_enable()).
-void gpu_provat_display(FILE* out, int qx, int qy) {
+void gpu_provat_display(Core* core, FILE* out, int qx, int qy) {
+  GpuState& g = core->game->gpu;
+  const int s_frame = g.s_frame, s_disp_x = g.s_disp_x, s_disp_y = g.s_disp_y;
   fprintf(out, "[provat] f%d display (%d,%d) +/-3  (disp@%d,%d)\n", s_frame, qx, qy, s_disp_x, s_disp_y);
-  if (s_prov_on <= 0) { fprintf(out, "  (provenance was off; now enabled — re-query after a frame)\n");
-                        s_prov_on = 1; return; }
+  if (g.s_prov_on <= 0) { fprintf(out, "  (provenance was off; now enabled — re-query after a frame)\n");
+                        g.s_prov_on = 1; return; }
   for (int dy = -3; dy <= 3; dy++) for (int dx = -3; dx <= 3; dx++) {
     int vx = s_disp_x + qx + dx, vy = s_disp_y + qy + dy;
-    uint16_t p = *vram(vx, vy);
-    uint32_t gid = s_prov[(vy & 511) * VRAM_W + (vx & 1023)];
-    ProvMeta* m = &s_provmeta[gid % PROVRING];
+    uint16_t p = *g.vram(vx, vy);
+    uint32_t gid = g.s_prov[(vy & 511) * VRAM_W + (vx & 1023)];
+    ProvMeta* m = &g.s_provmeta[gid % PROVRING];
     int valid = (m->gid == gid && gid != 0);
     fprintf(out, "  (%+d,%+d) vram(%d,%d)=%04X rgb(%d,%d,%d)", dx, dy, vx, vy, p,
             (p & 31) << 3, ((p >> 5) & 31) << 3, ((p >> 10) & 31) << 3);
@@ -66,6 +70,7 @@ static int gp0_cmd_len(uint8_t op) {
   return 1;
 }
 void gpu_scene_dump(Core* core, FILE* out, uint32_t madr) {
+  const int s_frame = core->game->gpu.s_frame;
   uint32_t addr = madr & 0x1FFFFC;
   int npoly = 0, nrect = 0, nline = 0, nfill = 0, ncopy = 0, nup = 0, nenv = 0;
   fprintf(out, "[scene] f%d OT@0x%08X — classified display list:\n", s_frame, 0x80000000u | addr);
@@ -97,4 +102,4 @@ void gpu_scene_dump(Core* core, FILE* out, uint32_t madr) {
 }
 // On-demand scene dump for the live debug server (dbg_server.c): classify the CURRENT frame's
 // last-submitted OT (g_ot_madr, set by gpu_dma2_linked_list) into `out`.
-void gpu_scene_dump_now(Core* core, FILE* out) { gpu_scene_dump(core, out, g_ot_madr); }
+void gpu_scene_dump_now(Core* core, FILE* out) { gpu_scene_dump(core, out, core->game->gpu.g_ot_madr); }
