@@ -283,6 +283,35 @@ static void exec_simple(Core* c, uint32_t in) {
 #define CORO_SENTINEL 0xDEAD0000u
 void rec_dispatch_miss(Core* c, uint32_t addr);
 
+// ---- Interpreter burn-down tripwire (PSXPORT_INTERP_FUNCS=<path>) --------------------------------
+// The top-down native-port metric: record every UNIQUE guest function the interpreter actually runs
+// (i.e. a call target with NO native override / not a BIOS vector). When this set is empty across a
+// boot->first-cutscene run, that path is 100% native (zero interpreter). Each newly-seen function is
+// appended as `TO  <-from  count(so far=1)` so the file doubles as a representative call-edge map for
+// building the port tree top-down. Open-addressing set, line-buffered so a kill/timeout still yields
+// the list. Zero cost when the env var is unset.
+static FILE*    g_ifn_fp = 0;
+static int      g_ifn_init = 0;
+static uint32_t g_ifn_set[1 << 14];               // 16384 slots; addrs are non-zero so 0 == empty
+static int      g_ifn_count = 0;
+static void ifn_open_once(void) {
+  g_ifn_init = 1;
+  const char* p = cfg_str("PSXPORT_INTERP_FUNCS");
+  if (p && *p) { g_ifn_fp = fopen(p, "w"); if (!g_ifn_fp) perror(p);
+                 else setvbuf(g_ifn_fp, 0, _IOLBF, 0); }
+}
+static inline void ifn_record(uint32_t tgt, uint32_t from) {
+  if (!g_ifn_init) ifn_open_once();
+  if (!g_ifn_fp) return;
+  uint32_t h = (tgt * 2654435761u) >> 18, m = (1u << 14) - 1u;
+  for (uint32_t i = 0; i < (1u << 14); i++) {
+    uint32_t s = (h + i) & m;
+    if (g_ifn_set[s] == tgt) return;              // already recorded
+    if (g_ifn_set[s] == 0) { g_ifn_set[s] = tgt; g_ifn_count++;
+      fprintf(g_ifn_fp, "%08X  <-%08X  [#%d]\n", tgt, from, g_ifn_count); return; }
+  }
+}
+
 // Invoke a call target natively if it is an override/BIOS (returns 1), else 0 (caller jumps).
 static int coro_native_call(Core* c, uint32_t tgt) {
   OverrideFn ov = interp_override_for(tgt);       // unified address-keyed override (resident + overlay)
@@ -300,6 +329,7 @@ static int coro_native_call(Core* c, uint32_t tgt) {
     ncall_log('B', tgt, a0,a1,a2,a3, c->r[2], c->r[3]);
     return 1;
   }
+  ifn_record(tgt, c->r[31]);   // tripwire: the interpreter is about to run this (non-native) function
   return 0;
 }
 
