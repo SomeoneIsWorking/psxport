@@ -459,6 +459,18 @@ static void ov_game_main(Core* c) {
         usleep(15000);
       } }
     native_step_frame(c, f);   // one frame of deterministic guest work (steppable core; see fn above)
+    // PSXPORT_RAMHASH=1 — per-frame FNV-1a of guest RAM EXCLUDING the render pool [0xBE000,0xEC000)
+    // (which legitimately differs native-vs-recomp: the recomp terrain submit writes packets there, the
+    // native one writes host memory). Run twice — native terrain vs PSXPORT_NO_TERRAIN=1 (recomp) — and
+    // diff the [ramhash] logs to find the FIRST frame the GAMEPLAY state diverges (the submit_terrain
+    // leak out of the render pool). Then PSXPORT_RAMDUMP_FRAME=<that frame> both ways + cmp -l the dumps
+    // for the byte addrs (~0x800FDxxx). The port is deterministic, so two sequential runs are comparable.
+    { static int rh = -1; if (rh < 0) rh = cfg_on("PSXPORT_RAMHASH") ? 1 : 0;
+      if (rh) { uint64_t h = 1469598103934665603ull;
+        for (uint32_t o = 0; o < 0x200000u; o++) {
+          if (o >= 0xBE000u && o < 0xEC000u) continue;            // skip the render pool
+          h ^= c->ram[o]; h *= 1099511628211ull; }
+        fprintf(stderr, "[ramhash] f%u %016llx\n", f, (unsigned long long)h); } }
     // PSXPORT_SEQDBG — libsnd sequencer STATE trace (from SsSeqCalled @0x80090BD0): is any BGM
     // sequence OPEN/PLAYING? 0x801054B0=open-seq count, 0x80104C28=playing bitmask, 0x800AC424=tick
     // mode, 0x800AC42C=SsSeqCalled ptr. If these never go nonzero, no song is ever started → the
