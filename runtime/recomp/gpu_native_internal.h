@@ -14,6 +14,7 @@
 #include "native_dl.h"   // NativePrim (member type of GpuState::s_ndl_cur)
 
 struct Core;             // CPU/RAM handle (core.h); methods below take Core* but only by pointer
+struct Game;             // back-pointer target (game.h); blit_src reaches gpu_vk via game->core
 
 #define VRAM_W 1024
 #define VRAM_H 512
@@ -29,6 +30,12 @@ typedef struct { int x, y; uint8_t r, g, b; int u, v; } Vtx;   // rasterizer ver
 // Owned by Game (game.h has `GpuState gpu;`). Field names keep their historical `s_`/`g_` spelling so
 // the rasterizer bodies are unchanged by the move (they now read members via implicit `this`).
 struct GpuState {
+  Game* game = nullptr;   // set by Game(); blit_src uses &game->core to reach the gpu_vk present wrapper
+
+  // Backdrop-vs-HUD / gameplay-frame discrimination (read by the gpu_vk present path via Core).
+  int s_seen3d = 0;       // has any GTE-projected (3D) prim been teed yet this frame? (else 2D backdrop band)
+  int s_prev_had3d = 0;   // did LAST frame draw any 3D? = "this is a gameplay (3D) frame" (wide pillarbox gate)
+
   // VRAM (textures + framebuffers) and the fps60 in-between buffer
   uint16_t  s_vram[VRAM_W * VRAM_H] = {};
   uint16_t  s_interp[VRAM_W * VRAM_H] = {};

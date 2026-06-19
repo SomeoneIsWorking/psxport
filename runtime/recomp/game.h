@@ -13,6 +13,7 @@
 #pragma once
 #include "core.h"
 #include "gpu_native_internal.h"   // GpuState — the native GPU's per-instance render machine state
+#include "gpu_vk_internal.h"       // GpuVkState — the Vulkan present backend's per-instance render state
 #include <stdint.h>
 #include <setjmp.h>
 
@@ -82,6 +83,10 @@ public:
   FmvState    fmv;
   StubState   stub;
   GpuState    gpu;   // native GPU: VRAM + draw/display state + the rasterizer (gpu_native.cpp)
+  GpuVkState  gpu_vk;// Vulkan present backend: per-frame batch/depth/dirty/present state (gpu_vk.cpp)
 
-  Game() { core.game = this; }
+  // core.game / gpu.game / gpu_vk.game are back-pointers so a subsystem holding one of those handles can
+  // reach the rest of the machine (e.g. blit_src -> gpu_vk via gpu.game; frame_via_fb -> s_seen3d via
+  // gpu_vk.game->core). Set once here so no file-scope global is needed.
+  Game() { core.game = this; gpu.game = this; gpu_vk.game = this; }
 };

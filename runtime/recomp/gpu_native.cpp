@@ -1,5 +1,6 @@
 #include "core.h"
 #include "game.h"
+#include "gpu_vk.h"   // Core*-threaded VK present API (de-globalized R2)
 #include "c_subsys.h"
 // Native GPU — PC rendering of the game's own draw primitives (NOT PSX-GPU emulation).
 //
@@ -32,8 +33,6 @@ extern int g_fps60_on;           // fps60: capture/synth enabled (PSXPORT_FPS60)
 
 // ---- Draw state (set by GP0 env commands E1..E6) ------------------------------------
 int gpu_vk_enabled(void);                                    // gpu_vk.c (declared early for the gp0 tee)
-void gpu_vk_dirty(int, int, int, int);                       // mark a SW-written VRAM region to mirror to VK
-void gpu_vk_set_order(unsigned idx);                         // OT submission order of the next VK prim (depth)
 static int s_reddbg;              // PSXPORT_REDDBG: dark-red output anomaly probe
 
 // ---- Display control (GP1) ----------------------------------------------------------
@@ -41,17 +40,11 @@ static int s_reddbg;              // PSXPORT_REDDBG: dark-red output anomaly pro
 
 static int g_log = 0;             // PSXPORT_GPU_LOG
 static long s_prims = 0;          // primitives drawn since last present
-static int s_seen3d = 0;          // has any GTE-projected (3D) prim been teed yet this frame? Non-3D
-                                  // prims before the first 3D one are backdrop (water/sky) -> FAR band;
-                                  // after, they are HUD/UI -> near overlay band (native-depth bands).
-static int s_prev_had3d = 0;      // did LAST frame draw any 3D? = "this is a gameplay (3D) frame". Used to
-                                  // pillarbox genuine-wide on fullscreen-2D screens (SCEA/FMV/title/menu):
-                                  // widen only gameplay; 2D-only frames present 4:3 (the PC-game behavior).
-int gpu_had3d_last_frame(void) { return s_prev_had3d; }
-// THIS frame's 3D status (the OT walk that tees geometry runs before present, so s_seen3d is final by
-// the time the present/compose pipeline queries it — no 1-frame lag). A frame with no tee'd 3D is a
-// VRAM-resident 2D screen (SCEA/FMV/title/menu); it has nothing in the scaled scratch FB.
-int gpu_seen3d_this_frame(void) { return s_seen3d; }
+// s_seen3d / s_prev_had3d are per-instance GpuState members now (gpu_native_internal.h). The OT walk
+// tees geometry before present, so s_seen3d is final by the time the present/compose path queries it.
+// A frame with no tee'd 3D is a VRAM-resident 2D screen (SCEA/FMV/title/menu) — nothing in the scratch FB.
+int gpu_had3d_last_frame(Core* core) { return core->game->gpu.s_prev_had3d; }
+int gpu_seen3d_this_frame(Core* core) { return core->game->gpu.s_seen3d; }
 static long s_gp0_words = 0, s_dma2 = 0;  // diagnostics: GP0 words + DMA2 triggers per frame
 long g_nd_3d = 0, g_nd_2d = 0;   // Phase-2 native-depth diag: prims drawn with real depth vs OT-order band
 long g_nd2d_hist[256];           // op histogram of prims that fall to the 2D band (ndepth diag)
@@ -369,7 +362,7 @@ void GpuState::gpu_native_load_image(Core* core, int x, int y, int w, int h, uin
   // SW s_vram. The VK opaque pass samples a full s_vram snapshot so it still saw them, but the VK
   // SEMI pass samples the post-opaque s_tex (dirty regions only) — so a SEMI-transparent textured
   // prim whose texture arrived here read zeros and discarded (the invisible in-game puddle water).
-  if (gpu_vk_enabled()) gpu_vk_dirty(x, y, w, h);
+  if (gpu_vk_enabled()) gpu_vk_dirty(core, x, y, w, h);
   if (cfg_dbg("upload"))
     fprintf(stderr, "[upload] f%d NATIVE dest=(%d,%d) %dx%d src=0x%08X\n", s_frame, x, y, w, h, src);
 }
@@ -530,13 +523,7 @@ void GpuState::gp0_exec(Core* core) {
     // untextured -> opaque batch; semi -> semi batch (mode 3 = untextured flat). VK owns these now.
     if (gpu_vk_enabled()) {
       unsigned ord_idx = s_prim_order++;
-      gpu_vk_set_order(ord_idx);           // OT submission order -> depth (preserve opaque/semi order)
-      void gpu_vk_draw_tritri(const int*,const int*,const int*,const int*,const unsigned char*,
-                              const unsigned char*,const unsigned char*,int,int,int,int,int,int,int,int,int,int,int,int,int,int);
-      void gpu_vk_draw_semi(const int*,const int*,const int*,const int*,const unsigned char*,
-                            const unsigned char*,const unsigned char*,int,int,int,int,int,int,int,int,int,int,int,int,int,int,int);
-      void gpu_vk_set_vd(const float*); void gpu_vk_set_order_2d(unsigned);
-      void gpu_vk_set_vd_n(const float*); void gpu_vk_set_order_2d_n(unsigned);
+      gpu_vk_set_order(core, ord_idx);           // OT submission order -> depth (preserve opaque/semi order)
       int xs[4], ys[4], us[4], vs[4]; unsigned char rs[4], gs[4], bs[4];
       for (int i = 0; i < nv; i++) { xs[i]=v[i].x+s_off_x; ys[i]=v[i].y+s_off_y; us[i]=v[i].u; vs[i]=v[i].v;
                                      rs[i]=v[i].r; gs[i]=v[i].g; bs[i]=v[i].b; }
@@ -567,10 +554,9 @@ void GpuState::gp0_exec(Core* core) {
         }
         if (is3d) s_seen3d = 1;            // a projected world prim has now been drawn this frame
         if (!is3d) {                        // 2D prim: backdrop (before any 3D = FAR band) vs HUD (after)
-          void gpu_vk_set_order_2d_bg(unsigned); void gpu_vk_set_order_2d_bg_n(unsigned);
           int bg = !s_seen3d;
-          if (s_sbs) { if (bg) gpu_vk_set_order_2d_bg_n(ord_idx); else gpu_vk_set_order_2d_n(ord_idx); }
-          else       { if (bg) gpu_vk_set_order_2d_bg(ord_idx);   else gpu_vk_set_order_2d(ord_idx); }
+          if (s_sbs) { if (bg) gpu_vk_set_order_2d_bg_n(core, ord_idx); else gpu_vk_set_order_2d_n(core, ord_idx); }
+          else       { if (bg) gpu_vk_set_order_2d_bg(core, ord_idx);   else gpu_vk_set_order_2d(core, ord_idx); }
         }
         if (!is3d && cfg_dbg("ndepth")) {   // categorize what lands in the 2D band: op + gouraud/quad/tex
           extern long g_nd2d_hist[256]; g_nd2d_hist[op]++; }
@@ -586,24 +572,24 @@ void GpuState::gp0_exec(Core* core) {
         if (s_ndepth && !is3d && gpu_vk_wide_engine() && s_prev_had3d) {  // 2D widen only on gameplay frames
           int o = s_da_x0, ww = gpu_vk_wide_engine_w();
           for (int i = 0; i < nv; i++) xs[i] = o + (xs[i] - o) * ww / 320; } }
-      #define SBS_OR_ND_SETVD(p) do { if (is3d) { if (s_sbs) gpu_vk_set_vd_n(p); else gpu_vk_set_vd(p); } } while (0)
+      #define SBS_OR_ND_SETVD(p) do { if (is3d) { if (s_sbs) gpu_vk_set_vd_n(core, p); else gpu_vk_set_vd(core, p); } } while (0)
       if (semi) {
-        { void gpu_vk_semi_group(int,int,int,int);   // OT-order grouping (overlap -> fresh fb snapshot)
+        {   // OT-order grouping (overlap -> fresh fb snapshot)
           int bx0=xs[0],by0=ys[0],bx1=xs[0],by1=ys[0];
           for (int i=1;i<nv;i++){ if(xs[i]<bx0)bx0=xs[i]; if(xs[i]>bx1)bx1=xs[i]; if(ys[i]<by0)by0=ys[i]; if(ys[i]>by1)by1=ys[i]; }
-          gpu_vk_semi_group(bx0, by0, bx1, by1); }
+          gpu_vk_semi_group(core, bx0, by0, bx1, by1); }
         SBS_OR_ND_SETVD(dep);
-        gpu_vk_draw_semi(xs, ys, us, vs, rs, gs, bs, s_tp_x, s_tp_y, mode, rw, s_clut_x, s_clut_y,
+        gpu_vk_draw_semi(core, xs, ys, us, vs, rs, gs, bs, s_tp_x, s_tp_y, mode, rw, s_clut_x, s_clut_y,
                          s_tw_mx, s_tw_my, s_tw_ox, s_tw_oy, s_da_x0, s_da_y0, s_da_x1, s_da_y1, s_tp_blend);
         if (nv == 4) { SBS_OR_ND_SETVD(&dep[1]);
-          gpu_vk_draw_semi(&xs[1], &ys[1], &us[1], &vs[1], &rs[1], &gs[1], &bs[1], s_tp_x, s_tp_y, mode, rw,
+          gpu_vk_draw_semi(core, &xs[1], &ys[1], &us[1], &vs[1], &rs[1], &gs[1], &bs[1], s_tp_x, s_tp_y, mode, rw,
                          s_clut_x, s_clut_y, s_tw_mx, s_tw_my, s_tw_ox, s_tw_oy, s_da_x0, s_da_y0, s_da_x1, s_da_y1, s_tp_blend); }
       } else {
         SBS_OR_ND_SETVD(dep);
-        gpu_vk_draw_tritri(xs, ys, us, vs, rs, gs, bs, s_tp_x, s_tp_y, mode, rw, s_clut_x, s_clut_y,
+        gpu_vk_draw_tritri(core, xs, ys, us, vs, rs, gs, bs, s_tp_x, s_tp_y, mode, rw, s_clut_x, s_clut_y,
                            s_tw_mx, s_tw_my, s_tw_ox, s_tw_oy, s_da_x0, s_da_y0, s_da_x1, s_da_y1);
         if (nv == 4) { SBS_OR_ND_SETVD(&dep[1]);
-          gpu_vk_draw_tritri(&xs[1], &ys[1], &us[1], &vs[1], &rs[1], &gs[1], &bs[1], s_tp_x, s_tp_y, mode, rw,
+          gpu_vk_draw_tritri(core, &xs[1], &ys[1], &us[1], &vs[1], &rs[1], &gs[1], &bs[1], s_tp_x, s_tp_y, mode, rw,
                            s_clut_x, s_clut_y, s_tw_mx, s_tw_my, s_tw_ox, s_tw_oy, s_da_x0, s_da_y0, s_da_x1, s_da_y1); }
       }
     }
@@ -685,20 +671,14 @@ void GpuState::gp0_exec(Core* core) {
     // VK backend (M5): tee rects/sprites as two triangles (opaque or semi; mode 3 = untextured solid).
     if (gpu_vk_enabled()) {
       unsigned ord_idx = s_prim_order++;
-      gpu_vk_set_order(ord_idx);          // OT submission order -> depth (preserve opaque/semi order)
+      gpu_vk_set_order(core, ord_idx);          // OT submission order -> depth (preserve opaque/semi order)
       // sprites/rects are screen-space (no GTE projection) -> 2D overlay band under PSXPORT_NATIVE_DEPTH.
       { static int s_ndepth = -1, s_sbs = -1; int native_depth_on(void);
         if (s_ndepth < 0) s_ndepth = native_depth_on();
         if (s_sbs < 0) s_sbs = cfg_on("PSXPORT_SBS") ? 1 : 0;
-        void gpu_vk_set_order_2d(unsigned); void gpu_vk_set_order_2d_n(unsigned);
-        void gpu_vk_set_order_2d_bg(unsigned); void gpu_vk_set_order_2d_bg_n(unsigned);
         int bg = !s_seen3d;   // sprite/rect before any 3D prim = backdrop -> FAR band; after = HUD
-        if (s_sbs) { if (bg) gpu_vk_set_order_2d_bg_n(ord_idx); else gpu_vk_set_order_2d_n(ord_idx); }
-        else if (s_ndepth) { if (bg) gpu_vk_set_order_2d_bg(ord_idx); else gpu_vk_set_order_2d(ord_idx); } }
-      void gpu_vk_draw_tritri(const int*,const int*,const int*,const int*,const unsigned char*,
-                              const unsigned char*,const unsigned char*,int,int,int,int,int,int,int,int,int,int,int,int,int,int);
-      void gpu_vk_draw_semi(const int*,const int*,const int*,const int*,const unsigned char*,
-                            const unsigned char*,const unsigned char*,int,int,int,int,int,int,int,int,int,int,int,int,int,int,int);
+        if (s_sbs) { if (bg) gpu_vk_set_order_2d_bg_n(core, ord_idx); else gpu_vk_set_order_2d_n(core, ord_idx); }
+        else if (s_ndepth) { if (bg) gpu_vk_set_order_2d_bg(core, ord_idx); else gpu_vk_set_order_2d(core, ord_idx); } }
       int X = x + s_off_x, Y = y + s_off_y;
       int XL = X, XR = X + w;
       // Widescreen 2D handling. Genuine engine-wide widens the 3D world at the projection (OFX); 2D
@@ -716,15 +696,15 @@ void GpuState::gp0_exec(Core* core) {
       unsigned char qr[4]={cr,cr,cr,cr}, qg[4]={cg,cg,cg,cg}, qb[4]={cb,cb,cb,cb};
       int mode = textured ? s_tp_mode : 3, rw = op & 1;
       if (semi) {
-        { void gpu_vk_semi_group(int,int,int,int); gpu_vk_semi_group(X, Y, X+w, Y+h); }  // OT-order grouping
-        gpu_vk_draw_semi(qx, qy, qu, qv, qr, qg, qb, s_tp_x, s_tp_y, mode, rw, s_clut_x, s_clut_y,
+        { gpu_vk_semi_group(core, X, Y, X+w, Y+h); }  // OT-order grouping
+        gpu_vk_draw_semi(core, qx, qy, qu, qv, qr, qg, qb, s_tp_x, s_tp_y, mode, rw, s_clut_x, s_clut_y,
                          s_tw_mx, s_tw_my, s_tw_ox, s_tw_oy, s_da_x0, s_da_y0, s_da_x1, s_da_y1, s_tp_blend);
-        gpu_vk_draw_semi(&qx[1], &qy[1], &qu[1], &qv[1], &qr[1], &qg[1], &qb[1], s_tp_x, s_tp_y, mode, rw,
+        gpu_vk_draw_semi(core, &qx[1], &qy[1], &qu[1], &qv[1], &qr[1], &qg[1], &qb[1], s_tp_x, s_tp_y, mode, rw,
                          s_clut_x, s_clut_y, s_tw_mx, s_tw_my, s_tw_ox, s_tw_oy, s_da_x0, s_da_y0, s_da_x1, s_da_y1, s_tp_blend);
       } else {
-        gpu_vk_draw_tritri(qx, qy, qu, qv, qr, qg, qb, s_tp_x, s_tp_y, mode, rw, s_clut_x, s_clut_y,
+        gpu_vk_draw_tritri(core, qx, qy, qu, qv, qr, qg, qb, s_tp_x, s_tp_y, mode, rw, s_clut_x, s_clut_y,
                            s_tw_mx, s_tw_my, s_tw_ox, s_tw_oy, s_da_x0, s_da_y0, s_da_x1, s_da_y1);
-        gpu_vk_draw_tritri(&qx[1], &qy[1], &qu[1], &qv[1], &qr[1], &qg[1], &qb[1], s_tp_x, s_tp_y, mode, rw,
+        gpu_vk_draw_tritri(core, &qx[1], &qy[1], &qu[1], &qv[1], &qr[1], &qg[1], &qb[1], s_tp_x, s_tp_y, mode, rw,
                            s_clut_x, s_clut_y, s_tw_mx, s_tw_my, s_tw_ox, s_tw_oy, s_da_x0, s_da_y0, s_da_x1, s_da_y1);
       }
     }
@@ -735,7 +715,7 @@ void GpuState::gp0_exec(Core* core) {
     int x = xy & 0x3F0, y = (xy >> 16) & 0x1FF, w = ((wh & 0x3FF) + 0xF) & ~0xF, h = (wh >> 16) & 0x1FF;
     uint16_t col = to555(cr, cg, cb);
     for (int dy = 0; dy < h; dy++) for (int dx = 0; dx < w; dx++) *vram(x + dx, y + dy) = col;
-    if (gpu_vk_enabled()) gpu_vk_dirty(x, y, w, h);   // mirror fill to VK
+    if (gpu_vk_enabled()) gpu_vk_dirty(core, x, y, w, h);   // mirror fill to VK
   } else if (op >= 0x40 && op <= 0x5F) {     // line / poly-line (flat or gouraud)
     int semi = (op & 0x02) ? 1 : 0, gouraud = (op & 0x10) ? 1 : 0;
     // Collect the vertex list from s_fifo (cmd carries v0's colour). Single lines have 2 verts;
@@ -749,10 +729,6 @@ void GpuState::gp0_exec(Core* core) {
       if (i >= s_fcount) break;
       vx[nv] = cx(s_fifo[i]); vy[nv] = cy(s_fifo[i]); vr[nv] = r; vg[nv] = g; vb[nv] = b; nv++; i++;
     }
-    void gpu_vk_draw_tritri(const int*,const int*,const int*,const int*,const unsigned char*,
-                            const unsigned char*,const unsigned char*,int,int,int,int,int,int,int,int,int,int,int,int,int,int);
-    void gpu_vk_draw_semi(const int*,const int*,const int*,const int*,const unsigned char*,
-                          const unsigned char*,const unsigned char*,int,int,int,int,int,int,int,int,int,int,int,int,int,int,int);
     for (int s = 0; s + 1 < nv; s++) {        // flat colour = start vertex
       if (!gpu_vk_enabled())
         raster_line(vx[s], vy[s], vx[s+1], vy[s+1], vr[s], vg[s], vb[s], semi);
@@ -762,14 +738,14 @@ void GpuState::gp0_exec(Core* core) {
         int xa[4]={x0,x1,x0+ox,x1+ox}, ya[4]={y0,y1,y0+oy,y1+oy}, zu[4]={0,0,0,0};
         unsigned char rr[4]={vr[s],vr[s+1],vr[s],vr[s+1]}, gg[4]={vg[s],vg[s+1],vg[s],vg[s+1]}, bb[4]={vb[s],vb[s+1],vb[s],vb[s+1]};
         int o1[3]={0,1,2}, o2[3]={1,2,3};      // tris (p0,p1,p0') and (p1,p0',p1')
-        if (semi) { void gpu_vk_semi_group(int,int,int,int);   // OT-order grouping for the segment quad
+        if (semi) {   // OT-order grouping for the segment quad
           int bx0=x0<x1?x0:x1, bx1=x0<x1?x1:x0, by0=y0<y1?y0:y1, by1=y0<y1?y1:y0;
-          gpu_vk_semi_group(bx0, by0, bx1+ox, by1+oy); }
+          gpu_vk_semi_group(core, bx0, by0, bx1+ox, by1+oy); }
         for (int t = 0; t < 2; t++) { int* o = t ? o2 : o1;
           int X[3]={xa[o[0]],xa[o[1]],xa[o[2]]}, Y[3]={ya[o[0]],ya[o[1]],ya[o[2]]};
           unsigned char R[3]={rr[o[0]],rr[o[1]],rr[o[2]]}, G[3]={gg[o[0]],gg[o[1]],gg[o[2]]}, B[3]={bb[o[0]],bb[o[1]],bb[o[2]]};
-          if (semi) gpu_vk_draw_semi(X,Y,zu,zu,R,G,B, 0,0,3,0,0,0, 0,0,0,0, s_da_x0,s_da_y0,s_da_x1,s_da_y1, s_tp_blend);
-          else      gpu_vk_draw_tritri(X,Y,zu,zu,R,G,B, 0,0,3,0,0,0, 0,0,0,0, s_da_x0,s_da_y0,s_da_x1,s_da_y1);
+          if (semi) gpu_vk_draw_semi(core, X,Y,zu,zu,R,G,B, 0,0,3,0,0,0, 0,0,0,0, s_da_x0,s_da_y0,s_da_x1,s_da_y1, s_tp_blend);
+          else      gpu_vk_draw_tritri(core, X,Y,zu,zu,R,G,B, 0,0,3,0,0,0, 0,0,0,0, s_da_x0,s_da_y0,s_da_x1,s_da_y1);
         }
       }
       if (g_fps60_on) {                       // fps60: tee each segment (snaps; obj 0) so the interp
@@ -897,7 +873,7 @@ void GpuState::gpu_gp0(Core* core, uint32_t w) {
       s_xfer_w = ((s_fifo[2] & 0x3FF) ? (s_fifo[2] & 0x3FF) : 1024);
       s_xfer_h = (((s_fifo[2] >> 16) & 0x1FF) ? ((s_fifo[2] >> 16) & 0x1FF) : 512);
       s_xfer_px = 0; s_xfer = 1;
-      if (gpu_vk_enabled()) gpu_vk_dirty(s_xfer_x, s_xfer_y, s_xfer_w, s_xfer_h);   // mirror upload to VK
+      if (gpu_vk_enabled()) gpu_vk_dirty(core, s_xfer_x, s_xfer_y, s_xfer_w, s_xfer_h);   // mirror upload to VK
       clutwatch_xfer("A0", s_xfer_x, s_xfer_y, s_xfer_w, s_xfer_h);
       if (cfg_dbg("upload")) {
         fprintf(stderr, "[upload] f%d A0 dest=(%d,%d) %dx%d src=0x%08X\n",
@@ -915,7 +891,7 @@ void GpuState::gpu_gp0(Core* core, uint32_t w) {
       int dx = s_fifo[2] & 0x3FF, dy = (s_fifo[2] >> 16) & 0x1FF;
       int w2 = s_fifo[3] & 0x3FF, h2 = (s_fifo[3] >> 16) & 0x1FF;
       for (int y = 0; y < h2; y++) for (int x = 0; x < w2; x++) *vram(dx + x, dy + y) = *vram(sx + x, sy + y);
-      if (gpu_vk_enabled()) gpu_vk_dirty(dx, dy, w2, h2);   // mirror VRAM->VRAM copy to VK
+      if (gpu_vk_enabled()) gpu_vk_dirty(core, dx, dy, w2, h2);   // mirror VRAM->VRAM copy to VK
       clutwatch_xfer("80copy", dx, dy, w2, h2);
       if (texwatch_overlap(dx, dy, w2, h2)) {
         fprintf(stderr, "[texwatch] f%d 80copy src=(%d,%d) dest=(%d,%d) %dx%d node=0x%08X words=%08X,%08X,%08X,%08X\n",
@@ -1000,11 +976,10 @@ void GpuState::ensure_window() {
 // Blit one display-sized region [sx,sy .. +disp_w,disp_h] of `src` (s_vram or s_interp) to the window,
 // fit to a 4:3 rect with black bars — never stretched (correct PSX pixel aspect for 2D / FMV / any res).
 int  gpu_vk_enabled(void);                                   // gpu_vk.c — Vulkan present backend (M0)
-void gpu_vk_present(const uint16_t*, int, int, int, int);
 void GpuState::blit_src(const uint16_t* src, int sx, int sy) {
   // VK first: headless offscreen VK (PSXPORT_VK_HEADLESS) renders without a window, so it must run even
   // when win_enabled() is false. The SW window path below needs a real window.
-  if (gpu_vk_enabled()) { gpu_vk_present(src, sx, sy, s_disp_w, s_disp_h); return; }  // HW path (incl. headless)
+  if (gpu_vk_enabled()) { gpu_vk_present(&game->core, src, sx, sy, s_disp_w, s_disp_h); return; }  // HW path (incl. headless)
   if (!win_enabled()) return;
   ensure_window();
   static uint32_t buf[VRAM_W * VRAM_H];
@@ -1217,7 +1192,7 @@ void GpuState::gpu_present_ex(Core* core, int do_blit) {
       fclose(f);
     }
   }
-  { void gpu_vk_dump(int,int,int,int,int); gpu_vk_dump(s_disp_x, s_disp_y, s_disp_w, s_disp_h, s_frame); }  // PSXPORT_VK_SHOT
+  { gpu_vk_dump(core, s_disp_x, s_disp_y, s_disp_w, s_disp_h, s_frame); }  // PSXPORT_VK_SHOT
   { static int fa = -2, fb = -2;   // PSXPORT_FADEDBG="a:b": per-frame brightness/draw log over [a,b]
     if (fa == -2) { const char* e = cfg_str("PSXPORT_FADEDBG"); fa = fb = -1;
       if (e) { fa = atoi(e); const char* col = strchr(e, ':'); fb = col ? atoi(col + 1) : fa + 200; } }
@@ -1226,7 +1201,7 @@ void GpuState::gpu_present_ex(Core* core, int do_blit) {
               s_frame, s_disp_x, s_disp_y, s_fade_lasty, s_fade_maxc, s_fade_npoly, s_fade_nsemi,
               s_fade_semimin == 999 ? -1 : s_fade_semimin, s_fade_semimax, s_fade_bigsemi); }
   s_fade_maxc = 0; s_fade_npoly = 0; s_fade_nsemi = 0; s_fade_semimax = -1; s_fade_semimin = 999; s_fade_bigsemi = 0;
-  { void gpu_vk_frame_end(const uint16_t*, int); gpu_vk_frame_end(s_vram, s_frame); }  // VK: diff + batch reset
+  { gpu_vk_frame_end(core, s_vram, s_frame); }  // VK: diff + batch reset
   s_frame++; s_prims = 0; s_gp0_words = 0; s_dma2 = 0;
   s_prim_order = 0;   // restart the per-frame OT submission order (VK depth) for the next frame
   s_prev_had3d = s_seen3d;   // remember whether this frame was a gameplay (3D) frame (wide pillarbox gate)

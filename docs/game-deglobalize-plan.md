@@ -101,9 +101,24 @@ Flag init-once-then-read tables case by case; when in doubt, move it (safe).
   threaded). Diagnostics/host-singletons stay shared per policy (s_prims, s_fade_*, s_cw_*, texwatch,
   s_sbs_on, SDL s_win/s_ren/s_tex, g_nd_*). Gates: frame-50 RAM 0-diff vs baseline ✓ AND field-frame 520
   VK render byte-identical pre-vs-post ✓.
-- **Next (order):** RENDER SUBSYSTEM (see "Render-subsystem migration" below) — ~~gpu_native~~(R1 done) →
-  gpu_vk (R2, thread Core* through the present/draw pipeline; move s_seen3d/s_prev_had3d) →
-  gpu_trace → gpu_debug — THEN dbg_server → native_boot → gte/spu/mdec (Beetle FORK) → engine modules
+- **R2 (done):** gpu_vk.cpp per-frame render state → `GpuVkState` on Game (`core->game->gpu_vk`). MOVED
+  (now members, `s_`-spelling kept so bodies are byte-unchanged): batch counters `s_tri_n`/`s_tex_n`/
+  `s_semi_n`, current prim depth/order `s_vd`/`s_vdn`/`s_cur_ord`/`s_cur_ordn`, semi grouping `s_semi_grp[]`/
+  `s_semi_grp_n`/`s_sg_*`, dirty regions `s_dirty[]`/`s_dirty_n`, present origin `s_present_sx/sy`, diag
+  snapshots `s_dbg_*`/`s_last_*`. The touching fns are now **GpuVkState methods** (scripted, body-preserving:
+  scratch/r2_gpu_vk.py) — set_*/semi_group/stats/dirty/present/draw_*/shot/dump/frame_end/tritest + the
+  internal helpers panel_upload/panel_render/ssao_pass/tex_emit/tri_*_readback/frame_via_fb. Public C API
+  kept stable via thin **wrappers** taking `Core*` (gpu_vk.h, the single decl site — scattered local
+  forward-decls in the gp0 tee dropped). Panel/TexVtx made named structs so they can be forward-declared in
+  the header. **`s_seen3d`/`s_prev_had3d` (R1 deferral) moved onto GpuState** (writer side stays byte-
+  identical); `gpu_seen3d_this_frame`/`gpu_had3d_last_frame` now take `Core*`; `frame_via_fb` reads them via
+  a `Game*` back-pointer added to GpuVkState (and to GpuState, used by `blit_src` → `&game->core`). Threaded
+  callers: gpu_native gp0 tee + present (have `core`), boot.cpp (tritest moved AFTER `new Game()`, passes
+  `c`), dbg_server (shot/stats take `s_ctx`). STAYS SHARED (documented): all Vulkan device/swapchain/
+  pipeline/buffer handles (one VK device per process), config-caches (s_vk_on/s_sbs/sbs_on), `s_rawdump_*`.
+  Gates: frame-50 RAM 0-diff vs baseline ✓ AND field-frame 520 VK render byte-identical pre-vs-post ✓.
+- **Next (order):** ~~gpu_native~~(R1) → ~~gpu_vk~~(R2 done) → gpu_trace → gpu_debug (audit; likely diag-only,
+  stay shared) — THEN dbg_server → native_boot → gte/spu/mdec (Beetle FORK) → engine modules
   (fps60, engine_submit, native_path*, game_tomba2). (mem 1 static, boot 1 — sweep at the end.)
   DONE/skip: timing, cd_override, hle, pad_input, native_fmv, native_stub, interp (done); sync_overrides,
   threads, memcard (only config-caches).

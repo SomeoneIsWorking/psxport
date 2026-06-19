@@ -53,8 +53,8 @@ int  gpu_sbs_get(void);
 void gpu_sbs_set(int on);
 int  gpu_frame_no(Core* core);
 int  gpu_vk_enabled(void);
-void gpu_vk_shot(const char* path);
-void gpu_vk_stats(int* tri, int* tex, int* semi);
+void gpu_vk_shot(Core* core, const char* path);
+void gpu_vk_stats(Core* core, int* tri, int* tex, int* semi);
 void gpu_vk_vram_region(const char* path, int x, int y, int w, int h);
 void gpu_vk_rawdump_arm(const char* path, int frame);
 // pad input (pad_input.c) — lets the debug server DRIVE the game (press/release/tap/hold)
@@ -204,15 +204,15 @@ static void dbg_exec(FILE* out, const char* line) {
     // display region. (Under VK the SW s_vram has only uploads, not the rasterized geometry.)
     char path[256] = "scratch/screenshots/dbg.ppm";
     sscanf(line, "%*s %255s", path);
-    if (gpu_vk_enabled()) { gpu_vk_shot(path); fprintf(out, "shot (VK) -> %s\n", path); }
+    if (gpu_vk_enabled()) { gpu_vk_shot(s_ctx, path); fprintf(out, "shot (VK) -> %s\n", path); }
     else                  { gpu_native_shot(s_ctx, path); fprintf(out, "shot (SW) -> %s\n", path); }
   } else if (!strcmp(cmd, "vkshot")) {
     char path[256] = "scratch/screenshots/dbg_vk.ppm";
     sscanf(line, "%*s %255s", path);
-    gpu_vk_shot(path);
+    gpu_vk_shot(s_ctx, path);
     fprintf(out, "vkshot -> %s\n", path);
   } else if (!strcmp(cmd, "vkstats")) {
-    int tri = 0, tex = 0, semi = 0; gpu_vk_stats(&tri, &tex, &semi);
+    int tri = 0, tex = 0, semi = 0; gpu_vk_stats(s_ctx, &tri, &tex, &semi);
     fprintf(out, "vk last-frame verts: flat-tri=%d (%d tris) textured=%d (%d tris) semi=%d (%d tris)\n",
             tri, tri/3, tex, tex/3, semi, semi/3);
   } else if (!strcmp(cmd, "vkvram")) {

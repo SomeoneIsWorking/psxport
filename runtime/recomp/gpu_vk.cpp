@@ -1,4 +1,6 @@
 #include "core.h"
+#include "game.h"   // Game / GpuVkState (per-instance render state)
+#include "gpu_vk.h"  // public Core*-threaded API decls (wrappers below forward to core->game->gpu_vk)
 // gpu_vk.c — Vulkan present backend (M0) for the Tomba2Engine port.
 //
 // M0 scope: take over PRESENTATION via Vulkan (SDL_Vulkan swapchain) — the software rasterizer in
@@ -91,10 +93,10 @@ static VkDescriptorSet s_dset_b;           // present descriptor: binding0 = s_t
 // per-vertex depth — with NO shared mutable render state (which previously made them render identically:
 // a per-frame copy of panel 0 destroyed panel 1's persistent native framebuffer). `native` selects the
 // depth channel via the pipeline specialization constant (s_tritex_pipe[native]).
-typedef struct {
+struct Panel {
   VkImage         color; VkFramebuffer fb; VkDescriptorSet dset_present; VkImage depth;
   int             color_undef, depth_undef, native;
-} Panel;
+};
 static Panel s_panels[2];
 static int   s_npanels = 1;
 
@@ -115,7 +117,6 @@ static VkDeviceMemory  s_vbuf_mem;
 static void*           s_vbuf_ptr;
 typedef struct { float x, y, r, g, b, ord, ordn; } TriVtx;
 #define TRI_CAP 196608                // max batched vertices (= 65536 tris)
-static int             s_tri_n;
 
 // --- Depth-ordered semi-transparency (preserve OT submission order across the opaque/semi split) ---
 // The VK rasterizer batches opaque then semi into two passes, which loses the back-to-front OT order
@@ -136,19 +137,15 @@ static VkDeviceMemory  s_depth_b_mem;
 static VkImageView     s_depth_b_view;
 static int             s_depth_b_undef = 1;
 static VkPipeline      s_tritex_semi_pipe[2];   // textured semi, depth-test GREATER_EQUAL no write; [native]
-static float           s_cur_ord;            // current prim's normalized depth (set by gpu_vk_set_order)
 // Phase 2 (PSXPORT_NATIVE_DEPTH): per-vertex REAL depth for the current triangle. When non-NULL it
 // overrides the per-prim OT-order s_cur_ord, so gl_Position.z carries the native view-space depth (from
 // proj_pz_to_ord) and the D32 buffer does true per-pixel occlusion instead of painter/OT order. Set by
 // the gp0 tee AFTER gpu_vk_set_order (which clears it, so 2D/sprite prims fall back to OT order).
-static const float*    s_vd;
-void gpu_vk_set_vd(const float* d3) { s_vd = d3; }
+void GpuVkState::set_vd(const float* d3) { s_vd = d3; }
 // PSXPORT_SBS second (native) depth channel: every vertex carries BOTH the default-mode depth (.ord)
 // and the native-mode depth (.ordn) so one geometry batch renders both ways (left=ord, right=ordn).
 // In a normal (non-SBS) run the native channel mirrors the default one (ordn == ord), so it is inert.
-static const float*    s_vdn;
-static float           s_cur_ordn;
-void gpu_vk_set_vd_n(const float* d3) { s_vdn = d3; }
+void GpuVkState::set_vd_n(const float* d3) { s_vdn = d3; }
 // Single shared D32 buffer is partitioned into THREE depth bands (nearer = larger ord = wins, with a
 // 0.0 clear): a 2D BACKGROUND band [0, NATIVE_3D_MIN) for non-projected backdrop layers (water/sky),
 // the 3D WORLD band [NATIVE_3D_MIN, NATIVE_3D_MAX] (real per-vertex depth), and a 2D OVERLAY band
@@ -162,19 +159,19 @@ void gpu_vk_set_vd_n(const float* d3) { s_vdn = d3; }
 #define NATIVE_3D_MAX 0.9375f
 // Map a normalized per-vertex 3D depth d in [0,1] into the 3D WORLD band [NATIVE_3D_MIN, NATIVE_3D_MAX].
 static inline float ord3d(float d) { return NATIVE_3D_MIN + d * (NATIVE_3D_MAX - NATIVE_3D_MIN); }
-void gpu_vk_set_order(unsigned idx) { s_cur_ord = (float)(idx + 1) / 65536.0f; if (s_cur_ord > 1.0f) s_cur_ord = 1.0f;
+void GpuVkState::set_order(unsigned idx) { s_cur_ord = (float)(idx + 1) / 65536.0f; if (s_cur_ord > 1.0f) s_cur_ord = 1.0f;
                                       s_cur_ordn = s_cur_ord; s_vd = 0; s_vdn = 0; }
 // 2D/HUD prim under PSXPORT_NATIVE_DEPTH: OT order, biased into the overlay band above the 3D world.
-void gpu_vk_set_order_2d(unsigned idx) { float t = (float)(idx + 1) / 65536.0f; if (t > 1.0f) t = 1.0f;
+void GpuVkState::set_order_2d(unsigned idx) { float t = (float)(idx + 1) / 65536.0f; if (t > 1.0f) t = 1.0f;
                                          s_cur_ord = NATIVE_3D_MAX + (1.0f - NATIVE_3D_MAX) * t; s_vd = 0; }
 // Same overlay-band bias, but for the SBS native channel only (leaves the default .ord untouched).
-void gpu_vk_set_order_2d_n(unsigned idx) { float t = (float)(idx + 1) / 65536.0f; if (t > 1.0f) t = 1.0f;
+void GpuVkState::set_order_2d_n(unsigned idx) { float t = (float)(idx + 1) / 65536.0f; if (t > 1.0f) t = 1.0f;
                                            s_cur_ordn = NATIVE_3D_MAX + (1.0f - NATIVE_3D_MAX) * t; s_vdn = 0; }
 // 2D BACKGROUND prim (drawn before any 3D this frame): OT order biased into the FAR band BELOW the 3D
 // world, so the backdrop (water/sky) sits behind the terrain instead of occluding it.
-void gpu_vk_set_order_2d_bg(unsigned idx) { float t = (float)(idx + 1) / 65536.0f; if (t > 1.0f) t = 1.0f;
+void GpuVkState::set_order_2d_bg(unsigned idx) { float t = (float)(idx + 1) / 65536.0f; if (t > 1.0f) t = 1.0f;
                                             s_cur_ord = NATIVE_3D_MIN * t; s_vd = 0; }
-void gpu_vk_set_order_2d_bg_n(unsigned idx) { float t = (float)(idx + 1) / 65536.0f; if (t > 1.0f) t = 1.0f;
+void GpuVkState::set_order_2d_bg_n(unsigned idx) { float t = (float)(idx + 1) / 65536.0f; if (t > 1.0f) t = 1.0f;
                                               s_cur_ordn = NATIVE_3D_MIN * t; s_vdn = 0; }
 
 // --- PSXPORT_SSAO: PC-native screen-space ambient occlusion (post pass) -------------------------------
@@ -207,11 +204,10 @@ static int deferred_on(void) { return ssao_on() || light_on(); }
 // render (native-depth is incomplete for not-yet-owned submit paths). The F1 overlay itself needs none
 // of this; SSAO/light just don't take effect unless launched with PSXPORT_UI=1 (or PSXPORT_SSAO/LIGHT).
 static int ui_infra(void)    { return cfg_on("PSXPORT_UI") && !sbs_on(); }
-static int s_present_sx, s_present_sy;   // this frame's faithful display origin (for the LIGHT screen map)
 
 // M3 textured rasterizer: a VRAM snapshot image the texture sampler reads (avoids render/sample feedback
 // loop), its descriptor set, the textured pipeline, and a textured-vertex batch.
-typedef struct { float x, y, u, v, r, g, b; int32_t tp[4], clut[4], tw[4], da[4]; float ord, ordn; } TexVtx;  // 100 bytes
+struct TexVtx { float x, y, u, v, r, g, b; int32_t tp[4], clut[4], tw[4], da[4]; float ord, ordn; };  // 100 bytes
 #define TEX_CAP 196608
 static VkImage         s_vram_tex;    // texture-source snapshot (copy of VRAM before a draw batch)
 static VkDeviceMemory  s_vram_tex_mem;
@@ -222,24 +218,18 @@ static VkPipeline      s_tritex_pipe[2];   // [0]=default OT depth, [1]=native d
 static VkBuffer        s_tvbuf;
 static VkDeviceMemory  s_tvbuf_mem;
 static void*           s_tvbuf_ptr;
-static int             s_tex_n;
 static VkBuffer        s_semibuf;     // SEMI-transparent prims (drawn after opaque, sampling the framebuffer)
 static VkDeviceMemory  s_semibuf_mem;
 static void*           s_semibuf_ptr;
-static int             s_semi_n;
 // OT-order-correct semi blending: VK draws all semi prims in one pass sampling ONE pre-semi snapshot,
 // so OVERLAPPING semi prims don't accumulate (each blends against the same scene; the later one
 // overwrites) — unlike the sequential PSX/SW rasterizer. That broke stacked full-screen subtractive
 // fade tiles (intro fade flash). Fix: partition the semi batch into GROUPS where no prim overlaps an
 // earlier prim in the same group, then draw each group with its own fresh framebuffer snapshot so a
 // later group sees the earlier groups' blends. Non-overlapping semis (water tiles) stay one group.
-#define SEMI_GRP_CAP 2048
-static int s_semi_grp[SEMI_GRP_CAP];   // vertex-index at which each NEW group starts (group 0 = index 0)
-static int s_semi_grp_n;
-static int s_sg_x0, s_sg_y0, s_sg_x1, s_sg_y1, s_sg_valid;   // current group's accumulated bbox (abs coords)
 // Called once per SEMI prim (before its triangles are appended) with the prim's ABSOLUTE bbox. Starts a
 // new group whenever the prim overlaps the current group's accumulated bbox.
-void gpu_vk_semi_group(int x0, int y0, int x1, int y1) {
+void GpuVkState::semi_group(int x0, int y0, int x1, int y1) {
   if (!s_sg_valid) { s_sg_x0=x0; s_sg_y0=y0; s_sg_x1=x1; s_sg_y1=y1; s_sg_valid=1; return; }
   int overlap = (x0 < s_sg_x1 && s_sg_x0 < x1 && y0 < s_sg_y1 && s_sg_y0 < y1);  // strict (touching edges OK)
   if (overlap) {
@@ -252,19 +242,13 @@ void gpu_vk_semi_group(int x0, int y0, int x1, int y1) {
 }
 // Dirty VRAM regions written by SW this frame (CPU->VRAM uploads, VRAM copies, fills) — mirrored from
 // s_vram into the PERSISTENT VK VRAM image at present (the framebuffer region stays VK-owned/persistent).
-typedef struct { int x, y, w, h; } VkRect;
-#define DIRTY_CAP 4096
-static VkRect s_dirty[DIRTY_CAP];
-static int    s_dirty_n;
-static int s_last_sx, s_last_sy, s_last_w = 320, s_last_h = 240;   // last-presented region (gpu_vk_shot)
-static int s_dbg_tri, s_dbg_tex, s_dbg_semi;   // last frame's batched vertex counts (vkstats probe)
 // Report the last frame's VK batched vertex counts (opaque-flat tris, opaque-textured tris, semi
 // tris). Lets the debug server tell apart "semi prims never batched" (tee bug) from "batched but
 // not visible" (semi pass / shader bug) — e.g. the missing semi-transparent puddle water.
-void gpu_vk_stats(int* tri, int* tex, int* semi) {
+void GpuVkState::stats(int* tri, int* tex, int* semi) {
   if (tri) *tri = s_dbg_tri; if (tex) *tex = s_dbg_tex; if (semi) *semi = s_dbg_semi;
 }
-void gpu_vk_dirty(int x, int y, int w, int h) {
+void GpuVkState::dirty(int x, int y, int w, int h) {
   if (s_dirty_n >= DIRTY_CAP || w <= 0 || h <= 0) return;
   if (x < 0) { w += x; x = 0; } if (y < 0) { h += y; y = 0; }
   if (x + w > VRAM_W) w = VRAM_W - x; if (y + h > VRAM_H) h = VRAM_H - y;
@@ -315,8 +299,7 @@ static int use_fb(void) { if (cfg_on("PSXPORT_NO_FB")) return 0;   // DIAG: hard
 // FMV / title / menu — a VRAM-resident image, no tee'd 3D) has an EMPTY scratch FB, so it must render +
 // present from the native VRAM display region at 4:3 instead. Render (push_wide / FB clear) and present
 // (sample region + aspect) both key off THIS so they stay consistent.
-int gpu_seen3d_this_frame(void);
-static int frame_via_fb(void) { return use_fb() && gpu_seen3d_this_frame(); }
+int GpuVkState::frame_via_fb() { return use_fb() && gpu_seen3d_this_frame(&game->core); }
 static void wide_init(void) { mods_init(); }
 
 // ---- Genuine engine-level widescreen ("no faking") ---------------------------------------------
@@ -376,7 +359,6 @@ static VkShaderModule make_shader(const uint32_t* code, unsigned len) {
 
 static void create_vram(void);   // forward decl: defined after init_vk, called from it
 static void create_ssao(void);   // PSXPORT_SSAO resources (post pass); created only when ssao_on()
-static void ssao_pass(void);     // PSXPORT_SSAO: AO between the opaque and semi passes (panel_render)
 static void img_barrier_on(VkImage, VkImageLayout, VkImageLayout, VkPipelineStageFlags,
                            VkPipelineStageFlags, VkAccessFlags, VkAccessFlags);
 
@@ -745,7 +727,7 @@ void panels_init(void) {
 // Mirror this frame's SW-written VRAM (s_stage) into a Panel's PERSISTENT color image: a full copy on
 // first use, then only the dirty regions (uploads/copies/fills) — the rendered framebuffer stays owned
 // by the panel across frames. Each panel uploads independently so its persistent framebuffer is its own.
-static void panel_upload(Panel* p) {
+void GpuVkState::panel_upload(Panel* p) {
   img_barrier_on(p->color, p->color_undef ? VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                  VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
                  VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_SHADER_READ_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
@@ -772,7 +754,7 @@ static void panel_upload(Panel* p) {
 // panel's `native` picks the depth-channel pipeline variant. `p->color` enters in TRANSFER_DST (just
 // uploaded) and leaves in SHADER_READ_ONLY (ready to sample). The texture/blend snapshot (s_vram_tex)
 // is shared scratch, serialized by its layout barriers.
-static void panel_render(Panel* p) {
+void GpuVkState::panel_render(Panel* p) {
   VkImage tgt = p->color, depth = p->depth; VkFramebuffer fb = p->fb; int native = p->native;
   VkRenderPassBeginInfo grp = { VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
   grp.renderPass = s_vram_rpass; grp.framebuffer = fb; grp.renderArea.extent = (VkExtent2D){ VRAM_W, IMG_H };
@@ -985,7 +967,7 @@ static void depth_barrier(VkImageLayout from, VkImageLayout to, VkPipelineStageF
 // Entry: s_tex in COLOR_ATTACHMENT, s_depth in DEPTH_STENCIL_ATTACHMENT. Reads color+depth, writes the
 // shaded color into s_ssao_img, copies it back into s_tex. Exit: s_tex back in COLOR_ATTACHMENT, s_depth
 // back in DEPTH_STENCIL (for the semi pass).
-static void ssao_pass(void) {
+void GpuVkState::ssao_pass() {
   // s_tex: color attachment (opaque output) -> shader-read (sample as the AO source)
   img_barrier_on(s_tex, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                  VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
@@ -1058,7 +1040,7 @@ static void ssao_pass(void) {
 }
 
 // Present the display region [sx,sy .. +w,h] of `src` (s_vram or s_interp) via Vulkan, fit to aspect.
-void gpu_vk_present(const uint16_t* src, int sx, int sy, int w, int h) {
+void GpuVkState::present(const uint16_t* src, int sx, int sy, int w, int h) {
   if (!gpu_vk_enabled()) return;
   if (!s_inited) init_vk();
   wide_init();
@@ -1344,7 +1326,7 @@ void create_tri_pipeline(void) {
 }
 
 // Append one triangle (VRAM coords + per-vertex RGB 0..255) to the batch.
-void gpu_vk_draw_tri(int x0,int y0,int r0,int g0,int b0, int x1,int y1,int r1,int g1,int b1,
+void GpuVkState::draw_tri(int x0,int y0,int r0,int g0,int b0, int x1,int y1,int r1,int g1,int b1,
                      int x2,int y2,int r2,int g2,int b2) {
   if (!s_inited || s_tri_n + 3 > TRI_CAP) return;
   TriVtx* v = (TriVtx*)s_vbuf_ptr + s_tri_n;
@@ -1355,7 +1337,7 @@ void gpu_vk_draw_tri(int x0,int y0,int r0,int g0,int b0, int x1,int y1,int r1,in
 }
 
 // Append one TEXTURED triangle: per-vertex pos/uv/color (rgb 0..255) + shared page/CLUT/mode/raw state.
-static void tex_emit(TexVtx* t, const int* xs, const int* ys, const int* us, const int* vs,
+void GpuVkState::tex_emit(TexVtx* t, const int* xs, const int* ys, const int* us, const int* vs,
                      const unsigned char* rs, const unsigned char* gs, const unsigned char* bs,
                      int tpx, int tpy, int mode, int raw, int clutx, int cluty,
                      int twmx, int twmy, int twox, int twoy, int dax0, int day0, int dax1, int day1,
@@ -1371,7 +1353,7 @@ static void tex_emit(TexVtx* t, const int* xs, const int* ys, const int* us, con
     t[i].ordn = s_vdn ? ord3d(s_vdn[i]) : s_cur_ordn;   // PSXPORT_SBS native channel (right half)
   }
 }
-void gpu_vk_draw_tritri(const int* xs, const int* ys, const int* us, const int* vs,
+void GpuVkState::draw_tritri(const int* xs, const int* ys, const int* us, const int* vs,
                         const unsigned char* rs, const unsigned char* gs, const unsigned char* bs,
                         int tpx, int tpy, int mode, int raw, int clutx, int cluty,
                         int twmx, int twmy, int twox, int twoy,
@@ -1383,7 +1365,7 @@ void gpu_vk_draw_tritri(const int* xs, const int* ys, const int* us, const int* 
 }
 // Semi-transparent triangle (mode 3 = untextured flat). Drawn AFTER opaque, blending against the
 // framebuffer snapshot, per `blend` (0=avg,1=add,2=sub,3=add/4).
-void gpu_vk_draw_semi(const int* xs, const int* ys, const int* us, const int* vs,
+void GpuVkState::draw_semi(const int* xs, const int* ys, const int* us, const int* vs,
                       const unsigned char* rs, const unsigned char* gs, const unsigned char* bs,
                       int tpx, int tpy, int mode, int raw, int clutx, int cluty,
                       int twmx, int twmy, int twox, int twoy,
@@ -1395,7 +1377,7 @@ void gpu_vk_draw_semi(const int* xs, const int* ys, const int* us, const int* vs
 }
 
 // Self-test: clear VRAM, draw batched tris into it, read back. Returns the readback (uint16 VRAM).
-static void tri_render_and_readback(uint16_t* out) {
+void GpuVkState::tri_render_and_readback(uint16_t* out) {
   VKC(vkWaitForFences(s_dev, 1, &s_fence, VK_TRUE, UINT64_MAX));
   VKC(vkResetFences(s_dev, 1, &s_fence));
   VKC(vkResetCommandBuffer(s_cmd, 0));
@@ -1458,7 +1440,7 @@ static void img_barrier_on(VkImage im, VkImageLayout from, VkImageLayout to, VkP
 // Render the batched tris (untextured + textured) on top of `bg` (the SW VRAM) and read the result back.
 // Textured prims sample a SNAPSHOT of `bg` (s_vram_tex) — same textures SW used — so where VK's
 // rasterization/sampling matches SW, out==bg; mismatches reveal rule deltas. Avoids render/sample loop.
-static void tri_over_bg_readback(const uint16_t* bg, uint16_t* out) {
+void GpuVkState::tri_over_bg_readback(const uint16_t* bg, uint16_t* out) {
   memcpy(s_stage_ptr, bg, (size_t)VRAM_W * VRAM_H * 2);
   VKC(vkWaitForFences(s_dev, 1, &s_fence, VK_TRUE, UINT64_MAX));
   VKC(vkResetFences(s_dev, 1, &s_fence));
@@ -1565,7 +1547,7 @@ static void vk_rawdump_now(const char* path) {
 }
 // On-demand VK readback for the live debug server (dbg_server.c `vkshot`): dump the last-presented
 // VK-rendered region to `path` as a PPM — i.e. exactly what VK put on screen this frame.
-void gpu_vk_shot(const char* path) {
+void GpuVkState::shot(const char* path) {
   if (!gpu_vk_enabled() || !s_inited) { fprintf(stderr, "[vk_shot] VK not active\n"); return; }
   vk_dump_to(path, s_last_sx, s_last_sy, s_last_w, s_last_h);
   fprintf(stderr, "[vk_shot] wrote %s (%dx%d @ %d,%d)\n", path, s_last_w, s_last_h, s_last_sx, s_last_sy);
@@ -1581,7 +1563,7 @@ void gpu_vk_vram_region(const char* path, int x, int y, int w, int h) {
 // PSXPORT_VK_SHOTSEQ="first:last:step:dir" -> dump EVERY step-th frame in [first,last] to
 // dir/vk_<frame>.ppm. The sequence is what catches intermittent/flickering bugs (e.g. water that
 // blinks across frames) instead of cherry-picking one frame — see docs/gfx-debug.md.
-void gpu_vk_dump(int sx, int sy, int w, int h, int frame) {
+void GpuVkState::dump(int sx, int sy, int w, int h, int frame) {
   if (!gpu_vk_enabled() || !s_inited) return;
   static int sf = -2; if (sf == -2) { const char* e = cfg_str("PSXPORT_VK_SHOT"); sf = e ? atoi(e) : -1; }
   static int qa = -2, qb, qstep; static char qdir[256];
@@ -1610,7 +1592,7 @@ void gpu_vk_dump(int sx, int sy, int w, int h, int frame) {
 
 // Per-frame: PSXPORT_VK_DIFF=frame -> diff this frame's tee'd untextured tris (VK) vs SW VRAM. Always
 // resets the batch. `frame` is the SW frame counter; `svram` is the SW VRAM (source of truth).
-void gpu_vk_frame_end(const uint16_t* svram, int frame) {
+void GpuVkState::frame_end(const uint16_t* svram, int frame) {
   if (!gpu_vk_enabled() || !s_inited) { s_tri_n = 0; return; }
   static int dframe = -2;
   if (dframe == -2) { const char* e = cfg_str("PSXPORT_VK_DIFF"); dframe = e ? atoi(e) : -1; }
@@ -1640,12 +1622,12 @@ void gpu_vk_frame_end(const uint16_t* svram, int frame) {
 
 // PSXPORT_VK_TRITEST=1: headless-ish self-test of the triangle rasterizer. Draws a known flat tri and a
 // gouraud tri, reads back, checks expected pixels, prints PASS/FAIL, exits. Validates the GPU raster path.
-void gpu_vk_tritest(void) {
+void GpuVkState::tritest() {
   if (!cfg_on("PSXPORT_VK_TRITEST")) return;
   if (!s_inited) init_vk();
   s_tri_n = 0;
-  gpu_vk_draw_tri( 10,10, 255,0,0,  200,10, 255,0,0,  10,200, 255,0,0);    // flat red, big right-triangle
-  gpu_vk_draw_tri(300,300, 255,0,0, 460,300, 0,255,0, 300,460, 0,0,255);   // gouraud r/g/b corners
+  draw_tri( 10,10, 255,0,0,  200,10, 255,0,0,  10,200, 255,0,0);    // flat red, big right-triangle
+  draw_tri(300,300, 255,0,0, 460,300, 0,255,0, 300,460, 0,0,255);   // gouraud r/g/b corners
   static uint16_t vram[VRAM_W * VRAM_H];
   tri_render_and_readback(vram);
   uint16_t inside_flat = vram[40 * VRAM_W + 40];        // inside flat tri -> red 0x001F
@@ -1666,40 +1648,63 @@ void gpu_vk_tritest(void) {
     fclose(f); fprintf(stderr, "[vk_tritest] wrote scratch/screenshots/vk_tritest.ppm\n"); }
   exit(ok ? 0 : 3);
 }
+
+// ---- Public API: thin free-function wrappers over the per-instance GpuVkState methods. Keep the
+// C-style call sites stable; each forwards to core->game->gpu_vk (de-globalization R2, 2026-06-19). ----
+void gpu_vk_set_vd(Core* core, const float* d3) { core->game->gpu_vk.set_vd(d3); }
+void gpu_vk_set_vd_n(Core* core, const float* d3) { core->game->gpu_vk.set_vd_n(d3); }
+void gpu_vk_set_order(Core* core, unsigned idx) { core->game->gpu_vk.set_order(idx); }
+void gpu_vk_set_order_2d(Core* core, unsigned idx) { core->game->gpu_vk.set_order_2d(idx); }
+void gpu_vk_set_order_2d_n(Core* core, unsigned idx) { core->game->gpu_vk.set_order_2d_n(idx); }
+void gpu_vk_set_order_2d_bg(Core* core, unsigned idx) { core->game->gpu_vk.set_order_2d_bg(idx); }
+void gpu_vk_set_order_2d_bg_n(Core* core, unsigned idx) { core->game->gpu_vk.set_order_2d_bg_n(idx); }
+void gpu_vk_semi_group(Core* core, int x0, int y0, int x1, int y1) { core->game->gpu_vk.semi_group(x0, y0, x1, y1); }
+void gpu_vk_stats(Core* core, int* tri, int* tex, int* semi) { core->game->gpu_vk.stats(tri, tex, semi); }
+void gpu_vk_dirty(Core* core, int x, int y, int w, int h) { core->game->gpu_vk.dirty(x, y, w, h); }
+void gpu_vk_present(Core* core, const uint16_t* src, int sx, int sy, int w, int h) { core->game->gpu_vk.present(src, sx, sy, w, h); }
+void gpu_vk_draw_tri(Core* core, int x0,int y0,int r0,int g0,int b0, int x1,int y1,int r1,int g1,int b1, int x2,int y2,int r2,int g2,int b2) { core->game->gpu_vk.draw_tri(x0,y0,r0,g0,b0,x1,y1,r1,g1,b1,x2,y2,r2,g2,b2); }
+void gpu_vk_draw_tritri(Core* core, const int* xs, const int* ys, const int* us, const int* vs, const unsigned char* rs, const unsigned char* gs, const unsigned char* bs, int tpx, int tpy, int mode, int raw, int clutx, int cluty, int twmx, int twmy, int twox, int twoy, int dax0, int day0, int dax1, int day1) { core->game->gpu_vk.draw_tritri(xs,ys,us,vs,rs,gs,bs,tpx,tpy,mode,raw,clutx,cluty,twmx,twmy,twox,twoy,dax0,day0,dax1,day1); }
+void gpu_vk_draw_semi(Core* core, const int* xs, const int* ys, const int* us, const int* vs, const unsigned char* rs, const unsigned char* gs, const unsigned char* bs, int tpx, int tpy, int mode, int raw, int clutx, int cluty, int twmx, int twmy, int twox, int twoy, int dax0, int day0, int dax1, int day1, int blend) { core->game->gpu_vk.draw_semi(xs,ys,us,vs,rs,gs,bs,tpx,tpy,mode,raw,clutx,cluty,twmx,twmy,twox,twoy,dax0,day0,dax1,day1,blend); }
+void gpu_vk_shot(Core* core, const char* path) { core->game->gpu_vk.shot(path); }
+void gpu_vk_dump(Core* core, int sx, int sy, int w, int h, int frame) { core->game->gpu_vk.dump(sx, sy, w, h, frame); }
+void gpu_vk_frame_end(Core* core, const uint16_t* svram, int frame) { core->game->gpu_vk.frame_end(svram, frame); }
+void gpu_vk_tritest(Core* core) { core->game->gpu_vk.tritest(); }
 #else
 #include <stdint.h>
 int  gpu_vk_enabled(void) { return 0; }
-void gpu_vk_present(const uint16_t* src, int sx, int sy, int w, int h) { (void)src;(void)sx;(void)sy;(void)w;(void)h; }
-void gpu_vk_tritest(void) {}
-void gpu_vk_frame_end(const uint16_t* svram, int frame) { (void)svram; (void)frame; }
-void gpu_vk_dump(int sx, int sy, int w, int h, int frame) { (void)sx;(void)sy;(void)w;(void)h;(void)frame; }
-void gpu_vk_shot(const char* path) { (void)path; }
-void gpu_vk_set_order(unsigned idx) { (void)idx; }
-void gpu_vk_set_order_2d(unsigned idx) { (void)idx; }
-void gpu_vk_set_order_2d_n(unsigned idx) { (void)idx; }
-void gpu_vk_set_vd(const float* d3) { (void)d3; }
-void gpu_vk_set_vd_n(const float* d3) { (void)d3; }
+void gpu_vk_present(Core* core, const uint16_t* src, int sx, int sy, int w, int h) { (void)core;(void)src;(void)sx;(void)sy;(void)w;(void)h; }
+void gpu_vk_tritest(Core* core) { (void)core; }
+void gpu_vk_frame_end(Core* core, const uint16_t* svram, int frame) { (void)core;(void)svram; (void)frame; }
+void gpu_vk_dump(Core* core, int sx, int sy, int w, int h, int frame) { (void)core;(void)sx;(void)sy;(void)w;(void)h;(void)frame; }
+void gpu_vk_shot(Core* core, const char* path) { (void)core;(void)path; }
+void gpu_vk_set_order(Core* core, unsigned idx) { (void)core;(void)idx; }
+void gpu_vk_set_order_2d(Core* core, unsigned idx) { (void)core;(void)idx; }
+void gpu_vk_set_order_2d_n(Core* core, unsigned idx) { (void)core;(void)idx; }
+void gpu_vk_set_order_2d_bg(Core* core, unsigned idx) { (void)core;(void)idx; }
+void gpu_vk_set_order_2d_bg_n(Core* core, unsigned idx) { (void)core;(void)idx; }
+void gpu_vk_set_vd(Core* core, const float* d3) { (void)core;(void)d3; }
+void gpu_vk_set_vd_n(Core* core, const float* d3) { (void)core;(void)d3; }
 void gpu_vk_rawdump_arm(const char* path, int frame) { (void)path;(void)frame; }
 void gpu_vk_vram_region(const char* path, int x, int y, int w, int h) { (void)path;(void)x;(void)y;(void)w;(void)h; }
-void gpu_vk_stats(int* tri, int* tex, int* semi) { if(tri)*tri=0; if(tex)*tex=0; if(semi)*semi=0; }
-void gpu_vk_dirty(int x, int y, int w, int h) { (void)x;(void)y;(void)w;(void)h; }
-void gpu_vk_semi_group(int x0, int y0, int x1, int y1) { (void)x0;(void)y0;(void)x1;(void)y1; }
-void gpu_vk_draw_tri(int a,int b,int c,int d,int e,int f,int g,int h,int i,int j,int k,int l,int m,int n,int o) {
-  (void)a;(void)b;(void)c;(void)d;(void)e;(void)f;(void)g;(void)h;(void)i;(void)j;(void)k;(void)l;(void)m;(void)n;(void)o;
+void gpu_vk_stats(Core* core, int* tri, int* tex, int* semi) { (void)core; if(tri)*tri=0; if(tex)*tex=0; if(semi)*semi=0; }
+void gpu_vk_dirty(Core* core, int x, int y, int w, int h) { (void)core;(void)x;(void)y;(void)w;(void)h; }
+void gpu_vk_semi_group(Core* core, int x0, int y0, int x1, int y1) { (void)core;(void)x0;(void)y0;(void)x1;(void)y1; }
+void gpu_vk_draw_tri(Core* core, int a,int b,int c,int d,int e,int f,int g,int h,int i,int j,int k,int l,int m,int n,int o) {
+  (void)core;(void)a;(void)b;(void)c;(void)d;(void)e;(void)f;(void)g;(void)h;(void)i;(void)j;(void)k;(void)l;(void)m;(void)n;(void)o;
 }
-void gpu_vk_draw_tritri(const int* xs, const int* ys, const int* us, const int* vs,
+void gpu_vk_draw_tritri(Core* core, const int* xs, const int* ys, const int* us, const int* vs,
                         const unsigned char* rs, const unsigned char* gs, const unsigned char* bs,
                         int tpx, int tpy, int mode, int raw, int clutx, int cluty,
                         int twmx, int twmy, int twox, int twoy,
                         int dax0, int day0, int dax1, int day1) {
-  (void)xs;(void)ys;(void)us;(void)vs;(void)rs;(void)gs;(void)bs;(void)tpx;(void)tpy;(void)mode;(void)raw;
+  (void)core;(void)xs;(void)ys;(void)us;(void)vs;(void)rs;(void)gs;(void)bs;(void)tpx;(void)tpy;(void)mode;(void)raw;
   (void)clutx;(void)cluty;(void)twmx;(void)twmy;(void)twox;(void)twoy;(void)dax0;(void)day0;(void)dax1;(void)day1;
 }
-void gpu_vk_draw_semi(const int* xs, const int* ys, const int* us, const int* vs, const unsigned char* rs,
+void gpu_vk_draw_semi(Core* core, const int* xs, const int* ys, const int* us, const int* vs, const unsigned char* rs,
                       const unsigned char* gs, const unsigned char* bs, int tpx, int tpy, int mode, int raw,
                       int clutx, int cluty, int twmx, int twmy, int twox, int twoy,
                       int dax0, int day0, int dax1, int day1, int blend) {
-  (void)xs;(void)ys;(void)us;(void)vs;(void)rs;(void)gs;(void)bs;(void)tpx;(void)tpy;(void)mode;(void)raw;
+  (void)core;(void)xs;(void)ys;(void)us;(void)vs;(void)rs;(void)gs;(void)bs;(void)tpx;(void)tpy;(void)mode;(void)raw;
   (void)clutx;(void)cluty;(void)twmx;(void)twmy;(void)twox;(void)twoy;(void)dax0;(void)day0;(void)dax1;(void)day1;(void)blend;
 }
 #endif
