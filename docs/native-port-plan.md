@@ -61,6 +61,56 @@ return. This is the real "port the engine" work, not a transcription.
    GP0-packet emulation toward native float transforms / native draw (the `proj_native_vertex` /
    native_dl groundwork already exists). No PSX quirks emulated where a native path is correct.
 
+## SCOPE (measured 2026-06-19) + STRATEGY DECISION
+Burn-down tripwire `PSXPORT_INTERP_FUNCS=<path>` (interp.cpp) records every UNIQUE guest fn the
+interpreter runs (no override / not BIOS). Boot→first-cutscene (`PSXPORT_AUTO_NEWGAME=1`, prologue
+GAME stage 0x8010637C reached frame 39): **779 unique interpreted functions** (671 resident MAIN.EXE,
+107 runtime-loaded overlay, 1 low). List: `scratch/trace/boot2cut.funcs`.
+
+Recompiler coverage: `generated/shard_*.c` has **1226 `gen_func_` bodies** (exact, compilable recompiled
+C — delay slots, GTE ops, override table `g_override[]` + `func_XXXX` wrappers + address→fn switch in
+`shard_disp.c`). BUT only **284 of the 779** have a body; **495 are reached only indirectly** (jalr/fn-
+ptr/computed-jump) and were never statically discovered → not emitted. So linking shards alone covers
+37% — the 495 need seeding into emit.py (it has a `seeds` list ~line 405) OR hand-porting.
+
+**DECISION (faithful-first substrate, then hand-port engine to real native — the repo's recomp-port
+methodology):** use recompiled bodies as a *temporary* no-interpreter substrate, then hand-port the
+engine/stage/render layer to real native PC C on top, function-by-function, until the substrate is gone
+from the boot→cutscene path. Recomp bodies are scaffold, NOT the end (user rejected "ship a blob").
+Rationale: hand-retyping 779 funcs — many trivial leaves the recompiler already translated correctly
+(e.g. 80082370 == libgpu GetTPage) — is absurd; the leaves have no meaningful "PC-native" form. The
+PC-game character lives in the ENGINE layer (GTE projection, submit, camera, stage logic), which is
+where the hand-port effort goes.
+
+**BLOCKER for the substrate:** shards use the PRE-OOP ABI (`R3000* c`, bare `mem_r32(...)`); the current
+runtime is OOP (`Core`, `c->mem_r32`). Re-enabling requires: (1) update emit.py to emit `c->mem_r32`
+etc. (OOP ABI) — or a compatibility shim of free `mem_r32(c,...)`; (2) seed the 495 indirect addrs into
+emit.py; (3) regen + compile shards + link (run.sh §4 currently SKIPS linking — see later-101); (4)
+route `rec_dispatch`/`coro_native_call` to the recompiled `func_XXXX` switch for recompiled addrs, else
+interp; (5) reconcile the 72 address-keyed runtime overrides with the index-keyed `g_override[]` table
+(register runtime natives into g_override at the right index, or keep the address-keyed path as the
+override layer ABOVE the recompiled switch). Overlays: emit.py already takes `--overlays`; watch address
+aliasing (multiple overlays share 0x80106000+ — the live overlay set for boot→DEMO→GAME must be the
+emitted one).
+
+### EXECUTION ORDER (next session, full budget; subagents OK per user)
+1. Re-enable the recomp substrate (steps 1-5 above). Verify: tripwire count drops sharply, game still
+   reaches the prologue (`[autonewgame] reached GAME`), no behavior change. This kills the interpreter
+   for the 284 (+ newly-seeded) resident funcs.
+2. Seed + emit the 495 indirect funcs; re-verify tripwire → near-zero resident interpreter.
+3. Overlay stage code (DEMO 0x801062E4 menu + GAME 0x8010637C prologue): emit + link the live overlay,
+   OR hand-port these (they're the menu/cutscene logic — prime "real native" targets). DEMO root is the
+   8-substate machine above; port its sequencer to a native return-based frame-step (resolve the longjmp
+   yield → native poll-and-return).
+4. Tripwire == 0 boot→cutscene ⇒ goal met (no interpreter). Then begin replacing recompiled bodies with
+   real native PC engine C, top-down (DEMO/GAME stage → render → camera), moving GTE/submit to native
+   float/PC-draw where it isn't already.
+
+Per-function port+verify recipe (for hand-ported engine fns): write native override (read gen_func body
++ MIPS as RE ref), build (`tools/build_port.sh <file>`), A/B vs the recomp/interp body
+(`PSXPORT_<X>_RECOMP` or the override's super-call), diff RAM/regs on the real path; the tripwire confirms
+the fn no longer hits interp. Keep the game reaching the prologue at every step.
+
 ## Tooling notes
 - Disassemble the live overlay from a menu RAM dump (overlays aren't in MAIN.EXE at a fixed addr):
   `scratch/bin/tomba2/ram_menu.bin` (offset = addr & 0x1FFFFF). MAIN.EXE-resident funcs disasm from
