@@ -5587,21 +5587,31 @@ gameplay-RAM diff is BLIND to this: submit_terrain works almost entirely in **sc
     diagonal (~36/64/52) — possibly legitimate terrain scale, NOT yet proven wrong.
   - **The real divergence is the WALK, not the compose.** ov_terrain dispatch counts over a 342-frame
     AUTO_GAMEPLAY run (NOAUDIO, field reached ~f328):
-      * node **0x800ED8D8**: 42x in BOTH native and the recomp super-call — SYMMETRIC. (Earlier "recomp
-        terrain submitter = 0" was because the recomp BODY for these CULLS the 0x80027768 submit; native
-        submit_terrain submits UNCONDITIONALLY — native lacks the recomp body's cull/early-exit.)
-      * node **0x800EDB80**: **native 1x vs recomp 160x** — the main resident-MAIN terrain node
-        (dispatched from 0x8003FA0C). Native stops dispatching it after one frame; recomp renders it
-        every frame. THIS asymmetry is the lead.
+      * node **0x800ED8D8**: 42x in BOTH native and the recomp super-call — SYMMETRIC.
+        **FALSIFIED EARLIER GUESS:** the "recomp gt4bp terrain submitter = 0" reading was an ARTIFACT,
+        NOT a cull. gen_func_8002AB5C is fully LINEAR (no branch, always calls 0x80027768; verified the
+        whole body has zero goto/if/return except the tail). rec_super_call => rec_interp interprets the
+        body; a DIRECT JAL to 0x80027768 inside an interpreted function does NOT route through the
+        override-based [terrgte]/gt4bp count (only rec_dispatch/JALR does — that is why the 200 OTHER
+        gt4bp calls counted but the interpreted terrain submit did not). So the recomp terrain DOES
+        submit, via the interpreted submitter, invisible to those counters. Do NOT chase a non-existent
+        native "missing cull". (Whether the interpreter checks the override on a direct JAL needs a
+        quick confirm in interp.c — if it SHOULD and doesn't, that itself is a bug worth a look.)
+      * node **0x800EDB80**: **native 1x vs recomp 160x** — main resident-MAIN terrain node (dispatched
+        from 0x8003FA0C). This is the strongest remaining lead, BUT first RULE OUT scene-timing skew:
+        these were whole-run counts; the NOAUDIO field-reach gate (xa_stream_is_looping) could put the
+        two runs in different scene phases. Confirm both runs are frame-synced (they were RAM-0-diff at
+        f300/f540 in the ORIGINAL non-debug runs) before trusting 1-vs-160.
   - Render-walk is fully native-overridden in BOTH configs (only NO_TERRAIN differs): ov_render_walk
     0x8003C048, ov_perobj_render 0x8003CCA4, ov_perobj_flush 0x8003CDD8, ov_build_xform 0x80051C8C.
-    So the 1-vs-160 asymmetry on 0x800EDB80 must come from native-walk state that is NOT in main RAM
-    (GTE/scratchpad/cull flags) OR an ov_terrain side effect, since main RAM is 0-diff.
 
-  **DO NEXT (render bug):** (1) add a per-frame node-dispatch count (frame-stamped) to compare native vs
-  recomp at a SINGLE field frame where RAM is 0-diff, isolating the 0x800EDB80 1-vs-160 from cutscene
-  transients. (2) RE the recomp body's CULL for node 0x800ED8D8 (why it skips 0x80027768) and give native
-  submit_terrain the same early-exit. (3) Find why the native render walk drops 0x800EDB80 after 1 frame
-  (ov_perobj_render/ov_render_walk cull on scratchpad/GTE state). Compare scratchpad 0x1F800000 region
-  native-vs-recomp at the terrain call (NOT captured by RAM dump — needs an in-call dump). NB: NO_TERRAIN
-  super-call IS a valid recomp oracle for the walk since the walk overrides stay active.
+  **DO NEXT (render bug) — REVISED:** the gameplay-RAM diff is BLIND here (submit_terrain works in
+  scratchpad+GTE). The right tool is a RENDER-level diff, not RAM. (1) Frame-stamp the [ov_terrain] /
+  [terrgte] logs and compare native vs the NO_TERRAIN super-call oracle at a SINGLE synced field frame,
+  to isolate the 0x800EDB80 1-vs-160 from cutscene transients / timing skew. (2) Dump scratchpad
+  0x1F800000 (camera matrix @+0xF8, composed matrix, object matrix) AT the terrain call in BOTH paths
+  (NOT in the main-RAM dump) and diff — that is where the compose input divergence (if any) lives.
+  (3) Confirm whether interp.c checks the override on a direct JAL; if not, the recomp terrain submit is
+  rendering via the un-instrumented interpreted submitter and the two submitters (native ov_submit vs
+  interpreted gen_func_80027768) may themselves differ — compare their VRAM output. NB: NO_TERRAIN
+  super-call is a valid recomp oracle for the walk since the walk overrides stay active.
