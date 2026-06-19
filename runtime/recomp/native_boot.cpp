@@ -157,6 +157,45 @@ static void ov_bgm_stop(Core* c) {
   rec_super_call(c, 0x80074E48u);
 }
 
+// ONE frame of deterministic guest work — the steppable core of the native frame loop, factored out so
+// the in-process dual-core diff can step TWO cores in lockstep (it calls this on `a` then `b`). It is
+// EXACTLY the guest-mutating body of the loop below (per-frame IRQ events, draw/display-env setup, the
+// FUN_800788ac frame update + native scheduler pass + dialog-music coord + draw sync + buffer flip); the
+// loop's driver scaffolding (REPL, auto-navigation/input, pause/step, diagnostics, dbg_server) stays in
+// the loop and runs ONCE around this call. No input is injected here — drive pads before calling it.
+static void native_step_frame(Core* c, uint32_t f) {
+  void hle_deliver_event(Core* c, uint32_t ev_class, uint32_t spec);
+  void pad_service_frame(Core*);
+  (void)f;
+  // Per-frame IRQ-driven events the game's waits poll via TestEvent (VBlank classes + sound-DMA-complete).
+  hle_deliver_event(c, 0xF2000003u, 0xFFFFFFFFu);
+  hle_deliver_event(c, 0xF0000001u, 0xFFFFFFFFu);
+  hle_deliver_event(c, 0xF0000009u, 0xFFFFFFFFu);
+  // Per-frame draw/display-env setup (LAB_80050c6c top): env struct pair for the current back buffer.
+  uint32_t envp = 0x800e80a8u + (uint32_t)c->mem_r8(0x1f800135) * 0x2070u;
+  c->mem_w32(0x800ed8c8, envp);                               // PTR_DAT_800ed8c8
+  rc2(c, 0x80081458, envp, 0x800);                            // ClearOTagR(ot, 0x800)
+  c->mem_w16(0x800e809c, 0);                                  // DAT_800e809c = 0 (dwell counter)
+  c->mem_w32(0x800bf4f4, c->mem_r32(0x800bf544));             // framebuffer ptr swap
+  c->mem_w32(0x800bf544, (c->mem_r8(0x1f800135) * 0x14000 + 0x800bfe68) & 0xffffff);
+  pad_service_frame(c);                                       // host input -> game pad buffer (pre-read)
+  xa_audio_trace(c, "pre");                                   // CD-vol fade state BEFORE tick+mix
+  rc0(c, 0x800788ac);                                         // tick + present + audio (override)
+  xa_audio_trace(c, "post");                                  // CD-vol fade state AFTER tick+mix
+  native_scheduler_step(c);                                   // <- replaces FUN_80051e60
+  xa_dialog_coord(c);                                         // dialogs stop/restore ingame music
+  xa_audio_trace(c, "coord");                                 // CD-vol fade state AFTER coord
+  rc1(c, 0x80080f6c, 0);                                      // draw sync
+  rc0(c, 0x800506d0);                                         // task sleep-countdown (re-arm 1->2)
+  // Buffer flip + display env (LAB_80050c6c, DAT_1f80019c==0 branch): submit env/OT, flip double buffer.
+  if (c->mem_r16(0x1f80019c) == 0) {
+    rc1(c, 0x8008179c, envp + 0x2000);                        // PutDispEnv  (env+0x2000)
+    rc1(c, 0x800815d0, envp + 0x2014);                        // PutDrawEnv  (env+0x2014)
+    rc1(c, 0x80081560, envp + 0x1ffc);                        // DrawOTag (submit the OT head)
+    c->mem_w8(0x1f800135, 1 - c->mem_r8(0x1f800135));         // flip back/front buffer
+  }
+}
+
 // Native override of game-main FUN_80050b08: init prefix, then (later) native frame loop.
 // ---- Interactive REPL (PSXPORT_REPL=1) — drive the native port from stdin --------------------
 // Mirrors the oracle's (wide60rt -repl) command set so one driver can step BOTH cores and diff.
@@ -366,21 +405,6 @@ static void ov_game_main(Core* c) {
         else fprintf(stderr, "[transplant] FAILED to open %s\n", rf);
         if (vf[0]) gpu_native_load_vram(c, vf);
       } }
-    // Per-frame IRQ-driven events the game's waits poll via TestEvent (we deliver no preemptive
-    // IRQs): VBlank classes + the sound-DMA-complete class 0xF0000009 (its callback FUN_80097030
-    // would normally fire it; native SPU DMA is synchronous, so signal it ready each frame).
-    hle_deliver_event(c, 0xF2000003u, 0xFFFFFFFFu);
-    hle_deliver_event(c, 0xF0000001u, 0xFFFFFFFFu);
-    hle_deliver_event(c, 0xF0000009u, 0xFFFFFFFFu);
-    // Per-frame draw/display-env setup (LAB_80050c6c top): the env struct pair for the current
-    // back buffer is at 0x800e80a8 + DAT_1f800135*0x2070 (the Ghidra `+uVar1*0x81c` is word
-    // arithmetic: 0x81c*4 = 0x2070 bytes); FUN_80081458 clears its ordering table.
-    uint32_t envp = 0x800e80a8u + (uint32_t)c->mem_r8(0x1f800135) * 0x2070u;
-    c->mem_w32(0x800ed8c8, envp);                               // PTR_DAT_800ed8c8
-    rc2(c, 0x80081458, envp, 0x800);                         // ClearOTagR(ot, 0x800)
-    c->mem_w16(0x800e809c, 0);                                  // DAT_800e809c = 0 (dwell counter)
-    c->mem_w32(0x800bf4f4, c->mem_r32(0x800bf544));                // framebuffer ptr swap
-    c->mem_w32(0x800bf544, (c->mem_r8(0x1f800135) * 0x14000 + 0x800bfe68) & 0xffffff);
     // PSXPORT_AUTO_NEWGAME: own the title->New Game navigation so we boot straight into the post-New
     // Game prologue cutscene (stage 0x8010637C) deterministically — no fighting the attract loop. The
     // menu confirm is Cross (0x4000); pulse it at the title (DEMO overlay) until task0 enters GAME.
@@ -434,27 +458,7 @@ static void ov_game_main(Core* c) {
         dbg_server_service(c);    // receive step/play/capture commands
         usleep(15000);
       } }
-    pad_service_frame(c);                                     // host input -> game pad buffer (pre-read)
-    xa_audio_trace(c, "pre");                                   // CD-vol fade state BEFORE tick+mix
-    rc0(c, 0x800788ac);                                      // tick + present + audio (override)
-    xa_audio_trace(c, "post");                                  // CD-vol fade state AFTER tick+mix
-    native_scheduler_step(c);                                // <- replaces FUN_80051e60
-    xa_dialog_coord(c);                                      // dialogs stop/restore ingame music (instant-CD mod)
-    xa_audio_trace(c, "coord");                                 // CD-vol fade state AFTER coord
-    rc1(c, 0x80080f6c, 0);                                   // draw sync
-    rc0(c, 0x800506d0);                                      // task sleep-countdown (re-arm 1->2)
-    // Buffer flip + display env (LAB_80050c6c, DAT_1f80019c==0 branch): submit this frame's
-    // draw env / display env / ordering table to the GPU, then flip the double buffer.
-    if (c->mem_r16(0x1f80019c) == 0) {
-      rc1(c, 0x8008179c, envp + 0x2000);                    // PutDispEnv  (env+0x2000)
-      rc1(c, 0x800815d0, envp + 0x2014);                    // PutDrawEnv  (env+0x2014)
-      rc1(c, 0x80081560, envp + 0x1ffc);                    // DrawOTag (submit the OT head)
-      // Swap the double buffer every frame, faithful to the game-main loop (LAB_80050c6c, the
-      // DAT_1f80019c==0 branch swaps unconditionally — DAT_1f800135 = 1 - DAT_1f800135). The game
-      // draws BOTH framebuffers' worth of content across its frames; the display/draw env pair
-      // selected by the parity is what governs what shows, so the swap must always track it.
-      c->mem_w8(0x1f800135, 1 - c->mem_r8(0x1f800135));           // flip back/front buffer
-    }
+    native_step_frame(c, f);   // one frame of deterministic guest work (steppable core; see fn above)
     // PSXPORT_SEQDBG — libsnd sequencer STATE trace (from SsSeqCalled @0x80090BD0): is any BGM
     // sequence OPEN/PLAYING? 0x801054B0=open-seq count, 0x80104C28=playing bitmask, 0x800AC424=tick
     // mode, 0x800AC42C=SsSeqCalled ptr. If these never go nonzero, no song is ever started → the
