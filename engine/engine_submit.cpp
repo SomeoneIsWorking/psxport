@@ -636,7 +636,11 @@ static void submit_perobj_flush(Core* c) {
     // compose camera-rotation × object-local matrix, one MVMVA per column (cmd+0x18/+0x1a/+0x1c) → host
     uint16_t hm[9];   // composed rotation, 3 cols interleaved: hm[col]=row0, hm[3+col]=row1, hm[6+col]=row2
     for (int col = 0; col < 3; col++) {
-      uint32_t cc = cmd + 0x18 + col;
+      // object-local matrix is 9 CONTIGUOUS halfwords at cmd+0x18; each column's 3 elements are at
+      // +0,+6,+0xc and the column base advances by a halfword (col*2). The real MIPS (gen_func_8003CDD8)
+      // does `addiu v0, a3, 0x18/0x1a/0x1c; lhu (v0), 6(v0), 0xc(v0)` — aligned loads, stride col*2.
+      // (A col*1 stride reads unaligned/overlapping halfwords for col=1 → garbage matrix → bad transform.)
+      uint32_t cc = cmd + 0x18 + col * 2;
       gte_write_data(9,  c->mem_r16(cc + 0));
       gte_write_data(10, c->mem_r16(cc + 6));
       gte_write_data(11, c->mem_r16(cc + 12));
