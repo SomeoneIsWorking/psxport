@@ -96,6 +96,29 @@ override layer ABOVE the recompiled switch). Overlays: emit.py already takes `--
 aliasing (multiple overlays share 0x80106000+ — the live overlay set for boot→DEMO→GAME must be the
 emitted one).
 
+### SUBSTRATE WIRING — DONE end-to-end, builds+runs, ONE derail to fix (2026-06-19)
+Implemented the A/B-gated substrate (`PSXPORT_SUBSTRATE=1` build):
+- emit.py: renamed generated `rec_set_override`→`shard_set_override` (so dispatch.cpp owns a HYBRID
+  rec_set_override: interp map + g_override[]).
+- dispatch.cpp: `#ifndef PSXPORT_SUBSTRATE` keeps interp-only (rec_func_index=-1, rec_dispatch=interp
+  router); `#else` rec_func_index+rec_dispatch come from shard_disp.c, rec_set_override is hybrid.
+- interp.cpp `coro_native_call`: `if (rec_func_index(tgt) >= 0) { rec_dispatch(c, tgt); return 1; }` —
+  recompiled targets run as COMPILED C from inside the flat interp (no-op when interp-only: index always -1).
+- build_port.sh: `PSXPORT_SUBSTRATE=1` adds -DPSXPORT_SUBSTRATE -Igenerated + links generated/shard_*.c
+  (compiled with `$CXX -x c++ -O1` — they're C++ content in .c files). Default build unchanged.
+**Result:** substrate compiles + links + RUNS. Boot→cutscene interpreted-func count drops **779 → 223**
+(the recompiled bodies now execute compiled). BUT it DERAILS in the init prefix (ov_game_main, after the
+native projection setup `[geom] SetGeomScreen`): the flat interp ends up at insn=0xFFFFFFFF (a `jr ra`
+to an unset/garbage return addr) and spins on `bad opcode`. Last tripwire entries before derail:
+800865C0, 80091EA8 (both `<-DEAD0000` = top-level native_boot dispatch). The compiled↔interp call/return
+contract via `rec_interp` (sets ra=CORO_SENTINEL, runs flat, restores) is correct in principle, so the
+derail is EITHER a specific miscompiled shard body (the shards were "0-diff" pre-OOP; may have rotted) OR
+a boundary case (tail-call `j` into a recompiled fn, a computed `jr` into one, or a fn the flat interp
+enters mid-body). NEXT: bisect — gate the `rec_func_index>=0` routing behind an address allowlist (or a
+PSXPORT_SUBSTRATE_ONLY=range env) to binary-search the offending function; compare its compiled body vs
+interp via the existing A/B (PSXPORT_*_RECOMP) / ncall_diff. Logs: scratch/logs/b2c_sub.log,
+scratch/trace/b2c_substrate.funcs. Default interp-only build verified still good.
+
 ### EXECUTION ORDER (next session, full budget; subagents OK per user)
 1. Re-enable the recomp substrate (steps 1-5 above). Verify: tripwire count drops sharply, game still
    reaches the prologue (`[autonewgame] reached GAME`), no behavior change. This kills the interpreter

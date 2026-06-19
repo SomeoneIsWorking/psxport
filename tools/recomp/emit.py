@@ -188,7 +188,7 @@ class Names:
         self.index, self.setov, self.ovtab = index, setov, ovtab
         self.decls, self.shardpfx, self.disp = decls, shardpfx, disp
 
-MAIN_NAMES = Names("gen_func", "func", "rec_dispatch", "rec_func_index", "rec_set_override",
+MAIN_NAMES = Names("gen_func", "func", "rec_dispatch", "rec_func_index", "shard_set_override",
                    "g_override", "rec_decls.h", "shard", "shard_disp")
 STUB_NAMES = Names("stub_gen_func", "stub_func", "stub_dispatch", "stub_func_index",
                    "stub_set_override", "g_stub_override", "stub_decls.h", "stub_shard", "stub_disp")

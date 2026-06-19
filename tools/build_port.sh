@@ -29,6 +29,19 @@ INC="-I$RT -I$ENG -I$MED -I$MED/psx -Ivendor/beetle-psx/libretro-common/include 
 CFLAGS="-O2 -g -w -D_XOPEN_SOURCE=700 $INC $(pkg-config --cflags sdl2 vulkan 2>/dev/null) -DPSXPORT_SDL"
 IMGUI=vendor/imgui
 CXXFLAGS="-O2 -g -w -fpermissive -std=c++17 $INC -I$IMGUI -I$IMGUI/backends $(pkg-config --cflags sdl2 vulkan 2>/dev/null) -DPSXPORT_SDL"
+
+# PSXPORT_SUBSTRATE=1: link the statically-recompiled bodies (generated/shard_*.c + shard_disp.c) as the
+# no-interpreter substrate (top-down native port). The shards are C++ content in .c files (call Core
+# methods c->mem_*), so compile_one routes generated/*.c through $CXX -x c++. Default (unset) = the
+# interpreter-only build (no shards linked; dispatch.cpp's rec_func_index() is always -1, so the
+# interp's recompiled-routing is a no-op). See docs/native-port-plan.md.
+SHARDS=""
+if [ -n "${PSXPORT_SUBSTRATE:-}" ]; then
+  CFLAGS="$CFLAGS -DPSXPORT_SUBSTRATE -Igenerated"
+  CXXFLAGS="$CXXFLAGS -DPSXPORT_SUBSTRATE -Igenerated"
+  SHARDS="generated/shard_disp.c generated/shard_0.c generated/shard_1.c generated/shard_2.c generated/shard_3.c generated/shard_4.c generated/shard_5.c generated/shard_6.c generated/shard_7.c"
+fi
+
 tools/gen_vk_shaders.sh   # compile+embed the Vulkan present shaders (gpu_vk_shaders.h) before gpu_vk.c
 
 # Same source list as run.sh step 4 (keep in sync). C++ TUs (.cpp) = ImGui overlay; compiled with $CXX.
@@ -39,7 +52,8 @@ SRC="$RT/dispatch.cpp \
   $RT/cfg.c $RT/mem.cpp $RT/stubs.cpp $RT/hle.cpp $RT/threads.cpp $RT/interp.cpp $RT/gpu_native.cpp $RT/gpu_trace.cpp $RT/gpu_debug.cpp $RT/spu_audio.c $RT/pad_input.cpp $RT/memcard.cpp $RT/native_fmv.cpp \
   $MED/psx/gte.c $RT/gte_beetle.cpp $MED/psx/mdec.c $RT/mdec_beetle.c $MED/psx/spu.c $RT/spu_beetle.c \
   $RT/disc.c $RT/cd_override.cpp $RT/cdc_native.c $RT/xa_stream.c $RT/timing.cpp $RT/gpu_vk.cpp $RT/mods.c $ENG/game_tomba2.cpp $ENG/fps60.cpp $ENG/engine_tomba2.cpp $ENG/engine_submit.cpp $ENG/native_dl.cpp $ENG/margin_render.cpp $RT/sync_overrides.cpp $RT/native_boot.cpp $RT/dbg_server.cpp $RT/native_stub.cpp $RT/watchdog.c $RT/boot.cpp \
-  $RT/imgui_overlay.cpp $IMGUI/imgui.cpp $IMGUI/imgui_draw.cpp $IMGUI/imgui_tables.cpp $IMGUI/imgui_widgets.cpp $IMGUI/backends/imgui_impl_sdl2.cpp $IMGUI/backends/imgui_impl_vulkan.cpp"
+  $RT/imgui_overlay.cpp $IMGUI/imgui.cpp $IMGUI/imgui_draw.cpp $IMGUI/imgui_tables.cpp $IMGUI/imgui_widgets.cpp $IMGUI/backends/imgui_impl_sdl2.cpp $IMGUI/backends/imgui_impl_vulkan.cpp \
+  $SHARDS"
 
 objof() { echo "$OBJ/$(echo "$1" | tr '/.' '__').o"; }
 
@@ -49,8 +63,9 @@ for f in "$@"; do FORCE="$FORCE $f"; done
 
 compile_one() { o="$(objof "$1")";
   case "$1" in
-    *.cpp|*.cc) $CXX $CXXFLAGS -c "$1" -o "$o" ;;
-    *)          $CC  $CFLAGS  -c "$1" -o "$o" ;;
+    generated/*.c) $CXX $CXXFLAGS -x c++ -O1 -c "$1" -o "$o" ;;  # recompiled shards: C++ content, lower opt (6MB)
+    *.cpp|*.cc)    $CXX $CXXFLAGS -c "$1" -o "$o" ;;
+    *)             $CC  $CFLAGS  -c "$1" -o "$o" ;;
   esac || { echo "FAILED: $1" >&2; exit 1; }; }
 export -f compile_one objof; export CC CXX CFLAGS CXXFLAGS OBJ
 

@@ -329,6 +329,13 @@ static int coro_native_call(Core* c, uint32_t tgt) {
     ncall_log('B', tgt, a0,a1,a2,a3, c->r[2], c->r[3]);
     return 1;
   }
+  // No-interpreter SUBSTRATE: if `tgt` is a statically-recompiled function, run its COMPILED body
+  // (rec_dispatch -> the generated addr->func_XXXX switch -> gen_func / g_override) instead of letting
+  // the flat interpreter execute it. Returns "handled" so the loop resumes at the caller's return addr,
+  // exactly like a native override. rec_func_index() is always -1 in the interpreter-only build, so this
+  // is a no-op there (no behavior change, no #ifdef needed). The compiled body itself reaches non-
+  // recompiled callees (overlays / the 495 indirect fns) back through rec_dispatch -> interp.
+  if (rec_func_index(tgt) >= 0) { rec_dispatch(c, tgt); return 1; }
   ifn_record(tgt, c->r[31]);   // tripwire: the interpreter is about to run this (non-native) function
   return 0;
 }

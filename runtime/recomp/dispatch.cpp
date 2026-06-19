@@ -17,12 +17,20 @@ void rec_dispatch_miss(Core* c, uint32_t addr);  // BIOS vectors -> HLE; else RA
 void rec_set_interp_override(uint32_t addr, OverrideFn fn);
 OverrideFn rec_interp_override_for(uint32_t a);   // unified address-keyed override lookup (interp.c)
 
-// "Is this address a statically-recompiled function?" — used by interp.c's is_recompiled(). With no
-// recompiled bodies the answer is always no; BIOS vectors (A0/B0/C0) are handled separately there.
+// PSXPORT_SUBSTRATE (A/B build switch, top-down native port): when defined, the statically-recompiled
+// function bodies (generated/shard_*.c + shard_disp.c) are LINKED and execute as compiled C — the
+// no-interpreter substrate for the boot->cutscene path. In that build, shard_disp.c provides
+// rec_func_index (real addr->index) and rec_dispatch (the addr->func_XXXX switch), and shard_set_override
+// writes g_override[]. Here we own only the HYBRID rec_set_override (registers BOTH the interp address-
+// keyed map AND g_override[], so an override is honored whether the caller is the interpreter OR a
+// compiled gen body calling func_XXXX directly). Default build (undefined) = interpreter-only (every
+// function runs via interp.c; rec_func_index always -1).
+#ifndef PSXPORT_SUBSTRATE
+
+// "Is this address a statically-recompiled function?" — interpreter-only build: never.
 int rec_func_index(uint32_t addr) { (void)addr; return -1; }
 
-// Register a fixed native override for a function address (the resident-MAIN call sites). Same table
-// as the overlay/auto overrides — there is no longer an index-keyed table to keep in sync.
+// Register a fixed native override for a function address. One address-keyed table (interp.c).
 void rec_set_override(uint32_t addr, OverrideFn fn) { rec_set_interp_override(addr, fn); }
 
 // Run the function at `addr`: a native override wins; otherwise defer to rec_dispatch_miss, which
@@ -34,6 +42,21 @@ void rec_dispatch(Core* c, uint32_t addr) {
   if (ov) { ov(c); return; }
   rec_dispatch_miss(c, addr);
 }
+
+#else  // PSXPORT_SUBSTRATE: rec_func_index + rec_dispatch come from generated/shard_disp.c
+
+void shard_set_override(uint32_t addr, OverrideFn fn);   // generated: g_override[rec_func_index(addr)] = fn
+
+// Hybrid registration: keep both override tables in sync so a native override wins regardless of who
+// calls the function — the interpreter (via rec_interp_override_for) OR a compiled body (via g_override[]
+// inside func_XXXX). shard_set_override is a no-op for non-recompiled addrs (index < 0), so overlay/BIOS
+// overrides still ride the interp map only.
+void rec_set_override(uint32_t addr, OverrideFn fn) {
+  rec_set_interp_override(addr, fn);
+  shard_set_override(addr, fn);
+}
+
+#endif
 
 // Super-call / A/B oracle: interpret the ORIGINAL function body, bypassing its own entry override (so
 // a native override can invoke the real PSX code). rec_interp does not re-check the entry override, so
