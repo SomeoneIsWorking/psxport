@@ -18,6 +18,7 @@
 // we load MAIN.EXE into RAM and longjmp out of the stub interpreter, then enter the native MAIN
 // boot (native_boot.c), which takes over for Whoopee/OP/menu (later 33).
 #include "core.h"
+#include "game.h"   // StubState lives on Game; reached via c->game->stub (de-globalization, 2026-06-19)
 #include "c_subsys.h"
 #include "cfg.h"
 #include <stdio.h>
@@ -64,9 +65,9 @@ static uint32_t load_exe_image(const char* path, Core* c) {
   return entry;
 }
 
-static jmp_buf      g_stub_exit;        // longjmp target = the setjmp in native_stub_run
-static const char*  g_main_path;        // MAIN.EXE path (reloaded at LoadExec hand-off)
-static Core*       g_boot_ctx;         // the boot Core (so the hook can reload MAIN into it)
+// Boot-stub state (vblank counter, MAIN.EXE path, LoadExec longjmp target) now lives on the
+// instance: c->game->stub.{vblank,main_path,exit_jmp}. The former g_boot_ctx global is gone — every
+// user is an override that already carries the boot Core* c, so it reloads MAIN into `c` directly.
 
 // LoadExec(cdrom:\MAIN.EXE;1, stackbase, stackoffset) interceptor. The real LoadExec loads the
 // named EXE and jumps to it (never returns). We instead reload MAIN.EXE (restoring the low text
@@ -78,8 +79,8 @@ static void ov_loadexec(Core* c) {
   for (; i < 63; i++) { uint8_t ch = c->mem_r8(name + i); if (!ch) break; fn[i] = (char)ch; }
   fn[i] = 0;
   fprintf(stderr, "[stub] LoadExec(\"%s\") -> hand off to native MAIN boot\n", fn);
-  load_exe_image(g_main_path, g_boot_ctx);     // reload MAIN.EXE image + registers
-  longjmp(g_stub_exit, 1);
+  load_exe_image(c->game->stub.main_path, c);  // reload MAIN.EXE image + registers into the boot Core
+  longjmp(c->game->stub.exit_jmp, 1);
 }
 
 // --- Stub libcd overrides ------------------------------------------------------------------
@@ -117,10 +118,10 @@ static void ov_stub_cddatasync(Core* c) { c->r[V0_] = 0; }
 // hold/fade progress. DAT_800267B4 is the count SCEA also reads directly.
 #define STUB_VBLANK_COUNT 0x800267B4u
 void hle_deliver_event(Core* c, uint32_t ev_class, uint32_t spec);
-static uint32_t g_stub_vblank;
 static void ov_stub_vsync(Core* c) {
+  uint32_t& stub_vblank = c->game->stub.vblank;   // boot-stub VBlank counter (was g_stub_vblank)
   int32_t mode = (int32_t)c->r[A0_];
-  if (cfg_dbg("vsync")) fprintf(stderr, "[vsync] mode=%d count=%u\n", mode, g_stub_vblank);
+  if (cfg_dbg("vsync")) fprintf(stderr, "[vsync] mode=%d count=%u\n", mode, stub_vblank);
   hle_deliver_event(c, 0xF2000003u, 0xFFFFFFFFu);      // VBlank event classes (RCnt3 / libapi)
   hle_deliver_event(c, 0xF0000001u, 0xFFFFFFFFu);
 
@@ -146,8 +147,8 @@ static void ov_stub_vsync(Core* c) {
 #endif
     if (cfg_on("PSXPORT_SCEA_SKIP") || (pad_buttons(c) & 0x0008u) == 0) {
       fprintf(stderr, "[stub] SCEA skipped (Start) -> hand off to MAIN\n");
-      load_exe_image(g_main_path, g_boot_ctx);
-      longjmp(g_stub_exit, 1);
+      load_exe_image(c->game->stub.main_path, c);
+      longjmp(c->game->stub.exit_jmp, 1);
     }
   }
 #ifdef PSXPORT_SDL
@@ -169,18 +170,18 @@ static void ov_stub_vsync(Core* c) {
     } else {
       watchdog_pet();                                  // poll: no present, no artificial count tick
     }
-    g_stub_vblank = (uint32_t)((now - t0) * 60.0 / 1000.0);   // count == real vblanks elapsed
-    c->mem_w32(STUB_VBLANK_COUNT, g_stub_vblank);
-    c->r[V0_] = g_stub_vblank;
+    stub_vblank = (uint32_t)((now - t0) * 60.0 / 1000.0);   // count == real vblanks elapsed
+    c->mem_w32(STUB_VBLANK_COUNT, stub_vblank);
+    c->r[V0_] = stub_vblank;
     return;
   }
 #endif
   // Headless / unpaced: advance per call (fast) so tests run at full speed; present on frame-waits.
-  g_stub_vblank += (mode > 0) ? (uint32_t)mode : 1u;
+  stub_vblank += (mode > 0) ? (uint32_t)mode : 1u;
   if (mode >= 0) gpu_present(c);
   else watchdog_pet();
-  c->mem_w32(STUB_VBLANK_COUNT, g_stub_vblank);
-  c->r[V0_] = g_stub_vblank;
+  c->mem_w32(STUB_VBLANK_COUNT, stub_vblank);
+  c->r[V0_] = stub_vblank;
 }
 
 // --- Stub CdRead: make SCEA do NO CD reads ----------------------------------------------------
@@ -193,7 +194,8 @@ static void ov_stub_vsync(Core* c) {
 // FMV. (User-requested: "make SCEA not do CD reads.")
 #define STUB_CD_STATUS 0x80026C0Cu
 static void ov_stub_cdread(Core* c) {
-  c->mem_w32(STUB_CD_STATUS, g_stub_vblank ? g_stub_vblank : 1u);
+  uint32_t sv = c->game->stub.vblank;
+  c->mem_w32(STUB_CD_STATUS, sv ? sv : 1u);
   c->r[V0_] = c->mem_r32(STUB_CD_STATUS);
 }
 
@@ -214,8 +216,7 @@ static void stub_cd_overrides_init(void) {
 }
 
 void native_stub_run(Core* c, const char* main_exe_path) {
-  g_main_path = main_exe_path;
-  g_boot_ctx  = c;
+  c->game->stub.main_path = main_exe_path;
   g_loadexec_hook = ov_loadexec;
   stub_cd_overrides_init();
   interp_trace_open(cfg_str("PSXPORT_INTERP_TRACE"));
@@ -229,11 +230,11 @@ void native_stub_run(Core* c, const char* main_exe_path) {
   snprintf(stub, sizeof stub, "%.*s%s", dirlen, main_exe_path, "SCUS_944.54");
   uint32_t entry = load_exe_image(stub, c);
 
-  if (setjmp(g_stub_exit) == 0) {
+  if (setjmp(c->game->stub.exit_jmp) == 0) {
     fprintf(stderr, "[stub] running boot stub from entry 0x%08X (draws SCEA, loads MAIN)\n", entry);
     stub_dispatch(c, entry);                     // runs SCEA + LoadExec; ov_loadexec longjmps out
     fprintf(stderr, "[stub] stub returned without LoadExec (unexpected) — booting MAIN directly\n");
-    load_exe_image(g_main_path, c);
+    load_exe_image(c->game->stub.main_path, c);
   }
   g_loadexec_hook = 0;
   fprintf(stderr, "[stub] entering native MAIN boot\n");

@@ -13,6 +13,7 @@
 #pragma once
 #include "core.h"
 #include <stdint.h>
+#include <setjmp.h>
 
 // ---- per-subsystem state structs (former file-scope statics), migrated one phase at a time ----
 
@@ -61,6 +62,13 @@ struct FmvState {
   int start_prev = 0;   // Start was down on the previously polled frame (skip edge-detect) (was s_fmv_start_prev)
 };
 
+// native_stub.cpp — the SCEA boot-stub (SCUS_944.54) interpreter that draws SCEA + LoadExec's MAIN.
+struct StubState {
+  uint32_t    vblank    = 0;        // boot-stub VBlank counter during SCEA fades (was g_stub_vblank)
+  const char* main_path = nullptr;  // MAIN.EXE path, reloaded at LoadExec hand-off (was g_main_path)
+  jmp_buf     exit_jmp;             // longjmp target = native_stub_run's setjmp (was g_stub_exit)
+};
+
 class Game {
 public:
   Core core;            // CPU registers + 2 MB main RAM + 1 KB scratchpad (was the sole instance object)
@@ -71,6 +79,7 @@ public:
   HleState    hle;
   PadState    pad;
   FmvState    fmv;
+  StubState   stub;
 
   Game() { core.game = this; }
 };

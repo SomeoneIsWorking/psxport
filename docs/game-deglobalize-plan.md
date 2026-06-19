@@ -74,8 +74,12 @@ Flag init-once-then-read tables case by case; when in doubt, move it (safe).
   **shared by design** — host audio-output singleton, not guest machine state, so a lockstep RAM diff
   is unaffected (documented in-code). 0-diff ✓ (FMV not exercised at the NO_FMV frame-50 gate, but the
   change is a pure variable relocation with identical semantics).
+- **P6 (done):** native_stub.cpp — boot-stub state → `StubState` (`c->game->stub`): `g_stub_vblank`→
+  `vblank`, `g_main_path`→`main_path`, `g_stub_exit`(jmp_buf)→`exit_jmp`. **Eliminated `g_boot_ctx`**
+  (redundant — every user is an override carrying the boot `Core* c`, so it reloads MAIN into `c`).
+  All users had `c` in scope; setjmp/longjmp now on `c->game->stub.exit_jmp`. 0-diff ✓.
 - **Next (order, small→large):**
-  native_stub (g_stub_vblank etc.) → interp → gpu_native → gpu_trace → dbg_server → native_boot →
+  interp → gpu_native → gpu_trace → dbg_server → native_boot →
   gpu_vk → gte/spu/mdec (Beetle FORK) → engine modules (fps60, engine_submit, native_path*, game_tomba2).
   DONE/skip: timing, cd_override, hle (done); sync_overrides, threads, memcard (only config-caches).
 
