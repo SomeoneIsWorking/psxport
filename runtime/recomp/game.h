@@ -54,6 +54,13 @@ struct PadState {
   int      repl_on    = 0;       // REPL drive active (was s_repl_on)
 };
 
+// native_fmv.cpp — native .STR movie player. Its only per-instance mutable state is the Start-skip
+// edge flag; the SDL audio-sink handles (s_fmv_dev/freq) stay a shared host-output singleton (you
+// can't open two host audio devices for one speaker; a lockstep RAM diff is unaffected by them).
+struct FmvState {
+  int start_prev = 0;   // Start was down on the previously polled frame (skip edge-detect) (was s_fmv_start_prev)
+};
+
 class Game {
 public:
   Core core;            // CPU registers + 2 MB main RAM + 1 KB scratchpad (was the sole instance object)
@@ -63,6 +70,7 @@ public:
   CdState     cd;
   HleState    hle;
   PadState    pad;
+  FmvState    fmv;
 
   Game() { core.game = this; }
 };

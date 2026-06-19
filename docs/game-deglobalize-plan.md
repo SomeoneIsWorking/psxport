@@ -69,7 +69,12 @@ Flag init-once-then-read tables case by case; when in doubt, move it (safe).
   native_boot repl + auto-navigator). Test-hook/config-cache statics inside `pad_service_frame`
   (`s_fc`, FORCE_* env caches) left shared per policy. Dropped the dead `PSXPORT_PAD_NO_OVERRIDES`
   standalone path (no build uses it). 0-diff ✓.
-- **Next (order, small→large):** native_fmv →
+- **P5 (done):** native_fmv.cpp — Start-skip edge flag `s_fmv_start_prev` → `FmvState::start_prev`
+  (`core->game->fmv`). The SDL audio-sink handles (`s_fmv_dev/freq/bytes_per_frame`) stay file-scope
+  **shared by design** — host audio-output singleton, not guest machine state, so a lockstep RAM diff
+  is unaffected (documented in-code). 0-diff ✓ (FMV not exercised at the NO_FMV frame-50 gate, but the
+  change is a pure variable relocation with identical semantics).
+- **Next (order, small→large):**
   native_stub (g_stub_vblank etc.) → interp → gpu_native → gpu_trace → dbg_server → native_boot →
   gpu_vk → gte/spu/mdec (Beetle FORK) → engine modules (fps60, engine_submit, native_path*, game_tomba2).
   DONE/skip: timing, cd_override, hle (done); sync_overrides, threads, memcard (only config-caches).

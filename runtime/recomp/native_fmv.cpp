@@ -1,4 +1,5 @@
 #include "core.h"
+#include "game.h"   // FmvState lives on Game; reached via core->game->fmv (de-globalization, 2026-06-19)
 #include "c_subsys.h"
 // Native FMV player for the Tomba!2 PC port.
 //
@@ -66,9 +67,8 @@ uint16_t pad_buttons(Core*);                                // active-low PSX bu
 
 static int fmv_resolve_path(const char* path, uint32_t* out_lba, uint32_t* out_size);
 
-// Start-skip edge state, shared by the FMV pacing (fmv_pace, below). 1 = Start was down on the
-// previous polled frame; edge-detected so a Start held across one movie doesn't skip the next.
-static int s_fmv_start_prev = 0;
+// Start-skip edge state now lives on the instance: core->game->fmv.start_prev. 1 = Start was down on
+// the previous polled frame; edge-detected so a Start held across one movie doesn't skip the next.
 
 #define SECTOR_USER   2048u
 #define SUBHDR_LEN    32u
@@ -615,6 +615,8 @@ int xa_decode_sector(const uint8_t* raw, int16_t* out, int16_t hist[2][2], int* 
 // ---- FMV audio output (dedicated SDL device at the XA rate) + audio-master pacing --------
 #ifdef PSXPORT_SDL
 #include <SDL.h>
+// shared: host audio-output singleton (NOT guest machine state). One physical speaker → one device;
+// a lockstep dual-core RAM diff is unaffected by it, so it stays file-scope shared by design.
 static SDL_AudioDeviceID s_fmv_dev = 0;
 static int s_fmv_freq = 0, s_fmv_bytes_per_frame = 4;   // S16 stereo
 static void fmv_audio_open(int freq) {
@@ -641,15 +643,16 @@ static void fmv_audio_close(void) { if (s_fmv_dev) { SDL_ClearQueuedAudio(s_fmv_
 // uncapped (PSXPORT_FMV_FPS=0) disables pacing for fast headless dumps.
 static int fmv_pace(Core* core, long media_frames, int freq, uint32_t t0, int uncapped) {
   pad_poll_sdl(core);
-  int pressed = ((pad_buttons(core) & PAD_START) == 0) && !s_fmv_start_prev;
-  s_fmv_start_prev = (pad_buttons(core) & PAD_START) == 0;
+  int& start_prev = core->game->fmv.start_prev;
+  int pressed = ((pad_buttons(core) & PAD_START) == 0) && !start_prev;
+  start_prev = (pad_buttons(core) & PAD_START) == 0;
   if (uncapped || freq <= 0) return pressed;
   uint32_t target = (uint32_t)((long long)media_frames * 1000 / freq);
   while ((int)(SDL_GetTicks() - t0) < (int)target) {
     SDL_Delay(2);
     pad_poll_sdl(core);
-    if (((pad_buttons(core) & PAD_START) == 0) && !s_fmv_start_prev) pressed = 1;
-    s_fmv_start_prev = (pad_buttons(core) & PAD_START) == 0;
+    if (((pad_buttons(core) & PAD_START) == 0) && !start_prev) pressed = 1;
+    start_prev = (pad_buttons(core) & PAD_START) == 0;
   }
   return pressed;
 }
@@ -697,7 +700,7 @@ int native_fmv_play_lba(Core* core, uint32_t lba, uint32_t size_bytes) {
   int16_t xa_hist[2][2] = {{0,0},{0,0}};
   static int16_t xa_pcm[4032 * 2];   // mono sectors yield up to 4032 frames (see xa_decode_sector)
   long media_frames = 0;                       // cumulative audio sample-pairs = media clock
-  s_fmv_start_prev = 1;                         // assume Start may be held from a prior movie
+  core->game->fmv.start_prev = 1;              // assume Start may be held from a prior movie
   uint32_t t0 = 0;
 #ifdef PSXPORT_SDL
   t0 = SDL_GetTicks();
