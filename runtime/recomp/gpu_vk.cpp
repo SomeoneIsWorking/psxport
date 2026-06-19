@@ -308,7 +308,8 @@ static int W_ires(void) {
 #define s_ires (W_ires())
 static int FBW(void) { return wide_native_w() * s_ires; }
 static int FBH(void) { return 240 * s_ires; }
-static int use_fb(void) { return s_wide || s_ires > 1; }   // 3D goes through the scaled scratch FB
+static int use_fb(void) { if (cfg_on("PSXPORT_NO_FB")) return 0;   // DIAG: hard-disable the scratch FB
+                          return s_wide || s_ires > 1; }   // 3D goes through the scaled scratch FB
 // Does THIS frame's content live in the scaled scratch FB? Only when hi-res/wide is configured AND the
 // frame actually drew 3D geometry (which is what gets relocated into the FB). A pure-2D screen (SCEA /
 // FMV / title / menu — a VRAM-resident image, no tee'd 3D) has an EMPTY scratch FB, so it must render +
@@ -442,8 +443,11 @@ static void init_vk(void) {
   const char* exts[16]; unsigned ext_n = 0;
   if (!s_headless) {
     SDL_Init(SDL_INIT_VIDEO);
-    int windowed = cfg_str("PSXPORT_WINDOWED") && atoi(cfg_str("PSXPORT_WINDOWED")) != 0;
-    Uint32 flags = SDL_WINDOW_VULKAN | (windowed ? SDL_WINDOW_RESIZABLE : SDL_WINDOW_FULLSCREEN_DESKTOP);
+    // Windowed by default (easier to drive/inspect); opt into fullscreen with PSXPORT_FULLSCREEN=1.
+    // (Legacy PSXPORT_WINDOWED=0 can still force fullscreen.)
+    int fullscreen = cfg_on("PSXPORT_FULLSCREEN")
+                  || (cfg_str("PSXPORT_WINDOWED") && atoi(cfg_str("PSXPORT_WINDOWED")) == 0);
+    Uint32 flags = SDL_WINDOW_VULKAN | (fullscreen ? SDL_WINDOW_FULLSCREEN_DESKTOP : SDL_WINDOW_RESIZABLE);
     s_win = SDL_CreateWindow("Tomba! 2 (Vulkan)", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
                              960, 720, flags);
     if (!s_win) { fprintf(stderr, "[gpu_vk] SDL_CreateWindow(VULKAN) failed: %s\n", SDL_GetError()); exit(2); }

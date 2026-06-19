@@ -373,24 +373,37 @@ static void ov_options_menu(Core* c) {
 }
 
 void games_tomba2_init(void) {
-  rec_set_override(0x800788ACu, ov_frame_update);
+  // PSXPORT_FAITHFUL=1: master "all hacks OFF" switch. Registers ZERO native overrides — the game runs
+  // purely through the recompiled/interpreted bodies (faithful submit, DrawOTag, projection, codecs, cull,
+  // per-frame tick) and the faithful OT-order depth (native_depth_on() also honors PSXPORT_FAITHFUL). This
+  // is the true reference render: no native submit/flush/walk/terrain/xform, no cull re-include, no native
+  // depth, no widescreen/hi-res relocation. Use it as the known-good baseline. (The individual *_RECOMP
+  // flags only disabled a SUBSET — ov_frame_update / ov_object_cull / ov_options_menu were always-on.)
+  int faith = cfg_on("PSXPORT_FAITHFUL");
+  // Granular per-override disables (for bisecting which always-on override corrupts the render):
+  // PSXPORT_NO_TICK_OV (frame_update 800788AC), PSXPORT_NO_CULL_OV (object_cull 8007712C),
+  // PSXPORT_NO_MENU_OV (options_menu 8007B45C). faith implies all three.
+  int no_tick = faith || cfg_on("PSXPORT_NO_TICK_OV");
+  int no_cull = faith || cfg_on("PSXPORT_NO_CULL_OV");
+  int no_menu = faith || cfg_on("PSXPORT_NO_MENU_OV");
+  if (!no_tick) rec_set_override(0x800788ACu, ov_frame_update);
   // Replace the game's in-game Options menu with our overlay. Always registered: the override itself
   // falls back to the real menu (super-call) when the overlay isn't up (headless / PSXPORT_UI=0), so
   // this needs no flag — it activates whenever the overlay exists (windowed by default).
-  rec_set_override(0x8007B45Cu, ov_options_menu);
-  if (!cfg_on("PSXPORT_GEOM_RECOMP")) {           // own the GTE projection setup natively (faithful-first)
+  if (!no_menu) rec_set_override(0x8007B45Cu, ov_options_menu);
+  if (!faith && !cfg_on("PSXPORT_GEOM_RECOMP")) { // own the GTE projection setup natively (faithful-first)
     rec_set_override(0x800846D0u, ov_set_geom_offset);
     rec_set_override(0x800846F0u, ov_set_geom_screen);
   }
-  if (!cfg_on("PSXPORT_OT_RECOMP"))               // own DrawOTag (the per-frame draw kick) natively
+  if (!faith && !cfg_on("PSXPORT_OT_RECOMP"))     // own DrawOTag (the per-frame draw kick) natively
     rec_set_override(0x80081560u, ov_draw_otag);
   // PC-owned asset codecs (A/B: PSXPORT_LZ_RECOMP=1 keeps the recomp bodies for comparison).
-  if (!cfg_on("PSXPORT_LZ_RECOMP")) {
+  if (!faith && !cfg_on("PSXPORT_LZ_RECOMP")) {
     rec_set_override(0x80044D8Cu, ov_lz_decompress);  // LZ image decompressor
     rec_set_override(0x80044E84u, ov_unpack_group);   // texture-group unpacker (drives the above)
     rec_set_override(0x80081218u, ov_upload_image);   // PC-native CPU->VRAM upload (libgs upload lib)
   }
-  if (!cfg_on("PSXPORT_SUBMIT_RECOMP")) {          // own the geometry submit path natively (faithful-first)
+  if (!faith && !cfg_on("PSXPORT_SUBMIT_RECOMP")) { // own the geometry submit path natively (faithful-first)
     void ov_submit_poly_gt3(Core*), ov_submit_poly_gt4(Core*), ov_submit_poly_gt4_bp(Core*),
          engine_submit_register_autodetect(void);
     rec_set_override(0x8007FDB0u, ov_submit_poly_gt3);   // POLY_GT3 (gouraud-textured triangle) submit
@@ -402,7 +415,7 @@ void games_tomba2_init(void) {
   // compose the camera×object transform + dispatch the geomblk to the native submitter, with NO guest
   // render code (later-133). A/B: PSXPORT_PEROBJ_RECOMP=1 keeps the recomp body. (PSXPORT_DEBUG=flush2
   // re-overrides the same addr below with the probe, which super-calls the recomp body.)
-  if (!cfg_on("PSXPORT_PEROBJ_RECOMP")) {
+  if (!faith && !cfg_on("PSXPORT_PEROBJ_RECOMP")) {
     void ov_perobj_flush(Core*), ov_perobj_render(Core*), ov_render_walk(Core*), ov_terrain(Core*);
     if (!cfg_on("PSXPORT_NO_FLUSH"))  rec_set_override(0x8003CDD8u, ov_perobj_flush);
     if (!cfg_on("PSXPORT_NO_DISP"))   rec_set_override(0x8003CCA4u, ov_perobj_render);  // per-object render dispatch
@@ -415,7 +428,7 @@ void games_tomba2_init(void) {
   // cull tap: ALWAYS registered — genuine-wide is the default wide path and the overlay can toggle aspect
   // LIVE, so the widened-frustum re-include must be available without a launch flag. ov_object_cull is a
   // faithful super-call + a wide-only re-include (no-op at 4:3), so registering it always is safe.
-  rec_set_override(0x8007712Cu, ov_object_cull);
+  if (!no_cull) rec_set_override(0x8007712Cu, ov_object_cull);
   // Render-command capture oracle (PSXPORT_DEBUG=rcmd): tap the deferred-flush mode dispatcher so every queued
   // render command (mode + GTE transform + geomblk) is dumped — the complete input for the native render port.
   // Gated: only registered when the channel is on (the super-call interprets the dispatcher subtree). later-130.

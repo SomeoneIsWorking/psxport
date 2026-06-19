@@ -414,6 +414,12 @@ static void ov_game_main(Core* c) {
           pad_repl_tap((uint16_t)(0xFFFF & ~0x0008), 6);           // pulse Start (0x0008): title + dialog advance
         }
       }
+      // PSXPORT_AUTO_SKIP=N: after field-reach, KEEP pulsing Start until native frame N to advance/skip
+      // the post-arrival fisherman dialog CUTSCENE (the field "reached" = area music looping, but the
+      // cutscene is still up and only ends on Start edges). Reaches actual Tomba gameplay on the cliff.
+      if (gnav == 2) { const char* sk = cfg_str("PSXPORT_AUTO_SKIP");
+        if (sk && f < (uint32_t)atoi(sk) && (f % 24u) == 0) {
+          void pad_repl_tap(uint16_t, int); pad_repl_tap((uint16_t)(0xFFFF & ~0x0008), 6); } }
       // PSXPORT_AUTO_WALK=<dir>: once the field is reached, HOLD a D-pad direction so the character
       // walks and the camera pans — a deterministic MOTION scene for validating fps60 interpolation
       // (the idle field is fully static, A==B). dir: l/r/u/d (default right). Active-low pad mask.

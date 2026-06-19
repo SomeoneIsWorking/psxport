@@ -392,7 +392,7 @@ int  projprim_count(void)      { return s_pp_n; }
 int native_depth_on(void) {
   static int v = -1;
   if (v < 0) { const char* nd = cfg_str("PSXPORT_NATIVE_DEPTH");
-    v = (cfg_on("PSXPORT_FAITHFUL_DEPTH") || (nd && atoi(nd) == 0)) ? 0 : 1; }
+    v = (cfg_on("PSXPORT_FAITHFUL") || cfg_on("PSXPORT_FAITHFUL_DEPTH") || (nd && atoi(nd) == 0)) ? 0 : 1; }
   return v;
 }
 // The native-depth path is active (default, or the SBS A/B view) — gates the engine's depth recording +

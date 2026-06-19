@@ -138,4 +138,7 @@ $CXX -rdynamic $OBJS $CHD_LIBS $(pkg-config --libs sdl2 vulkan) -lpthread -lm -o
 # ---- 5. run ------------------------------------------------------------------------
 say "launching Tomba! 2 (native PC port)…"
 WIN=1; [ -n "${PSXPORT_NOWINDOW:-}" ] && WIN=0
+# Debug server ON by default so a windowed session can be inspected/driven live (tools/dbgclient.py);
+# opt out with PSXPORT_DEBUG_SERVER=0. Window is windowed by default now (PSXPORT_FULLSCREEN=1 to override).
+PSXPORT_DEBUG_SERVER="${PSXPORT_DEBUG_SERVER:-1}" \
 PSXPORT_GPU_WINDOW=$WIN PSXPORT_TOMBA2_DISC="$DISC" exec ./scratch/bin/tomba2_port "$MAIN"
