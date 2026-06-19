@@ -383,6 +383,10 @@ void games_tomba2_init(void) {
   // Granular per-override disables (for bisecting which always-on override corrupts the render):
   // PSXPORT_NO_TICK_OV (frame_update 800788AC), PSXPORT_NO_CULL_OV (object_cull 8007712C),
   // PSXPORT_NO_MENU_OV (options_menu 8007B45C). faith implies all three.
+  // Hand-written native C++ for the boot→first-cutscene path (engine/native_path.cpp). This IS the
+  // port (always on; PSXPORT_FAITHFUL keeps pure interp as the RE reference). See docs/native-port-plan.md.
+  void games_native_path_init(void);
+  if (!faith) games_native_path_init();
   int no_tick = faith || cfg_on("PSXPORT_NO_TICK_OV");
   int no_cull = faith || cfg_on("PSXPORT_NO_CULL_OV");
   int no_menu = faith || cfg_on("PSXPORT_NO_MENU_OV");
