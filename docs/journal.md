@@ -5492,3 +5492,16 @@ globals / pool (0x800Bxxxx) / scratchpad (0x1F80xxxx).** b1's 15 fns: only stack
 Also fixed+re-enabled the two clip-word builders (later-151 quarantine): bug was 32778<<16=0x800A0000 not
 0x800F0000 (limits read from wrong base). 7-fn fix-queue → 5 left: 800752B4(167), 80097540(2-byte stack
 cascade), 80090160(80, wrong stream cursor → cascade), 80077FB0(4), 80094C10(15). Burn-down now 487.
+
+## later-153: non-leaf phase continued (b1+b2 = 23 fns) — burn-down 487→474; STACK-ARG gotcha
+
+Ported up the ov_game_main init-prefix call tree: descriptor/viewport setup (80050738 = 4× 80083B30/
+80083BF0 builders), GTE matrix×vector ops (80084470/80084250), strlen, table-search (8008BEAC via
+strcmp), fixed-point lookups, large field/array inits. Sub-calls via rec_dispatch(c, addr). All A/B-
+verified (non-leaf stack-frame-slot diffs accepted; globals/pool 0-diff).
+
+**STACK-ARG gotcha (recurs for any non-leaf port that passes a 5th+ arg):** the callee reads arg5 at
+sp+16. A frame-less override that writes c->r[29]+16 corrupts the CALLER's frame → hangs the interpreted
+caller (80050738 hung the init prefix this way). FIX: replicate the gen's frame alloc — `c->r[29] -= N`
+at entry, write the stack arg to the decremented sp+16, `c->r[29] += N` before returning. (Register args
+a0-a3 need no frame; only stack args do.) Caught by the gate as a hang (timeout, never reaches GAME).
