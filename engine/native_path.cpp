@@ -199,6 +199,90 @@ static void ov_800847B0(Core* c) {
   c->mem_w16(a1 + 4, (uint16_t)r9b); c->mem_w16(a1 + 16, (uint16_t)r10b);
 }
 
+// 0x800974FC — write into the u16 table at *0x800AC604, index a0: if a2==0 store a1, else store
+// a1 >> (*0x800AC62C & 31).
+static void ov_800974FC(Core* c) {
+  uint32_t p = c->mem_r32(0x800AC604u) + (c->r[4] << 1);
+  if (c->r[6] == 0) c->mem_w16(p, (uint16_t)c->r[5]);
+  else c->mem_w16(p, (uint16_t)(c->r[5] >> (c->mem_r32(0x800AC62Cu) & 31)));
+}
+
+// 0x80082C68 — write four GPU primitive templates through the pointer table at 0x800A5AA8..0x800A5AB4:
+// [0]=0x04000002, [1]=a0, [2]=0, [3]=0x01000401 (draw-mode / tex-window / etc. setup).
+static void ov_80082C68(Core* c) {
+  c->mem_w32(c->mem_r32(0x800A5AA8u), 0x04000002u);
+  c->mem_w32(c->mem_r32(0x800A5AACu), c->r[4]);
+  c->mem_w32(c->mem_r32(0x800A5AB0u), 0);
+  c->mem_w32(c->mem_r32(0x800A5AB4u), 0x01000401u);
+}
+
+// 0x800976C8 — original spins x=13; x*=13 sixty times into a stack local with NO external effect
+// (no global/pointer write), returning 0. The native form drops the dead loop. (r2 = 0 on exit.)
+static void ov_800976C8(Core* c) { c->r[2] = 0; }
+
+// 0x80097760 — if (int)a0 <= 0 return 0; else set up a request block at a1 and register it in the
+// globals at 0x800AC664/668/66C. *(a1)=0x40001010; *(a1+4)=(0x10000<<(*0x800AC62C&31))-0x1010.
+static void ov_80097760(Core* c) {
+  if ((int32_t)c->r[4] <= 0) { c->r[2] = 0; return; }
+  uint32_t sh = c->mem_r32(0x800AC62Cu) & 31;
+  c->mem_w32(c->r[5] + 0, 0x40001010u);
+  c->mem_w32(0x800AC66Cu, c->r[5]);
+  c->mem_w32(0x800AC668u, 0);
+  c->mem_w32(0x800AC664u, c->r[4]);
+  c->mem_w32(c->r[5] + 4, (0x00010000u << sh) - 4112u);
+  c->r[2] = c->r[4];
+}
+
+// 0x8009A340 — bzero(a0, a1) returning a0; returns 0 when a0==0 or (int)a1<=0.
+static void ov_8009A340(Core* c) {
+  uint32_t p = c->r[4]; int n = (int32_t)c->r[5];
+  if (p == 0 || n <= 0) { c->r[2] = 0; return; }
+  c->r[2] = p; for (int i = 0; i < n; i++) c->mem_w8(p + i, 0);
+}
+
+// 0x8009A540 — strcmp(a0, a1). Guard: if either is NULL, equal→0 / a0==NULL→-1 / else 1. Otherwise
+// walk both; the s2 pointer advances every iteration (a delay-slot store), so the mismatch return is
+// *s1 - *s2 (sign-extended bytes); both-NUL → 0.
+static void ov_8009A540(Core* c) {
+  uint32_t s1 = c->r[4], s2 = c->r[5];
+  if (s1 == 0 || s2 == 0) {
+    if (s1 == s2) c->r[2] = 0;
+    else if (s1 == 0) c->r[2] = (uint32_t)-1;
+    else c->r[2] = 1;
+    return;
+  }
+  for (;;) {
+    int32_t a = (int8_t)c->mem_r8(s1), b = (int8_t)c->mem_r8(s2);
+    uint32_t cur = c->mem_r8(s1);
+    s2++;                               // always (delay slot)
+    if (a == b) { s1++; if (cur == 0) { c->r[2] = 0; return; } continue; }
+    int32_t x = (int8_t)c->mem_r8(s1), y = (int8_t)c->mem_r8(s2 - 1);
+    c->r[2] = (uint32_t)(x - y); return;
+  }
+}
+
+// 0x8001CBA8 — write a {0,252,0,255} 4-byte pattern at offsets 72/74/76/78 of a0+(a1&0xff), for up
+// to two entries (the start index folds a1's low byte; 255 wraps to 0). A palette/attr seed.
+static void ov_8001CBA8(Core* c) {
+  uint32_t a0 = c->r[4], a1 = c->r[5];
+  uint32_t k = ((a1 & 0xff) == 255) ? 0u : 1u;
+  if ((a1 & 0xff) == 255) a1 = 0;
+  for (;;) {
+    k++;
+    uint32_t p = a0 + (a1 & 0xff);
+    c->mem_w8(p + 72, 0); c->mem_w8(p + 74, 252); c->mem_w8(p + 76, 0); c->mem_w8(p + 78, 255);
+    if ((int32_t)k < 2) a1++; else break;
+  }
+}
+
+// 0x8007B2C0 — load a 4-entry u16 weight ramp into the scratchpad at 0x1F800170: a0==0 → descending
+// {0x8000,0x4000,0x2000,0x1000}; a0!=0 → ascending {0x1000,0x2000,0x4000,0x8000}.
+static void ov_8007B2C0(Core* c) {
+  uint32_t b = 0x1F800170u;
+  if (c->r[4] == 0) { c->mem_w16(b+0,0x8000); c->mem_w16(b+2,0x4000); c->mem_w16(b+4,0x2000); c->mem_w16(b+6,0x1000); }
+  else              { c->mem_w16(b+0,0x1000); c->mem_w16(b+2,0x2000); c->mem_w16(b+4,0x4000); c->mem_w16(b+6,0x8000); }
+}
+
 // Register every hand-native boot→cutscene function. Called from games_tomba2_init at startup, before
 // ov_game_main runs the init prefix, so rec_dispatch routes these addresses to the native C++ bodies.
 void games_native_path_init(void) {
@@ -233,4 +317,12 @@ void games_native_path_init(void) {
   rec_set_override(0x8008CFF0u, ov_8008CFF0);
   rec_set_override(0x8006CBD0u, ov_8006CBD0);
   rec_set_override(0x800847B0u, ov_800847B0);
+  rec_set_override(0x800974FCu, ov_800974FC);
+  rec_set_override(0x80082C68u, ov_80082C68);
+  rec_set_override(0x800976C8u, ov_800976C8);
+  rec_set_override(0x80097760u, ov_80097760);
+  rec_set_override(0x8009A340u, ov_8009A340);
+  rec_set_override(0x8009A540u, ov_8009A540);
+  rec_set_override(0x8001CBA8u, ov_8001CBA8);
+  rec_set_override(0x8007B2C0u, ov_8007B2C0);
 }
