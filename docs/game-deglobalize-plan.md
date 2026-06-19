@@ -123,10 +123,25 @@ Flag init-once-then-read tables case by case; when in doubt, move it (safe).
   read-only w.r.t. guest RAM (it snapshots VRAM + records GP0 words, then writes a trace FILE for gpu_differ).
   They do NOT affect Core::ram, so per the "Debug/trace statics" policy they STAY SHARED (two lockstep cores
   are both unarmed/no-op or armed identically; the capture buffers can't diverge core.ram). No code change.
-- **Next (order):** ~~gpu_native~~(R1) → ~~gpu_vk~~(R2) → ~~gpu_trace/gpu_debug~~(R3 audit) → dbg_server (audit
-  done, see below) → **native_boot (REAL migration — scheduler state, do this next)** → gte/spu/mdec (Beetle
-  FORK) → engine modules (fps60, engine_submit, native_path*, game_tomba2). (mem 1 static, boot 1 — sweep at
-  the end.) THEN the dual-core diff + the submit_terrain fix.
+- **Next (order):** ~~gpu_native~~(R1) → ~~gpu_vk~~(R2) → ~~gpu_trace/gpu_debug~~(R3 audit) → ~~dbg_server~~(audit) →
+  ~~native_boot~~(done) → **gte/spu/mdec (Beetle FORK — do this next; architectural decision below)** → engine
+  modules (fps60, engine_submit, native_path*, game_tomba2). (mem 1 static, boot 1 — sweep at the end.) THEN
+  the dual-core diff + the submit_terrain fix.
+- **native_boot.cpp (done):** the native cooperative-scheduler state → `SchedulerState` on Game
+  (`c->game->sched`): `g_yield_jmp`→`yield_jmp`, `g_task_ctx[3]`→`task_ctx` (saved R3000 regs ONLY — the
+  [[oop-regression-hunt]] invariant), `g_in_stage`→`in_stage`, `g_cur_slot`→`cur_slot`,
+  `g_task_started[3]`→`task_started`. Both scheduler fns (ov_switch, native_scheduler_step) hold `Core* c`,
+  so the setjmp/longjmp now target the per-instance `c->game->sched.yield_jmp`. Rest of native_boot stays
+  shared (s_bgmdbg config-cache; out[400000]/held/ls/s_rd/s_last_* function-local diag). Gate: frame-50 RAM
+  0-diff vs baseline ✓ (native_boot is exercised heavily through boot, so this is a strong check).
+- **gte/spu/mdec (Beetle FORK — NEXT, decision point):** the GTE/SPU/MDEC register state lives in the
+  vendored fork (mednafen/psx/gte.c `gteCONTROL`/`gteDATA`, spu.c, mdec.c) as file-scope globals, NOT in our
+  gte_beetle/spu_beetle/mdec_beetle wrappers. De-globalizing means EITHER (a) make the fork's state a
+  per-instance struct (modify the committed fork — most faithful to "nothing global", but touches vendored
+  code and all its internal refs), OR (b) snapshot/restore the fork globals around each core switch in the
+  dual-core harness (leaves the fork alone; the globals are still globals but the harness saves/restores
+  them so each core sees its own). (b) is far less invasive and is enough for the lockstep diff (only ONE
+  core runs at a time between switches). RECOMMEND (b) unless the user wants the fork itself de-globalized.
 - **dbg_server.cpp (AUDIT — stays shared):** all file-scope statics are the HOST debug-interface singleton
   (one per process, not guest machine state, not in Core::ram): the server<->main handoff (s_mtx/s_done/
   s_cmd/s_req_pending/s_resp_*/s_started), pause/step driver controls (s_paused/s_step/s_held), and `s_ctx`

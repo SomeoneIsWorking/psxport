@@ -64,6 +64,19 @@ struct FmvState {
   int start_prev = 0;   // Start was down on the previously polled frame (skip edge-detect) (was s_fmv_start_prev)
 };
 
+// native_boot.cpp — the native cooperative task scheduler (replaces the BIOS thread layer). A task
+// context is ONLY the CPU register file (R3000) — guest RAM/scratchpad/DMA/peripherals are SHARED one
+// memory across all tasks (saving a whole Core here would give each task its own RAM snapshot — the OOP
+// regression where the loader task read a pre-fill file-table snapshot and stalled boot; see
+// oop-regression-hunt). So task_ctx slices to the R3000 base on save/restore.
+struct SchedulerState {
+  jmp_buf yield_jmp;          // longjmp target = the setjmp in native_scheduler_step (was g_yield_jmp)
+  R3000   task_ctx[3] = {};   // saved CPU register context per task slot, registers only (was g_task_ctx)
+  int     in_stage = 0;       // 1 while inside a task run (gates the yield override) (was g_in_stage)
+  int     cur_slot = 0;       // task slot currently running (for the yield capture) (was g_cur_slot)
+  int     task_started[3] = {};  // slot has a live coroutine context (else fresh) (was g_task_started)
+};
+
 // native_stub.cpp — the SCEA boot-stub (SCUS_944.54) interpreter that draws SCEA + LoadExec's MAIN.
 struct StubState {
   uint32_t    vblank    = 0;        // boot-stub VBlank counter during SCEA fades (was g_stub_vblank)
@@ -82,6 +95,7 @@ public:
   PadState    pad;
   FmvState    fmv;
   StubState   stub;
+  SchedulerState sched;  // native cooperative task scheduler (native_boot.cpp)
   GpuState    gpu;   // native GPU: VRAM + draw/display state + the rasterizer (gpu_native.cpp)
   GpuVkState  gpu_vk;// Vulkan present backend: per-frame batch/depth/dirty/present state (gpu_vk.cpp)
 

@@ -16,6 +16,7 @@
 // MILESTONE 1 (this file, current): run the init prefix and confirm it executes cleanly via
 // PC/RAM probes. The native frame loop + per-stage stepping land next.
 #include "core.h"
+#include "game.h"      // SchedulerState (per-instance cooperative-task state) reached via c->game->sched
 #include "c_subsys.h"
 #include "cfg.h"
 #include <stdio.h>
@@ -59,17 +60,12 @@ static void rc3(Core* c, uint32_t fn, uint32_t a0, uint32_t a1, uint32_t a2) {
 #define TASKSTRIDE 0x70u
 #define CUR_TASK 0x1f800138u   // DAT_1f800138: scheduler "current task" ptr
 
-static jmp_buf g_yield_jmp;    // longjmp target = the setjmp in native_scheduler_step
-// A cooperative task context is ONLY the CPU register file (R3000: r[], hi, lo) — NOT the Core.
-// guest RAM/scratchpad/DMA/peripheral state is SHARED (one guest memory across all tasks). Saving
-// a whole `Core` here (it embeds ram[2MB]+scratch+s_dma_buf by value) would give each task its own
-// RAM SNAPSHOT, so a write one task makes is invisible to another after a switch — the OOP
-// regression: task0 (START) filled the file table while the loader task carried a pre-fill snapshot
-// and read LBA 0, stalling boot before the field. Slice to the R3000 base on save/restore.
-static R3000  g_task_ctx[3];  // saved CPU register context per task slot (registers only)
-static int     g_in_stage;     // 1 while inside a task run (gates the yield override)
-static int     g_cur_slot;     // task slot currently running (for the yield capture)
-static int     g_task_started[3];  // slot has a live coroutine context (else state==2 == fresh)
+// The cooperative-scheduler state (yield jmp_buf, per-task saved R3000 regs, run flags) is per-instance
+// now: it lives on Game as SchedulerState (game.h), reached via c->game->sched. A task context is ONLY
+// the CPU register file — guest RAM/scratchpad/DMA/peripherals are SHARED one memory across all tasks
+// (saving a whole Core would give each task its own RAM snapshot — the OOP regression where the loader
+// task read a pre-fill file-table snapshot and stalled boot; see oop-regression-hunt). So task_ctx
+// slices to the R3000 base on save/restore.
 
 // FUN_80080880 ChangeThread override = the universal task-switch primitive. Every cooperative
 // switch funnels through it: FUN_80051f80 (yield, state=1), FUN_80051fb4 (task end, state=0) and
@@ -81,9 +77,9 @@ static int     g_task_started[3];  // slot has a live coroutine context (else st
 // etc.) has already run its real body, so register side effects it needs on resume (e.g. it
 // leaves v0=0x1f800000 for the stage loop head's `lw t0,0x138(v0)`) are captured.
 static void ov_switch(Core* c) {
-  if (!g_in_stage) { c->r[2] = c->r[4]; return; }   // no-op: return the handle arg in v0
-  g_task_ctx[g_cur_slot] = static_cast<R3000&>(*c);  // save REGISTERS only (r29=task SP, r31=resume ra)
-  longjmp(g_yield_jmp, 1);
+  if (!c->game->sched.in_stage) { c->r[2] = c->r[4]; return; }   // no-op: return the handle arg in v0
+  c->game->sched.task_ctx[c->game->sched.cur_slot] = static_cast<R3000&>(*c);  // save REGISTERS only (r29=task SP, r31=resume ra)
+  longjmp(c->game->sched.yield_jmp, 1);
 }
 
 // One scheduler pass over the 3 task slots (replaces FUN_80051e60).
@@ -97,39 +93,39 @@ static void native_scheduler_step(Core* c) {
     if (i == 2 && xa_stream_owns_slot2()) {
       if (xa_stream_voice_busy()) c->mem_w16(base, 2);     // still playing -> stay "running"
       else { c->mem_w16(base, 0); xa_stream_voice_release(); }  // clip done -> free -> cutscene advances
-      g_task_started[2] = 0;
+      c->game->sched.task_started[2] = 0;
       continue;
     }
     uint32_t st = c->mem_r16(base);
-    if (st == 0) { g_task_started[i] = 0; continue; }   // free
+    if (st == 0) { c->game->sched.task_started[i] = 0; continue; }   // free
     uint32_t resume_pc;
     // state==3 (restart at new entry) or state==2 on a slot with no live context (freshly
     // registered by FUN_80051f14) => fresh entry. state==2 with a live context => resume.
-    if (st == 3 || (st == 2 && !g_task_started[i])) {
+    if (st == 3 || (st == 2 && !c->game->sched.task_started[i])) {
       resume_pc = c->mem_r32(base + 0xc);        // task entry
-      g_task_ctx[i] = loop;                   // inherit gp; fresh sp/ra below
-      g_task_ctx[i].r[29] = c->mem_r32(base + 8);// per-task PSX stack top (obj+8)
-      g_task_ctx[i].r[31] = 0xDEAD0000u;      // sentinel return
-      g_task_started[i] = 1;
+      c->game->sched.task_ctx[i] = loop;                   // inherit gp; fresh sp/ra below
+      c->game->sched.task_ctx[i].r[29] = c->mem_r32(base + 8);// per-task PSX stack top (obj+8)
+      c->game->sched.task_ctx[i].r[31] = 0xDEAD0000u;      // sentinel return
+      c->game->sched.task_started[i] = 1;
     } else if (st == 2) {                     // runnable: resume after the previous yield
-      resume_pc = g_task_ctx[i].r[31];
+      resume_pc = c->game->sched.task_ctx[i].r[31];
     } else {
       continue;                               // sleeping this frame (state==1)
     }
     c->mem_w16(base, 4);                         // running
     if (cfg_dbg("sched"))
       fprintf(stderr, "[sched] slot %d st_in=%u resume_pc=0x%08X ra=0x%08X sp=0x%08X\n",
-              i, st, resume_pc, g_task_ctx[i].r[31], g_task_ctx[i].r[29]);
+              i, st, resume_pc, c->game->sched.task_ctx[i].r[31], c->game->sched.task_ctx[i].r[29]);
     c->mem_w32(CUR_TASK, base);
-    g_cur_slot = i;
-    static_cast<R3000&>(*c) = g_task_ctx[i];   // restore REGISTERS only (shared RAM untouched)
-    g_in_stage = 1;
-    if (setjmp(g_yield_jmp) == 0) {
+    c->game->sched.cur_slot = i;
+    static_cast<R3000&>(*c) = c->game->sched.task_ctx[i];   // restore REGISTERS only (shared RAM untouched)
+    c->game->sched.in_stage = 1;
+    if (setjmp(c->game->sched.yield_jmp) == 0) {
       rec_coro_run(c, resume_pc);             // runs until ov_yield longjmps back here
       c->mem_w16(base, 0);                        // returned (jr ra sentinel): task ended -> free
-      g_task_started[i] = 0;
+      c->game->sched.task_started[i] = 0;
     }
-    g_in_stage = 0;
+    c->game->sched.in_stage = 0;
   }
   static_cast<R3000&>(*c) = loop;             // restore the frame-loop REGISTERS (shared RAM untouched)
 }
