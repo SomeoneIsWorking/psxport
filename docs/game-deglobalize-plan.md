@@ -123,9 +123,23 @@ Flag init-once-then-read tables case by case; when in doubt, move it (safe).
   read-only w.r.t. guest RAM (it snapshots VRAM + records GP0 words, then writes a trace FILE for gpu_differ).
   They do NOT affect Core::ram, so per the "Debug/trace statics" policy they STAY SHARED (two lockstep cores
   are both unarmed/no-op or armed identically; the capture buffers can't diverge core.ram). No code change.
-- **Next (order):** ~~gpu_native~~(R1) → ~~gpu_vk~~(R2) → ~~gpu_trace/gpu_debug~~(R3 audit) — THEN dbg_server →
-  native_boot → gte/spu/mdec (Beetle FORK) → engine modules (fps60, engine_submit, native_path*,
-  game_tomba2). (mem 1 static, boot 1 — sweep at the end.) THEN the dual-core diff + the submit_terrain fix.
+- **Next (order):** ~~gpu_native~~(R1) → ~~gpu_vk~~(R2) → ~~gpu_trace/gpu_debug~~(R3 audit) → dbg_server (audit
+  done, see below) → **native_boot (REAL migration — scheduler state, do this next)** → gte/spu/mdec (Beetle
+  FORK) → engine modules (fps60, engine_submit, native_path*, game_tomba2). (mem 1 static, boot 1 — sweep at
+  the end.) THEN the dual-core diff + the submit_terrain fix.
+- **dbg_server.cpp (AUDIT — stays shared):** all file-scope statics are the HOST debug-interface singleton
+  (one per process, not guest machine state, not in Core::ram): the server<->main handoff (s_mtx/s_done/
+  s_cmd/s_req_pending/s_resp_*/s_started), pause/step driver controls (s_paused/s_step/s_held), and `s_ctx`
+  (a per-frame pointer to the core being serviced — set, not migrated). A lockstep diff drives neither core
+  via the debug server, so these don't diverge core.ram. No migration.
+- **native_boot.cpp (NOT an audit — has REAL per-instance state; this is the next phase):** the native
+  cooperative-scheduler block at ~lines 62–72 is execution-critical per-instance state that MUST move onto
+  Game (e.g. a `SchedulerState`/`NativeBootState`): `g_yield_jmp` (jmp_buf, the yield longjmp target),
+  `g_task_ctx[3]` (saved R3000 regs per task slot — see [[oop-regression-hunt]]: c344d16 fixed it to save
+  REGS ONLY, not the whole 2MB Core), `g_in_stage`, `g_cur_slot`, `g_task_started[3]`. Threading: the
+  scheduler fns hold `Core* c` → reach via `c->game->...`; mind the setjmp/longjmp (the jmp_buf must live on
+  the instance whose context is being saved/restored). The rest of native_boot's statics are config-cache
+  (s_bgmdbg) or function-local diag/scratch buffers (out[400000], held, ls, s_rd, s_last_*) → stay shared.
   DONE/skip: timing, cd_override, hle, pad_input, native_fmv, native_stub, interp (done); sync_overrides,
   threads, memcard (only config-caches).
 
