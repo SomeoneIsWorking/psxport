@@ -5546,3 +5546,15 @@ slots @0x800F2740, builds a downward free-list @0x800E7E74 (head 0x800ED8C0, pay
 last→first), records free count 520 @0x800ED098, runs 8 further sub-inits. No stack args. A/B = **perfect
 0-diff** (0 stack, 0 other), prologue at frame 39. Remaining on-path non-leaf: 800977C0 (block allocator,
 still deferred — needs careful transcription).
+
+## later-156: non-leaf b5 (0x800977C0 block allocator) — burn-down 463→462
+
+Ported the deferred allocator (engine/native_path_b5.cpp). Block table @G_base(0x800AC66C), 8B blocks
+(word0 = flags bit30 used / bit31 free | addr<28b>, word1 = size). Rounds size up to G_mask then aligns
+to 1<<G_shift; scans for a used block or big-enough free block; used→splits new used block at idx+1,
+free→carves front + pushes remainder block at G_nextfree; returns addr or -1. 0x80097A90 (lock/compact)
+called around mutations. Transcribed faithfully with the gen's branch structure (delay-slot semantics:
+the `r3=blk+size` in the nf<count delay slot is dead when the split is skipped). A/B: 11 stack bytes
+(its own frame slots ⇒ it WAS exercised on boot), **0 globals/pool/scratchpad** ⇒ equivalent. Prologue
+frame 39. No more on-path non-leaf candidates: next is the indirect-dispatch (vtable) fns + 0x80106xxx
+overlay stage code (object-model RE).
