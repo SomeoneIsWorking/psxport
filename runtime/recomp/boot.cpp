@@ -50,7 +50,7 @@ int main(int argc, char** argv) {
   void timing_init(void);
   void games_tomba2_init(void);
   void sync_overrides_init(void);
-  void pad_overrides_init(void);
+  void pad_overrides_init(Core*);
   void card_overrides_init(void);
   void threads_init(Core*);
   void threads_register_overrides(void);
@@ -70,7 +70,7 @@ int main(int argc, char** argv) {
   timing_init();            // native VBlank/VSync source (S3)
   games_tomba2_init();      // Tomba2 per-game overrides (vblank pacing)
   sync_overrides_init();    // convert HW sync/wait stalls to native non-stall
-  pad_overrides_init();     // native controller input (per-VBlank pad read override)
+  pad_overrides_init(c);    // native controller input (per-VBlank pad read override)
   card_overrides_init();    // native memory card (synchronous file-backed libcard I/O)
   threads_init(c);          // native BIOS threads (ucontext); main = slot 0
   threads_register_overrides();

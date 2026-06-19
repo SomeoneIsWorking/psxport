@@ -167,8 +167,8 @@ static void ov_bgm_stop(Core* c) {
 // Commands: run N | r addr [len] | rw addr [words] | w addr val | w8 addr val | watch lo hi |
 //   unwatch | hits | press/release <btn> | tap <btn> [frames] | regs | seq | quit. Memory is the
 //   game's address space (mem_r*/mem_w*); watchpoints via mem_set_watch (reported during `run`).
-void pad_repl_hold(uint16_t active_low_mask);
-void pad_repl_tap(uint16_t active_low_mask, int n);
+void pad_repl_hold(Core* c, uint16_t active_low_mask);
+void pad_repl_tap(Core* c, uint16_t active_low_mask, int n);
 static uint16_t repl_btn(const char* n) {     // name -> active-HIGH PSX pad bit
   if (!strcmp(n,"start"))    return 0x0008; if (!strcmp(n,"select")) return 0x0001;
   if (!strcmp(n,"x")||!strcmp(n,"cross"))  return 0x4000;
@@ -242,9 +242,9 @@ static long native_repl_read(Core* c, uint32_t f) {
     else if (!strcmp(cmd, "watch") && sscanf(line, "%*s %x %x", &a, &b) == 2) c->mem_set_watch(a, b);
     else if (!strcmp(cmd, "unwatch")) { c->mem_set_watch(0, 0); fprintf(stderr, "[repl] unwatch\n"); }
     else if (!strcmp(cmd, "hits")) fprintf(stderr, "[repl] watch hits=%d\n", c->mem_watch_hits());
-    else if (!strcmp(cmd, "press") && sscanf(line, "%*s %31s", arg) == 1)   { held &= ~repl_btn(arg); pad_repl_hold(held); fprintf(stderr, "[repl] held=%04X\n", held); }
-    else if (!strcmp(cmd, "release") && sscanf(line, "%*s %31s", arg) == 1) { held |= repl_btn(arg);  pad_repl_hold(held); fprintf(stderr, "[repl] held=%04X\n", held); }
-    else if (!strcmp(cmd, "tap") && sscanf(line, "%*s %31s %u", arg, &a) >= 1) { if (!a) a = 4; pad_repl_tap((uint16_t)(0xFFFF & ~repl_btn(arg)), (int)a); fprintf(stderr, "[repl] tap %s %u\n", arg, a); }
+    else if (!strcmp(cmd, "press") && sscanf(line, "%*s %31s", arg) == 1)   { held &= ~repl_btn(arg); pad_repl_hold(c, held); fprintf(stderr, "[repl] held=%04X\n", held); }
+    else if (!strcmp(cmd, "release") && sscanf(line, "%*s %31s", arg) == 1) { held |= repl_btn(arg);  pad_repl_hold(c, held); fprintf(stderr, "[repl] held=%04X\n", held); }
+    else if (!strcmp(cmd, "tap") && sscanf(line, "%*s %31s %u", arg, &a) >= 1) { if (!a) a = 4; pad_repl_tap(c, (uint16_t)(0xFFFF & ~repl_btn(arg)), (int)a); fprintf(stderr, "[repl] tap %s %u\n", arg, a); }
     else if (!strcmp(cmd, "shot")) { char path[200] = {0}; if (sscanf(line, "%*s %199s", path) == 1) { void gpu_native_shot(const char*); gpu_native_shot(path); } }
     else if (!strcmp(cmd, "dumpram")) {
       char path[200] = {0};
@@ -391,7 +391,7 @@ static void ov_game_main(Core* c) {
     { static int ang = -1; if (ang < 0) ang = cfg_str("PSXPORT_AUTO_NEWGAME") ? 1 : 0;
       if (ang == 1) {
         if (c->mem_r32(0x801fe00c) != 0x8010637Cu) {
-          if ((f % 12u) == 0) pad_repl_tap((uint16_t)(0xFFFF & ~0x4000), 6);   // tap Cross
+          if ((f % 12u) == 0) pad_repl_tap(c, (uint16_t)(0xFFFF & ~0x4000), 6);   // tap Cross
         } else { void dbg_set_paused(int); fprintf(stderr, "[autonewgame] reached GAME (prologue) at frame %u — auto-paused\n", f);
                  ang = 2; if (cfg_str("PSXPORT_AUTO_NEWGAME") && atoi(cfg_str("PSXPORT_AUTO_NEWGAME")) >= 2) dbg_set_paused(1); }
       } }
@@ -403,15 +403,15 @@ static void ov_game_main(Core* c) {
     { static int gnav = -1, sustain = 0;
       if (gnav < 0) gnav = cfg_str("PSXPORT_AUTO_GAMEPLAY") ? 1 : 0;
       if (gnav == 1) {
-        void pad_repl_release(void);
+        void pad_repl_release(Core*);
         if (xa_stream_is_looping()) sustain++; else sustain = 0;   // resets whenever dialog stops chan4
         if (sustain >= 150) {                                      // ~5 s of uninterrupted area music = field
-          pad_repl_release();
+          pad_repl_release(c);
           fprintf(stderr, "[autogameplay] field reached (chan4 looping %d frames) at frame %u — input released\n", sustain, f);
           gnav = 2;
           if (atoi(cfg_str("PSXPORT_AUTO_GAMEPLAY")) >= 2) { void dbg_set_paused(int); dbg_set_paused(1); }
         } else if ((f % 24u) == 0) {
-          pad_repl_tap((uint16_t)(0xFFFF & ~0x0008), 6);           // pulse Start (0x0008): title + dialog advance
+          pad_repl_tap(c, (uint16_t)(0xFFFF & ~0x0008), 6);        // pulse Start (0x0008): title + dialog advance
         }
       }
       // PSXPORT_AUTO_SKIP=N: after field-reach, KEEP pulsing Start until native frame N to advance/skip
@@ -419,14 +419,14 @@ static void ov_game_main(Core* c) {
       // cutscene is still up and only ends on Start edges). Reaches actual Tomba gameplay on the cliff.
       if (gnav == 2) { const char* sk = cfg_str("PSXPORT_AUTO_SKIP");
         if (sk && f < (uint32_t)atoi(sk) && (f % 24u) == 0) {
-          void pad_repl_tap(uint16_t, int); pad_repl_tap((uint16_t)(0xFFFF & ~0x0008), 6); } }
+          void pad_repl_tap(Core*, uint16_t, int); pad_repl_tap(c, (uint16_t)(0xFFFF & ~0x0008), 6); } }
       // PSXPORT_AUTO_WALK=<dir>: once the field is reached, HOLD a D-pad direction so the character
       // walks and the camera pans — a deterministic MOTION scene for validating fps60 interpolation
       // (the idle field is fully static, A==B). dir: l/r/u/d (default right). Active-low pad mask.
       if (gnav == 2) { const char* w = cfg_str("PSXPORT_AUTO_WALK");
         if (w) { uint16_t btn = 0x0020;                              // right
           if (*w=='l') btn=0x0080; else if (*w=='u') btn=0x0010; else if (*w=='d') btn=0x0040;
-          pad_repl_hold((uint16_t)(0xFFFF & ~btn)); } } }
+          pad_repl_hold(c, (uint16_t)(0xFFFF & ~btn)); } } }
     // PSXPORT_DEBUG_SERVER pause/step: when frozen, do NOT advance the game — just pump host input
     // (keeps the window alive) and service debug commands so `step`/`play` can arrive. A `step` runs
     // exactly one real frame then re-freezes, so transient bad frames can be inspected one at a time.

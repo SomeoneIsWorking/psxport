@@ -57,8 +57,8 @@ void gpu_vk_stats(int* tri, int* tex, int* semi);
 void gpu_vk_vram_region(const char* path, int x, int y, int w, int h);
 void gpu_vk_rawdump_arm(const char* path, int frame);
 // pad input (pad_input.c) — lets the debug server DRIVE the game (press/release/tap/hold)
-void pad_repl_hold(uint16_t active_low_mask);
-void pad_repl_tap(uint16_t active_low_mask, int n);
+void pad_repl_hold(Core* c, uint16_t active_low_mask);
+void pad_repl_tap(Core* c, uint16_t active_low_mask, int n);
 
 // PSX pad: name -> active-HIGH bit (mirrors the REPL mapping in native_boot.c).
 static unsigned dbg_btn(const char* n) {
@@ -233,14 +233,14 @@ static void dbg_exec(FILE* out, const char* line) {
     int tf = gpu_gputrace_arm(gp0); gpu_vk_rawdump_arm(vk, tf);
     fprintf(out, "swvkcap frame %d -> %s (GP0) + %s (VK raw); run tools/swvk_diff.py %s\n", tf, gp0, vk, pre);
   } else if (!strcmp(cmd, "press") && sscanf(line, "%*s %31s", arg) == 1) {
-    s_held &= ~(unsigned short)dbg_btn(arg); pad_repl_hold(s_held); fprintf(out, "held=%04X\n", s_held);
+    s_held &= ~(unsigned short)dbg_btn(arg); pad_repl_hold(s_ctx, s_held); fprintf(out, "held=%04X\n", s_held);
   } else if (!strcmp(cmd, "release") && sscanf(line, "%*s %31s", arg) == 1) {
-    s_held |= (unsigned short)dbg_btn(arg); pad_repl_hold(s_held); fprintf(out, "held=%04X\n", s_held);
+    s_held |= (unsigned short)dbg_btn(arg); pad_repl_hold(s_ctx, s_held); fprintf(out, "held=%04X\n", s_held);
   } else if (!strcmp(cmd, "tap") && sscanf(line, "%*s %31s %u", arg, &a) >= 1) {
-    if (!a) a = 4; pad_repl_tap((unsigned short)(0xFFFF & ~dbg_btn(arg)), (int)a);
+    if (!a) a = 4; pad_repl_tap(s_ctx, (unsigned short)(0xFFFF & ~dbg_btn(arg)), (int)a);
     fprintf(out, "tap %s %u\n", arg, a);
   } else if (!strcmp(cmd, "hold") && sscanf(line, "%*s %x", &a) == 1) {
-    s_held = (unsigned short)a; pad_repl_hold(s_held); fprintf(out, "held=%04X\n", s_held);
+    s_held = (unsigned short)a; pad_repl_hold(s_ctx, s_held); fprintf(out, "held=%04X\n", s_held);
   } else if (!strcmp(cmd, "sbs")) {
     if (sscanf(line, "%*s %u", &a) == 1) gpu_sbs_set((int)a);
     else gpu_sbs_set(!gpu_sbs_get());

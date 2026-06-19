@@ -60,8 +60,8 @@ static void mdec_pump(void) { MDEC_Run(0x40000000); }
 void gpu_gp1(uint32_t w);
 void gpu_native_init(void);
 
-void     pad_poll_sdl(void);                                // pad_input.c (host input)
-uint16_t pad_buttons(void);                                 // active-low PSX button mask
+void     pad_poll_sdl(Core*);                               // pad_input.cpp (host input)
+uint16_t pad_buttons(Core*);                                // active-low PSX button mask
 #define PAD_START 0x0008u                                   // Start button bit (active-low)
 
 static int fmv_resolve_path(const char* path, uint32_t* out_lba, uint32_t* out_size);
@@ -639,17 +639,17 @@ static void fmv_audio_close(void) { if (s_fmv_dev) { SDL_ClearQueuedAudio(s_fmv_
 // the elapsed media time; sleep until wall-clock catches up. This is the real PSX rate (the
 // fixed-15fps guess was too slow). Polls input and returns 1 if Start was pressed (skip).
 // uncapped (PSXPORT_FMV_FPS=0) disables pacing for fast headless dumps.
-static int fmv_pace(long media_frames, int freq, uint32_t t0, int uncapped) {
-  pad_poll_sdl();
-  int pressed = ((pad_buttons() & PAD_START) == 0) && !s_fmv_start_prev;
-  s_fmv_start_prev = (pad_buttons() & PAD_START) == 0;
+static int fmv_pace(Core* core, long media_frames, int freq, uint32_t t0, int uncapped) {
+  pad_poll_sdl(core);
+  int pressed = ((pad_buttons(core) & PAD_START) == 0) && !s_fmv_start_prev;
+  s_fmv_start_prev = (pad_buttons(core) & PAD_START) == 0;
   if (uncapped || freq <= 0) return pressed;
   uint32_t target = (uint32_t)((long long)media_frames * 1000 / freq);
   while ((int)(SDL_GetTicks() - t0) < (int)target) {
     SDL_Delay(2);
-    pad_poll_sdl();
-    if (((pad_buttons() & PAD_START) == 0) && !s_fmv_start_prev) pressed = 1;
-    s_fmv_start_prev = (pad_buttons() & PAD_START) == 0;
+    pad_poll_sdl(core);
+    if (((pad_buttons(core) & PAD_START) == 0) && !s_fmv_start_prev) pressed = 1;
+    s_fmv_start_prev = (pad_buttons(core) & PAD_START) == 0;
   }
   return pressed;
 }
@@ -658,7 +658,7 @@ static void fmv_audio_open(int freq) { (void)freq; }
 static void fmv_audio_queue(const int16_t* p, int n) { (void)p; (void)n; }
 static uint32_t fmv_audio_backlog_bytes(void) { return 0; }
 static void fmv_audio_close(void) {}
-static int fmv_pace(long m, int f, uint32_t t, int u) { (void)m;(void)f;(void)t;(void)u; return 0; }
+static int fmv_pace(Core* core, long m, int f, uint32_t t, int u) { (void)core;(void)m;(void)f;(void)t;(void)u; return 0; }
 #endif
 
 // ====================================================================================
@@ -714,7 +714,7 @@ int native_fmv_play_lba(Core* core, uint32_t lba, uint32_t size_bytes) {
       if (sec == 1 || media_frames == 0) fmv_audio_open(xa_freq);
       fmv_audio_queue(xa_pcm, n);
       media_frames += n;
-      if (fmv_pace(media_frames, xa_freq, t0, uncapped)) { skipped = 1; break; }
+      if (fmv_pace(core, media_frames, xa_freq, t0, uncapped)) { skipped = 1; break; }
       continue;
     }
 
@@ -753,7 +753,7 @@ int native_fmv_play_lba(Core* core, uint32_t lba, uint32_t size_bytes) {
         if (np > 0) {
           present_rgb555(core, pixels, fwidth, fheight); frames++;
           // Pace video to the audio/media clock (no audio sector here, so just gate on it).
-          if (fmv_pace(media_frames, xa_freq, t0, uncapped)) { skipped = 1; break; }
+          if (fmv_pace(core, media_frames, xa_freq, t0, uncapped)) { skipped = 1; break; }
         }
       }
       cur_frame = -1; expected_chunks = 0; got_chunks = 0; paylen = 0;

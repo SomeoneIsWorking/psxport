@@ -44,6 +44,16 @@ struct HleState {
   int      irq_enabled = 1;       // was s_irq_enabled
 };
 
+// pad_input.cpp — native controller input: current host button state + the REPL drive control.
+// (Test-hook / config-cache statics inside pad_service_frame stay shared per the plan policy.)
+struct PadState {
+  uint16_t buttons    = 0xFFFF;  // current host button state, active-low (0 bit = pressed) (was s_buttons)
+  uint16_t repl_hold  = 0xFFFF;  // REPL: bits cleared = held down (was s_repl_hold)
+  uint16_t repl_tap   = 0xFFFF;  // REPL: active-low mask pressed for repl_tap_n frames (was s_repl_tap)
+  int      repl_tap_n = 0;       // REPL: tap countdown frames (was s_repl_tap_n)
+  int      repl_on    = 0;       // REPL drive active (was s_repl_on)
+};
+
 class Game {
 public:
   Core core;            // CPU registers + 2 MB main RAM + 1 KB scratchpad (was the sole instance object)
@@ -52,6 +62,7 @@ public:
   TimingState timing;
   CdState     cd;
   HleState    hle;
+  PadState    pad;
 
   Game() { core.game = this; }
 };

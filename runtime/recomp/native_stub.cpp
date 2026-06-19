@@ -140,11 +140,11 @@ static void ov_stub_vsync(Core* c) {
   // button bit 0x0008, active-low (0 == pressed) in the host pad mask.
   static int skip_dis = -1; if (skip_dis < 0) skip_dis = cfg_on("PSXPORT_NOSKIP") ? 1 : 0;
   if (!skip_dis) {
-    uint16_t pad_buttons(void);
+    uint16_t pad_buttons(Core*);
 #ifdef PSXPORT_SDL
-    if (windowed) { void pad_poll_sdl(void); pad_poll_sdl(); }   // refresh host input
+    if (windowed) { void pad_poll_sdl(Core*); pad_poll_sdl(c); }   // refresh host input
 #endif
-    if (cfg_on("PSXPORT_SCEA_SKIP") || (pad_buttons() & 0x0008u) == 0) {
+    if (cfg_on("PSXPORT_SCEA_SKIP") || (pad_buttons(c) & 0x0008u) == 0) {
       fprintf(stderr, "[stub] SCEA skipped (Start) -> hand off to MAIN\n");
       load_exe_image(g_main_path, g_boot_ctx);
       longjmp(g_stub_exit, 1);

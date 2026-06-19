@@ -62,8 +62,14 @@ Flag init-once-then-read tables case by case; when in doubt, move it (safe).
   and the `hle_deliver_event(c,...)` signature (rippled to memcard/native_stub/timing/native_boot;
   card_deliver_complete(c), frame_tick(c)). 0-diff ✓. (sync_overrides/threads/memcard have NO migratable
   state — only config-caches.)
-- **Next (order, small→large):** pad_input (s_buttons + s_repl_*; ripples to pad_repl_hold/tap/release/
-  pad_buttons callers in dbg_server/native_fmv/native_boot — thread the instance) → native_fmv →
+- **P4 (done):** pad_input.cpp — host button state `s_buttons` + REPL drive `s_repl_*` → `PadState`
+  (`c->game->pad`). Threaded `Core*` through `pad_init/pad_set_buttons/pad_buttons/pad_fill_buffer/
+  pad_poll_sdl/pad_repl_hold/pad_repl_tap/pad_repl_release/pad_overrides_init` and their callers
+  (boot, dbg_server via `s_ctx`, native_fmv `fmv_pace(core,…)`, native_stub `ov_stub_vsync(c)`,
+  native_boot repl + auto-navigator). Test-hook/config-cache statics inside `pad_service_frame`
+  (`s_fc`, FORCE_* env caches) left shared per policy. Dropped the dead `PSXPORT_PAD_NO_OVERRIDES`
+  standalone path (no build uses it). 0-diff ✓.
+- **Next (order, small→large):** native_fmv →
   native_stub (g_stub_vblank etc.) → interp → gpu_native → gpu_trace → dbg_server → native_boot →
   gpu_vk → gte/spu/mdec (Beetle FORK) → engine modules (fps60, engine_submit, native_path*, game_tomba2).
   DONE/skip: timing, cd_override, hle (done); sync_overrides, threads, memcard (only config-caches).
