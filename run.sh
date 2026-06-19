@@ -140,5 +140,14 @@ say "launching Tomba! 2 (native PC port)…"
 WIN=1; [ -n "${PSXPORT_NOWINDOW:-}" ] && WIN=0
 # Debug server ON by default so a windowed session can be inspected/driven live (tools/dbgclient.py);
 # opt out with PSXPORT_DEBUG_SERVER=0. Window is windowed by default now (PSXPORT_FULLSCREEN=1 to override).
+#
+# STOPGAP: default PSXPORT_NO_TERRAIN=1 (route the field terrain renderer 0x8002AB5C to the recomp body
+# instead of the native submit_terrain) because the NATIVE terrain render is currently broken — it draws
+# the field as garbage while the recomp body renders it correctly (proven by an A/B screenshot diff;
+# native vs NO_TERRAIN). The gameplay half of submit_terrain is fixed (the sway-byte guest writes); the
+# RENDER half is an open bug in the scratchpad/GTE compose + render-walk path (see docs/journal.md
+# later-157). Until that is root-caused, NO_TERRAIN gives a correct, playable picture. Override with
+# PSXPORT_NO_TERRAIN=0 to exercise the (broken) native terrain renderer.
 PSXPORT_DEBUG_SERVER="${PSXPORT_DEBUG_SERVER:-1}" \
+PSXPORT_NO_TERRAIN="${PSXPORT_NO_TERRAIN:-1}" \
 PSXPORT_GPU_WINDOW=$WIN PSXPORT_TOMBA2_DISC="$DISC" exec ./scratch/bin/tomba2_port "$MAIN"
