@@ -145,6 +145,19 @@ static inline void ldhaz_step(uint32_t in, uint32_t pc) {
 // registers here and is consulted by coro_native_call on every control transfer. (There is no
 // longer a separate recompiled-function-index table; the interpreter-only pivot collapsed the
 // index/address duality that previously split overrides into two tables.)
+//
+// De-globalization note (2026-06-19): this table stays file-scope SHARED by design — it is
+// build-level dispatch infrastructure, NOT per-instance game state. The 175 registration sites are
+// all init-time and register the SAME native fns at the SAME addresses for every Game; the only
+// runtime mutation (auto-overlay flush/rescan, rec_overlay_loaded) is driven by overlay loads that
+// two lockstep cores perform identically, so the shared table stays consistent for both until the
+// diff stops at the first RAM divergence. The per-core difference the dual-core diff needs
+// (e.g. terrain override ON vs neutralized) is expressed as a FLAG on Game read INSIDE the override
+// (the override carries Core* c → c->game->...), never as two divergent override tables. Threading
+// Core* through all 175 init call sites would be a large ripple for no harness benefit. Every other
+// file-scope static in this file is debug/trace (stderr/file, cfg-gated — g_trace_fp, g_ncall_*,
+// g_ldhaz*, g_ifn_*, g_callring, g_interp_pc) or a config-cache (spindbg, sg_*), all of which never
+// touch Core::ram and so stay shared per the plan policy.
 #define MAX_IOV 256
 static struct { uint32_t addr; OverrideFn fn; int isauto; } g_iov[MAX_IOV];
 static int g_iov_n;

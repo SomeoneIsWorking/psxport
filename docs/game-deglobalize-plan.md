@@ -78,8 +78,17 @@ Flag init-once-then-read tables case by case; when in doubt, move it (safe).
   `vblank`, `g_main_path`→`main_path`, `g_stub_exit`(jmp_buf)→`exit_jmp`. **Eliminated `g_boot_ctx`**
   (redundant — every user is an override carrying the boot `Core* c`, so it reloads MAIN into `c`).
   All users had `c` in scope; setjmp/longjmp now on `c->game->stub.exit_jmp`. 0-diff ✓.
+- **P7 (done — AUDIT, nothing migrated):** interp.cpp — audited all file-scope statics; NONE are
+  per-instance mutable game state. All are either debug/trace (stderr/file, cfg-gated: g_trace_fp,
+  g_ncall_*, g_ldhaz*, g_ifn_*, g_callring, g_interp_pc) or config-caches (spindbg, sg_*) → stay
+  shared per policy. The override dispatch table `g_iov`/`g_iov_n` (+ `g_overlay_load_hook`) stays
+  SHARED by design: build-level dispatch (175 init sites register the same fns at the same addrs;
+  the only runtime churn is overlay flush/rescan, lockstep-identical across cores). The dual-core
+  diff expresses its per-core difference (terrain ON vs neutralized) as a **flag on Game read inside
+  the override** (override has Core* c), NOT divergent tables — so no migration needed. Rationale
+  documented in-code above `g_iov`. (No build/0-diff needed — comment-only change.)
 - **Next (order, small→large):**
-  interp → gpu_native → gpu_trace → dbg_server → native_boot →
+  gpu_native → gpu_trace → dbg_server → native_boot →
   gpu_vk → gte/spu/mdec (Beetle FORK) → engine modules (fps60, engine_submit, native_path*, game_tomba2).
   DONE/skip: timing, cd_override, hle (done); sync_overrides, threads, memcard (only config-caches).
 
