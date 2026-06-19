@@ -5472,3 +5472,23 @@ OWN stack frame slot (sp-=8; save r10; read back; freed on return) — provably 
 **Lesson:** subagents are viable for this mechanical transcription IF every output passes the A/B gate —
 do NOT trust "compiles + reaches prologue". The 7 buggy ones are the fix-queue (re-derive from gen_func,
 re-A/B to 0-diff, then re-enable). Burn-down 543 → 505. Reaches prologue at frame 39, A/B clean (1 benign).
+
+## later-152: non-leaf phase begins (batch b1, 15 fns) + clip fixes + non-leaf A/B note
+
+Clean-leaf supply exhausted (only the 7 quarantined buggy leaves remained). Started the NON-LEAF phase:
+functions whose static callees are ALL already native (portable leaf-up; no indirect dispatch). 34 such
+fns identified. Ported the first 15 (engine/native_path_b1.cpp): memset/strncmp wrappers (call 0x8009A420/
+0x8009A640 via rec_dispatch), 0x80097E40 id-pair callers, a GTE matrix×vector op (0x80084470), and a few
+global-clear+sub-call init fns. A native override invokes a sub-fn via `rec_dispatch(c, addr)` (same as
+native_boot's rc0/rc1) — routes to the callee's override or interp. Burn-down 505→487, prologue at frame 39.
+
+**Non-leaf A/B gate note (important, recurs for EVERY non-leaf port):** a non-leaf native override is
+frame-less, but the gen body has a prologue (`sp-=N; *(sp+16)=r31; …`). So the A/B RAM diff shows benign
+diffs in the STACK region (0x801FExxx/0x801FFxxx): the gen saved r31 (a 0x800xxxxx return addr) to its own
+frame slot, the override leaves stale stack — dead after return (confirmed by hex: interp=0x8008BAF8 etc.,
+native=stale). **For non-leaf ports, A/B-accept stack-region (>=~0x801F0000) diffs; only flag diffs in
+globals / pool (0x800Bxxxx) / scratchpad (0x1F80xxxx).** b1's 15 fns: only stack diffs ⇒ verified clean.
+
+Also fixed+re-enabled the two clip-word builders (later-151 quarantine): bug was 32778<<16=0x800A0000 not
+0x800F0000 (limits read from wrong base). 7-fn fix-queue → 5 left: 800752B4(167), 80097540(2-byte stack
+cascade), 80090160(80, wrong stream cursor → cascade), 80077FB0(4), 80094C10(15). Burn-down now 487.
