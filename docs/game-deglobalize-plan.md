@@ -117,9 +117,15 @@ Flag init-once-then-read tables case by case; when in doubt, move it (safe).
   `c`), dbg_server (shot/stats take `s_ctx`). STAYS SHARED (documented): all Vulkan device/swapchain/
   pipeline/buffer handles (one VK device per process), config-caches (s_vk_on/s_sbs/sbs_on), `s_rawdump_*`.
   Gates: frame-50 RAM 0-diff vs baseline ✓ AND field-frame 520 VK render byte-identical pre-vs-post ✓.
-- **Next (order):** ~~gpu_native~~(R1) → ~~gpu_vk~~(R2 done) → gpu_trace → gpu_debug (audit; likely diag-only,
-  stay shared) — THEN dbg_server → native_boot → gte/spu/mdec (Beetle FORK) → engine modules
-  (fps60, engine_submit, native_path*, game_tomba2). (mem 1 static, boot 1 — sweep at the end.)
+- **R3 (done — AUDIT, nothing migrated):** gpu_trace.cpp + gpu_debug.cpp. gpu_debug.cpp has ZERO file-scope
+  statics (already Core*-threaded in R1). gpu_trace.cpp's statics (s_trace_on/frames/count/idx/multi/path/
+  init/words/cap/n/inited/arm_path) are the PSXPORT_GPUTRACE GP0-capture state: gated on the trace flag,
+  read-only w.r.t. guest RAM (it snapshots VRAM + records GP0 words, then writes a trace FILE for gpu_differ).
+  They do NOT affect Core::ram, so per the "Debug/trace statics" policy they STAY SHARED (two lockstep cores
+  are both unarmed/no-op or armed identically; the capture buffers can't diverge core.ram). No code change.
+- **Next (order):** ~~gpu_native~~(R1) → ~~gpu_vk~~(R2) → ~~gpu_trace/gpu_debug~~(R3 audit) — THEN dbg_server →
+  native_boot → gte/spu/mdec (Beetle FORK) → engine modules (fps60, engine_submit, native_path*,
+  game_tomba2). (mem 1 static, boot 1 — sweep at the end.) THEN the dual-core diff + the submit_terrain fix.
   DONE/skip: timing, cd_override, hle, pad_input, native_fmv, native_stub, interp (done); sync_overrides,
   threads, memcard (only config-caches).
 
