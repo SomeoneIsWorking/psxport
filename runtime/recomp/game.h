@@ -29,6 +29,21 @@ struct CdState {
   uint32_t pm_end   = 0;        // was s_pm_end
 };
 
+// hle.cpp — BIOS HLE: event control blocks, native first-fit heap, IRQ/work-area flags.
+struct HleEvCB { int open, enabled, fired; uint32_t ev_class, spec, mode, func; };  // was EvCB
+struct HleHeapBlock { uint32_t addr, size; int used; };                             // was HeapBlock
+struct HleState {
+  HleEvCB     ev[16]      = {};   // was s_ev[EVCB_MAX]
+  HleHeapBlock blk[4096]  = {};   // was s_blk[HEAP_MAX_BLOCKS]
+  int      nblk       = 0;        // was s_nblk
+  uint32_t heap_base  = 0;        // was s_heap_base
+  uint32_t heap_size  = 0;        // was s_heap_size
+  int      heap_ok    = 0;        // was s_heap_ok
+  int      work_ok    = 0;        // was s_work_ok
+  uint32_t int_handler = 0;       // was s_int_handler (B0:0x19 HookEntryInt)
+  int      irq_enabled = 1;       // was s_irq_enabled
+};
+
 class Game {
 public:
   Core core;            // CPU registers + 2 MB main RAM + 1 KB scratchpad (was the sole instance object)
@@ -36,6 +51,7 @@ public:
   // ---- migrated subsystem state (one member per migrated subsystem) ----
   TimingState timing;
   CdState     cd;
+  HleState    hle;
 
   Game() { core.game = this; }
 };

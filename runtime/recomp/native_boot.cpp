@@ -336,7 +336,7 @@ static void ov_game_main(Core* c) {
   else if (!cfg_str("PSXPORT_GPU_WINDOW")) nframes = 120;
   fprintf(stderr, "[native_boot] entering native frame loop (%s)\n",
           nframes ? "capped" : "interactive (until window close)");
-  void hle_deliver_event(uint32_t ev_class, uint32_t spec);
+  void hle_deliver_event(Core* c, uint32_t ev_class, uint32_t spec);
   void pad_service_frame(Core*);
   void dbg_server_start(void); void dbg_server_service(Core* c);
   dbg_server_start();     // PSXPORT_DEBUG_SERVER: non-blocking live TCP debug server (dbg_server.c)
@@ -373,9 +373,9 @@ static void ov_game_main(Core* c) {
     // Per-frame IRQ-driven events the game's waits poll via TestEvent (we deliver no preemptive
     // IRQs): VBlank classes + the sound-DMA-complete class 0xF0000009 (its callback FUN_80097030
     // would normally fire it; native SPU DMA is synchronous, so signal it ready each frame).
-    hle_deliver_event(0xF2000003u, 0xFFFFFFFFu);
-    hle_deliver_event(0xF0000001u, 0xFFFFFFFFu);
-    hle_deliver_event(0xF0000009u, 0xFFFFFFFFu);
+    hle_deliver_event(c, 0xF2000003u, 0xFFFFFFFFu);
+    hle_deliver_event(c, 0xF0000001u, 0xFFFFFFFFu);
+    hle_deliver_event(c, 0xF0000009u, 0xFFFFFFFFu);
     // Per-frame draw/display-env setup (LAB_80050c6c top): the env struct pair for the current
     // back buffer is at 0x800e80a8 + DAT_1f800135*0x2070 (the Ghidra `+uVar1*0x81c` is word
     // arithmetic: 0x81c*4 = 0x2070 bytes); FUN_80081458 clears its ordering table.

@@ -116,13 +116,13 @@ static void ov_stub_cddatasync(Core* c) { c->r[V0_] = 0; }
 // (the stub has drawn + flipped its display) — the heartbeat that makes SCEA visible and its timed
 // hold/fade progress. DAT_800267B4 is the count SCEA also reads directly.
 #define STUB_VBLANK_COUNT 0x800267B4u
-void hle_deliver_event(uint32_t ev_class, uint32_t spec);
+void hle_deliver_event(Core* c, uint32_t ev_class, uint32_t spec);
 static uint32_t g_stub_vblank;
 static void ov_stub_vsync(Core* c) {
   int32_t mode = (int32_t)c->r[A0_];
   if (cfg_dbg("vsync")) fprintf(stderr, "[vsync] mode=%d count=%u\n", mode, g_stub_vblank);
-  hle_deliver_event(0xF2000003u, 0xFFFFFFFFu);         // VBlank event classes (RCnt3 / libapi)
-  hle_deliver_event(0xF0000001u, 0xFFFFFFFFu);
+  hle_deliver_event(c, 0xF2000003u, 0xFFFFFFFFu);      // VBlank event classes (RCnt3 / libapi)
+  hle_deliver_event(c, 0xF0000001u, 0xFFFFFFFFu);
 
   // PRESENT only on a real frame-wait (mode>=0), NOT on busy-poll queries (VSync(-1)). The SCEA
   // stub's per-frame body is: VSync(0) [frame boundary] -> clear framebuffer -> busy-poll VSync(-1)

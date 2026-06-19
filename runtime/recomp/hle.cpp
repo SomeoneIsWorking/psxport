@@ -4,6 +4,7 @@
 // exercises; extended as the boot/diff harness reveals more. Faithful-first — semantics
 // match the wide60 HLE that provably boots Tomba!2; not reimplemented from guesswork.
 #include "core.h"
+#include "game.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -16,67 +17,67 @@ enum { A0=4, A1=5, A2=6, A3=7, T1=9, V0=2 };
 // delivery in the recomp model, so WaitEvent cannot truly block — it reports the event
 // ready and clears `fired`, which terminates the game's wait-then-test loops. A native
 // frame source (timing.c) DeliverEvents the VBlank class each VSync so test loops advance.
-typedef struct { int open, enabled, fired; uint32_t ev_class, spec, mode, func; } EvCB;
+// EvCB/HeapBlock + their state now live on the instance (HleState in game.h): c->game->hle.*
 enum { EVCB_MAX = 16 };
-static EvCB s_ev[EVCB_MAX];
 static const uint32_t EV_ID_BASE = 0xF1000000u;
-static int ev_index(uint32_t id) {
+static int ev_index(Core* c, uint32_t id) {
   uint32_t idx = id - EV_ID_BASE;
-  return (idx < EVCB_MAX && s_ev[idx].open) ? (int)idx : -1;
+  return (idx < EVCB_MAX && c->game->hle.ev[idx].open) ? (int)idx : -1;
 }
 // Native VBlank delivery (called by the frame tick): mark matching open+enabled slots fired.
-void hle_deliver_event(uint32_t ev_class, uint32_t spec) {
+void hle_deliver_event(Core* c, uint32_t ev_class, uint32_t spec) {
+  HleEvCB* ev = c->game->hle.ev;
   for (int i = 0; i < EVCB_MAX; i++)
-    if (s_ev[i].open && s_ev[i].enabled && s_ev[i].ev_class == ev_class && (s_ev[i].spec & spec))
-      s_ev[i].fired = 1;
+    if (ev[i].open && ev[i].enabled && ev[i].ev_class == ev_class && (ev[i].spec & spec))
+      ev[i].fired = 1;
 }
 
 // ---- Heap (A0:0x33-0x39): native first-fit arena, bookkeeping outside PSX RAM -------
-typedef struct { uint32_t addr, size; int used; } HeapBlock;
 enum { HEAP_MAX_BLOCKS = 4096 };
-static HeapBlock s_blk[HEAP_MAX_BLOCKS];
-static int s_nblk = 0;
-static uint32_t s_heap_base = 0, s_heap_size = 0;
-static int s_heap_ok = 0;
 
-static void heap_init(uint32_t addr, uint32_t size) {
-  s_heap_base = addr; s_heap_size = size;
-  s_nblk = 1; s_blk[0].addr = addr; s_blk[0].size = size; s_blk[0].used = 0;
-  s_heap_ok = 1;
+static void heap_init(Core* c, uint32_t addr, uint32_t size) {
+  HleState& h = c->game->hle;
+  h.heap_base = addr; h.heap_size = size;
+  h.nblk = 1; h.blk[0].addr = addr; h.blk[0].size = size; h.blk[0].used = 0;
+  h.heap_ok = 1;
 }
-static uint32_t heap_alloc(uint32_t size) {
-  if (!s_heap_ok || size == 0) return 0;
+static uint32_t heap_alloc(Core* c, uint32_t size) {
+  HleState& h = c->game->hle;
+  if (!h.heap_ok || size == 0) return 0;
   size = (size + 7u) & ~7u;
-  for (int i = 0; i < s_nblk; i++) {
-    if (s_blk[i].used || s_blk[i].size < size) continue;
-    if (s_blk[i].size > size && s_nblk < HEAP_MAX_BLOCKS) {
-      for (int j = s_nblk; j > i + 1; j--) s_blk[j] = s_blk[j - 1];
-      s_blk[i + 1].addr = s_blk[i].addr + size;
-      s_blk[i + 1].size = s_blk[i].size - size;
-      s_blk[i + 1].used = 0;
-      s_blk[i].size = size; s_nblk++;
+  for (int i = 0; i < h.nblk; i++) {
+    if (h.blk[i].used || h.blk[i].size < size) continue;
+    if (h.blk[i].size > size && h.nblk < HEAP_MAX_BLOCKS) {
+      for (int j = h.nblk; j > i + 1; j--) h.blk[j] = h.blk[j - 1];
+      h.blk[i + 1].addr = h.blk[i].addr + size;
+      h.blk[i + 1].size = h.blk[i].size - size;
+      h.blk[i + 1].used = 0;
+      h.blk[i].size = size; h.nblk++;
     }
-    s_blk[i].used = 1; return s_blk[i].addr;
+    h.blk[i].used = 1; return h.blk[i].addr;
   }
   return 0;
 }
-static void heap_coalesce(void) {
-  for (int i = 0; i + 1 < s_nblk;) {
-    if (!s_blk[i].used && !s_blk[i + 1].used) {
-      s_blk[i].size += s_blk[i + 1].size;
-      for (int j = i + 1; j + 1 < s_nblk; j++) s_blk[j] = s_blk[j + 1];
-      s_nblk--;
+static void heap_coalesce(Core* c) {
+  HleState& h = c->game->hle;
+  for (int i = 0; i + 1 < h.nblk;) {
+    if (!h.blk[i].used && !h.blk[i + 1].used) {
+      h.blk[i].size += h.blk[i + 1].size;
+      for (int j = i + 1; j + 1 < h.nblk; j++) h.blk[j] = h.blk[j + 1];
+      h.nblk--;
     } else i++;
   }
 }
-static void heap_free(uint32_t addr) {
+static void heap_free(Core* c, uint32_t addr) {
   if (!addr) return;
-  for (int i = 0; i < s_nblk; i++)
-    if (s_blk[i].addr == addr && s_blk[i].used) { s_blk[i].used = 0; heap_coalesce(); return; }
+  HleState& h = c->game->hle;
+  for (int i = 0; i < h.nblk; i++)
+    if (h.blk[i].addr == addr && h.blk[i].used) { h.blk[i].used = 0; heap_coalesce(c); return; }
 }
-static uint32_t heap_block_size(uint32_t addr) {
-  for (int i = 0; i < s_nblk; i++)
-    if (s_blk[i].addr == addr && s_blk[i].used) return s_blk[i].size;
+static uint32_t heap_block_size(Core* c, uint32_t addr) {
+  HleState& h = c->game->hle;
+  for (int i = 0; i < h.nblk; i++)
+    if (h.blk[i].addr == addr && h.blk[i].used) return h.blk[i].size;
   return 0;
 }
 
@@ -84,16 +85,15 @@ static uint32_t heap_block_size(uint32_t addr) {
 // Tomba2 reads B0table[+0x16C] -> control struct, deriving pointers it later uses.
 // Publish a self-consistent native page so those reads land on valid memory.
 enum { HLE_B0TABLE = 0x8000F000u, HLE_C0TABLE = 0x8000F800u, HLE_WORK_BASE = 0x8000E000u };
-static int s_work_ok = 0;
 static void work_area_init(Core* c) {
-  if (s_work_ok) return;
-  s_work_ok = 1;
+  if (c->game->hle.work_ok) return;
+  c->game->hle.work_ok = 1;
   c->mem_w32(HLE_B0TABLE + 0x16Cu, HLE_WORK_BASE);
   c->mem_w32(HLE_C0TABLE + 0, 0x03E00008u);  // jr $ra
   c->mem_w32(HLE_C0TABLE + 4, 0);            // nop
 }
 
-static uint32_t s_int_handler = 0;  // B0:0x19 HookEntryInt — game IRQ entry (recorded)
+// B0:0x19 HookEntryInt — game IRQ entry (recorded) now lives on the instance: c->game->hle.int_handler
 
 // BIOS threads are implemented natively (per-thread ucontext stacks) in threads.c.
 uint32_t thread_open(Core* c);
@@ -109,22 +109,23 @@ void (*g_loadexec_hook)(Core*) = 0;
 // Dispatch one A0/B0/C0 BIOS call. Returns 1 if handled (c->r[V0] set), 0 otherwise.
 static int recomp_hle(char table, uint32_t fn, Core* c) {
   uint32_t a0 = c->r[A0], a1 = c->r[A1], a2 = c->r[A2];
+  HleEvCB* s_ev = c->game->hle.ev;   // instance event table (alias keeps the EvCB code below unchanged)
   if (table == 'A') {
     switch (fn) {
-      case 0x33: c->r[V0] = heap_alloc(a0); return 1;                 // malloc
-      case 0x34: heap_free(a0); c->r[V0] = 0; return 1;               // free
-      case 0x37: { uint32_t n = a0 * a1, p = heap_alloc(n);           // calloc
+      case 0x33: c->r[V0] = heap_alloc(c, a0); return 1;                 // malloc
+      case 0x34: heap_free(c, a0); c->r[V0] = 0; return 1;               // free
+      case 0x37: { uint32_t n = a0 * a1, p = heap_alloc(c, n);           // calloc
                    if (p) for (uint32_t i = 0; i < n; i++) c->mem_w8(p + i, 0);
                    c->r[V0] = p; return 1; }
       case 0x38: { uint32_t old = a0, ns = a1;                        // realloc
-                   if (!old) { c->r[V0] = heap_alloc(ns); return 1; }
-                   if (!ns) { heap_free(old); c->r[V0] = 0; return 1; }
-                   uint32_t np = heap_alloc(ns), os = heap_block_size(old);
+                   if (!old) { c->r[V0] = heap_alloc(c, ns); return 1; }
+                   if (!ns) { heap_free(c, old); c->r[V0] = 0; return 1; }
+                   uint32_t np = heap_alloc(c, ns), os = heap_block_size(c, old);
                    if (np) { uint32_t n = os < ns ? os : ns;
                              for (uint32_t i = 0; i < n; i++) c->mem_w8(np + i, c->mem_r8(old + i));
-                             heap_free(old); }
+                             heap_free(c, old); }
                    c->r[V0] = np; return 1; }
-      case 0x39: heap_init(a0, a1); c->r[V0] = 0; return 1;           // InitHeap
+      case 0x39: heap_init(c, a0, a1); c->r[V0] = 0; return 1;           // InitHeap
       case 0x44: c->r[V0] = 0; return 1;                              // FlushCache (no-op)
       case 0x49: c->r[V0] = 0; return 1;                              // GPU_cw(gp0): GP0
         // command word — drops to the (not-yet-wired) GPU; harmless until S5 renderer.
@@ -142,7 +143,7 @@ static int recomp_hle(char table, uint32_t fn, Core* c) {
   if (table == 'B') {
     switch (fn) {
       case 0x07:                                                      // DeliverEvent(cls,spec)
-        hle_deliver_event(a0, a1); c->r[V0] = 0; return 1;
+        hle_deliver_event(c, a0, a1); c->r[V0] = 0; return 1;
       case 0x08: {                                                    // OpenEvent(cls,spec,mode,func)
         for (int i = 0; i < EVCB_MAX; i++)
           if (!s_ev[i].open) {
@@ -152,20 +153,20 @@ static int recomp_hle(char table, uint32_t fn, Core* c) {
           }
         c->r[V0] = 0xFFFFFFFFu; return 1;                             // table full
       }
-      case 0x09: { int i = ev_index(a0);                              // CloseEvent
+      case 0x09: { int i = ev_index(c, a0);                              // CloseEvent
         if (i >= 0) { s_ev[i].open = 0; c->r[V0] = 1; } else c->r[V0] = 0; return 1; }
-      case 0x0A: { int i = ev_index(a0);                              // WaitEvent (can't block)
+      case 0x0A: { int i = ev_index(c, a0);                              // WaitEvent (can't block)
         if (i >= 0) { s_ev[i].fired = 0; c->r[V0] = 1; } else c->r[V0] = 0; return 1; }
-      case 0x0B: { int i = ev_index(a0);                              // TestEvent (read+clear)
+      case 0x0B: { int i = ev_index(c, a0);                              // TestEvent (read+clear)
         if (i >= 0 && s_ev[i].fired) { s_ev[i].fired = 0; c->r[V0] = 1; } else c->r[V0] = 0;
         return 1; }
-      case 0x0C: { int i = ev_index(a0);                              // EnableEvent
+      case 0x0C: { int i = ev_index(c, a0);                              // EnableEvent
         if (i >= 0) { s_ev[i].enabled = 1; c->r[V0] = 1; } else c->r[V0] = 0; return 1; }
-      case 0x0D: { int i = ev_index(a0);                              // DisableEvent
+      case 0x0D: { int i = ev_index(c, a0);                              // DisableEvent
         if (i >= 0) { s_ev[i].enabled = 0; c->r[V0] = 1; } else c->r[V0] = 0; return 1; }
       case 0x12: case 0x13: case 0x14: case 0x15: case 0x16:          // BIOS pad — no-op
         c->r[V0] = 0; return 1;                                       // (pad serviced natively)
-      case 0x19: s_int_handler = a0; c->r[V0] = 0; return 1;          // HookEntryInt
+      case 0x19: c->game->hle.int_handler = a0; c->r[V0] = 0; return 1;          // HookEntryInt
       case 0x35: {                                                    // FileWrite
         uint32_t fd = a0, buf = a1, len = a2;
         if (fd == 1 || fd == 2) for (uint32_t i = 0; i < len; i++) fputc(c->mem_r8(buf + i), stderr);
@@ -201,13 +202,13 @@ static int recomp_hle(char table, uint32_t fn, Core* c) {
 // The `syscall` instruction: the kernel op is selected by $a0 (not the code field).
 // Boot uses Enter/ExitCriticalSection around setup. Thread ops (a0=3) need the recomp
 // thread model (not yet) — logged.
-static int s_irq_enabled = 1;
 void rec_syscall(Core* c, uint32_t code) {
   (void)code;
+  int& irq_enabled = c->game->hle.irq_enabled;   // was s_irq_enabled (now per-instance)
   switch (c->r[A0]) {
     case 0: c->r[V0] = 0; break;
-    case 1: c->r[V0] = s_irq_enabled ? 1 : 0; s_irq_enabled = 0; break;  // EnterCritical
-    case 2: s_irq_enabled = 1; c->r[V0] = 0; break;                      // ExitCritical
+    case 1: c->r[V0] = irq_enabled ? 1 : 0; irq_enabled = 0; break;  // EnterCritical
+    case 2: irq_enabled = 1; c->r[V0] = 0; break;                    // ExitCritical
     default:
       fprintf(stderr, "[syscall] a0=%u (unhandled kernel op)\n", c->r[A0]);
       c->r[V0] = 0;

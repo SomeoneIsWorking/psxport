@@ -165,14 +165,14 @@ static int g_card_verbose = 0;           // PSXPORT_CARD_VERBOSE=1
 // Our I/O is synchronous, so completion is "now". EvSpIOE (0x0004) = I/O end. Delivered to the standard
 // card event classes (HwCARD/SwCARD); an unmatched class is a harmless no-op (hle_deliver_event only
 // fires OPEN events whose class+spec match). Confirmed classes recorded in the journal once captured.
-extern void hle_deliver_event(uint32_t ev_class, uint32_t spec);
-static void card_deliver_complete(void) {
+extern void hle_deliver_event(Core* c, uint32_t ev_class, uint32_t spec);
+static void card_deliver_complete(Core* c) {
   // Tomba2 uses libmcrd: its "Checking MEMORY CARD" loop TestEvents the SwCARD class (0xF4000001) for
   // completion (captured: it polls specs IOE/NEW/TIMOUT/ERROR every frame). Our I/O is synchronous, so
   // signal SUCCESS via EvSpIOE (0x0004) on SwCARD (and HwCARD for any lower-level waiter). NOT NEW
   // (0x2000) — that would mean "unformatted/new card" and trigger a format prompt.
-  hle_deliver_event(0xF4000001u, 0x0004u);   // SwCARD, EvSpIOE — libmcrd completion (the game polls this)
-  hle_deliver_event(0xF0000011u, 0x0004u);   // HwCARD, EvSpIOE — BIOS-level completion
+  hle_deliver_event(c, 0xF4000001u, 0x0004u);   // SwCARD, EvSpIOE — libmcrd completion (the game polls this)
+  hle_deliver_event(c, 0xF0000011u, 0x0004u);   // HwCARD, EvSpIOE — BIOS-level completion
 }
 
 // A0 libcard table (_card_info / _card_load) — Tomba2's "Checking MEMORY CARD" uses A0:0xAB, not the B0
@@ -183,7 +183,7 @@ int card_hle_a0(uint32_t fn, Core* c) {
     case 0xABu:   // _card_info(port)
     case 0xACu:   // _card_load(slot)
       if (g_card_verbose) fprintf(stderr, "[card] A0:0x%02X(a0=%X a1=%X a2=%X)\n", fn, c->r[A0], c->r[A1], c->r[A2]);
-      card_deliver_complete(); c->r[V0] = 1; return 1;
+      card_deliver_complete(c); c->r[V0] = 1; return 1;
     default: return 0;
   }
 }
@@ -216,7 +216,7 @@ static void ov_card_status(Core* c) { c->r[V0] = 1; }
 
 // B0:0x4C _card_info(chan): the BIOS issues a "get card info" and delivers a completion event; the
 // card is always present + healthy here (host-backed), so accept and deliver completion immediately.
-static void ov_card_info(Core* c) { card_deliver_complete(); c->r[V0] = 1; }
+static void ov_card_info(Core* c) { card_deliver_complete(c); c->r[V0] = 1; }
 
 // B0 libcard dispatch — these run through the HLE B0 vector (the game's statically-linked libcard
 // wrappers call B0:idx via the `li t0,0xB0; jr t0` trampoline -> rec_dispatch_miss -> recomp_hle ->
@@ -233,8 +233,8 @@ int card_hle_b0(uint32_t fn, Core* c) {
   }
   switch (fn) {
     case 0x4Cu: ov_card_info(c);   return 1;   // _card_info(chan)
-    case 0x4Eu: ov_card_read(c);   card_deliver_complete(); return 1;   // _card_read(chan,sector,buf)
-    case 0x4Fu: ov_card_write(c);  card_deliver_complete(); return 1;   // _card_write(chan,sector,buf)
+    case 0x4Eu: ov_card_read(c);   card_deliver_complete(c); return 1;   // _card_read(chan,sector,buf)
+    case 0x4Fu: ov_card_write(c);  card_deliver_complete(c); return 1;   // _card_write(chan,sector,buf)
     case 0x50u: c->r[V0] = 0;      return 1;   // _card_chan() -> active channel (single card = 0)
     case 0x5Cu: ov_card_status(c); return 1;   // _card_status(chan)
     default: return 0;

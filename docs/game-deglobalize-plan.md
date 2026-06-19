@@ -57,6 +57,11 @@ Flag init-once-then-read tables case by case; when in doubt, move it (safe).
 - **P0 (done):** `Game` container + `Core::game` back-ptr + boot uses `new Game()`. Empty wrapper. 0-diff ✓.
 - **P1 (done):** timing.cpp — `g_vblank` → `TimingState::vblank`. 0-diff ✓.
 - **P2 (done):** cd_override.cpp — deferred-music `s_pending_music/s_pm_*` → `CdState`. 0-diff ✓.
+- **P3 (done):** hle.cpp — event blocks `s_ev`, BIOS heap `s_blk/s_nblk/s_heap_*`, `s_work_ok`,
+  `s_int_handler`, `s_irq_enabled` → `HleState`. Threaded `c` through heap_*/ev_index/work_area_init
+  and the `hle_deliver_event(c,...)` signature (rippled to memcard/native_stub/timing/native_boot;
+  card_deliver_complete(c), frame_tick(c)). 0-diff ✓. (sync_overrides/threads/memcard have NO migratable
+  state — only config-caches.)
 - **Next (order, small→large):** pad_input → hle → threads → memcard → native_fmv → native_stub →
   interp → gpu_native → gpu_trace → dbg_server → native_boot → gpu_vk → gte/spu/mdec (Beetle fork) →
   engine modules (fps60, engine_submit, native_path*, game_tomba2). sync_overrides has NO mutable

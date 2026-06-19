@@ -12,7 +12,7 @@
 enum { A0 = 4, V0 = 2 };
 #define VBLANK_COUNT 0x800ABDE0u   // DAT_800abde0: libetc VSync counter (FUN_80085900 returns it)
 
-void hle_deliver_event(uint32_t ev_class, uint32_t spec);
+void hle_deliver_event(Core* c, uint32_t ev_class, uint32_t spec);
 
 // vblank counter now lives on the instance: c->game->timing.vblank (was the file-scope g_vblank)
 
@@ -23,11 +23,11 @@ void hle_deliver_event(uint32_t ev_class, uint32_t spec);
 // deref is skipped.
 static void ov_vsync_callback(Core* c) { c->r[V0] = 0; }
 
-static void frame_tick(void) {
+static void frame_tick(Core* c) {
   // Deliver the VBlank event to whichever class the game opened it under (RCnt3 vblank, or
   // the libapi vblank class); broad spec so any opened+enabled vblank EvCB matches.
-  hle_deliver_event(0xF2000003u, 0xFFFFFFFFu);
-  hle_deliver_event(0xF0000001u, 0xFFFFFFFFu);
+  hle_deliver_event(c, 0xF2000003u, 0xFFFFFFFFu);
+  hle_deliver_event(c, 0xF0000001u, 0xFFFFFFFFu);
 }
 
 // 0x80085900 FUN_80085900 = libetc VSync(mode):
@@ -44,7 +44,7 @@ static void ov_vsync(Core* c) {
   } else {
     vblank += (mode == 0) ? 1u : (uint32_t)mode;
     c->r[V0] = vblank;
-    frame_tick();
+    frame_tick(c);
   }
   c->mem_w32(VBLANK_COUNT, vblank);
 }
