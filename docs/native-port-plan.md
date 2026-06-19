@@ -96,7 +96,32 @@ override layer ABOVE the recompiled switch). Overlays: emit.py already takes `--
 aliasing (multiple overlays share 0x80106000+ — the live overlay set for boot→DEMO→GAME must be the
 emitted one).
 
-### SUBSTRATE WIRING — DONE end-to-end, builds+runs, ONE derail to fix (2026-06-19)
+### ⚑ run.sh DEFAULT must be the NATIVE path, not the interpreter (USER, 2026-06-19)
+Once the substrate is stable, flip the DEFAULT build (./run.sh + build_port.sh) to PSXPORT_SUBSTRATE
+(native compiled bodies); the interpreter-only build becomes the OPT-OUT (A/B). Today substrate is opt-in
+via PSXPORT_SUBSTRATE=1 only because it still derails (below). Do the flip after the derail is fixed.
+
+## SUBSTRATE — ROOT CAUSE of the derail FOUND (2026-06-19): no jump-table recovery
+**The recompiler has no in-function jump-table (switch) recovery.** A function with an internal computed
+`jr` (switch on a bounded index) emits `rec_dispatch(c, reg)`; emit.py SEEDS the jump-table case labels
+as fake "functions" (rec_func_index>=0). Under the substrate, the flat interp + compiled bodies dispatch
+those labels as FUNCTION CALLS — but they are mid-function code with NO prologue/frame — so each "call"
+corrupts the stack; after a few the return addr reads 0 → `jr ra` to 0 → derail (pc=0x10, ra=0, sp
+underflowed past 0x80200000). CONFIRMED: ring buffer of compiled entries (PSXPORT_DEBUG=derail) shows the
+derail inside the printf/format parser 0x8009A76C (case labels 8009AE60/8009AF5C) AND the sprintf/string
+subsystem 0x80098xxx (80098D30/80098DB0...) — both jump-table-heavy. Excluding 0x8009A000+ from routing
+still derails in 0x80098xxx, proving it is GENERAL, not one function.
+**THE FIX (unblocks the whole substrate), pick one:**
+  (A) PROPER + GENERAL: add in-function jump-table recovery to emit.py — detect the `sltiu idx,N; ... lw
+      t,jt(base); jr t` switch idiom, recover the N targets from the .rodata jump table, emit a C `switch`
+      (or computed-goto over `L_xxxx:` labels already emitted) so the computed jr stays INSIDE the compiled
+      body (no rec_dispatch, no fake-function labels). Stop seeding jump-table labels as functions.
+  (B) STOPGAP: native overrides for the format/string subsystem (printf/sprintf/vsprintf at 0x8009A76C +
+      0x80098xxx) — replaces the jump-table-heavy code with native C. Narrower; other jump-table fns remain.
+  Recommended: (A). Diagnostics already in tree: PSXPORT_DEBUG=derail (one-shot reporter + compiled-entry
+  ring), PSXPORT_SUBSTRATE_LO/HI (range gate) in interp.cpp coro_native_call.
+
+## SUBSTRATE WIRING — DONE end-to-end, builds+runs, ONE derail to fix (2026-06-19)
 Implemented the A/B-gated substrate (`PSXPORT_SUBSTRATE=1` build):
 - emit.py: renamed generated `rec_set_override`→`shard_set_override` (so dispatch.cpp owns a HYBRID
   rec_set_override: interp map + g_override[]).
@@ -113,11 +138,19 @@ to an unset/garbage return addr) and spins on `bad opcode`. Last tripwire entrie
 800865C0, 80091EA8 (both `<-DEAD0000` = top-level native_boot dispatch). The compiled↔interp call/return
 contract via `rec_interp` (sets ra=CORO_SENTINEL, runs flat, restores) is correct in principle, so the
 derail is EITHER a specific miscompiled shard body (the shards were "0-diff" pre-OOP; may have rotted) OR
-a boundary case (tail-call `j` into a recompiled fn, a computed `jr` into one, or a fn the flat interp
-enters mid-body). NEXT: bisect — gate the `rec_func_index>=0` routing behind an address allowlist (or a
-PSXPORT_SUBSTRATE_ONLY=range env) to binary-search the offending function; compare its compiled body vs
-interp via the existing A/B (PSXPORT_*_RECOMP) / ncall_diff. Logs: scratch/logs/b2c_sub.log,
-scratch/trace/b2c_substrate.funcs. Default interp-only build verified still good.
+a boundary case. DIAGNOSED (PSXPORT_DEBUG=derail one-shot reporter in interp_flat; PSXPORT_SUBSTRATE_LO/HI
+range gate in coro_native_call): the derail is **pc=0x10, ra=0x00000000, sp=0x80200030** (sp UNDERFLOWED
+past the 2MB top 0x80200000 — a function returned via `jr ra` with ra=0 and an over-popped stack). It
+fires in the init prefix right AFTER `[geom] SetGeomScreen`, i.e. inside the projection-setup subtree
+`gen_func_800509B4 → func_80050738 → func_80083B30(x2)/func_80083BF0(x2) → func_80086604`. ALL of those
+recompiled bodies have CORRECT frames (verified by hand) — so the ra=0/stack-underflow comes from a
+deeper or boundary case, NOT a jump table (gen_func_800509B4 has none). Range-bisection can't isolate
+further because routing one entry pulls its whole compiled subtree (direct `func_X(c)` calls bypass the
+gate). NEXT: add a ring buffer of entered compiled-function addrs (push in coro_native_call's
+`rec_func_index>=0` branch) and dump it in the derail reporter → names the exact function returning to
+ra=0. Suspect: a recompiled body whose o32 stacked-argument or $ra save/restore the compiler got wrong,
+OR a compiled→BIOS/override boundary that doesn't preserve sp/ra. Logs: scratch/logs/derail.log,
+scratch/logs/bis_*.log. Default interp-only build verified still good (rec_func_index==-1 there).
 
 ### EXECUTION ORDER (next session, full budget; subagents OK per user)
 1. Re-enable the recomp substrate (steps 1-5 above). Verify: tripwire count drops sharply, game still

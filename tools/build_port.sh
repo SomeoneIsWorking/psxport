@@ -40,6 +40,8 @@ if [ -n "${PSXPORT_SUBSTRATE:-}" ]; then
   CFLAGS="$CFLAGS -DPSXPORT_SUBSTRATE -Igenerated"
   CXXFLAGS="$CXXFLAGS -DPSXPORT_SUBSTRATE -Igenerated"
   SHARDS="generated/shard_disp.c generated/shard_0.c generated/shard_1.c generated/shard_2.c generated/shard_3.c generated/shard_4.c generated/shard_5.c generated/shard_6.c generated/shard_7.c"
+  OBJ=scratch/obj_sub   # SEPARATE object cache: substrate TUs carry -DPSXPORT_SUBSTRATE; sharing the
+  mkdir -p "$OBJ"       # interp-only OBJ dir would relink stale/wrong-flag objects (dup rec_dispatch).
 fi
 
 tools/gen_vk_shaders.sh   # compile+embed the Vulkan present shaders (gpu_vk_shaders.h) before gpu_vk.c

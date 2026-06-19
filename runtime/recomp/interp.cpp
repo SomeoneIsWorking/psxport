@@ -312,6 +312,9 @@ static inline void ifn_record(uint32_t tgt, uint32_t from) {
   }
 }
 
+static uint32_t g_callring[64];   // derail diagnostics: ring of last compiled-function entries
+static int      g_callring_pos = 0;
+
 // Invoke a call target natively if it is an override/BIOS (returns 1), else 0 (caller jumps).
 static int coro_native_call(Core* c, uint32_t tgt) {
   OverrideFn ov = interp_override_for(tgt);       // unified address-keyed override (resident + overlay)
@@ -335,7 +338,16 @@ static int coro_native_call(Core* c, uint32_t tgt) {
   // exactly like a native override. rec_func_index() is always -1 in the interpreter-only build, so this
   // is a no-op there (no behavior change, no #ifdef needed). The compiled body itself reaches non-
   // recompiled callees (overlays / the 495 indirect fns) back through rec_dispatch -> interp.
-  if (rec_func_index(tgt) >= 0) { rec_dispatch(c, tgt); return 1; }
+  // Bisect gate (PSXPORT_SUBSTRATE_LO/HI, hex KSEG0 addrs): when set, route to the compiled body only
+  // for tgt in [LO,HI); outside the window fall to the interpreter. Lets us binary-search a derailing
+  // compiled body without rebuilding. Unset window (LO==0 && HI==0) = route ALL recompiled targets.
+  static int sg_init = 0; static uint32_t sg_lo = 0, sg_hi = 0;
+  if (!sg_init) { sg_init = 1; const char* l = cfg_str("PSXPORT_SUBSTRATE_LO"); const char* h = cfg_str("PSXPORT_SUBSTRATE_HI");
+                  if (l) sg_lo = (uint32_t)strtoul(l, 0, 16); if (h) sg_hi = (uint32_t)strtoul(h, 0, 16); }
+  if (rec_func_index(tgt) >= 0 && (!(sg_lo | sg_hi) || (tgt >= sg_lo && tgt < sg_hi))) {
+    g_callring[g_callring_pos++ & 63] = tgt;   // derail diagnostics: last compiled entries
+    rec_dispatch(c, tgt); return 1;            // recompiled target -> run its COMPILED body
+  }
   ifn_record(tgt, c->r[31]);   // tripwire: the interpreter is about to run this (non-native) function
   return 0;
 }
@@ -387,6 +399,17 @@ static void interp_flat(Core* c, uint32_t pc, uint32_t stop_ra) {
     }
     uint32_t in = c->mem_r32(pc);
     uint32_t op = in >> 26;
+    // SUBSTRATE derail reporter (PSXPORT_DERAIL): a compiled<->interp return that goes wrong lands the
+    // interp on garbage (insn 0xFFFFFFFF). Report the exact PC + regs ONCE and stop the run (instead of
+    // spinning 12M "bad opcode" lines), so the offending function's broken return can be identified.
+    if (op == 0x3F && cfg_dbg("derail")) {
+      fprintf(stderr, "[derail] pc=%08X in=%08X  ra=%08X sp=%08X gp=%08X  stop_ra=%08X\n",
+              pc, in, c->r[31], c->r[29], c->r[28], stop_ra);
+      for (int k = 0; k < 16; k++) fprintf(stderr, "  stk[%2d] @%08X = %08X\n", k, c->r[29] + k*4, c->mem_r32(c->r[29] + k*4));
+      fprintf(stderr, "[derail] last compiled entries (newest last):\n");
+      for (int k = 24; k >= 1; k--) { uint32_t a = g_callring[(g_callring_pos - k) & 63]; if (a) fprintf(stderr, "  %08X\n", a); }
+      fflush(stderr); abort();
+    }
     ldhaz_step(in, pc);                              // load-delay hazard detector (execution order)
 
     // `break` is a program trap. We HLE the BIOS, so there is no exception handler to resume
