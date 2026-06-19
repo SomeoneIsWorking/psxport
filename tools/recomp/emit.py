@@ -194,9 +194,72 @@ STUB_NAMES = Names("stub_gen_func", "stub_func", "stub_dispatch", "stub_func_ind
                    "stub_set_override", "g_stub_override", "stub_decls.h", "stub_shard", "stub_disp")
 
 
+def find_jump_tables(exe, ins, lo, hi, validate=True):
+    """Recover in-function jump tables (C `switch`) so a computed `jr` stays INSIDE the compiled body
+    instead of routing through rec_dispatch (which, under the no-interpreter substrate, would dispatch
+    the table's mid-function case labels as fake functions -> stack corruption; see docs/native-port-
+    plan.md). Detects the MIPS switch idiom around a `jr rN` (rN != ra):
+        sltiu cond, idx, COUNT ; (beqz cond, default) ; sll t, idx, 2
+        lui   base, HI ; [addiu base, base, LO] ; addu base, base, t ; lw rN, OFF(base) ; jr rN
+    The jump table is at HI<<16 (+LO) + OFF; read COUNT word targets from the EXE image. Returns
+    {jr_addr: [target_addr,...]} (targets are the case-label code addresses)."""
+    jt = {}
+    for a in sorted(ins):
+        i = ins[a]
+        if not (i.kind == D.JUMPR and i.op == "jr" and i.rs and i.rs != 31):
+            continue
+        base_reg = off = hi_val = lo_add = count = None
+        for b in range(a - 4, max(lo, a - 0x40) - 4, -4):
+            if b not in ins:
+                break
+            j = ins[b]
+            if base_reg is None and j.op == "lw" and j.rt == i.rs:   # the table load into the jr reg
+                base_reg, off = j.rs, j.simm
+                continue
+            if base_reg is not None:
+                if hi_val is None and j.op == "lui" and j.rt == base_reg:
+                    hi_val = j.imm << 16
+                elif lo_add is None and j.op == "addiu" and j.rt == base_reg and j.rs == base_reg:
+                    lo_add = j.simm
+            if count is None and j.op == "sltiu":
+                count = j.imm
+            if hi_val is not None and count is not None:
+                break
+        if base_reg is None or hi_val is None or off is None or not count or count > 4096:
+            continue
+        tbl = (hi_val + (lo_add or 0) + off) & 0xFFFFFFFF
+        try:
+            targets = [exe.word(tbl + k * 4) for k in range(count)]
+        except Exception:
+            continue
+        if validate and any(not (lo <= t < hi) for t in targets):  # a real switch jumps within its fn
+            continue
+        jt[a] = targets
+    return jt
+
+
+def collect_jt_targets(exe, funcs, text_end):
+    """Global pre-pass: every jump-table case-label address across all functions. These are mid-function
+    code, NOT functions — they must be PRUNED from the function set so the containing function spans its
+    whole switch (otherwise the body is truncated at the label, the switch targets fall out of range, and
+    recovery fails -> the substrate derails). Validates targets are in-text and decode as real code (so a
+    false-positive idiom match on data can't prune a real function)."""
+    out = set()
+    ordered = sorted(funcs)
+    for k, a in enumerate(ordered):
+        hi = ordered[k + 1] if k + 1 < len(ordered) else text_end
+        ins = {x: decode(x, exe.word(x)) for x in range(a, hi, 4)}
+        for jr_a, tgts in find_jump_tables(exe, ins, a, hi, validate=False).items():
+            if tgts and all(exe.load <= t < text_end and decode(t, exe.word(t)).kind != D.UNKNOWN
+                            for t in tgts):
+                out.update(tgts)
+    return out
+
+
 def emit_func(exe, lo, hi, funcset, out, name, N):
     """Emit one C function covering [lo, hi) under the given C name (the pure recomp body)."""
     ins = {a: decode(a, exe.word(a)) for a in range(lo, hi, 4)}
+    jt = find_jump_tables(exe, ins, lo, hi)
 
     # Simulate the emission walk to find the exact set of "standalone" addresses (those
     # emitted as their own statement; a control op consumes the next word as its delay
@@ -209,6 +272,11 @@ def emit_func(exe, lo, hi, funcset, out, name, N):
         a += 8 if ins[a].kind in (D.BRANCH, D.JUMP, D.JUMPR) else 4
     labels = {i.target for i in ins.values()
               if i.kind in (D.BRANCH, D.JUMP) and i.target in standalone and lo <= i.target < hi}
+    # jump-table case-label targets are real labels too (the recovered `switch` gotos into them)
+    for tgts in jt.values():
+        for t in tgts:
+            if t in standalone:
+                labels.add(t)
 
     out.append(f"void {name}(Core* c) {{")
     a = lo
@@ -220,7 +288,7 @@ def emit_func(exe, lo, hi, funcset, out, name, N):
             slot = ins.get(a + 4)
             ds_c = emit_simple(slot) if (slot and slot.kind not in
                    (D.BRANCH, D.JUMP, D.JUMPR)) else "/* DS */"
-            out.extend(emit_control(i, ds_c, funcset, labels, N))
+            out.extend(emit_control(i, ds_c, funcset, labels, N, jt.get(a)))
             a += 8
         else:
             s = emit_simple(i)
@@ -237,8 +305,10 @@ def call_or_dispatch(target, funcset, N):
             else f"{N.dispatch}(c, 0x{target:08X}u);")
 
 
-def emit_control(i, ds_c, funcset, labels, N):
-    """Lines for a control instruction `i` whose delay-slot C is `ds_c`."""
+def emit_control(i, ds_c, funcset, labels, N, jtargets=None):
+    """Lines for a control instruction `i` whose delay-slot C is `ds_c`. `jtargets` (if set) = the
+    recovered jump-table case-label addresses for a computed `jr` -> emit a C switch on the target
+    value (auto-dedupes repeated entries) so the jump stays inside this compiled body."""
     L = []
     if i.kind == D.BRANCH:
         if i.op in ("bltzal", "bgezal"):
@@ -264,6 +334,18 @@ def emit_control(i, ds_c, funcset, labels, N):
     if i.op == "jr":
         if i.rs == 31:
             L.append(f"  {ds_c} return;")
+        elif jtargets:
+            # recovered jump table: switch on the loaded target value -> goto the case label. Dedupe
+            # repeated targets (a C switch can't have two identical case values). default = dispatch
+            # (unreached: the preceding bounds-check `beqz` guards the index range).
+            seen, cases = set(), []
+            for t in jtargets:
+                if t in seen or t not in labels:
+                    continue
+                seen.add(t)
+                cases.append(f"case 0x{t:08X}u: goto L_{t:08X};")
+            L.append(f"  {{ {ds_c} switch ({R(i.rs)}) {{ {' '.join(cases)} "
+                     f"default: {N.dispatch}(c, {R(i.rs)}); return; }} }}")
         else:
             L.append(f"  {ds_c} {N.dispatch}(c, {R(i.rs)}); return;")
     else:  # jalr rd, rs
@@ -343,6 +425,14 @@ def emit_module(exe, out_dir, N, seeds, ov_dir=None, limit=None, shards=8):
     if os.environ.get("PSXPORT_USE_GHIDRA"):
         seeds |= set(ghidra_funcs(exe.load, exe.text_end))
     funcs = discover_funcs(exe, seeds)
+    # PRUNE jump-table case labels wrongly seeded/discovered as functions: they are mid-function code,
+    # and leaving them in truncates the containing function so its switch can't be recovered (the
+    # substrate-derail root cause). Keep any that ARE a seed entry (defensive: a real fn shouldn't be a
+    # case label, but never drop an explicit seed).
+    jt_labels = collect_jt_targets(exe, funcs, exe.text_end) - set(seeds)
+    if jt_labels:
+        funcs = [f for f in funcs if f not in jt_labels]
+        print(f"[{N.wrap}] pruned {len(jt_labels)} jump-table case labels from the function set")
     print(f"[{N.wrap}] functions: {len(seeds)} seeds -> {len(funcs)} recompiled after jal "
           f"discovery (rest run via the interpreter)")
     funcset = set(funcs)
