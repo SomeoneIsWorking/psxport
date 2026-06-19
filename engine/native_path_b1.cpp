@@ -73,7 +73,61 @@ static void ov_80084470(Core* c) {
   c->r[2] = o;
 }
 
+// 0x80079528 — strlen(a0). (gen_func_80079528's body past the first `jr ra` — the 8009A640 call — is
+// the next function's recompiler over-run; the real body is just the count loop.)
+static void ov_80079528(Core* c) {
+  uint32_t p = c->r[4], n = 0;
+  if (c->mem_r8(p) != 0) { for (;;) { p++; n++; if (c->mem_r8(p) == 0) break; } }
+  c->r[2] = n;
+}
+
+// 0x8007B328 — zero an 8-byte descriptor at 0x800FB160 (via 0x8009A420), seed bytes
+// [1]=1,[4]=7,[5]=9 (rest 0), then call 0x8007B2C0(0) to load the ascending weight ramp.
+static void ov_8007B328(Core* c) {
+  uint32_t b = 0x800FB160u;
+  c->r[4] = b; c->r[5] = 0; c->r[6] = 8; call_fn(c, 0x8009A420u);
+  c->mem_w8(b + 1, 1); c->mem_w8(b + 2, 0); c->mem_w8(b + 3, 0);
+  c->mem_w8(b + 4, 7); c->mem_w8(b + 5, 9); c->mem_w8(b + 6, 0); c->mem_w8(b + 7, 0);
+  c->r[4] = 0; call_fn(c, 0x8007B2C0u);
+}
+
+// 0x8007B38C — scatter the 0x800FB160 descriptor's bytes [1..7] into the HW-shadow block at 0x800BF870
+// (offsets 51/1502/1503/26/27/1500/1501), then call 0x8007B2C0(desc[6] & 0xff).
+static void ov_8007B38C(Core* c) {
+  uint32_t s = 0x800FB160u, d = 0x800BF870u;
+  uint32_t b6 = c->mem_r8(s + 6);
+  c->mem_w8(d + 1500, (uint8_t)b6);
+  c->mem_w8(d + 51,   (uint8_t)c->mem_r8(s + 1));
+  c->mem_w8(d + 1502, (uint8_t)c->mem_r8(s + 2));
+  c->mem_w8(d + 1503, (uint8_t)c->mem_r8(s + 3));
+  c->mem_w8(d + 26,   (uint8_t)c->mem_r8(s + 4));
+  c->mem_w8(d + 27,   (uint8_t)c->mem_r8(s + 5));
+  c->mem_w8(d + 1501, (uint8_t)c->mem_r8(s + 7));
+  c->r[4] = b6 & 0xff; call_fn(c, 0x8007B2C0u);
+}
+
+// 0x80083B30 — initialize a ~28-byte sprite/object descriptor at a0 from (a1,a2,a3) + a stack 5th arg,
+// reading the global flag at 0x800ABE20 (via 0x80086604) to pick the +23 bound (arg5<257 vs <289).
+static void ov_80083B30(Core* c) {
+  uint32_t a0 = c->r[4], a1 = c->r[5], a2 = c->r[6], a3 = c->r[7];
+  uint32_t arg5 = c->mem_r32(c->r[29] + 16);
+  call_fn(c, 0x80086604u);                       // r2 = *0x800ABE20
+  uint32_t flag = c->r[2];
+  c->mem_w16(a0 + 0, (uint16_t)a1); c->mem_w16(a0 + 2, (uint16_t)a2); c->mem_w16(a0 + 4, (uint16_t)a3);
+  c->mem_w16(a0 + 12, 0); c->mem_w16(a0 + 14, 0); c->mem_w16(a0 + 16, 0); c->mem_w16(a0 + 18, 0);
+  c->mem_w8(a0 + 25, 0); c->mem_w8(a0 + 26, 0); c->mem_w8(a0 + 27, 0); c->mem_w8(a0 + 22, 1);
+  c->mem_w16(a0 + 6, (uint16_t)arg5);
+  uint32_t bound = (flag == 0) ? ((int32_t)arg5 < 257) : ((int32_t)arg5 < 289);
+  c->mem_w8(a0 + 23, (uint8_t)bound);
+  c->mem_w16(a0 + 8, (uint16_t)a1); c->mem_w16(a0 + 10, (uint16_t)a2);
+  c->mem_w16(a0 + 20, 10); c->mem_w8(a0 + 24, 0);
+}
+
 void games_native_path_b1_init(void) {
+  rec_set_override(0x80079528u, ov_80079528);
+  rec_set_override(0x8007B328u, ov_8007B328);
+  rec_set_override(0x8007B38Cu, ov_8007B38C);
+  rec_set_override(0x80083B30u, ov_80083B30);
   rec_set_override(0x8004FB20u, ov_8004FB20);
   rec_set_override(0x80089F68u, ov_80089F68);
   rec_set_override(0x8008BBC8u, ov_8008BBC8);
