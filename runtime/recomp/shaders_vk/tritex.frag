@@ -12,6 +12,11 @@ layout(set = 0, binding = 0) uniform usampler2D u_vram;
 layout(location = 0) out uint o_px;
 
 uint vram_at(int x, int y) { return texelFetch(u_vram, ivec2(x & 1023, y & 511), 0).r; }
+// Framebuffer destination read for semi-transparent blending. Unlike texture sampling (which wraps in
+// the 0..511 PSX texture region), the blend destination is the ACTUAL framebuffer pixel at gl_FragCoord
+// — which, in the wide/hi-res scratch FB, lives at rows >=512 (s_vram_tex is IMG_H tall). Masking y to
+// 511 (vram_at) made the FB blend read the texture atlas instead -> texture-looking garbage at hi-res.
+uint fb_at(int x, int y) { return texelFetch(u_vram, ivec2(x & 1023, y), 0).r; }
 
 void main() {
     int px = int(gl_FragCoord.x), py = int(gl_FragCoord.y);
@@ -42,7 +47,7 @@ void main() {
 
     // semi-transparency: textured blends only STP-set texels; untextured always blends.
     if (v_clut.z != 0 && (mode == 3 || stp == 1u)) {
-        uint d = vram_at(px, py);
+        uint d = fb_at(px, py);
         int sr=int(texel&31u), sg=int((texel>>5)&31u), sb=int((texel>>10)&31u);
         int dr=int(d&31u), dg=int((d>>5)&31u), db=int((d>>10)&31u);
         int br, bg, bb; int m = v_clut.w;

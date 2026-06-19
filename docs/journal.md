@@ -5353,3 +5353,52 @@ garbage → stage machine's file-table-driven progression never advanced → sta
 (scratch/oop/shots/oop_fixed_field_f470.png); two identical runs byte-identical at RAM@f350 (deterministic).
 This UNBLOCKS the top-down engine rewrite (the handoff's mission) — the field is reachable on the OOP Core
 substrate again, no revert of c344d16 needed.
+
+## later-142 — hi-res "override corruption" SOLVED: it was a SHADER bug (semi-blend dest read), NOT the override system
+**The handoff's central premise was FALSIFIED.** The handoff claimed the hi-res garble (ires≥2, overrides
+ON = black-left + texture-noise; scratch/oop/shots/fix_on_ires2.png) was caused by the override system —
+the interpreter jumping UP into native overrides mid-frame, render side-effects interleaving with guest
+execution — and that the cure was a big "top-down engine" rewrite (replace overrides, engine drives the
+frame, drains a render-command list natively). That diagnosis was wrong. The corruption is a localized
+**Vulkan fragment-shader bug** in the hi-res scratch-FB present path, with nothing to do with override
+timing or reentrancy.
+
+**How it was found (render-diff-first, per gfx-debug):**
+1. Reproduced ON vs OFF @ires=2. KEY REALIZATION: the "overrides-OFF = correct" baseline is **320×224**,
+   ON is **640×480** — they are NOT the same render path. OFF (PSXPORT_FAITHFUL_DEPTH) → `native_depth_on()`
+   false → `s_seen3d` never set → `frame_via_fb()` false → present plain 4:3 from VRAM. The hi-res scratch-FB
+   path is ONLY exercised by overrides-ON; "OFF is fine" just means the 4:3 VRAM path is fine. The comparison
+   in the handoff was misleading.
+2. **Parent worktree (05421fb, pre-OOP) produced BYTE-IDENTICAL garbage** → not an OOP regression, not
+   override-timing reentrancy (deterministic, same on both builds). (later-140's "ires=2 crisp" must have
+   been a non-ocean frame; the ocean/underwater field scene was always broken at hi-res.)
+3. **overrides-ON @ires=1 (no scratch FB) renders the ocean CORRECTLY** (scratch/oop/shots/on_ires1.png) →
+   native geometry submission is right; ONLY the hi-res relocation/scratch-FB render is broken. The bug is
+   100% in `push_wide` relocation + the scratch-FB present, NOT in what we submit.
+4. Added `PSXPORT_VK_FULLSHOT=frame` (dumps the ENTIRE panel image, VRAM rows 0..511 + scratch FB rows
+   512..IMG_H) — confirmed the SW framebuffers (0,0)/(0,256) are black at ires=2 ON (native 3D tees ONLY to
+   VK, not SW VRAM) and the scratch FB (rows 512+) held the garble that gets presented.
+
+**Root cause (tritex.frag):** `vram_at(x,y)` masks `y & 511` — correct for TEXTURE sampling (PSX textures
+live in VRAM rows 0..511) but the SAME helper was used for the **semi-transparency blend DESTINATION read**
+(`uint d = vram_at(px,py)` at `gl_FragCoord`). When `push_wide` relocates 3D geometry into the scratch FB
+(rows ≥512; the tee'd geometry's `gl_FragCoord.y` is 512..991), `py & 511` wrapped the destination read back
+to rows 0..479 — i.e. semi-transparent prims (the ocean water blends) read the **texture atlas** as their
+blend destination → texture-looking garbage. Opaque prims were fine (they don't read the dest); that's why
+some of the scene survived and the rest was scrambled.
+
+**Fix:** split the framebuffer destination read from texture sampling — new `fb_at(x,y)` = `texelFetch(u_vram,
+ivec2(x&1023, y), 0)` (NO y-mask; `s_vram_tex` is `IMG_H`=1232 tall, so rows 512+ are real framebuffer).
+`vram_at` keeps the 0..511 wrap for textures. tritex.frag only.
+
+**Verified (headless, real disc, field f470):** ires=2 ON ocean now renders crisp 640×480 in the scratch FB
+(scratch/oop/shots/final_on_ires2.png) — bright water left, dark cliff + Tomba right, matching the ires=1
+reference scaled 2×. Widescreen 856×480 @ires=2 also correct (fix1_wide_ires2.png). **ires=1 present is
+BYTE-IDENTICAL to pre-fix** (`fb_at`==`vram_at` when py<512, so the 4:3/non-FB path is untouched) — no
+regression. gpu_differ/replay_ours unaffected (SW rasterizer, doesn't use these shaders).
+
+**Implication for the mission:** the user's stated end-goal (top-down native engine) still stands as
+architecture, but the *bug it was supposedly needed to fix* is fixed without it. The "override system
+corrupts at hi-res" justification is gone — the rewrite, if pursued, is for the architectural reasons
+(engine owns the frame), not because overrides cause this corruption. Don't cite this corruption as the
+driver anymore.

@@ -25,6 +25,15 @@ For ANY "something renders wrong" problem (water, fade, corruption, color, geome
 screenshotting — their boot timing and attract demos DRIFT, so the states differ. `gpu_differ` removes
 that variable. (`tools/dualcore.py` state-sync is fragile — see Limits.)
 
+**Corollary 2 (hi-res/wide present): overrides-OFF is NOT a valid "correct" baseline.** At ires≥2 the
+faithful/overrides-OFF path (`PSXPORT_FAITHFUL_DEPTH`) never sets `s_seen3d`, so `frame_via_fb()` is false
+and it presents plain **4:3 from VRAM (320×224)** — a DIFFERENT render path from the hi-res **scratch FB**
+(640×480, only taken with native depth = overrides ON). Comparing them is path-vs-path, not geometry-vs-
+geometry. To isolate a hi-res bug: compare overrides-ON @ires=1 (correct, non-FB) vs @ires=2 (the scratch-FB
+path), and use `PSXPORT_VK_FULLSHOT` to see the FB region directly. (This is how later-142's hi-res garble
+was traced to a shader bug — the semi-blend destination read masked y to 0..511 and so read the texture
+atlas instead of the scratch FB at rows 512+ — NOT the override system the handoff blamed.)
+
 ## IMPROVE THE TOOLS WHEN THEY FALL SHORT — do not hand-grind or reinvent
 
 If a tool can't answer the question, **extend the tool**, don't grind it by hand and don't build a
@@ -47,6 +56,7 @@ re-reason"; this is its project-specific enforcement.)
 | `PSXPORT_SEMIDUMP=F` | Log each SEMI prim at frame F: blend mode (0=avg,1=add,2=sub,3=add/4) + colour + bbox + draw-Y. Found the stacked subtractive fade tiles behind the intro fade flash. gpu_native.c. | env |
 | state capture | **port:** `dumpram`, transplant `PSXPORT_TRANSPLANT="F:ram:vram"`, `gpu_vram_load`. **oracle:** `dumpram`, `dumpvram` (REPL), `-loadstate`/`-savestate`, `PSXPORT_VRAMDUMP`, `PSXPORT_FRAMEDUMP`. | REPL / env |
 | screenshots | port `shot PATH` (SW) or `PSXPORT_VK_SHOT=F` → `scratch/screenshots/vk_live.ppm` (VK); oracle `shot PATH`. | LAST-RESORT visual only |
+| `PSXPORT_VK_FULLSHOT=F` | Dump the ENTIRE VK panel image (`1024×IMG_H`): VRAM rows 0..511 + the hi-res/wide **scratch FB** at rows 512+. THE tool for hi-res/widescreen present bugs — shows exactly where `push_wide`-relocated geometry landed (the normal present only samples the FB region). gpu_vk.cpp. | env → `scratch/screenshots/vk_full.ppm` |
 | **live debug server** | **NON-BLOCKING** TCP server (`runtime/recomp/dbg_server.c`) — inspect the port WHILE the user plays live (windowed), unlike the blocking `PSXPORT_REPL` FIFO. Commands serviced on the main thread once/frame. `r`/`rw`/`stage`/`scene` (on-demand `gpu_scene_dump`)/`provat x y` (on-demand `gpu_provat_display`)/`shot [path]`/`gputrace [path]` (arm a gpu_differ capture of the next frame)/`sbs [0\|1]` (VK-vs-SW side-by-side present)/`frame`. | run with `PSXPORT_DEBUG_SERVER=1` (port 5959); drive with `tools/dbgclient.py <cmd...>` or interactively (`tools/dbgclient.py`) |
 
 ## Honest tool limits (fix these when they block you — don't work around by eyeballing)

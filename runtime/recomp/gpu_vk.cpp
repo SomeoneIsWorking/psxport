@@ -1589,6 +1589,11 @@ void gpu_vk_dump(int sx, int sy, int w, int h, int frame) {
     } else qa = -1; }
   int dsx = sx, dsy = sy, dw = w, dh = h;
   if (frame_via_fb()) { dsx = 0; dsy = FB_Y0; dw = FBW(); dh = FBH(); }   // scaled scratch FB (3D frame)
+  // DIAG: PSXPORT_VK_FULLSHOT=frame -> dump the ENTIRE panel image (VRAM rows 0..511 + scratch FB
+  // rows 512..IMG_H) so we can see exactly where geometry landed in the wide/hi-res FB.
+  { static int ff = -2; if (ff == -2) { const char* e = cfg_str("PSXPORT_VK_FULLSHOT"); ff = e ? atoi(e) : -1; }
+    if (ff >= 0 && frame == ff) { vk_dump_to("scratch/screenshots/vk_full.ppm", 0, 0, VRAM_W, IMG_H);
+      fprintf(stderr, "[vk_full] f%d wrote scratch/screenshots/vk_full.ppm (%dx%d)\n", frame, VRAM_W, IMG_H); } }
   if (sf >= 0 && frame == sf) { vk_dump_to("scratch/screenshots/vk_live.ppm", dsx, dsy, dw, dh);
     fprintf(stderr, "[vk_shot] f%d wrote scratch/screenshots/vk_live.ppm\n", frame); }
   if (qa >= 0 && frame >= qa && frame <= qb && ((frame - qa) % qstep) == 0) {
