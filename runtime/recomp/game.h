@@ -102,6 +102,12 @@ public:
   NdlState    ndl;   // native classified display list: per-frame prim arena + bucket lookup (native_dl.cpp)
   Fps60State  fps60; // interpolated-60fps tier: capture buffers + matcher + remap (fps60.cpp)
 
+  // Dual-core diff control: the per-core override-neutralize flag. The terrain override (ov_terrain,
+  // engine_submit.cpp) is in the SHARED dispatch table; each core decides ON vs neutralized by reading
+  // THIS flag (not divergent override tables — see docs game-deglobalize-plan P7). The harness sets it on
+  // the `b` core (terrain -> recomp super-call) so an a-vs-b core.ram diff isolates submit_terrain.
+  int neutralize_terrain = 0;
+
   // core.game / gpu.game / gpu_vk.game are back-pointers so a subsystem holding one of those handles can
   // reach the rest of the machine (e.g. blit_src -> gpu_vk via gpu.game; frame_via_fb -> s_seen3d via
   // gpu_vk.game->core). Set once here so no file-scope global is needed.

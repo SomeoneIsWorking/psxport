@@ -826,6 +826,9 @@ static void submit_terrain(Core* c) {
   rec_dispatch(c, 0x80027768u);
 }
 void ov_terrain(Core* c) {
+  // Dual-core diff: the `b` core neutralizes terrain to the recomp body via a per-Game flag (the override
+  // table is shared; the per-core choice is this flag, not a divergent table). `a` keeps the native path.
+  if (c->game->neutralize_terrain) { rec_super_call(c, 0x8002AB5Cu); return; }
   if (cfg_on("PSXPORT_PEROBJ_RECOMP")) { rec_super_call(c, 0x8002AB5Cu); return; }
   submit_terrain(c);
 }
