@@ -162,6 +162,11 @@ Flag init-once-then-read tables case by case; when in doubt, move it (safe).
 - **RENDER SUBSYSTEM = FULLY DE-GLOBALIZED** (R1 gpu_native, R2 gpu_vk, R3 trace/debug audit, native_dl,
   fps60). The core.ram-affecting de-globalization is COMPLETE. Only harness-level (Beetle fork) + the
   mem/boot 1-static sweep remain before building the dual-core diff.
+- **mem/boot sweep (done):** mem.cpp's function-local `static uint32_t toggle` (the GPUSTAT 0x1F801814
+  even/odd line bit — genuine per-instance HW-register state, read by the guest) → a `Core` member
+  `io_gpustat_toggle`. mem.cpp's `g_io_verbose` is diag-config (stays shared). boot.cpp has no file-scope
+  variable statics. Gate: frame-50 RAM 0-diff ✓. (Other function-local statics across the tree are
+  diag/config; the GPUSTAT toggle was the one piece of real machine state hiding as a function-local.)
 - **gte/spu/mdec (Beetle FORK — decision point):** the GTE/SPU/MDEC register state lives in the
   vendored fork (mednafen/psx/gte.c `gteCONTROL`/`gteDATA`, spu.c, mdec.c) as file-scope globals, NOT in our
   gte_beetle/spu_beetle/mdec_beetle wrappers. De-globalizing means EITHER (a) make the fork's state a

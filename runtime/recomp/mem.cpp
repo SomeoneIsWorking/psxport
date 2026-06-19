@@ -88,9 +88,8 @@ static int dma_block_words(uint32_t bcr) {  // sync-mode-1 block DMA total word 
 uint32_t Core::io_read(uint32_t a, uint32_t bytes) {
   const uint32_t p = a & 0x1FFFFFFF;
   if (p == 0x1F801814) {                           // GPUSTAT: report ready; toggle even/odd line
-    static uint32_t toggle = 0;
-    toggle ^= 0x80000000u;
-    return 0x1C000000u | toggle;
+    io_gpustat_toggle ^= 0x80000000u;              // per-instance (Core member), not a shared static
+    return 0x1C000000u | io_gpustat_toggle;
   }
   if (p >= 0x1F801800 && p <= 0x1F801803) return cdc_read(p);   // CD controller registers
   if (p == 0x1F801810) return 0;                 // GPUREAD (VRAM-store path: minimal)

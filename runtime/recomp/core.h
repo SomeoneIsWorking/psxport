@@ -29,6 +29,8 @@ public:
 
   Game* game = nullptr;   // back-pointer to the owning Game (set by Game's constructor)
 
+  uint32_t io_gpustat_toggle = 0;  // GPUSTAT (0x1F801814) even/odd line bit — per-instance HW state
+
   Core();
 
   // Memory access (delegates to host_ptr / the I/O map). PSX is little-endian == host.
