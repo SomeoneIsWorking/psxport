@@ -5505,3 +5505,35 @@ sp+16. A frame-less override that writes c->r[29]+16 corrupts the CALLER's frame
 caller (80050738 hung the init prefix this way). FIX: replicate the gen's frame alloc — `c->r[29] -= N`
 at entry, write the stack arg to the decremented sp+16, `c->r[29] += N` before returning. (Register args
 a0-a3 need no frame; only stack args do.) Caught by the gate as a hang (timeout, never reaches GAME).
+
+## later-154: non-leaf batch b3 (10 fns) — burn-down 474→464; portability-scan false-positive caught
+
+Continued the non-leaf phase. Rebuilt the portability scanner (scratch/portscan.py: a fn is portable
+when every static `func_<addr>` callee is an ENABLED override and the body has no `rec_dispatch(c, c->r[N])`
+indirect dispatch). **Gotcha caught: the first scan over-counted because the override set was grepped from
+all `rec_set_override(0x…)` source lines including the COMMENTED-OUT quarantined ones** (a1/a2/a3's 5
+disabled fns). Filtering commented lines dropped two bogus candidates (80099310→80097540, 8006D02C→80077FB0
+depend on still-interpreted quarantined leaves). Net: 11 clean on-path candidates.
+
+Ported 10 into engine/native_path_b3.cpp (deferred 800977C0, a complex split/coalesce block allocator —
+too error-prone to transcribe blind, do later with care):
+- 800753AC, 80045080: thin wrappers around 0x8001DC40 (global-offset / stride-8 table lookup)
+- 800834A0: call 0x80085900(-1), store ret+240
+- 80051F80: descriptor poke + 0x80080880
+- 8009C9D0: GPU packet finalize (call 0x8009CAEC, poke 5 reg cells via the 0x800AD0xx ptr table)
+- 80089BAC / 80089E1C: 4-attempt retry wrappers around 0x8008AC34 (E1C also tails 0x8008A6EC)
+- 800796DC: 104B control-block init + ~30 scratchpad clears + 0x800782F0/508A8/5082C
+- 8007E9C8: GPU-prim build into the 0x800BF544 pool + OT link; **STACK-ARG** to 0x80083DE0 at sp+16 →
+  replicated the gen 40-byte frame (c->r[29]-=40; write sp+16=0; …; +=40). No hang ⇒ correct.
+- 800798F8: seed 5 contiguous object arrays (memset+link+tag per entry, last next=0), record base/count
+  globals, wire 3 scratchpad list-head pairs.
+
+**A/B gate (scratch/abrun.sh + scratch/abdiff.py, now committed helpers):** AUTO_NEWGAME=1 + REPL, run 50,
+dumpram, cmp. Aggregate WITH-vs-WITHOUT diff = **20 bytes, ALL in stack region (>=0x801F0000)**, 0 in
+globals/pool/scratchpad/low-RAM ⇒ all 10 equivalent. Determinism reconfirmed (final re-run byte-identical).
+Both builds reach GAME prologue at frame 39. (NOTE: AUTO_NEWGAME=**2** + REPL deadlocks the run-budget loop
+— the auto-pause blocks frame advance; the A/B harness must use =1.)
+
+**DO NEXT:** re-run scratch/portscan.py (more fns become portable as b3's are now enabled), port the next
+non-leaf batch leaf-up; tackle 800977C0 (block allocator) carefully on its own; then the indirect-dispatch
+(`rec_dispatch(c, c->r[2])` vtable) fns + the 0x80106xxx overlay stage code (needs object-model RE).

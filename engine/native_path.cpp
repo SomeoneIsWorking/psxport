@@ -290,6 +290,7 @@ void games_native_path_a2_init(void);
 void games_native_path_a3_init(void);
 void games_native_path_b1_init(void);
 void games_native_path_b2_init(void);
+void games_native_path_b3_init(void);
 
 // Register every hand-native boot→cutscene function. Called from games_tomba2_init at startup, before
 // ov_game_main runs the init prefix, so rec_dispatch routes these addresses to the native C++ bodies.
@@ -299,6 +300,7 @@ void games_native_path_init(void) {
   games_native_path_a3_init();
   games_native_path_b1_init();
   games_native_path_b2_init();
+  games_native_path_b3_init();
   rec_set_override(0x80089788u, ov_80089788);
   rec_set_override(0x800861BCu, zfill_words);
   rec_set_override(0x80086320u, zfill_words);
