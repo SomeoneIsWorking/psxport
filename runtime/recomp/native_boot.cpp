@@ -60,7 +60,13 @@ static void rc3(Core* c, uint32_t fn, uint32_t a0, uint32_t a1, uint32_t a2) {
 #define CUR_TASK 0x1f800138u   // DAT_1f800138: scheduler "current task" ptr
 
 static jmp_buf g_yield_jmp;    // longjmp target = the setjmp in native_scheduler_step
-static Core   g_task_ctx[3];  // saved register context per task slot
+// A cooperative task context is ONLY the CPU register file (R3000: r[], hi, lo) — NOT the Core.
+// guest RAM/scratchpad/DMA/peripheral state is SHARED (one guest memory across all tasks). Saving
+// a whole `Core` here (it embeds ram[2MB]+scratch+s_dma_buf by value) would give each task its own
+// RAM SNAPSHOT, so a write one task makes is invisible to another after a switch — the OOP
+// regression: task0 (START) filled the file table while the loader task carried a pre-fill snapshot
+// and read LBA 0, stalling boot before the field. Slice to the R3000 base on save/restore.
+static R3000  g_task_ctx[3];  // saved CPU register context per task slot (registers only)
 static int     g_in_stage;     // 1 while inside a task run (gates the yield override)
 static int     g_cur_slot;     // task slot currently running (for the yield capture)
 static int     g_task_started[3];  // slot has a live coroutine context (else state==2 == fresh)
@@ -76,13 +82,13 @@ static int     g_task_started[3];  // slot has a live coroutine context (else st
 // leaves v0=0x1f800000 for the stage loop head's `lw t0,0x138(v0)`) are captured.
 static void ov_switch(Core* c) {
   if (!g_in_stage) { c->r[2] = c->r[4]; return; }   // no-op: return the handle arg in v0
-  g_task_ctx[g_cur_slot] = *c;      // r29=task SP, r31=return addr (resume point)
+  g_task_ctx[g_cur_slot] = static_cast<R3000&>(*c);  // save REGISTERS only (r29=task SP, r31=resume ra)
   longjmp(g_yield_jmp, 1);
 }
 
 // One scheduler pass over the 3 task slots (replaces FUN_80051e60).
 static void native_scheduler_step(Core* c) {
-  Core loop = *c;                            // frame-loop context (gp etc. for fresh tasks)
+  R3000 loop = *c;                           // frame-loop REGISTERS (gp etc. for fresh tasks); slices off RAM
   for (int i = 0; i < 3; i++) {
     uint32_t base = TASKBASE + (uint32_t)i * TASKSTRIDE;
     // Task slot 2 = XA voice/BGM. When the native clip player owns it, do NOT run the (now unused)
@@ -116,7 +122,7 @@ static void native_scheduler_step(Core* c) {
               i, st, resume_pc, g_task_ctx[i].r[31], g_task_ctx[i].r[29]);
     c->mem_w32(CUR_TASK, base);
     g_cur_slot = i;
-    *c = g_task_ctx[i];
+    static_cast<R3000&>(*c) = g_task_ctx[i];   // restore REGISTERS only (shared RAM untouched)
     g_in_stage = 1;
     if (setjmp(g_yield_jmp) == 0) {
       rec_coro_run(c, resume_pc);             // runs until ov_yield longjmps back here
@@ -125,7 +131,7 @@ static void native_scheduler_step(Core* c) {
     }
     g_in_stage = 0;
   }
-  *c = loop;                                  // restore the frame-loop context
+  static_cast<R3000&>(*c) = loop;             // restore the frame-loop REGISTERS (shared RAM untouched)
 }
 
 // ---- BGM start/stop diagnostic (PSXPORT_BGMDBG=1) --------------------------------------------

@@ -5316,3 +5316,40 @@ exploded-geometry (spiky stretched tris) reproduces even at ires=1 with ALL nati
 interpreter) — so it's a 3D render/geometry bug (rasterizer/GTE) or a real scene, to be settled by
 gpu_differ + the Beetle oracle (the mandated render-diff-first path). NOT guest-memory, NOT interp-vs-recomp
 (verified 0-diff, later-103). Do not "switch back to the recompiler" — it would change nothing here.
+
+## later-141 — OOP regression SOLVED: cooperative task context must save REGISTERS only, not the whole Core
+**Symptom:** after the OOP refactor (c344d16), the headless AUTO build stalled at stage START
+(task0 perpetually st_in=3, sm48 stuck at 0) and never advanced to DEMO/GAME/field. The parent
+(05441fb) reaches the field at f328; the OOP build never left START. Previously flagged "unresolved"
+([[oop-regression-hunt]]); the earlier "frame-1 RAM divergence / native-call I/O identical for 20
+frames" reads were measured in the REPL+faithful config, which doesn't exercise this path.
+
+**Diagnosis (this session, deterministic — no sleep-based dumps):**
+1. Stage trace: parent task0 START advances sm48 0→1→2→3 and YIELDS (st_in=2) each frame; OOP task0
+   restarts START fresh every frame (st_in=3, sm48=0), never yields. Frame-0 divergence, NOT 20 frames in.
+2. Faithful mode (overrides OFF) also stalls → pure OOP-CORE regression, not an override.
+3. `PSXPORT_NCALL_TRACE` (plain AUTO headless, NO REPL) on both builds: calls 0..3725 byte-identical;
+   first divergence at call 3726 — `FUN_8001dc40` (intro file loader) gets **a1=LBA 0 (OOP) vs 0x19A5
+   (parent)**, same dest. An INPUT divergence ⇒ a memory side-effect diverged earlier.
+4. Frame-0 RAM diff located it: the file-directory table of (LBA,size) pairs at **0x800BE0F0** is fully
+   populated on parent, ALL ZEROS on OOP at the loader-call moment.
+5. `PSXPORT_WWATCH` + cd-verbose: table IS filled at pc 0x80106630 (task0 START) on BOTH, in the same
+   order, yet the loader (FUN_80044F58, ra 0x80044FD8) still reads 0x800BE0F0 as 0 on OOP. The loader is
+   a SEPARATE task — so task0's write was invisible to the loader task.
+
+**Root cause:** `class Core : public R3000` embeds guest memory BY VALUE (`ram[0x200000]`, `scratch[0x400]`,
+`s_dma_buf[0x10000]`, DMA regs). The cooperative-scheduler context in native_boot.cpp saved/restored a whole
+`Core` (`static Core g_task_ctx[3]`; `Core loop=*c`; `g_task_ctx[i]=*c`; `*c=g_task_ctx[i]`). Pre-OOP that
+struct was register-only (R3000), so the save/restore touched only CPU regs and guest RAM stayed shared.
+After OOP it snapshots ALL 2MB of RAM per task — so **each task runs on its own stale RAM snapshot**: task0
+(START) filled the file table, but the loader task restored a pre-fill snapshot and read LBA 0 → loaded
+garbage → stage machine's file-table-driven progression never advanced → stall before the field.
+
+**Fix:** the task context is the CPU register file ONLY (guest memory is shared, single). Changed
+`g_task_ctx` to `R3000` and slice to the R3000 base on save/restore (`static_cast<R3000&>(*c)`), leaving
+`c->ram` untouched. native_boot.cpp only.
+
+**Verified:** OOP build now START→DEMO→GAME→field at **f328 (identical to parent)**; field renders
+(scratch/oop/shots/oop_fixed_field_f470.png); two identical runs byte-identical at RAM@f350 (deterministic).
+This UNBLOCKS the top-down engine rewrite (the handoff's mission) — the field is reachable on the OOP Core
+substrate again, no revert of c344d16 needed.
