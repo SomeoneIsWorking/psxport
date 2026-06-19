@@ -5402,3 +5402,45 @@ architecture, but the *bug it was supposedly needed to fix* is fixed without it.
 corrupts at hi-res" justification is gone — the rewrite, if pursued, is for the architectural reasons
 (engine owns the frame), not because overrides cause this corruption. Don't cite this corruption as the
 driver anymore.
+
+---
+
+## later-150: boot→cutscene grind — LANDSCAPE CORRECTION (the boot2cut.funcs head is NOISE)
+
+Continuing the hand-written-native-C++ boot→cutscene port (handoff: scratch/handoff.md). Before grinding
+I characterized the 585-entry burn-down list (`scratch/trace/tripwire.funcs`, PSXPORT_INTERP_FUNCS) and
+found the literal "port boot2cut.funcs top-down from #1" plan is **based on a polluted list head**:
+
+- **The first ~211 entries have NO real recompiled body**, and the top ~40 (the `0x80018xxx` cluster) are
+  **data, not functions**. Static MAIN.EXE bytes there == live RAM (no overlay/self-modify), and they decode
+  as a const/dispatch table (pairs `{0x20020000, smallint}`, embedded ptrs to 0x80018CCC, stray
+  `syscall`/`break` words). The recompiler (`tools/recomp/tomba2_funcs.txt`) finds **zero functions in
+  0x80010000–0x8001CB00** — that whole prefix is the .rodata/const region. Real functions start at 0x8001CB00.
+- **Decisive proof they don't execute:** a full boot→prologue run hits **exactly ONE `break`** (`[break]
+  code 1`, the terminal crt0 break), not the 40× `break code 3` that executing the `0x80018xxx` table would
+  produce. So those addresses are *recorded* as indirect-call targets by the tripwire (`ifn_record`) but the
+  interpreter never actually runs code there. They are false positives that inflate the metric by ~80–150.
+- **No-body distribution** (356 of 585): ~150 in 0x80011–0x8001B (the const-region noise), **~42 in
+  0x80106–0x80109 (the REAL overlay DEMO-menu/GAME-prologue stage code** — loaded at runtime so absent from
+  static MAIN.EXE; RE these from a live overlay RAM dump, e.g. `scratch/bin/tomba2/ram_menu.bin`), rest scattered.
+
+**Corrected top-down order = `ov_game_main`'s init-prefix call list** (`runtime/recomp/native_boot.cpp`
+~276–302: rc0/rc1/.. of 0x80089788, 0x80085b20, 0x800898a0, 0x80080bf0 …), NOT the tripwire first-seen order.
+That list is the real boot call-tree root; walk it (and callees) to port in genuine top-down order.
+
+**Function shapes** (229 of 585 have real gen_func bodies): 15 BIOS-vector thunks (`li t1,N; j 0xA0/B0/C0`
+→ route to `recomp_hle`), **69 clean leaves** (no jal/jalr/BIOS — the easy clean burn-down), and ~199 real-code
+funcs. Many of the real ones are **indirect-dispatch (`rec_dispatch(c, c->r[2])` through a guest object's
+vtable** at e.g. +12) — porting those to "clean native C++" needs object-model RE, not transcription. The
+clean leaves' native form is necessarily near-identical to the recompiled body (a memset is a memset).
+
+**Done this session (later-150):** ported the first clean-leaf batch into `engine/native_path.cpp` (12 fns:
+3× word-zero-fill 0x800861BC/86320/865C8, memset 0x80083AF8, EnterCritical 0x80080890, the 0x800ABE20
+get/set pair 0x80086604/865F0, struct-inits 0x80083BF0/0x80051794, global stores 0x8009A480/0x80096370/
+0x800963A0). Burn-down **585 → 573**; still `[autonewgame] reached GAME` at the identical frame 39 (no
+divergence). Per-fn RE = its `gen_func_<addr>` body (recompiler decode is the reference, per user "don't
+overrely on capstone"); trailing post-`jr ra` writes in those bodies are recompiler over-run, ignored.
+
+**Tooling note:** `scratch/bin/tomba2/main_ram.bin` is a 2MB RAM-layout view of MAIN.EXE (body at file
+offset 0x10000) so `tools/disasm.py <main_ram.bin> <kseg0_addr> <end>` resolves 0x800xxxxx directly. But
+prefer the gen_func bodies over raw disasm.
