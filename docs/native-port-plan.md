@@ -1,5 +1,31 @@
 # Top-down native port plan (boot → menu → game), 2026-06-19
 
+## ★ DIRECTION LOCKED (user, 2026-06-19): HAND-WRITTEN NATIVE C++ for boot→first-cutscene
+"Hand-native engine; gameplay doesn't matter; but ALL THE WAY from boot INTO the first cutscene, and
+ANYTHING along the way, needs to be NATIVE, using C++ as the spine."
+- The **779 functions on the boot→first-cutscene path** (scratch/trace/boot2cut.funcs) must each be
+  **hand-written native C++** — NOT interpreted, NOT machine-recompiled. C++ calls C++ (the spine).
+- **Gameplay beyond the cutscene "doesn't matter"** — per-entity AI/physics may stay interpreted/recomp.
+- **The recompiler/substrate is NOT the product** for this path. The user explicitly rejected shipping
+  recompiled (machine-translated) bodies. The recompiler stays ONLY as an RE *reference*: read
+  generated/shard_*.c (now with jump-table recovery → accurate pseudo-C) + the MIPS to UNDERSTAND each
+  function, then hand-write clean native C++. The PSXPORT_SUBSTRATE build stays opt-in dev scaffolding to
+  keep the game runnable end-to-end while porting, but the SHIPPED boot→cutscene path uses hand-native C++
+  only (tripwire == 0 interpreted AND no recompiled body invoked on the path).
+- MECHANISM: each ported function = a hand-written native C++ override (rec_set_override). Un-ported
+  functions interp TEMPORARILY; the tripwire (PSXPORT_INTERP_FUNCS) burns down to 0 as coverage grows.
+  When 0 on boot→cutscene, the path is 100% native; then flip run.sh default to it.
+- RECIPE per function: (1) read generated gen_func_<addr> + disasm (MAIN.EXE load 0x80010000) to get the
+  algorithm; (2) write a clean native C++ function (use real types/structs where sensible, not blind
+  c->r[] transcription) and register it via rec_set_override(addr, fn); (3) A/B verify vs the interp body
+  (super-call) — diff RAM/regs/return on the real boot→cutscene run; (4) confirm the tripwire no longer
+  lists it. Keep the game reaching the prologue at every step. Use subagents for batches (user-approved).
+- ORDER: top-down from boot — crt0/init-prefix (ov_game_main's rc0 list) → START stage → DEMO menu
+  (0x801062E4, 8-substate machine) → New Game → GAME prologue cutscene (0x8010637C). Engine/render/camera
+  funcs already native (engine_submit etc.) count toward coverage.
+
+## (superseded-as-product) earlier substrate investigation below — kept for the RE reference + tooling
+
 User directive (2026-06-19, supersedes the "engine-native, gameplay-stays-recomp" framing where they
 conflict): **make Tomba 2 fully PC-native, no black boxes, no unknowns. It must BEHAVE like a PC game
 (native GTE math / native submit, not PSX emulation), built TOP-DOWN starting at boot.** RE/MIPS work is
