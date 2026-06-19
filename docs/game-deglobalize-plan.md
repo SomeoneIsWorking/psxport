@@ -62,10 +62,11 @@ Flag init-once-then-read tables case by case; when in doubt, move it (safe).
   and the `hle_deliver_event(c,...)` signature (rippled to memcard/native_stub/timing/native_boot;
   card_deliver_complete(c), frame_tick(c)). 0-diff ✓. (sync_overrides/threads/memcard have NO migratable
   state — only config-caches.)
-- **Next (order, small→large):** pad_input → hle → threads → memcard → native_fmv → native_stub →
-  interp → gpu_native → gpu_trace → dbg_server → native_boot → gpu_vk → gte/spu/mdec (Beetle fork) →
-  engine modules (fps60, engine_submit, native_path*, game_tomba2). sync_overrides has NO mutable
-  statics (skip). Watch for non-Core-threaded callers (e.g. pad_repl_hold/tap) — thread the instance.
+- **Next (order, small→large):** pad_input (s_buttons + s_repl_*; ripples to pad_repl_hold/tap/release/
+  pad_buttons callers in dbg_server/native_fmv/native_boot — thread the instance) → native_fmv →
+  native_stub (g_stub_vblank etc.) → interp → gpu_native → gpu_trace → dbg_server → native_boot →
+  gpu_vk → gte/spu/mdec (Beetle FORK) → engine modules (fps60, engine_submit, native_path*, game_tomba2).
+  DONE/skip: timing, cd_override, hle (done); sync_overrides, threads, memcard (only config-caches).
 
 ## After de-globalization
 Build the dual-core diff: `Game a, b;` (b neutralizes the override under test, e.g. terrain → super-call),
