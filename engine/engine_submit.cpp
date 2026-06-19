@@ -433,6 +433,14 @@ static inline void uoff_add(PkTgt* p, uint32_t off, uint32_t uoff) {
 
 static void submit_poly_gt4_bp(Core* c) {
   uint32_t rec = c->r[4];
+  // PSXPORT_DEBUG=terrgte — dump the composed GTE state at the TERRAIN submit (geomblk 0x800A1AE8) to
+  // diff the native-terrain compose vs the recomp body's (both route here). One line per terrain call.
+  if (cfg_dbg("terrgte") && rec == 0x800A1AE8u) {
+    fprintf(stderr, "[terrgte] CR0-7 %08X %08X %08X %08X %08X | T %08X %08X %08X | IR0scr %08X FC %d %d %d a1=%u a2=%d a3=%u\n",
+            gte_read_ctrl(0), gte_read_ctrl(1), gte_read_ctrl(2), gte_read_ctrl(3), gte_read_ctrl(4),
+            gte_read_ctrl(5), gte_read_ctrl(6), gte_read_ctrl(7), c->mem_r32(0x1F800090u),
+            gte_read_ctrl(21), gte_read_ctrl(22), gte_read_ctrl(23), c->r[5], (int16_t)c->r[6], c->r[7]);
+  }
   uint32_t xoff = c->r[5] << 22;                       // CLUT-Y bank offset
   int32_t  zoff = (int32_t)(int16_t)c->r[6];           // OT-Z bias (sign-extended)
   uint32_t uoff = c->r[7];                             // U-texture offset
@@ -795,6 +803,13 @@ static void submit_terrain(Core* c) {
   c->mem_w32(SCR + 0x1C4, (uint32_t)sway1 << 2);
   c->mem_w32(SCR + 0x1C8, (uint32_t)sway2 << 2);
   c->r[4] = SCR; c->r[5] = SCR + 0x1C0; rec_dispatch(c, 0x80084520u);
+  if (cfg_dbg("terrgte")) {
+    fprintf(stderr, "[terrin] node=%08X CAM(F8) %08X %08X %08X %08X %08X | camToff(10C) %08X %08X %08X | OBJ(SCR) %04X %04X %04X / %04X %04X %04X / %04X %04X %04X\n",
+            node, c->mem_r32(SCR+0xF8), c->mem_r32(SCR+0xFC), c->mem_r32(SCR+0x100), c->mem_r32(SCR+0x104), c->mem_r32(SCR+0x108),
+            c->mem_r32(SCR+0x10C), c->mem_r32(SCR+0x110), c->mem_r32(SCR+0x114),
+            c->mem_r16(SCR+0), c->mem_r16(SCR+2), c->mem_r16(SCR+4), c->mem_r16(SCR+6), c->mem_r16(SCR+8), c->mem_r16(SCR+0xA),
+            c->mem_r16(SCR+0xC), c->mem_r16(SCR+0xE), c->mem_r16(SCR+0x10));
+  }
   // HOST-MEMORY compose: read the object matrix the build wrote (SCR cols, READ), compose with the camera
   // in host C locals, load only the GTE regs (hardware). No guest-RAM writes here.
   gte_write_ctrl(0, c->mem_r32(SCR + 0xF8)); gte_write_ctrl(1, c->mem_r32(SCR + 0xFC));
@@ -829,6 +844,7 @@ static void submit_terrain(Core* c) {
   rec_dispatch(c, 0x80027768u);
 }
 void ov_terrain(Core* c) {
+  if (cfg_dbg("terrgte")) fprintf(stderr, "[ov_terrain] node(a0=r4)=%08X\n", c->r[4]);
   // Dual-core diff: the `b` core neutralizes terrain to the recomp body via a per-Game flag (the override
   // table is shared; the per-core choice is this flag, not a divergent table). `a` keeps the native path.
   if (c->game->neutralize_terrain) { rec_super_call(c, 0x8002AB5Cu); return; }

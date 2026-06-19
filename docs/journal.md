@@ -5558,3 +5558,50 @@ the `r3=blk+size` in the nf<count delay slot is dead when the split is skipped).
 (its own frame slots ⇒ it WAS exercised on boot), **0 globals/pool/scratchpad** ⇒ equivalent. Prologue
 frame 39. No more on-path non-leaf candidates: next is the indirect-dispatch (vtable) fns + 0x80106xxx
 overlay stage code (object-model RE).
+
+## later-157: submit_terrain — sway-byte GAMEPLAY fix (DONE) + terrain RENDER bug ROOT-CHARACTERIZED (open)
+
+**Method:** sequential A/B RAM diff (PSXPORT_RAMHASH=1, native terrain vs PSXPORT_NO_TERRAIN=1 recomp;
+both deterministic so two runs are comparable). First gameplay-RAM divergence at **frame 86**, exactly
+two bytes: **0x800A2014 + 0x800A2016** (everything else below the render pool 0-diff through f540).
+
+**GAMEPLAY fix (committed 4e5823b, PUSHED):** native submit_terrain (engine_submit.cpp, 0x8002AB5C)
+withheld the two `mem_w8` guest writes the recomp body does — sway0→0x800A2014, sway2→0x800A2016 — to
+honor the (now USER-DISCARDED) no-guest-write rule. Restored them. Native gameplay RAM is now byte-
+identical to the recomp config at f86/f300/f540 (entity list 0x800f2624, entity structs 0x800FD000 all
+match). The fix changed EXACTLY those 2 bytes. **The no-guest-write rule is discarded** (user directive
+2026-06-19): the engine MAY write guest state where that is the function's faithful behavior.
+
+**SEPARATE terrain RENDER bug (OPEN — not fixed):** screenshots at the post-cutscene field/menu frame
+(scratch/screenshots/native_f540.png vs recomp_f540.png) show native terrain renders **water/garbage**
+while recomp renders the correct green village (matches docs/reference/ORACLE_village_f520.png). The
+gameplay-RAM diff is BLIND to this: submit_terrain works almost entirely in **scratchpad (0x1F800000)
++ GTE registers**, which are NOT in the 2MB main-RAM dump. So gameplay-RAM-clean ≠ render-correct here.
+
+  Diagnostics (PSXPORT_DEBUG=terrgte channel, added this session — engine_submit.cpp): logs the composed
+  GTE CR0-7 at the terrain submit ([terrgte]), the compose inputs camera@SCR+0xF8 + object-matrix@SCR
+  ([terrin]), and ov_terrain node dispatch ([ov_terrain]). Findings:
+  - The compose MATH matches the recomp exactly (MVMVA_ROTCOL=0x4A49E012, MVMVA_TRANS=0x4A486012; the
+    CR-packing of the 9 result halfwords matches the recomp's scratchpad layout line-for-line). Camera
+    matrix read at SCR+0xF8 is correctly ~4096-scaled. Object matrix from 80085480/80084520 is a tiny
+    diagonal (~36/64/52) — possibly legitimate terrain scale, NOT yet proven wrong.
+  - **The real divergence is the WALK, not the compose.** ov_terrain dispatch counts over a 342-frame
+    AUTO_GAMEPLAY run (NOAUDIO, field reached ~f328):
+      * node **0x800ED8D8**: 42x in BOTH native and the recomp super-call — SYMMETRIC. (Earlier "recomp
+        terrain submitter = 0" was because the recomp BODY for these CULLS the 0x80027768 submit; native
+        submit_terrain submits UNCONDITIONALLY — native lacks the recomp body's cull/early-exit.)
+      * node **0x800EDB80**: **native 1x vs recomp 160x** — the main resident-MAIN terrain node
+        (dispatched from 0x8003FA0C). Native stops dispatching it after one frame; recomp renders it
+        every frame. THIS asymmetry is the lead.
+  - Render-walk is fully native-overridden in BOTH configs (only NO_TERRAIN differs): ov_render_walk
+    0x8003C048, ov_perobj_render 0x8003CCA4, ov_perobj_flush 0x8003CDD8, ov_build_xform 0x80051C8C.
+    So the 1-vs-160 asymmetry on 0x800EDB80 must come from native-walk state that is NOT in main RAM
+    (GTE/scratchpad/cull flags) OR an ov_terrain side effect, since main RAM is 0-diff.
+
+  **DO NEXT (render bug):** (1) add a per-frame node-dispatch count (frame-stamped) to compare native vs
+  recomp at a SINGLE field frame where RAM is 0-diff, isolating the 0x800EDB80 1-vs-160 from cutscene
+  transients. (2) RE the recomp body's CULL for node 0x800ED8D8 (why it skips 0x80027768) and give native
+  submit_terrain the same early-exit. (3) Find why the native render walk drops 0x800EDB80 after 1 frame
+  (ov_perobj_render/ov_render_walk cull on scratchpad/GTE state). Compare scratchpad 0x1F800000 region
+  native-vs-recomp at the terrain call (NOT captured by RAM dump — needs an in-call dump). NB: NO_TERRAIN
+  super-call IS a valid recomp oracle for the walk since the walk overrides stay active.
