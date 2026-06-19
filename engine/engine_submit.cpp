@@ -18,6 +18,7 @@
 //   args: a0 = primitive-record array, a1 = OT base, a2 = record count;  returns a0 advanced past the array.
 //   global packet-pool write pointer at 0x800BF544 (advanced past each committed packet).
 #include "core.h"
+#include "game.h"   // Fps60State::current_object (was g_current_object)
 #include "cfg.h"
 #include "native_dl.h"
 #include <stdlib.h>
@@ -67,7 +68,7 @@ static int submit_xmax(void) { return gpu_vk_wide_engine() ? gpu_vk_wide_engine_
 // the geomblk ENQUEUE site (where a handler registers its render command, while g_current_object = its node).
 // At the field the owned path carries the world/map renderer's geometry; the 78 margin objects enqueue via
 // UN-owned submitter variants and are invisible here. Off by default; pure logging, no state change.
-extern uint32_t g_current_object, g_render_object;
+extern uint32_t g_render_object;
 int gpu_frame_no(Core*);
 // Optional single-frame gate (PSXPORT_GEOMBLK_FRAME=<frame>) shared by the geomblk + rcmd probes: bound the
 // firehose to one present frame so a 2900-frame headless run to the field doesn't emit gigabytes. Unset = every.
@@ -87,7 +88,7 @@ static void geomblk_dump(Core* c, const char* kind, uint32_t rec, uint32_t count
   uint32_t handler = o ? c->mem_r32(o + 0x1c) : 0;
   uint8_t  type    = o ? c->mem_r8(o + 0x0c) : 0xff;
   fprintf(stderr, "[geomblk] f%d cur=%08x lastcull=%08x type=%02x handler=%08x %s n=%u\n",
-          gpu_frame_no(c), g_current_object, o, type, handler, kind, count);
+          gpu_frame_no(c), c->game->fps60.current_object, o, type, handler, kind, count);
   for (uint32_t i = 0; i < count; i++) {
     fprintf(stderr, "[geomblk]   rec%u:", i);
     for (uint32_t b = 0; b < stride; b++) fprintf(stderr, "%s%02x", (b & 3) ? "" : " ", c->mem_r8(rec + i*stride + b));
@@ -121,7 +122,7 @@ void ov_render_cmd_probe(Core* c) {
 // and to build the object→command→geomblk map needed to enqueue margin commands natively. Super-calls original.
 void ov_enqueue_probe(Core* c) {
   if (cfg_dbg("enq") && probe_frame_ok(c)) {
-    uint32_t a0 = c->r[4], o = g_current_object;
+    uint32_t a0 = c->r[4], o = c->game->fps60.current_object;
     fprintf(stderr, "[enq] f%d obj=%08x type=%02x handler=%08x a0=%08x a0+40=%08x a0+18=%08x\n",
             gpu_frame_no(c), o, o ? c->mem_r8(o + 0x0c) : 0xff, o ? c->mem_r32(o + 0x1c) : 0,
             a0, c->mem_r32(a0 + 0x40), c->mem_r32(a0 + 0x18));
@@ -181,7 +182,7 @@ void ov_flush2_probe(Core* c) {
 // commands enqueue through this leaf, not the single-object 0x80051B70). g_current_object names the object.
 void ov_cmdenq_probe(Core* c) {
   if (cfg_dbg("cmdenq") && probe_frame_ok(c)) {
-    uint32_t cmd = c->r[4], group = c->r[5], sub = c->r[6], o = g_current_object;
+    uint32_t cmd = c->r[4], group = c->r[5], sub = c->r[6], o = c->game->fps60.current_object;
     uint32_t T = c->mem_r32(0x800ECF58u + group*4);
     uint32_t geomblk = T + c->mem_r32(T + sub*4 + 4);
     fprintf(stderr, "[cmdenq] f%d obj=%08x type=%02x group=%u sub=%u T=%08x geomblk=%08x cmd=%08x\n",

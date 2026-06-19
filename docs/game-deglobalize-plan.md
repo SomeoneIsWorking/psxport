@@ -138,16 +138,30 @@ Flag init-once-then-read tables case by case; when in doubt, move it (safe).
   margin_render.cpp = AUDIT, stay shared — their file-scope statics are config-caches (s_objlog/s_cull*,
   s_submit_recomp/s_probe_frame/s_geomblk/s_depth, s_dbg, ndl_active's s_active) or pure stderr-only
   per-frame diag counters (engine_submit s_subcnt/s_subaddr/s_cc/s_cctgt; engine_tomba2 s_walks). None write
-  guest RAM. **native_dl.cpp = MIGRATED** (see below). **fps60.cpp = NOT yet** (big render-side block — the
-  XObj/Prim/centroid double-buffers, vertex pools, grid, remap, rate detector; render-interp state that
-  never writes guest RAM, and PSXPORT_FPS60 is parked/off by default → migrating it is 0-diff on core.ram.
-  It's the last real "migrate render fully" item; do it for the literal nothing-global goal).
+  guest RAM. **native_dl.cpp + fps60.cpp = MIGRATED** (see below).
 - **native_dl.cpp (done):** the native classified display-list arena → `NdlState` on Game (`core->game->ndl`):
   s_prim[NDL_MAX] pool, s_banchor/s_bhead bucket hash, s_n, s_consumed → methods (body-preserving). Public
   ndl_alloc/lookup/next/mark_consumed now take `Core*` (callers submit_poly_gt3/gt4/gt4_bp have `c`;
   gpu_native ndl_render_node/gpu_dma2_linked_list have `core`); ndl_active() stays a free config-cache.
   Render-side (never writes guest RAM). Gates: frame-50 RAM 0-diff ✓ AND field-frame 520 render byte-
   identical pre-vs-post ✓.
+- **fps60.cpp (done):** the interpolated-60fps tier → `Fps60State` on Game (`core->game->fps60`). ALL
+  render-interp state moved (method-ized, body-preserving via scratch/r2_fps60.py): frame hash/geom/fence,
+  the SXY→object grid (s_obj_grid/stamp/epoch), the GTE transform-group matcher (XObj s_xa/s_xb + A/B ptrs)
+  + per-frame local-vertex pool (s_lvx/y/z/osxy/nv) + s_rtps_insn, the SXY remap (s_rm_key/val + s_xmatch),
+  the primitive double-buffer (Prim s_prim_a/b + A/B), per-object centroids (s_oc0/1), the rate detector
+  (s_rd), s_prev_front_y, the rtp diag counters. The cross-TU global **g_current_object → Fps60State::
+  current_object** (writers engine_tomba2 call_handler + game_tomba2 ov_object_cull, readers fps60 rtp +
+  engine_submit geomblk/enqueue probes — all have Core*). Capture API (fps60_rtp/cap_poly/cap_sprite/
+  cap_line/frame_commit) now takes Core* (callers: gte_beetle gte_op, gpu_native gp0 tee — both have the
+  handle). STAYS SHARED: g_fps60_on (process-wide UI mode toggle, overlay-edited), config-caches
+  (s_disp_gate/s_ocen_gate/s_sdbg), function-local diag. Gates: frame-50 RAM 0-diff ✓ AND field-frame 520
+  render byte-identical ✓ (both fps60-off) AND **fps60-ON synth byte-identical** (PSXPORT_FPS60=1
+  FPS60_SYNTH=520: A/in-between/B PPMs identical + sdbg fingerprint prims=590 tagged=211 translated=199
+  snapped=391 unchanged) — the off-path gates don't exercise fps60, so the on-path check is the real gate.
+- **RENDER SUBSYSTEM = FULLY DE-GLOBALIZED** (R1 gpu_native, R2 gpu_vk, R3 trace/debug audit, native_dl,
+  fps60). The core.ram-affecting de-globalization is COMPLETE. Only harness-level (Beetle fork) + the
+  mem/boot 1-static sweep remain before building the dual-core diff.
 - **gte/spu/mdec (Beetle FORK — decision point):** the GTE/SPU/MDEC register state lives in the
   vendored fork (mednafen/psx/gte.c `gteCONTROL`/`gteDATA`, spu.c, mdec.c) as file-scope globals, NOT in our
   gte_beetle/spu_beetle/mdec_beetle wrappers. De-globalizing means EITHER (a) make the fork's state a

@@ -508,15 +508,15 @@ void GpuState::gp0_exec(Core* core) {
         if(v[i].x<xmn)xmn=v[i].x; if(v[i].x>xmx)xmx=v[i].x; if(v[i].y<ymn)ymn=v[i].y; if(v[i].y>ymx)ymx=v[i].y; }
       fade_note(mr, mg, mb, s_off_y, semi); fade_note_size(xmx-xmn, ymx-ymn, semi);
       if (semi) semi_dump("poly", s_tp_blend, mr, mg, mb, xmn, ymn, xmx, ymx, s_off_y); }
-    { void fps60_join_poly(int, int); fps60_join_poly(v[0].x, v[0].y); }  // fps60: object join
+    { void fps60_join_poly(Core*, int, int); fps60_join_poly(core, v[0].x, v[0].y); }  // fps60: object join
     if (g_fps60_on) {                       // fps60: tee the full primitive into PrimFrame B
-      void fps60_cap_poly(int, int, const int*, const int*, const int*, const int*,
+      void fps60_cap_poly(Core*, int, int, const int*, const int*, const int*, const int*,
                            const unsigned char*, const unsigned char*, const unsigned char*,
                            int, int, int, int, int, int, int, int, int);
       int xs[4], ys[4], us[4], vs[4]; unsigned char rs[4], gs[4], bs[4];
       for (int i = 0; i < nv; i++) { xs[i]=v[i].x; ys[i]=v[i].y; us[i]=v[i].u; vs[i]=v[i].v;
                                      rs[i]=v[i].r; gs[i]=v[i].g; bs[i]=v[i].b; }
-      fps60_cap_poly(op, nv, xs, ys, us, vs, rs, gs, bs, s_off_x, s_off_y,
+      fps60_cap_poly(core, op, nv, xs, ys, us, vs, rs, gs, bs, s_off_x, s_off_y,
                       s_tp_x, s_tp_y, s_tp_mode, s_tp_blend, s_tp_dither, s_clut_x, s_clut_y);
     }
     // VK backend (M5): tee polys to the GPU rasterizer in absolute VRAM coords. Opaque textured/
@@ -659,9 +659,9 @@ void GpuState::gp0_exec(Core* core) {
     if (semi) semi_dump("sprite", s_tp_blend, cr, cg, cb, x, y, x + w, y + h, s_off_y);
     prov_begin(op, textured ? 1 : 0, semi, cr, cg, cb, x + s_off_x, y + s_off_y, u0, v0);
     if (g_fps60_on) {                       // fps60: tee the sprite/rect into PrimFrame B (snaps)
-      void fps60_cap_sprite(int, int, int, int, int, int, int, int, int, int,
+      void fps60_cap_sprite(Core*, int, int, int, int, int, int, int, int, int, int,
                              int, int, int, int, int, int, int, int);
-      fps60_cap_sprite(op, x, y, u0, v0, w, h, cr, cg, cb, s_off_x, s_off_y,
+      fps60_cap_sprite(core, op, x, y, u0, v0, w, h, cr, cg, cb, s_off_x, s_off_y,
                         s_tp_x, s_tp_y, s_tp_mode, s_tp_blend, s_clut_x, s_clut_y);
     }
     // bit0=1 -> raw texel; bit0=0 -> modulate by command color (beetle sprite decode table:
@@ -749,8 +749,8 @@ void GpuState::gp0_exec(Core* core) {
         }
       }
       if (g_fps60_on) {                       // fps60: tee each segment (snaps; obj 0) so the interp
-        void fps60_cap_line(int, int, int, int, int, int, int, int, int);   // frame keeps the line
-        fps60_cap_line(op, vx[s], vy[s], vx[s+1], vy[s+1], vr[s], vg[s], vb[s], semi);
+        void fps60_cap_line(Core*, int, int, int, int, int, int, int, int, int);   // frame keeps the line
+        fps60_cap_line(core, op, vx[s], vy[s], vx[s+1], vy[s+1], vr[s], vg[s], vb[s], semi);
       }
     }
     s_prims++;

@@ -14,6 +14,7 @@
 // back to the recomp body (the oracle) for diffing. Verified native==recomp: VRAM bit-identical at
 // frames 4000 and 4720 of real gameplay (1 MB cmp PASS each) — see docs/journal.md.
 #include "core.h"
+#include "game.h"   // Fps60State::current_object (was g_current_object)
 #include "cfg.h"
 #include "tomba2_types.h"
 #include "margin_render.hpp"
@@ -22,7 +23,6 @@
 #include <stdio.h>
 
 extern void     rec_dispatch(Core* c, uint32_t addr);   // run a function by address (override or interp)
-extern uint32_t g_current_object;                        // fps60: tag the object a handler's geometry belongs to
 
 static int  s_dbg   = -1;
 static long s_walks = 0;
@@ -31,11 +31,11 @@ static long s_walks = 0;
 // = node around the WHOLE handler so fps60 attributes ALL geometry it submits to this entity (the
 // interpolation identity), independent of whether projection happens inside the cull subtree.
 static inline void call_handler(Core* c, uint32_t node) {
-  uint32_t prev = g_current_object;
-  g_current_object = node;
+  uint32_t prev = c->game->fps60.current_object;
+  c->game->fps60.current_object = node;
   c->r[4] = node;                                  // $a0
   rec_dispatch(c, c->mem_r32(node + T2OBJ_HANDLER));
-  g_current_object = prev;
+  c->game->fps60.current_object = prev;
 }
 
 static void walk_list(Core* c, uint32_t head, long* count) {

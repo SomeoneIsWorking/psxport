@@ -14,6 +14,7 @@
 #include "core.h"
 #include "gpu_native_internal.h"   // GpuState — the native GPU's per-instance render machine state
 #include "gpu_vk_internal.h"       // GpuVkState — the Vulkan present backend's per-instance render state
+#include "fps60_internal.h"        // Fps60State — the interpolated-60fps tier's per-instance state
 #include <stdint.h>
 #include <setjmp.h>
 
@@ -99,6 +100,7 @@ public:
   GpuState    gpu;   // native GPU: VRAM + draw/display state + the rasterizer (gpu_native.cpp)
   GpuVkState  gpu_vk;// Vulkan present backend: per-frame batch/depth/dirty/present state (gpu_vk.cpp)
   NdlState    ndl;   // native classified display list: per-frame prim arena + bucket lookup (native_dl.cpp)
+  Fps60State  fps60; // interpolated-60fps tier: capture buffers + matcher + remap (fps60.cpp)
 
   // core.game / gpu.game / gpu_vk.game are back-pointers so a subsystem holding one of those handles can
   // reach the rest of the machine (e.g. blit_src -> gpu_vk via gpu.game; frame_via_fb -> s_seen3d via

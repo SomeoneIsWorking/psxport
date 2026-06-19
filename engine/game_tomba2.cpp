@@ -16,6 +16,7 @@
 // produced (the cb at 0x800506B4 only increments that counter), computed directly.
 // (When a host present loop exists it will pace frames; this just removes the busy-wait.)
 #include "core.h"
+#include "game.h"   // Fps60State::current_object (was g_current_object)
 #include "cfg.h"
 #include "margin_render.hpp"
 #include <stdlib.h>
@@ -23,7 +24,6 @@
 
 void rec_super_call(Core*, uint32_t);   // interpret the original PSX body (super-call / A/B oracle)
 void fps60_init(void);            // fps60: read PSXPORT_FPS60
-extern uint32_t g_current_object;  // fps60: object* whose RTP ops are being tagged
 // geomblk capture probe (engine_submit.c): the LAST object the cull ran on. Unlike g_current_object this is
 // NOT restored on return — a handler calls its cull (FUN_8007712c) then immediately submits its geometry, so
 // across that submit g_render_object identifies the rendering object. Pure probe key; no gameplay effect.
@@ -99,9 +99,9 @@ static unsigned isqrt32(unsigned v) { unsigned r = 0, b = 1u << 30; while (b > v
   while (b) { if (v >= r + b) { v -= r + b; r = (r >> 1) + b; } else r >>= 1; b >>= 2; } return r; }
 
 static void ov_object_cull(Core* c) {
-  uint32_t prev = g_current_object;
+  uint32_t prev = c->game->fps60.current_object;
   uint32_t o = c->r[4];                            // a0 = object* (MIPS arg register $a0)
-  g_current_object = o;
+  c->game->fps60.current_object = o;
   g_render_object  = o;                            // probe key: NOT restored — the submit that follows is o's
 
   if (s_objlog < 0) s_objlog = cfg_dbg("obj") ? 1 : 0;
@@ -175,7 +175,7 @@ static void ov_object_cull(Core* c) {
       }
     }
   }
-  g_current_object = prev;
+  c->game->fps60.current_object = prev;
 }
 
 // PC-owned LZ image decompressor — replaces recompiled FUN_80044D8C (0x80044D8C). This routine

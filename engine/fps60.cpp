@@ -1,4 +1,5 @@
 #include "core.h"
+#include "game.h"   // Fps60State (per-instance render-interp state) via core->game->fps60
 extern "C" {  // Beetle GTE (mednafen gte.c, compiled as C)
   uint32_t GTE_ReadDR(unsigned); uint32_t GTE_ReadCR(unsigned);
   void GTE_WriteDR(unsigned, uint32_t); void GTE_WriteCR(unsigned, uint32_t);
@@ -25,14 +26,10 @@ extern "C" {  // Beetle GTE (mednafen gte.c, compiled as C)
 
 
 int g_fps60_on = 0;          // read by the gte_op tap; set by fps60_init from PSXPORT_FPS60
-uint32_t g_current_object = 0;// set by games_tomba2.c ov_object_cull during the cull subtree
 
 // ---- per-frame projected-geometry fingerprint (rate detector input) -----------------
-static uint64_t s_frame_hash = 1469598103934665603ull;
-static long     s_frame_geom = 0;
-static long     s_fence = 0;       // per-logic-frame counter (the synth dumptest keys on it)
 
-static void fold(uint32_t v) {
+void Fps60State::fold(uint32_t v) {
   uint64_t h = s_frame_hash;
   for (int i = 0; i < 4; i++) { h ^= (v & 0xFF); h *= 1099511628211ull; v >>= 8; }
   s_frame_hash = h; s_frame_geom++;
@@ -41,19 +38,13 @@ static void fold(uint32_t v) {
 // ---- SXY → object-id grid (the join) -------------------------------------------------
 // Last object that projected a vertex to each (sx,sy). Epoch-stamped so it resets per frame with
 // no 2 MB memset: a cell is live only when its stamp == the current epoch.
-#define GW 1024
-#define GH 512
-static uint32_t s_obj_grid[GW * GH];
-static uint32_t s_obj_stamp[GW * GH];
-static uint32_t s_epoch = 0;
-static long s_join_hit, s_join_miss;     // accumulated over the report window
 
-static void grid_put(int sx, int sy, uint32_t obj) {
+void Fps60State::grid_put(int sx, int sy, uint32_t obj) {
   int x = sx & (GW - 1), y = sy & (GH - 1);
   int i = y * GW + x;
   s_obj_grid[i] = obj; s_obj_stamp[i] = s_epoch;
 }
-static uint32_t grid_get(int px, int py) {  // ±2px search; returns the source object's node pointer
+uint32_t Fps60State::grid_get(int px, int py) {  // ±2px search; returns the source object's node pointer
   for (int dy = -2; dy <= 2; dy++)          // (0 = no object near here / CPU-projected → caller snaps)
     for (int dx = -2; dx <= 2; dx++) {
       int x = (px + dx) & (GW - 1), y = (py + dy) & (GH - 1);
@@ -71,37 +62,19 @@ static uint32_t grid_get(int px, int py) {  // ±2px search; returns the source 
 // transform moves). Interpolating each object's transform between frames and re-projecting its verts
 // reproduces camera pan + object motion perspective-correctly. (RE: the 0x8007712C cull dispatcher does
 // NOT tag these scenes — the GTE transform is the real object identity.)
-#define XOBJ_MAX 1024
-#define XV_MAX   80000
-typedef struct {
-  uint32_t r0, r1, r2, r3, r4;     // rotation matrix, GTE control regs CR0..4 (packed int16 pairs)
-  int32_t  trx, try_, trz;         // translation, CR5..7
-  uint64_t fp;                     // local-vertex fingerprint = cross-frame identity
-  long     nrtps;                  // RTPS/RTPT count (object size)
-  int      v0, nv;                 // range [v0,v0+nv) into the per-frame local-vertex pool
-} XObj;
-static XObj s_xa[XOBJ_MAX], s_xb[XOBJ_MAX];
-static XObj* s_xA = s_xa;          // previous frame's objects (transforms; verts not needed)
-static XObj* s_xB = s_xb;          // current frame's objects (capturing)
-static int   s_nxA = 0, s_nxB = 0;
-static int   s_xb_started = 0;     // a group is open in s_xB
 // Per-frame local-vertex pool for the CURRENT frame (B): each captured vertex's model-space coords and
 // the screen XY the GTE produced for it (the key we remap on). Rebuilt every frame.
-static int16_t s_lvx[XV_MAX], s_lvy[XV_MAX], s_lvz[XV_MAX];
-static int32_t s_osxy[XV_MAX];
-static int     s_nv = 0;
-static uint32_t s_rtps_insn = 0x00080001; // a real RTPS instruction word (flags) for re-projection
 
 static void xfold(XObj* o, uint32_t v) {     // fold a local-vertex word into the fingerprint
   o->fp ^= v + 0x9E3779B97F4A7C15ull + (o->fp << 6) + (o->fp >> 2);
 }
-static void xvert(int16_t vx, int16_t vy, int16_t vz, uint32_t sxy) {
+void Fps60State::xvert(int16_t vx, int16_t vy, int16_t vz, uint32_t sxy) {
   if (s_nv >= XV_MAX) return;
   s_lvx[s_nv] = vx; s_lvy[s_nv] = vy; s_lvz[s_nv] = vz; s_osxy[s_nv] = (int32_t)sxy; s_nv++;
 }
 
 // Called per RTPS(0x01)/RTPT(0x30) from fps60_rtp, with the GTE holding this vertex's transform.
-static void xobj_rtp(uint32_t insn) {
+void Fps60State::xobj_rtp(uint32_t insn) {
   uint32_t op = insn & 0x3F;
   if (op == 0x01) s_rtps_insn = insn;          // remember the game's RTPS flags for re-projection
   uint32_t r0 = GTE_ReadCR(0), r1 = GTE_ReadCR(1), r2 = GTE_ReadCR(2), r3 = GTE_ReadCR(3), r4 = GTE_ReadCR(4);
@@ -136,7 +109,7 @@ static void xobj_rtp(uint32_t insn) {
 }
 
 // Match B objects to A by fingerprint; report match rate + transform deltas (interpolation viability).
-static void xobj_report(void) {
+void Fps60State::xobj_report() {
   long matched = 0, tot = s_nxB, dtr_sum = 0, dtr_max = 0;
   for (int i = 0; i < s_nxB; i++) {
     XObj* B = &s_xB[i];
@@ -151,7 +124,7 @@ static void xobj_report(void) {
           matched ? dtr_sum/matched : 0, dtr_max);
 }
 
-static void xobj_commit(void) {                 // swap A/B at frame end; reset the per-frame vert pool
+void Fps60State::xobj_commit() {                 // swap A/B at frame end; reset the per-frame vert pool
   XObj* t = s_xA; s_xA = s_xB; s_xB = t; s_nxA = s_nxB; s_nxB = 0; s_xb_started = 0; s_nv = 0;
 }
 
@@ -162,10 +135,9 @@ static void xobj_commit(void) {                 // swap A/B at frame end; reset 
 // through this table (unmapped verts = CPU/2D/unmatched → snap). This is the camera+object motion,
 // perspective-correct, with the game's own projection math.
 
-static int s_xmatch[XOBJ_MAX];   // B object i → A object index, or -1
 static int s_disp_gate = -1;     // PSXPORT_FPS60_GATE: max screen motion (px) to still interpolate
 
-static void xobj_match(void) {   // by fingerprint + identical vertex count (strong key)
+void Fps60State::xobj_match() {   // by fingerprint + identical vertex count (strong key)
   for (int i = 0; i < s_nxB; i++) {
     s_xmatch[i] = -1;
     XObj* B = &s_xB[i];
@@ -183,20 +155,16 @@ static uint32_t interp_packed(uint32_t a, uint32_t b) {
 }
 
 // old-SXY → new-SXY remap (open-addressing hash; key 0x80000000 reserved as empty marker→never a SXY)
-#define REMAP_SZ 131072
-static int32_t s_rm_key[REMAP_SZ];
-static int32_t s_rm_val[REMAP_SZ];
-static int      s_rm_init = 0;
-static void remap_reset(void) {
+void Fps60State::remap_reset() {
   for (int i = 0; i < REMAP_SZ; i++) s_rm_key[i] = (int32_t)0x80000000;
   s_rm_init = 1;
 }
-static void remap_put(int32_t key, int32_t val) {
+void Fps60State::remap_put(int32_t key, int32_t val) {
   uint32_t h = (uint32_t)key * 2654435761u;
   for (int n = 0; n < REMAP_SZ; n++) { int s = (int)((h + n) & (REMAP_SZ - 1));
     if (s_rm_key[s] == (int32_t)0x80000000 || s_rm_key[s] == key) { s_rm_key[s] = key; s_rm_val[s] = val; return; } }
 }
-static int remap_get(int32_t key, int32_t* out) {
+int Fps60State::remap_get(int32_t key, int32_t* out) {
   uint32_t h = (uint32_t)key * 2654435761u;
   for (int n = 0; n < REMAP_SZ; n++) { int s = (int)((h + n) & (REMAP_SZ - 1));
     if (s_rm_key[s] == (int32_t)0x80000000) return 0;
@@ -205,7 +173,7 @@ static int remap_get(int32_t key, int32_t* out) {
 }
 
 // Build the remap: interpolate each matched object's transform and re-project its verts through the GTE.
-static void fps60_build_remap(void) {
+void Fps60State::fps60_build_remap() {
   if (!s_rm_init) remap_reset(); else remap_reset();
   if (s_nxB == 0) return;
   if (s_disp_gate < 0) { const char* g = cfg_str("PSXPORT_FPS60_GATE"); s_disp_gate = g ? atoi(g) : 48; }
@@ -233,22 +201,21 @@ static void fps60_build_remap(void) {
 }
 
 // gte_op RTP tap. op 0x01 = RTPS (one new SXY, DR14); 0x30 = RTPT (three, DR12/13/14).
-long s_rtp_calls = 0, s_rtp_with_obj = 0;   // diag: how many RTPS carry an object context
-void fps60_rtp(uint32_t op) {
+void Fps60State::rtp(uint32_t op) {
   if (!g_fps60_on) return;
-  s_rtp_calls++; if (g_current_object) s_rtp_with_obj++;
+  s_rtp_calls++; if (current_object) s_rtp_with_obj++;
   xobj_rtp(op);                 // capture this vertex's GTE transform-group (native object)
   unsigned lo = (op == 0x30) ? 12 : 14, hi = 14;
   for (unsigned r = lo; r <= hi; r++) {
     uint32_t sxy = GTE_ReadDR(r);
     fold(sxy);
     int16_t sx = (int16_t)(sxy & 0xFFFF), sy = (int16_t)(sxy >> 16);
-    grid_put(sx, sy, g_current_object);
+    grid_put(sx, sy, current_object);
   }
 }
 
 // gp0_exec polygon tap: join the packet's lead vertex to a captured SXY.
-void fps60_join_poly(int px, int py) {
+void Fps60State::join_poly(int px, int py) {
   if (!g_fps60_on) return;
   if (grid_get(px, py)) s_join_hit++; else s_join_miss++;
 }
@@ -259,28 +226,10 @@ void fps60_join_poly(int px, int py) {
 // (pre-E5-offset = buffer-relative); the E5 offset at draw time is kept so the synth can apply
 // the CURRENT frame's buffer origin and so we can reason in absolute space when needed. Polys
 // carry the joined object id (the matcher's primary key); sprites/lines get obj=0 → they snap.
-typedef struct {
-  uint8_t  op, nv;
-  int16_t  x[4], y[4];
-  uint8_t  u[4], v[4];
-  uint8_t  r[4], g[4], b[4];
-  int16_t  w, h;                 // sprite/rect size (nv==1); unused for polys/lines
-  int16_t  off_x, off_y;         // E5 draw offset at draw time (the framebuffer origin)
-  int16_t  tp_x, tp_y;           // texpage base (px)
-  uint8_t  mode, blend, dither;  // texture color mode / semi-transparency mode / ordered-dither
-  int16_t  clut_x, clut_y;       // CLUT base (px)
-  uint32_t obj;                  // joined object id (0 = unjoined → snap)
-} Prim;
 
-#define PRIM_MAX 8192
-static Prim s_prim_a[PRIM_MAX], s_prim_b[PRIM_MAX];
-static Prim* s_pA = s_prim_a;   // previous frame's prims
-static Prim* s_pB = s_prim_b;   // current frame's prims (being captured)
-static int   s_nA = 0, s_nB = 0;
-static int   s_overflow = 0;    // set if a frame exceeded PRIM_MAX (report it)
 
 // Full capture for polygons (nv 3/4). xs/ys are packet coords; us/vs/rs/gs/bs per vertex.
-void fps60_cap_poly(int op, int nv, const int* xs, const int* ys, const int* us, const int* vs,
+void Fps60State::cap_poly(int op, int nv, const int* xs, const int* ys, const int* us, const int* vs,
                      const unsigned char* rs, const unsigned char* gs, const unsigned char* bs,
                      int off_x, int off_y, int tp_x, int tp_y, int mode, int blend, int dither,
                      int clut_x, int clut_y) {
@@ -303,7 +252,7 @@ void fps60_cap_poly(int op, int nv, const int* xs, const int* ys, const int* us,
 // Lighter capture for sprites/rects (nv==1) and lines (nv==2). These are CPU-projected / HUD /
 // 2D — they don't pass through the GTE, so obj=0 (snap) by design. Captured for completeness so
 // the in-between redraws the WHOLE display list (no holes).
-void fps60_cap_sprite(int op, int x, int y, int u, int v, int w, int h,
+void Fps60State::cap_sprite(int op, int x, int y, int u, int v, int w, int h,
                        int r, int g, int b, int off_x, int off_y,
                        int tp_x, int tp_y, int mode, int blend, int clut_x, int clut_y) {
   if (!g_fps60_on) return;
@@ -321,7 +270,7 @@ void fps60_cap_sprite(int op, int x, int y, int u, int v, int w, int h,
 
 // Line-segment capture (nv==2). Lines are CPU-projected / 2D (obj 0 → snap), captured so the interp
 // frame reproduces them (else they flicker on/off every other frame). Color is per-segment flat.
-void fps60_cap_line(int op, int x0, int y0, int x1, int y1, int r, int g, int b, int semi) {
+void Fps60State::cap_line(int op, int x0, int y0, int x1, int y1, int r, int g, int b, int semi) {
   if (!g_fps60_on) return;
   if (s_nB >= PRIM_MAX) { s_overflow = 1; return; }
   Prim* P = &s_pB[s_nB++];
@@ -353,7 +302,7 @@ void gpu_fps60_draw_sprite(Core*, int, int, int, int, int, int, int, int, int, i
                          int, int, int, int, int, int);
 void gpu_fps60_draw_line(Core*, int, int, int, int, int, int, int, int);
 
-static int fps60_front_off_y(void) { return s_nB > 0 ? s_pB[0].off_y : 0; }
+int Fps60State::fps60_front_off_y() { return s_nB > 0 ? s_pB[0].off_y : 0; }
 
 // ---- per-object screen-centroid motion (interpolation key = the node pointer) --------
 // Each captured poly is tagged with its source object's pool-slot pointer (Prim.obj, from the
@@ -361,11 +310,6 @@ static int fps60_front_off_y(void) { return s_nB > 0 ? s_pB[0].off_y : 0; }
 // between this frame (B) and the previous (A), matched by that POINTER — a stable engine identity
 // (no GTE fingerprints, no screen-XY collisions). The in-between translates each matched object's
 // prims to the midpoint (A+B)/2. obj==0 (2D/HUD/CPU-projected) and sprites/lines → snap (30fps).
-#define OCEN_SZ 8192
-typedef struct { uint32_t obj; int32_t sx, sy, n; } ObjCen;
-static ObjCen s_oc0[OCEN_SZ], s_oc1[OCEN_SZ];
-static ObjCen* s_ocA = s_oc0;          // previous frame's per-object centroids
-static ObjCen* s_ocB = s_oc1;          // current frame's
 static int s_ocen_gate = -1;           // PSXPORT_FPS60_GATE: max per-object screen motion (px L1)
 
 static ObjCen* ocen_slot(ObjCen* t, uint32_t obj) {   // open-addressing; obj != 0
@@ -389,7 +333,7 @@ static int ocen_centroid(ObjCen* t, uint32_t obj, int* cx, int* cy) {
   *cx = s->sx / s->n; *cy = s->sy / s->n; return 1;
 }
 // This object's B→midpoint translation (dx,dy), or (0,0) if unmatched / over the teleport gate.
-static int ocen_delta(uint32_t obj, int* dx, int* dy) {
+int Fps60State::ocen_delta(uint32_t obj, int* dx, int* dy) {
   *dx = *dy = 0;
   int bx, by, ax, ay;
   if (obj == 0 || !ocen_centroid(s_ocB, obj, &bx, &by) || !ocen_centroid(s_ocA, obj, &ax, &ay))
@@ -404,7 +348,7 @@ static int ocen_delta(uint32_t obj, int* dx, int* dy) {
 static int s_sdbg = -1;
 // Returns the number of prims actually translated (interpolated). 0 ⇒ nothing moved, so the caller
 // should present the REAL frame instead of this (lossy) re-rasterized in-between (see fps60_present).
-static long fps60_synthesize(Core* core) {
+long Fps60State::fps60_synthesize(Core* core) {
   if (s_nB == 0) return 0;
   if (s_sdbg < 0) s_sdbg = cfg_dbg("fps60") ? 1 : 0;
   long d_prims = 0, d_obj_translated = 0, d_snapped = 0, d_tagged = 0;  // sdbg: interpolation outcome
@@ -459,7 +403,7 @@ static long fps60_synthesize(Core* core) {
 // interpolation can be eyeballed (objects at intermediate positions) WITHOUT the live present path.
 void gpu_fps60_shot_vram(Core*, int, int, const char*);
 void gpu_fps60_shot_interp(Core*, int, int, const char*);
-static void fps60_synth_dumptest(Core* core) {
+void Fps60State::fps60_synth_dumptest(Core* core) {
   static int tf = -2;
   if (tf == -2) { const char* e = cfg_str("PSXPORT_FPS60_SYNTH"); tf = e ? atoi(e) : -1; }
   if (tf < 0 || s_fence != tf || s_nB == 0) return;
@@ -479,9 +423,8 @@ static void fps60_synth_dumptest(Core* core) {
 // frame and the displayed stream is A, lerp(A,B), B, lerp(B,C), C… = 60 fps. SAFETY GATE: only when
 // windowed + animating + actually double-buffering (front_y flips), else one faithful present of B.
 
-static int s_prev_front_y = -1;    // last frame's front-buffer y (for flip detection)
 
-static void fps60_present(Core* core) {
+void Fps60State::fps60_present(Core* core) {
   static int win = -1;
   if (win < 0) { const char* w = cfg_str("PSXPORT_GPU_WINDOW"); win = (w && atoi(w) != 0) ? 1 : 0; }
   void gpu_fps60_blit_vram(Core*, int, int); void gpu_fps60_blit_interp(Core*, int, int);
@@ -507,8 +450,6 @@ static void fps60_present(Core* core) {
 }
 
 // ---- logic-rate detector (lrate_proto.c, validated) ---------------------------------
-typedef struct { uint64_t last_hash; int held; int period; int votes[9]; long changes; } RateDet;
-static RateDet s_rd = { .period = 2 };
 
 static void rate_tick(RateDet* d, uint64_t set_hash) {
   if (set_hash == d->last_hash) { d->held++; return; }
@@ -521,7 +462,7 @@ static void rate_tick(RateDet* d, uint64_t set_hash) {
 }
 
 // ---- per-logic-frame fence (games_tomba2.c ov_frame_update) -------------------------
-void fps60_frame_commit(Core* core) {
+void Fps60State::frame_commit(Core* core) {
   if (!g_fps60_on) return;
   uint64_t set_hash = (s_frame_geom > 0) ? s_frame_hash : 0xFFFFFFFFFFFFFFFFull;
   rate_tick(&s_rd, set_hash);
@@ -552,6 +493,27 @@ void fps60_frame_commit(Core* core) {
   s_frame_geom = 0;
   s_epoch++;                  // reset the SXY→obj grid for the next frame
 }
+
+
+// ---- Public capture API: thin free-function wrappers over the per-instance Fps60State methods.
+// Keep the C-style call sites stable; each forwards to core->game->fps60 (de-globalization, 2026-06-19). ----
+void fps60_rtp(Core* core, uint32_t op) { core->game->fps60.rtp(op); }
+void fps60_join_poly(Core* core, int px, int py) { core->game->fps60.join_poly(px, py); }
+void fps60_cap_poly(Core* core, int op, int nv, const int* xs, const int* ys, const int* us, const int* vs,
+                    const unsigned char* rs, const unsigned char* gs, const unsigned char* bs,
+                    int off_x, int off_y, int tp_x, int tp_y, int mode, int blend, int dither,
+                    int clut_x, int clut_y) {
+  core->game->fps60.cap_poly(op, nv, xs, ys, us, vs, rs, gs, bs, off_x, off_y, tp_x, tp_y, mode, blend, dither, clut_x, clut_y);
+}
+void fps60_cap_sprite(Core* core, int op, int x, int y, int u, int v, int w, int h,
+                      int r, int g, int b, int off_x, int off_y,
+                      int tp_x, int tp_y, int mode, int blend, int clut_x, int clut_y) {
+  core->game->fps60.cap_sprite(op, x, y, u, v, w, h, r, g, b, off_x, off_y, tp_x, tp_y, mode, blend, clut_x, clut_y);
+}
+void fps60_cap_line(Core* core, int op, int x0, int y0, int x1, int y1, int r, int g, int b, int semi) {
+  core->game->fps60.cap_line(op, x0, y0, x1, y1, r, g, b, semi);
+}
+void fps60_frame_commit(Core* core) { core->game->fps60.frame_commit(core); }
 
 void fps60_init(void) {
   g_fps60_on = cfg_on("PSXPORT_FPS60") ? 1 : 0;
