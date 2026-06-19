@@ -134,7 +134,21 @@ Flag init-once-then-read tables case by case; when in doubt, move it (safe).
   so the setjmp/longjmp now target the per-instance `c->game->sched.yield_jmp`. Rest of native_boot stays
   shared (s_bgmdbg config-cache; out[400000]/held/ls/s_rd/s_last_* function-local diag). Gate: frame-50 RAM
   0-diff vs baseline ✓ (native_boot is exercised heavily through boot, so this is a strong check).
-- **gte/spu/mdec (Beetle FORK — NEXT, decision point):** the GTE/SPU/MDEC register state lives in the
+- **engine modules (triaged):** game_tomba2.cpp, engine_submit.cpp, engine_tomba2.cpp, native_path*.cpp,
+  margin_render.cpp = AUDIT, stay shared — their file-scope statics are config-caches (s_objlog/s_cull*,
+  s_submit_recomp/s_probe_frame/s_geomblk/s_depth, s_dbg, ndl_active's s_active) or pure stderr-only
+  per-frame diag counters (engine_submit s_subcnt/s_subaddr/s_cc/s_cctgt; engine_tomba2 s_walks). None write
+  guest RAM. **native_dl.cpp = MIGRATED** (see below). **fps60.cpp = NOT yet** (big render-side block — the
+  XObj/Prim/centroid double-buffers, vertex pools, grid, remap, rate detector; render-interp state that
+  never writes guest RAM, and PSXPORT_FPS60 is parked/off by default → migrating it is 0-diff on core.ram.
+  It's the last real "migrate render fully" item; do it for the literal nothing-global goal).
+- **native_dl.cpp (done):** the native classified display-list arena → `NdlState` on Game (`core->game->ndl`):
+  s_prim[NDL_MAX] pool, s_banchor/s_bhead bucket hash, s_n, s_consumed → methods (body-preserving). Public
+  ndl_alloc/lookup/next/mark_consumed now take `Core*` (callers submit_poly_gt3/gt4/gt4_bp have `c`;
+  gpu_native ndl_render_node/gpu_dma2_linked_list have `core`); ndl_active() stays a free config-cache.
+  Render-side (never writes guest RAM). Gates: frame-50 RAM 0-diff ✓ AND field-frame 520 render byte-
+  identical pre-vs-post ✓.
+- **gte/spu/mdec (Beetle FORK — decision point):** the GTE/SPU/MDEC register state lives in the
   vendored fork (mednafen/psx/gte.c `gteCONTROL`/`gteDATA`, spu.c, mdec.c) as file-scope globals, NOT in our
   gte_beetle/spu_beetle/mdec_beetle wrappers. De-globalizing means EITHER (a) make the fork's state a
   per-instance struct (modify the committed fork — most faithful to "nothing global", but touches vendored

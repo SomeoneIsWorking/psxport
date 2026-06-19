@@ -29,6 +29,9 @@
 #ifndef NATIVE_DL_H
 #define NATIVE_DL_H
 #include <stdint.h>
+#include <string.h>
+
+struct Core;   // CPU/RAM handle (core.h); the public ndl_* API takes Core* to reach core->game->ndl
 
 typedef struct {
   uint32_t node;       // OT bucket-anchor phys addr (otaddr & 0x1FFFFC) — the DrawOTag-walk lookup key
@@ -39,18 +42,43 @@ typedef struct {
   float    pz[4];      // per-vertex native view-space Z (parse order V0,V1,V2[,V3]); renderer depth
 } NativePrim;
 
+// Field main OT is ~514 polys + overlay emitters; size generously so the arena never drops geometry.
+#define NDL_MAX   32768
+#define NDL_HASH  65536           // power-of-two open-addressing table (load factor < 0.5)
+#define NDL_MASK  (NDL_HASH - 1)
+
+// NdlState — the native classified display list's per-instance, per-frame arena + node-keyed lookup.
+// De-globalization (2026-06-19): this was file-scope state in native_dl.cpp; it now lives on Game
+// (game.h has `NdlState ndl;`), reached via core->game->ndl, so two cores build independent lists. The
+// arena is HOST render data (never written to guest RAM), so it does not affect a Core::ram lockstep
+// diff — migrated for the literal "nothing file-scope global" goal + future per-core render diffing.
+// Method bodies keep the historical s_-names (member access via this), unchanged by the move.
+struct NdlState {
+  NativePrim s_prim[NDL_MAX] = {};
+  uint32_t   s_banchor[NDL_HASH] = {};  // bucket-anchor otaddr (phys), 0 = empty slot
+  int32_t    s_bhead[NDL_HASH] = {};    // head prim index for that anchor (LIFO chain via NativePrim.bnext)
+  int        s_n = 0;
+  int        s_consumed = 1;            // start consumed so the first alloc begins a clean frame
+  void        reset();
+  uint32_t    slot(uint32_t otaddr);
+  NativePrim* alloc(uint32_t otaddr);
+  NativePrim* lookup(uint32_t addr);
+  NativePrim* next(const NativePrim* p);
+  void        mark_consumed();
+};
+
 // Native display list active (the port default). PSXPORT_DL_GUESTPKT=1 reverts the owned submit fns to
 // writing the full guest packet into the guest OT (the pre-port behaviour) for A/B verification.
 int         ndl_active(void);
 // Append a prim to the host display list for OT bucket-anchor `otaddr` (phys). Prepends to that
 // bucket's LIFO chain. Resets the per-frame list if it was just consumed by a DrawOTag pass (lazy
 // reset — robust to the engine's setup-OT + main-OT double draw). NULL on arena overflow.
-NativePrim* ndl_alloc(uint32_t otaddr);
+NativePrim* ndl_alloc(Core* core, uint32_t otaddr);
 // Head prim of the host list for bucket-anchor `addr` (phys), or NULL if no host prims target it.
-NativePrim* ndl_lookup(uint32_t addr);
+NativePrim* ndl_lookup(Core* core, uint32_t addr);
 // Next prim in `p`'s bucket chain, or NULL at the end.
-NativePrim* ndl_next(const NativePrim* p);
+NativePrim* ndl_next(Core* core, const NativePrim* p);
 // Mark the list consumed after a DrawOTag walk completes; the next ndl_alloc starts a fresh frame.
-void        ndl_mark_consumed(void);
+void        ndl_mark_consumed(Core* core);
 
 #endif

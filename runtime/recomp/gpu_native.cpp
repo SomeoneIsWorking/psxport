@@ -1255,7 +1255,7 @@ void gpu_scene_dump(Core*, FILE*, uint32_t);
 // but with s_ndl_cur set so the depth path uses the carried native view-Z (no address bridge).
 void GpuState::ndl_render_node(Core* core, uint32_t addr) {
   // Render every host prim bound to this OT bucket-anchor, head-first (LIFO = guest AddPrim draw order).
-  for (NativePrim* np = ndl_lookup(addr); np; np = ndl_next(np)) {
+  for (NativePrim* np = ndl_lookup(core, addr); np; np = ndl_next(core, np)) {
     for (int i = 0; i < np->nwords; i++) { s_fifo[i] = np->words[i]; s_fifo_addr[i] = 0; }
     s_fcount = np->nwords;
     s_ndl_cur = np;
@@ -1337,7 +1337,7 @@ void GpuState::gpu_dma2_linked_list(Core* core, uint32_t madr) {
       if (a >= ot_lo && a < ot_hi) {                 // bucket boundary -> close the current run
         if (run_o && run_g) mixed++; else if (run_o) ob++; else if (run_g) gb++;
         run_o = run_g = 0;
-      } else if (ndl_lookup(a)) { run_o++; tot_o++; }   // owned native prim (1-word tag in pool)
+      } else if (ndl_lookup(core, a)) { run_o++; tot_o++; }   // owned native prim (1-word tag in pool)
       else { run_g++; tot_g++; }                        // guest inline-2D packet
       uint32_t next = hdr & 0xFFFFFF;
       if (next == 0xFFFFFF || next == 0) break;
@@ -1348,7 +1348,7 @@ void GpuState::gpu_dma2_linked_list(Core* core, uint32_t madr) {
       fprintf(stderr, "[bucket] f%d madr=0x%08X prims owned=%d guest=%d | buckets owned-only=%d "
               "guest-only=%d MIXED=%d\n", s_frame, 0x80000000u | g_ot_madr, tot_o, tot_g, ob, gb, mixed);
   }
-  ndl_mark_consumed();   // this draw consumed the native list; the next submit starts a fresh frame
+  ndl_mark_consumed(core);   // this draw consumed the native list; the next submit starts a fresh frame
   if (guard >= 0x10000) {
     static int warned = 0;
     if (!warned++) fprintf(stderr, "[gpu] WARN: OT traversal hit %d-node cap from madr=0x%08X "

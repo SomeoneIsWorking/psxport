@@ -98,6 +98,7 @@ public:
   SchedulerState sched;  // native cooperative task scheduler (native_boot.cpp)
   GpuState    gpu;   // native GPU: VRAM + draw/display state + the rasterizer (gpu_native.cpp)
   GpuVkState  gpu_vk;// Vulkan present backend: per-frame batch/depth/dirty/present state (gpu_vk.cpp)
+  NdlState    ndl;   // native classified display list: per-frame prim arena + bucket lookup (native_dl.cpp)
 
   // core.game / gpu.game / gpu_vk.game are back-pointers so a subsystem holding one of those handles can
   // reach the rest of the machine (e.g. blit_src -> gpu_vk via gpu.game; frame_via_fb -> s_seen3d via

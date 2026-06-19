@@ -287,7 +287,7 @@ static void submit_poly_gt3(Core* c) {
     uint32_t otaddr = ot + (idx << 2);
     if (dl) {
       // NATIVE ORDERING: append to the host per-bucket list keyed by the OT anchor — write NO guest OT/pool.
-      NativePrim* np = ndl_alloc(otaddr & 0x1FFFFC);
+      NativePrim* np = ndl_alloc(c, otaddr & 0x1FFFFC);
       if (np) { np->nwords = 9; np->npz = 3;
         for (int k = 0; k < 9; k++) np->words[k] = W[k + 1];   // W[1..9] = the 9 GP0 payload words
         np->pz[0] = pz0; np->pz[1] = pz1; np->pz[2] = pz2; }
@@ -371,7 +371,7 @@ static void submit_poly_gt4(Core* c) {
     uint32_t otaddr = ot + (idx << 2);
     if (dl) {
       // NATIVE ORDERING: append to the host per-bucket list keyed by the OT anchor — write NO guest OT/pool.
-      NativePrim* np = ndl_alloc(otaddr & 0x1FFFFC);
+      NativePrim* np = ndl_alloc(c, otaddr & 0x1FFFFC);
       if (np) { np->nwords = 12; np->npz = 4;
         for (int k = 0; k < 12; k++) np->words[k] = W[k + 1];  // W[1..12] = the 12 GP0 payload words
         np->pz[0] = pz0; np->pz[1] = pz1; np->pz[2] = pz2; np->pz[3] = pz3; }
@@ -496,7 +496,7 @@ static void submit_poly_gt4_bp(Core* c) {
           uint32_t otaddr = otbase + (idx << 2);
           if (dl) {
             // NATIVE ORDERING: append to the host per-bucket list keyed by the OT anchor — no guest OT/pool write.
-            NativePrim* np = ndl_alloc(otaddr & 0x1FFFFC);
+            NativePrim* np = ndl_alloc(c, otaddr & 0x1FFFFC);
             if (np) { np->nwords = 12; np->npz = 4;
               for (int k = 0; k < 12; k++) np->words[k] = W[k + 1];
               np->pz[0] = pz0; np->pz[1] = pz1; np->pz[2] = pz2; np->pz[3] = pz3; }
