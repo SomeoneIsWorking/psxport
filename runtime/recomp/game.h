@@ -21,12 +21,21 @@ struct TimingState {
   uint32_t vblank = 0;   // libetc VSync counter mirror (was g_vblank)
 };
 
+// cd_override.cpp — deferred ingame-music state (suppressed during dialog, resumed after).
+struct CdState {
+  int      pending_music = 0;   // a looping ingame-music clip is deferred/remembered (was s_pending_music)
+  uint8_t  pm_chan  = 0;        // was s_pm_chan
+  uint32_t pm_start = 0;        // was s_pm_start
+  uint32_t pm_end   = 0;        // was s_pm_end
+};
+
 class Game {
 public:
   Core core;            // CPU registers + 2 MB main RAM + 1 KB scratchpad (was the sole instance object)
 
   // ---- migrated subsystem state (one member per migrated subsystem) ----
   TimingState timing;
+  CdState     cd;
 
   Game() { core.game = this; }
 };

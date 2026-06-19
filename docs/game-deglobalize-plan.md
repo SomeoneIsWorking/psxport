@@ -38,19 +38,29 @@ engine: fps60 56, native_path 37, engine_submit 36, native_path_b1 20, game_tomb
 state a per-instance struct (modify the fork) or snapshot/restore around core switches — decide when
 reaching that phase. Same likely for SPU/MDEC (Beetle cores).
 
+## Policy: what stays shared
+- **CONST / read-only tables** (jump tables, fn-ptr dispatch tables filled once at init, name strings):
+  identical across cores → stay `static const` shared.
+- **Config-caches** (`g_cd_verbose` etc.: read an env/cfg flag once at init, then only read): effectively
+  const, identical across cores → leave shared (document with a `// shared: config-cache` note).
+- **Debug/trace statics** (under `cfg_dbg`/`PSXPORT_*_DBG` gates, only touch stderr — `static uint32_t prev`
+  in trace blocks): do NOT affect `Core::ram`; deferred (migrate last, or leave shared). Note them.
+- **Everything else (mutable game/machine state)** MUST move onto `Game`.
+
 ## CONST vs MUTABLE
 Only **mutable** state needs to move. Read-only tables (jump tables, name strings, fn-ptr dispatch
 tables that are filled once at init) can stay `static const` shared — they're identical across cores.
 Flag init-once-then-read tables case by case; when in doubt, move it (safe).
 
-## Phase log
-- **P0 (done):** `Game` container + `Core::game` back-ptr + boot uses `new Game()`. Empty wrapper, no
-  state moved. 0-diff ✓ (deglob_p0.bin == deglob_baseline.bin).
-- **P1 (next):** first real subsystem migration to prove the struct-member + `c->game->` pattern
-  end-to-end. Candidate order (small/self-contained first): timing → cd_override → hle → pad_input →
-  threads → sync_overrides → memcard → native_fmv → interp → gpu_native → gpu_vk → gte/spu/mdec(Beetle)
-  → engine modules. Each: move statics into a `*State` struct in game.h, rewrite refs to `c->game->st`,
-  build, 0-diff, commit+push.
+## Phase log (each: move statics → `*State` in game.h, rewrite refs to `c->game->st`,
+## `build_port.sh all`, 0-diff vs baseline, commit+push)
+- **P0 (done):** `Game` container + `Core::game` back-ptr + boot uses `new Game()`. Empty wrapper. 0-diff ✓.
+- **P1 (done):** timing.cpp — `g_vblank` → `TimingState::vblank`. 0-diff ✓.
+- **P2 (done):** cd_override.cpp — deferred-music `s_pending_music/s_pm_*` → `CdState`. 0-diff ✓.
+- **Next (order, small→large):** pad_input → hle → threads → memcard → native_fmv → native_stub →
+  interp → gpu_native → gpu_trace → dbg_server → native_boot → gpu_vk → gte/spu/mdec (Beetle fork) →
+  engine modules (fps60, engine_submit, native_path*, game_tomba2). sync_overrides has NO mutable
+  statics (skip). Watch for non-Core-threaded callers (e.g. pad_repl_hold/tap) — thread the instance.
 
 ## After de-globalization
 Build the dual-core diff: `Game a, b;` (b neutralizes the override under test, e.g. terrain → super-call),

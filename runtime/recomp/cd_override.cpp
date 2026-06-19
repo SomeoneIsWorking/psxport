@@ -14,6 +14,7 @@
 //     bytes from the disc image at lba straight into buf, return 1 (its bool success value).
 //     This bypasses the whole FUN_8008c960/c5d8/cafc/ac34 command+IRQ machinery for data.
 #include "core.h"
+#include "game.h"
 #include "c_subsys.h"
 #include "cfg.h"
 #include <stdio.h>
@@ -209,9 +210,7 @@ static void ov_cd_async_read(Core* c) {
 // the dialog tone — the audible bug. Mod: while a dialog tone is the current song, keep the
 // looping ingame music suppressed and remembered; resume it once the dialog ends. One-shot voice
 // clips are unaffected (they ARE the dialog audio).
-static int      s_pending_music;          // a looping ingame-music clip is deferred/remembered
-static uint8_t  s_pm_chan;
-static uint32_t s_pm_start, s_pm_end;
+// deferred-music state now lives on the instance: c->game->cd.{pending_music,pm_chan,pm_start,pm_end}
 static int dialog_tone_active(Core* c) {
   uint32_t s = c->mem_r16(0x800bed80) & 0xFFFF;
   return s >= 4 && s <= 7;
@@ -270,7 +269,7 @@ static void ov_voice_play(Core* c) {
   if (cfg_str("PSXPORT_XA_DBG"))
     fprintf(stderr, "[voice_play] chan=%u [%u..%u] loop=%d ra=%08X\n", chan, start, end, loop, c->r[31]);
   if (loop) {                                       // looping clip == ingame/area background music
-    s_pending_music = 1; s_pm_chan = chan; s_pm_start = start; s_pm_end = end;
+    c->game->cd.pending_music = 1; c->game->cd.pm_chan = chan; c->game->cd.pm_start = start; c->game->cd.pm_end = end;
     if (dialog_tone_active(c)) return;               // suppress during a dialog; resumed by xa_dialog_coord
   }
   xa_stream_play(chan, start, end, loop);
@@ -297,14 +296,14 @@ void xa_dialog_coord(Core* c) {
     uint32_t s = c->mem_r16(0x800bed80) & 0xFFFF; int a = xa_stream_is_active(), l = xa_stream_is_looping();
     if (s != prev || a != pa || l != pl) {
       fprintf(stderr, "[coord] song=%u tone=%d xa_active=%d loop=%d pending=%d\n",
-              s, dialog_tone_active(c), a, l, s_pending_music);
+              s, dialog_tone_active(c), a, l, c->game->cd.pending_music);
       prev = s; pa = a; pl = l;
     }
   }
   if (dialog_tone_active(c)) {
     if (xa_stream_is_looping()) xa_stream_stop();    // dialog up: silence ingame music (kept pending)
-  } else if (s_pending_music && !xa_stream_is_active()) {
-    xa_stream_play(s_pm_chan, s_pm_start, s_pm_end, 1);   // dialog over: resume ingame music
+  } else if (c->game->cd.pending_music && !xa_stream_is_active()) {
+    xa_stream_play(c->game->cd.pm_chan, c->game->cd.pm_start, c->game->cd.pm_end, 1);   // dialog over: resume ingame music
     c->mem_w16(0x801fe0e0, 2);
     cd_to_spu_mix(c, 1);
     music_fade_in(c);                                      // resumed music fades in from 0 (no voice now)
