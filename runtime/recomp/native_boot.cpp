@@ -563,7 +563,12 @@ static void ov_game_main(Core* c) {
         if (mf) { fwrite(c->ram, 1, 0x200000, mf); fclose(mf);
                   fprintf(stderr, "[native_boot] mid-run RAM dump @frame %u -> %s\n", f, rd); }
       } }
-    if (f < 10 || (f % 30) == 0)
+    if (cfg_dbg("schedf"))
+      fprintf(stderr, "[schedf] f%u t0[st=%u e=%08X s48=%u s4a=%u s4c=%u s5c=%u] t1[st=%u] t2[st=%u]\n",
+              f, c->mem_r16(TASKBASE), c->mem_r32(TASKBASE + 0xc), c->mem_r16(TASKBASE + 0x48),
+              c->mem_r16(TASKBASE + 0x4a), c->mem_r16(TASKBASE + 0x4c), c->mem_r16(TASKBASE + 0x5c),
+              c->mem_r16(TASKBASE + 0x70), c->mem_r16(TASKBASE + 0xe0));
+    else if (f < 10 || (f % 30) == 0)
       fprintf(stderr, "[native_boot]   frame %u: t0[st=%u e=0x%08X s48=%u] t1[st=%u] t2[st=%u] "
                       "f135=%u\n", f, c->mem_r16(TASKBASE), c->mem_r32(TASKBASE + 0xc),
               c->mem_r16(TASKBASE + 0x48), c->mem_r16(TASKBASE + 0x70), c->mem_r16(TASKBASE + 0xe0),

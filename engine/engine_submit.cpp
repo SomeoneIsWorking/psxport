@@ -880,7 +880,9 @@ static OverrideFn classify_submit(Core* c, uint32_t addr) {
 // Scan a just-loaded overlay [base,base+size) for submit-library fns. The packet-pool load
 // (lui $r,0x800C ; lw $r2,-0xABC(...)) appears only in the submit fns; for each, backtrack to the
 // function entry (after the previous fn's `jr $ra`+delay slot) and classify+register there.
+void stage_scan_overlay(Core* c, uint32_t base, uint32_t size);   // engine_stage.cpp: own GAME stage SM
 static void engine_scan_overlay(Core* c, uint32_t base, uint32_t size) {
+  stage_scan_overlay(c, base, size);   // own the GAME stage state machine when GAME.BIN loads
   uint32_t lo = base & ~3u, hi = (base + size) & ~3u;
   void ov_gt3gt4_caller(Core*);
   void ov_bg_tilemap(Core*);

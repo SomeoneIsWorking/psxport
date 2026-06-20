@@ -1,5 +1,38 @@
 # Debug / progress journal
 
+## later-168: GAME stage state machine — RE'd in full; own area-INIT native; running loop BLOCKED by yield
+Pushing the relentless-ownership frontier into a NON-render engine system (handoff's default target = the
+GAME stage state machine, the per-area scene/update driver). Full RE + a verified partial port + a decisive
+architectural finding.
+- **RE'd the whole GAME-stage machine** (overlay `\BIN\GAME.BIN` @0x80106228, task-0 entry 0x8010637C; map
+  in engine_re.md "GAME stage state machine"). It's a 3-level nested SM keyed on task-obj fields
+  `sm[0x48]` (top: 0=INIT/1=RESUME-INIT/2=RUNNING) → `sm[0x4a]` (6-way running sub-mode) → `sm[0x4c]`
+  (9-state area load/intro/play machine). The entry is a COOPERATIVE TASK: infinite loop, one
+  `FUN_80051f80(1)` yield per frame.
+- **OWNED native (engine/engine_stage.cpp):** the two area-INIT handlers `sm[0x48]==0` (0x801086e0) and
+  `==1` (0x80108720), registered AUTO when GAME.BIN loads (signature scan @ the overlay-load hook, mirrors
+  the M3 submit/tilemap scan). Each mirrors the original's exact guest writes + dispatches its SYNCHRONOUS
+  resident setup fns (FUN_8007a8e0/b38c/b3f4). **Verified: gameplay RAM 0-diff @ field f650 AND f1000** vs
+  the pre-change build; build deterministic (0-diff across runs); the field reaches/runs normally.
+- **DECISIVE FINDING — the RUNNING loop CANNOT be owned by override+rec_dispatch (cooperative-yield
+  blocker).** First attempt owned all three sm[0x48] handlers incl. the RUNNING dispatcher 0x80108784,
+  which dispatches the sm[0x4a]/sm[0x4c] sub-handlers. Result: 675k-byte RAM divergence @f650. Localized by
+  bracketing dumps (f80=0, f100=8473 root, f140=671k explosion) + a per-frame task-state trace
+  (`PSXPORT_DEBUG=schedf`, new diagnostic): **task 0 dies (st=2→0) at f53** in the override build, stays
+  alive in baseline. ROOT CAUSE: the area sub-handlers YIELD; `rec_dispatch` runs them in a NESTED
+  `rec_interp` with its own `CORO_SENTINEL`, so when a deep yield longjmps to the scheduler and the task
+  resumes, the PSX return chain unwinds back to that nested sentinel → `rec_coro_run` reads it as "the task
+  returned" → marks task 0 free → the game runs with NO stage driver → divergence snowballs. This is the
+  same cooperative-scheduler-longjmp handshake the engine_re init table flags for
+  FUN_80052078/FUN_800499e8. Fix = drop 0x80108784 from the scan (kept in-code as `ov_game_s48_2`, the
+  next-step reference with the correct sub-handler table, intentionally unregistered).
+- **NEXT (gating piece):** build the cooperative-yield handshake — a native-override path that survives a
+  deep yield/resume (so a native stage handler can call a yielding sub-handler without the nested-sentinel
+  task-death). That unlocks native ownership of the GAME running loop AND of FUN_80052078/FUN_800499e8.
+  Tooling added this session: `PSXPORT_DEBUG=schedf` (per-frame task0/1/2 state + sm[0x48/4a/4c/5c] trace),
+  `PSXPORT_DEBUG=stage` (GAME-stage ownership log). A/B gate recipe: build with/without, dump RAM @ a fixed
+  field frame (`PSXPORT_RAMDUMP_FRAME` + `PSXPORT_RAMDUMP`), `cmp -l` (0 = good); bracket frames to localize.
+
 ## later-167: M3 — own the 2D BACKGROUND layer by PROVENANCE (replaces the bg_2d coverage guess)
 Implemented the M3 layering fix later-166b called for: classify the field's tiled backdrop by WHO drew it,
 not per-prim size. RE first (field, `PSXPORT_AUTO_GAMEPLAY`, f650, RAM dump `PSXPORT_RAMDUMP_FRAME`):

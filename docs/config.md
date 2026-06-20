@@ -41,6 +41,10 @@ together: `PSXPORT_DEBUG=spu,cdcmd,bgm`. Old → new channel:
 | `PSXPORT_CDCMD_DBG`    | `cdcmd`   | | `PSXPORT_FPS60_SDBG` | `fps60`     |
 | (so e.g. `PSXPORT_CDCMD_DBG=1` → `PSXPORT_DEBUG=cdcmd`) | | | `PSXPORT_WS_SXHIST` | `sxhist` |
 
+New channels (no legacy var): `schedf` (per-frame cooperative task0/1/2 state + GAME `sm[0x48/4a/4c/5c]`
+trace, native_boot.cpp — for stage/scheduler debugging) · `stage` (GAME stage-machine native-ownership log,
+engine_stage.cpp). See journal later-168 / engine_re.md "GAME stage state machine".
+
 ## Flags that kept their own var (they carry a VALUE, not just on/off)
 These stay as `PSXPORT_*` (read via `cfg_int`/`cfg_str`) because they take a frame number, coords, path,
 or level — they can't be a bare channel:

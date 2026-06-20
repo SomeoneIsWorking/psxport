@@ -52,6 +52,37 @@ spawning**, the **main menu** (DEMO stage state machine @0x801062E4), font/text 
 subsystem init (800520e0), and a real PC-native single display env (replace FUN_80050738). Each: `disas.py`
 the fn, understand the data, reimplement PC-native in `engine/`, keep the PSX-content interface state exact.
 
+## GAME stage state machine (the per-area scene/update driver) — RE map (later-168)
+Overlay `\BIN\GAME.BIN` (LBA 1882, 11636 B), loaded RAW to base **0x80106228**; task-0 entry **0x8010637C**.
+Runs as a COOPERATIVE TASK: an infinite loop that yields once per frame via `FUN_80051f80(1)`. The current
+task object ptr is `*0x1f800138` (== task-0 obj `0x801fe000`). State fields in that object:
+`sm[0x48]` top state · `sm[0x4a]` running sub-mode · `sm[0x4c]` area machine · `sm[0x5c]` intro timer (0x14a).
+Three-level nested machine (disasm a GAME-stage RAM dump; `tools/disasm_overlay.py scratch/raw/GAME.BIN
+<addr> <end>` — extract with `scratch/bin/fmv_compare dumplba 1882 11636 scratch/raw/GAME.BIN <chd>`):
+- **Entry 0x8010637C** — init (zero display flags 0x1f800206/234/236, set buffer-mode 0x1f80019a=2, load
+  `sm[0x48]=*0x1f800134`, zero `sm[0x4a..0x50]` + frame ctr 0x1f800198) then the per-frame loop: dispatch
+  `sm[0x48]` → handler, `0x1f800198`++, `FUN_80051f80(1)` yield, repeat.
+- **`sm[0x48]` handlers:** 0 → `0x801086e0` (area INIT: sm[0x48]=2, reset sub-states, call setup
+  `FUN_8007a8e0`+`FUN_8007b38c`) · 1 → `0x80108720` (RESUME-INIT: sm[0x4a]=1, +`FUN_8007b3f4`, scratch
+  0x1f8001ff=0xff/0x278=0) · 2 → `0x80108784` (RUNNING).
+- **`sm[0x4a]` (in 0x80108784, 6-way jump table @0x8010631c):** 0→`0x8010882c` 1→`0x801088d8`
+  **2→`0x80106478`** (the area machine) 3→`0x80106a24` 4→`0x801089c4` 5→`0x80108a60`.
+- **`sm[0x4c]` (in 0x80106478, 9-way jump table @0x8010622c):** `{0x801064c4, 0x80106510, 0x80106580,
+  0x801065b8, 0x801066b8, 0x80106830, 0x80106930, 0x8010694c, 0x801069b4}` = area load/intro/play states
+  (timer countdown `sm[0x5c]` from 0x14a, pad-input skip via `*0x800e7e68`, calls resident system fns).
+
+**OWNED native (engine/engine_stage.cpp, scan-registered when GAME.BIN loads):** the two area-INIT handlers
+`sm[0x48]==0/==1`. Clean `jr ra` functions whose callees are SYNCHRONOUS → faithful as override+dispatch;
+verified RAM 0-diff @ field f650/f1000 vs the pre-change build.
+
+**BLOCKED — running loop needs the cooperative-yield handshake.** `0x80108784` + the `sm[0x4a]`/`sm[0x4c]`
+sub-handlers YIELD (they are task-0's per-frame waits). Dispatching a yielding fn via `rec_dispatch` runs it
+in a NESTED `rec_interp` with its own `CORO_SENTINEL`; on the yield's longjmp→scheduler→resume, the deep PSX
+return chain unwinds to that nested sentinel, which `rec_coro_run` reads as "task returned" → task 0 marked
+dead (st=2→0, caught at f53 → divergence explosion). Owning the running loop natively requires a native
+override that survives a deep yield/resume — the SAME blocker noted below for `FUN_80052078`/`FUN_800499e8`.
+This is the gating piece for native ownership of the GAME stage running driver.
+
 ## Top-level control flow
 - **Main loop** `FUN_80050b08` (`:31269`, override `ov_game_main`). After GPU/double-buffer + lib init,
   loops forever. Per frame, in order:
