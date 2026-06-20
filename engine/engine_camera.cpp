@@ -20,13 +20,14 @@ static inline int32_t cam_clamp(int16_t delta, int16_t maxstep) {
 // step it by clamp(delta,±6144)<<13. accum = 32-bit fixed @ (cam+accOff); its high 16 bits (cam+accOff+2 =
 // the integer the cull reads) are what `cur` was read from. Returns 1 if it SNAPPED (settled), 0 if it moved.
 //   tgt32 = target's full 32-bit fixed value;  tgtInt/curInt = the two u16 integers being compared.
-static inline int cam_axis(Core* c, uint32_t accAddr, uint32_t tgt32Addr, uint16_t tgtInt, uint16_t curInt) {
+static inline int cam_axis(Core* c, uint32_t accAddr, uint32_t tgt32Addr, uint16_t tgtInt, uint16_t curInt,
+                           int16_t maxstep) {
   int16_t delta = (int16_t)(tgtInt - curInt);          // low-16 sign-extended (recomp: subu then sll/sra16)
   if ((uint16_t)(delta + 10) < 21) {                   // |delta| <= 10  -> snap
     c->mem_w32(accAddr, c->mem_r32(tgt32Addr));
     return 1;
   }
-  int32_t step = cam_clamp(delta, 6144) << 13;         // (recomp: clampResult << 16 >>a 3 = << 13)
+  int32_t step = cam_clamp(delta, maxstep) << 13;      // (recomp: clampResult << 16 >>a 3 = << 13)
   c->mem_w32(accAddr, c->mem_r32(accAddr) + (uint32_t)step);
   return 0;
 }
@@ -38,13 +39,24 @@ static void ov_cam_track_xz(Core* c) {
   uint32_t a1 = c->r[5];
   if (cfg_dbg("cam")) { static int once = 0; if (!once) { once = 1;
     fprintf(stderr, "[cam] ov_cam_track_xz FIRED (a1=0x%08X)\n", a1); } }
-  int snapX = cam_axis(c, 0x1f8000dcu, a1 + 0, c->mem_r16(a1 + 2),  c->mem_r16(0x1f8000deu));
-  int snapZ = cam_axis(c, 0x1f8000e4u, a1 + 8, c->mem_r16(a1 + 10), c->mem_r16(0x1f8000e6u));
+  int snapX = cam_axis(c, 0x1f8000dcu, a1 + 0, c->mem_r16(a1 + 2),  c->mem_r16(0x1f8000deu), 6144);
+  int snapZ = cam_axis(c, 0x1f8000e4u, a1 + 8, c->mem_r16(a1 + 10), c->mem_r16(0x1f8000e6u), 6144);
   c->r[2] = (snapX && snapZ) ? 1u : 0u;                // v0 = both-settled flag (recomp's a0 fold)
+}
+
+// FUN_8006da54 (0x8006da54) — track the camera Y toward the target a1: accum 0x1f8000e0 (int 0x1f8000e2)
+// toward a1[+4]/[+6], maxstep 5632. Single axis. Returns v0 = 1 iff settled (snapped).
+static void ov_cam_track_y(Core* c) {
+  uint32_t a1 = c->r[5];
+  if (cfg_dbg("cam")) { static int once = 0; if (!once) { once = 1;
+    fprintf(stderr, "[cam] ov_cam_track_y FIRED (a1=0x%08X)\n", a1); } }
+  int snapY = cam_axis(c, 0x1f8000e0u, a1 + 4, c->mem_r16(a1 + 6), c->mem_r16(0x1f8000e2u), 5632);
+  c->r[2] = snapY ? 1u : 0u;
 }
 
 void rec_set_override(uint32_t addr, void (*fn)(Core*));
 
 void engine_camera_register(void) {
   rec_set_override(0x8006d960u, ov_cam_track_xz);     // per-frame camera X/Z follow (engine_re "Camera")
+  rec_set_override(0x8006da54u, ov_cam_track_y);      // per-frame camera Y follow
 }

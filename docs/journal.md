@@ -18,8 +18,12 @@ the target object. **`ov_cam_track_xz` (engine/engine_camera.cpp), registered in
   (`PSXPORT_DEBUG=cam`: "ov_cam_track_xz FIRED a1=0x800E8010") — per the later-170 lesson, confirmed it's
   actually invoked, not a faithful no-op passing the gate. New diagnostic `PSXPORT_DEBUG=cam` = per-frame
   camera pos + the fire log.
-- **NEXT:** the sibling per-axis smoothers + the matrix-build fn (the 0x8006e3c4/e89c/e8bc cluster, uses
-  libgte) — own them the same way to complete the camera-update system. engine_re.md "Camera" has the map.
+- **Y sibling done too:** `FUN_8006da54` (0x8006da54) = Y-axis smoother (accum 0x1f8000e0, maxstep 5632),
+  owned as `ov_cam_track_y`; also FIRES (a1=0x800E8010) + RAM 0-diff @ f650/f900. So camera POSITION (X/Y/Z)
+  is now native.
+- **NEXT:** the matrix-build fn (the 0x8006e3c4/e89c/e8bc cluster, uses libgte RotMatrix etc. → writes the
+  camera ROTATION matrix 0x1f8000f8) — own it the same way to complete the camera-update system. The libgte
+  helpers must be reproduced faithfully (the matrix is the render/cull interface). engine_re.md "Camera" map.
 
 ## later-173: free-roam nav SOLVED headless (toward verifying the staged ov_game_s4c) — area-exit still open
 Pursued the handoff's option 2: drive headless to an in-game AREA transition (`sm[0x4a]==2`) so the staged
