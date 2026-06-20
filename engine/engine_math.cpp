@@ -429,6 +429,70 @@ static void ov_apply_matlv_verify(Core* c) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
+// FUN_80084360 — libgte CompMatrixLV: compose M ← R × M IN PLACE (3x3 matrices). a0 = matrix R, a1 =
+// matrix M (in/out, also returned in v0). Both CR-packed (5 words). The recomp body CTC2-loads R into
+// the rotation-matrix CRs, then for each COLUMN j of M runs MVMVA (sf=1, mx=ROT, v=Vj, cv=Null, lm=0)
+// and packs the 3 IR outputs back over M in the same CR layout. This is the EXACT same product as
+// ov_mat_mul (P = R·M, same MVMVA/clamp/leftover semantics) — only the output is in-place into a1 and
+// v0 returns a1. main consumer of the FUN_800597AC world-transform orchestrator. USER 2026-06-21: GTE
+// math PC-native (output feeds object position → content-interface); must be GTE-exact (verify gate).
+static void ov_compmatlv(Core* c) {
+  int16_t R[3][3], M[3][3], P[3][3];
+  load_mat3(c, c->r[4], R);
+  load_mat3(c, c->r[5], M);   // M read in full before any store → no in-place aliasing hazard
+  int32_t mac1=0, mac2=0, mac3=0;
+  for (int j = 0; j < 3; j++) {              // column j of M = MVMVA vector Vj
+    for (int i = 0; i < 3; i++) {            // matrix row i
+      int64_t tmp = 0;
+      tmp = sign44(tmp + (int32_t)R[i][0] * M[0][j]);
+      tmp = sign44(tmp + (int32_t)R[i][1] * M[1][j]);
+      tmp = sign44(tmp + (int32_t)R[i][2] * M[2][j]);
+      int32_t mac = (int32_t)(tmp >> 12);
+      P[i][j] = clamp16s(mac);
+      if (j == 2) { if (i==0) mac1=mac; else if (i==1) mac2=mac; else mac3=mac; }
+    }
+  }
+  uint32_t a1 = c->r[5];
+  c->mem_w32(a1,    (uint16_t)P[0][0] | ((uint32_t)(uint16_t)P[0][1] << 16));
+  c->mem_w32(a1+4,  (uint16_t)P[0][2] | ((uint32_t)(uint16_t)P[1][0] << 16));
+  c->mem_w32(a1+8,  (uint16_t)P[1][1] | ((uint32_t)(uint16_t)P[1][2] << 16));
+  c->mem_w32(a1+12, (uint16_t)P[2][0] | ((uint32_t)(uint16_t)P[2][1] << 16));
+  c->mem_w32(a1+16, (uint32_t)(int32_t)P[2][2]);  // SWC2 IR3: sign-extended 32-bit
+  // GTE leftover (identical structure to ov_mat_mul): last column's input vector + its MVMVA result.
+  gte_write_data(0, (uint32_t)(uint16_t)M[0][2] | ((uint32_t)(uint16_t)M[1][2] << 16));  // VXY0 = col2
+  gte_write_data(1, (uint32_t)(uint16_t)M[2][2]);    // VZ0 = col2
+  gte_write_data(9,  (uint32_t)(int32_t)P[0][2]);    // IR1
+  gte_write_data(10, (uint32_t)(int32_t)P[1][2]);    // IR2
+  gte_write_data(11, (uint32_t)(int32_t)P[2][2]);    // IR3
+  gte_write_data(25, (uint32_t)mac1);                // MAC1
+  gte_write_data(26, (uint32_t)mac2);                // MAC2
+  gte_write_data(27, (uint32_t)mac3);                // MAC3
+  c->r[2] = a1;                                      // returns a1
+}
+static void ov_compmatlv_verify(Core* c) {
+  uint32_t rsave[32]; memcpy(rsave, c->r, sizeof rsave);
+  uint32_t a1 = c->r[5];
+  uint32_t osave[5]; for (int i=0;i<5;i++) osave[i]=c->mem_r32(a1+i*4);
+  uint32_t gd0[32], gc0[32]; for (int i=0;i<32;i++){ gd0[i]=gte_read_data(i); gc0[i]=gte_read_ctrl(i); }
+  ov_compmatlv(c);
+  uint32_t om[5]; for (int i=0;i<5;i++) om[i]=c->mem_r32(a1+i*4);
+  uint32_t gdm[32]; for (int i=0;i<32;i++) gdm[i]=gte_read_data(i);
+  memcpy(c->r, rsave, sizeof rsave);
+  for (int i=0;i<5;i++) c->mem_w32(a1+i*4, osave[i]);
+  for (int i=0;i<32;i++){ gte_write_data(i, gd0[i]); gte_write_ctrl(i, gc0[i]); }
+  rec_interp(c, 0x80084360u);
+  uint32_t oo[5]; for (int i=0;i<5;i++) oo[i]=c->mem_r32(a1+i*4);
+  uint32_t gdo[32]; for (int i=0;i<32;i++) gdo[i]=gte_read_data(i);
+  static int nbad=0, ngood=0; int bad=0;
+  for (int i=0;i<5;i++) if (om[i]!=oo[i]) { bad=1; if (nbad<80) fprintf(stderr,"[mathverify] compmatlv a1+%d mine=%08x oracle=%08x\n", i*4, om[i], oo[i]); }
+  for (int i=0;i<32;i++) { if (i>=12&&i<=15) continue; if (i==31) continue;
+    if (gdm[i]!=gdo[i]) { bad=1; if (nbad<80) fprintf(stderr,"[mathverify] compmatlv GTE-DR%d mine=%08x oracle=%08x\n", i, gdm[i], gdo[i]); } }
+  if (bad) nbad++; else if ((ngood++%5000)==0) fprintf(stderr,"[mathverify] compmatlv match #%d\n", ngood);
+  memcpy(c->r, rsave, sizeof rsave); for (int i=0;i<5;i++) c->mem_w32(a1+i*4,om[i]);
+  for (int i=0;i<32;i++) gte_write_data(i, gdm[i]); c->r[2]=a1;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────────
 // FUN_80084A80 — libgte RotMatrix variant: build a 3x3 matrix from 3 Euler angles (a0 = SVECTOR*,
 // vx@+0/vy@+2/vz@+4), a1 = MATRIX* out (also returned in v0). PURE — SIN/COS LUT @0x800a6490 + native
 // 16-bit multiplies (multu/mflo, low 32 bits = signed product), NO GTE ops, so no GTE side-effects to
@@ -591,6 +655,7 @@ void engine_math_register(void) {
   rec_set_override(0x80084EB0u, v ? ov_rot_y_verify : ov_rot_y);  // RotMatrixY-class (inverted sin); same kernel as rotZ/X (1 live call 0-diff; kernel verified 55k+ on siblings)
   rec_set_override(0x80084D10u, v ? ov_rot_x_verify : ov_rot_x);  // RotMatrixX-class; verified 0-diff 55000+ live calls
   rec_set_override(0x80084220u, v ? ov_apply_matlv_verify : ov_apply_matlv);  // MVMVA matrix(CR)×vec; verified 0-diff 75000+ live calls
+  rec_set_override(0x80084360u, v ? ov_compmatlv_verify : ov_compmatlv);  // CompMatrixLV M←R×M in-place (same product as ov_mat_mul); GTE-exact, 0-diff live (thin coverage, raised by FUN_800597AC)
   rec_set_override(0x80084A80u, v ? ov_rot84A80_verify : ov_rot84A80);  // RotMatrix variant (pure LUT trig, no GTE); verified 0-diff 5000+ live field calls; 4.4% field hot
   rec_set_override(0x800517BCu, v ? ov_settrans_verify : ov_settrans);  // SetVector 0x20-byte block (pure leaf); verified 0-diff 30000+; 1.76% field hot / 15900 calls
   rec_set_override(0x800851F0u, v ? ov_rot851F0_verify : ov_rot851F0);  // CPU RotMatrix twin (pure LUT trig, no GTE; FUN_800597AC dep; verified 0-diff live, rare-path)
