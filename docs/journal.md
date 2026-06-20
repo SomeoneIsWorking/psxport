@@ -67,6 +67,31 @@ wants, the title must render correctly under PC ownership first.
 
 
 
+## later-177b: ROOT-CAUSE of the title/menu BG render regression — the pool-walk hardcodes the FIELD pool
+The title (DEMO stage 0x801062E4) submits only ~5 prims; its 352-tile background is dropped (confirmed:
+`PSXPORT_DEBUG=gpu` shows "5 prims, 39 gp0words" on every title frame). NOT a decode bug (textures are in
+VRAM, decode fine). **Root cause: the later-172 packet-pool walk (`GpuState::gpu_dma2_linked_list`,
+gpu_native.cpp ~1522) HARDCODES the field/GAME overlay's pool — base `0x800bfe68`, write-ptr `*0x800bf544`.**
+The DEMO/title overlay uses its OWN render pool: `PSXPORT_DEBUG=pool` on a title frame shows DrawOTag handed
+**madr=0x800EA0D8 with 362 OT nodes** (+ a second madr=0x800EA0A4, 1 node) — the title's 362 prims live in
+the DEMO pool around 0x800EA000, NOT the hardcoded field range 0xBFE68..0xC1564. So the pool-walk reads the
+wrong (field) pool — which holds only ~5 stale/menu prims on the title — and misses the title's real content.
+later-172 was verified ONLY on a field frame, where the hardcoded address is correct, so this regressed every
+non-field (2D menu/title) overlay.
+
+**CONFIRMED mechanism = (A): the title's prims are in a DIFFERENT pool; the hardcoded field pool is STALE.**
+Proof: on every title frame the field pool write-ptr `*0x800bf544` is **static at 0xC1564** (unchanged frame to
+frame) — the title never writes the field pool; 0xC1564 is leftover from when the field last ran. The linear
+walk reads [0xBFE68,0xC1564) of stale field bytes (≈5 still-parseable prims after partial overwrite), then sets
+s_pool_drawn=0xC1564 and, since phi never moves, draws 0 from the pool on all subsequent frames. The ~5 prims
+that DO show on the title are DIRECT GP0 (menu text/char-art), not pool prims. The title's 362 real prims live
+in the DEMO overlay's own pool, reachable via the OT root madr=0x800EA0D8 (region 0x800EA0xx).
+**FIX — keep later-172's no-OT design (do NOT revert to honoring the guest OT order — boundary directive: the
+engine owns ordering).** VERIFY with gfx-debug: `PSXPORT_DEBUG=gpu` title prim count should jump 5 → ~360+, and
+the title composites the full TOMBA!2 logo/brick/characters (reference scratch/screenshots/nav3.ppm). This is the
+blocker for the user's "export the menu image". The asset pipeline (load/decode/unpack/orchestration) is already
+fully owned + offline-reconstructed (later-177) — this is a separate RENDER-submission bug.
+
 ## later-176: own the per-frame camera DISTANCE / ZOOM solver `FUN_8006d2ac` native (engine_camera.cpp)
 First sub-fn of the camera mode orchestrator `FUN_8006e0f0`. RE'd via `tools/disas.py` (a 13-entry jump table
 @0x800168d4 dispatching the TARGET source on `G[+0x164]`, plus a `cam[+0x72]&2` fast path, the look-point math
