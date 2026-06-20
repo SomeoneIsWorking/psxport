@@ -84,6 +84,8 @@ static const uint32_t T2_ISQRT  = 0x80084080u;   // isqrt(x)      -> floor(sqrt)
 static const uint32_t T2_RATAN2 = 0x80085690u;   // ratan2(y,x)   -> angle12
 static const uint32_t T2_ANGCMP = 0x80077768u;   // helper used by camera mode-2-case-1
 
+// trig-call spy (DS_SPY): record (fn,a0,a1,result) of every cam_call so the dist-solver verify can diff the
+// native call-sequence vs the oracle's. Temporary diagnostic.
 static inline int32_t cam_call(Core* c, uint32_t fn, int32_t a0, int32_t a1, int32_t a2) {
   c->r[4] = (uint32_t)a0; c->r[5] = (uint32_t)a1; c->r[6] = (uint32_t)a2;
   rec_dispatch(c, fn);
@@ -264,9 +266,170 @@ static void ov_cam_rotbuild_verify(Core* c) {
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────────────────────────
+// FUN_8006d2ac — the per-frame camera DISTANCE / ZOOM solver (first sub-fn of orchestrator FUN_8006e0f0).
+// RE: docs/engine_re.md "Camera". cam = a0 (main-RAM camera object), G = 0x800e7e80. It:
+//   1. sets a "settle timer" cam[+0x22] (240 normally, 0 when blocked by various flags),
+//   2. picks a TARGET planar point (tX,tZ) — a 13-entry jump table on G[+0x164] selects the source
+//      (world center G[+0x2c]/[+0x34], a sub-object G[+0x10], scratchpad 0x1f800200/204, or G[+0x14c]/[+0x150]),
+//      plus a cam[+0x72]&2 fast path; a "mode" byte picks whether to add 2048 (180°) to the base heading,
+//   3. derives the current camera→look-point planar distance (isqrt) and the angular error (ratan2),
+//   4. smooths cam[+0x14] toward ±distance limits (±65536/frame, clamped to ±0x280000) and accumulates it
+//      into the distance cam[+0x58], then places the camera planar position cam[+0x08]=X / cam[+0x10]=Z at
+//      that distance along the heading G[+0x140] from (tX,tZ).
+// Per the boundary the camera is ENGINE → own control flow + arithmetic native; CALL the libgte trig
+// (rsin/rcos/ratan2/isqrt) via rec_dispatch. Outputs are MAIN-RAM cam fields (visible to the A/B dump),
+// but gated robustly per-call by the camverify comparator below (snapshot, run native, restore, run oracle).
+//
+// All arithmetic mirrors the recomp's exact 32-bit mult-lo / arithmetic-shift behaviour (helper `mlo`).
+
+static inline int32_t mlo(int32_t a, int32_t b) { return (int32_t)((uint32_t)a * (uint32_t)b); }
+
+static void ov_cam_dist_solve(Core* c) {
+  uint32_t cam = c->r[4];
+  const uint32_t G = 0x800e7e80u;
+
+  if (cfg_dbg("cam")) { static int once = 0; if (!once) { once = 1;
+    fprintf(stderr, "[cam] ov_cam_dist_solve FIRED (cam=0x%08X)\n", cam); } }
+
+  // 1. settle timer cam[+0x22]
+  uint8_t g61 = c->mem_r8(G + 0x61);
+  int16_t timer;
+  if      (g61 & 0x80)                  timer = 0;
+  else if (c->mem_r8(G + 0x17a))        timer = 0;
+  else if ((g61 & 0xff) == 0)           timer = 240;
+  else if (g61 & 1)                     timer = 240;
+  else if (c->mem_r8(0x800bf816u))      timer = 0;
+  else                                  timer = 240;
+  c->mem_w16(cam + 0x22, (uint16_t)timer);
+  uint8_t flags = c->mem_r8(cam + 0x72);
+  if (flags & 4) c->mem_w16(cam + 0x22, 0);
+  flags = c->mem_r8(cam + 0x72);
+
+  // 2. target planar point (tX,tZ in 16.16) + heading "mode" byte
+  int32_t tX, tZ, mode;
+  if (flags & 2) {
+    tX = (int32_t)c->mem_r32(G + 0x2c);
+    tZ = (int32_t)c->mem_r32(G + 0x34);
+    mode = flags & 1;
+  } else {
+    uint8_t idx = c->mem_r8(G + 0x164);
+    uint8_t g147 = c->mem_r8(G + 0x147);
+    if (idx >= 13) idx = 8;                              // >=13 -> case-8 body
+    switch (idx) {
+      case 2: case 3: {                                  // 8006d3bc: a sub-object at G[+0x10]
+        uint32_t p = c->mem_r32(G + 0x10);
+        tX = (int32_t)(c->mem_r32(p + 0x2c) << 16);
+        tZ = (int32_t)(c->mem_r32(p + 0x34) << 16);
+        mode = g147;
+        break;
+      }
+      case 12: {                                         // 8006d3d8: scratchpad 0x1f800200/204
+        tX = (int32_t)(c->mem_r16(0x1f800200u) << 16);
+        tZ = (int32_t)(c->mem_r16(0x1f800204u) << 16);
+        mode = g147;
+        break;
+      }
+      case 7: {                                          // 8006d3f4: G[+0x14c]/[+0x150]
+        tX = (int32_t)(c->mem_r16(G + 0x14c) << 16);
+        tZ = (int32_t)(c->mem_r16(G + 0x150) << 16);
+        mode = g147;
+        break;
+      }
+      case 8: {                                          // 8006d40c (and idx>=13): world center, plain mode
+        tX = (int32_t)c->mem_r32(G + 0x2c);
+        tZ = (int32_t)c->mem_r32(G + 0x34);
+        mode = g147;
+        break;
+      }
+      default: {                                         // 8006d39c: 0,1,4,5,6,9,10,11 — world center
+        tX = (int32_t)c->mem_r32(G + 0x2c);
+        tZ = (int32_t)c->mem_r32(G + 0x34);
+        mode = (c->mem_r32(G + 0x158) == 0) ? (int32_t)g147 : (1 - (int32_t)g147);
+        break;
+      }
+    }
+  }
+
+  // 3. base heading + the look-point offset using the settle timer
+  int32_t baseAng = (int32_t)c->mem_r16(G + 0x140);
+  if (mode & 0xff) baseAng += 2048;
+  int32_t s0a   = (int16_t)(uint16_t)baseAng;            // sext16 (recomp: sll/sra 16)
+  int32_t cam22 = (int16_t)c->mem_r16(cam + 0x22);
+  int32_t s2 = tX + (mlo(cam_call(c, T2_RCOS, s0a, 0, 0), cam22) << 4);
+  int32_t s1 = tZ - (mlo(cam_call(c, T2_RSIN, s0a, 0, 0), cam22) << 4);
+
+  // current camera planar position along heading G[+0x140] at distance cam[+0x58]
+  int32_t g140s = (int16_t)c->mem_r16(G + 0x140);
+  int32_t cam58 = (int32_t)c->mem_r32(cam + 0x58);
+  int32_t coordX = tX + (mlo(cam_call(c, T2_RCOS, g140s, 0, 0), cam58) >> 4);
+  int32_t coordZ = tZ - (mlo(cam_call(c, T2_RSIN, g140s, 0, 0), cam58) >> 4);
+  int32_t s2q = (s2 - coordX) >> 8;                      // Q8 planar deltas to the look point
+  int32_t s1q = (s1 - coordZ) >> 8;
+  int32_t s0d = cam_call(c, T2_ISQRT, mlo(s2q, s2q) + mlo(s1q, s1q), 0, 0) << 8;
+  int32_t ang = cam_call(c, T2_RATAN2, -s1q, s2q, 0);
+  int32_t angd = (ang - (int32_t)c->mem_r16(G + 0x140) - 1024) & 0xfff;
+
+  // 4. smooth cam[+0x14] toward the distance, accumulate into cam[+0x58], place camera X/Z
+  int32_t cam14;
+  int32_t cur = (int32_t)c->mem_r32(cam + 0x14);
+  if (0x140000 < s0d) {                                  // far: step ±65536/frame toward a limit
+    if (angd < 2048) {                                   // look point ahead — pull NEGATIVE
+      int32_t neg = -s0d;
+      if (cur < neg)        cam14 = ((int32_t)0xffd80000 < neg) ? neg : (int32_t)0xffd80000;
+      else                  cam14 = (cur > 0 ? 0 : cur) - 65536;   // blez: zero only when cur>0
+    } else {                                             // behind — push POSITIVE
+      if (s0d < cur)        cam14 = (0x0027ffff < s0d) ? 0x00280000 : s0d;
+      else                  cam14 = (cur < 0 ? 0 : cur) + 65536;
+    }
+  } else {
+    // near: snap to the distance — but the far/near branch's DELAY SLOT (slti v0,angd,2048) re-loads v0, so
+    // the 8006d5b8 test is `angd<2048`, which NEGATES s0d when the look point is ahead (recomp 8006d5c0).
+    cam14 = (angd < 2048) ? -s0d : s0d;
+  }
+  c->mem_w32(cam + 0x14, (uint32_t)cam14);
+
+  int32_t cam58n = cam58 + (cam14 >> 8);
+  c->mem_w32(cam + 0x58, (uint32_t)cam58n);
+  c->mem_w32(cam + 0x08, (uint32_t)(tX + (mlo(cam_call(c, T2_RCOS, g140s, 0, 0), cam58n) >> 4)));
+  c->mem_w32(cam + 0x10, (uint32_t)(tZ - (mlo(cam_call(c, T2_RSIN, g140s, 0, 0), cam58n) >> 4)));
+}
+
+// PSXPORT_DEBUG=camverify — per-call A/B gate for the distance solver. Snapshot the cam struct + scratchpad,
+// run my native code, save the post-state, restore, run the recomp ORACLE on the same inputs, diff EVERY
+// word of the cam struct + scratchpad (so no written field is missed). later-176.
+static void ov_cam_dist_solve_verify(Core* c) {
+  uint32_t cam = c->r[4];
+  uint32_t cam0[64], sp0[256], rsave[32];
+  for (int i = 0; i < 64;  i++) cam0[i] = c->mem_r32(cam + i * 4);
+  for (int i = 0; i < 256; i++) sp0[i]  = c->mem_r32(0x1f800000u + i * 4);
+  memcpy(rsave, c->r, sizeof rsave);
+
+  ov_cam_dist_solve(c);
+  uint32_t camM[64]; for (int i = 0; i < 64; i++) camM[i] = c->mem_r32(cam + i * 4);
+
+  for (int i = 0; i < 64;  i++) c->mem_w32(cam + i * 4, cam0[i]);
+  for (int i = 0; i < 256; i++) c->mem_w32(0x1f800000u + i * 4, sp0[i]);
+  memcpy(c->r, rsave, sizeof rsave);
+  rec_interp(c, 0x8006d2acu);
+  uint32_t camO[64]; for (int i = 0; i < 64; i++) camO[i] = c->mem_r32(cam + i * 4);
+
+  static int nbad = 0, ngood = 0; int bad = 0;
+  for (int i = 0; i < 64; i++) if (camM[i] != camO[i]) {
+    bad = 1;
+    if (nbad++ < 60)
+      fprintf(stderr, "[distverify] MISMATCH cam+0x%02x  mine=%08x oracle=%08x\n", i * 4, camM[i], camO[i]);
+  }
+  if (!bad && (ngood++ % 200) == 0)
+    fprintf(stderr, "[distverify] match #%d (x=%08x z=%08x d58=%08x)\n",
+            ngood, camO[2], camO[4], camO[0x16]);
+}
+
 void engine_camera_register(void) {
   rec_set_override(0x8006d960u, ov_cam_track_xz);     // per-frame camera X/Z follow (engine_re "Camera")
   rec_set_override(0x8006da54u, ov_cam_track_y);      // per-frame camera Y follow
   rec_set_override(0x8006e464u,
                    cfg_dbg("camverify") ? ov_cam_rotbuild_verify : ov_cam_rotbuild);
+  rec_set_override(0x8006d2acu,
+                   cfg_dbg("camverify") ? ov_cam_dist_solve_verify : ov_cam_dist_solve);  // dist/zoom solver
 }

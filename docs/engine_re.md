@@ -356,6 +356,22 @@ computes the projection and can carry the real per-vertex view-Z straight to the
       `FUN_8006dad8`/`FUN_8006def0` (call the libgte helpers). A camera-mode selector calls one per frame.
     - So the camera is a multi-mode system; own the matrix builder + the active mode's orchestrator next,
       A/B-gated on the motion scene the same way.
+    - **DISTANCE / ZOOM solver `FUN_8006d2ac` — OWNED native (`ov_cam_dist_solve`, engine_camera.cpp, later-176).**
+      First sub-fn of orchestrator FUN_8006e0f0; cam=a0 (main-RAM camera object), G=0x800e7e80. Steps:
+      (1) sets a settle timer cam[+0x22] (240 unless blocked by G[+0x61]&0x80 / G[+0x17a] / 0x800bf816 / cam[+0x72]&4);
+      (2) picks a TARGET planar point (tX,tZ in 16.16) — a **13-entry jump table @0x800168d4 on G[+0x164]** selects the
+      source (world center G[+0x2c]/[+0x34]; a sub-object G[+0x10]→+0x2c/+0x34; scratchpad 0x1f800200/204; G[+0x14c]/[+0x150])
+      plus a `cam[+0x72]&2` fast path; a "mode" byte (g147=G[+0x147], or 1−g147 when G[+0x158]≠0) decides whether the
+      look heading adds 2048 (180°);
+      (3) look point = (tX,tZ) ± rcos/rsin(baseAng)·cam[+0x22]·16; current cam pos along heading G[+0x140] at distance
+      cam[+0x58]; planar distance `s0d = isqrt(Δx²+Δz²)<<8`, angular error `angd = (ratan2(−Δz,Δx) − G[+0x140] − 1024)&0xfff`;
+      (4) smooth cam[+0x14]: FAR (s0d>0x140000) → step ±65536/frame toward ±0x280000 by sign of (angd<2048); NEAR → snap to
+      ±s0d (sign = angd<2048). Then cam[+0x58] += cam[+0x14]>>8, and cam[+0x08]=tX+rcos·cam58>>4 / cam[+0x10]=tZ−rsin·cam58>>4.
+      Own arithmetic native; CALL libgte trig via rec_dispatch. GATE: per-call comparator `PSXPORT_DEBUG=camverify`
+      (also fires `ov_cam_dist_solve_verify`), 0-diff over 1800+ calls. **TRAP CAUGHT:** the far/near branch (`beq …,8006d5b8`)
+      has a DELAY SLOT `slti v0,angd,2048` that executes on the TAKEN branch, so the NEAR-path store test `beq v0,zero,8006d5c4`
+      is really `angd<2048` → NEGATE s0d. Missing that flipped the sign of the snapped distance; found by a trig-call spy that
+      proved s0d was bit-identical between native and oracle, isolating the bug to the final branch (not the math).
 - Full basis (right/up): per-object rotation matrix is loaded to GTE CR0-4 + translation CR5-7 right
   before each RTPS/RTPT (96 / 54 static ctc2 sites) — the per-object transform, the Phase-3 native target.
 

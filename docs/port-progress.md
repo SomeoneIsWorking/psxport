@@ -104,6 +104,14 @@ for content fns (call it). Do NOT mimic PSX hardware (GTE/GP0/OT) — remove Bee
     tables + common look-at tail; owns control flow + arithmetic native, CALLS libgte rsin/rcos/ratan2/isqrt
     via rec_dispatch. Output 0x1f8000d0/d8 is SCRATCHPAD (main-RAM diff is blind) → gated by per-call
     comparator `PSXPORT_DEBUG=camverify` (native vs recomp oracle, 0-diff, d0 accumulating on motion scene).
+  - ✅ DISTANCE / ZOOM solver `FUN_8006d2ac` = `ov_cam_dist_solve` (engine_camera.cpp, later-176) — first
+    sub-fn of orchestrator FUN_8006e0f0. Picks a target (X,Z) (13-entry jump table on G[+0x164] + cam[+0x72]&2
+    path), derives the camera→look-point planar distance (isqrt) + angular error (ratan2), smooths cam[+0x14]
+    toward ±0x280000 (±65536/frame), accumulates into cam[+0x58], places camera planar pos cam[+0x08]/[+0x10].
+    Outputs are MAIN-RAM cam fields → gated by per-call comparator `PSXPORT_DEBUG=camverify` (0-diff over 1800+
+    calls on the motion scene). GOTCHA: the far/near branch's DELAY SLOT (slti angd,2048) reloads v0, so the
+    NEAR-path final test NEGATES s0d when angd<2048 — a missed delay-slot effect (caught by the trig-spy diff).
+  - ☐ remaining sub-fns of `FUN_8006e0f0`: 0x8006d654, 0x8006c80c, 0x8006dcf4, 0x8006d02c, 0x8006e010 (TODO).
   - ☐ per-MODE orchestrators `FUN_8006e0f0` / `FUN_8006e228` / `FUN_8006e3f4` (call the smoothers; multi-mode).
 - ✅ Terrain `FUN_8002AB5C` = `ov_terrain` (native_terrain.cpp, later-158).
 - ✅ Render submit: geom GT3/GT4/gt4_bp, per-object render `0x8003CCA4`, render walk `0x8003C048` — engine_submit.
@@ -124,7 +132,10 @@ quest / event / progression / game-rule logic.
 # CURRENT FRONTIER (work these, in this order)
 1. **Camera per-MODE orchestrators `FUN_8006e0f0` / `FUN_8006e228` / `FUN_8006e3f4`** — call the owned position
    smoothers + the owned look-at builder; a camera-mode selector calls one per frame. Finish the camera system.
-   (The look-at builder `FUN_8006e464` itself is now owned — later-175.)
+   (The look-at builder `FUN_8006e464` and the dist/zoom solver `FUN_8006d2ac` are now owned — later-175/176.)
+   Remaining `FUN_8006e0f0` sub-fns to own next: 0x8006d654, 0x8006c80c, 0x8006dcf4, 0x8006d02c, 0x8006e010,
+   then collapse the orchestrator dispatch itself. Gate each scratchpad/cam-output fn with a camverify-style
+   per-call comparator (copy `ov_cam_dist_solve_verify` / `ov_cam_rotbuild_verify`).
 2. **DEMO / front-end MENU stage `0x801062E4`** — the big un-owned system in execution order between boot and
    gameplay. Title→New Game. Own its substate machine PC-native.
 3. **Init-prefix remainder:** `FUN_80075130` font/text init, `FUN_800520e0` engine subsystem init.

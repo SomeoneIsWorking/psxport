@@ -1,5 +1,32 @@
 # Debug / progress journal
 
+## later-176: own the per-frame camera DISTANCE / ZOOM solver `FUN_8006d2ac` native (engine_camera.cpp)
+First sub-fn of the camera mode orchestrator `FUN_8006e0f0`. RE'd via `tools/disas.py` (a 13-entry jump table
+@0x800168d4 dispatching the TARGET source on `G[+0x164]`, plus a `cam[+0x72]&2` fast path, the look-point math
+via libgte rcos/rsin/isqrt/ratan2, and a cam[+0x14] distance smoother that steps ±65536/frame toward ±0x280000
+or snaps in the near band). Reimplemented PC-native as `ov_cam_dist_solve`: own the control flow + 32-bit arithmetic
+(MIPS mult-lo via `mlo`, arithmetic shifts), CALL the libgte trig via `rec_dispatch`. Writes are MAIN-RAM cam
+fields (cam[+0x08]/[+0x10]/[+0x14]/[+0x22]/[+0x58]). Gated by a per-call comparator `ov_cam_dist_solve_verify`
+(`PSXPORT_DEBUG=camverify`): snapshot cam+scratchpad, run native, restore, run the recomp oracle (rec_interp),
+diff every word of the cam struct. **0-diff over 1800+ calls** on the free-roam MOTION scene with continuous
+varied movement (the static idle field is A==B and can't exercise it).
+
+Two bugs caught by the gate, both worth recording:
+- **Inverted `blez`**: the far-path `(cur>0?0:cur)−65536` step uses `blez` which BRANCHES (skips the zeroing)
+  when cur≤0 — I had zeroed when cur≤0 (backwards). Fixed to zero only when cur>0.
+- **Missed branch DELAY SLOT** (the subtle one): the far/near split `beq v0,zero,0x8006d5b8` has delay slot
+  `slti v0,angd,2048`, which executes on the TAKEN (near) branch and OVERWRITES v0. So the NEAR-path store test
+  `beq v0,zero,0x8006d5c4` is really testing `angd<2048` → when true it falls through to `subu s0,zero,s0`
+  (NEGATE). My near path just stored +s0d; it must store `(angd<2048) ? −s0d : s0d`. The static disasm reading
+  looked airtight as +s0d, producing a "logically impossible" oracle output. **Diagnosis tool that cracked it:**
+  a trig-call SPY (override rsin/rcos/isqrt/ratan2, record fn+args+result for the native run vs the oracle run,
+  diff) — it proved s0d was BIT-IDENTICAL between native and oracle, so the divergence had to be in the final
+  branch, not the math. Harness self-tested oracle-vs-oracle = 0 first. Lesson: when "same inputs → different
+  output" seems impossible, suspect a delay slot that mutates the very register a following branch tests.
+
+NEXT (frontier): remaining `FUN_8006e0f0` sub-fns 0x8006d654, 0x8006c80c, 0x8006dcf4, 0x8006d02c, 0x8006e010,
+then collapse the orchestrator. See docs/port-progress.md.
+
 ## later-175: own the per-frame camera ROTATION / LOOK-AT builder `FUN_8006e464` native (engine_camera.cpp)
 Owned the camera look-at/pitch builder — a big multi-mode function (entry **0x8006e464**, NOT 0x8006e6a8
 which is one jump-table case). `ov_cam_rotbuild` (engine/engine_camera.cpp). It picks a camera MODE via two
