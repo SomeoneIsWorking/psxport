@@ -878,21 +878,114 @@ static void ov_cam_lookat_verify(Core* c) {
     fprintf(stderr, "[lookatverify] match #%d (5c=%08x 60=%08x)\n", ngood, camO[0x17], camO[0x18]);
 }
 
+// ─────────────────────────────────────────────────────────────────────────────────────────────────
+// Per-MODE camera ORCHESTRATORS — FUN_8006e0f0 / FUN_8006e228 / FUN_8006e3f4. A camera-mode selector
+// calls one per frame; each drives the owned position/orient sub-fns in sequence plus a little glue.
+// We own the sequence native, calling the owned sub-fns DIRECTLY as C (so the orchestrator verify can
+// compare native-everything vs a PURE-gen oracle without the override table in the loop). The two
+// still-unowned e228 sub-fns (FUN_8006dad8 / FUN_8006def0 — they consume only a0) route via rec_dispatch.
+// RE: shard_3.c gen_func_8006E0F0 / gen_func_8006E3F4, shard_6.c gen_func_8006E228.
+
+// FUN_8006e0f0 — the MAIN follow mode: dist/zoom, track XZ, pitch, track Y, Y-floor, (heading if
+// cam[+0x76]==0 && G[+0x17a]==0), look-at, (angle-step if cam[+0x77]==0), then accumulate
+// scratchpad[0x1f800114] -= cam[+0x28]+cam[+0x34].
+static void ov_cam_orch_e0f0(Core* c) {
+  uint32_t cam = c->r[4];
+  const uint32_t G = 0x800e7e80u, S = 0x1f8000d0u;
+  c->r[4] = cam;                  ov_cam_dist_solve(c);
+  c->r[4] = cam; c->r[5] = cam+8; ov_cam_track_xz(c);
+  c->r[4] = cam;                  ov_cam_pitch(c);
+  c->r[4] = cam; c->r[5] = cam+8; ov_cam_track_y(c);
+  c->r[4] = cam;                  ov_cam_y_floor(c);
+  if (c->mem_r8(cam + 0x76) == 0 && c->mem_r8(G + 0x17a) == 0) { c->r[4] = cam; ov_cam_heading(c); }
+  c->r[4] = cam;                  ov_cam_lookat(c);
+  if (c->mem_r8(cam + 0x77) == 0) { c->r[4] = cam; ov_cam_angle_step(c); }
+  int32_t acc = (int32_t)c->mem_r32(cam + 0x28) + (int32_t)c->mem_r32(cam + 0x34);
+  c->mem_w32(S + 0x44, (uint32_t)((int32_t)c->mem_r32(S + 0x44) - acc));
+}
+
+// FUN_8006e3f4 — a SIMPLE mode (a0=cam, a1=target): track XZ then Y (settled flags → cam[+0x66]
+// |1 / |2), then look-at.
+static void ov_cam_orch_e3f4(Core* c) {
+  uint32_t cam = c->r[4], tgt = c->r[5];
+  c->r[4] = cam; c->r[5] = tgt; ov_cam_track_xz(c);
+  if (c->r[2] != 0) c->mem_w8(cam + 0x66, c->mem_r8(cam + 0x66) | 1);
+  c->r[4] = cam; c->r[5] = tgt; ov_cam_track_y(c);
+  if (c->r[2] != 0) c->mem_w8(cam + 0x66, c->mem_r8(cam + 0x66) | 2);
+  c->r[4] = cam; ov_cam_lookat(c);
+}
+
+// FUN_8006e228 — a mode (a0=cam, a1=target): track XZ then Y, latch cam[+0x0e]=scratchpad[0x1f8000e2],
+// then (if cam[+0x76]==0) the two unowned sub-fns FUN_8006dad8/FUN_8006def0, then look-at.
+static void ov_cam_orch_e228(Core* c) {
+  uint32_t cam = c->r[4], tgt = c->r[5];
+  c->r[4] = cam; c->r[5] = tgt; ov_cam_track_xz(c);
+  c->r[4] = cam; c->r[5] = tgt; ov_cam_track_y(c);
+  c->mem_w16(cam + 0x0e, c->mem_r16(0x1f8000e2u));
+  if (c->mem_r8(cam + 0x76) == 0) {
+    c->r[4] = cam; rec_dispatch(c, 0x8006dad8u);     // FUN_8006dad8 (unowned, reads a0 only)
+    c->r[4] = cam; rec_dispatch(c, 0x8006def0u);     // FUN_8006def0 (unowned, reads a0 only)
+  }
+  c->r[4] = cam; ov_cam_lookat(c);
+}
+
+// The 9 owned sub-fns — used to register and to CLEAR around the orchestrator oracle (so rec_interp of
+// the orchestrator runs the pure recomp bodies, not our overrides).
+static const struct { uint32_t a; void (*f)(Core*); } CAM_SUBS[] = {
+  {0x8006d960u, ov_cam_track_xz}, {0x8006da54u, ov_cam_track_y},
+  {0x8006e464u, ov_cam_rotbuild}, {0x8006d2acu, ov_cam_dist_solve},
+  {0x8006e010u, ov_cam_angle_step}, {0x8006c80cu, ov_cam_y_floor},
+  {0x8006d654u, ov_cam_pitch}, {0x8006dcf4u, ov_cam_heading},
+  {0x8006d02cu, ov_cam_lookat},
+};
+static void cam_subs_clear(int clear) {
+  for (unsigned i = 0; i < sizeof(CAM_SUBS) / sizeof(CAM_SUBS[0]); i++)
+    rec_set_override(CAM_SUBS[i].a, clear ? (void (*)(Core*))0 : CAM_SUBS[i].f);
+}
+
+// Generic orchestrator camverify: native-everything vs PURE-gen oracle (sub-fn overrides cleared).
+static void cam_orch_verify(Core* c, void (*nat)(Core*), uint32_t addr, const char* tag) {
+  uint32_t cam = c->r[4];
+  uint32_t cam0[64], sp0[256], rsave[32];
+  for (int i = 0; i < 64;  i++) cam0[i] = c->mem_r32(cam + i * 4);
+  for (int i = 0; i < 256; i++) sp0[i]  = c->mem_r32(0x1f800000u + i * 4);
+  memcpy(rsave, c->r, sizeof rsave);
+  nat(c);
+  uint32_t camM[64], spM[256];
+  for (int i = 0; i < 64;  i++) camM[i] = c->mem_r32(cam + i * 4);
+  for (int i = 0; i < 256; i++) spM[i]  = c->mem_r32(0x1f800000u + i * 4);
+  for (int i = 0; i < 64;  i++) c->mem_w32(cam + i * 4, cam0[i]);
+  for (int i = 0; i < 256; i++) c->mem_w32(0x1f800000u + i * 4, sp0[i]);
+  memcpy(c->r, rsave, sizeof rsave);
+  cam_subs_clear(1);                                 // pure-gen oracle
+  rec_interp(c, addr);
+  cam_subs_clear(0);
+  uint32_t camO[64], spO[256];
+  for (int i = 0; i < 64;  i++) camO[i] = c->mem_r32(cam + i * 4);
+  for (int i = 0; i < 256; i++) spO[i]  = c->mem_r32(0x1f800000u + i * 4);
+  static int nbad = 0, ngood = 0; int bad = 0;
+  for (int i = 0; i < 64; i++) if (camM[i] != camO[i]) { bad = 1;
+    if (nbad++ < 80) fprintf(stderr, "[%s] MISMATCH cam+0x%02x mine=%08x oracle=%08x\n", tag, i * 4, camM[i], camO[i]); }
+  for (int i = 0; i < 256; i++) if (spM[i] != spO[i]) { bad = 1;
+    if (nbad++ < 80) fprintf(stderr, "[%s] MISMATCH sp+0x%03x mine=%08x oracle=%08x\n", tag, i * 4, spM[i], spO[i]); }
+  if (!bad && (ngood++ % 200) == 0) fprintf(stderr, "[%s] match #%d\n", tag, ngood);
+}
+static void ov_cam_orch_e0f0_verify(Core* c) { cam_orch_verify(c, ov_cam_orch_e0f0, 0x8006e0f0u, "orch_e0f0"); }
+static void ov_cam_orch_e3f4_verify(Core* c) { cam_orch_verify(c, ov_cam_orch_e3f4, 0x8006e3f4u, "orch_e3f4"); }
+static void ov_cam_orch_e228_verify(Core* c) { cam_orch_verify(c, ov_cam_orch_e228, 0x8006e228u, "orch_e228"); }
+
 void engine_camera_register(void) {
+  int v = cfg_dbg("camverify");
   rec_set_override(0x8006d960u, ov_cam_track_xz);     // per-frame camera X/Z follow (engine_re "Camera")
   rec_set_override(0x8006da54u, ov_cam_track_y);      // per-frame camera Y follow
-  rec_set_override(0x8006e464u,
-                   cfg_dbg("camverify") ? ov_cam_rotbuild_verify : ov_cam_rotbuild);
-  rec_set_override(0x8006d2acu,
-                   cfg_dbg("camverify") ? ov_cam_dist_solve_verify : ov_cam_dist_solve);  // dist/zoom solver
-  rec_set_override(0x8006e010u,
-                   cfg_dbg("camverify") ? ov_cam_angle_step_verify : ov_cam_angle_step);  // cam[+0x34] angle step
-  rec_set_override(0x8006c80cu,
-                   cfg_dbg("camverify") ? ov_cam_y_floor_verify : ov_cam_y_floor);        // cam-Y floor clamp
-  rec_set_override(0x8006d654u,
-                   cfg_dbg("camverify") ? ov_cam_pitch_verify : ov_cam_pitch);            // pitch smoother
-  rec_set_override(0x8006dcf4u,
-                   cfg_dbg("camverify") ? ov_cam_heading_verify : ov_cam_heading);        // heading tracker
-  rec_set_override(0x8006d02cu,
-                   cfg_dbg("camverify") ? ov_cam_lookat_verify : ov_cam_lookat);          // orient/look-at matrix
+  rec_set_override(0x8006e464u, v ? ov_cam_rotbuild_verify   : ov_cam_rotbuild);
+  rec_set_override(0x8006d2acu, v ? ov_cam_dist_solve_verify : ov_cam_dist_solve);  // dist/zoom solver
+  rec_set_override(0x8006e010u, v ? ov_cam_angle_step_verify : ov_cam_angle_step);  // cam[+0x34] angle step
+  rec_set_override(0x8006c80cu, v ? ov_cam_y_floor_verify    : ov_cam_y_floor);     // cam-Y floor clamp
+  rec_set_override(0x8006d654u, v ? ov_cam_pitch_verify      : ov_cam_pitch);       // pitch smoother
+  rec_set_override(0x8006dcf4u, v ? ov_cam_heading_verify    : ov_cam_heading);     // heading tracker
+  rec_set_override(0x8006d02cu, v ? ov_cam_lookat_verify     : ov_cam_lookat);      // orient/look-at matrix
+  rec_set_override(0x8006e0f0u, v ? ov_cam_orch_e0f0_verify  : ov_cam_orch_e0f0);   // main follow mode
+  rec_set_override(0x8006e3f4u, v ? ov_cam_orch_e3f4_verify  : ov_cam_orch_e3f4);   // simple mode
+  rec_set_override(0x8006e228u, v ? ov_cam_orch_e228_verify  : ov_cam_orch_e228);   // mode w/ 2 unowned sub-fns
 }
