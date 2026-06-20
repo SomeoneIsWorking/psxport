@@ -339,6 +339,64 @@ static void ov_object_cull(Core* c) {
   c->game->fps60.current_object = prev;
 }
 
+// FUN_8007778C — camera-relative cull WRAPPER. Computes the object's delta from the camera
+// (obj pos − cam pos: a wrapping 16-bit subtraction, sign-extended), zeros the two cull scratchpad
+// flags (0x1F800080 push-enable, 0x1F800084 state), then forwards to the per-object cull body
+// FUN_8007712c (a0=object, a1=dx(X) → r5, a2=dz(Z) → r6, a3=dy(Y) → r7). Camera pos is the scratchpad
+// block @0x1F8000D0 (+2=X,+6=Z,+10=Y, u16). The cull body is itself owned (ov_object_cull) and re-reads
+// r5..r7 for the engine margin, so we route through it via rec_dispatch (NOT cull_native_body directly)
+// to keep current-object tracking + the widescreen margin. Returns v0 = visible (set by the cull body).
+static void ov_cull_wrapper_prep(Core* c) {
+  uint32_t obj = c->r[4];
+  uint16_t camx = (uint16_t)c->mem_r16(0x1F8000D2u);
+  uint16_t camz = (uint16_t)c->mem_r16(0x1F8000D6u);
+  uint16_t camy = (uint16_t)c->mem_r16(0x1F8000DAu);
+  c->mem_w32(0x1F800080u, 0);
+  c->mem_w32(0x1F800084u, 0);
+  c->r[5] = (uint32_t)(int32_t)(int16_t)(uint16_t)((uint16_t)c->mem_r16(obj + 0x2E) - camx);  // dx (X)
+  c->r[6] = (uint32_t)(int32_t)(int16_t)(uint16_t)((uint16_t)c->mem_r16(obj + 0x32) - camz);  // dz (Z)
+  c->r[7] = (uint32_t)(int32_t)(int16_t)(uint16_t)((uint16_t)c->mem_r16(obj + 0x36) - camy);  // dy (Y)
+  c->r[4] = obj;
+}
+// PSXPORT_DEBUG=cullwrap — per-call gate. The only NEW logic here is the delta arithmetic + the two
+// flag zero-writes; the inner cull (ov_object_cull) is already verified. Run native (prep + dispatch),
+// capture the gameplay-relevant outputs, restore them, run the recomp wrapper, and diff. The inner cull
+// is deterministic given r5..7 + scratchpad, so any divergence reflects a wrong delta. (Render-margin
+// scratch is applied in both paths and not restored — diagnostic frames only.)
+static void ov_cull_wrapper_verify(Core* c) {
+  uint32_t rs[32]; memcpy(rs, c->r, sizeof rs);
+  uint32_t obj = c->r[4];
+  uint32_t cnt_b[3], ptr_b[3];
+  for (int i = 0; i < 3; i++) { cnt_b[i] = (uint16_t)c->mem_r16(CULL_QCNT[i]); ptr_b[i] = c->mem_r32(CULL_QPTR[i]); }
+  uint32_t kept_b = c->mem_r8(obj + 1), f84_b = c->mem_r32(0x1F800084u), f80_b = c->mem_r32(0x1F800080u);
+  // NATIVE
+  ov_cull_wrapper_prep(c); rec_dispatch(c, 0x8007712Cu);
+  uint32_t kept_n = c->mem_r8(obj + 1), v0_n = c->r[2], f84_n = c->mem_r32(0x1F800084u), f80_n = c->mem_r32(0x1F800080u);
+  uint32_t cnt_n[3], ptr_n[3];
+  for (int i = 0; i < 3; i++) { cnt_n[i] = (uint16_t)c->mem_r16(CULL_QCNT[i]); ptr_n[i] = c->mem_r32(CULL_QPTR[i]); }
+  // RESTORE outputs to the pre-call state
+  memcpy(c->r, rs, sizeof rs);
+  c->mem_w8(obj + 1, (uint8_t)kept_b); c->mem_w32(0x1F800084u, f84_b); c->mem_w32(0x1F800080u, f80_b);
+  for (int i = 0; i < 3; i++) { c->mem_w16(CULL_QCNT[i], (uint16_t)cnt_b[i]); c->mem_w32(CULL_QPTR[i], ptr_b[i]); }
+  // RECOMP
+  rec_super_call(c, 0x8007778Cu);
+  uint32_t kept_o = c->mem_r8(obj + 1), v0_o = c->r[2], f84_o = c->mem_r32(0x1F800084u), f80_o = c->mem_r32(0x1F800080u);
+  uint32_t cnt_o[3], ptr_o[3];
+  for (int i = 0; i < 3; i++) { cnt_o[i] = (uint16_t)c->mem_r16(CULL_QCNT[i]); ptr_o[i] = c->mem_r32(CULL_QPTR[i]); }
+  static long ngood = 0, nbad = 0; int bad = 0;
+  if (kept_n != kept_o || v0_n != v0_o || f84_n != f84_o || f80_n != f80_o) bad = 1;
+  for (int i = 0; i < 3; i++) if (cnt_n[i] != cnt_o[i] || ptr_n[i] != ptr_o[i]) bad = 1;
+  if (bad) { if (nbad++ < 60) fprintf(stderr, "[cullwrap] MISMATCH obj=%08x kept(n=%u o=%u) v0(n=%08x o=%08x) f84(n=%08x o=%08x) f80(n=%08x o=%08x)\n",
+                                       obj, kept_n, kept_o, v0_n, v0_o, f84_n, f84_o, f80_n, f80_o); }
+  else if (++ngood % 20000 == 0) fprintf(stderr, "[cullwrap] %ld matches (last obj=%08x)\n", ngood, obj);
+}
+static void ov_cull_wrapper(Core* c) {
+  static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("cullwrap") ? 1 : 0;
+  if (s_v) { ov_cull_wrapper_verify(c); return; }
+  ov_cull_wrapper_prep(c);
+  rec_dispatch(c, 0x8007712Cu);
+}
+
 // PC-owned LZ image decompressor — replaces recompiled FUN_80044D8C (0x80044D8C). This routine
 // rebuilds the per-frame CLUTs (0x801FCDC0) and sprite/texture data from compressed area assets.
 // It was the source of the gameplay 2D-sprite corruption: the SAME function gave correct output
@@ -670,6 +728,7 @@ void games_tomba2_init(void) {
   // widened-frustum re-include is always available. ov_object_cull is a faithful super-call + a wide-only
   // re-include (no-op at 4:3).
   rec_set_override(0x8007712Cu, ov_object_cull);
+  rec_set_override(0x8007778Cu, ov_cull_wrapper);    // camera-relative delta + flag reset → dispatch the cull body
   // PC-native per-object DEPTH at the render-command dispatcher (the universal chokepoint): every queued
   // render command passes through 0x8003F698 with the composed camera×object transform live in the GTE, so
   // ov_render_cmd computes the object's world-position view-depth there and tags the command's packet-pool
