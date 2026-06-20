@@ -151,8 +151,9 @@ tails: 0x80106650 (jal 0x8001CF2C engine per-frame update → TAIL) · 0x8010665
 - **s3 0x801064E8** — sub-machine `v0=jal 0x80106AC4` (mirror of 0x8010696C). 1→jumps into s2's `sm[0x48]=7`
   tail; 2→phase trick **→5** (clear `*0x1F800134`) or **→6** (sm[0x6b]=0, sm[0x50]=0, jal 0x800750D8, clear
   `*0x800BF808`); 3 (back/cancel)→**sm[0x48]=2**.
-- **s4 0x80106580** — closer `jal 0x8007BF20(0,0)`; branch on `sm[0x6b]`: ==1→sm[0x48]=1,sm[0x68]=1; ==2→
-  sm[0x48]=1,sm[0x68]=0; ==7→**sm[0x48]=5** + `*0x1F800134=1`; else stay (render).
+- **s4 0x80106580** — closer `jal 0x8007BF20(0,0)`; branch on `sm[0x6b]` (CORRECTED later-185, disasm @
+  0x8010658C+): ==1→**sm[0x48]=2**,sm[0x68]=1; ==2→**sm[0x48]=2**,sm[0x68]=0; ==7→**sm[0x48]=5** +
+  `*0x1F800134=1` (all →TAIL_CF2C); else stay →TAIL_REND. (prior map said sm[0x48]=1 — wrong.)
 - **s5 0x801065DC** — LEAVE DEMO: `jal 0x80052078(2)` (stage-transition/task-restart to stage selector 2),
   yields. (0x80052078 rewrites the task's stage-handler word + drives the scheduler natives.)
 - **s6 0x801065EC** — page sub-machine `jal 0x8007B45C` (reads `*0x800E7E68 & 0x1000` Circle/back → SFX(17),
@@ -179,9 +180,18 @@ substates **s1/s2/s3/s6** — the ones whose only sub-call is SYNCHRONOUS (verif
 `tools/yield_reach.py`). The override is NOT placed on the root function; it sits on each substate body's
 address, fires when the guest loop's `jr v0` table-dispatch reaches it, runs the transition LOGIC native, and
 coro-redirects to the guest TAIL (0x80106650 / 0x80106658 / 0x80106670) — the ov_game_s4c shape. **NOTE the
-prologue register values the body comparisons use: s2=1, s1=2, s3=3** (0x8010633c/40/44). The DEEP-YIELDING
-substates **s0/s4/s5/s7** (their first sub-call reaches FUN_80051f80) stay GUEST until reworked with the
-coro-redirect-INTO-the-yielder handshake — a plain rec_dispatch of a deep yielder kills task 0 (later-169).
+prologue register values the body comparisons use: s2=1, s1=2, s3=3** (0x8010633c/40/44).
+**ALSO OWNED (later-185): s0 0x801063C0** — the run-once INIT substate. It HAS genuine pre-yield engine
+state (sm[0x68]=0, **sm[0x48]++** [increment, NOT `=1`], sm[0x4a]=0) which it owns native, then sets the
+loader-0 args (a0=0x80108F9C,a1=2,a2=task) and coro-redirects to the first loader jal 0x801063E4 (which
+YIELDS; the guest runs the rest of the loaders + falls into s1 in-context). A/B (run 150 steady menu,
+override-on vs -off): main-RAM + scratchpad **0-diff, no saved-ra artifact** (the guest jal sets its own ra).
+The remaining DEEP-YIELDING substates **s4/s5/s7** stay GUEST: their substantive transition logic is all
+POST-yield, so an entry override would be a pure passthrough owning nothing. Their REAL ownership is a
+POST-yield override (s4: own the sm[0x6b] branch at 0x8010658C after 0x8007bf20 returns ra=0x8010658C —
+v1==1→sm[0x48]=2,sm[0x68]=1; ==2→sm[0x48]=2,sm[0x68]=0; ==7→sm[0x48]=5,*0x1f800134=1; s7: own 0x80106C24's
+phase SELECTION + phase2 SYNC teardown 0x80106dfc; s5 = one stage-transition call, nothing to own). A plain
+rec_dispatch of a deep yielder kills task 0 (later-169). NEXT FRONTIER STEP.
 A/B gate (override-on vs -off, REPL `run 150`): main-RAM + scratchpad 0-diff except task-0's saved-ra stack
 slot (CORO_SENTINEL vs guest return-PC, the coro-redirect artifact). `dumpram` now also dumps a `.spad`.
 

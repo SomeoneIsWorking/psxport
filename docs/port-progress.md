@@ -217,10 +217,14 @@ ties into render-ownership, NOT the asset pipeline). (Camera sub-fns below are D
    = main-RAM 0-diff and **scratchpad 0-diff** except ONE word — task-0's saved-ra slot 0x801FE9CC
    (CORO_SENTINEL vs the guest return-PC), the inherent coro-redirect artifact, not behavioral state.
    `dumpram` now also dumps a `.spad` sidecar so the A/B covers scratchpad (was blind before).
-   **NEXT (this item): own the DEEP-YIELDING substates** s0 (loaders 0x80045080/0x80044bd4 yield + falls into
-   s1), s4 (0x8007bf20 yields), s5 (0x80052078 stage-restart yields), s7 (loader 0x80106c24 yields) — these
-   need the coro-redirect-INTO-the-yielder handshake (a plain rec_dispatch of a deep yielder kills task 0).
-   Overlay disasm via `tools/disas.py <addr> --ram scratch/bin/tomba2/ram_menu.bin` (added later-181).
+   **s0 NOW OWNED (later-185)** via the coro-redirect-INTO-the-yielder handshake: it has genuine pre-yield
+   engine state (sm[0x68]=0, sm[0x48]++, sm[0x4a]=0) owned native, then redirects to its first loader jal
+   0x801063E4 (yields) so the loaders + fall-through to s1 run in-context. A/B (run 150) main-RAM + scratchpad
+   **0-diff, no saved-ra artifact**. **NEXT (this item): s4/s7 via a POST-yield override (own the branch logic
+   that runs AFTER the yield — s4 at 0x8010658C, s7 inside phase machine 0x80106C24 + phase2 teardown). An
+   ENTRY override for s4/s5/s7 would be a pure passthrough owning nothing, so it was deliberately NOT done.
+   s5 = a single stage-transition call (0x80052078(2)), nothing to own — stays guest.** A plain rec_dispatch
+   of a deep yielder kills task 0. Overlay disasm via `tools/disas.py <addr> --ram scratch/bin/tomba2/ram_menu.bin`.
 3. **Init-prefix remainder:** `FUN_800520e0` engine subsystem init — ORCHESTRATION OWNED (later-183,
    eng_init_subsystems, boot A/B 0-diff); NEXT = descend into its 4 callees (8007b328/80088b00/80086620/87a60).
    `FUN_80075130` font/text init — ✅ DONE (ov_font_init, engine_font.cpp; 3 engine callees + memsets owned,
