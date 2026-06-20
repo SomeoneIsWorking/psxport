@@ -56,6 +56,7 @@ static VkQueue         s_queue;
 static VkSwapchainKHR  s_swap;
 static VkFormat        s_swap_fmt;
 static VkExtent2D      s_extent;
+static int             s_swap_dirty = 0;   // window resized -> recreate the swapchain before the next frame
 static uint32_t        s_swap_n;
 static VkImage         s_swap_img[MAX_SWAP];
 static VkImageView     s_swap_view[MAX_SWAP];
@@ -362,11 +363,28 @@ static void create_ssao(void);   // PSXPORT_SSAO resources (post pass); created 
 static void img_barrier_on(VkImage, VkImageLayout, VkImageLayout, VkPipelineStageFlags,
                            VkPipelineStageFlags, VkAccessFlags, VkAccessFlags);
 
+// The size the swapchain SHOULD be right now. The authoritative source is the surface's currentExtent;
+// but Wayland (and some other WSI) report currentExtent == 0xFFFFFFFF ("you pick"), so there we must ask
+// SDL for the live drawable (pixel) size and clamp it to the surface's allowed range. This is what makes
+// resize tracking driver-independent — we never depend on a possibly-undelivered SDL_WINDOWEVENT.
+static VkExtent2D surface_extent_now(void) {
+  VkSurfaceCapabilitiesKHR caps;
+  VKC(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(s_phys, s_surf, &caps));
+  if (caps.currentExtent.width != 0xFFFFFFFFu) return caps.currentExtent;
+  int w = 0, h = 0;
+  SDL_Vulkan_GetDrawableSize(s_win, &w, &h);
+  VkExtent2D e = { (uint32_t)w, (uint32_t)h };
+  if (e.width  < caps.minImageExtent.width)  e.width  = caps.minImageExtent.width;
+  if (e.width  > caps.maxImageExtent.width)  e.width  = caps.maxImageExtent.width;
+  if (e.height < caps.minImageExtent.height) e.height = caps.minImageExtent.height;
+  if (e.height > caps.maxImageExtent.height) e.height = caps.maxImageExtent.height;
+  return e;
+}
+
 static void create_swapchain(void) {
   VkSurfaceCapabilitiesKHR caps;
   VKC(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(s_phys, s_surf, &caps));
-  s_extent = caps.currentExtent.width != 0xFFFFFFFFu ? caps.currentExtent
-           : (VkExtent2D){ 1280, 720 };
+  s_extent = surface_extent_now();
   uint32_t fn = 0; vkGetPhysicalDeviceSurfaceFormatsKHR(s_phys, s_surf, &fn, 0);
   VkSurfaceFormatKHR fmts[32]; if (fn > 32) fn = 32;
   vkGetPhysicalDeviceSurfaceFormatsKHR(s_phys, s_surf, &fn, fmts);
@@ -699,6 +717,15 @@ static void poll_quit(void) {
     imgui_overlay_event(&e);   // overlay mouse/keys (+ ` / F1 visibility toggle); no-op if not inited
     if (e.type == SDL_QUIT) exit(0);
     if (e.type == SDL_KEYDOWN && e.key.keysym.scancode == SDL_SCANCODE_ESCAPE) exit(0);
+    // Window resized: flag the swapchain for recreation. Many drivers (notably Wayland) do NOT report
+    // SUBOPTIMAL/OUT_OF_DATE on resize, so relying on the present result alone leaves s_extent stale —
+    // the window grows but the swapchain (and so win_w()/win_h()) don't, and ImGui (whose DisplaySize
+    // tracks the live SDL window) then maps the cursor into the wrong, stale render extent. Handle the
+    // SDL resize explicitly. Ignore 0-size (minimized) so we never build a zero-extent swapchain.
+    if (e.type == SDL_WINDOWEVENT &&
+        (e.window.event == SDL_WINDOWEVENT_SIZE_CHANGED || e.window.event == SDL_WINDOWEVENT_RESIZED) &&
+        e.window.data1 > 0 && e.window.data2 > 0)
+      s_swap_dirty = 1;
   }
 }
 
@@ -1068,6 +1095,15 @@ void GpuVkState::present(const uint16_t* src, int sx, int sy, int w, int h) {
   VKC(vkWaitForFences(s_dev, 1, &s_fence, VK_TRUE, UINT64_MAX));
   uint32_t idx = 0;
   if (!s_headless) {
+    // Rebuild the swapchain whenever the window's real size no longer matches s_extent, so s_extent /
+    // win_w() / win_h() (and the overlay's window readout) track the live window this frame onward. We
+    // poll the authoritative surface size rather than trust an SDL_WINDOWEVENT or a SUBOPTIMAL/OUT_OF_DATE
+    // present result — Wayland delivers neither reliably, which is why resize was being missed entirely.
+    // Skip zero-size (minimized) so we never build a zero-extent swapchain.
+    VkExtent2D now = surface_extent_now();
+    if (s_swap_dirty || ((now.width != s_extent.width || now.height != s_extent.height) && now.width && now.height)) {
+      s_swap_dirty = 0; recreate_swapchain(); return;
+    }
     VkResult acq = vkAcquireNextImageKHR(s_dev, s_swap, UINT64_MAX, s_sem_acq, VK_NULL_HANDLE, &idx);
     if (acq == VK_ERROR_OUT_OF_DATE_KHR) { recreate_swapchain(); return; }
     if (acq != VK_SUCCESS && acq != VK_SUBOPTIMAL_KHR) { fprintf(stderr, "[gpu_vk] acquire %d\n", acq); exit(2); }
