@@ -446,30 +446,61 @@ void gpu_emit_rq_item(Core* core, const RqItem* it) {
   GpuState& s = core->game->gpu;
   const int* xs = it->xs; const int* ys = it->ys; const int* us = it->us; const int* vs = it->vs;
   const unsigned char* rs = it->rs; const unsigned char* gs = it->gs; const unsigned char* bs = it->bs;
-  const float* depth = it->depth; int mode = it->mode;
-  gpu_vk_set_order(core, s.s_prim_order++);
+  const float* depth = it->depth; int mode = it->mode, raw = it->raw, nv = it->nv ? it->nv : 4;
+  unsigned ord = s.s_prim_order++;
+  gpu_vk_set_order(core, ord);
+  // Depth: 3D world prims carry real per-vertex view-Z (set_vd); 2D prims select the renderer's far/near
+  // screen-space band (preserving the existing 2D depth semantics — only the ORDER is now engine-decided).
+  int om = it->order_mode;
+  if      (om == RQ_OM_2D_BG) gpu_vk_set_order_2d_bg(core, ord);
+  else if (om == RQ_OM_2D_FG) gpu_vk_set_order_2d(core, ord);
+  #define RQ_SETVD(p) do { if (om == RQ_OM_DEPTH) gpu_vk_set_vd(core, (p)); } while (0)
   if (it->semi) {
     int bx0=xs[0],by0=ys[0],bx1=xs[0],by1=ys[0];
-    for (int i=1;i<4;i++){ if(xs[i]<bx0)bx0=xs[i]; if(xs[i]>bx1)bx1=xs[i]; if(ys[i]<by0)by0=ys[i]; if(ys[i]>by1)by1=ys[i]; }
+    for (int i=1;i<nv;i++){ if(xs[i]<bx0)bx0=xs[i]; if(xs[i]>bx1)bx1=xs[i]; if(ys[i]<by0)by0=ys[i]; if(ys[i]>by1)by1=ys[i]; }
     gpu_vk_semi_group(core, bx0, by0, bx1, by1);
-    gpu_vk_set_vd(core, depth);
+    RQ_SETVD(depth);
     gpu_vk_draw_semi(core, (int*)xs, (int*)ys, (int*)us, (int*)vs, (unsigned char*)rs, (unsigned char*)gs, (unsigned char*)bs,
-                     it->tp_x, it->tp_y, mode, 0, it->clut_x, it->clut_y,
+                     it->tp_x, it->tp_y, mode, raw, it->clut_x, it->clut_y,
                      it->tw_mx, it->tw_my, it->tw_ox, it->tw_oy, it->da_x0, it->da_y0, it->da_x1, it->da_y1, it->tp_blend);
-    gpu_vk_set_vd(core, &depth[1]);
-    gpu_vk_draw_semi(core, (int*)&xs[1], (int*)&ys[1], (int*)&us[1], (int*)&vs[1], (unsigned char*)&rs[1], (unsigned char*)&gs[1], (unsigned char*)&bs[1],
-                     it->tp_x, it->tp_y, mode, 0, it->clut_x, it->clut_y,
-                     it->tw_mx, it->tw_my, it->tw_ox, it->tw_oy, it->da_x0, it->da_y0, it->da_x1, it->da_y1, it->tp_blend);
+    if (nv == 4) { RQ_SETVD(&depth[1]);
+      gpu_vk_draw_semi(core, (int*)&xs[1], (int*)&ys[1], (int*)&us[1], (int*)&vs[1], (unsigned char*)&rs[1], (unsigned char*)&gs[1], (unsigned char*)&bs[1],
+                       it->tp_x, it->tp_y, mode, raw, it->clut_x, it->clut_y,
+                       it->tw_mx, it->tw_my, it->tw_ox, it->tw_oy, it->da_x0, it->da_y0, it->da_x1, it->da_y1, it->tp_blend); }
   } else {
-    gpu_vk_set_vd(core, depth);
+    RQ_SETVD(depth);
     gpu_vk_draw_tritri(core, (int*)xs, (int*)ys, (int*)us, (int*)vs, (unsigned char*)rs, (unsigned char*)gs, (unsigned char*)bs,
-                       it->tp_x, it->tp_y, mode, 0, it->clut_x, it->clut_y,
+                       it->tp_x, it->tp_y, mode, raw, it->clut_x, it->clut_y,
                        it->tw_mx, it->tw_my, it->tw_ox, it->tw_oy, it->da_x0, it->da_y0, it->da_x1, it->da_y1);
-    gpu_vk_set_vd(core, &depth[1]);
-    gpu_vk_draw_tritri(core, (int*)&xs[1], (int*)&ys[1], (int*)&us[1], (int*)&vs[1], (unsigned char*)&rs[1], (unsigned char*)&gs[1], (unsigned char*)&bs[1],
-                       it->tp_x, it->tp_y, mode, 0, it->clut_x, it->clut_y,
-                       it->tw_mx, it->tw_my, it->tw_ox, it->tw_oy, it->da_x0, it->da_y0, it->da_x1, it->da_y1);
+    if (nv == 4) { RQ_SETVD(&depth[1]);
+      gpu_vk_draw_tritri(core, (int*)&xs[1], (int*)&ys[1], (int*)&us[1], (int*)&vs[1], (unsigned char*)&rs[1], (unsigned char*)&gs[1], (unsigned char*)&bs[1],
+                         it->tp_x, it->tp_y, mode, raw, it->clut_x, it->clut_y,
+                         it->tw_mx, it->tw_my, it->tw_ox, it->tw_oy, it->da_x0, it->da_y0, it->da_x1, it->da_y1); }
   }
+  #undef RQ_SETVD
+}
+
+// Build an RqItem from already-resolved quad/tri data + material snapshot, then either queue it (engine
+// owns the order, flushed at the draw kick) or emit it now. The ONE place the three submit paths (world
+// quad, guest poly, guest sprite) funnel through. `capture` routes to the queue (set during the OT walk
+// under PSXPORT_RQ); otherwise it draws inline immediately (default — identical to pre-queue behavior).
+static void rq_emit_or_queue(Core* core, int capture, int layer, int order_mode, int nv, int semi, int raw,
+                             const int* xs, const int* ys, const int* us, const int* vs,
+                             const unsigned char* rs, const unsigned char* gs, const unsigned char* bs,
+                             const float* depth, int mode, int tp_x, int tp_y, int clut_x, int clut_y,
+                             int tw_mx, int tw_my, int tw_ox, int tw_oy, int da_x0, int da_y0, int da_x1, int da_y1,
+                             int tp_blend) {
+  RqItem it;
+  it.layer = (uint8_t)layer; it.semi = semi ? 1 : 0; it.nv = (uint8_t)nv; it.raw = raw ? 1 : 0;
+  it.order_mode = (uint8_t)order_mode;
+  for (int i = 0; i < nv; i++) { it.xs[i]=xs[i]; it.ys[i]=ys[i]; it.us[i]=us[i]; it.vs[i]=vs[i];
+                                 it.rs[i]=rs[i]; it.gs[i]=gs[i]; it.bs[i]=bs[i];
+                                 it.depth[i] = depth ? depth[i] : 0.0f; }
+  it.mode = mode; it.tp_x = tp_x; it.tp_y = tp_y; it.clut_x = clut_x; it.clut_y = clut_y;
+  it.tw_mx = tw_mx; it.tw_my = tw_my; it.tw_ox = tw_ox; it.tw_oy = tw_oy;
+  it.da_x0 = da_x0; it.da_y0 = da_y0; it.da_x1 = da_x1; it.da_y1 = da_y1; it.tp_blend = tp_blend;
+  if (capture) { RqItem* slot = rq_push(core); if (slot) { uint32_t sq = slot->seq; *slot = it; slot->seq = sq; } }
+  else         gpu_emit_rq_item(core, &it);
 }
 
 void gpu_draw_world_quad(Core* core, const float* px, const float* py, const float* depth,
@@ -480,23 +511,18 @@ void gpu_draw_world_quad(Core* core, const float* px, const float* py, const flo
   s.set_texpage(tp);
   s.set_clut(clut);
   s.s_seen3d = 1;                              // a projected world prim has now been drawn this frame
-  // Resolve the quad into an engine RqItem (screen verts w/ draw offset + rounding, decoded material).
-  RqItem it; it.layer = RQ_WORLD; it.semi = semi ? 1 : 0;
+  int xs[4], ys[4], us[4], vs[4]; unsigned char rs[4], gs[4], bs[4];
   for (int i = 0; i < 4; i++) {
-    it.xs[i] = (int)(px[i] < 0 ? px[i] - 0.5f : px[i] + 0.5f) + s.s_off_x;  // round, then draw offset
-    it.ys[i] = (int)(py[i] < 0 ? py[i] - 0.5f : py[i] + 0.5f) + s.s_off_y;
-    it.us[i] = u[i]; it.vs[i] = v[i]; it.rs[i] = r[i]; it.gs[i] = g[i]; it.bs[i] = b[i];
-    it.depth[i] = depth[i];
+    xs[i] = (int)(px[i] < 0 ? px[i] - 0.5f : px[i] + 0.5f) + s.s_off_x;  // round, then draw offset
+    ys[i] = (int)(py[i] < 0 ? py[i] - 0.5f : py[i] + 0.5f) + s.s_off_y;
+    us[i] = u[i]; vs[i] = v[i]; rs[i] = r[i]; gs[i] = g[i]; bs[i] = b[i];
   }
-  it.mode = s.s_tp_mode;
-  it.tp_x = s.s_tp_x; it.tp_y = s.s_tp_y; it.clut_x = s.s_clut_x; it.clut_y = s.s_clut_y;
-  it.tw_mx = s.s_tw_mx; it.tw_my = s.s_tw_my; it.tw_ox = s.s_tw_ox; it.tw_oy = s.s_tw_oy;
-  it.da_x0 = s.s_da_x0; it.da_y0 = s.s_da_y0; it.da_x1 = s.s_da_x1; it.da_y1 = s.s_da_y1;
-  it.tp_blend = s.s_tp_blend;
-  // Engine owns ordering: queue it (flushed in engine order at the draw kick). Default (RQ off) draws
-  // inline exactly as before — identical pixels, no ordering change — until M1 is coherent.
-  if (rq_active()) { RqItem* slot = rq_push(core); if (slot) { uint32_t sq = slot->seq; *slot = it; slot->seq = sq; } }
-  else             { gpu_emit_rq_item(core, &it); }
+  // World geometry: engine layer WORLD with real per-vertex depth. Queue when RQ on (flushed in engine
+  // order at the draw kick); else draw inline (default — identical to pre-queue behavior).
+  rq_emit_or_queue(core, rq_active(), RQ_WORLD, RQ_OM_DEPTH, 4, semi ? 1 : 0, 0,
+                   xs, ys, us, vs, rs, gs, bs, depth, s.s_tp_mode,
+                   s.s_tp_x, s.s_tp_y, s.s_clut_x, s.s_clut_y, s.s_tw_mx, s.s_tw_my, s.s_tw_ox, s.s_tw_oy,
+                   s.s_da_x0, s.s_da_y0, s.s_da_x1, s.s_da_y1, s.s_tp_blend);
 }
 
 // Begin a primitive for provenance tracking: bump the global id and record this prim's details
@@ -639,23 +665,21 @@ void GpuState::gp0_exec(Core* core) {
     // untextured -> opaque batch; semi -> semi batch (mode 3 = untextured flat). VK owns these now.
     if (gpu_vk_enabled()) {
       unsigned ord_idx = s_prim_order++;
-      gpu_vk_set_order(core, ord_idx);           // OT submission order -> depth (preserve opaque/semi order)
       int xs[4], ys[4], us[4], vs[4]; unsigned char rs[4], gs[4], bs[4];
       for (int i = 0; i < nv; i++) { xs[i]=v[i].x+s_off_x; ys[i]=v[i].y+s_off_y; us[i]=v[i].u; vs[i]=v[i].v;
                                      rs[i]=v[i].r; gs[i]=v[i].g; bs[i]=v[i].b; }
       int mode = textured ? s_tp_mode : 3, rw = raw ? 1 : 0;
-      // Phase 2 (PSXPORT_NATIVE_DEPTH): hand the renderer per-vertex REAL view-space depth from the
-      // native projection when every vertex resolves to a projected (3D) vertex; the D32 buffer then
-      // does true per-pixel occlusion instead of OT/painter order. A poly with any unprojected vertex
-      // is a 2D/HUD prim -> OT-order depth in the overlay band (over the 3D world). Faithful-off.
-      // PSXPORT_SBS renders BOTH depth modes in one frame: it computes native depth too, but routes it
-      // to the SEPARATE native channel (set_vd_n / set_order_2d_n) leaving the default OT .ord intact,
-      // so the renderer can draw left=default / right=native. NATIVE_DEPTH replaces the single channel.
+      // Classify 3D-vs-2D (and 2D backdrop-vs-HUD) once; this drives both the inline draw and the engine
+      // render queue. Phase 2 (NATIVE_DEPTH): a poly whose every vertex resolves to a projected vertex is
+      // 3D world geometry -> carries real per-vertex view-Z (D32 occlusion); otherwise it is a 2D element
+      // -> a backdrop (FAR band) or HUD (near band) by screen coverage. PSXPORT_SBS keeps the dual-channel
+      // debug compare on its own inline path (not routed through the queue).
       static int s_ndepth = -1, s_sbs = -1;
       int native_depth_on(void);            // PC-native per-pixel depth — ALWAYS ON (opt out: PSXPORT_FAITHFUL_DEPTH)
       if (s_ndepth < 0) s_ndepth = native_depth_on();
       if (s_sbs < 0) s_sbs = cfg_on("PSXPORT_SBS") ? 1 : 0;
-      float dep[4]; int is3d = 0;
+      int use_rq = rq_active() && !s_sbs;        // engine render queue owns ordering (PSXPORT_RQ)
+      float dep[4]; int is3d = 0, bg = 0;
       if (s_ndepth || s_sbs) {
         int projprim_lookup_pz(uint32_t, float*);
         float proj_pz_to_ord(float);
@@ -671,18 +695,14 @@ void GpuState::gp0_exec(Core* core) {
         if (is3d) s_seen3d = 1;            // a projected world prim has now been drawn this frame
         int bx0=xs[0],by0=ys[0],bx1=xs[0],by1=ys[0];
         for (int i = 1; i < nv; i++) { if(xs[i]<bx0)bx0=xs[i]; if(xs[i]>bx1)bx1=xs[i]; if(ys[i]<by0)by0=ys[i]; if(ys[i]>by1)by1=ys[i]; }
-        if (!is3d) {                        // 2D prim: backdrop (FAR band) vs HUD (near band)
-          int bg = bg_2d(bx0, by0, bx1, by1);
-          if (s_sbs) { if (bg) gpu_vk_set_order_2d_bg_n(core, ord_idx); else gpu_vk_set_order_2d_n(core, ord_idx); }
-          else       { if (bg) gpu_vk_set_order_2d_bg(core, ord_idx);   else gpu_vk_set_order_2d(core, ord_idx); }
-        }
+        if (!is3d) bg = bg_2d(bx0, by0, bx1, by1);   // 2D prim: backdrop (FAR band) vs HUD (near band)
         if (!is3d && cfg_dbg("ndepth")) {   // categorize what lands in the 2D band: op + gouraud/quad/tex
           extern long g_nd2d_hist[256]; g_nd2d_hist[op]++; }
         // PSXPORT_PRIMDUMP=<frame>: dump every prim (poly) of that frame as an individual PNG (named by its
         // OT-walk ID) so the backdrop can be identified by eye and its band corrected. id=ord_idx.
         { void prim_dump_poly(Core*, int frame, unsigned id, uint8_t op, int nv, int is3d, int bg,
                               const int* xs, const int* ys, uint8_t r, uint8_t g, uint8_t b, int tex, int semi);
-          prim_dump_poly(core, s_frame, ord_idx, op, nv, is3d, is3d ? -1 : bg_2d(bx0,by0,bx1,by1), xs, ys,
+          prim_dump_poly(core, s_frame, ord_idx, op, nv, is3d, is3d ? -1 : bg, xs, ys,
                          rs[0], gs[0], bs[0], textured ? 1 : 0, semi); }
         extern long g_nd_3d, g_nd_2d; if (is3d) g_nd_3d++; else g_nd_2d++;
       }
@@ -690,12 +710,23 @@ void GpuState::gp0_exec(Core* core) {
       // overlay) drawn as polys rather than sprites. The 3D world widens via the projection (OFX); these
       // 2D polys would stay left-anchored at 320 (the banner gets cut). Widen them like the 2D sprites:
       // scale the 2D plane uniformly to the wide width about the framebuffer origin so they fill the frame.
-      // (Needs the now-always-on is3d classification.) Stepping stone: scales HUD size too; backdrop-vs-HUD
-      // split is the next refinement. Gated to wide-engine; no effect at 4:3 or the FB-hack path.
       { int gpu_vk_wide_engine(void), gpu_vk_wide_engine_w(void);
         if (s_ndepth && !is3d && gpu_vk_wide_engine() && s_prev_had3d) {  // 2D widen only on gameplay frames
           int o = s_da_x0, ww = gpu_vk_wide_engine_w();
           for (int i = 0; i < nv; i++) xs[i] = o + (xs[i] - o) * ww / 320; } }
+      if (use_rq) {
+        // Engine owns ordering: hand the prim to the render queue tagged with its layer + depth mode.
+        int layer = is3d ? RQ_WORLD : (bg ? RQ_BACKGROUND : RQ_HUD);
+        int om    = is3d ? RQ_OM_DEPTH : (bg ? RQ_OM_2D_BG : RQ_OM_2D_FG);
+        rq_emit_or_queue(core, 1, layer, om, nv, semi, rw, xs, ys, us, vs, rs, gs, bs,
+                         is3d ? dep : 0, mode, s_tp_x, s_tp_y, s_clut_x, s_clut_y,
+                         s_tw_mx, s_tw_my, s_tw_ox, s_tw_oy, s_da_x0, s_da_y0, s_da_x1, s_da_y1, s_tp_blend);
+      } else {
+      gpu_vk_set_order(core, ord_idx);           // OT submission order -> depth (preserve opaque/semi order)
+      if ((s_ndepth || s_sbs) && !is3d) {        // 2D band select (inline / SBS path)
+        if (s_sbs) { if (bg) gpu_vk_set_order_2d_bg_n(core, ord_idx); else gpu_vk_set_order_2d_n(core, ord_idx); }
+        else       { if (bg) gpu_vk_set_order_2d_bg(core, ord_idx);   else gpu_vk_set_order_2d(core, ord_idx); }
+      }
       #define SBS_OR_ND_SETVD(p) do { if (is3d) { if (s_sbs) gpu_vk_set_vd_n(core, p); else gpu_vk_set_vd(core, p); } } while (0)
       if (semi) {
         {   // OT-order grouping (overlap -> fresh fb snapshot)
@@ -715,6 +746,8 @@ void GpuState::gp0_exec(Core* core) {
         if (nv == 4) { SBS_OR_ND_SETVD(&dep[1]);
           gpu_vk_draw_tritri(core, &xs[1], &ys[1], &us[1], &vs[1], &rs[1], &gs[1], &bs[1], s_tp_x, s_tp_y, mode, rw,
                            s_clut_x, s_clut_y, s_tw_mx, s_tw_my, s_tw_ox, s_tw_oy, s_da_x0, s_da_y0, s_da_x1, s_da_y1); }
+      }
+      #undef SBS_OR_ND_SETVD
       }
     }
     // PSXPORT_POLYDUMP=frame — log every poly at `frame` (our port side, to compare vs oracle
@@ -795,23 +828,20 @@ void GpuState::gp0_exec(Core* core) {
     // VK backend (M5): tee rects/sprites as two triangles (opaque or semi; mode 3 = untextured solid).
     if (gpu_vk_enabled()) {
       unsigned ord_idx = s_prim_order++;
-      gpu_vk_set_order(core, ord_idx);          // OT submission order -> depth (preserve opaque/semi order)
-      // sprites/rects are screen-space (no GTE projection) -> 2D overlay band under PSXPORT_NATIVE_DEPTH.
-      { static int s_ndepth = -1, s_sbs = -1; int native_depth_on(void);
-        if (s_ndepth < 0) s_ndepth = native_depth_on();
-        if (s_sbs < 0) s_sbs = cfg_on("PSXPORT_SBS") ? 1 : 0;
-        int bg = bg_2d(x, y, x + w, y + h);   // full-screen layer -> FAR band; small -> overlay band
-        if (s_sbs) { if (bg) gpu_vk_set_order_2d_bg_n(core, ord_idx); else gpu_vk_set_order_2d_n(core, ord_idx); }
-        else if (s_ndepth) { if (bg) gpu_vk_set_order_2d_bg(core, ord_idx); else gpu_vk_set_order_2d(core, ord_idx); }
-        void prim_dump_sprite(Core*, int, unsigned, uint8_t, int, int, int, int, int, uint8_t, uint8_t, uint8_t, int, int);
+      // sprites/rects are screen-space (no GTE projection) -> 2D backdrop/HUD band by screen coverage.
+      static int s_ndepth = -1, s_sbs = -1; int native_depth_on(void);
+      if (s_ndepth < 0) s_ndepth = native_depth_on();
+      if (s_sbs < 0) s_sbs = cfg_on("PSXPORT_SBS") ? 1 : 0;
+      int use_rq = rq_active() && !s_sbs;
+      int bg = bg_2d(x, y, x + w, y + h);     // full-screen layer -> FAR band; small -> overlay band
+      { void prim_dump_sprite(Core*, int, unsigned, uint8_t, int, int, int, int, int, uint8_t, uint8_t, uint8_t, int, int);
         prim_dump_sprite(core, s_frame, ord_idx, op, x, y, w, h, bg, cr, cg, cb, textured ? 1 : 0, semi); }
       int X = x + s_off_x, Y = y + s_off_y;
       int XL = X, XR = X + w;
       // Widescreen 2D handling. Genuine engine-wide widens the 3D world at the projection (OFX); 2D
       // sprites (sky/water backdrop + HUD) bypass the GTE, so they must be widened here. Scale the whole
       // 2D plane uniformly to the wide width around the framebuffer origin (s_da_x0) so a tiled backdrop
-      // fills the frame with NO gaps. NOTE: stepping stone — this scales HUD size too; the proper split
-      // (backdrop scales, HUD anchors at native size) needs the always-on 3D/2D classification (B4).
+      // fills the frame with NO gaps.
       { int gpu_vk_wide_engine(void), gpu_vk_wide_engine_w(void);
         if (gpu_vk_wide_engine() && s_prev_had3d) {       // only widen 2D on gameplay frames (else pillarbox)
           int o = s_da_x0, ww = gpu_vk_wide_engine_w();   // map native [0,320] about origin -> [0,ww]
@@ -821,6 +851,16 @@ void GpuState::gp0_exec(Core* core) {
       int qu[4] = { u0, u0+w, u0, u0+w }, qv[4] = { v0, v0, v0+h, v0+h };
       unsigned char qr[4]={cr,cr,cr,cr}, qg[4]={cg,cg,cg,cg}, qb[4]={cb,cb,cb,cb};
       int mode = textured ? s_tp_mode : 3, rw = op & 1;
+      if (use_rq) {
+        int layer = bg ? RQ_BACKGROUND : RQ_HUD;
+        int om    = bg ? RQ_OM_2D_BG  : RQ_OM_2D_FG;
+        rq_emit_or_queue(core, 1, layer, om, 4, semi, rw, qx, qy, qu, qv, qr, qg, qb, 0, mode,
+                         s_tp_x, s_tp_y, s_clut_x, s_clut_y, s_tw_mx, s_tw_my, s_tw_ox, s_tw_oy,
+                         s_da_x0, s_da_y0, s_da_x1, s_da_y1, s_tp_blend);
+      } else {
+      gpu_vk_set_order(core, ord_idx);          // OT submission order -> depth (preserve opaque/semi order)
+      if (s_sbs)         { if (bg) gpu_vk_set_order_2d_bg_n(core, ord_idx); else gpu_vk_set_order_2d_n(core, ord_idx); }
+      else if (s_ndepth) { if (bg) gpu_vk_set_order_2d_bg(core, ord_idx);   else gpu_vk_set_order_2d(core, ord_idx); }
       if (semi) {
         { gpu_vk_semi_group(core, X, Y, X+w, Y+h); }  // OT-order grouping
         gpu_vk_draw_semi(core, qx, qy, qu, qv, qr, qg, qb, s_tp_x, s_tp_y, mode, rw, s_clut_x, s_clut_y,
@@ -832,6 +872,7 @@ void GpuState::gp0_exec(Core* core) {
                            s_tw_mx, s_tw_my, s_tw_ox, s_tw_oy, s_da_x0, s_da_y0, s_da_x1, s_da_y1);
         gpu_vk_draw_tritri(core, &qx[1], &qy[1], &qu[1], &qv[1], &qr[1], &qg[1], &qb[1], s_tp_x, s_tp_y, mode, rw,
                            s_clut_x, s_clut_y, s_tw_mx, s_tw_my, s_tw_ox, s_tw_oy, s_da_x0, s_da_y0, s_da_x1, s_da_y1);
+      }
       }
     }
     s_prims++;

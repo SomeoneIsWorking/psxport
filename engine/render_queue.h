@@ -19,12 +19,20 @@ struct Core;
 // the backdrop/HUD layers exist so screen-space 2D is ordered by what it IS, not by OT position.
 enum RqLayer { RQ_BACKGROUND = 0, RQ_WORLD = 1, RQ_OVERLAY = 2, RQ_HUD = 3 };
 
+// How the rasterizer gets this item's depth at emit. DEPTH = real per-vertex view-Z (3D world);
+// the 2D_* modes select the renderer's far/near screen-space bands (set_order_2d_bg / set_order_2d),
+// preserving the existing 2D depth semantics — the queue changes only the draw ORDER, not depth.
+enum RqOrderMode { RQ_OM_DEPTH = 0, RQ_OM_2D_BG = 1, RQ_OM_2D_FG = 2 };
+
 // One resolved drawable: a quad (two triangles) with its decoded material + real per-vertex depth. All
 // values are captured at enqueue time (after texpage/clut resolution + draw-offset/rounding) so flush is
 // independent of any GpuState mutated between enqueue and flush.
 struct RqItem {
   uint8_t  layer;          // RqLayer
   uint8_t  semi;           // semi-transparent (blended) quad
+  uint8_t  nv;             // vertex count: 3 = triangle (one tri), 4 = quad (two tris)
+  uint8_t  raw;            // raw texel (no color modulation)
+  uint8_t  order_mode;     // RqOrderMode — how depth is applied at emit
   uint32_t seq;            // submission order — stable tiebreak within a layer
   int      xs[4], ys[4];   // screen verts (with draw offset, rounded)
   int      us[4], vs[4];   // texel coords

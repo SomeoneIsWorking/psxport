@@ -5758,3 +5758,30 @@ RE confirms env0 draws at VRAM (0,0) (SetDefDrawEnv x=0,y=0,w=320,h=240 @0x80050
 shows the page we draw. The display W/H stay from the boot mode env (GP1 07/08). FUN_80050738 (the PSX
 env structs) is now only read for the draw env; the disp envs are dead. UNVERIFIED by me — user verifies
 via ./run.sh.
+
+## later-164: engine-owned render queue — the draw-ORDER authority (M1, plan noble-purring-pelican)
+
+User directive (2026-06-20): REBUILD the engine as a complete PC game engine that OWNS render ordering;
+do NOT inherit draw order from the guest OT (the sea/sky backdrop rendering ON TOP of the world is exactly
+PSX-order inheritance + a fragile screen-coverage band heuristic). FULL OWNERSHIP is always the answer.
+
+Before: every frame was drawn by walking the guest ordering table (gpu_dma2_linked_list) and rasterizing
+each node inline; the owned world geometry (terrain + GT3/GT4 + byte-packed GT4, all via
+gpu_draw_world_quad) drew inline too. Order = whatever the PSX OT said; 2D depth = bg_2d() coverage band.
+
+M1 (engine/render_queue.{h,cpp}, on Game; gated PSXPORT_RQ, default OFF until visually verified):
+- RenderQueue = per-frame host array of resolved RqItems (projected float verts + decoded material + real
+  per-vertex depth + an explicit engine LAYER: BACKGROUND<WORLD<OVERLAY<HUD + an order-mode: real depth vs
+  2D far/near band). flush() stable-sorts by (layer, submission seq) and emits via gpu_emit_rq_item.
+- ALL three submit paths funnel through one helper rq_emit_or_queue (gpu_native.cpp): gpu_draw_world_quad
+  (RQ_WORLD/depth), the guest poly path (is3d?WORLD:bg?BACKGROUND:HUD), the guest sprite path
+  (bg?BACKGROUND:HUD). Under RQ the inline draw + inline set_order_2d*/set_vd are skipped; the item carries
+  the layer+order-mode and gpu_emit_rq_item replays the exact set_order/2d-band/set_vd/semi_group/draw.
+- ov_draw_otag: walk the guest OT (still the prim SOURCE this milestone — its ORDER is discarded), then
+  rq_flush. PSXPORT_SBS keeps its dual-channel debug compare on the inline path (not queued).
+- Consequence (expected): the sea/sky backdrop sorts into RQ_BACKGROUND -> drawn first -> behind the world.
+
+KNOWN HAZARD (M3 fix): deferring poly/sprite to a post-walk flush moves them after any VRAM fill/copy that
+happens DURING the walk. Framebuffer-read effects (water reflection / fb snapshot) may interleave wrong
+until M3 captures prims at submit time and retires the OT read. That's why RQ is opt-in pending the user's
+visual check. Builds + boots headless clean both ways. UNVERIFIED visually by me — user verifies PSXPORT_RQ=1.
