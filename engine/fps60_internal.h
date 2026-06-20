@@ -101,6 +101,17 @@ struct Fps60State {
   int     s_prev_front_y = -1;
   RateDet s_rd = { 0, 0, 2, {}, 0 };
 
+  // ---- VK queue-snapshot interpolation (the real 60fps path) ----
+  // Snapshot the engine render queue (whole frame: world + 2D) each logic frame; interpolate matched
+  // world prims to the A/B midpoint and render the in-between THROUGH VK (not the dead SW s_interp path).
+  struct RqItem* s_rqPrev = nullptr;     // previous logic frame's queue snapshot
+  struct RqItem* s_rqCur  = nullptr;     // current frame's snapshot (captured at flush)
+  struct RqItem* s_rqLerp = nullptr;     // built in-between
+  int s_nPrev = 0, s_nCur = 0, s_have_prev = 0;
+  void rq_capture(const struct RqItem* items, int n);   // copy the (sorted) queue snapshot
+  int  build_lerp();                                    // match cur<->prev, lerp to midpoint; returns count
+  void fps60_present_vk(Core* core);                    // emit in-between + real frame, paced (60fps)
+
   // ---- methods (bodies in fps60.cpp; reached via core->game->fps60) ----
   void     fold(uint32_t v);
   void     grid_put(int sx, int sy, uint32_t obj);

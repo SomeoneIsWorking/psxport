@@ -484,7 +484,7 @@ void Fps60State::frame_commit(Core* core) {
   xobj_commit();                    // swap s_xA/s_xB + reset the per-frame local-vertex pool
   if (s_sdbg) fps60_synthesize(core);   // per-frame interpolation stats (headless diagnostic only)
   fps60_synth_dumptest(core);   // PSXPORT_FPS60_SYNTH: offline A/in-between/B dump (no live-path change)
-  fps60_present(core);          // owns presentation: 60fps pair (prev + interpolated) or faithful single
+  fps60_present_vk(core);       // owns presentation: VK 60fps pair (interpolated in-between + real frame)
 
   // Swap the prim double-buffer (so s_pB is clean next frame).
   { Prim* t = s_pA; s_pA = s_pB; s_pB = t; s_nA = s_nB; s_nB = 0; }
@@ -494,6 +494,93 @@ void Fps60State::frame_commit(Core* core) {
   s_epoch++;                  // reset the SXY→obj grid for the next frame
 }
 
+
+// ============================================================================================
+// VK 60fps: render-queue-snapshot interpolation (the LIVE path; replaces the dead SW s_interp synth).
+// Each logic frame the engine render queue (the WHOLE frame — world + 2D, already engine-sorted) is
+// captured here (render_queue.cpp's flush snapshots instead of emitting when fps60 is on). We match each
+// current world prim to the previous frame's by a position-INDEPENDENT material/UV/color fingerprint
+// (nearest centroid as tiebreak), lerp matched prims' screen verts + depth to the A/B midpoint, render
+// the in-between THROUGH the normal VK emit path + present it, then render+present the real frame — a
+// 60fps stream (in-between, real, ...). Static prims (terrain/HUD) have zero motion -> unchanged; moving
+// objects + camera-panned geometry interpolate; teleports/cuts exceed the gate -> snap (no smear).
+#include "render_queue.h"
+#include <unordered_map>
+void gpu_present_ex(Core* core, int do_blit);
+void gpu_fps60_present_pass(Core* core);
+void gpu_pace_subframe(Core* core, int n);
+
+#define FPS60_RQ_MAX 16384
+
+static uint64_t rq_fp(const RqItem* it) {                 // cross-frame surface identity (no position)
+  uint64_t h = 1469598103934665603ull;
+  auto mix = [&](uint64_t v){ h ^= (v & 0xFFFFFFFFu); h *= 1099511628211ull; };
+  mix(it->mode); mix(it->nv); mix(it->semi); mix(it->layer); mix(it->raw);
+  mix((uint32_t)it->tp_x); mix((uint32_t)it->tp_y); mix((uint32_t)it->clut_x); mix((uint32_t)it->clut_y);
+  for (int k = 0; k < it->nv; k++) {
+    mix((uint32_t)it->us[k]); mix((uint32_t)it->vs[k]); mix(it->rs[k]); mix(it->gs[k]); mix(it->bs[k]);
+  }
+  return h;
+}
+static void rq_centroid(const RqItem* it, int* cx, int* cy) {
+  long sx = 0, sy = 0; for (int k = 0; k < it->nv; k++) { sx += it->xs[k]; sy += it->ys[k]; }
+  *cx = (int)(sx / it->nv); *cy = (int)(sy / it->nv);
+}
+
+void Fps60State::rq_capture(const RqItem* items, int n) {
+  if (!s_rqCur) s_rqCur = new RqItem[FPS60_RQ_MAX];
+  if (n > FPS60_RQ_MAX) n = FPS60_RQ_MAX;
+  if (n > 0) memcpy(s_rqCur, items, (size_t)n * sizeof(RqItem));
+  s_nCur = n;
+}
+
+int Fps60State::build_lerp() {
+  if (!s_rqLerp) s_rqLerp = new RqItem[FPS60_RQ_MAX];
+  static int gate = -1; if (gate < 0) { const char* g = cfg_str("PSXPORT_FPS60_GATE"); gate = g ? atoi(g) : 64; }
+  std::unordered_multimap<uint64_t, int> pmap;            // prev prims indexed by fingerprint
+  pmap.reserve((size_t)s_nPrev * 2 + 16);
+  for (int j = 0; j < s_nPrev; j++) pmap.insert({ rq_fp(&s_rqPrev[j]), j });
+  for (int i = 0; i < s_nCur; i++) {
+    const RqItem* C = &s_rqCur[i];
+    s_rqLerp[i] = *C;                                     // default: SNAP (copy current unchanged)
+    if (C->layer != RQ_WORLD) continue;                  // only world geometry interpolates; 2D/HUD snap
+    uint64_t fp = rq_fp(C);
+    int cx, cy; rq_centroid(C, &cx, &cy);
+    int best = -1, bestd = gate + 1;
+    auto range = pmap.equal_range(fp);
+    for (auto it = range.first; it != range.second; ++it) {
+      const RqItem* P = &s_rqPrev[it->second];
+      if (P->nv != C->nv) continue;
+      int px, py; rq_centroid(P, &px, &py);
+      int d = abs(px - cx) + abs(py - cy);
+      if (d < bestd) { bestd = d; best = it->second; }
+    }
+    if (best >= 0 && bestd <= gate) {                    // matched + within the teleport gate -> midpoint
+      const RqItem* P = &s_rqPrev[best];
+      for (int k = 0; k < C->nv; k++) {
+        s_rqLerp[i].xs[k]    = (P->xs[k] + C->xs[k]) / 2;
+        s_rqLerp[i].ys[k]    = (P->ys[k] + C->ys[k]) / 2;
+        s_rqLerp[i].depth[k] = (P->depth[k] + C->depth[k]) * 0.5f;
+      }
+    }
+  }
+  return s_nCur;
+}
+
+void Fps60State::fps60_present_vk(Core* core) {
+  int nl = (s_have_prev && s_nCur > 0) ? build_lerp() : 0;
+  if (nl > 0) {                                           // PASS 1 — the interpolated in-between
+    for (int i = 0; i < nl; i++) gpu_emit_rq_item(core, &s_rqLerp[i]);
+    gpu_fps60_present_pass(core);                         // show it + reset the VK batch (no s_frame++)
+    gpu_pace_subframe(core, 2);
+  }
+  for (int i = 0; i < s_nCur; i++) gpu_emit_rq_item(core, &s_rqCur[i]);   // PASS 2 — the real frame
+  gpu_present_ex(core, 1);                                // present + per-logic-frame bookkeeping
+  gpu_pace_subframe(core, nl > 0 ? 2 : 1);
+  if (!s_rqPrev) s_rqPrev = new RqItem[FPS60_RQ_MAX];     // current -> previous for next frame
+  if (s_nCur > 0) memcpy(s_rqPrev, s_rqCur, (size_t)s_nCur * sizeof(RqItem));
+  s_nPrev = s_nCur; s_have_prev = 1;
+}
 
 // ---- Public capture API: thin free-function wrappers over the per-instance Fps60State methods.
 // Keep the C-style call sites stable; each forwards to core->game->fps60 (de-globalization, 2026-06-19). ----

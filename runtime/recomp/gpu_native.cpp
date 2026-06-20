@@ -1494,6 +1494,15 @@ void GpuState::gpu_present_ex(Core* core, int do_blit) {
   { void prim_dump_close_if_done(int); prim_dump_close_if_done(s_frame); }   // PSXPORT_PRIMDUMP: flush the file
 }
 void GpuState::gpu_present(Core* core) { gpu_present_ex(core, 1); }
+// VK 60fps in-between pass: present whatever draws are accumulated in the VK batch (over the current
+// s_vram 2D background), then end the VK frame to reset the batch + restart the per-frame depth order.
+// No s_frame++/diagnostics (that bookkeeping happens once per LOGIC frame in gpu_present_ex for the real
+// pass). fps60 emits the interpolated RqItems, calls this to show them, then emits the real frame.
+void GpuState::gpu_fps60_present_pass(Core* core) {
+  present_window();                          // blit_src(s_vram) -> gpu_vk_present renders the batch + shows
+  gpu_vk_frame_end(core, s_vram, s_frame);   // submit/diff + reset the VK draw batch
+  s_prim_order = 0;                          // restart per-frame OT submission order for the next pass
+}
 
 void gpu_native_init(void) {
   if (cfg_dbg("gpu")) g_log = 1;
@@ -1648,6 +1657,7 @@ void gpu_dma2_linked_list(Core* core, uint32_t madr) { core->game->gpu.gpu_dma2_
 void gpu_dma2_block(Core* core, uint32_t madr, int count, int to_gpu) { core->game->gpu.gpu_dma2_block(core, madr, count, to_gpu); }
 void gpu_present(Core* core) { core->game->gpu.gpu_present(core); }
 void gpu_present_ex(Core* core, int do_blit) { core->game->gpu.gpu_present_ex(core, do_blit); }
+void gpu_fps60_present_pass(Core* core) { core->game->gpu.gpu_fps60_present_pass(core); }
 void gpu_native_load_image(Core* core, int x, int y, int w, int h, uint32_t src) { core->game->gpu.gpu_native_load_image(core, x, y, w, h, src); }
 int  gpu_native_load_vram(Core* core, const char* path) { return core->game->gpu.gpu_native_load_vram(path); }
 void gpu_native_shot(Core* core, const char* path) { core->game->gpu.gpu_native_shot(core, path); }

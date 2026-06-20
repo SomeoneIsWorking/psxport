@@ -28,13 +28,18 @@ RqItem* RenderQueue::push() {
 void RenderQueue::mark_consumed() { if (n) consumed = 1; }
 
 void RenderQueue::flush(Core* core) {
-  if (!n) { mark_consumed(); return; }
   // Engine-decided order: layer low->high, submission order within a layer. stable_sort keeps the
   // within-layer submission order exactly (matters for semi-transparent blending). The D32 depth buffer
   // does fine-grained occlusion inside RQ_WORLD regardless of this order.
-  std::stable_sort(items, items + n, [](const RqItem& a, const RqItem& b) {
+  if (n) std::stable_sort(items, items + n, [](const RqItem& a, const RqItem& b) {
     return a.layer != b.layer ? a.layer < b.layer : a.seq < b.seq;
   });
+  // fps60: the interpolated-60fps tier OWNS presentation — it needs to emit this frame TWICE (the lerped
+  // in-between, then the real frame), so it must hold the items rather than have flush emit them now.
+  // Snapshot the sorted queue to it and skip the inline emit; fps60_present_vk emits + presents both.
+  extern int g_fps60_on;
+  if (g_fps60_on) { core->game->fps60.rq_capture(items, n); mark_consumed(); return; }
+  if (!n) { mark_consumed(); return; }
   for (int i = 0; i < n; i++) gpu_emit_rq_item(core, &items[i]);
   mark_consumed();
 }

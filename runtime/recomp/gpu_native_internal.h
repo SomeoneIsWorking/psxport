@@ -158,6 +158,7 @@ struct GpuState {
   void gpu_fps60_blit_interp(int dx, int dy);
   void gpu_fps60_shot_vram(int dx, int dy, const char* path);
   void gpu_fps60_shot_interp(int dx, int dy, const char* path);
+  void gpu_fps60_present_pass(Core* core);   // VK 60fps: present the accumulated batch over s_vram, reset batch (no s_frame++)
 };
 
 // ---- Diagnostic dumps (gpu_debug.cpp) — read the per-instance state via Core* -----------------
@@ -192,6 +193,7 @@ void gpu_fps60_blit_vram(Core* core, int dx, int dy);
 void gpu_fps60_blit_interp(Core* core, int dx, int dy);
 void gpu_fps60_shot_vram(Core* core, int dx, int dy, const char* path);
 void gpu_fps60_shot_interp(Core* core, int dx, int dy, const char* path);
+void gpu_fps60_present_pass(Core* core);   // VK 60fps in-between present pass
 // gpu_provat_display / gpu_prov_dump (gpu_debug.cpp) take Core* too:
 void gpu_provat_display(Core* core, FILE* out, int qx, int qy);
 void gpu_prov_dump(Core* core, int vx, int vy);
