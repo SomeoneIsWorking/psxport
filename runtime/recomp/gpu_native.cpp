@@ -1452,6 +1452,34 @@ void gpu_native_init(void) {
 // harness to assert exact rasterized/blended values; harmless in production (read-only).
 uint16_t GpuState::gpu_vram_peek(int x, int y) { return *vram(x, y); }
 
+// PC-native SCEA splash composite. The boot stub uploads the "Sony Computer Entertainment America
+// Presents" text to VRAM (4bpp page at (832,256), 16-entry CLUT at (880,511)) and clears the display
+// framebuffer to black, but its textured-rect draws don't rasterize through our hi-res VK path — so the
+// screen is black (the asset is in VRAM, just never composited; tools/menu_bg_export proves the decode).
+// We composite it OURSELVES, PC-native: decode the 4bpp+CLUT text from VRAM exactly as the exporter does
+// and write it straight into the displayed framebuffer (s_vram (0,0)), modulated by `fade` (0..128 = the
+// splash fade level). The 3 text rects + their texpage/CLUT/UV are decoded from the stub's SCEA GP0 stream.
+void GpuState::scea_splash_composite(int fade) {
+  if (fade <= 0) return;
+  if (fade > 128) fade = 128;
+  struct { int sx, sy, w, h, u0, v0; } sp[3] = {   // screen rect + texture UV origin (from the SCEA GP0)
+    { 536, 200,  64, 32, 0, 128 }, { 280, 200, 256, 64, 0, 64 }, { 24, 200, 256, 64, 0, 0 } };
+  const int TXB = 832, TY = 256, CX = 880, CY = 511;   // 4bpp page base (VRAM words) + CLUT origin
+  for (int s = 0; s < 3; s++)
+    for (int r = 0; r < sp[s].h; r++)
+      for (int c = 0; c < sp[s].w; c++) {
+        int u = sp[s].u0 + c, v = sp[s].v0 + r;
+        uint16_t word = s_vram[((TY + v) & 511) * VRAM_W + ((TXB + (u >> 2)) & 1023)];
+        int idx = (word >> ((u & 3) * 4)) & 0xF;
+        uint16_t cl = s_vram[(CY & 511) * VRAM_W + ((CX + idx) & 1023)];
+        if (cl == 0) continue;                           // PSX textured: a 0x0000 CLUT entry is transparent
+        int R = (cl & 31) * fade / 128, G = ((cl >> 5) & 31) * fade / 128, B = ((cl >> 10) & 31) * fade / 128;
+        int x = sp[s].sx + c, y = sp[s].sy + r;
+        if (x >= 0 && x < VRAM_W && y >= 0 && y < VRAM_H)
+          s_vram[y * VRAM_W + x] = (uint16_t)((B << 10) | (G << 5) | R);
+      }
+}
+
 // Primitives drawn since the last gpu_present() (reset each present). The native frame loop uses
 // this to avoid flipping the double buffer to a buffer it didn't draw this frame (menu-load flicker).
 int gpu_prims_since_present(void) { return (int)s_prims; }
@@ -1582,6 +1610,7 @@ void gpu_repaint(Core* core) { core->game->gpu.gpu_repaint(); }
 int  gpu_frame_no(Core* core) { return core->game->gpu.gpu_frame_no(); }
 void gpu_provat_enable(Core* core) { core->game->gpu.gpu_provat_enable(); }
 uint16_t gpu_vram_peek(Core* core, int x, int y) { return core->game->gpu.gpu_vram_peek(x, y); }
+void gpu_scea_splash_composite(Core* core, int fade) { core->game->gpu.scea_splash_composite(fade); }
 void gpu_vram_load(Core* core, const uint16_t* src) { core->game->gpu.gpu_vram_load(src); }
 void gpu_vram_save(Core* core, uint16_t* dst) { core->game->gpu.gpu_vram_save(dst); }
 void gpu_fps60_draw_poly(Core* core, int op, int nv, const int* xs, const int* ys, const int* us, const int* vs, const unsigned char* rs, const unsigned char* gs, const unsigned char* bs, int tp_x, int tp_y, int mode, int blend, int dither, int clut_x, int clut_y) { core->game->gpu.gpu_fps60_draw_poly(op, nv, xs, ys, us, vs, rs, gs, bs, tp_x, tp_y, mode, blend, dither, clut_x, clut_y); }

@@ -1,5 +1,52 @@
 # Debug / progress journal
 
+## OPEN BUGS (user-reported, not yet fixed) — work after the current task
+- **2D game objects lost their Z / depth ordering (USER, 2026-06-20).** Collectable 2D sprites (e.g. apples)
+  in the vanilla game have a Z: they occlude correctly — render BEHIND closer geometry and IN FRONT of
+  farther geometry. Our renderer does not replicate this; the 2D objects ignore depth. Likely needs RE +
+  port of the game's OBJECT PLACEMENT and specifically how it places/depths 2D objects (their per-object Z
+  → real depth in our queue, instead of the flat 2D layer band). Related: the engine-owned render queue
+  (`RQ_OM_2D_*` vs `RQ_OM_DEPTH`) — 2D collectables probably need a real view-Z, not the 2D FG/BG band.
+  Tie-in to the broader "own 2D from scene data" M4 work.
+- **Gameplay fade only covers the ATLAS region (USER, 2026-06-20).** A gameplay fade (the screen
+  fade-to/from-black or color overlay) only covers the texture-atlas area of VRAM, not the full displayed
+  framebuffer — so the fade is wrong/partial on screen. Likely the fade overlay prim's screen rect (or the
+  region our renderer applies it to) is keyed to the wrong VRAM extent. Investigate the fade prim
+  classification / the 2D overlay band vs the actual display region (ties into render-ownership + the
+  earlier fade work: see [[tomba2-fade-flash-solved]]).
+- ~~SCEA license screen was black~~ **FIXED PC-native (later-179, below).**
+
+## later-179: SCEA license screen — render it PC-NATIVE (composite the text into the framebuffer) + own its duration
+**The SCEA "Sony Computer Entertainment America Presents" screen now displays** (fades in to crisp white,
+holds, then proceeds to the FMVs/menu). USER directive (2026-06-20): stop skipping/being walled by PSX —
+make it PC-native; no need to be faithful to the PSX boot.
+
+**Two problems, both fixed:**
+1. **It handed off after ~10 frames (near-black flash).** The boot stub (SCUS_944.54, interpreted) draws SCEA
+   with a count-driven fade (rgb +2/frame, full at count ~100) and LoadExec's MAIN when its CdRead retry
+   loop succeeds. `ov_stub_cdread` returned instant success → the retry loop (which IS the on-screen hold)
+   collapsed, so it cut away at rgb~18. FIX: the ENGINE owns the splash DURATION — `ov_stub_cdread` reports
+   "busy" until the stub vblank count reaches `SCEA_SPLASH_VBLANKS` (default 160; PSXPORT_SCEA_HOLD overrides,
+   0 = old instant), so SCEA plays its full fade-in + hold (windowed: the count tracks REAL vblanks, ~2.7s).
+2. **The stub's textured rects don't rasterize through our hi-res VK path** — the text asset is uploaded to
+   VRAM (4bpp page @ (832,256), CLUT @ (880,511)) but the sprites never landed in the framebuffer (proven:
+   PSXPORT_VK_FULLSHOT showed the source texture present but the framebuffer + scratch-FB black; the prims
+   ENUMERATE but don't draw). Rather than debug the stub→VK pipeline, we render SCEA PC-native exactly like
+   the offline exporter: `GpuState::scea_splash_composite(fade)` (gpu_native.cpp) decodes the 4bpp+CLUT text
+   from VRAM and writes it straight into the displayed framebuffer s_vram (0,0), modulated by the fade level;
+   `ov_stub_vsync` calls it each present with fade = count*2. Present is `blit_src(s_vram,…)` so a direct
+   s_vram write is guaranteed to show. (Transparency = a 0x0000 CLUT entry, NOT index 0 — index 0 here is the
+   white fill; testing idx==0 first painted only the dark outline.)
+
+**Proven offline first** (the "same fix" the user asked to apply): decoded the 3 SCEA rects' texpage/CLUT/UV
+from the captured GP0 and reconstructed the full "Sony Computer Entertainment America Presents" image from a
+VRAM dump (scratch/screenshots/scea_export.png) — confirming the asset is intact and it's purely a
+render/compositing gap. The sprite layout baked into scea_splash_composite is from that decode.
+VERIFY: `PSXPORT_VK_SHOT` headless — fades in (grey→white) and holds; title + field unaffected.
+**NOTE (PC-native end state):** the stub still runs (it uploads the asset + LoadExec's MAIN). The eventual
+fully-native path decodes SCEA straight from SCUS_944.54 and drops the interpreted stub entirely; the
+hi-res-2D-sprite VK-rasterization drop is also a real bug worth fixing for other 2D (see OPEN BUGS).
+
 ## later-178: FIX the title/menu BG render — later-172's linear pool walk scrambled the E1-texpage→sprite order
 **The title (DEMO stage 0x801062E4) now renders correctly** (TOMBA!2 logo + brick + characters + New Game/
 Load Game — matches `scratch/screenshots/fl_06.ppm`). The field still renders correctly (no regression).

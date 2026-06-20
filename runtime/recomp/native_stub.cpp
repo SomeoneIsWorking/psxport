@@ -166,6 +166,8 @@ static void ov_stub_vsync(Core* c) {
       next += frames * 1000.0 / 60.0;
       if (next > now) { SDL_Delay((unsigned)(next - now)); now = (double)SDL_GetTicks(); }
       else if (now - next > 1000.0) next = now;        // resync after a long stall (no debt)
+      void gpu_scea_splash_composite(Core*, int);      // PC-native SCEA: composite the text into the
+      gpu_scea_splash_composite(c, (int)(stub_vblank * 2));  // displayed framebuffer with a fade (rgb/2/frame)
       gpu_present(c);                                   // show the completed frame (pets watchdog)
     } else {
       watchdog_pet();                                  // poll: no present, no artificial count tick
@@ -178,7 +180,8 @@ static void ov_stub_vsync(Core* c) {
 #endif
   // Headless / unpaced: advance per call (fast) so tests run at full speed; present on frame-waits.
   stub_vblank += (mode > 0) ? (uint32_t)mode : 1u;
-  if (mode >= 0) gpu_present(c);
+  if (mode >= 0) { void gpu_scea_splash_composite(Core*, int);
+                   gpu_scea_splash_composite(c, (int)(stub_vblank * 2)); gpu_present(c); }
   else watchdog_pet();
   c->mem_w32(STUB_VBLANK_COUNT, stub_vblank);
   c->r[V0_] = stub_vblank;
@@ -195,7 +198,17 @@ static void ov_stub_vsync(Core* c) {
 #define STUB_CD_STATUS 0x80026C0Cu
 static void ov_stub_cdread(Core* c) {
   uint32_t sv = c->game->stub.vblank;
-  c->mem_w32(STUB_CD_STATUS, sv ? sv : 1u);
+  // The ENGINE owns the SCEA splash DURATION (PC-native timing, not the PSX CD-load time). We keep CdRead
+  // "busy" (negative status -> the stub's caller retries, so its draw+fade loop keeps presenting frames)
+  // until the stub vblank count reaches SCEA_SPLASH_VBLANKS, then report success so the stub LoadExecs MAIN.
+  // The stub's count-driven fade reaches FULL brightness (rgb 128) by count ~100 and holds; ~160 vblanks =
+  // ~1.7s fade-in + ~1s hold at 60Hz (windowed: the count tracks REAL vblanks, so this is wall-clock; the
+  // earlier instant-success cut it off at count ~18 = a near-black flash). PSXPORT_SCEA_HOLD overrides; 0
+  // restores instant hand-off. (Render is still the interpreted stub — a fully PC-native splash that
+  // decodes+blits the SCEA image with its own fade, like tools/menu_bg_export, is the eventual replacement.)
+  static long hold = -2; if (hold == -2) { const char* e = cfg_str("PSXPORT_SCEA_HOLD"); hold = e ? atol(e) : 160; }
+  int32_t status = (sv >= (uint32_t)hold) ? (int32_t)(sv ? sv : 1) : -1;   // -1 = busy
+  c->mem_w32(STUB_CD_STATUS, (uint32_t)status);
   c->r[V0_] = c->mem_r32(STUB_CD_STATUS);
 }
 

@@ -126,6 +126,7 @@ struct GpuState {
   void gpu_present_ex(Core* core, int do_blit);
   void gpu_present(Core* core);
   uint16_t gpu_vram_peek(int x, int y);
+  void scea_splash_composite(int fade);   // PC-native SCEA splash: composite the text into s_vram (0,0)
   void gpu_vram_load(const uint16_t* src);
   void gpu_vram_save(uint16_t* dst);
   void gpu_provat_enable();
@@ -167,6 +168,7 @@ void gpu_repaint(Core* core);
 int  gpu_frame_no(Core* core);
 void gpu_provat_enable(Core* core);
 uint16_t gpu_vram_peek(Core* core, int x, int y);
+void gpu_scea_splash_composite(Core* core, int fade);
 void gpu_vram_load(Core* core, const uint16_t* src);
 void gpu_vram_save(Core* core, uint16_t* dst);
 void gpu_fps60_draw_poly(Core* core, int op, int nv, const int* xs, const int* ys, const int* us, const int* vs,
