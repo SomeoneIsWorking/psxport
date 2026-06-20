@@ -40,7 +40,6 @@ static void eng_load_stage(Core* c) {
 }
 
 void ov_load_stage(Core* c) {
-  if (cfg_on("PSXPORT_LOADSTAGE_RECOMP")) { rec_super_call(c, 0x800450BCu); return; }   // A/B oracle
   eng_load_stage(c);
 }
 

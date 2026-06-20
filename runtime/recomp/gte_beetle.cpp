@@ -436,12 +436,12 @@ int  projprim_count(void)      { return s_pp_n; }
 
 // PC-native per-pixel depth is the DEFAULT — this is a PC GAME, not an emulator. The OT-order painter's
 // algorithm is the PSX limitation we transcend; genuine widescreen needs real per-pixel occlusion (the
-// widened FOV breaks painter order). So native depth is ALWAYS ON. Opt OUT only to A/B-diff against the
-// faithful OT-order oracle: PSXPORT_FAITHFUL_DEPTH=1 (or legacy PSXPORT_NATIVE_DEPTH=0).
+// widened FOV breaks painter order). So native depth is ALWAYS ON. PSXPORT_FAITHFUL_DEPTH=1 (or legacy
+// PSXPORT_NATIVE_DEPTH=0) is the depth-only A/B-diff DIAGNOSTIC vs the OT-order oracle (not a behavior gate).
 int native_depth_on(void) {
   static int v = -1;
   if (v < 0) { const char* nd = cfg_str("PSXPORT_NATIVE_DEPTH");
-    v = (cfg_on("PSXPORT_FAITHFUL") || cfg_on("PSXPORT_FAITHFUL_DEPTH") || (nd && atoi(nd) == 0)) ? 0 : 1; }
+    v = (cfg_on("PSXPORT_FAITHFUL_DEPTH") || (nd && atoi(nd) == 0)) ? 0 : 1; }
   return v;
 }
 // The native-depth path is active (default, or the SBS A/B view) — gates the engine's depth recording +

@@ -10,9 +10,8 @@
 // node in a0. `next` is read BEFORE the handler runs (a handler may unlink/free its own node) and is
 // held in a host local, so it survives the handler clobbering guest registers.
 //
-// A/B TOGGLE: native walk is the DEFAULT (it IS the engine now); set PSXPORT_RECOMP_OBJWALK=1 to fall
-// back to the recomp body (the oracle) for diffing. Verified native==recomp: VRAM bit-identical at
-// frames 4000 and 4720 of real gameplay (1 MB cmp PASS each) — see docs/journal.md.
+// The native walk IS the engine now — registered unconditionally (no gating). Was verified native==recomp:
+// VRAM bit-identical at frames 4000 and 4720 of real gameplay (1 MB cmp PASS each) — see docs/journal.md.
 #include "core.h"
 #include "game.h"   // Fps60State::current_object (was g_current_object)
 #include "cfg.h"
@@ -66,7 +65,6 @@ static void ov_objwalk(Core* c) {
 }
 
 void engine_tomba2_init(void) {
-  if (cfg_on("PSXPORT_RECOMP_OBJWALK")) return;    // oracle fallback: keep the recomp FUN_8007a904
   rec_set_override(T2_OBJWALK_FN, ov_objwalk);     // 0x8007A904 — native engine owns the object walk
   if (cfg_dbg("engine"))
     fprintf(stderr, "[engine] native object-list walk active (FUN_8007a904)\n");

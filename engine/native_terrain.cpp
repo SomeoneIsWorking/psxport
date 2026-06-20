@@ -1,18 +1,15 @@
 // PC-NATIVE field terrain renderer (USER DIRECTIVE: render the game PC-native, do NOT transcribe the PSX
 // GTE/packet pipeline — see CLAUDE.md "RENDER is the EXCEPTION" + memory render-port-pc-native-...).
 //
-// This is the first PC-native render target. The faithful path (engine_submit.cpp submit_terrain) is a
-// transcription of the PSX terrain submit: it composes the camera × object matrix in the GTE's fixed-point
-// (MVMVA columns + CR-packing), drives the emulated GTE per vertex (RTPT/RTPS), and assembles byte-identical
-// GP0 packets — and THAT replication is the terrain render bug (water/garbage at the field, journal
-// later-157). Here we instead read the same SCENE DATA the engine already computed (camera rotation+
-// translation, the per-object rotation matrix, the object position, the terrain model geometry) and render
-// it with FLOAT matrices + real per-pixel depth, straight to the VK rasterizer (gpu_draw_world_quad). No
-// GTE compose, no gte_op for render, no GP0 packet, no guest write beyond the faithful gameplay prep.
-//
-// This is the DEFAULT terrain render path (ov_terrain in engine_submit.cpp routes here). The faithful
-// GTE-compose + 0x80027768-packet transcription (submit_terrain) is kept only as an A/B oracle behind
-// PSXPORT_TERRAIN_FAITHFUL; PSXPORT_NO_TERRAIN=1 falls all the way back to the recomp body.
+// This is the first PC-native render target. The OLD "faithful" path was a transcription of the PSX terrain
+// submit: it composed the camera × object matrix in the GTE's fixed-point (MVMVA columns + CR-packing),
+// drove the emulated GTE per vertex (RTPT/RTPS), and assembled byte-identical GP0 packets — and THAT
+// replication is the terrain render bug (water/garbage at the field, journal later-157). That transcription
+// oracle has been REMOVED (no gating). Here we instead read the same SCENE DATA the engine already computed
+// (camera rotation+translation, the per-object rotation matrix, the object position, the terrain model
+// geometry) and render it with FLOAT matrices + real per-pixel depth, straight to the VK rasterizer
+// (gpu_draw_world_quad). No GTE compose, no gte_op for render, no GP0 packet, no guest write beyond the
+// faithful gameplay prep. ov_terrain (engine_submit.cpp) routes here unconditionally — the ONE behavior.
 #include "core.h"
 #include "game.h"
 #include "cfg.h"

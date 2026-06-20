@@ -273,7 +273,7 @@ static void ov_unpack_group(Core* c) {
 // straight into native VRAM here and DO NOT enqueue (the later ring flush/sync then no-ops over
 // an empty ring). Ordering is preserved: the upload still happens before this frame's draws are
 // processed, and CLUTs are double-buffered across frames (parity-alternated slots), so no draw
-// reads a slot mid-overwrite. A/B: PSXPORT_LZ_RECOMP=1 keeps the recomp upload library.
+// reads a slot mid-overwrite.
 static void ov_upload_image(Core* c) {
   const uint32_t desc = c->r[4], src = c->r[5];
   const int x = (int16_t)c->mem_r16(desc + 0), y = (int16_t)c->mem_r16(desc + 2);
@@ -286,7 +286,7 @@ static void ov_upload_image(Core* c) {
 // FUN_800509B4 -> screen center (160,120), focal length H=350). We reimplement them in native C
 // (byte-identical to gen_func_800846D0/800846F0) so the PROJECTION is ours: this is the genuine
 // widescreen FOV lever (widen OFX + the draw-env clip; no squish, no renderer re-center) and the
-// reference point the 60fps/hi-res paths build on. Faithful-first: PSXPORT_GEOM_RECOMP=1 keeps the
+// reference point the 60fps/hi-res paths build on. Owned unconditionally (no gating). Was the
 // recomp bodies for A/B. A one-time log prints the configured projection to confirm equivalence.
 static void ov_set_geom_offset(Core* c) {       // SetGeomOffset(ofx, ofy)
   // FAITHFUL: write the game's exact projection offset. We do NOT widen OFX here anymore — CR24 is
@@ -311,7 +311,7 @@ static void ov_set_geom_screen(Core* c) {       // SetGeomScreen(h) — projecti
 // programs the GPU linked-list DMA to walk the ordering table at a0 — which our renderer already does
 // natively in gpu_dma2_linked_list (walk OT -> decode each primitive -> rasterize). Overriding it routes
 // the draw straight through our native walk (synchronous), instead of the DMA-register emulation dance.
-// This is the engine's draw submission, owned. Faithful-first: PSXPORT_OT_RECOMP=1 keeps the recomp body.
+// This is the engine's draw submission, owned.
 static void ov_draw_otag(Core* c) {
   // Engine-owned ordering (the one render path): owned world geometry was queued during submit; the OT
   // walk queues the guest 2D / un-owned submit variants (instead of drawing them inline); then the queue
@@ -382,41 +382,27 @@ static void ov_options_menu(Core* c) {
 }
 
 void games_tomba2_init(void) {
-  // PSXPORT_FAITHFUL=1: master "all hacks OFF" switch. Registers ZERO native overrides — the game runs
-  // purely through the recompiled/interpreted bodies (faithful submit, DrawOTag, projection, codecs, cull,
-  // per-frame tick) and the faithful OT-order depth (native_depth_on() also honors PSXPORT_FAITHFUL). This
-  // is the true reference render: no native submit/flush/walk/terrain/xform, no cull re-include, no native
-  // depth, no widescreen/hi-res relocation. Use it as the known-good baseline. (The individual *_RECOMP
-  // flags only disabled a SUBSET — ov_frame_update / ov_object_cull / ov_options_menu were always-on.)
-  int faith = cfg_on("PSXPORT_FAITHFUL");
-  // Granular per-override disables (for bisecting which always-on override corrupts the render):
-  // PSXPORT_NO_TICK_OV (frame_update 800788AC), PSXPORT_NO_CULL_OV (object_cull 8007712C),
-  // PSXPORT_NO_MENU_OV (options_menu 8007B45C). faith implies all three.
-  // Hand-written native C++ for the boot→first-cutscene path (engine/native_path.cpp). This IS the
-  // port (always on; PSXPORT_FAITHFUL keeps pure interp as the RE reference). See docs/native-port-plan.md.
+  // ONE behavior = the PC game. The native engine path is registered UNCONDITIONALLY — no FAITHFUL master
+  // switch, no per-override *_RECOMP / NO_* opt-outs (those were faithful-first A/B scaffolding; the user
+  // directive is no gating + drive toward removing the interpreter entirely, so they are retired). Every
+  // override below IS the behavior; the user verifies it via ./run.sh.
+  // Hand-written native C++ for the boot→first-cutscene path (engine/native_path.cpp).
   void games_native_path_init(void);
-  if (!faith) games_native_path_init();
-  int no_tick = faith || cfg_on("PSXPORT_NO_TICK_OV");
-  int no_cull = faith || cfg_on("PSXPORT_NO_CULL_OV");
-  int no_menu = faith || cfg_on("PSXPORT_NO_MENU_OV");
-  if (!no_tick) rec_set_override(0x800788ACu, ov_frame_update);
-  // Replace the game's in-game Options menu with our overlay. Always registered: the override itself
-  // falls back to the real menu (super-call) when the overlay isn't up (headless / PSXPORT_UI=0), so
-  // this needs no flag — it activates whenever the overlay exists (windowed by default).
-  if (!no_menu) rec_set_override(0x8007B45Cu, ov_options_menu);
-  if (!faith && !cfg_on("PSXPORT_GEOM_RECOMP")) { // own the GTE projection setup natively (faithful-first)
-    rec_set_override(0x800846D0u, ov_set_geom_offset);
-    rec_set_override(0x800846F0u, ov_set_geom_screen);
-  }
-  if (!faith && !cfg_on("PSXPORT_OT_RECOMP"))     // own DrawOTag (the per-frame draw kick) natively
-    rec_set_override(0x80081560u, ov_draw_otag);
-  // PC-owned asset codecs (A/B: PSXPORT_LZ_RECOMP=1 keeps the recomp bodies for comparison).
-  if (!faith && !cfg_on("PSXPORT_LZ_RECOMP")) {
-    rec_set_override(0x80044D8Cu, ov_lz_decompress);  // LZ image decompressor
-    rec_set_override(0x80044E84u, ov_unpack_group);   // texture-group unpacker (drives the above)
-    rec_set_override(0x80081218u, ov_upload_image);   // PC-native CPU->VRAM upload (libgs upload lib)
-  }
-  if (!faith && !cfg_on("PSXPORT_SUBMIT_RECOMP")) { // own the geometry submit path natively (faithful-first)
+  games_native_path_init();
+  rec_set_override(0x800788ACu, ov_frame_update);    // per-frame state update + present + audio
+  // Replace the game's in-game Options menu with our overlay. The override falls back to the real menu
+  // (super-call) when the overlay isn't up (headless / PSXPORT_UI=0), so it self-activates with the overlay.
+  rec_set_override(0x8007B45Cu, ov_options_menu);
+  // Own the GTE projection setup natively.
+  rec_set_override(0x800846D0u, ov_set_geom_offset);
+  rec_set_override(0x800846F0u, ov_set_geom_screen);
+  rec_set_override(0x80081560u, ov_draw_otag);       // own DrawOTag (the per-frame draw kick) natively
+  // PC-owned asset codecs.
+  rec_set_override(0x80044D8Cu, ov_lz_decompress);   // LZ image decompressor
+  rec_set_override(0x80044E84u, ov_unpack_group);    // texture-group unpacker (drives the above)
+  rec_set_override(0x80081218u, ov_upload_image);    // PC-native CPU->VRAM upload (libgs upload lib)
+  // Own the geometry submit path natively.
+  {
     void ov_submit_poly_gt3(Core*), ov_submit_poly_gt4(Core*), ov_submit_poly_gt4_bp(Core*),
          engine_submit_register_autodetect(void);
     rec_set_override(0x8007FDB0u, ov_submit_poly_gt3);   // POLY_GT3 (gouraud-textured triangle) submit
@@ -426,35 +412,31 @@ void games_tomba2_init(void) {
   }
   // Own the PER-OBJECT render flush natively (gen_func_8003CDD8 — the world/margin render submission):
   // compose the camera×object transform + dispatch the geomblk to the native submitter, with NO guest
-  // render code (later-133). A/B: PSXPORT_PEROBJ_RECOMP=1 keeps the recomp body. (PSXPORT_DEBUG=flush2
-  // re-overrides the same addr below with the probe, which super-calls the recomp body.)
-  if (!faith && !cfg_on("PSXPORT_PEROBJ_RECOMP")) {
+  // render code (later-133).
+  {
     void ov_perobj_flush(Core*), ov_perobj_render(Core*), ov_render_walk(Core*), ov_terrain(Core*);
-    if (!cfg_on("PSXPORT_NO_FLUSH"))  rec_set_override(0x8003CDD8u, ov_perobj_flush);
-    if (!cfg_on("PSXPORT_NO_DISP"))   rec_set_override(0x8003CCA4u, ov_perobj_render);  // per-object render dispatch
-    if (!cfg_on("PSXPORT_NO_WALK"))   rec_set_override(0x8003C048u, ov_render_walk);    // phase-2 render-list walk
-    // Terrain: ov_terrain renders the field PC-native by default (float transform + real depth, no PSX
-    // GTE/packet path); PSXPORT_TERRAIN_FAITHFUL opts into the transcription oracle, NO_TERRAIN→recomp body.
-    if (!cfg_on("PSXPORT_NO_TERRAIN")) rec_set_override(0x8002AB5Cu, ov_terrain);       // field terrain renderer
+    rec_set_override(0x8003CDD8u, ov_perobj_flush);
+    rec_set_override(0x8003CCA4u, ov_perobj_render);   // per-object render dispatch
+    rec_set_override(0x8003C048u, ov_render_walk);     // phase-2 render-list walk
+    rec_set_override(0x8002AB5Cu, ov_terrain);         // field terrain renderer (float transform + real depth)
     void ov_build_xform(Core*);
-    if (!cfg_on("PSXPORT_NO_XFORM")) rec_set_override(0x80051C8Cu, ov_build_xform);     // per-object transform builder
+    rec_set_override(0x80051C8Cu, ov_build_xform);     // per-object transform builder
   }
   // PC-native LEVEL/STAGE LOADER (engine/engine_level.cpp): the engine's overlay loader FUN_800450bc —
-  // load a stage's overlay off the disc + set its entry, synchronous (no PSX CD-wait yield). A/B oracle:
-  // PSXPORT_LOADSTAGE_RECOMP=1. The CD read itself (0x8001db8c) is already native (ov_cd_loadfile).
-  if (!faith) { void ov_load_stage(Core*); rec_set_override(0x800450BCu, ov_load_stage); }
+  // load a stage's overlay off the disc + set its entry, synchronous (no PSX CD-wait yield).
+  { void ov_load_stage(Core*); rec_set_override(0x800450BCu, ov_load_stage); }
   // PC-native STAGE TRANSITION (engine/engine_level.cpp): FUN_80052078 — load the next stage + restart the
   // task at its new entry. Thread plumbing replaced by the native scheduler (state=3 == restart); the
   // terminal yield is the existing ov_switch. Exercised at the START->DEMO->GAME boot transitions.
-  if (!faith) { void ov_stage_transition(Core*); rec_set_override(0x80052078u, ov_stage_transition); }
+  { void ov_stage_transition(Core*); rec_set_override(0x80052078u, ov_stage_transition); }
   // PC-native task-0 BOOTSTRAP (engine/engine_level.cpp): FUN_800499e8 — resolve \BIN\START.BIN, record its
   // (LBA,size) in the stage table, transition to stage 0. CD-directory lookup stays the platform mechanism.
-  if (!faith) { void ov_task0_boot(Core*); rec_set_override(0x800499E8u, ov_task0_boot); }
+  { void ov_task0_boot(Core*); rec_set_override(0x800499E8u, ov_task0_boot); }
   fps60_init();
-  // cull tap: ALWAYS registered — genuine-wide is the default wide path and the overlay can toggle aspect
-  // LIVE, so the widened-frustum re-include must be available without a launch flag. ov_object_cull is a
-  // faithful super-call + a wide-only re-include (no-op at 4:3), so registering it always is safe.
-  if (!no_cull) rec_set_override(0x8007712Cu, ov_object_cull);
+  // cull tap: genuine-wide is the default wide path and the overlay can toggle aspect LIVE, so the
+  // widened-frustum re-include is always available. ov_object_cull is a faithful super-call + a wide-only
+  // re-include (no-op at 4:3).
+  rec_set_override(0x8007712Cu, ov_object_cull);
   // Render-command capture oracle (PSXPORT_DEBUG=rcmd): tap the deferred-flush mode dispatcher so every queued
   // render command (mode + GTE transform + geomblk) is dumped — the complete input for the native render port.
   // Gated: only registered when the channel is on (the super-call interprets the dispatcher subtree). later-130.

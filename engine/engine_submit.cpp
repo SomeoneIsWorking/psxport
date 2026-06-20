@@ -10,7 +10,7 @@
 //
 // Faithful-first: the native routine reproduces the recomp body BYTE-FOR-BYTE (identical packets, OT
 // links, packet-pool advance, cull decisions, return value), verified 0-diff vs the recomp body on real
-// field gameplay. PSXPORT_SUBMIT_RECOMP=1 keeps the recomp bodies for A/B. The GTE math itself stays a
+// field gameplay. The GTE math itself stays a
 // platform primitive (gte_op → the Beetle GTE), exactly as the recomp body called it, so projection
 // results are bit-identical; we own the control flow, record decode, packet assembly and OT insertion.
 //
@@ -389,7 +389,7 @@ void ov_submit_poly_gt4_bp(Core* c) {
 // world path natively (native_dispatch → native_gt3gt4 → the native ov_submit_poly_gt3/gt4 above);
 // the per-scene OVERLAY submitter variants (mode-table entries other than the GT3/GT4 path) are NOT yet
 // owned, so for those modes the original per-mode renderer is invoked (rec_dispatch) — the documented
-// next RE target (engine_re "OPEN — full field depth coverage"). A/B: PSXPORT_PEROBJ_RECOMP=1.
+// next RE target (engine_re "OPEN — full field depth coverage").
 #define SCR          0x1F800000u             // PSX scratchpad base (the engine's GTE-compose temp area)
 #define MODE_BYTE    0x800BF870u             // *this = render-mode select (DAT_800bf870, 0..0x15)
 #define MODE_FORCE   0x1F800234u             // *this != 0 forces the generic GT3/GT4 path
@@ -513,7 +513,6 @@ static void submit_perobj_flush(Core* c) {
 }
 
 void ov_perobj_flush(Core* c) {
-  if (cfg_on("PSXPORT_PEROBJ_RECOMP")) { rec_super_call(c, 0x8003CDD8u); return; }
   submit_perobj_flush(c);
 }
 
@@ -524,7 +523,7 @@ void ov_perobj_flush(Core* c) {
 // The other cases add a secondary effect pass (gen_func_8003D584/8003F344/8003F3F4/8003F4C4/8003F594)
 // over the just-emitted packet range; those are not owned yet, so for them we super-call the recomp body
 // (which still calls the now-native func_8003CDD8 for the flush, then the secondary pass). At the field
-// only idx0 (flush-only) fires (PSXPORT_DEBUG=ccase: 1 call/frame, target 0x8003cd00). A/B: PEROBJ_RECOMP.
+// only idx0 (flush-only) fires (PSXPORT_DEBUG=ccase: 1 call/frame, target 0x8003cd00).
 static void submit_perobj_render(Core* c) {
   uint32_t node = c->r[4];
   c->mem_w32(SCR + 0x28C, node);                          // current render object (read by downstream code)
@@ -539,7 +538,6 @@ static void submit_perobj_render(Core* c) {
   rec_super_call(c, 0x8003CCA4u);                      // case w/ a secondary effect pass — not owned yet
 }
 void ov_perobj_render(Core* c) {
-  if (cfg_on("PSXPORT_PEROBJ_RECOMP")) { rec_super_call(c, 0x8003CCA4u); return; }
   submit_perobj_render(c);
 }
 
@@ -556,7 +554,7 @@ void ov_perobj_render(Core* c) {
 //   - table target 0x8003C0B4 = the per-object render case → native submit_perobj_render(node).
 //   - table target 0x8003C29C = the default case → rec_dispatch(node, *(node+24)) (the node's own render
 //     fn ptr; its leaf submit is owned where owned). Identical to the recomp default block.
-// Types ≥33 render nothing (the recomp skips them) → treated as handled no-ops. A/B: PEROBJ_RECOMP.
+// Types ≥33 render nothing (the recomp skips them) → treated as handled no-ops.
 #define RLIST_HEAD   0x800F2624u
 #define RLIST_TABLE  0x80014DB8u
 #define RCASE_PEROBJ 0x8003C0B4u             // jump-table target = the gen_func_8003CCA4 (per-object) case
@@ -588,7 +586,6 @@ static void submit_render_walk(Core* c) {
   }
 }
 void ov_render_walk(Core* c) {
-  if (cfg_on("PSXPORT_PEROBJ_RECOMP")) { rec_super_call(c, 0x8003C048u); return; }
   submit_render_walk(c);
 }
 
@@ -613,9 +610,8 @@ void ov_render_walk(Core* c) {
 #define MVMVA_TERRAIN_GEOMBLK 0x8009FAE8u
 // Shared terrain scene-data prep (the faithful gameplay half): write the depth-cue regs + the two sway
 // gameplay bytes, then build the object rotation matrix at scratch SCR (euler 0x80085480 + secondary
-// sway 0x80084520). Used by BOTH the faithful GTE-compose submit_terrain AND the PC-native
-// terrain_render_pc (engine/native_terrain.cpp), so the verified sway-byte writes (later-157, A/B
-// RAM-0-diff) have a single source of truth. Leaves the object matrix at SCR; camera matrix is at
+// sway 0x80084520). Used by the PC-native terrain_render_pc (engine/native_terrain.cpp); the verified
+// sway-byte writes (later-157, A/B RAM-0-diff) have a single source of truth. Leaves the object matrix at SCR; camera matrix is at
 // SCR+0xF8 (set earlier). The matrix-build leaves stay platform primitives (rec_dispatch), as the
 // recomp body calls them.
 void terrain_prep_object_matrix(Core* c, uint32_t node) {
@@ -652,63 +648,17 @@ void terrain_prep_object_matrix(Core* c, uint32_t node) {
   c->r[29] = saved_sp;                                    // pop the frame
 }
 
-static void submit_terrain(Core* c) {
-  uint32_t node = c->r[4];
-  terrain_prep_object_matrix(c, node);                    // faithful gameplay half (sway + object matrix)
-  if (cfg_dbg("terrgte")) {
-    fprintf(stderr, "[terrin] node=%08X CAM(F8) %08X %08X %08X %08X %08X | camToff(10C) %08X %08X %08X | OBJ(SCR) %04X %04X %04X / %04X %04X %04X / %04X %04X %04X\n",
-            node, c->mem_r32(SCR+0xF8), c->mem_r32(SCR+0xFC), c->mem_r32(SCR+0x100), c->mem_r32(SCR+0x104), c->mem_r32(SCR+0x108),
-            c->mem_r32(SCR+0x10C), c->mem_r32(SCR+0x110), c->mem_r32(SCR+0x114),
-            c->mem_r16(SCR+0), c->mem_r16(SCR+2), c->mem_r16(SCR+4), c->mem_r16(SCR+6), c->mem_r16(SCR+8), c->mem_r16(SCR+0xA),
-            c->mem_r16(SCR+0xC), c->mem_r16(SCR+0xE), c->mem_r16(SCR+0x10));
-  }
-  // HOST-MEMORY compose: read the object matrix the build wrote (SCR cols, READ), compose with the camera
-  // in host C locals, load only the GTE regs (hardware). No guest-RAM writes here.
-  gte_write_ctrl(0, c->mem_r32(SCR + 0xF8)); gte_write_ctrl(1, c->mem_r32(SCR + 0xFC));
-  gte_write_ctrl(2, c->mem_r32(SCR + 0x100)); gte_write_ctrl(3, c->mem_r32(SCR + 0x104));
-  gte_write_ctrl(4, c->mem_r32(SCR + 0x108));
-  uint16_t hm[9];
-  for (int col = 0; col < 3; col++) {
-    uint32_t cc = SCR + col * 2;
-    gte_write_data(9,  c->mem_r16(cc + 0));
-    gte_write_data(10, c->mem_r16(cc + 6));
-    gte_write_data(11, c->mem_r16(cc + 12));
-    gte_op(c, MVMVA_ROTCOL);
-    hm[col]     = (uint16_t)gte_read_data(9);
-    hm[3 + col] = (uint16_t)gte_read_data(10);
-    hm[6 + col] = (uint16_t)gte_read_data(11);
-  }
-  // transform the object translation (node+72/76) by the camera, add the camera translation offset
-  gte_write_data(0, c->mem_r32(node + 72)); gte_write_data(1, c->mem_r32(node + 76));
-  gte_op(c, MVMVA_TRANS);
-  uint32_t trx = gte_read_data(25) + c->mem_r32(SCR + 0x10C);
-  uint32_t try_ = gte_read_data(26) + c->mem_r32(SCR + 0x110);
-  uint32_t trz = gte_read_data(27) + c->mem_r32(SCR + 0x114);
-  // load composed rotation → CR0-4 (packed host halfwords), translation → CR5-7
-  gte_write_ctrl(0, (uint32_t)hm[0] | ((uint32_t)hm[1] << 16));
-  gte_write_ctrl(1, (uint32_t)hm[2] | ((uint32_t)hm[3] << 16));
-  gte_write_ctrl(2, (uint32_t)hm[4] | ((uint32_t)hm[5] << 16));
-  gte_write_ctrl(3, (uint32_t)hm[6] | ((uint32_t)hm[7] << 16));
-  gte_write_ctrl(4, (uint32_t)hm[8]);
-  gte_write_ctrl(5, trx); gte_write_ctrl(6, try_); gte_write_ctrl(7, trz);
-  // submit the terrain prim records via the owned byte-packed GT4 submitter
-  c->r[4] = MVMVA_TERRAIN_GEOMBLK; c->r[5] = 0; c->r[6] = 0; c->r[7] = 0;
-  rec_dispatch(c, 0x80027768u);
-}
 void terrain_render_pc(Core* c);             // engine/native_terrain.cpp — PC-native float terrain render
 void ov_terrain(Core* c) {
   if (cfg_dbg("terrgte")) fprintf(stderr, "[ov_terrain] node(a0=r4)=%08X\n", c->r[4]);
   // Dual-core diff: the `b` core neutralizes terrain to the recomp body via a per-Game flag (the override
   // table is shared; the per-core choice is this flag, not a divergent table). `a` keeps the native path.
   if (c->game->neutralize_terrain) { rec_super_call(c, 0x8002AB5Cu); return; }
-  if (cfg_on("PSXPORT_PEROBJ_RECOMP")) { rec_super_call(c, 0x8002AB5Cu); return; }
-  // RENDER PC-NATIVE BY DEFAULT (USER DIRECTIVE: behave like a PC game, do NOT simulate PSX). The terrain
-  // is rendered by terrain_render_pc — float transform + real per-pixel depth, drawn straight to the
-  // rasterizer, NO GTE compose / NO gte_op / NO byte-packed PSX packet. The faithful GTE-compose +
-  // 0x80027768-submit transcription (submit_terrain) is kept ONLY as an opt-in A/B oracle for comparison.
-  // Both share terrain_prep_object_matrix (the gameplay sway writes + object-matrix scene data), so the
-  // gameplay behavior is identical either way; only the render method differs.
-  if (cfg_on("PSXPORT_TERRAIN_FAITHFUL")) { submit_terrain(c); return; }
+  // RENDER PC-NATIVE (USER DIRECTIVE: behave like a PC game, do NOT simulate PSX). The terrain is rendered
+  // by terrain_render_pc — float transform + real per-pixel depth, drawn straight to the rasterizer, NO GTE
+  // compose / NO gte_op / NO byte-packed PSX packet. (The old GTE-compose + 0x80027768-submit transcription
+  // oracle was removed — no gating.) terrain_prep_object_matrix does the gameplay sway writes + object-matrix
+  // scene data; the render method is PC-native float.
   terrain_render_pc(c);
 }
 
@@ -719,7 +669,7 @@ void ov_terrain(Core* c) {
 // per-object flush (8003CDD8) reads this matrix (cmd+0x18); the widescreen margin calls this before its
 // render (its last remaining guest call). Interpreted-only (fn-ptr reached) → seeded + decoded. We own
 // the orchestration + memory writes; the rotation/propagate leaves stay primitives (rec_dispatch), as
-// the recomp body calls them. A/B: PSXPORT_PEROBJ_RECOMP=1.
+// the recomp body calls them.
 static void build_xform(Core* c) {
   uint32_t node = c->r[4];
   c->mem_w32(node + 152, 0x1000); c->mem_w32(node + 156, 0); c->mem_w32(node + 160, 0x1000);
@@ -734,7 +684,6 @@ static void build_xform(Core* c) {
   c->r[4] = node; rec_dispatch(c, 0x80051464u);
 }
 void ov_build_xform(Core* c) {
-  if (cfg_on("PSXPORT_PEROBJ_RECOMP")) { rec_super_call(c, 0x80051C8Cu); return; }
   build_xform(c);
 }
 
