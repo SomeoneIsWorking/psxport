@@ -11,6 +11,22 @@
 //
 // Build: add_executable in tools/CMakeLists.txt (links chdr-static + psxport_common + z), cmake --build.
 // Run:   tex_export [disc.chd] [out_dir]      (out_dir default scratch/textures/)
+//
+// FRAMES MODE — lay a sprite SHEET's animation frames into ONE labeled, TRUE-COLOR (CLUT-decoded) PNG:
+//   tex_export --frames --tp X,Y --bpp {4|8|15} --clut X,Y --uv U,V --size W,H [--step DU,DV]
+//              --n NFRAMES [--set S] [--out scratch/screenshots/dust_sheet.png]
+//   Decodes the disc-reconstructed VRAM (full atlas, or only --set S) exactly like the renderer's
+//   sample_tex: 4bpp/8bpp index -> CLUT row -> RGB555 -> RGB. Frames are laid left-to-right starting
+//   at texpage-local (U,V), advancing (DU,DV) per frame (default DU=W,DV=0 = horizontal sheet). Each
+//   cell is labeled F0,F1,...; a RED '#' marks any frame whose U range crosses a 256-texel texpage
+//   boundary (the suspected #8/#9 dust-bar onset). U is NOT masked to 255 (matches SW sample_tex,
+//   shows wide-sprite spill into the next page honestly — the shader's `u&=255` is the render bug).
+//
+//   The WALKING-DUST cel's tpage/CLUT/U/V/size/count are RUNTIME data (per-area "BAV" cel asset,
+//   loaded via gen_func_80096590 -> cel base latched at *0x80105CE8; effect slot array @0x800154C8),
+//   NOT static in MAIN.EXE. To dump the real dust sheet, read those live via the REPL while dust is on
+//   screen (cel record = 16B stride, frame idx at byte 0x80105CFF; U/V are bytes, tpage/clut halfwords),
+//   then pass the values here. The default invocation renders a TEMPLATE over a known-populated page.
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -145,11 +161,127 @@ void apply_archive(const uint8_t* arc, uint32_t len, std::vector<Desc>& descs,
   }
 }
 void put_png(const char* path, int w, int h, const uint8_t* rgb);  // fwd
+
+// ---- true-color CLUT decode of the reconstructed g_vram (mirror of GpuState::sample_tex) ----
+// A PSX texpage is 256 texels wide for the prim's bit depth: 4bpp packs 4 texels / VRAM word
+// (64 words), 8bpp packs 2 (128 words), 15bpp is 1:1 (256 words). The CLUT is a 16- (4bpp) or
+// 256- (8bpp) entry palette row of RGB555 at (clut_x, clut_y). This is exactly what the renderer
+// does at sample time — so the decoded colors ARE the on-screen colors (the bug is render-side
+// UV/texpage handling, not the data; this view confirms the data is intact).
+inline uint16_t vram_at(int x, int y) {
+  if (x < 0 || x >= VRAM_W || y < 0 || y >= VRAM_H) return 0;
+  return g_vram[y * VRAM_W + x];
+}
+// Sample one texel (u,v) within a texpage at (tpx,tpy), bit-depth `bpp` (4/8/15), CLUT at (clx,cly).
+// Returns RGB555 (0 = transparent). u is NOT masked to 255 — matches SW sample_tex (lets a wide
+// sprite's U run past the 256-texpage into adjacent VRAM, the very behavior the shader's `u&=255`
+// wrongly clobbers). For a STATIC SHEET VIEW we want the data as-laid-out, so no wrap here either.
+inline uint16_t sample_texel(int u, int v, int tpx, int tpy, int bpp, int clx, int cly) {
+  if (bpp == 15) return vram_at(tpx + u, tpy + v);
+  if (bpp == 8) {
+    uint16_t w = vram_at(tpx + (u >> 1), tpy + v);
+    int idx = (u & 1) ? (w >> 8) : (w & 0xFF);
+    return vram_at(clx + idx, cly);
+  }
+  uint16_t w = vram_at(tpx + (u >> 2), tpy + v);  // 4bpp
+  int idx = (w >> ((u & 3) * 4)) & 0xF;
+  return vram_at(clx + idx, cly);
+}
+inline void rgb555_to_rgb(uint16_t c, uint8_t* p) {
+  p[0] = (c & 31) << 3; p[1] = ((c >> 5) & 31) << 3; p[2] = ((c >> 10) & 31) << 3;
+}
+
+// 5x7 ASCII bitmap font (digits + uppercase + a few symbols) for frame labels. Each glyph is 7 rows
+// of 5 bits (MSB-left). Sparse table keyed by char; missing chars draw blank.
+struct Glyph { char c; uint8_t rows[7]; };
+const Glyph kFont[] = {
+  {'0',{0x0E,0x11,0x13,0x15,0x19,0x11,0x0E}}, {'1',{0x04,0x0C,0x04,0x04,0x04,0x04,0x0E}},
+  {'2',{0x0E,0x11,0x01,0x06,0x08,0x10,0x1F}}, {'3',{0x1F,0x02,0x04,0x02,0x01,0x11,0x0E}},
+  {'4',{0x02,0x06,0x0A,0x12,0x1F,0x02,0x02}}, {'5',{0x1F,0x10,0x1E,0x01,0x01,0x11,0x0E}},
+  {'6',{0x06,0x08,0x10,0x1E,0x11,0x11,0x0E}}, {'7',{0x1F,0x01,0x02,0x04,0x08,0x08,0x08}},
+  {'8',{0x0E,0x11,0x11,0x0E,0x11,0x11,0x0E}}, {'9',{0x0E,0x11,0x11,0x0F,0x01,0x02,0x0C}},
+  {'F',{0x1F,0x10,0x10,0x1E,0x10,0x10,0x10}}, {'R',{0x1E,0x11,0x11,0x1E,0x14,0x12,0x11}},
+  {'A',{0x0E,0x11,0x11,0x1F,0x11,0x11,0x11}}, {'M',{0x11,0x1B,0x15,0x15,0x11,0x11,0x11}},
+  {'E',{0x1F,0x10,0x10,0x1E,0x10,0x10,0x1F}}, {'#',{0x0A,0x0A,0x1F,0x0A,0x1F,0x0A,0x0A}},
+  {':',{0x00,0x04,0x00,0x00,0x00,0x04,0x00}}, {' ',{0,0,0,0,0,0,0}},
+};
+void draw_char(uint8_t* rgb, int W, int H, int x, int y, char c, uint8_t r, uint8_t g, uint8_t b) {
+  const uint8_t* rows = nullptr;
+  for (auto& gl : kFont) if (gl.c == c) { rows = gl.rows; break; }
+  if (!rows) return;
+  for (int ry = 0; ry < 7; ry++) for (int rx = 0; rx < 5; rx++)
+    if (rows[ry] & (1 << (4 - rx))) { int px = x + rx, py = y + ry;
+      if (px >= 0 && px < W && py >= 0 && py < H) { uint8_t* p = &rgb[(py * W + px) * 3]; p[0]=r; p[1]=g; p[2]=b; } }
+}
+void draw_text(uint8_t* rgb, int W, int H, int x, int y, const char* s, uint8_t r, uint8_t g, uint8_t b) {
+  for (int i = 0; s[i]; i++) draw_char(rgb, W, H, x + i * 6, y, s[i], r, g, b);
+}
+
+// Lay every animation frame of a sprite sheet into ONE labeled PNG (one row of frames). The sheet is
+// `nframes` cels, each `fw` x `fh` texels, the first at texpage-local (u0,v0), advancing by `du`,`dv`
+// per frame (a horizontal sheet uses du=fw, dv=0). Decoded TRUE-COLOR through (clut_x,clut_y) at the
+// given bit depth. Crossing a 256-texpage boundary is shown HONESTLY: U is not wrapped, so if a later
+// frame's U runs past 256 you SEE it sampling adjacent VRAM (the render bug's mechanism, made visible).
+void layout_sheet(const char* path, int tpx, int tpy, int bpp, int clut_x, int clut_y,
+                  int u0, int v0, int fw, int fh, int du, int dv, int nframes) {
+  const int pad = 2, label_h = 9;
+  const int cellw = fw + pad, cellh = fh + label_h + pad;
+  const int W = nframes * cellw + pad, H = cellh + pad;
+  std::vector<uint8_t> rgb((size_t)W * H * 3, 32);  // dark-gray checker bg so transparent shows
+  for (int y = 0; y < H; y++) for (int x = 0; x < W; x++)
+    if (((x >> 3) ^ (y >> 3)) & 1) { uint8_t* p = &rgb[(y*W+x)*3]; p[0]=p[1]=p[2]=48; }
+  for (int f = 0; f < nframes; f++) {
+    int ox = pad + f * cellw, oy = pad + label_h;
+    int fu = u0 + f * du, fv = v0 + f * dv;
+    for (int yy = 0; yy < fh; yy++) for (int xx = 0; xx < fw; xx++) {
+      uint16_t c = sample_texel(fu + xx, fv + yy, tpx, tpy, bpp, clut_x, clut_y);
+      if (c == 0) continue;  // transparent: leave checker bg
+      rgb555_to_rgb(c, &rgb[((size_t)(oy + yy) * W + (ox + xx)) * 3]);
+    }
+    char lbl[16]; std::snprintf(lbl, sizeof lbl, "F%d", f);
+    draw_text(rgb.data(), W, H, ox, pad, lbl, 255, 255, 0);
+    // mark the frame whose U crosses a 256 page boundary (the suspected bug onset) in RED.
+    if ((fu % 256) > ((fu + fw - 1) % 256)) draw_text(rgb.data(), W, H, ox + fw - 6, pad, "#", 255, 0, 0);
+  }
+  put_png(path, W, H, rgb.data());
+  std::printf("dust sheet -> %s  (%dx%d, %d frames, tp=(%d,%d) bpp=%d clut=(%d,%d) start uv=(%d,%d) %dx%d step=(%d,%d))\n",
+              path, W, H, nframes, tpx, tpy, bpp, clut_x, clut_y, u0, v0, fw, fh, du, dv);
+}
+}  // namespace
+
+namespace {
+// Parse "--key val" style options out of argv (returns the value string or fallback).
+const char* opt(int argc, char** argv, const char* key, const char* dflt) {
+  for (int i = 1; i + 1 < argc; i++) if (!std::strcmp(argv[i], key)) return argv[i + 1];
+  return dflt;
+}
+bool has_flag(int argc, char** argv, const char* key) {
+  for (int i = 1; i < argc; i++) if (!std::strcmp(argv[i], key)) return true; return false;
+}
+// Overlay ALL texture sets into g_vram (full atlas) so a frames-mode region can sample any page.
+void build_full_vram(const std::vector<uint8_t>& idx, const std::vector<uint8_t>& img, uint32_t nsets) {
+  std::memset(g_vram, 0, sizeof g_vram);
+  for (uint32_t s = 0; s < nsets; s++) {
+    uint32_t h0 = rd32(&idx[s*2048]), h1 = rd32(&idx[s*2048 + 4]);
+    if (h1 <= h0 || h1 > img.size()) continue;
+    std::vector<Desc> descs; int a=VRAM_W,b=VRAM_H,c=0,d=0;
+    apply_archive(&img[h0], h1 - h0, descs, a, b, c, d);
+  }
+}
 }  // namespace
 
 int main(int argc, char** argv) {
-  const auto disc_path = psxport::ResolveDiscPath(argc > 1 ? argv[1] : "");
-  const std::string out_dir = argc > 2 ? argv[2] : "scratch/textures";
+  // Positional disc/out_dir are the FIRST args not starting with '-' (so options can precede them).
+  const char* pos1 = nullptr; const char* pos2 = nullptr;
+  for (int i = 1; i < argc; i++) {
+    if (argv[i][0] == '-') {                                   // option
+      if (std::strcmp(argv[i], "--frames") != 0 && i + 1 < argc) i++;  // valued opt: skip its value
+      continue;                                                // (--frames is a valueless flag)
+    }
+    if (!pos1) pos1 = argv[i]; else if (!pos2) pos2 = argv[i];
+  }
+  const auto disc_path = psxport::ResolveDiscPath(pos1 ? pos1 : "");
+  const std::string out_dir = pos2 ? pos2 : "scratch/textures";
   if (!disc_path) { std::fprintf(stderr, "no disc image (arg/env/drop-in)\n"); return 1; }
   ChdDisc disc;
   if (!disc.Open(*disc_path)) { std::fprintf(stderr, "cannot open CHD %s\n", disc_path->c_str()); return 1; }
@@ -160,6 +292,39 @@ int main(int argc, char** argv) {
   std::vector<uint8_t> idx = ReadFile(disc, idxf), img = ReadFile(disc, imgf);
   const uint32_t nsets = idxf.size / 2048;
   std::printf("disc %s : %u texture sets\n", disc_path->c_str(), nsets);
+
+  // ---- FRAMES MODE: lay every animation frame of a sprite sheet into one labeled PNG ----
+  // `--frames` with: --tp X,Y (texpage origin) --bpp {4|8|15} --clut X,Y --uv U,V (first cel local)
+  //   --size W,H (per-frame texels) --step DU,DV (per-frame advance, default DU=W DV=0) --n N (#frames)
+  //   --set S (overlay only set S; default = full atlas) --out PATH (default scratch/screenshots/dust_sheet.png)
+  // The dust's tpage/clut/uv are RUNTIME cel data (loaded per-area, not static in MAIN.EXE), so the
+  // caller supplies them from a live REPL dump; this decodes the disc-reconstructed VRAM honestly.
+  if (has_flag(argc, argv, "--frames")) {
+    int tpx=0,tpy=0,clx=0,cly=0,u0=0,v0=0,fw=32,fh=32,du=-1,dv=0,n=8,bpp=4,set=-1;
+    std::sscanf(opt(argc,argv,"--tp","0,0"), "%d,%d", &tpx,&tpy);
+    std::sscanf(opt(argc,argv,"--clut","0,0"), "%d,%d", &clx,&cly);
+    std::sscanf(opt(argc,argv,"--uv","0,0"), "%d,%d", &u0,&v0);
+    std::sscanf(opt(argc,argv,"--size","32,32"), "%d,%d", &fw,&fh);
+    std::sscanf(opt(argc,argv,"--step","-1,0"), "%d,%d", &du,&dv);
+    bpp = std::atoi(opt(argc,argv,"--bpp","4"));
+    n   = std::atoi(opt(argc,argv,"--n","8"));
+    set = std::atoi(opt(argc,argv,"--set","-1"));
+    if (du < 0) du = fw;  // default: horizontal sheet
+    const char* outp = opt(argc, argv, "--out", "scratch/screenshots/dust_sheet.png");
+    int rc0 = system("mkdir -p scratch/screenshots"); (void)rc0;
+    if (set >= 0 && (uint32_t)set < nsets) {
+      std::memset(g_vram, 0, sizeof g_vram);
+      uint32_t h0 = rd32(&idx[set*2048]), h1 = rd32(&idx[set*2048 + 4]);
+      if (h1 > h0 && h1 <= img.size()) { std::vector<Desc> d; int a=VRAM_W,b=VRAM_H,c=0,e=0;
+        apply_archive(&img[h0], h1 - h0, d, a, b, c, e); }
+      std::printf("frames: overlaid set %d only\n", set);
+    } else {
+      build_full_vram(idx, img, nsets);
+      std::printf("frames: overlaid full atlas (%u sets)\n", nsets);
+    }
+    layout_sheet(outp, tpx, tpy, bpp, clx, cly, u0, v0, fw, fh, du, dv, n);
+    return 0;
+  }
 
   std::string mkdir = "mkdir -p '" + out_dir + "'"; int rc = system(mkdir.c_str()); (void)rc;
   std::string manifest_path = out_dir + "/manifest.txt";
