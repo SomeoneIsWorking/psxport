@@ -6508,3 +6508,30 @@ interp insns (−9.4%; cumulative −25.7% from the 42.93M pre-profiler baseline
 profiler hot-list. NEXT cluster siblings: FUN_80085050 (9.3%), FUN_80084EB0 (8.25%), FUN_80084D10 (7.5%),
 FUN_80084220 (2.3%). New #1 hot fn = FUN_80115598 (28.6%, overlay 2D tilemap renderer) + FUN_8013F0DC (10.5%,
 overlay, newly visible) — the second (overlay-override) arc.
+
+## later-187b — GTE transform cluster FINISHED (80085050/84EB0/84D10/84220), −37% cumulative
+Owned the remaining 4 GTE-transform-cluster fns native (engine/engine_math.cpp), finishing the cluster
+(after ov_mat_mul 84110 + ov_rotmat 85480). Used 3 parallel RE subagents (USER request) to spec
+FUN_80084EB0/80084D10/80084220 from the disas, then verified every spec myself against the disassembly
+before implementing (later-170 false-confidence discipline — and the subagents DID need cross-checking:
+the trig sign convention differs per fn).
+- **FUN_80085050 / FUN_80084EB0 / FUN_80084D10** = `ov_rot_z`/`ov_rot_y`/`ov_rot_x`: ONE generic kernel
+  `rotpair(rowA,rowB,posSin)` — compose an axis rotation onto a 3x3 matrix: rowA'=(cos·rowA−sin·rowB)>>12,
+  rowB'=(sin·rowA+cos·rowB)>>12 element-wise over 3 cols. PURE (no GTE): SIN/COS LUT @0x800a6490 + native
+  `multu` (only MFLO read = the signed product for 16-bit operands → plain signed C math bit-exact).
+  Differ ONLY in (rowA,rowB) byte offsets + the sin sign for positive angles: 80085050 rows +0/+6 posSin+1
+  (Z); 80084EB0 +0/+12 posSin−1 (Y — the asm NEGATES sin on the positive branch, opposite the others);
+  80084D10 +6/+12 posSin+1 (X). cos = LUT word high half (sign-independent); sin = low half, negated by
+  (angle<0)^(posSin<0).
+- **FUN_80084220** = `ov_apply_matlv`: GTE MVMVA (sf=1, mx=ROT, v=V0, cv=Null, lm=0) of the rotation matrix
+  ALREADY in GTE CR0-4 (loaded by a prior CTC2) × vector a0 → IR1-3 sign-extended to a1+0/4/8. Reused the
+  ov_mat_mul MVMVA core (sign44 44-bit accum, >>12, clamp16) but reads the matrix from gte_read_ctrl(0..4).
+  Replicated GTE leftover: VXY0/VZ0 (input), IR1-3, MAC1-3.
+- **VERIFIED** by per-call comparators vs rec_interp: rotX 55k+ calls 0-diff, ov_apply_matlv 75k+ (output
+  + all GTE data regs, FIFO/LZCR excluded), rotZ 35k+ — all 0-diff. **rotY only 1 live call** (the Y-axis
+  matrix rotation barely fires in the 2.5D seaside field even with motion/jumps), matched; confidence rests
+  on the IDENTICAL kernel verified at 55k+ on its siblings + offsets/sign read directly from the disas.
+- Field run **31.90M→27.06M interp insns (−15.2% this batch; cumulative −37% from the 42.93M baseline)**.
+  The entire GTE transform cluster is now OWNED and GONE from the profiler hot-list. NEW #1 hot = the
+  OVERLAY render arc: FUN_80115598 (34.7%, 2D tilemap renderer, needs overlay-override), FUN_8013F0DC
+  (12.7%, overlay), and FUN_8007712C (11.2%, cull — ov_object_cull registered but body still hot, investigate).

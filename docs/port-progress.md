@@ -171,6 +171,17 @@ for content fns (call it). Do NOT mimic PSX hardware (GTE/GP0/OT) — remove Bee
   GTE-EXACT verified: 5 output words + ALL GTE data regs (incl. the RGB FIFO the 4 GPFs push) 0-diff
   over 55000+ live calls (FIFO/LZCR excluded — same as matmul). Field run 35.21M→31.90M insns (−9.4%;
   cumulative −25.7% from the 42.93M baseline). Second of the cluster.
+- ✅ GTE-transform cluster REMAINDER `FUN_80085050`/`FUN_80084EB0`/`FUN_80084D10` = `ov_rot_z`/`ov_rot_y`/
+  `ov_rot_x` + `FUN_80084220` = `ov_apply_matlv` (engine_math.cpp, later-187). The three rot_* are ONE
+  generic kernel (`rotpair`): compose an axis rotation onto a 3x3 matrix — rowA'=(cos·rowA−sin·rowB)>>12,
+  rowB'=(sin·rowA+cos·rowB)>>12, differing only in (rowA,rowB) offsets + the Y-variant's inverted sin
+  sign (80085050 rows +0/+6 posSin+1; 80084EB0 +0/+12 posSin−1; 80084D10 +6/+12 posSin+1). PURE (no GTE,
+  SIN/COS LUT @0x800a6490 + native mults; multu→MFLO = signed product for 16-bit operands). ov_apply_matlv
+  = MVMVA (sf=1, ROT matrix from GTE CR0-4, vec from a0) → IR1-3 sign-extended to a1, GTE-exact. VERIFIED
+  0-diff: rotX 55k+, ov_apply_matlv 75k+ (output + all GTE data regs), rotZ 35k+ live calls; rotY only 1
+  live call (Y-axis rotation barely fires in 2.5D seaside) but is the same kernel verified at scale on its
+  siblings + offsets/sign read directly from the disas. Field run 31.90M→27.06M insns (−15.2%; **cumulative
+  −37% from baseline**). The whole GTE transform cluster is now OWNED + gone from the hot-list.
 - ✅ Render submit: geom GT3/GT4/gt4_bp, per-object render `0x8003CCA4`, render walk `0x8003C048` — engine_submit.
 - ✅ AUXILIARY render walks `0x8003BCF4` / `0x8003BF00` / `0x8003EEC0` = `ov_rwalk_aux_*` (engine_submit.cpp,
   issue #4): faithful per-node lift of each recomp body + per-node `gpu_obj_depth_add(world-pos depth)` so
@@ -207,10 +218,11 @@ in-port profiler (later-186, `interp.cpp`) gives the TIME + FREQUENCY histograms
     axis. NEXT BIG ARC.** All resident libgte ApplyMatrix/RotTrans-family helpers that CTC2-load a matrix
     + run MVMVA/RTPS, write to a2: ~~`FUN_80084110` 16.2%~~ ✅ OWNED native (ov_mat_mul, GTE-exact 0-diff
     115k calls — §D; the PROVEN RECIPE for the rest: decode GTE cmds, reimplement MVMVA from gte.c, verify
-    a2 + GTE output regs via the comparator excluding FIFO/LZCR). ~~`FUN_80085480` 16.9%~~ ✅ OWNED native
-    (ov_rotmat, RotMatrix, GTE-exact 0-diff 55k calls — §D; uses the GPF op not MVMVA). REMAINING:
-    `FUN_80085050` (NOW 9.3%), `FUN_80084EB0` (8.25%), `FUN_80084D10` (7.5%), `FUN_80084220` (2.3%).
-    Porting native needs: (1) a native fixed-point GTE-math layer (MVMVA with
+    a2 + GTE output regs via the comparator excluding FIFO/LZCR). **THE WHOLE CLUSTER IS NOW ✅ OWNED +
+    GONE FROM THE HOT-LIST (later-187):** ~~80085480 16.9%~~ ov_rotmat, ~~80085050 9.3%~~ ov_rot_z,
+    ~~80084EB0 8.25%~~ ov_rot_y, ~~80084D10 7.5%~~ ov_rot_x, ~~80084220 2.3%~~ ov_apply_matlv (+ the earlier
+    80084110 ov_mat_mul). Field run cumulative **42.93M→27.06M insns (−37%)**. (Historical note — the orig.
+    plan said porting native needs: (1) a native fixed-point GTE-math layer (MVMVA with
     sf/lm/IR-saturation/MAC-overflow matching mednafen gte.c), (2) GTE-REGISTER inspection tooling (the RAM
     dump is BLIND to GTE regs — must verify GTE-state LEAKAGE that downstream RTPS reads), (3) per-fn a2 +
     GTE-reg comparator. Big but the single highest-value perf + 100%-PC-native move.
@@ -227,14 +239,19 @@ in-port profiler (later-186, `interp.cpp`) gives the TIME + FREQUENCY histograms
     (FUN_80084110 ← 80084470 ← 80051980 = object rotated-displacement → world-position integration); **(3) a
     VULKAN/render PERF CHECK** (the profiler only measures interp insns, not GPU/present — needs a frame-time
     probe). End state: once the content consumers are ported too, even the fixed-point interface format goes
-    away. The transitional `gte_write_data` of leftover regs is just to keep the remaining gte_op readers correct.
-  - `FUN_80115598` NOW 28.6% (was 22.1%) — **OVERLAY** 2D tilemap/sprite-grid renderer (reads tile dims
-    +16/+17, screen pos +40/+42 centered 160/120). Engine render code but in GAME.BIN → needs overlay-
-    override (rec_set_interp_override_auto). Biggest single fn; second arc after the GTE cluster.
-  - `FUN_8013F0DC` NOW 10.5% (newly visible after the matmul/rotmat ports) — **OVERLAY** (GAME.BIN, addr
-    past MAIN.EXE end). Hot at +0xA04 (39.9k calls). Disas with `--ram scratch/bin/ram_field.bin`. RE next.
-  - `FUN_8007712C` 6.3% — the per-object CULL (ov_object_cull is registered but the guest body still runs hot;
-    investigate whether the override actually fully replaces it or re-dispatches).
+    away. The transitional `gte_write_data` of leftover regs is just to keep the remaining gte_op readers correct.)
+- **NEW HOT-LIST after the GTE cluster (field, later-187 re-profile; cumulative total now 27.06M insns):**
+  the SECOND ARC is the OVERLAY render + the cull. % is of sampled buckets:
+  - `FUN_80115598` NOW **34.7%** — **OVERLAY** 2D tilemap/sprite-grid renderer (reads tile dims +16/+17,
+    screen pos +40/+42 centered 160/120). Engine render code in GAME.BIN → needs overlay-override
+    (rec_set_interp_override_auto, flushed on unload; see engine_demo/engine_stage overlay scan). Biggest fn.
+  - `FUN_8013F0DC` NOW **12.7%** — **OVERLAY** (GAME.BIN, addr past MAIN.EXE end). Hot at +0xA04 (39.9k
+    calls). Disas with `--ram scratch/bin/ram_field.bin`. RE next.
+  - `FUN_8007712C` NOW **11.2%** — the per-object CULL. ov_object_cull is registered but the guest body
+    still runs hot at +0xD4/+0x5B0/+0x414 — INVESTIGATE whether the override actually replaces the body or
+    re-dispatches it (the override may only wrap a sub-path). Resident (MAIN.EXE) → plain disas.
+  - resident leaves still visible: `FUN_800931C0` 5.7%, `FUN_80051464` 3.5%, `FUN_8003F698` 3.5% (26k×2
+    calls @+0x50/+0xF8), `FUN_800597AC` 3.3%, `FUN_8007778C` 3.2%, `FUN_8013AC40` 3.1% (overlay).
   - ~~`FUN_80084080` 9% (mis-attributed; real 0.5%)~~ ✅ OWNED native (later-186, ov_gte_norm) — table sqrt via
     LZCR→LUT, GTE used only as CLZ; verified 0-diff 15000+ live calls. ~~`FUN_80077FB0` isqrt~~ ✅ OWNED. See §D.
   - `FUN_80076D68` 3.6% (no GTE) = animation-sequence VM stepper (control flow + 3 callees 80075f0c/80076904/
