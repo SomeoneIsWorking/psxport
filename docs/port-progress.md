@@ -158,12 +158,15 @@ resolves `CD/TOMBA2.IDX`/`CD/TOMBA2.IMG` by name, decodes the title set (set 2: 
 ties into render-ownership, NOT the asset pipeline). (Camera sub-fns below are DEFERRED behind this.)
 
 
-1. **Camera per-MODE orchestrators `FUN_8006e0f0` / `FUN_8006e228` / `FUN_8006e3f4`** — call the owned position
-   smoothers + the owned look-at builder; a camera-mode selector calls one per frame. Finish the camera system.
-   (The look-at builder `FUN_8006e464` and the dist/zoom solver `FUN_8006d2ac` are now owned — later-175/176.)
-   Remaining `FUN_8006e0f0` sub-fns to own next: 0x8006d654, 0x8006c80c, 0x8006dcf4, 0x8006d02c, 0x8006e010,
-   then collapse the orchestrator dispatch itself. Gate each scratchpad/cam-output fn with a camverify-style
-   per-call comparator (copy `ov_cam_dist_solve_verify` / `ov_cam_rotbuild_verify`).
+1. **Camera update system — DONE (later-180).** All `FUN_8006e0f0` sub-fns owned PC-native in
+   `engine/engine_camera.cpp`: 0x8006c80c Y-floor, 0x8006d654 pitch, 0x8006dcf4 heading, 0x8006d02c
+   orient/look-at matrix (rec_dispatches libgte/GTE as the math library per the RENDER boundary), 0x8006e010
+   angle-step, plus the earlier 0x8006e464 rotbuild / 0x8006d2ac dist-solve / 0x8006d960/da54 track xz·y. The
+   three per-mode ORCHESTRATORS `FUN_8006e0f0` (active follow) / `FUN_8006e228` / `FUN_8006e3f4` are collapsed
+   native too. camverify is now an end-to-end gate (native-everything vs a PURE-gen oracle, sub-fn overrides
+   cleared around the orchestrator rec_interp): e0f0 0-diff over 1000+ calls (AUTO_SKIP=500 AUTO_WALK=r);
+   e228/e3f4 are latent alternate modes, faithfully transcribed, verify when a scene drives them. Two e228
+   sub-fns (`FUN_8006dad8`/`FUN_8006def0`, a0-only) still route via rec_dispatch — own them if/when e228 is exercised.
 2. **DEMO / front-end MENU stage `0x801062E4`** — the big un-owned system in execution order between boot and
    gameplay. Title→New Game. Own its substate machine PC-native.
 3. **Init-prefix remainder:** `FUN_80075130` font/text init, `FUN_800520e0` engine subsystem init.
