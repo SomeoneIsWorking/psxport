@@ -517,9 +517,10 @@ void gpu_draw_world_quad(Core* core, const float* px, const float* py, const flo
     ys[i] = (int)(py[i] < 0 ? py[i] - 0.5f : py[i] + 0.5f) + s.s_off_y;
     us[i] = u[i]; vs[i] = v[i]; rs[i] = r[i]; gs[i] = g[i]; bs[i] = b[i];
   }
-  // World geometry: engine layer WORLD with real per-vertex depth. Queue when RQ on (flushed in engine
-  // order at the draw kick); else draw inline (default — identical to pre-queue behavior).
-  rq_emit_or_queue(core, rq_active(), RQ_WORLD, RQ_OM_DEPTH, 4, semi ? 1 : 0, 0,
+  // World geometry: engine layer WORLD with real per-vertex depth. The queue is the render path; only the
+  // PSXPORT_SBS debug compare falls back to inline single-channel emit (what world used pre-queue).
+  int gpu_sbs_get(void); int sbs = gpu_sbs_get();
+  rq_emit_or_queue(core, !sbs, RQ_WORLD, RQ_OM_DEPTH, 4, semi ? 1 : 0, 0,
                    xs, ys, us, vs, rs, gs, bs, depth, s.s_tp_mode,
                    s.s_tp_x, s.s_tp_y, s.s_clut_x, s.s_clut_y, s.s_tw_mx, s.s_tw_my, s.s_tw_ox, s.s_tw_oy,
                    s.s_da_x0, s.s_da_y0, s.s_da_x1, s.s_da_y1, s.s_tp_blend);

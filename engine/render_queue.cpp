@@ -6,11 +6,10 @@
 #include <algorithm>
 #include <stdio.h>
 
-static int s_active = -1;   // config-cache (PSXPORT_RQ), identical across cores -> stays shared
-int rq_active(void) {
-  if (s_active < 0) s_active = cfg_on("PSXPORT_RQ") ? 1 : 0;
-  return s_active;
-}
+// The render queue is THE render path — one behavior, the PC game. No env gate (user directive
+// 2026-06-20: "have only one behavior that is PC game"). The lone exception is the PSXPORT_SBS dual-channel
+// debug COMPARE tool, which keeps its own inline path; callers check gpu_sbs_get() for that, not this.
+int rq_active(void) { return 1; }
 
 void RenderQueue::reset() { n = 0; seq = 0; consumed = 0; }
 

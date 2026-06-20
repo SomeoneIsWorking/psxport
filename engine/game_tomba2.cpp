@@ -313,13 +313,14 @@ static void ov_set_geom_screen(Core* c) {       // SetGeomScreen(h) — projecti
 // the draw straight through our native walk (synchronous), instead of the DMA-register emulation dance.
 // This is the engine's draw submission, owned. Faithful-first: PSXPORT_OT_RECOMP=1 keeps the recomp body.
 static void ov_draw_otag(Core* c) {
-  // Engine-owned ordering (PSXPORT_RQ): owned world geometry was queued during submit; the OT walk now
-  // queues the guest 2D / un-owned submit variants (instead of drawing them inline); then the queue is
-  // drained in ENGINE order (layer: background < world < overlay < hud; depth within world). The guest
-  // OT is read here ONLY to enumerate the leftover guest prims — its draw ORDER is discarded. M3 captures
-  // those at submit time and retires this read. RQ off = no queue, pure inline draw during the walk.
+  // Engine-owned ordering (the one render path): owned world geometry was queued during submit; the OT
+  // walk queues the guest 2D / un-owned submit variants (instead of drawing them inline); then the queue
+  // drains in ENGINE order (layer: background < world < overlay < hud; depth within world). The guest OT
+  // is read here ONLY to enumerate the leftover guest prims — its draw ORDER is discarded. M3 captures
+  // those at submit time and retires this read. (PSXPORT_SBS debug compare keeps an inline path; its
+  // queue stays empty so the flush is a no-op.)
   gpu_dma2_linked_list(c, c->r[4]);
-  if (rq_active()) rq_flush(c);
+  rq_flush(c);
 }
 
 // ---- Replace the game's in-game Options menu with our PC-native (ImGui) menu (later-112) ----

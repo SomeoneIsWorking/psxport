@@ -12,6 +12,12 @@ Effort/time is NOT a constraint ("I don't care if it takes years"). The ONLY thi
 game CONTENT — characters (AI/behavior), level data, quests/game-rules (see THE BOUNDARY); everything
 else is PC-owned. When in doubt, own it; just build it, don't ask.
 
+**ONE BEHAVIOR = the PC game. Do NOT env-gate behavior (user, 2026-06-20).** New ownership work is THE
+path, not an opt-in flag. Do NOT add a `PSXPORT_*` toggle to A/B the PC-native path against the old PSX
+one "until verified" — make it the behavior; the user verifies the single behavior via `./run.sh`. The
+legacy A/B / `*_RECOMP` / `FAITHFUL` flags are scaffolding to RETIRE, not a pattern to extend. (Genuine
+DIAGNOSTIC tools — `PSXPORT_DEBUG=chan` probes, `PSXPORT_SBS` compare — are not "behavior" and may stay.)
+
 **The engine must NOT deal with PSX intricacies AT ALL — it OWNS the game itself.** A complete PC game
 engine owns its world and draws it the way a PC game does: it owns the game objects, the camera and
 **projection**, and — critically — **its own render ordering / visibility (real depth buffer + its own
