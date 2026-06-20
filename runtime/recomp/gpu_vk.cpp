@@ -1565,23 +1565,6 @@ static void vk_dump_to(const char* path, int sx, int sy, int w, int h) {
     fwrite(c, 1, 3, f); }
   fclose(f);
 }
-// Dump the full VK VRAM as RAW uint16 (VRAM_W x VRAM_H, no header) — the same format replay_ours
-// writes and tools/gpu_differ/diff.py reads. Lets the SW-vs-VK hook diff the VK render against a SW
-// replay of the identical GP0 stream. Armed for a target frame so it lands on the captured frame.
-static int  s_rawdump_frame = -1;
-static char s_rawdump_path[512];
-void gpu_vk_rawdump_arm(const char* path, int frame) {
-  snprintf(s_rawdump_path, sizeof s_rawdump_path, "%s", path); s_rawdump_frame = frame;
-}
-static void vk_rawdump_now(const char* path) {
-  vk_readback_to_rb();
-  FILE* f = fopen(path, "wb"); if (!f) { fprintf(stderr, "[vk_raw] cannot open %s\n", path); return; }
-  fwrite(s_rb_ptr, 2, (size_t)VRAM_W * VRAM_H, f);   // first VRAM_H rows = PSX VRAM (matches diff.py)
-  fclose(f);
-  fprintf(stderr, "[vk_raw] wrote %s (%dx%d raw u16)\n", path, VRAM_W, VRAM_H);
-}
-// On-demand VK readback for the live debug server (dbg_server.c `vkshot`): dump the last-presented
-// VK-rendered region to `path` as a PPM — i.e. exactly what VK put on screen this frame.
 // On-demand VK readback of an EXPLICIT VRAM region (the gpu_native display region) — used by the REPL
 // `shot` command, which runs headless where s_last_* (the windowed-present region) is never set.
 void gpu_vk_shot_region(Core* core, const char* path, int sx, int sy, int w, int h) {
@@ -1601,36 +1584,6 @@ void gpu_vk_vram_region(const char* path, int x, int y, int w, int h) {
   if (!gpu_vk_enabled() || !s_inited) { fprintf(stderr, "[vk_vram] VK not active\n"); return; }
   vk_dump_to(path, x, y, w, h);
   fprintf(stderr, "[vk_vram] wrote %s (%dx%d @ %d,%d)\n", path, w, h, x, y);
-}
-// PSXPORT_VK_SHOT=frame -> single dump to scratch/screenshots/vk_live.ppm.
-// PSXPORT_VK_SHOTSEQ="first:last:step:dir" -> dump EVERY step-th frame in [first,last] to
-// dir/vk_<frame>.ppm. The sequence is what catches intermittent/flickering bugs (e.g. water that
-// blinks across frames) instead of cherry-picking one frame — see docs/gfx-debug.md.
-void GpuVkState::dump(int sx, int sy, int w, int h, int frame) {
-  if (!gpu_vk_enabled() || !s_inited) return;
-  static int sf = -2; if (sf == -2) { const char* e = cfg_str("PSXPORT_VK_SHOT"); sf = e ? atoi(e) : -1; }
-  static int qa = -2, qb, qstep; static char qdir[256];
-  if (qa == -2) { qa = -1; const char* e = cfg_str("PSXPORT_VK_SHOTSEQ");
-    if (e && sscanf(e, "%d:%d:%d:%255s", &qa, &qb, &qstep, qdir) == 4 && qstep > 0) {
-      // Create the output dir up front — vk_dump_to just fopen("wb")s, so a missing dir would
-      // fail SILENTLY (the symptom of "shotseq wrote nothing"). Mirror the PSXPORT_GPU_DUMP path.
-      char cmd[320]; snprintf(cmd, sizeof cmd, "mkdir -p '%s'", qdir); int r = system(cmd); (void)r;
-    } else qa = -1; }
-  int dsx = sx, dsy = sy, dw = w, dh = h;
-  if (frame_via_fb()) { dsx = 0; dsy = FB_Y0; dw = FBW(); dh = FBH(); }   // scaled scratch FB (3D frame)
-  // DIAG: PSXPORT_VK_FULLSHOT=frame -> dump the ENTIRE panel image (VRAM rows 0..511 + scratch FB
-  // rows 512..IMG_H) so we can see exactly where geometry landed in the wide/hi-res FB.
-  { static int ff = -2; if (ff == -2) { const char* e = cfg_str("PSXPORT_VK_FULLSHOT"); ff = e ? atoi(e) : -1; }
-    if (ff >= 0 && frame == ff) { vk_dump_to("scratch/screenshots/vk_full.ppm", 0, 0, VRAM_W, IMG_H);
-      fprintf(stderr, "[vk_full] f%d wrote scratch/screenshots/vk_full.ppm (%dx%d)\n", frame, VRAM_W, IMG_H); } }
-  if (sf >= 0 && frame == sf) { vk_dump_to("scratch/screenshots/vk_live.ppm", dsx, dsy, dw, dh);
-    fprintf(stderr, "[vk_shot] f%d wrote scratch/screenshots/vk_live.ppm\n", frame); }
-  if (qa >= 0 && frame >= qa && frame <= qb && ((frame - qa) % qstep) == 0) {
-    char p[320]; snprintf(p, sizeof p, "%s/vk_%05d.ppm", qdir, frame); vk_dump_to(p, dsx, dsy, dw, dh);
-    if (cfg_on("PSXPORT_SBS")) {   // DIAG: also dump the native-depth pane (s_tex_b)
-      char pb[320]; snprintf(pb, sizeof pb, "%s/vk_%05d_b.ppm", qdir, frame);
-      s_rb_img = s_tex_b; vk_dump_to(pb, dsx, dsy, dw, dh); s_rb_img = 0; } }
-  if (s_rawdump_frame >= 0 && frame == s_rawdump_frame) { vk_rawdump_now(s_rawdump_path); s_rawdump_frame = -1; }
 }
 
 // Per-frame: reset the tee'd-primitive batch for the next frame.
@@ -1687,7 +1640,6 @@ void gpu_vk_draw_tri(Core* core, int x0,int y0,int r0,int g0,int b0, int x1,int 
 void gpu_vk_draw_tritri(Core* core, const int* xs, const int* ys, const int* us, const int* vs, const unsigned char* rs, const unsigned char* gs, const unsigned char* bs, int tpx, int tpy, int mode, int raw, int clutx, int cluty, int twmx, int twmy, int twox, int twoy, int dax0, int day0, int dax1, int day1) { core->game->gpu_vk.draw_tritri(xs,ys,us,vs,rs,gs,bs,tpx,tpy,mode,raw,clutx,cluty,twmx,twmy,twox,twoy,dax0,day0,dax1,day1); }
 void gpu_vk_draw_semi(Core* core, const int* xs, const int* ys, const int* us, const int* vs, const unsigned char* rs, const unsigned char* gs, const unsigned char* bs, int tpx, int tpy, int mode, int raw, int clutx, int cluty, int twmx, int twmy, int twox, int twoy, int dax0, int day0, int dax1, int day1, int blend) { core->game->gpu_vk.draw_semi(xs,ys,us,vs,rs,gs,bs,tpx,tpy,mode,raw,clutx,cluty,twmx,twmy,twox,twoy,dax0,day0,dax1,day1,blend); }
 void gpu_vk_shot(Core* core, const char* path) { core->game->gpu_vk.shot(path); }
-void gpu_vk_dump(Core* core, int sx, int sy, int w, int h, int frame) { core->game->gpu_vk.dump(sx, sy, w, h, frame); }
 void gpu_vk_frame_end(Core* core, const uint16_t* svram, int frame) { core->game->gpu_vk.frame_end(svram, frame); }
 void gpu_vk_tritest(Core* core) { core->game->gpu_vk.tritest(); }
 #else
@@ -1696,7 +1648,6 @@ int  gpu_vk_enabled(void) { return 0; }
 void gpu_vk_present(Core* core, const uint16_t* src, int sx, int sy, int w, int h) { (void)core;(void)src;(void)sx;(void)sy;(void)w;(void)h; }
 void gpu_vk_tritest(Core* core) { (void)core; }
 void gpu_vk_frame_end(Core* core, const uint16_t* svram, int frame) { (void)core;(void)svram; (void)frame; }
-void gpu_vk_dump(Core* core, int sx, int sy, int w, int h, int frame) { (void)core;(void)sx;(void)sy;(void)w;(void)h;(void)frame; }
 void gpu_vk_shot(Core* core, const char* path) { (void)core;(void)path; }
 void gpu_vk_set_order(Core* core, unsigned idx) { (void)core;(void)idx; }
 void gpu_vk_set_order_2d(Core* core, unsigned idx) { (void)core;(void)idx; }

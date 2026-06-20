@@ -81,7 +81,6 @@ struct GpuVkState {
                  int tpx, int tpy, int mode, int raw, int clutx, int cluty,
                  int twmx, int twmy, int twox, int twoy, int dax0, int day0, int dax1, int day1, int blend);
   void shot(const char* path);
-  void dump(int sx, int sy, int w, int h, int frame);
   void frame_end(const uint16_t* svram, int frame);
   void tritest();
   // internal helpers (called via this from the methods above)

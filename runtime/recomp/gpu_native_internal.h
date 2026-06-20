@@ -4,9 +4,9 @@
 // render state below. De-globalization (2026-06-19): all MUTABLE render machine state now lives on a
 // `GpuState` instance owned by `Game` (game.h), not in file-scope globals — so two cores can render
 // independently and be diffed. The rasterizer functions are methods of GpuState; any code holding a
-// `Core* c` reaches the state via `c->game->gpu`. The auxiliary modules carved out of gpu_native —
-// gpu_trace.cpp (GP0-stream capture for gpu_differ) and gpu_debug.cpp (scene/provenance dumps) — take
-// a `Core*` and read the per-instance state through it. NOT a public API; internal to the GPU TUs.
+// `Core* c` reaches the state via `c->game->gpu`. The auxiliary module carved out of gpu_native —
+// gpu_debug.cpp (scene/provenance dumps) — takes a `Core*` and reads the per-instance state through
+// it. NOT a public API; internal to the GPU TUs.
 #ifndef GPU_NATIVE_INTERNAL_H
 #define GPU_NATIVE_INTERNAL_H
 #include <stdio.h>
@@ -162,10 +162,6 @@ struct GpuState {
 
 // ---- Diagnostic dumps (gpu_debug.cpp) — read the per-instance state via Core* -----------------
 void gpu_scene_dump(Core* core, FILE* out, uint32_t madr);   // classify an OT's display list (PSXPORT_SCENEDUMP)
-
-// ---- GP0-stream trace capture (gpu_trace.cpp) -------------------------------------------------
-void trace_record(Core* core, uint32_t w);   // record one GP0 word (no-op unless armed); from gpu_gp0
-void trace_flush(Core* core);                 // write the captured frame's trace; from gpu_present_ex
 
 // ---- Public GPU API (free functions; thin wrappers over GpuState methods, reached via Core*) ---
 void gpu_gp0(Core* core, uint32_t w);

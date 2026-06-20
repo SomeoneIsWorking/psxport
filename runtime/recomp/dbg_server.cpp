@@ -15,8 +15,6 @@
 //   scene                 — classified display list of the CURRENT frame (gpu_scene_dump_now)
 //   provat <x> <y>        — which prim drew each displayed pixel around (x,y) (gpu_provat_display)
 //   shot [path]           — screenshot of the presented display region (PPM); default scratch/screenshots/dbg.ppm
-//   gputrace [path]       — arm a gpu_differ GP0 capture of the NEXT frame; default scratch/bin/dbg_gp0.bin
-//   sbs [0|1]             — toggle / set the Vulkan-vs-Software side-by-side present view
 //   frame                 — current present-frame counter
 //
 // Drive it from the repo with tools/dbgclient.py (or `nc 127.0.0.1 5959`).
@@ -47,7 +45,6 @@
 void gpu_scene_dump_now(Core* c, FILE* out);
 void gpu_provat_display(Core* core, FILE* out, int qx, int qy);
 void gpu_provat_enable(Core* core);
-int  gpu_gputrace_arm(Core* core, const char* path);
 void gpu_native_shot(Core* core, const char* path);
 int  gpu_sbs_get(void);
 void gpu_sbs_set(int on);
@@ -56,7 +53,6 @@ int  gpu_vk_enabled(void);
 void gpu_vk_shot(Core* core, const char* path);
 void gpu_vk_stats(Core* core, int* tri, int* tex, int* semi);
 void gpu_vk_vram_region(const char* path, int x, int y, int w, int h);
-void gpu_vk_rawdump_arm(const char* path, int frame);
 // pad input (pad_input.c) — lets the debug server DRIVE the game (press/release/tap/hold)
 void pad_repl_hold(Core* c, uint16_t active_low_mask);
 void pad_repl_tap(Core* c, uint16_t active_low_mask, int n);
@@ -119,8 +115,6 @@ static void dbg_exec(FILE* out, const char* line) {
       "  shot [path]      screenshot of the presented output (VK readback if VK active, else SW)\n"
       "  vkshot [path]    force a VK-rendered readback to PPM\n"
       "  vkstats          last frame's VK batched vertex counts (flat/textured/semi)\n"
-      "  gputrace [path]  arm a gpu_differ GP0 capture of the next frame\n"
-      "  swvkcap [prefix] capture one frame's GP0 + VK raw VRAM for tools/swvk_diff.py\n"
       "  press/release B  hold/release a pad button (up/down/left/right/x/o/triangle/square/start/select)\n"
       "  tap B [n]        tap a button for n frames (default 4)\n"
       "  hold <hex>       set the raw active-low pad mask\n"
@@ -220,19 +214,6 @@ static void dbg_exec(FILE* out, const char* line) {
     sscanf(line, "%*s %u %u %u %u %255s", &x, &y, &w, &h, path);
     gpu_vk_vram_region(path, (int)x, (int)y, (int)w, (int)h);
     fprintf(out, "vkvram (%u,%u %ux%u) -> %s\n", x, y, w, h, path);
-  } else if (!strcmp(cmd, "gputrace")) {
-    char path[256] = "scratch/bin/dbg_gp0.bin";
-    sscanf(line, "%*s %255s", path);
-    int tf = gpu_gputrace_arm(s_ctx, path);
-    fprintf(out, "gputrace armed for frame %d -> %s (appears after one frame)\n", tf, path);
-  } else if (!strcmp(cmd, "swvkcap")) {
-    // Capture the SAME frame for an aligned SW-vs-VK diff: the GP0 stream (+ initial VRAM) AND the
-    // VK-rendered VRAM. tools/swvk_diff.py replays the GP0 through SW and diffs it against the VK raw.
-    char pre[200] = "scratch/swvk/cap"; sscanf(line, "%*s %199s", pre);
-    char gp0[256], vk[256];
-    snprintf(gp0, sizeof gp0, "%s.gp0", pre); snprintf(vk, sizeof vk, "%s_vk.vram", pre);
-    int tf = gpu_gputrace_arm(s_ctx, gp0); gpu_vk_rawdump_arm(vk, tf);
-    fprintf(out, "swvkcap frame %d -> %s (GP0) + %s (VK raw); run tools/swvk_diff.py %s\n", tf, gp0, vk, pre);
   } else if (!strcmp(cmd, "press") && sscanf(line, "%*s %31s", arg) == 1) {
     s_held &= ~(unsigned short)dbg_btn(arg); pad_repl_hold(s_ctx, s_held); fprintf(out, "held=%04X\n", s_held);
   } else if (!strcmp(cmd, "release") && sscanf(line, "%*s %31s", arg) == 1) {

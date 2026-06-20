@@ -14,7 +14,7 @@
 // primitives via texpage+CLUT) and the framebuffer regions the game composes & displays.
 #include "r3000.h"
 #include "cfg.h"
-#include "gpu_native_internal.h"   // shared VRAM/state/helpers (also used by gpu_trace.c, gpu_debug.c)
+#include "gpu_native_internal.h"   // shared VRAM/state/helpers (also used by gpu_debug.cpp)
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1065,13 +1065,9 @@ static int gp0_len(uint32_t c) {
   return 1;                                      // env / nop / single-word
 }
 
-// ---- GP0 trace capture lives in gpu_trace.c (PSXPORT_GPUTRACE + gpu_gputrace_arm). It exposes
-// trace_record() (per GP0 word, below) and trace_flush() (per frame, gpu_present_ex). ----
-
 // One word into the GP0 port (direct write or DMA).
 void GpuState::gpu_gp0(Core* core, uint32_t w) {
   s_gp0_words++;
-  trace_record(core, w);
   if (s_xfer) {                                  // CPU->VRAM pixel stream (2 px/word)
     for (int k = 0; k < 2; k++) {
       int px = s_xfer_px % s_xfer_w, py = s_xfer_px / s_xfer_w;
@@ -1368,7 +1364,6 @@ void GpuState::gpu_native_shot(Core* core, const char* path) {
 // frame itself) but still wants the bookkeeping (watchdog, s_frame++, diagnostics).
 void GpuState::gpu_present_ex(Core* core, int do_blit) {
   watchdog_pet();             // frame-progress heartbeat (see watchdog.c)
-  trace_flush(core);          // PSXPORT_GPUTRACE: write this frame's GP0 trace (no-op unless armed)
   if (cfg_dbg("vramscan")) {
     int minx=99999,miny=99999,maxx=-1,maxy=-1; long nz=0;
     for (int y=0;y<512;y++) for (int x=0;x<1024;x++) if (*vram(x,y)&0x7FFF) {
@@ -1459,7 +1454,6 @@ void GpuState::gpu_present_ex(Core* core, int do_blit) {
       fclose(f);
     }
   }
-  { gpu_vk_dump(core, s_disp_x, s_disp_y, s_disp_w, s_disp_h, s_frame); }  // PSXPORT_VK_SHOT
   { static int fa = -2, fb = -2;   // PSXPORT_FADEDBG="a:b": per-frame brightness/draw log over [a,b]
     if (fa == -2) { const char* e = cfg_str("PSXPORT_FADEDBG"); fa = fb = -1;
       if (e) { fa = atoi(e); const char* col = strchr(e, ':'); fb = col ? atoi(col + 1) : fa + 200; } }

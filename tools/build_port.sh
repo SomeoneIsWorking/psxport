@@ -50,7 +50,7 @@ tools/gen_vk_shaders.sh   # compile+embed the Vulkan present shaders (gpu_vk_sha
 # the remaining .c are leaf C subsystems (cfg/disc/cdc/xa/spu/mdec adapters/mods/watchdog) + vendored
 # mednafen, reached across the boundary via extern "C".
 SRC="$RT/dispatch.cpp \
-  $RT/cfg.c $RT/mem.cpp $RT/stubs.cpp $RT/hle.cpp $RT/threads.cpp $RT/interp.cpp $RT/gpu_native.cpp $RT/gpu_trace.cpp $RT/gpu_debug.cpp $RT/spu_audio.c $RT/pad_input.cpp $RT/memcard.cpp $RT/native_fmv.cpp \
+  $RT/cfg.c $RT/mem.cpp $RT/stubs.cpp $RT/hle.cpp $RT/threads.cpp $RT/interp.cpp $RT/gpu_native.cpp $RT/gpu_debug.cpp $RT/spu_audio.c $RT/pad_input.cpp $RT/memcard.cpp $RT/native_fmv.cpp \
   $MED/psx/gte.c $RT/gte_beetle.cpp $MED/psx/mdec.c $RT/mdec_beetle.c $MED/psx/spu.c $RT/spu_beetle.c \
   $RT/disc.c $RT/cd_override.cpp $RT/cdc_native.c $RT/xa_stream.c $RT/timing.cpp $RT/gpu_vk.cpp $RT/mods.c $ENG/game_tomba2.cpp $ENG/engine_init.cpp $ENG/engine_level.cpp $ENG/fps60.cpp $ENG/engine_tomba2.cpp $ENG/engine_submit.cpp $ENG/engine_stage.cpp $ENG/engine_demo.cpp $ENG/engine_camera.cpp $ENG/native_terrain.cpp $ENG/render_queue.cpp $ENG/native_path.cpp $ENG/native_path_a1.cpp $ENG/native_path_a2.cpp $ENG/native_path_a3.cpp $ENG/native_path_b1.cpp $ENG/native_path_b2.cpp $ENG/native_path_b3.cpp $ENG/native_path_b4.cpp $ENG/native_path_b5.cpp $ENG/margin_render.cpp $RT/sync_overrides.cpp $RT/native_boot.cpp $RT/dbg_server.cpp $RT/native_stub.cpp $RT/watchdog.c $RT/boot.cpp \
   $RT/imgui_overlay.cpp $IMGUI/imgui.cpp $IMGUI/imgui_draw.cpp $IMGUI/imgui_tables.cpp $IMGUI/imgui_widgets.cpp $IMGUI/backends/imgui_impl_sdl2.cpp $IMGUI/backends/imgui_impl_vulkan.cpp \

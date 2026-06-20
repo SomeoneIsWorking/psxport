@@ -36,7 +36,6 @@ void gpu_vk_draw_semi(Core* core, const int* xs, const int* ys, const int* us, c
 // present / per-frame / readback
 void gpu_vk_present(Core* core, const uint16_t* src, int sx, int sy, int w, int h);
 void gpu_vk_frame_end(Core* core, const uint16_t* svram, int frame);
-void gpu_vk_dump(Core* core, int sx, int sy, int w, int h, int frame);
 void gpu_vk_shot(Core* core, const char* path);
 void gpu_vk_stats(Core* core, int* tri, int* tex, int* semi);
 void gpu_vk_tritest(Core* core);
