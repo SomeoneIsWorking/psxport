@@ -115,6 +115,17 @@ substate bodies C→C; the inner menu machines (0x80106F80 / 0x8010696C / 0x8010
 loader/SFX/render callees stay dispatched until ported. Gate on the interface state the retained content reads
 (sm fields above + the scratchpad flags). Frontier item 2 in docs/port-progress.md.
 
+**OWNED (later-182, engine/engine_demo.cpp, scan-registered `demo_scan_overlay` when the DEMO overlay loads):**
+substates **s1/s2/s3/s6** — the ones whose only sub-call is SYNCHRONOUS (verified yield-free with the new
+`tools/yield_reach.py`). The override is NOT placed on the root function; it sits on each substate body's
+address, fires when the guest loop's `jr v0` table-dispatch reaches it, runs the transition LOGIC native, and
+coro-redirects to the guest TAIL (0x80106650 / 0x80106658 / 0x80106670) — the ov_game_s4c shape. **NOTE the
+prologue register values the body comparisons use: s2=1, s1=2, s3=3** (0x8010633c/40/44). The DEEP-YIELDING
+substates **s0/s4/s5/s7** (their first sub-call reaches FUN_80051f80) stay GUEST until reworked with the
+coro-redirect-INTO-the-yielder handshake — a plain rec_dispatch of a deep yielder kills task 0 (later-169).
+A/B gate (override-on vs -off, REPL `run 150`): main-RAM + scratchpad 0-diff except task-0's saved-ra stack
+slot (CORO_SENTINEL vs guest return-PC, the coro-redirect artifact). `dumpram` now also dumps a `.spad`.
+
 ## GAME stage state machine (the per-area scene/update driver) — RE map (later-168)
 Overlay `\BIN\GAME.BIN` (LBA 1882, 11636 B), loaded RAW to base **0x80106228**; task-0 entry **0x8010637C**.
 Runs as a COOPERATIVE TASK: an infinite loop that yields once per frame via `FUN_80051f80(1)`. The current

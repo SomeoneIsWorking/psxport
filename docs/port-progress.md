@@ -170,9 +170,20 @@ ties into render-ownership, NOT the asset pipeline). (Camera sub-fns below are D
 2. **DEMO / front-end MENU stage `0x801062E4`** — the big un-owned system in execution order between boot and
    gameplay. Title→New Game. Own its substate machine PC-native. **FULLY RE'd (later-181) — see docs/engine_re.md
    "DEMO / front-end MENU stage" section**: root dispatcher + per-frame loop + the 8 substate handlers
-   (s0..s7), their inner menu sub-machines, sm field map, transitions, and callees are all mapped. NEXT =
-   own the substate dispatcher native (mirror engine/engine_stage.cpp's GAME-stage pattern). Overlay disasm
-   via `tools/disas.py <addr> --ram scratch/bin/tomba2/ram_menu.bin` (added later-181).
+   (s0..s7), their inner menu sub-machines, sm field map, transitions, and callees are all mapped.
+   **PARTIAL — OWNED (later-182): substates s1/s2/s3/s6 owned PC-native in `engine/engine_demo.cpp`** (the
+   ones whose only sub-call is SYNCHRONOUS — verified yield-free via the new `tools/yield_reach.py`). They
+   rec_dispatch the inner machine, then own the transition LOGIC (sm[0x48] selection + field writes) natively
+   and coro-redirect to the guest TAIL (like ov_game_s4c). Registered AUTO from the overlay-load scan
+   (`demo_scan_overlay`, distinguishes DEMO from the GAME.BIN that aliases the same base via the root prologue
+   sig 0x27bdffd0). **A/B gate PASSED**: override-on vs override-off at a steady menu frame (REPL `run 150`)
+   = main-RAM 0-diff and **scratchpad 0-diff** except ONE word — task-0's saved-ra slot 0x801FE9CC
+   (CORO_SENTINEL vs the guest return-PC), the inherent coro-redirect artifact, not behavioral state.
+   `dumpram` now also dumps a `.spad` sidecar so the A/B covers scratchpad (was blind before).
+   **NEXT (this item): own the DEEP-YIELDING substates** s0 (loaders 0x80045080/0x80044bd4 yield + falls into
+   s1), s4 (0x8007bf20 yields), s5 (0x80052078 stage-restart yields), s7 (loader 0x80106c24 yields) — these
+   need the coro-redirect-INTO-the-yielder handshake (a plain rec_dispatch of a deep yielder kills task 0).
+   Overlay disasm via `tools/disas.py <addr> --ram scratch/bin/tomba2/ram_menu.bin` (added later-181).
 3. **Init-prefix remainder:** `FUN_80075130` font/text init, `FUN_800520e0` engine subsystem init.
 
 # OPEN / BLOCKED (not on the critical path)

@@ -317,6 +317,11 @@ static long native_repl_read(Core* c, uint32_t f) {
         FILE* fp = fopen(path, "wb");
         if (fp) { fwrite(c->ram, 1, 0x200000, fp); fclose(fp); fprintf(stderr, "[repl] dumpram -> %s\n", path); }
         else fprintf(stderr, "[repl] dumpram: cannot open %s\n", path);
+        // Also dump the 1 KB scratchpad (0x1F800000) to a sidecar .spad — the main-RAM A/B diff is
+        // BLIND to scratchpad, where several engine flags live (DEMO: 0x1f80019a/19d/134/198 etc.).
+        char spath[208]; snprintf(spath, sizeof spath, "%s.spad", path);
+        FILE* sp = fopen(spath, "wb");
+        if (sp) { fwrite(c->scratch, 1, sizeof c->scratch, sp); fclose(sp); fprintf(stderr, "[repl] dumpram scratchpad -> %s\n", spath); }
       }
     }
     else if (!strcmp(cmd, "wav")) { char path[200] = {0}; if (sscanf(line, "%*s %199s", path) == 1) spu_wav_reopen(path); }

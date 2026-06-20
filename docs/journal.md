@@ -16,6 +16,35 @@
   earlier fade work: see [[tomba2-fade-flash-solved]]).
 - ~~SCEA license screen was black~~ **FIXED PC-native (later-179, below).**
 
+## later-182: OWN the DEMO / front-end MENU substate machine PC-native (s1/s2/s3/s6) — `engine/engine_demo.cpp`
+Frontier item 2 (docs/port-progress.md). Mirrors engine_stage.cpp's GAME-stage ownership for the DEMO
+overlay (base 0x80106228, aliases GAME.BIN — distinguished by the root prologue sig 0x801062E4==0x27bdffd0).
+The root dispatcher 0x801062E4 (prologue + per-frame loop reading sm[0x48], table @0x8010622C `jr v0`, single
+yield in the TAIL) runs as task-0's coroutine; each substate body is an inline block reached by the loop's
+computed `jr v0` and exited by `j <TAIL>`. We do NOT override the root — the loop's `jr v0` into an owned body
+address fires the override (interp fires overrides on computed jumps, interp.cpp:481), exactly the ov_game_s4c
+shape: native work + coro-redirect to the guest TAIL.
+- **OWNED: s1 (0x8010641C), s2 (0x80106464), s3 (0x801064E8), s6 (0x801065EC)** — the substates whose only
+  sub-call is SYNCHRONOUS. They rec_dispatch the inner machine (0x80106f80/0x8010696c/0x80106ac4/0x8007b45c +
+  0x8001cf2c/0x80106824/0x80106690/0x800750d8), then own the transition LOGIC native and redirect to the TAIL.
+- **NOT owned yet: s0/s4/s5/s7** — DEEP-YIELDING (s0 loaders 0x80045080/0x80044bd4; s4 0x8007bf20; s5
+  stage-restart 0x80052078; s7 loader 0x80106c24 all reach FUN_80051f80). A plain rec_dispatch of a deep
+  yielder longjmps out and destroys the override C frame → kills task 0 (later-169). They stay guest until
+  reworked with the coro-redirect-INTO-the-yielder handshake. Leaving them guest is safe: the guest root loop
+  dispatches them normally; only the owned addresses divert.
+- **NEW TOOL `tools/yield_reach.py`**: scans a 2MB KSEG0 RAM dump, follows direct `jal` recursively from a
+  fn, reports whether FUN_80051f80 (the yield) is reachable → tells you SYNC (safe to rec_dispatch) vs YIELDS
+  (needs handshake). Direct-jal only, so "no yield" is a lower bound; it prints indirect-call blind spots.
+- **`dumpram` now also writes a `.spad` sidecar** (the 1 KB scratchpad 0x1F800000) — the main-RAM A/B diff was
+  BLIND to scratchpad, where several DEMO flags live (0x1f80019a/19d/134/198).
+- **A/B GATE PASSED.** override-on vs override-off (PSXPORT_DEMO_OFF, a TEMPORARY verify toggle, now removed)
+  at a steady menu frame via REPL `run 150`: main-RAM diff = ONE word at 0x801FE9CC (task-0's saved-ra stack
+  slot: ON=0xDEAD0000 CORO_SENTINEL vs OFF=0x80106424 guest return-PC — the inherent coro-redirect mechanism
+  artifact, dead stack residue, not engine/content state) and **scratchpad 0-diff**. All sm fields + live
+  state byte-identical. (Confirmed it's the root frame: 0x801FE9B0..BC = the saved s0/s1/s2/s3 regs
+  1F800000/2/1/3.) This matches the engine_stage ownership result class (0-diff modulo the override's stack
+  bookkeeping).
+
 ## later-179: SCEA license screen — render it PC-NATIVE (composite the text into the framebuffer) + own its duration
 **The SCEA "Sony Computer Entertainment America Presents" screen now displays** (fades in to crisp white,
 holds, then proceeds to the FMVs/menu). USER directive (2026-06-20): stop skipping/being walled by PSX —
