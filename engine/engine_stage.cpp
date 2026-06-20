@@ -90,6 +90,36 @@ static void ov_game_s48_2(Core* c) {
   rec_coro_redirect(c, handler[s4a]);                  // run the handler IN-CONTEXT (survives a deep yield)
 }
 
+// sm[0x4c] == the AREA machine (the 9-state load/intro/play scene state machine), GAME.BIN 0x80106478,
+// reached as ov_game_s48_2's sub-mode 2 (the area LOAD/TRANSITION path). STAGED, NOT REGISTERED: it owns the
+// 9-way sm[0x4c] state selection via the same coro-redirect handshake (the per-state bodies yield deep and
+// run IN-CONTEXT), but the headless idle-field gate never reaches s4a==2, so it can't be A/B-verified yet —
+// see the registration site. Faithful to 0x80106478:
+//   prologue: addiu sp,-0x18; sw ra,0x14(sp); sw s0,0x10(sp)   (s0 saved in the jal's delay slot)
+//   jal 0x80075a80  — a per-frame area update BEFORE the dispatch. It is SYNCHRONOUS (a transitive
+//     jal-graph scan over its 57 reachable fns finds no yield FUN_80051f80; and the RAM 0-diff gate would
+//     catastrophically collapse — task 0 dies — if it ever yield-crossed this nested rec_dispatch), so it
+//     is dispatched synchronously here.
+//   read sm[0x4c]; if <9 jump-table @0x8010622c -> state; else fall to the shared epilogue.
+//   each state runs then `j 0x80106a14` (shared epilogue: lw ra,0x14(sp); lw s0,0x10(sp); jr ra).
+// The states are reached by `jr v0` (computed), so they run with ra UNCHANGED (= this fn's caller ra, which
+// rec_dispatch restores) and return only via `j 0x80106a14` — so we leave r[31] alone and just redirect.
+static void ov_game_s4c(Core* c) {
+  static const uint32_t state[9] = {
+    0x801064c4u, 0x80106510u, 0x80106580u, 0x801065b8u, 0x801066b8u,
+    0x80106830u, 0x80106930u, 0x8010694cu, 0x801069b4u,
+  };
+  uint32_t ra = c->r[31];
+  c->r[29] -= 0x18;
+  c->mem_w32(c->r[29] + 0x14, ra);              // sw ra,0x14(sp)
+  c->mem_w32(c->r[29] + 0x10, c->r[16]);        // sw s0,0x10(sp)
+  rec_dispatch(c, 0x80075a80u);                 // per-frame area update (synchronous — verified yield-free)
+  uint32_t sm = c->mem_r32(0x1f800138);
+  uint16_t s4c = c->mem_r16(sm + 0x4c);
+  if (s4c >= 9) { rec_coro_redirect(c, 0x80106a14u); return; }   // out of range -> shared epilogue
+  rec_coro_redirect(c, state[s4c]);             // run the state IN-CONTEXT (it `j`s to the epilogue itself)
+}
+
 // Register the GAME-stage area-init overrides when this just-loaded overlay is GAME.BIN at the stage base.
 // Detect by the fixed entry + handler signatures (START.BIN/DEMO.BIN are smaller and hold stale bytes at
 // these addresses, so they never match). Called from the overlay-load scan (engine_submit.cpp); registered
@@ -102,6 +132,13 @@ void stage_scan_overlay(Core* c, uint32_t base, uint32_t size) {
   rec_set_interp_override_auto(0x801086e0u, ov_game_s48_0);
   rec_set_interp_override_auto(0x80108720u, ov_game_s48_1);
   rec_set_interp_override_auto(0x80108784u, ov_game_s48_2);   // RUNNING dispatcher (coro-redirect handshake)
+  // ov_game_s4c (sm[0x4c] area machine, 0x80106478) is RE'd + implemented with the same coro-redirect
+  // handshake, but it is reached ONLY via sm[0x4a]==2 — the area LOAD/TRANSITION path. The headless idle-
+  // field gate runs entirely in sm[0x4a] 0/1 (steady play), so s4a==2 / 0x80106478 is NEVER exercised and
+  // can't be A/B-verified here. NOT registered until there's a deterministic area-transition test path
+  // (drive Tomba through an area boundary headless, or own FUN_80052078 to script a transition). See
+  // docs/journal.md later-169 NEXT.
+  (void)ov_game_s4c;
   if (cfg_dbg("stage"))
     fprintf(stderr, "[stage] own GAME area-init + RUNNING handlers (sm[0x48]==0 0x801086e0, ==1 0x80108720, "
                     "==2 0x80108784) in load 0x%08X+0x%X\n", base, size);

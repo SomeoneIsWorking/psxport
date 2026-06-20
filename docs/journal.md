@@ -24,9 +24,17 @@ the running sub-mode selection natively, content runs in-context."
 - **VERIFIED:** field reached at f328 with task 0 ALIVE (st=2, s48=2 running) and stable through f1000+ (vs
   task 0 dying @f53 with the naive override). **Gameplay RAM 0-diff @ f650 AND f1000** vs the pre-change
   (guest-interpreted) build (`PSXPORT_RAMDUMP_FRAME` + `cmp -l` → 0). Build deterministic.
-- **NEXT:** use the same `rec_coro_redirect` handshake to own the cooperative stage-transition `FUN_80052078`
-  and file-resolve `FUN_800499e8` (engine_re init table flags both with the same yield entanglement). Then
-  push toward owning the top-level loop / yield itself (native_scheduler_step "one iter per frame" design).
+- **Staged (not registered): `ov_game_s4c`** — the sm[0x4c] AREA machine (0x80106478, 9-state load/intro/
+  play). RE'd + implemented with the same handshake (native prologue + synchronous `jal 0x80075a80` —
+  verified yield-free by a 57-fn transitive jal-graph scan — + 9-way state select + redirect). BUT it is
+  reached only via sm[0x4a]==2 (area LOAD/TRANSITION); the headless idle field runs entirely in sm[0x4a]
+  0/1 (steady play: handler 0x801088d8 does NOT call 0x80106478), so s4a==2 is never exercised and the
+  A/B gate can't verify it. Left unregistered (no unverified behavior ships) until a deterministic area-
+  transition test path exists.
+- **NEXT:** (a) get a deterministic area-transition headless path (drive Tomba through an area boundary, or
+  own FUN_80052078 to script one) → then register+verify `ov_game_s4c`. (b) Own the cooperative stage-
+  transition `FUN_80052078` + file-resolve `FUN_800499e8` with the handshake (engine_re init table flags
+  both). (c) Push toward owning the top-level loop / yield itself (native_scheduler_step "one iter/frame").
 
 ## later-168: GAME stage state machine — RE'd in full; own area-INIT native; running loop BLOCKED by yield
 Pushing the relentless-ownership frontier into a NON-render engine system (handoff's default target = the
