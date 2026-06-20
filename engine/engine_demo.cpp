@@ -233,6 +233,99 @@ static void ov_demo_s0(Core* c) {
 //     the guest body. This is the remaining DEMO frontier step (needs reaching s7 = confirm a menu option).
 // s0 (above) is owned because it has genuine pre-yield engine state to own (init writes + substate sel).
 
+// ===========================================================================================
+// s7 PHASE MACHINE 0x80106C24 (later-186) — owned via the jal-target override + coro-redirect handshake.
+//
+// s7's body 0x80106668 is just a trampoline: `jal 0x80106C24` (delay nop) then falls into TAIL_NONE
+// (0x80106670: frame-ctr++ -> yield). The `jal 0x80106C24` is an override-checked jal target (interp
+// fires overrides on jal), so we own the phase machine 0x80106C24 itself (NOT s7's trampoline body —
+// s7's only engine logic IS this phase machine; the trampoline does nothing but call it and yield).
+//
+// 0x80106C24 is a 3-phase machine on sm[0x4a] (the phase index). Disasm (sm = *0x1f800138, s0=0x1f800000,
+// s1=1 set by the prologue; --ram ram_menu.bin):
+//   PROLOGUE+SELECT 0x80106c24..70:
+//     addiu sp,-40; sw s0,24(sp); lui s0,0x1f80; lw a0,0x138(s0)=task; sw ra,32(sp); sw s1,28(sp);
+//     lhu v1,0x4a(a0)=phase; addiu s1,1;
+//     beq v1,1 -> phase1 @0x80106d4c ; slti v0,v1,2; beq v0,0 -> @0x80106c64 (phase>=2 path);
+//     addiu v0,2; beq v1,0 -> phase0 @0x80106c74 ; addiu v0,900; j epilogue @0x80106e14 (1<phase<2 = none);
+//     @0x80106c64: beq v1,2 -> phase2 @0x80106dfc ; else j epilogue @0x80106e14.
+//   => phase0 body @0x80106c74, phase1 body @0x80106d4c, phase2 body @0x80106dfc, else epilogue @0x80106e14.
+//   EPILOGUE 0x80106e14: lw ra,32(sp); lw s1,28(sp); lw s0,24(sp); jr ra; addiu sp,+40
+//     -> returns to the trampoline's post-jal 0x8010666c (delay nop) -> falls into TAIL_NONE 0x80106670.
+//
+//   PHASE0 (launch, sm[0x4a]==0) @0x80106c74 — DEEP-YIELDS:
+//     sh s1(=1),0x4a(a0) [sm[0x4a]=1]; jal 0x8007a8e0; sh v0,0x5a(a0) [sm[0x5a]=timer];
+//     cursor table: a0=0x800452c0,a2=1,a3=2; lbu sm[0x6e]; sllv<<2 + table@0x8010770c; lbu -> *0x800bf870;
+//     sb 4,*0x800bf89c; jal 0x80044bd4 (LOADER, YIELDS); reinit jals 0x8007b18c/0x800796dc/0x800263e8/
+//     0x80072a78/0x80075240/0x800783dc/0x80078610; lbu a0,sm[0x6e]; jal 0x80079464; sb 1,*0x1f80019a;
+//     sm[0x6e]++ (wrap <3 -> else sm[0x6e]=0); j epilogue.
+//   PHASE1 (wait/animate, sm[0x4a]==1) @0x80106d4c — DEEP-YIELDS:
+//     optional draw jal 0x80079374 gated by *0x1f80017c & 0x10; if *0x800bf870==3 jal 0x80106ee4 else
+//     jal 0x80106e28 (per-state update, YIELDS); sm[0x5a]--; if !=0 jal 0x800524b4(0); on timeout/clear
+//     sm[0x4a]++ (->2); j epilogue.
+//   PHASE2 (teardown, sm[0x4a]==2) @0x80106dfc — ALL SYNC:
+//     jal 0x80074bc4 (verified SYNC via yield_reach.py: it sets *0x1f80027e=0 then calls 0x8001cf2c/
+//     0x80074b44/0x80074e48, no incoming-arg dependence); lw v1,0x138(s0)=sm; sb zero,*0x1f80019a;
+//     sh zero,0x48(v1) [sm[0x48]=0, restart front-end]; falls into epilogue.
+//
+// OWNERSHIP:
+//   - phase SELECTION (read sm[0x4a]) — owned native here (pre-yield, trivially ownable).
+//   - phase2 — owned FULLY native: rec_dispatch the SYNC 0x80074bc4 in-context, then *0x1f80019a=0,
+//     sm[0x48]=0. Then coro-redirect straight to the trampoline's TAIL_NONE 0x80106670 — we NEVER entered
+//     the 0x80106c24 stack frame (no prologue push), so there is nothing for the guest epilogue to restore;
+//     ra at entry is already 0x8010666c (set by the trampoline's jal). 0x80106670 re-establishes its own
+//     v0/v1/a0 (frame-ctr++ then the single yield), independent of s0/s1/ra/sp — so this is correct WITHOUT
+//     replicating the s7-frame epilogue. This mirrors s2/s3/s6 redirecting to a TAIL.
+//   - phase0 / phase1 — DEEP-YIELD, so they MUST run IN-CONTEXT. We replicate the prologue's stack frame
+//     (sp-=40; sw incoming ra@32, s1@28, s0@24) so the body's eventual `jr ra` epilogue restores the
+//     incoming ra (0x8010666c) and returns to the trampoline correctly. We set s0=0x1f800000 and s1=1 (the
+//     two regs the bodies read that the prologue established), set a0=task (the body reads sm via a0 in
+//     phase0's prologue-tail; phase1 reloads s0 itself), then coro-redirect to the body entry so the
+//     in-body yields longjmp/resume in-context. We do NOT own any phase0/phase1 sm writes natively — their
+//     substantive logic is all post-yield; pre-yield there is only sm[0x4a]=1 (phase0, redone by the body's
+//     own `sh s1,0x4a` at its head). Redirecting to the body's HEAD (0x80106c74 / 0x80106d4c) re-runs that
+//     head instruction normally, so we own nothing redundantly and risk nothing.
+//   - else (phase index not in {0,1,2}) — redirect to the epilogue path's effective destination: with no
+//     frame pushed, that is the trampoline TAIL_NONE 0x80106670 (the epilogue would `jr ra`=0x8010666c ->
+//     0x80106670). Same reasoning as phase2's return.
+static const uint32_t S7_PHASE0_BODY = 0x80106c74u;
+static const uint32_t S7_PHASE1_BODY = 0x80106d4cu;
+static void ov_demo_s7_phase(Core* c) {
+  uint32_t sm = c->mem_r32(SM_PTR);
+  uint16_t phase = c->mem_r16(sm + 0x4a);
+  if (cfg_dbg("demo"))
+    fprintf(stderr, "[demo] s7_phase sm[0x4a]=%u sm[0x48]=%u sm[0x6e]=%u sm[0x5a]=%u (ra=0x%08X)\n",
+            phase, c->mem_r16(sm + 0x48), c->mem_r8(sm + 0x6e), c->mem_r16(sm + 0x5a), c->r[31]);
+
+  if (phase == 2) {
+    // PHASE2 teardown — fully native, all SYNC. No s7 frame entered -> redirect to the trampoline TAIL.
+    rec_dispatch(c, 0x80074bc4u);             // teardown (SYNC: verified yield-free)
+    c->mem_w8 (0x1f80019au, 0);               // *0x1f80019a = 0
+    c->mem_w16(c->mem_r32(SM_PTR) + 0x48, 0); // sm[0x48] = 0 (restart front-end); re-read sm in case it moved
+    rec_coro_redirect(c, TAIL_NONE);          // == 0x80106670, the trampoline's post-jal flow (frame-ctr++ -> yield)
+    return;
+  }
+
+  if (phase == 0 || phase == 1) {
+    // PHASE0/PHASE1 deep-yield: replicate the 0x80106c24 prologue frame so the body's `jr ra` epilogue
+    // restores the incoming ra (=0x8010666c) and returns to the trampoline, then redirect into the body.
+    uint32_t ra = c->r[31];
+    c->r[29] -= 40;                           // addiu sp,-40
+    c->mem_w32(c->r[29] + 24, c->r[16]);      // sw s0,24(sp)  (save INCOMING s0)
+    c->mem_w32(c->r[29] + 32, ra);            // sw ra,32(sp)
+    c->mem_w32(c->r[29] + 28, c->r[17]);      // sw s1,28(sp)  (save INCOMING s1)
+    c->r[16] = 0x1f800000u;                   // s0 = 0x1f800000 (bodies read 0x138(s0); phase1 reloads it too)
+    c->r[17] = 1;                             // s1 = 1 (phase0 head does `sh s1,0x4a`)
+    c->r[4]  = sm;                            // a0 = task (phase0's prologue-tail reads sm via a0)
+    rec_coro_redirect(c, phase == 0 ? S7_PHASE0_BODY : S7_PHASE1_BODY);
+    return;
+  }
+
+  // else: phase index not in {0,1,2} — the guest would fall straight to its epilogue (`jr ra` ->
+  // 0x8010666c -> TAIL_NONE). With no frame pushed, redirect directly to the trampoline TAIL.
+  rec_coro_redirect(c, TAIL_NONE);
+}
+
 // Register the DEMO substate overrides when the just-loaded overlay is the DEMO overlay at the stage
 // base. Distinguish from GAME.BIN (which aliases the same base) by the root-dispatcher prologue:
 // DEMO 0x801062E4 = `addiu sp,sp,-48` (0x27bdffd0); GAME's entry is 0x8010637C = 0x27bdffe0 (and at
@@ -254,6 +347,13 @@ void demo_scan_overlay(Core* c, uint32_t base, uint32_t size) {
   rec_set_interp_override_auto(0x80106464u, ov_demo_s2);
   rec_set_interp_override_auto(0x801064E8u, ov_demo_s3);
   rec_set_interp_override_auto(0x801065ECu, ov_demo_s6);
+  // s7 phase machine (ov_demo_s7_phase, 0x80106C24) is written + reviewed but NOT registered: it could
+  // not be VERIFIED to fire. Headless automation (`newgame`) drives DEMO->GAME via s5 (leave-demo), and
+  // blind menu taps reach s2/s3/s5 but never s7 (sm[0x48]=7 = the "New Game" option-confirm path). Per the
+  // later-170 trap (a registered-but-never-fired override looks fine while doing nothing AND risks firing
+  // wrongly on an unverified path), it stays unregistered until a reliable New-Game-confirm REPL sequence
+  // reaches s7 for an A/B gate. See ov_demo_s7_phase + docs/journal.md later-185.
+  (void)ov_demo_s7_phase;
   if (cfg_dbg("demo"))
     fprintf(stderr, "[demo] own DEMO substates s0/s1/s2/s3/s6 (0x801063C0/0x8010641C/0x80106464/"
                     "0x801064E8/0x801065EC) in load 0x%08X+0x%X\n", base, size);
