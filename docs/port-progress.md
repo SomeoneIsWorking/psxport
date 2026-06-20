@@ -141,9 +141,17 @@ Owned this session: the unpack post-step (libgs DrawSync dropped from the synchr
 per-group LOADER ORCHESTRATION `FUN_80044F58` → `ov_load_texgroup` (header+archive CD-load, unpack, metadata,
 terminal yield), and the OFFLINE reconstructor `tools/tex_reconstruct.c` that rebuilds the seaside VRAM atlas
 from raw compressed bytes with NO PSX — 99.95% bit-identical to live VRAM, residual = runtime-animated CLUTs only.
-**REMAINING under this redirect:** (a) the on-screen 288×576 backdrop COMPOSITION (engine-owned 2D layer/sort,
-ties into render-ownership, NOT the asset pipeline); (b) the title/menu BG render regression (background not
-submitted — see later-177) before the menu image can be exported. (Camera sub-fns below are DEFERRED behind this.)
+**title/menu BG render: FIXED (later-178).** The title's two full-screen background sprites rendered BLACK
+because later-172's linear packet-pool walk decoupled each 2D sprite from its E1 DR_TPAGE (memory order ≠
+draw order); restoring OT LINK-ORDER enumeration in `gpu_dma2_linked_list` binds the texpage correctly. The
+title now composites the full TOMBA!2 logo/brick/characters/menu; field unchanged. (NOT a missing-submission
+or asset-pipeline bug — the assets were in VRAM all along; later-177b's root-cause was wrong, FALSIFIED.)
+**Menu BG EXPORTED OFFLINE from the CHD (USER request) — `tools/menu_bg_export.cpp`.** Opens the disc,
+resolves `CD/TOMBA2.IDX`/`CD/TOMBA2.IMG` by name, decodes the title set (set 2: LZ + unpack), composites the
+320×224 title via 8bpp+CLUT sampling, writes a PNG — game NOT run, no OT, no runtime. Output matches
+`fl_06.ppm` (sans the runtime menu-text prims). Run: `build/tools/menu_bg_export <disc.chd> out.png`.
+**REMAINING under this redirect:** the on-screen 288×576 backdrop COMPOSITION (engine-owned 2D layer/sort,
+ties into render-ownership, NOT the asset pipeline). (Camera sub-fns below are DEFERRED behind this.)
 
 
 1. **Camera per-MODE orchestrators `FUN_8006e0f0` / `FUN_8006e228` / `FUN_8006e3f4`** — call the owned position
