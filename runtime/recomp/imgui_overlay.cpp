@@ -41,6 +41,23 @@ void imgui_overlay_init(SDL_Window* win, VkInstance inst, VkPhysicalDevice phys,
   ImGui::CreateContext();
   ImGui::GetIO().IniFilename = nullptr;   // don't write imgui.ini next to the binary
   ImGui::StyleColorsDark();
+
+  // Scale the overlay for the display's DPI and bump it up a touch so it's comfortable by default.
+  // SDL reports the display's dots-per-inch; 96 dpi is the 1.0 baseline. UI_BASE_SCALE makes the
+  // default (non-HiDPI) overlay slightly bigger than ImGui's stock size. Both the widget metrics
+  // (ScaleAllSizes) and the bitmap font (built at the scaled pixel size) follow the same factor so
+  // text stays crisp instead of being stretched via FontGlobalScale.
+  const float UI_BASE_SCALE = 1.30f;
+  float dpi_scale = 1.0f;
+  { float ddpi = 96.0f;
+    int disp = SDL_GetWindowDisplayIndex(win);
+    if (disp >= 0 && SDL_GetDisplayDPI(disp, &ddpi, nullptr, nullptr) == 0 && ddpi > 0.0f)
+      dpi_scale = ddpi / 96.0f; }
+  float ui_scale = dpi_scale * UI_BASE_SCALE;
+  ImGui::GetStyle().ScaleAllSizes(ui_scale);
+  ImFontConfig fc; fc.SizePixels = 13.0f * ui_scale;   // stock default is 13px
+  ImGui::GetIO().Fonts->AddFontDefault(&fc);
+
   ImGui_ImplSDL2_InitForVulkan(win);
   ImGui_ImplVulkan_InitInfo ii = {};
   ii.Instance = inst; ii.PhysicalDevice = phys; ii.Device = dev;
@@ -128,12 +145,30 @@ static void build_ui(void) {
   ImGui::End();
 }
 
+// Debug pause state (dbg_server.c) — the P key toggles it; the present loop holds the frame. Show a small
+// pause glyph (two bars) top-left whenever paused so it's obvious the game is frozen, not hung.
+int dbg_is_paused(void);   // dbg_server.cpp (C++ linkage)
+static void draw_pause_indicator(void) {
+  if (!dbg_is_paused()) return;
+  ImDrawList* dl = ImGui::GetForegroundDrawList();
+  const float s = ImGui::GetFontSize() / 13.0f;                 // follow the UI/DPI scale
+  const float pad = 10.0f * s, bw = 7.0f * s, bh = 26.0f * s, gap = 7.0f * s, m = 7.0f * s;
+  const ImVec2 o(pad, pad);
+  const float boxw = m * 2 + bw * 2 + gap, boxh = m * 2 + bh;
+  dl->AddRectFilled(o, ImVec2(o.x + boxw, o.y + boxh), IM_COL32(0, 0, 0, 140), 4.0f * s);
+  const ImU32 col = IM_COL32(255, 255, 255, 230);
+  const float bx = o.x + m, by = o.y + m;
+  dl->AddRectFilled(ImVec2(bx, by), ImVec2(bx + bw, by + bh), col, 1.5f * s);
+  dl->AddRectFilled(ImVec2(bx + bw + gap, by), ImVec2(bx + bw * 2 + gap, by + bh), col, 1.5f * s);
+}
+
 void imgui_overlay_new_frame(void) {
   if (!s_inited) return;
   ImGui_ImplVulkan_NewFrame();
   ImGui_ImplSDL2_NewFrame();
   ImGui::NewFrame();
   if (s_visible) build_ui();
+  draw_pause_indicator();
   ImGui::Render();
 }
 
