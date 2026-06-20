@@ -1,5 +1,36 @@
 # Debug / progress journal
 
+## later-166: state reconciliation — field WORLD geometry is 100% engine-owned; M4 effectively done, M3 is what's left
+The handoff (`scratch/handoff.md`) and the committed docs (de8ea8e `engine_re.md`, journal later-165)
+named **`0x80027768` as "the next ownership target"** and claimed **"~70% of field world polys carry no
+native depth."** Both are STALE — the same class of stale-handoff error later-165 caught for M2. Verified,
+not assumed (grep + runtime measurement at the green field, `PSXPORT_AUTO_GAMEPLAY`, present f650):
+
+- **`0x80027768` is already owned + committed** — `ov_submit_poly_gt4_bp` (engine/engine_submit.cpp:315),
+  registered `game_tomba2.cpp:424`. A prior session re-RE'd an already-owned function and wrote it up as
+  open work (lost-track-of-existing-work, the exact failure CLAUDE.md warns about).
+- **The dominant field submitter is already native via the scan.** `PSXPORT_DEBUG=pdisp` shows 59/76
+  dispatches/frame are dispatcher **mode 0** → overlay renderer `0x80146478`. That looks like a "fallback,"
+  but `PSXPORT_DEBUG=submit` shows the scan-on-load owns it: "own overlay CALLER @ 0x80146478", and the
+  GT3/GT4 submitters it calls (`0x801465EC`/`0x801467BC`) are scan-owned native → push to the render queue
+  as `RQ_WORLD` with real depth. pdisp counts the dispatch *wrapper*, not the inner submit = a red herring.
+- **Only 2D leaks through the OT walk now.** `PSXPORT_DEBUG=ndepth` op-histogram at the field: the sole
+  OT-walk leftover is **op 0x2D/0x2F flat-textured quads** (~34/frame). `PSXPORT_POLYDUMP=650`: they are
+  small (8–12px) axis-aligned screen-space rects at the font/UI texpage `tp=(960,256)` with per-glyph
+  colors = **HUD text/UI**, genuinely 2D. The gouraud world ops (0x3C/0x34) the stale note listed as leaking
+  are GONE (owned). So **M4 — "100% world geometry carries real depth" — is effectively achieved for this
+  scene.** No more world submit VARIANTS to own here.
+- **Retired metrics warning:** `ndepth` real-depth/2D counters and the value-keyed `projprim` depth ring
+  measure the OLD attach path the render queue (later-164) superseded; they read ~0 even when world depth is
+  correct. Don't gate on them — measure the queue.
+
+**What's actually left = M3:** the leftover 2D (HUD/text FT4 quads + the screen-space background/water
+sprites) still reach the renderer via `gpu_dma2_linked_list` walking the guest OT, and their BACKGROUND-vs-
+HUD layer is chosen by the `bg_2d` screen-coverage heuristic (gpu_native.cpp:48), not by what the prim IS.
+Full ownership = capture those 2D submits at their SOURCE with an explicit engine layer, stop driving the
+frame from the OT walk, delete `bg_2d`. Docs corrected (engine_re.md OPEN section). No code change this
+entry — a measurement/reconciliation milestone so the next unit (M3) starts from the true state.
+
 ## 2026-06-17 — chan4 area music "loops ~18 s early" FIXED (spurious interleaved EOF)
 User report: the gameplay area music after the fisherman cutscene (chan4 XA, clip [84515..97979]
 loop=1, = 89.76 s) loops noticeably earlier than it should (~90 s expected). RE'd via offline +

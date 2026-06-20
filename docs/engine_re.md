@@ -234,36 +234,34 @@ computes the projection and can carry the real per-vertex view-Z straight to the
   too slow + thrashed). The flat interp now honours interp-overrides (coro_native_call → interp_override_for).
   VERIFIED 0-diff vs fully-interpreted (`PSXPORT_SUBMIT_RECOMP=1`) at f470/f560/f600. `PSXPORT_DEBUG=submit`
   logs each owned overlay submitter; `PSXPORT_NO_OVERLAY_OWN=1` is the A/B.
-- **OPEN — full field depth coverage needs MORE submit VARIANTS.** Measured (`PSXPORT_DEBUG=ndepth` +
-  the 2D-band op histogram + depth records-made/hit/miss counters): in the field only ~30% of gouraud-
-  textured world polys get native depth; ~70% (op 0x3C GT4 + 0x34 GT3 + 0x2D flat-textured FT4) fall to the
-  2D band because they come from submitters that record NO depth. These are NOT the GT3/GT4 library — they
-  are **distinct submit variants**, e.g. `0x80027768` (recompiled MAIN): a GT4-packet builder with
-  **byte-packed 8-bit vertex records** (`lbu`+`<<8`, verts built on the stack) and a **per-call X position
-  offset** (`addu vx,vx,a1`) — a different record format/ABI, so the generic native GT3/GT4 impl CANNOT own
-  it (owning it crashed: wrong return ptr → caller jumps into data). Other resident copies found by an
-  op-fingerprint scan of the f560 RAM image: `0x8003B320`/`0x8003C8F4` (GT3), `0x8013CDD4`/`0x8013DD34`
-  (overlay). Each distinct variant needs its own RE (record format, args, packet, cull, depth) + native
-  port + 0-diff, then own resident copies via `rec_set_override` and overlay copies via the scan (extend
-  classify_submit's signature per variant). NOTE the recompiled submitters are NOT covered by scan-on-load
-  (that only sees CD-loaded overlays) — own them by fixed address.
-- **`0x80027768` FULL decode (later-165, via `tools/disas.py 0x80027768`) — the next ownership target.**
-  It is a LOOP over byte-packed GT4 quad records (NOT a single prim) and is the LIT/depth-cued sibling of
-  the already-owned plain `submit_poly_gt4_bp` (engine/engine_submit.cpp:315 — mirror that native impl).
-  Entry regs: `t3=a0` (record base), `t1=a0+0x18` (per-vertex byte block), `t2=*0x800bf544` (GP0 packet
-  output cursor, written back to 0x800bf544 at the end, += 0x34/iter), `t0=t2+40`. Args: `a1<<22` = CLUT
-  bank (same as gt4_bp); `a2` = OT/UV offset (`sra 16` at entry); `a3` = U offset (callers pass
-  `a3 = a1+0` in shard_3/5/6, one site `a3 = (int32)a3>>16` shard_3:2570). Loop: control word
-  `t5 = *(rec+4)` reloaded each iter at 0x8002779c; body packs `lbu`+`<<8` bytes from scattered rec
-  offsets into stack words → GTE V0/V1/V2, runs RTPT 0x280030 + NCLIP/AVSZ + NCS color (GTE 0x0984000) +
-  gouraud (0x0f8002a) + depth-cue, writes a **52-byte** packet, links into OT 0x800ed8c8 with prim code
-  0x0c000000; advance rec t1/t3 += 0x24 (36, same stride as gt4_bp), out t0/t2 += 0x34 (52); `bgtz t5`
-  continues. Per CLAUDE.md RENDER + later-96 (no dynamic GTE lighting, NC*/CC=0): reimplement as decode
-  byte verts → `proj_native_xform` (float) → real depth → `gpu_draw_world_quad`, DROP the depth-cue fog
-  bake (renderer owns fog), exactly like gt4_bp's native version. CONFIRM the NCS color is a passthrough
-  via the VRAM A/B gate (build override-on vs a `*_RECOMP` super-call, headless dump at a frame where it
-  fires, `cmp -l` byte-identical) before flipping it to default. Decode the exact V/UV/RGB byte offsets
-  from the full disas when implementing — do NOT guess them.
+- **RESOLVED — field WORLD geometry is 100% engine-owned with real depth (later-166, re-measured).** The
+  earlier "~70% of world polys fall to the 2D band / `0x80027768` is the next ownership target" claims are
+  STALE — superseded by the render queue (M1, later-164) + the scan-on-load overlay ownership. Re-measured
+  at the green field (present f650, `PSXPORT_AUTO_GAMEPLAY`):
+  - `0x80027768` is **already owned** — `engine/engine_submit.cpp` `ov_submit_poly_gt4_bp`, registered in
+    `game_tomba2.cpp:424`. (The byte-packed GT4 decode is committed; it is NOT open work.)
+  - The dominant field submitter, dispatcher **mode 0** → overlay renderer `0x80146478`, is a *CALLER*
+    wrapper owned by the scan-on-load (`PSXPORT_DEBUG=submit`: "own overlay CALLER @ 0x80146478"); the
+    GT3/GT4 submitters it calls (`0x801465EC`/`0x801467BC`) are scan-owned native → they push straight to
+    the render queue as `RQ_WORLD` with real per-vertex depth. (`PSXPORT_DEBUG=pdisp` counts the dispatch
+    *wrapper* as "fallback" — a RED HERRING; the inner submit is native.)
+  - The only prims still flowing through the guest OT walk at the field are **op 0x2D/0x2F flat-textured
+    quads** (~34/frame, `PSXPORT_DEBUG=ndepth` op-histogram). Per `PSXPORT_POLYDUMP` these are small (8–12px)
+    axis-aligned screen-space rects at the font/UI texpage `tp=(960,256)` with per-glyph colors — i.e. **HUD
+    text/UI**, genuinely 2D, correctly in the 2D band. The gouraud world ops (0x3C GT4 / 0x34 GT3) the old
+    note listed as leaking are **gone** (now owned). So M4 ("100% world geometry carries real depth") is
+    effectively achieved for this scene; no more world submit VARIANTS need owning here.
+  - The retired metrics: `PSXPORT_DEBUG=ndepth` (real-depth/2D-band counters) and the value-keyed
+    `projprim` depth ring measure the OLD attach path, which the render queue superseded — under the queue
+    they read ~0 even when world depth is correct. Don't gate on them; measure the queue instead.
+- **NEXT (M3) — own the 2D layer at submit source + retire the OT walk.** What remains is NOT a missing
+  world-depth variant; it is that the leftover 2D (the HUD/text FT4 quads + the screen-space background/
+  water sprites) still reach the renderer via `gpu_dma2_linked_list` walking the guest OT, and their
+  BACKGROUND-vs-HUD layer is chosen by the `bg_2d` screen-coverage heuristic (gpu_native.cpp:48) rather
+  than by what the prim IS. Full ownership = capture those 2D submits at their source (text/sprite draw +
+  the background drawer) with an EXPLICIT engine layer, stop driving the frame from the OT walk, and delete
+  the `bg_2d` heuristic. That is the sea/sky-behind-world fix made source-true (M1's layering already makes
+  it render right; M3 removes the heuristic + the last OT read).
 - OPEN: 3D-projected overlay banners (hint signs) now sit behind nearer world geo (true depth vs the
   artist's OT-on-top) — overlay-vs-world depth semantics to resolve.
 
