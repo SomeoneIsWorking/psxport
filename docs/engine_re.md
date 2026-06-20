@@ -312,6 +312,18 @@ computes the projection and can carry the real per-vertex view-Z straight to the
 ## Camera
 - Position (u16): `_DAT_1f8000d2` (X), `_DAT_1f8000d6` (Y), `_DAT_1f8000da` (Z).
 - Forward vector (s16): `_DAT_1f8000e8/ea/ec` (used in the cull depth dot product).
+- **Per-frame camera UPDATE = `FUN_8006d95c` (0x8006d95c → `jr ra` @0x8006e8f0; ~0x1000 B / ~960 instrs)
+  — the NEXT engine-ownership target (later-173).** Init is already native (`eng_init_camera`, FUN_80050a80);
+  this is the per-frame FOLLOW/update that runs during play. Found via a write-watchpoint on the camera
+  position: `PSXPORT_WWATCH=9f8000d0,9f8000de` during the walk scene pins every store to the camera state to
+  PCs inside it (0x8006d9c4/d9d4, 0x8006e3c4, 0x8006e89c/e8bc). Prologue: `s1 = a1` (the camera-TARGET
+  object = Tomba), `s0 = 0x1f8000d0` (camera-state base); body reads the target's pos/state + current camera
+  state and recomputes the camera position + the rotation matrix at `0x1f8000f8` via libgte matrix/trig
+  helpers (`0x80083e80`/`80083f50`/`80084080`/`80085690`; note `slti s0,s0,401` = a clamp). The OUTPUT (cam
+  matrix `0x1f8000f8` + pos `0x1f8000d2..da` + forward `0x1f8000e8`) is the CONTENT/RENDER interface —
+  `proj_native_vertex` (render) AND the cull `FUN_8007712c` read it — so the ownership gate is **RAM-match of
+  those camera fields** vs the oracle, verifiable on the deterministic free-roam MOTION scene
+  (`AUTO_SKIP=500 AUTO_WALK`, driving-the-game.md §5) that the static idle field (A==B) cannot exercise.
 - Full basis (right/up): per-object rotation matrix is loaded to GTE CR0-4 + translation CR5-7 right
   before each RTPS/RTPT (96 / 54 static ctc2 sites) — the per-object transform, the Phase-3 native target.
 
