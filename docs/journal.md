@@ -30,6 +30,27 @@ not per-prim size. RE first (field, `PSXPORT_AUTO_GAMEPLAY`, f650, RAM dump `PSX
   (op 65/2D/2F) are still classified by the bg_2d fallback (all correctly HUD here, but own them at source
   next to finish M3).
 
+  **Two follow-on approaches RULED OUT this session (record so they're not re-walked):**
+  1. **Native transcription of the tilemap drawer = NO.** The per-drawer screen-centering constants are
+     baked as code IMMEDIATES, not in the descriptor: drawer 0x80115598 centres on (160,120), the 2nd
+     parallax drawer 0x8010C26C on (144,120) (captured live: scrollX=0 → tile0 X=8 ⇒ centre 144). A native
+     reimpl would have to import per-overlay magic constants — banned, and it's pure-mechanism transcription
+     the engine rule forbids. (Descriptor decode IS in later-167/engine_re if ever needed: cols@+0x10
+     rows@+0x11 scroll@+0x28/+0x2a clutBase@+0x06 mapdata@+0x14; tile = 16×16, U=(idx<<4)&0xF0
+     V=(idx&0xF0)+8 clut=clutBase+((idx&0xF00)>>2).)
+  2. **Per-drawer provenance for HUD/text = impractical.** Unlike the single backdrop drawer, the field HUD
+     has ~10+ heterogeneous sources (writer-trace via PSXPORT_WWATCH on HUD nodes): resident font 0x8007E8xx,
+     overlay UI 0x8013DFxx / 0x8010C4xx, item icons 0x8002668C, + the AddPrim linkers 0x8003CBF0/CC04/CC10
+     and sprite linker 0x80078F28/3C/48. Bracketing each is a sprawl with no payoff (HUD already classifies
+     correctly via the fallback).
+  - **RECOMMENDED OT-retirement mechanism instead:** capture 2D at the single AddPrim/linker CHOKEPOINT
+    (0x8003CBF0… and the sprite linker), not per drawer — feed each linked packet to the queue at submit
+    time (bg via the existing pool-range provenance, else HUD), then stop walking the guest OT chain. Caveat:
+    AddPrim order = submission order, which may differ from the OT's otz order WITHIN the HUD layer (later
+    HUD over earlier) — a visible difference only the USER can verify, so do that step with ./run.sh in the
+    loop. Render ORDERING across layers is already engine-owned (the queue re-sorts), so this is the last
+    PSX-render-read to remove, not an ordering change.
+
 ## later-166b: M3 root finding — the bg_2d coverage heuristic is blind to TILED backgrounds (provenance needed)
 Scoping M3 (own the 2D layer at source). Dumped the green-field 2D prims (`PSXPORT_PRIMDUMP=650`,
 present f650, `PSXPORT_AUTO_GAMEPLAY`). The field background is **NOT one full-screen sprite** — it is a
