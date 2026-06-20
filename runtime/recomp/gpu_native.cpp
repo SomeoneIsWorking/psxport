@@ -82,6 +82,12 @@ long g_od_add = 0, g_od_hit = 0, g_od_miss = 0;   // ndepth diag: obj-depth span
 void GpuState::obj_depth_add(uint32_t lo, uint32_t hi, float ord) {
   if (hi <= lo) return;
   if (s_od_frame != s_frame) { s_od_n = 0; s_od_frame = s_frame; }   // new frame -> clear prior spans
+  // A 2D billboard decal inherits ONE object-center depth for its whole span; on a surface at the same
+  // depth (a horseshoe/scroll on a wall, #5 wall-decals) that ties the wall's per-vertex depth and
+  // z-fights. Nudge it camera-ward (nearer = larger ord) by a sliver of the [0,1] range so it sits just
+  // in FRONT of its host surface — ~1/512 clears the per-frame reprojection jitter yet is far below the
+  // gap between distinct world objects, so it never pops in front of genuinely nearer geometry.
+  ord += 1.0f / 512.0f; if (ord > 1.0f) ord = 1.0f;
   if (s_od_n < OBJ_DEPTH_MAX) { s_od_lo[s_od_n] = lo; s_od_hi[s_od_n] = hi; s_od_ord[s_od_n] = ord; s_od_n++; g_od_add++; }
 }
 int GpuState::obj_depth_lookup(uint32_t node, float* ord) {

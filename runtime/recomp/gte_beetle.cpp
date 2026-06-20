@@ -274,7 +274,12 @@ void proj_native_xform(int vx, int vy, int vz, ProjVtx* out) {
   int64_t h_div_sz = proj_divide(H, (uint32_t)out->sz);
   out->sx = proj_clampi((int32_t)(((int64_t)OFX + out->ir1 * h_div_sz) >> 16), -1024, 1023);
   out->sy = proj_clampi((int32_t)(((int64_t)OFY + out->ir2 * h_div_sz) >> 16), -1024, 1023);
-  float pz = (float)H * 0.5f; if ((float)out->sz > pz) pz = (float)out->sz;
+  // Use the SUB-INTEGER view-Z: out->sz drops the 12 fractional bits (>>12), so near-coplanar faces
+  // collide on the same integer SZ -> identical depth -> z-fight flicker (#5 barrel). tmp2_unshifted is
+  // the same view-Z with its 12-bit fraction intact; out->sz (integer) is untouched so the GP0 packet
+  // and the UNR screen projection stay byte-faithful — only the float depth WE own gets finer.
+  float pzf = (float)tmp2_unshifted / 4096.0f;
+  float pz = (float)H * 0.5f; if (pzf > pz) pz = pzf;
   float ph = (float)H / pz;
   float fofx = (float)OFX / 65536.0f, fofy = (float)OFY / 65536.0f;
   s_proj_cx = fofx; s_proj_cy = fofy;
@@ -332,7 +337,12 @@ static void proj_native_vertex(unsigned vidx, uint32_t insn, ProjVtx* out) {
   out->sx = proj_clampi((int32_t)(((int64_t)OFX + out->ir1 * h_div_sz) >> 16), -1024, 1023);  // Lm_G
   out->sy = proj_clampi((int32_t)(((int64_t)OFY + out->ir2 * h_div_sz) >> 16), -1024, 1023);
   // float (subpixel) screen + depth — the data we keep that the integer GP0 packet throws away.
-  float pz = (float)H * 0.5f; if ((float)out->sz > pz) pz = (float)out->sz;
+  // Use the SUB-INTEGER view-Z: out->sz drops the 12 fractional bits (>>12), so near-coplanar faces
+  // collide on the same integer SZ -> identical depth -> z-fight flicker (#5 barrel). tmp2_unshifted is
+  // the same view-Z with its 12-bit fraction intact; out->sz (integer) is untouched so the GP0 packet
+  // and the UNR screen projection stay byte-faithful — only the float depth WE own gets finer.
+  float pzf = (float)tmp2_unshifted / 4096.0f;
+  float pz = (float)H * 0.5f; if (pzf > pz) pz = pzf;
   float ph = (float)H / pz;
   float fofx = (float)OFX / 65536.0f, fofy = (float)OFY / 65536.0f;
   s_proj_cx = fofx; s_proj_cy = fofy;                      // remember the projection center for PSXPORT_LIGHT
