@@ -6559,5 +6559,22 @@ MIPS cull body ran in full every call (~11.2% of sampled interp time). Reimpleme
   60000+ live calls** incl. directional motion (tap right/left/up) — both culled (kept=0) and kept-with-queue
   (q=2) paths exercised. Margin re-include (margin_collect) still fires (it reads obj+1 after the body).
 - Field run **27.06M→25.02M interp insns (−7.5% this batch; cumulative −41.7% from the 42.93M baseline)**.
-  FUN_8007712C gone from the hot-list. NEW #1 = the OVERLAY render arc: FUN_80115598 (37.8%, 2D tilemap
-  renderer, needs overlay-override) then FUN_8013F0DC (13.9%, overlay anim/transform).
+  FUN_8007712C gone from the hot-list.
+
+### later-188b — overlay profiler resolution + pure tile-lookup leaf 0x8013fae0 owned
+The "FUN_8013F0DC 13.9%" hot bucket was a MIS-ATTRIBUTION: tomba2_funcs.txt lists only resident + a sparse
+set of overlay fns, so several distinct overlay functions merged under one label. **Fixed prof_report.py**:
+merge the FREQUENCY section's call-target addresses (genuine jal/jalr entries logged by the interpreter)
+into the TIME boundary set, splitting the merged buckets at real function starts (overlay starts not in
+funcs.txt are labeled `ov_<addr>(>enclosing)` — call-target-resolved, verify w/ disas before porting).
+The bucket split into ov_8013FAE0 4.25%, FUN_8013F0DC 4.07% (the real 256-insn state machine, 0x8013f0dc..
+0x8013f4d8, 21-way jump table @0x8010a088 collapsing to 4 handlers), ov_8013F988 3.87%, ov_8013FA80 1.66%.
+- **Owned ov_8013FAE0 native** (`ov_tile_lookup`, engine_submit.cpp) — the single hottest overlay piece
+  (4.25%, 39.9k calls). Pure 2D table lookup: `tab[52*a1+a0] & (mask16<<4)`, tab=*0x8014c804 mask=*0x8014c800
+  (overlay data). Registered by SIGNATURE in engine_scan_overlay (anchor on the unique pair lw 0x8014c804 /
+  lhu 0x8014c800 0x10 apart, backtrack past the prev `jr ra` to the entry) — fires for the gameplay overlay
+  (loads at 0x80108F9C+0x459A8, covering 0x8011-0x8014). VERIFIED 60000+ calls 0-diff via the `tileverify`
+  predict-vs-recomp gate. Field **25.02M→24.46M insns (−2.2%; cumulative −43% from baseline)**.
+- **NEXT (the real lever): FUN_80115598 39.4%** = the OVERLAY 2D scrolling-tilemap RENDERER (biggest single
+  fn). Render-boundary → reimplement as a PC-native 2D layer feeding the RenderQueue (NOT a packet/OT
+  transcription), register via the same signature scan. Then resident FUN_800931C0 6.5%, FUN_80084A80 4.4%.

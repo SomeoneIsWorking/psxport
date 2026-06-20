@@ -137,6 +137,10 @@ for content fns (call it). Do NOT mimic PSX hardware (GTE/GP0/OT) — remove Bee
   VERIFIED 0-diff over 60000+ live calls via the `cullverify` gate (predict native pure, recomp body does
   the writes, compare obj+1/state/queue-delta/pushed-ptr) incl. directional motion. Field 27.06M→25.02M
   insns (−7.5%; cumulative −41.7% from baseline). Margin re-include (margin_collect) still fires.
+- ✅ Gameplay-overlay pure LEAF `0x8013fae0` = `ov_tile_lookup` (engine_submit.cpp, later-188b) — 2D table
+  lookup `tab[52*a1+a0] & (mask16<<4)` (tab=*0x8014c804, mask=*0x8014c800). Was the single hottest overlay
+  piece (4.25%, 39.9k calls), mis-bucketed under FUN_8013F0DC until the prof_report overlay-resolution fix.
+  Signature-registered in engine_scan_overlay; `tileverify` gate 0-diff 60000+ calls. Field 25.02M→24.46M.
 - ✅ `FUN_80051C8C` per-object TRANSFORM build = `ov_build_xform`.
 - **Camera update (engine_camera.cpp):**
   - ✅ position X/Z `FUN_8006d960` = `ov_cam_track_xz`; ✅ position Y `FUN_8006da54` = `ov_cam_track_y` (later-174).
@@ -248,19 +252,26 @@ in-port profiler (later-186, `interp.cpp`) gives the TIME + FREQUENCY histograms
     VULKAN/render PERF CHECK** (the profiler only measures interp insns, not GPU/present — needs a frame-time
     probe). End state: once the content consumers are ported too, even the fixed-point interface format goes
     away. The transitional `gte_write_data` of leftover regs is just to keep the remaining gte_op readers correct.)
-- **NEW HOT-LIST after the GTE cluster + cull (field, later-188 re-profile; cumulative total now 25.02M
+- **PROFILER OVERLAY RESOLUTION (later-188b):** prof_report.py now merges the FREQUENCY call-targets into
+  the TIME boundary set, so merged overlay buckets split at real function starts (`ov_<addr>(>enclosing)` =
+  call-target-resolved, VERIFY with disas before porting — may occasionally be a jump-table re-entry, not a
+  fn start). This corrected "FUN_8013F0DC 13.9%" → 4 distinct fns. **Run `prof_report.py <dump> --top N`.**
+- **HOT-LIST after the GTE cluster + cull + tile-leaf (field, later-188b; cumulative total now 24.46M
   insns):** the SECOND ARC is the OVERLAY render. % is of sampled buckets:
-  - `FUN_80115598` NOW **37.8%** — **OVERLAY** 2D tilemap/sprite-grid renderer (reads tile dims +16/+17,
-    screen pos +40/+42 centered 160/120). Engine render code in GAME.BIN → needs overlay-override
-    (rec_set_interp_override_auto, flushed on unload; see engine_demo/engine_stage overlay scan). Biggest fn.
-  - `FUN_8013F0DC` NOW **13.9%** — **OVERLAY** (GAME.BIN, addr past MAIN.EXE end). Hot at +0xA04 (39.9k
-    calls). Disas with `--ram scratch/bin/ram_field.bin`. RE next.
-  - ~~`FUN_8007712C` 11.2% the per-object CULL~~ ✅ OWNED native (later-188, cull_native_body) — see §D.
-    The override only WRAPPED the recomp body (rec_super_call); now the full decision is reimplemented
-    native, verified 0-diff 60000+ calls via the `cullverify` gate. Field 27.06M→25.02M (−7.5%).
-  - resident leaves still visible: `FUN_800931C0` 6.3%, `FUN_80084A80` 4.1%, `FUN_801401B8` 3.9% (overlay),
-    `FUN_80051464` 3.9%, `FUN_8003F698` 3.8% (26k×2 calls @+0x50/+0xF8), `FUN_800597AC` 3.6%,
-    `FUN_8007778C` 3.4%, `FUN_8013AC40` 3.4% (overlay).
+  - `FUN_80115598` **39.4%** — **THE lever.** OVERLAY 2D scrolling-tilemap RENDERER (reads tile dims +16/+17,
+    screen pos +40/+42 centered 160/120; builds GP0 sprite packets + OT). RENDER-boundary → reimplement as a
+    PC-native 2D layer feeding the engine RenderQueue (NOT a packet/OT transcription). Register via the
+    SIGNATURE scan in engine_scan_overlay (engine_submit.cpp) — the gameplay overlay loads at 0x80108F9C+
+    0x459A8. Can't headless-verify render → USER eyeballs a build. Biggest single fn.
+  - `FUN_8013F0DC` **4.2%** — OVERLAY per-object anim/transform STATE MACHINE (0x8013f0dc..0x8013f4d8, 21-way
+    jump table @0x8010a088 → 4 handlers 0x8013f178/1b8/228/234; writes scale @0x800a3f90/94, dispatch byte
+    @0x1f800207). Mechanically verifiable (predict-compare). `ov_8013F988` 4.0% + `ov_8013FA80` 1.7% are
+    sibling overlay fns in the same region.
+  - ~~`FUN_8007712C` 11.2% per-object CULL~~ ✅ OWNED (later-188, cull_native_body, §D). ~~`ov_8013FAE0`
+    4.25% tile-lookup leaf~~ ✅ OWNED (later-188b, ov_tile_lookup, engine_submit.cpp; pure `tab[52*a1+a0]
+    & (mask<<4)`, signature-registered, tileverify 0-diff 60000+ calls).
+  - resident leaves still visible: `FUN_800931C0` 6.5%, `FUN_80084A80` 4.4%, `FUN_801401B8` 4.1% (overlay),
+    `FUN_80051464` 3.8%, `FUN_800597AC` 3.6%, `FUN_8007778C` 3.4%, `FUN_8003F698` 3.0% (26k×2 calls).
   - ~~`FUN_80084080` 9% (mis-attributed; real 0.5%)~~ ✅ OWNED native (later-186, ov_gte_norm) — table sqrt via
     LZCR→LUT, GTE used only as CLZ; verified 0-diff 15000+ live calls. ~~`FUN_80077FB0` isqrt~~ ✅ OWNED. See §D.
   - `FUN_80076D68` 3.6% (no GTE) = animation-sequence VM stepper (control flow + 3 callees 80075f0c/80076904/

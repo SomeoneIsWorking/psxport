@@ -1188,6 +1188,34 @@ static OverrideFn classify_submit(Core* c, uint32_t addr) {
 // function entry (after the previous fn's `jr $ra`+delay slot) and classify+register there.
 void stage_scan_overlay(Core* c, uint32_t base, uint32_t size);   // engine_stage.cpp: own GAME stage SM
 void demo_scan_overlay(Core* c, uint32_t base, uint32_t size);    // engine_demo.cpp: own DEMO menu SM
+// Gameplay-overlay pure LEAF: a 2D table lookup `tab[52*a1 + a0] & (mask16 << 4)` where
+// tab = *0x8014c804 and mask16 = *0x8014c800 (overlay data). RE'd from the disasm (0x8013fae0,
+// later-188 — the single hottest overlay piece, 4.25% / 39.9k calls/300fr, mis-bucketed under
+// FUN_8013F0DC until the prof_report overlay-resolution fix). It's a pure tile/attribute lookup;
+// owning it native is a free, exact win (same family as isqrt/sin/cos). Registered by signature in
+// engine_scan_overlay (anchor on the unique pair lw 0x8014c804 / lhu 0x8014c800), backtracked to
+// the fn entry. PSXPORT_DEBUG=tileverify gates a per-call predict-vs-recomp compare.
+static uint32_t s_tile_entry = 0;
+static inline uint32_t tile_lookup_calc(Core* c, uint32_t a0, uint32_t a1) {
+  uint32_t idx  = 52u * a1 + a0;
+  uint8_t  b    = c->mem_r8(c->mem_r32(0x8014c804u) + idx);
+  uint16_t mask = c->mem_r16(0x8014c800u);
+  return (uint32_t)(b & (uint32_t)(mask << 4));
+}
+void ov_tile_lookup(Core* c) {
+  uint32_t a0 = c->r[4], a1 = c->r[5];
+  uint32_t mine = tile_lookup_calc(c, a0, a1);
+  static int s_tv = -1; if (s_tv < 0) s_tv = cfg_dbg("tileverify") ? 1 : 0;
+  if (s_tv && s_tile_entry) {
+    rec_super_call(c, s_tile_entry);                  // oracle: interpret the original body
+    static long ng = 0, nb = 0;
+    if ((uint32_t)c->r[2] != mine) { if (nb++ < 40)
+        fprintf(stderr, "[tileverify] MISMATCH a0=%x a1=%x mine=%x oracle=%x\n", a0, a1, mine, (uint32_t)c->r[2]); }
+    else if (++ng % 20000 == 0) fprintf(stderr, "[tileverify] %ld matches\n", ng);
+  }
+  c->r[2] = mine;
+}
+
 static void engine_scan_overlay(Core* c, uint32_t base, uint32_t size) {
   stage_scan_overlay(c, base, size);   // own the GAME stage state machine when GAME.BIN loads
   demo_scan_overlay(c, base, size);    // own the DEMO/front-end menu state machine when DEMO loads
@@ -1195,6 +1223,18 @@ static void engine_scan_overlay(Core* c, uint32_t base, uint32_t size) {
   void ov_gt3gt4_caller(Core*);
   void ov_bg_tilemap(Core*);
   for (uint32_t a = lo; a + 4 <= hi; a += 4) {
+    // (0a) the pure 2D table-lookup leaf (0x8013fae0): anchor on the unique pair `lw v1,0x8014c804`
+    //      then `lhu v0,0x8014c800` 0x10 apart; backtrack to the fn entry past the previous `jr ra`.
+    if (c->mem_r32(a) == 0x8C63C804u && c->mem_r32(a + 0x10) == 0x9442C800u) {
+      uint32_t entry = lo;
+      for (uint32_t b = a; b > lo && b > a - 0x40; b -= 4)
+        if (c->mem_r32(b - 4) == 0x03E00008u) { entry = b + 4; break; }
+      s_tile_entry = entry;
+      rec_set_interp_override_auto(entry, ov_tile_lookup);
+      if (cfg_dbg("submit"))
+        fprintf(stderr, "[submit] own tile-lookup leaf @ 0x%08X (in load 0x%08X+0x%X)\n", entry, base, size);
+      continue;
+    }
     // (0) the screen-space BACKGROUND tilemap drawer (M3 provenance): anchor on the unique tile
     //     command-word build `lui a1,0x7d80 ; ori a1,a1,0x8080`, backtrack to the fn entry, bracket it
     //     so its packet-pool span is tagged RQ_BACKGROUND (gpu_native node_is_bg). later this session.
