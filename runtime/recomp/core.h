@@ -31,6 +31,15 @@ public:
 
   uint32_t io_gpustat_toggle = 0;  // GPUSTAT (0x1F801814) even/odd line bit — per-instance HW state
 
+  // Cooperative-yield handshake (later-169): a native override of a YIELDING function cannot
+  // rec_dispatch its callee (that nests a rec_interp with its own CORO_SENTINEL; a deep yield's
+  // longjmp destroys that C frame, so the resume mis-reads the return as task-end). Instead the
+  // override does its native work, sets this to the guest address to continue at, and returns —
+  // the flat interp then runs that address IN-CONTEXT (same task run), so a deep yield/resume
+  // longjmps to the scheduler and resumes correctly. Transient: set right before the override
+  // returns, consumed (and cleared) by the interp at the next control transfer. See interp.cpp.
+  uint32_t coro_redirect_pc = 0;
+
   Core();
 
   // Memory access (delegates to host_ptr / the I/O map). PSX is little-endian == host.
@@ -87,6 +96,8 @@ void rec_syscall(Core* c, uint32_t code);
 void rec_break(Core* c, uint32_t code);
 void rec_interp(Core* c, uint32_t pc);     // synchronous nested call (super-call / RAM-code)
 void rec_coro_run(Core* c, uint32_t pc);   // cooperative task entry
+void rec_coro_redirect(Core* c, uint32_t target);  // override: continue the flat interp at `target`
+                                                   // IN-CONTEXT (survives a deep yield) — see interp.cpp
 
 // Native overrides (recomp-overrides): register a hand-written native fn keyed by entry address.
 void rec_set_override(uint32_t addr, OverrideFn fn);

@@ -1,5 +1,33 @@
 # Debug / progress journal
 
+## later-169: cooperative-yield handshake (`rec_coro_redirect`) — own the GAME RUNNING dispatcher native
+Built the handshake later-168 flagged as the gating blocker, and used it to OWN the GAME running dispatcher
+`sm[0x48]==2` (0x80108784). The frontier moves from "all sub-handlers run as guest code" to "the engine owns
+the running sub-mode selection natively, content runs in-context."
+- **The KEY structural fact (re-RE):** GAME.BIN holds exactly ONE `jal FUN_80051f80` (the yield), @0x80106468
+  in the TOP-LEVEL loop (0x8010637C), AFTER the `sm[0x48]` dispatch returns. The `sm[0x4a]`/`sm[0x4c]`
+  sub-handlers do NOT yield in the overlay — but they call RESIDENT MAIN.EXE fns (`0x8007xxxx`) that yield
+  deep (asset-load waits across frames). So the running dispatcher's callee CAN yield deep, which is exactly
+  why a `rec_dispatch` override killed task 0 (later-168): the nested `rec_interp`+`CORO_SENTINEL` C frame is
+  destroyed by the deep yield's longjmp, so the resume mis-reads the return as task-end (st=2→0 @f53).
+- **The fix — `rec_coro_redirect(c, target)` (core.h `Core::coro_redirect_pc`, interp.cpp):** a native
+  override does its work, sets `coro_redirect_pc`, and RETURNS; the flat interp's next control transfer then
+  jumps to `target` IN-CONTEXT (same `interp_flat` / task run) instead of to `r[31]`. No nested interpreter,
+  no second sentinel — so a deep yield inside `target` longjmps to the scheduler and resumes correctly, and
+  `target` eventually returns up the guest chain. Consumed-and-cleared at the transfer (`coro_next_pc`), so it
+  never leaks. This is the GENERAL cooperative-yield handshake (also unlocks FUN_80052078/FUN_800499e8).
+- **`ov_game_s48_2` (engine/engine_stage.cpp), now registered:** native prologue (`sp-=0x18; sw ra`), read
+  `sm[0x4a]`, select the handler from the engine's 6-entry table, set `ra = 0x801087CC + s4a*0x10` (the guest
+  `j 0x8010881c` trampoline — byte-identical saved-ra so the A/B gate stays clean), and
+  `rec_coro_redirect` to the handler. The handler runs in-context (deep yields fine) and returns through the
+  guest epilogue → the task loop, exactly as the PSX path.
+- **VERIFIED:** field reached at f328 with task 0 ALIVE (st=2, s48=2 running) and stable through f1000+ (vs
+  task 0 dying @f53 with the naive override). **Gameplay RAM 0-diff @ f650 AND f1000** vs the pre-change
+  (guest-interpreted) build (`PSXPORT_RAMDUMP_FRAME` + `cmp -l` → 0). Build deterministic.
+- **NEXT:** use the same `rec_coro_redirect` handshake to own the cooperative stage-transition `FUN_80052078`
+  and file-resolve `FUN_800499e8` (engine_re init table flags both with the same yield entanglement). Then
+  push toward owning the top-level loop / yield itself (native_scheduler_step "one iter per frame" design).
+
 ## later-168: GAME stage state machine — RE'd in full; own area-INIT native; running loop BLOCKED by yield
 Pushing the relentless-ownership frontier into a NON-render engine system (handoff's default target = the
 GAME stage state machine, the per-area scene/update driver). Full RE + a verified partial port + a decisive

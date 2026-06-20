@@ -71,17 +71,25 @@ Three-level nested machine (disasm a GAME-stage RAM dump; `tools/disasm_overlay.
   0x801065b8, 0x801066b8, 0x80106830, 0x80106930, 0x8010694c, 0x801069b4}` = area load/intro/play states
   (timer countdown `sm[0x5c]` from 0x14a, pad-input skip via `*0x800e7e68`, calls resident system fns).
 
-**OWNED native (engine/engine_stage.cpp, scan-registered when GAME.BIN loads):** the two area-INIT handlers
-`sm[0x48]==0/==1`. Clean `jr ra` functions whose callees are SYNCHRONOUS → faithful as override+dispatch;
-verified RAM 0-diff @ field f650/f1000 vs the pre-change build.
+**OWNED native (engine/engine_stage.cpp, scan-registered when GAME.BIN loads):** ALL THREE `sm[0x48]`
+handlers. The area-INIT pair (`==0`/`==1`) are clean `jr ra` functions whose callees are SYNCHRONOUS →
+faithful as override+dispatch. The RUNNING dispatcher (`==2`, `0x80108784`) owns the 6-way `sm[0x4a]`
+selection via the cooperative-yield handshake (below). Verified RAM 0-diff @ field f650/f1000 vs the
+pre-change (guest-interpreted) build.
 
-**BLOCKED — running loop needs the cooperative-yield handshake.** `0x80108784` + the `sm[0x4a]`/`sm[0x4c]`
-sub-handlers YIELD (they are task-0's per-frame waits). Dispatching a yielding fn via `rec_dispatch` runs it
-in a NESTED `rec_interp` with its own `CORO_SENTINEL`; on the yield's longjmp→scheduler→resume, the deep PSX
-return chain unwinds to that nested sentinel, which `rec_coro_run` reads as "task returned" → task 0 marked
-dead (st=2→0, caught at f53 → divergence explosion). Owning the running loop natively requires a native
-override that survives a deep yield/resume — the SAME blocker noted below for `FUN_80052078`/`FUN_800499e8`.
-This is the gating piece for native ownership of the GAME stage running driver.
+**SOLVED (later-169) — the cooperative-yield handshake = `rec_coro_redirect`.** The IMPORTANT structural
+fact: GAME.BIN contains exactly ONE yield call (`jal FUN_80051f80` @0x80106468), at the TOP-LEVEL loop
+(0x8010637C), AFTER the `sm[0x48]` dispatch returns — the sub-handlers do NOT yield in the overlay. But the
+sub-handlers call RESIDENT MAIN.EXE fns (`0x8007xxxx`) that DO yield deep (waiting on asset loads across
+frames). So the running dispatcher's callee can yield deep, which is why a `rec_dispatch` override killed
+task 0 (nested `rec_interp`+`CORO_SENTINEL`; the deep yield's longjmp destroys that C frame → resume
+mis-reads the return as task-end, st=2→0 @f53). **The fix:** the override does its native work, sets
+`c->coro_redirect_pc` (via `rec_coro_redirect(c, target)`), and returns; the flat interp then runs `target`
+IN-CONTEXT (in the SAME task run / `interp_flat`), so a deep yield longjmps to the scheduler and resumes
+correctly — no nested sentinel. `ov_game_s48_2` uses it: native prologue + 6-way `sm[0x4a]` select, set
+`ra = 0x801087CC + s4a*0x10` (the guest `j 0x8010881c` trampoline, byte-identical saved-ra), redirect to the
+handler. The handler returns through the guest epilogue → the task loop. This is the GENERAL mechanism that
+also unlocks owning `FUN_80052078`/`FUN_800499e8` (see below).
 
 ## Top-level control flow
 - **Main loop** `FUN_80050b08` (`:31269`, override `ov_game_main`). After GPU/double-buffer + lib init,

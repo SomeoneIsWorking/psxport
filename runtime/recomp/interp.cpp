@@ -370,6 +370,17 @@ static int coro_native_call(Core* c, uint32_t tgt) {
   return 0;
 }
 
+// Cooperative-yield handshake (later-169). A native override sets c->coro_redirect_pc to hand control
+// to a guest function that runs IN-CONTEXT (in the SAME flat interp / task run), instead of nesting a
+// rec_interp via rec_dispatch (which dies on a deep yield's longjmp — later-168). After every native
+// override returns, the flat loop's next pc is the redirect if set, else the override's r[31] (normal
+// "return to caller"). Consuming clears it, so it never leaks past one control transfer.
+void rec_coro_redirect(Core* c, uint32_t target) { c->coro_redirect_pc = target; }
+static inline uint32_t coro_next_pc(Core* c) {
+  if (c->coro_redirect_pc) { uint32_t p = c->coro_redirect_pc; c->coro_redirect_pc = 0; return p; }
+  return c->r[31];
+}
+
 static void interp_flat(Core* c, uint32_t pc, uint32_t stop_ra) {
   // Spin detector (PSXPORT_SPINDBG): a non-yielding busy-wait in game code loops here forever
   // (never returns to the scheduler, never calls a native override that longjmps). Track the
@@ -448,7 +459,7 @@ static void interp_flat(Core* c, uint32_t pc, uint32_t stop_ra) {
       // else the flat interpreter re-runs a function the PC side owns (e.g. the LZ decompressor
       // 0x80044D8C) and can diverge from it. coro_native_call only fires for exact override/BIOS
       // addresses, so a plain local `j` (label inside interpreted code) falls through unchanged.
-      if (coro_native_call(c, tgt)) { pc = c->r[31]; continue; }
+      if (coro_native_call(c, tgt)) { pc = coro_next_pc(c); continue; }
       pc = tgt; continue;                            // flat call/jump
     }
     if (op == 0x00 && (FN(in) == 0x08 || FN(in) == 0x09)) {  // jr / jalr
@@ -460,14 +471,14 @@ static void interp_flat(Core* c, uint32_t pc, uint32_t stop_ra) {
       if (is_jalr) {
         if (rd) c->r[rd] = link;
         trace_call(pc, tgt);                         // optional call trace (PSXPORT_INTERP_TRACE)
-        if (coro_native_call(c, tgt)) { pc = c->r[31]; continue; }
+        if (coro_native_call(c, tgt)) { pc = coro_next_pc(c); continue; }
         pc = tgt; continue;                          // flat indirect call
       }
       if (is_ra) {                                   // return
         if (tgt == stop_ra) return;                  // returned to our sentinel -> this run is done
         pc = tgt; continue;                          // flat return up the PSX call chain
       }
-      if (coro_native_call(c, tgt)) { pc = c->r[31]; continue; }  // computed tail-call
+      if (coro_native_call(c, tgt)) { pc = coro_next_pc(c); continue; }  // computed tail-call
       pc = tgt; continue;                            // computed jump (switch table etc.)
     }
     if (op == 0x01 || op == 0x04 || op == 0x05 || op == 0x06 || op == 0x07) {  // branches
