@@ -89,10 +89,11 @@ def track(w, regval):
 def main():
     args = sys.argv[1:]
     exe_path = os.path.join(os.path.dirname(__file__), "..", "scratch", "bin", "tomba2", "MAIN.EXE")
-    mem_only = raw = False; pos = []
+    mem_only = raw = ram = False; pos = []
     i = 0
     while i < len(args):
         if args[i] == "--exe": exe_path = args[i+1]; i += 2; continue
+        if args[i] == "--ram": exe_path = args[i+1]; ram = True; i += 2; continue
         if args[i] == "--mem": mem_only = True; i += 1; continue
         if args[i] == "--raw": raw = True; i += 1; continue
         pos.append(args[i]); i += 1
@@ -100,7 +101,7 @@ def main():
         print(__doc__); return 1
     start = int(pos[0], 16)
     count = int(pos[1]) if len(pos) > 1 else 4096
-    exe = psexe.load(exe_path)
+    exe = psexe.load_ram(exe_path) if ram else psexe.load(exe_path)
     regval = [None] * 32; regval[0] = 0
     a = start
     print(f";; {exe_path}  0x{start:08x}")

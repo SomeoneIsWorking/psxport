@@ -33,6 +33,14 @@ class PsxExe:
         return struct.unpack_from("<I", self.text, off)[0]
 
 
+def load_ram(path: str) -> PsxExe:
+    """Load a raw 2MB main-RAM dump (e.g. scratch/bin/tomba2/ram_menu.bin) so overlay code that is
+    NOT in MAIN.EXE (DEMO/GAME stage handlers at 0x80106xxx) can be disassembled. KSEG0-based: a
+    virtual address 0x80xxxxxx indexes the dump at (vaddr - 0x80000000)."""
+    d = open(path, "rb").read()
+    return PsxExe(0, 0, 0x80000000, len(d), 0, 0, d)
+
+
 def load(path: str) -> PsxExe:
     d = open(path, "rb").read()
     if d[:8] != b"PS-X EXE":
