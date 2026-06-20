@@ -212,6 +212,10 @@ static void dbg_exec(FILE* out, const char* line) {
     sscanf(line, "%*s %u %u %u %u %255s", &x, &y, &w, &h, path);
     gpu_vk_vram_region(path, (int)x, (int)y, (int)w, (int)h);
     fprintf(out, "vkvram (%u,%u %ux%u) -> %s\n", x, y, w, h, path);
+  } else if (!strcmp(cmd, "debug")) {
+    char ch[200] = {0}; sscanf(line, "%*s %199[^\n]", ch);
+    void cfg_dbg_set(const char*); cfg_dbg_set(ch);
+    fprintf(out, "debug channels = %s\n", ch[0] ? ch : "(none)");
   } else if (!strcmp(cmd, "press") && sscanf(line, "%*s %31s", arg) == 1) {
     s_held &= ~(unsigned short)dbg_btn(arg); pad_repl_hold(s_ctx, s_held); fprintf(out, "held=%04X\n", s_held);
   } else if (!strcmp(cmd, "release") && sscanf(line, "%*s %31s", arg) == 1) {

@@ -18,7 +18,8 @@ extern "C" {
 int         cfg_on (const char* name);
 int         cfg_int(const char* name, int def);
 const char* cfg_str(const char* name);
-int         cfg_dbg(const char* chan);
+int         cfg_dbg(const char* chan);            // is debug CHANNEL `chan` enabled? (set via REPL `debug`)
+void        cfg_dbg_set(const char* chans);       // REPL `debug <chans|all>`: enable diagnostic channels
 void        cfg_dump(void);   // log every active PSXPORT_* var (once); for boot-time visibility
 #ifdef __cplusplus
 }

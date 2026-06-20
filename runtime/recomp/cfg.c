@@ -1,4 +1,4 @@
-// Centralized PSXPORT_* config. See cfg.h. One env read per name, cached; PSXPORT_DEBUG drives all
+// Centralized PSXPORT_* config. See cfg.h. One env read per name, cached; the debug channel set drives all
 // diagnostic channels so the project no longer needs a separate env var per debug print.
 #include "cfg.h"
 #include <stdlib.h>
@@ -38,20 +38,21 @@ const char* cfg_str(const char* name) {
   return e;
 }
 
-// --- PSXPORT_DEBUG channel set (single var, comma/space/colon separated; "all" enables everything) ---
-static int         s_dbg_parsed = 0, s_dbg_all = 0, s_dbg_nch = 0;
+// --- Debug channel set — set at runtime via the REPL `debug <chanA,chanB,...|all>` command (no env) ---
+// Diagnostics are driven from the REPL, not an env var: `debug scene,stage` enables those channels,
+// `debug all` enables everything, `debug` (empty) clears. cfg_dbg(chan) is then true while enabled.
+static int         s_dbg_all = 0, s_dbg_nch = 0;
 static char        s_dbg_buf[1024];
 static const char* s_dbg_ch[96];
-static void parse_dbg(void) {
-  s_dbg_parsed = 1;
-  const char* e = getenv("PSXPORT_DEBUG"); if (!e) return;
-  if (!strcmp(e, "all") || !strcmp(e, "1")) { s_dbg_all = 1; return; }
-  strncpy(s_dbg_buf, e, sizeof s_dbg_buf - 1);
+void cfg_dbg_set(const char* chans) {
+  s_dbg_all = 0; s_dbg_nch = 0; s_dbg_buf[0] = 0;
+  if (!chans || !*chans) return;
+  if (!strcmp(chans, "all") || !strcmp(chans, "1")) { s_dbg_all = 1; return; }
+  strncpy(s_dbg_buf, chans, sizeof s_dbg_buf - 1);
   for (char* p = strtok(s_dbg_buf, ",: "); p && s_dbg_nch < 96; p = strtok(0, ",: "))
     s_dbg_ch[s_dbg_nch++] = p;
 }
 int cfg_dbg(const char* chan) {
-  if (!s_dbg_parsed) parse_dbg();
   if (s_dbg_all) return 1;
   for (int i = 0; i < s_dbg_nch; i++) if (!strcmp(s_dbg_ch[i], chan)) return 1;
   return 0;
