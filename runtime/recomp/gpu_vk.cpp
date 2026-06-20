@@ -199,10 +199,9 @@ float proj_plane_h(void);
 void  proj_screen_center(float* cx, float* cy);
 static int light_on(void)    { return g_mods.light; }
 static int deferred_on(void) { return ssao_on() || light_on(); }
-// The native-depth / deferred infra (for SSAO/light) is OPT-IN via the PSXPORT_UI env — NOT implied by
-// the overlay merely being available. The F1 overlay itself needs none of this; SSAO/light just don't
-// take effect unless launched with PSXPORT_UI=1 (or PSXPORT_SSAO/LIGHT).
-static int ui_infra(void)    { return cfg_on("PSXPORT_UI"); }
+// The deferred SSAO/light infra is built whenever the overlay is available (g_mods.ui, always on) so the
+// player can toggle SSAO/light live. The passes themselves stay off until toggled (ssao_on/light_on).
+static int ui_infra(void)    { return g_mods.ui; }
 
 // M3 textured rasterizer: a VRAM snapshot image the texture sampler reads (avoids render/sample feedback
 // loop), its descriptor set, the textured pipeline, and a textured-vertex batch.
@@ -323,17 +322,13 @@ void gpu_vk_video_status(int* native_w, int* ires, int* fbw, int* fbh, int* ww, 
 
 int gpu_vk_enabled(void) {
   if (s_vk_on < 0) {
-    // VK is the DEFAULT renderer for windowed runs. PSXPORT_SW_GPU=1 (or PSXPORT_VK=0) forces the SW
-    // rasterizer (the oracle / fallback). Headless (no window) always stays SW.
+    // VK is THE renderer. It runs windowed (PSXPORT_GPU_WINDOW) or offscreen-headless
+    // (PSXPORT_VK_HEADLESS, deterministic — the REPL screenshot harness). The SW rasterizer remains only
+    // as the per-pixel fill/copy fallback for non-tee'd GP0 ops, never the present path.
     const char* w = cfg_str("PSXPORT_GPU_WINDOW");
-    const char* sw = cfg_str("PSXPORT_SW_GPU");
-    const char* v = cfg_str("PSXPORT_VK");
     int win = w && atoi(w) != 0;
-    int want = (sw && atoi(sw) != 0) ? 0 : (v ? (atoi(v) != 0) : 1);   // default on; SW_GPU/VK=0 disables
-    // PSXPORT_VK_HEADLESS=1: offscreen VK (no window/swapchain) so the renderer runs headless and
-    // deterministically — the foundation for the VK render-diff tool (default vs NATIVE_DEPTH).
-    s_headless = (cfg_on("PSXPORT_VK_HEADLESS") && want) ? 1 : 0;
-    s_vk_on = (s_headless || (win && want)) ? 1 : 0;
+    s_headless = cfg_on("PSXPORT_VK_HEADLESS") ? 1 : 0;
+    s_vk_on = (s_headless || win) ? 1 : 0;
   }
   return s_vk_on && !s_failed;
 }
@@ -1069,14 +1064,6 @@ void GpuVkState::present(const uint16_t* src, int sx, int sy, int w, int h) {
   if (!gpu_vk_enabled()) return;
   if (!s_inited) init_vk();
   wide_init();
-  // DIAG (PSXPORT_ASPECT_SWITCH="frame:aspect[:ires]"): emulate a LIVE overlay aspect/ires toggle at a
-  // given present-frame so the resize transition can be reproduced + captured headlessly (don't guess).
-  { static int sw = -2, swf, swa, swi = -1; static long fc = 0;
-    if (sw == -2) { const char* e = cfg_str("PSXPORT_ASPECT_SWITCH");
-      sw = (e && sscanf(e, "%d:%d:%d", &swf, &swa, &swi) >= 2) ? 1 : 0; }
-    if (sw == 1 && fc == swf) { g_mods.aspect = swa; if (swi >= 1) { g_mods.ires = swi; g_mods.ires_auto = 0; }
-      fprintf(stderr, "[aspectsw] f%ld -> aspect=%d ires=%d\n", fc, g_mods.aspect, g_mods.ires); }
-    fc++; }
   s_present_sx = sx; s_present_sy = sy;   // faithful display origin (pre use_fb override) for the LIGHT screen map
   imgui_overlay_new_frame();   // CPU-build the mod-toggle UI for this frame (no-op if overlay not inited)
   // Mirror the whole CPU VRAM (s_vram/s_interp) into the GPU R16_UINT image (M1: SW still rasterizes;

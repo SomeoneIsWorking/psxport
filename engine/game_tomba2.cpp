@@ -117,8 +117,8 @@ static void ov_object_cull(Core* c) {
   // conservative 4:3 values. Both env-overridable (PSXPORT_CULL_FAR / _FOV).
   if (s_cull < 0) { const char* f = cfg_str("PSXPORT_CULL_FAR"); s_cull_far = f ? atoi(f) : -1;
                     const char* v = cfg_str("PSXPORT_CULL_FOV"); s_cull_fov = v ? atoi(v) : -1; s_cull = 1; }
-  int wide = (cfg_str("PSXPORT_WIDE") && atoi(cfg_str("PSXPORT_WIDE")) != 0) || gpu_vk_wide_engine();
-  int do_cull = cfg_on("PSXPORT_CULL") || wide;
+  int wide = gpu_vk_wide_engine();
+  int do_cull = wide;
   int cull_far = s_cull_far >= 0 ? s_cull_far : (wide ? 0x8000 : 0x6000);
   int cull_fov = s_cull_fov >= 0 ? s_cull_fov : (wide ? 0x00 : 0x80);
   // MEASUREMENT (entity-type taxonomy RE, journal later-127 step 1; off by default): restrict the wide

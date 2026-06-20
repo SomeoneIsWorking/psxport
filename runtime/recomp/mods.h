@@ -10,7 +10,7 @@ extern "C" {
 // Aspect mode for the PC-native widescreen (wider FOV, no stretch). AUTO = match the live window aspect.
 enum { ASPECT_4_3 = 0, ASPECT_16_9 = 1, ASPECT_21_9 = 2, ASPECT_AUTO = 3 };
 typedef struct {
-  int   ui;            // overlay system enabled (PSXPORT_UI): forces native-depth + the deferred infra on
+  int   ui;            // overlay system enabled (always on): keeps the deferred SSAO/light infra built
   int   aspect;        // ASPECT_4_3 / _16_9 / _21_9 / _AUTO (widescreen = wider FOV; not a present stretch)
   int   ires;          // internal resolution scale (1..3; capped by VRAM_W=1024 / current FB width)
   int   ires_auto;     // derive ires from the live window height (~round(h/240)), clamped to the width cap
