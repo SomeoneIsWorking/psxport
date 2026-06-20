@@ -168,7 +168,11 @@ ties into render-ownership, NOT the asset pipeline). (Camera sub-fns below are D
    e228/e3f4 are latent alternate modes, faithfully transcribed, verify when a scene drives them. Two e228
    sub-fns (`FUN_8006dad8`/`FUN_8006def0`, a0-only) still route via rec_dispatch — own them if/when e228 is exercised.
 2. **DEMO / front-end MENU stage `0x801062E4`** — the big un-owned system in execution order between boot and
-   gameplay. Title→New Game. Own its substate machine PC-native.
+   gameplay. Title→New Game. Own its substate machine PC-native. **FULLY RE'd (later-181) — see docs/engine_re.md
+   "DEMO / front-end MENU stage" section**: root dispatcher + per-frame loop + the 8 substate handlers
+   (s0..s7), their inner menu sub-machines, sm field map, transitions, and callees are all mapped. NEXT =
+   own the substate dispatcher native (mirror engine/engine_stage.cpp's GAME-stage pattern). Overlay disasm
+   via `tools/disas.py <addr> --ram scratch/bin/tomba2/ram_menu.bin` (added later-181).
 3. **Init-prefix remainder:** `FUN_80075130` font/text init, `FUN_800520e0` engine subsystem init.
 
 # OPEN / BLOCKED (not on the critical path)

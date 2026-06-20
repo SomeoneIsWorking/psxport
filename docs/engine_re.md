@@ -52,6 +52,69 @@ spawning**, the **main menu** (DEMO stage state machine @0x801062E4), font/text 
 subsystem init (800520e0), and a real PC-native single display env (replace FUN_80050738). Each: `disas.py`
 the fn, understand the data, reimplement PC-native in `engine/`, keep the PSX-content interface state exact.
 
+## DEMO / front-end MENU stage state machine @0x801062E4 — RE map (later-181)
+The title/attract/menu front-end. Lives in the **DEMO overlay** (loaded at base 0x80106228, like GAME.BIN
+— they ALIAS the same 0x80106xxx addresses, so the same jump-table address holds DIFFERENT entries per
+overlay; do not confuse this table with the GAME-stage `sm[0x4c]` table below). Runs as task-0 coroutine.
+Disassemble from a live menu RAM dump: `python3 tools/disas.py <addr> [n] --ram scratch/bin/tomba2/ram_menu.bin`
+(and `--mem --ram …` for resolved load/store addrs). task struct `sm = *0x1F800138`.
+
+**Root dispatcher 0x801062E4:** prologue runs ONCE (jal 0x800810F0 UI/ctx init with a 16-byte stack desc
+whose +4 = 320=screen-width; clear globals `*0x800BE0E4`=0, edges `*0x800E7E68`=0, `*0x800ECF54/56`=0,
+buffer-mode `*0x1F80019A`=0, `*0x1F80019D`=0; set `sm[0x48]=0`; jal 0x8005082C input/pad-table reset; clear
+`sm[0x6E]`). Then the per-frame LOOP @0x80106388: reload sm, read **`sm[0x48]` (u16) = SUBSTATE**, bounds
+`<8` (else→TAIL), dispatch via word table **@0x8010622C** → `jr`. **ONE substate per frame** (each body ends
+by branching to the TAIL; only s0 falls THROUGH into s1, so the first frame runs s0+s1). TAIL @0x80106670:
+`*0x1F800198 (u16 frame ctr)++`, `jal 0x80051F80` (the single yield), loop.
+
+**Substate table @0x8010622C:** s0=0x801063C0 s1=0x8010641C s2=0x80106464 s3=0x801064E8 s4=0x80106580
+s5=0x801065DC s6=0x801065EC s7=0x80106668.
+
+**sm fields:** `[0x48]`u16 SUBSTATE · `[0x4a]`u16 sub-machine init/phase (also s7 phase) · `[0x4c]`u16 page
+selector (written by 0x8007B45C) · `[0x50]`u16 page phase/counter · `[0x5a]`u16 intro/hold timer (inits 450) ·
+`[0x68]`u8 menu cursor/phase · `[0x6b]`u8 page selector · `[0x6e]`u8 selected-option index (s7). Button
+**pressed-edges** = `*0x800E7E68` (u16; Down=0x20, Up=0x80, confirm 0x4008, Circle/back 0x1000). Common exit
+tails: 0x80106650 (jal 0x8001CF2C engine per-frame update → TAIL) · 0x80106658 (jal 0x80075A80 attract render
+→ TAIL) · 0x80106674 (TAIL directly).
+
+**Substate handlers (→ = SUBSTATE transition written to sm[0x48]):**
+- **s0 0x801063C0** — run-once INIT: `sm[0x68]=0`, `sm[0x48]=1`, `sm[0x4a]=0`; load menu page-2 resources/
+  text/font/display (jal 0x80045080(_,2,0), 0x80044BD4, 0x8007982C, 0x80075240, 0x8001CF00(1)); **falls
+  through into s1** same frame.
+- **s1 0x8010641C** — wait/advance: `v0=jal 0x80106F80(0)` (inner menu input machine, 8-way table @0x801062C4
+  on `sm[0x4a]`; reads `*0x1F80019D`); if `v0!=0` → `sm[0x4a]=0`, **sm[0x48]→2**; else if any pad edge
+  (`*0x800E7E68`) → `*0x1F80019D=1` (skip-request). yields.
+- **s2 0x80106464** — sub-machine `v0=jal 0x8010696C` (NOT a table — beq/bne cascade on `sm[0x4a]`: 0=init set
+  timer `sm[0x5a]=450`, 1=run jal 0x80106690; on timeout reads edges, Down/Up move cursor `sm[0x68]`+SFX
+  0x80074590(21), confirm 0x4008→SFX(17) ret 2). Outcome 1→**sm[0x48]=7**; 2→phase trick on `sm[0x68]`:
+  first pass **→3** (set sm[0x68]=2), second pass **→4** (clear sm[0x68], sm[0x50]=0, jal 0x8001CF2C, clear
+  `*0x800BF84A`).
+- **s3 0x801064E8** — sub-machine `v0=jal 0x80106AC4` (mirror of 0x8010696C). 1→jumps into s2's `sm[0x48]=7`
+  tail; 2→phase trick **→5** (clear `*0x1F800134`) or **→6** (sm[0x6b]=0, sm[0x50]=0, jal 0x800750D8, clear
+  `*0x800BF808`); 3 (back/cancel)→**sm[0x48]=2**.
+- **s4 0x80106580** — closer `jal 0x8007BF20(0,0)`; branch on `sm[0x6b]`: ==1→sm[0x48]=1,sm[0x68]=1; ==2→
+  sm[0x48]=1,sm[0x68]=0; ==7→**sm[0x48]=5** + `*0x1F800134=1`; else stay (render).
+- **s5 0x801065DC** — LEAVE DEMO: `jal 0x80052078(2)` (stage-transition/task-restart to stage selector 2),
+  yields. (0x80052078 rewrites the task's stage-handler word + drives the scheduler natives.)
+- **s6 0x801065EC** — page sub-machine `jal 0x8007B45C` (reads `*0x800E7E68 & 0x1000` Circle/back → SFX(17),
+  writes page selector `sm[0x4c]=2`); if `sm[0x50]==3` fire commit pair 0x80106824(1,1)+0x80106690(1); on
+  `sm[0x6b]`∈{1,2} → **sm[0x48]=3** (+sm[0x68]=3); else stay.
+- **s7 0x80106668** — trampoline `jal 0x80106C24` then falls into TAIL. Body 0x80106C24 = 3-phase machine on
+  `sm[0x4a]`: **phase0** (0=launch) loads the SELECTED option (cursor `sm[0x6e]` indexes byte table
+  @0x8010770C → `*0x800BF870`; `*0x800BF89C=4`; the cross-frame yielding LOADER jal 0x80044BD4 + scene reinit
+  fns 0x8007B18C/0x800796DC/0x800263E8/0x80072A78/0x80075240/0x800783DC/0x80078610 + option setup
+  0x80079464(sm[0x6e]); `*0x1F80019A=1`; sm[0x4a]=1; cursor wraps <3); **phase1** (1=wait/animate) optional
+  draw 0x80079374 gated by `*0x1F80017C & 0x10`, per-state update 0x80106EE4/0x80106E28 (by `*0x800BF870==3`),
+  `sm[0x5a]--`, poll jal 0x800524B4(0); on timeout/clear sm[0x4a]→2; **phase2** (2=teardown) jal 0x80074BC4,
+  `*0x1F80019A=0`, **sm[0x48]=0** (restart front-end). The actual DEMO→GAME stage switch happens inside the
+  phase0 loader / phase2 teardown / 0x800524B4 poll, not via an in-s7 stage-request write.
+
+**To OWN native:** replace task-0's longjmp coroutine for the DEMO stage with a native dispatcher (like
+engine/engine_stage.cpp for GAME) — own the sm[0x48] switch + the per-frame loop/yield/frame-ctr, calling the
+substate bodies C→C; the inner menu machines (0x80106F80 / 0x8010696C / 0x80106AC4 / 0x8007B45C) and the
+loader/SFX/render callees stay dispatched until ported. Gate on the interface state the retained content reads
+(sm fields above + the scratchpad flags). Frontier item 2 in docs/port-progress.md.
+
 ## GAME stage state machine (the per-area scene/update driver) — RE map (later-168)
 Overlay `\BIN\GAME.BIN` (LBA 1882, 11636 B), loaded RAW to base **0x80106228**; task-0 entry **0x8010637C**.
 Runs as a COOPERATIVE TASK: an infinite loop that yields once per frame via `FUN_80051f80(1)`. The current
