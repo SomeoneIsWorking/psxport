@@ -157,8 +157,9 @@ for content fns (call it). Do NOT mimic PSX hardware (GTE/GP0/OT) — remove Bee
   fn of a0, ported native with `__builtin_clz` (the GTE caller no longer needs Beetle). Bit-exact 0-diff
   15000+ live calls. (Was mis-attributed as 9% by 256B buckets; real cost 0.5% — the profiler bucket fix.)
 - ✅ GTE 3x3 MATRIX MULTIPLY `FUN_80084110` = `ov_mat_mul` (engine_math.cpp, later-186) — P=R×M via MVMVA
-  (sf=1, rot matrix, lm=0). Was 16% of hot interp time + top freq leader (55k calls). Ported NATIVE per
-  USER 2026-06-21 (the GTE math, not just CLZ): exact MVMVA from gte.c (44-bit accum, >>12, signed clamp16;
+  (sf=1, rot matrix, lm=0). Was 16% of hot interp time + top freq leader (55k calls). Ported PC-NATIVE per
+  USER 2026-06-21 (GTE is PSX hardware → make the math native C, no gte_op/Beetle): plain-C MVMVA (44-bit
+  accum, >>12, signed clamp16;
   last element via SWC2 = sign-extended). GTE-EXACT verified: a2 output + MVMVA GTE regs (IR/MAC/input) 0-diff
   over 115000+ live calls (FIFO/LZCR regs excluded — comparator can't round-trip FIFO writes; neither path
   touches them). Field run 38.77M→35.21M insns (−9.2%; cumulative −18% from baseline). First of the cluster.
@@ -203,15 +204,20 @@ in-port profiler (later-186, `interp.cpp`) gives the TIME + FREQUENCY histograms
     sf/lm/IR-saturation/MAC-overflow matching mednafen gte.c), (2) GTE-REGISTER inspection tooling (the RAM
     dump is BLIND to GTE regs — must verify GTE-state LEAKAGE that downstream RTPS reads), (3) per-fn a2 +
     GTE-reg comparator. Big but the single highest-value perf + 100%-PC-native move.
-    **USER DIRECTIVE 2026-06-21 (supersedes the later-171 "no native GTE" precedent FOR PERF):** order is
-    **(1) NATIVE GTE FIRST** — port the cluster as native fixed-point GTE math (MVMVA + sf/lm/IR-saturation
-    matching mednafen `vendor/beetle-psx` gte.c), verified GTE-exact (a2 output + the GTE data regs the fn
-    leaves that downstream RTPS reads — build GTE-register inspection into the comparator); **(2) CALLER
-    ANALYSIS after** (FUN_80084110 ← 80084470 ← 80051980 = object rotated-displacement → world-position
-    integration, so content-adjacent → GTE-exact required); **(3) a VULKAN/render PERF CHECK** (the profiler
-    only measures interpreter insns, not GPU/present time — needs a separate frame-time probe).
-    NB: this re-opens the exact native-GTE path later-171 reverted — but the user owns the perf-vs-boundary
-    call and chose perf. Honor it; keep it GTE-exact so content stays correct.
+    **USER DIRECTIVE 2026-06-21 (the GTE is PSX HARDWARE; this is a PC game → that math must be PC-NATIVE,
+    not a mimicked/emulated GTE):** order is **(1) PC-NATIVE the GTE MATH FIRST** — reimplement each cluster
+    fn as plain C arithmetic (NO `gte_op`, NO Beetle). This is NOT a "tradeoff vs the boundary" and NOT the
+    same as the later-171 NCLIP/AVSZ revert: later-171 was a RENDER op (the engine already projects PC-native
+    with real depth, so replicating PSX NCLIP was pointless mimicry → bypass, don't replicate). These cluster
+    fns instead feed retained PSX CONTENT (object position), so the C math must produce values in the game's
+    fixed-point format — i.e. it must match the GTE's NUMERIC result so the content reads correct data (the
+    content-interface gate, CLAUDE.md). That is correctness, not GTE-hardware emulation. Verify a2 output +
+    the GTE data regs the fn leaves that a still-PSX gte_op reader would consume (the comparator excludes the
+    FIFO/LZCR regs neither path writes — can't round-trip a FIFO restore). **(2) CALLER ANALYSIS after**
+    (FUN_80084110 ← 80084470 ← 80051980 = object rotated-displacement → world-position integration); **(3) a
+    VULKAN/render PERF CHECK** (the profiler only measures interp insns, not GPU/present — needs a frame-time
+    probe). End state: once the content consumers are ported too, even the fixed-point interface format goes
+    away. The transitional `gte_write_data` of leftover regs is just to keep the remaining gte_op readers correct.
   - `FUN_80115598` 22.1% — **OVERLAY** 2D tilemap/sprite-grid renderer (reads tile dims +16/+17, screen pos
     +40/+42 centered 160/120). Engine render code but in GAME.BIN → needs overlay-override (rec_set_interp_
     override_auto). Biggest single fn; second arc after the GTE cluster.
