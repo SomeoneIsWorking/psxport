@@ -534,9 +534,22 @@ void Fps60State::rq_capture(const RqItem* items, int n) {
   s_nCur = n;
 }
 
+// Max per-VERTEX screen motion (px, L1) we will treat as "the same vertex moved a little" and lerp.
+// This is the load-bearing robustness gate, not the centroid one. Justification: Tomba2 logic runs at
+// 30fps and the in-between is the t=0.5 midpoint, so a vertex's true frame-to-frame motion is at most
+// ~half the on-screen speed of the fastest thing we interpolate. World geometry (camera pan + model
+// motion) moves at most a few tens of px/frame at this rate; 48px L1 comfortably covers genuine motion
+// while rejecting the cross-vertex pairings that cause the explosion (a mis-paired vertex jumps a large
+// fraction of the screen). A vertex whose paired displacement exceeds this is NOT the same vertex (wrong
+// fingerprint collision, permuted winding, or a real teleport/cut) -> we must not average it.
+#define FPS60_VTX_GATE 48
+// Max per-PRIM centroid motion to even consider a candidate match. Coarse pre-filter only; the per-vertex
+// gate is what actually guarantees correctness. Kept generous so legitimately-fast prims still match and
+// are then validated vertex-by-vertex.
+#define FPS60_CENTROID_GATE 64
+
 int Fps60State::build_lerp() {
   if (!s_rqLerp) s_rqLerp = new RqItem[FPS60_RQ_MAX];
-  const int gate = 64;   // max per-prim centroid motion (px) to still interpolate; beyond = teleport/cut -> snap
   std::unordered_multimap<uint64_t, int> pmap;            // prev prims indexed by fingerprint
   pmap.reserve((size_t)s_nPrev * 2 + 16);
   for (int j = 0; j < s_nPrev; j++) pmap.insert({ rq_fp(&s_rqPrev[j]), j });
@@ -546,16 +559,29 @@ int Fps60State::build_lerp() {
     if (C->layer != RQ_WORLD) continue;                  // only world geometry interpolates; 2D/HUD snap
     uint64_t fp = rq_fp(C);
     int cx, cy; rq_centroid(C, &cx, &cy);
-    int best = -1, bestd = gate + 1;
+    // Pick the candidate (same fp + same nv) whose WORST per-vertex displacement is smallest, and accept
+    // it only if EVERY vertex moved within FPS60_VTX_GATE. The fingerprint is position-independent and
+    // collides freely on real meshes (many tris share UV/color/texpage), so the centroid tiebreak alone
+    // can pair vertex k of C with vertex k of a DIFFERENT triangle whose centroid happens to be nearer —
+    // a far per-vertex midpoint = the one-frame vertex explosion. A close centroid does NOT bound the
+    // per-vertex distance (long/thin/rotated tris), so we must validate the pairing vertex-by-vertex and
+    // reject (snap) when any vertex is implausibly far. Worst-vertex (not centroid) ranking also prefers
+    // the truly-corresponding prim among same-fp collisions.
+    int best = -1, best_worst = FPS60_VTX_GATE + 1;
     auto range = pmap.equal_range(fp);
     for (auto it = range.first; it != range.second; ++it) {
       const RqItem* P = &s_rqPrev[it->second];
-      if (P->nv != C->nv) continue;
+      if (P->nv != C->nv) continue;                      // vertex-count guard: never pair mismatched verts
       int px, py; rq_centroid(P, &px, &py);
-      int d = abs(px - cx) + abs(py - cy);
-      if (d < bestd) { bestd = d; best = it->second; }
+      if (abs(px - cx) + abs(py - cy) > FPS60_CENTROID_GATE) continue;   // coarse pre-filter
+      int worst = 0;                                     // worst per-vertex L1 displacement for this pairing
+      for (int k = 0; k < C->nv; k++) {
+        int dxy = abs(P->xs[k] - C->xs[k]) + abs(P->ys[k] - C->ys[k]);
+        if (dxy > worst) worst = dxy;
+      }
+      if (worst < best_worst) { best_worst = worst; best = it->second; }
     }
-    if (best >= 0 && bestd <= gate) {                    // matched + within the teleport gate -> midpoint
+    if (best >= 0 && best_worst <= FPS60_VTX_GATE) {     // every vertex moved a small, plausible amount
       const RqItem* P = &s_rqPrev[best];
       for (int k = 0; k < C->nv; k++) {
         s_rqLerp[i].xs[k]    = (P->xs[k] + C->xs[k]) / 2;
@@ -563,6 +589,7 @@ int Fps60State::build_lerp() {
         s_rqLerp[i].depth[k] = (P->depth[k] + C->depth[k]) * 0.5f;
       }
     }
+    // else: no trustworthy pairing -> s_rqLerp[i] stays the SNAPPED current prim (real/latest position).
   }
   return s_nCur;
 }

@@ -105,19 +105,33 @@ long g_nd_3d = 0, g_nd_2d = 0;   // Phase-2 native-depth diag: prims drawn with 
 // (push_wide); 2D prims share that relocation shader, so they get the same +margin. We map each native-320
 // screen X to the pre-shader local X so that, AFTER the shader adds margin, the element lands anchored:
 //   backdrop (full-screen) -> STRETCH to fill the wide FB (no gaps);
-//   left-edge element       -> hug the wide LEFT edge (native size preserved);
-//   right-edge element      -> hug the wide RIGHT edge (native size preserved);
-//   otherwise (centered)    -> shift by margin, registering with the centered 3D world.
+//   left-anchored element   -> hug the wide LEFT edge (native size preserved);
+//   right-anchored element  -> hug the wide RIGHT edge (native size preserved);
+//   center-anchored element -> shift by margin, registering with the centered 3D world.
 // This replaces the old uniform stretch-about-x0 (which distorted + mis-anchored every HUD element).
+//
+// ANCHOR by the element's CENTER, not its edge. The old EDGE=48 band classified by whether either
+// bbox edge reached the screen edge; an element whose left edge sat at x<=48 but whose body was mid-
+// screen got dragged to the wide-left edge, and any element animating across x=48 / x=272 FLIPPED
+// anchor class frame-to-frame -> visible jump. Classifying by the bbox center into native-320 thirds
+// is stable (no straddle flip) and matches real HUD intent: corner/edge HUD hugs its side, a centered
+// prompt/meter stays centered with the world. The whole element shifts by one offset (its size and
+// internal layout are preserved exactly — no stretch), so multi-vertex prims stay rigid.
 int gpu_vk_wide_engine_w(void);
+static int ws_2d_anchor_off(int bx0, int bx1, int is_bg) {  // X offset (native px) to add to this 2D prim
+  int ww = gpu_vk_wide_engine_w(), margin = (ww - 320) / 2;
+  if (margin <= 0) return 0;                         // 4:3 -> no-op (byte-identical)
+  int cx = (bx0 + bx1) / 2;                           // element center in native-320 space
+  const int L = 320 / 3, R = 320 - 320 / 3;           // left / center / right thirds (~107, ~213)
+  if (cx < L) return -margin;                          // left-anchored:  hug wide LEFT  (x - margin)
+  if (cx > R) return +margin;                          // right-anchored: hug wide RIGHT (x + margin)
+  return 0;                                            // center-anchored: shader's +margin keeps it centered
+}
 static int ws_2d_local_x(int x, int bx0, int bx1, int is_bg) {
   int ww = gpu_vk_wide_engine_w(), margin = (ww - 320) / 2;
-  if (margin <= 0) return x;                         // 4:3 -> no-op
-  if (is_bg) return x * ww / 320 - margin;           // backdrop: fill (after +margin -> [0,fbw))
-  const int EDGE = 48;                               // HUD edge zone (native px)
-  if (bx0 <= EDGE)       return x - margin;          // left-anchored: hug wide left
-  if (bx1 >= 320 - EDGE) return x + margin;          // right-anchored: hug wide right
-  return x;                                          // centered: +margin (matches the 3D world)
+  if (margin <= 0) return x;                          // 4:3 -> no-op
+  if (is_bg) return x * ww / 320 - margin;            // backdrop: fill (after +margin -> [0,fbw))
+  return x + ws_2d_anchor_off(bx0, bx1, is_bg);       // HUD: rigid shift by the anchor offset
 }
 
 // PSXPORT_PRIMDUMP=<frame>: dump every prim drawn on that frame, in OT-walk order, to

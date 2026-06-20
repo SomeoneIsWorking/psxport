@@ -90,10 +90,21 @@ int gpu_vk_wide_engine(void);   // gpu_vk.c — genuine engine-wide active (PSXP
 static int s_objlog = -1;
 static inline uint16_t obj_r16(Core* c, uint32_t a) { return (uint16_t)(c->mem_r8(a) | (c->mem_r8(a + 1) << 8)); }
 
-// Extended culling (PSXPORT_CULL=1): the game's FUN_8007712c culls each object by distance AND by a
-// FOV cone (depth/dist < ~0x370 ≈ ±77°). That over-culls — distant objects pop in, and in widescreen
-// the wider edges get dropped. After the game's cull runs, re-include objects it dropped that are
-// within an EXTENDED distance + WIDER FOV cone (just mark visible@+1 + return 1). RE: docs/engine_re.md.
+// Engine-owned visibility margin (the engine OWNS the cull decision; later-183, user 2026-06-20).
+// The recompiled cull FUN_8007712c (RE'd from the disasm: tools/disas.py 0x8007712c → jump table at
+// 0x80016cc0, 5 state handlers) culls each object by TWO tests, both reproduced natively below:
+//   (1) DISTANCE: dist = isqrt(dx²+dy²+dz²) (object-to-camera). Each handler early-returns culled if
+//       dist < ~512 (near) and if dist >= a per-state FAR limit (~0x1001..0x1C01, i.e. 4097..7169).
+//   (2) FOV CONE: depth = forward·(dx,dy,dz) [forward = 0x1f8000e8/ea/ec], den = dist*4 (=(dist*4096)>>10);
+//       object is kept iff depth/den >= a per-state threshold (the constants 848/856/868/872/880 seen in
+//       the handlers — depth/(dist*4) ≈ cos·1024, so ~848 ≈ a ±34° half-cone). That ±34° cone is FAR
+//       narrower than even the 4:3 view frustum, so edge objects pop in/out as the camera pans, and the
+//       widescreen-widened side/corner geometry (incl. static terrain/water tiles) gets dropped entirely.
+// We do NOT inherit the PSX cone. The engine keeps any object that is in front of the camera within an
+// extended distance, regardless of aspect — a margin EVEN BEYOND what widescreen needs. After the recomp
+// body runs (it cleared the +1 flag for anything it culled), we re-include the dropped objects whose
+// (dist, forward-dot) fall inside the engine's own, wider kept region (collected for the post-walk margin
+// flush — no +1 poke, so gameplay stays 0-diff; see margin_render.hpp). Env overrides are diagnostic only.
 static int s_cull = -1, s_cull_far, s_cull_fov;
 static unsigned isqrt32(unsigned v) { unsigned r = 0, b = 1u << 30; while (b > v) b >>= 2;
   while (b) { if (v >= r + b) { v -= r + b; r = (r >> 1) + b; } else r >>= 1; b >>= 2; } return r; }
@@ -110,17 +121,23 @@ static void ov_object_cull(Core* c) {
             (int16_t)obj_r16(c, o + 0x2e), (int16_t)obj_r16(c, o + 0x32), (int16_t)obj_r16(c, o + 0x36));
   int p2 = (int16_t)c->r[5], p3 = (int16_t)c->r[6], p4 = (int16_t)c->r[7];   // pos - camera (s16 each)
   rec_super_call(c, 0x8007712Cu);                  // the game's cull (sets +1 visible flag, queues)
-  // Genuine engine-wide widens the FOV at the projection, so the frustum cull MUST widen too or the new
-  // side/corner geometry (incl. static terrain/water tiles, which also go through this per-object cull) is
-  // dropped -> black wedges. Re-evaluated LIVE each call (cached env overrides) so a live aspect toggle in
-  // the overlay takes effect immediately. Wide => widest cone (fov 0) + extended far; plain CULL keeps the
-  // conservative 4:3 values. Both env-overridable (PSXPORT_CULL_FAR / _FOV).
+  // The engine OWNS this margin, so it is ALWAYS active — not gated on widescreen. Even at 4:3 the
+  // stock ±34° cone over-culls (edge pop-in), so we keep the wide region in every aspect; widescreen
+  // then needs no extra special-casing. Env overrides remain for diagnostics only (PSXPORT_CULL_FAR/_FOV).
   if (s_cull < 0) { const char* f = cfg_str("PSXPORT_CULL_FAR"); s_cull_far = f ? atoi(f) : -1;
                     const char* v = cfg_str("PSXPORT_CULL_FOV"); s_cull_fov = v ? atoi(v) : -1; s_cull = 1; }
-  int wide = gpu_vk_wide_engine();
-  int do_cull = wide;
-  int cull_far = s_cull_far >= 0 ? s_cull_far : (wide ? 0x8000 : 0x6000);
-  int cull_fov = s_cull_fov >= 0 ? s_cull_fov : (wide ? 0x00 : 0x80);
+  int do_cull = 1;
+  // FAR limit (engine units, same scale as `dist`): the widest stock far is 7169 (0x1C01). 0x8000 ≈ 4.6x
+  // that, so distant scenery / terrain tiles the camera is heading toward are kept well before they pop in,
+  // while still bounding the working set (we never re-include the whole level — perf guard, see risk note).
+  int cull_far = s_cull_far >= 0 ? s_cull_far : 0x8000;
+  // FOV-cone threshold for depth/(dist*4) [≈ cos·1024]. The engine keeps objects to the EDGE of the view
+  // and a bit beyond: 0 = the full forward hemisphere (±90°, well past the widescreen frustum's ~±40°);
+  // a small NEGATIVE value extends past 90° so an object whose ORIGIN is just behind the camera plane but
+  // whose widened geometry still grazes the screen edge is not dropped (this is the "beyond WS" margin the
+  // user asked for). -0x60 ≈ cos(93.4°): ~3.4° past the side, enough to cover wide edge geometry without
+  // re-including things squarely behind the camera. (vs the stock 848..880 ≈ only ±34°.)
+  int cull_fov = s_cull_fov >= 0 ? s_cull_fov : -0x60;
   // MEASUREMENT (entity-type taxonomy RE, journal later-127 step 1; off by default): restrict the wide
   // re-include to a single entity type (+0xc), or exclude one, so a 4:3-vs-16:9 gameplay RAM self-diff
   // isolates whether re-including THAT type perturbs gameplay logic (static-world) or not (dynamic).
@@ -131,9 +148,13 @@ static void ov_object_cull(Core* c) {
   int otype = c->mem_r8(o + 0x0c);
   if (s_only >= 0 && otype != s_only) do_cull = 0;
   if (s_skip >= 0 && otype == s_skip) do_cull = 0;
-  if (do_cull && c->mem_r8(o + 1) == 0) {              // the game CULLED it — reconsider with extended bounds
+  if (do_cull && c->mem_r8(o + 1) == 0) {              // the game CULLED it — reconsider with engine bounds
     unsigned dist = isqrt32((unsigned)(p2*p2 + p3*p3 + p4*p4)) & 0xFFFF;
-    if (dist >= 0x200 && dist <= (unsigned)cull_far) {   // keep near/behind culling intact
+    // NEAR floor 0x80 (was 0x200): the stock body culls anything closer than ~512, so on-camera objects
+    // right by Tomba (e.g. the ground/water tile he stands on) pop at the inner edge too. 0x80 keeps them
+    // while staying above the degenerate dist→0 case where the forward-dot direction test is meaningless;
+    // the cone test below still rejects near objects that are actually behind the camera.
+    if (dist >= 0x80 && dist <= (unsigned)cull_far) {
       int fx = (int16_t)obj_r16(c, 0x1F8000E8), fy = (int16_t)obj_r16(c, 0x1F8000EA), fz = (int16_t)obj_r16(c, 0x1F8000EC);
       long depth = (long)fx*p2 + (long)fy*p3 + (long)fz*p4, den = ((long)dist * 0x1000) >> 10;
       if (den < 1) den = 1;
@@ -142,6 +163,10 @@ static void ov_object_cull(Core* c) {
         // instead of poking +1. Poking +1 runs the handler's VISIBLE branch -> gameplay perturbation
         // (5638 B). Collecting + flushing the node's persistent command list touches only render scratch
         // -> margin renders, gameplay 0-diff. A/B: PSXPORT_MARGIN_POKE=1 keeps the old +1 re-include.
+        // NOTE (scope of the wider cone above): margin_collect() only re-renders type-0x03 world-geometry
+        // (terrain/water/static scenery) — the dominant edge/corner pop-in. Dynamic entities are NOT
+        // poked visible here (that would perturb their gameplay state), so widening the cone safely
+        // un-pops the static world without disturbing enemy/item/NPC logic.
         if (margin_native_enabled()) { margin_collect(c, o); }
         else { c->mem_w8(o + 1, 1); c->r[2] = 1; }                          // re-include: mark visible
         // MEASUREMENT (PSXPORT_DEBUG=cullobj): identify WHAT the margin re-include renders — obj addr,
