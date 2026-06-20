@@ -1313,7 +1313,6 @@ void create_tri_pipeline(void) {
   VkPipelineDepthStencilStateCreateInfo dpo = { VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO };
   dpo.depthTestEnable = VK_TRUE; dpo.depthWriteEnable = VK_TRUE; dpo.depthCompareOp = VK_COMPARE_OP_GREATER_OR_EQUAL;
   VkPipelineDepthStencilStateCreateInfo dps = dpo; dps.depthWriteEnable = VK_FALSE;  // semi: test, no write
-  if (cfg_on("PSXPORT_VK_NODEPTH")) { dpo.depthTestEnable = VK_FALSE; dps.depthTestEnable = VK_FALSE; }  // A/B
   VkGraphicsPipelineCreateInfo gp = { VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO };
   gp.stageCount = 2; gp.pStages = st; gp.pVertexInputState = &vi; gp.pInputAssemblyState = &ia;
   gp.pViewportState = &vp; gp.pRasterizationState = &rs; gp.pMultisampleState = &ms;
@@ -1583,6 +1582,14 @@ static void vk_rawdump_now(const char* path) {
 }
 // On-demand VK readback for the live debug server (dbg_server.c `vkshot`): dump the last-presented
 // VK-rendered region to `path` as a PPM — i.e. exactly what VK put on screen this frame.
+// On-demand VK readback of an EXPLICIT VRAM region (the gpu_native display region) — used by the REPL
+// `shot` command, which runs headless where s_last_* (the windowed-present region) is never set.
+void gpu_vk_shot_region(Core* core, const char* path, int sx, int sy, int w, int h) {
+  (void)core;
+  if (!gpu_vk_enabled()) return;
+  vk_dump_to(path, sx, sy, w, h);
+  fprintf(stderr, "[vk_shot] wrote %s (%dx%d @ %d,%d)\n", path, w, h, sx, sy);
+}
 void GpuVkState::shot(const char* path) {
   if (!gpu_vk_enabled() || !s_inited) { fprintf(stderr, "[vk_shot] VK not active\n"); return; }
   vk_dump_to(path, s_last_sx, s_last_sy, s_last_w, s_last_h);
@@ -1626,32 +1633,10 @@ void GpuVkState::dump(int sx, int sy, int w, int h, int frame) {
   if (s_rawdump_frame >= 0 && frame == s_rawdump_frame) { vk_rawdump_now(s_rawdump_path); s_rawdump_frame = -1; }
 }
 
-// Per-frame: PSXPORT_VK_DIFF=frame -> diff this frame's tee'd untextured tris (VK) vs SW VRAM. Always
-// resets the batch. `frame` is the SW frame counter; `svram` is the SW VRAM (source of truth).
+// Per-frame: reset the tee'd-primitive batch for the next frame.
 void GpuVkState::frame_end(const uint16_t* svram, int frame) {
+  (void)svram; (void)frame;
   if (!gpu_vk_enabled() || !s_inited) { s_tri_n = 0; return; }
-  static int dframe = -2;
-  if (dframe == -2) { const char* e = cfg_str("PSXPORT_VK_DIFF"); dframe = e ? atoi(e) : -1; }
-  if (dframe >= 0 && frame == dframe) {
-    if (!s_tri_n && !s_tex_n) { fprintf(stderr, "[vk_diff] f%d: no tris this frame\n", frame); s_tri_n = s_tex_n = 0; return; }
-    static uint16_t got[VRAM_W * VRAM_H];
-    tri_over_bg_readback(svram, got);
-    fprintf(stderr, "[vk_diff] f%d  untex_tris=%d tex_tris=%d  -> wrote vk_out.ppm + sw_out.ppm\n",
-            frame, s_tri_n / 3, s_tex_n / 3);
-    // Dump the actual VK render and the SW render of the front framebuffer region, side by eye.
-    const char* names[2] = { "scratch/screenshots/vk_out.ppm", "scratch/screenshots/sw_out.ppm" };
-    const uint16_t* srcs[2] = { got, svram };
-    for (int s = 0; s < 2; s++) {
-      FILE* f = fopen(names[s], "wb"); if (!f) continue;
-      int W = 320, H = 240, ox = 0, oy = 256;     // Tomba2 front framebuffer (x 0..319, y 256..495)
-      fprintf(f, "P6\n%d %d\n255\n", W, H);
-      for (int y = 0; y < H; y++) for (int x = 0; x < W; x++) {
-        uint16_t p = srcs[s][(y + oy) * VRAM_W + (x + ox)];
-        unsigned char c[3] = { (unsigned char)(((p)&31)<<3), (unsigned char)(((p>>5)&31)<<3), (unsigned char)(((p>>10)&31)<<3) };
-        fwrite(c, 1, 3, f); }
-      fclose(f);
-    }
-  }
   s_tri_n = 0; s_tex_n = 0; s_semi_n = 0; s_dirty_n = 0;
   s_semi_grp_n = 0; s_sg_valid = 0;
 }

@@ -1003,7 +1003,7 @@ static void engine_scan_overlay(Core* c, uint32_t base, uint32_t size) {
     }
     // (1) generic GT3/GT4 CALLER (e.g. the mode-0 render 0x80146478): anchor on `addiu a0,a0,16`,
     //     backtrack to the fn entry, verify the caller signature, own it (runs the native submitters).
-    if (c->mem_r32(a) == 0x24840010u && !cfg_on("PSXPORT_NO_CALLER_OWN")) {
+    if (c->mem_r32(a) == 0x24840010u) {
       uint32_t entry = lo;
       for (uint32_t b = a; b > lo && b > a - 64; b -= 4)
         if (c->mem_r32(b - 4) == 0x03E00008u) { entry = b + 4; break; }

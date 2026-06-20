@@ -1343,7 +1343,14 @@ void gpu_pace_frame(Core* core) { gpu_pace_subframe(core, 1); }
 // PSXPORT_GPU_WINDOW=1 shows a live SDL window.
 // REPL `shot <path>`: write the currently-displayed VRAM region to a PPM so I can SEE where the
 // interactive driver is (title / menu / attract / gameplay) instead of guessing from stage numbers.
-void GpuState::gpu_native_shot(const char* path) {
+void GpuState::gpu_native_shot(Core* core, const char* path) {
+  // VK render lives in the GPU image, not s_vram — read it back over the current display region.
+  if (gpu_vk_enabled()) {
+    void gpu_vk_shot_region(Core*, const char*, int, int, int, int);
+    int dw = s_disp_w > 0 ? s_disp_w : 320, dh = s_disp_h > 0 ? s_disp_h : 240;
+    gpu_vk_shot_region(core, path, s_disp_x, s_disp_y, dw, dh);
+    return;
+  }
   FILE* f = fopen(path, "wb");
   if (!f) { fprintf(stderr, "[shot] cannot open %s\n", path); return; }
   fprintf(f, "P6\n%d %d\n255\n", s_disp_w, s_disp_h);
@@ -1634,7 +1641,7 @@ void gpu_present(Core* core) { core->game->gpu.gpu_present(core); }
 void gpu_present_ex(Core* core, int do_blit) { core->game->gpu.gpu_present_ex(core, do_blit); }
 void gpu_native_load_image(Core* core, int x, int y, int w, int h, uint32_t src) { core->game->gpu.gpu_native_load_image(core, x, y, w, h, src); }
 int  gpu_native_load_vram(Core* core, const char* path) { return core->game->gpu.gpu_native_load_vram(path); }
-void gpu_native_shot(Core* core, const char* path) { core->game->gpu.gpu_native_shot(path); }
+void gpu_native_shot(Core* core, const char* path) { core->game->gpu.gpu_native_shot(core, path); }
 void gpu_repaint(Core* core) { core->game->gpu.gpu_repaint(); }
 int  gpu_frame_no(Core* core) { return core->game->gpu.gpu_frame_no(); }
 void gpu_provat_enable(Core* core) { core->game->gpu.gpu_provat_enable(); }

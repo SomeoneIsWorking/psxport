@@ -442,21 +442,12 @@ int projprim_lookup_pz(uint32_t addr, float* pz) {   // renderer: depth for the 
 int  projprim_overflowed(void) { return s_pp_overflow; }
 int  projprim_count(void)      { return s_pp_n; }
 
-// PC-native per-pixel depth is the DEFAULT — this is a PC GAME, not an emulator. The OT-order painter's
-// algorithm is the PSX limitation we transcend; genuine widescreen needs real per-pixel occlusion (the
-// widened FOV breaks painter order). So native depth is ALWAYS ON. PSXPORT_FAITHFUL_DEPTH=1 (or legacy
-// PSXPORT_NATIVE_DEPTH=0) is the depth-only A/B-diff DIAGNOSTIC vs the OT-order oracle (not a behavior gate).
-int native_depth_on(void) {
-  static int v = -1;
-  if (v < 0) { const char* nd = cfg_str("PSXPORT_NATIVE_DEPTH");
-    v = (cfg_on("PSXPORT_FAITHFUL_DEPTH") || (nd && atoi(nd) == 0)) ? 0 : 1; }
-  return v;
-}
-// The native-depth path is active (default, or the SBS A/B view) — gates the engine's depth recording +
-// the per-frame reset. (PSXPORT_ATTACH and its value-keyed ring are retired.)
-static int s_attach = -1;
-int attach_enabled(void) { if (s_attach < 0) s_attach = (native_depth_on() || cfg_on("PSXPORT_SBS")) ? 1 : 0;
-                           return s_attach > 0; }
+// PC-native per-pixel depth is THE render behavior — this is a PC GAME, not an emulator. The OT-order
+// painter's algorithm is the PSX limitation we transcend; genuine widescreen needs real per-pixel
+// occlusion (the widened FOV breaks painter order). One behavior, no toggle.
+int native_depth_on(void) { return 1; }
+// The native-depth path gates the engine's depth recording + the per-frame reset. Always active.
+int attach_enabled(void) { return 1; }
 // engine_submit sets the projection-plane H (read from CR26) so proj_pz_to_ord normalizes depth correctly.
 void proj_set_H(uint16_t h) { s_proj_H = h; }
 // Near-plane view-Z used by proj_pz_to_ord (= H/2, clamped >=1). SSAO needs it to invert the banded

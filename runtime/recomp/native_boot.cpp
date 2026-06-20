@@ -286,6 +286,11 @@ static void repl_xadump(uint8_t chan, uint32_t start_lba, const char* path, int 
   repl_wav_write(path, out, frames, freq);
 }
 
+// REPL-armed auto-drive state, consumed by the frame loop (see the loop body). `newgame` pulses Cross
+// to the GAME prologue; `skip N` pulses Start for N frames to advance the intro cutscene into the field.
+static int  g_nav_newgame = 0;
+static long g_skip_frames  = 0;
+
 // Read+execute REPL commands until a `run N` (returns N) or quit/EOF (returns -1).
 static long native_repl_read(Core* c, uint32_t f) {
   static uint16_t held = 0xFFFF;              // active-low held mask (all released)
@@ -310,6 +315,8 @@ static long native_repl_read(Core* c, uint32_t f) {
     else if (!strcmp(cmd, "press") && sscanf(line, "%*s %31s", arg) == 1)   { held &= ~repl_btn(arg); pad_repl_hold(c, held); fprintf(stderr, "[repl] held=%04X\n", held); }
     else if (!strcmp(cmd, "release") && sscanf(line, "%*s %31s", arg) == 1) { held |= repl_btn(arg);  pad_repl_hold(c, held); fprintf(stderr, "[repl] held=%04X\n", held); }
     else if (!strcmp(cmd, "tap") && sscanf(line, "%*s %31s %u", arg, &a) >= 1) { if (!a) a = 4; pad_repl_tap(c, (uint16_t)(0xFFFF & ~repl_btn(arg)), (int)a); fprintf(stderr, "[repl] tap %s %u\n", arg, a); }
+    else if (!strcmp(cmd, "newgame")) { g_nav_newgame = 1; fprintf(stderr, "[repl] newgame: pulsing to GAME prologue\n"); return 100000; }
+    else if (!strcmp(cmd, "skip")) { a = 0; sscanf(line, "%*s %u", &a); if (!a) a = 500; g_skip_frames = (long)a; fprintf(stderr, "[repl] skip %u frames\n", a); return (long)a; }
     else if (!strcmp(cmd, "shot")) { char path[200] = {0}; if (sscanf(line, "%*s %199s", path) == 1) { void gpu_native_shot(Core*, const char*); gpu_native_shot(c, path); } }
     else if (!strcmp(cmd, "dumpram")) {
       char path[200] = {0};
@@ -404,11 +411,9 @@ static void ov_game_main(Core* c) {
   // a window is up this is the real interactive game loop — run until the user closes the window
   // (SDL_QUIT -> exit(0) in present_window); headless with no cap defaults to 120 (CI/smoke).
   uint32_t nframes = 0;   // 0 == run until window close / REPL quit
-  const char* nf = cfg_str("PSXPORT_NATIVE_FRAMES");
   int repl_mode = cfg_on("PSXPORT_REPL") != 0;
   if (repl_mode) nframes = 0;                       // REPL drives frame count via `run N`
-  else if (nf) nframes = (uint32_t)strtoul(nf, 0, 0);
-  else if (!cfg_str("PSXPORT_GPU_WINDOW")) nframes = 120;
+  else if (!cfg_str("PSXPORT_GPU_WINDOW")) nframes = 120;  // headless smoke default
   fprintf(stderr, "[native_boot] entering native frame loop (%s)\n",
           nframes ? "capped" : "interactive (until window close)");
   void hle_deliver_event(Core* c, uint32_t ev_class, uint32_t spec);
@@ -425,91 +430,23 @@ static void ov_game_main(Core* c) {
       if (repl_budget < 0) break;
       repl_budget--;
     }
-    // TRANSPLANT harness (PSXPORT_TRANSPLANT="frame:ramfile:vramfile"): at logic frame `frame`,
-    // overwrite our RAM (and VRAM if given) with the oracle's CLEAN green-field dump, then let the
-    // frame loop CONTINUE. Tests the accumulation hypothesis directly: if our per-frame logic is
-    // correct the next frames stay clean (match the oracle); if buggy they re-corrupt from a known
-    // -good start, so we can watch the corruption begin instead of it being masked. RAM is dropped
-    // at the TOP of the iteration (before FUN_800788AC), so our update runs on the oracle's state.
-    { static int tf = -2; static char rf[256], vf[256];
-      if (tf == -2) { tf = -1; rf[0] = vf[0] = 0; const char* e = cfg_str("PSXPORT_TRANSPLANT");
-        if (e) { char buf[600]; snprintf(buf, sizeof buf, "%s", e);
-          char* c1 = strchr(buf, ':'); if (c1) { *c1 = 0; tf = atoi(buf);
-            char* c2 = strchr(c1 + 1, ':'); if (c2) { *c2 = 0; snprintf(vf, sizeof vf, "%s", c2 + 1); }
-            snprintf(rf, sizeof rf, "%s", c1 + 1); } } }
-      if (tf >= 0 && (int)f == tf) {
-        int gpu_native_load_vram(Core*, const char*);
-        FILE* mf = fopen(rf, "rb");
-        if (mf) { size_t n = fread(c->ram, 1, 0x200000, mf); fclose(mf);
-                  fprintf(stderr, "[transplant] loaded RAM %zu B from %s at lf%u\n", n, rf, f); }
-        else fprintf(stderr, "[transplant] FAILED to open %s\n", rf);
-        if (vf[0]) gpu_native_load_vram(c, vf);
-      } }
-    // PSXPORT_AUTO_NEWGAME: own the title->New Game navigation so we boot straight into the post-New
-    // Game prologue cutscene (stage 0x8010637C) deterministically — no fighting the attract loop. The
-    // menu confirm is Cross (0x4000); pulse it at the title (DEMO overlay) until task0 enters GAME.
-    { static int ang = -1; if (ang < 0) ang = cfg_str("PSXPORT_AUTO_NEWGAME") ? 1 : 0;
-      if (ang == 1) {
-        if (c->mem_r32(0x801fe00c) != 0x8010637Cu) {
-          if ((f % 12u) == 0) pad_repl_tap(c, (uint16_t)(0xFFFF & ~0x4000), 6);   // tap Cross
-        } else { void dbg_set_paused(int); fprintf(stderr, "[autonewgame] reached GAME (prologue) at frame %u — auto-paused\n", f);
-                 ang = 2; if (cfg_str("PSXPORT_AUTO_NEWGAME") && atoi(cfg_str("PSXPORT_AUTO_NEWGAME")) >= 2) dbg_set_paused(1); }
-      } }
-    // PSXPORT_AUTO_GAMEPLAY=1: state-gated auto-navigator that OWNS the title->newgame->cutscene->field
-    // path and then goes HANDS-OFF. The post-newgame fisherman dialog cutscene advances only on Start
-    // EDGES (not Cross) and otherwise hard-stalls headless; once in the field, continued Start would
-    // open the pause menu (which stops the BGM). So: pulse Start until the chan4 area music has been
-    // looping continuously (= field reached, cutscene gate cleared), then RELEASE input. =2 also pauses.
-    { static int gnav = -1, sustain = 0; static uint32_t field_f = 0;
-      if (gnav < 0) gnav = cfg_str("PSXPORT_AUTO_GAMEPLAY") ? 1 : 0;
-      if (gnav == 1) {
-        void pad_repl_release(Core*);
-        if (xa_stream_is_looping()) sustain++; else sustain = 0;   // resets whenever dialog stops chan4
-        if (sustain >= 150) {                                      // ~5 s of uninterrupted area music = field
-          pad_repl_release(c);
-          fprintf(stderr, "[autogameplay] field reached (chan4 looping %d frames) at frame %u — input released\n", sustain, f);
-          gnav = 2; field_f = f;
-          if (atoi(cfg_str("PSXPORT_AUTO_GAMEPLAY")) >= 2) { void dbg_set_paused(int); dbg_set_paused(1); }
-        } else if ((f % 24u) == 0) {
-          pad_repl_tap(c, (uint16_t)(0xFFFF & ~0x0008), 6);        // pulse Start (0x0008): title + dialog advance
-        }
+    // REPL-armed auto-drive (the `newgame` / `skip` commands). One way to drive the game: pipe REPL
+    // commands. `newgame` pulses Cross at the title until task0 enters the GAME prologue (0x8010637C),
+    // then returns to the REPL prompt. `skip N` then pulses Start each frame for N frames to advance the
+    // post-newgame fisherman dialog cutscene into the field. Manual walking = `press`/`run`/`release`.
+    if (g_nav_newgame) {
+      if (c->mem_r32(0x801fe00c) != 0x8010637Cu) {
+        if ((f % 12u) == 0) pad_repl_tap(c, (uint16_t)(0xFFFF & ~0x4000), 6);   // tap Cross
+      } else {
+        fprintf(stderr, "[repl] newgame: reached GAME prologue at frame %u\n", f);
+        g_nav_newgame = 0; repl_budget = 0;                                     // back to the REPL prompt
       }
-      // PSXPORT_AUTO_SKIP=N: after field-reach, KEEP pulsing Start until native frame N to advance/skip
-      // the post-arrival fisherman dialog CUTSCENE (the field "reached" = area music looping, but the
-      // cutscene is still up and only ends on Start edges). Reaches actual Tomba gameplay on the cliff.
-      if (gnav == 2) { const char* sk = cfg_str("PSXPORT_AUTO_SKIP");
-        if (sk && f < (uint32_t)atoi(sk) && (f % 24u) == 0) {
-          void pad_repl_tap(Core*, uint16_t, int); pad_repl_tap(c, (uint16_t)(0xFFFF & ~0x0008), 6); } }
-      // PSXPORT_AUTO_WALK=<script>: once the field is reached, drive a deterministic input SCRIPT so the
-      // character walks/acts — a MOTION scene for fps60 interp AND for navigating to an area exit. Two forms:
-      //   single button "r" / "l" / "u" / "d" / "x"(Cross/jump) / "o"(Circle) / "t"(Triangle) / "s"(Square)
-      //     → HOLD it forever.  Multiple buttons in one phase combine: "rx" = right+jump.
-      //   phase list "r:300,u:150,rx:120" → hold each phase for N frames, in order, then release.
-      // Phases are counted from when the walk starts (= max(field-reached frame, AUTO_SKIP frame), so the
-      // Start-pulsing skip finishes first). Active-low pad mask (a pressed button CLEARS its bit).
-      if (gnav == 2) { const char* w = cfg_str("PSXPORT_AUTO_WALK");
-        if (w) {
-          const char* sk = cfg_str("PSXPORT_AUTO_SKIP");
-          uint32_t walk0 = field_f; if (sk && (uint32_t)atoi(sk) > walk0) walk0 = (uint32_t)atoi(sk);
-          uint32_t el = (f > walk0) ? f - walk0 : 0;
-          auto btn_bit = [](char ch) -> uint16_t {
-            switch (ch) { case 'l': return 0x0080; case 'u': return 0x0010; case 'd': return 0x0040;
-              case 'x': return 0x4000; case 'o': return 0x2000; case 't': return 0x1000; case 's': return 0x8000;
-              default:  return 0x0020; } };                          // 'r' / default = right
-          // find the active phase by walking the comma list, accumulating durations.
-          const char* p = w; uint32_t acc = 0; uint16_t held = 0; int done = 0;
-          while (*p) {
-            uint16_t phase = 0;
-            while (*p && *p != ':' && *p != ',') phase |= btn_bit(*p++);
-            uint32_t dur = 0;
-            if (*p == ':') { p++; while (*p >= '0' && *p <= '9') dur = dur*10 + (uint32_t)(*p++ - '0'); }
-            if (*p == ',') p++;
-            if (dur == 0) { held = phase; done = 1; break; }         // no duration → hold this phase forever
-            if (el < acc + dur) { held = phase; done = 1; break; }   // we're inside this phase
-            acc += dur;
-          }
-          if (done) pad_repl_hold(c, (uint16_t)(0xFFFF & ~held));    // else script finished → leave input released
-        } } }
+    }
+    if (g_skip_frames > 0) {
+      if ((f % 24u) == 0) pad_repl_tap(c, (uint16_t)(0xFFFF & ~0x0008), 6);     // pulse Start
+      if (--g_skip_frames == 0) { void pad_repl_release(Core*); pad_repl_release(c);
+        fprintf(stderr, "[repl] skip done at frame %u\n", f); }
+    }
     // PSXPORT_DEBUG_SERVER pause/step: when frozen, do NOT advance the game — just pump host input
     // (keeps the window alive) and service debug commands so `step`/`play` can arrive. A `step` runs
     // exactly one real frame then re-freezes, so transient bad frames can be inspected one at a time.
@@ -522,18 +459,6 @@ static void ov_game_main(Core* c) {
         usleep(15000);
       } }
     native_step_frame(c, f);   // one frame of deterministic guest work (steppable core; see fn above)
-    // PSXPORT_RAMHASH=1 — per-frame FNV-1a of guest RAM EXCLUDING the render pool [0xBE000,0xEC000)
-    // (which legitimately differs native-vs-recomp: the recomp terrain submit writes packets there, the
-    // native one writes host memory). Run twice — native terrain vs PSXPORT_NO_TERRAIN=1 (recomp) — and
-    // diff the [ramhash] logs to find the FIRST frame the GAMEPLAY state diverges (the submit_terrain
-    // leak out of the render pool). Then PSXPORT_RAMDUMP_FRAME=<that frame> both ways + cmp -l the dumps
-    // for the byte addrs (~0x800FDxxx). The port is deterministic, so two sequential runs are comparable.
-    { static int rh = -1; if (rh < 0) rh = cfg_on("PSXPORT_RAMHASH") ? 1 : 0;
-      if (rh) { uint64_t h = 1469598103934665603ull;
-        for (uint32_t o = 0; o < 0x200000u; o++) {
-          if (o >= 0xBE000u && o < 0xEC000u) continue;            // skip the render pool
-          h ^= c->ram[o]; h *= 1099511628211ull; }
-        fprintf(stderr, "[ramhash] f%u %016llx\n", f, (unsigned long long)h); } }
     // PSXPORT_SEQDBG — libsnd sequencer STATE trace (from SsSeqCalled @0x80090BD0): is any BGM
     // sequence OPEN/PLAYING? 0x801054B0=open-seq count, 0x80104C28=playing bitmask, 0x800AC424=tick
     // mode, 0x800AC42C=SsSeqCalled ptr. If these never go nonzero, no song is ever started → the

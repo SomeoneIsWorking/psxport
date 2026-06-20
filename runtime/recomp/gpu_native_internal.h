@@ -135,7 +135,7 @@ struct GpuState {
   void present_window();
   void shot_buf(const uint16_t* src, int dx, int dy, const char* path);
   void gpu_repaint();
-  void gpu_native_shot(const char* path);
+  void gpu_native_shot(Core* core, const char* path);
   void gpu_present_ex(Core* core, int do_blit);
   void gpu_present(Core* core);
   uint16_t gpu_vram_peek(int x, int y);
