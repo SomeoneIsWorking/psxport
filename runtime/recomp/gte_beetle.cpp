@@ -236,6 +236,55 @@ static inline int32_t proj_clampi(int32_t v, int32_t lo, int32_t hi) {
   return v < lo ? lo : (v > hi ? hi : v);
 }
 
+// Project an EXPLICIT model vertex V (int16 x/y/z) through the GTE's composed camera×object transform
+// (rotation CR0-4 + translation CR5-7 + screen offset/H CR24-26) to float screen coords + view-Z, with
+// NO gte_op — the full RTPT math in C. `insn` carries the sf/lm flags an RTPT would use (RTPT = 0x280030,
+// sf=1 lm=0). This is what a PC engine does: read the transform the engine built, transform vertices in
+// float. proj_native_vertex (below) is the same math reading V from the GTE DR regs (for PSXPORT_PROJPROBE).
+void proj_native_xform(int vx, int vy, int vz, ProjVtx* out) {
+  const uint32_t insn = 0x00280030u;                       // RTPT: sf=1 (bit19), lm=0
+  const uint32_t sf = (insn & (1 << 19)) ? 12 : 0;
+  const int      lm = (insn >> 10) & 1;
+  const uint32_t c0 = gte_read_ctrl(0), c1 = gte_read_ctrl(1), c2 = gte_read_ctrl(2),
+                 c3 = gte_read_ctrl(3), c4 = gte_read_ctrl(4);
+  const int32_t RT[3][3] = {
+    { (int16_t)c0,        (int16_t)(c0 >> 16), (int16_t)c1 },
+    { (int16_t)(c1 >> 16), (int16_t)c2,        (int16_t)(c2 >> 16) },
+    { (int16_t)c3,        (int16_t)(c3 >> 16), (int16_t)c4 } };
+  const int64_t TR[3] = { (int32_t)gte_read_ctrl(5), (int32_t)gte_read_ctrl(6), (int32_t)gte_read_ctrl(7) };
+  const int32_t V[3] = { (int16_t)vx, (int16_t)vy, (int16_t)vz };
+  int32_t mac[3]; int64_t tmp2_unshifted = 0;
+  for (int i = 0; i < 3; i++) {
+    int64_t t = TR[i] << 12;
+    t = proj_a_mv(t + (int64_t)RT[i][0] * V[0]);
+    t = proj_a_mv(t + (int64_t)RT[i][1] * V[1]);
+    t = proj_a_mv(t + (int64_t)RT[i][2] * V[2]);
+    if (i == 2) tmp2_unshifted = t;
+    mac[i] = (int32_t)(t >> sf);
+  }
+  const int32_t lo_b = -32768 + (lm << 15);
+  out->ir1 = proj_clampi(mac[0], lo_b, 32767);
+  out->ir2 = proj_clampi(mac[1], lo_b, 32767);
+  out->ir3 = proj_clampi(mac[2], lo_b, 32767);
+  out->sz  = proj_clampi((int32_t)(tmp2_unshifted >> 12), 0, 65535);
+  out->vx  = (float)out->ir1; out->vy = (float)out->ir2; out->vz = (float)out->ir3;
+  const int32_t OFX = (int32_t)gte_read_ctrl(24), OFY = (int32_t)gte_read_ctrl(25);
+  const uint16_t H = (uint16_t)gte_read_ctrl(26);
+  s_proj_H = H;
+  int64_t h_div_sz = proj_divide(H, (uint32_t)out->sz);
+  out->sx = proj_clampi((int32_t)(((int64_t)OFX + out->ir1 * h_div_sz) >> 16), -1024, 1023);
+  out->sy = proj_clampi((int32_t)(((int64_t)OFY + out->ir2 * h_div_sz) >> 16), -1024, 1023);
+  float pz = (float)H * 0.5f; if ((float)out->sz > pz) pz = (float)out->sz;
+  float ph = (float)H / pz;
+  float fofx = (float)OFX / 65536.0f, fofy = (float)OFY / 65536.0f;
+  s_proj_cx = fofx; s_proj_cy = fofy;
+  out->px = fofx + (float)out->ir1 * ph;
+  out->py = fofy + (float)out->ir2 * ph;
+  if (out->px < -1024.f) out->px = -1024.f; if (out->px > 1023.f) out->px = 1023.f;
+  if (out->py < -1024.f) out->py = -1024.f; if (out->py > 1023.f) out->py = 1023.f;
+  out->pz = pz;
+}
+
 // Recompute one vertex's projection from a snapshot of the GTE control/data regs (read post-instruction;
 // neither matrix CR0-7 nor the input V regs DR0-5 are touched by RTP, so reading after is exact).
 static void proj_native_vertex(unsigned vidx, uint32_t insn, ProjVtx* out) {

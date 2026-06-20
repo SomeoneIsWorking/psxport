@@ -7,6 +7,51 @@ recompiler is an offline analysis aid only. The **verification oracle is the Bee
 MAIN.EXE). Addresses are PSX RAM virtual addresses. **Verify against the oracle (or the original interpreted
 path) before relying on any field — decomp is point-in-time.**
 
+## Top-down PC-native engine port — FROM THE ENTRY POINT (later-159, the active spine)
+Per the CLAUDE.md boundary, we REIMPLEMENT the engine PC-native starting at the game's entry point and
+going down. The spine:
+`crt0 FUN_800896E0` (BSS-zero, SP/gp/heap) `→ main FUN_80050b08` (override `ov_game_main`, native_boot.cpp)
+`→ [init prefix]` `→ register task 0 = the stage sequencer FUN_800499e8 (START.BIN, stage-0 overlay load)`
+`→ native frame loop`.
+
+**Tool — `tools/disas.py <addr> [--mem]`:** MIPS-I disassembler for MAIN.EXE that resolves `lui+addiu/ori`
+address builds and annotates every load/store with its absolute target + WIDTH (sb/sh/sw). USE THIS before
+reimplementing any engine fn — Ghidra `DAT_*` hides widths and a wrong width silently corrupts the interface
+state the PSX content reads (later-158). `--mem` = just the memory effects.
+
+**Init prefix of `ov_game_main` — classified (PLATFORM = native platform owns it / keep dispatched;
+ENGINE = reimplement PC-native):**
+| fn | what | class |
+|----|------|-------|
+| 80089788 | one-shot guard (DAT_800abef0) | platform (no-op) |
+| 80085b20 | intr.c lib callback | platform |
+| 800898a0 | **CdInit** | platform (native CD) |
+| 80080bf0(3) | **ResetGraph** | platform (native GPU) |
+| 80080d64/80080ed4 | SetGraphDebug / **SetDispMask** | platform |
+| 800865f0 | lib state setter (DAT_800abe20) | platform |
+| **80050a0c** | **frame-state init** (vblank ctr, buffer parity DAT_1f800135, frame divisor DAT_1f800235, swap-mode DAT_1f80019c, …, DAT_80105ee8=0x45) | **ENGINE — DONE (engine_init.cpp `eng_init_framestate`)** |
+| **800509b4** | **display + GTE projection**: InitGeom (80083ff8: ZSF3=0x155 ZSF4=0x100 H=1000 DQA/DQB), SetGeomOffset(160,120), H=350→DAT_801003f8, SetGeomScreen | **ENGINE — DONE (`eng_init_display`)**; FUN_80050738 (PSX draw/disp env structs) still dispatched (native single-env = next display step) |
+| **80050a80** | **camera init**: identity matrix → scratch 0x1F8000F8 (the camera-rot the renderer reads) + 0x1F800118; cam fields (_1f8000ec=0x1000, _ee=H*-5, _d8=H*-0x50000) | **ENGINE — DONE (`eng_init_camera`)** |
+| 80096a70/80099310/800991b0/800993a0 | SPU/sound + heap lib | platform (verify) |
+| 80089bac(0xe,…) | CD/_bu command | platform |
+| 80085900(3/1) | **VSync** | platform |
+| 80075130 | **font/text system init** (FUN_800963a0/80091d70/…) | ENGINE (UI — later) |
+| 8009c620(0) | subsystem init | TBD |
+| 8001cc00 | DMA channel + pad init (FUN_80080830 0xf4000001…) | platform (DMA/pad hw) |
+| 800520e0 | engine subsystem init (FUN_8007b328, DAT_800ecf4x, FUN_80088b00/80086620/80087a60) | ENGINE (later) |
+| 80051e00 | **scheduler task-table init** (DAT_801fe000, "A0F.BIN", stride 0x70) | ENGINE (later) |
+| 80051f14(0,FUN_800499e8) | **register task 0 = stage sequencer** (the level loader's entry) | ENGINE (the big next system) |
+| 80085bb0(LAB_800506b4) | register VSyncCallback | platform |
+
+**Order of attack / status:** init display+camera DONE (eng_init_*). **Level LOADER core DONE** —
+FUN_800450bc overlay loader is PC-native (engine/engine_level.cpp `eng_load_stage`, later-162); its
+scheduler-coupled orchestration (FUN_80052078 task-restart ending in ChangeTh/ov_switch longjmp,
+FUN_800499e8 file-resolve) stays dispatched and calls the native loader — native-izing them needs the
+cooperative-scheduler longjmp handshake first. Remaining named systems: **object/entity placement &
+spawning**, the **main menu** (DEMO stage state machine @0x801062E4), font/text (80075130), engine
+subsystem init (800520e0), and a real PC-native single display env (replace FUN_80050738). Each: `disas.py`
+the fn, understand the data, reimplement PC-native in `engine/`, keep the PSX-content interface state exact.
+
 ## Top-level control flow
 - **Main loop** `FUN_80050b08` (`:31269`, override `ov_game_main`). After GPU/double-buffer + lib init,
   loops forever. Per frame, in order:

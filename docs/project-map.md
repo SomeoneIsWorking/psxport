@@ -11,6 +11,7 @@ This is the map. Keep it current when the layout changes.
 | Build the **oracle** (Beetle reference) | `make -C runtime` | `runtime/wide60rt` |
 | Drive the port or oracle interactively | `tools/drive.py start native\|oracle` … | — |
 | Inspect BGM/libsnd state of a RAM dump | `tools/bgm.py dump <ram>` | — |
+| **Disassemble** a MAIN.EXE engine fn (resolves load/store addr + WIDTH) | `tools/disas.py <addr> [--mem]` | — |
 
 - **`make` builds the ORACLE, not the port.** The port has no Makefile (see CLAUDE.md "TWO binaries").
 - `tools/build_port.sh` keeps a `scratch/obj/` object cache; one changed file relinks in ~0.5s.
