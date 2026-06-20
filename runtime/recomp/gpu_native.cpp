@@ -1437,10 +1437,9 @@ void GpuState::gpu_dma2_linked_list(Core* core, uint32_t madr) {
     if (sd >= 0 && s_frame == sd) gpu_scene_dump(core, stderr, madr); }
   s_dma2++;
   g_ot_madr = madr & 0x1FFFFC;
-  uint32_t addr = madr & 0x1FFFFC;
-  // PSXPORT_OTDBG: on a chain that fails to terminate within an OT's worth of nodes (cyclic =
-  // malformed), dump its first 40 nodes once for diagnosis. (Empty OTs are ~0x800 link-only nodes
-  // that DO terminate at the sentinel; a true cycle never terminates.)
+  // PSXPORT_DEBUG=ot (diagnostic only — the driver no longer reads the OT): on a chain that fails to
+  // terminate within an OT's worth of nodes (cyclic = malformed), dump its first 40 nodes once for diagnosis.
+  // (Empty OTs are ~0x800 link-only nodes that DO terminate at the sentinel; a true cycle never terminates.)
   if (cfg_dbg("ot")) {
     static int dumped = 0;
     uint32_t a = madr & 0x1FFFFC; int term = 0;
@@ -1461,21 +1460,33 @@ void GpuState::gpu_dma2_linked_list(Core* core, uint32_t madr) {
       }
     }
   }
-  // A valid ordering table is bounded (its entry count + linked primitives). A far larger node
-  // count means a malformed/cyclic next-pointer chain — cap it (so it can't wedge) and log the
-  // first offending case for diagnosis instead of spinning to the old 1M guard.
-  int guard;
-  for (guard = 0; guard < 0x10000; guard++) {
-    uint32_t hdr = core->mem_r32(addr);
-    int n = hdr >> 24;
-    s_cur_node = 0x80000000u | addr;
-    for (int i = 0; i < n; i++) { s_gp0_src = addr + 4 + i * 4;   // guest addr of this word (Phase-1 attach)
-                                  gpu_gp0(core, core->mem_r32(addr + 4 + i * 4)); }
-    uint32_t next = hdr & 0xFFFFFF;
-    if (next == 0xFFFFFF || next == 0) break;
-    addr = next & 0x1FFFFC;
+  // M3 (render-queue plan): RETIRE the guest OT read. The PSX ordering table is a PSX intricacy — its draw
+  // ORDER was already discarded (the engine queue re-sorts by Layer), and it is just an enumeration of this
+  // frame's prims scattered across ~2048 empty ordering buckets. The SAME prims live contiguously in the
+  // linear packet pool [0x800bfe68, *0x800bf544) as tagged nodes ([tag: len in high byte][len GP0 words]).
+  // Each DrawOTag draws the pool prims built SINCE the previous DrawOTag — [s_pool_drawn, pool_hi) — which
+  // partitions prims by draw pass WITHOUT reading any OT/next-pointer. We enumerate the pool linearly and
+  // replay each prim's GP0 words exactly as the OT walk did (same s_cur_node provenance, same gpu_gp0
+  // classification into the queue). Nothing consults the guest OT. (`addr`/`madr` kept only for diagnostics.)
+  uint32_t pbase = 0x800bfe68u & 0x1FFFFC;                          // packet-pool base (masked guest addr)
+  uint32_t phi   = core->mem_r32(0x800bf544u) & 0x1FFFFC;          // pool high-water (write ptr)
+  if (s_pool_drawn < pbase || s_pool_drawn > phi) s_pool_drawn = pbase;  // frame/mid-frame pool reset detected
+  int guard = 0;
+  for (uint32_t p = s_pool_drawn; p < phi && guard < 0x10000; guard++) {
+    uint32_t tag = core->mem_r32(p);
+    unsigned n = tag >> 24;                                         // primitive GP0-word count (tag high byte)
+    s_cur_node = 0x80000000u | p;
+    for (unsigned i = 0; i < n; i++) { s_gp0_src = p + 4 + i * 4;   // guest addr of this word (Phase-1 attach)
+                                       gpu_gp0(core, core->mem_r32(p + 4 + i * 4)); }
+    p += 4u * (1u + n);
   }
+  s_pool_drawn = phi;                                              // this DrawOTag has drawn up to here
   s_gp0_src = 0;   // non-OT gpu_gp0 callers (direct GP0 / FMV / block) carry no packet address
+  // PSXPORT_DEBUG=poolwalk: RE the packet-pool layout to retire the OT read (render-queue plan M3). The OT
+  // walk above enumerates this frame's prims by following the guest OT next-pointers; the SAME prims live in
+  // the linear packet pool [0x800bfe68, *0x800bf544) as tagged nodes ([link/tag word: len in high byte][len
+  // GP0 words]). Walking the pool linearly enumerates the prims WITHOUT reading any PSX ordering link. This
+  // dumps both so the layouts can be compared (prim/word counts must match) before switching the driver.
   // PSXPORT_DEBUG=pool: per-DrawOTag pool high-water + node count, to confirm the widescreen
   // fixed-buffer-overflow hypothesis (later-124). Pool write ptr 0x800BF544 is the frame's high-water
   // at the main draw; node count = OT entries the walk traversed. Compare 4:3 vs 16:9.
@@ -1488,9 +1499,8 @@ void GpuState::gpu_dma2_linked_list(Core* core, uint32_t madr) {
   }
   if (guard >= 0x10000) {
     static int warned = 0;
-    if (!warned++) fprintf(stderr, "[gpu] WARN: OT traversal hit %d-node cap from madr=0x%08X "
-                           "(last addr=0x%08X) — malformed/cyclic ordering table\n",
-                           guard, madr, addr);
+    if (!warned++) fprintf(stderr, "[gpu] WARN: packet-pool walk hit %d-node cap (pool_hi=0x%08X) — "
+                           "malformed/over-long pool\n", guard, phi);
   }
 }
 // DMA channel 2 block mode: `count` words from `madr` (to/from GP0). to_gpu=1 -> GP0 writes.

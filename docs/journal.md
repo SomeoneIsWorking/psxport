@@ -1,5 +1,28 @@
 # Debug / progress journal
 
+## later-172: RETIRE the guest OT read — the engine drives rendering from its OWN packet-pool enumeration
+Render-queue plan M3 (the "stop reading the PSX ordering table" half). The frame draw no longer reads the
+guest OT at all — a PSX render intricacy is gone, the PC way.
+- **RE (PSXPORT_DEBUG=poolwalk, retired after):** at a field frame the main DrawOTag walked **2476 OT nodes
+  = ~2048 EMPTY ordering buckets + 426 actual prims**. Those same 426 prims live contiguously in the linear
+  packet pool [0x800bfe68, *0x800bf544) as tagged nodes ([tag word: GP0-word count in the high byte][len GP0
+  words]); a linear pool scan parses EXACTLY to the write-ptr. So the OT was pure PSX-ordering scaffolding
+  around prims the pool already holds cleanly.
+- **Change (gpu_native.cpp gpu_dma2_linked_list):** replaced the OT next-pointer chain traversal with a
+  **packet-pool range walk**. Each DrawOTag draws the pool prims built SINCE the previous DrawOTag —
+  `[s_pool_drawn, pool_hi)` (new GpuState member, reset with the pool in native_step_frame) — which partitions
+  prims by draw pass WITHOUT reading any OT/next-pointer. Each prim's GP0 words are replayed through gpu_gp0
+  exactly as before (same s_cur_node provenance, same RQ_BACKGROUND/WORLD/HUD classification into the engine
+  queue, which re-sorts by Layer — so enumeration ORDER is irrelevant). Nothing consults the guest OT (the
+  PSXPORT_DEBUG=ot inspector is the only remaining OT read, gated/diagnostic).
+- **VERIFIED mechanically (the render is what I ported, so verify the render):** PSXPORT_PRIMDUMP=650 prim
+  set is BYTE-IDENTICAL between the OT-walk baseline and the pool-walk — 413 prims (34 poly + 379 sprite),
+  0 diff in the sorted (order-independent) prim signatures incl. the bg/layer classification. Run completes,
+  field reaches+renders. Render-only change (no guest-RAM writes), so the content interface is untouched.
+- **Still PSX (not this milestone):** the guest 2D drawers still BUILD the GP0 packets in the pool (I
+  enumerate their output, not the OT). Owning those drawers at SOURCE — render 2D from scene data, not by
+  replaying their GP0 — is the remaining M4 work; then the pool read goes too. But the OT-as-source is gone.
+
 ## later-171: retire ALL behavior gating; native-GTE replica tried & REVERTED (PSX mimicry) — user directive
 User directive (2026-06-20): "no gating; don't worry about breaking; END GOAL = remove the interpreter AND
 external deps like Beetle entirely" — BUT "we don't want to MIMIC the PSX, we want to PORT the game to PC"

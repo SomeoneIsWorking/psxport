@@ -90,6 +90,9 @@ struct GpuState {
   int s_frame = 0;                                            // present-frame counter
   uint32_t s_cur_node = 0;                                    // RAM addr of the OT node being fed to GP0
   uint32_t g_ot_madr = 0;                                     // last OT DMA root
+  uint32_t s_pool_drawn = 0;                                  // M3: packet-pool offset already drawn this frame
+                                                              // (the OT read is RETIRED — each DrawOTag draws the
+                                                              // pool prims built since the previous one)
   uint32_t g_dma_src = 0;                                     // last block-DMA source
 
   // ---- rasterizer / GP0 / present methods (bodies in gpu_native.cpp) ----
