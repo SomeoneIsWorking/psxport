@@ -625,6 +625,41 @@ void GpuState::raster_sprite(int op, int x, int y, int u0, int v0, int w, int h,
     }
 }
 
+// PC-native texture EXPORT (proves the texture DECODE is owned, not the PSX's). Decodes a w×h block of
+// texels at the CURRENT texpage (s_tp_x/y, s_tp_mode) through the CURRENT CLUT (s_clut_x/y) with MY OWN
+// decoder — the same CLUT/bit-depth logic as sample_tex but standalone — and writes an RGB PPM to
+// scratch/export/. The texels come from VRAM that the PC-owned upload chain (lz_decompress → group unpack
+// → ov_upload_image) filled, so neither the decompression nor the CLUT decode runs PSX code.
+void GpuState::tex_export(const char* name, int u0, int v0, int w, int h) {
+  if (w <= 0 || h <= 0 || w > 1024 || h > 1024) return;
+  char dir[] = "scratch/export"; { char cmd[64]; snprintf(cmd, sizeof cmd, "mkdir -p %s", dir); int r = system(cmd); (void)r; }
+  char path[256]; snprintf(path, sizeof path, "%s/%s.ppm", dir, name);
+  FILE* f = fopen(path, "wb"); if (!f) return;
+  fprintf(f, "P6\n%d %d\n255\n", w, h);
+  for (int dy = 0; dy < h; dy++)
+    for (int dx = 0; dx < w; dx++) {
+      int u = u0 + dx, v = v0 + dy;
+      uint16_t t;
+      if (s_tp_mode == 2) t = *vram(s_tp_x + u, s_tp_y + v);                  // 15bpp direct
+      else if (s_tp_mode == 1) {                                             // 8bpp -> CLUT
+        uint16_t word = *vram(s_tp_x + (u >> 1), s_tp_y + v);
+        int idx = (u & 1) ? (word >> 8) : (word & 0xFF);
+        t = *vram(s_clut_x + idx, s_clut_y);
+      } else {                                                               // 4bpp -> CLUT
+        uint16_t word = *vram(s_tp_x + (u >> 2), s_tp_y + v);
+        int idx = (word >> ((u & 3) * 4)) & 0xF;
+        t = *vram(s_clut_x + idx, s_clut_y);
+      }
+      unsigned char rgb[3] = { (unsigned char)((t & 31) << 3),
+                               (unsigned char)(((t >> 5) & 31) << 3),
+                               (unsigned char)(((t >> 10) & 31) << 3) };
+      fwrite(rgb, 1, 3, f);
+    }
+  fclose(f);
+  fprintf(stderr, "[texexport] wrote %s (%dx%d, tp=(%d,%d) mode=%d clut=(%d,%d) uv0=(%d,%d))\n",
+          path, w, h, s_tp_x, s_tp_y, s_tp_mode, s_clut_x, s_clut_y, u0, v0);
+}
+
 // Rasterize one flat line segment with the CURRENT draw state (s_off, clip). Shared by gp0_exec and
 // the fps60 synthesizer so poly-lines are reproduced in the interpolated frame (else they flicker).
 void GpuState::raster_line(int x0, int y0, int x1, int y1, uint8_t cr, uint8_t cg, uint8_t cb, int semi) {
@@ -823,6 +858,22 @@ void GpuState::gp0_exec(Core* core) {
                   "col=(%d,%d,%d) at=(%d,%d) %dx%d uv0=(%d,%d) off=(%d,%d)\n",
                   s_frame, s_cur_node, op, textured?1:0, semi, s_clut_x, s_clut_y, s_tp_x, s_tp_y,
                   cr, cg, cb, x, y, w, h, u0, v0, s_off_x, s_off_y);
+      } }
+    // PSXPORT_TEXEXPORT=<frame> — export the texture of each large textured sprite (backgrounds) on that
+    // frame via the PC-native decoder. The menu/sea backdrops are big sprites; this writes their decoded
+    // pixels to scratch/export/*.ppm with no PSX code in the decode path.
+    { static int tex_f = -2; if (tex_f == -2) { const char* e = cfg_str("PSXPORT_TEXEXPORT"); tex_f = e ? atoi(e) : -1; }
+      if (tex_f >= 0 && s_frame == tex_f && textured) {
+        // Backgrounds (menu/sea) are 16×16 TILEMAPS sampling a shared atlas texpage. Export the whole
+        // atlas (256×256 texels at the texpage origin) ONCE per unique (texpage,clut,mode), not per tile.
+        static int seen_tpx[64], seen_tpy[64], seen_clx[64], seen_cly[64], nseen = 0;
+        int dup = 0; for (int k = 0; k < nseen; k++)
+          if (seen_tpx[k]==s_tp_x && seen_tpy[k]==s_tp_y && seen_clx[k]==s_clut_x && seen_cly[k]==s_clut_y) { dup = 1; break; }
+        if (!dup && nseen < 64) {
+          seen_tpx[nseen]=s_tp_x; seen_tpy[nseen]=s_tp_y; seen_clx[nseen]=s_clut_x; seen_cly[nseen]=s_clut_y; nseen++;
+          char nm[96]; snprintf(nm, sizeof nm, "atlas_tp%d_%d_clut%d_%d_m%d", s_tp_x, s_tp_y, s_clut_x, s_clut_y, s_tp_mode);
+          tex_export(nm, 0, 0, 256, 256);
+        }
       } }
     fade_note(cr, cg, cb, s_off_y, semi); fade_note_size(w, h, semi);
     if (semi) semi_dump("sprite", s_tp_blend, cr, cg, cb, x, y, x + w, y + h, s_off_y);

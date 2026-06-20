@@ -107,6 +107,9 @@ struct GpuState {
   void prov_begin(uint8_t op, int tex, int semi, uint8_t r, uint8_t g, uint8_t b, int x0, int y0, int u0, int v0);
   void raster_sprite(int op, int x, int y, int u0, int v0, int w, int h,
                      uint8_t cr, uint8_t cg, uint8_t cb, int textured, int semi);
+  // PC-native texture EXPORT: decode w×h texels at the current texpage/CLUT (mode 0=4bpp/1=8bpp/2=15bpp)
+  // through MY OWN decoder (not the rasterizer) and write an RGB PPM. Proves the texture decode is owned.
+  void tex_export(const char* name, int u0, int v0, int w, int h);
   void raster_line(int x0, int y0, int x1, int y1, uint8_t cr, uint8_t cg, uint8_t cb, int semi);
   void set_texpage(uint16_t tp);
   void set_clut(uint16_t cl);
