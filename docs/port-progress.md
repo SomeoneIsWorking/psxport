@@ -220,11 +220,14 @@ ties into render-ownership, NOT the asset pipeline). (Camera sub-fns below are D
    **s0 NOW OWNED (later-185)** via the coro-redirect-INTO-the-yielder handshake: it has genuine pre-yield
    engine state (sm[0x68]=0, sm[0x48]++, sm[0x4a]=0) owned native, then redirects to its first loader jal
    0x801063E4 (yields) so the loaders + fall-through to s1 run in-context. A/B (run 150) main-RAM + scratchpad
-   **0-diff, no saved-ra artifact**. **NEXT (this item): s4/s7 via a POST-yield override (own the branch logic
-   that runs AFTER the yield — s4 at 0x8010658C, s7 inside phase machine 0x80106C24 + phase2 teardown). An
-   ENTRY override for s4/s5/s7 would be a pure passthrough owning nothing, so it was deliberately NOT done.
-   s5 = a single stage-transition call (0x80052078(2)), nothing to own — stays guest.** A plain rec_dispatch
-   of a deep yielder kills task 0. Overlay disasm via `tools/disas.py <addr> --ram scratch/bin/tomba2/ram_menu.bin`.
+   **0-diff, no saved-ra artifact**. **s4/s5 STAY GUEST (final):** verified (later-185) the override table is
+   consulted ONLY on jal/j/jalr/computed-jr targets, NOT on `jr ra` returns — so s4's only logic (the sm[0x6b]
+   branch post-yield at 0x8010658C, reached by jr ra) is unreachable by an override; s5 is one stage-transition
+   call. (The earlier "post-yield override" idea was retracted as not implementable.) **NEXT (this item): s7 —
+   OWNABLE.** Its `jal 0x80106C24` is an override-checked jal target and 0x80106C24's phase-selection prologue
+   (sm[0x4a]) is pre-yield + phase2 teardown is all-SYNC; own selection + phase2, redirect yielding phase0/1.
+   Needs reaching s7 (confirm a menu option) to A/B-verify. Overlay disasm via
+   `tools/disas.py <addr> --ram scratch/bin/tomba2/ram_menu.bin`.
 3. **Init-prefix remainder:** `FUN_800520e0` engine subsystem init — ORCHESTRATION OWNED (later-183,
    eng_init_subsystems, boot A/B 0-diff); NEXT = descend into its 4 callees (8007b328/80088b00/80086620/87a60).
    `FUN_80075130` font/text init — ✅ DONE (ov_font_init, engine_font.cpp; 3 engine callees + memsets owned,

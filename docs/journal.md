@@ -6470,3 +6470,22 @@ gpu_dma2_linked_list / ov_draw_otag's OT read. M4: own the still-recomp submit v
 OT-walk driver + bg_2d coverage heuristic. Open question for the user (M3 priority): under the new
 render-queue default, did any framebuffer-read effect (water reflection / fb snapshot) glitch? Such copies
 are usually issued OUTSIDE the OT, so the deferral hazard may not manifest — the answer sets M3 urgency.
+
+## later-185 — DEMO substate s0 owned; jr-ra override-bypass dead-end (s4/s5 final-guest)
+Owned DEMO front-end substate **s0 0x801063C0** PC-native (engine/engine_demo.cpp ov_demo_s0): genuine
+pre-yield engine state (sm[0x68]=0, sm[0x48]++, sm[0x4a]=0) owned native, then coro-redirect into the first
+loader jal 0x801063E4 (yields) so the loaders + fall-through into s1 run in-context. A/B (run 150 steady
+menu, override-on vs -off) main-RAM + scratchpad **0-diff, NO saved-ra artifact** (the guest jal sets its own
+ra). Also owned font init FUN_80075130 (ov_font_init, engine_font.cpp; boot run-2 0-diff vs initref.bin) and
+the #4 auxiliary render walks 8003BCF4/8003BF00/8003EEC0 (per-node world-depth tag; field ndepth spans 3→5).
+
+**DEAD-END (verified, retracts a prior plan):** I planned to own s4/s7's transition logic via a "post-yield
+override" at the instruction after their deep yielder returns (s4: 0x8010658C). This is IMPOSSIBLE: the
+interp's address-keyed override table is consulted ONLY on jal/j/jalr/computed-jr CALL/JUMP targets
+(interp_flat lines 453-483); a `jr ra` RETURN (line 477) does NOT consult it. The post-yield address is
+reached by `jr ra` from the yielder, so an override there never fires. Therefore **s4 0x80106580 and s5
+0x801065DC stay GUEST (final)** — s4's only logic is the sm[0x6b] branch reached post-jr-ra; s5 is one
+stage-transition call. **s7 0x80106668 IS still ownable** — its `jal 0x80106C24` is an override-checked jal
+target and 0x80106C24's phase-selection prologue (sm[0x4a]) is pre-yield + phase2 teardown all-SYNC; own
+selection + phase2, redirect yielding phase0/phase1. That is the remaining DEMO frontier step (needs reaching
+s7 = confirm a menu option to A/B-verify).

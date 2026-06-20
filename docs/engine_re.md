@@ -186,12 +186,20 @@ state (sm[0x68]=0, **sm[0x48]++** [increment, NOT `=1`], sm[0x4a]=0) which it ow
 loader-0 args (a0=0x80108F9C,a1=2,a2=task) and coro-redirects to the first loader jal 0x801063E4 (which
 YIELDS; the guest runs the rest of the loaders + falls into s1 in-context). A/B (run 150 steady menu,
 override-on vs -off): main-RAM + scratchpad **0-diff, no saved-ra artifact** (the guest jal sets its own ra).
-The remaining DEEP-YIELDING substates **s4/s5/s7** stay GUEST: their substantive transition logic is all
-POST-yield, so an entry override would be a pure passthrough owning nothing. Their REAL ownership is a
-POST-yield override (s4: own the sm[0x6b] branch at 0x8010658C after 0x8007bf20 returns ra=0x8010658C —
-v1==1→sm[0x48]=2,sm[0x68]=1; ==2→sm[0x48]=2,sm[0x68]=0; ==7→sm[0x48]=5,*0x1f800134=1; s7: own 0x80106C24's
-phase SELECTION + phase2 SYNC teardown 0x80106dfc; s5 = one stage-transition call, nothing to own). A plain
-rec_dispatch of a deep yielder kills task 0 (later-169). NEXT FRONTIER STEP.
+The remaining DEEP-YIELDING substates: **MECHANISM CONSTRAINT (verified later-185, interp.cpp):** the
+override table is consulted ONLY on `jal`/`j`/`jalr`/computed-`jr` CALL/JUMP targets (interp_flat 453-483);
+a `jr ra` RETURN does NOT consult it. So a "post-yield override" at the instruction after a deep yielder
+returns is IMPOSSIBLE (reached by `jr ra`, never fires). Therefore:
+- **s4 0x80106580 — STAYS GUEST (final).** Its only engine logic is the sm[0x6b] branch at 0x8010658C
+  (==1→sm[0x48]=2,sm[0x68]=1; ==2→sm[0x48]=2,sm[0x68]=0; ==7→sm[0x48]=5,*0x1f800134=1), reached by `jr ra`
+  from the deep yielder 0x8007bf20 → unreachable by an override. (An earlier "own at 0x8010658C" note was
+  WRONG, retracted.)
+- **s5 0x801065DC — STAYS GUEST.** Whole body is `jal 0x80052078(2)` + tail yield; nothing to own.
+- **s7 0x80106668 — OWNABLE, the remaining DEMO frontier step.** Its `jal 0x80106C24` IS an override-checked
+  jal target; phase machine 0x80106C24's phase-selection prologue (sm[0x4a]) is PRE-yield and phase2 teardown
+  (0x80106dfc: jal 0x80074bc4 SYNC ; *0x1f80019a=0 ; sm[0x48]=0) is all-SYNC → own selection + phase2, redirect
+  the yielding phase0/phase1 into the guest body. Needs reaching s7 (confirm a menu option) to A/B-verify.
+A plain rec_dispatch of a deep yielder kills task 0 (later-169).
 A/B gate (override-on vs -off, REPL `run 150`): main-RAM + scratchpad 0-diff except task-0's saved-ra stack
 slot (CORO_SENTINEL vs guest return-PC, the coro-redirect artifact). `dumpram` now also dumps a `.spad`.
 

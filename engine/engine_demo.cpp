@@ -211,21 +211,27 @@ static void ov_demo_s0(Core* c) {
   rec_coro_redirect(c, 0x801063E4u);         // first loader jal 0x80045080 (YIELDS) -> ... -> falls into s1
 }
 
-// s4 / s5 / s7 — NOT owned at the substate-ENTRY level (deliberately). Unlike s0, their substantive
+// s4 / s5 / s7 — entry-level ownership is NOT useful (deliberately). Unlike s0, their substantive
 // transition logic lives entirely AFTER their deep yield, so an entry-level override could only set up
 // args + coro-redirect straight into the guest yielder — a pure passthrough that OWNS NOTHING while
-// adding override-table indirection + task-0-death risk if a redirect target/ra is wrong. That is
-// scaffolding, not ownership, so we don't do it. The CORRECT ownership is a POST-YIELD override:
-//   - s4 0x80106580: let the guest run `jal 0x8007bf20(0,0)` (it sets ra=0x8010658C), then own the
-//     sm[0x6b] branch at 0x8010658C natively (v1==1 -> sm[0x48]=2,sm[0x68]=1; ==2 -> sm[0x48]=2,
-//     sm[0x68]=0; ==7 -> sm[0x48]=5,*0x1f800134=1; else stay) and coro-redirect to TAIL_CF2C/TAIL_REND.
-//   - s7 0x80106668 -> phase machine 0x80106C24: own the phase SELECTION (sm[0x4a]) prologue + phase2's
-//     all-SYNC teardown (0x80106dfc: jal 0x80074bc4 ; *0x1f80019a=0 ; sm[0x48]=0) natively; phase0/1
-//     still yield mid-phase, so redirect those.
+// adding task-0-death risk if a redirect target/ra is wrong. That is scaffolding, not ownership.
+//
+// MECHANISM CONSTRAINT (verified in interp.cpp, this session): the address-keyed override table is
+// consulted ONLY on `jal`/`j`/`jalr`/computed-`jr` CALL or JUMP targets (interp_flat lines 453-483).
+// A `jr ra` RETURN does NOT consult it (line 477: `pc = tgt; continue`). So a "post-yield override" at
+// the instruction AFTER a deep yielder returns is IMPOSSIBLE — that address is reached by `jr ra` and
+// would never fire. (An earlier note proposing an override at s4's post-yield 0x8010658C was WRONG and
+// is retracted.) This means:
+//   - s4 0x80106580: its only engine logic is the sm[0x6b] branch at 0x8010658C, reached by `jr ra`
+//     from the deep yielder 0x8007bf20 -> UNREACHABLE by an override. s4 STAYS GUEST (final, not a TODO).
 //   - s5 0x801065DC: its ENTIRE body is `jal 0x80052078(2)` (LEAVE DEMO / task-restart) + the tail yield
-//     — there is no engine logic to own; it stays guest (owning it would be the same empty passthrough).
-// Tracked as the next frontier step in docs/port-progress.md. s0 (above) is owned because it has genuine
-// pre-yield engine state to own (the init field writes + substate selection).
+//     — no engine logic to own. STAYS GUEST.
+//   - s7 0x80106668: OWNABLE — its trampoline `jal 0x80106C24` IS an override-checked jal target, and the
+//     phase machine 0x80106C24's phase SELECTION prologue (reads sm[0x4a]) is PRE-yield, plus phase2's
+//     teardown (0x80106dfc: jal 0x80074bc4 SYNC ; *0x1f80019a=0 ; sm[0x48]=0) is all-SYNC. So 0x80106C24
+//     can be owned: own phase selection + phase2 native, coro-redirect phase0/phase1 (which yield) into
+//     the guest body. This is the remaining DEMO frontier step (needs reaching s7 = confirm a menu option).
+// s0 (above) is owned because it has genuine pre-yield engine state to own (init writes + substate sel).
 
 // Register the DEMO substate overrides when the just-loaded overlay is the DEMO overlay at the stage
 // base. Distinguish from GAME.BIN (which aliases the same base) by the root-dispatcher prologue:
