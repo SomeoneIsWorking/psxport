@@ -264,6 +264,49 @@ static void ov_unpack_group(Core* c) {
   }
 }
 
+// PC-native TEXTURE-GROUP LOADER — owns the asset-load ORCHESTRATION FUN_80044F58 (0x80044F58): the
+// per-group loader a level uses to stream a texture set into VRAM. RE (tools/disas.py + gen_func_80044F58):
+// the current task selects a set via task[0x6D]=mode / task[0x6E]=set, then
+//   1. CD-load a 2KB HEADER from sector (filebase0 = *0x800BE0F0) + set  [+ a 4/26 bias in mode 2] -> 0x800EF478
+//   2. CD-load the compressed ARCHIVE from sector (filebase1 = *0x800BE0F8) + (hdr[0]>>11), len hdr[1]-hdr[0]
+//      -> the fixed staging buffer 0x8018A000 (descriptor table in its first 0x800 bytes, packed data after)
+//   3. UNPACK the archive (ov_unpack_group) -> decompress + upload each image to its VRAM (x,y) (owned)
+//   4. copy a 42-word metadata table from hdr+0x100 (0x800EF578) -> 0x800FB170 (per-set sprite/CLUT meta the
+//      game content reads back)
+//   5. (mode==0 only) set _DAT_1f80019b=1 and run the task TERMINAL YIELD FUN_80051FB4 (suspend until next
+//      frame — this is what streams the groups one-per-frame).
+// ENGINE asset orchestration -> reimplemented PC-native; the CD read (ov_cd_loadfile, via 0x8001DC40) and the
+// terminal task yield (the scheduler) stay the retained platform/content mechanism (called, not transcribed).
+// The mode/set inputs and the 0x800FB170 metadata are CONTENT-interface state, so this is gated on the main-
+// RAM A/B diff (later-177). For mode==0 the terminal yield does not return (ov_switch longjmps mid-game),
+// exactly like eng_stage_transition's tail; there is no code after it.
+static void ov_load_texgroup(Core* c) {
+  uint32_t ra = c->r[31], sp = c->r[29], s0 = c->r[16];   // preserve for the (non-yield) epilogue
+  uint32_t task = c->mem_r32(0x1F800138u);
+  uint32_t mode = c->mem_r8(task + 0x6Du);
+  uint32_t set  = c->mem_r8(task + 0x6Eu);
+  uint32_t hdr_sector = c->mem_r32(0x800BE0F0u) + set;             // filebase0 + set
+  if (mode == 2) {                                                 // mode-2 per-set 4/26-sector bias
+    uint16_t mask = c->mem_r16(0x800BFE56u);
+    hdr_sector += ((mask >> (set & 31)) & 1) ? 26u : 4u;
+  }
+  const uint32_t HDR = 0x800EF478u;
+  c->r[4] = HDR; c->r[5] = hdr_sector; c->r[6] = 2048;
+  rec_dispatch(c, 0x8001DC40u);                                    // 1. CD-load 2KB header (platform)
+  uint32_t h0 = c->mem_r32(HDR + 0), h1 = c->mem_r32(HDR + 4);
+  c->r[4] = 0x8018A000u; c->r[5] = c->mem_r32(0x800BE0F8u) + (h0 >> 11); c->r[6] = h1 - h0;
+  rec_dispatch(c, 0x8001DC40u);                                    // 2. CD-load compressed archive -> staging
+  c->r[4] = 0x8018A000u; c->r[5] = 0x1FD000u;
+  rec_dispatch(c, 0x80044E84u);                                    // 3. unpack -> decompress + VRAM upload (owned)
+  for (uint32_t i = 0; i < 42; i++)                                // 4. per-set metadata table
+    c->mem_w32(0x800FB170u + i * 4, c->mem_r32(HDR + 0x100u + i * 4));
+  c->r[16] = s0; c->r[29] = sp; c->r[31] = ra;
+  if (mode == 0) {                                                 // 5. terminal yield (streams one group/frame)
+    c->mem_w8(0x1F80019Bu, 1);
+    rec_dispatch(c, 0x80051FB4u);                                  // ov_switch tail — does not return mid-game
+  }
+}
+
 // Per-image post-step FUN_80080f6c(0) = the game's libgs frame DrawSync: FUN_80083364(0) waits for the
 // GPU's ordering-table DMA to drain and the GPU to go idle (polls GPUSTAT @0x800a5ab4 bit 0x01000000 /
 // @0x800a5aa8 bit 0x04000000), having queued the (now-empty, since ov_upload_image bypasses it) ring.
@@ -412,6 +455,7 @@ void games_tomba2_init(void) {
   { void engine_camera_register(void); engine_camera_register(); }   // per-frame camera X/Z follow native
   // PC-owned asset codecs.
   rec_set_override(0x80044D8Cu, ov_lz_decompress);   // LZ image decompressor
+  rec_set_override(0x80044F58u, ov_load_texgroup);   // texture-group LOADER orchestration (header+archive+unpack)
   rec_set_override(0x80044E84u, ov_unpack_group);    // texture-group unpacker (drives the above)
   rec_set_override(0x80081218u, ov_upload_image);    // PC-native CPU->VRAM upload (libgs upload lib)
   // Own the geometry submit path natively.

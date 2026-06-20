@@ -20,11 +20,23 @@ tiled cyan water). **Order: fully own the pipeline FIRST, then match 100%** (use
   gated only by diag `PSXPORT_DEBUG=unpacksync`). A/B-verified: VRAM byte-identical (present f100, post-menu-
   load), main-RAM identical at native f455 except 14 bytes of DEAD STACK below sp (decode = the post-step's
   own saved ra 0x80080FC4 + saved 0x800Axxxx regs — transient call-frame scratch, not game state).
-- ☐ **the ORCHESTRATION** — the level/area asset LOADER that decides WHICH file loads, the group-table /
-  descriptor layout, WHERE each image lands in VRAM, and how a multi-page backdrop (the 288×576 sea) is
-  assembled. This is still PSX and is the real "own the pipeline" work. eng_load_stage FUN_800450bc is the
-  entry; the group table is built from the loaded file then handed to ov_unpack_group (table+0x800 = data,
-  12-byte descriptor entries {x,y,stride@+4,field@+6,srclen@+8}, dst = anchor − 2·stride·field).
+- ✅ **the per-group ORCHESTRATION `FUN_80044F58`** — owned PC-native as `ov_load_texgroup` (game_tomba2.cpp).
+  RE'd the whole loader: the current task picks a set via task[0x6D]=mode / task[0x6E]=set, then (1) CD-loads a
+  2KB HEADER from sector (filebase0=*0x800BE0F0)+set [+4/26 bias in mode 2 from the 0x800BFE56 bitmask] to
+  0x800EF478, (2) CD-loads the compressed ARCHIVE from sector (filebase1=*0x800BE0F8)+(hdr[0]>>11), len
+  hdr[1]-hdr[0], to the FIXED staging buffer 0x8018A000 (descriptor table in first 0x800 bytes, packed data
+  after — so the "group table" IS the loaded file), (3) UNPACKs it (owned), (4) copies a 42-word per-set
+  metadata table hdr+0x100 -> 0x800FB170 (content reads it back), (5) mode==0 only: sets _DAT_1f80019b=1 +
+  runs the task terminal-yield FUN_80051FB4 (this streams one group/frame). Reimplemented native, calling the
+  owned leaf fns (ov_cd_loadfile via 0x8001DC40, ov_unpack_group) + the scheduler yield; NOT transcribed.
+  A/B-gated (main-RAM diff at native f455): ON-vs-OFF differs by only 8 bytes of DEAD STACK (the gen frame's
+  saved s0/ra spill slots my C path doesn't write) — the non-zero diff confirms the override runs; VRAM
+  byte-identical (present f100). The 5 seaside archive loads (10/2/4/2/6 images) compose the multi-page VRAM
+  backdrop; observe with PSXPORT_DEBUG=unpack.
+- ☐ **the 288×576 sea BACKDROP assembly** — the multi-page VRAM layout the 5 loads build (pages at VRAM y=0
+  and y=256, x in {320,448,512,576,640,832,896,1008}) + how the engine composes/scrolls them on screen.
+  Decode/upload/orchestration are all owned now; remaining = the on-screen composition + the offline
+  bit-identical reconstruction (the user's acceptance test).
 
 **Proven this session (committed 2ce8b00):** `PSXPORT_TEXEXPORT=<frame>` exports each background atlas via
 OUR decoder (no PSX in the decode). Verified 3: menu text atlas (4bpp, "NewGame LoadGame OPTIONS StartGame"),
