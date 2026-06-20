@@ -147,6 +147,35 @@ static uint32_t eng_init_mode_ctrl(Core* c, uint32_t a0) {
   return s1;
 }
 
+// FUN_80087a60 — a thin wrapper that just calls FUN_80086970; owned as eng_init_input.
+// FUN_80086970 — engine INPUT subsystem init: orchestrates the input/controller setup. We own the
+// direct engine-state writes + the call sequence PC-native and rec_dispatch the sub-init callees (each
+// is lower-level input/content init — the dispatch-table handler *0x800abe3c runs in-context here, as it
+// did under the recomp body). Faithful to 0x80086970:
+//   FUN_80080890(); *0x800abe70=0;
+//   FUN_80087400(a0=2, a1=0x80102440); FUN_800873f0(a0=2, a1=0x80102440);
+//   v1=*0x800abe98; *v1=-2; *(v1+4) |= 1; FUN_80085b10(a0=3, a1=0);
+//   FUN_800808a0();
+//   handler(*0x800abe6c); handler(*0x800abe6c + 0xf0);     // *0x800abe3c, both run
+//   *0x80102454=0; *0x80102450=0; *0x800abe70=1;
+void eng_init_input(Core* c) {
+  rec_dispatch(c, 0x80080890u);
+  c->mem_w32(0x800abe70, 0);
+  c->r[4] = 2; c->r[5] = 0x80102440u; rec_dispatch(c, 0x80087400u);
+  c->r[4] = 2; c->r[5] = 0x80102440u; rec_dispatch(c, 0x800873f0u);
+  uint32_t v1 = c->mem_r32(0x800abe98);
+  c->mem_w32(v1, (uint32_t)-2);
+  c->mem_w32(v1 + 4, c->mem_r32(v1 + 4) | 1);
+  c->r[4] = 3; c->r[5] = 0; rec_dispatch(c, 0x80085b10u);
+  rec_dispatch(c, 0x800808a0u);
+  uint32_t handler = c->mem_r32(0x800abe3c);
+  c->r[4] = c->mem_r32(0x800abe6c);          rec_dispatch(c, handler);
+  c->r[4] = c->mem_r32(0x800abe6c) + 0xf0;   rec_dispatch(c, handler);
+  c->mem_w32(0x80102454, 0);
+  c->mem_w32(0x80102450, 0);
+  c->mem_w32(0x800abe70, 1);
+}
+
 void eng_init_subsystems(Core* c) {
   uint32_t ra = c->r[31], sp = c->r[29];
   c->r[29] = sp - 0x18; c->mem_w32(c->r[29] + 0x10, ra);   // mirror prologue: addiu sp,-0x18; sw ra,0x10(sp)
@@ -159,6 +188,6 @@ void eng_init_subsystems(Core* c) {
   c->mem_w8 (0x800ecf4f, 0);
   c->r[4] = 0x800bf4f8u; c->r[5] = 0x800bf51au; rec_dispatch(c, 0x80088b00u);  // allocator/dispatch table
   eng_init_mode_ctrl(c, 1);                    // mode control(1) — owned native (no-op at init)
-  rec_dispatch(c, 0x80087a60u);                // input subsystem init
+  eng_init_input(c);                           // input subsystem init (FUN_80087a60->80086970) — owned native
   c->r[29] = sp; c->r[31] = ra;          // mirror epilogue: addiu sp,+0x18; jr ra
 }
