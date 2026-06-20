@@ -1,16 +1,62 @@
 # Tomba2Engine — a PC-native reimplementation of Tomba! 2's engine
 
-**Goal (2026-06-16):** turn Tomba! 2 into a real **PC-native engine port** — Tomba! 2's *own*
-game engine, reimplemented in native C, running the real game content. Not an emulator, not a
-recompiled-MIPS blob with I/O bolted on. Reference/oracle for every lift = the recompiled MIPS body.
+**Goal (2026-06-16; scope clarified 2026-06-19; sharpened by the user 2026-06-20):** turn Tomba! 2 into a
+real **PC-native GAME ENGINE** — **REBUILD Tomba! 2's engine as a complete, self-contained PC game
+engine** in native C, running the real game content. Not an emulator, not a recompiled-MIPS blob with
+I/O bolted on. **Behave like a PC game, do NOT simulate the PSX.**
 
-**Scope boundary (important):** the **gameplay logic** (per-entity AI, physics, game rules) STAYS as
-recompiled PSX code running in **PSX guest memory** — we do NOT reimplement it. We reimplement the
-**engine layer** in native C: the main loop, entity-list iteration, per-object cull/LOD, render
-submission, camera, and the 60fps interpolation + widescreen. The native engine **reads the entity
-structs out of guest RAM and calls into PSX gameplay code** where needed. This is the layer that makes
-object interpolation correct (we own the real entity list → no GTE-transform-fingerprint guessing) and
-it drops any "lift the whole game" phase.
+**The engine must NOT deal with PSX intricacies AT ALL — it OWNS the game itself.** A complete PC game
+engine owns its world and draws it the way a PC game does: it owns the game objects, the camera and
+**projection**, and — critically — **its own render ordering / visibility (real depth buffer + its own
+sort)**. It does NOT read, honor, or reproduce *any* PSX rendering decision: not the PSX ordering table
+(OT), not PSX draw order, not GTE output, not GP0 packets, not the PSX disp-env. Those are PSX
+intricacies; the rebuilt engine has no business knowing they exist. If the engine is consulting "what
+the PSX would draw / in what order" to decide what appears on screen, it is wrong — it must decide
+that itself from the scene (e.g. the sea-background-drawn-on-top bug is exactly this: order inherited
+from PSX instead of owned by the engine).
+
+## THE BOUNDARY — REBUILD the ENGINE PC-native; keep the game CONTENT/LOGIC as recompiled PSX (read this first)
+This is the single most-misread thing in the project. Sessions keep collapsing "rebuild the engine" into
+"port the renderer" or into "transcribe the PSX body to C." Both are wrong. The line is **engine vs
+content**, and a game engine is FAR more than rendering. Note the verb is **REBUILD**, not "port" — we are
+building a PC game engine that produces the same game, not translating PSX engine code into C.
+
+**THE ENGINE — we REIMPLEMENT it natively in C, as a PC game would do it (the WHOLE list, not just render):**
+- **main menu / title / front-end UI menus**, and the main game loop
+- **level / stage LOADING** — read the level's data and build the world
+- **character / model / texture / animation / ASSET loading**
+- **terrain** — load it, place it, build the mesh, AND render it (terrain is an engine SYSTEM, not "render")
+- **object / entity PLACEMENT & spawning** — where things are put in the world
+- **scene / world management, camera, PC-native projection, per-object cull / LOD**
+- **render ordering / visibility** — the engine decides what occludes what with its OWN real depth buffer
+  and its OWN sort; it NEVER inherits draw order from the PSX OT / GP0 stream (see RENDER below)
+- **render submission + the renderer** (PC-native: float transforms, real depth — see RENDER below)
+- save/load flow, 60fps interpolation, widescreen.
+
+**The game CONTENT / LOGIC — STAYS as recompiled PSX code/data; we do NOT reimplement it. The split (user,
+2026-06-20): PSX owns ONLY the actual game CONTENT — `characters`, `level data`, `quests`. EVERYTHING ELSE
+is PC-owned, INCLUDING the game objects themselves.** Concretely, PSX-owned content is:
+- **characters** — per-enemy AI, per-character / NPC behavior
+- **game physics & collision response** (how Tomba moves / jumps / lands)
+- **level data** (the stage's content/asset payload) and **quest / event / progression / game-rule logic**
+We are explicitly NOT porting every enemy type, every character, the quests, etc. But the **game objects**
+— the world's entity/object model, its placement, spawning, transforms, scene graph, ordering — are
+**PC-owned**, owned by the engine, not "whatever the PSX struct happens to be." The engine calls into the
+PSX content code as the interface (e.g. it builds the level + terrain + places objects, and the PSX
+physics/AI then move the player/enemies within that PC-owned world). Where the engine must hand state to
+the retained PSX content, that handoff must be CORRECT (a wrong guest write corrupts the PSX content — that
+is how the native terrain made Tomba fall through the ground, later-158) — but the goal is for the engine
+to OWN the object/world model PC-native and only marshal what the PSX content genuinely needs, not to treat
+the guest entity structs as the source of truth.
+
+**The recomp has TWO distinct roles — never conflate them:**
+1. For the **ENGINE**, the recompiled body (`gen_func_*`) is the **behavioral REFERENCE / oracle only**:
+   read what it does, understand the data, then **REIMPLEMENT it PC-native**. A native function that
+   merely reproduces the PSX body's instructions/packets byte-for-byte is **still PSX-simulation, not a
+   PC engine** — that is NOT the deliverable. Match the engine's *observable result* (the world it
+   builds, the picture it draws, the interface state the content reads), not its PSX mechanism.
+2. For the **CONTENT/LOGIC**, the recompiled body is the **live runtime** that keeps running in guest
+   memory. The engine calls it; we don't rewrite it.
 
 Active plan: `<local-notes>/plans/fancy-tinkering-kite.md`. Engine RE: `docs/engine_re.md` (read first).
 Findings/dead-ends: `docs/journal.md`. Project map / build cheat-sheet: `docs/project-map.md`.
@@ -54,32 +100,47 @@ one build, then extracting the common PSX part into its own repo (gh authed as `
   used to validate the port. Built by **`make -C runtime`** (the only thing that Makefile builds — NOT
   the port). Run: `runtime/wide60rt <chd> -bios <dir> -play` (OpenBIOS as scph5501.bin works).
 
-## Methodology — oracle-validated incremental lift
-Extend the existing override pattern inward from I/O to the engine: `rec_set_override(addr, ov_fn)`
-keeps the recomp body callable as the oracle/super-call; A/B toggle. Every lifted function is gated on
-**RAM/state equivalence vs the recomp body on real gameplay** (diff via `tools/drive.py` + the Beetle
-oracle), never "looks right". Determinism check first. The game stays playable at every step (un-lifted
-functions keep running as recomp).
+## Methodology — REIMPLEMENT the engine PC-native; the recomp is the reference + the content runtime
+Use `rec_set_override(addr, ov_fn)` to swap an engine function for a native C reimplementation while
+keeping the recomp body callable as the reference/super-call (A/B toggle). Determinism check first. The
+game stays playable at every step (un-ported engine functions + ALL content/logic keep running as recomp).
 
-### RENDER is the EXCEPTION — render PC-native, do NOT transcribe the PSX pipeline (USER DIRECTIVE, anchor)
-The RAM/byte-equivalence gate above is for **gameplay logic**. For the **render submission** it is the
-WRONG gate — it forces you to replicate PSX behavior in C. **We are porting the game to PC, not replaying
-PSX on PC.** What the tree currently calls "native" render (`engine_submit.cpp` `submit_terrain`,
-`ov_submit_poly_gt4_bp`, `native_dl`) is in fact a **transcription of the PSX render path**: it reproduces
-the GTE matrix compose (MVMVA columns + CR0-7 packing), drives `gte_op` (emulated PSX GTE), and fills
-GP0 packet words "byte-identical to the guest packet." That replication IS the source of the render
-glitches (the terrain's tiny composed matrix → water garbage; mangled 2D/UI quads). **Do not chase those
-by patching the transcription.** Instead:
-- Render the game's CONTENT with a PC renderer: read the SCENE DATA the game already computes — camera/
-  view, per-object transform (node euler + translation + scale), model GEOMETRY (geomblk prim-lists:
-  positions/UVs/colors) — transform with **float matrices**, project, draw textured tris/quads via
-  `gpu_vk_draw_*_f` with a **real depth buffer**. NO GTE compose, NO `gte_op` for render, NO byte-packed
-  PSX packet.
+**Two different gates — pick by WHICH side of the boundary you are on:**
+- **Engine reimplementation → gate on the OBSERVABLE RESULT, NOT a byte-match.** Reimplement the system
+  the way a PC game would, then verify the *result*: the world/menu/scene it builds, the picture it
+  draws, and — critically — **the interface state the retained PSX content reads back is correct** (the
+  guest fields/structs the AI/physics consume). Do NOT gate the engine on reproducing the PSX body's
+  instructions/registers/packets byte-for-byte; that gate forces transcription, which is the wrong
+  deliverable (a byte-faithful native function is still PSX-simulation). "Looks/works like the reference"
+  + "the content still behaves" is the bar.
+- **Content interface (the guest RAM the PSX AI/physics read) → MUST match the reference.** Where the
+  engine writes state the PSX content consumes, those writes must be correct vs the reference, and a
+  divergence there is a real bug (RAM/state diff via `tools/drive.py` + the Beetle oracle). NB the main-
+  RAM A/B diff is BLIND to **scratchpad (0x1F800000)** and GTE regs — a wrong scratchpad write can
+  corrupt the PSX content invisibly (later-158: the terrain clobbered scratchpad → broke collision).
+
+### RENDER — the clearest case of "reimplement, don't transcribe"
+The renderer is part of the engine, so it follows the engine rule above. What the tree once called
+"native" render (`engine_submit.cpp` `submit_terrain`, `ov_submit_poly_gt4_bp`, `native_dl`) was actually
+a **transcription of the PSX render path** — it reproduced the GTE matrix compose (MVMVA columns + CR0-7
+packing), drove `gte_op` (emulated PSX GTE), and filled GP0 packet words byte-identical to the guest
+packet. That is PSX-simulation, not a PC renderer. Instead:
+- Render the world's CONTENT with a PC renderer: read the SCENE DATA the engine has (camera/view,
+  per-object transform = node euler + translation + scale, model GEOMETRY = geomblk prim-lists of
+  positions/UVs/colors), transform with **float matrices**, project, draw textured tris/quads with a
+  **real depth buffer** (`gpu_draw_world_quad` / `gpu_vk_draw_*_f`). NO GTE compose, NO `gte_op` for
+  render, NO byte-packed PSX packet. (PC-native terrain render landed this way — later-158.)
+- **The engine OWNS render ordering — never the PSX.** Visibility/occlusion is decided PC-native: a real
+  depth buffer for 3D, and the engine's own explicit layer/sort for 2D (backgrounds, HUD, sprites). Do
+  NOT read the PSX ordering table (OT), the GP0 submission order, the z/otz the game computed, or any PSX
+  draw-order signal to decide what ends up on top. If something draws in the wrong order (e.g. a
+  background painted over the scene), the fix is to give the engine the correct ordering rule, NOT to
+  re-sync with what the PSX would have done.
 - The PSX render (recomp/interp) is the **VISUAL ORACLE only** — "what should the frame look like" — never
-  a byte-match target. Gate render work on the picture matching the oracle.
-- Still READ gameplay/scene state from guest RAM; never WRITE guest gameplay state (host-memory rule).
-- Applies to the whole render path (terrain, per-object, 2D/UI). First target: PC-native terrain
-  (`run.sh` ships `PSXPORT_NO_TERRAIN=1` as a stopgap until it works).
+  a byte-match target and never the source of draw order.
+- The engine may WRITE the guest interface state the PSX content reads (e.g. terrain sway/world data),
+  but those writes must match the reference (see the content-interface gate above); it must NOT
+  gratuitously clobber other guest/scratchpad state.
 
 ## Hard rules
 - **No bandaids / no magic constant offsets** — name the root cause; every lifted function / patched
