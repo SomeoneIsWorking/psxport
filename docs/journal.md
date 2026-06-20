@@ -1,5 +1,47 @@
 # Debug / progress journal
 
+## later-178: FIX the title/menu BG render — later-172's linear pool walk scrambled the E1-texpage→sprite order
+**The title (DEMO stage 0x801062E4) now renders correctly** (TOMBA!2 logo + brick + characters + New Game/
+Load Game — matches `scratch/screenshots/fl_06.ppm`). The field still renders correctly (no regression).
+USER-directed ("aim for this first").
+
+**later-177b's root-cause was WRONG — FALSIFIED (see below).** It blamed a hardcoded FIELD pool base in the
+walk, missed by the title's "own pool." That is not it: the OT genuinely holds only ~5 prims on the title
+(independent `PSXPORT_SCENEDUMP` OT-walk confirms it), and reverting to the OT walk draws the SAME 5 prims —
+so the *pool base* was never the issue, and disabling the later-177 loader override left the title black too
+(later-177 is exonerated). The 5 prims are not a "drop": they are the FULL title (2 full-screen background
+sprites + 3 menu-text polys). The bug was that **the 2 background sprites rendered BLACK.**
+
+**Real root cause — confirmed mechanically.** The title's 2 background sprites are op 0x65 (RAW textured rect:
+color ignored, texture used directly), each immediately preceded in the OT by its OWN E1 DR_TPAGE. Decoded
+the OT vs our walk from a live RAM dump (`tools/disas` + a hand OT-walker on `scratch/bin/title_ram.bin`):
+- **OT LINK order (= guest DRAW order):** `E1(768,256) → sprite1(x=256,64w) ; E1(640,256) → sprite0(x=0,256w)`
+  — a 2D OT links its nodes in REVERSE allocation order (classic prepend-to-bucket-head).
+- **later-172's LINEAR PACKET-POOL walk (memory/ascending-address order):** `sprite0, E1(640), sprite1,
+  E1(768)` — it DECOUPLED every E1 texpage from its sprite. So sprite0 sampled a STALE texpage (whatever the
+  previous frame's last GP0 left) and rendered BLACK; sprite1 got sprite0's E1 (640,256) instead of its own
+  (768,256). The captured GP0 stream (`PSXPORT_GPUTRACE`) matched the broken pool order exactly.
+- **Why the FIELD was unaffected:** its prims carry their texpage inline (POLY_GT vertex words) and the depth
+  buffer owns occlusion, so memory-vs-link order is invisible there. later-172 was verified ONLY on the field
+  → the false premise "memory order ≡ draw order, the engine re-sorts anyway" shipped. It is FALSE for 2D:
+  GP0 state commands (E1 texpage / E2 texwindow) are ORDER-DEPENDENT and must be applied in DRAW order,
+  because each 2D sprite binds the texpage of the E1 that PRECEDES it.
+
+**FIX (gpu_native.cpp `gpu_dma2_linked_list`):** restore OT LINK-ORDER enumeration (revert later-172's linear
+pool scan; removed the now-dead `s_pool_drawn`). This is NOT honoring PSX *visibility* order — the engine
+still OWNS what's on top: 3D world prims carry real per-vertex depth (the depth buffer decides occlusion,
+order-independent); 2D prims use enumeration order, which (until the 2D drawers are owned at SOURCE — the M4
+work) IS the guest draw order, the only correct enumeration for *replaying* guest GP0. Link order is needed
+purely to reconstruct correct GPU STATE (texpage) per prim. The "sea-bg-on-top" class (a 3D ordering bug) is
+unaffected — that lives in the depth buffer, not here.
+
+**VERIFY:** title VK present = full logo/brick/characters/menu (`PSXPORT_VK_SHOT=540`, headless); field VK
+present = village byte-for-the-eye identical to the oracle gameplay shot, both via the VK path (the raw
+`PSXPORT_VRAMDUMP` shows the SW `s_vram`, which is BLACK for 2D screens because the textured sprites render
+through the VK rasterizer, not SW — a trap that made later-177/177b read "framebuffer black" off the wrong
+buffer). The gpu_differ replay harness is currently broken (build.sh references the deleted native_dl.c) —
+left as-is; not needed here (this was a missing-state bug in the enumeration, not a rasterizer-fidelity bug).
+
 ## later-177: ASSET PIPELINE ownership — texture DECODE proven PC-owned; loader ORCHESTRATION is the gap (USER directive)
 **USER directive (2026-06-20), supersedes the camera frontier:** port top-down boot→gameplay; the asset
 pipeline (load→decode→render of textures AND models) must be FULLY PC-owned so assets can be reconstructed
@@ -67,7 +109,13 @@ wants, the title must render correctly under PC ownership first.
 
 
 
-## later-177b: ROOT-CAUSE of the title/menu BG render regression — the pool-walk hardcodes the FIELD pool
+## later-177b: ~~ROOT-CAUSE of the title/menu BG render regression — the pool-walk hardcodes the FIELD pool~~ FALSIFIED
+**FALSIFIED by later-178 (above) — do NOT act on this entry.** The diagnosis below (hardcoded field pool base
+0x800bfe68 / stale write-ptr; "362 prims live in the DEMO pool") is WRONG. The OT holds only ~5 prims on the
+title (not 362 — that number conflated the `pool` diag's linear-walk counter with OT nodes), and the title's
+real failure was 2 background SPRITES rendering BLACK due to scrambled E1-texpage ordering, NOT a different
+pool base. Kept for the record; superseded entirely by later-178. Original (wrong) text follows:
+
 The title (DEMO stage 0x801062E4) submits only ~5 prims; its 352-tile background is dropped (confirmed:
 `PSXPORT_DEBUG=gpu` shows "5 prims, 39 gp0words" on every title frame). NOT a decode bug (textures are in
 VRAM, decode fine). **Root cause: the later-172 packet-pool walk (`GpuState::gpu_dma2_linked_list`,

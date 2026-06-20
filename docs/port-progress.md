@@ -115,8 +115,11 @@ for content fns (call it). Do NOT mimic PSX hardware (GTE/GP0/OT) — remove Bee
   - ☐ per-MODE orchestrators `FUN_8006e0f0` / `FUN_8006e228` / `FUN_8006e3f4` (call the smoothers; multi-mode).
 - ✅ Terrain `FUN_8002AB5C` = `ov_terrain` (native_terrain.cpp, later-158).
 - ✅ Render submit: geom GT3/GT4/gt4_bp, per-object render `0x8003CCA4`, render walk `0x8003C048` — engine_submit.
-- ✅ Render ORDERING: engine RenderQueue + packet-pool walk (OT read RETIRED, later-172). DrawOTag `0x80081560`
-  = `ov_draw_otag`. Native projection `proj_native_vertex` (float matrices, real D32 depth).
+- ✅ Render ORDERING: engine RenderQueue owns VISIBILITY (3D = real D32 depth buffer; 2D = enumeration order).
+  Prims enumerated in OT LINK order (later-178) — NOT to honor PSX visibility (engine owns that) but to apply
+  GP0 STATE (E1 texpage/E2 texwindow) in DRAW order so each 2D sprite binds the right texpage. later-172's
+  linear packet-pool walk was REVERTED: memory order ≠ draw order broke 2D (title bg sprites went black).
+  DrawOTag `0x80081560` = `ov_draw_otag`. Native projection `proj_native_vertex` (float matrices, real depth).
 
 ## E. PLATFORM services (native; the "remove Beetle by porting callers" axis — NOT game logic)
 - ✅ CD/disc (cdc_native, cd_override, disc), ✅ XA stream (xa_stream), ✅ libsnd BGM (ov_bgm_*) + SPU voice.

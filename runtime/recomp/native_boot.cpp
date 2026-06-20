@@ -204,7 +204,6 @@ static void native_step_frame(Core* c, uint32_t f) {
   c->mem_w16(0x800e809c, 0);                                  // DAT_800e809c = 0 (dwell counter)
   c->mem_w32(0x800bf4f4, c->mem_r32(0x800bf544));             // keep last pool ptr (read by some submitters)
   c->mem_w32(0x800bf544, (parity * 0x14000 + 0x800bfe68) & 0xffffff);   // packet pool (now constant)
-  c->game->gpu.s_pool_drawn = 0x800bfe68u & 0x1FFFFC;        // M3: reset the per-frame "pool drawn" cursor with the pool
   pad_service_frame(c);                                       // host input -> game pad buffer (pre-read)
   xa_audio_trace(c, "pre");                                   // CD-vol fade state BEFORE tick+mix
   rc0(c, 0x800788ac);                                         // tick + present + audio (override)
