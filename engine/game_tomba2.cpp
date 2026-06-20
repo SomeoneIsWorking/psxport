@@ -258,9 +258,21 @@ static void ov_unpack_group(Core* c) {
     src   += srclen;
     entry += 12;
     c->r[4] = desc; c->r[5] = dst; rec_dispatch(c, 0x80081218u);  // FUN_80081218(desc, dst): upload
-    c->r[4] = 0;                         rec_dispatch(c, 0x80080F6Cu);  // FUN_80080f6c(0): post step
+    // Per-image post-step FUN_80080f6c(0) = libgs GPU DrawSync between uploads — meaningless for our
+    // synchronous native upload (no async DMA to drain). Owned as a skip; see note above ov_upload_image.
+    if (cfg_dbg("unpacksync")) { c->r[4] = 0; rec_dispatch(c, 0x80080F6Cu); }
   }
 }
+
+// Per-image post-step FUN_80080f6c(0) = the game's libgs frame DrawSync: FUN_80083364(0) waits for the
+// GPU's ordering-table DMA to drain and the GPU to go idle (polls GPUSTAT @0x800a5ab4 bit 0x01000000 /
+// @0x800a5aa8 bit 0x04000000), having queued the (now-empty, since ov_upload_image bypasses it) ring.
+// IMPORTANT: this same function is the MAIN-LOOP per-frame DrawSync, so it must NOT be globally overridden
+// (a global no-op stalls all presentation). Inside the unpack loop, however, it is a between-uploads GPU
+// sync that is meaningless for our SYNCHRONOUS native VRAM upload — there is no async DMA to wait on — so
+// the unpack loop owns it as a skip. A/B-verified VRAM+RAM-identical across a full menu+seaside load
+// (later-177): the unpack call site only ever passes a0=0 with an empty ring. DIAG: PSXPORT_DEBUG=unpacksync
+// restores the per-image super-call to prove equivalence.
 
 // PC-native CPU->VRAM upload — replaces the game's libgs-style upload library FUN_80081218
 // (0x80081218). RE (verified empirically vs the A0 upload log, later-62/63): a0 = descriptor

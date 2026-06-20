@@ -11,8 +11,15 @@ tiled cyan water). **Order: fully own the pipeline FIRST, then match 100%** (use
 - ✅ file load `ov_cd_loadfile` (0x8001DB8C) · ✅ LZ decompress `lz_decompress`/FUN_80044D8C ·
   ✅ group unpack `ov_unpack_group`/FUN_80044E84 · ✅ VRAM upload `ov_upload_image`/FUN_80081218 ·
   ✅ CLUT/bit-depth DECODE (`GpuState::tex_export`, new `PSXPORT_TEXEXPORT`; same logic as sample_tex).
-- ☐ **post-step `FUN_80080f6c`** per image — libgs GsSortObject sort/draw over the (bypassed) upload ring;
-  appears to be a no-op given ov_upload_image writes VRAM directly, but NOT yet owned/verified.
+- ✅ **post-step `FUN_80080f6c`** per image — RE'd: it is `FUN_80083364(0)`, the libgs frame **DrawSync**
+  (waits for the GPU OT-DMA to drain + GPU idle by polling GPUSTAT @0x800a5ab4 bit 0x01000000 / @0x800a5aa8
+  bit 0x04000000). It is ALSO the main-loop per-frame DrawSync, so it must NOT be globally overridden (a
+  global no-op stalls ALL presentation — observed: gpu present count froze < 200 while native frames hit
+  460). The UNPACK call site, though, is a between-uploads GPU sync that is meaningless for our SYNCHRONOUS
+  native VRAM upload (no async DMA to wait on), so the unpack loop now OWNS it as a skip (game_tomba2.cpp,
+  gated only by diag `PSXPORT_DEBUG=unpacksync`). A/B-verified: VRAM byte-identical (present f100, post-menu-
+  load), main-RAM identical at native f455 except 14 bytes of DEAD STACK below sp (decode = the post-step's
+  own saved ra 0x80080FC4 + saved 0x800Axxxx regs — transient call-frame scratch, not game state).
 - ☐ **the ORCHESTRATION** — the level/area asset LOADER that decides WHICH file loads, the group-table /
   descriptor layout, WHERE each image lands in VRAM, and how a multi-page backdrop (the 288×576 sea) is
   assembled. This is still PSX and is the real "own the pipeline" work. eng_load_stage FUN_800450bc is the
