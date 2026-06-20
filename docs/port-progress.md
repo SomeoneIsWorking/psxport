@@ -152,6 +152,10 @@ for content fns (call it). Do NOT mimic PSX hardware (GTE/GP0/OT) — remove Bee
 - ✅ Math helper `FUN_80077FB0` = `ov_isqrt` (engine_math.cpp, later-186) — 16-bit ROUNDING integer sqrt
   (libgte-style leaf). Was 8.41% of all interpreter instructions; owning it native dropped the field run
   42.93M→38.99M insns/300fr (−9.2%). Bit-exact: 65000+ live calls 0-diff vs recomp (`mathverify` gate).
+- ✅ Math helper `FUN_80084080` = `ov_gte_norm` (engine_math.cpp, later-186) — table-based fixed-point sqrt
+  (LZCR leading-bit count → normalize → LUT @0x800a6310 → exponent shift). GTE used ONLY as a CLZ → pure
+  fn of a0, ported native with `__builtin_clz` (the GTE caller no longer needs Beetle). Bit-exact 0-diff
+  15000+ live calls. (Was mis-attributed as 9% by 256B buckets; real cost 0.5% — the profiler bucket fix.)
 - ✅ Terrain `FUN_8002AB5C` = `ov_terrain` (native_terrain.cpp, later-158).
 - ✅ Render submit: geom GT3/GT4/gt4_bp, per-object render `0x8003CCA4`, render walk `0x8003C048` — engine_submit.
 - ✅ AUXILIARY render walks `0x8003BCF4` / `0x8003BF00` / `0x8003EEC0` = `ov_rwalk_aux_*` (engine_submit.cpp,
@@ -178,16 +182,30 @@ quest / event / progression / game-rule logic.
 The port is interpreter-only, so every un-owned engine fn + all CONTENT runs through `interp_flat`. The
 in-port profiler (later-186, `interp.cpp`) gives the TIME + FREQUENCY histograms to pick the next fn to own.
 - **Drive:** REPL `prof start` / `prof stop` / `prof dump <path>`. Cost: one predictable branch when OFF.
+  Buckets are 16 BYTES (aligned to function starts — 256B straddled adjacent small fns and mis-attributed,
+  e.g. lumped the hot FUN_80084110 under FUN_80084080; fixed later-186).
 - **Report:** `tools/prof_report.py <dump> --top N` aggregates PC buckets by enclosing function (resident list
   `tools/recomp/tomba2_funcs.txt`, which runs to 0x8018FBCC; addrs past MAIN.EXE file end are overlay code).
-- **CAPTURED HOT-LIST (field, newgame+skip 600, 300 frames — later-186; don't re-profile to re-confirm):**
-  - `FUN_80115598` 12.81% — **OVERLAY** (past MAIN.EXE end; needs a GAME RAM dump to RE; may be CONTENT).
-  - **libgte-style MATH cluster ≈ 31% combined** — the biggest single lever, all resident, pure/deterministic:
-    `FUN_80084080` 8.34% (GTE-reciprocal/normalize, uses cop2), `FUN_80085480` 6.29% (RotMatrix from sincos LUT
-    @0x800a6490), `FUN_80084EB0` 4.79%, `FUN_80084A80` 3.18%, `FUN_80085050` 2.72%, `FUN_800851F0` 2.16%,
-    `FUN_80084D10` 1.87%, `FUN_80084110` 1.85%. Own these native (exact-value verify vs interp) for a large win.
-  - ~~`FUN_80077FB0` 8.41% (isqrt)~~ ✅ OWNED native (later-186, ov_isqrt) — see §D; `FUN_80076D68` 3.27% next.
-  - Frequency leaders: `FUN_80084110` (55k calls), `FUN_8013F0DC` (overlay), `FUN_80084220`, `FUN_80077FB0`.
+  Top-200 16B buckets cover only the hot tail (TIME % is of the sampled buckets, not all insns) — the RANKING
+  is what matters; the FREQUENCY list (call counts) is exact.
+- **ACCURATE HOT-LIST (field, newgame+skip 600, 300 frames — later-186; don't re-profile to re-confirm):**
+  - **GTE matrix/vector TRANSFORM cluster ≈ 52% of hot time — THE dominant lever + the "remove Beetle GTE"
+    axis. NEXT BIG ARC.** All resident libgte ApplyMatrix/RotTrans-family helpers that CTC2-load a matrix
+    + run MVMVA/RTPS, write to a2: `FUN_80084110` 16.2% (55k calls — matrix×vec, CTC2 rot from a0, MVMVA,
+    out a2[0..0x10]+swc2), `FUN_80085480` 14.7%, `FUN_80085050` 7.2%, `FUN_80084EB0` 6.4%, `FUN_80084D10`
+    5.6%, `FUN_80084220` 1.8%. Porting native needs: (1) a native fixed-point GTE-math layer (MVMVA with
+    sf/lm/IR-saturation/MAC-overflow matching mednafen gte.c), (2) GTE-REGISTER inspection tooling (the RAM
+    dump is BLIND to GTE regs — must verify GTE-state LEAKAGE that downstream RTPS reads), (3) per-fn a2 +
+    GTE-reg comparator. Big but the single highest-value perf + 100%-PC-native move.
+  - `FUN_80115598` 22.1% — **OVERLAY** 2D tilemap/sprite-grid renderer (reads tile dims +16/+17, screen pos
+    +40/+42 centered 160/120). Engine render code but in GAME.BIN → needs overlay-override (rec_set_interp_
+    override_auto). Biggest single fn; second arc after the GTE cluster.
+  - `FUN_8007712C` 6.3% — the per-object CULL (ov_object_cull is registered but the guest body still runs hot;
+    investigate whether the override actually fully replaces it or re-dispatches).
+  - ~~`FUN_80084080` 9% (mis-attributed; real 0.5%)~~ ✅ OWNED native (later-186, ov_gte_norm) — table sqrt via
+    LZCR→LUT, GTE used only as CLZ; verified 0-diff 15000+ live calls. ~~`FUN_80077FB0` isqrt~~ ✅ OWNED. See §D.
+  - `FUN_80076D68` 3.6% (no GTE) = animation-sequence VM stepper (control flow + 3 callees 80075f0c/80076904/
+    80075ff8; verify needs full-RAM diff + caution: untested command types = false-confidence risk).
 
 ---
 

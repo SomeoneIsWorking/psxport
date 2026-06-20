@@ -335,22 +335,24 @@ static inline void ifn_record(uint32_t tgt, uint32_t from) {
 // perf?" (the #1 priority — owning a hot fn natively both advances 100%-PC-native AND speeds it up).
 // Two cheap, exact (not sampled) histograms, gated behind g_prof_on so the hot path costs one
 // predictable branch + one add when profiling is OFF, and one array increment when ON:
-//   1. PC histogram  — instructions executed per 256-byte bucket over main RAM 0x80000000..0x80200000
-//      (8192 buckets). Maps to functions offline via tools/prof_report.py + tomba2_funcs.txt. This is
-//      the TIME profile: a hot bucket = where the CPU actually spends interpreted cycles.
+//   1. PC histogram  — instructions executed per 16-byte bucket over main RAM 0x80000000..0x80200000
+//      (131072 buckets). Maps to functions offline via tools/prof_report.py + tomba2_funcs.txt. 16B
+//      (not 256B) so a bucket base aligns with a function start — coarser buckets straddle adjacent
+//      small functions and mis-attribute (a 256B bucket lumped FUN_80084110 under FUN_80084080).
+//      This is the TIME profile: a hot bucket = where the CPU actually spends interpreted cycles.
 //   2. CALL histogram — entries into each non-native (interpreter-run) function, counted in
 //      coro_native_call's miss path. The FREQUENCY profile: a high-count target is worth owning even
 //      if each call is cheap. Open-addressing, same shape as the ifn set.
 // Overlay (DEMO/GAME.BIN) functions aren't in tomba2_funcs.txt; their hot addresses report raw.
 int             g_prof_on = 0;                    // toggled by REPL `prof start`/`prof off`
-static uint64_t g_prof_pc[1 << 13];               // 8192 buckets, 256 bytes each
+static uint64_t g_prof_pc[1 << 17];               // 131072 buckets, 16 bytes each (aligns to fn starts)
 static uint64_t g_prof_total = 0;                 // total instructions counted
 static uint32_t g_prof_call_addr[1 << 14];        // call-target set (0 == empty)
 static uint64_t g_prof_call_n[1 << 14];           // parallel call counts
 static uint64_t g_prof_call_total = 0;            // total interpreted-fn entries counted
 
 static inline void prof_pc_tick(uint32_t pc) {
-  g_prof_pc[(pc & 0x1FFFFF) >> 8]++;
+  g_prof_pc[(pc & 0x1FFFFF) >> 4]++;
   g_prof_total++;
 }
 static inline void prof_call_tick(uint32_t tgt) {
@@ -362,7 +364,7 @@ static inline void prof_call_tick(uint32_t tgt) {
   }
 }
 void prof_start(void) {
-  for (uint32_t i = 0; i < (1u << 13); i++) g_prof_pc[i] = 0;
+  for (uint32_t i = 0; i < (1u << 17); i++) g_prof_pc[i] = 0;
   for (uint32_t i = 0; i < (1u << 14); i++) { g_prof_call_addr[i] = 0; g_prof_call_n[i] = 0; }
   g_prof_total = g_prof_call_total = 0;
   g_prof_on = 1;
@@ -378,14 +380,14 @@ void prof_dump(const char* path) {
   const int NPC = 200, NCALL = 200;
   fprintf(out, "# prof: %llu instructions, %llu interpreted-fn entries\n",
           (unsigned long long)g_prof_total, (unsigned long long)g_prof_call_total);
-  fprintf(out, "# --- TIME (top %d PC buckets, 256B each; addr = bucket base) ---\n", NPC);
+  fprintf(out, "# --- TIME (top %d PC buckets, 16B each; addr = bucket base) ---\n", NPC);
   fprintf(out, "# bucket_addr   insns      pct\n");
   // copy bucket counts so we can zero out as we extract
   for (int k = 0; k < NPC; k++) {
     uint64_t best = 0; int bi = -1;
-    for (int i = 0; i < (1 << 13); i++) if (g_prof_pc[i] > best) { best = g_prof_pc[i]; bi = i; }
+    for (int i = 0; i < (1 << 17); i++) if (g_prof_pc[i] > best) { best = g_prof_pc[i]; bi = i; }
     if (bi < 0 || best == 0) break;
-    uint32_t addr = 0x80000000u | ((uint32_t)bi << 8);
+    uint32_t addr = 0x80000000u | ((uint32_t)bi << 4);
     double pct = g_prof_total ? 100.0 * (double)best / (double)g_prof_total : 0.0;
     fprintf(out, "%08X   %10llu   %5.2f%%\n", addr, (unsigned long long)best, pct);
     g_prof_pc[bi] = 0;  // consume (g_prof_on is off during dump; start re-zeros anyway)
