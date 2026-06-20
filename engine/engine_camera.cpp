@@ -537,6 +537,132 @@ static void ov_cam_y_floor_verify(Core* c) {
   if (!bad && (ngood++ % 200) == 0) fprintf(stderr, "[yfloorverify] match #%d (y=%04x)\n", ngood, c->mem_r16(0x1f8000e2u));
 }
 
+// ─────────────────────────────────────────────────────────────────────────────────────────────────
+// FUN_8006d654 — camera PITCH / vertical-look smoother (sub-fn of orchestrator FUN_8006e0f0). a0=cam,
+// G=0x800e7e80. Picks a TARGET "base height" r5 (13-entry jump table @0x8001690c on G[+0x164]) from one
+// of several sources, applies a fixed -600<<16 bias, computes delta = target - cam[+0x0c], then with a
+// dead-band + asymmetric PULL/PUSH clamp arms rate-limits the velocity cam[+0x18] and accumulates
+// cam[+0x0c] += cam[+0x18]. Pure integer; NO trig / NO scratchpad / NO sub-calls. Outputs cam[+0x18],
+// cam[+0x0c] (both MAIN-RAM). Transcribed line-for-line from shard_0.c gen_func_8006D654 (disas.py
+// mis-scopes it; the recomp body is authoritative). later-176-class delay-slot hazards (delta in the
+// `bltz` delay slot, the dir flag in the two dead-band branch delay slots) are folded explicitly.
+static void ov_cam_pitch(Core* c) {
+  uint32_t cam = c->r[4];
+  const uint32_t G = 0x800e7e80u;
+  int32_t g30  = (int32_t)c->mem_r32(G + 0x30);
+  int16_t g17e = (int16_t)c->mem_r16(G + 0x17e);
+  int sign = (g17e & 0x8000) != 0;                     // sign bit of G[+0x17e]
+
+  // Phase A: base height r5 (folded with its per-path offset); `viaC8` adds +200<<16 (L_8006D7C8).
+  int32_t r5 = g30; int viaC8 = 0;
+  uint8_t idx = c->mem_r8(G + 0x164);
+  if (idx >= 13) idx = 7;                              // >=13 → L_8006D7C4 (== case 7/8 body)
+  switch (idx) {
+    case 2: {                                          // 0x8006d778
+      uint32_t p = c->mem_r32(G + 0x10);
+      r5 = (int32_t)(c->mem_r32(p + 0x30) << 16); viaC8 = 1; break;
+    }
+    case 3: {                                          // 0x8006d78c (→ L_8006D7D0, no +200)
+      uint32_t p = c->mem_r32(G + 0x10);
+      r5 = (int32_t)(c->mem_r32(p + 0x30) << 16); break;
+    }
+    case 12: {                                         // 0x8006d7a0: round-to-0 avg of scratchpad word + g30
+      int32_t a = (int16_t)c->mem_r16(0x1f800202u);
+      int32_t sum = (a << 16) + g30;
+      r5 = (int32_t)((sum + (int32_t)((uint32_t)sum >> 31)) >> 1); viaC8 = 1; break;
+    }
+    case 7: case 8:                                    // L_8006D7C4 (and idx>=13)
+      r5 = g30; viaC8 = 1; break;
+    default: {                                         // 0,1,4,5,6,9,10,11 → 0x8006d690
+      uint8_t m  = c->mem_r8(0x800bf821u);
+      uint8_t gm = c->mem_r8(G + 0x145);
+      if (m == 1) {
+        r5 = g30 - (200 << 16);
+      } else if (m != 0) {                             // m >= 2
+        if (gm == 2) r5 = g30 + (sign ? -(240 << 16) : (40 << 16));
+        else         r5 = g30 + (sign ? -(310 << 16) : -(240 << 16));
+      } else {                                         // m == 0
+        if (gm == 2) r5 = sign ? g30 : (g30 + (200 << 16));   // sign → L_8006D760 (r5=g30)
+        else         r5 = sign ? (g30 - (70 << 16)) : g30;    // !sign → L_8006D760 (r5=g30)
+      }
+      break;
+    }
+  }
+  if (viaC8) r5 += (200 << 16);
+  int32_t target = r5 - (600 << 16);                   // bias is -600<<16 on every path
+
+  // Phase B: dead-band + PULL/PUSH velocity clamp.
+  int32_t delta = target - (int32_t)c->mem_r32(cam + 0x0c);
+  int32_t r7 = (g17e < 0) ? (20 << 16)  : (140 << 16);
+  int32_t r4 = (g17e < 0) ? (580 << 16) : (460 << 16);
+
+  int dir; int32_t r3;
+  int32_t t = delta + r4;
+  if (t >= 0) { dir = 0; r3 = t; }
+  else {
+    int32_t t2 = t + r7;
+    if (t2 < 0) { dir = 1; r3 = t2; }
+    else { c->mem_w32(cam + 0x18, 0); return; }        // dead band: zero the velocity
+  }
+
+  if (dir == 0) {                                      // PULL arm (r3 = delta + r4)
+    if (!(0x80000 < r3)) {                             // L_8006D884: snap cam[+0x0c], leave velocity
+      c->mem_w32(cam + 0x0c, (uint32_t)(r5 + r4 - (600 << 16)));
+      return;
+    }
+    int32_t cv = (int32_t)c->mem_r32(cam + 0x18);
+    if (!(r3 < cv)) {                                  // L_8006D864: step up +16<<16 (clamp negatives to 0)
+      if (cv < 0) c->mem_w32(cam + 0x18, 0);
+      c->mem_w32(cam + 0x18, (uint32_t)((int32_t)c->mem_r32(cam + 0x18) + (16 << 16)));
+    } else if (0x4FFFFF < r3) {
+      c->mem_w32(cam + 0x18, (uint32_t)(80 << 16));
+    } else {                                           // L_8006D90C
+      c->mem_w32(cam + 0x18, (uint32_t)r3);
+    }
+  } else {                                             // PUSH arm (r3 = delta + r4 + r7)
+    uint8_t g145 = c->mem_r8(G + 0x145);
+    if (g145 != 0) {                                   // L_8006D8EC
+      if (!(r3 < -(256 << 16))) return;                // L_8006D92C: no change
+      r3 += (256 << 16);
+      if (-(96 << 16) < r3) c->mem_w32(cam + 0x18, (uint32_t)r3);            // D90C
+      else                  c->mem_w32(cam + 0x18, (uint32_t)-(96 << 16));   // D914
+    } else {                                           // g145 == 0
+      if (!(r3 < -(22 << 16))) {                       // r3 >= -22<<16 → D90C
+        c->mem_w32(cam + 0x18, (uint32_t)r3);
+      } else {
+        int32_t cv = (int32_t)c->mem_r32(cam + 0x18);
+        if (!(cv < r3)) {                              // cv >= r3 → D8D0: step down -90112 (clamp >0 to 0)
+          if (cv > 0) c->mem_w32(cam + 0x18, 0);
+          c->mem_w32(cam + 0x18, (uint32_t)((int32_t)c->mem_r32(cam + 0x18) + (int32_t)0xFFFEA000u));
+        } else {                                       // cv < r3 → velocity = -22<<16
+          c->mem_w32(cam + 0x18, (uint32_t)-(22 << 16));
+        }
+      }
+    }
+  }
+  // L_8006D918: cam[+0x0c] += cam[+0x18]
+  c->mem_w32(cam + 0x0c, (uint32_t)((int32_t)c->mem_r32(cam + 0x0c) + (int32_t)c->mem_r32(cam + 0x18)));
+}
+// PSXPORT_DEBUG=camverify — per-call A/B gate (cam-struct + scratchpad diff; outputs are main-RAM cam fields).
+static void ov_cam_pitch_verify(Core* c) {
+  uint32_t cam = c->r[4];
+  uint32_t cam0[64], sp0[256], rsave[32];
+  for (int i = 0; i < 64;  i++) cam0[i] = c->mem_r32(cam + i * 4);
+  for (int i = 0; i < 256; i++) sp0[i]  = c->mem_r32(0x1f800000u + i * 4);
+  memcpy(rsave, c->r, sizeof rsave);
+  ov_cam_pitch(c);
+  uint32_t camM[64]; for (int i = 0; i < 64; i++) camM[i] = c->mem_r32(cam + i * 4);
+  for (int i = 0; i < 64;  i++) c->mem_w32(cam + i * 4, cam0[i]);
+  for (int i = 0; i < 256; i++) c->mem_w32(0x1f800000u + i * 4, sp0[i]);
+  memcpy(c->r, rsave, sizeof rsave);
+  rec_interp(c, 0x8006d654u);
+  uint32_t camO[64]; for (int i = 0; i < 64; i++) camO[i] = c->mem_r32(cam + i * 4);
+  static int nbad = 0, ngood = 0; int bad = 0;
+  for (int i = 0; i < 64; i++) if (camM[i] != camO[i]) { bad = 1;
+    if (nbad++ < 60) fprintf(stderr, "[pitchverify] MISMATCH cam+0x%02x mine=%08x oracle=%08x\n", i * 4, camM[i], camO[i]); }
+  if (!bad && (ngood++ % 200) == 0) fprintf(stderr, "[pitchverify] match #%d (c=%08x v=%08x)\n", ngood, camO[3], camO[6]);
+}
+
 void engine_camera_register(void) {
   rec_set_override(0x8006d960u, ov_cam_track_xz);     // per-frame camera X/Z follow (engine_re "Camera")
   rec_set_override(0x8006da54u, ov_cam_track_y);      // per-frame camera Y follow
@@ -548,4 +674,6 @@ void engine_camera_register(void) {
                    cfg_dbg("camverify") ? ov_cam_angle_step_verify : ov_cam_angle_step);  // cam[+0x34] angle step
   rec_set_override(0x8006c80cu,
                    cfg_dbg("camverify") ? ov_cam_y_floor_verify : ov_cam_y_floor);        // cam-Y floor clamp
+  rec_set_override(0x8006d654u,
+                   cfg_dbg("camverify") ? ov_cam_pitch_verify : ov_cam_pitch);            // pitch smoother
 }
