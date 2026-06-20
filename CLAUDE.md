@@ -71,6 +71,12 @@ the guest entity structs as the source of truth.
 2. For the **CONTENT/LOGIC**, the recompiled body is the **live runtime** that keeps running in guest
    memory. The engine calls it; we don't rewrite it.
 
+**PORT PROGRESS TRACKER — `docs/port-progress.md` — READ THIS FIRST, every session.** It is the single
+source of truth: the boot→gameplay execution SPINE with per-function status (owned/partial/todo), the
+"how to own a function" LOOP, the standard A/B RAM-diff VERIFY recipe, and the CURRENT FRONTIER. We port the
+engine TOP-TO-BOTTOM in execution order — advance the frontier, don't cherry-pick. UPDATE it (status + the
+journal) in the SAME commit whenever you own a function, so the next session doesn't re-derive what's done.
+
 Active plan: `<local-notes>/plans/fancy-tinkering-kite.md`. Engine RE: `docs/engine_re.md` (read first).
 Findings/dead-ends: `docs/journal.md`. Project map / build cheat-sheet: `docs/project-map.md`.
 **Render/present pipeline (SW vs VK, depth, headless offscreen VK, the VK render-diff tool):
