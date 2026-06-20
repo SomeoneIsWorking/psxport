@@ -482,7 +482,9 @@ static void ov_game_main(Core* c) {
       if (gnav == 2) { const char* w = cfg_str("PSXPORT_AUTO_WALK");
         if (w) { uint16_t btn = 0x0020;                              // right
           if (*w=='l') btn=0x0080; else if (*w=='u') btn=0x0010; else if (*w=='d') btn=0x0040;
-          pad_repl_hold(c, (uint16_t)(0xFFFF & ~btn)); } } }
+          uint16_t mask = (uint16_t)(0xFFFF & ~btn);
+          if (cfg_on("PSXPORT_AUTO_JUMP") && (f % 40u) < 8u) mask &= (uint16_t)~0x4000;  // pulse Cross (jump) while walking
+          pad_repl_hold(c, mask); } } }
     // PSXPORT_DEBUG_SERVER pause/step: when frozen, do NOT advance the game — just pump host input
     // (keeps the window alive) and service debug commands so `step`/`play` can arrive. A `step` runs
     // exactly one real frame then re-freezes, so transient bad frames can be inspected one at a time.
@@ -520,6 +522,18 @@ static void ov_game_main(Core* c) {
                 c->mem_r8(0x800AC424), c->mem_r32(0x800AC42C), c->mem_r32(TASKBASE + 0xc));
         ls = st;
       }
+    }
+    // PSXPORT_DEBUG=nav — post-cutscene free-roam navigation probe: log camera position
+    // (_DAT_1f8000d2/d6/da = follows Tomba) and the in-game pause-menu page byte (task+0x6B)
+    // periodically, so a headless walk can be observed (is Tomba MOVING? did a pause menu open?).
+    if (cfg_dbg("nav") && (f % 30u) == 0) {
+      uint32_t task = c->mem_r32(0x1f800138u);
+      int16_t cx = (int16_t)c->mem_r16(0x1f8000d2u);
+      int16_t cy = (int16_t)c->mem_r16(0x1f8000d6u);
+      int16_t cz = (int16_t)c->mem_r16(0x1f8000dau);
+      uint8_t page = task ? c->mem_r8(task + 0x6Bu) : 0xFF;
+      uint16_t s4a = task ? c->mem_r16(task + 0x4au) : 0xFFFF;
+      fprintf(stderr, "[nav] f%u cam=(%d,%d,%d) pausePage=%u sm[0x4a]=%u\n", f, cx, cy, cz, page, s4a);
     }
     // BGM-active probe (PSXPORT_BGMDBG): each frame scan the 14 libsnd sequence slots
     // (0x800be3d8 + i*0xB0) for the active/play flag (+0x98 bit0). For any active slot, log

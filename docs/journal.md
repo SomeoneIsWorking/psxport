@@ -1,5 +1,28 @@
 # Debug / progress journal
 
+## later-173: free-roam nav SOLVED headless (toward verifying the staged ov_game_s4c) — area-exit still open
+Pursued the handoff's option 2: drive headless to an in-game AREA transition (`sm[0x4a]==2`) so the staged
+`ov_game_s4c` (sm[0x4c] area machine, 0x80106478, later-169) can be A/B-verified and registered. Outcome:
+**the free-roam-reachability half is SOLVED; the area-exit half remains open** (it needs vision or deeper RE).
+- **Free-roam IS reachable headless (was driving-the-game.md §5's open blocker).** The "auto-appearing menu"
+  was OVER-pulled Start: `AUTO_GAMEPLAY` releases input at f328 while the fisherman DIALOG cutscene is still
+  up, so Tomba never becomes controllable. Fix = `PSXPORT_AUTO_SKIP=500` (keep pulsing Start THROUGH the
+  dialog) then `PSXPORT_AUTO_WALK=<dir>`. Tomba then WALKS — `PSXPORT_DEBUG=nav` (new diagnostic, logs camera
+  `_DAT_1f8000d2/d6/da` + pause page `task+0x6B` every 30f) shows holding right pans cam-X 3270→5330, left
+  4012→3991. This is a deterministic **free-roam MOTION scene** (the idle field is static A==B; this isn't).
+- **Seaside start area geometry:** purely HORIZONTAL (Up/Down = no motion, cam Z fixed 2352); hard walls at
+  cam-X ≈ 3991/5330. Cross is NOT jump here — it opens the in-game menu (pausePage 0→3) and freezes Tomba, so
+  `PSXPORT_AUTO_JUMP` (pulse Cross while walking, added) is counterproductive in this area.
+- **Area transition NOT reached.** Walking into either wall keeps `sm[0x4a]==1` (no transition). Added a
+  `PSXPORT_DEBUG=stage` log of `sm[0x4a]`/`sm[0x4c]` transitions + an `ov_game_s4c` ENTER log. Confirmed
+  **0x80106478 is NEVER entered** on the field NOR during the boot area-load (0 hits) — on the field `sm[0x4c]`
+  is driven by the steady handler 0x801088d8, not this machine. So `ov_game_s4c` stays UNREGISTERED (no
+  unverified override ships; registration site documents why). Verifying it needs visual steering to the
+  seaside exit, or RE of the exit trigger inside 0x801088d8 (GAME.BIN overlay).
+- **Net:** diagnostics + the AUTO_SKIP+AUTO_WALK free-roam recipe are durable wins (unblock a class of
+  motion-scene verification — e.g. camera-follow / animation ownership). Task #1 (reach sm[0x4a]==2) and #2
+  (verify ov_game_s4c) remain open, now precisely characterized.
+
 ## later-172: RETIRE the guest OT read — the engine drives rendering from its OWN packet-pool enumeration
 Render-queue plan M3 (the "stop reading the PSX ordering table" half). The frame draw no longer reads the
 guest OT at all — a PSX render intricacy is gone, the PC way.

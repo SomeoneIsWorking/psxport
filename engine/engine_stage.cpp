@@ -85,6 +85,14 @@ static void ov_game_s48_2(Core* c) {
   c->r[29] -= 0x18; c->mem_w32(c->r[29] + 0x10, ra);   // prologue: addiu sp,-0x18; sw ra,0x10(sp)
   uint32_t sm = c->mem_r32(0x1f800138);
   uint16_t s4a = c->mem_r16(sm + 0x4a);
+  if (cfg_dbg("stage")) {
+    static uint16_t last4a = 0xffff, last4c = 0xffff;
+    uint16_t s4c = c->mem_r16(sm + 0x4c);
+    if (s4a != last4a || s4c != last4c) {
+      fprintf(stderr, "[stage] running: sm[0x4a]=%u sm[0x4c]=%u\n", s4a, s4c);
+      last4a = s4a; last4c = s4c;
+    }
+  }
   if (s4a >= 6) { rec_coro_redirect(c, 0x8010881Cu); return; }   // out of range -> guest epilogue
   c->r[31] = 0x801087CCu + (uint32_t)s4a * 0x10u;       // handler's guest return (`j 0x8010881c` trampoline)
   rec_coro_redirect(c, handler[s4a]);                  // run the handler IN-CONTEXT (survives a deep yield)
@@ -110,6 +118,11 @@ static void ov_game_s4c(Core* c) {
     0x80106830u, 0x80106930u, 0x8010694cu, 0x801069b4u,
   };
   uint32_t ra = c->r[31];
+  if (cfg_dbg("stage")) {
+    uint32_t sm0 = c->mem_r32(0x1f800138);
+    fprintf(stderr, "[stage] ov_game_s4c ENTER sm[0x4c]=%u (caller ra=0x%08X)\n",
+            c->mem_r16(sm0 + 0x4c), ra);
+  }
   c->r[29] -= 0x18;
   c->mem_w32(c->r[29] + 0x14, ra);              // sw ra,0x14(sp)
   c->mem_w32(c->r[29] + 0x10, c->r[16]);        // sw s0,0x10(sp)
@@ -179,6 +192,13 @@ void stage_scan_overlay(Core* c, uint32_t base, uint32_t size) {
   // can't be A/B-verified here. NOT registered until there's a deterministic area-transition test path
   // (drive Tomba through an area boundary headless, or own FUN_80052078 to script a transition). See
   // docs/journal.md later-169 NEXT.
+  // ov_game_s4c stays UNREGISTERED: confirmed (later-173, PSXPORT_DEBUG=stage entry log) that 0x80106478 is
+  // NEVER entered on the field NOR during the boot area-load — sm[0x4c] there is driven by the steady handler
+  // 0x801088d8, not this machine. It is reached only via sm[0x4a]==2 (a mid-play AREA boundary crossing),
+  // which needs a deterministic headless path TO an area exit. Free-roam IS now reachable headless
+  // (AUTO_SKIP + AUTO_WALK, driving-the-game.md §5), but the seaside area's exit is not a plain walk/jump
+  // into an edge — reaching it needs visual steering or RE of the exit trigger in 0x801088d8. Until then,
+  // no unverified override ships.
   (void)ov_game_s4c;
   if (cfg_dbg("stage"))
     fprintf(stderr, "[stage] own GAME area-init + RUNNING handlers (sm[0x48]==0 0x801086e0, ==1 0x80108720, "

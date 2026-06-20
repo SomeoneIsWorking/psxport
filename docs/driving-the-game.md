@@ -85,3 +85,25 @@ verified via the `ov_options_menu` override hit, `PSXPORT_DEBUG=ui`). So this IS
 menu, not a stuck/save-prompt state. Its state machine is RE'd in `docs/engine_re.md` "In-game pause /
 Options menu" (page byte `task+0x6B`, dispatch table `0x801062EC`). **Still open:** driving from this menu
 into controllable *free-roam* (cleanly closing it back to play).
+
+**UPDATE (later-173): free-roam IS reachable headless — the first half of §5 is SOLVED.** The "auto-appearing
+menu" was an artifact of OVER-pulsing Start: `AUTO_GAMEPLAY` releases input at f328 while the post-arrival
+fisherman DIALOG cutscene is still up, so Tomba is never controllable. The fix is to keep pulsing Start
+through the dialog with **`PSXPORT_AUTO_SKIP=500`**, THEN hold a direction with `PSXPORT_AUTO_WALK`:
+```
+PSXPORT_DEBUG=nav PSXPORT_VK_HEADLESS=1 PSXPORT_AUTO_GAMEPLAY=1 PSXPORT_AUTO_SKIP=500 \
+  PSXPORT_AUTO_WALK=r PSXPORT_NATIVE_FRAMES=1600 PSXPORT_NOAUDIO=1 scratch/bin/tomba2_port
+```
+Tomba then WALKS — verified via `PSXPORT_DEBUG=nav` (logs camera pos `_DAT_1f8000d2/d6/da` every 30 frames):
+holding right pans the camera X 3270→5330, holding left 4012→3991. This is a **deterministic free-roam
+MOTION scene** (useful for verifying camera-follow / animation systems, which the idle field — static, A==B —
+cannot exercise). `PSXPORT_DEBUG=nav` also reads the in-game pause page byte (`task+0x6B`: 0=playing, 1/3=menu).
+- **Movement geometry (seaside start area):** purely HORIZONTAL — Up/Down move nothing (cam Z stays 2352);
+  Left/Right hit hard walls at cam-X ≈ 3991 / 5330. Cross does NOT jump here — it OPENS the in-game menu
+  (pausePage 0→3) and freezes Tomba, so `PSXPORT_AUTO_JUMP=1` (pulse Cross while walking) is counterproductive.
+- **STILL OPEN — reaching an AREA TRANSITION (`sm[0x4a]==2`).** Walking into either wall does NOT transition
+  (`sm[0x4a]` stays 1; `PSXPORT_DEBUG=stage` logs `sm[0x4a]`/`sm[0x4c]`). The seaside area's exit is not a
+  plain walk/jump into an edge. Confirmed `ov_game_s4c` (0x80106478, the sm[0x4c] area machine) is NEVER
+  entered on the field NOR during the boot area-load (`PSXPORT_DEBUG=stage` ENTER log, 0 hits) — sm[0x4c]
+  there is driven by the steady handler 0x801088d8, not 0x80106478. So verifying `ov_game_s4c` needs either
+  visual steering of Tomba to the exit, or RE of the exit trigger inside 0x801088d8 (GAME.BIN overlay).
