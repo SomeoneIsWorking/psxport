@@ -85,8 +85,11 @@ for content fns (call it). Do NOT mimic PSX hardware (GTE/GP0/OT) — remove Bee
     PC-native (later-183): the 6 direct engine-flag writes (*0x800bf4fa=0xffff, *0x800ecf4a/4c/4d/4e/4f=0) +
     the 4-callee sequence. Boot A/B (frame 50) main-RAM + scratchpad 0-diff. Callee descent:
     ✅ `FUN_8007b328` entity-pool init = `eng_init_entity_pool` (later-183b, boot A/B 0-diff: the 8-byte header
-    @0x800fb160 + FUN_8007b2c0(0) scratchpad scale params, both inlined native). Still dispatched (next):
-    80088b00 allocator/dispatch-table · 80086620 mode ctrl · 80087a60 input.
+    @0x800fb160 + FUN_8007b2c0(0) scratchpad scale params, both inlined native).
+    ✅ `FUN_80086620` mode ctrl = `eng_init_mode_ctrl` (later-184: full logic reimplemented native; verified a
+    NO-OP at the init call — a0=1 with both mode flags 0x800abe88/8c + counters still BSS-zero → early-return;
+    boot RAM+scratchpad IDENTICAL to the recomp-running reference dump). Still dispatched (next):
+    80088b00 allocator/dispatch-table · 80087a60 input.
   - ◐ `FUN_80051e00` scheduler task-table init (rc0'd at boot, native_boot.cpp:371) + `FUN_80051f14` register
     task 0. The native frame loop replaces the per-frame stepper.
 - ✅ Native cooperative frame loop `native_scheduler_step` (replaces `FUN_80051e60`) — `native_boot.cpp`.

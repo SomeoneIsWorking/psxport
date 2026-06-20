@@ -118,6 +118,35 @@ void eng_init_entity_pool(Core* c) {
   c->mem_w16(0x1f800176u, 0x1000);
 }
 
+// FUN_80086620 — engine MODE control: set the two mode flags (0x800abe88 bit0-state, 0x800abe8c
+// bit1-state) from the a0 bitmask, and when a per-mode dwell counter (0x80102450/0x80102454) has
+// reached >=150 run the mode's transition handler (*0x800abe3c). Returns the prior packed mode.
+// Faithful to 0x80086620:
+//   s1 = (*0x800abe8c<<1) | (*0x800abe88==0); if (s1==a0) return s1;  // no change
+//   *0x800abe70=0;
+//   bit0: if set -> *0x800abe88=0; if(*0x80102450>=150) handler(*0x800abe6c); *0x80102450=0;
+//         else (clear) -> *0x800abe88=1;
+//   bit1: if set -> *0x800abe8c=1; if(*0x80102454>=150) handler(*0x800abe6c+0xf0); *0x80102454=0;
+//         else (clear) -> *0x800abe8c=0;
+//   *0x800abe70=1; return s1;
+// At the init call site (a0=1, both flags + both counters still BSS-zero) s1 == 1 == a0, so it
+// EARLY-RETURNS with no writes — a verified no-op; the logic below reproduces that and the general case.
+static uint32_t eng_init_mode_ctrl(Core* c, uint32_t a0) {
+  uint32_t s1 = (c->mem_r32(0x800abe8c) << 1) | (c->mem_r32(0x800abe88) == 0 ? 1u : 0u);
+  if (s1 == a0) return s1;                                  // mode unchanged -> nothing to do
+  c->mem_w32(0x800abe70, 0);
+  if (a0 & 1) { c->mem_w32(0x800abe88, 0);
+    if ((int32_t)c->mem_r32(0x80102450) >= 150) { c->r[4] = c->mem_r32(0x800abe6c); rec_dispatch(c, c->mem_r32(0x800abe3c)); }
+    c->mem_w32(0x80102450, 0);
+  } else c->mem_w32(0x800abe88, 1);
+  if (a0 & 2) { c->mem_w32(0x800abe8c, 1);
+    if ((int32_t)c->mem_r32(0x80102454) >= 150) { c->r[4] = c->mem_r32(0x800abe6c) + 0xf0; rec_dispatch(c, c->mem_r32(0x800abe3c)); }
+    c->mem_w32(0x80102454, 0);
+  } else c->mem_w32(0x800abe8c, 0);
+  c->mem_w32(0x800abe70, 1);
+  return s1;
+}
+
 void eng_init_subsystems(Core* c) {
   uint32_t ra = c->r[31], sp = c->r[29];
   c->r[29] = sp - 0x18; c->mem_w32(c->r[29] + 0x10, ra);   // mirror prologue: addiu sp,-0x18; sw ra,0x10(sp)
@@ -129,7 +158,7 @@ void eng_init_subsystems(Core* c) {
   c->mem_w8 (0x800ecf4e, 0);
   c->mem_w8 (0x800ecf4f, 0);
   c->r[4] = 0x800bf4f8u; c->r[5] = 0x800bf51au; rec_dispatch(c, 0x80088b00u);  // allocator/dispatch table
-  c->r[4] = 1; rec_dispatch(c, 0x80086620u);   // mode/subsystem control(1)
+  eng_init_mode_ctrl(c, 1);                    // mode control(1) — owned native (no-op at init)
   rec_dispatch(c, 0x80087a60u);                // input subsystem init
   c->r[29] = sp; c->r[31] = ra;          // mirror epilogue: addiu sp,+0x18; jr ra
 }
