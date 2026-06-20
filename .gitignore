@@ -5,8 +5,10 @@ generated/
 build/
 build-*/
 
-# Scratch / run artifacts (see CLAUDE.md — never /tmp)
+# Scratch / run artifacts (see CLAUDE.md — never /tmp; all tooling output goes here)
 scratch/
+# stray manual frame-dump dir (PSXPORT_VK_SHOTSEQ qdir) — artifacts belong in scratch/
+/x/
 
 # Local config (ROM path etc.)
 .env
