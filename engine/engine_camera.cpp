@@ -773,6 +773,111 @@ static void ov_cam_heading_verify(Core* c) {
     fprintf(stderr, "[hdgverify] match #%d (s04=%08x s06=%04x)\n", ngood, spO[0x35], (uint16_t)spO[0x35]);
 }
 
+// ─────────────────────────────────────────────────────────────────────────────────────────────────
+// FUN_8006d02c — camera ORIENT / LOOK-AT matrix builder (sub-fn of orchestrator FUN_8006e0f0). a0=cam,
+// S=0x1f8000d0. Builds the camera basis matrix: deltas dX/dZ/dY = fwd-target int - pos; isqrt the 3D
+// and XZ distances into cam[+0x5C]/[+0x60]; derive pitch (ratan2) + yaw (ratan2), assemble the two
+// rotation matrices, compose them (MulMatrix0), extract the basis rows, and transform the negated camera
+// position (ApplyMatrixLV) into the matrix translation column, then CopyMatrix to 0x1f800118.
+// Per the CLAUDE.md RENDER boundary this owns the CONTROL FLOW + integer arithmetic native and CALLS the
+// retained libgte/GTE helpers (isqrt/ratan2/MR_init + MulMatrix0/ApplyMatrixLV/CopyMatrix) via
+// rec_dispatch — they are the math library (a TRUE float-native matrix lift is a SEPARATE later step,
+// flagged here, not silently transcribed). NB isqrt here is 0x80077FB0 (NOT rotbuild's 0x80084080).
+// Outputs: mostly SCRATCHPAD + cam[+0x5C]/[+0x60] → camverify diffs cam + full scratchpad.
+// Transcribed from shard_6.c gen_func_8006D02C (the cpu_div sequences use the runtime div; the s18/s19!=0
+// guards mean the recomp's div-by-zero/overflow rec_breaks never fire).
+static const uint32_t LA_ISQRT  = 0x80077fb0u;   // isqrt (DIFFERENT from rotbuild's 0x80084080)
+static const uint32_t LA_RATAN2 = 0x80085690u;
+static const uint32_t LA_MRINIT = 0x80051794u;   // MR_init (identity)
+static const uint32_t LA_MULMAT = 0x80084250u;   // MulMatrix0(a0,a1)   [GTE]
+static const uint32_t LA_APPLYLV= 0x80084470u;   // ApplyMatrixLV(m,v,out) [GTE]
+static const uint32_t LA_COPYMAT= 0x800847b0u;   // CopyMatrix(a0,a1)
+
+static inline int32_t cam_idiv(Core* c, int32_t num, int32_t den) {
+  cpu_div(c, (uint32_t)num, (uint32_t)den);
+  return (int32_t)c->lo;
+}
+
+static void ov_cam_lookat(Core* c) {
+  uint32_t cam = c->r[4];
+  const uint32_t S = 0x1f8000d0u;                       // r21
+
+  int32_t dX = (int16_t)c->mem_r16(S + 14) - (int16_t)c->mem_r16(S + 2);   // 0x..de - 0x..d2
+  int32_t dZ = (int16_t)c->mem_r16(S + 22) - (int16_t)c->mem_r16(S + 10);  // 0x..e6 - 0x..da
+  int32_t dY = (int16_t)c->mem_r16(S + 18) - (int16_t)c->mem_r16(S + 6);   // 0x..e2 - 0x..d6
+  int32_t xz = dX * dX + dZ * dZ;
+  int32_t s18 = cam_call(c, LA_ISQRT, xz + dY * dY, 0, 0) & 0xffff;        // 3D dist
+  int32_t s19 = cam_call(c, LA_ISQRT, xz, 0, 0) & 0xffff;                  // XZ dist
+  c->mem_w32(cam + 0x5c, (uint32_t)s18);
+  c->mem_w32(cam + 0x60, (uint32_t)s19);
+
+  if (s18 != 0) {
+    cam_call(c, LA_MRINIT, S + 40, 0, 0);               // identity @0x1f8000f8 (pitch matrix base)
+    int32_t sinp = cam_idiv(c, dY  << 12, s18);
+    int32_t cosp = cam_idiv(c, s19 << 12, s18);
+    int32_t pitch = (int16_t)cam_call(c, LA_RATAN2, sinp, cosp, 0);
+    c->mem_w16(S + 32, (uint16_t)pitch);                // 0x1f8000f0
+    c->mem_w16(S + 48, (uint16_t)cosp);                 // m[4] @0x1f800100
+    c->mem_w16(S + 56, (uint16_t)cosp);                 // m[8] @0x1f800108
+    c->mem_w16(S + 50, (uint16_t)(-sinp));              // m[5] @0x1f800102
+    c->mem_w16(S + 54, (uint16_t)sinp);                 // m[7] @0x1f800106
+
+    if (s19 != 0) {
+      int32_t a = cam_idiv(c, (-dX) << 12, s19);        // r16 = (-dX<<12)/s19
+      int32_t b = cam_idiv(c, dZ    << 12, s19);        // r17 = (dZ<<12)/s19
+      int32_t yaw = (int16_t)cam_call(c, LA_RATAN2, a, b, 0);
+      c->mem_w16(S + 34, (uint16_t)yaw);                // 0x1f8000f2
+      cam_call(c, LA_MRINIT, 0x1f800000u, 0, 0);        // identity @0x1f800000 (yaw matrix base)
+      c->mem_w16(0x1f800000u, (uint16_t)b);             // m[0]
+      c->mem_w16(0x1f800004u, (uint16_t)a);             // m[2]
+      c->mem_w16(0x1f800010u, (uint16_t)b);             // m[8]
+      c->mem_w16(0x1f80000cu, (uint16_t)(-a));          // m[6]
+      cam_call(c, LA_MULMAT, S + 40, 0x1f800000u, 0);   // MulMatrix0(pitch, yaw)
+    }
+  }
+
+  // L_8006D214 tail (also reached by the s18==0 / s19==0 early exits).
+  uint32_t M = S + 40;                                  // 0x1f8000f8 composed matrix
+  uint16_t r104 = c->mem_r16(S + 52);                   // 0x1f800104
+  uint16_t r106 = c->mem_r16(S + 54);                   // 0x1f800106
+  uint16_t r108 = c->mem_r16(S + 56);                   // 0x1f800108
+  c->mem_w16(S + 24, r104);                             // 0x1f8000e8
+  c->mem_w16(S + 26, r106);                             // 0x1f8000ea
+  c->mem_w16(S + 28, r108);                             // 0x1f8000ec
+  c->mem_w16(0x1f8000c0u, (uint16_t)(0u - (uint32_t)c->mem_r16(S + 2)));    // -posX
+  c->mem_w16(0x1f8000c2u, (uint16_t)(0u - (uint32_t)c->mem_r16(S + 6)));    // -posY
+  c->mem_w16(0x1f8000c4u, (uint16_t)(0u - (uint32_t)c->mem_r16(S + 10)));   // -posZ
+  cam_call(c, LA_APPLYLV, M, 0x1f8000c0u, 0x1f80010cu); // ApplyMatrixLV(M, -pos, out=0x1f80010c)
+  cam_call(c, LA_COPYMAT, M, S + 72, 0);                // CopyMatrix(M → 0x1f800118)
+}
+// PSXPORT_DEBUG=camverify — per-call A/B gate (cam-struct + scratchpad diff). The libgte/GTE calls reload
+// their operands from memory each invocation, so restoring scratchpad+regs before the oracle suffices.
+static void ov_cam_lookat_verify(Core* c) {
+  uint32_t cam = c->r[4];
+  uint32_t cam0[64], sp0[256], rsave[32];
+  for (int i = 0; i < 64;  i++) cam0[i] = c->mem_r32(cam + i * 4);
+  for (int i = 0; i < 256; i++) sp0[i]  = c->mem_r32(0x1f800000u + i * 4);
+  memcpy(rsave, c->r, sizeof rsave);
+  ov_cam_lookat(c);
+  uint32_t camM[64], spM[256];
+  for (int i = 0; i < 64;  i++) camM[i] = c->mem_r32(cam + i * 4);
+  for (int i = 0; i < 256; i++) spM[i]  = c->mem_r32(0x1f800000u + i * 4);
+  for (int i = 0; i < 64;  i++) c->mem_w32(cam + i * 4, cam0[i]);
+  for (int i = 0; i < 256; i++) c->mem_w32(0x1f800000u + i * 4, sp0[i]);
+  memcpy(c->r, rsave, sizeof rsave);
+  rec_interp(c, 0x8006d02cu);
+  uint32_t camO[64], spO[256];
+  for (int i = 0; i < 64;  i++) camO[i] = c->mem_r32(cam + i * 4);
+  for (int i = 0; i < 256; i++) spO[i]  = c->mem_r32(0x1f800000u + i * 4);
+  static int nbad = 0, ngood = 0; int bad = 0;
+  for (int i = 0; i < 64; i++) if (camM[i] != camO[i]) { bad = 1;
+    if (nbad++ < 60) fprintf(stderr, "[lookatverify] MISMATCH cam+0x%02x mine=%08x oracle=%08x\n", i * 4, camM[i], camO[i]); }
+  for (int i = 0; i < 256; i++) if (spM[i] != spO[i]) { bad = 1;
+    if (nbad++ < 60) fprintf(stderr, "[lookatverify] MISMATCH sp+0x%03x mine=%08x oracle=%08x\n", i * 4, spM[i], spO[i]); }
+  if (!bad && (ngood++ % 200) == 0)
+    fprintf(stderr, "[lookatverify] match #%d (5c=%08x 60=%08x)\n", ngood, camO[0x17], camO[0x18]);
+}
+
 void engine_camera_register(void) {
   rec_set_override(0x8006d960u, ov_cam_track_xz);     // per-frame camera X/Z follow (engine_re "Camera")
   rec_set_override(0x8006da54u, ov_cam_track_y);      // per-frame camera Y follow
@@ -788,4 +893,6 @@ void engine_camera_register(void) {
                    cfg_dbg("camverify") ? ov_cam_pitch_verify : ov_cam_pitch);            // pitch smoother
   rec_set_override(0x8006dcf4u,
                    cfg_dbg("camverify") ? ov_cam_heading_verify : ov_cam_heading);        // heading tracker
+  rec_set_override(0x8006d02cu,
+                   cfg_dbg("camverify") ? ov_cam_lookat_verify : ov_cam_lookat);          // orient/look-at matrix
 }
