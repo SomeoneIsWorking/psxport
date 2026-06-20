@@ -155,6 +155,10 @@ static void ov_mat_mul(Core* c) {
   int16_t R[3][3], M[3][3], P[3][3];
   load_mat3(c, c->r[4], R);
   load_mat3(c, c->r[5], M);
+  // Faithful CTC2: the real body loads R into the GTE rotation-matrix CR0-4 and leaves it there, so a
+  // following MVMVA (FUN_80084220 ov_apply_matlv reads CR0-4) sees this matrix. Replicate it so the CR
+  // coupling is robust regardless of call order (was previously relying on a prior 80084470's CR write).
+  for (int i=0;i<5;i++) gte_write_ctrl(i, c->mem_r32(c->r[4]+i*4));
   int32_t mac1=0, mac2=0, mac3=0;  // trailing MAC1-3 = last column's pre-clamp results (GTE leftover)
   for (int j = 0; j < 3; j++) {              // column j of M = MVMVA vector Vj
     for (int i = 0; i < 3; i++) {            // matrix row i
@@ -440,6 +444,7 @@ static void ov_compmatlv(Core* c) {
   int16_t R[3][3], M[3][3], P[3][3];
   load_mat3(c, c->r[4], R);
   load_mat3(c, c->r[5], M);   // M read in full before any store → no in-place aliasing hazard
+  for (int i=0;i<5;i++) gte_write_ctrl(i, c->mem_r32(c->r[4]+i*4));  // faithful CTC2 R→CR0-4 (see ov_mat_mul)
   int32_t mac1=0, mac2=0, mac3=0;
   for (int j = 0; j < 3; j++) {              // column j of M = MVMVA vector Vj
     for (int i = 0; i < 3; i++) {            // matrix row i

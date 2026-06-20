@@ -217,6 +217,19 @@ for content fns (call it). Do NOT mimic PSX hardware (GTE/GP0/OT) — remove Bee
     pure LUT trig, distinct layout, two elements negate-before-shift (nsh12). Verified 0-diff live (rare path).
     A dependency of FUN_800597AC. NOTE: resident-math overrides latch their verify-gate `v` at boot (the REPL
     `debug mathverify` lands too late), so verify them with a one-time FORCED-verify build, not the channel.
+- ✅ WORLD-TRANSFORM orchestrator OWNED (later-190):
+  - `FUN_80084360` = `ov_compmatlv` (engine_math.cpp): libgte CompMatrixLV — compose M ← R × M IN PLACE.
+    Identical product/clamp/leftover to `ov_mat_mul` (P=R·M), only in-place into a1 + v0=a1. GTE-exact,
+    0-diff via forced-verify (thin coverage in seaside, raised by its consumer FUN_800597AC). ALSO: made
+    `ov_mat_mul` + `ov_compmatlv` faithfully CTC2 R→CR0-4 (the real bodies do; was relying on a prior
+    80084470's CR write) so a following `ov_apply_matlv` (reads CR0-4) gets the right matrix robustly.
+  - `FUN_800597AC` = `ov_orch597AC` (engine_submit.cpp): per-object world-transform orchestrator (3.8% field
+    hot). Builds node+0x98 render matrix (SetVector + RotMatrix + CPU-rot + matmul + CompMatrixLV + 80084470),
+    optional SECONDARY transform (node[0x145]/0x146 gated → 0x1F800060 + trans 0x1F800074..7C), then child
+    propagation over node[0xC0+4i] with parent select (child[6]<0 → this node, via s6/s7 picking node vs the
+    secondary matrix; child[6]>=0 → sibling node[0xC0+4*child[6]]). node[8] temp-forced to node[9] for the
+    loop, restored on exit. rec_dispatch'd primitives in exact jal order (preserves CR coupling). Verified
+    0-diff 2800+ live calls via `orchverify` (lazy first-call gate → REPL `debug orchverify` works).
 - ✅ AUXILIARY render walks `0x8003BCF4` / `0x8003BF00` / `0x8003EEC0` = `ov_rwalk_aux_*` (engine_submit.cpp,
   issue #4): faithful per-node lift of each recomp body + per-node `gpu_obj_depth_add(world-pos depth)` so
   flame/rope/effect billboards occlude by real world depth (was: flat 2D band → drew over foliage). Field
@@ -293,10 +306,14 @@ in-port profiler (later-186, `interp.cpp`) gives the TIME + FREQUENCY histograms
     4.25% tile-lookup leaf~~ ✅ OWNED (later-188b, ov_tile_lookup, engine_submit.cpp; pure `tab[52*a1+a0]
     & (mask<<4)`, signature-registered, tileverify 0-diff 60000+ calls).
   - resident leaves still visible: `FUN_800931C0` 6.5% (font/text → render), `FUN_801401B8` 4.1% (overlay),
-    `FUN_800597AC` 3.6%, `FUN_8003F698` 3.0% (26k×2 calls). ~~`FUN_80051464` 3.8%~~ ✅ OWNED native
+    `FUN_8003F698` 3.0% (26k×2 calls). ~~`FUN_80051464` 3.8%~~ ✅ OWNED native
     (later-189, ov_xform_propagate: child-node transform propagation orchestrating the owned rot/matmul/MVMVA
-    primitives; verified 0-diff 6000+ via `xformverify`). NEXT autonomous: `FUN_800597AC` (orchestrator, but
-    needs 2 new leaves 0x800517bc SetTransMatrix + 0x800851f0 CPU-RotMatrix-twin + 0x80084360 CompMatrixLV).
+    primitives; verified 0-diff 6000+ via `xformverify`). ~~`FUN_800597AC` 3.6/3.8%~~ ✅ OWNED native
+    (later-190, ov_orch597AC: per-object world-transform orchestrator; needed new leaves 0x80084360
+    CompMatrixLV — ALSO owned (ov_compmatlv) — 0x800517bc + 0x800851f0 already owned later-189; verified
+    0-diff 2800+ via `orchverify`). With the orchestrator + its deps owned, the resident transform/cull
+    cluster is essentially exhausted — the remaining BIG levers (FUN_80115598 ~49% tilemap, FUN_800931C0
+    ~9% font) are RENDER-boundary (REIMPLEMENT as PC-native 2D layers, USER eyeball — see §B targets below).
     ~~`FUN_80084A80` 4.4%~~ ✅ OWNED native (later-189, ov_rot84A80 RotMatrix variant; verified 0-diff 5000+).
     ~~`FUN_8007778C` 3.4%~~ ✅ OWNED native (later-189, ov_cull_wrapper: camera-relative delta + flag reset →
     rec_dispatch the owned cull body; verified 0-diff 40000+ via the `cullwrap` channel).

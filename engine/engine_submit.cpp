@@ -1135,6 +1135,174 @@ void ov_xform_propagate(Core* c) {
   xform_propagate_body(c);
 }
 
+// FUN_800597AC — per-object WORLD-TRANSFORM orchestrator (3.8% field hot). A bigger sibling of
+// build_xform/xform_propagate: builds the node's render matrix at node+0x98 from its euler angles +
+// translation, optionally a SECONDARY transform variant (node[0x145]/0x146 gated), then propagates to
+// all child sub-nodes. Every callee is an already-owned native primitive, so this is pure orchestration
+// + scratchpad seeding + integer translation adds — we rec_dispatch the primitives in the recomp's EXACT
+// jal order (preserving the matmul→MVMVA/CompMatrixLV GTE-CR coupling; ov_mat_mul/ov_compmatlv now CTC2
+// R→CR0-4 so the following ov_apply_matlv reads the right matrix). Scratchpad work areas (exact addrs):
+//   0x1F800000 SetVector work · 0x1F800020 CPU-rot mat · 0x1F800040 RotMatrix mat · 0x1F800060 secondary
+//   mat (+0x74/78/7C its translation) · 0x1F8000C0 angle SVECTOR. Primitives: 800517BC SetVector,
+//   80085480 RotMatrix, 800851F0 CPU-RotMatrix, 80084110 matmul, 80084360 CompMatrixLV, 80084470/80084250
+//   apply-matrix, 80084220 MVMVA. node[8] is temporarily forced to node[9] (gated) for the child loop and
+//   restored on exit. Child parent select: child[6]<0 → this node (s6/s7 pick node vs the secondary mat);
+//   child[6]>=0 → sibling node[0xC0+4*child[6]].
+static void orch597AC_body(Core* c) {
+  uint32_t node = c->r[4];
+  #define R16(a)  ((uint32_t)(int32_t)(int16_t)c->mem_r16(a))   // lh: sign-extended
+  #define HU(a)   ((uint32_t)c->mem_r16(a))                     // lhu: zero-extended
+  uint8_t saved8 = c->mem_r8(node + 8);
+  if ((c->mem_r16(node + 0x17E) & 0x20) && c->mem_r8(node + 0x179) != 0)
+    c->mem_w8(node + 8, c->mem_r8(node + 9));
+  // SetVector(0x1F800000, node->h[0xB8/BA/BC])
+  c->r[4]=0x1F800000u; c->r[5]=R16(node+0xB8); c->r[6]=R16(node+0xBA); c->r[7]=R16(node+0xBC); rec_dispatch(c, 0x800517BCu);
+  // RotMatrix(angles=node->hu[0x54/56/58] → 0x1F8000C0, out 0x1F800040)
+  c->mem_w16(0x1F8000C0u, (uint16_t)HU(node+0x54));
+  c->mem_w16(0x1F8000C2u, (uint16_t)HU(node+0x56));
+  c->mem_w16(0x1F8000C4u, (uint16_t)HU(node+0x58));
+  c->r[4]=0x1F8000C0u; c->r[5]=0x1F800040u; rec_dispatch(c, 0x80085480u);
+  // CPU RotMatrix: angle = (node->byte[0x177]&1) ? node->hu[0x14E] : 0, around Y → 0x1F800020
+  uint32_t a1ang = (c->mem_r8(node+0x177) & 1) ? HU(node+0x14E) : 0;
+  c->mem_w16(0x1F8000C0u, 0);
+  c->mem_w16(0x1F8000C2u, (uint16_t)a1ang);
+  c->mem_w16(0x1F8000C4u, 0);
+  c->r[4]=0x1F8000C0u; c->r[5]=0x1F800020u; rec_dispatch(c, 0x800851F0u);
+  // node+0x98 = (0x1F800020 × 0x1F800000) then ×= 0x1F800040 (CompMatrixLV), then 80084470(node+0x98,node+0x88,node+0xAC)
+  c->r[4]=0x1F800020u; c->r[5]=0x1F800000u; c->r[6]=node+0x98; rec_dispatch(c, 0x80084110u);
+  c->r[4]=0x1F800040u; c->r[5]=node+0x98;                       rec_dispatch(c, 0x80084360u);
+  c->r[4]=node+0x98;   c->r[5]=node+0x88;  c->r[6]=node+0xAC;   rec_dispatch(c, 0x80084470u);
+  // translation accumulate: node+0xAC/B0/B4 += node->h[0x2E/32/36]
+  c->mem_w32(node+0xAC, c->mem_r32(node+0xAC) + R16(node+0x2E));
+  c->mem_w32(node+0xB0, c->mem_r32(node+0xB0) + R16(node+0x32));
+  c->mem_w32(node+0xB4, c->mem_r32(node+0xB4) + R16(node+0x36));
+  if (c->mem_r8(node+0x164) == 5) {                              // ov_80084250(node+0x98, node->w[0x10]+24)
+    c->r[4]=node+0x98; c->r[5]=c->mem_r32(node+0x10)+24; rec_dispatch(c, 0x80084250u);
+  }
+  // SECONDARY transform (gated): builds a second matrix at 0x1F800060 + translation at 0x1F800074..7C.
+  int s6 = 0;
+  if (c->mem_r8(node+0x145) == 0 && (c->mem_r8(node+0x146) & 3) != 0) {
+    c->mem_w16(0x1F8000C0u, (uint16_t)HU(node+0x54));
+    c->mem_w16(0x1F8000C4u, 0);
+    c->mem_w16(0x1F8000C2u, (uint16_t)HU(node+0x56));
+    c->r[4]=0x1F8000C0u; c->r[5]=0x1F800040u; rec_dispatch(c, 0x80085480u);
+    c->r[4]=0x1F800020u; c->r[5]=0x1F800000u; c->r[6]=0x1F800060u; rec_dispatch(c, 0x80084110u);
+    c->r[4]=0x1F800040u; c->r[5]=0x1F800060u;                      rec_dispatch(c, 0x80084360u);
+    c->r[4]=0x1F800060u; c->r[5]=node+0x88; c->r[6]=0x1F800074u;   rec_dispatch(c, 0x80084470u);
+    c->mem_w32(0x1F800074u, c->mem_r32(0x1F800074u) + R16(node+0x2E));
+    c->mem_w32(0x1F800078u, c->mem_r32(0x1F800078u) + R16(node+0x32));
+    c->mem_w32(0x1F80007Cu, c->mem_r32(0x1F80007Cu) + R16(node+0x36));
+    s6 = 1;
+  }
+  // CHILD PROPAGATION LOOP
+  if (c->mem_r8(node+9) != 0) {
+    int s7 = 0, i = 0;
+    while (i < (int)(uint8_t)c->mem_r8(node+8)) {                 // top check (node[8], possibly forced to node[9])
+      uint32_t child = c->mem_r32(node + 0xC0 + 4u*(uint32_t)i);
+      int psel = (int)(int16_t)c->mem_r16(child + 6);             // parent select (signed)
+      // SetVector(0x1F800000, child->h[0x38/3A/3C]); RotMatrix(child+8 → 0x1F800020); mat 0x1F800040 = 0x1F800020 × 0x1F800000
+      c->r[4]=0x1F800000u; c->r[5]=R16(child+0x38); c->r[6]=R16(child+0x3A); c->r[7]=R16(child+0x3C); rec_dispatch(c, 0x800517BCu);
+      c->r[4]=child+8; c->r[5]=0x1F800020u; rec_dispatch(c, 0x80085480u);
+      c->r[4]=0x1F800020u; c->r[5]=0x1F800000u; c->r[6]=0x1F800040u; rec_dispatch(c, 0x80084110u);
+      if (psel >= 0) {                                            // SIBLING-by-index: parent = node[0xC0 + 4*psel]
+        uint32_t p = c->mem_r32(node + 0xC0 + 4u*(uint32_t)psel);
+        c->r[4]=p+24; c->r[5]=0x1F800040u; c->r[6]=child+24; rec_dispatch(c, 0x80084110u);
+        c->r[4]=child; c->r[5]=child+44; rec_dispatch(c, 0x80084220u);
+        c->mem_w32(child+0x2C, c->mem_r32(child+0x2C) + c->mem_r32(p+0x2C));
+        c->mem_w32(child+0x30, c->mem_r32(child+0x30) + c->mem_r32(p+0x30));
+        c->mem_w32(child+0x34, c->mem_r32(child+0x34) + c->mem_r32(p+0x34));
+      } else if (s6 == 0) {                                       // parent = this node (matrix node+0x98, trans node+0xAC)
+        c->r[4]=node+0x98; c->r[5]=0x1F800040u; c->r[6]=child+24; rec_dispatch(c, 0x80084110u);
+        c->r[4]=child; c->r[5]=child+44; rec_dispatch(c, 0x80084220u);
+        c->mem_w32(child+0x2C, c->mem_r32(child+0x2C) + c->mem_r32(node+0xAC));
+        c->mem_w32(child+0x30, c->mem_r32(child+0x30) + c->mem_r32(node+0xB0));
+        c->mem_w32(child+0x34, c->mem_r32(child+0x34) + c->mem_r32(node+0xB4));
+      } else if (s7 == 0) {                                       // first secondary child: matrix 0x1F800060, trans 0x1F800074
+        c->r[4]=0x1F800060u; c->r[5]=0x1F800040u; c->r[6]=child+24; rec_dispatch(c, 0x80084110u);
+        c->r[4]=child; c->r[5]=child+44; rec_dispatch(c, 0x80084220u);
+        c->mem_w32(child+0x2C, c->mem_r32(child+0x2C) + c->mem_r32(0x1F800074u));
+        c->mem_w32(child+0x30, c->mem_r32(child+0x30) + c->mem_r32(0x1F800078u));
+        c->mem_w32(child+0x34, c->mem_r32(child+0x34) + c->mem_r32(0x1F80007Cu));
+        s7 = 1;
+      } else {                                                    // subsequent secondary children: parent = this node again
+        c->r[4]=node+0x98; c->r[5]=0x1F800040u; c->r[6]=child+24; rec_dispatch(c, 0x80084110u);
+        c->r[4]=child; c->r[5]=child+44; rec_dispatch(c, 0x80084220u);
+        c->mem_w32(child+0x2C, c->mem_r32(child+0x2C) + c->mem_r32(node+0xAC));
+        c->mem_w32(child+0x30, c->mem_r32(child+0x30) + c->mem_r32(node+0xB0));
+        c->mem_w32(child+0x34, c->mem_r32(child+0x34) + c->mem_r32(node+0xB4));
+      }
+      i++;
+      if (!(i < (int)(uint8_t)c->mem_r8(node+9))) break;          // bottom check (node[9])
+    }
+  }
+  c->mem_w8(node + 8, saved8);                                    // restore node[8]
+  c->r[2] = node;                                                 // (no explicit return; harmless)
+  #undef R16
+  #undef HU
+}
+// PSXPORT_DEBUG=orchverify — per-call A/B gate. Snapshot node+0x98..0xB7 (matrix+trans) + node[8], every
+// child sub-struct +0x18..0x37, the scratchpad work areas (0x1F800000..0x80 + ANG 0x1F8000C0..C5) and the
+// GTE data regs; run native, capture, restore everything, run the recomp body, diff.
+static void ov_orch597AC_verify(Core* c) {
+  uint32_t rs[32]; memcpy(rs, c->r, sizeof rs);
+  uint32_t node = c->r[4];
+  int n8 = (uint8_t)c->mem_r8(node+8), n9 = (uint8_t)c->mem_r8(node+9);
+  int N = n8 > n9 ? n8 : n9; if (N > 64) N = 64;
+  uint32_t ch[64]; uint32_t csnap[64][8];
+  for (int i=0;i<N;i++){ ch[i]=c->mem_r32(node+0xC0+4u*(uint32_t)i);
+    for (int w=0;w<8;w++) csnap[i][w]=c->mem_r32(ch[i]+0x18+4u*(uint32_t)w); }
+  uint32_t nsnap[8]; for (int w=0;w<8;w++) nsnap[w]=c->mem_r32(node+0x98+4u*(uint32_t)w);  // matrix(5)+trans(3)
+  uint8_t node8 = c->mem_r8(node+8);
+  uint32_t sp_b[34]; for (int w=0;w<32;w++) sp_b[w]=c->mem_r32(0x1F800000u+4u*(uint32_t)w);
+  sp_b[32]=c->mem_r32(0x1F8000C0u); sp_b[33]=c->mem_r32(0x1F8000C4u);
+  uint32_t gd_b[32]; for (int i=0;i<32;i++) gd_b[i]=gte_read_data(i);
+  // NATIVE
+  orch597AC_body(c);
+  uint32_t cn[64][8], nn[8], sp_n[34], gd_n[32]; uint8_t node8_n=c->mem_r8(node+8);
+  for (int i=0;i<N;i++) for (int w=0;w<8;w++) cn[i][w]=c->mem_r32(ch[i]+0x18+4u*(uint32_t)w);
+  for (int w=0;w<8;w++) nn[w]=c->mem_r32(node+0x98+4u*(uint32_t)w);
+  for (int w=0;w<32;w++) sp_n[w]=c->mem_r32(0x1F800000u+4u*(uint32_t)w);
+  sp_n[32]=c->mem_r32(0x1F8000C0u); sp_n[33]=c->mem_r32(0x1F8000C4u);
+  for (int i=0;i<32;i++) gd_n[i]=gte_read_data(i);
+  // RESTORE
+  memcpy(c->r, rs, sizeof rs);
+  for (int i=0;i<N;i++) for (int w=0;w<8;w++) c->mem_w32(ch[i]+0x18+4u*(uint32_t)w, csnap[i][w]);
+  for (int w=0;w<8;w++) c->mem_w32(node+0x98+4u*(uint32_t)w, nsnap[w]);
+  c->mem_w8(node+8, node8);
+  for (int w=0;w<32;w++) c->mem_w32(0x1F800000u+4u*(uint32_t)w, sp_b[w]);
+  c->mem_w32(0x1F8000C0u, sp_b[32]); c->mem_w32(0x1F8000C4u, sp_b[33]);
+  for (int i=0;i<32;i++) gte_write_data(i, gd_b[i]);
+  // RECOMP
+  rec_super_call(c, 0x800597ACu);
+  static long ngood=0, nbad=0; int bad=0;
+  for (int w=0;w<8 && !bad;w++) if (nn[w]!=c->mem_r32(node+0x98+4u*(uint32_t)w)) {
+    if (nbad<40) fprintf(stderr,"[orchverify] MISMATCH node=%08x +0x%x mine=%08x oracle=%08x\n", node, 0x98+w*4, nn[w], c->mem_r32(node+0x98+4u*(uint32_t)w)); bad=1; }
+  if (!bad && node8_n != c->mem_r8(node+8)) { if (nbad<40) fprintf(stderr,"[orchverify] MISMATCH node=%08x node[8] mine=%02x oracle=%02x\n", node, node8_n, c->mem_r8(node+8)); bad=1; }
+  for (int i=0;i<N && !bad;i++) for (int w=0;w<8;w++) if (cn[i][w]!=c->mem_r32(ch[i]+0x18+4u*(uint32_t)w)) {
+    if (nbad<40) fprintf(stderr,"[orchverify] MISMATCH node=%08x child[%d]=%08x +0x%x mine=%08x oracle=%08x\n", node, i, ch[i], 0x18+w*4, cn[i][w], c->mem_r32(ch[i]+0x18+4u*(uint32_t)w)); bad=1; break; }
+  for (int w=0;w<32 && !bad;w++) if (sp_n[w]!=c->mem_r32(0x1F800000u+4u*(uint32_t)w)) {
+    if (nbad<40) fprintf(stderr,"[orchverify] MISMATCH node=%08x spad+0x%x mine=%08x oracle=%08x\n", node, w*4, sp_n[w], c->mem_r32(0x1F800000u+4u*(uint32_t)w)); bad=1; }
+  if (!bad && sp_n[32]!=c->mem_r32(0x1F8000C0u)) { if(nbad<40) fprintf(stderr,"[orchverify] MISMATCH node=%08x spad+0xC0 mine=%08x oracle=%08x\n", node, sp_n[32], c->mem_r32(0x1F8000C0u)); bad=1; }
+  if (!bad && sp_n[33]!=c->mem_r32(0x1F8000C4u)) { if(nbad<40) fprintf(stderr,"[orchverify] MISMATCH node=%08x spad+0xC4 mine=%08x oracle=%08x\n", node, sp_n[33], c->mem_r32(0x1F8000C4u)); bad=1; }
+  for (int i=0;i<32 && !bad;i++){ if (i>=12&&i<=15) continue; if (i==31) continue;
+    if (gd_n[i]!=gte_read_data(i)) { if (nbad<40) fprintf(stderr,"[orchverify] MISMATCH node=%08x GTE-DR%d mine=%08x oracle=%08x\n", node, i, gd_n[i], gte_read_data(i)); bad=1; } }
+  if (bad) nbad++; else if (++ngood==1 || ngood%20000==0) fprintf(stderr,"[orchverify] %ld matches (last node=%08x N=%d)\n", ngood, node, N);
+  // keep native results live
+  memcpy(c->r, rs, sizeof rs);
+  for (int i=0;i<N;i++) for (int w=0;w<8;w++) c->mem_w32(ch[i]+0x18+4u*(uint32_t)w, cn[i][w]);
+  for (int w=0;w<8;w++) c->mem_w32(node+0x98+4u*(uint32_t)w, nn[w]);
+  c->mem_w8(node+8, node8_n);
+  for (int w=0;w<32;w++) c->mem_w32(0x1F800000u+4u*(uint32_t)w, sp_n[w]);
+  c->mem_w32(0x1F8000C0u, sp_n[32]); c->mem_w32(0x1F8000C4u, sp_n[33]);
+  for (int i=0;i<32;i++) gte_write_data(i, gd_n[i]);
+  c->r[2] = node;
+}
+void ov_orch597AC(Core* c) {
+  static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("orchverify") ? 1 : 0;
+  if (s_v) { ov_orch597AC_verify(c); return; }
+  orch597AC_body(c);
+}
+
 // PSXPORT_DEBUG=subcnt — submitter call-counter. Registered (super-call) on candidate submit fns to see
 // which actually fire per scene + how often, so the un-owned variants worth porting are picked by data,
 // not guesswork. One slot per registered address; per-present-frame counts flushed on frame change.
