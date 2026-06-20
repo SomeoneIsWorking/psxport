@@ -549,10 +549,8 @@ void gpu_draw_world_quad(Core* core, const float* px, const float* py, const flo
     ys[i] = (int)(py[i] < 0 ? py[i] - 0.5f : py[i] + 0.5f) + s.s_off_y;
     us[i] = u[i]; vs[i] = v[i]; rs[i] = r[i]; gs[i] = g[i]; bs[i] = b[i];
   }
-  // World geometry: engine layer WORLD with real per-vertex depth. The queue is the render path; only the
-  // PSXPORT_SBS debug compare falls back to inline single-channel emit (what world used pre-queue).
-  int gpu_sbs_get(void); int sbs = gpu_sbs_get();
-  rq_emit_or_queue(core, !sbs, RQ_WORLD, RQ_OM_DEPTH, 4, semi ? 1 : 0, 0,
+  // World geometry: engine layer WORLD with real per-vertex depth. The queue is the render path.
+  rq_emit_or_queue(core, 1, RQ_WORLD, RQ_OM_DEPTH, 4, semi ? 1 : 0, 0,
                    xs, ys, us, vs, rs, gs, bs, depth, s.s_tp_mode,
                    s.s_tp_x, s.s_tp_y, s.s_clut_x, s.s_clut_y, s.s_tw_mx, s.s_tw_my, s.s_tw_ox, s.s_tw_oy,
                    s.s_da_x0, s.s_da_y0, s.s_da_x1, s.s_da_y1, s.s_tp_blend);
@@ -735,15 +733,10 @@ void GpuState::gp0_exec(Core* core) {
       // Classify 3D-vs-2D (and 2D backdrop-vs-HUD) once; this drives both the inline draw and the engine
       // render queue. Phase 2 (NATIVE_DEPTH): a poly whose every vertex resolves to a projected vertex is
       // 3D world geometry -> carries real per-vertex view-Z (D32 occlusion); otherwise it is a 2D element
-      // -> a backdrop (FAR band) or HUD (near band) by screen coverage. PSXPORT_SBS keeps the dual-channel
-      // debug compare on its own inline path (not routed through the queue).
-      static int s_ndepth = -1, s_sbs = -1;
-      int native_depth_on(void);            // PC-native per-pixel depth — ALWAYS ON (opt out: PSXPORT_FAITHFUL_DEPTH)
-      if (s_ndepth < 0) s_ndepth = native_depth_on();
-      if (s_sbs < 0) s_sbs = cfg_on("PSXPORT_SBS") ? 1 : 0;
-      int use_rq = rq_active() && !s_sbs;        // engine render queue owns ordering (PSXPORT_RQ)
+      // -> a backdrop (FAR band) or HUD (near band) by screen coverage.
+      int use_rq = rq_active();                  // engine render queue owns ordering (PSXPORT_RQ)
       float dep[4]; int is3d = 0, bg = 0;
-      if (s_ndepth || s_sbs) {
+      {
         int projprim_lookup_pz(uint32_t, float*);
         float proj_pz_to_ord(float);
         is3d = 1;
@@ -781,7 +774,7 @@ void GpuState::gp0_exec(Core* core) {
       // 2D polys would stay left-anchored at 320 (the banner gets cut). Widen them like the 2D sprites:
       // scale the 2D plane uniformly to the wide width about the framebuffer origin so they fill the frame.
       { int gpu_vk_wide_engine(void), gpu_vk_wide_engine_w(void);
-        if (s_ndepth && !is3d && gpu_vk_wide_engine() && s_prev_had3d) {  // 2D widen only on gameplay frames
+        if (!is3d && gpu_vk_wide_engine() && s_prev_had3d) {  // 2D widen only on gameplay frames
           int o = s_da_x0, ww = gpu_vk_wide_engine_w();
           for (int i = 0; i < nv; i++) xs[i] = o + (xs[i] - o) * ww / 320; } }
       if (use_rq) {
@@ -793,11 +786,10 @@ void GpuState::gp0_exec(Core* core) {
                          s_tw_mx, s_tw_my, s_tw_ox, s_tw_oy, s_da_x0, s_da_y0, s_da_x1, s_da_y1, s_tp_blend);
       } else {
       gpu_vk_set_order(core, ord_idx);           // OT submission order -> depth (preserve opaque/semi order)
-      if ((s_ndepth || s_sbs) && !is3d) {        // 2D band select (inline / SBS path)
-        if (s_sbs) { if (bg) gpu_vk_set_order_2d_bg_n(core, ord_idx); else gpu_vk_set_order_2d_n(core, ord_idx); }
-        else       { if (bg) gpu_vk_set_order_2d_bg(core, ord_idx);   else gpu_vk_set_order_2d(core, ord_idx); }
+      if (!is3d) {                               // 2D band select
+        if (bg) gpu_vk_set_order_2d_bg(core, ord_idx); else gpu_vk_set_order_2d(core, ord_idx);
       }
-      #define SBS_OR_ND_SETVD(p) do { if (is3d) { if (s_sbs) gpu_vk_set_vd_n(core, p); else gpu_vk_set_vd(core, p); } } while (0)
+      #define SBS_OR_ND_SETVD(p) do { if (is3d) gpu_vk_set_vd(core, p); } while (0)
       if (semi) {
         {   // OT-order grouping (overlap -> fresh fb snapshot)
           int bx0=xs[0],by0=ys[0],bx1=xs[0],by1=ys[0];
@@ -915,10 +907,7 @@ void GpuState::gp0_exec(Core* core) {
     if (gpu_vk_enabled()) {
       unsigned ord_idx = s_prim_order++;
       // sprites/rects are screen-space (no GTE projection) -> 2D backdrop/HUD band by screen coverage.
-      static int s_ndepth = -1, s_sbs = -1; int native_depth_on(void);
-      if (s_ndepth < 0) s_ndepth = native_depth_on();
-      if (s_sbs < 0) s_sbs = cfg_on("PSXPORT_SBS") ? 1 : 0;
-      int use_rq = rq_active() && !s_sbs;
+      int use_rq = rq_active();
       // PROVENANCE first (owned background drawer -> backdrop, any size), coverage fallback otherwise.
       int bg = node_is_bg(s_cur_node) || bg_2d(x, y, x + w, y + h);
       if (!bg && cfg_dbg("objz") && s_frame == s_primdump_frame)
@@ -952,8 +941,7 @@ void GpuState::gp0_exec(Core* core) {
                          s_da_x0, s_da_y0, s_da_x1, s_da_y1, s_tp_blend);
       } else {
       gpu_vk_set_order(core, ord_idx);          // OT submission order -> depth (preserve opaque/semi order)
-      if (s_sbs)         { if (bg) gpu_vk_set_order_2d_bg_n(core, ord_idx); else gpu_vk_set_order_2d_n(core, ord_idx); }
-      else if (s_ndepth) { if (bg) gpu_vk_set_order_2d_bg(core, ord_idx);   else gpu_vk_set_order_2d(core, ord_idx); }
+      if (bg) gpu_vk_set_order_2d_bg(core, ord_idx); else gpu_vk_set_order_2d(core, ord_idx);
       if (semi) {
         { gpu_vk_semi_group(core, X, Y, X+w, Y+h); }  // OT-order grouping
         gpu_vk_draw_semi(core, qx, qy, qu, qv, qr, qg, qb, s_tp_x, s_tp_y, mode, rw, s_clut_x, s_clut_y,
@@ -1388,8 +1376,8 @@ void GpuState::gpu_present_ex(Core* core, int do_blit) {
   // vertex word never reads an OLD frame's depth. The engine (engine_submit.c) repopulates it each frame.
   { int attach_enabled(void); void projprim_reset(void);
     if (attach_enabled()) projprim_reset(); }
-  { int native_depth_on(void);
-    if (native_depth_on() || cfg_on("PSXPORT_SBS")) {
+  {
+    {
       extern long g_nd_3d, g_nd_2d;
       if (cfg_dbg("ndepth") && s_frame > 0 && (s_frame % 60) == 0)
         fprintf(stderr, "[ndepth f%d] real-depth(3D) prims=%ld  OT-band(2D) prims=%ld  3D%%=%.1f\n",
@@ -1525,15 +1513,6 @@ void GpuState::gpu_vram_save(uint16_t* dst)       { memcpy(dst, s_vram, sizeof(s
 void GpuState::gpu_provat_enable() { s_prov_on = 1; }
 
 int GpuState::gpu_frame_no() { return s_frame; }
-
-// --- Vulkan-vs-Software side-by-side (SBS) present mode -----------------------------------------
-// When on (PSXPORT_SBS=1 or `sbs 1` via the debug server), the rasterization tee runs BOTH renderers
-// for every frame — the SW rasterizer into s_vram AND the VK rasterizer into its GPU image — and the
-// VK present pass shows VK on the left half, SW on the right half, so the two can be compared live.
-// gpu_native owns the flag (the tee is here); gpu_vk.c reads it for the dual present.
-static int s_sbs_on = -1;
-int  gpu_sbs_get(void) { if (s_sbs_on < 0) { const char* e = cfg_str("PSXPORT_SBS"); s_sbs_on = (e && atoi(e)) ? 1 : 0; } return s_sbs_on; }
-void gpu_sbs_set(int on) { s_sbs_on = on ? 1 : 0; }
 
 // Diagnostic dumps (gpu_prov_dump / gpu_provat_display / gpu_scene_dump[_now]) live in gpu_debug.c.
 void gpu_scene_dump(Core*, FILE*, uint32_t);

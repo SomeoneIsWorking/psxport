@@ -191,20 +191,18 @@ static VkPipelineLayout s_ssao_pll;
 static VkDescriptorPool s_ssao_dpool;
 static VkDescriptorSet s_ssao_dset;
 static VkPipeline      s_ssao_pipe;
-// AO/light are LIVE (g_mods, overlay-toggled). Disabled under SBS (single-panel only). proj getters feed
-// the LIGHT normal reconstruction. ui_infra() = the overlay needs the deferred infra + native-depth kept
-// on so SSAO/LIGHT can be toggled at runtime even if they started off.
-static int sbs_on(void)  { static int v = -1; if (v < 0) v = cfg_on("PSXPORT_SBS") ? 1 : 0; return v; }
-static int ssao_on(void) { return g_mods.ssao  && !sbs_on(); }
+// AO/light are LIVE (g_mods, overlay-toggled). proj getters feed the LIGHT normal reconstruction.
+// ui_infra() = the overlay needs the deferred infra + native-depth kept on so SSAO/LIGHT can be
+// toggled at runtime even if they started off.
+static int ssao_on(void) { return g_mods.ssao; }
 float proj_plane_h(void);
 void  proj_screen_center(float* cx, float* cy);
-static int light_on(void)    { return g_mods.light && !sbs_on(); }
+static int light_on(void)    { return g_mods.light; }
 static int deferred_on(void) { return ssao_on() || light_on(); }
 // The native-depth / deferred infra (for SSAO/light) is OPT-IN via the PSXPORT_UI env — NOT implied by
-// the overlay merely being available. Forcing native-depth on by default would change the faithful
-// render (native-depth is incomplete for not-yet-owned submit paths). The F1 overlay itself needs none
-// of this; SSAO/light just don't take effect unless launched with PSXPORT_UI=1 (or PSXPORT_SSAO/LIGHT).
-static int ui_infra(void)    { return cfg_on("PSXPORT_UI") && !sbs_on(); }
+// the overlay merely being available. The F1 overlay itself needs none of this; SSAO/light just don't
+// take effect unless launched with PSXPORT_UI=1 (or PSXPORT_SSAO/LIGHT).
+static int ui_infra(void)    { return cfg_on("PSXPORT_UI"); }
 
 // M3 textured rasterizer: a VRAM snapshot image the texture sampler reads (avoids render/sample feedback
 // loop), its descriptor set, the textured pipeline, and a textured-vertex batch.
@@ -622,7 +620,7 @@ static void init_vk(void) {
   void panels_init(void); panels_init();
   // Native depth is ALWAYS on now, so the deferred infra (SSAO/light) can ALWAYS be ready -> they toggle
   // live from the overlay with no launch flag (the old PSXPORT_UI gate is obsolete). Skip only under SBS.
-  if (!sbs_on()) create_ssao();
+  create_ssao();
   if (!s_headless) create_swapchain();
   // ImGui mod-toggle overlay (windowed only; needs the swapchain + present render pass).
   if (g_mods.ui && !s_headless)
@@ -1081,12 +1079,6 @@ void GpuVkState::present(const uint16_t* src, int sx, int sy, int w, int h) {
     fc++; }
   s_present_sx = sx; s_present_sy = sy;   // faithful display origin (pre use_fb override) for the LIGHT screen map
   imgui_overlay_new_frame();   // CPU-build the mod-toggle UI for this frame (no-op if overlay not inited)
-  // PSXPORT_SBS: split-screen depth A/B. Render the frame into TWO full-res images — s_tex with default
-  // OT-order depth, s_tex_b with native per-vertex depth — then composite them side by side (left pane =
-  // default, right pane = native) so you can SEE the native-depth bug against the correct render.
-  static int s_sbs = -1;
-  if (s_sbs < 0) s_sbs = cfg_on("PSXPORT_SBS") ? 1 : 0;
-
   // Mirror the whole CPU VRAM (s_vram/s_interp) into the GPU R16_UINT image (M1: SW still rasterizes;
   // M2+ will draw into this image directly and skip the upload for drawn regions). The display region
   // [sx,sy,w,h] is selected at sample time via the present push constant.
@@ -1115,9 +1107,8 @@ void GpuVkState::present(const uint16_t* src, int sx, int sy, int w, int h) {
   bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
   VKC(vkBeginCommandBuffer(s_cmd, &bi));
 
-  // Each Panel uploads its OWN persistent VRAM then renders independently (own depth occlusion, own
-  // pipeline depth-channel). PSXPORT_SBS = 2 panels (default + native); otherwise just the primary one.
-  s_npanels = s_sbs ? 2 : 1;
+  // The Panel uploads its persistent VRAM then renders (own depth occlusion). Single PC-native panel.
+  s_npanels = 1;
   s_dbg_tri = s_tri_n; s_dbg_tex = s_tex_n; s_dbg_semi = s_semi_n;   // snapshot for gpu_vk_stats (vkstats probe)
   for (int i = 0; i < s_npanels; i++) { panel_upload(&s_panels[i]); panel_render(&s_panels[i]); }
 
@@ -1158,7 +1149,7 @@ void GpuVkState::present(const uint16_t* src, int sx, int sy, int w, int h) {
   else if (s_wide)                  { aw = wide_native_w(); ah = 240; }   // 16:9 -> 428:240, 21:9 -> 560:240
   else                              { aw = 4; ah = 3; }
   int ow = s_extent.width, oh = s_extent.height;
-  int npanes = s_sbs ? 2 : 1;                          // SBS: left pane = s_tex (default), right = s_tex_b (native)
+  int npanes = 1;
   VkRect2D sc = { {0, 0}, s_extent };
   vkCmdSetScissor(s_cmd, 0, 1, &sc);
   vkCmdBindPipeline(s_cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, s_pipe);

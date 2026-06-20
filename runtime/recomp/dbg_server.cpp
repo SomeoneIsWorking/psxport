@@ -46,8 +46,6 @@ void gpu_scene_dump_now(Core* c, FILE* out);
 void gpu_provat_display(Core* core, FILE* out, int qx, int qy);
 void gpu_provat_enable(Core* core);
 void gpu_native_shot(Core* core, const char* path);
-int  gpu_sbs_get(void);
-void gpu_sbs_set(int on);
 int  gpu_frame_no(Core* core);
 int  gpu_vk_enabled(void);
 void gpu_vk_shot(Core* core, const char* path);
@@ -223,10 +221,6 @@ static void dbg_exec(FILE* out, const char* line) {
     fprintf(out, "tap %s %u\n", arg, a);
   } else if (!strcmp(cmd, "hold") && sscanf(line, "%*s %x", &a) == 1) {
     s_held = (unsigned short)a; pad_repl_hold(s_ctx, s_held); fprintf(out, "held=%04X\n", s_held);
-  } else if (!strcmp(cmd, "sbs")) {
-    if (sscanf(line, "%*s %u", &a) == 1) gpu_sbs_set((int)a);
-    else gpu_sbs_set(!gpu_sbs_get());
-    fprintf(out, "sbs=%d (Vulkan|Software side-by-side)\n", gpu_sbs_get());
   } else if (!strcmp(cmd, "pause")) {
     s_paused = 1; s_step = 0; fprintf(out, "paused at frame %d\n", gpu_frame_no(s_ctx));
   } else if (!strcmp(cmd, "play") || !strcmp(cmd, "resume")) {
