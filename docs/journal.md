@@ -45,6 +45,24 @@ shape: native work + coro-redirect to the guest TAIL.
   1F800000/2/1/3.) This matches the engine_stage ownership result class (0-diff modulo the override's stack
   bookkeeping).
 
+## later-182b: DEAD-END — owning the DEMO ROOT dispatcher prologue (ov_demo_root) introduces a GP0 env-packet divergence; REVERTED
+Tried to own the DEMO root 0x801062E4 prologue native (mirror ov_game_stage_main): reproduce the
+register/flag init, rec_dispatch the two SYNC setup calls (0x800810f0, 0x8005082c), coro-redirect to the
+loop body @0x80106388. The scheduler DOES fire an entry override on a fresh task entry (native_boot.cpp:134),
+so the mechanism works. BUT the A/B gate (override-on vs -off, REPL run 150) showed a **5-byte divergence**
+(GP0 command byte 0xE0 vs 0x00) in the draw-environment packet pools at 0x800A59xx / 0x800EA0xx — while the
+substate sub-fns dispatched 0-diff. ROOT CAUSE: 0x800810f0 builds the PSX draw-env via an INDIRECT libgpu
+call (`jalr v0[8]` off the double-buffer struct *0x800a5998, with a {0,0,320,512} desc + black color), and
+running 0x800810f0 as a NESTED rec_dispatch from the override is NOT equivalent to running it in the task
+coroutine context. Scratchpad was 0-diff (incl. buffer parity 0x1f800135 + frame ctr 0x1f800198), so this is
+NOT a frame-phase artifact — it's a genuine output difference from the nested-dispatched libgpu init.
+DECISION: REVERTED (no unverified override ships). The root prologue is low-value PSX disp-env plumbing the
+boundary says the engine shouldn't reproduce; owning it cleanly would need 0x800810f0 to run IN-CONTEXT
+(coro-redirect into it), which conflicts with its two-sync-call-then-loop structure. The valuable part — the
+substate transition LOGIC (s1/s2/s3/s6) — is owned and verified 0-diff (later-182). LESSON for the deep
+yielders: a SYNC sub-fn that itself makes an INDIRECT libgpu/hardware call may not be safely rec_dispatch'd
+from an override; check for jalr-to-overridden-target, prefer coro-redirect-in-context for those.
+
 ## later-179: SCEA license screen — render it PC-NATIVE (composite the text into the framebuffer) + own its duration
 **The SCEA "Sony Computer Entertainment America Presents" screen now displays** (fades in to crisp white,
 holds, then proceeds to the FMVs/menu). USER directive (2026-06-20): stop skipping/being walled by PSX —

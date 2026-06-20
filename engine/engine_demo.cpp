@@ -172,6 +172,14 @@ static void ov_demo_s6(Core* c) {
 void demo_scan_overlay(Core* c, uint32_t base, uint32_t size) {
   if (base != 0x80106228u) return;
   if (c->mem_r32(0x801062E4u) != 0x27bdffd0u) return;   // DEMO root dispatcher prologue: addiu sp,-48
+  // NB: owning the ROOT dispatcher prologue (ov_demo_root) was attempted (later-182b) and REVERTED:
+  // its one-time setup call 0x800810f0 builds the PSX draw-environment GP0 packets via an INDIRECT
+  // libgpu call (jalr v0[8] off the double-buffer struct *0x800a5998), and running 0x800810f0 as a
+  // nested rec_dispatch from the override is NOT equivalent to running it in-context — it left a 5-byte
+  // divergence in the env-packet pools (0x800A59xx/0x800EA0xx, GP0 cmd byte 0xE0 vs 0x00) while the
+  // substate sub-fns dispatched 0-diff. The prologue is low-value PSX disp-env plumbing (the boundary
+  // says the engine shouldn't reproduce it); owning it cleanly would need to run 0x800810f0 in-context,
+  // which conflicts with its two-sync-call structure. Left to the guest. See docs/journal.md later-182b.
   rec_set_interp_override_auto(0x8010641Cu, ov_demo_s1);
   rec_set_interp_override_auto(0x80106464u, ov_demo_s2);
   rec_set_interp_override_auto(0x801064E8u, ov_demo_s3);
