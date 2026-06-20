@@ -197,6 +197,13 @@ in-port profiler (later-186, `interp.cpp`) gives the TIME + FREQUENCY histograms
     sf/lm/IR-saturation/MAC-overflow matching mednafen gte.c), (2) GTE-REGISTER inspection tooling (the RAM
     dump is BLIND to GTE regs — must verify GTE-state LEAKAGE that downstream RTPS reads), (3) per-fn a2 +
     GTE-reg comparator. Big but the single highest-value perf + 100%-PC-native move.
+    **⚠ BOUNDARY CAVEAT (read before touching this cluster):** `gte_beetle.cpp`'s gte_op comment + later-171
+    (the reverted native NCLIP/AVSZ replica) establish: do NOT bit-replicate GTE math natively — that's PSX
+    mimicry, the wrong deliverable. The GTE goes away by porting its CALLERS, not by re-emulating MVMVA. So
+    FIRST do CALLER ANALYSIS per cluster fn: if its a2 output feeds RENDER, the engine already projects
+    PC-native (proj_native_vertex) → BYPASS it, don't replicate; if it feeds CONTENT (collision/physics),
+    it must match GTE-exactly → it stays GTE until that content caller is itself ported. Trace each fn's
+    callers/consumers (PSXPORT_RTPCALLER probe, ncall, disas the callers) BEFORE writing any native math.
   - `FUN_80115598` 22.1% — **OVERLAY** 2D tilemap/sprite-grid renderer (reads tile dims +16/+17, screen pos
     +40/+42 centered 160/120). Engine render code but in GAME.BIN → needs overlay-override (rec_set_interp_
     override_auto). Biggest single fn; second arc after the GTE cluster.
