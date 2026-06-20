@@ -1546,8 +1546,10 @@ static void vk_dump_to(const char* path, int sx, int sy, int w, int h) {
 // On-demand VK readback of an EXPLICIT VRAM region (the gpu_native display region) — used by the REPL
 // `shot` command, which runs headless where s_last_* (the windowed-present region) is never set.
 void gpu_vk_shot_region(Core* core, const char* path, int sx, int sy, int w, int h) {
-  (void)core;
   if (!gpu_vk_enabled()) return;
+  // Under hi-res/wide the present samples the scaled scratch FB (rows >=FB_Y0), NOT the display region —
+  // capture THAT so the shot matches what's on screen (else hi-res/wide shots show the empty 4:3 region).
+  if (core->game->gpu_vk.frame_via_fb()) { sx = 0; sy = FB_Y0; w = FBW(); h = FBH(); }
   vk_dump_to(path, sx, sy, w, h);
   fprintf(stderr, "[vk_shot] wrote %s (%dx%d @ %d,%d)\n", path, w, h, sx, sy);
 }

@@ -751,7 +751,10 @@ void GpuState::gp0_exec(Core* core) {
         // 2D prim: backdrop vs HUD. PROVENANCE first — a node produced by the engine's owned background
         // drawer is the backdrop regardless of size (fixes the tiled background, blind to bg_2d's coverage
         // test); fall back to screen-coverage for scenes whose background drawer isn't owned yet.
-        if (!is3d) bg = node_is_bg(s_cur_node) || bg_2d(bx0, by0, bx1, by1);
+        // A full-screen prim is a BACKDROP only if OPAQUE (sky/sea). A full-screen SEMI prim is a
+        // fade/overlay -> must NOT be a backdrop (else it draws UNDER the world); leave it in the HUD
+        // (topmost) band so fades composite on top. (Owned backdrops still match via node_is_bg.)
+        if (!is3d) bg = node_is_bg(s_cur_node) || (!semi && bg_2d(bx0, by0, bx1, by1));
         // PC-native object depth: a 2D billboard prim (no projected verts) whose OT-node falls in an
         // object's packet-pool span inherits that object's world-position view-Z and occludes for real.
         if (!is3d && !bg) { float od; if (obj_depth_lookup(s_cur_node, &od)) {
@@ -909,7 +912,9 @@ void GpuState::gp0_exec(Core* core) {
       // sprites/rects are screen-space (no GTE projection) -> 2D backdrop/HUD band by screen coverage.
       int use_rq = rq_active();
       // PROVENANCE first (owned background drawer -> backdrop, any size), coverage fallback otherwise.
-      int bg = node_is_bg(s_cur_node) || bg_2d(x, y, x + w, y + h);
+      // A full-screen SEMI sprite is a fade/overlay (NOT a backdrop) -> keep it out of the bg band so it
+      // composites on top of the world (opaque full-screen sprites stay backdrops).
+      int bg = node_is_bg(s_cur_node) || (!semi && bg_2d(x, y, x + w, y + h));
       if (!bg && cfg_dbg("objz") && s_frame == s_primdump_frame)
         fprintf(stderr, "[sprnode] op=%02x at(%d,%d %dx%d) rgb=(%d,%d,%d) node=%08x\n",
                 op, x, y, w, h, cr, cg, cb, s_cur_node);
