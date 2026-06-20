@@ -329,6 +329,80 @@ static inline void ifn_record(uint32_t tgt, uint32_t from) {
   }
 }
 
+// ---- Interpreter PERF PROFILER (REPL `prof start` / `prof dump <path>`) --------------------------
+// The perf floor of the port: every un-owned engine fn + all game CONTENT runs through this flat
+// interpreter, so "where do interpreter instructions go?" == "which engine fn should I own next for
+// perf?" (the #1 priority — owning a hot fn natively both advances 100%-PC-native AND speeds it up).
+// Two cheap, exact (not sampled) histograms, gated behind g_prof_on so the hot path costs one
+// predictable branch + one add when profiling is OFF, and one array increment when ON:
+//   1. PC histogram  — instructions executed per 256-byte bucket over main RAM 0x80000000..0x80200000
+//      (8192 buckets). Maps to functions offline via tools/prof_report.py + tomba2_funcs.txt. This is
+//      the TIME profile: a hot bucket = where the CPU actually spends interpreted cycles.
+//   2. CALL histogram — entries into each non-native (interpreter-run) function, counted in
+//      coro_native_call's miss path. The FREQUENCY profile: a high-count target is worth owning even
+//      if each call is cheap. Open-addressing, same shape as the ifn set.
+// Overlay (DEMO/GAME.BIN) functions aren't in tomba2_funcs.txt; their hot addresses report raw.
+int             g_prof_on = 0;                    // toggled by REPL `prof start`/`prof off`
+static uint64_t g_prof_pc[1 << 13];               // 8192 buckets, 256 bytes each
+static uint64_t g_prof_total = 0;                 // total instructions counted
+static uint32_t g_prof_call_addr[1 << 14];        // call-target set (0 == empty)
+static uint64_t g_prof_call_n[1 << 14];           // parallel call counts
+static uint64_t g_prof_call_total = 0;            // total interpreted-fn entries counted
+
+static inline void prof_pc_tick(uint32_t pc) {
+  g_prof_pc[(pc & 0x1FFFFF) >> 8]++;
+  g_prof_total++;
+}
+static inline void prof_call_tick(uint32_t tgt) {
+  uint32_t h = (tgt * 2654435761u) >> 18, m = (1u << 14) - 1u;
+  for (uint32_t i = 0; i < (1u << 14); i++) {
+    uint32_t s = (h + i) & m;
+    if (g_prof_call_addr[s] == tgt) { g_prof_call_n[s]++; g_prof_call_total++; return; }
+    if (g_prof_call_addr[s] == 0)   { g_prof_call_addr[s] = tgt; g_prof_call_n[s] = 1; g_prof_call_total++; return; }
+  }
+}
+void prof_start(void) {
+  for (uint32_t i = 0; i < (1u << 13); i++) g_prof_pc[i] = 0;
+  for (uint32_t i = 0; i < (1u << 14); i++) { g_prof_call_addr[i] = 0; g_prof_call_n[i] = 0; }
+  g_prof_total = g_prof_call_total = 0;
+  g_prof_on = 1;
+  fprintf(stderr, "[prof] profiling started (reset)\n");
+}
+void prof_stop(void) { g_prof_on = 0; fprintf(stderr, "[prof] profiling stopped\n"); }
+
+void prof_dump(const char* path) {
+  // Top PC buckets (time) + top call targets (frequency), sorted desc. Simple selection of top-N
+  // by repeated linear max — N is small (200), the arrays are 8K/16K, runs in a blink.
+  FILE* fp = path && *path ? fopen(path, "w") : 0;
+  FILE* out = fp ? fp : stderr;
+  const int NPC = 200, NCALL = 200;
+  fprintf(out, "# prof: %llu instructions, %llu interpreted-fn entries\n",
+          (unsigned long long)g_prof_total, (unsigned long long)g_prof_call_total);
+  fprintf(out, "# --- TIME (top %d PC buckets, 256B each; addr = bucket base) ---\n", NPC);
+  fprintf(out, "# bucket_addr   insns      pct\n");
+  // copy bucket counts so we can zero out as we extract
+  for (int k = 0; k < NPC; k++) {
+    uint64_t best = 0; int bi = -1;
+    for (int i = 0; i < (1 << 13); i++) if (g_prof_pc[i] > best) { best = g_prof_pc[i]; bi = i; }
+    if (bi < 0 || best == 0) break;
+    uint32_t addr = 0x80000000u | ((uint32_t)bi << 8);
+    double pct = g_prof_total ? 100.0 * (double)best / (double)g_prof_total : 0.0;
+    fprintf(out, "%08X   %10llu   %5.2f%%\n", addr, (unsigned long long)best, pct);
+    g_prof_pc[bi] = 0;  // consume (g_prof_on is off during dump; start re-zeros anyway)
+  }
+  fprintf(out, "# --- FREQUENCY (top %d interpreted-fn entry counts) ---\n", NCALL);
+  fprintf(out, "# func_addr     calls      pct\n");
+  for (int k = 0; k < NCALL; k++) {
+    uint64_t best = 0; int bi = -1;
+    for (int i = 0; i < (1 << 14); i++) if (g_prof_call_addr[i] && g_prof_call_n[i] > best) { best = g_prof_call_n[i]; bi = i; }
+    if (bi < 0 || best == 0) break;
+    double pct = g_prof_call_total ? 100.0 * (double)best / (double)g_prof_call_total : 0.0;
+    fprintf(out, "%08X   %10llu   %5.2f%%\n", g_prof_call_addr[bi], (unsigned long long)best, pct);
+    g_prof_call_n[bi] = 0;  // consume
+  }
+  if (fp) { fclose(fp); fprintf(stderr, "[prof] dump -> %s\n", path); }
+}
+
 static uint32_t g_callring[64];   // derail diagnostics: ring of last compiled-function entries
 static int      g_callring_pos = 0;
 
@@ -367,6 +441,7 @@ static int coro_native_call(Core* c, uint32_t tgt) {
     rec_dispatch(c, tgt); return 1;            // recompiled target -> run its COMPILED body
   }
   ifn_record(tgt, c->r[31]);   // tripwire: the interpreter is about to run this (non-native) function
+  if (g_prof_on) prof_call_tick(tgt);  // perf: count entries into this un-owned (interpreted) function
   return 0;
 }
 
@@ -414,6 +489,7 @@ static void interp_flat(Core* c, uint32_t pc, uint32_t stop_ra) {
       }
     }
     g_interp_pc = pc;
+    if (g_prof_on) prof_pc_tick(pc);   // perf profiler: instructions-per-PC-bucket (time histogram)
     // PSXPORT_SPRITEDBG: when the sprite-flush routine copies the red-quad clut template
     // (0x7EF71100) into the OT (store at 0x8007E67C), dump the renderer's working registers so
     // the owning sprite object ($a3/$t5) and its descriptor list ($a2) can be identified.

@@ -171,6 +171,21 @@ for content fns (call it). Do NOT mimic PSX hardware (GTE/GP0/OT) — remove Bee
 Per-enemy AI / per-character behavior; physics & collision response (Tomba move/jump/land); level data payloads;
 quest / event / progression / game-rule logic.
 
+## F. PERF PROFILER (the #1-priority lever: hot interpreted fn → own it native → faster + more PC-native)
+The port is interpreter-only, so every un-owned engine fn + all CONTENT runs through `interp_flat`. The
+in-port profiler (later-186, `interp.cpp`) gives the TIME + FREQUENCY histograms to pick the next fn to own.
+- **Drive:** REPL `prof start` / `prof stop` / `prof dump <path>`. Cost: one predictable branch when OFF.
+- **Report:** `tools/prof_report.py <dump> --top N` aggregates PC buckets by enclosing function (resident list
+  `tools/recomp/tomba2_funcs.txt`, which runs to 0x8018FBCC; addrs past MAIN.EXE file end are overlay code).
+- **CAPTURED HOT-LIST (field, newgame+skip 600, 300 frames — later-186; don't re-profile to re-confirm):**
+  - `FUN_80115598` 12.81% — **OVERLAY** (past MAIN.EXE end; needs a GAME RAM dump to RE; may be CONTENT).
+  - **libgte-style MATH cluster ≈ 31% combined** — the biggest single lever, all resident, pure/deterministic:
+    `FUN_80084080` 8.34% (GTE-reciprocal/normalize, uses cop2), `FUN_80085480` 6.29% (RotMatrix from sincos LUT
+    @0x800a6490), `FUN_80084EB0` 4.79%, `FUN_80084A80` 3.18%, `FUN_80085050` 2.72%, `FUN_800851F0` 2.16%,
+    `FUN_80084D10` 1.87%, `FUN_80084110` 1.85%. Own these native (exact-value verify vs interp) for a large win.
+  - `FUN_80077FB0` 8.41% (pure-integer isqrt/binary-search, no GTE — clean first port), `FUN_80076D68` 3.27%.
+  - Frequency leaders: `FUN_80084110` (55k calls), `FUN_8013F0DC` (overlay), `FUN_80084220`, `FUN_80077FB0`.
+
 ---
 
 # CURRENT FRONTIER (work these, in this order)

@@ -340,6 +340,14 @@ static long native_repl_read(Core* c, uint32_t f) {
     else if (!strcmp(cmd, "bgmstop")) { rc0(c, 0x80074E48u); fprintf(stderr, "[repl] bgmstop\n"); }
     else if (!strcmp(cmd, "xadump")) { unsigned ch = 0, lba = 0, secs = 3; char path[200] = {0};
       if (sscanf(line, "%*s %u %u %199s %u", &ch, &lba, path, &secs) >= 3) repl_xadump((uint8_t)ch, lba, path, secs ? (int)secs : 3); }
+    else if (!strcmp(cmd, "prof")) {
+      void prof_start(void); void prof_stop(void); void prof_dump(const char*);
+      char sub[32] = {0}, path[200] = {0}; sscanf(line, "%*s %31s %199s", sub, path);
+      if (!strcmp(sub, "start")) prof_start();
+      else if (!strcmp(sub, "stop") || !strcmp(sub, "off")) prof_stop();
+      else if (!strcmp(sub, "dump")) prof_dump(path[0] ? path : 0);
+      else fprintf(stderr, "[repl] prof: start | stop | dump <path>\n");
+    }
     else if (!strcmp(cmd, "stage")) fprintf(stderr, "[repl] stage=%08X sm48=%d\n", c->mem_r32(0x801fe00c), (int)c->mem_r16(0x801fe048));
     else if (!strcmp(cmd, "regs")) { for (int i = 0; i < 32; i++) { fprintf(stderr, " r%-2d=%08X", i, c->r[i]); if ((i & 3) == 3) fprintf(stderr, "\n"); } fprintf(stderr, " hi=%08X lo=%08X\n", c->hi, c->lo); }
     else if (!strcmp(cmd, "seq")) fprintf(stderr, "[repl] seq open=%d playmask=%04X tickmode=%d seqfn=%08X stage=%08X\n",
