@@ -156,6 +156,7 @@ static void ov_game_stage_main(Core* c) {
   c->mem_w16(task + 0x4c, 0);
   c->mem_w16(task + 0x4e, 0);
   c->mem_w16(task + 0x50, 0);
+  if (cfg_dbg("stage")) fprintf(stderr, "[stage] ov_game_stage_main: prologue run, sm[0x48]=%u\n", init48);
   rec_coro_redirect(c, 0x801063F4u);           // hand to the guest loop body IN-CONTEXT (deep yields OK)
 }
 

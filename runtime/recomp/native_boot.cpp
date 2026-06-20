@@ -26,6 +26,7 @@
 #include <unistd.h>   // usleep (debug-server pause/step idle wait)
 
 void rec_coro_run(Core* c, uint32_t pc); // flat coroutine interpreter (resumable, see interp.c)
+OverrideFn rec_interp_override_for(uint32_t a);  // unified address-keyed override lookup (interp.c)
 
 // Native XA voice/BGM clip player (xa_stream.c) owns task slot 2 — it replaced the FUN_8001cfc8
 // streaming-reader coroutine. The scheduler skips slot 2 while owned and reflects clip completion
@@ -99,10 +100,12 @@ static void native_scheduler_step(Core* c) {
     uint32_t st = c->mem_r16(base);
     if (st == 0) { c->game->sched.task_started[i] = 0; continue; }   // free
     uint32_t resume_pc;
+    int fresh = 0;
     // state==3 (restart at new entry) or state==2 on a slot with no live context (freshly
     // registered by FUN_80051f14) => fresh entry. state==2 with a live context => resume.
     if (st == 3 || (st == 2 && !c->game->sched.task_started[i])) {
       resume_pc = c->mem_r32(base + 0xc);        // task entry
+      fresh = 1;
       c->game->sched.task_ctx[i] = loop;                   // inherit gp; fresh sp/ra below
       c->game->sched.task_ctx[i].r[29] = c->mem_r32(base + 8);// per-task PSX stack top (obj+8)
       c->game->sched.task_ctx[i].r[31] = 0xDEAD0000u;      // sentinel return
@@ -121,7 +124,20 @@ static void native_scheduler_step(Core* c) {
     static_cast<R3000&>(*c) = c->game->sched.task_ctx[i];   // restore REGISTERS only (shared RAM untouched)
     c->game->sched.in_stage = 1;
     if (setjmp(c->game->sched.yield_jmp) == 0) {
-      rec_coro_run(c, resume_pc);             // runs until ov_yield longjmps back here
+      uint32_t start = resume_pc;
+      // A task ENTRY may be a native override (e.g. the GAME stage prologue ov_game_stage_main).
+      // interp_flat only fires overrides on a control transfer INTO an address, never at its start
+      // pc, and nothing `jal`s a task entry — so fire the entry override here, as a native call,
+      // exactly once on a FRESH entry (NOT on a resume, whose saved pc is deep guest code that must
+      // be interpreted, not re-dispatched). The override does its prologue and either rec_coro_redirect's
+      // to where the interp should continue (coro_redirect_pc) or returns to its ra; run flat from there.
+      if (fresh) {
+        OverrideFn ov = rec_interp_override_for(resume_pc);
+        if (ov) { extern uint32_t g_override_tgt; g_override_tgt = resume_pc; ov(c);
+                  start = c->coro_redirect_pc ? c->coro_redirect_pc : c->r[31];
+                  c->coro_redirect_pc = 0; }
+      }
+      rec_coro_run(c, start);                  // runs until ov_yield longjmps back here
       c->mem_w16(base, 0);                        // returned (jr ra sentinel): task ended -> free
       c->game->sched.task_started[i] = 0;
     }

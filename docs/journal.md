@@ -46,6 +46,18 @@ the overlay/level CONTENT it loads."
   AUTO in stage_scan_overlay. **VERIFIED RAM 0-diff @ f650 AND f1000.** This is the entry point for owning
   the loop ITSELF; the loop body + handler dispatch (all 3 handlers already native) + the FUN_80051f80 yield
   still run as the resumed task-0 coroutine.
+- **FIX — the prologue override was DEAD; made it LIVE via task-entry-override firing.** Caught by re-
+  examining the mechanism: `native_scheduler_step` enters a fresh task via `rec_coro_run(c, entry)` →
+  `interp_flat` starts interpreting AT the entry pc, and interp_flat only fires overrides on a control
+  transfer INTO an address (never at its start pc), and nothing `jal`s a task entry — so `ov_game_stage_main`
+  (registered at the task entry 0x8010637C) NEVER fired. The 0-diff "verification" was fooled by the
+  override being FAITHFUL (interpreted prologue == native prologue). FIX (native_boot.cpp): on a FRESH entry
+  (not a resume — a resume's saved pc is deep guest code that must be interpreted), look up the entry
+  override and invoke it as a native call, then continue interp_flat at its `coro_redirect_pc` (or ra). Now
+  `ov_game_stage_main` ACTUALLY runs (confirmed: `PSXPORT_DEBUG=stage` prints "ov_game_stage_main: prologue
+  run") AND RAM 0-diff @ f650/f1000 holds. This is also the general mechanism for owning ANY task entry.
+  LESSON: a faithful override registered where it's never invoked passes the A/B gate while doing nothing —
+  always confirm the override FIRES (debug log / a deliberate divergence), not just that RAM matches.
 - **NEXT:** (a) Own the loop BODY/yield (native_scheduler_step "one stage-iter per frame") — the real
   obstacle is the byte-faithful content-interface gate: the handlers' saved ra/stack are tied to the guest
   loop trampoline, and deep-yield resume needs interp_flat. Delicate core-scheduler change; A/B-gate every
