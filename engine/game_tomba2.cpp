@@ -242,8 +242,10 @@ static void ov_unpack_group(Core* c) {
   // unpacker reads it, sequence-numbered, so it can be checked against the disc / oracle exactly.
   { const char* dd = cfg_str("PSXPORT_UNPACKDUMP");
     if (dd) { static int seq = 0; char p[300]; snprintf(p, sizeof p, "%s/unpack_%03d_c%d.bin", dd, seq++, count);
-      FILE* uf = fopen(p, "wb"); if (uf) { 
-        fwrite(&c->ram[table & 0x1FFFFF], 1, 0x30000, uf); fclose(uf);
+      FILE* uf = fopen(p, "wb"); if (uf) {
+        // Dump from the staging base to the end of RAM (archives can be up to ~0x76000 from 0x8018A000).
+        uint32_t off = table & 0x1FFFFF, len = 0x200000u - off;
+        fwrite(&c->ram[off], 1, len, uf); fclose(uf);
         fprintf(stderr, "[unpack] dumped live input -> %s (table=0x%08X count=%d)\n", p, table, count); } } }
   for (int32_t i = 0; i < count; i++) {
     const uint32_t desc   = entry;

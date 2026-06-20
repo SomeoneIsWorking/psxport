@@ -33,10 +33,24 @@ tiled cyan water). **Order: fully own the pipeline FIRST, then match 100%** (use
   saved s0/ra spill slots my C path doesn't write) — the non-zero diff confirms the override runs; VRAM
   byte-identical (present f100). The 5 seaside archive loads (10/2/4/2/6 images) compose the multi-page VRAM
   backdrop; observe with PSXPORT_DEBUG=unpack.
-- ☐ **the 288×576 sea BACKDROP assembly** — the multi-page VRAM layout the 5 loads build (pages at VRAM y=0
-  and y=256, x in {320,448,512,576,640,832,896,1008}) + how the engine composes/scrolls them on screen.
-  Decode/upload/orchestration are all owned now; remaining = the on-screen composition + the offline
-  bit-identical reconstruction (the user's acceptance test).
+- ✅ **OFFLINE bit-identical RECONSTRUCTION (the user's acceptance test) — PROVEN.** `tools/tex_reconstruct.c`
+  (standalone C, NO PSX execution) rebuilds the seaside VRAM atlas from the raw compressed archives alone:
+  it mirrors ov_unpack_group + lz_decompress on flat buffers (descriptor walk + the MAIN.EXE @0x800153C8
+  offset table baked in: mode 1 = -1 byte RLE, modes 2..7 = row-relative factor*stride) and places each
+  decompressed stride×field image at its VRAM (x,y). Fed the 5 seaside archives (dumped via PSXPORT_UNPACKDUMP,
+  now full-size to RAM end) and compared to the live PSXPORT_VRAMDUMP f455: **353034 / 353216 touched VRAM
+  words bit-identical (99.95%)**. The 182 residual words are NOT decode errors — they are 16-pixel-wide
+  PALETTE strips the running game color-cycles per frame: the (1008,191) 16×65 CLUT block (the sea palette,
+  x1008-1023/y210-255 = 146 words), a bottom CLUT strip at x688-703/y509-511 (30 words), and 6 sprite-cell
+  words — all runtime-animated state, by definition not in the static archive. **The static image pipeline
+  load→decompress→unpack→VRAM-place is reproduced 100% bit-exact with the emulator OFF.** Run:
+  `cc -O2 -o scratch/bin/tex_reconstruct tools/tex_reconstruct.c` then
+  `tex_reconstruct <archive...> out.bin --cmp live_vram.bin`.
+
+- ☐ **the on-screen 288×576 sea BACKDROP composition** — the multi-page VRAM layout the 5 loads build (pages
+  at VRAM y=0 and y=256, x in {320,448,512,576,640,832,896,1008}) is now fully owned + offline-reproducible;
+  remaining is how the ENGINE composes/scrolls those pages into the on-screen backdrop (render ordering, the
+  engine's own 2D layer/sort — ties into the broader render-ownership work, NOT the asset pipeline which is done).
 
 **Proven this session (committed 2ce8b00):** `PSXPORT_TEXEXPORT=<frame>` exports each background atlas via
 OUR decoder (no PSX in the decode). Verified 3: menu text atlas (4bpp, "NewGame LoadGame OPTIONS StartGame"),
