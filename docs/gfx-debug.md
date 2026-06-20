@@ -1,81 +1,65 @@
-# Graphics debugging — toolbox + MANDATORY workflow (Tomba!2 port)
+# Graphics debugging — workflow + tools (Tomba!2 port)
 
 _Committed canonical copy of the `gfx-debug` skill (`.claude/` is gitignored). Keep both in sync._
-_Exists because a session LOST TRACK of `gpu_differ` and reinvented a worse screenshot tool. Read this
-FIRST before debugging any rendering issue, and before building any new comparison tooling._
+_Read this FIRST before debugging any rendering issue._
 
-## THE WORKFLOW IS NOT OPTIONAL — render-level diff FIRST, eyeball LAST
+## The methodology (2026-06-20): the engine OWNS its render — verify on the LIVE game
 
-For ANY "something renders wrong" problem (water, fade, corruption, color, geometry), the order is:
+There is **no oracle and no render-diff tool anymore** (the Beetle reference emulator + `gpu_differ` +
+all the compare scripts were removed by user directive). The engine OWNS its world, projection, and
+render ordering PC-native — so there is nothing PSX to diff against. A "renders wrong" bug is found by
+inspecting **the running port**, not by replaying a GP0 stream through a second renderer.
 
-1. **Rendering-level diff FIRST — `gpu_differ` (ours vs Beetle on the IDENTICAL GP0 stream).** This is
-   the primary tool. It captures the exact GP0 word stream + start VRAM for a frame and replays it
-   through BOTH our rasterizer and Beetle's GPU, then diffs the output VRAM. Any difference is a pure
-   rasterizer-fidelity bug (blend/modulation/dither/edge/copy) with **no game-state alignment needed**.
-   This is the truest "synced comparison" — same input to both renderers. USE THIS, do not screenshot.
-2. **Game-state / GP0-stream inspection** if the diff is clean (→ the bug is in WHAT we draw, not how):
-   `PSXPORT_SCENEDUMP` (classified per-frame display list), `PSXPORT_PROVAT` (which prim drew a pixel),
-   `PSXPORT_GTEPROBE` (GTE op/lighting/projection), `PSXPORT_POLYDUMP`/`POLYAT`.
-3. **Eyeball a screenshot ONLY when stuck** after 1–2 — i.e. when the render-diff is clean and the
-   state-inspection didn't localize it, and you genuinely need a human (the user) to judge. Eyeballing
-   and whole-frame pixel-diffing are LAST RESORTS, never the first move. They hid the water bug for a
-   whole session (stills "looked fine"; the user saw it broken). Never conclude from a still alone.
+For ANY "something renders wrong" problem (water, fade, corruption, color, geometry, order):
 
-**Corollary:** do NOT compare the port and oracle by running them to a frame number / latch and
-screenshotting — their boot timing and attract demos DRIFT, so the states differ. `gpu_differ` removes
-that variable. (`tools/dualcore.py` state-sync is fragile — see Limits.)
+1. **Inspect the LIVE game's render state** — drive the port to the scene via the REPL, then use the
+   diagnostic channels (enabled at runtime with the `debug <chan>` REPL/debug-server command — NOT an
+   env var) and the on-demand inspection commands:
+   - `debug scene` — classified per-frame display list (poly/rect/fill/VRAM-copy/env counts, fade/copy
+     details). Live debug server: `scene` (on-demand `gpu_scene_dump`).
+   - `debug gte` — GTE ops + lighting/fog/projection control regs.
+   - live debug server `provat x y` — which prim (op/clut/texpage/node) last wrote a displayed pixel.
+   - live debug server `vkvram x y w h <path>` — read back an arbitrary VK VRAM region to a PPM (verify
+     a texture/CLUT page is actually where the sampler expects it).
+   - `debug fade` / `debug semi` — fade brightness / semi-transparent prim blend+bbox details.
+2. **Build it and have the USER eyeball.** The agent CANNOT self-verify a render — it builds, captures a
+   headless screenshot (`PSXPORT_VK_HEADLESS=1` + the REPL `shot <path>` command, VK-readback PPM), and
+   asks the user (who is at a Mac and can eyeball pics / pull a push). NEVER conclude a render is correct
+   from a single still you looked at — stills hide bugs (water "looked fine" while the user saw it
+   broken). The user is the visual authority.
 
-**Corollary 2 (hi-res/wide present): overrides-OFF is NOT a valid "correct" baseline.** At ires≥2 the
-faithful/overrides-OFF path (`PSXPORT_FAITHFUL_DEPTH`) never sets `s_seen3d`, so `frame_via_fb()` is false
-and it presents plain **4:3 from VRAM (320×224)** — a DIFFERENT render path from the hi-res **scratch FB**
-(640×480, only taken with native depth = overrides ON). Comparing them is path-vs-path, not geometry-vs-
-geometry. To isolate a hi-res bug: compare overrides-ON @ires=1 (correct, non-FB) vs @ires=2 (the scratch-FB
-path), and use `PSXPORT_VK_FULLSHOT` to see the FB region directly. (This is how later-142's hi-res garble
-was traced to a shader bug — the semi-blend destination read masked y to 0..511 and so read the texture
-atlas instead of the scratch FB at rows 512+ — NOT the override system the handoff blamed.)
+**The engine owns ordering — never re-sync with the PSX.** If something draws in the wrong order (e.g. a
+background painted over the scene), the fix is to give the engine the correct ordering RULE (its own
+depth buffer for 3D, its own 2D layer/sort for backgrounds/HUD) — NOT to read the PSX OT / GP0 order /
+z-otz. There is no PSX draw order to consult anymore.
 
-## IMPROVE THE TOOLS WHEN THEY FALL SHORT — do not hand-grind or reinvent
+## Capturing a screenshot to send the user (headless, no display)
+```
+printf 'newgame\nskip 200\nrun 60\nshot scratch/screenshots/x.ppm\nquit\n' \
+  | PSXPORT_VK_HEADLESS=1 PSXPORT_REPL=1 PSXPORT_NOAUDIO=1 scratch/bin/tomba2_port scratch/bin/tomba2/MAIN.EXE
+# convert + send: magick/convert x.ppm x.png, then SendUserFile
+```
+`newgame` pulses to the GAME prologue; `skip N` advances the intro into the field; `run N` steps N
+frames; `shot` reads back the VK image over the display region (works headless). Drive elsewhere with
+`press`/`release`/`tap <btn>` + `run`.
 
-If a tool can't answer the question, **extend the tool**, don't grind it by hand and don't build a
-parallel worse one. Before writing new tooling, grep this file + `tools/` for what exists. When you add
-or fix a capability, update this doc + the skill in the same change. (Global rule "build tools, don't
-re-reason"; this is its project-specific enforcement.)
-
-## The toolbox (so you stop losing track)
+## The render toolbox (what's left)
 
 | Tool | What it does | Invoke |
 |------|--------------|--------|
-| **`tools/gpu_differ/`** | **PRIMARY render diff.** GP0-stream replay: ours vs Beetle, pixel-exact VRAM diff. `README.md` there. | capture `PSXPORT_GPUTRACE="F[:path]"`; `bash tools/gpu_differ/build.sh` → `scratch/bin/replay_ours trace out.vram`; oracle `wide60rt <chd> -bios scratch/bios -gpureplay trace beetle.vram`; `tools/gpu_differ/diff.py ours.vram beetle.vram --region x,y,w,h` (try both buffers 0,0 and 0,256) |
-| `tools/drive.py` | Interactive single-core driver (port OR oracle) over a FIFO. run/r/rw/watch/shot/dumpram/stage/tap. | `drive.py start native\|oracle`; `drive.py send "run 60" "stage"` |
-| `tools/dualcore.py` | Runs port+oracle, syncs on a guest-RAM latch (default 0x800BE258==2 scene-active). **LIMITED** (see below). | `dualcore.py start; sync; step N; shot NAME` |
-| `PSXPORT_SCENEDUMP=F` | Native classified display list for frame F (poly/rect/fill/VRAM-copy/env counts + fade/copy details). gpu_native.c. | env on any run |
-| `PSXPORT_PROVAT="x,y"` | Per-pixel primitive provenance: which prim (op/clut/texpage/node) last wrote a displayed pixel. gpu_native.c. | env |
-| `PSXPORT_GTEPROBE=F` | GTE ops executed + lighting/fog/projection control-reg snapshot. gte_beetle.c. | env |
-| `PSXPORT_POLYDUMP=F` (+`POLYAT=x,y`) | Log every poly/sprite at frame F (optionally only those covering a point). gpu_native.c. | env |
-| `PSXPORT_FADEDBG="a:b"` | Per-frame over [a,b]: max prim brightness, SEMI prim colour range, full-screen-semi count (`bigsemi`), disp + draw origin. Renderer-independent (same tee under SW/VK) → settles "is the bright frame in the GP0 or invented by VK?". gpu_native.c. | env |
-| `PSXPORT_SEMIDUMP=F` | Log each SEMI prim at frame F: blend mode (0=avg,1=add,2=sub,3=add/4) + colour + bbox + draw-Y. Found the stacked subtractive fade tiles behind the intro fade flash. gpu_native.c. | env |
-| state capture | **port:** `dumpram`, transplant `PSXPORT_TRANSPLANT="F:ram:vram"`, `gpu_vram_load`. **oracle:** `dumpram`, `dumpvram` (REPL), `-loadstate`/`-savestate`, `PSXPORT_VRAMDUMP`, `PSXPORT_FRAMEDUMP`. | REPL / env |
-| screenshots | port `shot PATH` (SW) or `PSXPORT_VK_SHOT=F` → `scratch/screenshots/vk_live.ppm` (VK); oracle `shot PATH`. | LAST-RESORT visual only |
-| `PSXPORT_VK_FULLSHOT=F` | Dump the ENTIRE VK panel image (`1024×IMG_H`): VRAM rows 0..511 + the hi-res/wide **scratch FB** at rows 512+. THE tool for hi-res/widescreen present bugs — shows exactly where `push_wide`-relocated geometry landed (the normal present only samples the FB region). gpu_vk.cpp. | env → `scratch/screenshots/vk_full.ppm` |
-| **live debug server** | **NON-BLOCKING** TCP server (`runtime/recomp/dbg_server.c`) — inspect the port WHILE the user plays live (windowed), unlike the blocking `PSXPORT_REPL` FIFO. Commands serviced on the main thread once/frame. `r`/`rw`/`stage`/`scene` (on-demand `gpu_scene_dump`)/`provat x y` (on-demand `gpu_provat_display`)/`shot [path]`/`gputrace [path]` (arm a gpu_differ capture of the next frame)/`sbs [0\|1]` (VK-vs-SW side-by-side present)/`frame`. | run with `PSXPORT_DEBUG_SERVER=1` (port 5959); drive with `tools/dbgclient.py <cmd...>` or interactively (`tools/dbgclient.py`) |
+| **REPL `shot <path>`** | VK-readback of the presented region to a PPM (works headless). The way to capture a frame for the user. | piped REPL command |
+| **`debug <chans>`** | Enable diagnostic channels at runtime (scene/gte/fade/semi/provat/objz/ndepth/…) — replaces the old per-flag env vars. | REPL or debug-server command |
+| **live debug server** | NON-BLOCKING TCP server (`runtime/recomp/dbg_server.c`) — inspect the port WHILE the user plays live (windowed). `r`/`rw`/`stage`/`scene`/`provat x y`/`vkvram`/`shot`/`debug <chan>`/`frame`. | `PSXPORT_DEBUG_SERVER=1` (port 5959); `tools/dbgclient.py <cmd...>` |
+| `PSXPORT_VK_HEADLESS=1` | Offscreen VK (no window/display) — deterministic; the basis of the headless screenshot. | env (run mode, not a behavior gate) |
+| `tools/disas.py <addr> [--ram dump]` | MAIN.EXE / overlay disassembly with resolved load/store addrs — read the recomp reference body before reimplementing an engine fn. | CLI |
 
-## Honest tool limits (fix these when they block you — don't work around by eyeballing)
-- **`gpu_differ`/oracle replay needs Beetle SW @ 1x** (flat VRAM). Don't set `PSXPORT_INTERNAL_RES`.
-- **`dualcore.py` sync is weak:** it advances each core to a latch SEQUENTIALLY; the attract demos are not
-  frame-locked so they DRIFT, and the latch can catch a black load frame. State-transfer (transplant)
-  was tried but RAM-only transfer is fragile (CPU regs/PC not transferred → port resumes its own path,
-  showed stale SCEA). If you need true game-state sync, the route is a FULL savestate transfer or the
-  gpu_differ stream replay (preferred). **Improve dualcore or prefer gpu_differ — do not fall back to
-  eyeballing drifted screenshots.**
-- VK widescreen FB has a known 1x rasterization-gap (vertical bars); clean at SS=2. Separate from game.
-- **`replay_ours` links `gpu_native.c` standalone — keep its stub set in sync.** `gpu_native.c` keeps
-  growing external refs (native_dl, projprim/native-depth, VK depth/order hooks, trace, cfg, scene/prov
-  dumps); the differ runs the SW rasterizer only (`gpu_vk_enabled()==0`) so they just need to LINK.
-  `tools/gpu_differ/build.sh` now also compiles `engine/native_dl.c` with `-Iengine`, and
-  `replay_ours.c` stubs the cfg/projprim/VK/trace symbols. New link error after a `gpu_native.c` change
-  → add the stub there (it is NOT reached in replay), don't disable the diff.
-- **Native-ordering era (later-139+): capture 3D with `PSXPORT_DL_GUESTPKT=1`.** Owned 3D submitters now
-  build the HOST display list, not guest GP0 — so a plain `PSXPORT_GPUTRACE` has `poly=0` (only guest 2D
-  prims). `PSXPORT_DL_GUESTPKT=1` makes the submitters write full guest packets back into the OT stream
-  so `gpu_differ` sees the 3D geometry. (Used later-141 to prove the rasterizer faithful on the ocean
-  scene: ours-vs-Beetle = 0.76% / all d=3 dither residual.)
+## Visual settings (widescreen / hi-res / SSAO / lighting / 60fps)
+These are NOT env vars — they default OFF and are toggled live in the **F1 imgui overlay**, persisted to
+`psxport_settings.ini` (gitignored), restored next launch (`runtime/recomp/mods.c`, `mods.h`). To
+reproduce a user's look, set the relevant keys in `psxport_settings.ini` before launching. NB SSAO/light
+currently have a known bug hiding some transparent surfaces (puddles/water) — see the journal.
+
+## Honest limits
+- **You cannot self-verify a render.** The user is the visual authority — build, send a pic, ask.
+- Headless `shot` captures the display region (`s_disp_*`); for a widescreen run the wider FB content is
+  rendered but the shot crops to the display width — note this when capturing widescreen.

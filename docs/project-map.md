@@ -8,16 +8,21 @@ This is the map. Keep it current when the layout changes.
 |------|---------|--------|
 | Build+run the **port** (full) | `./run.sh [disc.chd]` | `scratch/bin/tomba2_port` (then runs) |
 | Rebuild the **port** (incremental, no run) | `tools/build_port.sh [files… \| all]` | `scratch/bin/tomba2_port` |
-| Build the **oracle** (Beetle reference) | `make -C runtime` | `runtime/wide60rt` |
-| Drive the port or oracle interactively | `tools/drive.py start native\|oracle` … | — |
+| Drive the port interactively (REPL) | `PSXPORT_REPL=1 scratch/bin/tomba2_port …` (commands on stdin) | — |
 | Inspect BGM/libsnd state of a RAM dump | `tools/bgm.py dump <ram>` | — |
 | **Disassemble** a MAIN.EXE engine fn (resolves load/store addr + WIDTH) | `tools/disas.py <addr> [--mem]` | — |
 
-- **`make` builds the ORACLE, not the port.** The port has no Makefile (see CLAUDE.md "TWO binaries").
+- **There is ONE binary: the native port** `scratch/bin/tomba2_port`. `make` builds nothing now
+  (the old oracle Makefile is gone); the port has no Makefile (built by run.sh / build_port.sh).
 - `tools/build_port.sh` keeps a `scratch/obj/` object cache; one changed file relinks in ~0.5s.
   Its SRC list must mirror `run.sh` step 4 — add new `engine/*.c` or `runtime/recomp/*.c` to **both**.
-- `tools/drive.py` does NOT build. Build first, then drive. It sets `PSXPORT_NO_FMV=1`,
-  `PSXPORT_BGMDBG=1`, headless (`PSXPORT_NOWINDOW`/`NOAUDIO`) by default; pass `headed` for a window.
+- **Drive the game with the REPL** (`PSXPORT_REPL=1`, commands piped on stdin), not env vars:
+  `run N`, `newgame` (pulse to the GAME prologue), `skip N` (pulse Start N frames into the field),
+  `press`/`release`/`tap <btn>`, `r`/`rw`/`w` (memory), `dumpram <path>` (+ `.spad` scratchpad
+  sidecar), `shot <path>` (VK-readback PPM, works headless), `debug <chans|all>` (enable diagnostic
+  channels at runtime — replaces the `PSXPORT_DEBUG` env var), `stage`, `regs`, `seq`, `quit`.
+  Headless render for screenshots: `PSXPORT_VK_HEADLESS=1` (offscreen VK). The live TCP debug server
+  (`PSXPORT_DEBUG_SERVER=1`, `tools/dbgclient.py`) has the same commands for a windowed run.
 
 > **For WHAT'S PORTED and the execution-order frontier, see `docs/port-progress.md` (the source of truth).**
 > This section is the FILE map — what lives where. The two are kept in sync. The codebase is **C++** now
@@ -49,8 +54,7 @@ This is the map. Keep it current when the layout changes.
 automation + diagnostics — 694 lines, split candidate**), `sync_overrides.cpp`, `watchdog.c`, `stubs.cpp`,
 `cfg.c` (the `PSXPORT_*` config + `PSXPORT_DEBUG=chan` channels), `mods.c`.
 **GPU/present:** `gpu_native.cpp` (GP0/GP1, VRAM, packet pool — 1544 ln), `gpu_vk.cpp` (Vulkan backend + present —
-1746 ln) + `gpu_vk_shaders.h`/`gpu_vk_internal.h`, `gpu_native_internal.h`, `gpu_trace.cpp`/`gpu_debug.cpp`
-(GP0 capture/replay = the `gpu_differ`), `imgui_overlay.cpp`.
+1746 ln) + `gpu_vk_shaders.h`/`gpu_vk_internal.h`, `gpu_native_internal.h`, `gpu_debug.cpp`, `imgui_overlay.cpp`.
 **Audio:** `spu_beetle.c` (Beetle spu.c mixer lift), `spu_audio.c` (SDL sink + PSXPORT_WAV), `xa_stream.c`
 (in-game XA-ADPCM streaming).
 **CD/disc:** `cd_override.cpp` (libcd/engine read primitives → native), `cdc_native.c`, `disc.c` (libchdr),
@@ -58,20 +62,18 @@ automation + diagnostics — 694 lines, split candidate**), `sync_overrides.cpp`
 **Hardware lifts (vanish when their CALLERS are ported, NOT by re-emulating):** `gte_beetle.cpp` (Beetle gte.c),
 `mdec_beetle.c` (mdec.c), `native_fmv.cpp` (STR/MDEC FMV + shared XA decoder), `pad_input.cpp`.
 
-## `runtime/` (root: main.cpp, Makefile, wide60*) — the Beetle ORACLE frontend (NOT the port)
-`make -C runtime` builds `runtime/wide60rt`, the reference emulator. Separate from the port; slated to move out.
-
 ## Tools, generated, vendor
-`tools/` — `recomp/emit.py` (recompiler), `disas.py` (MAIN.EXE disasm), `drive.py` (diff driver), `gpu_differ`,
-`build_port.sh`, bgm/frame tooling. `generated/` — recompiled MAIN.EXE `shard_*.c` (gitignored, run.sh rebuilds).
-`vendor/beetle-psx` (committed GPL fork), `vendor/imgui`.
+`tools/` — `recomp/emit.py` (recompiler), `disas.py` (MAIN.EXE disasm), `dbgclient.py` (debug-server REPL
+client), `build_port.sh`, bgm/frame tooling. `generated/` — recompiled MAIN.EXE `shard_*.c` (gitignored,
+run.sh rebuilds). `vendor/beetle-psx` (committed GPL fork — the port's GTE/MDEC/SPU/CHD **hardware backend**,
+NOT a reference emulator), `vendor/imgui`.
 
 ## ORGANIZATION conventions + known DEBT
 - **One module per SYSTEM, named for the system** (`engine_camera.cpp`, not `native_path_a3.cpp`). New ported
   systems get their own `engine/<system>.cpp`. Name functions `ov_<what_it_does>`, not `ov_<hexaddr>`.
 - **Keep files focused; ~400–500 lines is the soft cap for a mixed-responsibility file.** Cohesive
   single-responsibility backends (gpu_vk, gpu_native) may be larger.
-- **Known debt (fix incrementally; don't churn working A/B-verified code all at once):**
+- **Known debt (fix incrementally; don't churn working, verified code all at once):**
   1. `engine/native_path*.cpp` (9 files, ~2600 ln) — legacy 1:1 transcription of the boot path with
      `ov_<hexaddr>` names split into arbitrary "batches" a1/a2/b3. SUPERSEDE as the top-down port reaches each
      subsystem: replace a cluster with a named module, delete its entries. Do NOT mass-rename for its own sake.
@@ -102,19 +104,31 @@ Decodes CD-XA from the ReadS-streamed sectors and feeds the SPU's CD-audio input
 self-paces to realtime). `xa_decode_sector()` lives in `native_fmv.c`. The SPU mixes XA only when
 the game enabled CD audio; sequenced (libsnd) BGM is a SEPARATE working path. Debug: `PSXPORT_XA_DBG=1`.
 
+## Verifying a change — run the PC game and observe it
+There is **no oracle to diff against** and no automated A/B gate. The PSX recomp body is still the
+behavioral REFERENCE you READ when reimplementing an engine function, but you do NOT diff a running
+oracle. To verify:
+- **Engine / render work:** run the game (`./run.sh`, or `PSXPORT_VK_HEADLESS=1` + REPL `shot` for a
+  headless screenshot) and observe it. The USER verifies visually; the agent builds, sends pics, and
+  inspects state via the REPL / debug server.
+- **Content-interface correctness** (guest RAM the PSX AI/physics read): inspect that RAM via the REPL
+  (`r`/`rw`/`dumpram`, with the `.spad` scratchpad sidecar) and reason about correctness from the recomp
+  reference + the live game — there is no automated RAM-diff gate anymore.
+- **Principle:** don't conclude from a cherry-picked still; verify on the running game.
+
 ## Rendering, present, and config — see the dedicated docs
-- **`docs/render-arch.md`** — the GP0→screen path, SW vs VK rasterizer split, the present dispatch
-  (`blit_src`→`gpu_vk_present`), headless **offscreen VK** (`PSXPORT_VK_HEADLESS`), the depth model
-  (OT-order default vs `PSXPORT_NATIVE_DEPTH` real per-vertex depth), and the VK render-diff tool
-  `tools/vk_depth_diff.sh`. Read before touching graphics/VK.
-- **`docs/config.md`** — the `cfg` module (`cfg_on/cfg_int/cfg_str/cfg_dbg`); ALL diagnostics are now the
-  single `PSXPORT_DEBUG=chan,chan` var (channel table + old→new map). Don't add raw `getenv("PSXPORT_…")`.
-- **`docs/driving-the-game.md`** — how to DRIVE the port to a scene: pad button bits, the automation flags
-  (`AUTO_GAMEPLAY`/`AUTO_NEWGAME`/`FORCE_*`), the live debug server (`tools/dbgclient.py`), scene-state
-  signals, and the headless-120-frame-cap / `pkill -f` gotchas. Read before driving the game.
+- **`docs/render-arch.md`** — the GP0→screen path, the VK rasterizer + present dispatch
+  (`blit_src`→`gpu_vk_present`), headless **offscreen VK** (`PSXPORT_VK_HEADLESS`), and the depth model.
+  Render is ONE PC-native behavior: native per-pixel depth is ALWAYS on (no faithful/OT-order toggle),
+  single VK panel, the render queue owns ordering. Read before touching graphics/VK.
+- **`docs/config.md`** — the `cfg` module (`cfg_on/cfg_int/cfg_str/cfg_dbg`). Diagnostics are REPL-driven:
+  set the unified `PSXPORT_DEBUG` channel set at runtime via the REPL / debug-server `debug <chans>`
+  command (`cfg_dbg_set`). Don't add raw `getenv("PSXPORT_…")`.
+- **`docs/driving-the-game.md`** — how to DRIVE the port to a scene via the REPL (`PSXPORT_REPL=1`,
+  `newgame`/`skip`/`press`…), the live debug server (`tools/dbgclient.py`), and scene-state signals.
+  Read before driving the game.
 
 ## Where state/notes live
 - `docs/journal.md` — chronological findings + dead ends (read the head before re-deriving).
-- `docs/diff-driver.md` — the drive.py/bgm.py oracle-comparison workflow (committed copy of the skill).
 - `<local-notes>/.../memory/MEMORY.md` — cross-session pointers (machine-local; in-repo docs are canonical).
 - `scratch/` — gitignored artifacts by type (`bin/ wav/ screenshots/ raw/ logs/ state/`). Never `/tmp`.

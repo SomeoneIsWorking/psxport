@@ -73,19 +73,18 @@ the guest entity structs as the source of truth.
 
 **PORT PROGRESS TRACKER — `docs/port-progress.md` — READ THIS FIRST, every session.** It is the single
 source of truth: the boot→gameplay execution SPINE with per-function status (owned/partial/todo), the
-"how to own a function" LOOP, the standard A/B RAM-diff VERIFY recipe, and the CURRENT FRONTIER. We port the
+"how to own a function" LOOP, the REPL-driven VERIFY recipe, and the CURRENT FRONTIER. We port the
 engine TOP-TO-BOTTOM in execution order — advance the frontier, don't cherry-pick. UPDATE it (status + the
 journal) in the SAME commit whenever you own a function, so the next session doesn't re-derive what's done.
 
 Active plan: `<local-notes>/plans/fancy-tinkering-kite.md`. Engine RE: `docs/engine_re.md` (read first).
 Findings/dead-ends: `docs/journal.md`. Project map / build cheat-sheet: `docs/project-map.md`.
-**Render/present pipeline (SW vs VK, depth, headless offscreen VK, the VK render-diff tool):
-`docs/render-arch.md`. Config & debug flags (the `cfg` module + the single `PSXPORT_DEBUG=chan` var —
-do NOT add raw `getenv`): `docs/config.md`. How to DRIVE the game (input/automation/debug-server/
-reaching a scene): `docs/driving-the-game.md`.** Read these before touching graphics, adding a flag, or
-driving the game — don't re-derive them.
+**Render/present pipeline (VK renderer, native depth, headless offscreen VK): `docs/render-arch.md`.
+Config & the `cfg` module (do NOT add raw `getenv`; diagnostics are REPL channels via `debug <chan>`,
+NOT env vars): `docs/config.md`. How to DRIVE the game (the REPL, reaching a scene): `docs/driving-the-
+game.md`.** Read these before touching graphics or driving the game — don't re-derive them.
 **Graphics/render debugging: `docs/gfx-debug.md` (skill `gfx-debug`) — READ FIRST before any rendering
-bug or comparison tooling; it has the tool catalog + the mandatory render-diff-first workflow.**
+bug; the engine OWNS its render (no oracle to diff against), so verify on the LIVE game + USER eyeball.**
 
 ## Repo structure — framework vs game (N64Recomp model, boundary-first)
 End state (like N64Recomp/Zelda64Recomp): a **generic, reusable PSX→PC framework** as a submodule, and
@@ -99,44 +98,55 @@ one build, then extracting the common PSX part into its own repo (gh authed as `
   PSX hardware natives (gpu_native, spu_*, gte_beetle, mdec_beetle, cdc_native, disc, pad_input,
   memcard), and the CD/XA/FMV subsystems (cd_override, xa_stream, native_fmv — generic mechanisms with
   game-tunable hooks; their game-specific bits get hooked out as the boundary firms up).
-- `runtime/` (root: main.cpp, wide60.cpp/h, Makefile) — the **Beetle oracle** frontend (separate from
-  the port). Also slated to move out of `runtime/` into its own home during the cleanup.
-- `tools/` — recompiler (`recomp/emit.py`), `discdump`, `drive.py` (diff driver), bgm/frame tooling.
+- `tools/` — recompiler (`recomp/emit.py`), `discdump`, `disas.py`, `dbgclient.py`, bgm/frame tooling.
 - `generated/` — recompiled Tomba! 2 MAIN.EXE (`shard_*.c`); gitignored, rebuilt by run.sh.
-- `vendor/beetle-psx` — our committed Beetle PSX fork (GPL-2), submodule. `docs/`, `patches/`,
-  `common/` (.env reader), `scratch/` (gitignored artifacts by type — **never /tmp**, RAM tmpfs ~6 GB).
+- `vendor/beetle-psx` — our committed Beetle PSX fork (GPL-2), submodule. **It is the port's GTE/MDEC/
+  SPU/CHD HARDWARE BACKEND** (the port links mednafen `gte.c`/`mdec.c`/`spu.c` + libchdr) — NOT a
+  reference emulator. Cutting it off Beetle = porting those subsystems native (a standing long-term
+  goal, not a deletion). `scratch/` = gitignored artifacts by type (**never /tmp**, RAM tmpfs ~6 GB).
 
-## TWO binaries — do not confuse them (trips up every fresh session)
-- **The native PORT — `scratch/bin/tomba2_port` — IS THE THING UNDER TEST.** Recompiled MAIN.EXE
-  (`generated/shard_*.c` from `tools/recomp/emit.py`) linked with the native engine (`engine/*.c`) +
-  the PSX platform (`runtime/recomp/*.c`). **NO Makefile builds it.**
+## ONE binary — the native port (no oracle anymore)
+- **The native PORT — `scratch/bin/tomba2_port` — IS THE GAME.** Recompiled MAIN.EXE (`generated/
+  shard_*.c` from `tools/recomp/emit.py`) linked with the native engine (`engine/*.cpp`) + the PSX
+  platform (`runtime/recomp/*`). **NO Makefile builds it; `make` builds nothing now.**
     - `./run.sh [disc.chd]` — full: extract MAIN.EXE, recompile, compile every TU, link, **and run**.
     - `tools/build_port.sh [files…|all]` — incremental compile+relink, no run (~0.5s/file). Object
-      cache `scratch/obj/`. **Keep its SRC list in sync with run.sh** when adding an `engine/*.c` or
-      `runtime/recomp/*.c` file.
-  Drive/observe with `tools/drive.py` (does NOT build). See `docs/diff-driver.md`.
-- **The ORACLE — `runtime/wide60rt`** — Beetle reference emulator, full emulation of the real disc,
-  used to validate the port. Built by **`make -C runtime`** (the only thing that Makefile builds — NOT
-  the port). Run: `runtime/wide60rt <chd> -bios <dir> -play` (OpenBIOS as scph5501.bin works).
+      cache `scratch/obj/`. **Keep its SRC list in sync with run.sh** when adding an `engine/*` or
+      `runtime/recomp/*` file.
+- **Drive/observe via the REPL** (`PSXPORT_REPL=1`, commands piped on stdin) or the live TCP debug
+  server (`PSXPORT_DEBUG_SERVER=1`, `tools/dbgclient.py`). Headless render for screenshots:
+  `PSXPORT_VK_HEADLESS=1`. Key REPL commands: `run N`, `newgame` (pulse to the GAME prologue), `skip N`
+  (advance the intro into the field), `press`/`release`/`tap <btn>`, `r`/`rw`/`w` (memory), `dumpram
+  <path>` (+ `.spad` scratchpad sidecar), `shot <path>` (VK-readback PPM, works headless), `debug
+  <chans|all>` (enable diagnostic channels at runtime), `stage`/`regs`/`seq`/`quit`. See
+  `docs/driving-the-game.md`.
+- **THE ORACLE IS GONE (2026-06-20).** There is no reference emulator in the repo — `runtime/wide60rt`
+  and all diff/compare tooling (gpu_differ, dualcore, drive.py, vk_depth_diff, …) were removed by user
+  directive ("we are past the harness point"). Do NOT look for them, re-create them, or describe the
+  port as validated against an oracle.
 
 ## Methodology — REIMPLEMENT the engine PC-native; the recomp is the reference + the content runtime
 Use `rec_set_override(addr, ov_fn)` to swap an engine function for a native C reimplementation while
-keeping the recomp body callable as the reference/super-call (A/B toggle). Determinism check first. The
-game stays playable at every step (un-ported engine functions + ALL content/logic keep running as recomp).
+keeping the recomp body callable as the reference/super-call. Determinism check first. The game stays
+playable at every step (un-ported engine functions + ALL content/logic keep running as recomp).
+**ONE PC-native behavior — no env A/B gating.** Do NOT add a `PSXPORT_*` toggle to A/B a new native path
+against the old one "until verified"; make it the behavior and verify by running the game (see below).
 
 **Two different gates — pick by WHICH side of the boundary you are on:**
 - **Engine reimplementation → gate on the OBSERVABLE RESULT, NOT a byte-match.** Reimplement the system
   the way a PC game would, then verify the *result*: the world/menu/scene it builds, the picture it
-  draws, and — critically — **the interface state the retained PSX content reads back is correct** (the
-  guest fields/structs the AI/physics consume). Do NOT gate the engine on reproducing the PSX body's
-  instructions/registers/packets byte-for-byte; that gate forces transcription, which is the wrong
-  deliverable (a byte-faithful native function is still PSX-simulation). "Looks/works like the reference"
-  + "the content still behaves" is the bar.
-- **Content interface (the guest RAM the PSX AI/physics read) → MUST match the reference.** Where the
-  engine writes state the PSX content consumes, those writes must be correct vs the reference, and a
-  divergence there is a real bug (RAM/state diff via `tools/drive.py` + the Beetle oracle). NB the main-
-  RAM A/B diff is BLIND to **scratchpad (0x1F800000)** and GTE regs — a wrong scratchpad write can
-  corrupt the PSX content invisibly (later-158: the terrain clobbered scratchpad → broke collision).
+  draws (the USER eyeballs a build — the agent builds + sends pics / asks), and — critically — **the
+  interface state the retained PSX content reads back is correct** (the guest fields/structs the AI/
+  physics consume). Do NOT gate the engine on reproducing the PSX body's instructions/registers/packets
+  byte-for-byte; that gate forces transcription, the wrong deliverable. "Looks/works like the running
+  game" + "the content still behaves" is the bar.
+- **Content interface (the guest RAM the PSX AI/physics read) → MUST be correct.** Where the engine
+  writes state the PSX content consumes, those writes must be right, and a divergence there is a real
+  bug. Inspect that guest RAM on the LIVE port via the REPL (`r`/`rw`/`dumpram`) and reason about
+  correctness from the recomp REFERENCE body — there is no oracle to auto-diff against. NB main RAM is
+  BLIND to **scratchpad (0x1F800000)** (use `dumpram`'s `.spad` sidecar) and GTE regs — a wrong
+  scratchpad write can corrupt the PSX content invisibly (later-158: terrain clobbered scratchpad →
+  broke collision).
 
 ### RENDER — the clearest case of "reimplement, don't transcribe"
 The renderer is part of the engine, so it follows the engine rule above. What the tree once called
@@ -155,8 +165,8 @@ packet. That is PSX-simulation, not a PC renderer. Instead:
   draw-order signal to decide what ends up on top. If something draws in the wrong order (e.g. a
   background painted over the scene), the fix is to give the engine the correct ordering rule, NOT to
   re-sync with what the PSX would have done.
-- The PSX render (recomp/interp) is the **VISUAL ORACLE only** — "what should the frame look like" — never
-  a byte-match target and never the source of draw order.
+- The PSX render is a **VISUAL REFERENCE only** (what the frame should roughly look like) — never a
+  byte-match target and never the source of draw order. There is no running oracle to diff against.
 - The engine may WRITE the guest interface state the PSX content reads (e.g. terrain sway/world data),
   but those writes must match the reference (see the content-interface gate above); it must NOT
   gratuitously clobber other guest/scratchpad state.
@@ -166,16 +176,17 @@ packet. That is PSX-simulation, not a PC renderer. Instead:
   value is documented with the RE that justifies it (see global "No bandaids").
 - **Single `main` branch**; verified milestones committed AND pushed to `origin`. (Remote is currently
   `github.com/SomeoneIsWorking/psxport.git`; will become Tomba2Engine + a psxport-framework submodule.)
-- **Verification = observed behavior on real gameplay, cited** (RAM/state probes preferred over
-  screenshots; diff against the oracle, never reason from the port alone).
-- **Rendering bugs: render-level diff FIRST, eyeball LAST.** For any "renders wrong" issue the order is
-  (1) `gpu_differ` — replay the captured GP0 stream through OUR rasterizer and Beetle and diff the VRAM
-  (pure rasterizer diff, no state alignment); (2) GP0/state inspection (`PSXPORT_SCENEDUMP`/`PROVAT`/
-  `GTEPROBE`); (3) eyeballing a screenshot / whole-frame pixel-diff ONLY as a last resort when stuck and
-  a human judgment is genuinely needed. Stills hide bugs (water "looked fine" while broken). NEVER
-  screenshot-compare port-vs-oracle by frame/latch — they drift. See `docs/gfx-debug.md`.
+- **Verification = observed behavior on the RUNNING port, cited** (drive it via the REPL; inspect guest
+  RAM/scene state with `r`/`rw`/`dumpram`; the USER eyeballs a build for render). There is no oracle —
+  reason about correctness from the recomp REFERENCE body + the live game, not an automated A/B diff.
+- **Rendering bugs: inspect the LIVE game, never conclude from a cherry-picked still.** The order is
+  (1) state/stream inspection on the running port — the `debug <chan>` channels (scene/provat/gte/…)
+  via the REPL or the live debug server (`scene`, `provat x y`, `vkvram`); (2) build it and have the
+  USER eyeball (the agent cannot self-verify a render — it builds, captures a headless `shot`, and
+  asks). There is NO gpu_differ / oracle to replay against anymore — the engine OWNS its render, so
+  there is nothing PSX to diff. Stills hide bugs (water "looked fine" while broken) — verify on the
+  running game, not one frame. See `docs/gfx-debug.md`.
 - **Improve the tools when they fall short — don't hand-grind or reinvent.** Grep `docs/gfx-debug.md` +
   `tools/` before building anything; extend the existing tool; update the doc + skill in the same change.
-  (A session lost track of `gpu_differ` and built a worse screenshot tool — this rule prevents that.)
 - Never commit CHDs or machine-specific paths. Disc: CLI arg > `PSXPORT_TOMBA2_DISC` (.env) > `*.chd`.
 - Beetle changes live in the committed fork (`vendor/beetle-psx`), NOT out-of-tree .patch files.

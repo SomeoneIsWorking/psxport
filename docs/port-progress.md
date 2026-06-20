@@ -20,35 +20,44 @@ Pointers (detail lives there, STATUS lives HERE): RE map `docs/engine_re.md`; fi
    `c->mem_r*/w*`, set `c->r[2]`. Register with `rec_set_override(0x<addr>, ov_<name>)` (or
    `rec_set_interp_override_auto` for OVERLAY fns, flushed on unload). Add the .cpp to BOTH `tools/build_port.sh`
    and `run.sh` SRC lists.
-5. **GATE (mechanical, never visual):**
-   - **CONTENT-INTERFACE fns (the guest RAM the still-PSX content/cull/render reads) MUST RAM-match.** A/B:
-     build override-ON, dump RAM; toggle it OFF, dump; `cmp -l` → **0**. Recipe in § VERIFY.
-   - **Pure ENGINE result fns:** gate on observable result (world built / picture / interface state), not a
-     byte-match — BUT if any retained PSX code reads the output, it's a content interface → RAM-match.
-   - **ALWAYS confirm the override actually FIRES** (a `cfg_dbg` log on entry). A faithful override registered
-     where it's never invoked passes the gate while doing nothing (later-170 trap).
+5. **VERIFY by RUNNING the game (see § VERIFY).** There is NO oracle to diff against and NO override-OFF
+   A/B build — env gating is banned (ONE PC-native behavior). Drive the live port through the REPL to the
+   scene that exercises the function, then check the result:
+   - **CONTENT-INTERFACE fns (the guest RAM the still-PSX content/cull/render reads):** inspect that RAM via
+     the REPL (`r`/`rw`/`dumpram`) and reason about correctness against the recomp REFERENCE you read while
+     porting. The output must be what the retained PSX content expects to read back; a wrong write corrupts
+     the content (e.g. native terrain made Tomba fall through the ground, later-158).
+   - **Pure ENGINE / RENDER result fns:** gate on the observable result — the world/menu/scene built and the
+     picture drawn. The USER eyeballs a build (the agent builds, runs, sends a `shot`, and asks).
+   - **ALWAYS confirm the override actually FIRES** (a `cfg_dbg` log on entry, enabled via REPL `debug`). A
+     faithful override registered where it's never invoked looks fine while doing nothing (later-170 trap).
 6. **Update THIS file** (status ☐→✅ + file/symbol) and `journal.md` (later-NNN), commit + push.
 
-## VERIFY — the standard A/B RAM-diff gate (deterministic; copy-paste)
-Idle field exercises boot+steady systems; the **free-roam MOTION scene** exercises motion (camera/anim) the
-idle field can't (it's static, A==B). Build is deterministic, so two runs compare byte-exact.
+## VERIFY — drive the live PC game via the REPL (there is NO oracle to diff against)
+The methodology changed (2026-06-20): the Beetle oracle (`wide60rt`), all diff/compare tooling (`gpu_differ`,
+`drive.py`, `dualcore.py`, `ram_region_diff.py`, …), and every env A/B toggle are GONE. You verify by RUNNING
+the ONE native port (`scratch/bin/tomba2_port`) and observing it — never by diffing two builds.
+
+Drive it with the REPL (`PSXPORT_REPL=1`, commands piped on stdin; or the live TCP debug server
+`PSXPORT_DEBUG_SERVER=1` + `tools/dbgclient.py` for a windowed run):
 ```
-# override ON (current build):
-PSXPORT_RAMDUMP_FRAME=650 PSXPORT_RAMDUMP=scratch/bin/on.bin \
-  PSXPORT_VK_HEADLESS=1 PSXPORT_AUTO_GAMEPLAY=1 PSXPORT_AUTO_SKIP=500 PSXPORT_AUTO_WALK=r \
-  PSXPORT_NATIVE_FRAMES=655 PSXPORT_NOAUDIO=1 scratch/bin/tomba2_port
-# toggle the registration OFF (comment it / env-guard), rebuild that one file, dump scratch/bin/off.bin, then:
-cmp -l scratch/bin/on.bin scratch/bin/off.bin | wc -l      # MUST be 0
+# headless, drive into the field, then inspect the state the function produces:
+printf 'newgame\nskip 500\npress r\nrun 150\ndumpram scratch/bin/state.bin\nr 0x800bf4fa 4\nshot scratch/screenshots/now.ppm\nquit\n' \
+  | PSXPORT_REPL=1 PSXPORT_VK_HEADLESS=1 scratch/bin/tomba2_port
 ```
-Also dump a second frame (e.g. 900) and the idle field (no AUTO_SKIP/WALK). Confirm FIRES via a `PSXPORT_DEBUG`
-log. **If the function's OUTPUT is in SCRATCHPAD (0x1F8000xx) the main-RAM dump is BLIND to it** — use a
-per-call comparator instead (pattern: `engine_camera.cpp` `ov_cam_rotbuild_verify`, `PSXPORT_DEBUG=camverify`):
-snapshot scratchpad+regs, run native, capture writes, restore, run the recomp oracle (`rec_interp(addr)`),
-compare. Self-test the harness (oracle-vs-oracle = 0) first. And ensure the scene actually EXERCISES the output
-(an accumulator only moves while the player MOVES — a stopped scene is a degenerate, false A==B gate). **Beetle oracle** (`runtime/wide60rt`, `make -C runtime`) is the cross-check when there's no override-OFF
-reference. Tools: `tools/disas.py`, `PSXPORT_WWATCH=<ka_lo>,<ka_hi>` (find who writes an addr; ka=addr|0x80000000),
-`PSXPORT_DEBUG=state` (task slots — is a menu/task alive?), `PSXPORT_DEBUG=cam` (camera pos), render gate
-`PSXPORT_PRIMDUMP=<frame>`. Gotchas: `docs/driving-the-game.md §0`.
+Key REPL commands: `run N` (advance N frames), `newgame` (pulse to the GAME prologue), `skip N` (pulse Start
+to push through the intro into the field), `press`/`release`/`tap <btn>` (input), `r`/`rw`/`w` (read/write
+memory), `dumpram <path>` (+ a `.spad` scratchpad sidecar — so dumps cover scratchpad too), `shot <path>`
+(VK-readback PPM, works headless), `debug <chans|all>` (enable diagnostic channels at runtime — replaces the
+old `PSXPORT_DEBUG` env var), `stage`, `regs`, `seq`, `quit`.
+
+Pick a scene that actually EXERCISES the output: the idle field exercises boot/steady systems, but a
+MOTION scene (drive in then `press r` to free-roam walk) is needed for camera/anim accumulators — a stopped
+scene leaves them unchanged and hides a bug. Confirm correctness by reading the relevant guest RAM / scene
+state with `r`/`rw`/`dumpram` and comparing it to what the recomp REFERENCE says it should be; for the
+picture, have the USER eyeball a build (`shot` + ask). Do NOT conclude from a single cherry-picked still —
+verify on the running game. Tools that remain: `tools/disas.py` (RE a function), the REPL/debug-server
+inspection commands above, and the F1 imgui overlay for live-tuning enhancements.
 
 ## THE BOUNDARY (one line; full text in CLAUDE.md)
 PSX keeps ONLY game CONTENT: per-character/enemy **AI & behavior**, **physics/collision response**, **level

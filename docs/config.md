@@ -1,7 +1,13 @@
-# Configuration & debug flags — `cfg` module + the single `PSXPORT_DEBUG` channel var
+# Configuration & debug flags — `cfg` module + the REPL-driven `debug` channel set
 
 Read this before adding a new `getenv("PSXPORT_…")`. The repo accumulated ~105 ad-hoc env flags, each
 with its own `static int x=-1; if(x<0) x=getenv(...)` boilerplate. That is now centralized.
+
+**No new env GATING (2026-06-20).** The PC-native port is the only path — do NOT add a `PSXPORT_*` flag
+that branches game behavior/render/features. Visual settings (widescreen/hi-res/SSAO/light/60fps) are
+the F1 overlay + `psxport_settings.ini` (`runtime/recomp/mods.c`), not env. Diagnostics are the REPL
+`debug <chan>` command (below), not env. `cfg_*` remains only for genuine launch config (disc path,
+window/headless run mode).
 
 ## The rule: don't call `getenv` — use `cfg` (`runtime/recomp/cfg.h`)
 ```c
@@ -9,7 +15,7 @@ with its own `static int x=-1; if(x<0) x=getenv(...)` boilerplate. That is now c
 cfg_on("PSXPORT_FOO")     // boolean config/feature flag: env present and != "0" -> 1   (cached)
 cfg_int("PSXPORT_FOO", d) // integer-valued flag (frame number, scale, port…), default d (cached)
 cfg_str("PSXPORT_FOO")    // string-valued flag (paths, "x,y" coords); NULL if unset    (cached)
-cfg_dbg("chan")           // is debug CHANNEL `chan` on? driven by ONE var PSXPORT_DEBUG=chan,chan…
+cfg_dbg("chan")           // is debug CHANNEL `chan` on? set at runtime via the REPL `debug chan,chan…`
 ```
 - Every lookup reads the environment **once** and caches. In hot paths (per-prim / per-GTE-op /
   per-store) still keep a local `static int x=-1; if(x<0) x=cfg_*(…)` so there is no per-call scan.
@@ -18,9 +24,10 @@ cfg_dbg("chan")           // is debug CHANNEL `chan` on? driven by ONE var PSXPO
   Still: classify before you wire (boolean → `cfg_on`/`cfg_dbg`; anything whose value is read → `cfg_str`/`cfg_int`).
 - `cfg_dump()` logs every active `PSXPORT_*` var once (boot-time visibility).
 
-## Debug output is ONE variable now: `PSXPORT_DEBUG=chanA,chanB` (or `=all`)
-~31 boolean `*_DBG` / `*LOG` / `*WATCH` / `VERBOSE` flags were collapsed into named channels. Set them
-together: `PSXPORT_DEBUG=spu,cdcmd,bgm`. Old → new channel:
+## Debug output is REPL-driven: `debug chanA,chanB` (or `debug all`, `debug` to clear)
+~31 boolean `*_DBG` / `*LOG` / `*WATCH` / `VERBOSE` flags were collapsed into named channels, enabled at
+runtime via the REPL / debug-server `debug` command (`cfg_dbg_set`), NOT an env var. Enable several
+together: `debug spu,cdcmd,bgm`. Old → new channel:
 
 | old env flag | channel | | old env flag | channel |
 |---|---|---|---|---|
