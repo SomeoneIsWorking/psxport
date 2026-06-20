@@ -78,15 +78,17 @@ void gpu_bg_range_add(Core* core, uint32_t lo, uint32_t hi) { core->game->gpu.bg
 // PC-native per-object depth: the engine's native render walk records each object's packet-pool span +
 // its WORLD-POSITION view-depth, so a 2D billboard prim rasterized later (deferred OT walk) occludes by
 // the object's real depth instead of sprite order. Stamped per frame (a stale span is never honored).
+long g_od_add = 0, g_od_hit = 0, g_od_miss = 0;   // ndepth diag: obj-depth spans recorded / lookups hit / missed
 void GpuState::obj_depth_add(uint32_t lo, uint32_t hi, float ord) {
   if (hi <= lo) return;
   if (s_od_frame != s_frame) { s_od_n = 0; s_od_frame = s_frame; }   // new frame -> clear prior spans
-  if (s_od_n < OBJ_DEPTH_MAX) { s_od_lo[s_od_n] = lo; s_od_hi[s_od_n] = hi; s_od_ord[s_od_n] = ord; s_od_n++; }
+  if (s_od_n < OBJ_DEPTH_MAX) { s_od_lo[s_od_n] = lo; s_od_hi[s_od_n] = hi; s_od_ord[s_od_n] = ord; s_od_n++; g_od_add++; }
 }
 int GpuState::obj_depth_lookup(uint32_t node, float* ord) {
-  if (s_od_frame != s_frame) return 0;
+  if (s_od_frame != s_frame) { g_od_miss++; return 0; }
   uint32_t n = node | 0x80000000u;
-  for (int i = 0; i < s_od_n; i++) if (n >= s_od_lo[i] && n < s_od_hi[i]) { if (ord) *ord = s_od_ord[i]; return 1; }
+  for (int i = 0; i < s_od_n; i++) if (n >= s_od_lo[i] && n < s_od_hi[i]) { if (ord) *ord = s_od_ord[i]; g_od_hit++; return 1; }
+  g_od_miss++;
   return 0;
 }
 void gpu_obj_depth_add(Core* core, uint32_t lo, uint32_t hi, float ord) { core->game->gpu.obj_depth_add(lo, hi, ord); }
@@ -1388,8 +1390,11 @@ void GpuState::gpu_present_ex(Core* core, int do_blit) {
         fprintf(stderr, "[ndepth f%d] real-depth(3D) prims=%ld  OT-band(2D) prims=%ld  3D%%=%.1f\n",
                 s_frame, g_nd_3d, g_nd_2d, (g_nd_3d+g_nd_2d) ? 100.0*g_nd_3d/(g_nd_3d+g_nd_2d) : 0.0);
       { extern long g_pp_set, g_pp_hit, g_pp_miss;
-        fprintf(stderr, "    depth records made=%ld  lookups hit=%ld miss=%ld\n", g_pp_set, g_pp_hit, g_pp_miss);
+        fprintf(stderr, "    projprim(vtx) records=%ld  lookups hit=%ld miss=%ld\n", g_pp_set, g_pp_hit, g_pp_miss);
         g_pp_set = g_pp_hit = g_pp_miss = 0; }
+      { extern long g_od_add, g_od_hit, g_od_miss;
+        fprintf(stderr, "    obj_depth spans=%ld  2D-prim lookups hit=%ld miss=%ld\n", g_od_add, g_od_hit, g_od_miss);
+        g_od_add = g_od_hit = g_od_miss = 0; }
       extern long g_nd2d_hist[256];
       if (cfg_dbg("ndepth") && s_frame > 0 && (s_frame % 60) == 0) {
         for (int o = 0; o < 256; o++) if (g_nd2d_hist[o]) {
