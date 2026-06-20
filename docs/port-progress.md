@@ -149,6 +149,9 @@ for content fns (call it). Do NOT mimic PSX hardware (GTE/GP0/OT) — remove Bee
     0x8006dcf4 (heading tracker), 0x8006d02c (orient/look-at matrix builder, uses GTE leaves). Full per-fn
     port specs (inputs/outputs/hazards/pseudocode/verify) in scratch/handoff_camera_subfns.md (this session).
   - ☐ per-MODE orchestrators `FUN_8006e0f0` / `FUN_8006e228` / `FUN_8006e3f4` (call the smoothers; multi-mode).
+- ✅ Math helper `FUN_80077FB0` = `ov_isqrt` (engine_math.cpp, later-186) — 16-bit ROUNDING integer sqrt
+  (libgte-style leaf). Was 8.41% of all interpreter instructions; owning it native dropped the field run
+  42.93M→38.99M insns/300fr (−9.2%). Bit-exact: 65000+ live calls 0-diff vs recomp (`mathverify` gate).
 - ✅ Terrain `FUN_8002AB5C` = `ov_terrain` (native_terrain.cpp, later-158).
 - ✅ Render submit: geom GT3/GT4/gt4_bp, per-object render `0x8003CCA4`, render walk `0x8003C048` — engine_submit.
 - ✅ AUXILIARY render walks `0x8003BCF4` / `0x8003BF00` / `0x8003EEC0` = `ov_rwalk_aux_*` (engine_submit.cpp,
@@ -183,7 +186,7 @@ in-port profiler (later-186, `interp.cpp`) gives the TIME + FREQUENCY histograms
     `FUN_80084080` 8.34% (GTE-reciprocal/normalize, uses cop2), `FUN_80085480` 6.29% (RotMatrix from sincos LUT
     @0x800a6490), `FUN_80084EB0` 4.79%, `FUN_80084A80` 3.18%, `FUN_80085050` 2.72%, `FUN_800851F0` 2.16%,
     `FUN_80084D10` 1.87%, `FUN_80084110` 1.85%. Own these native (exact-value verify vs interp) for a large win.
-  - `FUN_80077FB0` 8.41% (pure-integer isqrt/binary-search, no GTE — clean first port), `FUN_80076D68` 3.27%.
+  - ~~`FUN_80077FB0` 8.41% (isqrt)~~ ✅ OWNED native (later-186, ov_isqrt) — see §D; `FUN_80076D68` 3.27% next.
   - Frequency leaders: `FUN_80084110` (55k calls), `FUN_8013F0DC` (overlay), `FUN_80084220`, `FUN_80077FB0`.
 
 ---
