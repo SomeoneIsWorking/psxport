@@ -1,5 +1,26 @@
 # Debug / progress journal
 
+## later-166b: M3 root finding — the bg_2d coverage heuristic is blind to TILED backgrounds (provenance needed)
+Scoping M3 (own the 2D layer at source). Dumped the green-field 2D prims (`PSXPORT_PRIMDUMP=650`,
+present f650, `PSXPORT_AUTO_GAMEPLAY`). The field background is **NOT one full-screen sprite** — it is a
+**grid of 352 op-0x7C 16×16 textured tiles** (texpage `tp=(896,0)` clut=(1008,250), stepping 16px in x/y
+from (-20,-13), filling the screen). The `bg_2d` classifier (gpu_native.cpp:55) calls a prim a backdrop
+only if it covers ≥¾ of the display in BOTH axes — so every 16×16 tile is below threshold → classified
+**HUD (bg=0)**. CSV histogram for f650: 352 sprite/7C bg=0, 26 sprite/65 bg=0, 23 poly/2D bg=0, 11 poly/2F
+bg=0, 1 sprite/62 bg=1(semi). i.e. essentially the ENTIRE 2D layer (incl. the tiled background) lands in
+the HUD/near band, over the world. The coverage heuristic only ever works for a SINGLE full-screen backdrop
+sprite; it cannot see a tiled one.
+
+This is the structural reason M3 must classify by PROVENANCE, not coverage: the engine has to know "these
+tiles are the background drawer's output" from WHERE they were submitted, not from how big each one is.
+NEXT unit = tap the 2D submit SOURCE (the tiled-background drawer + the HUD/text drawer) and tag each with
+an explicit RQ layer, replacing `bg_2d`. NOTE: `PSXPORT_POLYDUMP`'s `node=` for these is the GPU
+packet-pool address (0x800BFxxx, +0x10/prim), NOT the source entity/handler — provenance needs a tap at
+the draw call, not the packet. CAUTION (not yet verified visually, user's call): whether this tiled layer
+currently renders correctly is unknown — do NOT blind-flip it to BACKGROUND, since if the tilemap is meant
+ON TOP forcing it behind would hide it. Get the user's visual ground truth (or a source tap that proves
+which layer it IS) before changing the layering.
+
 ## later-166: state reconciliation — field WORLD geometry is 100% engine-owned; M4 effectively done, M3 is what's left
 The handoff (`scratch/handoff.md`) and the committed docs (de8ea8e `engine_re.md`, journal later-165)
 named **`0x80027768` as "the next ownership target"** and claimed **"~70% of field world polys carry no
