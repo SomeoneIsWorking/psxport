@@ -53,6 +53,10 @@ static uint32_t isqrt16(uint32_t a0) {
 
 static void ov_isqrt(Core* c) { c->r[2] = isqrt16(c->r[4]); }
 
+// Exposed for the native per-object cull (game_tomba2.cpp ov_object_cull): the cull body computes
+// dist = isqrt16(dx²+dy²+dz²) exactly as FUN_80077FB0 does, so it must use the SAME bit-exact leaf.
+uint32_t eng_isqrt16(uint32_t a0) { return isqrt16(a0); }
+
 // PSXPORT_DEBUG=mathverify — per-call A/B gate: run native, save v0, restore regs, run the recomp
 // reference, compare. Pure leaf so only v0 (and clobbered caller-saved regs, which the caller
 // reloads) matters; we restore the full reg file before the reference so both see identical input.

@@ -128,7 +128,15 @@ for content fns (call it). Do NOT mimic PSX hardware (GTE/GP0/OT) — remove Bee
 ## D. Per-frame GAMEPLAY systems (inside the GAME stage loop)
 - ✅ `FUN_800788ac` frame update = `ov_frame_update` (pad read + present + audio kick) — game_tomba2.cpp.
 - ✅ `FUN_8007a904` object/entity WALK = `ov_objwalk` (engine_tomba2.cpp) — the per-frame object driver.
-- ✅ `FUN_8007712c` per-object CULL / LOD = `ov_object_cull` (engine_tomba2.cpp).
+- ✅ `FUN_8007712c` per-object CULL / LOD = `ov_object_cull` (game_tomba2.cpp). **BODY now PC-native
+  (later-188)** — was a `rec_super_call` WRAP (recomp body ran hot, ~11.2% of sampled interp time); now
+  `cull_native_body` reimplements the full decision (RE'd from the disasm: jump table 0x80016cc0, 5 state
+  handlers + state-0 typed sub-dispatch). dist=eng_isqrt16(dx²+dy²+dz²); per-state {near,far,fov} cone test
+  KEEP iff near≤dist<far AND (fwd·d)/(dist*4)≥fovthr (MIPS signed `div`, C `/` matches); writes the visible
+  flag @obj+1 + pushes the obj ptr onto 3 type-keyed render queues (A/B/C @0x1f80013c/48/54, cap 24/40/28).
+  VERIFIED 0-diff over 60000+ live calls via the `cullverify` gate (predict native pure, recomp body does
+  the writes, compare obj+1/state/queue-delta/pushed-ptr) incl. directional motion. Field 27.06M→25.02M
+  insns (−7.5%; cumulative −41.7% from baseline). Margin re-include (margin_collect) still fires.
 - ✅ `FUN_80051C8C` per-object TRANSFORM build = `ov_build_xform`.
 - **Camera update (engine_camera.cpp):**
   - ✅ position X/Z `FUN_8006d960` = `ov_cam_track_xz`; ✅ position Y `FUN_8006da54` = `ov_cam_track_y` (later-174).
@@ -240,18 +248,19 @@ in-port profiler (later-186, `interp.cpp`) gives the TIME + FREQUENCY histograms
     VULKAN/render PERF CHECK** (the profiler only measures interp insns, not GPU/present — needs a frame-time
     probe). End state: once the content consumers are ported too, even the fixed-point interface format goes
     away. The transitional `gte_write_data` of leftover regs is just to keep the remaining gte_op readers correct.)
-- **NEW HOT-LIST after the GTE cluster (field, later-187 re-profile; cumulative total now 27.06M insns):**
-  the SECOND ARC is the OVERLAY render + the cull. % is of sampled buckets:
-  - `FUN_80115598` NOW **34.7%** — **OVERLAY** 2D tilemap/sprite-grid renderer (reads tile dims +16/+17,
+- **NEW HOT-LIST after the GTE cluster + cull (field, later-188 re-profile; cumulative total now 25.02M
+  insns):** the SECOND ARC is the OVERLAY render. % is of sampled buckets:
+  - `FUN_80115598` NOW **37.8%** — **OVERLAY** 2D tilemap/sprite-grid renderer (reads tile dims +16/+17,
     screen pos +40/+42 centered 160/120). Engine render code in GAME.BIN → needs overlay-override
     (rec_set_interp_override_auto, flushed on unload; see engine_demo/engine_stage overlay scan). Biggest fn.
-  - `FUN_8013F0DC` NOW **12.7%** — **OVERLAY** (GAME.BIN, addr past MAIN.EXE end). Hot at +0xA04 (39.9k
+  - `FUN_8013F0DC` NOW **13.9%** — **OVERLAY** (GAME.BIN, addr past MAIN.EXE end). Hot at +0xA04 (39.9k
     calls). Disas with `--ram scratch/bin/ram_field.bin`. RE next.
-  - `FUN_8007712C` NOW **11.2%** — the per-object CULL. ov_object_cull is registered but the guest body
-    still runs hot at +0xD4/+0x5B0/+0x414 — INVESTIGATE whether the override actually replaces the body or
-    re-dispatches it (the override may only wrap a sub-path). Resident (MAIN.EXE) → plain disas.
-  - resident leaves still visible: `FUN_800931C0` 5.7%, `FUN_80051464` 3.5%, `FUN_8003F698` 3.5% (26k×2
-    calls @+0x50/+0xF8), `FUN_800597AC` 3.3%, `FUN_8007778C` 3.2%, `FUN_8013AC40` 3.1% (overlay).
+  - ~~`FUN_8007712C` 11.2% the per-object CULL~~ ✅ OWNED native (later-188, cull_native_body) — see §D.
+    The override only WRAPPED the recomp body (rec_super_call); now the full decision is reimplemented
+    native, verified 0-diff 60000+ calls via the `cullverify` gate. Field 27.06M→25.02M (−7.5%).
+  - resident leaves still visible: `FUN_800931C0` 6.3%, `FUN_80084A80` 4.1%, `FUN_801401B8` 3.9% (overlay),
+    `FUN_80051464` 3.9%, `FUN_8003F698` 3.8% (26k×2 calls @+0x50/+0xF8), `FUN_800597AC` 3.6%,
+    `FUN_8007778C` 3.4%, `FUN_8013AC40` 3.4% (overlay).
   - ~~`FUN_80084080` 9% (mis-attributed; real 0.5%)~~ ✅ OWNED native (later-186, ov_gte_norm) — table sqrt via
     LZCR→LUT, GTE used only as CLZ; verified 0-diff 15000+ live calls. ~~`FUN_80077FB0` isqrt~~ ✅ OWNED. See §D.
   - `FUN_80076D68` 3.6% (no GTE) = animation-sequence VM stepper (control flow + 3 callees 80075f0c/80076904/

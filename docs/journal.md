@@ -6535,3 +6535,29 @@ the trig sign convention differs per fn).
   The entire GTE transform cluster is now OWNED and GONE from the profiler hot-list. NEW #1 hot = the
   OVERLAY render arc: FUN_80115598 (34.7%, 2D tilemap renderer, needs overlay-override), FUN_8013F0DC
   (12.7%, overlay), and FUN_8007712C (11.2%, cull — ov_object_cull registered but body still hot, investigate).
+
+## later-188 — per-object CULL body FUN_8007712c owned PC-native (−7.5%, cumulative −41.7%)
+Resolved the later-187 open question ("ov_object_cull registered but the body still runs hot"): the override
+only WRAPPED the recomp body via `rec_super_call(0x8007712C)` and added the wide-margin re-include, so the
+MIPS cull body ran in full every call (~11.2% of sampled interp time). Reimplemented the body PC-native in
+`engine/game_tomba2.cpp` (`cull_native_body` + the pure `cull_decide`), replacing the super_call.
+- **RE** (tools/disas.py 0x8007712c → jump table @0x80016cc0, 5 state handlers + a state-0 typed
+  sub-dispatch on obj+0xc). Decision: dist=isqrt16(dx²+dy²+dz²) (FUN_80077FB0=eng_isqrt16, bit-exact leaf,
+  exposed from engine_math.cpp); fwd vec @0x1f8000e8/ea/ec (s16, scratchpad). If mode byte @0x800bf870==4
+  then state @0x1f800084:=2; state≥5 ⇒ always KEEP; else per-state {near,far,fovthr} cone test: KEEP iff
+  near≤dist<far AND q=(fwd·d)/(dist*4) ≥ fovthr. q is MIPS signed `div` (truncates toward zero — C `/`
+  matches); fwd·d and dx²+dy²+dz² use addu-wrap (computed via uint32 then cast). Thresholds: s0 t4
+  {512,7169,856} t2/9 {512,5121,880} t5 {512,6657,872} other {512,6145,872}; s1 {512,7169,856} s2
+  {768,4097,880} s3 {512,4097,848} s4 {1024,6657,872}.
+- **Side effects (content/render interface)**: clears visible flag @obj+1=0 at entry; on KEEP sets it 1
+  and (when @0x1f800080==0) pushes the obj ptr onto one of 3 type-keyed downward-growing render queues:
+  t2/9→A(ptr 0x1f80013c,cnt 0x1f800144,cap24) t4→B(0x1f800148/0x1f800150,cap40) t5→C(0x1f800154/0x1f80015c,
+  cap28). Returns v0=visible flag. These are SCRATCHPAD (main-RAM diff is blind).
+- **VERIFIED** via the `cullverify` REPL channel (NOT env — `debug cullverify`): predict native pure, run
+  the recomp body for the real writes, then compare observed effects (obj+1, r[2], state-word, queue count
+  delta = exactly +1, ptr advanced −4, pushed ptr == obj) against the prediction. **0 mismatches over
+  60000+ live calls** incl. directional motion (tap right/left/up) — both culled (kept=0) and kept-with-queue
+  (q=2) paths exercised. Margin re-include (margin_collect) still fires (it reads obj+1 after the body).
+- Field run **27.06M→25.02M interp insns (−7.5% this batch; cumulative −41.7% from the 42.93M baseline)**.
+  FUN_8007712C gone from the hot-list. NEW #1 = the OVERLAY render arc: FUN_80115598 (37.8%, 2D tilemap
+  renderer, needs overlay-override) then FUN_8013F0DC (13.9%, overlay anim/transform).

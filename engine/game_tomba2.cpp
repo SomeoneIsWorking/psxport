@@ -109,6 +109,139 @@ static int s_cull = -1, s_cull_far, s_cull_fov;
 static unsigned isqrt32(unsigned v) { unsigned r = 0, b = 1u << 30; while (b > v) b >>= 2;
   while (b) { if (v >= r + b) { v -= r + b; r = (r >> 1) + b; } else r >>= 1; b >>= 2; } return r; }
 
+// ---- PC-native reimplementation of the recompiled cull body FUN_8007712c ------------------------
+// Owns the per-object visibility decision (the per-object CULL/LOD engine system) PC-native instead
+// of running the recomp body through the interpreter (it was ~11.2% of hot interp time; the override
+// above only WRAPPED it via rec_super_call, so the MIPS body still ran every call). RE'd from the
+// disasm (tools/disas.py 0x8007712c → jump table 0x80016cc0, 5 state handlers + a typed sub-dispatch
+// in state 0). Decision logic, byte-exact:
+//   dist = isqrt16(dx²+dy²+dz²)            (FUN_80077FB0 = ov_isqrt → eng_isqrt16, bit-exact leaf)
+//   fwd  = forward vector @0x1f8000e8/ea/ec (s16, scratchpad)
+//   if mode byte @0x800bf870 == 4: state @0x1f800084 := 2
+//   state = @0x1f800084;  state>=5 → always KEEP
+//   else per-state {near, far, fovthr}: KEEP iff near<=dist<far AND (fwd·d)/(dist*4) >= fovthr
+//     (the cone quotient is MIPS signed `div`, truncating toward zero — C `/` matches).
+//   state 0 sub-dispatches on object type @+0xc: t4→{512,7169,856} t2/9→{512,5121,880}
+//     t5→{512,6657,872} other→{512,6145,872};  s1={512,7169,856} s2={768,4097,880}
+//     s3={512,4097,848} s4={1024,6657,872}.
+// Side effects (the content/render interface — these MUST match): clears the visible flag @obj+1 to 0
+// at entry; on KEEP sets it to 1 and, when @0x1f800080==0, pushes the object pointer onto one of three
+// type-keyed render queues (stacks growing downward): t2/9→A(ptr 0x1f80013c,cnt 0x1f800144,cap24)
+// t4→B(0x1f800148/0x1f800150,cap40) t5→C(0x1f800154/0x1f80015c,cap28). Returns v0 = visible flag.
+uint32_t eng_isqrt16(uint32_t);
+
+struct CullDecision { int kept; int wrote_state2; int queue; };  // queue: 0=none,1=A,2=B,3=C
+static const uint32_t CULL_QPTR[3] = { 0x1f80013cu, 0x1f800148u, 0x1f800154u };
+static const uint32_t CULL_QCNT[3] = { 0x1f800144u, 0x1f800150u, 0x1f80015cu };
+static const int      CULL_QCAP[3] = { 24, 40, 28 };
+
+// Pure (read-only) cull decision — reproduces FUN_8007712c's control flow without committing writes.
+static CullDecision cull_decide(Core* c) {
+  uint32_t obj = c->r[4];
+  int32_t dx = (int16_t)c->r[5], dy = (int16_t)c->r[6], dz = (int16_t)c->r[7];   // pos - camera
+  uint32_t sum  = (uint32_t)(dx*dx) + (uint32_t)(dy*dy) + (uint32_t)(dz*dz);     // addu-wrap, matches MIPS
+  uint32_t dist = eng_isqrt16(sum) & 0xffffu;
+  int32_t fx = (int16_t)c->mem_r16(0x1F8000E8u), fy = (int16_t)c->mem_r16(0x1F8000EAu), fz = (int16_t)c->mem_r16(0x1F8000ECu);
+  CullDecision R = { 0, 0, 0 };
+  uint32_t state;
+  if (c->mem_r8(0x800BF870u) == 4) { R.wrote_state2 = 1; state = 2; }
+  else                              state = c->mem_r32(0x1F800084u);
+  if (state >= 5) { R.kept = 1; }
+  else {
+    int nr, fr, thr;
+    uint32_t t = c->mem_r8(obj + 0x0c);
+    switch (state) {
+      case 0:
+        if      (t == 4)            { nr = 512;  fr = 7169; thr = 856; }
+        else if (t == 2 || t == 9)  { nr = 512;  fr = 5121; thr = 880; }
+        else if (t == 5)            { nr = 512;  fr = 6657; thr = 872; }
+        else                        { nr = 512;  fr = 6145; thr = 872; }
+        break;
+      case 1:  nr = 512;  fr = 7169; thr = 856; break;
+      case 2:  nr = 768;  fr = 4097; thr = 880; break;
+      case 3:  nr = 512;  fr = 4097; thr = 848; break;
+      default: nr = 1024; fr = 6657; thr = 872; break;   // state 4
+    }
+    if ((int)dist < nr || (int)dist >= fr) { R.kept = 0; }
+    else {
+      int32_t depth = (int32_t)((uint32_t)(fx*dx) + (uint32_t)(fy*dy) + (uint32_t)(fz*dz));  // addu-wrap
+      int32_t den   = (int32_t)((dist * 4096u) >> 10);    // = dist*4 (>0 since dist>=near>=512)
+      int32_t q     = depth / den;                        // signed trunc-toward-zero, matches MIPS div
+      R.kept = (q >= thr) ? 1 : 0;
+    }
+  }
+  if (R.kept && c->mem_r32(0x1F800080u) == 0) {
+    uint32_t t = c->mem_r8(obj + 0x0c);
+    if      (t == 4)           R.queue = 2;
+    else if (t == 2 || t == 9) R.queue = 1;
+    else if (t == 5)           R.queue = 3;
+  }
+  return R;
+}
+
+// Native body: commit the decision (the live path).
+static void cull_native_body(Core* c) {
+  uint32_t obj = c->r[4];
+  CullDecision R = cull_decide(c);
+  c->mem_w8(obj + 1, 0);                                  // prologue `sb zero,1(s3)`
+  if (R.wrote_state2) c->mem_w32(0x1F800084u, 2);
+  if (!R.kept) { c->r[2] = 0; return; }
+  c->mem_w8(obj + 1, 1);
+  c->r[2] = 1;
+  if (R.queue) {
+    int qi = R.queue - 1;
+    int32_t cnt = (int16_t)c->mem_r16(CULL_QCNT[qi]);
+    if (cnt < CULL_QCAP[qi]) {
+      uint32_t ptr = c->mem_r32(CULL_QPTR[qi]);
+      c->mem_w32(CULL_QPTR[qi], ptr - 4);
+      c->mem_w32(ptr - 4, obj);
+      c->mem_w16(CULL_QCNT[qi], (uint16_t)(cnt + 1));
+    }
+  }
+}
+
+// PSXPORT_DEBUG=cullverify — per-call gate: predict native (pure), let the recomp body do the real
+// writes, then compare the observed effects (visible flag @obj+1, state word, queue count deltas +
+// the pushed pointer) against the prediction. Scratchpad-blind to a plain RAM diff, so this is the
+// gate. 0 mismatches over many k live calls ⇒ flip to cull_native_body.
+static void cull_verify_body(Core* c) {
+  uint32_t obj = c->r[4];
+  uint32_t cnt_b[3], ptr_b[3];
+  for (int i = 0; i < 3; i++) { cnt_b[i] = (uint16_t)c->mem_r16(CULL_QCNT[i]); ptr_b[i] = c->mem_r32(CULL_QPTR[i]); }
+  CullDecision R = cull_decide(c);
+  rec_super_call(c, 0x8007712Cu);                         // authoritative writes
+  static long ngood = 0, nbad = 0;
+  int bad = 0;
+  int kept_a = c->mem_r8(obj + 1);
+  if (kept_a != R.kept) bad = 1;
+  if ((uint32_t)c->r[2] != (uint32_t)R.kept) bad = 1;
+  if (R.wrote_state2 && c->mem_r32(0x1F800084u) != 2) bad = 1;
+  // which queue actually changed (by count delta)?
+  int aq = 0; uint32_t pushed = 0;
+  for (int i = 0; i < 3; i++) {
+    uint32_t cnt_a = (uint16_t)c->mem_r16(CULL_QCNT[i]);
+    if (cnt_a != cnt_b[i]) {
+      aq = i + 1;
+      if (cnt_a != cnt_b[i] + 1) bad = 1;                 // exactly +1
+      uint32_t ptr_a = c->mem_r32(CULL_QPTR[i]);
+      if (ptr_a != ptr_b[i] - 4) bad = 1;                 // ptr advanced by -4
+      pushed = c->mem_r32(ptr_b[i] - 4);
+      if (pushed != obj) bad = 1;                         // obj stored at the new slot
+    }
+  }
+  // predicted queue: pushes only when not at cap (cap-skip leaves count unchanged → aq==0)
+  int pred_q = R.queue;
+  if (pred_q) { int qi = pred_q - 1; if (cnt_b[qi] >= (uint32_t)CULL_QCAP[qi]) pred_q = 0; }
+  if (aq != pred_q) bad = 1;
+  if (bad) {
+    if (nbad++ < 60)
+      fprintf(stderr, "[cullverify] MISMATCH obj=%08x type=%02x kept(n=%d a=%d) q(n=%d a=%d) state2=%d\n",
+              obj, c->mem_r8(obj + 0xc), R.kept, kept_a, pred_q, aq, R.wrote_state2);
+  } else if (++ngood % 20000 == 0) {
+    fprintf(stderr, "[cullverify] %ld matches (last obj=%08x kept=%d q=%d)\n", ngood, obj, R.kept, pred_q);
+  }
+}
+
 static void ov_object_cull(Core* c) {
   uint32_t prev = c->game->fps60.current_object;
   uint32_t o = c->r[4];                            // a0 = object* (MIPS arg register $a0)
@@ -120,7 +253,10 @@ static void ov_object_cull(Core* c) {
     fprintf(stderr, "[objlog] obj=%08x type=%02x pos=(%d,%d,%d)\n", o, c->mem_r8(o + 0x0c),
             (int16_t)obj_r16(c, o + 0x2e), (int16_t)obj_r16(c, o + 0x32), (int16_t)obj_r16(c, o + 0x36));
   int p2 = (int16_t)c->r[5], p3 = (int16_t)c->r[6], p4 = (int16_t)c->r[7];   // pos - camera (s16 each)
-  rec_super_call(c, 0x8007712Cu);                  // the game's cull (sets +1 visible flag, queues)
+  static int s_cullverify = -1;
+  if (s_cullverify < 0) s_cullverify = cfg_dbg("cullverify") ? 1 : 0;
+  if (s_cullverify) cull_verify_body(c);           // diagnostic: predict native, recomp writes, compare
+  else              cull_native_body(c);            // PC-native cull (replaces the recomp body)
   // The engine OWNS this margin, so it is ALWAYS active — not gated on widescreen. Even at 4:3 the
   // stock ±34° cone over-culls (edge pop-in), so we keep the wide region in every aspect; widescreen
   // then needs no extra special-casing. Env overrides remain for diagnostics only (PSXPORT_CULL_FAR/_FOV).
