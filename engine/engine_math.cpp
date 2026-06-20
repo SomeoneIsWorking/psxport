@@ -490,6 +490,65 @@ static void ov_rot84A80_verify(Core* c) {
   memcpy(c->r, rsave, sizeof rsave); for (int i=0;i<5;i++) c->mem_w32(out+i*4,om[i]); c->r[2]=vm;
 }
 
+// FUN_800851F0 — CPU RotMatrix twin (the non-GTE companion to 80085480; called by FUN_800597AC). Build
+// a 3x3 matrix from 3 Euler angles (a0 SVECTOR vx/vy/vz, a1 MATRIX out + v0). PURE — SIN/COS LUT
+// @0x800a6490 + native multiplies, NO GTE. NOTE the asm NEGATES two products with `subu` BEFORE the
+// `sra ,12` (negate-then-arith-shift ≠ shift-then-negate for negatives), so out+0x2 / out+0xc use
+// nsh12(). Intermediates kept 32-bit. Layout (s_i=sin,c_i=cos of angle i):
+//   m00=(c2*c1>>12)-((s0*s1>>12)*s2>>12)         m20=nsh12(c0*s1)
+//   m01=nsh12(s2*c0)                             m21=s0
+//   m02=(c2*s1>>12)+((s0*c1>>12)*s2>>12)         m22=(c0*c1)>>12
+//   m10=(s2*c1>>12)+((s0*s1>>12)*c2>>12)
+//   m11=(c2*c0)>>12
+//   m12=(s2*s1>>12)-((s0*c1>>12)*c2>>12)
+static inline int32_t nsh12(int32_t p) { return (int32_t)(0u - (uint32_t)p) >> 12; }  // subu then sra ,12
+static void ov_rot851F0(Core* c) {
+  uint32_t a0 = c->r[4], out = c->r[5];
+  int s0,c0,s1,c1,s2,c2;
+  rotpair_trig(c, (uint32_t)(int32_t)(int16_t)c->mem_r16(a0+0), +1, &s0, &c0);
+  rotpair_trig(c, (uint32_t)(int32_t)(int16_t)c->mem_r16(a0+2), +1, &s1, &c1);
+  rotpair_trig(c, (uint32_t)(int32_t)(int16_t)c->mem_r16(a0+4), +1, &s2, &c2);
+  int32_t s0s1 = ((int32_t)s0*s1) >> 12;
+  int32_t s0c1 = ((int32_t)s0*c1) >> 12;
+  int16_t m00 = (int16_t)((((int32_t)c2*c1) >> 12) - ((s0s1*s2) >> 12));
+  int16_t m01 = (int16_t)(nsh12((int32_t)s2*c0));
+  int16_t m02 = (int16_t)((((int32_t)c2*s1) >> 12) + ((s0c1*s2) >> 12));
+  int16_t m10 = (int16_t)((((int32_t)s2*c1) >> 12) + ((s0s1*c2) >> 12));
+  int16_t m11 = (int16_t)(((int32_t)c2*c0) >> 12);
+  int16_t m12 = (int16_t)((((int32_t)s2*s1) >> 12) - ((s0c1*c2) >> 12));
+  int16_t m20 = (int16_t)(nsh12((int32_t)c0*s1));
+  int16_t m21 = (int16_t)s0;
+  int16_t m22 = (int16_t)(((int32_t)c0*c1) >> 12);
+  c->mem_w16(out+0x0, (uint16_t)m00);
+  c->mem_w16(out+0x2, (uint16_t)m01);
+  c->mem_w16(out+0x4, (uint16_t)m02);
+  c->mem_w16(out+0x6, (uint16_t)m10);
+  c->mem_w16(out+0x8, (uint16_t)m11);
+  c->mem_w16(out+0xa, (uint16_t)m12);
+  c->mem_w16(out+0xc, (uint16_t)m20);
+  c->mem_w16(out+0xe, (uint16_t)m21);
+  c->mem_w16(out+0x10,(uint16_t)m22);
+  c->r[2] = out;
+}
+static void ov_rot851F0_verify(Core* c) {
+  uint32_t rsave[32]; memcpy(rsave, c->r, sizeof rsave);
+  uint32_t out = c->r[5];
+  uint32_t osave[5]; for (int i=0;i<5;i++) osave[i]=c->mem_r32(out+i*4);
+  ov_rot851F0(c);
+  uint32_t om[5]; for (int i=0;i<5;i++) om[i]=c->mem_r32(out+i*4);
+  uint32_t vm = c->r[2];
+  memcpy(c->r, rsave, sizeof rsave);
+  for (int i=0;i<5;i++) c->mem_w32(out+i*4, osave[i]);
+  rec_interp(c, 0x800851F0u);
+  uint32_t oo[5]; for (int i=0;i<5;i++) oo[i]=c->mem_r32(out+i*4);
+  uint32_t vo = c->r[2];
+  static int nbad=0, ngood=0; int bad=0;
+  for (int i=0;i<5;i++) if (om[i]!=oo[i]) { bad=1; if (nbad<60) fprintf(stderr,"[mathverify] rot851F0 out+%d mine=%08x oracle=%08x\n", i*4, om[i], oo[i]); }
+  if (vm!=vo) { bad=1; if (nbad<60) fprintf(stderr,"[mathverify] rot851F0 v0 mine=%08x oracle=%08x\n", vm, vo); }
+  if (bad) nbad++; else if ((ngood++%5000)==0) fprintf(stderr,"[mathverify] rot851F0 match #%d\n", ngood);
+  memcpy(c->r, rsave, sizeof rsave); for (int i=0;i<5;i++) c->mem_w32(out+i*4,om[i]); c->r[2]=vm;
+}
+
 // FUN_800517BC — write a 0x20-byte vector block: a1/a2/a3 (each sign-extended s16) at a0+0/+8/+16,
 // zero the other five words (+4/+12/+20/+24/+28). PURE leaf, no GTE, no return value. (libgte
 // SetVector/diagonal-init helper; a dependency of FUN_800597AC and independently hot — 15900 calls/run.)
@@ -534,4 +593,5 @@ void engine_math_register(void) {
   rec_set_override(0x80084220u, v ? ov_apply_matlv_verify : ov_apply_matlv);  // MVMVA matrix(CR)×vec; verified 0-diff 75000+ live calls
   rec_set_override(0x80084A80u, v ? ov_rot84A80_verify : ov_rot84A80);  // RotMatrix variant (pure LUT trig, no GTE); verified 0-diff 5000+ live field calls; 4.4% field hot
   rec_set_override(0x800517BCu, v ? ov_settrans_verify : ov_settrans);  // SetVector 0x20-byte block (pure leaf); verified 0-diff 30000+; 1.76% field hot / 15900 calls
+  rec_set_override(0x800851F0u, v ? ov_rot851F0_verify : ov_rot851F0);  // CPU RotMatrix twin (pure LUT trig, no GTE; FUN_800597AC dep; verified 0-diff live, rare-path)
 }
