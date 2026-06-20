@@ -74,6 +74,22 @@ int GpuState::node_is_bg(uint32_t node) {
 // Public wrapper: the engine's background-drawer override (engine_submit.cpp ov_bg_tilemap) records the
 // pool span it produced so the OT-walk classifies those prims as RQ_BACKGROUND by provenance.
 void gpu_bg_range_add(Core* core, uint32_t lo, uint32_t hi) { core->game->gpu.bg_range_add(lo, hi); }
+
+// PC-native per-object depth: the engine's native render walk records each object's packet-pool span +
+// its WORLD-POSITION view-depth, so a 2D billboard prim rasterized later (deferred OT walk) occludes by
+// the object's real depth instead of sprite order. Stamped per frame (a stale span is never honored).
+void GpuState::obj_depth_add(uint32_t lo, uint32_t hi, float ord) {
+  if (hi <= lo) return;
+  if (s_od_frame != s_frame) { s_od_n = 0; s_od_frame = s_frame; }   // new frame -> clear prior spans
+  if (s_od_n < OBJ_DEPTH_MAX) { s_od_lo[s_od_n] = lo; s_od_hi[s_od_n] = hi; s_od_ord[s_od_n] = ord; s_od_n++; }
+}
+int GpuState::obj_depth_lookup(uint32_t node, float* ord) {
+  if (s_od_frame != s_frame) return 0;
+  uint32_t n = node | 0x80000000u;
+  for (int i = 0; i < s_od_n; i++) if (n >= s_od_lo[i] && n < s_od_hi[i]) { if (ord) *ord = s_od_ord[i]; return 1; }
+  return 0;
+}
+void gpu_obj_depth_add(Core* core, uint32_t lo, uint32_t hi, float ord) { core->game->gpu.obj_depth_add(lo, hi, ord); }
 static long s_gp0_words = 0, s_dma2 = 0;  // diagnostics: GP0 words + DMA2 triggers per frame
 long g_nd_3d = 0, g_nd_2d = 0;   // Phase-2 native-depth diag: prims drawn with real depth vs OT-order band
 
@@ -743,6 +759,10 @@ void GpuState::gp0_exec(Core* core) {
         // drawer is the backdrop regardless of size (fixes the tiled background, blind to bg_2d's coverage
         // test); fall back to screen-coverage for scenes whose background drawer isn't owned yet.
         if (!is3d) bg = node_is_bg(s_cur_node) || bg_2d(bx0, by0, bx1, by1);
+        // PC-native object depth: a 2D billboard prim (no projected verts) whose OT-node falls in an
+        // object's packet-pool span inherits that object's world-position view-Z and occludes for real.
+        if (!is3d && !bg) { float od; if (obj_depth_lookup(s_cur_node, &od)) {
+          for (int i = 0; i < nv; i++) dep[i] = od; is3d = 1; s_seen3d = 1; } }
         if (!is3d && cfg_dbg("ndepth")) {   // categorize what lands in the 2D band: op + gouraud/quad/tex
           extern long g_nd2d_hist[256]; g_nd2d_hist[op]++; }
         // PSXPORT_PRIMDUMP=<frame>: dump every prim (poly) of that frame as an individual PNG (named by its
@@ -898,6 +918,9 @@ void GpuState::gp0_exec(Core* core) {
       int use_rq = rq_active() && !s_sbs;
       // PROVENANCE first (owned background drawer -> backdrop, any size), coverage fallback otherwise.
       int bg = node_is_bg(s_cur_node) || bg_2d(x, y, x + w, y + h);
+      if (!bg && cfg_dbg("objz") && s_frame == s_primdump_frame)
+        fprintf(stderr, "[sprnode] op=%02x at(%d,%d %dx%d) rgb=(%d,%d,%d) node=%08x\n",
+                op, x, y, w, h, cr, cg, cb, s_cur_node);
       { void prim_dump_sprite(Core*, int, unsigned, uint8_t, int, int, int, int, int, uint8_t, uint8_t, uint8_t, int, int);
         prim_dump_sprite(core, s_frame, ord_idx, op, x, y, w, h, bg, cr, cg, cb, textured ? 1 : 0, semi); }
       int X = x + s_off_x, Y = y + s_off_y;
@@ -916,9 +939,12 @@ void GpuState::gp0_exec(Core* core) {
       unsigned char qr[4]={cr,cr,cr,cr}, qg[4]={cg,cg,cg,cg}, qb[4]={cb,cb,cb,cb};
       int mode = textured ? s_tp_mode : 3, rw = op & 1;
       if (use_rq) {
-        int layer = bg ? RQ_BACKGROUND : RQ_HUD;
-        int om    = bg ? RQ_OM_2D_BG  : RQ_OM_2D_FG;
-        rq_emit_or_queue(core, 1, layer, om, 4, semi, rw, qx, qy, qu, qv, qr, qg, qb, 0, mode,
+        // PC-native object depth: a world object's billboard sprite occludes by its world position.
+        float dep[4], od; int objz = (!bg && obj_depth_lookup(s_cur_node, &od));
+        if (objz) { dep[0] = dep[1] = dep[2] = dep[3] = od; s_seen3d = 1; }
+        int layer = objz ? RQ_WORLD     : (bg ? RQ_BACKGROUND : RQ_HUD);
+        int om    = objz ? RQ_OM_DEPTH  : (bg ? RQ_OM_2D_BG   : RQ_OM_2D_FG);
+        rq_emit_or_queue(core, 1, layer, om, 4, semi, rw, qx, qy, qu, qv, qr, qg, qb, objz ? dep : 0, mode,
                          s_tp_x, s_tp_y, s_clut_x, s_clut_y, s_tw_mx, s_tw_my, s_tw_ox, s_tw_oy,
                          s_da_x0, s_da_y0, s_da_x1, s_da_y1, s_tp_blend);
       } else {

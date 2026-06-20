@@ -216,20 +216,32 @@ uint32_t Core::mem_r32(uint32_t a) {
   if (!p) return io_read(a, 4);
   uint32_t v; memcpy(&v, p, 4); return v;
 }
+// PC-native per-OBJECT depth: while armed (during one render-command dispatch, engine_submit ov_render_cmd),
+// record the address span of stores landing in the packet/OT pool [0x800BFE68,0x800E7E68) (RE'd render-buffer
+// map). The unowned overlay renderers write their GP0 packets HERE but WITHOUT advancing the pool pointer
+// 0x800BF544 — so the pointer can't bound them, but the stores can. The span is then tagged with the object's
+// world-position depth so its 2D billboard prims occlude for real at the deferred OT walk (gpu_native).
+int      g_pkt_track = 0;
+uint32_t g_pkt_lo = 0xFFFFFFFFu, g_pkt_hi = 0;
+static inline void pkt_track(uint32_t a, uint32_t bytes) {
+  if (!g_pkt_track) return;
+  uint32_t k = a | 0x80000000u;
+  if (k >= 0x800BFE68u && k < 0x800E7E68u) { if (k < g_pkt_lo) g_pkt_lo = k; if (k + bytes > g_pkt_hi) g_pkt_hi = k + bytes; }
+}
 void Core::mem_w8(uint32_t a, uint8_t v) {
   uint8_t* p = host_ptr(a, 1);
-  cw_check(a, v, 1);
+  cw_check(a, v, 1); pkt_track(a, 1);
   if (p) *p = v; else io_write(a, v, 1);
 }
 void Core::mem_w16(uint32_t a, uint16_t v) {
   uint8_t* p = host_ptr(a, 2);
-  cw_check(a, v, 2);
+  cw_check(a, v, 2); pkt_track(a, 2);
   if (p) memcpy(p, &v, 2); else io_write(a, v, 2);
 }
 void Core::mem_w32(uint32_t a, uint32_t v) {
   uint8_t* p = host_ptr(a, 4);
   wwatch_check(a, v);
-  cw_check(a, v, 4);
+  cw_check(a, v, 4); pkt_track(a, 4);
   if (p) memcpy(p, &v, 4); else io_write(a, v, 4);
 }
 

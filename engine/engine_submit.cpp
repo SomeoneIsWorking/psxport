@@ -85,7 +85,18 @@ static void geomblk_dump(Core* c, const char* kind, uint32_t rec, uint32_t count
 // translation). This is the full input a native render-half must reproduce, for ALL modes (incl. the overlay
 // variants the margin handlers feed), not just the natively-owned GT3/GT4 path the geomblk probe decodes.
 // Registered only when the channel is on (game_tomba2.c init), so zero cost otherwise; super-calls the original.
-void ov_render_cmd_probe(Core* c) {
+// NATIVE per-object DEPTH at the render-command dispatcher (gen_func_8003F698) — the UNIVERSAL chokepoint.
+// EVERY queued render command passes through here with the engine's composed camera×object transform live
+// in the GTE (CR0-7), regardless of which render walk drove it. We (a) compute the object's PC-native
+// world-position view-depth from that transform (proj_obj_center_ord), and (b) capture the packet-pool span
+// the command's renderer produces, recording span->depth. The geometry rasterizes LATER (deferred OT walk)
+// where the per-object context is gone; the span lets a 2D billboard prim recover its object's real depth
+// there (GpuState::obj_depth_lookup). Owned modes (generic GT3/GT4) carry per-VERTEX depth already and are
+// untouched; this gives the UNowned overlay-mode prims (the 2D billboards) their true world depth.
+void gpu_obj_depth_add(Core*, uint32_t lo, uint32_t hi, float ord);
+float proj_obj_center_ord(void);
+#define PKT_POOL_PTR  0x800BF544u
+void ov_render_cmd(Core* c) {
   if (cfg_dbg("rcmd") && probe_frame_ok(c)) {
     uint8_t mode = c->mem_r8(0x800BF870u);
     fprintf(stderr, "[rcmd] f%d mode=%02x geomblk=%08x ot=%08x flag=%08x ra=%08x M=",
@@ -93,7 +104,17 @@ void ov_render_cmd_probe(Core* c) {
     for (int i = 0; i < 8; i++) fprintf(stderr, "%s%08x", i ? "," : "", (uint32_t)gte_read_ctrl(i));
     fprintf(stderr, "\n");
   }
+  float ord = proj_obj_center_ord();                 // object depth from the live composed transform
+  // Capture the packet-pool address span this command's renderer writes (the pool POINTER doesn't move for
+  // the overlay variants, so track the actual stores), and tag it with the object's world-position depth.
+  extern int g_pkt_track; extern uint32_t g_pkt_lo, g_pkt_hi;
+  g_pkt_track = 1; g_pkt_lo = 0xFFFFFFFFu; g_pkt_hi = 0;
   rec_super_call(c, 0x8003F698u);
+  g_pkt_track = 0;
+  if (g_pkt_hi > g_pkt_lo) gpu_obj_depth_add(c, g_pkt_lo, g_pkt_hi, ord);
+  if (cfg_dbg("objz") && probe_frame_ok(c) && g_pkt_hi > g_pkt_lo)
+    fprintf(stderr, "[rcmddep] mode=%02x span %08x->%08x (%dB) ord=%.4f\n",
+            c->mem_r8(0x800BF870u), g_pkt_lo, g_pkt_hi, (int)(g_pkt_hi - g_pkt_lo), (double)ord);
 }
 
 // PSXPORT_DEBUG=enq — ENQUEUE tap (later-131 NEXT). The render-command PUSH gen_func_80077EBC appends its a0
@@ -587,6 +608,87 @@ static void submit_render_walk(Core* c) {
 }
 void ov_render_walk(Core* c) {
   submit_render_walk(c);
+}
+
+// ===================================================================================================
+// NATIVE WORLD-BUILDING render walk — gen_func_8003BB50 (the SNAPSHOT-QUEUE object render driver).
+//
+// This is the engine's per-frame object render phase for the FIELD: it drains the per-object render
+// QUEUE (a snapshot of node pointers the entity walk enqueued — scratchpad cursor 0x1F800140 / count
+// 0x1F800146), and for each live object dispatches its per-type renderer (by node+0xb through jump
+// table 0x80014A70). The recomp body drove this loop but threw away each object's WORLD DEPTH — the 2D
+// billboard prims the renderers emit (sprites / flat-textured quads with no projected vertices) then
+// fell to a flat enumeration-ordered 2D band, so collectables/decals did NOT occlude by distance.
+//
+// We OWN the loop natively so the engine drives object rendering; the per-type renderers themselves stay
+// guest content (rec_dispatch). Each object's PC-native WORLD-POSITION depth is attached downstream at the
+// universal render-command dispatcher (ov_render_cmd on 0x8003F698), where the composed camera×object
+// transform is live and the command's packet-pool span is captured — see ov_render_cmd above.
+//
+// Decoded byte-faithful from the recomp body (subagent RE, this session). Globals (PSX scratchpad):
+//   swap_flag 0x1F800136, live list_ptr 0x1F80013C, read cursor 0x1F800140, live count 0x1F800144,
+//   snap_count 0x1F800146; list base const 0x800F2410. Queue entries are raw entity-NODE pointers.
+#define RQ_SWAP_FLAG  0x1F800136u
+#define RQ_LIST_PTR   0x1F80013Cu
+#define RQ_CURSOR     0x1F800140u
+#define RQ_LIVE_CNT   0x1F800144u
+#define RQ_SNAP_CNT   0x1F800146u
+#define RQ_LIST_BASE  0x800F2410u
+#define RQ_JUMPTABLE  0x80014A70u
+
+// Replicate one jump-table case (node[0xb] → renderer), calling the existing guest renderers via
+// rec_dispatch (content stays PSX). The depth for `node` is already published by the caller.
+static void rq_dispatch_case(Core* c, uint32_t node, uint32_t tgt) {
+  switch (tgt) {
+    case 0x8003BC00u:   // per-object render dispatch, then the optional main renderer
+    case 0x8003BC24u: { // alt scene/overlay submitter, then the optional main renderer
+      c->r[4] = node;
+      rec_dispatch(c, tgt == 0x8003BC00u ? 0x8003CCA4u : 0x80122974u);
+      uint8_t b = c->mem_r8(node + 0xB);
+      if (b & 0x40) { c->r[4] = node; c->r[5] = 80; c->r[6] = 0; rec_dispatch(c, 0x8002AE0Cu); }
+      else if (b & 0x80) { c->r[4] = node; c->r[5] = (uint32_t)(int32_t)(int16_t)c->mem_r16(node + 0x80); c->r[6] = 0;
+                           rec_dispatch(c, 0x8002AE0Cu); }
+      break; }
+    case 0x8003BC6Cu: c->r[4] = node; rec_dispatch(c, 0x8003C2D4u); break;
+    case 0x8003BC7Cu: c->r[4] = node; rec_dispatch(c, 0x8003C464u); break;
+    case 0x8003BC8Cu: c->r[4] = node; rec_dispatch(c, 0x8003C5F8u); break;
+    case 0x8003BC9Cu: c->r[4] = node; rec_dispatch(c, 0x8003C788u); break;
+    case 0x8003BCACu: { c->r[4] = node; rec_dispatch(c, 0x8003C2D4u);                 // then indirect node[0x7c]
+                        uint32_t fn = c->mem_r32(node + 0x7C); if (fn) { c->r[4] = node; rec_dispatch(c, fn); } break; }
+    case 0x8003BCB4u: { uint32_t fn = c->mem_r32(node + 0x7C); if (fn) { c->r[4] = node; rec_dispatch(c, fn); } break; }
+    case 0x8003BCC0u: { uint32_t fn = c->mem_r32(node + 0x18); if (fn) { c->r[4] = node; rec_dispatch(c, fn); } break; }
+    default: break;   // 0x8003BCD0 = the skip/default case: render nothing
+  }
+}
+
+static void submit_render_walk_snapshot(Core* c) {
+  // Prologue: queue double-buffer SWAP (only when swap_flag==0) — capture the live count/cursor as the
+  // read snapshot and reset the live write cursor to the list base for next frame's enqueues.
+  if (c->mem_r8(RQ_SWAP_FLAG) == 0) {
+    uint16_t cnt = c->mem_r16(RQ_LIVE_CNT);
+    uint32_t lst = c->mem_r32(RQ_LIST_PTR);
+    c->mem_w16(RQ_LIVE_CNT, 0);
+    c->mem_w32(RQ_LIST_PTR, RQ_LIST_BASE);
+    c->mem_w16(RQ_SNAP_CNT, cnt);
+    c->mem_w32(RQ_CURSOR, lst);
+  }
+  int16_t count = (int16_t)c->mem_r16(RQ_SNAP_CNT);
+  uint32_t cursor = c->mem_r32(RQ_CURSOR);
+  while (count != 0) {
+    uint32_t node = c->mem_r32(cursor);
+    cursor += 4;
+    count--;
+    if (c->mem_r8(node + 1) == 0) continue;                  // not live
+    uint8_t t = c->mem_r8(node + 0xB);
+    if (t >= 144) continue;                                  // out of jump-table range -> render nothing
+    uint32_t tgt = c->mem_r32(RQ_JUMPTABLE + t * 4);
+    if (tgt == 0x8003BCD0u) continue;                        // default/skip case
+    rq_dispatch_case(c, node, tgt);                          // run the object's per-type renderer (guest content)
+  }
+}
+
+void ov_render_walk_snapshot(Core* c) {
+  submit_render_walk_snapshot(c);
 }
 
 // NATIVE field TERRAIN renderer — gen_func_8002AB5C (later-135). The render fn (node+24) of the field's

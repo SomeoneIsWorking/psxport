@@ -285,6 +285,13 @@ void proj_native_xform(int vx, int vy, int vz, ProjVtx* out) {
   out->pz = pz;
 }
 
+// Object-CENTER depth from the LIVE composed camera×object transform in the GTE control regs (CR0-7).
+// At the per-object render-command dispatch the engine has composed camera×model into the GTE; the object
+// origin's view-Z is proj_native_xform(0,0,0).pz — our own float pipeline, in the SAME band as per-vertex
+// world depth. This is the object's WORLD POSITION projected to view depth (CR5-7 = world pos in view
+// space). 2D billboard prims the object then emits occlude by this real depth instead of sprite order.
+float proj_obj_center_ord(void) { ProjVtx p; proj_native_xform(0, 0, 0, &p); return proj_pz_to_ord(p.pz); }
+
 // Recompute one vertex's projection from a snapshot of the GTE control/data regs (read post-instruction;
 // neither matrix CR0-7 nor the input V regs DR0-5 are touched by RTP, so reading after is exact).
 static void proj_native_vertex(unsigned vidx, uint32_t insn, ProjVtx* out) {
@@ -423,6 +430,7 @@ void projprim_set_pz(uint32_t addr, float pz) {   // engine_submit records a ver
   e->addr = addr; e->pz = pz; e->next = s_pp_head[h]; s_pp_head[h] = s_pp_n++;
 }
 long g_pp_set, g_pp_hit, g_pp_miss;   // ndepth diag: depth records made / lookups hit / lookups missed
+
 int projprim_lookup_pz(uint32_t addr, float* pz) {   // renderer: depth for the packet vertex word at addr
   if (!s_pp_inited) return 0;
   addr &= 0x1FFFFC;

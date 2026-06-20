@@ -50,6 +50,19 @@ struct GpuState {
   void bg_range_add(uint32_t lo, uint32_t hi);   // record a background drawer's pool span for the current frame
   int  node_is_bg(uint32_t node);                // is this OT node inside a background span this frame?
 
+  // PC-native PER-OBJECT depth by packet-pool SPAN. The engine's native render walk renders each world
+  // object into a contiguous packet-pool span and records [lo,hi)->view-depth here (its WORLD-POSITION
+  // depth). Geometry rasterizes later during the deferred OT walk, where the per-object render context is
+  // gone — so a 2D billboard prim (no projected verts) recovers its object's real depth by which span its
+  // OT-node address falls in, exactly like node_is_bg. Stamped per frame; honored only for that frame.
+  static const int OBJ_DEPTH_MAX = 512;
+  uint32_t s_od_lo[OBJ_DEPTH_MAX] = {}, s_od_hi[OBJ_DEPTH_MAX] = {};
+  float    s_od_ord[OBJ_DEPTH_MAX] = {};
+  int s_od_n = 0;
+  int s_od_frame = -1;
+  void obj_depth_add(uint32_t lo, uint32_t hi, float ord);  // record an object's pool span + world depth
+  int  obj_depth_lookup(uint32_t node, float* ord);         // depth ord for the OT node, if in an object span
+
   // VRAM (textures + framebuffers) and the fps60 in-between buffer
   uint16_t  s_vram[VRAM_W * VRAM_H] = {};
   uint16_t  s_interp[VRAM_W * VRAM_H] = {};

@@ -474,9 +474,11 @@ void games_tomba2_init(void) {
   // render code (later-133).
   {
     void ov_perobj_flush(Core*), ov_perobj_render(Core*), ov_render_walk(Core*), ov_terrain(Core*);
+    void ov_render_walk_snapshot(Core*);
     rec_set_override(0x8003CDD8u, ov_perobj_flush);
     rec_set_override(0x8003CCA4u, ov_perobj_render);   // per-object render dispatch
     rec_set_override(0x8003C048u, ov_render_walk);     // phase-2 render-list walk
+    rec_set_override(0x8003BB50u, ov_render_walk_snapshot);  // snapshot-queue object walk + world-pos depth
     rec_set_override(0x8002AB5Cu, ov_terrain);         // field terrain renderer (float transform + real depth)
     void ov_build_xform(Core*);
     rec_set_override(0x80051C8Cu, ov_build_xform);     // per-object transform builder
@@ -496,10 +498,12 @@ void games_tomba2_init(void) {
   // widened-frustum re-include is always available. ov_object_cull is a faithful super-call + a wide-only
   // re-include (no-op at 4:3).
   rec_set_override(0x8007712Cu, ov_object_cull);
-  // Render-command capture oracle (PSXPORT_DEBUG=rcmd): tap the deferred-flush mode dispatcher so every queued
-  // render command (mode + GTE transform + geomblk) is dumped — the complete input for the native render port.
-  // Gated: only registered when the channel is on (the super-call interprets the dispatcher subtree). later-130.
-  if (cfg_dbg("rcmd")) { void ov_render_cmd_probe(Core*); rec_set_override(0x8003F698u, ov_render_cmd_probe); }
+  // PC-native per-object DEPTH at the render-command dispatcher (the universal chokepoint): every queued
+  // render command passes through 0x8003F698 with the composed camera×object transform live in the GTE, so
+  // ov_render_cmd computes the object's world-position view-depth there and tags the command's packet-pool
+  // span → a 2D billboard prim occludes by real world depth, not sprite order. (Also carries the rcmd debug
+  // dump when PSXPORT_DEBUG=rcmd.) Always on — one behavior. later-130/this session.
+  { void ov_render_cmd(Core*); rec_set_override(0x8003F698u, ov_render_cmd); }
   // Enqueue tap (PSXPORT_DEBUG=enq): the render-command push, called per-object in phase 1 → g_current_object
   // names the source object, the attribution the downstream oracle lacks. later-131. Gated (super-call).
   if (cfg_dbg("enq")) { void ov_enqueue_probe(Core*); rec_set_override(0x80077EBCu, ov_enqueue_probe); }
