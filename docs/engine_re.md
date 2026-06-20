@@ -331,6 +331,18 @@ computes the projection and can carry the real per-vertex view-Z straight to the
   **RAM-match of those camera fields** (A/B: override-on vs off build, `PSXPORT_RAMDUMP` + `cmp -l`),
   verifiable on the free-roam MOTION scene (`AUTO_SKIP=500 AUTO_WALK`) that the static idle field (A==B) can't
   exercise. Watch the camera live with `PSXPORT_DEBUG=cam` (per-frame pos).
+  - **OWNED native (later-174, verified RAM 0-diff):** `FUN_8006d960` X/Z (`ov_cam_track_xz`, maxstep 6144) +
+    `FUN_8006da54` Y (`ov_cam_track_y`, maxstep 5632) → camera POSITION X/Y/Z is native (engine_camera.cpp).
+  - **The rest of the camera-update system (NEXT), mapped by walking functions (disas.py is function-scoped):**
+    - **Rotation-matrix builder `FUN_8006e6a8` (0x8006e6a8→0x8006e8f4)** — the dominant 0x8006e89c/e8bc writer;
+      builds the camera rotation matrix `0x1f8000f8` (+ forward `0x1f8000e8`) via libgte `RotMatrix 0x80083e80`/
+      `0x80083f50`/`0x80084080`/`0x80085690` + `FUN_80077768`. Faithful port needs reproducing libgte RotMatrix
+      (euler→matrix via the sin/cos LUT) exactly (it's the render/cull interface). The biggest remaining piece.
+    - **Per-MODE orchestrators** (each calls the position smoothers + a matrix builder; different camera
+      behaviours): `FUN_8006e0f0`, `FUN_8006e228`, `FUN_8006e3f4` (call 0x8006d960/da54), and matrix-side
+      `FUN_8006dad8`/`FUN_8006def0` (call the libgte helpers). A camera-mode selector calls one per frame.
+    - So the camera is a multi-mode system; own the matrix builder + the active mode's orchestrator next,
+      A/B-gated on the motion scene the same way.
 - Full basis (right/up): per-object rotation matrix is loaded to GTE CR0-4 + translation CR5-7 right
   before each RTPS/RTPT (96 / 54 static ctc2 sites) — the per-object transform, the Phase-3 native target.
 
