@@ -5785,3 +5785,35 @@ KNOWN HAZARD (M3 fix): deferring poly/sprite to a post-walk flush moves them aft
 happens DURING the walk. Framebuffer-read effects (water reflection / fb snapshot) may interleave wrong
 until M3 captures prims at submit time and retires the OT read. That's why RQ is opt-in pending the user's
 visual check. Builds + boots headless clean both ways. UNVERIFIED visually by me — user verifies PSXPORT_RQ=1.
+
+## later-165: build-hygiene fix + M1/M2 status reconciliation (engine-owned render)
+
+Two things this session.
+
+**(1) Committed main did not build from a clean clone (fixed, ea4b777).** The later-158/159 top-down
+engine foundation was wired into run.sh / build_port.sh but never committed: committed `engine_submit.cpp`
+calls `proj_native_xform`, which only existed in an uncommitted `gte_beetle.cpp` diff; `native_terrain.cpp`
+/ `engine_init.cpp` / `engine_level.cpp` were referenced by the build yet untracked. The later-164
+render-queue commits were stacked on top of this missing base. Committed the foundation (gte_beetle
+proj_native_xform, native_terrain, engine_init, engine_level, tools/disas.py, engine_re.md/project-map.md).
+Left out: the imgui DPI tweak (pending the user's visual check) and an unrelated vendor/beetle-psx input.c.
+
+**(2) The plan's M2 was ALREADY DONE — the handoff was stale.** The plan/handoff list M2 as "next work:
+reimplement FUN_8007a904 natively in a new engine/engine_object.cpp." That code already exists and is the
+default: `engine/engine_tomba2.cpp` `ov_objwalk` (registered on 0x8007A904 unless PSXPORT_RECOMP_OBJWALK)
+walks both entity lists, calls each handler via rec_dispatch (gameplay stays PSX), then margin_render_flush.
+Cull (ov_object_cull 0x8007712C), per-object render dispatch (ov_perobj_render 0x8003CCA4), the major flush
+(ov_perobj_flush 0x8003CDD8), and the transform builder (ov_build_xform 0x80051C8C) are all native overrides
+(game_tomba2.cpp), and the owned submit (engine_submit.cpp ov_submit_poly_gt3/4/gt4_bp) composes camera×
+object and projects in FLOAT via proj_native_xform → gpu_draw_world_quad → the render queue (RQ_WORLD, real
+depth). So the engine already owns the object walk + projection + world ordering (later-133/135 predate the
+plan). In-code verification note: VRAM bit-identical at frames 4000/4720 of real gameplay. M2 = DONE; do NOT
+create engine/engine_object.cpp.
+
+**Actual remaining work = M3 then M4.** M3: capture the guest 2D/HUD/background submits at their SOURCE
+(AddPrim / 2D draw) so they enter the queue without walking the guest OT, then stop driving the frame from
+gpu_dma2_linked_list / ov_draw_otag's OT read. M4: own the still-recomp submit variants (overlay modes
+0x8013xxxx, resident byte-packed 0x80027768) so 100% of world geometry carries real depth; delete the
+OT-walk driver + bg_2d coverage heuristic. Open question for the user (M3 priority): under the new
+render-queue default, did any framebuffer-read effect (water reflection / fb snapshot) glitch? Such copies
+are usually issued OUTSIDE the OT, so the deferral hazard may not manifest — the answer sets M3 urgency.
