@@ -1,5 +1,26 @@
 # Debug / progress journal
 
+## later-171: retire ALL behavior gating + start the NATIVE GTE (Beetle-removal) — user directive
+User directive (2026-06-20): "no gating; don't worry about breaking; END GOAL = remove the interpreter AND
+external deps like Beetle entirely."
+- **De-gated (f30c74b):** games_tomba2_init now registers the native engine path UNCONDITIONALLY — removed
+  PSXPORT_FAITHFUL + every *_RECOMP / NO_TICK/CULL/MENU/FLUSH/DISP/WALK/TERRAIN/XFORM / TERRAIN_FAITHFUL /
+  RECOMP_OBJWALK opt-out. Deleted the orphaned submit_terrain PSX-transcription oracle. native_depth keeps
+  only PSXPORT_FAITHFUL_DEPTH as a depth-diff DIAGNOSTIC. ONE behavior = the PC game. (entity walk
+  FUN_8007a904 was already owned — engine_tomba2.cpp ov_objwalk; now ungated.)
+- **Started the NATIVE GTE (runtime/recomp/gte_beetle.cpp) — the Beetle-removal foundation.** The port links
+  Beetle's gte.c/mdec.c/spu.c + libchdr; native-izing the GTE is the first dependency-removal. Methodology
+  (INCREMENTAL, never-breaking): gte_op dispatches PORTED ops to native C that reads/writes the SAME register
+  file (GTE_Read/WriteDR/CR) so state stays in sync with Beetle's still-unported ops; unported ops fall back
+  to GTE_Instruction. Each op is a faithful transcription of gte.c INCLUDING the FLAGS (CR31) overflow bits +
+  the bit-31 checksum, and `PSXPORT_GTE_VERIFY` runs Beetle LIVE + the native op as a SHADOW and bit-diffs
+  the result regs (MAC0/OTZ/FLAGS) — Beetle stays authoritative during verify so the game can't break.
+- **Ported + VERIFIED ops: NCLIP (0x06), AVSZ3 (0x2D), AVSZ4 (0x2E).** All exercised in the field and
+  **0 PSXPORT_GTE_VERIFY mismatches**; the native path ships live and the field runs normally. NCLIP =
+  cross-product backface MAC0; AVSZ3/4 = SZ-FIFO average → MAC0 + OTZ (i64_to_otz saturate). RTPS/RTPT
+  already have a native impl (proj_native_vertex, the projection cache) — fold them into gte_op_native next,
+  then MVMVA / the color ops (NCDS/CDP/DPCS/INTPL) / OP / GPF/GPL, until gte.c can be unlinked.
+
 ## later-170: own the cooperative STAGE TRANSITION `FUN_80052078` native (engine/engine_level.cpp)
 Owned the stage/area transition primitive `FUN_80052078(stageIdx)` (MAIN.EXE 0x80052078) PC-native — the
 engine function that loads the next stage's overlay and RESTARTS task 0 at its new entry. Frontier moves
