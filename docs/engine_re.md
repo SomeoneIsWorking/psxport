@@ -247,6 +247,23 @@ computes the projection and can carry the real per-vertex view-Z straight to the
   port + 0-diff, then own resident copies via `rec_set_override` and overlay copies via the scan (extend
   classify_submit's signature per variant). NOTE the recompiled submitters are NOT covered by scan-on-load
   (that only sees CD-loaded overlays) — own them by fixed address.
+- **`0x80027768` FULL decode (later-165, via `tools/disas.py 0x80027768`) — the next ownership target.**
+  It is a LOOP over byte-packed GT4 quad records (NOT a single prim) and is the LIT/depth-cued sibling of
+  the already-owned plain `submit_poly_gt4_bp` (engine/engine_submit.cpp:315 — mirror that native impl).
+  Entry regs: `t3=a0` (record base), `t1=a0+0x18` (per-vertex byte block), `t2=*0x800bf544` (GP0 packet
+  output cursor, written back to 0x800bf544 at the end, += 0x34/iter), `t0=t2+40`. Args: `a1<<22` = CLUT
+  bank (same as gt4_bp); `a2` = OT/UV offset (`sra 16` at entry); `a3` = U offset (callers pass
+  `a3 = a1+0` in shard_3/5/6, one site `a3 = (int32)a3>>16` shard_3:2570). Loop: control word
+  `t5 = *(rec+4)` reloaded each iter at 0x8002779c; body packs `lbu`+`<<8` bytes from scattered rec
+  offsets into stack words → GTE V0/V1/V2, runs RTPT 0x280030 + NCLIP/AVSZ + NCS color (GTE 0x0984000) +
+  gouraud (0x0f8002a) + depth-cue, writes a **52-byte** packet, links into OT 0x800ed8c8 with prim code
+  0x0c000000; advance rec t1/t3 += 0x24 (36, same stride as gt4_bp), out t0/t2 += 0x34 (52); `bgtz t5`
+  continues. Per CLAUDE.md RENDER + later-96 (no dynamic GTE lighting, NC*/CC=0): reimplement as decode
+  byte verts → `proj_native_xform` (float) → real depth → `gpu_draw_world_quad`, DROP the depth-cue fog
+  bake (renderer owns fog), exactly like gt4_bp's native version. CONFIRM the NCS color is a passthrough
+  via the VRAM A/B gate (build override-on vs a `*_RECOMP` super-call, headless dump at a frame where it
+  fires, `cmp -l` byte-identical) before flipping it to default. Decode the exact V/UV/RGB byte offsets
+  from the full disas when implementing — do NOT guess them.
 - OPEN: 3D-projected overlay banners (hint signs) now sit behind nearer world geo (true depth vs the
   artist's OT-on-top) — overlay-vs-world depth semantics to resolve.
 
