@@ -254,14 +254,19 @@ computes the projection and can carry the real per-vertex view-Z straight to the
   - The retired metrics: `PSXPORT_DEBUG=ndepth` (real-depth/2D-band counters) and the value-keyed
     `projprim` depth ring measure the OLD attach path, which the render queue superseded — under the queue
     they read ~0 even when world depth is correct. Don't gate on them; measure the queue instead.
-- **NEXT (M3) — own the 2D layer at submit source + retire the OT walk.** What remains is NOT a missing
-  world-depth variant; it is that the leftover 2D (the HUD/text FT4 quads + the screen-space background/
-  water sprites) still reach the renderer via `gpu_dma2_linked_list` walking the guest OT, and their
-  BACKGROUND-vs-HUD layer is chosen by the `bg_2d` screen-coverage heuristic (gpu_native.cpp:48) rather
-  than by what the prim IS. Full ownership = capture those 2D submits at their source (text/sprite draw +
-  the background drawer) with an EXPLICIT engine layer, stop driving the frame from the OT walk, and delete
-  the `bg_2d` heuristic. That is the sea/sky-behind-world fix made source-true (M1's layering already makes
-  it render right; M3 removes the heuristic + the last OT read).
+- **M3 (in progress) — own the 2D BACKGROUND layer by PROVENANCE (later-167, DONE for the field).** The
+  leftover 2D (HUD/text FT4 quads + the screen-space backdrop tiles) reaches the renderer via
+  `gpu_dma2_linked_list` walking the guest OT. The BACKDROP is the field's scrolling-tilemap drawer
+  **FUN_80115598** (+ a 2nd parallax layer 0x8010C26C): cols/rows@desc+16/+17, scroll@+40/+42, U-base@+6,
+  clut@+4, mapdata ptr@+20; emits a grid of 352 16×16 textured-rect packets. Each tile is below the old
+  `bg_2d` coverage threshold so the whole backdrop mis-classified as HUD. FIXED by provenance: the
+  scan-on-load (`engine_scan_overlay`) anchors on the unique tile command-word build `lui a1,0x7d80 ; ori
+  a1,a1,0x8080` and registers a BRACKET override (`ov_bg_tilemap`) that records the drawer's packet-pool
+  span as RQ_BACKGROUND (`gpu_bg_range_add`/`node_is_bg`). The 2D classifier is now `node_is_bg(node) ||
+  bg_2d(...)` — provenance wins (any tile size), coverage is the fallback for un-owned scenes. Proven the
+  tiles ARE the backdrop two ways (writer-trace + full-OT draw order: tiles drawn before world). RAM 0-diff
+  @ f650. **REMAINING:** own HUD/text at source too, then retire the OT-walk frame driver + a native
+  background renderer (push tiles straight to RQ_BACKGROUND, no guest packet) + delete `bg_2d` (M3/M4).
 - OPEN: 3D-projected overlay banners (hint signs) now sit behind nearer world geo (true depth vs the
   artist's OT-on-top) — overlay-vs-world depth semantics to resolve.
 

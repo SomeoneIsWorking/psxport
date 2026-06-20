@@ -124,6 +124,9 @@ void gpu_gp0(Core* core, uint32_t w);
 void gpu_gp1(uint32_t w);
 void gpu_present(Core* core);
 void gpu_present_ex(Core* core, int do_blit);
+// M3 provenance: an owned background drawer's override records the KSEG0 packet-pool span [lo,hi) it
+// produced this frame, so the OT walk classifies those prims as RQ_BACKGROUND (engine_submit.cpp).
+void gpu_bg_range_add(Core* core, uint32_t lo, uint32_t hi);
 void gpu_pace_frame(Core* core);
 void gpu_pace_subframe(Core* core, int parts);
 void gpu_native_load_image(Core* core, int x, int y, int w, int h, uint32_t src);

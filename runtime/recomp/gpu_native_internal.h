@@ -33,8 +33,22 @@ struct GpuState {
 
   // Backdrop-vs-HUD / gameplay-frame discrimination (read by the gpu_vk present path via Core).
   int s_seen3d = 0;       // has any GTE-projected (3D) prim been teed yet this frame? (else 2D backdrop band)
-  int bg_2d(int bx0, int by0, int bx1, int by1);   // is this 2D prim a backdrop (far band) vs HUD?
+  int bg_2d(int bx0, int by0, int bx1, int by1);   // FALLBACK 2D backdrop-vs-HUD by screen coverage (un-owned scenes)
   int s_prev_had3d = 0;   // did LAST frame draw any 3D? = "this is a gameplay (3D) frame" (wide pillarbox gate)
+
+  // M3 provenance — own the 2D layer by WHO submitted it, not per-prim size. The engine's screen-space
+  // BACKGROUND drawer(s) (e.g. the field's scrolling-tilemap backdrop FUN_80115598) are bracketed by a
+  // native override that records the OT-node (packet-pool) span they produce each frame here. A leftover
+  // 2D prim whose OT node falls in a span is the BACKDROP (RQ_BACKGROUND); everything else is HUD. This
+  // replaces the bg_2d screen-coverage guess, which is blind to a TILED background (352 sub-threshold
+  // tiles all mis-classified as HUD → painted over the world). Stamped per frame; honored only for the
+  // frame that filled it. (bg_2d stays as the fallback for scenes whose background drawer isn't owned yet.)
+  static const int BG_RANGE_MAX = 8;
+  uint32_t s_bg_lo[BG_RANGE_MAX] = {}, s_bg_hi[BG_RANGE_MAX] = {};   // KSEG0 packet-pool spans [lo,hi)
+  int s_bg_nrange = 0;
+  int s_bg_frame = -1;
+  void bg_range_add(uint32_t lo, uint32_t hi);   // record a background drawer's pool span for the current frame
+  int  node_is_bg(uint32_t node);                // is this OT node inside a background span this frame?
 
   // VRAM (textures + framebuffers) and the fps60 in-between buffer
   uint16_t  s_vram[VRAM_W * VRAM_H] = {};

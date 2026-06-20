@@ -39,7 +39,7 @@ void rec_set_override(uint32_t addr, OverrideFn fn) { rec_set_interp_override(ad
 // for PSX BIOS calls (`li $t2,0xA0; jr $t2`), which must NOT be interpreted as code at 0xA0.
 void rec_dispatch(Core* c, uint32_t addr) {
   OverrideFn ov = rec_interp_override_for(addr);
-  if (ov) { ov(c); return; }
+  if (ov) { extern uint32_t g_override_tgt; g_override_tgt = addr; ov(c); return; }
   rec_dispatch_miss(c, addr);
 }
 

@@ -57,6 +57,23 @@ int GpuState::bg_2d(int bx0, int by0, int bx1, int by1) {
   int w = bx1 - bx0, h = by1 - by0;
   return (w * 4 >= dw * 3) && (h * 4 >= dh * 3);    // covers >=3/4 of the display in both axes = backdrop
 }
+// M3 provenance: record [lo,hi) (KSEG0 packet-pool addresses) as a BACKGROUND drawer's output for the
+// current frame. Stamps the frame so a stale span from a prior frame is never honored.
+void GpuState::bg_range_add(uint32_t lo, uint32_t hi) {
+  if (hi <= lo) return;
+  if (s_bg_frame != s_frame) { s_bg_nrange = 0; s_bg_frame = s_frame; }  // new frame -> clear prior spans
+  if (s_bg_nrange < BG_RANGE_MAX) { s_bg_lo[s_bg_nrange] = lo; s_bg_hi[s_bg_nrange] = hi; s_bg_nrange++; }
+}
+// Is this OT node inside a background drawer's span recorded THIS frame? (provenance backdrop test)
+int GpuState::node_is_bg(uint32_t node) {
+  if (s_bg_frame != s_frame) return 0;
+  uint32_t n = node | 0x80000000u;
+  for (int i = 0; i < s_bg_nrange; i++) if (n >= s_bg_lo[i] && n < s_bg_hi[i]) return 1;
+  return 0;
+}
+// Public wrapper: the engine's background-drawer override (engine_submit.cpp ov_bg_tilemap) records the
+// pool span it produced so the OT-walk classifies those prims as RQ_BACKGROUND by provenance.
+void gpu_bg_range_add(Core* core, uint32_t lo, uint32_t hi) { core->game->gpu.bg_range_add(lo, hi); }
 static long s_gp0_words = 0, s_dma2 = 0;  // diagnostics: GP0 words + DMA2 triggers per frame
 long g_nd_3d = 0, g_nd_2d = 0;   // Phase-2 native-depth diag: prims drawn with real depth vs OT-order band
 
@@ -687,7 +704,10 @@ void GpuState::gp0_exec(Core* core) {
         if (is3d) s_seen3d = 1;            // a projected world prim has now been drawn this frame
         int bx0=xs[0],by0=ys[0],bx1=xs[0],by1=ys[0];
         for (int i = 1; i < nv; i++) { if(xs[i]<bx0)bx0=xs[i]; if(xs[i]>bx1)bx1=xs[i]; if(ys[i]<by0)by0=ys[i]; if(ys[i]>by1)by1=ys[i]; }
-        if (!is3d) bg = bg_2d(bx0, by0, bx1, by1);   // 2D prim: backdrop (FAR band) vs HUD (near band)
+        // 2D prim: backdrop vs HUD. PROVENANCE first — a node produced by the engine's owned background
+        // drawer is the backdrop regardless of size (fixes the tiled background, blind to bg_2d's coverage
+        // test); fall back to screen-coverage for scenes whose background drawer isn't owned yet.
+        if (!is3d) bg = node_is_bg(s_cur_node) || bg_2d(bx0, by0, bx1, by1);
         if (!is3d && cfg_dbg("ndepth")) {   // categorize what lands in the 2D band: op + gouraud/quad/tex
           extern long g_nd2d_hist[256]; g_nd2d_hist[op]++; }
         // PSXPORT_PRIMDUMP=<frame>: dump every prim (poly) of that frame as an individual PNG (named by its
@@ -825,7 +845,8 @@ void GpuState::gp0_exec(Core* core) {
       if (s_ndepth < 0) s_ndepth = native_depth_on();
       if (s_sbs < 0) s_sbs = cfg_on("PSXPORT_SBS") ? 1 : 0;
       int use_rq = rq_active() && !s_sbs;
-      int bg = bg_2d(x, y, x + w, y + h);     // full-screen layer -> FAR band; small -> overlay band
+      // PROVENANCE first (owned background drawer -> backdrop, any size), coverage fallback otherwise.
+      int bg = node_is_bg(s_cur_node) || bg_2d(x, y, x + w, y + h);
       { void prim_dump_sprite(Core*, int, unsigned, uint8_t, int, int, int, int, int, uint8_t, uint8_t, uint8_t, int, int);
         prim_dump_sprite(core, s_frame, ord_idx, op, x, y, w, h, bg, cr, cg, cb, textured ? 1 : 0, semi); }
       int X = x + s_off_x, Y = y + s_off_y;

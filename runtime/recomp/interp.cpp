@@ -29,6 +29,10 @@ void rec_interp(Core* c, uint32_t pc);
 // WHERE the interpreter is spinning). Optional call trace (PSXPORT_INTERP_TRACE=<path>) logs
 // jal/jalr targets — used to follow the boot stub and find where it wedges.
 volatile uint32_t g_interp_pc = 0;
+// Entry address of the override currently being dispatched — set right before an override fn runs, so a
+// bracket override (one fn registered at SEVERAL scanned overlay entries) can super-call the exact body
+// it intercepted instead of a stale stored address. Read immediately on override entry.
+uint32_t g_override_tgt = 0;
 static FILE* g_trace_fp = 0;
 void interp_trace_open(const char* path) {
   if (path && *path) { g_trace_fp = fopen(path, "w"); if (!g_trace_fp) perror(path);
@@ -334,6 +338,7 @@ static int coro_native_call(Core* c, uint32_t tgt) {
   if (ov) {
     if (!g_ncall_init) ncall_open_once();
     uint32_t a0=c->r[4],a1=c->r[5],a2=c->r[6],a3=c->r[7];
+    g_override_tgt = tgt;                          // entry addr being overridden (so a bracket override can super-call it)
     ov(c);
     ncall_log('O', tgt, a0,a1,a2,a3, c->r[2], c->r[3]);
     return 1;

@@ -1,5 +1,35 @@
 # Debug / progress journal
 
+## later-167: M3 — own the 2D BACKGROUND layer by PROVENANCE (replaces the bg_2d coverage guess)
+Implemented the M3 layering fix later-166b called for: classify the field's tiled backdrop by WHO drew it,
+not per-prim size. RE first (field, `PSXPORT_AUTO_GAMEPLAY`, f650, RAM dump `PSXPORT_RAMDUMP_FRAME`):
+- **The 352 op-7C tiles are the field BACKDROP, proven two independent ways.** (1) Provenance: a `PSXPORT_WWATCH`
+  on the first tile packet (pool node 0x800BFF30) pinned the writer to an interpreted overlay drawer; disasm
+  of the field RAM dump decoded it as a scrolling-tilemap renderer **FUN_80115598** (reads cols/rows@+16/+17,
+  scroll@+40/+42, U-base@+6, clut@+4, mapdata ptr@+20; builds 16×16 textured-rect packets into the pool).
+  (2) Draw order: running the full guest OT (all ownership reverted) + `PSXPORT_POLYDUMP=650` shows the 352
+  op-7C tiles are drawn FIRST (prims 1–352), THEN world geom (op 3C/34/3E), THEN HUD sprites/text (op 65 at
+  font texpage, last) — i.e. tiles are painted behind the world. So tilemap = backdrop is sound, not a guess.
+- **Mechanism (engine_submit.cpp `ov_bg_tilemap` + `engine_scan_overlay`):** the backdrop drawer's signature
+  is the unique tile command-word build `lui a1,0x7d80 ; ori a1,a1,0x8080` (1 occurrence in 2 MB). The
+  scan-on-load registers a BRACKET override at each matching entry (a field has SEVERAL parallax layers —
+  found two: 0x8010C26C + 0x80115598). The override reads the packet-pool ptr (*0x800BF544) before/after
+  super-calling the real body, and records the produced pool span as RQ_BACKGROUND
+  (`gpu_bg_range_add`→`GpuState::node_is_bg`). The OT-walk 2D classifier is now
+  `node_is_bg(node) || bg_2d(...)` — provenance wins (any tile size), coverage stays only as the fallback
+  for scenes whose backdrop drawer isn't owned yet (menus/title full-screen sprite). To super-call the EXACT
+  intercepted entry from one shared override fn, the interp now exposes `g_override_tgt` (the override target
+  addr, set right before the override runs).
+- **VERIFIED:** attribution — all 352 tiles classify RQ_BACKGROUND, the 26 op-65 + 23 op-2D + 11 op-2F HUD/
+  text stay RQ_HUD (`PSXPORT_PRIMDUMP=650` histogram). Content interface — gameplay **RAM 0-diff @ f650**
+  vs the pre-change build (the override only super-calls the original body + host-side bookkeeping; no guest
+  write changes). Visual = user (`./run.sh`): backdrop behind world, HUD on top.
+- **STILL OPEN (M3 tail / M4):** this owns the LAYER decision; the backdrop geometry still flows through the
+  guest drawer + the OT walk. Retiring the OT walk as the frame driver + a native background renderer (push
+  tiles straight to RQ_BACKGROUND, no guest packet) + deleting `bg_2d` is the remaining step. The HUD/text
+  (op 65/2D/2F) are still classified by the bg_2d fallback (all correctly HUD here, but own them at source
+  next to finish M3).
+
 ## later-166b: M3 root finding — the bg_2d coverage heuristic is blind to TILED backgrounds (provenance needed)
 Scoping M3 (own the 2D layer at source). Dumped the green-field 2D prims (`PSXPORT_PRIMDUMP=650`,
 present f650, `PSXPORT_AUTO_GAMEPLAY`). The field background is **NOT one full-screen sprite** — it is a

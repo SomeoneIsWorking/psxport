@@ -822,6 +822,32 @@ void ov_ccase_probe(Core* c) {
 // ~10-insn wrapper. a0 = geomblk, a1 = OT base — exactly native_gt3gt4's args.
 void ov_gt3gt4_caller(Core* c) { native_gt3gt4(c, c->r[4], c->r[5]); }
 
+// =====================================================================================================
+// M3 PROVENANCE — own the 2D BACKGROUND layer by WHO drew it, not by per-prim screen coverage.
+//
+// The field's screen-space backdrop is a scrolling tilemap: a grid of 352 16×16 textured tiles drawn by
+// FUN_80115598 (a per-area render overlay, loaded interpreted). Each tile is far below the bg_2d coverage
+// threshold, so the old heuristic mis-classified the WHOLE backdrop as HUD and painted it over the world.
+// Provenance fixes this at the source: we bracket the drawer, capture the packet-pool span it produces,
+// and tag every OT node in that span RQ_BACKGROUND (gpu_native.cpp node_is_bg) — regardless of tile size.
+// The drawer still builds its packets and links them into the OT (this owns the LAYER decision, not yet
+// the geometry); retiring the OT walk + a native background renderer is the remaining M3/M4 step.
+//
+// Registered via the same scan-on-load path as the submit library (the overlay reloads at reused
+// addresses across areas, so a fixed address is fragile). Signature: the tile command-word build
+// `lui a1,0x7d80; ori a1,a1,0x8080` (the 0x7D/0x7C textured-rect opcode + neutral 0x808080 modulate) —
+// unique in RAM. A field can carry SEVERAL backdrop layers (parallax), so this one override is registered
+// at every matching entry; it super-calls the EXACT body it intercepted via g_override_tgt (set by the
+// interp on override entry), not a stored address.
+extern uint32_t g_override_tgt;
+void ov_bg_tilemap(Core* c) {
+  uint32_t entry = g_override_tgt;                       // the backdrop drawer this call intercepted
+  uint32_t p0 = c->mem_r32(0x800BF544u);                 // packet-pool write ptr before the backdrop build
+  rec_super_call(c, entry);                              // run the real tilemap drawer (builds + links tiles)
+  uint32_t p1 = c->mem_r32(0x800BF544u);                 // ptr after = the span of THIS frame's backdrop tiles
+  gpu_bg_range_add(c, p0 | 0x80000000u, p1 | 0x80000000u);
+}
+
 // Detect the generic-caller signature in [addr, jr ra): the distinctive triple is `addiu a0,a0,16`
 // (skip the 16-byte geomblk header) + `andi a2,s0,0xffff` (tri count) + `srl a2,s0,16` (quad count).
 static int classify_caller(Core* c, uint32_t addr) {
@@ -857,7 +883,21 @@ static OverrideFn classify_submit(Core* c, uint32_t addr) {
 static void engine_scan_overlay(Core* c, uint32_t base, uint32_t size) {
   uint32_t lo = base & ~3u, hi = (base + size) & ~3u;
   void ov_gt3gt4_caller(Core*);
+  void ov_bg_tilemap(Core*);
   for (uint32_t a = lo; a + 4 <= hi; a += 4) {
+    // (0) the screen-space BACKGROUND tilemap drawer (M3 provenance): anchor on the unique tile
+    //     command-word build `lui a1,0x7d80 ; ori a1,a1,0x8080`, backtrack to the fn entry, bracket it
+    //     so its packet-pool span is tagged RQ_BACKGROUND (gpu_native node_is_bg). later this session.
+    if (c->mem_r32(a) == 0x3C057D80u && c->mem_r32(a + 4) == 0x34A58080u) {
+      uint32_t entry = lo;
+      for (uint32_t b = a; b > lo && b > a - 0x400; b -= 4)
+        if (c->mem_r32(b - 4) == 0x03E00008u) { entry = b + 4; break; }
+      rec_set_interp_override_auto(entry, ov_bg_tilemap);
+      if (cfg_dbg("submit"))
+        fprintf(stderr, "[submit] own BACKGROUND tilemap drawer @ 0x%08X (in load 0x%08X+0x%X)\n",
+                entry, base, size);
+      continue;
+    }
     // (1) generic GT3/GT4 CALLER (e.g. the mode-0 render 0x80146478): anchor on `addiu a0,a0,16`,
     //     backtrack to the fn entry, verify the caller signature, own it (runs the native submitters).
     if (c->mem_r32(a) == 0x24840010u && !cfg_on("PSXPORT_NO_CALLER_OWN")) {
