@@ -1366,9 +1366,9 @@ void GpuVkState::draw_tri(int x0,int y0,int r0,int g0,int b0, int x1,int y1,int 
                      int x2,int y2,int r2,int g2,int b2) {
   if (!s_inited || s_tri_n + 3 > TRI_CAP) return;
   TriVtx* v = (TriVtx*)s_vbuf_ptr + s_tri_n;
-  v[0] = (TriVtx){ x0, y0, r0/255.f, g0/255.f, b0/255.f, s_vd ? ord3d(s_vd[0]) : s_cur_ord, s_vdn ? ord3d(s_vdn[0]) : s_cur_ordn };
-  v[1] = (TriVtx){ x1, y1, r1/255.f, g1/255.f, b1/255.f, s_vd ? ord3d(s_vd[1]) : s_cur_ord, s_vdn ? ord3d(s_vdn[1]) : s_cur_ordn };
-  v[2] = (TriVtx){ x2, y2, r2/255.f, g2/255.f, b2/255.f, s_vd ? ord3d(s_vd[2]) : s_cur_ord, s_vdn ? ord3d(s_vdn[2]) : s_cur_ordn };
+  v[0] = (TriVtx){ (float)x0, (float)y0, r0/255.f, g0/255.f, b0/255.f, s_vd ? ord3d(s_vd[0]) : s_cur_ord, s_vdn ? ord3d(s_vdn[0]) : s_cur_ordn };
+  v[1] = (TriVtx){ (float)x1, (float)y1, r1/255.f, g1/255.f, b1/255.f, s_vd ? ord3d(s_vd[1]) : s_cur_ord, s_vdn ? ord3d(s_vdn[1]) : s_cur_ordn };
+  v[2] = (TriVtx){ (float)x2, (float)y2, r2/255.f, g2/255.f, b2/255.f, s_vd ? ord3d(s_vd[2]) : s_cur_ord, s_vdn ? ord3d(s_vdn[2]) : s_cur_ordn };
   s_tri_n += 3;
 }
 
