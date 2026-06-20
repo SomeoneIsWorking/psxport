@@ -203,6 +203,20 @@ for content fns (call it). Do NOT mimic PSX hardware (GTE/GP0/OT) — remove Bee
   so the REPL `debug mathverify` line arrives too late — verify by registering `*_verify` unconditionally
   for the one-time gate, then revert to the gated form). Was 4.4% of field hot time, now gone from hot-list.
 - ✅ Render submit: geom GT3/GT4/gt4_bp, per-object render `0x8003CCA4`, render walk `0x8003C048` — engine_submit.
+- ✅ MORE per-frame transform/cull leaves OWNED (later-189):
+  - `FUN_8007778C` = `ov_cull_wrapper` (game_tomba2.cpp): camera-relative delta (obj−cam, wrapping s16) +
+    zero the two cull scratchpad flags (0x1F800080/84) → `rec_dispatch` the owned cull body 0x8007712c
+    (routes through ov_object_cull for current-object tracking + margin). Verified 0-diff 40000+ via `cullwrap`.
+  - `FUN_80051464` = `ov_xform_propagate` (engine_submit.cpp): child-node transform propagation. Orchestrates
+    the owned rot_x/y/z + matmul(80084110) + MVMVA(80084220) in the recomp's exact jal order (preserving the
+    matmul→MVMVA GTE-CR coupling), seeds the scratchpad identity work matrix, accumulates parent translation.
+    Parent = node itself (sentinel c[6]==-1) or sibling node[0xC0+4*c[6]]. Verified 0-diff 6000+ via `xformverify`.
+  - `FUN_800517BC` = `ov_settrans` (engine_math.cpp): SetVector 0x20-byte block (a1/a2/a3 s16 at +0/+8/+16,
+    rest 0). Pure leaf. Verified 0-diff 30000+.
+  - `FUN_800851F0` = `ov_rot851F0` (engine_math.cpp): CPU RotMatrix twin (non-GTE companion to 80085480);
+    pure LUT trig, distinct layout, two elements negate-before-shift (nsh12). Verified 0-diff live (rare path).
+    A dependency of FUN_800597AC. NOTE: resident-math overrides latch their verify-gate `v` at boot (the REPL
+    `debug mathverify` lands too late), so verify them with a one-time FORCED-verify build, not the channel.
 - ✅ AUXILIARY render walks `0x8003BCF4` / `0x8003BF00` / `0x8003EEC0` = `ov_rwalk_aux_*` (engine_submit.cpp,
   issue #4): faithful per-node lift of each recomp body + per-node `gpu_obj_depth_add(world-pos depth)` so
   flame/rope/effect billboards occlude by real world depth (was: flat 2D band → drew over foliage). Field
