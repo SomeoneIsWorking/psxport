@@ -523,17 +523,36 @@ static void ov_game_main(Core* c) {
         ls = st;
       }
     }
-    // PSXPORT_DEBUG=nav — post-cutscene free-roam navigation probe: log camera position
-    // (_DAT_1f8000d2/d6/da = follows Tomba) and the in-game pause-menu page byte (task+0x6B)
-    // periodically, so a headless walk can be observed (is Tomba MOVING? did a pause menu open?).
-    if (cfg_dbg("nav") && (f % 30u) == 0) {
-      uint32_t task = c->mem_r32(0x1f800138u);
-      int16_t cx = (int16_t)c->mem_r16(0x1f8000d2u);
-      int16_t cy = (int16_t)c->mem_r16(0x1f8000d6u);
-      int16_t cz = (int16_t)c->mem_r16(0x1f8000dau);
-      uint8_t page = task ? c->mem_r8(task + 0x6Bu) : 0xFF;
-      uint16_t s4a = task ? c->mem_r16(task + 0x4au) : 0xFFFF;
-      fprintf(stderr, "[nav] f%u cam=(%d,%d,%d) pausePage=%u sm[0x4a]=%u\n", f, cx, cy, cz, page, s4a);
+    // PSXPORT_DEBUG=state — RELIABLE game-state probe (replaces the old `nav` camera guess, which
+    // disagreed with the screen). Dumps all 3 cooperative-task slots (state@+0x00, entry@+0x0c) so a
+    // PAUSE MENU (a separate task spawned in the GAME overlay, entry 0x80108xxx, page byte that task+0x6B)
+    // is DETECTABLE: when one of the 3 slots has a 0x80108xxx entry and is alive, a menu is open and
+    // gameplay input is going to the menu, NOT the player. Also prints the GAME stage sm + camera pos.
+    // Logged only on change of the (slot-state/entry + page) signature to stay quiet.
+    if (cfg_dbg("state")) {
+      uint64_t sig = 0; int menu_slot = -1; uint8_t menu_page = 0;
+      for (int i = 0; i < 3; i++) {
+        uint32_t base = 0x801fe000u + (uint32_t)i * 0x70u;
+        uint16_t st = c->mem_r16(base);
+        uint32_t ent = c->mem_r32(base + 0xc);
+        sig = sig * 1099511628211ull + ((uint64_t)st << 32 | ent);
+        if (st && (ent & 0xFFFFF000u) == 0x80108000u) { menu_slot = i; menu_page = c->mem_r8(base + 0x6bu); }
+      }
+      sig = sig * 31 + ((uint64_t)menu_slot << 8 | menu_page);
+      static uint64_t last_sig = 0;
+      if (sig != last_sig) {
+        last_sig = sig;
+        fprintf(stderr, "[state] f%u", f);
+        for (int i = 0; i < 3; i++) {
+          uint32_t base = 0x801fe000u + (uint32_t)i * 0x70u;
+          fprintf(stderr, " | s%d st=%u ent=0x%08X", i, c->mem_r16(base), c->mem_r32(base + 0xc));
+        }
+        fprintf(stderr, "  MENU=%s", menu_slot >= 0 ? "OPEN" : "no");
+        if (menu_slot >= 0) fprintf(stderr, "(slot%d page=%u)", menu_slot, menu_page);
+        fprintf(stderr, "  cam=(%d,%d,%d) sm[0x4a]=%u\n",
+                (int16_t)c->mem_r16(0x1f8000d2u), (int16_t)c->mem_r16(0x1f8000d6u),
+                (int16_t)c->mem_r16(0x1f8000dau), c->mem_r16(0x801fe000u + 0x4au));
+      }
     }
     // BGM-active probe (PSXPORT_BGMDBG): each frame scan the 14 libsnd sequence slots
     // (0x800be3d8 + i*0xB0) for the active/play flag (+0x98 bit0). For any active slot, log

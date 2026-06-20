@@ -91,16 +91,23 @@ menu" was an artifact of OVER-pulsing Start: `AUTO_GAMEPLAY` releases input at f
 fisherman DIALOG cutscene is still up, so Tomba is never controllable. The fix is to keep pulsing Start
 through the dialog with **`PSXPORT_AUTO_SKIP=500`**, THEN hold a direction with `PSXPORT_AUTO_WALK`:
 ```
-PSXPORT_DEBUG=nav PSXPORT_VK_HEADLESS=1 PSXPORT_AUTO_GAMEPLAY=1 PSXPORT_AUTO_SKIP=500 \
+PSXPORT_DEBUG=state PSXPORT_VK_HEADLESS=1 PSXPORT_AUTO_GAMEPLAY=1 PSXPORT_AUTO_SKIP=500 \
   PSXPORT_AUTO_WALK=r PSXPORT_NATIVE_FRAMES=1600 PSXPORT_NOAUDIO=1 scratch/bin/tomba2_port
 ```
-Tomba then WALKS — verified via `PSXPORT_DEBUG=nav` (logs camera pos `_DAT_1f8000d2/d6/da` every 30 frames):
-holding right pans the camera X 3270→5330, holding left 4012→3991. This is a **deterministic free-roam
-MOTION scene** (useful for verifying camera-follow / animation systems, which the idle field — static, A==B —
-cannot exercise). `PSXPORT_DEBUG=nav` also reads the in-game pause page byte (`task+0x6B`: 0=playing, 1/3=menu).
+Tomba then WALKS — camera pos `_DAT_1f8000d2/d6/da` pans (holding right ~3270→5330, left ~4012→3991), and a
+screenshot (`PSXPORT_VK_SHOTSEQ`) confirms the green village field is reached with Tomba present. This is a
+**deterministic free-roam MOTION scene** (useful for verifying camera-follow / animation systems, which the
+idle field — static, A==B — cannot exercise).
+- **Knowing the state RELIABLY — `PSXPORT_DEBUG=state`.** Dumps all 3 cooperative-task slots (state@+0x00,
+  entry@+0x0c at `0x801fe000 + i*0x70`) on change. A pause/in-game menu is a SEPARATE task — if one ever
+  spawns it shows as a slot going alive with a new entry. **CORRECTION of an earlier (later-173) claim made
+  from a BROKEN probe:** there is **NO pause menu** in these runs — across AUTO_GAMEPLAY / +AUTO_SKIP /
+  +AUTO_JUMP, 0 menu tasks ever spawn and no new task appears after f178 (s0 = the GAME stage 0x8010637C runs
+  throughout). The old `nav` probe read `task+0x6B` off the WRONG task (the scheduler's current-task pointer,
+  not the menu task), so its "pausePage" / "Cross opens a menu" readings were garbage. **Cross is just JUMP.**
 - **Movement geometry (seaside start area):** purely HORIZONTAL — Up/Down move nothing (cam Z stays 2352);
-  Left/Right hit hard walls at cam-X ≈ 3991 / 5330. Cross does NOT jump here — it OPENS the in-game menu
-  (pausePage 0→3) and freezes Tomba, so `PSXPORT_AUTO_JUMP=1` (pulse Cross while walking) is counterproductive.
+  Left/Right hit hard walls at cam-X ≈ 3991 / 5330. `PSXPORT_AUTO_JUMP=1` (pulse Cross = jump while walking)
+  doesn't help reach the exit (Tomba jumps in place).
 - **STILL OPEN — reaching an AREA TRANSITION (`sm[0x4a]==2`).** Walking into either wall does NOT transition
   (`sm[0x4a]` stays 1; `PSXPORT_DEBUG=stage` logs `sm[0x4a]`/`sm[0x4c]`). The seaside area's exit is not a
   plain walk/jump into an edge. Confirmed `ov_game_s4c` (0x80106478, the sm[0x4c] area machine) is NEVER

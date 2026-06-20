@@ -11,8 +11,15 @@ Pursued the handoff's option 2: drive headless to an in-game AREA transition (`s
   `_DAT_1f8000d2/d6/da` + pause page `task+0x6B` every 30f) shows holding right pans cam-X 3270→5330, left
   4012→3991. This is a deterministic **free-roam MOTION scene** (the idle field is static A==B; this isn't).
 - **Seaside start area geometry:** purely HORIZONTAL (Up/Down = no motion, cam Z fixed 2352); hard walls at
-  cam-X ≈ 3991/5330. Cross is NOT jump here — it opens the in-game menu (pausePage 0→3) and freezes Tomba, so
-  `PSXPORT_AUTO_JUMP` (pulse Cross while walking, added) is counterproductive in this area.
+  cam-X ≈ 3991/5330. `PSXPORT_AUTO_JUMP` (pulse Cross = jump while walking, added) doesn't reach the exit.
+- **OBSERVABILITY FIX (user pushed on this — "it's bad that you can't tell").** My first nav probe read the
+  pause page off `*(0x1f800138)+0x6B` = the CURRENT-task pointer, not the menu task, so its "pausePage" /
+  "Cross opens a menu" readings were GARBAGE — a falsified claim. Replaced it with `PSXPORT_DEBUG=state`, which
+  dumps all 3 cooperative-task slots (state@+0, entry@+0xc at 0x801fe000+i*0x70) on change. RELIABLE result:
+  **NO pause menu ever spawns** (0 menu tasks across AUTO_GAMEPLAY/+SKIP/+JUMP; no new task after f178; s0 =
+  GAME stage throughout). **Cross is just JUMP.** Screenshots (PSXPORT_VK_SHOTSEQ) confirm the green-village
+  field with Tomba and no menu. Lesson: read state off the RIGHT struct and confirm with a second channel
+  (task list + screenshot), don't infer game state from one unvalidated field.
 - **Area transition NOT reached.** Walking into either wall keeps `sm[0x4a]==1` (no transition). Added a
   `PSXPORT_DEBUG=stage` log of `sm[0x4a]`/`sm[0x4c]` transitions + an `ov_game_s4c` ENTER log. Confirmed
   **0x80106478 is NEVER entered** on the field NOR during the boot area-load (0 hits) — on the field `sm[0x4c]`
