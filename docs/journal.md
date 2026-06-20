@@ -6489,3 +6489,22 @@ stage-transition call. **s7 0x80106668 IS still ownable** — its `jal 0x80106C2
 target and 0x80106C24's phase-selection prologue (sm[0x4a]) is pre-yield + phase2 teardown all-SYNC; own
 selection + phase2, redirect yielding phase0/phase1. That is the remaining DEMO frontier step (needs reaching
 s7 = confirm a menu option to A/B-verify).
+
+## later-187 — GTE RotMatrix FUN_80085480 owned PC-native (−9.4%, 2nd of the GTE cluster)
+Owned the hottest remaining hot-list fn, `FUN_80085480` = libgte **RotMatrix** (Euler SVECTOR a0 → 3x3
+MATRIX a1, also returned), as `ov_rotmat` (engine/engine_math.cpp). NOT MVMVA like the matmul leaf — it uses
+the GTE **GPF** op (cmd 0x3d, sf=1: MAC_i=(IR0·IR_i)>>12, IR_i=clamp16(MAC_i), + an RGB-FIFO push) as a
+clamped scalar×vector multiplier, interleaved with 2 native 16-bit mults (cy·cx, cy·sx, >>12 then truncated,
+NOT clamped). SIN/COS LUT @0x800a6490 (word = sin low half / cos high half; the angle's sign is re-applied to
+sin only — sin odd, cos even — via the (x<<16)+sign^sign>>16 trick). Reimplemented the whole composition in
+plain C (NO gte_op/Beetle); decoded the cop2 stream with an inline python decoder (4 GPFs + the move/MFC2
+register choreography). Replicated ALL GTE leftover regs the body leaves: IR0=sz, IR1-3=clamp16(R4 MACs),
+MAC1-3=raw R4 products, AND the RGB FIFO (regs 20-22 = R2/R3/R4 colors via Lm_C(MAC>>4)|RGB_CD<<24) — so a
+still-PSX gte_op reader stays consistent (GPF actively writes the FIFO, unlike MVMVA, so I replicated rather
+than excluded it). GTE-EXACT verified by ov_rotmat_verify (per-call A/B vs rec_interp(0x80085480)): 5 output
+words + all 32 GTE data regs (XY-FIFO 12-15 / LZCR 31 excluded — untouched + can't round-trip a FIFO restore)
+**0-diff over 55000+ live field calls**. Field run (newgame+skip 600, press r, 300 frames) **35.21M→31.90M
+interp insns (−9.4%; cumulative −25.7% from the 42.93M pre-profiler baseline)**. The fn is gone from the
+profiler hot-list. NEXT cluster siblings: FUN_80085050 (9.3%), FUN_80084EB0 (8.25%), FUN_80084D10 (7.5%),
+FUN_80084220 (2.3%). New #1 hot fn = FUN_80115598 (28.6%, overlay 2D tilemap renderer) + FUN_8013F0DC (10.5%,
+overlay, newly visible) — the second (overlay-override) arc.
