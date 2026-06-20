@@ -370,7 +370,7 @@ static void ov_game_main(Core* c) {
   rc0(c, 0x80075130);
   rc1(c, 0x8009c620, 0);
   rc0(c, 0x8001cc00);
-  rc0(c, 0x800520e0);
+  { void eng_init_subsystems(Core*); eng_init_subsystems(c); }  // was rc0(c, 0x800520e0) — own orchestration native
   rc1(c, 0x80085900, 1);
   rc0(c, 0x80051e00);                       // scheduler-table init (task objs @0x801fe000)
   rc2(c, 0x80051f14, 0, 0x800499e8);        // register task 0, entry FUN_800499e8

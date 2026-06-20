@@ -45,6 +45,19 @@ shape: native work + coro-redirect to the guest TAIL.
   1F800000/2/1/3.) This matches the engine_stage ownership result class (0-diff modulo the override's stack
   bookkeeping).
 
+## later-183: own the engine SUBSYSTEM init FUN_800520e0 orchestration PC-native (eng_init_subsystems) — frontier item 3
+Init-prefix function dispatched once at boot (native_boot.cpp, was `rc0(c, 0x800520e0)`). RE (2 parallel
+Explore agents over ram_menu.bin, also mapped FUN_80075130) confirmed it is FULLY SYNCHRONOUS and touches
+NO GPU/DMA/SPU/GTE — pure engine-state: 6 direct flag writes (*0x800bf4fa=0xffff; *0x800ecf4a/4c/4d/4e/4f=0)
+then 4 subsystem-init callees (8007b328 entity-pool, 80088b00 allocator/dispatch-table[a0=0x800bf4f8,
+a1=0x800bf51a], 80086620 mode-ctrl(1), 80087a60 input). Owned the ORCHESTRATION + the 6 writes native in
+`engine/engine_init.cpp` (`eng_init_subsystems`, mirrors eng_init_framestate); the 4 callees stay dispatched
+(each is SYNC with no effective indirect call at init — 80086620's gated jalr needs counters >0x95, =0 here).
+**A/B GATE PASSED** (boot frame 50, REPL run 50): main-RAM 0-diff AND scratchpad 0-diff vs the guest dispatch.
+NEXT = descend into the 4 callees one by one (entity-pool init connects to the engine's entity ownership).
+FUN_80075130 (font/text) DEFERRED: 8/14 callees are LIBGPU with indirect calls → the later-182b nested-
+dispatch divergence risk; own only its 3 engine-state callees (FUN_800963a0/80096370/800752b4) + memsets later.
+
 ## later-182b: DEAD-END — owning the DEMO ROOT dispatcher prologue (ov_demo_root) introduces a GP0 env-packet divergence; REVERTED
 Tried to own the DEMO root 0x801062E4 prologue native (mirror ov_game_stage_main): reproduce the
 register/flag init, rec_dispatch the two SYNC setup calls (0x800810f0, 0x8005082c), coro-redirect to the

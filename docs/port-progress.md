@@ -69,8 +69,13 @@ for content fns (call it). Do NOT mimic PSX hardware (GTE/GP0/OT) — remove Bee
   - ✅ `FUN_80050a0c` frame-state init = `eng_init_framestate` (engine_init.cpp).
   - ✅ `FUN_800509b4` display + GTE projection = `eng_init_display` (engine_init.cpp).
   - ✅ `FUN_80050a80` camera init = `eng_init_camera` (engine_init.cpp).
-  - ☐ `FUN_80075130` **font / text system init** (ENGINE — front-end UI dependency).
-  - ☐ `FUN_800520e0` **engine subsystem init** (ENGINE — FUN_8007b328, DAT_800ecf4x, …).
+  - ☐ `FUN_80075130` **font / text system init** (ENGINE — front-end UI dependency). DEFERRED: 8 of 14 callees
+    are LIBGPU (draw-env setup) with indirect calls → the later-182b nested-dispatch divergence risk; own its
+    3 engine-state callees (FUN_800963a0/80096370/800752b4) + memsets later, keep the libgpu callees dispatched.
+  - ◐ `FUN_800520e0` **engine subsystem init** = `eng_init_subsystems` (engine_init.cpp) — ORCHESTRATION owned
+    PC-native (later-183): the 6 direct engine-flag writes (*0x800bf4fa=0xffff, *0x800ecf4a/4c/4d/4e/4f=0) +
+    the 4-callee sequence. Boot A/B (frame 50) main-RAM + scratchpad 0-diff. The 4 callees stay dispatched
+    (next descent): 8007b328 entity-pool · 80088b00 allocator/dispatch-table · 80086620 mode ctrl · 80087a60 input.
   - ◐ `FUN_80051e00` scheduler task-table init (rc0'd at boot, native_boot.cpp:371) + `FUN_80051f14` register
     task 0. The native frame loop replaces the per-frame stepper.
 - ✅ Native cooperative frame loop `native_scheduler_step` (replaces `FUN_80051e60`) — `native_boot.cpp`.
@@ -184,7 +189,10 @@ ties into render-ownership, NOT the asset pipeline). (Camera sub-fns below are D
    s1), s4 (0x8007bf20 yields), s5 (0x80052078 stage-restart yields), s7 (loader 0x80106c24 yields) — these
    need the coro-redirect-INTO-the-yielder handshake (a plain rec_dispatch of a deep yielder kills task 0).
    Overlay disasm via `tools/disas.py <addr> --ram scratch/bin/tomba2/ram_menu.bin` (added later-181).
-3. **Init-prefix remainder:** `FUN_80075130` font/text init, `FUN_800520e0` engine subsystem init.
+3. **Init-prefix remainder:** `FUN_800520e0` engine subsystem init — ORCHESTRATION OWNED (later-183,
+   eng_init_subsystems, boot A/B 0-diff); NEXT = descend into its 4 callees (8007b328/80088b00/80086620/87a60).
+   `FUN_80075130` font/text init — DEFERRED (libgpu-heavy, later-182b nested-dispatch risk; own only its 3
+   engine-state callees + memsets, keep libgpu dispatched).
 
 # OPEN / BLOCKED (not on the critical path)
 - **ov_game_s4c verification** needs an in-game AREA transition (sm[0x4a]==2). Free-roam IS reachable headless

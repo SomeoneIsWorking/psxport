@@ -83,3 +83,31 @@ void eng_init_camera(Core* c) {
   c->mem_w16(0x1F8000EE, (uint16_t)(h * -5));
   c->mem_w32(0x1F8000D8, (uint32_t)(h * -0x50000));
 }
+
+// FUN_800520e0 — engine SUBSYSTEM init (init-prefix slot, dispatched at native_boot.cpp once before the
+// scheduler starts). Pure engine-state setup: NO GPU/DMA/SPU/GTE touch, fully synchronous. The body sets
+// six engine flag fields and orchestrates four subsystem-init callees. We own the ORCHESTRATION + the six
+// direct writes PC-native (the engine owns its subsystem-init sequence); the four callees stay dispatched
+// to the retained PSX content for now (each is itself engine-state init — the next descent targets), and
+// they are SYNCHRONOUS with no effective indirect calls at init (FUN_80086620's gated jalr sites need
+// runtime counters >0x95, which are 0 here), so dispatching them is faithful. Faithful to 0x800520e0:
+//   addiu sp,-24; sw ra,0x10; jal 0x8007b328; *0x800bf4fa=0xffff(h);
+//   *0x800ecf4a=0(h); *0x800ecf4c/4d/4e/4f=0(b); jal 0x80088b00(a0=0x800bf4f8,a1=0x800bf51a);
+//   jal 0x80086620(a0=1); jal 0x80087a60; epilogue.
+//   callees: 8007b328 entity-pool init · 80088b00 allocator/dispatch-table init (a0/a1 = its struct span)
+//            · 80086620 mode/subsystem control(1) · 80087a60 input subsystem init.
+void eng_init_subsystems(Core* c) {
+  uint32_t ra = c->r[31], sp = c->r[29];
+  c->r[29] = sp - 0x18; c->mem_w32(c->r[29] + 0x10, ra);   // mirror prologue: addiu sp,-0x18; sw ra,0x10(sp)
+  rec_dispatch(c, 0x8007b328u);          // entity-pool init (synchronous)
+  c->mem_w16(0x800bf4fa, 0xffff);
+  c->mem_w16(0x800ecf4a, 0);
+  c->mem_w8 (0x800ecf4c, 0);
+  c->mem_w8 (0x800ecf4d, 0);
+  c->mem_w8 (0x800ecf4e, 0);
+  c->mem_w8 (0x800ecf4f, 0);
+  c->r[4] = 0x800bf4f8u; c->r[5] = 0x800bf51au; rec_dispatch(c, 0x80088b00u);  // allocator/dispatch table
+  c->r[4] = 1; rec_dispatch(c, 0x80086620u);   // mode/subsystem control(1)
+  rec_dispatch(c, 0x80087a60u);                // input subsystem init
+  c->r[29] = sp; c->r[31] = ra;          // mirror epilogue: addiu sp,+0x18; jr ra
+}
