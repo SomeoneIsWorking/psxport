@@ -32,9 +32,11 @@ void main() {
         // framebuffer-local view 1:1 into the (wider/hi-res) FB. da.xy is the active framebuffer origin.
         float ss = float(w.wa.z);
         vec2 local = i_pos - vec2(i_da.xy);
-        fx = local.x * ss + float(w.wb.w);
+        fx = local.x * ss + float(w.wb.w);              // wb.w = fb_x0 (centering margin*ss)
         fy = float(w.wa.y) + local.y * ss;
-        v_da = ivec4(w.wb.w, w.wa.y, w.wb.w + w.wb.y - 1, w.wa.y + w.wb.z - 1);   // clip = FB rect
+        // Clip = the WHOLE FB extent [0, fbw) — content (3D + anchored 2D) spans fx in [0, fbw), so the
+        // clip origin is 0, NOT fb_x0 (which is just the centering offset baked into fx above).
+        v_da = ivec4(0, w.wa.y, w.wb.y - 1, w.wa.y + w.wb.z - 1);
     } else {
         v_da = i_da;
         fx = i_pos.x; fy = i_pos.y;

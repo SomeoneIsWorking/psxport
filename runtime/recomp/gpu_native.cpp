@@ -101,6 +101,25 @@ void gpu_obj_depth_add(Core* core, uint32_t lo, uint32_t hi, float ord) { core->
 static long s_gp0_words = 0, s_dma2 = 0;  // diagnostics: GP0 words + DMA2 triggers per frame
 long g_nd_3d = 0, g_nd_2d = 0;   // Phase-2 native-depth diag: prims drawn with real depth vs OT-order band
 
+// Engine-owned 2D WIDESCREEN layout. The wide 3D world is centered in the scratch FB by fb_x0=margin*ss
+// (push_wide); 2D prims share that relocation shader, so they get the same +margin. We map each native-320
+// screen X to the pre-shader local X so that, AFTER the shader adds margin, the element lands anchored:
+//   backdrop (full-screen) -> STRETCH to fill the wide FB (no gaps);
+//   left-edge element       -> hug the wide LEFT edge (native size preserved);
+//   right-edge element      -> hug the wide RIGHT edge (native size preserved);
+//   otherwise (centered)    -> shift by margin, registering with the centered 3D world.
+// This replaces the old uniform stretch-about-x0 (which distorted + mis-anchored every HUD element).
+int gpu_vk_wide_engine_w(void);
+static int ws_2d_local_x(int x, int bx0, int bx1, int is_bg) {
+  int ww = gpu_vk_wide_engine_w(), margin = (ww - 320) / 2;
+  if (margin <= 0) return x;                         // 4:3 -> no-op
+  if (is_bg) return x * ww / 320 - margin;           // backdrop: fill (after +margin -> [0,fbw))
+  const int EDGE = 48;                               // HUD edge zone (native px)
+  if (bx0 <= EDGE)       return x - margin;          // left-anchored: hug wide left
+  if (bx1 >= 320 - EDGE) return x + margin;          // right-anchored: hug wide right
+  return x;                                          // centered: +margin (matches the 3D world)
+}
+
 // PSXPORT_PRIMDUMP=<frame>: dump every prim drawn on that frame, in OT-walk order, to
 // scratch/logs/prims_f<frame>.csv — one row per prim: id (walk order), kind, op, is3d, bg(ackdrop),
 // bbox, rgb, textured, semi. Lets a human identify which IDs are the water/sky backdrop so the
@@ -786,8 +805,9 @@ void GpuState::gp0_exec(Core* core) {
       // scale the 2D plane uniformly to the wide width about the framebuffer origin so they fill the frame.
       { int gpu_vk_wide_engine(void), gpu_vk_wide_engine_w(void);
         if (!is3d && gpu_vk_wide_engine() && s_prev_had3d) {  // 2D widen only on gameplay frames
-          int o = s_da_x0, ww = gpu_vk_wide_engine_w();
-          for (int i = 0; i < nv; i++) xs[i] = o + (xs[i] - o) * ww / 320; } }
+          int bx0 = xs[0], bx1 = xs[0];
+          for (int i = 1; i < nv; i++) { if (xs[i] < bx0) bx0 = xs[i]; if (xs[i] > bx1) bx1 = xs[i]; }
+          for (int i = 0; i < nv; i++) xs[i] = ws_2d_local_x(xs[i], bx0, bx1, bg); } }   // engine-owned 2D layout
       if (use_rq) {
         // Engine owns ordering: hand the prim to the render queue tagged with its layer + depth mode.
         int layer = is3d ? RQ_WORLD : (bg ? RQ_BACKGROUND : RQ_HUD);
@@ -934,10 +954,10 @@ void GpuState::gp0_exec(Core* core) {
       // sprites (sky/water backdrop + HUD) bypass the GTE, so they must be widened here. Scale the whole
       // 2D plane uniformly to the wide width around the framebuffer origin (s_da_x0) so a tiled backdrop
       // fills the frame with NO gaps.
-      { int gpu_vk_wide_engine(void), gpu_vk_wide_engine_w(void);
+      { int gpu_vk_wide_engine(void);
         if (gpu_vk_wide_engine() && s_prev_had3d) {       // only widen 2D on gameplay frames (else pillarbox)
-          int o = s_da_x0, ww = gpu_vk_wide_engine_w();   // map native [0,320] about origin -> [0,ww]
-          XL = o + (XL - o) * ww / 320; XR = o + (XR - o) * ww / 320;
+          XL = ws_2d_local_x(XL, X, X + w, bg);           // engine-owned 2D layout (anchored, native size)
+          XR = ws_2d_local_x(XR, X, X + w, bg);
         } }
       int qx[4] = { XL, XR, XL, XR }, qy[4] = { Y, Y, Y+h, Y+h };
       int qu[4] = { u0, u0+w, u0, u0+w }, qv[4] = { v0, v0, v0+h, v0+h };

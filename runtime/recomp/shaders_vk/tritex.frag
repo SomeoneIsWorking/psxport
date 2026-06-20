@@ -29,7 +29,10 @@ void main() {
         int u = int(v_uv.x), v = int(v_uv.y);
         u = (u & ~(v_tw.x * 8)) | ((v_tw.z & v_tw.x) * 8);
         v = (v & ~(v_tw.y * 8)) | ((v_tw.w & v_tw.y) * 8);
-        u &= 255; v &= 255;
+        // NO unconditional u&=255/v&=255: the SW reference (sample_tex) wraps U/V ONLY through the
+        // texture window (above); forcing &255 re-wrapped interpolated U>=256 back into the same texpage
+        // -> a sprite that spans into the next page re-sampled its left columns = vertical bars (#8/#9
+        // dust + effect stripes). vram_at already masks the final VRAM address to 1023x511.
         int tpx = v_tp.x, tpy = v_tp.y, clutx = v_clut.x, cluty = v_clut.y;
         if (mode == 0)      { uint w = vram_at(tpx+(u>>2), tpy+v); texel = vram_at(clutx+int((w>>((u&3)*4))&0xFu), cluty); }
         else if (mode == 1) { uint w = vram_at(tpx+(u>>1), tpy+v); texel = vram_at(clutx+int((w>>((u&1)*8))&0xFFu), cluty); }

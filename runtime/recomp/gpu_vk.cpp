@@ -725,11 +725,13 @@ static void poll_quit(void) {
 // Push the vertex-stage wide/supersample transform (VPC). `enabled` lets diagnostic passes force the
 // identity (non-wide) transform while still satisfying the shader's img_h dependency.
 static void push_wide(int enabled) {
-  // ss = internal-res scale. There is no horizontal re-center: 4:3 hi-res just scales the native view by
-  // s_ires (no FOV change), and genuine-wide places the already-wider projection 1:1 in the scratch FB.
-  // (The PSXPORT_SBS depth select is a pipeline specialization constant, not a push constant — see
-  // SBS_NATIVE in the shaders.) wb.x is reserved (kept 0) to preserve the push-constant layout.
-  int32_t va[8] = { enabled, FB_Y0, s_ires, IMG_H,   0 /*reserved*/, FBW(), FBH(), 0 /*fb_x0*/ };
+  // ss = internal-res scale. fb_x0 CENTERS the native 320-wide view in the (wider) FB: the world projects
+  // about the faithful OFX center (160), so without this the relocation (fx = local.x*ss + fb_x0) left-
+  // anchored the world and the extra wide FOV only appeared on the RIGHT. fb_x0 = margin*ss places the
+  // native band centered, so the widened cull's extra geometry fills BOTH side margins symmetrically.
+  // 4:3 -> margin 0 -> fb_x0 0 (byte-identical). wb.x stays reserved (0).
+  int margin = (wide_native_w() - 320) / 2;              // half the extra wide width, native px
+  int32_t va[8] = { enabled, FB_Y0, s_ires, IMG_H,   0 /*reserved*/, FBW(), FBH(), margin * s_ires };
   vkCmdPushConstants(s_cmd, s_pll, VK_SHADER_STAGE_VERTEX_BIT, 16, 32, va);
 }
 
