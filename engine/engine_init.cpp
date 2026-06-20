@@ -176,6 +176,47 @@ void eng_init_input(Core* c) {
   c->mem_w32(0x800abe70, 1);
 }
 
+// FUN_80088b00 — engine ALLOCATOR / dispatch-table init. a0/a1 = a struct span (0x800bf4f8/0x800bf51a).
+// Installs the 6-entry mode dispatch table (0x800abe38..0x800abe4c) + 0x800abe5c/6c, then builds the
+// 480-byte allocator heap at 0x80102500: 2 per-mode records (stride 240), each tagging its source byte
+// (s1 / s2) 0xff and writing a 6-byte run + the two roving pointers a2/a3 (+35 each). We own the direct
+// writes + the loop native and rec_dispatch the 3 callees (FUN_80089160 pre-init, FUN_8009a340 = the
+// 480-byte clear, FUN_80086738 post) in-context. Faithful to 0x80088b00 (a0=s1, a1=s2 from the caller).
+void eng_init_alloc(Core* c) {
+  uint32_t s1 = c->r[4], s2 = c->r[5];        // 0x800bf4f8 / 0x800bf51a from eng_init_subsystems
+  c->mem_w32(0x800abe70, 0);
+  c->mem_w32(0x800abe84, 0);
+  c->r[4] = s1; rec_dispatch(c, 0x80089160u);
+  uint32_t s0 = 0x80102500u;
+  c->mem_w32(0x800abe38, 0x80088cc8u);   // lui 0x8009 + addiu -N (sign-extended) -> 0x8008xxxx
+  c->mem_w32(0x800abe3c, 0x80088c60u);
+  c->mem_w32(0x800abe40, 0x80088dccu);
+  c->mem_w32(0x800abe44, 0x80088e88u);
+  c->mem_w32(0x800abe48, 0x80089104u);
+  c->mem_w32(0x800abe4c, 0x8008913cu);
+  c->mem_w32(0x800abe6c, s0);
+  c->mem_w32(0x800abe5c, 0x80088dbcu);
+  c->r[4] = s0; c->r[5] = 480; rec_dispatch(c, 0x8009a340u);   // clear the 480-byte heap
+  c->mem_w32(s0 + 48, s1);                     // once: seed record[0].src = s1
+  c->mem_w32(s0 + 288, s2);                    // once: seed record[1].src = s2
+  uint32_t a0 = s0 + 64, a3 = 0x801024b8u, a2 = 0x80102470u;
+  for (int t0 = 0; t0 < 2; t0++) {             // 2 records (a0 == s0+64 throughout: both advance 240)
+    uint32_t v0 = c->mem_r32(a0 - 16);         // = *(s0+48) -> the record's tagged source ptr (s1 / s2)
+    uint32_t a1 = s0 + 93;
+    c->mem_w32(a0 - 52, 0);
+    c->mem_w32(a0 - 48, s0);
+    c->mem_w8 (v0, 0xff);
+    v0 = c->mem_r32(a0 - 16);
+    c->mem_w8 (v0 + 1, 0);
+    c->mem_w32(a0 - 4, a2);
+    c->mem_w32(a0, a3);
+    for (int v1 = 5; v1 >= 0; v1--) { c->mem_w8(a1, 0xff); a1 += 1; }  // 6-byte run
+    a3 += 35; a2 += 35; a0 += 240; s0 += 240;
+  }
+  rec_dispatch(c, 0x80086738u);
+  c->mem_w32(0x800abe70, 1);
+}
+
 void eng_init_subsystems(Core* c) {
   uint32_t ra = c->r[31], sp = c->r[29];
   c->r[29] = sp - 0x18; c->mem_w32(c->r[29] + 0x10, ra);   // mirror prologue: addiu sp,-0x18; sw ra,0x10(sp)
@@ -186,7 +227,7 @@ void eng_init_subsystems(Core* c) {
   c->mem_w8 (0x800ecf4d, 0);
   c->mem_w8 (0x800ecf4e, 0);
   c->mem_w8 (0x800ecf4f, 0);
-  c->r[4] = 0x800bf4f8u; c->r[5] = 0x800bf51au; rec_dispatch(c, 0x80088b00u);  // allocator/dispatch table
+  c->r[4] = 0x800bf4f8u; c->r[5] = 0x800bf51au; eng_init_alloc(c);  // allocator/dispatch table — owned native
   eng_init_mode_ctrl(c, 1);                    // mode control(1) — owned native (no-op at init)
   eng_init_input(c);                           // input subsystem init (FUN_80087a60->80086970) — owned native
   c->r[29] = sp; c->r[31] = ra;          // mirror epilogue: addiu sp,+0x18; jr ra
