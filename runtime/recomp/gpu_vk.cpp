@@ -456,7 +456,7 @@ static void init_vk(void) {
     SDL_Vulkan_GetInstanceExtensions(s_win, &ext_n, exts);
   }
   uint32_t avail_n = 0; vkEnumerateInstanceExtensionProperties(0, &avail_n, 0);
-  VkExtensionProperties* avail = malloc(sizeof *avail * avail_n);
+  VkExtensionProperties* avail = (VkExtensionProperties*)malloc(sizeof *avail * avail_n);
   vkEnumerateInstanceExtensionProperties(0, &avail_n, avail);
   VkInstanceCreateFlags inst_flags = 0;
   if (has_ext(avail, avail_n, "VK_KHR_portability_enumeration")) {
@@ -478,13 +478,13 @@ static void init_vk(void) {
 
   // pick a physical device with a graphics(+present, unless headless) queue family
   uint32_t pn = 0; vkEnumeratePhysicalDevices(s_inst, &pn, 0);
-  VkPhysicalDevice* phys = malloc(sizeof *phys * pn);
+  VkPhysicalDevice* phys = (VkPhysicalDevice*)malloc(sizeof *phys * pn);
   vkEnumeratePhysicalDevices(s_inst, &pn, phys);
   int dev_portability = 0;
   s_phys = VK_NULL_HANDLE;
   for (uint32_t i = 0; i < pn && s_phys == VK_NULL_HANDLE; i++) {
     uint32_t qn = 0; vkGetPhysicalDeviceQueueFamilyProperties(phys[i], &qn, 0);
-    VkQueueFamilyProperties* qf = malloc(sizeof *qf * qn);
+    VkQueueFamilyProperties* qf = (VkQueueFamilyProperties*)malloc(sizeof *qf * qn);
     vkGetPhysicalDeviceQueueFamilyProperties(phys[i], &qn, qf);
     for (uint32_t q = 0; q < qn; q++) {
       VkBool32 present = 0;
@@ -499,7 +499,7 @@ static void init_vk(void) {
   if (s_phys == VK_NULL_HANDLE) { fprintf(stderr, "[gpu_vk] no suitable GPU\n"); exit(2); }
 
   uint32_t den = 0; vkEnumerateDeviceExtensionProperties(s_phys, 0, &den, 0);
-  VkExtensionProperties* de = malloc(sizeof *de * den);
+  VkExtensionProperties* de = (VkExtensionProperties*)malloc(sizeof *de * den);
   vkEnumerateDeviceExtensionProperties(s_phys, 0, &den, de);
   dev_portability = has_ext(de, den, "VK_KHR_portability_subset");
   free(de);
@@ -770,7 +770,7 @@ void GpuVkState::panel_upload(Panel* p) {
       r.bufferRowLength = VRAM_W;
       r.imageSubresource = (VkImageSubresourceLayers){ VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
       r.imageOffset = (VkOffset3D){ s_dirty[d].x, s_dirty[d].y, 0 };
-      r.imageExtent = (VkExtent3D){ s_dirty[d].w, s_dirty[d].h, 1 };
+      r.imageExtent = (VkExtent3D){ (uint32_t)s_dirty[d].w, (uint32_t)s_dirty[d].h, 1 };
       vkCmdCopyBufferToImage(s_cmd, s_stage, p->color, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &r);
     }
   }

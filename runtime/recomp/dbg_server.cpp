@@ -304,7 +304,7 @@ static char* dbg_submit(const char* line, size_t* out_len) {
   return buf;
 timeout:;
   const char* msg = "(debug server: command timed out — game frozen or busy)\n";
-  char* b = malloc(strlen(msg) + 1); if (b) strcpy(b, msg); *out_len = b ? strlen(msg) : 0;
+  char* b = (char*)malloc(strlen(msg) + 1); if (b) strcpy(b, msg); *out_len = b ? strlen(msg) : 0;
   return b;
 }
 
@@ -319,7 +319,7 @@ static void serve_conn(int fd) {
     ssize_t n = read(fd, in + fill, sizeof in - 1 - fill);
     if (n <= 0) break;
     fill += (size_t)n; in[fill] = 0;
-    if ((nl = memchr(in, '\n', fill)) != NULL) break;
+    if ((nl = (char*)memchr(in, '\n', fill)) != NULL) break;
   }
   if (nl) *nl = 0; else in[fill] = 0;
   char line[512]; snprintf(line, sizeof line, "%s", in);
