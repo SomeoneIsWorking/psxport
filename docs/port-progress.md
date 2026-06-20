@@ -132,11 +132,15 @@ quest / event / progression / game-rule logic.
 # CURRENT FRONTIER (work these, in this order)
 **USER REDIRECT 2026-06-20 (later-177) — supersedes the camera items below.** Port top-down boot→gameplay;
 the ASSET PIPELINE must be fully PC-owned so assets reconstruct with the emulator OFF. Acceptance test:
-reconstruct the sea backdrop (native 288×576) bit-identical. Decode is owned (`PSXPORT_TEXEXPORT`); the GAP is
-the asset LOADER ORCHESTRATION (eng_load_stage FUN_800450bc → group-table/descriptor build → where each image
-lands → multi-page backdrop assembly) + the per-image post-step FUN_80080f6c. Own the loader FIRST, then match
-100%. Also: the title/menu BG render is regressed (background not submitted — see later-177) and must render
-under PC ownership before the menu image can be exported. (Camera sub-fns below are DEFERRED behind this.)
+reconstruct the sea backdrop bit-identical.
+**STATUS: the texture asset pipeline is now FULLY PC-OWNED and the acceptance test PASSES (later-177).**
+Owned this session: the unpack post-step (libgs DrawSync dropped from the synchronous native upload path), the
+per-group LOADER ORCHESTRATION `FUN_80044F58` → `ov_load_texgroup` (header+archive CD-load, unpack, metadata,
+terminal yield), and the OFFLINE reconstructor `tools/tex_reconstruct.c` that rebuilds the seaside VRAM atlas
+from raw compressed bytes with NO PSX — 99.95% bit-identical to live VRAM, residual = runtime-animated CLUTs only.
+**REMAINING under this redirect:** (a) the on-screen 288×576 backdrop COMPOSITION (engine-owned 2D layer/sort,
+ties into render-ownership, NOT the asset pipeline); (b) the title/menu BG render regression (background not
+submitted — see later-177) before the menu image can be exported. (Camera sub-fns below are DEFERRED behind this.)
 
 
 1. **Camera per-MODE orchestrators `FUN_8006e0f0` / `FUN_8006e228` / `FUN_8006e3f4`** — call the owned position
