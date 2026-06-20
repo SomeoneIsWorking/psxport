@@ -334,19 +334,23 @@ computes the projection and can carry the real per-vertex view-Z straight to the
   - **OWNED native (later-174, verified RAM 0-diff):** `FUN_8006d960` X/Z (`ov_cam_track_xz`, maxstep 6144) +
     `FUN_8006da54` Y (`ov_cam_track_y`, maxstep 5632) → camera POSITION X/Y/Z is native (engine_camera.cpp).
   - **The rest of the camera-update system (NEXT), mapped by walking functions (disas.py is function-scoped):**
-    - **Rotation-matrix / look-at builder (the 0x8006e89c/e8bc writer cluster)** — writes the camera matrix-
-      adjacent fields `0x1f8000d0`/`d8` + reads center `0x1f800160/164` and the cam pos `0x1f8000d2/da`.
-      **NOTE: 0x8006e6a8 is NOT the entry — it's one CASE of a jump-table switch.** The real function has its
-      prologue EARLIER (48-byte frame, saves s0–s5/ra; epilogue `jr ra`@0x8006e8f0, `sp+=48`); a computed
-      `jr v0`@0x8006e6a4 dispatches through the table at **0x800169cc** into per-camera-MODE cases (each case
-      0x8006e6a8.. computes a target ANGLE differently from the camera obj fields s1[+0x61/+0x140/+0x56/+0x147]
-      + global `0x1f800196`), then a COMMON look-at tail @0x8006e7c8: `rcos/rsin(angle)·radius` → look point,
-      `ratan2(dz,dx)` → yaw, `isqrt(dx²+dz²)` → distance, then pitch into 0x1f8000d0/d8. **PORT APPROACH: own
-      the control flow + arithmetic natively but CALL the libgte trig via `rec_dispatch` (0x80083e80=rsin,
-      0x80083f50=rcos, 0x80085690=ratan2, 0x80084080=isqrt) — do NOT reproduce their LUTs (that's mimicking;
-      they're a retained math library, call them).** First: find the prologue (scan back from 0x8006e6a8 for
-      `addiu sp,-48`) + the switch variable; then port case-by-case, A/B-gating each on the motion scene.
-      A big multi-mode function — its own focused unit of work.
+    - **Rotation / look-at builder `FUN_8006e464` — OWNED native (`ov_cam_rotbuild`, engine_camera.cpp,
+      later-175).** Entry is **0x8006e464** (prologue: 48-byte frame, saves s0–s5/ra; epilogue `jr ra`@0x8006e8f0);
+      0x8006e6a8 is just one CASE of the **0x800169cc** jump table. Structure: a mode dispatch with TWO jump
+      tables — table1 @**0x80016994** (13 entries, on `G[+0x164]`, G=0x800e7e80) and table2 @**0x800169cc**
+      (8 entries, on `((G[+0x61]&0xff)>>4)-1`) — plus a `c114(cam+0x72)&0x40` "mode-A" path and a
+      `c114&2` path, each producing a heading ANGLE; then the COMMON look-at tail @0x8006e7c8:
+      `look = center(0x1f800160/164) ± rcos/rsin(angle)·radius>>12`, `yaw = ratan2(-dz, dx)`,
+      `dist = isqrt(dx²+dz²)`, then `0x1f8000d0 += rcos(yaw)·dist>>1`, `0x1f8000d8 -= rsin(yaw)·dist>>1`
+      (cam[+0x66]|=1 when dist<401). cam pos read from `0x1f8000d2/da`. **RADIUS = sext16(-mem_r16(0x1f8000ee))**
+      — set as s2 in the DELAY SLOT @e4d8 (UNCONDITIONAL, before dispatch), sext16'd at each use; the e518 path
+      overrides to -ee-600. (Mis-reading that delay slot as an ancestor-supplied s2 register, and forgetting the
+      sext16, were the two bugs caught by the gate.) **PORT APPROACH (done):** own control flow + arithmetic
+      native, CALL libgte trig via `rec_dispatch` (0x80083e80=rsin, 0x80083f50=rcos, 0x80085690=ratan2,
+      0x80084080=isqrt) — do NOT reproduce their LUTs. **GATE:** output is SCRATCHPAD → main-RAM A/B is BLIND;
+      use the per-call comparator `PSXPORT_DEBUG=camverify` (snapshot scratchpad, run native, restore, run recomp
+      oracle, compare) — 0-diff with d0 accumulating on the free-roam MOTION scene (continuous movement; a
+      stopped scene is degenerate). Default field path = table1 case-0; special-camera modes ported but latent.
     - **Per-MODE orchestrators** (each calls the position smoothers + a matrix builder; different camera
       behaviours): `FUN_8006e0f0`, `FUN_8006e228`, `FUN_8006e3f4` (call 0x8006d960/da54), and matrix-side
       `FUN_8006dad8`/`FUN_8006def0` (call the libgte helpers). A camera-mode selector calls one per frame.

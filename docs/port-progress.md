@@ -41,7 +41,11 @@ PSXPORT_RAMDUMP_FRAME=650 PSXPORT_RAMDUMP=scratch/bin/on.bin \
 cmp -l scratch/bin/on.bin scratch/bin/off.bin | wc -l      # MUST be 0
 ```
 Also dump a second frame (e.g. 900) and the idle field (no AUTO_SKIP/WALK). Confirm FIRES via a `PSXPORT_DEBUG`
-log. **Beetle oracle** (`runtime/wide60rt`, `make -C runtime`) is the cross-check when there's no override-OFF
+log. **If the function's OUTPUT is in SCRATCHPAD (0x1F8000xx) the main-RAM dump is BLIND to it** — use a
+per-call comparator instead (pattern: `engine_camera.cpp` `ov_cam_rotbuild_verify`, `PSXPORT_DEBUG=camverify`):
+snapshot scratchpad+regs, run native, capture writes, restore, run the recomp oracle (`rec_interp(addr)`),
+compare. Self-test the harness (oracle-vs-oracle = 0) first. And ensure the scene actually EXERCISES the output
+(an accumulator only moves while the player MOVES — a stopped scene is a degenerate, false A==B gate). **Beetle oracle** (`runtime/wide60rt`, `make -C runtime`) is the cross-check when there's no override-OFF
 reference. Tools: `tools/disas.py`, `PSXPORT_WWATCH=<ka_lo>,<ka_hi>` (find who writes an addr; ka=addr|0x80000000),
 `PSXPORT_DEBUG=state` (task slots — is a menu/task alive?), `PSXPORT_DEBUG=cam` (camera pos), render gate
 `PSXPORT_PRIMDUMP=<frame>`. Gotchas: `docs/driving-the-game.md §0`.
@@ -96,7 +100,10 @@ for content fns (call it). Do NOT mimic PSX hardware (GTE/GP0/OT) — remove Bee
 - ✅ `FUN_80051C8C` per-object TRANSFORM build = `ov_build_xform`.
 - **Camera update (engine_camera.cpp):**
   - ✅ position X/Z `FUN_8006d960` = `ov_cam_track_xz`; ✅ position Y `FUN_8006da54` = `ov_cam_track_y` (later-174).
-  - ☐ rotation-MATRIX builder `FUN_8006e6a8` (libgte RotMatrix → 0x1f8000f8 + forward 0x1f8000e8). **NEXT-camera.**
+  - ✅ rotation / LOOK-AT builder `FUN_8006e464` = `ov_cam_rotbuild` (engine_camera.cpp, later-175) — 2 jump
+    tables + common look-at tail; owns control flow + arithmetic native, CALLS libgte rsin/rcos/ratan2/isqrt
+    via rec_dispatch. Output 0x1f8000d0/d8 is SCRATCHPAD (main-RAM diff is blind) → gated by per-call
+    comparator `PSXPORT_DEBUG=camverify` (native vs recomp oracle, 0-diff, d0 accumulating on motion scene).
   - ☐ per-MODE orchestrators `FUN_8006e0f0` / `FUN_8006e228` / `FUN_8006e3f4` (call the smoothers; multi-mode).
 - ✅ Terrain `FUN_8002AB5C` = `ov_terrain` (native_terrain.cpp, later-158).
 - ✅ Render submit: geom GT3/GT4/gt4_bp, per-object render `0x8003CCA4`, render walk `0x8003C048` — engine_submit.
@@ -115,8 +122,9 @@ quest / event / progression / game-rule logic.
 ---
 
 # CURRENT FRONTIER (work these, in this order)
-1. **Camera rotation-MATRIX builder `FUN_8006e6a8`** (+ the active mode orchestrator) — finish the camera system.
-   Needs faithful libgte RotMatrix (euler→matrix via sin/cos LUT). Gate: RAM-match on the motion scene. (later-174)
+1. **Camera per-MODE orchestrators `FUN_8006e0f0` / `FUN_8006e228` / `FUN_8006e3f4`** — call the owned position
+   smoothers + the owned look-at builder; a camera-mode selector calls one per frame. Finish the camera system.
+   (The look-at builder `FUN_8006e464` itself is now owned — later-175.)
 2. **DEMO / front-end MENU stage `0x801062E4`** — the big un-owned system in execution order between boot and
    gameplay. Title→New Game. Own its substate machine PC-native.
 3. **Init-prefix remainder:** `FUN_80075130` font/text init, `FUN_800520e0` engine subsystem init.

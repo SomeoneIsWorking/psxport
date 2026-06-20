@@ -1,5 +1,29 @@
 # Debug / progress journal
 
+## later-175: own the per-frame camera ROTATION / LOOK-AT builder `FUN_8006e464` native (engine_camera.cpp)
+Owned the camera look-at/pitch builder — a big multi-mode function (entry **0x8006e464**, NOT 0x8006e6a8
+which is one jump-table case). `ov_cam_rotbuild` (engine/engine_camera.cpp). It picks a camera MODE via two
+jump tables (table1 @0x80016994 on `G[+0x164]`; table2 @0x800169cc on `((G[+0x61]&0xff)>>4)-1`; G=0x800e7e80)
+plus a `cam[+0x72]&0x40` "mode-A" and a `&2` path, computes a heading ANGLE, then the COMMON look-at tail
+@0x8006e7c8: look point = `center(0x1f800160/164) ± rcos/rsin(angle)·radius>>12`; `yaw=ratan2(-dz,dx)`;
+`dist=isqrt(dx²+dz²)`; `0x1f8000d0 += rcos(yaw)·dist>>1`, `0x1f8000d8 -= rsin(yaw)·dist>>1`. Owns control
+flow + arithmetic native, CALLS libgte rsin/rcos/ratan2/isqrt via rec_dispatch (NOT reproducing their LUTs).
+- **Two bugs, both caught by the gate (not by eyeballing):** (1) RADIUS is set as `s2 = -mem_r16(0x1f8000ee)`
+  in the **DELAY SLOT @e4d8**, which executes UNCONDITIONALLY before the mode dispatch — I first mis-modeled it
+  as an ancestor-supplied live `r[18]` (=1), giving radius 1 instead of ~1748. (2) The recomp **sext16's s2**
+  right before each mult; without that, `-ee` read as u16 (63786) gave radius −63786 instead of +1750. Correct:
+  `radius = (int16_t)(-(int32_t)mem_r16(0x1f8000ee))`; the e518 path overrides to `(int16_t)(-ee-600)`.
+- **GATE — output is SCRATCHPAD (0x1f8000d0/d8), which the main-RAM A/B dump is BLIND to** (the CLAUDE.md
+  scratchpad caveat in practice). Built a per-call comparator `PSXPORT_DEBUG=camverify`: snapshot the full
+  1KB scratchpad + reg file, run native, capture its writes, restore, run the recomp **oracle**
+  (`rec_interp(0x8006e464)`, bypasses the override), compare 0x1f8000d0/d8 + cam[+0x8c]/[+0x66]. Self-tested
+  the harness (oracle-vs-oracle = 0 diff) before trusting it. **0 mismatches across 3 scenes** with d0
+  ACTIVELY accumulating (continuous-movement walk script — a STOPPED scene is degenerate A==B and a false gate;
+  this corrected the handoff's assumption that a plain `AUTO_WALK=r` exercises rotation).
+- Diagnostic tap `isqrt(a0)` tagged by run made the divergence obvious: native passed `isqrt(3059017)` (dist
+  1748) while the oracle passed `isqrt(0)` (lookpoint exactly on the camera) → pointed straight at the radius.
+- NEXT: the per-mode orchestrators `FUN_8006e0f0/e228/e3f4` (call the owned smoothers + this builder).
+
 ## later-174: own the per-frame camera X/Z FOLLOW native (engine/engine_camera.cpp) — first verified on motion
 Resumed engine porting (user: "go back to porting the game"). Owned the camera-follow's X/Z tracker
 `FUN_8006d960` (0x8006d960) PC-native — the per-frame function that rate-limits the camera position toward
