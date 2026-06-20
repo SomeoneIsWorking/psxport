@@ -194,6 +194,14 @@ for content fns (call it). Do NOT mimic PSX hardware (GTE/GP0/OT) — remove Bee
   live call (Y-axis rotation barely fires in 2.5D seaside) but is the same kernel verified at scale on its
   siblings + offsets/sign read directly from the disas. Field run 31.90M→27.06M insns (−15.2%; **cumulative
   −37% from baseline**). The whole GTE transform cluster is now OWNED + gone from the hot-list.
+- ✅ GTE RotMatrix VARIANT `FUN_80084A80` = `ov_rot84A80` (engine_math.cpp, later-189). Build a 3x3 matrix
+  from 3 Euler angles (a0 SVECTOR vx/vy/vz, a1 MATRIX out + v0). PURE — SIN/COS LUT @0x800a6490 + native
+  16-bit mults (multu/MFLO), NO GTE ops, so no GTE side-effects to mirror. Different element layout/rotation
+  order than 80085480 (m20=−s1; m00=c1c2; etc — full layout in the fn comment). Intermediates kept 32-bit
+  (asm's `sra ,12` stays register-width before re-multiplying); only the final `sh` stores truncate to 16.
+  VERIFIED 0-diff 5000+ live field calls (forced-verify build: resident-math overrides latch `v` at boot,
+  so the REPL `debug mathverify` line arrives too late — verify by registering `*_verify` unconditionally
+  for the one-time gate, then revert to the gated form). Was 4.4% of field hot time, now gone from hot-list.
 - ✅ Render submit: geom GT3/GT4/gt4_bp, per-object render `0x8003CCA4`, render walk `0x8003C048` — engine_submit.
 - ✅ AUXILIARY render walks `0x8003BCF4` / `0x8003BF00` / `0x8003EEC0` = `ov_rwalk_aux_*` (engine_submit.cpp,
   issue #4): faithful per-node lift of each recomp body + per-node `gpu_obj_depth_add(world-pos depth)` so
@@ -270,8 +278,9 @@ in-port profiler (later-186, `interp.cpp`) gives the TIME + FREQUENCY histograms
   - ~~`FUN_8007712C` 11.2% per-object CULL~~ ✅ OWNED (later-188, cull_native_body, §D). ~~`ov_8013FAE0`
     4.25% tile-lookup leaf~~ ✅ OWNED (later-188b, ov_tile_lookup, engine_submit.cpp; pure `tab[52*a1+a0]
     & (mask<<4)`, signature-registered, tileverify 0-diff 60000+ calls).
-  - resident leaves still visible: `FUN_800931C0` 6.5%, `FUN_80084A80` 4.4%, `FUN_801401B8` 4.1% (overlay),
+  - resident leaves still visible: `FUN_800931C0` 6.5% (font/text → render), `FUN_801401B8` 4.1% (overlay),
     `FUN_80051464` 3.8%, `FUN_800597AC` 3.6%, `FUN_8007778C` 3.4%, `FUN_8003F698` 3.0% (26k×2 calls).
+    ~~`FUN_80084A80` 4.4%~~ ✅ OWNED native (later-189, ov_rot84A80 RotMatrix variant; verified 0-diff 5000+).
   - ~~`FUN_80084080` 9% (mis-attributed; real 0.5%)~~ ✅ OWNED native (later-186, ov_gte_norm) — table sqrt via
     LZCR→LUT, GTE used only as CLZ; verified 0-diff 15000+ live calls. ~~`FUN_80077FB0` isqrt~~ ✅ OWNED. See §D.
   - `FUN_80076D68` 3.6% (no GTE) = animation-sequence VM stepper (control flow + 3 callees 80075f0c/80076904/

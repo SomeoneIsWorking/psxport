@@ -428,6 +428,68 @@ static void ov_apply_matlv_verify(Core* c) {
   for (int i=0;i<32;i++) gte_write_data(i, gdm[i]); c->r[2]=out;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────────────────────────
+// FUN_80084A80 — libgte RotMatrix variant: build a 3x3 matrix from 3 Euler angles (a0 = SVECTOR*,
+// vx@+0/vy@+2/vz@+4), a1 = MATRIX* out (also returned in v0). PURE — SIN/COS LUT @0x800a6490 + native
+// 16-bit multiplies (multu/mflo, low 32 bits = signed product), NO GTE ops, so no GTE side-effects to
+// mirror. Element layout/composition differs from FUN_80085480 (different rotation order). Transcribed
+// from the asm's exact product/shift/store sequence: each product is >>12 (arithmetic), intermediates
+// kept full 32-bit (the asm's `sra ,12` results stay register-width before being re-multiplied), and
+// only the final `sh` stores truncate to 16 bits. All three angles use posSin=+1 (sin sign = angle
+// sign), so rotpair_trig is reused directly. Layout (s_i=sin, c_i=cos of angle i):
+//   m00=(c1*c2)>>12                              m20=-s1
+//   m01=((s0*s1>>12)*c2>>12)-(s2*c0>>12)         m21=(s0*c1)>>12
+//   m02=((s1*c0>>12)*c2>>12)+(s0*s2>>12)         m22=(c0*c1)>>12
+//   m10=(s2*c1)>>12
+//   m11=((s0*s1>>12)*s2>>12)+(c0*c2>>12)
+//   m12=((s1*c0>>12)*s2>>12)-(s0*c2>>12)
+static void ov_rot84A80(Core* c) {
+  uint32_t a0 = c->r[4], out = c->r[5];
+  int s0,c0,s1,c1,s2,c2;
+  rotpair_trig(c, (uint32_t)(int32_t)(int16_t)c->mem_r16(a0+0), +1, &s0, &c0);
+  rotpair_trig(c, (uint32_t)(int32_t)(int16_t)c->mem_r16(a0+2), +1, &s1, &c1);
+  rotpair_trig(c, (uint32_t)(int32_t)(int16_t)c->mem_r16(a0+4), +1, &s2, &c2);
+  int32_t s0s1 = ((int32_t)s0*s1) >> 12;   // kept full 32-bit (re-multiplied below)
+  int32_t s1c0 = ((int32_t)s1*c0) >> 12;
+  int16_t m00 = (int16_t)(((int32_t)c1*c2) >> 12);
+  int16_t m01 = (int16_t)(((s0s1*c2) >> 12) - (((int32_t)s2*c0) >> 12));
+  int16_t m02 = (int16_t)(((s1c0*c2) >> 12) + (((int32_t)s0*s2) >> 12));
+  int16_t m10 = (int16_t)(((int32_t)s2*c1) >> 12);
+  int16_t m11 = (int16_t)(((s0s1*s2) >> 12) + (((int32_t)c0*c2) >> 12));
+  int16_t m12 = (int16_t)(((s1c0*s2) >> 12) - (((int32_t)s0*c2) >> 12));
+  int16_t m20 = (int16_t)(-s1);
+  int16_t m21 = (int16_t)(((int32_t)s0*c1) >> 12);
+  int16_t m22 = (int16_t)(((int32_t)c0*c1) >> 12);
+  c->mem_w16(out+0x0, (uint16_t)m00);
+  c->mem_w16(out+0x2, (uint16_t)m01);
+  c->mem_w16(out+0x4, (uint16_t)m02);
+  c->mem_w16(out+0x6, (uint16_t)m10);
+  c->mem_w16(out+0x8, (uint16_t)m11);
+  c->mem_w16(out+0xa, (uint16_t)m12);
+  c->mem_w16(out+0xc, (uint16_t)m20);
+  c->mem_w16(out+0xe, (uint16_t)m21);
+  c->mem_w16(out+0x10,(uint16_t)m22);
+  c->r[2] = out;
+}
+static void ov_rot84A80_verify(Core* c) {
+  uint32_t rsave[32]; memcpy(rsave, c->r, sizeof rsave);
+  uint32_t out = c->r[5];
+  uint32_t osave[5]; for (int i=0;i<5;i++) osave[i]=c->mem_r32(out+i*4);
+  ov_rot84A80(c);
+  uint32_t om[5]; for (int i=0;i<5;i++) om[i]=c->mem_r32(out+i*4);
+  uint32_t vm = c->r[2];
+  memcpy(c->r, rsave, sizeof rsave);
+  for (int i=0;i<5;i++) c->mem_w32(out+i*4, osave[i]);
+  rec_interp(c, 0x80084A80u);
+  uint32_t oo[5]; for (int i=0;i<5;i++) oo[i]=c->mem_r32(out+i*4);
+  uint32_t vo = c->r[2];
+  static int nbad=0, ngood=0; int bad=0;
+  for (int i=0;i<5;i++) if (om[i]!=oo[i]) { bad=1; if (nbad<60) fprintf(stderr,"[mathverify] rot84A80 out+%d mine=%08x oracle=%08x\n", i*4, om[i], oo[i]); }
+  if (vm!=vo) { bad=1; if (nbad<60) fprintf(stderr,"[mathverify] rot84A80 v0 mine=%08x oracle=%08x\n", vm, vo); }
+  if (bad) nbad++; else if ((ngood++%5000)==0) fprintf(stderr,"[mathverify] rot84A80 match #%d\n", ngood);
+  memcpy(c->r, rsave, sizeof rsave); for (int i=0;i<5;i++) c->mem_w32(out+i*4,om[i]); c->r[2]=vm;
+}
+
 void engine_math_register(void) {
   // Verified bit-exact: 65000+ live field calls 0-diff vs the recomp reference (later-186). ov_isqrt is
   // the live path; ov_isqrt_verify is reachable as the per-call gate when the `mathverify` channel is set
@@ -441,4 +503,5 @@ void engine_math_register(void) {
   rec_set_override(0x80084EB0u, v ? ov_rot_y_verify : ov_rot_y);  // RotMatrixY-class (inverted sin); same kernel as rotZ/X (1 live call 0-diff; kernel verified 55k+ on siblings)
   rec_set_override(0x80084D10u, v ? ov_rot_x_verify : ov_rot_x);  // RotMatrixX-class; verified 0-diff 55000+ live calls
   rec_set_override(0x80084220u, v ? ov_apply_matlv_verify : ov_apply_matlv);  // MVMVA matrix(CR)×vec; verified 0-diff 75000+ live calls
+  rec_set_override(0x80084A80u, v ? ov_rot84A80_verify : ov_rot84A80);  // RotMatrix variant (pure LUT trig, no GTE); verified 0-diff 5000+ live field calls; 4.4% field hot
 }
