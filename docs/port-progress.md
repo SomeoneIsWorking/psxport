@@ -74,8 +74,10 @@ for content fns (call it). Do NOT mimic PSX hardware (GTE/GP0/OT) — remove Bee
     3 engine-state callees (FUN_800963a0/80096370/800752b4) + memsets later, keep the libgpu callees dispatched.
   - ◐ `FUN_800520e0` **engine subsystem init** = `eng_init_subsystems` (engine_init.cpp) — ORCHESTRATION owned
     PC-native (later-183): the 6 direct engine-flag writes (*0x800bf4fa=0xffff, *0x800ecf4a/4c/4d/4e/4f=0) +
-    the 4-callee sequence. Boot A/B (frame 50) main-RAM + scratchpad 0-diff. The 4 callees stay dispatched
-    (next descent): 8007b328 entity-pool · 80088b00 allocator/dispatch-table · 80086620 mode ctrl · 80087a60 input.
+    the 4-callee sequence. Boot A/B (frame 50) main-RAM + scratchpad 0-diff. Callee descent:
+    ✅ `FUN_8007b328` entity-pool init = `eng_init_entity_pool` (later-183b, boot A/B 0-diff: the 8-byte header
+    @0x800fb160 + FUN_8007b2c0(0) scratchpad scale params, both inlined native). Still dispatched (next):
+    80088b00 allocator/dispatch-table · 80086620 mode ctrl · 80087a60 input.
   - ◐ `FUN_80051e00` scheduler task-table init (rc0'd at boot, native_boot.cpp:371) + `FUN_80051f14` register
     task 0. The native frame loop replaces the per-frame stepper.
 - ✅ Native cooperative frame loop `native_scheduler_step` (replaces `FUN_80051e60`) — `native_boot.cpp`.

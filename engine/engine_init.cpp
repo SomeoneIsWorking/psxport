@@ -96,10 +96,32 @@ void eng_init_camera(Core* c) {
 //   jal 0x80086620(a0=1); jal 0x80087a60; epilogue.
 //   callees: 8007b328 entity-pool init · 80088b00 allocator/dispatch-table init (a0/a1 = its struct span)
 //            · 80086620 mode/subsystem control(1) · 80087a60 input subsystem init.
+// FUN_8007b328 — ENTITY-POOL init: clear the 8-byte entity-pool control header @0x800fb160 (just before
+// the entity list head DAT_800fb168) and set its control bytes, then FUN_8007b2c0(0) which writes four
+// default fixed-point scale params to scratchpad. Owned PC-native (the entity/object model is engine-
+// owned, see docs/engine_re.md). The header is the memset(0x800fb160,0,8)+{+1=1,+4=7,+5=9} net result.
+// FUN_8007b2c0 is called with a0=0 here (deterministic: a0 is zeroed at the call site), so its a0==0
+// branch is inlined (0x1f800170=0x8000, 0172=0x4000, 0174=0x2000, 0176=0x1000); the a0!=0 branch is a
+// different code path never taken from this call site.
+void eng_init_entity_pool(Core* c) {
+  c->mem_w8(0x800fb160u, 0);             // memset(0x800fb160, 0, 8) ...
+  c->mem_w8(0x800fb161u, 1);             // ... then the control bytes
+  c->mem_w8(0x800fb162u, 0);
+  c->mem_w8(0x800fb163u, 0);
+  c->mem_w8(0x800fb164u, 7);
+  c->mem_w8(0x800fb165u, 9);
+  c->mem_w8(0x800fb166u, 0);
+  c->mem_w8(0x800fb167u, 0);
+  c->mem_w16(0x1f800170u, 0x8000);       // FUN_8007b2c0(0): default fixed-point scale params
+  c->mem_w16(0x1f800172u, 0x4000);
+  c->mem_w16(0x1f800174u, 0x2000);
+  c->mem_w16(0x1f800176u, 0x1000);
+}
+
 void eng_init_subsystems(Core* c) {
   uint32_t ra = c->r[31], sp = c->r[29];
   c->r[29] = sp - 0x18; c->mem_w32(c->r[29] + 0x10, ra);   // mirror prologue: addiu sp,-0x18; sw ra,0x10(sp)
-  rec_dispatch(c, 0x8007b328u);          // entity-pool init (synchronous)
+  eng_init_entity_pool(c);               // entity-pool init (FUN_8007b328) — owned native
   c->mem_w16(0x800bf4fa, 0xffff);
   c->mem_w16(0x800ecf4a, 0);
   c->mem_w8 (0x800ecf4c, 0);
