@@ -425,6 +425,51 @@ static void ov_cam_dist_solve_verify(Core* c) {
             ngood, camO[2], camO[4], camO[0x16]);
 }
 
+// FUN_8006e010 — camera ANGLE-ACCUMULATOR step (sub-fn of orchestrator FUN_8006e0f0, called when
+// cam[+0x77]==0). Picks a target for the signed-32 field cam[+0x34] from the world mode bytes
+// G[+0x164]/G[+0x168] (5-entry jump table @0x8001697c), then rate-limits cam[+0x34] toward it in ±8 steps,
+// snapping on overshoot. Pure integer; NO trig / NO rec_dispatch. Output cam+0x34 is MAIN-RAM. a0 = cam.
+// RE this session (gen_func_8006E010, shard_2.c); delay slot @9154 precomputes cur+8 for the step-up path.
+static void ov_cam_angle_step(Core* c) {
+  uint32_t cam = c->r[4];
+  const uint32_t G = 0x800e7e80u;
+  int32_t cur = (int32_t)c->mem_r32(cam + 0x34);
+  if (c->mem_r8(G + 0x164) != 3) {                    // not mode 3: drive cam[+0x34] toward 0 by ±8
+    if (cur <= 0) { int32_t r = cur + 8; c->mem_w32(cam + 0x34, (uint32_t)r); if (r >= 0) c->mem_w32(cam + 0x34, 0); }
+    else          { int32_t r = cur - 8; c->mem_w32(cam + 0x34, (uint32_t)r); if (r <= 0) c->mem_w32(cam + 0x34, 0); }
+    return;
+  }
+  uint8_t idx = c->mem_r8(G + 0x168);                 // mode 3: target from the sub-mode jump table (all <=0)
+  int32_t target;
+  switch (idx >= 5 ? 4 : idx) {
+    case 0: case 1: target = 0;    break;
+    case 2:         target = -128; break;
+    case 3:         target = -256; break;
+    default:        target = -384; break;             // jt idx 4 and idx>=5
+  }
+  if (target < cur) { int32_t r = cur - 8; c->mem_w32(cam + 0x34, (uint32_t)r); if (r < target) c->mem_w32(cam + 0x34, (uint32_t)target); }
+  else              { int32_t r = cur + 8; c->mem_w32(cam + 0x34, (uint32_t)r); if (target < r) c->mem_w32(cam + 0x34, (uint32_t)target); }
+}
+// PSXPORT_DEBUG=camverify — per-call A/B gate (cam-struct diff; output cam+0x34 is main-RAM).
+static void ov_cam_angle_step_verify(Core* c) {
+  uint32_t cam = c->r[4];
+  uint32_t cam0[64], sp0[256], rsave[32];
+  for (int i = 0; i < 64;  i++) cam0[i] = c->mem_r32(cam + i * 4);
+  for (int i = 0; i < 256; i++) sp0[i]  = c->mem_r32(0x1f800000u + i * 4);
+  memcpy(rsave, c->r, sizeof rsave);
+  ov_cam_angle_step(c);
+  uint32_t camM[64]; for (int i = 0; i < 64; i++) camM[i] = c->mem_r32(cam + i * 4);
+  for (int i = 0; i < 64;  i++) c->mem_w32(cam + i * 4, cam0[i]);
+  for (int i = 0; i < 256; i++) c->mem_w32(0x1f800000u + i * 4, sp0[i]);
+  memcpy(c->r, rsave, sizeof rsave);
+  rec_interp(c, 0x8006e010u);
+  uint32_t camO[64]; for (int i = 0; i < 64; i++) camO[i] = c->mem_r32(cam + i * 4);
+  static int nbad = 0, ngood = 0; int bad = 0;
+  for (int i = 0; i < 64; i++) if (camM[i] != camO[i]) { bad = 1;
+    if (nbad++ < 60) fprintf(stderr, "[anglestepverify] MISMATCH cam+0x%02x mine=%08x oracle=%08x\n", i * 4, camM[i], camO[i]); }
+  if (!bad && (ngood++ % 200) == 0) fprintf(stderr, "[anglestepverify] match #%d (cam+34=%08x)\n", ngood, camO[0x0d]);
+}
+
 void engine_camera_register(void) {
   rec_set_override(0x8006d960u, ov_cam_track_xz);     // per-frame camera X/Z follow (engine_re "Camera")
   rec_set_override(0x8006da54u, ov_cam_track_y);      // per-frame camera Y follow
@@ -432,4 +477,6 @@ void engine_camera_register(void) {
                    cfg_dbg("camverify") ? ov_cam_rotbuild_verify : ov_cam_rotbuild);
   rec_set_override(0x8006d2acu,
                    cfg_dbg("camverify") ? ov_cam_dist_solve_verify : ov_cam_dist_solve);  // dist/zoom solver
+  rec_set_override(0x8006e010u,
+                   cfg_dbg("camverify") ? ov_cam_angle_step_verify : ov_cam_angle_step);  // cam[+0x34] angle step
 }

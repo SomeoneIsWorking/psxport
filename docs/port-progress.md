@@ -111,7 +111,11 @@ for content fns (call it). Do NOT mimic PSX hardware (GTE/GP0/OT) — remove Bee
     Outputs are MAIN-RAM cam fields → gated by per-call comparator `PSXPORT_DEBUG=camverify` (0-diff over 1800+
     calls on the motion scene). GOTCHA: the far/near branch's DELAY SLOT (slti angd,2048) reloads v0, so the
     NEAR-path final test NEGATES s0d when angd<2048 — a missed delay-slot effect (caught by the trig-spy diff).
-  - ☐ remaining sub-fns of `FUN_8006e0f0`: 0x8006d654, 0x8006c80c, 0x8006dcf4, 0x8006d02c, 0x8006e010 (TODO).
+  - ✅ angle-accumulator step `FUN_8006e010` = `ov_cam_angle_step` (engine_camera.cpp) — ±8 rate-limit of
+    cam[+0x34] toward a mode-selected target; main-RAM output, camverify 0-diff (1000+ calls, motion scene).
+  - ☐ remaining sub-fns of `FUN_8006e0f0`: 0x8006d654 (pitch smoother), 0x8006c80c (Y-floor clamp),
+    0x8006dcf4 (heading tracker), 0x8006d02c (orient/look-at matrix builder, uses GTE leaves). Full per-fn
+    port specs (inputs/outputs/hazards/pseudocode/verify) in scratch/handoff_camera_subfns.md (this session).
   - ☐ per-MODE orchestrators `FUN_8006e0f0` / `FUN_8006e228` / `FUN_8006e3f4` (call the smoothers; multi-mode).
 - ✅ Terrain `FUN_8002AB5C` = `ov_terrain` (native_terrain.cpp, later-158).
 - ✅ Render submit: geom GT3/GT4/gt4_bp, per-object render `0x8003CCA4`, render walk `0x8003C048` — engine_submit.
