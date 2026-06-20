@@ -45,8 +45,56 @@ static long s_prims = 0;          // primitives drawn since last present
 // A frame with no tee'd 3D is a VRAM-resident 2D screen (SCEA/FMV/title/menu) — nothing in the scratch FB.
 int gpu_had3d_last_frame(Core* core) { return core->game->gpu.s_prev_had3d; }
 int gpu_seen3d_this_frame(Core* core) { return core->game->gpu.s_seen3d; }
+// Backdrop-vs-HUD for a screen-space 2D prim — by SCREEN COVERAGE, which is order-independent. The water/
+// sky backdrop is a FULL-SCREEN 2D layer (it tiles the whole display); HUD/text/icons cover a small part.
+// So a 2D prim spanning most of the display is a backdrop (far depth band, behind the world); anything
+// smaller is HUD (overlay band, over the world). This is what the PSXPORT_PRIMDUMP capture showed: the
+// backdrop = full-frame sprites (op 0x65, x[0..320] y[~0..232]); HUD = small polys/sprites. It does NOT
+// depend on draw order, which matters because the PC-native renderer draws world geometry EAGERLY during
+// the per-object flush (before the OT walk) — so the old "no 3D teed yet => backdrop" rule mislabeled the
+// ocean as HUD and painted it over everything. `bx0..by1` = the prim's screen-space bbox (pre-offset).
+int GpuState::bg_2d(int bx0, int by0, int bx1, int by1) {
+  int dw = s_disp_w > 0 ? s_disp_w : 320, dh = s_disp_h > 0 ? s_disp_h : 240;
+  int w = bx1 - bx0, h = by1 - by0;
+  return (w * 4 >= dw * 3) && (h * 4 >= dh * 3);    // covers >=3/4 of the display in both axes = backdrop
+}
 static long s_gp0_words = 0, s_dma2 = 0;  // diagnostics: GP0 words + DMA2 triggers per frame
 long g_nd_3d = 0, g_nd_2d = 0;   // Phase-2 native-depth diag: prims drawn with real depth vs OT-order band
+
+// PSXPORT_PRIMDUMP=<frame>: dump every prim drawn on that frame, in OT-walk order, to
+// scratch/logs/prims_f<frame>.csv — one row per prim: id (walk order), kind, op, is3d, bg(ackdrop),
+// bbox, rgb, textured, semi. Lets a human identify which IDs are the water/sky backdrop so the
+// backdrop-vs-HUD band split can be made correct (and order-independent).
+static FILE* s_primdump_f = 0; static int s_primdump_frame = -2;
+static FILE* primdump_open(int frame) {
+  if (s_primdump_frame == -2) { const char* e = cfg_str("PSXPORT_PRIMDUMP"); s_primdump_frame = e ? atoi(e) : -1; }
+  if (s_primdump_frame < 0 || frame != s_primdump_frame) return 0;
+  if (!s_primdump_f) {
+    int r = system("mkdir -p scratch/logs"); (void)r;
+    char p[128]; snprintf(p, sizeof p, "scratch/logs/prims_f%d.csv", frame);
+    s_primdump_f = fopen(p, "w");
+    if (s_primdump_f) fprintf(s_primdump_f, "id,kind,op,is3d,bg,x0,y0,x1,y1,r,g,b,tex,semi\n");
+  }
+  return s_primdump_f;
+}
+void prim_dump_poly(Core* core, int frame, unsigned id, uint8_t op, int nv, int is3d, int bg,
+                    const int* xs, const int* ys, uint8_t r, uint8_t g, uint8_t b, int tex, int semi) {
+  (void)core; FILE* f = primdump_open(frame); if (!f) return;
+  int x0=xs[0],y0=ys[0],x1=xs[0],y1=ys[0];
+  for (int i = 1; i < nv; i++) { if(xs[i]<x0)x0=xs[i]; if(xs[i]>x1)x1=xs[i]; if(ys[i]<y0)y0=ys[i]; if(ys[i]>y1)y1=ys[i]; }
+  fprintf(f, "%u,poly,%02X,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d\n", id, op, is3d, bg, x0,y0,x1,y1, r,g,b, tex, semi);
+}
+void prim_dump_sprite(Core* core, int frame, unsigned id, uint8_t op, int x, int y, int w, int h,
+                      int bg, uint8_t r, uint8_t g, uint8_t b, int tex, int semi) {
+  (void)core; FILE* f = primdump_open(frame); if (!f) return;
+  fprintf(f, "%u,sprite,%02X,0,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d\n", id, op, bg, x,y,x+w,y+h, r,g,b, tex, semi);
+}
+void prim_dump_close_if_done(int frame) {
+  if (s_primdump_f && s_primdump_frame >= 0 && frame > s_primdump_frame) {
+    fclose(s_primdump_f); s_primdump_f = 0;
+    fprintf(stderr, "[primdump] wrote scratch/logs/prims_f%d.csv\n", s_primdump_frame);
+  }
+}
 long g_nd2d_hist[256];           // op histogram of prims that fall to the 2D band (ndepth diag)
 
 // Fade-flash diagnostic (PSXPORT_FADEDBG="a:b"): per-frame max emitted prim brightness + how the
@@ -389,6 +437,41 @@ void GpuState::set_clut(uint16_t cl) { s_clut_x = (cl & 0x3F) * 16; s_clut_y = (
 // no GP0 packet, no OT, no guest write. The renderer's D32 buffer does true occlusion from the depth.
 // Used by engine/native_terrain.cpp. Free function (reaches the per-instance GPU state via core->game->gpu),
 // mirroring the geometry tee in gp0_exec (this file ~522-595) but fed float scene data instead of a packet.
+// Emit one resolved RqItem to the VK rasterizer. The emission logic (set_order/semi_group/set_vd/draw)
+// lives ONLY here; both the inline draw and the engine render-queue flush funnel through it. set_order
+// uses the live GpuState counter so the order value reflects actual emit sequence (the 2D-fallback/
+// faithful-depth band); real per-vertex depth (set_vd) drives true occlusion for world prims.
+void gpu_emit_rq_item(Core* core, const RqItem* it) {
+  if (!gpu_vk_enabled()) return;
+  GpuState& s = core->game->gpu;
+  const int* xs = it->xs; const int* ys = it->ys; const int* us = it->us; const int* vs = it->vs;
+  const unsigned char* rs = it->rs; const unsigned char* gs = it->gs; const unsigned char* bs = it->bs;
+  const float* depth = it->depth; int mode = it->mode;
+  gpu_vk_set_order(core, s.s_prim_order++);
+  if (it->semi) {
+    int bx0=xs[0],by0=ys[0],bx1=xs[0],by1=ys[0];
+    for (int i=1;i<4;i++){ if(xs[i]<bx0)bx0=xs[i]; if(xs[i]>bx1)bx1=xs[i]; if(ys[i]<by0)by0=ys[i]; if(ys[i]>by1)by1=ys[i]; }
+    gpu_vk_semi_group(core, bx0, by0, bx1, by1);
+    gpu_vk_set_vd(core, depth);
+    gpu_vk_draw_semi(core, (int*)xs, (int*)ys, (int*)us, (int*)vs, (unsigned char*)rs, (unsigned char*)gs, (unsigned char*)bs,
+                     it->tp_x, it->tp_y, mode, 0, it->clut_x, it->clut_y,
+                     it->tw_mx, it->tw_my, it->tw_ox, it->tw_oy, it->da_x0, it->da_y0, it->da_x1, it->da_y1, it->tp_blend);
+    gpu_vk_set_vd(core, &depth[1]);
+    gpu_vk_draw_semi(core, (int*)&xs[1], (int*)&ys[1], (int*)&us[1], (int*)&vs[1], (unsigned char*)&rs[1], (unsigned char*)&gs[1], (unsigned char*)&bs[1],
+                     it->tp_x, it->tp_y, mode, 0, it->clut_x, it->clut_y,
+                     it->tw_mx, it->tw_my, it->tw_ox, it->tw_oy, it->da_x0, it->da_y0, it->da_x1, it->da_y1, it->tp_blend);
+  } else {
+    gpu_vk_set_vd(core, depth);
+    gpu_vk_draw_tritri(core, (int*)xs, (int*)ys, (int*)us, (int*)vs, (unsigned char*)rs, (unsigned char*)gs, (unsigned char*)bs,
+                       it->tp_x, it->tp_y, mode, 0, it->clut_x, it->clut_y,
+                       it->tw_mx, it->tw_my, it->tw_ox, it->tw_oy, it->da_x0, it->da_y0, it->da_x1, it->da_y1);
+    gpu_vk_set_vd(core, &depth[1]);
+    gpu_vk_draw_tritri(core, (int*)&xs[1], (int*)&ys[1], (int*)&us[1], (int*)&vs[1], (unsigned char*)&rs[1], (unsigned char*)&gs[1], (unsigned char*)&bs[1],
+                       it->tp_x, it->tp_y, mode, 0, it->clut_x, it->clut_y,
+                       it->tw_mx, it->tw_my, it->tw_ox, it->tw_oy, it->da_x0, it->da_y0, it->da_x1, it->da_y1);
+  }
+}
+
 void gpu_draw_world_quad(Core* core, const float* px, const float* py, const float* depth,
                          const int* u, const int* v, const uint8_t* r, const uint8_t* g,
                          const uint8_t* b, uint16_t tp, uint16_t clut, int semi) {
@@ -397,32 +480,23 @@ void gpu_draw_world_quad(Core* core, const float* px, const float* py, const flo
   s.set_texpage(tp);
   s.set_clut(clut);
   s.s_seen3d = 1;                              // a projected world prim has now been drawn this frame
-  int xs[4], ys[4], us[4], vs[4]; unsigned char rs[4], gs[4], bs[4];
+  // Resolve the quad into an engine RqItem (screen verts w/ draw offset + rounding, decoded material).
+  RqItem it; it.layer = RQ_WORLD; it.semi = semi ? 1 : 0;
   for (int i = 0; i < 4; i++) {
-    xs[i] = (int)(px[i] < 0 ? px[i] - 0.5f : px[i] + 0.5f) + s.s_off_x;  // round, then draw offset
-    ys[i] = (int)(py[i] < 0 ? py[i] - 0.5f : py[i] + 0.5f) + s.s_off_y;
-    us[i] = u[i]; vs[i] = v[i]; rs[i] = r[i]; gs[i] = g[i]; bs[i] = b[i];
+    it.xs[i] = (int)(px[i] < 0 ? px[i] - 0.5f : px[i] + 0.5f) + s.s_off_x;  // round, then draw offset
+    it.ys[i] = (int)(py[i] < 0 ? py[i] - 0.5f : py[i] + 0.5f) + s.s_off_y;
+    it.us[i] = u[i]; it.vs[i] = v[i]; it.rs[i] = r[i]; it.gs[i] = g[i]; it.bs[i] = b[i];
+    it.depth[i] = depth[i];
   }
-  gpu_vk_set_order(core, s.s_prim_order++);    // OT submission order (2D fallback / faithful-depth path)
-  int mode = s.s_tp_mode;                       // textured terrain -> texpage color mode
-  if (semi) {
-    int bx0=xs[0],by0=ys[0],bx1=xs[0],by1=ys[0];
-    for (int i=1;i<4;i++){ if(xs[i]<bx0)bx0=xs[i]; if(xs[i]>bx1)bx1=xs[i]; if(ys[i]<by0)by0=ys[i]; if(ys[i]>by1)by1=ys[i]; }
-    gpu_vk_semi_group(core, bx0, by0, bx1, by1);
-    gpu_vk_set_vd(core, depth);
-    gpu_vk_draw_semi(core, xs, ys, us, vs, rs, gs, bs, s.s_tp_x, s.s_tp_y, mode, 0, s.s_clut_x, s.s_clut_y,
-                     s.s_tw_mx, s.s_tw_my, s.s_tw_ox, s.s_tw_oy, s.s_da_x0, s.s_da_y0, s.s_da_x1, s.s_da_y1, s.s_tp_blend);
-    gpu_vk_set_vd(core, &depth[1]);
-    gpu_vk_draw_semi(core, &xs[1], &ys[1], &us[1], &vs[1], &rs[1], &gs[1], &bs[1], s.s_tp_x, s.s_tp_y, mode, 0,
-                     s.s_clut_x, s.s_clut_y, s.s_tw_mx, s.s_tw_my, s.s_tw_ox, s.s_tw_oy, s.s_da_x0, s.s_da_y0, s.s_da_x1, s.s_da_y1, s.s_tp_blend);
-  } else {
-    gpu_vk_set_vd(core, depth);
-    gpu_vk_draw_tritri(core, xs, ys, us, vs, rs, gs, bs, s.s_tp_x, s.s_tp_y, mode, 0, s.s_clut_x, s.s_clut_y,
-                       s.s_tw_mx, s.s_tw_my, s.s_tw_ox, s.s_tw_oy, s.s_da_x0, s.s_da_y0, s.s_da_x1, s.s_da_y1);
-    gpu_vk_set_vd(core, &depth[1]);
-    gpu_vk_draw_tritri(core, &xs[1], &ys[1], &us[1], &vs[1], &rs[1], &gs[1], &bs[1], s.s_tp_x, s.s_tp_y, mode, 0,
-                       s.s_clut_x, s.s_clut_y, s.s_tw_mx, s.s_tw_my, s.s_tw_ox, s.s_tw_oy, s.s_da_x0, s.s_da_y0, s.s_da_x1, s.s_da_y1);
-  }
+  it.mode = s.s_tp_mode;
+  it.tp_x = s.s_tp_x; it.tp_y = s.s_tp_y; it.clut_x = s.s_clut_x; it.clut_y = s.s_clut_y;
+  it.tw_mx = s.s_tw_mx; it.tw_my = s.s_tw_my; it.tw_ox = s.s_tw_ox; it.tw_oy = s.s_tw_oy;
+  it.da_x0 = s.s_da_x0; it.da_y0 = s.s_da_y0; it.da_x1 = s.s_da_x1; it.da_y1 = s.s_da_y1;
+  it.tp_blend = s.s_tp_blend;
+  // Engine owns ordering: queue it (flushed in engine order at the draw kick). Default (RQ off) draws
+  // inline exactly as before — identical pixels, no ordering change — until M1 is coherent.
+  if (rq_active()) { RqItem* slot = rq_push(core); if (slot) { uint32_t sq = slot->seq; *slot = it; slot->seq = sq; } }
+  else             { gpu_emit_rq_item(core, &it); }
 }
 
 // Begin a primitive for provenance tracking: bump the global id and record this prim's details
@@ -595,13 +669,21 @@ void GpuState::gp0_exec(Core* core) {
           else { is3d = 0; break; }
         }
         if (is3d) s_seen3d = 1;            // a projected world prim has now been drawn this frame
-        if (!is3d) {                        // 2D prim: backdrop (before any 3D = FAR band) vs HUD (after)
-          int bg = !s_seen3d;
+        int bx0=xs[0],by0=ys[0],bx1=xs[0],by1=ys[0];
+        for (int i = 1; i < nv; i++) { if(xs[i]<bx0)bx0=xs[i]; if(xs[i]>bx1)bx1=xs[i]; if(ys[i]<by0)by0=ys[i]; if(ys[i]>by1)by1=ys[i]; }
+        if (!is3d) {                        // 2D prim: backdrop (FAR band) vs HUD (near band)
+          int bg = bg_2d(bx0, by0, bx1, by1);
           if (s_sbs) { if (bg) gpu_vk_set_order_2d_bg_n(core, ord_idx); else gpu_vk_set_order_2d_n(core, ord_idx); }
           else       { if (bg) gpu_vk_set_order_2d_bg(core, ord_idx);   else gpu_vk_set_order_2d(core, ord_idx); }
         }
         if (!is3d && cfg_dbg("ndepth")) {   // categorize what lands in the 2D band: op + gouraud/quad/tex
           extern long g_nd2d_hist[256]; g_nd2d_hist[op]++; }
+        // PSXPORT_PRIMDUMP=<frame>: dump every prim (poly) of that frame as an individual PNG (named by its
+        // OT-walk ID) so the backdrop can be identified by eye and its band corrected. id=ord_idx.
+        { void prim_dump_poly(Core*, int frame, unsigned id, uint8_t op, int nv, int is3d, int bg,
+                              const int* xs, const int* ys, uint8_t r, uint8_t g, uint8_t b, int tex, int semi);
+          prim_dump_poly(core, s_frame, ord_idx, op, nv, is3d, is3d ? -1 : bg_2d(bx0,by0,bx1,by1), xs, ys,
+                         rs[0], gs[0], bs[0], textured ? 1 : 0, semi); }
         extern long g_nd_3d, g_nd_2d; if (is3d) g_nd_3d++; else g_nd_2d++;
       }
       // Genuine engine-wide: a poly with is3d==0 is a SCREEN-SPACE 2D element (HUD banner, full-screen
@@ -718,9 +800,11 @@ void GpuState::gp0_exec(Core* core) {
       { static int s_ndepth = -1, s_sbs = -1; int native_depth_on(void);
         if (s_ndepth < 0) s_ndepth = native_depth_on();
         if (s_sbs < 0) s_sbs = cfg_on("PSXPORT_SBS") ? 1 : 0;
-        int bg = !s_seen3d;   // sprite/rect before any 3D prim = backdrop -> FAR band; after = HUD
+        int bg = bg_2d(x, y, x + w, y + h);   // full-screen layer -> FAR band; small -> overlay band
         if (s_sbs) { if (bg) gpu_vk_set_order_2d_bg_n(core, ord_idx); else gpu_vk_set_order_2d_n(core, ord_idx); }
-        else if (s_ndepth) { if (bg) gpu_vk_set_order_2d_bg(core, ord_idx); else gpu_vk_set_order_2d(core, ord_idx); } }
+        else if (s_ndepth) { if (bg) gpu_vk_set_order_2d_bg(core, ord_idx); else gpu_vk_set_order_2d(core, ord_idx); }
+        void prim_dump_sprite(Core*, int, unsigned, uint8_t, int, int, int, int, int, uint8_t, uint8_t, uint8_t, int, int);
+        prim_dump_sprite(core, s_frame, ord_idx, op, x, y, w, h, bg, cr, cg, cb, textured ? 1 : 0, semi); }
       int X = x + s_off_x, Y = y + s_off_y;
       int XL = X, XR = X + w;
       // Widescreen 2D handling. Genuine engine-wide widens the 3D world at the projection (OFX); 2D
@@ -1248,6 +1332,7 @@ void GpuState::gpu_present_ex(Core* core, int do_blit) {
   s_prim_order = 0;   // restart the per-frame OT submission order (VK depth) for the next frame
   s_prev_had3d = s_seen3d;   // remember whether this frame was a gameplay (3D) frame (wide pillarbox gate)
   s_seen3d = 0;       // restart backdrop-vs-HUD discrimination (no 3D prim seen yet next frame)
+  { void prim_dump_close_if_done(int); prim_dump_close_if_done(s_frame); }   // PSXPORT_PRIMDUMP: flush the file
 }
 void GpuState::gpu_present(Core* core) { gpu_present_ex(core, 1); }
 

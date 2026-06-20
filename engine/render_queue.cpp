@@ -1,0 +1,44 @@
+// Engine-owned render queue — see render_queue.h. Per-instance state lives on Game (game.h);
+// the free rq_* API forwards to core->game->rq.
+#include "render_queue.h"
+#include "game.h"
+#include "cfg.h"
+#include <algorithm>
+#include <stdio.h>
+
+static int s_active = -1;   // config-cache (PSXPORT_RQ), identical across cores -> stays shared
+int rq_active(void) {
+  if (s_active < 0) s_active = cfg_on("PSXPORT_RQ") ? 1 : 0;
+  return s_active;
+}
+
+void RenderQueue::reset() { n = 0; seq = 0; consumed = 0; }
+
+RqItem* RenderQueue::push() {
+  if (consumed) reset();                       // first push after a flush -> new frame
+  if (n >= RQ_MAX) {
+    static int warned = 0;
+    if (!warned++) fprintf(stderr, "[rq] WARN: render queue full (%d) — dropping prims\n", RQ_MAX);
+    return 0;
+  }
+  RqItem* it = &items[n++];
+  it->seq = seq++;
+  return it;
+}
+
+void RenderQueue::mark_consumed() { if (n) consumed = 1; }
+
+void RenderQueue::flush(Core* core) {
+  if (!n) { mark_consumed(); return; }
+  // Engine-decided order: layer low->high, submission order within a layer. stable_sort keeps the
+  // within-layer submission order exactly (matters for semi-transparent blending). The D32 depth buffer
+  // does fine-grained occlusion inside RQ_WORLD regardless of this order.
+  std::stable_sort(items, items + n, [](const RqItem& a, const RqItem& b) {
+    return a.layer != b.layer ? a.layer < b.layer : a.seq < b.seq;
+  });
+  for (int i = 0; i < n; i++) gpu_emit_rq_item(core, &items[i]);
+  mark_consumed();
+}
+
+RqItem* rq_push(Core* core)   { return core->game->rq.push(); }
+void    rq_flush(Core* core)  { core->game->rq.flush(core); }

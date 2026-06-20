@@ -312,7 +312,14 @@ static void ov_set_geom_screen(Core* c) {       // SetGeomScreen(h) — projecti
 // natively in gpu_dma2_linked_list (walk OT -> decode each primitive -> rasterize). Overriding it routes
 // the draw straight through our native walk (synchronous), instead of the DMA-register emulation dance.
 // This is the engine's draw submission, owned. Faithful-first: PSXPORT_OT_RECOMP=1 keeps the recomp body.
-static void ov_draw_otag(Core* c) { gpu_dma2_linked_list(c, c->r[4]); }
+static void ov_draw_otag(Core* c) {
+  // Engine-owned ordering (PSXPORT_RQ): drain the render queue in ENGINE order first (owned world
+  // geometry, layer+depth sorted), THEN walk the guest OT for the not-yet-owned guest 2D / un-owned
+  // submit variants. This matches today's "world inline before the OT walk" order; M3 brings the guest
+  // 2D into the queue too and retires the OT walk. RQ off = no queue, pure inline (unchanged).
+  if (rq_active()) rq_flush(c);
+  gpu_dma2_linked_list(c, c->r[4]);
+}
 
 // ---- Replace the game's in-game Options menu with our PC-native (ImGui) menu (later-112) ----
 // RE: the in-game pause menu is a task in the GAME overlay. Its body is the dispatcher at 0x8010810C,
@@ -424,10 +431,16 @@ void games_tomba2_init(void) {
     if (!cfg_on("PSXPORT_NO_FLUSH"))  rec_set_override(0x8003CDD8u, ov_perobj_flush);
     if (!cfg_on("PSXPORT_NO_DISP"))   rec_set_override(0x8003CCA4u, ov_perobj_render);  // per-object render dispatch
     if (!cfg_on("PSXPORT_NO_WALK"))   rec_set_override(0x8003C048u, ov_render_walk);    // phase-2 render-list walk
+    // Terrain: ov_terrain renders the field PC-native by default (float transform + real depth, no PSX
+    // GTE/packet path); PSXPORT_TERRAIN_FAITHFUL opts into the transcription oracle, NO_TERRAIN→recomp body.
     if (!cfg_on("PSXPORT_NO_TERRAIN")) rec_set_override(0x8002AB5Cu, ov_terrain);       // field terrain renderer
     void ov_build_xform(Core*);
     if (!cfg_on("PSXPORT_NO_XFORM")) rec_set_override(0x80051C8Cu, ov_build_xform);     // per-object transform builder
   }
+  // PC-native LEVEL/STAGE LOADER (engine/engine_level.cpp): the engine's overlay loader FUN_800450bc —
+  // load a stage's overlay off the disc + set its entry, synchronous (no PSX CD-wait yield). A/B oracle:
+  // PSXPORT_LOADSTAGE_RECOMP=1. The CD read itself (0x8001db8c) is already native (ov_cd_loadfile).
+  if (!faith) { void ov_load_stage(Core*); rec_set_override(0x800450BCu, ov_load_stage); }
   fps60_init();
   // cull tap: ALWAYS registered — genuine-wide is the default wide path and the overlay can toggle aspect
   // LIVE, so the widened-frustum re-include must be available without a launch flag. ov_object_cull is a

@@ -117,7 +117,7 @@ tools/gen_vk_shaders.sh   # compile+embed the Vulkan present shaders (gpu_vk_sha
 SRC="$RT/dispatch.cpp \
   $RT/cfg.c $RT/mem.cpp $RT/stubs.cpp $RT/hle.cpp $RT/threads.cpp $RT/interp.cpp $RT/gpu_native.cpp $RT/gpu_trace.cpp $RT/gpu_debug.cpp $RT/spu_audio.c $RT/pad_input.cpp $RT/memcard.cpp $RT/native_fmv.cpp \
   $MED/psx/gte.c $RT/gte_beetle.cpp $MED/psx/mdec.c $RT/mdec_beetle.c $MED/psx/spu.c $RT/spu_beetle.c \
-  $RT/disc.c $RT/cd_override.cpp $RT/cdc_native.c $RT/xa_stream.c $RT/timing.cpp $RT/gpu_vk.cpp $RT/mods.c $ENG/game_tomba2.cpp $ENG/fps60.cpp $ENG/engine_tomba2.cpp $ENG/engine_submit.cpp $ENG/native_dl.cpp $ENG/native_path.cpp $ENG/native_path_a1.cpp $ENG/native_path_a2.cpp $ENG/native_path_a3.cpp $ENG/native_path_b1.cpp $ENG/native_path_b2.cpp $ENG/native_path_b3.cpp $ENG/native_path_b4.cpp $ENG/native_path_b5.cpp $ENG/margin_render.cpp $RT/sync_overrides.cpp $RT/native_boot.cpp $RT/dbg_server.cpp $RT/native_stub.cpp $RT/watchdog.c $RT/boot.cpp \
+  $RT/disc.c $RT/cd_override.cpp $RT/cdc_native.c $RT/xa_stream.c $RT/timing.cpp $RT/gpu_vk.cpp $RT/mods.c $ENG/game_tomba2.cpp $ENG/engine_init.cpp $ENG/engine_level.cpp $ENG/fps60.cpp $ENG/engine_tomba2.cpp $ENG/engine_submit.cpp $ENG/native_terrain.cpp $ENG/native_dl.cpp $ENG/render_queue.cpp $ENG/native_path.cpp $ENG/native_path_a1.cpp $ENG/native_path_a2.cpp $ENG/native_path_a3.cpp $ENG/native_path_b1.cpp $ENG/native_path_b2.cpp $ENG/native_path_b3.cpp $ENG/native_path_b4.cpp $ENG/native_path_b5.cpp $ENG/margin_render.cpp $RT/sync_overrides.cpp $RT/native_boot.cpp $RT/dbg_server.cpp $RT/native_stub.cpp $RT/watchdog.c $RT/boot.cpp \
   $RT/imgui_overlay.cpp $IMGUI/imgui.cpp $IMGUI/imgui_draw.cpp $IMGUI/imgui_tables.cpp $IMGUI/imgui_widgets.cpp $IMGUI/backends/imgui_impl_sdl2.cpp $IMGUI/backends/imgui_impl_vulkan.cpp"
 
 say "building the native port in parallel (-j$JOBS)…"
@@ -141,13 +141,14 @@ WIN=1; [ -n "${PSXPORT_NOWINDOW:-}" ] && WIN=0
 # Debug server ON by default so a windowed session can be inspected/driven live (tools/dbgclient.py);
 # opt out with PSXPORT_DEBUG_SERVER=0. Window is windowed by default now (PSXPORT_FULLSCREEN=1 to override).
 #
-# STOPGAP: default PSXPORT_NO_TERRAIN=1 (route the field terrain renderer 0x8002AB5C to the recomp body
-# instead of the native submit_terrain) because the NATIVE terrain render is currently broken — it draws
-# the field as garbage while the recomp body renders it correctly (proven by an A/B screenshot diff;
-# native vs NO_TERRAIN). The gameplay half of submit_terrain is fixed (the sway-byte guest writes); the
-# RENDER half is an open bug in the scratchpad/GTE compose + render-walk path (see docs/journal.md
-# later-157). Until that is root-caused, NO_TERRAIN gives a correct, playable picture. Override with
-# PSXPORT_NO_TERRAIN=0 to exercise the (broken) native terrain renderer.
+# The field terrain renderer 0x8002AB5C is native + ON by default (later-158). It renders PC-native
+# (engine/native_terrain.cpp: float transform + real per-pixel depth, NO PSX GTE compose / packet), with
+# the gameplay/scene-data prep (sway bytes + object matrix) shared with the recomp body. The later-157
+# stopgap was for a now-fixed bug: the native terrain (1) read the WRONG geometry buffer (0x800A1AE8, a
+# fabricated address) instead of the recomp's 0x8009FAE8, and (2) wrote the sway-angle scratch to
+# scratchpad 0x1F8001C0 — a guest write the recomp never makes (it uses its own stack) — clobbering live
+# engine state and breaking terrain collision (Tomba fell through). PSXPORT_TERRAIN_FAITHFUL=1 swaps in
+# the GTE/packet transcription as an A/B oracle; PSXPORT_NO_TERRAIN=1 falls back to the recomp body.
 PSXPORT_DEBUG_SERVER="${PSXPORT_DEBUG_SERVER:-1}" \
-PSXPORT_NO_TERRAIN="${PSXPORT_NO_TERRAIN:-1}" \
+PSXPORT_NO_TERRAIN="${PSXPORT_NO_TERRAIN:-0}" \
 PSXPORT_GPU_WINDOW=$WIN PSXPORT_TOMBA2_DISC="$DISC" exec ./scratch/bin/tomba2_port "$MAIN"

@@ -15,6 +15,7 @@
 #include "gpu_native_internal.h"   // GpuState — the native GPU's per-instance render machine state
 #include "gpu_vk_internal.h"       // GpuVkState — the Vulkan present backend's per-instance render state
 #include "fps60_internal.h"        // Fps60State — the interpolated-60fps tier's per-instance state
+#include "render_queue.h"          // RenderQueue — the engine-owned draw-order authority
 #include <stdint.h>
 #include <setjmp.h>
 
@@ -100,6 +101,7 @@ public:
   GpuState    gpu;   // native GPU: VRAM + draw/display state + the rasterizer (gpu_native.cpp)
   GpuVkState  gpu_vk;// Vulkan present backend: per-frame batch/depth/dirty/present state (gpu_vk.cpp)
   NdlState    ndl;   // native classified display list: per-frame prim arena + bucket lookup (native_dl.cpp)
+  RenderQueue rq;    // engine-owned render queue: the single draw-ORDER authority (render_queue.cpp)
   Fps60State  fps60; // interpolated-60fps tier: capture buffers + matcher + remap (fps60.cpp)
 
   // Dual-core diff control: the per-core override-neutralize flag. The terrain override (ov_terrain,
