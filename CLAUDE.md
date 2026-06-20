@@ -5,6 +5,13 @@ real **PC-native GAME ENGINE** — **REBUILD Tomba! 2's engine as a complete, se
 engine** in native C, running the real game content. Not an emulator, not a recompiled-MIPS blob with
 I/O bolted on. **Behave like a PC game, do NOT simulate the PSX.**
 
+**STANDING DIRECTIVE — FULL OWNERSHIP IS ALWAYS THE ANSWER (user, 2026-06-20). Do NOT ask which side of
+the boundary something falls on, do NOT offer a "lighter"/incremental-keep-PSX option, do NOT propose
+retaining a PSX mechanism for convenience.** Every fork defaults to the engine owning it PC-native.
+Effort/time is NOT a constraint ("I don't care if it takes years"). The ONLY things that stay PSX are the
+game CONTENT — characters (AI/behavior), level data, quests/game-rules (see THE BOUNDARY); everything
+else is PC-owned. When in doubt, own it; just build it, don't ask.
+
 **The engine must NOT deal with PSX intricacies AT ALL — it OWNS the game itself.** A complete PC game
 engine owns its world and draws it the way a PC game does: it owns the game objects, the camera and
 **projection**, and — critically — **its own render ordering / visibility (real depth buffer + its own
