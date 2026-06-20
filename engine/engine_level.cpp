@@ -84,3 +84,51 @@ static void eng_stage_transition(Core* c) {
 void ov_stage_transition(Core* c) {
   eng_stage_transition(c);
 }
+
+// FUN_800499e8 — task-0 INITIAL ENTRY (the engine's first-level bootstrap, registered as task 0 by
+// FUN_80051f14 in the init prefix). It resolves the first stage's overlay file off the disc, records its
+// (LBA,size) in the stage table, and transitions to stage 0. Engine-owned PC-native: the engine bootstraps
+// the first level; the disc CD-directory lookup (FUN_8008b8f0) and MSF->LBA decode (FUN_8008a110) stay the
+// retained PSX/platform mechanism (called, not reimplemented — correct boundary: file/asset *loading* is
+// engine, the CD/filesystem primitive is platform). Faithful to 0x800499e8:
+//   sp-=0x30; DAT_1f80019a=0; s0="\BIN\START.BIN;1" (0x80015458); sw s0,0x28(sp); sw ra,0x2c(sp);
+//   FUN_8008b8f0(buf=sp+0x10, name) -> v0; if v0!=0: stage[0].lba=FUN_8008a110(buf), stage[0].size=buf[+4];
+//   else: FUN_8009a730("Not found file name ", name) [error]; then FUN_80052078(0) (native transition).
+// Called once at boot via rc0(FUN_800499e8) (in_stage==0); FUN_80052078's terminal yield is a no-op return
+// there, so this returns to its caller, exactly as the interpreted path did.
+static void eng_task0_boot(Core* c) {
+  const uint32_t name = 0x80015458u;                 // "\BIN\START.BIN;1"
+  uint32_t ra = c->r[31], sp = c->r[29], s0_in = c->r[16];
+  c->r[29] = sp - 0x30;
+  uint32_t buf = c->r[29] + 0x10;                    // local CD dir-entry struct on the task stack
+  c->mem_w8(0x1f80019Au, 0);                         // DAT_1f80019a = 0 (CD-load-done flag reset)
+  c->mem_w32(c->r[29] + 0x28, s0_in);                // sw s0,0x28(sp)  — saves the INCOMING s0 (before s0=name)
+  c->mem_w32(c->r[29] + 0x2c, ra);                   // sw ra,0x2c(sp)
+  c->r[16] = name;                                   // s0 = name (AFTER the save; FUN_80052078 saves s0 on its stack)
+  // Each callee saves its own ra into its stack frame; to keep that stack scratch byte-identical to the
+  // interpreted body, set ra to the exact post-`jal` return address (jal_addr+8) each `jal` would link.
+  c->r[4] = buf; c->r[5] = name;
+  c->r[31] = 0x80049A10u;                            // jal 0x8008b8f0 @0x80049a08 -> ra
+  rec_dispatch(c, 0x8008B8F0u);                      // resolve the file's CD directory entry into buf (platform CD)
+  if (c->r[2] != 0) {
+    c->r[4] = buf;
+    c->r[31] = 0x80049A34u;                          // jal 0x8008a110 @0x80049a2c -> ra
+    rec_dispatch(c, 0x8008A110u);                    // MSF (in buf) -> LBA
+    c->mem_w32(0x800BE1E0u, c->r[2]);                // stage[0].lba
+    c->mem_w32(0x800BE1E4u, c->mem_r32(buf + 4));    // stage[0].size = buf[+4]
+  } else {
+    c->r[4] = 0x8001546Cu; c->r[5] = name;           // "Not found file name "
+    c->r[31] = 0x80049A24u;                          // jal 0x8009a730 @0x80049a1c -> ra
+    rec_dispatch(c, 0x8009A730u);                    // error report
+  }
+  c->r[4] = 0;                                       // FUN_80052078(0): transition to stage 0
+  c->r[31] = 0x80049A50u;                            // jal 0x80052078 @0x80049a48 -> ra
+  rec_dispatch(c, 0x80052078u);                      // (frame still down -> byte-faithful stack scratch)
+  c->r[16] = c->mem_r32(c->r[29] + 0x28);            // epilogue: lw s0,0x28(sp); lw ra,0x2c(sp)
+  c->r[31] = c->mem_r32(c->r[29] + 0x2c);
+  c->r[29] = sp;                                     // sp += 0x30
+}
+
+void ov_task0_boot(Core* c) {
+  eng_task0_boot(c);
+}

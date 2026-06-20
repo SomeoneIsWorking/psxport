@@ -28,9 +28,17 @@ the overlay/level CONTENT it loads."
   (frame 50 stage=GAME) and runs stable to f1000+ with task 0 alive — which REQUIRES the START→DEMO→GAME
   transitions to all run through this override. **Gameplay RAM 0-diff @ f650 AND f1000** vs the pre-change
   (interpreted-FUN_80052078) build (git-stash A/B + `PSXPORT_RAMDUMP_FRAME` + `cmp -l` → 0).
-- **NEXT:** (a) own task-0 initial entry / file-resolve `FUN_800499e8` the same plain way (engine_re init
-  table flags it). (b) Drive a deterministic IN-GAME area transition (now that the transition primitive is
-  engine-owned) → register + verify the staged `ov_game_s4c` (sm[0x4c] area machine, later-169). (c) Push
+- **ALSO owned task-0 INITIAL ENTRY `FUN_800499e8` (0x800499e8) native (`ov_task0_boot`, same file).** The
+  engine's first-level bootstrap: resolve `\BIN\START.BIN;1` (name@0x80015458) via the CD directory
+  (FUN_8008b8f0 — platform, called not reimplemented), decode MSF→LBA (FUN_8008a110), write stage[0]
+  (LBA,size) to 0x800be1e0/e4, then `FUN_80052078(0)` (the native transition). Called once at boot via
+  rc0(FUN_800499e8), in_stage==0 (FUN_80052078's terminal yield no-op returns there). **VERIFIED RAM 0-diff
+  @ f650 AND f1000** vs HEAD (interpreted-FUN_800499e8). Two stack-faithfulness fixes mattered (the gate
+  caught both as 20-byte task-stack diffs): (1) set ra to each `jal`'s post-link addr (jal+8) before each
+  `rec_dispatch` so callees save the same ra to their frames; (2) the prologue `sw s0,0x28(sp)` saves the
+  INCOMING s0 BEFORE `s0=name` — saving `name` instead leaked the name ptr into 5 task-stack frames.
+- **NEXT:** (a) Drive a deterministic IN-GAME area transition (now that the transition primitive is
+  engine-owned) → register + verify the staged `ov_game_s4c` (sm[0x4c] area machine, later-169). (b) Push
   toward owning the top-level loop / yield itself (native_scheduler_step "one stage-iter per frame").
 
 ## later-169: cooperative-yield handshake (`rec_coro_redirect`) — own the GAME RUNNING dispatcher native

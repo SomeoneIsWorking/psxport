@@ -447,6 +447,9 @@ void games_tomba2_init(void) {
   // task at its new entry. Thread plumbing replaced by the native scheduler (state=3 == restart); the
   // terminal yield is the existing ov_switch. Exercised at the START->DEMO->GAME boot transitions.
   if (!faith) { void ov_stage_transition(Core*); rec_set_override(0x80052078u, ov_stage_transition); }
+  // PC-native task-0 BOOTSTRAP (engine/engine_level.cpp): FUN_800499e8 — resolve \BIN\START.BIN, record its
+  // (LBA,size) in the stage table, transition to stage 0. CD-directory lookup stays the platform mechanism.
+  if (!faith) { void ov_task0_boot(Core*); rec_set_override(0x800499E8u, ov_task0_boot); }
   fps60_init();
   // cull tap: ALWAYS registered — genuine-wide is the default wide path and the overlay can toggle aspect
   // LIVE, so the widened-frustum re-include must be available without a launch flag. ov_object_cull is a
