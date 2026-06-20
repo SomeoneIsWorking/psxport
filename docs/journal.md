@@ -43,13 +43,27 @@ not per-prim size. RE first (field, `PSXPORT_AUTO_GAMEPLAY`, f650, RAM dump `PSX
      overlay UI 0x8013DFxx / 0x8010C4xx, item icons 0x8002668C, + the AddPrim linkers 0x8003CBF0/CC04/CC10
      and sprite linker 0x80078F28/3C/48. Bracketing each is a sprawl with no payoff (HUD already classifies
      correctly via the fallback).
-  - **RECOMMENDED OT-retirement mechanism instead:** capture 2D at the single AddPrim/linker CHOKEPOINT
-    (0x8003CBF0… and the sprite linker), not per drawer — feed each linked packet to the queue at submit
-    time (bg via the existing pool-range provenance, else HUD), then stop walking the guest OT chain. Caveat:
-    AddPrim order = submission order, which may differ from the OT's otz order WITHIN the HUD layer (later
-    HUD over earlier) — a visible difference only the USER can verify, so do that step with ./run.sh in the
-    loop. Render ORDERING across layers is already engine-owned (the queue re-sorts), so this is the last
-    PSX-render-read to remove, not an ordering change.
+  3. **AddPrim-chokepoint capture = ALSO NO (decisive).** There is NO generic AddPrim function to hook —
+     linking is INLINE in every drawer. 0x8003CBF0 disassembles as mid-function inline prim emission:
+     `a0=*0x800bf544 (pool); a1=*0x800ed8c8 + slot*4 (OT entry); *(a0)=*(a1)|0x09000000; *(a1)=a0` then
+     copies the prim's words from the builder into the pool. The `|0x0900` (POLY_GT3 tag len) is baked per
+     site; the sprite/quad/tile drawers each have their own inline copy+link. So "the linker" is a code
+     PATTERN scattered across all drawers, not a chokepoint. Trapping it everywhere is far more invasive
+     than any benefit.
+
+  **CONCLUSION (evidence-backed boundary): the OT-walk-as-ENUMERATOR is the right architecture; keep it.**
+  Draw-ORDER authority — the directive's actual concern ("engine decides what occludes what, not the PSX
+  OT") — is ALREADY owned: the render queue re-sorts by (engine layer, then submission seq) and the OT's
+  chain order is DISCARDED (plan M1 said the OT is read "only to enumerate leftover guest prims; its order
+  is discarded"). `gpu_dma2_linked_list` now serves solely as the convergence point that ENUMERATES the
+  engine-built 2D packets (it's also where env E1/E3 texpage/clut/draw-area state is sequenced into each
+  prim's queue snapshot). Removing that read would require trapping inline link-emission in every drawer for
+  ZERO observable change (order already re-decided, layers already provenance/coverage-classified). That is
+  cost without benefit — explicitly the kind of mechanism-shuffle to avoid. So M3's ordering goal is met;
+  the residual OT *enumeration* stays as a benign engine mechanism, NOT a PSX ordering decision. Further
+  high-value "PSX only drives content" ownership lies in NON-render engine systems (stage state machine,
+  main loop, menus, asset/level loading), which are RAM-gateable against the oracle — that's the frontier
+  to push next, not the OT enumeration.
 
 ## later-166b: M3 root finding — the bg_2d coverage heuristic is blind to TILED backgrounds (provenance needed)
 Scoping M3 (own the 2D layer at source). Dumped the green-field 2D prims (`PSXPORT_PRIMDUMP=650`,
