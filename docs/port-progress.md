@@ -230,6 +230,11 @@ for content fns (call it). Do NOT mimic PSX hardware (GTE/GP0/OT) — remove Bee
     secondary matrix; child[6]>=0 → sibling node[0xC0+4*child[6]]). node[8] temp-forced to node[9] for the
     loop, restored on exit. rec_dispatch'd primitives in exact jal order (preserves CR coupling). Verified
     0-diff 2800+ live calls via `orchverify` (lazy first-call gate → REPL `debug orchverify` works).
+  - `FUN_8002B278` = `ov_cone_cull_2b278` (game_tomba2.cpp): standalone view-CONE cull (3.9% field hot).
+    Multiply-form of FUN_8007712C's cone test with fixed {near=512,far=7169,thr≡856}: dist=isqrt16(dx²+dy²+
+    dz²) (dx=node->h[0x2C/2E/30]−cam@0x1F8000D2/D6/DA); reject if dist<512 or ≥7169; keep iff fwd·d ≥
+    dist*3424 (fwd@0x1F8000E8/EA/EC; 3424=4*856, no-divide form). On keep sets visible flag node[1]=1,
+    returns 1. Pure leaf (only owned isqrt). Verified 0-diff 20000+ via `conecull`.
 - ✅ AUXILIARY render walks `0x8003BCF4` / `0x8003BF00` / `0x8003EEC0` = `ov_rwalk_aux_*` (engine_submit.cpp,
   issue #4): faithful per-node lift of each recomp body + per-node `gpu_obj_depth_add(world-pos depth)` so
   flame/rope/effect billboards occlude by real world depth (was: flat 2D band → drew over foliage). Field

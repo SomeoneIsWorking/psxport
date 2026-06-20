@@ -242,6 +242,50 @@ static void cull_verify_body(Core* c) {
   }
 }
 
+// FUN_8002B278 — standalone view-CONE cull (3.9% field hot). a0 = node. The multiply-form of the same
+// cone test as FUN_8007712C with fixed params {near=512, far=7169, thr≡856}: compute the camera-relative
+// distance dist = isqrt16(dx²+dy²+dz²) (dx = node->h[0x2C/2E/30] − cam@scratchpad 0x1F8000D2/D6/DA), reject
+// (return 0) if dist<512 or dist>=7169, else keep iff fwd·d >= dist*3424 (fwd @0x1F8000E8/EA/EC; 3424 =
+// 4*856, the no-divide form of 8007712C's depth/(dist*4) >= 856). On keep, set the visible flag node[1]=1
+// and return 1; on reject, return 0 and leave node[1] untouched. Pure leaf (only calls the owned isqrt).
+static int cone_cull_2b278(Core* c, int commit) {
+  uint32_t node = c->r[4];
+  int32_t dx = (int16_t)c->mem_r16(node + 0x2C) - (int16_t)c->mem_r16(0x1F8000D2u);
+  int32_t dy = (int16_t)c->mem_r16(node + 0x2E) - (int16_t)c->mem_r16(0x1F8000D6u);
+  int32_t dz = (int16_t)c->mem_r16(node + 0x30) - (int16_t)c->mem_r16(0x1F8000DAu);
+  uint32_t sum  = (uint32_t)(dx*dx) + (uint32_t)(dy*dy) + (uint32_t)(dz*dz);   // addu-wrap, matches MIPS
+  uint32_t dist = eng_isqrt16(sum) & 0xffffu;
+  int32_t fx = (int16_t)c->mem_r16(0x1F8000E8u), fy = (int16_t)c->mem_r16(0x1F8000EAu), fz = (int16_t)c->mem_r16(0x1F8000ECu);
+  if (dist < 512u || dist >= 7169u) return 0;
+  int32_t dot = (int32_t)((uint32_t)(fx*dx) + (uint32_t)(fy*dy) + (uint32_t)(fz*dz));  // addu-wrap
+  int32_t thr = (int32_t)(dist * 3424u);                                              // dist<7169 → no overflow
+  if (dot < thr) return 0;
+  if (commit) c->mem_w8(node + 1, 1);
+  return 1;
+}
+// PSXPORT_DEBUG=conecull — per-call gate: native (no commit), restore, recomp body, compare v0 + node[1].
+static void ov_cone_cull_2b278_verify(Core* c) {
+  uint32_t rs[32]; memcpy(rs, c->r, sizeof rs);
+  uint32_t node = c->r[4];
+  uint8_t b1_before = c->mem_r8(node + 1);
+  int mine_v0 = cone_cull_2b278(c, 0);
+  uint8_t mine_b1 = (mine_v0 ? 1 : b1_before);                 // native would set node[1]=1 only on keep
+  rec_super_call(c, 0x8002B278u);                              // authoritative writes
+  int orc_v0 = (int)c->r[2];
+  uint8_t orc_b1 = c->mem_r8(node + 1);
+  static long ngood = 0, nbad = 0;
+  if (mine_v0 != orc_v0 || mine_b1 != orc_b1) {
+    if (nbad++ < 60) fprintf(stderr, "[conecull] MISMATCH node=%08x v0(n=%d o=%d) b1(n=%02x o=%02x)\n", node, mine_v0, orc_v0, mine_b1, orc_b1);
+  } else if (++ngood % 20000 == 0) fprintf(stderr, "[conecull] %ld matches (last node=%08x v0=%d)\n", ngood, node, orc_v0);
+  memcpy(c->r, rs, sizeof rs);
+  c->mem_w8(node + 1, mine_b1); c->r[2] = (uint32_t)mine_v0;   // keep native result live
+}
+void ov_cone_cull_2b278(Core* c) {
+  static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("conecull") ? 1 : 0;
+  if (s_v) { ov_cone_cull_2b278_verify(c); return; }
+  c->r[2] = (uint32_t)cone_cull_2b278(c, 1);
+}
+
 static void ov_object_cull(Core* c) {
   uint32_t prev = c->game->fps60.current_object;
   uint32_t o = c->r[4];                            // a0 = object* (MIPS arg register $a0)
@@ -708,6 +752,8 @@ void games_tomba2_init(void) {
     rec_set_override(0x80051464u, ov_xform_propagate); // child-node transform propagation (orchestrates owned prims)
     void ov_orch597AC(Core*);
     rec_set_override(0x800597ACu, ov_orch597AC);       // per-object world-transform orchestrator (build matrix + secondary + child propagate)
+    { void ov_cone_cull_2b278(Core*);
+      rec_set_override(0x8002B278u, ov_cone_cull_2b278); }  // view-cone cull (lazy conecull gate)
   }
   // PC-native LEVEL/STAGE LOADER (engine/engine_level.cpp): the engine's overlay loader FUN_800450bc —
   // load a stage's overlay off the disc + set its entry, synchronous (no PSX CD-wait yield).
