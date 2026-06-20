@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
 # Incremental build of the native port (scratch/bin/tomba2_port).
 #
-# WHY THIS EXISTS: `make -C runtime` builds the OTHER binary — the Beetle ORACLE
-# (runtime/wide60rt). The native port is NOT built by any Makefile; it is built by run.sh
-# (full build-extract-run) or by this script (incremental compile + relink, no run).
+# The native port is NOT built by any Makefile; it is built by run.sh (full
+# build-extract-run) or by this script (incremental compile + relink, no run).
 # Use this during a fix loop so you don't re-extract/re-recompile the whole game core.
 #
 #   tools/build_port.sh                      # recompile only sources newer than their .o, relink
@@ -11,7 +10,7 @@
 #   tools/build_port.sh all                  # recompile every source, relink
 #
 # Object naming mirrors run.sh: scratch/obj/<path-with-/.-as-_>.o
-# Then drive it with tools/drive.py (which does NOT build — it runs the existing binary).
+# Then run scratch/bin/tomba2_port directly (REPL via PSXPORT_REPL=1, or windowed).
 set -eu
 cd "$(dirname "$0")/.."
 
