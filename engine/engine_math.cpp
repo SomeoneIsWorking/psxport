@@ -490,6 +490,35 @@ static void ov_rot84A80_verify(Core* c) {
   memcpy(c->r, rsave, sizeof rsave); for (int i=0;i<5;i++) c->mem_w32(out+i*4,om[i]); c->r[2]=vm;
 }
 
+// FUN_800517BC — write a 0x20-byte vector block: a1/a2/a3 (each sign-extended s16) at a0+0/+8/+16,
+// zero the other five words (+4/+12/+20/+24/+28). PURE leaf, no GTE, no return value. (libgte
+// SetVector/diagonal-init helper; a dependency of FUN_800597AC and independently hot — 15900 calls/run.)
+static void ov_settrans(Core* c) {
+  uint32_t a0 = c->r[4];
+  c->mem_w32(a0+0,  (uint32_t)(int32_t)(int16_t)c->r[5]);
+  c->mem_w32(a0+4,  0);
+  c->mem_w32(a0+8,  (uint32_t)(int32_t)(int16_t)c->r[6]);
+  c->mem_w32(a0+12, 0);
+  c->mem_w32(a0+16, (uint32_t)(int32_t)(int16_t)c->r[7]);
+  c->mem_w32(a0+20, 0);
+  c->mem_w32(a0+24, 0);
+  c->mem_w32(a0+28, 0);
+}
+static void ov_settrans_verify(Core* c) {
+  uint32_t rsave[32]; memcpy(rsave, c->r, sizeof rsave);
+  uint32_t a0 = c->r[4];
+  uint32_t osave[8]; for (int i=0;i<8;i++) osave[i]=c->mem_r32(a0+i*4);
+  ov_settrans(c);
+  uint32_t om[8]; for (int i=0;i<8;i++) om[i]=c->mem_r32(a0+i*4);
+  memcpy(c->r, rsave, sizeof rsave);
+  for (int i=0;i<8;i++) c->mem_w32(a0+i*4, osave[i]);
+  rec_interp(c, 0x800517BCu);
+  static int nbad=0, ngood=0; int bad=0;
+  for (int i=0;i<8;i++) if (om[i]!=c->mem_r32(a0+i*4)) { bad=1; if (nbad<60) fprintf(stderr,"[mathverify] settrans +%d mine=%08x oracle=%08x\n", i*4, om[i], c->mem_r32(a0+i*4)); }
+  if (bad) nbad++; else if ((ngood++%5000)==0) fprintf(stderr,"[mathverify] settrans match #%d\n", ngood);
+  memcpy(c->r, rsave, sizeof rsave); for (int i=0;i<8;i++) c->mem_w32(a0+i*4, om[i]);
+}
+
 void engine_math_register(void) {
   // Verified bit-exact: 65000+ live field calls 0-diff vs the recomp reference (later-186). ov_isqrt is
   // the live path; ov_isqrt_verify is reachable as the per-call gate when the `mathverify` channel is set
@@ -504,4 +533,5 @@ void engine_math_register(void) {
   rec_set_override(0x80084D10u, v ? ov_rot_x_verify : ov_rot_x);  // RotMatrixX-class; verified 0-diff 55000+ live calls
   rec_set_override(0x80084220u, v ? ov_apply_matlv_verify : ov_apply_matlv);  // MVMVA matrix(CR)×vec; verified 0-diff 75000+ live calls
   rec_set_override(0x80084A80u, v ? ov_rot84A80_verify : ov_rot84A80);  // RotMatrix variant (pure LUT trig, no GTE); verified 0-diff 5000+ live field calls; 4.4% field hot
+  rec_set_override(0x800517BCu, v ? ov_settrans_verify : ov_settrans);  // SetVector 0x20-byte block (pure leaf); verified 0-diff 30000+; 1.76% field hot / 15900 calls
 }
