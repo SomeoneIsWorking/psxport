@@ -1,5 +1,39 @@
 # Debug / progress journal
 
+## later-177: ASSET PIPELINE ownership — texture DECODE proven PC-owned; loader ORCHESTRATION is the gap (USER directive)
+**USER directive (2026-06-20), supersedes the camera frontier:** port top-down boot→gameplay; the asset
+pipeline (load→decode→render of textures AND models) must be FULLY PC-owned so assets can be reconstructed
+with the emulator OFF. The acceptance test: reconstruct a known atlas **bit-identical**. Target reference =
+the **sea backdrop, native 288×576** (user-supplied 576×1152 = 2× it; sky gradient + clouds + horizon +
+tiled cyan water). **Order: fully own the pipeline FIRST, then match 100%** (user).
+
+**Pipeline state (what runs in the texture build):**
+- ✅ file load `ov_cd_loadfile` (0x8001DB8C) · ✅ LZ decompress `lz_decompress`/FUN_80044D8C ·
+  ✅ group unpack `ov_unpack_group`/FUN_80044E84 · ✅ VRAM upload `ov_upload_image`/FUN_80081218 ·
+  ✅ CLUT/bit-depth DECODE (`GpuState::tex_export`, new `PSXPORT_TEXEXPORT`; same logic as sample_tex).
+- ☐ **post-step `FUN_80080f6c`** per image — libgs GsSortObject sort/draw over the (bypassed) upload ring;
+  appears to be a no-op given ov_upload_image writes VRAM directly, but NOT yet owned/verified.
+- ☐ **the ORCHESTRATION** — the level/area asset LOADER that decides WHICH file loads, the group-table /
+  descriptor layout, WHERE each image lands in VRAM, and how a multi-page backdrop (the 288×576 sea) is
+  assembled. This is still PSX and is the real "own the pipeline" work. eng_load_stage FUN_800450bc is the
+  entry; the group table is built from the loaded file then handed to ov_unpack_group (table+0x800 = data,
+  12-byte descriptor entries {x,y,stride@+4,field@+6,srclen@+8}, dst = anchor − 2·stride·field).
+
+**Proven this session (committed 2ce8b00):** `PSXPORT_TEXEXPORT=<frame>` exports each background atlas via
+OUR decoder (no PSX in the decode). Verified 3: menu text atlas (4bpp, "NewGame LoadGame OPTIONS StartGame"),
+menu char-art bg (8bpp, Tomba!2 logo+chars), sea EFFECTS atlas tp=(320,256) clut=(1008,255) 4bpp (water
+sparkle/foam/rainbow sprites). NOTE the sea 288×576 BACKDROP (sky+clouds+water) is a DIFFERENT asset than
+the effects page — found by reaching seaside f450 (AUTO_GAMEPLAY); its source/layout is TBD (loader RE).
+
+**Title/menu BG render is BROKEN (regression) — separate from decode:** the full title (nav3.png: logo+brick+
+characters) does NOT composite in the current build; at f440 only ~5 prims submit (text atlas + char-art
+strip + 3 menu polys), the 352-tile background is NOT submitted, and VRAM framebuffer regions (0,0)/(0,256)
+are black. Textures ARE in VRAM and decode fine, so this is a RENDER/submission drop (suspect: packet-pool
+enumeration after the OT-walk retirement later-172), not a decode bug. To "export the menu image" the user
+wants, the title must render correctly under PC ownership first.
+
+
+
 ## later-176: own the per-frame camera DISTANCE / ZOOM solver `FUN_8006d2ac` native (engine_camera.cpp)
 First sub-fn of the camera mode orchestrator `FUN_8006e0f0`. RE'd via `tools/disas.py` (a 13-entry jump table
 @0x800168d4 dispatching the TARGET source on `G[+0x164]`, plus a `cam[+0x72]&2` fast path, the look-point math
