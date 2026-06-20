@@ -663,6 +663,116 @@ static void ov_cam_pitch_verify(Core* c) {
   if (!bad && (ngood++ % 200) == 0) fprintf(stderr, "[pitchverify] match #%d (c=%08x v=%08x)\n", ngood, camO[3], camO[6]);
 }
 
+// ─────────────────────────────────────────────────────────────────────────────────────────────────
+// FUN_8006dcf4 — camera HEADING tracker (sub-fn of orchestrator FUN_8006e0f0). a0=cam, G=0x800e7e80,
+// S=0x1f8000d0 (scratchpad cam-state). Selects a heading offset `off` (g61 fast path, else a 13-entry
+// jump table @0x80016944 on G[+0x164]), forms a delta toward S[+0x06]+off-cam[+0x26]-S[+0x12], then
+// either SNAPS the integer heading S[+0x06] or STEPS the heading accumulator S[+0x04]; a tail clamps
+// S[+0x06] to cam[+0x4a] under the cam[+0x74] &2/&8 gates. Outputs: S[+0x04]/S[+0x06] (SCRATCHPAD),
+// cam[+0x66]|=2 (main-RAM) → camverify diffs cam + scratchpad. NO trig / NO sub-calls (jump table
+// internal). Transcribed line-for-line from shard_7.c gen_func_8006DCF4. NB the case-1/11 "special"
+// path is off=1100 (the bne delay-slot r3=1100 SURVIVES into L_8006DE20 — it is NOT dead, and NOT a
+// "no-offset" path as an earlier note guessed).
+static void ov_cam_heading(Core* c) {
+  uint32_t cam = c->r[4];
+  const uint32_t G = 0x800e7e80u;
+  const uint32_t S = 0x1f8000d0u;
+
+  if (c->mem_r8(cam + 0x74) & 4) {                     // 8828 early exit → L_8006DED8
+    c->mem_w8(cam + 0x66, c->mem_r8(cam + 0x66) | 2);
+    return;
+  }
+
+  // Phase A: heading offset `off`.
+  int32_t off = 0;
+  uint8_t g61 = c->mem_r8(G + 0x61);
+  int useTable;
+  if (g61 == 0)            useTable = 1;
+  else if ((g61 & 1) == 0) { off = 768; useTable = 0; }   // skip table
+  else                     useTable = 1;
+
+  if (useTable) {
+    uint8_t idx = c->mem_r8(G + 0x164);
+    if (idx >= 13) return;                             // 8836 → L_8006DEE8
+    switch (idx) {
+      case 0: case 4: {                                // 0x8006dd54
+        if (c->mem_r8(G + 0x145) == 0) { off = 320; break; }
+        int32_t g4a_s = (int16_t)c->mem_r16(G + 0x4a);
+        uint32_t r3v  = (uint16_t)c->mem_r16(G + 0x4a);
+        if (g4a_s < 0) r3v = (uint32_t)(0 - r3v);
+        r3v += (c->mem_r8(G + 0x165) == 0) ? (uint32_t)-14976 : (uint32_t)-16384;
+        int32_t s = (int32_t)((uint32_t)r3v << 16) >> 21;
+        off = 320 - s;
+        break;
+      }
+      case 1: case 11: {                               // 0x8006dda8
+        uint32_t sub = c->mem_r32(G + 0x158);
+        off = (c->mem_r8(sub + 0xc) == 4 && c->mem_r8(sub + 0x2) != 0) ? 1100 : 700;
+        break;
+      }
+      case 9:  off = -320; break;                      // 0x8006ddd8
+      case 3:  off = 700;  break;                      // 0x8006dde0 (L_8006DDE0)
+      case 12: {                                       // 0x8006dde8
+        uint32_t diff = (uint32_t)(uint16_t)c->mem_r16(G + 0x32)
+                      - (uint32_t)(uint16_t)c->mem_r16(0x1f800202u);
+        off = ((int16_t)diff < 501) ? (int32_t)diff : 500;
+        break;
+      }
+      default: return;                                 // 2,5,6,7,8,10 → L_8006DEE8
+    }
+  }
+
+  // Phase B: smoother (L_8006DE20), low-16 wrap arithmetic like the recomp.
+  int32_t s06 = (uint16_t)c->mem_r16(S + 6);
+  int32_t c26 = (uint16_t)c->mem_r16(cam + 0x26);
+  int32_t s12 = (uint16_t)c->mem_r16(S + 0x12);
+  int32_t r5  = s06 + off - c26 - s12;
+  if ((uint16_t)(r5 + 10) < 21) {                      // SNAP (L_8006DE68)
+    c->mem_w16(S + 6, (uint16_t)(c26 + (s12 - off)));
+    c->mem_w8(cam + 0x66, c->mem_r8(cam + 0x66) | 2);
+  } else {                                             // STEP: S[+0x04] -= sext16(r5)<<13
+    int32_t step = (int32_t)((uint32_t)r5 << 16) >> 3;
+    c->mem_w32(S + 4, (uint32_t)((int32_t)c->mem_r32(S + 4) - step));
+  }
+
+  // Tail (L_8006DE80): clamp S[+0x06] to cam[+0x4a] under the cam[+0x74] &2/&8 gates.
+  uint8_t f = c->mem_r8(cam + 0x74);
+  int cond = 0, active = 1;
+  if (f & 2)      cond = ((int16_t)c->mem_r16(S + 6) < (int16_t)c->mem_r16(cam + 0x4a));
+  else if (f & 8) cond = ((int16_t)c->mem_r16(cam + 0x4a) < (int16_t)c->mem_r16(S + 6));
+  else            active = 0;
+  if (active && !cond) {                               // L_8006DEC8 false-arm: clamp + cam[+0x66]|=2
+    c->mem_w16(S + 6, (uint16_t)c->mem_r16(cam + 0x4a));
+    c->mem_w8(cam + 0x66, c->mem_r8(cam + 0x66) | 2);
+  }
+}
+// PSXPORT_DEBUG=camverify — per-call A/B gate (cam-struct + scratchpad diff).
+static void ov_cam_heading_verify(Core* c) {
+  uint32_t cam = c->r[4];
+  uint32_t cam0[64], sp0[256], rsave[32];
+  for (int i = 0; i < 64;  i++) cam0[i] = c->mem_r32(cam + i * 4);
+  for (int i = 0; i < 256; i++) sp0[i]  = c->mem_r32(0x1f800000u + i * 4);
+  memcpy(rsave, c->r, sizeof rsave);
+  ov_cam_heading(c);
+  uint32_t camM[64], spM[256];
+  for (int i = 0; i < 64;  i++) camM[i] = c->mem_r32(cam + i * 4);
+  for (int i = 0; i < 256; i++) spM[i]  = c->mem_r32(0x1f800000u + i * 4);
+  for (int i = 0; i < 64;  i++) c->mem_w32(cam + i * 4, cam0[i]);
+  for (int i = 0; i < 256; i++) c->mem_w32(0x1f800000u + i * 4, sp0[i]);
+  memcpy(c->r, rsave, sizeof rsave);
+  rec_interp(c, 0x8006dcf4u);
+  uint32_t camO[64], spO[256];
+  for (int i = 0; i < 64;  i++) camO[i] = c->mem_r32(cam + i * 4);
+  for (int i = 0; i < 256; i++) spO[i]  = c->mem_r32(0x1f800000u + i * 4);
+  static int nbad = 0, ngood = 0; int bad = 0;
+  for (int i = 0; i < 64; i++) if (camM[i] != camO[i]) { bad = 1;
+    if (nbad++ < 60) fprintf(stderr, "[hdgverify] MISMATCH cam+0x%02x mine=%08x oracle=%08x\n", i * 4, camM[i], camO[i]); }
+  for (int i = 0; i < 256; i++) if (spM[i] != spO[i]) { bad = 1;
+    if (nbad++ < 60) fprintf(stderr, "[hdgverify] MISMATCH sp+0x%03x mine=%08x oracle=%08x\n", i * 4, spM[i], spO[i]); }
+  if (!bad && (ngood++ % 200) == 0)
+    fprintf(stderr, "[hdgverify] match #%d (s04=%08x s06=%04x)\n", ngood, spO[0x35], (uint16_t)spO[0x35]);
+}
+
 void engine_camera_register(void) {
   rec_set_override(0x8006d960u, ov_cam_track_xz);     // per-frame camera X/Z follow (engine_re "Camera")
   rec_set_override(0x8006da54u, ov_cam_track_y);      // per-frame camera Y follow
@@ -676,4 +786,6 @@ void engine_camera_register(void) {
                    cfg_dbg("camverify") ? ov_cam_y_floor_verify : ov_cam_y_floor);        // cam-Y floor clamp
   rec_set_override(0x8006d654u,
                    cfg_dbg("camverify") ? ov_cam_pitch_verify : ov_cam_pitch);            // pitch smoother
+  rec_set_override(0x8006dcf4u,
+                   cfg_dbg("camverify") ? ov_cam_heading_verify : ov_cam_heading);        // heading tracker
 }
