@@ -1,25 +1,31 @@
 # Debug / progress journal
 
-## later-171: retire ALL behavior gating + start the NATIVE GTE (Beetle-removal) — user directive
+## later-171: retire ALL behavior gating; native-GTE replica tried & REVERTED (PSX mimicry) — user directive
 User directive (2026-06-20): "no gating; don't worry about breaking; END GOAL = remove the interpreter AND
-external deps like Beetle entirely."
+external deps like Beetle entirely" — BUT "we don't want to MIMIC the PSX, we want to PORT the game to PC"
+(so remove Beetle by porting its callers, NOT by reimplementing its hardware).
+**VERIFICATION SCOPE (user, 2026-06-20):** NEVER visually verify. Verify MECHANICALLY (RAM/state probes,
+oracle diff, gpu_differ) — but ONLY the parts you actually PORTED. Do NOT verify or debug "still PSX"
+(un-ported) things: we EXPECT them to not work correctly (e.g. the reported SCEA screen / reversed cutscene
+fades are un-ported PSX paths — leave them; they get FIXED BY PORTING, not by debugging the emulated path).
 - **De-gated (f30c74b):** games_tomba2_init now registers the native engine path UNCONDITIONALLY — removed
   PSXPORT_FAITHFUL + every *_RECOMP / NO_TICK/CULL/MENU/FLUSH/DISP/WALK/TERRAIN/XFORM / TERRAIN_FAITHFUL /
   RECOMP_OBJWALK opt-out. Deleted the orphaned submit_terrain PSX-transcription oracle. native_depth keeps
   only PSXPORT_FAITHFUL_DEPTH as a depth-diff DIAGNOSTIC. ONE behavior = the PC game. (entity walk
   FUN_8007a904 was already owned — engine_tomba2.cpp ov_objwalk; now ungated.)
-- **Started the NATIVE GTE (runtime/recomp/gte_beetle.cpp) — the Beetle-removal foundation.** The port links
-  Beetle's gte.c/mdec.c/spu.c + libchdr; native-izing the GTE is the first dependency-removal. Methodology
-  (INCREMENTAL, never-breaking): gte_op dispatches PORTED ops to native C that reads/writes the SAME register
-  file (GTE_Read/WriteDR/CR) so state stays in sync with Beetle's still-unported ops; unported ops fall back
-  to GTE_Instruction. Each op is a faithful transcription of gte.c INCLUDING the FLAGS (CR31) overflow bits +
-  the bit-31 checksum, and `PSXPORT_GTE_VERIFY` runs Beetle LIVE + the native op as a SHADOW and bit-diffs
-  the result regs (MAC0/OTZ/FLAGS) — Beetle stays authoritative during verify so the game can't break.
-- **Ported + VERIFIED ops: NCLIP (0x06), AVSZ3 (0x2D), AVSZ4 (0x2E).** All exercised in the field and
-  **0 PSXPORT_GTE_VERIFY mismatches**; the native path ships live and the field runs normally. NCLIP =
-  cross-product backface MAC0; AVSZ3/4 = SZ-FIFO average → MAC0 + OTZ (i64_to_otz saturate). RTPS/RTPT
-  already have a native impl (proj_native_vertex, the projection cache) — fold them into gte_op_native next,
-  then MVMVA / the color ops (NCDS/CDP/DPCS/INTPL) / OP / GPF/GPL, until gte.c can be unlinked.
+- **DEAD END (reverted) — bit-replicating the GTE natively was WRONG (PSX mimicry).** I started a native
+  GTE (gte_op_native: NCLIP/AVSZ3/AVSZ4 as faithful transcriptions of gte.c, FLAGS/checksum bit-matched, a
+  PSXPORT_GTE_VERIFY shadow-diff harness). The user corrected it: **we don't want to MIMIC the PSX, we want
+  to PORT the game to PC.** A native GTE byte-identical to Beetle's gte.c just swaps one PSX-hardware emulator
+  for another — it reproduces GTE output, exactly what CLAUDE.md forbids ("do NOT reproduce GTE output", "NO
+  gte_op for render", "the engine must NOT deal with PSX intricacies"). It does NOT advance the port. CORRECT
+  framing: the GTE/Beetle dependency disappears by **porting its CALLERS to PC-native math**, not by
+  re-emulating the coprocessor. Render already does this right (proj_native_vertex — float matrices, real
+  depth, the engine's own culling; no gte_op for render); the remaining gte_op calls (incl. NCLIP=backface,
+  AVSZ=OT-depth — both PSX render intricacies the PC engine replaces with its own depth buffer + visibility)
+  go away as those callers are ported. The GTE stays as the retained PSX-content math service (collision/
+  physics) until that content is ported. REVERTED gte_op back to GTE_Instruction. **Lesson: "remove Beetle"
+  ≠ "reimplement Beetle's hardware" — it means port the callers so the hardware emulation is never invoked.**
 
 ## later-170: own the cooperative STAGE TRANSITION `FUN_80052078` native (engine/engine_level.cpp)
 Owned the stage/area transition primitive `FUN_80052078(stageIdx)` (MAIN.EXE 0x80052078) PC-native — the

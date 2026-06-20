@@ -459,74 +459,14 @@ float proj_near_pz(void) { float n = s_proj_H ? (float)s_proj_H * 0.5f : 1.0f; r
 float proj_plane_h(void) { return s_proj_H ? (float)s_proj_H : 1.0f; }
 void  proj_screen_center(float* cx, float* cy) { if (cx) *cx = s_proj_cx; if (cy) *cy = s_proj_cy; }
 
-// ---- Incremental NATIVE GTE (Beetle-removal, the END GOAL: no external deps) -----------------------
-// Reimplement the GTE ops one at a time in native C, reading/writing the SAME register file (GTE_Read/
-// WriteDR/CR) so state stays in sync with Beetle's still-unported ops. Each op is a faithful transcription
-// of gte.c (the hardware reference) — including the FLAGS (CR31) overflow bits and the bit-31 checksum —
-// verified bit-identical to GTE_Instruction (PSXPORT_GTE_VERIFY) before it is trusted. When EVERY op is
-// native, gte.c (and the rest of vendor/beetle's GTE) can be unlinked. (RTPS/RTPT already have a native
-// implementation as the projection cache — proj_native_vertex; folding them into this path is the next step.)
-//
-// FLAGS helpers — exact mirrors of gte.c (F / check_mac_overflow / i64_to_otz / the finalize checksum).
-static uint32_t s_gflags;
-static inline int64_t  gte_F(int64_t v)        { if (v < -2147483648LL) s_gflags |= 1u<<15; if (v > 2147483647LL) s_gflags |= 1u<<16; return v; }
-static inline void     gte_chk_mac0(int64_t v) { if (v < -2147483648LL) s_gflags |= 1u<<15; if (v > 2147483647LL) s_gflags |= 1u<<16; }
-static inline uint16_t gte_i64_to_otz(int64_t average) {
-  int32_t value = (int32_t)(average >> 12);
-  if (s_gflags & (1u<<15)) { s_gflags |= 1u<<18; return 0; }
-  if (s_gflags & (1u<<16)) { s_gflags |= 1u<<18; return 0xFFFF; }
-  if (value < 0)     { s_gflags |= 1u<<18; return 0; }
-  if (value > 65535) { s_gflags |= 1u<<18; return 0xFFFF; }
-  return (uint16_t)value;
-}
-static inline void gte_finalize(void) { if (s_gflags & 0x7f87e000u) s_gflags |= 1u<<31; gte_write_ctrl(31, s_gflags); }
-
-static inline bool gte_handles_native(unsigned op) { return op == 0x06 || op == 0x2D || op == 0x2E; }
-
-// Compute a ported op natively against the shared register file. Returns true if handled.
-static bool gte_op_native(uint32_t insn) {
-  unsigned code = insn & 0x3F;
-  if (code == 0x06) {                       // NCLIP — normal-clip (backface) cross product -> MAC0
-    s_gflags = 0;
-    uint32_t f0 = gte_read_data(12), f1 = gte_read_data(13), f2 = gte_read_data(14);   // SXY0/1/2 FIFO
-    int16_t x0=(int16_t)f0, y0=(int16_t)(f0>>16), x1=(int16_t)f1, y1=(int16_t)(f1>>16), x2=(int16_t)f2, y2=(int16_t)(f2>>16);
-    int64_t sum = gte_F((int64_t)x0*(y1-y2) + (int64_t)x1*(y2-y0) + (int64_t)x2*(y0-y1));
-    gte_chk_mac0(sum);
-    gte_write_data(24, (uint32_t)(int32_t)sum);                                        // MAC0
-    gte_finalize();
-    return true;
-  }
-  if (code == 0x2D || code == 0x2E) {       // AVSZ3 / AVSZ4 — average SZ FIFO -> MAC0, OTZ
-    s_gflags = 0;
-    uint32_t z1=(uint16_t)gte_read_data(17), z2=(uint16_t)gte_read_data(18), z3=(uint16_t)gte_read_data(19);
-    uint64_t zsum; int64_t zsf;
-    if (code == 0x2D) { zsum = (uint64_t)z1 + z2 + z3;                          zsf = (int16_t)gte_read_ctrl(29); }   // ZSF3
-    else              { uint32_t z0=(uint16_t)gte_read_data(16); zsum = (uint64_t)z0 + z1 + z2 + z3; zsf = (int16_t)gte_read_ctrl(30); }  // ZSF4
-    int64_t avg = zsf * (int64_t)zsum;
-    gte_chk_mac0(avg);
-    gte_write_data(24, (uint32_t)(int32_t)avg);                                // MAC0
-    gte_write_data(7, gte_i64_to_otz((int32_t)gte_read_data(24)));             // OTZ = i64_to_otz(MAC0)
-    gte_finalize();
-    return true;
-  }
-  return false;
-}
-
-void     gte_op(Core* c, uint32_t insn)         { unsigned op0 = insn & 0x3F;
-                                                   static int s_gtever = -1;
-                                                   if (s_gtever < 0) s_gtever = cfg_on("PSXPORT_GTE_VERIFY") ? 1 : 0;
-                                                   bool handled = false;
-                                                   if (!s_gtever) handled = gte_op_native(insn);   // ship: native owns ported ops
-                                                   if (!handled) GTE_Instruction(insn);            // unported (or verify) -> Beetle live
-                                                   if (s_gtever && gte_handles_native(op0)) {       // shadow-diff native vs Beetle (Beetle stays live)
-                                                     uint32_t bm = gte_read_data(24), bo = gte_read_data(7), bf = gte_read_ctrl(31);
-                                                     gte_op_native(insn);
-                                                     uint32_t nm = gte_read_data(24), no = gte_read_data(7), nf = gte_read_ctrl(31);
-                                                     if (nm != bm || (op0 != 0x06 && (uint16_t)no != (uint16_t)bo) || nf != bf)
-                                                       fprintf(stderr, "[gteverify] op=%02X MAC0 n=%08X/b=%08X OTZ n=%04X/b=%04X FLAGS n=%08X/b=%08X\n",
-                                                               op0, nm, bm, (uint16_t)no, (uint16_t)bo, nf, bf);
-                                                     gte_write_data(24, bm); gte_write_data(7, bo); gte_write_ctrl(31, bf);  // restore Beetle's live values
-                                                   }
+// The GTE coprocessor is RETAINED for now ONLY as the PSX-content math service (collision/physics still
+// run as recompiled PSX and call gte_op). We do NOT bit-replicate the GTE natively — that would be PSX
+// mimicry (reproducing gte.c's fixed-point/overflow behavior), exactly what CLAUDE.md forbids. The GTE/
+// Beetle dependency goes away by PORTING ITS CALLERS to PC-native math: render already projects PC-native
+// (proj_native_vertex — float matrices, real depth, the engine's own visibility; no gte_op for render),
+// and the remaining gte_op calls disappear as the rest of the engine/content is ported. (Reverted the
+// native NCLIP/AVSZ replica — see docs/journal.md later-171.)
+void     gte_op(Core* c, uint32_t insn)         { GTE_Instruction(insn);
                                                    unsigned op = insn & 0x3F;
                                                    if (s_gteprobe < 0) { const char* e = cfg_str("PSXPORT_GTEPROBE"); s_gteprobe = e ? atoi(e) : 0; }
                                                    if (s_gteprobe > 0) s_gte_hist[op]++;
