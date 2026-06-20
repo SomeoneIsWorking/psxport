@@ -319,6 +319,9 @@ static long native_repl_read(Core* c, uint32_t f) {
     else if (!strcmp(cmd, "newgame")) { g_nav_newgame = 1; fprintf(stderr, "[repl] newgame: pulsing to GAME prologue\n"); return 100000; }
     else if (!strcmp(cmd, "skip")) { a = 0; sscanf(line, "%*s %u", &a); if (!a) a = 500; g_skip_frames = (long)a; fprintf(stderr, "[repl] skip %u frames\n", a); return (long)a; }
     else if (!strcmp(cmd, "shot")) { char path[200] = {0}; if (sscanf(line, "%*s %199s", path) == 1) { void gpu_native_shot(Core*, const char*); gpu_native_shot(c, path); } }
+    else if (!strcmp(cmd, "vram")) { char path[200] = {0}; unsigned x=0,y=0,w=1024,h=512;
+      if (sscanf(line, "%*s %199s %u %u %u %u", path, &x,&y,&w,&h) >= 1) {
+        void gpu_vk_vram_region(const char*, int, int, int, int); gpu_vk_vram_region(path, (int)x,(int)y,(int)w,(int)h); } }
     else if (!strcmp(cmd, "dumpram")) {
       char path[200] = {0};
       if (sscanf(line, "%*s %199s", path) == 1) {
