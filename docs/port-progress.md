@@ -156,7 +156,12 @@ for content fns (call it). Do NOT mimic PSX hardware (GTE/GP0/OT) — remove Bee
   (LZCR leading-bit count → normalize → LUT @0x800a6310 → exponent shift). GTE used ONLY as a CLZ → pure
   fn of a0, ported native with `__builtin_clz` (the GTE caller no longer needs Beetle). Bit-exact 0-diff
   15000+ live calls. (Was mis-attributed as 9% by 256B buckets; real cost 0.5% — the profiler bucket fix.)
-- ✅ Terrain `FUN_8002AB5C` = `ov_terrain` (native_terrain.cpp, later-158).
+- ✅ GTE 3x3 MATRIX MULTIPLY `FUN_80084110` = `ov_mat_mul` (engine_math.cpp, later-186) — P=R×M via MVMVA
+  (sf=1, rot matrix, lm=0). Was 16% of hot interp time + top freq leader (55k calls). Ported NATIVE per
+  USER 2026-06-21 (the GTE math, not just CLZ): exact MVMVA from gte.c (44-bit accum, >>12, signed clamp16;
+  last element via SWC2 = sign-extended). GTE-EXACT verified: a2 output + MVMVA GTE regs (IR/MAC/input) 0-diff
+  over 115000+ live calls (FIFO/LZCR regs excluded — comparator can't round-trip FIFO writes; neither path
+  touches them). Field run 38.77M→35.21M insns (−9.2%; cumulative −18% from baseline). First of the cluster.
 - ✅ Render submit: geom GT3/GT4/gt4_bp, per-object render `0x8003CCA4`, render walk `0x8003C048` — engine_submit.
 - ✅ AUXILIARY render walks `0x8003BCF4` / `0x8003BF00` / `0x8003EEC0` = `ov_rwalk_aux_*` (engine_submit.cpp,
   issue #4): faithful per-node lift of each recomp body + per-node `gpu_obj_depth_add(world-pos depth)` so
@@ -191,19 +196,22 @@ in-port profiler (later-186, `interp.cpp`) gives the TIME + FREQUENCY histograms
 - **ACCURATE HOT-LIST (field, newgame+skip 600, 300 frames — later-186; don't re-profile to re-confirm):**
   - **GTE matrix/vector TRANSFORM cluster ≈ 52% of hot time — THE dominant lever + the "remove Beetle GTE"
     axis. NEXT BIG ARC.** All resident libgte ApplyMatrix/RotTrans-family helpers that CTC2-load a matrix
-    + run MVMVA/RTPS, write to a2: `FUN_80084110` 16.2% (55k calls — matrix×vec, CTC2 rot from a0, MVMVA,
-    out a2[0..0x10]+swc2), `FUN_80085480` 14.7%, `FUN_80085050` 7.2%, `FUN_80084EB0` 6.4%, `FUN_80084D10`
-    5.6%, `FUN_80084220` 1.8%. Porting native needs: (1) a native fixed-point GTE-math layer (MVMVA with
+    + run MVMVA/RTPS, write to a2: ~~`FUN_80084110` 16.2%~~ ✅ OWNED native (ov_mat_mul, GTE-exact 0-diff
+    115k calls — §D; the PROVEN RECIPE for the rest: decode GTE cmds, reimplement MVMVA from gte.c, verify
+    a2 + GTE output regs via the comparator excluding FIFO/LZCR). REMAINING: `FUN_80085480` 16.9%,
+    `FUN_80085050` 8.3%, `FUN_80084EB0` 7.3%, `FUN_80084D10` ~5%, `FUN_80084220` ~2%. Porting native needs: (1) a native fixed-point GTE-math layer (MVMVA with
     sf/lm/IR-saturation/MAC-overflow matching mednafen gte.c), (2) GTE-REGISTER inspection tooling (the RAM
     dump is BLIND to GTE regs — must verify GTE-state LEAKAGE that downstream RTPS reads), (3) per-fn a2 +
     GTE-reg comparator. Big but the single highest-value perf + 100%-PC-native move.
-    **⚠ BOUNDARY CAVEAT (read before touching this cluster):** `gte_beetle.cpp`'s gte_op comment + later-171
-    (the reverted native NCLIP/AVSZ replica) establish: do NOT bit-replicate GTE math natively — that's PSX
-    mimicry, the wrong deliverable. The GTE goes away by porting its CALLERS, not by re-emulating MVMVA. So
-    FIRST do CALLER ANALYSIS per cluster fn: if its a2 output feeds RENDER, the engine already projects
-    PC-native (proj_native_vertex) → BYPASS it, don't replicate; if it feeds CONTENT (collision/physics),
-    it must match GTE-exactly → it stays GTE until that content caller is itself ported. Trace each fn's
-    callers/consumers (PSXPORT_RTPCALLER probe, ncall, disas the callers) BEFORE writing any native math.
+    **USER DIRECTIVE 2026-06-21 (supersedes the later-171 "no native GTE" precedent FOR PERF):** order is
+    **(1) NATIVE GTE FIRST** — port the cluster as native fixed-point GTE math (MVMVA + sf/lm/IR-saturation
+    matching mednafen `vendor/beetle-psx` gte.c), verified GTE-exact (a2 output + the GTE data regs the fn
+    leaves that downstream RTPS reads — build GTE-register inspection into the comparator); **(2) CALLER
+    ANALYSIS after** (FUN_80084110 ← 80084470 ← 80051980 = object rotated-displacement → world-position
+    integration, so content-adjacent → GTE-exact required); **(3) a VULKAN/render PERF CHECK** (the profiler
+    only measures interpreter insns, not GPU/present time — needs a separate frame-time probe).
+    NB: this re-opens the exact native-GTE path later-171 reverted — but the user owns the perf-vs-boundary
+    call and chose perf. Honor it; keep it GTE-exact so content stays correct.
   - `FUN_80115598` 22.1% — **OVERLAY** 2D tilemap/sprite-grid renderer (reads tile dims +16/+17, screen pos
     +40/+42 centered 160/120). Engine render code but in GAME.BIN → needs overlay-override (rec_set_interp_
     override_auto). Biggest single fn; second arc after the GTE cluster.

@@ -126,6 +126,96 @@ static void ov_gte_norm_verify(Core* c) {
   c->r[2] = mine;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────────────────────────
+// FUN_80084110 — 3x3 MATRIX MULTIPLY P = R × M via the GTE. a0 = matrix R, a1 = matrix M, a2 = out P
+// (all 3x3 int16, GTE row-major CR layout: 5 words = [11|12, 13|21, 22|23, 31|32, 33]). 16.2% of hot
+// interpreter time + the top frequency leader (55k calls) — the biggest single perf lever. The recomp
+// body CTC2-loads R into the rotation-matrix regs, then for each COLUMN j of M runs MVMVA (sf=1→>>12,
+// mx=ROT, v=Vj, cv=Null, lm=0) and packs the 3 IR outputs into P. USER DIRECTIVE 2026-06-21: port the
+// GTE math NATIVE (perf) — must stay GTE-EXACT (output feeds object position → content). Exact MVMVA
+// from vendor gte.c: MAC(1+i) = (Σ_k R[i][k]·Mcol_j[k]) >> 12 with 44-bit running accumulation (A_MV);
+// IR(1+i) = clamp(MAC, lm=0 → signed [-32768,32767]). P[i][j] = IR(1+i) for column j → P = R·M.
+static inline int64_t sign44(int64_t v) {                 // A_MV: sign-extend bit43 (overflow flags unread)
+  v &= (INT64_C(1) << 44) - 1;
+  if (v & (INT64_C(1) << 43)) v |= ~((INT64_C(1) << 44) - 1);
+  return v;
+}
+static inline int16_t clamp16s(int32_t v) { return v < -32768 ? -32768 : (v > 32767 ? 32767 : (int16_t)v); }
+static void load_mat3(Core* c, uint32_t p, int16_t m[3][3]) {
+  uint32_t w0 = c->mem_r32(p), w1 = c->mem_r32(p+4), w2 = c->mem_r32(p+8), w3 = c->mem_r32(p+12), w4 = c->mem_r32(p+16);
+  m[0][0]=(int16_t)w0;       m[0][1]=(int16_t)(w0>>16); m[0][2]=(int16_t)w1;
+  m[1][0]=(int16_t)(w1>>16); m[1][1]=(int16_t)w2;       m[1][2]=(int16_t)(w2>>16);
+  m[2][0]=(int16_t)w3;       m[2][1]=(int16_t)(w3>>16); m[2][2]=(int16_t)w4;
+}
+static void ov_mat_mul(Core* c) {
+  int16_t R[3][3], M[3][3], P[3][3];
+  load_mat3(c, c->r[4], R);
+  load_mat3(c, c->r[5], M);
+  int32_t mac1=0, mac2=0, mac3=0;  // trailing MAC1-3 = last column's pre-clamp results (GTE leftover)
+  for (int j = 0; j < 3; j++) {              // column j of M = MVMVA vector Vj
+    for (int i = 0; i < 3; i++) {            // matrix row i
+      int64_t tmp = 0;
+      tmp = sign44(tmp + (int32_t)R[i][0] * M[0][j]);
+      tmp = sign44(tmp + (int32_t)R[i][1] * M[1][j]);
+      tmp = sign44(tmp + (int32_t)R[i][2] * M[2][j]);
+      int32_t mac = (int32_t)(tmp >> 12);
+      P[i][j] = clamp16s(mac);
+      if (j == 2) { if (i==0) mac1=mac; else if (i==1) mac2=mac; else mac3=mac; }
+    }
+  }
+  uint32_t a2 = c->r[6];
+  c->mem_w32(a2,    (uint16_t)P[0][0] | ((uint32_t)(uint16_t)P[0][1] << 16));
+  c->mem_w32(a2+4,  (uint16_t)P[0][2] | ((uint32_t)(uint16_t)P[1][0] << 16));
+  c->mem_w32(a2+8,  (uint16_t)P[1][1] | ((uint32_t)(uint16_t)P[1][2] << 16));
+  c->mem_w32(a2+12, (uint16_t)P[2][0] | ((uint32_t)(uint16_t)P[2][1] << 16));
+  c->mem_w32(a2+16, (uint32_t)(int32_t)P[2][2]);  // SWC2 IR3: sign-extended 32-bit, not a packed halfword
+  // GTE leftover state a downstream gte_op reader could consume (the recomp body leaves the LAST
+  // column's input vector in DR0/DR1 (VXY0/VZ0) + that column's MVMVA result in IR1-3/MAC1-3).
+  gte_write_data(0, (uint32_t)(uint16_t)M[0][2] | ((uint32_t)(uint16_t)M[1][2] << 16));  // VXY0 = col2 (VX,VY)
+  gte_write_data(1, (uint32_t)(uint16_t)M[2][2]);    // VZ0 = col2 (VZ)
+  gte_write_data(9,  (uint32_t)(uint16_t)P[0][2]);   // IR1
+  gte_write_data(10, (uint32_t)(uint16_t)P[1][2]);   // IR2
+  gte_write_data(11, (uint32_t)(uint16_t)P[2][2]);   // IR3
+  gte_write_data(25, (uint32_t)mac1);                // MAC1
+  gte_write_data(26, (uint32_t)mac2);                // MAC2
+  gte_write_data(27, (uint32_t)mac3);                // MAC3
+  c->r[2] = a2;                                       // returns a2
+}
+
+// Comparator: diff a2 (5 words) AND all 32 GTE DATA regs, native vs the recomp reference. Snapshot regs
+// + a2 + GTE data/ctrl, run native, capture, restore everything, run oracle, capture, diff. Reveals
+// both output correctness and any GTE-state LEAKAGE the native path must replicate.
+static void ov_mat_mul_verify(Core* c) {
+  uint32_t rsave[32]; memcpy(rsave, c->r, sizeof rsave);
+  uint32_t a2 = c->r[6];
+  uint32_t a2save[5]; for (int i=0;i<5;i++) a2save[i]=c->mem_r32(a2+i*4);
+  uint32_t gd0[32], gc0[32]; for (int i=0;i<32;i++){ gd0[i]=gte_read_data(i); gc0[i]=gte_read_ctrl(i); }
+  ov_mat_mul(c);
+  uint32_t a2m[5]; for (int i=0;i<5;i++) a2m[i]=c->mem_r32(a2+i*4);
+  uint32_t gdm[32]; for (int i=0;i<32;i++) gdm[i]=gte_read_data(i);
+  // restore pre-state for the oracle
+  memcpy(c->r, rsave, sizeof rsave);
+  for (int i=0;i<5;i++) c->mem_w32(a2+i*4, a2save[i]);
+  for (int i=0;i<32;i++){ gte_write_data(i, gd0[i]); gte_write_ctrl(i, gc0[i]); }
+  rec_interp(c, 0x80084110u);
+  uint32_t a2o[5]; for (int i=0;i<5;i++) a2o[i]=c->mem_r32(a2+i*4);
+  uint32_t gdo[32]; for (int i=0;i<32;i++) gdo[i]=gte_read_data(i);
+  static int nbad=0, ngood=0; int bad=0;
+  for (int i=0;i<5;i++) if (a2m[i]!=a2o[i]) { bad=1; if (nbad<60) fprintf(stderr,"[mathverify] matmul a2+%d mine=%08x oracle=%08x\n", i*4, a2m[i], a2o[i]); }
+  for (int i=0;i<32;i++) {
+    // DR12-14 = XY_FIFO, DR15 = SXYP, DR31 = LZCR: FIFO/derived regs that MVMVA does NOT write, and the
+    // comparator's gte_write_data restore can't round-trip a FIFO (a write pushes it). Excluded — they
+    // diverge only as a snapshot artifact, not a real ov_mat_mul leak (both paths leave them untouched).
+    if (i>=12 && i<=15) continue; if (i==31) continue;
+    if (gdm[i]!=gdo[i]) { bad=1; if (nbad<60) fprintf(stderr,"[mathverify] matmul GTE-DR%d mine=%08x oracle=%08x\n", i, gdm[i], gdo[i]); }
+  }
+  if (bad) nbad++;
+  else if ((ngood++ % 5000)==0) fprintf(stderr,"[mathverify] matmul match #%d\n", ngood);
+  // keep native result live
+  memcpy(c->r, rsave, sizeof rsave); for (int i=0;i<5;i++) c->mem_w32(a2+i*4,a2m[i]);
+  for (int i=0;i<32;i++) gte_write_data(i, gdm[i]); c->r[2]=a2;
+}
+
 void engine_math_register(void) {
   // Verified bit-exact: 65000+ live field calls 0-diff vs the recomp reference (later-186). ov_isqrt is
   // the live path; ov_isqrt_verify is reachable as the per-call gate when the `mathverify` channel is set
@@ -133,4 +223,5 @@ void engine_math_register(void) {
   int v = cfg_dbg("mathverify");
   rec_set_override(0x80077FB0u, v ? ov_isqrt_verify    : ov_isqrt);
   rec_set_override(0x80084080u, v ? ov_gte_norm_verify : ov_gte_norm);  // verified 0-diff 15000+ live calls
+  rec_set_override(0x80084110u, v ? ov_mat_mul_verify : ov_mat_mul);  // 3x3 matmul; verified 0-diff 115000+ live calls
 }
