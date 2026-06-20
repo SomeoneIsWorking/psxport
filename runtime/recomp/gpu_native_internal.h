@@ -11,7 +11,6 @@
 #define GPU_NATIVE_INTERNAL_H
 #include <stdio.h>
 #include <stdint.h>
-#include "native_dl.h"   // NativePrim (member type of GpuState::s_ndl_cur)
 
 struct Core;             // CPU/RAM handle (core.h); methods below take Core* but only by pointer
 struct Game;             // back-pointer target (game.h); blit_src reaches gpu_vk via game->core
@@ -34,6 +33,7 @@ struct GpuState {
 
   // Backdrop-vs-HUD / gameplay-frame discrimination (read by the gpu_vk present path via Core).
   int s_seen3d = 0;       // has any GTE-projected (3D) prim been teed yet this frame? (else 2D backdrop band)
+  int bg_2d(int bx0, int by0, int bx1, int by1);   // is this 2D prim a backdrop (far band) vs HUD?
   int s_prev_had3d = 0;   // did LAST frame draw any 3D? = "this is a gameplay (3D) frame" (wide pillarbox gate)
 
   // VRAM (textures + framebuffers) and the fps60 in-between buffer
@@ -72,8 +72,6 @@ struct GpuState {
   int s_pl = 0, s_pl_g = 0;                                   // poly-line in progress / gouraud
   int s_xfer = 0, s_xfer_x = 0, s_xfer_y = 0, s_xfer_w = 0, s_xfer_h = 0, s_xfer_px = 0;
 
-  const NativePrim* s_ndl_cur = 0;                            // native-DL prim currently being rendered
-
   // Frame + OT bookkeeping
   int s_frame = 0;                                            // present-frame counter
   uint32_t s_cur_node = 0;                                    // RAM addr of the OT node being fed to GP0
@@ -98,7 +96,6 @@ struct GpuState {
   void gp0_exec(Core* core);
   void gpu_gp0(Core* core, uint32_t w);
   void gpu_gp1(uint32_t w);
-  void ndl_render_node(Core* core, uint32_t addr);
   void gpu_dma2_linked_list(Core* core, uint32_t madr);
   void gpu_dma2_block(Core* core, uint32_t madr, int count, int to_gpu);
   void gpu_native_load_image(Core* core, int x, int y, int w, int h, uint32_t src);

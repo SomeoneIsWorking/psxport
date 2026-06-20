@@ -15,7 +15,6 @@
 #include "r3000.h"
 #include "cfg.h"
 #include "gpu_native_internal.h"   // shared VRAM/state/helpers (also used by gpu_trace.c, gpu_debug.c)
-#include "native_dl.h"             // native classified display list (engine_submit owns the build)
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -617,11 +616,6 @@ void GpuState::raster_line(int x0, int y0, int x1, int y1, uint8_t cr, uint8_t c
     int e2 = 2 * e; if (e2 >= dy) { e += dy; x0 += sx; } if (e2 <= dx) { e += dx; y0 += sy; } }
 }
 
-// Native display list: the prim currently being rendered FROM the native arena (its packet words were
-// loaded into s_fifo by ndl_render_node). When set, the poly path takes each vertex's view-Z straight
-// from this prim (np->pz, parse order) instead of the value-keyed address bridge — the engine that
-// projected the vertex carries its real depth here directly. NULL for ordinary guest-packet decode.
-
 // Execute a complete GP0 primitive packet held in s_fifo[0..s_fcount).
 void GpuState::gp0_exec(Core* core) {
   uint32_t c = s_fifo[0];
@@ -687,10 +681,7 @@ void GpuState::gp0_exec(Core* core) {
         is3d = 1;
         for (int i = 0; i < nv; i++) {
           float pz;
-          if (s_ndl_cur) {                      // native display-list prim: depth carried directly
-            if (i < s_ndl_cur->npz) dep[i] = proj_pz_to_ord(s_ndl_cur->pz[i]);
-            else { is3d = 0; break; }
-          } else if (vaddr[i] && projprim_lookup_pz(vaddr[i], &pz)) dep[i] = proj_pz_to_ord(pz);
+          if (vaddr[i] && projprim_lookup_pz(vaddr[i], &pz)) dep[i] = proj_pz_to_ord(pz);
           else { is3d = 0; break; }
         }
         if (is3d) s_seen3d = 1;            // a projected world prim has now been drawn this frame
@@ -1417,23 +1408,6 @@ void gpu_sbs_set(int on) { s_sbs_on = on ? 1 : 0; }
 // Diagnostic dumps (gpu_prov_dump / gpu_provat_display / gpu_scene_dump[_now]) live in gpu_debug.c.
 void gpu_scene_dump(Core*, FILE*, uint32_t);
 
-// Render a native-display-list prim linked at OT node `addr` (phys), if one is. The owned node carries
-// a ZERO-LENGTH guest tag (no payload words for the walk to decode); its real packet words + per-vertex
-// view-Z live in the native arena. Load the packet words into the FIFO and run the normal primitive
-// path so every downstream behaviour (semi grouping, fade/fps60 capture, widescreen 2D) is identical,
-// but with s_ndl_cur set so the depth path uses the carried native view-Z (no address bridge).
-void GpuState::ndl_render_node(Core* core, uint32_t addr) {
-  // Render every host prim bound to this OT bucket-anchor, head-first (LIFO = guest AddPrim draw order).
-  for (NativePrim* np = ndl_lookup(core, addr); np; np = ndl_next(core, np)) {
-    for (int i = 0; i < np->nwords; i++) { s_fifo[i] = np->words[i]; s_fifo_addr[i] = 0; }
-    s_fcount = np->nwords;
-    s_ndl_cur = np;
-    gp0_exec(core);
-    s_ndl_cur = 0;
-    s_fcount = 0;
-  }
-}
-
 // DMA channel 2 (GPU): walk an ordering-table linked list from `madr`, feeding each node's
 // GP0 words to the parser. Header word: bits[24..31]=word count, bits[0..23]=next node addr
 // (0xFFFFFF = end).
@@ -1476,7 +1450,6 @@ void GpuState::gpu_dma2_linked_list(Core* core, uint32_t madr) {
     s_cur_node = 0x80000000u | addr;
     for (int i = 0; i < n; i++) { s_gp0_src = addr + 4 + i * 4;   // guest addr of this word (Phase-1 attach)
                                   gpu_gp0(core, core->mem_r32(addr + 4 + i * 4)); }
-    ndl_render_node(core, addr);   // owned native prim at this node (zero-length guest tag) -> render natively
     uint32_t next = hdr & 0xFFFFFF;
     if (next == 0xFFFFFF || next == 0) break;
     addr = next & 0x1FFFFC;
@@ -1492,32 +1465,6 @@ void GpuState::gpu_dma2_linked_list(Core* core, uint32_t madr) {
     fprintf(stderr, "[pool] f%d madr=0x%08X nodes=%d pool=0x%08X hi=0x%08X\n",
             s_frame, 0x80000000u | g_ot_madr, nodes, pool, (uint32_t)mx);
   }
-  // PSXPORT_DEBUG=bucket: do owned (native-DL 3D) prims and guest (inline-2D) packets ever share an OT
-  // bucket? Decides whether native per-bucket ordering (later-125 NEXT step 2b) can reproduce the draw
-  // order exactly or needs per-bucket owned/guest merge logic. A maximal run of consecutive POOL-region
-  // nodes between two OT-array (bucket-anchor) nodes is exactly one bucket's prim chain. Re-walk (probe
-  // only) and tally owned vs guest per run.
-  if (cfg_dbg("bucket")) {
-    uint32_t ot_lo = g_ot_madr - 0x1ffcu, ot_hi = ot_lo + 0x2000u;   // main OT array [ctx, ctx+0x2000)
-    uint32_t a = g_ot_madr;
-    int run_o = 0, run_g = 0, mixed = 0, ob = 0, gb = 0, tot_o = 0, tot_g = 0;
-    for (int k = 0; k < 0x10000; k++) {
-      uint32_t hdr = core->mem_r32(a);
-      if (a >= ot_lo && a < ot_hi) {                 // bucket boundary -> close the current run
-        if (run_o && run_g) mixed++; else if (run_o) ob++; else if (run_g) gb++;
-        run_o = run_g = 0;
-      } else if (ndl_lookup(core, a)) { run_o++; tot_o++; }   // owned native prim (1-word tag in pool)
-      else { run_g++; tot_g++; }                        // guest inline-2D packet
-      uint32_t next = hdr & 0xFFFFFF;
-      if (next == 0xFFFFFF || next == 0) break;
-      a = next & 0x1FFFFC;
-    }
-    if (run_o && run_g) mixed++; else if (run_o) ob++; else if (run_g) gb++;
-    if (tot_o + tot_g > 20)                          // the main OT only (skip the 1-node setup OT)
-      fprintf(stderr, "[bucket] f%d madr=0x%08X prims owned=%d guest=%d | buckets owned-only=%d "
-              "guest-only=%d MIXED=%d\n", s_frame, 0x80000000u | g_ot_madr, tot_o, tot_g, ob, gb, mixed);
-  }
-  ndl_mark_consumed(core);   // this draw consumed the native list; the next submit starts a fresh frame
   if (guard >= 0x10000) {
     static int warned = 0;
     if (!warned++) fprintf(stderr, "[gpu] WARN: OT traversal hit %d-node cap from madr=0x%08X "

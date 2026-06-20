@@ -20,32 +20,14 @@
 #include "core.h"
 #include "game.h"   // Fps60State::current_object (was g_current_object)
 #include "cfg.h"
-#include "native_dl.h"
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
 
 void rec_super_call(Core*, uint32_t);   // interpret the original PSX body (A/B oracle / super-call)
 
-#define PKT_POOL_PTR 0x800BF544u   // DAT_800bf544: current free GPU-packet write pointer
-#define COL_MASK     0xFFF0F0F0u   // low-nibble-per-byte clear applied to packet RGB words
+#define COL_MASK     0xFFF0F0F0u   // low-nibble-per-byte clear applied to RGB words (matches the GPU)
 
-// Packet write target. The submit code assembles a primitive packet either straight into GUEST RAM
-// (faithful pre-port behaviour; P.guest = the OT-pool node addr, P.w = NULL) or into a NATIVE word
-// buffer that becomes a NativePrim (the port default; P.w = the buffer). Offsets index packet bytes;
-// the native buffer mirrors the packet byte layout so the same 8/16/32-bit accesses line up on this
-// little-endian host (and the byte/halfword reads the cull does come back identical). The 1-word OT
-// link node still goes to guest RAM directly (not through this) since it is the engine's own ordering.
-typedef struct { uint32_t* w; uint32_t guest; Core* c; } PkTgt;
-static inline void     pk_w32(PkTgt* p, uint32_t o, uint32_t v) { if (p->w) p->w[o >> 2] = v;             else p->c->mem_w32(p->guest + o, v); }
-static inline void     pk_w16(PkTgt* p, uint32_t o, uint16_t v) { if (p->w) ((uint16_t*)p->w)[o >> 1] = v; else p->c->mem_w16(p->guest + o, v); }
-static inline void     pk_w8 (PkTgt* p, uint32_t o, uint8_t  v) { if (p->w) ((uint8_t*)p->w)[o] = v;        else p->c->mem_w8(p->guest + o, v); }
-static inline uint16_t pk_r16(PkTgt* p, uint32_t o) { return p->w ? ((uint16_t*)p->w)[o >> 1] : p->c->mem_r16(p->guest + o); }
-static inline uint8_t  pk_r8 (PkTgt* p, uint32_t o) { return p->w ? ((uint8_t*)p->w)[o]       : p->c->mem_r8(p->guest + o); }
-
-static int s_submit_recomp = -1;   // PSXPORT_SUBMIT_RECOMP=1 -> keep the recomp body (A/B)
-static int submit_recomp(void) { if (s_submit_recomp < 0) s_submit_recomp = cfg_on("PSXPORT_SUBMIT_RECOMP") ? 1 : 0;
-                                 return s_submit_recomp; }
 
 // Right-edge frustum-cull threshold. The submit drops a prim only if ALL its verts are off the right of
 // the screen. In 4:3 that's SX>=320 (faithful). Genuine engine-wide (gpu_vk_wide_engine) extends the
@@ -196,204 +178,109 @@ void ov_cmdenq_probe(Core* c) {
 // the renderer's D32 depth buffer does true per-pixel occlusion (PSXPORT_NATIVE_DEPTH / the SBS A/B
 // view) instead of OT-submission order. No correlation, no value-matching: the engine that emits the
 // vertex writes the depth for the exact address it stored the SXY to. Off (faithful) by default.
-int  attach_enabled(void);                       // native-depth path live (gte_beetle.c)
-void projprim_set_pz(uint32_t addr, float pz);   // record a vertex's view-Z at its packet word address
 void proj_set_H(uint16_t h);                     // tell proj_pz_to_ord the projection-plane H (CR26)
-static int s_depth = -1;
-static int depth_on(void) { if (s_depth < 0) s_depth = attach_enabled() ? 1 : 0; return s_depth; }
-
-// GTE opcodes used by the submit path (cop2 instruction encodings, matching the recomp bodies).
-#define GTE_RTPS  0x4A180001u   // project 1 vertex (V0)            -> SXY2/SZ3
-#define GTE_RTPT  0x4A280030u   // project 3 vertices (V0,V1,V2)    -> SXY0/1/2, SZ1/2/3
-#define GTE_NCLIP 0x4B400006u   // signed area of (SXY0,SXY1,SXY2)  -> MAC0 (>0 front-facing)
-#define GTE_AVSZ3 0x4B58002Du   // average Z of the 3 SZ           -> OTZ (DR7), scaled by ZSF3
-#define GTE_AVSZ4 0x4B68002Eu   // average Z of the 4 SZ           -> OTZ (DR7), scaled by ZSF4
-
-// OT-bucket depth from the SZ FIFO. `nz` SZ regs starting at DR `zbase` (tri: 3 @ DR17; quad: 4 @ DR16).
-// The record's code byte selects: type 1 -> farthest (max SZ)>>2, type 2 -> nearest (min SZ)>>2,
-// else -> hardware AVSZ average. (Verified by exhaustively tracing each recomp body's branch tree —
-// both type paths reduce to a pure min/max over all the SZ.)
-static uint32_t ot_depth(Core* c, uint32_t code, int zbase, int nz, uint32_t avsz) {
-  uint32_t type = (code >> 24) & 3u;
-  if (type == 1 || type == 2) {
-    int32_t z = (int32_t)gte_read_data(zbase);
-    for (int i = 1; i < nz; i++) { int32_t zi = (int32_t)gte_read_data(zbase + i);
-      if (type == 1 ? (zi > z) : (zi < z)) z = zi; }
-    return (uint32_t)(z >> 2);
-  }
-  gte_op(c, avsz);
-  return gte_read_data(7);
-}
-
-// Logarithmic OT-bucket compression + range clamp, exactly as the recomp body. Returns the final OT
-// index, or 0xFFFFFFFF (negative) if out of the drawable range [4,2047] (prim culled, not linked).
-// Uses ARITHMETIC shifts to match the recomp bodies bit-for-bit when otz can be negative (the
-// byte-packed variants add a signed per-call OT-Z bias before this; for the non-negative AVSZ inputs
-// of the resident GT3/GT4 library this is identical to a logical shift).
-static uint32_t ot_compress(uint32_t otz) {
-  int32_t z = (int32_t)otz;
-  int32_t sh = z >> 10;
-  int32_t idx = (z >> (sh & 31)) + (sh << 9);
-  if ((uint32_t)(idx - 4) < 2044u) return (uint32_t)idx;   // in range
-  return 0xFFFFFFFFu;                                       // out of range -> -1 -> skip
-}
-
+// PC-NATIVE render path (gte_beetle.c / gpu_native.c): project an explicit model vertex through the GTE's
+// composed camera×object transform in FLOAT (no gte_op), and tee a projected quad straight to the VK
+// rasterizer with real per-pixel depth (no GP0 packet, no OT). Same primitives native_terrain.cpp uses.
+typedef struct { int ir1, ir2, ir3, sz, sx, sy; float px, py, pz, vx, vy, vz; } ProjVtx;
+void  proj_native_xform(int vx, int vy, int vz, ProjVtx* out);
+float proj_pz_to_ord(float pz);
+void  gpu_draw_world_quad(Core* c, const float* px, const float* py, const float* depth,
+                          const int* u, const int* v, const uint8_t* r, const uint8_t* g,
+                          const uint8_t* b, uint16_t tp, uint16_t clut, int semi);
 // gen_func_8007FDB0 — POLY_GT3 (gouraud-textured triangle) submit.
 // Record = 36 bytes: {+0 rgb0|code, +4 rgb1 (rgb2 = rgb1<<4), +8 uv0|clut, +12 uv1|tpage,
 //   +16 VXY0, +20 VZ0(lo)|VZ1(hi), +24 VXY1, +28 VXY2, +32 VZ2(lo)|uv2(hi)}.
-// Packet = 40 bytes POLY_GT3: {tag, rgb0|code, SXY0, uv0|clut, rgb1, SXY1, uv1|tpage, rgb2, SXY2, uv2}.
-static void submit_poly_gt3(Core* c) {
-  uint32_t rec = c->r[4], ot = c->r[5], count = c->r[6];
-  uint32_t pkt = c->mem_r32(PKT_POOL_PTR);
-  int depth = depth_on(); if (depth) proj_set_H((uint16_t)gte_read_ctrl(26));
-  int dl = ndl_active();                           // build into a native prim instead of a guest packet
-  geomblk_dump(c, "GT3", rec, count, 36);             // capture probe (oracle): raw records keyed by render obj
-  uint32_t W[16];
+// PC-NATIVE POLY_GT3 submit — project the 3 model verts through the engine's composed transform in FLOAT
+// (proj_native_xform, no gte_op) and tee a degenerate quad (v2 repeated) to the VK rasterizer with real
+// per-pixel depth. No GP0 packet, no OT, no guest write.
+static void submit_poly_gt3_native(Core* c) {
+  uint32_t rec = c->r[4], count = c->r[6];
+  proj_set_H((uint16_t)gte_read_ctrl(26));
   for (uint32_t i = 0; i < count; i++, rec += 36) {
-    PkTgt P; P.c = c; if (dl) { memset(W, 0, sizeof W); P.w = W; P.guest = 0; } else { P.w = 0; P.guest = pkt; }
-    float pz0 = 0, pz1 = 0, pz2 = 0;
-    // load the 3 model vertices into the GTE input regs (V0..V2), then project all three (RTPT).
     uint32_t vz01 = c->mem_r32(rec + 20);
-    gte_write_data(0, c->mem_r32(rec + 16));          // VXY0
-    gte_write_data(1, vz01 & 0xFFFFu);             // VZ0
-    gte_write_data(2, c->mem_r32(rec + 24));          // VXY1
-    gte_write_data(3, vz01 >> 16);                 // VZ1
-    gte_write_data(4, c->mem_r32(rec + 28));          // VXY2
-    gte_write_data(5, c->mem_r32(rec + 32));          // VZ2 (low 16)
-    uint32_t code = c->mem_r32(rec + 4);
-    pk_w32(&P, 4,  c->mem_r32(rec + 0));              // rgb0|code
-    gte_op(c, GTE_RTPT);
-    pk_w32(&P, 12, c->mem_r32(rec + 8));              // uv0|clut
-    pk_w32(&P, 24, c->mem_r32(rec + 12));             // uv1|tpage
-    if ((int32_t)gte_read_ctrl(31) < 0) continue;  // GTE FLAG: projection error/overflow -> drop
-    gte_op(c, GTE_NCLIP);
-    pk_w32(&P, 16, code & COL_MASK);               // rgb1
-    if ((int32_t)gte_read_data(24) <= 0) continue; // MAC0 = signed area <= 0 -> backface -> drop
-    pk_w32(&P, 8,  gte_read_data(12));             // SXY0
-    pk_w32(&P, 20, gte_read_data(13));             // SXY1
-    pk_w32(&P, 32, gte_read_data(14));             // SXY2
-    // frustum cull (right/bottom edges only, as the original): drop if all 3 SX>=xmax or all 3 SY>=240.
+    uint32_t xy0 = c->mem_r32(rec + 16), xy1 = c->mem_r32(rec + 24), xy2 = c->mem_r32(rec + 28);
+    ProjVtx p[3];
+    proj_native_xform((int16_t)xy0, (int16_t)(xy0 >> 16), (int16_t)vz01,         &p[0]);
+    proj_native_xform((int16_t)xy1, (int16_t)(xy1 >> 16), (int16_t)(vz01 >> 16), &p[1]);
+    proj_native_xform((int16_t)xy2, (int16_t)(xy2 >> 16), (int16_t)c->mem_r32(rec + 32), &p[2]);
+    float area = (p[1].px - p[0].px) * (p[2].py - p[0].py) - (p[2].px - p[0].px) * (p[1].py - p[0].py);
+    if (area <= 0) continue;                                  // backface
     int xmax = submit_xmax();
-    uint16_t sx0 = pk_r16(&P, 8),  sx1 = pk_r16(&P, 20), sx2 = pk_r16(&P, 32);
-    if (sx0 >= xmax && sx1 >= xmax && sx2 >= xmax) continue;
-    uint16_t sy0 = pk_r16(&P, 10), sy1 = pk_r16(&P, 22), sy2 = pk_r16(&P, 34);
-    if (sy0 >= 240 && sy1 >= 240 && sy2 >= 240) continue;
-    pk_w32(&P, 28, (code << 4) & COL_MASK);        // rgb2
-    uint32_t idx = ot_compress(ot_depth(c, code, 17, 3, GTE_AVSZ3));
-    if ((int32_t)idx < 0) continue;                // out of OT range -> drop
-    pk_w16(&P, 36, c->mem_r16(rec + 34));             // uv2 (high half of rec+32 word)
-    pz0 = (float)(int32_t)gte_read_data(17);       // SXY0 -> SZ0  (native per-vertex view-Z)
-    pz1 = (float)(int32_t)gte_read_data(18);       // SXY1 -> SZ1
-    pz2 = (float)(int32_t)gte_read_data(19);       // SXY2 -> SZ2
-    uint32_t otaddr = ot + (idx << 2);
-    if (dl) {
-      // NATIVE ORDERING: append to the host per-bucket list keyed by the OT anchor — write NO guest OT/pool.
-      NativePrim* np = ndl_alloc(c, otaddr & 0x1FFFFC);
-      if (np) { np->nwords = 9; np->npz = 3;
-        for (int k = 0; k < 9; k++) np->words[k] = W[k + 1];   // W[1..9] = the 9 GP0 payload words
-        np->pz[0] = pz0; np->pz[1] = pz1; np->pz[2] = pz2; }
-    } else {
-      c->mem_w32(pkt + 0, c->mem_r32(otaddr) | 0x09000000u);  // tag: link old head + length (9 words)
-      c->mem_w32(otaddr, pkt);                        // OT head -> this packet
-      if (depth) {                                 // record each vertex's real view-Z at its packet addr
-        projprim_set_pz(pkt + 8,  pz0); projprim_set_pz(pkt + 20, pz1); projprim_set_pz(pkt + 32, pz2);
-      }
-      pkt += 40;
+    if (p[0].sx >= xmax && p[1].sx >= xmax && p[2].sx >= xmax) continue;
+    if (p[0].sy >= 240 && p[1].sy >= 240 && p[2].sy >= 240) continue;
+    uint32_t code = c->mem_r32(rec + 0);                      // rgb0|op ; rgb1 @rec+4, rgb2 = rgb1<<4
+    uint32_t rgb[3] = { code & COL_MASK, c->mem_r32(rec + 4) & COL_MASK, (c->mem_r32(rec + 4) << 4) & COL_MASK };
+    uint32_t uv0 = c->mem_r32(rec + 8), uv1 = c->mem_r32(rec + 12);
+    uint16_t clut = (uint16_t)(uv0 >> 16), tp = (uint16_t)(uv1 >> 16);
+    int u[4], v[4]; uint8_t r[4], g[4], b[4]; float px[4], py[4], depth[4];
+    u[0] = uv0 & 0xFF;  v[0] = (uv0 >> 8) & 0xFF;
+    u[1] = uv1 & 0xFF;  v[1] = (uv1 >> 8) & 0xFF;
+    u[2] = c->mem_r16(rec + 34) & 0xFF; v[2] = (c->mem_r16(rec + 34) >> 8) & 0xFF;   // uv2 (high half of rec+32)
+    for (int k = 0; k < 3; k++) {
+      px[k] = p[k].px; py[k] = p[k].py; depth[k] = proj_pz_to_ord(p[k].pz);
+      r[k] = rgb[k] & 0xFF; g[k] = (rgb[k] >> 8) & 0xFF; b[k] = (rgb[k] >> 16) & 0xFF;
     }
+    px[3] = px[2]; py[3] = py[2]; depth[3] = depth[2];        // 4th vert = v2 (degenerate -> a triangle)
+    u[3] = u[2]; v[3] = v[2]; r[3] = r[2]; g[3] = g[2]; b[3] = b[2];
+    int semi = (code & 0x02000000) ? 1 : 0;
+    gpu_draw_world_quad(c, px, py, depth, u, v, r, g, b, tp, clut, semi);
   }
-  if (!dl) c->mem_w32(PKT_POOL_PTR, pkt);           // native ordering writes no guest pool
-  c->r[2] = rec;                                   // return: record pointer advanced past the array
+  c->r[2] = rec;
 }
 
-void ov_submit_poly_gt3(Core* c) {
-  if (submit_recomp() || cfg_on("PSXPORT_GT3_RECOMP")) { rec_super_call(c, 0x8007FDB0u); return; }
-  submit_poly_gt3(c);
-}
+void ov_submit_poly_gt3(Core* c) { submit_poly_gt3_native(c); }
 
-// gen_func_8008007C — POLY_GT4 (gouraud-textured quad) submit.
+// gen_func_8008007C — POLY_GT4 (gouraud-textured quad) submit, PC-NATIVE.
 // Record = 44 bytes: {+0 rgb0(rgb1=<<4), +4 rgb2(rgb3=<<4), +8 uv0|clut, +12 uv1|tpage,
 //   +16 uv2(lo)|uv3(hi), +20 VXY0, +24 VZ0(lo)|VZ1(hi), +28 VXY1, +32 VXY2, +36 VZ2(lo)|VZ3(hi), +40 VXY3}.
-// Packet = 52 bytes POLY_GT4: {tag, rgb0,SXY0,uv0|clut, rgb1,SXY1,uv1|tpage, rgb2,SXY2,uv2, rgb3,SXY3,uv3}.
-// The 4th vertex (V3) is projected alone via RTPS first, then the front tri (V0,V1,V2) via RTPT.
-static void submit_poly_gt4(Core* c) {
-  uint32_t rec = c->r[4], ot = c->r[5], count = c->r[6];
-  uint32_t pkt = c->mem_r32(PKT_POOL_PTR);
-  int depth = depth_on(); if (depth) proj_set_H((uint16_t)gte_read_ctrl(26));
-  int dl = ndl_active();
-  geomblk_dump(c, "GT4", rec, count, 44);             // capture probe (oracle): raw records keyed by render obj
-  uint32_t W[16];
+// Project the 4 model verts through the engine's composed transform in FLOAT (proj_native_xform, no
+// gte_op) and tee the quad straight to the VK rasterizer (gpu_draw_world_quad) with real per-pixel depth.
+// NO GP0 packet, NO OT, NO guest write — the renderer a PC game has. Cull rules (backface/frustum) are
+// reproduced on the native projection so we drop the same prims the engine would. Returns the advanced
+// record pointer (the engine reads it back).
+static void submit_poly_gt4_native(Core* c) {
+  uint32_t rec = c->r[4], count = c->r[6];
+  proj_set_H((uint16_t)gte_read_ctrl(26));
   for (uint32_t i = 0; i < count; i++, rec += 44) {
-    PkTgt P; P.c = c; if (dl) { memset(W, 0, sizeof W); P.w = W; P.guest = 0; } else { P.w = 0; P.guest = pkt; }
-    float pz0 = 0, pz1 = 0, pz2 = 0, pz3 = 0;
-    // project the lone 4th vertex (V3) first (RTPS): result SXY in DR14.
-    uint32_t code2 = c->mem_r32(rec + 4);
-    gte_write_data(0, c->mem_r32(rec + 40));          // VXY3
-    gte_write_data(1, c->mem_r32(rec + 36) >> 16);    // VZ3
-    pk_w32(&P, 28, code2 & COL_MASK);              // rgb2
-    gte_op(c, GTE_RTPS);
-    pk_w32(&P, 40, (code2 << 4) & COL_MASK);       // rgb3
-    pk_w32(&P, 24, c->mem_r32(rec + 12));             // uv1|tpage
-    if ((int32_t)gte_read_ctrl(31) < 0) continue;  // GTE FLAG: V3 projection error -> drop
-    pk_w32(&P, 44, gte_read_data(14));             // SXY3
-    // project the front triangle (V0,V1,V2) via RTPT.
-    uint32_t vz01 = c->mem_r32(rec + 24);
-    gte_write_data(0, c->mem_r32(rec + 20));          // VXY0
-    gte_write_data(1, vz01 & 0xFFFFu);             // VZ0
-    gte_write_data(3, vz01 >> 16);                 // VZ1
-    gte_write_data(2, c->mem_r32(rec + 28));          // VXY1
-    gte_write_data(4, c->mem_r32(rec + 32));          // VXY2
-    gte_write_data(5, c->mem_r32(rec + 36) & 0xFFFFu);// VZ2
-    uint32_t code0 = c->mem_r32(rec + 0);
-    pk_w32(&P, 4, code0 & COL_MASK);               // rgb0
-    gte_op(c, GTE_RTPT);
-    pk_w32(&P, 16, (code0 << 4) & COL_MASK);       // rgb1
-    if ((int32_t)gte_read_ctrl(31) < 0) continue;  // GTE FLAG -> drop
-    gte_op(c, GTE_NCLIP);
-    pk_w32(&P, 12, c->mem_r32(rec + 8));              // uv0|clut
-    if ((int32_t)gte_read_data(24) <= 0) continue; // backface (front-tri signed area <= 0) -> drop
-    pk_w32(&P, 8,  gte_read_data(12));             // SXY0
-    pk_w32(&P, 20, gte_read_data(13));             // SXY1
-    pk_w32(&P, 32, gte_read_data(14));             // SXY2
-    // frustum cull (right/bottom edges) over all 4 verts.
+    // model verts: V0=rec+20(XY)|rec+24.lo(Z), V1=rec+28|rec+24.hi, V2=rec+32|rec+36.lo, V3=rec+40|rec+36.hi
+    uint32_t vz01 = c->mem_r32(rec + 24), vz23 = c->mem_r32(rec + 36);
+    uint32_t xy0 = c->mem_r32(rec + 20), xy1 = c->mem_r32(rec + 28),
+             xy2 = c->mem_r32(rec + 32), xy3 = c->mem_r32(rec + 40);
+    ProjVtx p[4];
+    proj_native_xform((int16_t)xy0, (int16_t)(xy0 >> 16), (int16_t)vz01,          &p[0]);
+    proj_native_xform((int16_t)xy1, (int16_t)(xy1 >> 16), (int16_t)(vz01 >> 16),  &p[1]);
+    proj_native_xform((int16_t)xy2, (int16_t)(xy2 >> 16), (int16_t)vz23,          &p[2]);
+    proj_native_xform((int16_t)xy3, (int16_t)(xy3 >> 16), (int16_t)(vz23 >> 16),  &p[3]);
+    // backface cull on the FRONT triangle's signed screen area (NCLIP: (SX1-SX0)*(SY2-SY0)-(SX2-SX0)*(SY1-SY0)).
+    float area = (p[1].px - p[0].px) * (p[2].py - p[0].py) - (p[2].px - p[0].px) * (p[1].py - p[0].py);
+    if (area <= 0) continue;                                  // backface (matches MAC0<=0 drop)
+    // frustum cull (right/bottom edges only, as the original) over all 4 verts.
     int xmax = submit_xmax();
-    uint16_t sx0 = pk_r16(&P, 8), sx1 = pk_r16(&P, 20), sx2 = pk_r16(&P, 32), sx3 = pk_r16(&P, 44);
-    if (sx0 >= xmax && sx1 >= xmax && sx2 >= xmax && sx3 >= xmax) continue;
-    uint16_t sy0 = pk_r16(&P, 10), sy1 = pk_r16(&P, 22), sy2 = pk_r16(&P, 34), sy3 = pk_r16(&P, 46);
-    if (sy0 >= 240 && sy1 >= 240 && sy2 >= 240 && sy3 >= 240) continue;
-    uint32_t idx = ot_compress(ot_depth(c, code2, 16, 4, GTE_AVSZ4));  // 4 SZ in DR16..19
-    if ((int32_t)idx < 0) continue;                // out of OT range -> drop
-    uint32_t uv23 = c->mem_r32(rec + 16);
-    pk_w32(&P, 36, uv23);                           // uv2 (low half used by GPU)
-    pk_w32(&P, 48, uv23 >> 16);                     // uv3
-    pz0 = (float)(int32_t)gte_read_data(17);        // SXY0 -> SZ0  (SZ FIFO: DR16=SZ3, DR17-19=SZ0-2)
-    pz1 = (float)(int32_t)gte_read_data(18);        // SXY1 -> SZ1
-    pz2 = (float)(int32_t)gte_read_data(19);        // SXY2 -> SZ2
-    pz3 = (float)(int32_t)gte_read_data(16);        // SXY3 -> SZ3
-    uint32_t otaddr = ot + (idx << 2);
-    if (dl) {
-      // NATIVE ORDERING: append to the host per-bucket list keyed by the OT anchor — write NO guest OT/pool.
-      NativePrim* np = ndl_alloc(c, otaddr & 0x1FFFFC);
-      if (np) { np->nwords = 12; np->npz = 4;
-        for (int k = 0; k < 12; k++) np->words[k] = W[k + 1];  // W[1..12] = the 12 GP0 payload words
-        np->pz[0] = pz0; np->pz[1] = pz1; np->pz[2] = pz2; np->pz[3] = pz3; }
-    } else {
-      c->mem_w32(pkt + 0, c->mem_r32(otaddr) | 0x0C000000u);  // tag: link old head + length (12 words)
-      c->mem_w32(otaddr, pkt);                        // OT head -> this packet
-      if (depth) {
-        projprim_set_pz(pkt + 8,  pz0); projprim_set_pz(pkt + 20, pz1);
-        projprim_set_pz(pkt + 32, pz2); projprim_set_pz(pkt + 44, pz3);
-      }
-      pkt += 52;
+    if (p[0].sx >= xmax && p[1].sx >= xmax && p[2].sx >= xmax && p[3].sx >= xmax) continue;
+    if (p[0].sy >= 240 && p[1].sy >= 240 && p[2].sy >= 240 && p[3].sy >= 240) continue;
+    // decode RGB (rgb0 @rec+0, rgb1=rgb0<<4; rgb2 @rec+4, rgb3=rgb2<<4) and UV/CLUT/texpage.
+    uint32_t code0 = c->mem_r32(rec + 0), code2 = c->mem_r32(rec + 4);
+    uint32_t rgb[4] = { code0 & COL_MASK, (code0 << 4) & COL_MASK, code2 & COL_MASK, (code2 << 4) & COL_MASK };
+    uint32_t uv0 = c->mem_r32(rec + 8), uv1 = c->mem_r32(rec + 12), uv23 = c->mem_r32(rec + 16);
+    uint16_t clut = (uint16_t)(uv0 >> 16);
+    uint16_t tp   = (uint16_t)(uv1 >> 16);
+    int u[4], v[4]; uint8_t r[4], g[4], b[4]; float px[4], py[4], depth[4];
+    u[0] = uv0 & 0xFF;        v[0] = (uv0 >> 8) & 0xFF;
+    u[1] = uv1 & 0xFF;        v[1] = (uv1 >> 8) & 0xFF;
+    u[2] = uv23 & 0xFF;       v[2] = (uv23 >> 8) & 0xFF;
+    u[3] = (uv23 >> 16) & 0xFF; v[3] = (uv23 >> 24) & 0xFF;
+    for (int k = 0; k < 4; k++) {
+      px[k] = p[k].px; py[k] = p[k].py; depth[k] = proj_pz_to_ord(p[k].pz);
+      r[k] = rgb[k] & 0xFF; g[k] = (rgb[k] >> 8) & 0xFF; b[k] = (rgb[k] >> 16) & 0xFF;
     }
+    int semi = (code0 & 0x02000000) ? 1 : 0;                  // GP0 op byte (code0>>24) bit1 = semi-transparency
+    gpu_draw_world_quad(c, px, py, depth, u, v, r, g, b, tp, clut, semi);
   }
-  if (!dl) c->mem_w32(PKT_POOL_PTR, pkt);           // native ordering writes no guest pool
-  c->r[2] = rec;                                   // return: record pointer advanced past the array
+  c->r[2] = rec;                                              // return: record pointer advanced past the array
 }
 
-void ov_submit_poly_gt4(Core* c) {
-  if (submit_recomp() || cfg_on("PSXPORT_GT4_RECOMP")) { rec_super_call(c, 0x8008007Cu); return; }
-  submit_poly_gt4(c);
-}
+void ov_submit_poly_gt4(Core* c) { submit_poly_gt4_native(c); }
 
 // =====================================================================================================
 // Byte-packed POLY_GT4 submit variant — gen_func_80027768 (resident MAIN). A DISTINCT submitter from
@@ -418,118 +305,59 @@ void ov_submit_poly_gt4(Core* c) {
 // native-depth path is live it additionally records each vertex's real view-Z (the SZ FIFO) keyed by
 // its packet SXY-word address, exactly like the GT3/GT4 library above.
 #define OTBASE_PTR   0x800ED8C8u             // *this = the active ordering-table base for these variants
-#define IR0_SCRATCH  0x1F800090u             // depth-cue interpolation factor (IR0) staged in scratchpad
-#define GTE_DPCT     0x4AF8002Au             // depth-cue 3 colors (rgb0,rgb1,rgb2) toward FAR_COLOR
-#define GTE_DPCS     0x4A780010u             // depth-cue 1 color  (rgb)            toward FAR_COLOR
 
-// byte b at `addr`, scaled <<8 into a 16-bit GTE coordinate (signedness is irrelevant after the 16-bit
-// truncation: (b<<8)&0xFFFF == (sext8(b)<<8)&0xFFFF for any byte b — the recomp body sext's some lanes
-// and not others, all yielding the same halfword).
-static inline uint32_t vcoord(Core* c, uint32_t addr) { return ((uint32_t)c->mem_r8(addr) << 8) & 0xFFFFu; }
-// add the per-call U offset (a3) to the low (U) byte of a packet uv word, in place (mod 256).
-static inline void uoff_add(PkTgt* p, uint32_t off, uint32_t uoff) {
-  pk_w8(p, off, (uint8_t)(pk_r8(p, off) + uoff));
-}
-
+// PC-NATIVE byte-packed GT4 submit. Verts are signed bytes <<8; the top byte of each RGB word is that
+// vertex's Z (<<8). Project natively (proj_native_xform) → float screen+depth, tee the quad to the VK
+// rasterizer with real per-pixel depth. The DPCT/DPCS depth-cue fog the PSX body applied to the colors is
+// dropped here — fog is the renderer's job (PSXPORT_FOG shader), not a per-vertex color bake. The OT-Z
+// bias (a2) is moot with a real depth buffer. CLUT bank (a1) and U offset (a3) ARE applied (texture
+// addressing). Same decode native_terrain.cpp uses; this is its general (any-geomblk) form.
 static void submit_poly_gt4_bp(Core* c) {
   uint32_t rec = c->r[4];
-  // PSXPORT_DEBUG=terrgte — dump the composed GTE state at the TERRAIN submit (geomblk 0x800A1AE8) to
-  // diff the native-terrain compose vs the recomp body's (both route here). One line per terrain call.
-  if (cfg_dbg("terrgte") && rec == 0x800A1AE8u) {
-    fprintf(stderr, "[terrgte] CR0-7 %08X %08X %08X %08X %08X | T %08X %08X %08X | IR0scr %08X FC %d %d %d a1=%u a2=%d a3=%u\n",
-            gte_read_ctrl(0), gte_read_ctrl(1), gte_read_ctrl(2), gte_read_ctrl(3), gte_read_ctrl(4),
-            gte_read_ctrl(5), gte_read_ctrl(6), gte_read_ctrl(7), c->mem_r32(0x1F800090u),
-            gte_read_ctrl(21), gte_read_ctrl(22), gte_read_ctrl(23), c->r[5], (int16_t)c->r[6], c->r[7]);
-  }
-  uint32_t xoff = c->r[5] << 22;                       // CLUT-Y bank offset
-  int32_t  zoff = (int32_t)(int16_t)c->r[6];           // OT-Z bias (sign-extended)
-  uint32_t uoff = c->r[7];                             // U-texture offset
-  uint32_t pkt  = c->mem_r32(PKT_POOL_PTR);
-  uint32_t otbase = c->mem_r32(OTBASE_PTR);
-  int depth = depth_on(); if (depth) proj_set_H((uint16_t)gte_read_ctrl(26));
-  int dl = ndl_active();
-  if (geomblk_on(c)) {                             // count the control-terminated record list, then dump
-    uint32_t n = 0, r = rec; for (;;) { n++; if ((int32_t)c->mem_r32(r + 4) <= 0) break; r += 36; }
-    geomblk_dump(c, "GT4bp", rec, n, 36);
-  }
-  uint32_t W[16];
+  uint32_t clut_bank = c->r[5];                        // a1: CLUT-Y bank (added <<22 to the uv0|clut word)
+  uint32_t uoff = c->r[7] & 0xFF;                      // a3: U-texture offset (mod 256 per U byte)
+  proj_set_H((uint16_t)gte_read_ctrl(26));
+  static const uint32_t XO[4] = {0x1C,0x1D,0x20,0x21}, YO[4] = {0x1E,0x1F,0x22,0x23},
+                        ZO[4] = {0x0F,0x13,0x17,0x1B};
   for (;;) {
-    PkTgt P; P.c = c; if (dl) { memset(W, 0, sizeof W); P.w = W; P.guest = 0; } else { P.w = 0; P.guest = pkt; }
-    uint32_t ctl = c->mem_r32(rec + 4);                   // control word (sign = last record)
-    // front triangle (V0,V1,V2) -> RTPT
-    gte_write_data(0, vcoord(c, rec + 0x1C) | (vcoord(c, rec + 0x1E) << 16));  // VXY0
-    gte_write_data(1, vcoord(c, rec + 0x0F));                                // VZ0
-    gte_write_data(2, vcoord(c, rec + 0x1D) | (vcoord(c, rec + 0x1F) << 16));  // VXY1
-    gte_write_data(3, vcoord(c, rec + 0x13));                                // VZ1
-    gte_write_data(4, vcoord(c, rec + 0x20) | (vcoord(c, rec + 0x22) << 16));  // VXY2
-    gte_write_data(5, vcoord(c, rec + 0x17));                                // VZ2
-    gte_op(c, GTE_RTPT);
-    if ((int32_t)gte_read_ctrl(31) >= 0) {
-      pk_w32(&P, 8,  gte_read_data(12));               // SXY0
-      pk_w32(&P, 20, gte_read_data(13));               // SXY1
-      pk_w32(&P, 32, gte_read_data(14));               // SXY2
-      // 4th vertex (V3) -> RTPS
-      gte_write_data(0, vcoord(c, rec + 0x21) | (vcoord(c, rec + 0x23) << 16)); // VXY3
-      gte_write_data(1, vcoord(c, rec + 0x1B));                               // VZ3
-      pk_w32(&P, 12, c->mem_r32(rec + 0) + xoff);         // uv0|clut + CLUT bank
-      gte_op(c, GTE_RTPS);
-      if ((int32_t)gte_read_ctrl(31) >= 0) {
-        pk_w32(&P, 44, gte_read_data(14));             // SXY3
-        pk_w32(&P, 24, ctl & 0x7FFFFFu);               // uv1|clut (control low 23 bits)
-        gte_op(c, GTE_AVSZ4);
-        uint32_t idx = ot_compress((uint32_t)((int32_t)gte_read_data(7) + zoff));
-        if ((int32_t)idx >= 0) {
-          uint32_t uv = c->mem_r32(rec + 8);
-          pk_w32(&P, 36, uv);                          // uv2
-          pk_w32(&P, 48, (uint32_t)((int32_t)uv >> 16)); // uv3 (sign-extended high half)
-          uoff_add(&P, 12, uoff); uoff_add(&P, 24, uoff);
-          uoff_add(&P, 36, uoff); uoff_add(&P, 48, uoff);
-          // depth-cued colors: DPCT(rgb0,rgb1,rgb2) then DPCS(rgb3)
-          gte_write_data(8,  c->mem_r32(IR0_SCRATCH));    // IR0 (depth-cue factor)
-          gte_write_data(20, c->mem_r32(rec + 0x0C));     // RGB0
-          gte_write_data(21, c->mem_r32(rec + 0x10));     // RGB1
-          gte_write_data(22, c->mem_r32(rec + 0x14));     // RGB2
-          gte_write_data(6,  c->mem_r32(rec + 0x14));     // RGBC (= rgb2; written by the body)
-          gte_op(c, GTE_DPCT);
-          pk_w32(&P, 4,  gte_read_data(20));           // rgb0 out
-          pk_w32(&P, 16, gte_read_data(21));           // rgb1 out
-          pk_w32(&P, 28, gte_read_data(22));           // rgb2 out
-          pk_w8(&P, 7, (ctl & 0x40000000u) ? 0x3E : 0x3C);  // code: semi-trans vs opaque GT4
-          gte_write_data(6, c->mem_r32(rec + 0x18));      // RGB3 in
-          gte_op(c, GTE_DPCS);
-          pk_w32(&P, 40, gte_read_data(22));           // rgb3 out
-          float pz0 = (float)(int32_t)gte_read_data(16);   // SZ FIFO: DR16..19 = SZ0..3
-          float pz1 = (float)(int32_t)gte_read_data(17);
-          float pz2 = (float)(int32_t)gte_read_data(18);
-          float pz3 = (float)(int32_t)gte_read_data(19);
-          uint32_t otaddr = otbase + (idx << 2);
-          if (dl) {
-            // NATIVE ORDERING: append to the host per-bucket list keyed by the OT anchor — no guest OT/pool write.
-            NativePrim* np = ndl_alloc(c, otaddr & 0x1FFFFC);
-            if (np) { np->nwords = 12; np->npz = 4;
-              for (int k = 0; k < 12; k++) np->words[k] = W[k + 1];
-              np->pz[0] = pz0; np->pz[1] = pz1; np->pz[2] = pz2; np->pz[3] = pz3; }
-          } else {
-            c->mem_w32(pkt + 0, c->mem_r32(otaddr) | 0x0C000000u);  // tag: link old head + len 12 (GT4)
-            c->mem_w32(otaddr, pkt);
-            if (depth) {
-              projprim_set_pz(pkt + 8,  pz0); projprim_set_pz(pkt + 20, pz1);
-              projprim_set_pz(pkt + 32, pz2); projprim_set_pz(pkt + 44, pz3);
-            }
-            pkt += 52;
-          }
-        }
-      }
+    uint32_t ctl = c->mem_r32(rec + 4);                 // control word (sign = last record; bit30 = semi)
+    ProjVtx p[4]; float px[4], py[4], depth[4]; int u[4], v[4]; uint8_t r[4], g[4], b[4];
+    for (int k = 0; k < 4; k++) {
+      int vx = (int)(int8_t)c->mem_r8(rec + XO[k]) << 8;
+      int vy = (int)(int8_t)c->mem_r8(rec + YO[k]) << 8;
+      int vz = (int)(int8_t)c->mem_r8(rec + ZO[k]) << 8;
+      proj_native_xform(vx, vy, vz, &p[k]);
+      px[k] = p[k].px; py[k] = p[k].py; depth[k] = proj_pz_to_ord(p[k].pz);
     }
-    if ((int32_t)ctl <= 0) break;                      // control sign marks the last record
+    float area = (p[1].px - p[0].px) * (p[2].py - p[0].py) - (p[2].px - p[0].px) * (p[1].py - p[0].py);
+    int cull = (area <= 0);
+    int xmax = submit_xmax();
+    if (p[0].sx >= xmax && p[1].sx >= xmax && p[2].sx >= xmax && p[3].sx >= xmax) cull = 1;
+    if (p[0].sy >= 240 && p[1].sy >= 240 && p[2].sy >= 240 && p[3].sy >= 240) cull = 1;
+    if (!cull) {
+      uint32_t uv0 = c->mem_r32(rec + 0) + (clut_bank << 22);  // uv0 | (clut + bank)
+      uint16_t clut = (uint16_t)(uv0 >> 16);
+      uint16_t tp   = (uint16_t)(((uint32_t)ctl & 0x7FFFFFu) >> 16);  // = packet uv1|tpage high half
+      uint32_t uv2  = c->mem_r32(rec + 8);
+      u[0] = (uv0 & 0xFF);            v[0] = (uv0 >> 8) & 0xFF;
+      u[1] = ((uint32_t)ctl & 0xFF); v[1] = ((uint32_t)ctl >> 8) & 0xFF;
+      u[2] = (uv2 & 0xFF);           v[2] = (uv2 >> 8) & 0xFF;
+      u[3] = ((uv2 >> 16) & 0xFF);   v[3] = (uv2 >> 24) & 0xFF;
+      for (int k = 0; k < 4; k++) {
+        u[k] = (u[k] + (int)uoff) & 0xFF;
+        uint32_t col = c->mem_r32(rec + 0x0C + 4 * k);  // raw RGB (top byte = Z, ignored); no DPCT/DPCS bake
+        r[k] = col & 0xFF; g[k] = (col >> 8) & 0xFF; b[k] = (col >> 16) & 0xFF;
+      }
+      int semi = (ctl & 0x40000000) ? 1 : 0;
+      gpu_draw_world_quad(c, px, py, depth, u, v, r, g, b, tp, clut, semi);
+    }
+    if ((int32_t)ctl <= 0) break;                       // control sign marks the last record
     rec += 36;
   }
-  if (!dl) c->mem_w32(PKT_POOL_PTR, pkt);           // native ordering writes no guest pool
-  c->r[2] = 0x800C0000u;                               // return value the recomp body leaves in r2
+  c->r[2] = 0x800C0000u;                                // return value the recomp body leaves in r2
 }
 
 void ov_submit_poly_gt4_bp(Core* c) {
-  if (submit_recomp() || cfg_on("PSXPORT_GT4BP_RECOMP")) { rec_super_call(c, 0x80027768u); return; }
   submit_poly_gt4_bp(c);
 }
 
@@ -775,12 +603,22 @@ void ov_render_walk(Core* c) {
 //   - FarColor (CR21-23) = 0 (fog toward black); IR0 depth-cue factor (0x1F800090, read by 80027768) =
 //     (128 - node[78]) << 5.
 //   - two sway angle bytes at 0x800A2014/2016 = (node[64]*node[80])>>11 and (node[66]*node[80])>>11.
-//   - terrain geomblk = 0x800A1AE8 (fixed per-frame record buffer); a1=a2=a3=0.
+//   - terrain geomblk = 0x8009FAE8 (fixed per-frame record buffer); a1=a2=a3=0.
 #define A2_PARAM     0x800A2014u             // 3-byte sway-angle param scratch (engine global)
 #define IR0_STAGE    0x1F800090u             // IR0 depth-cue factor staged for the 0x80027768 submitter
-#define MVMVA_TERRAIN_GEOMBLK 0x800A1AE8u    // terrain prim-record buffer (a0 to 80027768)
-static void submit_terrain(Core* c) {
-  uint32_t node = c->r[4];
+// Terrain prim-record buffer (a0 to 80027768). The recomp body 0x8002AB5C loads `lui 0x800A; addiu -1304`
+// = 0x8009FAE8 (confirmed: all three real callers of 0x80027768 pass -1304; 0x800A1AE8 is referenced by
+// NO function as a geomblk — it was a fabricated address in the prior native port that read the WRONG
+// buffer → garbage/water terrain geometry instead of the actual field strip).
+#define MVMVA_TERRAIN_GEOMBLK 0x8009FAE8u
+// Shared terrain scene-data prep (the faithful gameplay half): write the depth-cue regs + the two sway
+// gameplay bytes, then build the object rotation matrix at scratch SCR (euler 0x80085480 + secondary
+// sway 0x80084520). Used by BOTH the faithful GTE-compose submit_terrain AND the PC-native
+// terrain_render_pc (engine/native_terrain.cpp), so the verified sway-byte writes (later-157, A/B
+// RAM-0-diff) have a single source of truth. Leaves the object matrix at SCR; camera matrix is at
+// SCR+0xF8 (set earlier). The matrix-build leaves stay platform primitives (rec_dispatch), as the
+// recomp body calls them.
+void terrain_prep_object_matrix(Core* c, uint32_t node) {
   // depth-cue: FarColor=0, IR0 factor staged for the submitter
   gte_write_ctrl(21, 0); gte_write_ctrl(22, 0); gte_write_ctrl(23, 0);
   uint32_t ir0 = (uint32_t)((128 - (int16_t)c->mem_r16(node + 78)) << 5);
@@ -798,11 +636,25 @@ static void submit_terrain(Core* c) {
   c->mem_w32(IR0_STAGE, ir0);
   // build object rotation matrix at scratch SCR from the node's euler angles (node+84/86/88)
   c->r[4] = node + 84; c->r[5] = SCR; rec_dispatch(c, 0x80085480u);
-  // secondary sway rotation by the host-computed angle bytes (scaled <<2)
-  c->mem_w32(SCR + 0x1C0, (uint32_t)sway0 << 2);
-  c->mem_w32(SCR + 0x1C4, (uint32_t)sway1 << 2);
-  c->mem_w32(SCR + 0x1C8, (uint32_t)sway2 << 2);
-  c->r[4] = SCR; c->r[5] = SCR + 0x1C0; rec_dispatch(c, 0x80084520u);
+  // Secondary sway rotation by the host-computed angle bytes (scaled <<2). The recomp body 0x8002AB5C
+  // stages these three angle words on its OWN STACK FRAME (r29 -= 56; words at r29+16/20/24), NOT in
+  // scratchpad — and passes that stack pointer as 0x80084520's arg. The prior native code wrote them to
+  // scratchpad 0x1F8001C0 instead, a guest write the recomp NEVER makes; that clobbered whatever live
+  // engine state occupied 0x1F8001C0, corrupting gameplay (terrain collision → Tomba fell through). It
+  // was invisible to the later-157 A/B gate, which diffs only the 2 MB main RAM, not the scratchpad.
+  // Mirror the recomp exactly: take a guest stack frame, write the angles there, restore on the way out.
+  uint32_t saved_sp = c->r[29];
+  c->r[29] = saved_sp - 56;                               // recomp's stack frame (private scratch, not 0x1F800xxx)
+  c->mem_w32(c->r[29] + 16, (uint32_t)sway0 << 2);
+  c->mem_w32(c->r[29] + 20, (uint32_t)sway1 << 2);
+  c->mem_w32(c->r[29] + 24, (uint32_t)sway2 << 2);
+  c->r[4] = SCR; c->r[5] = c->r[29] + 16; rec_dispatch(c, 0x80084520u);
+  c->r[29] = saved_sp;                                    // pop the frame
+}
+
+static void submit_terrain(Core* c) {
+  uint32_t node = c->r[4];
+  terrain_prep_object_matrix(c, node);                    // faithful gameplay half (sway + object matrix)
   if (cfg_dbg("terrgte")) {
     fprintf(stderr, "[terrin] node=%08X CAM(F8) %08X %08X %08X %08X %08X | camToff(10C) %08X %08X %08X | OBJ(SCR) %04X %04X %04X / %04X %04X %04X / %04X %04X %04X\n",
             node, c->mem_r32(SCR+0xF8), c->mem_r32(SCR+0xFC), c->mem_r32(SCR+0x100), c->mem_r32(SCR+0x104), c->mem_r32(SCR+0x108),
@@ -843,13 +695,21 @@ static void submit_terrain(Core* c) {
   c->r[4] = MVMVA_TERRAIN_GEOMBLK; c->r[5] = 0; c->r[6] = 0; c->r[7] = 0;
   rec_dispatch(c, 0x80027768u);
 }
+void terrain_render_pc(Core* c);             // engine/native_terrain.cpp — PC-native float terrain render
 void ov_terrain(Core* c) {
   if (cfg_dbg("terrgte")) fprintf(stderr, "[ov_terrain] node(a0=r4)=%08X\n", c->r[4]);
   // Dual-core diff: the `b` core neutralizes terrain to the recomp body via a per-Game flag (the override
   // table is shared; the per-core choice is this flag, not a divergent table). `a` keeps the native path.
   if (c->game->neutralize_terrain) { rec_super_call(c, 0x8002AB5Cu); return; }
   if (cfg_on("PSXPORT_PEROBJ_RECOMP")) { rec_super_call(c, 0x8002AB5Cu); return; }
-  submit_terrain(c);
+  // RENDER PC-NATIVE BY DEFAULT (USER DIRECTIVE: behave like a PC game, do NOT simulate PSX). The terrain
+  // is rendered by terrain_render_pc — float transform + real per-pixel depth, drawn straight to the
+  // rasterizer, NO GTE compose / NO gte_op / NO byte-packed PSX packet. The faithful GTE-compose +
+  // 0x80027768-submit transcription (submit_terrain) is kept ONLY as an opt-in A/B oracle for comparison.
+  // Both share terrain_prep_object_matrix (the gameplay sway writes + object-matrix scene data), so the
+  // gameplay behavior is identical either way; only the render method differs.
+  if (cfg_on("PSXPORT_TERRAIN_FAITHFUL")) { submit_terrain(c); return; }
+  terrain_render_pc(c);
 }
 
 // NATIVE per-object TRANSFORM BUILD — gen_func_80051C8C (later-135). Build the object's render matrix
@@ -1026,7 +886,5 @@ static void engine_scan_overlay(Core* c, uint32_t base, uint32_t size) {
   }
 }
 void engine_submit_register_autodetect(void) {
-  if (submit_recomp()) return;               // A/B: keep all overlay submitters interpreted too
-  if (cfg_on("PSXPORT_NO_OVERLAY_OWN")) return;   // A/B: measure overlay-ownership depth contribution
   rec_set_overlay_load_hook(engine_scan_overlay);
 }

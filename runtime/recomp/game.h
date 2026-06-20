@@ -100,7 +100,6 @@ public:
   SchedulerState sched;  // native cooperative task scheduler (native_boot.cpp)
   GpuState    gpu;   // native GPU: VRAM + draw/display state + the rasterizer (gpu_native.cpp)
   GpuVkState  gpu_vk;// Vulkan present backend: per-frame batch/depth/dirty/present state (gpu_vk.cpp)
-  NdlState    ndl;   // native classified display list: per-frame prim arena + bucket lookup (native_dl.cpp)
   RenderQueue rq;    // engine-owned render queue: the single draw-ORDER authority (render_queue.cpp)
   Fps60State  fps60; // interpolated-60fps tier: capture buffers + matcher + remap (fps60.cpp)
 
