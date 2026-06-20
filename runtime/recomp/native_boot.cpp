@@ -456,7 +456,7 @@ static void ov_game_main(Core* c) {
     // EDGES (not Cross) and otherwise hard-stalls headless; once in the field, continued Start would
     // open the pause menu (which stops the BGM). So: pulse Start until the chan4 area music has been
     // looping continuously (= field reached, cutscene gate cleared), then RELEASE input. =2 also pauses.
-    { static int gnav = -1, sustain = 0;
+    { static int gnav = -1, sustain = 0; static uint32_t field_f = 0;
       if (gnav < 0) gnav = cfg_str("PSXPORT_AUTO_GAMEPLAY") ? 1 : 0;
       if (gnav == 1) {
         void pad_repl_release(Core*);
@@ -464,7 +464,7 @@ static void ov_game_main(Core* c) {
         if (sustain >= 150) {                                      // ~5 s of uninterrupted area music = field
           pad_repl_release(c);
           fprintf(stderr, "[autogameplay] field reached (chan4 looping %d frames) at frame %u — input released\n", sustain, f);
-          gnav = 2;
+          gnav = 2; field_f = f;
           if (atoi(cfg_str("PSXPORT_AUTO_GAMEPLAY")) >= 2) { void dbg_set_paused(int); dbg_set_paused(1); }
         } else if ((f % 24u) == 0) {
           pad_repl_tap(c, (uint16_t)(0xFFFF & ~0x0008), 6);        // pulse Start (0x0008): title + dialog advance
@@ -476,15 +476,36 @@ static void ov_game_main(Core* c) {
       if (gnav == 2) { const char* sk = cfg_str("PSXPORT_AUTO_SKIP");
         if (sk && f < (uint32_t)atoi(sk) && (f % 24u) == 0) {
           void pad_repl_tap(Core*, uint16_t, int); pad_repl_tap(c, (uint16_t)(0xFFFF & ~0x0008), 6); } }
-      // PSXPORT_AUTO_WALK=<dir>: once the field is reached, HOLD a D-pad direction so the character
-      // walks and the camera pans — a deterministic MOTION scene for validating fps60 interpolation
-      // (the idle field is fully static, A==B). dir: l/r/u/d (default right). Active-low pad mask.
+      // PSXPORT_AUTO_WALK=<script>: once the field is reached, drive a deterministic input SCRIPT so the
+      // character walks/acts — a MOTION scene for fps60 interp AND for navigating to an area exit. Two forms:
+      //   single button "r" / "l" / "u" / "d" / "x"(Cross/jump) / "o"(Circle) / "t"(Triangle) / "s"(Square)
+      //     → HOLD it forever.  Multiple buttons in one phase combine: "rx" = right+jump.
+      //   phase list "r:300,u:150,rx:120" → hold each phase for N frames, in order, then release.
+      // Phases are counted from when the walk starts (= max(field-reached frame, AUTO_SKIP frame), so the
+      // Start-pulsing skip finishes first). Active-low pad mask (a pressed button CLEARS its bit).
       if (gnav == 2) { const char* w = cfg_str("PSXPORT_AUTO_WALK");
-        if (w) { uint16_t btn = 0x0020;                              // right
-          if (*w=='l') btn=0x0080; else if (*w=='u') btn=0x0010; else if (*w=='d') btn=0x0040;
-          uint16_t mask = (uint16_t)(0xFFFF & ~btn);
-          if (cfg_on("PSXPORT_AUTO_JUMP") && (f % 40u) < 8u) mask &= (uint16_t)~0x4000;  // pulse Cross (jump) while walking
-          pad_repl_hold(c, mask); } } }
+        if (w) {
+          const char* sk = cfg_str("PSXPORT_AUTO_SKIP");
+          uint32_t walk0 = field_f; if (sk && (uint32_t)atoi(sk) > walk0) walk0 = (uint32_t)atoi(sk);
+          uint32_t el = (f > walk0) ? f - walk0 : 0;
+          auto btn_bit = [](char ch) -> uint16_t {
+            switch (ch) { case 'l': return 0x0080; case 'u': return 0x0010; case 'd': return 0x0040;
+              case 'x': return 0x4000; case 'o': return 0x2000; case 't': return 0x1000; case 's': return 0x8000;
+              default:  return 0x0020; } };                          // 'r' / default = right
+          // find the active phase by walking the comma list, accumulating durations.
+          const char* p = w; uint32_t acc = 0; uint16_t held = 0; int done = 0;
+          while (*p) {
+            uint16_t phase = 0;
+            while (*p && *p != ':' && *p != ',') phase |= btn_bit(*p++);
+            uint32_t dur = 0;
+            if (*p == ':') { p++; while (*p >= '0' && *p <= '9') dur = dur*10 + (uint32_t)(*p++ - '0'); }
+            if (*p == ',') p++;
+            if (dur == 0) { held = phase; done = 1; break; }         // no duration → hold this phase forever
+            if (el < acc + dur) { held = phase; done = 1; break; }   // we're inside this phase
+            acc += dur;
+          }
+          if (done) pad_repl_hold(c, (uint16_t)(0xFFFF & ~held));    // else script finished → leave input released
+        } } }
     // PSXPORT_DEBUG_SERVER pause/step: when frozen, do NOT advance the game — just pump host input
     // (keeps the window alive) and service debug commands so `step`/`play` can arrive. A `step` runs
     // exactly one real frame then re-freezes, so transient bad frames can be inspected one at a time.

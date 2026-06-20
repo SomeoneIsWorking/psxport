@@ -106,8 +106,12 @@ idle field — static, A==B — cannot exercise).
   throughout). The old `nav` probe read `task+0x6B` off the WRONG task (the scheduler's current-task pointer,
   not the menu task), so its "pausePage" / "Cross opens a menu" readings were garbage. **Cross is just JUMP.**
 - **Movement geometry (seaside start area):** purely HORIZONTAL — Up/Down move nothing (cam Z stays 2352);
-  Left/Right hit hard walls at cam-X ≈ 3991 / 5330. `PSXPORT_AUTO_JUMP=1` (pulse Cross = jump while walking)
-  doesn't help reach the exit (Tomba jumps in place).
+  Left/Right hit hard walls at cam-X ≈ 3991 / 5330. The hut has a visible door but a barrel blocks Tomba at
+  the right wall BEFORE the door, so "walk right then Up" does not enter it.
+- **`PSXPORT_AUTO_WALK` is a small input SCRIPT** (counted from max(field-reached, AUTO_SKIP)): a single token
+  `r`/`l`/`u`/`d`/`x`(Cross/jump)/`o`(Circle)/`t`(Triangle)/`s`(Square) HOLDS that button forever; tokens
+  combine (`rx` = right+jump); a comma phase-list `r:250,u:300,rx:120` holds each phase N frames in order then
+  releases. Use it to drive toward an exit while `PSXPORT_DEBUG=state` watches for `sm[0x4a]==2`.
 - **STILL OPEN — reaching an AREA TRANSITION (`sm[0x4a]==2`).** Walking into either wall does NOT transition
   (`sm[0x4a]` stays 1; `PSXPORT_DEBUG=stage` logs `sm[0x4a]`/`sm[0x4c]`). The seaside area's exit is not a
   plain walk/jump into an edge. Confirmed `ov_game_s4c` (0x80106478, the sm[0x4c] area machine) is NEVER
