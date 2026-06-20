@@ -765,6 +765,9 @@ void GpuState::gp0_exec(Core* core) {
           for (int i = 0; i < nv; i++) dep[i] = od; is3d = 1; s_seen3d = 1; } }
         if (!is3d && cfg_dbg("ndepth")) {   // categorize what lands in the 2D band: op + gouraud/quad/tex
           extern long g_nd2d_hist[256]; g_nd2d_hist[op]++; }
+        if (!is3d && !bg && cfg_dbg("objz") && s_frame == s_primdump_frame)
+          fprintf(stderr, "[polynode] id=%u op=%02x bbox=(%d,%d)-(%d,%d) node=%08x\n",
+                  ord_idx, op, bx0, by0, bx1, by1, s_cur_node);
         // PSXPORT_PRIMDUMP=<frame>: dump every prim (poly) of that frame as an individual PNG (named by its
         // OT-walk ID) so the backdrop can be identified by eye and its band corrected. id=ord_idx.
         { void prim_dump_poly(Core*, int frame, unsigned id, uint8_t op, int nv, int is3d, int bg,

@@ -545,6 +545,18 @@ void ov_perobj_flush(Core* c) {
 // over the just-emitted packet range; those are not owned yet, so for them we super-call the recomp body
 // (which still calls the now-native func_8003CDD8 for the flush, then the secondary pass). At the field
 // only idx0 (flush-only) fires (PSXPORT_DEBUG=ccase: 1 call/frame, target 0x8003cd00).
+// Per-object view-space depth from the object's WORLD POSITION + the camera (ov_object_cull dot). camFwd is
+// the camera forward (unit×4096); >>12 yields view-Z in world units, matching proj_native's pz so 2D object
+// prims share the 3D depth band. The collectable apple is an op-2D billboard quad rendered here with no
+// depth — this is the world-position depth it inherits.
+static float object_world_view_depth(Core* c, uint32_t node) {
+  int32_t ox = (int16_t)c->mem_r16(node + 0x2e), oy = (int16_t)c->mem_r16(node + 0x32), oz = (int16_t)c->mem_r16(node + 0x36);
+  int32_t cx = (int16_t)c->mem_r16(0x1F8000D2u), cy = (int16_t)c->mem_r16(0x1F8000D6u), cz = (int16_t)c->mem_r16(0x1F8000DAu);
+  int32_t fx = (int16_t)c->mem_r16(0x1F8000E8u), fy = (int16_t)c->mem_r16(0x1F8000EAu), fz = (int16_t)c->mem_r16(0x1F8000ECu);
+  int64_t dot = (int64_t)(ox - cx) * fx + (int64_t)(oy - cy) * fy + (int64_t)(oz - cz) * fz;
+  return (float)(dot >> 12);
+}
+
 static void submit_perobj_render(Core* c) {
   uint32_t node = c->r[4];
   c->mem_w32(SCR + 0x28C, node);                          // current render object (read by downstream code)
@@ -552,11 +564,15 @@ static void submit_perobj_render(Core* c) {
   if (idx >= 9) return;                                // not rendered
   uint32_t flag = (c->mem_r8(node + 0xB) == 0xF) ? 1u : 0u;
   uint32_t tgt = c->mem_r32(0x80014EC8u + idx * 4);
-  if (tgt == 0x8003CD00u) {                            // flush-only case → native flush, no guest render
-    c->r[4] = node; c->r[5] = flag; submit_perobj_flush(c);
-    return;
-  }
-  rec_super_call(c, 0x8003CCA4u);                      // case w/ a secondary effect pass — not owned yet
+  // Tag the packet-pool span this object renders into with its PC-native WORLD-POSITION depth, so its 2D
+  // billboard prims (apple quad, etc.) occlude by real depth at the deferred OT walk. (g_pkt_track records
+  // the actual store range — the pool POINTER doesn't move for these renderers.)
+  extern int g_pkt_track; extern uint32_t g_pkt_lo, g_pkt_hi;
+  g_pkt_track = 1; g_pkt_lo = 0xFFFFFFFFu; g_pkt_hi = 0;
+  if (tgt == 0x8003CD00u) { c->r[4] = node; c->r[5] = flag; submit_perobj_flush(c); }  // flush-only (native)
+  else                    { rec_super_call(c, 0x8003CCA4u); }                          // secondary-effect case
+  g_pkt_track = 0;
+  if (g_pkt_hi > g_pkt_lo) gpu_obj_depth_add(c, g_pkt_lo, g_pkt_hi, proj_pz_to_ord(object_world_view_depth(c, node)));
 }
 void ov_perobj_render(Core* c) {
   submit_perobj_render(c);
@@ -599,8 +615,16 @@ static void submit_render_walk(Core* c) {
       uint8_t t = c->mem_r8(n + 0xB);
       if (t < 33) {
         uint32_t tgt = c->mem_r32(RLIST_TABLE + t * 4);
-        if (tgt == RCASE_PEROBJ) { c->r[4] = n; submit_perobj_render(c); }
-        else                     { c->r[4] = n; rec_dispatch(c, c->mem_r32(n + 24)); }  // default case
+        if (tgt == RCASE_PEROBJ) { c->r[4] = n; submit_perobj_render(c); }  // self-tags its world depth
+        else {
+          // default case: the node's own render fn (node+24) — e.g. a collectable's billboard-quad drawer.
+          // Tag the packet span it produces with the object's PC-native world-position depth.
+          extern int g_pkt_track; extern uint32_t g_pkt_lo, g_pkt_hi;
+          g_pkt_track = 1; g_pkt_lo = 0xFFFFFFFFu; g_pkt_hi = 0;
+          c->r[4] = n; rec_dispatch(c, c->mem_r32(n + 24));
+          g_pkt_track = 0;
+          if (g_pkt_hi > g_pkt_lo) gpu_obj_depth_add(c, g_pkt_lo, g_pkt_hi, proj_pz_to_ord(object_world_view_depth(c, n)));
+        }
       }
     }
     n = next;
@@ -608,6 +632,24 @@ static void submit_render_walk(Core* c) {
 }
 void ov_render_walk(Core* c) {
   submit_render_walk(c);
+}
+
+// NATIVE depth for the collectable BILLBOARD-QUAD drawer — gen_func_8003C8F4. This is the single chokepoint
+// for the op-2D textured quads the collectables (apple + score pickups) draw as 2D billboards: it GTE-projects
+// the quad with the object's composed camera×object transform already live in CR0-7 (RTPT/RTPS @0x8003c98c/9dc).
+// The recomp body emits the quad packet into the OT with NO depth, so the pickups fell to the flat 2D band and
+// did not occlude. We compute the object's PC-native WORLD-POSITION view-Z from that live transform
+// (proj_obj_center_ord = our float proj of the object origin = CR5-7 view translation) and tag the packet span
+// the body writes, so the deferred OT walk gives each pickup its real world depth. Reached from multiple render
+// walks (owned and un-owned) — owning it HERE covers them all. Super-calls the body (content/packet unchanged).
+float proj_obj_center_ord(void);
+void ov_collectable_quad(Core* c) {
+  float ord = proj_obj_center_ord();                 // object-center depth from the live composed transform
+  extern int g_pkt_track; extern uint32_t g_pkt_lo, g_pkt_hi;
+  g_pkt_track = 1; g_pkt_lo = 0xFFFFFFFFu; g_pkt_hi = 0;
+  rec_super_call(c, 0x8003C8F4u);
+  g_pkt_track = 0;
+  if (g_pkt_hi > g_pkt_lo) gpu_obj_depth_add(c, g_pkt_lo, g_pkt_hi, ord);   // g_pkt_lo/hi already KSEG
 }
 
 // ===================================================================================================
@@ -683,7 +725,13 @@ static void submit_render_walk_snapshot(Core* c) {
     if (t >= 144) continue;                                  // out of jump-table range -> render nothing
     uint32_t tgt = c->mem_r32(RQ_JUMPTABLE + t * 4);
     if (tgt == 0x8003BCD0u) continue;                        // default/skip case
+    // Render the object, tagging the packet-pool span it produces with its PC-native world-position depth
+    // so its 2D billboard prims (collectable quads, etc.) occlude for real at the deferred OT walk.
+    extern int g_pkt_track; extern uint32_t g_pkt_lo, g_pkt_hi;
+    g_pkt_track = 1; g_pkt_lo = 0xFFFFFFFFu; g_pkt_hi = 0;
     rq_dispatch_case(c, node, tgt);                          // run the object's per-type renderer (guest content)
+    g_pkt_track = 0;
+    if (g_pkt_hi > g_pkt_lo) gpu_obj_depth_add(c, g_pkt_lo, g_pkt_hi, proj_pz_to_ord(object_world_view_depth(c, node)));
   }
 }
 

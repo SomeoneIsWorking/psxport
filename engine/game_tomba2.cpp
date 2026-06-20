@@ -479,6 +479,8 @@ void games_tomba2_init(void) {
     rec_set_override(0x8003CCA4u, ov_perobj_render);   // per-object render dispatch
     rec_set_override(0x8003C048u, ov_render_walk);     // phase-2 render-list walk
     rec_set_override(0x8003BB50u, ov_render_walk_snapshot);  // snapshot-queue object walk + world-pos depth
+    void ov_collectable_quad(Core*);
+    rec_set_override(0x8003C8F4u, ov_collectable_quad);  // collectable billboard-quad drawer: world-pos depth
     rec_set_override(0x8002AB5Cu, ov_terrain);         // field terrain renderer (float transform + real depth)
     void ov_build_xform(Core*);
     rec_set_override(0x80051C8Cu, ov_build_xform);     // per-object transform builder
