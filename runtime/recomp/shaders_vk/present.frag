@@ -7,7 +7,11 @@ layout(set = 0, binding = 0) uniform usampler2D u_vram;
 layout(push_constant) uniform PC { ivec4 disp; } pc;   // x, y, w, h (VRAM texels)
 void main() {
     ivec2 t = pc.disp.xy + ivec2(v_uv * vec2(pc.disp.zw));
-    t = clamp(t, ivec2(0), ivec2(1023, 991));   // image is IMG_H(992) tall (VRAM 512 + scratch FB)
+    // Clamp to the sampled region (disp) itself — never a stale image-height literal. disp=[x,y,w,h]
+    // is the exact FB/display rect (rows >=512 under hi-res) and is always within the image. The old
+    // hardcoded 991 (from when the image was 992 tall) collapsed every row past it onto one scanline
+    // once FB_MAXH grew to 720 (image now 1232 tall) -> the bottom-of-screen vertical-streak smear.
+    t = clamp(t, pc.disp.xy, pc.disp.xy + pc.disp.zw - ivec2(1));
     uint p = texelFetch(u_vram, t, 0).r;
     o_col = vec4(float(p & 31u) / 31.0, float((p >> 5) & 31u) / 31.0, float((p >> 10) & 31u) / 31.0, 1.0);
 }
