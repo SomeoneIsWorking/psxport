@@ -469,12 +469,19 @@ float proj_plane_h(void) { return s_proj_H ? (float)s_proj_H : 1.0f; }
 void  proj_screen_center(float* cx, float* cy) { if (cx) *cx = s_proj_cx; if (cy) *cy = s_proj_cy; }
 
 // The GTE coprocessor is RETAINED for now ONLY as the PSX-content math service (collision/physics still
-// run as recompiled PSX and call gte_op). We do NOT bit-replicate the GTE natively — that would be PSX
-// mimicry (reproducing gte.c's fixed-point/overflow behavior), exactly what CLAUDE.md forbids. The GTE/
-// Beetle dependency goes away by PORTING ITS CALLERS to PC-native math: render already projects PC-native
-// (proj_native_vertex — float matrices, real depth, the engine's own visibility; no gte_op for render),
-// and the remaining gte_op calls disappear as the rest of the engine/content is ported. (Reverted the
-// native NCLIP/AVSZ replica — see docs/journal.md later-171.)
+// run as recompiled PSX and call gte_op). The GTE/Beetle dependency goes away by PORTING ITS CALLERS to
+// PC-native math — NOT by building a general native GTE.
+//   FORBIDDEN (later-171 dead-end): a `gte_op_native` that ALL gte_op calls route through, byte-identical
+//   to gte.c. That just swaps one PSX-hardware emulator for our own — it advances nothing and is the PSX
+//   mimicry CLAUDE.md forbids. (Reverted the native NCLIP/AVSZ replica then.)
+//   CORRECT (and being done — later-186): port individual gte_op CALLERS to plain C so they no longer
+//   invoke the GTE at all (e.g. engine_math.cpp ov_mat_mul = FUN_80084110's 3x3 matmul). For a RENDER
+//   caller the engine already owns it PC-native (proj_native_vertex — float matrices, real depth; no
+//   gte_op for render) → bypass, don't replicate. For a caller whose result feeds retained PSX CONTENT
+//   (e.g. object position), the C math MUST produce the game's fixed-point values so the content reads
+//   correct data — that is the content-interface CORRECTNESS gate, not GTE-hardware emulation, and it is
+//   fine. The fixed-point interface itself disappears once that content consumer is ported too.
+// Every gte_op caller ported this way removes work from GTE_Instruction; it vanishes when none remain.
 void     gte_op(Core* c, uint32_t insn)         { GTE_Instruction(insn);
                                                    unsigned op = insn & 0x3F;
                                                    if (s_gteprobe < 0) { const char* e = cfg_str("PSXPORT_GTEPROBE"); s_gteprobe = e ? atoi(e) : 0; }
