@@ -279,7 +279,10 @@ in-port profiler (later-186, `interp.cpp`) gives the TIME + FREQUENCY histograms
     4.25% tile-lookup leaf~~ ✅ OWNED (later-188b, ov_tile_lookup, engine_submit.cpp; pure `tab[52*a1+a0]
     & (mask<<4)`, signature-registered, tileverify 0-diff 60000+ calls).
   - resident leaves still visible: `FUN_800931C0` 6.5% (font/text → render), `FUN_801401B8` 4.1% (overlay),
-    `FUN_80051464` 3.8%, `FUN_800597AC` 3.6%, `FUN_8003F698` 3.0% (26k×2 calls).
+    `FUN_800597AC` 3.6%, `FUN_8003F698` 3.0% (26k×2 calls). ~~`FUN_80051464` 3.8%~~ ✅ OWNED native
+    (later-189, ov_xform_propagate: child-node transform propagation orchestrating the owned rot/matmul/MVMVA
+    primitives; verified 0-diff 6000+ via `xformverify`). NEXT autonomous: `FUN_800597AC` (orchestrator, but
+    needs 2 new leaves 0x800517bc SetTransMatrix + 0x800851f0 CPU-RotMatrix-twin + 0x80084360 CompMatrixLV).
     ~~`FUN_80084A80` 4.4%~~ ✅ OWNED native (later-189, ov_rot84A80 RotMatrix variant; verified 0-diff 5000+).
     ~~`FUN_8007778C` 3.4%~~ ✅ OWNED native (later-189, ov_cull_wrapper: camera-relative delta + flag reset →
     rec_dispatch the owned cull body; verified 0-diff 40000+ via the `cullwrap` channel).

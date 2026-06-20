@@ -1044,6 +1044,97 @@ void ov_build_xform(Core* c) {
   build_xform(c);
 }
 
+// FUN_80051464 — child-node transform PROPAGATION. For each of the node's child sub-nodes (count =
+// node[8], pointer array @node+0xC0), seed an identity work matrix in scratchpad @0x1F800000, compose
+// the child's three euler angles onto it (rot_x/y/z = 80084D10/EB0/85050), then matmul it against a
+// PARENT matrix and MVMVA-rotate the child's translation, and finally accumulate the parent's world
+// translation onto the child's. The parent source depends on the child's sentinel angle c+6: -1 = the
+// node itself (matrix node+0x98, trans node+0xAC); else = sibling child node[0xC0 + 4*c[6]] (matrix
+// p+0x18, trans p+0x2C). All five callees are already-owned native overrides — this is pure orchestration
+// + scratchpad seeding + integer translation adds, so we rec_dispatch the primitives exactly as the
+// recomp body's jal sequence does (preserving the matmul→MVMVA GTE-CR coupling identically). The matmul
+// out-pointer a2 = c+24 is set in the recomp's branch-delay slot for BOTH branches, so it is constant.
+// The loop bound is re-read each iteration (top: s3 < node[8]; bottom: s3 < node[9]) — mirrored exactly.
+static void xform_propagate_body(Core* c) {
+  uint32_t node = c->r[4];
+  if (c->mem_r8(node + 9) == 0) return;
+  int i = 0;
+  while (i < (int)(uint8_t)c->mem_r8(node + 8)) {                 // top check (node[8])
+    uint32_t child = c->mem_r32(node + 0xC0 + 4u * (uint32_t)i);
+    // seed identity 3x3 work matrix (diagonal 0x1000) into scratchpad @0x1F800000
+    c->mem_w32(0x1F800000u, 4096); c->mem_w32(0x1F800004u, 0);
+    c->mem_w32(0x1F800008u, 4096); c->mem_w32(0x1F80000Cu, 0);
+    c->mem_w32(0x1F800010u, 4096); c->mem_w32(0x1F800014u, 0);
+    c->mem_w32(0x1F800018u, 0);    c->mem_w32(0x1F80001Cu, 0);
+    int16_t sentinel = (int16_t)c->mem_r16(child + 6);
+    c->r[4] = (uint32_t)(int32_t)(int16_t)c->mem_r16(child + 8);  c->r[5] = 0x1F800000u; rec_dispatch(c, 0x80084D10u); // rot_x
+    c->r[4] = (uint32_t)(int32_t)(int16_t)c->mem_r16(child + 10); c->r[5] = 0x1F800000u; rec_dispatch(c, 0x80084EB0u); // rot_y
+    c->r[4] = (uint32_t)(int32_t)(int16_t)c->mem_r16(child + 12); c->r[5] = 0x1F800000u; rec_dispatch(c, 0x80085050u); // rot_z
+    if (sentinel == -1) {                                        // ROOT: parent = this node
+      c->r[4] = node + 152; c->r[5] = 0x1F800000u; c->r[6] = child + 24; rec_dispatch(c, 0x80084110u); // child_mat = node_mat × work
+      c->r[4] = child; c->r[5] = child + 44; rec_dispatch(c, 0x80084220u);                              // MVMVA → child+0x2C
+      c->mem_w32(child + 0x2C, c->mem_r32(child + 0x2C) + c->mem_r32(node + 0xAC));
+      c->mem_w32(child + 0x30, c->mem_r32(child + 0x30) + c->mem_r32(node + 0xB0));
+      c->mem_w32(child + 0x34, c->mem_r32(child + 0x34) + c->mem_r32(node + 0xB4));
+    } else {                                                     // SIBLING: parent = node[0xC0 + 4*sentinel]
+      uint32_t p = c->mem_r32(node + 0xC0 + 4u * (uint32_t)(int)sentinel);
+      c->r[4] = p + 24; c->r[5] = 0x1F800000u; c->r[6] = child + 24; rec_dispatch(c, 0x80084110u); // child_mat = sibling_mat × work
+      c->r[4] = child; c->r[5] = child + 44; rec_dispatch(c, 0x80084220u);
+      c->mem_w32(child + 0x2C, c->mem_r32(child + 0x2C) + c->mem_r32(p + 0x2C));
+      c->mem_w32(child + 0x30, c->mem_r32(child + 0x30) + c->mem_r32(p + 0x30));
+      c->mem_w32(child + 0x34, c->mem_r32(child + 0x34) + c->mem_r32(p + 0x34));
+    }
+    i++;
+    if (!(i < (int)(uint8_t)c->mem_r8(node + 9))) break;         // bottom check (node[9])
+  }
+}
+// PSXPORT_DEBUG=xformverify — per-call gate. Both paths run the identical owned inner primitives, so this
+// verifies the orchestration (loop bounds, branch select, address math, add order, scratchpad seeding).
+// Snapshot every touched child sub-struct (+0x18..+0x38) + the scratchpad work matrix + GTE data regs,
+// run native, capture, restore, run the recomp body, diff.
+static void ov_xform_propagate_verify(Core* c) {
+  uint32_t rs[32]; memcpy(rs, c->r, sizeof rs);
+  uint32_t node = c->r[4];
+  int n8 = (uint8_t)c->mem_r8(node + 8), n9 = (uint8_t)c->mem_r8(node + 9);
+  int N = n8 > n9 ? n8 : n9; if (N > 64) N = 64;
+  uint32_t ch[64]; uint32_t snap[64][8];     // child+0x18..+0x37
+  for (int i = 0; i < N; i++) { ch[i] = c->mem_r32(node + 0xC0 + 4u * (uint32_t)i);
+    for (int w = 0; w < 8; w++) snap[i][w] = c->mem_r32(ch[i] + 0x18 + 4u * (uint32_t)w); }
+  uint32_t spad_b[8]; for (int w = 0; w < 8; w++) spad_b[w] = c->mem_r32(0x1F800000u + 4u * (uint32_t)w);
+  uint32_t gd_b[32]; for (int i = 0; i < 32; i++) gd_b[i] = gte_read_data(i);
+  // NATIVE
+  xform_propagate_body(c);
+  uint32_t nat[64][8], spad_n[8], gd_n[32];
+  for (int i = 0; i < N; i++) for (int w = 0; w < 8; w++) nat[i][w] = c->mem_r32(ch[i] + 0x18 + 4u * (uint32_t)w);
+  for (int w = 0; w < 8; w++) spad_n[w] = c->mem_r32(0x1F800000u + 4u * (uint32_t)w);
+  for (int i = 0; i < 32; i++) gd_n[i] = gte_read_data(i);
+  // RESTORE
+  memcpy(c->r, rs, sizeof rs);
+  for (int i = 0; i < N; i++) for (int w = 0; w < 8; w++) c->mem_w32(ch[i] + 0x18 + 4u * (uint32_t)w, snap[i][w]);
+  for (int w = 0; w < 8; w++) c->mem_w32(0x1F800000u + 4u * (uint32_t)w, spad_b[w]);
+  for (int i = 0; i < 32; i++) gte_write_data(i, gd_b[i]);
+  // RECOMP
+  rec_super_call(c, 0x80051464u);
+  static long ngood = 0, nbad = 0; int bad = 0;
+  for (int i = 0; i < N && !bad; i++) for (int w = 0; w < 8; w++)
+    if (nat[i][w] != c->mem_r32(ch[i] + 0x18 + 4u * (uint32_t)w)) {
+      if (nbad < 40) fprintf(stderr, "[xformverify] MISMATCH node=%08x child[%d]=%08x +0x%x mine=%08x oracle=%08x\n",
+                             node, i, ch[i], 0x18 + w * 4, nat[i][w], c->mem_r32(ch[i] + 0x18 + 4u * (uint32_t)w));
+      bad = 1; break; }
+  for (int w = 0; w < 8 && !bad; w++) if (spad_n[w] != c->mem_r32(0x1F800000u + 4u * (uint32_t)w)) {
+    if (nbad < 40) fprintf(stderr, "[xformverify] MISMATCH node=%08x spad+0x%x mine=%08x oracle=%08x\n",
+                           node, w * 4, spad_n[w], c->mem_r32(0x1F800000u + 4u * (uint32_t)w)); bad = 1; }
+  for (int i = 0; i < 32 && !bad; i++) { if (i >= 12 && i <= 15) continue; if (i == 31) continue;
+    if (gd_n[i] != gte_read_data(i)) { if (nbad < 40) fprintf(stderr, "[xformverify] MISMATCH node=%08x GTE-DR%d mine=%08x oracle=%08x\n",
+                                                              node, i, gd_n[i], gte_read_data(i)); bad = 1; } }
+  if (bad) nbad++; else if (++ngood == 1 || ngood % 20000 == 0) fprintf(stderr, "[xformverify] %ld matches (last node=%08x N=%d)\n", ngood, node, N);
+}
+void ov_xform_propagate(Core* c) {
+  static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("xformverify") ? 1 : 0;
+  if (s_v) { ov_xform_propagate_verify(c); return; }
+  xform_propagate_body(c);
+}
+
 // PSXPORT_DEBUG=subcnt — submitter call-counter. Registered (super-call) on candidate submit fns to see
 // which actually fire per scene + how often, so the un-owned variants worth porting are picked by data,
 // not guesswork. One slot per registered address; per-present-frame counts flushed on frame change.

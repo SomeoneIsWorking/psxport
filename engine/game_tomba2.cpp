@@ -704,6 +704,8 @@ void games_tomba2_init(void) {
     rec_set_override(0x8002AB5Cu, ov_terrain);         // field terrain renderer (float transform + real depth)
     void ov_build_xform(Core*);
     rec_set_override(0x80051C8Cu, ov_build_xform);     // per-object transform builder
+    void ov_xform_propagate(Core*);
+    rec_set_override(0x80051464u, ov_xform_propagate); // child-node transform propagation (orchestrates owned prims)
   }
   // PC-native LEVEL/STAGE LOADER (engine/engine_level.cpp): the engine's overlay loader FUN_800450bc —
   // load a stage's overlay off the disc + set its entry, synchronous (no PSX CD-wait yield).
