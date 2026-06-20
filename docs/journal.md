@@ -1,5 +1,26 @@
 # Debug / progress journal
 
+## later-174: own the per-frame camera X/Z FOLLOW native (engine/engine_camera.cpp) — first verified on motion
+Resumed engine porting (user: "go back to porting the game"). Owned the camera-follow's X/Z tracker
+`FUN_8006d960` (0x8006d960) PC-native — the per-frame function that rate-limits the camera position toward
+the target object. **`ov_cam_track_xz` (engine/engine_camera.cpp), registered in games_tomba2_init.**
+- **RE (tools/disas.py 0x8006d960 — disas.py is FUNCTION-scoped, stops at jr ra):** `a1` = camera-target obj
+  (=0x800E8010 at runtime). Two axes: X accum `0x1f8000dc` (int `0x1f8000de`) toward `a1[+0]/[+2]`; Z accum
+  `0x1f8000e4` (int `0x1f8000e6`) toward `a1[+8]/[+a]`. Each axis: `delta = targetInt − curInt` (low-16
+  sign-extended); if `|delta|<=10` SNAP accum=target32, else `accum += clamp(delta,±6144)<<13` via the shared
+  rate-limiter `FUN_8006ce74`(delta,maxstep)=clamp(±maxstep). Returns `v0 = 1` iff BOTH axes settled.
+- **Reimplemented faithfully (it's a CONTENT interface — the still-PSX cull FUN_8007712c reads the camera
+  fields, so it MUST RAM-match, like the terrain content-interface writes later-158).** Not the render path,
+  so no "don't transcribe GTE/packets" tension; this is integer camera STATE the cull consumes.
+- **VERIFIED mechanically on the free-roam MOTION scene** (`AUTO_SKIP=500 AUTO_WALK=r`, the scene built this
+  session; the static idle field is A==B and can't exercise camera motion): **gameplay RAM 0-diff @ f650 AND
+  f900** vs the override-OFF build (A/B toggle + PSXPORT_RAMDUMP + cmp -l → 0). And the override FIRES
+  (`PSXPORT_DEBUG=cam`: "ov_cam_track_xz FIRED a1=0x800E8010") — per the later-170 lesson, confirmed it's
+  actually invoked, not a faithful no-op passing the gate. New diagnostic `PSXPORT_DEBUG=cam` = per-frame
+  camera pos + the fire log.
+- **NEXT:** the sibling per-axis smoothers + the matrix-build fn (the 0x8006e3c4/e89c/e8bc cluster, uses
+  libgte) — own them the same way to complete the camera-update system. engine_re.md "Camera" has the map.
+
 ## later-173: free-roam nav SOLVED headless (toward verifying the staged ov_game_s4c) — area-exit still open
 Pursued the handoff's option 2: drive headless to an in-game AREA transition (`sm[0x4a]==2`) so the staged
 `ov_game_s4c` (sm[0x4c] area machine, 0x80106478, later-169) can be A/B-verified and registered. Outcome:

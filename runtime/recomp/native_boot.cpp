@@ -550,6 +550,11 @@ static void ov_game_main(Core* c) {
     // is DETECTABLE: when one of the 3 slots has a 0x80108xxx entry and is alive, a menu is open and
     // gameplay input is going to the menu, NOT the player. Also prints the GAME stage sm + camera pos.
     // Logged only on change of the (slot-state/entry + page) signature to stay quiet.
+    // PSXPORT_DEBUG=cam — per-frame camera pos (tracks Tomba). Used to determine controls empirically:
+    // hold one button and watch for a vertical (Y) excursion = a JUMP, vs a planar (X/Z) shift = walking.
+    if (cfg_dbg("cam"))
+      fprintf(stderr, "[cam] f%u (%d,%d,%d)\n", f, (int16_t)c->mem_r16(0x1f8000d2u),
+              (int16_t)c->mem_r16(0x1f8000d6u), (int16_t)c->mem_r16(0x1f8000dau));
     if (cfg_dbg("state")) {
       uint64_t sig = 0; int menu_slot = -1; uint8_t menu_page = 0;
       for (int i = 0; i < 3; i++) {

@@ -397,6 +397,7 @@ void games_tomba2_init(void) {
   rec_set_override(0x800846D0u, ov_set_geom_offset);
   rec_set_override(0x800846F0u, ov_set_geom_screen);
   rec_set_override(0x80081560u, ov_draw_otag);       // own DrawOTag (the per-frame draw kick) natively
+  { void engine_camera_register(void); engine_camera_register(); }   // per-frame camera X/Z follow native
   // PC-owned asset codecs.
   rec_set_override(0x80044D8Cu, ov_lz_decompress);   // LZ image decompressor
   rec_set_override(0x80044E84u, ov_unpack_group);    // texture-group unpacker (drives the above)
