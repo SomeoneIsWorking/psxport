@@ -120,6 +120,45 @@ static void ov_game_s4c(Core* c) {
   rec_coro_redirect(c, state[s4c]);             // run the state IN-CONTEXT (it `j`s to the epilogue itself)
 }
 
+// GAME stage TOP-LEVEL ENTRY 0x8010637C — task-0's stage driver: a one-time PROLOGUE then an infinite
+// per-frame loop {dispatch sm[0x48] handler; bump frame counter DAT_1f800198; yield FUN_80051f80(1)}. The
+// engine OWNS the prologue PC-native here: it is pure register/memory init of the stage state machine (no
+// yield, no jal), so it is safe to reimplement and hand to the guest loop body IN-CONTEXT via the coro-
+// redirect handshake — exactly like the sub-handlers. This is the entry point for owning the loop itself;
+// the loop body (0x801063F4) + its handler dispatch (all 3 handlers already native) + the FUN_80051f80
+// yield still run via the resumed task-0 coroutine, so deep yields/resumes are unchanged. Registered AUTO
+// (it lives in GAME.BIN, flushed on overlay unload). Faithful to 0x8010637C prologue (regs the loop body
+// reads MUST be set: s0=s1=0x1f800000, s2=1, sp=sp-0x20, ra saved at 0x1c(sp)):
+//   sp-=0x20; sw s1,0x14; s1=0x1f800000; sw s2,0x18; s2=1; sw s0,0x10; s0=0x1f800000; (saves INCOMING regs)
+//   0x1f800206=0; 0x1f800236=0; 0x1f800234=0; 0x1f80019a=2; v1=mem[0x1f800138]; a0=mem_r8(0x1f800134);
+//   sw ra,0x1c; 0x1f800198=0; 0x800be0e4=0; sm[0x48]=a0; sm[0x4a]=sm[0x4c]=sm[0x4e]=sm[0x50]=0.
+static void ov_game_stage_main(Core* c) {
+  uint32_t ra = c->r[31], sp = c->r[29];
+  uint32_t s0_in = c->r[16], s1_in = c->r[17], s2_in = c->r[18];
+  c->r[29] = sp - 0x20;
+  c->mem_w32(c->r[29] + 0x14, s1_in);          // sw s1,0x14(sp)  — save INCOMING callee-saved regs
+  c->mem_w32(c->r[29] + 0x18, s2_in);          // sw s2,0x18(sp)
+  c->mem_w32(c->r[29] + 0x10, s0_in);          // sw s0,0x10(sp)
+  c->r[16] = 0x1f800000u;                      // s0 = 0x1f800000  (loop reads 0x198(s0))
+  c->r[17] = 0x1f800000u;                      // s1 = 0x1f800000  (loop reads 0x138(s1))
+  c->r[18] = 1;                                // s2 = 1           (loop compares sm[0x48]==s2)
+  c->mem_w8(0x1f800206u, 0);
+  c->mem_w8(0x1f800236u, 0);
+  c->mem_w8(0x1f800234u, 0);
+  c->mem_w8(0x1f80019Au, 2);
+  uint32_t task = c->mem_r32(0x1f800138u);
+  uint8_t  init48 = c->mem_r8(0x1f800134u);    // initial sm[0x48] = boot/resume selector
+  c->mem_w32(c->r[29] + 0x1c, ra);             // sw ra,0x1c(sp)
+  c->mem_w16(0x1f800198u, 0);                  // sh zero,0x198(s0) — frame counter reset
+  c->mem_w8(0x800be0e4u, 0);
+  c->mem_w16(task + 0x48, init48);             // sm[0x48] = mem_r8(0x1f800134)
+  c->mem_w16(task + 0x4a, 0);
+  c->mem_w16(task + 0x4c, 0);
+  c->mem_w16(task + 0x4e, 0);
+  c->mem_w16(task + 0x50, 0);
+  rec_coro_redirect(c, 0x801063F4u);           // hand to the guest loop body IN-CONTEXT (deep yields OK)
+}
+
 // Register the GAME-stage area-init overrides when this just-loaded overlay is GAME.BIN at the stage base.
 // Detect by the fixed entry + handler signatures (START.BIN/DEMO.BIN are smaller and hold stale bytes at
 // these addresses, so they never match). Called from the overlay-load scan (engine_submit.cpp); registered
@@ -129,6 +168,7 @@ void stage_scan_overlay(Core* c, uint32_t base, uint32_t size) {
   if (c->mem_r32(0x8010637Cu) != 0x27bdffe0u) return;  // entry:   addiu sp,sp,-0x20
   if (c->mem_r32(0x801086e0u) != 0x27bdffe8u) return;  // s48==0:  addiu sp,sp,-0x18
   if (c->mem_r32(0x80108720u) != 0x27bdffe8u) return;  // s48==1:  addiu sp,sp,-0x18
+  rec_set_interp_override_auto(0x8010637Cu, ov_game_stage_main); // stage top-level: own the prologue, redirect to the loop
   rec_set_interp_override_auto(0x801086e0u, ov_game_s48_0);
   rec_set_interp_override_auto(0x80108720u, ov_game_s48_1);
   rec_set_interp_override_auto(0x80108784u, ov_game_s48_2);   // RUNNING dispatcher (coro-redirect handshake)

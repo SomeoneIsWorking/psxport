@@ -37,9 +37,20 @@ the overlay/level CONTENT it loads."
   caught both as 20-byte task-stack diffs): (1) set ra to each `jal`'s post-link addr (jal+8) before each
   `rec_dispatch` so callees save the same ra to their frames; (2) the prologue `sw s0,0x28(sp)` saves the
   INCOMING s0 BEFORE `s0=name` — saving `name` instead leaked the name ptr into 5 task-stack frames.
-- **NEXT:** (a) Drive a deterministic IN-GAME area transition (now that the transition primitive is
-  engine-owned) → register + verify the staged `ov_game_s4c` (sm[0x4c] area machine, later-169). (b) Push
-  toward owning the top-level loop / yield itself (native_scheduler_step "one stage-iter per frame").
+- **ALSO owned the GAME stage TOP-LEVEL ENTRY PROLOGUE `0x8010637C` native (`ov_game_stage_main`,
+  engine_stage.cpp).** Task-0's stage driver = a one-time prologue then `{dispatch sm[0x48]; bump
+  DAT_1f800198; yield}` forever. The prologue is pure register/memory init of the stage SM (no yield, no
+  jal): set s0=s1=0x1f800000, s2=1, sp-=0x20, save incoming s0/s1/s2/ra to the stack, reset
+  0x1f800206/236/234/19a/198 + 0x800be0e4, set `sm[0x48]=mem_r8(0x1f800134)` + sm[0x4a..0x50]=0, then
+  `rec_coro_redirect(0x801063F4)` into the guest loop body IN-CONTEXT (deep yields unchanged). Registered
+  AUTO in stage_scan_overlay. **VERIFIED RAM 0-diff @ f650 AND f1000.** This is the entry point for owning
+  the loop ITSELF; the loop body + handler dispatch (all 3 handlers already native) + the FUN_80051f80 yield
+  still run as the resumed task-0 coroutine.
+- **NEXT:** (a) Own the loop BODY/yield (native_scheduler_step "one stage-iter per frame") — the real
+  obstacle is the byte-faithful content-interface gate: the handlers' saved ra/stack are tied to the guest
+  loop trampoline, and deep-yield resume needs interp_flat. Delicate core-scheduler change; A/B-gate every
+  step. (b) Drive a deterministic IN-GAME area transition → register + verify the staged `ov_game_s4c`
+  (sm[0x4c] area machine) — BLOCKED on reaching free-roam headless (driving-the-game.md §5).
 
 ## later-169: cooperative-yield handshake (`rec_coro_redirect`) — own the GAME RUNNING dispatcher native
 Built the handshake later-168 flagged as the gating blocker, and used it to OWN the GAME running dispatcher
