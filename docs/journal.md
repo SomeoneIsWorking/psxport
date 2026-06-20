@@ -1,5 +1,38 @@
 # Debug / progress journal
 
+## later-170: own the cooperative STAGE TRANSITION `FUN_80052078` native (engine/engine_level.cpp)
+Owned the stage/area transition primitive `FUN_80052078(stageIdx)` (MAIN.EXE 0x80052078) PC-native — the
+engine function that loads the next stage's overlay and RESTARTS task 0 at its new entry. Frontier moves
+from "the transition runs as interpreted guest code" to "the engine owns the stage handoff; PSX drives only
+the overlay/level CONTENT it loads."
+- **RE (tools/disas.py 0x80052078):** prologue `sp-=0x18; sw s0,0x10(sp); sw ra,0x14(sp)`; `a1=stageIdx`;
+  `a0=mem[0x1f800138]+0xc` (task's entry-pointer slot); `jal 0x800450bc` = eng_load_stage(task+0xc, stage)
+  (already native, later-162); then `task[0]=3` (RESTART at new entry) + `task[0x6f]=0`; then the THREAD
+  PLUMBING `EnterCriticalSection(0x80080890) / CloseThread(task[4],0x80080870) / ExitCriticalSection
+  (0x800808a0) / ChangeThread(0xff000000, 0x80080880)`; epilogue `lw ra; lw s0; jr ra; sp+=0x18`.
+- **Reimplemented, NOT transcribed:** the four thread/critical-section calls only stop+switch the task;
+  the native cooperative scheduler (native_scheduler_step) replaces all of it — **setting task state=3 IS
+  the transition** ("restart fresh at the new entry") and the terminal `ChangeThread` IS the existing
+  native yield primitive `ov_switch` (0x80080880). The thread calls are RAM- and IRQ-flag-NEUTRAL in the
+  native model (Enter+Exit cancel; Close/Change only set v0), so dropping them is faithful to the content
+  interface. So `eng_stage_transition` = mirror prologue stack writes (byte-faithful) → eng_load_stage →
+  task[0]=3, task[0x6f]=0 → restore s0/sp/ra → `rec_dispatch(0x80080880)` (ov_switch).
+- **TERMINAL yield, so NO coro-redirect handshake needed** (unlike the RUNNING dispatcher, later-169). The
+  task never resumes into this fn — it restarts at state 3 — so a plain override that does the work then
+  ends the run is correct. `ov_switch` matches the PSX per context: mid-game (in a task run, in_stage==1)
+  it longjmps to the scheduler and the fn never returns (== ChangeThread suspending the task); at BOOT the
+  START→DEMO→GAME init transitions run via `rc0(FUN_800499e8)` with in_stage==0, where ov_switch is a
+  no-op return and the fn returns to FUN_800499e8, which continues — exactly as the stubbed thread layer
+  did. Either way the scheduler then restarts task 0 (state 3) at the new stage entry.
+- **VERIFIED:** registered in games_tomba2_init (`!faith`, next to ov_load_stage). The field reaches GAME
+  (frame 50 stage=GAME) and runs stable to f1000+ with task 0 alive — which REQUIRES the START→DEMO→GAME
+  transitions to all run through this override. **Gameplay RAM 0-diff @ f650 AND f1000** vs the pre-change
+  (interpreted-FUN_80052078) build (git-stash A/B + `PSXPORT_RAMDUMP_FRAME` + `cmp -l` → 0).
+- **NEXT:** (a) own task-0 initial entry / file-resolve `FUN_800499e8` the same plain way (engine_re init
+  table flags it). (b) Drive a deterministic IN-GAME area transition (now that the transition primitive is
+  engine-owned) → register + verify the staged `ov_game_s4c` (sm[0x4c] area machine, later-169). (c) Push
+  toward owning the top-level loop / yield itself (native_scheduler_step "one stage-iter per frame").
+
 ## later-169: cooperative-yield handshake (`rec_coro_redirect`) — own the GAME RUNNING dispatcher native
 Built the handshake later-168 flagged as the gating blocker, and used it to OWN the GAME running dispatcher
 `sm[0x48]==2` (0x80108784). The frontier moves from "all sub-handlers run as guest code" to "the engine owns

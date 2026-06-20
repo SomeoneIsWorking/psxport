@@ -443,6 +443,10 @@ void games_tomba2_init(void) {
   // load a stage's overlay off the disc + set its entry, synchronous (no PSX CD-wait yield). A/B oracle:
   // PSXPORT_LOADSTAGE_RECOMP=1. The CD read itself (0x8001db8c) is already native (ov_cd_loadfile).
   if (!faith) { void ov_load_stage(Core*); rec_set_override(0x800450BCu, ov_load_stage); }
+  // PC-native STAGE TRANSITION (engine/engine_level.cpp): FUN_80052078 — load the next stage + restart the
+  // task at its new entry. Thread plumbing replaced by the native scheduler (state=3 == restart); the
+  // terminal yield is the existing ov_switch. Exercised at the START->DEMO->GAME boot transitions.
+  if (!faith) { void ov_stage_transition(Core*); rec_set_override(0x80052078u, ov_stage_transition); }
   fps60_init();
   // cull tap: ALWAYS registered — genuine-wide is the default wide path and the overlay can toggle aspect
   // LIVE, so the widened-frustum re-include must be available without a launch flag. ov_object_cull is a
