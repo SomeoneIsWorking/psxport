@@ -378,7 +378,10 @@ static void ov_game_main(Core* c) {
   c->mem_w8(buf, 0x80);
   rc3(c, 0x80089bac, 0xe, buf, 0);
   rc1(c, 0x80085900, 3);
-  rc0(c, 0x80075130);
+  // FUN_80075130 font/text init reimplemented PC-native (engine/engine_font.cpp): owns the orchestration +
+  // direct writes + the 3 engine-state callees (FUN_800963a0/80096370/800752b4); the 8 libgpu/sound callees
+  // stay rec_dispatched in-context (later-182b nested-dispatch risk). Replaces the rc0 transcription.
+  { void ov_font_init(Core*); ov_font_init(c); }   // was rc0(c, 0x80075130)
   rc1(c, 0x8009c620, 0);
   rc0(c, 0x8001cc00);
   { void eng_init_subsystems(Core*); eng_init_subsystems(c); }  // was rc0(c, 0x800520e0) — own orchestration native

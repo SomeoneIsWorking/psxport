@@ -495,6 +495,14 @@ void games_tomba2_init(void) {
   // PC-native task-0 BOOTSTRAP (engine/engine_level.cpp): FUN_800499e8 — resolve \BIN\START.BIN, record its
   // (LBA,size) in the stage table, transition to stage 0. CD-directory lookup stays the platform mechanism.
   { void ov_task0_boot(Core*); rec_set_override(0x800499E8u, ov_task0_boot); }
+  // PC-native FONT/TEXT init (engine/engine_font.cpp): FUN_80075130 is called directly from native_boot,
+  // but register the orchestrator + its 3 owned engine callees so any other dispatcher to them uses native
+  // (the 8 libgpu/sound callees stay PSX, dispatched in-context). later (font frontier).
+  { void ov_font_init(Core*), ov_font_bank_select(Core*), ov_font_bank2_store(Core*), ov_font_glyphclass_fill(Core*);
+    rec_set_override(0x80075130u, ov_font_init);
+    rec_set_override(0x800963a0u, ov_font_bank_select);
+    rec_set_override(0x80096370u, ov_font_bank2_store);
+    rec_set_override(0x800752b4u, ov_font_glyphclass_fill); }
   fps60_init();
   // cull tap: genuine-wide is the default wide path and the overlay can toggle aspect LIVE, so the
   // widened-frustum re-include is always available. ov_object_cull is a faithful super-call + a wide-only
@@ -531,6 +539,17 @@ void games_tomba2_init(void) {
   }
   // Render-list node-type dump (PSXPORT_DEBUG=rlist): the full type set 8003C048 must handle. Gated.
   if (cfg_dbg("rlist")) { void ov_rlist_probe(Core*); rec_set_override(0x8003C048u, ov_rlist_probe); }
+  // Issue #4: own the AUXILIARY render walks PC-native (engine/engine_submit.cpp) so flame/rope/effect
+  // billboards get a real WORLD-POSITION depth (gpu_obj_depth_add) instead of falling to the flat 2D band
+  // and drawing over occluding foliage. Faithful per-node lift of each recomp body + per-node depth tag,
+  // mirroring ov_render_walk_snapshot. Skip when PSXPORT_DEBUG=rwalk is on (the diagnostic counters above
+  // own these addresses then; the override table is last-registration-wins, so this guard avoids a clash).
+  if (!cfg_dbg("rwalk")) {
+    void ov_rwalk_aux_bcf4(Core*), ov_rwalk_aux_bf00(Core*), ov_rwalk_aux_eec0(Core*);
+    rec_set_override(0x8003BCF4u, ov_rwalk_aux_bcf4);
+    rec_set_override(0x8003BF00u, ov_rwalk_aux_bf00);
+    rec_set_override(0x8003EEC0u, ov_rwalk_aux_eec0);
+  }
   void engine_tomba2_init(void);
   engine_tomba2_init();                            // native engine layer (Phase 1: object-list walk)
 }

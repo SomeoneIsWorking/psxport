@@ -739,6 +739,213 @@ void ov_render_walk_snapshot(Core* c) {
   submit_render_walk_snapshot(c);
 }
 
+// ===================================================================================================
+// NATIVE AUXILIARY render walks — gen_func_8003BCF4 / 8003BF00 / 8003EEC0 (issue #4: flames/ropes
+// drew OVER occluding foliage). These three are the secondary per-object render walks the field runs
+// IN ADDITION to the owned snapshot walk 8003BB50 — they drain their own object queues/lists and
+// dispatch each live object's per-type renderer through a jump table, exactly like 8003BB50. The
+// recomp bodies drove the loop but threw away each object's WORLD DEPTH, so the 2D billboard prims the
+// renderers emit (flame sprites, rope decals) landed in NO obj_depth span → fell to the flat 2D band →
+// drew in enumeration order, in front of nearer foliage. We OWN the loops PC-native (faithful per-node
+// lift of each recomp body), and after running each object's renderer we tag the packet-pool span it
+// produced with the object's PC-native WORLD-POSITION depth via gpu_obj_depth_add — exactly as the
+// owned snapshot walk does — so the deferred OT walk gives each effect its real world depth. The
+// per-type renderers themselves stay guest CONTENT (rec_dispatch), unchanged. Depth tagging is
+// PER-NODE (not a whole-walk merged span — a merged span mis-attributes depth in multi-effect scenes).
+//
+// Decoded byte-faithful from the recomp bodies (tools/disas.py, this session). For each: node is the
+// only arg (a0); `next`/queue-advance is captured the same instant the recomp body captures it.
+
+// --- 8003BCF4 -------------------------------------------------------------------------------------
+// SNAPSHOT-QUEUE walk, same double-buffer-swap prologue as 8003BB50 but a DIFFERENT queue + table.
+//   swap_flag 0x1F800136, live list_ptr 0x1F800148, live count 0x1F800150, snap_count 0x1F800152,
+//   read cursor 0x1F80014C; list base const 0x800F26C8; jump table 0x80014CB0 (33 entries, type<33).
+//   Liveness node+1!=0; type node+0xb. The s3=0x800C0000 base in two cases reads global 0x800BF870.
+// Jump-table case bodies (a0=node), decoded from 0x8003BDAC..0x8003BED8 (0x8003BED8 = skip/continue):
+//   idx 0,15  (0x8003BDAC): rec_dispatch 0x8003CCA4 (per-object render dispatch)
+//   idx 1     (0x8003BDBC): g=*0x800BF870; ==0 -> 0x801341E8; ==6 -> 0x80123C14; else skip
+//   idx 2     (0x8003BDF4): g; ==1->0x80129114, ==7->0x80120D2C, ==10->0x8011AD44, ==15->0x80115338,
+//                           else -> 0x80117984
+//   idx 3     (0x8003BE74): rec_dispatch 0x80136748
+//   idx 16    (0x8003BE84): rec_dispatch 0x8003C2D4
+//   idx 17    (0x8003BEA4): rec_dispatch 0x8003C464
+//   idx 21    (0x8003BEB4): rec_dispatch 0x8003C2D4, then node[0x7c] indirect (if nonzero)
+//   idx 22    (0x8003BEBC): node[0x7c] indirect (if nonzero)
+//   idx 23    (0x8003BE94): node[0x7c] indirect (if nonzero), THEN rec_dispatch 0x8003C464
+//   idx 32    (0x8003BEC8): node[0x18] indirect (if nonzero)
+#define AUX_BCF4_SWAP    0x1F800136u
+#define AUX_BCF4_LISTPTR 0x1F800148u
+#define AUX_BCF4_CURSOR  0x1F80014Cu
+#define AUX_BCF4_LIVECNT 0x1F800150u
+#define AUX_BCF4_SNAPCNT 0x1F800152u
+#define AUX_BCF4_BASE    0x800F26C8u
+#define AUX_BCF4_TABLE   0x80014CB0u
+#define AUX_BCF4_SKIP    0x8003BED8u
+#define G_RENDER_MODE    0x800BF870u
+
+static void aux_bcf4_case(Core* c, uint32_t node, uint32_t tgt) {
+  switch (tgt) {
+    case 0x8003BDACu: c->r[4] = node; rec_dispatch(c, 0x8003CCA4u); break;
+    case 0x8003BDBCu: { uint8_t g = c->mem_r8(G_RENDER_MODE);
+                        if (g == 0)      { c->r[4] = node; rec_dispatch(c, 0x801341E8u); }
+                        else if (g == 6) { c->r[4] = node; rec_dispatch(c, 0x80123C14u); }
+                        break; }
+    case 0x8003BDF4u: { uint8_t g = c->mem_r8(G_RENDER_MODE); uint32_t fn;
+                        if      (g == 1)  fn = 0x80129114u;
+                        else if (g == 7)  fn = 0x80120D2Cu;
+                        else if (g == 10) fn = 0x8011AD44u;
+                        else if (g == 15) fn = 0x80115338u;
+                        else              fn = 0x80117984u;
+                        c->r[4] = node; rec_dispatch(c, fn); break; }
+    case 0x8003BE74u: c->r[4] = node; rec_dispatch(c, 0x80136748u); break;
+    case 0x8003BE84u: c->r[4] = node; rec_dispatch(c, 0x8003C2D4u); break;
+    case 0x8003BEA4u: c->r[4] = node; rec_dispatch(c, 0x8003C464u); break;
+    case 0x8003BEB4u: { c->r[4] = node; rec_dispatch(c, 0x8003C2D4u);
+                        uint32_t fn = c->mem_r32(node + 0x7C); if (fn) { c->r[4] = node; rec_dispatch(c, fn); } break; }
+    case 0x8003BEBCu: { uint32_t fn = c->mem_r32(node + 0x7C); if (fn) { c->r[4] = node; rec_dispatch(c, fn); } break; }
+    case 0x8003BE94u: { uint32_t fn = c->mem_r32(node + 0x7C); if (fn) { c->r[4] = node; rec_dispatch(c, fn); }
+                        c->r[4] = node; rec_dispatch(c, 0x8003C464u); break; }
+    case 0x8003BEC8u: { uint32_t fn = c->mem_r32(node + 0x18); if (fn) { c->r[4] = node; rec_dispatch(c, fn); } break; }
+    default: break;   // 0x8003BED8 = skip/default: render nothing
+  }
+}
+
+void ov_rwalk_aux_bcf4(Core* c) {
+  if (c->mem_r8(AUX_BCF4_SWAP) == 0) {              // queue double-buffer swap (only when swap_flag==0)
+    uint16_t cnt = c->mem_r16(AUX_BCF4_LIVECNT);
+    uint32_t lst = c->mem_r32(AUX_BCF4_LISTPTR);
+    c->mem_w16(AUX_BCF4_LIVECNT, 0);
+    c->mem_w32(AUX_BCF4_LISTPTR, AUX_BCF4_BASE);
+    c->mem_w16(AUX_BCF4_SNAPCNT, cnt);
+    c->mem_w32(AUX_BCF4_CURSOR, lst);
+  }
+  int16_t count = (int16_t)c->mem_r16(AUX_BCF4_SNAPCNT);
+  uint32_t cursor = c->mem_r32(AUX_BCF4_CURSOR);
+  while (count != 0) {
+    uint32_t node = c->mem_r32(cursor);
+    cursor += 4;
+    count--;
+    if (c->mem_r8(node + 1) == 0) continue;                  // not live
+    uint8_t t = c->mem_r8(node + 0xB);
+    if (t >= 33) continue;                                   // out of jump-table range -> render nothing
+    uint32_t tgt = c->mem_r32(AUX_BCF4_TABLE + t * 4);
+    if (tgt == AUX_BCF4_SKIP) continue;                      // skip/default
+    extern int g_pkt_track; extern uint32_t g_pkt_lo, g_pkt_hi;
+    g_pkt_track = 1; g_pkt_lo = 0xFFFFFFFFu; g_pkt_hi = 0;
+    aux_bcf4_case(c, node, tgt);                             // per-type renderer (guest content)
+    g_pkt_track = 0;
+    if (g_pkt_hi > g_pkt_lo) gpu_obj_depth_add(c, g_pkt_lo, g_pkt_hi, proj_pz_to_ord(object_world_view_depth(c, node)));
+  }
+}
+
+// --- 8003BF00 -------------------------------------------------------------------------------------
+// SNAPSHOT-QUEUE walk (own queue), same swap prologue but type range <32.
+//   swap_flag 0x1F800136, live list_ptr 0x1F800154, live count 0x1F80015C, snap_count 0x1F80015E,
+//   read cursor 0x1F800158; list base const 0x800F2738; jump table 0x80014D38 (32 entries, type<32).
+//   Liveness node+1!=0; type node+0xb.
+// Jump-table case bodies (a0=node), decoded from 0x8003BFAC..0x8003C028 (0x8003C028 = skip/continue):
+//   idx 0,15 (0x8003BFAC): rec_dispatch 0x8003CCA4
+//   idx 16   (0x8003BFBC): rec_dispatch 0x8003C2D4
+//   idx 17   (0x8003BFCC): rec_dispatch 0x8003C464
+//   idx 18   (0x8003BFDC): rec_dispatch 0x8003C5F8
+//   idx 19   (0x8003BFEC): rec_dispatch 0x8003C788
+//   idx 31   (0x8003BFFC): g=*0x800BF870; ==20 -> 0x8010FC70; else -> 0x8004CC88
+#define AUX_BF00_SWAP    0x1F800136u
+#define AUX_BF00_LISTPTR 0x1F800154u
+#define AUX_BF00_CURSOR  0x1F800158u
+#define AUX_BF00_LIVECNT 0x1F80015Cu
+#define AUX_BF00_SNAPCNT 0x1F80015Eu
+#define AUX_BF00_BASE    0x800F2738u
+#define AUX_BF00_TABLE   0x80014D38u
+#define AUX_BF00_SKIP    0x8003C028u
+
+static void aux_bf00_case(Core* c, uint32_t node, uint32_t tgt) {
+  switch (tgt) {
+    case 0x8003BFACu: c->r[4] = node; rec_dispatch(c, 0x8003CCA4u); break;
+    case 0x8003BFBCu: c->r[4] = node; rec_dispatch(c, 0x8003C2D4u); break;
+    case 0x8003BFCCu: c->r[4] = node; rec_dispatch(c, 0x8003C464u); break;
+    case 0x8003BFDCu: c->r[4] = node; rec_dispatch(c, 0x8003C5F8u); break;
+    case 0x8003BFECu: c->r[4] = node; rec_dispatch(c, 0x8003C788u); break;
+    case 0x8003BFFCu: { uint8_t g = c->mem_r8(G_RENDER_MODE);
+                        c->r[4] = node; rec_dispatch(c, g == 20 ? 0x8010FC70u : 0x8004CC88u); break; }
+    default: break;   // 0x8003C028 = skip/default: render nothing
+  }
+}
+
+void ov_rwalk_aux_bf00(Core* c) {
+  if (c->mem_r8(AUX_BF00_SWAP) == 0) {             // queue double-buffer swap (only when swap_flag==0)
+    uint16_t cnt = c->mem_r16(AUX_BF00_LIVECNT);
+    uint32_t lst = c->mem_r32(AUX_BF00_LISTPTR);
+    c->mem_w16(AUX_BF00_LIVECNT, 0);
+    c->mem_w32(AUX_BF00_LISTPTR, AUX_BF00_BASE);
+    c->mem_w16(AUX_BF00_SNAPCNT, cnt);
+    c->mem_w32(AUX_BF00_CURSOR, lst);
+  }
+  int16_t count = (int16_t)c->mem_r16(AUX_BF00_SNAPCNT);
+  uint32_t cursor = c->mem_r32(AUX_BF00_CURSOR);
+  while (count != 0) {
+    uint32_t node = c->mem_r32(cursor);
+    cursor += 4;
+    count--;
+    if (c->mem_r8(node + 1) == 0) continue;                  // not live
+    uint8_t t = c->mem_r8(node + 0xB);
+    if (t >= 32) continue;                                   // out of jump-table range -> render nothing
+    uint32_t tgt = c->mem_r32(AUX_BF00_TABLE + t * 4);
+    if (tgt == AUX_BF00_SKIP) continue;                      // skip/default
+    extern int g_pkt_track; extern uint32_t g_pkt_lo, g_pkt_hi;
+    g_pkt_track = 1; g_pkt_lo = 0xFFFFFFFFu; g_pkt_hi = 0;
+    aux_bf00_case(c, node, tgt);                             // per-type renderer (guest content)
+    g_pkt_track = 0;
+    if (g_pkt_hi > g_pkt_lo) gpu_obj_depth_add(c, g_pkt_lo, g_pkt_hi, proj_pz_to_ord(object_world_view_depth(c, node)));
+  }
+}
+
+// --- 8003EEC0 -------------------------------------------------------------------------------------
+// LINKED-LIST walk (NOT a snapshot queue): head = *0x800F2738 (the same list base 8003BF00 enqueues
+// into), next = node+36 (captured BEFORE dispatch), liveness node+1!=0, type node+0xb (<33), jump
+// table 0x80015000 (33 entries). Has NO swap prologue.
+// Jump-table case bodies (a0=node), decoded from 0x8003EF20..0x8003EF78 (0x8003EF78 = skip/advance):
+//   idx 0,15 (0x8003EF20): rec_dispatch 0x8003CCA4
+//   idx 1    (0x8003EF30): rec_dispatch 0x8003CCA4, then rec_dispatch 0x8003B704
+//   idx 16   (0x8003EF40): rec_dispatch 0x8003C2D4, then IF node[2]==1 rec_dispatch 0x8003B704
+//   idx 32   (0x8003EF68): node[0x18] indirect (if nonzero)
+#define AUX_EEC0_HEAD    0x800F2738u
+#define AUX_EEC0_TABLE   0x80015000u
+#define AUX_EEC0_SKIP    0x8003EF78u
+
+static void aux_eec0_case(Core* c, uint32_t node, uint32_t tgt) {
+  switch (tgt) {
+    case 0x8003EF20u: c->r[4] = node; rec_dispatch(c, 0x8003CCA4u); break;
+    case 0x8003EF30u: c->r[4] = node; rec_dispatch(c, 0x8003CCA4u);
+                      c->r[4] = node; rec_dispatch(c, 0x8003B704u); break;
+    case 0x8003EF40u: { c->r[4] = node; rec_dispatch(c, 0x8003C2D4u);
+                        if (c->mem_r8(node + 2) == 1) { c->r[4] = node; rec_dispatch(c, 0x8003B704u); } break; }
+    case 0x8003EF68u: { uint32_t fn = c->mem_r32(node + 0x18); if (fn) { c->r[4] = node; rec_dispatch(c, fn); } break; }
+    default: break;   // 0x8003EF78 = skip/default: render nothing
+  }
+}
+
+void ov_rwalk_aux_eec0(Core* c) {
+  uint32_t node = c->mem_r32(AUX_EEC0_HEAD);
+  while (node) {
+    uint32_t next = c->mem_r32(node + 36);                   // captured before dispatch (recomp s1)
+    if (c->mem_r8(node + 1) != 0) {
+      uint8_t t = c->mem_r8(node + 0xB);
+      if (t < 33) {
+        uint32_t tgt = c->mem_r32(AUX_EEC0_TABLE + t * 4);
+        if (tgt != AUX_EEC0_SKIP) {
+          extern int g_pkt_track; extern uint32_t g_pkt_lo, g_pkt_hi;
+          g_pkt_track = 1; g_pkt_lo = 0xFFFFFFFFu; g_pkt_hi = 0;
+          aux_eec0_case(c, node, tgt);                       // per-type renderer (guest content)
+          g_pkt_track = 0;
+          if (g_pkt_hi > g_pkt_lo) gpu_obj_depth_add(c, g_pkt_lo, g_pkt_hi, proj_pz_to_ord(object_world_view_depth(c, node)));
+        }
+      }
+    }
+    node = next;
+  }
+}
+
 // NATIVE field TERRAIN renderer — gen_func_8002AB5C (later-135). The render fn (node+24) of the field's
 // t32 render-list node: the bulk map/terrain geometry. Interpreted-only (reached via fn-ptr; seeded into
 // the RE set). Decoded from the recomp body — it is structurally the per-object flush specialised for the

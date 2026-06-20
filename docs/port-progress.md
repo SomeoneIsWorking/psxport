@@ -78,9 +78,15 @@ for content fns (call it). Do NOT mimic PSX hardware (GTE/GP0/OT) — remove Bee
   - ✅ `FUN_80050a0c` frame-state init = `eng_init_framestate` (engine_init.cpp).
   - ✅ `FUN_800509b4` display + GTE projection = `eng_init_display` (engine_init.cpp).
   - ✅ `FUN_80050a80` camera init = `eng_init_camera` (engine_init.cpp).
-  - ☐ `FUN_80075130` **font / text system init** (ENGINE — front-end UI dependency). DEFERRED: 8 of 14 callees
-    are LIBGPU (draw-env setup) with indirect calls → the later-182b nested-dispatch divergence risk; own its
-    3 engine-state callees (FUN_800963a0/80096370/800752b4) + memsets later, keep the libgpu callees dispatched.
+  - ✅ `FUN_80075130` **font / text system init** = `ov_font_init` (engine_font.cpp) — ORCHESTRATION + direct
+    writes + the 3 engine-state callees OWNED PC-native; the 8 LIBGPU/sound callees KEPT as `rec_dispatch`
+    in-context (later-182b nested-dispatch risk). Owned: `ov_font_bank_select` (FUN_800963a0, store
+    0x80105cec), `ov_font_bank2_store` (FUN_80096370, store 0x80105d28), `ov_font_glyphclass_fill`
+    (FUN_800752b4, 24-entry table @0x800be238+8), plus the direct writes (0x800bed78/bed80, 0x800be358 +
+    14× sh loop @0x800be3d6.., the sp+16 FntOpen struct, 0x800be22a/b). Mirrors the sp-48 frame so the
+    dispatched FntOpen (0x80098330/0x80098d30) reads its struct at sp+16. VERIFIED: called directly from
+    native_boot (replaces rc0); boot dump (run 2) main-RAM + scratchpad 0-diff vs scratch/bin/initref.bin.
+    Registered in game_tomba2.cpp (orchestrator + 3 callees) for any other dispatcher.
   - ◐ `FUN_800520e0` **engine subsystem init** = `eng_init_subsystems` (engine_init.cpp) — ORCHESTRATION owned
     PC-native (later-183): the 6 direct engine-flag writes (*0x800bf4fa=0xffff, *0x800ecf4a/4c/4d/4e/4f=0) +
     the 4-callee sequence. Boot A/B (frame 50) main-RAM + scratchpad 0-diff. Callee descent:
@@ -145,6 +151,11 @@ for content fns (call it). Do NOT mimic PSX hardware (GTE/GP0/OT) — remove Bee
   - ☐ per-MODE orchestrators `FUN_8006e0f0` / `FUN_8006e228` / `FUN_8006e3f4` (call the smoothers; multi-mode).
 - ✅ Terrain `FUN_8002AB5C` = `ov_terrain` (native_terrain.cpp, later-158).
 - ✅ Render submit: geom GT3/GT4/gt4_bp, per-object render `0x8003CCA4`, render walk `0x8003C048` — engine_submit.
+- ✅ AUXILIARY render walks `0x8003BCF4` / `0x8003BF00` / `0x8003EEC0` = `ov_rwalk_aux_*` (engine_submit.cpp,
+  issue #4): faithful per-node lift of each recomp body + per-node `gpu_obj_depth_add(world-pos depth)` so
+  flame/rope/effect billboards occlude by real world depth (was: flat 2D band → drew over foliage). Field
+  verified safe (renders intact, ndepth obj_depth spans 3→5 = the 2 aux queues now contribute). The FLAME
+  occlusion itself awaits the flame-hut scene + USER eyeball (not headless-reachable yet).
 - ✅ Render ORDERING: engine RenderQueue owns VISIBILITY (3D = real D32 depth buffer; 2D = enumeration order).
   Prims enumerated in OT LINK order (later-178) — NOT to honor PSX visibility (engine owns that) but to apply
   GP0 STATE (E1 texpage/E2 texwindow) in DRAW order so each 2D sprite binds the right texpage. later-172's
@@ -212,8 +223,8 @@ ties into render-ownership, NOT the asset pipeline). (Camera sub-fns below are D
    Overlay disasm via `tools/disas.py <addr> --ram scratch/bin/tomba2/ram_menu.bin` (added later-181).
 3. **Init-prefix remainder:** `FUN_800520e0` engine subsystem init — ORCHESTRATION OWNED (later-183,
    eng_init_subsystems, boot A/B 0-diff); NEXT = descend into its 4 callees (8007b328/80088b00/80086620/87a60).
-   `FUN_80075130` font/text init — DEFERRED (libgpu-heavy, later-182b nested-dispatch risk; own only its 3
-   engine-state callees + memsets, keep libgpu dispatched).
+   `FUN_80075130` font/text init — ✅ DONE (ov_font_init, engine_font.cpp; 3 engine callees + memsets owned,
+   libgpu callees kept dispatched in-context; boot run-2 0-diff vs initref.bin). See §A.
 
 # OPEN / BLOCKED (not on the critical path)
 - **ov_game_s4c verification** needs an in-game AREA transition (sm[0x4a]==2). Free-roam IS reachable headless

@@ -52,6 +52,65 @@ spawning**, the **main menu** (DEMO stage state machine @0x801062E4), font/text 
 subsystem init (800520e0), and a real PC-native single display env (replace FUN_80050738). Each: `disas.py`
 the fn, understand the data, reimplement PC-native in `engine/`, keep the PSX-content interface state exact.
 
+### FUN_80075130 font / text init (`ov_font_init`, engine/engine_font.cpp)
+Init-prefix slot (called from ov_game_main). No args, no return. Frame: `addiu sp,-48; sw ra,40(sp)`;
+epilogue `lw ra,40(sp); addiu sp,48; jr ra`. The body sets a handful of engine-state fields directly and
+orchestrates **14 callees in order**. SCOPE: own the orchestration + direct writes + the 3 ENGINE-STATE
+callees; KEEP the 8 libgpu/libgs/sound callees as `rec_dispatch` IN-CONTEXT (they do indirect draw-env /
+FntLoad/FntOpen setup — later-182b nested-dispatch risk). Two of the kept callees (`0x80098330`,
+`0x80098d30`) read a struct that FUN_80075130 builds on **its own stack frame** at sp+16, so the native
+orchestrator MUST allocate the same sp-48 frame and populate sp+16..sp+26 before dispatching them, and pass
+`a0 = sp+16`. Callees in execution order (✦ = keep dispatched / libgpu-sound, ★ = own native):
+
+| # | callee | a0 / args | role | class |
+|---|--------|-----------|------|-------|
+| 1 | 0x8008e040 | — | sound/libgs/lib init (calls 80085b20, 80096a70 SPU, 80098de0(7), 8008dfa0) | ✦ dispatch |
+| 2 | **0x800963a0** | a0=24 | font-bank selector: clamp & store byte | ★ own |
+| 3 | **0x80096370** | a0=0 | font-bank2 store byte | ★ own |
+| 4 | 0x80098f90 | a0=0, a1=0xffffff | libgs colour/clut setup | ✦ dispatch |
+| 5 | 0x80091d70 | a0=1 | libgs/draw-env (calls 80086604) | ✦ dispatch |
+| 6 | 0x80091b50 | a0=0x800be3d8, a1=14, a2=1 | libgs init over a 14-elem table | ✦ dispatch |
+| 7 | 0x80090700 | a0=127, a1=127 (a1=a0 in delay slot) | libgs alloc/register | ✦ dispatch |
+| 8 | 0x80090980 | — | libgs flush/finish | ✦ dispatch |
+| 9 | **0x800752b4** | a0=2 | font glyph-class table fill (24 entries @0x800be238+8) | ★ own |
+| 10 | 0x80098ce0 | a0=1 | libgs FntFlush-ish (returns into sp+26) | ✦ dispatch |
+| 11 | 0x80098330 | a0=sp+16 (struct) | libgs FntOpen (reads sp+16 struct → 0x800ac5a0/a8) | ✦ dispatch |
+| 12 | 0x80098150 | a0=1 | libgs FntLoad-ish | ✦ dispatch |
+| 13 | 0x80098d30 | a0=sp+16 (struct) | libgs (reads *(sp+16)) | ✦ dispatch |
+| 14 | 0x80098db0 | a0=1, a1=0xffffff | libgs colour 204/205 | ✦ dispatch |
+
+**Direct writes in FUN_80075130 itself (own these natively, in this exact order relative to callees):**
+- after #8: `*0x800bed78 = 0` (sw, 4b); then call #9; in #9's delay slot `*0x800bed80 = -1` (sh, 2b)
+  — i.e. write 0x800bed80=0xffff(sh) right after the #9 call returns.
+- `*0x800be358 = 0` (sw, 4b) [once], then a 14-iteration loop `sh 0` at addrs
+  0x800be3d6,3ce,3c6,3be,3b6,3ae,3a6,39e,396,38e,386,37e,376,36e (v1 starts 0x800be3d0, store v1+6,
+  v1-=8, counter 13→-1 = 14 stores).
+- stack struct (consumed by dispatched #11/#13): `*(sp+16)=7`(sw), `*(sp+20)=258`(sw), `*(sp+24)=16384`(sh),
+  `*(sp+26)=16384`(sh) — note sp+26 stores the SAME v0=16384 (it is the value set at 800751e8, NOT a return).
+- after #14: `*0x800be22a = 0` (sb), `*0x800be22b = 0` (sb).  (base 0x800be1f8 + 50/51.)
+
+**Callee #2 FUN_800963a0** — a0=font index. `v0=(a0-1)&0xff; if(v0 < 24){ *0x80105cec(sb)=a0; return
+(a0<<24)>>24 (sign-extend low byte) }` else `return -1`. At call (a0=24): (24-1)&0xff=23 < 24 → store
+0x80105cec=24, return 24. No sub-calls.
+
+**Callee #3 FUN_80096370** — `*0x80105d28(sb)=a0; jr ra`. (a0=0 here → store 0, no return value set —
+leaf, v0 untouched.) No sub-calls.
+
+**Callee #9 FUN_800752b4** — a0=2 (the glyph "class" being assigned). Iterates `i = 0..23` (24 entries),
+base a1=0x800be238, per-entry stride 12 (`(i*3)<<2`), writes byte at entry+8 (sb). Thresholds derived from
+a0: t1=24-a0=22, t0=16-a0=14, a3=12-a0=10, a4=8-a0=6. The branch test is `slt(v1<thr)` with `bne` that
+branches AWAY when the test is TRUE, so the FALL-THROUGH (test false, i.e. v1>=thr) sets the value:
+```
+if      (i >= 22) entry.b8 = 4;    // not(i<22)
+else if (i >= 14) entry.b8 = 1;    // not(i<14)
+else if (i >= 10) entry.b8 = 3;    // not(i<10)
+else if (i >=  6) entry.b8 = 2;    // not(i<6)
+else              entry.b8 = 0;    // i<6
+```
+So for a0=2: i 0..5 →0, 6..9 →2, 10..13 →3, 14..21 →1, 22..23 →4. The cascade is exclusive (first matching
+branch `j`s to the loop tail 0x80075388). Returns count in v0 but the caller IGNORES it (the sh v0=-1 to
+0x800bed80 happened in the call's DELAY SLOT, before the function ran). Only writes 0x800be238+i*12+8.
+
 ## DEMO / front-end MENU stage state machine @0x801062E4 — RE map (later-181)
 The title/attract/menu front-end. Lives in the **DEMO overlay** (loaded at base 0x80106228, like GAME.BIN
 — they ALIAS the same 0x80106xxx addresses, so the same jump-table address holds DIFFERENT entries per
