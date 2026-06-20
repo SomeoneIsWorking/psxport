@@ -470,6 +470,73 @@ static void ov_cam_angle_step_verify(Core* c) {
   if (!bad && (ngood++ % 200) == 0) fprintf(stderr, "[anglestepverify] match #%d (cam+34=%08x)\n", ngood, camO[0x0d]);
 }
 
+// ─────────────────────────────────────────────────────────────────────────────────────────────────
+// FUN_8006c80c — camera-Y FLOOR clamp (sub-fn of orchestrator FUN_8006e0f0). Clamps the integer
+// camera-Y at scratchpad 0x1f8000e2 to a per-render-mode limit. a0=cam is UNUSED (reads globals only).
+// Selector = mem_r8(0x800bf870)-1 dispatched through a 13-entry jump table @0x80016874 — only modes
+// 1,4,6,10,13 clamp; every other mode returns untouched. Output: SCRATCHPAD 0x1f8000e2 (sh), so the
+// main-RAM A/B dump is BLIND — camverify must diff scratchpad. NO trig / NO sub-calls.
+// (shard_6.c gen_func_8006C80C; branch SENSES transcribed line-for-line — some arms write on Y<N via
+//  `beq`, others write on Y>=N via `bne`; the constant set in the delay slot is the value written.)
+static void ov_cam_y_floor(Core* c) {
+  uint8_t mode1 = c->mem_r8(0x800bf870u);
+  uint32_t idx = (uint32_t)(uint8_t)(mode1 - 1);
+  if (idx >= 13) return;                               // sltiu v1,13 guard
+  const uint32_t YA = 0x1f8000e2u;
+  int32_t Y = (int16_t)c->mem_r16(YA);
+  switch (idx) {
+    case 0:                                            // mode1=1 (0x8006c844): beq → write when Y<-10140
+      if (Y < -10140) c->mem_w16(YA, (uint16_t)(int16_t)-10140);
+      break;
+    case 3: {                                          // mode1=4 (0x8006c868)
+      if (c->mem_r8(0x800bf871u) == 7) {
+        if ((int16_t)c->mem_r16(0x800e7eb6u) < 6800) {
+          if (Y < -7299) {                             // bne → L_8006C8B8 with r2=(Y<-6499)
+            if (!(Y < -6499)) c->mem_w16(YA, (uint16_t)(int16_t)-6500);  // (dead: Y<-7299 ⇒ Y<-6499)
+          } else {
+            c->mem_w16(YA, (uint16_t)(int16_t)-7300);  // fall-through: Y >= -7299
+          }
+        }
+        // g7eb6 >= 6800 → no clamp (beq → RET)
+      } else {                                         // !=7 → L_8006C8C8: bne → write when Y>=-6599
+        if (!(Y < -6599)) c->mem_w16(YA, (uint16_t)(int16_t)-6600);
+      }
+      break;
+    }
+    case 5:                                            // mode1=6 (0x8006c8e8): both arms beq → write when Y<N
+      if (c->mem_r8(0x1f800207u) == 14) {
+        if (Y < -7200) c->mem_w16(YA, (uint16_t)(int16_t)-7200);
+      } else {
+        if (Y < -9200) c->mem_w16(YA, (uint16_t)(int16_t)-9200);
+      }
+      break;
+    case 9:                                            // mode1=10 (0x8006c93c): beq → write when Y<-2160
+      if (Y < -2160) c->mem_w16(YA, (uint16_t)(int16_t)-2160);
+      break;
+    case 12:                                           // mode1=13 (0x8006c960): bne → write when Y>=-1399
+      if (!(Y < -1399)) c->mem_w16(YA, (uint16_t)(int16_t)-1400);
+      break;
+    default:                                           // modes 2,3,5,7,8,9,11,12 → no clamp
+      break;
+  }
+}
+// PSXPORT_DEBUG=camverify — per-call A/B gate. Output is SCRATCHPAD, so snapshot+diff the full scratchpad.
+static void ov_cam_y_floor_verify(Core* c) {
+  uint32_t sp0[256], rsave[32];
+  for (int i = 0; i < 256; i++) sp0[i] = c->mem_r32(0x1f800000u + i * 4);
+  memcpy(rsave, c->r, sizeof rsave);
+  ov_cam_y_floor(c);
+  uint32_t spM[256]; for (int i = 0; i < 256; i++) spM[i] = c->mem_r32(0x1f800000u + i * 4);
+  for (int i = 0; i < 256; i++) c->mem_w32(0x1f800000u + i * 4, sp0[i]);
+  memcpy(c->r, rsave, sizeof rsave);
+  rec_interp(c, 0x8006c80cu);
+  uint32_t spO[256]; for (int i = 0; i < 256; i++) spO[i] = c->mem_r32(0x1f800000u + i * 4);
+  static int nbad = 0, ngood = 0; int bad = 0;
+  for (int i = 0; i < 256; i++) if (spM[i] != spO[i]) { bad = 1;
+    if (nbad++ < 60) fprintf(stderr, "[yfloorverify] MISMATCH sp+0x%03x mine=%08x oracle=%08x\n", i * 4, spM[i], spO[i]); }
+  if (!bad && (ngood++ % 200) == 0) fprintf(stderr, "[yfloorverify] match #%d (y=%04x)\n", ngood, c->mem_r16(0x1f8000e2u));
+}
+
 void engine_camera_register(void) {
   rec_set_override(0x8006d960u, ov_cam_track_xz);     // per-frame camera X/Z follow (engine_re "Camera")
   rec_set_override(0x8006da54u, ov_cam_track_y);      // per-frame camera Y follow
@@ -479,4 +546,6 @@ void engine_camera_register(void) {
                    cfg_dbg("camverify") ? ov_cam_dist_solve_verify : ov_cam_dist_solve);  // dist/zoom solver
   rec_set_override(0x8006e010u,
                    cfg_dbg("camverify") ? ov_cam_angle_step_verify : ov_cam_angle_step);  // cam[+0x34] angle step
+  rec_set_override(0x8006c80cu,
+                   cfg_dbg("camverify") ? ov_cam_y_floor_verify : ov_cam_y_floor);        // cam-Y floor clamp
 }
