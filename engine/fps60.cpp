@@ -536,7 +536,7 @@ void Fps60State::rq_capture(const RqItem* items, int n) {
 
 int Fps60State::build_lerp() {
   if (!s_rqLerp) s_rqLerp = new RqItem[FPS60_RQ_MAX];
-  static int gate = -1; if (gate < 0) { const char* g = cfg_str("PSXPORT_FPS60_GATE"); gate = g ? atoi(g) : 64; }
+  const int gate = 64;   // max per-prim centroid motion (px) to still interpolate; beyond = teleport/cut -> snap
   std::unordered_multimap<uint64_t, int> pmap;            // prev prims indexed by fingerprint
   pmap.reserve((size_t)s_nPrev * 2 + 16);
   for (int j = 0; j < s_nPrev; j++) pmap.insert({ rq_fp(&s_rqPrev[j]), j });
@@ -603,6 +603,8 @@ void fps60_cap_line(Core* core, int op, int x0, int y0, int x1, int y1, int r, i
 void fps60_frame_commit(Core* core) { core->game->fps60.frame_commit(core); }
 
 void fps60_init(void) {
-  g_fps60_on = cfg_on("PSXPORT_FPS60") ? 1 : 0;
-  if (g_fps60_on) fprintf(stderr, "[fps60] enabled (rate detect + object join)\n");
+  // 60fps is toggled in the F1 overlay (persisted to psxport_settings.ini via mods); g_fps60_on is loaded
+  // by mods_init BEFORE this runs. NO env gate (user directive): do not read PSXPORT_FPS60 — that would
+  // clobber the persisted overlay setting. Just report the loaded state.
+  if (g_fps60_on) fprintf(stderr, "[fps60] interpolated 60fps ON (overlay)\n");
 }
