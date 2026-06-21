@@ -6753,3 +6753,47 @@ control flow + object/child-node memory writes with two dispatched callees.
   the 2 dispatched callees run in BOTH passes and leave transient residue below entry sp (FUN_80040410's own
   48-byte frame is also dead there) → the gate excludes the top-of-RAM stack window [sp-0x800, sp), far above
   all game data. Live (non-verify) field run: Tomba walks normally, no crash, reaches stage 0x8010637C.
+
+### later-203 — FUN_80040558 `ov_sm40558` owned (per-object STATE-MACHINE HEAD — the dispatcher above child40410)
+Owned `FUN_80040558` PC-native in `engine/game_tomba2.cpp` — the per-object state machine whose state-0
+handler calls the just-owned child-spawn FUN_80040410 (later-202). Owning the HEAD advances the whole
+behavior family (higher leverage than the isolated leaf). a0 = obj; returns void. NO GTE, NO render packets;
+pure control flow + object byte/halfword writes + global/scratchpad READS, with EVERY `jal` (24 distinct
+sub-behaviors, incl. overlay code 0x80114xxx/0x80120xxx/0x8012xxxx) kept PSX via rec_dispatch.
+- **RE** (`tools/disas.py 0x80040558`, full 1280-byte body disassembled past the jump-table `jr v0` traps;
+  three inner jump tables dumped from MAIN.EXE: 0x800152e0 state-0/obj[5]==1 ×8, 0x80015300 state-1/obj[5]
+  ×6, 0x80015318 state-1/obj[94] ×8, 0x80015338 state-2/obj[5] ×5). Dispatch on the state byte obj[4]:
+  - **STATE 3** (@a40): jal 0x8007a624(obj); return.
+  - **STATE 0** (@5ac): sub-dispatch on obj[5]. obj[5]==0 (@5cc): v0=jal 0x80040410(obj, a1=obj[3]); if
+    v0!=0 → obj[5]++; then ALWAYS sh obj[128]=64, obj[130]=128, obj[132]=obj[134]=150, sb obj[41]=obj[43]=
+    obj[95]=obj[70]=0. obj[5]==1 (@620): v1=obj[94]; v1<8 → jt 0x800152e0 (jal one of 0x8003fbc4/fc00/
+    0x801286f4/-/0x8003fc78/0x80120188/0x8003fc8c/0x801146e8; entries 0-5 force v0=1, 6/7 take the callee's
+    v0 and @6b8 returns early if v0==0), else v0=1 (@6c0); @6c4 sb obj[4]=obj[0]=v0, sb obj[5]=obj[41]=0.
+  - **STATE 1** (@6d8): early-out gates on *0x800bf870 (==18 needs *0x800bfa59!=0; ==19 returns if
+    *0x800bf871==19). @720 obj[5] sub-dispatch (jt 0x80015300, jal 0x8003fd10/fed8/ffcc/0x4022c/0x40390/
+    0x80114934). @7a8 obj[94] sub-dispatch (jt 0x80015318: [0,1,3,4,6]→@7e0, [2]→@888, [5]→@8c0, [7]→@7d8
+    =@7e0 prefixed by jal 0x8012b118). @7e0: if *0x800bf816!=0 && *0x800bf817==(s16)obj[106] && (obj[40]&
+    0x80) → sb obj[1]=1, jal 0x80077e7c, jal 0x800517f8; else @834: if obj[40]&0x80 → done; else v0=jal
+    (*0x800bf870==8 ? 0x8012e168 : 0x8007778c); if v0!=0 → jal 0x800517f8. @888: v0=u8 *(*obj[16]+1); sb
+    obj[1]=v0; if v0!=0 → jal 0x8012866c, jal 0x80077e7c. @8c0: jal 0x801201e0. All paths sb obj[41]=0.
+  - **STATE 2** (@8d4): obj[5] sub-dispatch (jt 0x80015338: [1]→@904, [2]→jal 0x8003fe00, [3]→jal 0x8003fed8,
+    [0]/[4]→@964). @904: if obj[3]==0 && *0x800bfad1==0 → jal 0x80040b48(a0=56); if obj[94]==2 → *(*obj[16]+
+    94)=1. @964: if obj[94]==2 → sb obj[1]=u8 *(*obj[16]+1), jal 0x8012866c, jal 0x80077e7c; else @99c mirrors
+    state-1's @7e0..@834 tail (same global checks + jal 0x8012e168/0x8007778c + jal 0x800517f8).
+- **Ownership**: control flow + every memory write native; all 24 callees stay PSX via rec_dispatch.
+- **VERIFIED** with the full RAM+scratchpad A/B gate `sm40558` (native run → snapshot+rollback → rec_super_call
+  → diff full RAM 0x200000 + scratchpad 0x400; void return, no v0): **0-diff over 11200+ live field calls**
+  (press right 250 + press left 250). A transient state histogram (built with -DSM40558_HIST, then reverted)
+  confirmed this seaside scene drives **state 0 (28 calls, the spawn-init path) + state 1 (~11000 calls, the
+  hot active-behavior path)**; states 2 and 3 do NOT fire here (rarer transition/special paths), so they are
+  transcribed-from-disasm and will verify the moment a scene drives them (same posture as scriptvm/gridstep's
+  rare branches — the gate-off live path runs the identical code, so any state-2/3 slip surfaces under the
+  gate). GOTCHA (same family as child40410/grid/scriptvm): every dispatched callee runs in BOTH A/B passes
+  and leaves transient residue below entry sp (FUN_80040558's own 24-byte frame is dead there) → the gate
+  excludes [sp-0x800, sp), far above all game data. GOTCHAs caught while RE'ing: (1) state-0 obj[5]==1 entries
+  6/7 take the callee's return as v0 and @6b8 returns WITHOUT writing obj[4]/[5]/[0]/[41] when v0==0 — entries
+  0-5 force v0=1 and never early-return; (2) state-1 jt 0x80015318[7]→0x800407d8 is the SAME block as [0,1,3,
+  4,6]→0x800407e0, only PREFIXED by jal 0x8012b118 (the prefix is the only difference, so obj[94]==7 alone
+  runs that callee); (3) the obj[817]==obj[106] compare is against the SIGN-EXTENDED s16 lh obj[106].
+  Live (non-verify) field run with the override active: Tomba walks normally — master X 0x0F640000→0x17704900
+  holding right, no crash, reaches stage 0x8010637C.

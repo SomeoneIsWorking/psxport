@@ -233,6 +233,26 @@ for content fns (call it). Do NOT mimic PSX hardware (GTE/GP0/OT) — remove Bee
   full scratchpad 0x400 + v0). GOTCHA (same family as grid/scriptvm): the 2 dispatched callees run in BOTH
   passes and leave transient residue below entry sp (FUN_80040410's own 48-byte frame is also dead there) →
   gate excludes [sp-0x800, sp), far above all game data. Registered in game_tomba2.cpp.
+- ✅ **later-203 — `FUN_80040558` `ov_sm40558` (per-object STATE-MACHINE HEAD — the dispatcher whose state-0
+  handler calls the just-owned child-spawn FUN_80040410; owning the HEAD advances the whole behavior family).**
+  a0=obj, void return. NO GTE, NO render packets — pure control flow + object byte/halfword writes + global/
+  scratchpad reads, with EVERY `jal` (24 distinct sub-behaviors incl. overlay 0x80114xxx/0x80120xxx/0x8012xxxx)
+  kept PSX via rec_dispatch. Dispatch on the state byte obj[4]: 0/1/2/3. **STATE 0** = spawn-init (calls owned
+  FUN_80040410, sets up obj fields + an obj[5]/obj[94] sub-machine). **STATE 1** = the hot active-behavior path
+  (obj[5] jt 0x80015300 + obj[94] jt 0x80015318 with the @7e0/@834/@888/@8c0 tails, gated on globals
+  0x800bf870/816/817). **STATE 2** = a transition machine (obj[5] jt 0x80015338). **STATE 3** = jal 0x8007a624.
+  Three inner jump tables dumped from MAIN.EXE; full RE in journal later-203. Control flow + every memory write
+  owned native; all 24 callees stay PSX via rec_dispatch. Verified with the full RAM+scratchpad A/B gate
+  `sm40558`: **0-diff over 11200+ live field calls** (press right 250 + press left 250). Coverage (via a
+  transient -DSM40558_HIST histogram, since reverted): this seaside scene drives state 0 (28×, spawn-init) +
+  state 1 (~11000×, hot path) — states 2/3 do NOT fire here (rarer transition/special paths) and are
+  transcribed-from-disasm, verifying the moment a scene drives them (same posture as scriptvm/gridstep rare
+  branches). GOTCHAs caught while RE'ing: state-0 obj[5]==1 entries 6/7 take the callee's v0 and early-return
+  WITHOUT the obj[4]/[5]/[0]/[41] writes when v0==0 (entries 0-5 force v0=1); jt 0x80015318[7]→@7d8 is the
+  same block as [0,1,3,4,6]→@7e0 only PREFIXED by jal 0x8012b118; the *0x800bf817==obj[106] test is vs the
+  SIGN-EXTENDED s16 lh. Same-family gate exclusion [sp-0x800, sp) (dispatched callees + this fn's 24-byte frame
+  dead below entry sp). Live (gate-off) run: Tomba walks normally (master X 0x0F640000→0x17704900 holding
+  right), reaches stage 0x8010637C. Registered in game_tomba2.cpp.
 - ✅ **later-196 — `FUN_8004CE14` `ov_script_vm_4ce14` (per-object SCRIPT-VM tick — THE most-called field
   fn, ~14900 calls/run).** First CONTENT state machine owned after the boundary removal. Dispatch on state
   byte obj[4]: 2→no-op; 3→jal 0x8007A624; >3→no-op; 0→ if global 0x800BF873!=0 set obj[4]=3 & return, else

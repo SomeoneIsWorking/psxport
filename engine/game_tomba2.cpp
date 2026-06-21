@@ -795,6 +795,245 @@ void ov_child_spawn_40410(Core* c) {
   } else if (++ng % 10 == 0) fprintf(stderr, "[child40410] %ld matches\n", ng);
 }
 
+// FUN_80040558 — per-object STATE-MACHINE HEAD (the dispatcher whose state-0 handler calls the just-owned
+// child-spawn FUN_80040410; owning the head advances the whole behavior family). a0 = obj. Pure control
+// flow + object byte/halfword writes + global/scratchpad reads; NO GTE, NO render packets. Every `jal` is
+// a sub-behavior kept PSX via rec_dispatch (each honors its own override identically in the super-call
+// path). Dispatch on the state byte obj[4]: 0 / 1 / 2 / 3 / else.
+//   STATE 3 (@a40): jal 0x8007a624(obj); return.
+//   STATE 0 (@5ac): sub-dispatch on obj[5]:
+//     obj[5]==0 (@5cc): v0 = jal 0x80040410(obj, a1=obj[3]); if v0!=0 -> obj[5]++; then ALWAYS:
+//        sh obj[128]=64, sh obj[130]=128, sb obj[41]=0, sb obj[43]=0, sb obj[95]=0,
+//        sh obj[132]=150, sh obj[134]=150, sb obj[70]=0; return.  (the +64 in obj[128] comes from the
+//        delay-slot constant whether or not obj[5] was bumped).
+//     obj[5]==1 (@620): v1=obj[94]; if v1<8 -> jump table 0x800152e0[v1], else v0=1 (@6c0).
+//        jt[0]@650 jal 0x8003fbc4; v0=1.   jt[1]@660 jal 0x8003fc00; v0=1.
+//        jt[2]@670 jal 0x801286f4; v0=1.   jt[3]@6c0 v0=1.   jt[4]@680 jal 0x8003fc78; v0=1.
+//        jt[5]@690 jal 0x80120188; v0=1.   jt[6]@6a0 jal 0x8003fc8c; v0=ret. jt[7]@6b0 jal 0x801146e8; v0=ret.
+//        @6b8: if v0==0 return; @6c4: sb obj[4]=v0, sb obj[5]=0, sb obj[0]=v0, sb obj[41]=0; return.
+//     else: return.
+//   STATE 1 (@6d8): g870=*0x800bf870; if g870==18 { if *0x800bfa59==0 return; } else if g870==19 { if
+//      *0x800bf871==19 return; }. Then @720: v1=obj[5]; if v1<6 -> jt 0x80015300[v1] (jal one of
+//      0x8003fd10/fed8/ffcc/4022c/40390/0x80114934), else fall to @7a8.
+//      @7a8: v1=obj[94]; if v1<8 -> jt 0x80015318[v1], else @8c8. jt: [0,1,3,4,6]->@7e0, [2]->@888,
+//      [5]->@8c0, [7]->@7d8 (=@7e0 prefixed by jal 0x8012b118).
+//        @7e0: if *0x800bf816!=0 && *0x800bf817==obj[106](s16) && (obj[40]&0x80) { sb obj[1]=1;
+//              jal 0x80077e7c(obj); goto @878 } else goto @834.
+//        @834: if (obj[40]&0x80) goto @8c8; else if *0x800bf870==8 v0=jal 0x8012e168(obj) else
+//              v0=jal 0x8007778c(obj); if v0==0 goto @8c8; @878 jal 0x800517f8(obj); sb obj[41]=0; return.
+//        @888: v0=*(*obj[16] + 1)(u8); sb obj[1]=v0; if (v0&0xff)==0 goto @8c8; else jal 0x8012866c(obj),
+//              jal 0x80077e7c(obj); sb obj[41]=0; return.
+//        @8c0: jal 0x801201e0(obj); (fall to @8c8).   @8c8: sb obj[41]=0; return.
+//   STATE 2 (@8d4): v1=obj[5]; if v1<5 -> jt 0x80015338[v1], else @964.
+//      jt[0]/jt[4]=@964, jt[1]=@904, jt[2]=@94c (jal 0x8003fe00), jt[3]=@95c (jal 0x8003fed8 -> @964).
+//        @904: if obj[3]==0 && *0x800bfad1==0 -> jal 0x80040b48(a0=56); @92c: if obj[94]==2 { v1b=*obj[16];
+//              sb *(v1b+94)=1; } goto @964.
+//        @964: if obj[94]==2 { v0=*(*obj[16]+1)(u8); sb obj[1]=v0; jal 0x8012866c(obj); jal 0x80077e7c(obj);
+//              return } else @99c (mirrors state-1's @7e0..tail with the same global checks +
+//              jal 0x8012e168/0x8007778c + jal 0x800517f8, sb obj[1]=1 path).
+// `sm40558` gate = full RAM+scratchpad A/B vs rec_super_call (same family rationale as child40410: every
+// dispatched callee runs in BOTH passes leaving residue below entry sp, and this fn's own 24-byte frame is
+// dead there on return -> exclude [sp-0x800, sp), far above all game data).
+static void sm40558(Core* c) {
+  const uint32_t obj = c->r[4];
+  const uint32_t G = 0x800BF870u;                 // global block base (0x800bf870 = mode byte)
+  uint32_t st = c->mem_r8(obj + 4);
+
+  if (st == 3) { c->r[4] = obj; rec_dispatch(c, 0x8007A624u); return; }
+
+  if (st == 0) {
+    uint32_t s5 = c->mem_r8(obj + 5);
+    if (s5 == 0) {
+      c->r[4] = obj; c->r[5] = c->mem_r8(obj + 3);
+      rec_dispatch(c, 0x80040410u);
+      if (c->r[2] != 0) c->mem_w8(obj + 5, (uint8_t)(c->mem_r8(obj + 5) + 1));
+      c->mem_w16(obj + 128, 64);
+      c->mem_w16(obj + 130, 128);
+      c->mem_w8 (obj + 41, 0);
+      c->mem_w8 (obj + 43, 0);
+      c->mem_w8 (obj + 95, 0);
+      c->mem_w16(obj + 132, 150);
+      c->mem_w16(obj + 134, 150);
+      c->mem_w8 (obj + 70, 0);
+      return;
+    }
+    if (s5 == 1) {
+      uint32_t v94 = c->mem_r8(obj + 94);
+      uint32_t v0;
+      switch (v94) {
+        case 0: c->r[4]=obj; rec_dispatch(c, 0x8003FBC4u); v0=1; break;
+        case 1: c->r[4]=obj; rec_dispatch(c, 0x8003FC00u); v0=1; break;
+        case 2: c->r[4]=obj; rec_dispatch(c, 0x801286F4u); v0=1; break;
+        case 3: v0=1; break;
+        case 4: c->r[4]=obj; rec_dispatch(c, 0x8003FC78u); v0=1; break;
+        case 5: c->r[4]=obj; rec_dispatch(c, 0x80120188u); v0=1; break;
+        case 6: c->r[4]=obj; rec_dispatch(c, 0x8003FC8Cu); v0=c->r[2]; break;
+        case 7: c->r[4]=obj; rec_dispatch(c, 0x801146E8u); v0=c->r[2]; break;
+        default: v0=1; break;                    // v94>=8 -> @6c0 (v0=1)
+      }
+      if (v94 == 6 || v94 == 7) { if (v0 == 0) return; }   // @6b8 (only the ret-valued blocks gate here)
+      c->mem_w8(obj + 4, (uint8_t)v0);
+      c->mem_w8(obj + 5, 0);
+      c->mem_w8(obj + 0, (uint8_t)v0);
+      c->mem_w8(obj + 41, 0);
+      return;
+    }
+    return;                                       // obj[5] other -> @a48
+  }
+
+  if (st == 1) {
+    uint32_t g870 = c->mem_r8(G + 0);
+    if (g870 == 18) { if (c->mem_r8(0x800BFA59u) == 0) return; }
+    else if (g870 == 19) { if (c->mem_r8(G + 1) == 19) return; }
+    // @720: obj[5] sub-dispatch (jt 0x80015300, 6 entries)
+    uint32_t s5 = c->mem_r8(obj + 5);
+    if (s5 < 6) {
+      static const uint32_t JT1[6] = { 0x8003FD10u, 0x8003FED8u, 0x8003FFCCu, 0x8004022Cu, 0x80040390u, 0x80114934u };
+      c->r[4] = obj; rec_dispatch(c, JT1[s5]);
+    }
+    // @7a8: obj[94] sub-dispatch (jt 0x80015318, 8 entries)
+    uint32_t v94 = c->mem_r8(obj + 94);
+    int go888 = 0, go8c0 = 0;                      // selected tail block
+    if (v94 < 8) {
+      if (v94 == 7) { c->r[4] = obj; rec_dispatch(c, 0x8012B118u); }   // @7d8 prefix
+      if (v94 == 2) go888 = 1;
+      else if (v94 == 5) go8c0 = 1;
+      // else (0,1,3,4,6,7) -> the @7e0 common block
+    } else {
+      // v94 >= 8 -> @8c8
+      c->mem_w8(obj + 41, 0);
+      return;
+    }
+    if (go888) {
+      // @888
+      uint32_t p = c->mem_r32(obj + 16);
+      uint32_t v0 = c->mem_r8(p + 1);
+      c->mem_w8(obj + 1, (uint8_t)v0);
+      if ((v0 & 0xff) == 0) { c->mem_w8(obj + 41, 0); return; }        // @8c8
+      c->r[4]=obj; rec_dispatch(c, 0x8012866Cu);
+      c->r[4]=obj; rec_dispatch(c, 0x80077E7Cu);
+      c->mem_w8(obj + 41, 0);
+      return;
+    }
+    if (go8c0) {
+      // @8c0
+      c->r[4]=obj; rec_dispatch(c, 0x801201E0u);
+      c->mem_w8(obj + 41, 0);                       // fall to @8c8
+      return;
+    }
+    // @7e0 common block
+    if (c->mem_r8(0x800BF816u) != 0
+        && c->mem_r8(0x800BF817u) == (uint32_t)(uint16_t)(int16_t)c->mem_r16(obj + 106)) {
+      if (c->mem_r8(obj + 40) & 0x80) {
+        c->mem_w8(obj + 1, 1);
+        c->r[4]=obj; rec_dispatch(c, 0x80077E7Cu);
+        // @878
+        c->r[4]=obj; rec_dispatch(c, 0x800517F8u);
+        c->mem_w8(obj + 41, 0);
+        return;
+      }
+      // (obj[40]&0x80)==0 -> @8c8
+      c->mem_w8(obj + 41, 0);
+      return;
+    }
+    // @834 (g816==0, or obj[817]!=obj[106])
+    if (c->mem_r8(obj + 40) & 0x80) { c->mem_w8(obj + 41, 0); return; }   // @8c8
+    {
+      uint32_t v0;
+      if (c->mem_r8(G + 0) == 8) { c->r[4]=obj; rec_dispatch(c, 0x8012E168u); v0=c->r[2]; }
+      else                        { c->r[4]=obj; rec_dispatch(c, 0x8007778Cu); v0=c->r[2]; }
+      if (v0 == 0) { c->mem_w8(obj + 41, 0); return; }                    // @8c8
+      // @878
+      c->r[4]=obj; rec_dispatch(c, 0x800517F8u);
+      c->mem_w8(obj + 41, 0);
+      return;
+    }
+  }
+
+  if (st == 2) {
+    uint32_t s5 = c->mem_r8(obj + 5);
+    if (s5 < 5) {
+      // jt 0x80015338: [0]/[4]=@964, [1]=@904, [2]=@94c, [3]=@95c
+      if (s5 == 1) {
+        // @904
+        if (c->mem_r8(obj + 3) == 0 && c->mem_r8(0x800BFAD1u) == 0) { c->r[4] = 56; rec_dispatch(c, 0x80040B48u); }
+        // @92c
+        if (c->mem_r8(obj + 94) == 2) {
+          uint32_t v1b = c->mem_r32(obj + 16);
+          c->mem_w8(v1b + 94, 1);
+        }
+        // fall to @964
+      } else if (s5 == 2) {
+        c->r[4]=obj; rec_dispatch(c, 0x8003FE00u);    // @94c -> @964
+      } else if (s5 == 3) {
+        c->r[4]=obj; rec_dispatch(c, 0x8003FED8u);    // @95c -> @964
+      }
+      // s5==0 or 4 -> @964 directly
+    }
+    // @964
+    if (c->mem_r8(obj + 94) == 2) {
+      uint32_t p = c->mem_r32(obj + 16);
+      uint32_t v0 = c->mem_r8(p + 1);
+      c->mem_w8(obj + 1, (uint8_t)v0);
+      c->r[4]=obj; rec_dispatch(c, 0x8012866Cu);
+      c->r[4]=obj; rec_dispatch(c, 0x80077E7Cu);
+      return;
+    }
+    // @99c: mirror of state-1 @7e0..tail (global checks + cull/transform), with obj fields
+    if (c->mem_r8(0x800BF816u) != 0
+        && c->mem_r8(0x800BF817u) == (uint32_t)(uint16_t)(int16_t)c->mem_r16(obj + 106)) {
+      if (c->mem_r8(obj + 40) & 0x80) {
+        c->mem_w8(obj + 1, 1);
+        c->r[4]=obj; rec_dispatch(c, 0x80077E7Cu);
+        // @a30
+        c->r[4]=obj; rec_dispatch(c, 0x800517F8u);
+        return;
+      }
+      return;                                         // (obj[40]&0x80)==0 -> @a48
+    }
+    // @9ec
+    if (c->mem_r8(obj + 40) & 0x80) return;           // @a48
+    {
+      uint32_t v0;
+      if (c->mem_r8(G + 0) == 8) { c->r[4]=obj; rec_dispatch(c, 0x8012E168u); v0=c->r[2]; }
+      else                        { c->r[4]=obj; rec_dispatch(c, 0x8007778Cu); v0=c->r[2]; }
+      if (v0 == 0) return;                            // @a48
+      // @a30
+      c->r[4]=obj; rec_dispatch(c, 0x800517F8u);
+      return;
+    }
+  }
+
+  // st other (>3) -> @a48
+}
+
+void ov_sm40558(Core* c) {
+  static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("sm40558") ? 1 : 0;
+  if (!s_v) { sm40558(c); return; }
+  static uint8_t* ram0 = (uint8_t*)malloc(0x200000);
+  static uint8_t* ramN = (uint8_t*)malloc(0x200000);
+  uint8_t spad0[0x400], spadN[0x400];
+  uint32_t regs0[32]; memcpy(regs0, c->r, sizeof regs0);
+  uint32_t obj = c->r[4];
+  memcpy(ram0, c->ram, 0x200000); memcpy(spad0, c->scratch, 0x400);
+  sm40558(c);
+  memcpy(ramN, c->ram, 0x200000); memcpy(spadN, c->scratch, 0x400);
+  memcpy(c->ram, ram0, 0x200000); memcpy(c->scratch, spad0, 0x400); memcpy(c->r, regs0, sizeof regs0);
+  rec_super_call(c, 0x80040558u);
+  // Same family rationale as child40410/gridresolve: every dispatched callee runs in BOTH passes and leaves
+  // transient residue in its own stack frame below entry sp; FUN_80040558's own 24-byte frame is also dead
+  // below sp on return. Exclude [sp-0x800, sp) (sp ~0x1FE9xx, RAM end 0x200000 — far above all game data;
+  // a real divergence alters persistent state below). This fn returns void (no v0 to compare).
+  uint32_t sp = regs0[29] & 0x1FFFFFu, flo = (sp >= 0x800) ? sp - 0x800 : 0;
+  int ro = -1; for (uint32_t a = 0; a < 0x200000; a++) if (c->ram[a] != ramN[a] && !(a >= flo && a < sp)) { ro = (int)a; break; }
+  int so = -1; for (uint32_t a = 0; a < 0x400; a++) if (c->scratch[a] != spadN[a]) { so = (int)a; break; }
+  static long ng = 0, nb = 0;
+  if (ro >= 0 || so >= 0) {
+    if (nb++ < 40) fprintf(stderr, "[sm40558] MISMATCH obj=%08x st=%d s5=%d v94=%d ram@%x spad@%x sp=%x\n",
+                           obj, c->mem_r8(obj+4), c->mem_r8(obj+5), c->mem_r8(obj+94), ro, so, sp);
+  } else if (++ng % 200 == 0) fprintf(stderr, "[sm40558] %ld matches\n", ng);
+}
+
 // FUN_8004CE14 — per-object SCRIPT-VM tick (the MOST-CALLED field function, ~14900 calls/run). a0 = obj.
 // Dispatches on the state byte obj[4]: 2 -> no-op; 3 -> jal 0x8007A624(obj); >3 -> no-op; 0 -> if the
 // global enable byte 0x800BF873!=0 set obj[4]=3 & return, else INIT (obj[4]=1, obj[0]=1, load the per-obj
@@ -1765,6 +2004,7 @@ void games_tomba2_init(void) {
     { void ov_player_move(Core*); rec_set_override(0x80056B48u, ov_player_move); }
     { void ov_anim_vm_76d68(Core*); rec_set_override(0x80076D68u, ov_anim_vm_76d68); }  // per-object animation-sequence VM stepper (control flow owned; 3 frame sub-fns dispatched)
     { void ov_child_spawn_40410(Core*); rec_set_override(0x80040410u, ov_child_spawn_40410); }  // per-object child-node spawn/sub-object builder (control flow owned; allocator+setup dispatched)
+    { void ov_sm40558(Core*); rec_set_override(0x80040558u, ov_sm40558); }  // per-object state-machine head (control flow owned; all sub-behaviors dispatched)
   }
   // PC-native LEVEL/STAGE LOADER (engine/engine_level.cpp): the engine's overlay loader FUN_800450bc —
   // load a stage's overlay off the disc + set its entry, synchronous (no PSX CD-wait yield).
