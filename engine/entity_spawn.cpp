@@ -362,6 +362,81 @@ void ov_replace_dispatch(Core* c) {
   } else if (++ng % 20 == 0) fprintf(stderr, "[replacedispverify] %ld matches\n", ng);
 }
 
+// FUN_8007A624 — the DESPAWN primitive (the inverse of spawn): unlink a node from its active list, clear
+// its high state bit, return it to its pool's free-list, and deactivate it. RE'd from disas 0x8007A624 +
+// the 5 free handlers 0x8007a718..0x8007a7a8 (each pushes the node to a pool free-list + bumps the count,
+// then falls into the shared epilogue at 0x8007a7d0 that clears node[+0]/[+4]). Steps:
+//   (1) UNLINK from the active doubly-linked list (standard removal w/ head/tail fixup). The head/tail vars
+//       are picked list-0 vs ANY-nonzero (list!=0 uses list-1's head/tail) — verbatim recomp quirk; it only
+//       matters when the freed node is AT a list end (interior removal uses the prev/next pointers only).
+//   (2) node[+0x28] &= 0x7f  (clear the high bit)
+//   (3) cls = node[+0x28] & 0xff; if (cls < 5): push node onto pool[cls] free-list (node->next = *head;
+//       *head = node; cnt++); class 4 also calls the cleanup FUN_8007ADDC(node) (kept content via dispatch).
+//   (4) EPILOGUE (all classes incl. cls>=5): node[+0] = 0; node[+4] = 0  (deactivate).
+// The 5 pool descriptors are exactly the spawn-side free-lists (pool0/2 + the three variants).
+static const PoolDesc DESPAWN_POOL[5] = {
+  { 0x800E8098u, 0x800E7E7Cu },   // class 0 (FUN_80079C3C pool-208)
+  { 0x800E80A0u, 0x800E7E7Du },   // class 1 (FUN_80079DDC pool-2)
+  { 0x800F2398u, 0x800ED8CCu },   // class 2 (FUN_80079F90)
+  { 0x800ED8D4u, 0x800ED8C5u },   // class 3 (FUN_8007A12C)
+  { 0x800ED8D0u, 0x800ED8C4u },   // class 4 (FUN_8007A2C8) + cleanup 0x8007ADDC
+};
+static void despawn(Core* c) {
+  uint32_t node = c->r[4];
+  // (1) unlink. head/tail: list 0 -> list-0 vars, ANY nonzero list -> list-1 vars (verbatim).
+  uint32_t list = c->mem_r8(node + 0x0au);
+  uint32_t head = (list == 0) ? LIST_HEAD[0] : LIST_HEAD[1];
+  uint32_t tail = (list == 0) ? LIST_TAIL[0] : LIST_TAIL[1];
+  uint32_t prev = c->mem_r32(node + 32);
+  uint32_t next = c->mem_r32(node + 36);
+  if (prev != 0) c->mem_w32(prev + 36, next);            // prev->next = next
+  else { c->mem_w32(head, next); if (next != 0) c->mem_w32(next + 32, 0); }   // *head = next; new head->prev = 0
+  if (next != 0) c->mem_w32(next + 32, prev);            // next->prev = prev
+  else { c->mem_w32(tail, prev); if (prev != 0) c->mem_w32(prev + 36, 0); }   // *tail = prev; new tail->next = 0
+  // (2) clear high bit, (3) free-push by class
+  uint32_t v = c->mem_r8(node + 0x28) & 0x7fu;
+  c->mem_w8(node + 0x28, (uint8_t)v);
+  uint32_t cls = v & 0xffu;
+  if (cls < 5) {
+    const PoolDesc& p = DESPAWN_POOL[cls];
+    c->mem_w32(node + 36, c->mem_r32(p.free_head));      // node->next = *free_head
+    c->mem_w32(p.free_head, node);                        // *free_head = node
+    c->mem_w8(p.cnt, (uint8_t)(c->mem_r8(p.cnt) + 1));    // cnt++
+    if (cls == 4) { c->r[4] = node; rec_dispatch(c, 0x8007ADDCu); }   // pool-4 extra cleanup (content)
+  }
+  // (4) epilogue (0x8007a7d0): deactivate — zero the node header words 0/4/8/c/10/14/18/38 (covers active
+  // byte +0, state +4, list-id +0x0a and type +0x0c) + the bytes +0x29/+0x2a/+0x2b/+0x5e. The free-list link
+  // (+0x24) is deliberately NOT cleared (it must survive in the free-list). Verbatim recomp.
+  const uint32_t zw[] = { 0, 4, 8, 0xc, 0x10, 0x14, 0x18, 0x38 };
+  for (uint32_t o : zw) c->mem_w32(node + o, 0);
+  c->mem_w8(node + 0x2a, 0);
+  c->mem_w8(node + 0x2b, 0);
+  c->mem_w8(node + 0x29, 0);
+  c->mem_w8(node + 0x5e, 0);
+}
+void ov_despawn(Core* c) {
+  static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("despawnverify") ? 1 : 0;
+  if (!s_v) { despawn(c); return; }
+  static uint8_t* ram0 = (uint8_t*)malloc(0x200000);
+  static uint8_t* ramN = (uint8_t*)malloc(0x200000);
+  uint8_t spad0[0x400], spadN[0x400];
+  uint32_t regs0[32]; memcpy(regs0, c->r, sizeof regs0);
+  uint32_t a0 = c->r[4];
+  memcpy(ram0, c->ram, 0x200000); memcpy(spad0, c->scratch, 0x400);
+  despawn(c);
+  memcpy(ramN, c->ram, 0x200000); memcpy(spadN, c->scratch, 0x400);
+  memcpy(c->ram, ram0, 0x200000); memcpy(c->scratch, spad0, 0x400); memcpy(c->r, regs0, sizeof regs0);
+  rec_super_call(c, 0x8007A624u);
+  uint32_t sp = regs0[29] & 0x1FFFFFu, flo = (sp >= 0x800) ? sp - 0x800 : 0;
+  int ro = -1; for (uint32_t a = 0; a < 0x200000; a++) if (c->ram[a] != ramN[a] && !(a >= flo && a < sp)) { ro = (int)a; break; }
+  int so = -1; for (uint32_t a = 0; a < 0x400; a++) if (c->scratch[a] != spadN[a]) { so = (int)a; break; }
+  static long ng = 0, nb = 0;
+  if (ro >= 0 || so >= 0) {
+    if (nb++ < 40) fprintf(stderr, "[despawnverify] MISMATCH node=%08x list=%u ram@%x spad@%x sp=%x\n",
+                           a0, c->mem_r8(a0 + 0x0au), ro, so, sp);
+  } else if (++ng % 20 == 0) fprintf(stderr, "[despawnverify] %ld matches\n", ng);
+}
+
 // ------------------------------------------------------------------------------------------------
 // Public registration — ONE line from game_tomba2.cpp init.
 // ------------------------------------------------------------------------------------------------
@@ -373,4 +448,5 @@ void entity_spawn_register(void) {
   rec_set_override(0x8007A2C8u, ov_spawn_var4);     // FUN_8007A2C8 spawn variant — pool var4 (class 4, empty->0)
   rec_set_override(0x8007A980u, ov_spawn_dispatch); // FUN_8007A980 per-type spawn dispatcher (entry point)
   rec_set_override(0x8007AA38u, ov_replace_dispatch); // FUN_8007AA38 spawn-relative-to-object dispatcher
+  rec_set_override(0x8007A624u, ov_despawn);          // FUN_8007A624 despawn (unlink + free-list push + deactivate)
 }
