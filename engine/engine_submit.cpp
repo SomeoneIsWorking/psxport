@@ -28,6 +28,48 @@
 
 void rec_super_call(Core*, uint32_t);   // interpret the original PSX body (A/B oracle / super-call)
 
+// ---------------------------------------------------------------------------------------------------
+// NESTING-SAFE packet-pool span tracking (issue #4 — ropes/flames drew over terrain).
+//
+// Per-object depth tagging captures the address span an object's renderer writes into the packet pool
+// (g_pkt_track/g_pkt_lo/g_pkt_hi in mem.cpp), then stamps it with the object's world depth. The three
+// globals are ONE shared session, so the sessions did NOT nest. The rope/flame objects are rendered by
+// an aux walk (BCF4) whose per-type renderer (overlay fn 0x801341E8 / 0x80136748) INTERNALLY dispatches
+// the universal per-object render command 0x8003F698 (ov_render_cmd) for the SAME node. ov_render_cmd
+// opened its own session and, on exit, reset g_pkt_track=0 — so the rope's own quads, emitted by the
+// renderer AFTER that inner dispatch (via the per-quad submitter 0x8003B320 into 0x800C0xxx), were
+// written with tracking OFF. They got NO span, missed obj_depth_lookup at the OT walk, and fell to the
+// flat 2D OVERLAY band — drawing over the terrain/foliage. (Diagnosed live at tp 11647 -1597 2352:
+// idx-1 PRE track=1 -> inner ov_render_cmd -> POST track=0; 63/73 2D prims MISS.)
+//
+// Fix: a session SAVES the outer session's state on open and, on close, RESTORES it while MERGING its own
+// [lo,hi) into the outer's. The inner ov_render_cmd still publishes its own span, but tracking resumes
+// for the OUTER (rope-walk) session, so the outer's final gpu_obj_depth_add covers ALL of the object's
+// packets — the flush quads AND the rope segment quads — with the object's world depth. Nesting now works
+// for every span-tracking site (this is the general fix, not a rope special-case).
+struct PktSpanSession {
+  int outer_track; uint32_t outer_lo, outer_hi;
+  PktSpanSession() {
+    extern int g_pkt_track; extern uint32_t g_pkt_lo, g_pkt_hi;
+    outer_track = g_pkt_track; outer_lo = g_pkt_lo; outer_hi = g_pkt_hi;
+    g_pkt_track = 1; g_pkt_lo = 0xFFFFFFFFu; g_pkt_hi = 0;
+  }
+  // Close the session: returns 1 + fills lo/hi if this session captured a non-empty span (caller does the
+  // gpu_obj_depth_add with its own ord). Restores + merges into the outer session.
+  int close(uint32_t* lo, uint32_t* hi) {
+    extern int g_pkt_track; extern uint32_t g_pkt_lo, g_pkt_hi;
+    uint32_t my_lo = g_pkt_lo, my_hi = g_pkt_hi;
+    g_pkt_track = outer_track;                                   // resume the OUTER session (key fix)
+    g_pkt_lo = outer_lo; g_pkt_hi = outer_hi;
+    if (my_hi > my_lo) {                                          // merge my writes into the outer span
+      if (my_lo < g_pkt_lo) g_pkt_lo = my_lo;
+      if (my_hi > g_pkt_hi) g_pkt_hi = my_hi;
+      if (lo) *lo = my_lo; if (hi) *hi = my_hi; return 1;
+    }
+    return 0;
+  }
+};
+
 #define COL_MASK     0xFFF0F0F0u   // low-nibble-per-byte clear applied to RGB words (matches the GPU)
 
 
@@ -133,14 +175,17 @@ void ov_render_cmd(Core* c) {
   float ord = proj_obj_center_ord();                 // object depth from the live composed transform
   // Capture the packet-pool address span this command's renderer writes (the pool POINTER doesn't move for
   // the overlay variants, so track the actual stores), and tag it with the object's world-position depth.
-  extern int g_pkt_track; extern uint32_t g_pkt_lo, g_pkt_hi;
-  g_pkt_track = 1; g_pkt_lo = 0xFFFFFFFFu; g_pkt_hi = 0;
+  // NESTING-SAFE: this command is often dispatched from WITHIN an outer object-render session (e.g. the
+  // rope/flame renderer calls back here for the same node). The session restores + merges into the outer
+  // on close, so the outer walk keeps tracking the object's remaining quads (issue #4).
+  uint32_t slo, shi; PktSpanSession sess;
   render_cmd_dispatch(c);                             // native dispatch (was rec_super_call(0x8003F698) — the ~4%)
-  g_pkt_track = 0;
-  if (g_pkt_hi > g_pkt_lo) gpu_obj_depth_add(c, g_pkt_lo, g_pkt_hi, ord);
-  if (cfg_dbg("objz") && probe_frame_ok(c) && g_pkt_hi > g_pkt_lo)
-    fprintf(stderr, "[rcmddep] mode=%02x span %08x->%08x (%dB) ord=%.4f\n",
-            c->mem_r8(0x800BF870u), g_pkt_lo, g_pkt_hi, (int)(g_pkt_hi - g_pkt_lo), (double)ord);
+  if (sess.close(&slo, &shi)) {
+    gpu_obj_depth_add(c, slo, shi, ord);
+    if (cfg_dbg("objz") && probe_frame_ok(c))
+      fprintf(stderr, "[rcmddep] mode=%02x span %08x->%08x (%dB) ord=%.4f\n",
+              c->mem_r8(0x800BF870u), slo, shi, (int)(shi - slo), (double)ord);
+  }
 }
 
 // PSXPORT_DEBUG=enq — ENQUEUE tap (later-131 NEXT). The render-command PUSH gen_func_80077EBC appends its a0
@@ -638,12 +683,10 @@ static void submit_perobj_render(Core* c) {
   // Tag the packet-pool span this object renders into with its PC-native WORLD-POSITION depth, so its 2D
   // billboard prims (apple quad, etc.) occlude by real depth at the deferred OT walk. (g_pkt_track records
   // the actual store range — the pool POINTER doesn't move for these renderers.)
-  extern int g_pkt_track; extern uint32_t g_pkt_lo, g_pkt_hi;
-  g_pkt_track = 1; g_pkt_lo = 0xFFFFFFFFu; g_pkt_hi = 0;
+  uint32_t slo, shi; PktSpanSession sess;
   if (tgt == 0x8003CD00u) { c->r[4] = node; c->r[5] = flag; submit_perobj_flush(c); }  // flush-only (native)
   else                    { rec_super_call(c, 0x8003CCA4u); }                          // secondary-effect case
-  g_pkt_track = 0;
-  if (g_pkt_hi > g_pkt_lo) gpu_obj_depth_add(c, g_pkt_lo, g_pkt_hi, proj_pz_to_ord(object_world_view_depth(c, node)));
+  if (sess.close(&slo, &shi)) gpu_obj_depth_add(c, slo, shi, proj_pz_to_ord(object_world_view_depth(c, node)));
 }
 void ov_perobj_render(Core* c) {
   submit_perobj_render(c);
@@ -690,11 +733,9 @@ static void submit_render_walk(Core* c) {
         else {
           // default case: the node's own render fn (node+24) — e.g. a collectable's billboard-quad drawer.
           // Tag the packet span it produces with the object's PC-native world-position depth.
-          extern int g_pkt_track; extern uint32_t g_pkt_lo, g_pkt_hi;
-          g_pkt_track = 1; g_pkt_lo = 0xFFFFFFFFu; g_pkt_hi = 0;
+          uint32_t slo, shi; PktSpanSession sess;
           c->r[4] = n; rec_dispatch(c, c->mem_r32(n + 24));
-          g_pkt_track = 0;
-          if (g_pkt_hi > g_pkt_lo) gpu_obj_depth_add(c, g_pkt_lo, g_pkt_hi, proj_pz_to_ord(object_world_view_depth(c, n)));
+          if (sess.close(&slo, &shi)) gpu_obj_depth_add(c, slo, shi, proj_pz_to_ord(object_world_view_depth(c, n)));
         }
       }
     }
@@ -716,11 +757,9 @@ void ov_render_walk(Core* c) {
 float proj_obj_center_ord(void);
 void ov_collectable_quad(Core* c) {
   float ord = proj_obj_center_ord();                 // object-center depth from the live composed transform
-  extern int g_pkt_track; extern uint32_t g_pkt_lo, g_pkt_hi;
-  g_pkt_track = 1; g_pkt_lo = 0xFFFFFFFFu; g_pkt_hi = 0;
+  uint32_t slo, shi; PktSpanSession sess;
   rec_super_call(c, 0x8003C8F4u);
-  g_pkt_track = 0;
-  if (g_pkt_hi > g_pkt_lo) gpu_obj_depth_add(c, g_pkt_lo, g_pkt_hi, ord);   // g_pkt_lo/hi already KSEG
+  if (sess.close(&slo, &shi)) gpu_obj_depth_add(c, slo, shi, ord);   // slo/shi already KSEG
 }
 
 // ===================================================================================================
@@ -798,11 +837,9 @@ static void submit_render_walk_snapshot(Core* c) {
     if (tgt == 0x8003BCD0u) continue;                        // default/skip case
     // Render the object, tagging the packet-pool span it produces with its PC-native world-position depth
     // so its 2D billboard prims (collectable quads, etc.) occlude for real at the deferred OT walk.
-    extern int g_pkt_track; extern uint32_t g_pkt_lo, g_pkt_hi;
-    g_pkt_track = 1; g_pkt_lo = 0xFFFFFFFFu; g_pkt_hi = 0;
+    uint32_t slo, shi; PktSpanSession sess;
     rq_dispatch_case(c, node, tgt);                          // run the object's per-type renderer (guest content)
-    g_pkt_track = 0;
-    if (g_pkt_hi > g_pkt_lo) gpu_obj_depth_add(c, g_pkt_lo, g_pkt_hi, proj_pz_to_ord(object_world_view_depth(c, node)));
+    if (sess.close(&slo, &shi)) gpu_obj_depth_add(c, slo, shi, proj_pz_to_ord(object_world_view_depth(c, node)));
   }
 }
 
@@ -901,11 +938,9 @@ void ov_rwalk_aux_bcf4(Core* c) {
     if (t >= 33) continue;                                   // out of jump-table range -> render nothing
     uint32_t tgt = c->mem_r32(AUX_BCF4_TABLE + t * 4);
     if (tgt == AUX_BCF4_SKIP) continue;                      // skip/default
-    extern int g_pkt_track; extern uint32_t g_pkt_lo, g_pkt_hi;
-    g_pkt_track = 1; g_pkt_lo = 0xFFFFFFFFu; g_pkt_hi = 0;
+    uint32_t slo, shi; PktSpanSession sess;
     aux_bcf4_case(c, node, tgt);                             // per-type renderer (guest content)
-    g_pkt_track = 0;
-    if (g_pkt_hi > g_pkt_lo) gpu_obj_depth_add(c, g_pkt_lo, g_pkt_hi, proj_pz_to_ord(object_world_view_depth(c, node)));
+    if (sess.close(&slo, &shi)) gpu_obj_depth_add(c, slo, shi, proj_pz_to_ord(object_world_view_depth(c, node)));
   }
 }
 
@@ -963,11 +998,9 @@ void ov_rwalk_aux_bf00(Core* c) {
     if (t >= 32) continue;                                   // out of jump-table range -> render nothing
     uint32_t tgt = c->mem_r32(AUX_BF00_TABLE + t * 4);
     if (tgt == AUX_BF00_SKIP) continue;                      // skip/default
-    extern int g_pkt_track; extern uint32_t g_pkt_lo, g_pkt_hi;
-    g_pkt_track = 1; g_pkt_lo = 0xFFFFFFFFu; g_pkt_hi = 0;
+    uint32_t slo, shi; PktSpanSession sess;
     aux_bf00_case(c, node, tgt);                             // per-type renderer (guest content)
-    g_pkt_track = 0;
-    if (g_pkt_hi > g_pkt_lo) gpu_obj_depth_add(c, g_pkt_lo, g_pkt_hi, proj_pz_to_ord(object_world_view_depth(c, node)));
+    if (sess.close(&slo, &shi)) gpu_obj_depth_add(c, slo, shi, proj_pz_to_ord(object_world_view_depth(c, node)));
   }
 }
 
@@ -1005,11 +1038,9 @@ void ov_rwalk_aux_eec0(Core* c) {
       if (t < 33) {
         uint32_t tgt = c->mem_r32(AUX_EEC0_TABLE + t * 4);
         if (tgt != AUX_EEC0_SKIP) {
-          extern int g_pkt_track; extern uint32_t g_pkt_lo, g_pkt_hi;
-          g_pkt_track = 1; g_pkt_lo = 0xFFFFFFFFu; g_pkt_hi = 0;
+          uint32_t slo, shi; PktSpanSession sess;
           aux_eec0_case(c, node, tgt);                       // per-type renderer (guest content)
-          g_pkt_track = 0;
-          if (g_pkt_hi > g_pkt_lo) gpu_obj_depth_add(c, g_pkt_lo, g_pkt_hi, proj_pz_to_ord(object_world_view_depth(c, node)));
+          if (sess.close(&slo, &shi)) gpu_obj_depth_add(c, slo, shi, proj_pz_to_ord(object_world_view_depth(c, node)));
         }
       }
     }
