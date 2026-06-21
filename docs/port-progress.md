@@ -501,6 +501,38 @@ for content fns (call it). Do NOT mimic PSX hardware (GTE/GP0/OT) — remove Bee
 - ⬛ Still-linked Beetle: `gte.c` (GTE — used by the still-PSX cull NCLIP + content collision; goes when those
   callers are ported), `mdec.c` (FMV), `spu.c`. These vanish only by porting their CALLERS, never by re-emulating.
 
+## G. Save / Load FLOW  (engine/save.cpp)
+- ✅ `FUN_80036DFC` save/load-flow HEAD dispatcher = `ov_save_dispatch` (engine/save.cpp, `save_register()`).
+  The save system is a 6-state machine whose body is the active save-menu task's handler; this is the FLOW
+  HEAD reached from the title "Load Game" / pause-menu "Load data". RE: reads SUBSTATE = task[1] (a0=task),
+  bounds `<6`, dispatches via the handler table `0x80010668` → `jr table[substate]` (a TAIL-CALL; the page
+  handler unwinds the dispatcher's 0x30 frame itself). s1=task, s0=`0x800D1E68` save-context struct. Handlers
+  (table 0x80010668): [0] 0x80036E48 LOAD-SELECT, [1] 0x80036E58 LOAD-RUN (slot nav), [2] 0x800371D4
+  SAVE-CONFIRM, [3] 0x80037360 SAVE-EXECUTE (sets flags 0x800BF809/0A/0B/3A + kicks writers), [4] 0x800375E0
+  FORMAT, [5] 0x80037638 DELETE; substate≥6 = no-op return (epilogue 0x800376D4). The dispatcher does NO work
+  beyond the bounds-check + table resolution + tail-call → owned native; the page handlers + the libmcrd card
+  I/O LEAF stay PSX (the card frame R/W B0:0x4E/0x4F + SwCARD completion are PLATFORM, already native in
+  runtime/recomp/memcard.cpp). Same shape as ov_render_cmd / ov_disp_26c88.
+  - **No discrete game-side SERIALIZE/DESERIALIZE fn exists in this title:** the save data IS the live game
+    progress block; persistence is done by libmcrd writing/reading card frames directly through the BIOS file
+    API (open/read/write via 0xB0/0xA0 BIOS-call trampolines) — that whole path is library/PLATFORM, reached
+    only through trampolines (no direct game-code jal into it), already owned by memcard.cpp's HLE. So the
+    ENGINE-ownable save/load LOGIC here is precisely this FLOW state machine. (Evidence: file-API stubs
+    0x800808B8/C8/D8/E8/F8 have ZERO direct jal callers; libmcrd internals FUN_8009Bxxx/8009Cxxx are reached
+    via 0xB0 trampolines; the SAVE-EXECUTE handler 0x80037360 contains only flag writes + sub-calls, no bulk
+    game-RAM→buffer copy.)
+  - **VERIFY:** `saveverify` REPL channel = a NON-DESTRUCTIVE dispatch-decision gate (the page handlers can
+    YIELD across frames — SAVE-EXECUTE commits the card write over multiple frames — so a double-running
+    snapshot/rollback/super-call A/B is UNSAFE; the gate instead confirms the native body resolves the same
+    handler the recomp `jr table[substate]` reads, by construction identical, and that the override FIRES at
+    sane substates; the handler then runs exactly ONCE). **EXERCISE COVERAGE: the dispatcher is NOT reliably
+    reachable headless** — its only trigger is interactive title/pause menu navigation into the file flow,
+    which docs/driving-the-game.md §5 flags as only partly solved (cursor must land on "Load data" + confirm +
+    spawn the file machine; the auto pause-menu nav attempts didn't enter it). The dispatcher is RESIDENT
+    MAIN.EXE (0x80036xxx), so the override IS registered and verified inert during boot/field (field stage
+    0x8010637C reached cleanly, no regression). The dispatch body is transcribed faithfully from the disasm
+    above; the `saveverify` gate fires + verifies the moment the menu IS navigated. (later-207.)
+
 ## ⬛ CONTENT — keep as recompiled PSX (do NOT reimplement)
 Per-enemy AI / per-character behavior; physics & collision response (Tomba move/jump/land); level data payloads;
 quest / event / progression / game-rule logic.

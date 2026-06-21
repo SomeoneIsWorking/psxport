@@ -6938,3 +6938,53 @@ X 0x0F640000→0x17704900 holding right), no crash, reaches stage 0x8010637C. Re
 next to ov_xform_propagate. NEXT clean §F targets I see: `FUN_80026C88` / `FUN_8003F024` (pure per-object
 dispatcher loops over the 40-entry, 64-byte-stride 0x800ec188 table — no GTE, leaf-ish, full RAM+scratchpad
 A/B verifiable). AVOID `FUN_80027A4C` (16% but it builds GP0 packets with cop2/lwc2/swc2 — render-boundary).
+
+## later-207 — SAVE / LOAD FLOW owned native (engine/save.cpp): FUN_80036DFC head dispatcher
+USER task: own the game's save/load FLOW (NOT the memory-card hardware — that's already native in
+runtime/recomp/memcard.cpp) as a clean PC-game save module engine/save.cpp.
+
+**RE — the save system is a 6-state machine.** The FLOW HEAD is `FUN_80036DFC` (an earlier scan labelled it
+0x80036E00 = the first store after the `addiu sp,-0x30` prologue). It is the body of the active save-menu
+task, reached from the title "Load Game" and the in-game pause menu "Load data". It:
+- saves s0/s1/s2/ra in a 0x30 frame; sets s1 = a0 = the save-menu TASK struct, s0 = 0x800D1E68 = the
+  save-system CONTEXT struct;
+- reads SUBSTATE = task[1] (lbu); bounds `sltiu <6`; if ≥6 → epilogue 0x800376D4 (restore+return, no-op);
+- else `handler = lw table[substate]` (table @0x80010668, stride 4); `jr handler` — a TAIL-CALL (a0/s0/s1/s2/
+  ra + the 0x30 frame all live; the page handler unwinds the frame itself and returns to the dispatcher's
+  caller). Handlers: [0] 0x80036E48 LOAD-SELECT, [1] 0x80036E58 LOAD-RUN (slot Up/Down via pad edges
+  0x800E7E68, confirm/cancel), [2] 0x800371D4 SAVE-CONFIRM, [3] 0x80037360 SAVE-EXECUTE (sets save flags
+  0x800BF809/0A/0B + 0x800BF83A, kicks the writers via 0x800364AC/800368D0/8004D650/800525D0), [4] 0x800375E0
+  FORMAT, [5] 0x80037638 DELETE.
+
+**No discrete game-side serialize/deserialize fn in this title.** The save data IS the game's live progress
+block; persistence is libmcrd writing/reading card frames directly via the BIOS file API (open/read/write
+through the 0xB0/0xA0 BIOS-call trampolines). That whole path is library/PLATFORM, reached ONLY via
+trampolines — proven: the file-API stubs 0x800808B8/C8/D8/E8/F8 (open 0x32 / lseek 0x33 / read 0x34 / write
+0x35 / close 0x36) have ZERO direct jal callers; the libmcrd internals FUN_8009Bxxx/8009Cxxx (incl. the
+checksummed frame R/W FUN_8009C2B0 + dir writer FUN_8009C3F4) are reached via 0xB0 trampolines; and the
+SAVE-EXECUTE handler 0x80037360 contains only flag writes + sub-calls, NO bulk game-RAM→buffer copy. It's all
+already owned by memcard.cpp's HLE (B0:0x4E/0x4F frame R/W + SwCARD completion, later-94). So the
+ENGINE-ownable save/load LOGIC is precisely this FLOW state machine — which engine/save.cpp owns; the page
+handlers + the card I/O leaf stay PSX via rec_dispatch. (Ruled-out dead ends: the "Tomba MEMORY CARD" filename
+@0x800106d4 + the UI-text table 0x800a294c..0x800a29c0 are UI strings, NOT a serialize-buffer layout; the
+0x8001cc00 region is the card SIO/DMA hardware init, platform.)
+
+**Module:** engine/save.cpp — `save_dispatch_native` (faithful prologue + bounds + table resolution +
+rec_dispatch the handler), `ov_save_dispatch` (the override + saveverify gate), `save_register()` (ONE line
+into game_tomba2.cpp init: `rec_set_override(0x80036DFC, ov_save_dispatch)`). Added to run.sh +
+tools/build_port.sh SRC lists (in sync). Same shape as ov_render_cmd (render_cmd_dispatch) / ov_disp_26c88.
+
+**VERIFY:** `saveverify` channel = a NON-DESTRUCTIVE dispatch-decision gate. The page handlers can YIELD
+across frames (SAVE-EXECUTE commits the card write over multiple frames), so a snapshot/rollback/super-call
+A/B that DOUBLE-RUNS the handler is UNSAFE (a yield in the native pass longjmps out before the rollback) —
+so the gate instead confirms the native body resolves the same handler the recomp `jr table[substate]` reads
+(by construction identical) + that the override fires at sane substates; the handler runs exactly ONCE.
+**EXERCISE COVERAGE — HONEST:** the dispatcher is NOT reliably reachable headless. Its only trigger is
+interactive title/pause-menu navigation INTO the file flow (cursor → "Load data" → confirm → spawn the file
+machine), which docs/driving-the-game.md §5 flags as only partly solved; several headless pause-menu nav
+sequences (tap down/x) did not enter it (0 HITs). The dispatcher is RESIDENT MAIN.EXE (0x80036xxx) so the
+override IS registered; verified inert + no regression during boot/field (builds + links clean; field stage
+0x8010637C reached cleanly, task0 state=2). The dispatch body is transcribed faithfully from the disasm; the
+`saveverify` gate fires + verifies the moment the menu IS navigated. (Build gotcha: the shared scratch/obj
+object cache was contaminated by a parallel worktree's game_tomba2.o → undefined `sound_register`; built into
+a private object dir to isolate — the parallel-subagents OBJDIR rule.)
