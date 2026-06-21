@@ -59,14 +59,12 @@ static void objid_glyph(Core* core, const RqItem* ref, int g, int x, int y, int 
       }
 }
 
-// Draw `val` in DECIMAL at (x,y), scale s, on a dark backing box. The game object ids the user knows are
-// decimal (352/353/354 = the model id node+0xe), so we render base-10, not the raw hex pointer.
-static void objid_dec(Core* core, const RqItem* ref, uint32_t val, int x, int y, int s) {
-  int dig[6], n = 0;
-  do { dig[n++] = val % 10; val /= 10; } while (val && n < 6);  // least-significant first
-  int w = n * 4 * s, h = 5 * s;
+// Draw `val` as `ndig` HEX digits at (x,y), scale s, on a dark backing box.
+static void objid_hex(Core* core, const RqItem* ref, uint32_t val, int ndig, int x, int y, int s) {
+  int w = ndig * 4 * s, h = 5 * s;
   objid_solid(core, ref, x - s, y - s, x + w, y + h, 0, 0, 0);            // backing box
-  for (int d = 0; d < n; d++) objid_glyph(core, ref, dig[n - 1 - d], x + d * 4 * s, y, s);
+  for (int d = 0; d < ndig; d++)
+    objid_glyph(core, ref, (val >> ((ndig - 1 - d) * 4)) & 0xF, x + d * 4 * s, y, s);
 }
 
 // Scan the world prims (captured before we append). One label per unique ENTITY INSTANCE (dbg_node), at
@@ -85,18 +83,24 @@ static void objid_overlay(RenderQueue* q, Core* core) {
     if (node == 0) continue;                                   // no entity node resolved for this prim
     nnoded++;
     if (!seen.insert(node).second) continue;                   // one label per entity INSTANCE
-    uint32_t model = core->mem_r16(node + 0xE) & 0x3FFF;       // the game object id (model id)
-    objid_dec(core, it, model, it->xs[0], it->ys[0], 2);
+    // The model-id field (node+0xe) reads 0 for the captured entities, so display the per-instance node
+    // handle (low 16 bits, hex) — stable + unique per object. The stderr scan below hunts for the real
+    // game-id field; once found we switch the label to it.
+    objid_hex(core, it, node & 0xFFFF, 4, it->xs[0], it->ys[0], 2);
     nlabel++;
     if (dolog) {
-      // Candidate id fields — find which one is the 352/353/354 the user knows, so we display the right one.
-      fprintf(stderr, "[objid] %s node=%08x +0c(type)=%02x +0e=%u +0e&3fff=%u +28=%04x +2a=%u +38(mdata)=%08x "
-                      "pos=(%d,%d,%d) scr=(%d,%d) depth=%.4f\n",
-              it->fps_anchor ? "BILLBOARD" : "MESH", node,
-              core->mem_r8(node + 0xC), core->mem_r16(node + 0xE), core->mem_r16(node + 0xE) & 0x3FFF,
-              core->mem_r16(node + 0x28), core->mem_r16(node + 0x2A), core->mem_r32(node + 0x38),
+      // Hunt for where the game id (352/353/354 = 0x160/0x161/0x162) actually lives: scan the node struct
+      // (0..0xD0) at every byte offset, reporting any u16 in [0x150,0x180]. Also dump node[0..0x3F] words.
+      char hits[256]; int hp = 0; hits[0] = 0;
+      for (int off = 0; off + 1 < 0xD0; off++) {
+        uint32_t v = core->mem_r16(node + off);
+        if (v >= 0x150 && v <= 0x180 && hp < (int)sizeof(hits) - 24)
+          hp += snprintf(hits + hp, sizeof(hits) - hp, " +%X=%u", off, v);
+      }
+      fprintf(stderr, "[objid] %s node=%08x type=%02x pos=(%d,%d,%d) idhits[%s ] w0..3=%08x %08x %08x %08x\n",
+              it->fps_anchor ? "BILLBOARD" : "MESH", node, core->mem_r8(node + 0xC),
               (int)(int16_t)core->mem_r16(node + 0x2E), (int)(int16_t)core->mem_r16(node + 0x32), (int)(int16_t)core->mem_r16(node + 0x36),
-              it->xs[0], it->ys[0], (double)it->depth[0]);
+              hits, core->mem_r32(node), core->mem_r32(node + 4), core->mem_r32(node + 8), core->mem_r32(node + 0xC));
     }
   }
   if (dolog)
