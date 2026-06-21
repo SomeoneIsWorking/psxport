@@ -138,9 +138,130 @@ void ov_hud_rect(Core* c) {
   c->r[2] = 0;
 }
 
+// =====================================================================================================
+// PC-NATIVE TEXT GLYPHS — own the in-game string drawer FUN_80078CA8 (the engine's UI font emitter).
+// =====================================================================================================
+// RE (tools/disas.py 0x80078ca8; UV math 0x80078e70; live-confirmed on the field intro narration):
+//   FUN_80078CA8(a0, a1, a2, a3=string, [sp+16]=fontslot)
+//     a0 = PACKED PEN: low16 = pen X, high16 = pen Y (the prim's GP0 xy word). Live: 0x00df001c => x=28,y=223.
+//     a1 = PACKED CELL: low16 = cell WIDTH (advance), high16 = cell HEIGHT. Live: 0x00100008 => w=8,h=16.
+//     a2 = FONT BANK index (selects the CLUT): if a2<16  clut = ((a2+496)<<6)|0x3f
+//                                              else      clut = ((a2+480)<<6)|0x3e   (live a2=0 => 0x7c3f).
+//     a3 = NUL-terminated string pointer.
+//   Per char the body builds an op-0x65 textured sprite (font atlas) and links it into the OT pool; the
+//   atlas CELL is computed from the char code:  idx = ch + fontbase(*0x1f800180, s16);
+//     U = (idx & 31) * cellW ;  row = idx>>5 ; V = row*cellH (+8 when cellH==16) — verified: 'T'(0x54)+32=116
+//     => col20*8=160=U, row3*16+8=56=V, matching the captured prim uv=(160,56).
+//   The prim COLOR (modulation, e.g. the narration fade-in 0xf0..0xc0 ramp) is the GP0 sprite cmd word's
+//   R/G/B bytes, held in the scratchpad template at 0x1f800004(R)/+5(G)/+6(B) (the prior "set text colour"
+//   call wrote them; they persist between glyph calls). Control codes 0x01..0x04 (format/colour escapes)
+//   and 0x20 (space)/0x0a (newline) are handled like the body.
+// We REBUILD this PC-native (CLAUDE.md engine UI rule): instead of emitting a PSX op-0x65 packet into the
+// guest OT, we read the SAME state and draw each glyph as a PC textured quad from the font atlas on the
+// engine's OWN 2D overlay layer (gpu_vk_draw_tritri + gpu_vk_set_order_2d), exactly like ov_hud_sprite.
+// No guest writes (the recomp body is NOT run) -> the content interface / guest RAM is untouched.
+//
+// Font atlas tpage: tp=(960,256), 4bpp (docs/engine_re.md "font/UI texpage tp=(960,256)"); CLUT from a2.
+constexpr int FONT_TPX = 960, FONT_TPY = 256, FONT_MODE = 0;   // 4bpp font atlas
+
+// ---- TEMPORARY RE PROBES (bannerprobe channel): log box/9slice emitter state, super-call ----
+constexpr uint32_t GLYPH_STR  = 0x80078CA8u;  // per-glyph string drawer (loops a0..a3 over a string)
+constexpr uint32_t UI_RECT    = 0x8007E1B8u;  // universal UI rect emitter (box / panel slice)
+constexpr uint32_t NINE_SLICE = 0x8007EAE4u;  // 9-slice panel (box frame)
+
+// PC-native glyph string drawer. Mirrors FUN_80078CA8's char loop + atlas-cell UV math, but draws each
+// glyph as a textured quad on the engine 2D overlay instead of building a PSX op-0x65 OT packet.
+void ov_glyph_string(Core* c) {
+  { static int d=-1; if(d<0)d=cfg_dbg("hud")?1:0; if(d){static long n=0; if(++n<=4||n%400==0) fprintf(stderr,"[hud] ov_glyph_string FIRED #%ld (native text)\n",n);} }
+  uint32_t a0 = c->r[4], a1 = c->r[5];
+  int32_t  a2 = (int32_t)c->r[6];
+  uint32_t s  = c->r[7];                       // string ptr
+
+  int penx = (int16_t)(a0 & 0xffff);
+  int peny = (int16_t)(a0 >> 16);
+  int cellW = (int16_t)(a1 & 0xffff);
+  int cellH = (int16_t)(a1 >> 16);
+  if (cellW <= 0) cellW = 8;
+  if (cellH <= 0) cellH = 16;
+
+  // CLUT (bank a2) — exactly as the emitter computes it.
+  uint32_t clutw = (a2 < 16) ? (uint32_t)(((a2 + 496) << 6) | 0x3f)
+                             : (uint32_t)(((a2 + 480) << 6) | 0x3e);
+  int clutx = (int)((clutw & 0x3f) * 16);
+  int cluty = (int)(clutw >> 6);
+
+  int fontbase = (int16_t)c->mem_r16(0x1f800180u);   // s16 glyph-index base
+
+  // Escape/special tokens (bytes 0x01..0x04) are NOT printable glyphs: the recomp body parses them as
+  // MULTI-BYTE tokens via FUN_80078988 (token table @0x800a55e0 — special symbols / button-prompt icons).
+  // We do not yet own that token atlas, and parsing them as single bytes would DESYNC the string scan.
+  // So if any such token is present, fall back to the faithful recomp body for the WHOLE string (text
+  // stays correct everywhere); we own the common plain-text case PC-native. (Plain narration/menu/help
+  // strings have none — verified.)
+  for (uint32_t p = s; ; p++) { uint8_t ch = c->mem_r8(p); if (ch == 0) break; if (ch >= 0x01 && ch <= 0x04) { rec_super_call(c, 0x80078CA8u); return; } }
+
+  if (cfg_dbg("bannerprobe")) {
+    char buf[64]; int n=0; for(;n<63;n++){uint8_t ch=c->mem_r8(s+(uint32_t)n); if(!ch)break; buf[n]=(ch>=0x20&&ch<0x7f)?(char)ch:'.';} buf[n]=0;
+    static long cnt=0; if(++cnt<=20) fprintf(stderr,"[bp] NATIVE glyph pen=(%d,%d) cell=%dx%d bank=%d clut=(%d,%d) base=%d \"%s\"\n",penx,peny,cellW,cellH,a2,clutx,cluty,fontbase,buf);
+  }
+
+  int x = penx, y = peny;
+  for (;;) {
+    uint8_t ch = c->mem_r8(s); s++;
+    if (ch == 0) break;
+    if (ch == 0x20) { x += 8; continue; }              // space: advance pen (matches body's +8)
+    if (ch == 0x0a) { x = penx; continue; }            // newline: reset X (Y handled by caller per line)
+    // (0x01..0x04 tokens were handled up-front by the recomp fallback, so they never reach here.)
+    // Per-glyph colour from the scratchpad template (set by the prior "set text colour" call).
+    int cr = c->mem_r8(0x1f800004u);
+    int cg = c->mem_r8(0x1f800005u);
+    int cb = c->mem_r8(0x1f800006u);
+    if (cr==0 && cg==0 && cb==0) { cr=cg=cb=0x80; }     // template not yet set -> identity (no modulation)
+
+    int idx = (int)ch + fontbase;
+    int u = (idx & 31) * cellW;
+    int row = idx >> 5;
+    int v = row * cellH + (cellH == 16 ? 8 : 0);
+
+    if (cfg_dbg("texttest")) {   // DIAG: draw solid magenta cells to confirm placement (no texture sample)
+      int xs[4]={x,x+cellW,x,x+cellW}, ys[4]={y,y,y+cellH,y+cellH};
+      int us[4]={0,0,0,0}, vs[4]={0,0,0,0};
+      unsigned char R[4]={255,255,255,255},G[4]={0,0,0,0},B[4]={255,255,255,255};
+      gpu_vk_set_order(c, HUD_ORDER); gpu_vk_set_order_2d(c, HUD_ORDER);
+      gpu_vk_draw_tritri(c, xs,ys,us,vs,R,G,B, FONT_TPX,FONT_TPY,FONT_MODE,1,clutx,cluty,0,0,0,0,0,0,1023,511);
+      gpu_vk_draw_tritri(c, &xs[1],&ys[1],&us[1],&vs[1],&R[1],&G[1],&B[1], FONT_TPX,FONT_TPY,FONT_MODE,1,clutx,cluty,0,0,0,0,0,0,1023,511);
+      x += 8; continue;
+    }
+    hud_quad(c, x, y, cellW, cellH, u, v, cr, cg, cb, FONT_TPX, FONT_TPY, FONT_MODE, clutx, cluty);
+    x += 8;                                             // pen advance (body uses fixed +8 per glyph)
+  }
+  c->r[2] = 0;   // body returns the pool head ptr in v0; the caller of this drawer ignores it (chained text).
+}
+
+void probe_rect(Core* c) {
+  if (cfg_dbg("bannerprobe")) {
+    uint32_t a0=c->r[4],a1=c->r[5],a2=c->r[6],a3=c->r[7];
+    int w=(int16_t)c->mem_r16(a0+4), h=(int16_t)c->mem_r16(a0+6);
+    uint16_t d2=c->mem_r16(a3+2);
+    static long cnt=0; if(++cnt<=80) fprintf(stderr,"[bp] rect geom=%08x w=%d h=%d idx@a1=%08x tbl=%08x desc=%08x op=%02x ot=%02x d2=%04x\n",
+        a0,w,h,a1,a2,a3,c->mem_r8(a3),c->mem_r8(a3+1),d2);
+  }
+  rec_super_call(c, UI_RECT);
+}
+void probe_nine(Core* c) {
+  if (cfg_dbg("bannerprobe")) { static long cnt=0; if(++cnt<=20) fprintf(stderr,"[bp] 9slice a0=%08x a1=%08x a2=%08x a3=%08x\n",c->r[4],c->r[5],c->r[6],c->r[7]); }
+  rec_super_call(c, NINE_SLICE);
+}
+
 }  // namespace
 
 void hud_register(void) {
   rec_set_override(SPRITE_HELPER, ov_hud_sprite);
   rec_set_override(RECT_HELPER,   ov_hud_rect);
+  // PC-native text glyph drawer (own FUN_80078CA8; draws font quads on the engine 2D overlay) — THE behavior.
+  rec_set_override(GLYPH_STR,  ov_glyph_string);
+  // Box / 9-slice frame: not yet owned. Registered as pure super-call (behavior-identical to the recomp
+  // body) plus the `bannerprobe` diagnostic log, so the next session can RE them on the live banner scene.
+  rec_set_override(UI_RECT,    probe_rect);
+  rec_set_override(NINE_SLICE, probe_nine);
 }
