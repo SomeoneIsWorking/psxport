@@ -57,19 +57,10 @@ static const uint32_t FREE_CNT  = 0x800E7E7Cu;
 static const uint32_t LIST_HEAD[3] = { 0x800FB168u, 0x800F2624u, 0x800F2738u };
 static const uint32_t LIST_TAIL[3] = { 0x800F23A8u, 0x800F239Cu, 0x800F23A0u };
 
-static uint32_t entity_spawn(Core* c) {
-  const uint32_t ref  = c->r[4];          // a0
-  const uint32_t type = c->r[5] & 0xffu;  // a1 (stored as u8 -> node[12])
-  const uint32_t mode = c->r[6];          // a2 (insertion mode)
-  const uint32_t list = c->r[7];          // a3 (list id -> node[10])
-
-  uint32_t cnt = c->mem_r8(FREE_CNT);
-  if (cnt < 3) return 0;                   // pool-low guard
-
-  uint32_t node = c->mem_r32(FREE_HEAD);
-  c->mem_w8(FREE_CNT, (uint8_t)(cnt - 1));
-  c->mem_w32(FREE_HEAD, c->mem_r32(node + 36));   // free head = node->next
-
+// Link `node` into active list `list` at position `mode` relative to `ref`, then stamp identity. This is
+// the body shared by BOTH pool spawn primitives — the pool-208 FUN_80079C3C and the pool-2 FUN_80079DDC
+// link + stamp identically (verified from both disasms); only the free-list they pop from differs.
+static void spawn_link_stamp(Core* c, uint32_t node, uint32_t ref, uint32_t type, uint32_t mode, uint32_t list) {
   // Resolve the selected active list's head/tail vars (MIPS: a3==1 -> list1, a3==2 -> list2, else list0).
   uint32_t head, tail;
   if (list == 1)      { head = LIST_HEAD[1]; tail = LIST_TAIL[1]; }
@@ -122,6 +113,42 @@ static uint32_t entity_spawn(Core* c) {
   c->mem_w8(node + 10, (uint8_t)list);
   c->mem_w8(node + 0,  2);
   c->mem_w8(node + 12, (uint8_t)type);
+}
+
+static uint32_t entity_spawn(Core* c) {
+  const uint32_t ref  = c->r[4];          // a0
+  const uint32_t type = c->r[5] & 0xffu;  // a1 (stored as u8 -> node[12])
+  const uint32_t mode = c->r[6];          // a2 (insertion mode)
+  const uint32_t list = c->r[7];          // a3 (list id -> node[10])
+
+  uint32_t cnt = c->mem_r8(FREE_CNT);
+  if (cnt < 3) return 0;                   // pool-low guard
+
+  uint32_t node = c->mem_r32(FREE_HEAD);
+  c->mem_w8(FREE_CNT, (uint8_t)(cnt - 1));
+  c->mem_w32(FREE_HEAD, c->mem_r32(node + 36));   // free head = node->next
+
+  spawn_link_stamp(c, node, ref, type, mode, list);
+  return node;
+}
+
+// FUN_80079DDC — the POOL-2 spawn primitive (spawn variant class 1). Same link/stamp as FUN_80079C3C but
+// pops a DIFFERENT free-list (head 0x800E80A0, count 0x800E7E7D), has NO pool-low guard, and when its pool
+// is EMPTY it DELEGATES to variant 2 (FUN_80079F90) with the original (ref, type&0xff, mode, list). RE'd
+// from disas 0x80079DDC. The fallback target stays content (rec_dispatch).
+static const uint32_t POOL2_HEAD = 0x800E80A0u, POOL2_CNT = 0x800E7E7Du;
+static uint32_t spawn_pool2(Core* c) {
+  const uint32_t ref = c->r[4], type = c->r[5] & 0xffu, mode = c->r[6], list = c->r[7];
+  uint32_t node = c->mem_r32(POOL2_HEAD);
+  if (node == 0) {                                  // pool empty -> delegate to FUN_80079F90(ref,type,mode,list)
+    c->r[4] = ref; c->r[5] = type;                  // a2/a3 already hold mode/list, untouched
+    rec_dispatch(c, 0x80079F90u);
+    return c->r[2];
+  }
+  uint32_t cnt = c->mem_r8(POOL2_CNT);
+  c->mem_w8(POOL2_CNT, (uint8_t)(cnt - 1));
+  c->mem_w32(POOL2_HEAD, c->mem_r32(node + 36));    // free head = node->next
+  spawn_link_stamp(c, node, ref, type, mode, list);
   return node;
 }
 
@@ -198,10 +225,36 @@ void ov_spawn_dispatch(Core* c) {
   } else if (++ng % 20 == 0) fprintf(stderr, "[spawndispverify] %ld matches\n", ng);
 }
 
+void ov_spawn_pool2(Core* c) {   // FUN_80079DDC
+  static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("pool2verify") ? 1 : 0;
+  if (!s_v) { c->r[2] = spawn_pool2(c); return; }
+  static uint8_t* ram0 = (uint8_t*)malloc(0x200000);
+  static uint8_t* ramN = (uint8_t*)malloc(0x200000);
+  uint8_t spad0[0x400], spadN[0x400];
+  uint32_t regs0[32]; memcpy(regs0, c->r, sizeof regs0);
+  uint32_t a3 = c->r[7];
+  memcpy(ram0, c->ram, 0x200000); memcpy(spad0, c->scratch, 0x400);
+  c->r[2] = spawn_pool2(c);
+  uint32_t v0_n = c->r[2];
+  memcpy(ramN, c->ram, 0x200000); memcpy(spadN, c->scratch, 0x400);
+  memcpy(c->ram, ram0, 0x200000); memcpy(c->scratch, spad0, 0x400); memcpy(c->r, regs0, sizeof regs0);
+  rec_super_call(c, 0x80079DDCu);
+  uint32_t v0_o = c->r[2];
+  uint32_t sp = regs0[29] & 0x1FFFFFu, flo = (sp >= 0x800) ? sp - 0x800 : 0;
+  int ro = -1; for (uint32_t a = 0; a < 0x200000; a++) if (c->ram[a] != ramN[a] && !(a >= flo && a < sp)) { ro = (int)a; break; }
+  int so = -1; for (uint32_t a = 0; a < 0x400; a++) if (c->scratch[a] != spadN[a]) { so = (int)a; break; }
+  static long ng = 0, nb = 0;
+  if (ro >= 0 || so >= 0 || v0_n != v0_o) {
+    if (nb++ < 40) fprintf(stderr, "[pool2verify] MISMATCH list=%u v0 n=%x o=%x ram@%x spad@%x sp=%x\n",
+                           a3, v0_n, v0_o, ro, so, sp);
+  } else if (++ng % 20 == 0) fprintf(stderr, "[pool2verify] %ld matches\n", ng);
+}
+
 // ------------------------------------------------------------------------------------------------
 // Public registration — ONE line from game_tomba2.cpp init.
 // ------------------------------------------------------------------------------------------------
 void entity_spawn_register(void) {
-  rec_set_override(0x80079C3Cu, ov_entity_spawn);   // FUN_80079C3C entity spawn / placement primitive
+  rec_set_override(0x80079C3Cu, ov_entity_spawn);   // FUN_80079C3C entity spawn / placement primitive (pool 208)
+  rec_set_override(0x80079DDCu, ov_spawn_pool2);    // FUN_80079DDC spawn variant — pool 2 (delegates to 0x80079F90)
   rec_set_override(0x8007A980u, ov_spawn_dispatch); // FUN_8007A980 per-type spawn dispatcher (entry point)
 }
