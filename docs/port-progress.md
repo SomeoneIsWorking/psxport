@@ -206,6 +206,25 @@ for content fns (call it). Do NOT mimic PSX hardware (GTE/GP0/OT) — remove Bee
   terminator). Rarer paths (0x80111CCC, state 3, G0==6) transcribed from disasm, verify when a scene drives
   them. GOTCHA: the state-0 gate is INVERTED from the obvious read (`beq v0,zero` → gate==0 is the INIT path,
   gate!=0 sets obj[4]=3) — got this backwards first, caught by the A/B.
+- ✅ **later-197 — `FUN_800931C0` `ov_input_dispatch_931c0` (per-frame INPUT/controller-state processor —
+  the heaviest un-owned RESIDENT fn, ~12% of field TIME).** 5 phases over the global tables at
+  0x80105xxx/0x801054xx: P0 advance the 16-slot ring index 0x80105BAC, clear new slot; P1 per object
+  [0,(int8)0x80105CEC) jal 0x8009A1D0(s0,&rec[s0]) (rec base 0x801054CE, stride 56) + set "present" bit in
+  the ring slot when rec.h0==0; P2 if (int8)0x80105D28==0, AND the ring slots 0..14 (a 15-frame coherence
+  window) and for matching objects with rec-byte==2 jal 0x80097E10; P3 mask 0x801054B8/BA by ~0x80105BF0/BF2
+  then per object [0,24) call the two indirect fn-ptr globals (*0x80105BA8)/(*0x80105A20) when the record
+  halfwords are set; P4 per object [0,24) marshal a struct on the stack from the flag byte 0x80105A08[s0] +
+  the halfword fields at 0x80105A28+s0*16 and jal 0x80099970(struct) when nonzero; P5 four channel flushes
+  (0x80098F90 ×2 / 0x80098DB0 / 0x80097E10) then zero the channel globals. **Control flow + memory ops owned
+  native; every jal (incl. the P3 indirect fn-ptrs) stays dispatched.** We mirror the gen 120-byte stack
+  frame (sp-=120) so the P4 struct lands where 0x80099970 expects it AND every sub-call's frame aligns with
+  the gen body. Verified with a full RAM+scratchpad A/B gate `pad931c0`, **0-diff over 4000+ calls** (all 4
+  directions). GOTCHAs: (1) this fn runs from BOOT, so the verify gate must re-check cfg_dbg EACH call, not a
+  one-shot static (a first-call latch pins it OFF before the REPL `debug` is processed). (2) A/B excludes
+  scratch stack below the entry sp: an A/B that double-runs the sub-calls legitimately leaves different
+  scratch there — a deep callee of 0x80099970 reads a transient mid-fn value reconciled before return (the
+  struct passed in is byte-identical; ALL persistent state + v0 match). The stack lives at the top of RAM, far
+  above all game data, so the exclusion cannot hide a behavioral bug (that would alter persistent state).
 - ✅ `FUN_80051C8C` per-object TRANSFORM build = `ov_build_xform`.
 - **Camera update (engine_camera.cpp):**
   - ✅ position X/Z `FUN_8006d960` = `ov_cam_track_xz`; ✅ position Y `FUN_8006da54` = `ov_cam_track_y` (later-174).
