@@ -60,6 +60,29 @@ static unsigned isqrt32(unsigned v) { unsigned r = 0, b = 1u << 30; while (b > v
 // type-keyed render queues (stacks growing downward): t2/9→A(ptr 0x1f80013c,cnt 0x1f800144,cap24)
 // t4→B(0x1f800148/0x1f800150,cap40) t5→C(0x1f800154/0x1f80015c,cap28). Returns v0 = visible flag.
 
+// ---- Cull-range extension (GitHub issue #22): culling too aggressive, geometry/objects vanish too
+// near the camera. We push the FAR limits out so distant and off-screen-but-near things keep both
+// rendering AND simulating. Two levers, both in this file:
+//   (A) CULL_FAR_MULT  — multiplies every per-state FAR distance limit in cull_decide() below. The
+//       stock far limits are 0x1001..0x1C01 (4097..7169 engine units); ×4 pushes them to ~16k..28k
+//       so objects the camera is heading toward, and off-screen objects just past the stock edge,
+//       stay KEPT. Because cull_decide() drives the visible flag (obj+1) AND the render queues that
+//       the per-frame object walk consults, widening these limits keeps far objects simulating, not
+//       just drawing. See the pool-overflow RISK note on CULL_FAR (the engine-margin lever) below —
+//       the same caution applies: keep the multiplier bounded so the kept/active working set can't
+//       blow past the ~52-node active pool (free count @0x800E7E7C).
+//   (B) the engine-owned margin re-include (cull_far / cull_fov in ov_object_cull) — see there.
+// Tunable, named (not a magic literal): override at runtime with PSXPORT_CULL_FAR_MULT for A/B.
+#ifndef CULL_FAR_MULT
+#define CULL_FAR_MULT 4   // ×4 the stock per-state far limits (4097..7169 → ~16388..28676)
+#endif
+static int cull_far_mult() {
+  static int m = -1;
+  if (m < 0) { const char* s = cfg_str("PSXPORT_CULL_FAR_MULT"); int v = s ? atoi(s) : 0;
+               m = (v > 0) ? v : CULL_FAR_MULT; }
+  return m;
+}
+
 struct CullDecision { int kept; int wrote_state2; int queue; };  // queue: 0=none,1=A,2=B,3=C
 static const uint32_t CULL_QPTR[3] = { 0x1f80013cu, 0x1f800148u, 0x1f800154u };
 static const uint32_t CULL_QCNT[3] = { 0x1f800144u, 0x1f800150u, 0x1f80015cu };
@@ -92,6 +115,9 @@ static CullDecision cull_decide(Core* c) {
       case 3:  nr = 512;  fr = 4097; thr = 848; break;
       default: nr = 1024; fr = 6657; thr = 872; break;   // state 4
     }
+    // Issue #22: extend the far limit (the per-state `fr` above is the byte-exact stock value;
+    // we keep it readable and apply the named multiplier here so the kept set reaches further out).
+    fr *= cull_far_mult();
     if ((int)dist < nr || (int)dist >= fr) { R.kept = 0; }
     else {
       int32_t depth = (int32_t)((uint32_t)(fx*dx) + (uint32_t)(fy*dy) + (uint32_t)(fz*dz));  // addu-wrap
@@ -186,9 +212,13 @@ static int cone_cull_2b278(Core* c, int commit) {
   uint32_t sum  = (uint32_t)(dx*dx) + (uint32_t)(dy*dy) + (uint32_t)(dz*dz);   // addu-wrap, matches MIPS
   uint32_t dist = eng_isqrt16(sum) & 0xffffu;
   int32_t fx = (int16_t)c->mem_r16(0x1F8000E8u), fy = (int16_t)c->mem_r16(0x1F8000EAu), fz = (int16_t)c->mem_r16(0x1F8000ECu);
-  if (dist < 512u || dist >= 7169u) return 0;
+  // Issue #22: this standalone view-cone cull (FUN_8002B278) shares the 7169 stock far; extend it with
+  // the same named CULL_FAR_MULT so distant world geometry on this path also keeps rendering. The cone
+  // threshold below stays a relative dot >= dist*3424 (independent of far), so only the far gate moves.
+  uint32_t far_lim = 7169u * (uint32_t)cull_far_mult();
+  if (dist < 512u || dist >= far_lim) return 0;
   int32_t dot = (int32_t)((uint32_t)(fx*dx) + (uint32_t)(fy*dy) + (uint32_t)(fz*dz));  // addu-wrap
-  int32_t thr = (int32_t)(dist * 3424u);                                              // dist<7169 → no overflow
+  int64_t thr = (int64_t)dist * 3424;                                                  // widened (dist now > 7169 possible)
   if (dot < thr) return 0;
   if (commit) c->mem_w8(node + 1, 1);
   return 1;
@@ -237,17 +267,34 @@ void ov_object_cull(Core* c) {
   if (s_cull < 0) { const char* f = cfg_str("PSXPORT_CULL_FAR"); s_cull_far = f ? atoi(f) : -1;
                     const char* v = cfg_str("PSXPORT_CULL_FOV"); s_cull_fov = v ? atoi(v) : -1; s_cull = 1; }
   int do_cull = 1;
-  // FAR limit (engine units, same scale as `dist`): the widest stock far is 7169 (0x1C01). 0x8000 ≈ 4.6x
-  // that, so distant scenery / terrain tiles the camera is heading toward are kept well before they pop in,
-  // while still bounding the working set (we never re-include the whole level — perf guard, see risk note).
-  int cull_far = s_cull_far >= 0 ? s_cull_far : 0x8000;
+  // FAR limit (engine units, same scale as `dist`) for the engine-owned wide RE-INCLUDE of margin
+  // geometry the stock body culled. The widest stock far is 7169 (0x1C01).
+  //   CULL_MARGIN_FAR = 0x10000 ≈ 9.1x the stock far — generous per issue #22 so distant scenery /
+  //   terrain tiles the camera is heading toward (and off-screen-but-near static world) are kept well
+  //   before they pop in. RISK (pool overflow): the active-object pool free count lives @0x800E7E7C
+  //   (three active lists, ~stride 0xD0 nodes, ~52 nodes total). The margin re-include itself only
+  //   re-RENDERS type-0x03 static world geometry (margin_collect, no +1 poke), so it does NOT consume
+  //   pool nodes; but the cull_decide far multiplier above DOES affect what stays KEPT/active, so the
+  //   real overflow guard is to keep CULL_FAR_MULT bounded (×4 leaves margin) — do not crank it so far
+  //   that the whole level stays active at once. Named/tunable, not a magic literal; PSXPORT_CULL_FAR
+  //   overrides at runtime for A/B.
+  #ifndef CULL_MARGIN_FAR
+  #define CULL_MARGIN_FAR 0x10000   // ~9.1x the widest stock far (7169) — generous render-margin reach
+  #endif
+  int cull_far = s_cull_far >= 0 ? s_cull_far : CULL_MARGIN_FAR;
   // FOV-cone threshold for depth/(dist*4) [≈ cos·1024]. The engine keeps objects to the EDGE of the view
   // and a bit beyond: 0 = the full forward hemisphere (±90°, well past the widescreen frustum's ~±40°);
   // a small NEGATIVE value extends past 90° so an object whose ORIGIN is just behind the camera plane but
   // whose widened geometry still grazes the screen edge is not dropped (this is the "beyond WS" margin the
   // user asked for). -0x60 ≈ cos(93.4°): ~3.4° past the side, enough to cover wide edge geometry without
   // re-including things squarely behind the camera. (vs the stock 848..880 ≈ only ±34°.)
-  int cull_fov = s_cull_fov >= 0 ? s_cull_fov : -0x60;
+  // Named/tunable (issue #22): CULL_MARGIN_FOV = -0x60 already keeps the full forward hemisphere and
+  // ~3.4° past the side; that is generous enough for off-screen edge geometry, so we keep it but name
+  // it. PSXPORT_CULL_FOV overrides at runtime.
+  #ifndef CULL_MARGIN_FOV
+  #define CULL_MARGIN_FOV (-0x60)   // ≈ cos(93.4°): full hemisphere + ~3.4° past the side
+  #endif
+  int cull_fov = s_cull_fov >= 0 ? s_cull_fov : CULL_MARGIN_FOV;
   // MEASUREMENT (entity-type taxonomy RE, journal later-127 step 1; off by default): restrict the wide
   // re-include to a single entity type (+0xc), or exclude one, so a 4:3-vs-16:9 gameplay RAM self-diff
   // isolates whether re-including THAT type perturbs gameplay logic (static-world) or not (dynamic).
