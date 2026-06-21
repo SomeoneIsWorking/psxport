@@ -58,8 +58,11 @@ static const uint32_t LIST_HEAD[3] = { 0x800FB168u, 0x800F2624u, 0x800F2738u };
 static const uint32_t LIST_TAIL[3] = { 0x800F23A8u, 0x800F239Cu, 0x800F23A0u };
 
 // Link `node` into active list `list` at position `mode` relative to `ref`, then stamp identity. This is
-// the body shared by BOTH pool spawn primitives — the pool-208 FUN_80079C3C and the pool-2 FUN_80079DDC
-// link + stamp identically (verified from both disasms); only the free-list they pop from differs.
+// the body shared by ALL FIVE pool spawn primitives — pool-208 FUN_80079C3C, pool-2 FUN_80079DDC, and the
+// three pool variants FUN_80079F90 / FUN_8007A12C / FUN_8007A2C8 link + stamp identically (verified from all
+// disasms); only the free-list they pop from differs. When the target active list is EMPTY, the recomp
+// initializes BOTH end pointers (a head-insert also writes *tail, a tail-insert also writes *head); we match
+// that (caught by spawnvarverify: empty-list inserts that the seaside-only spawnverify never exercised).
 static void spawn_link_stamp(Core* c, uint32_t node, uint32_t ref, uint32_t type, uint32_t mode, uint32_t list) {
   // Resolve the selected active list's head/tail vars (MIPS: a3==1 -> list1, a3==2 -> list2, else list0).
   uint32_t head, tail;
@@ -100,12 +103,14 @@ static void spawn_link_stamp(Core* c, uint32_t node, uint32_t ref, uint32_t type
     uint32_t old = c->mem_r32(head);
     c->mem_w32(node + 36, old);                      // node->next = *head
     if (old != 0) c->mem_w32(old + 32, node);        // (*head)->prev = node
+    else          c->mem_w32(tail, node);            // list was EMPTY -> also init the tail ptr (recomp does this)
     c->mem_w32(head, node);                          // *head = node
   } else if (do_tail) {
     c->mem_w32(node + 36, 0);                        // node->next = 0
     uint32_t old = c->mem_r32(tail);
     c->mem_w32(node + 32, old);                      // node->prev = *tail
     if (old != 0) c->mem_w32(old + 36, node);        // (*tail)->next = node
+    else          c->mem_w32(head, node);            // list was EMPTY -> also init the head ptr (recomp does this)
     c->mem_w32(tail, node);                          // *tail = node
   }
 
@@ -225,6 +230,68 @@ void ov_spawn_dispatch(Core* c) {
   } else if (++ng % 20 == 0) fprintf(stderr, "[spawndispverify] %ld matches\n", ng);
 }
 
+// FUN_80079F90 / FUN_8007A12C / FUN_8007A2C8 — the remaining three pool spawn primitives (dispatcher
+// classes 2/3/4). RE'd from disas (0x80079F90 / 0x8007A12C / 0x8007A2C8): each is byte-identical to the
+// pool-2 primitive's pop+link+stamp EXCEPT (a) a different free-list head + count byte, and (b) when its
+// pool is EMPTY it returns 0 (jr ra; v0=zero at the 0x8007a124/0x8007a2c0/0x8007a45c tails) — NO delegation
+// (unlike pool-2, which delegates to 0x80079F90). The link/stamp (list head/tail by a3, insert by a2, stamp
+// node+10/+0/+12) is the shared spawn_link_stamp. No pool-low guard (only 0x80079C3C has the cnt<3 guard).
+struct PoolDesc { uint32_t free_head, cnt; };
+static const PoolDesc POOL_VAR2 = { 0x800F2398u, 0x800ED8CCu };   // FUN_80079F90 (class 2)
+static const PoolDesc POOL_VAR3 = { 0x800ED8D4u, 0x800ED8C5u };   // FUN_8007A12C (class 3)
+static const PoolDesc POOL_VAR4 = { 0x800ED8D0u, 0x800ED8C4u };   // FUN_8007A2C8 (class 4)
+
+static uint32_t pool_spawn(Core* c, const PoolDesc& p) {
+  const uint32_t ref = c->r[4], type = c->r[5] & 0xffu, mode = c->r[6], list = c->r[7];
+  uint32_t node = c->mem_r32(p.free_head);
+  if (node == 0) return 0;                          // pool empty -> v0 = 0 (no delegation)
+  uint32_t cnt = c->mem_r8(p.cnt);
+  c->mem_w8(p.cnt, (uint8_t)(cnt - 1));
+  c->mem_w32(p.free_head, c->mem_r32(node + 36));   // free head = node->next
+  spawn_link_stamp(c, node, ref, type, mode, list);
+  return node;
+}
+
+// Shared A/B gate for a pool spawn variant: run native, snapshot+rollback, super-call the recomp body,
+// diff full main-RAM (excluding the dead stack window [sp-0x800, sp)) + scratchpad + v0. Same rationale as
+// spawnverify/pool2verify: the only callee-touched persistent state is the pool/list nodes the diff covers.
+static void spawn_variant_gate(Core* c, const PoolDesc& p, uint32_t super_addr, const char* gate, int on) {
+  if (!on) { c->r[2] = pool_spawn(c, p); return; }
+  static uint8_t* ram0 = (uint8_t*)malloc(0x200000);
+  static uint8_t* ramN = (uint8_t*)malloc(0x200000);
+  uint8_t spad0[0x400], spadN[0x400];
+  uint32_t regs0[32]; memcpy(regs0, c->r, sizeof regs0);
+  uint32_t a3 = c->r[7];
+  memcpy(ram0, c->ram, 0x200000); memcpy(spad0, c->scratch, 0x400);
+  c->r[2] = pool_spawn(c, p);
+  uint32_t v0_n = c->r[2];
+  memcpy(ramN, c->ram, 0x200000); memcpy(spadN, c->scratch, 0x400);
+  memcpy(c->ram, ram0, 0x200000); memcpy(c->scratch, spad0, 0x400); memcpy(c->r, regs0, sizeof regs0);
+  rec_super_call(c, super_addr);
+  uint32_t v0_o = c->r[2];
+  uint32_t sp = regs0[29] & 0x1FFFFFu, flo = (sp >= 0x800) ? sp - 0x800 : 0;
+  int ro = -1; for (uint32_t a = 0; a < 0x200000; a++) if (c->ram[a] != ramN[a] && !(a >= flo && a < sp)) { ro = (int)a; break; }
+  int so = -1; for (uint32_t a = 0; a < 0x400; a++) if (c->scratch[a] != spadN[a]) { so = (int)a; break; }
+  static long ng = 0, nb = 0;
+  if (ro >= 0 || so >= 0 || v0_n != v0_o) {
+    if (nb++ < 40) fprintf(stderr, "[%s] MISMATCH list=%u v0 n=%x o=%x ram@%x spad@%x sp=%x\n",
+                           gate, a3, v0_n, v0_o, ro, so, sp);
+  } else if (++ng % 20 == 0) fprintf(stderr, "[%s] %ld matches\n", gate, ng);
+}
+
+void ov_spawn_var2(Core* c) {   // FUN_80079F90 (class 2)
+  static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("spawnvarverify") ? 1 : 0;
+  spawn_variant_gate(c, POOL_VAR2, 0x80079F90u, "spawnvarverify", s_v);
+}
+void ov_spawn_var3(Core* c) {   // FUN_8007A12C (class 3)
+  static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("spawnvarverify") ? 1 : 0;
+  spawn_variant_gate(c, POOL_VAR3, 0x8007A12Cu, "spawnvarverify", s_v);
+}
+void ov_spawn_var4(Core* c) {   // FUN_8007A2C8 (class 4)
+  static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("spawnvarverify") ? 1 : 0;
+  spawn_variant_gate(c, POOL_VAR4, 0x8007A2C8u, "spawnvarverify", s_v);
+}
+
 void ov_spawn_pool2(Core* c) {   // FUN_80079DDC
   static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("pool2verify") ? 1 : 0;
   if (!s_v) { c->r[2] = spawn_pool2(c); return; }
@@ -256,5 +323,8 @@ void ov_spawn_pool2(Core* c) {   // FUN_80079DDC
 void entity_spawn_register(void) {
   rec_set_override(0x80079C3Cu, ov_entity_spawn);   // FUN_80079C3C entity spawn / placement primitive (pool 208)
   rec_set_override(0x80079DDCu, ov_spawn_pool2);    // FUN_80079DDC spawn variant — pool 2 (delegates to 0x80079F90)
+  rec_set_override(0x80079F90u, ov_spawn_var2);     // FUN_80079F90 spawn variant — pool var2 (class 2, empty->0)
+  rec_set_override(0x8007A12Cu, ov_spawn_var3);     // FUN_8007A12C spawn variant — pool var3 (class 3, empty->0)
+  rec_set_override(0x8007A2C8u, ov_spawn_var4);     // FUN_8007A2C8 spawn variant — pool var4 (class 4, empty->0)
   rec_set_override(0x8007A980u, ov_spawn_dispatch); // FUN_8007A980 per-type spawn dispatcher (entry point)
 }
