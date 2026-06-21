@@ -169,6 +169,11 @@ for content fns (call it). Do NOT mimic PSX hardware (GTE/GP0/OT) — remove Bee
   `FUN_80040558`, `FUN_8013C3F4/538`, `FUN_8012E2F4`) are per-object STATE MACHINES = game CONTENT
   (stay PSX); and the `ov_XXXX(>encl)` profiler labels are mid-fn boundaries — disas to the real prologue
   before porting.
+- ✅ **later-193 — `FUN_80031780` `ov_list_scan_31780` (list-tail resolver/reset).** Walks the 8-byte-stride
+  list rooted at a0[0x34], reading the tag at entry+4 until `tag & 0xC0000000`; if `tag & 0x40000000` set ->
+  clear list (a0[0x34]=a0[0x38]=0), else set tail a0[0x38]=found+8. GOTCHA: the loop's `addiu v1,v1,8` is a
+  DELAY SLOT — it runs even when the branch falls through, so the found entry is +8 past where the tag matched
+  (first verify pass was off-by-8 until I modeled the delay slot). `listscan` A/B 0-diff (5000+ matches).
 - ✅ `FUN_80051C8C` per-object TRANSFORM build = `ov_build_xform`.
 - **Camera update (engine_camera.cpp):**
   - ✅ position X/Z `FUN_8006d960` = `ov_cam_track_xz`; ✅ position Y `FUN_8006da54` = `ov_cam_track_y` (later-174).

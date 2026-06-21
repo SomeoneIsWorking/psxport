@@ -372,6 +372,34 @@ void ov_rand(Core* c) {
   c->r[2] = mine; c->mem_w32(0x80105EE8u, st_n);     // keep native
 }
 
+// FUN_80031780 — list-tail resolver / reset. Walks the 8-byte-stride linked list rooted at
+// a0[52] (off 0x34), reading the tag word at entry+4 each step, until a tag has bit30|bit31
+// (0xC0000000) set. If that terminator tag has bit30 (0x40000000) set -> clear the list
+// (a0[52]=a0[56]=0); else set the tail pointer a0[56] (off 0x38)=found entry. If a0[52]==0 at
+// entry it is a no-op. Pure guest-pointer/integer walk, no GP0/OT. `listscan` (lazy gate) A/B's
+// the two written words.
+void ov_list_scan_31780(Core* c) {
+  static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("listscan") ? 1 : 0;
+  uint32_t a0 = c->r[4];
+  uint32_t o52 = c->mem_r32(a0 + 52), o56 = c->mem_r32(a0 + 56);
+  uint32_t n52 = o52, n56 = o56, v0 = c->r[2];
+  if (o52 != 0) {
+    uint32_t v1 = o52, a1;
+    for (;;) { a1 = c->mem_r32(v1 + 4); bool brk = (a1 & 0xC0000000u) != 0; v1 += 8; if (brk) break; }  // +8 is the loop's delay slot — runs even on exit
+    v0 = a1 & 0x40000000u;
+    if (v0) { n56 = 0; n52 = 0; } else { n56 = v1; }
+  }
+  if (s_v) {
+    rec_super_call(c, 0x80031780u);                  // memory untouched above -> oracle writes
+    uint32_t r52 = c->mem_r32(a0 + 52), r56 = c->mem_r32(a0 + 56);
+    static long ng = 0, nb = 0;
+    if (r52 != n52 || r56 != n56) { if (nb++ < 20) fprintf(stderr, "[listscan] MISMATCH a0=%x 52 mine=%x oracle=%x  56 mine=%x oracle=%x\n", a0, n52, r52, n56, r56); }
+    else if (++ng % 5000 == 0) fprintf(stderr, "[listscan] %ld matches\n", ng);
+    return;                                          // keep oracle result
+  }
+  c->mem_w32(a0 + 52, n52); c->mem_w32(a0 + 56, n56); c->r[2] = v0;
+}
+
 
 static void ov_object_cull(Core* c) {
   uint32_t prev = c->game->fps60.current_object;
@@ -895,6 +923,7 @@ void games_tomba2_init(void) {
       rec_set_override(0x80083F50u, ov_trig_cos);                      // cos LUT
       rec_set_override(0x80083EBCu, ov_trig_lut); }                    // sin-quadrant lookup
     { void ov_cull_wrap_77acc(Core*); rec_set_override(0x80077ACCu, ov_cull_wrap_77acc); }  // cull wrapper variant (flags 1/4)
+    { void ov_list_scan_31780(Core*); rec_set_override(0x80031780u, ov_list_scan_31780); }  // list-tail resolver/reset
   }
   // PC-native LEVEL/STAGE LOADER (engine/engine_level.cpp): the engine's overlay loader FUN_800450bc —
   // load a stage's overlay off the disc + set its entry, synchronous (no PSX CD-wait yield).
