@@ -13,8 +13,10 @@
 #include "core.h"
 #include "game.h"
 #include "cfg.h"
+#include "mods.h"   // g_mods — engine-native directional lighting on the terrain (matches engine_submit)
 #include <stdint.h>
 #include <stdio.h>
+#include <math.h>
 
 // Shared faithful gameplay prep (sway bytes + object rotation matrix @ SCR) — engine_submit.cpp.
 void  terrain_prep_object_matrix(Core* c, uint32_t node);
@@ -87,7 +89,7 @@ void terrain_render_pc(Core* c) {
   int drawn = 0;
   for (uint32_t rec = TERRAIN_GEOMBLK; ; rec += 36) {
     int32_t ctl = (int32_t)c->mem_r32(rec + 4);
-    float px[4], py[4], depth[4]; int u[4], v[4]; uint8_t r[4], g[4], b[4];
+    float px[4], py[4], depth[4]; int u[4], v[4]; uint8_t r[4], g[4], b[4]; float wv[4][3];
     for (int kk = 0; kk < 4; kk++) {
       float vx = (float)((int)(int8_t)c->mem_r8(rec + XO[kk]) << 8);
       float vy = (float)((int)(int8_t)c->mem_r8(rec + YO[kk]) << 8);
@@ -95,6 +97,7 @@ void terrain_render_pc(Core* c) {
       float w0 = Rview[0][0]*vx + Rview[0][1]*vy + Rview[0][2]*vz + Tview[0];
       float w1 = Rview[1][0]*vx + Rview[1][1]*vy + Rview[1][2]*vz + Tview[1];
       float w2 = Rview[2][0]*vx + Rview[2][1]*vy + Rview[2][2]*vz + Tview[2];
+      wv[kk][0] = w0; wv[kk][1] = w1; wv[kk][2] = w2;        // view-space pos (for the per-face light normal)
       float pz = w2; if (pz < nearp) pz = nearp;
       float ph = (float)H / pz;
       float sx = ofx + w0 * ph; if (sx < -1024.f) sx = -1024.f; if (sx > 1023.f) sx = 1023.f;
@@ -113,6 +116,25 @@ void terrain_render_pc(Core* c) {
     u[2] = uv2 & 0xFF;        v[2] = (uv2 >> 8) & 0xFF;
     u[3] = (uv2 >> 16) & 0xFF; v[3] = (uv2 >> 24) & 0xFF;
     int semi = (ctl & 0x40000000) ? 1 : 0;
+    // Engine-native directional lighting on the ground (same model as engine_submit.cpp engine_shade_face):
+    // per-face view-space normal from the quad's verts, modulate the vertex colours by ambient+diffuse·(N·L).
+    if (g_mods.light && !semi) {
+      float e1x = wv[1][0]-wv[0][0], e1y = wv[1][1]-wv[0][1], e1z = wv[1][2]-wv[0][2];
+      float e2x = wv[2][0]-wv[0][0], e2y = wv[2][1]-wv[0][1], e2z = wv[2][2]-wv[0][2];
+      float nx = e1y*e2z-e1z*e2y, ny = e1z*e2x-e1x*e2z, nz = e1x*e2y-e1y*e2x;
+      float ln = sqrtf(nx*nx+ny*ny+nz*nz);
+      if (ln > 1e-3f) {
+        nx/=ln; ny/=ln; nz/=ln; if (nz > 0.0f) { nx=-nx; ny=-ny; nz=-nz; }
+        float lx=g_mods.light_dir[0], ly=g_mods.light_dir[1], lz=g_mods.light_dir[2];
+        float ll=sqrtf(lx*lx+ly*ly+lz*lz); if (ll>1e-6f){lx/=ll;ly/=ll;lz/=ll;}
+        float ndl = nx*lx+ny*ly+nz*lz; if (ndl<0) ndl=0;
+        float lit = g_mods.light_ambient + g_mods.light_diffuse*ndl;
+        for (int kk=0; kk<4; kk++) {
+          int rr=(int)(r[kk]*lit+0.5f), gg=(int)(g[kk]*lit+0.5f), bb=(int)(b[kk]*lit+0.5f);
+          r[kk]=(uint8_t)(rr>255?255:rr); g[kk]=(uint8_t)(gg>255?255:gg); b[kk]=(uint8_t)(bb>255?255:bb);
+        }
+      }
+    }
     if (s_dbg && drawn < 4)
       fprintf(stderr, "[terrpc] rec=%08x v0=(%.1f,%.1f z%.3f) v2=(%.1f,%.1f) tp=%04x clut=%04x semi=%d\n",
               rec, px[0], py[0], depth[0], px[2], py[2], tp, clut, semi);
