@@ -228,6 +228,9 @@ void games_tomba2_init(void) {
     { void ov_osc_fd10(Core*); rec_set_override(0x8003FD10u, ov_osc_fd10); }  // sm40558 STATE-1 obj[5]=0 oscillate/frame-toggle handler (control flow owned; ov_rand dispatched)
     { void ov_disp_26c88(Core*); rec_set_override(0x80026C88u, ov_disp_26c88); }  // per-object dispatcher loop over 0x800ec188 table (control flow owned; handlers dispatched)
     { void ov_bav_load(Core*); rec_set_override(0x80096590u, ov_bav_load); }  // per-area BAV effect-cel LOADER (engine_bav.cpp): slot alloc + cel/UV parse + global latch owned; VRAM alloc/upload callback dispatched
+    { void entity_spawn_register(void); entity_spawn_register(); }  // entity SPAWN/placement primitive FUN_80079C3C (pool-pop + field-init + list-link; engine/entity_spawn.cpp)
+    // PC-native INVENTORY / ITEM-COLLECTION subsystem (engine/inventory.cpp): the shared item-add core
+    { void inventory_register(void); inventory_register(); }
   }
   // PC-native LEVEL/STAGE LOADER (engine/engine_level.cpp): the engine's overlay loader FUN_800450bc —
   // load a stage's overlay off the disc + set its entry, synchronous (no PSX CD-wait yield).
@@ -239,6 +242,8 @@ void games_tomba2_init(void) {
   // PC-native task-0 BOOTSTRAP (engine/engine_level.cpp): FUN_800499e8 — resolve \BIN\START.BIN, record its
   // (LBA,size) in the stage table, transition to stage 0. CD-directory lookup stays the platform mechanism.
   { void ov_task0_boot(Core*); rec_set_override(0x800499E8u, ov_task0_boot); }
+  // PC-native per-area CEL-GROUP LOAD-AND-WAIT (engine/engine_level.cpp): FUN_800753D4 — load one effect-cel
+  { void ov_cel_load_wait(Core*); rec_set_override(0x800753D4u, ov_cel_load_wait); }
   // PC-native FONT/TEXT init (engine/engine_font.cpp): FUN_80075130 is called directly from native_boot,
   // but register the orchestrator + its 3 owned engine callees so any other dispatcher to them uses native
   // (the 8 libgpu/sound callees stay PSX, dispatched in-context). later (font frontier).

@@ -119,6 +119,33 @@ seaside field loads 3 cels at boot — descriptors 0x801846b4 / 0x801858d4 / 0x8
 0x80105Cxx/0x80105Dxx region as the font init above. Single caller wrapper `FUN_80096480` (prefills the
 callback fn-ptr `0x800964b4` in a2); `FUN_80096480` is itself called by area-loader `FUN_800753D4`.
 
+## Area CEL-GROUP load-and-wait — `FUN_800753D4` (`ov_cel_load_wait`, engine/engine_level.cpp) — OWNED native
+The per-area asset bring-up primitive: pull ONE effect/animation cel group into VRAM and BLOCK until its
+upload finishes. ABI `FUN_800753D4(a0=u16* out_slot, a1=BAV desc, a2=cb_arg4)` (ret v0 ignored):
+1. `slot = FUN_80096480(desc, -1, cb_arg4)` — load via the native BAV loader (auto-slot; prefills upload
+   callback `0x800964b4`, a3=0). `*(u16*)out_slot = slot`.
+2. `FUN_80096980(cb_arg4, slot)` — kick the slot's upload state machine (leaves the slot's state byte
+   `0x80105D18[slot] = 1`).
+3. **poll-wait loop** @0x80075410: `while (sext16(FUN_80096a40(0)) == 0) FUN_80051f80(1);` — `FUN_80096a40`
+   (→`FUN_800993a0`→ BIOS event syscall `FUN_80080840`) reports the GPU-DMA upload-done event; `FUN_80051f80(1)`
+   is a one-frame coroutine YIELD (ChangeThread) between polls. The upload is **NOT** synchronous in the port —
+   it settles over the following frame(s), so the yield is real and must be preserved (an early "drop the yield"
+   attempt left the slot stuck at state 1 / cel #3 failing slot=-1).
+
+**Callers:** `FUN_800451d0` (area init) → `FUN_800754f4` (per-area asset-table walk; reads an offset table at
+`area_base+0x51000`, fires `FUN_800753D4` twice + 10× `FUN_80075448`) — area_base = `0x80182000` overlay region.
+The 3 seaside boot cels load to slots 0/1/2 (descriptors 0x801846b4 / 0x801858d4 / 0x801886f4); steady state of
+`0x80105D18` after load = `01 01 01`.
+
+**Ownership model (later, this session):** the PROLOGUE (load + `*out=slot` + state-machine kick) is native
+(the two callees complete without yielding — verified state byte = 1 after them, matching the recomp); the
+cross-frame DMA-wait loop is handed back IN-CONTEXT via the coro-redirect handshake (`rec_coro_redirect` to
+0x80075410, later-169) with the MIPS frame (sp-=0x20; s0/s1/ra saved) laid out byte-faithfully so the recomp
+loop+epilogue resume correctly. Cel-system callees (`FUN_80096480`/`80096980`/`80096a40`) stay dispatched.
+**VERIFY:** full main-RAM (2 MB) + scratchpad (1 KB) **0-diff** override-ON vs pure-recomp at field frame 120
+(newgame→skip 650→run 120, dumpram + .spad); cel-state table and all 3 slot stores byte-identical; 0 bad
+opcodes; reaches GAME. Diagnostic channel `celloadverify` (REPL `debug celloadverify`) logs each cel HIT.
+
 **ABI** `v0 = FUN_80096590(a0 desc, a1 slot, a2 cb, a3 arg4)`:
 - a0 = BAV descriptor ptr. a1 = requested slot ((int16); −1 = auto-allocate first free, else explicit [0,16)).
 - a2 = allocator/upload **callback** fn-ptr, called `cb(a0=size_rounded64, a1=arg4, a2=slot) → vram_word_addr | -1`.
@@ -345,6 +372,29 @@ Node fields (offsets from the node = the handler's `param_1`):
 | +0x32| u16   | **position Y** |
 | +0x36| u16   | **position Z** |
 | +0x38| ptr   | model-data pointer (set by `FUN_80077b38` from a table) |
+
+Correction: there are **THREE** active lists, not two (a third pool/list `head 0x800f2738 / tail 0x800f23a0`
+exists alongside the documented two). The pool init `FUN_800798f8` builds three free-lists with different
+node strides (88, 196, **208=0xD0**) — the 208-byte one is the main entity list. Free-list head =
+`0x800e8098`, free count (u8) = `0x800e7e7c`, free chain via node[+0x24]. The three active-list (head,tail)
+pairs: `(0x800fb168,0x800f23a8)`, `(0x800f2624,0x800f239c)`, `(0x800f2738,0x800f23a0)`.
+
+### Entity SPAWN / placement — `FUN_80079C3C` ✅ OWNED `ov_entity_spawn` (engine/entity_spawn.cpp, later-208)
+The engine's core SPAWN PRIMITIVE — pop a node from the free-list, link it into an active list at a
+requested position, stamp its identity. ABI: `node* spawn(a0=ref, a1=type, a2=mode, a3=list)`. Pure
+pool/list memory; NO GTE, NO render packets. Reached by the per-type spawn dispatchers `FUN_8007A980`
+(table `0x80016E4C`, 5 type-classes) / `FUN_8007AA38` (table `0x80016E64`, replace-variant), which
+tail-jump (`jr v0`) to thin per-type handlers that call this. Body:
+- `cnt=u8[0x800e7e7c]; if (cnt<3) return 0;` (pool-low guard, keeps ≥2 spare).
+- pop: `node=u32[0x800e8098]; u8[0x800e7e7c]=cnt-1; u32[0x800e8098]=node[+36];`
+- list-select by **a3** → (head,tail): a3==1→list1, a3==2→list2, else→list0 (the three pairs above).
+- insert by **mode a2**: 0=before ref (→head if ref->prev==0), 1=head, 2=after ref (→tail if ref->next==0),
+  3=tail, other=no-link. prev=node[+0x20], next=node[+0x24]; head ptr is the prev-end, tail ptr the next-end.
+- stamp (all paths): `u8[node+0x0a]=a3` (list id), `u8[node+0]=2` (active), `u8[node+0x0c]=a1` (entity type).
+The per-type dispatch tables + handlers stay PSX (content-side type routing); only the alloc+link+init
+primitive is owned. `spawnverify` gate = full main-RAM(0x200000)+scratchpad(0x400)+v0 A/B vs
+`rec_super_call(0x80079C3C)`: **0 mismatches over 100+ live field spawns** (seaside, newgame→skip 650→run),
+clean boot, no bad opcode. Registered in game_tomba2.cpp via `entity_spawn_register()`.
 
 ### The entity-list walk — `FUN_8007a904` (the engine's per-frame object driver)
 ```c

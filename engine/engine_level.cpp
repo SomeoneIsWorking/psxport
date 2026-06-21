@@ -8,9 +8,12 @@
 #include "core.h"
 #include "cfg.h"
 #include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdio.h>
 
 void rec_dispatch(Core*, uint32_t);
-void rec_super_call(Core*, uint32_t);
+void rec_coro_redirect(Core*, uint32_t);   // hand the flat interp control IN-CONTEXT (later-169 handshake)
 
 // FUN_800450bc — load a stage's overlay off the disc and set the task's stage entry point.
 //   a0 (param_1) = the task's entry-pointer slot (2 words: [0]=entry fn, [1]=task stack/handle)
@@ -130,4 +133,80 @@ static void eng_task0_boot(Core* c) {
 
 void ov_task0_boot(Core* c) {
   eng_task0_boot(c);
+}
+
+// =================================================================================================
+// FUN_800753D4 — per-area CEL-GROUP LOAD-AND-WAIT (`ov_cel_load_wait`). Owned PC-native (prologue), with
+// the cross-frame DMA-wait poll loop handed back IN-CONTEXT via the coro-redirect handshake (later-169).
+//
+// This is the area-asset bring-up primitive the area-init function FUN_800451d0 (via the per-area asset
+// table walk FUN_800754f4) calls to pull one effect/animation CEL GROUP into VRAM and BLOCK until its
+// upload finishes. The cel parse/VRAM layout/upload itself is the already-native BAV loader FUN_80096590
+// (engine/engine_bav.cpp, ov_bav_load); this wrapper is the *load + completion-wait* around it.
+// RE (tools/disas.py 0x800753D4):
+//
+//   0x800753d4 prologue: sp-=0x20; sw s1; s1=a0(out); a0=a1(desc); a1=-1; sw s0; sw ra; s0=a2(cbarg)
+//   0x800753f0 v0_slot = FUN_80096480(a0=desc, a1=-1, a2=cbarg)  // cel-load wrapper (auto-slot -1; prefills
+//                                                                //   upload callback 0x800964b4, a3=0;
+//                                                                //   calls FUN_80096590 = ov_bav_load)
+//   0x80075408 *(u16*)s1 = v0_slot                               // store the allocated SLOT at [out]
+//   0x80075404 FUN_80096980(a0=cbarg, a1=sext16(v0_slot))        // kick the slot's UPLOAD state machine (->1)
+//   0x80075410 LOOP: if (sext16(FUN_80096a40(0)) != 0) break;    // upload-DMA done? (FUN_800993a0 event poll)
+//   0x80075424      else FUN_80051f80(1);                        // YIELD one frame (ChangeThread / DMA wait)
+//   0x8007542c      goto LOOP;
+//   0x80075434 epilogue: lw ra; lw s1; lw s0; jr ra; sp+=0x20
+//
+// ABI: a0 = u16* out-slot; a1 = BAV descriptor; a2 = callback arg4. v0 (ret) ignored by both callers.
+//
+// OWNERSHIP MODEL — why the prologue is native but the loop is redirected (NOT dropped). The poll loop is
+// a *genuine cross-frame yield*: I measured it (`celloadverify` HITs) — the GPU-DMA upload is NOT complete
+// on the first FUN_80096a40 check, so FUN_80051f80(1) runs and longjmps to the scheduler; the upload
+// settles over the following frame(s). The earlier guess "synchronous upload ⇒ 0 iterations, drop the
+// yield" was FALSE and would be a bandaid (it left the slot in state 1=allocating, never reaching
+// 2=loaded). So the yield MUST be preserved. The two prologue callees DO run to completion without yielding
+// (verified: after them the slot's state-byte is 1 as the recomp leaves it), so they are safe to dispatch
+// natively here. We then `rec_coro_redirect` to the loop head 0x80075410 with the MIPS frame set up
+// byte-faithfully (sp-=0x20; s0/s1/ra saved), so the recomp loop + its epilogue restore correctly and the
+// deep yield resumes exactly as the PSX path would — same handshake engine_stage.cpp uses for deep-yield
+// handlers. The cel-system callees (FUN_80096480/80096980/80096a40 — engine_bav cel loader + upload state
+// machine + DMA-done event poll) stay dispatched: they write the guest cel-system globals still-recomp
+// content reads, and FUN_80096590 is itself an existing native override.
+// =================================================================================================
+static int32_t sext16(uint32_t v) { return (int32_t)(int16_t)(v & 0xffff); }
+
+void ov_cel_load_wait(Core* c) {
+  int s_v = cfg_dbg("celloadverify") ? 1 : 0;   // live-read so REPL `debug` mid-run takes effect
+  uint32_t out = c->r[4], desc = c->r[5], cbarg = c->r[6];
+  uint32_t ra = c->r[31], sp = c->r[29], s0_in = c->r[16], s1_in = c->r[17];
+
+  // ---- prologue (0x800753d4..0x800753ec): build the MIPS frame byte-faithfully so the recomp loop's
+  //      epilogue (lw ra/s1/s0; sp+=0x20) restores correctly after the redirect. ----
+  c->r[29] = sp - 0x20;
+  c->mem_w32(c->r[29] + 0x14, s1_in);            // sw s1, 0x14(sp)
+  c->mem_w32(c->r[29] + 0x10, s0_in);            // sw s0, 0x10(sp)
+  c->mem_w32(c->r[29] + 0x18, ra);               // sw ra, 0x18(sp)
+  c->r[17] = out;                                // s1 = a0 (out-slot ptr)
+  c->r[16] = cbarg;                              // s0 = a2 (callback arg4)
+
+  // ---- FUN_80096480(desc, -1, cbarg): load the cel group (auto-slot) via the native BAV loader. ----
+  c->r[4] = desc; c->r[5] = (uint32_t)-1; c->r[6] = cbarg;
+  c->r[31] = 0x800753F8u;                         // jal 0x80096480 @0x800753f0 -> ra = jal+8
+  rec_dispatch(c, 0x80096480u);
+  int32_t slot = sext16(c->r[2]);
+  c->mem_w16(out, (uint16_t)slot);                // *(u16*)out = allocated slot (0x80075408 / dup 0x8007540c)
+
+  // ---- FUN_80096980(cbarg, slot): kick the slot's upload state machine (state -> 1=allocating). ----
+  c->r[4] = cbarg; c->r[5] = (uint32_t)slot;
+  c->r[31] = 0x8007540Cu;                         // jal 0x80096980 @0x80075404 -> ra = jal+8
+  rec_dispatch(c, 0x80096980u);
+
+  if (s_v) {
+    static long s_hits = 0;
+    fprintf(stderr, "[celloadverify] HIT #%ld out=%08x desc=%08x slot=%d state(after kick)=%u -> redirect poll\n",
+            ++s_hits, out, desc, slot, (slot >= 0 && slot < 16) ? c->mem_r8(0x80105D18u + (uint32_t)slot) : 0xff);
+  }
+
+  // ---- hand the cross-frame DMA-wait poll loop back IN-CONTEXT (deep yield safe). ----
+  c->r[4] = 0;                                    // a0 = 0 (the loop's first FUN_80096a40 arg, set in delay slot)
+  rec_coro_redirect(c, 0x80075410u);              // continue the flat interp at the poll-loop head
 }

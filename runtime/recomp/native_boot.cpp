@@ -300,6 +300,22 @@ static long native_repl_read(Core* c, uint32_t f) {
     else if (!strcmp(cmd, "tp")) { int x=0,y=0,z=0;
       if (sscanf(line, "%*s %d %d %d", &x, &y, &z) == 3) { cam_teleport(x, y, z); fprintf(stderr, "[repl] tp camera -> (%d,%d,%d)\n", x, y, z); }
       else { cam_teleport_off(); fprintf(stderr, "[repl] tp off (camera follows player)\n"); } }
+    else if (!strcmp(cmd, "invtest")) {   // diagnostic: exercise the inventory subsystem with a test vector
+      // invtest [type] [amt] — fire FUN_8004D338/D4C4/D4F4(type,amt) through the override path (with the
+      // `invverify` gate enabled this runs the full RAM+scratchpad A/B vs the recomp body). With no args,
+      // sweep a spread of item types/amounts covering both quest-ref variants + the 23..28 ring + the cap.
+      int ty = -1, am = -1; sscanf(line, "%*s %d %d", &ty, &am);
+      static const int vt[] = { 1, 2, 5, 10, 23, 25, 28, 40, 60, 99 };
+      static const int va[] = { 1, 3, 1, 50, 1, 99, 2, 7, 1, 5 };
+      int n = (ty >= 0) ? 1 : (int)(sizeof vt / sizeof vt[0]);
+      for (int i = 0; i < n; i++) {
+        uint32_t t = (ty >= 0) ? (uint32_t)ty : (uint32_t)vt[i];
+        uint32_t m = (am >= 0) ? (uint32_t)am : (ty >= 0 ? 1u : (uint32_t)va[i]);
+        rc2(c, 0x8004D338u, t, m);    // inventory_add core
+        rc2(c, 0x8004D4F4u, t, m);    // give_only
+        rc2(c, 0x8004D4C4u, t, m);    // give_and_flag
+      }
+      fprintf(stderr, "[repl] invtest: fired %d vector(s) through inventory overrides\n", n * 3); }
     else if (!strcmp(cmd, "newgame")) { g_nav_newgame = 1; fprintf(stderr, "[repl] newgame: pulsing to GAME prologue\n"); return 100000; }
     else if (!strcmp(cmd, "skip")) { a = 0; sscanf(line, "%*s %u", &a); if (!a) a = 500; g_skip_frames = (long)a; fprintf(stderr, "[repl] skip %u frames\n", a); return (long)a; }
     else if (!strcmp(cmd, "shot")) { char path[200] = {0}; if (sscanf(line, "%*s %199s", path) == 1) { void gpu_native_shot(Core*, const char*); gpu_native_shot(c, path); } }
