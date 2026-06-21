@@ -88,6 +88,7 @@ void hud_quad(Core* c, int x, int y, int w, int h, int u, int v, int cr, int cg,
 // atlas cell, then draw it PC-native. The cell's UV/size come from the slice record (the game's own atlas
 // layout); we resolve it exactly so any gauge cell (not just the ball) draws from the right atlas spot.
 void ov_hud_sprite(Core* c) {
+  { static int d=-1; if(d<0)d=cfg_dbg("hud")?1:0; if(d){static long n=0; if(++n<=8||n%200==0) fprintf(stderr,"[hud] ov_hud_sprite FIRED #%ld (native draw)\n",n);} }
   uint32_t vtable = c->r[4];          // a0
   int geom_a = (int16_t)c->r[5];      // a1 -> screen X anchor
   int geom_b = (int16_t)c->r[6];      // a2 -> screen Y anchor
