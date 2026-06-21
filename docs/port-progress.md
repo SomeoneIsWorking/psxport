@@ -153,6 +153,22 @@ for content fns (call it). Do NOT mimic PSX hardware (GTE/GP0/OT) — remove Bee
   2*width); empty cell skip = `v1 == -1` (the dedup beq's v0 = -1 from the branch delay slot 0x8013f798).
   Signature-registered (corner-ptr load triple); `tilescanverify` gate 0-diff 600+ calls over varied
   triangles (71–149 tiles). Field 25.99M→24.28M (−6.6%); the ~11% 0x8013f9xx cluster GONE from the profile.
+- ✅ **later-192 batch — 6 resident leaves OWNED (field 24.28M→~23.0M).** All in game_tomba2.cpp /
+  engine_submit.cpp, each absent from the profile after: (1) `FUN_8003F698` render-command DISPATCHER
+  (~4%) — folded NATIVE into `ov_render_cmd` (`render_cmd_dispatch`): read cmd byte 0x800BF870,
+  bounds-check <22, index jump table 0x80015268, decode the per-cmd thunk's `jal` target, rec_dispatch the
+  handler (tail-call, exactly equivalent — render output unchanged, only dispatch glue native). (2)
+  `FUN_8009A450` `ov_rand` — glibc LCG (state*0x41C64E6D+12345 @0x80105EE8, (state>>16)&0x7FFF), 100k
+  calls/run, `randverify` 0-diff. (3) `FUN_80083E80/F50/EBC` `ov_trig_sin/cos/lut` — angle-table lookups
+  (12-bit angle, tables @0x800a5af0/52f0/42f0/4af0), `trigverify` 0-diff 40k+ (GOTCHA: cos q3 a0≥3073
+  returns UNNEGATED — its path `j 0x80083fe8` skips the negate, unlike q1/q2). (4) `FUN_80077ACC`
+  `ov_cull_wrap_77acc` — 2nd cull-wrapper variant (flags 0x1F800080=1/0x1F800084=4, position in a1-a3,
+  camera-relative → owned cull 0x8007712C), `cullwrap2` 0-diff. (5) `FUN_8004D7EC` `ov_bittest_4d7ec` —
+  pure bitmap test `bitmap[(int16)a0/8] & (1<<((int16)a0%8)&31)`, base 0x800BFD34 / 0x800BFCB4 by a1&0xff,
+  `bitverify` 0-diff. **LESSON re-confirmed:** the remaining big freq buckets (`FUN_8004CE14`,
+  `FUN_80040558`, `FUN_8013C3F4/538`, `FUN_8012E2F4`) are per-object STATE MACHINES = game CONTENT
+  (stay PSX); and the `ov_XXXX(>encl)` profiler labels are mid-fn boundaries — disas to the real prologue
+  before porting.
 - ✅ `FUN_80051C8C` per-object TRANSFORM build = `ov_build_xform`.
 - **Camera update (engine_camera.cpp):**
   - ✅ position X/Z `FUN_8006d960` = `ov_cam_track_xz`; ✅ position Y `FUN_8006da54` = `ov_cam_track_y` (later-174).
