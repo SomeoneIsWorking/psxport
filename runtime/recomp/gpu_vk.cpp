@@ -38,6 +38,23 @@
 #define IMG_H   (VRAM_H + FB_MAXH)   // 1232
 #define MAX_SWAP 8
 
+// The VRAM image is stored as R16_UINT (packed PSX 1555 words: R=bits0-4, G=5-9, B=10-14, STP=bit15) —
+// the format the GP0 VRAM-copy/upload word-moves, the paletted-texture sampler, present and readback all
+// see, kept bit-for-bit unchanged. R16_UINT cannot fixed-function BLEND, so the image is also created
+// VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT and a SECOND view is made in VRAM_BLEND_FMT — A1R5G5B5_UNORM_PACK16
+// (core since Vulkan 1.0, same 16-bit compatibility class as R16_UINT -> a legal aliased view). Its layout
+// is A=bit15=STP, R=bits10-14, G=5-9, B=0-4 — PSX 1555 with R<->B SWAPPED. We keep the stored BITS as PSX
+// 1555 (PSX-red in the low 5) by having the fragment shaders write PSX-blue into the view's R slot and
+// PSX-red into its B slot (a pure output swizzle); the stored word is therefore identical to the old
+// `uint o_px`, so every other consumer (copy/upload/sample/present/readback) is untouched. HW blend is
+// per-channel and symmetric, so blending the swapped channels still composites PSX-R with PSX-R etc. The
+// view is used ONLY as the render-pass color attachment, giving the 4 PSX semi modes real hardware blend.
+// (A1B5G5R5 would match PSX exactly with no swizzle, but it is a Vulkan-1.4/maintenance5 format — invalid
+// under our 1.1 instance per the validation layer; A1R5G5B5 is the portable 1.0-core choice.) Verified on
+// RADV + llvmpipe: A1R5G5B5 has COLOR_ATTACHMENT + BLEND + SAMPLED (scratch/fmtprobe.c).
+#define VRAM_FMT       VK_FORMAT_R16_UINT
+#define VRAM_BLEND_FMT VK_FORMAT_A1R5G5B5_UNORM_PACK16
+
 #define VKC(x) do { VkResult _r = (x); if (_r != VK_SUCCESS) { \
     fprintf(stderr, "[gpu_vk] %s failed: VkResult %d (%s:%d)\n", #x, _r, __FILE__, __LINE__); exit(2); } } while (0)
 
@@ -112,13 +129,15 @@ static void vkprof_tick() {
 static int             s_tex_undef;
 static VkImage         s_tex;
 static VkDeviceMemory  s_tex_mem;
-static VkImageView     s_tex_view;
+static VkImageView     s_tex_view;        // UINT view: sampling, present, copy/upload, readback (1555 bits)
+static VkImageView     s_tex_blend_view;  // A1B5G5R5_UNORM alias: render-pass color attachment (blendable)
 // PSXPORT_SBS: a SECOND full-resolution VRAM image. Each present renders the frame's geometry twice —
 // s_tex with default OT-order depth, s_tex_b with native per-vertex depth — then the windowed present
 // composites them side by side (left pane samples s_tex, right pane s_tex_b). No shared-image seam.
 static VkImage         s_tex_b;
 static VkDeviceMemory  s_tex_b_mem;
-static VkImageView     s_tex_b_view;
+static VkImageView     s_tex_b_view;        // UINT view (present sampling)
+static VkImageView     s_tex_b_blend_view;  // A1B5G5R5_UNORM alias (render-pass color attachment)
 static VkFramebuffer   s_vram_fb_b;        // render pass framebuffer over s_tex_b (+ its own depth)
 static VkDescriptorSet s_dset_b;           // present descriptor: binding0 = s_tex_b
 
@@ -171,7 +190,18 @@ static VkImage         s_depth_b;
 static VkDeviceMemory  s_depth_b_mem;
 static VkImageView     s_depth_b_view;
 static int             s_depth_b_undef = 1;
-static VkPipeline      s_tritex_semi_pipe[2];   // textured semi, depth-test GREATER_EQUAL no write; [native]
+// Textured semi-transparent pipelines: one per PSX blend MODE (0=avg, 1=add, 2=sub, 3=add/4), each ×
+// native-depth channel. Depth-test GREATER_OR_EQUAL, NO depth write. The 4 modes map to fixed-function
+// HW blend (no more in-shader framebuffer-snapshot blend):
+//   avg  (0): 0.5*src + 0.5*dst   (CONSTANT_COLOR .5, ADD)
+//   add  (1): 1*src + 1*dst       (ONE/ONE, ADD)
+//   sub  (2): 1*dst - 1*src       (ONE/ONE, REVERSE_SUBTRACT)
+//   add4 (3): 0.25*src + 1*dst    (CONSTANT_COLOR .25 src, ONE dst, ADD)
+// Blend constants (.5 / .25) are dynamic (vkCmdSetBlendConstants) and set per mode-run at draw time.
+static VkPipeline      s_tritex_semi_pipe[4][2];
+// Semi sub-pass 0: the OPAQUE half of a textured-semi prim (texels with STP=0 draw opaque, no HW blend),
+// depth-test / NO write, fragment SEMI_PASS=0 discarding the blending texels. Per native-depth channel.
+static VkPipeline      s_tritex_semi_op_pipe[2];
 // Phase 2 (PSXPORT_NATIVE_DEPTH): per-vertex REAL depth for the current triangle. When non-NULL it
 // overrides the per-prim OT-order s_cur_ord, so gl_Position.z carries the native view-space depth (from
 // proj_pz_to_ord) and the D32 buffer does true per-pixel occlusion instead of painter/OT order. Set by
@@ -762,8 +792,15 @@ static void init_vk(void) {
 // rasterizer (M2+), sampled by the present pass, transfer src/dst for upload/readback.
 static void create_vram(void) {
   s_tex_undef = 1;
+  // MUTABLE_FORMAT + an explicit format list (R16_UINT base + the A1B5G5R5_UNORM blend alias) so the same
+  // image carries both views. The format list lets the driver lay out the image valid for both up front.
+  static const VkFormat s_vram_fmt_list[2] = { VRAM_FMT, VRAM_BLEND_FMT };
+  VkImageFormatListCreateInfo fl = { VK_STRUCTURE_TYPE_IMAGE_FORMAT_LIST_CREATE_INFO };
+  fl.viewFormatCount = 2; fl.pViewFormats = s_vram_fmt_list;
   VkImageCreateInfo ii = { VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO };
-  ii.imageType = VK_IMAGE_TYPE_2D; ii.format = VK_FORMAT_R16_UINT;
+  ii.pNext = &fl;
+  ii.flags = VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT;
+  ii.imageType = VK_IMAGE_TYPE_2D; ii.format = VRAM_FMT;
   ii.extent = (VkExtent3D){ VRAM_W, IMG_H, 1 }; ii.mipLevels = 1; ii.arrayLayers = 1;
   ii.samples = VK_SAMPLE_COUNT_1_BIT; ii.tiling = VK_IMAGE_TILING_OPTIMAL;
   ii.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
@@ -776,9 +813,12 @@ static void create_vram(void) {
   VKC(vkAllocateMemory(s_dev, &ma, 0, &s_tex_mem));
   VKC(vkBindImageMemory(s_dev, s_tex, s_tex_mem, 0));
   VkImageViewCreateInfo vi = { VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO };
-  vi.image = s_tex; vi.viewType = VK_IMAGE_VIEW_TYPE_2D; vi.format = VK_FORMAT_R16_UINT;
+  vi.image = s_tex; vi.viewType = VK_IMAGE_VIEW_TYPE_2D; vi.format = VRAM_FMT;
   vi.subresourceRange = (VkImageSubresourceRange){ VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
   VKC(vkCreateImageView(s_dev, &vi, 0, &s_tex_view));
+  // Blendable A1B5G5R5_UNORM alias of the SAME image — the render-pass color attachment.
+  VkImageViewCreateInfo vib0 = vi; vib0.format = VRAM_BLEND_FMT;
+  VKC(vkCreateImageView(s_dev, &vib0, 0, &s_tex_blend_view));
 
   s_stage_sz = (VkDeviceSize)VRAM_W * VRAM_H * 2;   // uint16 per texel
   VkBufferCreateInfo bi = { VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO };
@@ -807,12 +847,16 @@ static void create_vram(void) {
   VKC(vkBindImageMemory(s_dev, s_tex_b, s_tex_b_mem, 0));
   VkImageViewCreateInfo vib = vi; vib.image = s_tex_b;
   VKC(vkCreateImageView(s_dev, &vib, 0, &s_tex_b_view));
+  VkImageViewCreateInfo vibb = vib; vibb.format = VRAM_BLEND_FMT;   // blendable alias for panel B's attachment
+  VKC(vkCreateImageView(s_dev, &vibb, 0, &s_tex_b_blend_view));
   VkDescriptorImageInfo dib = { s_sampler, s_tex_b_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
   VkWriteDescriptorSet wrb = wr; wrb.dstSet = s_dset_b; wrb.pImageInfo = &dib;
   vkUpdateDescriptorSets(s_dev, 1, &wrb, 0, 0);
 
   // VRAM snapshot image (texture source for the textured pipeline; copied from VRAM before a batch).
+  // Sampled-only R16_UINT: no blend alias needed, so drop the mutable flag / format list.
   VkImageCreateInfo ti = ii; ti.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+  ti.flags = 0; ti.pNext = 0;
   VKC(vkCreateImage(s_dev, &ti, 0, &s_vram_tex));
   VkMemoryRequirements tr; vkGetImageMemoryRequirements(s_dev, s_vram_tex, &tr);
   VkMemoryAllocateInfo tm = { VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO };
@@ -966,33 +1010,38 @@ void GpuVkState::panel_render(Panel* p) {
                    vkCmdBindVertexBuffers(s_cmd, 0, 1, &s_vbuf, &go); vkCmdDraw(s_cmd, s_tri_n, 1, 0, 0); }
     if (s_tex_n) { vkCmdBindPipeline(s_cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, s_tritex_pipe[native]);
                    vkCmdBindVertexBuffers(s_cmd, 0, 1, &s_tvbuf, &go); vkCmdDraw(s_cmd, s_tex_n, 1, 0, 0); }
-    vkCmdEndRenderPass(s_cmd);
-    // SEMI pass, OT-order-correct: each overlap-group with a FRESH framebuffer snapshot.
-    for (int g = 0; g <= s_semi_grp_n && s_semi_n; g++) {
-      int gstart = (g == 0) ? 0 : s_semi_grp[g - 1];
-      int gend   = (g < s_semi_grp_n) ? s_semi_grp[g] : s_semi_n;
-      if (gend <= gstart) continue;
-      if (s_vkprof > 0 && tgt == s_tex) s_vp_semi_grps++;   // vkprof: each group = one full-VRAM vkCmdCopyImage
-      img_barrier_on(tgt, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                  VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                  VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT);
-      img_barrier_on(s_vram_tex, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                     VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                     VK_ACCESS_SHADER_READ_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
-      vkCmdCopyImage(s_cmd, tgt, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, s_vram_tex, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &ic);
-      img_barrier_on(s_vram_tex, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                     VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                     VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
-      img_barrier_on(tgt, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                  VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-                  VK_ACCESS_TRANSFER_READ_BIT, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
-      vkCmdBeginRenderPass(s_cmd, &grp, VK_SUBPASS_CONTENTS_INLINE);
-      vkCmdSetViewport(s_cmd, 0, 1, &gv); vkCmdSetScissor(s_cmd, 0, 1, &gs);
+    // SEMI pass — PC-native HARDWARE BLEND. Fixed-function blend reads the LIVE color attachment as the
+    // dst per fragment, so overlapping/stacked translucent prims accumulate correctly in submission order
+    // with NO framebuffer snapshot (this is exactly what the old per-group vkCmdCopyImage scheme emulated;
+    // HW blend makes it free). Same render pass / depth buffer as the opaque pass (depth-test, no write).
+    // We draw the semi batch as contiguous RUNS of constant PSX blend mode (read from the host buffer's
+    // per-vertex clut[3]), binding that mode's HW-blend pipeline + its blend constant per run. Within a run
+    // submission order is preserved; blend always composites over what's already there. Textures still come
+    // from the pre-opaque s_vram_tex snapshot (the texel SOURCE); the blend DST is the attachment itself.
+    if (s_semi_n) {
       vkCmdBindDescriptorSets(s_cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, s_pll, 0, 1, &s_dset_tex, 0, 0);
-      vkCmdBindPipeline(s_cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, s_tritex_semi_pipe[native]);   // depth-test, NO write
-      vkCmdBindVertexBuffers(s_cmd, 0, 1, &s_semibuf, &go); vkCmdDraw(s_cmd, gend - gstart, 1, gstart, 0);
-      vkCmdEndRenderPass(s_cmd);
+      vkCmdBindVertexBuffers(s_cmd, 0, 1, &s_semibuf, &go);
+      const TexVtx* sv = (const TexVtx*)s_semibuf_ptr;
+      int i = 0;
+      while (i < s_semi_n) {
+        int m = sv[i].clut[3] & 3;                       // PSX blend mode of this prim (per-vertex, uniform/prim)
+        int j = i + 3;
+        while (j < s_semi_n && (sv[j].clut[3] & 3) == m) j += 3;   // extend the run while the mode matches
+        // 1) OPAQUE sub-pass: a textured-semi texel with STP=0 draws OPAQUE (mode-independent), so one
+        //    non-blend draw over the run handles them (the shader discards the blending texels).
+        vkCmdBindPipeline(s_cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, s_tritex_semi_op_pipe[native]);
+        vkCmdDraw(s_cmd, j - i, 1, i, 0);
+        // 2) BLEND sub-pass: STP=1 / untextured texels blend per the run's PSX mode via HW fixed-function.
+        float bc[4] = { 0,0,0,1 };
+        if (m == 0)      { bc[0]=bc[1]=bc[2]=0.5f; }     // avg:  .5 src + .5 dst
+        else if (m == 3) { bc[0]=bc[1]=bc[2]=0.25f; }    // add4: .25 src + 1 dst
+        vkCmdSetBlendConstants(s_cmd, bc);               // add(1)/sub(2): constants unused but set harmlessly
+        vkCmdBindPipeline(s_cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, s_tritex_semi_pipe[m][native]);
+        vkCmdDraw(s_cmd, j - i, 1, i, 0);
+        i = j;
+      }
     }
+    vkCmdEndRenderPass(s_cmd);
     // AO runs AFTER the translucent composite (#13 fix): darkening the OPAQUE buffer before the semi pass
     // poisoned the framebuffer the water samples (the puddle is a depth concavity -> max AO -> near-black
     // ground -> the blended water read as invisible). Applied to the FINAL composited frame instead, every
@@ -1575,7 +1624,8 @@ void create_tri_pipeline(void) {
   // Depth attachment LOADs too (it is explicitly cleared at the start of the opaque pass via
   // vkCmdClearAttachments, so the opaque->semi passes share one persistent depth buffer).
   VkAttachmentDescription at[2] = {{0},{0}};
-  at[0].format = VK_FORMAT_R16_UINT; at[0].samples = VK_SAMPLE_COUNT_1_BIT;
+  at[0].format = VRAM_BLEND_FMT;   // blendable A1B5G5R5 alias (same bits as the R16_UINT image)
+  at[0].samples = VK_SAMPLE_COUNT_1_BIT;
   at[0].loadOp = VK_ATTACHMENT_LOAD_OP_LOAD; at[0].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
   at[0].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE; at[0].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
   at[0].initialLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
@@ -1593,12 +1643,12 @@ void create_tri_pipeline(void) {
   rpi.attachmentCount = 2; rpi.pAttachments = at; rpi.subpassCount = 1; rpi.pSubpasses = &sp;
   VKC(vkCreateRenderPass(s_dev, &rpi, 0, &s_vram_rpass));
 
-  VkImageView fbviews[2] = { s_tex_view, s_depth_view };
+  VkImageView fbviews[2] = { s_tex_blend_view, s_depth_view };   // blendable color alias + depth
   VkFramebufferCreateInfo fi = { VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO };
   fi.renderPass = s_vram_rpass; fi.attachmentCount = 2; fi.pAttachments = fbviews;
   fi.width = VRAM_W; fi.height = IMG_H; fi.layers = 1;
   VKC(vkCreateFramebuffer(s_dev, &fi, 0, &s_vram_fb));
-  VkImageView fbviews_b[2] = { s_tex_b_view, s_depth_b_view };   // PSXPORT_SBS: s_tex_b + its OWN depth
+  VkImageView fbviews_b[2] = { s_tex_b_blend_view, s_depth_b_view };   // PSXPORT_SBS: s_tex_b alias + its OWN depth
   VkFramebufferCreateInfo fib = fi; fib.pAttachments = fbviews_b;
   VKC(vkCreateFramebuffer(s_dev, &fib, 0, &s_vram_fb_b));
 
@@ -1635,12 +1685,38 @@ void create_tri_pipeline(void) {
   rs.polygonMode = VK_POLYGON_MODE_FILL; rs.cullMode = VK_CULL_MODE_NONE; rs.lineWidth = 1.0f;
   VkPipelineMultisampleStateCreateInfo ms = { VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO };
   ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
-  VkPipelineColorBlendAttachmentState cba = {0}; cba.colorWriteMask = 0xF;   // R16_UINT: opaque (no blend)
+  VkPipelineColorBlendAttachmentState cba = {0}; cba.colorWriteMask = 0xF;   // opaque (no blend)
   VkPipelineColorBlendStateCreateInfo cb = { VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO };
   cb.attachmentCount = 1; cb.pAttachments = &cba;
   VkDynamicState dyn[2] = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
   VkPipelineDynamicStateCreateInfo ds = { VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO };
   ds.dynamicStateCount = 2; ds.pDynamicStates = dyn;
+  // --- semi-transparent blend: one color-blend-attachment per PSX mode (HW fixed-function), + a dynamic
+  // state that ADDS blend constants (the .5 / .25 factors set per draw). RGB blends per the mode; alpha is
+  // irrelevant (A=STP, never read by present), kept = src so the stored STP bit stays the source's.
+  VkPipelineColorBlendAttachmentState semi_cba[4];
+  for (int m = 0; m < 4; m++) {
+    VkPipelineColorBlendAttachmentState a = {0};
+    a.blendEnable = VK_TRUE; a.colorWriteMask = 0xF;
+    a.alphaBlendOp = VK_BLEND_OP_ADD; a.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE; a.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+    switch (m) {
+      case 0: a.colorBlendOp = VK_BLEND_OP_ADD;                                     // avg: .5*s + .5*d
+              a.srcColorBlendFactor = VK_BLEND_FACTOR_CONSTANT_COLOR; a.dstColorBlendFactor = VK_BLEND_FACTOR_CONSTANT_COLOR; break;
+      case 1: a.colorBlendOp = VK_BLEND_OP_ADD;                                     // add: s + d
+              a.srcColorBlendFactor = VK_BLEND_FACTOR_ONE; a.dstColorBlendFactor = VK_BLEND_FACTOR_ONE; break;
+      case 2: a.colorBlendOp = VK_BLEND_OP_REVERSE_SUBTRACT;                        // sub: d - s
+              a.srcColorBlendFactor = VK_BLEND_FACTOR_ONE; a.dstColorBlendFactor = VK_BLEND_FACTOR_ONE; break;
+      default:a.colorBlendOp = VK_BLEND_OP_ADD;                                     // add4: .25*s + d
+              a.srcColorBlendFactor = VK_BLEND_FACTOR_CONSTANT_COLOR; a.dstColorBlendFactor = VK_BLEND_FACTOR_ONE; break;
+    }
+    semi_cba[m] = a;
+  }
+  VkPipelineColorBlendStateCreateInfo semi_cb[4];
+  for (int m = 0; m < 4; m++) { semi_cb[m] = (VkPipelineColorBlendStateCreateInfo){ VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO };
+    semi_cb[m].attachmentCount = 1; semi_cb[m].pAttachments = &semi_cba[m]; }
+  VkDynamicState semi_dyn[3] = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR, VK_DYNAMIC_STATE_BLEND_CONSTANTS };
+  VkPipelineDynamicStateCreateInfo semi_ds = { VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO };
+  semi_ds.dynamicStateCount = 3; semi_ds.pDynamicStates = semi_dyn;
   // Depth state: OT order is the depth. Opaque writes depth, compare GREATER_OR_EQUAL (later prim =
   // greater ord wins, matching painter's order). The semi variant tests the same way but does NOT
   // write, so semi is rejected behind later opaque yet never occludes anything itself.
@@ -1683,12 +1759,30 @@ void create_tri_pipeline(void) {
   tvi.vertexBindingDescriptionCount = 1; tvi.pVertexBindingDescriptions = &tvbd;
   tvi.vertexAttributeDescriptionCount = 9; tvi.pVertexAttributeDescriptions = tvad;
   gp.pStages = tst; gp.pVertexInputState = &tvi;   // reuse ia/vp/rs/ms/cb/ds/layout/renderPass from above
+  // FRAGMENT spec constant SEMI_PASS (id 1): 0 = opaque sub-pass of a semi prim (STP=0 texels), 1 = blend
+  // sub-pass (STP=1 / untextured), 2 = plain opaque prim (no STP gating). Lives in the fragment stage, so
+  // it doesn't collide with the vertex stage's SBS_NATIVE (id 0).
+  static const int32_t semipass_val[3] = { 0, 1, 2 };
+  static const VkSpecializationMapEntry sme_f = { 1, 0, sizeof(int32_t) };
+  VkSpecializationInfo fspec[3] = {
+    { 1, &sme_f, sizeof(int32_t), &semipass_val[0] },
+    { 1, &sme_f, sizeof(int32_t), &semipass_val[1] },
+    { 1, &sme_f, sizeof(int32_t), &semipass_val[2] },
+  };
   for (int nv2 = 0; nv2 < 2; nv2++) { tst[0].pSpecializationInfo = &spec[nv2];   // [0]=default, [1]=native
     gp.pDepthStencilState = &dpo;                   // opaque-textured: depth test + write
+    gp.pColorBlendState = &cb; gp.pDynamicState = &ds;    // no blend
+    tst[1].pSpecializationInfo = &fspec[2];         // plain opaque prim
     VKC(vkCreateGraphicsPipelines(s_dev, VK_NULL_HANDLE, 1, &gp, 0, &s_tritex_pipe[nv2]));
-    gp.pDepthStencilState = &dps;                   // semi-textured: depth test, NO write
-    VKC(vkCreateGraphicsPipelines(s_dev, VK_NULL_HANDLE, 1, &gp, 0, &s_tritex_semi_pipe[nv2])); }
-  tst[0].pSpecializationInfo = 0;
+    gp.pDepthStencilState = &dps;                   // semi prim: depth test, NO write
+    tst[1].pSpecializationInfo = &fspec[0];         // semi OPAQUE sub-pass (STP=0 texels), no blend
+    VKC(vkCreateGraphicsPipelines(s_dev, VK_NULL_HANDLE, 1, &gp, 0, &s_tritex_semi_op_pipe[nv2]));
+    gp.pDynamicState = &semi_ds;                    // semi blend: + dynamic blend constants
+    tst[1].pSpecializationInfo = &fspec[1];         // semi BLEND sub-pass (STP=1 / untextured)
+    for (int m = 0; m < 4; m++) { gp.pColorBlendState = &semi_cb[m];   // one HW-blend pipeline per PSX mode
+      VKC(vkCreateGraphicsPipelines(s_dev, VK_NULL_HANDLE, 1, &gp, 0, &s_tritex_semi_pipe[m][nv2])); }
+    gp.pColorBlendState = &cb; gp.pDynamicState = &ds; }   // restore for the next iteration's opaque create
+  tst[0].pSpecializationInfo = 0; tst[1].pSpecializationInfo = 0;
   vkDestroyShaderModule(s_dev, tvs, 0); vkDestroyShaderModule(s_dev, tfs, 0);
   make_hostbuf(sizeof(TexVtx) * TEX_CAP, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, &s_tvbuf, &s_tvbuf_mem, &s_tvbuf_ptr);
   make_hostbuf(sizeof(TexVtx) * TEX_CAP, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, &s_semibuf, &s_semibuf_mem, &s_semibuf_ptr);
