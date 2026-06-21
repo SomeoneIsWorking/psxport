@@ -906,10 +906,6 @@ void GpuVkState::panel_render(Panel* p) {
     if (s_tex_n) { vkCmdBindPipeline(s_cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, s_tritex_pipe[native]);
                    vkCmdBindVertexBuffers(s_cmd, 0, 1, &s_tvbuf, &go); vkCmdDraw(s_cmd, s_tex_n, 1, 0, 0); }
     vkCmdEndRenderPass(s_cmd);
-    // PSXPORT_SSAO: darken opaque 3D creases NOW, before the translucent pass composites UI/water on top
-    // (only the primary panel; SSAO is disabled under PSXPORT_SBS). s_tex/s_depth are in their attachment
-    // layouts here; ssao_pass round-trips them through shader-read and restores them for the semi pass.
-    if (deferred_on() && tgt == s_tex) ssao_pass();
     // SEMI pass, OT-order-correct: each overlap-group with a FRESH framebuffer snapshot.
     for (int g = 0; g <= s_semi_grp_n && s_semi_n; g++) {
       int gstart = (g == 0) ? 0 : s_semi_grp[g - 1];
@@ -935,6 +931,13 @@ void GpuVkState::panel_render(Panel* p) {
       vkCmdBindVertexBuffers(s_cmd, 0, 1, &s_semibuf, &go); vkCmdDraw(s_cmd, gend - gstart, 1, gstart, 0);
       vkCmdEndRenderPass(s_cmd);
     }
+    // AO runs AFTER the translucent composite (#13 fix): darkening the OPAQUE buffer before the semi pass
+    // poisoned the framebuffer the water samples (the puddle is a depth concavity -> max AO -> near-black
+    // ground -> the blended water read as invisible). Applied to the FINAL composited frame instead, every
+    // 3D-world pixel (water included) is AO-shaded uniformly from the opaque depth, so translucent surfaces
+    // keep their hue and stay visible. s_tex is in COLOR_ATTACHMENT here (semi loop / opaque pass left it
+    // there); ssao_pass round-trips it through shader-read and returns it to COLOR_ATTACHMENT.
+    if (deferred_on() && tgt == s_tex) ssao_pass();
     img_barrier_on(tgt, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                 VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
                 VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
