@@ -189,6 +189,18 @@ void pad_poll_sdl(Core* c) {
   SDL_PumpEvents();
   uint16_t mask = PAD_NONE;
 
+  // GitHub #18: keep SDL text input (IME) OFF during gameplay. SDL leaves text input ON by default and
+  // ImGui's SDL backend re-enables it via its IME handler whenever the overlay window is focused, so this
+  // MUST run every frame (one-shot disabling is not enough). With IME on, KDE/Wayland compositors pop an
+  // "alternative character"/compose widget that swallows WASD before SDL_GetKeyboardState() sees it ->
+  // the player won't move. Only stop it when no UI text field actually wants the keyboard, so focused
+  // ImGui fields can still type.
+  if (!imgui_overlay_wants_keyboard() && SDL_IsTextInputActive()) {
+    SDL_StopTextInput();
+    static int s_ime_noted = 0;
+    if (!s_ime_noted) { s_ime_noted = 1; fprintf(stderr, "[pad] IME/text-input disabled during gameplay (GH#18)\n"); }
+  }
+
   // Suppress the keyboard ONLY while the user is typing into an ImGui text field (see the extern decl).
   // A merely-visible overlay does NOT block WASD — that was the bug. The debug pause/step keys below stay
   // outside this guard intentionally so P/'.' still work even with a field focused.
