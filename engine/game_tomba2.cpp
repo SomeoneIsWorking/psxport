@@ -229,6 +229,7 @@ void games_tomba2_init(void) {
     { void ov_grid_query_47cbc(Core*); rec_set_override(0x80047CBCu, ov_grid_query_47cbc); }  // collision-grid cell query/walk
     { void ov_grid_resolve_498c8(Core*); rec_set_override(0x800498C8u, ov_grid_resolve_498c8); }  // collision-grid resolve loop (control flow owned)
     { void ov_grid_step_4798c(Core*); rec_set_override(0x8004798Cu, ov_grid_step_4798c); }  // collision-grid per-step origin/index setup (the last dispatched grid callee)
+    { void ov_grid_offset_48360(Core*); rec_set_override(0x80048360u, ov_grid_offset_48360); }  // collision-grid cell-relative offset transform (scratchpad-only leaf, ~5% field; engine/grid_offset.cpp)
     { void ov_script_vm_4ce14(Core*); rec_set_override(0x8004CE14u, ov_script_vm_4ce14); }  // per-object script-VM tick (control flow owned; sub-behaviors dispatched)
     { void ov_input_dispatch_931c0(Core*); rec_set_override(0x800931C0u, ov_input_dispatch_931c0); }  // per-frame input/controller-state processor (control flow owned)
     // PC-native PLAYER velocity-integrate handler (engine/engine_player.cpp): FUN_80056B48 integrates

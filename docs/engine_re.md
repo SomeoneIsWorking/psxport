@@ -1025,6 +1025,27 @@ loop · `FUN_8004798C` per-step origin/index · `FUN_80031780` list-tail. All sc
 `0x1F8001C8`, probe coords `0x1F8001BC/BE/C0`, result tag `0x1F8001A6`, cell cursors `0x1F8001E0/E8/EC`).
 These are the GRID; the response/integration layer is the CONSUMER below.
 
+`FUN_80048360` **cell-relative OFFSET transform** (`ov_grid_offset_48360`, `engine/grid_offset.cpp`) —
+a hot grid LEAF (~5% of field interp time across its internal jump-table entries 0x80048360/410/594/630,
+~14400 calls/run; chosen via the §F profiler this session). No args; returns `rec[7]` (slope lo byte) in
+v0. Scratchpad-ONLY, no GTE, no render, **no callees**. Maps the probe into a cell-local 6-bit offset and
+applies the cell tag's orientation, then re-accumulates onto the working coords:
+- dx = `(sh[0x1BC]-sh[0x1AA]) & 0x3F` → `sh[0x1C2]`; dz = `(sh[0x1C0]-sh[0x1AC]) & 0x3F` → `sh[0x1C6]`.
+- TAG = `rec[0]` (rec ptr = `w[0x1E0]`, latched by the query). **TAG&3** drives a pre-mirror (`^0x3F`),
+  a post sign-negate, and a post re-mirror of (dx,dz) by quadrant (0:both / 1:dz·dx / 2:dx·dz / 3:none-mirror
+  vs all-negate — the negate is the bitwise complement of the mirror map). **TAG&4** transposes dx/dz
+  (applied before AND after the slope step). **TAG&8** selects the slope op on `rec[6]` (hi=a2, lo=a3):
+  set → sheared `dz -= a3 + (((a2-a3)*dx)>>6)`; clear → divided `dz -= ((dx-a3)*a2)/(a3^0x3F)` (MIPS
+  signed mult-lo + truncating div; the divisor is non-zero in practice). dx is zeroed across the slope.
+- Tail: `sh[0x1BC]+=dx, sh[0x1C0]+=dz`; `sh[0x1C2]=(origDx+dx)`, `sh[0x1C6]=(origDz+dz)` then re-mirror/
+  re-swap those by TAG&3 / TAG&4.
+GOTCHAs: the TAG&3 quadrant map differs between the pre-mirror (q1→dz, q2→dx, q3→both) and the
+sign-negate (q0→both, q1→dx, q2→dz, q3→none); the slope products are MIPS signed (low word); `origDx/origDz`
+(t4/t5) are the PRE-transform offsets captured at entry. Verified via the `gridoffset` channel = full
+main-RAM + scratchpad + v0 A/B vs `rec_super_call` (exact 0-diff, no stack-window exclusion since there are
+no dispatched callees): **8000+ live field calls 0-diff** (press right 250 + left 250, all tag branches
+exercised). Registered in game_tomba2.cpp.
+
 ### The move-and-collide RESPONSE family (consumers of grid_resolve `FUN_800498C8`)
 Discovered by scanning `jal 0x800498C8` and their callers. All take a **displacement/speed + angle**, NOT a
 velocity field, and derive the world step from the object's **angle field `+0x56`** via the engine's
