@@ -60,8 +60,13 @@ void rec_dispatch(Core*, uint32_t);  // hybrid call: recomp body if emitted, els
 #define SEQ_TICK_WRAPPER 0x800909C0u  // FUN_800909c0: per-vblank libsnd tick (user cb + SsSeqCalled)
 #define SEQ_FUNC_PTR     0x800AC42Cu  // DAT_800ac42c: SsSeqCalled pointer (0 until SsStart inits)
 
+// gpu_perf.cpp — per-frame CPU phase profiler (REPL `debug perf`), default off. PH_LOGIC=0/AUDIO=1/PRESENT=2.
+extern "C" void perf_phase_begin(int), perf_phase_end(int);
+
 static void ov_frame_update(Core* c) {
+  perf_phase_begin(0);                               // perf: LOGIC = all guest interpreter work + render submit
   rec_super_call(c, 0x800788ACu);                    // real per-frame state update
+  perf_phase_end(0);
   // Per-VBLANK audio work. On hardware the libsnd sequencer ticks once per VBlank IRQ (60 Hz NTSC)
   // and the SPU plays in realtime. One ov_frame_update is one *logic frame*, which on hardware spans
   // DAT_1f800235 (=quota) VBlanks (=2 => Tomba2's 30 fps). So the per-vblank work — the sequencer
@@ -77,16 +82,23 @@ static void ov_frame_update(Core* c) {
   uint32_t seqfn = c->mem_r32(SEQ_FUNC_PTR);
   int seq_ok = !cfg_on("PSXPORT_T2_NOSEQTICK")
                && (seqfn & 0x1FFFFFFFu) >= 0x10000u && (seqfn & 0x1FFFFFFFu) < 0x200000u;
+  perf_phase_begin(1);                               // perf: AUDIO = per-vblank sequencer tick + SPU advance
   for (int v = 0; v < quota; v++) {                  // once per VBlank this logic frame spans
     if (seq_ok) rec_dispatch(c, SEQ_TICK_WRAPPER);   // libsnd per-vblank tick (user cb + SsSeqCalled)
     spu_audio_frame();                               // advance SPU one 1/60 s field + feed device
   }
+  perf_phase_end(1);
   c->mem_w16(DISPLAY_COUNTER, c->mem_r8(VBLANK_QUOTA));    // satisfy the pacing dwell immediately
   // fps60 (when enabled) OWNS presentation: it presents the interpolated in-between + the real frame
   // (60 fps, 1 frame behind) and paces both halves — see fps60_present_vk. The faithful path
   // presents frame B once and paces a full frame.
   fps60_frame_commit(c);
-  if (!g_fps60_on) { gpu_present(c); gpu_pace_frame(c); }
+  if (!g_fps60_on) {
+    perf_phase_begin(2);                             // perf: PRESENT-cpu = VRAM mirror upload + VK record/submit
+    gpu_present(c);
+    perf_phase_end(2);                               // (pacing/vsync sleep below is excluded -> shows as idle/pace)
+    gpu_pace_frame(c);
+  }
 }
 
 // fps60 object tag: the universal per-object cull/LOD dispatcher (a0 = object*, once per logic

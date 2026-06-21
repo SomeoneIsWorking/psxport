@@ -159,11 +159,16 @@ void rec_super_call(Core*, uint32_t);   // interpret the original PSX body (A/B 
 // FUN_800788ac frame update + native scheduler pass + dialog-music coord + draw sync + buffer flip); the
 // loop's driver scaffolding (REPL, auto-navigation/input, pause/step, diagnostics, dbg_server) stays in
 // the loop and runs ONCE around this call. No input is injected here — drive pads before calling it.
+// gpu_perf.cpp — per-frame CPU phase / frame-time profiler (REPL `debug perf`), default off.
+extern "C" void perf_frame_begin(void), perf_mark_pre(void), perf_frame_end(void),
+                perf_phase_begin(int), perf_phase_end(int);
+
 static void native_step_frame(Core* c, uint32_t f) {
   void hle_deliver_event(Core* c, uint32_t ev_class, uint32_t spec);
   void pad_service_frame(Core*);
   void gpu_set_disp_origin(Core* c, int x, int y);
   (void)f;
+  perf_frame_begin();   // perf: start the frame clock (top of the deterministic per-frame work)
   // Per-frame IRQ-driven events the game's waits poll via TestEvent (VBlank classes + sound-DMA-complete).
   hle_deliver_event(c, 0xF2000003u, 0xFFFFFFFFu);
   hle_deliver_event(c, 0xF0000001u, 0xFFFFFFFFu);
@@ -186,9 +191,12 @@ static void native_step_frame(Core* c, uint32_t f) {
   c->mem_w32(0x800bf544, (parity * 0x14000 + 0x800bfe68) & 0xffffff);   // packet pool (now constant)
   pad_service_frame(c);                                       // host input -> game pad buffer (pre-read)
   xa_audio_trace(c, "pre");                                   // CD-vol fade state BEFORE tick+mix
+  perf_mark_pre();   // perf: charge the pre-tick host work (input/IRQ/OT-clear) to `pre`
   rc0(c, 0x800788ac);                                         // tick + present + audio (override)
   xa_audio_trace(c, "post");                                  // CD-vol fade state AFTER tick+mix
+  perf_phase_begin(3);   // perf: SCHED-LOGIC = the cooperative scheduler step (the real per-frame GAME logic)
   native_scheduler_step(c);                                   // <- replaces FUN_80051e60
+  perf_phase_end(3);
   xa_dialog_coord(c);                                         // dialogs stop/restore ingame music
   xa_audio_trace(c, "coord");                                 // CD-vol fade state AFTER coord
   rc1(c, 0x80080f6c, 0);                                      // draw sync
@@ -204,6 +212,7 @@ static void native_step_frame(Core* c, uint32_t f) {
     gpu_set_disp_origin(c, 0, 0);                             // PC-native: present scans the page we draw
     rc1(c, 0x80081560, envp + 0x1ffc);                        // DrawOTag (submit the OT head)
   }
+  perf_frame_end();   // perf: close the frame (post-tick remainder + full wall time) + emit rolling avg
 }
 
 // Native override of game-main FUN_80050b08: init prefix, then (later) native frame loop.

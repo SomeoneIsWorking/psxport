@@ -88,15 +88,24 @@ static int             s_vkprof = -1;     // cached cfg_dbg("vkprof") (re-checke
 static long            s_vp_frames;
 static double          s_vp_gpu_ms, s_vp_upload_ms, s_vp_record_ms, s_vp_submit_ms;
 static long            s_vp_tri, s_vp_tex, s_vp_semi;
+static long            s_vp_dirty_rects, s_vp_dirty_kpx, s_vp_full_uploads;   // per-frame VRAM->GPU upload volume
+static long            s_vp_semi_grps;   // semi overlap-groups/frame: EACH does a full 1024x512 vkCmdCopyImage snapshot
 static inline double now_ms() { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec * 1e3 + t.tv_nsec / 1e6; }
 static void vkprof_tick() {
   if (++s_vp_frames < 60) return;
   double n = s_vp_frames;
-  fprintf(stderr, "[vkprof] %.0ff avg: GPU %.2fms | CPU upload %.2f rec %.2f submit %.2f | prims tri %ld tex %ld semi %ld%s\n",
+  // `upload`/`dirty` answer the suspected M2 bottleneck: a full 1024x512 VRAM image re-upload every
+  // frame vs. only the small SW-written (atlas/fill/copy) dirty rects. full=0 after frame 0 => incremental.
+  fprintf(stderr, "[vkprof] %.0ff avg: GPU %.2fms | CPU upload %.2f rec %.2f submit %.2f | prims tri %ld tex %ld semi %ld"
+                  " | upload rects %ld (%ldKpx) full %ld | semigrps %ld (full-VRAM copies)%s\n",
           n, s_vp_gpu_ms / n, s_vp_upload_ms / n, s_vp_record_ms / n, s_vp_submit_ms / n,
-          s_vp_tri / (long)n, s_vp_tex / (long)n, s_vp_semi / (long)n, s_tspool ? "" : "  (no GPU timestamps)");
+          s_vp_tri / (long)n, s_vp_tex / (long)n, s_vp_semi / (long)n,
+          s_vp_dirty_rects / (long)n, s_vp_dirty_kpx / (long)n, s_vp_full_uploads,
+          s_vp_semi_grps / (long)n,
+          s_tspool ? "" : "  (no GPU timestamps)");
   s_vp_frames = 0; s_vp_gpu_ms = s_vp_upload_ms = s_vp_record_ms = s_vp_submit_ms = 0;
   s_vp_tri = s_vp_tex = s_vp_semi = 0;
+  s_vp_dirty_rects = s_vp_dirty_kpx = s_vp_full_uploads = 0; s_vp_semi_grps = 0;
 }
 
 // GPU VRAM image (R16_UINT 1024x512) + host-visible staging (upload) + readback
@@ -882,7 +891,13 @@ void GpuVkState::panel_upload(Panel* p) {
     bc.imageSubresource = (VkImageSubresourceLayers){ VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
     bc.imageExtent = (VkExtent3D){ VRAM_W, VRAM_H, 1 };
     vkCmdCopyBufferToImage(s_cmd, s_stage, p->color, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &bc);
+    if (s_vkprof > 0 && p == &s_panels[0]) s_vp_full_uploads++;   // vkprof: a FULL 1MB image upload happened
   } else {
+    if (s_vkprof > 0 && p == &s_panels[0]) {   // vkprof: per-frame dirty-region upload volume (panel 0 only)
+      s_vp_dirty_rects += s_dirty_n;
+      long px = 0; for (int d = 0; d < s_dirty_n; d++) px += (long)s_dirty[d].w * s_dirty[d].h;
+      s_vp_dirty_kpx += px / 1000;
+    }
     for (int d = 0; d < s_dirty_n; d++) {
       VkBufferImageCopy r = {0};
       r.bufferOffset = ((VkDeviceSize)s_dirty[d].y * VRAM_W + s_dirty[d].x) * 2;
@@ -957,6 +972,7 @@ void GpuVkState::panel_render(Panel* p) {
       int gstart = (g == 0) ? 0 : s_semi_grp[g - 1];
       int gend   = (g < s_semi_grp_n) ? s_semi_grp[g] : s_semi_n;
       if (gend <= gstart) continue;
+      if (s_vkprof > 0 && tgt == s_tex) s_vp_semi_grps++;   // vkprof: each group = one full-VRAM vkCmdCopyImage
       img_barrier_on(tgt, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                   VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
                   VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT);
@@ -1384,6 +1400,7 @@ void GpuVkState::present(const uint16_t* src, int sx, int sy, int w, int h) {
   imgui_overlay_new_frame();   // CPU-build the mod-toggle UI for this frame (no-op if overlay not inited)
   // vkprof: re-check the channel each frame (present runs from boot, before the REPL `debug` is processed).
   int vp = cfg_dbg("vkprof");
+  s_vkprof = vp;   // share with panel_upload (dirty-rect upload-volume counters)
   // Mirror the whole CPU VRAM (s_vram) into the GPU R16_UINT image (M1: SW still rasterizes;
   // M2+ will draw into this image directly and skip the upload for drawn regions). The display region
   // [sx,sy,w,h] is selected at sample time via the present push constant.
