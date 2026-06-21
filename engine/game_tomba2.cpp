@@ -1194,7 +1194,15 @@ static void ov_set_geom_screen(Core* c) {       // SetGeomScreen(h) — projecti
 // natively in gpu_dma2_linked_list (walk OT -> decode each primitive -> rasterize). Overriding it routes
 // the draw straight through our native walk (synchronous), instead of the DMA-register emulation dance.
 // This is the engine's draw submission, owned.
+void gpu_blank_display(Core* core);
 static void ov_draw_otag(Core* c) {
+  // #7/#11 finish: while the DEMO/title front-end is still LOADING its assets (sub-SM task0+0x48 < 2, the
+  // s4a load ramp), the title composites its menu/font over whatever VRAM the FMV/SCEA splash left — so the
+  // SCEA text / FMV last-frame show through (the one-time hand-off clear can't cover the multi-frame ramp).
+  // Blank the display FB to black BEFORE this frame's prims draw, every loading frame, so the title's
+  // partial 2D layer always sits on opaque black. Once loaded (s48>=2) the title owns a full background and
+  // this is a no-op-equivalent (its bg overwrites the black). Engine-owned, keyed on the stage's own signal.
+  if (c->mem_r32(0x801FE00Cu) == 0x801062E4u && c->mem_r8(0x801FE048u) < 2) gpu_blank_display(c);
   // Engine-owned ordering (the one render path): owned world geometry was queued during submit; the OT
   // walk queues the guest 2D / un-owned submit variants (instead of drawing them inline); then the queue
   // drains in ENGINE order (layer: background < world < overlay < hud; depth within world). The guest OT

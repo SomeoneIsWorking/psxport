@@ -1513,12 +1513,12 @@ void GpuState::gpu_present(Core* core) { gpu_present_ex(core, 1); }
 // present once, so no FMV last-frame or SCEA white-fill survives into the front-end. The resident
 // off-display SCEA text page is left alone — the title overwrites that VRAM when it uploads its atlas;
 // blacking the DISPLAY region is what removes the visible artifact. Wrap-safe per-pixel (any disp config).
-void GpuState::gpu_clear_display(Core* core) {
+void GpuState::gpu_blank_display() {            // zero the display FB rect (NO present) — caller presents later
   int dw = s_disp_w > 0 ? s_disp_w : 320, dh = s_disp_h > 0 ? s_disp_h : 240;
   for (int y = 0; y < dh; y++)
     for (int x = 0; x < dw; x++) *vram(s_disp_x + x, s_disp_y + y) = 0;   // opaque black (555, bit15=0)
-  gpu_present(core);
 }
+void GpuState::gpu_clear_display(Core* core) { gpu_blank_display(); gpu_present(core); }
 // VK 60fps in-between pass: present whatever draws are accumulated in the VK batch (over the current
 // s_vram 2D background), then end the VK frame to reset the batch + restart the per-frame depth order.
 // No s_frame++/diagnostics (that bookkeeping happens once per LOGIC frame in gpu_present_ex for the real
@@ -1683,6 +1683,7 @@ void gpu_dma2_block(Core* core, uint32_t madr, int count, int to_gpu) { core->ga
 void gpu_present(Core* core) { core->game->gpu.gpu_present(core); }
 void gpu_present_ex(Core* core, int do_blit) { core->game->gpu.gpu_present_ex(core, do_blit); }
 void gpu_clear_display(Core* core) { core->game->gpu.gpu_clear_display(core); }
+void gpu_blank_display(Core* core) { core->game->gpu.gpu_blank_display(); }
 void gpu_fps60_present_pass(Core* core) { core->game->gpu.gpu_fps60_present_pass(core); }
 void gpu_native_load_image(Core* core, int x, int y, int w, int h, uint32_t src) { core->game->gpu.gpu_native_load_image(core, x, y, w, h, src); }
 int  gpu_native_load_vram(Core* core, const char* path) { return core->game->gpu.gpu_native_load_vram(path); }
