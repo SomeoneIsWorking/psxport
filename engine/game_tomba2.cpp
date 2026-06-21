@@ -795,6 +795,54 @@ void ov_child_spawn_40410(Core* c) {
   } else if (++ng % 10 == 0) fprintf(stderr, "[child40410] %ld matches\n", ng);
 }
 
+// FUN_80026C88 — per-object DISPATCHER LOOP over the 40-entry, 64-byte-stride object table at 0x800ec188.
+// args: none. void return. Pure control flow — the loop body reads only obj[0] (active byte) and obj[1]
+// (handler index), loads a fn-ptr from the table at 0x800ad52c (stride 4), and tail-calls it with a0=obj.
+// The dispatcher writes NOTHING to memory itself (the recomp body only saves/restores s0/s1/s2/ra in its
+// own stack frame, which the native body never touches); ALL side effects live inside the dispatched
+// handlers, which stay PSX via rec_dispatch (each honors its own owned override identically in this path).
+// NO GTE, NO render-packet writes in the dispatcher. RE from gen_func_80026C88 / disas 0x80026C88:
+//   s2 = 0x800ad52c (handler fn-ptr table, stride 4); s0 = 0x800ec188 (object table, stride 64); i = 0
+//   for i in [0,40): v0 = lbu obj[0]; if v0 != 0 { idx = lbu obj[1]; fn = *(s2 + idx*4); a0 = obj; (*fn)(); }
+//                    i++; obj += 64
+// `disp26c88` gate = full RAM+scratchpad A/B vs rec_super_call (native run → snapshot+rollback → super_call
+// → diff). Same family rationale as the other dispatcher-loop gates (sm40558/grid): the dispatched handlers
+// run in BOTH passes and leave transient residue in their own stack frames below entry sp (no native frame
+// there) + this fn's own 32-byte frame is dead below sp on return → exclude [sp-0x800, sp) (sp ~0x1FExxx,
+// RAM end 0x200000 — far above ALL game data; a real divergence would alter persistent state).
+static void disp_26c88(Core* c) {
+  const uint32_t TBL = 0x800ad52cu;   // handler fn-ptr table (stride 4)
+  uint32_t obj = 0x800ec188u;         // object table (stride 64)
+  for (int i = 0; i < 40; i++, obj += 64) {
+    if (c->mem_r8(obj + 0) == 0) continue;
+    uint32_t idx = c->mem_r8(obj + 1);
+    uint32_t fn  = c->mem_r32(TBL + (idx << 2));
+    c->r[4] = obj;
+    rec_dispatch(c, fn);                // handler(obj) — stays PSX / honors its own owned override
+  }
+}
+
+void ov_disp_26c88(Core* c) {
+  static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("disp26c88") ? 1 : 0;
+  if (!s_v) { disp_26c88(c); return; }
+  static uint8_t* ram0 = (uint8_t*)malloc(0x200000);
+  static uint8_t* ramN = (uint8_t*)malloc(0x200000);
+  uint8_t spad0[0x400], spadN[0x400];
+  uint32_t regs0[32]; memcpy(regs0, c->r, sizeof regs0);
+  memcpy(ram0, c->ram, 0x200000); memcpy(spad0, c->scratch, 0x400);
+  disp_26c88(c);
+  memcpy(ramN, c->ram, 0x200000); memcpy(spadN, c->scratch, 0x400);
+  memcpy(c->ram, ram0, 0x200000); memcpy(c->scratch, spad0, 0x400); memcpy(c->r, regs0, sizeof regs0);
+  rec_super_call(c, 0x80026C88u);
+  uint32_t sp = regs0[29] & 0x1FFFFFu, flo = (sp >= 0x800) ? sp - 0x800 : 0;
+  int ro = -1; for (uint32_t a = 0; a < 0x200000; a++) if (c->ram[a] != ramN[a] && !(a >= flo && a < sp)) { ro = (int)a; break; }
+  int so = -1; for (uint32_t a = 0; a < 0x400; a++) if (c->scratch[a] != spadN[a]) { so = (int)a; break; }
+  static long ng = 0, nb = 0;
+  if (ro >= 0 || so >= 0) {
+    if (nb++ < 40) fprintf(stderr, "[disp26c88] MISMATCH ram@%x spad@%x sp=%x\n", ro, so, sp);
+  } else if (++ng % 50 == 0) fprintf(stderr, "[disp26c88] %ld matches\n", ng);
+}
+
 // FUN_80040558 — per-object STATE-MACHINE HEAD (the dispatcher whose state-0 handler calls the just-owned
 // child-spawn FUN_80040410; owning the head advances the whole behavior family). a0 = obj. Pure control
 // flow + object byte/halfword writes + global/scratchpad reads; NO GTE, NO render packets. Every `jal` is
@@ -2079,6 +2127,7 @@ void games_tomba2_init(void) {
     { void ov_child_spawn_40410(Core*); rec_set_override(0x80040410u, ov_child_spawn_40410); }  // per-object child-node spawn/sub-object builder (control flow owned; allocator+setup dispatched)
     { void ov_sm40558(Core*); rec_set_override(0x80040558u, ov_sm40558); }  // per-object state-machine head (control flow owned; all sub-behaviors dispatched)
     { void ov_osc_fd10(Core*); rec_set_override(0x8003FD10u, ov_osc_fd10); }  // sm40558 STATE-1 obj[5]=0 oscillate/frame-toggle handler (control flow owned; ov_rand dispatched)
+    { void ov_disp_26c88(Core*); rec_set_override(0x80026C88u, ov_disp_26c88); }  // per-object dispatcher loop over 0x800ec188 table (control flow owned; handlers dispatched)
   }
   // PC-native LEVEL/STAGE LOADER (engine/engine_level.cpp): the engine's overlay loader FUN_800450bc —
   // load a stage's overlay off the disc + set its entry, synchronous (no PSX CD-wait yield).

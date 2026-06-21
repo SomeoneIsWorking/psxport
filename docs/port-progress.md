@@ -298,6 +298,18 @@ for content fns (call it). Do NOT mimic PSX hardware (GTE/GP0/OT) — remove Bee
   xformverify). NEXT clean §F targets: `FUN_80026C88` / `FUN_8003F024` (pure per-object dispatcher loops over
   the 40-entry 0x800ec188 table, no GTE — verify via full RAM+scratchpad A/B); `FUN_80051128`'s consumers in
   the transform cluster. AVOID `FUN_80027A4C` (16% but GTE/GP0 packet submitter, render-boundary).
+- ✅ **later-206 — `FUN_80026C88` `ov_disp_26c88` (per-object DISPATCHER LOOP over the 40-entry, 64-byte-
+  stride object table at 0x800ec188 — the §F-flagged primary target).** No args, void return. **NO GTE, NO
+  render packets — pure control flow.** Loop i in [0,40): read obj[0] (active byte) — if 0 skip; else
+  idx=obj[1], fn=*(0x800ad52c + idx*4) (handler fn-ptr table, stride 4), call fn(obj). obj += 64 each iter.
+  The dispatcher itself writes NOTHING (recomp body only saves/restores s0/s1/s2/ra in its own 32-byte
+  frame, never touched by the native body); ALL side effects live in the dispatched handlers, kept PSX via
+  rec_dispatch (each honors its own owned override identically). Control flow + table/object address math
+  owned native; handlers dispatched. Verified with the full RAM+scratchpad A/B gate `disp26c88` (native →
+  snapshot+rollback → rec_super_call → diff): **0-diff over 800+ live field calls, 0 mismatches** (press
+  right 250 + press left 250); FIRES per-frame in the reachable seaside GAME stage. Same-family gate
+  exclusion [sp-0x800, sp) (dispatched handlers + this fn's 32-byte frame dead below entry sp, far above all
+  game data). Registered in game_tomba2.cpp. NEXT: `FUN_8003F024` (flagged fallback, same dispatcher shape).
 - ✅ **later-196 — `FUN_8004CE14` `ov_script_vm_4ce14` (per-object SCRIPT-VM tick — THE most-called field
   fn, ~14900 calls/run).** First CONTENT state machine owned after the boundary removal. Dispatch on state
   byte obj[4]: 2→no-op; 3→jal 0x8007A624; >3→no-op; 0→ if global 0x800BF873!=0 set obj[4]=3 & return, else

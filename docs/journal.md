@@ -16,6 +16,38 @@
   earlier fade work: see [[tomba2-fade-flash-solved]]).
 - ~~SCEA license screen was black~~ **FIXED PC-native (later-179, below).**
 
+## later-206: OWN per-object DISPATCHER LOOP FUN_80026C88 native (ov_disp_26c88) — §F resident leaf
+The §F-flagged primary target after later-205. `FUN_80026C88` is a per-object DISPATCHER LOOP over the
+40-entry, 64-byte-stride object table at `0x800ec188`. **No args, void return. NO GTE, NO render packets —
+pure control flow.** disas / gen_func_80026C88:
+```
+  s2 = 0x800ad52c  (handler fn-ptr table, stride 4)
+  s0 = 0x800ec188  (object table, stride 64)
+  for i in [0,40), obj += 64:
+    if (lbu obj[0]) == 0: continue        ; obj[0] = active byte
+    idx = lbu obj[1]                       ; obj[1] = handler index
+    fn  = *(s2 + idx*4)                     ; load handler fn-ptr
+    a0  = obj; (*fn)()                      ; tail-call handler(obj)
+```
+The dispatcher itself writes NOTHING to memory (the recomp body only saves/restores s0/s1/s2/ra in its
+own 32-byte stack frame, which the native body never touches). EVERY side effect lives inside the
+dispatched handlers, kept PSX via `rec_dispatch` (each handler honors its own owned override identically in
+the super-call path). Control flow + the table/object address math owned native; handlers dispatched.
+
+Verified with the full RAM+scratchpad A/B gate `disp26c88` (native run → snapshot+rollback → rec_super_call
+→ diff): **0-diff over 800+ live field calls, 0 mismatches** (`debug disp26c88`, newgame → skip 650 →
+press right 250 → press left 250). It FIRES per-frame in the reachable seaside GAME stage (the counter
+ticks 50/100/…/800+). Same-family gate exclusion `[sp-0x800, sp)`: the dispatched handlers run in BOTH
+passes and leave transient residue in their own stack frames below entry sp (no native frame there) + this
+fn's own 32-byte frame is dead below sp on return (sp ~0x1FExxx, RAM end 0x200000 — far above ALL game
+data; a real divergence would alter persistent state). Gate-off run reaches GAME(0x8010637C) and walks
+normally. Registered in game_tomba2.cpp alongside the other dispatcher-loop overrides. (No new .cpp — edit
+to game_tomba2.cpp only, so no run.sh / build_port.sh SRC change.)
+
+NEXT clean §F targets: `FUN_8003F024` (the flagged fallback — same per-object-dispatcher shape, verify the
+same way; disas it FIRST to confirm no GTE/GP0 and that it fires); then the remaining transform-cluster
+consumers of `FUN_80051128`. AVOID `FUN_80027A4C` (16% but GTE/GP0 packet submitter, render-boundary).
+
 ## later-204: OWN sm40558 STATE-1 sub-behavior FUN_8003FD10 native (ov_osc_fd10) — first descent into the state-machine's hot active-behavior callees
 Natural descent from later-203 (FUN_80040558 owned): STATE 1 (the ~11000×/run hot active-behavior path)
 dispatches into the obj[5] jump table JT1[6] @0x80015300. JT1[0] = `FUN_8003FD10`, a per-object OSCILLATE /
