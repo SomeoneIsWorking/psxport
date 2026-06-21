@@ -400,6 +400,36 @@ void ov_list_scan_31780(Core* c) {
   c->mem_w32(a0 + 52, n52); c->mem_w32(a0 + 56, n56); c->r[2] = v0;
 }
 
+// FUN_80049968 — collision-grid ROW-POINTER setup. a0 = grid/layer index (&0xff). Reads the table
+// base ptr @0x1F8001C8, indexes table[a0] (halfword offset) to a per-grid record, then writes 5
+// scratchpad row pointers from the record's halfword fields:
+//   0x1F8001CC = rec+0x14;  0x1F8001D0/D4/D8/DC = rec + rec[12/14/16/18]*2
+// Pure pointer arithmetic over scratchpad + guest record data. `gridsetup` A/B's the 5 written words.
+void ov_grid_setup_49968(Core* c) {
+  static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("gridsetup") ? 1 : 0;
+  uint32_t a0   = c->r[4] & 0xffu;
+  uint32_t base = c->mem_r32(0x1F8001C8u);
+  uint32_t rec  = base + (uint32_t)c->mem_r16(base + a0 * 2) * 2;
+  uint32_t cc = rec + 20;
+  uint32_t d0 = rec + (uint32_t)c->mem_r16(rec + 12) * 2;
+  uint32_t d4 = rec + (uint32_t)c->mem_r16(rec + 14) * 2;
+  uint32_t d8 = rec + (uint32_t)c->mem_r16(rec + 16) * 2;
+  uint32_t dc = rec + (uint32_t)c->mem_r16(rec + 18) * 2;
+  if (s_v) {
+    rec_super_call(c, 0x80049968u);
+    static long ng = 0, nb = 0;
+    uint32_t o_cc = c->mem_r32(0x1F8001CCu), o_d0 = c->mem_r32(0x1F8001D0u), o_d4 = c->mem_r32(0x1F8001D4u),
+             o_d8 = c->mem_r32(0x1F8001D8u), o_dc = c->mem_r32(0x1F8001DCu);
+    if (o_cc != cc || o_d0 != d0 || o_d4 != d4 || o_d8 != d8 || o_dc != dc) {
+      if (nb++ < 20) fprintf(stderr, "[gridsetup] MISMATCH a0=%x cc=%x/%x d0=%x/%x d4=%x/%x d8=%x/%x dc=%x/%x\n",
+                             a0, cc, o_cc, d0, o_d0, d4, o_d4, d8, o_d8, dc, o_dc);
+    } else if (++ng % 5000 == 0) fprintf(stderr, "[gridsetup] %ld matches\n", ng);
+    return;
+  }
+  c->mem_w32(0x1F8001CCu, cc); c->mem_w32(0x1F8001D0u, d0); c->mem_w32(0x1F8001D4u, d4);
+  c->mem_w32(0x1F8001D8u, d8); c->mem_w32(0x1F8001DCu, dc);
+}
+
 
 static void ov_object_cull(Core* c) {
   uint32_t prev = c->game->fps60.current_object;
@@ -924,6 +954,7 @@ void games_tomba2_init(void) {
       rec_set_override(0x80083EBCu, ov_trig_lut); }                    // sin-quadrant lookup
     { void ov_cull_wrap_77acc(Core*); rec_set_override(0x80077ACCu, ov_cull_wrap_77acc); }  // cull wrapper variant (flags 1/4)
     { void ov_list_scan_31780(Core*); rec_set_override(0x80031780u, ov_list_scan_31780); }  // list-tail resolver/reset
+    { void ov_grid_setup_49968(Core*); rec_set_override(0x80049968u, ov_grid_setup_49968); }  // collision-grid row-ptr setup
   }
   // PC-native LEVEL/STAGE LOADER (engine/engine_level.cpp): the engine's overlay loader FUN_800450bc —
   // load a stage's overlay off the disc + set its entry, synchronous (no PSX CD-wait yield).

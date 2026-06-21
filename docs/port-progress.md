@@ -174,6 +174,10 @@ for content fns (call it). Do NOT mimic PSX hardware (GTE/GP0/OT) — remove Bee
   clear list (a0[0x34]=a0[0x38]=0), else set tail a0[0x38]=found+8. GOTCHA: the loop's `addiu v1,v1,8` is a
   DELAY SLOT — it runs even when the branch falls through, so the found entry is +8 past where the tag matched
   (first verify pass was off-by-8 until I modeled the delay slot). `listscan` A/B 0-diff (5000+ matches).
+- ✅ **later-194 — `FUN_80049968` `ov_grid_setup_49968` (collision-grid ROW-POINTER setup).** a0=grid index
+  (&0xff); table base @0x1F8001C8, `rec = base + table[a0]*2`; writes 5 scratchpad row ptrs:
+  0x1F8001CC=rec+0x14, 0x1F8001D0/D4/D8/DC = rec + rec[12/14/16/18]*2. Pure scratchpad pointer arithmetic.
+  `gridsetup` A/B 0-diff (5000+ matches). Pairs with the grid QUERY FUN_80047CBC (next).
 - ✅ `FUN_80051C8C` per-object TRANSFORM build = `ov_build_xform`.
 - **Camera update (engine_camera.cpp):**
   - ✅ position X/Z `FUN_8006d960` = `ov_cam_track_xz`; ✅ position Y `FUN_8006da54` = `ov_cam_track_y` (later-174).
