@@ -184,6 +184,7 @@ void Fps60State::frame_commit(Core* core) {
 #include "render_queue.h"
 #include "game.h"
 #include <unordered_map>
+#include <algorithm>
 #include <math.h>
 void gpu_present_ex(Core* core, int do_blit);
 void gpu_fps60_present_pass(Core* core);
@@ -387,10 +388,64 @@ int Fps60State::build_lerp() {
   prevcr.reserve((size_t)s_nPrev * 2 + 16);
   for (int j = 0; j < s_nPrev; j++) { const RqItem* P = &s_rqPrev[j];
     if (P->fps_world && P->fps_key) prevcr.emplace(P->fps_key, P->fps_cr); }
-  long moved = 0, snapped = 0;
+
+  // ---- BACKGROUND / SEA-ATLAS layer 60fps translation (issue #25) -----------------------------------
+  // The screen-space scrolling backdrop (RQ_BACKGROUND tiles) carries fps_world=0, so without help it
+  // SNAPPED to camera-B while the world meshes/billboards interpolated -> the backdrop juddered. The whole
+  // backdrop layer translates RIGIDLY in screen space as the camera scrolls (a tile only moves; its atlas
+  // cell = texpage/clut/mode/UV is invariant). So we recover ONE per-frame layer translation by matching
+  // each cur bg tile to the prev frame's by that position-INDEPENDENT atlas fingerprint, then take the
+  // MEDIAN per-axis displacement (median, not mean — robust to parallax outliers and the odd mismatch, and
+  // it can NOT explode the way the retired general per-prim matcher did). The in-between then shifts every
+  // bg tile by HALF that median (the t=0.5 midpoint), panning the backdrop with the world. PC-OWNED: no
+  // guest read, derived purely from the engine's own queued screen geometry.
+  auto bg_fp = [](const RqItem* it) -> uint64_t {        // atlas-cell fingerprint (stable across frames)
+    return (uint64_t)(uint32_t)it->tp_x        ^ ((uint64_t)(uint32_t)it->tp_y   << 12)
+         ^ ((uint64_t)(uint32_t)it->clut_x << 20) ^ ((uint64_t)(uint32_t)it->clut_y << 28)
+         ^ ((uint64_t)(uint32_t)it->mode  << 36) ^ ((uint64_t)(uint32_t)(it->us[0] & 0xFF) << 40)
+         ^ ((uint64_t)(uint32_t)(it->vs[0] & 0xFF) << 48); };
+  std::unordered_map<uint64_t, const RqItem*> prevbg;
+  prevbg.reserve((size_t)s_nPrev + 16);
+  for (int j = 0; j < s_nPrev; j++) { const RqItem* P = &s_rqPrev[j];
+    if (P->layer == RQ_BACKGROUND) prevbg.emplace(bg_fp(P), P); }   // first occurrence per cell wins
+  // collect per-tile displacements, then median each axis
+  static int* s_bgdx = 0; static int* s_bgdy = 0;
+  if (!s_bgdx) { s_bgdx = new int[FPS60_RQ_MAX]; s_bgdy = new int[FPS60_RQ_MAX]; }
+  int nbg = 0;
+  for (int i = 0; i < s_nCur && nbg < FPS60_RQ_MAX; i++) {
+    const RqItem* C = &s_rqCur[i]; if (C->layer != RQ_BACKGROUND) continue;
+    auto it = prevbg.find(bg_fp(C)); if (it == prevbg.end()) continue;
+    s_bgdx[nbg] = C->xs[0] - it->second->xs[0];
+    s_bgdy[nbg] = C->ys[0] - it->second->ys[0]; nbg++;
+  }
+  int bg_have = 0, bg_hdx = 0, bg_hdy = 0;                // HALF-median bg translation (the midpoint shift)
+  if (nbg >= 4) {                                         // need a few matches for a meaningful median
+    std::sort(s_bgdx, s_bgdx + nbg); std::sort(s_bgdy, s_bgdy + nbg);
+    int mdx = s_bgdx[nbg / 2], mdy = s_bgdy[nbg / 2];     // median per axis (robust)
+    // Snap (don't smear) on a teleport/area-cut: a huge median = the whole backdrop jumped, not a pan.
+    if (abs(mdx) <= 128 && abs(mdy) <= 128) {
+      bg_have = 1;
+      // HALF of the B->cur motion = how far the in-between (t=0.5) sits BEHIND the real frame; shift cur back.
+      bg_hdx = -(mdx / 2); bg_hdy = -(mdy / 2);
+    }
+  }
+
+  long moved = 0, snapped = 0, bgmoved = 0;
   for (int i = 0; i < s_nCur; i++) {
     const RqItem* C = &s_rqCur[i];
     s_rqLerp[i] = *C;                                     // default: SNAP (real frame-B position)
+    // BACKGROUND layer (#25): shift the whole backdrop by the half-median camera scroll so it pans WITH the
+    // world at the midpoint instead of snapping. Uniform integer screen translate (+ the sub-pixel copy).
+    if (C->layer == RQ_BACKGROUND) {
+      if (bg_have && (bg_hdx || bg_hdy)) {
+        for (int k = 0; k < C->nv; k++) {
+          s_rqLerp[i].xs[k] = C->xs[k] + bg_hdx; s_rqLerp[i].ys[k] = C->ys[k] + bg_hdy;
+          s_rqLerp[i].xsf[k] = C->xsf[k] + (float)bg_hdx; s_rqLerp[i].ysf[k] = C->ysf[k] + (float)bg_hdy;
+        }
+        bgmoved++;
+      } else snapped++;
+      continue;
+    }
     if (!C->fps_world || !C->fps_key) { snapped++; continue; }   // 2D/HUD/terrain/unkeyed → snap
     auto it = prevcr.find(C->fps_key);
     if (it == prevcr.end()) { snapped++; continue; }     // actor is new this frame (spawn/teleport) → snap
@@ -405,8 +460,9 @@ int Fps60State::build_lerp() {
     moved++;
   }
   if (s_lerpdbg < 0) s_lerpdbg = cfg_dbg("fps60") ? 1 : 0;
-  if (s_lerpdbg) fprintf(stderr, "[fps60] f%ld reproject: prims=%d moved=%ld snapped=%ld actors=%zu\n",
-                         s_fence, s_nCur, moved, snapped, prevcr.size());
+  if (s_lerpdbg) fprintf(stderr, "[fps60] f%ld reproject: prims=%d moved=%ld bgmoved=%ld snapped=%ld actors=%zu "
+                         "bg(matches=%d have=%d half=%d,%d)\n",
+                         s_fence, s_nCur, moved, bgmoved, snapped, prevcr.size(), nbg, bg_have, bg_hdx, bg_hdy);
   // MECHANICAL GATE (PSXPORT_DEBUG=fps60chk): reproject every world prim at t=1.0 (crM = its OWN captured
   // composed transform, no averaging) — this MUST reproduce the prim's real screen verts. A non-zero error
   // means the capture/recompose/round path is wrong (not a smoothness issue). Pure diagnostic, no output change.

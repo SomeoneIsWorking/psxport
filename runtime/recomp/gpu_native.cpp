@@ -52,6 +52,18 @@ int GpuState::bg_2d(int bx0, int by0, int bx1, int by1) {
   int w = bx1 - bx0, h = by1 - by0;
   return (w * 4 >= dw * 3) && (h * 4 >= dh * 3);    // covers >=3/4 of the display in both axes = backdrop
 }
+// FULL-SCREEN FADE / DIM overlay test (issue #21). A screen/scene fade or a pause-menu darkening is a
+// near-full-screen SEMI prim. It must NOT be classified as a backdrop (it composites OVER the world, not
+// behind it — so it stays in the topmost band), but its COVERAGE must be the whole WIDE framebuffer, not
+// the centered 320 band: otherwise widescreen leaves undimmed green field showing in the margins. So this
+// returns 1 for a full-screen SEMI prim (caller gates on semi), and the 2D-X mapping then stretches it to
+// fill the wide FB while the layer/ordering keeps it on top. Mirrors bg_2d's coverage test for the fade
+// case. File-scope (GpuState's decl is in gpu_native_internal.h, not editable here); dims passed in.
+static int fade_full_2d(int dw, int dh, int bx0, int by0, int bx1, int by1) {
+  if (dw <= 0) dw = 320; if (dh <= 0) dh = 240;
+  int w = bx1 - bx0, h = by1 - by0;
+  return (w * 4 >= dw * 3) && (h * 4 >= dh * 3);    // full-screen (>=3/4 both axes)
+}
 // M3 provenance: record [lo,hi) (KSEG0 packet-pool addresses) as a BACKGROUND drawer's output for the
 // current frame. Stamps the frame so a stale span from a prior frame is never honored.
 void GpuState::bg_range_add(uint32_t lo, uint32_t hi) {
@@ -870,6 +882,7 @@ void GpuState::gp0_exec(Core* core) {
       // -> a backdrop (FAR band) or HUD (near band) by screen coverage.
       int use_rq = rq_active();                  // engine render queue owns ordering (PSXPORT_RQ)
       float dep[4]; int is3d = 0, bg = 0, billboard = 0;   // billboard = a 2D prim that got obj_depth (fps60 anchor)
+      int fade_full = 0;                         // full-screen SEMI overlay (fade/dim) -> stretch-to-fill, stay on top (#21)
       {
         int projprim_lookup_pz(uint32_t, float*);
         float proj_pz_to_ord(float);
@@ -889,6 +902,10 @@ void GpuState::gp0_exec(Core* core) {
         // fade/overlay -> must NOT be a backdrop (else it draws UNDER the world); leave it in the HUD
         // (topmost) band so fades composite on top. (Owned backdrops still match via node_is_bg.)
         if (!is3d) bg = node_is_bg(s_cur_node) || (!semi && bg_2d(bx0, by0, bx1, by1));
+        // FADE/DIM (#21): a full-screen SEMI prim is a fade/dim overlay, NOT a backdrop. It must cover the
+        // WHOLE wide FB (else green field shows in the widescreen margins) but composite ON TOP (HUD band).
+        // Tag it so the 2D-X mapping below stretches it to fill while the layer stays topmost.
+        if (!is3d && !bg && semi && fade_full_2d(s_disp_w, s_disp_h, bx0, by0, bx1, by1)) fade_full = 1;
         // PC-native object depth: a 2D billboard prim (no projected verts) whose OT-node falls in an
         // object's packet-pool span inherits that object's world-position view-Z and occludes for real.
         if (!is3d && !bg) { float od; if (obj_depth_lookup(s_cur_node, &od)) {
@@ -912,8 +929,10 @@ void GpuState::gp0_exec(Core* core) {
       // scale the 2D plane uniformly to the wide width about the framebuffer origin so they fill the frame.
       { int gpu_vk_wide_engine(void), gpu_vk_wide_engine_w(void);
         if (!is3d && gpu_vk_wide_engine() && s_prev_had3d) {  // 2D widen only on gameplay frames
-          // HUD: identity (shader centers it). Backdrop: stretch-to-fill. See ws_2d_local_x.
-          for (int i = 0; i < nv; i++) xs[i] = ws_2d_local_x(xs[i], bg); } }   // engine-owned 2D layout
+          // HUD: identity (shader centers it). Backdrop AND full-screen fade/dim: stretch-to-fill so the fade
+          // covers the whole wide FB (no undimmed margins, #21). See ws_2d_local_x.
+          int fill = bg || fade_full;
+          for (int i = 0; i < nv; i++) xs[i] = ws_2d_local_x(xs[i], fill); } }   // engine-owned 2D layout
       if (use_rq) {
         // Engine owns ordering: hand the prim to the render queue tagged with its layer + depth mode.
         int layer = is3d ? RQ_WORLD : (bg ? RQ_BACKGROUND : RQ_HUD);
@@ -1046,6 +1065,9 @@ void GpuState::gp0_exec(Core* core) {
       // A full-screen SEMI sprite is a fade/overlay (NOT a backdrop) -> keep it out of the bg band so it
       // composites on top of the world (opaque full-screen sprites stay backdrops).
       int bg = node_is_bg(s_cur_node) || (!semi && bg_2d(x, y, x + w, y + h));
+      // FADE/DIM (#21): a full-screen SEMI sprite is a fade/dim overlay -> stretch-to-fill the wide FB so it
+      // covers the margins too, while staying in the topmost (HUD) band (not a backdrop). See ws_2d_local_x.
+      int fade_full = (!bg && semi && fade_full_2d(s_disp_w, s_disp_h, x, y, x + w, y + h));
       if (!bg && cfg_dbg("objz") && s_frame == s_primdump_frame)
         fprintf(stderr, "[sprnode] op=%02x at(%d,%d %dx%d) rgb=(%d,%d,%d) node=%08x\n",
                 op, x, y, w, h, cr, cg, cb, s_cur_node);
@@ -1058,8 +1080,9 @@ void GpuState::gp0_exec(Core* core) {
       // FB; HUD/UI is identity (the relocation shader's +margin already centers it). See ws_2d_local_x.
       { int gpu_vk_wide_engine(void);
         if (gpu_vk_wide_engine() && s_prev_had3d) {       // only widen 2D on gameplay frames (else pillarbox)
-          XL = ws_2d_local_x(XL, bg);                     // engine-owned 2D layout (HUD centered, bg fills)
-          XR = ws_2d_local_x(XR, bg);
+          int fill = bg || fade_full;                     // backdrop AND full-screen fade/dim stretch-to-fill (#21)
+          XL = ws_2d_local_x(XL, fill);                   // engine-owned 2D layout (HUD centered, bg/fade fills)
+          XR = ws_2d_local_x(XR, fill);
         } }
       int qx[4] = { XL, XR, XL, XR }, qy[4] = { Y, Y, Y+h, Y+h };
       int qu[4] = { u0, u0+w, u0, u0+w }, qv[4] = { v0, v0, v0+h, v0+h };
