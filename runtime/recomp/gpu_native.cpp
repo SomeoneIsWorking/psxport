@@ -89,10 +89,55 @@ void GpuState::obj_depth_add(uint32_t lo, uint32_t hi, float ord) {
   if (ord < 0.0f) ord = 0.0f; if (ord > 1.0f) ord = 1.0f;
   if (s_od_n < OBJ_DEPTH_MAX) { s_od_lo[s_od_n] = lo; s_od_hi[s_od_n] = hi; s_od_ord[s_od_n] = ord; s_od_n++; g_od_add++; }
 }
+// PC-native COPLANAR FACE SEPARATION for OT-walked objects (issue #5 — barrel red/blue z-fight).
+//
+// A faceted object (barrel/container/crate) that renders through the GUEST OT walk — rather than the
+// owned per-vertex GT3/GT4 float path — has ALL of its face packets in ONE packet-pool span tagged with a
+// SINGLE whole-object world depth (object_world_view_depth, engine_submit.cpp). obj_depth_lookup then
+// stamped the IDENTICAL `od` on every face (gp0_exec: `for(i) dep[i]=od`). With every face at the exact
+// same D32 depth and a GREATER_OR_EQUAL test, which face wins a shared pixel is decided purely by draw
+// order WITHIN the frame — and that order is not stable across the double-buffered queue swap → the red
+// band and the blue band trade contested pixels each frame → the red/blue flicker. The whole-object depth
+// is also COARSE (object_world_view_depth returns dot>>12, the 12-bit fraction discarded), so genuinely
+// distinct faces a few units apart collapse to the same value too.
+//
+// The PROPER PC-owned fix is a STABLE, DETERMINISTIC per-FACE depth separation — an ordering RULE the
+// engine owns, NOT a re-sync with the PSX OT and NOT the removed blanket camera-ward bias (issue #4):
+// each consecutive prim that inherits the SAME object span gets a tiny monotonic camera-ward epsilon by
+// its position in that object's submission run. The OT walk visits a given object's faces in the same
+// link order every frame, so a given face ALWAYS gets the same epsilon → it wins/loses the contested
+// pixel identically every frame → no flicker. Later faces (later in paint order) get a larger ord (=
+// nearer, wins under GREATER_OR_EQUAL) → the same stacking the PSX painter produced, now stable.
+//
+// Why this does NOT reintroduce #4: a free-standing single-prim billboard (a flame/brazier/pickup quad)
+// is the FIRST (and only) prim in its span → k==0 → epsilon 0 → it keeps its true world depth with NO
+// camera-ward bias. The epsilon only separates MULTIPLE prims sharing ONE object span — exactly the
+// faceted-object z-fight case, never the lone billboard. The per-vertex float world path (a barrel that
+// IS owned-GT4) is untouched: it never calls obj_depth_lookup (it carries real per-vertex depth).
+//
+// EPS_STEP (1/65536 in pre-ord3d [0,1] units → ~1.3e-5 after ord3d's ×0.875 band map) is FAR above D32
+// float resolution near these values (~1e-7) yet FAR below the gap between distinct world objects, and
+// the run is capped so even a many-faced object can never drift a face in front of genuinely nearer geo.
+static int   s_od_eps_frame = -1;     // frame the per-prim epsilon run belongs to
+static int   s_od_eps_span  = -1;     // span index the current run is separating (consecutive same-span hits)
+static int   s_od_eps_k     = 0;      // per-prim counter within that run (face ordinal)
+static const float OD_EPS_STEP = 1.0f / 65536.0f;   // per-face camera-ward step (pre-ord3d ord units)
+static const int   OD_EPS_KMAX = 256;               // cap the run so total drift stays << inter-object gap
 int GpuState::obj_depth_lookup(uint32_t node, float* ord) {
   if (s_od_frame != s_frame) { g_od_miss++; return 0; }
   uint32_t n = node | 0x80000000u;
-  for (int i = 0; i < s_od_n; i++) if (n >= s_od_lo[i] && n < s_od_hi[i]) { if (ord) *ord = s_od_ord[i]; g_od_hit++; return 1; }
+  for (int i = 0; i < s_od_n; i++) if (n >= s_od_lo[i] && n < s_od_hi[i]) {
+    // Stable per-face epsilon: reset the run on a new frame or when a DIFFERENT object span is hit; the
+    // k-th consecutive face of the SAME span gets k camera-ward steps. Deterministic across frames.
+    if (s_od_eps_frame != s_frame) { s_od_eps_frame = s_frame; s_od_eps_span = -1; s_od_eps_k = 0; }
+    if (i != s_od_eps_span) { s_od_eps_span = i; s_od_eps_k = 0; }
+    int k = s_od_eps_k < OD_EPS_KMAX ? s_od_eps_k : OD_EPS_KMAX;
+    s_od_eps_k++;
+    float v = s_od_ord[i] + (float)k * OD_EPS_STEP;     // camera-ward = larger ord (GREATER_OR_EQUAL wins)
+    if (v > 1.0f) v = 1.0f;
+    if (ord) *ord = v;
+    g_od_hit++; return 1;
+  }
   g_od_miss++;
   return 0;
 }
