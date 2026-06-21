@@ -3,9 +3,13 @@
 #include "render_queue.h"
 #include "game.h"
 #include "cfg.h"
+#include "mods.h"
 #include <algorithm>
 #include <unordered_set>
 #include <stdio.h>
+
+// Debug object-ID overlay is on when the RmlUi Debug-tab toggle is set OR the `objid` debug channel is on.
+static inline int objid_on(void) { return g_mods.debug_ids || cfg_dbg("objid"); }
 
 void fps60_bb_frame_reset(void);   // clear the per-frame billboard-identity registry (engine/fps60.cpp)
 
@@ -65,11 +69,20 @@ static void objid_hex(Core* core, const RqItem* ref, uint32_t val, int ndig, int
 static void objid_overlay(RenderQueue* q, Core* core) {
   int n0 = q->n;                               // freeze the count: only label real prims, not our own labels
   std::unordered_set<uint32_t> seen;
+  int nworld = 0, nkeyed = 0, nlabel = 0;
   for (int i = 0; i < n0; i++) {
     const RqItem* it = &q->items[i];
-    if (it->layer != RQ_WORLD || it->fps_key == 0) continue;   // only identified objects
+    if (it->layer != RQ_WORLD) continue;
+    nworld++;
+    if (it->fps_key == 0) continue;                            // no engine identity on this prim
+    nkeyed++;
     if (!seen.insert(it->fps_key).second) continue;            // one label per object
     objid_hex(core, it, it->fps_key & 0xFFFF, 4, it->xs[0], it->ys[0], 2);   // low 16 bits, scale 2
+    nlabel++;
+  }
+  if (cfg_dbg("objid")) {                       // diagnostic: why labels did/didn't appear (every 60 frames)
+    static int f = 0; if ((f++ % 60) == 0)
+      fprintf(stderr, "[objid] world prims=%d keyed=%d labels=%d (n=%d)\n", nworld, nkeyed, nlabel, n0);
   }
 }
 
@@ -95,7 +108,7 @@ RqItem* RenderQueue::push() {
 void RenderQueue::mark_consumed() { if (n) consumed = 1; }
 
 void RenderQueue::flush(Core* core) {
-  if (n && cfg_dbg("objid")) objid_overlay(this, core);   // debug: label each object with its engine ID
+  if (n && objid_on()) objid_overlay(this, core);   // debug: label each object with its engine ID
   // Engine-decided order: layer low->high, submission order within a layer. stable_sort keeps the
   // within-layer submission order exactly (matters for semi-transparent blending). The D32 depth buffer
   // does fine-grained occlusion inside RQ_WORLD regardless of this order.

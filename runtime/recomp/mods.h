@@ -20,6 +20,7 @@ typedef struct {
   float ssao_strength, ssao_radius, ssao_bias, ssao_range;
   float light_dir[3], light_ambient, light_diffuse;
   float shadow_strength;   // 0..1 darkening applied in shadow (1 = full drop to ambient)
+  int   debug_ids;         // DEBUG: overlay each rendered object with its engine id (render_queue.cpp). Not persisted.
 } ModState;
 extern ModState g_mods;
 void mods_init(void);  // populate once: settings file (if present) else cfg/env (idempotent)

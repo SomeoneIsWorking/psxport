@@ -20,6 +20,7 @@ extern "C" {  // Beetle GTE (mednafen gte.c, compiled as C)
 //   object-matchable (3D models) vs. unjoinable (CPU-projected terrain / 2D HUD → will snap).
 #include <stdint.h>
 #include "cfg.h"
+#include "mods.h"   // g_mods.debug_ids — the RmlUi Debug-tab object-ID toggle also drives the bb registry
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -250,7 +251,7 @@ static int s_nBBCur = 0;
 // (which labels billboards with their object id in any mode). So record/lookup/stamp whenever EITHER is
 // active. In 60fps-off mode the registry is reset per frame from the render queue (fps60_bb_frame_reset,
 // called from RenderQueue::push); the 60fps path resets it in frame_commit as before.
-static inline int bb_active(void) { return g_fps60_on || cfg_dbg("objid"); }
+static inline int bb_active(void) { return g_fps60_on || g_mods.debug_ids || cfg_dbg("objid"); }
 void fps60_bb_frame_reset(void) { s_nBBCur = 0; }
 // (GTE_ReadCR is declared in the extern "C" block at the top of this file.)
 

@@ -191,7 +191,7 @@ void ov_render_cmd(Core* c) {
     // fps60 billboard entry keyed by that SPAN (the OT walk matches each item's source node against it) +
     // the current render object (scratch 0x1F80028C) as the stable cross-frame identity. The composed
     // camera×object transform is live in CR0-7 here (proj_obj_center_ord just read it).
-    if (g_fps60_on || cfg_dbg("objid")) fps60_record_billboard_span(c, slo, shi, c->mem_r32(0x1F80028Cu));
+    if (g_fps60_on || g_mods.debug_ids || cfg_dbg("objid")) fps60_record_billboard_span(c, slo, shi, c->mem_r32(0x1F80028Cu));
     if (cfg_dbg("objz") && probe_frame_ok(c))
       fprintf(stderr, "[rcmddep] mode=%02x span %08x->%08x (%dB) ord=%.4f\n",
               c->mem_r8(0x800BF870u), slo, shi, (int)(shi - slo), (double)ord);
@@ -321,7 +321,7 @@ void  fps60_stamp_world(Core* c, const int16_t mv[4][3], int nv, uint32_t key);
 // same anchor-translate the mesh path uses, keyed on identity (not depth ord). Host-only; no guest write.
 // Convenience: record the billboard entry that mirrors a just-published gpu_obj_depth_add(span, node-depth).
 static inline void fps60_bb_node(Core* c, uint32_t lo, uint32_t hi, uint32_t node) {
-  if (g_fps60_on || cfg_dbg("objid")) fps60_record_billboard_span(c, lo, hi, node);
+  if (g_fps60_on || g_mods.debug_ids || cfg_dbg("objid")) fps60_record_billboard_span(c, lo, hi, node);
 }
 static inline void fps60_stamp(Core* c, const ProjVtx* p, int nv) {
   if (!g_fps60_on) return;
@@ -836,7 +836,7 @@ void ov_collectable_quad(Core* c) {
     // (the OT walk matches the item's source node against it) + identity = the current render object
     // (scratch 0x1F80028C, set by submit_perobj_render); the composed camera×object transform is still live
     // in CR0-7 here (proj_obj_center_ord just read it), so fps60_record_billboard_span captures it.
-    if (g_fps60_on || cfg_dbg("objid")) fps60_record_billboard_span(c, slo, shi, c->mem_r32(0x1F80028Cu)); }
+    if (g_fps60_on || g_mods.debug_ids || cfg_dbg("objid")) fps60_record_billboard_span(c, slo, shi, c->mem_r32(0x1F80028Cu)); }
 }
 
 // ===================================================================================================

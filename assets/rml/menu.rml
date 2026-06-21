@@ -9,6 +9,7 @@
 		<tab-bar id="tab-bar">
 			<tab class="selected">Display</tab>
 			<tab>Graphics</tab>
+			<tab>Debug</tab>
 			<tab>Game</tab>
 			<tab>About</tab>
 		</tab-bar>
@@ -48,6 +49,13 @@
 				<select-button adjust="light_diffuse"><key>Diffuse</key><value>0.70</value></select-button>
 				<select-button toggle="shadows"><key>Dynamic Shadows</key><value>Off</value></select-button>
 				<select-button adjust="shadow_strength"><key>Shadow Strength</key><value>0.60</value></select-button>
+				<p class="hint">&#8596; switch tab &middot; &#8597; move &middot; Enter / A change &middot; Esc close</p>
+			</pane>
+
+			<pane>
+				<div class="section-heading">Debug</div>
+				<select-button toggle="debug_ids"><key>Object IDs</key><value>Off</value></select-button>
+				<p class="hint">Labels each rendered object with its engine id (4 hex), on the object.</p>
 				<p class="hint">&#8596; switch tab &middot; &#8597; move &middot; Enter / A change &middot; Esc close</p>
 			</pane>
 
