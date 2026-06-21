@@ -103,6 +103,20 @@ void imgui_overlay_event(const SDL_Event* e) {
 void imgui_overlay_set_visible(int v) { s_visible = (v != 0); }
 void imgui_overlay_set_options_mode(int v) { s_options_mode = (v != 0); }
 
+// True ONLY while the user is actively typing into an ImGui text widget (io.WantTextInput), NOT merely
+// because the overlay is visible/hovered. The game reads the keyboard via SDL_GetKeyboardState every
+// frame; if it kept reading while the user types into an ImGui input box, WASD would leak into gameplay
+// and vice-versa. So the pad code suppresses keyboard input ONLY in that narrow case. We deliberately do
+// NOT key off io.WantCaptureKeyboard: that goes true whenever any ImGui window is focused (even with no
+// text field), which would wrongly kill WASD just because the overlay is open. Keyboard-nav capture is
+// also intentionally left disabled in init (no ImGuiConfigFlags_NavEnableKeyboard), so a plain visible
+// overlay never claims the keyboard. Safe before init (no context) -> returns 0.
+extern "C" int imgui_overlay_wants_keyboard(void) {
+  if (!s_inited) return 0;
+  if (ImGui::GetCurrentContext() == nullptr) return 0;
+  return ImGui::GetIO().WantTextInput ? 1 : 0;
+}
+
 static void build_ui(void) {
   ImGui::SetNextWindowSize(ImVec2(330, 0), ImGuiCond_FirstUseEver);
   ImGui::SetNextWindowPos(ImVec2(20, 20), ImGuiCond_FirstUseEver);

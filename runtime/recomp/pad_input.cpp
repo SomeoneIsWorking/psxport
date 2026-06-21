@@ -71,6 +71,92 @@ void pad_fill_buffer(Core* c, uint8_t* buf) {
 #ifdef PSXPORT_SDL
 #include <SDL.h>
 
+// Provided by imgui_overlay.cpp. Returns 1 ONLY while the user is actively typing into an ImGui text
+// widget (io.WantTextInput) — NOT merely because the overlay is open/focused. We use it to suppress the
+// game's keyboard read in that narrow case so typed characters don't leak into gameplay (and WASD doesn't
+// leak into the text box). When the overlay is simply visible, this is 0 and WASD drives the game normally.
+// Declared here (extern "C") instead of including imgui_overlay.h so this TU stays header-light/testable.
+extern "C" int imgui_overlay_wants_keyboard(void);
+
+// --- Game controller (gamepad) state ----------------------------------------
+// Up to this many simultaneously-open controllers; hotswap-aware (DEVICEADDED/REMOVED handled by a
+// per-frame rescan in pad_rescan_controllers() so NO other file needs editing — see pad_poll_sdl).
+#define PAD_MAX_GC 4
+static SDL_GameController* s_gc[PAD_MAX_GC] = { nullptr, nullptr, nullptr, nullptr };
+static int                s_gc_inst[PAD_MAX_GC] = { -1, -1, -1, -1 };  // SDL_JoystickID per slot (-1 = empty)
+static int                s_gc_sub_init = 0;                            // lazily added the gamecontroller subsystem?
+
+// Lazily ensure SDL's gamecontroller subsystem is up. SDL_Init(SDL_INIT_VIDEO) happens in gpu_vk.cpp
+// (not owned here); the controller subsystem is independent, so we add it on first use. Idempotent.
+static void pad_ensure_gc_subsystem(void) {
+  if (s_gc_sub_init) return;
+  if (SDL_WasInit(SDL_INIT_GAMECONTROLLER) == 0)
+    SDL_InitSubSystem(SDL_INIT_GAMECONTROLLER);
+  s_gc_sub_init = 1;
+}
+
+// HOTSWAP: open any newly-connected controllers and drop any that vanished. Self-contained per-frame
+// rescan so we don't depend on SDL_CONTROLLERDEVICEADDED/REMOVED events reaching us through an event
+// pump we don't own (the pump lives in gpu_vk.cpp). Cheap: SDL_NumJoysticks is a count, and we only
+// call SDL_GameControllerOpen for indices we haven't already opened.
+static void pad_rescan_controllers(void) {
+  pad_ensure_gc_subsystem();
+  // 1) Drop slots whose controller was unplugged.
+  for (int s = 0; s < PAD_MAX_GC; s++) {
+    if (s_gc[s] && !SDL_GameControllerGetAttached(s_gc[s])) {
+      SDL_GameControllerClose(s_gc[s]);
+      s_gc[s] = nullptr; s_gc_inst[s] = -1;
+    }
+  }
+  // 2) Open any attached controller we don't already hold (dedup by instance id).
+  int n = SDL_NumJoysticks();
+  for (int i = 0; i < n; i++) {
+    if (!SDL_IsGameController(i)) continue;
+    SDL_JoystickID inst = SDL_JoystickGetDeviceInstanceID(i);
+    int already = 0;
+    for (int s = 0; s < PAD_MAX_GC; s++) if (s_gc_inst[s] == inst) { already = 1; break; }
+    if (already) continue;
+    for (int s = 0; s < PAD_MAX_GC; s++) {
+      if (!s_gc[s]) {
+        SDL_GameController* gc = SDL_GameControllerOpen(i);
+        if (gc) { s_gc[s] = gc; s_gc_inst[s] = SDL_JoystickInstanceID(SDL_GameControllerGetJoystick(gc)); }
+        break;
+      }
+    }
+  }
+}
+
+// OR one controller's buttons + analog sticks into the active-low PSX mask.
+// Button mapping (Sony layout — natural for a PSX title):
+//   A -> Cross, B -> Circle, X -> Square, Y -> Triangle (SDL A/B/X/Y are positional SNES-style;
+//   this gives the conventional Sony bottom=Cross, right=Circle, left=Square, top=Triangle).
+//   LeftShoulder/RightShoulder -> L1/R1; LeftTrigger/RightTrigger (analog, thresholded) -> L2/R2.
+//   Start -> Start, Back -> Select, LeftStick/RightStick click -> L3/R3.
+//   D-pad AND left analog stick -> directions (stick past ~50% deflection counts as a press).
+static void pad_apply_controller(SDL_GameController* gc, uint16_t* mask) {
+  #define BTN(b) SDL_GameControllerGetButton(gc, (b))
+  const int STICK = 16000;   // ~50% of 32767 deflection -> treat as a directional press
+  Sint16 lx = SDL_GameControllerGetAxis(gc, SDL_CONTROLLER_AXIS_LEFTX);
+  Sint16 ly = SDL_GameControllerGetAxis(gc, SDL_CONTROLLER_AXIS_LEFTY);
+  if (BTN(SDL_CONTROLLER_BUTTON_DPAD_UP)    || ly < -STICK) *mask &= ~0x0010u; // Up
+  if (BTN(SDL_CONTROLLER_BUTTON_DPAD_RIGHT) || lx >  STICK) *mask &= ~0x0020u; // Right
+  if (BTN(SDL_CONTROLLER_BUTTON_DPAD_DOWN)  || ly >  STICK) *mask &= ~0x0040u; // Down
+  if (BTN(SDL_CONTROLLER_BUTTON_DPAD_LEFT)  || lx < -STICK) *mask &= ~0x0080u; // Left
+  if (BTN(SDL_CONTROLLER_BUTTON_START))        *mask &= ~0x0008u; // Start
+  if (BTN(SDL_CONTROLLER_BUTTON_BACK))         *mask &= ~0x0001u; // Select
+  if (BTN(SDL_CONTROLLER_BUTTON_A))            *mask &= ~0x4000u; // Cross
+  if (BTN(SDL_CONTROLLER_BUTTON_B))            *mask &= ~0x2000u; // Circle
+  if (BTN(SDL_CONTROLLER_BUTTON_X))            *mask &= ~0x8000u; // Square
+  if (BTN(SDL_CONTROLLER_BUTTON_Y))            *mask &= ~0x1000u; // Triangle
+  if (BTN(SDL_CONTROLLER_BUTTON_LEFTSHOULDER)) *mask &= ~0x0400u; // L1
+  if (BTN(SDL_CONTROLLER_BUTTON_RIGHTSHOULDER))*mask &= ~0x0800u; // R1
+  if (BTN(SDL_CONTROLLER_BUTTON_LEFTSTICK))    *mask &= ~0x0002u; // L3
+  if (BTN(SDL_CONTROLLER_BUTTON_RIGHTSTICK))   *mask &= ~0x0004u; // R3
+  if (SDL_GameControllerGetAxis(gc, SDL_CONTROLLER_AXIS_TRIGGERLEFT)  > STICK) *mask &= ~0x0100u; // L2
+  if (SDL_GameControllerGetAxis(gc, SDL_CONTROLLER_AXIS_TRIGGERRIGHT) > STICK) *mask &= ~0x0200u; // R2
+  #undef BTN
+}
+
 // Map keyboard + first connected gamepad to the PSX button mask. Call once per
 // frame (after SDL_PumpEvents elsewhere, or it pumps here). Builds an ACTIVE-LOW
 // mask: a bit is cleared when its control is pressed.
@@ -78,7 +164,10 @@ void pad_poll_sdl(Core* c) {
   SDL_PumpEvents();
   uint16_t mask = PAD_NONE;
 
-  const Uint8* ks = SDL_GetKeyboardState(NULL);
+  // Suppress the keyboard ONLY while the user is typing into an ImGui text field (see the extern decl).
+  // A merely-visible overlay does NOT block WASD — that was the bug. The debug pause/step keys below stay
+  // outside this guard intentionally so P/'.' still work even with a field focused.
+  const Uint8* ks = (imgui_overlay_wants_keyboard() ? nullptr : SDL_GetKeyboardState(NULL));
   if (ks) {
     #define KEYDOWN(sc) (ks[(sc)] != 0)
     if (KEYDOWN(SDL_SCANCODE_UP)     || KEYDOWN(SDL_SCANCODE_W)) mask &= ~0x0010u; // Up
@@ -95,43 +184,36 @@ void pad_poll_sdl(Core* c) {
     if (KEYDOWN(SDL_SCANCODE_E))     mask &= ~0x0800u; // R1
     if (KEYDOWN(SDL_SCANCODE_1))     mask &= ~0x0100u; // L2
     if (KEYDOWN(SDL_SCANCODE_3))     mask &= ~0x0200u; // R2
-    // Debug pause / frame-step keys (edge-detected so one keypress = one action). P toggles
-    // pause/play; '.' (period) freezes and advances exactly one frame. Handled here because
-    // pad_poll_sdl runs every frame in BOTH the running loop and the paused wait. (dbg_server.c)
-    { void dbg_toggle_pause(void); void dbg_add_step(int);
-      static int prev_p = 0, prev_step = 0;
-      int p = KEYDOWN(SDL_SCANCODE_P), st = KEYDOWN(SDL_SCANCODE_PERIOD);
-      if (p && !prev_p)   dbg_toggle_pause();
-      if (st && !prev_step) dbg_add_step(1);
-      prev_p = p; prev_step = st; }
     #undef KEYDOWN
   }
 
-  // First connected game controller (if any), additive with the keyboard.
-  for (int i = 0; i < SDL_NumJoysticks(); i++) {
-    if (!SDL_IsGameController(i)) continue;
-    SDL_GameController* gc = SDL_GameControllerOpen(i);
-    if (!gc) continue;
-    #define BTN(b) SDL_GameControllerGetButton(gc, (b))
-    if (BTN(SDL_CONTROLLER_BUTTON_DPAD_UP))        mask &= ~0x0010u;
-    if (BTN(SDL_CONTROLLER_BUTTON_DPAD_RIGHT))     mask &= ~0x0020u;
-    if (BTN(SDL_CONTROLLER_BUTTON_DPAD_DOWN))      mask &= ~0x0040u;
-    if (BTN(SDL_CONTROLLER_BUTTON_DPAD_LEFT))      mask &= ~0x0080u;
-    if (BTN(SDL_CONTROLLER_BUTTON_START))          mask &= ~0x0008u;
-    if (BTN(SDL_CONTROLLER_BUTTON_BACK))           mask &= ~0x0001u; // Select
-    if (BTN(SDL_CONTROLLER_BUTTON_A))              mask &= ~0x4000u; // Cross
-    if (BTN(SDL_CONTROLLER_BUTTON_B))              mask &= ~0x2000u; // Circle
-    if (BTN(SDL_CONTROLLER_BUTTON_Y))              mask &= ~0x1000u; // Triangle
-    if (BTN(SDL_CONTROLLER_BUTTON_X))              mask &= ~0x8000u; // Square
-    if (BTN(SDL_CONTROLLER_BUTTON_LEFTSHOULDER))   mask &= ~0x0400u; // L1
-    if (BTN(SDL_CONTROLLER_BUTTON_RIGHTSHOULDER))  mask &= ~0x0800u; // R1
-    if (BTN(SDL_CONTROLLER_BUTTON_LEFTSTICK))      mask &= ~0x0002u; // L3
-    if (BTN(SDL_CONTROLLER_BUTTON_RIGHTSTICK))     mask &= ~0x0004u; // R3
-    #undef BTN
-    break; // first controller only
-  }
+  // Debug pause / frame-step keys (edge-detected so one keypress = one action). P toggles pause/play;
+  // '.' (period) freezes and advances exactly one frame. Read SDL's keyboard snapshot directly (not the
+  // `ks` above) so these still work even when ImGui suppressed gameplay keys. Handled here because
+  // pad_poll_sdl runs every frame in BOTH the running loop and the paused wait. (dbg_server.c)
+  { void dbg_toggle_pause(void); void dbg_add_step(int);
+    const Uint8* dks = SDL_GetKeyboardState(NULL);
+    static int prev_p = 0, prev_step = 0;
+    int p  = dks && dks[SDL_SCANCODE_P]      != 0;
+    int st = dks && dks[SDL_SCANCODE_PERIOD] != 0;
+    if (p && !prev_p)   dbg_toggle_pause();
+    if (st && !prev_step) dbg_add_step(1);
+    prev_p = p; prev_step = st; }
+
+  // HOTSWAP-aware controllers: open/close as devices come and go, then OR every connected pad into the
+  // mask (additive with the keyboard, so both work simultaneously). Self-contained — no dependency on
+  // SDL_CONTROLLERDEVICE* events from the (unowned) event pump.
+  pad_rescan_controllers();
+  for (int s = 0; s < PAD_MAX_GC; s++)
+    if (s_gc[s]) pad_apply_controller(s_gc[s], &mask);
 
   c->game->pad.buttons = mask;
+}
+
+// Close any open controllers (call on shutdown if desired). Safe to call multiple times.
+void pad_close_controllers(void) {
+  for (int s = 0; s < PAD_MAX_GC; s++)
+    if (s_gc[s]) { SDL_GameControllerClose(s_gc[s]); s_gc[s] = nullptr; s_gc_inst[s] = -1; }
 }
 #endif // PSXPORT_SDL
 
