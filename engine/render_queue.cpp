@@ -76,7 +76,7 @@ static void objid_overlay(RenderQueue* q, Core* core) {
   std::unordered_set<uint32_t> seen;
   int nworld = 0, nnoded = 0, nlabel = 0;
   static int s_logframe = 0;                    // throttle the stderr table to once every ~60 frames
-  int dolog = cfg_dbg("objid") && ((s_logframe++ % 60) == 0);
+  int dolog = objid_on() && ((s_logframe++ % 60) == 0);   // log whether enabled via channel OR the menu toggle
   for (int i = 0; i < n0; i++) {
     const RqItem* it = &q->items[i];
     if (it->layer != RQ_WORLD) continue;
@@ -89,11 +89,14 @@ static void objid_overlay(RenderQueue* q, Core* core) {
     objid_dec(core, it, model, it->xs[0], it->ys[0], 2);
     nlabel++;
     if (dolog) {
-      uint32_t nd = node & 0x1FFFFFu;
-      fprintf(stderr, "[objid] model=%u (0x%X) node=%08x type=%02x pos=(%d,%d,%d) %s scr=(%d,%d) depth=%.4f\n",
-              model, model, node, core->mem_r8(nd + 0xC),
-              (int)(int16_t)core->mem_r16(nd + 0x2E), (int)(int16_t)core->mem_r16(nd + 0x32), (int)(int16_t)core->mem_r16(nd + 0x36),
-              it->fps_anchor ? "BILLBOARD" : "MESH", it->xs[0], it->ys[0], (double)it->depth[0]);
+      // Candidate id fields — find which one is the 352/353/354 the user knows, so we display the right one.
+      fprintf(stderr, "[objid] %s node=%08x +0c(type)=%02x +0e=%u +0e&3fff=%u +28=%04x +2a=%u +38(mdata)=%08x "
+                      "pos=(%d,%d,%d) scr=(%d,%d) depth=%.4f\n",
+              it->fps_anchor ? "BILLBOARD" : "MESH", node,
+              core->mem_r8(node + 0xC), core->mem_r16(node + 0xE), core->mem_r16(node + 0xE) & 0x3FFF,
+              core->mem_r16(node + 0x28), core->mem_r16(node + 0x2A), core->mem_r32(node + 0x38),
+              (int)(int16_t)core->mem_r16(node + 0x2E), (int)(int16_t)core->mem_r16(node + 0x32), (int)(int16_t)core->mem_r16(node + 0x36),
+              it->xs[0], it->ys[0], (double)it->depth[0]);
     }
   }
   if (dolog)
