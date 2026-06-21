@@ -430,6 +430,121 @@ void ov_grid_setup_49968(Core* c) {
   c->mem_w32(0x1F8001D8u, d8); c->mem_w32(0x1F8001DCu, dc);
 }
 
+// FUN_80047CBC — collision-grid CELL QUERY / neighbor-walk. Converts the probe position
+// (sh[0x1BC],sh[0x1C0]) relative to grid origin (sh[0x1AA],sh[0x1AC]) into grid indices (>>6),
+// bounds-checks against the row table (w[0x1CC]), looks up the cell record (w[0x1D0] + idx*8) and
+// reads its tag. Then loops following the tag bits: 0x8000=keep walking, 0x4000=follow the cell's
+// link/child list (inner sub-scan against u16[0x1BE]-32), else step ONE cell in +/-X (sh[0x1C0]) or
+// +/-Z (sh[0x1BC]) per the low 3 tag bits, recompute the cell, repeat. Returns 0 (off-grid/blocked)
+// or 1 (resolved). Writes scratchpad ONLY (0x08C idx, 0x1A8 tag, 0x1BC/0x1C0 stepped coords,
+// 0x1E0/E4 cursor ptrs). t6=w[0x1D4], t7=u16[0x1BE], MASK=~63 (the -64 grid-snap mask).
+static uint32_t grid_query_47cbc(Core* c) {
+  const uint32_t SP = 0x1F800000u, MASK = 0xFFFFFFC0u;
+  // ---- phase A: initial cell from probe vs origin ----
+  int32_t t1 = ((int32_t)(int16_t)c->mem_r16(SP+0x1BC) - (int32_t)(int16_t)c->mem_r16(SP+0x1AA)) >> 6;  // grid Z idx (a3/t1)
+  int32_t a3 = t1;
+  uint32_t row0 = c->mem_r32(SP+0x1CC);
+  uint32_t a1   = row0 + (uint32_t)(t1 << 2);                    // &row0[t1] (4-byte stride)
+  int32_t t0   = ((int32_t)(int16_t)c->mem_r16(SP+0x1C0) - (int32_t)(int16_t)c->mem_r16(SP+0x1AC)) >> 6;  // grid X idx (t0)
+  uint32_t A1_0 = c->mem_r16(a1+0);
+  if (t0 < (int32_t)A1_0) return 0;
+  uint32_t a2 = (c->mem_r16(a1+2) + (uint32_t)t0) - A1_0;
+  int32_t limit = (int32_t)((uint32_t)c->mem_r16(SP+0x1AE) >> 6) - 2;
+  if (a3 < limit) { if (!((a2 & 0xffff) < (uint32_t)c->mem_r16(a1+6))) return 0; }
+  // ---- L_d64: latch the cell record + tag ----
+  uint32_t idx = a2 & 0xffff;
+  c->mem_w32(SP+0x08C, idx);
+  uint32_t ptr = c->mem_r32(SP+0x1D0) + (idx << 3);
+  a2 = c->mem_r16(ptr+0);
+  c->mem_w32(SP+0x1E4, ptr);
+  c->mem_w32(SP+0x1E0, ptr);
+  c->mem_w16(SP+0x1A8, (uint16_t)a2);
+  if ((a2 & 0xc000u) != 0xc000u) c->mem_w16(SP+0x1A8, 0);
+  if ((a2 & 0x8000u) == 0) return 1;
+  uint32_t t6 = c->mem_r32(SP+0x1D4);
+  uint32_t t7 = c->mem_r16(SP+0x1BE);
+  // ---- walk ----
+  for (;;) {
+    if (a2 & 0x4000u) {
+      // ARM A: follow link / child list
+      uint32_t rec = c->mem_r32(SP+0x1E0);                       // original record (a1)
+      c->mem_w32(SP+0x1E0, t6 + ((uint32_t)c->mem_r16(rec+2) << 3));
+      if (a2 & 0x0001u) {
+        int32_t a0 = 1;
+        uint32_t cnt = c->mem_r16(rec+4);
+        if (1 < (int32_t)cnt) {
+          int32_t a3p = (int32_t)t7 - 32;
+          for (;;) {
+            uint32_t cur = c->mem_r32(SP+0x1E0) + 8;
+            uint32_t iv = c->mem_r16(cur+4);
+            c->mem_w32(SP+0x1E0, cur);
+            uint32_t iw = c->mem_r16(cur+6);
+            if (((iv - (uint32_t)a3p) & 0xffff) < iw) break;
+            a0 += 1;
+            if (!(a0 < (int32_t)cnt)) break;
+          }
+        }
+        uint32_t t = c->mem_r16(rec+6);
+        bool hit = ((uint32_t)a0 == (t & 0xff)) || ((uint32_t)a0 == (t >> 8));
+        if (!hit && (uint32_t)a0 == (uint32_t)c->mem_r16(rec+4)) hit = true;
+        if (hit) c->mem_w32(SP+0x1E0, t6 + ((uint32_t)c->mem_r16(rec+2) << 3));
+      }
+      a2 = c->mem_r16(c->mem_r32(SP+0x1E0) + 0);
+    } else {
+      // ARM B: step one grid cell, recompute
+      if (a2 & 0x0004u) {
+        switch (a2 & 3u) {
+          case 1: c->mem_w16(SP+0x1BC, (uint16_t)((c->mem_r16(SP+0x1BC) + 64) & MASK)); t1++; break;
+          case 0: c->mem_w16(SP+0x1BC, (uint16_t)((c->mem_r16(SP+0x1BC) & MASK) - 1));  t1--; break;
+          case 2: c->mem_w16(SP+0x1C0, (uint16_t)((c->mem_r16(SP+0x1C0) & MASK) - 1));  t0--; break;
+          case 3: c->mem_w16(SP+0x1C0, (uint16_t)((c->mem_r16(SP+0x1C0) + 64) & MASK)); t0++; break;
+        }
+      } else if ((uint32_t)c->mem_r16(SP+0x1AE) < (uint32_t)c->mem_r16(SP+0x1B0)) {
+        if (a2 & 0x0002u) { c->mem_w16(SP+0x1BC, (uint16_t)((c->mem_r16(SP+0x1BC) + 64) & MASK)); t1++; }
+        else              { c->mem_w16(SP+0x1BC, (uint16_t)((c->mem_r16(SP+0x1BC) & MASK) - 1));  t1--; }
+      } else {
+        if (a2 & 0x0001u) { c->mem_w16(SP+0x1C0, (uint16_t)((c->mem_r16(SP+0x1C0) + 64) & MASK)); t0++; }
+        else              { c->mem_w16(SP+0x1C0, (uint16_t)((c->mem_r16(SP+0x1C0) & MASK) - 1));  t0--; }
+      }
+      // L_f9c: recompute cell from stepped indices
+      uint32_t a1b = c->mem_r32(SP+0x1CC) + (uint32_t)(((int32_t)(int16_t)t1) * 4);
+      uint32_t A1b0 = c->mem_r16(a1b+0);
+      if (A1b0 == 0xffff) return 0;
+      if ((int32_t)(int16_t)t0 < (int32_t)A1b0) return 0;
+      uint32_t a2v = (c->mem_r16(a1b+2) + (uint32_t)t0) - A1b0;
+      uint32_t a0b = a2v & 0xffff;
+      if (!(a0b < (uint32_t)c->mem_r16(a1b+6))) return 0;
+      uint32_t ptrB = c->mem_r32(SP+0x1D0) + (a0b << 3);
+      a2 = c->mem_r16(ptrB+0);
+      c->mem_w32(SP+0x08C, a0b);
+      c->mem_w32(SP+0x1E4, ptrB);
+      c->mem_w32(SP+0x1E0, ptrB);
+      c->mem_w16(SP+0x1A8, (uint16_t)a2);
+    }
+    if ((a2 & 0x8000u) == 0) return 1;
+  }
+}
+
+void ov_grid_query_47cbc(Core* c) {
+  static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("gridquery") ? 1 : 0;
+  if (!s_v) { c->r[2] = grid_query_47cbc(c); return; }
+  const uint32_t LO = 0x1F800080u, HI = 0x1F8001F0u, N = HI - LO;
+  uint8_t snap[0x170], after[0x170];
+  for (uint32_t a = LO; a < HI; a++) snap[a-LO] = c->mem_r8(a);
+  uint32_t mine = grid_query_47cbc(c);
+  for (uint32_t a = LO; a < HI; a++) { after[a-LO] = c->mem_r8(a); c->mem_w8(a, snap[a-LO]); }  // capture+restore
+  rec_super_call(c, 0x80047CBCu);
+  uint32_t oracle = c->r[2];
+  int firstoff = -1;
+  for (uint32_t a = LO; a < HI; a++) if (c->mem_r8(a) != after[a-LO]) { firstoff = (int)(a-LO); break; }
+  static long ng = 0, nb = 0;
+  if (firstoff >= 0 || mine != oracle) {
+    if (nb++ < 30) fprintf(stderr, "[gridquery] MISMATCH ret mine=%x oracle=%x scratchdiff@+%x\n", mine, oracle, firstoff);
+  } else if (++ng % 2000 == 0) fprintf(stderr, "[gridquery] %ld matches\n", ng);
+  (void)N;
+  c->r[2] = oracle;                                            // keep oracle scratchpad state
+}
+
 
 static void ov_object_cull(Core* c) {
   uint32_t prev = c->game->fps60.current_object;
@@ -955,6 +1070,7 @@ void games_tomba2_init(void) {
     { void ov_cull_wrap_77acc(Core*); rec_set_override(0x80077ACCu, ov_cull_wrap_77acc); }  // cull wrapper variant (flags 1/4)
     { void ov_list_scan_31780(Core*); rec_set_override(0x80031780u, ov_list_scan_31780); }  // list-tail resolver/reset
     { void ov_grid_setup_49968(Core*); rec_set_override(0x80049968u, ov_grid_setup_49968); }  // collision-grid row-ptr setup
+    { void ov_grid_query_47cbc(Core*); rec_set_override(0x80047CBCu, ov_grid_query_47cbc); }  // collision-grid cell query/walk
   }
   // PC-native LEVEL/STAGE LOADER (engine/engine_level.cpp): the engine's overlay loader FUN_800450bc —
   // load a stage's overlay off the disc + set its entry, synchronous (no PSX CD-wait yield).

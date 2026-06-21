@@ -178,6 +178,16 @@ for content fns (call it). Do NOT mimic PSX hardware (GTE/GP0/OT) — remove Bee
   (&0xff); table base @0x1F8001C8, `rec = base + table[a0]*2`; writes 5 scratchpad row ptrs:
   0x1F8001CC=rec+0x14, 0x1F8001D0/D4/D8/DC = rec + rec[12/14/16/18]*2. Pure scratchpad pointer arithmetic.
   `gridsetup` A/B 0-diff (5000+ matches). Pairs with the grid QUERY FUN_80047CBC (next).
+- ✅ **later-195 — `FUN_80047CBC` `ov_grid_query_47cbc` (collision-grid CELL QUERY / neighbor-walk, ~158
+  instrs, 3 returns; note 0x80048034+ is a SEPARATE fn).** Probe pos (sh[0x1BC],sh[0x1C0]) − origin
+  (sh[0x1AA],sh[0x1AC]) >>6 → grid idx; bounds-check vs row table w[0x1CC]; cell record = w[0x1D0]+idx*8.
+  Then walks following the cell TAG bits: 0x8000=keep walking, 0x4000=follow the cell's link/child list
+  (inner sub-scan vs u16[0x1BE]−32), else step ONE cell ±X (sh[0x1C0]) / ±Z (sh[0x1BC]) per the low 3 tag
+  bits (snap mask ~63), recompute, repeat. Returns 0 (off-grid/blocked) / 1 (resolved). Writes scratchpad
+  ONLY. Verified with a FULL-scratchpad A/B gate `gridquery` ([0x1F800080,0x1F8001F0) byte-compare + return
+  reg): 0-diff over 10000+ calls with movement in all 4 directions (exercises every step branch). GOTCHAs:
+  delay-slot writes (sh[0x1A8]=a2 then conditionally =0); a1 reloaded to scratchpad base mid-fn (t5=SP);
+  L_f9c uses (int16)t1*4 for the row index but FULL t0 for the column add.
 - ✅ `FUN_80051C8C` per-object TRANSFORM build = `ov_build_xform`.
 - **Camera update (engine_camera.cpp):**
   - ✅ position X/Z `FUN_8006d960` = `ov_cam_track_xz`; ✅ position Y `FUN_8006da54` = `ov_cam_track_y` (later-174).
