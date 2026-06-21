@@ -41,6 +41,13 @@ struct GpuVkState {
   const float* s_vdn = nullptr;
   float s_cur_ord = 0, s_cur_ordn = 0;
 
+  // Sub-pixel float SCREEN XY for the engine-owned 3D world path (vertex smoothing / issue #15). When set,
+  // tex_emit uses these floats for the vertex POSITION instead of the integer xs/ys (which the world submit
+  // would otherwise have rounded). NULL = use the integer xs/ys (2D/HUD/un-owned prims keep snapping).
+  // Same lifetime contract as s_vd: set by the emit just before a draw call, cleared after.
+  const float* s_xf = nullptr;
+  const float* s_yf = nullptr;
+
   // OT-order-correct semi grouping: vertex-index boundaries of each non-overlapping group + the current
   // group's accumulated abs bbox.
   int s_semi_grp[SEMI_GRP_CAP] = {};
@@ -61,6 +68,7 @@ struct GpuVkState {
   // public-API methods
   void set_vd(const float* d3);
   void set_vd_n(const float* d3);
+  void set_xyf(const float* xf, const float* yf);   // sub-pixel screen XY for the world path (#15)
   void set_order(unsigned idx);
   void set_order_2d(unsigned idx);
   void set_order_2d_n(unsigned idx);

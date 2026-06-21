@@ -572,6 +572,10 @@ static int fps60_reproject(const RqItem* C, const uint32_t crM[8], RqItem* out) 
     int d = abs(xs - C->xs[k]) + abs(ys - C->ys[k]);
     if (d > worst) worst = d;
     out->xs[k] = xs; out->ys[k] = ys; out->depth[k] = proj_pz_to_ord(pz[k]);
+    // Vertex smoothing (#15): also carry the SUB-PIXEL reprojected XY so the 60fps in-between is smooth
+    // too (the gate above still uses the integer position). has_xyf came along in the *C copy.
+    out->xsf[k] = px[k] + (float)C->fps_offx;
+    out->ysf[k] = py[k] + (float)C->fps_offy;
   }
   return worst;
 }
@@ -608,6 +612,7 @@ int Fps60State::build_lerp() {
     int worst = fps60_reproject(C, crM, &tmp);
     if (worst > FPS60_VTX_GATE) { snapped++; continue; } // cut/teleport/degenerate → snap (no smear)
     for (int k = 0; k < C->nv; k++) { s_rqLerp[i].xs[k] = tmp.xs[k]; s_rqLerp[i].ys[k] = tmp.ys[k];
+                                      s_rqLerp[i].xsf[k] = tmp.xsf[k]; s_rqLerp[i].ysf[k] = tmp.ysf[k];
                                       s_rqLerp[i].depth[k] = tmp.depth[k]; }
     moved++;
   }

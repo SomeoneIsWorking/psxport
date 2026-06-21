@@ -528,29 +528,38 @@ void gpu_emit_rq_item(Core* core, const RqItem* it) {
   if      (om == RQ_OM_2D_BG) gpu_vk_set_order_2d_bg(core, ord);
   else if (om == RQ_OM_2D_FG) gpu_vk_set_order_2d(core, ord);
   #define RQ_SETVD(p) do { if (om == RQ_OM_DEPTH) gpu_vk_set_vd(core, (p)); } while (0)
+  // Vertex smoothing (#15): for the world path, hand the rasterizer the sub-pixel float screen XY. The base
+  // pointer maps to vertex [0]; the second triangle of a quad is emitted from &xs[1], so it gets &xsf[1].
+  // gpu_vk_set_order (inside set_order, fired per draw via the *_set_vd/order path) clears s_xf, so a NULL
+  // here for non-world prims leaves them snapping to the integer xs/ys. set after set_order, before draw.
+  const float* xsf = it->has_xyf ? it->xsf : nullptr;
+  const float* ysf = it->has_xyf ? it->ysf : nullptr;
+  #define RQ_SETXYF(o) do { gpu_vk_set_xyf(core, xsf ? xsf+(o) : nullptr, ysf ? ysf+(o) : nullptr); } while (0)
   if (it->semi) {
     int bx0=xs[0],by0=ys[0],bx1=xs[0],by1=ys[0];
     for (int i=1;i<nv;i++){ if(xs[i]<bx0)bx0=xs[i]; if(xs[i]>bx1)bx1=xs[i]; if(ys[i]<by0)by0=ys[i]; if(ys[i]>by1)by1=ys[i]; }
     gpu_vk_semi_group(core, bx0, by0, bx1, by1);
-    RQ_SETVD(depth);
+    RQ_SETVD(depth); RQ_SETXYF(0);
     gpu_vk_draw_semi(core, (int*)xs, (int*)ys, (int*)us, (int*)vs, (unsigned char*)rs, (unsigned char*)gs, (unsigned char*)bs,
                      it->tp_x, it->tp_y, mode, raw, it->clut_x, it->clut_y,
                      it->tw_mx, it->tw_my, it->tw_ox, it->tw_oy, it->da_x0, it->da_y0, it->da_x1, it->da_y1, it->tp_blend);
-    if (nv == 4) { RQ_SETVD(&depth[1]);
+    if (nv == 4) { RQ_SETVD(&depth[1]); RQ_SETXYF(1);
       gpu_vk_draw_semi(core, (int*)&xs[1], (int*)&ys[1], (int*)&us[1], (int*)&vs[1], (unsigned char*)&rs[1], (unsigned char*)&gs[1], (unsigned char*)&bs[1],
                        it->tp_x, it->tp_y, mode, raw, it->clut_x, it->clut_y,
                        it->tw_mx, it->tw_my, it->tw_ox, it->tw_oy, it->da_x0, it->da_y0, it->da_x1, it->da_y1, it->tp_blend); }
   } else {
-    RQ_SETVD(depth);
+    RQ_SETVD(depth); RQ_SETXYF(0);
     gpu_vk_draw_tritri(core, (int*)xs, (int*)ys, (int*)us, (int*)vs, (unsigned char*)rs, (unsigned char*)gs, (unsigned char*)bs,
                        it->tp_x, it->tp_y, mode, raw, it->clut_x, it->clut_y,
                        it->tw_mx, it->tw_my, it->tw_ox, it->tw_oy, it->da_x0, it->da_y0, it->da_x1, it->da_y1);
-    if (nv == 4) { RQ_SETVD(&depth[1]);
+    if (nv == 4) { RQ_SETVD(&depth[1]); RQ_SETXYF(1);
       gpu_vk_draw_tritri(core, (int*)&xs[1], (int*)&ys[1], (int*)&us[1], (int*)&vs[1], (unsigned char*)&rs[1], (unsigned char*)&gs[1], (unsigned char*)&bs[1],
                          it->tp_x, it->tp_y, mode, raw, it->clut_x, it->clut_y,
                          it->tw_mx, it->tw_my, it->tw_ox, it->tw_oy, it->da_x0, it->da_y0, it->da_x1, it->da_y1); }
   }
+  gpu_vk_set_xyf(core, nullptr, nullptr);   // clear so the next prim (if not world) snaps to integer xs/ys
   #undef RQ_SETVD
+  #undef RQ_SETXYF
 }
 
 // Build an RqItem from already-resolved quad/tri data + material snapshot, then either queue it (engine
@@ -558,7 +567,8 @@ void gpu_emit_rq_item(Core* core, const RqItem* it) {
 // quad, guest poly, guest sprite) funnel through. `capture` routes to the queue (set during the OT walk
 // under PSXPORT_RQ); otherwise it draws inline immediately (default — identical to pre-queue behavior).
 static void rq_emit_or_queue(Core* core, int capture, int layer, int order_mode, int nv, int semi, int raw,
-                             const int* xs, const int* ys, const int* us, const int* vs,
+                             const int* xs, const int* ys, const float* xsf, const float* ysf,
+                             const int* us, const int* vs,
                              const unsigned char* rs, const unsigned char* gs, const unsigned char* bs,
                              const float* depth, int mode, int tp_x, int tp_y, int clut_x, int clut_y,
                              int tw_mx, int tw_my, int tw_ox, int tw_oy, int da_x0, int da_y0, int da_x1, int da_y1,
@@ -567,7 +577,10 @@ static void rq_emit_or_queue(Core* core, int capture, int layer, int order_mode,
   it.layer = (uint8_t)layer; it.semi = semi ? 1 : 0; it.nv = (uint8_t)nv; it.raw = raw ? 1 : 0;
   it.order_mode = (uint8_t)order_mode;
   it.fps_world = 0;   // fps60 capture: cleared here, set only by fps60_stamp_world on GTE-composed world prims
+  it.has_xyf = (xsf && ysf) ? 1 : 0;   // sub-pixel float XY (vertex smoothing) supplied by the world path
   for (int i = 0; i < nv; i++) { it.xs[i]=xs[i]; it.ys[i]=ys[i]; it.us[i]=us[i]; it.vs[i]=vs[i];
+                                 it.xsf[i]= it.has_xyf ? xsf[i] : (float)xs[i];
+                                 it.ysf[i]= it.has_xyf ? ysf[i] : (float)ys[i];
                                  it.rs[i]=rs[i]; it.gs[i]=gs[i]; it.bs[i]=bs[i];
                                  it.depth[i] = depth ? depth[i] : 0.0f; }
   it.mode = mode; it.tp_x = tp_x; it.tp_y = tp_y; it.clut_x = clut_x; it.clut_y = clut_y;
@@ -586,14 +599,19 @@ void gpu_draw_world_quad(Core* core, const float* px, const float* py, const flo
   s.set_clut(clut);
   s.s_seen3d = 1;                              // a projected world prim has now been drawn this frame
   int xs[4], ys[4], us[4], vs[4]; unsigned char rs[4], gs[4], bs[4];
+  float xsf[4], ysf[4];
   for (int i = 0; i < 4; i++) {
+    // Vertex smoothing (#15): keep the engine's SUB-PIXEL float screen XY (draw offset applied in float)
+    // for the rasterizer, and round only for the integer xs/ys still used by the 2D bbox/semi-group path.
+    xsf[i] = px[i] + (float)s.s_off_x;
+    ysf[i] = py[i] + (float)s.s_off_y;
     xs[i] = (int)(px[i] < 0 ? px[i] - 0.5f : px[i] + 0.5f) + s.s_off_x;  // round, then draw offset
     ys[i] = (int)(py[i] < 0 ? py[i] - 0.5f : py[i] + 0.5f) + s.s_off_y;
     us[i] = u[i]; vs[i] = v[i]; rs[i] = r[i]; gs[i] = g[i]; bs[i] = b[i];
   }
   // World geometry: engine layer WORLD with real per-vertex depth. The queue is the render path.
   rq_emit_or_queue(core, 1, RQ_WORLD, RQ_OM_DEPTH, 4, semi ? 1 : 0, 0,
-                   xs, ys, us, vs, rs, gs, bs, depth, s.s_tp_mode,
+                   xs, ys, xsf, ysf, us, vs, rs, gs, bs, depth, s.s_tp_mode,
                    s.s_tp_x, s.s_tp_y, s.s_clut_x, s.s_clut_y, s.s_tw_mx, s.s_tw_my, s.s_tw_ox, s.s_tw_oy,
                    s.s_da_x0, s.s_da_y0, s.s_da_x1, s.s_da_y1, s.s_tp_blend);
 }
@@ -827,7 +845,7 @@ void GpuState::gp0_exec(Core* core) {
         // Engine owns ordering: hand the prim to the render queue tagged with its layer + depth mode.
         int layer = is3d ? RQ_WORLD : (bg ? RQ_BACKGROUND : RQ_HUD);
         int om    = is3d ? RQ_OM_DEPTH : (bg ? RQ_OM_2D_BG : RQ_OM_2D_FG);
-        rq_emit_or_queue(core, 1, layer, om, nv, semi, rw, xs, ys, us, vs, rs, gs, bs,
+        rq_emit_or_queue(core, 1, layer, om, nv, semi, rw, xs, ys, 0, 0, us, vs, rs, gs, bs,
                          is3d ? dep : 0, mode, s_tp_x, s_tp_y, s_clut_x, s_clut_y,
                          s_tw_mx, s_tw_my, s_tw_ox, s_tw_oy, s_da_x0, s_da_y0, s_da_x1, s_da_y1, s_tp_blend);
       } else {
@@ -973,6 +991,7 @@ void GpuState::gp0_exec(Core* core) {
         if (gpu_vk_wide_engine() && s_prev_had3d) {       // only widen 2D on gameplay frames (else pillarbox)
           XL = ws_2d_local_x(XL, X, X + w, bg);           // engine-owned 2D layout (anchored, native size)
           XR = ws_2d_local_x(XR, X, X + w, bg);
+          if (!bg) { XL += s_da_x0; XR += s_da_x0; }      // ISS14 TEST: cancel shader i_da.x0 subtraction for HUD
         } }
       int qx[4] = { XL, XR, XL, XR }, qy[4] = { Y, Y, Y+h, Y+h };
       int qu[4] = { u0, u0+w, u0, u0+w }, qv[4] = { v0, v0, v0+h, v0+h };
@@ -984,7 +1003,7 @@ void GpuState::gp0_exec(Core* core) {
         if (objz) { dep[0] = dep[1] = dep[2] = dep[3] = od; s_seen3d = 1; }
         int layer = objz ? RQ_WORLD     : (bg ? RQ_BACKGROUND : RQ_HUD);
         int om    = objz ? RQ_OM_DEPTH  : (bg ? RQ_OM_2D_BG   : RQ_OM_2D_FG);
-        rq_emit_or_queue(core, 1, layer, om, 4, semi, rw, qx, qy, qu, qv, qr, qg, qb, objz ? dep : 0, mode,
+        rq_emit_or_queue(core, 1, layer, om, 4, semi, rw, qx, qy, 0, 0, qu, qv, qr, qg, qb, objz ? dep : 0, mode,
                          s_tp_x, s_tp_y, s_clut_x, s_clut_y, s_tw_mx, s_tw_my, s_tw_ox, s_tw_oy,
                          s_da_x0, s_da_y0, s_da_x1, s_da_y1, s_tp_blend);
       } else {

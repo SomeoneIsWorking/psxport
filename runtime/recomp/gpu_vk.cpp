@@ -172,6 +172,10 @@ void GpuVkState::set_vd(const float* d3) { s_vd = d3; }
 // and the native-mode depth (.ordn) so one geometry batch renders both ways (left=ord, right=ordn).
 // In a normal (non-SBS) run the native channel mirrors the default one (ordn == ord), so it is inert.
 void GpuVkState::set_vd_n(const float* d3) { s_vdn = d3; }
+// Sub-pixel float screen XY for the engine-owned 3D world path (vertex smoothing / issue #15). Set AFTER
+// set_order (which clears it) by gpu_emit_rq_item just before a world draw; tex_emit then uses these floats
+// for the vertex position instead of the integer xs/ys. NULL = snap to integer (2D/HUD/un-owned prims).
+void GpuVkState::set_xyf(const float* xf, const float* yf) { s_xf = xf; s_yf = yf; }
 // Single shared D32 buffer is partitioned into THREE depth bands (nearer = larger ord = wins, with a
 // 0.0 clear): a 2D BACKGROUND band [0, NATIVE_3D_MIN) for non-projected backdrop layers (water/sky),
 // the 3D WORLD band [NATIVE_3D_MIN, NATIVE_3D_MAX] (real per-vertex depth), and a 2D OVERLAY band
@@ -186,7 +190,7 @@ void GpuVkState::set_vd_n(const float* d3) { s_vdn = d3; }
 // Map a normalized per-vertex 3D depth d in [0,1] into the 3D WORLD band [NATIVE_3D_MIN, NATIVE_3D_MAX].
 static inline float ord3d(float d) { return NATIVE_3D_MIN + d * (NATIVE_3D_MAX - NATIVE_3D_MIN); }
 void GpuVkState::set_order(unsigned idx) { s_cur_ord = (float)(idx + 1) / 65536.0f; if (s_cur_ord > 1.0f) s_cur_ord = 1.0f;
-                                      s_cur_ordn = s_cur_ord; s_vd = 0; s_vdn = 0; }
+                                      s_cur_ordn = s_cur_ord; s_vd = 0; s_vdn = 0; s_xf = 0; s_yf = 0; }
 // 2D/HUD prim under PSXPORT_NATIVE_DEPTH: OT order, biased into the overlay band above the 3D world.
 void GpuVkState::set_order_2d(unsigned idx) { float t = (float)(idx + 1) / 65536.0f; if (t > 1.0f) t = 1.0f;
                                          s_cur_ord = NATIVE_3D_MAX + (1.0f - NATIVE_3D_MAX) * t; s_vd = 0; }
@@ -1458,7 +1462,12 @@ void GpuVkState::tex_emit(TexVtx* t, const int* xs, const int* ys, const int* us
                      int twmx, int twmy, int twox, int twoy, int dax0, int day0, int dax1, int day1,
                      int semi, int blend) {
   for (int i = 0; i < 3; i++) {
-    t[i].x = xs[i]; t[i].y = ys[i]; t[i].u = us[i]; t[i].v = vs[i];
+    // Vertex smoothing (#15): the world path supplies SUB-PIXEL float screen XY (draw offset already
+    // applied in float) — use it directly instead of the rounded integer xs/ys, so geometry no longer
+    // snaps pixel-to-pixel (PS1 wobble). 2D/HUD/un-owned prims leave s_xf NULL and keep the integer XY.
+    t[i].x = s_xf ? s_xf[i] : (float)xs[i];
+    t[i].y = s_yf ? s_yf[i] : (float)ys[i];
+    t[i].u = us[i]; t[i].v = vs[i];
     t[i].r = rs[i]/255.f; t[i].g = gs[i]/255.f; t[i].b = bs[i]/255.f;
     t[i].tp[0] = tpx; t[i].tp[1] = tpy; t[i].tp[2] = mode; t[i].tp[3] = raw;
     t[i].clut[0] = clutx; t[i].clut[1] = cluty; t[i].clut[2] = semi; t[i].clut[3] = blend;
@@ -1709,6 +1718,7 @@ void GpuVkState::tritest() {
 // C-style call sites stable; each forwards to core->game->gpu_vk (de-globalization R2, 2026-06-19). ----
 void gpu_vk_set_vd(Core* core, const float* d3) { core->game->gpu_vk.set_vd(d3); }
 void gpu_vk_set_vd_n(Core* core, const float* d3) { core->game->gpu_vk.set_vd_n(d3); }
+void gpu_vk_set_xyf(Core* core, const float* xf, const float* yf) { core->game->gpu_vk.set_xyf(xf, yf); }
 void gpu_vk_set_order(Core* core, unsigned idx) { core->game->gpu_vk.set_order(idx); }
 void gpu_vk_set_order_2d(Core* core, unsigned idx) { core->game->gpu_vk.set_order_2d(idx); }
 void gpu_vk_set_order_2d_n(Core* core, unsigned idx) { core->game->gpu_vk.set_order_2d_n(idx); }
@@ -1738,6 +1748,7 @@ void gpu_vk_set_order_2d_bg(Core* core, unsigned idx) { (void)core;(void)idx; }
 void gpu_vk_set_order_2d_bg_n(Core* core, unsigned idx) { (void)core;(void)idx; }
 void gpu_vk_set_vd(Core* core, const float* d3) { (void)core;(void)d3; }
 void gpu_vk_set_vd_n(Core* core, const float* d3) { (void)core;(void)d3; }
+void gpu_vk_set_xyf(Core* core, const float* xf, const float* yf) { (void)core;(void)xf;(void)yf; }
 void gpu_vk_rawdump_arm(const char* path, int frame) { (void)path;(void)frame; }
 void gpu_vk_vram_region(const char* path, int x, int y, int w, int h) { (void)path;(void)x;(void)y;(void)w;(void)h; }
 void gpu_vk_stats(Core* core, int* tri, int* tex, int* semi) { (void)core; if(tri)*tri=0; if(tex)*tex=0; if(semi)*semi=0; }

@@ -18,6 +18,7 @@ void gpu_vk_set_order_2d_bg(Core* core, unsigned idx);
 void gpu_vk_set_order_2d_bg_n(Core* core, unsigned idx);
 void gpu_vk_set_vd(Core* core, const float* d3);
 void gpu_vk_set_vd_n(Core* core, const float* d3);
+void gpu_vk_set_xyf(Core* core, const float* xf, const float* yf);  // sub-pixel screen XY (#15 smoothing)
 
 // geometry tee + dirty-region mirror
 void gpu_vk_dirty(Core* core, int x, int y, int w, int h);
