@@ -733,17 +733,15 @@ void ov_perobj_flush(Core* c) {
 // over the just-emitted packet range; those are not owned yet, so for them we super-call the recomp body
 // (which still calls the now-native func_8003CDD8 for the flush, then the secondary pass). At the field
 // only idx0 (flush-only) fires (PSXPORT_DEBUG=ccase: 1 call/frame, target 0x8003cd00).
-// Per-object view-space depth from the object's WORLD POSITION + the camera (ov_object_cull dot). camFwd is
-// the camera forward (unit×4096); >>12 yields view-Z in world units, matching proj_native's pz so 2D object
-// prims share the 3D depth band. The collectable apple is an op-2D billboard quad rendered here with no
-// depth — this is the world-position depth it inherits.
-static float object_world_view_depth(Core* c, uint32_t node) {
-  int32_t ox = (int16_t)c->mem_r16(node + 0x2e), oy = (int16_t)c->mem_r16(node + 0x32), oz = (int16_t)c->mem_r16(node + 0x36);
-  int32_t cx = (int16_t)c->mem_r16(0x1F8000D2u), cy = (int16_t)c->mem_r16(0x1F8000D6u), cz = (int16_t)c->mem_r16(0x1F8000DAu);
-  int32_t fx = (int16_t)c->mem_r16(0x1F8000E8u), fy = (int16_t)c->mem_r16(0x1F8000EAu), fz = (int16_t)c->mem_r16(0x1F8000ECu);
-  int64_t dot = (int64_t)(ox - cx) * fx + (int64_t)(oy - cy) * fy + (int64_t)(oz - cz) * fz;
-  return (float)(dot >> 12);
-}
+// Per-object render depth is now the EXACT object-origin projection (proj_obj_center_ord = the object's
+// model origin (0,0,0) transformed through the LIVE composed camera×object transform the renderer just
+// loaded → finer-than-integer view-Z), unifying these per-object tag sites with the universal render-cmd
+// dispatcher chokepoint (ov_render_cmd) which already uses it. This replaced the old coarse
+// `object_world_view_depth` (sign-extended u16 node position dotted with the camera-forward, >>12 with the
+// 12-bit fraction discarded): that coarseness collapsed nearby objects to the same depth band, so which one
+// won a shared pixel fell to draw ORDER — exactly why a flame billboard drew OVER nearer foreground decor
+// (#4). The exact origin projection is "where the object actually is", so depth/occlusion is owned from the
+// object's real placement, not a quantized approximation. (engine owns placement → engine owns depth.)
 
 static void submit_perobj_render(Core* c) {
   uint32_t node = c->r[4];
@@ -758,7 +756,7 @@ static void submit_perobj_render(Core* c) {
   uint32_t slo, shi; PktSpanSession sess;
   if (tgt == 0x8003CD00u) { c->r[4] = node; c->r[5] = flag; submit_perobj_flush(c); }  // flush-only (native)
   else                    { rec_super_call(c, 0x8003CCA4u); }                          // secondary-effect case
-  if (sess.close(&slo, &shi)) { float od = proj_pz_to_ord(object_world_view_depth(c, node));
+  if (sess.close(&slo, &shi)) { float od = proj_obj_center_ord();   // EXACT object-origin view depth (live composed transform)
     gpu_obj_depth_add(c, slo, shi, od); fps60_bb_node(c, slo, shi, node); }   // fps60: this object's billboards reproject at midpoint
 }
 void ov_perobj_render(Core* c) {
@@ -808,7 +806,7 @@ static void submit_render_walk(Core* c) {
           // Tag the packet span it produces with the object's PC-native world-position depth.
           uint32_t slo, shi; PktSpanSession sess;
           c->r[4] = n; rec_dispatch(c, c->mem_r32(n + 24));
-          if (sess.close(&slo, &shi)) { float od = proj_pz_to_ord(object_world_view_depth(c, n));
+          if (sess.close(&slo, &shi)) { float od = proj_obj_center_ord();   // EXACT object-origin view depth (live composed transform)
             gpu_obj_depth_add(c, slo, shi, od); fps60_bb_node(c, slo, shi, n); }
         }
       }
@@ -918,7 +916,7 @@ static void submit_render_walk_snapshot(Core* c) {
     // so its 2D billboard prims (collectable quads, etc.) occlude for real at the deferred OT walk.
     uint32_t slo, shi; PktSpanSession sess;
     rq_dispatch_case(c, node, tgt);                          // run the object's per-type renderer (guest content)
-    if (sess.close(&slo, &shi)) { float od = proj_pz_to_ord(object_world_view_depth(c, node));
+    if (sess.close(&slo, &shi)) { float od = proj_obj_center_ord();   // EXACT object-origin view depth (live composed transform)
       gpu_obj_depth_add(c, slo, shi, od); fps60_bb_node(c, slo, shi, node); }   // fps60: object billboards reproject at midpoint
   }
 }
@@ -1020,7 +1018,7 @@ void ov_rwalk_aux_bcf4(Core* c) {
     if (tgt == AUX_BCF4_SKIP) continue;                      // skip/default
     uint32_t slo, shi; PktSpanSession sess;
     aux_bcf4_case(c, node, tgt);                             // per-type renderer (guest content)
-    if (sess.close(&slo, &shi)) { float od = proj_pz_to_ord(object_world_view_depth(c, node));
+    if (sess.close(&slo, &shi)) { float od = proj_obj_center_ord();   // EXACT object-origin view depth (live composed transform)
       gpu_obj_depth_add(c, slo, shi, od); fps60_bb_node(c, slo, shi, node); }   // fps60: object billboards reproject at midpoint
   }
 }
@@ -1081,7 +1079,7 @@ void ov_rwalk_aux_bf00(Core* c) {
     if (tgt == AUX_BF00_SKIP) continue;                      // skip/default
     uint32_t slo, shi; PktSpanSession sess;
     aux_bf00_case(c, node, tgt);                             // per-type renderer (guest content)
-    if (sess.close(&slo, &shi)) { float od = proj_pz_to_ord(object_world_view_depth(c, node));
+    if (sess.close(&slo, &shi)) { float od = proj_obj_center_ord();   // EXACT object-origin view depth (live composed transform)
       gpu_obj_depth_add(c, slo, shi, od); fps60_bb_node(c, slo, shi, node); }   // fps60: object billboards reproject at midpoint
   }
 }
@@ -1122,7 +1120,7 @@ void ov_rwalk_aux_eec0(Core* c) {
         if (tgt != AUX_EEC0_SKIP) {
           uint32_t slo, shi; PktSpanSession sess;
           aux_eec0_case(c, node, tgt);                       // per-type renderer (guest content)
-          if (sess.close(&slo, &shi)) { float od = proj_pz_to_ord(object_world_view_depth(c, node));
+          if (sess.close(&slo, &shi)) { float od = proj_obj_center_ord();   // EXACT object-origin view depth (live composed transform)
       gpu_obj_depth_add(c, slo, shi, od); fps60_bb_node(c, slo, shi, node); }   // fps60: object billboards reproject at midpoint
         }
       }
