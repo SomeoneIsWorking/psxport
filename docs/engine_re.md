@@ -498,6 +498,25 @@ manager's target (Phase 1):** reimplement the walk in native C, call each handle
 - Per-type handlers (call the wrappers with their obj*): e.g. `:21274 :27367 :28376` → `FUN_8007778c`;
   `:45944 :45991 :46120` → `FUN_80077a4c`. These are the entity update/render routines (Phase 2 targets).
 
+## Per-object 2D BOX / hitbox-corner builder — `FUN_8003B220` (OWNED native, engine/hitbox.cpp)
+Pure resident LEAF (64 insns, ZERO jal, ZERO GTE, ZERO render packets, no scratchpad). ~1.64% of the
+seaside field's sampled interpreter time — the hottest still-recomp resident CONTENT leaf that is NOT a
+render-boundary fn. Signature `void FUN_8003B220(a0=dst struct, a1=base value, a2=params)`. It builds a
+small 2D box / corner set in the a0 struct from byte params in a2; every value is the one LIVE in memory at
+that point (the recomp re-loads each halfword), so the load/store ORDER is load-bearing. Semantics (all dst
+fields are u16 halfwords, all a2 reads bytes):
+- `M32[a0+0]=a1`; then `a0[0] += (s8)a2[14]` (X origin += signed dx), `a0[2] += (s8)a2[15]` (Y origin),
+  `a0[10]=a0[2]`, `a0[16]=a0[0]` (X snapshot), `a0[8]=a0[0]+(u8)a2[10]` (X far corner).
+- zero `a0[4]/[12]/[20]/[28]`.
+- `a0[18]=a0[2]+(u8)a2[11]` (Y far corner), `a0[24]=a0[8]` (X-far snapshot), `a0[26]=a0[18]` (Y-far snapshot).
+- then scale ×5 (`sll x,2; addu x` = x*4+x): `a0[0]/[16]/[8]/[24]/[2]/[10]/[18]/[26] *= 5` in that exact
+  reload order. v0 (ignored by callers) = the last computed value = `(s16)a0[26]_pre * 5`.
+The "×5" is the cell→pixel scale (the collision/tile grid uses 5-unit cells). OWNED native; gate `boxverify`
+= full main-RAM + scratchpad + v0 A/B vs rec_super_call(0x8003B220): **0 mismatches over 5000+ live field
+calls** (press right 400 + press left 400). RAM/scratchpad were byte-identical from the first build — only
+the return reg needed mirroring (the gen's delay-slot `sh v0,26(a0)` leaves v0 in r2). a0 is typically a
+STACK-local struct (a0~0x801fe8c8). Registered in game_tomba2.cpp. (later: hitbox.cpp.)
+
 ## Deferred render pipeline — the render-command QUEUE + flush (later-130, the missing architecture)
 Geometry submission is NOT inline in the entity handlers. It is a **deferred two-phase** system (proved by
 `PSXPORT_DEBUG=geomblk`: all owned submits run with `g_current_object==0`, AFTER every per-object cull):

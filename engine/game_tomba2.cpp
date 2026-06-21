@@ -241,6 +241,7 @@ void games_tomba2_init(void) {
     { void ov_sm40558(Core*); rec_set_override(0x80040558u, ov_sm40558); }  // per-object state-machine head (control flow owned; all sub-behaviors dispatched)
     { void ov_osc_fd10(Core*); rec_set_override(0x8003FD10u, ov_osc_fd10); }  // sm40558 STATE-1 obj[5]=0 oscillate/frame-toggle handler (control flow owned; ov_rand dispatched)
     { void ov_disp_26c88(Core*); rec_set_override(0x80026C88u, ov_disp_26c88); }  // per-object dispatcher loop over 0x800ec188 table (control flow owned; handlers dispatched)
+    { void ov_hitbox_3b220(Core*); rec_set_override(0x8003B220u, ov_hitbox_3b220); }  // per-object 2D box/hitbox-corner builder (pure resident leaf, no jal/GTE, ~1.64% field; engine/hitbox.cpp)
     { void ov_bav_load(Core*); rec_set_override(0x80096590u, ov_bav_load); }  // per-area BAV effect-cel LOADER (engine_bav.cpp): slot alloc + cel/UV parse + global latch owned; VRAM alloc/upload callback dispatched
     { void entity_spawn_register(void); entity_spawn_register(); }  // entity SPAWN/placement primitive FUN_80079C3C (pool-pop + field-init + list-link; engine/entity_spawn.cpp)
     { void actor_sm_24448_register(void); actor_sm_24448_register(); }  // actor move-and-collide SM step FUN_80024448 (vel+gravity+resolve; engine/actor_sm_24448.cpp)
