@@ -113,20 +113,17 @@ long g_nd_3d = 0, g_nd_2d = 0;   // Phase-2 native-depth diag: prims drawn with 
 // prompt/meter stays centered with the world. The whole element shifts by one offset (its size and
 // internal layout are preserved exactly — no stretch), so multi-vertex prims stay rigid.
 int gpu_vk_wide_engine_w(void);
-static int ws_2d_anchor_off(int bx0, int bx1, int is_bg) {  // X offset (native px) to add to this 2D prim
-  int ww = gpu_vk_wide_engine_w(), margin = (ww - 320) / 2;
-  if (margin <= 0) return 0;                         // 4:3 -> no-op (byte-identical)
-  int cx = (bx0 + bx1) / 2;                           // element center in native-320 space
-  const int L = 320 / 3, R = 320 - 320 / 3;           // left / center / right thirds (~107, ~213)
-  if (cx < L) return -margin;                          // left-anchored:  hug wide LEFT  (x - margin)
-  if (cx > R) return +margin;                          // right-anchored: hug wide RIGHT (x + margin)
-  return 0;                                            // center-anchored: shader's +margin keeps it centered
-}
-static int ws_2d_local_x(int x, int bx0, int bx1, int is_bg) {
+// 2D X mapping for widescreen. The relocation shader (tritex.vert) already adds fb_x0 = margin*ss to
+// every 2D vertex, so an UNMODIFIED PSX-320 prim lands in a centered [margin, margin+320] band. Therefore:
+//   HUD/UI  -> identity: keep the native-320 X; the shader's +margin centers it in the wide FB (matches 4:3,
+//              just centered). Previously this anchored thirds out to the wide edges (issue #16 smearing).
+//   backdrop-> STRETCH to fill the wide FB (after the shader's +margin -> [0,fbw)) for sky/water backdrops.
+// In 4:3 margin==0 -> identity for both (byte-identical).
+static int ws_2d_local_x(int x, int is_bg) {
   int ww = gpu_vk_wide_engine_w(), margin = (ww - 320) / 2;
   if (margin <= 0) return x;                          // 4:3 -> no-op
   if (is_bg) return x * ww / 320 - margin;            // backdrop: fill (after +margin -> [0,fbw))
-  return x + ws_2d_anchor_off(bx0, bx1, is_bg);       // HUD: rigid shift by the anchor offset
+  return x;                                           // HUD: identity (shader's +margin keeps it centered)
 }
 
 // PSXPORT_PRIMDUMP=<frame>: dump every prim drawn on that frame, in OT-walk order, to
@@ -866,9 +863,8 @@ void GpuState::gp0_exec(Core* core) {
       // scale the 2D plane uniformly to the wide width about the framebuffer origin so they fill the frame.
       { int gpu_vk_wide_engine(void), gpu_vk_wide_engine_w(void);
         if (!is3d && gpu_vk_wide_engine() && s_prev_had3d) {  // 2D widen only on gameplay frames
-          int bx0 = xs[0], bx1 = xs[0];
-          for (int i = 1; i < nv; i++) { if (xs[i] < bx0) bx0 = xs[i]; if (xs[i] > bx1) bx1 = xs[i]; }
-          for (int i = 0; i < nv; i++) xs[i] = ws_2d_local_x(xs[i], bx0, bx1, bg); } }   // engine-owned 2D layout
+          // HUD: identity (shader centers it). Backdrop: stretch-to-fill. See ws_2d_local_x.
+          for (int i = 0; i < nv; i++) xs[i] = ws_2d_local_x(xs[i], bg); } }   // engine-owned 2D layout
       if (use_rq) {
         // Engine owns ordering: hand the prim to the render queue tagged with its layer + depth mode.
         int layer = is3d ? RQ_WORLD : (bg ? RQ_BACKGROUND : RQ_HUD);
@@ -1006,14 +1002,12 @@ void GpuState::gp0_exec(Core* core) {
       int X = x + s_off_x, Y = y + s_off_y;
       int XL = X, XR = X + w;
       // Widescreen 2D handling. Genuine engine-wide widens the 3D world at the projection (OFX); 2D
-      // sprites (sky/water backdrop + HUD) bypass the GTE, so they must be widened here. Scale the whole
-      // 2D plane uniformly to the wide width around the framebuffer origin (s_da_x0) so a tiled backdrop
-      // fills the frame with NO gaps.
+      // sprites bypass the GTE, so they are mapped here. A backdrop (sky/water) STRETCHES to fill the wide
+      // FB; HUD/UI is identity (the relocation shader's +margin already centers it). See ws_2d_local_x.
       { int gpu_vk_wide_engine(void);
         if (gpu_vk_wide_engine() && s_prev_had3d) {       // only widen 2D on gameplay frames (else pillarbox)
-          XL = ws_2d_local_x(XL, X, X + w, bg);           // engine-owned 2D layout (anchored, native size)
-          XR = ws_2d_local_x(XR, X, X + w, bg);
-          if (!bg) { XL += s_da_x0; XR += s_da_x0; }      // ISS14 TEST: cancel shader i_da.x0 subtraction for HUD
+          XL = ws_2d_local_x(XL, bg);                     // engine-owned 2D layout (HUD centered, bg fills)
+          XR = ws_2d_local_x(XR, bg);
         } }
       int qx[4] = { XL, XR, XL, XR }, qy[4] = { Y, Y, Y+h, Y+h };
       int qu[4] = { u0, u0+w, u0, u0+w }, qv[4] = { v0, v0, v0+h, v0+h };
