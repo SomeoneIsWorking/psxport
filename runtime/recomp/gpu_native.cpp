@@ -77,12 +77,16 @@ long g_od_add = 0, g_od_hit = 0, g_od_miss = 0;   // ndepth diag: obj-depth span
 void GpuState::obj_depth_add(uint32_t lo, uint32_t hi, float ord) {
   if (hi <= lo) return;
   if (s_od_frame != s_frame) { s_od_n = 0; s_od_frame = s_frame; }   // new frame -> clear prior spans
-  // A 2D billboard decal inherits ONE object-center depth for its whole span; on a surface at the same
-  // depth (a horseshoe/scroll on a wall, #5 wall-decals) that ties the wall's per-vertex depth and
-  // z-fights. Nudge it camera-ward (nearer = larger ord) by a sliver of the [0,1] range so it sits just
-  // in FRONT of its host surface — ~1/512 clears the per-frame reprojection jitter yet is far below the
-  // gap between distinct world objects, so it never pops in front of genuinely nearer geometry.
-  ord += 1.0f / 512.0f; if (ord > 1.0f) ord = 1.0f;
+  // The billboard now occludes by its TRUE world-position view-Z — no implicit camera-ward bias (issue #4).
+  // The old blanket `ord += 1/512` nudge pushed EVERY free-standing billboard (flame/brazier/pickup) toward
+  // the camera so it would sit in front of its host SURFACE — that was the wall-decal (#5 coplanar) bandaid,
+  // and it is exactly what made the flame draw in front of the wall behind it that DOES carry real depth.
+  // A free-standing billboard must sort by its real Z like any world quad, so it is occluded by nearer
+  // geometry and occludes farther geometry. (The genuinely-coplanar decal case adds its own stable epsilon
+  // at its OWN call site if it needs one; it is not a property of every object span.) The depth is already
+  // the object's PC-native world view-Z (proj_obj_center_ord / object_world_view_depth → proj_pz_to_ord),
+  // so this is engine-owned occlusion, never a PSX OT order. `ord` is stored AS GIVEN.
+  if (ord < 0.0f) ord = 0.0f; if (ord > 1.0f) ord = 1.0f;
   if (s_od_n < OBJ_DEPTH_MAX) { s_od_lo[s_od_n] = lo; s_od_hi[s_od_n] = hi; s_od_ord[s_od_n] = ord; s_od_n++; g_od_add++; }
 }
 int GpuState::obj_depth_lookup(uint32_t node, float* ord) {
@@ -820,7 +824,7 @@ void GpuState::gp0_exec(Core* core) {
       // 3D world geometry -> carries real per-vertex view-Z (D32 occlusion); otherwise it is a 2D element
       // -> a backdrop (FAR band) or HUD (near band) by screen coverage.
       int use_rq = rq_active();                  // engine render queue owns ordering (PSXPORT_RQ)
-      float dep[4]; int is3d = 0, bg = 0;
+      float dep[4]; int is3d = 0, bg = 0, billboard = 0;   // billboard = a 2D prim that got obj_depth (fps60 anchor)
       {
         int projprim_lookup_pz(uint32_t, float*);
         float proj_pz_to_ord(float);
@@ -843,7 +847,7 @@ void GpuState::gp0_exec(Core* core) {
         // PC-native object depth: a 2D billboard prim (no projected verts) whose OT-node falls in an
         // object's packet-pool span inherits that object's world-position view-Z and occludes for real.
         if (!is3d && !bg) { float od; if (obj_depth_lookup(s_cur_node, &od)) {
-          for (int i = 0; i < nv; i++) dep[i] = od; is3d = 1; s_seen3d = 1; } }
+          for (int i = 0; i < nv; i++) dep[i] = od; is3d = 1; s_seen3d = 1; billboard = 1; } }
         if (!is3d && cfg_dbg("ndepth")) {   // categorize what lands in the 2D band: op + gouraud/quad/tex
           extern long g_nd2d_hist[256]; g_nd2d_hist[op]++; }
         if (!is3d && !bg && cfg_dbg("objz") && s_frame == s_primdump_frame)
@@ -872,6 +876,9 @@ void GpuState::gp0_exec(Core* core) {
         rq_emit_or_queue(core, 1, layer, om, nv, semi, rw, xs, ys, 0, 0, us, vs, rs, gs, bs,
                          is3d ? dep : 0, mode, s_tp_x, s_tp_y, s_clut_x, s_clut_y,
                          s_tw_mx, s_tw_my, s_tw_ox, s_tw_oy, s_da_x0, s_da_y0, s_da_x1, s_da_y1, s_tp_blend);
+        // fps60: a 2D billboard prim (obj_depth-tagged) gets stamped here, at queue time, as an anchor-
+        // reproject billboard keyed on its object's identity (node→span lookup) — no build_lerp pre-pass.
+        if (billboard) { void fps60_stamp_billboard(Core*, uint32_t); fps60_stamp_billboard(core, s_cur_node); }
       } else {
       gpu_vk_set_order(core, ord_idx);           // OT submission order -> depth (preserve opaque/semi order)
       if (!is3d) {                               // 2D band select
@@ -1022,6 +1029,9 @@ void GpuState::gp0_exec(Core* core) {
         rq_emit_or_queue(core, 1, layer, om, 4, semi, rw, qx, qy, 0, 0, qu, qv, qr, qg, qb, objz ? dep : 0, mode,
                          s_tp_x, s_tp_y, s_clut_x, s_clut_y, s_tw_mx, s_tw_my, s_tw_ox, s_tw_oy,
                          s_da_x0, s_da_y0, s_da_x1, s_da_y1, s_tp_blend);
+        // fps60: a 2D billboard sprite (obj_depth-tagged) gets stamped here, at queue time, as an anchor-
+        // reproject billboard keyed on its object's identity (node→span lookup) — no build_lerp pre-pass.
+        if (objz) { void fps60_stamp_billboard(Core*, uint32_t); fps60_stamp_billboard(core, s_cur_node); }
       } else {
       gpu_vk_set_order(core, ord_idx);          // OT submission order -> depth (preserve opaque/semi order)
       if (bg) gpu_vk_set_order_2d_bg(core, ord_idx); else gpu_vk_set_order_2d(core, ord_idx);

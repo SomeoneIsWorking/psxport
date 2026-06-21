@@ -222,94 +222,82 @@ void fps60_stamp_world(Core* c, const int16_t mv[4][3], int nv, uint32_t key) {
   it->fps_offy = (int16_t)c->game->gpu.s_off_y;
 }
 
-// 3D-POSITIONED 2D QUAD (billboard) handling lives further down, near build_lerp: collectable/overlay
-// BILLBOARDS are 2D quads the guest object renderers emit (apple/score pickups, flame/decal sprites)
-// anchored at a 3D WORLD point. They reach the render queue at the DEFERRED OT walk (gpu_native.cpp), NOT
-// through the native submitters above, so they cannot be stamped at submit time. Instead engine_submit.cpp
-// records each object's transform + depth as it publishes the object's depth span (fps60_record_billboard),
-// and build_lerp's pre-pass (fps60_tag_billboards) recovers each such queue item by its depth ord and turns
-// it into an anchor-reproject billboard — reusing the actor-transform machinery (see the registry below).
-
-// ---- 3D-POSITIONED 2D QUAD (billboard) registry ------------------------------------------------------
+// ---- 3D-POSITIONED 2D QUAD (billboard) registry — keyed by OBJECT IDENTITY (node-span) ----------------
 // The collectable/flame/decal billboards are guest GP0 quads the per-object renderers emit; they enter the
-// render queue at the DEFERRED OT walk (gpu_native.cpp) as RQ_WORLD items that inherit the object's
-// world-position depth via obj_depth_lookup, but carry NO fps60 capture (fps_world=0, has_xyf=0) — so the
-// 60fps tier snapped them to camera-B and they juddered while Tomba moved smoothly. We cannot tag them at
-// queue time (that code is the OT walk, off the engine-submit path), so engine_submit.cpp records a
-// registry entry at the SAME instant it publishes the object's depth span (fps60_record_billboard), and
-// build_lerp's pre-pass (fps60_tag_billboards) recovers each such item by its depth ord, finds the
-// previous frame's transform by the object's stable identity, and turns the item into an anchor-reproject
-// billboard (fps_world=1, fps_anchor=1) — reusing the existing actor-transform reprojection machinery.
+// render queue at the DEFERRED OT walk (gpu_native.cpp) as RQ_WORLD/RQ_OM_DEPTH items, inheriting the
+// object's PC-native world view-Z via obj_depth_lookup, but carry NO fps60 mesh capture (fps_world=0,
+// has_xyf=0) — so without help the 60fps tier snapped them to camera-B and they juddered while Tomba moved.
 //
-// The match key from queue-side back to here is the DEPTH ORD: the value engine_submit.cpp passes to
-// gpu_obj_depth_add is what obj_depth_lookup returns onto the item (plus the +1/512 nudge obj_depth_add
-// applies — reproduced here so the stored key equals the item's depth exactly). Identity (`ident`, the
-// object node/cmd ptr) is stable across frames and is how the previous-frame transform is found.
+// Now that Phase 1 gives each billboard an engine-known world position (its object's composed camera×object
+// transform), we capture THAT directly and key the cross-frame match on the object's STABLE IDENTITY (the
+// node/cmd ptr), not on a fragile depth-ord reverse-match. engine_submit.cpp records, at the SAME instant it
+// publishes the object's packet-pool depth span, an entry holding: the span [lo,hi) (so the OT walk can find
+// it by the SAME node-address test obj_depth_lookup uses), the object identity, and the live composed
+// transform. The OT walk knows the source OT-node (s_cur_node); when a billboard item is queued there it
+// calls fps60_billboard_for_node(node, ...) and, on a hit, stamps the item DIRECTLY as an anchor-reproject
+// billboard (fps_world=1, fps_anchor=1, fps_key=ident, fps_cr=transform, fps_mv=object origin). No build_lerp
+// pre-pass, no depth-ord matching. The previous frame's transform is found by fps_key out of the prev
+// RqItems (which now carry it), exactly like the mesh path — so the s_bbPrev registry is no longer needed
+// to hold prev transforms; the registry is purely the CURRENT-frame node→transform map for queue-time tagging.
 // File-scope (not on Fps60State — fps60_internal.h is not ours to edit); the 60fps present path is single-
 // core in practice, like the s_lerpdbg/s_chk statics. Host-only; never touches guest RAM.
-struct Fps60Billboard { float od; uint32_t ident; uint32_t crM[11]; };
+struct Fps60Billboard { uint32_t lo, hi; uint32_t ident; uint32_t crM[11]; };
 #define FPS60_BB_MAX 1024
-static Fps60Billboard s_bbCur[FPS60_BB_MAX], s_bbPrev[FPS60_BB_MAX];
-static int s_nBBCur = 0, s_nBBPrev = 0;
+static Fps60Billboard s_bbCur[FPS60_BB_MAX];
+static int s_nBBCur = 0;
 // (GTE_ReadCR is declared in the extern "C" block at the top of this file.)
 
-// Called from engine_submit.cpp right after gpu_obj_depth_add(span, ord). Capture this object's billboard
-// reprojection inputs: the depth ord that will land on its 2D-quad items (matching obj_depth_add's +1/512
-// nudge), its stable cross-frame identity, and the live composed camera×object transform (CR0-7 + the
-// frame projection constants CR24/25/26). No-op unless fps60 is on.
-void fps60_record_billboard(Core* /*c*/, uint32_t ident, float ord_added) {
-  if (!g_fps60_on || !ident) return;
-  float od = ord_added + 1.0f / 512.0f; if (od > 1.0f) od = 1.0f;   // == GpuState::obj_depth_add's stored ord
+// Called from engine_submit.cpp right after gpu_obj_depth_add(lo, hi, ord). Capture this object's billboard
+// reprojection inputs: its packet-pool SPAN [lo,hi) (the key the OT walk matches the item's node against,
+// identical to GpuState::obj_depth_lookup), its stable cross-frame IDENTITY, and the live composed
+// camera×object transform (CR0-7 + the frame projection constants CR24/25/26). No-op unless fps60 is on.
+void fps60_record_billboard_span(Core* /*c*/, uint32_t lo, uint32_t hi, uint32_t ident) {
+  if (!g_fps60_on || !ident || hi <= lo) return;
   if (s_nBBCur >= FPS60_BB_MAX) return;
   Fps60Billboard* e = &s_bbCur[s_nBBCur++];
-  e->od = od; e->ident = ident;
+  e->lo = lo | 0x80000000u; e->hi = hi | 0x80000000u; e->ident = ident;   // KSEG, matching s_cur_node form
   for (int i = 0; i < 8; i++) e->crM[i] = GTE_ReadCR(i);            // composed camera×object CR0-7 (live)
   e->crM[8] = GTE_ReadCR(24); e->crM[9] = GTE_ReadCR(25); e->crM[10] = GTE_ReadCR(26);  // OFX/OFY/H
 }
 
-// Find the current-frame billboard entry whose stored depth ord matches an item's depth (nearest; exact on
-// the common single-object-per-depth case). Returns NULL when no entry is reasonably close (the item is a
-// genuine 2D element that merely happens to sit in the world band, or a billboard whose object wasn't
-// recorded this frame). The tolerance is a tiny depth epsilon — distinct world objects differ in ord by far
-// more than this; the per-frame jitter the +1/512 nudge guards against is what we tolerate.
-static const Fps60Billboard* bb_find_cur(float od) {
-  // EXACT match first: the item's depth came from the SAME float computation we stored, so an object that
-  // recorded an entry this frame matches bit-exactly. Only fall back to nearest (within a tiny epsilon) for
-  // float-path drift; the epsilon is far below the ord gap between distinct world objects, so a wrong-object
-  // pick is avoided in the common case. On an exact tie (two objects truly at the same ord) take the LAST
-  // recorded — it is the most recent same-depth object and its transform is the better single guess.
-  const Fps60Billboard* exact = nullptr;
-  for (int i = 0; i < s_nBBCur; i++) if (s_bbCur[i].od == od) exact = &s_bbCur[i];
-  if (exact) return exact;
-  const Fps60Billboard* best = nullptr; float bd = 1e9f;
-  for (int i = 0; i < s_nBBCur; i++) { float d = fabsf(s_bbCur[i].od - od);
-    if (d < bd) { bd = d; best = &s_bbCur[i]; } }
-  return (best && bd <= 0.49f / 512.0f) ? best : nullptr;   // below the 1/512 inter-object nudge spacing
+// Queue-time lookup (called from the OT walk in gpu_native.cpp): if `node` falls in a recorded billboard
+// span this frame, return its identity + composed transform so the caller can stamp the RqItem as an
+// anchor-reproject billboard. Returns 1 on hit. node is the OT-node address (KSEG, == s_cur_node|0x80000000).
+static int fps60_billboard_for_node(uint32_t node, uint32_t* ident, uint32_t cr[11]) {
+  if (!g_fps60_on) return 0;
+  uint32_t n = node | 0x80000000u;
+  for (int i = 0; i < s_nBBCur; i++)
+    if (n >= s_bbCur[i].lo && n < s_bbCur[i].hi) {
+      if (ident) *ident = s_bbCur[i].ident;
+      if (cr) for (int k = 0; k < 11; k++) cr[k] = s_bbCur[i].crM[k];
+      return 1;
+    }
+  return 0;
 }
 
-// build_lerp PRE-PASS: turn every 3D-positioned 2D quad in the captured queue into an fps60 anchor-reproject
-// billboard. A billboard item is a world-band quad with NO native-mesh capture and NO sub-pixel float XY
-// (the OT-walk 2D path passes none): layer==RQ_WORLD, order_mode==RQ_OM_DEPTH, fps_world==0, has_xyf==0.
-// For each we recover its object (by depth ord), stamp fps_anchor=1 + its identity as fps_key + the object's
-// composed transform as fps_cr + the object origin as fps_mv[0]. build_lerp then finds the previous frame's
-// transform by fps_key and anchor-translates the quad to the midpoint camera (fps60_reproject_anchor) —
-// exactly the actor-transform mesh mechanism, single-anchor form. We must run this on s_rqCur (the snapshot
-// build_lerp lerps from) AND ensure the SAME stamping is reflected into the prev snapshot next frame; since
-// build_lerp keys prev transforms via the s_bbPrev registry (not the prev RqItems), only s_rqCur needs it.
-static void fps60_tag_billboards(RqItem* items, int n) {
-  for (int i = 0; i < n; i++) {
-    RqItem* it = &items[i];
-    if (it->fps_world) continue;                                    // already a native-mesh capture
-    if (it->layer != RQ_WORLD || it->order_mode != RQ_OM_DEPTH) continue;  // not a world-depth quad
-    if (it->has_xyf) continue;                                      // native-mesh world prims carry float XY
-    const Fps60Billboard* e = bb_find_cur(it->depth[0]);
-    if (!e) continue;                                               // no matching object → leave it snapping
-    it->fps_world = 1; it->fps_anchor = 1; it->fps_key = e->ident;
-    for (int k = 0; k < 11; k++) it->fps_cr[k] = e->crM[k];
-    for (int k = 0; k < 4; k++) { it->fps_mv[k][0] = 0; it->fps_mv[k][1] = 0; it->fps_mv[k][2] = 0; }  // anchor = object origin (CR5-7 = view pos)
-    it->fps_offx = (int16_t)0;   // billboard reproject is a screen TRANSLATE of xs/ys (offset already baked in)
-    it->fps_offy = (int16_t)0;
-  }
+// Stamp the JUST-PUSHED billboard RqItem as an anchor-reproject billboard. Called from the OT walk
+// (gpu_native.cpp) right after a 2D billboard prim (a world-band, obj_depth-hit quad) is queued, with the
+// prim's source OT-node address. If that node falls in a recorded billboard span this frame, we set the same
+// fps fields the old build_lerp pre-pass set, but keyed on the object's IDENTITY (node ptr) directly:
+//   fps_world=1, fps_anchor=1, fps_key=ident, fps_cr=composed transform, fps_mv=object origin (0,0,0).
+// build_lerp then reprojects the WORLD ANCHOR (the origin under the composed camera×object transform) at the
+// midpoint and translates the whole 2D quad — so the billboard pans/moves smoothly instead of snapping to
+// camera-B. The prev-frame transform is found by fps_key out of the prev RqItems (which now carry it).
+// No-op unless fps60 is on / no span matches. node = OT-node address (the gp0 walk's s_cur_node).
+void fps60_stamp_billboard(Core* c, uint32_t node) {
+  if (!g_fps60_on) return;
+  RenderQueue& q = c->game->rq;
+  if (q.consumed || q.n == 0) return;
+  RqItem* it = &q.items[q.n - 1];
+  if (it->fps_world) return;                            // already a native-mesh capture
+  if (it->layer != RQ_WORLD || it->order_mode != RQ_OM_DEPTH) return;
+  uint32_t ident; uint32_t cr[11];
+  if (!fps60_billboard_for_node(node, &ident, cr)) return;
+  it->fps_world = 1; it->fps_anchor = 1; it->fps_key = ident;
+  for (int k = 0; k < 11; k++) it->fps_cr[k] = cr[k];
+  for (int k = 0; k < 4; k++) { it->fps_mv[k][0] = 0; it->fps_mv[k][1] = 0; it->fps_mv[k][2] = 0; }  // anchor = object origin (CR5-7 = view pos)
+  it->fps_offx = 0;   // billboard reproject is a screen TRANSLATE of xs/ys (offset already baked in)
+  it->fps_offy = 0;
 }
 
 static int s_lerpdbg = -1;        // PSXPORT_DEBUG=fps60 — per-frame reproject stats
@@ -390,18 +378,15 @@ static void fps60_compose_mid(const uint32_t a[11], const uint32_t b[11], uint32
 // frame actors, and any prim whose reprojection jumps more than the gate (cut/teleport) SNAP unchanged.
 int Fps60State::build_lerp() {
   if (!s_rqLerp) s_rqLerp = new RqItem[FPS60_RQ_MAX];
-  // PRE-PASS: promote this frame's 3D-positioned 2D quads (billboards) to anchor-reproject items, using the
-  // per-object transforms engine_submit.cpp recorded into s_bbCur. Done on s_rqCur (the snapshot we lerp
-  // from) before matching; their previous-frame transforms come from the s_bbPrev registry (added below).
-  fps60_tag_billboards(s_rqCur, s_nCur);
-  // actor key -> its composed CR0-7 LAST frame (all of an actor's prims share one composed transform, so
-  // first occurrence wins). Mesh keys point into s_rqPrev; billboard keys point into the s_bbPrev registry
-  // (the prev RqItems aren't tagged, so the billboard's previous transform lives in the registry).
+  // Billboards are now tagged at QUEUE TIME by the OT walk (gpu_native.cpp → fps60_billboard_for_node), so a
+  // billboard RqItem already carries fps_world=1/fps_anchor=1/fps_key/fps_cr/fps_mv=origin on BOTH the cur and
+  // prev snapshots — exactly like a mesh prim. No pre-pass and no separate prev-transform registry are needed.
+  // actor key -> its composed CR0-7 LAST frame (all of an actor's prims — mesh OR billboard — share one
+  // composed transform, so first occurrence wins). Both mesh and billboard prev transforms live in s_rqPrev.
   std::unordered_map<uint32_t, const uint32_t*> prevcr;
-  prevcr.reserve((size_t)s_nPrev * 2 + (size_t)s_nBBPrev + 16);
+  prevcr.reserve((size_t)s_nPrev * 2 + 16);
   for (int j = 0; j < s_nPrev; j++) { const RqItem* P = &s_rqPrev[j];
     if (P->fps_world && P->fps_key) prevcr.emplace(P->fps_key, P->fps_cr); }
-  for (int j = 0; j < s_nBBPrev; j++) prevcr.emplace(s_bbPrev[j].ident, s_bbPrev[j].crM);   // billboard prev transforms
   long moved = 0, snapped = 0;
   for (int i = 0; i < s_nCur; i++) {
     const RqItem* C = &s_rqCur[i];
@@ -478,10 +463,10 @@ void Fps60State::fps60_present_vk(Core* core) {
   if (!s_rqPrev) s_rqPrev = new RqItem[FPS60_RQ_MAX];     // current -> previous for next frame
   if (s_nCur > 0) memcpy(s_rqPrev, s_rqCur, (size_t)s_nCur * sizeof(RqItem));
   s_nPrev = s_nCur; s_have_prev = 1;
-  // Billboard registry: current -> previous, then reset current for next frame's object-render phase (the
-  // recorder appends into s_bbCur during that phase; this is its once-per-frame fence, like s_rqPrev above).
-  if (s_nBBCur > 0) memcpy(s_bbPrev, s_bbCur, (size_t)s_nBBCur * sizeof(Fps60Billboard));
-  s_nBBPrev = s_nBBCur; s_nBBCur = 0;
+  // Billboard registry: it is the CURRENT-frame node→transform map consumed by the OT walk while this frame's
+  // queue is built; the prev transform now lives on the prev RqItems (s_rqPrev), so we only reset the cur
+  // registry for the next frame's object-render phase (the recorder appends into s_bbCur during that phase).
+  s_nBBCur = 0;
 }
 
 // ---- Public capture API: thin free-function wrappers over the per-instance Fps60State methods.
