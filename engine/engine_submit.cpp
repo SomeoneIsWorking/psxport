@@ -140,6 +140,8 @@ static void geomblk_dump(Core* c, const char* kind, uint32_t rec, uint32_t count
 // untouched; this gives the UNowned overlay-mode prims (the 2D billboards) their true world depth.
 void gpu_obj_depth_add(Core*, uint32_t lo, uint32_t hi, float ord);
 float proj_obj_center_ord(void);
+extern int g_fps60_on;                                    // fps60 mode (overlay toggle) — gate the billboard recorder
+void  fps60_record_billboard(Core* c, uint32_t ident, float ord_added);   // fps60: record a 3D-positioned 2D quad's reproject inputs
 #define PKT_POOL_PTR  0x800BF544u
 // Native replacement for the resident render-command DISPATCHER FUN_8003F698 (the interpreted body was
 // ~4% of field time). It reads a command byte at 0x800BF870, bounds-checks (<22), indexes the jump table
@@ -183,6 +185,11 @@ void ov_render_cmd(Core* c) {
   render_cmd_dispatch(c);                             // native dispatch (was rec_super_call(0x8003F698) — the ~4%)
   if (sess.close(&slo, &shi)) {
     gpu_obj_depth_add(c, slo, shi, ord);
+    // fps60: the unowned-mode (overlay/billboard) prims this command emits land in THIS inner span, so they
+    // inherit `ord` (proj_obj_center_ord) at the deferred OT walk. Record an fps60 billboard entry with the
+    // SAME ord so build_lerp can recover it, keyed by the current render object (scratch 0x1F80028C) for a
+    // stable cross-frame identity. The composed camera×object transform is live in CR0-7 (ord just read it).
+    if (g_fps60_on) fps60_record_billboard(c, c->mem_r32(0x1F80028Cu), ord);
     if (cfg_dbg("objz") && probe_frame_ok(c))
       fprintf(stderr, "[rcmddep] mode=%02x span %08x->%08x (%dB) ord=%.4f\n",
               c->mem_r8(0x800BF870u), slo, shi, (int)(shi - slo), (double)ord);
@@ -296,8 +303,24 @@ static inline const float (*shadow_verts(const ProjVtx* p, int nv, int semi, flo
 // fps60: after a GTE-composed world quad is pushed to the render queue, capture its model verts + the
 // composed transform (CR0-7) + the current actor key so the 60fps tier can reproject it at the A/B
 // midpoint (engine/fps60.cpp). No-op unless g_fps60_on. mv[k] = per-vertex model coords (4th = v2 for tris).
-extern int g_fps60_on;
+// (g_fps60_on + fps60_record_billboard are declared above, near gpu_obj_depth_add.)
 void  fps60_stamp_world(Core* c, const int16_t mv[4][3], int nv, uint32_t key);
+
+// fps60: 3D-POSITIONED 2D QUAD (billboard) capture. The collectable/flame/decal billboards are guest GP0
+// quads/sprites the per-object renderers emit; they reach the render queue LATER, at the deferred OT walk
+// (gpu_native.cpp, off the engine-submit path), where they inherit the object's WORLD-POSITION depth via
+// obj_depth_lookup — so they carry fps_world=0 and the 60fps tier snapped them to camera-B (they juddered
+// while Tomba moved smoothly). We cannot tag them at queue time (that code is the OT walk), so we record an
+// fps60 BILLBOARD entry (fps60_record_billboard, above) at the SAME instant we publish the object's depth
+// span — keyed by the depth ord that will land on the item (`ord_added` = the value passed to
+// gpu_obj_depth_add, before the +1/512 nudge) + the object's stable cross-frame identity (`ident`, the
+// node/cmd ptr) + the live composed camera×object transform. build_lerp recovers an item's entry by that
+// depth ord, finds the previous frame's transform by `ident`, and reprojects the billboard's WORLD ANCHOR
+// at the midpoint camera — the same anchor-translate the mesh path uses. Host-only; no guest write.
+// Convenience: record the billboard entry that mirrors a just-published gpu_obj_depth_add(node-depth) span.
+static inline void fps60_bb_node(Core* c, uint32_t node, float ord_added) {
+  if (g_fps60_on) fps60_record_billboard(c, node, ord_added);
+}
 static inline void fps60_stamp(Core* c, const ProjVtx* p, int nv) {
   if (!g_fps60_on) return;
   int16_t mv[4][3];
@@ -733,7 +756,8 @@ static void submit_perobj_render(Core* c) {
   uint32_t slo, shi; PktSpanSession sess;
   if (tgt == 0x8003CD00u) { c->r[4] = node; c->r[5] = flag; submit_perobj_flush(c); }  // flush-only (native)
   else                    { rec_super_call(c, 0x8003CCA4u); }                          // secondary-effect case
-  if (sess.close(&slo, &shi)) gpu_obj_depth_add(c, slo, shi, proj_pz_to_ord(object_world_view_depth(c, node)));
+  if (sess.close(&slo, &shi)) { float od = proj_pz_to_ord(object_world_view_depth(c, node));
+    gpu_obj_depth_add(c, slo, shi, od); fps60_bb_node(c, node, od); }   // fps60: this object's billboards reproject at midpoint
 }
 void ov_perobj_render(Core* c) {
   submit_perobj_render(c);
@@ -782,7 +806,8 @@ static void submit_render_walk(Core* c) {
           // Tag the packet span it produces with the object's PC-native world-position depth.
           uint32_t slo, shi; PktSpanSession sess;
           c->r[4] = n; rec_dispatch(c, c->mem_r32(n + 24));
-          if (sess.close(&slo, &shi)) gpu_obj_depth_add(c, slo, shi, proj_pz_to_ord(object_world_view_depth(c, n)));
+          if (sess.close(&slo, &shi)) { float od = proj_pz_to_ord(object_world_view_depth(c, n));
+            gpu_obj_depth_add(c, slo, shi, od); fps60_bb_node(c, n, od); }
         }
       }
     }
@@ -806,7 +831,11 @@ void ov_collectable_quad(Core* c) {
   float ord = proj_obj_center_ord();                 // object-center depth from the live composed transform
   uint32_t slo, shi; PktSpanSession sess;
   rec_super_call(c, 0x8003C8F4u);
-  if (sess.close(&slo, &shi)) gpu_obj_depth_add(c, slo, shi, ord);   // slo/shi already KSEG
+  if (sess.close(&slo, &shi)) { gpu_obj_depth_add(c, slo, shi, ord);   // slo/shi already KSEG
+    // fps60: the collectable's billboard quad reprojects at the midpoint camera. Identity = the current
+    // render object (scratch 0x1F80028C, set by submit_perobj_render); the composed camera×object transform
+    // is still live in CR0-7 here (proj_obj_center_ord just read it), so fps60_record_billboard captures it.
+    if (g_fps60_on) fps60_record_billboard(c, c->mem_r32(0x1F80028Cu), ord); }
 }
 
 // ===================================================================================================
@@ -886,7 +915,8 @@ static void submit_render_walk_snapshot(Core* c) {
     // so its 2D billboard prims (collectable quads, etc.) occlude for real at the deferred OT walk.
     uint32_t slo, shi; PktSpanSession sess;
     rq_dispatch_case(c, node, tgt);                          // run the object's per-type renderer (guest content)
-    if (sess.close(&slo, &shi)) gpu_obj_depth_add(c, slo, shi, proj_pz_to_ord(object_world_view_depth(c, node)));
+    if (sess.close(&slo, &shi)) { float od = proj_pz_to_ord(object_world_view_depth(c, node));
+      gpu_obj_depth_add(c, slo, shi, od); fps60_bb_node(c, node, od); }   // fps60: object billboards reproject at midpoint
   }
 }
 
@@ -987,7 +1017,8 @@ void ov_rwalk_aux_bcf4(Core* c) {
     if (tgt == AUX_BCF4_SKIP) continue;                      // skip/default
     uint32_t slo, shi; PktSpanSession sess;
     aux_bcf4_case(c, node, tgt);                             // per-type renderer (guest content)
-    if (sess.close(&slo, &shi)) gpu_obj_depth_add(c, slo, shi, proj_pz_to_ord(object_world_view_depth(c, node)));
+    if (sess.close(&slo, &shi)) { float od = proj_pz_to_ord(object_world_view_depth(c, node));
+      gpu_obj_depth_add(c, slo, shi, od); fps60_bb_node(c, node, od); }   // fps60: object billboards reproject at midpoint
   }
 }
 
@@ -1047,7 +1078,8 @@ void ov_rwalk_aux_bf00(Core* c) {
     if (tgt == AUX_BF00_SKIP) continue;                      // skip/default
     uint32_t slo, shi; PktSpanSession sess;
     aux_bf00_case(c, node, tgt);                             // per-type renderer (guest content)
-    if (sess.close(&slo, &shi)) gpu_obj_depth_add(c, slo, shi, proj_pz_to_ord(object_world_view_depth(c, node)));
+    if (sess.close(&slo, &shi)) { float od = proj_pz_to_ord(object_world_view_depth(c, node));
+      gpu_obj_depth_add(c, slo, shi, od); fps60_bb_node(c, node, od); }   // fps60: object billboards reproject at midpoint
   }
 }
 
@@ -1087,7 +1119,8 @@ void ov_rwalk_aux_eec0(Core* c) {
         if (tgt != AUX_EEC0_SKIP) {
           uint32_t slo, shi; PktSpanSession sess;
           aux_eec0_case(c, node, tgt);                       // per-type renderer (guest content)
-          if (sess.close(&slo, &shi)) gpu_obj_depth_add(c, slo, shi, proj_pz_to_ord(object_world_view_depth(c, node)));
+          if (sess.close(&slo, &shi)) { float od = proj_pz_to_ord(object_world_view_depth(c, node));
+      gpu_obj_depth_add(c, slo, shi, od); fps60_bb_node(c, node, od); }   // fps60: object billboards reproject at midpoint
         }
       }
     }

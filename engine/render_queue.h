@@ -53,7 +53,19 @@ struct RqItem {
   // reproject this prim's verts at the A/B midpoint WITHOUT re-running any guest/interpreted render code
   // (the actor-transform layer the user mandated — engine/fps60.cpp). Only the GTE-composed world path
   // (proj_native_xform) fills these; terrain/2D/HUD leave fps_world=0 and snap.
-  uint8_t  fps_world;      // 1 = GTE-composed world prim with valid capture below
+  uint8_t  fps_world;      // 1 = world prim with valid reprojection capture below (native mesh OR billboard)
+  // 3D-POSITIONED 2D QUAD (billboard) capture (host-only). Collectable/overlay billboard quads are
+  // screen-aligned 2D quads anchored at a 3D WORLD point — they are NOT projections of model verts, so
+  // they cannot be per-vertex reprojected like a mesh. They reach the render queue at the DEFERRED OT walk
+  // (gpu_native.cpp) as RQ_WORLD/RQ_OM_DEPTH items with NO sub-pixel float XY (has_xyf==0), inheriting the
+  // object's world-position depth via obj_depth_lookup. They cannot be tagged at queue time, so the 60fps
+  // tier tags them in build_lerp's PRE-PASS (engine/fps60.cpp fps60_tag_billboards): it recovers each one's
+  // object by its depth ord (engine_submit.cpp recorded the object's transform+depth via
+  // fps60_record_billboard) and sets fps_world=1, fps_anchor=1, fps_cr = the composed camera×object
+  // transform, fps_mv[0] = the object origin (= the WORLD-POSITION anchor; CR5-7 is its view-space pos).
+  // build_lerp then reprojects the ANCHOR at the A/B-midpoint camera and TRANSLATES the whole 2D quad by
+  // (anchor_mid - anchor_B), so the billboard pans/moves smoothly instead of snapping to camera-B.
+  uint8_t  fps_anchor;     // 1 = 3D-positioned 2D quad: translate by the anchor's midpoint screen delta
   uint32_t fps_key;        // cross-frame ACTOR identity (cmd ptr from submit_perobj_flush; 0 = snap)
   uint32_t fps_cr[11];     // projection state at draw: [0..7]=composed CR0-7 (rot CR0-4, trans CR5-7),
                            // [8]=CR24 OFX, [9]=CR25 OFY, [10]=CR26 H — proj_native_xform reads all of these.
