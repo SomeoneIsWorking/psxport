@@ -20,9 +20,11 @@
 #include "core.h"
 #include "game.h"   // Fps60State::current_object (was g_current_object)
 #include "cfg.h"
+#include "mods.h"   // g_mods — live PC-native lighting params (engine-native shading, not a deferred pass)
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include <math.h>
 
 void rec_super_call(Core*, uint32_t);   // interpret the original PSX body (A/B oracle / super-call)
 
@@ -245,6 +247,31 @@ static inline void fps60_stamp(Core* c, const ProjVtx* p, int nv) {
     mv[k][0] = (int16_t)p[s].mx; mv[k][1] = (int16_t)p[s].my; mv[k][2] = (int16_t)p[s].mz; }
   fps60_stamp_world(c, mv, nv, c->game->fps60.fps_cur_key);
 }
+
+// ENGINE-NATIVE directional lighting (user directive 2026-06-21: lighting must be engine-native, NOT a
+// screen-space deferred pass). Compute a real per-FACE normal from the prim's own view-space geometry
+// (cross of two edges of ProjVtx.vx/vy/vz = the GTE-rotated vertex = view-space position) and modulate the
+// vertex colours by ambient + diffuse*max(0,N·L). This shades ONLY the opaque world geometry it is called
+// on — it never touches semi-transparent surfaces (water etc.), so translucency is unaffected by
+// construction (that was the deferred pass's bug: it re-shaded/clobbered pixels behind translucent water).
+// Light dir is the to-light vector in view space (g_mods.light_dir), same convention as the retired pass.
+static inline void engine_shade_face(const ProjVtx* p, int nv, uint8_t r[4], uint8_t g[4], uint8_t b[4]) {
+  if (!g_mods.light) return;
+  float e1x = p[1].vx - p[0].vx, e1y = p[1].vy - p[0].vy, e1z = p[1].vz - p[0].vz;
+  float e2x = p[2].vx - p[0].vx, e2y = p[2].vy - p[0].vy, e2z = p[2].vz - p[0].vz;
+  float nx = e1y * e2z - e1z * e2y, ny = e1z * e2x - e1x * e2z, nz = e1x * e2y - e1y * e2x;
+  float ln = sqrtf(nx*nx + ny*ny + nz*nz); if (ln < 1e-6f) return;
+  nx /= ln; ny /= ln; nz /= ln;
+  if (nz > 0.0f) { nx = -nx; ny = -ny; nz = -nz; }            // face the camera (view -Z)
+  float lx = g_mods.light_dir[0], ly = g_mods.light_dir[1], lz = g_mods.light_dir[2];
+  float ll = sqrtf(lx*lx + ly*ly + lz*lz); if (ll > 1e-6f) { lx /= ll; ly /= ll; lz /= ll; }
+  float ndl = nx*lx + ny*ly + nz*lz; if (ndl < 0.0f) ndl = 0.0f;
+  float lit = g_mods.light_ambient + g_mods.light_diffuse * ndl;
+  for (int k = 0; k < nv; k++) {
+    int rr = (int)(r[k] * lit + 0.5f), gg = (int)(g[k] * lit + 0.5f), bb = (int)(b[k] * lit + 0.5f);
+    r[k] = (uint8_t)(rr > 255 ? 255 : rr); g[k] = (uint8_t)(gg > 255 ? 255 : gg); b[k] = (uint8_t)(bb > 255 ? 255 : bb);
+  }
+}
 // gen_func_8007FDB0 — POLY_GT3 (gouraud-textured triangle) submit.
 // Record = 36 bytes: {+0 rgb0|code, +4 rgb1 (rgb2 = rgb1<<4), +8 uv0|clut, +12 uv1|tpage,
 //   +16 VXY0, +20 VZ0(lo)|VZ1(hi), +24 VXY1, +28 VXY2, +32 VZ2(lo)|uv2(hi)}.
@@ -281,6 +308,7 @@ static void submit_poly_gt3_native(Core* c) {
     px[3] = px[2]; py[3] = py[2]; depth[3] = depth[2];        // 4th vert = v2 (degenerate -> a triangle)
     u[3] = u[2]; v[3] = v[2]; r[3] = r[2]; g[3] = g[2]; b[3] = b[2];
     int semi = (code & 0x02000000) ? 1 : 0;
+    if (!semi) engine_shade_face(p, 3, r, g, b);             // engine-native lighting (opaque only)
     gpu_draw_world_quad(c, px, py, depth, u, v, r, g, b, tp, clut, semi);
     fps60_stamp(c, p, 3);                                    // fps60: capture for midpoint reprojection
   }
@@ -333,6 +361,7 @@ static void submit_poly_gt4_native(Core* c) {
       r[k] = rgb[k] & 0xFF; g[k] = (rgb[k] >> 8) & 0xFF; b[k] = (rgb[k] >> 16) & 0xFF;
     }
     int semi = (code0 & 0x02000000) ? 1 : 0;                  // GP0 op byte (code0>>24) bit1 = semi-transparency
+    if (!semi) engine_shade_face(p, 4, r, g, b);             // engine-native lighting (opaque only)
     gpu_draw_world_quad(c, px, py, depth, u, v, r, g, b, tp, clut, semi);
     fps60_stamp(c, p, 4);                                    // fps60: capture for midpoint reprojection
   }
@@ -408,6 +437,7 @@ static void submit_poly_gt4_bp(Core* c) {
         r[k] = col & 0xFF; g[k] = (col >> 8) & 0xFF; b[k] = (col >> 16) & 0xFF;
       }
       int semi = (ctl & 0x40000000) ? 1 : 0;
+      if (!semi) engine_shade_face(p, 4, r, g, b);      // engine-native lighting (opaque only)
       gpu_draw_world_quad(c, px, py, depth, u, v, r, g, b, tp, clut, semi);
       fps60_stamp(c, p, 4);                             // fps60: capture for midpoint reprojection
     }

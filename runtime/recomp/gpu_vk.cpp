@@ -223,7 +223,11 @@ static int ssao_on(void) { return g_mods.ssao; }
 float proj_plane_h(void);
 void  proj_screen_center(float* cx, float* cy);
 static int light_on(void)    { return g_mods.light; }
-static int deferred_on(void) { return ssao_on() || light_on(); }
+// Lighting is now ENGINE-NATIVE (engine/engine_submit.cpp engine_shade_face — per-face normal in the
+// world-quad submit), NOT this deferred pass (user directive 2026-06-21: it must be engine-native, and the
+// deferred light/AO pass made semi-transparent water vanish by re-shading the geometry behind it). So the
+// deferred pass runs for SSAO only; the light bit is never set in its flags.
+static int deferred_on(void) { return ssao_on(); }
 // The deferred SSAO/light infra is built whenever the overlay is available (g_mods.ui, always on) so the
 // player can toggle SSAO/light live. The passes themselves stay off until toggled (ssao_on/light_on).
 static int ui_infra(void)    { return g_mods.ui; }
@@ -1094,7 +1098,7 @@ void GpuVkState::ssao_pass() {
   if (frame_via_fb()) { org_x = 0.0f; org_y = (float)FB_Y0; inv_scale = 1.0f / (float)s_ires; }
   else          { org_x = (float)s_present_sx; org_y = (float)s_present_sy; }
   int viz = cfg_int("PSXPORT_SSAO_VIZ", 0);   // 1=AO factor; 2=normal; 3=lit (any deferred-viz)
-  int flags = (ssao_on() ? 1 : 0) | (light_on() ? 2 : 0);
+  int flags = (ssao_on() ? 1 : 0);   // light is engine-native now (engine_shade_face); deferred = SSAO only
   struct { float p0[4], p1[4]; int32_t p2[4]; float p3[4], p4[4], p5[4], p6[4]; } pc;
   pc.p0[0] = inv_near; pc.p0[1] = inv_far; pc.p0[2] = strength; pc.p0[3] = radius;
   pc.p1[0] = bias_frac; pc.p1[1] = range_frac; pc.p1[2] = NATIVE_3D_MIN; pc.p1[3] = NATIVE_3D_MAX;
@@ -1137,6 +1141,9 @@ void GpuVkState::present(const uint16_t* src, int sx, int sy, int w, int h) {
   if (!s_inited) init_vk();
   wide_init();
   s_present_sx = sx; s_present_sy = sy;   // faithful display origin (pre use_fb override) for the LIGHT screen map
+  { void imgui_overlay_set_world(int,int,int,unsigned); Core* c = &game->core;   // live coord HUD
+    imgui_overlay_set_world((int16_t)c->mem_r16(0x1F8000D2u), (int16_t)c->mem_r16(0x1F8000D6u),
+                            (int16_t)c->mem_r16(0x1F8000DAu), c->mem_r32(0x801FE00Cu)); }
   imgui_overlay_new_frame();   // CPU-build the mod-toggle UI for this frame (no-op if overlay not inited)
   // vkprof: re-check the channel each frame (present runs from boot, before the REPL `debug` is processed).
   int vp = cfg_dbg("vkprof");
