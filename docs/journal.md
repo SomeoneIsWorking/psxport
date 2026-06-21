@@ -6826,3 +6826,45 @@ sub-behaviors, incl. overlay code 0x80114xxx/0x80120xxx/0x8012xxxx) kept PSX via
   runs that callee); (3) the obj[817]==obj[106] compare is against the SIGN-EXTENDED s16 lh obj[106].
   Live (non-verify) field run with the override active: Tomba walks normally — master X 0x0F640000→0x17704900
   holding right, no crash, reaches stage 0x8010637C.
+
+### later-205 — JT1[1..5] not autonomously verifiable; pivoted to FUN_80051128 `ov_xform51128` (child-node transform loop)
+**First half — JT1 frontier exhausted for autonomous verification.** The prior session's recommended next
+target was `FUN_80040390` (sm40558 STATE-1 obj[5] jump-table JT1[4]). I RE'd it (clean: no GTE, no render
+packets, 2 dispatched non-trivial callees 0x80027144/0x80074590, one obj[4]=3 write + one *0x800bf850
+decrement gated on obj[94]==5) and wrote the native body + a full-RAM+scratchpad `fd390` A/B gate. But it
+**never fires in the seaside scene** — a -DFD390_FIRE entry counter logged ZERO firings over 800 frames of
+movement. Instrumenting sm40558's own obj[5] dispatch with a JT1 histogram (then reverted) showed why:
+**obj[5] is ALWAYS 0 in this scene** — only JT1[0] (the already-owned fd10) is ever dispatched; JT1[1..5]
+(0x8003FED8/FFCC/4022C/40390/80114934) get exactly 0 calls. So none of the JT1 siblings can be 0-diff-verified
+autonomously here. Per the standing rule (don't force a trivial/unverified port), I removed the unverifiable
+fd390 override and pivoted to the §F resident hot-list.
+
+**Second half — owned `FUN_80051128` `ov_xform51128` PC-native (engine_submit.cpp), 0-diff verified.** A fresh
+profile (newgame + skip 650, press right 300 + left 300) put `FUN_80051128` at **3.7% of field hot time** —
+a clean (no GTE in body, no render packets), frequently-exercised resident transform orchestrator and the
+highest-value autonomously-verifiable target left. It is a near-twin of the already-owned `FUN_80051464`
+ov_xform_propagate: a per-object CHILD-NODE TRANSFORM loop. RE (`tools/disas.py 0x80051128`):
+- GUARD: if node[9]==0 return. Loop s2 in [0, node[8]) with a DUAL-BOUND continue check on node[9] (identical
+  idiom to xform_propagate).
+- Per child = node[0xC0 + 4*s2]: seed the scratchpad work matrix @0x1F800000 (zero +4/+0C/+14/+18/+1C;
+  +0=(s16)child[56], +8=(s16)child[58], +10=(s16)child[60], the +56/58/60 sign-extended via lhu→sll16/sra16),
+  then ov_rotmat(child+8 euler → 0x1F800020), ov_mat_mul(0x1F800020 × 0x1F800000 → 0x1F800040).
+- Parent select on sentinel=(s16)child[6]: ==-1 ROOT (parent = this node: ov_mat_mul(node+152 × 0x1F800040 →
+  child+24), ov_apply_matlv(child → child+0x2C), child[0x2C/30/34] += node[0xAC/B0/B4]); else SIBLING (parent =
+  node[0xC0 + 4*sentinel]; same ops with p+24 / p[0x2C/30/34]).
+Every callee is an already-owned native primitive (ov_rotmat 0x80085480 / ov_mat_mul 0x80084110 /
+ov_apply_matlv 0x80084220), so the body is pure orchestration + scratchpad seeding + integer translation
+adds; the primitives are rec_dispatch'd in the recomp's EXACT jal order to preserve the matmul→MVMVA GTE-CR
+coupling (ov_mat_mul CTC2's R→CR0-4 → the following ov_apply_matlv reads the right matrix).
+GOTCHAs: (1) child[56/58/60] sign-extended; (2) the sentinel is sll'd by 2 in the branch delay slot, so the
+sibling parent ptr is node[0xC0 + sentinel*4].
+**VERIFIED** with the `xform51128` gate (same scheme as `xformverify`: snapshot each touched child sub-struct
++0x18..+0x37 + the scratchpad work matrix + GTE data regs, run native, restore, run rec_super_call, diff;
+GTE FIFO regs 12-15 + LZCR reg 31 excluded — the comparator can't round-trip a FIFO restore and neither path
+writes them): **0-diff over 3000+ live field calls (~22000 child transforms), 0 mismatches**, exercising BOTH
+branches (a transient root/sib counter, since reverted, showed root=4748 / sibling=17268 children) across
+both movement directions (press right 400 + press left 400). Live gate-off run: Tomba walks normally (master
+X 0x0F640000→0x17704900 holding right), no crash, reaches stage 0x8010637C. Registered in game_tomba2.cpp
+next to ov_xform_propagate. NEXT clean §F targets I see: `FUN_80026C88` / `FUN_8003F024` (pure per-object
+dispatcher loops over the 40-entry, 64-byte-stride 0x800ec188 table — no GTE, leaf-ish, full RAM+scratchpad
+A/B verifiable). AVOID `FUN_80027A4C` (16% but it builds GP0 packets with cop2/lwc2/swc2 — render-boundary).

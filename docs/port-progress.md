@@ -267,6 +267,37 @@ for content fns (call it). Do NOT mimic PSX hardware (GTE/GP0/OT) — remove Bee
   gate exclusion [sp-0x800, sp) (dispatched ov_rand runs in both passes + this fn's 24-byte frame dead below
   entry sp). Registered in game_tomba2.cpp. NEXT descent: JT1[1..5] (0x8003FED8/FFCC/4022C/40390) — 0x80040390
   is next-cleanest (gated obj[41], 2 dispatched callees, no GTE).
+  **later-205 NOTE — the JT1[1..5] siblings are NOT autonomously verifiable in the seaside scene.** A JT1
+  histogram on the live field (instrumented in sm40558's obj[5] dispatch, then reverted) showed obj[5] is
+  **ALWAYS 0** here — only JT1[0] (fd10) ever fires; JT1[1..5] (0x8003FED8/FFCC/4022C/40390/80114934) get
+  **zero calls** (a -DFD390_FIRE entry counter on 0x80040390 confirmed it never fires). So a 0-diff A/B gate
+  on any of them can't be exercised autonomously; they are deferred until a scene drives obj[5]!=0. The
+  autonomously-verifiable JT1 frontier is exhausted — pivoted to the §F resident hot-list instead (later-205).
+- ✅ **later-205 — `FUN_80051128` `ov_xform51128` (per-object CHILD-NODE TRANSFORM loop, ~3.7% field hot —
+  engine_submit.cpp).** A sibling of `FUN_80051464` ov_xform_propagate: for each child node it builds a
+  per-child rotation from the child's stored rotation triple (child[56/58/60], sign-extended) + euler angles
+  (child+8), multiplies it onto the parent's world matrix, MVMVA-transforms the child's local translation into
+  child+0x2C, and accumulates the parent's world translation. EVERY callee is an already-owned native
+  transform PRIMITIVE — ov_rotmat (0x80085480), ov_mat_mul (0x80084110), ov_apply_matlv (0x80084220) — so this
+  is pure orchestration + scratchpad seeding + integer translation adds. NO GTE op in the body, NO render
+  packets. We rec_dispatch the primitives in the recomp's EXACT jal order to preserve the matmul→MVMVA GTE-CR
+  coupling (ov_mat_mul CTC2's R→CR0-4 so the following ov_apply_matlv reads the right matrix). Scratchpad work
+  areas: 0x1F800000 SetVector work, 0x1F800020 RotMatrix out, 0x1F800040 composed matrix. GUARD: node[9]==0 ->
+  return. Loop is a DUAL-BOUND idiom (enter on node[8], continue on node[9]) — same as xform_propagate. Parent
+  select: child[6]==-1 → ROOT (parent = this node, node+152 matrix / node+0xAC translation); else SIBLING
+  (parent = node[0xC0 + 4*child[6]]). GOTCHAs: (1) child[56/58/60] are sign-extended (lhu→sll16/sra16); (2) the
+  sentinel child[6] is sll'd by 2 in the branch delay slot, so the sibling parent ptr is node[0xC0 +
+  sentinel*4]. VERIFIED with the `xform51128` gate (same scheme as `xformverify`: snapshot each touched child
+  sub-struct +0x18..+0x37 + the scratchpad work matrix + GTE data regs; both paths run the identical owned
+  primitives, so it verifies the orchestration — loop bounds, branch select, address math, add order):
+  **0-diff over 3000+ live field calls (~22000 child transforms), 0 mismatches**, exercising BOTH branches
+  (root=4748 / sibling=17268 children) across both movement directions (press right 400 + press left 400).
+  Live gate-off run: Tomba walks normally (master X 0x0F640000→0x17704900 holding right), reaches stage
+  0x8010637C. Registered in game_tomba2.cpp alongside ov_xform_propagate. GTE-reg exclusion: FIFO regs 12-15
+  + reg 31 (LZCR) — the comparator can't round-trip a FIFO restore, and neither path writes them (same as
+  xformverify). NEXT clean §F targets: `FUN_80026C88` / `FUN_8003F024` (pure per-object dispatcher loops over
+  the 40-entry 0x800ec188 table, no GTE — verify via full RAM+scratchpad A/B); `FUN_80051128`'s consumers in
+  the transform cluster. AVOID `FUN_80027A4C` (16% but GTE/GP0 packet submitter, render-boundary).
 - ✅ **later-196 — `FUN_8004CE14` `ov_script_vm_4ce14` (per-object SCRIPT-VM tick — THE most-called field
   fn, ~14900 calls/run).** First CONTENT state machine owned after the boundary removal. Dispatch on state
   byte obj[4]: 2→no-op; 3→jal 0x8007A624; >3→no-op; 0→ if global 0x800BF873!=0 set obj[4]=3 & return, else

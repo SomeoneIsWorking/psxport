@@ -2051,6 +2051,8 @@ void games_tomba2_init(void) {
     rec_set_override(0x80051C8Cu, ov_build_xform);     // per-object transform builder
     void ov_xform_propagate(Core*);
     rec_set_override(0x80051464u, ov_xform_propagate); // child-node transform propagation (orchestrates owned prims)
+    void ov_xform51128(Core*);
+    rec_set_override(0x80051128u, ov_xform51128);      // per-object child-node transform loop (sibling of xform_propagate; orchestrates owned prims)
     void ov_orch597AC(Core*);
     rec_set_override(0x800597ACu, ov_orch597AC);       // per-object world-transform orchestrator (build matrix + secondary + child propagate)
     { void ov_cone_cull_2b278(Core*);
