@@ -225,6 +225,21 @@ for content fns (call it). Do NOT mimic PSX hardware (GTE/GP0/OT) — remove Bee
   scratch there — a deep callee of 0x80099970 reads a transient mid-fn value reconciled before return (the
   struct passed in is byte-identical; ALL persistent state + v0 match). The stack lives at the top of RAM, far
   above all game data, so the exclusion cannot hide a behavioral bug (that would alter persistent state).
+- ✅ **later-198 — `FUN_80056B48` `ov_player_move` (PLAYER velocity-integrate handler — engine/engine_player.cpp).**
+  First MOVEMENT/physics content fn owned after the boundary removal. Integrates speed×dir into the MASTER
+  position (16.16-fixed X/Y/Z at 0x800E7EAC/B0/B4, struct base G=0x800E7E80): posX += dirX·speed (a0+0x48 ·
+  a0+0x44), posZ += dirZ·speed (a0+0x4C·a0+0x44), and — only when arg a1==0 — posY += dirY·speed (a0+0x4A·
+  a0+0x44). Tail: if (flag363 @a0+0x16B == 0 && flag97 @a0+0x61 == 0) jal 0x80054650(a0,0) (a settle/stop
+  helper, kept DISPATCHED — runs in guest RAM); else flag95 @a0+0x5F &= ~0x04. v0 = the dispatched call's
+  result (jal path) or the masked flag95 byte (else path). The s16×s16 products fit in 32 bits exactly so
+  `(int16)dir * (int16)speed` matches the MIPS signed `mult`/`mflo` low word. Registered in game_tomba2.cpp.
+  Verified with the full RAM+scratchpad A/B gate `playerverify` (run native → snapshot → roll back → run
+  rec_super_call → diff): **0-diff over the full motion run** (press right 300 + press left 300 frames),
+  500+ matches, 0 mismatches. GOTCHA (same as scriptvm/pad931c0): the dispatched callee 0x80054650 runs in
+  BOTH passes and leaves different transient values in its own stack frame below entry sp, so the gate
+  excludes [sp-0x800, sp) — pure stack scratch at the top of RAM (~0x1FE8F0), far above all game data; every
+  persistent word + scratchpad + v0 match. Live (non-verify) path confirmed Tomba walks normally (X hi16
+  3940→6000 holding right). Added to run.sh + tools/build_port.sh SRC lists.
 - ✅ `FUN_80051C8C` per-object TRANSFORM build = `ov_build_xform`.
 - **Camera update (engine_camera.cpp):**
   - ✅ position X/Z `FUN_8006d960` = `ov_cam_track_xz`; ✅ position Y `FUN_8006da54` = `ov_cam_track_y` (later-174).

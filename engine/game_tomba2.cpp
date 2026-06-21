@@ -1336,6 +1336,10 @@ void games_tomba2_init(void) {
     { void ov_grid_query_47cbc(Core*); rec_set_override(0x80047CBCu, ov_grid_query_47cbc); }  // collision-grid cell query/walk
     { void ov_script_vm_4ce14(Core*); rec_set_override(0x8004CE14u, ov_script_vm_4ce14); }  // per-object script-VM tick (control flow owned; sub-behaviors dispatched)
     { void ov_input_dispatch_931c0(Core*); rec_set_override(0x800931C0u, ov_input_dispatch_931c0); }  // per-frame input/controller-state processor (control flow owned)
+    // PC-native PLAYER velocity-integrate handler (engine/engine_player.cpp): FUN_80056B48 integrates
+    // speed×dir into the master position (16.16 X/Y/Z at 0x800E7EAC/B0/B4). CONTENT (post-boundary), owned
+    // native; `playerverify` full RAM+scratchpad A/B gate. The settle helper 0x80054650 stays dispatched.
+    { void ov_player_move(Core*); rec_set_override(0x80056B48u, ov_player_move); }
   }
   // PC-native LEVEL/STAGE LOADER (engine/engine_level.cpp): the engine's overlay loader FUN_800450bc —
   // load a stage's overlay off the disc + set its entry, synchronous (no PSX CD-wait yield).
