@@ -211,10 +211,12 @@ static void ov_demo_s0(Core* c) {
   rec_coro_redirect(c, 0x801063E4u);         // first loader jal 0x80045080 (YIELDS) -> ... -> falls into s1
 }
 
-// s4 / s5 / s7 — entry-level ownership is NOT useful (deliberately). Unlike s0, their substantive
-// transition logic lives entirely AFTER their deep yield, so an entry-level override could only set up
-// args + coro-redirect straight into the guest yielder — a pure passthrough that OWNS NOTHING while
-// adding task-0-death risk if a redirect target/ra is wrong. That is scaffolding, not ownership.
+// s4 / s5 / s7 — an ENTRY-level (substate-body) override is NOT useful for any of these (deliberately):
+// unlike s0, their substantive transition logic lives entirely AFTER their deep yield, so a body-level
+// override could only set up args + coro-redirect straight into the guest yielder — a pure passthrough that
+// OWNS NOTHING while adding task-0-death risk if a redirect target/ra is wrong. That is scaffolding, not
+// ownership. (s7 IS owned, but NOT at its body 0x80106668 — at the phase machine 0x80106C24 it trampolines
+// into, whose phase-selection prologue + phase2 teardown are ownable; see the s7 block below.)
 //
 // MECHANISM CONSTRAINT (verified in interp.cpp, this session): the address-keyed override table is
 // consulted ONLY on `jal`/`j`/`jalr`/computed-`jr` CALL or JUMP targets (interp_flat lines 453-483).
@@ -226,11 +228,14 @@ static void ov_demo_s0(Core* c) {
 //     from the deep yielder 0x8007bf20 -> UNREACHABLE by an override. s4 STAYS GUEST (final, not a TODO).
 //   - s5 0x801065DC: its ENTIRE body is `jal 0x80052078(2)` (LEAVE DEMO / task-restart) + the tail yield
 //     — no engine logic to own. STAYS GUEST.
-//   - s7 0x80106668: OWNABLE — its trampoline `jal 0x80106C24` IS an override-checked jal target, and the
-//     phase machine 0x80106C24's phase SELECTION prologue (reads sm[0x4a]) is PRE-yield, plus phase2's
-//     teardown (0x80106dfc: jal 0x80074bc4 SYNC ; *0x1f80019a=0 ; sm[0x48]=0) is all-SYNC. So 0x80106C24
-//     can be owned: own phase selection + phase2 native, coro-redirect phase0/phase1 (which yield) into
-//     the guest body. This is the remaining DEMO frontier step (needs reaching s7 = confirm a menu option).
+//   - s7 0x80106668: OWNED (later-208, ov_demo_s7_phase, registered) — its trampoline `jal 0x80106C24` IS an
+//     override-checked jal target, and the phase machine 0x80106C24's phase SELECTION prologue (reads
+//     sm[0x4a]) is PRE-yield, plus phase2's teardown (0x80106dfc: jal 0x80074bc4 SYNC ; *0x1f80019a=0 ;
+//     sm[0x48]=0) is all-SYNC. We own phase selection + phase2 native, coro-redirect phase0/phase1 (which
+//     yield) into the guest body. REACH (the prior "confirm a menu option" assumption was WRONG): s7 is the
+//     ATTRACT-demo auto-launch — `tap 4008` (title s2->s3) then run ~455 frames so s3's intro timer sm[0x5a]
+//     (450) expires -> sm[0x48]->7 auto. Verified fires at all phases + A/B 0-diff at steady phase1 (only the
+//     coro saved-ra slot differs) + phase2 restart clean (poke sm[0x4a]=2). See ov_demo_s7_phase + later-208.
 // s0 (above) is owned because it has genuine pre-yield engine state to own (init writes + substate sel).
 
 // ===========================================================================================
@@ -347,13 +352,17 @@ void demo_scan_overlay(Core* c, uint32_t base, uint32_t size) {
   rec_set_interp_override_auto(0x80106464u, ov_demo_s2);
   rec_set_interp_override_auto(0x801064E8u, ov_demo_s3);
   rec_set_interp_override_auto(0x801065ECu, ov_demo_s6);
-  // s7 phase machine (ov_demo_s7_phase, 0x80106C24) is written + reviewed but NOT registered: it could
-  // not be VERIFIED to fire. Headless automation (`newgame`) drives DEMO->GAME via s5 (leave-demo), and
-  // blind menu taps reach s2/s3/s5 but never s7 (sm[0x48]=7 = the "New Game" option-confirm path). Per the
-  // later-170 trap (a registered-but-never-fired override looks fine while doing nothing AND risks firing
-  // wrongly on an unverified path), it stays unregistered until a reliable New-Game-confirm REPL sequence
-  // reaches s7 for an A/B gate. See ov_demo_s7_phase + docs/journal.md later-185.
-  (void)ov_demo_s7_phase;
+  // s7 phase machine (ov_demo_s7_phase, 0x80106C24) — NOW REGISTERED (later-208). REACH RECIPE: s7 is the
+  // ATTRACT-demo auto-launch, reached by letting the title-screen intro timer expire — `tap 4008` once (to
+  // advance title s2->s3), then `run ~455` frames: s3's sm[0x5a] intro timer (450) counts down and at
+  // expiry the front-end auto-advances sm[0x48]->7 WITHOUT further input (NOT a confirm-an-option path — the
+  // earlier "needs New-Game confirm" assumption was wrong; the attract sequence launches on the timer). The
+  // phase machine then runs phase0 (sm[0x4a]=0, ONE frame: the overlay LOADER — @0x80109450 changes as a new
+  // overlay loads) -> phase1 (sm[0x4a]=1, the whole attract-demo play loop, sits here ~hundreds of frames)
+  // -> phase2 (sm[0x4a]=2, teardown -> sm[0x48]=0, restart). VERIFIED to FIRE at all reachable phases via the
+  // `demo` log, and the steady-state observable result (phase progression + the phase0 overlay load) matches
+  // the guest baseline. See ov_demo_s7_phase + docs/journal.md later-208.
+  rec_set_interp_override_auto(0x80106C24u, ov_demo_s7_phase);
   if (cfg_dbg("demo"))
     fprintf(stderr, "[demo] own DEMO substates s0/s1/s2/s3/s6 (0x801063C0/0x8010641C/0x80106464/"
                     "0x801064E8/0x801065EC) in load 0x%08X+0x%X\n", base, size);

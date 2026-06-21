@@ -130,9 +130,20 @@ for content fns (call it). Do NOT mimic PSX hardware (GTE/GP0/OT) — remove Bee
 
 ## C. Stages (task 0 cycles START → DEMO → GAME)
 - ☐ **START.BIN** boot splash (SCEA etc.) — un-ported PSX boot path (EXPECTED-broken until ported; don't debug).
-- ☐ **DEMO stage `0x801062E4`** = TITLE / front-end MENU state machine (8 substates) — **the big front-end
-  engine system, INTERPRETED.** Title→New Game flow dr(driving-the-game.md). The first large un-owned system
-  in execution order between boot and gameplay.
+- ◐ **DEMO stage `0x801062E4`** = TITLE / front-end MENU state machine (8 substates) — **the big front-end
+  engine system** (engine/engine_demo.cpp, AUTO-registered via demo_scan_overlay). Substate ownership:
+  - ✅ **s0/s1/s2/s3/s6** (run-once INIT + the title/menu input substates; later-182/185, coro-redirect
+    handshake on each substate body, A/B 0-diff at a steady menu frame).
+  - ✅ **s7 0x80106668 attract-demo launch** = `ov_demo_s7_phase` on the phase machine 0x80106C24 (later-208).
+    Owns phase SELECTION + phase2 teardown native, coro-redirects the deep-yielding phase0/phase1 into the
+    guest body (prologue-frame replication). REACH: `tap 4008` (title s2->s3) then `run ~455` (s3 intro timer
+    expires -> sm[0x48]->7 auto-launch). VERIFIED: steady-phase1 full-RAM+scratchpad dump vs guest baseline =
+    scratchpad 0-diff, main-RAM diff only the 2-byte coro saved-ra slot (top-of-RAM stack, never game data);
+    phase0/phase1 clean 2000+ frames; phase2 (poke sm[0x4a]=2) restarts sm[0x48]->0 with no crash.
+  - ⬛ **s4 0x80106580 / s5 0x801065DC — STAY GUEST (final, NOT a TODO).** s4's only engine logic (the sm[0x6b]
+    branch) is reached by `jr ra` from its deep yielder 0x8007bf20 — UNREACHABLE by an override (the override
+    table is consulted only on jal/j/jalr/computed-jr, never on `jr ra`; interp_flat 453-483). s5's whole body
+    is `jal 0x80052078(2)` (leave-demo) + the tail yield — no engine logic to own. (later-185/208.)
 - GAME stage `0x8010637C` (overlay GAME.BIN, AUTO-registered in engine_stage.cpp via stage_scan_overlay):
   - ✅ top-level prologue = `ov_game_stage_main`; ✅ sm[0x48] handlers 0/1/2 (`ov_game_s48_0/1/2`);
     ✅ running dispatcher sm[0x48]==2 (coro-redirect handshake, later-169).

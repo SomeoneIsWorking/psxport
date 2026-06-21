@@ -16,6 +16,53 @@
   earlier fade work: see [[tomba2-fade-flash-solved]]).
 - ~~SCEA license screen was black~~ **FIXED PC-native (later-179, below).**
 
+## later-208: OWN DEMO front-end substate s7 (attract-demo launch) native — ov_demo_s7_phase REGISTERED
+Owned the last reachable DEMO front-end deep-yielder, **s7 0x80106668** (engine/engine_demo.cpp,
+ov_demo_s7_phase on the phase machine **0x80106C24**), via the same coro-redirect handshake as s0/s2/s3/s6.
+The override body was already written + RE'd in a prior session but UNREGISTERED ("could not be VERIFIED to
+fire"). This session **reached s7, verified it, and registered it.**
+
+**KEY DISCOVERY — how to reach s7 (the prior "needs New-Game confirm" assumption was WRONG).** s7 is the
+ATTRACT-demo auto-launch, reached by letting the **title intro timer expire**, not by confirming a menu
+option. Recipe (headless REPL): `run 45` (boot to DEMO), `tap 4008` once (the title s2 confirm-edge advances
+s2->s3, the title-screen menu page), then `run ~455` — s3's intro/hold timer `sm[0x5a]` (inits 450) counts
+down once per frame and at expiry the front-end AUTO-advances `sm[0x48]->7` with NO further input. (Blind
+menu taps only ever reach s2/s3/s5, never s7 — that's why prior sessions couldn't hit it; the s3 confirm
+returns outcome 2 -> s5 leave-demo, and there is no v0==1 confirm path in the title machine. The s7 path is
+the timer auto-launch.) Disasm of 0x80106ac4 (s3 machine) confirmed: after the timer, edge 0x4008 returns 2
+(not 1); 0x2000 returns 3; the s7-producing outcome-1 is the timer expiry.
+
+**Verification (all on the live headless port, override registered = the behavior):**
+- Disasm-faithfulness re-checked against a fresh menu RAM dump (ram_menu.bin): the trampoline `jal 0x80106C24`
+  at 0x80106668 falls into TAIL_NONE 0x80106670 (jal sets ra=0x80106670); the phase prologue sp-=40 / save
+  s0@24,ra@32,s1@28 / s1=1 / phase select on sm[0x4a] (beq phase1@0x80106d4c / phase0@0x80106c74 /
+  phase2@0x80106dfc / else epilogue@0x80106e14); phase2 = `jal 0x80074bc4` (SYNC) ; *0x1f80019a=0 ;
+  sm[0x48]=0 ; epilogue `jr ra`. ALL match the override exactly.
+- **FIRES at every reachable phase** (`demo` log): phase0 (sm[0x4a]=0) once at the launch frame; phase1
+  (sm[0x4a]=1) continuously through the attract play loop (sm[0x6e] wrapped to 1 by phase0, sm[0x5a] counting
+  down from ~26216). The later-170 never-fired trap is cleared.
+- **A/B 0-diff (the existing-substate gate):** full-RAM + scratchpad `dumpram` at a steady phase1 frame
+  (override-ON) vs a guest-baseline dump captured at the identical drive sequence = **scratchpad 0-diff;
+  main-RAM diff = exactly 2 bytes** at 0x1FE05A (a single saved-context halfword in the top-of-RAM coroutine
+  stack page, native 0x659E vs guest 0x02BA, surrounded by zeros) — the DOCUMENTED coro-redirect
+  saved-ra/sentinel artifact (same artifact class as the other coro-redirect substates), never game data.
+- **phase0+phase1 ran clean over 2000+ frames** (no bad opcode / no task-0 death — the prologue-frame
+  replication lets the deep in-body yields longjmp/resume in-context and the body's `jr ra` returns to the
+  trampoline). **phase2 verified by injection** (poke sm[0x4a]=2 while in s7): the override took the phase2
+  branch, dispatched the SYNC teardown 0x80074bc4, set sm[0x48]=0 (front-end restart), and the front-end
+  cleanly re-ran s0->s1 — no crash. (Reaching phase2 naturally needs ~26000 frames = the full attract play
+  out, so injection is the practical gate for the all-SYNC teardown path.)
+- **No regression:** the `newgame`->`skip 500` path still reaches the GAME stage 0x8010637C (seaside field)
+  cleanly — s7 only fires on the attract path, never on newgame.
+
+**s4/s5 stay GUEST (final, re-confirmed, NOT a TODO).** s4 0x80106580: its only engine logic is the sm[0x6b]
+branch at 0x8010658C, reached by `jr ra` from the deep yielder 0x8007bf20 -> UNREACHABLE by an override (the
+table is consulted only on jal/j/jalr/computed-jr; a `jr ra` RETURN does not consult it — interp_flat
+453-483). s5 0x801065DC: whole body is `jal 0x80052078(2)` leave-demo + tail yield, nothing to own. **The
+DEMO front-end is now owned to the limit the override mechanism allows** (s0/s1/s2/s3/s6/s7 native; s4/s5
+structurally guest). Updated engine_demo.cpp (registered + reach recipe), docs/engine_re.md, docs/port-
+progress.md §C.
+
 ## later-207: OWN per-area BAV effect/animation CEL LOADER FUN_80096590 native (ov_bav_load)
 First **asset-loading subsystem** owned end-to-end (engine/engine_bav.cpp). `FUN_80096590` loads an area's
 effect cels (the seaside field loads 3 at entry: descriptors 0x801846b4 / 0x801858d4 / 0x801886f4). It

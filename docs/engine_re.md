@@ -282,10 +282,21 @@ returns is IMPOSSIBLE (reached by `jr ra`, never fires). Therefore:
   from the deep yielder 0x8007bf20 → unreachable by an override. (An earlier "own at 0x8010658C" note was
   WRONG, retracted.)
 - **s5 0x801065DC — STAYS GUEST.** Whole body is `jal 0x80052078(2)` + tail yield; nothing to own.
-- **s7 0x80106668 — OWNABLE, the remaining DEMO frontier step.** Its `jal 0x80106C24` IS an override-checked
-  jal target; phase machine 0x80106C24's phase-selection prologue (sm[0x4a]) is PRE-yield and phase2 teardown
-  (0x80106dfc: jal 0x80074bc4 SYNC ; *0x1f80019a=0 ; sm[0x48]=0) is all-SYNC → own selection + phase2, redirect
-  the yielding phase0/phase1 into the guest body. Needs reaching s7 (confirm a menu option) to A/B-verify.
+- **s7 0x80106668 — OWNED (later-208, ov_demo_s7_phase, registered).** Its `jal 0x80106C24` IS an override-
+  checked jal target; phase machine 0x80106C24's phase-selection prologue (sm[0x4a]) is PRE-yield and phase2
+  teardown (0x80106dfc: jal 0x80074bc4 SYNC ; *0x1f80019a=0 ; sm[0x48]=0) is all-SYNC → own selection +
+  phase2, redirect the yielding phase0/phase1 into the guest body (replicating the prologue's sp-40 frame so
+  the body's `jr ra` epilogue returns to the trampoline). **REACH RECIPE (the prior "needs New-Game confirm"
+  assumption was WRONG): s7 is the ATTRACT-demo auto-launch, reached by letting the title intro timer expire**
+  — `tap 4008` once (title s2->s3) then `run ~455` so s3's sm[0x5a] intro timer (450) expires and the
+  front-end AUTO-advances sm[0x48]->7 (no further input). Phases: phase0 (sm[0x4a]=0, ONE frame, overlay
+  LOADER — @0x80109450 changes) -> phase1 (sm[0x4a]=1, the whole attract-play loop, sm[0x5a] counts down from
+  ~26216 so it sits here ~7 min of frames) -> phase2 (sm[0x4a]=2, teardown -> sm[0x48]=0 restart). VERIFIED:
+  full-RAM+scratchpad dump at a steady phase1 frame (override-ON) vs the guest baseline = **scratchpad 0-diff,
+  main-RAM 2-byte diff at 0x1FE05A** (a single saved-context halfword in the top-of-RAM coroutine stack page —
+  the documented coro-redirect saved-ra/sentinel artifact, never game data). phase0 fires once + phase1 fires
+  2000+ frames clean; phase2 (reached by poking sm[0x4a]=2) drives sm[0x48]->0 restart with no crash. The
+  newgame->GAME path is unaffected (s7 only fires on the attract path).
 A plain rec_dispatch of a deep yielder kills task 0 (later-169).
 A/B gate (override-on vs -off, REPL `run 150`): main-RAM + scratchpad 0-diff except task-0's saved-ra stack
 slot (CORO_SENTINEL vs guest return-PC, the coro-redirect artifact). `dumpram` now also dumps a `.spad`.
