@@ -8,9 +8,13 @@ I/O bolted on. **Behave like a PC game, do NOT simulate the PSX.**
 **STANDING DIRECTIVE — FULL OWNERSHIP IS ALWAYS THE ANSWER (user, 2026-06-20). Do NOT ask which side of
 the boundary something falls on, do NOT offer a "lighter"/incremental-keep-PSX option, do NOT propose
 retaining a PSX mechanism for convenience.** Every fork defaults to the engine owning it PC-native.
-Effort/time is NOT a constraint ("I don't care if it takes years"). The ONLY things that stay PSX are the
-game CONTENT — characters (AI/behavior), level data, quests/game-rules (see THE BOUNDARY); everything
-else is PC-owned. When in doubt, own it; just build it, don't ask.
+Effort/time is NOT a constraint ("I don't care if it takes years"). **NOTHING is fenced off from native
+ownership any more (user, 2026-06-21): the old "keep the game CONTENT as recompiled PSX" rule is REMOVED.**
+Characters/AI, physics/collision response, quests/event/game-rule logic — the things THE BOUNDARY used to
+reserve for PSX — are now ALSO valid native-ownership targets, exactly like the engine. Un-ported code still
+runs as the recomp body so the game stays playable at every step, but "it's content" is no longer a reason
+NOT to port something (port it when it helps — e.g. the per-object state machines that dominate the perf
+hot-list). When in doubt, own it; just build it, don't ask.
 
 **ONE BEHAVIOR = the PC game. Do NOT env-gate behavior (user, 2026-06-20).** New ownership work is THE
 path, not an opt-in flag. Do NOT add a `PSXPORT_*` toggle to A/B the PC-native path against the old PSX
@@ -28,11 +32,13 @@ the PSX would draw / in what order" to decide what appears on screen, it is wron
 that itself from the scene (e.g. the sea-background-drawn-on-top bug is exactly this: order inherited
 from PSX instead of owned by the engine).
 
-## THE BOUNDARY — REBUILD the ENGINE PC-native; keep the game CONTENT/LOGIC as recompiled PSX (read this first)
-This is the single most-misread thing in the project. Sessions keep collapsing "rebuild the engine" into
-"port the renderer" or into "transcribe the PSX body to C." Both are wrong. The line is **engine vs
-content**, and a game engine is FAR more than rendering. Note the verb is **REBUILD**, not "port" — we are
-building a PC game engine that produces the same game, not translating PSX engine code into C.
+## THE BOUNDARY — REBUILD everything PC-native; the recomp is the reference + the live fallback (read this first)
+**UPDATE 2026-06-21: the engine-vs-content boundary is GONE.** It used to fence content (characters/AI,
+physics, quests) off as "stays PSX"; that rule is removed — everything is now a native-ownership target.
+What remains true and still most-misread: a game engine is FAR more than rendering, and the verb is
+**REBUILD**, not "transcribe" — we build a PC game that produces the same result, not a line-by-line C copy
+of the PSX body. The ENGINE list below is still the TOP-TO-BOTTOM priority spine (own it in execution
+order); content is now ALSO fair game, especially where it's hot (the per-object state machines).
 
 **THE ENGINE — we REIMPLEMENT it natively in C, as a PC game would do it (the WHOLE list, not just render):**
 - **main menu / title / front-end UI menus**, and the main game loop
@@ -46,21 +52,16 @@ building a PC game engine that produces the same game, not translating PSX engin
 - **render submission + the renderer** (PC-native: float transforms, real depth — see RENDER below)
 - save/load flow, 60fps interpolation, widescreen.
 
-**The game CONTENT / LOGIC — STAYS as recompiled PSX code/data; we do NOT reimplement it. The split (user,
-2026-06-20): PSX owns ONLY the actual game CONTENT — `characters`, `level data`, `quests`. EVERYTHING ELSE
-is PC-owned, INCLUDING the game objects themselves.** Concretely, PSX-owned content is:
-- **characters** — per-enemy AI, per-character / NPC behavior
-- **game physics & collision response** (how Tomba moves / jumps / lands)
-- **level data** (the stage's content/asset payload) and **quest / event / progression / game-rule logic**
-We are explicitly NOT porting every enemy type, every character, the quests, etc. But the **game objects**
-— the world's entity/object model, its placement, spawning, transforms, scene graph, ordering — are
-**PC-owned**, owned by the engine, not "whatever the PSX struct happens to be." The engine calls into the
-PSX content code as the interface (e.g. it builds the level + terrain + places objects, and the PSX
-physics/AI then move the player/enemies within that PC-owned world). Where the engine must hand state to
-the retained PSX content, that handoff must be CORRECT (a wrong guest write corrupts the PSX content — that
-is how the native terrain made Tomba fall through the ground, later-158) — but the goal is for the engine
-to OWN the object/world model PC-native and only marshal what the PSX content genuinely needs, not to treat
-the guest entity structs as the source of truth.
+**The game CONTENT / LOGIC — now ALSO a native target (rule removed 2026-06-21).** Previously this was
+fenced off ("characters/AI, physics/collision response, level data, quests/events stay recompiled PSX, we
+do NOT reimplement"). That fence is gone: per-enemy AI / NPC behavior, how Tomba moves/jumps/lands,
+quest/event/progression/game-rule logic are all valid to reimplement native, same methodology as the
+engine. The **game objects** (entity/object model, placement, spawning, transforms, scene graph, ordering)
+are PC-owned as before. Two things still hold regardless: (1) un-ported content keeps running as the recomp
+body, so the game stays playable while you advance; (2) **CONTENT-INTERFACE CORRECTNESS** — wherever native
+code and still-recomp content share guest RAM / scratchpad, the handoff must be exactly right; a wrong guest
+write silently corrupts the other side (that is how the native terrain made Tomba fall through the ground,
+later-158). When native and recomp coexist for the same data, the native writes must match the reference.
 
 **The recomp has TWO distinct roles — never conflate them:**
 1. For the **ENGINE**, the recompiled body (`gen_func_*`) is the **behavioral REFERENCE / oracle only**:
@@ -68,8 +69,9 @@ the guest entity structs as the source of truth.
    merely reproduces the PSX body's instructions/packets byte-for-byte is **still PSX-simulation, not a
    PC engine** — that is NOT the deliverable. Match the engine's *observable result* (the world it
    builds, the picture it draws, the interface state the content reads), not its PSX mechanism.
-2. For the **CONTENT/LOGIC**, the recompiled body is the **live runtime** that keeps running in guest
-   memory. The engine calls it; we don't rewrite it.
+2. For **still-unported CONTENT/LOGIC**, the recompiled body is the **live runtime** that keeps running in
+   guest memory so the game stays playable. The engine calls it. As of 2026-06-21 we MAY rewrite it native
+   too (the fence is gone) — until we do, it runs as recomp; once owned, it's a native function like any other.
 
 **PORT PROGRESS TRACKER — `docs/port-progress.md` — READ THIS FIRST, every session.** It is the single
 source of truth: the boot→gameplay execution SPINE with per-function status (owned/partial/todo), the
