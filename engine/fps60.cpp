@@ -302,6 +302,10 @@ void fps60_stamp_billboard(Core* c, uint32_t node) {
   uint32_t ident; uint32_t cr[11];
   if (!fps60_billboard_for_node(node, &ident, cr)) return;
   it->fps_world = 1; it->fps_anchor = 1; it->fps_key = ident;
+  // objid overlay: a 2D billboard (apple/gem/flame) rasterizes at the DEFERRED OT walk, after the render
+  // walk's g_dbg_render_node scope ended — so rq_emit_or_queue stamped dbg_node=0. Recover it here from the
+  // span-matched entity node so the overlay boxes billboards too (the node is `ident`, KSEG).
+  if (ident >= 0x80000000u && ident < 0x80200000u) it->dbg_node = ident;
   for (int k = 0; k < 11; k++) it->fps_cr[k] = cr[k];
   for (int k = 0; k < 4; k++) { it->fps_mv[k][0] = 0; it->fps_mv[k][1] = 0; it->fps_mv[k][2] = 0; }  // anchor = object origin (CR5-7 = view pos)
   it->fps_offx = 0;   // billboard reproject is a screen TRANSLATE of xs/ys (offset already baked in)

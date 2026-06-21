@@ -81,7 +81,7 @@ static void objid_box(Core* core, const RqItem* ref, int x0, int y0, int x1, int
 // the per-instance node handle (low 16 hex — the stable object id; the node+0xe "model id" is only 0..13
 // here and the 352/353 the user recalled was a draw-order index, not a game id). Terrain/static prims have
 // dbg_node==0 and aren't boxed.
-struct ObjBox { int x0, y0, x1, y1; const RqItem* ref; };
+struct ObjBox { int x0, y0, x1, y1; const RqItem* ref; int anchor; };
 static void objid_overlay(RenderQueue* q, Core* core) {
   int n0 = q->n;                               // freeze the count: only scan real prims, not our own labels
   std::unordered_map<uint32_t, ObjBox> boxes;
@@ -96,13 +96,15 @@ static void objid_overlay(RenderQueue* q, Core* core) {
     if (node == 0) continue;
     nnoded++;
     int nv = it->nv ? it->nv : 4;
-    auto ins = boxes.emplace(node, ObjBox{ 99999, 99999, -99999, -99999, it });
+    auto ins = boxes.emplace(node, ObjBox{ 99999, 99999, -99999, -99999, it, 0 });
     ObjBox& bx = ins.first->second;
+    if (it->fps_anchor) bx.anchor = 1;
     for (int k = 0; k < nv; k++) {
       if (it->xs[k] < bx.x0) bx.x0 = it->xs[k]; if (it->xs[k] > bx.x1) bx.x1 = it->xs[k];
       if (it->ys[k] < bx.y0) bx.y0 = it->ys[k]; if (it->ys[k] > bx.y1) bx.y1 = it->ys[k];
     }
   }
+  int nbb = 0; for (auto& kv : boxes) if (kv.second.anchor) nbb++;
   for (auto& kv : boxes) {
     ObjBox& bx = kv.second;
     if (bx.x1 <= bx.x0 || bx.y1 <= bx.y0) continue;
@@ -110,8 +112,8 @@ static void objid_overlay(RenderQueue* q, Core* core) {
     objid_hex(core, bx.ref, kv.first & 0xFFFF, 4, bx.x0 + 1, bx.y0 + 1, 1);       // id at top-left
   }
   if (dolog)
-    fprintf(stderr, "[objid] --- world prims=%d noded=%d objects=%d (n=%d) ---\n",
-            nworld, nnoded, (int)boxes.size(), n0);
+    fprintf(stderr, "[objid] --- world prims=%d noded=%d objects=%d (billboards=%d) (n=%d) ---\n",
+            nworld, nnoded, (int)boxes.size(), nbb, n0);
 }
 
 // The render queue is THE render path — one behavior, the PC game. No env gate (user directive
