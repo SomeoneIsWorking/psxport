@@ -6988,3 +6988,44 @@ override IS registered; verified inert + no regression during boot/field (builds
 `saveverify` gate fires + verifies the moment the menu IS navigated. (Build gotcha: the shared scratch/obj
 object cache was contaminated by a parallel worktree's game_tomba2.o → undefined `sound_register`; built into
 a private object dir to isolate — the parallel-subagents OBJDIR rule.)
+## later-207 — SOUND front-end owned as a PC-game audio module (engine/sound.cpp)
+Lifted the game's sound-TRIGGER API (the SFX/BGM trigger functions the game logic calls, wrapping libsnd)
+into a clean PC-game audio module `engine/sound.cpp` (`sound_play_sfx`/`sound_play_bgm`/`sound_stop_bgm`,
+registered via `sound_register()` — one line in game_tomba2.cpp). The SPU hardware was already native; this
+is the trigger/state layer above it.
+
+RE (tools/disas.py; jump tables dumped from MAIN.EXE):
+- **FUN_80074590 = the SFX / song-id ROUTER** (`t2_call3(0x80074590, id, ...)`). id>=0x70 → a fixed 16-entry
+  id->song map (jump table 0x80016c04, all entries just call FUN_80074BF8 with a constant song: id 0x70→bgm2,
+  0x71→bgm3, … 0x79→bgm13, 0x7d/0x7e→ret0, 0x7f→FUN_80074eec). id<0x70 → the real per-effect SFX path
+  (reads descriptor tables 0x800a4d18/0x800a4ef8 for pan/vol, `jal 0x80075e04` submit leaf). **OWNED native**
+  — pure control flow; the id router + bounds reimplemented in C, the descriptor sub-path kept dispatched
+  (it funnels into the same 0x80075e04 leaf → identical SPU). `soundverify` gate (full RAM+scratchpad A/B vs
+  rec_super_call) = **0-diff over 800+ live calls** (menu/cursor/action SFX firing while walking the seaside
+  field). FIRES: per-frame on object actions; the 0x72→bgm4 etc. BGM entries route through the BGM override.
+- **FUN_80074BF8 = BGM START** / **FUN_80074E48 = BGM STOP**. Full RE in the module comment: classify the
+  requested song vs current song (state writes to 0x800bed80 song + 0x800be22a request byte), stop the old
+  seq, then drive the libsnd sequencer leaves (SsUt bank-set 0x800963a0, SsSeqSetVol 0x80091f50, SsSeqPlay
+  0x80090560, SsSeqStop 0x80091af0) per the seq-slot table 0x800be368 (stride 8: +0 handle, +4 vcount whose
+  low byte is the bank) and reset the per-voice table 0x800be238 (stride 12, word0=-1) / voice-count 0x800bed78.
+
+BOUNDARY CALL (not a bandaid — documented): I first reimplemented the BGM start/stop bodies fully native
+(control flow + state writes owned, the 5 libsnd leaves rec_dispatched in exact order). The `soundverify`
+A/B caught a REAL divergence I could NOT close: for vcount-14 songs the per-voice table 0x800be238 ends up
+HALF-written through the *dispatched* SsSeqPlay (the leaf decides per-voice keep/kill from its own internal
+voice state, which the gen body sets up via the EXACT inline register/call context; a native re-drive that
+dispatches the leaf does not reproduce that voicetab side-effect bit-for-bit). That is exactly the "it's a
+leaf, keep it dispatched" case in THE BOUNDARY — BGM start/stop ARE libsnd-sequencer glue. So the OWNED-native
+trigger surface is the SFX/song ROUTER (pure control flow, 0-diff), and BGM start/stop are **engine-glue
+super-call wrappers**: the wrapper owns the ENGINE-facing contract (the instant-CD dialog-music cut hook
+`xa_music_cut_if_dialog`, moved here from native_boot ov_bgm_start; + the clean API), and the gen body runs
+as the live sequencer via rec_super_call. The native BGM bodies + their RE are retained in sound.cpp as the
+documented reference for a future deeper pass (own the libsnd voice allocator too), clearly marked NOT
+registered. Verified live: `bgm 4` sets song@0x800bed80=4, `bgmstop` clears it to 0xFFFF; Tomba walks normally
+(master X → 0x17704900 holding right).
+
+Cleanup: removed the now-superseded `ov_bgm_start`/`ov_bgm_stop` wrappers + their registrations from
+native_boot.cpp (the dialog-cut hook + REPL bgm/bgmstop routing moved to / through sound.cpp). Added
+engine/sound.cpp to run.sh + tools/build_port.sh SRC lists (in sync). DEAD END recorded: dispatching the
+libsnd SEQ leaves does not bit-reproduce their voicetab bookkeeping — don't re-attempt a native BGM-start
+body without ALSO owning the SsSeqPlay/voice-allocator leaf.

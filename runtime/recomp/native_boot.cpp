@@ -146,32 +146,12 @@ static void native_scheduler_step(Core* c) {
   static_cast<R3000&>(*c) = loop;             // restore the frame-loop REGISTERS (shared RAM untouched)
 }
 
-// ---- BGM start/stop diagnostic (PSXPORT_BGMDBG=1) --------------------------------------------
-// FUN_80074BF8(idx) starts BGM #idx (writes the current-song index 0x800bed80, plays the seq);
-// FUN_80074E48() stops the current BGM (sets 0x800bed80=0xFFFF). Tomba2's gameplay BGM is silent
-// in this port because the start IS reached (idx written) but an immediate STOP clears it. Log
-// each call with the caller (ra), arg, and the index before/after to find the spurious stopper.
-volatile uint32_t g_bgm_frame = 0;   // current logic frame (extern: cd_override.c trace)
+// ---- BGM frame counter (PSXPORT_BGMDBG trace shared with cd_override.cpp) --------------------
+// FUN_80074BF8(idx) starts BGM #idx; FUN_80074E48() stops it. These are now OWNED PC-native by
+// engine/sound.cpp (sound_register), which also carries the instant-CD dialog-music cut hook. Only
+// the shared frame counter remains here (cd_override.cpp externs it for its own BGM trace).
+volatile uint32_t g_bgm_frame = 0;   // current logic frame (extern: cd_override.cpp trace)
 void rec_super_call(Core*, uint32_t);   // interpret the original PSX body (A/B oracle / super-call)
-void xa_music_cut_if_dialog(Core*);   // cd_override.c: stop looping ingame music when a dialog tone starts
-static int s_bgmdbg = -1;
-static void ov_bgm_start(Core* c) {
-  if (s_bgmdbg < 0) s_bgmdbg = (cfg_str("PSXPORT_BGMDBG") ? atoi(cfg_str("PSXPORT_BGMDBG")) : 0);
-  if (s_bgmdbg) fprintf(stderr, "[bgmdbg] f%u BGM_START(idx=0x%02X) ra=%08X  idx@800bed80(before)=0x%04X\n",
-                        g_bgm_frame, c->r[4] & 0xFF, c->r[31], c->mem_r16(0x800bed80));
-  rec_super_call(c, 0x80074BF8u);
-  // Dialog-tone songs (current-song 4..7) cut the looping ingame music SYNCHRONOUSLY here — at the
-  // song-start, before this frame's audio mix — so it can't leak a frame past the dialog start
-  // (the per-frame xa_dialog_coord stop is one frame late vs the audio mix). Instant-CD mod.
-  xa_music_cut_if_dialog(c);
-  if (s_bgmdbg) fprintf(stderr, "[bgmdbg]   -> idx@800bed80(after)=0x%04X\n", c->mem_r16(0x800bed80));
-}
-static void ov_bgm_stop(Core* c) {
-  if (s_bgmdbg < 0) s_bgmdbg = (cfg_str("PSXPORT_BGMDBG") ? atoi(cfg_str("PSXPORT_BGMDBG")) : 0);
-  if (s_bgmdbg) fprintf(stderr, "[bgmdbg] f%u BGM_STOP ra=%08X  idx@800bed80(before)=0x%04X\n",
-                        g_bgm_frame, c->r[31], c->mem_r16(0x800bed80));
-  rec_super_call(c, 0x80074E48u);
-}
 
 // ONE frame of deterministic guest work — the steppable core of the native frame loop, factored out so
 // the in-process dual-core diff can step TWO cores in lockstep (it calls this on `a` then `b`). It is
@@ -421,10 +401,10 @@ static void ov_game_main(Core* c) {
   // gpu_present + audio + satisfies the vblank pacing dwell. PSXPORT_NATIVE_FRAMES caps the
   // run (headless). ---
   rec_set_override(0x80080880u, ov_switch);    // ChangeThread -> native task switch (capture+longjmp)
-  // Always on: ov_bgm_start cuts the looping ingame music when a dialog tone starts (instant-CD mod);
-  // both also trace BGM start/stop callers under PSXPORT_BGMDBG.
-  rec_set_override(0x80074BF8u, ov_bgm_start);
-  rec_set_override(0x80074E48u, ov_bgm_stop);
+  // BGM start/stop (FUN_80074BF8 / FUN_80074E48) are now OWNED PC-native by engine/sound.cpp
+  // (sound_register, called from games_tomba2_init). The instant-CD "cut looping ingame music when a
+  // dialog tone starts" hook (xa_music_cut_if_dialog) moved into ov_sound_play_bgm there. The REPL
+  // `bgm`/`bgmstop` commands still rc1/rc0 those addresses directly (now routed through the overrides).
 
   // Frame budget: an explicit PSXPORT_NATIVE_FRAMES always wins (headless tests). Otherwise, when
   // a window is up this is the real interactive game loop — run until the user closes the window

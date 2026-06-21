@@ -141,6 +141,18 @@ for content fns (call it). Do NOT mimic PSX hardware (GTE/GP0/OT) — remove Bee
 
 ## D. Per-frame GAMEPLAY systems (inside the GAME stage loop)
 - ✅ `FUN_800788ac` frame update = `ov_frame_update` (pad read + present + audio kick) — game_tomba2.cpp.
+- ✅ **SOUND front-end (engine/sound.cpp, later-207)** — the game's SFX/BGM TRIGGER API (the functions the
+  game logic calls to play a sound / start-stop BGM; wraps libsnd — the SPU is already native). Clean PC-game
+  audio module: `sound_play_sfx`/`sound_play_bgm`/`sound_stop_bgm`, `sound_register()` (one line in
+  game_tomba2.cpp). ✅ `FUN_80074590` SFX / song-id ROUTER = `ov_sound_play_sfx` — OWNED PC-native (id->song
+  map + bounds; descriptor SFX sub-path + the 0x80075e04 submit leaf kept dispatched). `soundverify` full
+  RAM+scratchpad A/B 0-diff over 800+ live calls (menu/cursor/action SFX). ◐ `FUN_80074BF8`/`FUN_80074E48`
+  BGM start/stop = `ov_sound_play_bgm`/`ov_sound_stop_bgm` — engine-glue super-call WRAPPERS (own the
+  instant-CD dialog-music cut hook + the clean API; the gen body runs as the live libsnd sequencer because
+  its voicetab @0x800be238 state is co-evolved with the SsSeqPlay/SsSeqStop LEAVES — a native re-drive that
+  dispatches the leaf can't reproduce the leaf's per-voice bookkeeping bit-for-bit, so they stay sequencer
+  glue per THE BOUNDARY). Native BGM bodies + full RE retained in sound.cpp as the documented reference for a
+  future pass (own the SsSeqPlay voice allocator too). Replaces native_boot ov_bgm_start/stop.
 - ✅ `FUN_8007a904` object/entity WALK = `ov_objwalk` (engine_tomba2.cpp) — the per-frame object driver.
 - ✅ `FUN_8007712c` per-object CULL / LOD = `ov_object_cull` (game_tomba2.cpp). **BODY now PC-native
   (later-188)** — was a `rec_super_call` WRAP (recomp body ran hot, ~11.2% of sampled interp time); now
