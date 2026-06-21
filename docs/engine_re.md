@@ -1012,3 +1012,61 @@ state (e.g. attract/demo start), because their boot timings differ so frame numb
 an observable guest-RAM latch — e.g. the stage var `native_boot` prints as `stage=DEMO 0x801062E4`, or the
 documented scene latch `0x800BE258==2`. Gate both cores to that latch, then diff GP0 stream / VRAM /
 framebuffer there. Extends the existing `tools/drive.py` + `docs/diff-driver.md`.
+
+## Move-and-collide (per-object physics) — RE TRACE + ownership analysis (2026-06-21)
+Goal was to own a clean PC-native "pos += vel; gravity; query grid; clamp" integrator as `engine/
+physics.cpp`. **Finding: Tomba!2 has NO single shared velocity+gravity integrator.** The move-and-collide
+layer is a *family of angle+speed grid-SLIDE probes*, and the velocity→displacement + gravity step lives,
+per-object, inside the state-machine handlers — there is no shared routine to lift cleanly.
+
+### The owned collision-GRID query family (already native — `engine/collision.cpp`)
+`FUN_80049968` grid row-pointer setup · `FUN_80047CBC` cell query/neighbor-walk · `FUN_800498C8` resolve
+loop · `FUN_8004798C` per-step origin/index · `FUN_80031780` list-tail. All scratchpad-only (table base
+`0x1F8001C8`, probe coords `0x1F8001BC/BE/C0`, result tag `0x1F8001A6`, cell cursors `0x1F8001E0/E8/EC`).
+These are the GRID; the response/integration layer is the CONSUMER below.
+
+### The move-and-collide RESPONSE family (consumers of grid_resolve `FUN_800498C8`)
+Discovered by scanning `jal 0x800498C8` and their callers. All take a **displacement/speed + angle**, NOT a
+velocity field, and derive the world step from the object's **angle field `+0x56`** via the engine's
+fixed-point trig:
+- `FUN_80046A44` — the canonical/most-general probe (callers: `FUN_80024448`, `FUN_8005D530`,
+  `FUN_80062D8C`). Sig `(obj a0, speed a1, ystep a2, maxiter a3)`. Loops up to `a3` iterations: step =
+  `rsin/rcos(angle 0x56)*speed >>12`; writes probe pos to scratch `0x1BC/1BE/1C0`; calls grid_resolve
+  `0x800498C8`; on hit computes slide direction with **atan2 `FUN_80085690`**, picks a slide axis (tags
+  0x4/0x8), sub-steps via helper `FUN_8004602C` (itself a grid walk over `0x1F8001E0`), then writes the
+  resolved position back to guest **`+0x2E` (X), `+0x36` (Z)**, and `+0x32` (Y) on the floor-snap branch
+  (`0x1F8001A6 & 0x400` → add `0x1F8001C4`). Returns `(tag>>9)&3`. Callees: `0x80083E80` rsin,
+  `0x80083F50` rcos, `0x80085690` atan2, `0x800498C8` grid_resolve, `0x8004602C` slide helper.
+- `FUN_8004766C` — resolve-in-place (15 callers, e.g. `0x8003FBC4`, `0x80041194`, `0x80055D5C`,
+  `0x80069860`, `0x80080424`). Loads obj pos `+0x2E/+0x32/+0x36` → scratch, runs grid_setup(`+0x2A`)+
+  grid_query, follows grid links updating layer field `+0x2A`, then `FUN_80048134`/`FUN_80048034`
+  (sub-cell offset + link walk, scratchpad-only) and writes resolved pos back to `+0x2E/+0x36`. No velocity;
+  pure snap-to-grid of the CURRENT position.
+- Directional probes `FUN_800455C0`/`80045B30`/`80045CAC`/`800468AC`/`80046E2C`/`80047468`/`800492B0`/
+  `80049418` (+ thin wrappers `FUN_80049250/80049280/8004951C/…` that pass `obj, dx, dy, angle 0x56`).
+  Each tests one direction and snaps a single axis (`+0x32` Y for floor, `+0x2E/+0x36` for walls).
+
+### Object physics fields (guest node)
+Position: `+0x2E` X, `+0x32` Y, `+0x36` Z (all `sh`, fixed). Heading/angle: `+0x56` (12-bit, period 4096).
+Velocity (read only in the SM handlers, e.g. `FUN_80024448`): `+0x66` (lh, X-vel), `+0x68` (lhu, Y-vel),
+`+0x6A/+0x6C` seen as related. Floor/grid layer: `+0x2A`. Floor-type/state out: `+0x17D`, `+0x164`. The
+integration `pos += f(vel); gravity` is done by each SM case *before* calling a probe — e.g. `FUN_80024448`
+reads `+0x66/+0x68`, negates Y, picks dir from `+0x17E`, then calls `FUN_80046A44`.
+
+### Engine fixed-point trig (used by the probes — keep dispatched)
+`FUN_80083E80` = rsin, `FUN_80083F50` = rcos → core `FUN_80083EBC`: 4096-entry sine table at **`0x800A5AF0`**
+with quadrant folding, 12-bit angle. `FUN_80085690` = fixed-point atan2. These are the angle primitives;
+the probes' position output is byte-derived from them.
+
+### Why physics.cpp was NOT shipped (per the "can't cleanly isolate → return the trace" clause)
+The move-and-collide is intrinsically the iterative grid-SLIDE algorithm in `FUN_80046A44`, whose guest
+position bytes (`+0x2E/+0x32/+0x36`) the still-recomp AI reads back. Reproducing those bytes EXACTLY (the
+content-interface gate: full RAM + scratchpad 0-diff) requires reproducing the exact `>>12` fixed-point
+rsin/rcos-table math, the atan2 slide pick, and the sub-step helper `FUN_8004602C`'s grid walk — i.e. a
+MIPS-faithful transcription, which the methodology explicitly rejects as the deliverable ("a native function
+that merely reproduces the PSX body byte-for-byte is still PSX-simulation"). There is no clean `pos+=vel;
+gravity` integrator to lift, because that part is per-SM, not shared. A correct native ownership here means
+owning a per-object STATE MACHINE end-to-end (its velocity/gravity update AND its probe call), which is a
+different, larger unit than "a physics integration step" — to be scoped as an SM-handler port, not a shared
+physics module. Recommended next target: own one concrete actor SM (e.g. `FUN_80024448`'s owner) including
+its `+0x66/+0x68` velocity update + gravity + the `FUN_80046A44` call, gating on RAM+scratchpad 0-diff.
