@@ -188,6 +188,24 @@ for content fns (call it). Do NOT mimic PSX hardware (GTE/GP0/OT) — remove Bee
   reg): 0-diff over 10000+ calls with movement in all 4 directions (exercises every step branch). GOTCHAs:
   delay-slot writes (sh[0x1A8]=a2 then conditionally =0); a1 reloaded to scratchpad base mid-fn (t5=SP);
   L_f9c uses (int16)t1*4 for the row index but FULL t0 for the column add.
+- ✅ **later-196 — `FUN_8004CE14` `ov_script_vm_4ce14` (per-object SCRIPT-VM tick — THE most-called field
+  fn, ~14900 calls/run).** First CONTENT state machine owned after the boundary removal. Dispatch on state
+  byte obj[4]: 2→no-op; 3→jal 0x8007A624; >3→no-op; 0→ if global 0x800BF873!=0 set obj[4]=3 & return, else
+  INIT (obj[4]=1, obj[0]=1, load behavior fn-ptr from table 0x800A3F00[obj[3]] into cursor obj[108],
+  obj[116]=0, jal 0x8004B354(obj,0)) then fall into state 1. State 1: a pause/mode gate (globals
+  0x800BF870/871 + scratchpad 0x1F800207 + per-obj run-cond obj[3]) then a 16-byte-stride command loop at
+  cursor obj[108]: opcode 0xFF terminates; flag byte s4[2] bit7 selects predicate 0x8004D7EC(clr)/0x8004D868
+  (set), gated by per-slot mask obj[116]&(1<<idx); a passing slot runs 0x80111CCC(s4[12]) (when
+  0x800BF870==1 && 0x800BF871>=15) or the cull/anim 0x80077ACC(obj,s4[4],s4[6],s4[8]); nonzero return ORs the
+  slot bit into obj[112]. Terminator: obj[106]=slot count, obj[11]=31, obj[1]=1, jal 0x80077EFC. **CONTROL
+  FLOW + memory ops owned native; every jal sub-behavior stays interpreted via rec_dispatch (each honors its
+  own override identically in the super-call path).** Verified with a FULL RAM+scratchpad A/B gate `scriptvm`
+  (each path runs once from one checkpoint; the native run is rolled back; FUN_8004CE14's OWN 56-byte stack
+  frame [sp-56,sp) excluded — gen saves regs there, native never touches the guest stack): **0-diff over
+  3000+ calls** with movement in all 4 directions (state-0 init + state-1 loop both predicates + cull-exec +
+  terminator). Rarer paths (0x80111CCC, state 3, G0==6) transcribed from disasm, verify when a scene drives
+  them. GOTCHA: the state-0 gate is INVERTED from the obvious read (`beq v0,zero` → gate==0 is the INIT path,
+  gate!=0 sets obj[4]=3) — got this backwards first, caught by the A/B.
 - ✅ `FUN_80051C8C` per-object TRANSFORM build = `ov_build_xform`.
 - **Camera update (engine_camera.cpp):**
   - ✅ position X/Z `FUN_8006d960` = `ov_cam_track_xz`; ✅ position Y `FUN_8006da54` = `ov_cam_track_y` (later-174).
