@@ -469,27 +469,58 @@ static void init_vk(void) {
     fprintf(stderr, "[gpu_vk] SDL_Vulkan_CreateSurface failed: %s\n", SDL_GetError()); exit(2);
   }
 
-  // pick a physical device with a graphics(+present, unless headless) queue family
+  // Pick a physical device with a graphics(+present, unless headless) queue family. Among the suitable
+  // ones PREFER real hardware: discrete > integrated > virtual > other > CPU. This matters on systems
+  // where the loader also exposes a SOFTWARE ICD (SwiftShader/llvmpipe, or a CPU MoltenVK config) — the
+  // old "first suitable device" pick could silently land on a software rasterizer. We also LOG the chosen
+  // device's name + type so "is it actually software rendering?" is answerable from the boot output (on
+  // macOS this should read the Apple GPU via MoltenVK as INTEGRATED/DISCRETE, never CPU).
   uint32_t pn = 0; vkEnumeratePhysicalDevices(s_inst, &pn, 0);
   VkPhysicalDevice* phys = (VkPhysicalDevice*)malloc(sizeof *phys * pn);
   vkEnumeratePhysicalDevices(s_inst, &pn, phys);
   int dev_portability = 0;
   s_phys = VK_NULL_HANDLE;
-  for (uint32_t i = 0; i < pn && s_phys == VK_NULL_HANDLE; i++) {
+  int best_score = -100; VkPhysicalDeviceProperties best_props = {};
+  auto type_score = [](VkPhysicalDeviceType t) -> int {
+    switch (t) {
+      case VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU:   return 4;
+      case VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU: return 3;
+      case VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU:    return 2;
+      case VK_PHYSICAL_DEVICE_TYPE_OTHER:          return 1;
+      case VK_PHYSICAL_DEVICE_TYPE_CPU:            return 0;   // software rasterizer — last resort
+      default:                                     return 1;
+    }
+  };
+  for (uint32_t i = 0; i < pn; i++) {
     uint32_t qn = 0; vkGetPhysicalDeviceQueueFamilyProperties(phys[i], &qn, 0);
     VkQueueFamilyProperties* qf = (VkQueueFamilyProperties*)malloc(sizeof *qf * qn);
     vkGetPhysicalDeviceQueueFamilyProperties(phys[i], &qn, qf);
+    int found_q = -1;
     for (uint32_t q = 0; q < qn; q++) {
       VkBool32 present = 0;
       if (!s_headless) vkGetPhysicalDeviceSurfaceSupportKHR(phys[i], q, s_surf, &present);
-      if ((qf[q].queueFlags & VK_QUEUE_GRAPHICS_BIT) && (s_headless || present)) {
-        s_phys = phys[i]; s_qfam = q; break;
-      }
+      if ((qf[q].queueFlags & VK_QUEUE_GRAPHICS_BIT) && (s_headless || present)) { found_q = (int)q; break; }
     }
     free(qf);
+    if (found_q < 0) continue;
+    VkPhysicalDeviceProperties props; vkGetPhysicalDeviceProperties(phys[i], &props);
+    int score = type_score(props.deviceType);
+    if (score > best_score) { best_score = score; s_phys = phys[i]; s_qfam = (uint32_t)found_q; best_props = props; }
   }
   free(phys);
   if (s_phys == VK_NULL_HANDLE) { fprintf(stderr, "[gpu_vk] no suitable GPU\n"); exit(2); }
+  { const char* tn = "?";
+    switch (best_props.deviceType) {
+      case VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU:   tn = "DISCRETE_GPU"; break;
+      case VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU: tn = "INTEGRATED_GPU"; break;
+      case VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU:    tn = "VIRTUAL_GPU"; break;
+      case VK_PHYSICAL_DEVICE_TYPE_CPU:            tn = "CPU (SOFTWARE!)"; break;
+      default:                                     tn = "OTHER"; break;
+    }
+    fprintf(stderr, "[gpu_vk] device: %s  [%s]\n", best_props.deviceName, tn);
+    if (best_props.deviceType == VK_PHYSICAL_DEVICE_TYPE_CPU)
+      fprintf(stderr, "[gpu_vk] WARNING: selected a CPU/software Vulkan device — no hardware GPU was available.\n");
+  }
 
   uint32_t den = 0; vkEnumerateDeviceExtensionProperties(s_phys, 0, &den, 0);
   VkExtensionProperties* de = (VkExtensionProperties*)malloc(sizeof *de * den);
