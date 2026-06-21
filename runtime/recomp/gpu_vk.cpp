@@ -20,6 +20,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include <time.h>             // clock_gettime — CPU-side per-frame timing for the `vkprof` channel
 #include "gpu_vk_shaders.h"   // generated: spv_present_vert / spv_present_frag (tools/gen_vk_shaders.sh)
 #include "mods.h"             // g_mods: live PC-native mod toggles (wide/ires/ssao/light), seeded from cfg
 #include "imgui_overlay.h"    // ImGui mod-toggle overlay (no-op until init'd; windowed only)
@@ -73,6 +74,30 @@ static VkCommandPool   s_cpool;
 static VkCommandBuffer s_cmd;
 static VkSemaphore     s_sem_acq, s_sem_rel[MAX_SWAP];   // release: one per swapchain image (spec-correct reuse)
 static VkFence         s_fence;
+
+// ---- `vkprof` profiling channel (PSXPORT_DEBUG=vkprof / REPL `debug vkprof`) -------------------------
+// GPU time via a 2-slot timestamp query pool (write TOP at cmd begin, BOTTOM at cmd end; read the PREVIOUS
+// frame's pair right after this frame's fence wait, so no extra stall). CPU phase times via clock_gettime.
+// Prints a rolling average every 60 frames. This directly answers "where does render time go" — and on
+// MoltenVK exposes whether the per-frame full-VRAM CPU->GPU upload + per-batch VRAM-snapshot copies dominate.
+static VkQueryPool     s_tspool;          // 2 timestamps
+static double          s_ts_period_ns;    // VkPhysicalDeviceLimits.timestampPeriod (ns per tick); 0 = unsupported
+static int             s_ts_validbits;    // queue family timestampValidBits; 0 = no GPU timing
+static int             s_ts_primed;       // a prior frame wrote timestamps -> safe to read
+static int             s_vkprof = -1;     // cached cfg_dbg("vkprof") (re-checked lazily)
+static long            s_vp_frames;
+static double          s_vp_gpu_ms, s_vp_upload_ms, s_vp_record_ms, s_vp_submit_ms;
+static long            s_vp_tri, s_vp_tex, s_vp_semi;
+static inline double now_ms() { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec * 1e3 + t.tv_nsec / 1e6; }
+static void vkprof_tick() {
+  if (++s_vp_frames < 60) return;
+  double n = s_vp_frames;
+  fprintf(stderr, "[vkprof] %.0ff avg: GPU %.2fms | CPU upload %.2f rec %.2f submit %.2f | prims tri %ld tex %ld semi %ld%s\n",
+          n, s_vp_gpu_ms / n, s_vp_upload_ms / n, s_vp_record_ms / n, s_vp_submit_ms / n,
+          s_vp_tri / (long)n, s_vp_tex / (long)n, s_vp_semi / (long)n, s_tspool ? "" : "  (no GPU timestamps)");
+  s_vp_frames = 0; s_vp_gpu_ms = s_vp_upload_ms = s_vp_record_ms = s_vp_submit_ms = 0;
+  s_vp_tri = s_vp_tex = s_vp_semi = 0;
+}
 
 // GPU VRAM image (R16_UINT 1024x512) + host-visible staging (upload) + readback
 static int             s_tex_undef;
@@ -641,6 +666,20 @@ static void init_vk(void) {
   VkFenceCreateInfo fci = { VK_STRUCTURE_TYPE_FENCE_CREATE_INFO, 0, VK_FENCE_CREATE_SIGNALED_BIT };
   VKC(vkCreateFence(s_dev, &fci, 0, &s_fence));
 
+  // vkprof: GPU timestamp support (period from device limits, valid bits from the queue family).
+  { VkPhysicalDeviceProperties pp; vkGetPhysicalDeviceProperties(s_phys, &pp);
+    s_ts_period_ns = pp.limits.timestampPeriod;
+    uint32_t qn = 0; vkGetPhysicalDeviceQueueFamilyProperties(s_phys, &qn, 0);
+    VkQueueFamilyProperties* qf = (VkQueueFamilyProperties*)malloc(sizeof *qf * qn);
+    vkGetPhysicalDeviceQueueFamilyProperties(s_phys, &qn, qf);
+    s_ts_validbits = (s_qfam < qn) ? (int)qf[s_qfam].timestampValidBits : 0;
+    free(qf);
+    if (s_ts_period_ns > 0 && s_ts_validbits > 0) {
+      VkQueryPoolCreateInfo qpi = { VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO };
+      qpi.queryType = VK_QUERY_TYPE_TIMESTAMP; qpi.queryCount = 2;
+      VKC(vkCreateQueryPool(s_dev, &qpi, 0, &s_tspool));
+    } }
+
   create_vram();
   void create_tri_pipeline(void); create_tri_pipeline();
   void panels_init(void); panels_init();
@@ -1099,12 +1138,24 @@ void GpuVkState::present(const uint16_t* src, int sx, int sy, int w, int h) {
   wide_init();
   s_present_sx = sx; s_present_sy = sy;   // faithful display origin (pre use_fb override) for the LIGHT screen map
   imgui_overlay_new_frame();   // CPU-build the mod-toggle UI for this frame (no-op if overlay not inited)
+  // vkprof: re-check the channel each frame (present runs from boot, before the REPL `debug` is processed).
+  int vp = cfg_dbg("vkprof");
   // Mirror the whole CPU VRAM (s_vram/s_interp) into the GPU R16_UINT image (M1: SW still rasterizes;
   // M2+ will draw into this image directly and skip the upload for drawn regions). The display region
   // [sx,sy,w,h] is selected at sample time via the present push constant.
+  double t_up = vp ? now_ms() : 0;
   memcpy(s_stage_ptr, src, (size_t)VRAM_W * VRAM_H * 2);
+  if (vp) s_vp_upload_ms += now_ms() - t_up;
 
   VKC(vkWaitForFences(s_dev, 1, &s_fence, VK_TRUE, UINT64_MAX));
+  // vkprof: the fence wait guarantees the PREVIOUS frame's GPU work (and its timestamps) is complete.
+  if (vp && s_tspool && s_ts_primed) {
+    uint64_t ts[2] = {0, 0};
+    if (vkGetQueryPoolResults(s_dev, s_tspool, 0, 2, sizeof ts, ts, sizeof(uint64_t), VK_QUERY_RESULT_64_BIT) == VK_SUCCESS) {
+      uint64_t mask = (s_ts_validbits >= 64) ? ~0ull : ((1ull << s_ts_validbits) - 1);
+      s_vp_gpu_ms += (double)((ts[1] & mask) - (ts[0] & mask)) * s_ts_period_ns / 1e6;
+    }
+  }
   uint32_t idx = 0;
   if (!s_headless) {
     // Rebuild the swapchain whenever the window's real size no longer matches s_extent, so s_extent /
@@ -1126,19 +1177,27 @@ void GpuVkState::present(const uint16_t* src, int sx, int sy, int w, int h) {
   VkCommandBufferBeginInfo bi = { VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO };
   bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
   VKC(vkBeginCommandBuffer(s_cmd, &bi));
+  if (vp && s_tspool) { vkCmdResetQueryPool(s_cmd, s_tspool, 0, 2);
+                        vkCmdWriteTimestamp(s_cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, s_tspool, 0); }
 
   // The Panel uploads its persistent VRAM then renders (own depth occlusion). Single PC-native panel.
   s_npanels = 1;
   s_dbg_tri = s_tri_n; s_dbg_tex = s_tex_n; s_dbg_semi = s_semi_n;   // snapshot for gpu_vk_stats (vkstats probe)
+  if (vp) { s_vp_tri += s_tri_n; s_vp_tex += s_tex_n; s_vp_semi += s_semi_n; }
+  double t_rec = vp ? now_ms() : 0;
   for (int i = 0; i < s_npanels; i++) { panel_upload(&s_panels[i]); panel_render(&s_panels[i]); }
+  if (vp) s_vp_record_ms += now_ms() - t_rec;
 
   // Headless (offscreen): the frame is fully rendered into s_tex; there is no swapchain to present to.
   // End + submit the geometry command buffer (signaling s_fence) and return; vk_dump/readback reads s_tex.
   if (s_headless) {
+    if (vp && s_tspool) { vkCmdWriteTimestamp(s_cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, s_tspool, 1); s_ts_primed = 1; }
     VKC(vkEndCommandBuffer(s_cmd));
     VkSubmitInfo su = { VK_STRUCTURE_TYPE_SUBMIT_INFO };
     su.commandBufferCount = 1; su.pCommandBuffers = &s_cmd;
+    double t_sub = vp ? now_ms() : 0;
     VKC(vkQueueSubmit(s_queue, 1, &su, s_fence));
+    if (vp) { s_vp_submit_ms += now_ms() - t_sub; vkprof_tick(); }
     // Headless readback (vkshot / gpu_vk_shot) reads s_last_*; when wide/hi-res the geometry rendered into
     // the scaled scratch FB, so report THAT region (mirrors the windowed use_fb() override below and
     // gpu_vk_dump). Without this, a headless wide shot crops to the 4:3 (320) display region and the
@@ -1185,7 +1244,9 @@ void GpuVkState::present(const uint16_t* src, int sx, int sy, int w, int h) {
   }
   imgui_overlay_render(s_cmd);   // draw the mod-toggle overlay on top (no-op if not inited)
   vkCmdEndRenderPass(s_cmd);
+  if (vp && s_tspool) { vkCmdWriteTimestamp(s_cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, s_tspool, 1); s_ts_primed = 1; }
   VKC(vkEndCommandBuffer(s_cmd));
+  double t_sub = vp ? now_ms() : 0;
 
   VkPipelineStageFlags wait = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
   VkSubmitInfo su = { VK_STRUCTURE_TYPE_SUBMIT_INFO };
@@ -1200,6 +1261,7 @@ void GpuVkState::present(const uint16_t* src, int sx, int sy, int w, int h) {
   VkResult pres = vkQueuePresentKHR(s_queue, &pr);
   if (pres == VK_ERROR_OUT_OF_DATE_KHR || pres == VK_SUBOPTIMAL_KHR) recreate_swapchain();
   else if (pres != VK_SUCCESS) { fprintf(stderr, "[gpu_vk] present %d\n", pres); exit(2); }
+  if (vp) { s_vp_submit_ms += now_ms() - t_sub; vkprof_tick(); }
 
   poll_quit();
 }
