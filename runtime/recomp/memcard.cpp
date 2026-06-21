@@ -214,6 +214,67 @@ static void ov_card_write(Core* c) {
 // already completed synchronously, always report bit0 set (transfer complete, no error).
 static void ov_card_status(Core* c) { c->r[V0] = 1; }
 
+// ---- libcard ASYNC single-frame I/O (the SAVE / LOAD path) -------------------------------------
+// THE SAVE-HANG ROOT CAUSE (RE'd from scratch/decomp/ram_f1000_all.c):
+//   Tomba!2's save/load does NOT use the synchronous frame wrapper FUN_8009C2B0 (that one is called
+//   ONLY by the FORMAT routine FUN_8009C3F4). It uses Sony libcard's ASYNC single-frame API, whose
+//   statically-linked bodies live IN MAIN.EXE text (so they ARE recompiled/executed):
+//       FUN_8009BBFC(chan, sector, buf, n)  = _card_write  (async): installs a VBlank callback
+//           (FUN_8009BD84), kicks the BIOS write-frame send FUN_8009BF10 (B0:0x15), sets the libcard
+//           BUSY flag DAT_800ACF44 = 1, returns immediately.
+//       FUN_8009BC8C(chan, sector, buf, n)  = _card_read   (async): same shape via FUN_8009BEE0 (B0:0x12).
+//       FUN_8009BBEC()                       = _card_sync-ish: returns DAT_800ACF44 (the busy flag the
+//           save flow polls), cleared (=0) by the completion handler FUN_8009BD4C.
+//   The transfer is meant to finish over later VBlanks, driven by the SIO/card IRQ callback — which
+//   our no-IRQ HLE runtime NEVER fires. So FUN_8009BF10/FUN_8009BEE0 (B0:0x12/0x15) do nothing useful
+//   here (hle.cpp swallows B0:0x12-0x16 as "pad no-op"), the busy flag DAT_800ACF44 stays 1 forever,
+//   the completion event is never delivered, and the save screen waits on a frame that never completes
+//   -> the documented "saving hangs forever, has never worked" bug. (The card-CHECK works because it
+//   uses the synchronous frame path, not this async one.)
+//
+// FIX (PC-native, no IRQ to wait for): override the two async kick functions so the single 128-byte
+// frame transfer happens RIGHT NOW against the host card file, the busy flag is cleared immediately,
+// and the libcard completion event is delivered — exactly the post-transfer state the IRQ path would
+// have reached. The save flow then sees busy==0 + the event on its very next poll and completes.
+//
+// Arg ABI matches the low-level frame primitives (and FUN_8009C2B0): a0=chan, a1=sector, a2=buf.
+enum { A3 = 7 };
+static const uint32_t MC_BUSY_FLAG = 0x800ACF44u;   // DAT_800ACF44 — libcard async busy flag
+
+// FUN_8009BBFC _card_write(chan, sector, buf, n): write frame `sector` (128 B) from g_ram[buf] now,
+// clear the busy flag, deliver completion. (n/a3 is the BIOS callback selector — irrelevant to us.)
+static void ov_card_write_async(Core* c) {
+  uint32_t sector = c->r[A1], buf = c->r[A2];
+  uint8_t f[CARD_FRAME_SIZE];
+  for (uint32_t i = 0; i < CARD_FRAME_SIZE; i++) f[i] = c->mem_r8(buf + i);
+  card_write_frame(sector, f);
+  if (g_card_verbose)
+    fprintf(stderr, "[card] async write frame %u <- 0x%08X (a3=%X) ra=%08X\n", sector, buf, c->r[A3], c->r[31]);
+  c->mem_w8(MC_BUSY_FLAG, 0);   // transfer complete synchronously: clear libcard busy (DAT_800ACF44=0)
+  card_deliver_complete(c);     // SwCARD/HwCARD EvSpIOE — the save flow's per-frame completion wait
+}
+
+// FUN_8009BC8C _card_read(chan, sector, buf, n): read frame `sector` (128 B) into g_ram[buf] now,
+// clear the busy flag, deliver completion. Mirror of the write path (used by the LOAD flow).
+static void ov_card_read_async(Core* c) {
+  uint32_t sector = c->r[A1], buf = c->r[A2];
+  uint8_t f[CARD_FRAME_SIZE];
+  card_read_frame(sector, f);
+  for (uint32_t i = 0; i < CARD_FRAME_SIZE; i++) c->mem_w8(buf + i, f[i]);
+  if (g_card_verbose)
+    fprintf(stderr, "[card] async read  frame %u -> 0x%08X (a3=%X) ra=%08X\n", sector, buf, c->r[A3], c->r[31]);
+  c->mem_w8(MC_BUSY_FLAG, 0);   // transfer complete synchronously: clear libcard busy
+  card_deliver_complete(c);     // completion event for the load flow's wait
+}
+
+// FUN_8009BBEC _card_sync/busy-poll(): returns DAT_800ACF44. Our async I/O already cleared the flag
+// in the kick override, so reading the guest global is correct; we keep an explicit override as a
+// safety so a save flow that polls busy BEFORE issuing (or after a missed clear) never wedges — the
+// transfer is always already done in this synchronous model.
+static void ov_card_busy_poll(Core* c) {
+  c->r[V0] = c->mem_r8(MC_BUSY_FLAG);   // 0 = idle/complete (set 0 by the kick overrides)
+}
+
 // B0:0x4C _card_info(chan): the BIOS issues a "get card info" and delivers a completion event; the
 // card is always present + healthy here (host-backed), so accept and deliver completion immediately.
 static void ov_card_info(Core* c) { card_deliver_complete(c); c->r[V0] = 1; }
@@ -246,6 +307,13 @@ void card_overrides_init(void) {
   card_init();
   // Card B0 indices are serviced in the HLE B0 dispatch (recomp_hle -> card_hle_b0); no address
   // overrides (those BIOS addresses never run in the pure-HLE build).
+  //
+  // SAVE/LOAD: the async single-frame libcard API lives in MAIN.EXE text (recompiled & executed),
+  // so these ARE real overridable addresses (unlike the dead BIOS B0 vector bodies above). Without
+  // these the save hangs forever (no card IRQ to complete the async transfer) — see ov_card_*_async.
+  rec_set_override(0x8009BBFCu, ov_card_write_async);   // _card_write (async) -> sync host-file write + complete
+  rec_set_override(0x8009BC8Cu, ov_card_read_async);    // _card_read  (async) -> sync host-file read  + complete
+  rec_set_override(0x8009BBECu, ov_card_busy_poll);     // _card busy-poll -> reads DAT_800ACF44 (0 after sync I/O)
 }
 
 #endif // PSXPORT_CARD_NO_OVERRIDES
