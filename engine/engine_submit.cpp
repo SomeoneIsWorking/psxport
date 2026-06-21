@@ -1475,6 +1475,126 @@ void ov_tile_lookup(Core* c) {
   c->r[2] = mine;
 }
 
+// ============================================================================================
+// FUN_8013F4DC — per-object triangle-scan SOLID-TILE gatherer (0x8013f4dc..0x8013fadc). Hot field fn
+// (~11% — the profiler mislabeled it under FUN_8013F0DC; the anim/scale SM at 0x8013efa8 the handoff
+// named is actually cold, 3 calls/run). a0=object; a1/a2/a3 each point to a 2-word {x,y} corner. It
+// y-sorts the 3 corners, rasterizes the triangle scanline-by-scanline, and for every covered tile cell
+// whose attribute (the owned ov_tile_lookup at 0x8013fae0) is nonzero APPENDS the cell's tile id into
+// the object's list (obj[0x10 + 2*count], count byte at obj+6, capped 254) — the per-object solid-tile
+// broad-phase that the collision/interaction code reads. CLEAN INTEGER DATA feeding retained PSX
+// content → faithful exact-match port (same family as the owned ov_tile_lookup leaf), gated on the
+// CONTENT-INTERFACE bar: the gathered list must be bit-identical to the recomp body. NO render here.
+//
+// Structure (all 4 asm loop variants share one scanline body): s6 is ALWAYS the left-x 16.16
+// accumulator (s1 = s6>>16), s5 ALWAYS the right-x accumulator (s3 = s5>>16). The cross-product sign
+// (which side the middle vertex is on) only selects WHICH edge-gradient steps each accumulator:
+//   path A (cross>0): right(s5) follows the long edge A→C; left(s6) follows short A→B then B→C.
+//   path B (cross<=0): swapped — left(s6) follows A→C; right(s5) follows A→B then B→C.
+// The right accumulator s5 also gets a constant +0x10000 nudge before scanning (asm 0x8013f610 delay).
+static uint32_t s_tilescan_entry = 0;
+// One scanline at row s2, right end = s5>>16, left start = s6>>16 (mirrors asm 0x8013f6c8..0x8013f798).
+// The cell array (obj+0xC == *0x800ecf78, +4 past its {xbound,width} header) is row-major: the element
+// for column s1, row s2 lives at base+4 + 2*(s1*width + s2). The asm reaches it because its FIRST s0
+// advance (the `j 0x8013f788` entry) lands with v0 = the linear index s1*width+s2 (left in v0 by the
+// delay slot), so s0 += 2*(s1*width+s2); every later advance is the plain +2*width row step — leaving
+// s0 = base+4 + 2*(s1*width+s2) at each iteration. An EMPTY cell (0xFFFF/-1) is skipped — the dedup
+// `beq v1,v0` runs with v0 = -1, left in v0 by the loop-branch delay slot `addiu v0,zero,-1`
+// (0x8013f798) — as is a non-solid cell (ov_tile_lookup low16 == 0). Non-empty solid cells are
+// appended (capped 254).
+static inline void tilescan_scanline(Core* c, uint32_t obj, int s2, int s5, int s6) {
+  if (s2 < 0) return;                              // bltz s2 → skip (advance handled by caller)
+  int s3 = s5 >> 16;                               // right end x
+  int s1 = s6 >> 16;                               // left start x
+  int width = (int16_t)c->mem_r16(obj + 10);       // obj[10] (row stride + y-bound)
+  if (!(s2 < width)) return;                       // slt s2,width ; beq → skip scanline
+  int xb = (int16_t)c->mem_r16(obj + 8);           // obj[8] = x-bound
+  if (!(s3 < xb)) s3 = xb - 1;                     // clamp right to xb-1
+  if (s1 < 0) s1 = 0;                              // clamp left to 0
+  uint32_t base = c->mem_r32(0x800ecf78u) + 4;     // cell-array base past the 2-halfword header
+  for (; s1 <= s3; s1++) {
+    uint32_t s0 = base + 2u * (uint32_t)(s1 * width + s2);   // row-major (s1,s2) cell address
+    int v1 = (int16_t)c->mem_r16(s0);
+    if (v1 != -1) {                                // skip empty cell: dedup beq v1,v0 where v0=-1 (delay slot 0x8013f798)
+      uint32_t look = tile_lookup_calc(c, (uint32_t)s1, (uint32_t)s2);  // jal 0x8013fae0 (owned leaf)
+      if ((uint16_t)look != 0) {                   // sll v0,16 ; beq zero → low16 nonzero
+        uint8_t cnt = c->mem_r8(obj + 6) & 0xFF;
+        if (cnt < 254) {                           // sltiu count,254
+          c->mem_w8(obj + 6, (uint8_t)(cnt + 1));
+          c->mem_w16(obj + 16 + 2u * cnt, c->mem_r16(s0));  // lhu cell → sh obj[16+2*count]
+        }
+      }
+    }
+  }
+}
+static void tilescan_body(Core* c) {
+  uint32_t obj = c->r[4], a1p = c->r[5], a2p = c->r[6], a3p = c->r[7];
+  int xA = (int)c->mem_r32(a1p), yA = (int)c->mem_r32(a1p + 4);
+  int xB = (int)c->mem_r32(a2p), yB = (int)c->mem_r32(a2p + 4);
+  int xC = (int)c->mem_r32(a3p), yC = (int)c->mem_r32(a3p + 4);
+  int slt_BA = (yB < yA);                          // slt v0,s7,a1 (delay-slot, always evaluated)
+  if (yB == yA && yB == yC) return;                // 0x8013f52c: all-y-equal degenerate → no scan
+  if (slt_BA)      { int tx=xA; xA=xB; xB=tx; int ty=yA; yA=yB; yB=ty; }   // sort y: A<=B
+  if (yC < yA)     { int tx=xA; xA=xC; xC=tx; int ty=yA; yA=yC; yC=ty; }   //         A<=C
+  if (yC < yB)     { int tx=xB; xB=xC; xC=tx; int ty=yB; yB=yC; yC=ty; }   //         B<=C
+  int t1 = xB - xA, t2 = xC - xA, a2d = yB - yA, a3d = yC - yA;
+  int gradAB, gradBC, gradAC, s5, s6;
+  if (yB == yA) {                                  // flat top
+    if (xA < xB) { s6 = xA << 16; s5 = xB << 16; } else { s6 = xB << 16; s5 = xA << 16; }
+    gradAB = 0;
+  } else {
+    s5 = xA << 16; s6 = xA << 16;
+    gradAB = (int32_t)((uint32_t)t1 << 16) / a2d;  // (xB-xA)<<16 / (yB-yA), trunc toward 0
+  }
+  s5 += 0x10000;                                   // 0x8013f610 (always)
+  gradBC = (yB == yC) ? 0 : (int32_t)((uint32_t)(xC - xB) << 16) / (yC - yB);
+  int32_t v1cross = (int32_t)((uint32_t)(-a3d) * (uint32_t)t1);   // mflo(-a3d * t1)
+  int32_t t0cross = (int32_t)((uint32_t)t2 * (uint32_t)a2d);      // mflo(t2 * a2d)
+  gradAC = (a3d != 0) ? (int32_t)((uint32_t)t2 << 16) / a3d : 0;  // (xC-xA)<<16 / (yC-yA)
+  int32_t crossv = v1cross + t0cross;
+  int s2 = yA;
+  if (crossv > 0) {                                // 0x8013f6b8 (blez not taken): s6 steps the short edges
+    for (; s2 < yB; s2++) { tilescan_scanline(c, obj, s2, s5, s6); s6 += gradAB; s5 += gradAC; }
+    for (; s2 <= yC; s2++) { tilescan_scanline(c, obj, s2, s5, s6); s6 += gradBC; s5 += gradAC; }
+  } else {                                         // 0x8013f8b8 (blez taken, crossv<=0): s5 steps the short edges
+    for (; s2 < yB; s2++) { tilescan_scanline(c, obj, s2, s5, s6); s5 += gradAB; s6 += gradAC; }
+    for (; s2 <= yC; s2++) { tilescan_scanline(c, obj, s2, s5, s6); s5 += gradBC; s6 += gradAC; }
+  }
+}
+void ov_tilescan(Core* c) {
+  static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("tilescanverify") ? 1 : 0;
+  if (!s_v) { tilescan_body(c); return; }
+  // A/B gate: snapshot the only mutated state (count byte + tile list), run native, capture, restore,
+  // run the recomp body, compare. Registers don't matter (callee-saved, restored by the body's epilogue).
+  uint32_t obj = c->r[4]; uint32_t rs[35]; memcpy(rs, c->r, sizeof rs);
+  uint8_t  cnt_b = c->mem_r8(obj + 6);
+  uint16_t list_b[254]; for (int i = 0; i < 254; i++) list_b[i] = c->mem_r16(obj + 16 + 2u * i);
+  // NATIVE
+  tilescan_body(c);
+  uint8_t cnt_n = c->mem_r8(obj + 6);
+  uint16_t list_n[254]; for (int i = 0; i < 254; i++) list_n[i] = c->mem_r16(obj + 16 + 2u * i);
+  // RESTORE
+  memcpy(c->r, rs, sizeof rs);
+  c->mem_w8(obj + 6, cnt_b);
+  for (int i = 0; i < 254; i++) c->mem_w16(obj + 16 + 2u * i, list_b[i]);
+  // RECOMP
+  rec_super_call(c, s_tilescan_entry);
+  static long ngood = 0, nbad = 0; int bad = 0;
+  if (cnt_n != c->mem_r8(obj + 6)) {
+    if (nbad < 8) fprintf(stderr, "[tilescanverify] MISMATCH obj=%08x count mine=%u oracle=%u\n",
+                          obj, cnt_n, c->mem_r8(obj + 6));
+    bad = 1; }
+  int olim = c->mem_r8(obj + 6); if (olim > 254) olim = 254;
+  for (int i = 0; i < olim && !bad; i++) if (list_n[i] != c->mem_r16(obj + 16 + 2u * i)) {
+    if (nbad < 40) fprintf(stderr, "[tilescanverify] MISMATCH obj=%08x list[%d] mine=%04x oracle=%04x\n",
+                           obj, i, list_n[i], c->mem_r16(obj + 16 + 2u * i)); bad = 1; }
+  if (bad) nbad++; else if (++ngood == 1 || ngood % 200 == 0)
+    fprintf(stderr, "[tilescanverify] %ld matches (last obj=%08x count=%u)\n", ngood, obj, cnt_n);
+  // keep native results live
+  c->mem_w8(obj + 6, cnt_n);
+  for (int i = 0; i < 254; i++) c->mem_w16(obj + 16 + 2u * i, list_n[i]);
+}
+
 static void engine_scan_overlay(Core* c, uint32_t base, uint32_t size) {
   stage_scan_overlay(c, base, size);   // own the GAME stage state machine when GAME.BIN loads
   demo_scan_overlay(c, base, size);    // own the DEMO/front-end menu state machine when DEMO loads
@@ -1492,6 +1612,18 @@ static void engine_scan_overlay(Core* c, uint32_t base, uint32_t size) {
       rec_set_interp_override_auto(entry, ov_tile_lookup);
       if (cfg_dbg("submit"))
         fprintf(stderr, "[submit] own tile-lookup leaf @ 0x%08X (in load 0x%08X+0x%X)\n", entry, base, size);
+      continue;
+    }
+    // (0c) the per-object triangle-scan SOLID-TILE gatherer FUN_8013F4DC: anchor on its unique
+    //      corner-pointer load triple `lw v1,0(a1); lw a1,4(a1); lw a0,0(a2)`, backtrack to the entry.
+    if (c->mem_r32(a) == 0x8CA30000u && c->mem_r32(a + 4) == 0x8CA50004u && c->mem_r32(a + 8) == 0x8CC40000u) {
+      uint32_t entry = lo;
+      for (uint32_t b = a; b > lo && b > a - 0x80; b -= 4)
+        if (c->mem_r32(b - 4) == 0x03E00008u) { entry = b + 4; break; }
+      s_tilescan_entry = entry;
+      rec_set_interp_override_auto(entry, ov_tilescan);
+      if (cfg_dbg("submit") || cfg_dbg("tilescanverify"))
+        fprintf(stderr, "[submit] own tile-scan gatherer @ 0x%08X (in load 0x%08X+0x%X)\n", entry, base, size);
       continue;
     }
     // (0) the screen-space BACKGROUND tilemap drawer (M3 provenance): anchor on the unique tile

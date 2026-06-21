@@ -141,6 +141,18 @@ for content fns (call it). Do NOT mimic PSX hardware (GTE/GP0/OT) — remove Bee
   lookup `tab[52*a1+a0] & (mask16<<4)` (tab=*0x8014c804, mask=*0x8014c800). Was the single hottest overlay
   piece (4.25%, 39.9k calls), mis-bucketed under FUN_8013F0DC until the prof_report overlay-resolution fix.
   Signature-registered in engine_scan_overlay; `tileverify` gate 0-diff 60000+ calls. Field 25.02M→24.46M.
+- ✅ Gameplay-overlay TRIANGLE-SCAN SOLID-TILE GATHERER `0x8013f4dc` = `ov_tilescan` (engine_submit.cpp,
+  later-191) — the per-object collision broad-phase: y-sorts 3 corner {x,y} (a1/a2/a3 ptrs), rasterizes
+  the triangle scanline-by-scanline, per covered cell calls the owned `ov_tile_lookup`, and APPENDS the
+  cell's tile id into obj[0x10 + 2*count] (count byte obj+6, cap 254) when the cell is non-empty AND solid.
+  CLEAN INTEGER DATA (no GTE/GP0) → faithful exact-match (tile-lookup family). **CORRECTS the handoff/§F
+  mislabel:** the profiler bucket `FUN_8013F0DC` (~11% with siblings) is NOT the anim/scale SM at 0x8013efa8
+  (that fn is COLD — 3 calls/run); the hot code is THIS fn's loop body (0x8013f9xx), bucketed under
+  FUN_8013F0DC only because that's the nearest call-target boundary. Subtle exact bits: s0 cell address =
+  base+4 + 2*(s1*width+s2) row-major (the FIRST advance is 2*v0cmp from the `j 0x8013f788` delay slot, not
+  2*width); empty cell skip = `v1 == -1` (the dedup beq's v0 = -1 from the branch delay slot 0x8013f798).
+  Signature-registered (corner-ptr load triple); `tilescanverify` gate 0-diff 600+ calls over varied
+  triangles (71–149 tiles). Field 25.99M→24.28M (−6.6%); the ~11% 0x8013f9xx cluster GONE from the profile.
 - ✅ `FUN_80051C8C` per-object TRANSFORM build = `ov_build_xform`.
 - **Camera update (engine_camera.cpp):**
   - ✅ position X/Z `FUN_8006d960` = `ov_cam_track_xz`; ✅ position Y `FUN_8006da54` = `ov_cam_track_y` (later-174).
@@ -303,10 +315,14 @@ in-port profiler (later-186, `interp.cpp`) gives the TIME + FREQUENCY histograms
     PC-native 2D layer feeding the engine RenderQueue (NOT a packet/OT transcription). Register via the
     SIGNATURE scan in engine_scan_overlay (engine_submit.cpp) — the gameplay overlay loads at 0x80108F9C+
     0x459A8. Can't headless-verify render → USER eyeballs a build. Biggest single fn.
-  - `FUN_8013F0DC` **4.2%** — OVERLAY per-object anim/transform STATE MACHINE (0x8013f0dc..0x8013f4d8, 21-way
-    jump table @0x8010a088 → 4 handlers 0x8013f178/1b8/228/234; writes scale @0x800a3f90/94, dispatch byte
-    @0x1f800207). Mechanically verifiable (predict-compare). `ov_8013F988` 4.0% + `ov_8013FA80` 1.7% are
-    sibling overlay fns in the same region.
+  - ~~`FUN_8013F0DC` **4.2%** + `ov_8013F988` 4.0% + `ov_8013FA80` 1.7%~~ ✅ OWNED (later-191, ov_tilescan).
+    **The bucket label was WRONG:** these are NOT the anim/scale SM at 0x8013efa8 (the 21-way jump-table fn
+    the handoff named is COLD — 3 calls/run); the hot code is the per-object TRIANGLE-SCAN SOLID-TILE
+    GATHERER `FUN_8013F4DC` (0x8013f4dc..0x8013fadc), whose loop body lives at 0x8013f9xx and bucketed under
+    FUN_8013F0DC only because that's the nearest call-target boundary below it. Clean integer data,
+    `tilescanverify` 0-diff 600+ — see §D. (LESSON: when a profiler bucket spans a big range, disas to find
+    the REAL fn entry + verify which entry actually fires before porting — the boundary label can be a
+    non-entry.)
   - ~~`FUN_8007712C` 11.2% per-object CULL~~ ✅ OWNED (later-188, cull_native_body, §D). ~~`ov_8013FAE0`
     4.25% tile-lookup leaf~~ ✅ OWNED (later-188b, ov_tile_lookup, engine_submit.cpp; pure `tab[52*a1+a0]
     & (mask<<4)`, signature-registered, tileverify 0-diff 60000+ calls).
