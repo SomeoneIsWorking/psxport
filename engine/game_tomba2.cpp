@@ -709,6 +709,92 @@ void ov_grid_step_4798c(Core* c) {
   } else if (++ng % 2000 == 0) fprintf(stderr, "[gridstep] %ld matches\n", ng);
 }
 
+// FUN_80040410 — per-object CHILD-NODE SPAWN / sub-object builder (a callee of the per-object state
+// machine FUN_80040558's state-0 handler). a0 = obj, a1 = group index (low byte). NO GTE, NO render
+// packets; pure control flow + object/child-node memory writes, with 2 dispatched callees.
+//   obj[8] = 2 (child count, set unconditionally on entry).
+//   if ((int16)*0x800ed098 < 2): obj[4] = 3; return 0  (global gate — not ready yet).
+//   else:
+//     obj[9]=2, obj[13]=0, obj[11]=0, sh obj[84]=obj[86]=obj[88]=0.
+//     count = obj[8] (the 2 just written); s0 (per-child base) = obj; for i in [0,count):
+//       node = jal 0x8007aae8()          (child-node allocator, dispatched -> v0 = node ptr)
+//       s0[0xC0] = node                  (store the child ptr at obj+0xC0 + 4*i)
+//       node[6] = (i - 1) as s16         (0xFFFF on the first child)
+//       node[0] = u16 tblA[6*i + 0],  node[2] = u16 tblA[6*i + 2],  node[4] = u16 tblA[6*i + 4]
+//                                        (tblA = 0x800a3b1c, stride 6)
+//       node[8] = node[0xA] = node[0xC] = 0
+//       a2 = lh tblB[2*((a1&0xff) + i)]  (tblB = 0x800a3b28, stride 2, base index = a1&0xff)
+//       jal 0x80051b04(a0=node, a1=1, a2)  (transform/geom setup -> writes node[0x40], dispatched)
+//     return 1.
+// CONTROL FLOW + every memory write owned native; the allocator 0x8007aae8 and the setup 0x80051b04 stay
+// PSX via rec_dispatch (each honors its own override identically in the super-call path). GOTCHA: the
+// child count read (v1=obj[8]) is the value just stored (2) — re-read from memory; the loop counter
+// increments BEFORE the tblA stores complete but AFTER node[6]=s2-1 is stored (delay-slot ordering),
+// so node[6] uses the PRE-increment index. `child40410` gate = full RAM+scratchpad A/B vs rec_super_call.
+static uint32_t child_spawn_40410(Core* c) {
+  const uint32_t obj = c->r[4];
+  const uint32_t a1  = c->r[5] & 0xffu;
+  c->mem_w8(obj + 8, 2);
+  if ((int16_t)c->mem_r16(0x800ed098u) < 2) { c->mem_w8(obj + 4, 3); return 0; }
+  c->mem_w8(obj + 9, 2);
+  c->mem_w8(obj + 13, 0);
+  c->mem_w8(obj + 11, 0);
+  c->mem_w16(obj + 84, 0);
+  c->mem_w16(obj + 86, 0);
+  c->mem_w16(obj + 88, 0);
+  uint32_t count = c->mem_r8(obj + 8);
+  uint32_t s0 = obj;                 // per-child base for obj[0xC0 + 4*i]
+  uint32_t s1 = 0x800a3b1cu;         // tblA cursor (stride 6)
+  uint32_t s3 = a1 << 2;             // tblB byte offset = (a1&0xff)*4, +2 per iter
+  const uint32_t s5 = 0x800a3b28u;   // tblB base
+  for (uint32_t i = 0; i < count; i++) {
+    c->r[4] = 0; rec_dispatch(c, 0x8007aae8u);     // allocate child node
+    uint32_t node = c->r[2];
+    c->mem_w32(s0 + 0xC0, node);
+    c->mem_w16(node + 6, (uint16_t)(i - 1));        // node[6] = (i-1) as s16
+    c->mem_w16(node + 0, c->mem_r16(s1 + 0));
+    c->mem_w16(node + 2, c->mem_r16(s1 + 2));
+    c->mem_w16(node + 4, c->mem_r16(s1 + 4));
+    c->mem_w16(node + 8, 0);
+    c->mem_w16(node + 0xA, 0);
+    c->mem_w16(node + 0xC, 0);
+    uint32_t a2 = (uint32_t)(int32_t)(int16_t)c->mem_r16(s5 + s3);
+    c->r[4] = node; c->r[5] = 1; c->r[6] = a2;
+    rec_dispatch(c, 0x80051b04u);                   // transform/geom setup
+    s1 += 6; s3 += 2; s0 += 4;
+  }
+  return 1;
+}
+
+void ov_child_spawn_40410(Core* c) {
+  static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("child40410") ? 1 : 0;
+  if (!s_v) { c->r[2] = child_spawn_40410(c); return; }
+  static uint8_t* ram0 = (uint8_t*)malloc(0x200000);
+  static uint8_t* ramN = (uint8_t*)malloc(0x200000);
+  uint8_t spad0[0x400], spadN[0x400];
+  uint32_t regs0[32]; memcpy(regs0, c->r, sizeof regs0);
+  uint32_t obj = c->r[4];
+  memcpy(ram0, c->ram, 0x200000); memcpy(spad0, c->scratch, 0x400);
+  c->r[2] = child_spawn_40410(c);
+  uint32_t v0_n = c->r[2];
+  memcpy(ramN, c->ram, 0x200000); memcpy(spadN, c->scratch, 0x400);
+  memcpy(c->ram, ram0, 0x200000); memcpy(c->scratch, spad0, 0x400); memcpy(c->r, regs0, sizeof regs0);
+  rec_super_call(c, 0x80040410u);
+  uint32_t v0_o = c->r[2];
+  // Same family rationale as the grid/scriptvm gates: the dispatched callees (0x8007aae8 allocator,
+  // 0x80051b04 setup) run in BOTH passes and leave transient residue in their own stack frames below
+  // entry sp; FUN_80040410's own 48-byte frame is also dead below sp on return. Exclude [sp-0x800, sp)
+  // (sp ~0x1FE9xx, RAM end 0x200000 — far above ALL game data; a real divergence alters persistent state).
+  uint32_t sp = regs0[29] & 0x1FFFFFu, flo = (sp >= 0x800) ? sp - 0x800 : 0;
+  int ro = -1; for (uint32_t a = 0; a < 0x200000; a++) if (c->ram[a] != ramN[a] && !(a >= flo && a < sp)) { ro = (int)a; break; }
+  int so = -1; for (uint32_t a = 0; a < 0x400; a++) if (c->scratch[a] != spadN[a]) { so = (int)a; break; }
+  static long ng = 0, nb = 0;
+  if (ro >= 0 || so >= 0 || v0_n != v0_o) {
+    if (nb++ < 40) fprintf(stderr, "[child40410] MISMATCH obj=%08x v0 n=%x o=%x ram@%x spad@%x sp=%x\n",
+                           obj, v0_n, v0_o, ro, so, sp);
+  } else if (++ng % 10 == 0) fprintf(stderr, "[child40410] %ld matches\n", ng);
+}
+
 // FUN_8004CE14 — per-object SCRIPT-VM tick (the MOST-CALLED field function, ~14900 calls/run). a0 = obj.
 // Dispatches on the state byte obj[4]: 2 -> no-op; 3 -> jal 0x8007A624(obj); >3 -> no-op; 0 -> if the
 // global enable byte 0x800BF873!=0 set obj[4]=3 & return, else INIT (obj[4]=1, obj[0]=1, load the per-obj
@@ -1678,6 +1764,7 @@ void games_tomba2_init(void) {
     // native; `playerverify` full RAM+scratchpad A/B gate. The settle helper 0x80054650 stays dispatched.
     { void ov_player_move(Core*); rec_set_override(0x80056B48u, ov_player_move); }
     { void ov_anim_vm_76d68(Core*); rec_set_override(0x80076D68u, ov_anim_vm_76d68); }  // per-object animation-sequence VM stepper (control flow owned; 3 frame sub-fns dispatched)
+    { void ov_child_spawn_40410(Core*); rec_set_override(0x80040410u, ov_child_spawn_40410); }  // per-object child-node spawn/sub-object builder (control flow owned; allocator+setup dispatched)
   }
   // PC-native LEVEL/STAGE LOADER (engine/engine_level.cpp): the engine's overlay loader FUN_800450bc —
   // load a stage's overlay off the disc + set its entry, synchronous (no PSX CD-wait yield).

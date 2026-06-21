@@ -216,6 +216,23 @@ for content fns (call it). Do NOT mimic PSX hardware (GTE/GP0/OT) — remove Bee
   (same grid family): the dispatched callees run in BOTH passes and leave transient residue below entry sp
   (no native frame there) → gate excludes the top-of-RAM stack window [sp-0x800, sp). The whole grid family
   (49968 / 47CBC / 498C8 / 4798C) is now OWNED. Registered in game_tomba2.cpp alongside the grid leaves.
+- ✅ **later-202 — `FUN_80040410` `ov_child_spawn_40410` (per-object CHILD-NODE SPAWN / sub-object builder —
+  a callee of the per-object state machine FUN_80040558's state-0 handler).** a0=obj, a1=group index (low
+  byte). NO GTE, NO render packets — pure control flow + object/child-node memory writes, 2 dispatched
+  callees. Sets obj[8]=2 (child count) unconditionally; GATE: if (int16)*0x800ed098 < 2 → obj[4]=3, return 0.
+  Else zero obj[9]=2/obj[13]/obj[11]/sh obj[84..88], then for i in [0,count): alloc a child node (jal
+  0x8007aae8, dispatched), store its ptr at obj[0xC0+4i], node[6]=(i−1) s16, node[0/2/4] = u16 tblA[6i+0/2/4]
+  (tblA=0x800a3b1c stride 6), node[8/A/C]=0, a2 = lh tblB[2*((a1&0xff)+i)] (tblB=0x800a3b28 stride 2),
+  jal 0x80051b04(node,1,a2) (transform/geom setup, dispatched); return 1. Control flow + every memory write
+  owned native; the allocator + setup stay PSX via rec_dispatch. GOTCHAs: child count is the value JUST
+  stored (re-read obj[8]=2 from memory); node[6] uses the PRE-increment loop index via delay-slot ordering;
+  the gate global is a signed 16-bit compare (`slti v0, lh, 2`). Verified with the full RAM+scratchpad A/B
+  gate `child40410` (native run → snapshot+rollback → rec_super_call → diff): **0-diff over 28 live
+  field-spawn calls** (press right 250 + press left 250 — this is a spawn-time INIT handler, called once per
+  object-spawn not per-frame, so 28 is the natural exercise count; each call compares full RAM 0x200000 +
+  full scratchpad 0x400 + v0). GOTCHA (same family as grid/scriptvm): the 2 dispatched callees run in BOTH
+  passes and leave transient residue below entry sp (FUN_80040410's own 48-byte frame is also dead there) →
+  gate excludes [sp-0x800, sp), far above all game data. Registered in game_tomba2.cpp.
 - ✅ **later-196 — `FUN_8004CE14` `ov_script_vm_4ce14` (per-object SCRIPT-VM tick — THE most-called field
   fn, ~14900 calls/run).** First CONTENT state machine owned after the boundary removal. Dispatch on state
   byte obj[4]: 2→no-op; 3→jal 0x8007A624; >3→no-op; 0→ if global 0x800BF873!=0 set obj[4]=3 & return, else

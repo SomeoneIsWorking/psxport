@@ -6727,3 +6727,29 @@ dispatched callees; NO GTE, NO render packets.
   excludes the top-of-RAM stack window [sp-0x800, sp) — far above all game data; a real behavioral
   divergence would alter persistent state below it. Live (non-verify) field run: Tomba walks normally, no
   crash, reaches stage 0x8010637C.
+
+### later-202 — FUN_80040410 `ov_child_spawn_40410` owned (per-object child-node spawn / sub-object builder)
+Owned `FUN_80040410` PC-native in `engine/game_tomba2.cpp` — a callee of the per-object state machine
+FUN_80040558's state-0 handler. a0 = obj, a1 = group index (low byte). NO GTE, NO render packets; pure
+control flow + object/child-node memory writes with two dispatched callees.
+- **RE** (`tools/disas.py 0x80040410`): obj[8]=2 (child count) set unconditionally. GATE — if
+  (int16)*0x800ed098 < 2 → obj[4]=3, return 0 (global "not ready" gate; `slti v0, lh, 2` so the compare is
+  SIGNED 16-bit). Else: obj[9]=2, obj[13]=0, obj[11]=0, sh obj[84]=obj[86]=obj[88]=0; count = obj[8] (the 2
+  just written, re-read from memory). For i in [0,count): node = jal 0x8007aae8() (child-node allocator,
+  dispatched); store the node ptr at obj[0xC0 + 4*i]; node[6] = (i-1) as s16 (0xFFFF on the first child);
+  node[0/2/4] = u16 tblA[6*i + 0/2/4] (tblA = 0x800a3b1c, stride 6); node[8] = node[0xA] = node[0xC] = 0;
+  a2 = lh tblB[2*((a1&0xff) + i)] (tblB = 0x800a3b28, stride 2, base index a1&0xff); jal 0x80051b04(node,1,a2)
+  (transform/geom setup → writes node[0x40], dispatched). Return 1.
+- **Ownership**: control flow + every memory write owned native; the allocator 0x8007aae8 and the setup
+  0x80051b04 stay PSX via rec_dispatch (each honors its own override identically in the super-call path).
+- **VERIFIED** with the full RAM+scratchpad A/B gate `child40410` (native run → snapshot+rollback →
+  rec_super_call → diff over full RAM 0x200000 + scratchpad 0x400 + v0): **0-diff over 28 live field-spawn
+  calls** (press right 250 + press left 250). This is a spawn-time INIT handler — called once per
+  object-spawn, NOT per-frame — so 28 is the natural exercise count for the field; each of the 28 is a
+  complete state-equivalence check (whole RAM + whole scratchpad + return). GOTCHAs caught while RE'ing:
+  (1) the child count is the value JUST stored (obj[8]=2), re-read from memory, not a constant; (2) node[6]
+  uses the PRE-increment loop index (delay-slot ordering — s2++ lands after the node[6]=s2-1 store but before
+  the tblA stores complete); (3) the gate is a signed 16-bit compare. GOTCHA (same family as grid/scriptvm):
+  the 2 dispatched callees run in BOTH passes and leave transient residue below entry sp (FUN_80040410's own
+  48-byte frame is also dead there) → the gate excludes the top-of-RAM stack window [sp-0x800, sp), far above
+  all game data. Live (non-verify) field run: Tomba walks normally, no crash, reaches stage 0x8010637C.
