@@ -7029,3 +7029,38 @@ native_boot.cpp (the dialog-cut hook + REPL bgm/bgmstop routing moved to / throu
 engine/sound.cpp to run.sh + tools/build_port.sh SRC lists (in sync). DEAD END recorded: dispatching the
 libsnd SEQ leaves does not bit-reproduce their voicetab bookkeeping — don't re-attempt a native BGM-start
 body without ALSO owning the SsSeqPlay/voice-allocator leaf.
+
+## later-200: 60fps dynamic-shadow STROBE root-caused + fixed (interp pass zeroed the shadow stream)
+
+SYMPTOM: with 60fps interpolation + dynamic shadows ON, the shadow strobed at 30Hz.
+
+ROOT CAUSE (mechanical, not visual): the live 60fps tier is the actor-transform VK path
+(`fps60_present_vk` / `build_lerp` — the OLD SW `s_interp` re-rasterizer is already retired). It presents
+each logic frame TWICE: PASS 1 = interpolated in-between (movers at the A/B transform midpoint, everything
+else snapped), PASS 2 = the real frame. The dynamic-shadow GEOMETRY is captured ONCE per logic frame into
+the host-persistent `s_shadow_vbuf` (count `s_shadow_n`) during the engine submit walk — at the real
+frame-B world positions. Both passes go through `panel_render(s_tex)`, and the gate
+`if (shadows_on() && tgt == s_tex) shadow_pass()` DID fire on both. BUT PASS 1's
+`gpu_fps60_present_pass` → `gpu_vk_frame_end` → `frame_end` ZEROED `s_shadow_n`, so PASS 2 (the real, final-
+presented frame) rasterized an EMPTY shadow map. Probe `PSXPORT_DEBUG=fps60shadow` showed the smoking gun:
+`shadow_pass: s_shadow_n=2565 / 0 / 2565 / 0 …` (interp had the shadow, real had none) → 30Hz strobe.
+NOTE the brief's guess (`shadows only run for s_tex, never for the interp frame`) was the INVERSE of the
+real mechanism — both passes share s_tex; the bug was the stream reset, not the gate.
+
+FIX: don't let the interp present-pass consume the shadow stream. Added
+`GpuVkState::frame_end(..., int keep_shadow=0)` + `gpu_vk_frame_end_keepshadow`; the interp pass calls the
+keepshadow variant (resets only the draw batch s_tri/tex/semi, KEEPS s_shadow_n). Both passes now rasterize
+the SAME shadow map (B positions) → probe shows `2556 / 2556` on every frame. This matches the user's chosen
+cheap design: the dynamic shadow is NOT interpolated — it comes from the real composite (B) on both displayed
+frames (a mover's shadow may lag it by up to half a frame on the in-between; explicitly accepted, no strobe).
+
+2D OVERLAYS: not a bug in the live actor-transform tier — 2D/HUD carry fps_world=0, snap identically, and are
+emitted from the same RenderQueue snapshot on both passes (byte-identical). The brief's "2D re-raster diverges"
+was the OLD retired SW `s_interp` path's problem, already gone. Verified: before_interp == after_interp (0 px).
+
+VERIFY: mechanical `s_shadow_n` 2565/0→2556/2556 (proven by toggling the fix in/out); `before_real` (no
+shadow) vs `after_real` (shadow) diff (16.8% px) lights up exactly the hut/foliage/ground shadow regions
+(scratch/screenshots/diff_real_shadow.png). USER to eyeball the live run for no strobe. Diagnostics added
+(cfg-gated, no behavior change): `PSXPORT_DEBUG=fps60shadow` (per-pass s_shadow_n) and
+`PSXPORT_FPS60_INTERPSHOT="path[:fence]"` (dump the interp frame's s_tex in isolation). Repro: set
+`shadows=1 light=1 fps60=1` in psxport_settings.ini (or PSXPORT_SETTINGS), run the field.

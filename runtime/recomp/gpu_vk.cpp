@@ -983,6 +983,8 @@ void GpuVkState::panel_render(Panel* p) {
     // 3D-world pixel (water included) is AO-shaded uniformly from the opaque depth, so translucent surfaces
     // keep their hue and stay visible. s_tex is in COLOR_ATTACHMENT here (semi loop / opaque pass left it
     // there); ssao_pass round-trips it through shader-read and returns it to COLOR_ATTACHMENT.
+    if (cfg_dbg("fps60shadow")) fprintf(stderr, "[fps60shadow] panel_render tgt==s_tex=%d shadows_on=%d deferred_on=%d s_shadow_n=%d\n",
+                         tgt == s_tex, shadows_on(), deferred_on(), s_shadow_n);
     if (shadows_on() && tgt == s_tex) shadow_pass();   // light-view depth map (sampled by the deferred pass)
     if (deferred_on() && tgt == s_tex) ssao_pass();
     img_barrier_on(tgt, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
@@ -1246,6 +1248,12 @@ static void build_light_vp(float out16[16]) {
 // view-projection for this frame (also stashed in s_shadow_lvp for the deferred sample).
 void GpuVkState::shadow_pass() {
   build_light_vp(s_shadow_lvp); s_shadow_lvp_valid = 1;
+  // PSXPORT_DEBUG=fps60shadow — mechanical strobe check: report the captured shadow-vertex count the
+  // shadow map is built from on EACH present-pass. With fps60 ON this fires twice per logic frame (the
+  // interpolated in-between, then the real frame); both MUST show the same non-zero count (= the shadow
+  // is rasterized identically on both displayed frames -> no 30Hz strobe). A second-pass count of 0 means
+  // the interp pass consumed/zeroed the stream (the bug this fix addresses).
+  if (cfg_dbg("fps60shadow")) fprintf(stderr, "[fps60shadow] shadow_pass: s_shadow_n=%d (verts)\n", s_shadow_n);
   // ALWAYS run the pass (even with no captured geometry): the render pass CLEARs the map to far=1.0 and its
   // finalLayout transitions s_shadow_img to SHADER_READ_ONLY. Skipping it would leave the image UNDEFINED
   // while the deferred pass (do_shadow set) still samples binding 2 -> validation error / garbage. A cleared
@@ -1915,12 +1923,19 @@ void gpu_vk_vram_raw(const char* path) {
 }
 
 // Per-frame: reset the tee'd-primitive batch for the next frame.
-void GpuVkState::frame_end(const uint16_t* svram, int frame) {
+// keep_shadow: the fps60 interpolated present-pass passes 1 here so the captured shadow GEOMETRY stream
+// survives into the SECOND (real) present of the same logic frame. The shadow geometry is captured ONCE
+// during the engine submit walk (at the real frame-B world positions); both the interpolated in-between
+// and the real frame must rasterize the SAME shadow map, else only the pass that consumed the stream gets
+// a shadow and it STROBES at 30Hz. Per the user's 60fps design the dynamic shadow is NOT interpolated — it
+// comes from the real composite (B positions) on both displayed frames (may lag a mover by half a frame on
+// the in-between; that is the accepted cheap tradeoff). The draw batch (s_tri/tex/semi) is always reset.
+void GpuVkState::frame_end(const uint16_t* svram, int frame, int keep_shadow) {
   (void)svram; (void)frame;
-  if (!gpu_vk_enabled() || !s_inited) { s_tri_n = 0; s_shadow_n = 0; return; }
+  if (!gpu_vk_enabled() || !s_inited) { s_tri_n = 0; if (!keep_shadow) s_shadow_n = 0; return; }
   s_tri_n = 0; s_tex_n = 0; s_semi_n = 0; s_dirty_n = 0;
   s_semi_grp_n = 0; s_sg_valid = 0;
-  s_shadow_n = 0; s_shadow_lvp_valid = 0;   // shadow capture is per-frame too (host geometry stream)
+  if (!keep_shadow) { s_shadow_n = 0; s_shadow_lvp_valid = 0; }   // per-frame host geometry stream
 }
 
 // PSXPORT_VK_TRITEST=1: headless-ish self-test of the triangle rasterizer. Draws a known flat tri and a
@@ -1971,6 +1986,7 @@ void gpu_vk_draw_tritri(Core* core, const int* xs, const int* ys, const int* us,
 void gpu_vk_draw_semi(Core* core, const int* xs, const int* ys, const int* us, const int* vs, const unsigned char* rs, const unsigned char* gs, const unsigned char* bs, int tpx, int tpy, int mode, int raw, int clutx, int cluty, int twmx, int twmy, int twox, int twoy, int dax0, int day0, int dax1, int day1, int blend) { core->game->gpu_vk.draw_semi(xs,ys,us,vs,rs,gs,bs,tpx,tpy,mode,raw,clutx,cluty,twmx,twmy,twox,twoy,dax0,day0,dax1,day1,blend); }
 void gpu_vk_shot(Core* core, const char* path) { core->game->gpu_vk.shot(path); }
 void gpu_vk_frame_end(Core* core, const uint16_t* svram, int frame) { core->game->gpu_vk.frame_end(svram, frame); }
+void gpu_vk_frame_end_keepshadow(Core* core, const uint16_t* svram, int frame) { core->game->gpu_vk.frame_end(svram, frame, 1); }
 void gpu_vk_tritest(Core* core) { core->game->gpu_vk.tritest(); }
 #else
 #include <stdint.h>
@@ -1978,6 +1994,7 @@ int  gpu_vk_enabled(void) { return 0; }
 void gpu_vk_present(Core* core, const uint16_t* src, int sx, int sy, int w, int h) { (void)core;(void)src;(void)sx;(void)sy;(void)w;(void)h; }
 void gpu_vk_tritest(Core* core) { (void)core; }
 void gpu_vk_frame_end(Core* core, const uint16_t* svram, int frame) { (void)core;(void)svram; (void)frame; }
+void gpu_vk_frame_end_keepshadow(Core* core, const uint16_t* svram, int frame) { (void)core;(void)svram; (void)frame; }
 void gpu_vk_shot(Core* core, const char* path) { (void)core;(void)path; }
 void gpu_vk_set_order(Core* core, unsigned idx) { (void)core;(void)idx; }
 void gpu_vk_set_order_2d(Core* core, unsigned idx) { (void)core;(void)idx; }

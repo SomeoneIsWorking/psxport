@@ -1544,7 +1544,13 @@ void GpuState::gpu_clear_display(Core* core) { gpu_blank_display(); gpu_present(
 // pass). fps60 emits the interpolated RqItems, calls this to show them, then emits the real frame.
 void GpuState::gpu_fps60_present_pass(Core* core) {
   present_window();                          // blit_src(s_vram) -> gpu_vk_present renders the batch + shows
-  gpu_vk_frame_end(core, s_vram, s_frame);   // submit/diff + reset the VK draw batch
+  // KEEP the shadow-geometry stream: it was captured ONCE (at the real frame-B world positions) during the
+  // engine submit walk, and the REAL present (gpu_present_ex -> panel_render -> shadow_pass) that follows
+  // this interpolated pass must rasterize the SAME shadow map. A plain gpu_vk_frame_end here would zero
+  // s_shadow_n, leaving the real frame shadow-less -> the dynamic shadow would strobe at 30Hz. (The shadow
+  // is intentionally NOT interpolated; per the 60fps design it comes from the real composite on both
+  // displayed frames — see GpuVkState::frame_end / docs.)
+  gpu_vk_frame_end_keepshadow(core, s_vram, s_frame);   // submit/diff + reset the VK DRAW batch (shadow kept)
   s_prim_order = 0;                          // restart per-frame OT submission order for the next pass
 }
 
