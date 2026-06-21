@@ -70,6 +70,8 @@ static void objid_overlay(RenderQueue* q, Core* core) {
   int n0 = q->n;                               // freeze the count: only label real prims, not our own labels
   std::unordered_set<uint32_t> seen;
   int nworld = 0, nkeyed = 0, nlabel = 0;
+  static int s_logframe = 0;                    // throttle the stderr table to once every ~60 frames
+  int dolog = cfg_dbg("objid") && ((s_logframe++ % 60) == 0);
   for (int i = 0; i < n0; i++) {
     const RqItem* it = &q->items[i];
     if (it->layer != RQ_WORLD) continue;
@@ -79,11 +81,31 @@ static void objid_overlay(RenderQueue* q, Core* core) {
     if (!seen.insert(it->fps_key).second) continue;            // one label per object
     objid_hex(core, it, it->fps_key & 0xFFFF, 4, it->xs[0], it->ys[0], 2);   // low 16 bits, scale 2
     nlabel++;
+    // Diagnostic per-object line (channel only): resolve what this id IS so "check E1ED" has an answer.
+    // Billboard (fps_anchor): fps_key = the entity-node ptr -> dump type/pos/handler from guest RAM.
+    // Mesh: fps_key = the render-command ptr -> dump its geomblk + composed translation (cmd+0x2c/30/34).
+    if (dolog) {
+      uint32_t key = it->fps_key;
+      if (it->fps_anchor && key >= 0x80000000u && key < 0x80200000u) {
+        uint32_t nd = key & 0x1FFFFFu;
+        fprintf(stderr, "[objid] %04X BILLBOARD node=%08x type=%02x pos=(%d,%d,%d) handler=%08x scr=(%d,%d) depth=%.4f\n",
+                key & 0xFFFF, key, core->mem_r8(nd + 0xC),
+                (int)(int16_t)core->mem_r16(nd + 0x2E), (int)(int16_t)core->mem_r16(nd + 0x32), (int)(int16_t)core->mem_r16(nd + 0x36),
+                core->mem_r32(nd + 0x1C), it->xs[0], it->ys[0], (double)it->depth[0]);
+      } else if (key >= 0x80000000u && key < 0x80200000u) {
+        uint32_t cm = key & 0x1FFFFFu;
+        fprintf(stderr, "[objid] %04X MESH cmd=%08x geomblk=%08x trans=(%d,%d,%d) scr=(%d,%d) depth=%.4f\n",
+                key & 0xFFFF, key, core->mem_r32(cm + 0x40),
+                (int)core->mem_r32(cm + 0x2C), (int)core->mem_r32(cm + 0x30), (int)core->mem_r32(cm + 0x34),
+                it->xs[0], it->ys[0], (double)it->depth[0]);
+      } else {
+        fprintf(stderr, "[objid] %04X key=%08x (non-RAM) scr=(%d,%d) depth=%.4f\n",
+                key & 0xFFFF, key, it->xs[0], it->ys[0], (double)it->depth[0]);
+      }
+    }
   }
-  if (cfg_dbg("objid")) {                       // diagnostic: why labels did/didn't appear (every 60 frames)
-    static int f = 0; if ((f++ % 60) == 0)
-      fprintf(stderr, "[objid] world prims=%d keyed=%d labels=%d (n=%d)\n", nworld, nkeyed, nlabel, n0);
-  }
+  if (dolog)
+    fprintf(stderr, "[objid] --- world prims=%d keyed=%d labels=%d (n=%d) ---\n", nworld, nkeyed, nlabel, n0);
 }
 
 // The render queue is THE render path — one behavior, the PC game. No env gate (user directive
