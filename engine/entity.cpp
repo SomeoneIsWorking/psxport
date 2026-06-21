@@ -436,6 +436,65 @@ static void osc_fd10(Core* c) {
   c->mem_w16(node + 0, (uint16_t)(v0 * 6u));
 }
 
+// FUN_8007a904 — the engine's PER-FRAME ENTITY-LIST WALK (the native entity manager / object driver).
+// Each frame the engine walks the two live object lists and runs every node's handler. This is the
+// top of the per-object spine: the driver that touches every active game object, so owning it puts the
+// engine — not the recompiled body — in charge of iterating the world's objects (the foundation for
+// PC-owned per-object render classification, issue #4). Pure list traversal; the per-type handlers stay
+// reachable by address via rec_dispatch (each honors its own owned override identically).
+//
+// RE'd verbatim from disas 0x8007a904 (two identical loops, list0 head 0x800FB168 then list1 head
+// 0x800F2624 — the SAME (head) vars the spawn primitive links into, entity_spawn.cpp LIST_HEAD[0]/[1]):
+//   for (n = *head; n != 0; n = next) {
+//     next        = u32[n + 0x24];   // NEXT captured BEFORE the handler runs (a handler may relink/free n;
+//                                    //   `next` is a callee-saved reg in the recomp body, so it survives)
+//     handler     = u32[n + 0x1C];   // per-type update/render fn pointer
+//     u8[n + 1]   = 0;               // clear the per-frame render flag (jalr delay slot — before the call)
+//     handler(n);                    // a0 = n
+//   }
+// NB only TWO lists are walked here (list0 then list1); the third pool/list 0x800F2738 is not driven by
+// this function. `walkverify` gate = full main-RAM + scratchpad A/B vs rec_super_call(0x8007a904).
+static void entity_walk_7a904(Core* c) {
+  static const uint32_t HEAD[2] = { 0x800FB168u, 0x800F2624u };
+  for (int L = 0; L < 2; L++) {
+    uint32_t n = c->mem_r32(HEAD[L]);
+    while (n) {
+      uint32_t next    = c->mem_r32(n + 0x24);   // capture next FIRST (handler may unlink/free n)
+      uint32_t handler = c->mem_r32(n + 0x1C);
+      c->mem_w8(n + 1, 0);                        // clear per-frame render flag (delay slot of the call)
+      c->r[4] = n;                                // a0 = node
+      rec_dispatch(c, handler);                   // run the per-type handler (stays PSX / owned override)
+      n = next;
+    }
+  }
+}
+
+void ov_entity_walk_7a904(Core* c) {
+  static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("walkverify") ? 1 : 0;
+  if (!s_v) { entity_walk_7a904(c); return; }
+  static uint8_t* ram0 = (uint8_t*)malloc(0x200000);
+  static uint8_t* ramN = (uint8_t*)malloc(0x200000);
+  uint8_t spad0[0x400], spadN[0x400];
+  uint32_t regs0[32]; memcpy(regs0, c->r, sizeof regs0);
+  memcpy(ram0, c->ram, 0x200000); memcpy(spad0, c->scratch, 0x400);
+  entity_walk_7a904(c);
+  memcpy(ramN, c->ram, 0x200000); memcpy(spadN, c->scratch, 0x400);
+  memcpy(c->ram, ram0, 0x200000); memcpy(c->scratch, spad0, 0x400); memcpy(c->r, regs0, sizeof regs0);
+  rec_super_call(c, 0x8007A904u);
+  // Same family rationale as disp26c88/sm40558: every dispatched handler runs in BOTH passes and leaves
+  // transient residue in its own stack frame below entry sp (the native loop calls handlers at the entry
+  // sp; the recomp body decrements sp by 24 first, so handler frames land 24 bytes apart between the two
+  // runs). FUN_8007a904's own 24-byte frame is also dead below sp on return. Exclude [sp-0x800, sp) (sp
+  // ~0x1FExxx, RAM end 0x200000 — far above ALL pool/game data; a real divergence alters persistent state).
+  uint32_t sp = regs0[29] & 0x1FFFFFu, flo = (sp >= 0x800) ? sp - 0x800 : 0;
+  int ro = -1; for (uint32_t a = 0; a < 0x200000; a++) if (c->ram[a] != ramN[a] && !(a >= flo && a < sp)) { ro = (int)a; break; }
+  int so = -1; for (uint32_t a = 0; a < 0x400; a++) if (c->scratch[a] != spadN[a]) { so = (int)a; break; }
+  static long ng = 0, nb = 0;
+  if (ro >= 0 || so >= 0) {
+    if (nb++ < 40) fprintf(stderr, "[walkverify] MISMATCH ram@%x spad@%x sp=%x\n", ro, so, sp);
+  } else if (++ng % 50 == 0) fprintf(stderr, "[walkverify] %ld matches\n", ng);
+}
+
 void ov_osc_fd10(Core* c) {
   static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("fd10") ? 1 : 0;
   if (!s_v) { osc_fd10(c); return; }

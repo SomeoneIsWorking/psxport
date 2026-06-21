@@ -473,9 +473,15 @@ for (n = DAT_800fb168; n; n = *(n+0x24)) { *(n+1) = 0; (*(handler@n+0x1c))(n); }
 for (n = DAT_800f2624; n; n = *(n+0x24)) { *(n+1) = 0; (*(handler@n+0x1c))(n); }  // list 2
 ```
 Clears the render flag, then calls each node's handler (the PSX gameplay/render routine). A second
-walk of `DAT_800f2624` exists at `:18660` (likely a separate pass). **This is the native entity
-manager's target (Phase 1):** reimplement the walk in native C, call each handler via `rec_dispatch`
-(gameplay stays PSX), and snapshot node transforms across frames for correct object interpolation.
+walk of `DAT_800f2624` exists at `:18660` (likely a separate pass). **OWNED native (Phase 1) —
+`ov_entity_walk_7a904` (engine/entity.cpp), registered in game_tomba2.cpp.** The list traversal is
+reimplemented in C (capture `next` first, clear `+1`, dispatch each handler via `rec_dispatch`); the
+per-type handlers stay PSX / honor their own owned overrides. `walkverify` gate = full main-RAM +
+scratchpad A/B vs `rec_super_call(0x8007a904)` (same family as disp26c88/sm40558). This puts the engine
+in charge of iterating the world's objects — the foundation for PC-owned per-object render
+classification (the proper #4 fix: know each object's render TYPE so depth/ordering falls out). NEXT
+(Phase 2): capture per-object render type + world transform during the walk and classify billboards /
+foreground-decor at the source, instead of the late provenance heuristic at the OT walk.
 
 ## Per-object cull / LOD + submit
 - **Cull/LOD** `FUN_8007712c` (`:54440`, override `ov_object_cull`): args = (obj*, dx, dy, dz) where
