@@ -609,6 +609,106 @@ void ov_grid_resolve_498c8(Core* c) {
   } else if (++ng % 2000 == 0) fprintf(stderr, "[gridresolve] %ld matches\n", ng);
 }
 
+// FUN_8004798C — collision-grid PER-STEP ORIGIN/INDEX SETUP (the remaining dispatched callee inside
+// the owned FUN_800498C8 resolve loop; completes the grid family with FUN_80049968 setup / FUN_80047CBC
+// query / FUN_800498C8 resolve). a0 = probe object. Pure scratchpad halfword arithmetic + two dispatched
+// callees; NO GTE, NO render packets. Scratchpad fields (base 0x1F800000):
+//   0x1AA,0x1AC   = grid origin (X,Z)
+//   0x1AE,0x1B0   = grid extents (X,Z)    [used unsigned in the select/clamp tests]
+//   0x1B2,0x1B4   = grid cell base (X,Z)
+//   0x1BA         = grid cell pitch       [signed; the >>14 fixed-point recompute multiplier]
+//   0x1BC,0x1C0   = working probe coords (X,Z)
+//   0x1FE (byte)  = current grid id
+// Control flow:
+//   if (obj[42] != byte[0x1FE]) jal 0x80048ecc(a0 = obj[42])    -- reload grid for this id (dispatched)
+//   SELECT/RANGE TEST: if (h[0x1AE] u< h[0x1B0]) use the Z range else the X range; if probe is past the
+//     selected range, jal 0x80048fc4(a0 = obj, a1 = 1)          -- re-resolve (dispatched)
+//   CLAMP + RECOMPUTE: on (h[0x1AE] u< h[0x1B0]) -> Z branch (clamp 0x1C0 into [0x1AC, 0x1AC+0x1B0],
+//     recompute 0x1BC) else X branch (clamp 0x1BC into [0x1AA, 0x1AA+0x1AE], recompute 0x1C0).
+//   recompute writes the OTHER coord = cellbase + (((clamped - cellbase2) * pitch) >> 14) (signed mult,
+//   low word). NB the >>14 is an arithmetic shift of the 32-bit low product (sra).
+// `gridstep` gate = full RAM+scratchpad A/B vs rec_super_call (the two dispatched callees run in BOTH
+// passes; this fn's own [sp-24, sp) stack frame + the callees' frames below sp differ harmlessly, so the
+// gate excludes [sp-0x800, sp) — same family rationale as gridresolve/scriptvm).
+static void grid_step_4798c(Core* c) {
+  const uint32_t SP = 0x1F800000u, obj = c->r[4];
+  // ---- block 1: reload grid if the object's recorded id differs ----
+  uint32_t v1 = c->mem_r8(obj + 42);
+  uint32_t gid = c->mem_r8(SP + 0x1FE);
+  if (v1 != gid) { c->r[4] = v1; rec_dispatch(c, 0x80048eccu); }
+  // ---- block 2: select range (Z if h[0x1AE] u< h[0x1B0], else X), test, maybe re-resolve ----
+  uint32_t aE = c->mem_r16(SP + 0x1AE);   // h[0x1AE] (a1)
+  uint32_t b0 = c->mem_r16(SP + 0x1B0);   // h[0x1B0] (a0)
+  uint32_t test;
+  if (aE < b0) {                          // sltu(a1,a0) != 0 -> Z range
+    uint32_t d = (c->mem_r16(SP + 0x1C0) - c->mem_r16(SP + 0x1AC)) & 0xffffu;
+    test = (b0 < d) ? 1u : 0u;            // sltu(a0, d)
+  } else {                                // X range
+    uint32_t d = (c->mem_r16(SP + 0x1BC) - c->mem_r16(SP + 0x1AA)) & 0xffffu;
+    test = (aE < d) ? 1u : 0u;            // sltu(a1, d)
+  }
+  if (test != 0) { c->r[4] = obj; c->r[5] = 1; rec_dispatch(c, 0x80048fc4u); }
+  // ---- block 3: clamp the in-range coord, then recompute the other from it ----
+  uint32_t lo = c->mem_r16(SP + 0x1AE), hi = c->mem_r16(SP + 0x1B0);
+  if (lo < hi) {
+    // Z branch: clamp 0x1C0 into [0x1AC, 0x1AC + 0x1B0], then recompute 0x1BC
+    int32_t  a2 = (int16_t)c->mem_r16(SP + 0x1C0);
+    int32_t  a1 = (int16_t)c->mem_r16(SP + 0x1AC);
+    uint32_t v1u = c->mem_r16(SP + 0x1AC);
+    if (a2 < a1) {
+      c->mem_w16(SP + 0x1C0, (uint16_t)v1u);
+    } else {
+      uint32_t a0u = c->mem_r16(SP + 0x1B0);
+      if ((int32_t)((uint32_t)a1 + a0u) < a2) c->mem_w16(SP + 0x1C0, (uint16_t)(v1u + a0u));
+    }
+    int32_t  cv  = (int16_t)c->mem_r16(SP + 0x1C0);
+    uint32_t cb  = c->mem_r16(SP + 0x1B4);
+    int32_t  pit = (int16_t)c->mem_r16(SP + 0x1BA);
+    int32_t  prod = (int32_t)((uint32_t)((uint32_t)cv - cb) * (uint32_t)pit);  // lo(mult)
+    int32_t  v = prod >> 14;
+    c->mem_w16(SP + 0x1BC, (uint16_t)(c->mem_r16(SP + 0x1B2) + (uint32_t)v));
+  } else {
+    // X branch: clamp 0x1BC into [0x1AA, 0x1AA + 0x1AE], then recompute 0x1C0
+    int32_t  a2 = (int16_t)c->mem_r16(SP + 0x1BC);
+    int32_t  a1 = (int16_t)c->mem_r16(SP + 0x1AA);
+    uint32_t v1u = c->mem_r16(SP + 0x1AA);
+    if (a2 < a1) {
+      c->mem_w16(SP + 0x1BC, (uint16_t)v1u);
+    } else {
+      uint32_t a0u = c->mem_r16(SP + 0x1AE);
+      if ((int32_t)((uint32_t)a1 + a0u) < a2) c->mem_w16(SP + 0x1BC, (uint16_t)(v1u + a0u));
+    }
+    int32_t  cv  = (int16_t)c->mem_r16(SP + 0x1BC);
+    uint32_t cb  = c->mem_r16(SP + 0x1B2);
+    int32_t  pit = (int16_t)c->mem_r16(SP + 0x1BA);
+    int32_t  prod = (int32_t)((uint32_t)((uint32_t)cv - cb) * (uint32_t)pit);  // lo(mult)
+    int32_t  v = prod >> 14;
+    c->mem_w16(SP + 0x1C0, (uint16_t)(c->mem_r16(SP + 0x1B4) + (uint32_t)v));
+  }
+}
+
+void ov_grid_step_4798c(Core* c) {
+  static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("gridstep") ? 1 : 0;
+  if (!s_v) { grid_step_4798c(c); return; }
+  static uint8_t* ram0 = (uint8_t*)malloc(0x200000);
+  static uint8_t* ramN = (uint8_t*)malloc(0x200000);
+  uint8_t spad0[0x400], spadN[0x400];
+  uint32_t regs0[32]; memcpy(regs0, c->r, sizeof regs0);
+  uint32_t obj = c->r[4];
+  memcpy(ram0, c->ram, 0x200000); memcpy(spad0, c->scratch, 0x400);
+  grid_step_4798c(c);
+  memcpy(ramN, c->ram, 0x200000); memcpy(spadN, c->scratch, 0x400);
+  memcpy(c->ram, ram0, 0x200000); memcpy(c->scratch, spad0, 0x400); memcpy(c->r, regs0, sizeof regs0);
+  rec_super_call(c, 0x8004798Cu);
+  uint32_t sp = regs0[29] & 0x1FFFFFu, flo = (sp >= 0x800) ? sp - 0x800 : 0;
+  int ro = -1; for (uint32_t a = 0; a < 0x200000; a++) if (c->ram[a] != ramN[a] && !(a >= flo && a < sp)) { ro = (int)a; break; }
+  int so = -1; for (uint32_t a = 0; a < 0x400; a++) if (c->scratch[a] != spadN[a]) { so = (int)a; break; }
+  static long ng = 0, nb = 0;
+  if (ro >= 0 || so >= 0) {
+    if (nb++ < 40) fprintf(stderr, "[gridstep] MISMATCH obj=%08x ram@%x spad@%x sp=%x\n", obj, ro, so, sp);
+  } else if (++ng % 2000 == 0) fprintf(stderr, "[gridstep] %ld matches\n", ng);
+}
+
 // FUN_8004CE14 — per-object SCRIPT-VM tick (the MOST-CALLED field function, ~14900 calls/run). a0 = obj.
 // Dispatches on the state byte obj[4]: 2 -> no-op; 3 -> jal 0x8007A624(obj); >3 -> no-op; 0 -> if the
 // global enable byte 0x800BF873!=0 set obj[4]=3 & return, else INIT (obj[4]=1, obj[0]=1, load the per-obj
@@ -1570,6 +1670,7 @@ void games_tomba2_init(void) {
     { void ov_grid_setup_49968(Core*); rec_set_override(0x80049968u, ov_grid_setup_49968); }  // collision-grid row-ptr setup
     { void ov_grid_query_47cbc(Core*); rec_set_override(0x80047CBCu, ov_grid_query_47cbc); }  // collision-grid cell query/walk
     { void ov_grid_resolve_498c8(Core*); rec_set_override(0x800498C8u, ov_grid_resolve_498c8); }  // collision-grid resolve loop (control flow owned)
+    { void ov_grid_step_4798c(Core*); rec_set_override(0x8004798Cu, ov_grid_step_4798c); }  // collision-grid per-step origin/index setup (the last dispatched grid callee)
     { void ov_script_vm_4ce14(Core*); rec_set_override(0x8004CE14u, ov_script_vm_4ce14); }  // per-object script-VM tick (control flow owned; sub-behaviors dispatched)
     { void ov_input_dispatch_931c0(Core*); rec_set_override(0x800931C0u, ov_input_dispatch_931c0); }  // per-frame input/controller-state processor (control flow owned)
     // PC-native PLAYER velocity-integrate handler (engine/engine_player.cpp): FUN_80056B48 integrates

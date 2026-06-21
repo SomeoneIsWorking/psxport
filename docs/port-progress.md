@@ -201,6 +201,21 @@ for content fns (call it). Do NOT mimic PSX hardware (GTE/GP0/OT) — remove Bee
   frame there), so the gate excludes the top-of-RAM stack window [sp-0x800, sp) (sp ~0x1FE9xx, far above all
   game data) — a 32-byte window first exposed exactly this residue (diffs all at sp-0x26..sp-0x48), the wider
   window then went 0-diff. Registered in game_tomba2.cpp alongside the grid leaves.
+- ✅ **later-201 — `FUN_8004798C` `ov_grid_step_4798c` (collision-grid PER-STEP ORIGIN/INDEX SETUP — the
+  LAST dispatched callee inside the resolve loop; COMPLETES the grid family setup/query/resolve/step).** a0 =
+  probe object. Pure scratchpad halfword arithmetic + two dispatched callees; NO GTE, NO render. (1) if
+  obj[42] != byte[0x1FE] → jal 0x80048ecc(obj[42]) (grid reload, dispatched). (2) SELECT/RANGE TEST: if
+  (h[0x1AE] u< h[0x1B0]) test the Z range ((h[0x1C0]−h[0x1AC])&0xffff vs h[0x1B0]) else the X range
+  ((h[0x1BC]−h[0x1AA])&0xffff vs h[0x1AE]); if the probe is past it → jal 0x80048fc4(obj,1) (re-resolve,
+  dispatched). (3) CLAMP+RECOMPUTE: on (h[0x1AE] u< h[0x1B0]) → Z branch (clamp 0x1C0 into [0x1AC,
+  0x1AC+0x1B0], recompute 0x1BC) else X branch (clamp 0x1BC into [0x1AA, 0x1AA+0x1AE], recompute 0x1C0);
+  recompute = cellbase + (((clamped − cellbase2)·pitch[0x1BA]) >> 14) — SIGNED mult, low word, arithmetic
+  sra. Control flow + scratchpad ops owned native; the two callees stay PSX via rec_dispatch (and 0x8004798C
+  is now routed through this native body from the owned resolve loop). Verified with the full RAM+scratchpad
+  A/B gate `gridstep`: **0-diff over 8000+ live field calls** (press right 250 + press left 250). GOTCHA
+  (same grid family): the dispatched callees run in BOTH passes and leave transient residue below entry sp
+  (no native frame there) → gate excludes the top-of-RAM stack window [sp-0x800, sp). The whole grid family
+  (49968 / 47CBC / 498C8 / 4798C) is now OWNED. Registered in game_tomba2.cpp alongside the grid leaves.
 - ✅ **later-196 — `FUN_8004CE14` `ov_script_vm_4ce14` (per-object SCRIPT-VM tick — THE most-called field
   fn, ~14900 calls/run).** First CONTENT state machine owned after the boundary removal. Dispatch on state
   byte obj[4]: 2→no-op; 3→jal 0x8007A624; >3→no-op; 0→ if global 0x800BF873!=0 set obj[4]=3 & return, else

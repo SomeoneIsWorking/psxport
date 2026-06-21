@@ -6701,3 +6701,29 @@ of the grid family whose two leaves were owned earlier (later-194 `FUN_80049968`
   0x200000 — far above all game data; a real divergence would alter persistent state below). A first 32-byte
   exclusion exposed exactly this stack residue (diffs all at sp-0x26..sp-0x48), confirming the cause; the
   wider window then went 0-diff. Registered in game_tomba2.cpp alongside the grid leaves.
+
+### later-201 — FUN_8004798C `ov_grid_step_4798c` owned (collision-grid per-step origin/index setup)
+Owned `FUN_8004798C` PC-native in `engine/game_tomba2.cpp` — the LAST dispatched callee inside the owned
+resolve loop (later-200), completing the collision-grid family (setup 80049968 / query 80047CBC / resolve
+800498C8 / step 8004798C all native now). a0 = probe object. Pure scratchpad halfword arithmetic + two
+dispatched callees; NO GTE, NO render packets.
+- **RE** (`tools/disas.py 0x8004798C`): three blocks over scratchpad base 0x1F800000.
+  (1) if obj[42] != byte[0x1FE] (current grid id) → jal 0x80048ecc(a0=obj[42]) (grid reload, dispatched).
+  (2) SELECT/RANGE TEST: a "Z vs X" select on (h[0x1AE] u< h[0x1B0]); compute the selected-axis delta of the
+  working probe coord vs the grid origin ((h[0x1C0]−h[0x1AC])&0xffff for Z, (h[0x1BC]−h[0x1AA])&0xffff for X)
+  and sltu vs the extent (h[0x1B0]/h[0x1AE]); if the probe is past the range → jal 0x80048fc4(a0=obj,a1=1)
+  (re-resolve, dispatched). (3) CLAMP+RECOMPUTE on the SAME (h[0x1AE] u< h[0x1B0]) select: Z branch clamps
+  0x1C0 into [0x1AC, 0x1AC+0x1B0] then recomputes 0x1BC; X branch clamps 0x1BC into [0x1AA, 0x1AA+0x1AE]
+  then recomputes 0x1C0. recompute = cellbase + (((clamped − cellbase2)·pitch[0x1BA]) >> 14), a SIGNED
+  `mult`/`mflo` low-word product then arithmetic `sra 14`.
+- **Ownership**: control flow + every scratchpad op owned native; the two callees (80048ecc grid-reload,
+  80048fc4 re-resolve) stay PSX via rec_dispatch. Registering 0x8004798C means the resolve loop (later-200)
+  now routes its `jal 0x8004798C` through this native body instead of the raw recomp.
+- **VERIFIED** with the full RAM+scratchpad A/B gate `gridstep` (native run → snapshot+rollback →
+  rec_super_call → diff): **0-diff over 8000+ live field calls**, 0 mismatches, across both movement
+  directions (press right 250 + press left 250 — exercises both the Z and X clamp branches and the reload /
+  re-resolve callee arms). GOTCHA (same grid family as gridresolve/scriptvm): the dispatched callees run in
+  BOTH passes and leave transient residue below entry sp (this fn has no native frame there), so the gate
+  excludes the top-of-RAM stack window [sp-0x800, sp) — far above all game data; a real behavioral
+  divergence would alter persistent state below it. Live (non-verify) field run: Tomba walks normally, no
+  crash, reaches stage 0x8010637C.
