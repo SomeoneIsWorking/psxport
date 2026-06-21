@@ -768,6 +768,11 @@ int native_fmv_play_lba(Core* core, uint32_t lba, uint32_t size_bytes) {
     fprintf(stderr, "[fmv] done: %d video frames, %ld audio sample-pairs (%.2fs @ %dHz)\n",
             frames, media_frames, media_frames / (double)(xa_freq ? xa_freq : 37800), xa_freq);
   fmv_audio_close();
+  // FMV teardown (issues #7/#11): EVERY exit (normal end AND Start-skip break) leaves the FMV's last
+  // (possibly partial) frame in the display FB. Black it + present once so no FMV residue is revealed
+  // under the front-end's still-loading 2D layer. Engine-owned deterministic hand-off, no sleep/retry.
+  void gpu_clear_display(Core*);
+  gpu_clear_display(core);
   return frames;
 }
 

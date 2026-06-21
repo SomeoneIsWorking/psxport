@@ -631,6 +631,12 @@ void native_boot_run(Core* c) {
   } else {
     fprintf(stderr, "[native_boot] skipping intro FMVs (headless/NO_FMV)\n");
   }
+  // Clean hand-off to the front-end (issues #7/#11): black the display FB before the title builds, so the
+  // title's first frames (drawn over several frames while its background/font/CLUT upload) never composite
+  // over the stale SCEA white-fill or an FMV last-frame. Covers the no-FMV-ran case too (the stub splash
+  // fill is still resident in s_vram even when both intros are skipped). Deterministic, no timer.
+  void gpu_clear_display(Core*);
+  gpu_clear_display(c);
   rec_set_override(0x80050b08u, ov_game_main);
   fprintf(stderr, "[native_boot] entering crt0 0x800896E0 (interpreted)\n");
   rec_dispatch(c, 0x800896E0u);

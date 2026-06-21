@@ -140,6 +140,7 @@ struct GpuState {
   void gpu_present(Core* core);
   uint16_t gpu_vram_peek(int x, int y);
   void scea_splash_composite(int fade);   // PC-native SCEA splash: composite the text into s_vram (0,0)
+  void gpu_clear_display(Core* core);      // zero the display FB rect to opaque black + present (FMV teardown)
   void gpu_vram_load(const uint16_t* src);
   void gpu_vram_save(uint16_t* dst);
   void gpu_provat_enable();
@@ -171,6 +172,7 @@ void gpu_dma2_linked_list(Core* core, uint32_t madr);
 void gpu_dma2_block(Core* core, uint32_t madr, int count, int to_gpu);
 void gpu_present(Core* core);
 void gpu_present_ex(Core* core, int do_blit);
+void gpu_clear_display(Core* core);   // FMV/splash teardown: black the display FB + present (no stale pixels)
 void gpu_native_load_image(Core* core, int x, int y, int w, int h, uint32_t src);
 int  gpu_native_load_vram(Core* core, const char* path);
 void gpu_native_shot(Core* core, const char* path);
