@@ -470,6 +470,14 @@ int GpuState::gpu_native_load_vram(const char* path) {
   return n == (size_t)VRAM_W * VRAM_H;
 }
 void GpuState::gpu_native_load_image(Core* core, int x, int y, int w, int h, uint32_t src) {
+  // VRAM-transfer guard: bounds-report + atlas-clobber catch (vram_xfer.cpp, `debug vramguard`). This is
+  // the single CPU->VRAM upload chokepoint for every texture-group page, font page, and CLUT, so it is
+  // both the place to REGISTER the protected atlas regions and a transfer to validate. Diagnostic only.
+  vram_guard_check(core, "native", x, y, w, h, src);
+  // Register texture-region uploads (anything right of the two 320-wide framebuffers) as a protected,
+  // resident page: these are exactly the atlas/font/CLUT rects a later draw samples; a non-upload write
+  // landing on one is the stripe-corruption clobber. Framebuffer uploads (x<320) are NOT atlas data.
+  if (x >= 320) vram_register_atlas(x, y, w, h, (w <= 16) ? "clut" : "atlas");
   for (int v = 0; v < h; v++)
     for (int u = 0; u < w; u++)
       *vram(x + u, y + v) = core->mem_r16(src + (uint32_t)((v * w + u) * 2));
@@ -1130,6 +1138,7 @@ void GpuState::gpu_gp0(Core* core, uint32_t w) {
       s_xfer_h = (((s_fifo[2] >> 16) & 0x1FF) ? ((s_fifo[2] >> 16) & 0x1FF) : 512);
       s_xfer_px = 0; s_xfer = 1;
       if (gpu_vk_enabled()) gpu_vk_dirty(core, s_xfer_x, s_xfer_y, s_xfer_w, s_xfer_h);   // mirror upload to VK
+      vram_guard_check(core, "A0", s_xfer_x, s_xfer_y, s_xfer_w, s_xfer_h, 0x80000000u | g_dma_src);
       clutwatch_xfer("A0", s_xfer_x, s_xfer_y, s_xfer_w, s_xfer_h);
       if (cfg_dbg("upload")) {
         fprintf(stderr, "[upload] f%d A0 dest=(%d,%d) %dx%d src=0x%08X\n",
@@ -1146,6 +1155,10 @@ void GpuState::gpu_gp0(Core* core, uint32_t w) {
       int sx = s_fifo[1] & 0x3FF, sy = (s_fifo[1] >> 16) & 0x1FF;
       int dx = s_fifo[2] & 0x3FF, dy = (s_fifo[2] >> 16) & 0x1FF;
       int w2 = s_fifo[3] & 0x3FF, h2 = (s_fifo[3] >> 16) & 0x1FF;
+      // Guard the DEST rect: a render-OT 0x80 copy whose dest lands on a live texpage is the classic
+      // atlas-clobber (later-72 poly-line-desync family). Checked BEFORE the copy so the log names the
+      // clobber even though the copy still proceeds (diagnostic, non-mutating; the catch is the point).
+      vram_guard_check(core, "80copy", dx, dy, w2, h2, 0x80000000u | ((uint32_t)(sy * VRAM_W + sx) * 2));
       for (int y = 0; y < h2; y++) for (int x = 0; x < w2; x++) *vram(dx + x, dy + y) = *vram(sx + x, sy + y);
       if (gpu_vk_enabled()) gpu_vk_dirty(core, dx, dy, w2, h2);   // mirror VRAM->VRAM copy to VK
       clutwatch_xfer("80copy", dx, dy, w2, h2);

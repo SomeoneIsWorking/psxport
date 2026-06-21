@@ -97,6 +97,26 @@ struct GpuState {
   int s_pl = 0, s_pl_g = 0;                                   // poly-line in progress / gouraud
   int s_xfer = 0, s_xfer_x = 0, s_xfer_y = 0, s_xfer_w = 0, s_xfer_h = 0, s_xfer_px = 0;
 
+  // ---- PC-native VRAM TRANSFER GUARD (atlas-clobber catcher) ------------------------------------
+  // The texture/VRAM manager owns every CPU->VRAM and VRAM->VRAM transfer through ONE guarded entry
+  // (vram_xfer.cpp). It (1) bounds-validates the rect so a garbage descriptor can never silently fold
+  // onto a live texpage via the VRAM wrap, and (2) keeps a registry of the populated TEXTURE-GROUP
+  // regions (the big atlas/font/CLUT uploads). Under `debug vramguard` it logs any transfer that lands
+  // on a registered, still-resident atlas region from an UNEXPECTED path (a stray render-OT copy / a
+  // bad upload) — catching the non-deterministic stripe-corruption clobber deterministically the moment
+  // it fires live, with full provenance (source path, rect, OT node), even though it is rare. The
+  // registry is pure diagnostic bookkeeping (no guest-RAM write) so it never perturbs content state.
+  static const int VG_MAX = 64;
+  struct VgRegion { int x, y, w, h; int frame; uint8_t live; char tag[12]; };
+  VgRegion s_vg[VG_MAX] = {};
+  int s_vg_n = 0;
+  // Register a texture-group/atlas upload rect as a protected, populated region (called from the native
+  // upload). label distinguishes atlas vs CLUT vs framebuffer. Overlapping re-uploads refresh in place.
+  void vram_register_atlas(int x, int y, int w, int h, const char* tag);
+  // Guard a transfer: validate bounds; under vramguard, log if it clobbers a protected atlas region.
+  // `path` names the writer (e.g. "A0", "80copy", "native"); src is the guest source addr (0 if N/A).
+  void vram_guard_check(Core* core, const char* path, int x, int y, int w, int h, uint32_t src);
+
   // Frame + OT bookkeeping
   int s_frame = 0;                                            // present-frame counter
   uint32_t s_cur_node = 0;                                    // RAM addr of the OT node being fed to GP0
