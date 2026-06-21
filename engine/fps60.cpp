@@ -246,6 +246,12 @@ struct Fps60Billboard { uint32_t lo, hi; uint32_t ident; uint32_t crM[11]; };
 #define FPS60_BB_MAX 1024
 static Fps60Billboard s_bbCur[FPS60_BB_MAX];
 static int s_nBBCur = 0;
+// The billboard-identity registry is needed both by the 60fps reproject AND by the `debug objid` overlay
+// (which labels billboards with their object id in any mode). So record/lookup/stamp whenever EITHER is
+// active. In 60fps-off mode the registry is reset per frame from the render queue (fps60_bb_frame_reset,
+// called from RenderQueue::push); the 60fps path resets it in frame_commit as before.
+static inline int bb_active(void) { return g_fps60_on || cfg_dbg("objid"); }
+void fps60_bb_frame_reset(void) { s_nBBCur = 0; }
 // (GTE_ReadCR is declared in the extern "C" block at the top of this file.)
 
 // Called from engine_submit.cpp right after gpu_obj_depth_add(lo, hi, ord). Capture this object's billboard
@@ -253,7 +259,7 @@ static int s_nBBCur = 0;
 // identical to GpuState::obj_depth_lookup), its stable cross-frame IDENTITY, and the live composed
 // camera×object transform (CR0-7 + the frame projection constants CR24/25/26). No-op unless fps60 is on.
 void fps60_record_billboard_span(Core* /*c*/, uint32_t lo, uint32_t hi, uint32_t ident) {
-  if (!g_fps60_on || !ident || hi <= lo) return;
+  if (!bb_active() || !ident || hi <= lo) return;
   if (s_nBBCur >= FPS60_BB_MAX) return;
   Fps60Billboard* e = &s_bbCur[s_nBBCur++];
   e->lo = lo | 0x80000000u; e->hi = hi | 0x80000000u; e->ident = ident;   // KSEG, matching s_cur_node form
@@ -265,7 +271,7 @@ void fps60_record_billboard_span(Core* /*c*/, uint32_t lo, uint32_t hi, uint32_t
 // span this frame, return its identity + composed transform so the caller can stamp the RqItem as an
 // anchor-reproject billboard. Returns 1 on hit. node is the OT-node address (KSEG, == s_cur_node|0x80000000).
 static int fps60_billboard_for_node(uint32_t node, uint32_t* ident, uint32_t cr[11]) {
-  if (!g_fps60_on) return 0;
+  if (!bb_active()) return 0;
   uint32_t n = node | 0x80000000u;
   for (int i = 0; i < s_nBBCur; i++)
     if (n >= s_bbCur[i].lo && n < s_bbCur[i].hi) {
@@ -286,7 +292,7 @@ static int fps60_billboard_for_node(uint32_t node, uint32_t* ident, uint32_t cr[
 // camera-B. The prev-frame transform is found by fps_key out of the prev RqItems (which now carry it).
 // No-op unless fps60 is on / no span matches. node = OT-node address (the gp0 walk's s_cur_node).
 void fps60_stamp_billboard(Core* c, uint32_t node) {
-  if (!g_fps60_on) return;
+  if (!bb_active()) return;
   RenderQueue& q = c->game->rq;
   if (q.consumed || q.n == 0) return;
   RqItem* it = &q.items[q.n - 1];
