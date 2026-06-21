@@ -645,9 +645,19 @@ in-port profiler (later-186, `interp.cpp`) gives the TIME + FREQUENCY histograms
   RAM-diff gate). hud.cpp even spilled a 0xDEAD0000 sentinel `ra` into a guest stack slot (the frame
   transcription leaking). HUD must be REBUILT: read gauge/weapon-icon STATE → draw textured quads with the
   PC renderer. Worktrees: agent-ae0c0c3e (HUD), agent-a10b61c3 (inventory).
-- **IN PROGRESS:** offline WALKING-DUST sprite-sheet exporter (USER headline) — own the BAV cel format,
-  decode the seaside slot-1 17-frame 8bpp dust cel OFFLINE from the disc (extends `tools/tex_export.cpp`;
-  uses `engine/engine_bav.cpp` BAV-loader RE). Disc now wired in `.env`.
+- **LANDED this session (main b4c62ce):** entity_spawn (FUN_80079C3C) + inventory (FUN_8004D338 + wrappers)
+  + area cel-load (FUN_800753D4) all PC-native 0-diff (71acfd9); physics move-and-collide RE trace, no clean
+  shared integrator to own → per-actor SM is the unit (2bd2f8c); fps60 dynamic-shadow STROBE FIXED (167c574,
+  keep_shadow across the two presents); retired SW fps60 re-rasterizer REMOVED −515 lines (405cae1); texture
+  VRAM-transfer path owned + `vramguard` live atlas-clobber catcher (b4c62ce — corruption is timing-driven,
+  catcher names the offending GP0-0x80 copy when reproduced live; the FIX of that path is the followup).
+- **DUST: PARKED by user.** It is a quad-cluster particle effect, not a sprite strip; format owned + tooling
+  in 85ebb98 (tex_export --scanbav/--bavsheet/bav_layout, REPL `vramraw`). Finish = decode per-quad records.
+- **IN PROGRESS (subagents):** per-area LIGHTING (village sun + lava/torch point lights) and HUD/overlays
+  PC-NATIVE rebuild (read gauge/icon/banner STATE → draw textured quads, owning overlay order; NOT a
+  transcription — the prior transcription hud.cpp was REJECTED).
+- **60fps design (user-chosen):** interpolate CHARACTERS only; static world/terrain/2D/shadows from the REAL
+  composite. Live tier = actor-transform VK (fps60_present_vk/build_lerp).
 
 **USER REDIRECT 2026-06-20 (later-177) — supersedes the camera items below.** Port top-down boot→gameplay;
 the ASSET PIPELINE must be fully PC-owned so assets reconstruct with the emulator OFF. Acceptance test:
