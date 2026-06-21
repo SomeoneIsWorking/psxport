@@ -361,6 +361,66 @@ funcs are already native (`ov_open_thread`/`ov_change_thread`/`ov_switch`, `runt
 **Gameplay (entity update + render submission) runs inside the main gameplay task** — its body is the
 next RE target (see Open items).
 
+## Area WARP / destination mechanism — RE map (this session) + the `warp` REPL dev command
+**What selects the area to load.** The current area id is a single byte global **`0x800bf870`** (read ~304×
+across the engine for per-area behavior; the seaside field is area id 0). The area DATA overlay always lands
+at the fixed base **`0x80182000`** (its per-area asset table is at `area_base+0x51000`; see `FUN_800754f4`).
+Each area's disc location is in the **AREA TABLE at `0x800be118`** — stride-8 `(LBA, byte_size)` records,
+indexed by **`area_id + 3`** (the `+3` comes from `a1 = task[0x6e]+3` at `0x800453cc` → `FUN_80045080`).
+Live dump (24 entries, ids 0..23):
+
+| id | LBA | size | id | LBA | size | id | LBA | size |
+|----|-----|------|----|-----|------|----|-----|------|
+| 0 | 0x760 | 0x351C | 8 | 0x36A | 0x392B4 | 16 | 0x61A | 0x1D328 |
+| 1 | 0x74A | 0x61E4 | 9 | 0x3DD | 0x456BC | 17 | 0x655 | 0x1E6F0 |
+| 2 | 0x767 | 0x44FC | 10 | 0x468 | 0x38158 | 18 | 0x692 | 0x2114C |
+| 3 | 0x176 | 0x459A8 | 11 | 0x4D9 | 0x40F8C | 19 | 0x6D5 | 0x463C |
+| 4 | 0x202 | 0x316DC | 12 | 0x55B | 0x566D | 20 | 0x6DE | 0x36C0 |
+| 5 | 0x265 | 0x3112C | 13 | 0x566 | 0x1EE38 | 21 | 0x6E5 | 0x3B30 |
+| 6 | 0x2C8 | 0x1326C | 14 | 0x5A4 | 0x1C368 | 22 | 0x6ED | 0x4A7C |
+| 7 | 0x2EF | 0x3D3A4 | 15 | 0x5DD | 0x1E1C0 | 23 | 0x6F7 | 0x16CC4 |
+
+(The big ones — 3/4/5/7/8/9/10/11 ≈ 0x3xxxx–0x45xxx — are full field/level areas; the small 19..23 ≈ 0x3xxx–0x4xxx
+are likely sub-rooms/boss arenas. id 13..18 ≈ 0x1Cxxx–0x21xxx mid-size. NB the table is RAM-resident, filled at
+boot — it reads as all-zero in a fresh MAIN.EXE.) A parallel `(count, flags)` table sits at `0x800be368`
+(stride 8, ~20 entries: e.g. id0=`(1, 0x000E)`). The translated overlay's per-area disc params land at
+`0x800ef480/ef484` (LBA/end) + `0x800ef488` (record count) — written by the area-load orchestrator
+`FUN_8004514c`.
+
+**How a transition consumes it.** The area-load is **TASK SLOT 1** (`0x801fe070`, stride `0x70`), entry
+`FUN_800452c0`. A door/exit triggers it via **`FUN_80044bd4(a0=0x800452c0, a1=dest_id, a2=mode, a3=phase)`**:
+it kills sub-task slot 2 (`FUN_80052010(2)`), writes the dest id into **`task1[0x6e]` (`0x801fe0de`)** + mode
+into `task1[0x6d]` (`0x801fe0dd`), then `FUN_80051f14(1, 0x800452c0)` restarts the load task. The load task
+→ `FUN_8004514c` commits **`0x800bf870 = translate(task[0x6e])`** (`FUN_80045080`, table `0x800c5e18`/the id
+table), pulls the area overlay (table `0x800be118[id+3]`) to `0x80182000`, walks the asset table at
+`+0x51000` (cels via `FUN_800753D4`/`ov_cel_load_wait`), then GAME re-inits the scene.
+
+**The trigger lives in the GAME-stage steady handler `0x801088d8` (sm[0x4a]==1), case `sm[0x4c]==0`**
+(NOT the `sm[0x4c]` area machine `0x80106478` — that's never entered on the field; confirmed). case0:
+`FUN_8005245c()` (CD-lib cleanup) → `FUN_80044bd4(0x800452c0, a1=lbu@0x800bf870, 0, 2)` (loads the area in
+`0x800bf870`) → `sm[0x4c] = lbu@(0x80108f60 + lbu@0x800bf870)` (next area-machine state from a per-area byte
+table). So a SCRIPTED door first writes the destination into `0x800bf870` (+ the area-machine deeper path
+`FUN_80106b98`/`sm[0x4e]` 12-way table at `0x8010626c` does per-id special-casing on `0x800bf870`), then
+the steady handler reloads. **`sm[0x4a]==4` (`0x801089c4`, `sm[0x4c]==1`) is the TITLE/DEMO teardown** — it
+zeroes `task[0x69..0x6b]` + `sm[0x4a/4c/4e]` and calls `FUN_80052078(1)` (full stage reload → bounces to
+the DEMO stage `0x801062E4`); it is NOT an area-to-area warp.
+
+**`warp <area_id>` REPL dev command (runtime/recomp/native_boot.cpp).** From the field, seeds
+`0x800bf870 = dest` and drives `sm[0x4a]=1, sm[0x4c]=0` so the GAME stage runs case0 itself next frame and
+loads the dest area IN-CONTEXT (FUN_80044bd4's cooperative `FUN_80051f80` yields work because task0 yields →
+task1 loads → task0 resumes). Two approaches that DON'T work (both verified): (a) `rec_dispatch(FUN_80044bd4)`
+from the frame-loop top **deadlocks** (yields outside a task run); (b) restarting the load task ourselves under
+a live area **corrupts task0** (overlay swap mid object-walk → bad-opcode flood).
+- **VERIFIED CLEAN:** same-area reload `warp 0` from the seaside field — **0 bad opcodes**, stays in GAME
+  stage, area machine runs (`sm[0x4c]` 0→2). The trigger mechanism is sound.
+- **CROSS-area is prerequisite-state-dependent:** `warp 6`/`warp 20` ran with **0 bad opcodes** (got
+  furthest), `warp 3` 7, `warp 1` / `warp 19` crash hard (1000s of bad opcodes). Root cause: case0 reloads
+  the overlay while the OLD area's spawned object tasks/handlers are still registered and run against the
+  swapped `0x80182000` memory. A clean cross-area warp needs the **door-transition preamble** that quiesces/
+  tears down the per-area object tasks BEFORE the reload (the game runs this on a real door; reproducing it is
+  the scoped follow-up = the "prerequisite-state" work for a boss/level selector). The destination mechanism
+  itself (above) is fully mapped.
+
 ## Object / entity model — the entity LIST + node (RESOLVED via RAM-dump search)
 The active entities are a **doubly-linked list of pool nodes, stride 0xD0 (208 bytes)** (found by
 searching gameplay RAM dumps `scratch/bin/{level_ram,ours_ram_gf}.bin` for the handler address bytes;

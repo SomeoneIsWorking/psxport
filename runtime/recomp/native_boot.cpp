@@ -280,6 +280,16 @@ static void repl_xadump(uint8_t chan, uint32_t start_lba, const char* path, int 
 // to the GAME prologue; `skip N` pulses Start for N frames to advance the intro cutscene into the field.
 static int  g_nav_newgame = 0;
 static long g_skip_frames  = 0;
+// `warp <id>` (dev/diagnostic): arm an AREA WARP. The GAME-stage area machine loads the area whose id is
+// in the current-area global 0x800bf870; an area CHANGE is driven by FUN_80044bd4(area_task_entry=0x800452c0,
+// dest_area_id, mode, phase) from inside the GAME stage SM (the steady handler 0x801088d8 case0 calls it with
+// a1 = the current/destination area id). That registers/restarts the AREA-LOAD TASK (0x800452c0) which, via
+// FUN_8004514c, commits 0x800bf870 = translate(dest), pulls the area overlay (disc LBA/size from the area
+// table at 0x800be118, stride 8, indexed by id+3) to 0x80182000, and walks the per-area asset table at
+// area_base+0x51000. We arm the dest id here and fire FUN_80044bd4 from the frame loop (scheduler context
+// active, like `newgame`). See docs/engine_re.md "Area WARP / destination mechanism".
+static int      g_warp_armed = 0;
+static uint32_t g_warp_dest   = 0;
 
 // Read+execute REPL commands until a `run N` (returns N) or quit/EOF (returns -1).
 static long native_repl_read(Core* c, uint32_t f) {
@@ -327,6 +337,20 @@ static long native_repl_read(Core* c, uint32_t f) {
       fprintf(stderr, "[repl] invtest: fired %d vector(s) through inventory overrides\n", n * 3); }
     else if (!strcmp(cmd, "newgame")) { g_nav_newgame = 1; fprintf(stderr, "[repl] newgame: pulsing to GAME prologue\n"); return 100000; }
     else if (!strcmp(cmd, "skip")) { a = 0; sscanf(line, "%*s %u", &a); if (!a) a = 500; g_skip_frames = (long)a; fprintf(stderr, "[repl] skip %u frames\n", a); return (long)a; }
+    else if (!strcmp(cmd, "warp")) {
+      // warp <area_id> — load a different area on demand (foundation for a level/boss selector). Only valid
+      // from the field (GAME stage 0x8010637C, sm[0x48]==2). Arms the dest; the frame loop fires it.
+      if (sscanf(line, "%*s %u", &a) == 1) {
+        if (c->mem_r32(0x801fe00c) != 0x8010637Cu)
+          fprintf(stderr, "[repl] warp: not in GAME stage (stage=%08X) — reach the field first (newgame/skip)\n",
+                  c->mem_r32(0x801fe00c));
+        else {
+          g_warp_dest = a; g_warp_armed = 1;
+          fprintf(stderr, "[repl] warp: armed dest area id=%u (cur=%u) — run frames to load\n",
+                  a, c->mem_r8(0x800bf870u));
+        }
+      } else fprintf(stderr, "[repl] warp <area_id>  (area table @0x800be118, ids 0..23)\n");
+    }
     else if (!strcmp(cmd, "shot")) { char path[200] = {0}; if (sscanf(line, "%*s %199s", path) == 1) { void gpu_native_shot(Core*, const char*); gpu_native_shot(c, path); } }
     else if (!strcmp(cmd, "vram")) { char path[200] = {0}; unsigned x=0,y=0,w=1024,h=512;
       if (sscanf(line, "%*s %199s %u %u %u %u", path, &x,&y,&w,&h) >= 1) {
@@ -472,6 +496,36 @@ static void ov_game_main(Core* c) {
       if ((f % 24u) == 0) pad_repl_tap(c, (uint16_t)(0xFFFF & ~0x0008), 6);     // pulse Start
       if (--g_skip_frames == 0) { void pad_repl_release(Core*); pad_repl_release(c);
         fprintf(stderr, "[repl] skip done at frame %u\n", f); }
+    }
+    // `warp` — fire the armed area change. We replicate the NON-yielding essential body of the GAME-stage
+    // area-change call FUN_80044bd4(0x800452c0, dest, mode=0, phase=2). FUN_80044bd4 cannot be rec_dispatched
+    // directly here: it has cooperative FUN_80051f80(1) yields (waiting for in-flight CD-DMA on 0x801fe070)
+    // that deadlock when invoked outside a real task run (verified: a direct dispatch hangs). Its meaningful
+    // work in a steady field (DMA idle) is just: (1) FUN_80052010(2) kill sub-task slot 2; (2) write the
+    // dest area id into task0[0x6e] and the load mode into task0[0x6d]; (3) FUN_80051f14(1, 0x800452c0)
+    // restart AREA-LOAD TASK slot 1 at its entry. The cooperative area-load task then runs naturally over
+    // the following frames (commits 0x800bf870=translate(dest), pulls the area overlay from the table at
+    // 0x800be118[id+3], walks the asset table) — no nested-yield hazard. Both callees are non-yielding.
+    if (g_warp_armed) {
+      g_warp_armed = 0;
+      // The IN-GAME area reload (no DEMO/title bounce) is driven by the GAME-stage steady handler
+      // 0x801088d8 case sm[0x4c]==0 (running sub-mode sm[0x4a]==1): it calls
+      // FUN_80044bd4(0x800452c0, a1=lbu@0x800bf870, a2=0, a3=2) IN-CONTEXT (task0), so FUN_80044bd4's
+      // cooperative FUN_80051f80 yields work correctly — task0 yields, the area-load task (slot 1) pulls the
+      // new overlay, task0 resumes. (Restarting the load task ourselves, or rec_dispatching FUN_80044bd4
+      // from the frame-loop top, both fail: the former corrupts the live area -> bad opcodes, the latter
+      // deadlocks on the yield outside a task run — both verified.) So we DON'T do the load here: we seed the
+      // destination into the area id global 0x800bf870 (case0's a1) and set sm[0x4a]=1, sm[0x4c]=0 so the
+      // GAME stage runs case0 itself next frame and loads the dest area. (sm[0x4c]==4 -> FUN_80052078(1) is
+      // the title/DEMO teardown, NOT an area-to-area warp — verified it bounces to stage DEMO.)
+      const uint32_t TASK0 = 0x801fe000u;
+      fprintf(stderr, "[repl] warp: dest=%u at f%u (cur area=%u) -> seed area id + drive GAME case0\n",
+              g_warp_dest, f, c->mem_r8(0x800bf870u));
+      c->mem_w8(0x800bf870u, (uint8_t)g_warp_dest);    // area id global = dest (case0 passes it to FUN_80044bd4)
+      c->mem_w16(TASK0 + 0x4au, 1);                    // sm[0x4a] = 1 (running sub-mode -> handler 0x801088d8)
+      c->mem_w16(TASK0 + 0x4cu, 0);                    // sm[0x4c] = 0 -> case0 = FUN_80044bd4 area-load
+      fprintf(stderr, "[repl] warp: drove GAME case0; sm[0x4a]=%u sm[0x4c]=%u — run frames to load\n",
+              c->mem_r16(TASK0 + 0x4au), c->mem_r16(TASK0 + 0x4cu));
     }
     // PSXPORT_DEBUG_SERVER pause/step: when frozen, do NOT advance the game — just pump host input
     // (keeps the window alive) and service debug commands so `step`/`play` can arrive. A `step` runs
