@@ -202,6 +202,56 @@ constexpr uint32_t GLYPH_STR  = 0x80078CA8u;  // per-glyph string drawer (loops 
 constexpr uint32_t UI_RECT    = 0x8007E1B8u;  // universal UI rect emitter (box / panel slice)
 constexpr uint32_t NINE_SLICE = 0x8007EAE4u;  // 9-slice panel (box frame)
 
+// ---- IN-GAME MENU LABEL VISIBILITY (GitHub #26) -----------------------------------------------------
+// The two thin text wrappers below are the ONLY callers of the glyph drawer FUN_80078CA8 (verified: the
+// jal 0x80078ca8 sites are exactly 0x8007935c inside FUN_80079324 and 0x800793ac inside FUN_80079374 — so
+// EVERY string in the game routes through one of these two). They set the pen (a0), cell size (a1=8x8 or
+// 8x16) and font bank (a2->CLUT), then jal FUN_80078CA8 — but they do NOT touch the per-glyph MODULATION
+// COLOUR template at scratchpad 0x1f800004(R)/+5(G)/+6(B). FUN_80078CA8 packs those 3 bytes into every
+// op-0x65 sprite cmd word (lw 4(0x1f800000) @0x80078f34); ov_glyph_string reads the same slots.
+//   Most text callers (dialog, the field narration fade-in ramp) set that template themselves before
+// calling the wrapper (e.g. via the "set-colour + box" routine FUN_8007E9C8, which writes a0 -> 0x1f800004),
+// so their text is coloured/visible. But the in-game MENU draw routines — the SAVE/LOAD data menu
+// (FUN_800737F8 / 800738B0 / 800739AC / 80073CD8, cluster [0x80073328..0x80074134]) and the OPTIONS/CONFIG
+// screen (FUN_8007F914 + siblings, cluster [0x8007EAE4..0x8007FDA8]) — call the wrappers WITHOUT ever
+// setting the template. They inherit whatever the previous draw left there; on these dark menu boxes that
+// stale value is dark, so the labels render near-black-on-dark = INVISIBLE (#26).
+//   FIX (PC-owned, scoped — NOT a blanket force): override the two wrappers; when the CALLER (ra) is in a
+// menu cluster, set the colour template to the engine's intended visible menu colour BEFORE super-calling
+// the wrapper body (which then runs the real pen/font setup and the glyph draw). Non-menu callers
+// (narration/dialog) are untouched — we just super-call, preserving their own colour. So this fixes the
+// menu labels without regressing the working field-narration / dialog text.
+//
+// INTENDED MENU TEXT COLOUR: 0x80 = PSX identity modulation (1.0). At 0x80 the glyph keeps its font-CLUT
+// colour unmodulated — i.e. full-brightness cream/white menu text exactly as the art was authored. The
+// game's own visible-text path treats 0x80/0x80/0x80 as "no tint" (ov_glyph_string's existing fallback
+// already maps an all-zero template to 0x80), so identity is the designed, non-arbitrary menu colour.
+constexpr uint32_t TEXTW_8  = 0x80079324u;  // FUN_80079324: 8x8 cell text wrapper
+constexpr uint32_t TEXTW_16 = 0x80079374u;  // FUN_80079374: 8x16 cell text wrapper
+constexpr uint8_t  MENU_TEXT_RGB = 0x80;    // PSX identity modulation -> unmodulated cream/white CLUT text
+
+// True when return address `ra` lands inside one of the in-game menu draw clusters whose label routines
+// never set the glyph colour template (save/load data menu + options/config screen). Ranges are the
+// function-boundary clusters that hold every wrapper jal for those screens (see RE comment above).
+inline bool ra_is_menu_cluster(uint32_t ra) {
+  return (ra >= 0x80073328u && ra <  0x80074134u)    // SAVE / LOAD data menu draw cluster
+      || (ra >= 0x8007EAE4u && ra <= 0x8007FDA8u);   // OPTIONS / CONFIG screen draw cluster
+}
+
+// Shared wrapper override: for menu-cluster callers, set the visible menu colour template, then run the
+// real wrapper body (pen/font setup + glyph draw via ov_glyph_string). For all other callers, just
+// super-call unchanged so their own colour template is honoured (no regression to narration/dialog).
+inline void ov_text_wrapper(Core* c, uint32_t wrapper_addr) {
+  if (ra_is_menu_cluster(c->r[31])) {
+    c->mem_w8(0x1f800004u, MENU_TEXT_RGB);   // R
+    c->mem_w8(0x1f800005u, MENU_TEXT_RGB);   // G
+    c->mem_w8(0x1f800006u, MENU_TEXT_RGB);   // B  -> identity = full-brightness CLUT text
+  }
+  rec_super_call(c, wrapper_addr);           // run the original wrapper body (calls 0x80078ca8/ov_glyph_string)
+}
+void ov_textw_8 (Core* c) { ov_text_wrapper(c, TEXTW_8);  }
+void ov_textw_16(Core* c) { ov_text_wrapper(c, TEXTW_16); }
+
 // PC-native glyph string drawer. Mirrors FUN_80078CA8's char loop + atlas-cell UV math, but draws each
 // glyph as a textured quad on the engine 2D overlay instead of building a PSX op-0x65 OT packet.
 void ov_glyph_string(Core* c) {
@@ -245,7 +295,11 @@ void ov_glyph_string(Core* c) {
 
   if (cfg_dbg("bannerprobe")) {
     char buf[64]; int n=0; for(;n<63;n++){uint8_t ch=c->mem_r8(s+(uint32_t)n); if(!ch)break; buf[n]=(ch>=0x20&&ch<0x7f)?(char)ch:'.';} buf[n]=0;
-    static long cnt=0; if(++cnt<=20) fprintf(stderr,"[bp] NATIVE glyph pen=(%d,%d) cell=%dx%d bank=%d clut=(%d,%d) base=%d \"%s\"\n",penx,peny,cellW,cellH,a2,clutx,cluty,fontbase,buf);
+    // Also dump the GLYPH colour template (0x1f800004/5/6 — the per-glyph modulation RGB the body packs
+    // into the GP0 sprite cmd word, see FUN_80078CA8 @0x80078f34) so we can see WHY config-screen labels
+    // come out invisible (GitHub #26): if these are dark/zero against a dark box, the text is unreadable.
+    int tcr=c->mem_r8(0x1f800004u), tcg=c->mem_r8(0x1f800005u), tcb=c->mem_r8(0x1f800006u);
+    static long cnt=0; if(++cnt<=40) fprintf(stderr,"[bp] NATIVE glyph pen=(%d,%d) cell=%dx%d bank=%d clut=(%d,%d) base=%d colTmpl=(%d,%d,%d) \"%s\"\n",penx,peny,cellW,cellH,a2,clutx,cluty,fontbase,tcr,tcg,tcb,buf);
   }
 
   int x = penx, y = peny;
@@ -332,4 +386,8 @@ void hud_register(void) {
   // body) plus the `bannerprobe` diagnostic log, so the next session can RE them on the live banner scene.
   rec_set_override(UI_RECT,    probe_rect);
   rec_set_override(NINE_SLICE, probe_nine);
+  // In-game MENU label visibility (GitHub #26): the text wrappers set a visible colour template for
+  // menu-cluster callers, then super-call the body. See the RE comment above ov_text_wrapper.
+  rec_set_override(TEXTW_8,  ov_textw_8);
+  rec_set_override(TEXTW_16, ov_textw_16);
 }
