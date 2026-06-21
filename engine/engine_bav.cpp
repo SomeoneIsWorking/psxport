@@ -259,6 +259,24 @@ static uint32_t bav_load_native(Core* c) {
         "vram_base_word=%05x size=%u rec0.w12=%04x rec0.w14=%04x\n",
         slot_f, desc, kind, bpp, clamp, (int)(c->mem_r8(desc + 22) & 0xff) + 1,
         a0v, (unsigned)off, r0_12 & 0xffff, r0_14 & 0xffff);
+
+      // Per-frame VRAM-layout dump for the OFFLINE sheet exporter (tools/tex_export). For each frame the
+      // latched cel word = (a0v + cum_off) >> 3 is the packed VRAM cel pointer; word<<3 = the frame's
+      // VRAM WORD address (X = (word<<3)%1024, Y = (word<<3)/1024). uv_hw<<shift = the frame's size in
+      // VRAM words. These are exactly the values tex_export reproduces offline from the descriptor alone.
+      uint32_t f18  = c->mem_r16(desc + 18);
+      uint32_t uvb  = (desc + 32) + clamp * 16 + (f18 << 9);
+      int      bu2  = (int)(c->mem_r8(desc + 22) & 0xff);
+      int      shf  = (kind < 5u) ? 2 : 3;
+      uint32_t cum  = 0;
+      for (int i = 0; i <= bu2; i++) {
+        uint32_t hw = c->mem_r16(uvb + (uint32_t)i * 2);
+        cum += (hw << shf);
+        uint32_t word = (a0v + cum) >> 3;        // latched cel word (matches rec[i>>1] +12/+14)
+        uint32_t wa   = word << 3;               // frame VRAM word address
+        fprintf(stderr, "[bavload]   F%-2d word=%04x  vram XY=(%4u,%3u)  size_words=%u\n",
+                i, word & 0xffff, wa % 1024u, wa / 1024u, hw << shf);
+      }
     }
   }
 

@@ -24,9 +24,19 @@
 //
 //   The WALKING-DUST cel's tpage/CLUT/U/V/size/count are RUNTIME data (per-area "BAV" cel asset,
 //   loaded via gen_func_80096590 -> cel base latched at *0x80105CE8; effect slot array @0x800154C8),
-//   NOT static in MAIN.EXE. To dump the real dust sheet, read those live via the REPL while dust is on
-//   screen (cel record = 16B stride, frame idx at byte 0x80105CFF; U/V are bytes, tpage/clut halfwords),
-//   then pass the values here. The default invocation renders a TEMPLATE over a known-populated page.
+//   NOT static in MAIN.EXE. The default --frames invocation renders a TEMPLATE over a populated page.
+//
+// SCANBAV / BAVSHEET MODES (added 2026-06-21, walking-dust task) — locate + lay out a per-area BAV
+// EFFECT CEL (e.g. the walking dust) from the disc / a live dump. See the comment blocks in main():
+//   --scanbav [--all]  scan the disc for a BAV descriptor (dust = type 0x70, kind 7, 17 frames).
+//   --bavsheet --ram <dump> --vram <vramraw> --desc <addr> [--clut X,Y] [--w N]  lay a loaded BAV
+//                      cel's frames into one sheet from a RAM dump + a raw-u16 VRAM dump (REPL `vramraw`).
+//   bav_parse / bav_layout reproduce engine_bav.cpp loop-3 (the per-frame VRAM cel word) 0-DIFF vs the
+//   live-latched cel records — verified against a runtime dump of the seaside dust (slot 1, 0x801858d4).
+// FINDING: these BAV "frames" are NOT a simple sprite strip — each frame is a LARGE packed region (~7k
+//   VRAM words) that the dust draws as a CLUSTER OF TEXTURED QUADS (the descriptor's hu<<9 region holds
+//   32-byte quad records w/ vertex indices c0..c3). A faithful sprite sheet needs those per-quad UV
+//   lists decoded; the linear-span sheet here shows the raw per-frame VRAM region only.
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -110,6 +120,29 @@ std::vector<uint8_t> ReadFile(ChdDisc& disc, const IsoFile& f) {
   std::vector<uint8_t> buf((size_t)nsec * kUserDataSize);
   for (uint32_t i = 0; i < nsec; i++) disc.ReadSector(f.lba + i, buf.data() + (size_t)i * kUserDataSize);
   buf.resize(f.size); return buf;
+}
+
+// Enumerate a directory's child files (one level) into {name,lba,size}, for --scanbav.
+struct DirEnt { std::string name; uint32_t lba, size; bool dir; };
+bool ListDir(ChdDisc& disc, const std::string& path, std::vector<DirEnt>& out) {
+  IsoFile d;
+  if (path.empty()) { uint8_t sec[kUserDataSize];
+    if (!disc.ReadSector(16, sec) || std::memcmp(sec + 1, "CD001", 5) != 0) return false;
+    d.lba = rd32(sec + 156 + 2); d.size = rd32(sec + 156 + 10);
+  } else if (!FindFile(disc, path, &d)) return false;
+  const uint32_t nsec = (d.size + kUserDataSize - 1) / kUserDataSize;
+  std::vector<uint8_t> buf((size_t)nsec * kUserDataSize);
+  for (uint32_t i = 0; i < nsec; i++) disc.ReadSector(d.lba + i, buf.data() + (size_t)i * kUserDataSize);
+  for (uint32_t s = 0; s < buf.size(); s += kUserDataSize)
+    for (uint32_t pos = s; pos < s + kUserDataSize;) {
+      const uint8_t len = buf[pos]; if (!len) break;
+      const uint8_t flags = buf[pos + 25], nlen = buf[pos + 32];
+      std::string name((const char*)&buf[pos + 33], nlen);
+      const uint32_t e_lba = rd32(&buf[pos + 2]), e_size = rd32(&buf[pos + 10]); pos += len;
+      if (nlen == 1 && (name[0] == 0 || name[0] == 1)) continue;
+      out.push_back({Norm(name), e_lba, e_size, (bool)(flags & 0x02)});
+    }
+  return true;
 }
 
 // ---- PC-owned asset codec (mirror of game_tomba2.cpp / tex_reconstruct.c) ----
@@ -250,6 +283,50 @@ void layout_sheet(const char* path, int tpx, int tpy, int bpp, int clut_x, int c
 }  // namespace
 
 namespace {
+// ---- BAV cel descriptor (per-area effect-cel asset) — see engine/engine_bav.cpp ----
+// A BAV descriptor: +0 (u32) header; (hdr>>8)==0x564142 "BAV", low byte = TYPE (0x70 for the dust
+// variant). +4 (u32) kind/bpp selector (<5 -> 4bpp & sizes<<2; else 8bpp & sizes<<3; gates the
+// 64/128 cel-record clamp when type==0x70). +18 (u16) "hu". +22 (u8) "bu" = frames-1. +32.. = `clamp`
+// 16-byte CEL RECORDS, then (after hu<<9 more bytes) the per-frame UV size table.
+//   bavload loop-3 (VRAM layout): cum=0; for each frame i in [0,bu]:
+//     cum += (uv_hw[i] << shift);  word = (vram_base_word + cum) >> 3;
+//   word is written to cel record (i>>1): +12 for even i, +14 for odd i. This is the engine's INTERNAL
+//   packed cel pointer (NOT a GP0 texpage word) — reproduced here purely from the descriptor + a given
+//   vram_base, so the offline tool needs none of the runtime-latched values (verified 0-diff vs live).
+struct BavDesc {
+  bool ok = false; uint32_t off = 0;       // byte offset of the descriptor within its (decoded) blob
+  uint32_t type = 0, kind = 0, hu = 0; int frames = 0; int bpp = 0;
+};
+inline bool bav_match(const uint8_t* p, size_t avail) {
+  if (avail < 32) return false;
+  if (!((p[1]=='B') && (p[2]=='A') && (p[3]=='V'))) return false;  // (hdr>>8)=="BAV"
+  return true;
+}
+// Parse a BAV descriptor at p (avail bytes follow). Fills frames/bpp and (if dust=true) requires the
+// dust signature (type 0x70, kind 7, bu==16 -> 17 frames). Returns false if not a (matching) BAV.
+bool bav_parse(const uint8_t* p, size_t avail, BavDesc* d, bool dust_only) {
+  if (!bav_match(p, avail)) return false;
+  uint32_t hdr = rd32(p);
+  d->type = hdr & 0xff; d->kind = rd32(p + 4); d->hu = (uint16_t)(p[18] | (p[19] << 8));
+  uint32_t bu = p[22]; d->frames = (int)bu + 1; d->bpp = (d->kind < 5) ? 4 : 8;
+  if (dust_only && !(d->type == 0x70 && d->kind == 7 && bu == 16)) return false;
+  d->ok = true; return true;
+}
+// Reproduce bavload loop-3: derive each frame's internal cel-pointer word from the descriptor + a
+// vram_base (word addr). out_words[i] = (vram_base + cum_off_i) >> 3 (& 0xffff). Returns total bytes.
+uint32_t bav_layout(const uint8_t* desc, uint32_t vram_base, int* out_words) {
+  uint32_t kind = rd32(desc + 4); int bu = desc[22]; int shift = (kind < 5) ? 2 : 3;
+  uint32_t clamp = (desc[0] == 0x70) ? ((kind < 5) ? 64u : 128u) : 64u;
+  const uint8_t* uv = desc + 32 + clamp * 16 + ((uint32_t)((uint16_t)(desc[18] | (desc[19] << 8))) << 9);
+  uint32_t cum = 0;
+  for (int i = 0; i <= bu; i++) {
+    uint32_t v = (uint16_t)(uv[i*2] | (uv[i*2+1] << 8));
+    cum += (v << shift);
+    out_words[i] = (int)(((vram_base + cum) >> 3) & 0xffff);
+  }
+  return cum;
+}
+
 // Parse "--key val" style options out of argv (returns the value string or fallback).
 const char* opt(int argc, char** argv, const char* key, const char* dflt) {
   for (int i = 1; i + 1 < argc; i++) if (!std::strcmp(argv[i], key)) return argv[i + 1];
@@ -275,11 +352,91 @@ int main(int argc, char** argv) {
   const char* pos1 = nullptr; const char* pos2 = nullptr;
   for (int i = 1; i < argc; i++) {
     if (argv[i][0] == '-') {                                   // option
-      if (std::strcmp(argv[i], "--frames") != 0 && i + 1 < argc) i++;  // valued opt: skip its value
-      continue;                                                // (--frames is a valueless flag)
+      const bool valueless = !std::strcmp(argv[i],"--frames") || !std::strcmp(argv[i],"--scanbav") ||
+                             !std::strcmp(argv[i],"--all") || !std::strcmp(argv[i],"--bavsheet");
+      if (!valueless && i + 1 < argc) i++;                      // valued opt: skip its value
+      continue;
     }
     if (!pos1) pos1 = argv[i]; else if (!pos2) pos2 = argv[i];
   }
+  // ---- BAVSHEET MODE: lay a loaded BAV cel's 17 frames into one labeled sheet, from a RAM + raw-VRAM
+  // dump (no disc needed). The dust's pixels are uploaded to a DYNAMIC VRAM slot at area-load and are NOT
+  // present in TOMBA2.IMG, so the sheet is built from the LIVE atlas (REPL `vramraw` raw u16 dump). We
+  // reproduce engine_bav.cpp loop-3 PURELY from the descriptor in the RAM dump to get each frame's VRAM
+  // word-address + size, then CLUT-decode the frame rectangle.
+  //   tex_export --bavsheet --ram scratch/raw/dust_ram.bin --vram scratch/raw/dust_vram_raw.bin
+  //              --desc 0x801858d4 [--clut X,Y] [--w 256] [--out scratch/screenshots/dust_sheet.png]
+  // NB each "frame" of these effect cels is a large packed VRAM region (a cluster of textured quads),
+  // not a single sprite — the sheet shows each frame's raw atlas region (W-wide), CLUT-decoded.
+  if (has_flag(argc, argv, "--bavsheet")) {
+    const char* ramp = opt(argc, argv, "--ram", "scratch/raw/dust_ram.bin");
+    const char* vramp = opt(argc, argv, "--vram", "scratch/raw/dust_vram_raw.bin");
+    uint32_t descva = (uint32_t)std::strtoul(opt(argc, argv, "--desc", "0x801858d4"), nullptr, 0);
+    int clx=0, cly=0; std::sscanf(opt(argc,argv,"--clut","0,0"), "%d,%d", &clx,&cly);
+    int sheetw = std::atoi(opt(argc, argv, "--w", "256"));
+    const char* outp = opt(argc, argv, "--out", "scratch/screenshots/dust_sheet.png");
+    int rc0 = system("mkdir -p scratch/screenshots"); (void)rc0;
+    FILE* rf = std::fopen(ramp, "rb"); if (!rf) { std::perror(ramp); return 1; }
+    std::vector<uint8_t> ram(0x200000); if (std::fread(ram.data(),1,ram.size(),rf)!=ram.size()){} std::fclose(rf);
+    FILE* vf = std::fopen(vramp, "rb"); if (!vf) { std::perror(vramp); return 1; }
+    if (std::fread(g_vram,2,VRAM_W*VRAM_H,vf)!=(size_t)VRAM_W*VRAM_H){} std::fclose(vf);
+    uint32_t d = descva & 0x1FFFFF;
+    const uint8_t* desc = &ram[d];
+    BavDesc bd; if (!bav_parse(desc, ram.size()-d, &bd, false)) { std::fprintf(stderr, "no BAV at desc\n"); return 1; }
+    // slot's VRAM base: find which slot table entry (0x80105C50[slot]) == descva, read base from 0x80105D78.
+    uint32_t vbase = 0; int slot=-1;
+    for (int s=0;s<16;s++) if (rd32(&ram[(0x80105C50u&0x1FFFFF)+s*4])==descva) { slot=s;
+        vbase = rd32(&ram[(0x80105D78u&0x1FFFFF)+s*4]); break; }
+    if (slot<0) { std::fprintf(stderr,"desc not in any loaded BAV slot\n"); return 1; }
+    int words[256]; bav_layout(desc, vbase, words);              // latched cel word per frame
+    int nf = bd.frames;
+    // frame i data span = [wstart[i], wstart[i+1]); wstart[i] = words[i-1]<<3 (words[-1]=vbase), end words[i]<<3.
+    // Lay each frame as a sheetw-wide CLUT-decoded tile of its VRAM word region.
+    const int pad=2, label_h=9; std::vector<std::vector<uint8_t>> tiles(nf); std::vector<int> th(nf);
+    int maxh=1;
+    for (int i=0;i<nf;i++) {
+      // words[i] = (vbase + sum(sizes[0..i])) >> 3, so words[i]<<3 = end of frame i's VRAM word span;
+      // frame i occupies [ (i==0?vbase : words[i-1]<<3), words[i]<<3 ).
+      uint32_t a0 = (i==0) ? vbase : ((uint32_t)words[i-1] << 3);
+      uint32_t a1 = (uint32_t)words[i] << 3;
+      uint32_t nwords = (a1>a0)? a1-a0 : 0;
+      // pixels are 8bpp: 2 per word. Lay as a sheetw-wide (texels) tile.
+      int twords = sheetw/2; if (twords<1) twords=1;
+      int rows = (int)((nwords + twords - 1)/twords); if (rows<1) rows=1; if (rows>2000) rows=2000;
+      th[i]=rows; if (rows>maxh) maxh=rows;
+      tiles[i].assign((size_t)sheetw*rows*3, 0);
+      for (uint32_t k=0;k<nwords;k++) {
+        uint32_t wa=a0+k; int vx=(int)(wa%VRAM_W), vy=(int)(wa/VRAM_W);
+        if (vy>=VRAM_H) break; uint16_t wd=vram_at(vx,vy);
+        for (int half=0; half<2; half++) {
+          int idx=half? (wd>>8):(wd&0xff);
+          int u=(int)(k*2+half); int rr=u/sheetw, cc=u%sheetw;
+          if (rr>=rows) continue;
+          uint8_t* p=&tiles[i][((size_t)rr*sheetw+cc)*3];
+          if (clx==0 && cly==0) { p[0]=p[1]=p[2]=(uint8_t)idx; }   // index-grayscale view (no CLUT given)
+          else { uint16_t c = vram_at(clx+idx, cly); if (c) rgb555_to_rgb(c,p); }
+        }
+      }
+    }
+    int cellw=sheetw+pad, cellh=maxh+label_h+pad;
+    int W=nf*cellw+pad, H=cellh+pad;
+    std::vector<uint8_t> rgb((size_t)W*H*3,32);
+    for (int y=0;y<H;y++) for (int x=0;x<W;x++) if (((x>>3)^(y>>3))&1){uint8_t*p=&rgb[(y*W+x)*3];p[0]=p[1]=p[2]=48;}
+    for (int i=0;i<nf;i++) {
+      int ox=pad+i*cellw, oy=pad+label_h;
+      for (int yy=0;yy<th[i];yy++) for (int xx=0;xx<sheetw;xx++){
+        uint8_t* s=&tiles[i][((size_t)yy*sheetw+xx)*3];
+        if (s[0]|s[1]|s[2]) std::memcpy(&rgb[((size_t)(oy+yy)*W+ox+xx)*3], s, 3);
+      }
+      char lbl[16]; std::snprintf(lbl,sizeof lbl,"F%d",i);
+      draw_text(rgb.data(),W,H,ox,pad,lbl,255,255,0);
+    }
+    put_png(outp,W,H,rgb.data());
+    std::printf("bavsheet -> %s (%dx%d, slot %d, %d frames, vbase word=%05x, clut=(%d,%d), tile w=%d)\n",
+                outp,W,H,slot,nf,vbase,clx,cly,sheetw);
+    return 0;
+  }
+
   const auto disc_path = psxport::ResolveDiscPath(pos1 ? pos1 : "");
   const std::string out_dir = pos2 ? pos2 : "scratch/textures";
   if (!disc_path) { std::fprintf(stderr, "no disc image (arg/env/drop-in)\n"); return 1; }
@@ -292,6 +449,60 @@ int main(int argc, char** argv) {
   std::vector<uint8_t> idx = ReadFile(disc, idxf), img = ReadFile(disc, imgf);
   const uint32_t nsets = idxf.size / 2048;
   std::printf("disc %s : %u texture sets\n", disc_path->c_str(), nsets);
+
+  // ---- SCANBAV MODE: locate a BAV cel descriptor on the disc, offline ----
+  // `--scanbav [--all]`  scans BIN/*.BIN, CD/TOMBA2.{DAT,IMG} and ZZZ.DAT for the BAV magic ("BAV" at
+  // byte+1) — both as RAW bytes and after a best-effort {count,12B-entry,payload@0x800} archive LZ-decode
+  // — reporting any hit's file + byte offset + parsed descriptor (type/kind/frames). Without --all only
+  // the DUST signature (type 0x70, kind 7, 17 frames) is reported.
+  // FINDING (2026-06-21): NO BAV descriptor is present in ANY of these files raw OR via that archive
+  // format. The per-area effect cels (the 3 type-0x70 cel atlases incl. the walking dust at runtime
+  // 0x801858d4) are stored in a DIFFERENT compressed container that this scanner does not yet decode;
+  // the exact disc file+offset is therefore still UNRESOLVED (needs the area-load path traced). The cel
+  // pixels are also NOT in TOMBA2.IMG (the dust's live VRAM slot, X=272 Y=184, is uncovered by any
+  // TOMBA2.IMG placement) — they are uploaded from the area asset to a dynamic VRAM slot at load.
+  if (has_flag(argc, argv, "--scanbav")) {
+    const bool all = has_flag(argc, argv, "--all");
+    std::vector<std::string> files;
+    std::vector<DirEnt> binents;
+    if (ListDir(disc, "BIN", binents)) for (auto& e : binents) if (!e.dir) files.push_back("BIN/" + e.name);
+    files.push_back("CD/TOMBA2.DAT");
+    files.push_back("CD/TOMBA2.IMG");
+    files.push_back("ZZZ.DAT");
+    auto scan_buf = [&](const char* tag, const std::string& fp, uint32_t lba,
+                        const uint8_t* buf, size_t n) {
+      for (size_t i = 0; i + 32 <= n; i++) {
+        if (buf[i] != 0x42 && buf[i] != 0x70) continue;             // type byte (cheap pre-filter)
+        if (!(buf[i+1]=='B' && buf[i+2]=='A' && buf[i+3]=='V')) continue;
+        BavDesc d; if (!bav_parse(&buf[i], n - i, &d, !all)) continue;
+        std::printf("BAV  %-16s %-7s off=0x%06zx (LBA %u)  type=0x%02x kind=%u frames=%d bpp=%d hu=%u%s\n",
+                    fp.c_str(), tag, i, lba, d.type, d.kind, d.frames, d.bpp, d.hu,
+                    (d.type==0x70 && d.kind==7 && d.frames==17) ? "   <-- DUST" : "");
+      }
+    };
+    static uint8_t dec[0x80000];
+    for (auto& fp : files) {
+      IsoFile f; if (!FindFile(disc, fp, &f)) continue;
+      std::vector<uint8_t> blob = ReadFile(disc, f);
+      scan_buf("raw", fp, f.lba, blob.data(), blob.size());          // 1) raw bytes
+      // 2) archive LZ-decode: area BINs are {count, 12B entries{x,y,stride,field,srclen}, payload@0x800}.
+      if (blob.size() >= 0x800) {
+        uint32_t count = rd32(blob.data());
+        if (count && count < 4096) {
+          const uint8_t* entry = blob.data() + 4; const uint8_t* src = blob.data() + 0x800;
+          for (uint32_t e = 0; e < count && src < blob.data() + blob.size(); e++, entry += 12) {
+            int16_t stride = rd16(entry + 4); uint32_t srclen = rd32(entry + 8);
+            if (src + srclen > blob.data() + blob.size()) break;
+            uint32_t outn = lz_decompress(dec, sizeof dec, src, srclen, stride);
+            char tag[16]; std::snprintf(tag, sizeof tag, "lz#%u", e);
+            scan_buf(tag, fp, f.lba, dec, outn);
+            src += srclen;
+          }
+        }
+      }
+    }
+    return 0;
+  }
 
   // ---- FRAMES MODE: lay every animation frame of a sprite sheet into one labeled PNG ----
   // `--frames` with: --tp X,Y (texpage origin) --bpp {4|8|15} --clut X,Y --uv U,V (first cel local)

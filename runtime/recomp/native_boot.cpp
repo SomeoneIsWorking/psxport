@@ -306,6 +306,8 @@ static long native_repl_read(Core* c, uint32_t f) {
     else if (!strcmp(cmd, "vram")) { char path[200] = {0}; unsigned x=0,y=0,w=1024,h=512;
       if (sscanf(line, "%*s %199s %u %u %u %u", path, &x,&y,&w,&h) >= 1) {
         void gpu_vk_vram_region(const char*, int, int, int, int); gpu_vk_vram_region(path, (int)x,(int)y,(int)w,(int)h); } }
+    else if (!strcmp(cmd, "vramraw")) { char path[200] = {0};
+      if (sscanf(line, "%*s %199s", path) == 1) { void gpu_vk_vram_raw(const char*); gpu_vk_vram_raw(path); } }
     else if (!strcmp(cmd, "dumpram")) {
       char path[200] = {0};
       if (sscanf(line, "%*s %199s", path) == 1) {

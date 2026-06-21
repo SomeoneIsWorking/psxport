@@ -1901,6 +1901,18 @@ void gpu_vk_vram_region(const char* path, int x, int y, int w, int h) {
   vk_dump_to(path, x, y, w, h);
   fprintf(stderr, "[vk_vram] wrote %s (%dx%d @ %d,%d)\n", path, w, h, x, y);
 }
+// Dump the FULL 1024x512 VRAM as RAW little-endian uint16 words (1MB, no header) — for offline
+// tooling that needs the actual 16bpp/8bpp/4bpp index words (the PPM dump is RGB555-decoded and so
+// destroys paletted index data). Used to extract a CLUT-paletted cel sheet (e.g. the walking dust).
+void gpu_vk_vram_raw(const char* path) {
+  if (!gpu_vk_enabled() || !s_inited) { fprintf(stderr, "[vk_vram] VK not active\n"); return; }
+  vk_readback_to_rb();
+  const uint16_t* vram = (const uint16_t*)s_rb_ptr;
+  FILE* f = fopen(path, "wb"); if (!f) { perror(path); return; }
+  for (int y = 0; y < VRAM_H; y++) fwrite(&vram[y * VRAM_W], 2, VRAM_W, f);
+  fclose(f);
+  fprintf(stderr, "[vk_vram] wrote RAW %s (%dx%d u16)\n", path, VRAM_W, VRAM_H);
+}
 
 // Per-frame: reset the tee'd-primitive batch for the next frame.
 void GpuVkState::frame_end(const uint16_t* svram, int frame) {
