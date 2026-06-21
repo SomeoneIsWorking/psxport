@@ -70,6 +70,8 @@ void pad_fill_buffer(Core* c, uint8_t* buf) {
 // under PSXPORT_SDL, matching gpu_native.c's optional-SDL style.
 #ifdef PSXPORT_SDL
 #include <SDL.h>
+#include <stdio.h>   // diagnostic fprintf in pad_poll_sdl (controller-driving-directions notice)
+#include <stdlib.h>  // atoi (PSXPORT_PAD_NOPAD parse)
 
 // Provided by imgui_overlay.cpp. Returns 1 ONLY while the user is actively typing into an ImGui text
 // widget (io.WantTextInput) — NOT merely because the overlay is open/focused. We use it to suppress the
@@ -100,6 +102,16 @@ static void pad_ensure_gc_subsystem(void) {
 // pump we don't own (the pump lives in gpu_vk.cpp). Cheap: SDL_NumJoysticks is a count, and we only
 // call SDL_GameControllerOpen for indices we haven't already opened.
 static void pad_rescan_controllers(void) {
+  // ESCAPE HATCH (Linux WASD-dead): PSXPORT_PAD_NOPAD=1 ignores ALL game controllers and uses the
+  // keyboard only. Use this if a connected/phantom pad with a drifting analog stick ("analog mode")
+  // is injecting a phantom direction and you can't unplug it. Close anything already open, then bail.
+  static int nopad = -1;
+  if (nopad < 0) { const char* v = cfg_str("PSXPORT_PAD_NOPAD"); nopad = (v && atoi(v) != 0) ? 1 : 0; }
+  if (nopad) {
+    for (int s = 0; s < PAD_MAX_GC; s++)
+      if (s_gc[s]) { SDL_GameControllerClose(s_gc[s]); s_gc[s] = nullptr; s_gc_inst[s] = -1; }
+    return;
+  }
   pad_ensure_gc_subsystem();
   // 1) Drop slots whose controller was unplugged.
   for (int s = 0; s < PAD_MAX_GC; s++) {
@@ -109,6 +121,9 @@ static void pad_rescan_controllers(void) {
     }
   }
   // 2) Open any attached controller we don't already hold (dedup by instance id).
+  //    Linux note: SDL enumerates a lot of /dev/input nodes; SDL_IsGameController already filters to
+  //    devices with a real gamecontroller mapping, so we don't open accelerometers/phantom joysticks
+  //    here and then read garbage axes from them (which used to inject a permanent phantom direction).
   int n = SDL_NumJoysticks();
   for (int i = 0; i < n; i++) {
     if (!SDL_IsGameController(i)) continue;
@@ -133,9 +148,19 @@ static void pad_rescan_controllers(void) {
 //   LeftShoulder/RightShoulder -> L1/R1; LeftTrigger/RightTrigger (analog, thresholded) -> L2/R2.
 //   Start -> Start, Back -> Select, LeftStick/RightStick click -> L3/R3.
 //   D-pad AND left analog stick -> directions (stick past ~50% deflection counts as a press).
+//
+// DEADZONE / DRIFT ROBUSTNESS (Linux fix, 2026-06-21): the directional STICK threshold must be a LARGE
+// fraction of full deflection, never a small "off-center" value. The previous code OR'd directions in
+// additively across EVERY connected controller every frame with a 50%-ish threshold and NO lower guard,
+// so on Linux a controller (or a phantom/virtual joystick SDL enumerates and the hotswap then opens)
+// whose left stick rests slightly off-center — or whose axes read stale/extreme before the first
+// joystick event is pumped — would HOLD a phantom direction continuously. A constantly-held analog
+// direction makes the game look "stuck"/unresponsive to WASD (it fights or saturates movement), which
+// is exactly the "WASD doesn't move the player / maybe analog mode" symptom on the Linux machine. Keep
+// the threshold high (~70%) so only a deliberate stick push registers and resting drift never does.
 static void pad_apply_controller(SDL_GameController* gc, uint16_t* mask) {
   #define BTN(b) SDL_GameControllerGetButton(gc, (b))
-  const int STICK = 16000;   // ~50% of 32767 deflection -> treat as a directional press
+  const int STICK = 22000;   // ~67% of 32767 deflection -> treat as a directional press (drift-proof)
   Sint16 lx = SDL_GameControllerGetAxis(gc, SDL_CONTROLLER_AXIS_LEFTX);
   Sint16 ly = SDL_GameControllerGetAxis(gc, SDL_CONTROLLER_AXIS_LEFTY);
   if (BTN(SDL_CONTROLLER_BUTTON_DPAD_UP)    || ly < -STICK) *mask &= ~0x0010u; // Up
@@ -203,9 +228,35 @@ void pad_poll_sdl(Core* c) {
   // HOTSWAP-aware controllers: open/close as devices come and go, then OR every connected pad into the
   // mask (additive with the keyboard, so both work simultaneously). Self-contained — no dependency on
   // SDL_CONTROLLERDEVICE* events from the (unowned) event pump.
+  //
+  // SDL_GameControllerUpdate() FIRST: the joystick/controller event pump lives in another TU (gpu_vk's
+  // poll_quit) and our SDL_PumpEvents() above only refreshes controller state if the GC subsystem was
+  // already up at pump time. The subsystem is lazily initialized inside pad_rescan_controllers(), so on
+  // the frames right after a controller is opened the button/axis reads could be stale (Linux: stale
+  // axes read as a held direction). An explicit update guarantees fresh state before we read it.
   pad_rescan_controllers();
+  SDL_GameControllerUpdate();
+  uint16_t before_pads = mask;
   for (int s = 0; s < PAD_MAX_GC; s++)
     if (s_gc[s]) pad_apply_controller(s_gc[s], &mask);
+
+  // DIAGNOSTIC (Linux WASD-dead hunt): if a controller is injecting directions while the keyboard
+  // pressed nothing, say so once — this tells the user a connected/phantom pad (e.g. a drifting analog
+  // stick "analog mode") is the input source, not their keyboard. Active-low: bits CLEARED == pressed.
+  // Only fires on a transition so it doesn't spam. Set PSXPORT_PAD_NOPAD=1 to ignore controllers
+  // entirely (keyboard only) if a phantom device is the culprit and you can't unplug it.
+  {
+    const uint16_t DIRS = 0x00F0u;  // Up/Right/Down/Left
+    static int warned = 0;
+    int pad_dirs   = (before_pads & DIRS) != (mask & DIRS);          // a pad changed a direction bit
+    int kbd_no_dir = (before_pads & DIRS) == DIRS;                   // keyboard pressed no direction
+    if (pad_dirs && kbd_no_dir && !warned) {
+      fprintf(stderr, "[pad] a game controller is driving DIRECTIONS (host pad mask=0x%04x). If WASD "
+                      "seems dead, an analog stick / phantom pad is the input. Set PSXPORT_PAD_NOPAD=1 "
+                      "to use the keyboard only.\n", (unsigned)mask);
+      warned = 1;
+    }
+  }
 
   c->game->pad.buttons = mask;
 }
@@ -294,7 +345,10 @@ void pad_service_frame(Core* c) {
   static uint32_t s_fc = 0;       // internal frame counter for the pulse (== native frame index)
   static uint16_t s_hold_mask = PAD_NONE;  // headless test hook: a HELD (not pulsed) mask...
   static uint32_t s_hold_at = 0;           // ...applied from this native frame onward
-  if (s_have_window < 0) s_have_window = cfg_str("PSXPORT_GPU_WINDOW") ? 1 : 0;
+  // Check the VALUE, not mere presence: run.sh ALWAYS sets PSXPORT_GPU_WINDOW (to "0" headless, "1"
+  // windowed), so the old `cfg_str(...) ? 1 : 0` was true even headless -> it called pad_poll_sdl()
+  // with no SDL window. Match every other consumer (gpu_native/native_stub: `atoi(w) != 0`).
+  if (s_have_window < 0) { const char* w = cfg_str("PSXPORT_GPU_WINDOW"); s_have_window = (w && atoi(w) != 0) ? 1 : 0; }
 #ifdef PSXPORT_SDL
   if (s_have_window) pad_poll_sdl(c);            // host keyboard/gamepad -> c->game->pad.buttons
 #endif
