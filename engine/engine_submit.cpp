@@ -96,6 +96,30 @@ static void geomblk_dump(Core* c, const char* kind, uint32_t rec, uint32_t count
 void gpu_obj_depth_add(Core*, uint32_t lo, uint32_t hi, float ord);
 float proj_obj_center_ord(void);
 #define PKT_POOL_PTR  0x800BF544u
+// Native replacement for the resident render-command DISPATCHER FUN_8003F698 (the interpreted body was
+// ~4% of field time). It reads a command byte at 0x800BF870, bounds-checks (<22), indexes the jump table
+// at 0x80015268, and `jr`s into a per-command thunk = `jal <handler>; j <epilogue>`. The dispatcher does
+// NO work after the handler and passes a0..a3 untouched, so a native tail-call to the handler is exactly
+// equivalent (same args, same return target, ra/sp net-zero) — render output unchanged, only the dispatch
+// GLUE goes native. Two guards force the DEFAULT handler 0x800803DC: busy flag 0x1F800234, and a2&1. Each
+// thunk's first insn is the `jal`, so the handler is decoded from it (the table's default entries already
+// point at the 0x800803DC thunk → cmd<22 needs no special case). RE: disas.py 0x8003F698 / table
+// 0x80015268 / thunks 0x8003F6E8..0x8003F790.
+static void render_cmd_dispatch(Core* c) {
+  uint32_t handler;
+  if (c->mem_r8(0x1F800234u) != 0 || (c->r[6] & 1u) != 0) {
+    handler = 0x800803DCu;
+  } else {
+    uint32_t cmd = c->mem_r8(0x800BF870u);
+    if (cmd >= 22u) handler = 0x800803DCu;
+    else {
+      uint32_t thunk = c->mem_r32(0x80015268u + cmd * 4u);
+      uint32_t jal   = c->mem_r32(thunk);
+      handler = ((jal & 0x03FFFFFFu) << 2) | 0x80000000u;
+    }
+  }
+  rec_dispatch(c, handler);
+}
 void ov_render_cmd(Core* c) {
   if (cfg_dbg("rcmd") && probe_frame_ok(c)) {
     uint8_t mode = c->mem_r8(0x800BF870u);
@@ -109,7 +133,7 @@ void ov_render_cmd(Core* c) {
   // the overlay variants, so track the actual stores), and tag it with the object's world-position depth.
   extern int g_pkt_track; extern uint32_t g_pkt_lo, g_pkt_hi;
   g_pkt_track = 1; g_pkt_lo = 0xFFFFFFFFu; g_pkt_hi = 0;
-  rec_super_call(c, 0x8003F698u);
+  render_cmd_dispatch(c);                             // native dispatch (was rec_super_call(0x8003F698) — the ~4%)
   g_pkt_track = 0;
   if (g_pkt_hi > g_pkt_lo) gpu_obj_depth_add(c, g_pkt_lo, g_pkt_hi, ord);
   if (cfg_dbg("objz") && probe_frame_ok(c) && g_pkt_hi > g_pkt_lo)

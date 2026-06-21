@@ -286,6 +286,7 @@ void ov_cone_cull_2b278(Core* c) {
   c->r[2] = (uint32_t)cone_cull_2b278(c, 1);
 }
 
+
 static void ov_object_cull(Core* c) {
   uint32_t prev = c->game->fps60.current_object;
   uint32_t o = c->r[4];                            // a0 = object* (MIPS arg register $a0)
