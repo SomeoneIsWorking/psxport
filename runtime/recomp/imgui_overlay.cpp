@@ -149,6 +149,12 @@ static void build_ui(void) {
     if (ImGui::SliderFloat3("Light dir (view)", g_mods.light_dir, -1.0f, 1.0f)) mods_save();
     if (ImGui::SliderFloat("Ambient", &g_mods.light_ambient, 0.0f, 1.5f)) mods_save();
     if (ImGui::SliderFloat("Diffuse", &g_mods.light_diffuse, 0.0f, 1.5f)) mods_save();
+    // Dynamic shadow mapping is cast by THIS directional light, so it only makes sense with light on.
+    bool shadows = g_mods.shadows != 0;
+    if (ImGui::Checkbox("Dynamic shadows", &shadows)) { g_mods.shadows = shadows; mods_save(); }
+    if (g_mods.shadows) {
+      if (ImGui::SliderFloat("Shadow strength", &g_mods.shadow_strength, 0.0f, 1.0f)) mods_save();
+    }
   }
   ImGui::PopItemWidth();
   ImGui::End();

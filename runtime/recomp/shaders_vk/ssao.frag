@@ -17,14 +17,16 @@
 layout(location = 0) out uint o_px;
 layout(set = 0, binding = 0) uniform usampler2D u_color;   // R16_UINT 1555 geometry color
 layout(set = 0, binding = 1) uniform sampler2D  u_depth;   // D32 native 3-band depth
+layout(set = 0, binding = 2) uniform sampler2D  u_shadow;  // D32 light-view shadow depth map
 layout(push_constant) uniform PC {
     vec4  p0;   // inv_near (1/nearp), inv_far (1/65535), ssao_strength, ssao_radius (px)
     vec4  p1;   // ssao_bias_frac, ssao_range_frac, band_min (NATIVE_3D_MIN), band_max (NATIVE_3D_MAX)
-    ivec4 p2;   // img_w, img_h, viz(0 none|1 AO|2 normal|3 lit), flags(bit0=ssao, bit1=light)
+    ivec4 p2;   // img_w, img_h, viz(0 none|1 AO|2 normal|3 lit|4 shadow), flags(bit0=ssao, bit1=light, bit2=shadow)
     vec4  p3;   // light dir (to-light, view space) xyz, diffuse intensity
     vec4  p4;   // ambient, cx, cy, H
     vec4  p5;   // screen map: origin_x, origin_y, off_x, off_y
-    vec4  p6;   // screen map: inv_scale, -, -, -
+    vec4  p6;   // screen map: inv_scale, shadow_strength, shadow_texel (1/shadowmap_dim), shadow_depth_bias
+    mat4  lvp;  // light view-projection (view-space pos -> light clip), for shadow sampling
 } pc;
 
 uint  cat(int x, int y) { return texelFetch(u_color, ivec2(clamp(x,0,pc.p2.x-1), clamp(y,0,pc.p2.y-1)), 0).r; }
@@ -44,13 +46,36 @@ vec3 vpos(int x, int y, float pz) {
     return vec3((sx - pc.p4.y) * pz / pc.p4.w, (sy - pc.p4.z) * pz / pc.p4.w, pz);
 }
 
+// Shadow factor at a reconstructed VIEW-space position P: 1 = fully lit, 0 = fully in shadow. Transform P
+// into the light's clip space (lvp), do the perspective/ortho divide, map to [0,1] shadow-map UV + depth,
+// then PCF-compare against the stored light-view depth. A constant depth bias kills self-shadow acne; PCF
+// (3x3) softens the hard edge. Out-of-map (frustum edge) -> lit (no shadow), so the bounded ortho volume
+// doesn't shadow-band the whole scene.
+float shadow_at(vec3 P) {
+    vec4 lp = pc.lvp * vec4(P, 1.0);
+    if (lp.w <= 0.0) return 1.0;
+    vec3 ndc = lp.xyz / lp.w;
+    vec2 uv = ndc.xy * 0.5 + 0.5;                            // light-clip XY -> [0,1] map UV
+    if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) return 1.0;
+    if (ndc.z < 0.0 || ndc.z > 1.0) return 1.0;              // outside the ortho near/far -> lit
+    float ref = ndc.z - pc.p6.w;                             // bias toward the light (depth bias)
+    float texel = pc.p6.z, lit = 0.0;
+    for (int j = -1; j <= 1; j++)
+        for (int i = -1; i <= 1; i++) {
+            float sd = texture(u_shadow, uv + vec2(float(i), float(j)) * texel).r;
+            lit += (ref <= sd) ? 1.0 : 0.0;                  // closer-or-equal than the occluder -> lit
+        }
+    return lit / 9.0;
+}
+
 void main() {
     int px = int(gl_FragCoord.x), py = int(gl_FragCoord.y);
     uint c = cat(px, py);
     float z0 = lin(dat(px, py));
     if (z0 < 0.0) { o_px = c; return; }                      // not 3D -> pass color through untouched
-    bool do_ssao  = (pc.p2.w & 1) != 0;
-    bool do_light = (pc.p2.w & 2) != 0;
+    bool do_ssao   = (pc.p2.w & 1) != 0;
+    bool do_light  = (pc.p2.w & 2) != 0;
+    bool do_shadow = (pc.p2.w & 4) != 0;
 
     // --- ambient occlusion (curvature via opposite-neighbour pairs) ------------------------------------
     // A flat surface (even steeply TILTED) has center == average(opposite neighbours) -> 0 AO; only a
@@ -95,12 +120,20 @@ void main() {
         }
     }
 
+    // --- shadow factor (cast by the directional light) ------------------------------------------------
+    // shf in [0,1]: 1 = lit, 0 = occluded. Darkening multiplies the lit color by (1 - strength*(1-shf)),
+    // so a fully-shadowed pixel drops to (1-strength) of its lit value (strength=1 -> ambient-only feel).
+    float shf = 1.0;
+    if (do_shadow) shf = shadow_at(vpos(px, py, z0));
+    float shade = 1.0 - pc.p6.y * (1.0 - shf);
+
     // --- viz / composite ------------------------------------------------------------------------------
     if (pc.p2.z == 1) { uint q = uint(clamp(1.0 - pc.p0.z*ao,0.0,1.0)*31.0+0.5); o_px = q|(q<<5)|(q<<10); return; }
     if (pc.p2.z == 2) { uvec3 q = uvec3(clamp(N*0.5+0.5,0.0,1.0)*31.0+0.5);      o_px = q.x|(q.y<<5)|(q.z<<10); return; }
     if (pc.p2.z == 3) { uint q = uint(clamp(lit,0.0,1.0)*31.0+0.5);              o_px = q|(q<<5)|(q<<10); return; }
+    if (pc.p2.z == 4) { uint q = uint(clamp(shf,0.0,1.0)*31.0+0.5);              o_px = q|(q<<5)|(q<<10); return; }
 
-    float f = lit * (do_ssao ? clamp(1.0 - pc.p0.z * ao, 0.0, 1.0) : 1.0);
+    float f = lit * shade * (do_ssao ? clamp(1.0 - pc.p0.z * ao, 0.0, 1.0) : 1.0);
     uint a = c & 0x8000u;
     float cr2 = clamp(float(c & 31u)        * f, 0.0, 31.0);
     float cg2 = clamp(float((c >> 5) & 31u) * f, 0.0, 31.0);

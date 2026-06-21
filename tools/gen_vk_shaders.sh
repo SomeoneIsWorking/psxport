@@ -38,5 +38,7 @@ PY
   emit tritex.vert spv_tritex_vert
   emit tritex.frag spv_tritex_frag
   emit ssao.frag spv_ssao_frag          # PSXPORT_SSAO post pass (reuses present.vert as its vertex stage)
+  emit shadow.vert spv_shadow_vert      # shadow-map depth pass (view-space geom -> light ortho space)
+  emit shadow.frag spv_shadow_frag      # shadow-map depth pass (depth-only, empty fragment)
 } > "$OUT"
 echo "[gen_vk_shaders] wrote $OUT"

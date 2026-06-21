@@ -20,6 +20,14 @@ void gpu_vk_set_vd(Core* core, const float* d3);
 void gpu_vk_set_vd_n(Core* core, const float* d3);
 void gpu_vk_set_xyf(Core* core, const float* xf, const float* yf);  // sub-pixel screen XY (#15 smoothing)
 
+// Dynamic shadow mapping: capture one OPAQUE world-geometry triangle's VIEW-SPACE positions (v0/v1/v2,
+// each {x=ir1, y=ir2, z=pz} — the metric view space the deferred pass reconstructs) into the host shadow
+// geometry stream. Rasterized from the directional light's view into a depth map, then sampled in the
+// deferred pass to darken occluded pixels. Called from the opaque world submitters (engine_submit.cpp,
+// native_terrain.cpp). Cheap no-op when shadows are off. v0/v1/v2 point to 3 floats each.
+void gpu_vk_shadow_push_tri(Core* core, const float* v0, const float* v1, const float* v2);
+int  gpu_vk_shadows_active(void);   // shadows toggle (g_mods.shadows && g_mods.light) — submitters gate capture
+
 // geometry tee + dirty-region mirror
 void gpu_vk_dirty(Core* core, int x, int y, int w, int h);
 void gpu_vk_semi_group(Core* core, int x0, int y0, int x1, int y1);

@@ -220,6 +220,33 @@ static VkPipelineLayout s_ssao_pll;
 static VkDescriptorPool s_ssao_dpool;
 static VkDescriptorSet s_ssao_dset;
 static VkPipeline      s_ssao_pipe;
+
+// --- Dynamic SHADOW MAPPING (cast by the engine-native directional light) ----------------------------
+// A real shadow map: the opaque world geometry is captured at submit time as VIEW-SPACE triangles
+// (gpu_vk_shadow_push_tri, fed (ir1,ir2,pz) per vertex from the world submitters), then rasterized into a
+// D32 depth image from the DIRECTIONAL LIGHT's orthographic view (shadow_pass + shadow.vert). The deferred
+// pass (ssao.frag) reconstructs each 3D pixel's view-space position, transforms it by the SAME light
+// view-projection, and PCF-compares against this map to darken occluded pixels. No PSX intricacy: it is a
+// plain PC light-space raster of the engine's own scene geometry. Single-instance (disabled under SBS,
+// like the deferred pass). Resources created in create_shadow() once the device exists.
+#define SHADOW_DIM 2048                      // shadow map resolution (square ortho)
+#define SHADOW_VTX_CAP (3 * 65536)           // captured shadow-geometry vertices per frame (= 65536 tris)
+typedef struct { float vx, vy, vz; } ShadowVtx;   // view-space position (x=ir1, y=ir2, z=pz)
+static int             s_shadow_n;           // captured shadow vertices THIS frame (host stream)
+static VkImage         s_shadow_img;         // D32 light-view depth map
+static VkDeviceMemory  s_shadow_mem;
+static VkImageView     s_shadow_view;
+static int             s_shadow_undef = 1;
+static VkRenderPass    s_shadow_rpass;
+static VkFramebuffer   s_shadow_fb;
+static VkPipeline      s_shadow_pipe;
+static VkPipelineLayout s_shadow_pll;
+static VkBuffer        s_shadow_vbuf;        // host-visible captured geometry (view-space verts)
+static VkDeviceMemory  s_shadow_vbuf_mem;
+static void*           s_shadow_vbuf_ptr;
+static float           s_shadow_lvp[16];     // light view-projection built this frame (col-major, for the deferred sample)
+static int             s_shadow_lvp_valid;   // 1 once shadow_pass built a matrix this frame
+static int shadows_on(void)  { return g_mods.shadows && g_mods.light; }   // shadows are cast BY the light
 // AO/light are LIVE (g_mods, overlay-toggled). proj getters feed the LIGHT normal reconstruction.
 // ui_infra() = the overlay needs the deferred infra + native-depth kept on so SSAO/LIGHT can be
 // toggled at runtime even if they started off.
@@ -231,7 +258,23 @@ static int light_on(void)    { return g_mods.light; }
 // world-quad submit), NOT this deferred pass (user directive 2026-06-21: it must be engine-native, and the
 // deferred light/AO pass made semi-transparent water vanish by re-shading the geometry behind it). So the
 // deferred pass runs for SSAO only; the light bit is never set in its flags.
-static int deferred_on(void) { return ssao_on(); }
+// The deferred post pass (ssao.frag) runs when SSAO and/or shadows are on — shadows reuse it to sample the
+// shadow map + darken (light remains engine-native in the submitters; the deferred pass never sets light).
+static int deferred_on(void) { return ssao_on() || shadows_on(); }
+int gpu_vk_shadows_active(void) { return shadows_on(); }
+// Capture one opaque world triangle's view-space verts into the host shadow-geometry stream (transformed to
+// light space in shadow.vert at the pass). v0/v1/v2 each point to {x=ir1, y=ir2, z=pz}. No-op when shadows
+// are off / resources not yet up / the stream is full. Cheap: 9 float stores.
+void gpu_vk_shadow_push_tri(Core* core, const float* v0, const float* v1, const float* v2) {
+  (void)core;
+  if (!shadows_on() || !s_shadow_vbuf_ptr) return;
+  if (s_shadow_n + 3 > SHADOW_VTX_CAP) return;
+  ShadowVtx* d = (ShadowVtx*)s_shadow_vbuf_ptr + s_shadow_n;
+  d[0] = (ShadowVtx){ v0[0], v0[1], v0[2] };
+  d[1] = (ShadowVtx){ v1[0], v1[1], v1[2] };
+  d[2] = (ShadowVtx){ v2[0], v2[1], v2[2] };
+  s_shadow_n += 3;
+}
 // The deferred SSAO/light infra is built whenever the overlay is available (g_mods.ui, always on) so the
 // player can toggle SSAO/light live. The passes themselves stay off until toggled (ssao_on/light_on).
 static int ui_infra(void)    { return g_mods.ui; }
@@ -386,6 +429,8 @@ static VkShaderModule make_shader(const uint32_t* code, unsigned len) {
 
 static void create_vram(void);   // forward decl: defined after init_vk, called from it
 static void create_ssao(void);   // PSXPORT_SSAO resources (post pass); created only when ssao_on()
+static void create_shadow(void); // dynamic shadow-map resources (depth image + light-view depth pipeline)
+static void make_hostbuf(VkDeviceSize sz, VkBufferUsageFlags use, VkBuffer*, VkDeviceMemory*, void**);
 static void img_barrier_on(VkImage, VkImageLayout, VkImageLayout, VkPipelineStageFlags,
                            VkPipelineStageFlags, VkAccessFlags, VkAccessFlags);
 
@@ -693,7 +738,8 @@ static void init_vk(void) {
   void panels_init(void); panels_init();
   // Native depth is ALWAYS on now, so the deferred infra (SSAO/light) can ALWAYS be ready -> they toggle
   // live from the overlay with no launch flag (the old PSXPORT_UI gate is obsolete). Skip only under SBS.
-  create_ssao();
+  create_shadow();   // shadow-map resources first (its image/view feed the ssao descriptor's binding 2)
+  create_ssao();     // deferred post pass (samples color + depth + the shadow map)
   if (!s_headless) create_swapchain();
   // ImGui mod-toggle overlay (windowed only; needs the swapchain + present render pass).
   if (g_mods.ui && !s_headless)
@@ -937,6 +983,7 @@ void GpuVkState::panel_render(Panel* p) {
     // 3D-world pixel (water included) is AO-shaded uniformly from the opaque depth, so translucent surfaces
     // keep their hue and stay visible. s_tex is in COLOR_ATTACHMENT here (semi loop / opaque pass left it
     // there); ssao_pass round-trips it through shader-read and returns it to COLOR_ATTACHMENT.
+    if (shadows_on() && tgt == s_tex) shadow_pass();   // light-view depth map (sampled by the deferred pass)
     if (deferred_on() && tgt == s_tex) ssao_pass();
     img_barrier_on(tgt, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                 VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
@@ -996,31 +1043,35 @@ static void create_ssao(void) {
   fi.width = VRAM_W; fi.height = IMG_H; fi.layers = 1;
   VKC(vkCreateFramebuffer(s_dev, &fi, 0, &s_ssao_fb));
 
-  // descriptor set layout: binding0 = color (usampler2D), binding1 = depth (sampler2D), both fragment.
-  VkDescriptorSetLayoutBinding b[2] = {{0},{0}};
-  b[0].binding = 0; b[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; b[0].descriptorCount = 1; b[0].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-  b[1].binding = 1; b[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; b[1].descriptorCount = 1; b[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+  // descriptor set layout: binding0 = color (usampler2D), binding1 = depth (sampler2D), binding2 = shadow
+  // map (sampler2D), all fragment.
+  VkDescriptorSetLayoutBinding b[3] = {{0},{0},{0}};
+  for (int i = 0; i < 3; i++) { b[i].binding = i; b[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                                b[i].descriptorCount = 1; b[i].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT; }
   VkDescriptorSetLayoutCreateInfo dli = { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
-  dli.bindingCount = 2; dli.pBindings = b;
+  dli.bindingCount = 3; dli.pBindings = b;
   VKC(vkCreateDescriptorSetLayout(s_dev, &dli, 0, &s_ssao_dsl));
-  VkPushConstantRange pcr = { VK_SHADER_STAGE_FRAGMENT_BIT, 0, 112 };  // p0..p6 (7 × 16B): AO + LIGHT params
+  // p0..p6 (7 × 16B = 112) + light view-projection mat4 (64B) = 176B for AO + LIGHT + SHADOW params.
+  VkPushConstantRange pcr = { VK_SHADER_STAGE_FRAGMENT_BIT, 0, 176 };
   VkPipelineLayoutCreateInfo pli = { VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
   pli.setLayoutCount = 1; pli.pSetLayouts = &s_ssao_dsl; pli.pushConstantRangeCount = 1; pli.pPushConstantRanges = &pcr;
   VKC(vkCreatePipelineLayout(s_dev, &pli, 0, &s_ssao_pll));
 
-  VkDescriptorPoolSize psz = { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2 };
+  VkDescriptorPoolSize psz = { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 3 };
   VkDescriptorPoolCreateInfo dpi = { VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO };
   dpi.maxSets = 1; dpi.poolSizeCount = 1; dpi.pPoolSizes = &psz;
   VKC(vkCreateDescriptorPool(s_dev, &dpi, 0, &s_ssao_dpool));
   VkDescriptorSetAllocateInfo dai = { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO };
   dai.descriptorPool = s_ssao_dpool; dai.descriptorSetCount = 1; dai.pSetLayouts = &s_ssao_dsl;
   VKC(vkAllocateDescriptorSets(s_dev, &dai, &s_ssao_dset));
-  VkDescriptorImageInfo cdi = { s_sampler, s_tex_view,   VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
-  VkDescriptorImageInfo ddi = { s_sampler, s_depth_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
-  VkWriteDescriptorSet wr[2] = {{ VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET },{ VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET }};
+  VkDescriptorImageInfo cdi = { s_sampler, s_tex_view,    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+  VkDescriptorImageInfo ddi = { s_sampler, s_depth_view,  VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+  VkDescriptorImageInfo sdi = { s_sampler, s_shadow_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+  VkWriteDescriptorSet wr[3] = {{ VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET },{ VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET },{ VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET }};
   wr[0].dstSet = s_ssao_dset; wr[0].dstBinding = 0; wr[0].descriptorCount = 1; wr[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; wr[0].pImageInfo = &cdi;
   wr[1].dstSet = s_ssao_dset; wr[1].dstBinding = 1; wr[1].descriptorCount = 1; wr[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; wr[1].pImageInfo = &ddi;
-  vkUpdateDescriptorSets(s_dev, 2, wr, 0, 0);
+  wr[2].dstSet = s_ssao_dset; wr[2].dstBinding = 2; wr[2].descriptorCount = 1; wr[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; wr[2].pImageInfo = &sdi;
+  vkUpdateDescriptorSets(s_dev, 3, wr, 0, 0);
 
   VkShaderModule vs = make_shader(spv_present_vert, spv_present_vert_len);   // fullscreen tri (no vtx input)
   VkShaderModule fs = make_shader(spv_ssao_frag, spv_ssao_frag_len);
@@ -1050,6 +1101,171 @@ static void create_ssao(void) {
   VKC(vkCreateGraphicsPipelines(s_dev, VK_NULL_HANDLE, 1, &gp, 0, &s_ssao_pipe));
   vkDestroyShaderModule(s_dev, vs, 0); vkDestroyShaderModule(s_dev, fs, 0);
   fprintf(stderr, "[gpu_vk] PSXPORT_SSAO post pass up (R16_UINT %ux%u, 2-tap-ring depth AO)\n", VRAM_W, IMG_H);
+}
+
+// Build the dynamic shadow-map resources: a D32 depth image (the shadow map), a depth-only render pass +
+// framebuffer over it, a depth-only pipeline (shadow.vert transforms captured VIEW-SPACE world verts by the
+// light view-projection push constant; shadow.frag is empty), and a host-visible vertex buffer for the
+// per-frame captured geometry. Built once; the pass runs only when shadows_on(). The map's render pass ends
+// in SHADER_READ_ONLY so the deferred pass samples it directly.
+static void create_shadow(void) {
+  // D32 depth image, usable both as a depth attachment (shadow_pass) and as a sampled texture (ssao.frag).
+  VkImageCreateInfo ii = { VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO };
+  ii.imageType = VK_IMAGE_TYPE_2D; ii.format = VK_FORMAT_D32_SFLOAT;
+  ii.extent = (VkExtent3D){ SHADOW_DIM, SHADOW_DIM, 1 }; ii.mipLevels = 1; ii.arrayLayers = 1;
+  ii.samples = VK_SAMPLE_COUNT_1_BIT; ii.tiling = VK_IMAGE_TILING_OPTIMAL;
+  ii.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+  ii.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+  VKC(vkCreateImage(s_dev, &ii, 0, &s_shadow_img));
+  VkMemoryRequirements mr; vkGetImageMemoryRequirements(s_dev, s_shadow_img, &mr);
+  VkMemoryAllocateInfo ma = { VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO };
+  ma.allocationSize = mr.size; ma.memoryTypeIndex = mem_type(mr.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+  VKC(vkAllocateMemory(s_dev, &ma, 0, &s_shadow_mem));
+  VKC(vkBindImageMemory(s_dev, s_shadow_img, s_shadow_mem, 0));
+  VkImageViewCreateInfo vi = { VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO };
+  vi.image = s_shadow_img; vi.viewType = VK_IMAGE_VIEW_TYPE_2D; vi.format = VK_FORMAT_D32_SFLOAT;
+  vi.subresourceRange = (VkImageSubresourceRange){ VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1 };
+  VKC(vkCreateImageView(s_dev, &vi, 0, &s_shadow_view));
+
+  // depth-only render pass: clear -> store -> finalLayout SHADER_READ_ONLY (sampled by the deferred pass).
+  VkAttachmentDescription at = {0};
+  at.format = VK_FORMAT_D32_SFLOAT; at.samples = VK_SAMPLE_COUNT_1_BIT;
+  at.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR; at.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+  at.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE; at.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+  at.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED; at.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+  VkAttachmentReference ar = { 0, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL };
+  VkSubpassDescription sp = {0}; sp.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+  sp.pDepthStencilAttachment = &ar;
+  VkSubpassDependency dep[2] = {{0},{0}};
+  dep[0].srcSubpass = VK_SUBPASS_EXTERNAL; dep[0].dstSubpass = 0;   // prior frame's sample -> this write
+  dep[0].srcStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT; dep[0].dstStageMask = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
+  dep[0].srcAccessMask = VK_ACCESS_SHADER_READ_BIT; dep[0].dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+  dep[1].srcSubpass = 0; dep[1].dstSubpass = VK_SUBPASS_EXTERNAL;   // this write -> the deferred sample
+  dep[1].srcStageMask = VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT; dep[1].dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+  dep[1].srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT; dep[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+  VkRenderPassCreateInfo rpi = { VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO };
+  rpi.attachmentCount = 1; rpi.pAttachments = &at; rpi.subpassCount = 1; rpi.pSubpasses = &sp;
+  rpi.dependencyCount = 2; rpi.pDependencies = dep;
+  VKC(vkCreateRenderPass(s_dev, &rpi, 0, &s_shadow_rpass));
+
+  VkFramebufferCreateInfo fi = { VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO };
+  fi.renderPass = s_shadow_rpass; fi.attachmentCount = 1; fi.pAttachments = &s_shadow_view;
+  fi.width = SHADOW_DIM; fi.height = SHADOW_DIM; fi.layers = 1;
+  VKC(vkCreateFramebuffer(s_dev, &fi, 0, &s_shadow_fb));
+
+  // pipeline layout: one push constant = the light view-projection mat4 (64B), vertex stage.
+  VkPushConstantRange pcr = { VK_SHADER_STAGE_VERTEX_BIT, 0, 64 };
+  VkPipelineLayoutCreateInfo pli = { VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
+  pli.pushConstantRangeCount = 1; pli.pPushConstantRanges = &pcr;
+  VKC(vkCreatePipelineLayout(s_dev, &pli, 0, &s_shadow_pll));
+
+  VkShaderModule vs = make_shader(spv_shadow_vert, spv_shadow_vert_len);
+  VkShaderModule fs = make_shader(spv_shadow_frag, spv_shadow_frag_len);
+  VkPipelineShaderStageCreateInfo st[2] = {
+    { VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, 0, 0, VK_SHADER_STAGE_VERTEX_BIT, vs, "main", 0 },
+    { VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, 0, 0, VK_SHADER_STAGE_FRAGMENT_BIT, fs, "main", 0 },
+  };
+  VkVertexInputBindingDescription vbd = { 0, sizeof(ShadowVtx), VK_VERTEX_INPUT_RATE_VERTEX };
+  VkVertexInputAttributeDescription vad = { 0, 0, VK_FORMAT_R32G32B32_SFLOAT, 0 };   // in_vpos
+  VkPipelineVertexInputStateCreateInfo vin = { VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO };
+  vin.vertexBindingDescriptionCount = 1; vin.pVertexBindingDescriptions = &vbd;
+  vin.vertexAttributeDescriptionCount = 1; vin.pVertexAttributeDescriptions = &vad;
+  VkPipelineInputAssemblyStateCreateInfo ia = { VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO };
+  ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+  VkPipelineViewportStateCreateInfo vp = { VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO };
+  vp.viewportCount = 1; vp.scissorCount = 1;
+  VkPipelineRasterizationStateCreateInfo rs = { VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO };
+  rs.polygonMode = VK_POLYGON_MODE_FILL; rs.cullMode = VK_CULL_MODE_NONE; rs.lineWidth = 1.0f;
+  // A small depth slope bias in the raster helps peter-panning/acne on top of the shader's constant bias.
+  rs.depthBiasEnable = VK_TRUE; rs.depthBiasConstantFactor = 1.5f; rs.depthBiasSlopeFactor = 2.0f;
+  VkPipelineMultisampleStateCreateInfo ms = { VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO };
+  ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+  VkPipelineDepthStencilStateCreateInfo dss = { VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO };
+  dss.depthTestEnable = VK_TRUE; dss.depthWriteEnable = VK_TRUE; dss.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
+  VkPipelineColorBlendStateCreateInfo cb = { VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO };
+  cb.attachmentCount = 0;   // depth-only, no color attachment
+  VkDynamicState dyn[2] = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
+  VkPipelineDynamicStateCreateInfo ds = { VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO };
+  ds.dynamicStateCount = 2; ds.pDynamicStates = dyn;
+  VkGraphicsPipelineCreateInfo gp = { VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO };
+  gp.stageCount = 2; gp.pStages = st; gp.pVertexInputState = &vin; gp.pInputAssemblyState = &ia;
+  gp.pViewportState = &vp; gp.pRasterizationState = &rs; gp.pMultisampleState = &ms;
+  gp.pDepthStencilState = &dss; gp.pColorBlendState = &cb; gp.pDynamicState = &ds;
+  gp.layout = s_shadow_pll; gp.renderPass = s_shadow_rpass;
+  VKC(vkCreateGraphicsPipelines(s_dev, VK_NULL_HANDLE, 1, &gp, 0, &s_shadow_pipe));
+  vkDestroyShaderModule(s_dev, vs, 0); vkDestroyShaderModule(s_dev, fs, 0);
+
+  make_hostbuf(sizeof(ShadowVtx) * SHADOW_VTX_CAP, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+               &s_shadow_vbuf, &s_shadow_vbuf_mem, &s_shadow_vbuf_ptr);
+  fprintf(stderr, "[gpu_vk] dynamic shadow map up (D32 %ux%u, captured view-space geometry)\n", SHADOW_DIM, SHADOW_DIM);
+}
+
+// Build the light view-projection (column-major, 16 floats) for this frame from the directional light dir
+// (view space) + an orthographic volume covering the visible scene. The light looks ALONG -light_dir
+// (light_dir is the to-light vector); we frame a fixed cube around the view origin (the camera looks down
+// +Z in view space, so the scene sits ahead). v1: a fixed half-extent — robust for Tomba's side-scroll
+// field; a scene-fitted volume is a follow-up. Returns the matrix in `out16` and the world half-size used.
+static void build_light_vp(float out16[16]) {
+  // light forward (view-space) = -to_light. Build an orthonormal basis (fwd, right, up).
+  float lx = g_mods.light_dir[0], ly = g_mods.light_dir[1], lz = g_mods.light_dir[2];
+  float ll = sqrtf(lx*lx + ly*ly + lz*lz); if (ll < 1e-6f) { lx = -0.4f; ly = -0.7f; lz = -0.5f; ll = sqrtf(lx*lx+ly*ly+lz*lz); }
+  float fx = -lx/ll, fy = -ly/ll, fz = -lz/ll;                 // forward = along -to_light
+  float ux = 0.0f, uy = 1.0f, uz = 0.0f;                       // world-ish up (view +Y is down, but only used to seed the basis)
+  if (fabsf(fy) > 0.95f) { ux = 1.0f; uy = 0.0f; uz = 0.0f; }  // avoid degeneracy when the light is near-vertical
+  // right = normalize(cross(up, fwd)); up = cross(fwd, right)
+  float rx = uy*fz - uz*fy, ry = uz*fx - ux*fz, rz = ux*fy - uy*fx;
+  float rl = sqrtf(rx*rx+ry*ry+rz*rz);
+  if (rl < 1e-4f) { rx = 1.0f; ry = 0.0f; rz = 0.0f; rl = 1.0f; }   // up nearly ‖ fwd -> safe right (no NaN)
+  rx/=rl; ry/=rl; rz/=rl;
+  ux = fy*rz - fz*ry; uy = fz*rx - fx*rz; uz = fx*ry - fy*rx;  // already unit (fwd,right unit & orthogonal)
+  // The visible field sits ahead of the camera in view space. Frame a box around a center a bit into the
+  // scene; HALF = ortho half-extent in world units, DEPTH the near..far span along the light.
+  const float HALF = 6000.0f, DEPTH = 12000.0f;
+  float cxv = 0.0f, cyv = 0.0f, czv = 4000.0f;                 // view-space center of the shadowed volume
+  // light-space view matrix rows (R = [right; up; fwd]); eye = center - fwd*DEPTH*0.5 so the box is centered.
+  float ex = cxv - fx*DEPTH*0.5f, ey = cyv - fy*DEPTH*0.5f, ez = czv - fz*DEPTH*0.5f;
+  // view matrix (world/view-space point -> light space): L = R * (p - eye)
+  float tx = -(rx*ex + ry*ey + rz*ez);
+  float ty = -(ux*ex + uy*ey + uz*ez);
+  float tz = -(fx*ex + fy*ey + fz*ez);
+  // ortho: x,y -> [-1,1] over [-HALF,HALF]; z -> [0,1] over [0,DEPTH] (Vulkan clip z in [0,1]).
+  float sx = 1.0f/HALF, sy = 1.0f/HALF, sz = 1.0f/DEPTH;
+  // Compose P*V into a column-major mat4. Row r of (P*V) = scale[r] * Vrow[r] (+ z offset handled in tz term).
+  // V rows: [rx ry rz tx; ux uy uz ty; fx fy fz tz; 0 0 0 1].
+  float m[4][4];
+  m[0][0]=sx*rx; m[0][1]=sx*ry; m[0][2]=sx*rz; m[0][3]=sx*tx;
+  m[1][0]=sy*ux; m[1][1]=sy*uy; m[1][2]=sy*uz; m[1][3]=sy*ty;
+  m[2][0]=sz*fx; m[2][1]=sz*fy; m[2][2]=sz*fz; m[2][3]=sz*tz;
+  m[3][0]=0;     m[3][1]=0;     m[3][2]=0;     m[3][3]=1;
+  // GLSL mat4 is column-major: out16[col*4 + row] = m[row][col].
+  for (int col=0; col<4; col++) for (int row=0; row<4; row++) out16[col*4+row] = m[row][col];
+}
+
+// Rasterize the captured view-space world geometry from the light's view into the shadow depth map. Runs
+// BEFORE the deferred ssao_pass (which samples the map). No-op when nothing was captured. Builds the light
+// view-projection for this frame (also stashed in s_shadow_lvp for the deferred sample).
+void GpuVkState::shadow_pass() {
+  build_light_vp(s_shadow_lvp); s_shadow_lvp_valid = 1;
+  // ALWAYS run the pass (even with no captured geometry): the render pass CLEARs the map to far=1.0 and its
+  // finalLayout transitions s_shadow_img to SHADER_READ_ONLY. Skipping it would leave the image UNDEFINED
+  // while the deferred pass (do_shadow set) still samples binding 2 -> validation error / garbage. A cleared
+  // (all-far) map reads back as "everything lit", which is the correct result when nothing casts.
+  VkRenderPassBeginInfo rp = { VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
+  rp.renderPass = s_shadow_rpass; rp.framebuffer = s_shadow_fb;
+  rp.renderArea.extent = (VkExtent2D){ SHADOW_DIM, SHADOW_DIM };
+  VkClearValue cv = {}; cv.depthStencil.depth = 1.0f;   // far = 1.0 (LESS_OR_EQUAL test, closer wins)
+  rp.clearValueCount = 1; rp.pClearValues = &cv;
+  vkCmdBeginRenderPass(s_cmd, &rp, VK_SUBPASS_CONTENTS_INLINE);
+  if (s_shadow_n) {
+    VkViewport vpt = { 0, 0, SHADOW_DIM, SHADOW_DIM, 0.0f, 1.0f }; VkRect2D sc = { {0,0}, { SHADOW_DIM, SHADOW_DIM } };
+    vkCmdSetViewport(s_cmd, 0, 1, &vpt); vkCmdSetScissor(s_cmd, 0, 1, &sc);
+    vkCmdPushConstants(s_cmd, s_shadow_pll, VK_SHADER_STAGE_VERTEX_BIT, 0, 64, s_shadow_lvp);
+    vkCmdBindPipeline(s_cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, s_shadow_pipe);
+    VkDeviceSize off = 0; vkCmdBindVertexBuffers(s_cmd, 0, 1, &s_shadow_vbuf, &off);
+    vkCmdDraw(s_cmd, s_shadow_n, 1, 0, 0);
+  }
+  vkCmdEndRenderPass(s_cmd);   // s_shadow_img -> SHADER_READ_ONLY (render pass finalLayout)
+  s_shadow_undef = 0;
 }
 
 // Depth-aspect image barrier (img_barrier_on is color-aspect only).
@@ -1104,16 +1320,22 @@ void GpuVkState::ssao_pass() {
   float org_x, org_y, off_x = 0.0f, off_y = 0.0f, inv_scale = 1.0f;
   if (frame_via_fb()) { org_x = 0.0f; org_y = (float)FB_Y0; inv_scale = 1.0f / (float)s_ires; }
   else          { org_x = (float)s_present_sx; org_y = (float)s_present_sy; }
-  int viz = cfg_int("PSXPORT_SSAO_VIZ", 0);   // 1=AO factor; 2=normal; 3=lit (any deferred-viz)
-  int flags = (ssao_on() ? 1 : 0);   // light is engine-native now (engine_shade_face); deferred = SSAO only
-  struct { float p0[4], p1[4]; int32_t p2[4]; float p3[4], p4[4], p5[4], p6[4]; } pc;
+  int viz = cfg_int("PSXPORT_SSAO_VIZ", 0);   // 1=AO factor; 2=normal; 3=lit; 4=shadow (any deferred-viz)
+  // flags: bit0 SSAO, bit1 LIGHT (engine-native, never set here), bit2 SHADOW.
+  int flags = (ssao_on() ? 1 : 0) | (shadows_on() ? 4 : 0);
+  // shadow params: shadow_strength (overlay), shadow texel size (1/dim) for PCF, and a constant depth bias.
+  float sh_strength = g_mods.shadow_strength, sh_texel = 1.0f / (float)SHADOW_DIM, sh_bias = 0.0015f;
+  struct { float p0[4], p1[4]; int32_t p2[4]; float p3[4], p4[4], p5[4], p6[4]; float lvp[16]; } pc;
   pc.p0[0] = inv_near; pc.p0[1] = inv_far; pc.p0[2] = strength; pc.p0[3] = radius;
   pc.p1[0] = bias_frac; pc.p1[1] = range_frac; pc.p1[2] = NATIVE_3D_MIN; pc.p1[3] = NATIVE_3D_MAX;
   pc.p2[0] = VRAM_W; pc.p2[1] = IMG_H; pc.p2[2] = viz; pc.p2[3] = flags;
   pc.p3[0] = lx; pc.p3[1] = ly; pc.p3[2] = lz; pc.p3[3] = diffuse;
   pc.p4[0] = ambient; pc.p4[1] = cx; pc.p4[2] = cy; pc.p4[3] = H;
   pc.p5[0] = org_x; pc.p5[1] = org_y; pc.p5[2] = off_x; pc.p5[3] = off_y;
-  pc.p6[0] = inv_scale; pc.p6[1] = 0.0f; pc.p6[2] = 0.0f; pc.p6[3] = 0.0f;
+  pc.p6[0] = inv_scale; pc.p6[1] = sh_strength; pc.p6[2] = sh_texel; pc.p6[3] = sh_bias;
+  // light view-projection (shadow_pass built it this frame; identity-ish fallback if it somehow didn't).
+  if (s_shadow_lvp_valid) for (int i=0;i<16;i++) pc.lvp[i] = s_shadow_lvp[i];
+  else { for (int i=0;i<16;i++) pc.lvp[i] = 0.0f; pc.lvp[0]=pc.lvp[5]=pc.lvp[10]=pc.lvp[15]=1.0f; }
 
   VkRenderPassBeginInfo rp = { VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
   rp.renderPass = s_ssao_rpass; rp.framebuffer = s_ssao_fb; rp.renderArea.extent = (VkExtent2D){ VRAM_W, IMG_H };
@@ -1683,9 +1905,10 @@ void gpu_vk_vram_region(const char* path, int x, int y, int w, int h) {
 // Per-frame: reset the tee'd-primitive batch for the next frame.
 void GpuVkState::frame_end(const uint16_t* svram, int frame) {
   (void)svram; (void)frame;
-  if (!gpu_vk_enabled() || !s_inited) { s_tri_n = 0; return; }
+  if (!gpu_vk_enabled() || !s_inited) { s_tri_n = 0; s_shadow_n = 0; return; }
   s_tri_n = 0; s_tex_n = 0; s_semi_n = 0; s_dirty_n = 0;
   s_semi_grp_n = 0; s_sg_valid = 0;
+  s_shadow_n = 0; s_shadow_lvp_valid = 0;   // shadow capture is per-frame too (host geometry stream)
 }
 
 // PSXPORT_VK_TRITEST=1: headless-ish self-test of the triangle rasterizer. Draws a known flat tri and a

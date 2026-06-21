@@ -16,8 +16,10 @@ typedef struct {
   int   ires_auto;     // derive ires from the live window height (~round(h/240)), clamped to the width cap
   int   ssao;          // ambient occlusion
   int   light;         // directional light
+  int   shadows;       // dynamic shadow mapping cast by the directional light (needs light on)
   float ssao_strength, ssao_radius, ssao_bias, ssao_range;
   float light_dir[3], light_ambient, light_diffuse;
+  float shadow_strength;   // 0..1 darkening applied in shadow (1 = full drop to ambient)
 } ModState;
 extern ModState g_mods;
 void mods_init(void);  // populate once: settings file (if present) else cfg/env (idempotent)

@@ -280,6 +280,19 @@ float proj_pz_to_ord(float pz);
 void  gpu_draw_world_quad(Core* c, const float* px, const float* py, const float* depth,
                           const int* u, const int* v, const uint8_t* r, const uint8_t* g,
                           const uint8_t* b, uint16_t tp, uint16_t clut, int semi);
+// Dynamic shadow capture: feed an OPAQUE world prim's view-space verts (the same metric view space the
+// deferred pass reconstructs: x=ir1=vx, y=ir2=vy, z=pz) to the shadow-geometry stream. No-op when shadows
+// off. We capture the (degenerate-padded) quad as two triangles (v0,v1,v2)+(v1,v2,v3); tris pad v3=v2.
+void gpu_vk_shadow_push_tri(Core* core, const float* v0, const float* v1, const float* v2);
+int  gpu_vk_shadows_active(void);
+static inline void shadow_capture_prim(Core* c, const ProjVtx* p, int nv, int semi) {
+  if (semi || !gpu_vk_shadows_active()) return;          // only opaque world casts shadows
+  float vv[4][3];
+  for (int k = 0; k < 4; k++) { int s = k < nv ? k : nv - 1;
+    vv[k][0] = p[s].vx; vv[k][1] = p[s].vy; vv[k][2] = p[s].pz; }   // view space (x=ir1, y=ir2, z=pz)
+  gpu_vk_shadow_push_tri(c, vv[0], vv[1], vv[2]);
+  if (nv == 4) gpu_vk_shadow_push_tri(c, vv[1], vv[2], vv[3]);
+}
 // fps60: after a GTE-composed world quad is pushed to the render queue, capture its model verts + the
 // composed transform (CR0-7) + the current actor key so the 60fps tier can reproject it at the A/B
 // midpoint (engine/fps60.cpp). No-op unless g_fps60_on. mv[k] = per-vertex model coords (4th = v2 for tris).
@@ -355,6 +368,7 @@ static void submit_poly_gt3_native(Core* c) {
     int semi = (code & 0x02000000) ? 1 : 0;
     if (!semi) engine_shade_face(p, 3, r, g, b);             // engine-native lighting (opaque only)
     gpu_draw_world_quad(c, px, py, depth, u, v, r, g, b, tp, clut, semi);
+    shadow_capture_prim(c, p, 3, semi);                      // dynamic shadow: cast onto the terrain/objects
     fps60_stamp(c, p, 3);                                    // fps60: capture for midpoint reprojection
   }
   c->r[2] = rec;
@@ -408,6 +422,7 @@ static void submit_poly_gt4_native(Core* c) {
     int semi = (code0 & 0x02000000) ? 1 : 0;                  // GP0 op byte (code0>>24) bit1 = semi-transparency
     if (!semi) engine_shade_face(p, 4, r, g, b);             // engine-native lighting (opaque only)
     gpu_draw_world_quad(c, px, py, depth, u, v, r, g, b, tp, clut, semi);
+    shadow_capture_prim(c, p, 4, semi);                      // dynamic shadow: cast onto the terrain/objects
     fps60_stamp(c, p, 4);                                    // fps60: capture for midpoint reprojection
   }
   c->r[2] = rec;                                              // return: record pointer advanced past the array
@@ -484,6 +499,7 @@ static void submit_poly_gt4_bp(Core* c) {
       int semi = (ctl & 0x40000000) ? 1 : 0;
       if (!semi) engine_shade_face(p, 4, r, g, b);      // engine-native lighting (opaque only)
       gpu_draw_world_quad(c, px, py, depth, u, v, r, g, b, tp, clut, semi);
+      shadow_capture_prim(c, p, 4, semi);               // dynamic shadow: cast onto the terrain/objects
       fps60_stamp(c, p, 4);                             // fps60: capture for midpoint reprojection
     }
     if ((int32_t)ctl <= 0) break;                       // control sign marks the last record

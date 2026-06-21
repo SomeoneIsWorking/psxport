@@ -27,6 +27,9 @@ void  proj_set_H(uint16_t h);
 void  gpu_draw_world_quad(Core* c, const float* px, const float* py, const float* depth,
                           const int* u, const int* v, const uint8_t* r, const uint8_t* g,
                           const uint8_t* b, uint16_t tp, uint16_t clut, int semi);
+// Dynamic shadow capture (gpu_vk.cpp): push a world triangle's VIEW-SPACE verts to the shadow-geometry stream.
+void  gpu_vk_shadow_push_tri(Core* core, const float* v0, const float* v1, const float* v2);
+int   gpu_vk_shadows_active(void);
 
 #define SCR              0x1F800000u          // PSX scratchpad base (engine's GTE-compose temp area)
 #define TERRAIN_GEOMBLK  0x8009FAE8u          // terrain prim-record buffer (recomp 0x8002AB5C: lui 0x800A+addiu -1304)
@@ -139,6 +142,15 @@ void terrain_render_pc(Core* c) {
       fprintf(stderr, "[terrpc] rec=%08x v0=(%.1f,%.1f z%.3f) v2=(%.1f,%.1f) tp=%04x clut=%04x semi=%d\n",
               rec, px[0], py[0], depth[0], px[2], py[2], tp, clut, semi);
     gpu_draw_world_quad(c, px, py, depth, u, v, r, g, b, tp, clut, semi);
+    // Dynamic shadow capture: feed the terrain quad's view-space verts (x=w0, y=w1, z=pz) so the ground both
+    // CASTS into the shadow map (self-occlusion across hills) and RECEIVES shadows from objects above it.
+    if (!semi && gpu_vk_shadows_active()) {
+      float sv[4][3];
+      for (int kk = 0; kk < 4; kk++) { float pz = wv[kk][2]; if (pz < nearp) pz = nearp;
+        sv[kk][0] = wv[kk][0]; sv[kk][1] = wv[kk][1]; sv[kk][2] = pz; }
+      gpu_vk_shadow_push_tri(c, sv[0], sv[1], sv[2]);
+      gpu_vk_shadow_push_tri(c, sv[1], sv[2], sv[3]);
+    }
     drawn++;
     if (ctl <= 0) break;                                   // control sign marks the last record
   }

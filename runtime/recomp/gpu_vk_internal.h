@@ -95,6 +95,7 @@ struct GpuVkState {
   void panel_upload(Panel* p);
   void panel_render(Panel* p);
   void ssao_pass();
+  void shadow_pass();   // rasterize the captured world geometry from the light's view into the shadow map
   int  frame_via_fb();
   void tex_emit(TexVtx* t, const int* xs, const int* ys, const int* us, const int* vs,
                 const unsigned char* rs, const unsigned char* gs, const unsigned char* bs,
