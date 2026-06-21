@@ -7193,3 +7193,10 @@ treat B+0x1c as HP.
   HP/AP heal amount. NEXT: find the shared HEAL fn (writes the real HP/AP gauge global, area-independent, in
   MAIN.EXE engine/player code) by locating the gauge global first (find the damage/death path, or a live
   state where B+0x11!=0 with the gauge on), then the apple/fruit overlay handler that calls it.
+
+**later-208 cont. — DESPAWN owned (FUN_8007A624).** Inverse of spawn: unlink from active list + free-list
+push (5 trivial handlers 0x8007a718..a7a8 whose pools = the spawn descriptors; cls4 also jal 0x8007ADDC) +
+deactivate epilogue. GOTCHA: the deactivate epilogue at 0x8007a7d0 clears MANY node header words
+(0/4/8/c/10/14/18/38) + bytes (0x29/0x2a/0x2b/0x5e), not just node[0]/[4] — first native attempt diverged at
+node+0x0a (the list-id byte, inside the 0x8 word). RE'd the full epilogue. `despawnverify` 0-diff over 100+
+live despawns (commit 2cc6478). Object-pool alloc/free lifecycle now COMPLETE + PC-native.

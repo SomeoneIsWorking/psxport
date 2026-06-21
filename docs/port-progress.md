@@ -174,6 +174,13 @@ for content fns (call it). Do NOT mimic PSX hardware (GTE/GP0/OT) — remove Bee
   EMPTY the recomp inits BOTH end pointers (head-insert also writes *tail, and vice-versa); the native body
   set only one end → empty-list inserts diverged at the list head ptr. Gates: spawnverify, spawndispverify,
   spawnvarverify all 0-diff; pool2verify/replacedispverify not exercised at seaside (0 calls, RE-verified).
+- ✅ **DESPAWN — `FUN_8007A624` `ov_despawn` (entity_spawn.cpp, later-208).** The inverse of spawn: unlink
+  node from its active list, clear node[+0x28] high bit, push to the pool free-list (5 trivial free handlers
+  0x8007a718..a7a8, pools = the spawn descriptors; class 4 also calls cleanup 0x8007ADDC), then the shared
+  deactivate epilogue (zeros header words 0/4/8/c/10/14/18/38 + bytes 0x29/0x2a/0x2b/0x5e; preserves the
+  free link +0x24). Gate `despawnverify` 0-diff over 100+ live despawns. **Object-pool lifecycle now COMPLETE
+  (alloc + free).** GOTCHA: the deactivate epilogue clears far more of the node than node[0]/[4] (first try
+  diverged at node+0x0a) — RE the full 0x8007a7d0 epilogue.
 - ✅ `FUN_8007712c` per-object CULL / LOD = `ov_object_cull` (game_tomba2.cpp). **BODY now PC-native
   (later-188)** — was a `rec_super_call` WRAP (recomp body ran hot, ~11.2% of sampled interp time); now
   `cull_native_body` reimplements the full decision (RE'd from the disasm: jump table 0x80016cc0, 5 state
