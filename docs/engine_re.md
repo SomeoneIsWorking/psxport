@@ -1070,3 +1070,25 @@ owning a per-object STATE MACHINE end-to-end (its velocity/gravity update AND it
 different, larger unit than "a physics integration step" — to be scoped as an SM-handler port, not a shared
 physics module. Recommended next target: own one concrete actor SM (e.g. `FUN_80024448`'s owner) including
 its `+0x66/+0x68` velocity update + gravity + the `FUN_80046A44` call, gating on RAM+scratchpad 0-diff.
+
+### OWNED — `FUN_80024448` actor move-and-collide SM step (PC-native, `engine/actor_sm_24448.cpp`)
+Owned 2026-06-21. The control flow + branch decisions + guest field writes are PC-native; the three
+fixed-point LEAVES it calls stay `rec_dispatch`ed (they compute exact `>>12` results the still-recomp AI/
+render read back — transcribing them would be PSX-simulation). `sm24448verify` gate = full main-RAM +
+scratchpad + v0 A/B vs `rec_super_call(0x80024448)`, **650+ invocations, 0 mismatches, 0 bad-opcode** (driven
+field + walk; the SM fires as the FALLBACK move-collide path of caller `FUN_80024548`, see below).
+- Body: read `+0x17E` (mode, signed) → probe `maxiter` = 37 (`<0`) else 74; read X-vel `+0x66` (lh→speed)
+  and Y-vel `+0x68` (lhu, negated+sign-ext→ystep); clear `+0x17D`; call probe `FUN_80046A44(obj,xvel,
+  -yvel,maxiter)` → tag `s1`. If `s1==0` return 0 (miss). On HIT: `+0x17D = (scratch 0x1F8001A6>>11)&3`
+  (floor-type); call slide-finalize `FUN_80048654(obj)`; read resolved heading `scratch 0x1F8001A0` → store
+  raw to `+0x140`, and to angle `+0x56` (or `(head-0x800)&0xFFF` when flip-flag `+0x147!=0`). Tail: if
+  `s1==2 && (+0x17D&1)` → `+0x164=7` + sub-step `FUN_80024AF0(obj)`, else `+0x164=4`; store `+0x15C=s1`;
+  clear `scratch 0x1F800084`; return 1.
+- FIELD WRITES owned: `+0x17D`(sb floor-type), `+0x140`(sh heading), `+0x56`(sh angle), `+0x164`(sb state-
+  out), `+0x15C`(sb tag), `scratch 0x1F800084`(sw 0). Leaves dispatched: `FUN_80046A44` probe,
+  `FUN_80048654` slide-finalize (atan2/sqrt; writes obj `+0x48/4A/4C` + scratch `0x1A0/0x1A2`),
+  `FUN_80024AF0` floor sub-step (rsin/rcos `0x80083E80/0x80083F50`).
+- CALLER: sole `jal` from `FUN_80024548` @0x80024760 — only reached when scratch `0x1F800080==0` AND the
+  per-mode handler (`jalr` via table `0x800AD22C[*0x800BF870]`) returned 0. So `FUN_80024448` is the
+  generic move-collide FALLBACK of `FUN_80024548` (itself called from actor updates `FUN_80057A68`,
+  `FUN_8005D530`). No jump-table indirection into `FUN_80024448` itself.

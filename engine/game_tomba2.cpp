@@ -230,6 +230,7 @@ void games_tomba2_init(void) {
     { void ov_disp_26c88(Core*); rec_set_override(0x80026C88u, ov_disp_26c88); }  // per-object dispatcher loop over 0x800ec188 table (control flow owned; handlers dispatched)
     { void ov_bav_load(Core*); rec_set_override(0x80096590u, ov_bav_load); }  // per-area BAV effect-cel LOADER (engine_bav.cpp): slot alloc + cel/UV parse + global latch owned; VRAM alloc/upload callback dispatched
     { void entity_spawn_register(void); entity_spawn_register(); }  // entity SPAWN/placement primitive FUN_80079C3C (pool-pop + field-init + list-link; engine/entity_spawn.cpp)
+    { void actor_sm_24448_register(void); actor_sm_24448_register(); }  // actor move-and-collide SM step FUN_80024448 (vel+gravity+resolve; engine/actor_sm_24448.cpp)
     // PC-native INVENTORY / ITEM-COLLECTION subsystem (engine/inventory.cpp): the shared item-add core
     { void inventory_register(void); inventory_register(); }
   }
