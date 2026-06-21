@@ -455,7 +455,12 @@ The engine's core SPAWN PRIMITIVE — pop a node from the free-list, link it int
 requested position, stamp its identity. ABI: `node* spawn(a0=ref, a1=type, a2=mode, a3=list)`. Pure
 pool/list memory; NO GTE, NO render packets. Reached by the per-type spawn dispatchers `FUN_8007A980`
 (table `0x80016E4C`, 5 type-classes) / `FUN_8007AA38` (table `0x80016E64`, replace-variant), which
-tail-jump (`jr v0`) to thin per-type handlers that call this. Body:
+tail-jump (`jr v0`) to thin per-type handlers that call this. **`FUN_8007A980` ✅ OWNED
+`ov_spawn_dispatch` (entity_spawn.cpp): routes class→variant `{0x80079c3c, 0x80079ddc, 0x80079f90,
+0x8007a12c, 0x8007a2c8}` and calls `variant(ref=0, type, mode=3, list)`; the 5 spawn variants stay
+dispatched (content). `spawndispverify` gate = full RAM+scratchpad+v0 A/B vs `rec_super_call(0x8007A980)`:
+360+ live field spawns, 0 mismatches, clean. NEXT in the subsystem: the 5 variants + the replace-dispatcher
+`FUN_8007AA38`.** Body:
 - `cnt=u8[0x800e7e7c]; if (cnt<3) return 0;` (pool-low guard, keeps ≥2 spare).
 - pop: `node=u32[0x800e8098]; u8[0x800e7e7c]=cnt-1; u32[0x800e8098]=node[+36];`
 - list-select by **a3** → (head,tail): a3==1→list1, a3==2→list2, else→list0 (the three pairs above).

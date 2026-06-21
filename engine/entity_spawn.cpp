@@ -150,9 +150,58 @@ void ov_entity_spawn(Core* c) {
   } else if (++ng % 20 == 0) fprintf(stderr, "[spawnverify] %ld matches\n", ng);
 }
 
+// FUN_8007A980 — the per-type SPAWN DISPATCHER: the entry point game logic calls to spawn an object. It
+// routes by CLASS (a0 & 0xff, 0..4) through table 0x80016E4C to one of 5 thin per-type handlers, each of
+// which calls its spawn VARIANT as `variant(a0=0 ref, a1=type&0xff, a2=3 tail-insert, a3=list)` and returns
+// the new node. RE'd from disas 0x8007A980 + the 5 handlers (0x8007a9b8.. each: a0=0; a1&=0xff; a2=3; jal
+// variant; j epilogue). Owning this puts the engine in charge of object SPAWNING; the per-type variants
+// (which do the alloc + per-class init) stay reachable by address via rec_dispatch (content). Out-of-range
+// class returns 0 (the recomp's sltiu(cls,5)=0 lands in v0 and falls to the epilogue).
+//
+//   v0 = spawn(a0=class, a1=type, a2=list):
+//     cls = a0 & 0xff;  if (cls >= 5) return 0;
+//     variant = VAR[cls];                      // 0x80079c3c / 79ddc / 79f90 / 7a12c / 7a2c8
+//     return variant(0, a1 & 0xff, 3, a2);     // ref=0, type, mode=3 (tail), list=a2
+static const uint32_t SPAWN_VAR[5] = { 0x80079C3Cu, 0x80079DDCu, 0x80079F90u, 0x8007A12Cu, 0x8007A2C8u };
+static void spawn_dispatch(Core* c) {
+  uint32_t cls = c->r[4] & 0xffu;
+  if (cls >= 5) { c->r[2] = 0; return; }
+  uint32_t type = c->r[5] & 0xffu, list = c->r[6];
+  c->r[4] = 0; c->r[5] = type; c->r[6] = 3; c->r[7] = list;   // handler sets ref=0, type&0xff, mode=3, a3=list
+  rec_dispatch(c, SPAWN_VAR[cls]);                            // run the per-type spawn variant → v0 in r2
+}
+void rec_dispatch(Core*, uint32_t);
+void ov_spawn_dispatch(Core* c) {
+  static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("spawndispverify") ? 1 : 0;
+  if (!s_v) { spawn_dispatch(c); return; }
+  static uint8_t* ram0 = (uint8_t*)malloc(0x200000);
+  static uint8_t* ramN = (uint8_t*)malloc(0x200000);
+  uint8_t spad0[0x400], spadN[0x400];
+  uint32_t regs0[32]; memcpy(regs0, c->r, sizeof regs0);
+  uint32_t a0 = c->r[4];
+  memcpy(ram0, c->ram, 0x200000); memcpy(spad0, c->scratch, 0x400);
+  spawn_dispatch(c);
+  uint32_t v0_n = c->r[2];
+  memcpy(ramN, c->ram, 0x200000); memcpy(spadN, c->scratch, 0x400);
+  memcpy(c->ram, ram0, 0x200000); memcpy(c->scratch, spad0, 0x400); memcpy(c->r, regs0, sizeof regs0);
+  rec_super_call(c, 0x8007A980u);
+  uint32_t v0_o = c->r[2];
+  // Same family rationale as spawnverify: the variant runs in BOTH passes; its + the dispatcher's stack
+  // frames are dead below entry sp on return, and the native path doesn't decrement sp so they sit 24B apart.
+  uint32_t sp = regs0[29] & 0x1FFFFFu, flo = (sp >= 0x800) ? sp - 0x800 : 0;
+  int ro = -1; for (uint32_t a = 0; a < 0x200000; a++) if (c->ram[a] != ramN[a] && !(a >= flo && a < sp)) { ro = (int)a; break; }
+  int so = -1; for (uint32_t a = 0; a < 0x400; a++) if (c->scratch[a] != spadN[a]) { so = (int)a; break; }
+  static long ng = 0, nb = 0;
+  if (ro >= 0 || so >= 0 || v0_n != v0_o) {
+    if (nb++ < 40) fprintf(stderr, "[spawndispverify] MISMATCH cls=%u v0 n=%x o=%x ram@%x spad@%x sp=%x\n",
+                           a0 & 0xff, v0_n, v0_o, ro, so, sp);
+  } else if (++ng % 20 == 0) fprintf(stderr, "[spawndispverify] %ld matches\n", ng);
+}
+
 // ------------------------------------------------------------------------------------------------
 // Public registration — ONE line from game_tomba2.cpp init.
 // ------------------------------------------------------------------------------------------------
 void entity_spawn_register(void) {
   rec_set_override(0x80079C3Cu, ov_entity_spawn);   // FUN_80079C3C entity spawn / placement primitive
+  rec_set_override(0x8007A980u, ov_spawn_dispatch); // FUN_8007A980 per-type spawn dispatcher (entry point)
 }
