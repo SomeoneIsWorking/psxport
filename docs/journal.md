@@ -16,6 +16,44 @@
   earlier fade work: see [[tomba2-fade-flash-solved]]).
 - ~~SCEA license screen was black~~ **FIXED PC-native (later-179, below).**
 
+## later-207: OWN per-area BAV effect/animation CEL LOADER FUN_80096590 native (ov_bav_load)
+First **asset-loading subsystem** owned end-to-end (engine/engine_bav.cpp). `FUN_80096590` loads an area's
+effect cels (the seaside field loads 3 at entry: descriptors 0x801846b4 / 0x801858d4 / 0x801886f4). It
+allocates one of 16 cel SLOTS, parses the BAV descriptor's 16-byte cel-record table + UV table, sums the
+per-frame VRAM sizes, calls a caller-supplied VRAM allocator/upload **callback** (a2 = FUN_800964b4 → the
+allocator FUN_800977c0), then writes per-frame tpage/clut halfwords into the cel records (rec+12 even / +14
+odd) and latches the slot-keyed cel-system globals. Caller chain: area-loader FUN_800753D4 → wrapper
+FUN_80096480 (prefills the callback in a2) → FUN_80096590.
+
+OWNED native: the full control flow + the descriptor parse + EVERY cel-global write (slot state table
+0x80105D18, refcount 0x80105D70, data/desc/UV-base 0x80105C10/C50/C98 [index = slot*4], 64/128 clamp
+0x80105CDA, 0x80105CF0, size 0x80105D30, VRAM base 0x80105D78, lock 0x800AC638) + the two trivial lock
+helpers (FUN_80099478 test / FUN_80099450 set, single-word ops on 0x800AC638, inlined). The VRAM
+allocator/upload callback stays PSX via rec_dispatch in the recomp's exact order (its free-list is in
+tracked RAM 0x800AC5xx/6xx → returns the same VRAM base in an A/B re-run; verified D78 native==oracle).
+Full RE (descriptor struct, cel record, globals, callees, control flow) in engine_re.md "BAV cel loader".
+
+VERIFIED with the `bavload` full RAM+scratchpad+v0 A/B gate vs rec_super_call (native → snapshot+rollback →
+recomp body → diff, excluding the top-of-RAM stack window [sp-0x800, sp) per the grid/scriptvm family
+rationale): **0 mismatches over all 3 area-entry cel loads** (a spawn-time loader, called once per cel at
+area init, not per-frame — so 3 is the natural exercise count, same posture as child40410's 28 spawns).
+Drive: `debug bavload; newgame; skip 650; (walk)` — fires on the seaside area entry.
+
+3 GOTCHAs, each caught BY the A/B gate (the whole reason the gate exists):
+1. **Lock semantics inverted.** FUN_80099450(1) ACQUIRES via a `sw zero` in the a0==1 branch's DELAY SLOT
+   → writes 0 (busy), not 1; FUN_80099450(0) RELEASES → 1 (free). 1=FREE / 0=BUSY. Guard FUN_80099478 =
+   `(lock^1)!=0`. First mismatch was lock-only (native left it busy on a path the recomp released).
+2. **kind-shift inverted.** `if (*(desc+4) < 5)` uses `<<2` (the `sll v1,2` is the bne-taken delay slot);
+   `>=5` uses `<<3`. Had it backwards → every size was 2× off (D30 exactly doubled).
+3. **C10/C98 index = slot*4, not field18>>14.** The `sll s2,16` feeding the `sra ,14` is a beq DELAY SLOT,
+   so the index = `((int16)slot<<16)>>14` = slot*4. I misread the sra's source as field18 → wrong slot wrote.
+
+Build/infra note: a parallel worktree agent shared scratch/obj + scratch/bin (the scratch symlink), so its
+in-flight game_tomba2.cpp link-clobbered my binary. Fix = give the worktree a PRIVATE scratch (own obj/bin)
+and symlink only the read-only input dir scratch/bin/tomba2 (MAIN.EXE + SCUS_944.54 + START.BIN etc.) — the
+missing SCUS_944.54 was why the loader silently never fired for a stretch. (Confirms the docs gotcha:
+parallel agents need separate OBJDIR/EXE, not a shared scratch.)
+
 ## later-206: OWN per-object DISPATCHER LOOP FUN_80026C88 native (ov_disp_26c88) — §F resident leaf
 The §F-flagged primary target after later-205. `FUN_80026C88` is a per-object DISPATCHER LOOP over the
 40-entry, 64-byte-stride object table at `0x800ec188`. **No args, void return. NO GTE, NO render packets —

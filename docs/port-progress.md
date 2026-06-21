@@ -87,6 +87,20 @@ for content fns (call it). Do NOT mimic PSX hardware (GTE/GP0/OT) — remove Bee
     dispatched FntOpen (0x80098330/0x80098d30) reads its struct at sp+16. VERIFIED: called directly from
     native_boot (replaces rc0); boot dump (run 2) main-RAM + scratchpad 0-diff vs scratch/bin/initref.bin.
     Registered in game_tomba2.cpp (orchestrator + 3 callees) for any other dispatcher.
+  - ✅ `FUN_80096590` **per-area BAV effect/animation CEL LOADER** = `ov_bav_load` (engine/engine_bav.cpp,
+    later-207) — the asset-loading subsystem that loads an area's effect cels (e.g. the seaside walking-dust).
+    ORCHESTRATION + descriptor parse + ALL cel-system global writes OWNED PC-native; the genuine VRAM
+    allocator/upload **callback** (a2 = FUN_800964b4 → allocator FUN_800977c0) KEPT `rec_dispatch` in the
+    recomp's exact order (VRAM layout + timing identical). Owns: slot alloc (16-slot state table 0x80105D18,
+    refcount 0x80105D70), the 16-byte cel-record + UV-table parse, the per-frame tpage/clut writes (rec+12/14),
+    and the slot-keyed globals 0x80105C10/C50/C98 (data/desc/UV-base, index = slot*4), 0x80105CDA (64/128
+    clamp), 0x80105CF0, 0x80105D30 (size), 0x80105D78 (VRAM base), 0x800AC638 (lock, 1=free/0=busy). BAV
+    descriptor + cel-record + global layout fully RE'd in engine_re.md "BAV cel loader". VERIFIED 0-diff via
+    the `bavload` full RAM+scratchpad+v0 A/B gate (native→snapshot+rollback→rec_super_call→diff, excl.
+    [sp-0x800,sp)): **0 mismatches over all 3 area-entry cel loads** in the reachable seaside field (a
+    spawn-time loader, not per-frame). 3 GOTCHAs caught by the gate: lock inverted (delay-slot `sw zero`),
+    kind-shift inverted (`kind<5`→`<<2`), and the C10/C98 index = slot*4 (sll-s2,16>>14 idiom, NOT field18>>14).
+    Registered in game_tomba2.cpp.
   - ◐ `FUN_800520e0` **engine subsystem init** = `eng_init_subsystems` (engine_init.cpp) — ORCHESTRATION owned
     PC-native (later-183): the 6 direct engine-flag writes (*0x800bf4fa=0xffff, *0x800ecf4a/4c/4d/4e/4f=0) +
     the 4-callee sequence. Boot A/B (frame 50) main-RAM + scratchpad 0-diff. Callee descent:

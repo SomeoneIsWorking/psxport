@@ -111,6 +111,66 @@ So for a0=2: i 0..5 →0, 6..9 →2, 10..13 →3, 14..21 →1, 22..23 →4. The 
 branch `j`s to the loop tail 0x80075388). Returns count in v0 but the caller IGNORES it (the sh v0=-1 to
 0x800bed80 happened in the call's DELAY SLOT, before the function ran). Only writes 0x800be238+i*12+8.
 
+## BAV cel loader — `FUN_80096590` (`ov_bav_load`, engine/engine_bav.cpp, later-207) — OWNED native
+The per-area **effect/animation CEL loader**: parses a BAV descriptor, allocates a cel SLOT (one of 16),
+lays out the cel/UV tables, calls a VRAM allocator/upload callback, then patches per-frame tpage/clut
+halfwords into the cel records and latches the slot's cel-system globals. Fires on area entry (the
+seaside field loads 3 cels at boot — descriptors 0x801846b4 / 0x801858d4 / 0x801886f4). Same
+0x80105Cxx/0x80105Dxx region as the font init above. Single caller wrapper `FUN_80096480` (prefills the
+callback fn-ptr `0x800964b4` in a2); `FUN_80096480` is itself called by area-loader `FUN_800753D4`.
+
+**ABI** `v0 = FUN_80096590(a0 desc, a1 slot, a2 cb, a3 arg4)`:
+- a0 = BAV descriptor ptr. a1 = requested slot ((int16); −1 = auto-allocate first free, else explicit [0,16)).
+- a2 = allocator/upload **callback** fn-ptr, called `cb(a0=size_rounded64, a1=arg4, a2=slot) → vram_word_addr | -1`.
+- a3 = arg4 forwarded to the callback (upload context / VRAM hint).
+- v0 = the allocated **slot** on success; -1 / a transcribed leftover on error paths.
+
+**BAV descriptor struct** (a0):
+- +0  (u32) header. magic = `(word>>8)==0x00564142` ("BAV"); low byte = TYPE.
+- +4  (u32) kind/bpp selector: `<5` → UV/frame sizes ×4 (`<<2`, 4bpp); `≥5` → ×8 (`<<3`, 8bpp). Also gates 64-vs-128 clamp (only when TYPE==112).
+- +18 (u16) "hu" = cel-record count bound; must be ≤ the 64/128 clamp; also drives `a3 += hu<<9` to reach the UV table.
+- +22 (u8)  "bu" = (UV/frame entry count − 1); the entry loops run `i ∈ [0, bu]`.
+- +32 ..    DATA: a table of `clamp` (64/128) **16-byte CEL RECORDS**, then the per-frame UV table.
+
+**Cel record** (16-byte stride, base = desc+32): +0 (u8) presence/U byte (0 ⇒ skipped from the packed index);
++8 (u32) packed index among non-zero records (written by loop 1); +12 (u16) tpage/clut word for EVEN frames;
++14 (u16) for ODD frames — both = `(vram_base + cumulative_byte_offset) >> 3` (written by loop 3).
+
+**Cel-system globals written** (font+cel region):
+- 0x80105C10 [slot*4] = data ptr (desc+32).  index = `(slot<<16)>>14` = slot*4 (a sll-in-delay-slot idiom; **NOT** field18).
+- 0x80105C50 [slot*4] = the descriptor ptr for this slot.
+- 0x80105C98 [slot*4] = UV-table base (after the cel records).
+- 0x80105CDA (u16)     = the 64/128 cel-record-count clamp.
+- 0x80105CF0 (u32)     = 0 (cleared at entry).
+- 0x80105D18 [slot]    (u8) = slot STATE: 0 free / 1 allocating / 2 loaded.
+- 0x80105D30 [slot*4]  = total packed VRAM size.
+- 0x80105D70 (u16)     = active-slot REFCOUNT (++ on allocate, −− on error cleanup).
+- 0x80105D78 [slot*4]  = allocated VRAM base word-address.
+- 0x800AC638 (u32)     = re-entrancy LOCK: **1 = FREE, 0 = BUSY**. Guard `FUN_80099478` returns `(lock^1)!=0`
+  → bails when BUSY(0). `FUN_80099450(1)` ACQUIRES — its `sw zero` is in the a0==1 branch's **delay slot**,
+  so it writes 0/busy; `FUN_80099450(0)` RELEASES (writes 1/free). Success leaves the lock ACQUIRED(0); only
+  the error cleanup tail releases it. (Getting this inverted was the first A/B mismatch.)
+
+**Control flow** (per the disasm): lock guard → allocate/validate slot → record descriptor + clear 0x80105CF0
+→ magic check (else free slot + cleanup) → pick clamp (64/128) → bounds-check hu ≤ clamp (else cleanup) →
+record data ptr → **loop 1** (pack non-zero record index into rec+8) → **loop 2** (record UV base, sum
+per-entry sizes into a sp+16 scratch array, kind-shift `<<2/<<3`) → round size up to 64 → **call the
+callback** (jalr a2) → fail/overflow → cleanup; success → latch VRAM base → **loop 3** (per entry i∈[0,bu]:
+`off += size[i]`, write `(vram_base+off)>>3` into cel-record (i/2)'s +12 (even i) / +14 (odd i)) → store total
+size + mark slot LOADED(2). Return slot.
+
+**Callees**: `FUN_80099478`/`FUN_80099450` (the lock test/set — trivial single-word ops on 0x800AC638,
+owned inline). The **callback** (a2 = `FUN_800964b4` → the VRAM allocator `FUN_800977c0`) is the genuine
+leaf, KEPT dispatched (`rec_dispatch`) in the recomp's exact order — its free-list lives in tracked RAM
+(0x800AC5xx/6xx) so it returns the same VRAM base in an A/B re-run.
+
+**Verify**: `bavload` full RAM+scratchpad+v0 A/B gate vs `rec_super_call` (engine_bav.cpp) — native run →
+snapshot+rollback → recomp body → diff, excluding only the top-of-RAM stack window [sp-0x800, sp). **0-diff
+over all 3 area-entry cel loads** (the natural exercise count for the reachable seaside field; this is a
+spawn-time loader, not per-frame). GOTCHAs caught by the gate: (1) lock semantics inverted (delay-slot `sw
+zero`); (2) the kind-shift inverted (`kind<5` → `<<2`, not `<<3`); (3) the C10/C98 index is **slot*4** (the
+`sll s2,16 >> 14` idiom), which I first misread as `field18>>14`.
+
 ## DEMO / front-end MENU stage state machine @0x801062E4 — RE map (later-181)
 The title/attract/menu front-end. Lives in the **DEMO overlay** (loaded at base 0x80106228, like GAME.BIN
 — they ALIAS the same 0x80106xxx addresses, so the same jump-table address holds DIFFERENT entries per
