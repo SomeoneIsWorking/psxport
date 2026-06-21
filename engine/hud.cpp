@@ -94,6 +94,17 @@ void ov_hud_sprite(Core* c) {
   int geom_b = (int16_t)c->r[6];      // a2 -> screen Y anchor
   int slice_idx = (int16_t)c->mem_r16(c->r[29] + 16);   // arg5 on caller stack
 
+  // BUG 2 — weapon carousel: show ONLY the current (center) weapon, not prev+current+next.
+  // The carousel routine (RE'd at 0x80025c00) calls this helper THREE times per frame for slice 211:
+  //   - CURRENT (center, X=160): jal 0x80025c60 -> ra = 0x80025c68
+  //   - PREV    (left,   X=128): jal 0x80025cbc -> ra = 0x80025cc4
+  //   - NEXT    (right,  X=192): jal 0x80025d14 -> ra = 0x80025d1c
+  // (ra = jal_addr + 8: the instruction after the branch-delay slot.) We keep only the CURRENT draw.
+  if (slice_idx == 211 && c->r[31] != 0x80025c68u) {
+    c->r[2] = 0;   // skip prev/next carousel draws; behave like the helper (v0=0)
+    return;
+  }
+
   // Resolve the cell record exactly as the emitter does: SLICE_TABLE[slice_idx] -> slice_rec;
   // hdr = vtable + lh(slice_rec)*4; count = lh(hdr+0); celloff = lh(hdr+2); cellbase = vtable + celloff.
   uint32_t slice_rec = c->mem_r32(SLICE_TABLE + (uint32_t)slice_idx * 4u);
@@ -164,6 +175,28 @@ void ov_hud_rect(Core* c) {
 // Font atlas tpage: tp=(960,256), 4bpp (docs/engine_re.md "font/UI texpage tp=(960,256)"); CLUT from a2.
 constexpr int FONT_TPX = 960, FONT_TPY = 256, FONT_MODE = 0;   // 4bpp font atlas
 
+// ---- TOKEN ICONS (string bytes 0x01..0x04) — now OWNED PC-native, no recomp fallback ----------------
+// RE (tools/disas.py 0x80078ca8 + 0x80078988; token table 0x800a55e0):
+//   In FUN_80078CA8 a string byte 0x01..0x04 is a SINGLE byte (the body does `addiu s0,s0,1`). It is NOT
+//   a printable glyph: the body passes a fixed 2-byte Shift-JIS *token code* to the token drawer
+//   FUN_80078988 (a3 = a pointer to that 2-byte code in .rodata), then advances the glyph pen by +8 in
+//   the glyph scratchpad (0x1f800008) just like any glyph (the token drawer's own scratch pen at
+//   0x1f800028 is independent and discarded by the caller). So each token = ONE 8-wide cell, advance +8.
+//   The per-token 2-byte codes (read big-endian as the parser does, (b0<<8)|b1):
+//     ch 0x01 -> code @0x80016da8 = 0x9573 ;  ch 0x02 -> code @0x80016dac = 0x8c88
+//     ch 0x03 -> code @0x80016da4 = 0x8e4f ;  ch 0x04 -> code @0x80016da0 = 0x8e6c
+//   FUN_80078988 looks each code up in the table at 0x800a55e0 (8-byte entries: [u32 ptr->2byte code,
+//   u16 glyph-index, ...]) via a 2-byte memcmp, yielding a glyph INDEX:
+//     0x9573->0x61(97)   0x8c88->0x60(96)   0x8e4f->0x62(98)   0x8e6c->0x63(99)
+//   The icon cell is then an 8x8 cell in the SAME font atlas (tpage 960,256; CLUT from the font bank a2),
+//   addressed directly by that index (NO fontbase added, UNLIKE plain glyphs):
+//     U = (idx & 31) * 8 ;  V = (idx >> 5) * 8        (idx 96..99 -> all on row 3: V=24, U=0/8/16/24)
+//   These are the button-prompt / direction icons in prompts like "Use ^ and (O) to look inside".
+//   Special token results 0xff02 (=advance pen only) and 0x0a0a (=newline) cannot arise from 0x01..0x04
+//   (those map to 0x60..0x63), so they need no handling here.
+// Map: string token byte (0x01..0x04) -> font-atlas glyph index. Index 0 unused (no token byte 0x00).
+constexpr int TOKEN_GLYPH_IDX[5] = { 0, 0x61, 0x60, 0x62, 0x63 };
+
 // ---- TEMPORARY RE PROBES (bannerprobe channel): log box/9slice emitter state, super-call ----
 constexpr uint32_t GLYPH_STR  = 0x80078CA8u;  // per-glyph string drawer (loops a0..a3 over a string)
 constexpr uint32_t UI_RECT    = 0x8007E1B8u;  // universal UI rect emitter (box / panel slice)
@@ -184,6 +217,21 @@ void ov_glyph_string(Core* c) {
   if (cellW <= 0) cellW = 8;
   if (cellH <= 0) cellH = 16;
 
+  // BUG 1 — banner/menu text spread across the whole screen.
+  // ROOT CAUSE (RE of FUN_80078CA8): the recomp keeps the LIVE pen in scratchpad and, crucially,
+  // RETURNS the width it drew in v0:  v0 = (s16)(*0x1f800008) - (a0 & 0xffff)  (= finalPenX - startPenX,
+  // see 0x80078fdc..0x80079008). A caller that draws one banner as several consecutive chunks positions
+  // each next chunk using that returned width (and reads/writes the scratch pen at 0x1f800008/0x1f80000a).
+  // The old native override returned r[2]=0 and never touched the scratch pen, so every chunk after the
+  // first landed at a wrong absolute X -> the banner got split into screen-spanning pieces.
+  // We now (a) reset the scratch pen to a0 like the body, (b) track the pen through the scratch words so
+  // newline (0x0a) and the final value are exact, and (c) return the real drawn width in v0.
+  c->mem_w16(0x1f800008u, (uint16_t)(a0 & 0xffff));   // pen X (low16 of a0)
+  c->mem_w16(0x1f80000au, (uint16_t)(a0 >> 16));      // pen Y (high16 of a0)
+  c->mem_w16(0x1f800010u, (uint16_t)(a1 & 0xffff));   // cellW (= U stride), as the body stores a1
+  c->mem_w16(0x1f800012u, (uint16_t)(a1 >> 16));      // cellH (= V stride / line advance)
+  int startPenX = (int)(int16_t)(a0 & 0xffff);
+
   // CLUT (bank a2) — exactly as the emitter computes it.
   uint32_t clutw = (a2 < 16) ? (uint32_t)(((a2 + 496) << 6) | 0x3f)
                              : (uint32_t)(((a2 + 480) << 6) | 0x3e);
@@ -192,13 +240,8 @@ void ov_glyph_string(Core* c) {
 
   int fontbase = (int16_t)c->mem_r16(0x1f800180u);   // s16 glyph-index base
 
-  // Escape/special tokens (bytes 0x01..0x04) are NOT printable glyphs: the recomp body parses them as
-  // MULTI-BYTE tokens via FUN_80078988 (token table @0x800a55e0 — special symbols / button-prompt icons).
-  // We do not yet own that token atlas, and parsing them as single bytes would DESYNC the string scan.
-  // So if any such token is present, fall back to the faithful recomp body for the WHOLE string (text
-  // stays correct everywhere); we own the common plain-text case PC-native. (Plain narration/menu/help
-  // strings have none — verified.)
-  for (uint32_t p = s; ; p++) { uint8_t ch = c->mem_r8(p); if (ch == 0) break; if (ch >= 0x01 && ch <= 0x04) { rec_super_call(c, 0x80078CA8u); return; } }
+  // Token icons (bytes 0x01..0x04) are now OWNED natively below (see TOKEN_GLYPH_IDX / the loop); there
+  // is NO recomp fallback any more — every string is drawn PC-native.
 
   if (cfg_dbg("bannerprobe")) {
     char buf[64]; int n=0; for(;n<63;n++){uint8_t ch=c->mem_r8(s+(uint32_t)n); if(!ch)break; buf[n]=(ch>=0x20&&ch<0x7f)?(char)ch:'.';} buf[n]=0;
@@ -210,8 +253,28 @@ void ov_glyph_string(Core* c) {
     uint8_t ch = c->mem_r8(s); s++;
     if (ch == 0) break;
     if (ch == 0x20) { x += 8; continue; }              // space: advance pen (matches body's +8)
-    if (ch == 0x0a) { x = penx; continue; }            // newline: reset X (Y handled by caller per line)
-    // (0x01..0x04 tokens were handled up-front by the recomp fallback, so they never reach here.)
+    if (ch == 0x0a) {                                   // newline: reset X to (a0 & 0xfff), advance Y by cellH
+      x = (int)(a0 & 0xfff);                            // body uses andi a0,0xfff for the X reset (0x80078d60)
+      y += cellH;                                       // body: penY += *0x1f800012 (cellH), 0x80078d68
+      continue;
+    }
+    // Token icons (0x01..0x04): button-prompt / direction glyphs, OWNED natively (no recomp fallback).
+    // The body parses these via FUN_80078988 -> a fixed 8x8 cell in the font atlas at glyph index
+    // TOKEN_GLYPH_IDX[ch] (no fontbase), CLUT = the same font bank, advance the pen by +8 (same as a
+    // plain glyph). Colour comes from the token scratch template (0x1f800024..0x26 = the GP0 sprite
+    // cmd word's R/G/B that FUN_80078988 reads via `lw 4(s2)`), with the same 0x80-identity fallback.
+    if (ch >= 0x01 && ch <= 0x04) {
+      int tr = c->mem_r8(0x1f800024u);
+      int tg = c->mem_r8(0x1f800025u);
+      int tb = c->mem_r8(0x1f800026u);
+      if (tr==0 && tg==0 && tb==0) { tr=tg=tb=0x80; }   // template not yet set -> identity modulation
+      int tidx = TOKEN_GLYPH_IDX[ch];
+      int tu = (tidx & 31) * 8;                          // token cells are fixed 8x8 (FUN_80078988)
+      int tv = (tidx >> 5) * 8;
+      hud_quad(c, x, y, 8, 8, tu, tv, tr, tg, tb, FONT_TPX, FONT_TPY, FONT_MODE, clutx, cluty);
+      x += 8;                                            // pen advance (+8, matching the caller's body)
+      continue;
+    }
     // Per-glyph colour from the scratchpad template (set by the prior "set text colour" call).
     int cr = c->mem_r8(0x1f800004u);
     int cg = c->mem_r8(0x1f800005u);
@@ -235,7 +298,12 @@ void ov_glyph_string(Core* c) {
     hud_quad(c, x, y, cellW, cellH, u, v, cr, cg, cb, FONT_TPX, FONT_TPY, FONT_MODE, clutx, cluty);
     x += 8;                                             // pen advance (body uses fixed +8 per glyph)
   }
-  c->r[2] = 0;   // body returns the pool head ptr in v0; the caller of this drawer ignores it (chained text).
+  // Persist the final pen to the scratchpad (the body leaves it there) and return the WIDTH drawn in v0,
+  // exactly as FUN_80078CA8 does (v0 = (s16)finalPenX - (a0 & 0xffff)). Callers chain banner chunks with
+  // this width / read the scratch pen, so getting it wrong is what spread text across the screen (BUG 1).
+  c->mem_w16(0x1f800008u, (uint16_t)x);                 // final pen X
+  c->mem_w16(0x1f80000au, (uint16_t)y);                 // final pen Y
+  c->r[2] = (uint32_t)(int32_t)((int16_t)(uint16_t)x - startPenX);
 }
 
 void probe_rect(Core* c) {
