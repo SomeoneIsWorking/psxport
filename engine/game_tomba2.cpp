@@ -167,6 +167,7 @@ void games_tomba2_init(void) {
   { void engine_math_register(void);   engine_math_register();   }   // hot libgte-style math leaves (isqrt)
   { void save_register(void);          save_register();          }   // save/load FLOW dispatcher (engine/save.cpp)
   { void sound_register(void);         sound_register();         }   // PC-native sound front-end (SFX/BGM trigger API, engine/sound.cpp)
+  { void hud_register(void);           hud_register();           }   // PC-native in-game HUD (gauge/icon/banner, draws textured quads on the engine 2D layer; engine/hud.cpp)
   // PC-owned asset codecs.
   rec_set_override(0x80044D8Cu, ov_lz_decompress);   // LZ image decompressor
   rec_set_override(0x80044F58u, ov_load_texgroup);   // texture-group LOADER orchestration (header+archive+unpack)
