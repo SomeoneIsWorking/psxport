@@ -507,6 +507,53 @@ static void ov_cull_wrapper(Core* c) {
   rec_dispatch(c, 0x8007712Cu);
 }
 
+// FUN_80077ACC — a second cull-wrapper variant (~2.3%, 9k calls). Unlike ov_cull_wrapper it takes the
+// position in a1/a2/a3 (caller-supplied, not obj fields) and sets the cull flags 0x1F800080=1 /
+// 0x1F800084=4 (vs 0/0), then makes the position camera-relative (a1 -= *0x1F8000D2, a2 -= *0x1F8000D6,
+// a3 -= *0x1F8000DA; sign-extend low16) and calls the owned cull body 0x8007712C. The cull is already
+// verified, so the only new logic is the flag writes + delta arithmetic. `cullwrap2` gate A/B's the
+// cull's outputs (obj+1, v0, flags, the 3 render queues) native vs the recomp wrapper.
+static void cull_wrap_77acc_prep(Core* c) {
+  c->mem_w32(0x1F800080u, 1);
+  c->mem_w32(0x1F800084u, 4);
+  uint16_t cx = (uint16_t)c->mem_r16(0x1F8000D2u);
+  uint16_t cz = (uint16_t)c->mem_r16(0x1F8000D6u);
+  uint16_t cy = (uint16_t)c->mem_r16(0x1F8000DAu);
+  c->r[5] = (uint32_t)(int32_t)(int16_t)(uint16_t)((uint16_t)c->r[5] - cx);
+  c->r[6] = (uint32_t)(int32_t)(int16_t)(uint16_t)((uint16_t)c->r[6] - cz);
+  c->r[7] = (uint32_t)(int32_t)(int16_t)(uint16_t)((uint16_t)c->r[7] - cy);
+}
+static void ov_cull_wrap_77acc_verify(Core* c) {
+  uint32_t rs[32]; memcpy(rs, c->r, sizeof rs);
+  uint32_t obj = c->r[4];
+  uint32_t cnt_b[3], ptr_b[3];
+  for (int i = 0; i < 3; i++) { cnt_b[i] = (uint16_t)c->mem_r16(CULL_QCNT[i]); ptr_b[i] = c->mem_r32(CULL_QPTR[i]); }
+  uint32_t kept_b = c->mem_r8(obj + 1), f84_b = c->mem_r32(0x1F800084u), f80_b = c->mem_r32(0x1F800080u);
+  cull_wrap_77acc_prep(c); rec_dispatch(c, 0x8007712Cu);
+  uint32_t kept_n = c->mem_r8(obj + 1), v0_n = c->r[2], f84_n = c->mem_r32(0x1F800084u), f80_n = c->mem_r32(0x1F800080u);
+  uint32_t cnt_n[3], ptr_n[3];
+  for (int i = 0; i < 3; i++) { cnt_n[i] = (uint16_t)c->mem_r16(CULL_QCNT[i]); ptr_n[i] = c->mem_r32(CULL_QPTR[i]); }
+  memcpy(c->r, rs, sizeof rs);
+  c->mem_w8(obj + 1, (uint8_t)kept_b); c->mem_w32(0x1F800084u, f84_b); c->mem_w32(0x1F800080u, f80_b);
+  for (int i = 0; i < 3; i++) { c->mem_w16(CULL_QCNT[i], (uint16_t)cnt_b[i]); c->mem_w32(CULL_QPTR[i], ptr_b[i]); }
+  rec_super_call(c, 0x80077ACCu);
+  uint32_t kept_o = c->mem_r8(obj + 1), v0_o = c->r[2], f84_o = c->mem_r32(0x1F800084u), f80_o = c->mem_r32(0x1F800080u);
+  uint32_t cnt_o[3], ptr_o[3];
+  for (int i = 0; i < 3; i++) { cnt_o[i] = (uint16_t)c->mem_r16(CULL_QCNT[i]); ptr_o[i] = c->mem_r32(CULL_QPTR[i]); }
+  static long ngood = 0, nbad = 0; int bad = 0;
+  if (kept_n != kept_o || v0_n != v0_o || f84_n != f84_o || f80_n != f80_o) bad = 1;
+  for (int i = 0; i < 3; i++) if (cnt_n[i] != cnt_o[i] || ptr_n[i] != ptr_o[i]) bad = 1;
+  if (bad) { if (nbad++ < 60) fprintf(stderr, "[cullwrap2] MISMATCH obj=%08x kept(n=%u o=%u) v0(n=%08x o=%08x) f84(n=%08x o=%08x) f80(n=%08x o=%08x)\n",
+                                       obj, kept_n, kept_o, v0_n, v0_o, f84_n, f84_o, f80_n, f80_o); }
+  else if (++ngood % 20000 == 0) fprintf(stderr, "[cullwrap2] %ld matches (last obj=%08x)\n", ngood, obj);
+}
+void ov_cull_wrap_77acc(Core* c) {
+  static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("cullwrap2") ? 1 : 0;
+  if (s_v) { ov_cull_wrap_77acc_verify(c); return; }
+  cull_wrap_77acc_prep(c);
+  rec_dispatch(c, 0x8007712Cu);
+}
+
 // PC-owned LZ image decompressor — replaces recompiled FUN_80044D8C (0x80044D8C). This routine
 // rebuilds the per-frame CLUTs (0x801FCDC0) and sprite/texture data from compressed area assets.
 // It was the source of the gameplay 2D-sprite corruption: the SAME function gave correct output
@@ -825,6 +872,7 @@ void games_tomba2_init(void) {
       rec_set_override(0x80083E80u, ov_trig_sin);                      // sin LUT
       rec_set_override(0x80083F50u, ov_trig_cos);                      // cos LUT
       rec_set_override(0x80083EBCu, ov_trig_lut); }                    // sin-quadrant lookup
+    { void ov_cull_wrap_77acc(Core*); rec_set_override(0x80077ACCu, ov_cull_wrap_77acc); }  // cull wrapper variant (flags 1/4)
   }
   // PC-native LEVEL/STAGE LOADER (engine/engine_level.cpp): the engine's overlay loader FUN_800450bc —
   // load a stage's overlay off the disc + set its entry, synchronous (no PSX CD-wait yield).
