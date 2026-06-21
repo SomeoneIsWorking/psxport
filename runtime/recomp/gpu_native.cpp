@@ -566,6 +566,7 @@ static void rq_emit_or_queue(Core* core, int capture, int layer, int order_mode,
   RqItem it;
   it.layer = (uint8_t)layer; it.semi = semi ? 1 : 0; it.nv = (uint8_t)nv; it.raw = raw ? 1 : 0;
   it.order_mode = (uint8_t)order_mode;
+  it.fps_world = 0;   // fps60 capture: cleared here, set only by fps60_stamp_world on GTE-composed world prims
   for (int i = 0; i < nv; i++) { it.xs[i]=xs[i]; it.ys[i]=ys[i]; it.us[i]=us[i]; it.vs[i]=vs[i];
                                  it.rs[i]=rs[i]; it.gs[i]=gs[i]; it.bs[i]=bs[i];
                                  it.depth[i] = depth ? depth[i] : 0.0f; }

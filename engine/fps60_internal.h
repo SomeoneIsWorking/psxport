@@ -54,6 +54,12 @@ struct Fps60State {
   // object tag (was the cross-TU global g_current_object): the object whose RTP ops are being tagged
   uint32_t current_object = 0;
 
+  // fps60 actor key: the per-object render command (cmd ptr) whose world quads are CURRENTLY being
+  // submitted (set by submit_perobj_flush around native_dispatch). Stamped onto each captured world
+  // RqItem (fps_key) so the 60fps tier can match an actor's prims across frames and reproject them at
+  // the A/B transform midpoint. 0 = no actor context (the prim snaps).
+  uint32_t fps_cur_key = 0;
+
   // per-frame projected-geometry fingerprint (rate-detector input)
   uint64_t s_frame_hash = 1469598103934665603ull;
   long     s_frame_geom = 0;

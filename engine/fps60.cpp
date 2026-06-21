@@ -468,21 +468,15 @@ void Fps60State::frame_commit(Core* core) {
   rate_tick(&s_rd, set_hash);
   s_fence++;
 
-  // Object interpolation: tag each poly with its source object (pool-slot pointer) at capture, then
-  // here compute this frame's per-object screen centroids (B) and match to last frame (A) BY POINTER.
-  // The synth translates each matched object's prims to the midpoint. Must run before the A/B swap.
+  // The live in-between is built by fps60_present_vk → build_lerp (the ACTOR-TRANSFORM reprojection path
+  // below). The legacy GTE-SXY remap (xobj_* + fps60_build_remap) and the SW s_interp synth are RETIRED:
+  // the remap was keyed on raw GTE DR14 SXY while the live queue carries float-projected screen verts, so
+  // it never bridged to the live present (diagnostics only) AND it drove the Beetle GTE per vertex every
+  // frame for nothing. Only xobj_commit is kept — it resets the per-frame local-vertex pool that the RTP
+  // tap (rtp→xobj_rtp) still appends to, so without it s_nv would grow until XV_MAX and freeze the capture.
   if (s_sdbg < 0) s_sdbg = cfg_dbg("fps60") ? 1 : 0;
-  // GTE-transform object matching (the camera+model identity that does NOT need the per-poly object
-  // tag). Match this frame's transform-groups (B) to last frame's (A) by local-vertex fingerprint, then
-  // commit (B→A) for the next frame. Reported under PSXPORT_DEBUG=fps60 to validate cross-frame object
-  // identity + transform deltas — the foundation for re-submit interpolation. Must run before xobj_commit.
-  xobj_match();
-  if (s_sdbg) xobj_report();
-  fps60_build_remap();              // interpolate each matched object's transform + reproject its verts
-                                    // through the real GTE -> old-SXY -> interp-SXY table. BEFORE commit
-                                    // (needs s_xB + the per-frame vertex pool, which commit resets).
-  xobj_commit();                    // swap s_xA/s_xB + reset the per-frame local-vertex pool
-  if (s_sdbg) fps60_synthesize(core);   // per-frame interpolation stats (headless diagnostic only)
+  if (s_sdbg) { xobj_match(); xobj_report(); }   // optional cross-frame transform-group diagnostic
+  xobj_commit();                                 // reset the per-frame local-vertex pool (RTP-tap hygiene)
   fps60_synth_dumptest(core);   // PSXPORT_FPS60_SYNTH: offline A/in-between/B dump (no live-path change)
   fps60_present_vk(core);       // owns presentation: VK 60fps pair (interpolated in-between + real frame)
 
@@ -505,27 +499,47 @@ void Fps60State::frame_commit(Core* core) {
 // 60fps stream (in-between, real, ...). Static prims (terrain/HUD) have zero motion -> unchanged; moving
 // objects + camera-panned geometry interpolate; teleports/cuts exceed the gate -> snap (no smear).
 #include "render_queue.h"
+#include "game.h"
 #include <unordered_map>
+#include <math.h>
 void gpu_present_ex(Core* core, int do_blit);
 void gpu_fps60_present_pass(Core* core);
 void gpu_pace_subframe(Core* core, int n);
+// fps60 midpoint reprojection: project model verts through an explicit composed transform (gte_beetle.cpp).
+void proj_native_xform_cr(const uint32_t cr[11], const int16_t mv[4][3], int nv, float px[4], float py[4], float pz[4]);
+float proj_pz_to_ord(float pz);
 
 #define FPS60_RQ_MAX 16384
 
-static uint64_t rq_fp(const RqItem* it) {                 // cross-frame surface identity (no position)
-  uint64_t h = 1469598103934665603ull;
-  auto mix = [&](uint64_t v){ h ^= (v & 0xFFFFFFFFu); h *= 1099511628211ull; };
-  mix(it->mode); mix(it->nv); mix(it->semi); mix(it->layer); mix(it->raw);
-  mix((uint32_t)it->tp_x); mix((uint32_t)it->tp_y); mix((uint32_t)it->clut_x); mix((uint32_t)it->clut_y);
-  for (int k = 0; k < it->nv; k++) {
-    mix((uint32_t)it->us[k]); mix((uint32_t)it->vs[k]); mix(it->rs[k]); mix(it->gs[k]); mix(it->bs[k]);
-  }
-  return h;
+// ---- ACTOR-TRANSFORM 60fps tier (user spec 2026-06-21) -------------------------------------------------
+// The interpolated in-between is built by REPROJECTING each captured world prim under the A/B MIDPOINT of
+// its source actor's transform — NOT by matching screen prims (the retired fingerprint matcher exploded on
+// real meshes) and NOT by re-running any guest/interpreted render code (unsafe: the field's per-mode
+// renderers mutate guest packet RAM). At native projection (fps60_stamp_world) every GTE-composed world
+// quad records its MODEL verts, its composed transform CR0-7, and its actor key (the per-object render
+// command). The composed transform already bakes in the camera, so lerping it per actor reproduces BOTH
+// camera pan (a static actor's transform differs frame-to-frame only by the camera) AND object motion in
+// one mechanism — exactly the user's "static objects move via the interpolated camera only; movers also
+// get object-motion interp", with the per-actor transform delta as the static/mover signal (no separate
+// flag). Terrain (separate float projection) + 2D/HUD carry fps_world=0 and snap (documented follow-up).
+
+// Capture hook: stamp the just-pushed world RqItem with this prim's reprojection inputs. Called by the GTE
+// submitters (engine_submit.cpp) right after gpu_draw_world_quad. No-op unless fps60 is on.
+void fps60_stamp_world(Core* c, const int16_t mv[4][3], int nv, uint32_t key) {
+  RenderQueue& q = c->game->rq;
+  if (q.consumed || q.n == 0) return;                 // the world quad wasn't actually queued
+  RqItem* it = &q.items[q.n - 1];
+  if (it->layer != RQ_WORLD) return;
+  it->fps_world = 1; it->fps_key = key;
+  for (int i = 0; i < 8; i++) it->fps_cr[i] = GTE_ReadCR(i);   // composed camera×object transform CR0-7
+  it->fps_cr[8] = GTE_ReadCR(24); it->fps_cr[9] = GTE_ReadCR(25); it->fps_cr[10] = GTE_ReadCR(26); // OFX/OFY/H
+  for (int k = 0; k < 4; k++) { int s = k < nv ? k : nv - 1;
+    it->fps_mv[k][0] = mv[s][0]; it->fps_mv[k][1] = mv[s][1]; it->fps_mv[k][2] = mv[s][2]; }
+  it->fps_offx = (int16_t)c->game->gpu.s_off_x;       // draw offset baked into xs/ys (reproject reproduces)
+  it->fps_offy = (int16_t)c->game->gpu.s_off_y;
 }
-static void rq_centroid(const RqItem* it, int* cx, int* cy) {
-  long sx = 0, sy = 0; for (int k = 0; k < it->nv; k++) { sx += it->xs[k]; sy += it->ys[k]; }
-  *cx = (int)(sx / it->nv); *cy = (int)(sy / it->nv);
-}
+
+static int s_lerpdbg = -1;        // PSXPORT_DEBUG=fps60 — per-frame reproject stats
 
 void Fps60State::rq_capture(const RqItem* items, int n) {
   if (!s_rqCur) s_rqCur = new RqItem[FPS60_RQ_MAX];
@@ -543,53 +557,76 @@ void Fps60State::rq_capture(const RqItem* items, int n) {
 // fraction of the screen). A vertex whose paired displacement exceeds this is NOT the same vertex (wrong
 // fingerprint collision, permuted winding, or a real teleport/cut) -> we must not average it.
 #define FPS60_VTX_GATE 48
-// Max per-PRIM centroid motion to even consider a candidate match. Coarse pre-filter only; the per-vertex
-// gate is what actually guarantees correctness. Kept generous so legitimately-fast prims still match and
-// are then validated vertex-by-vertex.
-#define FPS60_CENTROID_GATE 64
 
+// Reproject one captured world prim under crM (its actor's A/B-midpoint composed transform) into `out`.
+// Returns the worst per-vertex L1 screen displacement from the prim's real (frame-B) position — the caller
+// snaps instead when this exceeds the gate (teleport/cut/bad match → no smear). Reproduces the exact
+// round+offset gpu_draw_world_quad applied, so a crM == fps_cr (t=1.0) reprojection is bit-faithful.
+static int fps60_reproject(const RqItem* C, const uint32_t crM[8], RqItem* out) {
+  float px[4], py[4], pz[4];
+  proj_native_xform_cr(crM, C->fps_mv, C->nv, px, py, pz);
+  int worst = 0;
+  for (int k = 0; k < C->nv; k++) {
+    int xs = (int)(px[k] < 0 ? px[k] - 0.5f : px[k] + 0.5f) + C->fps_offx;
+    int ys = (int)(py[k] < 0 ? py[k] - 0.5f : py[k] + 0.5f) + C->fps_offy;
+    int d = abs(xs - C->xs[k]) + abs(ys - C->ys[k]);
+    if (d > worst) worst = d;
+    out->xs[k] = xs; out->ys[k] = ys; out->depth[k] = proj_pz_to_ord(pz[k]);
+  }
+  return worst;
+}
+
+// Midpoint of an actor's composed transform: rotation CR0-4 = packed-int16 average, translation CR5-7 =
+// integer average. (Small-angle matrix lerp; refine to euler-slerp if fast spins warp — see journal.)
+static void fps60_compose_mid(const uint32_t a[11], const uint32_t b[11], uint32_t m[11]) {
+  for (int k = 0; k < 5; k++) m[k] = interp_packed(a[k], b[k]);                 // rotation CR0-4 (packed i16)
+  for (int k = 5; k < 8; k++) m[k] = (uint32_t)(int32_t)(((int64_t)(int32_t)a[k] + (int32_t)b[k]) / 2);  // trans
+  for (int k = 8; k < 11; k++) m[k] = (uint32_t)(int32_t)(((int64_t)(int32_t)a[k] + (int32_t)b[k]) / 2);  // OFX/OFY/H
+}
+
+// Build the interpolated in-between by reprojecting each world prim at its actor's transform midpoint.
+// A static actor's transform differs across frames only by the camera → it reprojects under the half-camera
+// (correct pan); a mover's also by its own motion → midpoint pose. 2D/HUD, terrain, unkeyed or new-this-
+// frame actors, and any prim whose reprojection jumps more than the gate (cut/teleport) SNAP unchanged.
 int Fps60State::build_lerp() {
   if (!s_rqLerp) s_rqLerp = new RqItem[FPS60_RQ_MAX];
-  std::unordered_multimap<uint64_t, int> pmap;            // prev prims indexed by fingerprint
-  pmap.reserve((size_t)s_nPrev * 2 + 16);
-  for (int j = 0; j < s_nPrev; j++) pmap.insert({ rq_fp(&s_rqPrev[j]), j });
+  // actor key -> its composed CR0-7 LAST frame (all of an actor's prims share one composed transform, so
+  // first occurrence wins). Points into s_rqPrev (stable for this call).
+  std::unordered_map<uint32_t, const uint32_t*> prevcr;
+  prevcr.reserve((size_t)s_nPrev * 2 + 16);
+  for (int j = 0; j < s_nPrev; j++) { const RqItem* P = &s_rqPrev[j];
+    if (P->fps_world && P->fps_key) prevcr.emplace(P->fps_key, P->fps_cr); }
+  long moved = 0, snapped = 0;
   for (int i = 0; i < s_nCur; i++) {
     const RqItem* C = &s_rqCur[i];
-    s_rqLerp[i] = *C;                                     // default: SNAP (copy current unchanged)
-    if (C->layer != RQ_WORLD) continue;                  // only world geometry interpolates; 2D/HUD snap
-    uint64_t fp = rq_fp(C);
-    int cx, cy; rq_centroid(C, &cx, &cy);
-    // Pick the candidate (same fp + same nv) whose WORST per-vertex displacement is smallest, and accept
-    // it only if EVERY vertex moved within FPS60_VTX_GATE. The fingerprint is position-independent and
-    // collides freely on real meshes (many tris share UV/color/texpage), so the centroid tiebreak alone
-    // can pair vertex k of C with vertex k of a DIFFERENT triangle whose centroid happens to be nearer —
-    // a far per-vertex midpoint = the one-frame vertex explosion. A close centroid does NOT bound the
-    // per-vertex distance (long/thin/rotated tris), so we must validate the pairing vertex-by-vertex and
-    // reject (snap) when any vertex is implausibly far. Worst-vertex (not centroid) ranking also prefers
-    // the truly-corresponding prim among same-fp collisions.
-    int best = -1, best_worst = FPS60_VTX_GATE + 1;
-    auto range = pmap.equal_range(fp);
-    for (auto it = range.first; it != range.second; ++it) {
-      const RqItem* P = &s_rqPrev[it->second];
-      if (P->nv != C->nv) continue;                      // vertex-count guard: never pair mismatched verts
-      int px, py; rq_centroid(P, &px, &py);
-      if (abs(px - cx) + abs(py - cy) > FPS60_CENTROID_GATE) continue;   // coarse pre-filter
-      int worst = 0;                                     // worst per-vertex L1 displacement for this pairing
-      for (int k = 0; k < C->nv; k++) {
-        int dxy = abs(P->xs[k] - C->xs[k]) + abs(P->ys[k] - C->ys[k]);
-        if (dxy > worst) worst = dxy;
-      }
-      if (worst < best_worst) { best_worst = worst; best = it->second; }
+    s_rqLerp[i] = *C;                                     // default: SNAP (real frame-B position)
+    if (!C->fps_world || !C->fps_key) { snapped++; continue; }   // 2D/HUD/terrain/unkeyed → snap
+    auto it = prevcr.find(C->fps_key);
+    if (it == prevcr.end()) { snapped++; continue; }     // actor is new this frame (spawn/teleport) → snap
+    uint32_t crM[11]; fps60_compose_mid(it->second, C->fps_cr, crM);
+    RqItem tmp = *C;
+    int worst = fps60_reproject(C, crM, &tmp);
+    if (worst > FPS60_VTX_GATE) { snapped++; continue; } // cut/teleport/degenerate → snap (no smear)
+    for (int k = 0; k < C->nv; k++) { s_rqLerp[i].xs[k] = tmp.xs[k]; s_rqLerp[i].ys[k] = tmp.ys[k];
+                                      s_rqLerp[i].depth[k] = tmp.depth[k]; }
+    moved++;
+  }
+  if (s_lerpdbg < 0) s_lerpdbg = cfg_dbg("fps60") ? 1 : 0;
+  if (s_lerpdbg) fprintf(stderr, "[fps60] f%ld reproject: prims=%d moved=%ld snapped=%ld actors=%zu\n",
+                         s_fence, s_nCur, moved, snapped, prevcr.size());
+  // MECHANICAL GATE (PSXPORT_DEBUG=fps60chk): reproject every world prim at t=1.0 (crM = its OWN captured
+  // composed transform, no averaging) — this MUST reproduce the prim's real screen verts. A non-zero error
+  // means the capture/recompose/round path is wrong (not a smoothness issue). Pure diagnostic, no output change.
+  static int s_chk = -1; if (s_chk < 0) s_chk = cfg_dbg("fps60chk") ? 1 : 0;
+  if (s_chk) {
+    long n = 0, maxe = 0; double sume = 0;
+    for (int i = 0; i < s_nCur; i++) { const RqItem* C = &s_rqCur[i];
+      if (!C->fps_world || !C->fps_key) continue;
+      RqItem tmp = *C; int e = fps60_reproject(C, C->fps_cr, &tmp);
+      n++; sume += e; if (e > maxe) maxe = e;
     }
-    if (best >= 0 && best_worst <= FPS60_VTX_GATE) {     // every vertex moved a small, plausible amount
-      const RqItem* P = &s_rqPrev[best];
-      for (int k = 0; k < C->nv; k++) {
-        s_rqLerp[i].xs[k]    = (P->xs[k] + C->xs[k]) / 2;
-        s_rqLerp[i].ys[k]    = (P->ys[k] + C->ys[k]) / 2;
-        s_rqLerp[i].depth[k] = (P->depth[k] + C->depth[k]) * 0.5f;
-      }
-    }
-    // else: no trustworthy pairing -> s_rqLerp[i] stays the SNAPPED current prim (real/latest position).
+    fprintf(stderr, "[fps60chk] f%ld world=%ld  t=1.0 reproject error: max=%ld avg=%.3f px (0 = exact)\n",
+            s_fence, n, maxe, n ? sume / n : 0.0);
   }
   return s_nCur;
 }

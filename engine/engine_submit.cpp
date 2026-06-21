@@ -227,12 +227,24 @@ void proj_set_H(uint16_t h);                     // tell proj_pz_to_ord the proj
 // PC-NATIVE render path (gte_beetle.c / gpu_native.c): project an explicit model vertex through the GTE's
 // composed camera×object transform in FLOAT (no gte_op), and tee a projected quad straight to the VK
 // rasterizer with real per-pixel depth (no GP0 packet, no OT). Same primitives native_terrain.cpp uses.
-typedef struct { int ir1, ir2, ir3, sz, sx, sy; float px, py, pz, vx, vy, vz; } ProjVtx;
+typedef struct { int ir1, ir2, ir3, sz, sx, sy; float px, py, pz, vx, vy, vz; int mx, my, mz; } ProjVtx;
 void  proj_native_xform(int vx, int vy, int vz, ProjVtx* out);
 float proj_pz_to_ord(float pz);
 void  gpu_draw_world_quad(Core* c, const float* px, const float* py, const float* depth,
                           const int* u, const int* v, const uint8_t* r, const uint8_t* g,
                           const uint8_t* b, uint16_t tp, uint16_t clut, int semi);
+// fps60: after a GTE-composed world quad is pushed to the render queue, capture its model verts + the
+// composed transform (CR0-7) + the current actor key so the 60fps tier can reproject it at the A/B
+// midpoint (engine/fps60.cpp). No-op unless g_fps60_on. mv[k] = per-vertex model coords (4th = v2 for tris).
+extern int g_fps60_on;
+void  fps60_stamp_world(Core* c, const int16_t mv[4][3], int nv, uint32_t key);
+static inline void fps60_stamp(Core* c, const ProjVtx* p, int nv) {
+  if (!g_fps60_on) return;
+  int16_t mv[4][3];
+  for (int k = 0; k < 4; k++) { int s = k < nv ? k : nv - 1;
+    mv[k][0] = (int16_t)p[s].mx; mv[k][1] = (int16_t)p[s].my; mv[k][2] = (int16_t)p[s].mz; }
+  fps60_stamp_world(c, mv, nv, c->game->fps60.fps_cur_key);
+}
 // gen_func_8007FDB0 — POLY_GT3 (gouraud-textured triangle) submit.
 // Record = 36 bytes: {+0 rgb0|code, +4 rgb1 (rgb2 = rgb1<<4), +8 uv0|clut, +12 uv1|tpage,
 //   +16 VXY0, +20 VZ0(lo)|VZ1(hi), +24 VXY1, +28 VXY2, +32 VZ2(lo)|uv2(hi)}.
@@ -270,6 +282,7 @@ static void submit_poly_gt3_native(Core* c) {
     u[3] = u[2]; v[3] = v[2]; r[3] = r[2]; g[3] = g[2]; b[3] = b[2];
     int semi = (code & 0x02000000) ? 1 : 0;
     gpu_draw_world_quad(c, px, py, depth, u, v, r, g, b, tp, clut, semi);
+    fps60_stamp(c, p, 3);                                    // fps60: capture for midpoint reprojection
   }
   c->r[2] = rec;
 }
@@ -321,6 +334,7 @@ static void submit_poly_gt4_native(Core* c) {
     }
     int semi = (code0 & 0x02000000) ? 1 : 0;                  // GP0 op byte (code0>>24) bit1 = semi-transparency
     gpu_draw_world_quad(c, px, py, depth, u, v, r, g, b, tp, clut, semi);
+    fps60_stamp(c, p, 4);                                    // fps60: capture for midpoint reprojection
   }
   c->r[2] = rec;                                              // return: record pointer advanced past the array
 }
@@ -395,6 +409,7 @@ static void submit_poly_gt4_bp(Core* c) {
       }
       int semi = (ctl & 0x40000000) ? 1 : 0;
       gpu_draw_world_quad(c, px, py, depth, u, v, r, g, b, tp, clut, semi);
+      fps60_stamp(c, p, 4);                             // fps60: capture for midpoint reprojection
     }
     if ((int32_t)ctl <= 0) break;                       // control sign marks the last record
     rec += 36;
@@ -549,7 +564,9 @@ static void submit_perobj_flush(Core* c) {
     uint32_t otbase = otbase_ptr;
     if ((c->mem_r8(node + 0xD) & 0xF) == 4)
       otbase = otbase_ptr + (((int32_t)(int8_t)c->mem_r8(cmd + 0x3F)) << 2);
+    c->game->fps60.fps_cur_key = cmd;                 // fps60: tag this actor's world quads for reprojection
     native_dispatch(c, geomblk, otbase, flag);
+    c->game->fps60.fps_cur_key = 0;
     }
   next:
     i++;

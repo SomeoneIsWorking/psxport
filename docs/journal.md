@@ -6578,3 +6578,46 @@ The bucket split into ov_8013FAE0 4.25%, FUN_8013F0DC 4.07% (the real 256-insn s
 - **NEXT (the real lever): FUN_80115598 39.4%** = the OVERLAY 2D scrolling-tilemap RENDERER (biggest single
   fn). Render-boundary → reimplement as a PC-native 2D layer feeding the RenderQueue (NOT a packet/OT
   transcription), register via the same signature scan. Then resident FUN_800931C0 6.5%, FUN_80084A80 4.4%.
+
+### later-198 — 60fps tier REBUILT on the ACTOR-TRANSFORM layer (reproject, not screen-match)
+User spec (2026-06-21): "60fps should only compute camera and moving/animating objects… use the game
+object's OWN transform layer, NOT GTE/screen-space prim matching." The old live path (`build_lerp`'s
+fingerprint matcher) paired CURRENT render-queue prims to PREVIOUS ones by a position-independent
+material/UV hash + nearest-centroid and lerped their SCREEN verts — it collided on real meshes (many tris
+share UV/colour/texpage) → vertex explosion (masked by a 48px gate → snap/judder), and it "computed
+everything like static objects". RETIRED.
+- **New mechanism — capture + midpoint REPROJECTION (no guest re-run, no guest writes):** at the native GTE
+  projection chokepoint every GTE-composed world quad records, into its host `RqItem` (`fps60_stamp_world`,
+  engine/fps60.cpp): its 4 MODEL verts, the composed transform CR0-7 it was projected with (+CR24/25/26 =
+  OFX/OFY/H, which `proj_native_xform` also reads), the draw offset, and its ACTOR KEY = the per-object
+  render command `cmd` (set by `submit_perobj_flush` around `native_dispatch`, engine_submit.cpp — this is
+  the one tap point that actually reaches the drawn geometry, unlike the cull-time `current_object`). The
+  composed transform already bakes in the camera, so lerping it per actor across frames reproduces BOTH the
+  camera pan (a static actor's transform differs frame-to-frame only by the camera) AND object motion in one
+  mechanism — exactly the user's "static objects move via the interpolated camera only; movers also get
+  object-motion interp", with the per-actor transform delta as the static/mover signal (no separate flag).
+- **build_lerp**: map actor key→prev composed transform; for each current world prim, lerp its actor's
+  transform to the A/B midpoint (rotation = packed-int16 average, translation/OFX/OFY/H = integer average)
+  and reproject its model verts in pure float via `proj_native_xform_cr` (gte_beetle.cpp; saves/restores
+  CR0-7+CR24-26, no guest state). 2D/HUD, terrain (separate float projection), unkeyed/new-this-frame
+  actors, and any prim whose reprojection jumps > the 48px gate (cut/teleport) SNAP.
+- **WHY (b) not the handoff's recommended (a):** re-running the native render WALK with lerped guest
+  transforms would re-execute the field's INTERPRETED per-mode renderers (byte-packed GT4 is reached via
+  `rec_dispatch(0x8003F698)`), which mutate guest packet RAM — unsafe to run twice/frame. The reproject
+  path touches zero guest RAM.
+- **MECHANICAL GATE (`debug fps60chk`):** reprojecting every world prim at t=1.0 (its OWN captured
+  transform, no averaging) must reproduce its real screen verts. **max=0 avg=0.000 px EXACT, every field
+  frame** — the capture/recompose/round path is bit-faithful to the engine's own projection. At the field:
+  ~500 of ~1450 prims reproject across ~98 matched actors/frame; 949 snap (2D/HUD/terrain). No crash; field
+  renders intact (scratch/screenshots/fps60_field.png).
+- **Bugs found+fixed building it:** (1) `RqItem.fps_*` left uninitialised in `rq_emit_or_queue` → garbage
+  `fps_world`/`fps_key` on 2D items → bogus map keys + huge reproject error (fixed: clear `fps_world` at
+  construction, gpu_native.cpp); (2) captured only CR0-7, but `proj_native_xform` also reads CR24/25/26
+  (OFX/OFY/H) live at present time → wrong projection scale (fixed: capture+restore all 11); (3) `crM[8]`
+  stack buffer while `fps60_compose_mid` writes 11 → stack smash corrupting the adjacent unordered_map →
+  SIGSEGV (fixed: `crM[11]`). Also dropped the dead per-frame `fps60_build_remap()` (drove the Beetle GTE
+  per vertex every frame for output nothing consumes).
+- **OPEN (next):** terrain uses its OWN float projection (native_terrain.cpp Rview/Tview), not the GTE
+  CR0-7 path, so it currently SNAPS under camera pan — add a camera-keyed reprojection (capture terrain
+  model verts + the camera Rview/Tview) so the ground interpolates too. SMOOTHNESS itself is USER-EYEBALL
+  ONLY (windowed, F1 overlay 60fps toggle) — the mechanical gate only proves the math, not the feel.

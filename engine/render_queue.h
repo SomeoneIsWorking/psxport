@@ -42,6 +42,18 @@ struct RqItem {
   int      tw_mx, tw_my, tw_ox, tw_oy;                // texture-window
   int      da_x0, da_y0, da_x1, da_y1;                // draw-area clip
   int      tp_blend;                                  // semi blend mode
+
+  // ---- fps60 reprojection capture (host-only; never guest RAM, does not affect a lockstep diff) ----
+  // Captured at native GTE projection (fps60_stamp_world) so the interpolated-60fps tier can recompose +
+  // reproject this prim's verts at the A/B midpoint WITHOUT re-running any guest/interpreted render code
+  // (the actor-transform layer the user mandated — engine/fps60.cpp). Only the GTE-composed world path
+  // (proj_native_xform) fills these; terrain/2D/HUD leave fps_world=0 and snap.
+  uint8_t  fps_world;      // 1 = GTE-composed world prim with valid capture below
+  uint32_t fps_key;        // cross-frame ACTOR identity (cmd ptr from submit_perobj_flush; 0 = snap)
+  uint32_t fps_cr[11];     // projection state at draw: [0..7]=composed CR0-7 (rot CR0-4, trans CR5-7),
+                           // [8]=CR24 OFX, [9]=CR25 OFY, [10]=CR26 H — proj_native_xform reads all of these.
+  int16_t  fps_mv[4][3];   // per-vertex MODEL-space coords = the input to proj_native_xform
+  int16_t  fps_offx, fps_offy;  // draw offset baked into xs/ys (so a reproject reproduces them exactly)
 };
 
 #define RQ_MAX 32768
