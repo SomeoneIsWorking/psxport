@@ -653,9 +653,14 @@ in-port profiler (later-186, `interp.cpp`) gives the TIME + FREQUENCY histograms
   catcher names the offending GP0-0x80 copy when reproduced live; the FIX of that path is the followup).
 - **DUST: PARKED by user.** It is a quad-cluster particle effect, not a sprite strip; format owned + tooling
   in 85ebb98 (tex_export --scanbav/--bavsheet/bav_layout, REPL `vramraw`). Finish = decode per-quad records.
-- **IN PROGRESS (subagents):** per-area LIGHTING (village sun + lava/torch point lights) and HUD/overlays
-  PC-NATIVE rebuild (read gauge/icon/banner STATE → draw textured quads, owning overlay order; NOT a
-  transcription — the prior transcription hud.cpp was REJECTED).
+- **HUD rebuilt PC-NATIVE (88741d6):** engine/hud.cpp draws the gauge/icon as textured quads on the engine's
+  own 2D overlay layer (gpu_vk_draw_tritri + gpu_vk_set_order_2d), owning overlay order — NO GP0 packet/OT/
+  rec_dispatch. Engine owns visibility → draws all 3 indicator sprites (the PSX 4:3 da-clip ate 2; #14 fix).
+  Content interface 0-diff (all field-A/B diffs in the PSX render packet pools the native HUD stops writing).
+  TODO: glow-pulse modulation; panel/numeric-glyph counts + quest-banner text (state not yet RE'd).
+- **Per-area LIGHTING (e03a7ad):** engine/lighting.cpp per-area registry; Fisherman Village (key 0xca184188) →
+  warm SUN; mine lava/torch CFG scaffolded (needs a mine area key). Integrated at engine_shade_face (per-face,
+  not the deferred pass). Render-only, gated on g_mods.light; light-off field dump byte-identical to pre-lighting.
 - **60fps design (user-chosen):** interpolate CHARACTERS only; static world/terrain/2D/shadows from the REAL
   composite. Live tier = actor-transform VK (fps60_present_vk/build_lerp).
 
