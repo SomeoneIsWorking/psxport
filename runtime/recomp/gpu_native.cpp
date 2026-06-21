@@ -647,6 +647,7 @@ static void rq_emit_or_queue(Core* core, int capture, int layer, int order_mode,
   it.layer = (uint8_t)layer; it.semi = semi ? 1 : 0; it.nv = (uint8_t)nv; it.raw = raw ? 1 : 0;
   it.order_mode = (uint8_t)order_mode;
   it.fps_world = 0;   // fps60 capture: cleared here, set only by fps60_stamp_world on GTE-composed world prims
+  it.dbg_node  = 0;   // objid overlay: set by fps60_stamp_world/_billboard to this prim's entity node
   // Shadow capture: an opaque world prim with view-space verts casts into the shadow map. Carried on the
   // item so gpu_emit_rq_item re-pushes it to the shadow VBO on EVERY emit (= on both 60fps present passes).
   it.sh_cast = sv ? 1 : 0;

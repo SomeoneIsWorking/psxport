@@ -48,64 +48,56 @@ static bool objid_solid(Core* core, const RqItem* ref, int x0, int y0, int x1, i
   return true;
 }
 
-// Draw `ndig` hex digits of `val` at (x,y), pixel scale `s`, on a dark backing box.
-static void objid_hex(Core* core, const RqItem* ref, uint32_t val, int ndig, int x, int y, int s) {
-  int w = ndig * 4 * s, h = 5 * s;
-  objid_solid(core, ref, x - s, y - s, x + w, y + h, 0, 0, 0);            // backing box for contrast
-  for (int d = 0; d < ndig; d++) {
-    int digit = (val >> ((ndig - 1 - d) * 4)) & 0xF;
-    const unsigned char* gph = OBJID_FONT[digit];
-    int dx = x + d * 4 * s;
-    for (int row = 0; row < 5; row++)
-      for (int col = 0; col < 3; col++)
-        if (gph[row] & (1 << (2 - col))) {
-          int px = dx + col * s, py = y + row * s;
-          objid_solid(core, ref, px, py, px + s, py + s, 255, 255, 0);    // yellow pixel
-        }
-  }
+// Draw a single 3x5 glyph (index into OBJID_FONT) at (x,y), pixel scale s.
+static void objid_glyph(Core* core, const RqItem* ref, int g, int x, int y, int s) {
+  const unsigned char* gph = OBJID_FONT[g & 0xF];
+  for (int row = 0; row < 5; row++)
+    for (int col = 0; col < 3; col++)
+      if (gph[row] & (1 << (2 - col))) {
+        int px = x + col * s, py = y + row * s;
+        objid_solid(core, ref, px, py, px + s, py + s, 255, 255, 0);      // yellow pixel
+      }
 }
 
-// Scan the world prims (captured before we append), one label per unique object key, at its first vertex.
+// Draw `val` in DECIMAL at (x,y), scale s, on a dark backing box. The game object ids the user knows are
+// decimal (352/353/354 = the model id node+0xe), so we render base-10, not the raw hex pointer.
+static void objid_dec(Core* core, const RqItem* ref, uint32_t val, int x, int y, int s) {
+  int dig[6], n = 0;
+  do { dig[n++] = val % 10; val /= 10; } while (val && n < 6);  // least-significant first
+  int w = n * 4 * s, h = 5 * s;
+  objid_solid(core, ref, x - s, y - s, x + w, y + h, 0, 0, 0);            // backing box
+  for (int d = 0; d < n; d++) objid_glyph(core, ref, dig[n - 1 - d], x + d * 4 * s, y, s);
+}
+
+// Scan the world prims (captured before we append). One label per unique ENTITY INSTANCE (dbg_node), at
+// its first vertex, showing the GAME object id = the entity model id (node+0xe & 0x3fff) in decimal.
 static void objid_overlay(RenderQueue* q, Core* core) {
   int n0 = q->n;                               // freeze the count: only label real prims, not our own labels
   std::unordered_set<uint32_t> seen;
-  int nworld = 0, nkeyed = 0, nlabel = 0;
+  int nworld = 0, nnoded = 0, nlabel = 0;
   static int s_logframe = 0;                    // throttle the stderr table to once every ~60 frames
   int dolog = cfg_dbg("objid") && ((s_logframe++ % 60) == 0);
   for (int i = 0; i < n0; i++) {
     const RqItem* it = &q->items[i];
     if (it->layer != RQ_WORLD) continue;
     nworld++;
-    if (it->fps_key == 0) continue;                            // no engine identity on this prim
-    nkeyed++;
-    if (!seen.insert(it->fps_key).second) continue;            // one label per object
-    objid_hex(core, it, it->fps_key & 0xFFFF, 4, it->xs[0], it->ys[0], 2);   // low 16 bits, scale 2
+    uint32_t node = it->dbg_node;
+    if (node == 0) continue;                                   // no entity node resolved for this prim
+    nnoded++;
+    if (!seen.insert(node).second) continue;                   // one label per entity INSTANCE
+    uint32_t model = core->mem_r16(node + 0xE) & 0x3FFF;       // the game object id (model id)
+    objid_dec(core, it, model, it->xs[0], it->ys[0], 2);
     nlabel++;
-    // Diagnostic per-object line (channel only): resolve what this id IS so "check E1ED" has an answer.
-    // Billboard (fps_anchor): fps_key = the entity-node ptr -> dump type/pos/handler from guest RAM.
-    // Mesh: fps_key = the render-command ptr -> dump its geomblk + composed translation (cmd+0x2c/30/34).
     if (dolog) {
-      uint32_t key = it->fps_key;
-      if (it->fps_anchor && key >= 0x80000000u && key < 0x80200000u) {
-        uint32_t nd = key & 0x1FFFFFu;
-        fprintf(stderr, "[objid] %04X BILLBOARD node=%08x type=%02x pos=(%d,%d,%d) handler=%08x scr=(%d,%d) depth=%.4f\n",
-                key & 0xFFFF, key, core->mem_r8(nd + 0xC),
-                (int)(int16_t)core->mem_r16(nd + 0x2E), (int)(int16_t)core->mem_r16(nd + 0x32), (int)(int16_t)core->mem_r16(nd + 0x36),
-                core->mem_r32(nd + 0x1C), it->xs[0], it->ys[0], (double)it->depth[0]);
-      } else if (key >= 0x80000000u && key < 0x80200000u) {
-        uint32_t cm = key & 0x1FFFFFu;
-        fprintf(stderr, "[objid] %04X MESH cmd=%08x geomblk=%08x trans=(%d,%d,%d) scr=(%d,%d) depth=%.4f\n",
-                key & 0xFFFF, key, core->mem_r32(cm + 0x40),
-                (int)core->mem_r32(cm + 0x2C), (int)core->mem_r32(cm + 0x30), (int)core->mem_r32(cm + 0x34),
-                it->xs[0], it->ys[0], (double)it->depth[0]);
-      } else {
-        fprintf(stderr, "[objid] %04X key=%08x (non-RAM) scr=(%d,%d) depth=%.4f\n",
-                key & 0xFFFF, key, it->xs[0], it->ys[0], (double)it->depth[0]);
-      }
+      uint32_t nd = node & 0x1FFFFFu;
+      fprintf(stderr, "[objid] model=%u (0x%X) node=%08x type=%02x pos=(%d,%d,%d) %s scr=(%d,%d) depth=%.4f\n",
+              model, model, node, core->mem_r8(nd + 0xC),
+              (int)(int16_t)core->mem_r16(nd + 0x2E), (int)(int16_t)core->mem_r16(nd + 0x32), (int)(int16_t)core->mem_r16(nd + 0x36),
+              it->fps_anchor ? "BILLBOARD" : "MESH", it->xs[0], it->ys[0], (double)it->depth[0]);
     }
   }
   if (dolog)
-    fprintf(stderr, "[objid] --- world prims=%d keyed=%d labels=%d (n=%d) ---\n", nworld, nkeyed, nlabel, n0);
+    fprintf(stderr, "[objid] --- world prims=%d noded=%d labels=%d (n=%d) ---\n", nworld, nnoded, nlabel, n0);
 }
 
 // The render queue is THE render path — one behavior, the PC game. No env gate (user directive

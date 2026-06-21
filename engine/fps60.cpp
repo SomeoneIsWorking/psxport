@@ -215,6 +215,9 @@ void fps60_stamp_world(Core* c, const int16_t mv[4][3], int nv, uint32_t key) {
   if (q.consumed || q.n == 0) return;                 // the world quad wasn't actually queued
   RqItem* it = &q.items[q.n - 1];
   if (it->layer != RQ_WORLD) return;
+  // objid overlay: the current render object node (scratch 0x1F80028C, set by submit_perobj_render) — its
+  // model id (node+0xe) is the GAME object id we display. Valid here: this runs during the per-object flush.
+  { uint32_t nd = c->mem_r32(0x1F80028Cu); if (nd >= 0x80000000u && nd < 0x80200000u) it->dbg_node = nd; }
   it->fps_world = 1; it->fps_anchor = 0; it->fps_key = key;   // mesh prim: per-vertex reproject (not anchor-translate)
   for (int i = 0; i < 8; i++) it->fps_cr[i] = GTE_ReadCR(i);   // composed camera×object transform CR0-7
   it->fps_cr[8] = GTE_ReadCR(24); it->fps_cr[9] = GTE_ReadCR(25); it->fps_cr[10] = GTE_ReadCR(26); // OFX/OFY/H
@@ -302,6 +305,7 @@ void fps60_stamp_billboard(Core* c, uint32_t node) {
   uint32_t ident; uint32_t cr[11];
   if (!fps60_billboard_for_node(node, &ident, cr)) return;
   it->fps_world = 1; it->fps_anchor = 1; it->fps_key = ident;
+  if (ident >= 0x80000000u && ident < 0x80200000u) it->dbg_node = ident;   // objid: the entity node (= ident)
   for (int k = 0; k < 11; k++) it->fps_cr[k] = cr[k];
   for (int k = 0; k < 4; k++) { it->fps_mv[k][0] = 0; it->fps_mv[k][1] = 0; it->fps_mv[k][2] = 0; }  // anchor = object origin (CR5-7 = view pos)
   it->fps_offx = 0;   // billboard reproject is a screen TRANSLATE of xs/ys (offset already baked in)

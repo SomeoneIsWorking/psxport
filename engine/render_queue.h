@@ -69,6 +69,8 @@ struct RqItem {
   // is keyed on the object IDENTITY (fps_key), not a fragile depth-ord reverse-match.
   uint8_t  fps_anchor;     // 1 = 3D-positioned 2D quad: translate by the anchor's midpoint screen delta
   uint32_t fps_key;        // cross-frame ACTOR identity (cmd ptr from submit_perobj_flush; 0 = snap)
+  uint32_t dbg_node;       // DEBUG (objid overlay): the per-instance ENTITY NODE ptr this prim belongs to
+                           // (0 = unknown). Its model id (node+0xe & 0x3fff) is the GAME object id we display.
   uint32_t fps_cr[11];     // projection state at draw: [0..7]=composed CR0-7 (rot CR0-4, trans CR5-7),
                            // [8]=CR24 OFX, [9]=CR25 OFY, [10]=CR26 H — proj_native_xform reads all of these.
   int16_t  fps_mv[4][3];   // per-vertex MODEL-space coords = the input to proj_native_xform
