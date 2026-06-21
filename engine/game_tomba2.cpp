@@ -545,6 +545,70 @@ void ov_grid_query_47cbc(Core* c) {
   c->r[2] = oracle;                                            // keep oracle scratchpad state
 }
 
+// FUN_800498C8 — collision-grid RESOLVE LOOP (top of the grid family; pairs with the owned
+// FUN_80049968 setup + FUN_80047CBC query). a0 = probe object. Iterates:
+//   jal 0x8004798C(obj)                    -- per-step grid-origin/index setup (kept dispatched; non-trivial)
+//   jal 0x80049968(u8 @0x1F8001FE)         -- row-pointer setup (owned ov_grid_setup_49968)
+//   v0 = jal 0x80047CBC()                  -- cell query/neighbor-walk (owned ov_grid_query_47cbc)
+//   if v0 == 0 -> return 0                  (query found nothing / off-grid -> done)
+//   v1 = w[0x1F8001E0] (the cell record ptr the query latched)
+//   if (h[v1] & 0x4000) == 0 -> return 1   (resolved cell is terminal -> done, keep)
+//   obj[42] = b[v1]                         (record the resolved cell's tag byte onto the probe object)
+//   reload v1' = w[0x1F8001E0]; if (h[v1'] & 0x4000) != 0 -> LOOP (descend further)
+//   else -> return 1
+// Pure control flow over scratchpad + object memory; ONE object write (obj+42); NO GTE, NO render
+// packets. The three callees stay PSX via rec_dispatch (the two grid leaves honor their own owned
+// override identically in the dispatched path). Return: 0 only when the query returns 0; otherwise 1.
+static uint32_t grid_resolve_498c8(Core* c) {
+  const uint32_t obj = c->r[4];
+  for (;;) {
+    c->r[4] = obj; rec_dispatch(c, 0x8004798Cu);                 // setup (dispatched)
+    c->r[4] = (uint32_t)c->mem_r8(0x1F8001FEu); rec_dispatch(c, 0x80049968u);  // row-ptr setup (owned)
+    rec_dispatch(c, 0x80047CBCu);                                // cell query (owned)
+    if (c->r[2] == 0) return 0;
+    uint32_t v1 = c->mem_r32(0x1F8001E0u);
+    if ((c->mem_r16(v1) & 0x4000u) == 0) return 1;
+    c->mem_w8(obj + 42, c->mem_r8(v1));                          // record tag byte onto the object
+    uint32_t v1b = c->mem_r32(0x1F8001E0u);
+    if ((c->mem_r16(v1b) & 0x4000u) != 0) continue;             // bne v0,zero,0x800498e8 -> loop
+    return 1;
+  }
+}
+
+void ov_grid_resolve_498c8(Core* c) {
+  static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("gridresolve") ? 1 : 0;
+  if (!s_v) { c->r[2] = grid_resolve_498c8(c); return; }
+  // Full RAM+scratchpad A/B vs rec_super_call. The native path runs first, its writes are snapshotted
+  // and rolled back, then the recomp body runs and we diff. The dispatched callees (incl. the deep
+  // FUN_8004798C tree) run in BOTH passes; FUN_800498C8's own 32-byte stack frame [sp-32, sp) is dead
+  // below sp on return (gen saves regs there; native never touches the guest stack) -> excluded.
+  static uint8_t* ram0 = (uint8_t*)malloc(0x200000);
+  static uint8_t* ramN = (uint8_t*)malloc(0x200000);
+  uint8_t spad0[0x400], spadN[0x400];
+  uint32_t regs0[32]; memcpy(regs0, c->r, sizeof regs0);
+  uint32_t obj = c->r[4];
+  memcpy(ram0, c->ram, 0x200000); memcpy(spad0, c->scratch, 0x400);
+  c->r[2] = grid_resolve_498c8(c);
+  uint32_t v0_n = c->r[2];
+  memcpy(ramN, c->ram, 0x200000); memcpy(spadN, c->scratch, 0x400);
+  memcpy(c->ram, ram0, 0x200000); memcpy(c->scratch, spad0, 0x400); memcpy(c->r, regs0, sizeof regs0);
+  rec_super_call(c, 0x800498C8u);
+  uint32_t v0_o = c->r[2];
+  // Exclude pure stack scratch below entry sp: the dispatched callee tree (FUN_8004798C -> 0x80048ecc/
+  // 0x80048fc4 + the grid leaves) runs in BOTH passes and leaves transient values in its OWN frames below
+  // sp; because FUN_800498C8's native frame is absent, the residual bytes there differ harmlessly (same as
+  // scriptvm/player). The exclusion window is the top-of-RAM stack (sp-0x800, sp) — far above ALL game
+  // data (sp ~0x1FE9xx, RAM end 0x200000); a real behavioral divergence would alter persistent state below.
+  uint32_t sp = regs0[29] & 0x1FFFFFu, flo = (sp >= 0x800) ? sp - 0x800 : 0;
+  int ro = -1; for (uint32_t a = 0; a < 0x200000; a++) if (c->ram[a] != ramN[a] && !(a >= flo && a < sp)) { ro = (int)a; break; }
+  int so = -1; for (uint32_t a = 0; a < 0x400; a++) if (c->scratch[a] != spadN[a]) { so = (int)a; break; }
+  static long ng = 0, nb = 0;
+  if (ro >= 0 || so >= 0 || v0_n != v0_o) {
+    if (nb++ < 40) fprintf(stderr, "[gridresolve] MISMATCH obj=%08x v0 n=%x o=%x ram@%x spad@%x sp=%x\n",
+                           obj, v0_n, v0_o, ro, so, sp);
+  } else if (++ng % 2000 == 0) fprintf(stderr, "[gridresolve] %ld matches\n", ng);
+}
+
 // FUN_8004CE14 — per-object SCRIPT-VM tick (the MOST-CALLED field function, ~14900 calls/run). a0 = obj.
 // Dispatches on the state byte obj[4]: 2 -> no-op; 3 -> jal 0x8007A624(obj); >3 -> no-op; 0 -> if the
 // global enable byte 0x800BF873!=0 set obj[4]=3 & return, else INIT (obj[4]=1, obj[0]=1, load the per-obj
@@ -1505,6 +1569,7 @@ void games_tomba2_init(void) {
     { void ov_list_scan_31780(Core*); rec_set_override(0x80031780u, ov_list_scan_31780); }  // list-tail resolver/reset
     { void ov_grid_setup_49968(Core*); rec_set_override(0x80049968u, ov_grid_setup_49968); }  // collision-grid row-ptr setup
     { void ov_grid_query_47cbc(Core*); rec_set_override(0x80047CBCu, ov_grid_query_47cbc); }  // collision-grid cell query/walk
+    { void ov_grid_resolve_498c8(Core*); rec_set_override(0x800498C8u, ov_grid_resolve_498c8); }  // collision-grid resolve loop (control flow owned)
     { void ov_script_vm_4ce14(Core*); rec_set_override(0x8004CE14u, ov_script_vm_4ce14); }  // per-object script-VM tick (control flow owned; sub-behaviors dispatched)
     { void ov_input_dispatch_931c0(Core*); rec_set_override(0x800931C0u, ov_input_dispatch_931c0); }  // per-frame input/controller-state processor (control flow owned)
     // PC-native PLAYER velocity-integrate handler (engine/engine_player.cpp): FUN_80056B48 integrates

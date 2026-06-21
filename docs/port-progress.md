@@ -188,6 +188,19 @@ for content fns (call it). Do NOT mimic PSX hardware (GTE/GP0/OT) — remove Bee
   reg): 0-diff over 10000+ calls with movement in all 4 directions (exercises every step branch). GOTCHAs:
   delay-slot writes (sh[0x1A8]=a2 then conditionally =0); a1 reloaded to scratchpad base mid-fn (t5=SP);
   L_f9c uses (int16)t1*4 for the row index but FULL t0 for the column add.
+- ✅ **later-200 — `FUN_800498C8` `ov_grid_resolve_498c8` (collision-grid RESOLVE LOOP — head of the grid
+  family, drives the later-194/195 leaves).** a0 = probe object. Loop: `jal 0x8004798C(obj)` (per-step grid
+  setup; non-trivial → kept DISPATCHED), `jal 0x80049968(u8@0x1F8001FE)` (owned row-ptr setup), `v0 = jal
+  0x80047CBC()` (owned cell query). v0==0 → return 0. Else v1=w[0x1F8001E0] (record ptr the query latched);
+  (h[v1]&0x4000)==0 → return 1 (terminal). Else obj[42]=b[v1] (record the resolved tag byte onto the probe
+  object), reload v1'; (h[v1']&0x4000)!=0 → LOOP (descend) else return 1. Pure control flow over scratchpad
+  + object memory; ONE object write (obj+42); NO GTE/render. Control flow + the obj+42 write owned native;
+  all three callees stay PSX via rec_dispatch. Verified with the full RAM+scratchpad A/B gate `gridresolve`:
+  **0-diff over 8000+ live field calls** (press right 250 + press left 250). GOTCHA (scriptvm/player family):
+  the dispatched callee tree runs in BOTH passes and leaves transient stack residue below entry sp (no native
+  frame there), so the gate excludes the top-of-RAM stack window [sp-0x800, sp) (sp ~0x1FE9xx, far above all
+  game data) — a 32-byte window first exposed exactly this residue (diffs all at sp-0x26..sp-0x48), the wider
+  window then went 0-diff. Registered in game_tomba2.cpp alongside the grid leaves.
 - ✅ **later-196 — `FUN_8004CE14` `ov_script_vm_4ce14` (per-object SCRIPT-VM tick — THE most-called field
   fn, ~14900 calls/run).** First CONTENT state machine owned after the boundary removal. Dispatch on state
   byte obj[4]: 2→no-op; 3→jal 0x8007A624; >3→no-op; 0→ if global 0x800BF873!=0 set obj[4]=3 & return, else

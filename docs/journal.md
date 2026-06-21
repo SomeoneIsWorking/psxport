@@ -6676,3 +6676,28 @@ Worked the 8 open GitHub render bugs (specs in docs/reference/issues/).
   cutscene black bar doesn't reproduce headless and the fix is delicate present-region math (gpu_vk.cpp
   :1221) that would touch ALL frames — unsafe to change without a repro to verify. Applying any of these
   blind = bandaid/regression risk (forbidden). Specs carry the exact live repro recipe for the user.
+
+### later-200 — FUN_800498C8 `ov_grid_resolve_498c8` owned (collision-grid resolve loop, top of the grid family)
+Owned the collision-grid RESOLVE LOOP `FUN_800498C8` PC-native in `engine/game_tomba2.cpp`. It is the head
+of the grid family whose two leaves were owned earlier (later-194 `FUN_80049968` setup, later-195
+`FUN_80047CBC` query); this fn drives them in a descent loop. a0 = probe object.
+- **RE** (`tools/disas.py 0x800498C8`): a loop —
+  `jal 0x8004798C(obj)` (per-step grid-origin/index setup; non-trivial, calls 0x80048ecc/0x80048fc4 → kept
+  DISPATCHED), `jal 0x80049968(u8@0x1F8001FE)` (owned row-ptr setup), `v0 = jal 0x80047CBC()` (owned cell
+  query/walk). If v0==0 → return 0. Else v1 = w[0x1F8001E0] (the record ptr the query latched); if
+  (h[v1]&0x4000)==0 → return 1 (terminal cell). Else obj[42] = b[v1] (record the resolved tag byte onto the
+  probe object), reload v1' = w[0x1F8001E0]; if (h[v1']&0x4000)!=0 → LOOP (descend further) else return 1.
+  Pure control flow over scratchpad + object memory; ONE object write (obj+42); NO GTE, NO render packets.
+- **Ownership**: control flow + the obj+42 write owned native; all three callees stay PSX via rec_dispatch
+  (the two grid leaves honor their own owned override identically in the dispatched path; FUN_8004798C's
+  deep tree stays interpreted). Returns: 0 only when the query returns 0; otherwise 1 (matching the gen
+  delay-slot `addiu v0,zero,1` on every keep path).
+- **VERIFIED** with the full RAM+scratchpad A/B gate `gridresolve` (native run → snapshot+rollback →
+  rec_super_call → diff): **0-diff over 8000+ live field calls** across both movement directions (press
+  right 250 + press left 250). v0 + every persistent RAM word + all scratchpad match exactly. GOTCHA (same
+  family as scriptvm/player): the dispatched callee tree runs in BOTH passes and leaves transient values in
+  its OWN stack frames below entry sp; because FUN_800498C8's native frame is absent those residual bytes
+  differ harmlessly, so the gate excludes the top-of-RAM stack window [sp-0x800, sp) (sp ~0x1FE9xx, RAM end
+  0x200000 — far above all game data; a real divergence would alter persistent state below). A first 32-byte
+  exclusion exposed exactly this stack residue (diffs all at sp-0x26..sp-0x48), confirming the cause; the
+  wider window then went 0-diff. Registered in game_tomba2.cpp alongside the grid leaves.
