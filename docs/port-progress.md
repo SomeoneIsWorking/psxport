@@ -240,6 +240,21 @@ for content fns (call it). Do NOT mimic PSX hardware (GTE/GP0/OT) — remove Bee
   excludes [sp-0x800, sp) — pure stack scratch at the top of RAM (~0x1FE8F0), far above all game data; every
   persistent word + scratchpad + v0 match. Live (non-verify) path confirmed Tomba walks normally (X hi16
   3940→6000 holding right). Added to run.sh + tools/build_port.sh SRC lists.
+- ✅ **later-198 — `FUN_80076D68` `ov_anim_vm_76d68` (per-object ANIMATION-SEQUENCE VM stepper, ~3.6% of
+  field interp time, no GTE).** a0=anim object; field s0+0x0E = frame countdown/duration; s0+0x38 = cursor
+  (word ptr) into an 8-byte-stride keyframe stream (tag/payload halfword @+6, jump pointer @+8). ctrl =
+  s0+0x0E read once; bit 0x1000 = "do NOT advance the cursor" (freeze). low12(ctrl)>1 → DELAY: cursor SIGN
+  BIT is a flag — cur<0 freezes (h=(low12−1)|(ctrl&0x1000), ret 0), else apply frame (0x80075f0c, a1=low12−1)
+  + h=(low12−1)|(post-call s0[14]&0x1000), ret 2. low12==1 → STEP on tag [cur+6]&0xc000: 0x0000 advance
+  cur+=8; 0x4000/0xc000 FOLLOW cur=[cur+8]; 0x8000 hold; then reload duration via 0x80076904 + if loaded
+  frame has the 0x2000 exec flag run executor 0x80075ff8. **Control flow + memory ops owned native; the 3
+  callees stay PSX via rec_dispatch.** `animvm` full-RAM+scratchpad A/B vs rec_super_call: **0-diff 4000+
+  calls** across all 4 movement directions. GOTCHAs caught by the gate (all delay-slot / arg-register slips):
+  (1) the cur<0 path writes `(low12−1)+(ctrl&0x1000)` — the +0x1000 is the bltz delay slot `andi v0,a0,0x1000`,
+  NOT a literal +2; (2) 0x80075f0c needs **a1=low12−1** (it sets the cursor's KSEG0 flag bit when a1==1) —
+  passing only a0 left the cursor's high byte clear; (3) T4000/TC000 FOLLOW [cur+8] when NOT frozen (the
+  transient cur+8 store is dead, overwritten) — had it inverted with the freeze case first; (4) the apply
+  path RE-READS s0+14 after 0x80075f0c (the applier may modify it) for the freeze-bit OR.
 - ✅ `FUN_80051C8C` per-object TRANSFORM build = `ov_build_xform`.
 - **Camera update (engine_camera.cpp):**
   - ✅ position X/Z `FUN_8006d960` = `ov_cam_track_xz`; ✅ position Y `FUN_8006da54` = `ov_cam_track_y` (later-174).
@@ -427,8 +442,10 @@ in-port profiler (later-186, `interp.cpp`) gives the TIME + FREQUENCY histograms
     rec_dispatch the owned cull body; verified 0-diff 40000+ via the `cullwrap` channel).
   - ~~`FUN_80084080` 9% (mis-attributed; real 0.5%)~~ ✅ OWNED native (later-186, ov_gte_norm) — table sqrt via
     LZCR→LUT, GTE used only as CLZ; verified 0-diff 15000+ live calls. ~~`FUN_80077FB0` isqrt~~ ✅ OWNED. See §D.
-  - `FUN_80076D68` 3.6% (no GTE) = animation-sequence VM stepper (control flow + 3 callees 80075f0c/80076904/
-    80075ff8; verify needs full-RAM diff + caution: untested command types = false-confidence risk).
+  - ~~`FUN_80076D68` 3.6% (no GTE) = animation-sequence VM stepper~~ ✅ OWNED native (later-198,
+    ov_anim_vm_76d68, game_tomba2.cpp) — control flow + memory ops owned, the 3 callees (80075f0c applier /
+    80076904 frame loader / 80075ff8 frame executor) stay PSX via rec_dispatch. `animvm` full-RAM+scratchpad
+    A/B gate 0-diff 4000+ calls across all 4 movement directions (advance / follow-jump / freeze / executor).
 
 ---
 

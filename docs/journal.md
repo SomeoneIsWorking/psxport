@@ -16,6 +16,40 @@
   earlier fade work: see [[tomba2-fade-flash-solved]]).
 - ~~SCEA license screen was black~~ **FIXED PC-native (later-179, below).**
 
+## later-198: OWN the per-object ANIMATION-SEQUENCE VM stepper FUN_80076D68 native (ov_anim_vm_76d68)
+Frontier §F resident leaf (3.6% field interp time, no GTE, a freq leader on motion scenes). First port of
+the animation-keyframe VM — a content state machine, same methodology as scriptvm/pad931c0 (later-196/197).
+**a0 = anim object.** Two object fields drive it: s0+0x0E (h) = the per-frame COUNTDOWN/duration (low12) +
+a 0x1000 freeze flag; s0+0x38 = the CURSOR (word ptr) into an 8-byte-stride keyframe stream — each keyframe
+has a tag/payload halfword at +6 and a jump pointer at +8. ctrl=s0[0x0E] is read ONCE at entry.
+- **low12(ctrl) > 1 → DELAY** (still counting this frame): the cursor's SIGN BIT is a flag. cur<0 = freeze
+  in place (h=(low12−1)|(ctrl&0x1000), ret 0). cur≥0 = apply the current frame (jal 0x80075f0c, a1=low12−1)
+  then h=(low12−1)|(post-call s0[0x0E]&0x1000), ret 2.
+- **low12(ctrl) == 1 → STEP** (frame elapsed): dispatch on [cur+6]&0xc000 — 0x0000 advance cur+=8;
+  0x4000/0xc000 FOLLOW the jump cur=[cur+8]; 0x8000 terminal/hold (h=[cur+6]&0xfff, no advance). After the
+  advance/follow, reload the new frame's duration into h via jal 0x80076904, and if the LOADED frame has the
+  0x2000 "execute" bit, run the executor jal 0x80075ff8 keyed by the new tag. (When frozen — ctrl&0x1000 —
+  the cursor is NOT advanced in any block.)
+- **Owned native:** all control flow + the s0[0x0E]/s0[0x38] reads & writes. The 3 callees (0x80075f0c
+  per-frame applier, 0x80076904 frame loader, 0x80075ff8 frame executor) stay PSX via rec_dispatch (each
+  honors any later override identically in the super-call path).
+- **`animvm` gate** (game_tomba2.cpp, scriptvm template): full RAM (0x200000) + scratchpad (0x400) A/B vs
+  rec_super_call — native runs once, RAM/scratch/regs rolled back, super_call runs, byte-compare + v0;
+  exclude the fn's own 40-byte stack frame [sp−40,sp). **0-diff over 4000+ live calls** across right/left/
+  up/down movement (exercises advance + follow-jump + freeze + the executor sub-calls). Lazy cfg_dbg gate
+  (re-checked each call) so the REPL `debug animvm` works (the fn can run before the channel is set).
+- **4 delay-slot/arg-register GOTCHAs, every one caught by the A/B (the gate working):** (1) the cur<0 path
+  writes `(low12−1)+(ctrl&0x1000)`, NOT a literal +2 — the +0x1000 is the bltz delay slot `andi v0,a0,0x1000`
+  (a0=entry ctrl). (2) 0x80075f0c needs **a1=low12−1** — it ORs the KSEG0 bit (0x80000000) into the cursor
+  iff (int16)a1==1; calling it with only a0 left the cursor's high byte clear (mismatch at obj+0x3b = the
+  cursor's top byte). (3) T4000/TC000 FOLLOW [cur+8] when NOT frozen — the asm writes a transient cur+8 that
+  is immediately overwritten by [cur+8]; I first modeled it as the inverse (cur+8 not-frozen / follow when
+  frozen). (4) the DELAY apply path RE-READS s0[0x0E] AFTER 0x80075f0c (the applier may modify it) for the
+  freeze-bit OR — using the entry ctrl's bit was wrong.
+Build/verify done in the agent worktree (parent `generated/`+`build/` symlinked, MAIN.EXE + obj cache copied,
+`.env` copied, `vendor/beetle-psx` submodule init'd — no code change to build scripts). Field run perf gain
+expected ~3.6% (the bucket leaves the hot-list); re-profile to confirm if needed (not re-profiled this pass).
+
 ## later-182: OWN the DEMO / front-end MENU substate machine PC-native (s1/s2/s3/s6) — `engine/engine_demo.cpp`
 Frontier item 2 (docs/port-progress.md). Mirrors engine_stage.cpp's GAME-stage ownership for the DEMO
 overlay (base 0x80106228, aliases GAME.BIN — distinguished by the root prologue sig 0x801062E4==0x27bdffd0).
