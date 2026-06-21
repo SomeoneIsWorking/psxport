@@ -1,0 +1,229 @@
+/* Tomba2Engine RmlUi mod/debug menu — Dusklight-style layout.
+   Ported from Dusklight's res/rml/window.rcss + tabbing.rcss (CC0), via soh3d's adaptation
+   (Shipwright/libultraship/assets/rml/soh3d_test.rcss). Content adapted to Tomba2's mods.
+
+   Deliberate deviations from Dusklight (same constraints soh3d hit):
+   - No `box-shadow`, no `backdrop-filter: blur`, no `filter: opacity()`, no element `opacity`.
+     RmlUi renders those via its layer / render-to-texture / composite path, which the port's
+     minimal RmlUi Vulkan render interface does not implement (base no-op layer methods). Using
+     them draws a red error placeholder / corrupts the frame. Dimming is done with rgba colors,
+     which blend correctly. border-radius (plain geometry), gradients (decorators), font-effect
+     glow (baked into the font texture) and rectangular scissor clipping all work and are used.
+   - Fonts: we DO vendor Dusklight's Fira family, so this uses "Fira Sans" / "Fira Sans Condensed"
+     (Dusklight's actual fonts), not a single fallback face. No "Material Symbols" icons (Unicode
+     arrows/glyphs are used in the markup instead).
+   - Units: Dusklight authors in `dp`; at density ratio 1, dp == px, so this sheet uses px. */
+
+@font-face {
+	font-family: "Fira Sans";
+	font-weight: normal;
+	src: url("FiraSans-Regular.ttf");
+}
+@font-face {
+	font-family: "Fira Sans";
+	font-weight: bold;
+	src: url("FiraSans-Bold.ttf");
+}
+@font-face {
+	font-family: "Fira Sans Condensed";
+	font-weight: bold;
+	src: url("FiraSansCondensed-Bold.ttf");
+}
+
+* {
+	box-sizing: border-box;
+}
+
+body {
+	display: flex;
+	width: 100%;
+	height: 100%;
+	padding: 64px;
+	/* Dim the whole window so the menu reads as a modal cover over the game (Dusklight uses a
+	   backdrop blur here, which the render interface can't do yet — a scrim is the stand-in). */
+	background-color: rgba(0, 0, 0, 82%);
+	font-family: "Fira Sans";
+	font-weight: normal;
+	font-style: normal;
+	font-size: 15px;
+	color: #E0DBC8;
+}
+
+/* The window: centered, dark translucent, gold border, rounded. */
+window {
+	display: flex;
+	flex-flow: column;
+	position: relative;
+	height: 100%;
+	width: 100%;
+	max-width: 1088px;
+	max-height: 768px;
+	margin: auto;
+	border-radius: 14px;
+	overflow: hidden;
+	border: 2px #92875B;
+	background-color: rgba(21, 22, 16, 90%);
+}
+
+/* --- Tab bar ------------------------------------------------------------------------------ */
+tab-bar {
+	display: block;
+	flex: 0 0 64px;
+	height: 64px;
+	background-color: rgba(217, 217, 217, 10%);
+	border-bottom: 2px #92875B;
+	font-family: "Fira Sans Condensed";
+	text-transform: uppercase;
+}
+
+tab {
+	display: inline-block;
+	height: 64px;
+	padding: 0 24px;
+	line-height: 64px;
+	vertical-align: top;
+	font-weight: bold;
+	font-size: 18px;
+	white-space: nowrap;
+	color: rgba(224, 219, 200, 25%);
+	cursor: pointer;
+}
+
+tab:hover,
+tab:focus {
+	color: #E0DBC8;
+	decorator: vertical-gradient(#c2a42d00 #c2a42d26);
+}
+
+tab.selected {
+	color: #E0DBC8;
+	border-bottom: 4px #C2A42D;
+	font-effect: glow(0px 4px 0px 4px black);
+}
+
+/* --- Content / panes --------------------------------------------------------------------- */
+content {
+	display: flex;
+	flex: 1 1 auto;
+	min-height: 0;
+	overflow: hidden;
+}
+
+/* One pane per tab; only the active tab's pane is shown (the C++ toggles the `active` class). */
+pane {
+	display: none;
+	flex: 1 1 0;
+	min-height: 0;
+	padding: 24px;
+	font-size: 20px;
+	overflow-y: auto;
+}
+
+pane.active {
+	display: block;
+}
+
+.section-heading {
+	display: block;
+	font-family: "Fira Sans Condensed";
+	font-weight: bold;
+	text-transform: uppercase;
+	font-size: 22px;
+	color: rgba(224, 219, 200, 35%);
+	margin-bottom: 8px;
+}
+
+.section-heading.spaced {
+	margin-top: 16px;
+}
+
+/* A settings row: label on the left, value right-aligned. The whole row takes focus so a
+   controller/keyboard has a clear, readable highlight. */
+select-button {
+	display: block;
+	background-color: rgba(17, 16, 10, 20%);
+	padding: 8px 16px;
+	margin-bottom: 8px;
+	border-radius: 14px;
+	border: 1px rgba(146, 135, 91, 25%);
+	cursor: pointer;
+	/* RmlUi keys focus navigation off the `tab-index` RCSS property (default `none`), NOT the HTML
+	   `tabindex` attribute, so this — not a markup attribute — is what makes Up/Down step rows. */
+	tab-index: auto;
+	focus: auto;
+}
+
+select-button:hover,
+select-button:focus {
+	background-color: rgba(204, 184, 119, 20%);
+	border: 1px #C2A42D;
+}
+
+select-button key {
+	display: inline-block;
+	width: 70%;
+	font-family: "Fira Sans Condensed";
+	font-weight: bold;
+	font-size: 18px;
+	text-transform: uppercase;
+	vertical-align: middle;
+}
+
+select-button value {
+	display: inline-block;
+	width: 28%;
+	text-align: right;
+	font-size: 20px;
+	color: #E0DBC8;
+	vertical-align: middle;
+}
+
+select-button:hover value,
+select-button:focus value {
+	color: #C2A42D;
+}
+
+/* --- Scrollbar (slim gold-on-cream, matches Dusklight) ----------------------------------- */
+scrollbarvertical {
+	width: 8px;
+	margin: 4px 4px 4px 0;
+}
+
+scrollbarvertical slidertrack {
+	background-color: rgba(255, 255, 255, 5%);
+	border-radius: 2px;
+}
+
+scrollbarvertical sliderbar {
+	width: 8px;
+	min-height: 24px;
+	background-color: rgba(224, 219, 200, 45%);
+	border-radius: 2px;
+}
+
+scrollbarvertical sliderbar:hover,
+scrollbarvertical sliderbar:active {
+	background-color: rgba(194, 164, 45, 80%);
+}
+
+scrollbarvertical sliderarrowdec,
+scrollbarvertical sliderarrowinc {
+	height: 0;
+}
+
+/* Footer hint line at the bottom of a pane. */
+.hint {
+	display: block;
+	margin-top: 12px;
+	font-size: 15px;
+	color: rgba(224, 219, 200, 45%);
+}
+
+/* Read-only status line (video/world readout). */
+.readout {
+	display: block;
+	font-family: "Fira Sans Condensed";
+	font-size: 15px;
+	color: rgba(224, 219, 200, 60%);
+	margin-bottom: 8px;
+}

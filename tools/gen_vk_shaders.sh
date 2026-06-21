@@ -40,5 +40,7 @@ PY
   emit ssao.frag spv_ssao_frag          # PSXPORT_SSAO post pass (reuses present.vert as its vertex stage)
   emit shadow.vert spv_shadow_vert      # shadow-map depth pass (view-space geom -> light ortho space)
   emit shadow.frag spv_shadow_frag      # shadow-map depth pass (depth-only, empty fragment)
+  emit rml.vert spv_rml_vert            # RmlUi mod/debug overlay (2D, premultiplied-alpha, textured)
+  emit rml.frag spv_rml_frag
 } > "$OUT"
 echo "[gen_vk_shaders] wrote $OUT"

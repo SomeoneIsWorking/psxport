@@ -23,7 +23,7 @@
 #include <time.h>             // clock_gettime — CPU-side per-frame timing for the `vkprof` channel
 #include "gpu_vk_shaders.h"   // generated: spv_present_vert / spv_present_frag (tools/gen_vk_shaders.sh)
 #include "mods.h"             // g_mods: live PC-native mod toggles (wide/ires/ssao/light), seeded from cfg
-#include "imgui_overlay.h"    // ImGui mod-toggle overlay (no-op until init'd; windowed only)
+#include "overlay_glue.h"     // RmlUi mod/debug overlay integration hooks (no-op until init'd; windowed)
 
 #define VRAM_W 1024
 #define VRAM_H 512
@@ -780,9 +780,9 @@ static void init_vk(void) {
   create_shadow();   // shadow-map resources first (its image/view feed the ssao descriptor's binding 2)
   create_ssao();     // deferred post pass (samples color + depth + the shadow map)
   if (!s_headless) create_swapchain();
-  // ImGui mod-toggle overlay (windowed only; needs the swapchain + present render pass).
+  // RmlUi mod/debug overlay (windowed only; needs the swapchain + present render pass).
   if (g_mods.ui && !s_headless)
-    imgui_overlay_init(s_win, s_inst, s_phys, s_qfam, s_dev, s_queue, s_rpass, 2, s_swap_n);
+    overlay_glue_init(s_win, s_inst, s_phys, s_qfam, s_dev, s_queue, s_rpass, 2, s_swap_n);
   else fprintf(stderr, "[gpu_vk] headless offscreen render up (VRAM 1024x512 R16_UINT, no swapchain)\n");
   fprintf(stderr, "[gpu_vk] Vulkan present backend up (%ux%u, %u swap images; VRAM 1024x512 R16_UINT)\n",
           s_extent.width, s_extent.height, s_swap_n);
@@ -884,9 +884,10 @@ static void img_barrier(VkImageLayout from, VkImageLayout to, VkPipelineStageFla
 static void poll_quit(void) {
   SDL_Event e;
   while (SDL_PollEvent(&e)) {
-    imgui_overlay_event(&e);   // overlay mouse/keys (+ ` / F1 visibility toggle); no-op if not inited
+    overlay_glue_event(&e);    // overlay mouse/keys (ESC toggles the RmlUi menu); no-op if not inited
     if (e.type == SDL_QUIT) exit(0);
-    if (e.type == SDL_KEYDOWN && e.key.keysym.scancode == SDL_SCANCODE_ESCAPE) exit(0);
+    // ESC no longer quits the game — it toggles the RmlUi menu (handled in imgui_overlay_event). The
+    // actual quit now lives in the "Quit game" button inside that menu (on_quit -> exit(0)).
     // Window resized: flag the swapchain for recreation. Many drivers (notably Wayland) do NOT report
     // SUBOPTIMAL/OUT_OF_DATE on resize, so relying on the present result alone leaves s_extent stale —
     // the window grows but the swapchain (and so win_w()/win_h()) don't, and ImGui (whose DisplaySize
@@ -1443,10 +1444,7 @@ void GpuVkState::present(const uint16_t* src, int sx, int sy, int w, int h) {
   if (!s_inited) init_vk();
   wide_init();
   s_present_sx = sx; s_present_sy = sy;   // faithful display origin (pre use_fb override) for the LIGHT screen map
-  { void imgui_overlay_set_world(int,int,int,unsigned); Core* c = &game->core;   // live coord HUD
-    imgui_overlay_set_world((int16_t)c->mem_r16(0x1F8000D2u), (int16_t)c->mem_r16(0x1F8000D6u),
-                            (int16_t)c->mem_r16(0x1F8000DAu), c->mem_r32(0x801FE00Cu)); }
-  imgui_overlay_new_frame();   // CPU-build the mod-toggle UI for this frame (no-op if overlay not inited)
+  overlay_glue_frame_begin(&game->core);   // latch the world readout + run the overlay's CPU update
   // vkprof: re-check the channel each frame (present runs from boot, before the REPL `debug` is processed).
   int vp = cfg_dbg("vkprof");
   s_vkprof = vp;   // share with panel_upload (dirty-rect upload-volume counters)
@@ -1552,7 +1550,7 @@ void GpuVkState::present(const uint16_t* src, int sx, int sy, int w, int h) {
     vkCmdBindDescriptorSets(s_cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, s_pll, 0, 1, &s_panels[p].dset_present, 0, 0);
     vkCmdDraw(s_cmd, 3, 1, 0, 0);
   }
-  imgui_overlay_render(s_cmd);   // draw the mod-toggle overlay on top (no-op if not inited)
+  overlay_glue_record(s_cmd, idx, s_extent);   // draw the RmlUi overlay on top (no-op if hidden)
   vkCmdEndRenderPass(s_cmd);
   if (vp && s_tspool) { vkCmdWriteTimestamp(s_cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, s_tspool, 1); s_ts_primed = 1; }
   VKC(vkEndCommandBuffer(s_cmd));

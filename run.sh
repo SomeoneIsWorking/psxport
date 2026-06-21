@@ -106,10 +106,19 @@ MED=vendor/beetle-psx/mednafen
 INC="-I$RT -I$ENG -I$MED -I$MED/psx -Ivendor/beetle-psx/libretro-common/include -Ivendor/beetle-psx -Ivendor/beetle-psx/deps/libchdr/include"
 # _XOPEN_SOURCE: makecontext/swapcontext (native threads) need it on macOS/glibc.
 CFLAGS="-O2 -g -w -D_XOPEN_SOURCE=700 $INC $(pkg-config --cflags sdl2 vulkan 2>/dev/null) -DPSXPORT_SDL"
-CXX="${CXX:-c++}"   # ImGui mod-overlay (imgui_overlay.cpp + vendored Dear ImGui) is C++
-IMGUI=vendor/imgui
-CXXFLAGS="-O2 -g -w -fpermissive -std=c++17 $INC -I$IMGUI -I$IMGUI/backends $(pkg-config --cflags sdl2 vulkan 2>/dev/null) -DPSXPORT_SDL"
-tools/gen_vk_shaders.sh   # compile+embed the Vulkan present shaders (gpu_vk_shaders.h) before gpu_vk.c
+CXX="${CXX:-c++}"   # the RmlUi mod/debug overlay (imgui_overlay.cpp + rmlui_render_vk.cpp + vendored
+                    # RmlUi SDL platform backend) is C++.
+# RmlUi (HTML/CSS) overlay: build the vendored lib (vendor/rmlui) once into a static lib.
+say "building vendored RmlUi (static)…"
+tools/build_rmlui.sh
+RMLUI=vendor/rmlui
+RMLUI_INC="-I$RMLUI/Include -I$RMLUI/Backends -DRMLUI_STATIC_LIB -DRMLUI_SDL_VERSION_MAJOR=2 $(pkg-config --cflags freetype2 2>/dev/null)"
+RMLUI_CORE_A="$(find build/rmlui -name 'librmlui.a' 2>/dev/null | head -1)"
+RMLUI_DBG_A="$(find build/rmlui -name 'librmlui_debugger.a' 2>/dev/null | head -1)"
+[ -n "$RMLUI_CORE_A" ] || die "RmlUi static lib not built (see tools/build_rmlui.sh)"
+RMLUI_LIBS="$RMLUI_DBG_A $RMLUI_CORE_A $(pkg-config --libs freetype2 2>/dev/null || echo -lfreetype)"
+CXXFLAGS="-O2 -g -w -fpermissive -std=c++17 $INC $RMLUI_INC $(pkg-config --cflags sdl2 vulkan 2>/dev/null) -DPSXPORT_SDL"
+tools/gen_vk_shaders.sh   # compile+embed the Vulkan shaders (gpu_vk_shaders.h, incl. rml.vert/frag)
 # All TUs. Interpreter-only runtime: MAIN.EXE + the boot stub run from RAM via the interpreter
 # (runtime/recomp/dispatch.c + interp.c); the recompiled generated/shard_*.c are NOT linked (the
 # recompiler is kept only as an offline analysis aid). See docs/journal.md later-101.
@@ -118,7 +127,7 @@ SRC="$RT/dispatch.cpp \
   $RT/cfg.c $RT/mem.cpp $RT/stubs.cpp $RT/hle.cpp $RT/threads.cpp $RT/interp.cpp $RT/gpu_native.cpp $RT/gpu_debug.cpp $RT/vram_xfer.cpp $RT/spu_audio.c $RT/pad_input.cpp $RT/memcard.cpp $RT/native_fmv.cpp \
   $MED/psx/gte.c $RT/gte_beetle.cpp $MED/psx/mdec.c $RT/mdec_beetle.c $MED/psx/spu.c $RT/spu_beetle.c \
   $RT/disc.c $RT/cd_override.cpp $RT/cdc_native.c $RT/xa_stream.c $RT/timing.cpp $RT/gpu_vk.cpp $RT/gpu_perf.cpp $RT/mods.c $ENG/game_tomba2.cpp $ENG/asset.cpp $ENG/mathlib.cpp $ENG/cull.cpp $ENG/collision.cpp $ENG/hitbox.cpp $ENG/grid_offset.cpp $ENG/entity.cpp $ENG/entity_spawn.cpp $ENG/actor_sm_24448.cpp $ENG/script.cpp $ENG/animation.cpp $ENG/input.cpp $ENG/menu.cpp $ENG/inventory.cpp $ENG/hud.cpp $ENG/lighting.cpp $ENG/engine_bav.cpp $ENG/save.cpp $ENG/sound.cpp $ENG/engine_init.cpp $ENG/engine_font.cpp $ENG/engine_level.cpp $ENG/fps60.cpp $ENG/engine_tomba2.cpp $ENG/engine_submit.cpp $ENG/engine_stage.cpp $ENG/engine_demo.cpp $ENG/engine_camera.cpp $ENG/engine_math.cpp $ENG/engine_player.cpp $ENG/native_terrain.cpp $ENG/render_queue.cpp $ENG/native_path.cpp $ENG/native_path_a1.cpp $ENG/native_path_a2.cpp $ENG/native_path_a3.cpp $ENG/native_path_b1.cpp $ENG/native_path_b2.cpp $ENG/native_path_b3.cpp $ENG/native_path_b4.cpp $ENG/native_path_b5.cpp $ENG/margin_render.cpp $RT/sync_overrides.cpp $RT/native_boot.cpp $RT/dbg_server.cpp $RT/native_stub.cpp $RT/watchdog.c $RT/boot.cpp \
-  $RT/imgui_overlay.cpp $IMGUI/imgui.cpp $IMGUI/imgui_draw.cpp $IMGUI/imgui_tables.cpp $IMGUI/imgui_widgets.cpp $IMGUI/backends/imgui_impl_sdl2.cpp $IMGUI/backends/imgui_impl_vulkan.cpp"
+  $RT/imgui_overlay.cpp $RT/overlay_glue.cpp $RT/rmlui_render_vk.cpp $RMLUI/Backends/RmlUi_Platform_SDL.cpp"
 
 say "building the native port in parallel (-j$JOBS)…"
 OBJ=scratch/obj; mkdir -p "$OBJ"
@@ -133,7 +142,7 @@ printf '%s\n' $SRC | xargs -P"$JOBS" -I{} bash -c 'compile_one "$@"' _ {} || die
 OBJS=""; for s in $SRC; do OBJS="$OBJS $OBJ/$(echo "$s" | tr '/.' '__').o"; done
 # shellcheck disable=SC2086
 # -rdynamic: export symbols so the watchdog's backtrace shows function names (watchdog.c). Link with $CXX (libstdc++).
-$CXX -rdynamic $OBJS $CHD_LIBS $(pkg-config --libs sdl2 vulkan) -lpthread -lm -o scratch/bin/tomba2_port || die "link failed"
+$CXX -rdynamic $OBJS $CHD_LIBS $RMLUI_LIBS $(pkg-config --libs sdl2 vulkan) -lpthread -lm -o scratch/bin/tomba2_port || die "link failed"
 
 # ---- 5. run ------------------------------------------------------------------------
 say "launching Tomba! 2 (native PC port)…"

@@ -1,230 +1,409 @@
-// Dear ImGui mod-toggle overlay. Brings ImGui up on the port's existing Vulkan device + present render
-// pass and draws a small window that edits the LIVE mod state (g_mods, mods.h) and 60fps (g_fps60_on).
-// Toggle visibility with `~` (grave) or F1. C-callable bridge in imgui_overlay.h; built as C++ and
-// linked into the otherwise-C port (build_port.sh / run.sh compile .cpp with $CXX and link with $CXX).
-#include "imgui.h"
-#include "backends/imgui_impl_sdl2.h"
-#include "backends/imgui_impl_vulkan.h"
+// RmlUi (HTML/CSS) mod/debug overlay for the Tomba2 port — replaces the former Dear ImGui overlay.
+// The menu layout/structure is copied from Dusklight (CC0) via soh3d's adaptation: a <window> with a
+// <tab-bar> of <tab>s and a <content> of <pane>s, each pane a list of <select-button> rows (<key> +
+// <value>). Navigation, activation and the value-text refresh are driven from C++ here (the same model
+// as soh3d's SohRmlUi) rather than RmlUi data-bindings, because that is the proven, render-interface-
+// compatible approach. Rows carry attributes the C++ reads: toggle / adjust / action.
+//
+// Brought up on the port's existing Vulkan device + present render pass via RmlRenderInterfaceVk
+// (records into the swapchain command buffer the present pass hands it). ESC toggles the menu; quit
+// lives in the menu's "Quit Game" row. The public C entry points keep the historical imgui_overlay_*
+// names so gpu_vk.cpp / overlay_glue.cpp and pad_input.cpp's imgui_overlay_wants_keyboard link
+// unchanged. Built as C++ and linked into the otherwise-C port.
+
 #include "imgui_overlay.h"
+#include "rmlui_render_vk.h"
+
+#include <RmlUi/Core.h>
+#include <RmlUi/Core/Input.h>
+#include <RmlUi/Core/ElementDocument.h>
+#include <RmlUi/Core/Element.h>
+#include <RmlUi/Debugger.h>
+
+// SDL platform helpers (system interface + SDL->Rml input translation) from the vendored RmlUi
+// backend. RMLUI_SDL_VERSION_MAJOR is set in this TU's build flags.
+#include "RmlUi_Platform_SDL.h"
+
+#include <cstdio>
+#include <cstring>
+#include <cmath>
+#include <string>
+#include <vector>
+#include <memory>
+#include <algorithm>
+
 extern "C" {
 #include "mods.h"
 }
-extern "C" int g_fps60_on;   // engine/fps60.c — the 60fps interpolation gate
-extern "C" int cfg_on(const char* name);   // cfg.c — env flag (PSXPORT_UI gates the SSAO/light infra)
-// Effective (computed, incl. auto) video status from the renderer; out ptrs may be NULL.
-void gpu_vk_video_status(int* native_w, int* ires, int* fbw, int* fbh,
-                                    int* ww, int* wh, int* ires_cap);
+extern "C" int g_fps60_on;                  // engine/fps60.c — the 60fps interpolation gate
+extern "C" int cfg_on(const char* name);    // cfg.c
+void gpu_vk_video_status(int* native_w, int* ires, int* fbw, int* fbh, int* ww, int* wh, int* ires_cap);
 
-static bool            s_inited  = false;
-static bool            s_visible = true;
-static bool            s_options_mode = false;   // true while we stand in for the game's in-game Options menu
+// ---- static state ---------------------------------------------------------------------------------
+static bool s_inited = false;
+static bool s_visible = false;          // ESC opens it; starts hidden
+static bool s_options_mode = false;     // stands in for the game's in-game Options menu
 
-// Live world readout (camera/Tomba position + stage), pushed each frame from gpu_vk before NewFrame.
-// Always-on small corner HUD so the user can navigate to a target scene and report coordinates.
-static int      s_wpos[3] = {0,0,0};   // camera position x,y,z (int16 world units, scratchpad 0x1F8000D2/DA/D6)
-static uint32_t s_wstage  = 0;         // current stage entry pointer (*0x801fe00c)
-static int      s_wvalid  = 0;
+static SDL_Window* s_win = nullptr;
+static Rml::Context* s_ctx = nullptr;
+static Rml::ElementDocument* s_doc = nullptr;
+static SystemInterface_SDL* s_sys = nullptr;
+static RmlRenderInterfaceVk* s_render = nullptr;
+static int s_active_tab = 0;
+
+// Live world readout, pushed each frame from gpu_vk before NewFrame.
+static int s_wpos[3] = {0,0,0};
+static uint32_t s_wstage = 0;
+static int s_wvalid = 0;
+
 extern "C" void imgui_overlay_set_world(int x, int y, int z, unsigned stage) {
-  s_wpos[0] = x; s_wpos[1] = y; s_wpos[2] = z; s_wstage = stage; s_wvalid = 1;
+    s_wpos[0] = x; s_wpos[1] = y; s_wpos[2] = z; s_wstage = stage; s_wvalid = 1;
 }
-static VkDevice        s_dev     = VK_NULL_HANDLE;
-static VkDescriptorPool s_pool   = VK_NULL_HANDLE;
 
-static void check_vk(VkResult r) { (void)r; }
+// ---- value formatting / live mod state per row ----------------------------------------------------
+static std::string fmt_f(float v, int prec) { char b[32]; snprintf(b, sizeof b, "%.*f", prec, v); return b; }
 
+// Build the <value> text for a row given its attribute kind/id. Returns false if unknown.
+static bool row_value_text(const std::string& kind, const std::string& id, std::string& out) {
+    if (kind == "toggle") {
+        if (id == "aspect") {
+            static const char* A[] = { "4:3", "16:9", "21:9", "Auto" };
+            int a = g_mods.aspect; if (a < 0 || a > 3) a = 0; out = A[a]; return true;
+        }
+        if (id == "ires_auto") { out = g_mods.ires_auto ? "On" : "Off"; return true; }
+        if (id == "fps60")     { out = g_fps60_on ? "On" : "Off"; return true; }
+        if (id == "ssao")      { out = g_mods.ssao ? "On" : "Off"; return true; }
+        if (id == "light")     { out = g_mods.light ? "On" : "Off"; return true; }
+        if (id == "shadows")   { out = g_mods.shadows ? "On" : "Off"; return true; }
+    } else if (kind == "adjust") {
+        if (id == "ires")            { out = std::to_string(g_mods.ires) + "x"; return true; }
+        if (id == "ssao_strength")   { out = fmt_f(g_mods.ssao_strength, 2); return true; }
+        if (id == "ssao_radius")     { out = fmt_f(g_mods.ssao_radius, 1); return true; }
+        if (id == "ssao_bias")       { out = fmt_f(g_mods.ssao_bias, 3); return true; }
+        if (id == "ssao_range")      { out = fmt_f(g_mods.ssao_range, 3); return true; }
+        if (id == "light_dir_x")     { out = fmt_f(g_mods.light_dir[0], 2); return true; }
+        if (id == "light_dir_y")     { out = fmt_f(g_mods.light_dir[1], 2); return true; }
+        if (id == "light_dir_z")     { out = fmt_f(g_mods.light_dir[2], 2); return true; }
+        if (id == "light_ambient")   { out = fmt_f(g_mods.light_ambient, 2); return true; }
+        if (id == "light_diffuse")   { out = fmt_f(g_mods.light_diffuse, 2); return true; }
+        if (id == "shadow_strength") { out = fmt_f(g_mods.shadow_strength, 2); return true; }
+    }
+    return false;
+}
+
+// Toggle (cycle bool / aspect) a row's state. mods_save() persists.
+static void do_toggle(const std::string& id) {
+    if (id == "aspect")          g_mods.aspect = (g_mods.aspect + 1) & 3;
+    else if (id == "ires_auto")  g_mods.ires_auto = !g_mods.ires_auto;
+    else if (id == "fps60")      g_fps60_on = !g_fps60_on;
+    else if (id == "ssao")       g_mods.ssao = !g_mods.ssao;
+    else if (id == "light")      g_mods.light = !g_mods.light;
+    else if (id == "shadows")    g_mods.shadows = !g_mods.shadows;
+    else return;
+    mods_save();
+}
+
+static void clampf(float& v, float lo, float hi) { if (v < lo) v = lo; if (v > hi) v = hi; }
+
+// Step a numeric row by dir (+1 = Enter/A or Right, -1 = Left), clamped/wrapped. mods_save() persists.
+static void do_adjust(const std::string& id, int dir) {
+    if (id == "ires")                 { g_mods.ires += dir; if (g_mods.ires < 1) g_mods.ires = 3; if (g_mods.ires > 3) g_mods.ires = 1; }
+    else if (id == "ssao_strength")   { g_mods.ssao_strength   += 0.05f * dir; clampf(g_mods.ssao_strength, 0.0f, 2.0f); }
+    else if (id == "ssao_radius")     { g_mods.ssao_radius     += 0.5f  * dir; clampf(g_mods.ssao_radius, 1.0f, 20.0f); }
+    else if (id == "ssao_bias")       { g_mods.ssao_bias       += 0.002f* dir; clampf(g_mods.ssao_bias, 0.0f, 0.1f); }
+    else if (id == "ssao_range")      { g_mods.ssao_range      += 0.01f * dir; clampf(g_mods.ssao_range, 0.02f, 0.6f); }
+    else if (id == "light_dir_x")     { g_mods.light_dir[0]    += 0.05f * dir; clampf(g_mods.light_dir[0], -1.0f, 1.0f); }
+    else if (id == "light_dir_y")     { g_mods.light_dir[1]    += 0.05f * dir; clampf(g_mods.light_dir[1], -1.0f, 1.0f); }
+    else if (id == "light_dir_z")     { g_mods.light_dir[2]    += 0.05f * dir; clampf(g_mods.light_dir[2], -1.0f, 1.0f); }
+    else if (id == "light_ambient")   { g_mods.light_ambient   += 0.05f * dir; clampf(g_mods.light_ambient, 0.0f, 1.5f); }
+    else if (id == "light_diffuse")   { g_mods.light_diffuse   += 0.05f * dir; clampf(g_mods.light_diffuse, 0.0f, 1.5f); }
+    else if (id == "shadow_strength") { g_mods.shadow_strength += 0.05f * dir; clampf(g_mods.shadow_strength, 0.0f, 1.0f); }
+    else return;
+    mods_save();
+}
+
+// ---- value-text + readout refresh -----------------------------------------------------------------
+static void set_row_value(Rml::Element* row) {
+    std::string id, kind;
+    if (!(id = row->GetAttribute<Rml::String>("toggle", "")).empty()) kind = "toggle";
+    else if (!(id = row->GetAttribute<Rml::String>("adjust", "")).empty()) kind = "adjust";
+    else return;
+    std::string txt;
+    if (!row_value_text(kind, id, txt)) return;
+    if (Rml::Element* v = row->QuerySelector("value"))
+        if (v->GetInnerRML() != txt) v->SetInnerRML(txt);
+}
+
+static void refresh_all_rows() {
+    if (!s_doc) return;
+    Rml::ElementList rows;
+    s_doc->GetElementsByTagName(rows, "select-button");
+    for (Rml::Element* r : rows) set_row_value(r);
+}
+
+static void refresh_readouts() {
+    if (!s_doc) return;
+    int nw = 320, ir = 1, fbw = 320, fbh = 240, ww = 0, wh = 0, cap = 3;
+    gpu_vk_video_status(&nw, &ir, &fbw, &fbh, &ww, &wh, &cap);
+    char buf[192];
+    if (Rml::Element* e = s_doc->GetElementById("video_readout")) {
+        snprintf(buf, sizeof buf, "render %dx%d &middot; window %dx%d &middot; internal %dx", fbw, fbh, ww, wh, ir);
+        if (e->GetInnerRML() != buf) e->SetInnerRML(buf);
+    }
+    if (Rml::Element* e = s_doc->GetElementById("world_readout")) {
+        std::string txt;
+        if (s_wvalid) {
+            const char* sname = s_wstage == 0x8010637Cu ? "GAME" : s_wstage == 0x801062E4u ? "DEMO"
+                              : s_wstage == 0x8010649Cu ? "START" : "?";
+            snprintf(buf, sizeof buf, "pos X %d Y %d Z %d &middot; stage %s (0x%08X)",
+                     s_wpos[0], s_wpos[1], s_wpos[2], sname, s_wstage);
+            txt = buf;
+        }
+        if (e->GetInnerRML() != txt) e->SetInnerRML(txt);
+    }
+}
+
+// ---- tab + focus navigation (mirrors soh3d's SohRmlUi) --------------------------------------------
+static void apply_visibility();
+
+static void scroll_focus_into_view() {
+    if (!s_ctx) return;
+    if (Rml::Element* f = s_ctx->GetFocusElement())
+        f->ScrollIntoView(Rml::ScrollIntoViewOptions(Rml::ScrollAlignment::Nearest));
+}
+
+static void focus_first_in_active_pane() {
+    if (!s_doc) return;
+    Rml::ElementList panes;
+    s_doc->GetElementsByTagName(panes, "pane");
+    if (s_active_tab < 0 || s_active_tab >= (int)panes.size()) return;
+    if (Rml::Element* first = panes[s_active_tab]->QuerySelector("select-button")) {
+        first->Focus();
+        scroll_focus_into_view();
+    }
+}
+
+static void set_active_tab(int index) {
+    if (!s_ctx || !s_doc) return;
+    Rml::ElementList tabs, panes;
+    s_doc->GetElementsByTagName(tabs, "tab");
+    s_doc->GetElementsByTagName(panes, "pane");
+    const int n = (int)std::min(tabs.size(), panes.size());
+    if (n == 0) return;
+    if (index < 0) index = n - 1; else if (index >= n) index = 0;
+    s_active_tab = index;
+    for (int i = 0; i < (int)tabs.size(); i++)  tabs[i]->SetClass("selected", i == index);
+    for (int i = 0; i < (int)panes.size(); i++) panes[i]->SetClass("active", i == index);
+    refresh_all_rows();
+    refresh_readouts();
+    s_ctx->Update();
+    focus_first_in_active_pane();
+}
+
+static void focus_next() { if (s_ctx) { s_ctx->ProcessKeyDown(Rml::Input::KI_TAB, 0); s_ctx->ProcessKeyUp(Rml::Input::KI_TAB, 0); scroll_focus_into_view(); } }
+static void focus_prev() { if (s_ctx) { s_ctx->ProcessKeyDown(Rml::Input::KI_TAB, Rml::Input::KM_SHIFT); s_ctx->ProcessKeyUp(Rml::Input::KI_TAB, Rml::Input::KM_SHIFT); scroll_focus_into_view(); } }
+static void next_tab()   { set_active_tab(s_active_tab + 1); }
+static void prev_tab()   { set_active_tab(s_active_tab - 1); }
+
+// Activate (Enter/A) or step (Left/Right with dir) the focused row.
+static void activate_focused(int dir) {
+    if (!s_ctx) return;
+    Rml::Element* f = s_ctx->GetFocusElement();
+    if (!f) return;
+    std::string id;
+    if (!(id = f->GetAttribute<Rml::String>("action", "")).empty()) {
+        if (id == "quit") { fprintf(stderr, "[rmlui] quit from menu\n"); exit(0); }
+        if (id == "close") { s_visible = false; apply_visibility(); }
+        return;
+    }
+    if (!(id = f->GetAttribute<Rml::String>("toggle", "")).empty()) { do_toggle(id); set_row_value(f); return; }
+    if (!(id = f->GetAttribute<Rml::String>("adjust", "")).empty()) { do_adjust(id, dir); set_row_value(f); return; }
+}
+
+// Click handler bound to each <tab> so a mouse click also switches tabs.
+class TabClick : public Rml::EventListener {
+public:
+    explicit TabClick(int i) : idx(i) {}
+    void ProcessEvent(Rml::Event&) override { set_active_tab(idx); }
+private: int idx;
+};
+static std::vector<std::unique_ptr<TabClick>> s_tab_listeners;
+
+// Click handler bound to each <select-button> so a mouse click activates it.
+class RowClick : public Rml::EventListener {
+public:
+    void ProcessEvent(Rml::Event& e) override {
+        if (Rml::Element* el = e.GetCurrentElement()) { el->Focus(); activate_focused(+1); }
+    }
+};
+static RowClick s_row_listener;
+
+static void attach_handlers() {
+    if (!s_doc) return;
+    Rml::ElementList tabs;
+    s_doc->GetElementsByTagName(tabs, "tab");
+    s_tab_listeners.clear();
+    for (int i = 0; i < (int)tabs.size(); i++) {
+        auto l = std::make_unique<TabClick>(i);
+        tabs[i]->AddEventListener("click", l.get());
+        s_tab_listeners.push_back(std::move(l));
+    }
+    Rml::ElementList rows;
+    s_doc->GetElementsByTagName(rows, "select-button");
+    for (Rml::Element* r : rows) r->AddEventListener("click", &s_row_listener);
+}
+
+static void apply_visibility() {
+    if (!s_doc) return;
+    if (s_visible) {
+        s_doc->Show();
+        if (s_ctx) s_ctx->Update();
+        set_active_tab(s_active_tab);   // shows the pane, refreshes values, focuses the first row
+    } else {
+        if (s_ctx) if (Rml::Element* fe = s_ctx->GetFocusElement()) fe->Blur();
+        s_doc->Hide();
+    }
+}
+
+// ---- init -----------------------------------------------------------------------------------------
 void imgui_overlay_init(SDL_Window* win, VkInstance inst, VkPhysicalDevice phys, uint32_t qfam,
                         VkDevice dev, VkQueue queue, VkRenderPass present_rpass,
                         uint32_t min_image_count, uint32_t image_count) {
-  if (s_inited) return;
-  s_dev = dev;
-  // A small descriptor pool for ImGui (font atlas + any user textures).
-  VkDescriptorPoolSize ps = { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 16 };
-  VkDescriptorPoolCreateInfo dpi = { VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO };
-  dpi.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
-  dpi.maxSets = 16; dpi.poolSizeCount = 1; dpi.pPoolSizes = &ps;
-  if (vkCreateDescriptorPool(dev, &dpi, nullptr, &s_pool) != VK_SUCCESS) {
-    fprintf(stderr, "[imgui] descriptor pool create failed; overlay disabled\n");
-    return;
-  }
-  IMGUI_CHECKVERSION();
-  ImGui::CreateContext();
-  ImGui::GetIO().IniFilename = nullptr;   // don't write imgui.ini next to the binary
-  ImGui::StyleColorsDark();
+    if (s_inited) return;
+    (void)inst; (void)min_image_count;
+    s_win = win;
 
-  // Scale the overlay for the display's DPI and bump it up a touch so it's comfortable by default.
-  // SDL reports the display's dots-per-inch; 96 dpi is the 1.0 baseline. UI_BASE_SCALE makes the
-  // default (non-HiDPI) overlay slightly bigger than ImGui's stock size. Both the widget metrics
-  // (ScaleAllSizes) and the bitmap font (built at the scaled pixel size) follow the same factor so
-  // text stays crisp instead of being stretched via FontGlobalScale.
-  const float UI_BASE_SCALE = 1.30f;
-  float dpi_scale = 1.0f;
-  { float ddpi = 96.0f;
-    int disp = SDL_GetWindowDisplayIndex(win);
-    if (disp >= 0 && SDL_GetDisplayDPI(disp, &ddpi, nullptr, nullptr) == 0 && ddpi > 0.0f)
-      dpi_scale = ddpi / 96.0f; }
-  float ui_scale = dpi_scale * UI_BASE_SCALE;
-  ImGui::GetStyle().ScaleAllSizes(ui_scale);
-  ImFontConfig fc; fc.SizePixels = 13.0f * ui_scale;   // stock default is 13px
-  ImGui::GetIO().Fonts->AddFontDefault(&fc);
+    s_render = new RmlRenderInterfaceVk();
+    uint32_t fif = image_count < 2 ? 2 : image_count;
+    if (!s_render->Init(phys, dev, qfam, queue, present_rpass, fif)) {
+        fprintf(stderr, "[rmlui] render interface init failed; overlay disabled\n");
+        delete s_render; s_render = nullptr; return;
+    }
+    s_sys = new SystemInterface_SDL();
+    s_sys->SetWindow(win);
+    Rml::SetSystemInterface(s_sys);
+    Rml::SetRenderInterface(s_render);
+    if (!Rml::Initialise()) { fprintf(stderr, "[rmlui] Rml::Initialise failed; overlay disabled\n"); return; }
 
-  ImGui_ImplSDL2_InitForVulkan(win);
-  ImGui_ImplVulkan_InitInfo ii = {};
-  ii.Instance = inst; ii.PhysicalDevice = phys; ii.Device = dev;
-  ii.QueueFamily = qfam; ii.Queue = queue; ii.DescriptorPool = s_pool;
-  ii.RenderPass = present_rpass; ii.Subpass = 0;
-  ii.MinImageCount = min_image_count < 2 ? 2 : min_image_count;
-  ii.ImageCount = image_count < ii.MinImageCount ? ii.MinImageCount : image_count;
-  ii.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
-  ii.CheckVkResultFn = check_vk;
-  ImGui_ImplVulkan_Init(&ii);
-  s_inited = true;
-  fprintf(stderr, "[imgui] overlay up (toggle with ` or F1)\n");
+    const char* fonts[] = {
+        "assets/rml/FiraSans-Regular.ttf",
+        "assets/rml/FiraSans-Bold.ttf",
+        "assets/rml/FiraSansCondensed-Bold.ttf",
+    };
+    int loaded = 0;
+    for (const char* f : fonts) if (Rml::LoadFontFace(f)) loaded++;
+    if (!loaded) fprintf(stderr, "[rmlui] WARNING: no fonts loaded (assets/rml/*.ttf missing)\n");
+
+    int ww = 0, wh = 0; SDL_GetWindowSize(win, &ww, &wh);
+    if (ww <= 0) ww = 1280; if (wh <= 0) wh = 720;
+    s_ctx = Rml::CreateContext("tomba2_menu", Rml::Vector2i(ww, wh));
+    if (!s_ctx) { fprintf(stderr, "[rmlui] CreateContext failed\n"); return; }
+    Rml::Debugger::Initialise(s_ctx);
+
+    s_doc = s_ctx->LoadDocument("assets/rml/menu.rml");
+    if (!s_doc) {
+        fprintf(stderr, "[rmlui] LoadDocument(assets/rml/menu.rml) FAILED — menu unavailable\n");
+    } else {
+        attach_handlers();
+        refresh_all_rows();
+        s_doc->Hide();   // start hidden; ESC shows it
+    }
+
+    s_inited = true;
+    fprintf(stderr, "[rmlui] overlay up (ESC to toggle the menu)\n");
 }
 
 void imgui_overlay_shutdown(void) {
-  if (!s_inited) return;
-  vkDeviceWaitIdle(s_dev);
-  ImGui_ImplVulkan_Shutdown();
-  ImGui_ImplSDL2_Shutdown();
-  ImGui::DestroyContext();
-  if (s_pool) vkDestroyDescriptorPool(s_dev, s_pool, nullptr);
-  s_inited = false;
+    if (!s_inited) return;
+    Rml::Shutdown();   // destroys contexts/documents
+    s_ctx = nullptr; s_doc = nullptr;
+    s_tab_listeners.clear();
+    if (s_render) { s_render->Shutdown(); delete s_render; s_render = nullptr; }
+    if (s_sys) { delete s_sys; s_sys = nullptr; }
+    s_inited = false;
 }
 
+// ---- event pump -----------------------------------------------------------------------------------
 void imgui_overlay_event(const SDL_Event* e) {
-  if (!s_inited || !e) return;
-  ImGui_ImplSDL2_ProcessEvent(e);
-  // In options-mode the game owns visibility (Circle/Triangle exit) — don't let `~`/F1 fight it.
-  if (!s_options_mode && e->type == SDL_KEYDOWN &&
-      (e->key.keysym.scancode == SDL_SCANCODE_GRAVE || e->key.keysym.scancode == SDL_SCANCODE_F1))
-    s_visible = !s_visible;
+    if (!s_inited || !e) return;
+    // ESC toggles the menu (the game's old "ESC quits" was removed in gpu_vk.cpp). In options-mode the
+    // game owns visibility (Circle/Triangle), so don't fight it.
+    if (!s_options_mode && e->type == SDL_KEYDOWN && e->key.repeat == 0 &&
+        e->key.keysym.scancode == SDL_SCANCODE_ESCAPE) {
+        s_visible = !s_visible; apply_visibility(); return;
+    }
+    if (e->type == SDL_KEYDOWN && e->key.repeat == 0 && e->key.keysym.scancode == SDL_SCANCODE_F1) {
+        Rml::Debugger::SetVisible(!Rml::Debugger::IsVisible()); return;
+    }
+    if (!s_visible || !s_ctx) return;
+
+    // Menu open: arrows = nav, Enter/A = activate, Left/Right on a numeric row = step (else change tab),
+    // mouse/text via the SDL platform shim.
+    if (e->type == SDL_KEYDOWN) {
+        switch (e->key.keysym.sym) {
+            case SDLK_DOWN:  focus_next(); return;
+            case SDLK_UP:    focus_prev(); return;
+            case SDLK_RIGHT: {
+                Rml::Element* f = s_ctx->GetFocusElement();
+                std::string id = f ? f->GetAttribute<Rml::String>("adjust", "") : std::string();
+                if (!id.empty()) { do_adjust(id, +1); set_row_value(f); } else next_tab();
+                return;
+            }
+            case SDLK_LEFT: {
+                Rml::Element* f = s_ctx->GetFocusElement();
+                std::string id = f ? f->GetAttribute<Rml::String>("adjust", "") : std::string();
+                if (!id.empty()) { do_adjust(id, -1); set_row_value(f); } else prev_tab();
+                return;
+            }
+            case SDLK_RETURN: case SDLK_KP_ENTER: case SDLK_SPACE: activate_focused(+1); return;
+            default: { SDL_Event ev = *e; RmlSDL::InputEventHandler(s_ctx, s_win, ev); return; }
+        }
+    }
+    // Mouse / wheel / keyup / text -> the SDL platform shim (hover, clicks, scrolling).
+    SDL_Event ev = *e;
+    RmlSDL::InputEventHandler(s_ctx, s_win, ev);
 }
 
-void imgui_overlay_set_visible(int v) { s_visible = (v != 0); }
+void imgui_overlay_set_visible(int v) { s_visible = (v != 0); apply_visibility(); }
 void imgui_overlay_set_options_mode(int v) { s_options_mode = (v != 0); }
 
-// True ONLY while the user is actively typing into an ImGui text widget (io.WantTextInput), NOT merely
-// because the overlay is visible/hovered. The game reads the keyboard via SDL_GetKeyboardState every
-// frame; if it kept reading while the user types into an ImGui input box, WASD would leak into gameplay
-// and vice-versa. So the pad code suppresses keyboard input ONLY in that narrow case. We deliberately do
-// NOT key off io.WantCaptureKeyboard: that goes true whenever any ImGui window is focused (even with no
-// text field), which would wrongly kill WASD just because the overlay is open. Keyboard-nav capture is
-// also intentionally left disabled in init (no ImGuiConfigFlags_NavEnableKeyboard), so a plain visible
-// overlay never claims the keyboard. Safe before init (no context) -> returns 0.
+// pad_input.cpp suppresses gameplay keyboard input while this returns nonzero. The menu uses arrow/Enter
+// nav (not typing), so we suppress whenever the menu is OPEN — otherwise arrow keys would also drive
+// Tomba. (No text fields exist in this menu; the input/textarea checks are kept for completeness.)
 extern "C" int imgui_overlay_wants_keyboard(void) {
-  if (!s_inited) return 0;
-  if (ImGui::GetCurrentContext() == nullptr) return 0;
-  return ImGui::GetIO().WantTextInput ? 1 : 0;
+    if (!s_inited || !s_ctx) return 0;
+    if (s_visible) return 1;
+    Rml::Element* fe = s_ctx->GetFocusElement();
+    if (!fe) return 0;
+    const Rml::String& tag = fe->GetTagName();
+    if (tag == "input") { Rml::String t = fe->GetAttribute<Rml::String>("type", "text"); if (t == "text" || t == "password") return 1; }
+    if (tag == "textarea") return 1;
+    return 0;
 }
 
-static void build_ui(void) {
-  ImGui::SetNextWindowSize(ImVec2(330, 0), ImGuiCond_FirstUseEver);
-  ImGui::SetNextWindowPos(ImVec2(20, 20), ImGuiCond_FirstUseEver);
-  ImGui::Begin("Tomba2Engine - PC-native mods");   // ASCII only (default font has no em-dash glyph)
-  ImGui::TextDisabled(s_options_mode ? "Circle: back    Triangle: close" : "` or F1 to hide");
-  ImGui::PushItemWidth(120.0f);   // keep sliders compact so their labels aren't clipped
-
-  const char* aspects[] = { "4:3", "16:9", "21:9", "Auto (window)" };
-  int am = g_mods.aspect;
-  if (ImGui::Combo("Aspect", &am, aspects, 4)) { g_mods.aspect = am; mods_save(); }
-
-  int nw = 320, ir = 1, fbw = 320, fbh = 240, ww = 0, wh = 0, cap = 3;
-  gpu_vk_video_status(&nw, &ir, &fbw, &fbh, &ww, &wh, &cap);
-  bool ia = g_mods.ires_auto != 0;
-  if (ImGui::Checkbox("Auto internal res", &ia)) { g_mods.ires_auto = ia; mods_save(); }
-  if (g_mods.ires_auto) {
-    ImGui::SameLine(); ImGui::TextDisabled("(%dx)", ir);    // computed from window size
-  } else {
-    int iv = g_mods.ires;
-    if (ImGui::SliderInt("Internal res", &iv, 1, cap < 1 ? 1 : cap)) {
-      g_mods.ires = iv < 1 ? 1 : (iv > 3 ? 3 : iv); mods_save(); }
-  }
-  ImGui::TextDisabled("Render %dx%d  |  window %dx%d", fbw, fbh, ww, wh);
-
-  bool fps60 = g_fps60_on != 0;
-  if (ImGui::Checkbox("60fps interpolation", &fps60)) { g_fps60_on = fps60; mods_save(); }
-
-  ImGui::Separator();
-  // Native per-pixel depth is always on, so SSAO/light toggle LIVE — no launch flag (the deferred infra
-  // is always created). Changing any setting persists it (mods_save).
-  bool ssao = g_mods.ssao != 0;
-  if (ImGui::Checkbox("Ambient occlusion (SSAO)", &ssao)) { g_mods.ssao = ssao; mods_save(); }
-  if (g_mods.ssao) {
-    if (ImGui::SliderFloat("AO strength", &g_mods.ssao_strength, 0.0f, 2.0f)) mods_save();
-    if (ImGui::SliderFloat("AO radius (px)", &g_mods.ssao_radius, 1.0f, 20.0f)) mods_save();
-    if (ImGui::SliderFloat("AO bias", &g_mods.ssao_bias, 0.0f, 0.1f, "%.3f")) mods_save();
-    if (ImGui::SliderFloat("AO range", &g_mods.ssao_range, 0.02f, 0.6f, "%.3f")) mods_save();
-  }
-
-  ImGui::Separator();
-  bool light = g_mods.light != 0;
-  if (ImGui::Checkbox("Directional light", &light)) { g_mods.light = light; mods_save(); }
-  if (g_mods.light) {
-    if (ImGui::SliderFloat3("Light dir (view)", g_mods.light_dir, -1.0f, 1.0f)) mods_save();
-    if (ImGui::SliderFloat("Ambient", &g_mods.light_ambient, 0.0f, 1.5f)) mods_save();
-    if (ImGui::SliderFloat("Diffuse", &g_mods.light_diffuse, 0.0f, 1.5f)) mods_save();
-    // Dynamic shadow mapping is cast by THIS directional light, so it only makes sense with light on.
-    bool shadows = g_mods.shadows != 0;
-    if (ImGui::Checkbox("Dynamic shadows", &shadows)) { g_mods.shadows = shadows; mods_save(); }
-    if (g_mods.shadows) {
-      if (ImGui::SliderFloat("Shadow strength", &g_mods.shadow_strength, 0.0f, 1.0f)) mods_save();
-    }
-  }
-  ImGui::PopItemWidth();
-  ImGui::End();
-}
-
-// Debug pause state (dbg_server.c) — the P key toggles it; the present loop holds the frame. Show a small
-// pause glyph (two bars) top-left whenever paused so it's obvious the game is frozen, not hung.
-int dbg_is_paused(void);   // dbg_server.cpp (C++ linkage)
-static void draw_pause_indicator(void) {
-  if (!dbg_is_paused()) return;
-  ImDrawList* dl = ImGui::GetForegroundDrawList();
-  const float s = ImGui::GetFontSize() / 13.0f;                 // follow the UI/DPI scale
-  const float pad = 10.0f * s, bw = 7.0f * s, bh = 26.0f * s, gap = 7.0f * s, m = 7.0f * s;
-  const ImVec2 o(pad, pad);
-  const float boxw = m * 2 + bw * 2 + gap, boxh = m * 2 + bh;
-  dl->AddRectFilled(o, ImVec2(o.x + boxw, o.y + boxh), IM_COL32(0, 0, 0, 140), 4.0f * s);
-  const ImU32 col = IM_COL32(255, 255, 255, 230);
-  const float bx = o.x + m, by = o.y + m;
-  dl->AddRectFilled(ImVec2(bx, by), ImVec2(bx + bw, by + bh), col, 1.5f * s);
-  dl->AddRectFilled(ImVec2(bx + bw + gap, by), ImVec2(bx + bw * 2 + gap, by + bh), col, 1.5f * s);
-}
-
-// Always-on coordinate HUD (top-right): camera/Tomba world position + stage. Lets the user walk to a
-// target scene (barrel #5 / flame hut #4) and read off where they are so the agent can drive there.
-static void draw_world_readout(void) {
-  if (!s_wvalid) return;
-  ImGuiIO& io = ImGui::GetIO();
-  ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x - 12, 12), ImGuiCond_Always, ImVec2(1.0f, 0.0f));
-  ImGui::SetNextWindowBgAlpha(0.55f);
-  ImGuiWindowFlags f = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
-                       ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing |
-                       ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_AlwaysAutoResize;
-  if (ImGui::Begin("##worldpos", nullptr, f)) {
-    const char* sname = s_wstage == 0x8010637Cu ? "GAME" : s_wstage == 0x801062E4u ? "DEMO"
-                      : s_wstage == 0x8010649Cu ? "START" : "?";
-    ImGui::Text("pos  X %d  Y %d  Z %d", s_wpos[0], s_wpos[1], s_wpos[2]);
-    ImGui::Text("stage %s (0x%08X)", sname, s_wstage);
-  }
-  ImGui::End();
-}
-
+// ---- per-frame ------------------------------------------------------------------------------------
 void imgui_overlay_new_frame(void) {
-  if (!s_inited) return;
-  ImGui_ImplVulkan_NewFrame();
-  ImGui_ImplSDL2_NewFrame();
-  ImGui::NewFrame();
-  if (s_visible) build_ui();
-  draw_world_readout();
-  draw_pause_indicator();
-  ImGui::Render();
+    if (!s_inited || !s_ctx) return;
+    if (s_win) {
+        int ww = 0, wh = 0; SDL_GetWindowSize(s_win, &ww, &wh);
+        if (ww > 0 && wh > 0) {
+            Rml::Vector2i cur = s_ctx->GetDimensions();
+            if (cur.x != ww || cur.y != wh) s_ctx->SetDimensions(Rml::Vector2i(ww, wh));
+        }
+    }
+    if (s_visible) refresh_readouts();   // keep the live video/world status lines current
+    s_ctx->Update();
 }
 
-void imgui_overlay_render(VkCommandBuffer cmd) {
-  if (!s_inited) return;
-  ImDrawData* dd = ImGui::GetDrawData();
-  if (dd) ImGui_ImplVulkan_RenderDrawData(dd, cmd);
+// Record the menu geometry into the present pass command buffer. overlay_glue passes the FULL window
+// viewport so the menu covers the whole window.
+void imgui_overlay_render_vk(VkCommandBuffer cmd, uint32_t frame_index,
+                             VkViewport viewport, VkRect2D full_scissor) {
+    if (!s_inited || !s_ctx || !s_render) return;
+    if (!s_visible) return;
+    s_render->BeginFrame(cmd, frame_index, viewport, full_scissor);
+    s_ctx->Render();
+    s_render->EndFrame();
 }
 
 int imgui_overlay_inited(void) { return s_inited ? 1 : 0; }

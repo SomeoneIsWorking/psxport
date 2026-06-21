@@ -1,0 +1,69 @@
+<rml>
+<head>
+	<title>Tomba2Engine</title>
+	<link type="text/rcss" href="rml.rcss"/>
+	<link type="text/rcss" href="menu.rcss"/>
+</head>
+<body>
+	<window id="window">
+		<tab-bar id="tab-bar">
+			<tab class="selected">Display</tab>
+			<tab>Graphics</tab>
+			<tab>Game</tab>
+			<tab>About</tab>
+		</tab-bar>
+		<content id="content">
+			<!-- One <pane> per tab; the C++ (RmlMenu) shows only the active tab's pane and moves the
+			     `selected`/`active` classes. Each focusable row is a <select-button> with a <key>
+			     (label) + <value>. `tab-index: auto` (RCSS, in menu.rcss) drives Up/Down nav.
+			     `toggle="<id>"` = on/off row; `cycle="<id>"` = multi-state row; `adjust="<id>"` =
+			     numeric step row; `action="<id>"` = a one-shot button (quit/close). The value text is
+			     refreshed from the live mod state on open / activation by RmlMenu. -->
+			<pane class="active">
+				<div id="video_readout" class="readout">render -</div>
+				<div id="world_readout" class="readout"></div>
+
+				<div class="section-heading">Display</div>
+				<select-button toggle="aspect"><key>Aspect Ratio</key><value>4:3</value></select-button>
+				<select-button toggle="ires_auto"><key>Auto Internal Resolution</key><value>On</value></select-button>
+				<select-button adjust="ires"><key>Internal Resolution</key><value>1x</value></select-button>
+				<select-button toggle="fps60"><key>60fps Interpolation</key><value>Off</value></select-button>
+				<p class="hint">&#8596; switch tab &middot; &#8597; move &middot; Enter / A change &middot; Esc close</p>
+			</pane>
+
+			<pane>
+				<div class="section-heading">Ambient Occlusion</div>
+				<select-button toggle="ssao"><key>SSAO</key><value>Off</value></select-button>
+				<select-button adjust="ssao_strength"><key>AO Strength</key><value>1.00</value></select-button>
+				<select-button adjust="ssao_radius"><key>AO Radius (px)</key><value>6.0</value></select-button>
+				<select-button adjust="ssao_bias"><key>AO Bias</key><value>0.020</value></select-button>
+				<select-button adjust="ssao_range"><key>AO Range</key><value>0.200</value></select-button>
+
+				<div class="section-heading spaced">Lighting</div>
+				<select-button toggle="light"><key>Directional Light</key><value>Off</value></select-button>
+				<select-button adjust="light_dir_x"><key>Light Dir X</key><value>0.00</value></select-button>
+				<select-button adjust="light_dir_y"><key>Light Dir Y</key><value>0.00</value></select-button>
+				<select-button adjust="light_dir_z"><key>Light Dir Z</key><value>1.00</value></select-button>
+				<select-button adjust="light_ambient"><key>Ambient</key><value>0.50</value></select-button>
+				<select-button adjust="light_diffuse"><key>Diffuse</key><value>0.70</value></select-button>
+				<select-button toggle="shadows"><key>Dynamic Shadows</key><value>Off</value></select-button>
+				<select-button adjust="shadow_strength"><key>Shadow Strength</key><value>0.60</value></select-button>
+				<p class="hint">&#8596; switch tab &middot; &#8597; move &middot; Enter / A change &middot; Esc close</p>
+			</pane>
+
+			<pane>
+				<div class="section-heading">Game</div>
+				<select-button action="close"><key>Resume</key><value>&#8629;</value></select-button>
+				<select-button action="quit"><key>Quit Game</key><value>&#10005;</value></select-button>
+				<p class="hint">&#8596; switch tab &middot; &#8597; move &middot; Enter / A select &middot; Esc close</p>
+			</pane>
+
+			<pane>
+				<div class="section-heading">About</div>
+				<p>Tomba! 2 &mdash; PC-native engine port (Tomba2Engine).</p>
+				<p class="hint">RmlUi (HTML/CSS) menu over the Vulkan renderer. Layout from Dusklight (CC0).</p>
+			</pane>
+		</content>
+	</window>
+</body>
+</rml>
