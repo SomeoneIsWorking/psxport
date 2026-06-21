@@ -36,10 +36,24 @@ static inline int cam_axis(Core* c, uint32_t accAddr, uint32_t tgt32Addr, uint16
 // FUN_8006d960 (0x8006d960) — track the camera X and Z toward the target object a1.
 //   X: accum 0x1f8000dc (int 0x1f8000de) toward a1[+0]/a1[+2];  Z: accum 0x1f8000e4 (int 0x1f8000e6) toward
 //   a1[+8]/a1[+a].  Returns v0 = 1 iff BOTH axes are settled (snapped) this frame, else 0.
+// Debug TELEPORT (REPL `tp X Y Z`): force the camera's follow-target (a1 = cam+8) + the X/Z/Y tracking
+// accumulators to a fixed world point every frame, so the camera flies to an off-screen area to diagnose
+// render bugs at scenes the player can't walk to (e.g. #4 ropes X~11647, #5 barrel). The player object is
+// untouched — this only steers the camera. `tp` with no/zero args (cam_teleport_off) releases it.
+int g_cam_tp_on = 0; int32_t g_cam_tp_x = 0, g_cam_tp_y = 0, g_cam_tp_z = 0;
+void cam_teleport(int x, int y, int z) { g_cam_tp_x = x; g_cam_tp_y = y; g_cam_tp_z = z; g_cam_tp_on = 1; }
+void cam_teleport_off(void) { g_cam_tp_on = 0; }
+
 static void ov_cam_track_xz(Core* c) {
   uint32_t a1 = c->r[5];
   if (cfg_dbg("cam")) { static int once = 0; if (!once) { once = 1;
     fprintf(stderr, "[cam] ov_cam_track_xz FIRED (a1=0x%08X)\n", a1); } }
+  if (g_cam_tp_on) {                                     // force target + accumulators (snap the camera here)
+    c->mem_w32(a1 + 0, (uint32_t)g_cam_tp_x << 16); c->mem_w32(0x1f8000dcu, (uint32_t)g_cam_tp_x << 16);
+    c->mem_w32(a1 + 8, (uint32_t)g_cam_tp_z << 16); c->mem_w32(0x1f8000e4u, (uint32_t)g_cam_tp_z << 16);
+    c->mem_w16(0x1f8000d2u, (uint16_t)g_cam_tp_x); c->mem_w16(0x1f8000dau, (uint16_t)g_cam_tp_z);  // eye pos (cull/GTE)
+    c->mem_w32(0x1f800160u, (uint32_t)g_cam_tp_x << 16); c->mem_w32(0x1f800164u, (uint32_t)g_cam_tp_z << 16); // scene center (look-at)
+  }
   int snapX = cam_axis(c, 0x1f8000dcu, a1 + 0, c->mem_r16(a1 + 2),  c->mem_r16(0x1f8000deu), 6144);
   int snapZ = cam_axis(c, 0x1f8000e4u, a1 + 8, c->mem_r16(a1 + 10), c->mem_r16(0x1f8000e6u), 6144);
   c->r[2] = (snapX && snapZ) ? 1u : 0u;                // v0 = both-settled flag (recomp's a0 fold)
@@ -51,6 +65,7 @@ static void ov_cam_track_y(Core* c) {
   uint32_t a1 = c->r[5];
   if (cfg_dbg("cam")) { static int once = 0; if (!once) { once = 1;
     fprintf(stderr, "[cam] ov_cam_track_y FIRED (a1=0x%08X)\n", a1); } }
+  if (g_cam_tp_on) { c->mem_w32(a1 + 4, (uint32_t)g_cam_tp_y << 16); c->mem_w32(0x1f8000e0u, (uint32_t)g_cam_tp_y << 16); }
   int snapY = cam_axis(c, 0x1f8000e0u, a1 + 4, c->mem_r16(a1 + 6), c->mem_r16(0x1f8000e2u), 5632);
   c->r[2] = snapY ? 1u : 0u;
 }

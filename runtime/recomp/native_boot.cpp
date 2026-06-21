@@ -233,6 +233,7 @@ static void native_step_frame(Core* c, uint32_t f) {
 //   unwatch | hits | press/release <btn> | tap <btn> [frames] | regs | seq | quit. Memory is the
 //   game's address space (mem_r*/mem_w*); watchpoints via mem_set_watch (reported during `run`).
 void pad_repl_hold(Core* c, uint16_t active_low_mask);
+void cam_teleport(int x, int y, int z); void cam_teleport_off(void);   // engine_camera.cpp — REPL `tp`
 void pad_repl_tap(Core* c, uint16_t active_low_mask, int n);
 static uint16_t repl_btn(const char* n) {     // name -> active-HIGH PSX pad bit
   if (!strcmp(n,"start"))    return 0x0008; if (!strcmp(n,"select")) return 0x0001;
@@ -316,6 +317,9 @@ static long native_repl_read(Core* c, uint32_t f) {
     else if (!strcmp(cmd, "release") && sscanf(line, "%*s %31s", arg) == 1) { held |= repl_btn(arg);  pad_repl_hold(c, held); fprintf(stderr, "[repl] held=%04X\n", held); }
     else if (!strcmp(cmd, "tap") && sscanf(line, "%*s %31s %u", arg, &a) >= 1) { if (!a) a = 4; pad_repl_tap(c, (uint16_t)(0xFFFF & ~repl_btn(arg)), (int)a); fprintf(stderr, "[repl] tap %s %u\n", arg, a); }
     else if (!strcmp(cmd, "debug")) { char ch[200] = {0}; sscanf(line, "%*s %199[^\n]", ch); void cfg_dbg_set(const char*); cfg_dbg_set(ch); fprintf(stderr, "[repl] debug channels = %s\n", ch[0] ? ch : "(none)"); }
+    else if (!strcmp(cmd, "tp")) { int x=0,y=0,z=0;
+      if (sscanf(line, "%*s %d %d %d", &x, &y, &z) == 3) { cam_teleport(x, y, z); fprintf(stderr, "[repl] tp camera -> (%d,%d,%d)\n", x, y, z); }
+      else { cam_teleport_off(); fprintf(stderr, "[repl] tp off (camera follows player)\n"); } }
     else if (!strcmp(cmd, "newgame")) { g_nav_newgame = 1; fprintf(stderr, "[repl] newgame: pulsing to GAME prologue\n"); return 100000; }
     else if (!strcmp(cmd, "skip")) { a = 0; sscanf(line, "%*s %u", &a); if (!a) a = 500; g_skip_frames = (long)a; fprintf(stderr, "[repl] skip %u frames\n", a); return (long)a; }
     else if (!strcmp(cmd, "shot")) { char path[200] = {0}; if (sscanf(line, "%*s %199s", path) == 1) { void gpu_native_shot(Core*, const char*); gpu_native_shot(c, path); } }
