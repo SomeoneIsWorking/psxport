@@ -336,6 +336,27 @@ void ov_trig_cos(Core* c) { static int v = -1; if (v<0) v = cfg_dbg("trigverify"
 void ov_trig_lut(Core* c) { static int v = -1; if (v<0) v = cfg_dbg("trigverify")?1:0;
   uint32_t r = (uint32_t)trig_lut(c, (int)c->r[4]); if (v) trig_verify(c, r, 0x80083EBCu, "lut"); else c->r[2] = r; }
 
+// FUN_8004D7EC — pure bitmap bit-test (~2%, 6.8k calls): byte = bitmap[(int16)(a0/8)] then return
+// byte & (1 << ((int16)(a0%8) & 31)); bitmap base is 0x800BFD34 when (a1&0xff)!=0 else 0x800BFCB4.
+// Pure function over a guest bitmap — exact native reimpl. `bitverify` (lazy gate) A/B's v0.
+void ov_bittest_4d7ec(Core* c) {
+  static int v = -1; if (v < 0) v = cfg_dbg("bitverify") ? 1 : 0;
+  int a0 = (int)c->r[4]; uint32_t a1 = c->r[5];
+  int q  = (a0 >= 0) ? a0 : (a0 + 7);
+  int a2 = q >> 3;                        // a0/8 toward zero
+  int a3 = a0 - (a2 << 3);                // a0%8
+  uint32_t base = (a1 & 0xff) ? (0x800BF870u + 1220u) : (0x800BF870u + 1092u);
+  uint8_t byte = c->mem_r8(base + (uint32_t)(int32_t)(int16_t)a2);
+  uint32_t mine = (uint32_t)byte & (1u << ((uint32_t)(int32_t)(int16_t)a3 & 31u));
+  if (v) {
+    rec_super_call(c, 0x8004D7ECu);
+    static long ng = 0, nb = 0;
+    if ((uint32_t)c->r[2] != mine) { if (nb++ < 20) fprintf(stderr, "[bitverify] MISMATCH a0=%d a1=%x mine=%x oracle=%x\n", a0, a1, mine, (uint32_t)c->r[2]); }
+    else if (++ng % 20000 == 0) fprintf(stderr, "[bitverify] %ld matches\n", ng);
+  }
+  c->r[2] = mine;
+}
+
 void ov_rand(Core* c) {
   static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("randverify") ? 1 : 0;
   if (!s_v) { c->r[2] = rand_lcg(c); return; }
@@ -868,6 +889,7 @@ void games_tomba2_init(void) {
     { void ov_cone_cull_2b278(Core*);
       rec_set_override(0x8002B278u, ov_cone_cull_2b278); }  // view-cone cull (lazy conecull gate)
     { void ov_rand(Core*); rec_set_override(0x8009A450u, ov_rand); }   // platform PRNG (rand LCG)
+    { void ov_bittest_4d7ec(Core*); rec_set_override(0x8004D7ECu, ov_bittest_4d7ec); }  // bitmap bit-test
     { void ov_trig_sin(Core*), ov_trig_cos(Core*), ov_trig_lut(Core*);
       rec_set_override(0x80083E80u, ov_trig_sin);                      // sin LUT
       rec_set_override(0x80083F50u, ov_trig_cos);                      // cos LUT
