@@ -6621,3 +6621,24 @@ everything like static objects". RETIRED.
   CR0-7 path, so it currently SNAPS under camera pan — add a camera-keyed reprojection (capture terrain
   model verts + the camera Rview/Tview) so the ground interpolates too. SMOOTHNESS itself is USER-EYEBALL
   ONLY (windowed, F1 overlay 60fps toggle) — the mechanical gate only proves the math, not the feel.
+
+### later-199 — render-issue batch: #7/#11 FIXED + verified; #8/#9 RE'd; #4/#5/#6/#12 need live user diagnosis
+Worked the 8 open GitHub render bugs (specs in docs/reference/issues/).
+- **#7 + #11 (FMV-skip stale overlay) — FIXED + HEADLESS-VERIFIED (commit 29bd85f).** Added
+  `gpu_clear_display(core)` (gpu_native.cpp) and called it at the single return of `native_fmv_play_lba`
+  (every exit incl. Start-skip) + once in `native_boot_run` after the intro-FMV block. Repro (NO_FMV=0
+  SCEA_SKIP=1 FMV_MAXFRAMES=3): post-FMV frame is now solid BLACK (was near-white SCEA fill), title
+  renders clean (TOMBA!2 logo + menu, no SCEA text / no garbled glyphs). USER eyeballs windowed skip feel.
+- **#8 + #9 (dust/impact striped bars) — RE'd into issue8_9_re.md.** Root cause = effect prims sample
+  beyond their texpage cell because the GP0-0xE2 texture-WINDOW confinement isn't in force at draw time;
+  a prior "fix" (2a11b4f) was a bandaid (dropped `u&=255` so SW==VK but both march off-cell). Real fix =
+  apply the real texture window in draw order so the existing tritex.frag wrap confines U — NOT a clamp
+  constant. Needs a LIVE `provat`/texture-window read on a bar pixel to pick the branch; dust is
+  animation-gated (not reliably headless-reachable).
+- **#4 / #5 / #6 / #12 — NOT acted on (correctly): each needs live USER diagnosis the agent cannot do
+  headless.** #4 flame-hut + #5 barrel are past free-roam (driving §5 blocker); their fix branches on
+  whether the prim is OT-walked-shared-obj_depth vs owned-GT4 (must confirm live with `provat`/`objz`).
+  #6 HUD gray box is LATENT until the menu page handler is owned native (doesn't reproduce now). #12
+  cutscene black bar doesn't reproduce headless and the fix is delicate present-region math (gpu_vk.cpp
+  :1221) that would touch ALL frames — unsafe to change without a repro to verify. Applying any of these
+  blind = bandaid/regression risk (forbidden). Specs carry the exact live repro recipe for the user.
