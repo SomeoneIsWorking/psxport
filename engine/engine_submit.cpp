@@ -141,6 +141,16 @@ static void geomblk_dump(Core* c, const char* kind, uint32_t rec, uint32_t count
 void gpu_obj_depth_add(Core*, uint32_t lo, uint32_t hi, float ord);
 float proj_obj_center_ord(void);
 extern int g_fps60_on;                                    // fps60 mode (overlay toggle) — gate the billboard recorder
+// The entity node the native render walk is currently rendering (set around each per-object dispatch,
+// below). The PER-INSTANCE identity for every prim an object emits — including a 2D billboard whose quad
+// rasterizes later at the OT walk. Used both for the objid overlay (gpu_native rq_emit_or_queue) and as the
+// billboard span identity (so collectables/flames are identified individually, not merged under a shared id).
+uint32_t g_dbg_render_node = 0;
+// The real per-instance render object: the walk's node when set, else the guest "current render object"
+// scratch (0x1F80028C). Prefer the native walk's node — 0x28C is shared/stale for some billboard paths.
+static inline uint32_t cur_render_node(Core* c) {
+  return g_dbg_render_node ? g_dbg_render_node : c->mem_r32(0x1F80028Cu);
+}
 // fps60: record a 3D-positioned 2D quad's reproject inputs, keyed by the object's packet-pool SPAN (the OT
 // walk later matches each billboard item's source node against this span, identical to obj_depth_lookup).
 void  fps60_record_billboard_span(Core* c, uint32_t lo, uint32_t hi, uint32_t ident);
@@ -191,7 +201,7 @@ void ov_render_cmd(Core* c) {
     // fps60 billboard entry keyed by that SPAN (the OT walk matches each item's source node against it) +
     // the current render object (scratch 0x1F80028C) as the stable cross-frame identity. The composed
     // camera×object transform is live in CR0-7 here (proj_obj_center_ord just read it).
-    if (g_fps60_on || g_mods.debug_ids || cfg_dbg("objid")) fps60_record_billboard_span(c, slo, shi, c->mem_r32(0x1F80028Cu));
+    if (g_fps60_on || g_mods.debug_ids || cfg_dbg("objid")) fps60_record_billboard_span(c, slo, shi, cur_render_node(c));
     if (cfg_dbg("objz") && probe_frame_ok(c))
       fprintf(stderr, "[rcmddep] mode=%02x span %08x->%08x (%dB) ord=%.4f\n",
               c->mem_r8(0x800BF870u), slo, shi, (int)(shi - slo), (double)ord);
@@ -743,12 +753,6 @@ void ov_perobj_flush(Core* c) {
 // (#4). The exact origin projection is "where the object actually is", so depth/occlusion is owned from the
 // object's real placement, not a quantized approximation. (engine owns placement → engine owns depth.)
 
-// objid debug overlay: the entity node currently being rendered by a native render walk. Every world prim
-// emitted while this is set is stamped with it (gpu_native.cpp rq_emit_or_queue), so the overlay can label
-// EVERY rendered object — not just the few that flow through the keyed per-object/billboard path. 0 when no
-// per-object render is active (terrain/static/background prims → no entity, correctly unlabeled).
-uint32_t g_dbg_render_node = 0;
-
 static void submit_perobj_render(Core* c) {
   uint32_t node = c->r[4];
   g_dbg_render_node = node;                               // objid: tag this object's prims
@@ -844,7 +848,7 @@ void ov_collectable_quad(Core* c) {
     // (the OT walk matches the item's source node against it) + identity = the current render object
     // (scratch 0x1F80028C, set by submit_perobj_render); the composed camera×object transform is still live
     // in CR0-7 here (proj_obj_center_ord just read it), so fps60_record_billboard_span captures it.
-    if (g_fps60_on || g_mods.debug_ids || cfg_dbg("objid")) fps60_record_billboard_span(c, slo, shi, c->mem_r32(0x1F80028Cu)); }
+    if (g_fps60_on || g_mods.debug_ids || cfg_dbg("objid")) fps60_record_billboard_span(c, slo, shi, cur_render_node(c)); }
 }
 
 // ===================================================================================================
