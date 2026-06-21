@@ -16,6 +16,35 @@
   earlier fade work: see [[tomba2-fade-flash-solved]]).
 - ~~SCEA license screen was black~~ **FIXED PC-native (later-179, below).**
 
+## later-204: OWN sm40558 STATE-1 sub-behavior FUN_8003FD10 native (ov_osc_fd10) — first descent into the state-machine's hot active-behavior callees
+Natural descent from later-203 (FUN_80040558 owned): STATE 1 (the ~11000×/run hot active-behavior path)
+dispatches into the obj[5] jump table JT1[6] @0x80015300. JT1[0] = `FUN_8003FD10`, a per-object OSCILLATE /
+FRAME-TOGGLE sub-behavior (a counter-driven 2-frame sprite/offset oscillator on a child node). **a0 = obj,
+void return. NO GTE, NO render packets — pure object/scratchpad memory ops + ONE dispatched callee
+(0x8009A450 = ov_rand, already owned).** A 3-way micro state-machine on the phase byte obj[6]:
+- **obj[6]==0** (@fd40): if obj[43]==0 return; else obj[6]=1, obj[43]=0, obj[64](sh)=16.
+- **obj[6]==1** (@fd64): if obj[43]!=0 { obj[43]=0; obj[64]=16 }; then @fd7c: cnt=obj[64](lhu); cnt--;
+  obj[64]=cnt; if (int16)cnt==-1 obj[6]-- (the `addiu v0,v0,-1` adds v1=-1); then @fdb0:
+  r=(*(u16*)0x1F80017C)&1; node=*(obj+0xC0); node[2](sh)=r*6; rr=ov_rand(); node[0](sh)=((rr&3)-2)*6.
+- **obj[6] other** (@fdf0): return.
+**Owned native:** all control flow + every obj/scratchpad/node memory access. ov_rand stays PSX via
+rec_dispatch (honors its own override identically in the super-call path). GOTCHAs (every one a delay-slot
+hazard, all caught by the A/B): (1) the `sh v1,2(node)` at 0x8003fdd0 is in the ov_rand jal DELAY SLOT —
+node and v1=r*6 are computed BEFORE the call (node loaded @0x8003fdc4), the store uses the pre-call values;
+(2) the obj[6]-- at @fdac only fires on the cnt==-1 branch (the `addu v0,v0,v1` with v1=-1); (3) node[2]/[0]
+are halfword stores of v0*6 = (v0*3)<<1.
+**`fd10` gate** (game_tomba2.cpp, sm40558 template): full RAM (0x200000) + scratchpad (0x400) A/B vs
+rec_super_call — native runs once, RAM/scratch/regs rolled back, super_call runs, byte-compare. **0-diff
+over 11000+ live field calls** (newgame + skip 650 + press right 250 + press left 250 — this is a hot
+state-1 sub-behavior, so 11000 is the natural exercise count; it covers the obj[6]==0/1 phases, the
+counter-decrement/wrap, and the ov_rand-driven node offset). Same-family gate exclusion [sp-0x800, sp)
+(the dispatched ov_rand runs in BOTH passes + this fn's 24-byte frame is dead below entry sp on return;
+sp ~0x1FE9xx, far above all game data). Lazy cfg_dbg gate so the REPL `debug fd10` works. Live (gate-off)
+run reaches the GAME stage and walks normally. Registered in game_tomba2.cpp (no new file → no run.sh /
+build_port.sh SRC change). **NEXT in the descent:** the other JT1 entries (0x8003FED8/FFCC/4022C/40390)
+and the obj[94] @7e0 common-block callees — same posture; 0x80040390 is the next-cleanest (gated on obj[41],
+2 dispatched callees, no GTE).
+
 ## later-198: OWN the per-object ANIMATION-SEQUENCE VM stepper FUN_80076D68 native (ov_anim_vm_76d68)
 Frontier §F resident leaf (3.6% field interp time, no GTE, a freq leader on motion scenes). First port of
 the animation-keyframe VM — a content state machine, same methodology as scriptvm/pad931c0 (later-196/197).

@@ -253,6 +253,20 @@ for content fns (call it). Do NOT mimic PSX hardware (GTE/GP0/OT) — remove Bee
   SIGN-EXTENDED s16 lh. Same-family gate exclusion [sp-0x800, sp) (dispatched callees + this fn's 24-byte frame
   dead below entry sp). Live (gate-off) run: Tomba walks normally (master X 0x0F640000→0x17704900 holding
   right), reaches stage 0x8010637C. Registered in game_tomba2.cpp.
+- ✅ **later-204 — `FUN_8003FD10` `ov_osc_fd10` (per-object OSCILLATE / FRAME-TOGGLE sub-behavior — the FIRST
+  descent into sm40558's STATE-1 hot active-behavior callees; JT1[0] of the obj[5] jump table @0x80015300).**
+  a0=obj, void return. NO GTE, NO render packets — pure object/scratchpad/child-node memory ops + ONE
+  dispatched callee (0x8009A450 = owned ov_rand). 3-way micro state-machine on the phase byte obj[6]: ==0
+  arm (obj[43] gate → obj[6]=1, obj[64]=16); ==1 run (decrement counter obj[64], wrap obj[6]-- on cnt==-1,
+  then set child node[2]/[0] (obj+0xC0) to oscillation offsets from scratchpad 0x1F80017C&1 and (ov_rand&3)-2,
+  ×6); else no-op. Control flow + every memory write owned native; ov_rand stays PSX via rec_dispatch.
+  GOTCHAs (all delay-slot, all caught by the A/B): node[2]'s `sh` is in the ov_rand jal delay slot (pre-call
+  node/value); obj[6]-- only on the cnt==-1 branch (`addu v0,v1=-1`); offsets are v0*6=(v0*3)<<1. Verified
+  with the full RAM+scratchpad A/B gate `fd10` (native → snapshot+rollback → rec_super_call → diff): **0-diff
+  over 11000+ live field calls** (press right 250 + press left 250 — a hot state-1 sub-behavior). Same-family
+  gate exclusion [sp-0x800, sp) (dispatched ov_rand runs in both passes + this fn's 24-byte frame dead below
+  entry sp). Registered in game_tomba2.cpp. NEXT descent: JT1[1..5] (0x8003FED8/FFCC/4022C/40390) — 0x80040390
+  is next-cleanest (gated obj[41], 2 dispatched callees, no GTE).
 - ✅ **later-196 — `FUN_8004CE14` `ov_script_vm_4ce14` (per-object SCRIPT-VM tick — THE most-called field
   fn, ~14900 calls/run).** First CONTENT state machine owned after the boundary removal. Dispatch on state
   byte obj[4]: 2→no-op; 3→jal 0x8007A624; >3→no-op; 0→ if global 0x800BF873!=0 set obj[4]=3 & return, else

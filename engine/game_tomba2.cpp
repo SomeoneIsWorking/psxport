@@ -1034,6 +1034,77 @@ void ov_sm40558(Core* c) {
   } else if (++ng % 200 == 0) fprintf(stderr, "[sm40558] %ld matches\n", ng);
 }
 
+// FUN_8003FD10 — per-object OSCILLATE / FRAME-TOGGLE sub-behavior (one of sm40558 STATE-1's obj[5] jump-table
+// handlers JT1[0], reached ~thousands×/run from the hot active-behavior path). a0 = obj. NO GTE, NO render
+// packets — pure object/scratchpad memory ops + ONE dispatched callee (0x8009A450 = ov_rand, owned). A
+// 3-way micro state-machine on the phase byte obj[6]:
+//   obj[6]==0 (@fd40): if obj[43]==0 return; else obj[6]=1, obj[43]=0, obj[64](sh)=16, return.
+//   obj[6]==1 (@fd64): if obj[43]!=0 { obj[43]=0; obj[64](sh)=16; }  @fd7c: v0=obj[64](lhu); v0--; obj[64]=v0;
+//     if (int16)v0 == -1 obj[6] += -1 (i.e. obj[6]--);  @fdb0: r = ((u16*)0x1F80017C & 1); node=*(obj+0xC0);
+//     node[2](sh) = r*6; rr = ov_rand(); node[0](sh) = ((rr&3)-2)*6; return.
+//   obj[6] other (@fdf0): return.
+// GOTCHAs: (1) the `sh v1,2(node)` at 0x8003fdd0 is in the ov_rand jal DELAY SLOT — node and v1 (=r*6) are
+//   computed BEFORE the call, the store happens with the pre-call values (node loaded @0x8003fdc4). (2) the
+//   obj[6]-- at @fdac uses v1=-1 added to obj[6] (only on the v0==-1 branch). (3) node[2]/[0] are halfword
+//   stores of v0*6 == (v0*3)<<1. `fd10` gate = full RAM+scratchpad A/B vs rec_super_call (same family
+//   rationale as sm40558: the dispatched ov_rand runs in BOTH passes + this fn's 24-byte frame is dead below
+//   entry sp on return -> exclude [sp-0x800, sp)).
+static void osc_fd10(Core* c) {
+  const uint32_t obj = c->r[4];
+  uint8_t p6 = c->mem_r8(obj + 6);
+  if (p6 == 0) {                                  // @fd40
+    if (c->mem_r8(obj + 43) == 0) return;         // @fdf0
+    c->mem_w8 (obj + 6, 1);
+    c->mem_w16(obj + 64, 16);
+    c->mem_w8 (obj + 43, 0);
+    return;
+  }
+  if (p6 != 1) return;                            // @fdf0
+  // @fd64
+  if (c->mem_r8(obj + 43) != 0) {
+    c->mem_w8 (obj + 43, 0);
+    c->mem_w16(obj + 64, 16);
+  }
+  // @fd7c
+  uint16_t cnt = c->mem_r16(obj + 64);
+  cnt = (uint16_t)(cnt - 1);
+  c->mem_w16(obj + 64, cnt);
+  if ((int16_t)cnt == -1) {                       // @fda4 (obj[6] += -1)
+    c->mem_w8(obj + 6, (uint8_t)(c->mem_r8(obj + 6) - 1));
+  }
+  // @fdb0
+  uint32_t r = c->mem_r16(0x1F80017Cu) & 1u;      // scratchpad halfword & 1
+  uint32_t node = c->mem_r32(obj + 0xC0);
+  c->mem_w16(node + 2, (uint16_t)(r * 6u));       // sh in the ov_rand delay slot (pre-call node/value)
+  c->r[4] = obj; rec_dispatch(c, 0x8009A450u);    // ov_rand
+  uint32_t rr = c->r[2] & 3u;
+  uint32_t v0 = (uint32_t)((int32_t)rr - 2);
+  c->mem_w16(node + 0, (uint16_t)(v0 * 6u));
+}
+
+void ov_osc_fd10(Core* c) {
+  static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("fd10") ? 1 : 0;
+  if (!s_v) { osc_fd10(c); return; }
+  static uint8_t* ram0 = (uint8_t*)malloc(0x200000);
+  static uint8_t* ramN = (uint8_t*)malloc(0x200000);
+  uint8_t spad0[0x400], spadN[0x400];
+  uint32_t regs0[32]; memcpy(regs0, c->r, sizeof regs0);
+  uint32_t obj = c->r[4];
+  memcpy(ram0, c->ram, 0x200000); memcpy(spad0, c->scratch, 0x400);
+  osc_fd10(c);
+  memcpy(ramN, c->ram, 0x200000); memcpy(spadN, c->scratch, 0x400);
+  memcpy(c->ram, ram0, 0x200000); memcpy(c->scratch, spad0, 0x400); memcpy(c->r, regs0, sizeof regs0);
+  rec_super_call(c, 0x8003FD10u);
+  uint32_t sp = regs0[29] & 0x1FFFFFu, flo = (sp >= 0x800) ? sp - 0x800 : 0;
+  int ro = -1; for (uint32_t a = 0; a < 0x200000; a++) if (c->ram[a] != ramN[a] && !(a >= flo && a < sp)) { ro = (int)a; break; }
+  int so = -1; for (uint32_t a = 0; a < 0x400; a++) if (c->scratch[a] != spadN[a]) { so = (int)a; break; }
+  static long ng = 0, nb = 0;
+  if (ro >= 0 || so >= 0) {
+    if (nb++ < 40) fprintf(stderr, "[fd10] MISMATCH obj=%08x p6=%d ram@%x spad@%x sp=%x\n",
+                           obj, c->mem_r8(obj+6), ro, so, sp);
+  } else if (++ng % 200 == 0) fprintf(stderr, "[fd10] %ld matches\n", ng);
+}
+
 // FUN_8004CE14 — per-object SCRIPT-VM tick (the MOST-CALLED field function, ~14900 calls/run). a0 = obj.
 // Dispatches on the state byte obj[4]: 2 -> no-op; 3 -> jal 0x8007A624(obj); >3 -> no-op; 0 -> if the
 // global enable byte 0x800BF873!=0 set obj[4]=3 & return, else INIT (obj[4]=1, obj[0]=1, load the per-obj
@@ -2005,6 +2076,7 @@ void games_tomba2_init(void) {
     { void ov_anim_vm_76d68(Core*); rec_set_override(0x80076D68u, ov_anim_vm_76d68); }  // per-object animation-sequence VM stepper (control flow owned; 3 frame sub-fns dispatched)
     { void ov_child_spawn_40410(Core*); rec_set_override(0x80040410u, ov_child_spawn_40410); }  // per-object child-node spawn/sub-object builder (control flow owned; allocator+setup dispatched)
     { void ov_sm40558(Core*); rec_set_override(0x80040558u, ov_sm40558); }  // per-object state-machine head (control flow owned; all sub-behaviors dispatched)
+    { void ov_osc_fd10(Core*); rec_set_override(0x8003FD10u, ov_osc_fd10); }  // sm40558 STATE-1 obj[5]=0 oscillate/frame-toggle handler (control flow owned; ov_rand dispatched)
   }
   // PC-native LEVEL/STAGE LOADER (engine/engine_level.cpp): the engine's overlay loader FUN_800450bc —
   // load a stage's overlay off the disc + set its entry, synchronous (no PSX CD-wait yield).
