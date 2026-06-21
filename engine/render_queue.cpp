@@ -5,7 +5,7 @@
 #include "cfg.h"
 #include "mods.h"
 #include <algorithm>
-#include <unordered_set>
+#include <unordered_map>
 #include <stdio.h>
 
 // Debug object-ID overlay is on when the RmlUi Debug-tab toggle is set OR the `objid` debug channel is on.
@@ -67,44 +67,51 @@ static void objid_hex(Core* core, const RqItem* ref, uint32_t val, int ndig, int
     objid_glyph(core, ref, (val >> ((ndig - 1 - d) * 4)) & 0xF, x + d * 4 * s, y, s);
 }
 
-// Scan the world prims (captured before we append). One label per unique ENTITY INSTANCE (dbg_node), at
-// its first vertex, showing the GAME object id = the entity model id (node+0xe & 0x3fff) in decimal.
+// Draw a 1px-scaled hollow rectangle outline (4 thin solid quads) in colour (r,g,b).
+static void objid_box(Core* core, const RqItem* ref, int x0, int y0, int x1, int y1,
+                      unsigned char r, unsigned char g, unsigned char b, int t) {
+  objid_solid(core, ref, x0, y0, x1, y0 + t, r, g, b);   // top
+  objid_solid(core, ref, x0, y1 - t, x1, y1, r, g, b);   // bottom
+  objid_solid(core, ref, x0, y0, x0 + t, y1, r, g, b);   // left
+  objid_solid(core, ref, x1 - t, y0, x1, y1, r, g, b);   // right
+}
+
+// Box + id every rendered ENTITY INSTANCE. Pass 1: accumulate each object's screen bbox across all its
+// prims (grouped by dbg_node, stamped by the native render walk). Pass 2: outline the box + label it with
+// the per-instance node handle (low 16 hex — the stable object id; the node+0xe "model id" is only 0..13
+// here and the 352/353 the user recalled was a draw-order index, not a game id). Terrain/static prims have
+// dbg_node==0 and aren't boxed.
+struct ObjBox { int x0, y0, x1, y1; const RqItem* ref; };
 static void objid_overlay(RenderQueue* q, Core* core) {
-  int n0 = q->n;                               // freeze the count: only label real prims, not our own labels
-  std::unordered_set<uint32_t> seen;
-  int nworld = 0, nnoded = 0, nlabel = 0;
-  static int s_logframe = 0;                    // throttle the stderr table to once every ~60 frames
-  int dolog = objid_on() && ((s_logframe++ % 60) == 0);   // log whether enabled via channel OR the menu toggle
+  int n0 = q->n;                               // freeze the count: only scan real prims, not our own labels
+  std::unordered_map<uint32_t, ObjBox> boxes;
+  int nworld = 0, nnoded = 0;
+  static int s_logframe = 0;
+  int dolog = objid_on() && ((s_logframe++ % 60) == 0);
   for (int i = 0; i < n0; i++) {
     const RqItem* it = &q->items[i];
     if (it->layer != RQ_WORLD) continue;
     nworld++;
     uint32_t node = it->dbg_node;
-    if (node == 0) continue;                                   // no entity node resolved for this prim
+    if (node == 0) continue;
     nnoded++;
-    if (!seen.insert(node).second) continue;                   // one label per entity INSTANCE
-    // The model-id field (node+0xe) reads 0 for the captured entities, so display the per-instance node
-    // handle (low 16 bits, hex) — stable + unique per object. The stderr scan below hunts for the real
-    // game-id field; once found we switch the label to it.
-    objid_hex(core, it, node & 0xFFFF, 4, it->xs[0], it->ys[0], 2);
-    nlabel++;
-    if (dolog) {
-      // Hunt for where the game id (352/353/354 = 0x160/0x161/0x162) actually lives: scan the node struct
-      // (0..0xD0) at every byte offset, reporting any u16 in [0x150,0x180]. Also dump node[0..0x3F] words.
-      char hits[256]; int hp = 0; hits[0] = 0;
-      for (int off = 0; off + 1 < 0xD0; off++) {
-        uint32_t v = core->mem_r16(node + off);
-        if (v >= 0x150 && v <= 0x180 && hp < (int)sizeof(hits) - 24)
-          hp += snprintf(hits + hp, sizeof(hits) - hp, " +%X=%u", off, v);
-      }
-      fprintf(stderr, "[objid] %s node=%08x type=%02x pos=(%d,%d,%d) idhits[%s ] w0..3=%08x %08x %08x %08x\n",
-              it->fps_anchor ? "BILLBOARD" : "MESH", node, core->mem_r8(node + 0xC),
-              (int)(int16_t)core->mem_r16(node + 0x2E), (int)(int16_t)core->mem_r16(node + 0x32), (int)(int16_t)core->mem_r16(node + 0x36),
-              hits, core->mem_r32(node), core->mem_r32(node + 4), core->mem_r32(node + 8), core->mem_r32(node + 0xC));
+    int nv = it->nv ? it->nv : 4;
+    auto ins = boxes.emplace(node, ObjBox{ 99999, 99999, -99999, -99999, it });
+    ObjBox& bx = ins.first->second;
+    for (int k = 0; k < nv; k++) {
+      if (it->xs[k] < bx.x0) bx.x0 = it->xs[k]; if (it->xs[k] > bx.x1) bx.x1 = it->xs[k];
+      if (it->ys[k] < bx.y0) bx.y0 = it->ys[k]; if (it->ys[k] > bx.y1) bx.y1 = it->ys[k];
     }
   }
+  for (auto& kv : boxes) {
+    ObjBox& bx = kv.second;
+    if (bx.x1 <= bx.x0 || bx.y1 <= bx.y0) continue;
+    objid_box(core, bx.ref, bx.x0, bx.y0, bx.x1, bx.y1, 0, 255, 255, 1);          // cyan outline
+    objid_hex(core, bx.ref, kv.first & 0xFFFF, 4, bx.x0 + 1, bx.y0 + 1, 1);       // id at top-left
+  }
   if (dolog)
-    fprintf(stderr, "[objid] --- world prims=%d noded=%d labels=%d (n=%d) ---\n", nworld, nnoded, nlabel, n0);
+    fprintf(stderr, "[objid] --- world prims=%d noded=%d objects=%d (n=%d) ---\n",
+            nworld, nnoded, (int)boxes.size(), n0);
 }
 
 // The render queue is THE render path — one behavior, the PC game. No env gate (user directive

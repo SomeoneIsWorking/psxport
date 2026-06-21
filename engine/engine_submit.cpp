@@ -743,8 +743,15 @@ void ov_perobj_flush(Core* c) {
 // (#4). The exact origin projection is "where the object actually is", so depth/occlusion is owned from the
 // object's real placement, not a quantized approximation. (engine owns placement → engine owns depth.)
 
+// objid debug overlay: the entity node currently being rendered by a native render walk. Every world prim
+// emitted while this is set is stamped with it (gpu_native.cpp rq_emit_or_queue), so the overlay can label
+// EVERY rendered object — not just the few that flow through the keyed per-object/billboard path. 0 when no
+// per-object render is active (terrain/static/background prims → no entity, correctly unlabeled).
+uint32_t g_dbg_render_node = 0;
+
 static void submit_perobj_render(Core* c) {
   uint32_t node = c->r[4];
+  g_dbg_render_node = node;                               // objid: tag this object's prims
   c->mem_w32(SCR + 0x28C, node);                          // current render object (read by downstream code)
   uint32_t idx = c->mem_r8(node + 0xD) & 0xB;
   if (idx >= 9) return;                                // not rendered
@@ -758,6 +765,7 @@ static void submit_perobj_render(Core* c) {
   else                    { rec_super_call(c, 0x8003CCA4u); }                          // secondary-effect case
   if (sess.close(&slo, &shi)) { float od = proj_obj_center_ord();   // EXACT object-origin view depth (live composed transform)
     gpu_obj_depth_add(c, slo, shi, od); fps60_bb_node(c, slo, shi, node); }   // fps60: this object's billboards reproject at midpoint
+  g_dbg_render_node = 0;                                  // objid: end this object's render scope
 }
 void ov_perobj_render(Core* c) {
   submit_perobj_render(c);
@@ -915,7 +923,9 @@ static void submit_render_walk_snapshot(Core* c) {
     // Render the object, tagging the packet-pool span it produces with its PC-native world-position depth
     // so its 2D billboard prims (collectable quads, etc.) occlude for real at the deferred OT walk.
     uint32_t slo, shi; PktSpanSession sess;
+    g_dbg_render_node = node;                                // objid: tag every prim this object emits
     rq_dispatch_case(c, node, tgt);                          // run the object's per-type renderer (guest content)
+    g_dbg_render_node = 0;
     if (sess.close(&slo, &shi)) { float od = proj_obj_center_ord();   // EXACT object-origin view depth (live composed transform)
       gpu_obj_depth_add(c, slo, shi, od); fps60_bb_node(c, slo, shi, node); }   // fps60: object billboards reproject at midpoint
   }
