@@ -7064,3 +7064,42 @@ shadow) vs `after_real` (shadow) diff (16.8% px) lights up exactly the hut/folia
 (cfg-gated, no behavior change): `PSXPORT_DEBUG=fps60shadow` (per-pass s_shadow_n) and
 `PSXPORT_FPS60_INTERPSHOT="path[:fence]"` (dump the interp frame's s_tex in isolation). Repro: set
 `shadows=1 light=1 fps60=1` in psxport_settings.ini (or PSXPORT_SETTINGS), run the field.
+
+## later-201: 60fps rearchitected to ONE pipeline — interp frame = the same full queue, twice (keep_shadow + HUD-bypass REMOVED)
+USER DIRECTIVE: "There shouldn't be any difference between how 60fps renders and how 30fps does — integrate
+into the 3D pipeline." The later-200 `keep_shadow` flag and the HUD's direct `gpu_vk_draw_tritri` bypass were
+SYMPTOMS of a SEPARATE interp path: a subsystem that lands on only one of the two presents needs a per-feature
+patch to also run on the other. The fix is to make the in-between go through the IDENTICAL pipeline, not to
+patch each subsystem.
+
+REARCHITECTURE: the render queue is now THE COMPLETE FRAME; each 60fps present emits the whole queue and runs
+the full present pipeline (panel_render = opaque/semi + shadow_pass + ssao_pass + 2D). Two things were moved
+INTO the queue so they ride both passes by construction:
+- HUD → queue. `engine/hud.cpp` `hud_quad` now calls `rq_push_2d_quad` (new, gpu_native.cpp) → an RqItem on
+  layer RQ_HUD, instead of a direct `gpu_vk_draw_tritri`. The HUD is part of the snapshot, emitted on BOTH
+  passes → no flicker.
+- Dynamic shadow geometry → queue. RqItem gained host-only `sh_cast` + `sh_vx/vy/vz[4]` (the opaque world
+  prim's view-space verts). `gpu_draw_world_quad` takes an `sv` arg; the GT3/GT4 submitters (engine_submit.cpp
+  `shadow_verts`) and native_terrain.cpp fill it instead of calling `gpu_vk_shadow_push_tri` directly.
+  `gpu_emit_rq_item` re-pushes the shadow tris on EVERY emit → the shadow map rebuilds identically on each
+  pass. Shadows stay un-interpolated (build_lerp leaves sh_v* at B), per the user's design.
+
+REMOVED: `keep_shadow` param on `GpuVkState::frame_end`, `gpu_vk_frame_end_keepshadow` (header + both defs),
+and the keepshadow call in `gpu_fps60_present_pass` — `frame_end` now resets the shadow stream every present,
+refilled by the next queue emit. No per-feature special-casing remains.
+
+VERIFY: (1) clean `build_port.sh all`, boot, 0 bad opcodes. (2) DEFAULT 30fps field guest-RAM dump (run 8)
+BYTE-IDENTICAL to a pre-change baseline (render changes don't touch guest RAM); deterministic across runs.
+(3) `debug fps60pass` (new REPL diagnostic, cfg-gated) at the field with fps60+shadows+light: interp and real
+pass report IDENTICAL counts every frame — `prims=942 HUD=3 shadow_cast=569` on BOTH — proving the HUD and the
+shadow casters are in the queue and emitted on both presents (no flicker/strobe). after_real shot shows the
+field with the 3 HUD indicators + shadows. USER eyeballs the live run for motion smoothness.
+
+GOTCHA (cost a long debugging detour): RqItem lives in render_queue.h, included by game.h, so it sizes `Game`.
+Changing RqItem changes `sizeof(Game)` and every member offset — an INCREMENTAL `build_port.sh <files>` that
+misses a TU including game.h leaves a stale .o with the OLD layout → an ODR size mismatch → `core->game->fps60`
+computes a garbage `this` → SIGSEGV deep in unrelated code (it crashed in rate_tick with `d` pointing into SDL
+symbols). ALWAYS `build_port.sh all` after touching render_queue.h / game.h / core.h. (Confirms the existing
+"core.h/game.h edits need build_port.sh all" note — extend it to render_queue.h.)
+ALSO: `PSXPORT_DEBUG=<chan>` env does NOT enable channels (no startup getenv→cfg_dbg_set wiring); channels are
+REPL-only via `debug <chan>` — already in memory, re-confirmed here.

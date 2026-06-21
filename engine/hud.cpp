@@ -40,6 +40,7 @@
 #include "core.h"
 #include "cfg.h"
 #include "gpu_vk.h"
+#include "render_queue.h"
 #include <stdint.h>
 #include <stdio.h>
 
@@ -56,14 +57,17 @@ constexpr uint32_t SLICE_TABLE   = 0x80017334u;  // s16 index, stride 4, -> ptr 
 constexpr int HUD_TPX = 384, HUD_TPY = 0;       // texpage base (pixels) — tpage 0x06
 constexpr int HUD_CLUTX = 480, HUD_CLUTY = 211; // CLUT base (pixels)
 constexpr int HUD_MODE = 0;                      // 4bpp CLUT
+constexpr unsigned HUD_ORDER = 60000;            // overlay order for the `texttest` placement diagnostic only
+                                                 // (the real HUD/glyph draw goes through the render queue via hud_quad)
 
-// Engine-owned overlay ordering: the HUD is a 2D layer ON TOP of the world. We give it a large 2D order
-// index so it sorts above scene/background 2D. (The engine owns this decision; it does NOT read the PSX OT.)
-constexpr unsigned HUD_ORDER = 60000;
+// Engine-owned overlay ordering: the HUD is a 2D layer ON TOP of the world — the queue's RQ_HUD layer
+// sorts it above the world/2D. (The engine owns this decision; it does NOT read the PSX OT.)
 
 // Draw one textured quad (the engine's 2D overlay path): screen rect (x,y,w,h) sampling the HUD atlas at
-// (u,v) of the same size, modulated by color (cr,cg,cb). Issued as two tris via gpu_vk_draw_tritri on the
-// engine's 2D overlay layer (HUD on top). No PSX packet, no OT.
+// (u,v) of the same size, modulated by color (cr,cg,cb). Enqueued as an RqItem on the engine's HUD layer
+// (RQ_HUD, on top) via rq_push_2d_quad — so the HUD is part of THE FRAME (the render queue) and is
+// re-emitted on BOTH 60fps present passes (no direct gpu_vk_draw_tritri that lands on only one pass and
+// strobes). No PSX packet, no OT; the queue owns 2D order (HUD layer above the world).
 void hud_quad(Core* c, int x, int y, int w, int h, int u, int v, int cr, int cg, int cb,
               int tpx, int tpy, int mode, int clutx, int cluty) {
   if (!gpu_vk_enabled()) return;
@@ -74,14 +78,10 @@ void hud_quad(Core* c, int x, int y, int w, int h, int u, int v, int cr, int cg,
   unsigned char rs[4] = {(unsigned char)cr,(unsigned char)cr,(unsigned char)cr,(unsigned char)cr};
   unsigned char gs[4] = {(unsigned char)cg,(unsigned char)cg,(unsigned char)cg,(unsigned char)cg};
   unsigned char bs[4] = {(unsigned char)cb,(unsigned char)cb,(unsigned char)cb,(unsigned char)cb};
-  // Engine-owned 2D overlay order (HUD on top). No draw-area clip (full FB) — the engine, not the PSX
-  // draw-area register, owns HUD visibility; this also fixes the old 4:3 da-clip that ate 2 of 3 balls.
-  gpu_vk_set_order(c, HUD_ORDER);
-  gpu_vk_set_order_2d(c, HUD_ORDER);
-  gpu_vk_draw_tritri(c, xs,        ys,        us,        vs,        rs,        gs,        bs,
-                     tpx, tpy, mode, 0, clutx, cluty, 0, 0, 0, 0, 0, 0, 1023, 511);
-  gpu_vk_draw_tritri(c, &xs[1],    &ys[1],    &us[1],    &vs[1],    &rs[1],    &gs[1],    &bs[1],
-                     tpx, tpy, mode, 0, clutx, cluty, 0, 0, 0, 0, 0, 0, 1023, 511);
+  // No draw-area clip (full FB) — the engine, not the PSX draw-area register, owns HUD visibility (this is
+  // what fixed the old 4:3 da-clip that ate 2 of 3 balls). RQ_HUD sorts above the world; 2D-FG depth band.
+  rq_push_2d_quad(c, RQ_HUD, /*order_2d_fg=*/1, xs, ys, us, vs, rs, gs, bs,
+                  tpx, tpy, mode, /*raw=*/0, clutx, cluty, 0, 0, 0, 0, 0, 0, 1023, 511);
 }
 
 // FUN_8007E938 — HUD sprite-strip cell. Read the element's screen position (geom_a-16, geom_b-12) and the

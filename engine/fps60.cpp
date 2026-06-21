@@ -320,9 +320,19 @@ int Fps60State::build_lerp() {
 }
 
 void gpu_vk_shot(Core* core, const char* path);   // diagnostic: dump the CURRENT s_tex (the just-presented frame)
+// PSXPORT_DEBUG=fps60pass — prove the two 60fps presents emit the SAME COMPLETE frame: count the HUD-layer
+// items and the shadow-casting prims in a queue set. Both passes must report identical counts (the HUD and
+// the shadow are in the queue, so each pass emits them — no per-feature replay/keep_shadow).
+static void fps60_pass_stats(const char* tag, long fence, const RqItem* items, int n) {
+  static int on = -1; if (on < 0) on = cfg_dbg("fps60pass") ? 1 : 0; if (!on) return;
+  long hud = 0, shcast = 0;
+  for (int i = 0; i < n; i++) { if (items[i].layer == RQ_HUD) hud++; if (items[i].sh_cast) shcast++; }
+  fprintf(stderr, "[fps60pass] f%ld %s: prims=%d HUD=%ld shadow_cast=%ld\n", fence, tag, n, hud, shcast);
+}
 void Fps60State::fps60_present_vk(Core* core) {
   int nl = (s_have_prev && s_nCur > 0) ? build_lerp() : 0;
   if (nl > 0) {                                           // PASS 1 — the interpolated in-between
+    fps60_pass_stats("interp", s_fence, s_rqLerp, nl);
     for (int i = 0; i < nl; i++) gpu_emit_rq_item(core, &s_rqLerp[i]);
     gpu_fps60_present_pass(core);                         // show it + reset the VK batch (no s_frame++)
     // PSXPORT_FPS60_INTERPSHOT=path — one-shot: dump the INTERPOLATED in-between's s_tex (it persists until
@@ -339,6 +349,7 @@ void Fps60State::fps60_present_vk(Core* core) {
         fprintf(stderr, "[fps60] interp-frame shot (f%ld) -> %s\n", s_fence, path); } }
     gpu_pace_subframe(core, 2);
   }
+  fps60_pass_stats("real  ", s_fence, s_rqCur, s_nCur);
   for (int i = 0; i < s_nCur; i++) gpu_emit_rq_item(core, &s_rqCur[i]);   // PASS 2 — the real frame
   gpu_present_ex(core, 1);                                // present + per-logic-frame bookkeeping
   gpu_pace_subframe(core, nl > 0 ? 2 : 1);

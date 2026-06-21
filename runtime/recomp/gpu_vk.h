@@ -45,10 +45,6 @@ void gpu_vk_draw_semi(Core* core, const int* xs, const int* ys, const int* us, c
 // present / per-frame / readback
 void gpu_vk_present(Core* core, const uint16_t* src, int sx, int sy, int w, int h);
 void gpu_vk_frame_end(Core* core, const uint16_t* svram, int frame);
-// Like gpu_vk_frame_end but PRESERVES the captured shadow-geometry stream (s_shadow_n) — used by the
-// fps60 interpolated present-pass so the SECOND (real) present of the same logic frame rasterizes the
-// SAME shadow map (no 30Hz shadow strobe). See GpuVkState::frame_end.
-void gpu_vk_frame_end_keepshadow(Core* core, const uint16_t* svram, int frame);
 void gpu_vk_shot(Core* core, const char* path);
 void gpu_vk_stats(Core* core, int* tri, int* tex, int* semi);
 void gpu_vk_tritest(Core* core);

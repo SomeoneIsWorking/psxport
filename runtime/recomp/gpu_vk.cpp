@@ -1922,20 +1922,20 @@ void gpu_vk_vram_raw(const char* path) {
   fprintf(stderr, "[vk_vram] wrote RAW %s (%dx%d u16)\n", path, VRAM_W, VRAM_H);
 }
 
-// Per-frame: reset the tee'd-primitive batch for the next frame.
-// keep_shadow: the fps60 interpolated present-pass passes 1 here so the captured shadow GEOMETRY stream
-// survives into the SECOND (real) present of the same logic frame. The shadow geometry is captured ONCE
-// during the engine submit walk (at the real frame-B world positions); both the interpolated in-between
-// and the real frame must rasterize the SAME shadow map, else only the pass that consumed the stream gets
-// a shadow and it STROBES at 30Hz. Per the user's 60fps design the dynamic shadow is NOT interpolated — it
-// comes from the real composite (B positions) on both displayed frames (may lag a mover by half a frame on
-// the in-between; that is the accepted cheap tradeoff). The draw batch (s_tri/tex/semi) is always reset.
-void GpuVkState::frame_end(const uint16_t* svram, int frame, int keep_shadow) {
+// Per-PRESENT reset of the host-side geometry batch (draw prims + shadow stream).
+// One pipeline: each present pass emits the WHOLE render queue (color prims AND, via gpu_emit_rq_item, the
+// shadow tris carried on each opaque world item — render_queue.h sh_cast), then presents through the full
+// pipeline (panel_render: opaque/semi + shadow_pass + ssao_pass), then resets EVERYTHING here. The next
+// pass refills both streams by re-emitting the same queue, so the shadow map rebuilds identically on every
+// pass with no side-channel. This is why the old keep_shadow flag is gone — there is no asymmetric pass to
+// preserve a stream for. (Per the user's 60fps design shadows are not interpolated: build_lerp leaves the
+// view-space sh_v* at B positions, so both passes cast the same shadow.)
+void GpuVkState::frame_end(const uint16_t* svram, int frame) {
   (void)svram; (void)frame;
-  if (!gpu_vk_enabled() || !s_inited) { s_tri_n = 0; if (!keep_shadow) s_shadow_n = 0; return; }
+  if (!gpu_vk_enabled() || !s_inited) { s_tri_n = 0; s_shadow_n = 0; return; }
   s_tri_n = 0; s_tex_n = 0; s_semi_n = 0; s_dirty_n = 0;
   s_semi_grp_n = 0; s_sg_valid = 0;
-  if (!keep_shadow) { s_shadow_n = 0; s_shadow_lvp_valid = 0; }   // per-frame host geometry stream
+  s_shadow_n = 0; s_shadow_lvp_valid = 0;   // per-pass host geometry stream (refilled by the next queue emit)
 }
 
 // PSXPORT_VK_TRITEST=1: headless-ish self-test of the triangle rasterizer. Draws a known flat tri and a
@@ -1986,7 +1986,6 @@ void gpu_vk_draw_tritri(Core* core, const int* xs, const int* ys, const int* us,
 void gpu_vk_draw_semi(Core* core, const int* xs, const int* ys, const int* us, const int* vs, const unsigned char* rs, const unsigned char* gs, const unsigned char* bs, int tpx, int tpy, int mode, int raw, int clutx, int cluty, int twmx, int twmy, int twox, int twoy, int dax0, int day0, int dax1, int day1, int blend) { core->game->gpu_vk.draw_semi(xs,ys,us,vs,rs,gs,bs,tpx,tpy,mode,raw,clutx,cluty,twmx,twmy,twox,twoy,dax0,day0,dax1,day1,blend); }
 void gpu_vk_shot(Core* core, const char* path) { core->game->gpu_vk.shot(path); }
 void gpu_vk_frame_end(Core* core, const uint16_t* svram, int frame) { core->game->gpu_vk.frame_end(svram, frame); }
-void gpu_vk_frame_end_keepshadow(Core* core, const uint16_t* svram, int frame) { core->game->gpu_vk.frame_end(svram, frame, 1); }
 void gpu_vk_tritest(Core* core) { core->game->gpu_vk.tritest(); }
 #else
 #include <stdint.h>
@@ -1994,7 +1993,6 @@ int  gpu_vk_enabled(void) { return 0; }
 void gpu_vk_present(Core* core, const uint16_t* src, int sx, int sy, int w, int h) { (void)core;(void)src;(void)sx;(void)sy;(void)w;(void)h; }
 void gpu_vk_tritest(Core* core) { (void)core; }
 void gpu_vk_frame_end(Core* core, const uint16_t* svram, int frame) { (void)core;(void)svram; (void)frame; }
-void gpu_vk_frame_end_keepshadow(Core* core, const uint16_t* svram, int frame) { (void)core;(void)svram; (void)frame; }
 void gpu_vk_shot(Core* core, const char* path) { (void)core;(void)path; }
 void gpu_vk_set_order(Core* core, unsigned idx) { (void)core;(void)idx; }
 void gpu_vk_set_order_2d(Core* core, unsigned idx) { (void)core;(void)idx; }

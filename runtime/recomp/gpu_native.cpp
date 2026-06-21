@@ -517,9 +517,18 @@ void GpuState::set_clut(uint16_t cl) { s_clut_x = (cl & 0x3F) * 16; s_clut_y = (
 // lives ONLY here; both the inline draw and the engine render-queue flush funnel through it. set_order
 // uses the live GpuState counter so the order value reflects actual emit sequence (the 2D-fallback/
 // faithful-depth band); real per-vertex depth (set_vd) drives true occlusion for world prims.
+void gpu_vk_shadow_push_tri(Core* core, const float* v0, const float* v1, const float* v2);
 void gpu_emit_rq_item(Core* core, const RqItem* it) {
   if (!gpu_vk_enabled()) return;
   GpuState& s = core->game->gpu;
+  // Shadow geometry is part of the frame: re-push this prim's view-space verts to the shadow VBO on EVERY
+  // emit, so the shadow map rebuilds identically on each 60fps present pass (no keep_shadow side-channel).
+  // gpu_vk_shadow_push_tri no-ops when shadows are off; verts are the B (un-interpolated) positions.
+  if (it->sh_cast) {
+    float v[4][3]; for (int k = 0; k < 4; k++) { v[k][0]=it->sh_vx[k]; v[k][1]=it->sh_vy[k]; v[k][2]=it->sh_vz[k]; }
+    gpu_vk_shadow_push_tri(core, v[0], v[1], v[2]);
+    if ((it->nv ? it->nv : 4) == 4) gpu_vk_shadow_push_tri(core, v[1], v[2], v[3]);
+  }
   const int* xs = it->xs; const int* ys = it->ys; const int* us = it->us; const int* vs = it->vs;
   const unsigned char* rs = it->rs; const unsigned char* gs = it->gs; const unsigned char* bs = it->bs;
   const float* depth = it->depth; int mode = it->mode, raw = it->raw, nv = it->nv ? it->nv : 4;
@@ -575,11 +584,16 @@ static void rq_emit_or_queue(Core* core, int capture, int layer, int order_mode,
                              const unsigned char* rs, const unsigned char* gs, const unsigned char* bs,
                              const float* depth, int mode, int tp_x, int tp_y, int clut_x, int clut_y,
                              int tw_mx, int tw_my, int tw_ox, int tw_oy, int da_x0, int da_y0, int da_x1, int da_y1,
-                             int tp_blend) {
+                             int tp_blend, const float (*sv)[3] = nullptr) {
   RqItem it;
   it.layer = (uint8_t)layer; it.semi = semi ? 1 : 0; it.nv = (uint8_t)nv; it.raw = raw ? 1 : 0;
   it.order_mode = (uint8_t)order_mode;
   it.fps_world = 0;   // fps60 capture: cleared here, set only by fps60_stamp_world on GTE-composed world prims
+  // Shadow capture: an opaque world prim with view-space verts casts into the shadow map. Carried on the
+  // item so gpu_emit_rq_item re-pushes it to the shadow VBO on EVERY emit (= on both 60fps present passes).
+  it.sh_cast = sv ? 1 : 0;
+  if (sv) for (int k = 0; k < 4; k++) { int s = k < nv ? k : nv - 1;
+            it.sh_vx[k] = sv[s][0]; it.sh_vy[k] = sv[s][1]; it.sh_vz[k] = sv[s][2]; }
   it.has_xyf = (xsf && ysf) ? 1 : 0;   // sub-pixel float XY (vertex smoothing) supplied by the world path
   for (int i = 0; i < nv; i++) { it.xs[i]=xs[i]; it.ys[i]=ys[i]; it.us[i]=us[i]; it.vs[i]=vs[i];
                                  it.xsf[i]= it.has_xyf ? xsf[i] : (float)xs[i];
@@ -593,9 +607,13 @@ static void rq_emit_or_queue(Core* core, int capture, int layer, int order_mode,
   else         gpu_emit_rq_item(core, &it);
 }
 
+// sv (optional, NULL = no shadow): the prim's 4 VIEW-SPACE verts (x=vx, y=vy, z=pz) for the shadow map.
+// When non-NULL and opaque, the queued item carries them and gpu_emit_rq_item re-pushes them as two tris
+// to the shadow VBO on every emit (= on both 60fps present passes — see render_queue.h sh_cast).
 void gpu_draw_world_quad(Core* core, const float* px, const float* py, const float* depth,
                          const int* u, const int* v, const uint8_t* r, const uint8_t* g,
-                         const uint8_t* b, uint16_t tp, uint16_t clut, int semi) {
+                         const uint8_t* b, uint16_t tp, uint16_t clut, int semi,
+                         const float (*sv)[3]) {
   if (!gpu_vk_enabled()) return;
   GpuState& s = core->game->gpu;
   s.set_texpage(tp);
@@ -613,10 +631,27 @@ void gpu_draw_world_quad(Core* core, const float* px, const float* py, const flo
     us[i] = u[i]; vs[i] = v[i]; rs[i] = r[i]; gs[i] = g[i]; bs[i] = b[i];
   }
   // World geometry: engine layer WORLD with real per-vertex depth. The queue is the render path.
+  // Only opaque prims cast a shadow (semi water etc. must not occlude the light); drop the cast if semi.
+  const float (*cast)[3] = (sv && !semi) ? sv : nullptr;
   rq_emit_or_queue(core, 1, RQ_WORLD, RQ_OM_DEPTH, 4, semi ? 1 : 0, 0,
                    xs, ys, xsf, ysf, us, vs, rs, gs, bs, depth, s.s_tp_mode,
                    s.s_tp_x, s.s_tp_y, s.s_clut_x, s.s_clut_y, s.s_tw_mx, s.s_tw_my, s.s_tw_ox, s.s_tw_oy,
-                   s.s_da_x0, s.s_da_y0, s.s_da_x1, s.s_da_y1, s.s_tp_blend);
+                   s.s_da_x0, s.s_da_y0, s.s_da_x1, s.s_da_y1, s.s_tp_blend, cast);
+}
+
+// 2D quad enqueue (HUD / overlay) — funnels through rq_emit_or_queue so a 2D drawable is a queued RqItem
+// (part of THE FRAME), not a direct gpu_vk_draw_tritri that lands on only one 60fps present pass.
+void rq_push_2d_quad(Core* core, int layer, int order_2d_fg,
+                     const int* xs, const int* ys, const int* us, const int* vs,
+                     const unsigned char* rs, const unsigned char* gs, const unsigned char* bs,
+                     int tp_x, int tp_y, int mode, int raw, int clut_x, int clut_y,
+                     int tw_mx, int tw_my, int tw_ox, int tw_oy, int da_x0, int da_y0, int da_x1, int da_y1) {
+  if (!gpu_vk_enabled()) return;
+  int om = order_2d_fg ? RQ_OM_2D_FG : RQ_OM_2D_BG;
+  rq_emit_or_queue(core, 1, layer, om, 4, 0, raw,
+                   xs, ys, nullptr, nullptr, us, vs, rs, gs, bs, nullptr, mode,
+                   tp_x, tp_y, clut_x, clut_y, tw_mx, tw_my, tw_ox, tw_oy,
+                   da_x0, da_y0, da_x1, da_y1, 0, nullptr);
 }
 
 // Begin a primitive for provenance tracking: bump the global id and record this prim's details
@@ -1468,13 +1503,12 @@ void GpuState::gpu_clear_display(Core* core) { gpu_blank_display(); gpu_present(
 // pass). fps60 emits the interpolated RqItems, calls this to show them, then emits the real frame.
 void GpuState::gpu_fps60_present_pass(Core* core) {
   present_window();                          // blit_src(s_vram) -> gpu_vk_present renders the batch + shows
-  // KEEP the shadow-geometry stream: it was captured ONCE (at the real frame-B world positions) during the
-  // engine submit walk, and the REAL present (gpu_present_ex -> panel_render -> shadow_pass) that follows
-  // this interpolated pass must rasterize the SAME shadow map. A plain gpu_vk_frame_end here would zero
-  // s_shadow_n, leaving the real frame shadow-less -> the dynamic shadow would strobe at 30Hz. (The shadow
-  // is intentionally NOT interpolated; per the 60fps design it comes from the real composite on both
-  // displayed frames — see GpuVkState::frame_end / docs.)
-  gpu_vk_frame_end_keepshadow(core, s_vram, s_frame);   // submit/diff + reset the VK DRAW batch (shadow kept)
+  // Plain per-present reset: this pass emitted the WHOLE queue (color prims AND the shadow tris carried on
+  // each opaque world item, via gpu_emit_rq_item) and presented through the full pipeline (panel_render ->
+  // shadow_pass + ssao_pass). frame_end resets BOTH the draw batch and the shadow stream; the REAL pass
+  // that follows re-emits the same queue, rebuilding an identical shadow map. No keep_shadow side-channel —
+  // both 60fps presents are the same full pipeline by construction, so the shadow/HUD/2D are correct on both.
+  gpu_vk_frame_end(core, s_vram, s_frame);   // submit/diff + reset the VK draw + shadow batch
   s_prim_order = 0;                          // restart per-frame OT submission order for the next pass
 }
 

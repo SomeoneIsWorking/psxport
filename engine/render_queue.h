@@ -59,6 +59,16 @@ struct RqItem {
                            // [8]=CR24 OFX, [9]=CR25 OFY, [10]=CR26 H — proj_native_xform reads all of these.
   int16_t  fps_mv[4][3];   // per-vertex MODEL-space coords = the input to proj_native_xform
   int16_t  fps_offx, fps_offy;  // draw offset baked into xs/ys (so a reproject reproduces them exactly)
+
+  // ---- dynamic-shadow capture (host-only) ----------------------------------------------------------
+  // Opaque world prims cast into the shadow map. The shadow GEOMETRY is part of THE FRAME (the queue),
+  // not a side-channel: it is carried here and re-pushed to the shadow VBO by gpu_emit_rq_item every time
+  // this item is emitted. Because the queue is emitted on BOTH 60fps present passes, the shadow map is
+  // rebuilt identically on each — no keep_shadow side-channel, no strobe. View space = (x=vx, y=vy, z=pz),
+  // the metric view space the deferred/light pass reconstructs; never interpolated (B positions on both
+  // passes — build_lerp leaves these untouched), per the user's "shadows are not interpolated" design.
+  uint8_t  sh_cast;        // 1 = opaque world prim that casts a shadow (push sh_v* as two tris at emit)
+  float    sh_vx[4], sh_vy[4], sh_vz[4];   // view-space verts (the shadow VBO input)
 };
 
 #define RQ_MAX 32768
@@ -83,5 +93,14 @@ void rq_flush(Core* core);             // emit the frame's queued items in engin
 // Emit one resolved item to the VK rasterizer (defined in gpu_native.cpp, where the gpu_vk_* draw
 // entries live). Used by both the inline path and the queue flush so emission logic lives in one place.
 void gpu_emit_rq_item(Core* core, const RqItem* it);
+
+// Enqueue a 2D textured quad (HUD / overlay) into the render queue so it is part of THE FRAME and gets
+// re-emitted on both 60fps present passes (no direct gpu_vk_draw_tritri bypass that lands on one pass).
+// layer = RQ_OVERLAY / RQ_HUD; order picks the 2D far/near band. Defined in gpu_native.cpp (RqItem fill).
+void rq_push_2d_quad(Core* core, int layer, int order_2d_fg,
+                     const int* xs, const int* ys, const int* us, const int* vs,
+                     const unsigned char* rs, const unsigned char* gs, const unsigned char* bs,
+                     int tp_x, int tp_y, int mode, int raw, int clut_x, int clut_y,
+                     int tw_mx, int tw_my, int tw_ox, int tw_oy, int da_x0, int da_y0, int da_x1, int da_y1);
 
 #endif
