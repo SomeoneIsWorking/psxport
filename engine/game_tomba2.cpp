@@ -286,6 +286,31 @@ void ov_cone_cull_2b278(Core* c) {
   c->r[2] = (uint32_t)cone_cull_2b278(c, 1);
 }
 
+// FUN_8009A450 — the platform PRNG (`rand`): the classic glibc LCG state*0x41C64E6D + 12345, state at
+// 0x80105EE8, returns (state>>16)&0x7FFF. Called from many hot per-frame loops (particle/effect jitter,
+// range-random 0x80032A44). Pure platform primitive — exact native reimplementation (mult low word =
+// mflo). `randverify` (lazy REPL gate) snapshots/restores the state word and A/B's v0 + new state vs the
+// recomp body.
+static inline uint32_t rand_lcg(Core* c) {
+  uint32_t st = c->mem_r32(0x80105EE8u) * 0x41C64E6Du + 12345u;
+  c->mem_w32(0x80105EE8u, st);
+  return (st >> 16) & 0x7FFFu;
+}
+void ov_rand(Core* c) {
+  static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("randverify") ? 1 : 0;
+  if (!s_v) { c->r[2] = rand_lcg(c); return; }
+  uint32_t st0 = c->mem_r32(0x80105EE8u);
+  uint32_t mine = rand_lcg(c); uint32_t st_n = c->mem_r32(0x80105EE8u);
+  c->mem_w32(0x80105EE8u, st0);                      // restore
+  rec_super_call(c, 0x8009A450u);
+  static long ng = 0, nb = 0;
+  if (c->r[2] != mine || c->mem_r32(0x80105EE8u) != st_n) {
+    if (nb++ < 20) fprintf(stderr, "[randverify] MISMATCH v0 mine=%x oracle=%x state mine=%x oracle=%x\n",
+                          mine, (uint32_t)c->r[2], st_n, c->mem_r32(0x80105EE8u));
+  } else if (++ng % 20000 == 0) fprintf(stderr, "[randverify] %ld matches\n", ng);
+  c->r[2] = mine; c->mem_w32(0x80105EE8u, st_n);     // keep native
+}
+
 
 static void ov_object_cull(Core* c) {
   uint32_t prev = c->game->fps60.current_object;
@@ -755,6 +780,7 @@ void games_tomba2_init(void) {
     rec_set_override(0x800597ACu, ov_orch597AC);       // per-object world-transform orchestrator (build matrix + secondary + child propagate)
     { void ov_cone_cull_2b278(Core*);
       rec_set_override(0x8002B278u, ov_cone_cull_2b278); }  // view-cone cull (lazy conecull gate)
+    { void ov_rand(Core*); rec_set_override(0x8009A450u, ov_rand); }   // platform PRNG (rand LCG)
   }
   // PC-native LEVEL/STAGE LOADER (engine/engine_level.cpp): the engine's overlay loader FUN_800450bc —
   // load a stage's overlay off the disc + set its entry, synchronous (no PSX CD-wait yield).
