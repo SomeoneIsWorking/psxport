@@ -18,6 +18,15 @@ void gpu_vk_video_status(int* native_w, int* ires, int* fbw, int* fbh,
 static bool            s_inited  = false;
 static bool            s_visible = true;
 static bool            s_options_mode = false;   // true while we stand in for the game's in-game Options menu
+
+// Live world readout (camera/Tomba position + stage), pushed each frame from gpu_vk before NewFrame.
+// Always-on small corner HUD so the user can navigate to a target scene and report coordinates.
+static int      s_wpos[3] = {0,0,0};   // camera position x,y,z (int16 world units, scratchpad 0x1F8000D2/DA/D6)
+static uint32_t s_wstage  = 0;         // current stage entry pointer (*0x801fe00c)
+static int      s_wvalid  = 0;
+extern "C" void imgui_overlay_set_world(int x, int y, int z, unsigned stage) {
+  s_wpos[0] = x; s_wpos[1] = y; s_wpos[2] = z; s_wstage = stage; s_wvalid = 1;
+}
 static VkDevice        s_dev     = VK_NULL_HANDLE;
 static VkDescriptorPool s_pool   = VK_NULL_HANDLE;
 
@@ -162,12 +171,32 @@ static void draw_pause_indicator(void) {
   dl->AddRectFilled(ImVec2(bx + bw + gap, by), ImVec2(bx + bw * 2 + gap, by + bh), col, 1.5f * s);
 }
 
+// Always-on coordinate HUD (top-right): camera/Tomba world position + stage. Lets the user walk to a
+// target scene (barrel #5 / flame hut #4) and read off where they are so the agent can drive there.
+static void draw_world_readout(void) {
+  if (!s_wvalid) return;
+  ImGuiIO& io = ImGui::GetIO();
+  ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x - 12, 12), ImGuiCond_Always, ImVec2(1.0f, 0.0f));
+  ImGui::SetNextWindowBgAlpha(0.55f);
+  ImGuiWindowFlags f = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
+                       ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing |
+                       ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_AlwaysAutoResize;
+  if (ImGui::Begin("##worldpos", nullptr, f)) {
+    const char* sname = s_wstage == 0x8010637Cu ? "GAME" : s_wstage == 0x801062E4u ? "DEMO"
+                      : s_wstage == 0x8010649Cu ? "START" : "?";
+    ImGui::Text("pos  X %d  Y %d  Z %d", s_wpos[0], s_wpos[1], s_wpos[2]);
+    ImGui::Text("stage %s (0x%08X)", sname, s_wstage);
+  }
+  ImGui::End();
+}
+
 void imgui_overlay_new_frame(void) {
   if (!s_inited) return;
   ImGui_ImplVulkan_NewFrame();
   ImGui_ImplSDL2_NewFrame();
   ImGui::NewFrame();
   if (s_visible) build_ui();
+  draw_world_readout();
   draw_pause_indicator();
   ImGui::Render();
 }

@@ -21,6 +21,8 @@ void imgui_overlay_set_visible(int v);          // force show/hide (used when it
 // Options-mode: the overlay is currently standing in for the game's in-game Options menu. Suppresses the
 // `~`/F1 toggle (the game owns exit via Circle/Triangle) and shows the in-game back/close hint instead.
 void imgui_overlay_set_options_mode(int v);
+// Push the live world readout (camera/Tomba position + current stage) for the always-on corner HUD.
+void imgui_overlay_set_world(int x, int y, int z, unsigned stage);
 #ifdef __cplusplus
 }
 #endif
