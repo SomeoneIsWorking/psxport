@@ -21,6 +21,7 @@
 #include "game.h"   // Fps60State::current_object (was g_current_object)
 #include "cfg.h"
 #include "mods.h"   // g_mods — live PC-native lighting params (engine-native shading, not a deferred pass)
+#include "lighting.h" // PER-AREA light registry (sun / lava+torch); selected per frame in engine_shade_select
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -313,20 +314,51 @@ static inline void fps60_stamp(Core* c, const ProjVtx* p, int nv) {
 // on — it never touches semi-transparent surfaces (water etc.), so translucency is unaffected by
 // construction (that was the deferred pass's bug: it re-shaded/clobbered pixels behind translucent water).
 // Light dir is the to-light vector in view space (g_mods.light_dir), same convention as the retired pass.
+// PER-AREA lighting (engine/lighting.cpp): the directional light is now COLOURED and AREA-SELECTED (open
+// areas get a warm SUN, mines get a dim cave ambient), plus optional POINT lights (lava up-glow / torches)
+// attenuated by the face's view-space position. Config picked once per frame in engine_shade_select() (the
+// renderer caches it so this hot per-face routine doesn't re-read guest RAM). lit is now per-CHANNEL: each
+// vertex colour is modulated by (ambient_col*ambient + dir_col*diffuse*N·L + Σ point_col*att*N·L).
+static const LightConfig* s_shade_cfg = 0;   // selected per frame; falls back to the SUN default if unset
+void engine_shade_select(Core* c) {          // called once per world frame before the submitters run
+  unsigned key = lighting_area_key_from(
+      [](void* ctx, unsigned a) -> unsigned { return ((Core*)ctx)->mem_r32(a); }, c);
+  s_shade_cfg = lighting_select(key);
+}
 static inline void engine_shade_face(const ProjVtx* p, int nv, uint8_t r[4], uint8_t g[4], uint8_t b[4]) {
   if (!g_mods.light) return;
+  const LightConfig* cfg = s_shade_cfg ? s_shade_cfg : lighting_default();
   float e1x = p[1].vx - p[0].vx, e1y = p[1].vy - p[0].vy, e1z = p[1].vz - p[0].vz;
   float e2x = p[2].vx - p[0].vx, e2y = p[2].vy - p[0].vy, e2z = p[2].vz - p[0].vz;
   float nx = e1y * e2z - e1z * e2y, ny = e1z * e2x - e1x * e2z, nz = e1x * e2y - e1y * e2x;
   float ln = sqrtf(nx*nx + ny*ny + nz*nz); if (ln < 1e-6f) return;
   nx /= ln; ny /= ln; nz /= ln;
   if (nz > 0.0f) { nx = -nx; ny = -ny; nz = -nz; }            // face the camera (view -Z)
-  float lx = g_mods.light_dir[0], ly = g_mods.light_dir[1], lz = g_mods.light_dir[2];
+  // directional key light (coloured): ambient_col*ambient + dir_col*diffuse*max(0,N·L).
+  float lx = cfg->dir[0], ly = cfg->dir[1], lz = cfg->dir[2];
   float ll = sqrtf(lx*lx + ly*ly + lz*lz); if (ll > 1e-6f) { lx /= ll; ly /= ll; lz /= ll; }
   float ndl = nx*lx + ny*ly + nz*lz; if (ndl < 0.0f) ndl = 0.0f;
-  float lit = g_mods.light_ambient + g_mods.light_diffuse * ndl;
+  float litR = cfg->ambient_color[0]*cfg->ambient + cfg->dir_color[0]*cfg->dir_intensity*ndl;
+  float litG = cfg->ambient_color[1]*cfg->ambient + cfg->dir_color[1]*cfg->dir_intensity*ndl;
+  float litB = cfg->ambient_color[2]*cfg->ambient + cfg->dir_color[2]*cfg->dir_intensity*ndl;
+  // point lights (lava up-glow / torches): face-centre view-space pos, soft falloff to radius, N·L diffuse.
+  if (cfg->num_points > 0) {
+    float cxp = (p[0].vx + p[1].vx + p[2].vx) * (1.0f/3.0f);
+    float cyp = (p[0].vy + p[1].vy + p[2].vy) * (1.0f/3.0f);
+    float czp = (p[0].vz + p[1].vz + p[2].vz) * (1.0f/3.0f);
+    for (int i = 0; i < cfg->num_points; i++) {
+      const PointLight* pl = &cfg->points[i];
+      float dx = pl->pos[0]-cxp, dy = pl->pos[1]-cyp, dz = pl->pos[2]-czp;
+      float d = sqrtf(dx*dx+dy*dy+dz*dz);
+      float rad = pl->radius > 1.0f ? pl->radius : 1.0f;
+      float att = 1.0f - d/rad; if (att < 0.0f) att = 0.0f; att *= att;   // soft quadratic falloff
+      float pdl = (d > 1e-3f) ? (nx*dx + ny*dy + nz*dz)/d : 0.0f; if (pdl < 0.0f) pdl = 0.0f;
+      float w = pl->intensity * att * pdl;
+      litR += pl->color[0]*w; litG += pl->color[1]*w; litB += pl->color[2]*w;
+    }
+  }
   for (int k = 0; k < nv; k++) {
-    int rr = (int)(r[k] * lit + 0.5f), gg = (int)(g[k] * lit + 0.5f), bb = (int)(b[k] * lit + 0.5f);
+    int rr = (int)(r[k] * litR + 0.5f), gg = (int)(g[k] * litG + 0.5f), bb = (int)(b[k] * litB + 0.5f);
     r[k] = (uint8_t)(rr > 255 ? 255 : rr); g[k] = (uint8_t)(gg > 255 ? 255 : gg); b[k] = (uint8_t)(bb > 255 ? 255 : bb);
   }
 }
@@ -1126,6 +1158,9 @@ void terrain_prep_object_matrix(Core* c, uint32_t node) {
 void terrain_render_pc(Core* c);             // engine/native_terrain.cpp — PC-native float terrain render
 void ov_terrain(Core* c) {
   if (cfg_dbg("terrgte")) fprintf(stderr, "[ov_terrain] node(a0=r4)=%08X\n", c->r[4]);
+  // Pick this area's light config ONCE per world frame (terrain renders first); the per-face shader reads
+  // the cached pointer. Cheap guest-RAM fingerprint read; unknown area -> village SUN default.
+  if (g_mods.light) engine_shade_select(c);
   // Dual-core diff: the `b` core neutralizes terrain to the recomp body via a per-Game flag (the override
   // table is shared; the per-core choice is this flag, not a divergent table). `a` keeps the native path.
   if (c->game->neutralize_terrain) { rec_super_call(c, 0x8002AB5Cu); return; }
