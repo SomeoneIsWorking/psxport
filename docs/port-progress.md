@@ -630,6 +630,25 @@ in-port profiler (later-186, `interp.cpp`) gives the TIME + FREQUENCY histograms
 ---
 
 # CURRENT FRONTIER (work these, in this order)
+**SESSION 2026-06-21 (later-200) — FILE ORGANIZATION + "PC-owned applies to EVERYTHING".**
+- **SWEEP landed (99e6df5):** `engine/game_tomba2.cpp` split 2042→300 lines into 8 discrete subsystem
+  modules — `engine/{mathlib,cull,collision,entity,script,animation,input,menu}.{cpp,h}`. Pure file
+  organization (USER goal #1: distinct per-subsystem files, no piling into one file). Verified 0-diff:
+  full RAM+scratchpad A/B at the GAME field (newgame; skip 650; run 8) IDENTICAL vs pre-sweep main.
+- **USER DIRECTIVE (2026-06-21): "PC owned" applies to EVERYTHING — incl. HUD/UI.** A native fn that
+  mirrors the PSX stack frame, `rec_dispatch`es the PSX emitter, rebuilds the guest packet byte-for-byte,
+  and gates on full-RAM 0-diff is STILL a PSX transcription — the WRONG deliverable. The RAM-byte gate is
+  ONLY for the content-INTERFACE (guest RAM still-recomp content reads), NOT the definition of "owned".
+  Own engine systems by REBUILDING PC-native + gating on the OBSERVABLE RESULT (USER eyeball).
+- **REJECTED (not landed):** `engine/hud.cpp` (FUN_8007E938/8007E8DC) and `engine/inventory.cpp` —
+  both built by prior subagents as PSX transcriptions (mirror frame + rec_dispatch + `hudverify`/`invverify`
+  RAM-diff gate). hud.cpp even spilled a 0xDEAD0000 sentinel `ra` into a guest stack slot (the frame
+  transcription leaking). HUD must be REBUILT: read gauge/weapon-icon STATE → draw textured quads with the
+  PC renderer. Worktrees: agent-ae0c0c3e (HUD), agent-a10b61c3 (inventory).
+- **IN PROGRESS:** offline WALKING-DUST sprite-sheet exporter (USER headline) — own the BAV cel format,
+  decode the seaside slot-1 17-frame 8bpp dust cel OFFLINE from the disc (extends `tools/tex_export.cpp`;
+  uses `engine/engine_bav.cpp` BAV-loader RE). Disc now wired in `.env`.
+
 **USER REDIRECT 2026-06-20 (later-177) — supersedes the camera items below.** Port top-down boot→gameplay;
 the ASSET PIPELINE must be fully PC-owned so assets reconstruct with the emulator OFF. Acceptance test:
 reconstruct the sea backdrop bit-identical.
