@@ -165,6 +165,15 @@ for content fns (call it). Do NOT mimic PSX hardware (GTE/GP0/OT) — remove Bee
   glue per THE BOUNDARY). Native BGM bodies + full RE retained in sound.cpp as the documented reference for a
   future pass (own the SsSeqPlay voice allocator too). Replaces native_boot ov_bgm_start/stop.
 - ✅ `FUN_8007a904` object/entity WALK = `ov_objwalk` (engine_tomba2.cpp) — the per-frame object driver.
+- ✅ **SPAWN subsystem — FULLY OWNED (engine/entity_spawn.cpp, later-208).** All 5 pool spawn primitives
+  + both dispatchers PC-native: `FUN_80079C3C` (pool-208, cnt<3 guard), `FUN_80079DDC` (pool-2, delegates
+  to 79F90 when empty), `FUN_80079F90`/`FUN_8007A12C`/`FUN_8007A2C8` (pool variants, empty→return 0) all
+  share one `spawn_link_stamp`; `FUN_8007A980` per-type spawn dispatcher (table 0x80016E4C, ref=0/mode=3)
+  + `FUN_8007AA38` spawn-relative-to-object dispatcher (table 0x80016E64, guards obj[+0x0a]==a3, passes
+  caller mode/list). **Fixed a real latent bug in the shared link/stamp:** when the target active list is
+  EMPTY the recomp inits BOTH end pointers (head-insert also writes *tail, and vice-versa); the native body
+  set only one end → empty-list inserts diverged at the list head ptr. Gates: spawnverify, spawndispverify,
+  spawnvarverify all 0-diff; pool2verify/replacedispverify not exercised at seaside (0 calls, RE-verified).
 - ✅ `FUN_8007712c` per-object CULL / LOD = `ov_object_cull` (game_tomba2.cpp). **BODY now PC-native
   (later-188)** — was a `rec_super_call` WRAP (recomp body ran hot, ~11.2% of sampled interp time); now
   `cull_native_body` reimplements the full decision (RE'd from the disasm: jump table 0x80016cc0, 5 state

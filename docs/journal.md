@@ -7150,3 +7150,46 @@ symbols). ALWAYS `build_port.sh all` after touching render_queue.h / game.h / co
 "core.h/game.h edits need build_port.sh all" note — extend it to render_queue.h.)
 ALSO: `PSXPORT_DEBUG=<chan>` env does NOT enable channels (no startup getenv→cfg_dbg_set wiring); channels are
 REPL-only via `debug <chan>` — already in memory, re-confirmed here.
+
+---
+
+## later-208 (2026-06-21) — SPAWN subsystem fully owned + a latent empty-list bug; HUD item-popup RE (HP-gauge correction)
+
+**SPAWN subsystem — DONE (engine/entity_spawn.cpp).** Owned the remaining pieces so the engine now owns
+object spawning end-to-end:
+- `FUN_80079F90` / `FUN_8007A12C` / `FUN_8007A2C8` — the three remaining pool spawn primitives (dispatcher
+  classes 2/3/4). RE'd from disas: each is the pool-2 pop+link+stamp with a different free-list head +
+  count byte, and returns 0 (jr ra; v0=zero) when its pool is empty — NO delegation (unlike pool-2, which
+  delegates to 79F90). Free-head/count: var2=(0x800F2398,0x800ED8CC), var3=(0x800ED8D4,0x800ED8C5),
+  var4=(0x800ED8D0,0x800ED8C4). All share `spawn_link_stamp`. Gate `spawnvarverify` 0-diff.
+- `FUN_8007AA38` — spawn-RELATIVE-to-object dispatcher (table 0x80016E64). Guards `(u8)obj[+0x0a]==a3`,
+  then `cls=(a1>>8)&0x7f; type=a1&0xff; if(cls>=5) return 0; return SPAWN_VAR[cls](obj,type,a2,a3)` (the 5
+  thin handlers 0x8007aa90..aad0 each `a1&=0xff; jal SPAWN_VAR[class]`). Unlike FUN_8007A980 it passes the
+  caller's mode (a2) and list (a3) through. Gate `replacedispverify` (not exercised at seaside, 0 calls,
+  like pool2verify — RE-verified). Commits 3a67eb6 + 71b63f1.
+
+**REAL BUG fixed in the shared `spawn_link_stamp`:** when the target active list is EMPTY, the recomp
+initializes BOTH end pointers — a head-insert also writes `*tail`, a tail-insert also writes `*head`. The
+native body only set the one end, so an empty-list insert diverged at the list head ptr 0x800F2624 (caught
+by spawnvarverify; the seaside-only spawnverify never hit an empty active list). The fix applies to all
+five primitives (79C3C/79DDC were latently wrong too, just never exercised empty at seaside).
+
+**HUD item-popup RE — and a CORRECTION to an HP-gauge mis-read.** While hunting Tomba's HP global via code:
+the HUD gauge/counter renderer is `FUN @0x80039110` (helper FUN_8007E938; 12 callers found by scanning for
+`jal 0x8007e938`). It sets `s3 = 0x800BF870` (save block B) and reads B+0x1c..0x1f + flags B+0x11.
+INITIALLY mis-read B+0x1c as "HP segment count". WRONG — verified against the item-event dispatcher
+`FUN @~0x8004a3xx-0x8004a7xx`: that handler, per acquired item, writes `B+0x1c = item id` and `B+0x1d =
+category (1 or 2)` and calls the give-wrapper 0x8004d4c4. So **B+0x1c..0x1f are the RECENTLY-ACQUIRED-ITEM
+HUD popup (icon id + category), NOT a persistent HP/AP gauge** (FUN_800376ec draws an item icon by id, not
+a segment bar). Consistent with the inventory "recently-acquired ring" (B+0x13 len, B+0x14 data). DO NOT
+treat B+0x1c as HP.
+- The persistent **HP / AP gauge global is still UNFOUND**. Live-confirming it is also BLOCKED in the
+  reachable seaside field: B+0x11 (the HUD-enable flags the drawer gates on) reads 0 after `newgame; skip
+  700; run 240` AND after `tap start` drives — i.e. the HP/AP gauge is NOT active there (same reachability
+  wall as the apple-on-a-log scene; matches docs/reference/issues/issue6_12_re.md "AP-gauge state not
+  reachable headless").
+- **LEAD for the user's "red=1 / blue=2":** the item category byte B+0x1d ∈ {1,2} set per item in the
+  0x8004a3xx dispatcher is a 2-way distinction worth chasing — but it is a CATEGORY, not confirmed to be an
+  HP/AP heal amount. NEXT: find the shared HEAL fn (writes the real HP/AP gauge global, area-independent, in
+  MAIN.EXE engine/player code) by locating the gauge global first (find the damage/death path, or a live
+  state where B+0x11!=0 with the gauge on), then the apple/fruit overlay handler that calls it.
