@@ -317,6 +317,51 @@ void ov_spawn_pool2(Core* c) {   // FUN_80079DDC
   } else if (++ng % 20 == 0) fprintf(stderr, "[pool2verify] %ld matches\n", ng);
 }
 
+// FUN_8007AA38 — the SPAWN-RELATIVE-TO-OBJECT dispatcher (a second spawn entry, table 0x80016E64). Unlike
+// FUN_8007A980 (which forces ref=0, mode=3 tail-insert), this one spawns a new node RELATIVE to an existing
+// object `obj`, passing the caller's mode (a2) and list (a3) straight through. RE'd from disas 0x8007AA38 +
+// the 5 thin handlers 0x8007aa90..0x8007aad0 (each: a1 &= 0xff; jal SPAWN_VAR[class]; return its v0):
+//
+//   v0 = spawn_rel(a0=obj, a1=packed, a2=mode, a3=list):
+//     if ((u8)obj[+0x0a] != a3) return 0;          // guard: obj must already be in the expected list
+//     cls = (a1 >> 8) & 0x7f;  type = a1 & 0xff;
+//     if (cls >= 5) return 0;
+//     return SPAWN_VAR[cls](obj, type, a2, a3);     // ref=obj, type, mode=a2, list=a3
+//
+// The per-class spawn VARIANTS are all owned natively above; this just guards + routes (content-side type).
+static void replace_dispatch(Core* c) {
+  uint32_t obj = c->r[4], a1 = c->r[5], a2 = c->r[6], a3 = c->r[7];
+  if (c->mem_r8(obj + 0x0au) != a3) { c->r[2] = 0; return; }   // obj's list id (+0x0a) must equal a3
+  uint32_t cls = (a1 >> 8) & 0x7fu;
+  if (cls >= 5) { c->r[2] = 0; return; }
+  c->r[5] = a1 & 0xffu;                  // a1 = type (a0=obj, a2=mode, a3=list pass through)
+  rec_dispatch(c, SPAWN_VAR[cls]);       // run the per-type spawn variant → v0 in r2
+}
+void ov_replace_dispatch(Core* c) {
+  static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("replacedispverify") ? 1 : 0;
+  if (!s_v) { replace_dispatch(c); return; }
+  static uint8_t* ram0 = (uint8_t*)malloc(0x200000);
+  static uint8_t* ramN = (uint8_t*)malloc(0x200000);
+  uint8_t spad0[0x400], spadN[0x400];
+  uint32_t regs0[32]; memcpy(regs0, c->r, sizeof regs0);
+  uint32_t a1 = c->r[5];
+  memcpy(ram0, c->ram, 0x200000); memcpy(spad0, c->scratch, 0x400);
+  replace_dispatch(c);
+  uint32_t v0_n = c->r[2];
+  memcpy(ramN, c->ram, 0x200000); memcpy(spadN, c->scratch, 0x400);
+  memcpy(c->ram, ram0, 0x200000); memcpy(c->scratch, spad0, 0x400); memcpy(c->r, regs0, sizeof regs0);
+  rec_super_call(c, 0x8007AA38u);
+  uint32_t v0_o = c->r[2];
+  uint32_t sp = regs0[29] & 0x1FFFFFu, flo = (sp >= 0x800) ? sp - 0x800 : 0;
+  int ro = -1; for (uint32_t a = 0; a < 0x200000; a++) if (c->ram[a] != ramN[a] && !(a >= flo && a < sp)) { ro = (int)a; break; }
+  int so = -1; for (uint32_t a = 0; a < 0x400; a++) if (c->scratch[a] != spadN[a]) { so = (int)a; break; }
+  static long ng = 0, nb = 0;
+  if (ro >= 0 || so >= 0 || v0_n != v0_o) {
+    if (nb++ < 40) fprintf(stderr, "[replacedispverify] MISMATCH a1=%x cls=%u v0 n=%x o=%x ram@%x spad@%x sp=%x\n",
+                           a1, (a1 >> 8) & 0x7fu, v0_n, v0_o, ro, so, sp);
+  } else if (++ng % 20 == 0) fprintf(stderr, "[replacedispverify] %ld matches\n", ng);
+}
+
 // ------------------------------------------------------------------------------------------------
 // Public registration — ONE line from game_tomba2.cpp init.
 // ------------------------------------------------------------------------------------------------
@@ -327,4 +372,5 @@ void entity_spawn_register(void) {
   rec_set_override(0x8007A12Cu, ov_spawn_var3);     // FUN_8007A12C spawn variant — pool var3 (class 3, empty->0)
   rec_set_override(0x8007A2C8u, ov_spawn_var4);     // FUN_8007A2C8 spawn variant — pool var4 (class 4, empty->0)
   rec_set_override(0x8007A980u, ov_spawn_dispatch); // FUN_8007A980 per-type spawn dispatcher (entry point)
+  rec_set_override(0x8007AA38u, ov_replace_dispatch); // FUN_8007AA38 spawn-relative-to-object dispatcher
 }
