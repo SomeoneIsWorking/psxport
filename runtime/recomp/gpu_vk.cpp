@@ -1372,7 +1372,7 @@ void GpuVkState::ssao_pass() {
                 VK_ACCESS_SHADER_READ_BIT, VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT);
 }
 
-// Present the display region [sx,sy .. +w,h] of `src` (s_vram or s_interp) via Vulkan, fit to aspect.
+// Present the display region [sx,sy .. +w,h] of `src` (s_vram) via Vulkan, fit to aspect.
 void GpuVkState::present(const uint16_t* src, int sx, int sy, int w, int h) {
   if (!gpu_vk_enabled()) return;
   if (!s_inited) init_vk();
@@ -1384,7 +1384,7 @@ void GpuVkState::present(const uint16_t* src, int sx, int sy, int w, int h) {
   imgui_overlay_new_frame();   // CPU-build the mod-toggle UI for this frame (no-op if overlay not inited)
   // vkprof: re-check the channel each frame (present runs from boot, before the REPL `debug` is processed).
   int vp = cfg_dbg("vkprof");
-  // Mirror the whole CPU VRAM (s_vram/s_interp) into the GPU R16_UINT image (M1: SW still rasterizes;
+  // Mirror the whole CPU VRAM (s_vram) into the GPU R16_UINT image (M1: SW still rasterizes;
   // M2+ will draw into this image directly and skip the upload for drawn regions). The display region
   // [sx,sy,w,h] is selected at sample time via the present push constant.
   double t_up = vp ? now_ms() : 0;

@@ -25,11 +25,6 @@
 extern int g_fps60_on;           // fps60: capture/synth enabled (PSXPORT_FPS60); 0 = faithful path
 // VRAM_W/VRAM_H and vram() now live in gpu_native_internal.h
 
-// fps60 60fps layer: a SEPARATE off-screen framebuffer the interpolated frame is rasterized into,
-// so the 60fps tier sits ON TOP of the renderer and NEVER writes the game's VRAM. put_px_b writes
-// (and its blend-reads) go to s_fb_base — normally s_vram, switched to s_interp only while synthesizing
-// the in-between; sample_tex always reads s_vram, so textures still come from the live atlas.
-
 // ---- Draw state (set by GP0 env commands E1..E6) ------------------------------------
 int gpu_vk_enabled(void);                                    // gpu_vk.c (declared early for the gp0 tee)
 static int s_reddbg;              // PSXPORT_REDDBG: dark-red output anomaly probe
@@ -772,16 +767,6 @@ void GpuState::gp0_exec(Core* core) {
       fade_note(mr, mg, mb, s_off_y, semi); fade_note_size(xmx-xmn, ymx-ymn, semi);
       if (semi) semi_dump("poly", s_tp_blend, mr, mg, mb, xmn, ymn, xmx, ymx, s_off_y); }
     { void fps60_join_poly(Core*, int, int); fps60_join_poly(core, v[0].x, v[0].y); }  // fps60: object join
-    if (g_fps60_on) {                       // fps60: tee the full primitive into PrimFrame B
-      void fps60_cap_poly(Core*, int, int, const int*, const int*, const int*, const int*,
-                           const unsigned char*, const unsigned char*, const unsigned char*,
-                           int, int, int, int, int, int, int, int, int);
-      int xs[4], ys[4], us[4], vs[4]; unsigned char rs[4], gs[4], bs[4];
-      for (int i = 0; i < nv; i++) { xs[i]=v[i].x; ys[i]=v[i].y; us[i]=v[i].u; vs[i]=v[i].v;
-                                     rs[i]=v[i].r; gs[i]=v[i].g; bs[i]=v[i].b; }
-      fps60_cap_poly(core, op, nv, xs, ys, us, vs, rs, gs, bs, s_off_x, s_off_y,
-                      s_tp_x, s_tp_y, s_tp_mode, s_tp_blend, s_tp_dither, s_clut_x, s_clut_y);
-    }
     // VK backend (M5): tee polys to the GPU rasterizer in absolute VRAM coords. Opaque textured/
     // untextured -> opaque batch; semi -> semi batch (mode 3 = untextured flat). VK owns these now.
     if (gpu_vk_enabled()) {
@@ -957,12 +942,6 @@ void GpuState::gp0_exec(Core* core) {
     fade_note(cr, cg, cb, s_off_y, semi); fade_note_size(w, h, semi);
     if (semi) semi_dump("sprite", s_tp_blend, cr, cg, cb, x, y, x + w, y + h, s_off_y);
     prov_begin(op, textured ? 1 : 0, semi, cr, cg, cb, x + s_off_x, y + s_off_y, u0, v0);
-    if (g_fps60_on) {                       // fps60: tee the sprite/rect into PrimFrame B (snaps)
-      void fps60_cap_sprite(Core*, int, int, int, int, int, int, int, int, int, int,
-                             int, int, int, int, int, int, int, int);
-      fps60_cap_sprite(core, op, x, y, u0, v0, w, h, cr, cg, cb, s_off_x, s_off_y,
-                        s_tp_x, s_tp_y, s_tp_mode, s_tp_blend, s_clut_x, s_clut_y);
-    }
     // bit0=1 -> raw texel; bit0=0 -> modulate by command color (beetle sprite decode table:
     // 0x64/0x66 = TM1 modulate, 0x65/0x67 = TM0 raw). Modulating unconditionally once wrongly
     // tinted raw 0x65 sprites (turned a blue item green).
@@ -1063,44 +1042,10 @@ void GpuState::gp0_exec(Core* core) {
           else      gpu_vk_draw_tritri(core, X,Y,zu,zu,R,G,B, 0,0,3,0,0,0, 0,0,0,0, s_da_x0,s_da_y0,s_da_x1,s_da_y1);
         }
       }
-      if (g_fps60_on) {                       // fps60: tee each segment (snaps; obj 0) so the interp
-        void fps60_cap_line(Core*, int, int, int, int, int, int, int, int, int);   // frame keeps the line
-        fps60_cap_line(core, op, vx[s], vy[s], vx[s+1], vy[s+1], vr[s], vg[s], vb[s], semi);
-      }
     }
     s_prims++;
   }
   // env commands (E1..E6) handled in gpu_gp0 directly (single-word).
-}
-
-// ---- fps60 in-between synthesizer: direct-draw entry points -------------------------
-// The 60fps tier (fps60.c) re-rasterizes a lerped copy of the captured display list into the SEPARATE
-// s_interp buffer (see gpu_fps60_begin_interp). These reuse the SAME tri()/raster_sprite() path as
-// gp0_exec (no GP0 re-encode round-trip), driven by explicit decoded state; textures read from VRAM.
-void GpuState::gpu_fps60_draw_poly(int op, int nv, const int* xs, const int* ys, const int* us, const int* vs,
-                       const unsigned char* rs, const unsigned char* gs, const unsigned char* bs,
-                       int tp_x, int tp_y, int mode, int blend, int dither, int clut_x, int clut_y) {
-  int gouraud = op & 0x10, textured = op & 0x04, semi = (op & 0x02) ? 1 : 0;
-  int raw = textured && (op & 0x01);
-  s_tp_x = tp_x; s_tp_y = tp_y; s_tp_mode = mode; s_tp_blend = blend; s_tp_dither = dither;
-  s_clut_x = clut_x; s_clut_y = clut_y;
-  Vtx v[4];
-  for (int i = 0; i < nv; i++) { v[i].x=xs[i]; v[i].y=ys[i]; v[i].u=us[i]; v[i].v=vs[i];
-                                 v[i].r=rs[i]; v[i].g=gs[i]; v[i].b=bs[i]; }
-  int shade = gouraud || !textured;
-  tri(v[0], v[1], v[2], textured, shade, semi, raw);
-  if (nv == 4) tri(v[1], v[2], v[3], textured, shade, semi, raw);
-}
-void GpuState::gpu_fps60_draw_sprite(int op, int x, int y, int u0, int v0, int w, int h,
-                         int r, int g, int b, int tp_x, int tp_y, int mode, int blend,
-                         int clut_x, int clut_y) {
-  int textured = op & 0x04, semi = (op & 0x02) ? 1 : 0;
-  s_tp_x = tp_x; s_tp_y = tp_y; s_tp_mode = mode; s_tp_blend = blend;
-  s_clut_x = clut_x; s_clut_y = clut_y;
-  raster_sprite(op, x, y, u0, v0, w, h, (uint8_t)r, (uint8_t)g, (uint8_t)b, textured, semi);
-}
-void GpuState::gpu_fps60_draw_line(int x0, int y0, int x1, int y1, int r, int g, int b, int semi) {
-  raster_line(x0, y0, x1, y1, (uint8_t)r, (uint8_t)g, (uint8_t)b, semi);
 }
 
 // Words needed to complete the packet beginning with command word `c`.
@@ -1284,7 +1229,7 @@ void GpuState::ensure_window() {
     s_tex_w = s_disp_w; s_tex_h = s_disp_h;
   }
 }
-// Blit one display-sized region [sx,sy .. +disp_w,disp_h] of `src` (s_vram or s_interp) to the window,
+// Blit one display-sized region [sx,sy .. +disp_w,disp_h] of `src` (s_vram) to the window,
 // fit to a 4:3 rect with black bars — never stretched (correct PSX pixel aspect for 2D / FMV / any res).
 int  gpu_vk_enabled(void);                                   // gpu_vk.c — Vulkan present backend (M0)
 void GpuState::blit_src(const uint16_t* src, int sx, int sy) {
@@ -1318,44 +1263,10 @@ void GpuState::present_window() { blit_src(s_vram, s_disp_x, s_disp_y); }   // t
 // the window stays live AND the VK readback reflects exactly what's on screen (vkshot reads the same
 // region this presents). No s_frame++ / batch reset (those belong to gpu_present_ex).
 void GpuState::gpu_repaint() { present_window(); }
-// fps60: present the previous real frame straight from VRAM (read-only), and the interpolated frame
-// from the separate s_interp buffer. Both blit a display-sized region at the given VRAM origin.
-void GpuState::gpu_fps60_blit_vram(int dx, int dy)   { blit_src(s_vram,   dx, dy); }
-void GpuState::gpu_fps60_blit_interp(int dx, int dy) { blit_src(s_interp, dx, dy); }
 #else
 void GpuState::present_window() {}
 void GpuState::gpu_repaint() {}
-void GpuState::gpu_fps60_blit_vram(int dx, int dy)   { (void)dx; (void)dy; }
-void GpuState::gpu_fps60_blit_interp(int dx, int dy) { (void)dx; (void)dy; }
 #endif
-
-// fps60 headless validation: dump a display-sized region of a buffer to a PPM (P6). Used by the
-// synth dumptest to compare prev / interpolated / current frames offline.
-void GpuState::shot_buf(const uint16_t* src, int dx, int dy, const char* path) {
-  FILE* f = fopen(path, "wb"); if (!f) return;
-  fprintf(f, "P6\n%d %d\n255\n", s_disp_w, s_disp_h);
-  for (int y = 0; y < s_disp_h; y++)
-    for (int x = 0; x < s_disp_w; x++) {
-      uint16_t p = src[((dy + y) & 511) * VRAM_W + ((dx + x) & 1023)];
-      uint8_t rgb[3] = { (uint8_t)((p & 31) << 3), (uint8_t)(((p >> 5) & 31) << 3), (uint8_t)(((p >> 10) & 31) << 3) };
-      fwrite(rgb, 1, 3, f);
-    }
-  fclose(f);
-}
-void GpuState::gpu_fps60_shot_vram(int dx, int dy, const char* path)   { shot_buf(s_vram,   dx, dy, path); }
-void GpuState::gpu_fps60_shot_interp(int dx, int dy, const char* path) { shot_buf(s_interp, dx, dy, path); }
-
-// fps60: redirect the rasterizer's framebuffer writes to the separate s_interp buffer, clear the
-// target display region, and set the draw env. The interpolated display list is then rasterized via
-// the normal gpu_fps60_draw_* path (textures still read from VRAM). end_interp restores VRAM as target.
-void GpuState::gpu_fps60_begin_interp(int off_x, int off_y, int cx0, int cy0, int cx1, int cy1) {
-  s_fb_base = s_interp;
-  for (int y = cy0; y <= cy1; y++)
-    for (int x = cx0; x <= cx1; x++) s_interp[(y & 511) * VRAM_W + (x & 1023)] = 0;
-  s_off_x = off_x; s_off_y = off_y;
-  s_da_x0 = cx0; s_da_y0 = cy0; s_da_x1 = cx1; s_da_y1 = cy1;
-}
-void GpuState::gpu_fps60_end_interp() { s_fb_base = s_vram; }
 
 // Frame pacing: the native game loop (ov_game_main) runs UNTHROTTLED — at thousands of fps.
 // That's right for headless tests but unplayable windowed. When a window is up we throttle to
@@ -1720,12 +1631,3 @@ uint16_t gpu_vram_peek(Core* core, int x, int y) { return core->game->gpu.gpu_vr
 void gpu_scea_splash_composite(Core* core, int fade) { core->game->gpu.scea_splash_composite(fade); }
 void gpu_vram_load(Core* core, const uint16_t* src) { core->game->gpu.gpu_vram_load(src); }
 void gpu_vram_save(Core* core, uint16_t* dst) { core->game->gpu.gpu_vram_save(dst); }
-void gpu_fps60_draw_poly(Core* core, int op, int nv, const int* xs, const int* ys, const int* us, const int* vs, const unsigned char* rs, const unsigned char* gs, const unsigned char* bs, int tp_x, int tp_y, int mode, int blend, int dither, int clut_x, int clut_y) { core->game->gpu.gpu_fps60_draw_poly(op, nv, xs, ys, us, vs, rs, gs, bs, tp_x, tp_y, mode, blend, dither, clut_x, clut_y); }
-void gpu_fps60_draw_sprite(Core* core, int op, int x, int y, int u0, int v0, int w, int h, int r, int g, int b, int tp_x, int tp_y, int mode, int blend, int clut_x, int clut_y) { core->game->gpu.gpu_fps60_draw_sprite(op, x, y, u0, v0, w, h, r, g, b, tp_x, tp_y, mode, blend, clut_x, clut_y); }
-void gpu_fps60_draw_line(Core* core, int x0, int y0, int x1, int y1, int r, int g, int b, int semi) { core->game->gpu.gpu_fps60_draw_line(x0, y0, x1, y1, r, g, b, semi); }
-void gpu_fps60_begin_interp(Core* core, int off_x, int off_y, int cx0, int cy0, int cx1, int cy1) { core->game->gpu.gpu_fps60_begin_interp(off_x, off_y, cx0, cy0, cx1, cy1); }
-void gpu_fps60_end_interp(Core* core) { core->game->gpu.gpu_fps60_end_interp(); }
-void gpu_fps60_blit_vram(Core* core, int dx, int dy) { core->game->gpu.gpu_fps60_blit_vram(dx, dy); }
-void gpu_fps60_blit_interp(Core* core, int dx, int dy) { core->game->gpu.gpu_fps60_blit_interp(dx, dy); }
-void gpu_fps60_shot_vram(Core* core, int dx, int dy, const char* path) { core->game->gpu.gpu_fps60_shot_vram(dx, dy, path); }
-void gpu_fps60_shot_interp(Core* core, int dx, int dy, const char* path) { core->game->gpu.gpu_fps60_shot_interp(dx, dy, path); }

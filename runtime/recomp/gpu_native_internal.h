@@ -63,12 +63,10 @@ struct GpuState {
   void obj_depth_add(uint32_t lo, uint32_t hi, float ord);  // record an object's pool span + world depth
   int  obj_depth_lookup(uint32_t node, float* ord);         // depth ord for the OT node, if in an object span
 
-  // VRAM (textures + framebuffers) and the fps60 in-between buffer
+  // VRAM (textures + framebuffers)
   uint16_t  s_vram[VRAM_W * VRAM_H] = {};
-  uint16_t  s_interp[VRAM_W * VRAM_H] = {};
-  uint16_t* s_fb_base = s_vram;                              // put_px target: s_vram, or s_interp while synthesizing
   uint16_t* vram(int x, int y) { return &s_vram[(y & 511) * VRAM_W + (x & 1023)]; }
-  uint16_t* fb(int x, int y)   { return &s_fb_base[(y & 511) * VRAM_W + (x & 1023)]; }
+  uint16_t* fb(int x, int y)   { return &s_vram[(y & 511) * VRAM_W + (x & 1023)]; }
 
   // Draw env (GP0 E1..E6)
   int s_da_x0 = 0, s_da_y0 = 0, s_da_x1 = 1023, s_da_y1 = 511; // draw clip area
@@ -133,7 +131,6 @@ struct GpuState {
   void ensure_window();
   void blit_src(const uint16_t* src, int sx, int sy);
   void present_window();
-  void shot_buf(const uint16_t* src, int dx, int dy, const char* path);
   void gpu_repaint();
   void gpu_native_shot(Core* core, const char* path);
   void gpu_present_ex(Core* core, int do_blit);
@@ -146,20 +143,6 @@ struct GpuState {
   void gpu_vram_save(uint16_t* dst);
   void gpu_provat_enable();
   int  gpu_frame_no();
-  // fps60 in-between synthesizer entry points (re-rasterize a lerped list into s_interp)
-  void gpu_fps60_draw_poly(int op, int nv, const int* xs, const int* ys, const int* us, const int* vs,
-                           const unsigned char* rs, const unsigned char* gs, const unsigned char* bs,
-                           int tp_x, int tp_y, int mode, int blend, int dither, int clut_x, int clut_y);
-  void gpu_fps60_draw_sprite(int op, int x, int y, int u0, int v0, int w, int h,
-                             int r, int g, int b, int tp_x, int tp_y, int mode, int blend,
-                             int clut_x, int clut_y);
-  void gpu_fps60_draw_line(int x0, int y0, int x1, int y1, int r, int g, int b, int semi);
-  void gpu_fps60_begin_interp(int off_x, int off_y, int cx0, int cy0, int cx1, int cy1);
-  void gpu_fps60_end_interp();
-  void gpu_fps60_blit_vram(int dx, int dy);
-  void gpu_fps60_blit_interp(int dx, int dy);
-  void gpu_fps60_shot_vram(int dx, int dy, const char* path);
-  void gpu_fps60_shot_interp(int dx, int dy, const char* path);
   void gpu_fps60_present_pass(Core* core);   // VK 60fps: present the accumulated batch over s_vram, reset batch (no s_frame++)
 };
 
@@ -185,18 +168,6 @@ uint16_t gpu_vram_peek(Core* core, int x, int y);
 void gpu_scea_splash_composite(Core* core, int fade);
 void gpu_vram_load(Core* core, const uint16_t* src);
 void gpu_vram_save(Core* core, uint16_t* dst);
-void gpu_fps60_draw_poly(Core* core, int op, int nv, const int* xs, const int* ys, const int* us, const int* vs,
-                         const unsigned char* rs, const unsigned char* gs, const unsigned char* bs,
-                         int tp_x, int tp_y, int mode, int blend, int dither, int clut_x, int clut_y);
-void gpu_fps60_draw_sprite(Core* core, int op, int x, int y, int u0, int v0, int w, int h,
-                           int r, int g, int b, int tp_x, int tp_y, int mode, int blend, int clut_x, int clut_y);
-void gpu_fps60_draw_line(Core* core, int x0, int y0, int x1, int y1, int r, int g, int b, int semi);
-void gpu_fps60_begin_interp(Core* core, int off_x, int off_y, int cx0, int cy0, int cx1, int cy1);
-void gpu_fps60_end_interp(Core* core);
-void gpu_fps60_blit_vram(Core* core, int dx, int dy);
-void gpu_fps60_blit_interp(Core* core, int dx, int dy);
-void gpu_fps60_shot_vram(Core* core, int dx, int dy, const char* path);
-void gpu_fps60_shot_interp(Core* core, int dx, int dy, const char* path);
 void gpu_fps60_present_pass(Core* core);   // VK 60fps in-between present pass
 // gpu_provat_display / gpu_prov_dump (gpu_debug.cpp) take Core* too:
 void gpu_provat_display(Core* core, FILE* out, int qx, int qy);

@@ -82,8 +82,8 @@ static void ov_frame_update(Core* c) {
     spu_audio_frame();                               // advance SPU one 1/60 s field + feed device
   }
   c->mem_w16(DISPLAY_COUNTER, c->mem_r8(VBLANK_QUOTA));    // satisfy the pacing dwell immediately
-  // fps60 (when enabled) OWNS presentation: it presents the previous real frame + the interpolated
-  // frame (60 fps, 1 frame behind) and paces both halves — see fps60_present. The faithful path
+  // fps60 (when enabled) OWNS presentation: it presents the interpolated in-between + the real frame
+  // (60 fps, 1 frame behind) and paces both halves — see fps60_present_vk. The faithful path
   // presents frame B once and paces a full frame.
   fps60_frame_commit(c);
   if (!g_fps60_on) { gpu_present(c); gpu_pace_frame(c); }
