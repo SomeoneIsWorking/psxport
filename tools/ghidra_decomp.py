@@ -12,8 +12,17 @@ from ghidra.util.task import ConsoleTaskMonitor
 
 args = getScriptArgs()
 outpath = args[0] if len(args) > 0 else "decomp_all.c"
-lo = int(args[1], 16) if len(args) >= 3 else None
-hi = int(args[2], 16) if len(args) >= 3 else None
+# Two selection modes after <out.c>:
+#   <lo_hex> <hi_hex>          -> functions whose entry is in [lo,hi)   (range)
+#   list <addr_hex> [addr...]  -> exactly these function entries        (explicit list)
+rest = args[1:]
+lo = hi = None
+want = None
+if len(rest) >= 1 and rest[0] == "list":
+    want = set(int(a, 16) for a in rest[1:])
+elif len(rest) >= 2:
+    lo = int(rest[0], 16)
+    hi = int(rest[1], 16)
 
 decomp = DecompInterface()
 decomp.toggleCCode(True)
@@ -25,7 +34,10 @@ count = 0
 f = open(outpath, "w")
 for fn in fm.getFunctions(True):
     ea = fn.getEntryPoint().getOffset()
-    if lo is not None and not (lo <= ea < hi):
+    if want is not None:
+        if ea not in want:
+            continue
+    elif lo is not None and not (lo <= ea < hi):
         continue
     res = decomp.decompileFunction(fn, 90, monitor)
     f.write("// ==================== %08X %s ====================\n" % (ea, fn.getName()))

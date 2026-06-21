@@ -3,8 +3,9 @@
 #
 # Usage:
 #   tools/decomp.sh import <dump.bin> [projname]      # import + auto-analyze (slow, once)
-#   tools/decomp.sh decomp <projname> <out.c> [lo hi] # decompile from analyzed project
-#   tools/decomp.sh all <dump.bin> <out.c> [lo hi]    # import+analyze+decompile in one go
+#   tools/decomp.sh decomp <projname> <out.c> [lo hi] # decompile a [lo,hi) entry-addr range
+#   tools/decomp.sh decomp <projname> <out.c> list <addr...>   # decompile an explicit fn list
+#   tools/decomp.sh all <dump.bin> <out.c> [lo hi | list <addr...>]   # import+analyze+decompile
 #
 # The dump is loaded as a raw binary based at 0x80000000 so addresses match the
 # virtual addresses in docs/journal.md. Projects live in scratch/ghidra/ (gitignored);
