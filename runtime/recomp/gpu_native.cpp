@@ -19,6 +19,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>    // clock_gettime / nanosleep — portable PC-owned frame pacer (gpu_pace_subframe)
 #ifdef PSXPORT_SDL
 #include <SDL.h>
 #endif
@@ -1397,21 +1398,28 @@ void GpuState::gpu_repaint() {}
 // Pace 1/`parts` of a logic frame: parts=1 → one full logic frame (30fps faithful path); parts=2 →
 // half a logic frame (fps60 presents twice per logic frame for 60fps). The shared `next` accumulator
 // advances by exactly one logic frame's worth per logic frame either way, so audio stays realtime.
+extern "C" int gpu_has_window(void);
 void gpu_pace_subframe(Core* core, int parts) {
-#ifdef PSXPORT_SDL
-  if (!gpu_windowed() || cfg_on("PSXPORT_NOPACE")) return;   // headless never paces (tests stay fast)
+  // PC-OWNED frame pacing (user 2026-06-22: the game loop paces itself). Gate on a RUNTIME check for an
+  // on-screen window — NOT a compile-time macro and NOT gpu_vk_enabled() — so it always paces a live
+  // windowed run and never paces headless (tests stay fast). Portable monotonic clock + nanosleep (no
+  // SDL dependency), so it works identically on Linux and macOS.
+  if (!gpu_has_window() || cfg_on("PSXPORT_NOPACE")) return;
   if (parts < 1) parts = 1;
   int quota = core->mem_r8(0x1F800235u); if (quota < 1) quota = 2;   // vblanks per frame (default 30fps)
-  double interval = quota * 1000.0 / 60.0 / parts;             // ms for this sub-frame
+  double interval_ms = quota * 1000.0 / 60.0 / parts;               // target ms for this (sub)frame
+  struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
+  double now = ts.tv_sec * 1000.0 + ts.tv_nsec / 1e6;
   static double next = -1;
-  double now = (double)SDL_GetTicks();
   if (next < 0) next = now;
-  next += interval;
-  if (next > now) SDL_Delay((unsigned)(next - now));
-  else if (now - next > interval) next = now;                  // resync after a hitch (no debt)
-#else
-  (void)parts;
-#endif
+  next += interval_ms;
+  if (next > now) {
+    double sleep_ms = next - now;
+    struct timespec req = { (time_t)(sleep_ms / 1000.0), (long)((sleep_ms - (long)(sleep_ms/1000.0)*1000.0) * 1e6) };
+    nanosleep(&req, 0);
+  } else if (now - next > interval_ms) {
+    next = now;                                                     // resync after a hitch (no debt)
+  }
 }
 void gpu_pace_frame(Core* core) { gpu_pace_subframe(core, 1); }
 

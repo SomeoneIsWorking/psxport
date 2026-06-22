@@ -451,6 +451,9 @@ int gpu_vk_enabled(void) {
 // gate). Windowed == VK renderer running and NOT in headless/offscreen mode. Used by the pacing,
 // audio-realtime, pad-poll, and present paths so there is one behavior, not an env A/B.
 extern "C" int gpu_windowed(void) { return gpu_vk_enabled() && !s_headless; }
+// Runtime check: is there an on-screen SDL window to pace to? (Used by the frame pacer instead of a
+// compile-time macro / gpu_vk_enabled gate — a window exists iff SDL created one for the live run.)
+extern "C" int gpu_has_window(void) { return s_win != 0; }
 
 static uint32_t mem_type(uint32_t bits, VkMemoryPropertyFlags want) {
   VkPhysicalDeviceMemoryProperties mp; vkGetPhysicalDeviceMemoryProperties(s_phys, &mp);
@@ -2310,6 +2313,7 @@ void gpu_vk_tritest(Core* core) { core->game->gpu_vk.tritest(); }
 #include <stdint.h>
 int  gpu_vk_enabled(void) { return 0; }
 extern "C" int gpu_windowed(void) { return 0; }
+extern "C" int gpu_has_window(void) { return 0; }
 void gpu_vk_present(Core* core, const uint16_t* src, int sx, int sy, int w, int h) { (void)core;(void)src;(void)sx;(void)sy;(void)w;(void)h; }
 void gpu_vk_present_image(Core* core, const uint8_t* rgba, int iw, int ih, float fade) { (void)core;(void)rgba;(void)iw;(void)ih;(void)fade; }
 void gpu_vk_tritest(Core* core) { (void)core; }
