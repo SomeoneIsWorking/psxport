@@ -77,6 +77,8 @@ struct SchedulerState {
   int     in_stage = 0;       // 1 while inside a task run (gates the yield override) (was g_in_stage)
   int     cur_slot = 0;       // task slot currently running (for the yield capture) (was g_cur_slot)
   int     task_started[3] = {};  // slot has a live coroutine context (else fresh) (was g_task_started)
+  int     demo_native[3] = {};   // slot runs the DEMO/front-end as a NATIVE per-frame dispatcher (no guest
+                                 // coroutine): ov_demo_frame is called once per frame, state in guest RAM.
 };
 
 // native_stub.cpp — the SCEA boot-stub (SCUS_944.54) interpreter that draws SCEA + LoadExec's MAIN.

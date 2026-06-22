@@ -407,14 +407,74 @@ void ov_demo_stage_main(Core* c) {
   rec_dispatch(c, 0x80075240u);                // voice/audio-attr control-block init (SYNC)
   c->r[4] = 1; rec_dispatch(c, 0x8001CF00u);   // SpuSetCommonAttr CD->SPU mix on (SYNC)
 
-  c->r[16] = 0x1f800000u;                      // s0 = 0x1f800000 (loop reads 0x198(s0), 0x138(s0))
-  c->r[17] = 2;                                // s1 = 2
-  c->r[18] = 1;                                // s2 = 1 (loop compares sm[0x48]==s2)
-  c->r[19] = 3;                                // s3 = 3
-  if (cfg_dbg("demo")) fprintf(stderr, "[demo] ov_demo_stage_main: prologue + s0 native+sync, sm[0x48]=%u; loop @0x80106388 "
+  if (cfg_dbg("demo")) fprintf(stderr, "[demo] ov_demo_stage_main: prologue + s0 native+sync, sm[0x48]=%u "
                                        "(s0 texgroup meta[0x800FB170]=%08X, exact match vs reference menu dump)\n",
                                        c->mem_r16(sm + 0x48), c->mem_r32(0x800fb170u));
-  rec_coro_redirect(c, 0x80106388u);           // hand to the guest per-frame loop body IN-CONTEXT (starts at s1)
+  // No coro-redirect: the DEMO stage now runs as a NATIVE per-frame dispatcher (ov_demo_frame), driven
+  // by the scheduler each frame. ov_demo_stage_main runs ONCE (prologue + s0); the loop is the scheduler.
+}
+
+// ===== DEMO per-frame NATIVE dispatcher (replaces the guest root loop @0x80106388) ==============
+// The DEMO stage is driven one frame at a time by the native scheduler (native_boot.cpp): each frame
+// it calls ov_demo_frame, which dispatches the current substate sm[0x48] natively (the guest loop's
+// jr-v0 table dispatch can no longer be intercepted — override table gone), then bumps the per-frame
+// counter (every guest tail does this). Substates are SYNCHRONOUS (one frame each), so this needs no
+// coroutine. s0 runs once at entry (ov_demo_stage_main); s2..s7 are the current frontier.
+
+// s1's inner menu input machine (0x80106F80): an 8-way state machine on sm[0x4a]. 0x80106F80 is a real
+// callable function (proper prologue + `jr ra` epilogue, the inline state handlers `j` to it), so we
+// own only its TWO libcd states natively and rec_dispatch the CD-free ones. CD states (scan of
+// 0x80106F80..0x801072E0): sm[0x4a]==0 (0x80106FF0, CdControlB Setmode 0x80 @0x8010701C — busy-loops
+// until the CD acks, which our no-IRQ libcd never does) and sm[0x4a]==7 (0x80107280, CdControlB
+// @0x801072B0). Our disc reads by LBA need no drive mode, so the Setmode is a native no-op.
+static uint32_t demo_menu_machine(Core* c) {
+  uint32_t sm = c->mem_r32(SM_PTR);
+  uint32_t s4a = c->mem_r8(0x1f80019du) ? 7u : c->mem_r16(sm + 0x4a);   // prologue: skip-flag -> state 7
+  if (s4a == 0) {                              // state 0 (0x80106FF0): Setmode then advance, returns 0
+    c->mem_w8(sm + 0x69, 0);                   // sb s1,0x69 — s1 (the 0x80106F80 a0 arg) is 0 here
+    c->mem_w16(sm + 0x4a, c->mem_r16(sm + 0x4a) + 1);                   // sm[0x4a]++ : 0 -> 1
+    return 0;                                  // guest handler j's to 0x801072DC (v0 = 0)
+  }
+  // States 1..3 (0x80107034) are pure sm[0x4a]++ advance steps — CD-free, run the real function (a
+  // proper jr-ra function; only state 0/4/5/6/7 differ). State >=4 issues async libcd CD loads (state 4
+  // @0x80107054 -> CdControlB 0x8008B8F0; state 7 @0x80107280 -> CdControlB 0x801072B0) that our no-IRQ
+  // runtime can't complete — they must be owned native+sync (the FRONTIER), so do NOT rec_dispatch them
+  // (that yields/busy-waits forever). Park at the first un-owned CD state without hanging.
+  if (s4a >= 4) {
+    if (cfg_dbg("demo")) { static int w=0; if(!w++) fprintf(stderr,
+      "[demo] menu_machine sm[0x4a]=%u: async CD load not yet owned native+sync (FRONTIER) — parked\n", s4a); }
+    return 0;
+  }
+  c->r[4] = 0;                                 // a0 = 0 (s1 calls 0x80106F80(0))
+  rec_dispatch(c, 0x80106f80u);                // states 1..3: run the real function (jr ra), advances sm[0x4a]
+  return c->r[2];                              // v0 (nonzero => menu machine done)
+}
+
+// Substate s1 (0x8010641C) — wait/advance. Run the menu machine; on completion (v0!=0) reset sm[0x4a]
+// and advance sm[0x48] (1->2); else on any pad edge set the skip-request flag. Always TAIL_NONE.
+static void demo_frame_s1(Core* c) {
+  uint32_t v0 = demo_menu_machine(c);
+  uint32_t sm = c->mem_r32(SM_PTR);
+  if (v0 != 0) {
+    c->mem_w16(sm + 0x4a, 0);
+    c->mem_w16(sm + 0x48, c->mem_r16(sm + 0x48) + 1);                   // 1 -> 2
+  } else if (c->mem_r16(0x800e7e68u) != 0) {   // pad pressed-edges
+    c->mem_w8(0x1f80019du, 1);                 // request skip
+  }
+}
+
+// Called once per frame by the native scheduler for the DEMO task.
+void ov_demo_frame(Core* c) {
+  uint32_t sm = c->mem_r32(SM_PTR);
+  uint16_t s48 = c->mem_r16(sm + 0x48);
+  switch (s48) {
+    case 1: demo_frame_s1(c); break;
+    default:
+      if (cfg_dbg("demo")) { static int w = 0; if (!w++) fprintf(stderr,
+        "[demo] ov_demo_frame: sm[0x48]=%u not yet native (frontier — s2..s7 need conversion)\n", s48); }
+      break;
+  }
+  c->mem_w16(0x1f800198u, c->mem_r16(0x1f800198u) + 1);   // per-frame counter (every guest tail bumps it)
 }
 
 // Register the DEMO substate overrides when the just-loaded overlay is the DEMO overlay at the stage

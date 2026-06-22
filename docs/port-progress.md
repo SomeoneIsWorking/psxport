@@ -161,20 +161,32 @@ for content fns (call it). Do NOT mimic PSX hardware (GTE/GP0/OT) — remove Bee
     back) is a BYTE-EXACT match vs the reference steady-menu RAM dump.** WHY native+sync: run pure-PSX, s0's
     loaders descend into the IRQ-driven async reader (FUN_8001D940 via FUN_8001DC40 / the FUN_80044BD4 task-1
     spawn) which our no-IRQ runtime never completes → infinite spin in libcd's VSync-timed `CD_cw`.
-  - ☐ **NEW FRONTIER — substate s1's menu machine issues a pure-PSX libcd CD command that spins.** After s0,
-    the guest loop runs s1 (0x8010641C, menu input machine 0x80106F80). Its sm[0x4a]=0 handler (overlay
-    0x80107024 → resident 0x80075Dxx) calls **`CdControlB` 0x80089F68** (sets a CdlLOC @0x800BED7C, a CD
-    seek/position) which blocks in **`CD_cw` 0x8008A6EC**. CD_cw busy-waits (VSync-timed, deadline=vblcnt+960)
-    polling libcd's IRQ-updated SHADOW status @0x800AC298 — updated ONLY by the libcd CD interrupt handler,
-    which our no-IRQ runtime never runs (cdc_native queues the INT3 ack for the Setmode 0x0E but never raises
-    the CD IRQ / runs the ISR, so the shadow stays "NoIntr"). **STRUCTURAL (confirmed): pure-PSX libcd cannot
-    be made to complete** — CD_cw needs an IRQ-updated shadow AND busy-waits within one frame; and the override
-    table that used to let a native intercept the deep `jal 0x80089F68` is GONE. So EVERY libcd-touching menu
-    substate must be owned TOP-DOWN native (its CD ops via the sync primitives cd_loadfile_native/cd_dc40_sync/
-    preload_texgroup), exactly like s0. **The DEMO front-end is a large multi-substate subsystem; advance it
-    substate-by-substate.** Next: own s1's menu machine (0x80106F80 + the 0x80107024 handler) native+sync so
-    its CdControlB seek becomes a native disc op. Tools: `debug demo` (substate trace), `debug cdc` (now
-    dynamic — every CD command), `debug vsync` (re-add the interp trace if needed), PSXPORT_WATCHDOG=<sec>.
+  - ✅ **DEMO runs as a NATIVE PER-FRAME LOOP** (`ov_demo_frame`, engine_demo.cpp; scheduler integration in
+    native_boot.cpp `native_scheduler_step` + `SchedulerState::demo_native[3]`). The guest root loop
+    @0x80106388 (jr-v0 substate dispatch) can no longer be intercepted (override table gone), so the DEMO
+    task is driven as a STATELESS native per-frame dispatcher: each frame the scheduler calls ov_demo_frame,
+    which reads sm[0x48] and runs that substate's one-frame work natively, then bumps the frame counter
+    0x1F800198. No coroutine/ucontext — substates are synchronous, so "yield" is just returning; the slot is
+    re-armed to state 2 each frame. A `setjmp(yield_jmp)` guard contains any cooperative yield from a
+    rec_dispatch'd substate (so a not-yet-sync CD load can't corrupt the scheduler via a stale longjmp).
+    Leaving DEMO→GAME re-registers the slot with a non-DEMO entry, clearing demo_native.
+  - ✅ **substate s1 (0x8010641C) + its inner menu machine (0x80106F80) states 0..3 native.** s1 runs the
+    menu machine; on completion (v0!=0) advances sm[0x48] 1→2; on a pad edge sets the skip flag. The menu
+    machine (a real jr-ra function) is owned by special-casing its libcd states and rec_dispatching the
+    CD-free ones: state 0 (0x80106FF0, CdControlB Setmode 0x80) → native no-op (our disc reads by LBA need
+    no drive mode) + advance; states 1..3 (0x80107034, pure sm[0x4a]++) → rec_dispatch. VERIFIED: boot
+    reaches DEMO, runs the native loop, advances sm[0x4a] 0→1→2→3 with NO hang, `run N` completes cleanly.
+  - ☐ **NEW FRONTIER — menu-machine states ≥4 are async libcd CD LOADS; own them native+sync.** State 4
+    (0x80107054) calls **`CdControlB` 0x8008B8F0** (CD command-queue op, table @0x80107718) → spawns/awaits an
+    async CD read: run pure-PSX it FUN_80051f80-yields the first frame then busy-waits in CD_cw the next →
+    hang. State 7 (0x80107280) has a CdControlB @0x801072B0 too. We currently PARK cleanly at sm[0x4a]≥4
+    (demo_menu_machine returns 0 without dispatching — no hang, no render yet; the title graphics load in
+    these states, so the screen stays black until they're owned). NEXT: RE state 4's load (what file/where
+    via 0x8008B8F0 → 0x8008BBE8 → the CD queue) and reimplement it with the sync primitives (cd_dc40_sync /
+    cd_loadfile_native / preload_texgroup), then states 5/6/7, then substates s2..s7 (s2 = title display,
+    TAIL_REND attract render 0x80075A80 — likely where the title first draws). Each new substate becomes a
+    `case` in ov_demo_frame. Tools: `debug demo`, `debug cdc` (dynamic), PSXPORT_WATCHDOG=<sec>, the interp
+    VSync/stack-walk trace (re-add to interp.cpp around g_interp_pc if a hang needs a guest backtrace).
   - FOLLOW-UP (pre-existing, stage-0): the 2nd cel slot @0x800BED82 reads FFFF (no slot) vs reference 0001 —
     `preload_cel`/FUN_80096480 returns -1 for the 2nd cel. Verify the cel lands in VRAM once DEMO renders.
   Substate ownership:

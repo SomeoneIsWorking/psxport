@@ -101,7 +101,52 @@ static void native_scheduler_step(Core* c) {
       continue;
     }
     uint32_t st = c->mem_r16(base);
-    if (st == 0) { c->game->sched.task_started[i] = 0; continue; }   // free
+    if (st == 0) { c->game->sched.task_started[i] = 0; c->game->sched.demo_native[i] = 0; continue; }  // free
+    // ---- DEMO / front-end NATIVE per-frame task (no guest coroutine) ----------------------------
+    // The DEMO stage runs as a native dispatcher: ov_demo_frame is called once per frame with ALL state
+    // in guest RAM (sm[0x48] substate, sm[0x4a] sub-mode). On the FRESH entry we run the prologue + s0
+    // (ov_demo_stage_main) then the first frame; on resume, just another frame. The substates are all
+    // SYNCHRONOUS (no cross-frame yield), so no coroutine/longjmp is needed — "yield" is just returning.
+    // This replaces coro-redirecting into the guest loop (whose deep pure-PSX substate calls hit libcd/
+    // VSync busy-waits our no-IRQ runtime can't satisfy, and which the removed override table can no
+    // longer intercept). Leaving DEMO (-> GAME) re-registers the slot with a non-DEMO entry, clearing
+    // demo_native via the generic fresh path below.
+    {
+      int demo_fresh = (st == 3 || (st == 2 && !c->game->sched.task_started[i]))
+                       && c->mem_r32(base + 0xc) == 0x801062E4u;
+      if (demo_fresh || (c->game->sched.demo_native[i] && st == 2 && c->game->sched.task_started[i])) {
+        if (demo_fresh) {
+          c->game->sched.task_ctx[i] = loop;                         // inherit gp
+          c->game->sched.task_ctx[i].r[29] = c->mem_r32(base + 8);   // per-task PSX stack top
+          c->game->sched.task_ctx[i].r[31] = 0xDEAD0000u;
+          c->game->sched.task_started[i] = 1;
+          c->game->sched.demo_native[i] = 1;
+        }
+        c->mem_w16(base, 4);                                         // running
+        c->mem_w32(CUR_TASK, base);
+        c->game->sched.cur_slot = i;
+        static_cast<R3000&>(*c) = c->game->sched.task_ctx[i];        // restore REGISTERS
+        c->game->sched.in_stage = 1;
+        void ov_demo_stage_main(Core*); void ov_demo_frame(Core*);
+        // Contain any cooperative yield from a rec_dispatch'd guest substate (e.g. a menu state that
+        // spawns an async CD read and FUN_80051f80-yields): without this setjmp the yield's longjmp
+        // would hit a stale jmp_buf and corrupt the scheduler. A yield = the substate isn't fully
+        // synchronous yet (a CD load to own native+sync — the frontier); treat it as frame-done.
+        if (setjmp(c->game->sched.yield_jmp) == 0) {
+          if (demo_fresh) ov_demo_stage_main(c);                     // prologue + s0 (sets sm[0x48]=1)
+          ov_demo_frame(c);                                          // one frame: substate dispatch + tail
+        } else if (cfg_dbg("demo")) {
+          static int w = 0; if (!w++) fprintf(stderr, "[demo] caught a substate yield (async CD not yet "
+                                                      "owned native+sync) — frontier\n");
+        }
+        c->game->sched.in_stage = 0;
+        c->game->sched.task_ctx[i] = static_cast<R3000&>(*c);        // save REGISTERS
+        c->mem_w16(base, 2);                                         // runnable next frame (resume the
+                                                                    // native dispatcher; state==2 + the
+                                                                    // demo_native flag re-enters here)
+        continue;
+      }
+    }
     uint32_t resume_pc;
     int fresh = 0;
     // state==3 (restart at new entry) or state==2 on a slot with no live context (freshly
@@ -113,6 +158,7 @@ static void native_scheduler_step(Core* c) {
       c->game->sched.task_ctx[i].r[29] = c->mem_r32(base + 8);// per-task PSX stack top (obj+8)
       c->game->sched.task_ctx[i].r[31] = 0xDEAD0000u;      // sentinel return
       c->game->sched.task_started[i] = 1;
+      c->game->sched.demo_native[i] = 0;       // a non-DEMO fresh entry (e.g. GAME): leave native-DEMO mode
     } else if (st == 2) {                     // runnable: resume after the previous yield
       resume_pc = c->game->sched.task_ctx[i].r[31];
     } else {
@@ -149,14 +195,9 @@ static void native_scheduler_step(Core* c) {
         ov_start_bin_stage(c);
         start = c->coro_redirect_pc ? c->coro_redirect_pc : c->r[31];
         c->coro_redirect_pc = 0;
-      } else if (fresh && resume_pc == 0x801062E4u) {
-        // DEMO/front-end stage entry: own the prologue native (the pure-PSX prologue busy-waits in
-        // libcd/libetc VSync, which our no-IRQ runtime can't satisfy), then hand to the guest loop body.
-        void ov_demo_stage_main(Core*);
-        ov_demo_stage_main(c);
-        start = c->coro_redirect_pc ? c->coro_redirect_pc : c->r[31];
-        c->coro_redirect_pc = 0;
       }
+      // (The DEMO/front-end entry 0x801062E4 is handled by the native per-frame dispatcher above,
+      //  never here — it `continue`s before reaching this generic coroutine path.)
       rec_coro_run(c, start);                  // runs until ov_yield longjmps back here
       c->mem_w16(base, 0);                        // returned (jr ra sentinel): task ended -> free
       c->game->sched.task_started[i] = 0;
