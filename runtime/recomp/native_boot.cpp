@@ -286,7 +286,13 @@ static void native_step_frame(Core* c, uint32_t f) {
   if (c->mem_r16(0x1f80019c) == 0) {
     rc1(c, 0x800815d0, envp + 0x2014);                        // PutDrawEnv (draw area/offset/clip for page 0)
     gpu_set_disp_origin(c, 0, 0);                             // PC-native: present scans the page we draw
-    rc1(c, 0x80081560, envp + 0x1ffc);                        // DrawOTag (submit the OT head)
+    // DrawOTag, PC-native: call ov_draw_otag DIRECTLY (top-down) instead of interpreting the PSX FUN_80081560.
+    // ov_draw_otag walks the OT to ENUMERATE the leftover guest prims (its draw ORDER is discarded), QUEUES
+    // them into the engine render queue (rq_active() is always on), then rq_flush()es the queue in ENGINE
+    // order. The interpreted PSX DrawOTag did the walk+queue but NOT the flush (rq_flush only lives in
+    // ov_draw_otag, orphaned by the override-table removal) — so the queue filled every frame and never
+    // drained, and NOTHING 2D reached the VK renderer (the whole front-end rendered black). a0 = OT head.
+    { void ov_draw_otag(Core*); c->r[4] = envp + 0x1ffcu; ov_draw_otag(c); }
   }
   perf_frame_end();   // perf: close the frame (post-tick remainder + full wall time) + emit rolling avg
 }

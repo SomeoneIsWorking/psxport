@@ -145,7 +145,7 @@ static void ov_set_geom_screen(Core* c) {       // SetGeomScreen(h) — projecti
 // the draw straight through our native walk (synchronous), instead of the DMA-register emulation dance.
 // This is the engine's draw submission, owned.
 void gpu_blank_display(Core* core);
-static void ov_draw_otag(Core* c) {
+void ov_draw_otag(Core* c) {   // called directly from native_step_frame (PC-driven); NOT an override
   // #7/#11 finish: while the DEMO/title front-end is still LOADING its assets (sub-SM task0+0x48 < 2, the
   // s4a load ramp), the title composites its menu/font over whatever VRAM the FMV/SCEA splash left — so the
   // SCEA text / FMV last-frame show through (the one-time hand-off clear can't cover the multi-frame ramp).

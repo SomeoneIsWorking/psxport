@@ -753,6 +753,25 @@ in-port profiler (later-186, `interp.cpp`) gives the TIME + FREQUENCY histograms
 ---
 
 # CURRENT FRONTIER (work these, in this order)
+**SESSION 2026-06-22 (later-214) — MAIN MENU / TITLE FIXED (was frontier #1 "title renders BLACK").**
+Two independent root causes, both override-removal casualties:
+- **Title texture never loaded:** native DEMO s0 called `preload_texgroup(c, 2, 0)` but that fn is
+  `(mode, set)` while the original `FUN_80044BD4(set=2, mode=0)` ⇒ args were swapped, loading the wrong
+  group. The title page (set 2) was never uploaded to VRAM (640,256)/(768,256)/CLUT(640,511), so the two
+  full-screen title sprites sampled empty VRAM. Fixed → `preload_texgroup(c, 0, 2)`; title page now in VRAM.
+- **Render queue never drained (the big one):** `rq_active()` is always on, so EVERY prim that walks the OT
+  is QUEUED (the OT draw-ORDER is discarded; the engine owns ordering). The queue drains via `rq_flush`,
+  which lived ONLY in `ov_draw_otag` (the native DrawOTag) — ORPHANED by the override-table removal. The
+  native loop interpreted the PSX DrawOTag (`rc1 0x80081560`) which did the walk+queue but NO flush, so the
+  queue filled every frame and never reached the VK renderer (`vk tex=0`). The ENTIRE 2D front-end was black.
+  Fixed: native_step_frame now calls `ov_draw_otag(c)` DIRECTLY (PC-driven), which walks+queues+`rq_flush`es.
+- **VERIFIED:** headless title shot now matches the offline oracle (logo/brick/characters/copyright + the
+  New Game / Load Game menu text). Boot → DEMO s2 clean. NB the engine OWNS render order (OT order discarded);
+  this does NOT re-introduce OT-order rendering — the OT is read only to enumerate leftover guest 2D prims.
+- ☐ NEXT (per user directive "all game render PC-native, no OT"): retire the OT-walk enumeration entirely —
+  own the 2D submit (title/menu/HUD/font) at the source so prims are queued PC-native without reading the OT;
+  and make in-game world prims order by real 3D position (not OT) — the sea-background-on-top class of bug.
+
 **SESSION 2026-06-22 (later-213) — PC-NATIVE GAME LOOP: present + pace + per-vblank audio re-OWNED top-down.**
 - **Root cause fixed:** the override-table removal (later-212) ORPHANED `ov_frame_update` — `gpu_present`,
   `gpu_pace_frame`, and the per-vblank audio (sequencer tick + `spu_audio_frame`×quota) + fps60 commit were
