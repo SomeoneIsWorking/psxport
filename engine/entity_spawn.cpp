@@ -543,6 +543,41 @@ void ov_obj_render_update(Core* c) {
   record_gate(c, obj_render_update, 0x800517F8u, "rendupdverify", s_v);
 }
 
+// FUN_80077B38 — set an object's GEOMETRY-BLOCK pointer from a table. RE'd from disas 0x80077B38 (leaf):
+//   ent = *(a1 + a2*4);  obj[+0x38] = ent;  obj[+0x0e] = (u16)ent[+2] & 0x3fff;  return that value.
+static uint32_t obj_set_geom(Core* c) {
+  uint32_t obj = c->r[4], tbl = c->r[5], idx = c->r[6];
+  uint32_t ent = c->mem_r32(tbl + idx * 4u);
+  uint32_t cnt = (uint32_t)(c->mem_r16(ent + 2) & 0x3fffu);
+  c->mem_w32(obj + 0x38, ent);
+  c->mem_w16(obj + 0x0e, (uint16_t)cnt);
+  return cnt;   // incidental v0 the recomp leaves (callers treat this void)
+}
+void ov_obj_set_geom(Core* c) {
+  static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("setgeomverify") ? 1 : 0;
+  record_gate(c, obj_set_geom, 0x80077B38u, "setgeomverify", s_v);
+}
+
+// FUN_8006CBD0 — copy a 6-halfword TRANSFORM BLOCK from a1 into the scratchpad camera/transform block
+// (0x1F8000D2/D6/DA) + the object's rotation fields (obj+0x3a/0x3e/0x42). RE'd from disas 0x8006CBD0 (leaf):
+//   *0x1F8000D2 = a1[0]; *0x1F8000D6 = a1[1]; *0x1F8000DA = a1[2];
+//   obj[+0x3a] = a1[3]; obj[+0x3e] = a1[4]; obj[+0x42] = a1[5];
+static uint32_t obj_set_xformblk(Core* c) {
+  uint32_t obj = c->r[4], src = c->r[5];
+  c->mem_w16(0x1F8000D2u, c->mem_r16(src + 0));
+  c->mem_w16(0x1F8000D6u, c->mem_r16(src + 2));
+  c->mem_w16(0x1F8000DAu, c->mem_r16(src + 4));
+  c->mem_w16(obj + 0x3a, c->mem_r16(src + 6));
+  c->mem_w16(obj + 0x3e, c->mem_r16(src + 8));
+  uint32_t last = c->mem_r16(src + 0xa);
+  c->mem_w16(obj + 0x42, (uint16_t)last);
+  return last;   // incidental v0
+}
+void ov_obj_set_xformblk(Core* c) {
+  static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("setxblkverify") ? 1 : 0;
+  record_gate(c, obj_set_xformblk, 0x8006CBD0u, "setxblkverify", s_v);
+}
+
 // ------------------------------------------------------------------------------------------------
 // Public registration — ONE line from game_tomba2.cpp init.
 // ------------------------------------------------------------------------------------------------
@@ -558,4 +593,6 @@ void entity_spawn_register(void) {
   rec_set_override(0x8007AAE8u, ov_record_alloc_g);   // FUN_8007AAE8 render-record bump allocator
   rec_set_override(0x80051B70u, ov_obj_record_init);  // FUN_80051B70 per-object render-record init
   rec_set_override(0x800517F8u, ov_obj_render_update);// FUN_800517F8 per-object render-state update
+  rec_set_override(0x80077B38u, ov_obj_set_geom);     // FUN_80077B38 set object geometry-block ptr
+  rec_set_override(0x8006CBD0u, ov_obj_set_xformblk); // FUN_8006CBD0 set object transform block (scratchpad+obj)
 }
