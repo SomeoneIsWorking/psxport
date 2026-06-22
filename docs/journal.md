@@ -7212,3 +7212,17 @@ Owned 3 shared engine routines the collectable/entity handlers call:
 - `FUN_800517F8` per-object RENDER-STATE UPDATE (hot, 8000+/run): FUN_80085480 transform build + snapshot
   int16 pos obj[+0x2e/32/36]→32-bit obj[+0xac/b0/b4] + FUN_80051300; 2 callees kept content. Gate
   rendupdverify 0-diff 8000+ (also a perf win). All in engine/entity_spawn.cpp (commits 8bec1e7, 7547512).
+
+**later-209 cont. — more shared object/spawn helpers owned (all engine/entity_spawn.cpp):**
+- `FUN_80077B38` set object geometry-block ptr (obj[+0x38]=*(tbl+idx*4); obj[+0x0e]=ent[+2]&0x3fff). Gate
+  setgeomverify 0-diff 5000+.
+- `FUN_8006CBD0` set object transform block (copies a1[0..2]→scratchpad 0x1F8000D2/D6/DA, a1[3..5]→obj
+  +0x3a/3e/42). Gate setxblkverify (0 calls@seaside, RE-verified leaf).
+- `FUN_8003116C` spawn-and-init helper: guard pool0 cnt>=7, spawn type6/list1 via owned FUN_8007A980, seed
+  pos from a1, init via FUN_80028E10 (content). Gate spawninitverify 0-diff 120+.
+Method (user 2026-06-22): "keep owning game subsystems until HP/AP reveal themselves naturally" — work the
+shared engine routines the collectable handlers call (ranked by call count in scratch/decomp/collectables.c).
+Owned this run: spawn variants 79F90/A12C/A2C8, dispatchers 7AA38/7A980-already, despawn 7A624, record
+alloc/init 7AAE8/51B70, render-state 517F8, geom/xform setters 77B38/6CBD0, spawn-init 3116C. NEXT shared
+candidates (unowned, by count): FUN_8004BD64 (10, multi-mode pos midpoint), FUN_80083F50 (10, quadrant sine
+LUT → belongs in mathlib.cpp), FUN_80083E80 (8), FUN_80054D14 (5), FUN_80040CDC (5).
