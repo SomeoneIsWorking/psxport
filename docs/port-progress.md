@@ -772,6 +772,25 @@ Two independent root causes, both override-removal casualties:
   own the 2D submit (title/menu/HUD/font) at the source so prims are queued PC-native without reading the OT;
   and make in-game world prims order by real 3D position (not OT) — the sea-background-on-top class of bug.
 
+**GAME-STAGE DERAIL — ROOT CAUSE FOUND (later-214, was "NEW FRONTIER" in later-212).**
+- Repro: `newgame` reaches GAME prologue (0x8010637C) ~f26, then `[DERAIL] bad opcode 0x6E656874 ("then")
+  at pc=0x80118FF8 ra=0x801088B0`. Diagnostic: `PSXPORT_DERAIL_DUMP=<path>` dumps 2MB guest RAM on the
+  bad-opcode abort (interp.cpp) → disas.py --ram.
+- The GAME area-machine handler (0x801088A8 `jal 0x80109450`) calls into 0x80109450, which is **all zeros**.
+  RAM map at derail: GAME.BIN code = 0x80106000–0x80108FFF; **0x80109000–0x801187FF = ZERO (the AREA
+  OVERLAY slot, never loaded)**; data at 0x80118800+ (the idx-2 file at 0x80118F9C). Execution nop-slides
+  from 0x80109450 through the zero hole and hits the first data word at 0x80118FF8 → bad opcode.
+- WHY the slot is empty: **task1 (the cooperative AREA-LOAD task) never spawns** — at the derail
+  task0={state1,entry GAME,sm48=2 running}, **task1={state0}, task2={state0}**; area id 0x800bf870 = 18.
+  So the GAME stage reached its RUNNING substate (sm[0x48]=2) WITHOUT ever loading area 18's overlay. The
+  newgame hand-off (s5 → demo_start_stage(c,2) → GAME) does not trigger the first area-load.
+- FIX DIRECTION: on GAME entry, drive the first area-load (area 18) like the REPL `warp` does
+  (seed 0x800bf870 + restart the area-load task slot 1 at FUN_80051f14(1,0x800452c0), or run the GAME
+  stage's own load substate) so task1 pulls the overlay into 0x80109000 over the following frames BEFORE
+  the area machine calls 0x80109450. PITFALL (later-212): do NOT force-sync the shared async core
+  FUN_8001D940 — it corrupts the overlay; let the cooperative task run. Verify: newgame → run, no derail,
+  0x80109000 region becomes CODE.
+
 **SESSION 2026-06-22 (later-213) — PC-NATIVE GAME LOOP: present + pace + per-vblank audio re-OWNED top-down.**
 - **Root cause fixed:** the override-table removal (later-212) ORPHANED `ov_frame_update` — `gpu_present`,
   `gpu_pace_frame`, and the per-vblank audio (sequencer tick + `spu_audio_frame`×quota) + fps60 commit were
