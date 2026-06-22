@@ -167,159 +167,24 @@ void games_tomba2_init(void) {
   // Hand-written native C++ for the boot→first-cutscene path (engine/native_path.cpp).
   void games_native_path_init(void);
   games_native_path_init();
-  rec_set_override(0x800788ACu, ov_frame_update);    // per-frame state update + present + audio
-  // Replace the game's in-game Options menu with our overlay. The override falls back to the real menu
-  // (super-call) when the overlay isn't up (headless / PSXPORT_UI=0), so it self-activates with the overlay.
-  rec_set_override(0x8007B45Cu, ov_options_menu);
-  // Own the GTE projection setup natively.
-  rec_set_override(0x800846D0u, ov_set_geom_offset);
-  rec_set_override(0x800846F0u, ov_set_geom_screen);
-  rec_set_override(0x80081560u, ov_draw_otag);       // own DrawOTag (the per-frame draw kick) natively
-  { void engine_camera_register(void); engine_camera_register(); }   // per-frame camera X/Z follow native
-  { void engine_math_register(void);   engine_math_register();   }   // hot libgte-style math leaves (isqrt)
-  { void save_register(void);          save_register();          }   // save/load FLOW dispatcher (engine/save.cpp)
-  { void sound_register(void);         sound_register();         }   // PC-native sound front-end (SFX/BGM trigger API, engine/sound.cpp)
-  { void hud_register(void);           hud_register();           }   // PC-native in-game HUD (gauge/icon/banner, draws textured quads on the engine 2D layer; engine/hud.cpp)
-  // PC-owned asset codecs.
-  rec_set_override(0x80044D8Cu, ov_lz_decompress);   // LZ image decompressor
-  rec_set_override(0x80044F58u, ov_load_texgroup);   // texture-group LOADER orchestration (header+archive+unpack)
-  rec_set_override(0x80044E84u, ov_unpack_group);    // texture-group unpacker (drives the above)
-  rec_set_override(0x80081218u, ov_upload_image);    // PC-native CPU->VRAM upload (libgs upload lib)
-  // Own the geometry submit path natively.
-  {
-    void ov_submit_poly_gt3(Core*), ov_submit_poly_gt4(Core*), ov_submit_poly_gt4_bp(Core*),
-         engine_submit_register_autodetect(void);
-    rec_set_override(0x8007FDB0u, ov_submit_poly_gt3);   // POLY_GT3 (gouraud-textured triangle) submit
-    rec_set_override(0x8008007Cu, ov_submit_poly_gt4);   // POLY_GT4 (gouraud-textured quad) submit
-    rec_set_override(0x80027768u, ov_submit_poly_gt4_bp);// byte-packed POLY_GT4 (field's dominant emitter)
-    engine_submit_register_autodetect();                 // + own the same library in runtime-loaded overlays
-  }
-  // Own the PER-OBJECT render flush natively (gen_func_8003CDD8 — the world/margin render submission):
-  // compose the camera×object transform + dispatch the geomblk to the native submitter, with NO guest
-  // render code (later-133).
-  {
-    void ov_perobj_flush(Core*), ov_perobj_render(Core*), ov_render_walk(Core*), ov_terrain(Core*);
-    void ov_render_walk_snapshot(Core*);
-    rec_set_override(0x8003CDD8u, ov_perobj_flush);
-    rec_set_override(0x8003CCA4u, ov_perobj_render);   // per-object render dispatch
-    rec_set_override(0x8003C048u, ov_render_walk);     // phase-2 render-list walk
-    rec_set_override(0x8003BB50u, ov_render_walk_snapshot);  // snapshot-queue object walk + world-pos depth
-    void ov_collectable_quad(Core*);
-    rec_set_override(0x8003C8F4u, ov_collectable_quad);  // collectable billboard-quad drawer: world-pos depth
-    rec_set_override(0x8002AB5Cu, ov_terrain);         // field terrain renderer (float transform + real depth)
-    void ov_build_xform(Core*);
-    rec_set_override(0x80051C8Cu, ov_build_xform);     // per-object transform builder
-    void ov_xform_propagate(Core*);
-    rec_set_override(0x80051464u, ov_xform_propagate); // child-node transform propagation (orchestrates owned prims)
-    void ov_xform51128(Core*);
-    rec_set_override(0x80051128u, ov_xform51128);      // per-object child-node transform loop (sibling of xform_propagate; orchestrates owned prims)
-    void ov_orch597AC(Core*);
-    rec_set_override(0x800597ACu, ov_orch597AC);       // per-object world-transform orchestrator (build matrix + secondary + child propagate)
-    { void ov_cone_cull_2b278(Core*);
-      rec_set_override(0x8002B278u, ov_cone_cull_2b278); }  // view-cone cull (lazy conecull gate)
-    { void ov_rand(Core*); rec_set_override(0x8009A450u, ov_rand); }   // platform PRNG (rand LCG)
-    { void ov_bittest_4d7ec(Core*); rec_set_override(0x8004D7ECu, ov_bittest_4d7ec); }  // bitmap bit-test
-    { void ov_trig_sin(Core*), ov_trig_cos(Core*), ov_trig_lut(Core*);
-      rec_set_override(0x80083E80u, ov_trig_sin);                      // sin LUT
-      rec_set_override(0x80083F50u, ov_trig_cos);                      // cos LUT
-      rec_set_override(0x80083EBCu, ov_trig_lut); }                    // sin-quadrant lookup
-    { void ov_cull_wrap_77acc(Core*); rec_set_override(0x80077ACCu, ov_cull_wrap_77acc); }  // cull wrapper variant (flags 1/4)
-    { void ov_list_scan_31780(Core*); rec_set_override(0x80031780u, ov_list_scan_31780); }  // list-tail resolver/reset
-    { void ov_grid_setup_49968(Core*); rec_set_override(0x80049968u, ov_grid_setup_49968); }  // collision-grid row-ptr setup
-    { void ov_grid_query_47cbc(Core*); rec_set_override(0x80047CBCu, ov_grid_query_47cbc); }  // collision-grid cell query/walk
-    { void ov_grid_resolve_498c8(Core*); rec_set_override(0x800498C8u, ov_grid_resolve_498c8); }  // collision-grid resolve loop (control flow owned)
-    { void ov_grid_step_4798c(Core*); rec_set_override(0x8004798Cu, ov_grid_step_4798c); }  // collision-grid per-step origin/index setup (the last dispatched grid callee)
-    { void ov_grid_offset_48360(Core*); rec_set_override(0x80048360u, ov_grid_offset_48360); }  // collision-grid cell-relative offset transform (scratchpad-only leaf, ~5% field; engine/grid_offset.cpp)
-    { void ov_script_vm_4ce14(Core*); rec_set_override(0x8004CE14u, ov_script_vm_4ce14); }  // per-object script-VM tick (control flow owned; sub-behaviors dispatched)
-    { void ov_input_dispatch_931c0(Core*); rec_set_override(0x800931C0u, ov_input_dispatch_931c0); }  // per-frame input/controller-state processor (control flow owned)
-    // PC-native PLAYER velocity-integrate handler (engine/engine_player.cpp): FUN_80056B48 integrates
-    // speed×dir into the master position (16.16 X/Y/Z at 0x800E7EAC/B0/B4). CONTENT (post-boundary), owned
-    // native; `playerverify` full RAM+scratchpad A/B gate. The settle helper 0x80054650 stays dispatched.
-    { void ov_player_move(Core*); rec_set_override(0x80056B48u, ov_player_move); }
-    { void ov_anim_vm_76d68(Core*); rec_set_override(0x80076D68u, ov_anim_vm_76d68); }  // per-object animation-sequence VM stepper (control flow owned; 3 frame sub-fns dispatched)
-    { void ov_child_spawn_40410(Core*); rec_set_override(0x80040410u, ov_child_spawn_40410); }  // per-object child-node spawn/sub-object builder (control flow owned; allocator+setup dispatched)
-    { void ov_sm40558(Core*); rec_set_override(0x80040558u, ov_sm40558); }  // per-object state-machine head (control flow owned; all sub-behaviors dispatched)
-    { void ov_osc_fd10(Core*); rec_set_override(0x8003FD10u, ov_osc_fd10); }  // sm40558 STATE-1 obj[5]=0 oscillate/frame-toggle handler (control flow owned; ov_rand dispatched)
-    { void ov_disp_26c88(Core*); rec_set_override(0x80026C88u, ov_disp_26c88); }  // per-object dispatcher loop over 0x800ec188 table (control flow owned; handlers dispatched)
-    { void ov_entity_walk_7a904(Core*); rec_set_override(0x8007A904u, ov_entity_walk_7a904); }  // per-frame entity-list walk = native object driver (list traversal owned; per-type handlers dispatched) [#4]
-    { void ov_hitbox_3b220(Core*); rec_set_override(0x8003B220u, ov_hitbox_3b220); }  // per-object 2D box/hitbox-corner builder (pure resident leaf, no jal/GTE, ~1.64% field; engine/hitbox.cpp)
-    { void ov_bav_load(Core*); rec_set_override(0x80096590u, ov_bav_load); }  // per-area BAV effect-cel LOADER (engine_bav.cpp): slot alloc + cel/UV parse + global latch owned; VRAM alloc/upload callback dispatched
-    { void entity_spawn_register(void); entity_spawn_register(); }  // entity SPAWN/placement primitive FUN_80079C3C (pool-pop + field-init + list-link; engine/entity_spawn.cpp)
-    { void actor_sm_24448_register(void); actor_sm_24448_register(); }  // actor move-and-collide SM step FUN_80024448 (vel+gravity+resolve; engine/actor_sm_24448.cpp)
-    { void objbeh_739ac_register(void); objbeh_739ac_register(); }  // per-object behavior SM FUN_800739AC (placement-installed scene/UI trigger; engine/objbeh_739ac.cpp)
-    { void objbeh_73cd8_register(void); objbeh_73cd8_register(); }  // per-object behavior SM FUN_80073CD8 (resident sibling; engine/objbeh_73cd8.cpp)
-    { void objbeh_741dc_register(void); objbeh_741dc_register(); }  // per-object behavior SM FUN_800741DC (item/pickup scene trigger; engine/objbeh_741dc.cpp)
-    // PC-native INVENTORY / ITEM-COLLECTION subsystem (engine/inventory.cpp): the shared item-add core
-    { void inventory_register(void); inventory_register(); }
-  }
-  // PC-native LEVEL/STAGE LOADER (engine/engine_level.cpp): the engine's overlay loader FUN_800450bc —
-  // load a stage's overlay off the disc + set its entry, synchronous (no PSX CD-wait yield).
-  { void ov_load_stage(Core*); rec_set_override(0x800450BCu, ov_load_stage); }
-  // PC-native STAGE TRANSITION (engine/engine_level.cpp): FUN_80052078 — load the next stage + restart the
-  // task at its new entry. Thread plumbing replaced by the native scheduler (state=3 == restart); the
-  // terminal yield is the existing ov_switch. Exercised at the START->DEMO->GAME boot transitions.
-  { void ov_stage_transition(Core*); rec_set_override(0x80052078u, ov_stage_transition); }
-  // PC-native task-0 BOOTSTRAP (engine/engine_level.cpp): FUN_800499e8 — resolve \BIN\START.BIN, record its
-  // (LBA,size) in the stage table, transition to stage 0. CD-directory lookup stays the platform mechanism.
-  { void ov_task0_boot(Core*); rec_set_override(0x800499E8u, ov_task0_boot); }
-  // PC-native per-area CEL-GROUP LOAD-AND-WAIT (engine/engine_level.cpp): FUN_800753D4 — load one effect-cel
-  { void ov_cel_load_wait(Core*); rec_set_override(0x800753D4u, ov_cel_load_wait); }
-  // PC-native FONT/TEXT init (engine/engine_font.cpp): FUN_80075130 is called directly from native_boot,
-  // but register the orchestrator + its 3 owned engine callees so any other dispatcher to them uses native
-  // (the 8 libgpu/sound callees stay PSX, dispatched in-context). later (font frontier).
-  { void ov_font_init(Core*), ov_font_bank_select(Core*), ov_font_bank2_store(Core*), ov_font_glyphclass_fill(Core*);
-    rec_set_override(0x80075130u, ov_font_init);
-    rec_set_override(0x800963a0u, ov_font_bank_select);
-    rec_set_override(0x80096370u, ov_font_bank2_store);
-    rec_set_override(0x800752b4u, ov_font_glyphclass_fill); }
+  // OVERRIDE SYSTEM REMOVED (2026-06-22): every rec_set_override(...) registration that used to live in
+  // this init was deleted. The ov_* native fns are KEPT (in native_path.cpp / engine_submit.cpp / etc.)
+  // as future DIRECT-CALL targets, wired top-down as each parent is owned. The *_register() helpers below
+  // are plain C calls into the subsystem init (now no-ops where their bodies only registered overrides),
+  // left in place so re-introducing direct wiring per subsystem is a one-line change.
+  { void engine_camera_register(void); engine_camera_register(); }
+  { void engine_math_register(void);   engine_math_register();   }
+  { void save_register(void);          save_register();          }
+  { void sound_register(void);         sound_register();         }
+  { void hud_register(void);           hud_register();           }
+  { void engine_submit_register_autodetect(void); engine_submit_register_autodetect(); }
+  { void entity_spawn_register(void);  entity_spawn_register();  }
+  { void actor_sm_24448_register(void); actor_sm_24448_register(); }
+  { void objbeh_739ac_register(void);  objbeh_739ac_register();  }
+  { void objbeh_73cd8_register(void);  objbeh_73cd8_register();  }
+  { void objbeh_741dc_register(void);  objbeh_741dc_register();  }
+  { void inventory_register(void);     inventory_register();     }
   fps60_init();
-  // cull tap: genuine-wide is the default wide path and the overlay can toggle aspect LIVE, so the
-  // widened-frustum re-include is always available. ov_object_cull is a faithful super-call + a wide-only
-  // re-include (no-op at 4:3).
-  rec_set_override(0x8007712Cu, ov_object_cull);
-  rec_set_override(0x8007778Cu, ov_cull_wrapper);    // camera-relative delta + flag reset → dispatch the cull body
-  // PC-native per-object DEPTH at the render-command dispatcher (the universal chokepoint): every queued
-  // render command passes through 0x8003F698 with the composed camera×object transform live in the GTE, so
-  // ov_render_cmd computes the object's world-position view-depth there and tags the command's packet-pool
-  // span → a 2D billboard prim occludes by real world depth, not sprite order. (Also carries the rcmd debug
-  // dump when PSXPORT_DEBUG=rcmd.) Always on — one behavior. later-130/this session.
-  { void ov_render_cmd(Core*); rec_set_override(0x8003F698u, ov_render_cmd); }
-  // Enqueue tap (PSXPORT_DEBUG=enq): the render-command push, called per-object in phase 1 → g_current_object
-  // names the source object, the attribution the downstream oracle lacks. later-131. Gated (super-call).
-  if (cfg_dbg("enq")) { void ov_enqueue_probe(Core*); rec_set_override(0x80077EBCu, ov_enqueue_probe); }
-  // Flush tap (PSXPORT_DEBUG=flush): dump the command-struct addresses (list+0xc0[i]) the flush drains, to
-  // trace the still-open render-command enqueue. later-131. Gated (super-call).
-  if (cfg_dbg("flush")) { void ov_flush_probe(Core*); rec_set_override(0x8003F174u, ov_flush_probe); }
-  // Major flush tap (PSXPORT_DEBUG=flush2): the world/margin flush gen_func_8003CDD8 (later-133). Gated.
-  if (cfg_dbg("flush2")) { void ov_flush2_probe(Core*); rec_set_override(0x8003CDD8u, ov_flush2_probe); }
-  // Command-enqueue tap (PSXPORT_DEBUG=cmdenq): gen_func_80051B70, validates obj/(group,sub)→geomblk. later-132.
-  if (cfg_dbg("cmdenq")) { void ov_cmdenq_probe(Core*); rec_set_override(0x80051B04u, ov_cmdenq_probe); }
-  // Submitter call-counter (PSXPORT_DEBUG=subcnt): which un-owned submit variants fire per scene. Gated.
-  if (cfg_dbg("subcnt")) { void ov_subcnt_b320(Core*), ov_subcnt_c8f4(Core*);
-    rec_set_override(0x8003B320u, ov_subcnt_b320); rec_set_override(0x8003C8F4u, ov_subcnt_c8f4); }
-  // Per-object dispatch case histogram (PSXPORT_DEBUG=ccase): which gen_func_8003CCA4 cases fire. Gated.
-  if (cfg_dbg("ccase")) { void ov_ccase_probe(Core*); rec_set_override(0x8003CCA4u, ov_ccase_probe); }
-  // Phase-2 render-walk caller counter (PSXPORT_DEBUG=rwalk): which orchestrator drives 8003CCA4. Gated.
-  if (cfg_dbg("rwalk")) {
-    void ov_rwalk_b588(Core*), ov_rwalk_bb50(Core*), ov_rwalk_bcf4(Core*),
-         ov_rwalk_bf00(Core*), ov_rwalk_c048(Core*), ov_rwalk_eec0(Core*);
-    rec_set_override(0x8003B588u, ov_rwalk_b588); rec_set_override(0x8003BB50u, ov_rwalk_bb50);
-    rec_set_override(0x8003BCF4u, ov_rwalk_bcf4); rec_set_override(0x8003BF00u, ov_rwalk_bf00);
-    rec_set_override(0x8003C048u, ov_rwalk_c048); rec_set_override(0x8003EEC0u, ov_rwalk_eec0);
-  }
-  // Render-list node-type dump (PSXPORT_DEBUG=rlist): the full type set 8003C048 must handle. Gated.
-  if (cfg_dbg("rlist")) { void ov_rlist_probe(Core*); rec_set_override(0x8003C048u, ov_rlist_probe); }
-  // Issue #4: own the AUXILIARY render walks PC-native (engine/engine_submit.cpp) so flame/rope/effect
-  // billboards get a real WORLD-POSITION depth (gpu_obj_depth_add) instead of falling to the flat 2D band
-  // and drawing over occluding foliage. Faithful per-node lift of each recomp body + per-node depth tag,
-  // mirroring ov_render_walk_snapshot. Skip when PSXPORT_DEBUG=rwalk is on (the diagnostic counters above
-  // own these addresses then; the override table is last-registration-wins, so this guard avoids a clash).
-  if (!cfg_dbg("rwalk")) {
-    void ov_rwalk_aux_bcf4(Core*), ov_rwalk_aux_bf00(Core*), ov_rwalk_aux_eec0(Core*);
-    rec_set_override(0x8003BCF4u, ov_rwalk_aux_bcf4);
-    rec_set_override(0x8003BF00u, ov_rwalk_aux_bf00);
-    rec_set_override(0x8003EEC0u, ov_rwalk_aux_eec0);
-  }
   void engine_tomba2_init(void);
   engine_tomba2_init();                            // native engine layer (Phase 1: object-list walk)
 }

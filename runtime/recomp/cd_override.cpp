@@ -148,7 +148,6 @@ static void ov_cd_loadfile(Core* c) {
   }
   if (g_cd_verbose)
     fprintf(stderr, "[cd] loadfile %u B @ LBA %u -> 0x%08X ra=0x%08X\n", size, lba, dest, c->r[31]);
-  rec_overlay_loaded(c, dest, size);  // scan the freshly-loaded bytes for owned overlay library fns
   c->r[V0] = size;
 }
 
@@ -187,7 +186,6 @@ static void ov_cd_async_read(Core* c) {
   if (nsec) c->mem_w32(0x800be0e0, lba + nsec - 1);  // DAT_800be0e0 = last sector read (pos tracker)
   if (g_cd_verbose)
     fprintf(stderr, "[cd] async read %u words (%u B) @ LBA %u -> 0x%08X\n", words, bytes, lba, dest);
-  rec_overlay_loaded(c, dest, bytes); // scan the freshly-loaded bytes for owned overlay library fns
 }
 
 // 0x8001D2A8 FUN_8001d2a8(chan, start_lba, end_lba, flags): the engine's voice/BGM clip player.
@@ -317,11 +315,6 @@ static void ov_voice_stop(Core* c) {
 
 void cd_overrides_init(void) {
   if (cfg_dbg("cd")) g_cd_verbose = 1;
-  rec_set_override(0x8001D2A8u, ov_voice_play);      // engine voice/BGM clip player -> native xa_stream
-  rec_set_override(0x8001CF2Cu, ov_voice_stop);      // stop voice/BGM -> native
-  rec_set_override(0x8001D940u, ov_cd_async_read);   // engine async streaming reader (task1)
-  rec_set_override(0x8008B2D8u, ov_cdinit);
-  rec_set_override(0x8001DB8Cu, ov_cd_loadfile);
   // 0x8001DC40 FUN_8001dc40(a0=dest, a1=lba, a2=size_bytes): the intro sequencer's loader
   // variant. Same (dest, lba, size_bytes) contract as FUN_8001db8c — it sets the identical
   // _DAT_1f8001f8/f0/f4 read state — but runs the reader INLINE (calls FUN_8001d940 directly,
@@ -331,9 +324,4 @@ void cd_overrides_init(void) {
   // (FUN_80044f58/FUN_8004514c) stalls forever. The inline variant has no guard to clear, so
   // the same native synchronous read body applies verbatim: copy `size` bytes from `lba` into
   // `dest`, return size. Callers set their own done-flag (DAT_1f80019b) after the call.
-  rec_set_override(0x8001DC40u, ov_cd_loadfile);
-  rec_set_override(0x8008AC34u, ov_cd_command);
-  rec_set_override(0x8008A6ECu, ov_cd_sync);
-  rec_set_override(0x8001CE90u, ov_cd_cmd_stream);   // streaming CD-cmd wrapper (GetlocL pos)
-  rec_set_override(0x8008C1ECu, ov_cd_read);
 }

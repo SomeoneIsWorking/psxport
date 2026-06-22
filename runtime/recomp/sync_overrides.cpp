@@ -41,8 +41,4 @@ static void ov_cdreadsync(Core* c) { zero_result(c, c->r[A1]); c->r[V0] = 0; }
 static void ov_cddatasync(Core* c) { c->r[V0] = 0; }   // 0 = DMA idle / transfer complete
 
 void sync_overrides_init(void) {
-  rec_set_override(0x8009CAECu, ov_sync_ok);      // DecDCTinSync  ("MDEC_in_sync timeout")
-  rec_set_override(0x8009CB80u, ov_sync_ok);      // DecDCToutSync ("MDEC_out_sync timeout")
-  rec_set_override(0x8008A96Cu, ov_cdreadsync);   // CdReadSync    ("CD timeout")
-  rec_set_override(0x8008B4B8u, ov_cddatasync);   // CdDataSync    ("CD timeout")
 }

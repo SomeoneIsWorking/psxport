@@ -13,7 +13,6 @@
 #include <stdio.h>
 #include <string.h>
 
-void rec_set_override(uint32_t addr, void (*fn)(Core*));
 void rec_interp(Core* c, uint32_t pc);
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
@@ -652,16 +651,4 @@ void engine_math_register(void) {
   // the live path; ov_isqrt_verify is reachable as the per-call gate when the `mathverify` channel is set
   // before override install (same convention as camverify).
   int v = cfg_dbg("mathverify");
-  rec_set_override(0x80077FB0u, v ? ov_isqrt_verify    : ov_isqrt);
-  rec_set_override(0x80084080u, v ? ov_gte_norm_verify : ov_gte_norm);  // verified 0-diff 15000+ live calls
-  rec_set_override(0x80084110u, v ? ov_mat_mul_verify : ov_mat_mul);  // 3x3 matmul; verified 0-diff 115000+ live calls
-  rec_set_override(0x80085480u, v ? ov_rotmat_verify : ov_rotmat);  // RotMatrix; verified 0-diff 55000+ live calls
-  rec_set_override(0x80085050u, v ? ov_rot_z_verify : ov_rot_z);  // RotMatrixZ-class; verified 0-diff 35000+ live calls
-  rec_set_override(0x80084EB0u, v ? ov_rot_y_verify : ov_rot_y);  // RotMatrixY-class (inverted sin); same kernel as rotZ/X (1 live call 0-diff; kernel verified 55k+ on siblings)
-  rec_set_override(0x80084D10u, v ? ov_rot_x_verify : ov_rot_x);  // RotMatrixX-class; verified 0-diff 55000+ live calls
-  rec_set_override(0x80084220u, v ? ov_apply_matlv_verify : ov_apply_matlv);  // MVMVA matrix(CR)×vec; verified 0-diff 75000+ live calls
-  rec_set_override(0x80084360u, v ? ov_compmatlv_verify : ov_compmatlv);  // CompMatrixLV M←R×M in-place (same product as ov_mat_mul); GTE-exact, 0-diff live (thin coverage, raised by FUN_800597AC)
-  rec_set_override(0x80084A80u, v ? ov_rot84A80_verify : ov_rot84A80);  // RotMatrix variant (pure LUT trig, no GTE); verified 0-diff 5000+ live field calls; 4.4% field hot
-  rec_set_override(0x800517BCu, v ? ov_settrans_verify : ov_settrans);  // SetVector 0x20-byte block (pure leaf); verified 0-diff 30000+; 1.76% field hot / 15900 calls
-  rec_set_override(0x800851F0u, v ? ov_rot851F0_verify : ov_rot851F0);  // CPU RotMatrix twin (pure LUT trig, no GTE; FUN_800597AC dep; verified 0-diff live, rare-path)
 }

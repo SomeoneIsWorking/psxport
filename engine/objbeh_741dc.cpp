@@ -188,5 +188,4 @@ void ov_beh_741dc(Core* c) {
 }  // namespace
 
 void objbeh_741dc_register(void) {
-  rec_set_override(BEH_FN, ov_beh_741dc);   // FUN_800741DC per-object behavior SM (item/pickup scene trigger)
 }

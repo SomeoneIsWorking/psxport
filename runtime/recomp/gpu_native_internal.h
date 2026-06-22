@@ -156,7 +156,6 @@ struct GpuState {
   void gpu_present_ex(Core* core, int do_blit);
   void gpu_present(Core* core);
   uint16_t gpu_vram_peek(int x, int y);
-  void scea_splash_composite(int fade);   // PC-native SCEA splash: composite the text into s_vram (0,0)
   void gpu_blank_display();                 // zero the display FB rect (no present)
   void gpu_clear_display(Core* core);      // gpu_blank_display + present (FMV teardown)
   void gpu_vram_load(const uint16_t* src);
@@ -185,7 +184,9 @@ void gpu_repaint(Core* core);
 int  gpu_frame_no(Core* core);
 void gpu_provat_enable(Core* core);
 uint16_t gpu_vram_peek(Core* core, int x, int y);
-void gpu_scea_splash_composite(Core* core, int fade);
+// PC-native SCEA decode: baked 4bpp+CLUT asset -> flat RGBA8 at the 640x468 screen positions (text =
+// CLUT color, else transparent black). PSX-free source for gpu_vk_present_image. `out` = 640*468*4 bytes.
+void gpu_scea_decode_rgba(uint8_t* out);
 void gpu_vram_load(Core* core, const uint16_t* src);
 void gpu_vram_save(Core* core, uint16_t* dst);
 void gpu_fps60_present_pass(Core* core);   // VK 60fps in-between present pass

@@ -437,16 +437,20 @@ void gpu_vk_video_status(int* native_w, int* ires, int* fbw, int* fbh, int* ww, 
 
 int gpu_vk_enabled(void) {
   if (s_vk_on < 0) {
-    // VK is THE renderer. It runs windowed (PSXPORT_GPU_WINDOW) or offscreen-headless
-    // (PSXPORT_VK_HEADLESS, deterministic — the REPL screenshot harness). The SW rasterizer remains only
-    // as the per-pixel fill/copy fallback for non-tee'd GP0 ops, never the present path.
-    const char* w = cfg_str("PSXPORT_GPU_WINDOW");
-    int win = w && atoi(w) != 0;
+    // VK is THE renderer — always on. The only mode distinction is whether it presents to a live
+    // on-screen window (the default) or renders offscreen-headless (PSXPORT_VK_HEADLESS, deterministic,
+    // the REPL screenshot harness). The SW rasterizer remains only as the per-pixel fill/copy fallback
+    // for non-tee'd GP0 ops, never the present path.
     s_headless = cfg_on("PSXPORT_VK_HEADLESS") ? 1 : 0;
-    s_vk_on = (s_headless || win) ? 1 : 0;
+    s_vk_on = 1;
   }
   return s_vk_on && !s_failed;
 }
+
+// Single source of truth for "is a live on-screen window up" (replaces the PSXPORT_GPU_WINDOW env
+// gate). Windowed == VK renderer running and NOT in headless/offscreen mode. Used by the pacing,
+// audio-realtime, pad-poll, and present paths so there is one behavior, not an env A/B.
+extern "C" int gpu_windowed(void) { return gpu_vk_enabled() && !s_headless; }
 
 static uint32_t mem_type(uint32_t bits, VkMemoryPropertyFlags want) {
   VkPhysicalDeviceMemoryProperties mp; vkGetPhysicalDeviceMemoryProperties(s_phys, &mp);
@@ -2076,6 +2080,212 @@ void GpuVkState::tritest() {
   exit(ok ? 0 : 3);
 }
 
+// ---- PC-native fullscreen IMAGE present (gpu_vk_present_image) ---------------------------------------
+// A reusable, PSX-free fullscreen image draw: present a plain RGBA8 (UNORM) image FULLSCREEN, letterboxed
+// to 4:3 (pillarbox), with every rgb scaled by `fade` (0..1, black background). This is NOT the VRAM/1555
+// present path — it uploads the host RGBA into its own R8G8B8A8_UNORM texture and draws it with the
+// dedicated `image` pipeline (image.vert/frag). Used for the SCEA boot splash; works windowed (swapchain),
+// no-ops the present when headless (the caller PPM-dumps the CPU rgba directly for headless verification).
+static VkPipeline      s_img_pipe;        // image present pipeline (own layout: set0=sampler, PC=float fade)
+static VkPipelineLayout s_img_pll;
+static VkDescriptorSetLayout s_img_dsl;
+static VkDescriptorPool s_img_dpool;
+static VkDescriptorSet s_img_dset;
+static VkSampler       s_img_sampler;     // LINEAR (RGBA8, real filtering for the upscale)
+static VkImage         s_img_tex;
+static VkDeviceMemory  s_img_tex_mem;
+static VkImageView     s_img_tex_view;
+static int             s_img_iw, s_img_ih;   // current texture dims (recreate when iw/ih change)
+static int             s_img_tex_undef = 1;
+// Dedicated RGBA staging host buffer (the shared s_stage is sized for VRAM = 1MB, too small for a
+// 640x468 RGBA = 1.14MB). Sized to iw*ih*4, (re)created when the dims change.
+static VkBuffer        s_img_stage;
+static VkDeviceMemory  s_img_stage_mem;
+static void*           s_img_stage_ptr;
+static VkDeviceSize    s_img_stage_sz;
+
+static void img_present_create_pipeline(void) {
+  // descriptor set layout: binding0 = combined image sampler (fragment)
+  VkDescriptorSetLayoutBinding b = {0};
+  b.binding = 0; b.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+  b.descriptorCount = 1; b.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+  VkDescriptorSetLayoutCreateInfo dli = { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
+  dli.bindingCount = 1; dli.pBindings = &b;
+  VKC(vkCreateDescriptorSetLayout(s_dev, &dli, 0, &s_img_dsl));
+  VkPushConstantRange pcr = { VK_SHADER_STAGE_FRAGMENT_BIT, 0, 4 };   // float fade
+  VkPipelineLayoutCreateInfo pli = { VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
+  pli.setLayoutCount = 1; pli.pSetLayouts = &s_img_dsl;
+  pli.pushConstantRangeCount = 1; pli.pPushConstantRanges = &pcr;
+  VKC(vkCreatePipelineLayout(s_dev, &pli, 0, &s_img_pll));
+
+  VkShaderModule vs = make_shader(spv_image_vert, spv_image_vert_len);
+  VkShaderModule fs = make_shader(spv_image_frag, spv_image_frag_len);
+  VkPipelineShaderStageCreateInfo st[2] = {
+    { VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, 0, 0, VK_SHADER_STAGE_VERTEX_BIT, vs, "main", 0 },
+    { VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, 0, 0, VK_SHADER_STAGE_FRAGMENT_BIT, fs, "main", 0 },
+  };
+  VkPipelineVertexInputStateCreateInfo vi = { VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO };
+  VkPipelineInputAssemblyStateCreateInfo ia = { VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO };
+  ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+  VkPipelineViewportStateCreateInfo vp = { VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO };
+  vp.viewportCount = 1; vp.scissorCount = 1;
+  VkPipelineRasterizationStateCreateInfo rs = { VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO };
+  rs.polygonMode = VK_POLYGON_MODE_FILL; rs.cullMode = VK_CULL_MODE_NONE; rs.lineWidth = 1.0f;
+  VkPipelineMultisampleStateCreateInfo ms = { VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO };
+  ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+  VkPipelineColorBlendAttachmentState cba = {0}; cba.colorWriteMask = 0xF;
+  VkPipelineColorBlendStateCreateInfo cb = { VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO };
+  cb.attachmentCount = 1; cb.pAttachments = &cba;
+  VkDynamicState dyn[2] = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
+  VkPipelineDynamicStateCreateInfo ds = { VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO };
+  ds.dynamicStateCount = 2; ds.pDynamicStates = dyn;
+  VkGraphicsPipelineCreateInfo gp = { VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO };
+  gp.stageCount = 2; gp.pStages = st; gp.pVertexInputState = &vi; gp.pInputAssemblyState = &ia;
+  gp.pViewportState = &vp; gp.pRasterizationState = &rs; gp.pMultisampleState = &ms;
+  gp.pColorBlendState = &cb; gp.pDynamicState = &ds; gp.layout = s_img_pll; gp.renderPass = s_rpass;
+  VKC(vkCreateGraphicsPipelines(s_dev, VK_NULL_HANDLE, 1, &gp, 0, &s_img_pipe));
+  vkDestroyShaderModule(s_dev, vs, 0); vkDestroyShaderModule(s_dev, fs, 0);
+
+  VkSamplerCreateInfo si = { VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO };
+  si.magFilter = si.minFilter = VK_FILTER_LINEAR;   // RGBA8: real filtering for the upscale
+  si.addressModeU = si.addressModeV = si.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+  VKC(vkCreateSampler(s_dev, &si, 0, &s_img_sampler));
+  VkDescriptorPoolSize ps = { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1 };
+  VkDescriptorPoolCreateInfo dpi = { VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO };
+  dpi.maxSets = 1; dpi.poolSizeCount = 1; dpi.pPoolSizes = &ps;
+  VKC(vkCreateDescriptorPool(s_dev, &dpi, 0, &s_img_dpool));
+  VkDescriptorSetAllocateInfo dai = { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO };
+  dai.descriptorPool = s_img_dpool; dai.descriptorSetCount = 1; dai.pSetLayouts = &s_img_dsl;
+  VKC(vkAllocateDescriptorSets(s_dev, &dai, &s_img_dset));
+}
+
+// Create (or recreate when iw/ih change) the R8G8B8A8_UNORM texture + point the descriptor at it.
+static void img_present_make_tex(int iw, int ih) {
+  if (s_img_tex && s_img_iw == iw && s_img_ih == ih) return;
+  if (s_img_tex) {   // dims changed: tear down the old image/view + staging (rare — SCEA is fixed-size)
+    vkDeviceWaitIdle(s_dev);
+    vkDestroyImageView(s_dev, s_img_tex_view, 0);
+    vkDestroyImage(s_dev, s_img_tex, 0);
+    vkFreeMemory(s_dev, s_img_tex_mem, 0);
+    vkDestroyBuffer(s_dev, s_img_stage, 0);
+    vkFreeMemory(s_dev, s_img_stage_mem, 0);
+    s_img_tex = 0; s_img_tex_view = 0; s_img_tex_mem = 0;
+    s_img_stage = 0; s_img_stage_mem = 0; s_img_stage_ptr = 0; s_img_stage_sz = 0;
+  }
+  VkImageCreateInfo ic = { VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO };
+  ic.imageType = VK_IMAGE_TYPE_2D; ic.format = VK_FORMAT_R8G8B8A8_UNORM;
+  ic.extent = (VkExtent3D){ (uint32_t)iw, (uint32_t)ih, 1 }; ic.mipLevels = 1; ic.arrayLayers = 1;
+  ic.samples = VK_SAMPLE_COUNT_1_BIT; ic.tiling = VK_IMAGE_TILING_OPTIMAL;
+  ic.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+  ic.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+  VKC(vkCreateImage(s_dev, &ic, 0, &s_img_tex));
+  VkMemoryRequirements mr; vkGetImageMemoryRequirements(s_dev, s_img_tex, &mr);
+  VkMemoryAllocateInfo ma = { VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO };
+  ma.allocationSize = mr.size; ma.memoryTypeIndex = mem_type(mr.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+  VKC(vkAllocateMemory(s_dev, &ma, 0, &s_img_tex_mem));
+  VKC(vkBindImageMemory(s_dev, s_img_tex, s_img_tex_mem, 0));
+  VkImageViewCreateInfo vi = { VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO };
+  vi.image = s_img_tex; vi.viewType = VK_IMAGE_VIEW_TYPE_2D; vi.format = VK_FORMAT_R8G8B8A8_UNORM;
+  vi.subresourceRange = (VkImageSubresourceRange){ VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+  VKC(vkCreateImageView(s_dev, &vi, 0, &s_img_tex_view));
+  s_img_stage_sz = (VkDeviceSize)iw * ih * 4;
+  make_hostbuf(s_img_stage_sz, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, &s_img_stage, &s_img_stage_mem, &s_img_stage_ptr);
+  s_img_iw = iw; s_img_ih = ih; s_img_tex_undef = 1;
+
+  VkDescriptorImageInfo di = { s_img_sampler, s_img_tex_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+  VkWriteDescriptorSet wr = { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
+  wr.dstSet = s_img_dset; wr.dstBinding = 0; wr.descriptorCount = 1;
+  wr.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; wr.pImageInfo = &di;
+  vkUpdateDescriptorSets(s_dev, 1, &wr, 0, 0);
+}
+
+void gpu_vk_present_image(Core* core, const uint8_t* rgba, int iw, int ih, float fade) {
+  (void)core;
+  if (!gpu_vk_enabled() || iw <= 0 || ih <= 0) return;
+  if (!s_inited) init_vk();   // brings up the device / swapchain / sync statics (idempotent)
+  if (!s_img_pipe) img_present_create_pipeline();
+  img_present_make_tex(iw, ih);
+
+  // Upload the host RGBA into the texture via its dedicated staging host buffer (sized iw*ih*4) +
+  // a one-time-submit copy on s_cmd.
+  VKC(vkWaitForFences(s_dev, 1, &s_fence, VK_TRUE, UINT64_MAX));
+  VKC(vkResetFences(s_dev, 1, &s_fence));
+  memcpy(s_img_stage_ptr, rgba, (size_t)iw * ih * 4);
+
+  VKC(vkResetCommandBuffer(s_cmd, 0));
+  VkCommandBufferBeginInfo bi = { VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO };
+  bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+  VKC(vkBeginCommandBuffer(s_cmd, &bi));
+  img_barrier_on(s_img_tex, s_img_tex_undef ? VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                 VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                 VK_PIPELINE_STAGE_TRANSFER_BIT, 0, VK_ACCESS_TRANSFER_WRITE_BIT);
+  s_img_tex_undef = 0;
+  VkBufferImageCopy bc = {0};
+  bc.imageSubresource = (VkImageSubresourceLayers){ VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+  bc.imageExtent = (VkExtent3D){ (uint32_t)iw, (uint32_t)ih, 1 };
+  vkCmdCopyBufferToImage(s_cmd, s_img_stage, s_img_tex, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &bc);
+  img_barrier_on(s_img_tex, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                 VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                 VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
+
+  // Headless: no swapchain. End+submit the upload (so the texture is valid), wait, and return — the
+  // caller PPM-dumps the CPU rgba directly for headless verification (s_tex readback won't see this image).
+  if (s_headless) {
+    VKC(vkEndCommandBuffer(s_cmd));
+    VkSubmitInfo su = { VK_STRUCTURE_TYPE_SUBMIT_INFO };
+    su.commandBufferCount = 1; su.pCommandBuffers = &s_cmd;
+    VKC(vkQueueSubmit(s_queue, 1, &su, s_fence));
+    return;
+  }
+
+  // Acquire the next swapchain image (handle resize/out-of-date like present()).
+  VkExtent2D now = surface_extent_now();
+  if (s_swap_dirty || ((now.width != s_extent.width || now.height != s_extent.height) && now.width && now.height)) {
+    s_swap_dirty = 0; VKC(vkEndCommandBuffer(s_cmd)); recreate_swapchain();
+    VKC(vkResetFences(s_dev, 1, &s_fence)); return;   // skip this frame; nothing submitted (cmd discarded)
+  }
+  uint32_t idx = 0;
+  VkResult acq = vkAcquireNextImageKHR(s_dev, s_swap, UINT64_MAX, s_sem_acq, VK_NULL_HANDLE, &idx);
+  if (acq == VK_ERROR_OUT_OF_DATE_KHR) { VKC(vkEndCommandBuffer(s_cmd)); recreate_swapchain(); return; }
+  if (acq != VK_SUCCESS && acq != VK_SUBOPTIMAL_KHR) { fprintf(stderr, "[img_present] acquire %d\n", acq); exit(2); }
+
+  VkClearValue clear = {{{0, 0, 0, 1}}};   // black background (pillarbox bars)
+  VkRenderPassBeginInfo rp = { VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
+  rp.renderPass = s_rpass; rp.framebuffer = s_swap_fb[idx];
+  rp.renderArea.extent = s_extent; rp.clearValueCount = 1; rp.pClearValues = &clear;
+  vkCmdBeginRenderPass(s_cmd, &rp, VK_SUBPASS_CONTENTS_INLINE);
+
+  // Letterbox the image to 4:3 (pillarbox), centered in the window — same pane-fit math as present().
+  int aw = 4, ah = 3, ow = s_extent.width, oh = s_extent.height, dw, dh;
+  if (ow * ah >= oh * aw) { dh = oh; dw = oh * aw / ah; } else { dw = ow; dh = ow * ah / aw; }
+  VkViewport vpt = { (float)((ow - dw) / 2), (float)((oh - dh) / 2), (float)dw, (float)dh, 0.0f, 1.0f };
+  VkRect2D sc = { {0, 0}, s_extent };
+  vkCmdSetViewport(s_cmd, 0, 1, &vpt);
+  vkCmdSetScissor(s_cmd, 0, 1, &sc);
+  vkCmdBindPipeline(s_cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, s_img_pipe);
+  if (fade < 0.0f) fade = 0.0f; if (fade > 1.0f) fade = 1.0f;
+  vkCmdPushConstants(s_cmd, s_img_pll, VK_SHADER_STAGE_FRAGMENT_BIT, 0, 4, &fade);
+  vkCmdBindDescriptorSets(s_cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, s_img_pll, 0, 1, &s_img_dset, 0, 0);
+  vkCmdDraw(s_cmd, 3, 1, 0, 0);
+  vkCmdEndRenderPass(s_cmd);
+  VKC(vkEndCommandBuffer(s_cmd));
+
+  VkPipelineStageFlags wait = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+  VkSubmitInfo su = { VK_STRUCTURE_TYPE_SUBMIT_INFO };
+  su.waitSemaphoreCount = 1; su.pWaitSemaphores = &s_sem_acq; su.pWaitDstStageMask = &wait;
+  su.commandBufferCount = 1; su.pCommandBuffers = &s_cmd;
+  su.signalSemaphoreCount = 1; su.pSignalSemaphores = &s_sem_rel[idx];
+  VKC(vkQueueSubmit(s_queue, 1, &su, s_fence));
+
+  VkPresentInfoKHR pr = { VK_STRUCTURE_TYPE_PRESENT_INFO_KHR };
+  pr.waitSemaphoreCount = 1; pr.pWaitSemaphores = &s_sem_rel[idx];
+  pr.swapchainCount = 1; pr.pSwapchains = &s_swap; pr.pImageIndices = &idx;
+  VkResult pres = vkQueuePresentKHR(s_queue, &pr);
+  if (pres == VK_ERROR_OUT_OF_DATE_KHR || pres == VK_SUBOPTIMAL_KHR) recreate_swapchain();
+  else if (pres != VK_SUCCESS) { fprintf(stderr, "[img_present] present %d\n", pres); exit(2); }
+  poll_quit();
+}
+
 // ---- Public API: thin free-function wrappers over the per-instance GpuVkState methods. Keep the
 // C-style call sites stable; each forwards to core->game->gpu_vk (de-globalization R2, 2026-06-19). ----
 void gpu_vk_set_vd(Core* core, const float* d3) { core->game->gpu_vk.set_vd(d3); }
@@ -2099,7 +2309,9 @@ void gpu_vk_tritest(Core* core) { core->game->gpu_vk.tritest(); }
 #else
 #include <stdint.h>
 int  gpu_vk_enabled(void) { return 0; }
+extern "C" int gpu_windowed(void) { return 0; }
 void gpu_vk_present(Core* core, const uint16_t* src, int sx, int sy, int w, int h) { (void)core;(void)src;(void)sx;(void)sy;(void)w;(void)h; }
+void gpu_vk_present_image(Core* core, const uint8_t* rgba, int iw, int ih, float fade) { (void)core;(void)rgba;(void)iw;(void)ih;(void)fade; }
 void gpu_vk_tritest(Core* core) { (void)core; }
 void gpu_vk_frame_end(Core* core, const uint16_t* svram, int frame) { (void)core;(void)svram; (void)frame; }
 void gpu_vk_shot(Core* core, const char* path) { (void)core;(void)path; }

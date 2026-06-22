@@ -124,23 +124,4 @@ static void ov_80083B30(Core* c) {
 }
 
 void games_native_path_b1_init(void) {
-  rec_set_override(0x80079528u, ov_80079528);
-  rec_set_override(0x8007B328u, ov_8007B328);
-  rec_set_override(0x8007B38Cu, ov_8007B38C);
-  rec_set_override(0x80083B30u, ov_80083B30);
-  rec_set_override(0x8004FB20u, ov_8004FB20);
-  rec_set_override(0x80089F68u, ov_80089F68);
-  rec_set_override(0x8008BBC8u, ov_8008BBC8);
-  rec_set_override(0x80097E10u, ov_80097E10);
-  rec_set_override(0x80098DB0u, ov_80098DB0);
-  rec_set_override(0x8007AC14u, ov_8007AC14);
-  rec_set_override(0x8007AC40u, ov_8007AC40);
-  rec_set_override(0x8007AC6Cu, ov_8007AC6C);
-  rec_set_override(0x8007AC98u, ov_8007AC98);
-  rec_set_override(0x8007AD14u, ov_8007AD14);
-  rec_set_override(0x8007ACC4u, ov_8007ACC4);
-  rec_set_override(0x8007AD40u, ov_8007AD40);
-  rec_set_override(0x80098CE0u, ov_80098CE0);
-  rec_set_override(0x8008CCE0u, ov_8008CCE0);
-  rec_set_override(0x80084470u, ov_80084470);
 }

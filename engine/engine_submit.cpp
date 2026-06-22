@@ -1921,77 +1921,11 @@ void ov_tilescan(Core* c) {
   for (int i = 0; i < 254; i++) c->mem_w16(obj + 16 + 2u * i, list_n[i]);
 }
 
-static void engine_scan_overlay(Core* c, uint32_t base, uint32_t size) {
-  stage_scan_overlay(c, base, size);   // own the GAME stage state machine when GAME.BIN loads
-  demo_scan_overlay(c, base, size);    // own the DEMO/front-end menu state machine when DEMO loads
-  uint32_t lo = base & ~3u, hi = (base + size) & ~3u;
-  void ov_gt3gt4_caller(Core*);
-  void ov_bg_tilemap(Core*);
-  for (uint32_t a = lo; a + 4 <= hi; a += 4) {
-    // (0a) the pure 2D table-lookup leaf (0x8013fae0): anchor on the unique pair `lw v1,0x8014c804`
-    //      then `lhu v0,0x8014c800` 0x10 apart; backtrack to the fn entry past the previous `jr ra`.
-    if (c->mem_r32(a) == 0x8C63C804u && c->mem_r32(a + 0x10) == 0x9442C800u) {
-      uint32_t entry = lo;
-      for (uint32_t b = a; b > lo && b > a - 0x40; b -= 4)
-        if (c->mem_r32(b - 4) == 0x03E00008u) { entry = b + 4; break; }
-      s_tile_entry = entry;
-      rec_set_interp_override_auto(entry, ov_tile_lookup);
-      if (cfg_dbg("submit"))
-        fprintf(stderr, "[submit] own tile-lookup leaf @ 0x%08X (in load 0x%08X+0x%X)\n", entry, base, size);
-      continue;
-    }
-    // (0c) the per-object triangle-scan SOLID-TILE gatherer FUN_8013F4DC: anchor on its unique
-    //      corner-pointer load triple `lw v1,0(a1); lw a1,4(a1); lw a0,0(a2)`, backtrack to the entry.
-    if (c->mem_r32(a) == 0x8CA30000u && c->mem_r32(a + 4) == 0x8CA50004u && c->mem_r32(a + 8) == 0x8CC40000u) {
-      uint32_t entry = lo;
-      for (uint32_t b = a; b > lo && b > a - 0x80; b -= 4)
-        if (c->mem_r32(b - 4) == 0x03E00008u) { entry = b + 4; break; }
-      s_tilescan_entry = entry;
-      rec_set_interp_override_auto(entry, ov_tilescan);
-      if (cfg_dbg("submit") || cfg_dbg("tilescanverify"))
-        fprintf(stderr, "[submit] own tile-scan gatherer @ 0x%08X (in load 0x%08X+0x%X)\n", entry, base, size);
-      continue;
-    }
-    // (0) the screen-space BACKGROUND tilemap drawer (M3 provenance): anchor on the unique tile
-    //     command-word build `lui a1,0x7d80 ; ori a1,a1,0x8080`, backtrack to the fn entry, bracket it
-    //     so its packet-pool span is tagged RQ_BACKGROUND (gpu_native node_is_bg). later this session.
-    if (c->mem_r32(a) == 0x3C057D80u && c->mem_r32(a + 4) == 0x34A58080u) {
-      uint32_t entry = lo;
-      for (uint32_t b = a; b > lo && b > a - 0x400; b -= 4)
-        if (c->mem_r32(b - 4) == 0x03E00008u) { entry = b + 4; break; }
-      rec_set_interp_override_auto(entry, ov_bg_tilemap);
-      if (cfg_dbg("submit"))
-        fprintf(stderr, "[submit] own BACKGROUND tilemap drawer @ 0x%08X (in load 0x%08X+0x%X)\n",
-                entry, base, size);
-      continue;
-    }
-    // (1) generic GT3/GT4 CALLER (e.g. the mode-0 render 0x80146478): anchor on `addiu a0,a0,16`,
-    //     backtrack to the fn entry, verify the caller signature, own it (runs the native submitters).
-    if (c->mem_r32(a) == 0x24840010u) {
-      uint32_t entry = lo;
-      for (uint32_t b = a; b > lo && b > a - 64; b -= 4)
-        if (c->mem_r32(b - 4) == 0x03E00008u) { entry = b + 4; break; }
-      if (classify_caller(c, entry)) {
-        rec_set_interp_override_auto(entry, ov_gt3gt4_caller);
-        if (cfg_dbg("submit"))
-          fprintf(stderr, "[submit] own overlay CALLER @ 0x%08X (in load 0x%08X+0x%X)\n", entry, base, size);
-      }
-      continue;
-    }
-    if ((c->mem_r32(a) >> 26) != 0x0Fu || (c->mem_r32(a) & 0xFFFFu) != 0x800Cu) continue;   // lui $r,0x800C
-    if ((c->mem_r32(a + 4) >> 26) != 0x23u || (c->mem_r32(a + 4) & 0xFFFFu) != 0xF544u) continue; // lw ...,0xF544
-    uint32_t entry = lo;                     // backtrack to the fn entry = just past previous `jr $ra`
-    for (uint32_t b = a; b > lo && b > a - 64; b -= 4)
-      if (c->mem_r32(b - 4) == 0x03E00008u) { entry = b + 4; break; }  // (b-4)=jr ra, (b)=delay slot, entry=b+4
-    OverrideFn fn = classify_submit(c, entry);
-    if (fn) {
-      rec_set_interp_override_auto(entry, fn);
-      if (cfg_dbg("submit"))
-        fprintf(stderr, "[submit] own overlay %s @ 0x%08X (in load 0x%08X+0x%X)\n",
-                fn == ov_submit_poly_gt4 ? "GT4" : "GT3", entry, base, size);
-    }
-  }
-}
+// OVERRIDE SYSTEM REMOVED (2026-06-22): the overlay-load scan existed only to register AUTO overrides
+// (rec_set_interp_override_auto) on freshly-loaded overlay library fns (tile-lookup, tile-scan gatherer,
+// background tilemap, GT3/GT4 callers/submitters) plus the GAME/DEMO state-machine entries. With the
+// override table gone, there is nothing to register; native ownership is wired by PC calling the native
+// fn directly (top-down). The classify_*/ov_* defs above are kept as future direct-call targets.
 void engine_submit_register_autodetect(void) {
-  rec_set_overlay_load_hook(engine_scan_overlay);
+  // No-op: no overlay-load hook to install (override table removed).
 }

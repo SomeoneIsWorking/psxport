@@ -146,7 +146,9 @@ $CXX -rdynamic $OBJS $CHD_LIBS $RMLUI_LIBS $(pkg-config --libs sdl2 vulkan) -lpt
 
 # ---- 5. run ------------------------------------------------------------------------
 say "launching Tomba! 2 (native PC port)…"
-WIN=1; [ -n "${PSXPORT_NOWINDOW:-}" ] && WIN=0
+# Windowed by default; PSXPORT_NOWINDOW selects offscreen-headless (the single mode discriminator is
+# PSXPORT_VK_HEADLESS, read by the renderer — there is no PSXPORT_GPU_WINDOW behavior gate any more).
+[ -n "${PSXPORT_NOWINDOW:-}" ] && export PSXPORT_VK_HEADLESS=1
 # Debug server ON by default so a windowed session can be inspected/driven live (tools/dbgclient.py);
 # opt out with PSXPORT_DEBUG_SERVER=0. Window is windowed by default now (PSXPORT_FULLSCREEN=1 to override).
 #
@@ -160,4 +162,4 @@ WIN=1; [ -n "${PSXPORT_NOWINDOW:-}" ] && WIN=0
 # the GTE/packet transcription as an A/B oracle; PSXPORT_NO_TERRAIN=1 falls back to the recomp body.
 PSXPORT_DEBUG_SERVER="${PSXPORT_DEBUG_SERVER:-1}" \
 PSXPORT_NO_TERRAIN="${PSXPORT_NO_TERRAIN:-0}" \
-PSXPORT_GPU_WINDOW=$WIN PSXPORT_TOMBA2_DISC="$DISC" exec ./scratch/bin/tomba2_port "$MAIN"
+PSXPORT_TOMBA2_DISC="$DISC" exec ./scratch/bin/tomba2_port "$MAIN"

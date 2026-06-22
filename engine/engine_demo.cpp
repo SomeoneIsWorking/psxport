@@ -336,34 +336,10 @@ static void ov_demo_s7_phase(Core* c) {
 // DEMO 0x801062E4 = `addiu sp,sp,-48` (0x27bdffd0); GAME's entry is 0x8010637C = 0x27bdffe0 (and at
 // DEMO's 0x8010637C sits a `sh zero,0x48(v1)` 0xa4600048, so GAME's stage_scan signature won't match
 // DEMO either). AUTO so the overrides flush when the overlay unloads and the base is reused.
+// OVERRIDE SYSTEM REMOVED (2026-06-22): this scan registered the DEMO/front-end substate handlers
+// (ov_demo_s0/s1/s2/s3/s6/s7_phase) into the address-keyed override table when DEMO loaded. The table
+// is gone; these become future direct-call targets, wired top-down. No-op.
 void demo_scan_overlay(Core* c, uint32_t base, uint32_t size) {
-  if (base != 0x80106228u) return;
-  if (c->mem_r32(0x801062E4u) != 0x27bdffd0u) return;   // DEMO root dispatcher prologue: addiu sp,-48
-  // NB: owning the ROOT dispatcher prologue (ov_demo_root) was attempted (later-182b) and REVERTED:
-  // its one-time setup call 0x800810f0 builds the PSX draw-environment GP0 packets via an INDIRECT
-  // libgpu call (jalr v0[8] off the double-buffer struct *0x800a5998), and running 0x800810f0 as a
-  // nested rec_dispatch from the override is NOT equivalent to running it in-context — it left a 5-byte
-  // divergence in the env-packet pools (0x800A59xx/0x800EA0xx, GP0 cmd byte 0xE0 vs 0x00) while the
-  // substate sub-fns dispatched 0-diff. The prologue is low-value PSX disp-env plumbing (the boundary
-  // says the engine shouldn't reproduce it); owning it cleanly would need to run 0x800810f0 in-context,
-  // which conflicts with its two-sync-call structure. Left to the guest. See docs/journal.md later-182b.
-  rec_set_interp_override_auto(0x801063C0u, ov_demo_s0);   // run-once INIT (owns field writes + selection)
-  rec_set_interp_override_auto(0x8010641Cu, ov_demo_s1);
-  rec_set_interp_override_auto(0x80106464u, ov_demo_s2);
-  rec_set_interp_override_auto(0x801064E8u, ov_demo_s3);
-  rec_set_interp_override_auto(0x801065ECu, ov_demo_s6);
-  // s7 phase machine (ov_demo_s7_phase, 0x80106C24) — NOW REGISTERED (later-208). REACH RECIPE: s7 is the
-  // ATTRACT-demo auto-launch, reached by letting the title-screen intro timer expire — `tap 4008` once (to
-  // advance title s2->s3), then `run ~455` frames: s3's sm[0x5a] intro timer (450) counts down and at
-  // expiry the front-end auto-advances sm[0x48]->7 WITHOUT further input (NOT a confirm-an-option path — the
-  // earlier "needs New-Game confirm" assumption was wrong; the attract sequence launches on the timer). The
-  // phase machine then runs phase0 (sm[0x4a]=0, ONE frame: the overlay LOADER — @0x80109450 changes as a new
-  // overlay loads) -> phase1 (sm[0x4a]=1, the whole attract-demo play loop, sits here ~hundreds of frames)
-  // -> phase2 (sm[0x4a]=2, teardown -> sm[0x48]=0, restart). VERIFIED to FIRE at all reachable phases via the
-  // `demo` log, and the steady-state observable result (phase progression + the phase0 overlay load) matches
-  // the guest baseline. See ov_demo_s7_phase + docs/journal.md later-208.
-  rec_set_interp_override_auto(0x80106C24u, ov_demo_s7_phase);
-  if (cfg_dbg("demo"))
-    fprintf(stderr, "[demo] own DEMO substates s0/s1/s2/s3/s6 (0x801063C0/0x8010641C/0x80106464/"
-                    "0x801064E8/0x801065EC) in load 0x%08X+0x%X\n", base, size);
+  (void)c; (void)base; (void)size;
+  (void)ov_demo_s0; (void)ov_demo_s1; (void)ov_demo_s2; (void)ov_demo_s3; (void)ov_demo_s6; (void)ov_demo_s7_phase;
 }

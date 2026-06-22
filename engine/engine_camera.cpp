@@ -77,8 +77,6 @@ static void ov_cam_track_y(Core* c) {
   c->r[2] = snapY ? 1u : 0u;
 }
 
-void rec_set_override(uint32_t addr, void (*fn)(Core*));
-
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
 // FUN_8006e464 — the per-frame camera ROTATION / LOOK-AT builder (the matrix-adjacent pitch fields).
 // RE: docs/engine_re.md "Camera". Big multi-mode function: it picks a camera MODE (two jump tables) to
@@ -961,8 +959,8 @@ static const struct { uint32_t a; void (*f)(Core*); } CAM_SUBS[] = {
   {0x8006d02cu, ov_cam_lookat},
 };
 static void cam_subs_clear(int clear) {
-  for (unsigned i = 0; i < sizeof(CAM_SUBS) / sizeof(CAM_SUBS[0]); i++)
-    rec_set_override(CAM_SUBS[i].a, clear ? (void (*)(Core*))0 : CAM_SUBS[i].f);
+  // Override system removed (2026-06-22): there is no override table to clear/restore. No-op.
+  (void)clear; (void)CAM_SUBS;
 }
 
 // Generic orchestrator camverify: native-everything vs PURE-gen oracle (sub-fn overrides cleared).
@@ -997,17 +995,7 @@ static void ov_cam_orch_e3f4_verify(Core* c) { cam_orch_verify(c, ov_cam_orch_e3
 static void ov_cam_orch_e228_verify(Core* c) { cam_orch_verify(c, ov_cam_orch_e228, 0x8006e228u, "orch_e228"); }
 
 void engine_camera_register(void) {
-  int v = cfg_dbg("camverify");
-  rec_set_override(0x8006d960u, ov_cam_track_xz);     // per-frame camera X/Z follow (engine_re "Camera")
-  rec_set_override(0x8006da54u, ov_cam_track_y);      // per-frame camera Y follow
-  rec_set_override(0x8006e464u, v ? ov_cam_rotbuild_verify   : ov_cam_rotbuild);
-  rec_set_override(0x8006d2acu, v ? ov_cam_dist_solve_verify : ov_cam_dist_solve);  // dist/zoom solver
-  rec_set_override(0x8006e010u, v ? ov_cam_angle_step_verify : ov_cam_angle_step);  // cam[+0x34] angle step
-  rec_set_override(0x8006c80cu, v ? ov_cam_y_floor_verify    : ov_cam_y_floor);     // cam-Y floor clamp
-  rec_set_override(0x8006d654u, v ? ov_cam_pitch_verify      : ov_cam_pitch);       // pitch smoother
-  rec_set_override(0x8006dcf4u, v ? ov_cam_heading_verify    : ov_cam_heading);     // heading tracker
-  rec_set_override(0x8006d02cu, v ? ov_cam_lookat_verify     : ov_cam_lookat);      // orient/look-at matrix
-  rec_set_override(0x8006e0f0u, v ? ov_cam_orch_e0f0_verify  : ov_cam_orch_e0f0);   // main follow mode
-  rec_set_override(0x8006e3f4u, v ? ov_cam_orch_e3f4_verify  : ov_cam_orch_e3f4);   // simple mode
-  rec_set_override(0x8006e228u, v ? ov_cam_orch_e228_verify  : ov_cam_orch_e228);   // mode w/ 2 unowned sub-fns
+  // Override system removed (2026-06-22): camera sub-fns are direct-call targets to be wired top-down.
+  // Registration deleted; the ov_cam_* defs and *_verify wrappers are kept for future direct calls.
+  (void)cfg_dbg;
 }

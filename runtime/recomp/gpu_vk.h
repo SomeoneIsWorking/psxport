@@ -44,6 +44,11 @@ void gpu_vk_draw_semi(Core* core, const int* xs, const int* ys, const int* us, c
 
 // present / per-frame / readback
 void gpu_vk_present(Core* core, const uint16_t* src, int sx, int sy, int w, int h);
+// PC-native fullscreen IMAGE present: draw a plain RGBA8 image (iw x ih) FULLSCREEN, letterboxed to 4:3
+// (pillarbox, black bars), every rgb scaled by `fade` (0..1). Reusable, PSX-free (no VRAM/GP0/CLUT) —
+// uploads the host RGBA into its own texture and draws it. Windowed presents to the swapchain; headless
+// only uploads (no present) — verify headless via the caller's own CPU-side dump.
+void gpu_vk_present_image(Core* core, const uint8_t* rgba, int iw, int ih, float fade);
 void gpu_vk_frame_end(Core* core, const uint16_t* svram, int frame);
 void gpu_vk_shot(Core* core, const char* path);
 void gpu_vk_stats(Core* core, int* tri, int* tex, int* semi);

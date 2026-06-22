@@ -27,7 +27,4 @@ static void ov_close_thread(Core* c)  { c->r[2] = thread_close(c); }
 static void ov_change_thread(Core* c) { uint32_t h = c->r[4]; thread_change(c, h); c->r[2] = h; }
 
 void threads_register_overrides(void) {
-  rec_set_override(0x80080860u, ov_open_thread);    // FUN_80080860 OpenThread
-  rec_set_override(0x80080870u, ov_close_thread);   // FUN_80080870 CloseThread
-  rec_set_override(0x80080880u, ov_change_thread);  // FUN_80080880 ChangeThread
 }

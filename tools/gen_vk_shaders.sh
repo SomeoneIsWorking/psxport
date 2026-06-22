@@ -42,5 +42,7 @@ PY
   emit shadow.frag spv_shadow_frag      # shadow-map depth pass (depth-only, empty fragment)
   emit rml.vert spv_rml_vert            # RmlUi mod/debug overlay (2D, premultiplied-alpha, textured)
   emit rml.frag spv_rml_frag
+  emit image.vert spv_image_vert        # PC-native fullscreen IMAGE present (gpu_vk_present_image; SCEA splash)
+  emit image.frag spv_image_frag        # samples an RGBA8 texture, fades rgb by a push-constant scalar
 } > "$OUT"
 echo "[gen_vk_shaders] wrote $OUT"

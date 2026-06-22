@@ -219,5 +219,4 @@ void ov_beh_73cd8(Core* c) {
 }  // namespace
 
 void objbeh_73cd8_register(void) {
-  rec_set_override(BEH_FN, ov_beh_73cd8);   // FUN_80073CD8 per-object behavior SM (scene/UI trigger sibling)
 }

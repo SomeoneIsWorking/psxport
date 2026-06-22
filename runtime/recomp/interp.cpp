@@ -144,67 +144,12 @@ static inline void ldhaz_step(uint32_t in, uint32_t pc) {
   g_ld_last_in = in; g_ld_last_pc = pc;
 }
 
-// The ONE address-keyed override table. Every native replacement — resident MAIN call sites
-// (rec_set_override), boot-stub libcd/libetc waits, and scan-registered overlay library fns —
-// registers here and is consulted by coro_native_call on every control transfer. (There is no
-// longer a separate recompiled-function-index table; the interpreter-only pivot collapsed the
-// index/address duality that previously split overrides into two tables.)
-//
-// De-globalization note (2026-06-19): this table stays file-scope SHARED by design — it is
-// build-level dispatch infrastructure, NOT per-instance game state. The 175 registration sites are
-// all init-time and register the SAME native fns at the SAME addresses for every Game; the only
-// runtime mutation (auto-overlay flush/rescan, rec_overlay_loaded) is driven by overlay loads that
-// two lockstep cores perform identically, so the shared table stays consistent for both until the
-// diff stops at the first RAM divergence. The per-core difference the dual-core diff needs
-// (e.g. terrain override ON vs neutralized) is expressed as a FLAG on Game read INSIDE the override
-// (the override carries Core* c → c->game->...), never as two divergent override tables. Threading
-// Core* through all 175 init call sites would be a large ripple for no harness benefit. Every other
-// file-scope static in this file is debug/trace (stderr/file, cfg-gated — g_trace_fp, g_ncall_*,
-// g_ldhaz*, g_ifn_*, g_callring, g_interp_pc) or a config-cache (spindbg, sg_*), all of which never
-// touch Core::ram and so stay shared per the plan policy.
-#define MAX_IOV 256
-static struct { uint32_t addr; OverrideFn fn; int isauto; } g_iov[MAX_IOV];
-static int g_iov_n;
-static void iov_add(uint32_t addr, OverrideFn fn, int isauto) {
-  for (int i = 0; i < g_iov_n; i++) if (g_iov[i].addr == addr) { g_iov[i].fn = fn; g_iov[i].isauto = isauto; return; }
-  if (g_iov_n < MAX_IOV) { g_iov[g_iov_n].addr = addr; g_iov[g_iov_n].fn = fn; g_iov[g_iov_n].isauto = isauto; g_iov_n++; }
-}
-void rec_set_interp_override(uint32_t addr, OverrideFn fn) { iov_add(addr, fn, 0); }
-// Auto (scan-registered) overlay override: the engine scans a freshly-loaded overlay ONCE for known
-// library-fn signatures and registers each here (isauto=1). Cleared on the next overlay load (the
-// address is only stable while that code is resident — per-scene reuse). Done at load time, so the
-// per-call path stays a plain g_iov lookup — no per-call classification (that was far too slow).
-void rec_set_interp_override_auto(uint32_t addr, OverrideFn fn) { iov_add(addr, fn, 1); }
-static OverrideFn interp_override_for(uint32_t a) {
-  for (int i = 0; i < g_iov_n; i++) if (g_iov[i].addr == a) return g_iov[i].fn;
-  return 0;
-}
-// Drop scan-registered (overlay) overrides whose address lies in the just-loaded region [base,base+size)
-// — only those were overwritten by the new load and need re-scanning. Overrides OUTSIDE the loaded
-// region stay valid: a data/asset overlay loading elsewhere must NOT wipe a code overlay's submitters
-// (the old flush-everything dropped them silently, so a later load left the field's submitters un-owned
-// — the depth-coverage bug). Compared in physical space (KSEG-agnostic).
-static void iov_flush_auto_range(uint32_t base, uint32_t size) {
-  uint32_t lo = base & 0x1FFFFFFFu, hi = lo + size;
-  int w = 0;
-  for (int i = 0; i < g_iov_n; i++) {
-    uint32_t a = g_iov[i].addr & 0x1FFFFFFFu;
-    if (g_iov[i].isauto && a >= lo && a < hi) continue;   // overwritten by this load -> drop, re-scan
-    g_iov[w++] = g_iov[i];
-  }
-  g_iov_n = w;
-}
-// The engine's "an overlay was just loaded into [base,base+size)" hook (scans for owned library fns).
-static void (*g_overlay_load_hook)(Core* c, uint32_t base, uint32_t size);
-void rec_set_overlay_load_hook(void (*fn)(Core*, uint32_t, uint32_t)) { g_overlay_load_hook = fn; }
-void rec_overlay_loaded(Core* c, uint32_t base, uint32_t size) {
-  iov_flush_auto_range(base, size);               // drop only the overrides this load overwrote
-  if (g_overlay_load_hook) g_overlay_load_hook(c, base, size);
-}
-// Public accessor so rec_dispatch_miss can apply an interp override at the moment it would ENTER
-// the interpreter (a recompiled `jalr`/dispatch into a non-recompiled stub fn lands here, not via
-// call_addr). Keyed by full KSEG0 address.
-OverrideFn rec_interp_override_for(uint32_t a) { return interp_override_for(a); }
+// OVERRIDE TABLE REMOVED (2026-06-22) — top-down PC-driven model: PC calls PC directly; PSX never
+// calls PC. The address-keyed override table (g_iov / iov_add / rec_set_interp_override[_auto] /
+// interp_override_for / iov_flush_auto_range) and the overlay-load hook plumbing
+// (rec_set_overlay_load_hook / rec_overlay_loaded) are GONE — they existed only to flip the
+// interpreter into native code at a registered address. Native code is now invoked by PC calling
+// the native function directly.
 
 static int is_bios(uint32_t a) { uint32_t p = a & 0x1FFFFFFF; return p==0xA0||p==0xB0||p==0xC0; }
 

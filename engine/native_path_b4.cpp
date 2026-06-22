@@ -40,5 +40,4 @@ static void ov_8007B18C(Core* c) {
 }
 
 void games_native_path_b4_init(void) {
-  rec_set_override(0x8007B18Cu, ov_8007B18C);
 }

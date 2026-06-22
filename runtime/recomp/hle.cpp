@@ -220,7 +220,6 @@ void rec_break(Core* c, uint32_t code) {
 }
 
 void rec_interp(Core* c, uint32_t pc);  // hybrid fallback (interp.c)
-OverrideFn rec_interp_override_for(uint32_t a);  // native override for an interpreted addr (interp.c)
 
 static int g_miss = 0;
 void rec_dispatch_miss(Core* c, uint32_t addr) {

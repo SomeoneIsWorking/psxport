@@ -824,21 +824,4 @@ void ov_spawn_with_parent(Core* c) {
 // Public registration — ONE line from game_tomba2.cpp init.
 // ------------------------------------------------------------------------------------------------
 void entity_spawn_register(void) {
-  rec_set_override(0x80079C3Cu, ov_entity_spawn);   // FUN_80079C3C entity spawn / placement primitive (pool 208)
-  rec_set_override(0x80079DDCu, ov_spawn_pool2);    // FUN_80079DDC spawn variant — pool 2 (delegates to 0x80079F90)
-  rec_set_override(0x80079F90u, ov_spawn_var2);     // FUN_80079F90 spawn variant — pool var2 (class 2, empty->0)
-  rec_set_override(0x8007A12Cu, ov_spawn_var3);     // FUN_8007A12C spawn variant — pool var3 (class 3, empty->0)
-  rec_set_override(0x8007A2C8u, ov_spawn_var4);     // FUN_8007A2C8 spawn variant — pool var4 (class 4, empty->0)
-  rec_set_override(0x8007A980u, ov_spawn_dispatch); // FUN_8007A980 per-type spawn dispatcher (entry point)
-  rec_set_override(0x8007AA38u, ov_replace_dispatch); // FUN_8007AA38 spawn-relative-to-object dispatcher
-  rec_set_override(0x8007A624u, ov_despawn);          // FUN_8007A624 despawn (unlink + free-list push + deactivate)
-  rec_set_override(0x8007AAE8u, ov_record_alloc_g);   // FUN_8007AAE8 render-record bump allocator
-  rec_set_override(0x80051B70u, ov_obj_record_init);  // FUN_80051B70 per-object render-record init
-  rec_set_override(0x800517F8u, ov_obj_render_update);// FUN_800517F8 per-object render-state update
-  rec_set_override(0x80077B38u, ov_obj_set_geom);     // FUN_80077B38 set object geometry-block ptr
-  rec_set_override(0x8006CBD0u, ov_obj_set_xformblk); // FUN_8006CBD0 set object transform block (scratchpad+obj)
-  rec_set_override(0x8003116Cu, ov_spawn_and_init);   // FUN_8003116C spawn-and-init helper (type 6, list 1)
-  rec_set_override(0x8004BD64u, ov_obj_pos_compose);  // FUN_8004BD64 position-compose (midpoint/offset) + render refresh
-  rec_set_override(0x80072A78u, ov_place_objects);    // FUN_80072A78 field object-PLACEMENT driver (reads area table -> spawns)
-  rec_set_override(0x80072DDCu, ov_spawn_with_parent);// FUN_80072DDC spawn-with-parent helper (spawn + link parent + flag)
 }

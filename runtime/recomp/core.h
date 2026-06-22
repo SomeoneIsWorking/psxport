@@ -99,14 +99,9 @@ void rec_coro_run(Core* c, uint32_t pc);   // cooperative task entry
 void rec_coro_redirect(Core* c, uint32_t target);  // override: continue the flat interp at `target`
                                                    // IN-CONTEXT (survives a deep yield) — see interp.cpp
 
-// Native overrides (recomp-overrides): register a hand-written native fn keyed by entry address.
-void rec_set_override(uint32_t addr, OverrideFn fn);
-void rec_set_interp_override(uint32_t addr, OverrideFn fn);
-void rec_set_interp_override_auto(uint32_t addr, OverrideFn fn);
-void rec_set_overlay_load_hook(void (*fn)(Core* c, uint32_t base, uint32_t size));
-void rec_overlay_loaded(Core* c, uint32_t base, uint32_t size);
+// OVERRIDE SYSTEM REMOVED (2026-06-22) — top-down PC-driven model: PC calls native code directly; PSX
+// never calls PC. The address-keyed override table + overlay-load hook are gone (see dispatch.cpp).
 int  rec_func_index(uint32_t addr);
-OverrideFn rec_interp_override_for(uint32_t a);
 
 // ---- COP0 (minimal) ----
 uint32_t cop0_mfc(Core* c, uint32_t reg);

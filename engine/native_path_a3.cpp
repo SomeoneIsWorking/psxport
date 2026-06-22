@@ -683,14 +683,6 @@ static void ov_80094C10(Core* c) {
 // Register every batch-A3 native override. Called from games_tomba2_init alongside the other
 // games_native_path_*_init runners.
 void games_native_path_a3_init(void) {
-  rec_set_override(0x80075E04u, ov_80075E04);
-  rec_set_override(0x800962B0u, ov_800962B0);
-  rec_set_override(0x80092FD0u, ov_80092FD0);
-  rec_set_override(0x80094474u, ov_80094474);
   // TODO(verify): rec_set_override(0x80094C10u, ov_80094C10); — DISABLED: A/B RAM-diff fails (15 bytes vs interp). fixed-point mixer/pan — densest, reciprocal-magic divides. Re-enable after fixing gen_func_80094C10 + re-A/B.
-  rec_set_override(0x800782F0u, ov_800782F0);
-  rec_set_override(0x800508A8u, ov_800508A8);
   // TODO(verify): rec_set_override(0x80077FB0u, ov_80077FB0); — DISABLED: A/B RAM-diff fails (4 bytes vs interp). 16-bit integer sqrt — wrong result (cascades into 0x800E806x). Re-enable after fixing gen_func_80077FB0 + re-A/B.
-  rec_set_override(0x80085690u, ov_80085690);
-  rec_set_override(0x8007A12Cu, ov_8007A12C);
 }

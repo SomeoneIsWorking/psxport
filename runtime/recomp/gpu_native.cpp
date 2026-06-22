@@ -15,6 +15,7 @@
 #include "r3000.h"
 #include "cfg.h"
 #include "gpu_native_internal.h"   // shared VRAM/state/helpers (also used by gpu_debug.cpp)
+#include "scea_asset.h"            // baked SCEA license-screen texture+CLUT (PC-native boot splash)
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1324,14 +1325,8 @@ void GpuState::gpu_gp1(uint32_t w) {
 // scaler, independent of the — currently blocked — widescreen GEOMETRY tier; we do not widen here.)
 #ifdef PSXPORT_SDL
 static SDL_Window* s_win; static SDL_Renderer* s_ren; static SDL_Texture* s_tex;
-static int s_tex_w, s_tex_h, s_win_on = -1;
-static int win_enabled(void) {
-  // Check the VALUE, not mere presence: run.sh always SETS PSXPORT_GPU_WINDOW (to "0" headless),
-  // and getenv("...")!=NULL is truthy for "0" too — so a presence test opened a window even with
-  // PSXPORT_NOWINDOW=1 (the "still running headed" bug). Match gpu_pace_subframe: atoi(w)!=0.
-  if (s_win_on < 0) { const char* w = cfg_str("PSXPORT_GPU_WINDOW"); s_win_on = (w && atoi(w) != 0) ? 1 : 0; }
-  return s_win_on;
-}
+static int s_tex_w, s_tex_h;
+static int win_enabled(void) { return gpu_windowed(); }   // a live on-screen window is up (gpu_vk.cpp)
 void GpuState::ensure_window() {
   if (!s_win) {
     SDL_Init(SDL_INIT_VIDEO);
@@ -1404,12 +1399,7 @@ void GpuState::gpu_repaint() {}
 // advances by exactly one logic frame's worth per logic frame either way, so audio stays realtime.
 void gpu_pace_subframe(Core* core, int parts) {
 #ifdef PSXPORT_SDL
-  static int on = -1;
-  if (on < 0) {
-    const char* w = cfg_str("PSXPORT_GPU_WINDOW");   // NB: run.sh sets this to "0" headless, so
-    on = (w && atoi(w) != 0 && !cfg_on("PSXPORT_NOPACE")) ? 1 : 0;  // check the VALUE, not presence
-  }
-  if (!on) return;
+  if (!gpu_windowed() || cfg_on("PSXPORT_NOPACE")) return;   // headless never paces (tests stay fast)
   if (parts < 1) parts = 1;
   int quota = core->mem_r8(0x1F800235u); if (quota < 1) quota = 2;   // vblanks per frame (default 30fps)
   double interval = quota * 1000.0 / 60.0 / parts;             // ms for this sub-frame
@@ -1599,31 +1589,34 @@ void gpu_native_init(void) {
 // harness to assert exact rasterized/blended values; harmless in production (read-only).
 uint16_t GpuState::gpu_vram_peek(int x, int y) { return *vram(x, y); }
 
-// PC-native SCEA splash composite. The boot stub uploads the "Sony Computer Entertainment America
-// Presents" text to VRAM (4bpp page at (832,256), 16-entry CLUT at (880,511)) and clears the display
-// framebuffer to black, but its textured-rect draws don't rasterize through our hi-res VK path — so the
-// screen is black (the asset is in VRAM, just never composited; tools/menu_bg_export proves the decode).
-// We composite it OURSELVES, PC-native: decode the 4bpp+CLUT text from VRAM exactly as the exporter does
-// and write it straight into the displayed framebuffer (s_vram (0,0)), modulated by `fade` (0..128 = the
-// splash fade level). The 3 text rects + their texpage/CLUT/UV are decoded from the stub's SCEA GP0 stream.
-void GpuState::scea_splash_composite(int fade) {
-  if (fade <= 0) return;
-  if (fade > 128) fade = 128;
-  struct { int sx, sy, w, h, u0, v0; } sp[3] = {   // screen rect + texture UV origin (from the SCEA GP0)
+// PC-native SCEA decode: turn the baked 4bpp+CLUT asset (scea_asset.h) into a flat RGBA8 buffer laid out
+// at the 640x468 SCEA SCREEN positions (the same 3 rects / texpage / CLUT / UV the PSX boot stub used,
+// mirroring scea_splash_composite). Text pixels = the CLUT color (a=255); everywhere else = (0,0,0,0).
+// This is the PSX-FREE source for gpu_vk_present_image (no s_vram poke, no VRAM mirror) — `out` must be
+// SCEA_DISP_W * SCEA_DISP_H * 4 bytes. The 5-bit PSX color channels are expanded to 8-bit (<<3 | >>2).
+void gpu_scea_decode_rgba(uint8_t* out) {
+  memset(out, 0, (size_t)SCEA_DISP_W * SCEA_DISP_H * 4);   // transparent/black background
+  struct { int sx, sy, w, h, u0, v0; } sp[3] = {           // screen rect + texture UV origin (from the SCEA GP0)
     { 536, 200,  64, 32, 0, 128 }, { 280, 200, 256, 64, 0, 64 }, { 24, 200, 256, 64, 0, 0 } };
-  const int TXB = 832, TY = 256, CX = 880, CY = 511;   // 4bpp page base (VRAM words) + CLUT origin
   for (int s = 0; s < 3; s++)
     for (int r = 0; r < sp[s].h; r++)
       for (int c = 0; c < sp[s].w; c++) {
         int u = sp[s].u0 + c, v = sp[s].v0 + r;
-        uint16_t word = s_vram[((TY + v) & 511) * VRAM_W + ((TXB + (u >> 2)) & 1023)];
+        // 4bpp texel: the asset word for this (u,v) is scea_tex_words[v*W + (u>>2)] (the same word the
+        // PSX boot read from VRAM at texpage (832,256)); the nibble is selected by (u&3). The baked
+        // texture is 64 words x 160 rows — exactly covering all 3 rects' (u>>2) in [0,64), v in [0,160).
+        int tu = u >> 2, tv = v;
+        if (tu < 0 || tu >= SCEA_TEX_W || tv < 0 || tv >= SCEA_TEX_H) continue;
+        uint16_t word = scea_tex_words[tv * SCEA_TEX_W + tu];
         int idx = (word >> ((u & 3) * 4)) & 0xF;
-        uint16_t cl = s_vram[(CY & 511) * VRAM_W + ((CX + idx) & 1023)];
-        if (cl == 0) continue;                           // PSX textured: a 0x0000 CLUT entry is transparent
-        int R = (cl & 31) * fade / 128, G = ((cl >> 5) & 31) * fade / 128, B = ((cl >> 10) & 31) * fade / 128;
+        uint16_t cl = scea_clut_words[idx];
+        if (cl == 0) continue;                               // PSX textured: a 0x0000 CLUT entry is transparent
+        int R = (cl & 31), G = (cl >> 5) & 31, B = (cl >> 10) & 31;
         int x = sp[s].sx + c, y = sp[s].sy + r;
-        if (x >= 0 && x < VRAM_W && y >= 0 && y < VRAM_H)
-          s_vram[y * VRAM_W + x] = (uint16_t)((B << 10) | (G << 5) | R);
+        if (x < 0 || x >= SCEA_DISP_W || y < 0 || y >= SCEA_DISP_H) continue;
+        uint8_t* px = out + ((size_t)y * SCEA_DISP_W + x) * 4;
+        px[0] = (uint8_t)((R << 3) | (R >> 2)); px[1] = (uint8_t)((G << 3) | (G >> 2));
+        px[2] = (uint8_t)((B << 3) | (B >> 2)); px[3] = 255;
       }
 }
 
@@ -1751,6 +1744,5 @@ void gpu_repaint(Core* core) { core->game->gpu.gpu_repaint(); }
 int  gpu_frame_no(Core* core) { return core->game->gpu.gpu_frame_no(); }
 void gpu_provat_enable(Core* core) { core->game->gpu.gpu_provat_enable(); }
 uint16_t gpu_vram_peek(Core* core, int x, int y) { return core->game->gpu.gpu_vram_peek(x, y); }
-void gpu_scea_splash_composite(Core* core, int fade) { core->game->gpu.scea_splash_composite(fade); }
 void gpu_vram_load(Core* core, const uint16_t* src) { core->game->gpu.gpu_vram_load(src); }
 void gpu_vram_save(Core* core, uint16_t* dst) { core->game->gpu.gpu_vram_save(dst); }

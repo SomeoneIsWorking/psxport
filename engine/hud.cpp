@@ -378,16 +378,9 @@ void probe_nine(Core* c) {
 }  // namespace
 
 void hud_register(void) {
-  rec_set_override(SPRITE_HELPER, ov_hud_sprite);
-  rec_set_override(RECT_HELPER,   ov_hud_rect);
   // PC-native text glyph drawer (own FUN_80078CA8; draws font quads on the engine 2D overlay) — THE behavior.
-  rec_set_override(GLYPH_STR,  ov_glyph_string);
   // Box / 9-slice frame: not yet owned. Registered as pure super-call (behavior-identical to the recomp
   // body) plus the `bannerprobe` diagnostic log, so the next session can RE them on the live banner scene.
-  rec_set_override(UI_RECT,    probe_rect);
-  rec_set_override(NINE_SLICE, probe_nine);
   // In-game MENU label visibility (GitHub #26): the text wrappers set a visible colour template for
   // menu-cluster callers, then super-call the body. See the RE comment above ov_text_wrapper.
-  rec_set_override(TEXTW_8,  ov_textw_8);
-  rec_set_override(TEXTW_16, ov_textw_16);
 }

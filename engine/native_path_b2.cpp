@@ -142,12 +142,4 @@ static void ov_80098150(Core* c) {
 }
 
 void games_native_path_b2_init(void) {
-  rec_set_override(0x8008BEACu, ov_8008BEAC);
-  rec_set_override(0x8009440Cu, ov_8009440C);
-  rec_set_override(0x8007982Cu, ov_8007982C);
-  rec_set_override(0x8007A810u, ov_8007A810);
-  rec_set_override(0x8007A8E0u, ov_8007A8E0);
-  rec_set_override(0x80050738u, ov_80050738);
-  rec_set_override(0x80084250u, ov_80084250);
-  rec_set_override(0x80098150u, ov_80098150);
 }

@@ -112,9 +112,8 @@ void spu_audio_init(void)
    // Headless implies no audio — there's no point driving the sound device for an automated/offscreen
    // run (it just makes noise). Audio opens ONLY for a real on-screen window. `PSXPORT_NOAUDIO` stays as
    // an explicit mute for windowed runs. (WAV capture above is independent and still works headless.)
-   { const char* w = cfg_str("PSXPORT_GPU_WINDOW");
-     int windowed = w && atoi(w) != 0;
-     if (cfg_on("PSXPORT_NOAUDIO") || !windowed || cfg_on("PSXPORT_VK_HEADLESS"))
+   { int gpu_windowed(void);
+     if (cfg_on("PSXPORT_NOAUDIO") || !gpu_windowed())   // audio opens only for a real on-screen window
      {
         s_state = -1;
         return;

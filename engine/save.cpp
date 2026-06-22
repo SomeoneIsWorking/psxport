@@ -182,5 +182,4 @@ void ov_save_dispatch(Core* c) {
 // Public registration — ONE line from game_tomba2.cpp init.
 // ------------------------------------------------------------------------------------------------
 void save_register(void) {
-  rec_set_override(SAVE_DISPATCH_FN, ov_save_dispatch);  // FUN_80036DFC save/load-flow head dispatcher
 }

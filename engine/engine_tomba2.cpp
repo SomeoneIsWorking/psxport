@@ -65,7 +65,6 @@ static void ov_objwalk(Core* c) {
 }
 
 void engine_tomba2_init(void) {
-  rec_set_override(T2_OBJWALK_FN, ov_objwalk);     // 0x8007A904 — native engine owns the object walk
   if (cfg_dbg("engine"))
     fprintf(stderr, "[engine] native object-list walk active (FUN_8007a904)\n");
 }

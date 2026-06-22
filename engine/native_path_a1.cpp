@@ -373,15 +373,6 @@ static void ov_80098D30(Core* c) {
 
 // Register every batch-A1 native function.
 void games_native_path_a1_init(void) {
-  rec_set_override(0x8008B19Cu, ov_8008B19C);
   // TODO(verify): rec_set_override(0x80097540u, ov_80097540); — DISABLED: A/B RAM-diff fails (2 bytes vs interp). return-selection edge case (a0==-1/-2 path). Re-enable after fixing gen_func_80097540 + re-A/B.
-  rec_set_override(0x800982A0u, ov_800982A0);
-  rec_set_override(0x80094B50u, ov_80094B50);
-  rec_set_override(0x80098F90u, ov_80098F90);
-  rec_set_override(0x80097E40u, ov_80097E40);
-  rec_set_override(0x80091B50u, ov_80091B50);
-  rec_set_override(0x80090A60u, ov_80090A60);
   // TODO(verify): rec_set_override(0x800752B4u, ov_800752B4); — DISABLED: A/B RAM-diff fails (167 bytes vs interp). stride-12 band-classify table @0x800BE238 — wrong records. Re-enable after fixing gen_func_800752B4 + re-A/B.
-  rec_set_override(0x80098810u, ov_80098810);
-  rec_set_override(0x80098D30u, ov_80098D30);
 }

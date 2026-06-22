@@ -38,7 +38,6 @@
 
 void rec_super_call(Core*, uint32_t);   // interpret the original PSX body (A/B oracle / super-call)
 void rec_dispatch(Core*, uint32_t);     // run a guest fn in-context (honors its own override)
-void rec_set_override(uint32_t addr, void (*fn)(Core*));
 
 // The native body. a0 = c->r[4] (G), a1 = c->r[5] (suppress-Y).
 static void player_move_56b48(Core* c) {

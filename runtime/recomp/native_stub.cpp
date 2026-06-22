@@ -1,43 +1,22 @@
-// Authentic boot: run the disc's boot stub (SCUS_944.54) as the real entry point.
+// PC-native boot entry (replaces interpreting the disc's PSX boot stub SCUS_944.54).
 //
-// The REAL PSX boot is: BIOS -> boot executable (the SCUS stub, NOT MAIN.EXE) -> stub draws the
-// SCEA "Sony Computer Entertainment America Presents" screen itself, then BIOS-LoadExec's
-// cdrom:\MAIN.EXE;1 and jumps to MAIN's entry (0x800896E0). The port previously skipped the stub
-// (loading MAIN directly), so there was no SCEA; a fake native_fmv "intro" stood in for it. See
-// docs/journal.md "later 34" + memory [[psxport-scea-boot-stub]].
-//
-// The stub is NOT recompiled (only MAIN.EXE is), so we INTERPRET it (rec_interp) straight from
-// g_ram, using the same runtime (mem/gpu/hle) as recompiled code. The stub carries its own copy
-// of the PSY-Q libs (libgpu/libcd/libetc) at its own addresses (0x80018xxx..) — distinct from
-// MAIN.EXE's. The native GPU renders the stub's draws (it pokes the same GP0/GP1/DMA the renderer
-// parses). The stub's blocking libcd/libetc waits (which spin on CD/VBlank IRQs we don't deliver)
-// are converted to native non-stalls by overrides registered here, mirroring what cd_override.c /
-// timing.c / sync_overrides.c do for the MAIN.EXE copies.
-//
-// Hand-off: the stub's LoadExec(cdrom:\MAIN.EXE;1, ...) is intercepted (hle.c g_loadexec_hook):
-// we load MAIN.EXE into RAM and longjmp out of the stub interpreter, then enter the native MAIN
-// boot (native_boot.c), which takes over for Whoopee/OP/menu (later 33).
+// The REAL PSX boot is: BIOS -> boot executable (the SCUS stub) -> stub draws the SCEA
+// "Sony Computer Entertainment America Presents" screen, then BIOS-LoadExec's cdrom:\MAIN.EXE;1.
+// We no longer interpret that stub: its CD/VSync busy-waits depended on the override mechanism
+// (removed 2026-06-22, top-down PC-driven rebuild). Instead native_stub_run renders SCEA PC-native
+// from a baked asset (native_scea_splash + gpu_scea_load_asset), then loads MAIN.EXE itself and
+// enters the native MAIN boot (native_boot.cpp), which takes over for the intro FMVs + the menu.
 #include "core.h"
 #include "game.h"   // StubState lives on Game; reached via c->game->stub (de-globalization, 2026-06-19)
 #include "c_subsys.h"
 #include "cfg.h"
+#include "scea_asset.h"   // SCEA_DISP_W/H (the decoded RGBA splash dims)
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <setjmp.h>
-#ifdef PSXPORT_SDL
-#include <SDL.h>   // SDL_GetTicks/SDL_Delay — pace the SCEA stub to real 60 Hz when windowed
-#endif
-
-// The boot stub is recompiled as its OWN module (emit.py --stub: STUB_NAMES) with distinct
-// dispatch/override symbols, since it overlaps MAIN.EXE's address space. stub_dispatch runs a
-// stub function by address (hybrid: misses fall to the interpreter on the stub's RAM bytes);
-// stub_set_override installs a native body for a recompiled stub function (CD/etc.).
-void stub_dispatch(Core* c, uint32_t addr);
-void stub_set_override(uint32_t addr, OverrideFn fn);
 void native_boot_run(Core* c);
 void interp_trace_open(const char* path);
-extern void (*g_loadexec_hook)(Core*);
 
 static uint32_t rd32(const uint8_t* p) { return p[0] | p[1]<<8 | p[2]<<16 | (uint32_t)p[3]<<24; }
 
@@ -69,187 +48,73 @@ static uint32_t load_exe_image(const char* path, Core* c) {
 // instance: c->game->stub.{vblank,main_path,exit_jmp}. The former g_boot_ctx global is gone — every
 // user is an override that already carries the boot Core* c, so it reloads MAIN into `c` directly.
 
-// LoadExec(cdrom:\MAIN.EXE;1, stackbase, stackoffset) interceptor. The real LoadExec loads the
-// named EXE and jumps to it (never returns). We instead reload MAIN.EXE (restoring the low text
-// the stub overwrote) and bail out of the stub interpreter; native_stub_run then enters the
-// native MAIN boot. a0 = filename ptr (logged for sanity).
-static void ov_loadexec(Core* c) {
-  uint32_t name = c->r[4];
-  char fn[64]; int i = 0;
-  for (; i < 63; i++) { uint8_t ch = c->mem_r8(name + i); if (!ch) break; fn[i] = (char)ch; }
-  fn[i] = 0;
-  fprintf(stderr, "[stub] LoadExec(\"%s\") -> hand off to native MAIN boot\n", fn);
-  load_exe_image(c->game->stub.main_path, c);  // reload MAIN.EXE image + registers into the boot Core
-  longjmp(c->game->stub.exit_jmp, 1);
+// PC-native SCEA license screen (replaces the interpreted PSX boot stub SCUS_944.54). The stub's
+// only jobs were: draw SCEA, then CdInit + LoadExec MAIN. Its CD/VSync waits used to be unstalled by
+// the override mechanism (now removed), so we no longer interpret it. We render SCEA directly from the
+// baked asset (scea_asset.h, via gpu_scea_load_asset) with a fade-in over a fixed duration, skippable
+// with Start (loading is PC-native, so it IS skippable now), then native_stub_run LoadExec's MAIN.
+// Fade envelope over the splash: fade in, hold at full, fade back out (the PSX SCEA does the same).
+// Durations measured from the REAL SCUS_944.54 stub vs the oracle (docs/journal.md later-46/48):
+// total ~305 frames (~5.1s @ 60Hz) — a ~57-frame linear grey->white fade-in, a long full-bright hold,
+// then a ~2-3 frame fade-out at the tail. (The HLE's old count*2 / 160-hold were guesses, discarded.)
+#define SCEA_FADE_IN   57                                  // frames to ramp 0 -> 128 (linear grey->white)
+#define SCEA_FADE_OUT  3                                   // short fade-out at the very end (f304-305)
+#define SCEA_HOLD      245                                 // frames held at full brightness (~305 total)
+#define SCEA_FRAMES    (SCEA_FADE_IN + SCEA_HOLD + SCEA_FADE_OUT)
+// Dump a faded SCEA RGBA buffer to a PPM (headless verification of the decode/layout). rgba is
+// SCEA_DISP_W x SCEA_DISP_H RGBA8; `fade01` (0..1) scales rgb exactly as the shader does on screen.
+static void scea_dump_ppm(const uint8_t* rgba, float fade01, const char* path) {
+  FILE* f = fopen(path, "wb"); if (!f) { perror(path); return; }
+  fprintf(f, "P6\n%d %d\n255\n", SCEA_DISP_W, SCEA_DISP_H);
+  for (int i = 0; i < SCEA_DISP_W * SCEA_DISP_H; i++) {
+    const uint8_t* p = rgba + (size_t)i * 4;
+    unsigned char o[3] = { (unsigned char)(p[0] * fade01), (unsigned char)(p[1] * fade01),
+                           (unsigned char)(p[2] * fade01) };
+    fwrite(o, 1, 3, f);
+  }
+  fclose(f);
+  fprintf(stderr, "[scea] wrote %s (%dx%d, fade %.2f)\n", path, SCEA_DISP_W, SCEA_DISP_H, fade01);
 }
 
-// --- Stub libcd overrides ------------------------------------------------------------------
-// The boot stub carries its own PSY-Q libcd at 0x80019xxx-0x8001Axxx (distinct from MAIN.EXE's,
-// which cd_override.c/sync_overrides.c handle). Its blocking primitives spin in a status poll
-// with a timer-based timeout ("CD timeout: CD_cw(...)") waiting on a CD IRQ we never deliver.
-// We replace them with native non-stalls, mirroring the MAIN.EXE overrides 1:1:
-//   * CD_cw (0x8001A0C0, cmd,param,result,...) — the command-word engine. Real body sends the
-//     command and waits for the controller ack/IRQ. Override: report success (v0=0), zero the
-//     8 result/status bytes the caller copies (a2). Every libcd command (Init/Setloc/Setmode/
-//     ReadN/Pause/Nop) funnels here, so this single override unblocks init + control. DATA is
-//     served separately by the native read primitive (added once located).
-//   * CdSync (0x80019B78, mode,result) — return 2 (status: complete), zero result(a1).
-//   * CdDataSync (0x8001A944, mode) — DMA-done wait — return 0 (already done).
-enum { V0_ = 2, A0_ = 4, A1_ = 5, A2_ = 6 };
-static void zero_result8(Core* c, uint32_t p) { if (p) for (int i = 0; i < 8; i++) c->mem_w8(p + i, 0); }
-static void ov_stub_cd_cw(Core* c)    { zero_result8(c, c->r[A2_]); c->r[V0_] = 0; }
-static void ov_stub_cdsync(Core* c)   { zero_result8(c, c->r[A1_]); c->r[V0_] = 2; }
-static void ov_stub_cddatasync(Core* c) { c->r[V0_] = 0; }
-
-// --- Stub libetc VSync ---------------------------------------------------------------------
-// The stub's public VSync(mode) (0x80017E4C) measures frame timing off hardware we don't model
-// (GPUSTAT 0x1F801814, Timer1 0x1F801110) and waits on the VBlank IRQ count — none of which
-// advance, so its fades/holds spin and it polls GPUSTAT forever. Replace the whole function with
-// the native frame model (mirrors timing.c's ov_vsync for MAIN.EXE):
-//   mode > 0  -> wait `mode` frames;  mode == 0 -> wait one frame
-//   mode < 0  -> "query current count" — but the stub's timed holds BUSY-POLL VSync(-1) expecting
-//                the VBlank IRQ to advance the count in the background (e.g. SCEA state 9 loops
-//                until VSync(-1) > start+3). We deliver no preemptive IRQ, so in this cooperative
-//                model EVERY VSync call ticks one frame: a query-poll loop then makes progress and
-//                keeps presenting. (A query advancing one frame is harmless to elapsed measurements
-//                and is exactly what lets those wait loops terminate.)
-// Each call advances the native frame clock, delivers the VBlank events, and PRESENTS one frame
-// (the stub has drawn + flipped its display) — the heartbeat that makes SCEA visible and its timed
-// hold/fade progress. DAT_800267B4 is the count SCEA also reads directly.
-#define STUB_VBLANK_COUNT 0x800267B4u
-void hle_deliver_event(Core* c, uint32_t ev_class, uint32_t spec);
-static void ov_stub_vsync(Core* c) {
-  uint32_t& stub_vblank = c->game->stub.vblank;   // boot-stub VBlank counter (was g_stub_vblank)
-  int32_t mode = (int32_t)c->r[A0_];
-  if (cfg_dbg("vsync")) fprintf(stderr, "[vsync] mode=%d count=%u\n", mode, stub_vblank);
-  hle_deliver_event(c, 0xF2000003u, 0xFFFFFFFFu);      // VBlank event classes (RCnt3 / libapi)
-  hle_deliver_event(c, 0xF0000001u, 0xFFFFFFFFu);
-
-  // PRESENT only on a real frame-wait (mode>=0), NOT on busy-poll queries (VSync(-1)). The SCEA
-  // stub's per-frame body is: VSync(0) [frame boundary] -> clear framebuffer -> busy-poll VSync(-1)
-  // (timing/CD) -> draw -> loop. Presenting on the polls flashes the just-cleared (black) buffer
-  // between complete frames (the SCEA blink, journal later-46). Real HW refreshes the display only
-  // at the VBlank frame boundary, never mid-draw.
-  static int windowed = -1;
-  if (windowed < 0) {
-    const char* w = cfg_str("PSXPORT_GPU_WINDOW");      // run.sh sets "0" headless, "1" windowed
-    windowed = (w && atoi(w) != 0 && !cfg_on("PSXPORT_NOPACE")) ? 1 : 0;
-  }
-
-  // SCEA skip: pressing Start jumps straight to the MAIN.EXE hand-off (skipping the fades), exactly
-  // as ov_loadexec does. PSXPORT_SCEA_SKIP forces it (headless test / always-skip). Start is PSX
-  // button bit 0x0008, active-low (0 == pressed) in the host pad mask.
-  static int skip_dis = -1; if (skip_dis < 0) skip_dis = cfg_on("PSXPORT_NOSKIP") ? 1 : 0;
-  if (!skip_dis) {
-    uint16_t pad_buttons(Core*);
+static void native_scea_splash(Core* c) {
+  void gpu_scea_decode_rgba(uint8_t*);
+  void gpu_vk_present_image(Core*, const uint8_t*, int, int, float);
+  void gpu_pace_frame(Core*); void gpu_clear_display(Core*); uint16_t pad_buttons(Core*);
+  // Decode the baked SCEA asset into a PC-native RGBA8 screen image ONCE (no PSX VRAM / GP0 / CLUT path).
+  static uint8_t scea_rgba[SCEA_DISP_W * SCEA_DISP_H * 4];
+  gpu_scea_decode_rgba(scea_rgba);
+  int dumped = 0;
+  for (int f = 0; f < SCEA_FRAMES; f++) {
 #ifdef PSXPORT_SDL
-    if (windowed) { void pad_poll_sdl(Core*); pad_poll_sdl(c); }   // refresh host input
+    { if (gpu_windowed()) { void pad_poll_sdl(Core*); pad_poll_sdl(c); } }
 #endif
-    if (cfg_on("PSXPORT_SCEA_SKIP") || (pad_buttons(c) & 0x0008u) == 0) {
-      fprintf(stderr, "[stub] SCEA skipped (Start) -> hand off to MAIN\n");
-      load_exe_image(c->game->stub.main_path, c);
-      longjmp(c->game->stub.exit_jmp, 1);
+    if ((pad_buttons(c) & 0x0008u) == 0) {                // Start = skip the license screen
+      fprintf(stderr, "[scea] skipped (Start) at frame %d\n", f); break; }
+    int fade;                                             // 0..128: fade in, hold, fade out
+    if (f < SCEA_FADE_IN)                  fade = f * 128 / SCEA_FADE_IN;
+    else if (f < SCEA_FADE_IN + SCEA_HOLD) fade = 128;
+    else                                   fade = (SCEA_FRAMES - 1 - f) * 128 / SCEA_FADE_OUT;
+    gpu_vk_present_image(c, scea_rgba, SCEA_DISP_W, SCEA_DISP_H, fade / 128.0f);
+    // Headless: present_image only uploads (no swapchain) — dump the CPU rgba (faded) at the hold midpoint
+    // so the decode/layout can be verified offline.
+    if (!dumped && f == SCEA_FADE_IN + SCEA_HOLD / 2) {
+      scea_dump_ppm(scea_rgba, fade / 128.0f, "scratch/screenshots/scea_native_check.ppm");
+      dumped = 1;
     }
+    gpu_pace_frame(c);                                    // paces to ~60 Hz when windowed; headless = fast
+    watchdog_pet();
   }
-#ifdef PSXPORT_SDL
-  if (windowed) {
-    // Real-vblank model (matches hardware): the VSync count advances at 60 Hz of REAL time via the
-    // VBlank IRQ, independent of how often the stub polls. Deriving the count from a per-call
-    // increment (headless path below) inflates it by the busy-poll rate, so SCEA's count-timed fades
-    // and holds run far too fast (journal later-48). Here the count tracks elapsed real time, and a
-    // frame-wait sleeps to the next 60 Hz boundary before presenting — authentic fade/hold speed.
-    static double t0 = -1, next = 0;
-    double now = (double)SDL_GetTicks();
-    if (t0 < 0) { t0 = now; next = now; }
-    if (mode >= 0) {                                   // frame-wait: pace to the vblank, then present
-      int frames = (mode > 0) ? mode : 1;
-      next += frames * 1000.0 / 60.0;
-      if (next > now) { SDL_Delay((unsigned)(next - now)); now = (double)SDL_GetTicks(); }
-      else if (now - next > 1000.0) next = now;        // resync after a long stall (no debt)
-      void gpu_scea_splash_composite(Core*, int);      // PC-native SCEA: composite the text into the
-      gpu_scea_splash_composite(c, (int)(stub_vblank * 2));  // displayed framebuffer with a fade (rgb/2/frame)
-      gpu_present(c);                                   // show the completed frame (pets watchdog)
-    } else {
-      watchdog_pet();                                  // poll: no present, no artificial count tick
-    }
-    stub_vblank = (uint32_t)((now - t0) * 60.0 / 1000.0);   // count == real vblanks elapsed
-    c->mem_w32(STUB_VBLANK_COUNT, stub_vblank);
-    c->r[V0_] = stub_vblank;
-    return;
-  }
-#endif
-  // Headless / unpaced: advance per call (fast) so tests run at full speed; present on frame-waits.
-  stub_vblank += (mode > 0) ? (uint32_t)mode : 1u;
-  if (mode >= 0) { void gpu_scea_splash_composite(Core*, int);
-                   gpu_scea_splash_composite(c, (int)(stub_vblank * 2)); gpu_present(c); }
-  else watchdog_pet();
-  c->mem_w32(STUB_VBLANK_COUNT, stub_vblank);
-  c->r[V0_] = stub_vblank;
-}
-
-// --- Stub CdRead: make SCEA do NO CD reads ----------------------------------------------------
-// The SCEA stub's CdRead (0x8001BA64) preloads CD data the screen doesn't actually need — we play
-// the intro FMVs natively and LoadExec MAIN from file, so no real CD stream reaches the stub. Its
-// caller (0x8001B89C) retries while the CD-status word (CD struct @0x80026BF8, +20 = 0x80026C0C) is
-// negative — producing the endless "CdRead: retry..." spam. Replace CdRead with a no-op that writes
-// a SUCCESS status (a positive value, exactly as the original success path stores the VSync count)
-// so the caller's `bgez` sees success and stops retrying; SCEA then just ends and cuts to the LOGO
-// FMV. (User-requested: "make SCEA not do CD reads.")
-#define STUB_CD_STATUS 0x80026C0Cu
-static void ov_stub_cdread(Core* c) {
-  uint32_t sv = c->game->stub.vblank;
-  // The ENGINE owns the SCEA splash DURATION (PC-native timing, not the PSX CD-load time). We keep CdRead
-  // "busy" (negative status -> the stub's caller retries, so its draw+fade loop keeps presenting frames)
-  // until the stub vblank count reaches SCEA_SPLASH_VBLANKS, then report success so the stub LoadExecs MAIN.
-  // The stub's count-driven fade reaches FULL brightness (rgb 128) by count ~100 and holds; ~160 vblanks =
-  // ~1.7s fade-in + ~1s hold at 60Hz (windowed: the count tracks REAL vblanks, so this is wall-clock; the
-  // earlier instant-success cut it off at count ~18 = a near-black flash). PSXPORT_SCEA_HOLD overrides; 0
-  // restores instant hand-off. (Render is still the interpreted stub — a fully PC-native splash that
-  // decodes+blits the SCEA image with its own fade, like tools/menu_bg_export, is the eventual replacement.)
-  static long hold = -2; if (hold == -2) { const char* e = cfg_str("PSXPORT_SCEA_HOLD"); hold = e ? atol(e) : 160; }
-  int32_t status = (sv >= (uint32_t)hold) ? (int32_t)(sv ? sv : 1) : -1;   // -1 = busy
-  c->mem_w32(STUB_CD_STATUS, (uint32_t)status);
-  c->r[V0_] = c->mem_r32(STUB_CD_STATUS);
-}
-
-// Register a stub override on BOTH the recompiled path (stub_set_override, function-index keyed —
-// fires when the fn is reached via a direct call) and the interpreter path (rec_set_interp_override,
-// raw-address keyed — fires when reached via a function pointer / non-recompiled caller). One of
-// the two always applies regardless of how libcd is entered.
-static void stub_override(uint32_t addr, OverrideFn fn) {
-  stub_set_override(addr, fn);
-  rec_set_interp_override(addr, fn);
-}
-static void stub_cd_overrides_init(void) {
-  stub_override(0x8001A0C0u, ov_stub_cd_cw);      // CD_cw (command engine; entry precedes prologue)
-  stub_override(0x80019B78u, ov_stub_cdsync);     // CdSync
-  stub_override(0x8001A944u, ov_stub_cddatasync); // CdDataSync
-  stub_override(0x80017E4Cu, ov_stub_vsync);      // libetc public VSync(mode)
-  stub_override(0x8001BA64u, ov_stub_cdread);     // CdRead -> no-op success (no CD reads in SCEA)
+  gpu_clear_display(c);                                   // hard black after the fade-out (clean cut to FMV)
 }
 
 void native_stub_run(Core* c, const char* main_exe_path) {
   c->game->stub.main_path = main_exe_path;
-  g_loadexec_hook = ov_loadexec;
-  stub_cd_overrides_init();
   interp_trace_open(cfg_str("PSXPORT_INTERP_TRACE"));
 
-  // The stub (the disc's boot executable) lives next to MAIN.EXE — same directory, name
-  // SCUS_944.54 (extracted by run.sh via `discdump get`). It loads to 0x80010000 (over MAIN's low
-  // text), entry 0x80018B6C; the MAIN reload at LoadExec restores that text, as the real boot does.
-  char stub[512];
-  const char* slash = strrchr(main_exe_path, '/');
-  int dirlen = slash ? (int)(slash - main_exe_path) + 1 : 0;
-  snprintf(stub, sizeof stub, "%.*s%s", dirlen, main_exe_path, "SCUS_944.54");
-  uint32_t entry = load_exe_image(stub, c);
-
-  if (setjmp(c->game->stub.exit_jmp) == 0) {
-    fprintf(stderr, "[stub] running boot stub from entry 0x%08X (draws SCEA, loads MAIN)\n", entry);
-    stub_dispatch(c, entry);                     // runs SCEA + LoadExec; ov_loadexec longjmps out
-    fprintf(stderr, "[stub] stub returned without LoadExec (unexpected) — booting MAIN directly\n");
-    load_exe_image(c->game->stub.main_path, c);
-  }
-  g_loadexec_hook = 0;
+  // PC-native boot: render SCEA natively (no interpreted PSX stub), then load MAIN.EXE ourselves and
+  // enter the native MAIN boot. (The PSX stub SCUS_944.54 is no longer run — see native_scea_splash.)
+  native_scea_splash(c);
+  load_exe_image(c->game->stub.main_path, c);   // load MAIN.EXE image + initial registers into the Core
   fprintf(stderr, "[stub] entering native MAIN boot\n");
   native_boot_run(c);
 }

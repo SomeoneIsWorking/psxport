@@ -195,5 +195,4 @@ void ov_sm_24448(Core* c) {
 // Public registration — ONE line from game_tomba2.cpp init.
 // ------------------------------------------------------------------------------------------------
 void actor_sm_24448_register(void) {
-  rec_set_override(SM_FN, ov_sm_24448);   // FUN_80024448 actor move-and-collide SM step
 }

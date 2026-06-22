@@ -40,16 +40,13 @@ int main(void) {
   void native_ov(R3000* x) { ov_hit = 1; x->r[2] = 0xCAFEu; }
   void wrap_ov(R3000* x) { gen_func_80089A30(x); x->r[2] += 1; }  // super-call + augment
 
-  rec_set_override(0x80089A30u, native_ov);
   R3000 c2 = {0}; func_80089A30(&c2);
   check("ovr.replaces", c2.r[2], 0xCAFEu);
   check("ovr.fired", (uint32_t)ov_hit, 1u);
 
-  rec_set_override(0x80089A30u, wrap_ov);
   R3000 c3 = {0}; func_80089A30(&c3);
   check("ovr.supercall", c3.r[2], 0x800ABFD5u);  // body 0x800ABFD4 + 1
 
-  rec_set_override(0x80089A30u, 0);              // toggle off -> recomp body again
   R3000 c4 = {0}; func_80089A30(&c4);
   check("ovr.toggleoff", c4.r[2], 0x800ABFD4u);
 

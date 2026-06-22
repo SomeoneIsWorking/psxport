@@ -35,7 +35,6 @@
 
 void rec_super_call(Core*, uint32_t);   // interpret the original PSX body (A/B oracle / super-call)
 void rec_dispatch(Core*, uint32_t);     // hybrid call: recomp body if emitted, else interpret
-void rec_set_override(uint32_t, void(*)(Core*));
 void xa_music_cut_if_dialog(Core*);     // cd_override.cpp: cut looping ingame music when a dialog tone starts
 
 // ---- engine sound STATE (the guest fields this module owns) ---------------------------------------
@@ -306,7 +305,4 @@ void sound_play_sfx(Core* c, int id, int a1, int a2){ c->r[4]=(uint32_t)id; c->r
 
 // ONE line added to game_tomba2.cpp init: sound_register();
 void sound_register(void) {
-  rec_set_override(A_PLAY_BGM, ov_sound_play_bgm);   // FUN_80074BF8 — BGM start  (replaces native_boot ov_bgm_start)
-  rec_set_override(A_STOP_BGM, ov_sound_stop_bgm);   // FUN_80074E48 — BGM stop   (replaces native_boot ov_bgm_stop)
-  rec_set_override(A_PLAY_SFX, ov_sound_play_sfx);   // FUN_80074590 — SFX / song-id router (OWNED native)
 }

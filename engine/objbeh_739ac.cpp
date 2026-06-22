@@ -168,5 +168,4 @@ void ov_beh_739ac(Core* c) {
 }  // namespace
 
 void objbeh_739ac_register(void) {
-  rec_set_override(BEH_FN, ov_beh_739ac);   // FUN_800739AC per-object behavior SM (scene/UI trigger)
 }

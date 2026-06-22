@@ -33,6 +33,7 @@
 #include "cfg.h"
 #include "core.h"
 #include "game.h"   // PadState lives on Game; reached via c->game->pad (de-globalization, 2026-06-19)
+#include "c_subsys.h" // gpu_windowed()
 
 // PSX digital button bits, active-low (0 = pressed). Default = nothing pressed.
 #define PAD_NONE 0xFFFFu
@@ -319,7 +320,6 @@ static void ov_pad_read(Core* c) {
 
 void pad_overrides_init(Core* c) {
   pad_init(c);
-  rec_set_override(0x80003A4Cu, ov_pad_read);   // per-VBlank pad read (no-op until 0x80003A4C is recompilable)
 }
 
 // Per-frame native pad service. The real console fills the slot pad buffers from the per-VBlank
@@ -357,10 +357,7 @@ void pad_service_frame(Core* c) {
   static uint32_t s_fc = 0;       // internal frame counter for the pulse (== native frame index)
   static uint16_t s_hold_mask = PAD_NONE;  // headless test hook: a HELD (not pulsed) mask...
   static uint32_t s_hold_at = 0;           // ...applied from this native frame onward
-  // Check the VALUE, not mere presence: run.sh ALWAYS sets PSXPORT_GPU_WINDOW (to "0" headless, "1"
-  // windowed), so the old `cfg_str(...) ? 1 : 0` was true even headless -> it called pad_poll_sdl()
-  // with no SDL window. Match every other consumer (gpu_native/native_stub: `atoi(w) != 0`).
-  if (s_have_window < 0) { const char* w = cfg_str("PSXPORT_GPU_WINDOW"); s_have_window = (w && atoi(w) != 0) ? 1 : 0; }
+  s_have_window = gpu_windowed();                // a live on-screen window is up (gpu_vk.cpp)
 #ifdef PSXPORT_SDL
   if (s_have_window) pad_poll_sdl(c);            // host keyboard/gamepad -> c->game->pad.buttons
 #endif

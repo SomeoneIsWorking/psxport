@@ -145,7 +145,9 @@ static void ov_game_s4c(Core* c) {
 //   sp-=0x20; sw s1,0x14; s1=0x1f800000; sw s2,0x18; s2=1; sw s0,0x10; s0=0x1f800000; (saves INCOMING regs)
 //   0x1f800206=0; 0x1f800236=0; 0x1f800234=0; 0x1f80019a=2; v1=mem[0x1f800138]; a0=mem_r8(0x1f800134);
 //   sw ra,0x1c; 0x1f800198=0; 0x800be0e4=0; sm[0x48]=a0; sm[0x4a]=sm[0x4c]=sm[0x4e]=sm[0x50]=0.
-static void ov_game_stage_main(Core* c) {
+// Non-static: called directly from the native scheduler (native_boot.cpp) — the ONE remaining native
+// task entry after the override system was removed (2026-06-22).
+void ov_game_stage_main(Core* c) {
   uint32_t ra = c->r[31], sp = c->r[29];
   uint32_t s0_in = c->r[16], s1_in = c->r[17], s2_in = c->r[18];
   c->r[29] = sp - 0x20;
@@ -177,30 +179,11 @@ static void ov_game_stage_main(Core* c) {
 // Detect by the fixed entry + handler signatures (START.BIN/DEMO.BIN are smaller and hold stale bytes at
 // these addresses, so they never match). Called from the overlay-load scan (engine_submit.cpp); registered
 // AUTO so it is flushed when GAME.BIN unloads and another overlay reuses the base (mirrors the M3 scan).
+// OVERRIDE SYSTEM REMOVED (2026-06-22): this scan used to register the GAME stage-machine handlers
+// (ov_game_stage_main + sub-handlers s48_0/1/2) into the address-keyed override table when GAME.BIN
+// loaded. The table is gone; ov_game_stage_main is now called DIRECTLY from the scheduler
+// (native_boot.cpp). The sub-handler ov_game_* defs are kept as future direct-call targets. No-op.
 void stage_scan_overlay(Core* c, uint32_t base, uint32_t size) {
-  if (base != 0x80106228u || size < 0x2600u) return;   // only GAME.BIN (~11.6 KB) reaches the handlers
-  if (c->mem_r32(0x8010637Cu) != 0x27bdffe0u) return;  // entry:   addiu sp,sp,-0x20
-  if (c->mem_r32(0x801086e0u) != 0x27bdffe8u) return;  // s48==0:  addiu sp,sp,-0x18
-  if (c->mem_r32(0x80108720u) != 0x27bdffe8u) return;  // s48==1:  addiu sp,sp,-0x18
-  rec_set_interp_override_auto(0x8010637Cu, ov_game_stage_main); // stage top-level: own the prologue, redirect to the loop
-  rec_set_interp_override_auto(0x801086e0u, ov_game_s48_0);
-  rec_set_interp_override_auto(0x80108720u, ov_game_s48_1);
-  rec_set_interp_override_auto(0x80108784u, ov_game_s48_2);   // RUNNING dispatcher (coro-redirect handshake)
-  // ov_game_s4c (sm[0x4c] area machine, 0x80106478) is RE'd + implemented with the same coro-redirect
-  // handshake, but it is reached ONLY via sm[0x4a]==2 — the area LOAD/TRANSITION path. The headless idle-
-  // field gate runs entirely in sm[0x4a] 0/1 (steady play), so s4a==2 / 0x80106478 is NEVER exercised and
-  // can't be A/B-verified here. NOT registered until there's a deterministic area-transition test path
-  // (drive Tomba through an area boundary headless, or own FUN_80052078 to script a transition). See
-  // docs/journal.md later-169 NEXT.
-  // ov_game_s4c stays UNREGISTERED: confirmed (later-173, PSXPORT_DEBUG=stage entry log) that 0x80106478 is
-  // NEVER entered on the field NOR during the boot area-load — sm[0x4c] there is driven by the steady handler
-  // 0x801088d8, not this machine. It is reached only via sm[0x4a]==2 (a mid-play AREA boundary crossing),
-  // which needs a deterministic headless path TO an area exit. Free-roam IS now reachable headless
-  // (AUTO_SKIP + AUTO_WALK, driving-the-game.md §5), but the seaside area's exit is not a plain walk/jump
-  // into an edge — reaching it needs visual steering or RE of the exit trigger in 0x801088d8. Until then,
-  // no unverified override ships.
-  (void)ov_game_s4c;
-  if (cfg_dbg("stage"))
-    fprintf(stderr, "[stage] own GAME area-init + RUNNING handlers (sm[0x48]==0 0x801086e0, ==1 0x80108720, "
-                    "==2 0x80108784) in load 0x%08X+0x%X\n", base, size);
+  (void)c; (void)base; (void)size;
+  (void)ov_game_s48_0; (void)ov_game_s48_1; (void)ov_game_s48_2; (void)ov_game_s4c;
 }

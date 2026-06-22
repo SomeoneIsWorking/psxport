@@ -449,15 +449,5 @@ L_80097D88:
 
 // Register every batch-A2 hand-native function (called from games_tomba2_init at startup).
 void games_native_path_a2_init(void) {
-  rec_set_override(0x8009A640u, ov_8009A640);
-  rec_set_override(0x8008A00Cu, ov_8008A00C);
-  rec_set_override(0x8008A110u, ov_8008A110);
-  rec_set_override(0x80082240u, ov_80082240);
-  rec_set_override(0x800822D8u, ov_800822D8);
-  rec_set_override(0x80097A90u, ov_80097A90);
   // TODO(verify): rec_set_override(0x80090160u, ov_80090160); — DISABLED: A/B RAM-diff fails (80 bytes vs interp). varint stream consumer — wrong accumulation. Re-enable after fixing gen_func_80090160 + re-A/B.
-  rec_set_override(0x8005082Cu, ov_8005082C);
-  rec_set_override(0x8008B040u, ov_8008B040);
-  rec_set_override(0x80083DE0u, ov_80083DE0);
-  rec_set_override(0x800998E4u, ov_800998E4);
 }

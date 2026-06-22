@@ -26,7 +26,6 @@
 #include <unistd.h>   // usleep (debug-server pause/step idle wait)
 
 void rec_coro_run(Core* c, uint32_t pc); // flat coroutine interpreter (resumable, see interp.c)
-OverrideFn rec_interp_override_for(uint32_t a);  // unified address-keyed override lookup (interp.c)
 
 // Native XA voice/BGM clip player (xa_stream.c) owns task slot 2 — it replaced the FUN_8001cfc8
 // streaming-reader coroutine. The scheduler skips slot 2 while owned and reflects clip completion
@@ -131,11 +130,14 @@ static void native_scheduler_step(Core* c) {
       // exactly once on a FRESH entry (NOT on a resume, whose saved pc is deep guest code that must
       // be interpreted, not re-dispatched). The override does its prologue and either rec_coro_redirect's
       // to where the interp should continue (coro_redirect_pc) or returns to its ra; run flat from there.
-      if (fresh) {
-        OverrideFn ov = rec_interp_override_for(resume_pc);
-        if (ov) { extern uint32_t g_override_tgt; g_override_tgt = resume_pc; ov(c);
-                  start = c->coro_redirect_pc ? c->coro_redirect_pc : c->r[31];
-                  c->coro_redirect_pc = 0; }
+      if (fresh && resume_pc == 0x8010637Cu) {
+        // The ONE native task entry: the GAME stage dispatcher (engine_stage.cpp). Called directly
+        // (top-down PC-driven) instead of via the removed address-keyed override table.
+        void ov_game_stage_main(Core*);
+        extern uint32_t g_override_tgt; g_override_tgt = resume_pc;
+        ov_game_stage_main(c);
+        start = c->coro_redirect_pc ? c->coro_redirect_pc : c->r[31];
+        c->coro_redirect_pc = 0;
       }
       rec_coro_run(c, start);                  // runs until ov_yield longjmps back here
       c->mem_w16(base, 0);                        // returned (jr ra sentinel): task ended -> free
@@ -393,6 +395,28 @@ static long native_repl_read(Core* c, uint32_t f) {
   return -1;  // EOF
 }
 
+static void ov_game_main(Core* c);
+
+// PC-native crt0 (faithful reimplementation of FUN_800896E0): BSS-zero, heap setup, then a DIRECT
+// call to ov_game_main — the top of the top-down PC-driven spine. Replaces the old bootstrap flip
+// (crt0 jal main -> override). The libc/heap init at 0x80089860 stays a dispatched PSX leaf.
+static void native_crt0(Core* c) {
+  for (uint32_t a = 0x800be0d8; a < 0x80106228; a += 4) c->mem_w32(a, 0);   // BSS zero
+  uint32_t v0 = c->mem_r32(0x800a3f88) - 8;          // stack top base
+  uint32_t sp = v0 | 0x80000000u;
+  uint32_t a0 = 0x80106228u & 0x1FFFFFFFu;           // 0x00106228 (heap base, masked)
+  uint32_t v1 = c->mem_r32(0x800a3f8c);
+  uint32_t heapsz = (v0 - v1) - a0;
+  c->mem_w32(0x800abef8, heapsz);                    // heap size
+  a0 |= 0x80000000u;                                 // 0x80106228
+  c->mem_w32(0x800abef4, a0);                        // heap base
+  c->r[28] = 0x800be0d4u;                            // gp
+  c->r[29] = sp; c->r[30] = sp;                      // sp, fp
+  c->r[4]  = a0 + 4;                                 // a0 for the init call
+  rec_dispatch(c, 0x80089860u);                      // libc/heap init (PSX leaf) — keep dispatched
+  ov_game_main(c);                                   // DIRECT PC call (was: crt0 jal main -> flip)
+}
+
 static void ov_game_main(Core* c) {
   fprintf(stderr, "[native_boot] FUN_80050b08 override: running init prefix\n");
 
@@ -451,7 +475,7 @@ static void ov_game_main(Core* c) {
   // incrementally). FUN_800788ac is overridden (ov_frame_update): real per-frame update +
   // gpu_present + audio + satisfies the vblank pacing dwell. PSXPORT_NATIVE_FRAMES caps the
   // run (headless). ---
-  rec_set_override(0x80080880u, ov_switch);    // ChangeThread -> native task switch (capture+longjmp)
+  (void)ov_switch;  // ov_switch kept for a future direct-call wiring; registration removed (override system gone)
   // BGM start/stop (FUN_80074BF8 / FUN_80074E48) are now OWNED PC-native by engine/sound.cpp
   // (sound_register, called from games_tomba2_init). The instant-CD "cut looping ingame music when a
   // dialog tone starts" hook (xa_music_cut_if_dialog) moved into ov_sound_play_bgm there. The REPL
@@ -463,7 +487,7 @@ static void ov_game_main(Core* c) {
   uint32_t nframes = 0;   // 0 == run until window close / REPL quit
   int repl_mode = cfg_on("PSXPORT_REPL") != 0;
   if (repl_mode) nframes = 0;                       // REPL drives frame count via `run N`
-  else if (!cfg_str("PSXPORT_GPU_WINDOW")) nframes = 120;  // headless smoke default
+  else { if (!gpu_windowed()) nframes = 120; }  // headless smoke default
   fprintf(stderr, "[native_boot] entering native frame loop (%s)\n",
           nframes ? "capped" : "interactive (until window close)");
   void hle_deliver_event(Core* c, uint32_t ev_class, uint32_t spec);
@@ -702,8 +726,7 @@ void native_boot_run(Core* c) {
   // fill is still resident in s_vram even when both intros are skipped). Deterministic, no timer.
   void gpu_clear_display(Core*);
   gpu_clear_display(c);
-  rec_set_override(0x80050b08u, ov_game_main);
-  fprintf(stderr, "[native_boot] entering crt0 0x800896E0 (interpreted)\n");
-  rec_dispatch(c, 0x800896E0u);
-  fprintf(stderr, "[native_boot] returned from crt0\n");
+  fprintf(stderr, "[native_boot] entering native crt0 (PC-driven)\n");
+  native_crt0(c);
+  fprintf(stderr, "[native_boot] returned from native crt0\n");
 }

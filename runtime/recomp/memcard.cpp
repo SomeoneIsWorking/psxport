@@ -512,13 +512,6 @@ void card_overrides_init(void) {
   // menu's per-frame TestEvent(+28) wait falls through and the operation completes (and persists).
   // (The prior overrides on the ASYNC libcard primitives FUN_8009BBFC/BC8C/BBEC were REMOVED: the
   // save/load flow never calls them — verified by disassembling the CRD.BIN card-menu overlay.)
-  rec_set_override(0x800808B0u, ov_file_open);       // B0:0x32 open("bu00:<name>", mode)
-  rec_set_override(0x800808C0u, ov_file_lseek);      // B0:0x33 lseek(fd, off, whence)
-  rec_set_override(0x800808D0u, ov_file_read);       // B0:0x34 read(fd, buf, len)  + completion (LOAD)
-  rec_set_override(0x800808E0u, ov_file_write);      // B0:0x35 write(fd, buf, len) + completion (SAVE)
-  rec_set_override(0x800808F0u, ov_file_close);      // B0:0x36 close(fd)
-  rec_set_override(0x80080900u, ov_file_firstfile);  // B0:0x43 firstfile (enumerate)
-  rec_set_override(0x80080910u, ov_file_erase);      // B0:0x45 erase(name)  (DELETE menu)
 }
 
 #endif // PSXPORT_CARD_NO_OVERRIDES

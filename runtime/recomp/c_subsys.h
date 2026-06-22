@@ -13,6 +13,10 @@ extern "C" {
 void watchdog_init(void);
 void watchdog_pet(void);
 
+// gpu_vk.cpp — is a live on-screen window up (the single windowed/headless discriminator; replaces
+// the old PSXPORT_GPU_WINDOW env gate). C-linkage so C and C++ subsystems share one source of truth.
+int gpu_windowed(void);
+
 // disc.c
 int  disc_read_raw(uint32_t lba, uint8_t* out, uint32_t n);   // raw 2352-byte sector
 int  disc_read_sector(uint32_t lba, uint8_t* out);            // 2048-byte data sector

@@ -174,9 +174,5 @@ void ov_inventory_give(Core* c) {              // FUN_8004D4F4
 }
 
 // ---- registration (ONE line from game_tomba2.cpp init) --------------------------------------------
-void rec_set_override(uint32_t addr, void (*fn)(Core*));
 void inventory_register(void) {
-  rec_set_override(0x8004D338u, ov_inventory_add);            // inventory_add core (count/clamp/quest-ref/ring)
-  rec_set_override(0x8004D4C4u, ov_inventory_give_and_flag);  // give + item-acquired flag/event
-  rec_set_override(0x8004D4F4u, ov_inventory_give);           // give only
 }

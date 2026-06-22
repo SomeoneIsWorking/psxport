@@ -52,6 +52,4 @@ static void ov_vsync(Core* c) {
 uint32_t timing_vblank(Core* c) { return c->game->timing.vblank; }
 
 void timing_init(void) {
-  rec_set_override(0x80085900u, ov_vsync);   // VSync core
-  rec_set_override(0x80085BB0u, ov_vsync_callback);  // VSyncCallback registrar
 }
