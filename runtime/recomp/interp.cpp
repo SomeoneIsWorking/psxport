@@ -240,6 +240,12 @@ static void exec_simple(Core* c, uint32_t in) {
           uint32_t w = c->mem_r32(a), k = w & 0x1FFFFFFF;
           if (k >= 0x10000 && k < 0x120000 && (w & 3) == 0) { fprintf(stderr, "   [sp+0x%03X]=0x%08X\n", a-sp, w); shown++; }
         } }
+      // PSXPORT_DERAIL_DUMP=<path>: snapshot guest RAM at the derail so the offending overlay/jump can be
+      // reverse-engineered (the overlay code isn't in static MAIN.EXE; disas.py --ram needs this dump).
+      { const char* dp = cfg_str("PSXPORT_DERAIL_DUMP");
+        if (dp) { FILE* df = fopen(dp, "wb");
+          if (df) { fwrite(c->ram, 1, 0x200000, df); fclose(df);
+                    fprintf(stderr, "[DERAIL] guest RAM dumped -> %s (2MB)\n", dp); } } }
       fflush(stderr); abort();
   }
 }
