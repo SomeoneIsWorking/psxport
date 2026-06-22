@@ -37,6 +37,7 @@
 #include "core.h"
 #include "cfg.h"
 #include <stdio.h>
+#include <stdlib.h>
 
 static const uint32_t SM_PTR   = 0x1f800138u;
 static const uint32_t TAIL_CF2C = 0x80106650u;  // jal 0x8001cf2c (engine update) -> attract render -> yield
@@ -436,14 +437,30 @@ static uint32_t demo_menu_machine(Core* c) {
     return 0;                                  // guest handler j's to 0x801072DC (v0 = 0)
   }
   // States 1..3 (0x80107034) are pure sm[0x4a]++ advance steps — CD-free, run the real function (a
-  // proper jr-ra function; only state 0/4/5/6/7 differ). State >=4 issues async libcd CD loads (state 4
-  // @0x80107054 -> CdControlB 0x8008B8F0; state 7 @0x80107280 -> CdControlB 0x801072B0) that our no-IRQ
-  // runtime can't complete — they must be owned native+sync (the FRONTIER), so do NOT rec_dispatch them
-  // (that yields/busy-waits forever). Park at the first un-owned CD state without hanging.
+  // proper jr-ra function; only state 0/4..7 differ). States 4..7 are the OPENING MOVIE sub-sequence:
+  // 4 (0x80107054) start the load of `\MOVIE\OP.STR;1` (CdControlB 0x8008B8F0); 5 (0x801070A4) stream a
+  // chunk via strNext 0x8010755C; 6 (0x80107144) post/decode-draw; 7 (0x80107280) teardown (CD CdlPause
+  // 0x80089E1C busy-loop) then returns nonzero ⇒ s1 advances to s2. Run pure-PSX they drive the libcd/STR
+  // streaming our no-IRQ runtime can't complete. Own the whole sub-sequence natively: play OP.STR with the
+  // self-contained native .STR player (native_fmv.cpp — already plays LOGO/OP at boot), then replicate
+  // state 7's teardown and return nonzero so s1 advances to s2 (the front-end/title proper).
   if (s4a >= 4) {
-    if (cfg_dbg("demo")) { static int w=0; if(!w++) fprintf(stderr,
-      "[demo] menu_machine sm[0x4a]=%u: async CD load not yet owned native+sync (FRONTIER) — parked\n", s4a); }
-    return 0;
+    int skip = cfg_on("PSXPORT_NO_FMV") || cfg_on("PSXPORT_VK_HEADLESS");
+    const char* nf = cfg_str("PSXPORT_NO_FMV");
+    if (nf && atoi(nf) == 0 && *nf) skip = 0;                     // explicit PSXPORT_NO_FMV=0 forces FMV on
+    if (!skip) { int native_fmv_play(Core*, const char*); native_fmv_play(c, "MOVIE/OP.STR"); }
+    else if (cfg_dbg("demo")) { static int w=0; if(!w++) fprintf(stderr,
+      "[demo] OP.STR opening movie skipped (NO_FMV/headless); running teardown -> s2\n"); }
+    // state 7 (0x80107280) teardown, faithful — the CdControlB(CdlPause) busy-loop becomes a native no-op
+    // (no async CD read is running in our model). The other callees are synchronous libgs/SPU/cleanup.
+    c->r[4] = 0; rec_dispatch(c, 0x8001cf00u);                    // SPU CD->mix off
+    c->r[4] = 0; rec_dispatch(c, 0x8009c820u);                    // libgs reset
+    c->r[4] = 0; rec_dispatch(c, 0x8009c8bcu);                    // libgs reset
+    rec_dispatch(c, 0x8008cd40u);                                 // CD-event cleanup
+    rec_dispatch(c, 0x8008cce0u);                                 // alloc/dispatch cleanup (= ov_8008CCE0)
+    c->mem_w8(0x1f80019cu, 0);
+    c->mem_w8(0x1f80019du, 0);
+    return 1;                                                    // nonzero ⇒ s1 advances sm[0x48] 1->2 (s2)
   }
   c->r[4] = 0;                                 // a0 = 0 (s1 calls 0x80106F80(0))
   rec_dispatch(c, 0x80106f80u);                // states 1..3: run the real function (jr ra), advances sm[0x4a]
@@ -463,12 +480,34 @@ static void demo_frame_s1(Core* c) {
   }
 }
 
+// Substate s2 (0x80106464) — title/menu sub-machine 0x8010696C (sets the intro timer sm[0x5a]=450,
+// runs the title input). Outcome 1 -> s7 (attract launch); outcome 2 -> cursor two-phase (first pass
+// -> s3, second pass -> s4). All paths end with TAIL_REND (attract render 0x80075A80 — draws the
+// title). Mirrors ov_demo_s2 but return-based + runs the tail render inline. (Faithful to 0x80106464.)
+static void demo_frame_s2(Core* c) {
+  rec_dispatch(c, 0x8010696cu);                // title sub-machine (SYNC)
+  uint32_t v0 = c->r[2];
+  uint32_t sm = c->mem_r32(SM_PTR);
+  if (v0 == 1) {                               // -> s7 (attract)
+    c->mem_w16(sm + 0x48, 7); c->mem_w16(sm + 0x4a, 0); c->mem_w16(sm + 0x4c, 0);
+  } else if (v0 == 2) {                        // cursor two-phase
+    if (c->mem_r8(sm + 0x68) == 0) { c->mem_w16(sm + 0x48, 3); c->mem_w8(sm + 0x68, 2); }
+    else {
+      c->mem_w8(sm + 0x68, 0); c->mem_w16(sm + 0x48, 4); c->mem_w16(sm + 0x50, 0); c->mem_w8(sm + 0x6b, 0);
+      rec_dispatch(c, 0x8001cf2cu); c->mem_w8(0x800bf84au, 0);   // engine update (SYNC)
+    }
+    c->mem_w16(sm + 0x4a, 0);
+  }
+  rec_dispatch(c, 0x80075a80u);                // TAIL_REND: attract render (draws the title)
+}
+
 // Called once per frame by the native scheduler for the DEMO task.
 void ov_demo_frame(Core* c) {
   uint32_t sm = c->mem_r32(SM_PTR);
   uint16_t s48 = c->mem_r16(sm + 0x48);
   switch (s48) {
     case 1: demo_frame_s1(c); break;
+    case 2: demo_frame_s2(c); break;
     default:
       if (cfg_dbg("demo")) { static int w = 0; if (!w++) fprintf(stderr,
         "[demo] ov_demo_frame: sm[0x48]=%u not yet native (frontier — s2..s7 need conversion)\n", s48); }

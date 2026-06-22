@@ -176,7 +176,26 @@ for content fns (call it). Do NOT mimic PSX hardware (GTE/GP0/OT) — remove Bee
     CD-free ones: state 0 (0x80106FF0, CdControlB Setmode 0x80) → native no-op (our disc reads by LBA need
     no drive mode) + advance; states 1..3 (0x80107034, pure sm[0x4a]++) → rec_dispatch. VERIFIED: boot
     reaches DEMO, runs the native loop, advances sm[0x4a] 0→1→2→3 with NO hang, `run N` completes cleanly.
-  - ☐ **NEW FRONTIER — menu-machine states ≥4 = the OPENING MOVIE + attract sequence (FMV subsystem).**
+  - ✅ **s1's menu machine FULLY owned incl. the OP.STR opening-movie sub-sequence; reaches s2.** demo_menu_
+    machine states ≥4 (the movie load/stream/post/teardown) are owned natively: `native_fmv_play(c,
+    "MOVIE/OP.STR")` (skipped under NO_FMV/headless) + a faithful replication of state-7 teardown (the sync
+    libgs/SPU/cleanup callees + CdlPause→native no-op + clear 0x1F80019C/9D), returning nonzero so s1 advances
+    to s2. **VERIFIED: no hang, sm[0x48] advances 1→2.**
+  - ✅ **substate s2 (0x80106464) native** (`demo_frame_s2`, ov_demo_frame case 2): title/menu sub-machine
+    0x8010696C (intro timer sm[0x5a]=450) + cursor two-phase transitions, ending with TAIL_REND (attract
+    render 0x80075A80). **VERIFIED: stable 120+ frames in s2, no hang.**
+  - ☐ **NEW FRONTIER (1) — the title/front-end renders BLACK.** s2 runs the attract render (0x80075A80) every
+    frame but the headless `shot` is all-black (0% non-black). This is now a RENDERING issue, not a hang —
+    needs the gfx-debug methodology (LIVE game + `debug scene/provat/vkvram` + USER eyeball; the agent can't
+    self-verify a render). Suspects: (a) the attract render's display-list/OT isn't reaching the native VK
+    present; (b) skipping the movie's frame-decode states (5/6) left the title without a background/camera
+    setup it expected (interface-correctness of the FMV teardown shortcut); (c) the title genuinely needs the
+    movie's last frame. Check the scene/submit state on the running port first. See docs/gfx-debug.md.
+  - ☐ **FRONTIER (2) — substates s3..s7 still need native conversion** (ov_demo_frame default case = parked
+    no-op). s3/s6 have logic in the old coro-redirect ov_demo_s3/s6 (convert like s2); s4/s5 were "stays
+    guest" under the old model (re-RE for the native loop); s7 = attract (plays OP.STR again, reuse the FMV
+    path). Each is a `case` in ov_demo_frame. Reach s7 by letting s2's intro timer (450) expire (~run 450).
+  - (historical) menu-machine states ≥4 = the OPENING MOVIE + attract sequence (FMV subsystem):
     DISCOVERED: state 4 (0x80107054) passes descriptor @0x80106254 = the STRING **`\MOVIE\OP.STR;1`** (dest
     0x8018A000, size 0x7E5) to **`0x8008B8F0`** (libcd file-by-name queue op → 0x8008BBE8 → 0x8008C1EC; the
     "time out in strNext()" error string sits right after the filename @0x80106264). So the DEMO front-end's
@@ -188,6 +207,24 @@ for content fns (call it). Do NOT mimic PSX hardware (GTE/GP0/OT) — remove Bee
     menu machine (play OP.STR, or skip+advance under NO_FMV), then the attract states, then s2.. (s2 = the
     real front-end/title display, TAIL_REND attract render 0x80075A80). Each new substate is a `case` in
     ov_demo_frame. Tools: `debug demo`, `debug cdc` (dynamic), PSXPORT_WATCHDOG=<sec>, native_fmv's own path.
+    - **DECISION (user, 2026-06-22): INTEGRATE the native FMV player** (not skip-only). Plan + the RE'd movie
+      state map (menu machine 0x80106F80, sm[0x4a]):
+      * state 4 (0x80107054): start load — descriptor 0x80106254 = `\MOVIE\OP.STR;1`, size word table
+        @0x80107718[0]={0x80106254,0x8018A000,0x07E5}; CdControlB 0x8008B8F0; sets *0x1F80019C=1; sm[0x4a]→5.
+      * state 5 (0x801070A4): stream a chunk via **strNext 0x8010755C**(a0=0x1f800000, a1=0x07E5 sectors);
+        v0!=-1 → sm[0x4a]→6 (more); v0==-1 → print "time out in strNext()" + sm[0x4a]→7. (0x80107400/0x801074BC
+        are the STR/MDEC decode setup.)
+      * state 6 (0x80107144): post (reads scratchpad 0x1F800008/14; libgs 0x8009C784/800 draws the decoded frame).
+      * state 7 (0x80107280): teardown — 0x8001CF00 (SPU mix), libgs 0x8009C820/8BC, 0x8008CD40, 0x8008CCE0
+        (=ov_8008CCE0, native exists), **CdControlB 0x80089E1C (CD Pause) busy-loop**, then clears *0x1F80019C
+        and *0x1F80019D, j 0x801072DC → returns v0!=0 (the Pause result) ⇒ s1 advances sm[0x48] 1→2 (to s2).
+      * INTEGRATION: in demo_menu_machine, replace states 4..7 with: `native_fmv_play(c,"MOVIE/OP.STR")` (it
+        already plays LOGO/OP at boot in native_boot.cpp ~L969; respect the NO_FMV/headless skip), then
+        replicate state 7's OBSERVABLE teardown (clear 0x1F80019C/9D, run the SYNC libgs/SPU cleanup callees,
+        CD-Pause = native no-op) and return nonzero so s1 advances to s2. **INTERFACE-CORRECTNESS RISK:** s2
+        reads what states 6/7 set up (libgs draw env, scratchpad) — verify s2 renders correctly, don't blindly
+        skip. native_fmv_play is SYNCHRONOUS (blocks the whole movie in one ov_demo_frame call — fine for an
+        attract movie). Next after this: substate s2 (the front-end/title display — TAIL_REND 0x80075A80).
   - FOLLOW-UP (pre-existing, stage-0): the 2nd cel slot @0x800BED82 reads FFFF (no slot) vs reference 0001 —
     `preload_cel`/FUN_80096480 returns -1 for the 2nd cel. Verify the cel lands in VRAM once DEMO renders.
   Substate ownership:
