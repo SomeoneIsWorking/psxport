@@ -138,6 +138,13 @@ static void native_scheduler_step(Core* c) {
         ov_game_stage_main(c);
         start = c->coro_redirect_pc ? c->coro_redirect_pc : c->r[31];
         c->coro_redirect_pc = 0;
+      } else if (fresh && resume_pc == 0x8010649Cu) {
+        // Stage-0 START.BIN entry: own the file-table builder native (disc_find_file), then continue
+        // the PSX stage SM in-task. Same top-down direct-call pattern as the GAME stage above.
+        void ov_start_bin_stage(Core*);
+        ov_start_bin_stage(c);
+        start = c->coro_redirect_pc ? c->coro_redirect_pc : c->r[31];
+        c->coro_redirect_pc = 0;
       }
       rec_coro_run(c, start);                  // runs until ov_yield longjmps back here
       c->mem_w16(base, 0);                        // returned (jr ra sentinel): task ended -> free
@@ -473,6 +480,60 @@ static void native_task0_bootstrap(Core* c) {
   c->mem_w32(STAGE_FILE_TBL + 4, size);              // 0x800be1e4 = START.BIN size
   fprintf(stderr, "[native_boot] START.BIN resolved: LBA %u, %u bytes\n", lba, size);
   native_start_stage(c, 0);
+}
+
+// Read a NUL-terminated guest string into `out` (bounded). Used to pull the START.BIN filename
+// tables (which live in the loaded overlay) for native resolution.
+static void read_guest_str(Core* c, uint32_t addr, char* out, int cap) {
+  int k = 0;
+  for (; k < cap - 1; k++) { char ch = (char)c->mem_r8(addr + k); out[k] = ch; if (!ch) break; }
+  out[k] = 0;
+}
+
+// Stage-0 START.BIN entry (0x8010649c): own the file-table BUILDER PC-native, then hand the small
+// stage state-machine back to the PSX body in-task. The builder is a set of CdSearchFile loops that
+// resolve ~36 disc filenames and record each {LBA,size}; run as pure PSX (overrides gone) every
+// CdSearchFile busy-waits on libcd forever. Replace the resolution with the native ISO9660 resolver
+// (disc_find_file) — the filename tables and destination layout are read from the loaded overlay, so
+// nothing is hard-coded. Reference: dumped overlay disas of 0x8010649c..0x80106728 (later-211).
+//   Loop A: 25 names @0x80106808 -> {LBA,size} table 0x800be118 (stride 8)  [\BIN\OPN/CRD/SOP/A00..A0L]
+//   Loop B:  3 names @0x8010686c -> 0x800be1e0  [START/DEMO/GAME.BIN — fills the per-stage file table]
+//   Loop C:  5 names @0x801067f4 -> 0x800be0f0  [\CD\TOMBA2.IDX/IMG/DAT/SND, SWDATA.BIN]
+//   3 inline singletons -> scratchpad LBA: \CD\VOICE.XA->0x1f80021c, DEMO.XA->0x1f800220, BGM.XA->0x1f800224
+// Then s2(reg18)=1 (the SM's "1" constant) and continue into the PSX state machine at 0x80106728,
+// whose FUN_80044bd4 cooperative loads run correctly in-task (via rec_coro_run).
+void ov_start_bin_stage(Core* c) {
+  struct { uint32_t names, dest, n; } loops[] = {
+    { 0x80106808u, 0x800be118u, 25 },
+    { 0x8010686cu, 0x800be1e0u, 3  },
+    { 0x801067f4u, 0x800be0f0u, 5  },
+  };
+  char name[80];
+  for (auto& L : loops) {
+    for (uint32_t i = 0; i < L.n; i++) {
+      read_guest_str(c, c->mem_r32(L.names + i * 4), name, sizeof name);
+      uint32_t lba = 0, size = 0;
+      if (disc_find_file(name, &lba, &size)) {
+        c->mem_w32(L.dest + i * 8, lba);
+        c->mem_w32(L.dest + i * 8 + 4, size);
+      } else {
+        fprintf(stderr, "[start.bin] Not found file name %s\n", name);   // matches the PSX error path
+      }
+    }
+  }
+  struct { uint32_t str, dest; } sing[] = {
+    { 0x8010646cu, 0x1f80021cu }, { 0x8010647cu, 0x1f800220u }, { 0x8010648cu, 0x1f800224u },
+  };
+  for (auto& S : sing) {
+    read_guest_str(c, S.str, name, sizeof name);
+    uint32_t lba = 0, size = 0;
+    if (disc_find_file(name, &lba, &size)) c->mem_w32(S.dest, lba);   // XA stream LBA (only LBA stored)
+    else fprintf(stderr, "[start.bin] Not found file name %s\n", name);
+  }
+  fprintf(stderr, "[start.bin] file table built (native); entering stage-0 SM at 0x80106728\n");
+  c->r[18] = 1;                       // s2 = 1 (SM constant; set by the BGM.XA singleton we replaced)
+  c->r[29] -= 456;                    // reserve the prologue's stack frame (addiu sp,sp,-456)
+  c->coro_redirect_pc = 0x80106728u;  // run the PSX stage-0 state machine in-task
 }
 
 static void ov_game_main(Core* c) {

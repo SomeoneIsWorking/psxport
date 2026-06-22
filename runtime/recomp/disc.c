@@ -119,14 +119,14 @@ static int iso_name_eq(const uint8_t* name, int nlen, const char* want) {
   int i = 0;
   for (; i < nlen; i++) {
     char nc = (char)name[i];
-    if (nc == ';') break;                        // stop at the version suffix
     char wc = want[i];
-    if (!wc) return 0;                           // want shorter than name
+    if (nc == ';') break;                        // on-disc name reached its version suffix
+    if (wc == ';' || wc == 0) return 0;          // want ended/versioned before the name did → no match
     char a = (nc >= 'a' && nc <= 'z') ? (char)(nc - 32) : nc;
     char b = (wc >= 'a' && wc <= 'z') ? (char)(wc - 32) : wc;
     if (a != b) return 0;
   }
-  return want[i] == 0;                           // both ended together
+  return want[i] == 0 || want[i] == ';';         // both ended (want may carry its own ";version")
 }
 
 // Resolve an absolute ISO9660 path (PSX backslash style, e.g. "\\BIN\\START.BIN"; '/' also accepted;
