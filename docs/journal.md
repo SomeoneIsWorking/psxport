@@ -7200,3 +7200,15 @@ deactivate epilogue. GOTCHA: the deactivate epilogue at 0x8007a7d0 clears MANY n
 (0/4/8/c/10/14/18/38) + bytes (0x29/0x2a/0x2b/0x5e), not just node[0]/[4] — first native attempt diverged at
 node+0x0a (the list-id byte, inside the 0x8 word). RE'd the full epilogue. `despawnverify` 0-diff over 100+
 live despawns (commit 2cc6478). Object-pool alloc/free lifecycle now COMPLETE + PC-native.
+
+**later-209 — OBJECT RECORD + RENDER-STATE subsystem owned (shared by collectables).** Per the user
+(2026-06-22: "stop chasing HP/AP, keep owning game subsystems until HP/AP reveal themselves naturally").
+Owned 3 shared engine routines the collectable/entity handlers call:
+- `FUN_8007AAE8` render-record BUMP ALLOCATOR (cursor 0x800E7E74 over a record-ptr array, count 0x800ED098;
+  record=*cursor; cursor+=4; cnt--; empty→0). Gate recallocverify 0-diff 1000+.
+- `FUN_80051B70` per-object render-record INIT (alloc + zero/init record scale 0x1000, stamp obj render
+  fields obj[+0xc0]=record etc., rec[+0x40]=table-driven data ptr from 0x800ECF58; pool empty→obj[+4]=3,
+  ret 1). Gate recinitverify 0-diff 80+.
+- `FUN_800517F8` per-object RENDER-STATE UPDATE (hot, 8000+/run): FUN_80085480 transform build + snapshot
+  int16 pos obj[+0x2e/32/36]→32-bit obj[+0xac/b0/b4] + FUN_80051300; 2 callees kept content. Gate
+  rendupdverify 0-diff 8000+ (also a perf win). All in engine/entity_spawn.cpp (commits 8bec1e7, 7547512).
