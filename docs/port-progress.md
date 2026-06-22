@@ -133,26 +133,31 @@ for content fns (call it). Do NOT mimic PSX hardware (GTE/GP0/OT) — remove Bee
 - ✅ CD loadfile path native (ov_cd_loadfile 0x8001DB8C synchronous; `cd_loadfile_native` direct-call wrapper) — `cd_override.cpp`.
 
 ## C. Stages (task 0 cycles START → DEMO → GAME)
-- ◐ **START.BIN stage-0 `0x8010649c`** — boot bootstrap overlay (builds the file table, runs a 4-state SM that
-  preloads boot data then switches to DEMO). **File-table BUILDER OWNED native (later-211, `ov_start_bin_stage`,
-  native_boot.cpp): all ~36 CdSearchFile resolves replaced by `disc_find_file`; verified 0 not-found, 0 CD
-  timeouts in the resolve phase.** Then coro-redirects into the PSX SM at 0x80106728.
-  - ☐ **NEXT FRONTIER — the SM's area/asset PRELOAD is ASYNC and hangs (later-211).** SM states 0/1 call
-    `FUN_80044bd4(callback, …)` which spawns the load CALLBACK as PSX task-1 and yield-waits on the load-done
-    flag 0x1f80019b. The callbacks (`FUN_80044f58` state-0, `FUN_8004514c` state-1) read files via
-    `FUN_8001dc40`→`FUN_8001d940`, the libcd ASYNC reader that spins on a per-sector IRQ callback that never
-    fires (overrides gone) → never returns, done-flag never set. **USER DIRECTIVE 2026-06-22: "don't have async
-    calls in the engine, make everything SYNC."** Because PSX-never-calls-PC, the native sync read can't be
-    injected into PSX-running code — so own the chain top-down NATIVE: stage-0 SM → `FUN_80044bd4` (sync, no
-    spawn/yield) → the callbacks (sync reads). The read primitive already exists as `ov_cd_async_read`
-    (cd_override.cpp:170 — reads dest/lba/wordcount from scratchpad 0x1f8001f8/f0/f4, native synchronous copy).
-    Callbacks do reads + processing (FUN_80044e84, FUN_800754f4, 42-word table copy @0x80045028); reimplement
-    faithfully (content-interface correctness — wrong loads corrupt boot data). SM at state 3 → FUN_80052078(1)
-    → DEMO. See scratch/handoff_sync_area_loader.md for the full chain + addresses.
-  Must be owned top-down (reimplement its CD/overlay loads native, like native_task0_bootstrap did for the
-  START.BIN resolve).** The native frame loop + REPL prompt are REACHED; advancing a frame enters this and stalls.
+- ✅ **START.BIN stage-0 `0x8010649c`** — boot bootstrap overlay: file-table builder + the 4-state area/asset
+  PRELOAD SM, NOW OWNED PC-native + SYNCHRONOUS (native_boot.cpp `ov_start_bin_stage` → `native_stage0_sm`).
+  File-table BUILDER native (later-211, `disc_find_file`, 0 not-found / 0 CD timeouts). The SM (overlay
+  0x80106728) is reimplemented in C — no coro-redirect to PSX, no async: states run in order, then
+  `native_start_stage(c,1)` → DEMO + `ov_switch` yield (keeps the slot's state=3 restart).
+  - The async hang is GONE. Reuses the existing leaf natives the **code map** surfaced (don't re-derive):
+    `cd_loadfile_native` (the sync replacement for the async CD reads `0x8001DB8C`/`0x8001DC40`), `ov_unpack_group`
+    (FUN_80044E84, now calling `ov_upload_image` direct, not rec_dispatch). Orchestration reimplemented sync:
+    `preload_texgroup` (=FUN_80044F58 header+archive+unpack+42-word meta), `preload_stage1` (=FUN_8004514c
+    SWDATA+DAT+relocation), `preload_build_vram` (=FUN_800754f4), `preload_cel` (=FUN_800753d4 alloc+kick, async
+    DMA-poll DROPPED — native upload is synchronous).
+  - VERIFIED: reaches DEMO (`stage=DEMO(0x801062E4)`) with no hang; content-interface tables populated sane
+    (meta 0x800FB170 file-shaped, 0x1F80022C=0x801886F4, 0x800ED014=0x8017C800). FOLLOW-UP: `FUN_80096480`
+    returns -1 (no slot) for the 2nd cel — verify the cel lands in VRAM once DEMO renders (USER eyeball).
 - ◐ **DEMO stage `0x801062E4`** = TITLE / front-end MENU state machine (8 substates) — **the big front-end
-  engine system** (engine/engine_demo.cpp, AUTO-registered via demo_scan_overlay). Substate ownership:
+  engine system** (engine/engine_demo.cpp, AUTO-registered via demo_scan_overlay). **NOW REACHED from boot
+  (stage-0 preload owned, above).**
+  - ☐ **NEW FRONTIER — DEMO entry hangs at a wait-for-timer-stable loop `0x80085900` (guest pc 0x80085924).**
+    `s0=*(0x800BACA8); a1=*(0x800BACAC); do { v0=*(a1); } while (v0 != reread *(a1)); delta = v0 - *(0x800BACB0)`
+    — it reads the counter at `*(0x800BACAC)` twice and spins until two reads AGREE (debounce a HW counter),
+    then takes a delta. In our runtime `*(0x800BACAC)` (a root-counter / timer I/O register) returns a
+    different value every read → never stable → spins forever. Owning fix: model that timer register so two
+    back-to-back reads return the same value within a "tick" (or own this timing-measure fn native). Find what
+    init writes the register pointer to `0x800BACAC`. (Reached headless via `run` once boot enters DEMO.)
+  Substate ownership:
   - ✅ **s0/s1/s2/s3/s6** (run-once INIT + the title/menu input substates; later-182/185, coro-redirect
     handshake on each substate body, A/B 0-diff at a steady menu frame).
   - ✅ **s7 0x80106668 attract-demo launch** = `ov_demo_s7_phase` on the phase machine 0x80106C24 (later-208).

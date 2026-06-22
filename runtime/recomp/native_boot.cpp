@@ -19,6 +19,7 @@
 #include "game.h"      // SchedulerState (per-instance cooperative-task state) reached via c->game->sched
 #include "c_subsys.h"
 #include "cfg.h"
+#include "asset.h"     // ov_unpack_group / ov_upload_image — existing native asset leaves (call direct)
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -41,6 +42,9 @@ static void rc2(Core* c, uint32_t fn, uint32_t a0, uint32_t a1) {
 }
 static void rc3(Core* c, uint32_t fn, uint32_t a0, uint32_t a1, uint32_t a2) {
   c->r[4] = a0; c->r[5] = a1; c->r[6] = a2; rec_dispatch(c, fn);
+}
+static void rc4(Core* c, uint32_t fn, uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3) {
+  c->r[4] = a0; c->r[5] = a1; c->r[6] = a2; c->r[7] = a3; rec_dispatch(c, fn);
 }
 
 // --- Native cooperative scheduler (replaces FUN_80051e60) without ucontext ------------------
@@ -490,6 +494,98 @@ static void read_guest_str(Core* c, uint32_t addr, char* out, int cap) {
   out[k] = 0;
 }
 
+void cd_loadfile_native(Core* c, uint32_t dest, uint32_t lba, uint32_t size);  // cd_override.cpp (sync 0x8001DB8C/DC40)
+
+// ===== Stage-0 area/asset PRELOAD — PC-native + SYNCHRONOUS (user 2026-06-22: no async loads) =====
+// The PSX stage-0 SM (overlay 0x80106728) runs a 4-state preload; each state calls
+// FUN_80044bd4(callback,a1,a2) which spawns the callback as task-1 and yield-waits across frames for
+// the async streaming reader FUN_8001d940 (never completes in our no-IRQ runtime → the boot hang).
+// We own the chain top-down + synchronous, REUSING the existing leaf natives the code map surfaced
+// (docs/code-map.md): cd_loadfile_native (the sync replacement for the async CD reads 0x8001DB8C/DC40),
+// ov_unpack_group (FUN_80044E84 decompress+VRAM upload, itself now calling ov_upload_image direct).
+// Only the orchestration (SM + area-load) and the async-carrying cel upload are reimplemented here.
+
+// FUN_80044F58 texture-group load, synchronous. (Mirrors engine/asset.cpp ov_load_texgroup but driven
+// by explicit (mode,set) — no task-1 spawn, no terminal yield.) Header sector -> archive -> unpack ->
+// copy the 42-word per-set metadata table the still-recomp content reads back.
+static void preload_texgroup(Core* c, uint32_t mode, uint32_t set) {
+  uint32_t hdr_sector = c->mem_r32(0x800BE0F0u) + set;             // filebase0 + set
+  if (mode == 2) {                                                 // mode-2 per-set 4/26-sector bias
+    uint16_t mask = (uint16_t)c->mem_r16(0x800BFE56u);
+    hdr_sector += ((mask >> (set & 31)) & 1) ? 26u : 4u;
+  }
+  cd_loadfile_native(c, 0x800EF478u, hdr_sector, 2048);           // 1. 2KB header
+  uint32_t h0 = c->mem_r32(0x800EF478u), h1 = c->mem_r32(0x800EF47Cu);
+  cd_loadfile_native(c, 0x8018A000u, c->mem_r32(0x800BE0F8u) + (h0 >> 11), h1 - h0);  // 2. compressed archive
+  c->r[4] = 0x8018A000u; c->r[5] = 0x1FD000u; ov_unpack_group(c); // 3. decompress + VRAM upload (native)
+  for (uint32_t i = 0; i < 42; i++)                                // 4. per-set metadata table
+    c->mem_w32(0x800FB170u + i * 4, c->mem_r32(0x800EF478u + 0x100u + i * 4));
+}
+
+// FUN_800753D4 cel-load, SYNCHRONOUS. Original: FUN_80096480 (slot alloc + BAV cel load) -> store slot
+// at `out` -> FUN_80096980 (kick the upload state machine) -> cross-frame poll FUN_80096a40 until the
+// GPU-DMA upload completes. The alloc + kick carry no async wait (they leave the slot in state 1), so
+// run them as the recomp REFERENCE; our native GPU upload is synchronous, so we DROP the cross-frame
+// poll (the "no async" directive) instead of yielding for a DMA that already happened.
+static void preload_cel(Core* c, uint32_t out, uint32_t desc, uint32_t cbarg) {
+  rc3(c, 0x80096480u, desc, (uint32_t)-1, cbarg);                  // slot = FUN_80096480(desc,-1,cbarg)
+  c->mem_w16(out, (uint16_t)c->r[2]);                             // *(u16*)out = allocated slot
+  rc2(c, 0x80096980u, cbarg, c->r[2]);                            // FUN_80096980(cbarg, slot): kick upload
+  // FOLLOW-UP: FUN_80096480 (the BAV cel loader FUN_80096590, run as recomp) can return -1 (no slot)
+  // for the 2nd cel; verify the cel actually lands in VRAM once DEMO renders (USER eyeball). Dropping
+  // the async DMA-poll here is correct (native upload is synchronous) and does not affect slot alloc.
+}
+
+// FUN_800754F4 cel/sprite VRAM build, synchronous. FUN_800753ac is itself an async CD read -> use the
+// sync loadfile; the two FUN_800753d4 cel-loads go through preload_cel; the ten FUN_80075448
+// sprite-cell registrations carry no CD/async wait, so run as recomp. `base` = work base 0x80182000.
+static void preload_build_vram(Core* c, uint32_t base) {
+  uint32_t s0 = base + 0x51000u;                                   // descriptor table (filled by the read)
+  cd_loadfile_native(c, base, c->mem_r32(0x800BE108u), 0x51800u);  // FUN_800753ac: read SND file (idx3)
+  preload_cel(c, 0x800BED84u, base + c->mem_r32(s0 + 0x28), base + c->mem_r32(s0 + 0x30));
+  preload_cel(c, 0x800BED82u, base + c->mem_r32(s0 + 0x2c), base + c->mem_r32(s0 + 0x34));
+  static const struct { uint32_t off, sz; } cells[10] = {
+    {0x0c,14},{0x08,14},{0x04,14},{0x00,14},{0x10,8},{0x14,8},{0x18,8},{0x1c,14},{0x20,14},{0x24,14},
+  };
+  uint32_t cell_h = (uint32_t)(int32_t)(int16_t)c->mem_r16(0x800BED82u);
+  for (int i = 0; i < 10; i++)
+    rc4(c, 0x80075448u, (uint32_t)i, base + c->mem_r32(s0 + cells[i].off), cells[i].sz, cell_h);
+  c->r[2] = base + 26356;                                          // v0 = base + 0x66f4
+}
+
+// FUN_8004514C — the stage-1 callback. SWDATA + DAT load, shared texgroup sub-load, relocation table,
+// then the cel/sprite VRAM build.
+static void preload_stage1(Core* c) {
+  cd_loadfile_native(c, 0x80157000u, c->mem_r32(0x800BE110u), c->mem_r32(0x800BE114u));  // SWDATA.BIN
+  preload_texgroup(c, 1, 1);                                       // shared texgroup sub-load
+  uint32_t lo = c->mem_r32(0x800EF480u), hi = c->mem_r32(0x800EF484u);
+  cd_loadfile_native(c, 0x80158000u, c->mem_r32(0x800BE100u) + (lo >> 11), hi - lo);     // DAT payload
+  uint32_t dat_end = (hi - lo) + 0x80158000u;
+  c->mem_w32(0x1F800228u, dat_end);
+  c->mem_w32(0x800ED014u, dat_end);
+  int32_t n = (int32_t)c->mem_r32(0x800EF488u);                    // relocation table (blez -> skip)
+  for (int32_t i = 0; i < n; i++) {
+    uint32_t word = c->mem_r32(0x800EF48Cu + i * 4);
+    c->mem_w32(0x800ECF58u + (word >> 24) * 4, (word & 0x00FFFFFFu) + 0x80158000u);
+  }
+  preload_build_vram(c, 0x80182000u);
+  c->mem_w32(0x1F80022Cu, c->r[2]);
+}
+
+// Stage-0 START.BIN state machine (overlay 0x80106728), PC-native + synchronous. Original loop yields
+// one frame per state; synchronous, we run them in order then transition task0 to DEMO and yield (so
+// the slot keeps its state=3 restart, exactly like the GAME stage transition — a plain return would
+// hit the scheduler's task-ended path and free the slot before the restart).
+static void native_stage0_sm(Core* c) {
+  uint32_t task = c->mem_r32(CUR_TASK);
+  c->mem_w16(task + 0x48, 0);
+  c->mem_w16(task + 0x4a, 0);
+  preload_texgroup(c, 0, 0);          // state 0: index/asset preload
+  preload_stage1(c);                  // state 1: SWDATA + DAT + cel/sprite VRAM build
+  native_start_stage(c, 1);           // state 3: switch task0 -> stage 1 (DEMO 0x801062e4), state=3
+  ov_switch(c);                       // yield (longjmp to the scheduler); never returns
+}
+
 // Stage-0 START.BIN entry (0x8010649c): own the file-table BUILDER PC-native, then hand the small
 // stage state-machine back to the PSX body in-task. The builder is a set of CdSearchFile loops that
 // resolve ~36 disc filenames and record each {LBA,size}; run as pure PSX (overrides gone) every
@@ -530,10 +626,8 @@ void ov_start_bin_stage(Core* c) {
     if (disc_find_file(name, &lba, &size)) c->mem_w32(S.dest, lba);   // XA stream LBA (only LBA stored)
     else fprintf(stderr, "[start.bin] Not found file name %s\n", name);
   }
-  fprintf(stderr, "[start.bin] file table built (native); entering stage-0 SM at 0x80106728\n");
-  c->r[18] = 1;                       // s2 = 1 (SM constant; set by the BGM.XA singleton we replaced)
-  c->r[29] -= 456;                    // reserve the prologue's stack frame (addiu sp,sp,-456)
-  c->coro_redirect_pc = 0x80106728u;  // run the PSX stage-0 state machine in-task
+  fprintf(stderr, "[start.bin] file table built (native); running stage-0 preload SM (native + sync)\n");
+  native_stage0_sm(c);                // own the 4-state preload + transition to DEMO; yields (no return)
 }
 
 static void ov_game_main(Core* c) {

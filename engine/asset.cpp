@@ -92,7 +92,8 @@ void ov_unpack_group(Core* c) {
     lz_decompress(c, desc, dst, src, srclen);            // native decompress into transient scratch
     src   += srclen;
     entry += 12;
-    c->r[4] = desc; c->r[5] = dst; rec_dispatch(c, 0x80081218u);  // FUN_80081218(desc, dst): upload
+    c->r[4] = desc; c->r[5] = dst; ov_upload_image(c);   // FUN_80081218(desc, dst): native VRAM upload
+    //   (direct C call — the override table that routed 0x80081218 here is gone; top-down PC-driven)
     // Per-image post-step FUN_80080f6c(0) = libgs GPU DrawSync between uploads — meaningless for our
     // synchronous native upload (no async DMA to drain). Owned as a skip; see note above ov_upload_image.
     if (cfg_dbg("unpacksync")) { c->r[4] = 0; rec_dispatch(c, 0x80080F6Cu); }
