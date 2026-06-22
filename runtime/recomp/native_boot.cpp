@@ -149,6 +149,13 @@ static void native_scheduler_step(Core* c) {
         ov_start_bin_stage(c);
         start = c->coro_redirect_pc ? c->coro_redirect_pc : c->r[31];
         c->coro_redirect_pc = 0;
+      } else if (fresh && resume_pc == 0x801062E4u) {
+        // DEMO/front-end stage entry: own the prologue native (the pure-PSX prologue busy-waits in
+        // libcd/libetc VSync, which our no-IRQ runtime can't satisfy), then hand to the guest loop body.
+        void ov_demo_stage_main(Core*);
+        ov_demo_stage_main(c);
+        start = c->coro_redirect_pc ? c->coro_redirect_pc : c->r[31];
+        c->coro_redirect_pc = 0;
       }
       rec_coro_run(c, start);                  // runs until ov_yield longjmps back here
       c->mem_w16(base, 0);                        // returned (jr ra sentinel): task ended -> free
@@ -508,7 +515,7 @@ void cd_loadfile_native(Core* c, uint32_t dest, uint32_t lba, uint32_t size);  /
 // FUN_80044F58 texture-group load, synchronous. (Mirrors engine/asset.cpp ov_load_texgroup but driven
 // by explicit (mode,set) — no task-1 spawn, no terminal yield.) Header sector -> archive -> unpack ->
 // copy the 42-word per-set metadata table the still-recomp content reads back.
-static void preload_texgroup(Core* c, uint32_t mode, uint32_t set) {
+void preload_texgroup(Core* c, uint32_t mode, uint32_t set) {
   uint32_t hdr_sector = c->mem_r32(0x800BE0F0u) + set;             // filebase0 + set
   if (mode == 2) {                                                 // mode-2 per-set 4/26-sector bias
     uint16_t mask = (uint16_t)c->mem_r16(0x800BFE56u);

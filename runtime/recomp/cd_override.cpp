@@ -195,6 +195,19 @@ static void ov_cd_async_read(Core* c) {
     fprintf(stderr, "[cd] async read %u words (%u B) @ LBA %u -> 0x%08X\n", words, bytes, lba, dest);
 }
 
+// Direct-call native FUN_8001DC40(dest, lba, size_bytes): the inline (NON-spawning) sync reader the
+// indexed file loaders use (e.g. ov_80045080). FUN_8001DC40 stuffs the scratchpad read descriptor
+// (0x1f8001f8=dest, 0x1f8001f0=lba, 0x1f8001f4=ceil(size/4) words) then calls FUN_8001D940 inline; we
+// reproduce that by filling the same descriptor and running the synchronous ov_cd_async_read. Used by
+// the top-down PC-driven loaders (e.g. DEMO substate s0) so they never enter the IRQ-driven reader.
+void cd_dc40_sync(Core* c, uint32_t dest, uint32_t lba, uint32_t size) {
+  c->mem_w32(0x1f8001f8, dest);
+  c->mem_w32(0x1f8001f0, lba);
+  c->mem_w32(0x1f8001f4, (size + 3u) >> 2);   // ceil(size/4) words, as FUN_8001DC40 computes
+  ov_cd_async_read(c);
+  c->r[V0] = size;                            // FUN_8001DC40 returns size in v0
+}
+
 // 0x8001D2A8 FUN_8001d2a8(chan, start_lba, end_lba, flags): the engine's voice/BGM clip player.
 // It set task-2 fields + spawned the FUN_8001cfc8 streaming-reader coroutine (slot 2) which issued
 // the CD commands and busy-polled GetlocL for the clip end; the cutscene then waited

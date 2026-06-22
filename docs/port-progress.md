@@ -150,19 +150,33 @@ for content fns (call it). Do NOT mimic PSX hardware (GTE/GP0/OT) — remove Bee
 - ◐ **DEMO stage `0x801062E4`** = TITLE / front-end MENU state machine (8 substates) — **the big front-end
   engine system** (engine/engine_demo.cpp, AUTO-registered via demo_scan_overlay). **NOW REACHED from boot
   (stage-0 preload owned, above).**
-  - ☐ **NEW FRONTIER — DEMO entry hangs in pure-PSX `VSync` (`FUN_80085900` @ guest pc 0x80085924).**
-    ROOT CAUSE (diagnosed): `FUN_80085900` = libetc `VSync(mode)`. Its globals (probed live): `*0x800AACA8`
-    = GPUSTAT `0x1F801814`, `*0x800AACAC` = Timer1 `0x1F801110`, count = `DAT_800abde0` (0x800ABDE0, bumped
-    by the vblank IRQ callback `FUN_80086288`). The DEMO entry rec_dispatches VSync as PURE PSX; its wait
-    can't terminate because our no-IRQ runtime never fires the vblank callback, so `DAT_800abde0` never
-    advances. **The runtime ALREADY has a native VSync — `ov_vsync` (timing.cpp:37) — but it is ORPHANED by
-    the override removal**, exactly like the preload natives were. This is NOT a one-off: the whole DEMO stage
-    (entry prologue + the engine_demo.cpp substates, also orphaned + coro-redirect-based) needs the SAME
-    top-down native re-wiring the stage-0 preload just got. Plan: own the DEMO entry `0x801062E4` as a native
-    scheduler dispatch entry (like 0x8010649C/0x8010637C in native_boot's scheduler), call the native DEMO
-    handler + `ov_vsync`/`frame_tick` directly instead of rec_dispatching the PSX entry that busy-waits VSync.
-    `ov_vsync` modes: <0 query count, 0 wait-1, >1 wait-N (advance frame clock). Don't try to make pure-PSX
-    VSync work (it structurally needs the IRQ) — own the caller. (Reached headless via `run` once at DEMO.)
+  - ✅ **DEMO ENTRY `0x801062E4` + substate s0 OWNED PC-native + SYNCHRONOUS** (`ov_demo_stage_main`,
+    engine_demo.cpp; wired into the native scheduler in native_boot.cpp like 0x8010649C/0x8010637C). The
+    prologue (UI/ctx init 0x800810F0 + input reset 0x8005082C + the field inits, faithful to the 0x801062E4
+    disasm) runs native, then s0 (0x801063C0, run-once menu-resource INIT) runs native+SYNC: loader 0x80045080
+    via `cd_dc40_sync` (new, cd_override.cpp — the inline FUN_8001DC40 sync read) + area-load 0x80044BD4(cb=
+    FUN_80044F58,2,0) via `preload_texgroup(c,2,0)` (reused from stage-0, now non-static) + the SYNC tail calls
+    0x8007982C/0x80075240/0x8001CF00. Sets sm[0x48]=1, coro-redirects to the guest loop @0x80106388 (starts at
+    s1). **VERIFIED interface-correct: the 42-word texgroup metadata @0x800FB170 (the table the content reads
+    back) is a BYTE-EXACT match vs the reference steady-menu RAM dump.** WHY native+sync: run pure-PSX, s0's
+    loaders descend into the IRQ-driven async reader (FUN_8001D940 via FUN_8001DC40 / the FUN_80044BD4 task-1
+    spawn) which our no-IRQ runtime never completes → infinite spin in libcd's VSync-timed `CD_cw`.
+  - ☐ **NEW FRONTIER — substate s1's menu machine issues a pure-PSX libcd CD command that spins.** After s0,
+    the guest loop runs s1 (0x8010641C, menu input machine 0x80106F80). Its sm[0x4a]=0 handler (overlay
+    0x80107024 → resident 0x80075Dxx) calls **`CdControlB` 0x80089F68** (sets a CdlLOC @0x800BED7C, a CD
+    seek/position) which blocks in **`CD_cw` 0x8008A6EC**. CD_cw busy-waits (VSync-timed, deadline=vblcnt+960)
+    polling libcd's IRQ-updated SHADOW status @0x800AC298 — updated ONLY by the libcd CD interrupt handler,
+    which our no-IRQ runtime never runs (cdc_native queues the INT3 ack for the Setmode 0x0E but never raises
+    the CD IRQ / runs the ISR, so the shadow stays "NoIntr"). **STRUCTURAL (confirmed): pure-PSX libcd cannot
+    be made to complete** — CD_cw needs an IRQ-updated shadow AND busy-waits within one frame; and the override
+    table that used to let a native intercept the deep `jal 0x80089F68` is GONE. So EVERY libcd-touching menu
+    substate must be owned TOP-DOWN native (its CD ops via the sync primitives cd_loadfile_native/cd_dc40_sync/
+    preload_texgroup), exactly like s0. **The DEMO front-end is a large multi-substate subsystem; advance it
+    substate-by-substate.** Next: own s1's menu machine (0x80106F80 + the 0x80107024 handler) native+sync so
+    its CdControlB seek becomes a native disc op. Tools: `debug demo` (substate trace), `debug cdc` (now
+    dynamic — every CD command), `debug vsync` (re-add the interp trace if needed), PSXPORT_WATCHDOG=<sec>.
+  - FOLLOW-UP (pre-existing, stage-0): the 2nd cel slot @0x800BED82 reads FFFF (no slot) vs reference 0001 —
+    `preload_cel`/FUN_80096480 returns -1 for the 2nd cel. Verify the cel lands in VRAM once DEMO renders.
   Substate ownership:
   - ✅ **s0/s1/s2/s3/s6** (run-once INIT + the title/menu input substates; later-182/185, coro-redirect
     handshake on each substate body, A/B 0-diff at a steady menu frame).

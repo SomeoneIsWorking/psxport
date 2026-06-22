@@ -66,7 +66,7 @@ static void load_sector(void) {           // fill the data FIFO with the sector 
 }
 
 static void exec_command(uint8_t cmd) {
-  if (s_verbose)
+  if (s_verbose || cfg_dbg("cdc"))
     fprintf(stderr, "[cdc] cmd 0x%02X params=%d [%02X %02X %02X]\n", cmd, s_param_n,
             s_param[0], s_param[1], s_param[2]);
   uint8_t r1[1] = { s_stat };

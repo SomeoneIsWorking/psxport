@@ -331,6 +331,92 @@ static void ov_demo_s7_phase(Core* c) {
   rec_coro_redirect(c, TAIL_NONE);
 }
 
+// DEMO stage entry (0x801062E4) — own the prologue PC-native, then hand to the guest per-frame loop body
+// @0x80106388 via the coro-redirect handshake. Mirrors ov_game_stage_main (engine_stage.cpp). Called
+// DIRECTLY from the native scheduler (native_boot.cpp) when task 0 enters stage 1 (DEMO); the override
+// table that used to intercept 0x801062E4 is gone (2026-06-22). WHY this is needed: run as pure PSX, the
+// DEMO entry's prologue drives the libetc/libcd display+CD init which busy-waits on the vblank-IRQ VSync
+// count (never advances in our cooperative no-IRQ runtime) → infinite spin. We replicate the prologue's
+// guest-RAM init exactly (faithful to the 0x801062E4 disasm) and run its two sub-calls in-context; the
+// guest loop body + substate dispatch + the single FUN_80051f80 yield then run via the resumed coroutine.
+//
+// Prologue disasm (0x801062E4, from a live DEMO RAM dump):
+//   sp-=0x30; stack desc @sp+0x10 = {u16[0]=0, u16[1]=0, u16[2]=320(width), u16[3]=512}; save s0..s3/ra;
+//   a0=sp+0x10,a1=a2=a3=0; jal 0x800810F0 (UI/print-stream ctx init);
+//   *0x800BE0E4(u8)=0; *0x800E7E68(u16)=0; *0x800ECF54(u16)=0; *0x800ECF56(u16)=0;
+//   *0x1F80019A(u8)=0; *0x1F80019D(u8)=0; s0=0x1f800000; s2=1; s1=2; s3=3; v1=*0x1F800138;
+//   sm[0x48](u16)=0; sm[0x6E](u8)=0; jal 0x8005082C (input/pad reset); fall into loop @0x80106388.
+// Register state the loop body reads MUST hold on hand-off: s0=0x1f800000, s2=1, s1=2, s3=3.
+void ov_demo_stage_main(Core* c) {
+  uint32_t ra = c->r[31], sp = c->r[29];
+  uint32_t s0_in = c->r[16], s1_in = c->r[17], s2_in = c->r[18], s3_in = c->r[19];
+  c->r[29] = sp - 0x30;
+  c->mem_w16(c->r[29] + 0x10, 0);              // stack desc: x
+  c->mem_w16(c->r[29] + 0x12, 0);              //             y
+  c->mem_w16(c->r[29] + 0x14, 320);            //             w = 320 (screen width)
+  c->mem_w16(c->r[29] + 0x16, 512);            //             h-ish field = 512
+  c->mem_w32(c->r[29] + 0x28, ra);             // sw ra,0x28(sp)  — return on stage exit
+  c->mem_w32(c->r[29] + 0x24, s3_in);          // sw s3,0x24(sp)
+  c->mem_w32(c->r[29] + 0x20, s2_in);          // sw s2,0x20(sp)
+  c->mem_w32(c->r[29] + 0x1c, s1_in);          // sw s1,0x1c(sp)
+  c->mem_w32(c->r[29] + 0x18, s0_in);          // sw s0,0x18(sp)
+  c->r[4] = c->r[29] + 0x10; c->r[5] = 0; c->r[6] = 0; c->r[7] = 0;
+  rec_dispatch(c, 0x800810F0u);                // UI / print-stream context init (leaf — synchronous)
+  c->mem_w8 (0x800be0e4u, 0);
+  c->mem_w16(0x800e7e68u, 0);
+  c->mem_w16(0x800ecf54u, 0);
+  c->mem_w16(0x800ecf56u, 0);
+  c->mem_w8 (0x1f80019au, 0);
+  c->mem_w8 (0x1f80019du, 0);
+  uint32_t sm = c->mem_r32(0x1f800138u);
+  c->mem_w16(sm + 0x48, 0);                    // sm[0x48] = 0 (start at substate 0)
+  c->mem_w8 (sm + 0x6e, 0);                    // sm[0x6e] = 0
+  c->r[4] = 0; c->r[5] = 0; c->r[6] = 0;
+  rec_dispatch(c, 0x8005082Cu);                // input / pad-table reset (leaf — synchronous)
+
+  // --- DEMO substate s0 (0x801063C0) run-once INIT, PC-native + SYNCHRONOUS ---
+  // s0 loads the menu page-2 resources from CD. Run as pure PSX, its loaders descend into the
+  // IRQ-driven async reader (FUN_8001D940 via FUN_8001DC40 / the FUN_80044BD4 task-1 spawn) which our
+  // no-IRQ runtime can't complete → infinite spin in libcd's VSync-timed CD_cw. We reimplement s0's
+  // loads with the SAME synchronous primitives stage-0 uses (cd_dc40_sync / preload_texgroup), then
+  // advance to substate 1 so the guest per-frame loop starts at s1 (menu input — all-SYNC, no CD).
+  // Faithful to the 0x801063C0 disasm:
+  //   a0=0x80118F9C; sm[0x68]=0; sm[0x48]++ (0->1); sm[0x4a]=0;
+  //   jal 0x80045080(a0, idx=2, task)  -> indexed file load (table 0x800BE118, stride 8) via FUN_8001DC40
+  //   jal 0x80044BD4(0x80044F58, a1=2, a2=0, phase=0) -> texgroup area-load (spawn+yield-wait, sync here)
+  //   jal 0x8007982C; jal 0x80075240; jal 0x8001CF00(1)  -> control-block / audio-attr / SPU-mix (SYNC)
+  c->mem_w8(sm + 0x68, 0);
+  c->mem_w16(sm + 0x48, 1);                    // sm[0x48]++ : 0 -> 1
+  c->mem_w16(sm + 0x4a, 0);
+  { // loader 0x80045080(dest=0x80118F9C, idx=2): tab=0x800BE118+idx*8 -> {lba,size}; sync read to dest
+    void cd_dc40_sync(Core*, uint32_t, uint32_t, uint32_t);
+    uint32_t tab = 0x800be118u + 2u * 8u;
+    cd_dc40_sync(c, 0x80118f9cu, c->mem_r32(tab), c->mem_r32(tab + 4));
+  }
+  { // area-load FUN_80044BD4(callback=FUN_80044F58, a1=2, a2=0): native sync (no task-1 spawn, no yield).
+    // FUN_80044BD4 latches a1->0x801fe0de, a2->0x801fe0dd, clears the load-done flag 0x1f80019b, then the
+    // callback runs and sets 0x1f80019b=1. preload_texgroup(mode,set) IS the synchronous FUN_80044F58.
+    void preload_texgroup(Core*, uint32_t, uint32_t);
+    c->mem_w8(0x801fe0deu, 2);
+    c->mem_w8(0x801fe0ddu, 0);
+    c->mem_w8(0x1f80019bu, 0);
+    preload_texgroup(c, 2, 0);
+    c->mem_w8(0x1f80019bu, 1);
+  }
+  rec_dispatch(c, 0x8007982Cu);                // zero+seed the 1524B control block @0x800BF870 (SYNC)
+  rec_dispatch(c, 0x80075240u);                // voice/audio-attr control-block init (SYNC)
+  c->r[4] = 1; rec_dispatch(c, 0x8001CF00u);   // SpuSetCommonAttr CD->SPU mix on (SYNC)
+
+  c->r[16] = 0x1f800000u;                      // s0 = 0x1f800000 (loop reads 0x198(s0), 0x138(s0))
+  c->r[17] = 2;                                // s1 = 2
+  c->r[18] = 1;                                // s2 = 1 (loop compares sm[0x48]==s2)
+  c->r[19] = 3;                                // s3 = 3
+  if (cfg_dbg("demo")) fprintf(stderr, "[demo] ov_demo_stage_main: prologue + s0 native+sync, sm[0x48]=%u; loop @0x80106388 "
+                                       "(s0 texgroup meta[0x800FB170]=%08X, exact match vs reference menu dump)\n",
+                                       c->mem_r16(sm + 0x48), c->mem_r32(0x800fb170u));
+  rec_coro_redirect(c, 0x80106388u);           // hand to the guest per-frame loop body IN-CONTEXT (starts at s1)
+}
+
 // Register the DEMO substate overrides when the just-loaded overlay is the DEMO overlay at the stage
 // base. Distinguish from GAME.BIN (which aliases the same base) by the root-dispatcher prologue:
 // DEMO 0x801062E4 = `addiu sp,sp,-48` (0x27bdffd0); GAME's entry is 0x8010637C = 0x27bdffe0 (and at
