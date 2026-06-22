@@ -7,7 +7,7 @@ A native may exist already. **LIVE** = reachable by direct C call from a native_
 dispatch root (actually runs). **ORPHAN** = native exists but only the REMOVED override
 table used to reach it — it is dead code until a native parent calls it directly.
 
-Totals: 358 native fns, 298 owned addresses, 32 LIVE / 326 ORPHAN.
+Totals: 358 native fns, 259 owned addresses, 32 LIVE / 326 ORPHAN.
 
 | addr | status | symbol | file:line | depends-on (still-PSX) | summary |
 |------|--------|--------|-----------|------------------------|---------|
@@ -18,7 +18,6 @@ Totals: 358 native fns, 298 owned addresses, 32 LIVE / 326 ORPHAN.
 | 0x8001D2A8 | ORPHAN | `ov_voice_play` | runtime/recomp/cd_override.cpp:285 |  |  |
 | 0x8001D940 | ORPHAN | `ov_cd_async_read` | runtime/recomp/cd_override.cpp:177 |  | the engine's ASYNC streaming reader. It is spawned as task1 (its body |
 | 0x8001DB8C | LIVE | `ov_cd_loadfile` | runtime/recomp/cd_override.cpp:139 |  | (a0=dest, a1=lba, a2=size_bytes): the engine's file loader. The |
-| 0x8001DC40 | ORPHAN | `ov_800753AC` | engine/native_path_b3.cpp:11 | 0x8001DC40 | a1 = *(0x800BE108) + a1, then tail-call 0x8001DC40(a0, a1). |
 | 0x8001DC40 | LIVE | `ov_cd_loadfile` | runtime/recomp/cd_override.cpp:139 |  | (a0=dest, a1=lba, a2=size_bytes): the engine's file loader. The |
 | 0x80026C88 | ORPHAN | `ov_disp_26c88` | engine/entity.cpp:131 | 0x80026C88 |  |
 | 0x80027768 | ORPHAN | `ov_submit_poly_gt4_bp` | engine/engine_submit.cpp:598 |  |  |
@@ -82,7 +81,6 @@ Totals: 358 native fns, 298 owned addresses, 32 LIVE / 326 ORPHAN.
 | 0x8004D4F4 | ORPHAN | `ov_inventory_give` | engine/inventory.cpp:171 |  |  |
 | 0x8004D7EC | ORPHAN | `ov_bittest_4d7ec` | engine/mathlib.cpp:65 | 0x8004D7EC | pure bitmap bit-test (~2%, 6.8k calls): byte = bitmap[(int16)(a0/8)] t… |
 | 0x8004FB20 | ORPHAN | `ov_8004FB20` | engine/native_path_b1.cpp:13 | 0x8009A420 | memset(0x800BF548, 0, 700) via 0x8009A420. |
-| 0x8004FB20 | ORPHAN | `ov_8007B18C` | engine/native_path_b4.cpp:13 | 0x8004FB20 0x800798F8 0x8007A810 0x8007AC14 0x8007AC40 0x8007AC6C … | top-level object-pool init. Calls 0x8004FB20 then 0x800798F8; zeroes 5… |
 | 0x80050738 | ORPHAN | `ov_80050738` | engine/native_path_b2.cpp:80 | 0x80083B30 0x80083BF0 | build four viewport/clip descriptors (0x80083B30 ×2, 0x80083BF0 ×2, al… |
 | 0x8005082C | ORPHAN | `ov_8005082C` | engine/native_path_a2.cpp:199 |  | latch a controller rumble / actuator command. Reads three actuator byt… |
 | 0x800508A8 | ORPHAN | `ov_800508A8` | engine/native_path_a3.cpp:271 |  | propagate a 4-byte RGB+flag tuple selected by the current bank state i… |
@@ -103,8 +101,6 @@ Totals: 358 native fns, 298 owned addresses, 32 LIVE / 326 ORPHAN.
 | 0x80051C8C | ORPHAN | `ov_build_xform` | engine/engine_submit.cpp:1264 |  |  |
 | 0x80051E60 | LIVE | `native_scheduler_step` | runtime/recomp/native_boot.cpp:110 |  | One scheduler pass over the 3 task slots (replaces FUN_80051e60). |
 | 0x80051F80 | ORPHAN | `ov_80051F80` | engine/native_path_b3.cpp:34 | 0x80080880 | fetch the descriptor ptr at scratch+312, write a0 to +2 and 1 to +0, t… |
-| 0x80051F80 | LIVE | `ov_switch` | runtime/recomp/native_boot.cpp:103 |  | ChangeThread override = the universal task-switch primitive. Every coo… |
-| 0x80051FB4 | LIVE | `ov_switch` | runtime/recomp/native_boot.cpp:103 |  | ChangeThread override = the universal task-switch primitive. Every coo… |
 | 0x80052078 | ORPHAN | `eng_stage_transition` | engine/engine_level.cpp:69 | 0x800450BC 0x80080880 | (stageIdx) — the cooperative STAGE TRANSITION: load the next stage's o… |
 | 0x80052078 | ORPHAN | `ov_stage_transition` | engine/engine_level.cpp:86 |  |  |
 | 0x80052078 | LIVE | `native_start_stage` | runtime/recomp/native_boot.cpp:483 | 0x80080870 0x80080880 0x80080890 0x800808A0 | switch task 0 to the given stage (load overlay + reset the display/BIO… |
@@ -154,9 +150,7 @@ Totals: 358 native fns, 298 owned addresses, 32 LIVE / 326 ORPHAN.
 | 0x80079528 | ORPHAN | `ov_80079528` | engine/native_path_b1.cpp:78 |  | strlen(a0). (gen_func_80079528's body past the first `jr ra` — the 800… |
 | 0x800796DC | ORPHAN | `ov_800796DC` | engine/native_path_b3.cpp:122 | 0x8005082C 0x800508A8 0x800782F0 0x8009A420 | zero the 104-byte control block at 0x800BF808 (via 0x8009A420), seed t… |
 | 0x8007982C | ORPHAN | `ov_8007982C` | engine/native_path_b2.cpp:42 | 0x8009A420 | zero the 1524-byte control block at 0x800BF870 (via 0x8009A420), then … |
-| 0x8007982C | ORPHAN | `ov_8007A8E0` | engine/native_path_b2.cpp:73 | 0x8007982C | call 0x8007982C (block init) then clear the scratchpad u16 at 0x1F8001… |
 | 0x800798F8 | ORPHAN | `ov_800798F8` | engine/native_path_b3.cpp:193 |  |  |
-| 0x800798F8 | ORPHAN | `ov_8007B18C` | engine/native_path_b4.cpp:13 | 0x8004FB20 0x800798F8 0x8007A810 0x8007AC14 0x8007AC40 0x8007AC6C … | top-level object-pool init. Calls 0x8004FB20 then 0x800798F8; zeroes 5… |
 | 0x80079C3C | ORPHAN | `ov_entity_spawn` | engine/entity_spawn.cpp:169 | 0x80079C3C |  |
 | 0x80079C3C | ORPHAN | `ov_entity_spawn` | engine/entity_spawn.h:10 |  |  |
 | 0x80079DDC | ORPHAN | `ov_spawn_pool2` | engine/entity_spawn.cpp:306 | 0x80079DDC |  |
@@ -183,7 +177,6 @@ Totals: 358 native fns, 298 owned addresses, 32 LIVE / 326 ORPHAN.
 | 0x8007B2C0 | ORPHAN | `ov_8007B2C0` | engine/native_path.cpp:280 |  | load a 4-entry u16 weight ramp into the scratchpad at 0x1F800170: a0==… |
 | 0x8007B328 | ORPHAN | `ov_8007B328` | engine/native_path_b1.cpp:86 | 0x8007B2C0 0x8009A420 | zero an 8-byte descriptor at 0x800FB160 (via 0x8009A420), seed bytes |
 | 0x8007B38C | ORPHAN | `ov_8007B38C` | engine/native_path_b1.cpp:96 | 0x8007B2C0 | scatter the 0x800FB160 descriptor's bytes [1..7] into the HW-shadow bl… |
-| 0x8007B45C | ORPHAN | `ov_demo_s6` | engine/engine_demo.cpp:144 | 0x8007B45C 0x80106690 0x80106824 | s6 0x801065EC — page sub-machine 0x8007b45c(); if sm[0x50]==3 fire the… |
 | 0x8007B45C | ORPHAN | `ov_options_menu` | engine/menu.cpp:46 | 0x8007B45C |  |
 | 0x8007B45C | ORPHAN | `ov_options_menu` | engine/menu.h:8 |  |  |
 | 0x8007E1B8 | ORPHAN | `ov_ui_rect_emit` | engine/engine_ui_rect.cpp:107 | 0x8007E1B8 | override — see the RE block above. |
@@ -214,9 +207,7 @@ Totals: 358 native fns, 298 owned addresses, 32 LIVE / 326 ORPHAN.
 | 0x800834A0 | ORPHAN | `ov_800834A0` | engine/native_path_b3.cpp:17 | 0x80085900 | call 0x80085900(-1); store ret+240 at 0x800A5ADC and 0 at 0x800A5AE0. |
 | 0x80083AF8 | ORPHAN | `ov_80083AF8` | engine/native_path.cpp:42 |  | memset: write byte (uint8_t)a1 to `a2` bytes at `a0`. |
 | 0x80083B30 | ORPHAN | `ov_80083B30` | engine/native_path_b1.cpp:111 | 0x80086604 | initialize a ~28-byte sprite/object descriptor at a0 from (a1,a2,a3) +… |
-| 0x80083B30 | ORPHAN | `ov_80050738` | engine/native_path_b2.cpp:80 | 0x80083B30 0x80083BF0 | build four viewport/clip descriptors (0x80083B30 ×2, 0x80083BF0 ×2, al… |
 | 0x80083BF0 | ORPHAN | `ov_80083BF0` | engine/native_path.cpp:62 |  | initialize a 20-byte descriptor at a0 from (a1,a2,a3) and a stack-pass… |
-| 0x80083BF0 | ORPHAN | `ov_80050738` | engine/native_path_b2.cpp:80 | 0x80083B30 0x80083BF0 | build four viewport/clip descriptors (0x80083B30 ×2, 0x80083BF0 ×2, al… |
 | 0x80083DE0 | ORPHAN | `ov_80083DE0` | engine/native_path_a2.cpp:254 |  | build a GPU sprite/quad primitive (3 words) at a0 from flags a1,a2 and… |
 | 0x80083E80 | ORPHAN | `ov_trig_sin` | engine/mathlib.cpp:55 |  |  |
 | 0x80083EBC | ORPHAN | `ov_trig_lut` | engine/mathlib.cpp:59 |  |  |
@@ -230,10 +221,8 @@ Totals: 358 native fns, 298 owned addresses, 32 LIVE / 326 ORPHAN.
 | 0x800847B0 | ORPHAN | `ov_800847B0` | engine/native_path.cpp:191 |  | reformat a {int,int} pair pack from a0 into a1: each 32-bit field is s… |
 | 0x80084A80 | ORPHAN | `ov_rot84A80` | engine/engine_math.cpp:514 |  | ──────────────────────────────────────────────────────────────────────… |
 | 0x80085690 | ORPHAN | `ov_80085690` | engine/native_path_a3.cpp:352 |  | atan2-style angle from (a0=dy?, a1=dx?) returning a fixed-point angle … |
-| 0x80085900 | ORPHAN | `ov_800834A0` | engine/native_path_b3.cpp:17 | 0x80085900 | call 0x80085900(-1); store ret+240 at 0x800A5ADC and 0 at 0x800A5AE0. |
 | 0x80085900 | ORPHAN | `ov_vsync` | runtime/recomp/timing.cpp:37 |  | = libetc VSync(mode): |
 | 0x80085BB0 | ORPHAN | `ov_vsync_callback` | runtime/recomp/timing.cpp:24 |  | VSyncCallback(func): no-op. The original routes the per-vblank |
-| 0x800865F0 | ORPHAN | `ov_80086604` | engine/native_path.cpp:56 |  | getter/setter for the global word at 0x800ABE20 (0x800B<<16 - 0x41E0). |
 | 0x800865F0 | ORPHAN | `ov_800865F0` | engine/native_path.cpp:57 |  |  |
 | 0x80086604 | ORPHAN | `ov_80086604` | engine/native_path.cpp:56 |  | getter/setter for the global word at 0x800ABE20 (0x800B<<16 - 0x41E0). |
 | 0x80086970 | LIVE | `eng_init_input` | engine/engine_init.cpp:161 | 0x80080890 0x800808A0 0x80085B10 0x800873F0 0x80087400 | a thin wrapper that just calls FUN_80086970; owned as eng_init_input. |
@@ -245,16 +234,11 @@ Totals: 358 native fns, 298 owned addresses, 32 LIVE / 326 ORPHAN.
 | 0x80089E1C | ORPHAN | `ov_80089E1C` | engine/native_path_b3.cpp:88 | 0x8008A6EC 0x8008AC34 | like 80089BAC but on success additionally calls 0x8008A6EC(0,a2) and r… |
 | 0x80089F68 | ORPHAN | `ov_80089F68` | engine/native_path_b1.cpp:16 | 0x8008B040 | call 0x8008B040 (args passed through from caller) then return 1. |
 | 0x8008A00C | ORPHAN | `ov_8008A00C` | engine/native_path_a2.cpp:55 |  | binary frame-count → packed BCD time at a1, the encoder paired with 0x… |
-| 0x8008A00C | ORPHAN | `ov_8008A110` | engine/native_path_a2.cpp:102 |  | packed BCD time at a0 → binary frame count (decoder, inverse of 0x8008… |
-| 0x8008A110 | ORPHAN | `ov_8008A00C` | engine/native_path_a2.cpp:55 |  | binary frame-count → packed BCD time at a1, the encoder paired with 0x… |
 | 0x8008A110 | ORPHAN | `ov_8008A110` | engine/native_path_a2.cpp:102 |  | packed BCD time at a0 → binary frame count (decoder, inverse of 0x8008… |
-| 0x8008A6EC | ORPHAN | `ov_80089E1C` | engine/native_path_b3.cpp:88 | 0x8008A6EC 0x8008AC34 | like 80089BAC but on success additionally calls 0x8008A6EC(0,a2) and r… |
 | 0x8008A6EC | ORPHAN | `ov_cd_sync` | runtime/recomp/cd_override.cpp:66 |  | (noblock, result) CdSync -> 2 (status: complete/ready). |
 | 0x8008A96C | ORPHAN | `ov_cdreadsync` | runtime/recomp/sync_overrides.cpp:34 |  | (mode, result) — CdReadSync. Blocking path spins until the CD |
-| 0x8008AC34 | ORPHAN | `ov_80089BAC` | engine/native_path_b3.cpp:59 | 0x8008AC34 | retry wrapper (up to 4 attempts) around 0x8008AC34. idx = a0 & 255. |
 | 0x8008AC34 | ORPHAN | `ov_cd_command` | runtime/recomp/cd_override.cpp:41 |  | (cmd, param, result, mode) CdCommand -> 0 (success). |
 | 0x8008B040 | ORPHAN | `ov_8008B040` | engine/native_path_a2.cpp:225 |  | push a 4-byte pad/memcard command sequence through the SIO-ish HW shad… |
-| 0x8008B040 | ORPHAN | `ov_80089F68` | engine/native_path_b1.cpp:16 | 0x8008B040 | call 0x8008B040 (args passed through from caller) then return 1. |
 | 0x8008B19C | ORPHAN | `ov_8008B19C` | engine/native_path_a1.cpp:21 |  | ── 0x8008B19C — controller/pad config seed. Through ptr *0x800AC294 (=… |
 | 0x8008B2D8 | ORPHAN | `ov_cdinit` | runtime/recomp/cd_override.cpp:30 |  | low-level CdInit -> success (drive ready), no HW handshake. |
 | 0x8008B4B8 | ORPHAN | `ov_cddatasync` | runtime/recomp/sync_overrides.cpp:41 |  | (mode) — CdDataSync (CD DMA-done wait). Blocking path spins while the |
@@ -263,7 +247,6 @@ Totals: 358 native fns, 298 owned addresses, 32 LIVE / 326 ORPHAN.
 | 0x8008C1EC | ORPHAN | `ov_cd_read` | runtime/recomp/cd_override.cpp:121 |  |  |
 | 0x8008CCE0 | ORPHAN | `ov_8008CCE0` | engine/native_path_b1.cpp:57 | 0x8008CFF0 | clear a cluster of globals at 0x801027xx, then 0x8008CFF0(0, *0x801027… |
 | 0x8008CFF0 | ORPHAN | `ov_8008CFF0` | engine/native_path.cpp:170 |  | zero the first word of `a1` stride-32 records starting at index a0 in … |
-| 0x8008CFF0 | ORPHAN | `ov_8008CCE0` | engine/native_path_b1.cpp:57 | 0x8008CFF0 | clear a cluster of globals at 0x801027xx, then 0x8008CFF0(0, *0x801027… |
 | 0x80090160 | ORPHAN | `ov_80090160` | engine/native_path_a2.cpp:164 |  | consume one 7-bit-continuation varint from a per-row stream cursor and… |
 | 0x80090A60 | ORPHAN | `ov_80090A60` | engine/native_path_a1.cpp:294 |  | ── 0x80090A60 — channel/voice attribute setup. a0=ch (r4, &0xFFFF), a1… |
 | 0x80091B50 | ORPHAN | `ov_80091B50` | engine/native_path_a1.cpp:228 |  | ── 0x80091B50 — voice-object table builder. a0=base ptr (r4), a1=rows … |
@@ -272,7 +255,6 @@ Totals: 358 native fns, 298 owned addresses, 32 LIVE / 326 ORPHAN.
 | 0x800931C0 | ORPHAN | `ov_input_dispatch_931c0` | engine/input.h:7 |  |  |
 | 0x8009440C | ORPHAN | `ov_8009440C` | engine/native_path_b2.cpp:29 | 0x80094474 | fixed-point lookup wrapper around 0x80094474. Builds a signed offset f… |
 | 0x80094474 | ORPHAN | `ov_80094474` | engine/native_path_a3.cpp:176 |  | fixed-point helper: given base (a0), step (a1), key (a2 low byte), wra… |
-| 0x80094474 | ORPHAN | `ov_8009440C` | engine/native_path_b2.cpp:29 | 0x80094474 | fixed-point lookup wrapper around 0x80094474. Builds a signed offset f… |
 | 0x80094B50 | ORPHAN | `ov_80094B50` | engine/native_path_a1.cpp:99 |  | ── 0x80094B50 — voice key-on/key-off mask split across two 16-voice SP… |
 | 0x80094C10 | ORPHAN | `ov_80094C10` | engine/native_path_a3.cpp:505 |  | large fixed-point mixer/pan computation for the current voice (record … |
 | 0x800962B0 | ORPHAN | `ov_800962B0` | engine/native_path_a3.cpp:73 |  | bind a runtime "actor/voice" record (id a0, slot a1). Bounds: low16(a0… |
@@ -291,15 +273,11 @@ Totals: 358 native fns, 298 owned addresses, 32 LIVE / 326 ORPHAN.
 | 0x80097A90 | ORPHAN | `ov_80097A90` | engine/native_path_a2.cpp:308 |  | multi-pass coalescing/defragmentation over the GPU/heap free-list. The… |
 | 0x80097E10 | ORPHAN | `ov_80097E10` | engine/native_path_b1.cpp:22 | 0x80097E40 | call 0x80097E40 (a0,a1 passed through) with fixed (a2,a3) id pairs. |
 | 0x80097E40 | ORPHAN | `ov_80097E40` | engine/native_path_a1.cpp:179 |  | ── 0x80097E40 — voice-pan/volume table read-modify-write returning a 2… |
-| 0x80097E40 | ORPHAN | `ov_80097E10` | engine/native_path_b1.cpp:22 | 0x80097E40 | call 0x80097E40 (a0,a1 passed through) with fixed (a2,a3) id pairs. |
 | 0x80098150 | ORPHAN | `ov_80098150` | engine/native_path_b2.cpp:126 | 0x800982A0 | channel state toggle on a0 (0 or 1). Updates the flag word at *(0x800A… |
 | 0x800982A0 | ORPHAN | `ov_800982A0` | engine/native_path_a1.cpp:76 |  | ── 0x800982A0 — range-overlap test against a list. a0 <<= (*0x800AC62C… |
-| 0x800982A0 | ORPHAN | `ov_80098CE0` | engine/native_path_b1.cpp:49 | 0x800982A0 | return (a0 != 0 && 0x800982A0(*0x800AC5A0) == 0) ? 1 : 0; also store t… |
 | 0x80098810 | ORPHAN | `ov_80098810` | engine/native_path_a1.cpp:335 |  | ── 0x80098810 — voice param scatter (key bits 0..18). a0 = ptr to a re… |
-| 0x80098810 | ORPHAN | `ov_80098D30` | engine/native_path_a1.cpp:355 |  | ── 0x80098D30 — voice param scatter, bits 1 and 2 only (a small siblin… |
 | 0x80098CE0 | ORPHAN | `ov_80098CE0` | engine/native_path_b1.cpp:49 | 0x800982A0 | return (a0 != 0 && 0x800982A0(*0x800AC5A0) == 0) ? 1 : 0; also store t… |
 | 0x80098D30 | ORPHAN | `ov_80098D30` | engine/native_path_a1.cpp:355 |  | ── 0x80098D30 — voice param scatter, bits 1 and 2 only (a small siblin… |
-| 0x80098DB0 | ORPHAN | `ov_80097E10` | engine/native_path_b1.cpp:22 | 0x80097E40 | call 0x80097E40 (a0,a1 passed through) with fixed (a2,a3) id pairs. |
 | 0x80098DB0 | ORPHAN | `ov_80098DB0` | engine/native_path_b1.cpp:23 | 0x80097E40 |  |
 | 0x80098F90 | ORPHAN | `ov_80098F90` | engine/native_path_a1.cpp:130 |  | ── 0x80098F90 — voice key-on/key-off request. a1 &= 0x00FFFFFF; lo = a… |
 | 0x80099370 | ORPHAN | `ov_80099370` | engine/native_path.cpp:133 |  | *0x800AC594 = a0; *0x800AC620 = (a0 == 1) ? 1 : 0. |
@@ -310,70 +288,19 @@ Totals: 358 native fns, 298 owned addresses, 32 LIVE / 326 ORPHAN.
 | 0x8009A340 | ORPHAN | `ov_8009A340` | engine/native_path.cpp:237 |  | bzero(a0, a1) returning a0; returns 0 when a0==0 or (int)a1<=0. |
 | 0x8009A3E0 | ORPHAN | `ov_8009A3E0` | engine/native_path.cpp:147 |  | memcpy(a0, a1, a2) returning a0 (0 if a0==0); no-op body when (int)a2<… |
 | 0x8009A420 | ORPHAN | `ov_8009A420` | engine/native_path.cpp:139 |  | memset(a0, (uint8_t)a1, a2) returning a0; returns 0 when a0==0 or (int… |
-| 0x8009A420 | ORPHAN | `ov_8004FB20` | engine/native_path_b1.cpp:13 | 0x8009A420 | memset(0x800BF548, 0, 700) via 0x8009A420. |
-| 0x8009A420 | ORPHAN | `ov_8007AC14` | engine/native_path_b1.cpp:29 | 0x8009A420 | AC40/AC6C/AC98/AD14 — memset(<global>, 0, <n>) via 0x8009A420. Bases f… |
-| 0x8009A420 | ORPHAN | `ov_8007ACC4` | engine/native_path_b1.cpp:36 | 0x8009A420 | 8× memset(0x80100400 + i*76, 0, 76) via 0x8009A420 (eight stride-76 re… |
-| 0x8009A420 | ORPHAN | `ov_8007AD40` | engine/native_path_b1.cpp:42 | 0x8009A420 | memset(0x800EC188, 0, 2560) via 0x8009A420, then for 40 stride-64 reco… |
-| 0x8009A420 | ORPHAN | `ov_8007B328` | engine/native_path_b1.cpp:86 | 0x8007B2C0 0x8009A420 | zero an 8-byte descriptor at 0x800FB160 (via 0x8009A420), seed bytes |
-| 0x8009A420 | ORPHAN | `ov_8007982C` | engine/native_path_b2.cpp:42 | 0x8009A420 | zero the 1524-byte control block at 0x800BF870 (via 0x8009A420), then … |
-| 0x8009A420 | ORPHAN | `ov_800796DC` | engine/native_path_b3.cpp:122 | 0x8005082C 0x800508A8 0x800782F0 0x8009A420 | zero the 104-byte control block at 0x800BF808 (via 0x8009A420), seed t… |
 | 0x8009A450 | ORPHAN | `ov_rand` | engine/mathlib.cpp:83 | 0x8009A450 |  |
 | 0x8009A450 | ORPHAN | `ov_rand` | engine/mathlib.h:8 |  |  |
 | 0x8009A450 | ORPHAN | `ov_8009A450` | engine/native_path.cpp:156 |  | rand(): seed at 0x80105EE8; seed = seed*0x41C64E6D + 12345; return (se… |
 | 0x8009A480 | ORPHAN | `ov_8009A480` | engine/native_path.cpp:48 |  | store a0 to the global word at 0x80105EE8 (0x8010<<16 + 0x5EE8). |
 | 0x8009A540 | ORPHAN | `ov_8009A540` | engine/native_path.cpp:246 |  | strcmp(a0, a1). Guard: if either is NULL, equal→0 / a0==NULL→-1 / else… |
 | 0x8009A640 | ORPHAN | `ov_8009A640` | engine/native_path_a2.cpp:22 |  | strncmp(a0, a1, a2): NUL-guard like strcmp, else compare up to a2 byte… |
-| 0x8009A640 | ORPHAN | `ov_8008BBC8` | engine/native_path_b1.cpp:19 | 0x8009A640 | strncmp(a0, a1, 12) via 0x8009A640; return 1 if equal (result < 1 unsi… |
-| 0x8009C060 | ORPHAN | `ov_8009C1FC` | engine/native_path.cpp:163 |  | copy a 28-word table from 0x8009C060 to low RAM 0xDF80 (installs a fix… |
 | 0x8009C1FC | ORPHAN | `ov_8009C1FC` | engine/native_path.cpp:163 |  | copy a 28-word table from 0x8009C060 to low RAM 0xDF80 (installs a fix… |
 | 0x8009C9D0 | ORPHAN | `ov_8009C9D0` | engine/native_path_b3.cpp:45 | 0x8009CAEC | finalize a GPU command packet: call 0x8009CAEC(a0,a1); then poke five … |
-| 0x8009CAEC | ORPHAN | `ov_8009C9D0` | engine/native_path_b3.cpp:45 | 0x8009CAEC | finalize a GPU command packet: call 0x8009CAEC(a0,a1); then poke five … |
 | 0x8009CAEC | ORPHAN | `ov_sync_ok` | runtime/recomp/sync_overrides.cpp:19 |  | DecDCTinSync / 0x8009CB80 DecDCToutSync — the MDEC in/out sync waits. … |
 | 0x8009CB80 | ORPHAN | `ov_sync_ok` | runtime/recomp/sync_overrides.cpp:19 |  | DecDCTinSync / 0x8009CB80 DecDCToutSync — the MDEC in/out sync waits. … |
-| 0x800A5AA8 | ORPHAN | `ov_80082C68` | engine/native_path.cpp:212 |  | write four GPU primitive templates through the pointer table at 0x800A… |
-| 0x800A5AB4 | ORPHAN | `ov_80082C68` | engine/native_path.cpp:212 |  | write four GPU primitive templates through the pointer table at 0x800A… |
-| 0x800A5ADC | ORPHAN | `ov_800834A0` | engine/native_path_b3.cpp:17 | 0x80085900 | call 0x80085900(-1); store ret+240 at 0x800A5ADC and 0 at 0x800A5AE0. |
-| 0x800A5AE0 | ORPHAN | `ov_800834A0` | engine/native_path_b3.cpp:17 | 0x80085900 | call 0x80085900(-1); store ret+240 at 0x800A5ADC and 0 at 0x800A5AE0. |
-| 0x800ABE20 | ORPHAN | `ov_80086604` | engine/native_path.cpp:56 |  | getter/setter for the global word at 0x800ABE20 (0x800B<<16 - 0x41E0). |
-| 0x800ABFC0 | ORPHAN | `ov_80089B98` | engine/native_path.cpp:102 |  | get/set the global word at 0x800ABFC0 (returns old, writes a0). |
-| 0x800AC294 | ORPHAN | `ov_8008B19C` | engine/native_path_a1.cpp:21 |  | ── 0x8008B19C — controller/pad config seed. Through ptr *0x800AC294 (=… |
-| 0x800AC594 | ORPHAN | `ov_80099370` | engine/native_path.cpp:133 |  | *0x800AC594 = a0; *0x800AC620 = (a0 == 1) ? 1 : 0. |
-| 0x800AC59C | ORPHAN | `ov_80098CE0` | engine/native_path_b1.cpp:49 | 0x800982A0 | return (a0 != 0 && 0x800982A0(*0x800AC5A0) == 0) ? 1 : 0; also store t… |
-| 0x800AC5A0 | ORPHAN | `ov_80098CE0` | engine/native_path_b1.cpp:49 | 0x800982A0 | return (a0 != 0 && 0x800982A0(*0x800AC5A0) == 0) ? 1 : 0; also store t… |
-| 0x800AC604 | ORPHAN | `ov_8009A1D0` | engine/native_path.cpp:118 |  | table read: entry = *0x800AC604 + (a0<<4); *(u16*)a1 = *(u16*)(entry+1… |
-| 0x800AC604 | ORPHAN | `ov_800974FC` | engine/native_path.cpp:204 |  | write into the u16 table at *0x800AC604, index a0: if a2==0 store a1, … |
-| 0x800AC604 | ORPHAN | `ov_80098150` | engine/native_path_b2.cpp:126 | 0x800982A0 | channel state toggle on a0 (0 or 1). Updates the flag word at *(0x800A… |
-| 0x800AC618 | ORPHAN | `ov_80097678` | engine/native_path.cpp:124 |  | read-modify-write the word at *0x800AC618: v = (v & 0xF0FFFFFF) \| 0x02… |
-| 0x800AC620 | ORPHAN | `ov_80099370` | engine/native_path.cpp:133 |  | *0x800AC594 = a0; *0x800AC620 = (a0 == 1) ? 1 : 0. |
-| 0x800AC628 | ORPHAN | `ov_80097540` | engine/native_path_a1.cpp:50 |  | ── 0x80097540 — sound/voice region-bound helper. If *0x800AC628 (=0x80… |
-| 0x800AC62C | ORPHAN | `ov_800982A0` | engine/native_path_a1.cpp:76 |  | ── 0x800982A0 — range-overlap test against a list. a0 <<= (*0x800AC62C… |
-| 0x800AC638 | ORPHAN | `ov_80099478` | engine/native_path.cpp:105 |  | return (*0x800AC638 ^ 1) != 0  (i.e. *0x800AC638 != 1). |
-| 0x800AC638 | ORPHAN | `ov_80099450` | engine/native_path.cpp:130 |  | *0x800AC638 = (a0 == 1) ? 0 : 1. |
-| 0x800AC66C | ORPHAN | `ov_800977C0` | engine/native_path_b5.cpp:16 | 0x80097A90 | allocate a `size`-byte run from the block table at G_base (0x800AC66C)… |
-| 0x800B0000 | ORPHAN | `ov_8008B19C` | engine/native_path_a1.cpp:21 |  | ── 0x8008B19C — controller/pad config seed. Through ptr *0x800AC294 (=… |
-| 0x800B0000 | ORPHAN | `ov_80097540` | engine/native_path_a1.cpp:50 |  | ── 0x80097540 — sound/voice region-bound helper. If *0x800AC628 (=0x80… |
-| 0x800BE108 | ORPHAN | `ov_800753AC` | engine/native_path_b3.cpp:11 | 0x8001DC40 | a1 = *(0x800BE108) + a1, then tail-call 0x8001DC40(a0, a1). |
-| 0x800BE118 | ORPHAN | `ov_80045080` | engine/native_path_b3.cpp:25 | 0x8001DC40 | index the stride-8 table at 0x800BE118 by (a1 & 255); load its two wor… |
 | 0x800BF4F8 | LIVE | `eng_init_alloc` | engine/engine_init.cpp:185 | 0x80086738 0x80089160 0x8009A340 | engine ALLOCATOR / dispatch-table init. a0/a1 = a struct span (0x800bf… |
 | 0x800BF51A | LIVE | `eng_init_alloc` | engine/engine_init.cpp:185 | 0x80086738 0x80089160 0x8009A340 | engine ALLOCATOR / dispatch-table init. a0/a1 = a struct span (0x800bf… |
-| 0x800BF544 | ORPHAN | `ov_8007E9C8` | engine/native_path_b3.cpp:151 | 0x80083DE0 | build a GPU primitive into a 12-word pool slot (pool head at 0x800BF54… |
-| 0x800BF548 | ORPHAN | `ov_8004FB20` | engine/native_path_b1.cpp:13 | 0x8009A420 | memset(0x800BF548, 0, 700) via 0x8009A420. |
-| 0x800BF808 | ORPHAN | `ov_800796DC` | engine/native_path_b3.cpp:122 | 0x8005082C 0x800508A8 0x800782F0 0x8009A420 | zero the 104-byte control block at 0x800BF808 (via 0x8009A420), seed t… |
-| 0x800BF870 | ORPHAN | `ov_8007B38C` | engine/native_path_b1.cpp:96 | 0x8007B2C0 | scatter the 0x800FB160 descriptor's bytes [1..7] into the HW-shadow bl… |
-| 0x800BF870 | ORPHAN | `ov_8007982C` | engine/native_path_b2.cpp:42 | 0x8009A420 | zero the 1524-byte control block at 0x800BF870 (via 0x8009A420), then … |
 | 0x800E7E80 | ORPHAN | `ov_cam_heading` | engine/engine_camera.cpp:696 |  | ──────────────────────────────────────────────────────────────────────… |
-| 0x800EC188 | ORPHAN | `ov_8007AD40` | engine/native_path_b1.cpp:42 | 0x8009A420 | memset(0x800EC188, 0, 2560) via 0x8009A420, then for 40 stride-64 reco… |
-| 0x800FB160 | ORPHAN | `ov_8007B328` | engine/native_path_b1.cpp:86 | 0x8007B2C0 0x8009A420 | zero an 8-byte descriptor at 0x800FB160 (via 0x8009A420), seed bytes |
-| 0x800FB160 | ORPHAN | `ov_8007B38C` | engine/native_path_b1.cpp:96 | 0x8007B2C0 | scatter the 0x800FB160 descriptor's bytes [1..7] into the HW-shadow bl… |
-| 0x80100400 | ORPHAN | `ov_8007ACC4` | engine/native_path_b1.cpp:36 | 0x8009A420 | 8× memset(0x80100400 + i*76, 0, 76) via 0x8009A420 (eight stride-76 re… |
-| 0x80100690 | ORPHAN | `ov_8007A810` | engine/native_path_b2.cpp:59 | 0x8009A420 | init a 4-entry, stride-264 array at 0x80100690: zero a 388-byte header… |
-| 0x8010272C | ORPHAN | `ov_8008CCE0` | engine/native_path_b1.cpp:57 | 0x8008CFF0 | clear a cluster of globals at 0x801027xx, then 0x8008CFF0(0, *0x801027… |
-| 0x80102D6C | ORPHAN | `ov_8008BEAC` | engine/native_path_b2.cpp:11 | 0x8009A540 | search a 128-entry, stride-44 table at 0x80102D6C for an entry whose i… |
-| 0x80105CD8 | ORPHAN | `ov_80096390` | engine/native_path.cpp:90 |  | store u16 0 to the global at 0x80105CD8. |
-| 0x80105D28 | LIVE | `ov_font_bank2_store` | engine/engine_font.cpp:40 |  | font-bank2 store. `*0x80105d28(sb) = a0; jr ra`. Leaf; does NOT set a … |
-| 0x80105D28 | ORPHAN | `ov_80096370` | engine/native_path.cpp:87 |  | store (uint8_t)a0 to the global byte at 0x80105D28. |
-| 0x80105EE8 | ORPHAN | `ov_8009A480` | engine/native_path.cpp:48 |  | store a0 to the global word at 0x80105EE8 (0x8010<<16 + 0x5EE8). |
-| 0x80105EE8 | ORPHAN | `ov_8009A450` | engine/native_path.cpp:156 |  | rand(): seed at 0x80105EE8; seed = seed*0x41C64E6D + 12345; return (se… |
 | 0x8010637C | LIVE | `ov_game_stage_main` | engine/engine_stage.cpp:150 | 0x801063F4 | GAME stage TOP-LEVEL ENTRY 0x8010637C — task-0's stage driver: a one-t… |
 | 0x801063C0 | ORPHAN | `ov_demo_s0` | engine/engine_demo.cpp:201 | 0x801063E4 | s0 0x801063C0 — run-once INIT then loaders; FALLS THROUGH into s1 same… |
 | 0x8010641C | ORPHAN | `ov_demo_s1` | engine/engine_demo.cpp:57 | 0x80106F80 | s1 0x8010641C — wait/advance: v0 = inner menu input machine 0x80106f80… |
@@ -383,12 +310,7 @@ Totals: 358 native fns, 298 owned addresses, 32 LIVE / 326 ORPHAN.
 | 0x801064E8 | ORPHAN | `ov_demo_s3` | engine/engine_demo.cpp:112 | 0x800750D8 0x80106AC4 | s3 0x801064E8 — sub-machine v0 = 0x80106ac4() (mirror of 0x8010696c). … |
 | 0x801065EC | ORPHAN | `ov_demo_s6` | engine/engine_demo.cpp:144 | 0x8007B45C 0x80106690 0x80106824 | s6 0x801065EC — page sub-machine 0x8007b45c(); if sm[0x50]==3 fire the… |
 | 0x80106728 | LIVE | `native_stage0_sm` | runtime/recomp/native_boot.cpp:631 |  | Stage-0 START.BIN state machine (overlay 0x80106728), PC-native + sync… |
-| 0x80106824 | ORPHAN | `ov_demo_s6` | engine/engine_demo.cpp:144 | 0x8007B45C 0x80106690 0x80106824 | s6 0x801065EC — page sub-machine 0x8007b45c(); if sm[0x50]==3 fire the… |
-| 0x8010696C | ORPHAN | `ov_demo_s2` | engine/engine_demo.cpp:77 | 0x8001CF2C 0x8010696C | s2 0x80106464 — sub-machine v0 = 0x8010696c(). Outcome 1 -> go to s7 (… |
-| 0x8010696C | ORPHAN | `ov_demo_s3` | engine/engine_demo.cpp:112 | 0x800750D8 0x80106AC4 | s3 0x801064E8 — sub-machine v0 = 0x80106ac4() (mirror of 0x8010696c). … |
-| 0x80106AC4 | ORPHAN | `ov_demo_s3` | engine/engine_demo.cpp:112 | 0x800750D8 0x80106AC4 | s3 0x801064E8 — sub-machine v0 = 0x80106ac4() (mirror of 0x8010696c). … |
 | 0x80106C24 | ORPHAN | `ov_demo_s7_phase` | engine/engine_demo.cpp:298 | 0x80074BC4 |  |
-| 0x80106F80 | ORPHAN | `ov_demo_s1` | engine/engine_demo.cpp:57 | 0x80106F80 | s1 0x8010641C — wait/advance: v0 = inner menu input machine 0x80106f80… |
 | 0x801086E0 | ORPHAN | `ov_game_s48_0` | engine/engine_stage.cpp:32 | 0x8007A8E0 0x8007B38C | sm[0x48] == 0 — area INIT: advance to running (sm[0x48]=2), reset the … |
 | 0x80108720 | ORPHAN | `ov_game_s48_1` | engine/engine_stage.cpp:49 | 0x8007B3F4 | sm[0x48] == 1 — area RESUME-INIT (re-enter a running area, sub-mode 1)… |
 | 0x80108784 | ORPHAN | `ov_game_s48_2` | engine/engine_stage.cpp:80 | 0x8010881C | sm[0x48] == 2 — RUNNING: dispatch the running sub-mode sm[0x4a] (0..5)… |

@@ -92,24 +92,26 @@ def parse_file(path, natives):
             j += 1
         bodytext = "\n".join(body)
 
-        # implemented address(es): authoritative override table (if present) + name-hex + header comment
+        # implemented address(es). The override table is AUTHORITATIVE — when a symbol is in it, use
+        # ONLY those addresses (its comment also names helper/dependency addresses we must NOT count as
+        # "implemented here"). New top-down natives absent from the table fall back to name-hex + the
+        # header-comment address(es) before the first em-dash/colon.
         impl = list(OVR.get(sym, []))
-        nh = NAMEHEX.match(sym)
-        if nh and nh.group(1).upper() not in impl:
-            impl.append(nh.group(1).upper())
-        # header = comment lines before the first em-dash/desc; multi-addr "0xA / 0xB —" supported
-        header = []
-        for cl in comment:
-            header.append(cl)
-            if "—" in cl or " - " in cl or ":" in cl:
-                break
-        htext = " ".join(header)
-        for a in ADDR_RE.findall(htext) + [x.upper() for x in FUN_RE.findall(htext)]:
-            if a.upper() not in impl:
-                impl.append(a.upper())
-        if not impl:  # last resort: any address anywhere in the comment block
-            for a in ADDR_RE.findall(" ".join(comment)) + [x.upper() for x in FUN_RE.findall(" ".join(comment))]:
+        if not impl:
+            nh = NAMEHEX.match(sym)
+            if nh:
+                impl.append(nh.group(1).upper())
+            header = []
+            for cl in comment:
+                header.append(cl)
+                if "—" in cl or " - " in cl or ":" in cl:
+                    break
+            htext = " ".join(header)
+            for a in ADDR_RE.findall(htext) + [x.upper() for x in FUN_RE.findall(htext)]:
                 if a.upper() not in impl:
+                    impl.append(a.upper())
+            if not impl:  # last resort: first address anywhere in the comment block
+                for a in ADDR_RE.findall(" ".join(comment)) + [x.upper() for x in FUN_RE.findall(" ".join(comment))]:
                     impl.append(a.upper()); break
 
         deps = sorted({d.upper() for d in DEP_RE.findall(bodytext)})
