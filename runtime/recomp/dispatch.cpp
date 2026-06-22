@@ -30,16 +30,17 @@ OverrideFn rec_interp_override_for(uint32_t a);   // unified address-keyed overr
 // "Is this address a statically-recompiled function?" — interpreter-only build: never.
 int rec_func_index(uint32_t addr) { (void)addr; return -1; }
 
-// Register a fixed native override for a function address. One address-keyed table (interp.c).
-void rec_set_override(uint32_t addr, OverrideFn fn) { rec_set_interp_override(addr, fn); }
+// OVERRIDE SYSTEM REMOVED (2026-06-22) — top-down PC-driven model: PC calls PC directly; PSX never
+// calls PC. rec_set_override is now a NO-OP (the registration sites are being deleted top-down as each
+// parent is owned). Native code is invoked by PC calling the native function directly, NOT by registering
+// an address. rec_dispatch is the PC->PSX-leaf call: it runs the original recomp body (pure PSX) — BIOS
+// vectors to HLE, RAM code interpreted — and, with no overrides anywhere, never re-enters native code.
+void rec_set_override(uint32_t addr, OverrideFn fn) { (void)addr; (void)fn; }
 
-// Run the function at `addr`: a native override wins; otherwise defer to rec_dispatch_miss, which
-// routes BIOS vectors (A0/B0/C0) to the HLE BIOS and interprets RAM code (overlays / MAIN / stub).
-// This mirrors the old generated rec_dispatch's `default: rec_dispatch_miss` path exactly — crucial
-// for PSX BIOS calls (`li $t2,0xA0; jr $t2`), which must NOT be interpreted as code at 0xA0.
+// Run the PSX function at `addr` as pure recomp: rec_dispatch_miss routes BIOS vectors (A0/B0/C0) to the
+// HLE BIOS and interprets RAM code (overlays / MAIN / stub). Crucial for PSX BIOS calls (`li $t2,0xA0;
+// jr $t2`), which must NOT be interpreted as code at 0xA0.
 void rec_dispatch(Core* c, uint32_t addr) {
-  OverrideFn ov = rec_interp_override_for(addr);
-  if (ov) { extern uint32_t g_override_tgt; g_override_tgt = addr; ov(c); return; }
   rec_dispatch_miss(c, addr);
 }
 

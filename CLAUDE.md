@@ -92,9 +92,9 @@ bug; the engine OWNS its render (no oracle to diff against), so verify on the LI
 End state (like N64Recomp/Zelda64Recomp): a **generic, reusable PSX→PC framework** as a submodule, and
 **Tomba2Engine** as the game repo on top. We are establishing that boundary **in-tree first**, keeping
 one build, then extracting the common PSX part into its own repo (gh authed as `SomeoneIsWorking`).
-- `engine/` — **Tomba2Engine, the game-specific native engine + RE.** game_tomba2.c (engine hooks /
-  native overrides), wide60.c (60fps interpolation), tomba2_types.h, and the native engine modules
-  being lifted (engine_tomba2.c …). This is the heart of the project.
+- `engine/` — **Tomba2Engine, the game-specific native engine + RE.** game_tomba2.c (engine registration /
+  the PC-driven call tree), wide60.c (60fps interpolation), tomba2_types.h, and the native engine modules
+  being lifted (engine_tomba2.c …). This is the heart of the project. (No override flips — see Methodology.)
 - `runtime/recomp/` — **common PSX→PC platform** (future `psxport` submodule): R3000 interp + recomp
   glue (mem, interp, hle, threads, timing, boot, native_boot/stub, watchdog, stubs, sync_overrides),
   PSX hardware natives (gpu_native, spu_*, gte_beetle, mdec_beetle, cdc_native, disc, pad_input,
@@ -127,10 +127,25 @@ one build, then extracting the common PSX part into its own repo (gh authed as `
   directive ("we are past the harness point"). Do NOT look for them, re-create them, or describe the
   port as validated against an oracle.
 
-## Methodology — REIMPLEMENT the engine PC-native; the recomp is the reference + the content runtime
-Use `rec_set_override(addr, ov_fn)` to swap an engine function for a native C reimplementation while
-keeping the recomp body callable as the reference/super-call. Determinism check first. The game stays
-playable at every step (un-ported engine functions + ALL content/logic keep running as recomp).
+## Methodology — TOP-DOWN PC-DRIVEN; PC calls PC, `rec_dispatch` the PSX leaves, PSX NEVER calls PC
+**THE OVERRIDE SYSTEM IS REMOVED (user, 2026-06-22).** The old "flip" model — recompiled PSX code is the
+driver and the interpreter flips into native C wherever `rec_set_override(addr, fn)` is registered — is
+GONE. Do NOT use `rec_set_override` / `rec_super_call`, and do NOT add new ones. The interpreter no longer
+consults an override table, so a PSX body run via `rec_dispatch` runs PURE PSX all the way down — it can
+never re-enter native code. **PSX never calls PC.**
+
+The architecture is **top-down, PC-driven**:
+- **PC is the driver.** Ownership starts at the boot/main entry and grows DOWNWARD in execution order. A
+  native function is reached because its PARENT is already native and **calls it directly (a plain C
+  call)** — never because an address got intercepted.
+- **PC calls PC** for everything it owns (direct C calls, a real call tree), and **`rec_dispatch(c, leaf)`
+  for the still-PSX leaves** it hasn't reimplemented yet. The leaf runs as pure recomp and returns.
+- **Contiguity is required.** You can only `rec_dispatch` a PSX leaf when EVERYTHING above it is already
+  PC. You can only own a function once its caller is PC. This is why we port strictly top-down in
+  execution order (see `docs/port-progress.md`) — no island overrides of deep leaves.
+- The recomp body is still the **behavioral REFERENCE** (read it to learn what to build) and the **live
+  fallback** for un-owned leaves (run it via `rec_dispatch`). It is no longer entered by a flip.
+
 **ONE PC-native behavior — no env A/B gating.** Do NOT add a `PSXPORT_*` toggle to A/B a new native path
 against the old one "until verified"; make it the behavior and verify by running the game (see below).
 

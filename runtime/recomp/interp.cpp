@@ -408,17 +408,12 @@ void prof_dump(const char* path) {
 static uint32_t g_callring[64];   // derail diagnostics: ring of last compiled-function entries
 static int      g_callring_pos = 0;
 
-// Invoke a call target natively if it is an override/BIOS (returns 1), else 0 (caller jumps).
+// Invoke a call target natively if it is a BIOS vector (returns 1), else 0 (caller jumps).
+// OVERRIDE SYSTEM REMOVED (2026-06-22): the interpreter NO LONGER flips into native overrides on a call.
+// PSX code run via the interpreter executes pure recomp all the way down and can never re-enter native
+// code (PSX never calls PC). Native code is reached only top-down, by PC calling it directly. BIOS vectors
+// still route to HLE below — that is hardware emulation, not a function override.
 static int coro_native_call(Core* c, uint32_t tgt) {
-  OverrideFn ov = interp_override_for(tgt);       // unified address-keyed override (resident + overlay)
-  if (ov) {
-    if (!g_ncall_init) ncall_open_once();
-    uint32_t a0=c->r[4],a1=c->r[5],a2=c->r[6],a3=c->r[7];
-    g_override_tgt = tgt;                          // entry addr being overridden (so a bracket override can super-call it)
-    ov(c);
-    ncall_log('O', tgt, a0,a1,a2,a3, c->r[2], c->r[3]);
-    return 1;
-  }
   if (is_bios(tgt)) {
     if (!g_ncall_init) ncall_open_once();
     uint32_t a0=c->r[4],a1=c->r[5],a2=c->r[6],a3=c->r[7];

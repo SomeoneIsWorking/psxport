@@ -238,8 +238,7 @@ void rec_dispatch_miss(Core* c, uint32_t addr) {
   // interp override for this address (the boot stub's libcd waits are replaced this way) — a
   // recompiled jalr into a non-recompiled stub fn enters here, bypassing call_addr's check.
   if (a >= 0x10000 && a < 0x200000) {
-    OverrideFn ov = rec_interp_override_for(addr);
-    if (ov) { ov(c); return; }
+    // OVERRIDE SYSTEM REMOVED (2026-06-22): no native-override flip here either — interpret the RAM body.
     rec_interp(c, addr); return;
   }
   fprintf(stderr, "[miss %d] addr 0x%08X (no recompiled fn / overlay)\n", g_miss++, addr);
