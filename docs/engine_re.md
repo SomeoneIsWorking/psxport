@@ -483,6 +483,11 @@ the spawn callers at field-load (`debug spawntrace` logs each spawn-entry's `ra`
 were inside `FUN_80072A78` (table loop) and `FUN_80072DDC` (single-object spawn-with-parent helper). Resident
 MAIN.EXE, no yield → plain override.
 
+**`FUN_80072DDC` ✅ OWNED `ov_spawn_with_parent` (same file).** The 2nd dominant field-spawn caller — a
+single-object helper: `node = FUN_8007A980(type&0x7f, (class==3)?3:class, (class==3)?1:0)`; if non-null
+`node[0x28]=type` (full byte), `node[0x10]=parent` (a0), `node[2]=flag` (a3). `spawnparentverify` full-RAM+
+scratchpad+v0 A/B = **100+ live field calls 0-diff**, 0 bad opcode.
+
 **Placement record (0x14 bytes; table terminated by a record whose `byte[0]==0xff`):**
 | off | type | → node | meaning |
 |-----|------|--------|---------|

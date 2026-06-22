@@ -668,9 +668,10 @@ in-port profiler (later-186, `interp.cpp`) gives the TIME + FREQUENCY histograms
   full-RAM+scratchpad A/B = **seaside 0-diff** (both per-load calls), 0 bad opcode. Record format + table
   select fully RE'd → docs/engine_re.md "field OBJECT-PLACEMENT DRIVER". This is the real top-down placement
   spine: GAME sm[0x48]==2 → area machine → `FUN_80072A78` → `FUN_8007A980` → spawn primitive (all owned).
-- NEXT top-down: `FUN_80072DDC` (parent-linked spawn helper, the other dominant field-spawn caller) is a
-  trivial leaf to own next; then the per-object behavior HANDLERS the placement records install at node+0x1c
-  (content state-machines, now valid native targets). Item 3 (FUN_800520e0 callees) still pending.
+- **`FUN_80072DDC` ALSO OWNED** `ov_spawn_with_parent` (the 2nd dominant field-spawn caller; spawn + link
+  parent + flag). `spawnparentverify` = 100+ field calls 0-diff, 0 bad opcode.
+- NEXT top-down: the per-object behavior HANDLERS the placement records install at node+0x1c (content
+  state-machines, now valid native targets — pick the perf-hot ones, §F). Item 3 (FUN_800520e0 callees) pending.
 
 
 **SESSION 2026-06-21 (later-200) — FILE ORGANIZATION + "PC-owned applies to EVERYTHING".**
