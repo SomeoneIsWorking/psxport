@@ -843,6 +843,10 @@ static void ov_game_main(Core* c) {
         usleep(15000);
       } }
     native_step_frame(c, f);   // one frame of deterministic guest work (steppable core; see fn above)
+    // PC-OWNED FRAME PACING. The native loop IS the game loop, so it paces itself here. (The old pacer
+    // lived in ov_frame_update, invoked via the now-removed override table — orphaned, so nothing capped
+    // the loop and a live window ran uncapped.) gpu_pace_frame no-ops headless / when there's no window.
+    { void gpu_pace_frame(Core*); gpu_pace_frame(c); }
     // PSXPORT_SEQDBG — libsnd sequencer STATE trace (from SsSeqCalled @0x80090BD0): is any BGM
     // sequence OPEN/PLAYING? 0x801054B0=open-seq count, 0x80104C28=playing bitmask, 0x800AC424=tick
     // mode, 0x800AC42C=SsSeqCalled ptr. If these never go nonzero, no song is ever started → the
