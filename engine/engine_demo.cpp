@@ -401,7 +401,7 @@ void ov_demo_stage_main(Core* c) {
     c->mem_w8(0x801fe0deu, 2);
     c->mem_w8(0x801fe0ddu, 0);
     c->mem_w8(0x1f80019bu, 0);
-    preload_texgroup(c, 2, 0);
+    preload_texgroup(c, 0, 2);   // FUN_80044BD4(set=2, mode=0): mode=0, set=2 (was swapped -> wrong group)
     c->mem_w8(0x1f80019bu, 1);
   }
   rec_dispatch(c, 0x8007982Cu);                // zero+seed the 1524B control block @0x800BF870 (SYNC)

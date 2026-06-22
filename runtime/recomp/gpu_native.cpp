@@ -1587,7 +1587,7 @@ void GpuState::gpu_fps60_present_pass(Core* core) {
 }
 
 void gpu_native_init(void) {
-  if (cfg_dbg("gpu")) g_log = 1;
+  if (cfg_dbg("gpu") || cfg_on("PSXPORT_GPU_LOG")) g_log = 1;   // diagnostic: per-frame prim log via env
   if (cfg_dbg("red")) s_reddbg = 1;
   const char* cw = cfg_str("PSXPORT_CLUTWATCH");
   if (cw) { s_cw_x = 880; s_cw_y = 507; int x, y; if (sscanf(cw, "%d,%d", &x, &y) == 2) { s_cw_x = x; s_cw_y = y; } }
