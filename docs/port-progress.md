@@ -123,13 +123,21 @@ for content fns (call it). Do NOT mimic PSX hardware (GTE/GP0/OT) — remove Bee
   Thread/critical-section primitives owned: ov_open/close/change_thread, ov_switch (0x80080880).
 
 ## B. Stage sequencer / loader  (task 0)
-- ✅ `FUN_800499e8` task-0 stage sequencer = `ov_task0_boot` (engine_level.cpp) — resolves START.BIN.
-- ✅ `FUN_80052078` stage transition = `ov_stage_transition` (engine_level.cpp) — restart task at new stage.
-- ✅ `FUN_800450bc` level/overlay LOADER = `ov_load_stage`/`eng_load_stage` (engine_level.cpp, later-162).
-- ✅ CD loadfile path native (ov_cd_loadfile 0x8001DB8C synchronous) — `cd_override.cpp`.
+- ✅ `FUN_800499e8` task-0 bootstrap = `native_task0_bootstrap` (native_boot.cpp) — resolves \BIN\START.BIN
+  via the native ISO9660 resolver `disc_find_file` (disc.c, CdSearchFile replacement), records its {LBA,size}
+  at 0x800be1e0, then switches task 0 to stage 0. **Owned PC-native top-down (override system removed);
+  replaces the old override-based `ov_task0_boot`.** (later-211)
+- ✅ `FUN_80052078` stage transition = `native_start_stage` (native_boot.cpp) — overlay load + display/BIOS reset.
+- ✅ `FUN_800450bc` overlay LOADER = `native_load_overlay` (native_boot.cpp) — `cd_loadfile_native(0x80106228,
+  LBA, size)` + sets task restart PC from the stage-entry table 0x800a3ecc[stage].
+- ✅ CD loadfile path native (ov_cd_loadfile 0x8001DB8C synchronous; `cd_loadfile_native` direct-call wrapper) — `cd_override.cpp`.
 
 ## C. Stages (task 0 cycles START → DEMO → GAME)
-- ☐ **START.BIN** boot splash (SCEA etc.) — un-ported PSX boot path (EXPECTED-broken until ported; don't debug).
+- ☐ **START.BIN stage-0 `0x8010649c`** — boot bootstrap overlay (decides DEMO vs GAME, loads the title). **NEXT
+  FRONTIER (later-211): runs pure-PSX via the native scheduler and busy-waits on libcd CD reads (CdlSetloc
+  timeouts) — the override system is gone so its internal CD-primitive calls no longer hit the native ov_cd_*.
+  Must be owned top-down (reimplement its CD/overlay loads native, like native_task0_bootstrap did for the
+  START.BIN resolve).** The native frame loop + REPL prompt are REACHED; advancing a frame enters this and stalls.
 - ◐ **DEMO stage `0x801062E4`** = TITLE / front-end MENU state machine (8 substates) — **the big front-end
   engine system** (engine/engine_demo.cpp, AUTO-registered via demo_scan_overlay). Substate ownership:
   - ✅ **s0/s1/s2/s3/s6** (run-once INIT + the title/menu input substates; later-182/185, coro-redirect

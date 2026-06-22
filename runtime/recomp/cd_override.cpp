@@ -151,6 +151,13 @@ static void ov_cd_loadfile(Core* c) {
   c->r[V0] = size;
 }
 
+// Direct-call native loadfile (used by the PC-native boot path, which owns the START.BIN /
+// stage-overlay load top-down instead of dispatching the PSX FUN_8001db8c). Same semantics.
+void cd_loadfile_native(Core* c, uint32_t dest, uint32_t lba, uint32_t size) {
+  c->r[A0] = dest; c->r[A1] = lba; c->r[A2] = size;
+  ov_cd_loadfile(c);
+}
+
 // 0x8001D940 FUN_8001d940: the engine's ASYNC streaming reader. It is spawned as task1 (its body
 // FUN_8001db38 -> FUN_8001d940) by the area-data loaders FUN_80044cd4 (fire-and-forget) and
 // FUN_80044bd4 (spawn + yield-wait), NOT through FUN_8001db8c/FUN_8001dc40 — so the synchronous

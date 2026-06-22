@@ -107,3 +107,72 @@ int disc_read_raw(uint32_t lba, uint8_t* out, uint32_t n) {
   memcpy(out, s_hunk_buf + off, n);
   return 1;
 }
+
+static uint32_t rd_le32(const uint8_t* p) {
+  return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+}
+
+// Case-insensitive compare of an ISO9660 directory record name (length `nlen`, no NUL) against a
+// path component `want`. The on-disc file name carries a ";version" suffix (e.g. "START.BIN;1");
+// directory names do not. Matches `want` against the name with any ";.." suffix stripped.
+static int iso_name_eq(const uint8_t* name, int nlen, const char* want) {
+  int i = 0;
+  for (; i < nlen; i++) {
+    char nc = (char)name[i];
+    if (nc == ';') break;                        // stop at the version suffix
+    char wc = want[i];
+    if (!wc) return 0;                           // want shorter than name
+    char a = (nc >= 'a' && nc <= 'z') ? (char)(nc - 32) : nc;
+    char b = (wc >= 'a' && wc <= 'z') ? (char)(wc - 32) : wc;
+    if (a != b) return 0;
+  }
+  return want[i] == 0;                           // both ended together
+}
+
+// Resolve an absolute ISO9660 path (PSX backslash style, e.g. "\\BIN\\START.BIN"; '/' also accepted;
+// ";version" and case are ignored) to its data LBA and byte size by walking the directory tree from
+// the Primary Volume Descriptor. This is the native CdSearchFile replacement for the game's
+// FUN_8008b8f0, which did the same ISO directory walk via busy-wait CD reads. Returns 1 on success.
+int disc_find_file(const char* path, uint32_t* out_lba, uint32_t* out_size) {
+  if (!s_chd && !disc_open()) return 0;
+  uint8_t sec[2048];
+  // Primary Volume Descriptor at sector 16; its root directory record sits at offset 156 (34 bytes).
+  if (!disc_read_sector(16, sec)) return 0;
+  if (sec[0] != 1) return 0;                     // PVD type byte
+  uint32_t dir_lba  = rd_le32(sec + 156 + 2);    // root extent LBA  (LE form of the 8-byte field)
+  uint32_t dir_size = rd_le32(sec + 156 + 10);   // root data length (LE form)
+
+  const char* p = path;
+  while (*p == '\\' || *p == '/') p++;           // skip leading separator(s)
+  while (*p) {
+    // isolate this path component into comp[]
+    char comp[64]; int cn = 0;
+    while (*p && *p != '\\' && *p != '/' && cn < (int)sizeof(comp) - 1) comp[cn++] = *p++;
+    comp[cn] = 0;
+    while (*p == '\\' || *p == '/') p++;
+    int is_last = (*p == 0);
+
+    // scan the directory's records (records never cross a 2048-byte sector boundary)
+    uint32_t nsec = (dir_size + 2047u) / 2048u, found = 0;
+    for (uint32_t s = 0; s < nsec && !found; s++) {
+      if (!disc_read_sector(dir_lba + s, sec)) return 0;
+      uint32_t o = 0;
+      while (o < 2048u) {
+        uint32_t rlen = sec[o];
+        if (rlen == 0) break;                    // zero pad → rest of sector is empty
+        if (o + rlen > 2048u) break;
+        int nlen = sec[o + 32];
+        if (iso_name_eq(sec + o + 33, nlen, comp)) {
+          uint32_t e_lba  = rd_le32(sec + o + 2);
+          uint32_t e_size = rd_le32(sec + o + 10);
+          if (is_last) { *out_lba = e_lba; *out_size = e_size; return 1; }
+          dir_lba = e_lba; dir_size = e_size; found = 1;
+          break;
+        }
+        o += rlen;
+      }
+    }
+    if (!found) return 0;                         // component not present
+  }
+  return 0;                                       // path ended on a directory, not a file
+}

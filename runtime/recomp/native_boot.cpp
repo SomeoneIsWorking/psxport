@@ -417,6 +417,64 @@ static void native_crt0(Core* c) {
   ov_game_main(c);                                   // DIRECT PC call (was: crt0 jal main -> flip)
 }
 
+// --- PC-native task-0 bootstrap: own the START.BIN resolve + stage-0 overlay load top-down ----------
+// Replaces the FUN_800499e8 -> FUN_80052078 -> FUN_800450bc CD subtree, which (run as a pure-PSX leaf
+// now that the CD overrides are unregistered) busy-waits forever on the libcd Init/Read handshake.
+// Behavioural reference (read via tools/disas.py):
+//   FUN_800499e8 : CdSearchFile("\BIN\START.BIN") -> {MSF,size}; store {LBA,size} at 0x800be1e0/e4;
+//                  FUN_80052078(0).
+//   FUN_80052078 : FUN_800450bc(task+0xc, 0); task.state=3; task[0x6f]=0; a few libgpu/BIOS resets.
+//   FUN_800450bc : FUN_8001db8c(0x80106228, LBA, size) [= ov_cd_loadfile]; entry = STAGE_ENTRY[0]
+//                  (0x8010649c); task+0xc = task+0x10 = entry.
+// The per-stage {LBA,size} table lives at 0x800be1e0 (stride 8); the stage-entry table at 0x800a3ecc.
+static const uint32_t STAGE_ENTRY_TBL = 0x800a3ecc;  // [0]=0x8010649c [1]=0x801062e4 [2]=0x8010637c
+static const uint32_t STAGE_FILE_TBL  = 0x800be1e0;  // {LBA,size} per stage, stride 8
+
+void cd_loadfile_native(Core* c, uint32_t dest, uint32_t lba, uint32_t size);  // cd_override.cpp
+
+// FUN_800450bc: load the stage overlay (if any) and point the task's restart entry at the stage code.
+static void native_load_overlay(Core* c, uint32_t taskfields, uint32_t stage) {
+  uint32_t entry;
+  if (stage == 3) {
+    entry = c->mem_r32(STAGE_ENTRY_TBL + 3 * 4);     // stage 3 is already resident: no overlay load
+  } else {
+    uint32_t lba  = c->mem_r32(STAGE_FILE_TBL + stage * 8);
+    uint32_t size = c->mem_r32(STAGE_FILE_TBL + stage * 8 + 4);
+    cd_loadfile_native(c, 0x80106228, lba, size);    // = FUN_8001db8c / ov_cd_loadfile
+    // FUN_80051f80(1) cooperative yield is a no-op with the native scheduler — skipped.
+    entry = c->mem_r32(STAGE_ENTRY_TBL + stage * 4);
+  }
+  c->mem_w32(taskfields, entry);                     // task+0xc = restart PC
+  c->mem_w32(taskfields + 4, entry);                 // task+0x10
+}
+
+// FUN_80052078: switch task 0 to the given stage (load overlay + reset the display/BIOS bits).
+static void native_start_stage(Core* c, uint32_t stage) {
+  uint32_t task = c->mem_r32(0x1f800138);            // current task (= task 0, 0x801fe000)
+  native_load_overlay(c, task + 0xc, stage);
+  c->mem_w16(task, 3);                               // task state = 3 (active)
+  c->mem_w8(task + 0x6f, 0);
+  rec_dispatch(c, 0x80080890u);                      // EnterCriticalSection (BIOS leaf)
+  c->r[4] = c->mem_r32(task + 4);
+  rec_dispatch(c, 0x80080870u);                      // B(0Fh) reset (BIOS leaf)
+  rec_dispatch(c, 0x800808a0u);                      // ExitCriticalSection (BIOS leaf)
+  c->r[4] = 0xff000000u;
+  rec_dispatch(c, 0x80080880u);                      // B(10h) reset (BIOS leaf)
+}
+
+// FUN_800499e8: resolve \BIN\START.BIN natively, record its {LBA,size}, switch task 0 to stage 0.
+static void native_task0_bootstrap(Core* c) {
+  uint32_t lba = 0, size = 0;
+  if (!disc_find_file("\\BIN\\START.BIN", &lba, &size)) {
+    fprintf(stderr, "[native_boot] FATAL: cannot resolve \\BIN\\START.BIN on disc\n");
+    return;
+  }
+  c->mem_w32(STAGE_FILE_TBL, lba);                   // 0x800be1e0 = START.BIN LBA
+  c->mem_w32(STAGE_FILE_TBL + 4, size);              // 0x800be1e4 = START.BIN size
+  fprintf(stderr, "[native_boot] START.BIN resolved: LBA %u, %u bytes\n", lba, size);
+  native_start_stage(c, 0);
+}
+
 static void ov_game_main(Core* c) {
   fprintf(stderr, "[native_boot] FUN_80050b08 override: running init prefix\n");
 
@@ -465,7 +523,7 @@ static void ov_game_main(Core* c) {
   // scheduler's "current task" ptr DAT_1f800138 is normally set by FUN_80051e60; set it to task0
   // so FUN_80052078/FUN_800450bc operate on task 0. ---
   c->mem_w32(0x1f800138, 0x801fe000);
-  rc0(c, 0x800499e8);
+  native_task0_bootstrap(c);   // PC-native: was rc0(c, 0x800499e8) — CD subtree owned top-down
   // START.BIN loaded raw to 0x80106228: [0]=manifest count (6); entry word @0x8010649c.
   fprintf(stderr, "[native_boot] after FUN_800499e8: START.BIN count@0x80106228=%u "
                   "entry-word@0x8010649c=0x%08X (expect 0x27BDFE38); task0 state=%u entry=0x%08X\n",

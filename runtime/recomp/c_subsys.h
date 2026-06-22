@@ -20,6 +20,7 @@ int gpu_windowed(void);
 // disc.c
 int  disc_read_raw(uint32_t lba, uint8_t* out, uint32_t n);   // raw 2352-byte sector
 int  disc_read_sector(uint32_t lba, uint8_t* out);            // 2048-byte data sector
+int  disc_find_file(const char* path, uint32_t* out_lba, uint32_t* out_size);  // native ISO9660 CdSearchFile
 
 // mdec_beetle.c + vendored mednafen mdec.c
 void     mdec_init(void);
