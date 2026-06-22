@@ -176,17 +176,18 @@ for content fns (call it). Do NOT mimic PSX hardware (GTE/GP0/OT) — remove Bee
     CD-free ones: state 0 (0x80106FF0, CdControlB Setmode 0x80) → native no-op (our disc reads by LBA need
     no drive mode) + advance; states 1..3 (0x80107034, pure sm[0x4a]++) → rec_dispatch. VERIFIED: boot
     reaches DEMO, runs the native loop, advances sm[0x4a] 0→1→2→3 with NO hang, `run N` completes cleanly.
-  - ☐ **NEW FRONTIER — menu-machine states ≥4 are async libcd CD LOADS; own them native+sync.** State 4
-    (0x80107054) calls **`CdControlB` 0x8008B8F0** (CD command-queue op, table @0x80107718) → spawns/awaits an
-    async CD read: run pure-PSX it FUN_80051f80-yields the first frame then busy-waits in CD_cw the next →
-    hang. State 7 (0x80107280) has a CdControlB @0x801072B0 too. We currently PARK cleanly at sm[0x4a]≥4
-    (demo_menu_machine returns 0 without dispatching — no hang, no render yet; the title graphics load in
-    these states, so the screen stays black until they're owned). NEXT: RE state 4's load (what file/where
-    via 0x8008B8F0 → 0x8008BBE8 → the CD queue) and reimplement it with the sync primitives (cd_dc40_sync /
-    cd_loadfile_native / preload_texgroup), then states 5/6/7, then substates s2..s7 (s2 = title display,
-    TAIL_REND attract render 0x80075A80 — likely where the title first draws). Each new substate becomes a
-    `case` in ov_demo_frame. Tools: `debug demo`, `debug cdc` (dynamic), PSXPORT_WATCHDOG=<sec>, the interp
-    VSync/stack-walk trace (re-add to interp.cpp around g_interp_pc if a hang needs a guest backtrace).
+  - ☐ **NEW FRONTIER — menu-machine states ≥4 = the OPENING MOVIE + attract sequence (FMV subsystem).**
+    DISCOVERED: state 4 (0x80107054) passes descriptor @0x80106254 = the STRING **`\MOVIE\OP.STR;1`** (dest
+    0x8018A000, size 0x7E5) to **`0x8008B8F0`** (libcd file-by-name queue op → 0x8008BBE8 → 0x8008C1EC; the
+    "time out in strNext()" error string sits right after the filename @0x80106264). So the DEMO front-end's
+    sm[0x4a]≥4 states stream/play the **opening .STR movie** (then attract). That is why the title is black
+    under PSXPORT_NO_FMV (the title sequence IS the OP.STR movie + attract, not a static title screen). This
+    is the FMV subsystem, NOT a menu-resource load — own it via the native .STR player (runtime/recomp/
+    native_fmv.cpp) instead of cd_loadfile_native, and honor the NO_FMV skip (advance sm[0x4a] past the movie
+    states). Currently PARKED cleanly at sm[0x4a]≥4 (no hang). NEXT: wire native_fmv into ov_demo_frame's s1
+    menu machine (play OP.STR, or skip+advance under NO_FMV), then the attract states, then s2.. (s2 = the
+    real front-end/title display, TAIL_REND attract render 0x80075A80). Each new substate is a `case` in
+    ov_demo_frame. Tools: `debug demo`, `debug cdc` (dynamic), PSXPORT_WATCHDOG=<sec>, native_fmv's own path.
   - FOLLOW-UP (pre-existing, stage-0): the 2nd cel slot @0x800BED82 reads FFFF (no slot) vs reference 0001 —
     `preload_cel`/FUN_80096480 returns -1 for the 2nd cel. Verify the cel lands in VRAM once DEMO renders.
   Substate ownership:
