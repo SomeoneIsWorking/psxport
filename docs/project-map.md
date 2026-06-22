@@ -8,6 +8,7 @@ This is the map. Keep it current when the layout changes.
 |------|---------|--------|
 | Build+run the **port** (full) | `./run.sh [disc.chd]` | `scratch/bin/tomba2_port` (then runs) |
 | Rebuild the **port** (incremental, no run) | `tools/build_port.sh [files… \| all]` | `scratch/bin/tomba2_port` |
+| Build the **port** via CMake (IDE/clangd) | `cmake -S . -B build && cmake --build build --target tomba2_port` | `scratch/bin/tomba2_port` |
 | Drive the port interactively (REPL) | `PSXPORT_REPL=1 scratch/bin/tomba2_port …` (commands on stdin) | — |
 | Inspect BGM/libsnd state of a RAM dump | `tools/bgm.py dump <ram>` | — |
 | **Disassemble** a MAIN.EXE engine fn (resolves load/store addr + WIDTH) | `tools/disas.py <addr> [--mem]` | — |
@@ -15,7 +16,13 @@ This is the map. Keep it current when the layout changes.
 - **There is ONE binary: the native port** `scratch/bin/tomba2_port`. `make` builds nothing now
   (the old oracle Makefile is gone); the port has no Makefile (built by run.sh / build_port.sh).
 - `tools/build_port.sh` keeps a `scratch/obj/` object cache; one changed file relinks in ~0.5s.
-  Its SRC list must mirror `run.sh` step 4 — add new `engine/*.c` or `runtime/recomp/*.c` to **both**.
+  Its SRC list must mirror `run.sh` step 4 AND `cmake/tomba2_port.cmake` — add a new `engine/*` or
+  `runtime/recomp/*` source to **all three** (the three SRC lists are kept in sync by hand).
+- **CMake** also builds the port (`cmake/tomba2_port.cmake`, target `tomba2_port`, output still
+  `scratch/bin/tomba2_port`): handy for clangd/`compile_commands.json` and IDEs. The shell build
+  (run.sh / build_port.sh) stays canonical (run.sh also extracts MAIN.EXE + launches). The CMake
+  port target is `-DPSXPORT_BUILD_PORT=ON` by default; it self-skips (warns) if SDL2/Vulkan/FreeType
+  dev libs are absent, so the discdump-only configure run.sh uses still works.
 - **Drive the game with the REPL** (`PSXPORT_REPL=1`, commands piped on stdin), not env vars:
   `run N`, `newgame` (pulse to the GAME prologue), `skip N` (pulse Start N frames into the field),
   `press`/`release`/`tap <btn>`, `r`/`rw`/`w` (memory), `dumpram <path>` (+ `.spad` scratchpad

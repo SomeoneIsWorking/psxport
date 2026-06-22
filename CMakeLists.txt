@@ -19,3 +19,8 @@ add_subdirectory(vendor/beetle-psx/deps/libchdr EXCLUDE_FROM_ALL)
 
 add_subdirectory(common)
 add_subdirectory(tools)
+
+# The native PC port binary (scratch/bin/tomba2_port). Guarded so the lightweight discdump-only
+# configure used by run.sh still works when SDL2/Vulkan/FreeType dev libs are absent.
+find_package(Threads REQUIRED)
+include(cmake/tomba2_port.cmake)
