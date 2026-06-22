@@ -753,6 +753,23 @@ in-port profiler (later-186, `interp.cpp`) gives the TIME + FREQUENCY histograms
 ---
 
 # CURRENT FRONTIER (work these, in this order)
+**SESSION 2026-06-22 (later-213) — PC-NATIVE GAME LOOP: present + pace + per-vblank audio re-OWNED top-down.**
+- **Root cause fixed:** the override-table removal (later-212) ORPHANED `ov_frame_update` — `gpu_present`,
+  `gpu_pace_frame`, and the per-vblank audio (sequencer tick + `spu_audio_frame`×quota) + fps60 commit were
+  reached only via the dead override table, so the live loop ran UNCAPPED (window to ~385k frames) and the
+  presented frame could be stale (`gpu_present` was not called anywhere in the live loop — only native_fmv /
+  SCEA splash / gpu_clear_display).
+- **Fix (top-down PC-driven):** `native_step_frame` (native_boot.cpp) now calls `ov_frame_update(c)` DIRECTLY
+  (plain C call) in place of the bare `rc0(c,0x800788ac)`. `ov_frame_update` (game_tomba2.cpp) is no longer
+  static / no longer an "override": it runs the still-PSX per-frame leaf via `rec_dispatch` (was
+  `rec_super_call`), then OWNS per-vblank audio + `fps60_frame_commit` + (`!fps60`) `gpu_present` +
+  `gpu_pace_frame`. Present stays BEFORE the OT submit (exact override-era ordering: the VK batch shown is
+  the one DrawOTag built last frame). Removed the later-212 stopgap pace in the for-loop (5369b42) — would
+  double-pace now that ov_frame_update owns it.
+- **VERIFY:** headless boot → DEMO s2 CLEAN (no trap/derail/bad-opcode/timeout); `gpu_present_ex` diagnostics
+  (`projprim(vtx) records=`) now print every frame ⇒ present reached. Headless stays uncapped/fast (pacer
+  no-ops with no window). **LIVE windowed pacing/audio/render = USER eyeball (`git pull && ./run.sh`).**
+
 **SESSION 2026-06-22 (later-212) — FAIL-FAST timing/IO + front-end reaches the GAME stage.**
 - **FAIL-FAST is now a hard rule (user; see CLAUDE.md "Hard rules" + memory).** The PC port does ALL I/O
   and timing synchronously+natively; any PSX async/wait primitive is made sync-native OR traps+aborts.

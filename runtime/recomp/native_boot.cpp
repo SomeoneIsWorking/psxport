@@ -262,7 +262,13 @@ static void native_step_frame(Core* c, uint32_t f) {
   pad_service_frame(c);                                       // host input -> game pad buffer (pre-read)
   xa_audio_trace(c, "pre");                                   // CD-vol fade state BEFORE tick+mix
   perf_mark_pre();   // perf: charge the pre-tick host work (input/IRQ/OT-clear) to `pre`
-  rc0(c, 0x800788ac);                                         // tick + present + audio (override)
+  // PC-driven frame body: per-frame state update (still-PSX leaf) + per-vblank audio + fps60 commit +
+  // present + pace. Called as a plain C call (top-down PC-driven model) — NOT an override. This is where
+  // gpu_present / gpu_pace_frame / the per-vblank sequencer+SPU tick are reached every live frame; before
+  // this was wired they were orphaned with the override table (a live window ran uncapped + stale). The
+  // present happens here (before the OT submit below) so the VK batch shown is the one DrawOTag built last
+  // frame, exactly as the override-era ordering did.
+  { void ov_frame_update(Core*); ov_frame_update(c); }        // tick + per-vblank audio + present + pace
   xa_audio_trace(c, "post");                                  // CD-vol fade state AFTER tick+mix
   perf_phase_begin(3);   // perf: SCHED-LOGIC = the cooperative scheduler step (the real per-frame GAME logic)
   native_scheduler_step(c);                                   // <- replaces FUN_80051e60
@@ -752,9 +758,9 @@ static void ov_game_main(Core* c) {
           c->mem_r32(0x80106228), c->mem_r32(0x8010649c), c->mem_r16(0x801fe000), c->mem_r32(0x801fe00c));
   // --- native frame loop (replaces LAB_80050c6c). Per frame, faithful to the game-main loop
   // body but with the scheduler call FUN_80051e60 replaced by native stage stepping (added
-  // incrementally). FUN_800788ac is overridden (ov_frame_update): real per-frame update +
-  // gpu_present + audio + satisfies the vblank pacing dwell. PSXPORT_NATIVE_FRAMES caps the
-  // run (headless). ---
+  // incrementally). native_step_frame calls ov_frame_update DIRECTLY (PC-driven, top-down): real
+  // per-frame update (still-PSX leaf FUN_800788ac) + per-vblank audio + fps60 commit + gpu_present +
+  // gpu_pace_frame + satisfies the vblank pacing dwell. PSXPORT_NATIVE_FRAMES caps the run (headless). ---
   (void)ov_switch;  // ov_switch kept for a future direct-call wiring; registration removed (override system gone)
   // BGM start/stop (FUN_80074BF8 / FUN_80074E48) are now OWNED PC-native by engine/sound.cpp
   // (sound_register, called from games_tomba2_init). The instant-CD "cut looping ingame music when a
@@ -842,11 +848,9 @@ static void ov_game_main(Core* c) {
         dbg_server_service(c);    // receive step/play/capture commands
         usleep(15000);
       } }
-    native_step_frame(c, f);   // one frame of deterministic guest work (steppable core; see fn above)
-    // PC-OWNED FRAME PACING. The native loop IS the game loop, so it paces itself here. (The old pacer
-    // lived in ov_frame_update, invoked via the now-removed override table — orphaned, so nothing capped
-    // the loop and a live window ran uncapped.) gpu_pace_frame no-ops headless / when there's no window.
-    { void gpu_pace_frame(Core*); gpu_pace_frame(c); }
+    native_step_frame(c, f);   // one frame of deterministic guest work (steppable core; see fn above).
+    // native_step_frame -> ov_frame_update OWNS present + pace + per-vblank audio (PC-driven frame body),
+    // so the loop no longer needs a separate pacer here (the earlier orphaned-override stopgap is gone).
     // PSXPORT_SEQDBG — libsnd sequencer STATE trace (from SsSeqCalled @0x80090BD0): is any BGM
     // sequence OPEN/PLAYING? 0x801054B0=open-seq count, 0x80104C28=playing bitmask, 0x800AC424=tick
     // mode, 0x800AC42C=SsSeqCalled ptr. If these never go nonzero, no song is ever started → the

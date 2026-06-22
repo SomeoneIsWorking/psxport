@@ -63,9 +63,13 @@ void rec_dispatch(Core*, uint32_t);  // hybrid call: recomp body if emitted, els
 // gpu_perf.cpp — per-frame CPU phase profiler (REPL `debug perf`), default off. PH_LOGIC=0/AUDIO=1/PRESENT=2.
 extern "C" void perf_phase_begin(int), perf_phase_end(int);
 
-static void ov_frame_update(Core* c) {
+// Per-frame engine tick. Called DIRECTLY (a plain C call) from native_step_frame (native_boot.cpp) —
+// this is the PC-driven game loop's frame body. It runs the still-PSX per-frame update leaf, then OWNS
+// the per-vblank audio, the fps60 commit, and present + pace (the things the now-removed override table
+// used to attach). NOT an override anymore; not static so native_boot can call it top-down.
+void ov_frame_update(Core* c) {
   perf_phase_begin(0);                               // perf: LOGIC = all guest interpreter work + render submit
-  rec_super_call(c, 0x800788ACu);                    // real per-frame state update
+  rec_dispatch(c, 0x800788ACu);                      // real per-frame state update (still-PSX leaf)
   perf_phase_end(0);
   // Per-VBLANK audio work. On hardware the libsnd sequencer ticks once per VBlank IRQ (60 Hz NTSC)
   // and the SPU plays in realtime. One ov_frame_update is one *logic frame*, which on hardware spans
