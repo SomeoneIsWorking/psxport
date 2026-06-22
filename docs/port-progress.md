@@ -679,7 +679,16 @@ in-port profiler (later-186, `interp.cpp`) gives the TIME + FREQUENCY histograms
   sub-machine JT 0x80016BE8 driving FUN_8007E110/80040B48/42728 + scene/save flags). Control flow + memory
   owned native, all sub-calls rec_dispatched. NB it calls cull FUN_8007778C but IGNORES the result (unlike
   739ac). `obj73cd8verify` = 1400+ field calls 0-diff, 0 bad opcode; live field renders clean.
-- NEXT top-down: the scene-overlay handlers (0x8012/0x8013xxxx). Item 3 (FUN_800520e0 callees) still pending.
+- **`FUN_800741DC` OWNED** `ov_beh_741dc` (engine/objbeh_741dc.cpp) — the third resident handler that actually
+  FIRES in the seaside field (probe: of {741dc,52078,499e8,4c930} only 741dc runs there). Item/pickup scene
+  trigger: state-0 cull-init (FUN_80051B70 a1=1,a2=0x18) + node+0x56 from DAT_800a4cec; state-1 node[5]
+  if-chain (scene-register FUN_8007E110 keyed DAT_800a4cf8, pad-edge, child-spawn FUN_8007413C bounded by
+  DAT_800a4d04 vs DAT_800bf874; case-4 emits 2× FUN_80027144 packets + sets per-type collected bit DAT_800bfa23
+  + 0x1f all-collected reward). Mirrors the recomp `sp-=0x30` frame so case-4's stack buffer lands above the
+  sub-call frames. `obj741dcverify` = 500+ field calls 0-diff, 0 bad opcode; live field renders clean.
+- NEXT top-down: the scene-overlay handlers (0x8012/0x8013xxxx) run only in OTHER scenes → NOT headless-
+  verifiable in seaside (cross-area warp floods bad opcodes). Resident handlers reachable in seaside are now
+  EXHAUSTED (739ac/73cd8/741dc all owned). Item 3 (FUN_800520e0 callees) was already fully owned (lines 104-119).
 
 
 **SESSION 2026-06-21 (later-200) — FILE ORGANIZATION + "PC-owned applies to EVERYTHING".**

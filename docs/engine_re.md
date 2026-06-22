@@ -508,7 +508,24 @@ scratchpad+v0 A/B = **100+ live field calls 0-diff**, 0 bad opcode.
   per-type FUN_80040B48(0x4e/0x4f/0x50). Tail: special-area (2/7/0x14) release of node+0x14 when `DAT_800e7e85!=0x1f`,
   then node[0x2b]=0 + render FUN_800517F8. Control flow + node/global writes owned native; sub-calls rec_dispatched.
   `obj73cd8verify` full-RAM+scratchpad A/B = **1400+ live field calls 0-diff**, 0 bad opcode.
-  Remaining handlers = scene-overlay code (0x8012/0x8013xxxx) — NEXT.
+- **`FUN_800741DC` ✅ OWNED `ov_beh_741dc` (engine/objbeh_741dc.cpp).** The third resident handler that fires
+  in the seaside field (a counting probe over {741dc,52078,499e8,4c930} showed only 741dc runs in seaside).
+  Item/pickup scene trigger, same state-byte shape (state-1 dispatch is a plain if-chain, not a JT): state-0
+  cull-init (FUN_80051B70 a1=1, a2=0x18) + box/size + node+0x56 = `DAT_800a4cec[node[3]]`; state-1 node[5]
+  sub-machine — case0 registers a scene (FUN_8007E110 keyed `DAT_800a4cf8[node[3]]`) + SFX FUN_80040b48(0x39)
+  / +2 on DAT_800bf8ed, sets DAT_800bf809=1; case1 FUN_80042728; case2 pad-edge `DAT_800e7e68 & DAT_1f800174`;
+  case3 spawns a child FUN_8007413C bounded by `DAT_800a4d04[node[3]]` vs counter DAT_800bf874 (else node[5]=99
+  re-arm); **case4** (driven) builds a 3-field struct on the guest stack (node+0x2e, node+0x32-(s16)node+0x84/2,
+  node+0x36) → 2× FUN_80027144 + SFX FUN_80074590(0xc), then sets the per-type collected bit `1<<node[3]` in
+  DAT_800bfa23 and toggles FUN_80040b48/c00(0x39/0x3a) incl. the all-collected (`==0x1f`) reward. Like 73cd8 it
+  calls cull FUN_8007778C and IGNORES the result. To make case4 byte-faithful, `ov_beh_741dc` mirrors the recomp
+  body's `sp -= 0x30` prologue (wrapper) so the stack buffer at sp+0x10 sits above the sub-call frames exactly
+  where the recomp places it. Control flow + node/global writes owned native; sub-calls rec_dispatched.
+  `obj741dcverify` full-RAM+scratchpad A/B = **500+ live field calls 0-diff**, 0 bad opcode (idle path; the
+  pad/scene-driven sub-states incl. case4 faithfully transcribed, verify when driven).
+  The remaining placement-installed handlers are scene-overlay code (0x8012/0x8013xxxx) that run only in OTHER
+  scenes (not headless-verifiable in seaside; cross-area warp floods bad opcodes) — the seaside-resident set
+  (739ac/73cd8/741dc) is now exhausted.
 
 **Placement record (0x14 bytes; table terminated by a record whose `byte[0]==0xff`):**
 | off | type | → node | meaning |

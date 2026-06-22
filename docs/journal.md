@@ -7244,3 +7244,25 @@ VERIFY: `obj73cd8verify` full-RAM (minus the callee stack window) + scratchpad A
 live seaside-field calls 0-diff, 0 MISMATCH, 0 bad opcode**; plain (non-gate) run renders the field clean.
 Wired into run.sh + tools/build_port.sh SRC + game_tomba2.cpp registration. NEXT: the scene-overlay handlers
 (0x8012/0x8013xxxx) the placement table installs; then Item 3 (FUN_800520e0 callees).
+
+## later-213 (2026-06-22) — FUN_800741DC owned `ov_beh_741dc` (3rd seaside-resident per-object behavior SM)
+Continued the behavior-handler descent (later-211/212 owned 0x800739AC / 0x80073CD8). To pick the next
+VERIFIABLE target (rather than the documented scene-overlay handlers, which only run in non-seaside scenes
+and can't be A/B-exercised headless), I added a throwaway counting override over candidate resident handlers
+{0x800741dc, 0x80052078, 0x800499e8, 0x8004c930} and ran the seaside field: **only FUN_800741DC fires there.**
+Owned it: `ov_beh_741dc` (engine/objbeh_741dc.cpp) — an item/pickup scene trigger, same state-byte shape as
+the siblings but its state-1 dispatch is a plain if-chain (no jump table). State 0: cull-init (FUN_80051B70
+a1=1, a2=0x18), box/size, node+0x56 = `DAT_800a4cec[node[3]]`. State 1 node[5] machine: scene-register
+(FUN_8007E110 keyed DAT_800a4cf8), pad-edge (DAT_800e7e68 & DAT_1f800174 scratchpad), bounded child-spawn
+(FUN_8007413C vs DAT_800a4d04[node[3]]/DAT_800bf874, else node[5]=99 re-arm), and case-4 completion (2×
+FUN_80027144 packet emit + SFX + per-type collected bit DAT_800bfa23 / 0x1f reward). Like 73cd8 it calls cull
+FUN_8007778C and IGNORES the result. WRINKLE: case-4 builds a 3-field struct on the guest stack for
+FUN_80027144 — so `ov_beh_741dc` wraps the body in the recomp's own `sp -= 0x30` frame (restored on return)
+so the buffer at sp+0x10 sits above the rec_dispatch sub-call frames exactly where the recomp puts it (and
+the writes fall inside the verify's excluded [sp-0x800,sp) window). Control flow + node/global writes owned
+native; every sub-call rec_dispatched (no GTE, no packets). VERIFY: `obj741dcverify` full-RAM+scratchpad A/B
+vs rec_super_call = **500+ live seaside-field calls 0-diff, 0 MISMATCH, 0 bad opcode**; plain run renders
+clean. Wired into run.sh + build_port.sh + game_tomba2.cpp. The seaside-RESIDENT behavior-handler set
+(739ac/73cd8/741dc) is now EXHAUSTED; remaining placement handlers are scene-overlay (0x8012/0x8013xxxx) that
+need their own scenes (and a reliable cross-area drive) before they can be A/B-verified — a real blocker for
+autonomous headless progress on that branch.

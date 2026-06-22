@@ -248,6 +248,7 @@ void games_tomba2_init(void) {
     { void actor_sm_24448_register(void); actor_sm_24448_register(); }  // actor move-and-collide SM step FUN_80024448 (vel+gravity+resolve; engine/actor_sm_24448.cpp)
     { void objbeh_739ac_register(void); objbeh_739ac_register(); }  // per-object behavior SM FUN_800739AC (placement-installed scene/UI trigger; engine/objbeh_739ac.cpp)
     { void objbeh_73cd8_register(void); objbeh_73cd8_register(); }  // per-object behavior SM FUN_80073CD8 (resident sibling; engine/objbeh_73cd8.cpp)
+    { void objbeh_741dc_register(void); objbeh_741dc_register(); }  // per-object behavior SM FUN_800741DC (item/pickup scene trigger; engine/objbeh_741dc.cpp)
     // PC-native INVENTORY / ITEM-COLLECTION subsystem (engine/inventory.cpp): the shared item-add core
     { void inventory_register(void); inventory_register(); }
   }
