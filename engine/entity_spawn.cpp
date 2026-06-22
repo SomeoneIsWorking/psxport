@@ -437,6 +437,90 @@ void ov_despawn(Core* c) {
   } else if (++ng % 20 == 0) fprintf(stderr, "[despawnverify] %ld matches\n", ng);
 }
 
+// ====================================================================================================
+// OBJECT RENDER-RECORD subsystem — per-object display-record allocation + init (shared by collectables
+// and other entities; 15 call sites across the collectable handlers alone).
+// ====================================================================================================
+//
+// FUN_8007AAE8 — the render-record BUMP ALLOCATOR. The record pool is a contiguous array of pre-built
+// record pointers; a cursor at 0x800E7E74 points at the next free slot and a signed count at 0x800ED098
+// tracks remaining slots. RE'd from disas 0x8007AAE8:
+//   if ((s16)cnt <= 0) return 0;                      // pool empty
+//   record = *cursor; cursor += 4; cnt--; return record;
+static uint32_t record_alloc(Core* c) {
+  int16_t cnt = (int16_t)c->mem_r16(0x800ED098u);
+  if (cnt <= 0) return 0;
+  uint32_t cursor = c->mem_r32(0x800E7E74u);
+  c->mem_w16(0x800ED098u, (uint16_t)(cnt - 1));
+  uint32_t record = c->mem_r32(cursor);
+  c->mem_w32(0x800E7E74u, cursor + 4);
+  return record;
+}
+
+// FUN_80051B70 — per-object render-record INIT. Allocates a record (FUN_8007AAE8), zero/init its fields
+// (scale 0x1000), stamps the object's render fields, and stores a data pointer computed from two .data
+// tables indexed by (a1, a2). If the record pool is exhausted it sets obj[+4]=3 (despawn-pending) and
+// returns 1. RE'd from disas 0x80051B70:
+//   if ((s16)*0x800ED098 <= 0) { obj[+4] = 3; return 1; }
+//   obj[+8]=1; obj[+9]=1; obj[+0xd]=0; obj[+0xb8]=obj[+0xba]=obj[+0xbc]=0x1000;
+//   rec = alloc(); obj[+0xc0] = rec;
+//   rec[+6]=-1; rec[+0]=rec[+2]=rec[+4]=rec[+8]=rec[+0xa]=rec[+0xc]=0; rec[+0x38]=rec[+0x3a]=rec[+0x3c]=0x1000;
+//   base = *(0x800ECF58 + a1*4);  rec[+0x40] = base + *(base + a2*4 + 4);
+//   return 0;
+static uint32_t obj_record_init(Core* c) {
+  uint32_t obj = c->r[4], a1 = c->r[5], a2 = c->r[6];
+  if ((int16_t)c->mem_r16(0x800ED098u) <= 0) { c->mem_w8(obj + 4, 3); return 1; }
+  c->mem_w8(obj + 8, 1);
+  c->mem_w8(obj + 9, 1);
+  c->mem_w8(obj + 0xd, 0);
+  c->mem_w16(obj + 0xbc, 0x1000);
+  c->mem_w16(obj + 0xba, 0x1000);
+  c->mem_w16(obj + 0xb8, 0x1000);
+  rec_dispatch(c, 0x8007AAE8u);                  // allocate the record (native via ov_record_alloc)
+  uint32_t rec = c->r[2];
+  c->mem_w32(obj + 0xc0, rec);
+  c->mem_w16(rec + 6, 0xffff);                   // -1
+  c->mem_w16(rec + 0, 0);  c->mem_w16(rec + 2, 0);  c->mem_w16(rec + 4, 0);
+  c->mem_w16(rec + 8, 0);  c->mem_w16(rec + 0xa, 0); c->mem_w16(rec + 0xc, 0);
+  c->mem_w16(rec + 0x38, 0x1000); c->mem_w16(rec + 0x3a, 0x1000); c->mem_w16(rec + 0x3c, 0x1000);
+  uint32_t base = c->mem_r32(0x800ECF58u + a1 * 4u);     // table[a1]
+  uint32_t off  = c->mem_r32(base + a2 * 4u + 4u);        // *(table[a1] + a2*4 + 4)
+  c->mem_w32(rec + 0x40, base + off);
+  return 0;
+}
+// Shared A/B gate template for these two record-subsystem fns (native run, snapshot+rollback, super-call,
+// diff full main-RAM excl. dead stack + scratchpad + v0).
+static void record_gate(Core* c, uint32_t (*fn)(Core*), uint32_t super_addr, const char* gate, int on) {
+  if (!on) { c->r[2] = fn(c); return; }
+  static uint8_t* ram0 = (uint8_t*)malloc(0x200000);
+  static uint8_t* ramN = (uint8_t*)malloc(0x200000);
+  uint8_t spad0[0x400], spadN[0x400];
+  uint32_t regs0[32]; memcpy(regs0, c->r, sizeof regs0);
+  uint32_t a0 = c->r[4];
+  memcpy(ram0, c->ram, 0x200000); memcpy(spad0, c->scratch, 0x400);
+  c->r[2] = fn(c);
+  uint32_t v0_n = c->r[2];
+  memcpy(ramN, c->ram, 0x200000); memcpy(spadN, c->scratch, 0x400);
+  memcpy(c->ram, ram0, 0x200000); memcpy(c->scratch, spad0, 0x400); memcpy(c->r, regs0, sizeof regs0);
+  rec_super_call(c, super_addr);
+  uint32_t v0_o = c->r[2];
+  uint32_t sp = regs0[29] & 0x1FFFFFu, flo = (sp >= 0x800) ? sp - 0x800 : 0;
+  int ro = -1; for (uint32_t a = 0; a < 0x200000; a++) if (c->ram[a] != ramN[a] && !(a >= flo && a < sp)) { ro = (int)a; break; }
+  int so = -1; for (uint32_t a = 0; a < 0x400; a++) if (c->scratch[a] != spadN[a]) { so = (int)a; break; }
+  static long ng = 0, nb = 0;
+  if (ro >= 0 || so >= 0 || v0_n != v0_o) {
+    if (nb++ < 40) fprintf(stderr, "[%s] MISMATCH a0=%08x v0 n=%x o=%x ram@%x spad@%x sp=%x\n", gate, a0, v0_n, v0_o, ro, so, sp);
+  } else if (++ng % 20 == 0) fprintf(stderr, "[%s] %ld matches\n", gate, ng);
+}
+void ov_record_alloc_g(Core* c) {
+  static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("recallocverify") ? 1 : 0;
+  record_gate(c, record_alloc, 0x8007AAE8u, "recallocverify", s_v);
+}
+void ov_obj_record_init(Core* c) {
+  static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("recinitverify") ? 1 : 0;
+  record_gate(c, obj_record_init, 0x80051B70u, "recinitverify", s_v);
+}
+
 // ------------------------------------------------------------------------------------------------
 // Public registration — ONE line from game_tomba2.cpp init.
 // ------------------------------------------------------------------------------------------------
@@ -449,4 +533,6 @@ void entity_spawn_register(void) {
   rec_set_override(0x8007A980u, ov_spawn_dispatch); // FUN_8007A980 per-type spawn dispatcher (entry point)
   rec_set_override(0x8007AA38u, ov_replace_dispatch); // FUN_8007AA38 spawn-relative-to-object dispatcher
   rec_set_override(0x8007A624u, ov_despawn);          // FUN_8007A624 despawn (unlink + free-list push + deactivate)
+  rec_set_override(0x8007AAE8u, ov_record_alloc_g);   // FUN_8007AAE8 render-record bump allocator
+  rec_set_override(0x80051B70u, ov_obj_record_init);  // FUN_80051B70 per-object render-record init
 }
