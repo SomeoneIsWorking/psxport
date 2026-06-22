@@ -670,8 +670,12 @@ in-port profiler (later-186, `interp.cpp`) gives the TIME + FREQUENCY histograms
   spine: GAME sm[0x48]==2 → area machine → `FUN_80072A78` → `FUN_8007A980` → spawn primitive (all owned).
 - **`FUN_80072DDC` ALSO OWNED** `ov_spawn_with_parent` (the 2nd dominant field-spawn caller; spawn + link
   parent + flag). `spawnparentverify` = 100+ field calls 0-diff, 0 bad opcode.
-- NEXT top-down: the per-object behavior HANDLERS the placement records install at node+0x1c (content
-  state-machines, now valid native targets — pick the perf-hot ones, §F). Item 3 (FUN_800520e0 callees) pending.
+- **Per-object behavior HANDLERS (node+0x1c) — descent STARTED (later-211).** Seaside placement installs 22
+  distinct handlers; 2 resident/generic. **`FUN_800739AC` OWNED** `ov_beh_739ac` (engine/objbeh_739ac.cpp):
+  a state machine / scene-UI trigger, control flow + memory owned native, sub-calls rec_dispatched.
+  `obj739acverify` = 1050+ field calls 0-diff, 0 bad opcode (idle path; input transitions transcribed).
+- NEXT top-down: resident sibling `FUN_80073CD8` (4 seaside objects, ~558 instrs, same SM shape); then the
+  scene-overlay handlers (0x8012/0x8013xxxx). Item 3 (FUN_800520e0 callees) still pending.
 
 
 **SESSION 2026-06-21 (later-200) — FILE ORGANIZATION + "PC-owned applies to EVERYTHING".**

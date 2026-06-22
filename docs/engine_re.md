@@ -488,6 +488,17 @@ single-object helper: `node = FUN_8007A980(type&0x7f, (class==3)?3:class, (class
 `node[0x28]=type` (full byte), `node[0x10]=parent` (a0), `node[2]=flag` (a3). `spawnparentverify` full-RAM+
 scratchpad+v0 A/B = **100+ live field calls 0-diff**, 0 bad opcode.
 
+**The per-object behavior HANDLERS the placement records install (node+0x1c).** The seaside table installs
+22 distinct handlers; 2 are resident/generic (the rest are scene-overlay code). First owned (later-211):
+- **`FUN_800739AC` ✅ OWNED `ov_beh_739ac` (engine/objbeh_739ac.cpp).** A resident per-object behavior SM
+  (state byte node[4]: 0 init / 1 active / 2 idle / 3 despawn; the active state runs a 6-way node[5] sub-machine
+  via jump table `0x80016B50 = {b20,b60,bbc,c1c,c90,b14}`) — a scene/UI TRIGGER (on confirm pushes node[3]
+  into 0x800BF871 + calls area-transition FUN_800782F0; plays SFX FUN_80074590; case3 seeds camera/save
+  globals 0x800BF890.. + FUN_8005082C). Control flow + node/global writes owned native; sub-calls
+  rec_dispatched. `obj739acverify` full-RAM+scratchpad A/B = **1050+ live field calls 0-diff**, 0 bad opcode
+  (idle path fully exercised; input-driven node[5] 1..5 transitions faithfully transcribed, verify when driven).
+  Resident generic sibling `FUN_80073CD8` (4 objects, ~558 instrs) is the same shape — NEXT.
+
 **Placement record (0x14 bytes; table terminated by a record whose `byte[0]==0xff`):**
 | off | type | → node | meaning |
 |-----|------|--------|---------|
