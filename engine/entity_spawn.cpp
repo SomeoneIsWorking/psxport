@@ -608,6 +608,48 @@ void ov_spawn_and_init(Core* c) {   // FUN_8003116C (defined above, gated here a
   record_gate(c, spawn_and_init, 0x8003116Cu, "spawninitverify", s_v);
 }
 
+// FUN_8004BD64 — per-object POSITION-COMPOSE + render-state refresh. RE'd from disas 0x8004BD64
+// (args: a0=obj, a1=mode&0xff, a2=srcA, a3=srcB, [sp+0x10]=t0 offset vector):
+//   mode 0: obj[+0x2e/32/36] = roundedAvg(srcA[+0x2c/30/34], srcB...)   // 32-bit reads, (s+sign)>>1
+//   mode 1: obj[+0x2e/32/36] = srcA[+0x2c/30/34] + t0[+0/2/4]            // 16-bit reads, add
+//   mode 2: obj[+0x2e/32/36] = srcB[+0x2c/30/34] + t0[+0/2/4]
+//   (other mode: no position write)
+//   if ((obj[+0x28] & 0x7f) != 0) FUN_800517F8(obj);                     // refresh render-state (owned)
+// v0 the recomp incidentally leaves = the last full (un-truncated) computed value (or 0x800517F8's return
+// if the tail ran); we mirror it so the A/B v0 compare holds.
+static uint32_t obj_pos_compose(Core* c) {
+  uint32_t obj = c->r[4], mode = c->r[5] & 0xffu, srcA = c->r[6], srcB = c->r[7];
+  uint32_t t0 = c->mem_r32(c->r[29] + 0x10);
+  uint32_t last = c->r[2];   // default (other mode): v0 unchanged
+  if (mode == 0) {
+    for (int i = 0; i < 3; i++) {
+      uint32_t so = 0x2c + (uint32_t)i * 4, oo = 0x2e + (uint32_t)i * 4;
+      int32_t s = (int32_t)c->mem_r32(srcA + so) + (int32_t)c->mem_r32(srcB + so);
+      s = (s + (int32_t)((uint32_t)s >> 31)) >> 1;
+      c->mem_w16(obj + oo, (uint16_t)s);
+      last = (uint32_t)s;
+    }
+  } else if (mode == 1 || mode == 2) {
+    uint32_t src = (mode == 1) ? srcA : srcB;
+    for (int i = 0; i < 3; i++) {
+      uint32_t so = 0x2c + (uint32_t)i * 4, oo = 0x2e + (uint32_t)i * 4;
+      uint32_t sum = (uint32_t)c->mem_r16(src + so) + (uint32_t)c->mem_r16(t0 + (uint32_t)i * 2);
+      c->mem_w16(obj + oo, (uint16_t)sum);
+      last = sum;
+    }
+  }
+  if ((c->mem_r8(obj + 0x28) & 0x7fu) != 0) {
+    c->r[4] = obj;
+    rec_dispatch(c, 0x800517F8u);
+    return c->r[2];
+  }
+  return last;
+}
+void ov_obj_pos_compose(Core* c) {
+  static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("poscomposeverify") ? 1 : 0;
+  record_gate(c, obj_pos_compose, 0x8004BD64u, "poscomposeverify", s_v);
+}
+
 // ------------------------------------------------------------------------------------------------
 // Public registration — ONE line from game_tomba2.cpp init.
 // ------------------------------------------------------------------------------------------------
@@ -626,4 +668,5 @@ void entity_spawn_register(void) {
   rec_set_override(0x80077B38u, ov_obj_set_geom);     // FUN_80077B38 set object geometry-block ptr
   rec_set_override(0x8006CBD0u, ov_obj_set_xformblk); // FUN_8006CBD0 set object transform block (scratchpad+obj)
   rec_set_override(0x8003116Cu, ov_spawn_and_init);   // FUN_8003116C spawn-and-init helper (type 6, list 1)
+  rec_set_override(0x8004BD64u, ov_obj_pos_compose);  // FUN_8004BD64 position-compose (midpoint/offset) + render refresh
 }
