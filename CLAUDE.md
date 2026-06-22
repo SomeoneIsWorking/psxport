@@ -79,6 +79,17 @@ source of truth: the boot→gameplay execution SPINE with per-function status (o
 engine TOP-TO-BOTTOM in execution order — advance the frontier, don't cherry-pick. UPDATE it (status + the
 journal) in the SAME commit whenever you own a function, so the next session doesn't re-derive what's done.
 
+**CODE MAP — `docs/code-map.md` (tool: `tools/codemap.py`) — CHECK BEFORE REIMPLEMENTING ANY `FUN_xxxx`.**
+There are ~350 hand-written PC-native reimplementations indexed by GUEST ADDRESS. Most are **ORPHAN**
+(correct code reachable only by the now-removed override table — a reference library the top-down rebuild
+wires in as the frontier reaches each), a few are **LIVE** (direct-called from a native_boot dispatch root).
+`tools/codemap.py --addr <hex>` answers "is this already owned natively, and where?" — consult it FIRST so
+you don't re-derive what exists (that already bit us). Regenerate the map (`tools/codemap.py`) when you add
+or move a native. **Natives live in SUBSYSTEM files** (engine: clib, gte, gpu_lib, sound_voice, object_init,
+native_misc, asset, engine_camera, engine_submit, …; platform: runtime/recomp/peripheral_misc, cd_override,
+…) — the old arbitrary `native_path*.cpp` grab-bags are GONE; never recreate them. New natives go in the
+matching subsystem file, ordered by guest address.
+
 Active plan: `<local-notes>/plans/fancy-tinkering-kite.md`. Engine RE: `docs/engine_re.md` (read first).
 Findings/dead-ends: `docs/journal.md`. Project map / build cheat-sheet: `docs/project-map.md`.
 **Render/present pipeline (VK renderer, native depth, headless offscreen VK): `docs/render-arch.md`.
