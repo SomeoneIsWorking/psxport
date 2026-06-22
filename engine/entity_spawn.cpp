@@ -521,6 +521,28 @@ void ov_obj_record_init(Core* c) {
   record_gate(c, obj_record_init, 0x80051B70u, "recinitverify", s_v);
 }
 
+// FUN_800517F8 — per-object RENDER-STATE UPDATE: build the object's transform, then snapshot its int16
+// world position into the 32-bit render-position fields. RE'd from disas 0x800517F8:
+//   FUN_80085480(obj+0x54, obj+0x98);                          // transform/matrix build (kept content)
+//   obj[+0xac] = (s32)(s16)obj[+0x2e]; obj[+0xb0] = (s32)(s16)obj[+0x32]; obj[+0xb4] = (s32)(s16)obj[+0x36];
+//   FUN_80051300(obj);                                          // downstream render setup (kept content)
+// The two callees stay PSX via rec_dispatch; we own the control flow + the position snapshot.
+static uint32_t obj_render_update(Core* c) {
+  uint32_t obj = c->r[4];
+  c->r[4] = obj + 0x54; c->r[5] = obj + 0x98;
+  rec_dispatch(c, 0x80085480u);
+  c->mem_w32(obj + 0xac, (uint32_t)(int32_t)(int16_t)c->mem_r16(obj + 0x2e));
+  c->mem_w32(obj + 0xb0, (uint32_t)(int32_t)(int16_t)c->mem_r16(obj + 0x32));
+  c->mem_w32(obj + 0xb4, (uint32_t)(int32_t)(int16_t)c->mem_r16(obj + 0x36));
+  c->r[4] = obj;
+  rec_dispatch(c, 0x80051300u);
+  return c->r[2];
+}
+void ov_obj_render_update(Core* c) {
+  static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("rendupdverify") ? 1 : 0;
+  record_gate(c, obj_render_update, 0x800517F8u, "rendupdverify", s_v);
+}
+
 // ------------------------------------------------------------------------------------------------
 // Public registration — ONE line from game_tomba2.cpp init.
 // ------------------------------------------------------------------------------------------------
@@ -535,4 +557,5 @@ void entity_spawn_register(void) {
   rec_set_override(0x8007A624u, ov_despawn);          // FUN_8007A624 despawn (unlink + free-list push + deactivate)
   rec_set_override(0x8007AAE8u, ov_record_alloc_g);   // FUN_8007AAE8 render-record bump allocator
   rec_set_override(0x80051B70u, ov_obj_record_init);  // FUN_80051B70 per-object render-record init
+  rec_set_override(0x800517F8u, ov_obj_render_update);// FUN_800517F8 per-object render-state update
 }
