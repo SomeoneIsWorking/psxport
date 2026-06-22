@@ -133,9 +133,22 @@ for content fns (call it). Do NOT mimic PSX hardware (GTE/GP0/OT) — remove Bee
 - ✅ CD loadfile path native (ov_cd_loadfile 0x8001DB8C synchronous; `cd_loadfile_native` direct-call wrapper) — `cd_override.cpp`.
 
 ## C. Stages (task 0 cycles START → DEMO → GAME)
-- ☐ **START.BIN stage-0 `0x8010649c`** — boot bootstrap overlay (decides DEMO vs GAME, loads the title). **NEXT
-  FRONTIER (later-211): runs pure-PSX via the native scheduler and busy-waits on libcd CD reads (CdlSetloc
-  timeouts) — the override system is gone so its internal CD-primitive calls no longer hit the native ov_cd_*.
+- ◐ **START.BIN stage-0 `0x8010649c`** — boot bootstrap overlay (builds the file table, runs a 4-state SM that
+  preloads boot data then switches to DEMO). **File-table BUILDER OWNED native (later-211, `ov_start_bin_stage`,
+  native_boot.cpp): all ~36 CdSearchFile resolves replaced by `disc_find_file`; verified 0 not-found, 0 CD
+  timeouts in the resolve phase.** Then coro-redirects into the PSX SM at 0x80106728.
+  - ☐ **NEXT FRONTIER — the SM's area/asset PRELOAD is ASYNC and hangs (later-211).** SM states 0/1 call
+    `FUN_80044bd4(callback, …)` which spawns the load CALLBACK as PSX task-1 and yield-waits on the load-done
+    flag 0x1f80019b. The callbacks (`FUN_80044f58` state-0, `FUN_8004514c` state-1) read files via
+    `FUN_8001dc40`→`FUN_8001d940`, the libcd ASYNC reader that spins on a per-sector IRQ callback that never
+    fires (overrides gone) → never returns, done-flag never set. **USER DIRECTIVE 2026-06-22: "don't have async
+    calls in the engine, make everything SYNC."** Because PSX-never-calls-PC, the native sync read can't be
+    injected into PSX-running code — so own the chain top-down NATIVE: stage-0 SM → `FUN_80044bd4` (sync, no
+    spawn/yield) → the callbacks (sync reads). The read primitive already exists as `ov_cd_async_read`
+    (cd_override.cpp:170 — reads dest/lba/wordcount from scratchpad 0x1f8001f8/f0/f4, native synchronous copy).
+    Callbacks do reads + processing (FUN_80044e84, FUN_800754f4, 42-word table copy @0x80045028); reimplement
+    faithfully (content-interface correctness — wrong loads corrupt boot data). SM at state 3 → FUN_80052078(1)
+    → DEMO. See scratch/handoff_sync_area_loader.md for the full chain + addresses.
   Must be owned top-down (reimplement its CD/overlay loads native, like native_task0_bootstrap did for the
   START.BIN resolve).** The native frame loop + REPL prompt are REACHED; advancing a frame enters this and stalls.
 - ◐ **DEMO stage `0x801062E4`** = TITLE / front-end MENU state machine (8 substates) — **the big front-end
