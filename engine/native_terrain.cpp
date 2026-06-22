@@ -61,6 +61,12 @@ void terrain_render_pc(Core* c) {
   float camT[3] = { (float)(int32_t)c->mem_r32(SCR+0x10C),
                     (float)(int32_t)c->mem_r32(SCR+0x110),
                     (float)(int32_t)c->mem_r32(SCR+0x114) };
+  // Publish the MAIN scene camera view matrix (Rcam + camT) for deterministic per-object world-position
+  // depth: it is read here from the scratchpad at terrain-draw time, when it holds the real scene camera
+  // (the per-object compose later overwrites the scratchpad with object-specific transforms, so reading it
+  // at object-render time is volatile). gpu_native uses this to project each object's WORLD POSITION to a
+  // stable view-Z, consistent with the terrain it stands on. See proj_camview_world_ord.
+  { void camview_publish(const float R[3][3], const float T[3]); camview_publish(Rcam, camT); }
   // object position @ node+72 (x lo / y hi) and node+76 (z lo).
   uint32_t p72 = c->mem_r32(node+72);
   float objP[3] = { (float)(int16_t)p72, (float)(int16_t)(p72>>16), (float)(int16_t)c->mem_r32(node+76) };

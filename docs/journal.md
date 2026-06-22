@@ -7266,3 +7266,27 @@ clean. Wired into run.sh + build_port.sh + game_tomba2.cpp. The seaside-RESIDENT
 (739ac/73cd8/741dc) is now EXHAUSTED; remaining placement handlers are scene-overlay (0x8012/0x8013xxxx) that
 need their own scenes (and a reliable cross-area drive) before they can be A/B-verified — a real blocker for
 autonomous headless progress on that branch.
+
+## later-214 (2026-06-22) — PC-native object DEPTH from real world position (fixes invisible objects)
+USER REGRESSION: after the spawn/object-ownership chain (c5ddfb9…) spawned the FULL object set (~145 vs ~12),
+Tomba and many objects went INVISIBLE in Fisherman Village (`newgame; skip 650`). ROOT CAUSE (not a bandaid —
+this is the real engineering fix the user asked for): every object's render-queue DEPTH was tagged with
+`proj_obj_center_ord()`, which projects the object ORIGIN (0,0,0) through the **live GTE CR0-7** — i.e. whatever
+camera×object transform was composed LAST. That makes object depth RENDER-ORDER-DEPENDENT (a PSX-ism leaking
+in): billboards got a wrong/too-far view-Z (~0.05) and lost the depth test to terrain (correct per-vertex
+~0.25–0.48, GREATER_OR_EQUAL = nearer wins) → vanished under the ground. The user's diagnosis was exactly
+right ("depth must come from the object's real 3D world position, not PSX OT / order").
+FIX: `obj_world_ord(c,node)` (engine/engine_submit.cpp) projects the object's REAL spawned WORLD position
+(node+0x2e/0x32/0x36 — the fields entity placement stamps and movement keeps live) through the STABLE scene
+camera, published once per frame at terrain draw (`camview_publish` in native_terrain.cpp; `proj_camview_world_ord`
+/ `camview_valid` in gte_beetle.cpp — Rcam from scratch 0xF8 /4096, camT from 0x10C). Render order can no
+longer leak into depth. Replaced `proj_obj_center_ord()` at ALL 7 object depth-tag sites (the universal
+render-cmd chokepoint ov_render_cmd, submit_perobj_render, submit_render_walk default case, the snapshot walk,
+ov_collectable_quad, +2). Falls back to the old live-GTE projection only before the scene camera is known
+(first frame / no terrain). VERIFY: Fisherman Village headless `shot` — Tomba + crates + cart-wheels now render
+visible at correct depth/occlusion (scratch/screenshots/fv_depthfix2.png), vs the prior all-invisible field.
+146 obj_depth spans = the full object set. NEXT (the larger PC-native rebuild): the deferred-OT span-match
+routing (obj_depth_lookup keyed by packet address) still exists only to carry this depth to billboards that
+rasterize in the OT walk; owning the remaining billboard drawers (0x8003C8F4 + the unowned render modes) to
+draw IMMEDIATELY PC-native from world position will retire the span hack and give per-collectable identity
+(fixes the objid overlay merging all collectables into one box).

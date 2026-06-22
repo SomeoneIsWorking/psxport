@@ -140,6 +140,14 @@ static void geomblk_dump(Core* c, const char* kind, uint32_t rec, uint32_t count
 // untouched; this gives the UNowned overlay-mode prims (the 2D billboards) their true world depth.
 void gpu_obj_depth_add(Core*, uint32_t lo, uint32_t hi, float ord);
 float proj_obj_center_ord(void);
+// PC-NATIVE object depth from real 3D placement. proj_camview_world_ord projects a WORLD point through the
+// STABLE scene camera (published once per frame at terrain draw, camview_publish); camview_valid says it's
+// known. This is the engine owning object depth from the object's spawned world position — NOT the volatile
+// live-GTE origin projection (proj_obj_center_ord reads whatever camera×object transform was composed LAST,
+// so render ORDER leaks into the depth and billboards get a wrong/too-far view-Z, losing the depth test to
+// terrain and vanishing). See obj_world_ord below.
+float proj_camview_world_ord(float wx, float wy, float wz);
+int   camview_valid(void);
 extern int g_fps60_on;                                    // fps60 mode (overlay toggle) — gate the billboard recorder
 // The entity node the native render walk is currently rendering (set around each per-object dispatch,
 // below). The PER-INSTANCE identity for every prim an object emits — including a 2D billboard whose quad
@@ -150,6 +158,19 @@ uint32_t g_dbg_render_node = 0;
 // scratch (0x1F80028C). Prefer the native walk's node — 0x28C is shared/stale for some billboard paths.
 static inline uint32_t cur_render_node(Core* c) {
   return g_dbg_render_node ? g_dbg_render_node : c->mem_r32(0x1F80028Cu);
+}
+// The engine's PC-native depth for an object: project its REAL spawned WORLD position (node+0x2e/0x32/0x36,
+// the fields entity placement stamps and the object's movement code keeps live) through the STABLE scene
+// camera. Render order can no longer leak into depth. Falls back to the live-GTE origin projection only
+// before the scene camera is known (first frame / no terrain in scene).
+static inline float obj_world_ord(Core* c, uint32_t node) {
+  if (node && camview_valid()) {
+    float wx = (float)(int16_t)c->mem_r16(node + 0x2E);
+    float wy = (float)(int16_t)c->mem_r16(node + 0x32);
+    float wz = (float)(int16_t)c->mem_r16(node + 0x36);
+    return proj_camview_world_ord(wx, wy, wz);
+  }
+  return proj_obj_center_ord();
 }
 // fps60: record a 3D-positioned 2D quad's reproject inputs, keyed by the object's packet-pool SPAN (the OT
 // walk later matches each billboard item's source node against this span, identical to obj_depth_lookup).
@@ -187,7 +208,7 @@ void ov_render_cmd(Core* c) {
     for (int i = 0; i < 8; i++) fprintf(stderr, "%s%08x", i ? "," : "", (uint32_t)gte_read_ctrl(i));
     fprintf(stderr, "\n");
   }
-  float ord = proj_obj_center_ord();                 // object depth from the live composed transform
+  float ord = obj_world_ord(c, cur_render_node(c));  // PC-native depth from the object's real world position
   // Capture the packet-pool address span this command's renderer writes (the pool POINTER doesn't move for
   // the overlay variants, so track the actual stores), and tag it with the object's world-position depth.
   // NESTING-SAFE: this command is often dispatched from WITHIN an outer object-render session (e.g. the
@@ -767,7 +788,7 @@ static void submit_perobj_render(Core* c) {
   uint32_t slo, shi; PktSpanSession sess;
   if (tgt == 0x8003CD00u) { c->r[4] = node; c->r[5] = flag; submit_perobj_flush(c); }  // flush-only (native)
   else                    { rec_super_call(c, 0x8003CCA4u); }                          // secondary-effect case
-  if (sess.close(&slo, &shi)) { float od = proj_obj_center_ord();   // EXACT object-origin view depth (live composed transform)
+  if (sess.close(&slo, &shi)) { float od = obj_world_ord(c, node);   // PC-native depth from real world position
     gpu_obj_depth_add(c, slo, shi, od); fps60_bb_node(c, slo, shi, node); }   // fps60: this object's billboards reproject at midpoint
   g_dbg_render_node = 0;                                  // objid: end this object's render scope
 }
@@ -818,7 +839,7 @@ static void submit_render_walk(Core* c) {
           // Tag the packet span it produces with the object's PC-native world-position depth.
           uint32_t slo, shi; PktSpanSession sess;
           c->r[4] = n; rec_dispatch(c, c->mem_r32(n + 24));
-          if (sess.close(&slo, &shi)) { float od = proj_obj_center_ord();   // EXACT object-origin view depth (live composed transform)
+          if (sess.close(&slo, &shi)) { float od = obj_world_ord(c, n);   // PC-native depth from real world position
             gpu_obj_depth_add(c, slo, shi, od); fps60_bb_node(c, slo, shi, n); }
         }
       }
@@ -840,7 +861,7 @@ void ov_render_walk(Core* c) {
 // walks (owned and un-owned) — owning it HERE covers them all. Super-calls the body (content/packet unchanged).
 float proj_obj_center_ord(void);
 void ov_collectable_quad(Core* c) {
-  float ord = proj_obj_center_ord();                 // object-center depth from the live composed transform
+  float ord = obj_world_ord(c, cur_render_node(c));  // PC-native depth from the object's real world position
   uint32_t slo, shi; PktSpanSession sess;
   rec_super_call(c, 0x8003C8F4u);
   if (sess.close(&slo, &shi)) { gpu_obj_depth_add(c, slo, shi, ord);   // slo/shi already KSEG
@@ -930,7 +951,7 @@ static void submit_render_walk_snapshot(Core* c) {
     g_dbg_render_node = node;                                // objid: tag every prim this object emits
     rq_dispatch_case(c, node, tgt);                          // run the object's per-type renderer (guest content)
     g_dbg_render_node = 0;
-    if (sess.close(&slo, &shi)) { float od = proj_obj_center_ord();   // EXACT object-origin view depth (live composed transform)
+    if (sess.close(&slo, &shi)) { float od = obj_world_ord(c, node);   // PC-native depth from real world position
       gpu_obj_depth_add(c, slo, shi, od); fps60_bb_node(c, slo, shi, node); }   // fps60: object billboards reproject at midpoint
   }
 }
@@ -1032,7 +1053,7 @@ void ov_rwalk_aux_bcf4(Core* c) {
     if (tgt == AUX_BCF4_SKIP) continue;                      // skip/default
     uint32_t slo, shi; PktSpanSession sess;
     aux_bcf4_case(c, node, tgt);                             // per-type renderer (guest content)
-    if (sess.close(&slo, &shi)) { float od = proj_obj_center_ord();   // EXACT object-origin view depth (live composed transform)
+    if (sess.close(&slo, &shi)) { float od = obj_world_ord(c, node);   // PC-native depth from real world position
       gpu_obj_depth_add(c, slo, shi, od); fps60_bb_node(c, slo, shi, node); }   // fps60: object billboards reproject at midpoint
   }
 }
@@ -1093,7 +1114,7 @@ void ov_rwalk_aux_bf00(Core* c) {
     if (tgt == AUX_BF00_SKIP) continue;                      // skip/default
     uint32_t slo, shi; PktSpanSession sess;
     aux_bf00_case(c, node, tgt);                             // per-type renderer (guest content)
-    if (sess.close(&slo, &shi)) { float od = proj_obj_center_ord();   // EXACT object-origin view depth (live composed transform)
+    if (sess.close(&slo, &shi)) { float od = obj_world_ord(c, node);   // PC-native depth from real world position
       gpu_obj_depth_add(c, slo, shi, od); fps60_bb_node(c, slo, shi, node); }   // fps60: object billboards reproject at midpoint
   }
 }
@@ -1134,7 +1155,7 @@ void ov_rwalk_aux_eec0(Core* c) {
         if (tgt != AUX_EEC0_SKIP) {
           uint32_t slo, shi; PktSpanSession sess;
           aux_eec0_case(c, node, tgt);                       // per-type renderer (guest content)
-          if (sess.close(&slo, &shi)) { float od = proj_obj_center_ord();   // EXACT object-origin view depth (live composed transform)
+          if (sess.close(&slo, &shi)) { float od = obj_world_ord(c, node);   // PC-native depth from real world position
       gpu_obj_depth_add(c, slo, shi, od); fps60_bb_node(c, slo, shi, node); }   // fps60: object billboards reproject at midpoint
         }
       }

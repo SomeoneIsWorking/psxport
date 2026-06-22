@@ -298,6 +298,24 @@ void proj_native_xform(int vx, int vy, int vz, ProjVtx* out) {
 // space). 2D billboard prims the object then emits occlude by this real depth instead of sprite order.
 float proj_obj_center_ord(void) { ProjVtx p; proj_native_xform(0, 0, 0, &p); return proj_pz_to_ord(p.pz); }
 
+// MAIN scene camera view matrix, published once per frame by native_terrain at terrain-draw time (when the
+// scratchpad holds the real scene camera, before the per-object compose overwrites it). Used to project an
+// object's WORLD POSITION to a STABLE view-Z (deterministic, render-order-independent), so a 2D billboard
+// occludes by where the object really is — consistent with the terrain it stands on. PC-owned, not PSX OT.
+static float s_camR[3][3] = {{1,0,0},{0,1,0},{0,0,1}}; static float s_camT[3] = {0,0,0};
+static int   s_camR_valid = 0;
+void camview_publish(const float R[3][3], const float T[3]) {
+  for (int i = 0; i < 3; i++) { for (int j = 0; j < 3; j++) s_camR[i][j] = R[i][j]; s_camT[i] = T[i]; }
+  s_camR_valid = 1;
+}
+int  camview_valid(void) { return s_camR_valid; }
+// Project a WORLD-space point (object position) to the normalized depth ord via the published camera. Only
+// the view-Z row (R[2]·P + T[2]) is needed for depth.
+float proj_camview_world_ord(float wx, float wy, float wz) {
+  float vz = s_camR[2][0]*wx + s_camR[2][1]*wy + s_camR[2][2]*wz + s_camT[2];
+  return proj_pz_to_ord(vz);
+}
+
 // fps60 midpoint reprojection (engine/fps60.cpp): project up to 4 MODEL verts through an EXPLICIT composed
 // transform `cr` (CR0-4 rotation, CR5-7 translation — the A/B-midpoint of an actor's transform), returning
 // float screen px/py + view-Z pz per vertex. The live CR0-7 are saved and restored, so this is a pure host
