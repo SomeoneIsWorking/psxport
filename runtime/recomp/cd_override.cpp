@@ -174,8 +174,7 @@ void cd_loadfile_native(Core* c, uint32_t dest, uint32_t lba, uint32_t size) {
 // FUN_8001d7c4 does (dest advances by words*4, no sector padding). Then zero the remaining count
 // and advance dest/position trackers to the post-read state so FUN_8001d940's caller FUN_8001db38
 // (task+0x6c is already 1 = success) sets DAT_1f80019b and ends task1.
-static void ov_cd_async_read(Core* c) {
-  (void)c;
+void ov_cd_async_read(Core* c) {
   uint32_t lba   = c->mem_r32(0x1f8001f0);
   uint32_t words = c->mem_r32(0x1f8001f4);
   uint32_t dest  = c->mem_r32(0x1f8001f8);
@@ -207,6 +206,9 @@ void cd_dc40_sync(Core* c, uint32_t dest, uint32_t lba, uint32_t size) {
   ov_cd_async_read(c);
   c->r[V0] = size;                            // FUN_8001DC40 returns size in v0
 }
+
+// Platform-HLE entry for FUN_8001DC40 (intercepted for any caller): (a0=dest, a1=lba, a2=size_bytes).
+void ov_cd_dc40(Core* c) { cd_dc40_sync(c, c->r[A0], c->r[A1], c->r[A2]); }
 
 // 0x8001D2A8 FUN_8001d2a8(chan, start_lba, end_lba, flags): the engine's voice/BGM clip player.
 // It set task-2 fields + spawned the FUN_8001cfc8 streaming-reader coroutine (slot 2) which issued
@@ -333,8 +335,43 @@ static void ov_voice_stop(Core* c) {
   c->r[A0] = 0; rec_dispatch(c, 0x8001cf00u);        // CD->SPU mix off
 }
 
+// ===========================================================================================
+// NATIVE HLE CD — boot init (replaces the PSX libcd CdInit at FUN_800898a0 / FUN_80089930 /
+// FUN_8008b2d8). The PC port models NO CD controller: every CD operation is a native synchronous
+// call that resolves as fast as the host can (data reads via disc_read_sector / cd_loadfile_native,
+// command/sync via the ov_cd_* bodies above). There must be NO busy-wait anywhere.
+//
+// The recomp libcd init busy-waits: FUN_800898a0 retries FUN_80089930 (CdInit) up to 5 times, and
+// each CdInit calls the low-level reset FUN_8008b2d8, which pokes the CD HW registers (0x1F801800
+// region — unmodelled) then spins in CD_cw on the controller-ready bit DAT_800ac298/299, which no
+// IRQ ever sets → "CD timeout" → "CdInit: Init failed". None of that HW state is read by our native
+// CD path (cd_loadfile_native / disc_find_file / the ov_cd_* HLE), so we skip the entire handshake
+// and just leave RAM in the state FUN_800898a0's SUCCESS path leaves it: the four CD-event callback
+// pointers installed (matching the proven-good path where the low-level reset returned ready). The
+// callbacks are dead in our model (no IRQ invokes them; every command completes inline), but we
+// install them so any code that inspects the table sees the same values as on real hardware.
+void cd_hle_init(Core* c) {
+  // FUN_800898a0 success path (0x800898c4..0x800898fc): install the CD-event callback table.
+  c->mem_w32(0x800abfbcu, 0x8009996cu);   // CD-ready / sync callback
+  c->mem_w32(0x800abfc0u, 0x80089994u);   // CD-ready-cb 2
+  c->mem_w32(0x800abf24u, 0x800899bcu);   // CD event handler
+  c->mem_w32(0x800abf28u, 0x00000000u);   // (cleared)
+  if (g_cd_verbose || cfg_dbg("cd"))
+    fprintf(stderr, "[cd] HLE CdInit: drive ready (no controller, no handshake, no busy-wait)\n");
+}
+
 void cd_overrides_init(void) {
   if (cfg_dbg("cd")) g_cd_verbose = 1;
+  // SYNC the inline async CD loader FUN_8001DC40(dest, lba, size_bytes): it stuffs the scratchpad read
+  // descriptor then runs the IRQ-driven reader FUN_8001D940 inline, which (no IRQ in our model) never
+  // drains the word count and hits CD_cw -> VSync (now trapped). Replace the whole entry with the native
+  // synchronous read (cd_dc40_sync sets the same descriptor + reads the sectors straight off the disc).
+  // NB intercept THIS entry (clean a0/a1/a2 contract), NOT the shared core FUN_8001D940 — that core is
+  // also driven by the COOPERATIVE area-load task (FUN_80044bd4 -> task-1), whose descriptor setup differs;
+  // force-syncing the core corrupted the area overlay. (User 2026-06-22: async CD read -> do it sync.)
+  void platform_hle_register(uint32_t, OverrideFn);
+  void ov_cd_dc40(Core*);
+  platform_hle_register(0x8001DC40u, ov_cd_dc40);   // FUN_8001dc40 inline async loader -> sync
   // 0x8001DC40 FUN_8001dc40(a0=dest, a1=lba, a2=size_bytes): the intro sequencer's loader
   // variant. Same (dest, lba, size_bytes) contract as FUN_8001db8c — it sets the identical
   // _DAT_1f8001f8/f0/f4 read state — but runs the reader INLINE (calls FUN_8001d940 directly,

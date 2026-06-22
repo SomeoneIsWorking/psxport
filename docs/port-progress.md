@@ -753,7 +753,36 @@ in-port profiler (later-186, `interp.cpp`) gives the TIME + FREQUENCY histograms
 ---
 
 # CURRENT FRONTIER (work these, in this order)
-**SESSION 2026-06-22 (later-210) — TOP-DOWN: the field OBJECT-PLACEMENT DRIVER is OWNED.**
+**SESSION 2026-06-22 (later-212) — FAIL-FAST timing/IO + front-end reaches the GAME stage.**
+- **FAIL-FAST is now a hard rule (user; see CLAUDE.md "Hard rules" + memory).** The PC port does ALL I/O
+  and timing synchronously+natively; any PSX async/wait primitive is made sync-native OR traps+aborts.
+- **Platform-HLE table** (`runtime/recomp/sync_overrides.cpp` — `platform_hle_register`/`platform_hle_lookup`,
+  checked in interp `coro_native_call` + `rec_dispatch_miss`). Restricted to PSX library / I/O addresses
+  (CD-IO glue 0x8001Cxxx, SCEI libs 0x80082xxx-0x8009Cxxx); NEVER game/engine `FUN_xxxx`. Entries:
+  - **VSync 0x80085900 → TRAP+abort** (every mode/caller). The native loop (`native_boot` for-loop +
+    `gpu_pace_frame`) owns ALL pacing. Removed the instant-VSync bandaid + the boot VSync(3)/(1) calls.
+  - libgpu GPU-DMA timeout `FUN_800834a0/d4`, libcd `CdReadSync`/`CdDataSync`/`CdInit`-handshake,
+    libmdec `DecDCTin/outSync` → native no-ops (GPU/CD/MDEC are synchronous; no busy-wait, no timeout).
+  - async CD read: inline loader `FUN_8001DC40 → ov_cd_dc40` (sync sector read). NB do NOT intercept the
+    shared core `FUN_8001D940` — it's also driven by the cooperative area-load task and force-syncing it
+    corrupts the overlay. CdInit fully native (`cd_hle_init`, replaces the recomp libcd CdInit 5-retry loop).
+- **Bad opcode → abort** (`interp.cpp`) with derail PC + guest-stack backtrace. No more spew-and-limp.
+- **Boot is CLEAN**: no CD/VSync/MDEC/GPU busy-waits, no `CD timeout`/`CdInit failed`. Reaches DEMO s2.
+- **Intro FMV de-duped**: boot plays LOGO only; the DEMO menu machine owns OP.STR (was playing twice).
+- **DEMO substates s3/s5/s6 OWNED in the native per-frame loop** (engine_demo.cpp `demo_frame_s3/s5/s6`):
+  s3 main-menu sub-machine 0x80106AC4 (→s5/s6/s7/s2), s6 page sub-machine 0x8007B45C (→s3), and
+  **s5 = LEAVE DEMO → GAME** (`demo_start_stage(c,2)` = FUN_80052078; the scheduler detects the entry
+  change and hands off, native_boot.cpp). **VERIFIED: New Game (s2→s3→s5) reaches the GAME stage
+  (sm[0x48]=5 → GAME 0x8010637C).** Attract (s7) + menu (s3) paths clean, no trap/derail.
+- ☐ **NEW FRONTIER — the GAME stage derails.** Once in GAME (newgame), a GAME.BIN handler at ra=0x801088B0
+  jumps to 0x80118FF8 (an overlay region holding TEXT, not code) → bad opcode → abort (fail-fast). PERSISTS
+  after reverting the CD changes ⇒ PRE-EXISTING (override-removal casualty / area-load/handler), exposed now
+  that the front-end reaches GAME. Needs a GAME.BIN+overlay RAM dump (the code is in the overlay, not static
+  MAIN.EXE) at the derail to RE the broken dispatch/overlay-load. Likely tied to the cooperative area-load
+  task (FUN_80044bd4 → FUN_8001D940 async) not delivering the area overlay's code.
+- ☐ **STILL OPEN — title renders BLACK** (frontier #1, unchanged; the s2 attract render reaches no VK present).
+
+
 - Found "the object spawn handler" the user wanted by going top-down: traced spawn callers at field-load via a
   new `debug spawntrace` channel (logs each spawn-entry's `ra`). The two dominant callers were `FUN_80072A78`
   (the per-area placement-table loop) and `FUN_80072DDC` (single-object spawn-with-parent helper). The driver

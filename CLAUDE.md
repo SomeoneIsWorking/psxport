@@ -200,6 +200,16 @@ packet. That is PSX-simulation, not a PC renderer. Instead:
   gratuitously clobber other guest/scratchpad state.
 
 ## Hard rules
+- **FAIL-FAST is a global rule (user, 2026-06-22).** The PC port must do ALL I/O and timing synchronously
+  and natively. Any PSX async/wait/hardware-poll primitive — `VSync` waits (libetc), CD command-waits
+  (`CD_cw`/CdSync), the async CD reader, GPU/MDEC DMA-completion timeouts, IRQ-driven loops — and any
+  invalid state (a bad/derailed opcode = PC jumped into data) must NOT be papered over to "limp along"
+  (instant-return stubs, fake-complete, spew-and-continue). It must either be **made PC-native +
+  synchronous** (the data/work is done inline so no wait is ever reached) or, if reached, **ABORT with a
+  diagnostic** (caller `ra` + guest-stack backtrace) so the offending path is found and owned top-down.
+  Implemented: `sync_overrides.cpp` platform-HLE table (traps VSync; native-syncs CD/GPU/MDEC); the
+  interp bad-opcode handler aborts (`interp.cpp`). Do NOT re-introduce instant-VSync / fake-CD-complete
+  bandaids, and do NOT add env A/B escape hatches (`PSXPORT_VSYNC_OK`-style) to bypass a trap.
 - **No bandaids / no magic constant offsets** — name the root cause; every lifted function / patched
   value is documented with the RE that justifies it (see global "No bandaids").
 - **Single `main` branch**; verified milestones committed AND pushed to `origin`. (Remote is currently

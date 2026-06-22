@@ -21,7 +21,7 @@ void hle_deliver_event(Core* c, uint32_t ev_class, uint32_t spec);
 // VBlank IRQs at all — the game's vblank busy-waits are ported to PC behavior natively
 // (see games_tomba2.c), so registering the callback is unnecessary and its unmodeled-vector
 // deref is skipped.
-static void ov_vsync_callback(Core* c) { c->r[V0] = 0; }
+void ov_vsync_callback(Core* c) { c->r[V0] = 0; }
 
 static void frame_tick(Core* c) {
   // Deliver the VBlank event to whichever class the game opened it under (RCnt3 vblank, or
@@ -34,7 +34,7 @@ static void frame_tick(Core* c) {
 //   mode < 0  -> return current vblank count (query, no wait)
 //   mode == 1 -> return hblank delta (query, no wait) — dummy 0 here
 //   mode == 0 -> wait one vblank; mode > 1 -> wait `mode` vblanks. Advance the frame clock.
-static void ov_vsync(Core* c) {
+void ov_vsync(Core* c) {
   uint32_t& vblank = c->game->timing.vblank;
   int32_t mode = (int32_t)c->r[A0];
   if (mode < 0) {

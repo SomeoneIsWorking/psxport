@@ -501,6 +501,59 @@ static void demo_frame_s2(Core* c) {
   rec_dispatch(c, 0x80075a80u);                // TAIL_REND: attract render (draws the title)
 }
 
+// TAIL helpers (the guest loop's per-frame tail render, run inline after a substate's transition):
+//   TAIL_REND 0x80106658 = attract render 0x80075A80.  TAIL_CF2C 0x80106650 = engine-update 0x8001CF2C
+//   then the attract render.  TAIL_NONE = no render. (The per-frame counter is bumped by ov_demo_frame.)
+static void demo_tail_rend(Core* c) { rec_dispatch(c, 0x80075a80u); }
+static void demo_tail_cf2c(Core* c) { rec_dispatch(c, 0x8001cf2cu); rec_dispatch(c, 0x80075a80u); }
+
+// Substate s3 (0x801064E8) — main-menu sub-machine 0x80106AC4 (mirror of 0x8010696C). Return-based
+// twin of ov_demo_s3. Outcome 1 -> s7 (attract); 2 -> phase on sm[0x68]: ==2 -> s5 (LEAVE DEMO/New
+// Game) clearing *0x1F800134; else -> s6 (sub-page); 3 (back/cancel) -> s2. All paths end TAIL_REND.
+static void demo_frame_s3(Core* c) {
+  rec_dispatch(c, 0x80106ac4u);                // main-menu sub-machine (SYNC)
+  uint32_t v0 = c->r[2];
+  uint32_t sm = c->mem_r32(SM_PTR);
+  if (v0 == 1) {                               // -> s7
+    c->mem_w16(sm + 0x48, 7); c->mem_w16(sm + 0x4a, 0); c->mem_w16(sm + 0x4c, 0);
+  } else if (v0 == 2) {
+    if (c->mem_r8(sm + 0x68) == 2) {           // -> s5 (start GAME)
+      c->mem_w16(sm + 0x48, 5); c->mem_w8(sm + 0x68, 0); c->mem_w8(0x1f800134u, 0);
+    } else {                                   // -> s6 (sub-page)
+      c->mem_w8(sm + 0x68, 0); c->mem_w16(sm + 0x48, 6); c->mem_w8(sm + 0x6b, 0); c->mem_w16(sm + 0x50, 0);
+      rec_dispatch(c, 0x800750d8u); c->mem_w8(0x800bf808u, 0);   // page close (SYNC)
+    }
+  } else if (v0 == 3) {                        // back -> s2
+    c->mem_w16(sm + 0x48, 2); c->mem_w8(sm + 0x68, 0);
+  }
+  demo_tail_rend(c);
+}
+
+// Substate s5 (0x801065DC) — LEAVE DEMO: the body is `jal 0x80052078(2)` (switch task 0 to stage 2 =
+// GAME). Native: call the stage transition; the scheduler detects the DEMO->GAME entry change and hands
+// off to GAME next frame (native_boot.cpp). No tail render (we are leaving the front-end).
+static void demo_frame_s5(Core* c) {
+  void demo_start_stage(Core*, uint32_t);
+  demo_start_stage(c, 2);                      // = FUN_80052078(2): load GAME overlay, restart task 0
+}
+
+// Substate s6 (0x801065EC) — page sub-machine 0x8007B45C; if sm[0x50]==3 fire the commit pair
+// 0x80106824(1,1)+0x80106690(1). Then on sm[0x6b]: ==1 -> s3 (sm[0x68]=3); ==2 -> s3 (sm[0x68]=2); both
+// end TAIL_CF2C; else stay -> TAIL_REND. Return-based twin of ov_demo_s6.
+static void demo_frame_s6(Core* c) {
+  rec_dispatch(c, 0x8007b45cu);                // page sub-machine (SYNC)
+  uint32_t sm = c->mem_r32(SM_PTR);
+  if (c->mem_r16(sm + 0x50) == 3) {
+    c->r[4] = 1; c->r[5] = 1; rec_dispatch(c, 0x80106824u);   // commit (a0=1,a1=1)
+    c->r[4] = 1;             rec_dispatch(c, 0x80106690u);    // commit2 (a0=1)
+    sm = c->mem_r32(SM_PTR);
+  }
+  uint8_t s6b = c->mem_r8(sm + 0x6b);
+  if (s6b == 1) {       c->mem_w16(sm + 0x48, 3); c->mem_w8(sm + 0x68, 3); demo_tail_cf2c(c); }
+  else if (s6b == 2) {  c->mem_w16(sm + 0x48, 3); c->mem_w8(sm + 0x68, 2); demo_tail_cf2c(c); }
+  else                  demo_tail_rend(c);
+}
+
 // Called once per frame by the native scheduler for the DEMO task.
 void ov_demo_frame(Core* c) {
   uint32_t sm = c->mem_r32(SM_PTR);
@@ -508,6 +561,9 @@ void ov_demo_frame(Core* c) {
   switch (s48) {
     case 1: demo_frame_s1(c); break;
     case 2: demo_frame_s2(c); break;
+    case 3: demo_frame_s3(c); break;
+    case 5: demo_frame_s5(c); return;   // left DEMO -> GAME (no frame-ctr bump; we're gone)
+    case 6: demo_frame_s6(c); break;
     default:
       if (cfg_dbg("demo")) { static int w = 0; if (!w++) fprintf(stderr,
         "[demo] ov_demo_frame: sm[0x48]=%u not yet native (frontier — s2..s7 need conversion)\n", s48); }

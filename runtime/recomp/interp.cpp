@@ -228,7 +228,19 @@ static void exec_simple(Core* c, uint32_t in) {
     }
     case 0x32: gte_write_data(RT(in), c->mem_r32(c->r[RS(in)] + SIMM(in))); break;       // lwc2
     case 0x3A: c->mem_w32(c->r[RS(in)] + SIMM(in), gte_read_data(RT(in))); break;        // swc2
-    default: fprintf(stderr, "[interp] bad opcode 0x%02X @ insn 0x%08X\n", op, in); break;
+    default:
+      // FAIL-FAST (global rule, user 2026-06-22): a bad opcode means the PC derailed into data/garbage —
+      // a real bug (wrong jump target / unloaded overlay / corrupt load). Do NOT limp on spewing thousands
+      // of "bad opcode" lines; abort immediately with the derail site + a guest-stack backtrace so the
+      // broken jump/load can be found and fixed at its root.
+      fprintf(stderr, "\n[DERAIL] bad opcode 0x%02X insn=0x%08X at pc=0x%08X ra=0x%08X sp=0x%08X\n",
+              op, in, g_interp_pc, c->r[31], c->r[29]);
+      { uint32_t sp = c->r[29]; int shown = 0;
+        for (uint32_t a = sp; a < sp + 512 && shown < 16; a += 4) {
+          uint32_t w = c->mem_r32(a), k = w & 0x1FFFFFFF;
+          if (k >= 0x10000 && k < 0x120000 && (w & 3) == 0) { fprintf(stderr, "   [sp+0x%03X]=0x%08X\n", a-sp, w); shown++; }
+        } }
+      fflush(stderr); abort();
   }
 }
 
@@ -366,6 +378,13 @@ static int coro_native_call(Core* c, uint32_t tgt) {
     ncall_log('B', tgt, a0,a1,a2,a3, c->r[2], c->r[3]);
     return 1;
   }
+  // PLATFORM HLE (sync_overrides.cpp): PSX BIOS-library HW-sync leaves (libcd/libetc/libmdec) that
+  // busy-spin on an IRQ/status bit we don't model. NOT the removed game-override table — these are
+  // hardware-emulation entries only (same class as the is_bios HLE above), restricted to the
+  // BIOS-library address window. A `jal` to one runs the native HLE and returns to the caller.
+  { extern OverrideFn platform_hle_lookup(uint32_t);
+    OverrideFn pf = platform_hle_lookup(tgt);
+    if (pf) { pf(c); return 1; } }
   // No-interpreter SUBSTRATE: if `tgt` is a statically-recompiled function, run its COMPILED body
   // (rec_dispatch -> the generated addr->func_XXXX switch -> gen_func / g_override) instead of letting
   // the flat interpreter execute it. Returns "handled" so the loop resumes at the caller's return addr,

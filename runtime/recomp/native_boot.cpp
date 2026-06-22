@@ -140,6 +140,15 @@ static void native_scheduler_step(Core* c) {
                                                       "owned native+sync) — frontier\n");
         }
         c->game->sched.in_stage = 0;
+        // A substate may LEAVE the DEMO stage this frame (s5 New-Game -> GAME calls native_start_stage,
+        // which rewrites this task's entry (base+0xc) to the GAME overlay + sets state=3). Detect that by
+        // the entry no longer being the DEMO root: drop native-DEMO mode and let the state=3 fresh entry
+        // stand so the next step enters GAME via the generic path (do NOT clobber state back to 2).
+        if (c->mem_r32(base + 0xc) != 0x801062E4u) {
+          c->game->sched.demo_native[i] = 0;
+          c->game->sched.task_started[i] = 0;
+          continue;
+        }
         c->game->sched.task_ctx[i] = static_cast<R3000&>(*c);        // save REGISTERS
         c->mem_w16(base, 2);                                         // runnable next frame (resume the
                                                                     // native dispatcher; state==2 + the
@@ -521,6 +530,11 @@ static void native_start_stage(Core* c, uint32_t stage) {
   rec_dispatch(c, 0x80080880u);                      // B(10h) reset (BIOS leaf)
 }
 
+// Public entry for the front-end (engine_demo.cpp s5 = LEAVE DEMO -> GAME). FUN_80052078(2): the DEMO
+// substate s5's whole body is `jal 0x80052078(2)` — switch task 0 to stage 2 (GAME). The scheduler's
+// DEMO branch detects the entry change and hands off to GAME (see native_scheduler_step).
+void demo_start_stage(Core* c, uint32_t stage) { native_start_stage(c, stage); }
+
 // FUN_800499e8: resolve \BIN\START.BIN natively, record its {LBA,size}, switch task 0 to stage 0.
 static void native_task0_bootstrap(Core* c) {
   uint32_t lba = 0, size = 0;
@@ -684,7 +698,10 @@ static void ov_game_main(Core* c) {
   // --- init prefix, transcribed from FUN_80050b08 (no scheduler loop) ---
   rc0(c, 0x80089788);
   rc0(c, 0x80085b20);
-  rc0(c, 0x800898a0);
+  // CD init: native HLE, NOT the recomp libcd (FUN_800898a0). The recomp CdInit busy-waits on the
+  // CD-controller reset handshake (no IRQ ever acks → 5 retries → "CD timeout" → "Init failed").
+  // We model no CD controller; all CD ops are native synchronous (cd_override.cpp). (was rc0 0x800898a0)
+  { void cd_hle_init(Core*); cd_hle_init(c); }
   rc1(c, 0x80080bf0, 3);
   rc1(c, 0x80080d64, 0);
   rc1(c, 0x80080ed4, 1);
@@ -701,11 +718,11 @@ static void ov_game_main(Core* c) {
   rc1(c, 0x80099310, 0x1010);
   rc1(c, 0x800991b0, 0x20000);
   rc1(c, 0x800993a0, 1);
-  // FUN_80089bac(0xe, &local_28, 0) with local_28[0] = 0x80 (a stack byte buffer).
-  uint32_t buf = c->r[29] - 0x40;
-  c->mem_w8(buf, 0x80);
-  rc3(c, 0x80089bac, 0xe, buf, 0);
-  rc1(c, 0x80085900, 3);
+  // FUN_80089bac(cmd=0xe Setmode, &mode=0x80, 0) — CdControlB. The recomp body busy-waits in CD_cw
+  // on the controller ack (no IRQ -> "CdlSetmode timeout"). We model no CD drive mode (every read is
+  // by LBA, served natively), so Setmode is a native no-op. (was rc3 0x80089bac)
+  // (removed: VSync(3) display-settle wait — the PC-native frame loop owns ALL timing; boot does not
+  // call libetc VSync. Any code that reaches VSync now TRAPS (sync_overrides.cpp ov_vsync_trap).)
   // FUN_80075130 font/text init reimplemented PC-native (engine/engine_font.cpp): owns the orchestration +
   // direct writes + the 3 engine-state callees (FUN_800963a0/80096370/800752b4); the 8 libgpu/sound callees
   // stay rec_dispatched in-context (later-182b nested-dispatch risk). Replaces the rc0 transcription.
@@ -713,10 +730,12 @@ static void ov_game_main(Core* c) {
   rc1(c, 0x8009c620, 0);
   rc0(c, 0x8001cc00);
   { void eng_init_subsystems(Core*); eng_init_subsystems(c); }  // was rc0(c, 0x800520e0) — own orchestration native
-  rc1(c, 0x80085900, 1);
+  // (removed: VSync(1) — see above; PC owns timing, boot never calls VSync.)
   rc0(c, 0x80051e00);                       // scheduler-table init (task objs @0x801fe000)
   rc2(c, 0x80051f14, 0, 0x800499e8);        // register task 0, entry FUN_800499e8
-  rc1(c, 0x80085bb0, 0x800506b4);           // register the vsync callback LAB_800506b4
+  // VSyncCallback(LAB_800506b4): native no-op — we deliver no preemptive VBlank IRQ (the per-vblank
+  // callback's unmodeled interrupt-vector deref is skipped). (was rc1 0x80085bb0)
+  { void ov_vsync_callback(Core*); c->r[4] = 0x800506b4; ov_vsync_callback(c); }
 
   fprintf(stderr, "[native_boot] init prefix complete\n");
 
@@ -960,12 +979,15 @@ static void ov_game_main(Core* c) {
 // crt0; crt0's call to FUN_80050b08 lands in ov_game_main.
 void native_boot_run(Core* c) {
   { void cfg_dump(void); cfg_dump(); }   // log active PSXPORT_* config once (see docs/config.md)
-  // Intro FMVs: the real boot is SCEA (stub) -> Whoopee logo -> opening movie -> title/menu. The
-  // game's own STR streaming (strNext) TIMES OUT under our runtime (we don't feed CD-streamed FMV
-  // sectors to its StrPlayer — see "time out in strNext()" in the DEMO stage), so the movies are
-  // skipped to a black gap. Play them here with our self-contained native FMV player (native_fmv.c)
-  // before booting MAIN, restoring SCEA->Woopee->OP->menu. PSXPORT_NO_FMV skips them (headless
-  // gameplay tests that need to reach GAME fast / with stable frame numbers).
+  // Intro FMVs: the real boot is SCEA (stub) -> Whoopee logo (LOGO.STR) -> opening movie (OP.STR) ->
+  // title/menu. The game's own STR streaming (strNext) TIMES OUT under our runtime (we don't feed
+  // CD-streamed FMV sectors to its StrPlayer — see "time out in strNext()" in the DEMO stage), so the
+  // movies are played here with our self-contained native FMV player (native_fmv.c).
+  // SPLIT OF OWNERSHIP: only LOGO.STR (the Whoopee logo, which plays BEFORE the front-end overlay is
+  // even loaded) is played at boot. OP.STR (the opening movie) is OWNED BY THE FRONT-END — the DEMO
+  // menu machine's states 4..7 ARE the OP.STR sequence (engine_demo.cpp demo_menu_machine), which now
+  // plays it via native_fmv_play. Playing OP here too made it play TWICE (boot + front-end) — the
+  // "FMV repeats" bug. Boot plays LOGO; the front-end plays OP -> SCEA->LOGO->OP->title, no repeat.
   int native_fmv_play(Core*, const char*);
   // Skip the intro FMVs when there's no viewer: PSXPORT_NO_FMV, OR any headless run (a headless probe
   // has nobody watching — playing/decoding the intro movies just burns wall-clock; a field probe went
@@ -975,9 +997,8 @@ void native_boot_run(Core* c) {
   const char* nf_ov = cfg_str("PSXPORT_NO_FMV");
   if (nf_ov && atoi(nf_ov) == 0 && *nf_ov) skip_fmv = 0;     // explicit PSXPORT_NO_FMV=0 forces FMVs on
   if (!skip_fmv) {
-    fprintf(stderr, "[native_boot] playing intro FMVs (Whoopee logo, opening)\n");
+    fprintf(stderr, "[native_boot] playing boot FMV (Whoopee logo); OP.STR is the front-end's\n");
     native_fmv_play(c, "MOVIE/LOGO.STR");
-    native_fmv_play(c, "MOVIE/OP.STR");
   } else {
     fprintf(stderr, "[native_boot] skipping intro FMVs (headless/NO_FMV)\n");
   }

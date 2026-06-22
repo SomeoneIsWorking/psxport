@@ -238,6 +238,13 @@ void rec_dispatch_miss(Core* c, uint32_t addr) {
   // recompiled jalr into a non-recompiled stub fn enters here, bypassing call_addr's check.
   if (a >= 0x10000 && a < 0x200000) {
     // OVERRIDE SYSTEM REMOVED (2026-06-22): no native-override flip here either — interpret the RAM body.
+    // EXCEPT the PLATFORM HLE table (sync_overrides.cpp): PSX BIOS-library HW-sync leaves
+    // (libcd/libetc/libmdec) that busy-spin on an unmodelled IRQ/status bit are resolved natively here
+    // too, so a direct rec_dispatch of one (not just an interpreted jal) doesn't stall. Restricted to
+    // the BIOS-library window; never a game/engine fn (those are owned top-down). Same class as A0/B0/C0.
+    { extern OverrideFn platform_hle_lookup(uint32_t);
+      OverrideFn pf = platform_hle_lookup(addr | 0x80000000u);
+      if (pf) { pf(c); return; } }
     rec_interp(c, addr); return;
   }
   fprintf(stderr, "[miss %d] addr 0x%08X (no recompiled fn / overlay)\n", g_miss++, addr);
