@@ -472,6 +472,41 @@ primitive is owned. `spawnverify` gate = full main-RAM(0x200000)+scratchpad(0x40
 `rec_super_call(0x80079C3C)`: **0 mismatches over 100+ live field spawns** (seaside, newgame→skip 650→run),
 clean boot, no bad opcode. Registered in game_tomba2.cpp via `entity_spawn_register()`.
 
+### The field OBJECT-PLACEMENT DRIVER — `FUN_80072A78` ✅ OWNED `ov_place_objects` (engine/entity_spawn.cpp, later-210)
+**This is "the object spawn handler" — the TOP-DOWN entry that populates a field with its objects.** When a
+field/area becomes active, the GAME-stage area machine calls it (4 sites in GAME.BIN: `0x80106bf4` /
+`0x801072a8` / `0x801077f0` / `0x80108e14`; on the seaside field it fires twice via `0x80106bfc`). It selects
+the area's PLACEMENT TABLE from (area id `0x800BF870`, sub-state `0x800BF871`), then walks the table's fixed
+**0x14-byte records**, spawning one object per record via the owned per-type dispatch `FUN_8007A980` and
+stamping the new node's identity/position/facing/behavior-handler from the record. Found TOP-DOWN by tracing
+the spawn callers at field-load (`debug spawntrace` logs each spawn-entry's `ra`): the two dominant callers
+were inside `FUN_80072A78` (table loop) and `FUN_80072DDC` (single-object spawn-with-parent helper). Resident
+MAIN.EXE, no yield → plain override.
+
+**Placement record (0x14 bytes; table terminated by a record whose `byte[0]==0xff`):**
+| off | type | → node | meaning |
+|-----|------|--------|---------|
+| +0x00 | u8 | +0x28 (full byte) | TYPE; `a0` to spawn = `type & 0x7f` |
+| +0x01 | u8 | — | CLASS; `a1` to spawn; if `class==3` → list/`a2`=1 else 0 |
+| +0x02 | u16 | +0x2e | X |
+| +0x04 | u16 | +0x32 | Y |
+| +0x06 | u16 | +0x36 | Z |
+| +0x08 | u8 | +0x02 | (flags) |
+| +0x09 | u8 | +0x03 | (sub-id) |
+| +0x0a | s16 | +0x56 | facing A (DEGREES → PSX 0..0xfff via signed ÷360 reciprocal `0xb60b60b7`) |
+| +0x0c | s16 | +0x58 | facing B (same conversion) |
+| +0x0e | s16 | — | COND gate: `1` = skip if collected-bit `0x800BFE56`(u16) bit[area] set; `2` = skip if global enable `0x800BF873`!=0 |
+| +0x10 | u32 | +0x1c | per-object HANDLER fn ptr (content) |
+
+(node+0x54 is zeroed per spawn.) **Table select:** area5/sub1..3→`0x8013C1A4`; area1/sub≥15→`0x80134918`;
+area6: sub<6 `0x801437AC`/<9 `0x80143ACC`/else `0x80143AE0`; area8: sub<9 `0x8014304C`/<16 `0x801432B8`/<21
+`0x80143470`/else `0x80143614`; area0x15: sub0..4 `0x80115004/18/F4/180/1F8`/else `0x80115310`; **default:**
+if `u16@0x800BF870==0x704` none, else `0x800A4C28[area]` (0 → none). The seaside field (area 0) takes the
+default PTR-table path. `placeverify` gate = full main-RAM+scratchpad A/B vs `rec_super_call(0x80072A78)`:
+**seaside field 0-diff** (both per-load calls), 0 bad opcode. Cross-area exercise of the special tables is
+blocked by the documented prerequisite-state warp limitation (the record-decode loop is shared & verified;
+table-select is a 1:1 disasm transcription). Registered in `entity_spawn_register()`.
+
 ### The entity-list walk — `FUN_8007a904` (the engine's per-frame object driver)
 ```c
 for (n = DAT_800fb168; n; n = *(n+0x24)) { *(n+1) = 0; (*(handler@n+0x1c))(n); }  // list 1

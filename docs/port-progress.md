@@ -657,6 +657,22 @@ in-port profiler (later-186, `interp.cpp`) gives the TIME + FREQUENCY histograms
 ---
 
 # CURRENT FRONTIER (work these, in this order)
+**SESSION 2026-06-22 (later-210) — TOP-DOWN: the field OBJECT-PLACEMENT DRIVER is OWNED.**
+- Found "the object spawn handler" the user wanted by going top-down: traced spawn callers at field-load via a
+  new `debug spawntrace` channel (logs each spawn-entry's `ra`). The two dominant callers were `FUN_80072A78`
+  (the per-area placement-table loop) and `FUN_80072DDC` (single-object spawn-with-parent helper). The driver
+  is `FUN_80072A78`, called by the GAME-stage area machine (GAME.BIN `0x80106bf4`/`801072a8`/`801077f0`/
+  `80108e14`) when a field activates. It reads the area's placement TABLE → spawns each object via the owned
+  `FUN_8007A980` → stamps node identity/pos/facing/handler.
+- **OWNED `ov_place_objects` (engine/entity_spawn.cpp).** Resident, no yield → plain override. `placeverify`
+  full-RAM+scratchpad A/B = **seaside 0-diff** (both per-load calls), 0 bad opcode. Record format + table
+  select fully RE'd → docs/engine_re.md "field OBJECT-PLACEMENT DRIVER". This is the real top-down placement
+  spine: GAME sm[0x48]==2 → area machine → `FUN_80072A78` → `FUN_8007A980` → spawn primitive (all owned).
+- NEXT top-down: `FUN_80072DDC` (parent-linked spawn helper, the other dominant field-spawn caller) is a
+  trivial leaf to own next; then the per-object behavior HANDLERS the placement records install at node+0x1c
+  (content state-machines, now valid native targets). Item 3 (FUN_800520e0 callees) still pending.
+
+
 **SESSION 2026-06-21 (later-200) — FILE ORGANIZATION + "PC-owned applies to EVERYTHING".**
 - **SWEEP landed (99e6df5):** `engine/game_tomba2.cpp` split 2042→300 lines into 8 discrete subsystem
   modules — `engine/{mathlib,cull,collision,entity,script,animation,input,menu}.{cpp,h}`. Pure file
