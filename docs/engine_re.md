@@ -497,7 +497,18 @@ scratchpad+v0 A/B = **100+ live field calls 0-diff**, 0 bad opcode.
   globals 0x800BF890.. + FUN_8005082C). Control flow + node/global writes owned native; sub-calls
   rec_dispatched. `obj739acverify` full-RAM+scratchpad A/B = **1050+ live field calls 0-diff**, 0 bad opcode
   (idle path fully exercised; input-driven node[5] 1..5 transitions faithfully transcribed, verify when driven).
-  Resident generic sibling `FUN_80073CD8` (4 objects, ~558 instrs) is the same shape — NEXT.
+- **`FUN_80073CD8` ✅ OWNED `ov_beh_73cd8` (engine/objbeh_73cd8.cpp).** The resident generic sibling — same
+  state-byte shape, but bigger: STATE 0 (init) seeds cull-record (FUN_80051B70 a1=0xc, a2=`(s16)DAT_800a4c94[area]`)
+  + box/size fields, then a per-`node[3]` sub-switch (JT `0x80016B68`, node[3]-2 in [0,30]: cases 2/5-7/8/0xc-0xe/
+  0x11/0x14/0x15-0x18/0x1d-0x1e/0x20) writing node+0x56/0x80..0x86/8/0xb (case 0x11 bumps node+0x32 by 100 if
+  `DAT_800bfe56 & 0x10`). STATE 1 calls cull FUN_8007778C **but ignores its result** (unlike 739ac), then a
+  node[5] sub-machine (JT `0x80016BE8`, [0,6]): case1/5 picks a scene id (`DAT_800a4ca8[node[3]]`, special-cased
+  for node[3]==2 via DAT_800bf907/8c3) → FUN_8007E110 → node+0x14; case2 pad-edge (`DAT_800e7e68 & DAT_1f800174`);
+  case3 releases node+0x14 → idle; case6 FUN_80042728; case4 re-arms→case0; case0 on `node[0x2b]==3` advances +
+  per-type FUN_80040B48(0x4e/0x4f/0x50). Tail: special-area (2/7/0x14) release of node+0x14 when `DAT_800e7e85!=0x1f`,
+  then node[0x2b]=0 + render FUN_800517F8. Control flow + node/global writes owned native; sub-calls rec_dispatched.
+  `obj73cd8verify` full-RAM+scratchpad A/B = **1400+ live field calls 0-diff**, 0 bad opcode.
+  Remaining handlers = scene-overlay code (0x8012/0x8013xxxx) — NEXT.
 
 **Placement record (0x14 bytes; table terminated by a record whose `byte[0]==0xff`):**
 | off | type | → node | meaning |

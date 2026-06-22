@@ -7226,3 +7226,21 @@ Owned this run: spawn variants 79F90/A12C/A2C8, dispatchers 7AA38/7A980-already,
 alloc/init 7AAE8/51B70, render-state 517F8, geom/xform setters 77B38/6CBD0, spawn-init 3116C. NEXT shared
 candidates (unowned, by count): FUN_8004BD64 (10, multi-mode pos midpoint), FUN_80083F50 (10, quadrant sine
 LUT → belongs in mathlib.cpp), FUN_80083E80 (8), FUN_80054D14 (5), FUN_80040CDC (5).
+
+## later-212 (2026-06-22) — FUN_80073CD8 owned `ov_beh_73cd8` (resident sibling per-object behavior SM)
+Continuing the per-object behavior-handler descent (later-211 owned the first resident handler 0x800739AC).
+Owned the second resident/generic handler the seaside placement table installs at node+0x1c:
+**`FUN_80073CD8` → `ov_beh_73cd8` (engine/objbeh_73cd8.cpp).** Same state-byte shape as 0x800739AC but ~558
+instrs: STATE 0 (init) builds the cull-record (FUN_80051B70, a2 = `(s16)DAT_800a4c94[area]`) + box/size, then a
+per-`node[3]` sub-switch (jump table 0x80016B68, index node[3]-2 in [0,30]) seeding node+0x56/0x80..0x86/8/0xb
+(case 0x11 bumps node+0x32 += 100 when `DAT_800bfe56 & 0x10`). STATE 1 calls the cull FUN_8007778C **and ignores
+its result** (key difference vs 739ac, which early-returns on a cull miss), then runs a node[5] sub-machine (JT
+0x80016BE8, [0,6]) → FUN_8007E110 (scene id from `DAT_800a4ca8[node[3]]`, special-cased for node[3]==2 via
+DAT_800bf907/8c3), pad-edge `DAT_800e7e68 & DAT_1f800174` (scratchpad!), FUN_80042728, per-type confirm
+FUN_80040B48(0x4e/0x4f/0x50). Tail: special-area (2/7/0x14) release of node+0x14, then node[0x2b]=0 + render
+FUN_800517F8. Control flow + all node/global writes owned native; every sub-behavior call rec_dispatched (no GTE,
+no render packets). RE'd 1:1 from disas (full function incl. both jump tables) — see docs/engine_re.md.
+VERIFY: `obj73cd8verify` full-RAM (minus the callee stack window) + scratchpad A/B vs rec_super_call = **1400+
+live seaside-field calls 0-diff, 0 MISMATCH, 0 bad opcode**; plain (non-gate) run renders the field clean.
+Wired into run.sh + tools/build_port.sh SRC + game_tomba2.cpp registration. NEXT: the scene-overlay handlers
+(0x8012/0x8013xxxx) the placement table installs; then Item 3 (FUN_800520e0 callees).

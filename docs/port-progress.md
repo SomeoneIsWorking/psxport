@@ -674,8 +674,12 @@ in-port profiler (later-186, `interp.cpp`) gives the TIME + FREQUENCY histograms
   distinct handlers; 2 resident/generic. **`FUN_800739AC` OWNED** `ov_beh_739ac` (engine/objbeh_739ac.cpp):
   a state machine / scene-UI trigger, control flow + memory owned native, sub-calls rec_dispatched.
   `obj739acverify` = 1050+ field calls 0-diff, 0 bad opcode (idle path; input transitions transcribed).
-- NEXT top-down: resident sibling `FUN_80073CD8` (4 seaside objects, ~558 instrs, same SM shape); then the
-  scene-overlay handlers (0x8012/0x8013xxxx). Item 3 (FUN_800520e0 callees) still pending.
+- **`FUN_80073CD8` OWNED** `ov_beh_73cd8` (engine/objbeh_73cd8.cpp) — the resident sibling (~558 instrs, same
+  SM shape but bigger: state-0 per-node[3] sub-switch JT 0x80016B68 seeding box/size fields; state-1 node[5]
+  sub-machine JT 0x80016BE8 driving FUN_8007E110/80040B48/42728 + scene/save flags). Control flow + memory
+  owned native, all sub-calls rec_dispatched. NB it calls cull FUN_8007778C but IGNORES the result (unlike
+  739ac). `obj73cd8verify` = 1400+ field calls 0-diff, 0 bad opcode; live field renders clean.
+- NEXT top-down: the scene-overlay handlers (0x8012/0x8013xxxx). Item 3 (FUN_800520e0 callees) still pending.
 
 
 **SESSION 2026-06-21 (later-200) — FILE ORGANIZATION + "PC-owned applies to EVERYTHING".**
