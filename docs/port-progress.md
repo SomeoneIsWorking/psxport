@@ -150,13 +150,19 @@ for content fns (call it). Do NOT mimic PSX hardware (GTE/GP0/OT) — remove Bee
 - ◐ **DEMO stage `0x801062E4`** = TITLE / front-end MENU state machine (8 substates) — **the big front-end
   engine system** (engine/engine_demo.cpp, AUTO-registered via demo_scan_overlay). **NOW REACHED from boot
   (stage-0 preload owned, above).**
-  - ☐ **NEW FRONTIER — DEMO entry hangs at a wait-for-timer-stable loop `0x80085900` (guest pc 0x80085924).**
-    `s0=*(0x800BACA8); a1=*(0x800BACAC); do { v0=*(a1); } while (v0 != reread *(a1)); delta = v0 - *(0x800BACB0)`
-    — it reads the counter at `*(0x800BACAC)` twice and spins until two reads AGREE (debounce a HW counter),
-    then takes a delta. In our runtime `*(0x800BACAC)` (a root-counter / timer I/O register) returns a
-    different value every read → never stable → spins forever. Owning fix: model that timer register so two
-    back-to-back reads return the same value within a "tick" (or own this timing-measure fn native). Find what
-    init writes the register pointer to `0x800BACAC`. (Reached headless via `run` once boot enters DEMO.)
+  - ☐ **NEW FRONTIER — DEMO entry hangs in pure-PSX `VSync` (`FUN_80085900` @ guest pc 0x80085924).**
+    ROOT CAUSE (diagnosed): `FUN_80085900` = libetc `VSync(mode)`. Its globals (probed live): `*0x800AACA8`
+    = GPUSTAT `0x1F801814`, `*0x800AACAC` = Timer1 `0x1F801110`, count = `DAT_800abde0` (0x800ABDE0, bumped
+    by the vblank IRQ callback `FUN_80086288`). The DEMO entry rec_dispatches VSync as PURE PSX; its wait
+    can't terminate because our no-IRQ runtime never fires the vblank callback, so `DAT_800abde0` never
+    advances. **The runtime ALREADY has a native VSync — `ov_vsync` (timing.cpp:37) — but it is ORPHANED by
+    the override removal**, exactly like the preload natives were. This is NOT a one-off: the whole DEMO stage
+    (entry prologue + the engine_demo.cpp substates, also orphaned + coro-redirect-based) needs the SAME
+    top-down native re-wiring the stage-0 preload just got. Plan: own the DEMO entry `0x801062E4` as a native
+    scheduler dispatch entry (like 0x8010649C/0x8010637C in native_boot's scheduler), call the native DEMO
+    handler + `ov_vsync`/`frame_tick` directly instead of rec_dispatching the PSX entry that busy-waits VSync.
+    `ov_vsync` modes: <0 query count, 0 wait-1, >1 wait-N (advance frame clock). Don't try to make pure-PSX
+    VSync work (it structurally needs the IRQ) — own the caller. (Reached headless via `run` once at DEMO.)
   Substate ownership:
   - ✅ **s0/s1/s2/s3/s6** (run-once INIT + the title/menu input substates; later-182/185, coro-redirect
     handshake on each substate body, A/B 0-diff at a steady menu frame).
