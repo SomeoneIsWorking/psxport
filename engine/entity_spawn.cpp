@@ -337,6 +337,32 @@ static void replace_dispatch(Core* c) {
   c->r[5] = a1 & 0xffu;                  // a1 = type (a0=obj, a2=mode, a3=list pass through)
   rec_dispatch(c, SPAWN_VAR[cls]);       // run the per-type spawn variant → v0 in r2
 }
+// FUN_8003116C — SPAWN-AND-INIT helper: spawn a type-6 object on list 1 (via the owned dispatcher
+// FUN_8007A980), seed its position from a1, stash a2, and run the object init FUN_80028E10. RE'd from disas
+// 0x8003116C:
+//   if ((u8)*0x800E7E7C < 7) return 0;                 // pool-0 free-count guard
+//   node = FUN_8007A980(class=0, type=6, list=1);  if (!node) return 0;
+//   if (a1) { node[+0x2c]=a1[+2]; node[+0x2e]=a1[+6]; node[+0x30]=a1[+0xa]; }
+//   node[+0x32] = (u16)a2;  FUN_80028E10(node, a0);  return node;
+// The owned spawn dispatcher does the alloc; the per-object init FUN_80028E10 stays content (rec_dispatch).
+static uint32_t spawn_and_init(Core* c) {
+  uint32_t a0 = c->r[4], a1 = c->r[5], a2 = c->r[6];
+  if (c->mem_r8(0x800E7E7Cu) < 7) return 0;
+  c->r[4] = 0; c->r[5] = 6; c->r[6] = 1;
+  rec_dispatch(c, 0x8007A980u);
+  uint32_t node = c->r[2];
+  if (node == 0) return 0;
+  if (a1 != 0) {
+    c->mem_w16(node + 0x2c, c->mem_r16(a1 + 2));
+    c->mem_w16(node + 0x2e, c->mem_r16(a1 + 6));
+    c->mem_w16(node + 0x30, c->mem_r16(a1 + 0xa));
+  }
+  c->mem_w16(node + 0x32, (uint16_t)a2);
+  c->r[4] = node; c->r[5] = a0;
+  rec_dispatch(c, 0x80028E10u);
+  return node;
+}
+
 void ov_replace_dispatch(Core* c) {
   static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("replacedispverify") ? 1 : 0;
   if (!s_v) { replace_dispatch(c); return; }
@@ -577,6 +603,10 @@ void ov_obj_set_xformblk(Core* c) {
   static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("setxblkverify") ? 1 : 0;
   record_gate(c, obj_set_xformblk, 0x8006CBD0u, "setxblkverify", s_v);
 }
+void ov_spawn_and_init(Core* c) {   // FUN_8003116C (defined above, gated here after record_gate)
+  static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("spawninitverify") ? 1 : 0;
+  record_gate(c, spawn_and_init, 0x8003116Cu, "spawninitverify", s_v);
+}
 
 // ------------------------------------------------------------------------------------------------
 // Public registration — ONE line from game_tomba2.cpp init.
@@ -595,4 +625,5 @@ void entity_spawn_register(void) {
   rec_set_override(0x800517F8u, ov_obj_render_update);// FUN_800517F8 per-object render-state update
   rec_set_override(0x80077B38u, ov_obj_set_geom);     // FUN_80077B38 set object geometry-block ptr
   rec_set_override(0x8006CBD0u, ov_obj_set_xformblk); // FUN_8006CBD0 set object transform block (scratchpad+obj)
+  rec_set_override(0x8003116Cu, ov_spawn_and_init);   // FUN_8003116C spawn-and-init helper (type 6, list 1)
 }
