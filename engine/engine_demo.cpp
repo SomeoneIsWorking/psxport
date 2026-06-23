@@ -579,8 +579,12 @@ static void demo_frame_s7(Core* c) {
   if (phase == 0) {
     // PHASE0 0x80106c74 — launch: advance to phase1, set the item timer, select+load the attract area.
     c->mem_w16(sm + 0x4a, 1);                                       // sh s1(=1),0x4a -> phase1
-    rec_dispatch(c, 0x8007a8e0u);                                   // item duration (frames)
-    c->mem_w16(sm + 0x5a, c->r[2] & 0xffff);                        // sh v0,0x5a
+    // sm[0x5a] = 900: the phase-machine prologue loads v0=900 in the `beq v1,zero,phase0` DELAY SLOT
+    // (0x80106c58 addiu v0,zero,0x384), and phase0's `sh v0,0x5a` sits in the `jal 0x8007a8e0` DELAY
+    // SLOT — so it stores that 900, NOT 0x8007a8e0's return (0x8007a8e0 is called only for side effects:
+    // it clears 0x1f80017c and seeds the control block). The item plays 900 frames (~15s) then times out.
+    rec_dispatch(c, 0x8007a8e0u);                                   // side effects (clears 0x1f80017c)
+    c->mem_w16(sm + 0x5a, 900);                                     // sh v0(=900),0x5a (delay-slot const)
     uint8_t cur   = c->mem_r8(sm + 0x6e);
     uint8_t entry = c->mem_r8(0x8010770cu + (uint32_t)cur * 4);     // cursor table {0,1,3}, byte[0]
     c->mem_w8(0x800bf870u, entry);                                  // sb v1,0x800bf870 (phase1 selector)
