@@ -332,6 +332,15 @@ void xa_dialog_coord(Core* c) {
 // 0x8001CF2C FUN_8001cf2c: stop the current voice/BGM clip.
 static void ov_voice_stop(Core* c) {
   xa_stream_stop(); c->mem_w16(0x801fe0e0, 0);
+  // EXPLICIT stop: forget any remembered looping music so the per-frame xa_dialog_coord can't
+  // resurrect it. Without this, navigating the front-end menus (title<->load<->options, each exit
+  // runs 0x8001cf2c) stopped the looping menu clip then immediately had it RE-PLAYED by the
+  // dialog-coord resume (pending_music was still set) — the audible "menu music starts over instead
+  // of stopping" bug. The in-game dialog suppression path stops via xa_stream_stop() directly (not
+  // this fn) and keeps pending_music, so its resume is unaffected. Guard on !dialog: during an
+  // in-game dialog the area music is suppressed+pending, and a mid-dialog 0x8001cf2c (line change)
+  // must NOT forget it, or it wouldn't resume when the dialog ends.
+  if (!dialog_tone_active(c)) c->game->cd.pending_music = 0;
   c->r[A0] = 0; rec_dispatch(c, 0x8001cf00u);        // CD->SPU mix off
 }
 
