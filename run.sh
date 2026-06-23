@@ -44,7 +44,7 @@ for a in "$@"; do
     *)             ARGS+=("$a") ;;
   esac
 done
-set -- "${ARGS[@]}"
+set -- ${ARGS[@]+"${ARGS[@]}"}   # empty-array-safe under set -u
 [ -n "$GATES_OFF" ] && export PSXPORT_NATIVE_OFF="$GATES_OFF" && say "native gates OFF (PSX fallback): $GATES_OFF"
 
 # ---- 1. resolve the disc ------------------------------------------------------------
