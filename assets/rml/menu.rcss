@@ -14,21 +14,9 @@
      arrows/glyphs are used in the markup instead).
    - Units: Dusklight authors in `dp`; at density ratio 1, dp == px, so this sheet uses px. */
 
-@font-face {
-	font-family: "Fira Sans";
-	font-weight: normal;
-	src: url("FiraSans-Regular.ttf");
-}
-@font-face {
-	font-family: "Fira Sans";
-	font-weight: bold;
-	src: url("FiraSans-Bold.ttf");
-}
-@font-face {
-	font-family: "Fira Sans Condensed";
-	font-weight: bold;
-	src: url("FiraSansCondensed-Bold.ttf");
-}
+/* Fonts are loaded via the C++ API (Rml::LoadFontFace in the RmlUi overlay setup), NOT via @font-face:
+   this RmlUi build's RCSS parser does not support the @font-face at-rule (it errored on the block and
+   skipped it). The faces used below ("Fira Sans" / "Fira Sans Condensed") are the ones loaded there. */
 
 * {
 	box-sizing: border-box;

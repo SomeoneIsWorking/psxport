@@ -498,7 +498,7 @@ static VkExtent2D surface_extent_now(void) {
   return e;
 }
 
-static void create_swapchain(void) {
+static void create_swapchain(VkSwapchainKHR old_swap = VK_NULL_HANDLE) {
   VkSurfaceCapabilitiesKHR caps;
   VKC(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(s_phys, s_surf, &caps));
   s_extent = surface_extent_now();
@@ -521,6 +521,7 @@ static void create_swapchain(void) {
   ci.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
   ci.presentMode = VK_PRESENT_MODE_FIFO_KHR;   // always supported
   ci.clipped = VK_TRUE;
+  ci.oldSwapchain = old_swap;                   // retire the old swapchain cleanly (resize/DPI recreate)
   VKC(vkCreateSwapchainKHR(s_dev, &ci, 0, &s_swap));
 
   vkGetSwapchainImagesKHR(s_dev, s_swap, &s_swap_n, 0);
@@ -538,18 +539,25 @@ static void create_swapchain(void) {
   }
 }
 
-static void destroy_swapchain(void) {
+static void recreate_swapchain(void) {
+  // DO NOT vkDeviceWaitIdle here. On Wayland a FIFO present in flight during a surface resize / DPI
+  // change never completes until we ack the compositor's configure — which needs the SDL event loop to
+  // pump — but vkDeviceWaitIdle would block this (the render) thread waiting for that present, so the
+  // configure is never acked and the wait hangs forever. That is the window-resize / DPI-switch boot
+  // freeze (drmSyncobjWait in the backtrace). Instead: (1) wait only on OUR render fence (s_fence is
+  // already signaled at every recreate call site — the per-frame wait at the top of present, or the
+  // submit just issued — and it is NOT gated on the compositor, so this never hangs); (2) recreate with
+  // the old swapchain passed as oldSwapchain so the driver retires the pending present cleanly; (3)
+  // destroy the old swapchain's framebuffers/views (safe — our renderpass is done per s_fence; the
+  // present references the swapchain IMAGE, not these) and the old swapchain handle.
+  vkWaitForFences(s_dev, 1, &s_fence, VK_TRUE, UINT64_MAX);
+  VkSwapchainKHR old = s_swap;
   for (uint32_t i = 0; i < s_swap_n; i++) {
     vkDestroyFramebuffer(s_dev, s_swap_fb[i], 0);
     vkDestroyImageView(s_dev, s_swap_view[i], 0);
   }
-  vkDestroySwapchainKHR(s_dev, s_swap, 0);
-}
-
-static void recreate_swapchain(void) {
-  vkDeviceWaitIdle(s_dev);
-  destroy_swapchain();
-  create_swapchain();
+  create_swapchain(old);                         // new s_swap + fbs/views; ci.oldSwapchain = old
+  vkDestroySwapchainKHR(s_dev, old, 0);
 }
 
 static void init_vk(void) {
