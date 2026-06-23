@@ -172,7 +172,11 @@ static void ov_game_submode0(Core* c) {
       c->mem_w16(sm + 0x50, 0);
       c->mem_w16(sm + 0x4e, (uint16_t)(c->mem_r16(sm + 0x4e) + 1));
     } else if (s4e == 1) {
-      ov_sop_field_mode(c);                  // native SOP field-mode machine (0x80109450)
+      // 0x80109450 is the loaded MODE overlay's field-mode fn. Our native machine is SOP-specific, so
+      // only use it when SOP is actually loaded (signature = its first insn `lui v0,0x1f80` = 0x3C021F80);
+      // for any other mode/field overlay, dispatch the guest fn (until that overlay is owned natively too).
+      if (c->mem_r32(0x80109450u) == 0x3C021F80u) ov_sop_field_mode(c);   // native SOP
+      else rec_dispatch(c, 0x80109450u);                                   // other overlay -> guest
     }
   } else if (s4c == 1) {
     uint16_t s4a = c->mem_r16(sm + 0x4a);
