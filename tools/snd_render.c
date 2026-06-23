@@ -137,24 +137,39 @@ static void tone_read(Vab* v, int t, Tone* o) {
     o->adsr1=rd16(a+0x10); o->adsr2=rd16(a+0x12); o->prog=rd16(a+0x14); o->vag=g_buf[a+0x16];
 }
 // Cumulative tone-start index for program p (tones concatenated in program order).
+// This mirrors libsnd's VabOpenHead transform: it loads the on-disc concatenated tones into
+// a fixed 16-tone-per-program image and rewrites ProgAttr+8 to the program's tone base. The
+// note-on resolver (0x80095C40) reads `baseTone = ProgAttr[prog]+8` then scans tones
+// `ToneAttr[(baseTone*16 + i)]` for i in 0..nTones. On disc baseTone == the program's
+// cumulative tone start; for the shipped VABs prog0 starts at 0 (so baseTone(prog0)=0).
 static int prog_tone_start(Vab* v, int p) {
     int start = 0; for (int q = 0; q < p; q++) start += g_buf[v->progtab + q*16];
     return start;
 }
-// Pick the tone within program p that serves MIDI `note` (first whose [min,max] covers it).
-static int prog_pick_tone(Vab* v, int p, int note) {
-    // PROBE: SEQ programs exceed VAB program count; remap into range until the real libsnd
-    // program->tone mapping is RE'd (see agent task). TODO replace with the authoritative map.
-    if (g_buf[v->progtab + p*16] == 0 && v->ps > 0) p = p % v->ps;
-    int nt = g_buf[v->progtab + p*16]; if (!nt) return -1;
-    int start = prog_tone_start(v, p);
-    int fallback = -1;
-    for (int i = 0; i < nt; i++) {
+
+// AUTHORITATIVE program->tone mapping (RE'd 2026-06-23, replaces the old `p % ps` probe).
+//
+// The tone-selection program is NOT the live MIDI prog-change. It is the per-SEQUENCE
+// program-set selector slot[0x26], set ONCE at SsSeqOpen from the SEQ byte at file offset
+// 0x0F (the byte right after the 15-byte 'pQES' header). For EVERY Tomba!2 sequence that byte
+// is 0x00, so tone selection always uses VAB program 0. (Verified: 0x80090094 `lb a1,38(v1)`
+// passes slot+0x26 as the resolve program index; the 0xCn prog-change writes slot[ch+0x37],
+// used only for vol/pan, NOT for tone selection — it never updates slot+0x26 at runtime.)
+//
+// Tone scan (0x80095C40) is MULTI-VOICE: EVERY tone of the program whose [min,max] note range
+// covers `note` keys on its own voice. Returns the matching tone indices into `out` (capacity
+// `cap`), count via the return value. 0 matches = note dropped (genuine libsnd behavior when
+// the program has no tone for that note — e.g. note outside the VAB's covered range).
+static int prog_pick_tones(Vab* v, int prog, int note, int* out, int cap) {
+    if (prog < 0 || prog >= v->ps) return 0;          // program out of range -> note dropped
+    int nt = g_buf[v->progtab + prog*16]; if (!nt) return 0;
+    int start = prog_tone_start(v, prog);
+    int n = 0;
+    for (int i = 0; i < nt && n < cap; i++) {
         Tone t; tone_read(v, start+i, &t);
-        if (fallback < 0) fallback = start+i;
-        if (note >= t.nmin && note <= t.nmax) return start+i;
+        if (note >= t.nmin && note <= t.nmax) out[n++] = start + i;
     }
-    return fallback;   // no exact range match -> first tone of the program
+    return n;
 }
 
 // ===========================================================================================
@@ -327,6 +342,7 @@ typedef struct {
     uint64_t age;
     // per-channel state
     int prog[16], vol[16], pan[16];
+    int prog_set;        // slot[0x26]: per-SEQUENCE program-set selector (tone-selection program)
     // stream cursor
     long p, end;
     int  running_status;
@@ -356,14 +372,18 @@ static void seq_note_on(Seq* s, int ch, int note, int vel) {
                 s->voice[i].phase = ADSR_RELEASE, s->voice[i].divider = 0;
         return;
     }
-    int p = s->prog[ch]; if (p < 0) p = 0;
-    int ti = prog_pick_tone(s->vab, p, note);
-    if (ti < 0) return;
-    Tone t; tone_read(s->vab, ti, &t);
-    Voice* vc = seq_alloc_voice(s);
-    voice_keyon(vc, s->vab, &t, note, vel, ch, s->vol[ch], s->pan[ch], ++s->age);
-    if (getenv("SND_DBG")) fprintf(stderr,"keyon ch=%d note=%d vel=%d prog=%d tone=%d vag=%d active=%d vol_l=%d pitch=%u\n",
-                                   ch,note,vel,p,ti,t.vag,vc->active,vc->vol_l,vc->pitch);
+    // Tone selection uses the per-SEQUENCE program-set selector (slot[0x26]), NOT the live
+    // MIDI prog-change. Multi-voice: every in-range tone of that program keys on its own voice.
+    int tones[16];
+    int ntone = prog_pick_tones(s->vab, s->prog_set, note, tones, 16);
+    if (ntone == 0) return;   // no tone covers this note in the program -> note dropped (libsnd)
+    for (int k = 0; k < ntone; k++) {
+        Tone t; tone_read(s->vab, tones[k], &t);
+        Voice* vc = seq_alloc_voice(s);
+        voice_keyon(vc, s->vab, &t, note, vel, ch, s->vol[ch], s->pan[ch], ++s->age);
+        if (getenv("SND_DBG")) fprintf(stderr,"keyon ch=%d note=%d vel=%d pset=%d tone=%d vag=%d active=%d vol_l=%d pitch=%u\n",
+                                       ch,note,vel,s->prog_set,tones[k],t.vag,vc->active,vc->vol_l,vc->pitch);
+    }
 }
 
 static void seq_note_off(Seq* s, int ch, int note) {
@@ -414,25 +434,32 @@ static void seq_open(Seq* s, Vab* vab, long seqOff) {
     if (memcmp(g_buf+seqOff, "pQES", 4)) { fprintf(stderr,"seq @0x%lx bad magic\n", seqOff); exit(1); }
     s->ppqn    = rd16be(seqOff + 8);
     s->tempo_us= (double)rd24be(seqOff + 10);
-    s->p = seqOff + 15;     // after 'pQES'(4) ver(4) ppqn(2) tempo(3) rhythm(2)
+    // After the 15-byte header ('pQES'4 + ver4 + ppqn2 + tempo3 + rhythm2) SsSeqOpen consumes
+    // ONE byte (file offset 0x0F) into slot[0x26] = the program-set selector (the tone-selection
+    // program). The SEP event stream proper then begins at offset 0x10. (RE: 0x8008E3DC reads
+    // that byte and advances the read pointer; 0x80090094 passes slot+0x26 as the resolve prog.)
+    s->prog_set = g_buf[seqOff + 15];
+    s->p = seqOff + 16;
     s->running_status = 0;
 }
 
 // samples per MIDI tick at the current tempo.
 static double seq_spt(Seq* s, int rate) { return s->tempo_us * rate / (s->ppqn * 1.0e6); }
 
-// Render the whole song to a stereo WAV. MIDI order is [delta][event][delta][event]...:
-// read a delta, wait that many samples, dispatch the event, read the next delta. Stops at
-// end-of-track (draining a release tail) or at max_frames if the song loops past it.
+// Render the whole song to a stereo WAV. The SEP stream is [event][delta][event][delta]...
+// (the delta-to-next FOLLOWS each event; the first event has NO leading delta — verified
+// from the raw stream). So: dispatch an event, read its trailing delta, wait that many
+// samples, dispatch the next event. Stops at end-of-track (draining a release tail) or at
+// max_frames if the song loops past it.
 static void seq_render(Seq* s, int16_t* out, int outcap_frames, int rate, int max_frames,
                        int* out_frames) {
     int frames = 0, ended = 0, tail = 0;
-    double pending = (double)varlen(s) * seq_spt(s, rate);   // wait before first event
+    double pending = 0.0;   // first event fires immediately (no leading delta)
     while (frames < outcap_frames && frames < max_frames) {
-        // dispatch every event whose delta has elapsed
+        // dispatch every event whose (trailing) delta has elapsed
         while (!ended && pending <= 0.0) {
             if (!seq_event(s)) { ended = 1; break; }
-            pending += (double)varlen(s) * seq_spt(s, rate);  // delta before the next event
+            pending += (double)varlen(s) * seq_spt(s, rate);  // delta-to-next FOLLOWS the event
         }
         // mix the 24 voices for this output frame
         int L = 0, R = 0, any = 0;

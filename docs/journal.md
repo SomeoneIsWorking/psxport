@@ -48,11 +48,15 @@ Two parallel threads this session.
   loop points): `tone` cmd renders a clean enveloped note (sustain held, release on keyoff). **SEP
   sequencer** (`song` cmd): MIDI running-status interpreter + tempo→samples/tick + 24-voice alloc; all 10
   container sequences render without derailing; output levels match Beetle refs (rms ~2530 vs intro 2538).
-- **Program→tone mapping RE'd** (the blocker): SEQ program is NOT a direct ProgAttr index — baseTone =
-  `ProgAttr[slot0x26]+8` (slot0x26 = SEQ-header program-set selector), tone scan `ToneAttr[baseTone*16+i]`
-  over the note range (multi-voice); the prog-change value indexes ProgAttr for vol/pan. Recorded in the
-  spec §5b; snd_render currently uses a marked `p%ps` PROBE pending that mapping (offline tool only).
-  Spec: `scratch/native_audio_spec.md`.
+- **Program→tone mapping RE'd + APPLIED** (the blocker, now resolved): SEQ program is NOT a direct
+  ProgAttr index. Tone selection uses **slot[0x26]** = the SEQ byte at file offset 0x0F (consumed at
+  SsSeqOpen 0x8008E390), which is **0x00 for every Tomba!2 seq → VAB program 0**; the runtime 0xCn
+  prog-change feeds only vol/pan. baseTone = ProgAttr[prog]+8 (on-disc 0xFF placeholder → libsnd rewrites
+  to the program's tone base at load; offline tool uses `prog_tone_start(prog)`). Multi-voice tone scan
+  (all in-range matches). Also corrected the **SEP framing to [event][delta]** (delta FOLLOWS each event;
+  stream starts at 0x10 after the 0x0F selector byte) — the `p%ps` probe is GONE. VERIFIED musical: seq4
+  (14.07s ≈ intro.wav 14.20s) renders rms~1444 with a wide-range VAB. Residual loudness gap = song→VAB
+  selection (spec §6 TODO), not the map. Spec: `scratch/native_audio_spec.md` §5b.
 
 ## later-208: OWN DEMO front-end substate s7 (attract-demo launch) native — ov_demo_s7_phase REGISTERED
 Owned the last reachable DEMO front-end deep-yielder, **s7 0x80106668** (engine/engine_demo.cpp,
