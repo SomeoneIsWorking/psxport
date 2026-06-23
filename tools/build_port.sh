@@ -15,7 +15,7 @@ set -eu
 cd "$(dirname "$0")/.."
 
 CC="${CC:-cc}"
-CXX="${CXX:-c++}"   # RmlUi overlay (imgui_overlay.cpp + rmlui_render_vk.cpp + RmlUi SDL backend) is C++
+CXX="${CXX:-c++}"   # RmlUi overlay (rmlui_overlay.cpp + rmlui_render_vk.cpp + RmlUi SDL backend) is C++
 JOBS="$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)"
 RT=runtime/recomp       # common PSX->PC platform (future psxport submodule)
 ENG=engine              # Tomba2Engine — the game-specific native engine + RE
@@ -52,7 +52,7 @@ fi
 
 tools/gen_vk_shaders.sh   # compile+embed the Vulkan present shaders (gpu_vk_shaders.h) before gpu_vk.c
 
-# Same source list as run.sh step 4 (keep in sync). C++ TUs (.cpp) = ImGui overlay; compiled with $CXX.
+# Same source list as run.sh step 4 (keep in sync). C++ TUs (.cpp) = RmlUi overlay; compiled with $CXX.
 # OOP refactor: the runtime is now C++ (state lives in `class Core`, core.h). Most TUs are .cpp;
 # the remaining .c are leaf C subsystems (cfg/disc/cdc/xa/spu/mdec adapters/mods/watchdog) + vendored
 # mednafen, reached across the boundary via extern "C".
@@ -60,7 +60,7 @@ SRC="$RT/dispatch.cpp \
   $RT/cfg.c $RT/mem.cpp $RT/stubs.cpp $RT/hle.cpp $RT/threads.cpp $RT/interp.cpp $RT/gpu_native.cpp $RT/gpu_debug.cpp $RT/vram_xfer.cpp $RT/spu_audio.c $RT/pad_input.cpp $RT/memcard.cpp $RT/native_fmv.cpp \
   $MED/psx/gte.c $RT/gte_beetle.cpp $MED/psx/mdec.c $RT/mdec_beetle.c $MED/psx/spu.c $RT/spu_beetle.c \
   $RT/disc.c $RT/cd_override.cpp $RT/cdc_native.c $RT/xa_stream.c $RT/timing.cpp $RT/gpu_vk.cpp $RT/gpu_perf.cpp $RT/mods.c $ENG/game_tomba2.cpp $ENG/asset.cpp $ENG/mathlib.cpp $ENG/cull.cpp $ENG/collision.cpp $ENG/hitbox.cpp $ENG/grid_offset.cpp $ENG/entity.cpp $ENG/entity_spawn.cpp $ENG/actor_sm_24448.cpp $ENG/objbeh_739ac.cpp $ENG/objbeh_73cd8.cpp $ENG/objbeh_741dc.cpp $ENG/script.cpp $ENG/animation.cpp $ENG/input.cpp $ENG/menu.cpp $ENG/inventory.cpp $ENG/hud.cpp $ENG/lighting.cpp $ENG/engine_bav.cpp $ENG/save.cpp $ENG/sound.cpp $ENG/engine_init.cpp $ENG/engine_font.cpp $ENG/engine_level.cpp $ENG/fps60.cpp $ENG/engine_tomba2.cpp $ENG/engine_submit.cpp $ENG/engine_stage.cpp $ENG/sop.cpp $ENG/engine_demo.cpp $ENG/engine_camera.cpp $ENG/engine_math.cpp $ENG/engine_player.cpp $ENG/native_terrain.cpp $ENG/render_queue.cpp $ENG/clib.cpp $ENG/gte.cpp $ENG/gpu_lib.cpp $ENG/sound_voice.cpp $ENG/object_init.cpp $ENG/native_misc.cpp $RT/peripheral_misc.cpp $ENG/margin_render.cpp $ENG/audio/native_audio.c $ENG/audio/native_music.c $ENG/audio/music_list.c $RT/sync_overrides.cpp $RT/native_boot.cpp $RT/dualcore.cpp $RT/dbg_server.cpp $RT/native_stub.cpp $RT/watchdog.c $RT/boot.cpp \
-  $RT/imgui_overlay.cpp $RT/overlay_glue.cpp $RT/rmlui_render_vk.cpp $RMLUI/Backends/RmlUi_Platform_SDL.cpp \
+  $RT/rmlui_overlay.cpp $RT/overlay_glue.cpp $RT/rmlui_render_vk.cpp $RMLUI/Backends/RmlUi_Platform_SDL.cpp \
   $SHARDS"
 
 objof() { echo "$OBJ/$(echo "$1" | tr '/.' '__').o"; }
@@ -102,6 +102,6 @@ ZSTD_A="$(find_a 'libzstd.a')"; [ -n "$ZSTD_A" ] && CHD_LIBS="$CHD_LIBS $ZSTD_A"
 
 OBJS=""; for s in $SRC; do OBJS="$OBJS $(objof "$s")"; done
 # shellcheck disable=SC2086
-# Link with $CXX so libstdc++ (ImGui) is pulled in.
+# Link with $CXX so libstdc++ (RmlUi) is pulled in.
 $CXX -rdynamic $OBJS $CHD_LIBS $RMLUI_LIBS $(pkg-config --libs sdl2 vulkan) -lpthread -lm -o scratch/bin/tomba2_port || { echo "[build] link failed" >&2; exit 1; }
 echo "[build] linked scratch/bin/tomba2_port"

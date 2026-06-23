@@ -901,11 +901,11 @@ static void poll_quit(void) {
   while (SDL_PollEvent(&e)) {
     overlay_glue_event(&e);    // overlay mouse/keys (ESC toggles the RmlUi menu); no-op if not inited
     if (e.type == SDL_QUIT) exit(0);
-    // ESC no longer quits the game — it toggles the RmlUi menu (handled in imgui_overlay_event). The
+    // ESC no longer quits the game — it toggles the RmlUi menu (handled in rmlui_overlay_event). The
     // actual quit now lives in the "Quit game" button inside that menu (on_quit -> exit(0)).
     // Window resized: flag the swapchain for recreation. Many drivers (notably Wayland) do NOT report
     // SUBOPTIMAL/OUT_OF_DATE on resize, so relying on the present result alone leaves s_extent stale —
-    // the window grows but the swapchain (and so win_w()/win_h()) don't, and ImGui (whose DisplaySize
+    // the window grows but the swapchain (and so win_w()/win_h()) don't, and RmlUi (whose DisplaySize
     // tracks the live SDL window) then maps the cursor into the wrong, stale render extent. Handle the
     // SDL resize explicitly. Ignore 0-size (minimized) so we never build a zero-extent swapchain.
     if (e.type == SDL_WINDOWEVENT &&

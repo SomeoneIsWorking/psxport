@@ -74,12 +74,12 @@ void pad_fill_buffer(Core* c, uint8_t* buf) {
 #include <stdio.h>   // diagnostic fprintf in pad_poll_sdl (controller-driving-directions notice)
 #include <stdlib.h>  // atoi (PSXPORT_PAD_NOPAD parse)
 
-// Provided by imgui_overlay.cpp. Returns 1 ONLY while the user is actively typing into an ImGui text
+// Provided by rmlui_overlay.cpp. Returns 1 ONLY while the user is actively typing into an RmlUi text
 // widget (io.WantTextInput) — NOT merely because the overlay is open/focused. We use it to suppress the
 // game's keyboard read in that narrow case so typed characters don't leak into gameplay (and WASD doesn't
 // leak into the text box). When the overlay is simply visible, this is 0 and WASD drives the game normally.
-// Declared here (extern "C") instead of including imgui_overlay.h so this TU stays header-light/testable.
-extern "C" int imgui_overlay_wants_keyboard(void);
+// Declared here (extern "C") instead of including rmlui_overlay.h so this TU stays header-light/testable.
+extern "C" int rmlui_overlay_wants_keyboard(void);
 
 // --- Game controller (gamepad) state ----------------------------------------
 // Up to this many simultaneously-open controllers; hotswap-aware (DEVICEADDED/REMOVED handled by a
@@ -191,21 +191,21 @@ void pad_poll_sdl(Core* c) {
   uint16_t mask = PAD_NONE;
 
   // GitHub #18: keep SDL text input (IME) OFF during gameplay. SDL leaves text input ON by default and
-  // ImGui's SDL backend re-enables it via its IME handler whenever the overlay window is focused, so this
+  // RmlUi's SDL backend re-enables it via its IME handler whenever the overlay window is focused, so this
   // MUST run every frame (one-shot disabling is not enough). With IME on, KDE/Wayland compositors pop an
   // "alternative character"/compose widget that swallows WASD before SDL_GetKeyboardState() sees it ->
   // the player won't move. Only stop it when no UI text field actually wants the keyboard, so focused
-  // ImGui fields can still type.
-  if (!imgui_overlay_wants_keyboard() && SDL_IsTextInputActive()) {
+  // RmlUi fields can still type.
+  if (!rmlui_overlay_wants_keyboard() && SDL_IsTextInputActive()) {
     SDL_StopTextInput();
     static int s_ime_noted = 0;
     if (!s_ime_noted) { s_ime_noted = 1; fprintf(stderr, "[pad] IME/text-input disabled during gameplay (GH#18)\n"); }
   }
 
-  // Suppress the keyboard ONLY while the user is typing into an ImGui text field (see the extern decl).
+  // Suppress the keyboard ONLY while the user is typing into an RmlUi text field (see the extern decl).
   // A merely-visible overlay does NOT block WASD — that was the bug. The debug pause/step keys below stay
   // outside this guard intentionally so P/'.' still work even with a field focused.
-  const Uint8* ks = (imgui_overlay_wants_keyboard() ? nullptr : SDL_GetKeyboardState(NULL));
+  const Uint8* ks = (rmlui_overlay_wants_keyboard() ? nullptr : SDL_GetKeyboardState(NULL));
   if (ks) {
     #define KEYDOWN(sc) (ks[(sc)] != 0)
     if (KEYDOWN(SDL_SCANCODE_UP)     || KEYDOWN(SDL_SCANCODE_W)) mask &= ~0x0010u; // Up
@@ -227,7 +227,7 @@ void pad_poll_sdl(Core* c) {
 
   // Debug pause / frame-step keys (edge-detected so one keypress = one action). P toggles pause/play;
   // '.' (period) freezes and advances exactly one frame. Read SDL's keyboard snapshot directly (not the
-  // `ks` above) so these still work even when ImGui suppressed gameplay keys. Handled here because
+  // `ks` above) so these still work even when RmlUi suppressed gameplay keys. Handled here because
   // pad_poll_sdl runs every frame in BOTH the running loop and the paused wait. (dbg_server.c)
   { void dbg_toggle_pause(void); void dbg_add_step(int);
     const Uint8* dks = SDL_GetKeyboardState(NULL);

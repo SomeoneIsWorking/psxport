@@ -1,4 +1,4 @@
-// Live mod state — seeded from cfg (env) once; thereafter the ImGui overlay owns it. See mods.h.
+// Live mod state — seeded from cfg (env) once; thereafter the RmlUi overlay owns it. See mods.h.
 #include "mods.h"
 #include "cfg.h"
 #include <stdlib.h>

@@ -1,7 +1,7 @@
 #ifndef PSXPORT_OVERLAY_GLUE_H
 #define PSXPORT_OVERLAY_GLUE_H
 // Thin integration layer between the Vulkan present path (gpu_vk.cpp) and the RmlUi mod/debug overlay
-// (imgui_overlay.cpp). gpu_vk.cpp calls these four hooks and nothing more — all overlay-specific logic
+// (rmlui_overlay.cpp). gpu_vk.cpp calls these four hooks and nothing more — all overlay-specific logic
 // (full-window viewport build for the menu, the live world-position latch read from guest RAM, the
 // per-frame CPU update, and the present-pass record) lives HERE, not crammed into the renderer.
 //
@@ -16,7 +16,7 @@ extern "C" {
 #endif
 
 // Bring the overlay up on the port's existing VK device + present render pass (call once, after the
-// swapchain + present render pass exist; windowed only). Mirrors imgui_overlay_init's parameters.
+// swapchain + present render pass exist; windowed only). Mirrors rmlui_overlay_init's parameters.
 void overlay_glue_init(SDL_Window* win, VkInstance inst, VkPhysicalDevice phys, uint32_t qfam,
                        VkDevice dev, VkQueue queue, VkRenderPass present_rpass,
                        uint32_t min_image_count, uint32_t image_count);
