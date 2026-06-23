@@ -85,6 +85,50 @@ static void d3(Core* c, uint32_t fn, uint32_t a0, uint32_t a1, uint32_t a2) {
   c->r[4]=a0; c->r[5]=a1; c->r[6]=a2; rec_dispatch(c, fn);
 }
 
+// SOP per-frame FIELD UPDATE — native ownership of FUN_801092b4 (decomp scratch/decomp/sop/801092b4.c).
+// The running-gameplay frame: a startup-delay countdown (sm[0x60]), then BG scene SM + entity update +
+// Tomba update + BG layer SM + entity render + GPU submit, then the sm[0x52] intro/end-scroller tail.
+// Control flow + every field write owned native; the heavy callees stay rec_dispatched (engine
+// subsystems to own next: entity update 0x8010a0e0 / render 0x80109fe0, Tomba update 0x8007b008; and
+// the per-scene content). Called from ov_sop_field_mode states 1/2/3.
+void ov_sop_field_update(Core* c) {
+  uint32_t sm = c->mem_r32(0x1f800138u);
+  int16_t delay = (int16_t)c->mem_r16(sm + 0x60);
+  if (delay != 0) {
+    c->mem_w16(sm + 0x60, (uint16_t)(delay - 1));          // startup delay: just count down
+  } else {
+    d1(c, 0x8002655cu, 0x80100400u);                       // BG scene transition SM
+    d1(c, 0x8010a0e0u, 0x800f2418u);                       // entity update loop
+    d0(c, 0x8007b008u);                                    // Tomba update
+    c->mem_w8(0x1f800234u, 1);
+    uint8_t bg = c->mem_r8(0x800e8008u);                   // BG layer SM
+    if (bg == 0) { c->mem_w8(0x800e8008u, 1); c->mem_w8(0x800e806cu, 0); }
+    else if (bg == 1) {
+      uint8_t sub = c->mem_r8(0x800e806cu);
+      if (sub == 0) d2(c, 0x8006e3b0u, 0x800e8008u, 0x800e8040u);
+      else if (sub == 1) c->mem_w8(0x800e806cu, 0);
+    }
+    d0(c, 0x80075a80u);                                    // per-frame area update
+    if (c->mem_r8(0x800bf9b4u) != 5) d1(c, 0x8010bffcu, 0x800ed018u);   // parallax BG draw
+    d1(c, 0x80109fe0u, 0x800f2418u);                       // entity render loop
+    d0(c, 0x8003c048u);                                    // GPU packet submit
+    if (c->mem_r8(0x800bf9b4u) != 5) d1(c, 0x8010c26cu, 0x800ed018u);   // BG tile scroller
+    c->mem_w8(0x1f800234u, 0);
+  }
+  // tail — sm[0x52]: 0 = intro zone setup, 1 = end-of-area text scroller, 2+ = done
+  sm = c->mem_r32(0x1f800138u);
+  uint16_t s52 = c->mem_r16(sm + 0x52);
+  if (s52 == 1) {
+    d0(c, 0x8010c79cu);                                    // end-of-area scroller
+    if (c->r[2] == 0) return;                              // still running -> stay
+  } else {
+    if (s52 != 0) return;                                  // s52 >= 2: done
+    c->mem_w16(sm + 0x62, 0);
+    d1(c, 0x8001d71cu, 0xe);                               // zone/area transition setup
+  }
+  c->mem_w16(sm + 0x52, (uint16_t)(c->mem_r16(sm + 0x52) + 1));
+}
+
 // SOP FIELD-MODE MACHINE — native ownership of FUN_80109450 (decomp scratch/decomp/sop/80109450.c).
 // Owns the sm[0x50] switch + every field write; dispatches the heavy per-state callees (those not yet
 // owned native). CRITICAL: state 0 does NOT call FUN_80044bd4 (which clears 1f80019b, spawns the slot-1
@@ -129,11 +173,11 @@ void ov_sop_field_mode(Core* c) {
       uint8_t v = (uint8_t)(c->mem_r8(sm + 0x6c) - 1);
       c->mem_w8(sm + 0x6c, v);
       if (v == 0) { c->mem_w8(sm + 0x6c, 0x1f); c->mem_w16(sm + 0x50, (uint16_t)(c->mem_r16(sm + 0x50) + 1)); }
-      d0(c, 0x801092b4u);                             // per-frame field update
+      ov_sop_field_update(c);                  // native per-frame field update
       break;
     }
     case 2: {  // GAMEPLAY
-      d0(c, 0x801092b4u);
+      ov_sop_field_update(c);
       if (c->mem_r8(0x800bf839u) != 0 || (c->mem_r32(0x800e7e68u) & 8) != 0)
         c->mem_w16(sm + 0x50, (uint16_t)(c->mem_r16(sm + 0x50) + 1));
       break;
@@ -144,7 +188,7 @@ void ov_sop_field_mode(Core* c) {
       uint8_t v = (uint8_t)(c->mem_r8(sm + 0x6c) - 1);
       c->mem_w8(sm + 0x6c, v);
       if (v == 0) c->mem_w16(sm + 0x50, (uint16_t)(c->mem_r16(sm + 0x50) + 1));
-      d0(c, 0x801092b4u);
+      ov_sop_field_update(c);
       break;
     }
     case 4: {  // RESET -> next area
