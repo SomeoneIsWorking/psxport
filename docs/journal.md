@@ -30,9 +30,12 @@ every libsnd voice keyon 0x800939A0; `=banksel` traces the slot[0x26] setter 0x8
 `seqsolo <i>` plays one sequence in isolation):
 - **Every sequencer keyon fails.** The note channels' per-channel VAB id `slot[0x26]` = 0xFF (-1), so
   the VAB-select 0x800962b0 rejects it → no voice. The bank-select handler 0x8008e390 never runs for
-  note channels. Forcing a valid loaded bank (0/1) at keyon STILL produced no audio → the VAB ADPCM
-  **bodies aren't in SPU RAM** either (headers registered, banks 0/1 flagged @0x80105d18, bodies not
-  transferred). So the game itself is silent for sequenced music — there is **NO in-game reference**.
+  note channels. **REFINED:** the VAB ADPCM bodies ARE in SPU RAM (`PSXPORT_DEBUG=spu`: two DMA writes
+  46144 + 45664 = 91808 words = the two area VABs). Forcing a valid bank at keyon makes the tone-scan
+  0x80095C40 succeed (vab-select OK) but STILL no audible voice → the per-tone→SPU-address setup (done
+  at sequence-open / SsVabOpenHead time, tied to the same -1 binding) is also broken, so keyed voices
+  read silence. Binding fails at OPEN time (likely ordering: sequences opened with vab=-1 before the
+  VABs are registered, OR SsVabOpenHead returns -1 in our port). NO in-game reference exists.
   The dialog music (song 4) additionally needs bank 8, which this area never loads at all.
 - **Data divergence found.** The game loads a compact area BGM bundle to 0x80182000 = 10 SEPs
   (byte-identical to TOMBA2.SND's first 10) + 2 AREA-specific VABs (bank0 ps=4 @+0x26b4, bank1 ps=18
