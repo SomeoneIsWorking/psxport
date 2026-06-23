@@ -30,23 +30,6 @@ pkg-config --exists sdl2 || die "SDL2 not found (macOS: brew install sdl2; Linux
 CC="${CC:-cc}"
 JOBS="$(getconf _NPROCESSORS_ONLN 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)"
 
-# ---- 0. parse keyword args (diagnostic gate presets) --------------------------------
-# `./run.sh psx-area-load` starts the diagnostic `areaload` native gate OFF, so the recompiled
-# (PSX) cooperative area-load runs in place of the native one (the in-game oracle for the silent
-# sequenced-music investigation). Generic form: `native:<gate>` turns off any gate by name. These
-# keyword args are stripped from $@ so the remaining positional arg is still the disc path.
-GATES_OFF=""
-ARGS=()
-for a in "$@"; do
-  case "$a" in
-    psx-area-load) GATES_OFF="${GATES_OFF:+$GATES_OFF,}areaload" ;;
-    native:*)      GATES_OFF="${GATES_OFF:+$GATES_OFF,}${a#native:}" ;;
-    *)             ARGS+=("$a") ;;
-  esac
-done
-set -- ${ARGS[@]+"${ARGS[@]}"}   # empty-array-safe under set -u
-[ -n "$GATES_OFF" ] && export PSXPORT_NATIVE_OFF="$GATES_OFF" && say "native gates OFF (PSX fallback): $GATES_OFF"
-
 # ---- 1. resolve the disc ------------------------------------------------------------
 DISC="${1:-${PSXPORT_TOMBA2_DISC:-}}"
 if [ -z "$DISC" ] && [ -f .env ]; then

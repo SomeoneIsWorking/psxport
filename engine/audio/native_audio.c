@@ -7,7 +7,6 @@
 // multiple sequences can render concurrently.
 #include "native_audio.h"
 #include <stdint.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
@@ -286,9 +285,6 @@ static void seq_note_on(NaSeq* s, int ch, int note, int vel) {
     if (prog < 0 || prog >= s->vab->ps) prog = s->prog_set;
     int tones[16];
     int ntone = prog_pick_tones(s->vab, prog, note, tones, 16);
-    static int progdbg = -1; if (progdbg < 0) progdbg = getenv("NA_PROGDBG") ? 1 : 0;
-    if (progdbg) fprintf(stderr, "[nakey] ch=%d note=%d liveprog=%d used=%d ps=%d -> %d tone(s)\n",
-                         ch, note, s->prog[ch], prog, s->vab->ps, ntone);
     if (ntone == 0) return;
     for (int k = 0; k < ntone; k++) {
         NaTone t; na_tone_read(s->vab, tones[k], &t);
@@ -315,11 +311,7 @@ static int seq_event(NaSeq* s) {
         case 0x80: { int n=s->buf[s->p++], v=s->buf[s->p++]; (void)v; seq_note_off(s,ch,n); break; }
         case 0xB0: { int cc=s->buf[s->p++], v=s->buf[s->p++];
                      if (cc==7) s->vol[ch]=v; else if (cc==10) s->pan[ch]=v; break; }
-        case 0xC0: { int pr=s->buf[s->p++]; s->prog[ch]=pr;
-                     static int pd=-1; if (pd<0) pd=getenv("NA_PROGDBG")?1:0;
-                     if (pd) fprintf(stderr, "[naprog] ch=%d prog=%d (prog_set=%d vab.ps=%d)\n",
-                                     ch, pr, s->prog_set, s->vab ? s->vab->ps : -1);
-                     break; }
+        case 0xC0: { s->prog[ch]=s->buf[s->p++]; break; }
         case 0xE0: s->p += 2; break;
         case 0xF0: {
             int type = s->buf[s->p++];

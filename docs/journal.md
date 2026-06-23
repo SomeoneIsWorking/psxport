@@ -24,13 +24,13 @@
 - ~~SCEA license screen was black~~ **FIXED PC-native (later-179, below).**
 
 ## later-220 (2026-06-23) — IN-GAME MUSIC: wrong VAB bank + wrong tone-start (corrects later-219's slot[0x26] claim)
-USER: "no dialogue music; the area-load is the culprit." Gated the native area-load (`native areaload off`,
-`./run.sh psx-area-load`) — NOT it: the recomp libsnd path is dead (keyon/seqplay = 0 in every config), so
-in-game music is 100% the native engine. Real root cause is the native engine's VAB/tone handling, three bugs:
+USER: "no dialogue music; the area-load is the culprit." Gated the native area-load (REPL `native areaload
+off`) — NOT it: the recomp libsnd path is dead (keyon/seqplay = 0 in every config), so in-game music is 100%
+the native engine. Real root cause is the native engine's VAB/tone handling, three bugs:
 1. **Wrong VAB bank.** The area bundle (guest 0x80182000) has TWO `pBAV` VABs: bank0 @+0x26b4 (ps=4) and
    bank1 @+0x38d4 (ps=18). `music_list.c` bound bank0 for every song. The songs program-change (0xCn) to
-   programs 1,2,4,5,7,8,13,15 (VERIFIED live, `NA_PROGDBG`) — those exist only in bank1. Fixed: bind bank1
-   (AREA_VAB_OFF 0x38d4; AREA_SEP_END 0x26b4 still bounds the SEP scan).
+   programs 1,2,4,5,7,8,13,15 (verified live with a temporary per-note program trace) — those exist only in
+   bank1. Fixed: bind bank1 (AREA_VAB_OFF 0x38d4; AREA_SEP_END 0x26b4 still bounds the SEP scan).
 2. **Live program ignored.** `seq_note_on` forced `slot[0x26]` (=program 0) for ALL notes "because programs
    9..17 dropped against ps=4" (later-219). That was a workaround for bug #1, not a fix — it collapsed every
    instrument to program 0 (the SFX-tone sound). Fixed: use the live 0xCn `s->prog[ch]`, fall back to
@@ -40,10 +40,10 @@ in-game music is 100% the native engine. Real root cause is the native engine's 
    FIXED 16 slots/program (na_vab_open_at's own `vagtab = tonetab + ps*16*32` proves it). Agreed only for
    program 0 — so it was masked while #2 forced program 0; honoring the live program exposed it (every note
    resolved to the wrong slots -> 0 tones -> dropped). Fixed: `return p*16`.
-RESULT (objective, `NA_PROGDBG`): field song 8 now keys 104 voices, **0 dropped**, across 4 instruments
-(programs 1/2/4/15) vs all-program-0 before. Sound test unchanged (ps<=2 -> fallback). USER verifies by ear.
-Diag added: `PSXPORT_DEBUG=bgmreq` (game's sound_play_bgm/stop trigger — never fires in normal field play,
-confirming the area trigger FUN_8007566c path), `NA_PROGDBG` (synth program/tone resolution). OPEN: per-song
+RESULT (objective, measured via a temporary per-note trace): field song 8 now keys 104 voices, **0 dropped**,
+across 4 instruments (programs 1/2/4/15) vs all-program-0 before. Sound test unchanged (ps<=2 -> fallback).
+USER verifies by ear. Diag left in tree: `PSXPORT_DEBUG=bgmreq` (game's sound_play_bgm/stop trigger — never
+fires in normal field play, confirming the area trigger FUN_8007566c path is what drives BGM). OPEN: per-song
 bank selection is currently hardcoded to bank1 — if some jingles are authored for bank0, add a song->bank map.
 
 ## later-219 (2026-06-23) — NATIVE audio engine LANDED: sound test + IN-GAME field music (libsnd replaced)

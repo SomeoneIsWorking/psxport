@@ -43,29 +43,9 @@ void xa_audio_trace(Core* c, const char* tag);    // CD-vol fade + XA lifecycle 
 struct NativeGate { const char* name; int on; };
 static NativeGate s_gates[32];
 static int s_ngates = 0;
-// A gate is OFF at registration if its name appears in the comma-list PSXPORT_NATIVE_OFF (the
-// startup preset for the REPL `native <name> off` command — set by `./run.sh psx-area-load`). This
-// is a DIAGNOSTIC preset for the gate registry, not a behavior toggle.
-static int native_gate_env_off(const char* name) {
-  const char* env = getenv("PSXPORT_NATIVE_OFF");
-  if (!env || !*env) return 0;
-  size_t nl = strlen(name);
-  for (const char* p = env; *p; ) {
-    const char* q = strchr(p, ',');
-    size_t len = q ? (size_t)(q - p) : strlen(p);
-    if (len == nl && !strncmp(p, name, nl)) return 1;
-    if (!q) break;
-    p = q + 1;
-  }
-  return 0;
-}
 extern "C" int native_gate(const char* name) {
   for (int i = 0; i < s_ngates; i++) if (!strcmp(s_gates[i].name, name)) return s_gates[i].on;
-  if (s_ngates < 32) {                                  // copy name (REPL buf dangles); default ON
-    s_gates[s_ngates] = { strdup(name), native_gate_env_off(name) ? 0 : 1 };
-    if (!s_gates[s_ngates].on) fprintf(stderr, "[native] gate '%s' preset OFF (PSXPORT_NATIVE_OFF)\n", name);
-    return s_gates[s_ngates++].on;
-  }
+  if (s_ngates < 32) { s_gates[s_ngates] = { strdup(name), 1 }; return s_gates[s_ngates++].on; }  // copy name (REPL buf dangles); default ON
   return 1;
 }
 static void native_gate_set(const char* name, int on) {
