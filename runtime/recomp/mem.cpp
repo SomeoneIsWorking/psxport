@@ -133,9 +133,19 @@ void Core::io_write(uint32_t a, uint32_t v, uint32_t bytes) {
       uint32_t da = s_dma4_madr & 0x1FFFFC;
       if (v & 1) {                                 // RAM -> SPU
         for (int i = 0; i < n; i++) s_dma_buf[i] = mem_r32(da + i * 4);
-        if (cfg_str("PSXPORT_SPUDMA"))             // log VAB/sample transfers: source -> SPU dest, size
+        if (cfg_str("PSXPORT_SPUDMA")) {           // log VAB/sample transfers: source -> SPU dest, size
           fprintf(stderr, "[spudma] RAM 0x%08X -> SPU 0x%06X  %d words (%d B)  pc=%08X stage=%08X\n",
                   0x80000000u | da, s_spu_xfer_addr, n, n * 4, g_interp_pc, mem_r32(0x801fe00c));
+          if (n > 20000) {                         // big VAB bank: dump engine-range guest return addrs
+            uint32_t sp = r[29] & 0x1FFFFFFF; fprintf(stderr, "  [vab-caller-chain]");
+            for (uint32_t o = 0; o < 0x800 && sp + o + 4 <= 0x200000; o += 4) {
+              uint32_t w; memcpy(&w, &ram[sp + o], 4); uint32_t p = w & 0x1FFFFFFF;
+              if ((w & 0xFFE00000u) == 0x80000000u && (w & 3) == 0 && p >= 0x1E000 && p < 0x82000)
+                fprintf(stderr, " %08X", w);
+            }
+            fprintf(stderr, "\n");
+          }
+        }
         spu_dma_write(s_dma_buf, n);
       } else {                                     // SPU -> RAM
         int got = spu_dma_read(s_dma_buf, n);

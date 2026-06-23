@@ -474,6 +474,32 @@ static void interp_flat(Core* c, uint32_t pc, uint32_t stop_ra) {
                 else fprintf(stderr, "[bgmreq] sound_play_bgm(idx=%u song=%u loop=%d) ra=%08X\n",
                              c->r[4], c->r[4] & 0x7f, (c->r[4] & 0x80) == 0, c->r[31]); }
     }
+    // PSXPORT_DEBUG=septrace: trace the libsnd SEP event dispatcher 0x80091460 — at 0x800914d0 the
+    // status byte (s2=r18) has just been read from the track stream pointer (a3=r7, already +1). Log
+    // the byte ADDRESS and value per event = the game's exact event walk (byte-consumption oracle for
+    // aligning our na_seq_render parser). r17=seq, r16/.. set later; r7-1 = the status byte's address.
+    if (pc == 0x800914D0u) {
+      static int stc = -2; if (stc == -2) stc = cfg_dbg("septrace") ? 1 : 0;
+      if (stc) fprintf(stderr, "[septrace] @%08X status=%02X\n", c->r[7] - 1, c->r[18] & 0xff);
+    }
+    // PSXPORT_DEBUG=tickdbg: where does the recomp libsnd sequencer stall? trace the per-vblank tick
+    // wrapper 0x800909C0, SsSeqCalled 0x80090BD0, and the SEP event dispatcher 0x80091460. If the tick
+    // runs but the dispatcher never does, the sequence clock isn't advancing (frozen sequencer).
+    if (pc == 0x800909C0u || pc == 0x80090BD0u || pc == 0x80091460u) {
+      static int td = -2; if (td == -2) td = cfg_dbg("tickdbg") ? 1 : 0;
+      if (td) { static unsigned ct[3]={0,0,0}; int k = pc==0x800909C0u?0 : pc==0x80090BD0u?1:2;
+                if (++ct[k] <= 3 || ct[k]%200==0)
+                  fprintf(stderr, "[tickdbg] %s count=%u\n",
+                          pc==0x800909C0u?"tick(909C0)":pc==0x80090BD0u?"SsSeqCalled(90BD0)":"dispatch(91460)", ct[k]); }
+    }
+    // PSXPORT_DEBUG=seqopen: trace SsSeqOpen 0x80090210 (a0=SEP addr, a1=VAB id) — the game's intended
+    // SEQ->VAB binding (which we currently guess). a2/a3 = seq/sub indices. Reveals which VAB each song
+    // is authored against, the missing piece for correct instruments/pitch.
+    if (pc == 0x80090210u) {
+      static int so = -2; if (so == -2) so = cfg_dbg("seqopen") ? 1 : 0;
+      if (so) fprintf(stderr, "[seqopen] SsSeqOpen(sep=%08X vab=%d) ra=%08X\n",
+                      c->r[4], (int)(int16_t)c->r[5], c->r[31]);
+    }
     // PSXPORT_DEBUG=seqplay: trace SsSeqPlay 0x80090560 (a0=seq handle) — which sequences are played.
     if (pc == 0x80090560u) {
       static int sp = -2; if (sp == -2) sp = cfg_dbg("seqplay") ? 1 : 0;
