@@ -43,9 +43,29 @@ void xa_audio_trace(Core* c, const char* tag);    // CD-vol fade + XA lifecycle 
 struct NativeGate { const char* name; int on; };
 static NativeGate s_gates[32];
 static int s_ngates = 0;
+// A gate is OFF at registration if its name appears in the comma-list PSXPORT_NATIVE_OFF (the
+// startup preset for the REPL `native <name> off` command — set by `./run.sh psx-area-load`). This
+// is a DIAGNOSTIC preset for the gate registry, not a behavior toggle.
+static int native_gate_env_off(const char* name) {
+  const char* env = getenv("PSXPORT_NATIVE_OFF");
+  if (!env || !*env) return 0;
+  size_t nl = strlen(name);
+  for (const char* p = env; *p; ) {
+    const char* q = strchr(p, ',');
+    size_t len = q ? (size_t)(q - p) : strlen(p);
+    if (len == nl && !strncmp(p, name, nl)) return 1;
+    if (!q) break;
+    p = q + 1;
+  }
+  return 0;
+}
 extern "C" int native_gate(const char* name) {
   for (int i = 0; i < s_ngates; i++) if (!strcmp(s_gates[i].name, name)) return s_gates[i].on;
-  if (s_ngates < 32) { s_gates[s_ngates] = { strdup(name), 1 }; return s_gates[s_ngates++].on; }  // copy name (REPL buf dangles); default ON
+  if (s_ngates < 32) {                                  // copy name (REPL buf dangles); default ON
+    s_gates[s_ngates] = { strdup(name), native_gate_env_off(name) ? 0 : 1 };
+    if (!s_gates[s_ngates].on) fprintf(stderr, "[native] gate '%s' preset OFF (PSXPORT_NATIVE_OFF)\n", name);
+    return s_gates[s_ngates++].on;
+  }
   return 1;
 }
 static void native_gate_set(const char* name, int on) {
@@ -191,7 +211,10 @@ static void native_scheduler_step(Core* c) {
     {
       int sop_fresh = (st == 3 || (st == 2 && !c->game->sched.task_started[i]))
                       && c->mem_r32(base + 0xc) == 0x80109164u;
-      if (sop_fresh) {
+      // `native areaload off` drops the native SOP load: fall through so the recomp load body
+      // 0x80109164 runs as a normal cooperative task (its FUN_80051fb4 yield serviced) — the recomp
+      // libsnd setup runs in its place. Diagnostic for the silent-sequenced-music hypothesis.
+      if (sop_fresh && native_gate("areaload")) {
         c->game->sched.task_ctx[i] = loop;                          // inherit gp
         c->game->sched.task_ctx[i].r[29] = c->mem_r32(base + 8);    // per-task PSX stack top
         c->game->sched.task_ctx[i].r[31] = 0xDEAD0000u;
@@ -220,7 +243,19 @@ static void native_scheduler_step(Core* c) {
     {
       int game_fresh = (st == 3 || (st == 2 && !c->game->sched.task_started[i]))
                        && c->mem_r32(base + 0xc) == 0x8010637Cu;
-      if (game_fresh || (c->game->sched.game_native[i] && st == 2 && c->game->sched.task_started[i])) {
+      // `native areaload off`: route the WHOLE GAME stage through the cooperative guest loop instead
+      // of the native per-frame dispatcher. The native transition area-load (native_transition_area_load,
+      // reached only inside this native path via ov_game_submode1) is bypassed, so the recomp's
+      // cooperative area-load (FUN_80044bd4 spawn-and-wait) runs with its yields serviced and the recomp
+      // libsnd binds the vab — the in-game oracle for the silent-music bug. Drop any stale native mode so
+      // a mid-run toggle re-enters the generic path cleanly (it sees a fresh entry at the loop top).
+      int areaload = native_gate("areaload");
+      if (!areaload && c->game->sched.game_native[i]) {
+        c->game->sched.game_native[i] = 0;
+        c->game->sched.task_started[i] = 0;
+      }
+      if (areaload &&
+          (game_fresh || (c->game->sched.game_native[i] && st == 2 && c->game->sched.task_started[i]))) {
         if (game_fresh) {
           c->game->sched.task_ctx[i] = loop;                        // inherit gp
           c->game->sched.task_ctx[i].r[29] = c->mem_r32(base + 8);  // per-task PSX stack top
