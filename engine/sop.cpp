@@ -195,7 +195,8 @@ void ov_sop_field_update(Core* c) {
     d0(c, 0x80075a80u);                                    // per-frame area update
     if (c->mem_r8(0x800bf9b4u) != 5) d1(c, 0x8010bffcu, 0x800ed018u);   // parallax BG draw
     d1(c, 0x80109fe0u, 0x800f2418u);                       // entity render loop
-    d0(c, 0x8003c048u);                                    // GPU packet submit
+    void ov_render_walk(Core*);                            // engine_submit.cpp — NATIVE 0x8003c048 walk
+    ov_render_walk(c);                                     // object render-list walk (PC-native depth + fps60)
     if (c->mem_r8(0x800bf9b4u) != 5) d1(c, 0x8010c26cu, 0x800ed018u);   // BG tile scroller
     c->mem_w8(0x1f800234u, 0);
   }
