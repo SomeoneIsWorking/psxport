@@ -7290,3 +7290,41 @@ routing (obj_depth_lookup keyed by packet address) still exists only to carry th
 rasterize in the OT walk; owning the remaining billboard drawers (0x8003C8F4 + the unowned render modes) to
 draw IMMEDIATELY PC-native from world position will retire the span hack and give per-collectable identity
 (fixes the objid overlay merging all collectables into one box).
+
+## later-215 (2026-06-22) — GHIDRA decomp pipeline (USE IT) + GAME area-load / overlay-class RE
+**GHIDRA IS SET UP — use it for any RE instead of squinting at raw disas (USER directive).**
+- Ghidra 11.0.3 headless: `/opt/ghidra_11.0.3_PUBLIC/support/analyzeHeadless`. Reusable script
+  `<local-notes>/skills/decomp-port/DecompDump.py` (skill `decomp-port`, SKILL.md §1-2 for usage).
+- **Full MAIN.EXE decomp already exists: `scratch/decomp/ram_f1000_all.c`** (2MB, every resident FUN_*).
+  Grep it FIRST — readable C beats hand-disassembly. Overlay decomps under `scratch/decomp/{a00,game,sop}/`;
+  Ghidra projects under `scratch/ghidra/{A00,GAME,SOP}` (re-decompile is cheap).
+- Decompile an OVERLAY: import raw with `-processor MIPS:LE:32:default -loader BinaryLoader
+  -loader-baseAddr <guest base>` (PSX MIPS LE). Use `scratch/ghidra/` for the project +
+  `-Djava.io.tmpdir=scratch/ghidra/tmp` (NEVER /tmp — quota'd tmpfs). file_off = vaddr - base.
+- `tools/disas.py 0x<addr> --ram <dump>` stays the quick cross-check; the RAM dumps (ram_game.bin =
+  derail w/ NO overlay; ram_derail2.bin = A00 loaded @0x80108f9c) are the ground-truth images.
+
+**GAME-stage area-load RE (the new-game derail frontier):**
+- GAME.BIN = BIN/GAME.BIN, LBA 1882, size 0x2d74, base 0x80106228, ENDS exactly at 0x80108f9c.
+- Two overlay CLASSES load RAW (no reloc) to the SAME slot **0x80108f9c** (the byte right after GAME.BIN):
+  - **MODE overlays** (SOP/OPN/CRD/DEMO/START.BIN) — have a real FUNCTION at **0x80109450** (the per-frame
+    game-mode state machine: `switch(gamestate sm+0x50)`, fade/spawn/…). GAME.BIN's running sub-mode-0
+    handler (FUN_8010882c, sm[0x4a]==0) does `jal 0x80109450` every frame = a CROSS-OVERLAY direct call
+    into the resident MODE overlay (link-time symbol map; not a trampoline, nothing patches it).
+  - **AREA overlays** (A00..A0L.BIN) — have a DATA jump-table at 0x80109450 (per-object-type dispatch,
+    entries into FUN_80113700 object-list walker). Their header @0x80108fa0 = count(10) + state-handler
+    entry pointers (e.g. A00 hdr[0]=0x8010a3ac into the actor state machine FUN_8010a33c).
+- Per-area file table @ **0x800be118** (stride 8, (LBA,size); 25 entries). A00..A0L at table idx 3..23,
+  indexed by **(area_id+3)&0xff**. The area-CODE overlay loader = `FUN_80045080(dest=0x80108f9c, area_id+3)`
+  = `cd_dc40_sync(0x80108f9c, table[idx].LBA, table[idx].size)` (raw, no reloc). Called from `FUN_800452c0`
+  (task-1, the cooperative area-load that never spawns in our port). Full FUN_800452c0 body in
+  ram_f1000_all.c:24267 (code overlay → FUN_8007566c per-area cel/scene → FUN_80044f58 texgroup →
+  DAT→0x8018a000 + reloc → done flags 0x1f80019b=1). Fresh new-game first area = **area 0 (seaside) = A00**
+  (task0[0x6e]=0 at GAME entry; idx 3; LBA 374, size 0x459A8).
+- **CONCLUSION (do NOT patch 0x80109450):** loading the AREA overlay (A00) to 0x80108f9c is the WRONG
+  overlay class for the sub-mode-0 `jal 0x80109450` path — that path needs a MODE overlay resident. The
+  new-game derail is an **overlay-SEQUENCING** issue: GAME runs the MODE-overlay machine (sub-mode 0) with
+  no mode overlay loaded. NEXT: find which MODE overlay the new-game opening needs + what selects/loads it
+  (FUN_8005082c arms flags 0x800ea0d4/0x800ec144 + 0x800bf8a4..7 = mode/transition request; find consumer).
+- TOOLING ADDED: REPL `newgame` now FREEZES at the GAME prologue (native_boot.cpp: `continue` before
+  native_step_frame) so immediate `r`/`dumpram` see a clean GAME-entry state (was derailing same frame).

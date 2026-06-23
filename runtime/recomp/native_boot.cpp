@@ -806,6 +806,11 @@ static void ov_game_main(Core* c) {
       } else {
         fprintf(stderr, "[repl] newgame: reached GAME prologue at frame %u\n", f);
         g_nav_newgame = 0; repl_budget = 0;                                     // back to the REPL prompt
+        // Do NOT run this frame's native_step_frame: it would advance into the GAME loop body (area
+        // INIT -> running sub-mode) and, with the area-code overlay not yet loaded, derail before the
+        // REPL prompt regains control. `continue` freezes task0 right after the GAME prologue (before
+        // INIT runs) so immediate `r`/`rw`/`dumpram` reads see a clean GAME-entry state.
+        continue;
       }
     }
     if (g_skip_frames > 0) {

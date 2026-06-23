@@ -52,6 +52,27 @@ static void on_fault(int sig) {
   _exit(139);
 }
 
+// SIGINT/SIGTERM (Ctrl+C / kill): a hung interpreter loop never returns to the windowing event
+// pump, so the window's own close/Ctrl+C handling is dead and the process is unkillable from the
+// UI. Install our OWN handler so Ctrl+C always force-exits IMMEDIATELY — and report where it was
+// stuck (interp PC + C backtrace) on the way out, so a hang is diagnosable, not just killable.
+// A second signal hard-kills in case anything in the handler wedges.
+static volatile sig_atomic_t g_int_seen;
+static void on_interrupt(int sig) {
+  (void)sig;
+  if (g_int_seen) _exit(130);          // second Ctrl+C: bail without touching anything
+  g_int_seen = 1;
+  static const char msg[] = "\n[watchdog] INTERRUPT (SIGINT/SIGTERM) — where it was stuck:\n";
+  write(2, msg, sizeof(msg) - 1);
+  { char b[] = "[watchdog] interp PC = 0x00000000\n"; uint32_t p = g_interp_pc;
+    for (int i = 0; i < 8; i++) b[32 - i] = "0123456789abcdef"[(p >> (i * 4)) & 0xF];
+    write(2, b, sizeof(b) - 1); }
+#ifdef HAVE_BACKTRACE
+  void* bt[64]; int n = backtrace(bt, 64); backtrace_symbols_fd(bt, n, 2);
+#endif
+  _exit(130);
+}
+
 // Enable with PSXPORT_WATCHDOG=<seconds> (0/unset disables). Call once at startup.
 void watchdog_init(void) {
   // A crash (SIGSEGV/SIGABRT) during boot should report WHERE (C backtrace + interpreter PC),
@@ -62,8 +83,20 @@ void watchdog_init(void) {
   sigaction(SIGABRT, &fa, 0);
   sigaction(SIGBUS, &fa, 0);
 
+  // Always make Ctrl+C / kill work + diagnostic, regardless of the frame-watchdog setting — a hung
+  // interpreter loop otherwise leaves the window unclosable and SIGINT swallowed (the event pump
+  // never runs). Our handler force-exits with the stuck PC.
+  struct sigaction ia = {0};
+  ia.sa_handler = on_interrupt;
+  sigaction(SIGINT, &ia, 0);
+  sigaction(SIGTERM, &ia, 0);
+
+  // Frame-progress watchdog. Default ON (3s) even when PSXPORT_WATCHDOG is unset, so a hang in a
+  // windowed `./run.sh` self-aborts with a backtrace instead of wedging forever. A frame must take
+  // well under a second, so 3s is already far past any healthy frame; gameplay pets every present
+  // and never trips it. Explicit PSXPORT_WATCHDOG=0 disables it; set higher only for slow debugging.
   const char* s = cfg_str("PSXPORT_WATCHDOG");
-  g_secs = s ? atoi(s) : 0;
+  g_secs = s ? atoi(s) : 3;
   if (g_secs <= 0) return;
   struct sigaction sa = {0};
   sa.sa_handler = on_alarm;
