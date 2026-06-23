@@ -128,6 +128,15 @@ static void native_scheduler_step(Core* c) {
     }
     uint32_t st = c->mem_r16(base);
     if (st == 0) { c->game->sched.task_started[i] = 0; c->game->sched.demo_native[i] = 0; continue; }  // free
+    // GATE: with psx_fallback on, the native stage dispatchers + loaders (DEMO/GAME per-frame, START.BIN
+    // file-table builder, SOP area load) are OFF — the stage state machines and asset/area LOADING run as
+    // pure PSX recomp coroutines (the generic path; their CD reads stay sync via cd_override). The scheduler
+    // harness stays native always. Clear any stale native-dispatcher mode so a `gate` toggle re-enters the
+    // generic path cleanly.
+    int native_content = !c->game->psx_fallback;
+    if (!native_content && (c->game->sched.demo_native[i] || c->game->sched.game_native[i])) {
+      c->game->sched.demo_native[i] = 0; c->game->sched.game_native[i] = 0; c->game->sched.task_started[i] = 0;
+    }
     // ---- DEMO / front-end NATIVE per-frame task (no guest coroutine) ----------------------------
     // The DEMO stage runs as a native dispatcher: ov_demo_frame is called once per frame with ALL state
     // in guest RAM (sm[0x48] substate, sm[0x4a] sub-mode). On the FRESH entry we run the prologue + s0
@@ -138,7 +147,7 @@ static void native_scheduler_step(Core* c) {
     // longer intercept). Leaving DEMO (-> GAME) re-registers the slot with a non-DEMO entry, clearing
     // demo_native via the generic fresh path below.
     {
-      int demo_fresh = (st == 3 || (st == 2 && !c->game->sched.task_started[i]))
+      int demo_fresh = native_content && (st == 3 || (st == 2 && !c->game->sched.task_started[i]))
                        && c->mem_r32(base + 0xc) == 0x801062E4u;
       if (demo_fresh || (c->game->sched.demo_native[i] && st == 2 && c->game->sched.task_started[i])) {
         if (demo_fresh) {
@@ -191,10 +200,11 @@ static void native_scheduler_step(Core* c) {
     {
       int sop_fresh = (st == 3 || (st == 2 && !c->game->sched.task_started[i]))
                       && c->mem_r32(base + 0xc) == 0x80109164u;
-      // `native areaload off` drops the native SOP load: fall through so the recomp load body
-      // 0x80109164 runs as a normal cooperative task (its FUN_80051fb4 yield serviced) — the recomp
-      // libsnd setup runs in its place. Diagnostic for the silent-sequenced-music hypothesis.
-      if (sop_fresh && native_gate("areaload")) {
+      // With psx_fallback on this native SOP load is dropped: fall through so the recomp load body 0x80109164
+      // runs as a normal cooperative task (its FUN_80051fb4 yield serviced by the harness). Its CD reads
+      // still go through the platform CD sync layer, so the load stays synchronous; only the orchestration
+      // (unpack/reloc/libsnd setup) runs as PSX — the recomp baseline.
+      if (sop_fresh && native_content) {
         c->game->sched.task_ctx[i] = loop;                          // inherit gp
         c->game->sched.task_ctx[i].r[29] = c->mem_r32(base + 8);    // per-task PSX stack top
         c->game->sched.task_ctx[i].r[31] = 0xDEAD0000u;
@@ -223,13 +233,12 @@ static void native_scheduler_step(Core* c) {
     {
       int game_fresh = (st == 3 || (st == 2 && !c->game->sched.task_started[i]))
                        && c->mem_r32(base + 0xc) == 0x8010637Cu;
-      // `native areaload off`: route the WHOLE GAME stage through the cooperative guest loop instead
-      // of the native per-frame dispatcher. The native transition area-load (native_transition_area_load,
-      // reached only inside this native path via ov_game_submode1) is bypassed, so the recomp's
-      // cooperative area-load (FUN_80044bd4 spawn-and-wait) runs with its yields serviced and the recomp
-      // libsnd binds the vab — the in-game oracle for the silent-music bug. Drop any stale native mode so
-      // a mid-run toggle re-enters the generic path cleanly (it sees a fresh entry at the loop top).
-      int areaload = native_gate("areaload");
+      // With psx_fallback on the GAME native per-frame dispatcher is off: route the WHOLE GAME stage through the
+      // cooperative guest loop instead. The native transition area-load (native_transition_area_load, reached
+      // only inside the native dispatcher via ov_game_submode1) is bypassed, so the recomp's cooperative
+      // area-load (FUN_80044bd4 spawn-and-wait) runs with its yields serviced — the GAME stage runs as PSX
+      // recomp. Drop any stale native mode so a `gate` toggle re-enters the generic path cleanly.
+      int areaload = native_content;
       if (!areaload && c->game->sched.game_native[i]) {
         c->game->sched.game_native[i] = 0;
         c->game->sched.task_started[i] = 0;
@@ -318,7 +327,10 @@ static void native_scheduler_step(Core* c) {
       // exactly once on a FRESH entry (NOT on a resume, whose saved pc is deep guest code that must
       // be interpreted, not re-dispatched). The override does its prologue and either rec_coro_redirect's
       // to where the interp should continue (coro_redirect_pc) or returns to its ra; run flat from there.
-      if (fresh && resume_pc == 0x8010637Cu) {
+      // With psx_fallback on, these native stage entries are OFF: the stage runs as pure PSX recomp from
+      // its entry (start == resume_pc), so the GAME stage SM and the START.BIN file-table builder + stage-0
+      // asset preload all run as PSX (sync CD via cd_override). Only fire the native owners at full native.
+      if (native_content && fresh && resume_pc == 0x8010637Cu) {
         // The ONE native task entry: the GAME stage dispatcher (engine_stage.cpp). Called directly
         // (top-down PC-driven) instead of via the removed address-keyed override table.
         void ov_game_stage_main(Core*);
@@ -326,7 +338,7 @@ static void native_scheduler_step(Core* c) {
         ov_game_stage_main(c);
         start = c->coro_redirect_pc ? c->coro_redirect_pc : c->r[31];
         c->coro_redirect_pc = 0;
-      } else if (fresh && resume_pc == 0x8010649Cu) {
+      } else if (native_content && fresh && resume_pc == 0x8010649Cu) {
         // Stage-0 START.BIN entry: own the file-table builder native (disc_find_file), then continue
         // the PSX stage SM in-task. Same top-down direct-call pattern as the GAME stage above.
         void ov_start_bin_stage(Core*);
@@ -400,7 +412,11 @@ static void native_step_frame(Core* c, uint32_t f) {
   { void ov_frame_update(Core*); ov_frame_update(c); }        // tick + per-vblank audio + present + pace
   xa_audio_trace(c, "post");                                  // CD-vol fade state AFTER tick+mix
   perf_phase_begin(3);   // perf: SCHED-LOGIC = the cooperative scheduler step (the real per-frame GAME logic)
-  native_scheduler_step(c);                                   // <- replaces FUN_80051e60
+  // The native scheduler is the frame-loop's task-stepping HARNESS (no BIOS threads — yields are setjmp/
+  // longjmp coroutines, CD loads are synchronous). It stays native at every gate level. What the gate
+  // controls is whether the TASK BODIES it steps run as native stage dispatchers + content (full native) or
+  // as pure PSX recomp coroutines (psx_fallback on) — see the gate checks inside native_scheduler_step.
+  native_scheduler_step(c);                                   // <- replaces FUN_80051e60 (BIOS scheduler)
   perf_phase_end(3);
   xa_dialog_coord(c);                                         // dialogs stop/restore ingame music
   xa_audio_trace(c, "coord");                                 // CD-vol fade state AFTER coord
@@ -412,7 +428,8 @@ static void native_step_frame(Core* c, uint32_t f) {
   // opposite buffer's disp-env struct (the later-161 (1-parity) trick — a band-aid over the env pairing
   // that depended on the two structs lining up). One fixed page, drawn and displayed; nothing PSX in the
   // display path. (env0's draw area starts at VRAM (0,0); the display W/H stay as the boot env's mode set.)
-  if (c->mem_r16(0x1f80019c) == 0) {
+  // Dual-core diff mode skips the whole display/OT-submit block (host render output, shared VK singleton).
+  if (!c->game->diff_mode && c->mem_r16(0x1f80019c) == 0) {
     rc1(c, 0x800815d0, envp + 0x2014);                        // PutDrawEnv (draw area/offset/clip for page 0)
     gpu_set_disp_origin(c, 0, 0);                             // PC-native: present scans the page we draw
     // DrawOTag, PC-native: call ov_draw_otag DIRECTLY (top-down) instead of interpreting the PSX FUN_80081560.
@@ -592,6 +609,15 @@ static long native_repl_read(Core* c, uint32_t f) {
       else native_gate_set(nm, strcmp(st, "off") != 0),
            fprintf(stderr, "[repl] native %s = %s\n", nm, strcmp(st, "off") ? "on" : "off");
     }
+    // gate on|off (or 1|0) — toggle PSX-fallback live: everything the frame loop calls runs as PSX recomp
+    // (sync CD) instead of the native owners. Applies to tasks freshly (re)entered after the toggle; an
+    // already-running native dispatcher is reset on its next scheduler step so it re-enters as PSX.
+    else if (!strcmp(cmd, "gate")) {
+      char st[16] = {0};
+      if (sscanf(line, "%*s %15s", st) == 1)
+        c->game->psx_fallback = (!strcmp(st, "off") || !strcmp(st, "0")) ? 0 : 1;
+      fprintf(stderr, "[repl] psx_fallback = %d\n", c->game->psx_fallback);
+    }
     // seqsolo <i> — stop ALL open libsnd sequences then SsSeqPlay just sequence <i> at full vol, via the
     // GAME'S OWN sequencer. Lets each area SEP sequence be rendered in isolation (the area's field theme
     // otherwise plays continuously). SsSeqStop=0x80091AF0, SsSeqPlay(h,mode,loop)=0x80090560, SsSeqSetVol
@@ -640,7 +666,8 @@ static void ov_game_main(Core* c);
 // PC-native crt0 (faithful reimplementation of FUN_800896E0): BSS-zero, heap setup, then a DIRECT
 // call to ov_game_main — the top of the top-down PC-driven spine. Replaces the old bootstrap flip
 // (crt0 jal main -> override). The libc/heap init at 0x80089860 stays a dispatched PSX leaf.
-static void native_crt0(Core* c) {
+// crt0 register/heap setup only (no main call) — shared by native_crt0 and the dual-core harness.
+static void crt0_setup(Core* c) {
   for (uint32_t a = 0x800be0d8; a < 0x80106228; a += 4) c->mem_w32(a, 0);   // BSS zero
   uint32_t v0 = c->mem_r32(0x800a3f88) - 8;          // stack top base
   uint32_t sp = v0 | 0x80000000u;
@@ -654,6 +681,10 @@ static void native_crt0(Core* c) {
   c->r[29] = sp; c->r[30] = sp;                      // sp, fp
   c->r[4]  = a0 + 4;                                 // a0 for the init call
   rec_dispatch(c, 0x80089860u);                      // libc/heap init (PSX leaf) — keep dispatched
+}
+
+static void native_crt0(Core* c) {
+  crt0_setup(c);
   ov_game_main(c);                                   // DIRECT PC call (was: crt0 jal main -> flip)
 }
 
@@ -864,7 +895,9 @@ void ov_start_bin_stage(Core* c) {
   native_stage0_sm(c);                // own the 4-state preload + transition to DEMO; yields (no return)
 }
 
-static void ov_game_main(Core* c) {
+// Init prefix + task-0 bootstrap (everything FUN_80050b08 does before its scheduler loop). Factored out
+// of ov_game_main so the dual-core harness can init two cores then drive the frame loop itself.
+static void ov_game_init(Core* c) {
   fprintf(stderr, "[native_boot] FUN_80050b08 override: running init prefix\n");
 
   // --- init prefix, transcribed from FUN_80050b08 (no scheduler loop) ---
@@ -922,6 +955,15 @@ static void ov_game_main(Core* c) {
   fprintf(stderr, "[native_boot] after FUN_800499e8: START.BIN count@0x80106228=%u "
                   "entry-word@0x8010649c=0x%08X (expect 0x27BDFE38); task0 state=%u entry=0x%08X\n",
           c->mem_r32(0x80106228), c->mem_r32(0x8010649c), c->mem_r16(0x801fe000), c->mem_r32(0x801fe00c));
+}
+
+// Dual-core harness hooks (dualcore.cpp): boot a core to the start of the frame loop, then step it one
+// frame at a time. dc_boot_init = crt0 setup + the init prefix/bootstrap; dc_step_frame = one frame.
+void dc_boot_init(Core* c) { crt0_setup(c); ov_game_init(c); }
+void dc_step_frame(Core* c, uint32_t f) { native_step_frame(c, f); }
+
+static void ov_game_main(Core* c) {
+  ov_game_init(c);
   // --- native frame loop (replaces LAB_80050c6c). Per frame, faithful to the game-main loop
   // body but with the scheduler call FUN_80051e60 replaced by native stage stepping (added
   // incrementally). native_step_frame calls ov_frame_update DIRECTLY (PC-driven, top-down): real
@@ -1167,6 +1209,12 @@ static void ov_game_main(Core* c) {
 // crt0; crt0's call to FUN_80050b08 lands in ov_game_main.
 void native_boot_run(Core* c) {
   { void cfg_dump(void); cfg_dump(); }   // log active PSXPORT_* config once (see docs/config.md)
+  // PSX-fallback gate (diagnostic): boot + frame-loop stay native; everything the loop calls runs as PSX
+  // recomp (sync CD). PSXPORT_GATE nonzero turns it on; the REPL `gate on|off` toggles it live.
+  { const char* g = cfg_str("PSXPORT_GATE");
+    if (g && *g) c->game->psx_fallback = (atoi(g) != 0);
+    fprintf(stderr, "[native_boot] psx_fallback=%d (%s)\n", c->game->psx_fallback,
+            c->game->psx_fallback ? "native boot+frameloop, PSX everything else (sync)" : "full native"); }
   // Intro FMVs: the real boot is SCEA (stub) -> Whoopee logo (LOGO.STR) -> opening movie (OP.STR) ->
   // title/menu. The game's own STR streaming (strNext) TIMES OUT under our runtime (we don't feed
   // CD-streamed FMV sectors to its StrPlayer — see "time out in strNext()" in the DEMO stage), so the

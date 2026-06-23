@@ -107,6 +107,22 @@ public:
   RenderQueue rq;    // engine-owned render queue: the single draw-ORDER authority (render_queue.cpp)
   Fps60State  fps60; // interpolated-60fps tier: capture buffers + matcher + remap (fps60.cpp)
 
+  // ---- PSX-fallback gate (diagnostic, user 2026-06-23) --------------------------------------------
+  // ONE switch: keep BOOT (native crt0/FMV/init) and the FRAME LOOP skeleton native, but run EVERYTHING
+  // the frame loop calls — the stage state machines, all asset/area LOADING, and content — as the PSX
+  // RECOMP body instead of the native owners. CD reads still go through the platform CD layer (cd_override
+  // ov_cd_loadfile/ov_cd_dc40/ov_cd_async_read), so the PSX loaders run SYNCHRONOUSLY (no busy-wait). This
+  // restores a working PSX baseline to compare the native path against. Set by PSXPORT_GATE (nonzero) and
+  // the REPL `gate on|off`. Default OFF = full native (shipped behavior). Wired in native_boot.cpp.
+  int psx_fallback = 0;
+
+  // ---- dual-core diff mode (dualcore.cpp) ----------------------------------------------------------
+  // When set, the frame body runs ONLY the guest-state-mutating work (per-frame update + scheduler +
+  // loaders) and SKIPS all host output — present, pace, audio device feed, render submit, FMV. This lets
+  // two Game instances step in one process without the shared VK/SDL/Beetle output singletons fighting,
+  // so we can diff their guest RAM (PSX-fallback core vs native core) to find what the native loader drops.
+  int diff_mode = 0;
+
   // Dual-core diff control: the per-core override-neutralize flag. The terrain override (ov_terrain,
   // engine_submit.cpp) is in the SHARED dispatch table; each core decides ON vs neutralized by reading
   // THIS flag (not divergent override tables — see docs game-deglobalize-plan P7). The harness sets it on

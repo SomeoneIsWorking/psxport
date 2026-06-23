@@ -4,6 +4,7 @@
 // instance; everything it calls receives `c`.
 #include "core.h"
 #include "game.h"
+#include "cfg.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -16,7 +17,7 @@ extern "C" {
 
 static uint32_t rd32(const uint8_t* p) { return p[0] | p[1]<<8 | p[2]<<16 | (uint32_t)p[3]<<24; }
 
-static void load_exe(const char* path, Core* c) {
+void load_exe(const char* path, Core* c) {   // non-static: the dual-core harness loads two cores
   FILE* f = fopen(path, "rb");
   if (!f) { perror(path); exit(1); }
   fseek(f, 0, SEEK_END); long n = ftell(f); fseek(f, 0, SEEK_SET);
@@ -81,6 +82,14 @@ int main(int argc, char** argv) {
   // cdrom:\MAIN.EXE;1 and jumps to MAIN's entry. We run the stub as the real entry (interpreted —
   // it isn't recompiled) and intercept its LoadExec to hand off to the native MAIN boot
   // (native_boot.c, later 33/34). See docs/journal.md "later 34" + [[psxport-scea-boot-stub]].
+  // PSXPORT_DUALCORE: skip the normal single-core boot; run the PSX-vs-native diff harness instead. It
+  // creates its own two Game instances (the global override tables + Beetle backends are already init'd
+  // above), so the primary `game` here is left unused. See dualcore.cpp.
+  if (cfg_on("PSXPORT_DUALCORE")) {
+    void dualcore_run(const char* exe_path);
+    dualcore_run(path);
+    return 0;
+  }
   void native_stub_run(Core*, const char* main_exe_path);
   native_stub_run(c, path);              // stub draws SCEA, then hands off to native MAIN boot
   fprintf(stderr, "[boot] native_stub_run returned\n");

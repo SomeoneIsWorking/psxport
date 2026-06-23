@@ -122,6 +122,11 @@ void ov_frame_update(Core* c) {
   // playback and keeps the WAV's tick:field ratio unchanged (just a longer, more correct duration).
   // Sequencer guard: pointer initialized + sane code address (never call through null pre-SsStart).
   // Opt out (A/B): PSXPORT_T2_NOSEQTICK. Adaptive: a true-60fps scene (quota=1) ticks once.
+  // Dual-core diff mode: the per-frame state update above is the guest-state work we diff; everything
+  // below is host OUTPUT (audio device feed, fps60, present, pace) — skip it so two cores can step in one
+  // process without the shared SPU/VK singletons fighting. (The sequencer tick mutates guest libsnd state,
+  // but its only purpose is audio playback we aren't producing here, so skip the whole audio block.)
+  if (c->game->diff_mode) return;
   int quota = c->mem_r8(VBLANK_QUOTA); if (quota < 1) quota = 1;
   uint32_t seqfn = c->mem_r32(SEQ_FUNC_PTR);
   int seq_ok = !cfg_on("PSXPORT_T2_NOSEQTICK") && native_gate("seqtick")
@@ -131,7 +136,8 @@ void ov_frame_update(Core* c) {
     if (seq_ok) rec_dispatch(c, SEQ_TICK_WRAPPER);   // libsnd per-vblank tick (user cb + SsSeqCalled)
     spu_audio_frame();                               // advance SPU one 1/60 s field + feed device
   }
-  field_bgm_director(c);                              // native field BGM (libsnd music path is silent)
+  // (native field-BGM director REMOVED — it played a HARDCODED song over everything from the menu on.
+  //  Music is the recompiled libsnd path above; no native music engine, no hardcoded song.)
   perf_phase_end(1);
   c->mem_w16(DISPLAY_COUNTER, c->mem_r8(VBLANK_QUOTA));    // satisfy the pacing dwell immediately
   // fps60 (when enabled) OWNS presentation: it presents the interpolated in-between + the real frame
