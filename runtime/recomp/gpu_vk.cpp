@@ -2220,6 +2220,23 @@ void gpu_vk_present_image(Core* core, const uint8_t* rgba, int iw, int ih, float
   // Upload the host RGBA into the texture via its dedicated staging host buffer (sized iw*ih*4) +
   // a one-time-submit copy on s_cmd.
   VKC(vkWaitForFences(s_dev, 1, &s_fence, VK_TRUE, UINT64_MAX));
+
+  // Decide swapchain recreate / acquire the image BEFORE resetting the fence, exactly like present().
+  // recreate_swapchain() requires s_fence to be SIGNALED at its call site (its own wait is on s_fence,
+  // not gated on the compositor). If we reset first and then hit the extent-change recreate path, the
+  // fence is unsignaled with nothing submitted, so recreate_swapchain()'s wait hangs forever — that is
+  // the first-frame boot/SCEA freeze (window sizes to its real extent → extent mismatch → recreate).
+  uint32_t idx = 0;
+  if (!s_headless) {
+    VkExtent2D now = surface_extent_now();
+    if (s_swap_dirty || ((now.width != s_extent.width || now.height != s_extent.height) && now.width && now.height)) {
+      s_swap_dirty = 0; recreate_swapchain(); return;   // skip this frame; fence still signaled, nothing reset
+    }
+    VkResult acq = vkAcquireNextImageKHR(s_dev, s_swap, UINT64_MAX, s_sem_acq, VK_NULL_HANDLE, &idx);
+    if (acq == VK_ERROR_OUT_OF_DATE_KHR) { recreate_swapchain(); return; }
+    if (acq != VK_SUCCESS && acq != VK_SUBOPTIMAL_KHR) { fprintf(stderr, "[img_present] acquire %d\n", acq); exit(2); }
+  }
+
   VKC(vkResetFences(s_dev, 1, &s_fence));
   memcpy(s_img_stage_ptr, rgba, (size_t)iw * ih * 4);
 
@@ -2248,17 +2265,6 @@ void gpu_vk_present_image(Core* core, const uint8_t* rgba, int iw, int ih, float
     VKC(vkQueueSubmit(s_queue, 1, &su, s_fence));
     return;
   }
-
-  // Acquire the next swapchain image (handle resize/out-of-date like present()).
-  VkExtent2D now = surface_extent_now();
-  if (s_swap_dirty || ((now.width != s_extent.width || now.height != s_extent.height) && now.width && now.height)) {
-    s_swap_dirty = 0; VKC(vkEndCommandBuffer(s_cmd)); recreate_swapchain();
-    VKC(vkResetFences(s_dev, 1, &s_fence)); return;   // skip this frame; nothing submitted (cmd discarded)
-  }
-  uint32_t idx = 0;
-  VkResult acq = vkAcquireNextImageKHR(s_dev, s_swap, UINT64_MAX, s_sem_acq, VK_NULL_HANDLE, &idx);
-  if (acq == VK_ERROR_OUT_OF_DATE_KHR) { VKC(vkEndCommandBuffer(s_cmd)); recreate_swapchain(); return; }
-  if (acq != VK_SUCCESS && acq != VK_SUBOPTIMAL_KHR) { fprintf(stderr, "[img_present] acquire %d\n", acq); exit(2); }
 
   VkClearValue clear = {{{0, 0, 0, 1}}};   // black background (pillarbox bars)
   VkRenderPassBeginInfo rp = { VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
