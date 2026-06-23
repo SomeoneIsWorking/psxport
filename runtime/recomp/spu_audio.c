@@ -13,6 +13,7 @@
 #include "cfg.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <time.h>
 #ifdef PSXPORT_SDL
 #include <SDL.h>
@@ -22,6 +23,13 @@
 // this output sink is self-contained (matches the runtime's per-module convention).
 int32_t spu_update(int32_t clocks);
 int     spu_render(int16_t *out, int max_frames);
+
+// Native music engine (engine/audio/native_music.c) — the PC-native SEP/VAB synth that
+// replaces the broken libsnd sequenced-music path. Its stereo @44100 output is MIXED into the
+// SPU sink below so the sound-test (and, eventually, all sequenced BGM) is audible. Silent when
+// nothing is playing. Declared here to keep this sink self-contained.
+int     native_music_render(int16_t *out, int nframes);
+int     native_music_active(void);
 
 // Public interface (this module).
 void spu_audio_init(void);
@@ -201,7 +209,27 @@ void spu_audio_frame(void)
 
    int frames = spu_render(buf, SPU_FRAMES_PER_VIDEO_FRAME + 64);
    if (frames <= 0)
-      return;
+   {
+      // The SPU produced nothing this frame, but native music may still need output. Emit a full
+      // frame of silence as the base and let the native mix fill it.
+      frames = SPU_FRAMES_PER_VIDEO_FRAME;
+      memset(buf, 0, (size_t)frames * 2 * sizeof(int16_t));
+   }
+
+   // Mix the native music engine on top of the SPU's output (sound-test / native sequenced BGM).
+   // It renders into a scratch buffer and we add it sample-by-sample with saturation. When nothing
+   // is playing native_music_render writes silence, so this is a no-op for normal play.
+   if (native_music_active())
+   {
+      static int16_t mbuf[2 * (SPU_FRAMES_PER_VIDEO_FRAME + 64)];
+      native_music_render(mbuf, frames);
+      for (int i = 0; i < frames * 2; i++)
+      {
+         int v = buf[i] + mbuf[i];
+         if (v > 32767) v = 32767; else if (v < -32768) v = -32768;
+         buf[i] = (int16_t)v;
+      }
+   }
 
    // WAV capture: append the drained PCM (every frame, regardless of SDL). Capped.
    if (s_wav && s_wav_bytes < WAV_MAX_BYTES)

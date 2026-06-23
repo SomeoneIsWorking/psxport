@@ -20,6 +20,7 @@
 #include "c_subsys.h"
 #include "cfg.h"
 #include "asset.h"     // ov_unpack_group / ov_upload_image — existing native asset leaves (call direct)
+#include "audio/music_list.h"   // native sound-test: music_list_play/stop (engine/audio/)
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -554,6 +555,19 @@ static long native_repl_read(Core* c, uint32_t f) {
       rc3(c, 0x80090560u, a, 1, 0);                                // SsSeqPlay(a, mode=1, loop=0)
       rc3(c, 0x80091F50u, a, 127, 127);                           // SsSeqSetVol(a, 127, 127)
       fprintf(stderr, "[repl] seqsolo %u\n", a);
+    }
+    // musictest <n> — play catalogued music track <n> through the NATIVE audio engine (sound test).
+    // 'musictest stop' (or n<0) stops. Bypasses the broken libsnd path entirely (engine/audio/).
+    else if (!strcmp(cmd, "musictest")) {
+      char sub[32] = {0}; int n = -1;
+      if (sscanf(line, "%*s %31s", sub) == 1 && !strcmp(sub, "stop")) { music_list_stop(); fprintf(stderr, "[repl] musictest stop\n"); }
+      else if (sscanf(line, "%*s %d", &n) == 1 && n >= 0) {
+        int rc = music_list_play(n);
+        fprintf(stderr, "[repl] musictest %d (%s) -> %s\n", n, music_list_name(n) ? music_list_name(n) : "?", rc ? "FAIL" : "ok");
+      } else {
+        fprintf(stderr, "[repl] musictest: tracks 0..%d, or 'stop'\n", music_list_count()-1);
+        for (int i = 0; i < music_list_count(); i++) fprintf(stderr, "   %d: %s\n", i, music_list_name(i));
+      }
     }
     else if (!strcmp(cmd, "xadump")) { unsigned ch = 0, lba = 0, secs = 3; char path[200] = {0};
       if (sscanf(line, "%*s %u %u %199s %u", &ch, &lba, path, &secs) >= 3) repl_xadump((uint8_t)ch, lba, path, secs ? (int)secs : 3); }
