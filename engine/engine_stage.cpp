@@ -133,6 +133,64 @@ static void ov_game_s4c(Core* c) {
   rec_coro_redirect(c, state[s4c]);             // run the state IN-CONTEXT (it `j`s to the epilogue itself)
 }
 
+// ---- NATIVE PER-FRAME GAME LOOP (game_native path, mirrors DEMO demo_native) ------------------------
+// The GAME stage is owned as a native per-frame dispatcher instead of coro-redirecting into the guest
+// loop 0x801063F4: each frame ov_game_frame runs ONE loop iteration natively (dispatch the sm[0x48]
+// handler + bump the frame counter), and "yield" = return. This re-wires the previously-orphaned native
+// handlers and descends ownership into gameplay (the SOP field-mode machine). Prereq landed (later-217b):
+// the SOP area load is native+synchronous, so SOP state-0 never yields.
+
+void ov_sop_field_mode(Core*);           // engine/sop.cpp — native SOP field-mode machine
+static void ov_game_submode0(Core* c);   // fwd
+
+// sm[0x48]==2 RUNNING, per-frame variant: dispatch sm[0x4a] handler. handler[0] = the GAME->SOP bridge
+// 0x8010882c (owned native, ov_game_submode0); the others stay rec_dispatch leaves (synchronous; a
+// not-yet-sync leaf that yields is contained by the scheduler setjmp = frame-done).
+static void ov_game_s48_2_frame(Core* c) {
+  static const uint32_t handler[6] = {
+    0x8010882cu, 0x801088d8u, 0x80106478u, 0x80106a24u, 0x801089c4u, 0x80108a60u,
+  };
+  uint32_t sm = c->mem_r32(0x1f800138u);
+  uint16_t s4a = c->mem_r16(sm + 0x4a);
+  if (s4a >= 6) return;
+  if (s4a == 0) { ov_game_submode0(c); return; }
+  rec_dispatch(c, handler[s4a]);
+}
+
+// GAME sub-mode-0 bridge 0x8010882c (sm[0x4c]/sm[0x4e] dispatch) — native. Faithful to the disasm:
+// sm[0x4c]==0 & sm[0x4e]==0 -> input-reset 0x8005082c (sync leaf) + sm[0x50]=0, sm[0x4e]=1; sm[0x4e]==1
+// -> run the native SOP field-mode machine; sm[0x4c]==1 -> sm[0x4c]=0, sm[0x4a]++.
+static void ov_game_submode0(Core* c) {
+  uint32_t sm = c->mem_r32(0x1f800138u);
+  uint16_t s4c = c->mem_r16(sm + 0x4c);
+  if (s4c == 0) {
+    uint16_t s4e = c->mem_r16(sm + 0x4e);
+    if (s4e == 0) {
+      c->r[4] = 0; c->r[5] = 0; c->r[6] = 0;
+      rec_dispatch(c, 0x8005082cu);          // input reset (leaf, no yield)
+      sm = c->mem_r32(0x1f800138u);
+      c->mem_w16(sm + 0x50, 0);
+      c->mem_w16(sm + 0x4e, (uint16_t)(c->mem_r16(sm + 0x4e) + 1));
+    } else if (s4e == 1) {
+      ov_sop_field_mode(c);                  // native SOP field-mode machine (0x80109450)
+    }
+  } else if (s4c == 1) {
+    uint16_t s4a = c->mem_r16(sm + 0x4a);
+    c->mem_w16(sm + 0x4c, 0);
+    c->mem_w16(sm + 0x4a, (uint16_t)(s4a + 1));
+  }
+}
+
+// One native loop iteration of the guest body 0x801063F4: dispatch sm[0x48] handler, bump frame counter.
+void ov_game_frame(Core* c) {
+  uint32_t sm = c->mem_r32(0x1f800138u);
+  uint16_t s48 = c->mem_r16(sm + 0x48);
+  if (s48 == 0) ov_game_s48_0(c);
+  else if (s48 == 1) ov_game_s48_1(c);
+  else if (s48 == 2) ov_game_s48_2_frame(c);
+  c->mem_w16(0x1f800198u, (uint16_t)(c->mem_r16(0x1f800198u) + 1));   // loop tail 0x8010645c
+}
+
 // GAME stage TOP-LEVEL ENTRY 0x8010637C — task-0's stage driver: a one-time PROLOGUE then an infinite
 // per-frame loop {dispatch sm[0x48] handler; bump frame counter DAT_1f800198; yield FUN_80051f80(1)}. The
 // engine OWNS the prologue PC-native here: it is pure register/memory init of the stage state machine (no
@@ -147,7 +205,7 @@ static void ov_game_s4c(Core* c) {
 //   sw ra,0x1c; 0x1f800198=0; 0x800be0e4=0; sm[0x48]=a0; sm[0x4a]=sm[0x4c]=sm[0x4e]=sm[0x50]=0.
 // Non-static: called directly from the native scheduler (native_boot.cpp) — the ONE remaining native
 // task entry after the override system was removed (2026-06-22).
-void ov_game_stage_main(Core* c) {
+void ov_game_stage_prologue(Core* c) {
   uint32_t ra = c->r[31], sp = c->r[29];
   uint32_t s0_in = c->r[16], s1_in = c->r[17], s2_in = c->r[18];
   c->r[29] = sp - 0x20;
@@ -171,8 +229,15 @@ void ov_game_stage_main(Core* c) {
   c->mem_w16(task + 0x4c, 0);
   c->mem_w16(task + 0x4e, 0);
   c->mem_w16(task + 0x50, 0);
-  if (cfg_dbg("stage")) fprintf(stderr, "[stage] ov_game_stage_main: prologue run, sm[0x48]=%u\n", init48);
-  rec_coro_redirect(c, 0x801063F4u);           // hand to the guest loop body IN-CONTEXT (deep yields OK)
+  if (cfg_dbg("stage")) fprintf(stderr, "[stage] ov_game_stage_prologue run, sm[0x48]=%u\n", init48);
+}
+
+// OLD guest-loop entry (prologue + coro-redirect into the guest loop 0x801063F4). SUPERSEDED by the
+// native per-frame path (game_native in native_scheduler_step calls ov_game_stage_prologue + ov_game_frame).
+// Retained as a reference / fallback; not on the live path.
+void ov_game_stage_main(Core* c) {
+  ov_game_stage_prologue(c);
+  rec_coro_redirect(c, 0x801063F4u);
 }
 
 // Register the GAME-stage area-init overrides when this just-loaded overlay is GAME.BIN at the stage base.

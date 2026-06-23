@@ -186,6 +186,48 @@ static void native_scheduler_step(Core* c) {
         continue;
       }
     }
+    // ---- GAME stage NATIVE per-frame dispatcher (mirrors demo_native) ---------------------------
+    // Run the GAME stage as a native per-frame task: ov_game_frame each frame (sm[0x48] dispatch +
+    // frame counter), all state in guest RAM. Fresh entry -> prologue + first frame; resume -> a frame.
+    // SOP state-0's area load is native+sync (later-217b), so no cross-frame yield; a not-yet-sync deep
+    // leaf yield is contained by setjmp = frame-done. Replaces coro-redirecting into the guest loop.
+    {
+      int game_fresh = (st == 3 || (st == 2 && !c->game->sched.task_started[i]))
+                       && c->mem_r32(base + 0xc) == 0x8010637Cu;
+      if (game_fresh || (c->game->sched.game_native[i] && st == 2 && c->game->sched.task_started[i])) {
+        if (game_fresh) {
+          c->game->sched.task_ctx[i] = loop;                        // inherit gp
+          c->game->sched.task_ctx[i].r[29] = c->mem_r32(base + 8);  // per-task PSX stack top
+          c->game->sched.task_ctx[i].r[31] = 0xDEAD0000u;
+          c->game->sched.task_started[i] = 1;
+          c->game->sched.game_native[i] = 1;
+        }
+        c->mem_w16(base, 4);                                        // running
+        c->mem_w32(CUR_TASK, base);
+        c->game->sched.cur_slot = i;
+        static_cast<R3000&>(*c) = c->game->sched.task_ctx[i];       // restore REGISTERS
+        c->game->sched.in_stage = 1;
+        void ov_game_stage_prologue(Core*); void ov_game_frame(Core*);
+        if (setjmp(c->game->sched.yield_jmp) == 0) {
+          if (game_fresh) ov_game_stage_prologue(c);                // prologue (sets sm[0x48] from 0x134)
+          ov_game_frame(c);                                         // one frame: sm[0x48] dispatch + tail
+        } else if (cfg_dbg("sched")) {
+          static int w = 0; if (!w++) fprintf(stderr, "[sched] caught a GAME substate yield (a leaf not "
+                                                      "yet sync) — frontier\n");
+        }
+        c->game->sched.in_stage = 0;
+        // A handler may LEAVE the GAME stage (area transition rewrites base+0xc). Drop native mode and
+        // let the fresh entry stand if so.
+        if (c->mem_r32(base + 0xc) != 0x8010637Cu) {
+          c->game->sched.game_native[i] = 0;
+          c->game->sched.task_started[i] = 0;
+          continue;
+        }
+        c->game->sched.task_ctx[i] = static_cast<R3000&>(*c);       // save REGISTERS
+        c->mem_w16(base, 2);                                        // runnable next frame
+        continue;
+      }
+    }
     uint32_t resume_pc;
     int fresh = 0;
     // state==3 (restart at new entry) or state==2 on a slot with no live context (freshly

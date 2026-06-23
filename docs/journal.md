@@ -41,6 +41,23 @@ Two parallel threads this session.
   bridge 0x8010882c, **(3)** convert the GAME loop to native per-frame (mirror demo_native). Verify each:
   newgame → sm[0x50]=2, no derail. Full trap write-up in `scratch/gameplay_start_flow_re.md`.
 
+**(A.2) later-217c — GAME stage CONVERTED to a NATIVE PER-FRAME LOOP; SOP field-mode machine OWNED.**
+Built on 217b (native sync area-load). The GAME stage no longer coro-redirects into the guest loop —
+it runs as a native per-frame task (`game_native` in native_scheduler_step, mirroring `demo_native`):
+- `ov_game_stage_prologue` (split out of ov_game_stage_main) + `ov_game_frame` each frame (sm[0x48]
+  dispatch → the re-wired native `ov_game_s48_0/1/2_frame` + frame-counter bump = the cooperative yield).
+- GAME→SOP bridge 0x8010882c → `ov_game_submode0` (native): input-reset + the per-frame SOP call.
+- **SOP field-mode machine 0x80109450 → `ov_sop_field_mode`** (engine/sop.cpp): the full sm[0x50]
+  LOAD→FADE-IN→GAMEPLAY→FADE-OUT→RESET switch native. State-0 calls `native_sop_area_load` INLINE
+  (NOT FUN_80044bd4, which clears 1f80019b + spawns the slot-1 task + yields — fatal to re-enter per
+  frame), spawns the 3 scene objects from the SOP overlay tables @0x8010c98c, dispatches the BG/init
+  callees. Heavy per-frame work (FUN_801092b4, per-scene handlers) stays rec_dispatched.
+- VERIFIED: newgame → sm[0x50] 0→1→2 (gameplay) by frame 60 (one frame faster than the cooperative
+  baseline — load is inline), 1f80019b=1, stable 300 frames, zero derail/hang/caught-yield, render
+  99.9% non-black (USER eyeball pending). NB game.h gained `game_native[3]` → needs `build_port.sh all`.
+- NEXT: descend FUN_801092b4 (entity update/render, Tomba update) to re-wire the orphaned
+  cull/spawn/collision/object-walk natives; then the area-transition path.
+
 **(B) Native audio engine — offline synth + sequencer (continues later-216; tool `tools/snd_render.c`).**
 - Corrected the ToneAttr parse (ground-truthed from raw bytes): adsr1@0x10, adsr2@0x12, prog@0x14,
   vag@0x16, + note-range min@6/max@7 (the spec had adsr off by 2).

@@ -255,12 +255,22 @@ for content fns (call it). Do NOT mimic PSX hardware (GTE/GP0/OT) — remove Bee
     slot-1 task-entry interception in native_scheduler_step (keyed on entry 0x80109164). VERIFIED: newgame →
     sm[0x50] 0→1→2 (gameplay) at the SAME frames as baseline (f61), 1f80019b=1, ecf58 patched 8 entries,
     stable 220 frames, zero derail. This is the sync-load fn the native SOP state-0 will call inline.
-  - ☐ NEXT (advance native INTO gameplay) — ORDER MATTERS (later-217 constraint): step (0) DONE above.
-    Then **(1)** own the SOP field-mode machine 0x80109450 (sm[0x50] LOAD→FADE→GAMEPLAY, `sop_mode_re.md`),
-    **(2)** own the bridge 0x8010882c (`ov_game_submode0`), **(3)** convert the GAME loop to a native
-    per-frame dispatcher (mirror DEMO `demo_native` → native `ov_game_frame` wiring s48_0/1/2). Full
-    rationale + the cooperative-yield trap in `scratch/gameplay_start_flow_re.md`. Area loads
-    `scratch/level_layout_re.md`. Baseline: newgame → sm[0x50]=2 (gameplay running) by ~frame 61.
+  - ✅ **GAME stage now driven by a NATIVE PER-FRAME LOOP** (later-217c) — steps (1)(2)(3) DONE. The
+    `game_native` path in `native_scheduler_step` (mirrors `demo_native`) runs `ov_game_stage_prologue`
+    (split out of ov_game_stage_main; the old coro-redirect-to-guest-loop path is retired) then
+    `ov_game_frame` each frame. **NOW NATIVE & LIVE-WIRED:** the per-frame loop (`ov_game_frame`), the
+    sm[0x48] dispatch (`ov_game_s48_0/1/2_frame` — the orphaned handlers are re-wired), the GAME→SOP
+    bridge 0x8010882c (`ov_game_submode0`), and the **SOP field-mode machine 0x80109450**
+    (`ov_sop_field_mode`, engine/sop.cpp — the full sm[0x50] LOAD→FADE→GAMEPLAY→RESET switch; state-0
+    calls `native_sop_area_load` INLINE so it never yields). Heavy per-state callees (FUN_801092b4
+    per-frame field update, BG init, the per-scene object handlers) stay rec_dispatched as content/leaves.
+    VERIFIED: newgame → sm[0x50] 0→1→2 (gameplay) by frame 60 (a frame faster than the cooperative
+    baseline — load is inline now), 1f80019b=1, stable 300 frames, zero derail/hang/caught-yield, render
+    99.9% non-black (USER eyeball pending). Map: `scratch/gameplay_start_flow_re.md`.
+  - ☐ NEXT: descend the SOP per-frame field update `FUN_801092b4` (entity update FUN_8010a0e0, Tomba
+    update 0x8007b008, BG draw, entity render FUN_80109fe0) — own its sub-systems native, re-wiring the
+    orphaned cull/spawn/collision/object-walk natives as their callers become native. Then the area
+    transition path (sm[0x50]=3/4 → next area) + the OT-walk-enum retire / 3D-position ordering.
 
 ## D. Per-frame GAMEPLAY systems (inside the GAME stage loop)
 - ✅ `FUN_800788ac` frame update = `ov_frame_update` (pad read + present + audio kick) — game_tomba2.cpp.
