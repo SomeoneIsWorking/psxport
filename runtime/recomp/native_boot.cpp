@@ -156,6 +156,36 @@ static void native_scheduler_step(Core* c) {
         continue;
       }
     }
+    // ---- SOP area-DATA load task: own the load body SYNCHRONOUSLY (engine/sop.cpp) ---------------
+    // SOP state-0 spawns LAB_80109164 (SOP.BIN 0x80109164) as a cooperative slot-1 task and blocks on
+    // *0x1f80019b. The task body is all-synchronous (sync CD reads + unpack + reloc patch), so we run
+    // it native+sync in one scheduler step and mark the slot done — no FUN_80051fb4 yield. Result is
+    // identical (1f80019b=1, ecf58 patched); this removes the load's cross-frame yield, the prereq for
+    // owning the SOP machine native per-frame. Keyed on the exact entry (SOP.BIN-specific address).
+    {
+      int sop_fresh = (st == 3 || (st == 2 && !c->game->sched.task_started[i]))
+                      && c->mem_r32(base + 0xc) == 0x80109164u;
+      if (sop_fresh) {
+        c->game->sched.task_ctx[i] = loop;                          // inherit gp
+        c->game->sched.task_ctx[i].r[29] = c->mem_r32(base + 8);    // per-task PSX stack top
+        c->game->sched.task_ctx[i].r[31] = 0xDEAD0000u;
+        c->mem_w16(base, 4);                                        // running
+        c->mem_w32(CUR_TASK, base);
+        c->game->sched.cur_slot = i;
+        static_cast<R3000&>(*c) = c->game->sched.task_ctx[i];       // restore REGISTERS
+        c->game->sched.in_stage = 1;
+        void native_sop_area_load(Core*);
+        if (setjmp(c->game->sched.yield_jmp) == 0) {
+          native_sop_area_load(c);                                  // synchronous (all leaves are sync)
+        } else if (cfg_dbg("sched")) {
+          fprintf(stderr, "[sched] SOP area-load yielded unexpectedly — a leaf isn't sync yet\n");
+        }
+        c->game->sched.in_stage = 0;
+        c->mem_w16(base, 0);                                        // task done -> slot free
+        c->game->sched.task_started[i] = 0;
+        continue;
+      }
+    }
     uint32_t resume_pc;
     int fresh = 0;
     // state==3 (restart at new entry) or state==2 on a slot with no live context (freshly
