@@ -7666,3 +7666,36 @@ Beetle spu.c for game audio. ONE behavior, no env A/B; verify by listening + off
   offline full-song render + A/B vs scratch/wav Beetle captures -> wire into ov_frame_update (stop the
   interpreted libsnd tick) -> fold native XA into the native mixer -> retire Beetle spu.c for game audio ->
   delete the cd_override dialog-coordination bandaid.
+
+## later-218 (2026-06-24) — DEMO front-end: ATTRACT (s7) owned native; freeze fixed, render works
+USER REPORT: native ./run.sh FREEZES on the idle->attraction-demo transition (and on Load data); PSX
+fallback (PSXPORT_GATE=1) works. Both are deep-yielding DEMO substates not owned by the native per-frame
+dispatcher ov_demo_frame (engine_demo.cpp), which only handled s1/s2/s3/s5/s6 — substate 7 (attract) hit
+the `default` case and silently spun (bumped the frame counter, no progress, FAIL-FAST violation).
+- ROOT CAUSE (attract): at idle, the title sub-machine (s2) returns outcome 1 -> sm[0x48]=7. The s7
+  trampoline 0x80106668 calls the 3-phase machine 0x80106C24 (phase0 launch+area-load, phase1 per-frame
+  engine update + attract render counting down sm[0x5a], phase2 teardown -> restart at sm[0x48]=0). phase0's
+  area-load and phase1's update deep-yield in the guest; the native per-frame model can't resume a guest
+  coroutine, so it must run them synchronously.
+- FIX (engine_demo.cpp): added demo_frame_s7 (faithful to 0x80106C24, title_ram disasm) + wired ov_demo_frame
+  case 7. phase0 owns the field writes + cursor table {0,1,3}@0x8010770c selection, runs the area-load
+  SYNC via native_transition_area_load (the 0x800452c0 callback body — the area selector comes from
+  sm[0x6d]/sm[0x6e], not the 0x80044bd4 latch), then the reinit jals; phase1 rec_dispatches the return-based
+  per-frame update (0x80106e28 gameplay / 0x80106ee4 type-3) — one frame each, no yield; phase2 teardown +
+  restart. Also extracted demo_frame_s0 (was inline in ov_demo_stage_main) and wired ov_demo_frame case 0 so
+  the attract->title restart reloads the menu resources. VERIFIED: no more freeze — phase 0->1 advances,
+  engine update runs each frame (no yields caught), attract RENDERS real gameplay (seaside village, Tomba +
+  HUD, camera pans — headless shots scratch/screenshots/attract_f600/f800.png; USER confirmed gameplay shows).
+- REMAINING FRONTIER (shared root cause): the recorded-input/attract subsystem is NOT armed. Recording-active
+  byte 0x800bf4f8 == 0 during the native attract, so (a) the blinking "DEMO" text overlay never draws (its
+  handler, one of 8 in the jalr table dispatched by 0x80026368, runs with flag 0x1f80019a=1 but the recording
+  state it needs isn't set), and (b) 0x800524b4 (end-of-recording check, reads 0x800bf4f8) never fires, the
+  sm[0x5a] timer is huge (=0x8007982c's return), so the attract NEVER cycles back to the title (plays the demo
+  area forever — not a freeze, but wrong). The arm is the a2=1 attract-mode path of the spawn
+  FUN_80044bd4(0x800452c0, entry, a2=1, 2): the spawn latches a1->task[0x6e], a2->task[0x6d] so the load task
+  sees sm[0x6e]=entry, sm[0x6d]=1 (vs the GAME path's a2=0). native_transition_area_load runs with the DEMO
+  task's sm (cursor), so it loads a valid area but takes the GAME (a2=0) path and never arms the recording.
+  NEXT: find the recording-arm (writer of 0x800bf4f8, struct-relative so not absolute-offset scannable; the
+  consumer is SOP 0x80102530) and the demo-recording file load; transcribe the a2=1 attract load faithfully.
+  Diagnostic added: PSXPORT_DEBUG=demoflag (interp.cpp) logs which demo-flag 0x1f80019a reader PCs execute.
+- Load data freeze: same class (deep-yielder substate, likely s4/load sub-page) — not yet root-caused.

@@ -332,6 +332,8 @@ static void ov_demo_s7_phase(Core* c) {
   rec_coro_redirect(c, TAIL_NONE);
 }
 
+static void demo_frame_s0(Core* c);  // defined in the per-frame dispatcher section below
+
 // DEMO stage entry (0x801062E4) — own the prologue PC-native, then hand to the guest per-frame loop body
 // @0x80106388 via the coro-redirect handshake. Mirrors ov_game_stage_main (engine_stage.cpp). Called
 // DIRECTLY from the native scheduler (native_boot.cpp) when task 0 enters stage 1 (DEMO); the override
@@ -376,45 +378,7 @@ void ov_demo_stage_main(Core* c) {
   rec_dispatch(c, 0x8005082Cu);                // input / pad-table reset (leaf — synchronous)
 
   // --- DEMO substate s0 (0x801063C0) run-once INIT, PC-native + SYNCHRONOUS ---
-  // s0 loads the menu page-2 resources from CD. Run as pure PSX, its loaders descend into the
-  // IRQ-driven async reader (FUN_8001D940 via FUN_8001DC40 / the FUN_80044BD4 task-1 spawn) which our
-  // no-IRQ runtime can't complete → infinite spin in libcd's VSync-timed CD_cw. We reimplement s0's
-  // loads with the SAME synchronous primitives stage-0 uses (cd_dc40_sync / preload_texgroup), then
-  // advance to substate 1 so the guest per-frame loop starts at s1 (menu input — all-SYNC, no CD).
-  // Faithful to the 0x801063C0 disasm:
-  //   a0=0x80108F9C (lui 0x8011 + addiu -28772 = 0x80108F9C — the overlay slot right after GAME.BIN,
-  //     NOT 0x80118F9C; an earlier lui|imm decode slip put SOP 0x10000 too high so the GAME stage's
-  //     jal 0x80109450 hit zeroed RAM); sm[0x68]=0; sm[0x48]++ (0->1); sm[0x4a]=0;
-  //   jal 0x80045080(a0, idx=2, task)  -> indexed file load (table 0x800BE118, stride 8) via FUN_8001DC40
-  //   jal 0x80044BD4(0x80044F58, a1=2, a2=0, phase=0) -> texgroup area-load (spawn+yield-wait, sync here)
-  //   jal 0x8007982C; jal 0x80075240; jal 0x8001CF00(1)  -> control-block / audio-attr / SPU-mix (SYNC)
-  c->mem_w8(sm + 0x68, 0);
-  c->mem_w16(sm + 0x48, 1);                    // sm[0x48]++ : 0 -> 1
-  c->mem_w16(sm + 0x4a, 0);
-  { // loader 0x80045080(dest=0x80108F9C, idx=2): tab=0x800BE118+idx*8 -> {lba,size}; sync read to dest.
-    // dest is the overlay slot immediately after GAME.BIN (which ends at 0x80108f9c); idx 2 = SOP.BIN,
-    // the field gameplay-MODE overlay whose per-frame machine GAME.BIN calls via `jal 0x80109450`.
-    void cd_dc40_sync(Core*, uint32_t, uint32_t, uint32_t);
-    uint32_t tab = 0x800be118u + 2u * 8u;
-    cd_dc40_sync(c, 0x80108f9cu, c->mem_r32(tab), c->mem_r32(tab + 4));
-  }
-  { // area-load FUN_80044BD4(callback=FUN_80044F58, a1=2, a2=0): native sync (no task-1 spawn, no yield).
-    // FUN_80044BD4 latches a1->0x801fe0de, a2->0x801fe0dd, clears the load-done flag 0x1f80019b, then the
-    // callback runs and sets 0x1f80019b=1. preload_texgroup(mode,set) IS the synchronous FUN_80044F58.
-    void preload_texgroup(Core*, uint32_t, uint32_t);
-    c->mem_w8(0x801fe0deu, 2);
-    c->mem_w8(0x801fe0ddu, 0);
-    c->mem_w8(0x1f80019bu, 0);
-    preload_texgroup(c, 0, 2);   // FUN_80044BD4(set=2, mode=0): mode=0, set=2 (was swapped -> wrong group)
-    c->mem_w8(0x1f80019bu, 1);
-  }
-  rec_dispatch(c, 0x8007982Cu);                // zero+seed the 1524B control block @0x800BF870 (SYNC)
-  rec_dispatch(c, 0x80075240u);                // voice/audio-attr control-block init (SYNC)
-  c->r[4] = 1; rec_dispatch(c, 0x8001CF00u);   // SpuSetCommonAttr CD->SPU mix on (SYNC)
-
-  if (cfg_dbg("demo")) fprintf(stderr, "[demo] ov_demo_stage_main: prologue + s0 native+sync, sm[0x48]=%u "
-                                       "(s0 texgroup meta[0x800FB170]=%08X, exact match vs reference menu dump)\n",
-                                       c->mem_r16(sm + 0x48), c->mem_r32(0x800fb170u));
+  demo_frame_s0(c);                             // load menu page resources + advance to s1 (see below)
   // No coro-redirect: the DEMO stage now runs as a NATIVE per-frame dispatcher (ov_demo_frame), driven
   // by the scheduler each frame. ov_demo_stage_main runs ONCE (prologue + s0); the loop is the scheduler.
 }
@@ -469,6 +433,44 @@ static uint32_t demo_menu_machine(Core* c) {
   c->r[4] = 0;                                 // a0 = 0 (s1 calls 0x80106F80(0))
   rec_dispatch(c, 0x80106f80u);                // states 1..3: run the real function (jr ra), advances sm[0x4a]
   return c->r[2];                              // v0 (nonzero => menu machine done)
+}
+
+// Substate s0 (0x801063C0) — run-once INIT / restart: load the menu page resources, advance to s1.
+// Called at DEMO stage entry (ov_demo_stage_main) AND on attract restart (ov_demo_frame case 0, after
+// the attract item replaced the menu area). PC-native + SYNCHRONOUS: run as pure PSX the loaders
+// descend into the IRQ-driven async CD reader (FUN_8001D940 / the FUN_80044BD4 task spawn) our no-IRQ
+// runtime can't complete → infinite spin in libcd's VSync-timed CD_cw. We reimplement s0's loads with
+// the SAME synchronous primitives stage-0 uses (cd_dc40_sync / preload_texgroup), then advance to s1.
+// Faithful to the 0x801063C0 disasm:
+//   a0=0x80108F9C (the overlay slot right after GAME.BIN); sm[0x68]=0; sm[0x48]++ (0->1); sm[0x4a]=0;
+//   jal 0x80045080(a0, idx=2, task)  -> indexed file load (table 0x800BE118, stride 8) via FUN_8001DC40
+//   jal 0x80044BD4(0x80044F58, a1=2, a2=0, phase=0) -> texgroup area-load (spawn+yield-wait, sync here)
+//   jal 0x8007982C; jal 0x80075240; jal 0x8001CF00(1)  -> control-block / audio-attr / SPU-mix (SYNC)
+static void demo_frame_s0(Core* c) {
+  uint32_t sm = c->mem_r32(SM_PTR);
+  c->mem_w8 (sm + 0x68, 0);
+  c->mem_w16(sm + 0x48, 1);                    // sm[0x48]++ : 0 -> 1
+  c->mem_w16(sm + 0x4a, 0);
+  { // loader 0x80045080(dest=0x80108F9C, idx=2): tab=0x800BE118+idx*8 -> {lba,size}; sync read to dest.
+    void cd_dc40_sync(Core*, uint32_t, uint32_t, uint32_t);
+    uint32_t tab = 0x800be118u + 2u * 8u;
+    cd_dc40_sync(c, 0x80108f9cu, c->mem_r32(tab), c->mem_r32(tab + 4));
+  }
+  { // area-load FUN_80044BD4(callback=FUN_80044F58, a1=2, a2=0): native sync (no task spawn, no yield).
+    // FUN_80044BD4 latches a1->0x801fe0de, a2->0x801fe0dd, clears 0x1f80019b, then the callback runs and
+    // sets 0x1f80019b=1. preload_texgroup(mode,set) IS the synchronous FUN_80044F58.
+    void preload_texgroup(Core*, uint32_t, uint32_t);
+    c->mem_w8(0x801fe0deu, 2);
+    c->mem_w8(0x801fe0ddu, 0);
+    c->mem_w8(0x1f80019bu, 0);
+    preload_texgroup(c, 0, 2);   // FUN_80044BD4(set=2, mode=0)
+    c->mem_w8(0x1f80019bu, 1);
+  }
+  rec_dispatch(c, 0x8007982Cu);                // zero+seed the 1524B control block @0x800BF870 (SYNC)
+  rec_dispatch(c, 0x80075240u);                // voice/audio-attr control-block init (SYNC)
+  c->r[4] = 1; rec_dispatch(c, 0x8001CF00u);   // SpuSetCommonAttr CD->SPU mix on (SYNC)
+  if (cfg_dbg("demo")) fprintf(stderr, "[demo] s0 init: menu resources loaded, sm[0x48]=1 "
+                               "(texgroup meta[0x800FB170]=%08X)\n", c->mem_r32(0x800fb170u));
 }
 
 // Substate s1 (0x8010641C) — wait/advance. Run the menu machine; on completion (v0!=0) reset sm[0x4a]
@@ -558,19 +560,91 @@ static void demo_frame_s6(Core* c) {
   else                  demo_tail_rend(c);
 }
 
+// Substate s7 (trampoline 0x80106668 -> phase machine 0x80106C24) — the ATTRACT DEMO. A 3-phase
+// machine on sm[0x4a]: phase0 launches an attract ITEM (load its area + reinit subsystems), phase1
+// runs the item one frame at a time (the full game-engine per-frame update + the attract render),
+// counting down sm[0x5a]; phase2 tears down and restarts the front-end at substate 0. The attract
+// cycles items via sm[0x6e] through the cursor table @0x8010770c = {0,1,3} (stride 4, byte[0]); the
+// selected item byte goes to *0x800bf870, which phase1 reads (==3 -> the type-3 item 0x80106ee4,
+// else the gameplay item 0x80106e28). Faithful to 0x80106C24 (title_ram disasm). The deep area-load
+// yield in phase0 is owned native+sync via native_transition_area_load — the SAME 0x800452c0 callback
+// body the GAME-stage transition uses (the callback selects the area from sm[0x6d]/sm[0x6e], NOT from
+// the 0x80044bd4 latched a1/a2, so a2=1-vs-0 is immaterial to the load). The per-frame item updates
+// (0x80106e28 / 0x80106ee4) are return-based (one frame each, no yield) and run via rec_dispatch.
+static void demo_frame_s7(Core* c) {
+  uint32_t sm = c->mem_r32(SM_PTR);
+  uint16_t phase = c->mem_r16(sm + 0x4a);
+  if (cfg_dbg("demo")) fprintf(stderr, "[demo] s7 attract phase=%u sm[0x6e]=%u sm[0x5a]=%u bf870=%u\n",
+                               phase, c->mem_r8(sm + 0x6e), c->mem_r16(sm + 0x5a), c->mem_r8(0x800bf870u));
+  if (phase == 0) {
+    // PHASE0 0x80106c74 — launch: advance to phase1, set the item timer, select+load the attract area.
+    c->mem_w16(sm + 0x4a, 1);                                       // sh s1(=1),0x4a -> phase1
+    rec_dispatch(c, 0x8007a8e0u);                                   // item duration (frames)
+    c->mem_w16(sm + 0x5a, c->r[2] & 0xffff);                        // sh v0,0x5a
+    uint8_t cur   = c->mem_r8(sm + 0x6e);
+    uint8_t entry = c->mem_r8(0x8010770cu + (uint32_t)cur * 4);     // cursor table {0,1,3}, byte[0]
+    c->mem_w8(0x800bf870u, entry);                                  // sb v1,0x800bf870 (phase1 selector)
+    c->mem_w8(0x800bf89cu, 4);                                      // sb 4,0x800bf89c (load mode)
+    // area-load FUN_80044bd4(0x800452c0, entry, 1, 2): latch + run the callback body synchronously.
+    c->mem_w8(0x801fe0deu, entry);
+    c->mem_w8(0x801fe0ddu, 1);
+    c->mem_w8(0x1f80019bu, 0);
+    void native_transition_area_load(Core*);
+    native_transition_area_load(c);                                 // = sync 0x800452c0; sets 1f80019b=1
+    // reinit subsystems (all SYNC; no incoming args / self-args)
+    rec_dispatch(c, 0x8007b18cu);
+    rec_dispatch(c, 0x800796dcu);
+    rec_dispatch(c, 0x800263e8u);
+    rec_dispatch(c, 0x80072a78u);
+    rec_dispatch(c, 0x80075240u);
+    rec_dispatch(c, 0x800783dcu);
+    rec_dispatch(c, 0x80078610u);
+    sm = c->mem_r32(SM_PTR);
+    c->r[4] = c->mem_r8(sm + 0x6e); rec_dispatch(c, 0x80079464u);   // jal 0x80079464(sm[0x6e])
+    c->mem_w8(0x1f80019au, 1);                                      // sb s1(=1),0x1f80019a
+    uint8_t ne = (uint8_t)((c->mem_r8(sm + 0x6e) + 1) & 0xff);
+    c->mem_w8(sm + 0x6e, ne < 3 ? ne : 0);                          // sm[0x6e]++ wrap<3 -> {0,1,2}
+  } else if (phase == 1) {
+    // PHASE1 0x80106d4c — run one frame of the attract item, then count down sm[0x5a].
+    if (c->mem_r16(0x1f80017cu) & 0x10) rec_dispatch(c, 0x80079374u);   // optional draw (gated)
+    if (c->mem_r8(0x800bf870u) == 3) rec_dispatch(c, 0x80106ee4u);      // type-3 item update+render
+    else                              rec_dispatch(c, 0x80106e28u);      // gameplay item update+render
+    sm = c->mem_r32(SM_PTR);
+    uint16_t t = (uint16_t)((c->mem_r16(sm + 0x5a) - 1) & 0xffff);
+    c->mem_w16(sm + 0x5a, t);                                       // sm[0x5a]--
+    int advance = 0;
+    if (t != 0) {
+      c->r[4] = 0; rec_dispatch(c, 0x800524b4u);                    // skip/abort check (v0!=0 => skip)
+      if (c->r[2] != 0) advance = 1;
+    } else advance = 1;                                             // timer expired
+    if (advance) c->mem_w16(sm + 0x4a, c->mem_r16(sm + 0x4a) + 1);  // sm[0x4a]++ -> phase2
+  } else if (phase == 2) {
+    // PHASE2 0x80106dfc — teardown + restart the front-end (sm[0x48]=0 -> s0 reinit -> title).
+    rec_dispatch(c, 0x80074bc4u);                                   // teardown (SYNC, verified yield-free)
+    sm = c->mem_r32(SM_PTR);
+    c->mem_w8 (0x1f80019au, 0);
+    c->mem_w16(sm + 0x48, 0);                                       // sm[0x48]=0 (restart)
+  } else {
+    // phase index out of range — match the guest epilogue (no-op) and don't spin.
+    if (cfg_dbg("demo")) fprintf(stderr, "[demo] s7 attract: phase=%u out of range (no-op)\n", phase);
+  }
+}
+
 // Called once per frame by the native scheduler for the DEMO task.
 void ov_demo_frame(Core* c) {
   uint32_t sm = c->mem_r32(SM_PTR);
   uint16_t s48 = c->mem_r16(sm + 0x48);
   switch (s48) {
+    case 0: demo_frame_s0(c); break;    // restart (attract -> title): reload menu resources, -> s1
     case 1: demo_frame_s1(c); break;
     case 2: demo_frame_s2(c); break;
     case 3: demo_frame_s3(c); break;
     case 5: demo_frame_s5(c); return;   // left DEMO -> GAME (no frame-ctr bump; we're gone)
     case 6: demo_frame_s6(c); break;
+    case 7: demo_frame_s7(c); break;    // attract demo (idle timeout)
     default:
       if (cfg_dbg("demo")) { static int w = 0; if (!w++) fprintf(stderr,
-        "[demo] ov_demo_frame: sm[0x48]=%u not yet native (frontier — s2..s7 need conversion)\n", s48); }
+        "[demo] ov_demo_frame: sm[0x48]=%u not yet native (frontier — s4 needs conversion)\n", s48); }
       break;
   }
   c->mem_w16(0x1f800198u, c->mem_r16(0x1f800198u) + 1);   // per-frame counter (every guest tail bumps it)

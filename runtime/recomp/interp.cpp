@@ -474,6 +474,12 @@ static void interp_flat(Core* c, uint32_t pc, uint32_t stop_ra) {
                 else fprintf(stderr, "[bgmreq] sound_play_bgm(idx=%u song=%u loop=%d) ra=%08X\n",
                              c->r[4], c->r[4] & 0x7f, (c->r[4] & 0x80) == 0, c->r[31]); }
     }
+    // PSXPORT_DEBUG=demoflag: trace which demo-flag (0x1f80019a) READER PCs execute (find DEMO-text drawer).
+    if (pc == 0x80026874u || pc == 0x80052208u || pc == 0x800522b0u || pc == 0x80075834u || pc == 0x800788ccu) {
+      static int df = -2; if (df == -2) df = cfg_dbg("demoflag") ? 1 : 0;
+      if (df) { static unsigned n[5]={0,0,0,0,0}; int k = pc==0x80026874u?0:pc==0x80052208u?1:pc==0x800522b0u?2:pc==0x80075834u?3:4;
+                if (++n[k] <= 2) fprintf(stderr, "[demoflag] reader @%08X hit (flag=%02X) ra=%08X\n", pc, c->mem_r8(0x1f80019au), c->r[31]); }
+    }
     // PSXPORT_DEBUG=septrace: trace the libsnd SEP event dispatcher 0x80091460 — at 0x800914d0 the
     // status byte (s2=r18) has just been read from the track stream pointer (a3=r7, already +1). Log
     // the byte ADDRESS and value per event = the game's exact event walk (byte-consumption oracle for
