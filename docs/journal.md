@@ -7390,3 +7390,21 @@ FUN_8001DC40 had been migrated to platform-HLE). Recovered the original set from
   mode overlay loaded to wrong addr -> (215c) cooperative yield disconnected -> (215d) CD HLEs orphaned.
 - NEXT: drive into the actual field (skip the intro), exercise movement/camera; verify render fidelity on
   the live windowed build (USER); the OT-walk-enumeration retire + 3D-position ordering remain (later-214).
+
+## later-215e (2026-06-23) — sync the area-DATA streaming reader -> SKIP-CUTSCENE FIELD RENDERS (black screen fixed)
+After 215d, newgame reached the intro cutscene, but SKIPPING it left a BLACK field. ROOT CAUSE: the
+cutscene->field transition triggers the cooperative AREA-DATA load (area machine sm[0x4a]=1/sm[0x4c]=2 ->
+FUN_80044cd4 -> task1 FUN_800452c0 -> FUN_8001db38 -> FUN_8001d940). FUN_8001d940 (the libcd async
+streaming reader) loops `FUN_80051f80(1) yield; poll status&count` until the per-sector IRQ callback drains
+_DAT_1f8001f4 — but no IRQ fires, so the count never reaches 0, the read never completes, the load-done flag
+0x1f80019b stays 0, and the area machine cycles forever -> 0 prims -> black.
+- FIX: register FUN_8001D940 -> ov_cd_async_read in cd_overrides_init (the existing synchronous replacement:
+  reads the descriptor 0x1f8001f0/f4/f8, delivers all sectors via disc_read_sector, zeroes the count).
+- **The OLD "do NOT sync the shared core FUN_8001D940 — it corrupts the overlay" pitfall is FALSIFIED /
+  STALE.** It dated from BEFORE the cooperative-yield fix (215c): with the scheduler broken, the core ran in
+  a wrong/incomplete context. Now that the scheduler runs tasks correctly, syncing the core is CORRECT and
+  safe — VERIFIED: 0x1f80019b set, NO derail/corruption over 400 post-skip frames, the seaside/village field
+  RENDERS (Tomba + hut + terrain + objects + "Go to the Burning House!" banner — scratch/screenshots/
+  after_skip2.png, field_stable.png). USER eyeballed.
+- STILL OPEN: cutscene BGM doesn't play (audio path — ov_voice_play/xa_stream; investigate next). And the
+  area machine sm[0x4e] cycles (intro/fade states) — confirm it settles into walkable play with input.

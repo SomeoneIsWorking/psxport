@@ -388,6 +388,13 @@ void cd_overrides_init(void) {
   platform_hle_register(0x8008A6ECu, ov_cd_sync);       // libcd CdSync -> complete (CD is synchronous)
   platform_hle_register(0x8001CE90u, ov_cd_cmd_stream); // streaming CD-cmd wrapper (GetlocL pos in range)
   platform_hle_register(0x8008C1ECu, ov_cd_read);       // libcd by-LBA read -> native sync
+  // EXPERIMENT (later-215e): wire the shared async streaming core FUN_8001D940 -> ov_cd_async_read so the
+  // cooperative area-DATA load (skip cutscene -> field: FUN_800452c0 -> FUN_8001db38 -> FUN_8001d940) reads
+  // its sectors synchronously and drains the count, instead of yielding forever for a per-sector IRQ that
+  // never fires (-> 0x1f80019b never set -> area machine cycles -> BLACK field). The old "do NOT sync the
+  // core" pitfall predates the cooperative-yield fix (215c); re-test now that the scheduler runs tasks.
+  void ov_cd_async_read(Core*);
+  platform_hle_register(0x8001D940u, ov_cd_async_read);  // async streaming reader -> sync (area-DATA load)
   // 0x8001DC40 FUN_8001dc40(a0=dest, a1=lba, a2=size_bytes): the intro sequencer's loader
   // variant. Same (dest, lba, size_bytes) contract as FUN_8001db8c — it sets the identical
   // _DAT_1f8001f8/f0/f4 read state — but runs the reader INLINE (calls FUN_8001d940 directly,
