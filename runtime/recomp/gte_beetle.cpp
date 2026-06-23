@@ -304,8 +304,15 @@ float proj_obj_center_ord(void) { ProjVtx p; proj_native_xform(0, 0, 0, &p); ret
 // occludes by where the object really is — consistent with the terrain it stands on. PC-owned, not PSX OT.
 static float s_camR[3][3] = {{1,0,0},{0,1,0},{0,0,1}}; static float s_camT[3] = {0,0,0};
 static int   s_camR_valid = 0;
+static float s_camH = 0, s_camOFX = 0, s_camOFY = 0;   // projection constants captured WITH the camera
 void camview_publish(const float R[3][3], const float T[3]) {
   for (int i = 0; i < 3; i++) { for (int j = 0; j < 3; j++) s_camR[i][j] = R[i][j]; s_camT[i] = T[i]; }
+  // Capture the projection constants live at terrain-draw time (CR24/25/26) so a world->screen projection
+  // uses the SAME OFX/OFY/H the per-vertex renderer used this frame (they are frame-constant; the per-object
+  // compose only touches CR0-7). Matches proj_native_xform's float screen path.
+  s_camH   = (float)(uint16_t)gte_read_ctrl(26);
+  s_camOFX = (float)(int32_t)gte_read_ctrl(24) / 65536.0f;
+  s_camOFY = (float)(int32_t)gte_read_ctrl(25) / 65536.0f;
   s_camR_valid = 1;
 }
 int  camview_valid(void) { return s_camR_valid; }
@@ -314,6 +321,22 @@ int  camview_valid(void) { return s_camR_valid; }
 float proj_camview_world_ord(float wx, float wy, float wz) {
   float vz = s_camR[2][0]*wx + s_camR[2][1]*wy + s_camR[2][2]*wz + s_camT[2];
   return proj_pz_to_ord(vz);
+}
+// Project a WORLD-space point to SCREEN pixel coords via the published stable scene camera. Returns 1 +
+// fills *sx,*sy when the point is in front of the camera; 0 if behind/at the camera plane. Same projection
+// as proj_native_xform's float path: sx = OFX/65536 + vx*(H/pz), pz = max(H/2, view-Z). Used by the objid
+// debug overlay to box each game object at its real world position (engine/render_queue.cpp).
+int proj_camview_world_screen(float wx, float wy, float wz, float* sx, float* sy) {
+  if (!s_camR_valid || s_camH <= 0.0f) return 0;
+  float vx = s_camR[0][0]*wx + s_camR[0][1]*wy + s_camR[0][2]*wz + s_camT[0];
+  float vy = s_camR[1][0]*wx + s_camR[1][1]*wy + s_camR[1][2]*wz + s_camT[1];
+  float vz = s_camR[2][0]*wx + s_camR[2][1]*wy + s_camR[2][2]*wz + s_camT[2];
+  if (vz <= 0.0f) return 0;                            // behind the camera -> not visible
+  float pz = s_camH * 0.5f; if (vz > pz) pz = vz;      // near-plane clamp (matches proj_native_xform)
+  float ph = s_camH / pz;
+  *sx = s_camOFX + vx * ph;
+  *sy = s_camOFY + vy * ph;
+  return 1;
 }
 
 // fps60 midpoint reprojection (engine/fps60.cpp): project up to 4 MODEL verts through an EXPLICIT composed
