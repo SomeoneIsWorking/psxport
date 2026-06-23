@@ -249,11 +249,14 @@ for content fns (call it). Do NOT mimic PSX hardware (GTE/GP0/OT) — remove Bee
     ORPHANED** since the override-table removal (2026-06-22): `stage_scan_overlay` is a no-op and the defs
     are `(void)`-cast (engine_stage.cpp:188). Correct ready-to-wire REFERENCE bodies, not live code; the
     live guest loop calls the GUEST handlers (0x801086e0/720/784), not these.
-  - ☐ NEXT (advance native INTO gameplay): mirror the DEMO `demo_native` per-frame dispatcher for GAME — a
-    `game_native` flag in `native_scheduler_step` calling a native `ov_game_frame` (wires s48_0/1/2), then
-    own the bridge 0x8010882c (`ov_game_submode0`) + the SOP field-mode machine 0x80109450 (sm[0x50]
-    LOAD→FADE→GAMEPLAY, `scratch/sop_mode_re.md`). Area loads `scratch/level_layout_re.md`. Baseline:
-    newgame → sm[0x50]=2 (gameplay running) by ~frame 61.
+  - ☐ NEXT (advance native INTO gameplay) — ORDER MATTERS (later-217 constraint): **(0) own SOP state-0's
+    AREA LOAD synchronously** (`LAB_80109164` 0x80109164 → native PC disc read writing 1f80019b=1, NO task
+    spawn) — PREREQ: the cooperative slot-0/slot-1 load handshake breaks if you convert the loop first.
+    Then **(1)** own the SOP field-mode machine 0x80109450 (sm[0x50] LOAD→FADE→GAMEPLAY, `sop_mode_re.md`),
+    **(2)** own the bridge 0x8010882c (`ov_game_submode0`), **(3)** convert the GAME loop to a native
+    per-frame dispatcher (mirror DEMO `demo_native` → native `ov_game_frame` wiring s48_0/1/2). Full
+    rationale + the cooperative-yield trap in `scratch/gameplay_start_flow_re.md`. Area loads
+    `scratch/level_layout_re.md`. Baseline: newgame → sm[0x50]=2 (gameplay running) by ~frame 61.
 
 ## D. Per-frame GAMEPLAY systems (inside the GAME stage loop)
 - ✅ `FUN_800788ac` frame update = `ov_frame_update` (pad read + present + audio kick) — game_tomba2.cpp.

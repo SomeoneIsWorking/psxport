@@ -32,11 +32,14 @@ Two parallel threads this session.
 - **The gameplay-start state flow (recomp, verified live `newgame`):** GAME sm[0x48]=2 → sm[0x4e] 0→1 (the
   0x8010882c bridge: input-reset 0x8005082c + per-frame `jal 0x80109450`) → SOP sm[0x50] 0(LOAD)→1(FADE-IN)
   →2(GAMEPLAY) reached by ~frame 61. SOP map `scratch/sop_mode_re.md`, area loads `scratch/level_layout_re.md`.
-- **NEXT (concrete plan, in the map):** mirror the DEMO `demo_native` per-frame dispatcher for GAME (a
-  `game_native` flag → native `ov_game_frame` wiring s48_0/1/2), own the bridge 0x8010882c
-  (`ov_game_submode0`) then the SOP machine 0x80109450. The per-frame cooperative yield is why the loop is
-  still guest; the demo_native "yield = return" pattern (deep yields contained by `setjmp`) is the proven
-  way around it. Verify each step: newgame → sm[0x50]=2, no derail.
+- **NEXT — ORDER MATTERS (critical constraint found this session):** the GAME native-loop conversion is
+  BLOCKED on first owning SOP state-0's area load SYNCHRONOUSLY. SOP state 0 spawns the load as a
+  cooperative slot-1 task and yields on 1f80019b; a native per-frame loop that `rec_dispatch`es SOP would
+  break that handshake (yield → frame-done guard, not slot-1 service; SOP restarts state-0 each frame and
+  re-spawns the load) → regression. Revised order: **(0)** own `LAB_80109164` (0x80109164) as a native
+  sync disc read writing 1f80019b=1 (no task spawn), **(1)** own SOP machine 0x80109450, **(2)** own the
+  bridge 0x8010882c, **(3)** convert the GAME loop to native per-frame (mirror demo_native). Verify each:
+  newgame → sm[0x50]=2, no derail. Full trap write-up in `scratch/gameplay_start_flow_re.md`.
 
 **(B) Native audio engine — offline synth + sequencer (continues later-216; tool `tools/snd_render.c`).**
 - Corrected the ToneAttr parse (ground-truthed from raw bytes): adsr1@0x10, adsr2@0x12, prog@0x14,
