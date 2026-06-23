@@ -287,29 +287,39 @@ timeout:;
   return b;
 }
 
-// ONE command per connection (tools/dbgclient.py opens a fresh connection per command, so this is
-// fully compatible) — robust: a finished or half-open client can never wedge the accept loop in a
-// blocking read for "more lines". A recv timeout is the backstop if a client connects but stalls.
+// MULTIPLE commands per connection. tools/dbgclient.py's interactive mode keeps ONE socket open and
+// sends many newline-delimited commands, reading each reply up to the "---END---\n" terminator; its
+// single-shot mode opens a fresh connection per command. Both work here: loop reading commands (handling
+// partial / pipelined reads) and reply to each with "---END---". A generous IDLE recv timeout is the
+// backstop so a client that connects then dies WITHOUT closing eventually frees the serial accept loop
+// instead of wedging it. (Was one-command-per-connection, which broke interactive dbgclient: the 2nd
+// command hit an already-closed socket -> BrokenPipeError.)
 static void serve_conn(int fd) {
-  struct timeval tv = { 3, 0 };
+  struct timeval tv = { 120, 0 };                   // idle backstop: drop a stalled/dead client
   setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
-  char in[1024]; size_t fill = 0; char* nl = NULL;
-  while (fill < sizeof in - 1) {                    // read until the first newline (one command)
-    ssize_t n = read(fd, in + fill, sizeof in - 1 - fill);
-    if (n <= 0) break;
-    fill += (size_t)n; in[fill] = 0;
-    if ((nl = (char*)memchr(in, '\n', fill)) != NULL) break;
+  char in[1024]; size_t fill = 0;
+  for (;;) {
+    char* nl = (char*)memchr(in, '\n', fill);       // a pipelined next command may already be buffered
+    while (!nl) {
+      if (fill >= sizeof in - 1) { close(fd); return; }   // overlong line with no newline: give up
+      ssize_t n = read(fd, in + fill, sizeof in - 1 - fill);
+      if (n <= 0) { close(fd); return; }            // client closed / recv timeout / error
+      fill += (size_t)n; in[fill] = 0;
+      nl = (char*)memchr(in, '\n', fill);
+    }
+    *nl = 0;
+    char line[512]; snprintf(line, sizeof line, "%s", in);
+    size_t consumed = (size_t)(nl - in) + 1;        // drop this command + newline; keep any remainder
+    memmove(in, in + consumed, fill - consumed); fill -= consumed; in[fill] = 0;
+    size_t ll = strlen(line); if (ll && line[ll - 1] == '\r') line[ll - 1] = 0;
+    if (!strcmp(line, "quit") || !strcmp(line, "q") || !strcmp(line, "exit")) { close(fd); return; }
+    if (line[0]) {
+      size_t rl = 0; char* resp = dbg_submit(line, &rl);
+      if (resp && rl && write(fd, resp, rl) < 0) { free(resp); close(fd); return; }
+      free(resp);
+    }
+    if (write(fd, "---END---\n", 10) < 0) { close(fd); return; }   // delimit every reply (incl. blank)
   }
-  if (nl) *nl = 0; else in[fill] = 0;
-  char line[512]; snprintf(line, sizeof line, "%s", in);
-  size_t ll = strlen(line); if (ll && line[ll - 1] == '\r') line[ll - 1] = 0;
-  if (line[0]) {
-    size_t rl = 0; char* resp = dbg_submit(line, &rl);
-    if (resp && rl) (void)!write(fd, resp, rl);
-    free(resp);
-    (void)!write(fd, "---END---\n", 10);
-  }
-  close(fd);
 }
 
 static void* dbg_thread(void* arg) {
