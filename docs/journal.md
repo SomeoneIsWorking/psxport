@@ -23,6 +23,35 @@
   give the engine the right near depth/order. Independent of the gameplay-loop work. See gfx-debug skill.
 - ~~SCEA license screen was black~~ **FIXED PC-native (later-179, below).**
 
+## later-219 (2026-06-23) — NATIVE audio engine LANDED: sound test + IN-GAME field music (libsnd replaced)
+Built the PC-native music engine + RmlUi Sound Test, and wired it to score the field (commits up to
+5dd61ba). The native engine REPLACES the silent libsnd sequenced-music path entirely.
+- SHARED SYNTH CORE `engine/audio/native_audio.{h,c}` = snd_render.c's VAB/ADPCM/ADSR/SEP synth,
+  de-globalized (operates on a byte buffer + explicit offsets; per-NaSeq VAG cache). tools/snd_render.c
+  now #includes + drives it (offline + in-game are ONE codebase = the unification).
+- REAL-TIME PLAYER `engine/audio/native_music.{h,c}` (play/stop/render/active), mixed into the SPU sink
+  (spu_audio.c) before SDL/WAV; silent when idle.
+- CATALOGUE `engine/audio/music_list.{h,c}`: the 10 TOMBA2.SND songs + `music_list_play_area()` for the
+  LIVE area bundle. REPL `musictest <n>|stop` (native_boot.cpp) + RmlUi "Sound" tab (menu.rml +
+  imgui_overlay.cpp action handler).
+- **ROOT-CAUSE FIX (corrects later-218 / handoff §5b dispute):** tone selection uses the per-SEQUENCE
+  program-set selector **slot[0x26] (=program 0)**, NOT the live 0xCn MIDI program. DATA-PROVEN: the area
+  VABs have only 4 programs but the sequences emit 0xCn programs 9..17 -> those don't index ProgAttr ->
+  EVERY note was dropped (the universal-silence the handoff blamed on "wrong VAB"). With slot[0x26] all 10
+  area seqs AND all 10 TOMBA2.SND songs synth audibly. The handoff's "0xCn drives tone selection"
+  correction was WRONG; spec §5b (slot 0x26) is right. The "songs 0-3/9 need area VABs" gap was this synth
+  bug, not missing data.
+- IN-GAME: `field_bgm_director()` in game_tomba2.cpp's ov_frame_update — while the GAME stage (0x8010637C)
+  is active + the area bundle (guest 0x80182000: 10 SEPs + field VAB @+0x26b4) is loaded, it starts the
+  native area theme (default seq 8; `PSXPORT_FIELD_SONG=<0..9>` to audition), restarts on drain, stops on
+  leaving the field. NB the no-override arch means the recomp BGM-start (ov_sound_play_bgm) is DEAD (PSX
+  never calls PC) — the director is the single audible path; do NOT try to hook ov_sound_play_bgm.
+- DEAD END recorded: 0x80104C28 ("playmask" 0xC3FF) is STATIC config (same at DEMO + field), not a
+  per-slot play flag — useless as a BGM trigger. The field never sets song@0x800bed80 (FFFF throughout)
+  because it plays seq slots via SsSeqPlay directly, not FUN_80074BF8.
+- VERIFIED headless: field auto-starts "area BGM song 8", sustained ~rms 2000; idle/post-stop = rms 0.
+  USER confirms the right field theme by ear (windowed) + auditions via the Sound tab / PSXPORT_FIELD_SONG.
+
 ## later-218 (2026-06-23) — SEQUENCED MUSIC IS SILENT IN THE PORT: root-caused; audio-engine UNIFICATION directed
 USER: sequencer effects/music (incl. dialog music) won't play (windowed/macOS), though SFX + XA do.
 Root-caused via the game's own libsnd as an oracle (new diagnostics: `PSXPORT_DEBUG=keyon` traces
