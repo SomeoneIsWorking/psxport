@@ -465,6 +465,12 @@ static void interp_flat(Core* c, uint32_t pc, uint32_t stop_ra) {
                        c->r[4] & 0xff, (c->r[4] >> 8) & 0xff, (int)(int16_t)c->r[5],
                        (int)(int16_t)c->r[6], c->r[7] & 0xff, c->mem_r32(c->r[29] + 16));
     }
+    // PSXPORT_DEBUG=seqplay: trace SsSeqPlay 0x80090560 (a0=seq handle) — which sequences are played.
+    if (pc == 0x80090560u) {
+      static int sp = -2; if (sp == -2) sp = cfg_dbg("seqplay") ? 1 : 0;
+      if (sp) fprintf(stderr, "[seqplay] SsSeqPlay(handle=%d, mode=%d, loop=%d)\n",
+                      (int)(int16_t)c->r[4], c->r[5], c->r[6]);
+    }
     // PSXPORT_DEBUG=banksel: trace the libsnd bank-select event handler 0x8008e390 (sets channel
     // slot[0x26]=VAB from the stream). a0=seq, a1=chan. Reveals whether it runs for note channels.
     if (pc == 0x8008e390u) {
