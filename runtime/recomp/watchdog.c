@@ -110,3 +110,11 @@ void watchdog_init(void) {
 void watchdog_pet(void) {
   if (g_armed) alarm((unsigned)g_secs);
 }
+
+// Suspend the frame-progress timeout during an INTENTIONAL idle where no frame is presented and that
+// is NOT a hang: a debug-server PAUSE/step-wait, or blocking on REPL stdin for the next command. The
+// next watchdog_pet (the next presented frame after resume) re-arms it. Without this the 3s timeout
+// fires on a deliberately paused/idle process. (cancel any pending alarm; keep g_armed so pet re-arms.)
+void watchdog_suspend(void) {
+  if (g_armed) alarm(0);
+}

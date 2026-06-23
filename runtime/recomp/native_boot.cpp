@@ -795,6 +795,9 @@ static void ov_game_main(Core* c) {
     // REPL: when the run-budget is exhausted, block reading stdin commands until a `run N` refills
     // it (immediate commands — r/w/watch/input/regs/seq — execute between frames). Quit/EOF breaks.
     if (repl_mode) {
+      // Blocking on stdin for the next command is an intentional idle, not a hang — suspend the
+      // frame-progress watchdog while waiting so it doesn't fire at a paused REPL prompt.
+      if (repl_budget <= 0) watchdog_suspend();
       while (repl_budget <= 0) { repl_budget = native_repl_read(c, f); if (repl_budget < 0) break; }
       if (repl_budget < 0) break;
       repl_budget--;
@@ -855,6 +858,7 @@ static void ov_game_main(Core* c) {
     // (keeps the window alive) and service debug commands so `step`/`play` can arrive. A `step` runs
     // exactly one real frame then re-freezes, so transient bad frames can be inspected one at a time.
     { int dbg_is_paused(void), dbg_step_pending(void); void dbg_consume_step(void); void gpu_repaint(Core*);
+      if (dbg_is_paused()) watchdog_suspend();   // a debug pause is intentional idle, not a hang
       while (dbg_is_paused()) {
         if (dbg_step_pending()) { dbg_consume_step(); break; }   // run exactly one frame
         pad_service_frame(c);      // pump host input (keeps the window responsive)
@@ -862,6 +866,8 @@ static void ov_game_main(Core* c) {
         dbg_server_service(c);    // receive step/play/capture commands
         usleep(15000);
       } }
+    watchdog_pet();   // re-arm the timer for THIS step (covers a step that hangs before it presents,
+                      // and re-arms after an idle suspend); c_subsys.h C-linkage decl
     native_step_frame(c, f);   // one frame of deterministic guest work (steppable core; see fn above).
     // native_step_frame -> ov_frame_update OWNS present + pace + per-vblank audio (PC-driven frame body),
     // so the loop no longer needs a separate pacer here (the earlier orphaned-override stopgap is gone).

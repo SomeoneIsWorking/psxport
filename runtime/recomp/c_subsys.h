@@ -12,6 +12,7 @@ extern "C" {
 // watchdog.c
 void watchdog_init(void);
 void watchdog_pet(void);
+void watchdog_suspend(void);   // cancel the timeout during intentional idle (pause / REPL input wait)
 
 // gpu_vk.cpp — is a live on-screen window up (the single windowed/headless discriminator; replaces
 // the old PSXPORT_GPU_WINDOW env gate). C-linkage so C and C++ subsystems share one source of truth.
