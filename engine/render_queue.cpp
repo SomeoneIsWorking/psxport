@@ -143,12 +143,6 @@ static void objid_overlay(RenderQueue* q, Core* core) {
   for (int i = 0; i < n0; i++) if (q->items[i].layer == RQ_WORLD) { ref = &q->items[i]; break; }
   if (!ref && n0 > 0) ref = &q->items[0];
   if (!ref) return;
-  // Classification signal: which nodes emitted a billboard (fps_anchor) prim this frame -> QUAD objects.
-  std::unordered_map<uint32_t, int> is_quad;        // node -> 1 if it emitted a billboard prim
-  for (int i = 0; i < n0; i++) {
-    const RqItem* it = &q->items[i];
-    if (it->dbg_node && it->fps_anchor) is_quad[it->dbg_node] = 1;
-  }
   // The game objects live in the engine's active entity lists (doubly-linked, next @ node+0x24, end =
   // next==0). There are three (heads @ 0x800FB168 / 0x800F2624 / 0x800F2738; the object walk uses the
   // first two, cull touches all three). Walk all three so EVERY live object is enumerated individually.
@@ -163,7 +157,12 @@ static void objid_overlay(RenderQueue* q, Core* core) {
       int16_t wx = (int16_t)core->mem_r16(n + 0x2E);
       int16_t wy = (int16_t)core->mem_r16(n + 0x32);
       int16_t wz = (int16_t)core->mem_r16(n + 0x36);
-      int quad = is_quad.count(n) ? 1 : 0;
+      // QUAD (billboard) vs 3D-MESH classification by INTRINSIC render type (node+0xb): the per-object
+      // render dispatcher (gen_func_8003C048) routes render types 0x10..0x14 to the SPRITE/BILLBOARD
+      // submitters (single object-center RTPS -> screen quad: e.g. the AP-crystal pickup), while 0/0xf are
+      // mesh. (The old fps_anchor signal is dead — its feeder ov_render_cmd is orphaned post override-removal.)
+      uint8_t rtype = core->mem_r8(n + 0xB);
+      int quad = (rtype >= 0x10 && rtype <= 0x14) ? 1 : 0;
       if (quad ? !objid_quads_on() : !objid_objects_on()) continue;  // class toggled off
       float sx = 0, sy = 0;
       if (!proj_camview_world_screen((float)wx, (float)wy, (float)wz, &sx, &sy)) continue;  // behind camera

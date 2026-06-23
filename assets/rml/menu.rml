@@ -55,8 +55,9 @@
 
 			<pane>
 				<div class="section-heading">Debug</div>
-				<select-button toggle="debug_ids"><key>Object IDs</key><value>Off</value></select-button>
-				<p class="hint">Labels each rendered object with its engine id (4 hex), on the object.</p>
+				<select-button toggle="debug_quads"><key>Highlight Quads (billboards)</key><value>Off</value></select-button>
+				<select-button toggle="debug_objects"><key>Highlight 3D Objects</key><value>Off</value></select-button>
+				<p class="hint">Boxes each game object at its world position + shows id and WORLD x,y,z. Quads (2D sprites at 3D positions) are yellow; 3D meshes are cyan.</p>
 				<p class="hint">&#8596; switch tab &middot; &#8597; move &middot; Enter / A change &middot; Esc close</p>
 			</pane>
 

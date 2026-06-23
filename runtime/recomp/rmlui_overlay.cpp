@@ -77,7 +77,9 @@ static bool row_value_text(const std::string& kind, const std::string& id, std::
         if (id == "ssao")      { out = g_mods.ssao ? "On" : "Off"; return true; }
         if (id == "light")     { out = g_mods.light ? "On" : "Off"; return true; }
         if (id == "shadows")   { out = g_mods.shadows ? "On" : "Off"; return true; }
-        if (id == "debug_ids") { out = g_mods.debug_ids ? "On" : "Off"; return true; }
+        if (id == "debug_ids")     { out = g_mods.debug_ids ? "On" : "Off"; return true; }
+        if (id == "debug_quads")   { out = g_mods.debug_quads ? "On" : "Off"; return true; }
+        if (id == "debug_objects") { out = g_mods.debug_objects ? "On" : "Off"; return true; }
     } else if (kind == "adjust") {
         if (id == "ires")            { out = std::to_string(g_mods.ires) + "x"; return true; }
         if (id == "ssao_strength")   { out = fmt_f(g_mods.ssao_strength, 2); return true; }
@@ -102,7 +104,9 @@ static void do_toggle(const std::string& id) {
     else if (id == "ssao")       g_mods.ssao = !g_mods.ssao;
     else if (id == "light")      g_mods.light = !g_mods.light;
     else if (id == "shadows")    g_mods.shadows = !g_mods.shadows;
-    else if (id == "debug_ids")  { g_mods.debug_ids = !g_mods.debug_ids; return; }  // debug toggle: not persisted
+    else if (id == "debug_ids")     { g_mods.debug_ids = !g_mods.debug_ids; return; }      // debug toggles:
+    else if (id == "debug_quads")   { g_mods.debug_quads = !g_mods.debug_quads; return; }   // not persisted
+    else if (id == "debug_objects") { g_mods.debug_objects = !g_mods.debug_objects; return; }
     else return;
     mods_save();
 }
