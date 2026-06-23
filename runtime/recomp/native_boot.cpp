@@ -543,6 +543,16 @@ static long native_repl_read(Core* c, uint32_t f) {
     else if (!strcmp(cmd, "wav")) { char path[200] = {0}; if (sscanf(line, "%*s %199s", path) == 1) spu_wav_reopen(path); }
     else if (!strcmp(cmd, "bgm") && sscanf(line, "%*s %u", &a) == 1) { rc1(c, 0x80074BF8u, a); fprintf(stderr, "[repl] bgm %u (song@800bed80=%04X)\n", a, c->mem_r16(0x800bed80)); }
     else if (!strcmp(cmd, "bgmstop")) { rc0(c, 0x80074E48u); fprintf(stderr, "[repl] bgmstop\n"); }
+    // seqsolo <i> — stop ALL open libsnd sequences then SsSeqPlay just sequence <i> at full vol, via the
+    // GAME'S OWN sequencer. Lets each area SEP sequence be rendered in isolation (the area's field theme
+    // otherwise plays continuously). SsSeqStop=0x80091AF0, SsSeqPlay(h,mode,loop)=0x80090560, SsSeqSetVol
+    // (h,volL,volR)=0x80091F50. handle == the seq access index (0..13).
+    else if (!strcmp(cmd, "seqsolo") && sscanf(line, "%*s %u", &a) == 1) {
+      for (uint32_t i = 0; i < 14; i++) rc1(c, 0x80091AF0u, i);   // SsSeqStop(i) — silence all
+      rc3(c, 0x80090560u, a, 1, 0);                                // SsSeqPlay(a, mode=1, loop=0)
+      rc3(c, 0x80091F50u, a, 127, 127);                           // SsSeqSetVol(a, 127, 127)
+      fprintf(stderr, "[repl] seqsolo %u\n", a);
+    }
     else if (!strcmp(cmd, "xadump")) { unsigned ch = 0, lba = 0, secs = 3; char path[200] = {0};
       if (sscanf(line, "%*s %u %u %199s %u", &ch, &lba, path, &secs) >= 3) repl_xadump((uint8_t)ch, lba, path, secs ? (int)secs : 3); }
     else if (!strcmp(cmd, "prof")) {

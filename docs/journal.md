@@ -23,6 +23,31 @@
   give the engine the right near depth/order. Independent of the gameplay-loop work. See gfx-debug skill.
 - ~~SCEA license screen was black~~ **FIXED PC-native (later-179, below).**
 
+## later-218 (2026-06-23) — SEQUENCED MUSIC IS SILENT IN THE PORT: root-caused; audio-engine UNIFICATION directed
+USER: sequencer effects/music (incl. dialog music) won't play (windowed/macOS), though SFX + XA do.
+Root-caused via the game's own libsnd as an oracle (new diagnostics: `PSXPORT_DEBUG=keyon` traces
+every libsnd voice keyon 0x800939A0; `=banksel` traces the slot[0x26] setter 0x8008e390; REPL
+`seqsolo <i>` plays one sequence in isolation):
+- **Every sequencer keyon fails.** The note channels' per-channel VAB id `slot[0x26]` = 0xFF (-1), so
+  the VAB-select 0x800962b0 rejects it → no voice. The bank-select handler 0x8008e390 never runs for
+  note channels. Forcing a valid loaded bank (0/1) at keyon STILL produced no audio → the VAB ADPCM
+  **bodies aren't in SPU RAM** either (headers registered, banks 0/1 flagged @0x80105d18, bodies not
+  transferred). So the game itself is silent for sequenced music — there is **NO in-game reference**.
+  The dialog music (song 4) additionally needs bank 8, which this area never loads at all.
+- **Data divergence found.** The game loads a compact area BGM bundle to 0x80182000 = 10 SEPs
+  (byte-identical to TOMBA2.SND's first 10) + 2 AREA-specific VABs (bank0 ps=4 @+0x26b4, bank1 ps=18
+  @+0x38d4). These area VABs are NOT in TOMBA2.SND (VABs at 0x51800, ps≤2) — so the offline snd_render
+  (which read TOMBA2.SND's VABs) used the WRONG instruments (sounded like SFX). Extracted to
+  scratch/bin/snd/AREA_BGM.bin; snd_render gained `raw <seqOff> <vabOff>` + per-channel prog tone
+  selection (was forcing prog 0 — the spec's "prog-change=vol/pan only" was WRONG; 0xCn sets the
+  tone-selection PROGRAM via slot[0x37]) + an 0xF0 parser fix (libsnd SEP is NOT MIDI: events are
+  [status][N data][delta-varlen]; 0xF0 type 0x2F=end else 3-byte tempo).
+- **USER DIRECTIVE — UNIFY:** offline export and in-game audio must be ONE native engine (they diverge:
+  in-game=libsnd+Beetle SPU, offline=snd_render, + different data). Build a single CD-sourced loader +
+  native synth, used offline AND in-game, retiring the (broken, silent) libsnd music path. Plan +
+  full RE in scratch/handoff_audio_unify.md (the native-engine bible scratch/native_audio_spec.md §5b/§6
+  are CORRECTED there). NOT YET FIXED in-game — this is the active work.
+
 ## later-217 (2026-06-23) — GAMEPLAY-START FLOW MAPPED + native boundary CORRECTED; audio synth+sequencer built offline
 Two parallel threads this session.
 

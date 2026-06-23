@@ -456,6 +456,25 @@ static void interp_flat(Core* c, uint32_t pc, uint32_t stop_ra) {
       }
     }
     g_interp_pc = pc;
+    // PSXPORT_DEBUG=keyon (oracle, temporary): trace every libsnd voice keyon 0x800939A0
+    // (a0=seq|chan<<8, a1=vab id, a2=program, a3=note, sp+16=velocity). Reveals which sequences/
+    // instruments/notes actually compose a song — ground truth for the offline snd_render tool.
+    if (pc == 0x800939A0u) {
+      static int kon = -2; if (kon == -2) kon = cfg_dbg("keyon") ? 1 : 0;
+      if (kon) fprintf(stderr, "[keyon] seq=%u chan=%u vab=%d prog=%d note=%u vel=%u\n",
+                       c->r[4] & 0xff, (c->r[4] >> 8) & 0xff, (int)(int16_t)c->r[5],
+                       (int)(int16_t)c->r[6], c->r[7] & 0xff, c->mem_r32(c->r[29] + 16));
+    }
+    // PSXPORT_DEBUG=banksel: trace the libsnd bank-select event handler 0x8008e390 (sets channel
+    // slot[0x26]=VAB from the stream). a0=seq, a1=chan. Reveals whether it runs for note channels.
+    if (pc == 0x8008e390u) {
+      static int bs = -2; if (bs == -2) bs = cfg_dbg("banksel") ? 1 : 0;
+      if (bs) { uint32_t cap = c->mem_r32(0x80104c30u + (c->r[4] & 0xffff) * 4);
+                uint32_t cs = cap + (c->r[5] & 0xffff) * 176;
+                uint32_t dp = c->mem_r32(cs);
+                fprintf(stderr, "[banksel] seq=%u chan=%u streambyte=0x%02x (-> slot[0x26])\n",
+                        c->r[4] & 0xffff, c->r[5] & 0xffff, c->mem_r8(dp)); }
+    }
     if (g_prof_on) prof_pc_tick(pc);   // perf profiler: instructions-per-PC-bucket (time histogram)
     // PSXPORT_SPRITEDBG: when the sprite-flush routine copies the red-quad clut template
     // (0x7EF71100) into the OT (store at 0x8007E67C), dump the renderer's working registers so

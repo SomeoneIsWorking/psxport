@@ -114,6 +114,18 @@ static void wav_write(const char* path, const int16_t* pcm, int frames, int ch, 
 // ---- VAB access --------------------------------------------------------------------------
 typedef struct { long base; int ver,id,fsize,ps,ts,vs; long progtab, tonetab, vagtab, body; } Vab;
 static long vab_file_off(int idx) { return (long)rd16(idx*2) * 0x800; }
+// Open a VAB at an EXPLICIT file byte offset (used for area-BGM bundles whose VABs are NOT in the
+// container's index table — e.g. the field music VAB loaded right after the SEP region).
+static void vab_open_at(Vab* v, long o) {
+    v->base = o;
+    if (memcmp(g_buf+o, "pBAV", 4)) { fprintf(stderr,"VAB @0x%lx: bad magic\n", o); exit(1); }
+    v->ver=rd32(o+4); v->id=rd32(o+8); v->fsize=rd32(o+12);
+    v->ps=rd16(o+16+2); v->ts=rd16(o+16+4); v->vs=rd16(o+16+6);
+    v->progtab = o + 0x20;
+    v->tonetab = o + 0x820;
+    v->vagtab = o + 0x20 + 128*16 + (long)v->ps*16*32;
+    v->body   = v->vagtab + 512;
+}
 static void vab_open(Vab* v, int idx) {
     long o = vab_file_off(idx); v->base = o;
     if (memcmp(g_buf+o, "pBAV", 4)) { fprintf(stderr,"VAB %d @0x%lx: bad magic\n", idx, o); exit(1); }
@@ -374,17 +386,21 @@ static void seq_note_on(Seq* s, int ch, int note, int vel) {
                 s->voice[i].phase = ADSR_RELEASE, s->voice[i].divider = 0;
         return;
     }
-    // Tone selection uses the per-SEQUENCE program-set selector (slot[0x26]), NOT the live
-    // MIDI prog-change. Multi-voice: every in-range tone of that program keys on its own voice.
+    // Tone selection uses the PER-CHANNEL program set by the live MIDI prog-change (0xCn) event.
+    // RE (note-on 0x80090010 -> keyon 0x800939a0): the 0xCn handler 0x800900f0 stores the program
+    // byte at (chanstruct+midichan)[0x37]; note-on passes THAT as keyon's a2, which indexes
+    // ProgAttr[program] for the tone scan. (The earlier theory that 0xCn only fed vol/pan and that
+    // slot[0x26] selected the program was WRONG — slot[0x26]=v1[38] is the VAB/bank id, the keyon a1,
+    // not the program.) Multi-voice: every in-range tone of that program keys on its own voice.
     int tones[16];
-    int ntone = prog_pick_tones(s->vab, s->prog_set, note, tones, 16);
+    int ntone = prog_pick_tones(s->vab, s->prog[ch], note, tones, 16);
     if (ntone == 0) return;   // no tone covers this note in the program -> note dropped (libsnd)
     for (int k = 0; k < ntone; k++) {
         Tone t; tone_read(s->vab, tones[k], &t);
         Voice* vc = seq_alloc_voice(s);
         voice_keyon(vc, s->vab, &t, note, vel, ch, s->vol[ch], s->pan[ch], ++s->age);
-        if (getenv("SND_DBG")) fprintf(stderr,"keyon ch=%d note=%d vel=%d pset=%d tone=%d vag=%d active=%d vol_l=%d pitch=%u\n",
-                                       ch,note,vel,s->prog_set,tones[k],t.vag,vc->active,vc->vol_l,vc->pitch);
+        if (getenv("SND_DBG")) fprintf(stderr,"keyon ch=%d note=%d vel=%d prog=%d tone=%d vag=%d active=%d vol_l=%d pitch=%u\n",
+                                       ch,note,vel,s->prog[ch],tones[k],t.vag,vc->active,vc->vol_l,vc->pitch);
     }
 }
 
@@ -408,22 +424,22 @@ static int seq_event(Seq* s) {
         case 0xB0: { int cc=g_buf[s->p++], v=g_buf[s->p++];
                      if (cc==7) s->vol[ch]=v; else if (cc==10) s->pan[ch]=v; break; }
         case 0xC0: { int pr=g_buf[s->p++]; s->prog[ch]=pr; break; }
-        case 0xA0: case 0xE0: s->p += 2; break;            // poly-aftertouch / pitchbend (ignored v1)
-        case 0xD0: s->p += 1; break;                       // channel aftertouch
-        case 0xF0:
-            if (status == 0xFF) {                          // meta
-                int type = g_buf[s->p++]; int len = varlen(s);
-                long body = s->p; s->p += len;
-                if (type == 0x2F) return 0;                // end of track
-                if (type == 0x51 && len == 3)              // tempo
-                    s->tempo_us = (double)((g_buf[body]<<16)|(g_buf[body+1]<<8)|g_buf[body+2]);
-            } else {
-                // SysEx / unknown F0 — skip a varlen-framed blob if present
-                int len = varlen(s); s->p += len;
-            }
+        case 0xE0: s->p += 2; break;                       // 0xE0: 2 data bytes (libsnd dispatch skips 1
+                                                           //   + handler 0x8008fb60 reads 1), then delta
+        // 0xF0/0xFF: NOT standard MIDI meta. libsnd (dispatch 0x80091654) reads ONE type byte; if it is
+        // 0x2F it is END-OF-TRACK (no delta follows). Any OTHER type routes to the tempo handler
+        // 0x8008fe40 which reads a 3-byte (24-bit BE) tempo value (microseconds/quarter, same encoding as
+        // the header at +0x0A). A trailing delta follows like every non-end event.
+        case 0xF0: {
+            int type = g_buf[s->p++];
+            if (type == 0x2F) return 0;                    // end of track
+            s->tempo_us = (double)((g_buf[s->p]<<16)|(g_buf[s->p+1]<<8)|g_buf[s->p+2]);
+            s->p += 3;
             break;
+        }
         default:
-            // resync failure — bail
+            // 0x80 (note-off as a status), 0xA0, 0xD0 etc. are NOT in libsnd's dispatch (it has only
+            // 0x90/0xB0/0xC0/0xE0/0xF0) — an unexpected status means the stream desynced; bail.
             return 0;
     }
     return 1;
@@ -594,6 +610,18 @@ int main(int argc, char** argv) {
         fprintf(stderr,"[snd_render] songid %d -> seq%d vab%d (bank %d)\n",
                 id, S2SV[id].seq, S2SV[id].vab, S2SV[id].vab+1);
         return render_song(S2SV[id].seq, S2SV[id].vab, out, seconds);
+    }
+    if (!strcmp(cmd, "raw")) {                    // render a seq + VAB at EXPLICIT byte offsets
+        if (argc < 6) { fprintf(stderr,"usage: %s <file> raw <seqOff_hex> <vabOff_hex> <out> [seconds]\n", argv[0]); return 1; }
+        long seqOff = strtol(argv[3],0,16), vabOff = strtol(argv[4],0,16);
+        const char* out = argv[5]; int seconds = argc > 6 ? atoi(argv[6]) : 30;
+        Vab v; vab_open_at(&v, vabOff);
+        Seq s; seq_open(&s, &v, seqOff);
+        fprintf(stderr,"[snd_render] raw seq@0x%lx vab@0x%lx(ps=%d ts=%d vs=%d) ppqn=%d tempo=%.0f\n",
+                seqOff, vabOff, v.ps, v.ts, v.vs, s.ppqn, s.tempo_us);
+        int rate = 44100, maxf = seconds*rate; int16_t* pcm = malloc((size_t)maxf*2*2);
+        int frames = 0; seq_render(&s, pcm, maxf, rate, maxf, &frames);
+        wav_write(out, pcm, frames, 2, rate); free(pcm); return 0;
     }
     fprintf(stderr,"unknown cmd %s\n", cmd); return 1;
 }
