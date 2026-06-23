@@ -32,6 +32,8 @@
 //   snd_render <SND> vag <vabIdx> <vagIdx> <out>    # decode one VAG -> WAV @44100
 //   snd_render <SND> tone <vabIdx> <toneIdx> <note> <out>  # synth one tone at MIDI note -> WAV
 //   snd_render <SND> song <seqIdx> <vabIdx> <out> [seconds]  # render a full SEP song -> WAV
+//   snd_render <SND> songid <id> <out> [seconds]   # render BGM song <id> via the game's
+//        song->(seq,vab) table (RE'd from MAIN.EXE FUN_80075448 open block, §6).
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -478,6 +480,26 @@ static void seq_render(Seq* s, int16_t* out, int outcap_frames, int rate, int ma
     *out_frames = frames;
 }
 
+// Render the seq'th 'pQES' sequence with VAB index vi to a stereo WAV. Shared by the
+// `song` (manual indices) and `songid` (game-mapped) commands.
+static int render_song(int si, int vi, const char* out, int seconds) {
+    long o = 0x30; int idx = 0, found = -1;
+    while (o < 0x51800) {
+        if (!memcmp(g_buf+o,"pQES",4)) { if (idx==si) { found=o; break; } idx++; o+=4; } else o++;
+    }
+    if (found < 0) { fprintf(stderr,"seq %d not found\n", si); return 1; }
+    Vab v; vab_open(&v, vi);
+    Seq s; seq_open(&s, &v, found);
+    fprintf(stderr,"[snd_render] song seq%d @0x%lx vab%d ppqn=%d tempo=%.0f\n",
+            si, found, vi, s.ppqn, s.tempo_us);
+    int rate = 44100, maxf = seconds*rate;
+    int16_t* pcm = malloc((size_t)maxf*2*2);
+    int frames = 0; seq_render(&s, pcm, maxf, rate, maxf, &frames);
+    wav_write(out, pcm, frames, 2, rate);
+    free(pcm);
+    return 0;
+}
+
 int main(int argc, char** argv) {
     if (argc < 3) { fprintf(stderr,"usage: %s <TOMBA2.SND> info|vab|seqs|vag|tone|song ...\n", argv[0]); return 1; }
     g_buf = load(argv[1], &g_size);
@@ -551,22 +573,27 @@ int main(int argc, char** argv) {
     if (!strcmp(cmd, "song")) {                   // render a full SEP sequence
         int si = atoi(argv[3]), vi = atoi(argv[4]); const char* out = argv[5];
         int seconds = argc > 6 ? atoi(argv[6]) : 30;
-        // find the si'th 'pQES'
-        long o = 0x30; int idx = 0, found = -1;
-        while (o < 0x51800) {
-            if (!memcmp(g_buf+o,"pQES",4)) { if (idx==si) { found=o; break; } idx++; o+=4; } else o++;
-        }
-        if (found < 0) { fprintf(stderr,"seq %d not found\n", si); return 1; }
-        Vab v; vab_open(&v, vi);
-        Seq s; seq_open(&s, &v, found);
-        fprintf(stderr,"[snd_render] song seq%d @0x%lx vab%d ppqn=%d tempo=%.0f\n",
-                si, found, vi, s.ppqn, s.tempo_us);
-        int rate = 44100, maxf = seconds*rate;
-        int16_t* pcm = malloc((size_t)maxf*2*2);
-        int frames = 0; seq_render(&s, pcm, maxf, rate, maxf, &frames);
-        wav_write(out, pcm, frames, 2, rate);
-        free(pcm);
-        return 0;
+        return render_song(si, vi, out, seconds);
+    }
+    if (!strcmp(cmd, "songid")) {                 // render BGM by game song id
+        if (argc < 5) { fprintf(stderr,"usage: %s <SND> songid <id> <out> [seconds]\n", argv[0]); return 1; }
+        int id = atoi(argv[3]); const char* out = argv[4];
+        int seconds = argc > 5 ? atoi(argv[5]) : 30;
+        // song->(seq scan-index, vab scan-index) RE'd from MAIN.EXE FUN_80075448 open
+        // block (0x80075500..0x80075648) cross-referenced with the asset offset table at
+        // TOMBA2.SND+0x51000 (slot i -> seq offset[i], identical to the linear 'pQES' scan).
+        // VAB column = the runtime BANK arg (FUN_800963a0, 1-based) minus 1 => scan-index;
+        // its mapping to the actual SPU VAB BODY is area/runtime-bound (see §6) -- treat the
+        // vab as the BANK SLOT, verify the body live.
+        static const struct { int seq, vab; } S2SV[10] = {
+            {3,13},{2,13},{1,13},{0,13},  // songs 0..3: bank 14 -> vab idx 13
+            {4, 7},{5, 7},{6, 7},          // songs 4..6 (dialog): bank 8 -> vab idx 7
+            {7,13},{8,13},{9,13},          // songs 7..9: bank 14 -> vab idx 13
+        };
+        if (id < 0 || id >= 10) { fprintf(stderr,"songid %d out of range 0..9\n", id); return 1; }
+        fprintf(stderr,"[snd_render] songid %d -> seq%d vab%d (bank %d)\n",
+                id, S2SV[id].seq, S2SV[id].vab, S2SV[id].vab+1);
+        return render_song(S2SV[id].seq, S2SV[id].vab, out, seconds);
     }
     fprintf(stderr,"unknown cmd %s\n", cmd); return 1;
 }
