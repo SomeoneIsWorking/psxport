@@ -7,6 +7,7 @@
 // multiple sequences can render concurrently.
 #include "native_audio.h"
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
@@ -84,8 +85,13 @@ void na_tone_read(const NaVab* v, int t, NaTone* o) {
 }
 
 int na_prog_tone_start(const NaVab* v, int p) {
-    int start = 0; for (int q = 0; q < p; q++) start += v->buf[v->progtab + q*16];
-    return start;
+    // PSX VAB tone table is a FIXED 16 tone-slots per program (this is exactly what na_vab_open_at
+    // assumes: vagtab = tonetab + ps*16*32). So program p's tones start at slot p*16; progtab[p*16]
+    // is how many of those 16 slots are valid. The old code summed the per-program tone COUNTS (a
+    // packed layout), which only agrees for program 0 — for programs >0 it pointed into the wrong
+    // program's slots, so every note past a 0xCn program-change resolved to no tone and was dropped.
+    // That bug was masked while the synth forced program 0; honoring the live program exposed it.
+    return p * 16;
 }
 
 int na_vab_decode_vag(const NaVab* v, int vagIdx, int16_t* out, int outcap,
@@ -270,8 +276,19 @@ static void seq_note_on(NaSeq* s, int ch, int note, int vel) {
     // sequences emit 0xCn programs 9..17 — those don't index ProgAttr, so using the live program
     // dropped EVERY note (the universal-silence bug). With slot[0x26] (=program 0) all 10 area
     // sequences synth audibly. (Confirms spec §5b; contradicts the handoff's "0xCn drives tone".)
+    // Use the LIVE per-channel 0xCn program when the bound VAB actually has it; fall back to the
+    // per-sequence selector slot[0x26] otherwise. The area songs program-change to 1..15, which exist
+    // in area VAB bank1 (0x38d4, ps=18) but NOT bank0 (0x26b4, ps=4) or TOMBA2.SND's VABs (ps<=2) — so
+    // binding bank1 + honoring the live program plays the real instruments. Against a too-small VAB the
+    // live program would index out of range and drop every note (the bug the old prog_set=0 forcing hid);
+    // the fallback keeps such VABs (the sound test's ps<=2 banks) audible. RE: docs/journal later-220.
+    int prog = s->prog[ch];
+    if (prog < 0 || prog >= s->vab->ps) prog = s->prog_set;
     int tones[16];
-    int ntone = prog_pick_tones(s->vab, s->prog_set, note, tones, 16);
+    int ntone = prog_pick_tones(s->vab, prog, note, tones, 16);
+    static int progdbg = -1; if (progdbg < 0) progdbg = getenv("NA_PROGDBG") ? 1 : 0;
+    if (progdbg) fprintf(stderr, "[nakey] ch=%d note=%d liveprog=%d used=%d ps=%d -> %d tone(s)\n",
+                         ch, note, s->prog[ch], prog, s->vab->ps, ntone);
     if (ntone == 0) return;
     for (int k = 0; k < ntone; k++) {
         NaTone t; na_tone_read(s->vab, tones[k], &t);
@@ -298,7 +315,11 @@ static int seq_event(NaSeq* s) {
         case 0x80: { int n=s->buf[s->p++], v=s->buf[s->p++]; (void)v; seq_note_off(s,ch,n); break; }
         case 0xB0: { int cc=s->buf[s->p++], v=s->buf[s->p++];
                      if (cc==7) s->vol[ch]=v; else if (cc==10) s->pan[ch]=v; break; }
-        case 0xC0: { int pr=s->buf[s->p++]; s->prog[ch]=pr; break; }
+        case 0xC0: { int pr=s->buf[s->p++]; s->prog[ch]=pr;
+                     static int pd=-1; if (pd<0) pd=getenv("NA_PROGDBG")?1:0;
+                     if (pd) fprintf(stderr, "[naprog] ch=%d prog=%d (prog_set=%d vab.ps=%d)\n",
+                                     ch, pr, s->prog_set, s->vab ? s->vab->ps : -1);
+                     break; }
         case 0xE0: s->p += 2; break;
         case 0xF0: {
             int type = s->buf[s->p++];

@@ -93,9 +93,13 @@ int music_list_play(int i) {
 }
 
 // ---- in-game (live area bundle) ------------------------------------------------------------
-// The area bundle's field instrument VAB sits at bundle offset 0x26b4 (ps=4); the 10 SEPs are
-// concatenated from 0x30 (same layout as TOMBA2.SND). See scratch/handoff_audio_unify.md.
-#define AREA_VAB_OFF 0x26b4
+// The area bundle holds the 10 SEPs concatenated from 0x30 (same layout as TOMBA2.SND), then TWO
+// area VABs: bank0 'pBAV' @0x26b4 (ps=4) and bank1 'pBAV' @0x38d4 (ps=18). The area songs emit 0xCn
+// program-changes up to 15 (verified live, NA_PROGDBG) — those programs only exist in bank1, so we
+// bind bank1 as the instrument bank (bank0's 4 programs dropped most notes -> the silent/SFX-tone
+// bug). See scratch/handoff_audio_unify.md + docs/journal later-220.
+#define AREA_SEP_END 0x26b4   // SEPs occupy [0x30, 0x26b4); first VAB starts here
+#define AREA_VAB_OFF 0x38d4   // bank1 (ps=18) — the instrument bank the songs are authored against
 
 static uint8_t* s_area;       // engine-owned copy of the live area bundle
 static long     s_area_len;
@@ -103,7 +107,7 @@ static long     s_area_len;
 // byte offset of the si'th 'pQES' within the area bundle (linear scan from 0x30), or -1.
 static long area_seq_off(int si) {
     long o = 0x30; int idx = 0;
-    while (o + 4 <= s_area_len && o < AREA_VAB_OFF) {
+    while (o + 4 <= s_area_len && o < AREA_SEP_END) {
         if (!memcmp(s_area + o, "pQES", 4)) { if (idx == si) return o; idx++; o += 4; }
         else o++;
     }

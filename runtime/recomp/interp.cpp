@@ -465,6 +465,15 @@ static void interp_flat(Core* c, uint32_t pc, uint32_t stop_ra) {
                        c->r[4] & 0xff, (c->r[4] >> 8) & 0xff, (int)(int16_t)c->r[5],
                        (int)(int16_t)c->r[6], c->r[7] & 0xff, c->mem_r32(c->r[29] + 16));
     }
+    // PSXPORT_DEBUG=bgmreq: trace the game's BGM trigger sound_play_bgm 0x80074BF8 (a0=idx; low7=song,
+    // bit7 set => loop). Reveals which song the GAME LOGIC actually requests per area/dialogue — the
+    // signal the native field_bgm_director currently ignores (it hardcodes song 8).
+    if (pc == 0x80074BF8u || pc == 0x80074E48u) {
+      static int br = -2; if (br == -2) br = cfg_dbg("bgmreq") ? 1 : 0;
+      if (br) { if (pc == 0x80074E48u) fprintf(stderr, "[bgmreq] sound_stop_bgm() ra=%08X\n", c->r[31]);
+                else fprintf(stderr, "[bgmreq] sound_play_bgm(idx=%u song=%u loop=%d) ra=%08X\n",
+                             c->r[4], c->r[4] & 0x7f, (c->r[4] & 0x80) == 0, c->r[31]); }
+    }
     // PSXPORT_DEBUG=seqplay: trace SsSeqPlay 0x80090560 (a0=seq handle) — which sequences are played.
     if (pc == 0x80090560u) {
       static int sp = -2; if (sp == -2) sp = cfg_dbg("seqplay") ? 1 : 0;
