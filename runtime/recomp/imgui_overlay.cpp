@@ -13,6 +13,7 @@
 
 #include "imgui_overlay.h"
 #include "rmlui_render_vk.h"
+#include "audio/music_list.h"   // Sound Test: native music_list_play/stop (engine/audio/)
 
 #include <RmlUi/Core.h>
 #include <RmlUi/Core/Input.h>
@@ -26,6 +27,7 @@
 
 #include <cstdio>
 #include <cstring>
+#include <cstdlib>
 #include <cmath>
 #include <string>
 #include <vector>
@@ -152,6 +154,12 @@ static void refresh_readouts() {
         snprintf(buf, sizeof buf, "render %dx%d &middot; window %dx%d &middot; internal %dx", fbw, fbh, ww, wh, ir);
         if (e->GetInnerRML() != buf) e->SetInnerRML(buf);
     }
+    if (Rml::Element* e = s_doc->GetElementById("music_readout")) {
+        int np = music_list_now_playing();
+        std::string txt = (np >= 0 && music_list_name(np))
+                            ? (std::string("playing: ") + music_list_name(np)) : "stopped";
+        if (e->GetInnerRML() != txt) e->SetInnerRML(txt);
+    }
     if (Rml::Element* e = s_doc->GetElementById("world_readout")) {
         std::string txt;
         if (s_wvalid) {
@@ -216,6 +224,12 @@ static void activate_focused(int dir) {
     if (!(id = f->GetAttribute<Rml::String>("action", "")).empty()) {
         if (id == "quit") { fprintf(stderr, "[rmlui] quit from menu\n"); exit(0); }
         if (id == "close") { s_visible = false; apply_visibility(); }
+        // Sound Test: action="music_<n>" plays catalogued track n; action="music_stop" stops.
+        if (id.rfind("music_", 0) == 0) {
+            if (id == "music_stop") music_list_stop();
+            else music_list_play(atoi(id.c_str() + 6));
+            refresh_readouts();
+        }
         return;
     }
     if (!(id = f->GetAttribute<Rml::String>("toggle", "")).empty()) { do_toggle(id); set_row_value(f); return; }
