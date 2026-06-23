@@ -753,6 +753,26 @@ in-port profiler (later-186, `interp.cpp`) gives the TIME + FREQUENCY histograms
 ---
 
 # CURRENT FRONTIER (work these, in this order)
+**SESSION 2026-06-23 (later-215a..d) — NEWGAME NOW BOOTS INTO GAMEPLAY (the override-removal regressions fixed).**
+The GAME-stage derail/hang was a stack of THREE override-removal casualties, all now fixed (see journal
+later-215a..d for full RE; scratch/{overlay_seq,sop_mode,level_layout}_re.md for the maps):
+- **215b** SOP field-MODE overlay loaded to the wrong addr (0x80118f9c vs 0x80108f9c) in native DEMO s0 →
+  GAME `jal 0x80109450` hit zeroed RAM → derail. (Two overlay classes share slot 0x80108f9c: MODE
+  overlays SOP/OPN/CRD idx 0/1/2 have the per-frame field-mode fn at 0x80109450; AREA overlays A00.. idx 3+
+  have a data table there. New-game needs SOP.) Fixed engine_demo.cpp.
+- **215c** the cooperative YIELD was disconnected: ChangeThread FUN_80080880 (which FUN_80051f80 yield +
+  FUN_80051fb4 task-end funnel through) lost its ov_switch wiring → every GAME per-frame yield spun. Re-wired
+  via platform-HLE (sync_overrides.cpp, window widened to 0x80080000-0x8009E000). Restores the whole coop scheduler.
+- **215d** the CD-subsystem native HLEs were orphaned (only FUN_8001DC40 migrated) → the XA reader spun in
+  libcd CdSync. Re-registered the original set in cd_overrides_init (skip 0x8001D940 core + 0x8008B2D8).
+- **RESULT (VERIFIED, headless + USER eyeball):** newgame → DEMO → GAME → SOP mode machine (sm[0x50] LOAD→
+  FADE→GAMEPLAY), 200+ frames ZERO derail/hang, the OPENING CUTSCENE renders (intro narration). Also:
+  REPL `newgame` freezes at GAME entry for clean inspection; watchdog default-on 3s + SIGINT killability.
+- ☐ NEXT: drive PAST the intro into the walkable field (skip/input), exercise movement+camera; own more of
+  the chain native (SOP mode machine, area asset loader FUN_800754f4 — level_layout_re.md); then the
+  later-214 OT-walk-enumeration retire + 3D-position ordering. Live windowed render fidelity = USER eyeball.
+
+
 **SESSION 2026-06-22 (later-214) — MAIN MENU / TITLE FIXED (was frontier #1 "title renders BLACK").**
 Two independent root causes, both override-removal casualties:
 - **Title texture never loaded:** native DEMO s0 called `preload_texgroup(c, 2, 0)` but that fn is
