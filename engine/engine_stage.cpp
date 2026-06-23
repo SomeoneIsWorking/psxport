@@ -150,6 +150,8 @@ static void ov_game_s4c(Core* c) {
 
 void ov_sop_field_mode(Core*);           // engine/sop.cpp — native SOP field-mode machine
 void native_transition_area_load(Core*); // engine/sop.cpp — sync transition area-DATA load
+void ov_objwalk(Core*);                  // engine/engine_tomba2.cpp — native FUN_8007a904 object-list walk
+void ov_disp_26c88(Core*);               // engine/entity.cpp — native FUN_80026c88 display update
 static void ov_game_submode0(Core* c);   // fwd
 static void ov_game_submode1(Core* c);   // fwd
 
@@ -213,15 +215,15 @@ static void ov_game_submode0(Core* c) {
 // the running states of the sm[0x4e] machine). Faithful to the disasm: bump *0x1f80017c and *0x800bf878;
 // if NOT paused (*0x1f800136==0) run the 11-call gameplay-update block; if *0x1f800136 < 2 run 0x8003f9a8;
 // then always the render-submit 0x8010810c + 0x80077d8c + per-frame area update 0x80075a80. Yield-free
-// (transitive jal scan, 1021 fns). The callees (incl. object-walk 0x8007a904, display 0x80026c88) stay
-// rec_dispatch leaves for now — there are orphan natives (ov_objwalk, ov_disp_26c88) ready to wire as
-// DIRECT calls once they're made callable from this TU (a follow-up: de-static + header decl).
+// (transitive jal scan, 1021 fns). The object-walk 0x8007a904 and display 0x80026c88 now run as the
+// NATIVE ov_objwalk / ov_disp_26c88 (direct C calls — the previously-orphan bodies wired into the live
+// field frame); the remaining callees stay rec_dispatch leaves until owned in turn.
 static void ov_field_frame(Core* c) {
   c->mem_w16(0x1f80017cu, (uint16_t)(c->mem_r16(0x1f80017cu) + 1));   // frame counter
   c->mem_w32(0x800bf878u, c->mem_r32(0x800bf878u) + 1);
   if (c->mem_r8(0x1f800136u) == 0) {            // not paused: full gameplay update
-    d0(c, 0x80059d28u); d0(c, 0x80069b28u); d0(c, 0x80026368u); d0(c, 0x8007a904u);   // ...incl ov_objwalk
-    d0(c, 0x80025588u); d0(c, 0x8004fe84u); d0(c, 0x80026c88u); d0(c, 0x80022a80u);   // ...incl ov_disp_26c88
+    d0(c, 0x80059d28u); d0(c, 0x80069b28u); d0(c, 0x80026368u); ov_objwalk(c);        // 0x8007a904 NATIVE
+    d0(c, 0x80025588u); d0(c, 0x8004fe84u); ov_disp_26c88(c); d0(c, 0x80022a80u);     // 0x80026c88 NATIVE
     d0(c, 0x8006ec44u); d0(c, 0x80050de4u); d0(c, 0x8001cac0u);
   }
   if (c->mem_r8(0x1f800136u) < 2) d0(c, 0x8003f9a8u);

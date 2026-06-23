@@ -48,7 +48,8 @@ static void walk_list(Core* c, uint32_t head, long* count) {
 
 // Native FUN_8007a904. Second list head is re-read fresh after list 1 (handlers in list 1 may mutate
 // it) — matches the recomp body, which reloads DAT_800f2624 across the first loop.
-static void ov_objwalk(Core* c) {
+// Non-static: called DIRECTLY from the native field per-frame update (engine_stage.cpp ov_field_frame).
+void ov_objwalk(Core* c) {
   long nodes = 0;
   walk_list(c, c->mem_r32(T2_OBJLIST_HEAD_1), &nodes);
   walk_list(c, c->mem_r32(T2_OBJLIST_HEAD_2), &nodes);

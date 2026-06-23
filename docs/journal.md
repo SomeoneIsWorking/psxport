@@ -154,6 +154,14 @@ ZERO derail/fault/fallback. NB: orphan natives ov_objwalk/ov_disp_26c88 exist bu
 so ov_field_frame still rec_dispatches the GUEST bodies — wiring them as direct calls (de-static + header)
 is a follow-up. Files: engine/engine_stage.cpp.
 
+**later-217j — orphan natives ov_objwalk + ov_disp_26c88 wired into the live field frame (direct calls).**
+The 217i follow-up: de-static'd `ov_objwalk` (engine_tomba2.cpp, native FUN_8007a904 object-list walk +
+widescreen margin flush) and called it (plus the already-non-static `ov_disp_26c88`, native FUN_80026c88)
+DIRECTLY from `ov_field_frame` instead of rec_dispatching the guest bodies. These were ORPHAN natives
+(reachable only by the removed override table); they now run on the live gameplay frame. VERIFIED: skip 400
+→ `[engine] objwalk` fires (110→152 nodes over 300 frames), sm[0x4e] sequence unchanged vs baseline, zero
+derail/fault. Files: engine/engine_stage.cpp, engine/engine_tomba2.cpp.
+
 **(B) Native audio engine — offline synth + sequencer (continues later-216; tool `tools/snd_render.c`).**
 - Corrected the ToneAttr parse (ground-truthed from raw bytes): adsr1@0x10, adsr2@0x12, prog@0x14,
   vag@0x16, + note-range min@6/max@7 (the spec had adsr off by 2).
