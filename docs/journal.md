@@ -14,6 +14,13 @@
   region our renderer applies it to) is keyed to the wrong VRAM extent. Investigate the fade prim
   classification / the 2D overlay band vs the actual display region (ties into render-ownership + the
   earlier fade work: see [[tomba2-fade-flash-solved]]).
+- **Teal terrain band at the field bottom (USER, 2026-06-23).** The intro/field shows a TEAL diamond-
+  checker band at the screen bottom where GREEN terrain should be — "something is culling it." LEAD: the
+  PC-native terrain render is ORPHANED — `ov_terrain`/`terrain_render_pc` (engine_submit.cpp:1227 +
+  native_terrain.cpp) is NOT wired (`[ov_terrain]` debug never fires), so terrain renders via the RECOMP
+  path 0x8002AB5C (the old "water/garbage at the field edge" class, later-157), OR a 2D BG draws over the
+  near terrain. FIX = own terrain render PC-native (wire terrain_render_pc once its caller is native) +
+  give the engine the right near depth/order. Independent of the gameplay-loop work. See gfx-debug skill.
 - ~~SCEA license screen was black~~ **FIXED PC-native (later-179, below).**
 
 ## later-217 (2026-06-23) — GAMEPLAY-START FLOW MAPPED + native boundary CORRECTED; audio synth+sequencer built offline
@@ -57,6 +64,17 @@ it runs as a native per-frame task (`game_native` in native_scheduler_step, mirr
   99.9% non-black (USER eyeball pending). NB game.h gained `game_native[3]` → needs `build_port.sh all`.
 - NEXT: descend FUN_801092b4 (entity update/render, Tomba update) to re-wire the orphaned
   cull/spawn/collision/object-walk natives; then the area-transition path.
+
+**later-217e/f — skip→field REGRESSION found + fixed with a cooperative fallback (native start preserved).**
+Driving past the intro (`skip 400`) DERAILED: the native per-frame loop rec_dispatched the area machine
+(sm[0x4c] 0x80106478) + transition sub-modes (sm[0x4a]!=0) + the non-SOP field overlay (0x80109450 swaps to
+0x801138A4), all of which YIELD DEEP — fatal in the per-frame model. The cooperative parent (6c659d1)
+reaches the field fine (A/B confirmed), so it was MY regression. Per the user (full-ownership, don't revert):
+`ov_game_frame` now returns 1 only for OWNED states (area-init + the SOP-intro sm[0x4a]==0 path w/ SOP
+loaded) and 0 otherwise; the scheduler hands the GAME task back to the cooperative guest loop (resume
+0x801063F4) for the rest. Native intro preserved; field reachable, no derail. **The remaining work = own the
+area machine sm[0x4c] + the non-SOP field overlay (make their loads sync, same as native_sop_area_load) so
+the fallback shrinks to nothing = FULL native gameplay-start.** Handoff: scratch/handoff_native_gameplay.md.
 
 **(B) Native audio engine — offline synth + sequencer (continues later-216; tool `tools/snd_render.c`).**
 - Corrected the ToneAttr parse (ground-truthed from raw bytes): adsr1@0x10, adsr2@0x12, prog@0x14,
