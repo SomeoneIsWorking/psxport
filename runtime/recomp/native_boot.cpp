@@ -793,12 +793,18 @@ void preload_texgroup(Core* c, uint32_t mode, uint32_t set) {
 // run them as the recomp REFERENCE; our native GPU upload is synchronous, so we DROP the cross-frame
 // poll (the "no async" directive) instead of yielding for a DMA that already happened.
 static void preload_cel(Core* c, uint32_t out, uint32_t desc, uint32_t cbarg) {
-  rc3(c, 0x80096480u, desc, (uint32_t)-1, cbarg);                  // slot = FUN_80096480(desc,-1,cbarg)
-  c->mem_w16(out, (uint16_t)c->r[2]);                             // *(u16*)out = allocated slot
-  rc2(c, 0x80096980u, cbarg, c->r[2]);                            // FUN_80096980(cbarg, slot): kick upload
-  // FOLLOW-UP: FUN_80096480 (the BAV cel loader FUN_80096590, run as recomp) can return -1 (no slot)
-  // for the 2nd cel; verify the cel actually lands in VRAM once DEMO renders (USER eyeball). Dropping
-  // the async DMA-poll here is correct (native upload is synchronous) and does not affect slot alloc.
+  int16_t slot = (int16_t)(rc3(c, 0x80096480u, desc, (uint32_t)-1, cbarg), c->r[2]);  // FUN_80096480(desc,-1,cbarg)
+  c->mem_w16(out, (uint16_t)slot);                               // *(u16*)out = allocated slot
+  rc2(c, 0x80096980u, cbarg, (uint32_t)slot);                    // FUN_80096980(cbarg, slot): kick upload
+  // Drain the BAV upload queue SYNCHRONOUSLY so this cel's VAB bank reaches SPU (and its slot frees so the
+  // NEXT cel can allocate). The real FUN_800753d4 polls 0x80096a40, whose 0x800993a0 sync busy-waits on the
+  // upload's DMA-complete IRQ event — which never fires in this no-IRQ preload, so the original code dropped
+  // the poll and silently skipped a whole VAB bank (proved by the dual-core SPU-DMA diff: 1 transfer vs PSX's
+  // 2). Deliver the sound-DMA-complete event first so 0x800993a0 returns immediately (no busy-wait, no yield),
+  // then run the sync once. (later: in-game music VAB.)
+  void hle_deliver_event(Core* c, uint32_t ev_class, uint32_t spec);
+  hle_deliver_event(c, 0xF0000009u, 0xFFFFFFFFu);                // sound/DMA-complete event
+  rc1(c, 0x80096a40u, 0);                                        // FUN_80096a40(0): upload sync (now non-blocking)
 }
 
 // FUN_800754F4 cel/sprite VRAM build, synchronous. FUN_800753ac is itself an async CD read -> use the
