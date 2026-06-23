@@ -7328,3 +7328,23 @@ draw IMMEDIATELY PC-native from world position will retire the span hack and giv
   (FUN_8005082c arms flags 0x800ea0d4/0x800ec144 + 0x800bf8a4..7 = mode/transition request; find consumer).
 - TOOLING ADDED: REPL `newgame` now FREEZES at the GAME prologue (native_boot.cpp: `continue` before
   native_step_frame) so immediate `r`/`dumpram` see a clean GAME-entry state (was derailing same frame).
+
+## later-215b (2026-06-23) — SOP mode-overlay load address fix (derail -> understood hang)
+ROOT CAUSE of the new-game GAME derail (was "jal 0x80109450 into empty/zero region"): the native DEMO s0
+owner (engine_demo.cpp ov_demo_stage_main) loaded the SOP MODE overlay (BIN/SOP.BIN, file-table idx 2) to
+the WRONG dest **0x80118f9c** instead of **0x80108f9c** — a `lui 0x8011 | 0x8f9c` decode slip vs the real
+`lui 0x8011 + addiu -28772` = 0x80108f9c (the overlay slot immediately after GAME.BIN). So SOP sat 0x10000
+too high; 0x80108f9c..0x80109xxx stayed zero; GAME's running sub-mode-0 `jal 0x80109450` hit zeroed RAM.
+- KEY RE (later-215 + agents): TWO overlay classes load to the SAME slot 0x80108f9c — MODE overlays
+  (SOP/OPN/CRD idx 0/1/2, a real fn at 0x80109450 = the per-frame field-mode state machine) and AREA
+  overlays (A00.. idx 3+, a data jump-table there). New-game needs SOP (idx 2). SOP loads in the DEMO
+  stage (s0), survives into GAME, runs via `jal 0x80109450`; later the AREA overlay overwrites it.
+- FIX: engine_demo.cpp:395 dest 0x80118f9c -> 0x80108f9c. VERIFIED: SOP now resident from DEMO frame 1
+  (0x80109450 = 3C021F80 = `lui v0,0x1f80`, the SOP mode machine prologue); newgame reaches GAME with NO
+  derail. (Also fixed an earlier-attempted A00 forced-load experiment which was the WRONG overlay class.)
+- REMAINING (next): SOP state-0 (FUN_80109450 sm+0x50==0) spawns the cooperative area-DATA load via
+  FUN_80044bd4(&LAB_80109164,0,0,3) and yield-polls 0x1f80019b; the spawned task never completes (no-IRQ
+  coop scheduling) -> hangs at interp PC 0x80051f80 (the yield). Per user: the ENTIRE call chain must be
+  PC-owned (override system is gone) -> own the area-load synchronously / run the coop scheduler natively.
+  SOP mode-machine map: scratch/sop_mode_re.md; level layout: scratch/level_layout_re.md; overlay seq:
+  scratch/overlay_seq_re.md. eng_load_game_area_code (engine_stage.cpp, PSXPORT_OVLIDX-gated) is a WIP probe.

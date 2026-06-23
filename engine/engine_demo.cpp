@@ -382,17 +382,21 @@ void ov_demo_stage_main(Core* c) {
   // loads with the SAME synchronous primitives stage-0 uses (cd_dc40_sync / preload_texgroup), then
   // advance to substate 1 so the guest per-frame loop starts at s1 (menu input — all-SYNC, no CD).
   // Faithful to the 0x801063C0 disasm:
-  //   a0=0x80118F9C; sm[0x68]=0; sm[0x48]++ (0->1); sm[0x4a]=0;
+  //   a0=0x80108F9C (lui 0x8011 + addiu -28772 = 0x80108F9C — the overlay slot right after GAME.BIN,
+  //     NOT 0x80118F9C; an earlier lui|imm decode slip put SOP 0x10000 too high so the GAME stage's
+  //     jal 0x80109450 hit zeroed RAM); sm[0x68]=0; sm[0x48]++ (0->1); sm[0x4a]=0;
   //   jal 0x80045080(a0, idx=2, task)  -> indexed file load (table 0x800BE118, stride 8) via FUN_8001DC40
   //   jal 0x80044BD4(0x80044F58, a1=2, a2=0, phase=0) -> texgroup area-load (spawn+yield-wait, sync here)
   //   jal 0x8007982C; jal 0x80075240; jal 0x8001CF00(1)  -> control-block / audio-attr / SPU-mix (SYNC)
   c->mem_w8(sm + 0x68, 0);
   c->mem_w16(sm + 0x48, 1);                    // sm[0x48]++ : 0 -> 1
   c->mem_w16(sm + 0x4a, 0);
-  { // loader 0x80045080(dest=0x80118F9C, idx=2): tab=0x800BE118+idx*8 -> {lba,size}; sync read to dest
+  { // loader 0x80045080(dest=0x80108F9C, idx=2): tab=0x800BE118+idx*8 -> {lba,size}; sync read to dest.
+    // dest is the overlay slot immediately after GAME.BIN (which ends at 0x80108f9c); idx 2 = SOP.BIN,
+    // the field gameplay-MODE overlay whose per-frame machine GAME.BIN calls via `jal 0x80109450`.
     void cd_dc40_sync(Core*, uint32_t, uint32_t, uint32_t);
     uint32_t tab = 0x800be118u + 2u * 8u;
-    cd_dc40_sync(c, 0x80118f9cu, c->mem_r32(tab), c->mem_r32(tab + 4));
+    cd_dc40_sync(c, 0x80108f9cu, c->mem_r32(tab), c->mem_r32(tab + 4));
   }
   { // area-load FUN_80044BD4(callback=FUN_80044F58, a1=2, a2=0): native sync (no task-1 spawn, no yield).
     // FUN_80044BD4 latches a1->0x801fe0de, a2->0x801fe0dd, clears the load-done flag 0x1f80019b, then the
