@@ -7427,3 +7427,27 @@ Findings (headless trace, PSXPORT_XA_DBG):
   a mix/volume issue; if chan-4 sectors are absent/filtered or n<=0 it's a decode/stream issue. Also suspect
   the dialog-music coordination mod (cd_override.cpp xa_dialog_coord) over-suppressing in the field, and the
   music_fade_in ramp. (The chan-4 area music had prior trouble — see the EOF-early-loop note in xa_stream.c.)
+
+## later-216 (2026-06-23) — PC-NATIVE AUDIO ENGINE: directive + Phase-0/1 (ADPCM/VAB decode PROVEN)
+USER DIRECTIVE: drop the PSX sequencer + XA, replace with a PC-native audio engine. Order: (1) load
+SEQ+VAB+XA natively, (2) native sequencer + voice synth, (3) fold XA into the native mixer, (4) retire
+Beetle spu.c for game audio. ONE behavior, no env A/B; verify by listening + offline WAV A/B vs Beetle.
+- DIAGNOSTIC (supersedes later-215f's "sequenced audio silent" framing): captured the SPU MIXED output
+  headless via PSXPORT_WAV (forces spu_render even with no audio device). menu-cursor SFX (pure SEQ, no XA)
+  rendered REAL audio (peak 11753, RMS at the tap frames); intro rendered continuous content. So libsnd SEQ
+  voices DO synthesize in Beetle — the pipeline is not dead (play flag set, rd ptr advances, VAB DMA'd to
+  SPU RAM 46144 words, KON fires with nonzero voice bits). The windowed silence is likely output/coord, not
+  a dead pipeline. Moot under the native rewrite.
+- RE COMPLETE (formats are all STOCK PSX): TOMBA2.SND container = u16[24] VAB sector table + concatenated
+  SEP sequences (resident 0..0x51800 -> RAM 0x80182000) + 24 VABs ('pBAV' ver7) from 0x51800. SEP='pQES'
+  ver1 ppqn384 tempo-us/quarter BE, MIDI running-status events. VAB=VabHdr32 + ProgAttr[128]*16 +
+  ToneAttr[ps*16]*32 + VAG-size-table(256 u16) + ADPCM body. Full spec: scratch/native_audio_spec.md;
+  container detail: scratch/snd_container_re.md. Raw file: scratch/bin/snd/TOMBA2.SND.
+- BUILT + VERIFIED: tools/snd_render.c (standalone) parses the container + all 24 VABs (sane prog/tone/vag
+  counts, ToneAttr vol/pan/centre/adsr/vag all correct) and decodes PSX ADPCM. VAB0 VAG1 -> clean TONAL
+  waveform (peak 30704, rms 8497, 23.7% zero-crossings = instrument note, not noise). The riskiest piece
+  (ADPCM 2-tap filter math) is PROVEN. Filter coeffs pos{0,60,115,98,122}/neg{0,0,-52,-55,-60}.
+- NEXT (in scratch/native_audio_spec.md §STATUS): voice synth (ADSR+pitch+vol/pan) -> SEP sequencer ->
+  offline full-song render + A/B vs scratch/wav Beetle captures -> wire into ov_frame_update (stop the
+  interpreted libsnd tick) -> fold native XA into the native mixer -> retire Beetle spu.c for game audio ->
+  delete the cd_override dialog-coordination bandaid.
