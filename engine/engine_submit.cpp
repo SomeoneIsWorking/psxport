@@ -824,8 +824,12 @@ static void submit_render_walk(Core* c) {
     uint8_t t = c->mem_r8(n + 0xB);
     if (t >= 33) continue;                            // renders nothing (recomp skips) — handled
     uint32_t tgt = c->mem_r32(RLIST_TABLE + t * 4);
-    if (tgt != RCASE_PEROBJ && tgt != RCASE_DEFAULT) { rec_super_call(c, 0x8003C048u); return; }
+    if (tgt != RCASE_PEROBJ && tgt != RCASE_DEFAULT) {
+      if (cfg_dbg("rwalk")) { static int w=0; if(!w++) fprintf(stderr,"[rwalk] FALLBACK: node type=%u tgt=%08X -> super-call PSX body\n", t, tgt); }
+      rec_super_call(c, 0x8003C048u); return;
+    }
   }
+  if (cfg_dbg("rwalk")) { static int w=0; if(!w++) fprintf(stderr,"[rwalk] NATIVE walk active\n"); }
   // native walk: read `next` before dispatch (the recomp captures node+36 before the case runs).
   for (uint32_t n = head; n; ) {
     uint32_t next = c->mem_r32(n + 36);
