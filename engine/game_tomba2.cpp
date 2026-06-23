@@ -79,7 +79,10 @@ extern "C" int  music_list_now_playing(void);
 #define GAME_STAGE_ADDR 0x801062ECu   // current-stage cell (c->mem_r32) — 0x8010637C while in the field
 #define AREA_BUNDLE     0x182000u     // guest 0x80182000 -> RAM offset
 
+extern "C" int native_gate(const char* name);   // native_boot.cpp — REPL `native <name> on|off`
+
 static void field_bgm_director(Core* c) {
+  if (!native_gate("music")) return;   // gated off -> recomp libsnd is the (oracle) music path
   // Are we in the field (GAME stage running)? The stage cell holds the active stage's task-0 entry.
   uint32_t stage = c->mem_r32(0x801fe00c);
   int in_field = (stage == 0x8010637Cu);
@@ -121,7 +124,7 @@ void ov_frame_update(Core* c) {
   // Opt out (A/B): PSXPORT_T2_NOSEQTICK. Adaptive: a true-60fps scene (quota=1) ticks once.
   int quota = c->mem_r8(VBLANK_QUOTA); if (quota < 1) quota = 1;
   uint32_t seqfn = c->mem_r32(SEQ_FUNC_PTR);
-  int seq_ok = !cfg_on("PSXPORT_T2_NOSEQTICK")
+  int seq_ok = !cfg_on("PSXPORT_T2_NOSEQTICK") && native_gate("seqtick")
                && (seqfn & 0x1FFFFFFFu) >= 0x10000u && (seqfn & 0x1FFFFFFFu) < 0x200000u;
   perf_phase_begin(1);                               // perf: AUDIO = per-vblank sequencer tick + SPU advance
   for (int v = 0; v < quota; v++) {                  // once per VBlank this logic frame spans

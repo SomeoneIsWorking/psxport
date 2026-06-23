@@ -35,6 +35,29 @@ void rec_coro_run(Core* c, uint32_t pc); // flat coroutine interpreter (resumabl
 void xa_dialog_coord(Core* c);          // dialog-vs-ingame-music coordination (cd_override.c)
 void xa_audio_trace(Core* c, const char* tag);    // CD-vol fade + XA lifecycle trace (cd_override.c)
 
+// ---- Native-layer GATE registry (user directive 2026-06-23) -------------------------------------
+// Each PC-native layer that REPLACES game behavior is gated behind a named flag (DEFAULT ENABLED).
+// `native <name> off` at the REPL drops that layer so the recompiled game code (the in-game ORACLE)
+// runs in its place — letting us A/B a native layer against the faithful recomp to isolate breakage.
+// Names auto-register on first query. Diagnostic-only mechanism (not a shipped behavior toggle).
+struct NativeGate { const char* name; int on; };
+static NativeGate s_gates[32];
+static int s_ngates = 0;
+extern "C" int native_gate(const char* name) {
+  for (int i = 0; i < s_ngates; i++) if (!strcmp(s_gates[i].name, name)) return s_gates[i].on;
+  if (s_ngates < 32) { s_gates[s_ngates] = { strdup(name), 1 }; return s_gates[s_ngates++].on; }  // copy name (REPL buf dangles); default ON
+  return 1;
+}
+static void native_gate_set(const char* name, int on) {
+  (void)native_gate(name);   // ensure registered
+  for (int i = 0; i < s_ngates; i++) if (!strcmp(s_gates[i].name, name)) { s_gates[i].on = on; return; }
+}
+static void native_gate_list() {
+  fprintf(stderr, "[native] gates (%d):\n", s_ngates);
+  for (int i = 0; i < s_ngates; i++)
+    fprintf(stderr, "  %-16s %s\n", s_gates[i].name, s_gates[i].on ? "on" : "off");
+}
+
 // Call recompiled/overridden game fn `fn` with up to 3 args; runs to its `jr ra` and returns.
 static void rc0(Core* c, uint32_t fn) { rec_dispatch(c, fn); }
 static void rc1(Core* c, uint32_t fn, uint32_t a0) { c->r[4] = a0; rec_dispatch(c, fn); }
@@ -546,6 +569,14 @@ static long native_repl_read(Core* c, uint32_t f) {
     else if (!strcmp(cmd, "wav")) { char path[200] = {0}; if (sscanf(line, "%*s %199s", path) == 1) spu_wav_reopen(path); }
     else if (!strcmp(cmd, "bgm") && sscanf(line, "%*s %u", &a) == 1) { rc1(c, 0x80074BF8u, a); fprintf(stderr, "[repl] bgm %u (song@800bed80=%04X)\n", a, c->mem_r16(0x800bed80)); }
     else if (!strcmp(cmd, "bgmstop")) { rc0(c, 0x80074E48u); fprintf(stderr, "[repl] bgmstop\n"); }
+    // native <name> on|off  /  native list — gate PC-native layers (default ON) so the recomp oracle
+    // runs in their place. e.g. `native music off` drops the native field-BGM engine.
+    else if (!strcmp(cmd, "native")) {
+      char nm[64] = {0}, st[16] = {0}; int k = sscanf(line, "%*s %63s %15s", nm, st);
+      if (k <= 0 || !strcmp(nm, "list")) native_gate_list();
+      else native_gate_set(nm, strcmp(st, "off") != 0),
+           fprintf(stderr, "[repl] native %s = %s\n", nm, strcmp(st, "off") ? "on" : "off");
+    }
     // seqsolo <i> — stop ALL open libsnd sequences then SsSeqPlay just sequence <i> at full vol, via the
     // GAME'S OWN sequencer. Lets each area SEP sequence be rendered in isolation (the area's field theme
     // otherwise plays continuously). SsSeqStop=0x80091AF0, SsSeqPlay(h,mode,loop)=0x80090560, SsSeqSetVol
