@@ -1,5 +1,37 @@
 # Debug / progress journal
 
+## later-221 (2026-06-24) — LOAD GAME freeze FIXED: DEMO substate s4 owned native (memcard slot browser)
+USER REPORT: native ./run.sh FREEZES when selecting LOAD GAME from the title (PSX fallback PSXPORT_GATE=1
+works). ROOT CAUSE: the DEMO per-frame dispatcher `ov_demo_frame` (engine_demo.cpp) handled s0/1/2/3/5/6/7
+but **s4 hit the `default` case = silent no-op spin** (FAIL-FAST violation). Repro: title (s2) RIGHT (cursor
+item1=sm[0x68]=1) + Cross -> sm[0x48]=4 -> default -> freeze.
+- RE (Ghidra headless on a DEMO-overlay RAM dump, scratch/ghidra + scratch/decomp): s4 = 0x80106580 runs the
+  LOAD sub-machine 0x8007bf20(0,0) then routes on sm[0x6b]. The load sub-machine's case-0 disc load
+  FUN_80045558(1) = FUN_80045080(0x8018a000, idx=1) = the async indexed reader FUN_8001dc40 -> loads the
+  LOAD-MENU OVERLAY to 0x8018a000; that overlay's FUN_8018fa88/fbcc is the actual memcard slot browser
+  (reached via the resident UI driver FUN_8007be18). The async reader never completes in our no-IRQ runtime
+  (same class as the s0 loaders).
+- FIX (engine_demo.cpp `demo_frame_s4` + `load_machine_s4`): reimplement 0x8007bf20 native+SYNC — case-0 disc
+  read via cd_dc40_sync (+ set 0x1f80019b done), rec_dispatch the page-open FUN_800750d8 and the browser
+  driver FUN_8007be18 (its memcard frame R/W is already sync+instant via the BIOS B0/A0 card HLE,
+  memcard.cpp — so the browser does NOT yield). Wired `case 4` in ov_demo_frame.
+- GOTCHA (caused a follow-up bug the USER caught: "exiting load replays OP FMV, skipping it loops back to
+  load"): the root dispatcher 0x801062E4 prologue loads **s2=1, s1=2, s3=3** (NOT s1=1/s2=2). So 0x80106580's
+  `sh s1,0x48` writes sm[0x48]=**2** (TITLE), and the load-ok path writes sm[0x48]=5 + *0x1f800134=**1**. My
+  first cut assumed s1=1 -> routed cancel to sm[0x48]=1 (s1 = the opening-movie machine) -> OP FMV replayed,
+  and the skip-edge then re-confirmed back into load. Fixed: cancel (sm[0x6b]==1/2) -> sm[0x48]=2 title;
+  load-ok (sm[0x6b]==7) -> sm[0x48]=5 GAME, *0x1f800134=1.
+- VERIFIED (headless): title -> Load -> renders the real PS1 card screen ("Load / Select slot", MEMORY CARD
+  slot 1/2, X:OK ○:Return △:Exit; 88% non-black, scratch/screenshots/loadgame.png) with NO freeze/derail;
+  Circle (Return) -> back to title (s4->s2), no movie replay; newgame unaffected (reaches GAME 0x8010637C).
+  Load->GAME (sm[0x6b]==7) routing transcribed from disasm; needs a save on the card to exercise live.
+- Memcard ops are ALREADY sync+instant (USER directive confirmed): host-backed 128KB image, _card_status
+  always reports complete, wired live via the BIOS trampoline (hle.cpp card_hle_a0/b0) — not the dead
+  override table.
+- TOOLING: established a Ghidra-headless decompile pipeline for the front-end — import the DEMO-overlay RAM
+  dump (base 0x80000000) -> analyze -> DecompDump.py per-function clean C (scratch/decomp/*.c). Far faster
+  than hand-tracing the menu state machines. Reusable for the rest of the front-end port.
+
 ## OPEN BUGS (user-reported, not yet fixed) — work after the current task
 - **2D game objects lost their Z / depth ordering (USER, 2026-06-20).** Collectable 2D sprites (e.g. apples)
   in the vanilla game have a Z: they occlude correctly — render BEHIND closer geometry and IN FRONT of

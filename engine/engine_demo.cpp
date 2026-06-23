@@ -543,6 +543,65 @@ static void demo_frame_s5(Core* c) {
   demo_start_stage(c, 2);                      // = FUN_80052078(2): load GAME overlay, restart task 0
 }
 
+// Substate s4 (0x80106580) — LOAD GAME. The body runs the load sub-machine 0x8007bf20(0,0) then routes
+// on sm[0x6b]: ==7 -> s5 (load complete, start GAME, *0x1f800134=1); ==1/2 -> back to s2 (cancel/back =
+// the TITLE); else stay in s4 (continue the slot browser). NB the root dispatcher 0x801062E4 prologue
+// loads s2=1, s1=2, s3=3 — so 0x80106580's `sh s1,0x48` writes sm[0x48]=2 (TITLE), not 1 (which would
+// replay the opening movie). All transition paths run TAIL_CF2C
+// (engine update 0x8001cf2c + attract render 0x80075a80); stay-path runs TAIL_REND only.
+//
+// The load sub-machine 0x8007bf20 is reimplemented native+SYNC (load_machine_s4 below): its case-0 disc
+// load (FUN_80045558(1) = the async indexed reader FUN_8001dc40 to 0x8018a000 — the LOAD-MENU overlay)
+// would spin forever in our no-IRQ runtime, exactly like the s0 loaders. We do that read SYNC (cd_dc40
+// + mark 0x1f80019b done), then rec_dispatch the resident UI driver FUN_8007be18 (which calls the
+// just-loaded overlay's slot browser FUN_8018fa88/fbcc). The memcard reads inside the browser are
+// already sync+instant via the BIOS B0/A0 card HLE (memcard.cpp), so the browser does not yield.
+static void load_machine_s4(Core* c) {
+  uint8_t st = c->mem_r8(0x800bf84au);
+  uint32_t sm;
+  switch (st) {
+    case 0:
+      rec_dispatch(c, 0x8001cf2cu);                          // engine update
+      { // FUN_80045558(1) = FUN_80045080(0x8018a000, idx=1) = FUN_8001dc40(dest, lba, size) — SYNC read
+        void cd_dc40_sync(Core*, uint32_t, uint32_t, uint32_t);
+        uint32_t tab = 0x800be118u + 1u * 8u;               // indexed file table, stride 8 {lba,size}
+        cd_dc40_sync(c, 0x8018a000u, c->mem_r32(tab), c->mem_r32(tab + 4));
+      }
+      c->mem_w8(0x1f80019bu, 1);                              // mark the load complete (case 3 reads this)
+      c->mem_w8(0x800bf84au, 1);
+      c->r[4] = 0x0c; c->r[5] = 1; rec_dispatch(c, 0x800750d8u);   // FUN_800750d8(0xc, 1): page open
+      break;
+    case 1:
+      c->r[4] = 0; rec_dispatch(c, 0x8007be18u);             // overlay slot browser (param2==0 path)
+      sm = c->mem_r32(SM_PTR);
+      if (c->mem_r16(sm + 0x50) > 1) c->mem_w8(0x800bf84au, 3);   // user picked/cancelled -> poll done
+      break;
+    case 2:                                                   // (param2==0 skips this; sync = always done)
+      c->mem_w8(0x800bf84au, 3);
+      break;
+    case 3:
+      if (c->mem_r8(0x1f80019bu) != 0) c->mem_w8(0x800bf84au, 4);
+      break;
+    case 4:
+      c->r[4] = 0; rec_dispatch(c, 0x8007be18u);             // run the chosen action (sets sm[0x6b])
+      c->mem_w8(0x800bf84au, 0);
+      break;
+    default:
+      c->mem_w8(0x800bf84au, 0);
+      break;
+  }
+}
+
+static void demo_frame_s4(Core* c) {
+  load_machine_s4(c);                            // = jal 0x8007bf20(0,0), native+sync
+  uint32_t sm = c->mem_r32(SM_PTR);
+  uint8_t s6b = c->mem_r8(sm + 0x6b);
+  if (s6b == 1)      { c->mem_w16(sm + 0x48, 2); c->mem_w8(sm + 0x68, 1); demo_tail_cf2c(c); }  // back -> title
+  else if (s6b == 2) { c->mem_w16(sm + 0x48, 2); c->mem_w8(sm + 0x68, 0); demo_tail_cf2c(c); }  // back -> title
+  else if (s6b == 7) { c->mem_w16(sm + 0x48, 5); c->mem_w8(0x1f800134u, 1); demo_tail_cf2c(c); }// load ok -> GAME
+  else               { demo_tail_rend(c); }
+}
+
 // Substate s6 (0x801065EC) — page sub-machine 0x8007B45C; if sm[0x50]==3 fire the commit pair
 // 0x80106824(1,1)+0x80106690(1). Then on sm[0x6b]: ==1 -> s3 (sm[0x68]=3); ==2 -> s3 (sm[0x68]=2); both
 // end TAIL_CF2C; else stay -> TAIL_REND. Return-based twin of ov_demo_s6.
@@ -643,6 +702,7 @@ void ov_demo_frame(Core* c) {
     case 1: demo_frame_s1(c); break;
     case 2: demo_frame_s2(c); break;
     case 3: demo_frame_s3(c); break;
+    case 4: demo_frame_s4(c); break;    // LOAD GAME (memcard slot browser)
     case 5: demo_frame_s5(c); return;   // left DEMO -> GAME (no frame-ctr bump; we're gone)
     case 6: demo_frame_s6(c); break;
     case 7: demo_frame_s7(c); break;    // attract demo (idle timeout)

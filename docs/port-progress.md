@@ -236,10 +236,16 @@ for content fns (call it). Do NOT mimic PSX hardware (GTE/GP0/OT) — remove Bee
     expires -> sm[0x48]->7 auto-launch). VERIFIED: steady-phase1 full-RAM+scratchpad dump vs guest baseline =
     scratchpad 0-diff, main-RAM diff only the 2-byte coro saved-ra slot (top-of-RAM stack, never game data);
     phase0/phase1 clean 2000+ frames; phase2 (poke sm[0x4a]=2) restarts sm[0x48]->0 with no crash.
-  - ⬛ **s4 0x80106580 / s5 0x801065DC — STAY GUEST (final, NOT a TODO).** s4's only engine logic (the sm[0x6b]
-    branch) is reached by `jr ra` from its deep yielder 0x8007bf20 — UNREACHABLE by an override (the override
-    table is consulted only on jal/j/jalr/computed-jr, never on `jr ra`; interp_flat 453-483). s5's whole body
-    is `jal 0x80052078(2)` (leave-demo) + the tail yield — no engine logic to own. (later-185/208.)
+  - ✅ **s4 0x80106580 — LOAD GAME, OWNED native (later-221, `demo_frame_s4`+`load_machine_s4`).** Was
+    UNHANDLED in the native per-frame loop (`default` case) → silent spin = the USER-reported "Load Game
+    freezes". Reimplements the load sub-machine 0x8007bf20 native+SYNC (case-0 disc load FUN_80045558(1) of
+    the load-menu OVERLAY to 0x8018a000 done via cd_dc40_sync; the resident UI driver FUN_8007be18 → the
+    overlay slot browser FUN_8018fa88/fbcc rec_dispatched — its memcard frame R/W is already sync+instant via
+    the BIOS B0/A0 card HLE). Routes on sm[0x6b]: ==1/2 → s2 (title); ==7 → s5 (GAME), *0x1f800134=1. GOTCHA:
+    root prologue loads s2=1,s1=2,s3=3 → `sh s1,0x48`=sm[0x48]=2 (TITLE), not 1 (would replay the OP movie).
+    VERIFIED: renders the PS1 card screen, Return → title, no freeze/derail. (The old "STAY GUEST" note was a
+    pre-override-removal artifact — s4 IS ownable in the native per-frame dispatcher.)
+  - ⬛ **s5 0x801065DC — owned via `demo_frame_s5`** (`jal 0x80052078(2)` leave-demo → GAME). (later-185/208/212.)
 - GAME stage `0x8010637C` (overlay GAME.BIN). **NATIVE OWNERSHIP ENDS HERE AT THE PROLOGUE** — full map
   `scratch/gameplay_start_flow_re.md` (read it for the gameplay-start flow + the next-step plan).
   - ✅ top-level prologue = `ov_game_stage_main` (LIVE — called directly by `native_scheduler_step`), then
