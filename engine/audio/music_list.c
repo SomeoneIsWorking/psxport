@@ -16,22 +16,21 @@
 // The seq scan-index is RE'd from MAIN.EXE (spec §6 S2SV). The VAB column is the EMPIRICALLY
 // AUDIBLE bank, NOT the documented §6 bank-slot: §6.4 warns the bank<->VAB-body binding is
 // runtime/area-bound, so the spec's "bank 14 -> vab 13" slot numbers don't address a TOMBA2.SND
-// VAB that actually covers the song's notes. Sweeping all 24 container VABs per seq (tools/
-// snd_render song <seq> <vab>) showed seqs 4-8 sound with these VABs; seqs 0-3 & 9 (the short
-// jingles) produce NO audio with ANY TOMBA2.SND VAB — their notes fall outside every container
-// bank's 1-VAG-per-semitone range, so they need the per-AREA VABs (AREA_BGM.bin) which only ship
-// for the loaded area. Those are flagged "(needs area VAB)" until the area-VAB loader lands.
+// VAB that actually covers the song's notes. The vabs below are empirically-resolved (sweep all
+// 24 container VABs per seq, tools/snd_render song <seq> <vab>). After the program-0 tone-selection
+// fix (slot[0x26], native_audio.c) ALL 10 songs are audible with these VABs — the earlier
+// "needs area VAB" silence was the synth dropping notes, not missing data.
 static const struct { int seq, vab; const char* name; } S2SV[10] = {
-    {3,  7, "Song 0 (jingle, needs area VAB)"},
-    {2,  7, "Song 1 (jingle, needs area VAB)"},
-    {1,  7, "Song 2 (jingle, needs area VAB)"},
-    {0,  7, "Song 3 (jingle, needs area VAB)"},
+    {3,  7, "Song 0 (jingle)"},
+    {2,  7, "Song 1 (jingle)"},
+    {1,  7, "Song 2 (jingle)"},
+    {0,  7, "Song 3 (jingle)"},
     {4,  3, "Song 4 (cue)"},
     {5, 21, "Song 5 (cue)"},
     {6, 21, "Song 6 (cue)"},
     {7, 21, "Song 7 (field)"},
     {8, 21, "Song 8 (field)"},
-    {9,  7, "Song 9 (field, needs area VAB)"},
+    {9,  7, "Song 9 (field)"},
 };
 
 static uint8_t* s_buf;     // TOMBA2.SND contents

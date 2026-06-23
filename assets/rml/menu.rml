@@ -70,16 +70,16 @@
 			<pane>
 				<div class="section-heading">Sound Test</div>
 				<div id="music_readout" class="readout">stopped</div>
-				<select-button action="music_0"><key>Song 0 (jingle, needs area VAB)</key><value>&#9654;</value></select-button>
-				<select-button action="music_1"><key>Song 1 (jingle, needs area VAB)</key><value>&#9654;</value></select-button>
-				<select-button action="music_2"><key>Song 2 (jingle, needs area VAB)</key><value>&#9654;</value></select-button>
-				<select-button action="music_3"><key>Song 3 (jingle, needs area VAB)</key><value>&#9654;</value></select-button>
+				<select-button action="music_0"><key>Song 0 (jingle)</key><value>&#9654;</value></select-button>
+				<select-button action="music_1"><key>Song 1 (jingle)</key><value>&#9654;</value></select-button>
+				<select-button action="music_2"><key>Song 2 (jingle)</key><value>&#9654;</value></select-button>
+				<select-button action="music_3"><key>Song 3 (jingle)</key><value>&#9654;</value></select-button>
 				<select-button action="music_4"><key>Song 4 (cue)</key><value>&#9654;</value></select-button>
 				<select-button action="music_5"><key>Song 5 (cue)</key><value>&#9654;</value></select-button>
 				<select-button action="music_6"><key>Song 6 (cue)</key><value>&#9654;</value></select-button>
 				<select-button action="music_7"><key>Song 7 (field)</key><value>&#9654;</value></select-button>
 				<select-button action="music_8"><key>Song 8 (field)</key><value>&#9654;</value></select-button>
-				<select-button action="music_9"><key>Song 9 (field, needs area VAB)</key><value>&#9654;</value></select-button>
+				<select-button action="music_9"><key>Song 9 (field)</key><value>&#9654;</value></select-button>
 				<select-button action="music_stop"><key>Stop</key><value>&#9632;</value></select-button>
 				<p class="hint">Native PC audio engine (engine/audio/) &middot; replaces the libsnd music path.</p>
 				<p class="hint">&#8596; switch tab &middot; &#8597; move &middot; Enter / A play &middot; Esc close</p>
