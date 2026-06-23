@@ -61,6 +61,22 @@ public:
     return true;
   }
 
+  // Raw 2352-byte sector (12 sync + 3 addr + 1 mode + Mode2 8-byte subheader + data). For XA
+  // inspection: raw[15]=mode, raw[16]=file, raw[17]=chan, raw[18]=submode (bit2=audio, bit7=EOF).
+  bool ReadRaw(uint32_t lba, uint8_t* out2352)
+  {
+    const uint32_t hunk = lba / m_frames_per_hunk;
+    const uint32_t offset = (lba % m_frames_per_hunk) * kRawFrameSize;
+    if (hunk >= m_hunk_count) return false;
+    if (hunk != m_cached_hunk)
+    {
+      if (chd_read(m_chd, hunk, m_hunk_buf.data()) != CHDERR_NONE) return false;
+      m_cached_hunk = hunk;
+    }
+    std::memcpy(out2352, m_hunk_buf.data() + offset, 2352);
+    return true;
+  }
+
 private:
   chd_file* m_chd = nullptr;
   uint32_t m_hunk_bytes = 0;
@@ -273,8 +289,9 @@ int main(int argc, char** argv)
   const std::string mode = argc > 1 ? argv[1] : "";
   const bool list_mode = mode == "list";
   const bool get_mode = mode == "get";
+  const bool subhdr_mode = mode == "subhdr";  // subhdr <lba> <count> [disc]: dump XA file/chan/submode
   const std::string get_name = (get_mode && argc > 2) ? argv[2] : "";
-  const int disc_argi = list_mode ? 2 : (get_mode ? 3 : 1);
+  const int disc_argi = list_mode ? 2 : (get_mode ? 3 : (subhdr_mode ? 4 : 1));
   const auto disc_path =
       psxport::ResolveDiscPath(argc > disc_argi ? argv[disc_argi] : "");
   if (!disc_path)
@@ -296,6 +313,22 @@ int main(int argc, char** argv)
     return 1;
   }
   std::printf("disc: %s\n", disc_path->c_str());
+
+  if (subhdr_mode)
+  {
+    const uint32_t lba0 = argc > 2 ? (uint32_t)std::strtoul(argv[2], nullptr, 0) : 0;
+    const uint32_t cnt  = argc > 3 ? (uint32_t)std::strtoul(argv[3], nullptr, 0) : 16;
+    std::printf("LBA      mode file chan submode  audio eof\n");
+    for (uint32_t i = 0; i < cnt; i++)
+    {
+      uint8_t raw[2352];
+      if (!disc.ReadRaw(lba0 + i, raw)) { std::printf("%-8u  <read fail>\n", lba0 + i); break; }
+      const uint8_t md = raw[15], file = raw[16], chan = raw[17], sub = raw[18];
+      std::printf("%-8u  %2u  %3u  %3u   0x%02X     %d    %d\n",
+                  lba0 + i, md, file, chan, sub, (sub & 0x04) != 0, (sub & 0x80) != 0);
+    }
+    return 0;
+  }
 
   if (list_mode)
   {
