@@ -111,7 +111,10 @@ static void ov_vsync_trap(Core* c) { trap_abort(c, "VSYNC", 0x80085900u); }
 // Game/engine LOGIC lives in [0x8001E000,0x80082000) (FUN_8004xxxx-FUN_8007xxxx, main) and the
 // overlays (0x8010xxxx+) — both OUTSIDE these windows, so the guard keeps logic out of this table.
 static int plat_in_window(uint32_t a) {
-  return (a >= 0x8001C000u && a < 0x8001E000u) || (a >= 0x80082000u && a < 0x8009E000u);
+  // 0x8001Cxxx libcd glue; 0x80080000-0x8009E000 the PSX kernel/BIOS-library window (SCEI libs +
+  // the kernel thread primitives at 0x80080xxx — ChangeThread/OpenThread, which the cooperative
+  // scheduler funnels every task-switch through). All platform/BIOS, never game/engine FUN_xxxx.
+  return (a >= 0x8001C000u && a < 0x8001E000u) || (a >= 0x80080000u && a < 0x8009E000u);
 }
 enum { PLAT_MAX = 32 };
 static uint32_t  s_plat_addr[PLAT_MAX];
@@ -154,4 +157,10 @@ void sync_overrides_init(void) {
   plat_register(0x800834D4u, ov_gpu_timeout_chk);   // FUN_800834d4 check (not timed out)
   // libetc VSync — TRAP every caller, every mode (the native loop owns ALL timing). See ov_vsync_trap.
   plat_register(0x80085900u, ov_vsync_trap);   // VSync(mode)
+  // Cooperative task-switch: ChangeThread (FUN_80080880) is the universal yield/task-end primitive
+  // (FUN_80051f80 yield + FUN_80051fb4 task-end both funnel through it). Wire it to ov_switch so a
+  // yield from an interpreted task coroutine saves the task's resume context and longjmps back to the
+  // native scheduler (native_boot.cpp). Without this, every GAME-stage per-frame yield spins forever
+  // (the override table that used to carry this was removed). ov_switch no-ops outside a task run.
+  { void ov_switch(Core*); plat_register(0x80080880u, ov_switch); }   // ChangeThread -> scheduler yield
 }

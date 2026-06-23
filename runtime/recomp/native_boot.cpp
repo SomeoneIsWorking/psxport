@@ -80,7 +80,7 @@ static void rc4(Core* c, uint32_t fn, uint32_t a0, uint32_t a1, uint32_t a2, uin
 // no-op returning the handle, exactly as the stubbed thread layer did. The caller (FUN_80051f80
 // etc.) has already run its real body, so register side effects it needs on resume (e.g. it
 // leaves v0=0x1f800000 for the stage loop head's `lw t0,0x138(v0)`) are captured.
-static void ov_switch(Core* c) {
+void ov_switch(Core* c) {
   if (!c->game->sched.in_stage) { c->r[2] = c->r[4]; return; }   // no-op: return the handle arg in v0
   c->game->sched.task_ctx[c->game->sched.cur_slot] = static_cast<R3000&>(*c);  // save REGISTERS only (r29=task SP, r31=resume ra)
   longjmp(c->game->sched.yield_jmp, 1);
@@ -767,7 +767,10 @@ static void ov_game_main(Core* c) {
   // incrementally). native_step_frame calls ov_frame_update DIRECTLY (PC-driven, top-down): real
   // per-frame update (still-PSX leaf FUN_800788ac) + per-vblank audio + fps60 commit + gpu_present +
   // gpu_pace_frame + satisfies the vblank pacing dwell. PSXPORT_NATIVE_FRAMES caps the run (headless). ---
-  (void)ov_switch;  // ov_switch kept for a future direct-call wiring; registration removed (override system gone)
+  // ov_switch (the cooperative task-switch) is wired via the platform-HLE table — see
+  // sync_overrides_init: FUN_80080880 (ChangeThread, the universal yield/task-end primitive that
+  // FUN_80051f80/FUN_80051fb4 funnel through) -> ov_switch, so a yield from an interpreted task
+  // coroutine longjmps back to the native scheduler. (Was the removed address-keyed override table.)
   // BGM start/stop (FUN_80074BF8 / FUN_80074E48) are now OWNED PC-native by engine/sound.cpp
   // (sound_register, called from games_tomba2_init). The instant-CD "cut looping ingame music when a
   // dialog tone starts" hook (xa_music_cut_if_dialog) moved into ov_sound_play_bgm there. The REPL

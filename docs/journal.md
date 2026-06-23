@@ -7348,3 +7348,24 @@ too high; 0x80108f9c..0x80109xxx stayed zero; GAME's running sub-mode-0 `jal 0x8
   PC-owned (override system is gone) -> own the area-load synchronously / run the coop scheduler natively.
   SOP mode-machine map: scratch/sop_mode_re.md; level layout: scratch/level_layout_re.md; overlay seq:
   scratch/overlay_seq_re.md. eng_load_game_area_code (engine_stage.cpp, PSXPORT_OVLIDX-gated) is a WIP probe.
+
+## later-215c (2026-06-23) — RE-WIRE the cooperative yield (ChangeThread -> ov_switch) — scheduler restored
+The override-system removal (later-212) silently disconnected the cooperative TASK-SWITCH: FUN_80080880
+(ChangeThread) was the universal yield/task-end primitive (FUN_80051f80 yield + FUN_80051fb4 task-end both
+`jal 0x80080880`), and it USED to be an address-keyed override -> ov_switch (saves the task's resume regs +
+longjmps to the native scheduler). With the table gone and 0x80080880 outside the platform-HLE window,
+ChangeThread ran as pure interpreted kernel code that never longjmped -> EVERY GAME-stage per-frame yield
+(FUN_80051f80) spun forever at PC 0x80051f98 (the scheduler ran slot 0 once and never came back). DEMO was
+unaffected (it uses the native per-frame dispatcher ov_demo_frame, no coroutine yield), so this only bit at
+the GAME stage — the first coroutine-yielding task.
+- FIX: re-wire via the surviving platform-HLE table (sync_overrides.cpp): widen plat_in_window to include
+  the kernel/BIOS window 0x80080000-0x8009E000 (kernel thread primitives at 0x80080xxx are platform, not
+  game logic), and `plat_register(0x80080880, ov_switch)`. Made ov_switch non-static (native_boot.cpp).
+- VERIFIED: GAME slot 0 now yields+resumes (resume_pc=0x80051FA4); the cooperative AREA-LOAD task SPAWNS and
+  RUNS (slot 1 @0x80109164 = SOP state-0's loader LAB_80109164); slot 2 (XA reader @0x8001CFC8) spawns.
+  Front-end unaffected (DEMO reaches s2 clean, no derail/hang). This is the general fix for ALL cooperative
+  tasks, not just the area load.
+- NEW blocker (next layer): the area-load task spins in libcd at 0x8008a720 (a CD-command wait that uses
+  VSync 0x80085900 as its clock) — an un-HLE'd libcd CdRead path. Per FAIL-FAST: make that CD read native +
+  synchronous (extend cd_override / sync_overrides). NB earlier pitfall "don't force-sync FUN_8001D940" was
+  about a bad manual restart; the proper fix is native-synchronous CD I/O so the wait is never reached.
