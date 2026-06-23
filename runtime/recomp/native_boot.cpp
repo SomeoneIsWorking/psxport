@@ -207,10 +207,11 @@ static void native_scheduler_step(Core* c) {
         c->game->sched.cur_slot = i;
         static_cast<R3000&>(*c) = c->game->sched.task_ctx[i];       // restore REGISTERS
         c->game->sched.in_stage = 1;
-        void ov_game_stage_prologue(Core*); void ov_game_frame(Core*);
+        void ov_game_stage_prologue(Core*); int ov_game_frame(Core*);
+        int handled = 1;
         if (setjmp(c->game->sched.yield_jmp) == 0) {
           if (game_fresh) ov_game_stage_prologue(c);                // prologue (sets sm[0x48] from 0x134)
-          ov_game_frame(c);                                         // one frame: sm[0x48] dispatch + tail
+          handled = ov_game_frame(c);                               // one frame: sm[0x48] dispatch + tail
         } else if (cfg_dbg("sched")) {
           static int w = 0; if (!w++) fprintf(stderr, "[sched] caught a GAME substate yield (a leaf not "
                                                       "yet sync) — frontier\n");
@@ -221,6 +222,21 @@ static void native_scheduler_step(Core* c) {
         if (c->mem_r32(base + 0xc) != 0x8010637Cu) {
           c->game->sched.game_native[i] = 0;
           c->game->sched.task_started[i] = 0;
+          continue;
+        }
+        // ov_game_frame returned 0: the current GAME state isn't owned natively yet (transition sub-mode /
+        // area machine / non-SOP overlay — all yield deep). Hand the task back to the COOPERATIVE guest
+        // loop: resume it at the loop top 0x801063F4 with the regs the loop expects (s0=s1=0x1f800000,
+        // s2=1). The generic coroutine path then drives it (the coro-redirect handshake survives the deep
+        // yields). Own the area machine + field overlays to shrink this fallback (gameplay_start_flow_re.md).
+        if (!handled) {
+          c->r[16] = 0x1f800000u; c->r[17] = 0x1f800000u; c->r[18] = 1;   // guest-loop callee-saved regs
+          c->r[31] = 0x801063F4u;                                          // resume PC = guest loop top
+          c->game->sched.task_ctx[i] = static_cast<R3000&>(*c);
+          c->game->sched.game_native[i] = 0;                               // -> generic cooperative path
+          c->mem_w16(base, 2);
+          if (cfg_dbg("sched")) fprintf(stderr, "[sched] GAME -> cooperative guest loop (state not yet "
+                                                 "owned native; field reachable)\n");
           continue;
         }
         c->game->sched.task_ctx[i] = static_cast<R3000&>(*c);       // save REGISTERS

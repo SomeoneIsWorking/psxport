@@ -186,13 +186,28 @@ static void ov_game_submode0(Core* c) {
 }
 
 // One native loop iteration of the guest body 0x801063F4: dispatch sm[0x48] handler, bump frame counter.
-void ov_game_frame(Core* c) {
+// Returns 1 if handled natively, 0 if the current state is NOT yet owned and the task must hand back to
+// the cooperative guest loop. OWNED so far: sm[0x48] area-init (0/1) + the RUNNING SOP-intro path
+// (sm[0x48]==2, sm[0x4a]==0, SOP loaded). The transition sub-modes (sm[0x4a]!=0), the area machine
+// (sm[0x4c] 0x80106478), and the non-SOP field overlays YIELD DEEP and aren't owned yet — own them (RE
+// in scratch/gameplay_start_flow_re.md) to extend native ownership and shrink the cooperative fallback.
+// Returning 0 keeps the field REACHABLE (no derail) until those are owned.
+int ov_game_frame(Core* c) {
   uint32_t sm = c->mem_r32(0x1f800138u);
   uint16_t s48 = c->mem_r16(sm + 0x48);
-  if (s48 == 0) ov_game_s48_0(c);
-  else if (s48 == 1) ov_game_s48_1(c);
-  else if (s48 == 2) ov_game_s48_2_frame(c);
+  if (s48 == 2) {
+    uint16_t s4a = c->mem_r16(sm + 0x4a);
+    if (s4a != 0 || c->mem_r32(0x80109450u) != 0x3C021F80u) return 0;   // not the owned SOP-intro path
+    ov_game_s48_2_frame(c);
+  } else if (s48 == 0) {
+    ov_game_s48_0(c);
+  } else if (s48 == 1) {
+    ov_game_s48_1(c);
+  } else {
+    return 0;                                                          // unknown top state -> cooperative
+  }
   c->mem_w16(0x1f800198u, (uint16_t)(c->mem_r16(0x1f800198u) + 1));   // loop tail 0x8010645c
+  return 1;
 }
 
 // GAME stage TOP-LEVEL ENTRY 0x8010637C — task-0's stage driver: a one-time PROLOGUE then an infinite
