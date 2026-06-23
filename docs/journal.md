@@ -7369,3 +7369,24 @@ the GAME stage — the first coroutine-yielding task.
   VSync 0x80085900 as its clock) — an un-HLE'd libcd CdRead path. Per FAIL-FAST: make that CD read native +
   synchronous (extend cd_override / sync_overrides). NB earlier pitfall "don't force-sync FUN_8001D940" was
   about a bad manual restart; the proper fix is native-synchronous CD I/O so the wait is never reached.
+
+## later-215d (2026-06-23) — restore the orphaned CD-subsystem HLEs — NEWGAME REACHES GAMEPLAY
+With the cooperative yield re-wired (215c), the area-load task ran but slot 2 (the cooperative XA/BGM
+streaming reader FUN_8001cfc8) spun forever in libcd CdSync (FUN_8008a6ec) — wedging the whole scheduler
+frame. ROOT CAUSE: the override-table removal ORPHANED the entire CD-subsystem native HLE set (only
+FUN_8001DC40 had been migrated to platform-HLE). Recovered the original set from the removal commit
+(faeb436) and re-registered via platform_hle_register in cd_overrides_init:
+  0x8001D2A8 ov_voice_play, 0x8001CF2C ov_voice_stop, 0x8001DB8C ov_cd_loadfile, 0x8008AC34 ov_cd_command,
+  0x8008A6EC ov_cd_sync (CdSync->complete), 0x8001CE90 ov_cd_cmd_stream (streaming GetlocL pos in range),
+  0x8008C1EC ov_cd_read. Two DELIBERATE omissions: 0x8001D940 (ov_cd_async_read — the shared async core,
+  force-syncing corrupts the coop area overlay, verified pitfall) and 0x8008B2D8 (CdInit, owned by
+  sync_overrides ov_cdinit_hs). (platform-HLE window already widened to 0x80080000-0x8009E000 in 215c.)
+- **VERIFIED: newgame now boots ALL THE WAY into gameplay** — DEMO->GAME->SOP mode machine runs its state
+  flow (sm[0x50] 0 LOAD -> 1 FADE -> 2 GAMEPLAY per scratch/sop_mode_re.md); 200+ frames with ZERO
+  derail/stuck/fault; renderer processes hundreds of prims (projprim ~490, 2D-prim ~980). Headless `shot`
+  shows the new-game OPENING CUTSCENE rendering (intro narration "Tomba is living peacefully... Tabby has
+  disappeared" over the scene) — scratch/screenshots/newgame_field.png. USER eyeballed.
+- This completes the boot->gameplay chain the override removal broke. The full causal stack was: (215b) SOP
+  mode overlay loaded to wrong addr -> (215c) cooperative yield disconnected -> (215d) CD HLEs orphaned.
+- NEXT: drive into the actual field (skip the intro), exercise movement/camera; verify render fidelity on
+  the live windowed build (USER); the OT-walk-enumeration retire + 3D-position ordering remain (later-214).
