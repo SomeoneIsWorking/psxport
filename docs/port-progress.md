@@ -240,11 +240,20 @@ for content fns (call it). Do NOT mimic PSX hardware (GTE/GP0/OT) — remove Bee
     branch) is reached by `jr ra` from its deep yielder 0x8007bf20 — UNREACHABLE by an override (the override
     table is consulted only on jal/j/jalr/computed-jr, never on `jr ra`; interp_flat 453-483). s5's whole body
     is `jal 0x80052078(2)` (leave-demo) + the tail yield — no engine logic to own. (later-185/208.)
-- GAME stage `0x8010637C` (overlay GAME.BIN, AUTO-registered in engine_stage.cpp via stage_scan_overlay):
-  - ✅ top-level prologue = `ov_game_stage_main`; ✅ sm[0x48] handlers 0/1/2 (`ov_game_s48_0/1/2`);
-    ✅ running dispatcher sm[0x48]==2 (coro-redirect handshake, later-169).
-  - ◐ `ov_game_s4c` (sm[0x4c] area machine `0x80106478`) — STAGED, UNVERIFIED (never entered on field/boot;
-    needs a real area transition sm[0x4a]==2; see § OPEN). NOT registered.
+- GAME stage `0x8010637C` (overlay GAME.BIN). **NATIVE OWNERSHIP ENDS HERE AT THE PROLOGUE** — full map
+  `scratch/gameplay_start_flow_re.md` (read it for the gameplay-start flow + the next-step plan).
+  - ✅ top-level prologue = `ov_game_stage_main` (LIVE — called directly by `native_scheduler_step`), then
+    `rec_coro_redirect`s to the GUEST loop body 0x801063F4 ⇒ the per-frame loop + sm[0x48] dispatch + the
+    SOP field-mode machine all run as RECOMP from here down.
+  - ⚠ STALE-MARKER CORRECTION: `ov_game_s48_0/1/2` + `ov_game_s4c` are written natively BUT **UNWIRED /
+    ORPHANED** since the override-table removal (2026-06-22): `stage_scan_overlay` is a no-op and the defs
+    are `(void)`-cast (engine_stage.cpp:188). Correct ready-to-wire REFERENCE bodies, not live code; the
+    live guest loop calls the GUEST handlers (0x801086e0/720/784), not these.
+  - ☐ NEXT (advance native INTO gameplay): mirror the DEMO `demo_native` per-frame dispatcher for GAME — a
+    `game_native` flag in `native_scheduler_step` calling a native `ov_game_frame` (wires s48_0/1/2), then
+    own the bridge 0x8010882c (`ov_game_submode0`) + the SOP field-mode machine 0x80109450 (sm[0x50]
+    LOAD→FADE→GAMEPLAY, `scratch/sop_mode_re.md`). Area loads `scratch/level_layout_re.md`. Baseline:
+    newgame → sm[0x50]=2 (gameplay running) by ~frame 61.
 
 ## D. Per-frame GAMEPLAY systems (inside the GAME stage loop)
 - ✅ `FUN_800788ac` frame update = `ov_frame_update` (pad read + present + audio kick) — game_tomba2.cpp.

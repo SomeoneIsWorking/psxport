@@ -16,6 +16,41 @@
   earlier fade work: see [[tomba2-fade-flash-solved]]).
 - ~~SCEA license screen was black~~ **FIXED PC-native (later-179, below).**
 
+## later-217 (2026-06-23) — GAMEPLAY-START FLOW MAPPED + native boundary CORRECTED; audio synth+sequencer built offline
+Two parallel threads this session.
+
+**(A) Gameplay-start flow — where native ends, and the path into gameplay (map: `scratch/gameplay_start_flow_re.md`).**
+- **Native ownership ENDS at `ov_game_stage_main`'s PROLOGUE (GAME.BIN 0x8010637C).** It runs the prologue
+  native then `rec_coro_redirect`s to the GUEST loop body 0x801063F4; from there the per-frame loop, the
+  sm[0x48] dispatch, the sub-mode-0 bridge 0x8010882c, the SOP field-mode machine 0x80109450, the area
+  loads, and all per-frame gameplay systems run as RECOMP (`rec_coro_run`).
+- **STALE-MARKER CORRECTION:** the native `ov_game_s48_0/1/2` + `ov_game_s4c` handlers and the hundreds of
+  later-188..208 gameplay natives (cull/spawn/collision/object-walk) are **ORPHANED** — the address-keyed
+  override table that reached them was removed (later-212, 2026-06-22). `stage_scan_overlay` is a no-op;
+  the handler defs are `(void)`-cast (engine_stage.cpp:188). They are correct ready-to-wire reference
+  bodies, not live code. port-progress §C "✅ owned" markers updated accordingly.
+- **The gameplay-start state flow (recomp, verified live `newgame`):** GAME sm[0x48]=2 → sm[0x4e] 0→1 (the
+  0x8010882c bridge: input-reset 0x8005082c + per-frame `jal 0x80109450`) → SOP sm[0x50] 0(LOAD)→1(FADE-IN)
+  →2(GAMEPLAY) reached by ~frame 61. SOP map `scratch/sop_mode_re.md`, area loads `scratch/level_layout_re.md`.
+- **NEXT (concrete plan, in the map):** mirror the DEMO `demo_native` per-frame dispatcher for GAME (a
+  `game_native` flag → native `ov_game_frame` wiring s48_0/1/2), own the bridge 0x8010882c
+  (`ov_game_submode0`) then the SOP machine 0x80109450. The per-frame cooperative yield is why the loop is
+  still guest; the demo_native "yield = return" pattern (deep yields contained by `setjmp`) is the proven
+  way around it. Verify each step: newgame → sm[0x50]=2, no derail.
+
+**(B) Native audio engine — offline synth + sequencer (continues later-216; tool `tools/snd_render.c`).**
+- Corrected the ToneAttr parse (ground-truthed from raw bytes): adsr1@0x10, adsr2@0x12, prog@0x14,
+  vag@0x16, + note-range min@6/max@7 (the spec had adsr off by 2).
+- **Voice synth** (Beetle `CalcVCDelta`/`SPU_RunEnvelope` ADSR verbatim + note→pitch + vol/pan + ADPCM
+  loop points): `tone` cmd renders a clean enveloped note (sustain held, release on keyoff). **SEP
+  sequencer** (`song` cmd): MIDI running-status interpreter + tempo→samples/tick + 24-voice alloc; all 10
+  container sequences render without derailing; output levels match Beetle refs (rms ~2530 vs intro 2538).
+- **Program→tone mapping RE'd** (the blocker): SEQ program is NOT a direct ProgAttr index — baseTone =
+  `ProgAttr[slot0x26]+8` (slot0x26 = SEQ-header program-set selector), tone scan `ToneAttr[baseTone*16+i]`
+  over the note range (multi-voice); the prog-change value indexes ProgAttr for vol/pan. Recorded in the
+  spec §5b; snd_render currently uses a marked `p%ps` PROBE pending that mapping (offline tool only).
+  Spec: `scratch/native_audio_spec.md`.
+
 ## later-208: OWN DEMO front-end substate s7 (attract-demo launch) native — ov_demo_s7_phase REGISTERED
 Owned the last reachable DEMO front-end deep-yielder, **s7 0x80106668** (engine/engine_demo.cpp,
 ov_demo_s7_phase on the phase machine **0x80106C24**), via the same coro-redirect handshake as s0/s2/s3/s6.
