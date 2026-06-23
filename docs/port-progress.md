@@ -801,6 +801,32 @@ in-port profiler (later-186, `interp.cpp`) gives the TIME + FREQUENCY histograms
 ---
 
 # CURRENT FRONTIER (work these, in this order)
+**SESSION 2026-06-24 (later-221/222) — FRONT-END bugs fixed + render-walk RE-WIRED into the C spine.**
+- ✅ LOAD GAME owned (DEMO s4 native, `demo_frame_s4`/`load_machine_s4`, engine_demo.cpp) — fixed the freeze
+  (s4 was the unhandled `default` in ov_demo_frame) + the cancel-replays-OP-movie bug (root prologue
+  s2=1/s1=2/s3=3 → sm[0x48]=2 title, not 1). Renders the real PS1 memory-card slot browser. Memcard I/O is
+  already sync+instant (BIOS B0/A0 card HLE, memcard.cpp). (later-221)
+- ✅ Front-end menu music stops on exit (cd_override.cpp `ov_voice_stop` clears `cd.pending_music` when
+  !dialog) — the dialog-coord was resurrecting the stopped Load/Options menu clip. (later-221)
+- ✅ **Object RENDER-WALK 0x8003c048 RE-WIRED into the field spine** (sop.cpp ov_sop_field_update now calls
+  the native `ov_render_walk`, not rec_dispatch). It was ORPHANED by the override-table removal — so the
+  PC-native per-object world-depth (gpu_obj_depth_add) + the 60fps billboard reprojection (fps60_bb_node)
+  were DEAD. Verified `[rwalk] NATIVE walk active` at the field. **THIS is the pattern the user wants** —
+  the ires/wide/60fps "we used to have with overrides" are orphaned natives; re-wire them top-down. (later-222)
+- ☐ **NEXT (render PC-native, top-down) — the spine's render LEAVES are still PSX:**
+  - `ov_terrain` (engine_submit.cpp → terrain_render_pc, PC-native float terrain) is ORPHANED — NO caller.
+    Wire it where the field renders terrain (confirm path: 0x80109fe0 tile render uses GTE control words +
+    per-tile FUN_801099b4/80109c80; vs the geomblk terrain gen_func_8002AB5C that ov_terrain rebuilds — RE
+    which one the live field uses, scratch/decomp/field/{80109fe0,8010a0e0}.c).
+  - per-object TRANSFORM 0x8003CCA4 (submit_perobj_render still `rec_super_call`s the PSX body) — own it
+    PC-native (float matrix compose + projection, real depth) so WIDESCREEN/ires project correctly. This is
+    the big render leaf; it's what makes wide/ires reliable instead of override-fragile.
+  - then ov_render_cmd (0x8003F698) + the per-type render handlers (cases 1-8,0x10-0x14 in 0x8003c048).
+  - TOOLING established this session: Ghidra-headless decompile pipeline for overlay code — import a RAM dump
+    (base 0x80000000) → analyze → DecompDump.py per-fn clean C (scratch/decomp/). Field dump =
+    scratch/bin/field_game_ram.bin (Ghidra proj tomba2_field). DEMO dump = scratch/bin/demo_title_ram.bin.
+
+
 **SESSION 2026-06-23 (later-215a..d) — NEWGAME NOW BOOTS INTO GAMEPLAY (the override-removal regressions fixed).**
 The GAME-stage derail/hang was a stack of THREE override-removal casualties, all now fixed (see journal
 later-215a..d for full RE; scratch/{overlay_seq,sop_mode,level_layout}_re.md for the maps):
