@@ -363,9 +363,82 @@ static void ov_field_run(Core* c) {
   }
 }
 
+// FIELD PER-FRAME UPDATE VARIANT 0x80108be4 — the mid-TRANSITION field frame, used by the state-3
+// running sub-machine while the screen is faded for an area change. Lighter than ov_field_frame
+// (0x80108b0c): a reduced gameplay-update set (the state-transition object update 0x8007b04c instead
+// of the full Tomba+object walk 0x8007a904) then the SAME render-submit 0x8010810c. Faithful to disasm.
+// Owned so the transition path is native+traceable (the door freeze lives below here): the heavy
+// callees stay rec_dispatch leaves to descend into next — esp. 0x8007b04c (the per-object update that
+// must, but currently does not, tick the screen-transition sequencer FUN_80026ad0 to completion).
+static void ov_field_frame_x(Core* c) {
+  c->mem_w16(0x1f80017cu, (uint16_t)(c->mem_r16(0x1f80017cu) + 1));   // frame counter
+  c->mem_w32(0x800bf878u, c->mem_r32(0x800bf878u) + 1);
+  if (c->mem_r8(0x1f800136u) == 0) {            // not paused: reduced gameplay update
+    d0(c, 0x80059d28u); d0(c, 0x80069b28u); d0(c, 0x80026368u); d0(c, 0x8007b04cu);   // 0x8007b04c obj update
+    d0(c, 0x80025588u); d0(c, 0x8004fe84u); ov_disp_26c88(c); d0(c, 0x80022a80u);     // 0x80026c88 NATIVE
+    d0(c, 0x8006ec44u);
+  }
+  if (c->mem_r8(0x1f800136u) < 2) d0(c, 0x8003fa44u);
+  d0(c, 0x8010810cu);                           // render submit
+  d0(c, 0x80077d8cu);
+  d0(c, 0x80075a80u);                           // per-frame area update
+}
+
+// FIELD RUNNING sub-machine VARIANT 0x801070b4 (sm[0x4c]==3, the mid-transition running handler reached
+// when a door/edge sets up an area change). A switch on sm[0x4e]: state 0 = init (scene reset + input
+// reset) then fall into state 1; state 1 = run ov_field_frame_x and check the mode-3 / area-change exit
+// conditions to hand back to the normal running handler (sm[0x4c]=2); state 2 = bump to 1. Faithful to
+// the disasm (hand-decompiled from the field overlay).
+static void ov_field_run_x(Core* c) {
+  uint32_t sm  = c->mem_r32(0x1f800138u);
+  uint16_t s4e = c->mem_r16(sm + 0x4e);
+  if (s4e >= 2) {
+    if (s4e == 2) c->mem_w16(sm + 0x4e, 1);     // 0x8010721c: re-arm to running
+    return;
+  }
+  if (s4e == 0) {                                // 0x80107100: init
+    c->mem_w16(sm + 0x4e, 1);
+    d0(c, 0x8006c77cu);
+    d3(c, 0x8005082cu, 0, 0, 0);                 // input reset
+    // fall through to state 1
+  }
+  ov_field_frame_x(c);                           // 0x80108be4 per-frame (state 1, 0x80107118)
+  if (c->mem_r8(0x800bf80du) == 3) {             // mode-3 exit (0x80107138)
+    if (c->mem_r8(0x800bf80fu) != 0) return;
+    d0(c, 0x80074bc4u);
+    sm = c->mem_r32(0x1f800138u);
+    c->mem_w16(sm + 0x4c, 2);                     // back to normal running handler
+    int16_t  e_s = (int16_t)c->mem_r16(0x800e7feeu);
+    uint16_t e_u = c->mem_r16(0x800e7feeu);
+    if (e_s != 0) {
+      c->mem_w8(0x800bf880u, 1);
+      c->mem_w16(0x1f800194u, e_u);              // sh (16-bit per disasm)
+      c->mem_w16(sm + 0x4e, 0);
+    } else {
+      c->mem_w16(sm + 0x4e, 2);
+    }
+    return;
+  }
+  // not mode-3 (0x80107194): area-change request via bf839
+  uint8_t bf839 = c->mem_r8(0x800bf839u);
+  if (bf839 == 0) return;
+  if (c->mem_r8(0x800bf80fu) != 0) return;
+  if (bf839 == 8) {                              // 0x801071bc
+    sm = c->mem_r32(0x1f800138u);
+    c->mem_w16(sm + 0x4a, 1); c->mem_w16(sm + 0x4c, 2); c->mem_w16(sm + 0x4e, 3);
+    return;
+  }
+  if (c->mem_r8(0x1f800236u) >= 5) d1(c, 0x80050894u, 0);   // 0x801071f0
+  sm = c->mem_r32(0x1f800138u);
+  c->mem_w16(sm + 0x4a, 1); c->mem_w16(sm + 0x4c, 2); c->mem_w16(sm + 0x4e, 6);
+}
+
 static void ov_game_submode1(Core* c) {
   uint32_t sm = c->mem_r32(0x1f800138u);
   uint16_t s4c = c->mem_r16(sm + 0x4c);
+  if (cfg_dbg("stage") && s4c <= 1)
+    fprintf(stderr, "[stage] submode1 case %u: bf870=%u nexttab[bf870]=%u\n",
+            s4c, c->mem_r8(0x800bf870u), c->mem_r8(0x80108f60u + c->mem_r8(0x800bf870u)));
   switch (s4c) {
     case 0:
       rec_dispatch(c, 0x8005245cu);          // FUN_8005245c (sound/CD setup, sync leaf)
@@ -381,7 +454,7 @@ static void ov_game_submode1(Core* c) {
       break;
     }
     case 2: ov_field_run(c); break;                // field RUNNING sub-machine (sm[0x4e]) — native
-    case 3: rec_dispatch(c, 0x801070b4u); break;
+    case 3: ov_field_run_x(c); break;              // mid-transition running sub-machine 0x801070b4 — native
     case 4: rec_dispatch(c, 0x80107230u); break;
     case 5: rec_dispatch(c, 0x8010766cu); break;
     case 6: rec_dispatch(c, 0x80107790u); break;

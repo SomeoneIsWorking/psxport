@@ -96,6 +96,12 @@ void native_sop_area_load(Core* c) {
 // Mirrors native_sop_area_load for the SOP intro load.
 void native_transition_area_load(Core* c) {
   uint32_t sm = c->mem_r32(0x1f800138u);
+  if (cfg_dbg("stage"))
+    fprintf(stderr, "[sop] XLOAD enter: sm6d=%u sm6e=%u bf870=%u bf872=%u bf838=%u bf839=%u bf83a=0x%04X "
+            "1f8001ff=%u bfe56=0x%04X 1f800278=0x%04X\n",
+            c->mem_r8(sm+0x6d), c->mem_r8(sm+0x6e), c->mem_r8(0x800bf870u), c->mem_r8(0x800bf872u),
+            c->mem_r8(0x800bf838u), c->mem_r8(0x800bf839u), c->mem_r16(0x800bf83au),
+            c->mem_r8(0x1f8001ffu), c->mem_r16(0x800bfe56u), c->mem_r16(0x1f800278u));
   // --- early/quick path test (0x800452d8-0x8004531c): sm[0x6d]==0 AND *1f8001ff==sm[0x6e] AND
   //     (*0x800bfe56 & (1<<sm[0x6e])) == (*0x1f800278 & (1<<sm[0x6e])) ---
   uint8_t s6d = c->mem_r8(sm + 0x6d);
