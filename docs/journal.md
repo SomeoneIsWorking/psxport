@@ -7408,3 +7408,22 @@ _DAT_1f8001f4 — but no IRQ fires, so the count never reaches 0, the read never
   after_skip2.png, field_stable.png). USER eyeballed.
 - STILL OPEN: cutscene BGM doesn't play (audio path — ov_voice_play/xa_stream; investigate next). And the
   area machine sm[0x4e] cycles (intro/fade states) — confirm it settles into walkable play with input.
+
+## later-215f (2026-06-23) — cutscene/area BGM investigation (voice works, music silent) — NOT headless-verifiable
+USER (windowed ./run.sh): intro/fisherman cutscene VOICE plays correctly, but the MUSIC doesn't.
+Findings (headless trace, PSXPORT_XA_DBG):
+- The music IS triggered: ov_voice_play fires `chan=4 [84515..97979] loop=1` (BGM.XA, the looping area
+  music) at f104; it goes active (xa_stream act=1 loop=1), is briefly suppressed by a dialog tone
+  (song=4, the dialog-vs-music coordination mod), then RESUMES (f154) and stays active over 500 frames.
+- Sectors are VALID: `discdump subhdr` shows BGM.XA (music) and DEMO.XA (voice) are BOTH file=1 with
+  channels 0-7 interleaved, so the chan-4 music sectors exist and PASS the decoder filter
+  (file==1 && chan==4 in xa_stream.c). So the filter is NOT the cause.
+- ROOT-CAUSE NOT YET FOUND, and NOT headless-verifiable: the XA decode (xa_decode_next_sector) is
+  PULL-driven by the real SPU/audio output (Beetle spu.c CDC_GetCDAudioSample). Headless drives NO XA
+  decode at all (0 sector traces for voice AND music), so headless cannot distinguish working voice from
+  silent music — needs the windowed audio build to diagnose.
+- NEXT (needs USER's audio build): run `PSXPORT_XA_DBG=2 ./run.sh`, reach the field, and read the
+  `[xa]  sector LBA ... chan=4 ... n=<samples>` lines — if n>0 for chan-4 sectors the DECODE works and it's
+  a mix/volume issue; if chan-4 sectors are absent/filtered or n<=0 it's a decode/stream issue. Also suspect
+  the dialog-music coordination mod (cd_override.cpp xa_dialog_coord) over-suppressing in the field, and the
+  music_fade_in ramp. (The chan-4 area music had prior trouble — see the EOF-early-loop note in xa_stream.c.)
