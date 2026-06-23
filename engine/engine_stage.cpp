@@ -201,6 +201,32 @@ static void ov_game_submode0(Core* c) {
 //     These are YIELD-FREE (transitive jal-graph scan: no FUN_80051f80 once CD/audio-busy are sync
 //     leaves), so they rec_dispatch synchronously per-frame and return = the frame's gameplay work.
 //   sm[0x4c] >= 7 -> no-op (falls to the epilogue).
+// FIELD RUNNING sub-machine 0x80106b98 — native control flow. Reached from ov_game_submode1's
+// sm[0x4c]==2 (the running field). A 12-way jump-table switch on sm[0x4e] (table @0x8010626c). All 12
+// state bodies end at the SHARED epilogue 0x801070a4 (`lw ra,0x14(sp); lw s0,0x10(sp); jr ra`), so we
+// replicate the guest prologue's stack frame and rec_dispatch the selected state at its entry: the
+// state runs (its `j 0x801070a4` falls into the epilogue, which restores ra to OUR rec_dispatch return
+// sentinel and returns). Faithful to 0x80106b98 prologue: `addiu sp,-0x18; sw ra,0x14(sp); sw s0,
+// 0x10(sp)`. The states are reached by `jr v0` (computed) with ra UNCHANGED, returning only via the
+// epilogue. sm[0x4e] >= 12 -> straight to the epilogue (no-op). The state bodies are yield-free (proven
+// by a transitive jal-graph scan); their callees (FUN_80072a78 object-placement etc.) stay rec_dispatch
+// leaves until owned in turn. This moves the native boundary one level deeper into the field frame.
+static void ov_field_run(Core* c) {
+  static const uint32_t state[12] = {
+    0x80106bdcu, 0x80106d00u, 0x80106ddcu, 0x80106e08u, 0x80106ce0u, 0x80106ca0u,
+    0x80106e5cu, 0x80106f38u, 0x80106f68u, 0x80106fc4u, 0x80107020u, 0x80107098u,
+  };
+  uint32_t sm  = c->mem_r32(0x1f800138u);
+  uint16_t s4e = c->mem_r16(sm + 0x4e);
+  if (s4e >= 12) return;                        // out of range -> epilogue no-op
+  uint32_t ra = c->r[31], sp = c->r[29], s0 = c->r[16];
+  c->r[29] = sp - 0x18;
+  c->mem_w32(c->r[29] + 0x14, ra);              // sw ra,0x14(sp) — restored by the shared epilogue
+  c->mem_w32(c->r[29] + 0x10, s0);              // sw s0,0x10(sp)
+  rec_dispatch(c, state[s4e]);                  // run the state; its `j 0x801070a4` epilogue restores ra+s0+sp and returns
+  c->r[31] = ra; c->r[29] = sp; c->r[16] = s0;  // restore the caller's regs (rec_dispatch leaves its sentinel)
+}
+
 static void ov_game_submode1(Core* c) {
   uint32_t sm = c->mem_r32(0x1f800138u);
   uint16_t s4c = c->mem_r16(sm + 0x4c);
@@ -218,7 +244,7 @@ static void ov_game_submode1(Core* c) {
       c->mem_w16(sm + 0x4c, next);
       break;
     }
-    case 2: rec_dispatch(c, 0x80106b98u); break;   // field RUNNING sub-machine (sm[0x4e])
+    case 2: ov_field_run(c); break;                // field RUNNING sub-machine (sm[0x4e]) — native
     case 3: rec_dispatch(c, 0x801070b4u); break;
     case 4: rec_dispatch(c, 0x80107230u); break;
     case 5: rec_dispatch(c, 0x8010766cu); break;

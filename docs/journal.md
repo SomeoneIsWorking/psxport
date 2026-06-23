@@ -131,6 +131,16 @@ enters). Owned `ov_game_submode1` (engine_stage.cpp): switch on sm[0x4c] (table 
   `yieldpc` diagnostic channel to ov_switch (logs the longjmp caller ra — how I found the FUN_80051fb4
   task-complete was the yield source). Files: engine/engine_stage.cpp, engine/sop.cpp, native_boot.cpp.
 
+**later-217h — FIELD RUNNING sub-machine 0x80106b98 dispatcher owned native (`ov_field_run`).**
+Descended one level into the field frame. `ov_field_run` (engine_stage.cpp) owns the 12-way sm[0x4e]
+jump-table dispatch (table @0x8010626c) that ov_game_submode1's sm[0x4c]==2 case used to rec_dispatch
+wholesale. Replicates the guest prologue's stack frame (`addiu sp,-0x18; sw ra,0x14; sw s0,0x10`) and
+rec_dispatches the selected state at its entry — all 12 states fall into the SHARED epilogue 0x801070a4
+(`lw ra,0x14(sp); lw s0,0x10(sp); jr ra`), which restores ra to the rec_dispatch sentinel and returns;
+the native side then restores the caller regs. VERIFIED: skip 400 → sm[0x4e] cycles 0/9/10/7/8/6/1 EXACTLY
+as the cooperative + 217g baseline, 200 frames, zero derail. The state bodies (0x80106bdc..0x80107098)
+remain rec_dispatch leaves; their callees (FUN_80072a78 object-placement etc.) are the next descent.
+
 **(B) Native audio engine — offline synth + sequencer (continues later-216; tool `tools/snd_render.c`).**
 - Corrected the ToneAttr parse (ground-truthed from raw bytes): adsr1@0x10, adsr2@0x12, prog@0x14,
   vag@0x16, + note-range min@6/max@7 (the spec had adsr off by 2).
