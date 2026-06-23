@@ -18,7 +18,9 @@
 #endif
 
 static int g_secs;       // 0 => disabled
+static int g_boot_secs;  // generous grace for the FIRST presented frame (cold pipeline compile)
 static volatile sig_atomic_t g_armed;
+static volatile sig_atomic_t g_first_frame_done;  // 0 until the first present pets the watchdog
 
 extern volatile uint32_t g_interp_pc;  // last PC the hybrid interpreter executed (interp.c)
 
@@ -26,6 +28,11 @@ static void on_alarm(int sig) {
   (void)sig;
   static const char msg[] = "\n[watchdog] STUCK: no frame presented within the timeout — backtrace:\n";
   write(2, msg, sizeof(msg) - 1);
+  if (!g_first_frame_done) {
+    static const char hint[] = "[watchdog] (tripped on the FIRST frame — likely cold GPU pipeline "
+                               "compile, not a hang; re-run, or raise PSXPORT_WATCHDOG_BOOT)\n";
+    write(2, hint, sizeof(hint) - 1);
+  }
   // Report where the interpreter is spinning (async-signal-safe hex emit; no fprintf).
   { char b[] = "[watchdog] interp PC = 0x00000000\n"; uint32_t p = g_interp_pc;
     for (int i = 0; i < 8; i++) b[32 - i] = "0123456789abcdef"[(p >> (i * 4)) & 0xF];
@@ -98,17 +105,29 @@ void watchdog_init(void) {
   const char* s = cfg_str("PSXPORT_WATCHDOG");
   g_secs = s ? atoi(s) : 3;
   if (g_secs <= 0) return;
+  // The FIRST presented frame is legitimately slow: RADV/AMD compiles every Vulkan pipeline (SSAO,
+  // shadow map, tritex, present blit, …) on first use, so the first present blocks in the GPU fence
+  // wait for several seconds on a cold shader cache (e.g. right after a full ./run.sh rebuild). That
+  // is NOT a hang, so the 3s steady-state budget must not apply to it. Give the first frame a much
+  // larger grace (still finite, so a real first-frame GPU hang is still caught + a Ctrl+C works).
+  // PSXPORT_WATCHDOG_BOOT overrides; default = max(g_secs, 45).
+  const char* sb = cfg_str("PSXPORT_WATCHDOG_BOOT");
+  g_boot_secs = sb ? atoi(sb) : (g_secs > 45 ? g_secs : 45);
   struct sigaction sa = {0};
   sa.sa_handler = on_alarm;
   sigaction(SIGALRM, &sa, 0);
   g_armed = 1;
-  alarm((unsigned)g_secs);
-  fprintf(stderr, "[watchdog] armed: %ds frame-progress timeout\n", g_secs);
+  alarm((unsigned)g_boot_secs);
+  fprintf(stderr, "[watchdog] armed: %ds frame-progress timeout (%ds grace for the first frame)\n",
+          g_secs, g_boot_secs);
 }
 
-// Pet from the present path — one beat per produced frame. Re-arms the timer.
+// Pet from the present path — one beat per produced frame. Re-arms the timer. The first present
+// switches from the boot grace to the steady-state budget.
 void watchdog_pet(void) {
-  if (g_armed) alarm((unsigned)g_secs);
+  if (!g_armed) return;
+  g_first_frame_done = 1;
+  alarm((unsigned)g_secs);
 }
 
 // Suspend the frame-progress timeout during an INTENTIONAL idle where no frame is presented and that
