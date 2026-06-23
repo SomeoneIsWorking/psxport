@@ -141,6 +141,19 @@ the native side then restores the caller regs. VERIFIED: skip 400 → sm[0x4e] c
 as the cooperative + 217g baseline, 200 frames, zero derail. The state bodies (0x80106bdc..0x80107098)
 remain rec_dispatch leaves; their callees (FUN_80072a78 object-placement etc.) are the next descent.
 
+**later-217i — FIELD running sub-machine STATE BODIES + the field per-frame update owned native.**
+Replaced the dispatch-only ov_field_run with a FULL native transcription of all 12 states (authoritative
+decomp: scratch/decomp/game/80106b98.c — it cleared up the hand-RE ambiguity, e.g. case-1's `DAT_1f800236`
+and the explicit fall-throughs case 2→3, case 4→1). The running states now call **`ov_field_frame`** — a
+native transcription of the field per-frame update 0x80108b0c (bump frame counters; if not paused run the
+11-call gameplay-update block; conditionally 0x8003f9a8; then render-submit 0x8010810c + 0x80077d8c +
+per-frame area update 0x80075a80 — yield-free, 1021-fn jal scan). Heavy leaf callees (object-walk 0x8007a904,
+display 0x80026c88, FUN_80072a78 placement, …) stay rec_dispatch leaves. VERIFIED: skip 400 → sm[0x4e]
+cycles 0/9/10/7/8/6/1 EXACTLY as baseline and rests at sm[0x4e]=1; 300 frames + clean newgame 150 frames,
+ZERO derail/fault/fallback. NB: orphan natives ov_objwalk/ov_disp_26c88 exist but are `static` in other TUs,
+so ov_field_frame still rec_dispatches the GUEST bodies — wiring them as direct calls (de-static + header)
+is a follow-up. Files: engine/engine_stage.cpp.
+
 **(B) Native audio engine — offline synth + sequencer (continues later-216; tool `tools/snd_render.c`).**
 - Corrected the ToneAttr parse (ground-truthed from raw bytes): adsr1@0x10, adsr2@0x12, prog@0x14,
   vag@0x16, + note-range min@6/max@7 (the spec had adsr off by 2).

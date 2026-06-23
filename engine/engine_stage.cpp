@@ -27,6 +27,14 @@
 #include "cfg.h"
 #include <stdio.h>
 
+// dispatch a still-recomp leaf with up to 3 args set (helpers for the native stage machines).
+static inline void d0(Core* c, uint32_t fn) { rec_dispatch(c, fn); }
+static inline void d1(Core* c, uint32_t fn, uint32_t a0) { c->r[4]=a0; rec_dispatch(c, fn); }
+static inline void d2(Core* c, uint32_t fn, uint32_t a0, uint32_t a1) { c->r[4]=a0; c->r[5]=a1; rec_dispatch(c, fn); }
+static inline void d3(Core* c, uint32_t fn, uint32_t a0, uint32_t a1, uint32_t a2) {
+  c->r[4]=a0; c->r[5]=a1; c->r[6]=a2; rec_dispatch(c, fn);
+}
+
 // sm[0x48] == 0 — area INIT: advance to running (sm[0x48]=2), reset the sub-machine state, run the per-area
 // setup fns. (GAME.BIN 0x801086e0) Verified runtime-exercised + RAM 0-diff.
 static void ov_game_s48_0(Core* c) {
@@ -201,30 +209,156 @@ static void ov_game_submode0(Core* c) {
 //     These are YIELD-FREE (transitive jal-graph scan: no FUN_80051f80 once CD/audio-busy are sync
 //     leaves), so they rec_dispatch synchronously per-frame and return = the frame's gameplay work.
 //   sm[0x4c] >= 7 -> no-op (falls to the epilogue).
-// FIELD RUNNING sub-machine 0x80106b98 — native control flow. Reached from ov_game_submode1's
-// sm[0x4c]==2 (the running field). A 12-way jump-table switch on sm[0x4e] (table @0x8010626c). All 12
-// state bodies end at the SHARED epilogue 0x801070a4 (`lw ra,0x14(sp); lw s0,0x10(sp); jr ra`), so we
-// replicate the guest prologue's stack frame and rec_dispatch the selected state at its entry: the
-// state runs (its `j 0x801070a4` falls into the epilogue, which restores ra to OUR rec_dispatch return
-// sentinel and returns). Faithful to 0x80106b98 prologue: `addiu sp,-0x18; sw ra,0x14(sp); sw s0,
-// 0x10(sp)`. The states are reached by `jr v0` (computed) with ra UNCHANGED, returning only via the
-// epilogue. sm[0x4e] >= 12 -> straight to the epilogue (no-op). The state bodies are yield-free (proven
-// by a transitive jal-graph scan); their callees (FUN_80072a78 object-placement etc.) stay rec_dispatch
-// leaves until owned in turn. This moves the native boundary one level deeper into the field frame.
+// FIELD PER-FRAME UPDATE 0x80108b0c — native control flow (the field frame's work driver, called by
+// the running states of the sm[0x4e] machine). Faithful to the disasm: bump *0x1f80017c and *0x800bf878;
+// if NOT paused (*0x1f800136==0) run the 11-call gameplay-update block; if *0x1f800136 < 2 run 0x8003f9a8;
+// then always the render-submit 0x8010810c + 0x80077d8c + per-frame area update 0x80075a80. Yield-free
+// (transitive jal scan, 1021 fns). The callees (incl. object-walk 0x8007a904, display 0x80026c88) stay
+// rec_dispatch leaves for now — there are orphan natives (ov_objwalk, ov_disp_26c88) ready to wire as
+// DIRECT calls once they're made callable from this TU (a follow-up: de-static + header decl).
+static void ov_field_frame(Core* c) {
+  c->mem_w16(0x1f80017cu, (uint16_t)(c->mem_r16(0x1f80017cu) + 1));   // frame counter
+  c->mem_w32(0x800bf878u, c->mem_r32(0x800bf878u) + 1);
+  if (c->mem_r8(0x1f800136u) == 0) {            // not paused: full gameplay update
+    d0(c, 0x80059d28u); d0(c, 0x80069b28u); d0(c, 0x80026368u); d0(c, 0x8007a904u);   // ...incl ov_objwalk
+    d0(c, 0x80025588u); d0(c, 0x8004fe84u); d0(c, 0x80026c88u); d0(c, 0x80022a80u);   // ...incl ov_disp_26c88
+    d0(c, 0x8006ec44u); d0(c, 0x80050de4u); d0(c, 0x8001cac0u);
+  }
+  if (c->mem_r8(0x1f800136u) < 2) d0(c, 0x8003f9a8u);
+  d0(c, 0x8010810cu);                           // render submit
+  d0(c, 0x80077d8cu);
+  d0(c, 0x80075a80u);                           // per-frame area update
+}
+
+// FIELD RUNNING sub-machine 0x80106b98 — native control flow + state bodies (decomp:
+// scratch/decomp/game/80106b98.c). A 12-way switch on sm[0x4e]; the running states call the native
+// ov_field_frame (0x80108b0c) and the heavy leaf callees rec_dispatch. NB the guest fall-throughs are
+// faithful: case 2 -> 3, case 4 -> 1 (no break). sm[0x4e] >= 12 = no-op. This anchors the field frame
+// natively; the leaf callees (object-placement FUN_80072a78 etc.) are the next descent.
 static void ov_field_run(Core* c) {
-  static const uint32_t state[12] = {
-    0x80106bdcu, 0x80106d00u, 0x80106ddcu, 0x80106e08u, 0x80106ce0u, 0x80106ca0u,
-    0x80106e5cu, 0x80106f38u, 0x80106f68u, 0x80106fc4u, 0x80107020u, 0x80107098u,
-  };
   uint32_t sm  = c->mem_r32(0x1f800138u);
   uint16_t s4e = c->mem_r16(sm + 0x4e);
-  if (s4e >= 12) return;                        // out of range -> epilogue no-op
-  uint32_t ra = c->r[31], sp = c->r[29], s0 = c->r[16];
-  c->r[29] = sp - 0x18;
-  c->mem_w32(c->r[29] + 0x14, ra);              // sw ra,0x14(sp) — restored by the shared epilogue
-  c->mem_w32(c->r[29] + 0x10, s0);              // sw s0,0x10(sp)
-  rec_dispatch(c, state[s4e]);                  // run the state; its `j 0x801070a4` epilogue restores ra+s0+sp and returns
-  c->r[31] = ra; c->r[29] = sp; c->r[16] = s0;  // restore the caller's regs (rec_dispatch leaves its sentinel)
+  switch (s4e) {
+    case 0:
+      d0(c, 0x8007b18cu); d0(c, 0x800796dcu); d0(c, 0x800263e8u); d0(c, 0x80072a78u);
+      d0(c, 0x80075240u); d0(c, 0x800783dcu); d0(c, 0x80078610u);
+      sm = c->mem_r32(0x1f800138u);
+      c->mem_w16(sm + 0x4e, 1);
+      c->mem_w8(sm + 0x6b, 0);
+      if (c->mem_r8(0x800bf89cu) == 2) { c->mem_w16(sm + 0x4e, 9); }
+      else if (c->mem_r8(0x800bf870u) == 8) { d0(c, 0x80114b90u); }
+      else if (c->mem_r32(0x800bf870u) == 0x15) { c->mem_w16(sm + 0x4e, 0xb); return; }
+      d1(c, 0x80074f24u, c->mem_r8(0x800bf870u));
+      break;
+    case 2:
+      d2(c, 0x80058304u, 0x800e7e80u, 0xc);
+      sm = c->mem_r32(0x1f800138u);
+      c->mem_w16(sm + 0x4e, (uint16_t)(c->mem_r16(sm + 0x4e) + 1));
+      /* fallthrough */
+    case 3:
+      d0(c, 0x80074bc4u);
+      if (c->mem_r8(0x800bf870u) == 8) d0(c, 0x80114b90u);
+      sm = c->mem_r32(0x1f800138u);
+      c->mem_w16(sm + 0x4a, 2);
+      c->mem_w16(sm + 0x4c, 0);
+      c->mem_w16(sm + 0x4e, 0);
+      d3(c, 0x8005082cu, 0, 0, 0);
+      break;
+    case 4:
+      d0(c, 0x8006c7c4u); d0(c, 0x800508a8u);
+      c->mem_w16(c->mem_r32(0x1f800138u) + 0x4e, 1);
+      /* fallthrough */
+    case 1: {
+      ov_field_frame(c);                        // native field per-frame update (0x80108b0c)
+      sm = c->mem_r32(0x1f800138u);
+      if (c->mem_r8(0x800bf80du) == 3) {        // (signed byte) special mode 3
+        if (c->mem_r8(0x800bf80fu) == 0) {
+          d0(c, 0x80074bc4u);
+          sm = c->mem_r32(0x1f800138u);
+          if (c->mem_r32(0x800e7feeu) == 0) {   // _DAT_800e7fee (read as int per decomp)
+            c->mem_w16(sm + 0x4e, (uint16_t)(c->mem_r16(sm + 0x4e) + 1));    // LAB_80106f48
+          } else {
+            c->mem_w8(0x800bf880u, 1);
+            c->mem_w32(0x1f800194u, c->mem_r32(0x800e7feeu));
+            c->mem_w16(sm + 0x4e, 0);
+          }
+        }
+      } else if (c->mem_r8(0x800bf839u) != 0 && c->mem_r8(0x800bf80fu) == 0) {
+        if (c->mem_r8(0x800bf839u) == 8) {
+          c->mem_w16(sm + 0x4a, 3); c->mem_w16(sm + 0x4c, 0); c->mem_w16(sm + 0x4e, 0);
+        } else {
+          if (c->mem_r8(0x1f800236u) > 4) d1(c, 0x80050894u, 0);    // LAB_80106fac join
+          sm = c->mem_r32(0x1f800138u);
+          c->mem_w16(sm + 0x4a, 1); c->mem_w16(sm + 0x4c, 2); c->mem_w16(sm + 0x4e, 6);
+        }
+      }
+      break;
+    }
+    case 5:
+      if (c->mem_r8(0x800bf870u) == 7) { d0(c, 0x801128bcu); d0(c, 0x800508a8u); }
+      c->mem_w16(c->mem_r32(0x1f800138u) + 0x4e, 1);
+      ov_field_frame(c);
+      break;
+    case 6: {
+      if (c->mem_r32(0x800e7feeu) != 0) { c->mem_w8(0x800bf880u, 1); c->mem_w32(0x1f800194u, c->mem_r32(0x800e7feeu)); }
+      d0(c, 0x80074bc4u);
+      // _DAT_800bf870 = CONCAT11(...) & 0x3f1f  — the decomp's byte-swap-and-mask of *0x800bf83a into bf870
+      uint16_t b83a = c->mem_r16(0x800bf83au);
+      uint32_t v = (((uint32_t)(b83a & 0xff) << 8) | (b83a >> 8)) & 0x3f1f;
+      c->mem_w32(0x800bf870u, v);
+      if (c->mem_r8(0x800bf839u) == 7) { d0(c, 0x80114b90u); c->mem_w8(0x800bf839u, 3); }
+      sm = c->mem_r32(0x1f800138u);
+      if (c->mem_r8(0x800bf839u) == 3) {
+        d0(c, 0x8005245cu);
+        sm = c->mem_r32(0x1f800138u);
+        c->mem_w16(sm + 0x48, 2); c->mem_w16(sm + 0x4a, 1); c->mem_w16(sm + 0x4c, 1); c->mem_w16(sm + 0x4e, 0);
+      } else {
+        c->mem_w16(sm + 0x48, 2);
+        uint8_t b = c->mem_r8(0x1f800236u);
+        c->mem_w16(sm + 0x4a, 5); c->mem_w16(sm + 0x4e, 0); c->mem_w16(sm + 0x4c, b);
+      }
+      break;
+    }
+    case 7: {
+      d1(c, 0x80045580u, 1);
+      if (c->r[2] == 0) return;
+      sm = c->mem_r32(0x1f800138u);
+      c->mem_w16(sm + 0x4e, (uint16_t)(c->mem_r16(sm + 0x4e) + 1));    // goto LAB_80106f48
+      break;
+    }
+    case 8:
+      if (c->mem_r8(0x1f80019bu) == 0) return;
+      c->mem_w8(0x800bf89cu, 4);
+      c->mem_w8(0x1f800236u, 0);
+      c->mem_w8(0x800bf839u, 3);
+      c->mem_w16(0x800bf83au, 0);
+      sm = c->mem_r32(0x1f800138u);
+      c->mem_w16(sm + 0x4a, 1); c->mem_w16(sm + 0x4c, 2); c->mem_w16(sm + 0x4e, 6);   // LAB_80106fac
+      break;
+    case 9:
+      ov_field_frame(c);
+      sm = c->mem_r32(0x1f800138u);
+      if (c->mem_r8(0x800bf89cu) == 2 && (c->mem_r32(0x800e7e68u) & 8) != 0) {
+        c->mem_w16(sm + 0x4e, (uint16_t)(c->mem_r16(sm + 0x4e) + 1));
+        c->mem_w8(0x800bf809u, 1);
+        c->mem_w8(sm + 0x6e, 0x1f);
+      }
+      break;
+    case 10: {
+      ov_field_frame(c);
+      sm = c->mem_r32(0x1f800138u);
+      uint32_t u = ((uint32_t)c->mem_r8(sm + 0x6e) * (uint32_t)-8) & 0xff;
+      d3(c, 0x8007e9c8u, (u << 16) | (u << 8) | u, 0, 0);
+      uint8_t nv = (uint8_t)(c->mem_r8(sm + 0x6e) - 1);
+      c->mem_w8(sm + 0x6e, nv);
+      if (nv == 0) { c->mem_w16(sm + 0x4e, 7); d0(c, 0x8001cf2cu); }
+      break;
+    }
+    case 0xb:
+      d1(c, 0x8010957cu, 0x800e8008u);
+      break;
+    default: break;
+  }
 }
 
 static void ov_game_submode1(Core* c) {
