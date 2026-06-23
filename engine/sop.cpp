@@ -20,6 +20,12 @@
 #include "cfg.h"
 #include <stdio.h>
 
+// dispatch a still-recomp leaf with up to 3 args set (helpers for the SOP/transition machines).
+static void d0(Core* c, uint32_t fn);
+static void d1(Core* c, uint32_t fn, uint32_t a0);
+static void d2(Core* c, uint32_t fn, uint32_t a0, uint32_t a1);
+static void d3(Core* c, uint32_t fn, uint32_t a0, uint32_t a1, uint32_t a2);
+
 // Owned synchronous area-DATA load (replaces the body of LAB_80109164 0x80109164). Runs in the
 // slot-1 task register context; uses c->r[] for the dispatched leaves' args; writes guest RAM.
 void native_sop_area_load(Core* c) {
@@ -77,7 +83,85 @@ void native_sop_area_load(Core* c) {
             count, (unsigned)(area & 0xf));
 }
 
-// dispatch a still-recomp leaf with up to 3 args set (helper for the SOP machine).
+// Synchronous TRANSITION area-DATA load — replaces the cooperative spawn-and-wait of
+// FUN_80044bd4(0x800452c0, *0x800bf870, 0, 2) used by the field area machine's state-0 (GAME.BIN
+// 0x80108918). In the PSX flow FUN_80044bd4 kills slot 2, clears 1f80019b, spawns 0x800452c0 in
+// slot 1, and YIELD-waits on 1f80019b; the task body 0x800452c0 does the load and ends with
+// FUN_80051fb4 (task-complete, longjmp-yield). We can NOT rec_dispatch 0x800452c0 wholesale because
+// (a) its closing FUN_80051fb4 longjmps out (= frame done mid-state, sm[0x4c] never advances) and
+// (b) its CD-settle / audio-busy waits would yield. So we transcribe the BODY natively (faithful to
+// 0x800452c0), DROP the FUN_80051fb4 task-completes and the settle/busy waits (no-ops in our
+// synchronous CD/audio runtime), and rec_dispatch the leaf callees (CD read, collision grid, unpack,
+// BGM trigger — all synchronous). Ends by writing 1f80019b=1, exactly as the recomp body leaves it.
+// Mirrors native_sop_area_load for the SOP intro load.
+void native_transition_area_load(Core* c) {
+  uint32_t sm = c->mem_r32(0x1f800138u);
+  // --- early/quick path test (0x800452d8-0x8004531c): sm[0x6d]==0 AND *1f8001ff==sm[0x6e] AND
+  //     (*0x800bfe56 & (1<<sm[0x6e])) == (*0x1f800278 & (1<<sm[0x6e])) ---
+  uint8_t s6d = c->mem_r8(sm + 0x6d);
+  if (s6d == 0) {
+    uint8_t  s6e  = c->mem_r8(sm + 0x6e);
+    uint32_t mask = 1u << s6e;
+    uint32_t a2   = (uint32_t)c->mem_r16(0x800bfe56u) & mask;
+    uint8_t  s1ff = c->mem_r8(0x1f8001ffu);
+    uint32_t v0   = (uint32_t)c->mem_r16(0x1f800278u) & mask;
+    if (s1ff == s6e && a2 == v0) {
+      // QUICK PATH (0x80045320-0x80045344): collision grid + done, no DMA load.
+      d2(c, 0x80045258u, (uint32_t)((c->mem_r16(0x800bf89eu) & 0xf) << 1), 47);
+      c->mem_w8(0x1f800206u, 0);
+      c->mem_w8(0x1f80019bu, 1);
+      if (cfg_dbg("stage")) fprintf(stderr, "[sop] native transition area-load (quick path) done\n");
+      return;
+    }
+  }
+  // --- MAIN LOAD PATH (0x80045350+) ---
+  d0(c, 0x8001cf2cu);                                   // kill slot-2 task / settle CD (sync; settle-wait dropped)
+  sm = c->mem_r32(0x1f800138u);
+  c->mem_w8(sm + 0x6d, 2);                              // sm[0x6d] = 2
+  uint8_t s6e = c->mem_r8(sm + 0x6e);
+  c->mem_w16(0x1f800278u, c->mem_r16(0x800bfe56u));     // *1f800278 = *0x800bfe56
+  c->mem_w8(0x1f8001ffu, s6e);                          // *1f8001ff = sm[0x6e]
+  c->mem_w8(0x800bf872u, s6e);                          // *0x800bf872 = sm[0x6e]
+  // *0x800bf870 = sm[0x6e]  (stored in the jal's DELAY SLOT = the OLD v0, i.e. sm[0x6e], NOT the
+  // FUN_80045080 return); then FUN_80045080(0x80108f9c, (sm[0x6e]+3)&0xff) loads the next-area file
+  // (its return is discarded).
+  c->mem_w8(0x800bf870u, s6e);
+  d2(c, 0x80045080u, 0x80108f9cu, (uint32_t)((s6e + 3) & 0xff));
+  // FUN_8007566c(*0x800bf870, *0x1f80022c)   — area BGM/asset trigger
+  d2(c, 0x8007566cu, c->mem_r8(0x800bf870u), c->mem_r32(0x1f80022cu));
+  d0(c, 0x80044f58u);                                  // ov_load_texgroup (sync)
+  // FUN_8001dc40(0x8018a000, *0x800be100 + (*0x800ef480>>11), *0x800ef484 - *0x800ef480);
+  //   *0x800a3ec8 = *0x800ef480>>11    (the area-asset overlay DMA load)
+  uint32_t l = c->mem_r32(0x800ef480u);
+  c->mem_w32(0x800a3ec8u, l >> 11);
+  d3(c, 0x8001dc40u, 0x8018a000u, c->mem_r32(0x800be100u) + (l >> 11), c->mem_r32(0x800ef484u) - l);
+  // if (*0x800bf89c == 2) FUN_80045558(0)
+  if (c->mem_r8(0x800bf89cu) == 2) d1(c, 0x80045558u, 0);
+  // FUN_80045258((*0x800bf89e & 0xf)<<1, 47)   — collision grid
+  d2(c, 0x80045258u, (uint32_t)((c->mem_r16(0x800bf89eu) & 0xf) << 1), 47);
+  // RELOC PATCH (0x80045468-0x800454b0): for i in 0..*0x800ef488:
+  //   w=*(0x800ef48c + i*4); ecf58[w>>24] = 0x8018a000 + (w & 0xffffff)
+  int32_t count = (int32_t)c->mem_r32(0x800ef488u);
+  for (int32_t i = 0; i < count; i++) {
+    uint32_t w   = c->mem_r32(0x800ef48cu + (uint32_t)i * 4);
+    c->mem_w32(0x800ecf58u + (w >> 24) * 4, 0x8018a000u + (w & 0x00ffffffu));
+  }
+  // tail (0x800454b4-0x80045538): if *0x800bf870 == 8: bonus-area asset bump (0x800ecf94 += 0x1000;
+  //   FUN_80045258(idx, 8) by *0x800bf871 bracket); then *0x1f800206 = 1; *1f80019b = 1.
+  if (c->mem_r8(0x800bf870u) == 8) {
+    c->mem_w32(0x800ecf94u, c->mem_r32(0x800ecf94u) + 0x1000);
+    uint8_t b = c->mem_r8(0x800bf871u);
+    uint32_t idx = (b < 9) ? 34 : (b < 16) ? 38 : (b < 21) ? 40 : 36;
+    d2(c, 0x80045258u, idx, 8);
+    c->mem_w8(0x800bfe60u, (uint8_t)idx);
+  }
+  c->mem_w8(0x1f800206u, 1);
+  c->mem_w8(0x1f80019bu, 1);
+  if (cfg_dbg("stage"))
+    fprintf(stderr, "[sop] native transition area-load (main path) done: 1f80019b=1, ecf58 patched %d, "
+            "bf870=%u\n", count, (unsigned)c->mem_r8(0x800bf870u));
+}
+
 static void d0(Core* c, uint32_t fn) { rec_dispatch(c, fn); }
 static void d1(Core* c, uint32_t fn, uint32_t a0) { c->r[4]=a0; rec_dispatch(c, fn); }
 static void d2(Core* c, uint32_t fn, uint32_t a0, uint32_t a1) { c->r[4]=a0; c->r[5]=a1; rec_dispatch(c, fn); }

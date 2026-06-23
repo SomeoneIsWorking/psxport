@@ -82,6 +82,8 @@ static void rc4(Core* c, uint32_t fn, uint32_t a0, uint32_t a1, uint32_t a2, uin
 // leaves v0=0x1f800000 for the stage loop head's `lw t0,0x138(v0)`) are captured.
 void ov_switch(Core* c) {
   if (!c->game->sched.in_stage) { c->r[2] = c->r[4]; return; }   // no-op: return the handle arg in v0
+  if (cfg_dbg("yieldpc")) fprintf(stderr, "[yieldpc] ov_switch longjmp from ra=0x%08X 801fe0e0=0x%X\n",
+                                  c->r[31], c->mem_r32(0x801fe0e0u));
   c->game->sched.task_ctx[c->game->sched.cur_slot] = static_cast<R3000&>(*c);  // save REGISTERS only (r29=task SP, r31=resume ra)
   longjmp(c->game->sched.yield_jmp, 1);
 }

@@ -104,6 +104,33 @@ loaded) and 0 otherwise; the scheduler hands the GAME task back to the cooperati
 area machine sm[0x4c] + the non-SOP field overlay (make their loads sync, same as native_sop_area_load) so
 the fallback shrinks to nothing = FULL native gameplay-start.** Handoff: scratch/handoff_native_gameplay.md.
 
+**later-217g — FIELD AREA MACHINE owned native; the cooperative fallback for the field is GONE.**
+Closed the 217e/f gap. CORRECTION to the handoff: the live walkable-field machine is GAME.BIN **0x801088d8**
+(s48_2 handler[1], reached at sm[0x4a]==1), NOT 0x80106478 (handler[2]/sm[0x4a]==2, which `skip 400` never
+enters). Owned `ov_game_submode1` (engine_stage.cpp): switch on sm[0x4c] (table @0x80106334, 7 states).
+- State-0 (0x80108918) does FUN_8005245c (sound/CD setup, sync leaf) + the cooperative area-DATA load
+  FUN_80044bd4(0x800452c0,*0x800bf870,0,2), then FALLS THROUGH into state-1 (0x8010893c, sm[0x4c]=next-state
+  table[area]) — both run in one frame. Replaced the spawn-and-wait with **`native_transition_area_load`**
+  (engine/sop.cpp): a faithful native transcription of the load body 0x800452c0 (quick path + main path:
+  FUN_8001cf2c, the next-area file load via FUN_80045080, BGM trigger FUN_8007566c, ov_load_texgroup, the
+  area-asset overlay DMA via FUN_8001dc40, collision grid FUN_80045258, the ecf58 reloc-patch loop), with
+  the FUN_80051fb4 task-completes + the slot-2-settle / audio-busy yield loops DROPPED (no-ops under our
+  synchronous CD/audio runtime). rec_dispatches the leaf callees (all sync).
+- States 2..6 rec_dispatch the field RUNNING sub-machine (0x80106b98/70b4/7230/766c/7790, a 12-way sm[0x4e]
+  dispatch); a transitive jal-graph scan (197+ fns each, treating CD/task/audio-busy as leaves) found NO
+  FUN_80051f80 in them → yield-free, safe to rec_dispatch per-frame.
+- `ov_game_frame` now returns 1 for sm[0x4a]==1 (and the SOP-intro sm[0x4a]==0) → the **`[sched] GAME ->
+  cooperative guest loop` message no longer fires at all** for the field.
+- KEY RE BUG (cost the most): 0x800452c0's `sb v0,0x800bf870` at 0x800453d8 is in the **jal DELAY SLOT** of
+  `jal 0x80045080` → it stores the *prior* v0 (= sm[0x6e], the area index), NOT FUN_80045080's return. I
+  first stored the return (a 168-byte CD-load size) → FUN_8007566c's `jr v0` jump-table (@0x80016c7c, indexed
+  by *0x800bf870-5) read garbage → DERAIL to 0xFF800004. Reading delay slots correctly is load-bearing.
+- VERIFIED (headless REPL): `skip 400` → field reaches sm[0x4a]=1 sm[0x4c]=2 overlay 0x801138A4, sm[0x4e]
+  cycles 0/9/10/7/8/6/1 EXACTLY as the cooperative baseline (6c659d1), stable 200 frames; clean `newgame`
+  120 frames unaffected; ZERO cooperative-fallback / caught-yield / derail / fault in any run. Added a gated
+  `yieldpc` diagnostic channel to ov_switch (logs the longjmp caller ra — how I found the FUN_80051fb4
+  task-complete was the yield source). Files: engine/engine_stage.cpp, engine/sop.cpp, native_boot.cpp.
+
 **(B) Native audio engine — offline synth + sequencer (continues later-216; tool `tools/snd_render.c`).**
 - Corrected the ToneAttr parse (ground-truthed from raw bytes): adsr1@0x10, adsr2@0x12, prog@0x14,
   vag@0x16, + note-range min@6/max@7 (the spec had adsr off by 2).

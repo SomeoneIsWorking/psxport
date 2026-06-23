@@ -267,10 +267,26 @@ for content fns (call it). Do NOT mimic PSX hardware (GTE/GP0/OT) — remove Bee
     VERIFIED: newgame → sm[0x50] 0→1→2 (gameplay) by frame 60 (a frame faster than the cooperative
     baseline — load is inline now), 1f80019b=1, stable 300 frames, zero derail/hang/caught-yield, render
     99.9% non-black (USER eyeball pending). Map: `scratch/gameplay_start_flow_re.md`.
+  - ✅ **FIELD AREA MACHINE (sm[0x4a]==1) now NATIVE per-frame** (later-217g). The walkable field that
+    runs AFTER the SOP intro is dispatched by GAME.BIN **0x801088d8** (handler[1], NOT 0x80106478 — the
+    handoff's "area machine 0x80106478" was wrong; the live path is sm[0x4a]==1). Owned `ov_game_submode1`
+    (engine_stage.cpp): a switch on sm[0x4c] (table @0x80106334, 7 states). State-0 calls
+    **`native_transition_area_load`** (engine/sop.cpp) — a faithful native+SYNC transcription of the
+    cooperative load body 0x800452c0 (the FUN_80044bd4(0x800452c0,…) spawn-and-wait), dropping the
+    FUN_80051fb4 task-completes + the CD-settle/audio-busy yields (no-ops in our sync runtime) — then falls
+    through to state-1's next-state select. States 2..6 rec_dispatch the field RUNNING sub-machine
+    (0x80106b98/70b4/7230/766c/7790, sm[0x4e]) — a transitive jal-scan proved them YIELD-FREE.
+    `ov_game_frame` now returns 1 for sm[0x4a]==1, so the **cooperative fallback is GONE** for the field.
+    VERIFIED: `skip 400` → field reaches sm[0x4a]=1 sm[0x4c]=2 overlay 0x801138A4, sm[0x4e] cycles
+    0/9/10/7/8/6/1 EXACTLY as the cooperative baseline, stable 200 frames, ZERO "[sched] cooperative" /
+    caught-yield / derail; clean newgame unaffected. KEY RE GOTCHA: 0x800452c0's `sb v0` at 0x800453d8 is
+    in the jal DELAY SLOT → it stores the OLD v0 (sm[0x6e]), NOT the FUN_80045080 return (a 168-byte load
+    size that derailed the BGM jump-table when mis-stored).
   - ☐ NEXT: descend the SOP per-frame field update `FUN_801092b4` (entity update FUN_8010a0e0, Tomba
     update 0x8007b008, BG draw, entity render FUN_80109fe0) — own its sub-systems native, re-wiring the
-    orphaned cull/spawn/collision/object-walk natives as their callers become native. Then the area
-    transition path (sm[0x50]=3/4 → next area) + the OT-walk-enum retire / 3D-position ordering.
+    orphaned cull/spawn/collision/object-walk natives as their callers become native. Also own the
+    remaining sm[0x4a] running sub-modes (2..5) + the area-machine RUNNING sub-states (0x80106b98 etc.,
+    currently rec_dispatched yield-free) + the OT-walk-enum retire / 3D-position ordering.
 
 ## D. Per-frame GAMEPLAY systems (inside the GAME stage loop)
 - ✅ `FUN_800788ac` frame update = `ov_frame_update` (pad read + present + audio kick) — game_tomba2.cpp.

@@ -141,7 +141,9 @@ static void ov_game_s4c(Core* c) {
 // the SOP area load is native+synchronous, so SOP state-0 never yields.
 
 void ov_sop_field_mode(Core*);           // engine/sop.cpp — native SOP field-mode machine
+void native_transition_area_load(Core*); // engine/sop.cpp — sync transition area-DATA load
 static void ov_game_submode0(Core* c);   // fwd
+static void ov_game_submode1(Core* c);   // fwd
 
 // sm[0x48]==2 RUNNING, per-frame variant: dispatch sm[0x4a] handler. handler[0] = the GAME->SOP bridge
 // 0x8010882c (owned native, ov_game_submode0); the others stay rec_dispatch leaves (synchronous; a
@@ -154,6 +156,7 @@ static void ov_game_s48_2_frame(Core* c) {
   uint16_t s4a = c->mem_r16(sm + 0x4a);
   if (s4a >= 6) return;
   if (s4a == 0) { ov_game_submode0(c); return; }
+  if (s4a == 1) { ov_game_submode1(c); return; }
   rec_dispatch(c, handler[s4a]);
 }
 
@@ -185,6 +188,45 @@ static void ov_game_submode0(Core* c) {
   }
 }
 
+// GAME sm[0x4a]==1 handler 0x801088d8 — the FIELD area machine (the actual walkable field, loaded
+// AFTER the SOP intro). Native: a jump-table switch on sm[0x4c] (table @0x80106334, 7 states). Faithful
+// to the disasm:
+//   state 0 (0x80108918): FUN_8005245c() (sound/CD setup, sync leaf), then the area-DATA load
+//     FUN_80044bd4(0x800452c0, *0x800bf870, 0, 2) — the COOPERATIVE spawn-and-wait. We own it INLINE
+//     and SYNCHRONOUS via native_transition_area_load (no task spawn, no yield) — the prereq for the
+//     per-frame model (re-entering a yielding state-0 would re-spawn the load forever).
+//   state 1 (0x8010893c): 0x1f800234=0; sm[0x4c] = *(u8*)(0x80108f60 + *0x800bf870)  (next-state table)
+//   states 2..6 (0x8010896c/7c/8c/9c/ac): jal the field RUNNING sub-machine handler:
+//     2->0x80106b98  3->0x801070b4  4->0x80107230  5->0x8010766c  6->0x80107790
+//     These are YIELD-FREE (transitive jal-graph scan: no FUN_80051f80 once CD/audio-busy are sync
+//     leaves), so they rec_dispatch synchronously per-frame and return = the frame's gameplay work.
+//   sm[0x4c] >= 7 -> no-op (falls to the epilogue).
+static void ov_game_submode1(Core* c) {
+  uint32_t sm = c->mem_r32(0x1f800138u);
+  uint16_t s4c = c->mem_r16(sm + 0x4c);
+  switch (s4c) {
+    case 0:
+      rec_dispatch(c, 0x8005245cu);          // FUN_8005245c (sound/CD setup, sync leaf)
+      native_transition_area_load(c);         // INLINE sync load (replaces FUN_80044bd4) -> 1f80019b=1
+      // FALL THROUGH to state 1: in the guest, 0x80108918 does NOT branch to the epilogue — it falls
+      // into 0x8010893c, so the load AND the next-state selection both run in this one frame.
+      /* fallthrough */
+    case 1: {
+      c->mem_w8(0x1f800234u, 0);
+      uint8_t area = c->mem_r8(0x800bf870u);
+      uint8_t next = c->mem_r8(0x80108f60u + area);
+      c->mem_w16(sm + 0x4c, next);
+      break;
+    }
+    case 2: rec_dispatch(c, 0x80106b98u); break;   // field RUNNING sub-machine (sm[0x4e])
+    case 3: rec_dispatch(c, 0x801070b4u); break;
+    case 4: rec_dispatch(c, 0x80107230u); break;
+    case 5: rec_dispatch(c, 0x8010766cu); break;
+    case 6: rec_dispatch(c, 0x80107790u); break;
+    default: break;                                 // >=7: no-op
+  }
+}
+
 // One native loop iteration of the guest body 0x801063F4: dispatch sm[0x48] handler, bump frame counter.
 // Returns 1 if handled natively, 0 if the current state is NOT yet owned and the task must hand back to
 // the cooperative guest loop. OWNED so far: sm[0x48] area-init (0/1) + the RUNNING SOP-intro path
@@ -197,7 +239,14 @@ int ov_game_frame(Core* c) {
   uint16_t s48 = c->mem_r16(sm + 0x48);
   if (s48 == 2) {
     uint16_t s4a = c->mem_r16(sm + 0x4a);
-    if (s4a != 0 || c->mem_r32(0x80109450u) != 0x3C021F80u) return 0;   // not the owned SOP-intro path
+    // OWNED running sub-modes: 0 = SOP-intro (SOP overlay must be loaded); 1 = field area machine
+    // (0x801088d8, the walkable field — its load is sync via native_transition_area_load, its running
+    // states are yield-free). Other sub-modes (2..5, the area-machine variants) aren't owned yet.
+    if (s4a == 0) {
+      if (c->mem_r32(0x80109450u) != 0x3C021F80u) return 0;            // SOP not loaded -> cooperative
+    } else if (s4a != 1) {
+      return 0;                                                        // unowned running sub-mode
+    }
     ov_game_s48_2_frame(c);
   } else if (s48 == 0) {
     ov_game_s48_0(c);
