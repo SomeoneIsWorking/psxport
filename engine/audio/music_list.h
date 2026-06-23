@@ -8,6 +8,7 @@
 // Used by BOTH the REPL `musictest <n>` command and the RmlUi Sound Test pane.
 #ifndef MUSIC_LIST_H
 #define MUSIC_LIST_H
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -23,6 +24,13 @@ int         music_list_play(int i);
 void        music_list_stop(void);
 // Index of the currently-playing track, or -1 if none / stopped.
 int         music_list_now_playing(void);
+
+// IN-GAME: play the field BGM for `song` (0..9) from the LIVE area bundle. `bundle` points at the
+// area bundle in guest RAM (guest 0x80182000); `bundle_len` = bytes safe to copy. The bundle is
+// copied into an engine-owned buffer (survives area data churn); the song's SEP is found by 'pQES'
+// scan (song id == scan index, spec §6.3); the area VAB (+0x26b4) drives the synth. Returns 0 ok,
+// -1 on error. Used by the BGM-start hook in engine/sound.cpp.
+int         music_list_play_area(const uint8_t* bundle, long bundle_len, int song);
 
 #ifdef __cplusplus
 }

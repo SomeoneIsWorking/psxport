@@ -84,6 +84,46 @@ int music_list_play(int i) {
     return 0;
 }
 
+// ---- in-game (live area bundle) ------------------------------------------------------------
+// The area bundle's field instrument VAB sits at bundle offset 0x26b4 (ps=4); the 10 SEPs are
+// concatenated from 0x30 (same layout as TOMBA2.SND). See scratch/handoff_audio_unify.md.
+#define AREA_VAB_OFF 0x26b4
+
+static uint8_t* s_area;       // engine-owned copy of the live area bundle
+static long     s_area_len;
+
+// byte offset of the si'th 'pQES' within the area bundle (linear scan from 0x30), or -1.
+static long area_seq_off(int si) {
+    long o = 0x30; int idx = 0;
+    while (o + 4 <= s_area_len && o < AREA_VAB_OFF) {
+        if (!memcmp(s_area + o, "pQES", 4)) { if (idx == si) return o; idx++; o += 4; }
+        else o++;
+    }
+    return -1;
+}
+
+int music_list_play_area(const uint8_t* bundle, long bundle_len, int song) {
+    if (!bundle || bundle_len < 0x4000 || song < 0 || song >= 10) return -1;
+    // Validate this really is the bundle (SEP at 0x30, area VAB at 0x26b4) before committing.
+    if (memcmp(bundle + 0x30, "pQES", 4) || memcmp(bundle + AREA_VAB_OFF, "pBAV", 4)) {
+        fprintf(stderr, "[music_list] area bundle invalid (no pQES@0x30 / pBAV@0x26b4)\n");
+        return -1;
+    }
+    // Copy into an engine-owned buffer so playback survives area data churn / overwrite.
+    long need = bundle_len; if (need > 0x50000) need = 0x50000;
+    uint8_t* nb = (uint8_t*)malloc(need);
+    if (!nb) return -1;
+    memcpy(nb, bundle, need);
+    native_music_stop();
+    free(s_area); s_area = nb; s_area_len = need;
+    long so = area_seq_off(song);
+    if (so < 0) { fprintf(stderr, "[music_list] area song %d: seq not found\n", song); return -1; }
+    if (native_music_play(s_area, so, AREA_VAB_OFF)) { fprintf(stderr, "[music_list] area song %d: play failed\n", song); return -1; }
+    s_now = song;
+    fprintf(stderr, "[music_list] area BGM song %d (seq@0x%lx vab@0x%lx)\n", song, so, (long)AREA_VAB_OFF);
+    return 0;
+}
+
 void music_list_stop(void) { native_music_stop(); s_now = -1; }
 
 int music_list_now_playing(void) {

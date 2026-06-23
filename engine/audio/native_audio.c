@@ -263,8 +263,15 @@ static void seq_note_on(NaSeq* s, int ch, int note, int vel) {
                 s->voice[i].phase = NA_ADSR_RELEASE, s->voice[i].divider = 0;
         return;
     }
+    // Tone selection uses the per-SEQUENCE program-set selector slot[0x26] (the SEQ byte at file
+    // offset 0x0F, = 0 for every Tomba!2 sequence), NOT the live 0xCn MIDI program. RE: keyon
+    // 0x80090094 passes slot+0x26 as the resolve program; the 0xCn handler writes slot[ch+0x37]
+    // (used for vol/pan only). This is DATA-PROVEN: the area VABs have only 4 programs, but the
+    // sequences emit 0xCn programs 9..17 — those don't index ProgAttr, so using the live program
+    // dropped EVERY note (the universal-silence bug). With slot[0x26] (=program 0) all 10 area
+    // sequences synth audibly. (Confirms spec §5b; contradicts the handoff's "0xCn drives tone".)
     int tones[16];
-    int ntone = prog_pick_tones(s->vab, s->prog[ch], note, tones, 16);
+    int ntone = prog_pick_tones(s->vab, s->prog_set, note, tones, 16);
     if (ntone == 0) return;
     for (int k = 0; k < ntone; k++) {
         NaTone t; na_tone_read(s->vab, tones[k], &t);
