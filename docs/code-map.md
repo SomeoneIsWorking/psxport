@@ -7,18 +7,19 @@ A native may exist already. **LIVE** = reachable by direct C call from a native_
 dispatch root (actually runs). **ORPHAN** = native exists but only the REMOVED override
 table used to reach it — it is dead code until a native parent calls it directly.
 
-Totals: 353 native fns, 255 owned addresses, 27 LIVE / 326 ORPHAN.
+Totals: 372 native fns, 265 owned addresses, 37 LIVE / 335 ORPHAN.
 
 | addr | status | symbol | file:line | depends-on (still-PSX) | summary |
 |------|--------|--------|-----------|------------------------|---------|
 | 0x80003A4C | ORPHAN | `ov_pad_read` | runtime/recomp/pad_input.cpp:311 |  | Slot-buffer pointer table base in the SIO driver's low-RAM globals: th… |
 | 0x8001CBA8 | ORPHAN | `ov_8001CBA8` | engine/native_misc.cpp:100 |  | write a {0,252,0,255} 4-byte pattern at offsets 72/74/76/78 of a0+(a1&… |
 | 0x8001CE90 | ORPHAN | `ov_cd_cmd_stream` | runtime/recomp/cd_override.cpp:83 |  | (cmd, param, result) — the engine's streaming-path CD-command |
-| 0x8001CF2C | ORPHAN | `ov_voice_stop` | runtime/recomp/cd_override.cpp:318 | 0x8001CF00 | stop the current voice/BGM clip. |
-| 0x8001D2A8 | ORPHAN | `ov_voice_play` | runtime/recomp/cd_override.cpp:270 |  |  |
+| 0x8001CF2C | ORPHAN | `ov_voice_stop` | runtime/recomp/cd_override.cpp:333 | 0x8001CF00 | stop the current voice/BGM clip. |
+| 0x8001D2A8 | ORPHAN | `ov_voice_play` | runtime/recomp/cd_override.cpp:285 |  |  |
 | 0x8001D940 | ORPHAN | `ov_cd_async_read` | runtime/recomp/cd_override.cpp:177 |  | the engine's ASYNC streaming reader. It is spawned as task1 (its body |
 | 0x8001DB8C | LIVE | `ov_cd_loadfile` | runtime/recomp/cd_override.cpp:139 |  | (a0=dest, a1=lba, a2=size_bytes): the engine's file loader. The |
 | 0x8001DC40 | LIVE | `ov_cd_loadfile` | runtime/recomp/cd_override.cpp:139 |  | (a0=dest, a1=lba, a2=size_bytes): the engine's file loader. The |
+| 0x8001DC40 | ORPHAN | `ov_cd_dc40` | runtime/recomp/cd_override.cpp:211 |  | Platform-HLE entry for FUN_8001DC40 (intercepted for any caller): (a0=… |
 | 0x80026C88 | ORPHAN | `ov_disp_26c88` | engine/entity.cpp:131 | 0x80026C88 |  |
 | 0x80027768 | ORPHAN | `ov_submit_poly_gt4_bp` | engine/engine_submit.cpp:598 |  |  |
 | 0x8002AB5C | ORPHAN | `ov_terrain` | engine/engine_submit.cpp:1227 | 0x8002AB5C |  |
@@ -55,12 +56,13 @@ Totals: 353 native fns, 255 owned addresses, 27 LIVE / 326 ORPHAN.
 | 0x80040558 | ORPHAN | `ov_sm40558` | engine/entity.cpp:364 | 0x80040558 |  |
 | 0x80044D8C | ORPHAN | `ov_lz_decompress` | engine/asset.cpp:53 |  |  |
 | 0x80044D8C | ORPHAN | `ov_lz_decompress` | engine/asset.h:7 |  |  |
-| 0x80044E84 | ORPHAN | `ov_unpack_group` | engine/asset.cpp:66 | 0x80080F6C 0x80081218 |  |
-| 0x80044F58 | ORPHAN | `ov_load_texgroup` | engine/asset.cpp:118 | 0x8001DC40 0x80044E84 0x80051FB4 | PC-native TEXTURE-GROUP LOADER — owns the asset-load ORCHESTRATION FUN… |
+| 0x80044E84 | LIVE | `ov_unpack_group` | engine/asset.cpp:66 | 0x80080F6C |  |
+| 0x80044F58 | ORPHAN | `ov_load_texgroup` | engine/asset.cpp:119 | 0x8001DC40 0x80044E84 0x80051FB4 | PC-native TEXTURE-GROUP LOADER — owns the asset-load ORCHESTRATION FUN… |
 | 0x80045080 | ORPHAN | `ov_80045080` | engine/native_misc.cpp:114 | 0x8001DC40 | index the stride-8 table at 0x800BE118 by (a1 & 255); load its two wor… |
 | 0x800450BC | ORPHAN | `eng_load_stage` | engine/engine_level.cpp:26 | 0x8001DB8C 0x80080930 | load a stage's overlay off the disc and set the task's stage entry poi… |
 | 0x800450BC | ORPHAN | `ov_load_stage` | engine/engine_level.cpp:45 |  |  |
-| 0x800450BC | LIVE | `native_load_overlay` | runtime/recomp/native_boot.cpp:443 |  | load the stage overlay (if any) and point the task's restart entry at … |
+| 0x800450BC | LIVE | `native_load_overlay` | runtime/recomp/native_boot.cpp:630 |  | load the stage overlay (if any) and point the task's restart entry at … |
+| 0x800452C0 | ORPHAN | `native_transition_area_load` | engine/sop.cpp:97 |  | Synchronous TRANSITION area-DATA load — replaces the cooperative spawn… |
 | 0x8004798C | ORPHAN | `ov_grid_step_4798c` | engine/collision.cpp:333 | 0x8004798C |  |
 | 0x80047CBC | ORPHAN | `ov_grid_query_47cbc` | engine/collision.cpp:171 | 0x80047CBC |  |
 | 0x80048360 | ORPHAN | `ov_grid_offset_48360` | engine/grid_offset.cpp:143 | 0x80048360 |  |
@@ -69,7 +71,7 @@ Totals: 353 native fns, 255 owned addresses, 27 LIVE / 326 ORPHAN.
 | 0x80049968 | ORPHAN | `ov_grid_setup_49968` | engine/collision.cpp:51 | 0x80049968 | collision-grid ROW-POINTER setup. a0 = grid/layer index (&0xff). Reads… |
 | 0x800499E8 | ORPHAN | `eng_task0_boot` | engine/engine_level.cpp:101 | 0x80052078 0x8008A110 0x8008B8F0 0x8009A730 | task-0 INITIAL ENTRY (the engine's first-level bootstrap, registered a… |
 | 0x800499E8 | ORPHAN | `ov_task0_boot` | engine/engine_level.cpp:134 |  |  |
-| 0x800499E8 | LIVE | `native_task0_bootstrap` | runtime/recomp/native_boot.cpp:473 |  | resolve \BIN\START.BIN natively, record its {LBA,size}, switch task 0 … |
+| 0x800499E8 | LIVE | `native_task0_bootstrap` | runtime/recomp/native_boot.cpp:665 |  | resolve \BIN\START.BIN natively, record its {LBA,size}, switch task 0 … |
 | 0x8004BD64 | ORPHAN | `ov_obj_pos_compose` | engine/entity_spawn.cpp:660 |  |  |
 | 0x8004CE14 | ORPHAN | `ov_script_vm_4ce14` | engine/script.cpp:112 | 0x8004CE14 |  |
 | 0x8004CE14 | ORPHAN | `ov_script_vm_4ce14` | engine/script.h:8 |  |  |
@@ -84,9 +86,9 @@ Totals: 353 native fns, 255 owned addresses, 27 LIVE / 326 ORPHAN.
 | 0x800509B4 | LIVE | `eng_init_display` | engine/engine_init.cpp:50 | 0x80050738 | engine DISPLAY + GTE-projection init, PC-native. Sets the GTE projecti… |
 | 0x80050A0C | LIVE | `eng_init_framestate` | engine/engine_init.cpp:30 |  | engine frame-state init: zero the vblank counter and the double-buffer… |
 | 0x80050A80 | LIVE | `eng_init_camera` | engine/engine_init.cpp:74 |  | engine CAMERA init: identity camera-rotation matrix at scratchpad 0x1F… |
-| 0x80050B08 | LIVE | `ov_game_main` | runtime/recomp/native_boot.cpp:405 | 0x80089860 |  |
-| 0x80050B08 | LIVE | `ov_game_main` | runtime/recomp/native_boot.cpp:539 | 0x8001CC00 0x800499E8 0x800509B4 0x80050A0C 0x80050A80 0x80051E00 … |  |
-| 0x80050B08 | LIVE | `native_boot_run` | runtime/recomp/native_boot.cpp:819 |  | Wired from boot.c when PSXPORT_NATIVE_BOOT is set. Registers the main … |
+| 0x80050B08 | LIVE | `ov_game_main` | runtime/recomp/native_boot.cpp:592 | 0x80089860 |  |
+| 0x80050B08 | LIVE | `ov_game_main` | runtime/recomp/native_boot.cpp:821 | 0x8001CC00 0x800499E8 0x800509B4 0x80050A0C 0x80050A80 0x80051E00 … |  |
+| 0x80050B08 | LIVE | `native_boot_run` | runtime/recomp/native_boot.cpp:1122 |  | Wired from boot.c when PSXPORT_NATIVE_BOOT is set. Registers the main … |
 | 0x80051128 | ORPHAN | `ov_xform51128` | engine/engine_submit.cpp:1458 |  |  |
 | 0x80051464 | ORPHAN | `ov_xform_propagate` | engine/engine_submit.cpp:1353 |  |  |
 | 0x80051794 | LIVE | `eng_identity_matrix` | engine/engine_init.cpp:20 |  | set an identity 3x3 rotation matrix (0x1000 = 1.0 fixed on the diagona… |
@@ -96,11 +98,11 @@ Totals: 353 native fns, 255 owned addresses, 27 LIVE / 326 ORPHAN.
 | 0x80051B04 | ORPHAN | `ov_cmdenq_probe` | engine/engine_submit.cpp:298 | 0x80051B04 | PSXPORT_DEBUG=cmdenq — render-command ENQUEUE tap (later-132). gen_fun… |
 | 0x80051B70 | ORPHAN | `ov_obj_record_init` | engine/entity_spawn.cpp:557 |  |  |
 | 0x80051C8C | ORPHAN | `ov_build_xform` | engine/engine_submit.cpp:1264 |  |  |
-| 0x80051E60 | LIVE | `native_scheduler_step` | runtime/recomp/native_boot.cpp:86 |  | One scheduler pass over the 3 task slots (replaces FUN_80051e60). |
+| 0x80051E60 | LIVE | `native_scheduler_step` | runtime/recomp/native_boot.cpp:93 |  | One scheduler pass over the 3 task slots (replaces FUN_80051e60). |
 | 0x80051F80 | ORPHAN | `ov_80051F80` | engine/object_init.cpp:56 | 0x80080880 | fetch the descriptor ptr at scratch+312, write a0 to +2 and 1 to +0, t… |
 | 0x80052078 | ORPHAN | `eng_stage_transition` | engine/engine_level.cpp:69 | 0x800450BC 0x80080880 | (stageIdx) — the cooperative STAGE TRANSITION: load the next stage's o… |
 | 0x80052078 | ORPHAN | `ov_stage_transition` | engine/engine_level.cpp:86 |  |  |
-| 0x80052078 | LIVE | `native_start_stage` | runtime/recomp/native_boot.cpp:459 | 0x80080870 0x80080880 0x80080890 0x800808A0 | switch task 0 to the given stage (load overlay + reset the display/BIO… |
+| 0x80052078 | LIVE | `native_start_stage` | runtime/recomp/native_boot.cpp:646 | 0x80080870 0x80080880 0x80080890 0x800808A0 | switch task 0 to the given stage (load overlay + reset the display/BIO… |
 | 0x800520E0 | LIVE | `eng_init_entity_pool` | engine/engine_init.cpp:106 |  | engine SUBSYSTEM init (init-prefix slot, dispatched at native_boot.cpp… |
 | 0x80056B48 | ORPHAN | `ov_player_move` | engine/engine_player.cpp:75 | 0x80056B48 | playerverify — full RAM+scratchpad A/B gate (like the scriptvm/pad931c… |
 | 0x800597AC | ORPHAN | `ov_orch597AC` | engine/engine_submit.cpp:1626 |  |  |
@@ -140,7 +142,7 @@ Totals: 353 native fns, 255 owned addresses, 27 LIVE / 326 ORPHAN.
 | 0x80077EBC | ORPHAN | `ov_enqueue_probe` | engine/engine_submit.cpp:238 | 0x80077EBC | PSXPORT_DEBUG=enq — ENQUEUE tap (later-131 NEXT). The render-command P… |
 | 0x80077FB0 | ORPHAN | `ov_80077FB0` | engine/clib.cpp:16 |  | integer square root (16-bit binary-search refinement). a0 = input; the… |
 | 0x800782F0 | ORPHAN | `ov_800782F0` | engine/sound_voice.cpp:19 |  | set/queue a sound-bank request. a0 (low byte) selects a sub-bank (must… |
-| 0x800788AC | LIVE | `ov_frame_update` | engine/game_tomba2.cpp:66 | 0x800788AC |  |
+| 0x800788AC | LIVE | `ov_frame_update` | engine/game_tomba2.cpp:70 | 0x800788AC | Per-frame engine tick. Called DIRECTLY (a plain C call) from native_st… |
 | 0x80078CA8 | ORPHAN | `ov_glyph_string` | engine/hud.cpp:257 |  | PC-native glyph string drawer. Mirrors FUN_80078CA8's char loop + atla… |
 | 0x80079528 | ORPHAN | `ov_80079528` | engine/clib.cpp:53 |  | strlen(a0). (gen_func_80079528's body past the first `jr ra` — the 800… |
 | 0x800796DC | ORPHAN | `ov_800796DC` | engine/object_init.cpp:139 | 0x8005082C 0x800508A8 0x800782F0 0x8009A420 | zero the 104-byte control block at 0x800BF808 (via 0x8009A420), seed t… |
@@ -156,7 +158,7 @@ Totals: 353 native fns, 255 owned addresses, 27 LIVE / 326 ORPHAN.
 | 0x8007A624 | ORPHAN | `ov_despawn` | engine/entity_spawn.cpp:455 | 0x8007A624 |  |
 | 0x8007A810 | ORPHAN | `ov_8007A810` | engine/object_init.cpp:270 | 0x8009A420 | init a 4-entry, stride-264 array at 0x80100690: zero a 388-byte header… |
 | 0x8007A8E0 | ORPHAN | `ov_8007A8E0` | engine/object_init.cpp:284 | 0x8007982C | call 0x8007982C (block init) then clear the scratchpad u16 at 0x1F8001… |
-| 0x8007A904 | ORPHAN | `ov_objwalk` | engine/engine_tomba2.cpp:51 |  | Native FUN_8007a904. Second list head is re-read fresh after list 1 (h… |
+| 0x8007A904 | ORPHAN | `ov_objwalk` | engine/engine_tomba2.cpp:52 |  | Native FUN_8007a904. Second list head is re-read fresh after list 1 (h… |
 | 0x8007A904 | ORPHAN | `ov_entity_walk_7a904` | engine/entity.cpp:472 | 0x8007A904 |  |
 | 0x8007A980 | ORPHAN | `ov_spawn_dispatch` | engine/entity_spawn.cpp:216 | 0x8007A980 |  |
 | 0x8007AA38 | ORPHAN | `ov_replace_dispatch` | engine/entity_spawn.cpp:377 | 0x8007AA38 |  |
@@ -182,7 +184,7 @@ Totals: 353 native fns, 255 owned addresses, 27 LIVE / 326 ORPHAN.
 | 0x8008007C | ORPHAN | `ov_submit_poly_gt4` | engine/engine_submit.cpp:518 |  |  |
 | 0x80080860 | ORPHAN | `ov_open_thread` | runtime/recomp/threads.cpp:25 |  |  |
 | 0x80080870 | ORPHAN | `ov_close_thread` | runtime/recomp/threads.cpp:26 |  |  |
-| 0x80080880 | LIVE | `ov_switch` | runtime/recomp/native_boot.cpp:79 |  | ChangeThread override = the universal task-switch primitive. Every coo… |
+| 0x80080880 | LIVE | `ov_switch` | runtime/recomp/native_boot.cpp:84 |  | ChangeThread override = the universal task-switch primitive. Every coo… |
 | 0x80080880 | ORPHAN | `ov_change_thread` | runtime/recomp/threads.cpp:27 |  |  |
 | 0x80080890 | ORPHAN | `ov_80080890` | engine/native_misc.cpp:150 |  | EnterCriticalSection: `a0=1; syscall`. Routed through rec_syscall so t… |
 | 0x800808B0 | ORPHAN | `ov_file_open` | runtime/recomp/memcard.cpp:373 |  | B0:0x32 open(name, mode): mode bit 0x0200 = create; block count = (mod… |
@@ -192,14 +194,16 @@ Totals: 353 native fns, 255 owned addresses, 27 LIVE / 326 ORPHAN.
 | 0x800808F0 | ORPHAN | `ov_file_close` | runtime/recomp/memcard.cpp:445 |  | B0:0x36 close(fd). |
 | 0x80080900 | ORPHAN | `ov_file_firstfile` | runtime/recomp/memcard.cpp:471 |  | B0:0x43 firstfile(name_pattern, dir_entry_out): the menu uses this to … |
 | 0x80080910 | ORPHAN | `ov_file_erase` | runtime/recomp/memcard.cpp:454 |  | B0:0x45 erase(name): mark the file's directory block free. Returns 1 o… |
-| 0x80081218 | ORPHAN | `ov_upload_image` | engine/asset.cpp:167 |  | PC-native CPU->VRAM upload — replaces the game's libgs-style upload li… |
-| 0x80081560 | ORPHAN | `ov_draw_otag` | engine/game_tomba2.cpp:144 |  |  |
+| 0x80081218 | LIVE | `ov_upload_image` | engine/asset.cpp:168 |  | PC-native CPU->VRAM upload — replaces the game's libgs-style upload li… |
+| 0x80081560 | LIVE | `ov_draw_otag` | engine/game_tomba2.cpp:148 |  |  |
 | 0x80082220 | ORPHAN | `ov_80082220` | engine/gpu_lib.cpp:94 |  | GPU draw-mode word: base 0xE1000000, \|512 if a1!=0, plus (a2&2559)\|102… |
 | 0x80082240 | ORPHAN | `ov_80082240` | engine/gpu_lib.cpp:100 |  |  |
 | 0x800822D8 | ORPHAN | `ov_800822D8` | engine/gpu_lib.cpp:102 |  |  |
 | 0x80082370 | ORPHAN | `ov_80082370` | engine/gpu_lib.cpp:105 |  | libgpu primitive/tpage word: 0xE5000000 \| ((a1&2047)<<11) \| (a0&2047). |
 | 0x80082C68 | ORPHAN | `ov_80082C68` | engine/gpu_lib.cpp:109 |  | write four GPU primitive templates through the pointer table at 0x800A… |
 | 0x800834A0 | ORPHAN | `ov_800834A0` | engine/gpu_lib.cpp:117 | 0x80085900 | call 0x80085900(-1); store ret+240 at 0x800A5ADC and 0 at 0x800A5AE0. |
+| 0x800834A0 | ORPHAN | `ov_gpu_timeout_arm` | runtime/recomp/sync_overrides.cpp:65 |  | libgpu GPU-DMA-completion TIMEOUT (arm / check). |
+| 0x800834D4 | ORPHAN | `ov_gpu_timeout_arm` | runtime/recomp/sync_overrides.cpp:65 |  | libgpu GPU-DMA-completion TIMEOUT (arm / check). |
 | 0x80083AF8 | ORPHAN | `ov_80083AF8` | engine/gpu_lib.cpp:124 |  | memset: write byte (uint8_t)a1 to `a2` bytes at `a0`. |
 | 0x80083B30 | ORPHAN | `ov_80083B30` | engine/gpu_lib.cpp:131 | 0x80086604 | initialize a ~28-byte sprite/object descriptor at a0 from (a1,a2,a3) +… |
 | 0x80083BF0 | ORPHAN | `ov_80083BF0` | engine/gpu_lib.cpp:149 |  | initialize a 20-byte descriptor at a0 from (a1,a2,a3) and a stack-pass… |
@@ -211,13 +215,13 @@ Totals: 353 native fns, 255 owned addresses, 27 LIVE / 326 ORPHAN.
 | 0x80084250 | ORPHAN | `ov_80084250` | engine/gte.cpp:14 |  | transform 3 vertices through a GTE matrix (5 ctrl regs from a0), three… |
 | 0x80084360 | ORPHAN | `ov_compmatlv` | engine/engine_math.cpp:442 |  | ──────────────────────────────────────────────────────────────────────… |
 | 0x80084470 | ORPHAN | `ov_80084470` | engine/gte.cpp:38 |  | GTE matrix×vector: load 5 ctrl regs from the matrix at a0, 2 data regs… |
-| 0x800846D0 | ORPHAN | `ov_set_geom_offset` | engine/game_tomba2.cpp:119 |  | -- Native ownership of the GTE projection setters (libgte) -----------… |
-| 0x800846F0 | ORPHAN | `ov_set_geom_screen` | engine/game_tomba2.cpp:132 |  |  |
+| 0x800846D0 | ORPHAN | `ov_set_geom_offset` | engine/game_tomba2.cpp:123 |  | -- Native ownership of the GTE projection setters (libgte) -----------… |
+| 0x800846F0 | ORPHAN | `ov_set_geom_screen` | engine/game_tomba2.cpp:136 |  |  |
 | 0x800847B0 | ORPHAN | `ov_800847B0` | engine/gte.cpp:51 |  | reformat a {int,int} pair pack from a0 into a1: each 32-bit field is s… |
 | 0x80084A80 | ORPHAN | `ov_rot84A80` | engine/engine_math.cpp:514 |  | ──────────────────────────────────────────────────────────────────────… |
 | 0x80085690 | ORPHAN | `ov_80085690` | engine/clib.cpp:65 |  | atan2-style angle from (a0=dy?, a1=dx?) returning a fixed-point angle … |
 | 0x80085900 | ORPHAN | `ov_vsync` | runtime/recomp/timing.cpp:37 |  | = libetc VSync(mode): |
-| 0x80085BB0 | ORPHAN | `ov_vsync_callback` | runtime/recomp/timing.cpp:24 |  | VSyncCallback(func): no-op. The original routes the per-vblank |
+| 0x80085BB0 | LIVE | `ov_vsync_callback` | runtime/recomp/timing.cpp:24 |  | VSyncCallback(func): no-op. The original routes the per-vblank |
 | 0x800865F0 | ORPHAN | `ov_800865F0` | engine/native_misc.cpp:152 |  |  |
 | 0x80086604 | ORPHAN | `ov_80086604` | engine/native_misc.cpp:156 |  | getter/setter for the global word at 0x800ABE20 (0x800B<<16 - 0x41E0). |
 | 0x80086970 | LIVE | `eng_init_input` | engine/engine_init.cpp:161 | 0x80080890 0x800808A0 0x80085B10 0x800873F0 0x80087400 | a thin wrapper that just calls FUN_80086970; owned as eng_init_input. |
@@ -231,12 +235,13 @@ Totals: 353 native fns, 255 owned addresses, 27 LIVE / 326 ORPHAN.
 | 0x8008A00C | ORPHAN | `ov_8008A00C` | runtime/recomp/peripheral_misc.cpp:155 |  | binary frame-count → packed BCD time at a1, the encoder paired with 0x… |
 | 0x8008A110 | ORPHAN | `ov_8008A110` | runtime/recomp/peripheral_misc.cpp:202 |  | packed BCD time at a0 → binary frame count (decoder, inverse of 0x8008… |
 | 0x8008A6EC | ORPHAN | `ov_cd_sync` | runtime/recomp/cd_override.cpp:66 |  | (noblock, result) CdSync -> 2 (status: complete/ready). |
-| 0x8008A96C | ORPHAN | `ov_cdreadsync` | runtime/recomp/sync_overrides.cpp:34 |  | (mode, result) — CdReadSync. Blocking path spins until the CD |
+| 0x8008A96C | ORPHAN | `ov_cdreadsync` | runtime/recomp/sync_overrides.cpp:46 |  | (mode, result) — CdReadSync. Blocking path spins until the CD data-rea… |
 | 0x8008AC34 | ORPHAN | `ov_cd_command` | runtime/recomp/cd_override.cpp:41 |  | (cmd, param, result, mode) CdCommand -> 0 (success). |
 | 0x8008B040 | ORPHAN | `ov_8008B040` | runtime/recomp/peripheral_misc.cpp:225 |  | push a 4-byte pad/memcard command sequence through the SIO-ish HW shad… |
 | 0x8008B19C | ORPHAN | `ov_8008B19C` | runtime/recomp/peripheral_misc.cpp:249 |  | ── 0x8008B19C — controller/pad config seed. Through ptr *0x800AC294 (=… |
 | 0x8008B2D8 | ORPHAN | `ov_cdinit` | runtime/recomp/cd_override.cpp:30 |  | low-level CdInit -> success (drive ready), no HW handshake. |
-| 0x8008B4B8 | ORPHAN | `ov_cddatasync` | runtime/recomp/sync_overrides.cpp:41 |  | (mode) — CdDataSync (CD DMA-done wait). Blocking path spins while the |
+| 0x8008B2D8 | ORPHAN | `ov_cdinit_hs` | runtime/recomp/sync_overrides.cpp:56 |  | low-level CdInit reset handshake — pokes the (unmodelled) CD HW regist… |
+| 0x8008B4B8 | ORPHAN | `ov_cddatasync` | runtime/recomp/sync_overrides.cpp:50 |  | (mode) — CdDataSync (CD DMA-done wait). Real body spins while the CD D… |
 | 0x8008BBC8 | ORPHAN | `ov_8008BBC8` | runtime/recomp/peripheral_misc.cpp:272 | 0x8009A640 | strncmp(a0, a1, 12) via 0x8009A640; return 1 if equal (result < 1 unsi… |
 | 0x8008BEAC | ORPHAN | `ov_8008BEAC` | runtime/recomp/peripheral_misc.cpp:276 | 0x8009A540 | search a 128-entry, stride-44 table at 0x80102D6C for an entry whose i… |
 | 0x8008C1EC | ORPHAN | `ov_cd_read` | runtime/recomp/cd_override.cpp:121 |  |  |
@@ -291,21 +296,30 @@ Totals: 353 native fns, 255 owned addresses, 27 LIVE / 326 ORPHAN.
 | 0x8009A640 | ORPHAN | `ov_8009A640` | engine/clib.cpp:190 |  | strncmp(a0, a1, a2): NUL-guard like strcmp, else compare up to a2 byte… |
 | 0x8009C1FC | ORPHAN | `ov_8009C1FC` | engine/native_misc.cpp:347 |  | copy a 28-word table from 0x8009C060 to low RAM 0xDF80 (installs a fix… |
 | 0x8009C9D0 | ORPHAN | `ov_8009C9D0` | engine/gpu_lib.cpp:492 | 0x8009CAEC | finalize a GPU command packet: call 0x8009CAEC(a0,a1); then poke five … |
-| 0x8009CAEC | ORPHAN | `ov_sync_ok` | runtime/recomp/sync_overrides.cpp:19 |  | DecDCTinSync / 0x8009CB80 DecDCToutSync — the MDEC in/out sync waits. … |
-| 0x8009CB80 | ORPHAN | `ov_sync_ok` | runtime/recomp/sync_overrides.cpp:19 |  | DecDCTinSync / 0x8009CB80 DecDCToutSync — the MDEC in/out sync waits. … |
+| 0x8009CAEC | ORPHAN | `ov_sync_ok` | runtime/recomp/sync_overrides.cpp:37 |  | DecDCTinSync / 0x8009CB80 DecDCToutSync — libmdec in/out sync. Real bo… |
+| 0x8009CB80 | ORPHAN | `ov_sync_ok` | runtime/recomp/sync_overrides.cpp:37 |  | DecDCTinSync / 0x8009CB80 DecDCToutSync — libmdec in/out sync. Real bo… |
 | 0x800BF4F8 | LIVE | `eng_init_alloc` | engine/engine_init.cpp:185 | 0x80086738 0x80089160 0x8009A340 | engine ALLOCATOR / dispatch-table init. a0/a1 = a struct span (0x800bf… |
 | 0x800BF51A | LIVE | `eng_init_alloc` | engine/engine_init.cpp:185 | 0x80086738 0x80089160 0x8009A340 | engine ALLOCATOR / dispatch-table init. a0/a1 = a struct span (0x800bf… |
 | 0x800E7E80 | ORPHAN | `ov_cam_heading` | engine/engine_camera.cpp:696 |  | ──────────────────────────────────────────────────────────────────────… |
-| 0x8010637C | LIVE | `ov_game_stage_main` | engine/engine_stage.cpp:150 | 0x801063F4 | GAME stage TOP-LEVEL ENTRY 0x8010637C — task-0's stage driver: a one-t… |
-| 0x801063C0 | ORPHAN | `ov_demo_s0` | engine/engine_demo.cpp:201 | 0x801063E4 | s0 0x801063C0 — run-once INIT then loaders; FALLS THROUGH into s1 same… |
-| 0x8010641C | ORPHAN | `ov_demo_s1` | engine/engine_demo.cpp:57 | 0x80106F80 | s1 0x8010641C — wait/advance: v0 = inner menu input machine 0x80106f80… |
-| 0x80106464 | ORPHAN | `ov_demo_s2` | engine/engine_demo.cpp:77 | 0x8001CF2C 0x8010696C | s2 0x80106464 — sub-machine v0 = 0x8010696c(). Outcome 1 -> go to s7 (… |
-| 0x80106478 | ORPHAN | `ov_game_s4c` | engine/engine_stage.cpp:115 | 0x80075A80 0x80106A14 | sm[0x4c] == the AREA machine (the 9-state load/intro/play scene state … |
-| 0x8010649C | LIVE | `ov_start_bin_stage` | runtime/recomp/native_boot.cpp:505 |  | Stage-0 START.BIN entry (0x8010649c): own the file-table BUILDER PC-na… |
-| 0x801064E8 | ORPHAN | `ov_demo_s3` | engine/engine_demo.cpp:112 | 0x800750D8 0x80106AC4 | s3 0x801064E8 — sub-machine v0 = 0x80106ac4() (mirror of 0x8010696c). … |
-| 0x801065EC | ORPHAN | `ov_demo_s6` | engine/engine_demo.cpp:144 | 0x8007B45C 0x80106690 0x80106824 | s6 0x801065EC — page sub-machine 0x8007b45c(); if sm[0x50]==3 fire the… |
-| 0x80106C24 | ORPHAN | `ov_demo_s7_phase` | engine/engine_demo.cpp:298 | 0x80074BC4 |  |
-| 0x801086E0 | ORPHAN | `ov_game_s48_0` | engine/engine_stage.cpp:32 | 0x8007A8E0 0x8007B38C | sm[0x48] == 0 — area INIT: advance to running (sm[0x48]=2), reset the … |
-| 0x80108720 | ORPHAN | `ov_game_s48_1` | engine/engine_stage.cpp:49 | 0x8007B3F4 | sm[0x48] == 1 — area RESUME-INIT (re-enter a running area, sub-mode 1)… |
-| 0x80108784 | ORPHAN | `ov_game_s48_2` | engine/engine_stage.cpp:80 | 0x8010881C | sm[0x48] == 2 — RUNNING: dispatch the running sub-mode sm[0x4a] (0..5)… |
+| 0x801062E4 | LIVE | `ov_demo_stage_main` | engine/engine_demo.cpp:351 | 0x8001CF00 0x8005082C 0x80075240 0x8007982C 0x800810F0 | DEMO stage entry (0x801062E4) — own the prologue PC-native, then hand … |
+| 0x8010637C | LIVE | `ov_game_stage_prologue` | engine/engine_stage.cpp:438 |  | GAME stage TOP-LEVEL ENTRY 0x8010637C — task-0's stage driver: a one-t… |
+| 0x8010637C | LIVE | `ov_game_stage_main` | engine/engine_stage.cpp:468 | 0x801063F4 | OLD guest-loop entry (prologue + coro-redirect into the guest loop 0x8… |
+| 0x801063C0 | ORPHAN | `ov_demo_s0` | engine/engine_demo.cpp:202 | 0x801063E4 | s0 0x801063C0 — run-once INIT then loaders; FALLS THROUGH into s1 same… |
+| 0x8010641C | ORPHAN | `ov_demo_s1` | engine/engine_demo.cpp:58 | 0x80106F80 | s1 0x8010641C — wait/advance: v0 = inner menu input machine 0x80106f80… |
+| 0x80106464 | ORPHAN | `ov_demo_s2` | engine/engine_demo.cpp:78 | 0x8001CF2C 0x8010696C | s2 0x80106464 — sub-machine v0 = 0x8010696c(). Outcome 1 -> go to s7 (… |
+| 0x80106478 | ORPHAN | `ov_game_s4c` | engine/engine_stage.cpp:123 | 0x80075A80 0x80106A14 | sm[0x4c] == the AREA machine (the 9-state load/intro/play scene state … |
+| 0x8010649C | LIVE | `ov_start_bin_stage` | runtime/recomp/native_boot.cpp:789 |  | Stage-0 START.BIN entry (0x8010649c): own the file-table BUILDER PC-na… |
+| 0x801064E8 | ORPHAN | `ov_demo_s3` | engine/engine_demo.cpp:113 | 0x800750D8 0x80106AC4 | s3 0x801064E8 — sub-machine v0 = 0x80106ac4() (mirror of 0x8010696c). … |
+| 0x801065EC | ORPHAN | `ov_demo_s6` | engine/engine_demo.cpp:145 | 0x8007B45C 0x80106690 0x80106824 | s6 0x801065EC — page sub-machine 0x8007b45c(); if sm[0x50]==3 fire the… |
+| 0x80106728 | LIVE | `native_stage0_sm` | runtime/recomp/native_boot.cpp:767 |  | Stage-0 START.BIN state machine (overlay 0x80106728), PC-native + sync… |
+| 0x80106B98 | ORPHAN | `ov_field_run` | engine/engine_stage.cpp:240 |  | FIELD RUNNING sub-machine 0x80106b98 — native control flow + state bod… |
+| 0x80106C24 | ORPHAN | `ov_demo_s7_phase` | engine/engine_demo.cpp:299 | 0x80074BC4 |  |
+| 0x801086E0 | ORPHAN | `ov_game_s48_0` | engine/engine_stage.cpp:40 | 0x8007A8E0 0x8007B38C | sm[0x48] == 0 — area INIT: advance to running (sm[0x48]=2), reset the … |
+| 0x80108720 | ORPHAN | `ov_game_s48_1` | engine/engine_stage.cpp:57 | 0x8007B3F4 | sm[0x48] == 1 — area RESUME-INIT (re-enter a running area, sub-mode 1)… |
+| 0x80108784 | ORPHAN | `ov_game_s48_2` | engine/engine_stage.cpp:88 | 0x8010881C | sm[0x48] == 2 — RUNNING: dispatch the running sub-mode sm[0x4a] (0..5)… |
+| 0x8010882C | ORPHAN | `ov_game_submode0` | engine/engine_stage.cpp:176 | 0x8005082C 0x80109450 | GAME sub-mode-0 bridge 0x8010882c (sm[0x4c]/sm[0x4e] dispatch) — nativ… |
+| 0x801088D8 | ORPHAN | `ov_field_frame` | engine/engine_stage.cpp:221 |  | GAME sm[0x4a]==1 handler 0x801088d8 — the FIELD area machine (the actu… |
+| 0x80109164 | LIVE | `native_sop_area_load` | engine/sop.cpp:31 | 0x8001DC40 0x80044E84 0x80045258 | Owned synchronous area-DATA load (replaces the body of LAB_80109164 0x… |
+| 0x801092B4 | ORPHAN | `ov_sop_field_update` | engine/sop.cpp:178 |  | SOP per-frame FIELD UPDATE — native ownership of FUN_801092b4 (decomp … |
+| 0x80109450 | ORPHAN | `ov_sop_field_mode` | engine/sop.cpp:221 |  | SOP FIELD-MODE MACHINE — native ownership of FUN_80109450 (decomp scra… |
 | 0x80146478 | ORPHAN | `ov_gt3gt4_caller` | engine/engine_submit.cpp:1714 |  | -- Auto-ownership of the SAME submit library when it appears in a runt… |
