@@ -37,19 +37,28 @@ static uint8_t* s_buf;     // TOMBA2.SND contents
 static long     s_size;
 static int      s_now = -1;
 
+// The SND container is read from the GAME DISC at runtime (NOT a pre-extracted file — that path is
+// machine-local/gitignored and absent on a fresh checkout, which silenced the whole sound test). Uses
+// the port's native ISO9660 reader, the same path the game itself loads \CD\TOMBA2.SND through.
+int disc_read_sector(uint32_t lba, uint8_t* out);                              // runtime/recomp/disc.c
+int disc_find_file(const char* path, uint32_t* out_lba, uint32_t* out_size);
 static int load_container(void) {
     if (s_buf) return 0;
-    const char* path = "scratch/bin/snd/TOMBA2.SND";
-    FILE* f = fopen(path, "rb");
-    if (!f) { fprintf(stderr, "[music_list] cannot open %s\n", path); return -1; }
-    fseek(f, 0, SEEK_END); s_size = ftell(f); fseek(f, 0, SEEK_SET);
-    s_buf = (uint8_t*)malloc(s_size);
-    if (!s_buf || fread(s_buf, 1, s_size, f) != (size_t)s_size) {
-        fprintf(stderr, "[music_list] read failed %s\n", path); fclose(f);
-        free(s_buf); s_buf = NULL; return -1;
+    uint32_t lba = 0, size = 0;
+    if (!disc_find_file("\\CD\\TOMBA2.SND", &lba, &size) || size == 0) {
+        fprintf(stderr, "[music_list] disc_find_file \\CD\\TOMBA2.SND failed\n"); return -1;
     }
-    fclose(f);
-    fprintf(stderr, "[music_list] loaded %s (%ld bytes)\n", path, s_size);
+    uint32_t nsec = (size + 2047) / 2048;
+    s_buf = (uint8_t*)malloc((size_t)nsec * 2048);
+    if (!s_buf) return -1;
+    for (uint32_t i = 0; i < nsec; i++) {
+        if (!disc_read_sector(lba + i, s_buf + (size_t)i * 2048)) {
+            fprintf(stderr, "[music_list] disc read failed at sector %u\n", i);
+            free(s_buf); s_buf = NULL; return -1;
+        }
+    }
+    s_size = (long)size;
+    fprintf(stderr, "[music_list] loaded \\CD\\TOMBA2.SND from disc (lba=%u, %ld bytes)\n", lba, s_size);
     return 0;
 }
 
