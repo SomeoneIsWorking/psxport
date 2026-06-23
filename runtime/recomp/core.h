@@ -70,6 +70,7 @@ private:
   uint32_t s_dma1_madr=0, s_dma1_bcr=0, s_dma1_chcr=0;
   uint32_t s_dma2_madr=0, s_dma2_bcr=0, s_dma2_chcr=0;
   uint32_t s_dma4_madr=0, s_dma4_bcr=0, s_dma4_chcr=0;
+  uint32_t s_spu_xfer_addr=0;   // last SPU transfer-start addr (reg 0x1F801DA6 << 3), for SPU-DMA logging
   uint32_t s_dma6_madr=0, s_dma6_bcr=0, s_dma6_chcr=0;
   uint32_t s_dma_buf[0x10000];
 

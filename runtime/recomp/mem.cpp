@@ -122,6 +122,7 @@ void Core::io_write(uint32_t a, uint32_t v, uint32_t bytes) {
   if (p == 0x1F801810) { gpu_gp0(this, v); return; }    // GP0 (direct)
   if (p == 0x1F801814) { gpu_gp1(this, v); return; }    // GP1 (display/control)
   if (p == 0x1F801820 || p == 0x1F801824) { mdec_write(p, v); return; }  // MDEC0 cmd / MDEC1 ctrl
+  if (p == 0x1F801DA6) s_spu_xfer_addr = (v & 0xFFFF) << 3;               // SPU transfer-start addr (bytes)
   if (p >= 0x1F801C00 && p <= 0x1F801FFF) { spu_write(p, v); return; }    // SPU register file
   if (p == 0x1F8010C0) { s_dma4_madr = v; return; }
   if (p == 0x1F8010C4) { s_dma4_bcr = v; return; }
@@ -132,6 +133,9 @@ void Core::io_write(uint32_t a, uint32_t v, uint32_t bytes) {
       uint32_t da = s_dma4_madr & 0x1FFFFC;
       if (v & 1) {                                 // RAM -> SPU
         for (int i = 0; i < n; i++) s_dma_buf[i] = mem_r32(da + i * 4);
+        if (cfg_str("PSXPORT_SPUDMA"))             // log VAB/sample transfers: source -> SPU dest, size
+          fprintf(stderr, "[spudma] RAM 0x%08X -> SPU 0x%06X  %d words (%d B)  pc=%08X stage=%08X\n",
+                  0x80000000u | da, s_spu_xfer_addr, n, n * 4, g_interp_pc, mem_r32(0x801fe00c));
         spu_dma_write(s_dma_buf, n);
       } else {                                     // SPU -> RAM
         int got = spu_dma_read(s_dma_buf, n);
