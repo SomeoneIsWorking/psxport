@@ -206,7 +206,16 @@ void ov_draw_otag(Core* c) {   // called directly from native_step_frame (PC-dri
   // is read here ONLY to enumerate the leftover guest prims — its draw ORDER is discarded. M3 captures
   // those at submit time and retires this read. (PSXPORT_SBS debug compare keeps an inline path; its
   // queue stays empty so the flush is a no-op.)
-  gpu_dma2_linked_list(c, c->r[4]);
+  // Phase-1 DECOUPLED native scene render (one-native-render-path-decoupled): when on, the native path
+  // renders the world from GAME DATA and the PSX OT walk is SKIPPED entirely (so the PSX 2D-band flat prims
+  // don't composite over the native real-depth world). `scenenativehud` keeps the PSX walk for the 2D HUD/bg
+  // we haven't ported yet (mixed, for bring-up only).
+  if (cfg_dbg("scenenative")) {
+    if (cfg_dbg("scenenativehud")) gpu_dma2_linked_list(c, c->r[4]);   // bring-up: keep PSX 2D on top
+    void ov_scene_native(Core*); ov_scene_native(c);
+  } else {
+    gpu_dma2_linked_list(c, c->r[4]);
+  }
   rq_flush(c);
 }
 

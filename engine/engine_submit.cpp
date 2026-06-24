@@ -822,6 +822,42 @@ void ov_perobj_flush(Core* c) {
   submit_perobj_flush(c);
 }
 
+// ===================================================================================================
+// ONE NATIVE RENDER PATH — world-data-driven scene render (Phase 1, user 2026-06-24 architecture:
+// [[one-native-render-path-decoupled]]). Driven from the GAME's WORLD DATA, NOT from PSX GP0 packets:
+// walk the 3 active entity lists, and render each live object's 3D model (geomblk via node+0xC0 cmds)
+// through the native float-projection submitters (eproj + D32 depth + engine lighting). This is the
+// single mechanism depth/60fps/ires/lighting attach to. It runs as its OWN pass (not bolted onto the
+// PSX OT-walk) so the draw state is the native pass's. Gated `debug scenenative` while standing it up.
+extern "C" int g_scene_native_diag;  int g_scene_native_diag = 0;   // counters for the bring-up probe
+extern "C" long g_sn_objs, g_sn_cmds; long g_sn_objs = 0, g_sn_cmds = 0;
+void ov_render_walk(Core* c);
+void ov_rwalk_aux_bf00(Core* c), ov_rwalk_aux_eec0(Core* c), ov_rwalk_b588(Core* c),
+     ov_render_walk_snapshot(Core* c), ov_rwalk_aux_bcf4(Core* c);
+void ov_scene_native(Core* c) {
+  static const uint32_t HEADS[3] = { 0x800FB168u, 0x800F2624u, 0x800F2738u };
+  uint32_t saved = c->r[4];
+  g_sn_objs = g_sn_cmds = 0;
+  // (a) TERRAIN + per-object world geometry via the native render walks (self-route to ov_terrain etc.).
+  ov_rwalk_aux_bf00(c); ov_rwalk_aux_eec0(c); ov_rwalk_b588(c); ov_render_walk_snapshot(c);
+  ov_rwalk_aux_bcf4(c); ov_render_walk(c);
+  // (b) SCENE TABLE (grass / props / sky-sea backdrop) — native world-coord render of 0x800F2418.
+  c->r[4] = 0x800F2418u; ov_field_entity_render(c);
+  // (c) the field's OBJECTS — walk the 3 entity lists, render each object's geomblk natively (real depth).
+  for (int h = 0; h < 3; h++) {
+    uint32_t n = c->mem_r32(HEADS[h]);
+    for (int g = 0; n && g < 400; g++, n = c->mem_r32(n + 0x24)) {
+      if (c->mem_r8(n + 8) == 0 || c->mem_r8(n + 9) == 0) continue;   // no render commands
+      g_sn_objs++; g_sn_cmds += c->mem_r8(n + 8);
+      c->r[4] = n;
+      submit_perobj_flush(c);
+    }
+  }
+  c->r[4] = saved;
+  if (cfg_dbg("scenenative")) { int gpu_seen3d_this_frame(Core*); static int f = 0; if ((f++ % 60) == 0)
+    fprintf(stderr, "[scenenative] objs=%ld cmds=%ld seen3d=%d\n", g_sn_objs, g_sn_cmds, gpu_seen3d_this_frame(c)); }
+}
+
 // NATIVE per-object render DISPATCH — gen_func_8003CCA4 (later-135). The phase-2 per-object render entry:
 // stash the current render object (scratch 0x1F80028C), compute the flush flag (= node[0xb]==0xf, the
 // "world" objects), select a case by idx = node[0xd]&0xb (idx>=9 → not rendered), and for the common
