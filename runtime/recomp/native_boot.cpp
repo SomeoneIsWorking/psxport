@@ -405,6 +405,7 @@ extern "C" void dv_restore_pre (Core* c) { dv_load(c, s_dv_pre_ram,  s_dv_pre_sp
 extern "C" void dv_restore_post(Core* c) { dv_load(c, s_dv_post_ram, s_dv_post_spad, s_dv_post_gc, s_dv_post_gd); }
 
 static void native_step_frame(Core* c, uint32_t f) {
+  void gte_bind(Core*); gte_bind(c);   // bind THIS core's GTE register file (per-instance — no shared GTE)
   void hle_deliver_event(Core* c, uint32_t ev_class, uint32_t spec);
   ffspan_reset_frame();   // backdrop-attribution: reset the per-frame builder span table
   void pad_service_frame(Core*);
@@ -1058,10 +1059,11 @@ static void ov_game_init(Core* c) {
 
 // Dual-core harness hooks (dualcore.cpp): boot a core to the start of the frame loop, then step it one
 // frame at a time. dc_boot_init = crt0 setup + the init prefix/bootstrap; dc_step_frame = one frame.
-void dc_boot_init(Core* c) { crt0_setup(c); ov_game_init(c); }
+void dc_boot_init(Core* c) { void gte_bind(Core*); gte_bind(c); crt0_setup(c); ov_game_init(c); }
 void dc_step_frame(Core* c, uint32_t f) { native_step_frame(c, f); }
 
 static void ov_game_main(Core* c) {
+  void gte_bind(Core*); gte_bind(c);   // bind this core's GTE before the init prefix / frame loop
   ov_game_init(c);
   // --- native frame loop (replaces LAB_80050c6c). Per frame, faithful to the game-main loop
   // body but with the scheduler call FUN_80051e60 replaced by native stage stepping (added

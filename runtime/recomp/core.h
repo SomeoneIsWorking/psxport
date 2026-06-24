@@ -57,6 +57,9 @@ public:
   // Store watchpoints (REPL `watch` / PSXPORT_CW / PSXPORT_WWATCH).
   void mem_set_watch(uint32_t lo, uint32_t hi);
   int  mem_watch_hits();
+  // Programmatic write-watchpoint (SBS divergence debugger): stores landing in [lo,hi) fire the global
+  // g_store_watch_cb (mem.cpp) with (this, addr, value) — used to catch the exact corrupting write.
+  void wwatch_arm(uint32_t lo, uint32_t hi);
 
 private:
   uint8_t* host_ptr(uint32_t a, uint32_t bytes);

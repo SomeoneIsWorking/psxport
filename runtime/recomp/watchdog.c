@@ -137,3 +137,11 @@ void watchdog_pet(void) {
 void watchdog_suspend(void) {
   if (g_armed) alarm(0);
 }
+
+// Permanently disable the frame-progress watchdog. For the SBS divergence debugger, which PAUSES the
+// process indefinitely on a divergence for live inspection — "no frame presented" is the intended state
+// there, not a hang, and watchdog_suspend (a one-shot alarm cancel) can't keep up with an open pause.
+void watchdog_disable(void) {
+  g_armed = 0;
+  alarm(0);
+}

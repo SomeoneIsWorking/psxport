@@ -5,6 +5,7 @@
 // the few externs gte.c references (PGXP off, widescreen off, savestate unused) so the math
 // matches the oracle exactly. The widescreen GTE-scale hack stays OFF here (fps60 tier later).
 #include "core.h"
+#include "game.h"   // Core::game->gte (per-instance GTE register file) for gte_bind
 #include "cfg.h"
 #include <stdint.h>
 #include <stdbool.h>
@@ -581,6 +582,9 @@ void     gte_op(Core* c, uint32_t insn)         { GTE_Instruction(insn);
                                                        }
                                                      }
                                                    } }
+// Bind the GTE math to THIS core's register file (game.h GteRegs) so two cores keep separate GTE state.
+// Called per core frame-step (native_step_frame) + at boot, from the explicit Core — no shared regs.
+void     gte_bind(Core* c)                       { GTE_BindState(&c->game->gte); }
 void     gte_init(void)                          { GTE_Init(); GTE_Power();
   // PSXPORT_WIDE is PC-native widescreen now: the GTE keeps its NATIVE projection (NO squish) and the
   // renderer (gpu_vk) re-centers the geometry into a wider scratch framebuffer at a true wider FOV.

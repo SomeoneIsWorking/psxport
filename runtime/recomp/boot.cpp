@@ -91,6 +91,15 @@ int main(int argc, char** argv) {
     dualcore_run(path);
     return 0;
   }
+  // PSXPORT_SBS: LIVE side-by-side two-core divergence debugger (sbs.cpp). Two native-boot cores in
+  // lockstep with identical input, differing only by mode (render / gameplay / both); auto-pauses on the
+  // first guest-RAM divergence and serves the divergence + guest backtraces over the debug server. Like
+  // DUALCORE it owns its own Game instances, so the primary `c`/`game` above is left unused.
+  if (cfg_on("PSXPORT_SBS")) {
+    void sbs_run(const char* exe_path);
+    sbs_run(path);
+    return 0;
+  }
   void native_stub_run(Core*, const char* main_exe_path);
   native_stub_run(c, path);              // stub draws SCEA, then hands off to native MAIN boot
   fprintf(stderr, "[boot] native_stub_run returned\n");

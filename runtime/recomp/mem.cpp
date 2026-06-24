@@ -58,7 +58,14 @@ void Core::cw_check(uint32_t a, uint32_t v, int width) {
   }
 }
 
-// PSXPORT_WWATCH=lo,hi — log the interpreter PC of any store landing in [lo,hi).
+// SBS divergence debugger: a store landing in a watched range fires this callback (set by sbs.cpp) with
+// the writing core + addr + value, so the harness can capture the EXACT corrupting-write guest backtrace.
+void (*g_store_watch_cb)(Core*, uint32_t a, uint32_t v) = nullptr;
+
+void Core::wwatch_arm(uint32_t lo, uint32_t hi) { s_ww_init = 1; s_ww_lo = lo; s_ww_hi = hi; }
+
+// PSXPORT_WWATCH=lo,hi — log the interpreter PC of any store landing in [lo,hi). Also fires
+// g_store_watch_cb (programmatic arm via wwatch_arm) for the SBS write-site backtrace.
 void Core::wwatch_check(uint32_t a, uint32_t v) {
   if (!s_ww_init) {
     s_ww_init = 1;
@@ -66,8 +73,11 @@ void Core::wwatch_check(uint32_t a, uint32_t v) {
     if (w) { unsigned long lo=0, hi=0; if (sscanf(w, "%lx,%lx", &lo, &hi) == 2) { s_ww_lo=lo; s_ww_hi=hi; } }
   }
   uint32_t ka = a | 0x80000000u;
-  if (s_ww_hi && ka >= s_ww_lo && ka < s_ww_hi)
-    fprintf(stderr, "[wwatch] store [%08X]=%08X by pc=%08X stage=%08X\n", ka, v, g_interp_pc, mem_r32(0x801fe00c));
+  if (s_ww_hi && ka >= s_ww_lo && ka < s_ww_hi) {
+    if (cfg_str("PSXPORT_WWATCH"))
+      fprintf(stderr, "[wwatch] store [%08X]=%08X by pc=%08X stage=%08X\n", ka, v, g_interp_pc, mem_r32(0x801fe00c));
+    if (g_store_watch_cb) g_store_watch_cb(this, ka, v);
+  }
 }
 
 // Map a virtual address to a RAM/scratchpad host pointer, or NULL for I/O.
@@ -244,11 +254,13 @@ static inline void pkt_track(uint32_t a, uint32_t bytes) {
 }
 void Core::mem_w8(uint32_t a, uint8_t v) {
   uint8_t* p = host_ptr(a, 1);
+  wwatch_check(a, v);
   cw_check(a, v, 1); pkt_track(a, 1);
   if (p) *p = v; else io_write(a, v, 1);
 }
 void Core::mem_w16(uint32_t a, uint16_t v) {
   uint8_t* p = host_ptr(a, 2);
+  wwatch_check(a, v);
   cw_check(a, v, 2); pkt_track(a, 2);
   if (p) memcpy(p, &v, 2); else io_write(a, v, 2);
 }

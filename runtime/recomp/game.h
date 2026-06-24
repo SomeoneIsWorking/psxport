@@ -12,6 +12,7 @@
 // here, migrated ONE subsystem per phase, 0-diff-verified each step (see docs/game-deglobalize-plan.md).
 #pragma once
 #include "core.h"
+#include "gte_state.h"             // GteRegs — per-instance GTE (COP2) register file (Beetle gte.c)
 #include "gpu_native_internal.h"   // GpuState — the native GPU's per-instance render machine state
 #include "gpu_vk_internal.h"       // GpuVkState — the Vulkan present backend's per-instance render state
 #include "fps60_internal.h"        // Fps60State — the interpolated-60fps tier's per-instance state
@@ -106,6 +107,8 @@ public:
   GpuVkState  gpu_vk;// Vulkan present backend: per-frame batch/depth/dirty/present state (gpu_vk.cpp)
   RenderQueue rq;    // engine-owned render queue: the single draw-ORDER authority (render_queue.cpp)
   Fps60State  fps60; // interpolated-60fps tier: capture buffers + matcher + remap (fps60.cpp)
+  GteRegs     gte{}; // GTE (COP2) register file — per-instance so two cores keep SEPARATE GTE state
+                     // (Beetle gte.c bound to this via GTE_BindState; see gte_bind, gte_beetle.cpp)
 
   // ---- PSX-fallback gate (diagnostic, user 2026-06-23) --------------------------------------------
   // ONE switch: keep BOOT (native crt0/FMV/init) and the FRAME LOOP skeleton native, but run EVERYTHING

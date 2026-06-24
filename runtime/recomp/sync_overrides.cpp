@@ -76,17 +76,20 @@ extern volatile uint32_t g_interp_pc;
 // Walk the guest stack (sp upward) printing plausible return addresses in resident-code range, so a
 // trap shows the call chain that reached it (e.g. async-read issuer -> CD_cw -> VSync). Best-effort:
 // the recomp ABI doesn't frame-link, so this scans sp..sp+512 for words that look like return PCs.
-static void guest_backtrace(Core* c) {
+// Write the backtrace to an arbitrary stream (so the SBS divergence debugger can capture it into a
+// string buffer and serve it over the debug server, not only abort-to-stderr).
+extern "C" void guest_backtrace_to(Core* c, FILE* out) {
   uint32_t sp = c->r[29];
-  fprintf(stderr, "  guest stack (sp=0x%08X), plausible return addrs:\n", sp);
+  fprintf(out, "  guest stack (sp=0x%08X), plausible return addrs:\n", sp);
   int shown = 0;
   for (uint32_t a = sp; a < sp + 512 && shown < 16; a += 4) {
     uint32_t w = c->mem_r32(a);
     uint32_t k = w & 0x1FFFFFFF;
     if (k >= 0x10000 && k < 0x120000 && (w & 3) == 0)   // resident MAIN/overlay code, word-aligned
-      { fprintf(stderr, "    [sp+0x%03X] 0x%08X\n", a - sp, w); shown++; }
+      { fprintf(out, "    [sp+0x%03X] 0x%08X\n", a - sp, w); shown++; }
   }
 }
+static void guest_backtrace(Core* c) { guest_backtrace_to(c, stderr); }
 
 static void trap_abort(Core* c, const char* what, uint32_t addr) {
   fprintf(stderr, "\n[%s-TRAP] reached 0x%08X  a0=%d ra=0x%08X interp_pc=0x%08X\n"
