@@ -154,9 +154,14 @@ render subsystem replaces them.
     state 1 FUN_80071768 + conditional FUN_800518FC; state 3 FUN_8007A624) — control flow owned native, the
     sub-behavior leaves stay PSX via rec_dispatch. Verified live on seaside: `obj80071a3cverify` 550+
     matches, 0 mismatch; gate-off native-driven reaches the field clean (no bad opcode).
+  - **Object-pool init FUN_8007B18C owned native+live (2026-06-24):** the field case-0 prefix
+    (engine_stage.cpp ov_field_run) now calls `ov_pool_init_run` (game/world/pool.cpp + pool.h) directly
+    instead of rec_dispatch(0x8007b18c). It builds the 520-slot object pool / free-list and runs the eight
+    sub-inits (leaves stay PSX via rec_dispatch). Inline A/B gate `poolinitverify` match #1/#2 (byte-exact
+    full RAM+scratchpad+v0 vs rec_super_call); gate-off native-driven reaches the field clean (151 nodes).
   - **NEXT — extend the contiguity:** own more behavior handlers (the model-attach sites FUN_80077B38 +
-    other per-object render-record callers) so the full graphics-bind set runs native; wire prefix sibling
-    `ov_8007B18C` (pool-init). Each verified via its A/B gate. (Render itself = the `game/render/` decoupled
-    native path, in progress separately.)
+    other per-object render-record callers) so the full graphics-bind set runs native; own the remaining
+    case-0 prefix leaves (0x800796dc / 0x800263e8 / …). Each verified via its A/B gate. (Render itself =
+    the `game/render/` decoupled native path, in progress separately.)
 ```
 ```

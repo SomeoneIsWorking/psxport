@@ -2,8 +2,12 @@
 
 #include "core.h"
 #include "cfg.h"
+#include "pool.h"
+#include "verify_gate.h"
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 void rec_dispatch(Core*, uint32_t);
 void rec_syscall(Core*, uint32_t);
@@ -341,6 +345,32 @@ static void ov_8007B18C(Core* c) {
   call_fn(c, 0x8007AC98u);
   call_fn(c, 0x8007AD14u);
   call_fn(c, 0x8007AD40u);
+}
+
+// Public GATED entry — the native field case-0 prefix (engine_stage.cpp ov_field_run) calls this
+// directly (PC calls PC) instead of rec_dispatch(0x8007B18C). Native by default; A/B-vs-recomp
+// (full RAM+scratchpad+v0 vs rec_super_call) when channel `poolinitverify` is on. This is a
+// once-per-field-load init, so we use an inline gate that prints EVERY match (record_gate is silent
+// on single matches) — positive confirmation it ran, matching placement.cpp's gate style.
+void ov_pool_init_run(Core* c) {
+  static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("poolinitverify") ? 1 : 0;
+  if (!s_v) { ov_8007B18C(c); return; }
+  static uint8_t* ram0 = (uint8_t*)malloc(0x200000);
+  static uint8_t* ramN = (uint8_t*)malloc(0x200000);
+  uint8_t spad0[0x400], spadN[0x400];
+  uint32_t regs0[32]; memcpy(regs0, c->r, sizeof regs0);
+  memcpy(ram0, c->ram, 0x200000); memcpy(spad0, c->scratch, 0x400);
+  ov_8007B18C(c); uint32_t v0_n = c->r[2];
+  memcpy(ramN, c->ram, 0x200000); memcpy(spadN, c->scratch, 0x400);
+  memcpy(c->ram, ram0, 0x200000); memcpy(c->scratch, spad0, 0x400); memcpy(c->r, regs0, sizeof regs0);
+  rec_super_call(c, 0x8007B18Cu); uint32_t v0_o = c->r[2];
+  uint32_t sp = regs0[29] & 0x1FFFFFu, flo = (sp >= 0x800) ? sp - 0x800 : 0;
+  int ro = -1; for (uint32_t a = 0; a < 0x200000; a++) if (c->ram[a] != ramN[a] && !(a >= flo && a < sp)) { ro = (int)a; break; }
+  int so = -1; for (uint32_t a = 0; a < 0x400; a++) if (c->scratch[a] != spadN[a]) { so = (int)a; break; }
+  static long ng = 0, nb = 0;
+  if (ro >= 0 || so >= 0 || v0_n != v0_o)
+    { if (nb++ < 40) fprintf(stderr, "[poolinitverify] MISMATCH v0 n=%x o=%x ram@%x spad@%x sp=%x\n", v0_n, v0_o, ro, so, sp); }
+  else fprintf(stderr, "[poolinitverify] match #%ld\n", ++ng);
 }
 
 // 0x8007B2C0 — load a 4-entry u16 weight ramp into the scratchpad at 0x1F800170: a0==0 → descending
