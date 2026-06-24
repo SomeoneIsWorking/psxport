@@ -4,4 +4,6 @@
 struct Core;
 // 0x8007B18C — top-level object-pool init (field case-0 prefix). GATED (channel `poolinitverify`).
 void ov_pool_init_run(Core* c);
+// 0x800796DC — control-block reset + sub-inits (field case-0 prefix). GATED (channel `init796dcverify`).
+void ov_796dc_run(Core* c);
 #endif

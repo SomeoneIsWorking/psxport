@@ -159,6 +159,11 @@ render subsystem replaces them.
     instead of rec_dispatch(0x8007b18c). It builds the 520-slot object pool / free-list and runs the eight
     sub-inits (leaves stay PSX via rec_dispatch). Inline A/B gate `poolinitverify` match #1/#2 (byte-exact
     full RAM+scratchpad+v0 vs rec_super_call); gate-off native-driven reaches the field clean (151 nodes).
+  - **Control-block reset FUN_800796DC owned native+live (2026-06-24):** the next case-0 prefix leaf now
+    calls `ov_796dc_run` (game/world/pool.cpp) instead of rec_dispatch(0x800796dc) — zeroes the 104-byte
+    control block at 0x800BF808, clears ~30 scratchpad fields, runs its sub-inits (leaves stay PSX). Shared
+    once-per-load gate `world_init_gate`; `init796dcverify` match #1/#2 byte-exact (incidental v0 mirrored:
+    recomp epilogue leaves the 0x800c0000 store base). 151 nodes gate-off.
   - **NEXT — extend the contiguity:** own more behavior handlers (the model-attach sites FUN_80077B38 +
     other per-object render-record callers) so the full graphics-bind set runs native; own the remaining
     case-0 prefix leaves (0x800796dc / 0x800263e8 / …). Each verified via its A/B gate. (Render itself =
