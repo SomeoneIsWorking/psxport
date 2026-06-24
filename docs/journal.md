@@ -8058,3 +8058,14 @@ of matches each; render_cmp unchanged at 5343px (identical game state). 7 field 
 0x8013259C ×1848, 0x80145230 ×1848, 0x801395C0 ×1232, 0x80124E74-family, …) same pipeline. The render-side
 object real-depth (later-231/231b: own 0x8003b588/0x8003d0bc; the eproj_compose_camera ground-projection bug)
 is the SEPARATE track.
+
+## later-232b (2026-06-24) — +2 more game-object behaviors (0x8013259C, 0x80145230); 0x80138FC8 has a bug, deferred
+Continues later-232. Batch of 3 RE'd (parallel subagents); 2 verified byte-exact and wired LIVE:
+- 0x8013259C (×1848) — engine/objbeh_8013259c.cpp — node[4] SM, comparison-chain sub-dispatch (no JT).
+- 0x80145230 (×1848) — engine/objbeh_80145230.cpp — node[4] SM, slti/beq ladders, spawn via on-stack struct.
+Both: `debug obj8013259cverify,obj80145230verify` → 0 MISMATCH; render_cmp unchanged 5343px. 9 behaviors now
+owned (later-230's 4 + later-232's 3 + these 2).
+- 0x80138FC8 (×1854) — engine/objbeh_80138fc8.cpp WRITTEN but the A/B gate shows 40 MISMATCH at node+1 /
+  scratch+0x148 in state 1 sub 0 (obj 800efa98). NOT wired (dispatch case commented out; runs PSX). The
+  state-1 global-gate front-end (0x800BF816/0x800BF817 → FUN_80077ebc/8007703c/cull) or a node+1 write is
+  mis-RE'd. Sent the RE agent a fix request with the exact mismatch. Re-wire once `obj80138fc8verify` is clean.
