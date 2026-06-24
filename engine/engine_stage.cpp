@@ -37,7 +37,9 @@
 // span table persists across the present (which classifies the prior frame's OT) because it is reset only at
 // the TOP of the next ov_field_frame. `ffspan_lookup(addr)` returns the builder name (latest-span-wins).
 extern int g_pkt_track; extern uint32_t g_pkt_lo, g_pkt_hi;
-extern "C" void dv_snapshot(Core*);   // dual-view: capture pre-render state (native_boot.cpp); no-op unless on
+extern "C" void dv_snapshot(Core*);    // capture post-gameplay/pre-render guest state (native_boot.cpp)
+extern "C" void dv_restore_pre(Core*); // restore that snapshot (native_boot.cpp)
+extern "C" int  g_render_psx, g_dualview;   // engine_render.cpp — render-path compare switches
 struct FFSpan { const char* name; uint32_t lo, hi; };
 static FFSpan s_ffspan[40]; static int s_ffspan_n = 0; static int s_bdtag = -1;
 static inline int bdtag_on() { if (s_bdtag < 0) s_bdtag = cfg_str("PSXPORT_BDTAG") ? 1 : 0; return s_bdtag; }
@@ -285,6 +287,21 @@ static void ov_field_frame(Core* c) {
   dv_snapshot(c);
   if (c->mem_r8(0x1f800136u) < 2) ov_render_frame(c);   // 0x8003f9a8 — NATIVE render orchestrator + walk
   FFS("ff_submit810c", d0(c, 0x8010810cu));     // render submit
+  // PSX RENDER UNDERNEATH (user 2026-06-24 architecture): the native renderer must leave NO guest-memory
+  // side effects — only native GAMEPLAY may write guest memory. The native render above (ov_render_frame +
+  // submit) scribbles guest scratchpad/OT (e.g. the RotMatrix angle SVECTOR at 0x1F8000C0) as PSX-GTE
+  // transform workspace, which the still-recomp content then reads back wrong (the gameplay regression the
+  // PSXPORT_DUALCORE harness pinned to scratchpad 0x1F8000C0). So rewind to the post-gameplay state captured
+  // by dv_snapshot above and run the PSX render: guest OT/packets/scratchpad end in the correct PSX state.
+  // The native DISPLAY is produced later by ov_scene_native (ov_draw_otag), which RE-DERIVES its transforms
+  // from node/entity data — not from leftover scratchpad — so it is unaffected by this guest rewind. We do
+  // NOT call ov_draw_otag here, so the PSX render only maintains guest state and emits no VK. Skipped in the
+  // PSX-render compare mode (already PSX) and in dual-view (its own block runs the PSX pass).
+  if (!g_render_psx && !g_dualview && c->mem_r8(0x1f800136u) < 2) {
+    dv_restore_pre(c);
+    FFS("ff_psx_underhood", d0(c, 0x8003f9a8u));   // PSX field render orchestrator -> correct guest state
+    FFS("ff_psx_submit",    d0(c, 0x8010810cu));   // render submit (faithful), guest-state only (no VK)
+  }
   FFS("ff_77d8c", d0(c, 0x80077d8cu));
   FFS("ff_area75a80", d0(c, 0x80075a80u));      // per-frame area update
 }

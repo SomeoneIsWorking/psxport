@@ -395,8 +395,11 @@ static void dv_load(Core* c, const uint8_t* ram, const uint8_t* spad, const uint
   memcpy(c->ram, ram, 0x200000); memcpy(c->scratch, spad, 0x400);
   for (int i = 0; i < 32; i++) { gte_write_ctrl(i, gc[i]); gte_write_data(i, gd[i]); }
 }
-// called from ov_field_frame (engine_stage.cpp) right before the native render, when dual-view is on.
-extern "C" void dv_snapshot(Core* c) { if (!g_dualview) return; dv_save(c, s_dv_pre_ram, s_dv_pre_spad, s_dv_pre_gc, s_dv_pre_gd); g_dv_have_pre = 1; }
+// called from ov_field_frame (engine_stage.cpp) right before the native render. Captures the
+// post-gameplay / pre-render guest state UNCONDITIONALLY: it feeds both the dual-view PSX pass AND the
+// always-on "PSX render underneath" (user 2026-06-24: the native renderer must leave no guest-memory side
+// effects; the PSX render runs from this snapshot to keep guest memory correct). RAM+scratchpad+GTE.
+extern "C" void dv_snapshot(Core* c) { dv_save(c, s_dv_pre_ram, s_dv_pre_spad, s_dv_pre_gc, s_dv_pre_gd); g_dv_have_pre = 1; }
 extern "C" void dv_capture_post(Core* c) { dv_save(c, s_dv_post_ram, s_dv_post_spad, s_dv_post_gc, s_dv_post_gd); }
 extern "C" void dv_restore_pre (Core* c) { dv_load(c, s_dv_pre_ram,  s_dv_pre_spad,  s_dv_pre_gc,  s_dv_pre_gd ); }
 extern "C" void dv_restore_post(Core* c) { dv_load(c, s_dv_post_ram, s_dv_post_spad, s_dv_post_gc, s_dv_post_gd); }
