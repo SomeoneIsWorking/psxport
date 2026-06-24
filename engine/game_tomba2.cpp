@@ -192,6 +192,7 @@ static void ov_set_geom_screen(Core* c) {       // SetGeomScreen(h) — projecti
 // the draw straight through our native walk (synchronous), instead of the DMA-register emulation dance.
 // This is the engine's draw submission, owned.
 void gpu_blank_display(Core* core);
+extern "C" int g_render_psx;   // engine_render.cpp — A/B compare switch (forces the PSX OT walk)
 void ov_draw_otag(Core* c) {   // called directly from native_step_frame (PC-driven); NOT an override
   // #7/#11 finish: while the DEMO/title front-end is still LOADING its assets (sub-SM task0+0x48 < 2, the
   // s4a load ramp), the title composites its menu/font over whatever VRAM the FMV/SCEA splash left — so the
@@ -206,11 +207,16 @@ void ov_draw_otag(Core* c) {   // called directly from native_step_frame (PC-dri
   // is read here ONLY to enumerate the leftover guest prims — its draw ORDER is discarded. M3 captures
   // those at submit time and retires this read. (PSXPORT_SBS debug compare keeps an inline path; its
   // queue stays empty so the flush is a no-op.)
-  // Phase-1 DECOUPLED native scene render (one-native-render-path-decoupled): when on, the native path
-  // renders the world from GAME DATA and the PSX OT walk is SKIPPED entirely (so the PSX 2D-band flat prims
-  // don't composite over the native real-depth world). `scenenativehud` keeps the PSX walk for the 2D HUD/bg
-  // we haven't ported yet (mixed, for bring-up only).
-  if (cfg_dbg("scenenative")) {
+  // DECOUPLED native scene render (one-native-render-path-decoupled). For the FIELD (GAME stage,
+  // 0x801FE00C == 0x8010637C) the native path OWNS the render: it builds the world from GAME DATA (terrain +
+  // entity lists + backdrop tilemap) with real depth, and the PSX OT walk is SKIPPED — this is what makes
+  // dynamic objects (Tomba, NPCs, props) render at correct depth instead of the flat is3d=0 PSX prims that
+  // the OT walk drops behind the terrain (the "invisible Tomba" regression). Other stages (DEMO/title/menus)
+  // still walk the PSX OT (no native path yet). `renderpsx on` (g_render_psx) forces the PSX walk for A/B.
+  // NOTE (frontier): scenenative skips ALL the PSX 2D for the field — once in-gameplay dialog/menus/item
+  // bubbles appear they need native 2D (RQ_HUD/OVERLAY) or they'll be missing. Free-roam is correct now.
+  bool field = (c->mem_r32(0x801FE00Cu) == 0x8010637Cu);
+  if (!g_render_psx && (field || cfg_dbg("scenenative"))) {
     if (cfg_dbg("scenenativehud")) gpu_dma2_linked_list(c, c->r[4]);   // bring-up: keep PSX 2D on top
     void ov_scene_native(Core*); ov_scene_native(c);
   } else {
