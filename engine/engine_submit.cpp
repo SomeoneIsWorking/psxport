@@ -22,6 +22,7 @@
 #include "cfg.h"
 #include "mods.h"   // g_mods — live PC-native lighting params (engine-native shading, not a deferred pass)
 #include "lighting.h" // PER-AREA light registry (sun / lava+torch); selected per frame in engine_shade_select
+#include "render_queue.h" // RQ_BACKGROUND + rq_push_2d_quad — native backdrop tilemap path
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -834,10 +835,78 @@ extern "C" long g_sn_objs, g_sn_cmds; long g_sn_objs = 0, g_sn_cmds = 0;
 void ov_render_walk(Core* c);
 void ov_rwalk_aux_bf00(Core* c), ov_rwalk_aux_eec0(Core* c), ov_rwalk_b588(Core* c),
      ov_render_walk_snapshot(Core* c), ov_rwalk_aux_bcf4(Core* c);
+// NATIVE BACKDROP tilemap drawer — overlay FUN_80115598 (the seaside field's state-0 background drawer,
+// reached via 0x8003df04's 16-state jump table @0x80014fc0; state 0 → 0x8003df74 → 0x80115598). This is the
+// sky + distant parallax hills (the only thing the decoupled native scene was missing — verified by SKIPPASS
+// attribution, later-244). The PSX body reads the area's tile MAP (W×H grid of u16 tile entries) and a
+// scroll position, then builds GP0 textured-sprite (cmd 0x7d) packets into the OT for the visible wraparound
+// window of 16×16 tiles. We TRANSCRIBE the integer wrap/scroll/index math (that's scene data — what tile
+// goes where), but emit NATIVE RQ_BACKGROUND 2D quads instead of GP0 packets / OT links (the engine owns the
+// background layer; sky/hills sit behind the real-depth world). Struct @t4 (=0x800ed018 at the seaside):
+//   +0x04 hword tpage  +0x06 hword clut-base  +0x10 byte W  +0x11 byte H
+//   +0x14 word  tilemap ptr (u16[H][W])       +0x28 hword scrollX  +0x2a hword scrollY
+// Tile entry bits: [0:3]=atlas col, [4:7]=atlas row, [8:11]=clut sub-index. U=(t&0xF)<<4, V=(t&0xF0)+8 (the
+// half-tile V bias is in the source data layout — faithful), clut=clutbase+((t&0xF00)>>2). Texpage 0x0E =
+// 4bpp @ VRAM(896,0) (set once via a GP0(0xE1) prim in the PSX body; applied per-quad here).
+static void ov_bg_tilemap_native(Core* c, uint32_t t4) {
+  int W = c->mem_r8(t4 + 0x10), H = c->mem_r8(t4 + 0x11);
+  if (W == 0 || H == 0) return;
+  int rowstride = W * 2;                          // s0 — bytes per map row
+  int mapbytes  = rowstride * H;                  // s3 — total map bytes (wrap modulus)
+  int scrollX = (int16_t)c->mem_r16(t4 + 0x28);
+  int scrollY = (int16_t)c->mem_r16(t4 + 0x2a);
+  uint32_t map      = c->mem_r32(t4 + 0x14);
+  uint16_t tpage    = c->mem_r16(t4 + 0x04);
+  uint16_t clutbase = c->mem_r16(t4 + 0x06);
+  int tp_x = (tpage & 0xF) * 64, tp_y = ((tpage >> 4) & 1) * 256;
+  int mode = (tpage >> 7) & 3; if (mode > 2) mode = 2;
+  // Starting tile row/col = (scroll - screen-center) >> 4, wrapped into [0,H) / [0,W).
+  int rowtile = ((scrollY - 120) >> 4) % H; if (rowtile < 0) rowtile += H;
+  int coltile = ((scrollX - 160) >> 4) % W; if (coltile < 0) coltile += W;
+  int t2 = rowtile * rowstride;                   // current row byte offset (wraps mod mapbytes)
+  int coloff0 = coltile * 2;                       // starting col byte offset (wraps mod rowstride)
+  int xoff = (int16_t)(152 - scrollX);             // t9 — sub-tile X scroll remainder + screen offset
+  int yoff = (int16_t)(112 - scrollY);             // s7 — sub-tile Y scroll remainder + screen offset
+  unsigned char col[4] = { 0x80, 0x80, 0x80, 0x80 };  // 0x7d is raw-texture: color ignored
+  int outer_bound = (int16_t)(scrollY - 120) + 0x100; // 16 rows
+  int t5 = (int16_t)(scrollX - 160) + 0x160;          // ~22 cols
+  for (int t8 = scrollY - 120;;) {
+    int Y = (int16_t)((t8 & 0xFFF0) + yoff);
+    int t6 = (int16_t)t2;                          // row byte offset (sign-extended)
+    int t0 = coloff0;
+    for (int t1 = scrollX - 160;;) {
+      int X = (int16_t)((t1 & 0xFFF0) + xoff);
+      uint16_t tile = c->mem_r16(map + (uint32_t)(t6 + t0));
+      int u = (tile & 0xF) << 4, v = (tile & 0xF0) + 8;
+      uint16_t clut = (uint16_t)(clutbase + ((tile & 0xF00) >> 2));
+      int clut_x = (clut & 0x3F) * 16, clut_y = (clut >> 6) & 0x1FF;
+      int xs[4] = { X, X + 16, X, X + 16 }, ys[4] = { Y, Y, Y + 16, Y + 16 };
+      int us[4] = { u, u + 16, u, u + 16 }, vs[4] = { v, v, v + 16, v + 16 };
+      rq_push_2d_quad(c, RQ_BACKGROUND, /*order_2d_fg=*/0, xs, ys, us, vs, col, col, col,
+                      tp_x, tp_y, mode, /*raw=*/1, clut_x, clut_y, 0, 0, 0, 0, 0, 0, 1023, 511);
+      g_sn_cmds++;
+      t0 += 2; if (t0 >= rowstride) t0 = 0;        // column wrap
+      t1 += 16;
+      if (!((int16_t)t1 < t5)) break;
+    }
+    t2 += rowstride; if ((int16_t)t2 >= mapbytes) t2 -= mapbytes;  // row wrap
+    t8 += 16;
+    if (!((int16_t)t8 < outer_bound)) break;
+  }
+}
+
 void ov_scene_native(Core* c) {
   static const uint32_t HEADS[3] = { 0x800FB168u, 0x800F2624u, 0x800F2738u };
   uint32_t saved = c->r[4];
   g_sn_objs = g_sn_cmds = 0;
+  // (0) BACKDROP (sky + distant parallax hills) — the field's background drawer, dispatched natively. The
+  // PSX path is 0x8003df04's 16-state jump table @0x80014fc0 keyed on mem_r8(0x800bf870), gated by
+  // mem_r8(0x800bf873)==0. Only state 0 (→ tilemap drawer 0x80115598) is owned natively so far; other
+  // fields' drawers are still-PSX and stay black here until ported (frontier). RQ_BACKGROUND → behind world.
+  if (c->mem_r8(0x800bf873u) == 0) {
+    uint32_t bgstate = c->mem_r8(0x800bf870u);
+    if (bgstate == 0) ov_bg_tilemap_native(c, 0x800ed018u);
+  }
   // (a) TERRAIN + per-object world geometry via the native render walks (self-route to ov_terrain etc.).
   ov_rwalk_aux_bf00(c); ov_rwalk_aux_eec0(c); ov_rwalk_b588(c); ov_render_walk_snapshot(c);
   ov_rwalk_aux_bcf4(c); ov_render_walk(c);

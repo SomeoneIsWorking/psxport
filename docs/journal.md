@@ -1,5 +1,32 @@
 # Debug / progress journal
 
+## later-244 (2026-06-24) — BACKDROP ported native (sky + parallax hills); decoupled scene now complete at the seaside field
+Finished the Phase-1 decoupled native render gap from later-243: the only black area (sky + distant parallax
+hills) is now drawn natively. ATTRIBUTION (empirical, not the later-243 guess): walked the still-skipped passes
+with `PSXPORT_SKIPPASS=<addr>` under `debug scenenative scenenativehud`. Skipping **0x8003df04** removed the
+ENTIRE backdrop; skipping 0x8004fd30 (the flat 320×240 fill) changed NOTHING (it is fully covered → invisible
+this field). So the backdrop = 0x8003df04, which is a 16-state jump table @0x80014fc0 keyed on
+`mem_r8(0x800bf870)` (gated by `mem_r8(0x800bf873)==0`). At the seaside field state=0 → 0x8003df74 →
+**FUN_80115598** — i.e. the backdrop IS the known scrolling-TILEMAP drawer (§F's ~49% hot lever), NOT "absent
+in this field" as later-243 claimed (the old signature search keyed on a texpage this field doesn't use).
+- **FUN_80115598 RE'd** (overlay; disas via scratch/dual/mdis.py). Struct @a0=0x800ed018: +0x04 tpage, +0x06
+  clut-base, +0x10 W(=36), +0x11 H(=72), +0x14 tilemap ptr (u16[H][W] @0x801F0FA4), +0x28 scrollX, +0x2a
+  scrollY. Iterates a wraparound visible window (22 cols × 16 rows of 16×16 tiles). Tile u16: [0:3]=atlas col,
+  [4:7]=atlas row, [8:11]=clut sub-index → U=(t&0xF)<<4, V=(t&0xF0)+8, clut=clutbase+((t&0xF00)>>2). Texpage
+  0x0E = 4bpp @ VRAM(896,0); applied once via a GP0(0xE1) prim in the PSX body.
+- **PORT** (`ov_bg_tilemap_native`, engine_submit.cpp): TRANSCRIBE the integer wrap/scroll/index math (scene
+  data — what tile goes where), EMIT native RQ_BACKGROUND 2D quads via `rq_push_2d_quad` (raw texture, behind
+  the world) instead of GP0 sprite packets / OT links. Wired into `ov_scene_native` ahead of the world walks,
+  gated by the same 0x800bf873==0 / state==0 guards (only state 0 owned so far; other fields' drawers still
+  black until ported — frontier). +352 native quads (22×16) at the seaside.
+- **VERIFIED headless** (AUTO_SKIP free-roam, scenenative): sky/clouds/sea-horizon/distant-hills now render and
+  MATCH PSX vanilla (scratch/dual/bd_cmp.png); native world (Tomba/see-saw/pots/swine/water) intact at real
+  depth; before/after diff (bd_ba.png) shows the ONLY delta is the backdrop filling the former black — no
+  regression. Stable + parallax-correct under walk-right motion (bd_scroll.png / bd_walk2.png).
+- NEXT (unchanged frontier): native 2D HUD into ov_scene_native, then retire the PSX OT walk here and UNGATE
+  (make scenenative the behavior, drop the debug flag), then confirm 60fps/ires/lighting all ride this one
+  path. Other fields' backdrop states (jump-table entries ≠0: 0x8013f0dc/0x80136f28/0x80141a94/… ) still PSX.
+
 ## later-221 (2026-06-24) — LOAD GAME freeze FIXED: DEMO substate s4 owned native (memcard slot browser)
 USER REPORT: native ./run.sh FREEZES when selecting LOAD GAME from the title (PSX fallback PSXPORT_GATE=1
 works). ROOT CAUSE: the DEMO per-frame dispatcher `ov_demo_frame` (engine_demo.cpp) handled s0/1/2/3/5/6/7
@@ -8464,12 +8491,11 @@ render real-depth, stable 200+ frames of motion, no derail.
 - **0px root cause (solved):** native 3D world prims live in depth [0,0.9375]; the PSX 2D-FG band is (0.9375,1]
   and the compare is GREATER_OR_EQUAL, so the PSX flat layer WON and covered the native world. Skipping the PSX
   walk (decoupling) fixed it — confirms the native path must OWN the frame, not share a queue with PSX.
-- **REMAINING = the BACKDROP** (the only black area: sky + distant parallax hills). NOT the known tilemap
-  drawer (FUN_80115598 signature absent in this field). Candidates among the still-skipped passes: **0x8004fd30**
-  (first pass — builds a full-screen 320×240 shaded rect = the sky/background fill; reads color/shade from
-  0x1F800135, submits via 0x80081cf8) and **0x8003df04** (the SKIPPASS-major builder, ~7470px — likely the
-  distant hills/scenery). NEXT: own these natively as RQ_BACKGROUND / world geometry (decode 0x8004fd30's
-  gradient → native full-screen bg quad; RE 0x8003df04 → its geometry). Then the 2D HUD, then retire the PSX
-  walk here and make scenenative the behavior (ungate), and confirm 60fps/ires/lighting all ride this one path.
+- **REMAINING = the BACKDROP** (the only black area: sky + distant parallax hills). [CORRECTED by later-244:
+  the "NOT FUN_80115598 / 0x8004fd30 sky-fill / 0x8003df04 hills" attribution below was WRONG — the backdrop
+  IS the tilemap drawer FUN_80115598. The 0x80115598 signature search missed it because this field's texpage
+  differs; the flat-fill 0x8004fd30 is fully covered (invisible). See later-244.] ~~Candidates among the
+  still-skipped passes: 0x8004fd30 (sky fill) and 0x8003df04 (distant hills).~~ Then the 2D HUD, then retire
+  the PSX walk here and make scenenative the behavior (ungate), and confirm 60fps/ires/lighting ride one path.
 - Tools added this session: REPL `ents` (enumerate objects), `PSXPORT_PCTRAP=0xADDR`(+_SKIP=N) guest-call-chain
   tracer, `PSXPORT_AUTO_SKIP=1` (reach real free-roam). RE: docs/engine_re.md ★ GAME-STAGE OBJECT PIPELINE.
