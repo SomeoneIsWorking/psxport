@@ -128,8 +128,16 @@ render subsystem replaces them.
     the field clean (151 nodes, 0 bad opcode). The per-type spawn VARIANTS' per-class init beyond the
     pool/list primitive is already inside these native bodies; only the deeper content handlers (node+0x1c
     behaviors) remain PSX.
-  - **NEXT — extend the contiguity:** wire the owned prefix siblings the same way (e.g. pool-init
-    `ov_8007B18C` in game/world/pool.cpp — expose + direct-call), then descend into the graphics-binding
-    attach (model/geom set, render-record) on the live path, each verified via its A/B gate.
+  - **GRAPHICS-BIND now native+live (2026-06-24):** the native entity walk (engine_tomba2.cpp
+    `dispatch_native_behavior`) already routes the seaside-resident handlers (739ac/73cd8/741dc) to native;
+    their one graphics-binding call (per-object render-record init FUN_80051B70 → alloc record, resolve
+    geomblk from the two-level model table, store into node+0xC0) now calls native `ov_obj_record_init`
+    instead of rec_dispatch. So "assigning graphics" runs PC-native live for these handlers. Verified:
+    handler gates 0 mismatch (obj739ac 1150 / obj73cd8 2300 / obj741dc 550), gate-off native-driven binds
+    geomblks into node+0xC0 (ents gb0=…), field clean.
+  - **NEXT — extend the contiguity:** own more behavior handlers (the model-attach sites FUN_80077B38 +
+    other per-object render-record callers) so the full graphics-bind set runs native; wire prefix sibling
+    `ov_8007B18C` (pool-init). Each verified via its A/B gate. (Render itself = the `game/render/` decoupled
+    native path, in progress separately.)
 ```
 ```
