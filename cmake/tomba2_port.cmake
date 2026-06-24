@@ -112,8 +112,12 @@ target_compile_definitions(tomba2_port PRIVATE
   $<$<BOOL:${PSXPORT_SUBSTRATE}>:PSXPORT_SUBSTRATE>)
 
 # -w (warnings off) and -O2 -g, matching the shell build; -fpermissive only for C++.
+# clang (macOS) has no -fpermissive and makes C++11 braced-init narrowing a hard ERROR (e.g. the
+# provably-safe int16_t->float in engine_project.cpp matrix inits, and the generated shards which
+# narrow and can't be hand-edited). -Wno-c++11-narrowing is clang's diagnostic; -Wno-narrowing is GCC's;
+# each is harmlessly ignored by the other. Keeps the CMake (macOS) build in step with build_port.sh/run.sh.
 target_compile_options(tomba2_port PRIVATE -w -O2 -g
-  $<$<COMPILE_LANGUAGE:CXX>:-fpermissive>
+  $<$<COMPILE_LANGUAGE:CXX>:-fpermissive -Wno-c++11-narrowing -Wno-narrowing>
   ${SDL2_CFLAGS_OTHER} ${VULKAN_CFLAGS_OTHER} ${FREETYPE_CFLAGS_OTHER})
 
 target_link_libraries(tomba2_port PRIVATE

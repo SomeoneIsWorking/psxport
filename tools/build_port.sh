@@ -34,7 +34,11 @@ RMLUI_CORE_A="$(find build/rmlui -name 'librmlui.a' 2>/dev/null | head -1)"
 RMLUI_DBG_A="$(find build/rmlui -name 'librmlui_debugger.a' 2>/dev/null | head -1)"
 [ -n "$RMLUI_CORE_A" ] || { echo "RmlUi static lib not built (tools/build_rmlui.sh)" >&2; exit 1; }
 RMLUI_LIBS="$RMLUI_DBG_A $RMLUI_CORE_A $(pkg-config --libs freetype2 2>/dev/null || echo -lfreetype)"
-CXXFLAGS="-O2 -g -w -fpermissive -std=c++17 $INC $RMLUI_INC $(pkg-config --cflags sdl2 vulkan 2>/dev/null) -DPSXPORT_SDL"
+# -fpermissive (GCC) downgrades C++11 braced-init narrowing to a warning; clang has no -fpermissive and makes
+# it a hard ERROR, so a portable build needs the explicit -Wno for clang (e.g. the provably-safe int16_t->float
+# in engine_project.cpp's matrix inits, and the recompiler-generated shards which narrow and can't be hand-edited).
+# -Wno-c++11-narrowing is clang's exact diagnostic; -Wno-narrowing covers GCC; each is harmlessly ignored by the other.
+CXXFLAGS="-O2 -g -w -fpermissive -Wno-c++11-narrowing -Wno-narrowing -std=c++17 $INC $RMLUI_INC $(pkg-config --cflags sdl2 vulkan 2>/dev/null) -DPSXPORT_SDL"
 
 # PSXPORT_SUBSTRATE=1: link the statically-recompiled bodies (generated/shard_*.c + shard_disp.c) as the
 # no-interpreter substrate (top-down native port). The shards are C++ content in .c files (call Core

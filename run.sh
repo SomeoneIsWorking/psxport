@@ -117,7 +117,9 @@ RMLUI_CORE_A="$(find build/rmlui -name 'librmlui.a' 2>/dev/null | head -1)"
 RMLUI_DBG_A="$(find build/rmlui -name 'librmlui_debugger.a' 2>/dev/null | head -1)"
 [ -n "$RMLUI_CORE_A" ] || die "RmlUi static lib not built (see tools/build_rmlui.sh)"
 RMLUI_LIBS="$RMLUI_DBG_A $RMLUI_CORE_A $(pkg-config --libs freetype2 2>/dev/null || echo -lfreetype)"
-CXXFLAGS="-O2 -g -w -fpermissive -std=c++17 $INC $RMLUI_INC $(pkg-config --cflags sdl2 vulkan 2>/dev/null) -DPSXPORT_SDL"
+# -Wno-(c++11-)narrowing: clang (macOS) has no -fpermissive and makes braced-init narrowing a hard error; keep
+# the build portable (see tools/build_port.sh). -Wno-c++11-narrowing = clang; -Wno-narrowing = GCC; each ignores the other.
+CXXFLAGS="-O2 -g -w -fpermissive -Wno-c++11-narrowing -Wno-narrowing -std=c++17 $INC $RMLUI_INC $(pkg-config --cflags sdl2 vulkan 2>/dev/null) -DPSXPORT_SDL"
 tools/gen_vk_shaders.sh   # compile+embed the Vulkan shaders (gpu_vk_shaders.h, incl. rml.vert/frag)
 # All TUs. Interpreter-only runtime: MAIN.EXE + the boot stub run from RAM via the interpreter
 # (runtime/recomp/dispatch.c + interp.c); the recompiled generated/shard_*.c are NOT linked (the
