@@ -29,11 +29,41 @@ static long s_walks = 0;
 // Call one node's handler exactly as the recomp does: a0 = node, jalr *(node+0x1c). Tag g_current_object
 // = node around the WHOLE handler so fps60 attributes ALL geometry it submits to this entity (the
 // interpolation identity), independent of whether projection happens inside the cull subtree.
+// Owned per-object BEHAVIOR handlers (node+0x1C). Each was RE'd 1:1 from its recomp body and carries its
+// own full RAM+scratchpad A/B verify gate (sm40558 / obj739acverify / obj741dcverify / obj73cd8verify) —
+// they were written but ORPHANED (call_handler always rec_dispatched the raw address). Routing them here
+// makes the native bodies LIVE: native-only when the gate channel is off, A/B-vs-recomp when it is on.
+// This is the start of owning the entity-behavior layer (the object SYSTEM's logic), top-down by hotness.
+void ov_sm40558(Core* c);        // 0x80040558 (entity.h)
+void ov_beh_739ac_run(Core* c);  // 0x800739AC (objbeh_739ac.cpp)
+void ov_beh_73cd8_run(Core* c);  // 0x80073CD8 (objbeh_73cd8.cpp)
+void ov_beh_741dc_run(Core* c);  // 0x800741DC (objbeh_741dc.cpp)
+static bool dispatch_native_behavior(Core* c, uint32_t h) {
+  switch (h) {
+    case 0x80040558u: ov_sm40558(c);       return true;
+    case 0x800739ACu: ov_beh_739ac_run(c); return true;
+    case 0x80073CD8u: ov_beh_73cd8_run(c); return true;
+    case 0x800741DCu: ov_beh_741dc_run(c); return true;
+    default: return false;
+  }
+}
+
 static inline void call_handler(Core* c, uint32_t node) {
   uint32_t prev = c->game->fps60.current_object;
   c->game->fps60.current_object = node;
   c->r[4] = node;                                  // $a0
-  rec_dispatch(c, c->mem_r32(node + T2OBJ_HANDLER));
+  uint32_t h = c->mem_r32(node + T2OBJ_HANDLER);
+  // DIAG `behhist`: tally distinct per-object behavior handlers (node+0x1C) so we know the concrete
+  // entity-behavior set to own natively (the bulk of the still-PSX object SYSTEM logic). (later-230)
+  if (cfg_dbg("behhist")) {
+    static uint32_t addr[64]; static long cnt[64]; static int nh=0; static long w=0;
+    int i=0; for(; i<nh; i++) if(addr[i]==h) break;
+    if(i==nh && nh<64){ addr[nh]=h; cnt[nh]=0; nh++; }
+    if(i<64) cnt[i]++;
+    if((++w % 300)==0){ fprintf(stderr,"[behhist] distinct=%d handlers:\n", nh);
+      for(int j=0;j<nh;j++) fprintf(stderr,"   %08X  x%ld\n", addr[j], cnt[j]); }
+  }
+  if (!dispatch_native_behavior(c, h)) rec_dispatch(c, h);   // owned behavior → native; else PSX leaf
   c->game->fps60.current_object = prev;
 }
 

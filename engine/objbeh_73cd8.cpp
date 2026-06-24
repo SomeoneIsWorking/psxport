@@ -220,3 +220,7 @@ void ov_beh_73cd8(Core* c) {
 
 void objbeh_73cd8_register(void) {
 }
+
+// Exported entry — the verify wrapper ov_beh_73cd8 is in the anonymous namespace above (internal linkage);
+// the engine's per-object dispatch (engine_tomba2.cpp call_handler) calls THIS to run the owned behavior.
+void ov_beh_73cd8_run(Core* c) { ov_beh_73cd8(c); }

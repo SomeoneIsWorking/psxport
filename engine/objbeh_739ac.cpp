@@ -169,3 +169,7 @@ void ov_beh_739ac(Core* c) {
 
 void objbeh_739ac_register(void) {
 }
+
+// Exported entry — the verify wrapper ov_beh_739ac is in the anonymous namespace above (internal linkage);
+// the engine's per-object dispatch (engine_tomba2.cpp call_handler) calls THIS to run the owned behavior.
+void ov_beh_739ac_run(Core* c) { ov_beh_739ac(c); }

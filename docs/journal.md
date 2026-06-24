@@ -7931,3 +7931,30 @@ ownership of game's 3D OBJECTS, not sorting layers."
 - TOOLS LEFT IN-TREE: PSXPORT_PRIMAT + PSXPORT_PAINTFG (gpu_native.cpp, cfg_str, documented in gfx-debug.md).
   The temp PSXPORT_SKIPPASS getenv mask + bb_dispatch/SKIPBB bisect scaffolding were REMOVED before this commit
   (raw getenv is banned); re-add a cfg_str-based pass/handler skip if the next session needs to re-bisect.
+
+## later-230 (2026-06-24) — ENTITY-BEHAVIOR ownership: the 4 hottest field behaviors wired LIVE (were written-but-orphaned)
+User directive: own the ENTITY/OBJECT SYSTEM overall (not just its render). Mapped the current state (subagent):
+the entity LIFECYCLE is already ~90% native (pool/free-lists, spawn `ov_entity_spawn` + 5 variants + 2
+dispatchers, despawn `ov_despawn`, placement `ov_place_objects`, the per-frame walk `ov_objwalk`, cull) — all
+0-diff verified earlier. What is STILL PSX is the per-object BEHAVIOR layer: the node+0x1C handlers `ov_objwalk`
+dispatches via rec_dispatch (the AI/state/physics logic = the object system's actual logic).
+- ENUMERATED the live behavior set (new cfg diag `debug behhist` — tallies distinct node+0x1C handlers in
+  engine_tomba2.cpp call_handler): **46 distinct handlers** at the seaside field (a few resident 0x800xxxxx,
+  most overlay 0x801xxxxx). Hottest over 300 walks: 0x80040558 ×4312 (per-object state machine), 0x8012EB54
+  ×3708 (overlay), 0x80124E74 ×2772, 0x80133C14 ×2162, 0x80073CD8 ×1236, 0x800739AC ×618, 0x800741DC ×308…
+- KEY FINDING: four of those (the resident ones) ALREADY had byte-exact native bodies — `ov_sm40558`
+  (0x80040558, entity.cpp), `ov_beh_739ac`/`ov_beh_73cd8`/`ov_beh_741dc` (objbeh_*.cpp) — but were ORPHANED:
+  the three objbeh bodies sat in ANONYMOUS NAMESPACES reachable only via the now-dead `objbeh_*_register()`
+  override-era stubs, so `call_handler` always rec_dispatched the raw guest address. They never ran natively.
+- WIRED them LIVE: added exported `ov_beh_*_run` entries (kept the empty register stubs game_tomba2.cpp still
+  calls) + a `dispatch_native_behavior()` switch in call_handler (engine_tomba2.cpp) that routes those 4 guest
+  addresses to the native bodies; everything else still rec_dispatches. Native-only when the verify channel is
+  off, A/B-vs-recomp when on.
+- VERIFIED byte-exact: `debug sm40558,obj739acverify,obj741dcverify,obj73cd8verify` (set BEFORE the field so
+  the static gate latches ON) → **0 MISMATCH** with thousands of matches across all four (the gates do a full
+  RAM+scratchpad A/B vs rec_super_call each call). `tools/render_cmp.py` unchanged at 5343px/6.96% (identical
+  game state → identical frame). So the hottest entity behaviors now run native with zero behavioral drift.
+- NEXT: own the remaining ~42 behaviors top-down by hotness — start with the overlay hot ones 0x8012EB54,
+  0x80124E74, 0x80133C14 (RE via `tools/disasm_overlay.py` on a fresh `dumpram`; resident via tools/disas.py).
+  Each: RE 1:1, add a verify gate, wire into dispatch_native_behavior, confirm 0-diff. The render-side 2D-band
+  ownership (later-229: 0x8003d0bc/0x8003b588) is a SEPARATE track. New diag: `debug behhist`.
