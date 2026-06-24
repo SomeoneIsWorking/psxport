@@ -29,10 +29,12 @@ cmd count, geomblk of cmd[0]) + `node <addr>` (full node decode).
 
 **1. STAGE.** GAME stage entry `0x8010637C`; a 4-level state machine in task0 (`sm[0x48]` area-mode /
 `sm[0x4a]` sub-mode: 0=intro-cutscene, **1=running field** / `sm[0x4c]` area-machine / `sm[0x4e]` running
-sub-state). See "GAME stage state machine". The **running field is rendered by the INTERPRETED area
-OVERLAY**, not the native `ov_render_frame` — the latter is essentially dormant in the live field (`debug
-rfprobe`: 0–1 calls / 700 frames). later-238's "steady field = ov_field_frame → ov_render_frame" is
-FALSIFIED for the headless free-roam field.
+sub-state). See "GAME stage state machine". In REAL free-roam (reach it with the FIXED `PSXPORT_AUTO_SKIP=1`)
+the native **`ov_render_frame` runs every frame** (`debug rfprobe`: ~once/frame) — it IS the render driver
+(later-238 was right; my earlier "dormant" reading was an artifact of the BROKEN old AUTO_SKIP, which left
+the game in the PAUSED auto-menu where `ov_render_frame` is gated off by `*(0x1F800136) < 2`). BUT
+`ov_render_frame`'s passes mostly `rec_dispatch` the INTERPRETED PSX render, so the actual field geometry is
+built by PSX overlay code (next paragraph) → flat quads.
 
 **2. AREA / ASSET LOAD.** The area-load task `0x800452c0` → `FUN_8004514c` commits the area id to
 `0x800BF870`, pulls the AREA OVERLAY (disc LBA/size from the area table `0x800BE118`, stride 8, indexed by
@@ -82,10 +84,22 @@ render queue as `RQ_WORLD` with D32 depth. **That mechanism was part of the OVER
 PSX again: they emit screen-space GP0 packets with **no view-Z**, so the native gp0 classifier marks them
 **is3d=0 (flat)** and draws them in the 2D-foreground band — painter order, ON TOP of / behind the real-depth
 world. That is exactly the regression: the field's objects + terrain are flattened to depthless quads and
-composite by PSX OT order, so objects land behind terrain/sea. **The fix is to restore native, real-depth
-ownership of the overlay render path — but TOP-DOWN (own the interpreted area-overlay render driver from a
-native caller down to these submitters), NOT by reintroducing the scan-on-load override flip.** This is the
-current render-ownership frontier.
+composite by PSX OT order, so objects land behind terrain/sea.
+
+**The LIVE render path, traced with `PSXPORT_PCTRAP=0xADDR` (+`_SKIP=N`, dumps the guest call chain when the
+interpreter reaches ADDR — later-242):** `ov_render_frame` (native, every frame) → its passes `rec_dispatch`
+the PSX bodies → the per-object geometry render goes `…→0x8003F698→0x80146478` (the OVERLAY GT3/GT4 renderer)
+and the ground/scene entities go `0x8003D0BC→0x801401B8 (entity loop)→0x8013FE58/0x8013FB88 (overlay GT4/GT3
+submitters)`, all INTERPRETED → is3d=0 flat. The native reimplementations DO exist — `submit_perobj_render`
+(0x8003CCA4; every render-case 0x80014EC8 runs base flush 0x8003CDD8 = native `submit_perobj_flush`, then a
+secondary-effect pass 0x8003D584/F344/F3F4/F594) and `ov_field_entity_render` (0x800F2418) — but they are
+**NOT on the live path**: they only fire when the NATIVE render-walk (`ov_render_walk`/rwalks in
+`ov_render_frame`) calls them, and those walk-lists are EMPTY in this field (`RLIST_HEAD==0`), so the
+interpreted PSX render runs instead. Confirmed: `groundnative` (route 0x8003D0BC→`ov_field_entity_render`) and
+routing all `submit_perobj_render` cases through the native flush BOTH leave the field 90.5% flat — they're
+off the live path. **The frontier: make `ov_render_frame`'s rec_dispatched passes call the NATIVE render
+reimpls (per-object dispatch + entity loop + submitters) instead of the PSX bodies — own the render-pass call
+tree TOP-DOWN from `ov_render_frame`, NOT by reintroducing the removed scan-on-load override flip.**
 
 **Init prefix of `ov_game_main` — classified (PLATFORM = native platform owns it / keep dispatched;
 ENGINE = reimplement PC-native):**

@@ -457,6 +457,18 @@ static void interp_flat(Core* c, uint32_t pc, uint32_t stop_ra) {
       }
     }
     g_interp_pc = pc;
+    // PSXPORT_PCTRAP=0xADDR — when the interpreter first reaches ADDR, dump the guest call chain (ra + a
+    // wide stack scan incl. OVERLAY code 0x80100000..0x80200000) so we can find the native->interpreted
+    // handoff for a still-PSX path (e.g. the field render driver). later-242 (RE tool, not behavior).
+    { static uint32_t trap = 0xFFFFFFFFu; static long skipn = 0;
+      if (trap == 0xFFFFFFFFu) { const char* s = cfg_str("PSXPORT_PCTRAP"); trap = s ? (uint32_t)strtoul(s,0,0) : 0;
+        const char* k = cfg_str("PSXPORT_PCTRAP_SKIP"); skipn = k ? strtol(k,0,0) : 0; }
+      if (trap && pc == trap) { static long hit = 0; if (hit++ == skipn) {
+        fprintf(stderr, "[pctrap] reached 0x%08X  ra=0x%08X sp=0x%08X a0=0x%08X\n", pc, c->r[31], c->r[29], c->r[4]);
+        uint32_t sp = c->r[29]; int shown = 0;
+        for (uint32_t a = sp; a < sp + 1024 && shown < 24; a += 4) { uint32_t w = c->mem_r32(a); uint32_t k = w & 0x1FFFFFFF;
+          if (k >= 0x10000 && k < 0x200000 && (w & 3) == 0) { fprintf(stderr, "    [sp+0x%03X] 0x%08X\n", a - sp, w); shown++; } }
+        fflush(stderr); } } }
     // PSXPORT_DEBUG=keyon (oracle, temporary): trace every libsnd voice keyon 0x800939A0
     // (a0=seq|chan<<8, a1=vab id, a2=program, a3=note, sp+16=velocity). Reveals which sequences/
     // instruments/notes actually compose a song — ground truth for the offline snd_render tool.
