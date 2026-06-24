@@ -8383,3 +8383,24 @@ NEXT: own the SOP entity UPDATE FUN_8010a0e0 (positions) + the BG draws FUN_8010
 on 0x800ed018) + Tomba update 0x8007b008 — the rest of ov_sop_field_update's PSX leaves — as the frontier
 advances. The ov_render_frame water-ownership (later-238 ov_rwalk_b588) is dormant in this SOP path; revisit if
 ov_field_frame becomes live. BDTAG attribution harness (ffspan_*, PSXPORT_BDTAG) left in-tree (gated) for reuse.
+
+### later-238 CORRECTION — the FUN_80109fe0 native render is the SOP-INTRO path, NOT steady gameplay (verified)
+Honesty fix to "later-238 LANDED" above (which overstated it as the live field render). VERIFIED with a
+per-path one-shot counter (debug pathdbg, since reverted): at the seaside, **ov_sop_field_mode (the SOP path,
+sm[0x4a]==0, where FUN_80109fe0 / my native ov_field_entity_render lives) fires exactly ONCE — the intro
+frame** — then **ov_field_frame (sm[0x4a]==1, the area-machine path) fires EVERY steady frame** (#1,121,241,
+…,721 over run 250). sm[0x4a] is a stable 1 from ~run 30 on (dumped 30/120/250). So:
+- The STEADY, user-visible gameplay field is rendered by **ov_field_frame → ov_render_frame** (engine_stage.cpp
+  / engine_render.cpp) — STILL PSX (atlas pass 0x80025d98, ground 0x8003d0bc, the rwalks, 0x8003f024/df04).
+  It renders CORRECTLY today because it's all-PSX (PSX OT order). My SOP FUN_80109fe0 ownership is CORRECT code
+  but only exercises the 1-frame SOP intro — keep it (it owns the SOP-area render path, used for SOP intros),
+  but it does NOT own steady gameplay and did NOT change the steady picture.
+- The water ownership (ov_rwalk_b588) DOES live in ov_render_frame → it IS in the steady path (good).
+- Steady-field BDTAG map (the real frontier, run 200): is3d=0 PSX prims built by fieldframe/fieldrun on tp
+  (576,0),(640,0),(704,0),(768,0),(896,0),(960,0),(320,0),(448,256),(512,256),(320,256),(960,256),(384,0).
+  NB there is NO tp(576,256) backdrop in the steady field (that was the SOP intro). The steady field's own
+  sky/backdrop is among these (e.g. op-3e tp(320,256)/(960,0)). RE which when owning them.
+- THE REAL FRONTIER (corrected): own the STEADY field render = ov_render_frame's still-PSX passes natively
+  (engine_render.cpp), top-down, each producing eproj real-depth or RQ_BACKGROUND as appropriate — same method
+  as the SOP path. Start where the BDTAG map shows the heaviest builders. The "decouple the steady gameplay
+  field" goal is this path, not the SOP one.

@@ -925,14 +925,16 @@ void GpuState::gp0_exec(Core* core) {
         // fade/overlay -> must NOT be a backdrop (else it draws UNDER the world); leave it in the HUD
         // (topmost) band so fades composite on top. (Owned backdrops still match via node_is_bg.)
         if (!is3d) bg = node_is_bg(s_cur_node) || (!semi && bg_2d(bx0, by0, bx1, by1));
-        // PSXPORT_BDTAG: attribute the deferred tp(576,256) sky/sea BACKDROP prim to the ov_field_frame call
-        // that BUILT it (ffspan_lookup maps the packet address to the build-time pool span). Logs once per name.
-        if (!is3d && s_tp_x == 576 && s_tp_y == 256 && cfg_str("PSXPORT_BDTAG")) {
-          static int lastf = -1, nlogged = 0;
-          if (s_frame != lastf && nlogged < 50) { lastf = s_frame; nlogged++;
-            const char* t = ffspan_lookup(s_cur_node);
-            fprintf(stderr, "[bdtag] f%d tp(576,256) built by '%s' (node=%08x bbox=(%d,%d)-(%d,%d))\n",
-                    s_frame, t, s_cur_node, bx0, by0, bx1, by1); } }
+        // PSXPORT_BDTAG: attribute a DEFERRED PSX gp0 (is3d=0) prim to the build-time call that produced it
+        // (ffspan_lookup maps the packet addr to a recorded pool span). Maps the remaining PSX render so the
+        // next ownership target is picked by data. Dedups by (builder,tp) and only after the field settles
+        // (s_frame>=120, so transition/load frames don't dominate). Logs each unique (builder,tp) once.
+        if (!is3d && cfg_str("PSXPORT_BDTAG") && s_frame >= 120) {
+          const char* t = ffspan_lookup(s_cur_node);
+          static struct { const char* t; int tx, ty; } seen[64]; static int nseen = 0; int f = 0;
+          for (int i = 0; i < nseen; i++) if (seen[i].t == t && seen[i].tx == s_tp_x && seen[i].ty == s_tp_y) { f = 1; break; }
+          if (!f && nseen < 64) { seen[nseen].t = t; seen[nseen].tx = s_tp_x; seen[nseen].ty = s_tp_y; nseen++;
+            fprintf(stderr, "[bdtag] PSX is3d=0 op=%02x tp=(%d,%d) built by '%s'\n", op, s_tp_x, s_tp_y, t); } }
         // FADE/DIM (#21): a full-screen SEMI prim is a fade/dim overlay, NOT a backdrop. It must cover the
         // WHOLE wide FB (else green field shows in the widescreen margins) but composite ON TOP (HUD band).
         // Tag it so the 2D-X mapping below stretches it to fill while the layer stays topmost.
