@@ -82,14 +82,8 @@ int main(int argc, char** argv) {
   // cdrom:\MAIN.EXE;1 and jumps to MAIN's entry. We run the stub as the real entry (interpreted —
   // it isn't recompiled) and intercept its LoadExec to hand off to the native MAIN boot
   // (native_boot.c, later 33/34). See docs/journal.md "later 34" + [[psxport-scea-boot-stub]].
-  // PSXPORT_DUALCORE: skip the normal single-core boot; run the PSX-vs-native diff harness instead. It
-  // creates its own two Game instances (the global override tables + Beetle backends are already init'd
-  // above), so the primary `game` here is left unused. See dualcore.cpp.
-  if (cfg_on("PSXPORT_DUALCORE")) {
-    void dualcore_run(const char* exe_path);
-    dualcore_run(path);
-    return 0;
-  }
+  // (The old PSXPORT_DUALCORE PSX-vs-native diff harness — dualcore.cpp — was removed with the rest of the
+  // oracle tooling: the engine owns its render/state, there is nothing PSX to diff against. See CLAUDE.md.)
   void native_stub_run(Core*, const char* main_exe_path);
   native_stub_run(c, path);              // stub draws SCEA, then hands off to native MAIN boot
   fprintf(stderr, "[boot] native_stub_run returned\n");
