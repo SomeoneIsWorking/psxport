@@ -7731,3 +7731,27 @@ the `default` case and silently spun (bumped the frame counter, no progress, FAI
   consumer is SOP 0x80102530) and the demo-recording file load; transcribe the a2=1 attract load faithfully.
   Diagnostic added: PSXPORT_DEBUG=demoflag (interp.cpp) logs which demo-flag 0x1f80019a reader PCs execute.
 - Load data freeze: same class (deep-yielder substate, likely s4/load sub-page) — not yet root-caused.
+
+## later-223 — door-enter freeze (X≈14656 seaside house) root-caused; state-3 transition path owned native
+USER bug: walk RIGHT into the X≈14656 treehouse (#DB80 @ 14656,-2636,1676) → screen fades to black, frozen
+(first house works). Repro headless: skip into field, `w 800e7eac 39400000` (tp Tomba X→14656), press right,
+run ~900 — black, frame loop still runs (watchdog won't trip; HUD draws, 3D scene empty). Full chain:
+- Walking right flips the field running sub-machine **sm[0x4c] 2→3** (mid-transition handler). Owned native
+  this session: ov_field_run_x (0x801070b4) / ov_field_frame_x (0x80108be4), wired into ov_game_submode1
+  case 3 (engine_stage.cpp). Behavior identical, now traceable C — no regression (field 98% non-black).
+- Screen-transition sequencer **FUN_80026ad0** (caller 0x80116870, found via new REPL `trace` cmd — it's
+  indirect, not an entity handler, not a static jal) runs ~1×/frame in state 3. Door case sets sm[0x4c]=3 +
+  **bf818(0x800bf818)=2**, then waits at substate 3 for **bf818==3** to reach substate 4 (which sets
+  sm[0x4c]=2 = done). bf818 stays 2 → stuck forever → black. (gate bf80f=0, not the blocker.)
+- **bf818=3 = "destination area READY" handshake**, written only by FUN_80073300 ← FUN_80073328's node[6]
+  state machine (gated on node[6] reaching states @0x800734a0/0x80073518 + bf80f==0 + bf818==6). In the stuck
+  window (trace): FUN_80073300 fires 0×, area-load body 800452C0 0×, FUN_800782F0 0×, trigger behavior
+  FUN_800739AC (owned native objbeh_739ac.cpp; its warp/confirm sub-states are transcribed-but-untested) 0×.
+  Teardown 8001cf2c ran 1×. So the transition is HALF-done: torn down, destination-area LOAD + ready-signal
+  NEVER run → handshake never completes. SAME FAIL-FAST class as the Load Game freeze / later-215c/d (a
+  spawned cooperative load task whose scheduling is orphaned post-override-removal).
+- NEXT: own FUN_800782F0 (area transition the trigger calls) + the door load path native+SYNC (mirror
+  native_transition_area_load); find where the destination-area load is meant to be spawned in state 2
+  (trace a tight window before the 4c→3 flip). Entity lists UNCHANGED across the freeze (NOT objects-cleared).
+  Full detail + addresses: scratch/handoff_door_freeze.md. DEAD END: objid_split.png is the START area, not
+  this house; #DB80 = Tomba's own node handle.
