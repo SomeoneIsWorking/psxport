@@ -907,6 +907,7 @@ void ov_scene_native(Core* c) {
     uint32_t bgstate = c->mem_r8(0x800bf870u);
     if (bgstate == 0) ov_bg_tilemap_native(c, 0x800ed018u);
   }
+  if (cfg_dbg("bgonly")) { c->r[4] = saved; return; }  // PROBE: backdrop only (test if ov_render_frame already drew the world)
   // (a) TERRAIN + per-object world geometry via the native render walks (self-route to ov_terrain etc.).
   ov_rwalk_aux_bf00(c); ov_rwalk_aux_eec0(c); ov_rwalk_b588(c); ov_render_walk_snapshot(c);
   ov_rwalk_aux_bcf4(c); ov_render_walk(c);

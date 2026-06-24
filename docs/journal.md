@@ -1,5 +1,44 @@
 # Debug / progress journal
 
+## later-245 (2026-06-24) — scenenative made FIELD-DEFAULT (invisible-Tomba fixed); RENDER ARCH mapped + the 2D gap
+USER (./run.sh): invisible Tomba (occluded), missing 2D (pickups, attack weapon), atlas judders on camera
+turn at 60fps, cutscene fades missing, some Z-fighting (a pot's red top), and spurious `[miss N] addr
+0x00000002`. "Just fill the gaps."
+- **Invisible Tomba = the gate.** ./run.sh used the DEFAULT path; scenenative was behind a debug flag. Default
+  walks the PSX OT, which re-adds FLAT (is3d=0) duplicates of the world that sort on top → objects look
+  occluded. FIX (pushed): ov_draw_otag routes the FIELD (GAME stage, mem_r32(0x801FE00C)==0x8010637C) through
+  ov_scene_native by default; other stages still PSX-walk; `renderpsx on` forces PSX; `debug scenenative`
+  force-on elsewhere. Title/menu verified unchanged.
+- **RENDER ARCHITECTURE (mapped this session — the key to the 2D gaps):**
+  - `ov_render_frame` (engine_stage.cpp:284, per field frame, BEFORE ov_draw_otag) already NATIVE-draws the
+    OBJECTS (Tomba/door/see-saw/pots/swine) into the render queue (submit_perobj_flush→native_gt3gt4→
+    gpu_draw_world_quad), AND builds the PSX OT (the 2D passes + ground + special-object renderers it
+    rec_dispatches emit OT packets). It does NOT native-draw the terrain/ground.
+  - The render queue persists across both (RenderQueue auto-resets on first push after flush; one rq_flush at
+    end of ov_draw_otag). So `ov_scene_native` RE-walking the same walks DOUBLE-DRAWS the objects (harmless —
+    identical opaque pixels — but wasteful, and would double-blend semis). PROVEN with `debug bgonly` (scene
+    skips walks+entity-lists, only backdrop): objects still render (from ov_render_frame), terrain GONE (sea
+    backdrop shows through) → ov_scene_native is the SOLE terrain/ground renderer (ov_render_walk→ov_terrain +
+    ov_field_entity_render(0x800F2418)).
+  - **THE 2D GAP:** pickups, the attack weapon, cutscene FADES, HUD/dialog are drawn by the still-PSX passes
+    (2D sprite band 0x80025d98 = op-0x65; the fade/transition passes; special per-type renderers reached by
+    rec_dispatch in the walks). They emit ONLY PSX OT packets — never native-drawn — so scenenative (skips the
+    OT walk) drops them. Walking the full OT is NOT the answer: it re-adds the flat is3d=0 object dupes that
+    occlude (verified earlier as scenenativehud: native Tomba covered).
+- **PLAN to fill the 2D gaps (next):** run the specific 2D-content passes (0x80025d98 sprite band; the fade
+  pass) into an ISOLATED OT (swap the OT head *0x800ed8c8+12, run pass, walk only its links, restore) so only
+  genuine 2D (pickups/weapon/fades/HUD) is queued — NOT the flat object dupes. Classify as RQ_OVERLAY/RQ_HUD
+  (engine owns layer). OR port those renderers to native draw. NEEDS on-screen content to verify (no weapon/
+  pickup/fade in the AUTO_SKIP intro free-roam) → user-side eyeball or a save with a weapon equipped.
+- **Z-fighting (pot red top) + 60fps atlas judder on turn:** separate; the pot z-fight is native depth
+  precision/coplanar (need the close-up to repro); the atlas judder is fps60.cpp's RQ_BACKGROUND
+  half-median translation failing on camera ROTATION (tiles wrap → fingerprint mismatch → median oscillates).
+  Both are USER-eyeball-verified (motion/close-up) — can't self-verify headless at 1x/30fps.
+- `[miss] addr 0x00000002`: a jalr/computed-jump to target 2 (a < 0x10000 → falls past the interp window to
+  rec_dispatch_miss). Not reproduced in AUTO_SKIP free-roam at rest or with tap square/circle/triangle/cross;
+  triggered by the user's specific action (likely the attack/weapon renderer derailing). Tie to the weapon 2D
+  port. Add a guest-ra + callring dump when rec_dispatch_miss gets addr<0x10000 to localize.
+
 ## later-244 (2026-06-24) — BACKDROP ported native (sky + parallax hills); decoupled scene now complete at the seaside field
 Finished the Phase-1 decoupled native render gap from later-243: the only black area (sky + distant parallax
 hills) is now drawn natively. ATTRIBUTION (empirical, not the later-243 guess): walked the still-skipped passes
