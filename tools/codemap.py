@@ -27,7 +27,8 @@ USAGE:
 import os, re, sys, glob
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SRC_GLOBS = ["engine/**/*.cpp", "engine/**/*.h", "runtime/recomp/**/*.cpp", "runtime/recomp/**/*.c"]
+SRC_GLOBS = ["engine/**/*.cpp", "engine/**/*.h", "game/**/*.cpp", "game/**/*.h",
+             "runtime/recomp/**/*.cpp", "runtime/recomp/**/*.c"]
 # Native-dispatch ROOTS: symbols native_boot.cpp calls directly (top-down) to enter native code.
 # Everything reachable from these by direct C call is LIVE; the rest is ORPHANED (was override-only).
 ROOTS = {"ov_game_stage_main", "ov_start_bin_stage", "native_task0_bootstrap",

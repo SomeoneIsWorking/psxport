@@ -1,4 +1,4 @@
-// engine/object_init.cpp — PC-native object-pool / control-block init (the boot-time zero/seed cluster) and scheduler-frame helpers.
+// game/world/pool.cpp — PC-native object-pool / control-block init (the boot-time zero/seed cluster) and scheduler-frame helpers.
 
 #include "core.h"
 #include "cfg.h"

@@ -105,5 +105,19 @@ Move existing `engine/*` files into their subsystem folders incrementally, updat
 `run.sh` + `tools/build_port.sh` and include paths in the SAME change; build after each move. Keep the recomp
 fallback (`platform/`) intact. Retire the scenenative/g_ot_2d_only/bgonly/ot2dtest experiments as the native
 render subsystem replaces them.
+
+### Migration status
+- **`game/world/` — the OBJECT subsystem — MIGRATED (2026-06-24).** The PC-native object-CREATION +
+  GRAPHICS-BINDING pipeline (previously orphan grab-bag code in `engine/entity_spawn.cpp` / `object_init.cpp`
+  / `entity.cpp`) now lives in clean sub-subsystem files: `game/world/{spawn,placement,graphics_bind,
+  verify_gate,pool,entity}.cpp` (+ headers, `world_pool.h`). Verbatim relocation — no logic change; builds
+  clean. `graphics_bind.cpp` carries the forward `SceneObject` native scene-data struct (geometry ref +
+  float transform + texture id) the decoupled native renderer will consume. `ov_build_xform` (FUN_80051C8C)
+  stays in `engine/engine_submit.cpp` for now (depends on a submit static; moves with the render subsystem).
+  - **NEXT PASS — wire it LIVE top-down (no overrides):** the native spine already reaches `ov_field_run`
+    (engine/engine_stage.cpp:295); its case-0 dispatches the object init prefix to PSX at line 300
+    (`d0(c,0x80072a78)` = rec_dispatch). Replace that with a direct `ov_place_objects(c)` call (and similarly
+    the owned prefix siblings, e.g. `ov_8007B18C`), one at a time, each verified via its dormant A/B gate
+    (`placeverify`/`spawnverify`/…) which then fires on the live path.
 ```
 ```
