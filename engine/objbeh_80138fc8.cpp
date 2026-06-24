@@ -181,12 +181,13 @@ void beh_80138fc8(Core* c) {
     }
     // else j 0x801392ec
   } else {                                            // ---- 0x801392B0: gate byte == 0 ----
-    if (c->mem_r8(obj + 3) == 2) {                    // 801392B0 lbu v1,3(s0) ; 801392B8 bne v1,2 -> 0x801392e4
-      if (c->mem_r8(0x1F800207u) < 0x1d) {            // 801392C0 lbu v0,0x207(0x1f80) ; 801392C8 sltiu<0x1d ; 801392CC bnez -> 0x801392e4
-        c->r[4] = obj; rec_dispatch(c, 0x8007703Cu);  // 801392D4 jal 0x8007703c (a0=s0)
-      } else {
-        c->r[4] = obj; rec_dispatch(c, 0x8007778Cu);  // 801392E4 jal 0x8007778c (a0=s0) cull
-      }
+    // GOTCHA: branch POLARITY. 801392C8 `sltiu v0,v0,0x1d` => v0=1 when (0x1F800207 < 0x1d);
+    // 801392CC `bnez v0 -> 0x801392e4` => when (val < 0x1d) we TAKE the branch to the cull
+    // FUN_8007778c. FUN_8007703c is reached only on the FALL-THROUGH, i.e. when (val >= 0x1d).
+    // (An earlier version had this inverted, which mis-dispatched the leaf for obj node[3]==2 and
+    //  diverged at node+1 / scratch 0x148.)
+    if (c->mem_r8(obj + 3) == 2 && c->mem_r8(0x1F800207u) >= 0x1d) {  // 801392B0 bne v1,2 ; 801392C0..CC val>=0x1d
+      c->r[4] = obj; rec_dispatch(c, 0x8007703Cu);    // 801392D4 jal 0x8007703c (a0=s0)
     } else {
       c->r[4] = obj; rec_dispatch(c, 0x8007778Cu);    // 801392E4 jal 0x8007778c (a0=s0) cull
     }

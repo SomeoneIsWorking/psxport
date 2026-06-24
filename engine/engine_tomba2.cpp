@@ -44,6 +44,10 @@ void ov_beh_80133c14_run(Core* c); // 0x80133C14 (objbeh_80133c14.cpp — overla
 void ov_beh_80138fc8_run(Core* c); // 0x80138FC8 (objbeh_80138fc8.cpp — overlay)
 void ov_beh_8013259c_run(Core* c); // 0x8013259C (objbeh_8013259c.cpp — overlay)
 void ov_beh_80145230_run(Core* c); // 0x80145230 (objbeh_80145230.cpp — overlay)
+void ov_beh_8012d4ec_run(Core* c); // 0x8012D4EC (objbeh_8012d4ec.cpp — overlay)
+void ov_beh_8012d404_run(Core* c); // 0x8012D404 (objbeh_8012d404.cpp — overlay)
+void ov_beh_801395c0_run(Core* c); // 0x801395C0 (objbeh_801395c0.cpp — overlay)
+void ov_beh_8004c238_run(Core* c); // 0x8004C238 (objbeh_8004c238.cpp — resident)
 static bool dispatch_native_behavior(Core* c, uint32_t h) {
   switch (h) {
     case 0x80040558u: ov_sm40558(c);          return true;
@@ -53,10 +57,14 @@ static bool dispatch_native_behavior(Core* c, uint32_t h) {
     case 0x8012EB54u: ov_beh_8012eb54_run(c); return true;
     case 0x80124E74u: ov_beh_80124e74_run(c); return true;
     case 0x80133C14u: ov_beh_80133c14_run(c); return true;
-    // 0x80138FC8: native body written (objbeh_80138fc8.cpp) but A/B gate shows a divergence at node+1 /
-    // scratch+0x148 in state 1 (later-232b) — NOT wired live until fixed; runs as PSX (rec_dispatch).
+    case 0x80138FC8u: ov_beh_80138fc8_run(c); return true;
     case 0x8013259Cu: ov_beh_8013259c_run(c); return true;
     case 0x80145230u: ov_beh_80145230_run(c); return true;
+    case 0x8012D4ECu: ov_beh_8012d4ec_run(c); return true;
+    case 0x8012D404u: ov_beh_8012d404_run(c); return true;
+    case 0x801395C0u: ov_beh_801395c0_run(c); return true;
+    // 0x8004C238: native body written (objbeh_8004c238.cpp) but A/B gate shows 40 MISMATCH (later-232c) —
+    // NOT wired until fixed; runs as PSX (rec_dispatch).
     default: return false;
   }
 }

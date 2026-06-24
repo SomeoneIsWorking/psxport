@@ -8069,3 +8069,36 @@ owned (later-230's 4 + later-232's 3 + these 2).
   scratch+0x148 in state 1 sub 0 (obj 800efa98). NOT wired (dispatch case commented out; runs PSX). The
   state-1 global-gate front-end (0x800BF816/0x800BF817 → FUN_80077ebc/8007703c/cull) or a node+1 write is
   mis-RE'd. Sent the RE agent a fix request with the exact mismatch. Re-wire once `obj80138fc8verify` is clean.
+
+## later-233 (2026-06-24) — camera ownership status: owned-as-code, blocked on contiguity (selector is indirect-called)
+User asked to own the camera. FINDING: the camera UPDATE is ALREADY reimplemented PC-native and verified —
+engine/engine_camera.cpp owns the per-mode orchestrators ov_cam_orch_e0f0/e228/e3f4 (0x8006e0f0/e228/e3f4)
+calling the 9 owned sub-fns (ov_cam_track_xz/_y, _rotbuild, _dist_solve, _angle_step, _pitch, _y_floor,
+_heading, _lookat) — all 0-diff via `PSXPORT_DEBUG=camverify` (later-173..180). BUT they are ORPHAN (codemap):
+written under the now-removed override model, never wired into the live call tree → the camera currently runs
+PSX each frame.
+- BLOCKER to wiring it live: the camera-mode SELECTOR (picks one orchestrator/frame, ABI a0=cam a1=target) is
+  called INDIRECTLY — grep of generated/shard_3.c/shard_6.c finds NO direct `gen_func_8006E0F0(...)` call site;
+  the orchestrators are reached via a function-pointer/jump table the selector indexes by camera mode. And the
+  selector itself is invoked from the still-PSX per-frame field-update chain (FUN_801092b4 → … per later-224),
+  which is NOT native yet. Unlike the per-object behaviors (wired at the native ov_objwalk call_handler site),
+  there is NO native call site to intercept the camera at — the override table is gone.
+- TO OWN IT LIVE (next): (1) find the selector address — add a one-shot log in rec_dispatch/the indirect-call
+  path when target ∈ {0x8006e0f0,e228,e3f4} to capture the caller `ra`, or find the orchestrator-pointer table
+  in MAIN.EXE (search for the 3 addresses as DATA); (2) own the selector native (it's a small mode dispatch),
+  exporting ov_cam_select_run; (3) walk UP from the selector to the first already-native ancestor and route
+  there — i.e. own the field-update chain down to the camera call, same top-down contiguity rule as everything
+  else. The camera math is DONE; this is purely a wiring/contiguity task. (camverify still gates correctness.)
+
+## later-232c (2026-06-24) — +4 more game-object behaviors owned (13 total); 0x8004C238 has a bug, deferred
+Continues later-232b. Batch of 5 RE'd (parallel subagents); 4 verified byte-exact + wired LIVE, and the
+earlier-deferred 0x80138FC8 was FIXED (inverted cull-branch polarity: state-1 node[3]==2 gate, 0x1F800207<0x1d
+→ FUN_8007778c cull else FUN_8007703c — was backwards) and is now LIVE too:
+- 0x80138FC8 (×1854) engine/objbeh_80138fc8.cpp (FIXED+wired), 0x8012D4EC (×1848) engine/objbeh_8012d4ec.cpp,
+  0x8012D404 (×1232) engine/objbeh_8012d404.cpp, 0x801395C0 (×1232) engine/objbeh_801395c0.cpp.
+All four: `debug obj80138fc8verify,obj8012d4ecverify,obj8012d404verify,obj801395c0verify` → 0 MISMATCH; render
+unchanged 5343px. **13 field behaviors now owned native.**
+- 0x8004C238 (×1232, RESIDENT) engine/objbeh_8004c238.cpp WRITTEN but A/B gate → 40 MISMATCH; NOT wired
+  (dispatch case commented). Sent RE agent a fix request. Re-wire once obj8004c238verify is clean.
+NOTE: running 5 full-RAM A/B gates at once is very slow (each = 2MB snapshot+restore+compare per call) — verify
+in groups of ~4 and exclude any gate that's spamming mismatches.
