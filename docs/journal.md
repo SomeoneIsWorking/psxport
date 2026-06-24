@@ -8131,3 +8131,18 @@ eproj px/py/pz; confirm the cmd+4 header size + GT3/GT4 strides for THIS table (
 header). Then build the native object model + decoupled scene renderer per the architecture above.
 NB the behavior ports (later-230/232/232b/232c, 13 owned) are NOT wasted — they're the content-interface and a
 step toward eventually moving object DATA native — but they are NOT the decoupling deliverable; the renderer is.
+
+## later-232d (2026-06-24) — A/B behavior-verify CAVEAT: false mismatches for overlay-calling handlers
+0x8004C238 (the crane handler) showed 40 A/B mismatches at node+0x29, but RE re-audit vs the recompiler's
+OWN emitted body (generated/shard_0.c gen_func for 0x8004C238) proved the native transcription is BYTE-EXACT
+across all 16 JT-B cases — there is no behavior bug. ROOT CAUSE = a verify-HARNESS artifact: the gate's oracle
+is `rec_super_call` = `rec_interp` (the flat interpreter), which INLINES a `jal` to the overlay sub-fn
+(0x80118B10, the failing case-6 path) via a flat `pc=tgt` jump (interp.cpp ~563-573), whereas the native body
+runs that overlay via `rec_dispatch` in a SEPARATE run context (its own stop_ra sentinel). The two contexts
+handle the overlay's deep jal/jalr (and possible yields — interp.cpp notes rec_interp-via-rec_dispatch "dies
+on a deep yield's longjmp", later-168) differently, and the first divergent byte surfaces as node+0x29. So the
+A/B gate can FALSE-POSITIVE for any owned handler that rec_dispatches an OVERLAY sub-fn. The 13 wired behaviors
+that verified 0-diff are still fine (they didn't mismatch); but a mismatch in such a handler must be confirmed
+against the gen_func emitted body before assuming a transcription bug. 0x8004C238 left UNWIRED (moot under the
+later-234 decoupled-renderer pivot; its native body is correct if ever needed). Fix-if-pursued: own 0x80118B10
+too, or make the verify oracle use rec_dispatch for sub-calls.
