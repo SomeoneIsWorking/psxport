@@ -7755,3 +7755,34 @@ run ~900 — black, frame loop still runs (watchdog won't trip; HUD draws, 3D sc
   (trace a tight window before the 4c→3 flip). Entity lists UNCHANGED across the freeze (NOT objects-cleared).
   Full detail + addresses: scratch/handoff_door_freeze.md. DEAD END: objid_split.png is the START area, not
   this house; #DB80 = Tomba's own node handle.
+
+## later-224 — PC-NATIVE world-coord render module (engine_project) + live field-render chain MAPPED
+USER directive (this session): build a COMPLETELY PC-native renderer, fully decoupled from the PSX, based on
+objects' REAL WORLD COORDINATES — no fallback; put the code in a proper engine module (NOT gte_beetle).
+- **New module `engine/engine_project.{h,cpp}`** — the PC-native object render transform & projection.
+  `eproj_compose_object(cmd)` composes camera × object in FLOAT from the object's real world matrix (cmd+0x18)
+  + world position (cmd+0x2c) + the scene camera (scratch 0x1F8000F8 / 0x10C); `eproj_compose_camera()` does
+  the camera-only case (world-space verts). `eproj_vertex()` is the full RTPT in float — NO gte_op, NO CR0-7
+  read for the picture. `eproj_set/clear/active` + `eproj_vertex_active` drive the submitters; `eproj_active_cr`
+  packs the float xform back to CR0-7 for the 60fps midpoint reproject. Projection consts (OFX/OFY/H) still
+  read from CR24-26 (the camera's frame-constant projection; a future engine camera can own them).
+- **engine_submit converted**: `submit_perobj_flush` (gen_func_8003CDD8) no longer GTE-composes — it builds the
+  float world xform via eproj and calls `native_gt3gt4` directly. NO FALLBACK: the old `native_dispatch` →
+  gen_func_8003F698 per-mode PSX dispatcher is removed; every per-object geomblk is submitted as generic
+  GT3/GT4 through the world-coord projection. The GT3/GT4 native submitters project via `eproj_vertex_active`
+  (the resident byte-packed emitter submit_poly_gt4_bp still uses proj_native_xform/GTE — its upstream compose
+  is still-PSX field code). `fps60_stamp_world_cr` added so 60fps works off the float xform.
+- **KEY DISCOVERY — the foundation is DORMANT at the walkable field; the live render is a DIFFERENT chain.**
+  Instrumented (PSXPORT_DEBUG=eproj / subc) + the REPL `trace`: at the seaside walkable field, submit_perobj_flush
+  and ALL native submitters fire **0×**. The live per-object render is **0x8010810c (ov_field_frame render
+  submit, a jump-table SM) → 0x8003D074 (per-object render, 76×/frame) → 0x8003F698 (per-mode dispatch) →
+  0x8003F6E8 → 0x80146478 (overlay GT3/GT4 caller = ov_gt3gt4_caller, ORPHAN) → the overlay submit twins** —
+  ALL interpreted. The render-walk list 0x800F2624 is EMPTY here (ov_render_walk no-ops). So owning the visible
+  field render means owning THIS chain top-down (0x8010810c down), routing it through native_gt3gt4 + eproj.
+- `ov_field_entity_render` (native 0x80109fe0, the SOP-mode entity loop, world-coord) is written + ready but
+  UNWIRED — the SOP path isn't the walkable field, so it's unverified; own the live chain first.
+- VERIFIED no regression: SOP intro narration + the walkable field both render identically (the new code is
+  built in but dormant). Tooling: PSXPORT_DEBUG=eproj (compose count), subc (submitter counts).
+- NEXT: own the live chain top-down from 0x8010810c → 0x8003D074 → 0x8003F698, set the camera-only/world
+  eproj xform, route geometry through native_gt3gt4. That makes the VISIBLE field render fully PC-native from
+  world coords. RE 0x8010810c (jump-table SM) + 0x8003D074 from the field dump (scratch/bin/field_game_ram.bin).

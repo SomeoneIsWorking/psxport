@@ -312,10 +312,10 @@ void ov_cmdenq_probe(Core* c) {
 // view) instead of OT-submission order. No correlation, no value-matching: the engine that emits the
 // vertex writes the depth for the exact address it stored the SXY to. Off (faithful) by default.
 void proj_set_H(uint16_t h);                     // tell proj_pz_to_ord the projection-plane H (CR26)
-// PC-NATIVE render path (gte_beetle.c / gpu_native.c): project an explicit model vertex through the GTE's
-// composed camera×object transform in FLOAT (no gte_op), and tee a projected quad straight to the VK
-// rasterizer with real per-pixel depth (no GP0 packet, no OT). Same primitives native_terrain.cpp uses.
-typedef struct { int ir1, ir2, ir3, sz, sx, sy; float px, py, pz, vx, vy, vz; int mx, my, mz; } ProjVtx;
+// PC-NATIVE render path. ProjVtx + the per-object world-coord projection live in engine/engine_project.*.
+// proj_native_xform (gte_beetle) is the GTE-composed-transform projection still used by the resident
+// byte-packed GT4 emitter (submit_poly_gt4_bp), whose upstream compose is the still-PSX field code.
+#include "engine_project.h"
 void  proj_native_xform(int vx, int vy, int vz, ProjVtx* out);
 float proj_pz_to_ord(float pz);
 void  gpu_draw_world_quad(Core* c, const float* px, const float* py, const float* depth,
@@ -338,6 +338,7 @@ static inline const float (*shadow_verts(const ProjVtx* p, int nv, int semi, flo
 // midpoint (engine/fps60.cpp). No-op unless g_fps60_on. mv[k] = per-vertex model coords (4th = v2 for tris).
 // (g_fps60_on + fps60_record_billboard_span are declared above, near gpu_obj_depth_add.)
 void  fps60_stamp_world(Core* c, const int16_t mv[4][3], int nv, uint32_t key);
+void  fps60_stamp_world_cr(Core* c, const int16_t mv[4][3], int nv, uint32_t key, const uint32_t cr[11]);
 
 // fps60: 3D-POSITIONED 2D QUAD (billboard) capture. The collectable/flame/decal billboards are guest GP0
 // quads/sprites the per-object renderers emit; they reach the render queue LATER, at the deferred OT walk
@@ -359,7 +360,10 @@ static inline void fps60_stamp(Core* c, const ProjVtx* p, int nv) {
   int16_t mv[4][3];
   for (int k = 0; k < 4; k++) { int s = k < nv ? k : nv - 1;
     mv[k][0] = (int16_t)p[s].mx; mv[k][1] = (int16_t)p[s].my; mv[k][2] = (int16_t)p[s].mz; }
-  fps60_stamp_world(c, mv, nv, c->game->fps60.fps_cur_key);
+  // World-coord native path: capture the composed transform from the active float xform; GTE path (the
+  // resident byte-packed emitter) falls back to reading the live control registers.
+  if (eproj_active()) { uint32_t cr[11]; eproj_active_cr(cr); fps60_stamp_world_cr(c, mv, nv, c->game->fps60.fps_cur_key, cr); }
+  else                  fps60_stamp_world(c, mv, nv, c->game->fps60.fps_cur_key);
 }
 
 // ENGINE-NATIVE directional lighting (user directive 2026-06-21: lighting must be engine-native, NOT a
@@ -424,15 +428,16 @@ static inline void engine_shade_face(const ProjVtx* p, int nv, uint8_t r[4], uin
 // (proj_native_xform, no gte_op) and tee a degenerate quad (v2 repeated) to the VK rasterizer with real
 // per-pixel depth. No GP0 packet, no OT, no guest write.
 static void submit_poly_gt3_native(Core* c) {
+  if (cfg_dbg("subc")) { static long n=0; if(n++%240==0) fprintf(stderr,"[subc] gt3_native %ld\n", n); }
   uint32_t rec = c->r[4], count = c->r[6];
   proj_set_H((uint16_t)gte_read_ctrl(26));
   for (uint32_t i = 0; i < count; i++, rec += 36) {
     uint32_t vz01 = c->mem_r32(rec + 20);
     uint32_t xy0 = c->mem_r32(rec + 16), xy1 = c->mem_r32(rec + 24), xy2 = c->mem_r32(rec + 28);
     ProjVtx p[3];
-    proj_native_xform((int16_t)xy0, (int16_t)(xy0 >> 16), (int16_t)vz01,         &p[0]);
-    proj_native_xform((int16_t)xy1, (int16_t)(xy1 >> 16), (int16_t)(vz01 >> 16), &p[1]);
-    proj_native_xform((int16_t)xy2, (int16_t)(xy2 >> 16), (int16_t)c->mem_r32(rec + 32), &p[2]);
+    eproj_vertex_active((int16_t)xy0, (int16_t)(xy0 >> 16), (int16_t)vz01,         &p[0]);
+    eproj_vertex_active((int16_t)xy1, (int16_t)(xy1 >> 16), (int16_t)(vz01 >> 16), &p[1]);
+    eproj_vertex_active((int16_t)xy2, (int16_t)(xy2 >> 16), (int16_t)c->mem_r32(rec + 32), &p[2]);
     float area = (p[1].px - p[0].px) * (p[2].py - p[0].py) - (p[2].px - p[0].px) * (p[1].py - p[0].py);
     if (area <= 0) continue;                                  // backface
     int xmax = submit_xmax();
@@ -472,6 +477,7 @@ void ov_submit_poly_gt3(Core* c) { submit_poly_gt3_native(c); }
 // reproduced on the native projection so we drop the same prims the engine would. Returns the advanced
 // record pointer (the engine reads it back).
 static void submit_poly_gt4_native(Core* c) {
+  if (cfg_dbg("subc")) { static long n=0; if(n++%240==0) fprintf(stderr,"[subc] gt4_native %ld\n", n); }
   uint32_t rec = c->r[4], count = c->r[6];
   proj_set_H((uint16_t)gte_read_ctrl(26));
   for (uint32_t i = 0; i < count; i++, rec += 44) {
@@ -480,10 +486,10 @@ static void submit_poly_gt4_native(Core* c) {
     uint32_t xy0 = c->mem_r32(rec + 20), xy1 = c->mem_r32(rec + 28),
              xy2 = c->mem_r32(rec + 32), xy3 = c->mem_r32(rec + 40);
     ProjVtx p[4];
-    proj_native_xform((int16_t)xy0, (int16_t)(xy0 >> 16), (int16_t)vz01,          &p[0]);
-    proj_native_xform((int16_t)xy1, (int16_t)(xy1 >> 16), (int16_t)(vz01 >> 16),  &p[1]);
-    proj_native_xform((int16_t)xy2, (int16_t)(xy2 >> 16), (int16_t)vz23,          &p[2]);
-    proj_native_xform((int16_t)xy3, (int16_t)(xy3 >> 16), (int16_t)(vz23 >> 16),  &p[3]);
+    eproj_vertex_active((int16_t)xy0, (int16_t)(xy0 >> 16), (int16_t)vz01,          &p[0]);
+    eproj_vertex_active((int16_t)xy1, (int16_t)(xy1 >> 16), (int16_t)(vz01 >> 16),  &p[1]);
+    eproj_vertex_active((int16_t)xy2, (int16_t)(xy2 >> 16), (int16_t)vz23,          &p[2]);
+    eproj_vertex_active((int16_t)xy3, (int16_t)(xy3 >> 16), (int16_t)(vz23 >> 16),  &p[3]);
     // backface cull on the FRONT triangle's signed screen area (NCLIP: (SX1-SX0)*(SY2-SY0)-(SX2-SX0)*(SY1-SY0)).
     float area = (p[1].px - p[0].px) * (p[2].py - p[0].py) - (p[2].px - p[0].px) * (p[1].py - p[0].py);
     if (area <= 0) continue;                                  // backface (matches MAC0<=0 drop)
@@ -548,6 +554,7 @@ void ov_submit_poly_gt4(Core* c) { submit_poly_gt4_native(c); }
 // bias (a2) is moot with a real depth buffer. CLUT bank (a1) and U offset (a3) ARE applied (texture
 // addressing). Same decode native_terrain.cpp uses; this is its general (any-geomblk) form.
 static void submit_poly_gt4_bp(Core* c) {
+  if (cfg_dbg("subc")) { static long n=0; if(n++%240==0) fprintf(stderr,"[subc] gt4_bp #%ld\n", n); }
   uint32_t rec = c->r[4];
   uint32_t clut_bank = c->r[5];                        // a1: CLUT-Y bank (added <<22 to the uv0|clut word)
   uint32_t uoff = c->r[7] & 0xFF;                      // a3: U-texture offset (mod 256 per U byte)
@@ -648,50 +655,45 @@ static void native_gt3gt4(Core* c, uint32_t geomblk, uint32_t otbase) {
   ov_submit_poly_gt4(c);
 }
 
-// gen_func_8003F698: route geomblk to the per-mode renderer. The generic GT3/GT4 path (forced flag /
-// force-byte / mode≥22 / a table entry that IS gen_func_800803DC) is owned natively; any other mode
-// (a per-scene overlay submitter variant we don't own yet) runs its original per-mode renderer.
-// PSXPORT_DEBUG=pdisp — per-mode dispatch coverage: count native (generic GT3/GT4) vs fallback
-// (unowned overlay-variant) dispatches per present frame, and which mode/target the fallbacks use.
-// Tells us how much of the field's render still flows through interpreted per-mode renderers (the next
-// ownership target). Pure counting, no state change.
-static void pdisp_count(Core* c, int native, uint32_t mode, uint32_t tgt) {
-  static int s_pd = -1; if (s_pd < 0) s_pd = cfg_dbg("pdisp") ? 1 : 0;
-  if (!s_pd) return;
-  static int last_f = -1, nat = 0, fb = 0; static uint32_t fbmode[32] = {0};
-  if (gpu_frame_no(c) != last_f) {
-    if (last_f >= 0) {
-      fprintf(stderr, "[pdisp] f%d native=%d fallback=%d", last_f, nat, fb);
-      for (int m = 0; m < 32; m++) if (fbmode[m]) fprintf(stderr, " m%d=%u", m, fbmode[m]);
-      fprintf(stderr, "\n");
-    }
-    last_f = gpu_frame_no(c); nat = fb = 0; for (int m = 0; m < 32; m++) fbmode[m] = 0;
+// FIELD ENTITY RENDER LOOP — PC-native ownership of the SOP field-overlay entity render 0x80109fe0
+// (sop.cpp:203, "entity render loop"). The field loads the scene CAMERA into the GTE once, then submits
+// each entity's GT3/GT4 geometry whose vertices are already in WORLD space. We own it natively: build the
+// float camera-view transform from world coordinates (eproj_compose_camera) and route every entity through
+// the native GT3/GT4 submitters — projecting in float through that world-coord transform, with real depth.
+// NO gte_op, NO PSX submit library (0x801099b4 / 0x80109c80). This is the path that actually draws the
+// visible field (Tomba, props, terrain props); before this it ran 100% interpreted.
+//
+// Faithful transcription of the loop's addressing (decoded from the overlay disasm):
+//   a0 = entity-list struct: [6] = u8 count, [0xc] = packed-geometry base, [0x10..] = u16 entry offsets.
+//   per entry: cmd = base + idx*4; s0 = *cmd (packed counts); records follow at cmd+4.
+//     GT3 submit(rec = cmd+4, ot, count = s0 & 0xff) -> returns the advanced record ptr = the GT4 base.
+//     GT4 submit(rec = <ret>,  ot, count = (s0 >> 16) & 0xff).
+void ov_field_entity_render(Core* c) {
+  uint32_t es = c->r[4];
+  uint8_t count = c->mem_r8(es + 6);
+  if (count == 0) return;
+  uint32_t otbase = c->mem_r32(OTBASE_PTR);
+  uint32_t base   = c->mem_r32(es + 0xC);
+  EObjXform w; eproj_compose_camera(c, &w); eproj_set_active(&w);
+  uint32_t p = es + 0x10, end = es + 0x10 + (uint32_t)count * 2;
+  for (; p < end; p += 2) {
+    uint32_t cmd = base + (uint32_t)c->mem_r16(p) * 4;
+    uint32_t s0  = c->mem_r32(cmd);
+    c->game->fps60.fps_cur_key = cmd;                                  // fps60: per-entity reproject key
+    c->r[4] = cmd + 4;  c->r[5] = otbase; c->r[6] = s0 & 0xFF;          submit_poly_gt3_native(c);
+    c->r[4] = c->r[2];  c->r[5] = otbase; c->r[6] = (s0 >> 16) & 0xFF;  submit_poly_gt4_native(c);
+    c->game->fps60.fps_cur_key = 0;
   }
-  if (native) nat++; else { fb++; if (mode < 32) fbmode[mode]++; }
+  eproj_clear_active();
 }
 
-// The mode dispatcher gen_func_8003F698 indexes a 22-entry table @0x80015268 by *0x800BF870; the entries
-// are the dispatcher's OWN internal case-label addresses (0x8003F6xx), NOT renderer function pointers —
-// each label then calls the real per-mode renderer. The GENERIC GT3/GT4 path is the label 0x8003F788
-// (modes 3 + 9..0x13, and the force/flag/mode≥22 early-outs all branch here → func_800803DC). So we own
-// the generic path natively (native_gt3gt4) ONLY when it is provably generic; for any other mode we MUST
-// run the real dispatcher gen_func_8003F698 (it owns its internal jump table + the per-mode renderers we
-// haven't lifted) — dispatching to the raw table entry ourselves would jump into the middle of 8003F698
-// and execute garbage (the f434 margin hang, found via gdb on the live process).
-#define DISPATCH_GENERIC 0x8003F788u             // mode-table entry = the generic GT3/GT4 case label
-static void native_dispatch(Core* c, uint32_t geomblk, uint32_t otbase, uint32_t flag) {
-  if (c->mem_r8(MODE_FORCE) != 0 || (flag & 1u)) { pdisp_count(c, 1, 0, 0); native_gt3gt4(c, geomblk, otbase); return; }
-  uint32_t mode = c->mem_r8(MODE_BYTE);
-  if (mode >= 22) { pdisp_count(c, 1, mode, 0); native_gt3gt4(c, geomblk, otbase); return; }
-  uint32_t tgt = c->mem_r32(MODE_TABLE + mode * 4);
-  if (tgt == DISPATCH_GENERIC) { pdisp_count(c, 1, mode, tgt); native_gt3gt4(c, geomblk, otbase); return; }
-  pdisp_count(c, 0, mode, tgt);
-  c->r[4] = geomblk; c->r[5] = otbase; c->r[6] = flag;   // unowned mode — run the REAL dispatcher
-  rec_dispatch(c, 0x8003F698u);
-}
+// The per-object render path is FULLY native (no PSX fallback): submit_perobj_flush composes the float
+// world transform and calls native_gt3gt4 directly. The old gen_func_8003F698 per-mode dispatcher (which
+// ran interpreted per-scene submitter variants for non-generic modes) is no longer consulted — every
+// per-object geomblk is submitted as generic GT3/GT4 through the native, world-coord projection.
 
 static void submit_perobj_flush(Core* c) {
-  uint32_t node = c->r[4], flag = c->r[5];
+  uint32_t node = c->r[4];
   if (c->mem_r8(node + 8) == 0) return;
   if (c->mem_r8(node + 9) == 0) return;
   uint32_t otbase_ptr = c->mem_r32(OTBASE_PTR);              // *0x800ED8C8
@@ -699,54 +701,21 @@ static void submit_perobj_flush(Core* c) {
   while (i < (int)c->mem_r8(node + 8)) {
     uint32_t cmd = c->mem_r32(node + 0xC0 + i * 4);
     uint32_t geomblk = c->mem_r32(cmd + 0x40);
-    if (geomblk == 0) goto next;
-    {  // block-scope the compose locals so `goto next` doesn't cross their initialization (C++)
-    // HOST-MEMORY compose (never writes guest RAM): all intermediates are C locals; the only writes are
-    // to the GTE control/data registers (hardware, not guest RAM). Reads from guest (camera matrix, the
-    // object cmd matrix/translation, the camera translation offset) are fine.
-    // camera rotation (guest scratch 0x1F8000F8, 5 words, READ) → CR0-4
-    gte_write_ctrl(0, c->mem_r32(SCR + 0xF8)); gte_write_ctrl(1, c->mem_r32(SCR + 0xFC));
-    gte_write_ctrl(2, c->mem_r32(SCR + 0x100)); gte_write_ctrl(3, c->mem_r32(SCR + 0x104));
-    gte_write_ctrl(4, c->mem_r32(SCR + 0x108));
-    // compose camera-rotation × object-local matrix, one MVMVA per column (cmd+0x18/+0x1a/+0x1c) → host
-    uint16_t hm[9];   // composed rotation, 3 cols interleaved: hm[col]=row0, hm[3+col]=row1, hm[6+col]=row2
-    for (int col = 0; col < 3; col++) {
-      // object-local matrix is 9 CONTIGUOUS halfwords at cmd+0x18; each column's 3 elements are at
-      // +0,+6,+0xc and the column base advances by a halfword (col*2). The real MIPS (gen_func_8003CDD8)
-      // does `addiu v0, a3, 0x18/0x1a/0x1c; lhu (v0), 6(v0), 0xc(v0)` — aligned loads, stride col*2.
-      // (A col*1 stride reads unaligned/overlapping halfwords for col=1 → garbage matrix → bad transform.)
-      uint32_t cc = cmd + 0x18 + col * 2;
-      gte_write_data(9,  c->mem_r16(cc + 0));
-      gte_write_data(10, c->mem_r16(cc + 6));
-      gte_write_data(11, c->mem_r16(cc + 12));
-      gte_op(c, MVMVA_ROTCOL);
-      hm[col]     = (uint16_t)gte_read_data(9);
-      hm[3 + col] = (uint16_t)gte_read_data(10);
-      hm[6 + col] = (uint16_t)gte_read_data(11);
+    if (geomblk != 0) {
+      // PC-NATIVE: compose the camera × object transform in FLOAT from the object's REAL WORLD coordinates
+      // (its world matrix cmd+0x18 + world position cmd+0x2c, transformed by the scene camera) and make it
+      // the ACTIVE projection. The submitters project every vertex through it — NO gte_op, NO CR0-7.
+      EObjXform w; eproj_compose_object(c, cmd, &w);
+      eproj_set_active(&w);
+      // OT base: node[0xd]&0xf == 4 selects a per-command sub-bucket (cmd[0x3f]*4 offset), else the base.
+      uint32_t otbase = otbase_ptr;
+      if ((c->mem_r8(node + 0xD) & 0xF) == 4)
+        otbase = otbase_ptr + (((int32_t)(int8_t)c->mem_r8(cmd + 0x3F)) << 2);
+      c->game->fps60.fps_cur_key = cmd;                 // fps60: tag this actor's world quads for reprojection
+      native_gt3gt4(c, geomblk, otbase);                // fully-native generic GT3/GT4 submit (no PSX fallback)
+      c->game->fps60.fps_cur_key = 0;
+      eproj_clear_active();
     }
-    // transform the object translation (cmd+0x2c/30/34) by the camera, then add the camera translation
-    gte_write_data(0, (uint32_t)c->mem_r16(cmd + 0x2C) | ((uint32_t)c->mem_r16(cmd + 0x30) << 16));  // VXY0
-    gte_write_data(1, (uint32_t)c->mem_r16(cmd + 0x34));                                            // VZ0
-    gte_op(c, MVMVA_TRANS);
-    uint32_t trx = gte_read_data(25) + c->mem_r32(SCR + 0x10C);
-    uint32_t try_ = gte_read_data(26) + c->mem_r32(SCR + 0x110);
-    uint32_t trz = gte_read_data(27) + c->mem_r32(SCR + 0x114);
-    // load the composed transform from host: rotation → CR0-4 (packed halfwords), translation → CR5-7
-    gte_write_ctrl(0, (uint32_t)hm[0] | ((uint32_t)hm[1] << 16));
-    gte_write_ctrl(1, (uint32_t)hm[2] | ((uint32_t)hm[3] << 16));
-    gte_write_ctrl(2, (uint32_t)hm[4] | ((uint32_t)hm[5] << 16));
-    gte_write_ctrl(3, (uint32_t)hm[6] | ((uint32_t)hm[7] << 16));
-    gte_write_ctrl(4, (uint32_t)hm[8]);
-    gte_write_ctrl(5, trx); gte_write_ctrl(6, try_); gte_write_ctrl(7, trz);
-    // OT base: node[0xd]&0xf == 4 selects a per-command sub-bucket (cmd[0x3f]*4 offset), else the base
-    uint32_t otbase = otbase_ptr;
-    if ((c->mem_r8(node + 0xD) & 0xF) == 4)
-      otbase = otbase_ptr + (((int32_t)(int8_t)c->mem_r8(cmd + 0x3F)) << 2);
-    c->game->fps60.fps_cur_key = cmd;                 // fps60: tag this actor's world quads for reprojection
-    native_dispatch(c, geomblk, otbase, flag);
-    c->game->fps60.fps_cur_key = 0;
-    }
-  next:
     i++;
     if (i >= (int)c->mem_r8(node + 9)) break;
   }

@@ -200,7 +200,10 @@ void ov_sop_field_update(Core* c) {
     }
     d0(c, 0x80075a80u);                                    // per-frame area update
     if (c->mem_r8(0x800bf9b4u) != 5) d1(c, 0x8010bffcu, 0x800ed018u);   // parallax BG draw
-    d1(c, 0x80109fe0u, 0x800f2418u);                       // entity render loop
+    // SOP-mode entity render. The native world-coord version (ov_field_entity_render, engine_submit.cpp)
+    // is ready but UNWIRED — this SOP path isn't exercised by the walkable field (which renders via
+    // 0x8010810c -> 0x8003D074 -> 0x8003F698), so wiring it native is unverified. Own the live chain first.
+    d1(c, 0x80109fe0u, 0x800f2418u);                       // entity render loop (still PSX until the path is verified)
     void ov_render_walk(Core*);                            // engine_submit.cpp — NATIVE 0x8003c048 walk
     ov_render_walk(c);                                     // object render-list walk (PC-native depth + fps60)
     if (c->mem_r8(0x800bf9b4u) != 5) d1(c, 0x8010c26cu, 0x800ed018u);   // BG tile scroller

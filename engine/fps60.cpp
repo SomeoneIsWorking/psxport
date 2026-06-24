@@ -210,18 +210,26 @@ float proj_pz_to_ord(float pz);
 
 // Capture hook: stamp the just-pushed world RqItem with this prim's reprojection inputs. Called by the GTE
 // submitters (engine_submit.cpp) right after gpu_draw_world_quad. No-op unless fps60 is on.
-void fps60_stamp_world(Core* c, const int16_t mv[4][3], int nv, uint32_t key) {
+// Capture with an EXPLICIT composed transform `cr` (cr[0..7] = CR0-7, cr[8..10] = OFX/OFY/H). The native
+// world-coord render path supplies this from its float xform (engine_project eproj_active_cr); the GTE
+// path supplies it from the live control registers (fps60_stamp_world below).
+void fps60_stamp_world_cr(Core* c, const int16_t mv[4][3], int nv, uint32_t key, const uint32_t cr[11]) {
   RenderQueue& q = c->game->rq;
   if (q.consumed || q.n == 0) return;                 // the world quad wasn't actually queued
   RqItem* it = &q.items[q.n - 1];
   if (it->layer != RQ_WORLD) return;
   it->fps_world = 1; it->fps_anchor = 0; it->fps_key = key;   // mesh prim: per-vertex reproject (not anchor-translate)
-  for (int i = 0; i < 8; i++) it->fps_cr[i] = GTE_ReadCR(i);   // composed camera×object transform CR0-7
-  it->fps_cr[8] = GTE_ReadCR(24); it->fps_cr[9] = GTE_ReadCR(25); it->fps_cr[10] = GTE_ReadCR(26); // OFX/OFY/H
+  for (int i = 0; i < 11; i++) it->fps_cr[i] = cr[i];          // composed camera×object transform + OFX/OFY/H
   for (int k = 0; k < 4; k++) { int s = k < nv ? k : nv - 1;
     it->fps_mv[k][0] = mv[s][0]; it->fps_mv[k][1] = mv[s][1]; it->fps_mv[k][2] = mv[s][2]; }
   it->fps_offx = (int16_t)c->game->gpu.s_off_x;       // draw offset baked into xs/ys (reproject reproduces)
   it->fps_offy = (int16_t)c->game->gpu.s_off_y;
+}
+void fps60_stamp_world(Core* c, const int16_t mv[4][3], int nv, uint32_t key) {
+  uint32_t cr[11];
+  for (int i = 0; i < 8; i++) cr[i] = GTE_ReadCR(i);          // composed camera×object transform CR0-7 (GTE path)
+  cr[8] = GTE_ReadCR(24); cr[9] = GTE_ReadCR(25); cr[10] = GTE_ReadCR(26); // OFX/OFY/H
+  fps60_stamp_world_cr(c, mv, nv, key, cr);
 }
 
 // ---- 3D-POSITIONED 2D QUAD (billboard) registry — keyed by OBJECT IDENTITY (node-span) ----------------
