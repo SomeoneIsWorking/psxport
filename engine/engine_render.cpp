@@ -55,6 +55,10 @@ static inline void d1(Core* c, uint32_t fn, uint32_t a0) { c->r[4] = a0; rec_dis
 // ways and diffed (native must match PSX under 1x / 4:3 / 30fps). Set by PSXPORT_RENDER_PSX / REPL
 // `renderpsx on|off`. This is a verification instrument, NOT a shipped behavior toggle.
 extern "C" { int g_render_psx = 0; }
+// DUAL-VIEW: render ONE game state two ways side by side (engine-native left | PSX-recomp right). Set at
+// launch (PSXPORT_DUALVIEW). The second (PSX) render pass is driven by native_step_frame; this flag gates
+// the GPU's two-batch allocation + side-by-side present. (REPL `dualview on|off` mirrors PSXPORT_DUALVIEW.)
+extern "C" { int g_dualview = 0; }
 
 // 0x8003f9a8 — per-frame render orchestrator (11 passes). The render-queue walks (0x8003bf00/eec0/bb50/
 // bcf4) run through their PC-native bodies (engine_submit.cpp), which attach each object's PC-native
@@ -65,11 +69,11 @@ void ov_render_frame(Core* c) {
   if (g_render_psx) { d0(c, 0x8003f9a8u); return; }   // COMPARE: render the field via the PSX recomp path
   ffspan_begin(); d0(c, 0x8004fd30u); ffspan_end("rf_4fd30");
   ffspan_begin(); d0(c, 0x80025d98u); ffspan_end("rf_25d98");   // 2D atlas SPRITE band (op-0x65)
-  ov_rwalk_aux_bf00(c);              // 0x8003bf00
-  ov_rwalk_aux_eec0(c);             // 0x8003eec0
-  ov_rwalk_b588(c);                  // 0x8003b588 — field WATER, NATIVE real-depth (node 0x800E7E80 → submit_perobj_render)
-  ov_render_walk_snapshot(c);        // 0x8003bb50
-  ov_rwalk_aux_bcf4(c);              // 0x8003bcf4
+  ffspan_begin(); ov_rwalk_aux_bf00(c); ffspan_end("rw_bf00");          // 0x8003bf00
+  ffspan_begin(); ov_rwalk_aux_eec0(c); ffspan_end("rw_eec0");          // 0x8003eec0
+  ffspan_begin(); ov_rwalk_b588(c); ffspan_end("rw_b588");              // 0x8003b588 — field WATER, NATIVE real-depth
+  ffspan_begin(); ov_render_walk_snapshot(c); ffspan_end("rw_bb50");    // 0x8003bb50
+  ffspan_begin(); ov_rwalk_aux_bcf4(c); ffspan_end("rw_bcf4");          // 0x8003bcf4
   ov_ground_probe(c);                // DIAG groundprobe: decode the ground scene table (no draw; later-235)
   // DIAG groundnative: route the ground table real-depth via ov_field_entity_render. Decode is CORRECT, but
   // the 2D sea/water backdrop then composites OVER it (later-235 render-ordering blocker) — OFF by default.
@@ -77,7 +81,7 @@ void ov_render_frame(Core* c) {
   else { ffspan_begin(); d1(c, 0x8003d0bcu, 0x800f2418u); ffspan_end("rf_ground"); } // STILL-PSX GROUND (later-229)
   ffspan_begin(); d0(c, 0x8003f024u); ffspan_end("rf_3f024");
   ffspan_begin(); d0(c, 0x8003df04u); ffspan_end("rf_3df04");
-  ov_render_walk(c);                  // 0x8003c048 (native — terrain renders world-coord via ov_terrain)
+  ffspan_begin(); ov_render_walk(c); ffspan_end("rw_c048");   // 0x8003c048 (native — terrain world-coord via ov_terrain)
 }
 
 // 0x8003fa44 — mid-transition render orchestrator twin (reduced pass set, same native walks).

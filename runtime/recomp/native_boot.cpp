@@ -375,6 +375,32 @@ void rec_super_call(Core*, uint32_t);   // interpret the original PSX body (A/B 
 extern "C" void perf_frame_begin(void), perf_mark_pre(void), perf_frame_end(void),
                 perf_phase_begin(int), perf_phase_end(int);
 
+// ---- DUAL-VIEW guest-state snapshots (native | PSX side-by-side render of ONE game state) -------------
+// Two snapshots of guest state (main RAM + scratchpad + GTE regs): "pre" = post-gameplay/pre-render
+// (captured in ov_field_frame by dv_snapshot, before the native render consumes per-frame queues) — the
+// PSX render pass runs from this; "post" = the real post-frame canonical state, restored after the PSX
+// pass so the running game is unaffected by the extra render. See native_step_frame's dual-view block.
+extern "C" int g_dualview;       // defined in engine_render.cpp
+extern "C" { int g_dv_have_pre = 0; }
+static uint8_t  s_dv_pre_ram[0x200000],  s_dv_post_ram[0x200000];
+static uint8_t  s_dv_pre_spad[0x400],    s_dv_post_spad[0x400];
+static uint32_t s_dv_pre_gc[32], s_dv_pre_gd[32], s_dv_post_gc[32], s_dv_post_gd[32];
+static void dv_save(Core* c, uint8_t* ram, uint8_t* spad, uint32_t* gc, uint32_t* gd) {
+  uint32_t gte_read_ctrl(uint32_t), gte_read_data(uint32_t);
+  memcpy(ram, c->ram, 0x200000); memcpy(spad, c->scratch, 0x400);
+  for (int i = 0; i < 32; i++) { gc[i] = gte_read_ctrl(i); gd[i] = gte_read_data(i); }
+}
+static void dv_load(Core* c, const uint8_t* ram, const uint8_t* spad, const uint32_t* gc, const uint32_t* gd) {
+  void gte_write_ctrl(uint32_t,uint32_t), gte_write_data(uint32_t,uint32_t);
+  memcpy(c->ram, ram, 0x200000); memcpy(c->scratch, spad, 0x400);
+  for (int i = 0; i < 32; i++) { gte_write_ctrl(i, gc[i]); gte_write_data(i, gd[i]); }
+}
+// called from ov_field_frame (engine_stage.cpp) right before the native render, when dual-view is on.
+extern "C" void dv_snapshot(Core* c) { if (!g_dualview) return; dv_save(c, s_dv_pre_ram, s_dv_pre_spad, s_dv_pre_gc, s_dv_pre_gd); g_dv_have_pre = 1; }
+extern "C" void dv_capture_post(Core* c) { dv_save(c, s_dv_post_ram, s_dv_post_spad, s_dv_post_gc, s_dv_post_gd); }
+extern "C" void dv_restore_pre (Core* c) { dv_load(c, s_dv_pre_ram,  s_dv_pre_spad,  s_dv_pre_gc,  s_dv_pre_gd ); }
+extern "C" void dv_restore_post(Core* c) { dv_load(c, s_dv_post_ram, s_dv_post_spad, s_dv_post_gc, s_dv_post_gd); }
+
 static void native_step_frame(Core* c, uint32_t f) {
   void hle_deliver_event(Core* c, uint32_t ev_class, uint32_t spec);
   ffspan_reset_frame();   // backdrop-attribution: reset the per-frame builder span table
@@ -445,6 +471,30 @@ static void native_step_frame(Core* c, uint32_t f) {
     // ov_draw_otag, orphaned by the override-table removal) — so the queue filled every frame and never
     // drained, and NOTHING 2D reached the VK renderer (the whole front-end rendered black). a0 = OT head.
     { void ov_draw_otag(Core*); c->r[4] = envp + 0x1ffcu; ov_draw_otag(c); }
+    // ---- DUAL-VIEW second render pass: render the SAME game state via the PSX recomp path into render
+    // target 1 (right panel). The engine render is NOT idempotent (its per-frame queues/OT get consumed),
+    // so the PSX pass must run from the PRE-render state captured in ov_field_frame (dv_snapshot, before
+    // the native render ran), not from the post-native-render state. We then restore the POST-FRAME state
+    // so the canonical game (which includes the post-render per-frame area update) is undisturbed.
+    extern int g_dualview, g_dv_have_pre; extern void gpu_vk_select_target(int);
+    extern void dv_capture_post(Core*), dv_restore_pre(Core*), dv_restore_post(Core*);
+    if (g_dualview && g_dv_have_pre) {
+      void ov_draw_otag(Core*);
+      dv_capture_post(c);            // save the real post-frame canonical state
+      dv_restore_pre(c);             // rewind to the pre-render (post-gameplay) state the PSX pass needs
+      rc2(c, 0x80081458, envp, 0x800);                          // ClearOTagR(ot, 0x800)
+      c->mem_w32(0x800ed8c8, envp);                             // OT base
+      c->mem_w16(0x800e809c, 0);                                // dwell counter
+      c->mem_w32(0x800bf4f4, c->mem_r32(0x800bf544));
+      c->mem_w32(0x800bf544, (0x800bfe68u) & 0xffffff);         // reset packet pool ptr
+      gpu_vk_select_target(1);
+      rec_dispatch(c, 0x8003f9a8u);                             // PSX field render orchestrator (full OT build)
+      rec_dispatch(c, 0x8010810cu);                             // render submit (faithful to ov_field_frame)
+      c->r[4] = envp + 0x1ffcu; ov_draw_otag(c);                // walk PSX OT -> target-1 batch
+      gpu_vk_select_target(0);
+      dv_restore_post(c);            // restore the real canonical state (PSX pass fully undone)
+      g_dv_have_pre = 0;
+    }
   }
   perf_frame_end();   // perf: close the frame (post-tick remainder + full wall time) + emit rolling avg
 }
@@ -1244,6 +1294,11 @@ void native_boot_run(Core* c) {
   { extern int g_render_psx; const char* r = cfg_str("PSXPORT_RENDER_PSX");
     if (r && *r) g_render_psx = (atoi(r) != 0);
     if (g_render_psx) fprintf(stderr, "[native_boot] g_render_psx=1 (field render via PSX recomp path)\n"); }
+  // DUAL-VIEW: render the SAME game state TWICE per frame — engine-native (left) + PSX-recomp (right) — and
+  // composite side by side. Set at launch (PSXPORT_DUALVIEW=1) so the GPU allocates two geometry batches.
+  { extern int g_dualview; const char* r = cfg_str("PSXPORT_DUALVIEW");
+    if (r && *r) g_dualview = (atoi(r) != 0);
+    if (g_dualview) fprintf(stderr, "[native_boot] g_dualview=1 (side-by-side native | PSX render)\n"); }
   { extern int g_perobj_psx; const char* r = cfg_str("PSXPORT_PEROBJ_PSX");   // BISECT: per-object render -> PSX
     if (r && *r) g_perobj_psx = (atoi(r) != 0); }
   // Intro FMVs: the real boot is SCEA (stub) -> Whoopee logo (LOGO.STR) -> opening movie (OP.STR) ->

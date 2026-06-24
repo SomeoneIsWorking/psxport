@@ -35,6 +35,7 @@
 // span table persists across the present (which classifies the prior frame's OT) because it is reset only at
 // the TOP of the next ov_field_frame. `ffspan_lookup(addr)` returns the builder name (latest-span-wins).
 extern int g_pkt_track; extern uint32_t g_pkt_lo, g_pkt_hi;
+extern "C" void dv_snapshot(Core*);   // dual-view: capture pre-render state (native_boot.cpp); no-op unless on
 struct FFSpan { const char* name; uint32_t lo, hi; };
 static FFSpan s_ffspan[40]; static int s_ffspan_n = 0; static int s_bdtag = -1;
 static inline int bdtag_on() { if (s_bdtag < 0) s_bdtag = cfg_str("PSXPORT_BDTAG") ? 1 : 0; return s_bdtag; }
@@ -271,14 +272,19 @@ static void ov_field_frame(Core* c) {
   c->mem_w16(0x1f80017cu, (uint16_t)(c->mem_r16(0x1f80017cu) + 1));   // frame counter
   c->mem_w32(0x800bf878u, c->mem_r32(0x800bf878u) + 1);
   if (c->mem_r8(0x1f800136u) == 0) {            // not paused: full gameplay update
-    d0(c, 0x80059d28u); d0(c, 0x80069b28u); d0(c, 0x80026368u); ov_objwalk(c);        // 0x8007a904 NATIVE
-    d0(c, 0x80025588u); d0(c, 0x8004fe84u); ov_disp_26c88(c); d0(c, 0x80022a80u);     // 0x80026c88 NATIVE
-    d0(c, 0x8006ec44u); d0(c, 0x80050de4u); d0(c, 0x8001cac0u);
+    FFS("ff_59d28", d0(c, 0x80059d28u)); FFS("ff_69b28", d0(c, 0x80069b28u));
+    FFS("ff_26368", d0(c, 0x80026368u)); FFS("ff_objwalk", ov_objwalk(c));            // 0x8007a904 NATIVE
+    FFS("ff_25588", d0(c, 0x80025588u)); FFS("ff_4fe84", d0(c, 0x8004fe84u));
+    FFS("ff_disp26c88", ov_disp_26c88(c)); FFS("ff_22a80", d0(c, 0x80022a80u));       // 0x80026c88 NATIVE
+    FFS("ff_6ec44", d0(c, 0x8006ec44u)); FFS("ff_50de4", d0(c, 0x80050de4u)); FFS("ff_1cac0", d0(c, 0x8001cac0u));
   }
+  // DUAL-VIEW: snapshot the post-gameplay / pre-render state so the side-by-side PSX render pass can run
+  // from it (the native render below consumes per-frame queues, so it is not re-runnable). No-op unless on.
+  dv_snapshot(c);
   if (c->mem_r8(0x1f800136u) < 2) ov_render_frame(c);   // 0x8003f9a8 — NATIVE render orchestrator + walk
-  d0(c, 0x8010810cu);                           // render submit
-  d0(c, 0x80077d8cu);
-  d0(c, 0x80075a80u);                           // per-frame area update
+  FFS("ff_submit810c", d0(c, 0x8010810cu));     // render submit
+  FFS("ff_77d8c", d0(c, 0x80077d8cu));
+  FFS("ff_area75a80", d0(c, 0x80075a80u));      // per-frame area update
 }
 
 // FIELD RUNNING sub-machine 0x80106b98 — native control flow + state bodies (decomp:

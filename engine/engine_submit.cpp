@@ -907,6 +907,23 @@ void ov_bg_render(Core* c) {
 #define RLIST_TABLE  0x80014DB8u
 #define RCASE_PEROBJ 0x8003C0B4u             // jump-table target = the gen_func_8003CCA4 (per-object) case
 #define RCASE_DEFAULT 0x8003C29Cu            // jump-table target = the default case: rec_dispatch(node+24)
+// later-239: type-4 case (jump-table tgt 0x8003C0E8) = `FUN_80039f4c(node)` — a multi-element object
+// renderer (GTE-transforms node+0xC0 elements). It is the ONLY case the steady field uses beyond
+// PEROBJ/DEFAULT, and its presence forced the WHOLE walk to super-call PSX every steady frame (so the
+// native walk never ran in gameplay). Own the case natively (dispatch the leaf, tag its packet span with
+// the node's PC-native world depth) so the steady master walk runs native; the leaf stays guest content.
+#define RCASE_TYPE4   0x8003C0E8u
+#define RFN_TYPE4     0x80039F4Cu
+
+// PSXPORT_BDTAG per-node attribution (later-239): name a node's render route + fn so the deferred gp0
+// OT-walk classifier pins which node in the master walk builds the steady backdrop (sky/terrain quads).
+extern "C" void ffspan_begin(void); extern "C" void ffspan_end(const char*);
+static const char* rw_tag(const char* pfx, uint32_t fn) {
+  static char buf[512][20]; static int bi = 0;       // ring (per-frame names; classify is deferred 1 frame)
+  int i = bi; bi = (bi + 1) & 511;
+  snprintf(buf[i], 20, "%s%05x", pfx, fn & 0xfffffu);
+  return buf[i];
+}
 
 static void submit_render_walk(Core* c) {
   uint32_t head = c->mem_r32(RLIST_HEAD);
@@ -917,6 +934,12 @@ static void submit_render_walk(Core* c) {
     uint8_t t = c->mem_r8(n + 0xB);
     if (t >= 33) continue;                            // renders nothing (recomp skips) — handled
     uint32_t tgt = c->mem_r32(RLIST_TABLE + t * 4);
+    if (cfg_dbg("rwtypes")) { static uint64_t seen=0; if(!(seen&(1ull<<t))){ seen|=(1ull<<t);
+      fprintf(stderr,"[rwtypes] node type=%u tgt=%08X fn(node+24)=%08X\n", t, tgt, c->mem_r32(n+24)); } }
+    // NOTE: type-4 (RCASE_TYPE4) intentionally NOT accepted here — accepting it activates the native
+    // master walk in the steady field, which renders terrain at REAL depth and then OCCLUDES the flat
+    // (is3d=0) objects (Tomba/entities/collectables). Until type-4 + the objects are owned with correct
+    // depth, fall back to the all-PSX walk (flat OT order) so the steady field composites correctly.
     if (tgt != RCASE_PEROBJ && tgt != RCASE_DEFAULT) {
       if (cfg_dbg("rwalk")) { static int w=0; if(!w++) fprintf(stderr,"[rwalk] FALLBACK: node type=%u tgt=%08X -> super-call PSX body\n", t, tgt); }
       rec_super_call(c, 0x8003C048u); return;
@@ -930,7 +953,15 @@ static void submit_render_walk(Core* c) {
       uint8_t t = c->mem_r8(n + 0xB);
       if (t < 33) {
         uint32_t tgt = c->mem_r32(RLIST_TABLE + t * 4);
-        if (tgt == RCASE_PEROBJ) { c->r[4] = n; submit_perobj_render(c); }  // self-tags its world depth
+        if (tgt == RCASE_PEROBJ) { ffspan_begin(); c->r[4] = n; submit_perobj_render(c); ffspan_end(rw_tag("rwP", c->mem_r32(n+24))); }  // self-tags its world depth
+        else if (tgt == RCASE_TYPE4) {     // type-4 multi-element object renderer (FUN_80039f4c) — guest leaf, native depth
+          ffspan_begin();
+          uint32_t slo, shi; PktSpanSession sess;
+          c->r[4] = n; rec_dispatch(c, RFN_TYPE4);
+          if (sess.close(&slo, &shi)) { float od = obj_world_ord(c, n);
+            gpu_obj_depth_add(c, slo, shi, od); fps60_bb_node(c, slo, shi, n); }
+          ffspan_end(rw_tag("rw4", RFN_TYPE4));
+        }
         else {
           // default case: the node's own render fn (node+24) — e.g. a collectable's billboard-quad drawer,
           // or the field TERRAIN renderer (0x8002AB5C). Terrain is owned PC-native (ov_terrain → the float
@@ -938,13 +969,15 @@ static void submit_render_walk(Core* c) {
           // PSX content (rec_dispatch), with its produced span tagged by the object's PC-native world depth.
           void ov_terrain(Core* c);
           uint32_t fn = c->mem_r32(n + 24);
-          if (fn == 0x8002AB5Cu) { c->r[4] = n; ov_terrain(c); }   // PC-native world-coord terrain (self-draws)
-          else if (fn == 0x8013E9D8u) { c->r[4] = n; ov_bg_render(c); }   // PC-native world-coord ground/BG node
+          if (fn == 0x8002AB5Cu) { ffspan_begin(); c->r[4] = n; ov_terrain(c); ffspan_end("rwT_terrain"); }   // PC-native world-coord terrain (self-draws)
+          else if (fn == 0x8013E9D8u) { ffspan_begin(); c->r[4] = n; ov_bg_render(c); ffspan_end("rwB_bg"); }   // PC-native world-coord ground/BG node
           else {
+            ffspan_begin();
             uint32_t slo, shi; PktSpanSession sess;
             c->r[4] = n; rec_dispatch(c, fn);
             if (sess.close(&slo, &shi)) { float od = obj_world_ord(c, n);   // PC-native depth from real world position
               gpu_obj_depth_add(c, slo, shi, od); fps60_bb_node(c, slo, shi, n); }
+            ffspan_end(rw_tag("rwD", fn));
           }
         }
       }

@@ -32,8 +32,10 @@ struct VkRect { int x, y, w, h; };
 struct GpuVkState {
   Game* game = nullptr;   // set by Game(); reached only by frame_via_fb() for s_seen3d (via game->core)
 
-  // M2/M3 batch counters: vertices appended to the opaque-flat / opaque-textured / semi batches this frame
-  int s_tri_n = 0, s_tex_n = 0, s_semi_n = 0;
+  // M2/M3 batch state (counters + the three host vertex buffers + the semi-overlap grouping + the dirty-
+  // VRAM list) moved OUT of GpuVkState into the file-scope GeomBatch s_gb[2] in gpu_vk.cpp, so the renderer
+  // holds TWO independent batches and draws each into its own panel image (dual-view native-vs-PSX
+  // side-by-side, 2026-06-24). The touching methods bind them via BIND_BATCH() — see gpu_vk.cpp.
 
   // Current prim's depth/order (set by the gp0 tee before each draw). s_vd/s_vdn = per-vertex native depth
   // (NULL = fall back to the per-prim OT-order s_cur_ord/s_cur_ordn). ordn = the PSXPORT_SBS native channel.
@@ -48,15 +50,8 @@ struct GpuVkState {
   const float* s_xf = nullptr;
   const float* s_yf = nullptr;
 
-  // OT-order-correct semi grouping: vertex-index boundaries of each non-overlapping group + the current
-  // group's accumulated abs bbox.
-  int s_semi_grp[SEMI_GRP_CAP] = {};
-  int s_semi_grp_n = 0;
-  int s_sg_x0 = 0, s_sg_y0 = 0, s_sg_x1 = 0, s_sg_y1 = 0, s_sg_valid = 0;
-
-  // Dirty VRAM regions written by SW this frame (uploads / copies / fills), mirrored at present.
-  VkRect s_dirty[DIRTY_CAP] = {};
-  int    s_dirty_n = 0;
+  // (semi-overlap grouping s_semi_grp[]/s_sg_* and the dirty-VRAM list s_dirty[] moved into GeomBatch —
+  // see the note above; each render target owns its own.)
 
   // This frame's faithful display origin (for the LIGHT screen map) and the last-presented region
   // (on-demand gpu_vk_shot) + last frame's batched vertex counts (vkstats probe).

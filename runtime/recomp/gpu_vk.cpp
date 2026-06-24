@@ -166,11 +166,44 @@ static void*           s_rb_ptr;
 static VkRenderPass    s_vram_rpass;
 static VkFramebuffer   s_vram_fb;
 static VkPipeline      s_tri_pipe[2];   // [0]=default OT depth, [1]=native depth (SBS_NATIVE spec const)
-static VkBuffer        s_vbuf;        // host-visible vertex batch
-static VkDeviceMemory  s_vbuf_mem;
-static void*           s_vbuf_ptr;
 typedef struct { float x, y, r, g, b, ord, ordn; } TriVtx;
 #define TRI_CAP 196608                // max batched vertices (= 65536 tris)
+
+// ---- OBJECT-ORIENTED RENDER TARGET (dual-view native-vs-PSX, 2026-06-24) ----------------------------
+// The per-frame GEOMETRY BATCH (the three host vertex buffers + their fill counts + the semi-overlap
+// grouping + the dirty-VRAM list) is encapsulated here as a GeomBatch so the renderer can hold TWO
+// independent batches and draw each into its OWN panel image — i.e. render ONE game state TWO ways
+// (engine-native left, PSX-recomp right) and composite them side by side. s_tgt selects which batch the
+// gp0/rq emit path accumulates into; s_ntgt is how many are live this frame. Target 0 is the canonical
+// (always-built) batch; target 1 is built by the second (PSX) render pass — see native_step_frame.
+//
+// Each touching GpuVkState method opens with BIND_BATCH(), which binds local references that SHADOW the
+// historical `s_*` field names onto s_gb[s_tgt].*, so the function bodies stay byte-identical to the
+// single-batch version. (The transient per-prim state — s_vd/s_xf/s_cur_ord, the diag snapshots — stays
+// on GpuVkState: both passes set it fresh per prim, so sharing is correct.)
+struct GeomBatch {
+  VkBuffer vbuf = 0, tvbuf = 0, semibuf = 0;
+  VkDeviceMemory vbuf_mem = 0, tvbuf_mem = 0, semibuf_mem = 0;
+  void *vbuf_ptr = 0, *tvbuf_ptr = 0, *semibuf_ptr = 0;
+  int tri_n = 0, tex_n = 0, semi_n = 0;
+  int semi_grp[SEMI_GRP_CAP] = {}, semi_grp_n = 0;
+  int sg_x0 = 0, sg_y0 = 0, sg_x1 = 0, sg_y1 = 0, sg_valid = 0;
+};
+static GeomBatch s_gb[2];
+// The dirty-VRAM list stays SHARED (not per-target): VRAM is one shared image both panels mirror, so the
+// same CPU-written regions must be uploaded to each panel. Both render passes accumulate into it.
+static VkRect s_dirty[DIRTY_CAP] = {};
+static int    s_dirty_n = 0;
+static int s_tgt = 0;          // which batch the emit path accumulates into (0=native, 1=psx)
+static int s_ntgt = 1;         // live batch count this frame (2 in dual-view)
+extern "C" int g_dualview;     // dual-view side-by-side native-vs-PSX render (native_boot REPL `dualview`)
+#define BIND_BATCH() GeomBatch& _gb = s_gb[s_tgt]; \
+  int& s_tri_n = _gb.tri_n; int& s_tex_n = _gb.tex_n; int& s_semi_n = _gb.semi_n; \
+  VkBuffer& s_vbuf = _gb.vbuf; VkBuffer& s_tvbuf = _gb.tvbuf; VkBuffer& s_semibuf = _gb.semibuf; \
+  void*& s_vbuf_ptr = _gb.vbuf_ptr; void*& s_tvbuf_ptr = _gb.tvbuf_ptr; void*& s_semibuf_ptr = _gb.semibuf_ptr; \
+  int* s_semi_grp = _gb.semi_grp; int& s_semi_grp_n = _gb.semi_grp_n; \
+  int& s_sg_x0 = _gb.sg_x0; int& s_sg_y0 = _gb.sg_y0; int& s_sg_x1 = _gb.sg_x1; int& s_sg_y1 = _gb.sg_y1; int& s_sg_valid = _gb.sg_valid; \
+  (void)_gb
 
 // --- Depth-ordered semi-transparency (preserve OT submission order across the opaque/semi split) ---
 // The VK rasterizer batches opaque then semi into two passes, which loses the back-to-front OT order
@@ -328,12 +361,8 @@ static VkImageView     s_vram_tex_view;
 static int             s_vram_tex_undef;
 static VkDescriptorSet s_dset_tex;    // binding0 = s_vram_tex
 static VkPipeline      s_tritex_pipe[2];   // [0]=default OT depth, [1]=native depth
-static VkBuffer        s_tvbuf;
-static VkDeviceMemory  s_tvbuf_mem;
-static void*           s_tvbuf_ptr;
-static VkBuffer        s_semibuf;     // SEMI-transparent prims (drawn after opaque, sampling the framebuffer)
-static VkDeviceMemory  s_semibuf_mem;
-static void*           s_semibuf_ptr;
+// s_tvbuf / s_semibuf (textured-opaque + semi vertex batches) moved into GeomBatch (see s_gb above) so
+// each render target owns its own batch for the dual-view side-by-side. Bound via BIND_BATCH().
 // OT-order-correct semi blending: VK draws all semi prims in one pass sampling ONE pre-semi snapshot,
 // so OVERLAPPING semi prims don't accumulate (each blends against the same scene; the later one
 // overwrites) — unlike the sequential PSX/SW rasterizer. That broke stacked full-screen subtractive
@@ -343,6 +372,7 @@ static void*           s_semibuf_ptr;
 // Called once per SEMI prim (before its triangles are appended) with the prim's ABSOLUTE bbox. Starts a
 // new group whenever the prim overlaps the current group's accumulated bbox.
 void GpuVkState::semi_group(int x0, int y0, int x1, int y1) {
+  BIND_BATCH();
   if (!s_sg_valid) { s_sg_x0=x0; s_sg_y0=y0; s_sg_x1=x1; s_sg_y1=y1; s_sg_valid=1; return; }
   int overlap = (x0 < s_sg_x1 && s_sg_x0 < x1 && y0 < s_sg_y1 && s_sg_y0 < y1);  // strict (touching edges OK)
   if (overlap) {
@@ -362,7 +392,7 @@ void GpuVkState::stats(int* tri, int* tex, int* semi) {
   if (tri) *tri = s_dbg_tri; if (tex) *tex = s_dbg_tex; if (semi) *semi = s_dbg_semi;
 }
 void GpuVkState::dirty(int x, int y, int w, int h) {
-  if (s_dirty_n >= DIRTY_CAP || w <= 0 || h <= 0) return;
+  if (s_dirty_n >= DIRTY_CAP || w <= 0 || h <= 0) return;   // s_dirty is the SHARED file-scope list
   if (x < 0) { w += x; x = 0; } if (y < 0) { h += y; y = 0; }
   if (x + w > VRAM_W) w = VRAM_W - x; if (y + h > VRAM_H) h = VRAM_H - y;
   if (w <= 0 || h <= 0) return;
@@ -562,6 +592,7 @@ static void recreate_swapchain(void) {
 
 static void init_vk(void) {
   s_inited = 1;
+  s_ntgt = g_dualview ? 2 : 1;   // dual-view: allocate + draw two geometry batches (native | PSX)
   mods_init();   // seed the live mod state from cfg before any ssao_on()/ui_infra() decision below
   // instance extensions: SDL surface exts (+ portability enumeration if the loader has it). Headless
   // (offscreen) needs no window/surface extensions at all.
@@ -976,6 +1007,7 @@ void GpuVkState::panel_upload(Panel* p) {
 // uploaded) and leaves in SHADER_READ_ONLY (ready to sample). The texture/blend snapshot (s_vram_tex)
 // is shared scratch, serialized by its layout barriers.
 void GpuVkState::panel_render(Panel* p) {
+  BIND_BATCH();   // draw THIS panel's own geometry batch (s_tgt set by the present loop)
   VkImage tgt = p->color, depth = p->depth; VkFramebuffer fb = p->fb; int native = p->native;
   VkRenderPassBeginInfo grp = { VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
   grp.renderPass = s_vram_rpass; grp.framebuffer = fb; grp.renderArea.extent = (VkExtent2D){ VRAM_W, IMG_H };
@@ -1503,12 +1535,17 @@ void GpuVkState::present(const uint16_t* src, int sx, int sy, int w, int h) {
   if (vp && s_tspool) { vkCmdResetQueryPool(s_cmd, s_tspool, 0, 2);
                         vkCmdWriteTimestamp(s_cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, s_tspool, 0); }
 
-  // The Panel uploads its persistent VRAM then renders (own depth occlusion). Single PC-native panel.
-  s_npanels = 1;
-  s_dbg_tri = s_tri_n; s_dbg_tex = s_tex_n; s_dbg_semi = s_semi_n;   // snapshot for gpu_vk_stats (vkstats probe)
-  if (vp) { s_vp_tri += s_tri_n; s_vp_tex += s_tex_n; s_vp_semi += s_semi_n; }
+  // Each Panel uploads its persistent VRAM then renders its OWN geometry batch (own depth occlusion).
+  // Dual-view: panel 0 = canonical (native) batch s_gb[0], panel 1 = PSX batch s_gb[1], side by side.
+  s_npanels = s_ntgt;
+  if (g_dualview) { static int n=0; if (n++ < 3 || (n%120)==0)
+    fprintf(stderr, "[dualview] present batches: P0(native) tri=%d tex=%d semi=%d | P1(psx) tri=%d tex=%d semi=%d\n",
+            s_gb[0].tri_n, s_gb[0].tex_n, s_gb[0].semi_n, s_gb[1].tri_n, s_gb[1].tex_n, s_gb[1].semi_n); }
+  s_dbg_tri = s_gb[0].tri_n; s_dbg_tex = s_gb[0].tex_n; s_dbg_semi = s_gb[0].semi_n;   // vkstats probe (canonical)
+  if (vp) { s_vp_tri += s_gb[0].tri_n; s_vp_tex += s_gb[0].tex_n; s_vp_semi += s_gb[0].semi_n; }
   double t_rec = vp ? now_ms() : 0;
-  for (int i = 0; i < s_npanels; i++) { panel_upload(&s_panels[i]); panel_render(&s_panels[i]); }
+  for (int i = 0; i < s_npanels; i++) { s_tgt = i; panel_upload(&s_panels[i]); panel_render(&s_panels[i]); }
+  s_tgt = 0;   // restore default accumulation target
   if (vp) s_vp_record_ms += now_ms() - t_rec;
 
   // Headless (offscreen): the frame is fully rendered into s_tex; there is no swapchain to present to.
@@ -1551,7 +1588,7 @@ void GpuVkState::present(const uint16_t* src, int sx, int sy, int w, int h) {
   else if (s_wide)                  { aw = wide_native_w(); ah = 240; }   // 16:9 -> 428:240, 21:9 -> 560:240
   else                              { aw = 4; ah = 3; }
   int ow = s_extent.width, oh = s_extent.height;
-  int npanes = 1;
+  int npanes = s_ntgt;   // dual-view: two side-by-side panes (panel 0 native | panel 1 PSX)
   VkRect2D sc = { {0, 0}, s_extent };
   vkCmdSetScissor(s_cmd, 0, 1, &sc);
   vkCmdBindPipeline(s_cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, s_pipe);
@@ -1746,7 +1783,10 @@ void create_tri_pipeline(void) {
   st[0].pSpecializationInfo = 0;
   vkDestroyShaderModule(s_dev, vs, 0); vkDestroyShaderModule(s_dev, fs, 0);
 
-  make_hostbuf(sizeof(TriVtx) * TRI_CAP, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, &s_vbuf, &s_vbuf_mem, &s_vbuf_ptr);
+  // Allocate the flat-triangle vertex buffer for each live render target (2 in dual-view).
+  for (int t = 0; t < s_ntgt; t++)
+    make_hostbuf(sizeof(TriVtx) * TRI_CAP, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                 &s_gb[t].vbuf, &s_gb[t].vbuf_mem, &s_gb[t].vbuf_ptr);
   make_hostbuf((VkDeviceSize)VRAM_W * IMG_H * 2, VK_BUFFER_USAGE_TRANSFER_DST_BIT, &s_rb, &s_rb_mem, &s_rb_ptr);
 
   // textured pipeline (TexVtx input, samples the VRAM snapshot, renders to the VRAM render pass)
@@ -1797,13 +1837,17 @@ void create_tri_pipeline(void) {
     gp.pColorBlendState = &cb; gp.pDynamicState = &ds; }   // restore for the next iteration's opaque create
   tst[0].pSpecializationInfo = 0; tst[1].pSpecializationInfo = 0;
   vkDestroyShaderModule(s_dev, tvs, 0); vkDestroyShaderModule(s_dev, tfs, 0);
-  make_hostbuf(sizeof(TexVtx) * TEX_CAP, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, &s_tvbuf, &s_tvbuf_mem, &s_tvbuf_ptr);
-  make_hostbuf(sizeof(TexVtx) * TEX_CAP, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, &s_semibuf, &s_semibuf_mem, &s_semibuf_ptr);
+  // Textured-opaque + semi vertex buffers, per live render target (2 in dual-view).
+  for (int t = 0; t < s_ntgt; t++) {
+    make_hostbuf(sizeof(TexVtx) * TEX_CAP, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, &s_gb[t].tvbuf, &s_gb[t].tvbuf_mem, &s_gb[t].tvbuf_ptr);
+    make_hostbuf(sizeof(TexVtx) * TEX_CAP, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, &s_gb[t].semibuf, &s_gb[t].semibuf_mem, &s_gb[t].semibuf_ptr);
+  }
 }
 
 // Append one triangle (VRAM coords + per-vertex RGB 0..255) to the batch.
 void GpuVkState::draw_tri(int x0,int y0,int r0,int g0,int b0, int x1,int y1,int r1,int g1,int b1,
                      int x2,int y2,int r2,int g2,int b2) {
+  BIND_BATCH();
   if (!s_inited || s_tri_n + 3 > TRI_CAP) return;
   TriVtx* v = (TriVtx*)s_vbuf_ptr + s_tri_n;
   v[0] = (TriVtx){ (float)x0, (float)y0, r0/255.f, g0/255.f, b0/255.f, s_vd ? ord3d(s_vd[0]) : s_cur_ord, s_vdn ? ord3d(s_vdn[0]) : s_cur_ordn };
@@ -1839,6 +1883,7 @@ void GpuVkState::draw_tritri(const int* xs, const int* ys, const int* us, const 
                         int tpx, int tpy, int mode, int raw, int clutx, int cluty,
                         int twmx, int twmy, int twox, int twoy,
                         int dax0, int day0, int dax1, int day1) {
+  BIND_BATCH();
   if (!s_inited || s_tex_n + 3 > TEX_CAP) return;
   tex_emit((TexVtx*)s_tvbuf_ptr + s_tex_n, xs, ys, us, vs, rs, gs, bs, tpx, tpy, mode, raw, clutx, cluty,
            twmx, twmy, twox, twoy, dax0, day0, dax1, day1, 0, 0);
@@ -1851,6 +1896,7 @@ void GpuVkState::draw_semi(const int* xs, const int* ys, const int* us, const in
                       int tpx, int tpy, int mode, int raw, int clutx, int cluty,
                       int twmx, int twmy, int twox, int twoy,
                       int dax0, int day0, int dax1, int day1, int blend) {
+  BIND_BATCH();
   if (!s_inited || s_semi_n + 3 > TEX_CAP) return;
   tex_emit((TexVtx*)s_semibuf_ptr + s_semi_n, xs, ys, us, vs, rs, gs, bs, tpx, tpy, mode, raw, clutx, cluty,
            twmx, twmy, twox, twoy, dax0, day0, dax1, day1, 1, blend);
@@ -1859,6 +1905,7 @@ void GpuVkState::draw_semi(const int* xs, const int* ys, const int* us, const in
 
 // Self-test: clear VRAM, draw batched tris into it, read back. Returns the readback (uint16 VRAM).
 void GpuVkState::tri_render_and_readback(uint16_t* out) {
+  BIND_BATCH();
   VKC(vkWaitForFences(s_dev, 1, &s_fence, VK_TRUE, UINT64_MAX));
   VKC(vkResetFences(s_dev, 1, &s_fence));
   VKC(vkResetCommandBuffer(s_cmd, 0));
@@ -1922,6 +1969,7 @@ static void img_barrier_on(VkImage im, VkImageLayout from, VkImageLayout to, VkP
 // Textured prims sample a SNAPSHOT of `bg` (s_vram_tex) — same textures SW used — so where VK's
 // rasterization/sampling matches SW, out==bg; mismatches reveal rule deltas. Avoids render/sample loop.
 void GpuVkState::tri_over_bg_readback(const uint16_t* bg, uint16_t* out) {
+  BIND_BATCH();
   memcpy(s_stage_ptr, bg, (size_t)VRAM_W * VRAM_H * 2);
   VKC(vkWaitForFences(s_dev, 1, &s_fence, VK_TRUE, UINT64_MAX));
   VKC(vkResetFences(s_dev, 1, &s_fence));
@@ -2011,6 +2059,30 @@ static void vk_dump_to(const char* path, int sx, int sy, int w, int h) {
     fwrite(c, 1, 3, f); }
   fclose(f);
 }
+// DUAL-VIEW: dump panel 0 (native) | panel 1 (PSX) side by side into one 2w×h PPM, with a 2px divider.
+// Reads both VK images back (s_tex then s_tex_b) into the shared readback buffer in turn.
+static void vk_dump_dual(const char* path, int sx, int sy, int w, int h) {
+  static uint16_t left[VRAM_W * IMG_H];   // hold panel 0 while panel 1 is read back into s_rb_ptr
+  s_rb_img = 0;      vk_readback_to_rb(); memcpy(left, s_rb_ptr, sizeof left);
+  s_rb_img = s_tex_b; vk_readback_to_rb(); s_rb_img = 0;
+  const uint16_t* R = (const uint16_t*)s_rb_ptr;
+  FILE* f = fopen(path, "wb"); if (!f) return;
+  const int gap = 2, W = w * 2 + gap;
+  fprintf(f, "P6\n%d %d\n255\n", W, h);
+  for (int y = 0; y < h; y++) for (int x = 0; x < W; x++) {
+    unsigned char c[3] = {0,0,0};
+    if (x < w) {                               // left = panel 0 (native)
+      uint16_t p = left[((sy+y)%IMG_H)*VRAM_W + ((sx+x)&1023)];
+      c[0]=(p&31)<<3; c[1]=((p>>5)&31)<<3; c[2]=((p>>10)&31)<<3;
+    } else if (x >= w + gap) {                 // right = panel 1 (PSX)
+      int rx = x - w - gap;
+      uint16_t p = R[((sy+y)%IMG_H)*VRAM_W + ((sx+rx)&1023)];
+      c[0]=(p&31)<<3; c[1]=((p>>5)&31)<<3; c[2]=((p>>10)&31)<<3;
+    }                                          // [w, w+gap) = black divider
+    fwrite(c, 1, 3, f);
+  }
+  fclose(f);
+}
 // On-demand VK readback of an EXPLICIT VRAM region (the gpu_native display region) — used by the REPL
 // `shot` command, which runs headless where s_last_* (the windowed-present region) is never set.
 void gpu_vk_shot_region(Core* core, const char* path, int sx, int sy, int w, int h) {
@@ -2018,6 +2090,9 @@ void gpu_vk_shot_region(Core* core, const char* path, int sx, int sy, int w, int
   // Under hi-res/wide the present samples the scaled scratch FB (rows >=FB_Y0), NOT the display region —
   // capture THAT so the shot matches what's on screen (else hi-res/wide shots show the empty 4:3 region).
   if (core->game->gpu_vk.frame_via_fb()) { sx = 0; sy = FB_Y0; w = FBW(); h = FBH(); }
+  extern int g_dualview;
+  if (g_dualview) { vk_dump_dual(path, sx, sy, w, h);
+    fprintf(stderr, "[vk_shot] wrote %s (DUAL %dx%d: native | PSX)\n", path, w*2+2, h); return; }
   vk_dump_to(path, sx, sy, w, h);
   fprintf(stderr, "[vk_shot] wrote %s (%dx%d @ %d,%d)\n", path, w, h, sx, sy);
 }
@@ -2056,9 +2131,11 @@ void gpu_vk_vram_raw(const char* path) {
 // view-space sh_v* at B positions, so both passes cast the same shadow.)
 void GpuVkState::frame_end(const uint16_t* svram, int frame) {
   (void)svram; (void)frame;
-  if (!gpu_vk_enabled() || !s_inited) { s_tri_n = 0; s_shadow_n = 0; return; }
-  s_tri_n = 0; s_tex_n = 0; s_semi_n = 0; s_dirty_n = 0;
-  s_semi_grp_n = 0; s_sg_valid = 0;
+  // reset EVERY render target's batch (both panels in dual-view), not just the current one.
+  for (int t = 0; t < 2; t++) { GeomBatch& b = s_gb[t];
+    b.tri_n = 0; b.tex_n = 0; b.semi_n = 0; b.semi_grp_n = 0; b.sg_valid = 0; }
+  s_dirty_n = 0;   // shared dirty-VRAM list
+  if (!gpu_vk_enabled() || !s_inited) { s_shadow_n = 0; return; }
   s_shadow_n = 0; s_shadow_lvp_valid = 0;   // per-pass host geometry stream (refilled by the next queue emit)
 }
 
@@ -2067,6 +2144,7 @@ void GpuVkState::frame_end(const uint16_t* svram, int frame) {
 void GpuVkState::tritest() {
   if (!cfg_on("PSXPORT_VK_TRITEST")) return;
   if (!s_inited) init_vk();
+  BIND_BATCH();
   s_tri_n = 0;
   draw_tri( 10,10, 255,0,0,  200,10, 255,0,0,  10,200, 255,0,0);    // flat red, big right-triangle
   draw_tri(300,300, 255,0,0, 460,300, 0,255,0, 300,460, 0,0,255);   // gouraud r/g/b corners
@@ -2323,6 +2401,10 @@ void gpu_vk_draw_semi(Core* core, const int* xs, const int* ys, const int* us, c
 void gpu_vk_shot(Core* core, const char* path) { core->game->gpu_vk.shot(path); }
 void gpu_vk_frame_end(Core* core, const uint16_t* svram, int frame) { core->game->gpu_vk.frame_end(svram, frame); }
 void gpu_vk_tritest(Core* core) { core->game->gpu_vk.tritest(); }
+// Dual-view: select which geometry batch the emit path accumulates into (0=native/left, 1=PSX/right).
+// The dual-render driver (native_step_frame) sets target 1 around the second (PSX) render pass.
+void gpu_vk_select_target(int t) { s_tgt = (t && s_ntgt > 1) ? 1 : 0; }
+int  gpu_vk_target_count(int t) { return s_gb[t&1].tri_n + s_gb[t&1].tex_n + s_gb[t&1].semi_n; }
 #else
 #include <stdint.h>
 int  gpu_vk_enabled(void) { return 0; }
@@ -2332,6 +2414,7 @@ void gpu_vk_present(Core* core, const uint16_t* src, int sx, int sy, int w, int 
 void gpu_vk_present_image(Core* core, const uint8_t* rgba, int iw, int ih, float fade) { (void)core;(void)rgba;(void)iw;(void)ih;(void)fade; }
 void gpu_vk_tritest(Core* core) { (void)core; }
 void gpu_vk_frame_end(Core* core, const uint16_t* svram, int frame) { (void)core;(void)svram; (void)frame; }
+void gpu_vk_select_target(int t) { (void)t; }
 void gpu_vk_shot(Core* core, const char* path) { (void)core;(void)path; }
 void gpu_vk_set_order(Core* core, unsigned idx) { (void)core;(void)idx; }
 void gpu_vk_set_order_2d(Core* core, unsigned idx) { (void)core;(void)idx; }
