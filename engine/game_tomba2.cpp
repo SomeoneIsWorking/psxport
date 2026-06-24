@@ -222,6 +222,13 @@ void ov_draw_otag(Core* c) {   // called directly from native_step_frame (PC-dri
   } else {
     gpu_dma2_linked_list(c, c->r[4]);
   }
+  // ADDITIVE native render subsystem (game/render/) — the decoupled "native experience" pass. Fully
+  // separate from the PSX path above: it builds the frame from native SCENE DATA (entity lists + camera)
+  // with float transforms and real depth (NO OT/GP0/GTE). Gated behind the `rendernative` DIAGNOSTIC
+  // channel (NOT an A/B behavior flag) so we can inspect it before it becomes the default; when off, the
+  // pass is never invoked and the PSX-vanilla path is the only renderer. Emitted before rq_flush so its
+  // world quads drain with this frame.
+  if (cfg_dbg("rendernative")) { void render_scene_native(Core*); render_scene_native(c); }
   rq_flush(c);
 }
 

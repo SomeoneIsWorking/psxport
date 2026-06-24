@@ -93,7 +93,20 @@ same parse. Capture inputs via REPL: `ents` (model/geomblk addrs), `dumpram <f>`
   reference (tools/disas.py / mdis.py) + memory ([[object-pipeline-and-depth-regression]] geomblk,
   [[tomba2-native-display-list]], the tilemap atlas in later-244). Cache decomps in scratch/decomp/assets/.
 
-### 2) RENDER subsystem (`game/render/`) — build AFTER assets, ON TOP of native assets.
+### 2) RENDER subsystem (`game/render/`) — FOUNDATION STARTED (2026-06-24), decoupled native path.
+First cut of the decoupled NATIVE render path (NO GTE / NO OT / NO GP0). Tree: `game/render/scene/`
+(`scene_data.h` = `SceneObject`/`SceneCamera`/`RenderScene`; `scene_build.cpp` `render_scene_collect` walks
+the 3 entity lists, selects 3D-mesh nodes, builds float model→view from node euler+pos+scale + the
+scratchpad camera) + `game/render/mesh/` (`mesh_draw.cpp` parses the geomblk GT3/GT4 records, transforms
+verts in FLOAT, projects, draws textured tris/quads via the engine's real-depth `gpu_draw_world_quad`) +
+`render_native.cpp` (`render_scene_native`). Invoked additively in `ov_draw_otag` behind the `rendernative`
+DIAGNOSTIC channel (default-off — the PSX-vanilla path is untouched and remains the default). Produces real
+geometry live (seaside: ~47 objects / ~425 prims/frame). KNOWN first-cut limits (follow-ups): flat
+unmodulated vertex color, VRAM-sampled textures (native RGBA cache is the asset step), opaque-only, and
+static props that store orientation in cmd+0x18 (not node euler) may be axis-aligned until euler-vs-matrix
+is reconciled. Render correctness is USER-eyeballed, not self-verified.
+
+### 2b) RENDER subsystem (`game/render/`) — build AFTER assets, ON TOP of native assets.
 Field renders ENTIRELY from scene data + native assets — no recomp render, no OT walk, no GP0 emit/tag, no
 flags. Reference pipeline = MAIN.EXE 0x8003f9a8 (orchestrator) → render walks → per-type drawers → 2D sprite
 band (0x80025d98) → backdrop (0x8003df04→tilemap 0x80115598) → fades. Decompile each, map the scene-data
