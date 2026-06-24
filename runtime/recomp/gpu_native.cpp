@@ -688,6 +688,9 @@ static void rq_emit_or_queue(Core* core, int capture, int layer, int order_mode,
 // sv (optional, NULL = no shadow): the prim's 4 VIEW-SPACE verts (x=vx, y=vy, z=pz) for the shadow map.
 // When non-NULL and opaque, the queued item carries them and gpu_emit_rq_item re-pushes them as two tris
 // to the shadow VBO on every emit (= on both 60fps present passes — see render_queue.h sh_cast).
+extern "C" const char* ffspan_lookup(uint32_t);   // engine_stage.cpp — PSXPORT_BDTAG builder attribution
+extern "C" void ffspan_dump(uint32_t);
+
 void gpu_draw_world_quad(Core* core, const float* px, const float* py, const float* depth,
                          const int* u, const int* v, const uint8_t* r, const uint8_t* g,
                          const uint8_t* b, uint16_t tp, uint16_t clut, int semi,
@@ -922,6 +925,14 @@ void GpuState::gp0_exec(Core* core) {
         // fade/overlay -> must NOT be a backdrop (else it draws UNDER the world); leave it in the HUD
         // (topmost) band so fades composite on top. (Owned backdrops still match via node_is_bg.)
         if (!is3d) bg = node_is_bg(s_cur_node) || (!semi && bg_2d(bx0, by0, bx1, by1));
+        // PSXPORT_BDTAG: attribute the deferred tp(576,256) sky/sea BACKDROP prim to the ov_field_frame call
+        // that BUILT it (ffspan_lookup maps the packet address to the build-time pool span). Logs once per name.
+        if (!is3d && s_tp_x == 576 && s_tp_y == 256 && cfg_str("PSXPORT_BDTAG")) {
+          static int lastf = -1, nlogged = 0;
+          if (s_frame != lastf && nlogged < 50) { lastf = s_frame; nlogged++;
+            const char* t = ffspan_lookup(s_cur_node);
+            fprintf(stderr, "[bdtag] f%d tp(576,256) built by '%s' (node=%08x bbox=(%d,%d)-(%d,%d))\n",
+                    s_frame, t, s_cur_node, bx0, by0, bx1, by1); } }
         // FADE/DIM (#21): a full-screen SEMI prim is a fade/dim overlay, NOT a backdrop. It must cover the
         // WHOLE wide FB (else green field shows in the widescreen margins) but composite ON TOP (HUD band).
         // Tag it so the 2D-X mapping below stretches it to fill while the layer stays topmost.

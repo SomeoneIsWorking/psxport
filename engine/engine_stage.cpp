@@ -29,6 +29,54 @@
 #include <stdio.h>
 
 // dispatch a still-recomp leaf with up to 3 args set (helpers for the native stage machines).
+// later-238 BACKDROP ATTRIBUTION (PSXPORT_BDTAG): record each ov_field_frame call's pool-write span so the
+// gp0 OT-walk classifier (gpu_native.cpp) can attribute a DEFERRED prim (e.g. the tp(576,256) sea backdrop)
+// to the call that BUILT it — reliable where per-pass tags / WWATCH-pc / pool-node-addresses are not. The
+// span table persists across the present (which classifies the prior frame's OT) because it is reset only at
+// the TOP of the next ov_field_frame. `ffspan_lookup(addr)` returns the builder name (latest-span-wins).
+extern int g_pkt_track; extern uint32_t g_pkt_lo, g_pkt_hi;
+struct FFSpan { const char* name; uint32_t lo, hi; };
+static FFSpan s_ffspan[40]; static int s_ffspan_n = 0; static int s_bdtag = -1;
+static inline int bdtag_on() { if (s_bdtag < 0) s_bdtag = cfg_str("PSXPORT_BDTAG") ? 1 : 0; return s_bdtag; }
+extern "C" const char* ffspan_lookup(uint32_t a) {
+  // EARLIEST-first = INNERMOST-wins: an inner bracket ends (is recorded) before its outer, and outer spans
+  // merge in their children, so the first containing span in record order is the tightest (real) builder.
+  for (int i = 0; i < s_ffspan_n; i++) if (a >= s_ffspan[i].lo && a < s_ffspan[i].hi) return s_ffspan[i].name;
+  return "(unattributed)";
+}
+// Coarse top-level phase bracketing (called from native_step_frame): reset at frame top, then begin/end
+// around each frame phase to find WHICH phase builds the deferred backdrop packet (the gp0 classify runs
+// later in the same frame's DrawOTag). begin/end do NOT nest (single saved slot) — bracket sibling phases only.
+static struct { int ot; uint32_t lo, hi; } s_ff_stk[8]; static int s_ff_sp = 0;
+extern "C" void ffspan_reset_frame(void) { if (bdtag_on()) { s_ffspan_n = 0; s_ff_sp = 0; } }
+extern "C" void ffspan_begin(void) {       // NESTABLE: save outer, start a fresh empty span
+  if (!bdtag_on() || s_ff_sp >= 8) return;
+  s_ff_stk[s_ff_sp].ot = g_pkt_track; s_ff_stk[s_ff_sp].lo = g_pkt_lo; s_ff_stk[s_ff_sp].hi = g_pkt_hi; s_ff_sp++;
+  g_pkt_track = 1; g_pkt_lo = 0xFFFFFFFFu; g_pkt_hi = 0;
+}
+extern "C" void ffspan_end(const char* nm) {
+  if (!bdtag_on() || s_ff_sp <= 0) return;
+  uint32_t mlo = g_pkt_lo, mhi = g_pkt_hi;
+  if (mhi > mlo && s_ffspan_n < 40) { s_ffspan[s_ffspan_n].name = nm;
+    s_ffspan[s_ffspan_n].lo = mlo; s_ffspan[s_ffspan_n].hi = mhi; s_ffspan_n++; }
+  s_ff_sp--; g_pkt_track = s_ff_stk[s_ff_sp].ot;            // restore outer; MERGE my writes into it
+  g_pkt_lo = s_ff_stk[s_ff_sp].lo; g_pkt_hi = s_ff_stk[s_ff_sp].hi;
+  if (mhi > mlo) { if (mlo < g_pkt_lo) g_pkt_lo = mlo; if (mhi > g_pkt_hi) g_pkt_hi = mhi; }
+}
+extern "C" void ffspan_dump(uint32_t a) {   // one-time: show the recorded spans vs an unattributed address
+  static int done = 0; if (done) return; done = 1;
+  fprintf(stderr, "[ffspan] addr %08x NOT in any of %d field-frame spans:\n", a, s_ffspan_n);
+  for (int i = 0; i < s_ffspan_n; i++)
+    fprintf(stderr, "[ffspan]   %-12s [%08x .. %08x)\n", s_ffspan[i].name, s_ffspan[i].lo, s_ffspan[i].hi);
+}
+#define FFS(nm, call) do { \
+  if (bdtag_on()) { int _ot = g_pkt_track; uint32_t _olo = g_pkt_lo, _ohi = g_pkt_hi; \
+    g_pkt_track = 1; g_pkt_lo = 0xFFFFFFFFu; g_pkt_hi = 0; call; \
+    if (g_pkt_hi > g_pkt_lo && s_ffspan_n < 40) { s_ffspan[s_ffspan_n].name = nm; \
+      s_ffspan[s_ffspan_n].lo = g_pkt_lo; s_ffspan[s_ffspan_n].hi = g_pkt_hi; s_ffspan_n++; } \
+    g_pkt_track = _ot; g_pkt_lo = _olo; g_pkt_hi = _ohi; } \
+  else { call; } } while (0)
+
 static inline void d0(Core* c, uint32_t fn) { rec_dispatch(c, fn); }
 static inline void d1(Core* c, uint32_t fn, uint32_t a0) { c->r[4]=a0; rec_dispatch(c, fn); }
 static inline void d2(Core* c, uint32_t fn, uint32_t a0, uint32_t a1) { c->r[4]=a0; c->r[5]=a1; rec_dispatch(c, fn); }
@@ -166,9 +214,9 @@ static void ov_game_s48_2_frame(Core* c) {
   uint32_t sm = c->mem_r32(0x1f800138u);
   uint16_t s4a = c->mem_r16(sm + 0x4a);
   if (s4a >= 6) return;
-  if (s4a == 0) { ov_game_submode0(c); return; }
-  if (s4a == 1) { ov_game_submode1(c); return; }
-  rec_dispatch(c, handler[s4a]);
+  if (s4a == 0) { ffspan_begin(); ov_game_submode0(c); ffspan_end("submode0"); return; }
+  if (s4a == 1) { ffspan_begin(); ov_game_submode1(c); ffspan_end("submode1"); return; }
+  ffspan_begin(); rec_dispatch(c, handler[s4a]); ffspan_end("s48_2_handler");
 }
 
 // GAME sub-mode-0 bridge 0x8010882c (sm[0x4c]/sm[0x4e] dispatch) — native. Faithful to the disasm:
@@ -272,7 +320,7 @@ static void ov_field_run(Core* c) {
       c->mem_w16(c->mem_r32(0x1f800138u) + 0x4e, 1);
       /* fallthrough */
     case 1: {
-      ov_field_frame(c);                        // native field per-frame update (0x80108b0c)
+      ffspan_begin(); ov_field_frame(c); ffspan_end("fieldframe");   // native field per-frame update (0x80108b0c)
       sm = c->mem_r32(0x1f800138u);
       if (c->mem_r8(0x800bf80du) == 3) {        // (signed byte) special mode 3
         if (c->mem_r8(0x800bf80fu) == 0) {
@@ -454,7 +502,7 @@ static void ov_game_submode1(Core* c) {
       c->mem_w16(sm + 0x4c, next);
       break;
     }
-    case 2: ov_field_run(c); break;                // field RUNNING sub-machine (sm[0x4e]) — native
+    case 2: ffspan_begin(); ov_field_run(c); ffspan_end("fieldrun"); break;   // field RUNNING sub-machine (sm[0x4e]) — native
     case 3: ov_field_run_x(c); break;              // mid-transition running sub-machine 0x801070b4 — native
     case 4: rec_dispatch(c, 0x80107230u); break;
     case 5: rec_dispatch(c, 0x8010766cu); break;
@@ -485,9 +533,9 @@ int ov_game_frame(Core* c) {
     }
     ov_game_s48_2_frame(c);
   } else if (s48 == 0) {
-    ov_game_s48_0(c);
+    ffspan_begin(); ov_game_s48_0(c); ffspan_end("s48_0");
   } else if (s48 == 1) {
-    ov_game_s48_1(c);
+    ffspan_begin(); ov_game_s48_1(c); ffspan_end("s48_1");
   } else {
     return 0;                                                          // unknown top state -> cooperative
   }

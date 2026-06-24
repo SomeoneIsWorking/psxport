@@ -113,6 +113,7 @@ void ov_switch(Core* c) {
 }
 
 // One scheduler pass over the 3 task slots (replaces FUN_80051e60).
+extern "C" void ffspan_reset_frame(void), ffspan_begin(void), ffspan_end(const char*);  // PSXPORT_BDTAG (engine_stage.cpp)
 static void native_scheduler_step(Core* c) {
   R3000 loop = *c;                           // frame-loop REGISTERS (gp etc. for fresh tasks); slices off RAM
   for (int i = 0; i < 3; i++) {
@@ -261,7 +262,7 @@ static void native_scheduler_step(Core* c) {
         int handled = 1;
         if (setjmp(c->game->sched.yield_jmp) == 0) {
           if (game_fresh) ov_game_stage_prologue(c);                // prologue (sets sm[0x48] from 0x134)
-          handled = ov_game_frame(c);                               // one frame: sm[0x48] dispatch + tail
+          ffspan_begin(); handled = ov_game_frame(c); ffspan_end("gameframe");  // one frame: sm[0x48] dispatch + tail
         } else if (cfg_dbg("sched")) {
           static int w = 0; if (!w++) fprintf(stderr, "[sched] caught a GAME substate yield (a leaf not "
                                                       "yet sync) — frontier\n");
@@ -348,7 +349,7 @@ static void native_scheduler_step(Core* c) {
       }
       // (The DEMO/front-end entry 0x801062E4 is handled by the native per-frame dispatcher above,
       //  never here — it `continue`s before reaching this generic coroutine path.)
-      rec_coro_run(c, start);                  // runs until ov_yield longjmps back here
+      ffspan_begin(); rec_coro_run(c, start); ffspan_end("coro");   // runs until ov_yield longjmps back here
       c->mem_w16(base, 0);                        // returned (jr ra sentinel): task ended -> free
       c->game->sched.task_started[i] = 0;
     }
@@ -376,6 +377,7 @@ extern "C" void perf_frame_begin(void), perf_mark_pre(void), perf_frame_end(void
 
 static void native_step_frame(Core* c, uint32_t f) {
   void hle_deliver_event(Core* c, uint32_t ev_class, uint32_t spec);
+  ffspan_reset_frame();   // backdrop-attribution: reset the per-frame builder span table
   void pad_service_frame(Core*);
   void gpu_set_disp_origin(Core* c, int x, int y);
   (void)f;
@@ -409,14 +411,18 @@ static void native_step_frame(Core* c, uint32_t f) {
   // this was wired they were orphaned with the override table (a live window ran uncapped + stale). The
   // present happens here (before the OT submit below) so the VK batch shown is the one DrawOTag built last
   // frame, exactly as the override-era ordering did.
+  ffspan_begin();
   { void ov_frame_update(Core*); ov_frame_update(c); }        // tick + per-vblank audio + present + pace
+  ffspan_end("frameupd");
   xa_audio_trace(c, "post");                                  // CD-vol fade state AFTER tick+mix
   perf_phase_begin(3);   // perf: SCHED-LOGIC = the cooperative scheduler step (the real per-frame GAME logic)
   // The native scheduler is the frame-loop's task-stepping HARNESS (no BIOS threads — yields are setjmp/
   // longjmp coroutines, CD loads are synchronous). It stays native at every gate level. What the gate
   // controls is whether the TASK BODIES it steps run as native stage dispatchers + content (full native) or
   // as pure PSX recomp coroutines (psx_fallback on) — see the gate checks inside native_scheduler_step.
+  ffspan_begin();
   native_scheduler_step(c);                                   // <- replaces FUN_80051e60 (BIOS scheduler)
+  ffspan_end("scheduler");
   perf_phase_end(3);
   xa_dialog_coord(c);                                         // dialogs stop/restore ingame music
   xa_audio_trace(c, "coord");                                 // CD-vol fade state AFTER coord

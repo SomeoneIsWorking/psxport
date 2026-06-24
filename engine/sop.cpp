@@ -22,6 +22,7 @@
 
 // dispatch a still-recomp leaf with up to 3 args set (helpers for the SOP/transition machines).
 static void d0(Core* c, uint32_t fn);
+extern "C" void ffspan_begin(void), ffspan_end(const char*);   // PSXPORT_BDTAG attribution (engine_stage.cpp)
 static void d1(Core* c, uint32_t fn, uint32_t a0);
 static void d2(Core* c, uint32_t fn, uint32_t a0, uint32_t a1);
 static void d3(Core* c, uint32_t fn, uint32_t a0, uint32_t a1, uint32_t a2);
@@ -187,8 +188,8 @@ void ov_sop_field_update(Core* c) {
   if (delay != 0) {
     c->mem_w16(sm + 0x60, (uint16_t)(delay - 1));          // startup delay: just count down
   } else {
-    d1(c, 0x8002655cu, 0x80100400u);                       // BG scene transition SM
-    d1(c, 0x8010a0e0u, 0x800f2418u);                       // entity update loop
+    ffspan_begin(); d1(c, 0x8002655cu, 0x80100400u); ffspan_end("bgscene");   // BG scene transition SM
+    ffspan_begin(); d1(c, 0x8010a0e0u, 0x800f2418u); ffspan_end("entupd");    // entity update loop
     d0(c, 0x8007b008u);                                    // Tomba update
     c->mem_w8(0x1f800234u, 1);
     uint8_t bg = c->mem_r8(0x800e8008u);                   // BG layer SM
@@ -199,14 +200,14 @@ void ov_sop_field_update(Core* c) {
       else if (sub == 1) c->mem_w8(0x800e806cu, 0);
     }
     d0(c, 0x80075a80u);                                    // per-frame area update
-    if (c->mem_r8(0x800bf9b4u) != 5) d1(c, 0x8010bffcu, 0x800ed018u);   // parallax BG draw
+    if (c->mem_r8(0x800bf9b4u) != 5) { ffspan_begin(); d1(c, 0x8010bffcu, 0x800ed018u); ffspan_end("parallaxBG"); }   // parallax BG draw
     // SOP-mode entity render. The native world-coord version (ov_field_entity_render, engine_submit.cpp)
     // is ready but UNWIRED — this SOP path isn't exercised by the walkable field (which renders via
     // 0x8010810c -> 0x8003D074 -> 0x8003F698), so wiring it native is unverified. Own the live chain first.
-    d1(c, 0x80109fe0u, 0x800f2418u);                       // entity render loop (still PSX until the path is verified)
+    ffspan_begin(); d1(c, 0x80109fe0u, 0x800f2418u); ffspan_end("entrender");   // entity render loop (still PSX)
     void ov_render_walk(Core*);                            // engine_submit.cpp — NATIVE 0x8003c048 walk
-    ov_render_walk(c);                                     // object render-list walk (PC-native depth + fps60)
-    if (c->mem_r8(0x800bf9b4u) != 5) d1(c, 0x8010c26cu, 0x800ed018u);   // BG tile scroller
+    ffspan_begin(); ov_render_walk(c); ffspan_end("renderwalk");   // object render-list walk (PC-native depth + fps60)
+    if (c->mem_r8(0x800bf9b4u) != 5) { ffspan_begin(); d1(c, 0x8010c26cu, 0x800ed018u); ffspan_end("bgscroll"); }   // BG tile scroller
     c->mem_w8(0x1f800234u, 0);
   }
   // tail — sm[0x52]: 0 = intro zone setup, 1 = end-of-area text scroller, 2+ = done

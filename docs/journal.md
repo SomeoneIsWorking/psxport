@@ -8333,3 +8333,31 @@ Pursued the cyan backdrop (tp 576,256, op-3C, is3d=0) with reliable C-level tool
   sky/sea as RQ_BACKGROUND (if screen-space) or eproj real-depth (if world-space). Determine which by dumping
   its scene-table records' verts once the builder is known. (Faster alt to localize the builder: temporarily
   no-op each ov_field_frame call one at a time, rebuild, shot with groundnative — see which removes the cyan.)
+
+### later-238 (cont. 2) — FOUND IT: the backdrop builder is FUN_80109fe0 (SOP entity render over 0x800f2418), reached via ov_sop_field_mode
+Built a RELIABLE build-time prim→builder attribution harness (PSXPORT_BDTAG): bracket a call with
+ffspan_begin()/ffspan_end("name") to record its pool-write span (g_pkt_lo/hi while g_pkt_track=1, mem.cpp);
+at the deferred gp0 OT-walk, ffspan_lookup(packet_addr) returns the INNERMOST bracket that wrote it
+(earliest-recorded span wins — inner brackets end before outer, and outer spans merge their children, so
+the first containing span in record order is the tightest). Reset once per frame at native_step_frame top.
+Climbed the call tree top-down with nested brackets:
+  native_step_frame → **scheduler** → **gameframe** (ov_game_frame) → **submode0** (ov_game_submode0, s4a==0
+  — NOT submode1/ov_field_frame!) → ov_sop_field_mode → ov_sop_field_update → **entrender** = the SOP entity
+  render loop `d1(c, 0x80109fe0u, 0x800f2418u)` (engine/sop.cpp). 50/50 backdrop prims attribute to entrender.
+KEY CORRECTIONS:
+- The seaside walkable field renders through the **SOP field-mode path** (ov_game_submode0 → ov_sop_field_mode
+  → ov_sop_field_update), NOT the ov_field_frame / ov_render_frame path (sm[0x4a]==0 SOP sub-mode does the
+  actual per-frame render; sm[0x4a]==1 / ov_field_frame is a DIFFERENT/secondary path). This is why owning the
+  water (ov_rwalk_b588 in ov_render_frame) and groundnative (ov_field_entity_render in ov_render_frame) did
+  NOT touch the backdrop — they're in the wrong render path for this field.
+- The sop.cpp:203-206 comment ("this SOP path isn't exercised by the walkable field; ov_field_entity_render
+  ready but UNWIRED, renders via 0x8010810c→0x8003D074→0x8003F698") is **WRONG**. The walkable field DOES use
+  ov_sop_field_update, and 0x80109fe0 (entity render over 0x800f2418) is the live builder of the sky/sea
+  backdrop (and the scene). ov_field_entity_render is the native reimpl of 0x80109fe0 — wire it HERE.
+- NB: groundprobe-tp's GT4 decode of 0x800f2418 showed only tp_y=0 records (grass) — so the tp(576,256)
+  backdrop is NOT a standard GT4 record in that table; 0x80109fe0 must draw it via a different entry-type /
+  per-entity path. RE 0x80109fe0 fully before wiring native (it draws BOTH the grass scene AND the backdrop;
+  the backdrop is screen-space → must become RQ_BACKGROUND, the grass → eproj real-depth).
+- THE OWNERSHIP TARGET IS NOW PINNED: own FUN_80109fe0 (engine/sop.cpp ov_sop_field_update's entrender call)
+  natively. That single function owns the field's whole picture; owning it correctly (backdrop→RQ_BACKGROUND,
+  world→eproj depth) fixes the "sea on top" AND gives real depth, in the RIGHT render path.
