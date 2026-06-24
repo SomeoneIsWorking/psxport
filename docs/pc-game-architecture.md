@@ -120,8 +120,16 @@ render subsystem replaces them.
     (`debug placeverify`) = both per-load calls byte-exact (full RAM+scratchpad) vs the PSX reference;
     gate OFF (native actually drives) = field reached, 155 nodes placed identical to the reference set, no
     bad opcode. This is the first native function on the LIVE object-creation path.
-  - **NEXT — extend the contiguity downward/sideways:** wire the owned prefix siblings the same way (e.g.
-    pool-init `ov_8007B18C` in game/world/pool.cpp — expose + direct-call), then own the per-type spawn
-    VARIANTS that `spawn_dispatch` still `rec_dispatch`es (content), each verified via its A/B gate.
+  - **SPAWN path now fully native (2026-06-24):** `spawn_dispatch` (and `replace_dispatch`) no longer
+    `rec_dispatch` the per-type spawn variants — they call the 5 owned native bodies directly via
+    `spawn_variant_native(c, cls)` (entity_spawn / spawn_pool2 / pool_spawn×3). So the live object-creation
+    chain — placement → spawn dispatch → spawn variant → pool pop + list link + identity stamp — is ALL
+    PC-native. `placeverify` stays match #1/#2 (byte-exact end-to-end vs PSX), gate-off native-driven reaches
+    the field clean (151 nodes, 0 bad opcode). The per-type spawn VARIANTS' per-class init beyond the
+    pool/list primitive is already inside these native bodies; only the deeper content handlers (node+0x1c
+    behaviors) remain PSX.
+  - **NEXT — extend the contiguity:** wire the owned prefix siblings the same way (e.g. pool-init
+    `ov_8007B18C` in game/world/pool.cpp — expose + direct-call), then descend into the graphics-binding
+    attach (model/geom set, render-record) on the live path, each verified via its A/B gate.
 ```
 ```

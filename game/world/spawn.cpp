@@ -207,12 +207,16 @@ void ov_entity_spawn(Core* c) {
 //     variant = VAR[cls];                      // 0x80079c3c / 79ddc / 79f90 / 7a12c / 7a2c8
 //     return variant(0, a1 & 0xff, 3, a2);     // ref=0, type, mode=3 (tail), list=a2
 static const uint32_t SPAWN_VAR[5] = { 0x80079C3Cu, 0x80079DDCu, 0x80079F90u, 0x8007A12Cu, 0x8007A2C8u };
+// Run the per-class spawn VARIANT NATIVELY (the 5 bodies are all owned in this TU) reading ref/type/mode/
+// list from r4..r7 and returning the node ptr. Replaces the former rec_dispatch(SPAWN_VAR[cls]) into the
+// PSX body — keeps the placement→spawn path fully native (PC calls PC). Defined after pool_spawn/POOL_VAR.
+static uint32_t spawn_variant_native(Core* c, uint32_t cls);
 void spawn_dispatch(Core* c) {
   uint32_t cls = c->r[4] & 0xffu;
   if (cls >= 5) { c->r[2] = 0; return; }
   uint32_t type = c->r[5] & 0xffu, list = c->r[6];
   c->r[4] = 0; c->r[5] = type; c->r[6] = 3; c->r[7] = list;   // handler sets ref=0, type&0xff, mode=3, a3=list
-  rec_dispatch(c, SPAWN_VAR[cls]);                            // run the per-type spawn variant → v0 in r2
+  c->r[2] = spawn_variant_native(c, cls);                     // run the per-type spawn variant (native) → v0
 }
 void rec_dispatch(Core*, uint32_t);
 void ov_spawn_dispatch(Core* c) {
@@ -262,6 +266,18 @@ static uint32_t pool_spawn(Core* c, const PoolDesc& p) {
   c->mem_w32(p.free_head, c->mem_r32(node + 36));   // free head = node->next
   spawn_link_stamp(c, node, ref, type, mode, list);
   return node;
+}
+
+// Native per-class spawn-variant dispatch (forward-declared above spawn_dispatch). All 5 variant bodies are
+// owned in this TU; they read ref/type/mode/list from r4..r7. cls is pre-validated (<5) by the callers.
+static uint32_t spawn_variant_native(Core* c, uint32_t cls) {
+  switch (cls) {
+    case 0:  return entity_spawn(c);            // FUN_80079C3C (pool-208, with pool-low guard)
+    case 1:  return spawn_pool2(c);             // FUN_80079DDC (pool-2, delegates to var2 when empty)
+    case 2:  return pool_spawn(c, POOL_VAR2);   // FUN_80079F90
+    case 3:  return pool_spawn(c, POOL_VAR3);   // FUN_8007A12C
+    default: return pool_spawn(c, POOL_VAR4);   // FUN_8007A2C8 (cls==4)
+  }
 }
 
 // Shared A/B gate for a pool spawn variant: run native, snapshot+rollback, super-call the recomp body,
@@ -347,7 +363,7 @@ static void replace_dispatch(Core* c) {
   uint32_t cls = (a1 >> 8) & 0x7fu;
   if (cls >= 5) { c->r[2] = 0; return; }
   c->r[5] = a1 & 0xffu;                  // a1 = type (a0=obj, a2=mode, a3=list pass through)
-  rec_dispatch(c, SPAWN_VAR[cls]);       // run the per-type spawn variant → v0 in r2
+  c->r[2] = spawn_variant_native(c, cls); // run the per-type spawn variant (native) → v0
 }
 // FUN_8003116C — SPAWN-AND-INIT helper: spawn a type-6 object on list 1 (via the owned dispatcher
 // FUN_8007A980), seed its position from a1, stash a2, and run the object init FUN_80028E10. RE'd from disas
