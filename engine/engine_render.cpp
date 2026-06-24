@@ -22,6 +22,8 @@
 
 #include "engine_render.h"
 #include "core.h"
+#include "cfg.h"
+void ov_field_entity_render(Core* c);  // engine_submit.cpp — native world-space GT3/GT4 scene-table render
 
 // Native render-queue walkers (engine_submit.cpp). void(Core*); each drains its queue/list, dispatches
 // every live object's per-type renderer (still-PSX content), and tags the produced packet span with the
@@ -31,6 +33,7 @@ void ov_rwalk_aux_eec0(Core* c);       // 0x8003eec0
 void ov_render_walk_snapshot(Core* c); // 0x8003bb50
 void ov_rwalk_aux_bcf4(Core* c);       // 0x8003bcf4
 void ov_render_walk(Core* c);          // 0x8003c048 (master phase-2 list walk; routes terrain to ov_terrain)
+void ov_ground_probe(Core* c);         // DIAG: decode ground scene table 0x800F2418 (later-234 blocker)
 
 static inline void d0(Core* c, uint32_t fn) { rec_dispatch(c, fn); }
 static inline void d1(Core* c, uint32_t fn, uint32_t a0) { c->r[4] = a0; rec_dispatch(c, fn); }
@@ -49,13 +52,17 @@ extern "C" { int g_render_psx = 0; }
 void ov_render_frame(Core* c) {
   if (g_render_psx) { d0(c, 0x8003f9a8u); return; }   // COMPARE: render the field via the PSX recomp path
   d0(c, 0x8004fd30u);
-  d0(c, 0x80025d98u);
+  d0(c, 0x80025d98u);                // STILL-PSX: sky/upper-sea backdrop (later-235: 2D, fails bg classification)
   ov_rwalk_aux_bf00(c);              // 0x8003bf00
   ov_rwalk_aux_eec0(c);             // 0x8003eec0
-  d0(c, 0x8003b588u);                // STILL-PSX: emits ~117 GP0 field prims (later-229; NOT diagnostic-only)
+  d0(c, 0x8003b588u);                // STILL-PSX: emits ~117 GP0 field prims incl. the water-reflection backdrop
   ov_render_walk_snapshot(c);        // 0x8003bb50
   ov_rwalk_aux_bcf4(c);              // 0x8003bcf4
-  d1(c, 0x8003d0bcu, 0x800f2418u);   // STILL-PSX: emits ~220 GP0 field prims = the GROUND (later-229)
+  ov_ground_probe(c);                // DIAG groundprobe: decode the ground scene table (no draw; later-235)
+  // DIAG groundnative: route the ground table real-depth via ov_field_entity_render. Decode is CORRECT, but
+  // the 2D sea/water backdrop then composites OVER it (later-235 render-ordering blocker) — OFF by default.
+  if (cfg_dbg("groundnative")) { c->r[4] = 0x800f2418u; ov_field_entity_render(c); }
+  else d1(c, 0x8003d0bcu, 0x800f2418u); // STILL-PSX: emits ~220 GP0 field prims = the GROUND (later-229)
   d0(c, 0x8003f024u);
   d0(c, 0x8003df04u);
   ov_render_walk(c);                  // 0x8003c048 (native — terrain renders world-coord via ov_terrain)

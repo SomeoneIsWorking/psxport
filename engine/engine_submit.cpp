@@ -700,6 +700,66 @@ void ov_field_entity_render(Core* c) {
   eproj_clear_active();
 }
 
+// DIAGNOSTIC (later-234 ground blocker): decode the GROUND scene table 0x800F2418 through the EXACT same
+// record layout the native GT3/GT4 submitters use, and log the first few entries' decoded model verts +
+// their eproj projection — WITHOUT drawing (the PSX pass still draws the ground, so it stays visible). This
+// isolates whether the record striding/offsets or the camera compose is the cause of the vanish. Gated by
+// `debug groundprobe`; runs once.
+void ov_ground_probe(Core* c) {
+  if (!cfg_dbg("groundprobe")) return;
+  static int done = 0; if (done >= 3) return;
+  uint32_t es = 0x800F2418u;
+  uint8_t count = c->mem_r8(es + 6);
+  if (count == 0) return;   // table not populated this frame
+  done++;
+  uint32_t base = c->mem_r32(es + 0xC);
+  EObjXform w; eproj_compose_camera(c, &w); eproj_set_active(&w);
+  fprintf(stderr, "[groundprobe] es=%08x count=%u base=%08x T=(%.0f,%.0f,%.0f) H=%.0f R0=(%.3f,%.3f,%.3f) R2=(%.3f,%.3f,%.3f)\n",
+    es, count, base, (double)w.T[0],(double)w.T[1],(double)w.T[2],(double)w.H,
+    (double)w.R[0][0]/4096,(double)w.R[0][1]/4096,(double)w.R[0][2]/4096,
+    (double)w.R[2][0]/4096,(double)w.R[2][1]/4096,(double)w.R[2][2]/4096);
+  fprintf(stderr, "[groundprobe] OFX=%.1f OFY=%.1f\n", (double)w.ofx, (double)w.ofy);
+  int logged = 0;
+  uint32_t p = es + 0x10, end = es + 0x10 + (uint32_t)count * 2;
+  for (; p < end && logged < 6; p += 2) {
+    uint32_t idx = c->mem_r16(p);
+    uint32_t cmd = base + idx * 4;
+    uint32_t s0  = c->mem_r32(cmd);
+    uint32_t gt3 = s0 & 0xFF, gt4 = (s0 >> 16) & 0xFF;
+    fprintf(stderr, "[groundprobe] entry[%u] idx=%u cmd=%08x s0=%08x gt3=%u gt4=%u\n",
+            (p - es - 0x10)/2, idx, cmd, s0, gt3, gt4);
+    // first GT3 record (stride 36) — same offsets as submit_poly_gt3_native
+    if (gt3) {
+      uint32_t rec = cmd + 4;
+      uint32_t vz01 = c->mem_r32(rec + 20);
+      uint32_t xy0 = c->mem_r32(rec + 16), xy1 = c->mem_r32(rec + 24), xy2 = c->mem_r32(rec + 28);
+      ProjVtx pv0, pv1, pv2;
+      eproj_vertex_active((int16_t)xy0, (int16_t)(xy0>>16), (int16_t)vz01, &pv0);
+      eproj_vertex_active((int16_t)xy1, (int16_t)(xy1>>16), (int16_t)(vz01>>16), &pv1);
+      eproj_vertex_active((int16_t)xy2, (int16_t)(xy2>>16), (int16_t)c->mem_r32(rec+32), &pv2);
+      fprintf(stderr, "   gt3 m0=(%d,%d,%d) -> px=%.1f py=%.1f pz=%.1f | m1=(%d,%d,%d)->(%.0f,%.0f) m2=(%d,%d,%d)->(%.0f,%.0f)\n",
+        (int16_t)xy0,(int16_t)(xy0>>16),(int16_t)vz01, (double)pv0.px,(double)pv0.py,(double)pv0.pz,
+        (int16_t)xy1,(int16_t)(xy1>>16),(int16_t)(vz01>>16), (double)pv1.px,(double)pv1.py,
+        (int16_t)xy2,(int16_t)(xy2>>16),(int16_t)c->mem_r32(rec+32), (double)pv2.px,(double)pv2.py);
+    }
+    // first GT4 record (stride 44) after the GT3 block — same offsets as submit_poly_gt4_native
+    if (gt4) {
+      uint32_t rec = cmd + 4 + gt3 * 36;
+      uint32_t vz01 = c->mem_r32(rec + 24);
+      uint32_t xy0 = c->mem_r32(rec + 20), xy1 = c->mem_r32(rec + 28), xy2 = c->mem_r32(rec + 32);
+      ProjVtx pv0, pv1, pv2;
+      eproj_vertex_active((int16_t)xy0, (int16_t)(xy0>>16), (int16_t)vz01, &pv0);
+      eproj_vertex_active((int16_t)xy1, (int16_t)(xy1>>16), (int16_t)(vz01>>16), &pv1);
+      eproj_vertex_active((int16_t)xy2, (int16_t)(xy2>>16), (int16_t)c->mem_r32(rec+36), &pv2);
+      fprintf(stderr, "   gt4 m0=(%d,%d,%d) -> px=%.1f py=%.1f pz=%.1f | m1->(%.0f,%.0f) m2->(%.0f,%.0f)\n",
+        (int16_t)xy0,(int16_t)(xy0>>16),(int16_t)vz01, (double)pv0.px,(double)pv0.py,(double)pv0.pz,
+        (double)pv1.px,(double)pv1.py,(double)pv2.px,(double)pv2.py);
+    }
+    logged++;
+  }
+  eproj_clear_active();
+}
+
 // The per-object render path is FULLY native (no PSX fallback): submit_perobj_flush composes the float
 // world transform and calls native_gt3gt4 directly. The old gen_func_8003F698 per-mode dispatcher (which
 // ran interpreted per-scene submitter variants for non-generic modes) is no longer consulted — every

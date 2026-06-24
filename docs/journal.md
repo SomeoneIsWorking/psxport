@@ -8146,3 +8146,48 @@ that verified 0-diff are still fine (they didn't mismatch); but a mismatch in su
 against the gen_func emitted body before assuming a transcription bug. 0x8004C238 left UNWIRED (moot under the
 later-234 decoupled-renderer pivot; its native body is correct if ever needed). Fix-if-pursued: own 0x80118B10
 too, or make the verify oracle use rec_dispatch for sub-calls.
+
+## later-235 (2026-06-24) — GROUND DECODE IS CORRECT (later-231b/234 blocker was a RED HERRING); the REAL blocker is the 2D sea/water backdrop ORDERING
+Picked up the later-234 "parked blocker" (routing the ground scene-table 0x800F2418 through ov_field_entity_render
+makes the ground VANISH; later-231b blamed an eproj_compose_camera PROJECTION bug + a record-stride misread).
+Both diagnoses are WRONG. Instrumented the REAL submit path (new `debug groundprobe`, engine_submit.cpp
+ov_ground_probe — decodes the table through the EXACT GT3/GT4 record layout the native submitters use):
+- **The records DECODE and PROJECT CORRECTLY.** First ground entries: model verts (713,-128,1854),
+  (2549,-128,2626)… — all on the ground plane (y=-128), sane world x/z; camera T=(-4612,-524,3072) H=350,
+  normalized R; they project to on-screen px/py with POSITIVE depth pz~2500-3100. The later-231b "absurd verts
+  (-30976,18688)" came from the *manual* GT3-skip decode in the old groundproj probe — a bug in THAT probe, NOT
+  the real path. eproj_compose_camera is FINE. So later-231b's "next-session lead" (chase the projection /
+  4096-scale / rotation packing) is a DEAD END — do not re-walk it.
+- **Why the ground still vanishes (the true cause):** routing the ground real-depth makes grass/house/tree
+  disappear and reveals the SEA underneath. The seaside SEA/SKY/WATER is a **2D backdrop** (the grass+scenery
+  are geometry drawn ON it). Natively the grass becomes layer-1 real-depth, but the 2D sea prim
+  (`pktnode=800BFEB8 op=3C tp=(576,256)`, fails bg_2d's ¾-coverage test → mis-classified HUD/foreground)
+  composites OVER it. Same root cause both ways: **the sea backdrop must classify RQ_BACKGROUND** (CLAUDE.md's
+  "sea-drawn-on-top = order inherited from PSX" bug). The decode work is DONE; this is a render-ORDERING task.
+- **The backdrop drawers:** `debug passpool` (pool-delta per pass) → the sea/sky/water comes from passes
+  **0x80025d98** (sky/upper sea, node 800BFEB8) + **0x8003b588** (water reflection, node 800C0B04, ~117 prims).
+- **Why fixing it is HARD (three mechanisms tried, all failed — record so they're not re-walked):**
+  1. **bg_2d coverage** — sea prims are ~216px wide (<¾ of 320), so never classified backdrop. (Bandaid to
+     lower the threshold; rejected.)
+  2. **During-pass flag** (`g_in_backdrop_pass` set around the passes, checked in gp0_exec) — NO effect, because
+     **gp0 classification is DEFERRED to the OT walk** (runs long after the pass returns). Only node-ADDRESS
+     provenance (node_is_bg) survives the deferral.
+  3. **node_is_bg pool-span provenance** (the ov_bg_tilemap mechanism: bracket the pass, register its packet-pool
+     span as RQ_BACKGROUND) — FAILS for two compounding reasons: (a) the backdrop packets are **PERSISTENT** —
+     built at scene-LOAD and only rarely rebuilt, so a per-frame pool-delta capture (0x800BF544 before/after)
+     mostly sees an EMPTY delta and misses them (confirmed: first non-empty capture only at s_frame≈214); (b)
+     pass 0x8003b588 **MIXES** the water backdrop with FOREGROUND content (Tomba/scenery) in ONE pool span, so
+     tagging the whole span bg pushes Tomba/HUD behind the sea too (verified: Tomba vanished).
+  4. **Self-learning texpage** (seed the backdrop texpage from node_is_bg hits — sky+water = tp(576,256),
+     Tomba = tp(576,0) — then bg any opaque 2D prim on that page) — sound IDEA, but blocked by (3a): the seed
+     never reliably fires because node_is_bg is never seeded (persistent packets). Reverted.
+- **CONCLUSION / next step:** the fix must IDENTIFY the backdrop robustly without per-frame pool-delta. Options:
+  (i) scan-on-load for the sea/sky DRAWER by code signature (like ov_bg_tilemap does for the green tilemap) and
+  register its STABLE packet region once per scene; (ii) the proper decoupled answer — the engine OWNS the
+  sea/sky/water as a NATIVE background layer drawn explicitly behind the world (RE the drawer, render a native
+  backdrop, retire the PSX backdrop passes). (ii) is the later-234 direction. Either way the ground geometry is
+  already proven-correct and will show the moment the backdrop sorts behind it.
+- TOOLS LEFT IN-TREE (gated, OFF by default, repo still at the 6.96% baseline — verified render_cmp unchanged):
+  `debug groundprobe` (ov_ground_probe: decode+project the ground table, no draw) and `debug groundnative`
+  (route the ground real-depth via ov_field_entity_render — shows the backdrop-ordering bug live). The seabg/
+  texpage/passpool experiments were REMOVED (didn't work; documented above).
