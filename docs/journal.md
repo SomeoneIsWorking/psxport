@@ -8013,3 +8013,30 @@ PASS B — 0x8003D0BC case 0 → handler 0x801401B8 (~220 prims = the GROUND) �
   offset directly against tools/disasm_overlay.py of 0x8013FB88 & 0x8013FE58 before shipping (byte-exact).
   Existing precedents to copy: submit_poly_gt3_native (engine_submit.cpp:430), submit_poly_gt4_native (:479),
   submit_poly_gt4_bp (:557, the separate-layout precedent), ov_field_entity_render (:671).
+
+### later-231b — Pass B FIRST ATTEMPT (reverted): ground VANISHES via ov_field_entity_render — projection bug to chase
+CONFIRMED LIVE: mode byte *0x800BF870 == 0 at seaside; table 0x800F2418 has count@+6 = 0x84 (132),
+base@+0xC = 0x801A5724. RE-VERIFIED the GT3/GT4 record layouts directly (disasm_overlay 0x8013FB88 /
+0x8013FE58): **they are IDENTICAL to submit_poly_gt3_native / submit_poly_gt4_native** (GT3 VXY0@+0x10,
+VZ@+0x14, VXY1@+0x18, VXY2@+0x1C, VZ2@+0x20; GT4 VXY0@+0x14, VXY1@+0x1C, VXY2@+0x20, VXY3@+0x28) — the
+subagent's "different layout / need new submitters" claim was WRONG. So Pass B == ov_field_entity_render with
+a0=0x800F2418 (same OT-base 0x800ED8C8, same camera CR0-7 from 0x1F8000F8). NO new submitters needed.
+- ATTEMPT (reverted): replaced `d1(c,0x8003d0bcu,0x800f2418u)` in ov_render_frame with `ov_ground_render`
+  (mode==0 → ov_field_entity_render(0x800F2418)). RESULT: the GROUND/tree/house VANISH — the sea backdrop
+  shows through; render_cmp jumps to 90.23%. So it is BROKEN, not merely "different from PSX."
+- DIAGNOSIS so far: the geometry IS submitted (`debug subc`: gt3/gt4_native fire ~98k, huge jump) but
+  mis-projects. `PSXPORT_PRIMAT` at a grass pixel shows SOME real-depth world prims (layer=1, depth~0.08,
+  gray) at plausible coords, yet the ground isn't visible and BG node 800FC5C0 projected OFF-SCREEN (155,-81).
+  Loading the GTE CR0-7 camera in the native pass (hypothesis: downstream PSX passes need it) made ZERO
+  difference (identical 69294px) → NOT a downstream-GTE-state issue. So `eproj_compose_camera` /
+  ov_field_entity_render itself mis-projects the ground's world-space verts. eproj_compose_camera was
+  UNVERIFIED (later-224) and this is its first live use.
+- NEXT-SESSION LEAD (do this with FRESH context): instrument ONE ground record — log eproj's px/py/pz for its
+  verts vs the PSX GTE RTPT SXY/SZ for the SAME record (run the PSX 0x801401B8 once via rec_dispatch with a
+  capture, or read CR results). Compare against eproj_compose_OBJECT which WORKS (submit_perobj_flush renders
+  the tree/props correctly). Candidate bugs: (a) eproj_compose_camera rotation packing/scale differs from the
+  PSX ctc2 load order; (b) the ground verts are NOT pure world-space — RE 0x801401B8 FULLY past 0x8014022C
+  (after the CR0-7 load) to confirm no per-table/per-record pre-transform or a vert SCALE the camera-only path
+  omits; (c) a 4096 / fixed-point scale mismatch in T. The repo is back to the WORKING 6.96% state (Pass B
+  reverted); re-apply ov_ground_render once eproj_compose_camera is fixed, and own Pass A in the SAME change
+  (ordering caveat above).
