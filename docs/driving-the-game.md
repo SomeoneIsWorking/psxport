@@ -4,6 +4,23 @@ How to get the PORT (`scratch/bin/tomba2_port`) to a target scene and feed it in
 This exists because driving the game keeps getting re-figured-out. Pairs with `tomba2-newgame.md`
 (title→New Game menu RE), `tomba2-scene-state.md` (state signals), `render-arch.md`, `config.md`.
 
+## ⭐ REACHING GAMEPLAY HEADLESS — JUST MASH START (read this; it keeps getting lost)
+**To reach a populated free-roam GAME world headless you MASH START — that is what `PSXPORT_AUTO_SKIP` does**
+(it keeps pulsing Start every frame, advancing title → menus → through the arrival dialog into the live
+field). `PSXPORT_AUTO_GAMEPLAY` ALONE is NOT enough — without AUTO_SKIP the run sits in the attract/menu
+with an EMPTY world (object-list heads 0x800FB168 / 0x800F2624 == 0, scene table 0x800F2418 count == 0), and
+you will wrongly conclude "the field render has no world to draw." The world is THERE; you just have to mash
+Start to get into it. The game-stage entry shows as `stage=0x801062E4` — that label reads "DEMO" in the boot
+log, but it IS the game playing its stages (the attract is the game running with predetermined input), so it
+has the full world model. Canonical recipe (VERIFIED 2026-06-24: object lists populated `objlist1=800ef478
+objlist2=800fc5c0`, scene count 124):
+```
+PSXPORT_VK_HEADLESS=1 PSXPORT_AUTO_GAMEPLAY=1 PSXPORT_AUTO_SKIP=500 PSXPORT_NOAUDIO=1 PSXPORT_REPL=1 \
+  ./scratch/bin/tomba2_port scratch/bin/tomba2/MAIN.EXE   # then REPL: run 900 ; dumpram/shot ; quit
+```
+Verify you're in the world (not the menu) BEFORE rendering: object-list head 0x800FB168 != 0. If it's 0, you
+have NOT mashed Start enough — raise `run N` / AUTO_SKIP, don't conclude the world is empty.
+
 ## 0. Gotchas that waste time
 - **Headless runs auto-SKIP the intro FMVs and fast-forward in-game FMVs** (later-134). A field probe is
   ~1.4s, not ~77s — the intro movie used to be played back in REAL TIME even headless. Just use
@@ -39,7 +56,8 @@ held direction is what gameplay reads for movement.
   (`0x8010637C`), then auto-pauses. `=2` also freezes via the debug server.
 - **`PSXPORT_AUTO_GAMEPLAY=1`** — owns title→NewGame→fisherman cutscene; pulses **Start** until the chan4
   area music has looped 150 frames, then RELEASES input. ⚠️ The heuristic fires EARLY: it releases at the
-  seaside intro (~f328); the green field follows ~f600. **It does NOT reach free-roam gameplay** (see §5).
+  seaside intro (~f328); the green field follows ~f600. **For free-roam gameplay with a POPULATED world, ADD
+  `PSXPORT_AUTO_SKIP=500` to mash Start into the field — see the ⭐ callout at the top.**
 - **`PSXPORT_FORCE_BUTTONS=<hex>`** — pulse a mask (8 frames on / 24 off, = edges) from frame 0.
 - **`PSXPORT_FORCE_HOLD=<hex>` + `PSXPORT_FORCE_HOLD_AT=N`** — HOLD a mask continuously from frame N
   (overrides the pulse; use for movement, or a single edge by also setting STOP_AT a few frames later).
@@ -75,7 +93,7 @@ Launch with `PSXPORT_DEBUG_SERVER=1` (port 5959) **and a high `PSXPORT_NATIVE_FR
 - `*(u8)0x1F800137` — **!=0** = real play; **==0** = attract-demo driver running.
 - stage pointer `*(u32)0x801fe00c`; GAME stage = `0x8010637C`.
 
-## 5. OPEN: reaching free-roam playable gameplay headless
+## 5. Reaching free-roam playable gameplay headless — SOLVED (mash Start via AUTO_SKIP; see ⭐ callout)
 `AUTO_GAMEPLAY` lands (post-intro, stage GAME) on the seaside→green-field with quest banner "Go to the
 Burning House" and an **auto-appearing menu "Options / Load data / Quit game"** (feather cursor on
 "Options"). This menu appears WITHOUT input (~f700). The earlier note that it "does NOT respond to forced
