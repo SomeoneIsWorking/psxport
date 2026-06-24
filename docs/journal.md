@@ -8102,3 +8102,32 @@ unchanged 5343px. **13 field behaviors now owned native.**
   (dispatch case commented). Sent RE agent a fix request. Re-wire once obj8004c238verify is clean.
 NOTE: running 5 full-RAM A/B gates at once is very slow (each = 2MB snapshot+restore+compare per call) — verify
 in groups of ~4 and exclude any gate that's spamming mismatches.
+
+## later-234 (2026-06-24) — DIRECTION (user): DECOUPLED renderer + NATIVE object model mirrored to guest RAM
+User rejected the byte-exact per-object behavior transcription as the focus ("focusing on the crane feels
+wrong — we're making an engine DECOUPLED from PSX"). Byte-exact-vs-recomp reimplementation is COUPLING (it
+defines correctness as "matches PSX" and operates on guest-RAM nodes at PSX offsets). The chosen target is the
+**DECOUPLED RENDERER** (AskUserQuestion) PLUS the user also endorsed the **native object structs mirrored to
+guest RAM** idea. Synthesis = the decoupled-engine object/render architecture:
+- **Native object model**: an engine-owned `EngObject` struct array = the SOURCE OF TRUTH for world entities
+  (id, type, world transform = euler+translation+scale, geometry/model ref, state). The engine owns it.
+- **Mirror to guest RAM**: each frame copy the native struct fields INTO the guest entity node (at the PSX
+  offsets the still-PSX AI/physics/quest content reads) so un-owned content keeps working — native→guest. For
+  fields the engine doesn't own yet, populate native FROM guest (guest→native) so the model is complete.
+- **Decoupled renderer**: draw the scene by iterating the NATIVE object model — real geometry + world
+  transform projected in float with real per-vertex depth (eproj + gpu_draw_world_quad) — NOT the PSX
+  OT/packet render passes. The PSX render passes (the orchestrator 0x8003f9a8 + its walks/passes) get RETIRED
+  in favor of one native scene renderer driven by the native model. Recomp render = visual REFERENCE only.
+CURRENT RENDER STATE (what to build on): per-object MESHES already draw via eproj real-depth
+(submit_perobj_flush → eproj_compose_object → gpu_draw_world_quad — WORKS, tree/props correct). The GROUND +
+scenery (PSX pass 0x8003d0bc → 0x801401B8 → scene table 0x800F2418, ~132 entries, WORLD-space verts) and the
+crane/figure/pickup (still-PSX passes 0x8003b588 etc.) are NOT owned → flat PSX 2D-band (later-229). 
+PARKED BLOCKER (later-231b): routing the ground through ov_field_entity_render/eproj_compose_camera made it
+VANISH. New finding (debug `groundproj` in ov_field_entity_render): compose_camera produces a SANE camera
+(T=(-4612,-524,3072), normalized R), but my manual record decode read absurd model verts (-30976,18688) — the
+scene-table record striding/offsets I assumed are WRONG (or the GT3-skip is). NEXT-SESSION: instrument INSIDE
+submit_poly_gt3/gt4_native (the REAL decode, not a manual skip) to log the first ground record's model verts +
+eproj px/py/pz; confirm the cmd+4 header size + GT3/GT4 strides for THIS table (vs native_gt3gt4's 16-byte
+header). Then build the native object model + decoupled scene renderer per the architecture above.
+NB the behavior ports (later-230/232/232b/232c, 13 owned) are NOT wasted — they're the content-interface and a
+step toward eventually moving object DATA native — but they are NOT the decoupling deliverable; the renderer is.

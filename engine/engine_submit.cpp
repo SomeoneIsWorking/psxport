@@ -675,6 +675,19 @@ void ov_field_entity_render(Core* c) {
   uint32_t otbase = c->mem_r32(OTBASE_PTR);
   uint32_t base   = c->mem_r32(es + 0xC);
   EObjXform w; eproj_compose_camera(c, &w); eproj_set_active(&w);
+  // DIAG groundproj: log the camera xform + first GT4 record's model verts and their eproj projection, so we
+  // can see whether the world-space scene-table geometry projects on-screen with sane depth. (later-231b)
+  if (cfg_dbg("groundproj")) { static int n=0; if (n++ < 3) {
+    fprintf(stderr, "[groundproj] es=%08x count=%u base=%08x T=(%.0f,%.0f,%.0f) H=%.0f R0=(%.3f,%.3f,%.3f)\n",
+      es, count, base, (double)w.T[0],(double)w.T[1],(double)w.T[2],(double)w.H,
+      (double)w.R[0][0]/4096,(double)w.R[0][1]/4096,(double)w.R[0][2]/4096);
+    uint32_t cmd0 = base + (uint32_t)c->mem_r16(es+0x10)*4; uint32_t s0d=c->mem_r32(cmd0);
+    uint32_t rec = cmd0+4 + ((s0d&0xFF)*36);   // skip GT3s to first GT4 record (44B)
+    for (int k=0;k<2;k++){ uint32_t r2=rec+k*44;
+      int16_t vx=(int16_t)c->mem_r16(r2+20), vy=(int16_t)(c->mem_r32(r2+20)>>16), vz=(int16_t)c->mem_r16(r2+24);
+      ProjVtx pv; eproj_vertex_active(vx,vy,vz,&pv);
+      fprintf(stderr,"   gt4[%d] model=(%d,%d,%d) -> px=%.1f py=%.1f pz=%.1f sx=%d sy=%d\n",
+        k, vx,vy,vz, (double)pv.px,(double)pv.py,(double)pv.pz, pv.sx, pv.sy); } } }
   uint32_t p = es + 0x10, end = es + 0x10 + (uint32_t)count * 2;
   for (; p < end; p += 2) {
     uint32_t cmd = base + (uint32_t)c->mem_r16(p) * 4;
