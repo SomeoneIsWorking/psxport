@@ -7850,3 +7850,26 @@ now LIVE.
   per-object path entirely (eproj_active_cr already bridges fps60). Also: the resident byte-packed emitter
   submit_poly_gt4_bp still uses proj_native_xform/GTE for its (still-PSX) upstream field compose — own that
   compose to make terrain/BG projection world-coord too.
+
+## later-227 (2026-06-24) — master render-list walk owned native; resident terrain → world-coord float
+Continues later-226. Owned the MASTER phase-2 render-list walk **0x8003c048** native (the orchestrator now
+calls ov_render_walk = submit_render_walk instead of rec_dispatch) and routed the field TERRAIN renderer
+(node+24 == 0x8002AB5C) to the PC-native **ov_terrain → terrain_render_pc** (float transform, real per-pixel
+depth via gpu_draw_world_quad, NO GTE / NO packet) — previously orphaned.
+- RLIST (head 0x800F2624, table 0x80014DB8): at seaside only 2 LIVE nodes — 0x800fc5c0 (type32, renderfn
+  **0x8013e9d8** = an OVERLAY drawer, the main ground/BG — still PSX) and 0x800edb80 (type32, renderfn
+  0x8002AB5C = resident terrain). submit_render_walk's pre-scan passes (both RCASE_DEFAULT), native walk runs.
+- VERIFIED: `debug rwalk,terrgte,terrpc` confirms NATIVE walk active → ov_terrain(node=800EDB80) →
+  terrain_render_pc drew 1 quad (H=350). Renders correctly static AND under camera motion (terr_native.png,
+  terr_move.png — Tomba relocated, terrain/props/sea all correct). Zero derail.
+- FINDING: at seaside, the resident terrain 0x8002AB5C is only **1 quad** (geomblk 0x8009FAE8 has 1 record;
+  ctl<=0 terminator on rec0). The big visible GROUND is the overlay node renderfn **0x8013e9d8** (still PSX
+  GTE) — that's the next terrain target. terrain_render_pc holds static MODEL-space verts (no per-frame writes
+  to 0x8009FAE8 observed via PSXPORT_CW) and projects them through the fresh camera each frame, so the static
+  buffer is correct for static geometry. OPEN QUESTION (verify at a SCROLLING area): if 0x8002AB5C is meant to
+  rebuild the geomblk per-frame at scroll-areas and nothing does now, a scrolling resident-terrain strip could
+  go stale — revisit when a scrolling area is reachable. (At seaside: correct.)
+- NOTE: `cfg_dbg` channels are set via the REPL `debug <a,b>` command ONLY — NOT the PSXPORT_DEBUG env var
+  (that does nothing for cfg_dbg). Use `debug` in the REPL stream.
+- NEXT: own the overlay ground drawer 0x8013e9d8 (the main seaside terrain) world-coord; then the billboard-
+  quad handlers 0x8003c2d4/c464 → 0x8003c8f4 (pickups, still GTE-project their 4 corners).

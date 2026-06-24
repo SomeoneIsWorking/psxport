@@ -303,10 +303,13 @@ for content fns (call it). Do NOT mimic PSX hardware (GTE/GP0/OT) — remove Bee
     `eproj_vertex_active` — NO GTE for the picture. VERIFIED: field renders identically to GTE + correct
     under a moved camera; `debug eproj` confirms native compose fires (was 0× orphaned). The dormant
     later-224 foundation is LIVE.
-  - ☐ NEXT (render): own the remaining per-type handlers (0x8003c2d4/c464/c5f8/c788) and 0x8003cdd8's
-    secondary-effect cases native; retire the PSX GTE compose from the per-object path entirely. Then own
-    the byte-packed emitter's (submit_poly_gt4_bp) upstream field compose so terrain/BG projection is
-    world-coord too (it still uses proj_native_xform/GTE).
+  - ✅ **master render-list walk 0x8003c048 + resident terrain 0x8002AB5C owned native (later-227).** The
+    orchestrator calls ov_render_walk; the terrain default-case routes to ov_terrain → terrain_render_pc
+    (float, real depth, NO GTE). VERIFIED at seaside (static + motion). At seaside 0x8002AB5C is only 1 quad;
+    the main GROUND is the overlay drawer 0x8013e9d8 (still PSX) — next.
+  - ☐ NEXT (render): own the overlay ground drawer 0x8013e9d8 (main seaside terrain) world-coord; the
+    billboard-quad handlers 0x8003c2d4/c464 → 0x8003c8f4 (pickups, still GTE-project 4 corners); the
+    remaining per-type handlers (0x8003c5f8/c788 fire 0× at seaside); 0x8003cdd8 secondary-effect cases.
   - ☐ NEXT (gameplay): descend the SOP per-frame field update `FUN_801092b4` (entity update FUN_8010a0e0,
     Tomba update 0x8007b008, BG draw, entity render FUN_80109fe0) — own its sub-systems native, re-wiring the
     orphaned cull/spawn/collision/object-walk natives as their callers become native. Also own the

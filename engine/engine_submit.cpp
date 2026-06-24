@@ -808,12 +808,19 @@ static void submit_render_walk(Core* c) {
         uint32_t tgt = c->mem_r32(RLIST_TABLE + t * 4);
         if (tgt == RCASE_PEROBJ) { c->r[4] = n; submit_perobj_render(c); }  // self-tags its world depth
         else {
-          // default case: the node's own render fn (node+24) — e.g. a collectable's billboard-quad drawer.
-          // Tag the packet span it produces with the object's PC-native world-position depth.
-          uint32_t slo, shi; PktSpanSession sess;
-          c->r[4] = n; rec_dispatch(c, c->mem_r32(n + 24));
-          if (sess.close(&slo, &shi)) { float od = obj_world_ord(c, n);   // PC-native depth from real world position
-            gpu_obj_depth_add(c, slo, shi, od); fps60_bb_node(c, slo, shi, n); }
+          // default case: the node's own render fn (node+24) — e.g. a collectable's billboard-quad drawer,
+          // or the field TERRAIN renderer (0x8002AB5C). Terrain is owned PC-native (ov_terrain → the float
+          // terrain_render_pc, real per-pixel depth, NO GTE/packet) — route it there; everything else stays
+          // PSX content (rec_dispatch), with its produced span tagged by the object's PC-native world depth.
+          void ov_terrain(Core* c);
+          uint32_t fn = c->mem_r32(n + 24);
+          if (fn == 0x8002AB5Cu) { c->r[4] = n; ov_terrain(c); }   // PC-native world-coord terrain (self-draws)
+          else {
+            uint32_t slo, shi; PktSpanSession sess;
+            c->r[4] = n; rec_dispatch(c, fn);
+            if (sess.close(&slo, &shi)) { float od = obj_world_ord(c, n);   // PC-native depth from real world position
+              gpu_obj_depth_add(c, slo, shi, od); fps60_bb_node(c, slo, shi, n); }
+          }
         }
       }
     }

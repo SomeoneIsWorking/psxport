@@ -30,6 +30,7 @@ void ov_rwalk_aux_bf00(Core* c);       // 0x8003bf00
 void ov_rwalk_aux_eec0(Core* c);       // 0x8003eec0
 void ov_render_walk_snapshot(Core* c); // 0x8003bb50
 void ov_rwalk_aux_bcf4(Core* c);       // 0x8003bcf4
+void ov_render_walk(Core* c);          // 0x8003c048 (master phase-2 list walk; routes terrain to ov_terrain)
 
 static inline void d0(Core* c, uint32_t fn) { rec_dispatch(c, fn); }
 static inline void d1(Core* c, uint32_t fn, uint32_t a0) { c->r[4] = a0; rec_dispatch(c, fn); }
@@ -49,7 +50,7 @@ void ov_render_frame(Core* c) {
   d1(c, 0x8003d0bcu, 0x800f2418u);
   d0(c, 0x8003f024u);
   d0(c, 0x8003df04u);
-  d0(c, 0x8003c048u);
+  ov_render_walk(c);                  // 0x8003c048 (native — terrain renders world-coord via ov_terrain)
 }
 
 // 0x8003fa44 — mid-transition render orchestrator twin (reduced pass set, same native walks).
@@ -61,6 +62,6 @@ void ov_render_frame_x(Core* c) {
   d0(c, 0x8003b588u);
   ov_render_walk_snapshot(c);        // 0x8003bb50
   ov_rwalk_aux_bcf4(c);              // 0x8003bcf4
-  d0(c, 0x8003c048u);
+  ov_render_walk(c);                  // 0x8003c048 (native — terrain world-coord)
   d0(c, 0x8003f024u);
 }

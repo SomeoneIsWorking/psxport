@@ -7,7 +7,7 @@ A native may exist already. **LIVE** = reachable by direct C call from a native_
 dispatch root (actually runs). **ORPHAN** = native exists but only the REMOVED override
 table used to reach it — it is dead code until a native parent calls it directly.
 
-Totals: 380 native fns, 270 owned addresses, 65 LIVE / 315 ORPHAN.
+Totals: 381 native fns, 270 owned addresses, 68 LIVE / 313 ORPHAN.
 
 | addr | status | symbol | file:line | depends-on (still-PSX) | summary |
 |------|--------|--------|-----------|------------------------|---------|
@@ -22,38 +22,39 @@ Totals: 380 native fns, 270 owned addresses, 65 LIVE / 315 ORPHAN.
 | 0x8001DC40 | ORPHAN | `ov_cd_dc40` | runtime/recomp/cd_override.cpp:211 |  | Platform-HLE entry for FUN_8001DC40 (intercepted for any caller): (a0=… |
 | 0x80026C88 | LIVE | `ov_disp_26c88` | engine/entity.cpp:131 | 0x80026C88 |  |
 | 0x80027768 | ORPHAN | `ov_submit_poly_gt4_bp` | engine/engine_submit.cpp:605 |  |  |
-| 0x8002AB5C | ORPHAN | `ov_terrain` | engine/engine_submit.cpp:1201 | 0x8002AB5C |  |
+| 0x8002AB5C | LIVE | `ov_terrain` | engine/engine_submit.cpp:815 |  | default case: the node's own render fn (node+24) — e.g. a collectable'… |
+| 0x8002AB5C | LIVE | `ov_terrain` | engine/engine_submit.cpp:1208 | 0x8002AB5C |  |
 | 0x8002B278 | LIVE | `ov_cone_cull_2b278` | engine/cull.cpp:243 |  |  |
 | 0x8003116C | ORPHAN | `ov_spawn_and_init` | engine/entity_spawn.cpp:618 |  |  |
 | 0x80031780 | ORPHAN | `ov_list_scan_31780` | engine/collision.cpp:24 | 0x80031780 | list-tail resolver / reset. Walks the 8-byte-stride linked list rooted… |
 | 0x80031780 | ORPHAN | `ov_list_scan_31780` | engine/collision.h:8 |  |  |
 | 0x8003B220 | ORPHAN | `ov_hitbox_3b220` | engine/hitbox.cpp:114 | 0x8003B220 |  |
 | 0x8003B220 | ORPHAN | `ov_hitbox_3b220` | engine/hitbox.h:6 |  |  |
-| 0x8003B320 | ORPHAN | `ov_subcnt_b320` | engine/engine_submit.cpp:1621 |  |  |
-| 0x8003B588 | ORPHAN | `ov_rwalk_b588` | engine/engine_submit.cpp:1627 |  | PSXPORT_DEBUG=rwalk — phase-2 render-walk caller counter. The per-obje… |
-| 0x8003BB50 | LIVE | `ov_render_walk_snapshot` | engine/engine_submit.cpp:933 |  |  |
-| 0x8003BB50 | ORPHAN | `ov_rwalk_bb50` | engine/engine_submit.cpp:1628 |  |  |
-| 0x8003BCF4 | LIVE | `ov_rwalk_aux_bcf4` | engine/engine_submit.cpp:1008 |  |  |
-| 0x8003BCF4 | ORPHAN | `ov_rwalk_bcf4` | engine/engine_submit.cpp:1629 |  |  |
+| 0x8003B320 | ORPHAN | `ov_subcnt_b320` | engine/engine_submit.cpp:1628 |  |  |
+| 0x8003B588 | ORPHAN | `ov_rwalk_b588` | engine/engine_submit.cpp:1634 |  | PSXPORT_DEBUG=rwalk — phase-2 render-walk caller counter. The per-obje… |
+| 0x8003BB50 | LIVE | `ov_render_walk_snapshot` | engine/engine_submit.cpp:940 |  |  |
+| 0x8003BB50 | ORPHAN | `ov_rwalk_bb50` | engine/engine_submit.cpp:1635 |  |  |
+| 0x8003BCF4 | LIVE | `ov_rwalk_aux_bcf4` | engine/engine_submit.cpp:1015 |  |  |
+| 0x8003BCF4 | ORPHAN | `ov_rwalk_bcf4` | engine/engine_submit.cpp:1636 |  |  |
 | 0x8003BF00 | LIVE | `ov_rwalk_aux_bf00` | engine/engine_render.cpp:29 |  | Native render-queue walkers (engine_submit.cpp). void(Core*); each dra… |
-| 0x8003BF00 | LIVE | `ov_render_frame` | engine/engine_render.cpp:41 |  | per-frame render orchestrator (11 passes). The render-queue walks (0x8… |
-| 0x8003BF00 | LIVE | `ov_rwalk_aux_bf00` | engine/engine_submit.cpp:1069 |  |  |
-| 0x8003BF00 | ORPHAN | `ov_rwalk_bf00` | engine/engine_submit.cpp:1630 |  |  |
-| 0x8003C048 | ORPHAN | `ov_render_walk` | engine/engine_submit.cpp:823 |  |  |
-| 0x8003C048 | ORPHAN | `ov_rwalk_c048` | engine/engine_submit.cpp:1631 |  |  |
-| 0x8003C048 | ORPHAN | `ov_rlist_probe` | engine/engine_submit.cpp:1638 | 0x8003C048 | PSXPORT_DEBUG=rlist — dump the gen_func_8003C048 render-list node TYPE… |
-| 0x8003C8F4 | ORPHAN | `ov_collectable_quad` | engine/engine_submit.cpp:836 | 0x8003C8F4 |  |
-| 0x8003C8F4 | ORPHAN | `ov_subcnt_c8f4` | engine/engine_submit.cpp:1622 |  |  |
+| 0x8003BF00 | LIVE | `ov_render_frame` | engine/engine_render.cpp:42 |  | per-frame render orchestrator (11 passes). The render-queue walks (0x8… |
+| 0x8003BF00 | LIVE | `ov_rwalk_aux_bf00` | engine/engine_submit.cpp:1076 |  |  |
+| 0x8003BF00 | ORPHAN | `ov_rwalk_bf00` | engine/engine_submit.cpp:1637 |  |  |
+| 0x8003C048 | LIVE | `ov_render_walk` | engine/engine_submit.cpp:830 |  |  |
+| 0x8003C048 | ORPHAN | `ov_rwalk_c048` | engine/engine_submit.cpp:1638 |  |  |
+| 0x8003C048 | ORPHAN | `ov_rlist_probe` | engine/engine_submit.cpp:1645 | 0x8003C048 | PSXPORT_DEBUG=rlist — dump the gen_func_8003C048 render-list node TYPE… |
+| 0x8003C8F4 | ORPHAN | `ov_collectable_quad` | engine/engine_submit.cpp:843 | 0x8003C8F4 |  |
+| 0x8003C8F4 | ORPHAN | `ov_subcnt_c8f4` | engine/engine_submit.cpp:1629 |  |  |
 | 0x8003CCA4 | ORPHAN | `ov_perobj_render` | engine/engine_submit.cpp:764 |  |  |
-| 0x8003CCA4 | ORPHAN | `ov_ccase_probe` | engine/engine_submit.cpp:1660 | 0x8003CCA4 |  |
+| 0x8003CCA4 | ORPHAN | `ov_ccase_probe` | engine/engine_submit.cpp:1667 | 0x8003CCA4 |  |
 | 0x8003CDD8 | ORPHAN | `ov_flush2_probe` | engine/engine_submit.cpp:273 | 0x8003CDD8 | PSXPORT_DEBUG=flush2 — the MAJOR flush tap (gen_func_8003CDD8). later-… |
 | 0x8003CDD8 | ORPHAN | `ov_perobj_flush` | engine/engine_submit.cpp:724 |  |  |
-| 0x8003EEC0 | LIVE | `ov_rwalk_aux_eec0` | engine/engine_submit.cpp:1121 |  |  |
-| 0x8003EEC0 | ORPHAN | `ov_rwalk_eec0` | engine/engine_submit.cpp:1632 |  |  |
+| 0x8003EEC0 | LIVE | `ov_rwalk_aux_eec0` | engine/engine_submit.cpp:1128 |  |  |
+| 0x8003EEC0 | ORPHAN | `ov_rwalk_eec0` | engine/engine_submit.cpp:1639 |  |  |
 | 0x8003F174 | ORPHAN | `ov_flush_probe` | engine/engine_submit.cpp:252 | 0x8003F174 | PSXPORT_DEBUG=flush — render-command FLUSH tap (later-131 NEXT). Taps … |
 | 0x8003F698 | ORPHAN | `ov_render_cmd` | engine/engine_submit.cpp:203 |  |  |
-| 0x8003F9A8 | LIVE | `ov_render_frame` | engine/engine_render.cpp:41 |  | per-frame render orchestrator (11 passes). The render-queue walks (0x8… |
-| 0x8003FA44 | LIVE | `ov_render_frame_x` | engine/engine_render.cpp:56 |  | mid-transition render orchestrator twin (reduced pass set, same native… |
+| 0x8003F9A8 | LIVE | `ov_render_frame` | engine/engine_render.cpp:42 |  | per-frame render orchestrator (11 passes). The render-queue walks (0x8… |
+| 0x8003FA44 | LIVE | `ov_render_frame_x` | engine/engine_render.cpp:57 |  | mid-transition render orchestrator twin (reduced pass set, same native… |
 | 0x8003FD10 | ORPHAN | `ov_osc_fd10` | engine/entity.cpp:498 | 0x8003FD10 |  |
 | 0x80040410 | ORPHAN | `ov_child_spawn_40410` | engine/entity.cpp:75 | 0x80040410 |  |
 | 0x80040410 | ORPHAN | `ov_child_spawn_40410` | engine/entity.h:8 |  |  |
@@ -94,15 +95,15 @@ Totals: 380 native fns, 270 owned addresses, 65 LIVE / 315 ORPHAN.
 | 0x80050B08 | LIVE | `ov_game_init` | runtime/recomp/native_boot.cpp:911 | 0x8001CC00 0x800499E8 0x800509B4 0x80050A0C 0x80050A80 0x80051E00 … | Init prefix + task-0 bootstrap (everything FUN_80050b08 does before it… |
 | 0x80050B08 | LIVE | `ov_game_main` | runtime/recomp/native_boot.cpp:976 |  |  |
 | 0x80050B08 | LIVE | `native_boot_run` | runtime/recomp/native_boot.cpp:1221 |  | Wired from boot.c when PSXPORT_NATIVE_BOOT is set. Registers the main … |
-| 0x80051128 | ORPHAN | `ov_xform51128` | engine/engine_submit.cpp:1432 |  |  |
-| 0x80051464 | ORPHAN | `ov_xform_propagate` | engine/engine_submit.cpp:1327 |  |  |
+| 0x80051128 | ORPHAN | `ov_xform51128` | engine/engine_submit.cpp:1439 |  |  |
+| 0x80051464 | ORPHAN | `ov_xform_propagate` | engine/engine_submit.cpp:1334 |  |  |
 | 0x80051794 | LIVE | `eng_identity_matrix` | engine/engine_init.cpp:20 |  | set an identity 3x3 rotation matrix (0x1000 = 1.0 fixed on the diagona… |
 | 0x80051794 | ORPHAN | `ov_80051794` | engine/object_init.cpp:48 |  | init an 8-word block at a0 to {0x1000,0,0x1000,0,0x1000,0,0,0} (three … |
 | 0x800517BC | ORPHAN | `ov_settrans` | engine/engine_math.cpp:623 |  | write a 0x20-byte vector block: a1/a2/a3 (each sign-extended s16) at a… |
 | 0x800517F8 | ORPHAN | `ov_obj_render_update` | engine/entity_spawn.cpp:579 |  |  |
 | 0x80051B04 | ORPHAN | `ov_cmdenq_probe` | engine/engine_submit.cpp:298 | 0x80051B04 | PSXPORT_DEBUG=cmdenq — render-command ENQUEUE tap (later-132). gen_fun… |
 | 0x80051B70 | ORPHAN | `ov_obj_record_init` | engine/entity_spawn.cpp:557 |  |  |
-| 0x80051C8C | ORPHAN | `ov_build_xform` | engine/engine_submit.cpp:1238 |  |  |
+| 0x80051C8C | ORPHAN | `ov_build_xform` | engine/engine_submit.cpp:1245 |  |  |
 | 0x80051E60 | LIVE | `native_scheduler_step` | runtime/recomp/native_boot.cpp:116 |  | One scheduler pass over the 3 task slots (replaces FUN_80051e60). |
 | 0x80051F80 | ORPHAN | `ov_80051F80` | engine/object_init.cpp:56 | 0x80080880 | fetch the descriptor ptr at scratch+312, write a0 to +2 and 1 to +0, t… |
 | 0x80052078 | ORPHAN | `eng_stage_transition` | engine/engine_level.cpp:69 | 0x800450BC 0x80080880 | (stageIdx) — the cooperative STAGE TRANSITION: load the next stage's o… |
@@ -110,7 +111,7 @@ Totals: 380 native fns, 270 owned addresses, 65 LIVE / 315 ORPHAN.
 | 0x80052078 | LIVE | `native_start_stage` | runtime/recomp/native_boot.cpp:728 | 0x80080870 0x80080880 0x80080890 0x800808A0 | switch task 0 to the given stage (load overlay + reset the display/BIO… |
 | 0x800520E0 | LIVE | `eng_init_entity_pool` | engine/engine_init.cpp:106 |  | engine SUBSYSTEM init (init-prefix slot, dispatched at native_boot.cpp… |
 | 0x80056B48 | ORPHAN | `ov_player_move` | engine/engine_player.cpp:75 | 0x80056B48 | playerverify — full RAM+scratchpad A/B gate (like the scriptvm/pad931c… |
-| 0x800597AC | ORPHAN | `ov_orch597AC` | engine/engine_submit.cpp:1600 |  |  |
+| 0x800597AC | ORPHAN | `ov_orch597AC` | engine/engine_submit.cpp:1607 |  |  |
 | 0x8006C80C | ORPHAN | `ov_cam_y_floor` | engine/engine_camera.cpp:501 |  | ──────────────────────────────────────────────────────────────────────… |
 | 0x8006CBD0 | ORPHAN | `ov_obj_set_xformblk` | engine/entity_spawn.cpp:614 |  |  |
 | 0x8006CBD0 | ORPHAN | `ov_8006CBD0` | engine/native_misc.cpp:123 |  | scatter 6 u16 fields from a1 into the scratchpad block at 0x1F8000D0 (… |
@@ -330,4 +331,4 @@ Totals: 380 native fns, 270 owned addresses, 65 LIVE / 315 ORPHAN.
 | 0x801092B4 | ORPHAN | `ov_sop_field_update` | engine/sop.cpp:184 |  | SOP per-frame FIELD UPDATE — native ownership of FUN_801092b4 (decomp … |
 | 0x80109450 | ORPHAN | `ov_sop_field_mode` | engine/sop.cpp:231 |  | SOP FIELD-MODE MACHINE — native ownership of FUN_80109450 (decomp scra… |
 | 0x80109FE0 | ORPHAN | `ov_field_entity_render` | engine/engine_submit.cpp:671 |  | FIELD ENTITY RENDER LOOP — PC-native ownership of the SOP field-overla… |
-| 0x80146478 | ORPHAN | `ov_gt3gt4_caller` | engine/engine_submit.cpp:1688 |  | -- Auto-ownership of the SAME submit library when it appears in a runt… |
+| 0x80146478 | ORPHAN | `ov_gt3gt4_caller` | engine/engine_submit.cpp:1695 |  | -- Auto-ownership of the SAME submit library when it appears in a runt… |
