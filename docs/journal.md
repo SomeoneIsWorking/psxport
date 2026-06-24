@@ -8228,3 +8228,38 @@ be conflated. Deep static RE (subagent, exhaustive trace) settled which op-0x3C 
 - Key addrs: water 0x8003b588 → 0x8003cca4 (JT 0x80014ec8) → 0x8003cdd8, cam 0x1F8000F8/Tcam 0x1F80010C, geom
   node+0xC0[i]. Atlas: dispatcher 0x80025d98, sky drawer 0x80025b78, sprite 0x8007e6dc(op64)/wrapper 0x8007e938,
   FT4 0x8007e1b8(op2C), static coord/UV table 0x80017334.
+
+## later-237 (2026-06-24) — CONFIRMED: the visible sea IS the 2D atlas backdrop (op-0x65 SPRITE, builder 0x8007e6dc). primat MIS-REPORTS its op as 3C.
+A 2nd RE pass raised a scare ("pass 0x80025d98 emits no op-3C, so node 800BFEB8 (which primat shows op=3C) can't
+be the atlas — it must be a GTE/world path"). RESOLVED it definitively; the scare was a primat bug, not a real
+mis-attribution:
+- **Skip-pass bisect (new gated PSXPORT_SKIPPASS, engine_render.cpp) FAILED** to remove node 800BFEB8 by skipping
+  ANY ov_render_frame pass (the 5 d0 passes AND all native walks AND the ground/terrain pass). REASON: the
+  backdrop packets are PERSISTENT — built once at scene-LOAD, linked into the OT, re-walked every frame; skipping
+  the building pass mid-run can't un-link an already-built packet. (Same persistence that made later-235's
+  passpool pool-delta unreliable. Pass-skip is the wrong tool for persistent packets — use WWATCH.)
+- **PSXPORT_WWATCH=0x800BFEB8,0x800BFEE0 (writer trace, mem.cpp) is DECISIVE:** the sea packet is written by
+  **0x8007e6dc** (pc 0x8007E838..0x8007E8B0) + tpage 0x80083de0 + OT-splice 0x80083c30 + clip-rect 0x80081cf8 —
+  i.e. EXACTLY the atlas SPRITE-builder infrastructure (the RE's 0x80025d98 → 0x80025b78 → 0x8007e6dc path).
+- **`r 0x800BFEB8` = `27 F8 00 65 …` → word0 high byte 0x65 = GP0 textured SPRITE** (opaque, blend). So the packet
+  is a SPRITE (op 0x65), NOT POLY_GT4. **primat's `op=3C` for this prim is a MIS-READ** (it decodes the op from
+  the wrong word for sprite packets) — that false "op=3C" is what sent the 2nd RE down the "can't be the atlas"
+  path. FIX primat's op decode for sprites if it keeps misleading (gpu_native.cpp primat block).
+- **NET: later-235/236's conclusion STANDS and is now hard-confirmed.** The visible cyan sea = the 2D ATLAS
+  backdrop (op-0x65 sprites, builder 0x8007e6dc, dispatcher 0x80025d98, tp(576,256)), persistent. The REAL 3D
+  water is the SEPARATE 0x8003b588 GTE path (node 800C0B04). They are two different things, as the user insisted.
+- **PLAN unchanged (later-236):** own the atlas backdrop as RQ_BACKGROUND (native reimpl per the RE spec below),
+  then own the real water real-depth (0x8003b588 Pass A), then re-enable groundnative.
+- **ATLAS native-reimpl spec (RE agent, implementation-ready):** dispatcher 0x80025d98 routes on
+  u8[0x800ED061]&3 / mode u8[0x800BF870] to arms 0x80025744 (FT4 op-2C) / 0x80025934 (FT4+sprite) / 0x80025b78
+  (3-tile sprite sea-band). 0x80025b78 emits a HARDCODED 3 sprite tiles (no count/terminator) at screen
+  X=(s8)u8[0x800ED05E]+160 (±32/+64 for the 3), Y=212, column=u8[0x800ED060]±1 (horizontal sea-band scroll lives
+  in these node bytes, NOT a UV register — UVs are static per cell). Blit-source template ptr = *(0x800ED094).
+  Per-tile cells walked by 0x8007e6dc from records via pointer table 0x80017334[idx] (idx = lh[0x800AD284 +
+  u8[blitsrc+34]*4 + 2]); each 16B cell: +0 UV|clut, +6 OT-z, +14/+15 signed X/Y delta, +10 UV. Emit each cell as
+  a textured 2D quad (screen rect + UV sub-rect, tp(576,256) clut(624,510), semi if op 0x66) into RQ_BACKGROUND
+  via rq_push_2d_quad(core, RQ_BACKGROUND, …) (gpu_native.cpp:722) — NO PSX packet. Read the per-frame WH from the
+  0x800ED094 blit-template live. CAUTION: also check arms 0x80025744/934 (counter-driven FT4) don't include a
+  2D FOREGROUND element (sea-foam/spray) that must NOT be reclassified — eyeball before blanket-bg.
+- Diagnostics left in-tree (gated, OFF by default): PSXPORT_SKIPPASS (engine_render.cpp, with the persistence
+  caveat in-comment). render_cmp unchanged at 6.96%.

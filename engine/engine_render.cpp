@@ -23,6 +23,7 @@
 #include "engine_render.h"
 #include "core.h"
 #include "cfg.h"
+#include <stdlib.h>
 void ov_field_entity_render(Core* c);  // engine_submit.cpp — native world-space GT3/GT4 scene-table render
 
 // Native render-queue walkers (engine_submit.cpp). void(Core*); each drains its queue/list, dispatches
@@ -35,7 +36,16 @@ void ov_rwalk_aux_bcf4(Core* c);       // 0x8003bcf4
 void ov_render_walk(Core* c);          // 0x8003c048 (master phase-2 list walk; routes terrain to ov_terrain)
 void ov_ground_probe(Core* c);         // DIAG: decode ground scene table 0x800F2418 (later-234 blocker)
 
-static inline void d0(Core* c, uint32_t fn) { rec_dispatch(c, fn); }
+// DIAG skippass: PSXPORT_SKIPPASS=0xADDR skips that one rec_dispatch'd render pass, to attribute a prim to
+// the pass producing it. NOTE: useless for PERSISTENT packets (built once at scene-load, re-walked from the
+// OT every frame) — skipping the pass mid-run can't un-link an already-built packet; use PSXPORT_WWATCH on
+// the packet address to find the real builder instead (later-237).
+static inline void d0(Core* c, uint32_t fn) {
+  static uint32_t skip = 0xFFFFFFFFu;
+  if (skip == 0xFFFFFFFFu) { const char* s = cfg_str("PSXPORT_SKIPPASS"); skip = s ? (uint32_t)strtoul(s, 0, 0) : 0; }
+  if (skip && fn == skip) return;
+  rec_dispatch(c, fn);
+}
 static inline void d1(Core* c, uint32_t fn, uint32_t a0) { c->r[4] = a0; rec_dispatch(c, fn); }
 
 // RENDER-PATH COMPARE SWITCH (diagnostic, user 2026-06-24). When set, the FIELD render runs entirely as
@@ -52,10 +62,11 @@ extern "C" { int g_render_psx = 0; }
 void ov_render_frame(Core* c) {
   if (g_render_psx) { d0(c, 0x8003f9a8u); return; }   // COMPARE: render the field via the PSX recomp path
   d0(c, 0x8004fd30u);
-  d0(c, 0x80025d98u);                // STILL-PSX: sky/upper-sea backdrop (later-235: 2D, fails bg classification)
+  d0(c, 0x80025d98u);                // STILL-PSX: the 2D ATLAS backdrop (sky/sea sprites, op-0x65, builder
+                                     // 0x8007e6dc; node 0x800BFEB8 is the visible sea — confirmed by WWATCH, later-237)
   ov_rwalk_aux_bf00(c);              // 0x8003bf00
   ov_rwalk_aux_eec0(c);             // 0x8003eec0
-  d0(c, 0x8003b588u);                // STILL-PSX: emits ~117 GP0 field prims incl. the water-reflection backdrop
+  d0(c, 0x8003b588u);                // STILL-PSX: REAL 3D WATER (GTE per-object path 0x8003cdd8, node 800C0B04; later-236)
   ov_render_walk_snapshot(c);        // 0x8003bb50
   ov_rwalk_aux_bcf4(c);              // 0x8003bcf4
   ov_ground_probe(c);                // DIAG groundprobe: decode the ground scene table (no draw; later-235)
