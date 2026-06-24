@@ -8040,3 +8040,21 @@ a0=0x800F2418 (same OT-base 0x800ED8C8, same camera CR0-7 from 0x1F8000F8). NO n
   omits; (c) a 4096 / fixed-point scale mismatch in T. The repo is back to the WORKING 6.96% state (Pass B
   reverted); re-apply ov_ground_render once eproj_compose_camera is fixed, and own Pass A in the SAME change
   (ordering caveat above).
+
+## later-232 (2026-06-24) — 3 more game-object behaviors owned (the hottest overlay handlers), byte-exact
+Continues later-230 (own the entity/object SYSTEM's behavior layer). RE'd + reimplemented the 3 hottest
+still-PSX field object behaviors 1:1 native, following the objbeh_* pattern (anonymous-namespace impl + a
+full RAM+scratchpad A/B verify gate + an exported ov_beh_*_run; all jal callees kept as rec_dispatch leaves):
+- 0x8012EB54 (×3708/300walks) — engine/objbeh_8012eb54.cpp — node[4] state machine + node[5] jump-table
+  sub-machine (table 0x80109dec, 6 entries); range 0x8012EB54..0x8012ED80.
+- 0x80124E74 (×2772) — engine/objbeh_80124e74.cpp — node[4] SM + 7-way node[3] jump table (0x80109B88) with
+  inner node[6]/node[5] sub-switches; range 0x80124E74..0x801252BC.
+- 0x80133C14 (×2162) — engine/objbeh_80133c14.cpp — node[4] SM, no sub-table, data table 0x8014A6E4[node3];
+  range 0x80133C14..0x80133D68.
+Wired into engine_tomba2.cpp dispatch_native_behavior + build lists (build_port.sh/run.sh). VERIFIED:
+`debug obj8012eb54verify,obj80124e74verify,obj80133c14verify` (set before the field) → 0 MISMATCH, thousands
+of matches each; render_cmp unchanged at 5343px (identical game state). 7 field behaviors now native total
+(later-230's 4 + these 3). NEXT: continue the behhist top-down (remaining overlay handlers 0x80138FC8 ×1854,
+0x8013259C ×1848, 0x80145230 ×1848, 0x801395C0 ×1232, 0x80124E74-family, …) same pipeline. The render-side
+object real-depth (later-231/231b: own 0x8003b588/0x8003d0bc; the eproj_compose_camera ground-projection bug)
+is the SEPARATE track.

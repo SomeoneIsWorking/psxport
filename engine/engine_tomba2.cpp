@@ -34,16 +34,22 @@ static long s_walks = 0;
 // they were written but ORPHANED (call_handler always rec_dispatched the raw address). Routing them here
 // makes the native bodies LIVE: native-only when the gate channel is off, A/B-vs-recomp when it is on.
 // This is the start of owning the entity-behavior layer (the object SYSTEM's logic), top-down by hotness.
-void ov_sm40558(Core* c);        // 0x80040558 (entity.h)
-void ov_beh_739ac_run(Core* c);  // 0x800739AC (objbeh_739ac.cpp)
-void ov_beh_73cd8_run(Core* c);  // 0x80073CD8 (objbeh_73cd8.cpp)
-void ov_beh_741dc_run(Core* c);  // 0x800741DC (objbeh_741dc.cpp)
+void ov_sm40558(Core* c);          // 0x80040558 (entity.h)
+void ov_beh_739ac_run(Core* c);    // 0x800739AC (objbeh_739ac.cpp)
+void ov_beh_73cd8_run(Core* c);    // 0x80073CD8 (objbeh_73cd8.cpp)
+void ov_beh_741dc_run(Core* c);    // 0x800741DC (objbeh_741dc.cpp)
+void ov_beh_8012eb54_run(Core* c); // 0x8012EB54 (objbeh_8012eb54.cpp — overlay)
+void ov_beh_80124e74_run(Core* c); // 0x80124E74 (objbeh_80124e74.cpp — overlay)
+void ov_beh_80133c14_run(Core* c); // 0x80133C14 (objbeh_80133c14.cpp — overlay)
 static bool dispatch_native_behavior(Core* c, uint32_t h) {
   switch (h) {
-    case 0x80040558u: ov_sm40558(c);       return true;
-    case 0x800739ACu: ov_beh_739ac_run(c); return true;
-    case 0x80073CD8u: ov_beh_73cd8_run(c); return true;
-    case 0x800741DCu: ov_beh_741dc_run(c); return true;
+    case 0x80040558u: ov_sm40558(c);         return true;
+    case 0x800739ACu: ov_beh_739ac_run(c);   return true;
+    case 0x80073CD8u: ov_beh_73cd8_run(c);   return true;
+    case 0x800741DCu: ov_beh_741dc_run(c);   return true;
+    case 0x8012EB54u: ov_beh_8012eb54_run(c); return true;
+    case 0x80124E74u: ov_beh_80124e74_run(c); return true;
+    case 0x80133C14u: ov_beh_80133c14_run(c); return true;
     default: return false;
   }
 }
