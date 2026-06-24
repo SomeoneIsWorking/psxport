@@ -7873,3 +7873,24 @@ depth via gpu_draw_world_quad, NO GTE / NO packet) — previously orphaned.
   (that does nothing for cfg_dbg). Use `debug` in the REPL stream.
 - NEXT: own the overlay ground drawer 0x8013e9d8 (the main seaside terrain) world-coord; then the billboard-
   quad handlers 0x8003c2d4/c464 → 0x8003c8f4 (pickups, still GTE-project their 4 corners).
+
+## later-228 (2026-06-24) — the MAIN seaside GROUND now renders world-coord float (overlay node owned)
+Continues later-227. Owned the seaside ground/BG node renderer **OVERLAY 0x8013E9D8** native (ov_bg_render,
+engine_submit.cpp) and routed the master render-list walk's default case to it (fn == 0x8013E9D8). The recomp
+wrapper: stack a position triple (*(node+0x14)) + node[0x4e/50/52], call the GTE visibility/bound setup
+0x8013DD34 (kept PSX via rec_dispatch — writes only scratchpad cull temps 0x1F8000C0/0x1F800080, not the
+per-command transform; the recomp calls the render UNCONDITIONALLY after it), then call the per-object render
+dispatch 0x8003CCA4 = native submit_perobj_render -> submit_perobj_flush (world-coord eproj).
+- This node (0x800FC5C0) carries **12 render commands** = the main ground geometry (geomblks 0x801e68xx..),
+  so this is what makes the visible seaside GROUND render PC-native from world coords.
+- VERIFIED: `debug bgr` confirms ov_bg_render fires (node=800fc5c0, cmds=12). Render is **BYTE-IDENTICAL** to
+  the GTE output (bg_native.png vs terr_native.png: 0/102720 pixels differ — float eproj == PSX RTPT for the
+  whole ground) and correct under camera motion (bg_move.png, Tomba relocated). Zero derail. `debug eproj`
+  shows the BG command range composing world-coord.
+- STATE OF THE FIELD RENDER now: per-object MESH (Tomba/props), the resident terrain quad, AND the main
+  overlay GROUND all project world-coord float via eproj — NO GTE for those pictures. Remaining GTE users at
+  seaside: the billboard-quad PICKUP handlers 0x8003c2d4/c464 -> 0x8003c8f4 (4-corner RTPT, but already
+  world-coord DEPTH), and the byte-packed terrain-prop emitter submit_poly_gt4_bp's upstream compose.
+- NEXT: own 0x8003c8f4 (billboard quad) projection via eproj to finish the per-object render GTE-free; then
+  audit any remaining RTPS/RTPT callers at the field (the PSXPORT_RTPCALLER histogram is gated on the GPU
+  present frame %50 and didn't fire headless — fix its trigger or add a per-frame gte_op RTP counter).

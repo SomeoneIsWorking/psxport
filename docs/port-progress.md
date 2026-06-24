@@ -307,9 +307,12 @@ for content fns (call it). Do NOT mimic PSX hardware (GTE/GP0/OT) — remove Bee
     orchestrator calls ov_render_walk; the terrain default-case routes to ov_terrain → terrain_render_pc
     (float, real depth, NO GTE). VERIFIED at seaside (static + motion). At seaside 0x8002AB5C is only 1 quad;
     the main GROUND is the overlay drawer 0x8013e9d8 (still PSX) — next.
-  - ☐ NEXT (render): own the overlay ground drawer 0x8013e9d8 (main seaside terrain) world-coord; the
-    billboard-quad handlers 0x8003c2d4/c464 → 0x8003c8f4 (pickups, still GTE-project 4 corners); the
-    remaining per-type handlers (0x8003c5f8/c788 fire 0× at seaside); 0x8003cdd8 secondary-effect cases.
+  - ✅ **main seaside GROUND owned world-coord (later-228).** The overlay ground/BG node renderer 0x8013E9D8
+    (ov_bg_render) is native + routed from the master walk; its 12 ground render-commands flow through native
+    submit_perobj_flush (world-coord eproj). VERIFIED byte-identical to GTE + correct under motion. Per-object
+    mesh + resident terrain + main ground are ALL world-coord float now (no GTE for those pictures).
+  - ☐ NEXT (render): own 0x8003c8f4 (billboard-quad pickups, 0x8003c2d4/c464) projection via eproj to finish
+    the per-object render GTE-free; audit remaining RTPS/RTPT callers at the field; 0x8003cdd8 secondary cases.
   - ☐ NEXT (gameplay): descend the SOP per-frame field update `FUN_801092b4` (entity update FUN_8010a0e0,
     Tomba update 0x8007b008, BG draw, entity render FUN_80109fe0) — own its sub-systems native, re-wiring the
     orphaned cull/spawn/collision/object-walk natives as their callers become native. Also own the

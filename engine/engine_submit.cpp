@@ -765,6 +765,31 @@ void ov_perobj_render(Core* c) {
   submit_perobj_render(c);
 }
 
+// NATIVE seaside-area GROUND/BG node renderer — OVERLAY 0x8013E9D8 (the renderfn of the field's BG/world
+// node 0x800FC5C0, dispatched by the master render-list walk's default case). The recomp wrapper: copy a
+// position triple (*(node+0x14)[0/2/4]) + node[0x4e/50/52] onto the stack, call the GTE visibility/setup
+// 0x8013DD34(a0=&pos, a1=&node-triple), then call the per-object render dispatch 0x8003CCA4(node). We own
+// it so the dispatch goes to the NATIVE submit_perobj_render -> submit_perobj_flush (world-coord eproj
+// projection) — this node carries 12 render commands = the main ground geometry, so this is what makes the
+// visible seaside ground render PC-native from world coords. 0x8013DD34 stays PSX (rec_dispatch): it writes
+// only the scratchpad cull/bound temps (0x1F8000C0/0x1F800080), NOT the per-command transform eproj reads,
+// and the recomp calls 0x8003CCA4 UNCONDITIONALLY after it (it is a side-effect setup, not a gate).
+void ov_bg_render(Core* c) {
+  uint32_t node = c->r[4], saved_sp = c->r[29], ra = c->r[31];
+  uint32_t sp = saved_sp - 0x28; c->r[29] = sp;          // mirror the recomp frame (addiu sp,-0x28)
+  uint32_t pp = c->mem_r32(node + 0x14);                  // position-source ptr
+  c->mem_w16(sp + 0x10, c->mem_r16(pp + 0));             // pos triple (3 u16) -> sp+0x10/0x12/0x14
+  c->mem_w16(sp + 0x12, c->mem_r16(pp + 2));
+  c->mem_w16(sp + 0x14, c->mem_r16(pp + 4));
+  c->mem_w16(sp + 0x18, c->mem_r16(node + 0x4e));        // node triple (3 u16) -> sp+0x18/0x1a/0x1c
+  c->mem_w16(sp + 0x1a, c->mem_r16(node + 0x50));
+  c->mem_w16(sp + 0x1c, c->mem_r16(node + 0x52));
+  c->r[4] = sp + 0x10; c->r[5] = sp + 0x18;
+  rec_dispatch(c, 0x8013DD34u);                           // PSX GTE visibility/bound setup (faithful side-effect)
+  c->r[29] = saved_sp; c->r[31] = ra;                    // pop the frame
+  c->r[4] = node; submit_perobj_render(c);                // native world-coord per-object render
+}
+
 // NATIVE phase-2 render-list WALK — gen_func_8003C048 (later-135). The master draining of the per-frame
 // render list: iterate the linked list (head *0x800F2624, next at node+36), skip non-live nodes
 // (node+1==0), and dispatch each live node by its render type (node+0xb, <33) through the 33-entry jump
@@ -815,6 +840,7 @@ static void submit_render_walk(Core* c) {
           void ov_terrain(Core* c);
           uint32_t fn = c->mem_r32(n + 24);
           if (fn == 0x8002AB5Cu) { c->r[4] = n; ov_terrain(c); }   // PC-native world-coord terrain (self-draws)
+          else if (fn == 0x8013E9D8u) { c->r[4] = n; ov_bg_render(c); }   // PC-native world-coord ground/BG node
           else {
             uint32_t slo, shi; PktSpanSession sess;
             c->r[4] = n; rec_dispatch(c, fn);
