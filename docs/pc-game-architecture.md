@@ -114,10 +114,14 @@ render subsystem replaces them.
   clean. `graphics_bind.cpp` carries the forward `SceneObject` native scene-data struct (geometry ref +
   float transform + texture id) the decoupled native renderer will consume. `ov_build_xform` (FUN_80051C8C)
   stays in `engine/engine_submit.cpp` for now (depends on a submit static; moves with the render subsystem).
-  - **NEXT PASS — wire it LIVE top-down (no overrides):** the native spine already reaches `ov_field_run`
-    (engine/engine_stage.cpp:295); its case-0 dispatches the object init prefix to PSX at line 300
-    (`d0(c,0x80072a78)` = rec_dispatch). Replace that with a direct `ov_place_objects(c)` call (and similarly
-    the owned prefix siblings, e.g. `ov_8007B18C`), one at a time, each verified via its dormant A/B gate
-    (`placeverify`/`spawnverify`/…) which then fires on the live path.
+  - **PLACEMENT now LIVE top-down (2026-06-24, no overrides):** `ov_field_run` case-0 (engine/engine_stage.cpp
+    ~300) now calls `ov_place_objects(c)` DIRECTLY (replacing `rec_dispatch(0x80072a78)`). Native object
+    placement drives the live seaside field. Verified headless (`PSXPORT_AUTO_SKIP=1`): gate ON
+    (`debug placeverify`) = both per-load calls byte-exact (full RAM+scratchpad) vs the PSX reference;
+    gate OFF (native actually drives) = field reached, 155 nodes placed identical to the reference set, no
+    bad opcode. This is the first native function on the LIVE object-creation path.
+  - **NEXT — extend the contiguity downward/sideways:** wire the owned prefix siblings the same way (e.g.
+    pool-init `ov_8007B18C` in game/world/pool.cpp — expose + direct-call), then own the per-type spawn
+    VARIANTS that `spawn_dispatch` still `rec_dispatch`es (content), each verified via its A/B gate.
 ```
 ```

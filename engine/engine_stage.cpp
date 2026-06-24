@@ -26,6 +26,7 @@
 #include "core.h"
 #include "cfg.h"
 #include "engine_render.h"          // ov_render_frame / ov_render_frame_x (native per-frame render driver)
+#include "placement.h"              // ov_place_objects — native field object-placement driver (game/world)
 #include <stdio.h>
 
 // dispatch a still-recomp leaf with up to 3 args set (helpers for the native stage machines).
@@ -297,7 +298,8 @@ static void ov_field_run(Core* c) {
   uint16_t s4e = c->mem_r16(sm + 0x4e);
   switch (s4e) {
     case 0:
-      d0(c, 0x8007b18cu); d0(c, 0x800796dcu); d0(c, 0x800263e8u); d0(c, 0x80072a78u);
+      d0(c, 0x8007b18cu); d0(c, 0x800796dcu); d0(c, 0x800263e8u);
+      ov_place_objects(c);   // OWNED native (game/world/placement.cpp) — replaces rec_dispatch(0x80072a78)
       d0(c, 0x80075240u); d0(c, 0x800783dcu); d0(c, 0x80078610u);
       sm = c->mem_r32(0x1f800138u);
       c->mem_w16(sm + 0x4e, 1);
