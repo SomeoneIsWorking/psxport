@@ -35,11 +35,19 @@ void ov_render_walk(Core* c);          // 0x8003c048 (master phase-2 list walk; 
 static inline void d0(Core* c, uint32_t fn) { rec_dispatch(c, fn); }
 static inline void d1(Core* c, uint32_t fn, uint32_t a0) { c->r[4] = a0; rec_dispatch(c, fn); }
 
+// RENDER-PATH COMPARE SWITCH (diagnostic, user 2026-06-24). When set, the FIELD render runs entirely as
+// the PSX recomp path (rec_dispatch the orchestrator) instead of the native world-coord path — WITHOUT
+// touching the native frame loop / game state, so the SAME deterministic guest state can be rendered both
+// ways and diffed (native must match PSX under 1x / 4:3 / 30fps). Set by PSXPORT_RENDER_PSX / REPL
+// `renderpsx on|off`. This is a verification instrument, NOT a shipped behavior toggle.
+extern "C" { int g_render_psx = 0; }
+
 // 0x8003f9a8 — per-frame render orchestrator (11 passes). The render-queue walks (0x8003bf00/eec0/bb50/
 // bcf4) run through their PC-native bodies (engine_submit.cpp), which attach each object's PC-native
 // world-position depth — engine-owned render ordering from real world coords. 0x8003b588 has no real
 // native (only a diagnostic counter), and the non-walk passes stay PSX, so both rec_dispatch.
 void ov_render_frame(Core* c) {
+  if (g_render_psx) { d0(c, 0x8003f9a8u); return; }   // COMPARE: render the field via the PSX recomp path
   d0(c, 0x8004fd30u);
   d0(c, 0x80025d98u);
   ov_rwalk_aux_bf00(c);              // 0x8003bf00
@@ -55,6 +63,7 @@ void ov_render_frame(Core* c) {
 
 // 0x8003fa44 — mid-transition render orchestrator twin (reduced pass set, same native walks).
 void ov_render_frame_x(Core* c) {
+  if (g_render_psx) { d0(c, 0x8003fa44u); return; }   // COMPARE: render the field via the PSX recomp path
   d0(c, 0x8004fd30u);
   d0(c, 0x80025d98u);
   ov_rwalk_aux_bf00(c);              // 0x8003bf00

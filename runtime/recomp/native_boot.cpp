@@ -618,6 +618,14 @@ static long native_repl_read(Core* c, uint32_t f) {
         c->game->psx_fallback = (!strcmp(st, "off") || !strcmp(st, "0")) ? 0 : 1;
       fprintf(stderr, "[repl] psx_fallback = %d\n", c->game->psx_fallback);
     }
+    // renderpsx on|off — render the FIELD via the PSX recomp path (vs the native world-coord path) with the
+    // SAME native game state, for a native-vs-PSX RENDER diff (must match at 1x/4:3/30fps). Diagnostic.
+    else if (!strcmp(cmd, "renderpsx")) {
+      extern int g_render_psx; char st[16] = {0};
+      if (sscanf(line, "%*s %15s", st) == 1)
+        g_render_psx = (!strcmp(st, "off") || !strcmp(st, "0")) ? 0 : 1;
+      fprintf(stderr, "[repl] g_render_psx = %d\n", g_render_psx);
+    }
     // seqsolo <i> — stop ALL open libsnd sequences then SsSeqPlay just sequence <i> at full vol, via the
     // GAME'S OWN sequencer. Lets each area SEP sequence be rendered in isolation (the area's field theme
     // otherwise plays continuously). SsSeqStop=0x80091AF0, SsSeqPlay(h,mode,loop)=0x80090560, SsSeqSetVol
@@ -1226,6 +1234,10 @@ void native_boot_run(Core* c) {
     if (g && *g) c->game->psx_fallback = (atoi(g) != 0);
     fprintf(stderr, "[native_boot] psx_fallback=%d (%s)\n", c->game->psx_fallback,
             c->game->psx_fallback ? "native boot+frameloop, PSX everything else (sync)" : "full native"); }
+  // RENDER-path compare switch: PSXPORT_RENDER_PSX renders the field via the PSX recomp path (native state).
+  { extern int g_render_psx; const char* r = cfg_str("PSXPORT_RENDER_PSX");
+    if (r && *r) g_render_psx = (atoi(r) != 0);
+    if (g_render_psx) fprintf(stderr, "[native_boot] g_render_psx=1 (field render via PSX recomp path)\n"); }
   // Intro FMVs: the real boot is SCEA (stub) -> Whoopee logo (LOGO.STR) -> opening movie (OP.STR) ->
   // title/menu. The game's own STR streaming (strNext) TIMES OUT under our runtime (we don't feed
   // CD-streamed FMV sectors to its StrPlayer — see "time out in strNext()" in the DEMO stage), so the
