@@ -8361,3 +8361,25 @@ KEY CORRECTIONS:
 - THE OWNERSHIP TARGET IS NOW PINNED: own FUN_80109fe0 (engine/sop.cpp ov_sop_field_update's entrender call)
   natively. That single function owns the field's whole picture; owning it correctly (backdrop→RQ_BACKGROUND,
   world→eproj depth) fixes the "sea on top" AND gives real depth, in the RIGHT render path.
+
+### later-238 LANDED — owned FUN_80109fe0 (the live field render) native; backdrop now real-depth, "sea on top" root cause eliminated
+RE'd the SOP submitters: FUN_801099b4 (GT3, scratch/decomp/sop/801099b4.c — stride 36, RTPT-projects, vert
+offsets +16/+20/+24/+28/+32) and FUN_80109c80 (GT4, 80109c80.c — stride 44, RTPT+RTPS, +20/+24/+28/+32/+36/+40)
+are BYTE-IDENTICAL in layout to submit_poly_gt3_native / submit_poly_gt4_native, and FUN_80109fe0's loop
+(es=0x800f2418, CR0-7 from 0x1f8000f8, idx array @+0x10, GT3-then-GT4 per cmd) is identical to
+ov_field_entity_render. So ov_field_entity_render IS the faithful native reimpl. CRUCIALLY: both submitters
+GTE-PROJECT every record (RTPT/RTPS) — the sky/sea backdrop is real WORLD GEOMETRY, not a flat screen-space
+overlay. It only LOOKED like a foreground "backdrop" because, run as PSX, its packets were is3d=0 (the native
+renderer couldn't recover their projected verts) → flat 2D foreground → drew over the native world.
+FIX (engine/sop.cpp ov_sop_field_update): replaced `d1(c, 0x80109fe0u, 0x800f2418u)` (PSX) with
+`c->r[4]=0x800f2418u; ov_field_entity_render(c)` (native). Now every field record — grass, house, tree, AND
+the sky/sea — projects through float eproj with REAL per-vertex depth and sorts in RQ_WORLD by the depth
+buffer. VERIFIED on the live game: sky pixel (160,20) is now [primat-rq] layer=1 om=0 depth~0.04-0.085 (native
+world), NO gp0 is3d=0 backdrop prim remains; scene renders correctly (matches baseline), STABLE 380+ frames
+with motion (Tomba walks, sign prompt appears, gameplay progresses), zero derail. The "sea on top" root cause
+(backdrop classified is3d=0 foreground while world is native) is GONE — all field geometry is native real-depth
+in the RIGHT (SOP) render path. (USER eyeball pending: sop_native_stable.png.)
+NEXT: own the SOP entity UPDATE FUN_8010a0e0 (positions) + the BG draws FUN_8010bffc/8010c26c (parallax/scroll,
+on 0x800ed018) + Tomba update 0x8007b008 — the rest of ov_sop_field_update's PSX leaves — as the frontier
+advances. The ov_render_frame water-ownership (later-238 ov_rwalk_b588) is dormant in this SOP path; revisit if
+ov_field_frame becomes live. BDTAG attribution harness (ffspan_*, PSXPORT_BDTAG) left in-tree (gated) for reuse.
