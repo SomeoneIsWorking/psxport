@@ -21,6 +21,7 @@
 
 #include "core.h"
 #include "cfg.h"
+#include "graphics_bind.h"   // ov_obj_record_init — native graphics-bind (game/world)
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -65,7 +66,7 @@ bool beh_741dc_body(Core* c) {
     // ---- STATE 0 ----
     if (c->mem_r8(0x800BF873u) != 0) { c->mem_w8(obj + 4, 3); return true; }
     c->r[4] = obj; c->r[5] = 1; c->r[6] = 0x18;
-    rec_dispatch(c, 0x80051B70u);
+    ov_obj_record_init(c);   // OWNED native graphics-bind (render-record alloc + geomblk resolve into node+0xC0)
     if (c->r[2] != 0) return true;
     c->mem_w16(obj + 0x80, 0x140);
     c->mem_w16(obj + 0x82, 0x280);
