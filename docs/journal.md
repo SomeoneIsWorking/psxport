@@ -8452,3 +8452,24 @@ and its submitters — reached top-down from whatever cooperative driver runs it
 world objects are traced and these functions identified, **each should be DECOMPILED into the PC port** (the
 overlay GT3/GT4 submitters + entity loop are direct equivalents of natives we already have). Decompiles cached
 under `scratch/dual/*.asm` (capstone flat-dump disassembler `scratch/dual/mdis.py`).
+
+## later-243 (2026-06-24) — Phase-1 DECOUPLED native world-data render LANDED (debug scenenative); backdrop is the remaining gap
+Per the user's render north star ([[one-native-render-path-decoupled]]): ONE native render path driven from
+WORLD DATA, PSX vanilla, fully decoupled. Phase 1 landed (commit 6f01015): `ov_scene_native`
+(engine_submit.cpp), wired in `ov_draw_otag` (game_tomba2.cpp); when `debug scenenative` is on the PSX OT
+walk is SKIPPED and the field renders from game data — native render walks (→ov_terrain), scene table
+0x800F2418 (ov_field_entity_render), and every object in the 3 entity lists (node+0xC0→geomblk→native GT3/GT4,
+eproj+D32+lighting). VERIFIED headless (AUTO_SKIP free-roam): terrain/hut/tree/Tomba/Swine/see-saw/water all
+render real-depth, stable 200+ frames of motion, no derail.
+- **0px root cause (solved):** native 3D world prims live in depth [0,0.9375]; the PSX 2D-FG band is (0.9375,1]
+  and the compare is GREATER_OR_EQUAL, so the PSX flat layer WON and covered the native world. Skipping the PSX
+  walk (decoupling) fixed it — confirms the native path must OWN the frame, not share a queue with PSX.
+- **REMAINING = the BACKDROP** (the only black area: sky + distant parallax hills). NOT the known tilemap
+  drawer (FUN_80115598 signature absent in this field). Candidates among the still-skipped passes: **0x8004fd30**
+  (first pass — builds a full-screen 320×240 shaded rect = the sky/background fill; reads color/shade from
+  0x1F800135, submits via 0x80081cf8) and **0x8003df04** (the SKIPPASS-major builder, ~7470px — likely the
+  distant hills/scenery). NEXT: own these natively as RQ_BACKGROUND / world geometry (decode 0x8004fd30's
+  gradient → native full-screen bg quad; RE 0x8003df04 → its geometry). Then the 2D HUD, then retire the PSX
+  walk here and make scenenative the behavior (ungate), and confirm 60fps/ires/lighting all ride this one path.
+- Tools added this session: REPL `ents` (enumerate objects), `PSXPORT_PCTRAP=0xADDR`(+_SKIP=N) guest-call-chain
+  tracer, `PSXPORT_AUTO_SKIP=1` (reach real free-roam). RE: docs/engine_re.md ★ GAME-STAGE OBJECT PIPELINE.
