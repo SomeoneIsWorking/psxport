@@ -60,10 +60,11 @@ extern "C" { int g_render_psx = 0; }
 // bcf4) run through their PC-native bodies (engine_submit.cpp), which attach each object's PC-native
 // world-position depth — engine-owned render ordering from real world coords. 0x8003b588 has no real
 // native (only a diagnostic counter), and the non-walk passes stay PSX, so both rec_dispatch.
+extern "C" void ffspan_begin(void), ffspan_end(const char*);   // PSXPORT_BDTAG attribution (engine_stage.cpp)
 void ov_render_frame(Core* c) {
   if (g_render_psx) { d0(c, 0x8003f9a8u); return; }   // COMPARE: render the field via the PSX recomp path
-  d0(c, 0x8004fd30u);
-  d0(c, 0x80025d98u);                // STILL-PSX: 2D atlas SPRITE band (op-0x65, node 800BFEB8) — NOT the cyan backdrop
+  ffspan_begin(); d0(c, 0x8004fd30u); ffspan_end("rf_4fd30");
+  ffspan_begin(); d0(c, 0x80025d98u); ffspan_end("rf_25d98");   // 2D atlas SPRITE band (op-0x65)
   ov_rwalk_aux_bf00(c);              // 0x8003bf00
   ov_rwalk_aux_eec0(c);             // 0x8003eec0
   ov_rwalk_b588(c);                  // 0x8003b588 — field WATER, NATIVE real-depth (node 0x800E7E80 → submit_perobj_render)
@@ -73,9 +74,9 @@ void ov_render_frame(Core* c) {
   // DIAG groundnative: route the ground table real-depth via ov_field_entity_render. Decode is CORRECT, but
   // the 2D sea/water backdrop then composites OVER it (later-235 render-ordering blocker) — OFF by default.
   if (cfg_dbg("groundnative")) { c->r[4] = 0x800f2418u; ov_field_entity_render(c); }
-  else d1(c, 0x8003d0bcu, 0x800f2418u); // STILL-PSX: emits ~220 GP0 field prims = the GROUND (later-229)
-  d0(c, 0x8003f024u);
-  d0(c, 0x8003df04u);
+  else { ffspan_begin(); d1(c, 0x8003d0bcu, 0x800f2418u); ffspan_end("rf_ground"); } // STILL-PSX GROUND (later-229)
+  ffspan_begin(); d0(c, 0x8003f024u); ffspan_end("rf_3f024");
+  ffspan_begin(); d0(c, 0x8003df04u); ffspan_end("rf_3df04");
   ov_render_walk(c);                  // 0x8003c048 (native — terrain renders world-coord via ov_terrain)
 }
 
