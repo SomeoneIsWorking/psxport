@@ -1238,6 +1238,8 @@ void native_boot_run(Core* c) {
   { extern int g_render_psx; const char* r = cfg_str("PSXPORT_RENDER_PSX");
     if (r && *r) g_render_psx = (atoi(r) != 0);
     if (g_render_psx) fprintf(stderr, "[native_boot] g_render_psx=1 (field render via PSX recomp path)\n"); }
+  { extern int g_perobj_psx; const char* r = cfg_str("PSXPORT_PEROBJ_PSX");   // BISECT: per-object render -> PSX
+    if (r && *r) g_perobj_psx = (atoi(r) != 0); }
   // Intro FMVs: the real boot is SCEA (stub) -> Whoopee logo (LOGO.STR) -> opening movie (OP.STR) ->
   // title/menu. The game's own STR streaming (strNext) TIMES OUT under our runtime (we don't feed
   // CD-streamed FMV sectors to its StrPlayer — see "time out in strNext()" in the DEMO stage), so the

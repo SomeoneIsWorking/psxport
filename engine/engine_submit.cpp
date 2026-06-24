@@ -743,7 +743,9 @@ void ov_perobj_flush(Core* c) {
 // (#4). The exact origin projection is "where the object actually is", so depth/occlusion is owned from the
 // object's real placement, not a quantized approximation. (engine owns placement → engine owns depth.)
 
+int g_perobj_psx = 0;   // BISECT: route the per-object render to the PSX body (compare which native piece diverges)
 static void submit_perobj_render(Core* c) {
+  if (g_perobj_psx) { rec_super_call(c, 0x8003CCA4u); return; }
   uint32_t node = c->r[4];
   g_dbg_render_node = node;                               // objid: tag this object's prims
   c->mem_w32(SCR + 0x28C, node);                          // current render object (read by downstream code)
