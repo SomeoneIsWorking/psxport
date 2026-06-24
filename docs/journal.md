@@ -8263,3 +8263,39 @@ mis-attribution:
   2D FOREGROUND element (sea-foam/spray) that must NOT be reclassified — eyeball before blanket-bg.
 - Diagnostics left in-tree (gated, OFF by default): PSXPORT_SKIPPASS (engine_render.cpp, with the persistence
   caveat in-comment). render_cmp unchanged at 6.96%.
+
+## later-238 (2026-06-24) — CORRECTION: the "sea/sky backdrop" is the GROUND scene-table (0x801401B8), NOT the atlas drawer or the water pass. later-235/236/237 mis-attributed it.
+Followed the user's directive (port TOP-DOWN, it reveals itself) instead of the handoff's bottom-up "replace
+the atlas pass" plan — and the handoff/journal attribution chain was WRONG. Hard evidence (live PRIMAT + WWATCH
+on the actual screen-filling cyan, with `debug groundnative` ON so the bug shows):
+- The visible cyan "sea" that covers the field in groundnative mode is **pktnode 800C0ED4, op=3C, tp=(576,256)
+  clut=(624,510), is3d=0** — a TEXTURED POLY (GT4), not a sprite.
+- **WWATCH 0x800C0ED4 → builder pc=0x8013FBE8 / 0x8013FED4 / 0x8013FEC4 = the GT3/GT4 scene-table submitters
+  0x8013FB88 / 0x8013FE58**, dispatched by the GROUND handler **0x801401B8** (the 0x8003d0bc pass, scene table
+  0x800F2418). So the sky/sea backdrop lives in the SAME scene-table as the grass/house/tree and is drawn by
+  the GROUND pass. It is NOT the atlas sprite drawer 0x80025d98/0x80025b78 (that builds op-0x65 SPRITES — node
+  800BFEB8 — a SEPARATE, thin element) and NOT the water pass 0x8003b588.
+- This RESOLVES every prior confusion: skipping/replacing 0x80025d98 did nothing because the cyan backdrop
+  isn't drawn by it (later-237's WWATCH watched node 800BFEB8 = the sprite band, and conflated it with the
+  poly backdrop 800C0ED4). The "sea on top" in groundnative is because ov_field_entity_render projects the
+  ENTIRE table uniformly, so the screen-space backdrop quads (tp 576,256, baked perspective) mis-project and
+  cover the world instead of staying behind it. The grass entries project fine (later-235 groundprobe was
+  right about THOSE) — but the table also contains backdrop entries that must NOT be camera-projected.
+- DEAD ENDS now firmly closed: (a) reclassify/own the atlas sprite drawer 0x80025d98 as RQ_BACKGROUND — wrong
+  target, doesn't touch the cyan backdrop; (b) own the water 0x8003b588 to fix the backdrop — water poly is a
+  different node, owning it (Pass A, below) left 800C0ED4 untouched. The atlas SPRITE band and the water are
+  real but minor/separate; do NOT chase them for the "sea on top" bug.
+- THE REAL FRONTIER: own 0x801401B8 (the field ground+backdrop scene-table renderer) faithfully — it must
+  distinguish the WORLD-space ground entries (camera-project via eproj → real depth) from the SCREEN-space
+  backdrop entries (sky/sea on tp 576,256 → draw as RQ_BACKGROUND 2D, no camera projection). Need the
+  per-entry 3D-vs-backdrop discriminator from 0x801401B8's decode (RE in progress). Then groundnative becomes
+  correct and the grass/house/tree show over the backdrop.
+
+### later-238 LANDED: Pass A (field WATER) owned native real-depth (engine_submit.cpp ov_rwalk_b588).
+Replaced the orphan diag stub with the faithful body of 0x8003B588 (node 0x800E7E80): node-byte bookkeeping
+(@0x8003b5a0..698, ported 1:1 from disas), rec_dispatch the PSX transform-setup leaf 0x800597AC (no render),
+then route the per-object render through NATIVE submit_perobj_render (node+0xD=0 → render-case
+0x80014EC8[0]=0x8003CD00 = the eproj FLUSH case → real per-vertex depth). Wired into ov_render_frame/_x
+(both twins) replacing d0(c,0x8003b588u). VERIFIED: default seaside view (groundnative off) unchanged
+(passA_default.png == baseline) — no regression. This is correct top-down progress (water now sorts by real
+depth) but it is NOT the "sea on top" fix (that is 0x801401B8, above).

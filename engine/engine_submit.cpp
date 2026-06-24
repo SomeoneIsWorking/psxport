@@ -1732,7 +1732,60 @@ void ov_subcnt_c8f4(Core* c) { subcnt_tick(c, 0x8003C8F4u); }
 // PSXPORT_DEBUG=rwalk — phase-2 render-walk caller counter. The per-object render dispatch
 // gen_func_8003CCA4 is driven by one of several orchestrators (the render-layer/list drainers); count
 // which fire per scene so the phase-2 flush walk worth owning next is picked by data. Super-calls.
-void ov_rwalk_b588(Core* c) { subcnt_tick(c, 0x8003B588u); }
+// 0x8003B588 (later-231 "Pass A") — the field WATER render pass, OWNED native real-depth.
+// Node 0x800E7E80 (cmd-ptr array @+0xC0). Structure (disas.py 0x8003b588): node-byte bookkeeping
+// (anim/state @0x8003b5a0..0x8003b698, ported 1:1 below), then the PSX per-object transform SETUP leaf
+// 0x800597AC (rec_dispatch — still PSX, does NO render), then the per-object RENDER. Live, node+0xD=0 →
+// (node+0xD)&0xB=0 → render-case table 0x80014EC8[0]=0x8003CD00 = the native eproj FLUSH case, so routing
+// the render through the native submit_perobj_render gives the water world-coord FLOAT projection with REAL
+// per-vertex depth. Previously the whole pass ran as pure PSX (engine_render.cpp d0(0x8003b588)), so the
+// inner jal 0x8003CCA4 emitted GTE packets the native renderer couldn't project (is3d=0) → the water drew
+// as a flat 2D FOREGROUND fill OVER the world (the "sea on top" bug). NB: own this TOGETHER with the native
+// ground (later-231 caveat) so both sort by real depth — a still-2D-FG ground would occlude the real-depth water.
+void ov_rwalk_b588(Core* c) {
+  const uint32_t node = 0x800E7E80u;
+  uint32_t v1 = c->mem_r8(node + 0x0D);
+  if ((v1 & 0xD0) == 0) {
+    c->mem_w8(node + 0x0D, 0);                                   // @698
+  } else {
+    v1 |= 0x02; c->mem_w8(node + 0x0D, v1);                      // @5b0/@5bc
+    if (!(v1 & 0x20)) {                                          // @5b8: (v1&0x20)==0 → byte setup
+      uint32_t g = c->mem_r8(0x1F800247u);                       // @5cc/@608/@658 (same addr)
+      if (v1 & 0x10) {                                           // @5c0 → @5cc
+        int to5f4 = ((g & 0x30) != 0) || ((g & 0x03) < 2);       // @5d4 / @5e0+@5e4
+        if (!to5f4) {                                            // @5e8 → @68c (v0=208)
+          c->mem_w8(node + 0x18, 208); c->mem_w8(node + 0x19, 208); c->mem_w8(node + 0x1A, 208);
+        } else {                                                 // @5f4
+          uint32_t v1b = c->mem_r8(node + 0x0D);
+          if (v1b & 0x80) {                                      // @5fc≠0 → @604/@684 (v0 computed, then 32/32)
+            c->r[4] = (g & 0x0F) << 7; rec_dispatch(c, 0x80083E80u);
+            int32_t r = ((int32_t)(c->r[2] << 16)) >> 22;        // sll16/sra22
+            c->mem_w8(node + 0x18, (uint8_t)(r + 48)); c->mem_w8(node + 0x19, 32); c->mem_w8(node + 0x1A, 32);
+          } else if (v1b & 0x40) {                               // @62c → @634 (v0=32)
+            c->mem_w8(node + 0x18, 32); c->mem_w8(node + 0x19, 32); c->mem_w8(node + 0x1A, 32);
+          } else {                                               // @640 (v0=128)
+            c->mem_w8(node + 0x18, 128); c->mem_w8(node + 0x19, 128); c->mem_w8(node + 0x1A, 128);
+          }
+        }
+      } else {                                                   // @64c: (v1&0x10)==0
+        if (v1 & 0x80) {                                         // @650≠0 → @654/@680/@684 (v0=r+16+32, then 32/32)
+          c->r[4] = (g & 0x0F) << 7; rec_dispatch(c, 0x80083E80u);
+          int32_t r = ((int32_t)(c->r[2] << 16)) >> 22;
+          c->mem_w8(node + 0x18, (uint8_t)(r + 48)); c->mem_w8(node + 0x19, 32); c->mem_w8(node + 0x1A, 32);
+        } else {                                                 // @67c → @680/@684 (v0=0+32)
+          c->mem_w8(node + 0x18, 32); c->mem_w8(node + 0x19, 32); c->mem_w8(node + 0x1A, 32);
+        }
+      }
+    }
+  }
+  c->r[4] = node; rec_dispatch(c, 0x800597ACu);                  // @69c: PSX transform setup (no render)
+  if (c->mem_r8(node + 1) != 0) {                                // @6a4: per-object RENDER (native real-depth)
+    uint8_t s1 = c->mem_r8(node + 8);
+    if ((c->mem_r16(node + 0x17E) & 0x20) && c->mem_r8(node + 0x179)) c->mem_w8(node + 8, c->mem_r8(node + 9));
+    c->r[4] = node; submit_perobj_render(c);                     // was inner jal 0x8003CCA4 (PSX GTE)
+    c->mem_w8(node + 8, s1);
+  }
+}
 void ov_rwalk_bb50(Core* c) { subcnt_tick(c, 0x8003BB50u); }
 void ov_rwalk_bcf4(Core* c) { subcnt_tick(c, 0x8003BCF4u); }
 void ov_rwalk_bf00(Core* c) { subcnt_tick(c, 0x8003BF00u); }
