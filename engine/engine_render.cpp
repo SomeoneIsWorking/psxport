@@ -52,10 +52,10 @@ void ov_render_frame(Core* c) {
   d0(c, 0x80025d98u);
   ov_rwalk_aux_bf00(c);              // 0x8003bf00
   ov_rwalk_aux_eec0(c);             // 0x8003eec0
-  d0(c, 0x8003b588u);                // diagnostic-only native — rec_dispatch the PSX body
+  d0(c, 0x8003b588u);                // STILL-PSX: emits ~117 GP0 field prims (later-229; NOT diagnostic-only)
   ov_render_walk_snapshot(c);        // 0x8003bb50
   ov_rwalk_aux_bcf4(c);              // 0x8003bcf4
-  d1(c, 0x8003d0bcu, 0x800f2418u);
+  d1(c, 0x8003d0bcu, 0x800f2418u);   // STILL-PSX: emits ~220 GP0 field prims = the GROUND (later-229)
   d0(c, 0x8003f024u);
   d0(c, 0x8003df04u);
   ov_render_walk(c);                  // 0x8003c048 (native — terrain renders world-coord via ov_terrain)

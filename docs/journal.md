@@ -7894,3 +7894,40 @@ dispatch 0x8003CCA4 = native submit_perobj_render -> submit_perobj_flush (world-
 - NEXT: own 0x8003c8f4 (billboard quad) projection via eproj to finish the per-object render GTE-free; then
   audit any remaining RTPS/RTPT callers at the field (the PSXPORT_RTPCALLER histogram is gated on the GPU
   present frame %50 and didn't fire headless — fix its trigger or add a per-frame gte_op RTP counter).
+
+## later-229 (2026-06-24) — ROOT CAUSE of the missing crane/figure + the 6.96% diff: the VISIBLE FIELD IS STILL ~99% PSX 2D-BAND
+Continues later-228. Chased the harness 6.96% diff (crane device + a figure + a pickup OCCLUDED/invisible on the
+RIGHT in native; present in PSX). The chase OVERTURNS the later-225..228 story that "the field render is owned":
+**the bulk of the visible seaside field is still drawn by STILL-PSX passes that emit GP0 packets → gp0_exec →
+the flat 2D OT-BAND (no real depth)**. Only a small per-object-mesh subset goes through the real-depth owned
+path (eproj → gpu_draw_world_quad). So the native field is essentially PSX flat layering with a thin real-depth
+layer hidden underneath — which is exactly why it nearly matches PSX (6.96%) and why the user said "you need the
+ownership of game's 3D OBJECTS, not sorting layers."
+- HARD EVIDENCE (new diagnostics, all via cfg_str so REPL `debug`/env both work):
+  - `PSXPORT_PRIMAT="x,y"` (gpu_native.cpp, gp0_exec + gpu_emit_rq_item): logs EVERY prim covering a DISPLAY
+    pixel with is3d/bg/billboard/dep/layer/order_mode/node/tp/clut/col — point-in-triangle, sees BOTH the gp0
+    OT-walk prims AND the queue/world prims (provat is BLIND to VK polys: it tracks CPU s_vram, polys tee to VK).
+  - `PSXPORT_PAINTFG=1`: force every gp0 2D-FG poly to solid magenta. Result at the seaside field: the WHOLE
+    ground/tree/house/Tomba turns magenta → the visible field IS gp0 2D-band, NOT owned real-depth geometry.
+  - `debug ndepth`: real-depth(3D) gp0 prims = **3/frame**, OT-band(2D) = **337/frame** (3D% = 0.9%). The
+    native submitters DO fire (subc: gt3/gt4_native ~56/frame) but that output is a minority, mostly hidden
+    UNDER the 2D-band field. (ndepth counts only gp0_exec prims; gpu_draw_world_quad prims bypass it.)
+- WHERE THE 337 2D-BAND PRIMS COME FROM (bisect via the temp PSXPORT_SKIPPASS mask over ov_render_frame's
+  rec_dispatch'd non-walk passes): skipping ALL non-walk passes → 2D-band drops 337→0. Per-pass:
+  **0x8003d0bc emits ~220 prims (the GROUND/terrain — a 22-case MODE dispatcher keyed on *0x800BF870, jump
+  table 0x80014EF0, arg a0=0x800F2418), 0x8003b588 emits ~117 prims** (NOT "diagnostic-only" as later-225
+  claimed — that note is FALSE; fix it). The billboard handlers (0x8003C2D4/C464/C5F8/C788) are NOT the
+  source (SKIPBB → still 337) and the per-object flush is not either (g_perobj_psx no-change, later handoff).
+- THE CRANE specifically (#DF38, a QUAD/billboard object, rtype=0x11, world (5727,-1912,5548)): its tan quad
+  (col 208,192,144, tp=(320,0) 4bpp clut=(496,177)) reaches gp0 as a 2D-FG (HUD-band) prim and is queued
+  topmost, but is CULLED before raster (PSXPORT_PAINTFG leaves the pixel sky-blue — not a texture/occlusion
+  issue; the VK quad is dropped, likely winding/degenerate from the un-owned GTE projection). The fix is NOT
+  to debug the 2D-FG cull — it is to OWN these objects so they project world-coord with REAL per-vertex depth.
+- THE FIX (next session): OWN 0x8003d0bc and 0x8003b588 PC-native — RE each, route their per-object geometry
+  through eproj + the native GT3/GT4 submitters (gpu_draw_world_quad, real depth), exactly like
+  submit_perobj_flush / ov_field_entity_render. That moves the ground + the 117-prim pass + the crane/figure/
+  pickup off the flat 2D-band onto real depth → the occlusion resolves itself and the 6.96% collapses. Verify
+  with `tools/render_cmp.py` (diagnostic gate; the TARGET is real-depth ownership, NOT matching PSX).
+- TOOLS LEFT IN-TREE: PSXPORT_PRIMAT + PSXPORT_PAINTFG (gpu_native.cpp, cfg_str, documented in gfx-debug.md).
+  The temp PSXPORT_SKIPPASS getenv mask + bb_dispatch/SKIPBB bisect scaffolding were REMOVED before this commit
+  (raw getenv is banned); re-add a cfg_str-based pass/handler skip if the next session needs to re-bisect.

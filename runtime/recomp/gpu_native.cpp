@@ -592,6 +592,20 @@ void gpu_emit_rq_item(Core* core, const RqItem* it) {
   const int* xs = it->xs; const int* ys = it->ys; const int* us = it->us; const int* vs = it->vs;
   const unsigned char* rs = it->rs; const unsigned char* gs = it->gs; const unsigned char* bs = it->bs;
   const float* depth = it->depth; int mode = it->mode, raw = it->raw, nv = it->nv ? it->nv : 4;
+  // PSXPORT_PRIMAT="x,y" (DISPLAY coords): also log WORLD/queue prims (gpu_draw_world_quad etc.) that cover
+  // that pixel — primat in gp0_exec is blind to these (they bypass the OT walk). Shows the real-depth
+  // occluders. (diag, 2026-06-24)
+  { static int qx=-2, qy=-1; if (qx==-2){ qx=-1; const char* pa=cfg_str("PSXPORT_PRIMAT"); if(pa) sscanf(pa,"%d,%d",&qx,&qy); }
+    if (qx>=0) { int ax=s.s_disp_x+qx, ay=s.s_disp_y+qy;
+      auto edge=[](int ax_,int ay_,int x0,int y0,int x1,int y1){ return (int64_t)(x1-x0)*(ay_-y0)-(int64_t)(y1-y0)*(ax_-x0); };
+      auto intri=[&](int i0,int i1,int i2){ int64_t w0=edge(ax,ay,xs[i1],ys[i1],xs[i2],ys[i2]);
+        int64_t w1=edge(ax,ay,xs[i2],ys[i2],xs[i0],ys[i0]); int64_t w2=edge(ax,ay,xs[i0],ys[i0],xs[i1],ys[i1]);
+        return (w0>=0&&w1>=0&&w2>=0)||(w0<=0&&w1<=0&&w2<=0); };
+      if (intri(0,1,2) || (nv==4 && intri(1,2,3))) { static int n=0; if(n++<6000)
+        fprintf(stderr,"[primat-rq] f%d dbgnode=%08X layer=%d om=%d semi=%d depth=[%.4f %.4f %.4f %.4f] col=(%d,%d,%d) xy0=(%d,%d) xy2=(%d,%d)\n",
+          s.s_frame, it->dbg_node, it->layer, it->order_mode, it->semi,
+          depth?depth[0]:-1.f, depth?depth[1]:-1.f, depth?depth[2]:-1.f, (depth&&nv==4)?depth[3]:-1.f,
+          rs[0],gs[0],bs[0], xs[0],ys[0], xs[2],ys[2]); } } }
   unsigned ord = s.s_prim_order++;
   gpu_vk_set_order(core, ord);
   // Depth: 3D world prims carry real per-vertex view-Z (set_vd); 2D prims select the renderer's far/near
@@ -928,6 +942,26 @@ void GpuState::gp0_exec(Core* core) {
           prim_dump_poly(core, s_frame, ord_idx, op, nv, is3d, is3d ? -1 : bg, xs, ys,
                          rs[0], gs[0], bs[0], textured ? 1 : 0, semi); }
         extern long g_nd_3d, g_nd_2d; if (is3d) g_nd_3d++; else g_nd_2d++;
+        // PSXPORT_PRIMAT="x,y" (DISPLAY coords): log EVERY poly whose triangle covers that display pixel,
+        // with its 3D/2D classification + per-vertex depth (ord) + node + color. Unlike provat (blind to
+        // VK polys), this is the gp0 tee, so it sees the actual occlusion contestants. Frontmost opaque =
+        // max ord. Tagged f%d so a multi-frame run can be grepped for the shot frame. (diag, 2026-06-24)
+        { static int qx=-2, qy=-1; if (qx==-2){ qx=-1; const char* pa=cfg_str("PSXPORT_PRIMAT"); if(pa) sscanf(pa,"%d,%d",&qx,&qy); }
+          if (qx>=0) { int ax=s_disp_x+qx, ay=s_disp_y+qy;
+            auto edge=[](int ax_,int ay_,int x0,int y0,int x1,int y1){ return (int64_t)(x1-x0)*(ay_-y0)-(int64_t)(y1-y0)*(ax_-x0); };
+            auto intri=[&](int i0,int i1,int i2){ int64_t w0=edge(ax,ay,xs[i1],ys[i1],xs[i2],ys[i2]);
+              int64_t w1=edge(ax,ay,xs[i2],ys[i2],xs[i0],ys[i0]); int64_t w2=edge(ax,ay,xs[i0],ys[i0],xs[i1],ys[i1]);
+              return (w0>=0&&w1>=0&&w2>=0)||(w0<=0&&w1<=0&&w2<=0); };
+            int cover = intri(0,1,2) || (nv==4 && intri(1,2,3));
+            if (cover) { static int n=0; extern uint32_t g_dbg_render_node; if (n++<6000)
+              fprintf(stderr,"[primat] f%d objnode=%08X pktnode=%08X op=%02X is3d=%d bg=%d bb=%d semi=%d tex=%d mode=%d raw=%d tp=(%d,%d) clut=(%d,%d) uv0=(%d,%d) da=(%d,%d)-(%d,%d) off=(%d,%d) col=(%d,%d,%d) bbox=(%d,%d)-(%d,%d)\n",
+                s_frame, g_dbg_render_node, s_cur_node, op, is3d, bg, billboard, semi, textured?1:0, mode, rw, s_tp_x, s_tp_y, s_clut_x, s_clut_y,
+                us[0], vs[0], s_da_x0,s_da_y0,s_da_x1,s_da_y1, s_off_x,s_off_y,
+                rs[0],gs[0],bs[0], bx0,by0,bx1,by1); } } }
+        // PSXPORT_PAINTFG=1 (diag): force every 2D-FG (HUD-band) poly to opaque solid magenta so we can SEE
+        // whether these prims rasterize at all (vs being culled / texture-transparent).
+        { static int pf=-2; if(pf==-2){ const char* e=cfg_str("PSXPORT_PAINTFG"); pf=e?atoi(e):0; }
+          if (pf && !is3d && !bg) { textured=0; mode=3; for(int i=0;i<nv;i++){rs[i]=255;gs[i]=0;bs[i]=255;} } }
       }
       // Genuine engine-wide: a poly with is3d==0 is a SCREEN-SPACE 2D element (HUD banner, full-screen
       // overlay) drawn as polys rather than sprites. The 3D world widens via the projection (OFX); these

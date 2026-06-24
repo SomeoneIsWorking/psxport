@@ -169,6 +169,8 @@ static void objid_overlay(RenderQueue* q, Core* core) {
       int cx = (int)(sx + 0.5f), cy = (int)(sy + 0.5f);
       if (cx < -60 || cx > 420 || cy < -40 || cy > 280) continue;   // off-screen
       if (quad) nquad++; else nobj++;
+      if (dolog && quad) fprintf(stderr, "[objid-q] node=%08X rtype=0x%02X scr=(%d,%d) world=(%d,%d,%d) +0xC=%02X +0xD=%02X\n",
+                                 n, rtype, (int)(sx+0.5f),(int)(sy+0.5f), wx,wy,wz, core->mem_r8(n+0xC), core->mem_r8(n+0xD));
       unsigned char br = quad ? 255 : 0, bg = 255, bb = quad ? 0 : 255;   // quads yellow, 3D objects cyan
       objid_box(core, ref, cx - 6, cy - 6, cx + 6, cy + 6, br, bg, bb, 1);
       char l1[16], l2[40];
