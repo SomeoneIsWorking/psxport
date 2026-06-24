@@ -24,6 +24,7 @@
 #include "core.h"
 #include "cfg.h"
 #include <stdlib.h>
+#include <stdio.h>
 void ov_field_entity_render(Core* c);  // engine_submit.cpp — native world-space GT3/GT4 scene-table render
 
 // Native render-queue walkers (engine_submit.cpp). void(Core*); each drains its queue/list, dispatches
@@ -66,6 +67,7 @@ extern "C" { int g_dualview = 0; }
 // native (only a diagnostic counter), and the non-walk passes stay PSX, so both rec_dispatch.
 extern "C" void ffspan_begin(void), ffspan_end(const char*);   // PSXPORT_BDTAG attribution (engine_stage.cpp)
 void ov_render_frame(Core* c) {
+  if (cfg_dbg("rfprobe")) { static int n=0; if ((n++ % 60)==0) fprintf(::stderr,"[rfprobe] ov_render_frame run #%d\n", n); }
   if (g_render_psx) { d0(c, 0x8003f9a8u); return; }   // COMPARE: render the field via the PSX recomp path
   ffspan_begin(); d0(c, 0x8004fd30u); ffspan_end("rf_4fd30");
   ffspan_begin(); d0(c, 0x80025d98u); ffspan_end("rf_25d98");   // 2D atlas SPRITE band (op-0x65)

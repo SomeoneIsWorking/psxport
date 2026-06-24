@@ -8404,3 +8404,51 @@ frame** — then **ov_field_frame (sm[0x4a]==1, the area-machine path) fires EVE
   (engine_render.cpp), top-down, each producing eproj real-depth or RQ_BACKGROUND as appropriate — same method
   as the SOP path. Start where the BDTAG map shows the heaviest builders. The "decouple the steady gameplay
   field" goal is this path, not the SOP one.
+
+## later-240 (2026-06-24) — AUTO_SKIP into real free-roam FIXED; and the field renders via INTERPRETED overlay, NOT ov_render_frame (corrects later-238)
+Two findings while making "reach gameplay headless" actually work.
+
+### 1. `PSXPORT_AUTO_SKIP` was DEAD; reimplemented to drive into real CONTROLLABLE free-roam
+`PSXPORT_AUTO_SKIP` / `PSXPORT_AUTO_GAMEPLAY` / `PSXPORT_AUTO_NEWGAME` were referenced only in docs and **read
+by NO code** (`git grep` confirms). So a "no-input" run never mashed anything — it just sat in the **attract
+DEMO** (`stage=0x801062E4`, the game playing predetermined input). That demo is PSX-rendered playback, not the
+GAME free-roam field; using it to judge rendering is a trap. Reimplemented `PSXPORT_AUTO_SKIP=1` as a
+self-contained auto-drive state machine in `runtime/recomp/native_boot.cpp`:
+- (0) tap **Cross** until task0 enters the GAME stage (`0x8010637C`);
+- (1) wait for the post-NewGame **intro cutscene** to start — the cutscene-active flag `*(0x1F800137)` goes 1
+  (verified: 1 throughout the scripted camera-pan/dialog cutscene, 0 in free-roam; an early loading 0-window
+  precedes it, so we wait for the first 1 before treating 0 as free-roam);
+- (2) the cutscene does NOT end on its own — pulse **Start** (every ~40f) WHILE the flag is 1 (Start ends it;
+  takes a few taps until it reaches a skippable point). Stop once the flag has been 0 for ~60f (~2s), which
+  also lets the cutscene-END FADE finish so a Start right after hand-off opens the pause menu (not mid-fade).
+  Pressing Start ONLY while the flag is 1 keeps us out of the pause menu (Start in free-roam opens it).
+VERIFIED controllable: at hand-off (~f216) idle frame-to-frame Δ≈0px (cutscene auto-pans 83%), holding Right
+pans the camera ~70k px, and a Start tap opens the Options/Load/Quit pause menu. Recipe + dead-var note are in
+`docs/driving-the-game.md` ⭐. Gotcha that cost time: the manual `newgame` REPL path FREEZES task0 at the GAME
+prologue (`continue`), and a Start tap there does NOT skip the cutscene — only the live auto-drive path does.
+
+### 2. The steady GAME field renders via INTERPRETED overlay code, NOT the native ov_render_frame (corrects later-238)
+later-238's "steady gameplay = ov_field_frame → ov_render_frame" is **FALSIFIED**. Probe `debug rfprobe`
+(counter at the top of `engine_render.cpp ov_render_frame`): in the real free-roam field `ov_render_frame`
+runs **0–1 times over 700 frames** (dormant) — both in the attract demo AND in the player field. The field is
+drawn by interpreted OVERLAY code, attributed by BDTAG to `'scheduler'` (outside even the `gameframe`
+bracket), i.e. it runs in the cooperative guest path, not under the native `ov_game_frame`.
+Traced the actual steady builders (WWATCH on a terrain packet `0x800c367c` → builder PCs `0x80146xxx`/
+`0x8013Fxxx`; these are OVERLAY addresses, beyond MAIN.EXE, dumped live + disassembled with capstone):
+- **Entity-render loop `0x801401b8`** — BYTE-IDENTICAL in structure to `ov_field_entity_render`
+  (count@+6, base@+0xc, u16 idx array @+0x10, CR0-7 from scratchpad `0x1f8000f8`, otbase from `*0x800ED8C8`,
+  GT3-submit-then-GT4 per cmd). Takes the scene table `es` in a0.
+- **GT3 submitter `0x801465ec`** and **GT4 submitter `0x8013fe58`** — RTPT/RTPS-project each record and emit a
+  GT3/GT4 packet to the pool at `*0x800bf544`; structurally == `submit_poly_gt3/gt4_native`. (Also a second GT3
+  `0x8013fb88` the entity loop calls.) The packets classify **is3d=0** (flat) only because the PSX emitter
+  discards view-Z; the geometry IS real per-frame GTE-projected world geometry.
+- **Caller `0x8003d0bc`** is a SCENE-TYPE DISPATCHER: `*(0x800bf870)` (<0x16) indexes a jump table at
+  `0x80014ef0`; one case → `0x8003d0f4` jal `0x801401b8`. (This is why the `groundnative` flag — which routes
+  the *native* `ov_render_frame` ground pass `0x8003d0bc(0x800f2418)` to `ov_field_entity_render` — had ZERO
+  effect on the field: `ov_render_frame` never runs here, so its passes are moot.)
+**Implication for the frontier:** owning `ov_render_frame`'s passes (later-238 plan) does NOT touch the visible
+steady field. The real target is the interpreted overlay render path — `0x801401b8` (== `ov_field_entity_render`)
+and its submitters — reached top-down from whatever cooperative driver runs it. Per the user (2026-06-24): as
+world objects are traced and these functions identified, **each should be DECOMPILED into the PC port** (the
+overlay GT3/GT4 submitters + entity loop are direct equivalents of natives we already have). Decompiles cached
+under `scratch/dual/*.asm` (capstone flat-dump disassembler `scratch/dual/mdis.py`).

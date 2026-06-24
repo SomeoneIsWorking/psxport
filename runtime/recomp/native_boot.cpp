@@ -1060,6 +1060,9 @@ static void ov_game_main(Core* c) {
   int repl_mode = cfg_on("PSXPORT_REPL") != 0;
   if (repl_mode) nframes = 0;                       // REPL drives frame count via `run N`
   else { if (!gpu_windowed()) nframes = 120; }  // headless smoke default
+  // PSXPORT_AUTO_SKIP needs time to tap through title -> GAME -> field: raise the headless smoke cap so a
+  // no-REPL run actually reaches free-roam before the loop ends (REPL runs gate frames via `run N` instead).
+  if (!repl_mode && !gpu_windowed() && cfg_str("PSXPORT_AUTO_SKIP")) nframes = 1500;
   fprintf(stderr, "[native_boot] entering native frame loop (%s)\n",
           nframes ? "capped" : "interactive (until window close)");
   void hle_deliver_event(Core* c, uint32_t ev_class, uint32_t spec);
@@ -1078,6 +1081,43 @@ static void ov_game_main(Core* c) {
       while (repl_budget <= 0) { repl_budget = native_repl_read(c, f); if (repl_budget < 0) break; }
       if (repl_budget < 0) break;
       repl_budget--;
+    }
+    // PSXPORT_AUTO_SKIP=1 — headless AUTO-DRIVE into the real GAME free-roam FIELD (NOT the attract DEMO, NOT
+    // the intro cutscene). The dead PSXPORT_AUTO_GAMEPLAY/AUTO_SKIP env vars previously did nothing, so a
+    // no-input run only ever reached the attract demo (stage 0x801062E4, fully interpreted), never player
+    // control. Self-contained state machine driven by the CUTSCENE-ACTIVE flag *(0x1F800137) — verified 1
+    // throughout the post-NewGame intro cutscene (scripted camera pan + dialog) and 0 in free-roam:
+    //   (0) REACH GAME: tap Cross until task0 enters the GAME stage (0x8010637C).
+    //   (1) WAIT FOR CUTSCENE: hold until the flag first reads 1 (skips the early loading 0-window before the
+    //       cutscene starts), so a flag==0 later is unambiguously free-roam, not "not started yet".
+    //   (2) SKIP: the cutscene does NOT end on its own — pulse START (every ~40 frames) while the flag is 1.
+    //       Start ends it (it can take a few taps until the cutscene reaches a skippable point). Pressing
+    //       Start ONLY while the flag is 1 is what keeps us OUT of the pause menu (Start in free-roam opens
+    //       it). Done once the flag has been 0 for a short persistence window (survives any brief beat gap).
+    // Works with or without the REPL (the REPL's `run N` still gates frame budget).
+    static int  s_as_phase = -1;     // -1 uninit, 0 reach-GAME, 1 await-cutscene, 2 skip-cutscene, 3 done
+    static int  s_as_idle  = 0;      // consecutive flag==0 frames in phase 2
+    if (s_as_phase == -1) {
+      const char* s = cfg_str("PSXPORT_AUTO_SKIP");
+      s_as_phase = (s && strcmp(s, "0")) ? 0 : 3;
+      if (s_as_phase == 0) fprintf(stderr, "[autoskip] armed: drive into GAME free-roam\n");
+    }
+    if (s_as_phase < 3) {
+      void pad_repl_release(Core*);
+      uint32_t stg = c->mem_r32(TASKBASE + 0xc);
+      uint8_t  cut = c->mem_r8(0x1F800137u);             // cutscene-active flag
+      if (s_as_phase == 0) {                             // tap Cross until the GAME stage
+        if (stg != 0x8010637Cu) { if ((f % 12u) == 0) pad_repl_tap(c, (uint16_t)(0xFFFF & ~0x4000), 6); }
+        else { s_as_phase = 1; fprintf(stderr, "[autoskip] reached GAME at frame %u\n", f); }
+      } else if (s_as_phase == 1) {                      // wait for the cutscene to actually start (flag -> 1)
+        if (cut) { s_as_phase = 2; fprintf(stderr, "[autoskip] intro cutscene up at frame %u; skipping (Start)\n", f); }
+      } else {                                           // phase 2: pulse Start while the cutscene is active
+        if (cut) { s_as_idle = 0; if ((f % 40u) == 0) pad_repl_tap(c, (uint16_t)(0xFFFF & ~0x0008), 6); }
+        else if (++s_as_idle >= 60) {   // ~2s after the flag clears: lets the cutscene-END FADE finish before
+          pad_repl_release(c); s_as_phase = 3;   // hand-off, so a Start right after skip opens the pause menu
+          fprintf(stderr, "[autoskip] free-roam reached at frame %u (cutscene ended)\n", f);   // (not mid-fade)
+        }
+      }
     }
     // REPL-armed auto-drive (the `newgame` / `skip` commands). One way to drive the game: pipe REPL
     // commands. `newgame` pulses Cross at the title until task0 enters the GAME prologue (0x8010637C),
