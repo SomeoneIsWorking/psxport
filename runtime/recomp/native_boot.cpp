@@ -651,6 +651,11 @@ static long native_repl_read(Core* c, uint32_t f) {
       else if (!strcmp(sub, "dump")) prof_dump(path[0] ? path : 0);
       else fprintf(stderr, "[repl] prof: start | stop | dump <path>\n");
     }
+    else if (!strcmp(cmd, "trace")) {   // trace <path> : open the interp call tracer; `trace` alone closes
+      void interp_trace_open(const char*); char path[200] = {0};
+      if (sscanf(line, "%*s %199s", path) == 1) { interp_trace_open(path); fprintf(stderr, "[repl] trace -> %s\n", path); }
+      else { interp_trace_open(0); fprintf(stderr, "[repl] trace closed\n"); }
+    }
     else if (!strcmp(cmd, "stage")) fprintf(stderr, "[repl] stage=%08X sm48=%d\n", c->mem_r32(0x801fe00c), (int)c->mem_r16(0x801fe048));
     else if (!strcmp(cmd, "regs")) { for (int i = 0; i < 32; i++) { fprintf(stderr, " r%-2d=%08X", i, c->r[i]); if ((i & 3) == 3) fprintf(stderr, "\n"); } fprintf(stderr, " hi=%08X lo=%08X\n", c->hi, c->lo); }
     else if (!strcmp(cmd, "seq")) fprintf(stderr, "[repl] seq open=%d playmask=%04X tickmode=%d seqfn=%08X stage=%08X\n",

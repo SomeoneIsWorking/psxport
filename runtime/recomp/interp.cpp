@@ -37,6 +37,7 @@ static FILE* g_trace_fp = 0;
 void interp_trace_open(const char* path) {
   if (path && *path) { g_trace_fp = fopen(path, "w"); if (!g_trace_fp) perror(path);
     else setvbuf(g_trace_fp, 0, _IOLBF, 0); }
+  else if (g_trace_fp) { fclose(g_trace_fp); g_trace_fp = 0; }   // empty path = close
 }
 static inline void trace_call(uint32_t from, uint32_t to) {
   if (g_trace_fp) fprintf(g_trace_fp, "%08X -> %08X\n", from, to);
