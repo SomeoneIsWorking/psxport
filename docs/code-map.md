@@ -7,7 +7,7 @@ A native may exist already. **LIVE** = reachable by direct C call from a native_
 dispatch root (actually runs). **ORPHAN** = native exists but only the REMOVED override
 table used to reach it — it is dead code until a native parent calls it directly.
 
-Totals: 411 native fns, 269 owned addresses, 76 LIVE / 335 ORPHAN.
+Totals: 413 native fns, 269 owned addresses, 76 LIVE / 337 ORPHAN.
 
 | addr | status | symbol | file:line | depends-on (still-PSX) | summary |
 |------|--------|--------|-----------|------------------------|---------|
@@ -163,7 +163,7 @@ Totals: 411 native fns, 269 owned addresses, 76 LIVE / 335 ORPHAN.
 | 0x8007A624 | ORPHAN | `ov_despawn` | game/world/spawn.cpp:472 | 0x8007A624 |  |
 | 0x8007A810 | ORPHAN | `ov_8007A810` | game/world/pool.cpp:270 | 0x8009A420 | init a 4-entry, stride-264 array at 0x80100690: zero a 388-byte header… |
 | 0x8007A8E0 | ORPHAN | `ov_8007A8E0` | game/world/pool.cpp:284 | 0x8007982C | call 0x8007982C (block init) then clear the scratchpad u16 at 0x1F8001… |
-| 0x8007A904 | LIVE | `ov_objwalk` | engine/engine_tomba2.cpp:103 |  | Native FUN_8007a904. Second list head is re-read fresh after list 1 (h… |
+| 0x8007A904 | LIVE | `ov_objwalk` | engine/engine_tomba2.cpp:105 |  | Native FUN_8007a904. Second list head is re-read fresh after list 1 (h… |
 | 0x8007A904 | ORPHAN | `ov_entity_walk_7a904` | game/world/entity.cpp:472 | 0x8007A904 |  |
 | 0x8007A980 | ORPHAN | `ov_spawn_dispatch` | game/world/spawn.cpp:222 | 0x8007A980 |  |
 | 0x8007AA38 | ORPHAN | `ov_replace_dispatch` | game/world/spawn.cpp:394 | 0x8007AA38 |  |

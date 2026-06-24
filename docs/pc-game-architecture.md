@@ -148,6 +148,12 @@ render subsystem replaces them.
     instead of rec_dispatch. So "assigning graphics" runs PC-native live for these handlers. Verified:
     handler gates 0 mismatch (obj739ac 1150 / obj73cd8 2300 / obj741dc 550), gate-off native-driven binds
     geomblks into node+0xC0 (ents gb0=…), field clean.
+  - **Behavior handler FUN_80071A3C owned native+live (2026-06-24):** added `engine/objbeh_80071a3c.cpp`
+    and routed it through `dispatch_native_behavior`. A resident state machine on node[4] (state 0 runs
+    FUN_800716B4 + a global-flag-gated overlay event dispatch on 0x800BFAE1/0x800BFAE6 vs area 0x800BF870;
+    state 1 FUN_80071768 + conditional FUN_800518FC; state 3 FUN_8007A624) — control flow owned native, the
+    sub-behavior leaves stay PSX via rec_dispatch. Verified live on seaside: `obj80071a3cverify` 550+
+    matches, 0 mismatch; gate-off native-driven reaches the field clean (no bad opcode).
   - **NEXT — extend the contiguity:** own more behavior handlers (the model-attach sites FUN_80077B38 +
     other per-object render-record callers) so the full graphics-bind set runs native; wire prefix sibling
     `ov_8007B18C` (pool-init). Each verified via its A/B gate. (Render itself = the `game/render/` decoupled
