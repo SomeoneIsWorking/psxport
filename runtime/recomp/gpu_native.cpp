@@ -986,6 +986,12 @@ void GpuState::gp0_exec(Core* core) {
           // covers the whole wide FB (no undimmed margins, #21). See ws_2d_local_x.
           int fill = bg || fade_full;
           for (int i = 0; i < nv; i++) xs[i] = ws_2d_local_x(xs[i], fill); } }   // engine-owned 2D layout
+      // DIAG PSXPORT_PAINTER=1: force PURE PSX OT painter order (is3d=0 / no bg split) for EVERY prim, so the
+      // frame composites exactly as the PSX ordering table would. Render the field with and without this and
+      // diff: the differing pixels are precisely where native per-pixel depth changes the picture (the
+      // object-occlusion bug — terrain/atlas not obeying world-depth). Diagnostic only.
+      { static int pm=-2; if(pm==-2){ const char* e=cfg_str("PSXPORT_PAINTER"); pm=e?atoi(e):0; }
+        if (pm) { is3d = 0; bg = 0; } }
       if (use_rq) {
         // Engine owns ordering: hand the prim to the render queue tagged with its layer + depth mode.
         int layer = is3d ? RQ_WORLD : (bg ? RQ_BACKGROUND : RQ_HUD);
@@ -1118,6 +1124,7 @@ void GpuState::gp0_exec(Core* core) {
       // A full-screen SEMI sprite is a fade/overlay (NOT a backdrop) -> keep it out of the bg band so it
       // composites on top of the world (opaque full-screen sprites stay backdrops).
       int bg = node_is_bg(s_cur_node) || (!semi && bg_2d(x, y, x + w, y + h));
+      { static int pm=-2; if(pm==-2){ const char* e=cfg_str("PSXPORT_PAINTER"); pm=e?atoi(e):0; } if(pm) bg=0; }  // DIAG painter
       // FADE/DIM (#21): a full-screen SEMI sprite is a fade/dim overlay -> stretch-to-fill the wide FB so it
       // covers the margins too, while staying in the topmost (HUD) band (not a backdrop). See ws_2d_local_x.
       int fade_full = (!bg && semi && fade_full_2d(s_disp_w, s_disp_h, x, y, x + w, y + h));
