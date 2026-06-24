@@ -7,7 +7,7 @@ A native may exist already. **LIVE** = reachable by direct C call from a native_
 dispatch root (actually runs). **ORPHAN** = native exists but only the REMOVED override
 table used to reach it — it is dead code until a native parent calls it directly.
 
-Totals: 416 native fns, 269 owned addresses, 80 LIVE / 336 ORPHAN.
+Totals: 418 native fns, 271 owned addresses, 82 LIVE / 336 ORPHAN.
 
 | addr | status | symbol | file:line | depends-on (still-PSX) | summary |
 |------|--------|--------|-----------|------------------------|---------|
@@ -20,6 +20,7 @@ Totals: 416 native fns, 269 owned addresses, 80 LIVE / 336 ORPHAN.
 | 0x8001DB8C | LIVE | `ov_cd_loadfile` | runtime/recomp/cd_override.cpp:139 |  | (a0=dest, a1=lba, a2=size_bytes): the engine's file loader. The |
 | 0x8001DC40 | LIVE | `ov_cd_loadfile` | runtime/recomp/cd_override.cpp:139 |  | (a0=dest, a1=lba, a2=size_bytes): the engine's file loader. The |
 | 0x8001DC40 | ORPHAN | `ov_cd_dc40` | runtime/recomp/cd_override.cpp:211 |  | Platform-HLE entry for FUN_8001DC40 (intercepted for any caller): (a0=… |
+| 0x800263E8 | LIVE | `ov_800263E8` | game/world/pool.cpp:355 | 0x8007AD98 | area object-record seeding. Selects a per-area byte sequence (table 0x… |
 | 0x80026C88 | LIVE | `ov_disp_26c88` | game/world/entity.cpp:131 | 0x80026C88 |  |
 | 0x80027768 | ORPHAN | `ov_submit_poly_gt4_bp` | engine/engine_submit.cpp:606 |  |  |
 | 0x8002AB5C | LIVE | `ov_terrain` | engine/engine_submit.cpp:1076 |  | default case: the node's own render fn (node+24) — e.g. a collectable'… |
@@ -178,9 +179,9 @@ Totals: 416 native fns, 269 owned addresses, 80 LIVE / 336 ORPHAN.
 | 0x8007AD40 | ORPHAN | `ov_8007AD40` | game/world/pool.cpp:312 | 0x8009A420 | memset(0x800EC188, 0, 2560) via 0x8009A420, then for 40 stride-64 reco… |
 | 0x8007B18C | ORPHAN | `ov_8007B18C` | game/world/pool.cpp:322 | 0x8004FB20 0x800798F8 0x8007A810 0x8007AC14 0x8007AC40 0x8007AC6C … | top-level object-pool init. Calls 0x8004FB20 then 0x800798F8; zeroes 5… |
 | 0x8007B18C | LIVE | `ov_pool_init_run` | game/world/pool.h:6 |  | top-level object-pool init (field case-0 prefix). GATED (channel `pool… |
-| 0x8007B2C0 | ORPHAN | `ov_8007B2C0` | game/world/pool.cpp:391 |  | load a 4-entry u16 weight ramp into the scratchpad at 0x1F800170: a0==… |
-| 0x8007B328 | ORPHAN | `ov_8007B328` | game/world/pool.cpp:399 | 0x8007B2C0 0x8009A420 | zero an 8-byte descriptor at 0x800FB160 (via 0x8009A420), seed bytes |
-| 0x8007B38C | ORPHAN | `ov_8007B38C` | game/world/pool.cpp:409 | 0x8007B2C0 | scatter the 0x800FB160 descriptor's bytes [1..7] into the HW-shadow bl… |
+| 0x8007B2C0 | ORPHAN | `ov_8007B2C0` | game/world/pool.cpp:415 |  | load a 4-entry u16 weight ramp into the scratchpad at 0x1F800170: a0==… |
+| 0x8007B328 | ORPHAN | `ov_8007B328` | game/world/pool.cpp:423 | 0x8007B2C0 0x8009A420 | zero an 8-byte descriptor at 0x800FB160 (via 0x8009A420), seed bytes |
+| 0x8007B38C | ORPHAN | `ov_8007B38C` | game/world/pool.cpp:433 | 0x8007B2C0 | scatter the 0x800FB160 descriptor's bytes [1..7] into the HW-shadow bl… |
 | 0x8007B45C | ORPHAN | `ov_options_menu` | engine/menu.cpp:46 | 0x8007B45C |  |
 | 0x8007B45C | ORPHAN | `ov_options_menu` | engine/menu.h:8 |  |  |
 | 0x8007E1B8 | ORPHAN | `ov_ui_rect_emit` | engine/engine_ui_rect.cpp:107 | 0x8007E1B8 | override — see the RE block above. |
@@ -305,6 +306,7 @@ Totals: 416 native fns, 269 owned addresses, 80 LIVE / 336 ORPHAN.
 | 0x8009C9D0 | ORPHAN | `ov_8009C9D0` | engine/gpu_lib.cpp:492 | 0x8009CAEC | finalize a GPU command packet: call 0x8009CAEC(a0,a1); then poke five … |
 | 0x8009CAEC | ORPHAN | `ov_sync_ok` | runtime/recomp/sync_overrides.cpp:37 |  | DecDCTinSync / 0x8009CB80 DecDCToutSync — libmdec in/out sync. Real bo… |
 | 0x8009CB80 | ORPHAN | `ov_sync_ok` | runtime/recomp/sync_overrides.cpp:37 |  | DecDCTinSync / 0x8009CB80 DecDCToutSync — libmdec in/out sync. Real bo… |
+| 0x8009D414 | LIVE | `ov_800263E8` | game/world/pool.cpp:355 | 0x8007AD98 | area object-record seeding. Selects a per-area byte sequence (table 0x… |
 | 0x800BF4F8 | LIVE | `eng_init_alloc` | engine/engine_init.cpp:185 | 0x80086738 0x80089160 0x8009A340 | engine ALLOCATOR / dispatch-table init. a0/a1 = a struct span (0x800bf… |
 | 0x800BF51A | LIVE | `eng_init_alloc` | engine/engine_init.cpp:185 | 0x80086738 0x80089160 0x8009A340 | engine ALLOCATOR / dispatch-table init. a0/a1 = a struct span (0x800bf… |
 | 0x800E7E80 | ORPHAN | `ov_cam_heading` | engine/engine_camera.cpp:696 |  | ──────────────────────────────────────────────────────────────────────… |

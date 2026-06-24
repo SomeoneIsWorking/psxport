@@ -164,6 +164,10 @@ render subsystem replaces them.
     control block at 0x800BF808, clears ~30 scratchpad fields, runs its sub-inits (leaves stay PSX). Shared
     once-per-load gate `world_init_gate`; `init796dcverify` match #1/#2 byte-exact (incidental v0 mirrored:
     recomp epilogue leaves the 0x800c0000 store base). 151 nodes gate-off.
+  - **Area record-seed FUN_800263E8 owned native+live (2026-06-24):** next case-0 prefix leaf → `ov_263e8_run`
+    (game/world/pool.cpp). Walks a per-area byte sequence (table 0x8009D414[area]) to a 0xFF terminator,
+    allocating a record per byte via 0x8007AD98 (PSX leaf) and stamping record[0]=1/record[2]=byte. Gate
+    `init263e8verify` match #1/#2 byte-exact (incidental v0=0xFF terminator mirrored). 151 nodes gate-off.
   - **NEXT — extend the contiguity:** own more behavior handlers (the model-attach sites FUN_80077B38 +
     other per-object render-record callers) so the full graphics-bind set runs native; own the remaining
     case-0 prefix leaves (0x800796dc / 0x800263e8 / …). Each verified via its A/B gate. (Render itself =

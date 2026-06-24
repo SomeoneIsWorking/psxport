@@ -348,6 +348,25 @@ static void ov_8007B18C(Core* c) {
   call_fn(c, 0x8007AD40u);
 }
 
+// 0x800263E8 — area object-record seeding. Selects a per-area byte sequence (table 0x8009D414 indexed
+// by the area byte 0x800BF870); for each byte up to a 0xFF terminator, allocate a record via
+// 0x8007AD98 and stamp record[0]=1, record[2]=byte. RE'd 1:1 from disas 0x800263E8 (the FUN_8007AD98
+// allocator stays a PSX leaf via rec_dispatch). Empty (first byte 0xFF) → no-op.
+static void ov_800263E8(Core* c) {
+  uint32_t area = c->mem_r8(0x800BF870u);
+  uint32_t s0   = c->mem_r32(0x8009D414u + area * 4u);
+  if (c->mem_r8(s0) != 0xFFu) {
+    do {
+      call_fn(c, 0x8007AD98u);                 // v0 = newly-allocated record ptr
+      uint32_t rec = c->r[2];
+      c->mem_w8(rec + 0, 1);
+      uint8_t b = c->mem_r8(s0); s0 += 1;
+      c->mem_w8(rec + 2, b);
+    } while (c->mem_r8(s0) != 0xFFu);
+  }
+  c->r[2] = 0xFFu;   // incidental v0: both the skip and loop-exit paths leave the 0xFF terminator in v0
+}
+
 // Shared inline A/B gate for the once-per-field-load WORLD inits wired into engine_stage case-0.
 // Runs the native body, snapshots+rolls back, super-calls the recomp body, and diffs full
 // main-RAM (excl. the dead stack window) + scratchpad + v0. Prints EVERY match (record_gate is
@@ -384,6 +403,11 @@ void ov_796dc_run(Core* c) {                              // 0x800796DC — cont
   static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("init796dcverify") ? 1 : 0;
   if (!s_v) { ov_800796DC(c); return; }
   static long ng = 0, nb = 0; world_init_gate(c, ov_800796DC, 0x800796DCu, "init796dcverify", &ng, &nb);
+}
+void ov_263e8_run(Core* c) {                              // 0x800263E8 — area object-record seeding
+  static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("init263e8verify") ? 1 : 0;
+  if (!s_v) { ov_800263E8(c); return; }
+  static long ng = 0, nb = 0; world_init_gate(c, ov_800263E8, 0x800263E8u, "init263e8verify", &ng, &nb);
 }
 
 // 0x8007B2C0 — load a 4-entry u16 weight ramp into the scratchpad at 0x1F800170: a0==0 → descending
