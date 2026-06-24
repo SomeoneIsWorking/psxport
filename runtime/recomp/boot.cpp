@@ -82,8 +82,15 @@ int main(int argc, char** argv) {
   // cdrom:\MAIN.EXE;1 and jumps to MAIN's entry. We run the stub as the real entry (interpreted —
   // it isn't recompiled) and intercept its LoadExec to hand off to the native MAIN boot
   // (native_boot.c, later 33/34). See docs/journal.md "later 34" + [[psxport-scea-boot-stub]].
-  // (The old PSXPORT_DUALCORE PSX-vs-native diff harness — dualcore.cpp — was removed with the rest of the
-  // oracle tooling: the engine owns its render/state, there is nothing PSX to diff against. See CLAUDE.md.)
+  // PSXPORT_DUALCORE: NATIVE-render vs PSX-render guest-RAM divergence harness (dualcore.cpp). Diagnostic
+  // (user 2026-06-24): the native renderer corrupts guest RAM the gameplay reads — this runs the same
+  // native-gameplay game twice (native render vs PSX render) and diffs guest RAM per frame to find the
+  // corrupting write. It creates its own Game instances, so the primary `c`/`game` here is left unused.
+  if (cfg_on("PSXPORT_DUALCORE")) {
+    void dualcore_run(const char* exe_path);
+    dualcore_run(path);
+    return 0;
+  }
   void native_stub_run(Core*, const char* main_exe_path);
   native_stub_run(c, path);              // stub draws SCEA, then hands off to native MAIN boot
   fprintf(stderr, "[boot] native_stub_run returned\n");
