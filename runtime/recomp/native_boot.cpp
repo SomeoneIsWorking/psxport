@@ -600,6 +600,27 @@ static long native_repl_read(Core* c, uint32_t f) {
     else if (!strcmp(cmd, "release") && sscanf(line, "%*s %31s", arg) == 1) { held |= repl_btn(arg);  pad_repl_hold(c, held); fprintf(stderr, "[repl] held=%04X\n", held); }
     else if (!strcmp(cmd, "tap") && sscanf(line, "%*s %31s %u", arg, &a) >= 1) { if (!a) a = 4; pad_repl_tap(c, (uint16_t)(0xFFFF & ~repl_btn(arg)), (int)a); fprintf(stderr, "[repl] tap %s %u\n", arg, a); }
     else if (!strcmp(cmd, "debug")) { char ch[200] = {0}; sscanf(line, "%*s %199[^\n]", ch); void cfg_dbg_set(const char*); cfg_dbg_set(ch); fprintf(stderr, "[repl] debug channels = %s\n", ch[0] ? ch : "(none)"); }
+    else if (!strcmp(cmd, "ents")) {   // enumerate live GAME OBJECTS across the 3 entity lists, with identity
+      // Each object is a node in a doubly-linked list (next @ +0x24). Identity fields: type @+0xc, render
+      // intrinsic @+0xb (0x10..0x14 = sprite/billboard, 0/0xf = mesh), behavior handler @+0x1c (the object's
+      // "what is it" — different per Tomba / enemy / prop), model id @+0xe & 0x3fff, world pos @+0x2e/32/36,
+      // and the 3D MODEL = geomblk of render cmd[0] (cmd @+0xc0, geomblk @ cmd+0x40). later-241.
+      const uint32_t heads[3] = { 0x800FB168u, 0x800F2624u, 0x800F2738u };
+      int total = 0;
+      for (int h = 0; h < 3; h++) {
+        uint32_t n = c->mem_r32(heads[h]);
+        fprintf(stderr, "[ents] -- list %d head=%08X --\n", h, n);
+        for (int g = 0; n && g < 400; g++, n = c->mem_r32(n + 0x24)) {
+          uint32_t cmd0 = c->mem_r8(n + 8) ? c->mem_r32(n + 0xC0) : 0;
+          fprintf(stderr, "[ents]  %08X t=%02X ri=%02X model=%04X h=%08X pos=(%6d,%6d,%6d) rf=%u cmds=%u gb0=%08X\n",
+                  n, c->mem_r8(n + 0xc), c->mem_r8(n + 0xb), c->mem_r16(n + 0xe) & 0x3fff, c->mem_r32(n + 0x1c),
+                  (int16_t)c->mem_r16(n + 0x2e), (int16_t)c->mem_r16(n + 0x32), (int16_t)c->mem_r16(n + 0x36),
+                  c->mem_r8(n + 1), c->mem_r8(n + 8), cmd0 ? c->mem_r32(cmd0 + 0x40) : 0);
+          total++;
+        }
+      }
+      fprintf(stderr, "[ents] (%d nodes)\n", total);
+    }
     else if (!strcmp(cmd, "tp")) { int x=0,y=0,z=0;
       if (sscanf(line, "%*s %d %d %d", &x, &y, &z) == 3) { cam_teleport(x, y, z); fprintf(stderr, "[repl] tp camera -> (%d,%d,%d)\n", x, y, z); }
       else { cam_teleport_off(); fprintf(stderr, "[repl] tp off (camera follows player)\n"); } }

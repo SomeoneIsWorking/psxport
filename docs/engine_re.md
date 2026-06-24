@@ -17,7 +17,75 @@ going down. The spine:
 **Tool — `tools/disas.py <addr> [--mem]`:** MIPS-I disassembler for MAIN.EXE that resolves `lui+addiu/ori`
 address builds and annotates every load/store with its absolute target + WIDTH (sb/sh/sw). USE THIS before
 reimplementing any engine fn — Ghidra `DAT_*` hides widths and a wrong width silently corrupts the interface
-state the PSX content reads (later-158). `--mem` = just the memory effects.
+state the PSX content reads (later-158). `--mem` = just the memory effects. For **overlay** code (>0x8010xxxx,
+beyond MAIN.EXE — the field renderer/submitters live here) dump live RAM (`dumpram`) and disassemble the flat
+image with capstone (`scratch/dual/mdis.py <addr> [n]`).
+
+## ★ GAME-STAGE OBJECT PIPELINE — end-to-end (later-241, the map the user asked for)
+How the field STAGE loads → places → stores → models → renders its objects, tying together the per-function
+RE below. Driven/observed headless via `PSXPORT_AUTO_SKIP=1` (reaches real free-roam) + REPL `ents` (dumps
+every live object node: addr, type@+0xc, render-intrinsic@+0xb, model id@+0xe, handler@+0x1c, world pos,
+cmd count, geomblk of cmd[0]) + `node <addr>` (full node decode).
+
+**1. STAGE.** GAME stage entry `0x8010637C`; a 4-level state machine in task0 (`sm[0x48]` area-mode /
+`sm[0x4a]` sub-mode: 0=intro-cutscene, **1=running field** / `sm[0x4c]` area-machine / `sm[0x4e]` running
+sub-state). See "GAME stage state machine". The **running field is rendered by the INTERPRETED area
+OVERLAY**, not the native `ov_render_frame` — the latter is essentially dormant in the live field (`debug
+rfprobe`: 0–1 calls / 700 frames). later-238's "steady field = ov_field_frame → ov_render_frame" is
+FALSIFIED for the headless free-roam field.
+
+**2. AREA / ASSET LOAD.** The area-load task `0x800452c0` → `FUN_8004514c` commits the area id to
+`0x800BF870`, pulls the AREA OVERLAY (disc LBA/size from the area table `0x800BE118`, stride 8, indexed by
+id+3) to **`0x80182000`**, and walks the per-area ASSET table at `area_base+0x51000`. The overlay carries the
+area's render code (the field entity loop + GT3/GT4 submitters — see step 6) AND its model/texture assets.
+
+**3. PLACEMENT.** `FUN_80072A78` (`ov_place_objects`, OWNED) selects the area PLACEMENT TABLE (by area id
+`0x800BF870` + sub-state `0x800BF871`; seaside/area0 = `0x800A4C28[area]`), walks fixed **0x14-byte records**
+(table ends at a record whose `byte[0]==0xff`), and spawns one object per record. Record format + per-field
+node stamp are in "field OBJECT-PLACEMENT DRIVER" — notably `+0x00` TYPE, `+0x02/04/06` world XYZ,
+`+0x0a/0c` facing, `+0x10` per-object behavior handler → node+0x1c.
+
+**4. SPAWN + STORAGE.** `FUN_80079C3C` (`ov_entity_spawn`, OWNED) pops a node from the free-list and links it
+into one of **3 doubly-linked active lists** (heads `0x800FB168` / `0x800F2624` / `0x800F2738`; next @node+0x24).
+Nodes are **0xD0 (208) bytes**. Identity fields: `+0xb` render-intrinsic (**0x0F=3D mesh, 0x10..0x14=2D
+billboard/sprite at a 3D world pos, 0x20=off-world/HUD anchor**), `+0xc` entity type, `+0xe` model id,
+`+0x1c` behavior handler (per-type update — Tomba/enemy/prop/trigger differ here; the strongest identity
+signal), `+0x2e/32/36` world XYZ, `+0x38` model-data descriptor ptr, `+0xC0` RENDER-COMMAND ptr array (count
+@node+8). The entity walk `FUN_8007a904` runs each node's `+0x1c` handler every frame.
+
+**5. MODEL ATTACH.** `FUN_80077b38(node, table, idx)` looks up `model = table[idx]`, stores the model-data
+descriptor ptr at **node+0x38** and the model id (`*(model+2) & 0x3fff`) at node+0xe. The resident model
+table is **`0x80017334`** (MAIN.EXE .data; entries point to descriptors at `0x8001792c+` — small per-model
+anim/variant lists, NOT the raw geometry). The model-attach call sites (`0x80024e50+` etc.) dispatch by
+entity subtype. NB some objects (e.g. **Tomba**) have node+0x38 == 0 — the player/some actors carry their
+render commands directly (built by their handler) rather than via this descriptor table.
+
+**6. THE REAL 3D MODEL = the GEOMBLK.** The actual 3D geometry an object draws is the **geomblk**, reached as
+`geomblk = mem_r32(cmd + 0x40)` for each render command `cmd` in the node's `+0xC0` array. **geomblk format**:
+word@+0 packs counts (lo16 = GT3 triangle count, hi16 = GT4 quad count); then GT3 records (36 B) then GT4
+records (44 B), each holding MODEL-SPACE int16 verts + UV + per-vertex RGB + texpage/clut (full layout in
+"Geometry SUBMIT"). Example — Tomba: node `…E8E8`, render cmds `{0x800F7844,0x800F7888}`, geomblk
+`0x8015C094` = **6 triangles + 13 quads** (a real 3D mesh, not a sprite). Geomblks live in LOADED regions:
+`0x8015xxxx` (resident models — Tomba, items), `0x801Cxxxx–0x801Exxxx` (area models — trees, NPCs, props),
+pulled from disc by the asset pipeline (step 2). They are MODEL-SPACE; the per-object world transform is
+`cmd+0x18` (matrix) + `cmd+0x2c` (position).
+
+**7. RENDER + THE DEPTH REGRESSION (the user's "objects behind terrain/sea" bug).** The per-object render
+(`gen_func_8003CCA4` → `submit_perobj_flush`) walks node+0xC0 → geomblk → the GT3/GT4 submitters, which
+project each model vertex and emit a packet. There are TWO copies of the submit library: the resident
+`0x8007FDB0`/`0x8008007C` (native-owned `ov_submit_poly_gt3/4`) and a per-area **OVERLAY** copy
+(`0x801465EC`/`0x8013FE58`/`0x801401b8` entity loop). **Historically (later-166) the overlay copy was owned
+native with REAL per-vertex depth via SCAN-ON-LOAD** (`engine_scan_overlay` → `rec_set_interp_override_auto`
+registered the native impl for the freshly-loaded overlay submitters) → field world geometry went to the
+render queue as `RQ_WORLD` with D32 depth. **That mechanism was part of the OVERRIDE SYSTEM removed
+2026-06-22** ([[override-system-removed-top-down-pc-driven]]). With it gone, the overlay submitters run PURE
+PSX again: they emit screen-space GP0 packets with **no view-Z**, so the native gp0 classifier marks them
+**is3d=0 (flat)** and draws them in the 2D-foreground band — painter order, ON TOP of / behind the real-depth
+world. That is exactly the regression: the field's objects + terrain are flattened to depthless quads and
+composite by PSX OT order, so objects land behind terrain/sea. **The fix is to restore native, real-depth
+ownership of the overlay render path — but TOP-DOWN (own the interpreted area-overlay render driver from a
+native caller down to these submitters), NOT by reintroducing the scan-on-load override flip.** This is the
+current render-ownership frontier.
 
 **Init prefix of `ov_game_main` — classified (PLATFORM = native platform owns it / keep dispatched;
 ENGINE = reimplement PC-native):**
