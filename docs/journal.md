@@ -7824,3 +7824,29 @@ Continues later-224. Goal: the VISIBLE walkable-field render runs through PC-nat
   VERTEX PROJECTION is world-coord float (not GTE). Those natives (ov_perobj_render 0x8003cca4, ov_render_cmd
   0x8003f698) also exist ORPHANED in engine_submit.cpp — wire them as the frontier reaches each. Contiguity:
   the walks are native now, so 0x8003cca4 is the next ownable node.
+
+## later-226 (2026-06-24) — per-object VERTEX PROJECTION now world-coord float (eproj) in the LIVE render
+Continues later-225. The render walks now drive the per-object render through the NATIVE dispatch
+`submit_perobj_render` (0x8003cca4) instead of rec_dispatching the PSX body. submit_perobj_render's
+flush-only case (the only one that fires at the field) runs the native `submit_perobj_flush`, which
+composes the camera×object transform in FLOAT from the object's REAL WORLD coordinates (world matrix
+cmd+0x18 + world position cmd+0x2c + scene camera) via engine_project (eproj) and submits every geomblk
+through native_gt3gt4 → ov_submit_poly_gt3/gt4, which project each vertex with `eproj_vertex_active`
+(float RTPT) — NO gte_op, NO CR0-7 read for the picture. This was the DORMANT later-224 foundation; it is
+now LIVE.
+- WIRED (engine_submit.cpp): the 4 render-walk per-type dispatch sites that called rec_dispatch(0x8003CCA4)
+  — aux_bf00_case 0x8003BFAC, aux_eec0_case 0x8003EF20/0x8003EF30, aux_bcf4_case 0x8003BDAC, rq_dispatch_case
+  0x8003BC00 — now call submit_perobj_render(c) (a0=node already set). The double depth-tag (walk session +
+  submit_perobj_render's own session) is benign: PktSpanSession MERGES nested sessions and both tag the same
+  span with the same obj_world_ord. Secondary-effect cases (rare, not at the field) still fall back to the PSX
+  body via rec_super_call=rec_interp.
+- VERIFIED (headless `shot` + USER-eyeball-ready): the seaside field renders IDENTICALLY to the GTE output
+  (perobj_native.png == later-225 render_final.png — float eproj matches the PSX RTPT) AND under a moved
+  camera (perobj_move.png, Tomba relocated: treehouse/bridge/terrain/sea/HUD all correct depth/occlusion).
+  `debug eproj` confirms native compose FIRES (Tview reasonable, H=350) — it was 0× (orphaned) before.
+  Stable, zero derail.
+- NEXT: own the remaining per-type render handlers (0x8003c2d4/c464/c5f8/c788 — the non-flush-only object
+  render variants) and 0x8003cdd8's secondary-effect cases native; then retire the PSX GTE compose from the
+  per-object path entirely (eproj_active_cr already bridges fps60). Also: the resident byte-packed emitter
+  submit_poly_gt4_bp still uses proj_native_xform/GTE for its (still-PSX) upstream field compose — own that
+  compose to make terrain/BG projection world-coord too.

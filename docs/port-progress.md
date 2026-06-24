@@ -297,11 +297,16 @@ for content fns (call it). Do NOT mimic PSX hardware (GTE/GP0/OT) — remove Bee
     (diagnostic-only) + the non-walk passes stay rec_dispatch. VERIFIED: seaside field renders correctly in
     WIDESCREEN, stable 320+ frames, zero derail (render_final.png; USER eyeball pending). CORRECTS later-224:
     the live render driver is 0x8003f9a8 (called by ov_field_frame), NOT the overlay SM 0x8010810c.
-  - ☐ NEXT (render): own the per-type render handlers (0x8003cca4 = ov_perobj_render, + 0x8003c2d4/c464/
-    c5f8/c788) and the per-object flush 0x8003cdd8 + render-cmd dispatch 0x8003f698 (= ov_render_cmd) native,
-    routing VERTEX PROJECTION through eproj/native_gt3gt4 (world-coord float, not GTE). Those natives exist
-    ORPHANED in engine_submit.cpp — wire as the frontier reaches each. Contiguity: the walks are native now,
-    so 0x8003cca4 is the next ownable node.
+  - ✅ **per-object VERTEX PROJECTION now world-coord float (later-226).** The render walks dispatch the
+    per-object render through native `submit_perobj_render` (0x8003cca4) → native `submit_perobj_flush`,
+    which composes camera×object in FLOAT from real world coords (eproj) and projects every vertex via
+    `eproj_vertex_active` — NO GTE for the picture. VERIFIED: field renders identically to GTE + correct
+    under a moved camera; `debug eproj` confirms native compose fires (was 0× orphaned). The dormant
+    later-224 foundation is LIVE.
+  - ☐ NEXT (render): own the remaining per-type handlers (0x8003c2d4/c464/c5f8/c788) and 0x8003cdd8's
+    secondary-effect cases native; retire the PSX GTE compose from the per-object path entirely. Then own
+    the byte-packed emitter's (submit_poly_gt4_bp) upstream field compose so terrain/BG projection is
+    world-coord too (it still uses proj_native_xform/GTE).
   - ☐ NEXT (gameplay): descend the SOP per-frame field update `FUN_801092b4` (entity update FUN_8010a0e0,
     Tomba update 0x8007b008, BG draw, entity render FUN_80109fe0) — own its sub-systems native, re-wiring the
     orphaned cull/spawn/collision/object-walk natives as their callers become native. Also own the

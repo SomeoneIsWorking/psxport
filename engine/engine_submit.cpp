@@ -878,7 +878,8 @@ static void rq_dispatch_case(Core* c, uint32_t node, uint32_t tgt) {
     case 0x8003BC00u:   // per-object render dispatch, then the optional main renderer
     case 0x8003BC24u: { // alt scene/overlay submitter, then the optional main renderer
       c->r[4] = node;
-      rec_dispatch(c, tgt == 0x8003BC00u ? 0x8003CCA4u : 0x80122974u);
+      if (tgt == 0x8003BC00u) submit_perobj_render(c);    // native (world-coord eproj projection)
+      else rec_dispatch(c, 0x80122974u);
       uint8_t b = c->mem_r8(node + 0xB);
       if (b & 0x40) { c->r[4] = node; c->r[5] = 80; c->r[6] = 0; rec_dispatch(c, 0x8002AE0Cu); }
       else if (b & 0x80) { c->r[4] = node; c->r[5] = (uint32_t)(int32_t)(int16_t)c->mem_r16(node + 0x80); c->r[6] = 0;
@@ -979,7 +980,7 @@ void ov_render_walk_snapshot(Core* c) {
 
 static void aux_bcf4_case(Core* c, uint32_t node, uint32_t tgt) {
   switch (tgt) {
-    case 0x8003BDACu: c->r[4] = node; rec_dispatch(c, 0x8003CCA4u); break;
+    case 0x8003BDACu: c->r[4] = node; submit_perobj_render(c); break;   // native (world-coord eproj projection)
     case 0x8003BDBCu: { uint8_t g = c->mem_r8(G_RENDER_MODE);
                         if (g == 0)      { c->r[4] = node; rec_dispatch(c, 0x801341E8u); }
                         else if (g == 6) { c->r[4] = node; rec_dispatch(c, 0x80123C14u); }
@@ -1054,7 +1055,7 @@ void ov_rwalk_aux_bcf4(Core* c) {
 
 static void aux_bf00_case(Core* c, uint32_t node, uint32_t tgt) {
   switch (tgt) {
-    case 0x8003BFACu: c->r[4] = node; rec_dispatch(c, 0x8003CCA4u); break;
+    case 0x8003BFACu: c->r[4] = node; submit_perobj_render(c); break;   // native (world-coord eproj projection)
     case 0x8003BFBCu: c->r[4] = node; rec_dispatch(c, 0x8003C2D4u); break;
     case 0x8003BFCCu: c->r[4] = node; rec_dispatch(c, 0x8003C464u); break;
     case 0x8003BFDCu: c->r[4] = node; rec_dispatch(c, 0x8003C5F8u); break;
@@ -1107,8 +1108,8 @@ void ov_rwalk_aux_bf00(Core* c) {
 
 static void aux_eec0_case(Core* c, uint32_t node, uint32_t tgt) {
   switch (tgt) {
-    case 0x8003EF20u: c->r[4] = node; rec_dispatch(c, 0x8003CCA4u); break;
-    case 0x8003EF30u: c->r[4] = node; rec_dispatch(c, 0x8003CCA4u);
+    case 0x8003EF20u: c->r[4] = node; submit_perobj_render(c); break;   // native (world-coord eproj projection)
+    case 0x8003EF30u: c->r[4] = node; submit_perobj_render(c);          // native (world-coord eproj projection)
                       c->r[4] = node; rec_dispatch(c, 0x8003B704u); break;
     case 0x8003EF40u: { c->r[4] = node; rec_dispatch(c, 0x8003C2D4u);
                         if (c->mem_r8(node + 2) == 1) { c->r[4] = node; rec_dispatch(c, 0x8003B704u); } break; }
