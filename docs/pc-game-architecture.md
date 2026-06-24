@@ -168,6 +168,11 @@ render subsystem replaces them.
     (game/world/pool.cpp). Walks a per-area byte sequence (table 0x8009D414[area]) to a 0xFF terminator,
     allocating a record per byte via 0x8007AD98 (PSX leaf) and stamping record[0]=1/record[2]=byte. Gate
     `init263e8verify` match #1/#2 byte-exact (incidental v0=0xFF terminator mirrored). 151 nodes gate-off.
+  - **Clamp/control-block reset FUN_80075240 owned native+live (2026-06-24):** next case-0 prefix leaf →
+    `ov_75240_run` (game/world/pool.cpp). Resets the control block at 0x800BE1F8 (clamp limits 0x7FFF/0x1FFF,
+    counters) around three PSX leaf calls (0x80075D58/0x80075824/0x80099490). Gate `init75240verify` match
+    #1/#2 byte-exact. With this, the FIRST FOUR case-0 prefix steps + placement are all native; only
+    0x800783dc / 0x80078610 remain PSX in the prefix. 151 nodes gate-off.
   - **NEXT — extend the contiguity:** own more behavior handlers (the model-attach sites FUN_80077B38 +
     other per-object render-record callers) so the full graphics-bind set runs native; own the remaining
     case-0 prefix leaves (0x800796dc / 0x800263e8 / …). Each verified via its A/B gate. (Render itself =

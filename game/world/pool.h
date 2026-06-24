@@ -8,4 +8,6 @@ void ov_pool_init_run(Core* c);
 void ov_796dc_run(Core* c);
 // 0x800263E8 — area object-record seeding (field case-0 prefix). GATED (channel `init263e8verify`).
 void ov_263e8_run(Core* c);
+// 0x80075240 — clamp/control-block reset (field case-0 prefix). GATED (channel `init75240verify`).
+void ov_75240_run(Core* c);
 #endif

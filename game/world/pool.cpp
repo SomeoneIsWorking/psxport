@@ -367,6 +367,24 @@ static void ov_800263E8(Core* c) {
   c->r[2] = 0xFFu;   // incidental v0: both the skip and loop-exit paths leave the 0xFF terminator in v0
 }
 
+// 0x80075240 — reset the control block at 0x800BE1F8: call 0x80075D58 (leaf, entry a0 unchanged), seed
+// clamp limits (s16 +42/+44 = 0x7FFF, +46/+48 = 0x1FFF), word +0 = 768, zero +24/+20, then call
+// 0x80075824(blk) and 0x80099490(blk), finally zero word +0 again and bytes +50/+51. RE'd 1:1 from
+// disas 0x80075240. The three callees stay PSX leaves via rec_dispatch. Incidental v0 = the last
+// call's (0x80099490) return — left in c->r[2] automatically, no manual mirror needed.
+static void ov_80075240(Core* c) {
+  const uint32_t b = 0x800BE1F8u;
+  call_fn(c, 0x80075D58u);                  // a0 = entry a0 (matches recomp: jal precedes a0=blk)
+  c->mem_w16(b + 42, 0x7FFF); c->mem_w16(b + 44, 0x7FFF);
+  c->mem_w16(b + 46, 0x1FFF); c->mem_w16(b + 48, 0x1FFF);
+  c->mem_w32(b + 0, 768);
+  c->mem_w32(b + 24, 0); c->mem_w32(b + 20, 0);
+  c->r[4] = b; call_fn(c, 0x80075824u);
+  c->r[4] = b; call_fn(c, 0x80099490u);
+  c->mem_w32(b + 0, 0);
+  c->mem_w8(b + 50, 0); c->mem_w8(b + 51, 0);
+}
+
 // Shared inline A/B gate for the once-per-field-load WORLD inits wired into engine_stage case-0.
 // Runs the native body, snapshots+rolls back, super-calls the recomp body, and diffs full
 // main-RAM (excl. the dead stack window) + scratchpad + v0. Prints EVERY match (record_gate is
@@ -408,6 +426,11 @@ void ov_263e8_run(Core* c) {                              // 0x800263E8 — area
   static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("init263e8verify") ? 1 : 0;
   if (!s_v) { ov_800263E8(c); return; }
   static long ng = 0, nb = 0; world_init_gate(c, ov_800263E8, 0x800263E8u, "init263e8verify", &ng, &nb);
+}
+void ov_75240_run(Core* c) {                              // 0x80075240 — clamp/control-block reset
+  static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("init75240verify") ? 1 : 0;
+  if (!s_v) { ov_80075240(c); return; }
+  static long ng = 0, nb = 0; world_init_gate(c, ov_80075240, 0x80075240u, "init75240verify", &ng, &nb);
 }
 
 // 0x8007B2C0 — load a 4-entry u16 weight ramp into the scratchpad at 0x1F800170: a0==0 → descending
