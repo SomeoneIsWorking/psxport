@@ -7958,3 +7958,58 @@ dispatches via rec_dispatch (the AI/state/physics logic = the object system's ac
   0x80124E74, 0x80133C14 (RE via `tools/disasm_overlay.py` on a fresh `dumpram`; resident via tools/disas.py).
   Each: RE 1:1, add a verify gate, wire into dispatch_native_behavior, confirm 0-diff. The render-side 2D-band
   ownership (later-229: 0x8003d0bc/0x8003b588) is a SEPARATE track. New diag: `debug behhist`.
+
+## later-231 (2026-06-24) — IMPLEMENTATION SPEC: own the two field object-render passes as real-depth 3D (the crane fix)
+User clarified the target: the crane (and the rest of the field's right side) are REAL 3D game objects whose
+geometry the PSX flattens to depth-less OT-ordered quads (PSX has no depth). To render them natively with true
+depth we must RE the game OBJECTS' real 3D geometry + world transform and reproject in float via eproj — i.e.
+own the two still-PSX passes from later-229. Full RE done (subagent); implementation-ready spec:
+
+CRITICAL ORDERING CAVEAT — own BOTH passes together. Pass A runs before Pass B in ov_render_frame. If only one
+is converted to real-depth while the other stays 2D-FG (band ~0.94 = very front), the 2D-FG pass will OCCLUDE
+the newly real-depth objects (0.94 > their real depth). So convert A and B in the SAME change (or the field
+will look worse mid-way). Verify with tools/render_cmp.py + USER eyeball.
+
+PASS A — 0x8003B588 (~117 prims) — NEARLY FREE (reuses the already-native real-depth path):
+  It is a wrapper around node 0x800E7E80 (a single render node, node+8/9 = 17 commands, cmd-ptr array at
+  node+0xC0[i]); it does state bookkeeping then `jal 0x800597AC(node)` (PSX setup — keep rec_dispatch) then,
+  if node[1]!=0, `jal 0x8003CCA4(node)` = submit_perobj_render = ALREADY NATIVE → submit_perobj_flush →
+  native_gt3gt4 → real depth. Disasm (tools/disas.py 0x8003B588) of the bookkeeping to port 1:1 (s0=node):
+    - @5a0: v1=node[0xd]; if((v1&0xD0)==0) node[0xd]=0 (goto @698→@69c); else node[0xd]=v1|0x02; if(v1&0x20)
+      skip to @69c; elif(v1&0x10) {…reads 0x1F800247, may set node[0x18]=208 and return-ish} else {…};
+      the @5f4/@62c/@64c arms compute a byte via `jal 0x80083E80(a0=(0x1F800247&0xf)<<7)` (keep rec_dispatch;
+      it returns v0, then v0=(v0<<16)>>22 +0x30/+0x10/… ) → node[0x18], and node[0x19]=0x20, node[0x1a]=v0.
+      PORT THESE BYTE WRITES EXACTLY (node[0x18..0x1a], node[0xd]) — they feed the render/anim. Full arm
+      decode is in the disasm; transcribe verbatim.
+    - @69c: rec_dispatch(0x800597AC, a0=node); if(node[1]!=0){ s1=node[8]; if((node[0x17e]&0x20)&&node[0x179]
+      && ...) node[8]=node[9]; submit_perobj_render(node); node[8]=s1; }
+  The existing engine_submit.cpp:1662 ov_rwalk_b588 is a DIAG STUB — replace it with this, then in
+  engine_render.cpp call ov_rwalk_b588(c) instead of d0(c,0x8003b588u) in BOTH ov_render_frame/_x.
+  VERIFY: A/B the BOOKKEEPING bytes only (node[0xd],[0x18..0x1a],[8]) vs rec_super_call(0x8003B588) — the
+  packet/OT writes WILL differ by design (native real-depth vs PSX packets); gate the compare to those bytes.
+
+PASS B — 0x8003D0BC case 0 → handler 0x801401B8 (~220 prims = the GROUND) — needs TWO new submitters:
+  0x8003D0BC: mode=*0x800BF870 (==0 at seaside; CONFIRM live with `r 0x800bf870` — other field sub-states use
+  cases 1→0x80132358,2→0x80124CB8,4→0x801185F0,5→0x8013606C, RE those handlers too if they fire), table
+  0x80014EF0, a0=0x800F2418 passed through. Handler 0x801401B8 (OVERLAY — disasm_overlay.py on field dump)
+  walks a STATIC SCENE TABLE exactly like ov_field_entity_render (engine_submit.cpp:671):
+    es=0x800F2418; count=u8[es+6](=132); base=*(es+0xC)(=0x801A5724); ot=*0x800ED8C8; load scratch
+    0x1F8000F8→CR0-7 (scene camera = what eproj_compose_camera reads); u16 idx array @es+0x10, count entries;
+    per idx: cmd=base+idx*4; s0=*cmd; GT3(0x8013FB88, a0=cmd+4, count=s0&0xff)→ret; GT4(0x8013FE58, a0=ret,
+    count=(s0>>16)&0xff). Verts are WORLD-SPACE (single camera load) → use eproj_compose_camera + set_active
+    once before the loop.
+  The GT3/GT4 record layouts DIFFER from the existing native submitters → add submit_poly_gt3_ov (stride
+  0x24/36B) and submit_poly_gt4_ov (stride 0x2C/44B), copies of submit_poly_gt3/gt4_native but with these
+  offsets (decoded from 0x8013FB88 / 0x8013FE58 lwc2/mtc2):
+    GT3 36B: +0x00 rgb0|code(op=>>24,bit25=semi), rgb1 hi→rgb2=rgb1<<4; +0x10 VXY0; +0x14 VZ0lo|VZ1hi;
+             +0x18 VXY1; +0x1C VXY2; +0x20 VZ2; uv|clut & uv|tpage in +0x00..+0x0C region (re-confirm uv offs
+             against the disasm before trusting).
+    GT4 44B: +0x00 rgb0|code(rgb1=rgb0<<4); +0x04 uv0|clut; +0x08 uv1|tpage; +0x0C uv2|uv3; +0x14 VXY0;
+             +0x18 VZ0lo|VZ1hi; +0x1C VXY1; +0x20 VXY2; +0x24 VZ2lo|VZ3hi; +0x28 VXY3.
+    Reuse eproj_vertex_active + engine_shade_face + gpu_draw_world_quad + the NCLIP/frustum cull from the
+    existing natives. New `ov_ground_render(c)` mirrors ov_field_entity_render; in engine_render.cpp replace
+    d1(c,0x8003d0bcu,0x800f2418u) with ov_ground_render(c) (gate by mode==0; else rec_dispatch the dispatcher).
+  CAUTION: the GT3/GT4 _ov field offsets above are the subagent's first decode — RE-VERIFY each lwc2/mtc2/lw
+  offset directly against tools/disasm_overlay.py of 0x8013FB88 & 0x8013FE58 before shipping (byte-exact).
+  Existing precedents to copy: submit_poly_gt3_native (engine_submit.cpp:430), submit_poly_gt4_native (:479),
+  submit_poly_gt4_bp (:557, the separate-layout precedent), ov_field_entity_render (:671).
