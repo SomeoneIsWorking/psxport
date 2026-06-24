@@ -8191,3 +8191,40 @@ ov_ground_probe — decodes the table through the EXACT GT3/GT4 record layout th
   `debug groundprobe` (ov_ground_probe: decode+project the ground table, no draw) and `debug groundnative`
   (route the ground real-depth via ov_field_entity_render — shows the backdrop-ordering bug live). The seabg/
   texpage/passpool experiments were REMOVED (didn't work; documented above).
+
+## later-236 (2026-06-24) — RE: the seaside has TWO seas — REAL 3D water (0x8003b588) vs a 2D ATLAS backdrop (0x80025d98)
+User flagged (correctly) that the field has BOTH "real water" and a "background atlas water" and they must NOT
+be conflated. Deep static RE (subagent, exhaustive trace) settled which op-0x3C source is which:
+- **REAL WORLD WATER = pass 0x8003b588 → node 0x800C0B04.** Trace: 0x8003b588 (bookkeeping + jal 0x800597AC
+  setup) → `jal 0x8003cca4` (= submit_perobj_render) → jump table 0x80014ec8 (node[0xd]&0x0b) → GTE projector
+  **0x8003cdd8** (40 COP2 ops: loads scene-camera CR0-7 from scratchpad **0x1F8000F8** via ctc2, Tcam from
+  **0x1F80010C**, runs RTPT/RTPS `4a49e012`/`4a486012` on world-space model verts from node+0xC0[i], swc2 the
+  SXY/SZ). This is the SAME camera the ground + objects use, and 0x8003cdd8 = the per-object render path ALREADY
+  owned native (engine_submit.cpp submit_perobj_render → submit_perobj_flush → eproj_compose_object →
+  gpu_draw_world_quad). So the real water is genuine 3D world geometry; OWN IT real-depth by routing 0x8003b588
+  through its native body (this is exactly later-231 "Pass A": 0x8003b588 wraps node 0x800E7E80 → submit_perobj_
+  render). Then it sorts by real depth like everything else.
+- **ATLAS BACKDROP (sky/upper-sea) = pass 0x80025d98 → node 0x800BFEB8.** Exhaustive call-graph from 0x80025d98
+  = 42 reachable fns, ZERO indirect (jalr) sites (so the static graph is COMPLETE). Only ONE fn touches COP2
+  (0x80084080: mtc2 LZCS/mfc2 LZCR = the CLZ divide helper — NOT projection). **No RTPT/RTPS, no camera ctc2,
+  no lwc2/swc2 of vertex coords anywhere in the pass.** The packets are built by 2D screen-space TEMPLATE
+  blitters: sky drawer 0x80025b78 computes integer SCREEN coords from descriptor bytes (e.g. `X = u8[node+6]+160`,
+  `Y = 212` constant, column = u8[node+8]±1) and calls 0x8007e6dc/0x8007e938 (sprite op 0x64/0x66) + 0x8007e1b8
+  (FT4 op 0x2C), copying a 16-byte template from the STATIC table **0x80017334**, patching only color + scrolling
+  UV (signed-byte deltas), linking into OT 0x800ed8c8 / pool 0x800bf544. Texpage tp=(576,256). So the atlas is a
+  genuine 2D SCREEN-SPACE backdrop; its "perspective" is BAKED into the atlas art + the static tile-coordinate
+  table, NOT produced by any camera transform.
+- **RESOLVES the user's uncertainty** ("the atlas has its own native 3D projection, maybe it's part of the
+  world — I don't know"): the 3D-projected sea is the REAL WATER (0x8003b588); the ATLAS (0x80025d98) is NOT
+  projected and NOT part of the world — it is a flat screen-space background. So "statically put the atlas
+  behind" is CORRECT (it has no camera projection to honor); the later-235 ordering struggle was a CLASSIFICATION
+  problem (couldn't identify the source), not a projection problem — and we now KNOW the source is pass 0x80025d98.
+- **PLAN (own both, retire the PSX backdrop):** (1) route 0x8003b588 native (later-231 Pass A) → real water gets
+  real depth, sorts under the grass cliff / over the far backdrop automatically. (2) Own the atlas backdrop as an
+  explicit native 2D BACKGROUND layer (RQ_BACKGROUND): reimplement the descriptor+0x80017334-table tile blit, or
+  at minimum tag pass-0x80025d98 output RQ_BACKGROUND now that the source is known. No new ART needed — the atlas
+  texture IS the game's sky/sea art; we own its RENDERING, not recreate it. Then re-enable ground real-depth
+  (groundnative) and the grass/house/tree show correctly over the atlas, under nothing.
+- Key addrs: water 0x8003b588 → 0x8003cca4 (JT 0x80014ec8) → 0x8003cdd8, cam 0x1F8000F8/Tcam 0x1F80010C, geom
+  node+0xC0[i]. Atlas: dispatcher 0x80025d98, sky drawer 0x80025b78, sprite 0x8007e6dc(op64)/wrapper 0x8007e938,
+  FT4 0x8007e1b8(op2C), static coord/UV table 0x80017334.
