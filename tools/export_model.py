@@ -109,6 +109,28 @@ def parse_geomblk(mem, addr):
         rec += 44
     return prims, n3, n4
 
+def parse_terrain(mem, addr):
+    """Byte-packed GT4 terrain records (RE'd from engine/native_terrain.cpp). 36B stride from `addr`;
+    X/Y are s8<<8 at +1C/1D/20/21 & +1E/1F/22/23; Z is the top byte of the RGB words (+0F/13/17/1B)<<8;
+    loop continues while ctl=(s32)u32(+4) > 0 (last record has ctl<=0). uv0@+0, uv1 in ctl, uv2@+8."""
+    XO=(0x1C,0x1D,0x20,0x21); YO=(0x1E,0x1F,0x22,0x23); ZO=(0x0F,0x13,0x17,0x1B)
+    prims=[]; rec=addr
+    for _ in range(20000):
+        ctl = mem.u32(rec+4); ctls = ctl - 0x100000000 if ctl & 0x80000000 else ctl
+        verts=[]
+        for k in range(4):
+            vx=(mem.d[mem.off(rec+XO[k])]); vx=(vx-256 if vx&0x80 else vx)<<8
+            vy=(mem.d[mem.off(rec+YO[k])]); vy=(vy-256 if vy&0x80 else vy)<<8
+            vz=(mem.d[mem.off(rec+ZO[k])]); vz=(vz-256 if vz&0x80 else vz)<<8
+            verts.append((vx,vy,vz))
+        uv0=mem.u32(rec+0); uv2=mem.u32(rec+8)
+        uvs=[(uv0&0xFF,(uv0>>8)&0xFF),(ctl&0xFF,(ctl>>8)&0xFF),
+             (uv2&0xFF,(uv2>>8)&0xFF),((uv2>>16)&0xFF,(uv2>>24)&0xFF)]
+        prims.append(dict(verts=verts, uvs=uvs, tp=(ctl&0x7FFFFF)>>16, clut=uv0>>16))
+        rec += 36
+        if ctls <= 0: break
+    return prims, 0, len(prims)
+
 def main():
     if len(sys.argv) < 5:
         print(__doc__); sys.exit(1)
@@ -117,8 +139,11 @@ def main():
     # args: geomblk hex addresses, or "node:HEX" to export a whole OBJECT (all its render-cmd geomblks:
     # cmd-ptr array @node+0xC0, count @node+8, geomblk @cmd+0x40 — RE'd in the `ents` REPL tool).
     addrs = []
+    terrain_addr = None
     for a in sys.argv[4:]:
-        if a.startswith('node:'):
+        if a.startswith('terrain'):
+            terrain_addr = int(a.split(':')[1], 16) if ':' in a else 0x8009FAE8
+        elif a.startswith('node:'):
             node = int(a[5:], 16); ncmd = ram.d[ram.off(node + 8)]
             for i in range(ncmd):
                 cmd = ram.u32(node + 0xC0 + i * 4)
@@ -126,15 +151,17 @@ def main():
         else:
             addrs.append(int(a, 16))
     addrs = [a for a in addrs if 0x80000000 <= a < 0x80200000]   # valid RAM geomblks only
-    if not addrs: print("no valid geomblk addresses"); sys.exit(1)
-    name = "model_%08x" % addrs[0]
+    jobs = [('geomblk', a) for a in addrs]
+    if terrain_addr is not None: jobs.append(('terrain', terrain_addr))
+    if not jobs: print("no valid geomblk/terrain addresses"); sys.exit(1)
+    name = "terrain_%08x" % terrain_addr if (terrain_addr is not None and not addrs) else "model_%08x" % addrs[0]
     obj = open(os.path.join(out, name + ".obj"), 'w')
     mtl = open(os.path.join(out, name + ".mtl"), 'w')
     obj.write("mtllib %s.mtl\n" % name)
     vbase = 1; mats = {}
-    for addr in addrs:
-        prims, n3, n4 = parse_geomblk(ram, addr)
-        print("geomblk %08X: %d tris + %d quads = %d prims" % (addr, n3, n4, len(prims)))
+    for kind, addr in jobs:
+        prims, n3, n4 = (parse_terrain if kind == 'terrain' else parse_geomblk)(ram, addr)
+        print("%s %08X: %d tris + %d quads = %d prims" % (kind, addr, n3, n4, len(prims)))
         for pr in prims:
             key = (pr['tp'], pr['clut'])
             if key not in mats:
