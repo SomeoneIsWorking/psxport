@@ -1,0 +1,66 @@
+// engine_render.cpp — PC-native per-frame RENDER ORCHESTRATION. (See engine_render.h.)
+//
+// TOP-DOWN render ownership. The native field per-frame update (engine_stage.cpp ov_field_frame) now calls
+// ov_render_frame DIRECTLY (a plain C call) instead of rec_dispatching MAIN.EXE 0x8003f9a8. ov_render_frame
+// mirrors that orchestrator's render passes; the per-object render-queue WALKS it drives already have
+// PC-native bodies in engine_submit.cpp (ov_rwalk_aux_bf00, ov_rwalk_aux_eec0, ov_render_walk_snapshot,
+// ov_rwalk_aux_bcf4) — written under the old override model but ORPHANED since the override table was
+// removed. Owning the orchestrator natively is the contiguous parent that lets us WIRE those orphan
+// walkers back into the LIVE field render (they attach each object's PC-native WORLD-POSITION depth via
+// gpu_obj_depth_add, so render ordering is engine-owned from real world coords, not the PSX OT).
+//
+// The render-queue walks run through their native bodies; the non-walk passes (0x8004fd30, 0x80025d98,
+// 0x8003d0bc, 0x8003f024, 0x8003df04, 0x8003c048) and the diagnostic-only 0x8003b588 (no real native)
+// stay PSX (rec_dispatch). VERIFIED (later-225): the seaside walkable field renders correctly in
+// widescreen — the world-coord depth path drives the engine-owned render extent.
+//
+// RE (MAIN.EXE, tools/disas.py):
+//   0x8003f9a8 render orchestrator: jal 0x8004fd30, 0x80025d98, 0x8003bf00, 0x8003eec0, 0x8003b588,
+//     0x8003bb50, 0x8003bcf4, 0x8003d0bc(a0=0x800f2418), 0x8003f024, 0x8003df04, 0x8003c048.
+//   0x8003fa44 (transition twin): jal 0x8004fd30, 0x80025d98, 0x8003bf00, 0x8003eec0, 0x8003b588,
+//     0x8003bb50, 0x8003bcf4, 0x8003c048, 0x8003f024.
+
+#include "engine_render.h"
+#include "core.h"
+
+// Native render-queue walkers (engine_submit.cpp). void(Core*); each drains its queue/list, dispatches
+// every live object's per-type renderer (still-PSX content), and tags the produced packet span with the
+// object's PC-native world depth.
+void ov_rwalk_aux_bf00(Core* c);       // 0x8003bf00
+void ov_rwalk_aux_eec0(Core* c);       // 0x8003eec0
+void ov_render_walk_snapshot(Core* c); // 0x8003bb50
+void ov_rwalk_aux_bcf4(Core* c);       // 0x8003bcf4
+
+static inline void d0(Core* c, uint32_t fn) { rec_dispatch(c, fn); }
+static inline void d1(Core* c, uint32_t fn, uint32_t a0) { c->r[4] = a0; rec_dispatch(c, fn); }
+
+// 0x8003f9a8 — per-frame render orchestrator (11 passes). The render-queue walks (0x8003bf00/eec0/bb50/
+// bcf4) run through their PC-native bodies (engine_submit.cpp), which attach each object's PC-native
+// world-position depth — engine-owned render ordering from real world coords. 0x8003b588 has no real
+// native (only a diagnostic counter), and the non-walk passes stay PSX, so both rec_dispatch.
+void ov_render_frame(Core* c) {
+  d0(c, 0x8004fd30u);
+  d0(c, 0x80025d98u);
+  ov_rwalk_aux_bf00(c);              // 0x8003bf00
+  ov_rwalk_aux_eec0(c);             // 0x8003eec0
+  d0(c, 0x8003b588u);                // diagnostic-only native — rec_dispatch the PSX body
+  ov_render_walk_snapshot(c);        // 0x8003bb50
+  ov_rwalk_aux_bcf4(c);              // 0x8003bcf4
+  d1(c, 0x8003d0bcu, 0x800f2418u);
+  d0(c, 0x8003f024u);
+  d0(c, 0x8003df04u);
+  d0(c, 0x8003c048u);
+}
+
+// 0x8003fa44 — mid-transition render orchestrator twin (reduced pass set, same native walks).
+void ov_render_frame_x(Core* c) {
+  d0(c, 0x8004fd30u);
+  d0(c, 0x80025d98u);
+  ov_rwalk_aux_bf00(c);              // 0x8003bf00
+  ov_rwalk_aux_eec0(c);             // 0x8003eec0
+  d0(c, 0x8003b588u);
+  ov_render_walk_snapshot(c);        // 0x8003bb50
+  ov_rwalk_aux_bcf4(c);              // 0x8003bcf4
+  d0(c, 0x8003c048u);
+  d0(c, 0x8003f024u);
+}

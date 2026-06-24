@@ -288,11 +288,25 @@ for content fns (call it). Do NOT mimic PSX hardware (GTE/GP0/OT) — remove Bee
     caught-yield / derail; clean newgame unaffected. KEY RE GOTCHA: 0x800452c0's `sb v0` at 0x800453d8 is
     in the jal DELAY SLOT → it stores the OLD v0 (sm[0x6e]), NOT the FUN_80045080 return (a 168-byte load
     size that derailed the BGM jump-table when mis-stored).
-  - ☐ NEXT: descend the SOP per-frame field update `FUN_801092b4` (entity update FUN_8010a0e0, Tomba
-    update 0x8007b008, BG draw, entity render FUN_80109fe0) — own its sub-systems native, re-wiring the
+  - ✅ **FIELD per-frame RENDER owned PC-native (later-225, engine/engine_render.cpp).** The native
+    ov_field_frame / ov_field_frame_x now call `ov_render_frame` (0x8003f9a8) / `ov_render_frame_x`
+    (0x8003fa44) DIRECTLY (was rec_dispatch). The orchestrator wires the 4 per-object render-queue WALKS
+    (0x8003bf00/eec0/bb50/bcf4 = ov_rwalk_aux_bf00 / ov_rwalk_aux_eec0 / ov_render_walk_snapshot /
+    ov_rwalk_aux_bcf4 — previously ORPHAN natives in engine_submit.cpp) back into the LIVE render; each
+    attaches the object's PC-native WORLD-POSITION depth (engine-owned ordering, not the PSX OT). 0x8003b588
+    (diagnostic-only) + the non-walk passes stay rec_dispatch. VERIFIED: seaside field renders correctly in
+    WIDESCREEN, stable 320+ frames, zero derail (render_final.png; USER eyeball pending). CORRECTS later-224:
+    the live render driver is 0x8003f9a8 (called by ov_field_frame), NOT the overlay SM 0x8010810c.
+  - ☐ NEXT (render): own the per-type render handlers (0x8003cca4 = ov_perobj_render, + 0x8003c2d4/c464/
+    c5f8/c788) and the per-object flush 0x8003cdd8 + render-cmd dispatch 0x8003f698 (= ov_render_cmd) native,
+    routing VERTEX PROJECTION through eproj/native_gt3gt4 (world-coord float, not GTE). Those natives exist
+    ORPHANED in engine_submit.cpp — wire as the frontier reaches each. Contiguity: the walks are native now,
+    so 0x8003cca4 is the next ownable node.
+  - ☐ NEXT (gameplay): descend the SOP per-frame field update `FUN_801092b4` (entity update FUN_8010a0e0,
+    Tomba update 0x8007b008, BG draw, entity render FUN_80109fe0) — own its sub-systems native, re-wiring the
     orphaned cull/spawn/collision/object-walk natives as their callers become native. Also own the
     remaining sm[0x4a] running sub-modes (2..5) + the area-machine RUNNING sub-states (0x80106b98 etc.,
-    currently rec_dispatched yield-free) + the OT-walk-enum retire / 3D-position ordering.
+    currently rec_dispatched yield-free).
 
 ## D. Per-frame GAMEPLAY systems (inside the GAME stage loop)
 - ✅ `FUN_800788ac` frame update = `ov_frame_update` (pad read + present + audio kick) — game_tomba2.cpp.

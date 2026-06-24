@@ -7786,3 +7786,41 @@ objects' REAL WORLD COORDINATES — no fallback; put the code in a proper engine
 - NEXT: own the live chain top-down from 0x8010810c → 0x8003D074 → 0x8003F698, set the camera-only/world
   eproj xform, route geometry through native_gt3gt4. That makes the VISIBLE field render fully PC-native from
   world coords. RE 0x8010810c (jump-table SM) + 0x8003D074 from the field dump (scratch/bin/field_game_ram.bin).
+
+## later-225 (2026-06-24) — LIVE field render owned PC-native: orchestrator + world-coord render walks wired
+Continues later-224. Goal: the VISIBLE walkable-field render runs through PC-native, world-coord code.
+- **CORRECTION to later-224's chain.** The handoff said the live per-object render hangs off the overlay
+  render-submit SM **0x8010810c** (sm[0x6b]). It does NOT. The render-submit SM at the seaside field is in
+  state sm[0x6b]==0 (a guard/transition state — verified live: *0x1f800138=0x801fe000, [0x6b]=0). The real
+  per-object render driver is **MAIN.EXE 0x8003f9a8**, called DIRECTLY by the native ov_field_frame
+  (`if(*0x1f800136<2) d0(c,0x8003f9a8)`), and its transition twin **0x8003fa44** (from ov_field_frame_x).
+  Found by extending the interp call tracer to log COMPUTED jumps (jr jump-tables were invisible — interp.cpp
+  now trace_call's the computed-jump case too) and back-tracking who reaches the render chokepoint 0x8003cca4.
+- **Render chain (all MAIN.EXE, resident, disas.py-visible):** 0x8003f9a8 (11-pass orchestrator) →
+  0x8003bf00 / 0x8003eec0 / 0x8003bb50 / 0x8003bcf4 (the per-object render-queue WALKS) → per-type render
+  handlers → 0x8003cca4 (per-object render dispatch) → 0x8003cdd8 (the GTE-compose flush) → 0x8003f698
+  (render-cmd dispatch) → submit twins. The walk over list 0x800f2738 (count 0x1f80015c, jump table
+  0x80014d38) drives ~12 per-object renders/frame.
+- **KEY: those 4 render walks ALREADY had PC-native bodies** in engine_submit.cpp — ov_rwalk_aux_bf00 /
+  ov_rwalk_aux_eec0 / ov_render_walk_snapshot / ov_rwalk_aux_bcf4 — written under the old override model and
+  ORPHANED since the override table was removed (codemap: all [ORPHAN], "only the removed override table").
+  Each walks its queue, dispatches every live object's per-type renderer (still-PSX content via rec_dispatch),
+  and tags the produced packet span with the object's PC-native WORLD-POSITION depth (gpu_obj_depth_add) —
+  i.e. engine-owned render ordering from real world coords, not the PSX OT. They just needed a native parent
+  to call them.
+- **DONE — new module engine/engine_render.{h,cpp}** (render code OUT of gte_beetle, per directive): owns the
+  render orchestrator `ov_render_frame` (0x8003f9a8) + `ov_render_frame_x` (0x8003fa44), which the native
+  ov_field_frame / ov_field_frame_x now call DIRECTLY (was rec_dispatch). The orchestrator wires the 4 orphan
+  walks back into the LIVE render; 0x8003b588 (no real native, only a subcnt diagnostic) + the 5 non-walk
+  passes (4fd30/25d98/d0bc/f024/df04/c048) stay rec_dispatch. Built + run-list updated (build_port.sh+run.sh).
+- **VERIFIED (headless `shot`):** A/B at the seaside field — orchestrator-native + walks-rec_dispatch renders
+  4:3 98.4% non-black (== baseline); orchestrator-native + walks-NATIVE renders the SAME scene correctly in
+  WIDESCREEN 428×240 (90.5% non-black + HUD) — the world-coord depth path now drives the engine-owned render
+  extent. Stable 320+ frames, zero derail/caught-yield. Shots: scratch/screenshots/render_walk0.png (4:3) vs
+  render_final.png (widescreen). USER eyeball pending (`git pull && ./run.sh`). No A/B env/compile gate kept
+  (ONE behavior — the bring-up WALK_NATIVE switch was removed before commit).
+- **NEXT:** descend the render walks — own the per-type render handlers (0x8003cca4 + 0x8003c2d4/c464/c5f8/
+  c788) and the per-object flush 0x8003cdd8 native, routing geometry through eproj/native_gt3gt4 so the actual
+  VERTEX PROJECTION is world-coord float (not GTE). Those natives (ov_perobj_render 0x8003cca4, ov_render_cmd
+  0x8003f698) also exist ORPHANED in engine_submit.cpp — wire them as the frontier reaches each. Contiguity:
+  the walks are native now, so 0x8003cca4 is the next ownable node.

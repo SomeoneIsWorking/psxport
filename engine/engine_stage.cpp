@@ -25,6 +25,7 @@
 
 #include "core.h"
 #include "cfg.h"
+#include "engine_render.h"          // ov_render_frame / ov_render_frame_x (native per-frame render driver)
 #include <stdio.h>
 
 // dispatch a still-recomp leaf with up to 3 args set (helpers for the native stage machines).
@@ -226,7 +227,7 @@ static void ov_field_frame(Core* c) {
     d0(c, 0x80025588u); d0(c, 0x8004fe84u); ov_disp_26c88(c); d0(c, 0x80022a80u);     // 0x80026c88 NATIVE
     d0(c, 0x8006ec44u); d0(c, 0x80050de4u); d0(c, 0x8001cac0u);
   }
-  if (c->mem_r8(0x1f800136u) < 2) d0(c, 0x8003f9a8u);
+  if (c->mem_r8(0x1f800136u) < 2) ov_render_frame(c);   // 0x8003f9a8 — NATIVE render orchestrator + walk
   d0(c, 0x8010810cu);                           // render submit
   d0(c, 0x80077d8cu);
   d0(c, 0x80075a80u);                           // per-frame area update
@@ -378,7 +379,7 @@ static void ov_field_frame_x(Core* c) {
     d0(c, 0x80025588u); d0(c, 0x8004fe84u); ov_disp_26c88(c); d0(c, 0x80022a80u);     // 0x80026c88 NATIVE
     d0(c, 0x8006ec44u);
   }
-  if (c->mem_r8(0x1f800136u) < 2) d0(c, 0x8003fa44u);
+  if (c->mem_r8(0x1f800136u) < 2) ov_render_frame_x(c); // 0x8003fa44 — NATIVE render orchestrator twin
   d0(c, 0x8010810cu);                           // render submit
   d0(c, 0x80077d8cu);
   d0(c, 0x80075a80u);                           // per-frame area update

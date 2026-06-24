@@ -589,6 +589,7 @@ static void interp_flat(Core* c, uint32_t pc, uint32_t stop_ra) {
         pc = tgt; continue;                          // flat return up the PSX call chain
       }
       if (coro_native_call(c, tgt)) { pc = coro_next_pc(c); continue; }  // computed tail-call
+      trace_call(pc, tgt);                           // computed jump (switch table / jr-dispatch) — traced too
       pc = tgt; continue;                            // computed jump (switch table etc.)
     }
     if (op == 0x01 || op == 0x04 || op == 0x05 || op == 0x06 || op == 0x07) {  // branches
