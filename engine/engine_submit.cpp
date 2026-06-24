@@ -757,6 +757,30 @@ void ov_ground_probe(Core* c) {
     }
     logged++;
   }
+  // FULL-TABLE texpage/depth scan (later-238): for EVERY GT4 record in the table, log its texpage and the
+  // eproj depth (pz) of vert0 — to see (a) whether the tp(576,256) sky/sea backdrop quads are IN this table,
+  // and (b) what depth eproj assigns them (near=covers world → eproj mis-projects the backdrop; far=behind).
+  { struct TP { int tx, ty, n; float zmin, zmax; } tps[16]; int ntp = 0;
+    uint32_t q = es + 0x10, qend = es + 0x10 + (uint32_t)count * 2;
+    for (; q < qend; q += 2) {
+      uint32_t cmd = base + (uint32_t)c->mem_r16(q) * 4;
+      uint32_t s0 = c->mem_r32(cmd);
+      uint32_t gt3 = s0 & 0xFF, gt4 = (s0 >> 16) & 0xFF;
+      uint32_t rec = cmd + 4 + gt3 * 36;
+      for (uint32_t k = 0; k < gt4; k++, rec += 44) {
+        uint16_t tp = (uint16_t)(c->mem_r32(rec + 12) >> 16);
+        int tx = (tp & 0xF) * 64, ty = ((tp >> 4) & 1) * 256;
+        uint32_t vz01 = c->mem_r32(rec + 24), xy0 = c->mem_r32(rec + 20);
+        ProjVtx pv; eproj_vertex_active((int16_t)xy0, (int16_t)(xy0 >> 16), (int16_t)vz01, &pv);
+        int s = -1; for (int j = 0; j < ntp; j++) if (tps[j].tx == tx && tps[j].ty == ty) { s = j; break; }
+        if (s < 0 && ntp < 16) { s = ntp++; tps[s] = (TP){ tx, ty, 0, 1e9f, -1e9f }; }
+        if (s >= 0) { tps[s].n++; if (pv.pz < tps[s].zmin) tps[s].zmin = pv.pz; if (pv.pz > tps[s].zmax) tps[s].zmax = pv.pz; }
+      }
+    }
+    for (int j = 0; j < ntp; j++)
+      fprintf(stderr, "[groundprobe-tp] tp=(%d,%d) gt4recs=%d eproj_pz=[%.0f .. %.0f]\n",
+              tps[j].tx, tps[j].ty, tps[j].n, (double)tps[j].zmin, (double)tps[j].zmax);
+  }
   eproj_clear_active();
 }
 

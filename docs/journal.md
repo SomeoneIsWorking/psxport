@@ -8299,3 +8299,37 @@ then route the per-object render through NATIVE submit_perobj_render (node+0xD=0
 (both twins) replacing d0(c,0x8003b588u). VERIFIED: default seaside view (groundnative off) unchanged
 (passA_default.png == baseline) — no regression. This is correct top-down progress (water now sorts by real
 depth) but it is NOT the "sea on top" fix (that is 0x801401B8, above).
+
+### later-238 (cont.) — the cyan backdrop is built OUTSIDE ov_render_frame; classified at the DEFERRED OT-walk; attribution tooling is the blocker
+Pursued the cyan backdrop (tp 576,256, op-3C, is3d=0) with reliable C-level tools instead of WWATCH:
+- **The ground table 0x800F2418 is GRASS/terrain ONLY** — new `debug groundprobe` full-table scan
+  (`[groundprobe-tp]`) shows its GT4 records are all on tp_y=0 pages (640,0 grass, 576,0, 704,0, 768,0,
+  896,0, 960,0), eproj-projecting to SANE positive depths (pz ~195..4474). NO tp(576,256) entries. So
+  groundnative draws the grass correctly; later-235 "ground decode correct" CONFIRMED. The cyan backdrop is
+  NOT in this table.
+- **WWATCH "pc=" is UNRELIABLE for the field render.** It logs g_interp_pc, which only updates in the
+  INTERPRETER; the field render runs through recomp/native code, so the pc is stale garbage (e.g. it pointed
+  at 0x80115xxx which is a 0x7FFF7FFF DATA buffer, not code). later-237's "writer pc=0x8007E838" and all
+  pool-address WWATCH attribution (mine + the journal's) are suspect. Pool addresses also churn (a node addr
+  is reused by different builders frame-to-frame), so node-address attribution is doubly unreliable.
+- **Built a per-pass attribution probe** (g_render_pass_tag stamped per pass in ov_render_frame + ov_field_frame;
+  PSXPORT_BDTAG histograms it in the gp0 classifier). Result: the tp(576,256) backdrop is ALWAYS tagged "?"
+  (the initial value) — i.e. it is classified when NO pass tag is set. CONCLUSION: gp0 classification is
+  DEFERRED to the present/OT-walk (double-buffered: present runs at loop-top BEFORE ov_field_frame sets any
+  tag), DECOUPLED from the building pass. So per-current-pass tagging CANNOT attribute these prims (re-confirms
+  later-235 #2). The backdrop is also built OUTSIDE ov_render_frame entirely (skipping every ov_render_frame
+  pass never removed it — earlier SKIPPASS tests), i.e. in the field-update phase or a separate BG/backdrop
+  render. (The probe was reverted; it proved a negative. `groundprobe-tp` kept.)
+- **NET STATE:** the "sea on top" cyan backdrop = a tp(576,256) screen-space 2D element, built outside the
+  owned ov_render_frame, classified at the deferred OT-walk → lands is3d=0 foreground → covers the native
+  world when groundnative moves the grass to RQ_WORLD. The atlas SPRITE band (0x80025d98) and the water
+  (0x8003b588, now owned) are SEPARATE and NOT this backdrop.
+- **THE REAL BLOCKER / NEXT STEP:** need RELIABLE BUILD-TIME prim→builder attribution that survives the
+  deferred OT-walk + pool churn. The infra exists: PktSpanSession / g_pkt_track (engine_submit.cpp:832) records
+  a pool-write span; bracket each ov_field_frame call (0x80059d28, 0x80069b28, 0x80026368, ov_objwalk,
+  0x80025588, 0x8004fe84, ov_disp_26c88, 0x80022a80, 0x8006ec44, 0x80050de4, 0x8001cac0, 0x8010810c) with a
+  span capture, then at gp0 classify look up which bracket's span the packet falls in (NOT a current-pass
+  global). That identifies the backdrop's builder reliably. Then own that builder TOP-DOWN and either draw its
+  sky/sea as RQ_BACKGROUND (if screen-space) or eproj real-depth (if world-space). Determine which by dumping
+  its scene-table records' verts once the builder is known. (Faster alt to localize the builder: temporarily
+  no-op each ov_field_frame call one at a time, rebuild, shot with groundnative — see which removes the cyan.)

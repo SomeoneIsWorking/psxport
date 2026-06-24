@@ -63,8 +63,7 @@ extern "C" { int g_render_psx = 0; }
 void ov_render_frame(Core* c) {
   if (g_render_psx) { d0(c, 0x8003f9a8u); return; }   // COMPARE: render the field via the PSX recomp path
   d0(c, 0x8004fd30u);
-  d0(c, 0x80025d98u);                // STILL-PSX: the 2D ATLAS backdrop (sky/sea sprites, op-0x65, builder
-                                     // 0x8007e6dc; node 0x800BFEB8 is the visible sea — confirmed by WWATCH, later-237)
+  d0(c, 0x80025d98u);                // STILL-PSX: 2D atlas SPRITE band (op-0x65, node 800BFEB8) — NOT the cyan backdrop
   ov_rwalk_aux_bf00(c);              // 0x8003bf00
   ov_rwalk_aux_eec0(c);             // 0x8003eec0
   ov_rwalk_b588(c);                  // 0x8003b588 — field WATER, NATIVE real-depth (node 0x800E7E80 → submit_perobj_render)
