@@ -324,6 +324,17 @@ render subsystem replaces them.
     (sp-=48) for the stack arg. Transcribed 1:1; control flow + direct node/area-flag writes owned native,
     leaves stay PSX via rec_dispatch. Verified live: `obj80118240verify` 1550+ matches, 0 mismatch; gate-off
     field clean (151 nodes, 0 bad opcode).
+  - **Behavior handler FUN_8013A900 owned native+live (2026-06-25):** added `engine/objbeh_8013a900.cpp`
+    (~x1554/field-frame on seaside, ~205 instr). Outer state machine on node[4]: state 0 INIT gates on global
+    0x800ED098, seeds node fields + sizes, allocates node[8] child records (FUN_8007AAE8) filled from the
+    per-node[3] source table @0x8014AAB0 (8 bytes/rec) + FUN_80051B04, then per node[3] (0 -> FUN_801252C0
+    x2 gated on 0x800BF8F7; 2 -> motion-field seed); state 1 gates scratchpad[0x207] in [23,31] + FUN_8007778C,
+    then node[3]==0 runs a trig block (FUN_80083E80/F50 of the 0x800E7ED8 angle + FUN_80085690 x2, writing
+    node[0xC4] record fields), 1/2 -> FUN_80135414, then FUN_800517F8; state 3 -> FUN_8007A624. The math helpers
+    are ordinary rec_dispatch leaves (return via v0, not gte_op); a0 fidelity in the record loop kept by not
+    clobbering c->r[4] between FUN_80051B04 and the next FUN_8007AAE8. Transcribed 1:1; control flow + direct
+    node/record writes owned native. Verified live: `obj8013a900verify` 1550+ matches, 0 mismatch; gate-off
+    field clean (151 nodes, 0 bad opcode).
   - **NEXT — extend the contiguity:** own the remaining per-object behavior handlers
     (e.g. the overlay-resident 0x801xxxxx handlers; the model-attach sites FUN_80077B38 +
     other per-object render-record callers) so the full graphics-bind set runs native; own the remaining

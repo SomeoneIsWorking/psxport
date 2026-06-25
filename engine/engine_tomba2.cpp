@@ -62,6 +62,7 @@ void ov_beh_80121978_run(Core* c); // 0x80121978 (objbeh_80121978.cpp — overla
 void ov_beh_80125e0c_run(Core* c); // 0x80125E0C (objbeh_80125e0c.cpp — overlay)
 void ov_beh_80128760_run(Core* c); // 0x80128760 (objbeh_80128760.cpp — overlay)
 void ov_beh_80118240_run(Core* c); // 0x80118240 (objbeh_80118240.cpp — overlay)
+void ov_beh_8013a900_run(Core* c); // 0x8013A900 (objbeh_8013a900.cpp — overlay)
 static bool dispatch_native_behavior(Core* c, uint32_t h) {
   switch (h) {
     case 0x80040558u: ov_sm40558(c);          return true;
@@ -91,6 +92,7 @@ static bool dispatch_native_behavior(Core* c, uint32_t h) {
     case 0x80125E0Cu: ov_beh_80125e0c_run(c); return true;
     case 0x80128760u: ov_beh_80128760_run(c); return true;
     case 0x80118240u: ov_beh_80118240_run(c); return true;
+    case 0x8013A900u: ov_beh_8013a900_run(c); return true;
     // 0x8004C238: native body written (objbeh_8004c238.cpp) but A/B gate shows 40 MISMATCH (later-232c) —
     // NOT wired until fixed; runs as PSX (rec_dispatch).
     default: return false;
