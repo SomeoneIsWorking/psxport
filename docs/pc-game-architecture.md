@@ -443,6 +443,12 @@ render subsystem replaces them.
     (shared context ptr); state 1 routes on node[3] to FUN_8011C674/FUN_8011CA04 + node[1]-gated
     FUN_800518FC + tail FUN_8011CD14; state 2 sets node[4]=3; state 3 FUN_8007A624. Verified live:
     `node3_routerverify` 750+ matches, 0 mismatch; gate-off field clean (151 nodes).
+  - **Behavior handler FUN_8011D988 = `beh_actor_move_sm` owned native+live (2026-06-25, Ghidra flow):** a
+    rich movement actor — outer node[4] phases (1 vs 2), each a switch on the movement sub-state node[5]
+    dispatching a large FUN_8011/8012xxxx movement-leaf family, gated on mem[0x800BF809]/scratch[0x137]/
+    node[3]. Preserves the state-2 case-0xB fallthrough (->2/7/8) and the state-1 cross-case goto (cases
+    0/1 -> case 4's FUN_8012185C). State 3 clears node[0x1B]&0x40 or despawns. Verified live:
+    `actor_move_smverify` 750+ matches, 0 mismatch; gate-off field clean (151 nodes).
   - **NEXT — extend the contiguity:** own the remaining per-object behavior handlers
     (e.g. the overlay-resident 0x801xxxxx handlers; the model-attach sites FUN_80077B38 +
     other per-object render-record callers) so the full graphics-bind set runs native; own the remaining
