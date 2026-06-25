@@ -280,6 +280,17 @@ render subsystem replaces them.
     embedded). Transcribed 1:1; signed (lh/sra) vs unsigned (lhu/lbu) preserved; control flow + direct node
     writes owned native, leaves stay PSX via rec_dispatch. Verified live: `obj8012a0b8verify` 2300+ matches,
     0 mismatch; gate-off field clean (151 nodes, 0 bad opcode).
+  - **Behavior handler FUN_8012DA04 owned native+live (2026-06-25):** added `engine/objbeh_8012da04.cpp`
+    (~x2331/field-frame on seaside, ~200 instr). Outer state machine on node[4] with TWO in-overlay jump
+    tables (jt0 @0x80109DAC INIT, jt1 @0x80109DCC the per-node[3] animation/spawn sub-states), both indexed
+    by node[3]<8. State 0 resets the node block or calls FUN_80051B70/FUN_800517F8; state 1's jt1 cases drive
+    a node[5] sub-state, call FUN_80077B38 (model-attach) on entry then FUN_8004BD64 (5-arg, arg5 = &node[0x60]
+    passed on the STACK), copy node[1] from node[0x10][1], and gate on area bytes 0x800BF9DD/0x800BF9B5 to run
+    the FUN_8004D4C4+FUN_8004B0D8 tail / advance node[4]=3; state 2 runs that tail when node[3]==2; state 3
+    -> FUN_8007A624. Mirrors the guest prologue (sp-=40) so the leaf reads arg5 from the right frame slot.
+    Transcribed 1:1; both jump tables READ live from overlay RAM; control flow + direct node writes owned
+    native, leaves stay PSX via rec_dispatch. Verified live: `obj8012da04verify` 2300+ matches, 0 mismatch;
+    gate-off field clean (151 nodes, 0 bad opcode).
   - **NEXT — extend the contiguity:** own the remaining per-object behavior handlers
     (e.g. the overlay-resident 0x801xxxxx handlers; the model-attach sites FUN_80077B38 +
     other per-object render-record callers) so the full graphics-bind set runs native; own the remaining
