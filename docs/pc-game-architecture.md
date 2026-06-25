@@ -349,6 +349,19 @@ render subsystem replaces them.
     unsigned preserved. PRNG draws return via c->r[2] and advance the shared RNG (gate rolls RAM back so both
     sides draw the same sequence). Control flow + direct node/s2/global writes owned native. Verified live:
     `obj80117658verify` 1550+ matches, 0 mismatch; gate-off field clean (151 nodes, 0 bad opcode).
+  - **Behavior handler FUN_80135D64 owned native+live (2026-06-25):** added `engine/objbeh_80135d64.cpp`
+    (~x1552/field-frame on seaside, ~230 instr). Same record-alloc shape as FUN_8013A900. State 0: if
+    node[3]<2 and global 0x800ED098 >= 4, allocate node[8]=4 child records (FUN_8007AAE8) filled from the
+    per-node[3] source table @0x8014A780 (8 bytes/rec) + FUN_80051B04; then seed the common block (node[4]=
+    node[0]=1, sizes 30/60/50/100, node[0x2E/0x32/0x36/0x56] from tbl2 @0x8014A7A0[node[3]], node[0x48]=512,
+    node[0x4A]=50, node[0x60]=node[0x32]; node[3]==0 clamp of node[0x2E] vs scratch[0x160]) then FUN_80135414
+    + FUN_800517F8. State 1: compute a gate from mem[0x800E7E84]/[0x800E7EAA]+scratch, optionally reload the
+    tbl2 fields, then gate on scratchpad[0x207] (==23 needs scratch[0xDA]>=11000) + mem[0x800E7EAA]<32 and run
+    FUN_8007778C/FUN_80135414/FUN_800517F8. State 3 -> FUN_8007A624. a0 fidelity in the record loop kept by
+    not clobbering c->r[4] between FUN_80051B04 and the next FUN_8007AAE8; the transient node[4]=3 on the
+    0x800ED098<4 path is overwritten by node[4]=1 at the tail (END RAM identical). Transcribed 1:1; control
+    flow + direct node/record/global writes owned native. Verified live: `obj80135d64verify` 1550+ matches,
+    0 mismatch; gate-off field clean (151 nodes, 0 bad opcode).
   - **NEXT — extend the contiguity:** own the remaining per-object behavior handlers
     (e.g. the overlay-resident 0x801xxxxx handlers; the model-attach sites FUN_80077B38 +
     other per-object render-record callers) so the full graphics-bind set runs native; own the remaining
