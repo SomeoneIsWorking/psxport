@@ -219,6 +219,20 @@ render subsystem replaces them.
     all writes owned native; the 9 sub-behavior leaves stay PSX via rec_dispatch. Verified live on seaside:
     `obj8006f2d0verify` 750+ matches, 0 mismatch (full RAM+scratchpad A/B); gate-off native-driven reaches the
     field clean (151 nodes, 0 bad opcode). Overlay handlers remain; 0x8004C238 still has its 40-mismatch bug.
+  - **Behavior handler FUN_8013C538 owned native+live (2026-06-25):** added `engine/objbeh_8013c538.cpp`
+    and routed it through `dispatch_native_behavior`. THE hottest still-PSX OVERLAY handler (~x6091/field-frame
+    on seaside; ~110 instr) — an area-overlay routine NOT in MAIN.EXE, disassembled from the field RAM dump
+    (`scratch/ram/field_seaside.bin`). State machine on node[4]: state 0 reads area byte 0x800BF9E0, picks a
+    scatter count (node[0x4e]=7,n=7 if <6 else 1,n=1) and seeds n stride-8 records at node[0x50] via
+    FUN_80032A44(a0,a1) random offsets, sets node[4]=1 and FALLS INTO state 1; state 1 reads area block
+    0x800E7E80 (byte +363/+42 early-outs), copies node[0x38]→node[0x34], then dithers the node[0x50] recs with
+    node[0x4e] iterations of 3x FUN_8009A450() (two jitter variants gated on 0x800BF9E0<6: &3 vs &7 masks),
+    then FUN_8002B278 / FUN_80031780; states 2/3 → FUN_8007A624; state ≥4 trivial. Transcribed 1:1 as a
+    register machine (goto labels = guest addresses); a0/a1 written into c->r only where the guest writes them
+    so the no-arg FUN_8009A450 leaves inherit the recomp's a0/a1. Control flow + all node writes owned native;
+    the 5 sub-behavior leaves stay PSX via rec_dispatch. Verified live on seaside: `obj8013c538verify` 6100+
+    matches, 0 mismatch (full RAM+scratchpad A/B); gate-off native-driven reaches the field clean (151 nodes,
+    0 bad opcode). Disassemble further overlay handlers from the RAM dump (`tools/disas.py --ram …`).
   - **NEXT — extend the contiguity:** own the remaining per-object behavior handlers
     (e.g. the overlay-resident 0x801xxxxx handlers; the model-attach sites FUN_80077B38 +
     other per-object render-record callers) so the full graphics-bind set runs native; own the remaining
