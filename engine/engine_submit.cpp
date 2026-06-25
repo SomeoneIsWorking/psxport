@@ -1075,7 +1075,11 @@ static void submit_render_walk(Core* c) {
           // PSX content (rec_dispatch), with its produced span tagged by the object's PC-native world depth.
           void ov_terrain(Core* c);
           uint32_t fn = c->mem_r32(n + 24);
-          if (fn == 0x8002AB5Cu) { ffspan_begin(); c->r[4] = n; ov_terrain(c); ffspan_end("rwT_terrain"); }   // PC-native world-coord terrain (self-draws)
+          // DIAG probes (cfg_dbg): noterr skips the native terrain pass, nobg skips the native BG node —
+          // to attribute the "stale village still drawn in the hut interior" bug to a specific native pass.
+          if (fn == 0x8002AB5Cu && cfg_dbg("noterr")) { /* skip terrain */ }
+          else if (fn == 0x8013E9D8u && cfg_dbg("nobg")) { /* skip bg */ }
+          else if (fn == 0x8002AB5Cu) { ffspan_begin(); c->r[4] = n; ov_terrain(c); ffspan_end("rwT_terrain"); }   // PC-native world-coord terrain (self-draws)
           else if (fn == 0x8013E9D8u) { ffspan_begin(); c->r[4] = n; ov_bg_render(c); ffspan_end("rwB_bg"); }   // PC-native world-coord ground/BG node
           else {
             ffspan_begin();

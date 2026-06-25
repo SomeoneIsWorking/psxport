@@ -466,7 +466,11 @@ void pad_service_frame(Core* c) {
       FILE* fp = fopen(p, "wb"); if (fp) { fwrite(c->ram, 1, 0x200000, fp); fclose(fp); }
       char sp[112]; snprintf(sp, sizeof sp, "%s.spad", p);
       FILE* spf = fopen(sp, "wb"); if (spf) { fwrite(c->scratch, 1, sizeof c->scratch, spf); fclose(spf); }
-      fprintf(stderr, "[padrec] dumpram at replay-frame %u -> %s\n", rec_fc, p);
+      // also dump the classified display list (which prims/passes drew this frame) — pins the culprit pass.
+      void gpu_scene_dump_now(Core*, FILE*);
+      char sc[100]; snprintf(sc, sizeof sc, "scratch/bin/padscene_%u.txt", rec_fc);
+      FILE* scf = fopen(sc, "w"); if (scf) { gpu_scene_dump_now(c, scf); fclose(scf); }
+      fprintf(stderr, "[padrec] dumpram+scene at replay-frame %u -> %s\n", rec_fc, p);
     }
     // PSXPORT_PAD_TRACE=lo-hi : log the transition/scene markers EVERY replay frame in [lo,hi] (pad-frame
     // indexed — the faithful axis). Finds which field moves when the player walks into the hut (the
