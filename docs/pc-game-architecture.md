@@ -270,6 +270,16 @@ render subsystem replaces them.
     FUN_80051C8C. Transcribed 1:1; jump table -> switch->goto; signed hword tests preserved. Control flow +
     direct node/record writes owned native; leaves stay PSX via rec_dispatch. Verified live:
     `obj80129c00verify` 2300+ matches, 0 mismatch; gate-off field clean (151 nodes, 0 bad opcode).
+  - **Behavior handler FUN_8012A0B8 owned native+live (2026-06-25):** added `engine/objbeh_8012a0b8.cpp`
+    (~x2334/field-frame on seaside, ~135 instr). Outer state machine on node[4]: states 2/3 -> FUN_8007A624;
+    state 0 is the INIT path (node[11]=32, node[4]=1, node[8]=node[9]=0, node[0x18]=0x8013EA64), routes node[3]
+    to FUN_801360F4 + FUN_80139838 x2 (node[3]<2) or FUN_8013AC34 (>=2), then copies a per-node[3] record from
+    the resident overlay table @0x80149EC4 (stride 10) into node fields 0x80/0x82/0x84/0x86 and computes two
+    round-toward-zero midpoints (node[0x2E]/0x4E, node[0x36]) before FUN_80129E8C; state 1 reads scratchpad byte
+    0x1F800207 and, when 25<=b<32, calls FUN_80129E8C and sets node[1]=1. Table READ live from overlay RAM (not
+    embedded). Transcribed 1:1; signed (lh/sra) vs unsigned (lhu/lbu) preserved; control flow + direct node
+    writes owned native, leaves stay PSX via rec_dispatch. Verified live: `obj8012a0b8verify` 2300+ matches,
+    0 mismatch; gate-off field clean (151 nodes, 0 bad opcode).
   - **NEXT — extend the contiguity:** own the remaining per-object behavior handlers
     (e.g. the overlay-resident 0x801xxxxx handlers; the model-attach sites FUN_80077B38 +
     other per-object render-record callers) so the full graphics-bind set runs native; own the remaining
