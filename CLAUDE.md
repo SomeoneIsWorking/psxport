@@ -119,10 +119,13 @@ a PC renderer. Instead:
 
 ## Build / drive / repo
 - **`scratch/bin/tomba2_port` IS THE GAME** — recompiled MAIN.EXE (`generated/shard_*.c` from
-  `tools/recomp/emit.py`) + native engine (`engine/*`) + PSX platform (`runtime/recomp/*`). No Makefile.
-  - `./run.sh [disc.chd]` — full: extract + recompile + compile + link + run.
-  - `tools/build_port.sh [files…|all]` — incremental compile+relink, no run (~0.5s/file). **Keep its SRC
-    list in sync with run.sh** when adding an `engine/*` or `runtime/recomp/*` file.
+  `tools/recomp/emit.py`) + native engine (`engine/*`) + PSX platform (`runtime/recomp/*`). **The build is
+  CMake** (`cmake/tomba2_port.cmake` owns the source list, RmlUi static-lib subbuild, SDL_GPU shader gen,
+  and link — keep that list in sync when adding an `engine/*` / `runtime/recomp/*` file).
+  - `./run.sh [disc.chd]` — full: extract MAIN.EXE + `cmake --build build --target tomba2_port` + run.
+  - Incremental rebuild without running: `cmake --build build --target tomba2_port` (configure once with
+    `cmake -S . -B build`). Renderer regression check: `tools/test_gpu_render.sh`. (The old per-file
+    `tools/build_port.sh` g++ build is RETIRED — CMake is the single source of truth.)
 - **Drive/observe:** REPL (`PSXPORT_REPL=1`, stdin) or live TCP debug server (`PSXPORT_DEBUG_SERVER=1`,
   `tools/dbgclient.py`). Headless render: `PSXPORT_VK_HEADLESS=1`. Key commands: `run N`, `newgame`,
   `skip N`, `press`/`release`/`tap <btn>`, `r`/`rw`/`w`, `dumpram <path>` (+`.spad`), `shot <path>`

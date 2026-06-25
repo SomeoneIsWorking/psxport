@@ -12,7 +12,8 @@
 set -eu
 cd "$(dirname "$0")/.."
 
-tools/build_port.sh runtime/recomp/gpu_gpu.cpp >/dev/null 2>&1 || { echo "[test_gpu_render] build failed" >&2; exit 2; }
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release >/dev/null 2>&1 || { echo "[test_gpu_render] cmake configure failed" >&2; exit 2; }
+cmake --build build -j"$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)" --target tomba2_port >/dev/null 2>&1 || { echo "[test_gpu_render] build failed" >&2; exit 2; }
 
 # The self-test only needs the GPU device; pass a dummy argv[1] (boot calls the test before load_exe).
 out="$(PSXPORT_GPU_SELFTEST=1 PSXPORT_VK_HEADLESS=1 ./scratch/bin/tomba2_port /dev/null 2>&1 || true)"

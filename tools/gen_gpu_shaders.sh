@@ -40,5 +40,7 @@ PY
   emit tri.frag     spv_g_tri_frag
   emit tritex.vert  spv_g_tritex_vert   # native 3D raster (textured + in-shader semi blend)
   emit tritex.frag  spv_g_tritex_frag
+  emit rml.vert     spv_g_rml_vert      # RmlUi 2D mod/debug overlay (textured + premult-alpha blend)
+  emit rml.frag     spv_g_rml_frag
 } > "$OUT"
 echo "[gen_gpu_shaders] wrote $OUT"

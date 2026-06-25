@@ -1,14 +1,12 @@
-// Integration glue between the Vulkan present path (gpu_gpu.cpp) and the RmlUi overlay
+// Integration glue between the SDL_GPU present path (gpu_gpu.cpp) and the RmlUi overlay
 // (rmlui_overlay.cpp). Keeps all overlay-specific orchestration out of the renderer — see
 // overlay_glue.h. Built as C++ (reads guest RAM via Core); the public hooks have C linkage.
 #include "overlay_glue.h"
 #include "rmlui_overlay.h"
 #include "core.h"
 
-void overlay_glue_init(SDL_Window* win, VkInstance inst, VkPhysicalDevice phys, uint32_t qfam,
-                       VkDevice dev, VkQueue queue, VkRenderPass present_rpass,
-                       uint32_t min_image_count, uint32_t image_count) {
-    rmlui_overlay_init(win, inst, phys, qfam, dev, queue, present_rpass, min_image_count, image_count);
+void overlay_glue_init(SDL_Window* win, SDL_GPUDevice* dev, SDL_GPUTextureFormat swap_fmt) {
+    rmlui_overlay_init(win, dev, swap_fmt);
 }
 
 void overlay_glue_event(const SDL_Event* e) {
@@ -28,10 +26,6 @@ void overlay_glue_frame_begin(Core* core) {
     rmlui_overlay_new_frame();
 }
 
-void overlay_glue_record(VkCommandBuffer cmd, uint32_t frame_index, VkExtent2D extent) {
-    // The menu must cover the FULL window (not the letterboxed game-pane viewport the present pass set
-    // for the framebuffer blit), so build a full-window viewport + scissor from the swapchain extent.
-    VkViewport full_vp = { 0.0f, 0.0f, (float)extent.width, (float)extent.height, 0.0f, 1.0f };
-    VkRect2D full_sc = { {0, 0}, extent };
-    rmlui_overlay_render_vk(cmd, frame_index, full_vp, full_sc);
+void overlay_glue_record(SDL_GPUCommandBuffer* cmd, SDL_GPURenderPass* rp, int win_w, int win_h) {
+    rmlui_overlay_record_gpu(cmd, rp, win_w, win_h);
 }

@@ -112,52 +112,14 @@ if [ -n "${PSXPORT_RECOMP:-}" ] && { [ ! -f "$GEN" ] || [ "$MAIN" -nt "$GEN" ] |
   python3 tools/recomp/emit.py "$MAIN" "$GEN" --overlays "$OVL" --stub "$STUB" >/dev/null
 fi
 
-# libchdr static libs (versions vary across platforms — locate them).
-CHDR_DIR=build/vendor/beetle-psx/deps/libchdr
-find_a() { find "$CHDR_DIR" -name "$1" 2>/dev/null | head -1; }
-CHD_LIBS="$(find_a 'libchdr-static.a') $(find_a 'libchdr-lzma.a') $(find_a 'libminiz.a')"
-ZSTD_A="$(find_a 'libzstd.a')"; [ -n "$ZSTD_A" ] && CHD_LIBS="$CHD_LIBS $ZSTD_A" || CHD_LIBS="$CHD_LIBS $(pkg-config --libs libzstd 2>/dev/null || echo -lzstd)"
-[ -n "$(find_a 'libchdr-static.a')" ] || die "libchdr not built (re-run; check the CMake step)"
-
-MED=vendor/beetle-psx/mednafen
-# libchdr headers live in the source tree; its compiled .a is under build/ (CHDR_DIR above).
-# (No -Igenerated: the interpreter-only runtime links no recompiled shards, so nothing in the
-# build includes generated/*. emit.py output is an offline analysis aid only — see later-101.)
-INC="-I$RT -I$ENG -Igame/world -Igame/render -Igame/render/scene -Igame/render/mesh -I$MED -I$MED/psx -Ivendor/beetle-psx/libretro-common/include -Ivendor/beetle-psx -Ivendor/beetle-psx/deps/libchdr/include"
-# _XOPEN_SOURCE: makecontext/swapcontext (native threads) need it on macOS/glibc.
-CFLAGS="-O2 -g -w -D_XOPEN_SOURCE=700 $INC $(pkg-config --cflags sdl3 2>/dev/null) -DPSXPORT_SDL"
-CXX="${CXX:-c++}"
-# The RmlUi overlay is DROPPED, and the SBS presenter is now SDL_GPU, in the SDL_GPU build (their SDL2/Vulkan/OpenGL
-# backends don't port to SDL3/SDL_GPU this pass — see docs/render-backend-port.md); their symbols are
-# the RmlUi symbols satisfied by rmlui_overlay_stub.cpp; the SBS two-pane present by sbs_present_sdl.cpp + gpu_gpu.cpp. No extra static libs.
-# -Wno-(c++11-)narrowing: clang (macOS) has no -fpermissive and makes braced-init narrowing a hard error; keep
-# the build portable (see tools/build_port.sh). -Wno-c++11-narrowing = clang; -Wno-narrowing = GCC; each ignores the other.
-CXXFLAGS="-O2 -g -w -fpermissive -Wno-c++11-narrowing -Wno-narrowing -std=c++17 $INC $(pkg-config --cflags sdl3 2>/dev/null) -DPSXPORT_SDL"
-tools/gen_gpu_shaders.sh   # compile+embed the SDL_GPU shaders (gpu_gpu_shaders.h)
-# All TUs. Interpreter-only runtime: MAIN.EXE + the boot stub run from RAM via the interpreter
-# (runtime/recomp/dispatch.c + interp.c); the recompiled generated/shard_*.c are NOT linked (the
-# recompiler is kept only as an offline analysis aid). See docs/journal.md later-101.
-# C++ TUs (.cpp) = the RmlUi mod overlay; compiled with $CXX, linked via $CXX. Keep in sync with build_port.sh.
-SRC="$RT/dispatch.cpp \
-  $RT/cfg.c $RT/mem.cpp $RT/stubs.cpp $RT/hle.cpp $RT/threads.cpp $RT/interp.cpp $RT/gpu_native.cpp $RT/gpu_debug.cpp $RT/vram_xfer.cpp $RT/spu_audio.c $RT/pad_input.cpp $RT/memcard.cpp $RT/native_fmv.cpp \
-  $MED/psx/gte.c $RT/gte_beetle.cpp $MED/psx/mdec.c $RT/mdec_beetle.c $MED/psx/spu.c $RT/spu_beetle.c \
-  $RT/disc.c $RT/cd_override.cpp $RT/cdc_native.c $RT/xa_stream.c $RT/timing.cpp $RT/gpu_gpu.cpp $RT/gpu_perf.cpp $RT/mods.c $ENG/game_tomba2.cpp $ENG/asset.cpp $ENG/mathlib.cpp $ENG/cull.cpp $ENG/collision.cpp $ENG/hitbox.cpp $ENG/grid_offset.cpp game/world/spawn.cpp game/world/placement.cpp game/world/graphics_bind.cpp game/world/verify_gate.cpp game/world/pool.cpp game/world/entity.cpp game/render/render_native.cpp game/render/scene/scene_build.cpp game/render/mesh/mesh_draw.cpp $ENG/actor_sm_24448.cpp $ENG/beh_scene_ui_trigger.cpp $ENG/beh_typed_init_scene_trigger.cpp $ENG/beh_pickup_collect_trigger.cpp $ENG/beh_substate_edge_orchestrator.cpp $ENG/beh_jumptable_release_trigger.cpp $ENG/beh_typed_table_seed_gate.cpp $ENG/beh_typed_jumptable_pair.cpp $ENG/beh_cull_substate_orchestrator.cpp $ENG/beh_id_compare_motion_dispatch.cpp $ENG/beh_jumptable_flag_gate.cpp $ENG/beh_cull_tick_render.cpp $ENG/beh_sibling_angle_track.cpp $ENG/beh_visibility_gate_dispatch.cpp $ENG/beh_record_list_scanner.cpp $ENG/beh_area_event_dispatch.cpp $ENG/beh_pad_child_linker.cpp $ENG/beh_scatter_record_dither.cpp $ENG/beh_area_threshold_ptr_swap.cpp $ENG/beh_scatter_ramp_machine.cpp $ENG/beh_pure_inner_dispatch.cpp $ENG/beh_anim_trigger_gates.cpp $ENG/beh_box_seed_phase_gate.cpp $ENG/beh_typed_anim_spawn.cpp $ENG/beh_id_routed_dispatch.cpp $ENG/beh_pure_substate_dispatch.cpp $ENG/beh_linked_advance_branch.cpp $ENG/beh_typed_init_exit_poker.cpp $ENG/beh_child_trig_motion.cpp $ENG/beh_prng_velocity_machine.cpp $ENG/beh_quad_record_table_seed.cpp $ENG/beh_flagbit_timer_machine.cpp $ENG/beh_two_child_steer.cpp $ENG/beh_single_child_cull.cpp $ENG/beh_twin_record_steer.cpp $ENG/beh_multi_record_phase_machine.cpp $ENG/beh_sine_motion_sfx.cpp $ENG/beh_box_rearm_sub.cpp $ENG/beh_node3_router.cpp $ENG/beh_actor_move_sm.cpp $ENG/beh_variant_actor_sm.cpp $ENG/beh_lift_platform.cpp $ENG/beh_event_record_machine.cpp $ENG/beh_typed_variant_router.cpp $ENG/beh_camera_target_follow.cpp $ENG/beh_cube_text_spawn.cpp $ENG/beh_area_transition_machine.cpp $ENG/bg_scene_transition_sm.cpp $ENG/script.cpp $ENG/animation.cpp $ENG/input.cpp $ENG/menu.cpp $ENG/inventory.cpp $ENG/hud.cpp $ENG/lighting.cpp $ENG/engine_bav.cpp $ENG/save.cpp $ENG/sound.cpp $ENG/engine_init.cpp $ENG/engine_font.cpp $ENG/engine_level.cpp $ENG/fps60.cpp $ENG/engine_tomba2.cpp $ENG/engine_submit.cpp $ENG/engine_project.cpp $ENG/engine_render.cpp $ENG/engine_stage.cpp $ENG/sop.cpp $ENG/engine_demo.cpp $ENG/engine_camera.cpp $ENG/engine_math.cpp $ENG/engine_player.cpp $ENG/native_terrain.cpp $ENG/render_queue.cpp $ENG/clib.cpp $ENG/gte.cpp $ENG/gpu_lib.cpp $ENG/sound_voice.cpp $ENG/native_misc.cpp $RT/peripheral_misc.cpp $ENG/margin_render.cpp $ENG/audio/native_audio.c $ENG/audio/native_music.c $ENG/audio/music_list.c $RT/sync_overrides.cpp $RT/native_boot.cpp $RT/dbg_server.cpp $RT/native_stub.cpp $RT/watchdog.c $RT/dualcore.cpp $RT/sbs.cpp $RT/sbs_present_sdl.cpp $RT/boot.cpp \
-  $RT/rmlui_overlay_stub.cpp"
-
-say "building the native port in parallel (-j$JOBS)…"
-OBJ=scratch/obj; mkdir -p "$OBJ"
-compile_one() { o="$OBJ/$(echo "$1" | tr '/.' '__').o";
-  case "$1" in
-    *.cpp|*.cc) $CXX $CXXFLAGS -c "$1" -o "$o" ;;
-    *)          $CC  $CFLAGS  -c "$1" -o "$o" ;;
-  esac || { echo "FAILED: $1" >&2; exit 1; }; }
-export -f compile_one; export CC CXX CFLAGS CXXFLAGS OBJ
-# shellcheck disable=SC2086
-printf '%s\n' $SRC | xargs -P"$JOBS" -I{} bash -c 'compile_one "$@"' _ {} || die "compile failed"
-OBJS=""; for s in $SRC; do OBJS="$OBJS $OBJ/$(echo "$s" | tr '/.' '__').o"; done
-# shellcheck disable=SC2086
-# -rdynamic: export symbols so the watchdog's backtrace shows function names (watchdog.c). Link with $CXX (libstdc++).
-$CXX -rdynamic $OBJS $CHD_LIBS $(pkg-config --libs sdl3) -lpthread -lm -o scratch/bin/tomba2_port || die "link failed"
+# ---- 4b. build the native port via CMake (single source of truth: cmake/tomba2_port.cmake) ----------
+# CMake owns the whole port build: the source list, the vendored RmlUi static-lib subbuild + link, the
+# SDL_GPU SPIR-V shader generation, the beetle/libchdr backend, and the SDL3/freetype link. It emits
+# scratch/bin/tomba2_port (RUNTIME_OUTPUT_DIRECTORY). Configure is idempotent (fast when up to date); the
+# build is incremental. (The old hand-rolled per-file g++ compile/link + tools/build_port.sh are retired.)
+say "building the native port (CMake -j$JOBS)…"
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release >/dev/null || die "cmake configure failed"
+cmake --build build -j "$JOBS" --target tomba2_port || die "port build failed"
 
 # ---- 5. run ------------------------------------------------------------------------
 say "launching Tomba! 2 (native PC port)…"

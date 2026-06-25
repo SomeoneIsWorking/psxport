@@ -22,6 +22,7 @@
 #include <SDL3/SDL_gpu.h>
 #include "cfg.h"
 #include "mods.h"             // g_mods: live PC-native mod toggles (wide/ires); seeded from cfg
+#include "overlay_glue.h"     // RmlUi mod/debug overlay hooks (init / event / per-frame / record)
 #include "gpu_gpu_shaders.h"  // generated: spv_g_present_{vert,frag} / spv_g_image_{vert,frag}
 #include <stdint.h>
 #include <stdlib.h>
@@ -299,11 +300,15 @@ static void init_gpu(void) {
   }
   create_3d();   // the native 3D/textured raster (R16_UINT color target + depth) — windowed AND headless
   fprintf(stderr, "[gpu_gpu] %s renderer up (VRAM %dx%d RG8 = PSX 1555)\n", s_headless ? "headless" : "windowed", VRAM_W, VRAM_H);
+  // RmlUi mod/debug overlay — windowed only (it records into the swapchain present pass). No-op if its
+  // assets/fonts are missing; ESC toggles it once up.
+  if (!s_headless) overlay_glue_init(s_win, s_dev, s_swap_fmt);
 }
 
 static void poll_quit(void) {
   SDL_Event e;
   while (SDL_PollEvent(&e)) {
+    overlay_glue_event(&e);   // RmlUi overlay: ESC toggle + mouse/keyboard nav (no-op if not inited)
     if (e.type == SDL_EVENT_QUIT) exit(0);
   }
 }
@@ -405,6 +410,9 @@ void GpuGpuState::present(const uint16_t* src, int sx, int sy, int w, int h) {
   SDL_GPUTextureSamplerBinding tsb = { s_vram_tex, s_samp_nearest };
   SDL_BindGPUFragmentSamplers(rp, 0, &tsb, 1);
   SDL_DrawGPUPrimitives(rp, 3, 1, 0, 0);
+  // RmlUi mod/debug overlay (ESC) composites ON TOP of the game frame, into the same present pass over
+  // the FULL window. No-op when the menu is hidden / overlay not inited.
+  overlay_glue_record(cmd, rp, (int)sw, (int)sh);
   SDL_EndGPURenderPass(rp);
   SDL_SubmitGPUCommandBuffer(cmd);
   poll_quit();
@@ -769,7 +777,7 @@ void gpu_gpu_set_order_2d_bg_n(Core* core, unsigned idx) { core->game->gpu_gpu.s
 void gpu_gpu_semi_group(Core* core, int x0, int y0, int x1, int y1) { core->game->gpu_gpu.semi_group(x0, y0, x1, y1); }
 void gpu_gpu_stats(Core* core, int* tri, int* tex, int* semi) { core->game->gpu_gpu.stats(tri, tex, semi); }
 void gpu_gpu_dirty(Core* core, int x, int y, int w, int h) { core->game->gpu_gpu.dirty(x, y, w, h); }
-void gpu_gpu_present(Core* core, const uint16_t* src, int sx, int sy, int w, int h) { core->game->gpu_gpu.present(src, sx, sy, w, h); }
+void gpu_gpu_present(Core* core, const uint16_t* src, int sx, int sy, int w, int h) { overlay_glue_frame_begin(core); core->game->gpu_gpu.present(src, sx, sy, w, h); }
 void gpu_gpu_present_sbs(Core* coreA, const uint16_t* vramA, const uint16_t* vramB, int sx, int sy, int w, int h) {
   coreA->game->gpu_gpu.present_sbs(vramA, vramB, sx, sy, w, h, 0);
 }

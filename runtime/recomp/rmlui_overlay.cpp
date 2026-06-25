@@ -5,14 +5,14 @@
 // as soh3d's SohRmlUi) rather than RmlUi data-bindings, because that is the proven, render-interface-
 // compatible approach. Rows carry attributes the C++ reads: toggle / adjust / action.
 //
-// Brought up on the port's existing Vulkan device + present render pass via RmlRenderInterfaceVk
-// (records into the swapchain command buffer the present pass hands it). ESC toggles the menu; quit
+// Brought up on the port's existing SDL_GPU device via RmlRenderInterfaceGpu (records into the present
+// render pass the present path hands it). ESC toggles the menu; quit
 // lives in the menu's "Quit Game" row. The public C entry points keep the historical rmlui_overlay_*
 // names so gpu_gpu.cpp / overlay_glue.cpp and pad_input.cpp's rmlui_overlay_wants_keyboard link
 // unchanged. Built as C++ and linked into the otherwise-C port.
 
 #include "rmlui_overlay.h"
-#include "rmlui_render_vk.h"
+#include "rmlui_render_gpu.h"
 #include "audio/music_list.h"   // Sound Test: native music_list_play/stop (engine/audio/)
 
 #include <RmlUi/Core.h>
@@ -50,7 +50,7 @@ static SDL_Window* s_win = nullptr;
 static Rml::Context* s_ctx = nullptr;
 static Rml::ElementDocument* s_doc = nullptr;
 static SystemInterface_SDL* s_sys = nullptr;
-static RmlRenderInterfaceVk* s_render = nullptr;
+static RmlRenderInterfaceGpu* s_render = nullptr;
 static int s_active_tab = 0;
 
 // Live world readout, pushed each frame from gpu_gpu before NewFrame.
@@ -286,16 +286,12 @@ static void apply_visibility() {
 }
 
 // ---- init -----------------------------------------------------------------------------------------
-void rmlui_overlay_init(SDL_Window* win, VkInstance inst, VkPhysicalDevice phys, uint32_t qfam,
-                        VkDevice dev, VkQueue queue, VkRenderPass present_rpass,
-                        uint32_t min_image_count, uint32_t image_count) {
+void rmlui_overlay_init(SDL_Window* win, SDL_GPUDevice* dev, SDL_GPUTextureFormat swap_fmt) {
     if (s_inited) return;
-    (void)inst; (void)min_image_count;
     s_win = win;
 
-    s_render = new RmlRenderInterfaceVk();
-    uint32_t fif = image_count < 2 ? 2 : image_count;
-    if (!s_render->Init(phys, dev, qfam, queue, present_rpass, fif)) {
+    s_render = new RmlRenderInterfaceGpu();
+    if (!s_render->Init(dev, swap_fmt)) {
         fprintf(stderr, "[rmlui] render interface init failed; overlay disabled\n");
         delete s_render; s_render = nullptr; return;
     }
@@ -347,20 +343,20 @@ void rmlui_overlay_shutdown(void) {
 void rmlui_overlay_event(const SDL_Event* e) {
     if (!s_inited || !e) return;
     // ESC toggles the menu (the game's old "ESC quits" was removed in gpu_gpu.cpp). In options-mode the
-    // game owns visibility (Circle/Triangle), so don't fight it.
-    if (!s_options_mode && e->type == SDL_KEYDOWN && e->key.repeat == 0 &&
-        e->key.keysym.scancode == SDL_SCANCODE_ESCAPE) {
+    // game owns visibility (Circle/Triangle), so don't fight it. (SDL3 event/key field names.)
+    if (!s_options_mode && e->type == SDL_EVENT_KEY_DOWN && !e->key.repeat &&
+        e->key.scancode == SDL_SCANCODE_ESCAPE) {
         s_visible = !s_visible; apply_visibility(); return;
     }
-    if (e->type == SDL_KEYDOWN && e->key.repeat == 0 && e->key.keysym.scancode == SDL_SCANCODE_F1) {
+    if (e->type == SDL_EVENT_KEY_DOWN && !e->key.repeat && e->key.scancode == SDL_SCANCODE_F1) {
         Rml::Debugger::SetVisible(!Rml::Debugger::IsVisible()); return;
     }
     if (!s_visible || !s_ctx) return;
 
     // Menu open: arrows = nav, Enter/A = activate, Left/Right on a numeric row = step (else change tab),
     // mouse/text via the SDL platform shim.
-    if (e->type == SDL_KEYDOWN) {
-        switch (e->key.keysym.sym) {
+    if (e->type == SDL_EVENT_KEY_DOWN) {
+        switch (e->key.key) {
             case SDLK_DOWN:  focus_next(); return;
             case SDLK_UP:    focus_prev(); return;
             case SDLK_RIGHT: {
@@ -415,13 +411,12 @@ void rmlui_overlay_new_frame(void) {
     s_ctx->Update();
 }
 
-// Record the menu geometry into the present pass command buffer. overlay_glue passes the FULL window
-// viewport so the menu covers the whole window.
-void rmlui_overlay_render_vk(VkCommandBuffer cmd, uint32_t frame_index,
-                             VkViewport viewport, VkRect2D full_scissor) {
+// Record the menu geometry into the present render pass. overlay_glue passes the FULL window size so the
+// menu covers the whole window.
+void rmlui_overlay_record_gpu(SDL_GPUCommandBuffer* cmd, SDL_GPURenderPass* rp, int win_w, int win_h) {
     if (!s_inited || !s_ctx || !s_render) return;
     if (!s_visible) return;
-    s_render->BeginFrame(cmd, frame_index, viewport, full_scissor);
+    s_render->BeginFrame(cmd, rp, win_w, win_h);
     s_ctx->Render();
     s_render->EndFrame();
 }

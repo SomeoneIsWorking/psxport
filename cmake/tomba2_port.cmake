@@ -1,16 +1,14 @@
-# cmake/tomba2_port.cmake — build the native PC port binary `tomba2_port`.
+# cmake/tomba2_port.cmake — build the native PC port binary `tomba2_port` (SDL3 / SDL_GPU).
 #
-# This mirrors tools/build_port.sh / run.sh step 4 (the authoritative shell build): same source list,
-# include dirs, flags, and link libraries. It produces scratch/bin/tomba2_port (where the REPL/driver
-# tooling and docs expect it), exactly like the shell scripts. The shell build remains the canonical
-# path (run.sh also extracts MAIN.EXE from the disc and launches); CMake is the IDE/clangd-friendly
-# alternative for compiling the port. KEEP THE SOURCE LIST BELOW IN SYNC with build_port.sh + run.sh.
-#
-# Enable with -DPSXPORT_BUILD_PORT=ON (default ON). If SDL2/Vulkan/FreeType (pkg-config) are missing,
-# the target is skipped with a warning so the lightweight discdump-only configure (run.sh) still works.
+# THE build for the port (the old hand-rolled run.sh g++ link is the fallback). Produces
+# scratch/bin/tomba2_port (where the REPL/driver tooling + docs expect it). The source list below is the
+# same set run.sh compiles — KEEP IN SYNC with run.sh / tools/build_port.sh.
 #
 #   cmake -S . -B build && cmake --build build --target tomba2_port
 #   ./scratch/bin/tomba2_port scratch/bin/tomba2/MAIN.EXE      # (after run.sh has extracted MAIN.EXE)
+#
+# The renderer is SDL_GPU (gpu_gpu.cpp) — SDL3 owns window+input+audio+GPU; no Vulkan/SDL2 dev needed.
+# The RmlUi mod/debug overlay (ESC) links the vendored static librmlui(_debugger) + system freetype.
 
 option(PSXPORT_BUILD_PORT "Build the Tomba!2 native port binary (tomba2_port)" ON)
 option(PSXPORT_SUBSTRATE  "Link recompiled shards (generated/) instead of interpreter-only" OFF)
@@ -20,12 +18,11 @@ if(NOT PSXPORT_BUILD_PORT)
 endif()
 
 find_package(PkgConfig REQUIRED)
-pkg_check_modules(SDL2 sdl2)
-pkg_check_modules(VULKAN vulkan)
+pkg_check_modules(SDL3 sdl3)
 pkg_check_modules(FREETYPE freetype2)
-if(NOT (SDL2_FOUND AND VULKAN_FOUND AND FREETYPE_FOUND))
-  message(WARNING "tomba2_port skipped: needs pkg-config sdl2 + vulkan + freetype2 "
-                  "(found sdl2=${SDL2_FOUND} vulkan=${VULKAN_FOUND} freetype2=${FREETYPE_FOUND})")
+if(NOT (SDL3_FOUND AND FREETYPE_FOUND))
+  message(WARNING "tomba2_port skipped: needs pkg-config sdl3 + freetype2 "
+                  "(found sdl3=${SDL3_FOUND} freetype2=${FREETYPE_FOUND})")
   return()
 endif()
 
@@ -42,41 +39,162 @@ set(RMLUI_LOTTIE_PLUGIN  OFF CACHE BOOL   "" FORCE)
 set(RMLUI_FONT_ENGINE    freetype CACHE STRING "" FORCE)
 add_subdirectory(vendor/rmlui EXCLUDE_FROM_ALL)
 
-# ---- generated Vulkan SPIR-V header (runtime/recomp/gpu_gpu_shaders.h) --------------------------
-# tools/gen_vk_shaders.sh compiles shaders_vk/*.{vert,frag} and embeds the SPIR-V; it writes into the
-# source tree (as the shell build does). Re-run it when a shader source changes.
+# ---- generated SDL_GPU SPIR-V header (runtime/recomp/gpu_gpu_shaders.h) ------------------------
+# tools/gen_gpu_shaders.sh compiles shaders_gpu/*.{vert,frag} (incl. the RmlUi overlay shaders) and
+# embeds the SPIR-V into the source tree. Re-run when a shader source changes.
 file(GLOB SHADER_SRCS CONFIGURE_DEPENDS
-  ${CMAKE_SOURCE_DIR}/${RT}/shaders_vk/*.vert ${CMAKE_SOURCE_DIR}/${RT}/shaders_vk/*.frag)
+  ${CMAKE_SOURCE_DIR}/${RT}/shaders_gpu/*.vert ${CMAKE_SOURCE_DIR}/${RT}/shaders_gpu/*.frag)
 set(SHADERS_H ${CMAKE_SOURCE_DIR}/${RT}/gpu_gpu_shaders.h)
 add_custom_command(OUTPUT ${SHADERS_H}
-  COMMAND bash ${CMAKE_SOURCE_DIR}/tools/gen_vk_shaders.sh
-  DEPENDS ${SHADER_SRCS} ${CMAKE_SOURCE_DIR}/tools/gen_vk_shaders.sh
+  COMMAND bash ${CMAKE_SOURCE_DIR}/tools/gen_gpu_shaders.sh
+  DEPENDS ${SHADER_SRCS} ${CMAKE_SOURCE_DIR}/tools/gen_gpu_shaders.sh
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-  COMMENT "Generating Vulkan SPIR-V header (gpu_gpu_shaders.h)"
+  COMMENT "Generating SDL_GPU SPIR-V header (gpu_gpu_shaders.h)"
   VERBATIM)
-add_custom_target(gen_vk_shaders DEPENDS ${SHADERS_H})
+add_custom_target(gen_gpu_shaders DEPENDS ${SHADERS_H})
 
-# ---- source list (KEEP IN SYNC with tools/build_port.sh and run.sh) ---------------------------
+# ---- source list (KEEP IN SYNC with run.sh / tools/build_port.sh) -----------------------------
 set(PORT_SRC
-  ${RT}/dispatch.cpp ${RT}/cfg.c ${RT}/mem.cpp ${RT}/stubs.cpp ${RT}/hle.cpp ${RT}/threads.cpp
-  ${RT}/interp.cpp ${RT}/gpu_native.cpp ${RT}/gpu_debug.cpp ${RT}/vram_xfer.cpp ${RT}/spu_audio.c
-  ${RT}/pad_input.cpp ${RT}/memcard.cpp ${RT}/native_fmv.cpp
-  ${MED}/psx/gte.c ${RT}/gte_beetle.cpp ${MED}/psx/mdec.c ${RT}/mdec_beetle.c ${MED}/psx/spu.c ${RT}/spu_beetle.c
-  ${RT}/disc.c ${RT}/cd_override.cpp ${RT}/cdc_native.c ${RT}/xa_stream.c ${RT}/timing.cpp
-  ${RT}/gpu_gpu.cpp ${RT}/gpu_perf.cpp ${RT}/mods.c
-  ${ENG}/game_tomba2.cpp ${ENG}/asset.cpp ${ENG}/mathlib.cpp ${ENG}/cull.cpp ${ENG}/collision.cpp
-  ${ENG}/hitbox.cpp ${ENG}/grid_offset.cpp ${ENG}/entity.cpp ${ENG}/entity_spawn.cpp
-  ${ENG}/actor_sm_24448.cpp ${ENG}/objbeh_739ac.cpp ${ENG}/objbeh_73cd8.cpp ${ENG}/objbeh_741dc.cpp
-  ${ENG}/script.cpp ${ENG}/animation.cpp ${ENG}/input.cpp ${ENG}/menu.cpp ${ENG}/inventory.cpp
-  ${ENG}/hud.cpp ${ENG}/lighting.cpp ${ENG}/engine_bav.cpp ${ENG}/save.cpp ${ENG}/sound.cpp
-  ${ENG}/engine_init.cpp ${ENG}/engine_font.cpp ${ENG}/engine_level.cpp ${ENG}/fps60.cpp
-  ${ENG}/engine_tomba2.cpp ${ENG}/engine_submit.cpp ${ENG}/engine_stage.cpp ${ENG}/engine_demo.cpp
-  ${ENG}/engine_camera.cpp ${ENG}/engine_math.cpp ${ENG}/engine_player.cpp ${ENG}/native_terrain.cpp
-  ${ENG}/render_queue.cpp ${ENG}/clib.cpp ${ENG}/gte.cpp ${ENG}/gpu_lib.cpp ${ENG}/sound_voice.cpp
-  ${ENG}/object_init.cpp ${ENG}/native_misc.cpp ${RT}/peripheral_misc.cpp ${ENG}/margin_render.cpp
-  ${RT}/sync_overrides.cpp ${RT}/native_boot.cpp ${RT}/dbg_server.cpp ${RT}/native_stub.cpp
-  ${RT}/watchdog.c ${RT}/boot.cpp
-  ${RT}/imgui_overlay.cpp ${RT}/overlay_glue.cpp ${RT}/rmlui_render_vk.cpp
+  runtime/recomp/dispatch.cpp
+  runtime/recomp/cfg.c
+  runtime/recomp/mem.cpp
+  runtime/recomp/stubs.cpp
+  runtime/recomp/hle.cpp
+  runtime/recomp/threads.cpp
+  runtime/recomp/interp.cpp
+  runtime/recomp/gpu_native.cpp
+  runtime/recomp/gpu_debug.cpp
+  runtime/recomp/vram_xfer.cpp
+  runtime/recomp/spu_audio.c
+  runtime/recomp/pad_input.cpp
+  runtime/recomp/memcard.cpp
+  runtime/recomp/native_fmv.cpp
+  vendor/beetle-psx/mednafen/psx/gte.c
+  runtime/recomp/gte_beetle.cpp
+  vendor/beetle-psx/mednafen/psx/mdec.c
+  runtime/recomp/mdec_beetle.c
+  vendor/beetle-psx/mednafen/psx/spu.c
+  runtime/recomp/spu_beetle.c
+  runtime/recomp/disc.c
+  runtime/recomp/cd_override.cpp
+  runtime/recomp/cdc_native.c
+  runtime/recomp/xa_stream.c
+  runtime/recomp/timing.cpp
+  runtime/recomp/gpu_gpu.cpp
+  runtime/recomp/gpu_perf.cpp
+  runtime/recomp/mods.c
+  engine/game_tomba2.cpp
+  engine/asset.cpp
+  engine/mathlib.cpp
+  engine/cull.cpp
+  engine/collision.cpp
+  engine/hitbox.cpp
+  engine/grid_offset.cpp
+  game/world/spawn.cpp
+  game/world/placement.cpp
+  game/world/graphics_bind.cpp
+  game/world/verify_gate.cpp
+  game/world/pool.cpp
+  game/world/entity.cpp
+  game/render/render_native.cpp
+  game/render/scene/scene_build.cpp
+  game/render/mesh/mesh_draw.cpp
+  engine/actor_sm_24448.cpp
+  engine/beh_scene_ui_trigger.cpp
+  engine/beh_typed_init_scene_trigger.cpp
+  engine/beh_pickup_collect_trigger.cpp
+  engine/beh_substate_edge_orchestrator.cpp
+  engine/beh_jumptable_release_trigger.cpp
+  engine/beh_typed_table_seed_gate.cpp
+  engine/beh_typed_jumptable_pair.cpp
+  engine/beh_cull_substate_orchestrator.cpp
+  engine/beh_id_compare_motion_dispatch.cpp
+  engine/beh_jumptable_flag_gate.cpp
+  engine/beh_cull_tick_render.cpp
+  engine/beh_sibling_angle_track.cpp
+  engine/beh_visibility_gate_dispatch.cpp
+  engine/beh_record_list_scanner.cpp
+  engine/beh_area_event_dispatch.cpp
+  engine/beh_pad_child_linker.cpp
+  engine/beh_scatter_record_dither.cpp
+  engine/beh_area_threshold_ptr_swap.cpp
+  engine/beh_scatter_ramp_machine.cpp
+  engine/beh_pure_inner_dispatch.cpp
+  engine/beh_anim_trigger_gates.cpp
+  engine/beh_box_seed_phase_gate.cpp
+  engine/beh_typed_anim_spawn.cpp
+  engine/beh_id_routed_dispatch.cpp
+  engine/beh_pure_substate_dispatch.cpp
+  engine/beh_linked_advance_branch.cpp
+  engine/beh_typed_init_exit_poker.cpp
+  engine/beh_child_trig_motion.cpp
+  engine/beh_prng_velocity_machine.cpp
+  engine/beh_quad_record_table_seed.cpp
+  engine/beh_flagbit_timer_machine.cpp
+  engine/beh_two_child_steer.cpp
+  engine/beh_single_child_cull.cpp
+  engine/beh_twin_record_steer.cpp
+  engine/beh_multi_record_phase_machine.cpp
+  engine/beh_sine_motion_sfx.cpp
+  engine/beh_box_rearm_sub.cpp
+  engine/beh_node3_router.cpp
+  engine/beh_actor_move_sm.cpp
+  engine/beh_variant_actor_sm.cpp
+  engine/beh_lift_platform.cpp
+  engine/beh_event_record_machine.cpp
+  engine/beh_typed_variant_router.cpp
+  engine/beh_camera_target_follow.cpp
+  engine/beh_cube_text_spawn.cpp
+  engine/beh_area_transition_machine.cpp
+  engine/bg_scene_transition_sm.cpp
+  engine/script.cpp
+  engine/animation.cpp
+  engine/input.cpp
+  engine/menu.cpp
+  engine/inventory.cpp
+  engine/hud.cpp
+  engine/lighting.cpp
+  engine/engine_bav.cpp
+  engine/save.cpp
+  engine/sound.cpp
+  engine/engine_init.cpp
+  engine/engine_font.cpp
+  engine/engine_level.cpp
+  engine/fps60.cpp
+  engine/engine_tomba2.cpp
+  engine/engine_submit.cpp
+  engine/engine_project.cpp
+  engine/engine_render.cpp
+  engine/engine_stage.cpp
+  engine/sop.cpp
+  engine/engine_demo.cpp
+  engine/engine_camera.cpp
+  engine/engine_math.cpp
+  engine/engine_player.cpp
+  engine/native_terrain.cpp
+  engine/render_queue.cpp
+  engine/clib.cpp
+  engine/gte.cpp
+  engine/gpu_lib.cpp
+  engine/sound_voice.cpp
+  engine/native_misc.cpp
+  runtime/recomp/peripheral_misc.cpp
+  engine/margin_render.cpp
+  engine/audio/native_audio.c
+  engine/audio/native_music.c
+  engine/audio/music_list.c
+  runtime/recomp/sync_overrides.cpp
+  runtime/recomp/native_boot.cpp
+  runtime/recomp/dbg_server.cpp
+  runtime/recomp/native_stub.cpp
+  runtime/recomp/watchdog.c
+  runtime/recomp/dualcore.cpp
+  runtime/recomp/sbs.cpp
+  runtime/recomp/sbs_present_sdl.cpp
+  runtime/recomp/boot.cpp
+  runtime/recomp/rmlui_overlay.cpp
+  runtime/recomp/rmlui_render_gpu.cpp
+  runtime/recomp/overlay_glue.cpp
   vendor/rmlui/Backends/RmlUi_Platform_SDL.cpp)
 
 # PSXPORT_SUBSTRATE: link the statically-recompiled shards (C++ content in .c files) instead of the
@@ -92,7 +210,7 @@ if(PSXPORT_SUBSTRATE)
 endif()
 
 add_executable(tomba2_port ${PORT_SRC} ${SHADERS_H})
-add_dependencies(tomba2_port gen_vk_shaders)
+add_dependencies(tomba2_port gen_gpu_shaders)
 
 # C++17 + -fpermissive for this target (mednafen/engine), overriding the project-wide C++20.
 set_target_properties(tomba2_port PROPERTIES
@@ -101,28 +219,27 @@ set_target_properties(tomba2_port PROPERTIES
   RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/scratch/bin)
 
 target_include_directories(tomba2_port PRIVATE
-  ${RT} ${ENG} ${MED} ${MED}/psx
+  ${RT} ${ENG} game/world game/render game/render/scene game/render/mesh
+  ${MED} ${MED}/psx
   vendor/beetle-psx/libretro-common/include vendor/beetle-psx
   vendor/beetle-psx/deps/libchdr/include
   vendor/rmlui/Include vendor/rmlui/Backends
-  ${SDL2_INCLUDE_DIRS} ${VULKAN_INCLUDE_DIRS} ${FREETYPE_INCLUDE_DIRS})
+  ${SDL3_INCLUDE_DIRS} ${FREETYPE_INCLUDE_DIRS})
 
 target_compile_definitions(tomba2_port PRIVATE
-  PSXPORT_SDL _XOPEN_SOURCE=700 RMLUI_STATIC_LIB RMLUI_SDL_VERSION_MAJOR=2
+  PSXPORT_SDL _XOPEN_SOURCE=700 RMLUI_STATIC_LIB RMLUI_SDL_VERSION_MAJOR=3
   $<$<BOOL:${PSXPORT_SUBSTRATE}>:PSXPORT_SUBSTRATE>)
 
-# -w (warnings off) and -O2 -g, matching the shell build; -fpermissive only for C++.
-# clang (macOS) has no -fpermissive and makes C++11 braced-init narrowing a hard ERROR (e.g. the
-# provably-safe int16_t->float in engine_project.cpp matrix inits, and the generated shards which
-# narrow and can't be hand-edited). -Wno-c++11-narrowing is clang's diagnostic; -Wno-narrowing is GCC's;
-# each is harmlessly ignored by the other. Keeps the CMake (macOS) build in step with build_port.sh/run.sh.
+# -w (warnings off) and -O2 -g, matching the shell build; -fpermissive + narrowing-suppression only for
+# C++ (clang has no -fpermissive and treats braced-init narrowing as a hard error). Keeps the CMake
+# (macOS) build in step with run.sh / build_port.sh.
 target_compile_options(tomba2_port PRIVATE -w -O2 -g
   $<$<COMPILE_LANGUAGE:CXX>:-fpermissive -Wno-c++11-narrowing -Wno-narrowing>
-  ${SDL2_CFLAGS_OTHER} ${VULKAN_CFLAGS_OTHER} ${FREETYPE_CFLAGS_OTHER})
+  ${SDL3_CFLAGS_OTHER} ${FREETYPE_CFLAGS_OTHER})
 
 target_link_libraries(tomba2_port PRIVATE
   rmlui_debugger rmlui_core chdr-static
-  ${SDL2_LIBRARIES} ${VULKAN_LIBRARIES} ${FREETYPE_LIBRARIES}
+  ${SDL3_LIBRARIES} ${FREETYPE_LIBRARIES}
   Threads::Threads m)
 target_link_directories(tomba2_port PRIVATE
-  ${SDL2_LIBRARY_DIRS} ${VULKAN_LIBRARY_DIRS} ${FREETYPE_LIBRARY_DIRS})
+  ${SDL3_LIBRARY_DIRS} ${FREETYPE_LIBRARY_DIRS})
