@@ -299,6 +299,13 @@ render subsystem replaces them.
     FUN_80122BF4(node)+node[0x2B]=0; state 3 -> FUN_8007A624. No leaf takes a stack arg. Transcribed 1:1;
     control flow + direct node writes owned native, leaves stay PSX via rec_dispatch. Verified live:
     `obj80121978verify` 1550+ matches, 0 mismatch; gate-off field clean (151 nodes, 0 bad opcode).
+  - **Behavior handler FUN_80125E0C owned native+live (2026-06-25):** added `engine/objbeh_80125e0c.cpp`
+    (~x1556/field-frame on seaside, ~80 instr). PURE control-flow dispatcher (no direct node writes of its
+    own). State 0 -> FUN_801253E8; state 1 -> FUN_8007778C then node[5] 0/1/2 -> FUN_80125FE0/801255CC/80125800;
+    state 2 -> FUN_8007778C then FUN_801261FC when node[5] in {2,3}; states 1/2 share a tail (FUN_800518FC when
+    node[1]!=0); state 3 -> FUN_8007A624. Transcribed 1:1; control flow owned native, all sub-behavior leaves
+    stay PSX via rec_dispatch. Verified live: `obj80125e0cverify` 1550+ matches, 0 mismatch; gate-off field
+    clean (151 nodes, 0 bad opcode).
   - **NEXT — extend the contiguity:** own the remaining per-object behavior handlers
     (e.g. the overlay-resident 0x801xxxxx handlers; the model-attach sites FUN_80077B38 +
     other per-object render-record callers) so the full graphics-bind set runs native; own the remaining
