@@ -704,11 +704,13 @@ static void rq_emit_or_queue(Core* core, int capture, int layer, int order_mode,
 extern "C" const char* ffspan_lookup(uint32_t);   // engine_stage.cpp — PSXPORT_BDTAG builder attribution
 extern "C" void ffspan_dump(uint32_t);
 
+long g_dbg_world_quads = 0;   // PSXPORT_GPU_TRACE: world quads emitted (SBS black-pane diag)
 void gpu_draw_world_quad(Core* core, const float* px, const float* py, const float* depth,
                          const int* u, const int* v, const uint8_t* r, const uint8_t* g,
                          const uint8_t* b, uint16_t tp, uint16_t clut, int semi,
                          const float (*sv)[3]) {
   if (!gpu_gpu_enabled()) return;
+  g_dbg_world_quads++;   // PSXPORT_GPU_TRACE: world quads this frame (SBS diag)
   GpuState& s = core->game->gpu;
   s.set_texpage(tp);
   s.set_clut(clut);
