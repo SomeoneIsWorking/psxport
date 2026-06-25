@@ -146,6 +146,9 @@ set(PORT_SRC
   engine/beh_camera_target_follow.cpp
   engine/beh_cube_text_spawn.cpp
   engine/beh_area_transition_machine.cpp
+  engine/beh_rand_phase_cull.cpp
+  engine/beh_pos_history_trail.cpp
+  engine/beh_variant_overlay_lifecycle.cpp
   engine/bg_scene_transition_sm.cpp
   engine/script.cpp
   engine/animation.cpp

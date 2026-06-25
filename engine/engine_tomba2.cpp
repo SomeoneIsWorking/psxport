@@ -81,6 +81,9 @@ void ov_beh_typed_variant_router_run(Core* c); // 0x8011C164 (beh_typed_variant_
 void ov_beh_camera_target_follow_run(Core* c); // 0x80059ED8 (beh_camera_target_follow.cpp — resident)
 void ov_beh_cube_text_spawn_run(Core* c); // 0x8003AD48 (beh_cube_text_spawn.cpp — resident)
 void ov_beh_area_transition_machine_run(Core* c); // 0x80127798 (beh_area_transition_machine.cpp — overlay)
+void ov_beh_rand_phase_cull_run(Core* c); // 0x8002918C (beh_rand_phase_cull.cpp — resident)
+void ov_beh_pos_history_trail_run(Core* c); // 0x80029B40 (beh_pos_history_trail.cpp — resident)
+void ov_beh_variant_overlay_lifecycle_run(Core* c); // 0x8007DC38 (beh_variant_overlay_lifecycle.cpp — resident)
 static bool dispatch_native_behavior(Core* c, uint32_t h) {
   switch (h) {
     case 0x80040558u: ov_sm40558(c);          return true;
@@ -130,6 +133,9 @@ static bool dispatch_native_behavior(Core* c, uint32_t h) {
     case 0x8003AD48u: ov_beh_cube_text_spawn_run(c); return true;
     case 0x80127798u: ov_beh_area_transition_machine_run(c); return true;
     case 0x8004C238u: ov_beh_visibility_gate_dispatch_run(c); return true;  // resident; cases-6-14 0x29 delay-slot fixed (later-232c)
+    case 0x8002918Cu: ov_beh_rand_phase_cull_run(c); return true;           // resident (swarm-ported, later session)
+    case 0x80029B40u: ov_beh_pos_history_trail_run(c); return true;         // resident
+    case 0x8007DC38u: ov_beh_variant_overlay_lifecycle_run(c); return true; // resident
     default: return false;
   }
 }
