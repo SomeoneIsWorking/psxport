@@ -83,6 +83,16 @@ static VkFramebuffer   s_swap_fb[MAX_SWAP];
 static VkRenderPass    s_rpass;
 static VkDescriptorSetLayout s_dsl;
 static VkPipelineLayout s_pll;
+
+// Engine-owned screen FADE (replaces the deleted PSX full-screen semi OT rect + the gpu_native fade_full_2d
+// heuristic). The engine sets {mode,r,g,b} each frame via gpu_set_fade; the present shader (present.frag) and
+// the headless readback (vk_dump_to) apply clamp(rgb +/- color/255). mode: 0 none, 1 additive (fade to/from
+// white), 2 subtractive (fade to/from black). Cleared at the start of each engine logic frame (ov_game_frame)
+// so a fade that stops being set simply vanishes. r/g/b are PSX 8-bit color channels (0..255).
+static int     s_fade_mode = 0;
+static uint8_t s_fade_r = 0, s_fade_g = 0, s_fade_b = 0;
+void gpu_set_fade(int mode, uint8_t r, uint8_t g, uint8_t b) { s_fade_mode = mode; s_fade_r = r; s_fade_g = g; s_fade_b = b; }
+void gpu_clear_fade(void) { s_fade_mode = 0; s_fade_r = s_fade_g = s_fade_b = 0; }
 static VkPipeline      s_pipe;
 static VkDescriptorPool s_dpool;
 static VkDescriptorSet s_dset;
@@ -739,7 +749,10 @@ static void init_vk(void) {
   dli.bindingCount = 1; dli.pBindings = &b;
   VKC(vkCreateDescriptorSetLayout(s_dev, &dli, 0, &s_dsl));
   VkPushConstantRange pcr[2] = {
-    { VK_SHADER_STAGE_FRAGMENT_BIT, 0, 16 },    // present: ivec4 display rect (x,y,w,h)
+    // present.frag: ivec4 disp [0,16) + ivec4 fade at offset 48 -> FRAGMENT range grows to 64. The VERTEX
+    // range [16,48) (tri/tritex pane transform) overlaps in bytes but is a DIFFERENT stage, which validation
+    // permits (only same-stage overlap is forbidden); the fade lives strictly at [48,64).
+    { VK_SHADER_STAGE_FRAGMENT_BIT, 0, 64 },    // present: ivec4 disp (x,y,w,h) + ivec4 fade (mode,r,g,b)@48
     { VK_SHADER_STAGE_VERTEX_BIT, 16, 32 },     // tri/tritex: VPC wa,wb (wide/supersample transform)
   };
   VkPipelineLayoutCreateInfo pli = { VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
@@ -1594,6 +1607,10 @@ void GpuVkState::present(const uint16_t* src, int sx, int sy, int w, int h) {
   vkCmdBindPipeline(s_cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, s_pipe);
   int32_t disp[4] = { sx, sy, w, h };   // VRAM display region the present pass samples (same for both panes)
   vkCmdPushConstants(s_cmd, s_pll, VK_SHADER_STAGE_FRAGMENT_BIT, 0, 16, disp);
+  // Engine-owned screen fade: push {mode,r,g,b} at FRAGMENT offset 48 (see present.frag / pcr[0]). Applies to
+  // every pane that samples s_tex through present.frag.
+  int32_t fade[4] = { s_fade_mode, s_fade_r, s_fade_g, s_fade_b };
+  vkCmdPushConstants(s_cmd, s_pll, VK_SHADER_STAGE_FRAGMENT_BIT, 48, 16, fade);
   for (int p = 0; p < npanes; p++) {
     int paneW = ow / npanes, paneX = p * paneW, dw, dh;   // fit display aspect within each pane
     if (paneW * ah >= oh * aw) { dh = oh; dw = oh * aw / ah; } else { dw = paneW; dh = paneW * ah / aw; }
@@ -2055,7 +2072,13 @@ static void vk_dump_to(const char* path, int sx, int sy, int w, int h) {
   FILE* f = fopen(path, "wb"); if (!f) return;
   fprintf(f, "P6\n%d %d\n255\n", w, h);
   for (int y = 0; y < h; y++) for (int x = 0; x < w; x++) { uint16_t p = vram[((sy+y)%IMG_H)*VRAM_W + ((sx+x)&1023)];
-    unsigned char c[3] = { (unsigned char)((p&31)<<3), (unsigned char)(((p>>5)&31)<<3), (unsigned char)(((p>>10)&31)<<3) };
+    int r = (p&31)<<3, g = ((p>>5)&31)<<3, b = ((p>>10)&31)<<3;
+    // Engine-owned screen fade (same math as present.frag, so a headless shot matches the window). The shader
+    // works in 0..1; here in 0..255 the channels are 5-bit<<3 (0..248), so add/sub the 8-bit fade color and
+    // clamp. mode 1 additive (white), 2 subtractive (black).
+    if (s_fade_mode == 1)      { r += s_fade_r; g += s_fade_g; b += s_fade_b; if (r>255)r=255; if (g>255)g=255; if (b>255)b=255; }
+    else if (s_fade_mode == 2) { r -= s_fade_r; g -= s_fade_g; b -= s_fade_b; if (r<0)r=0; if (g<0)g=0; if (b<0)b=0; }
+    unsigned char c[3] = { (unsigned char)r, (unsigned char)g, (unsigned char)b };
     fwrite(c, 1, 3, f); }
   fclose(f);
 }
@@ -2415,6 +2438,8 @@ void gpu_vk_present_image(Core* core, const uint8_t* rgba, int iw, int ih, float
 void gpu_vk_tritest(Core* core) { (void)core; }
 void gpu_vk_frame_end(Core* core, const uint16_t* svram, int frame) { (void)core;(void)svram; (void)frame; }
 void gpu_vk_select_target(int t) { (void)t; }
+void gpu_set_fade(int mode, uint8_t r, uint8_t g, uint8_t b) { (void)mode;(void)r;(void)g;(void)b; }
+void gpu_clear_fade(void) {}
 void gpu_vk_shot(Core* core, const char* path) { (void)core;(void)path; }
 void gpu_vk_set_order(Core* core, unsigned idx) { (void)core;(void)idx; }
 void gpu_vk_set_order_2d(Core* core, unsigned idx) { (void)core;(void)idx; }

@@ -2,11 +2,23 @@
 
 #include "core.h"
 #include "cfg.h"
+#include "gpu_vk.h"
 #include <stdint.h>
 #include <stdio.h>
 
 void rec_dispatch(Core*, uint32_t);
 void rec_syscall(Core*, uint32_t);
+
+// Engine-owned SCREEN FADE entry — replaces the PSX full-screen semi OT rect (the old FUN_8007e9c8
+// screen-fade callers, OT slot 0/4). Mirrors that entry's blend RE (FUN_80083de0 E1 ABR field): a1!=0 =>
+// ABR=1 ADDITIVE (fade to/from white), a1==0 => ABR=2 SUBTRACTIVE (fade to/from black). The callers still
+// compute the exact brightness curve (the grey level in `color`); we only change DELIVERY from a PSX rect
+// to engine fade state, applied PC-native in present.frag + the headless readback. NOT a PSX packet.
+void engine_fade_set(Core* core, uint32_t color, uint32_t a1) {
+  (void)core;
+  int mode = (a1 != 0u) ? 1 /*additive/white*/ : 2 /*subtractive/black*/;
+  gpu_set_fade(mode, (uint8_t)(color & 0xffu), (uint8_t)((color >> 8) & 0xffu), (uint8_t)((color >> 16) & 0xffu));
+}
 
 static inline void call_fn(Core* c, uint32_t fn) { rec_dispatch(c, fn); }
 

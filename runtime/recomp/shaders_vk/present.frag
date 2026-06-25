@@ -4,7 +4,10 @@
 layout(location = 0) in vec2 v_uv;
 layout(location = 0) out vec4 o_col;
 layout(set = 0, binding = 0) uniform usampler2D u_vram;
-layout(push_constant) uniform PC { ivec4 disp; } pc;   // x, y, w, h (VRAM texels)
+// PUSH-CONSTANT: disp=[x,y,w,h] at FRAGMENT offset 0. fade at FRAGMENT offset 48 — the [16,48) range is the
+// VERTEX-stage pane transform (tri/tritex), a DIFFERENT stage, so the cross-stage byte overlap is allowed by
+// validation. fade = {mode(0 none/1 additive-to-white/2 subtractive-to-black), r, g, b} (r/g/b are 0..255).
+layout(push_constant) uniform PC { ivec4 disp; layout(offset = 48) ivec4 fade; } pc;   // x,y,w,h ; mode,r,g,b
 void main() {
     ivec2 t = pc.disp.xy + ivec2(v_uv * vec2(pc.disp.zw));
     // Clamp to the sampled region (disp) itself — never a stale image-height literal. disp=[x,y,w,h]
@@ -13,5 +16,10 @@ void main() {
     // once FB_MAXH grew to 720 (image now 1232 tall) -> the bottom-of-screen vertical-streak smear.
     t = clamp(t, pc.disp.xy, pc.disp.xy + pc.disp.zw - ivec2(1));
     uint p = texelFetch(u_vram, t, 0).r;
-    o_col = vec4(float(p & 31u) / 31.0, float((p >> 5) & 31u) / 31.0, float((p >> 10) & 31u) / 31.0, 1.0);
+    vec3 rgb = vec3(float(p & 31u) / 31.0, float((p >> 5) & 31u) / 31.0, float((p >> 10) & 31u) / 31.0);
+    // Engine-owned screen FADE (replaces the PSX full-screen semi OT rect): additive = fade to/from white,
+    // subtractive = fade to/from black, clamped per channel. col = fade.rgb / 255.
+    if (pc.fade.x == 1)      rgb = min(rgb + vec3(pc.fade.yzw) / 255.0, vec3(1.0));   // additive (white)
+    else if (pc.fade.x == 2) rgb = max(rgb - vec3(pc.fade.yzw) / 255.0, vec3(0.0));   // subtractive (black)
+    o_col = vec4(rgb, 1.0);
 }

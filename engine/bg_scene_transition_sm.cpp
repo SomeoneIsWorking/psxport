@@ -33,6 +33,7 @@
 #include <string.h>
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
+void engine_fade_set(Core*, uint32_t color, uint32_t a1);  // engine/gpu_lib.cpp — engine-owned screen fade
 
 namespace {
 
@@ -41,9 +42,12 @@ constexpr uint32_t P      = 0x80100400u;   // the scene-transition struct (fixed
 constexpr uint32_t G_dir  = 0x800BF80Fu;   // DAT_800bf80c._3_1_ — direction/abort byte
 constexpr uint32_t G_req  = 0x1F800236u;   // DAT_1f800236 — scene-transition request code (scratchpad)
 
-// FUN_8007e9c8(color, P[3], 4) — the (still-PSX) screen fade-rect builder.
+// Screen fade (was FUN_8007e9c8(color, P[3], 4), OT slot 4). Now ENGINE-OWNED PC-native: a1=P[3] selects the
+// blend (P[3]!=0 = additive/white fade, P[3]==0 = subtractive/black fade) — see engine_fade_set. The intro
+// SM's exact direction/color (P[3], color) is unchanged; only the DELIVERY moves from a PSX rect to the
+// engine's fade state, applied in present.frag + the headless readback.
 static inline void fade_rect(Core* c, uint32_t color) {
-  c->r[4] = color; c->r[5] = c->mem_r8(P + 3); c->r[6] = 4; rec_dispatch(c, 0x8007E9C8u);
+  engine_fade_set(c, color, c->mem_r8(P + 3));
 }
 
 void bg_scene_transition_sm(Core* c) {

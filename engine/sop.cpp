@@ -25,6 +25,7 @@ static void d0(Core* c, uint32_t fn);
 extern "C" void ffspan_begin(void), ffspan_end(const char*);   // PSXPORT_BDTAG attribution (engine_stage.cpp)
 void ov_field_entity_render(Core*);   // engine_submit.cpp — native reimpl of SOP FUN_80109fe0
 void ov_bg_scene_transition_sm(Core*);  // bg_scene_transition_sm.cpp — native FUN_8002655c
+void engine_fade_set(Core*, uint32_t color, uint32_t a1);  // engine/gpu_lib.cpp — engine-owned screen fade
 static void d1(Core* c, uint32_t fn, uint32_t a0);
 static void d2(Core* c, uint32_t fn, uint32_t a0, uint32_t a1);
 static void d3(Core* c, uint32_t fn, uint32_t a0, uint32_t a1, uint32_t a2);
@@ -242,7 +243,7 @@ void ov_sop_field_mode(Core* c) {
   uint16_t st = c->mem_r16(sm + 0x50);
   switch (st) {
     case 0: {  // LOAD
-      d3(c, 0x8007e9c8u, 0xffffffu, 0, 0);    // clear screen white
+      engine_fade_set(c, 0xffffffu, 0);       // LOAD: a1=0 = subtractive 0xffffff = full screen to BLACK
       native_sop_area_load(c);                 // INLINE sync load (replaces FUN_80044bd4) -> 1f80019b=1
       d0(c, 0x8007b18cu);
       d0(c, 0x800796dcu);
@@ -272,7 +273,7 @@ void ov_sop_field_mode(Core* c) {
     }
     case 1: {  // FADE-IN
       uint32_t u = (uint32_t)c->mem_r8(sm + 0x6c) & 0x1f;
-      d3(c, 0x8007e9c8u, (u << 19) | (u << 11) | (u << 3), 0, 0);
+      engine_fade_set(c, (u << 19) | (u << 11) | (u << 3), 0);   // FADE-IN: a1=0 = subtractive (from black)
       uint8_t v = (uint8_t)(c->mem_r8(sm + 0x6c) - 1);
       c->mem_w8(sm + 0x6c, v);
       if (v == 0) { c->mem_w8(sm + 0x6c, 0x1f); c->mem_w16(sm + 0x50, (uint16_t)(c->mem_r16(sm + 0x50) + 1)); }
@@ -287,7 +288,7 @@ void ov_sop_field_mode(Core* c) {
     }
     case 3: {  // FADE-OUT
       uint32_t u = ((uint32_t)c->mem_r8(sm + 0x6c) * (uint32_t)-8) & 0xff;
-      d3(c, 0x8007e9c8u, (u << 16) | (u << 8) | u, 0, 0);
+      engine_fade_set(c, (u << 16) | (u << 8) | u, 0);   // FADE-OUT: a1=0 = subtractive (to black)
       uint8_t v = (uint8_t)(c->mem_r8(sm + 0x6c) - 1);
       c->mem_w8(sm + 0x6c, v);
       if (v == 0) c->mem_w16(sm + 0x50, (uint16_t)(c->mem_r16(sm + 0x50) + 1));

@@ -54,6 +54,16 @@ void gpu_vk_shot(Core* core, const char* path);
 void gpu_vk_stats(Core* core, int* tri, int* tex, int* semi);
 void gpu_vk_tritest(Core* core);
 
+// Engine-owned screen FADE (replaces the PSX full-screen semi OT rect + the gpu_native fade_full_2d
+// heuristic). The engine sets the fade each logic frame; present.frag + the headless readback apply
+// clamp(rgb +/- color/255). mode: 0 none, 1 additive (to/from white), 2 subtractive (to/from black).
+void gpu_set_fade(int mode, uint8_t r, uint8_t g, uint8_t b);
+void gpu_clear_fade(void);
+// Caller-facing wrapper mirroring the old FUN_8007e9c8(color, a1, otslot) SCREEN-FADE entry: a1!=0 =>
+// additive (white), a1==0 => subtractive (black); color channels r=color&0xff, g=(color>>8)&0xff,
+// b=(color>>16)&0xff. (Core* kept for symmetry with the other engine entries; currently unused.)
+void engine_fade_set(Core* core, uint32_t color, uint32_t a1);
+
 // this-/last-frame 3D status (defined in gpu_native.cpp; read by the gpu_vk present path) — now per-instance
 int gpu_seen3d_this_frame(Core* core);
 int gpu_had3d_last_frame(Core* core);

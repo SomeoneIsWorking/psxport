@@ -54,13 +54,16 @@ int GpuState::bg_2d(int bx0, int by0, int bx1, int by1) {
   int w = bx1 - bx0, h = by1 - by0;
   return (w * 4 >= dw * 3) && (h * 4 >= dh * 3);    // covers >=3/4 of the display in both axes = backdrop
 }
-// FULL-SCREEN FADE / DIM overlay test (issue #21). A screen/scene fade or a pause-menu darkening is a
-// near-full-screen SEMI prim. It must NOT be classified as a backdrop (it composites OVER the world, not
-// behind it — so it stays in the topmost band), but its COVERAGE must be the whole WIDE framebuffer, not
-// the centered 320 band: otherwise widescreen leaves undimmed green field showing in the margins. So this
-// returns 1 for a full-screen SEMI prim (caller gates on semi), and the 2D-X mapping then stretches it to
-// fill the wide FB while the layer/ordering keeps it on top. Mirrors bg_2d's coverage test for the fade
-// case. File-scope (GpuState's decl is in gpu_native_internal.h, not editable here); dims passed in.
+// FULL-SCREEN PSX-OVERLAY coverage test (issue #21). NOTE (FADE ownership, 2026-06-25): the cutscene/area
+// SCREEN-FADE is NO LONGER delivered as a PSX OT rect — it is engine-owned (gpu_set_fade, applied in
+// present.frag + the headless readback), so it never reaches this path. This test now serves ONLY the
+// RESIDUAL genuinely-PSX full-screen semi overlays still emitted as OT rects (the slot-0x74 transition/wipe
+// effect FUN_80034548 0x404040, and a pause-menu dim if it fires): such a near-full-screen SEMI prim must
+// NOT be a backdrop (it composites OVER the world, topmost band) and its COVERAGE must span the whole WIDE
+// framebuffer (else widescreen leaves undimmed margins). Returns 1 for a full-screen SEMI prim; the 2D-X
+// mapping then stretches it to fill the wide FB while the layer/ordering keeps it on top. Keep this minimal
+// guard until those residual PSX overlays are owned PC-native too. dims passed in (GpuState decl is in
+// gpu_native_internal.h, not editable here).
 static int fade_full_2d(int dw, int dh, int bx0, int by0, int bx1, int by1) {
   if (dw <= 0) dw = 320; if (dh <= 0) dh = 240;
   int w = bx1 - bx0, h = by1 - by0;

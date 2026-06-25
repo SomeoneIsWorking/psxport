@@ -204,6 +204,8 @@ static void ov_game_s4c(Core* c) {
 
 void ov_sop_field_mode(Core*);           // engine/sop.cpp — native SOP field-mode machine
 void native_transition_area_load(Core*); // engine/sop.cpp — sync transition area-DATA load
+void engine_fade_set(Core*, uint32_t color, uint32_t a1);  // engine/gpu_lib.cpp — engine-owned screen fade
+void gpu_clear_fade(void);                                 // runtime/recomp/gpu_vk.cpp — per-frame fade reset
 void ov_objwalk(Core*);                  // engine/engine_tomba2.cpp — native FUN_8007a904 object-list walk
 void ov_disp_26c88(Core*);               // engine/entity.cpp — native FUN_80026c88 display update
 static void ov_game_submode0(Core* c);   // fwd
@@ -429,7 +431,7 @@ static void ov_field_run(Core* c) {
       ov_field_frame(c);
       sm = c->mem_r32(0x1f800138u);
       uint32_t u = ((uint32_t)c->mem_r8(sm + 0x6e) * (uint32_t)-8) & 0xff;
-      d3(c, 0x8007e9c8u, (u << 16) | (u << 8) | u, 0, 0);
+      engine_fade_set(c, (u << 16) | (u << 8) | u, 0);   // area-transition fade-out: a1=0 = subtractive (black)
       uint8_t nv = (uint8_t)(c->mem_r8(sm + 0x6e) - 1);
       c->mem_w8(sm + 0x6e, nv);
       if (nv == 0) { c->mem_w16(sm + 0x4e, 7); d0(c, 0x8001cf2cu); }
@@ -549,6 +551,9 @@ static void ov_game_submode1(Core* c) {
 // in scratch/gameplay_start_flow_re.md) to extend native ownership and shrink the cooperative fallback.
 // Returning 0 keeps the field REACHABLE (no derail) until those are owned.
 int ov_game_frame(Core* c) {
+  // Per-logic-frame reset of the engine-owned screen fade: clear it before the field machines run, so a fade
+  // that stops being set this frame disappears (the field machines below call engine_fade_set when fading).
+  gpu_clear_fade();
   uint32_t sm = c->mem_r32(0x1f800138u);
   uint16_t s48 = c->mem_r16(sm + 0x48);
   if (s48 == 2) {
