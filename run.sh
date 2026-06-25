@@ -30,6 +30,26 @@ pkg-config --exists sdl2 || die "SDL2 not found (macOS: brew install sdl2; Linux
 CC="${CC:-cc}"
 JOBS="$(getconf _NPROCESSORS_ONLN 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)"
 
+# ---- 0b. sync git submodules (vendor/beetle-psx = the GTE/MDEC/SPU/CHD backend) -----
+# A plain `git pull` does NOT update submodules, so after a pull the beetle sources can be stale and
+# the link fails with undefined GTE_BindState / MDEC_*State / SPU_*State. Sync them here so
+# `git pull && ./run.sh` is self-sufficient. Guard: if a submodule has UNCOMMITTED edits (the dev
+# works in the beetle fork in-tree), skip the auto-checkout and just warn — never clobber local work.
+if command -v git >/dev/null && [ -f .gitmodules ]; then
+  if git submodule status --recursive 2>/dev/null | grep -q '^-'; then
+    say "initializing git submodules…"
+    git submodule update --init --recursive || die "git submodule update failed"
+  elif git submodule status --recursive 2>/dev/null | grep -q '^+'; then
+    # gitlink moved (e.g. after a pull) but checkout differs. Update only the CLEAN ones.
+    if [ -z "$(git -C vendor/beetle-psx status --porcelain 2>/dev/null)" ]; then
+      say "updating git submodules to recorded commits…"
+      git submodule update --recursive || die "git submodule update failed"
+    else
+      say "WARNING: vendor/beetle-psx has uncommitted changes; not auto-updating submodule (commit or stash to sync)."
+    fi
+  fi
+fi
+
 # ---- 1. resolve the disc ------------------------------------------------------------
 DISC="${1:-${PSXPORT_TOMBA2_DISC:-}}"
 if [ -z "$DISC" ] && [ -f .env ]; then
