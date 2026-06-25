@@ -459,6 +459,53 @@ static void ov_800783DC(Core* c) {
   c->r[2] = 0x1F800000u;   // incidental v0
 }
 
+// 0x80078610 — final per-area view init: zero two control blocks (scratchpad 0x1F8000D0, main 0x800E8008),
+// seed fixed view params, copy the three view vectors from the 0x800E7E80 block (built by 0x800783DC) into
+// both blocks (the scratchpad copy biased by 0xFEC00000 / 0xF92A0000), run the camera orient/look-at matrix
+// builder 0x8006D02C, then set the area's draw-range half-word 0x801003F8 (233 if area mode==3 else 350) and
+// run 0x800846F0 with it. RE'd 1:1 from disas 0x80078610. Callees (0x80051794×2, 0x8006D02C, 0x800846F0)
+// stay PSX leaves via rec_dispatch. Incidental v0 = 0x800846F0's return (left in c->r[2] automatically).
+static void ov_80078610(Core* c) {
+  const uint32_t E = 0x800E8008u;   // s0: main control block
+  const uint32_t V = 0x800E7E80u;   // s1: view control block (built by ov_800783DC)
+  const uint32_t P = 0x1F8000D0u;   // v1 = s2-40: scratchpad control block
+
+  c->r[4] = 0x1F8000F8u; call_fn(c, 0x80051794u);   // a0 = s2
+  c->r[4] = 0x1F800118u; call_fn(c, 0x80051794u);   // a0 = s2+32
+
+  c->mem_w16(P + 30, (uint16_t)-1750);
+  c->mem_w16(P + 28, 4096);
+  c->mem_w16(P + 24, 0); c->mem_w16(P + 26, 0);
+  c->mem_w16(P + 32, 0); c->mem_w16(P + 34, 0); c->mem_w16(P + 36, 0);
+  c->mem_w16(E + 112, 1024);
+  c->mem_w32(E + 88, 0);
+  c->mem_w32(E + 32, 0); c->mem_w32(E + 36, 0); c->mem_w32(E + 40, 0);
+  c->mem_w32(E + 20, 0); c->mem_w32(E + 24, 0);
+  c->mem_w16(E + 110, 256);
+
+  uint32_t a1 = c->mem_r32(V + 48);
+  uint32_t a2 = c->mem_r32(V + 44);
+  uint32_t a3 = c->mem_r32(V + 52);
+  c->mem_w16(E + 108, 1750);
+  c->mem_w32(P + 16, a1); c->mem_w32(P + 12, a2); c->mem_w32(P + 20, a3);
+  c->mem_w32(E + 8, a1);
+  a1 += 0xFEC00000u;
+  c->mem_w32(E + 16, a3);
+  a3 += 0xF92A0000u;
+  c->mem_w32(E + 12, a2);
+  c->mem_w32(P + 0, a2);
+  c->mem_w32(P + 4, a1);
+  c->mem_w32(P + 8, a3);
+  c->r[4] = E; c->r[5] = a1; c->r[6] = a2; c->r[7] = a3;
+  call_fn(c, 0x8006D02Cu);
+
+  uint32_t v0 = (c->mem_r8(0x800BF870u) == 3) ? 233u : 350u;
+  c->mem_w16(0x801003F8u, (uint16_t)v0);
+  c->r[2] = 0x80100000u;   // lui v0,0x8010 — survives to return (0x800846F0 leaves v0); incidental v0
+  c->r[4] = (uint32_t)(int32_t)(int16_t)c->mem_r16(0x801003F8u);
+  call_fn(c, 0x800846F0u);
+}
+
 // Shared inline A/B gate for the once-per-field-load WORLD inits wired into engine_stage case-0.
 // Runs the native body, snapshots+rolls back, super-calls the recomp body, and diffs full
 // main-RAM (excl. the dead stack window) + scratchpad + v0. Prints EVERY match (record_gate is
@@ -510,6 +557,11 @@ void ov_783dc_run(Core* c) {                              // 0x800783DC — per-
   static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("init783dcverify") ? 1 : 0;
   if (!s_v) { ov_800783DC(c); return; }
   static long ng = 0, nb = 0; world_init_gate(c, ov_800783DC, 0x800783DCu, "init783dcverify", &ng, &nb);
+}
+void ov_78610_run(Core* c) {                              // 0x80078610 — final per-area view init
+  static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("init78610verify") ? 1 : 0;
+  if (!s_v) { ov_80078610(c); return; }
+  static long ng = 0, nb = 0; world_init_gate(c, ov_80078610, 0x80078610u, "init78610verify", &ng, &nb);
 }
 
 // 0x8007B2C0 — load a 4-entry u16 weight ramp into the scratchpad at 0x1F800170: a0==0 → descending

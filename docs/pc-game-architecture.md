@@ -180,7 +180,16 @@ render subsystem replaces them.
     (0x1F800207/0160/0162/0164). Two callees (0x80048D3C, 0x80072DDC) stay PSX leaves. Gate `init783dcverify`
     match #1/#2 byte-exact (incidental v0=0x1F800000 mirrored). 151 nodes gate-off. Only 0x80078610 now
     remains PSX in the case-0 prefix.
-  - **NEXT — extend the contiguity:** own the last case-0 prefix leaf 0x80078610, then more behavior handlers
+  - **Final per-area view init FUN_80078610 owned native+live (2026-06-25):** the LAST case-0 prefix leaf →
+    `ov_78610_run` (game/world/pool.cpp). Zeroes the scratchpad (0x1F8000D0) + main (0x800E8008) view
+    control blocks, seeds fixed view params, copies the three view vectors from the 0x800E7E80 block (built
+    by ov_800783DC) into both (scratchpad copy biased by 0xFEC00000/0xF92A0000), runs the camera matrix
+    builder 0x8006D02C, then sets the area draw-range half-word 0x801003F8 (233 if area mode==3 else 350) and
+    runs 0x800846F0. Four callees (0x80051794×2, 0x8006D02C, 0x800846F0) stay PSX leaves. Gate
+    `init78610verify` match #1/#2 byte-exact (incidental v0=0x80100000 mirrored — the `lui v0,0x8010` value
+    survives to return). 151 nodes gate-off. **The ENTIRE field case-0 prefix is now PC-native** (pool init →
+    796dc → 263e8 → placement → 75240 → 783dc → 78610); no rec_dispatch leaves remain in it.
+  - **NEXT — extend the contiguity:** own the per-object behavior handlers
     (the model-attach sites FUN_80077B38 +
     other per-object render-record callers) so the full graphics-bind set runs native; own the remaining
     case-0 prefix leaves (0x800796dc / 0x800263e8 / …). Each verified via its A/B gate. (Render itself =

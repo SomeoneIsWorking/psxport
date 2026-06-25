@@ -322,7 +322,7 @@ static void ov_field_run(Core* c) {
       ov_place_objects(c);   // OWNED native (game/world/placement.cpp) — replaces rec_dispatch(0x80072a78)
       ov_75240_run(c);       // OWNED native (game/world/pool.cpp) — replaces rec_dispatch(0x80075240)
       ov_783dc_run(c);       // OWNED native (game/world/pool.cpp) — replaces rec_dispatch(0x800783dc)
-      d0(c, 0x80078610u);
+      ov_78610_run(c);       // OWNED native (game/world/pool.cpp) — replaces rec_dispatch(0x80078610)
       sm = c->mem_r32(0x1f800138u);
       c->mem_w16(sm + 0x4e, 1);
       c->mem_w8(sm + 0x6b, 0);

@@ -12,4 +12,6 @@ void ov_263e8_run(Core* c);
 void ov_75240_run(Core* c);
 // 0x800783DC — per-area view/scroll setup (field case-0 prefix). GATED (channel `init783dcverify`).
 void ov_783dc_run(Core* c);
+// 0x80078610 — final per-area view init (field case-0 prefix). GATED (channel `init78610verify`).
+void ov_78610_run(Core* c);
 #endif
