@@ -18,7 +18,6 @@
 //
 // State model mirrors gpu_vk.cpp: the SDL_GPU device/window/pipelines are file-static (one per process);
 // the wrappers ignore Core* exactly as before. The per-frame batch state lives on GpuVkState (game.h).
-#ifdef PSXPORT_SDL
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_gpu.h>
 #include "cfg.h"
@@ -680,9 +679,82 @@ void gpu_vk_select_target(int t) { (void)t; }
 int  gpu_vk_target_count(int t) { (void)t; return 0; }
 void gpu_vk_rawdump_arm(const char* path, int frame) { (void)path; (void)frame; }
 
-// SBS raylib readback path is a dead end (raylib abandoned) — return black.
+// SBS per-pane render: render ONE core's VRAM + geometry batch into s_vram_tex (NO swapchain present),
+// then read the display region [sx,sy,w,h] back to host RGBA8 (`rgba` holds w*h*4). The SBS composites the
+// two returned panes via gpu_vk_present_sbs2. Reuses the proven upload+geom+readback path; the engine
+// screen-fade is applied (same math as dump_to / present.frag).
 void gpu_vk_render_readback(Core* core, const uint16_t* vram, int sx, int sy, int w, int h, uint8_t* rgba) {
-  (void)core; (void)vram; (void)sx; (void)sy; memset(rgba, 0, (size_t)w * h * 4);
+  (void)core;
+  if (!gpu_vk_enabled()) { memset(rgba, 0, (size_t)w * h * 4); return; }
+  if (!s_inited) init_gpu();
+  SDL_GPUCommandBuffer* cmd = SDL_AcquireGPUCommandBuffer(s_dev); GPUCHK(cmd, "render_readback cmd");
+  upload_vram(cmd, vram);
+  int a, b, c; render_geom(cmd, vram, &a, &b, &c);
+  SDL_SubmitGPUCommandBuffer(cmd);                 // render into s_vram_tex; NO swapchain present
+  const uint16_t* src = readback_vram();           // download s_vram_tex (RG8 bytes == uint16 1555 words)
+  for (int y = 0; y < h; y++) for (int x = 0; x < w; x++) {
+    uint16_t p = src[((sy + y) % VRAM_H) * VRAM_W + ((sx + x) & 1023)];
+    int r = (p & 31) << 3, g = ((p >> 5) & 31) << 3, bl = ((p >> 10) & 31) << 3;
+    if (s_fade_mode == 1)      { r += s_fade_r; g += s_fade_g; bl += s_fade_b; if (r>255)r=255; if (g>255)g=255; if (bl>255)bl=255; }
+    else if (s_fade_mode == 2) { r -= s_fade_r; g -= s_fade_g; bl -= s_fade_b; if (r<0)r=0; if (g<0)g=0; if (bl<0)bl=0; }
+    uint8_t* o = rgba + ((size_t)y * w + x) * 4; o[0] = (uint8_t)r; o[1] = (uint8_t)g; o[2] = (uint8_t)bl; o[3] = 255;
+  }
+  SDL_UnmapGPUTransferBuffer(s_dev, s_rb_xfer);
+}
+
+// SBS two-pane composite: draw CPU RGBA pane A (left) | pane B (right) to the swapchain in one window
+// frame, each letterboxed 4:3 within its half. Uses the image pipeline (RGBA sampler). Windowed only.
+static SDL_GPUTexture*        s_sbs_tex[2];
+static SDL_GPUTransferBuffer* s_sbs_xfer[2];
+static int                    s_sbs_w[2], s_sbs_h[2];
+static void sbs_make_tex(int i, int w, int h) {
+  if (s_sbs_tex[i] && s_sbs_w[i] == w && s_sbs_h[i] == h) return;
+  if (s_sbs_tex[i]) { SDL_ReleaseGPUTexture(s_dev, s_sbs_tex[i]); SDL_ReleaseGPUTransferBuffer(s_dev, s_sbs_xfer[i]); }
+  SDL_GPUTextureCreateInfo ti = {}; ti.type = SDL_GPU_TEXTURETYPE_2D; ti.format = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM;
+  ti.usage = SDL_GPU_TEXTUREUSAGE_SAMPLER; ti.width = (Uint32)w; ti.height = (Uint32)h; ti.layer_count_or_depth = 1; ti.num_levels = 1;
+  s_sbs_tex[i] = SDL_CreateGPUTexture(s_dev, &ti); GPUCHK(s_sbs_tex[i], "sbs tex");
+  SDL_GPUTransferBufferCreateInfo up = {}; up.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD; up.size = (Uint32)w * h * 4;
+  s_sbs_xfer[i] = SDL_CreateGPUTransferBuffer(s_dev, &up); GPUCHK(s_sbs_xfer[i], "sbs xfer");
+  s_sbs_w[i] = w; s_sbs_h[i] = h;
+}
+void gpu_vk_present_sbs2(const uint8_t* rgbaA, int wA, int hA, const uint8_t* rgbaB, int wB, int hB) {
+  if (!gpu_vk_enabled() || s_headless) return;
+  if (!s_inited) init_gpu();
+  if (wA < 1) wA = 1; if (hA < 1) hA = 1; if (wB < 1) wB = 1; if (hB < 1) hB = 1;
+  sbs_make_tex(0, wA, hA); sbs_make_tex(1, wB, hB);
+  const uint8_t* rgb[2] = { rgbaA, rgbaB };
+  int pw[2] = { wA, wB }, ph[2] = { hA, hB };
+
+  SDL_GPUCommandBuffer* cmd = SDL_AcquireGPUCommandBuffer(s_dev); GPUCHK(cmd, "sbs cmd");
+  for (int i = 0; i < 2; i++) { void* p = SDL_MapGPUTransferBuffer(s_dev, s_sbs_xfer[i], true);
+    memcpy(p, rgb[i], (size_t)pw[i] * ph[i] * 4); SDL_UnmapGPUTransferBuffer(s_dev, s_sbs_xfer[i]); }
+  SDL_GPUCopyPass* cp = SDL_BeginGPUCopyPass(cmd);
+  for (int i = 0; i < 2; i++) { SDL_GPUTextureTransferInfo si = {}; si.transfer_buffer = s_sbs_xfer[i]; si.pixels_per_row = (Uint32)pw[i]; si.rows_per_layer = (Uint32)ph[i];
+    SDL_GPUTextureRegion dr = {}; dr.texture = s_sbs_tex[i]; dr.w = (Uint32)pw[i]; dr.h = (Uint32)ph[i]; dr.d = 1;
+    SDL_UploadToGPUTexture(cp, &si, &dr, false); }
+  SDL_EndGPUCopyPass(cp);
+
+  SDL_GPUTexture* swaptex = NULL; Uint32 sw = 0, sh = 0;
+  if (!SDL_WaitAndAcquireGPUSwapchainTexture(cmd, s_win, &swaptex, &sw, &sh) || !swaptex) { SDL_SubmitGPUCommandBuffer(cmd); poll_quit(); return; }
+  SDL_GPUColorTargetInfo cti = {}; cti.texture = swaptex; cti.clear_color = (SDL_FColor){ 0, 0, 0, 1 };
+  cti.load_op = SDL_GPU_LOADOP_CLEAR; cti.store_op = SDL_GPU_STOREOP_STORE;
+  SDL_GPURenderPass* rp = SDL_BeginGPURenderPass(cmd, &cti, 1, NULL);
+  float fpc[4] = { 1.0f, 0, 0, 0 };   // no fade (already applied in the readback)
+  SDL_PushGPUFragmentUniformData(cmd, 0, fpc, sizeof fpc);
+  SDL_BindGPUGraphicsPipeline(rp, s_image_pipe);
+  int paneW = (int)sw / 2;
+  SDL_Rect sc = { 0, 0, (int)sw, (int)sh };
+  for (int i = 0; i < 2; i++) {
+    SDL_GPUViewport vp = letterbox(4, 3, paneW, (int)sh);
+    vp.x += (float)(i * paneW);
+    SDL_SetGPUViewport(rp, &vp); SDL_SetGPUScissor(rp, &sc);
+    SDL_GPUTextureSamplerBinding tsb = { s_sbs_tex[i], s_samp_linear };
+    SDL_BindGPUFragmentSamplers(rp, 0, &tsb, 1);
+    SDL_DrawGPUPrimitives(rp, 3, 1, 0, 0);
+  }
+  SDL_EndGPURenderPass(rp);
+  SDL_SubmitGPUCommandBuffer(cmd);
+  poll_quit();
 }
 
 // ---- Public API: thin free-function wrappers over the per-instance GpuVkState methods ---------------
@@ -711,51 +783,3 @@ void gpu_vk_shot(Core* core, const char* path) { core->game->gpu_vk.shot(path); 
 void gpu_vk_shot_b(Core* core, const char* path) { core->game->gpu_vk.shot_b(path); }
 void gpu_vk_frame_end(Core* core, const uint16_t* svram, int frame) { core->game->gpu_vk.frame_end(svram, frame); }
 void gpu_vk_tritest(Core* core) { core->game->gpu_vk.tritest(); }
-
-#else  // !PSXPORT_SDL — headless/no-SDL build: everything is a no-op (mirrors gpu_vk.cpp's #else block)
-#include <stdint.h>
-#include <string.h>
-int  gpu_vk_enabled(void) { return 0; }
-extern "C" int gpu_windowed(void) { return 0; }
-extern "C" int gpu_has_window(void) { return 0; }
-void gpu_vk_present(Core* core, const uint16_t* src, int sx, int sy, int w, int h) { (void)core;(void)src;(void)sx;(void)sy;(void)w;(void)h; }
-void gpu_vk_present_sbs(Core* a, const uint16_t* va, const uint16_t* vb, int sx, int sy, int w, int h) { (void)a;(void)va;(void)vb;(void)sx;(void)sy;(void)w;(void)h; }
-void gpu_vk_present_sbs_repaint(Core* a, int sx, int sy, int w, int h) { (void)a;(void)sx;(void)sy;(void)w;(void)h; }
-void gpu_vk_present_image(Core* core, const uint8_t* rgba, int iw, int ih, float fade) { (void)core;(void)rgba;(void)iw;(void)ih;(void)fade; }
-void gpu_vk_tritest(Core* core) { (void)core; }
-void gpu_vk_frame_end(Core* core, const uint16_t* svram, int frame) { (void)core;(void)svram;(void)frame; }
-void gpu_vk_select_target(int t) { (void)t; }
-void gpu_set_fade(int mode, uint8_t r, uint8_t g, uint8_t b) { (void)mode;(void)r;(void)g;(void)b; }
-void gpu_clear_fade(void) {}
-void gpu_vk_shot(Core* core, const char* path) { (void)core;(void)path; }
-void gpu_vk_set_order(Core* core, unsigned idx) { (void)core;(void)idx; }
-void gpu_vk_set_order_2d(Core* core, unsigned idx) { (void)core;(void)idx; }
-void gpu_vk_set_order_2d_n(Core* core, unsigned idx) { (void)core;(void)idx; }
-void gpu_vk_set_order_2d_bg(Core* core, unsigned idx) { (void)core;(void)idx; }
-void gpu_vk_set_order_2d_bg_n(Core* core, unsigned idx) { (void)core;(void)idx; }
-void gpu_vk_set_vd(Core* core, const float* d3) { (void)core;(void)d3; }
-void gpu_vk_set_vd_n(Core* core, const float* d3) { (void)core;(void)d3; }
-void gpu_vk_set_xyf(Core* core, const float* xf, const float* yf) { (void)core;(void)xf;(void)yf; }
-void gpu_vk_rawdump_arm(const char* path, int frame) { (void)path;(void)frame; }
-void gpu_vk_vram_region(const char* path, int x, int y, int w, int h) { (void)path;(void)x;(void)y;(void)w;(void)h; }
-void gpu_vk_stats(Core* core, int* tri, int* tex, int* semi) { (void)core; if(tri)*tri=0; if(tex)*tex=0; if(semi)*semi=0; }
-void gpu_vk_dirty(Core* core, int x, int y, int w, int h) { (void)core;(void)x;(void)y;(void)w;(void)h; }
-void gpu_vk_semi_group(Core* core, int x0, int y0, int x1, int y1) { (void)core;(void)x0;(void)y0;(void)x1;(void)y1; }
-void gpu_vk_draw_tri(Core* core, int a,int b,int c,int d,int e,int f,int g,int h,int i,int j,int k,int l,int m,int n,int o) {
-  (void)core;(void)a;(void)b;(void)c;(void)d;(void)e;(void)f;(void)g;(void)h;(void)i;(void)j;(void)k;(void)l;(void)m;(void)n;(void)o;
-}
-void gpu_vk_draw_tritri(Core* core, const int* xs, const int* ys, const int* us, const int* vs,
-                        const unsigned char* rs, const unsigned char* gs, const unsigned char* bs,
-                        int tpx, int tpy, int mode, int raw, int clutx, int cluty,
-                        int twmx, int twmy, int twox, int twoy, int dax0, int day0, int dax1, int day1) {
-  (void)core;(void)xs;(void)ys;(void)us;(void)vs;(void)rs;(void)gs;(void)bs;(void)tpx;(void)tpy;(void)mode;(void)raw;
-  (void)clutx;(void)cluty;(void)twmx;(void)twmy;(void)twox;(void)twoy;(void)dax0;(void)day0;(void)dax1;(void)day1;
-}
-void gpu_vk_draw_semi(Core* core, const int* xs, const int* ys, const int* us, const int* vs, const unsigned char* rs,
-                      const unsigned char* gs, const unsigned char* bs, int tpx, int tpy, int mode, int raw,
-                      int clutx, int cluty, int twmx, int twmy, int twox, int twoy,
-                      int dax0, int day0, int dax1, int day1, int blend) {
-  (void)core;(void)xs;(void)ys;(void)us;(void)vs;(void)rs;(void)gs;(void)bs;(void)tpx;(void)tpy;(void)mode;(void)raw;
-  (void)clutx;(void)cluty;(void)twmx;(void)twmy;(void)twox;(void)twoy;(void)dax0;(void)day0;(void)dax1;(void)day1;(void)blend;
-}
-#endif

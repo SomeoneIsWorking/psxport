@@ -215,8 +215,8 @@ static int s_tgt = 0;          // which batch the emit path accumulates into (0=
 static int s_ntgt = 1;         // live batch count this frame (2 in dual-view)
 extern "C" int g_dualview;     // dual-view side-by-side native-vs-PSX render (native_boot REPL `dualview`)
 extern "C" int g_sbs;          // PSXPORT_SBS two-core side-by-side (sbs.cpp) — also forces 2 render targets
-extern "C" int g_sbs_rl;       // PSXPORT_SBS raylib present: each core renders SEQUENTIALLY into ONE target
-                               // (s_tex), read back to a CPU buffer, then raylib draws the two panes. So the
+extern "C" int g_sbs_rl;       // PSXPORT_SBS SDL_GPU window present: each core renders SEQUENTIALLY into ONE target
+                               // (s_tex), read back to a CPU buffer, then SDL_GPU window draws the two panes. So the
                                // VK side stays SINGLE-target (the proven single-mode headless render path).
 #define BIND_BATCH() GeomBatch& _gb = s_gb[s_tgt]; \
   int& s_tri_n = _gb.tri_n; int& s_tex_n = _gb.tex_n; int& s_semi_n = _gb.semi_n; \
@@ -613,7 +613,7 @@ static void recreate_swapchain(void) {
 
 static void init_vk(void) {
   s_inited = 1;
-  // dual-view OR (the OLD VK-composite) SBS: two geometry batches. The raylib SBS (g_sbs_rl) renders the
+  // dual-view OR (the OLD VK-composite) SBS: two geometry batches. The SDL_GPU window SBS (g_sbs_rl) renders the
   // two cores SEQUENTIALLY into ONE target and reads each back, so it stays single-target.
   s_ntgt = ((g_dualview || g_sbs) && !g_sbs_rl) ? 2 : 1;
   mods_init();   // seed the live mod state from cfg before any ssao_on()/ui_infra() decision below
@@ -2218,7 +2218,7 @@ static void vk_dump_to(const char* path, int sx, int sy, int w, int h) {
     fwrite(c, 1, 3, f); }
   fclose(f);
 }
-// PSXPORT_SBS raylib present: render the CURRENT (already-emitted) geometry batch headless into s_tex, then
+// PSXPORT_SBS SDL_GPU window present: render the CURRENT (already-emitted) geometry batch headless into s_tex, then
 // read the display region [sx,sy,w,h] back to host RGBA8 (`rgba` must hold w*h*4 bytes). This reuses the
 // PROVEN single-mode headless present + VRAM readback + 1555->RGB conversion (the exact path `gpu_vk_shot`
 // uses, which works on macOS), so each SBS pane is driven by the render path that is known-good there —
