@@ -233,6 +233,15 @@ render subsystem replaces them.
     the 5 sub-behavior leaves stay PSX via rec_dispatch. Verified live on seaside: `obj8013c538verify` 6100+
     matches, 0 mismatch (full RAM+scratchpad A/B); gate-off native-driven reaches the field clean (151 nodes,
     0 bad opcode). Disassemble further overlay handlers from the RAM dump (`tools/disas.py --ram …`).
+  - **Behavior handler FUN_8013C3F4 owned native+live (2026-06-25):** added `engine/objbeh_8013c3f4.cpp`
+    (2nd-hottest overlay handler ~x4632/field-frame on seaside, ~80 instr; disassembled from the field RAM
+    dump). State machine on node[4]: state 0 gates on area byte 0x800BF9E0 (>=28 -> node[4]=3) then node[4]=1
+    and FALLS INTO state 1, which sets node[0x34] from node[0x38] (or overlay data ptrs 0x8014AC18/0x8014AF20
+    selected via node[3] vs 0x800BF9E0 thresholds), then FUN_8002B278 / FUN_80031780; states 2/3 -> FUN_8007A624.
+    Transcribed 1:1 (e.g. the c454 16-bit state store, the c494 branch-delay sltiu read at L4a8). Control flow +
+    all node writes owned native; the 3 sub-behavior leaves stay PSX via rec_dispatch. Verified live:
+    `obj8013c3f4verify` 4600+ matches, 0 mismatch (full RAM+scratchpad A/B); gate-off field clean (151 nodes,
+    0 bad opcode).
   - **NEXT — extend the contiguity:** own the remaining per-object behavior handlers
     (e.g. the overlay-resident 0x801xxxxx handlers; the model-attach sites FUN_80077B38 +
     other per-object render-record callers) so the full graphics-bind set runs native; own the remaining
