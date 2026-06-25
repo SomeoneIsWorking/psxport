@@ -291,6 +291,14 @@ render subsystem replaces them.
     Transcribed 1:1; both jump tables READ live from overlay RAM; control flow + direct node writes owned
     native, leaves stay PSX via rec_dispatch. Verified live: `obj8012da04verify` 2300+ matches, 0 mismatch;
     gate-off field clean (151 nodes, 0 bad opcode).
+  - **Behavior handler FUN_80121978 owned native+live (2026-06-25):** added `engine/objbeh_80121978.cpp`
+    (hottest still-PSX overlay handler ~x1592/field-frame on seaside, ~115 instr). Outer state machine on
+    node[4]: state 0 INIT (FUN_800519E0 + FUN_80077C40, seeds node[0x80..0x86]=140/280/128/256, node[0x44]=384,
+    node[4]+=1); state 1 routes node[3] to a per-id sub-behavior leaf (0/1/95/96/97/98/99 ->
+    FUN_801225BC/80122D58/801220FC/80121B44/80121CF8/80122CA4/8018BF08, all other ids none) then ALWAYS
+    FUN_80122BF4(node)+node[0x2B]=0; state 3 -> FUN_8007A624. No leaf takes a stack arg. Transcribed 1:1;
+    control flow + direct node writes owned native, leaves stay PSX via rec_dispatch. Verified live:
+    `obj80121978verify` 1550+ matches, 0 mismatch; gate-off field clean (151 nodes, 0 bad opcode).
   - **NEXT — extend the contiguity:** own the remaining per-object behavior handlers
     (e.g. the overlay-resident 0x801xxxxx handlers; the model-attach sites FUN_80077B38 +
     other per-object render-record callers) so the full graphics-bind set runs native; own the remaining
