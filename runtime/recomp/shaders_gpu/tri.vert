@@ -8,5 +8,9 @@ layout(location = 2) in float i_ord;   // depth [0,1] (band-mapped; later prim/n
 layout(location = 0) out vec3 v_col;
 void main() {
     v_col = i_col;
-    gl_Position = vec4(i_pos.x / 512.0 - 1.0, i_pos.y / 256.0 - 1.0, i_ord, 1.0);
+    // Negate Y: SDL_GPU offscreen render targets are Y-up (NDC +1 = texture row 0), so VRAM row 0 must map
+    // to NDC y=+1 to land at texture row 0 — matching the copy-uploaded 2D backdrop and the present sample
+    // (else the rendered geometry is vertically flipped vs the backdrop and the in-shader blend reads the
+    // wrong row). gl_FragCoord.y then equals the VRAM row (draw-area clip + blend depend on this).
+    gl_Position = vec4(i_pos.x / 512.0 - 1.0, -(i_pos.y / 256.0 - 1.0), i_ord, 1.0);
 }

@@ -17,5 +17,8 @@ layout(location = 4) flat out ivec4 v_tw;
 layout(location = 5) flat out ivec4 v_da;
 void main() {
     v_col = i_col; v_uv = i_uv; v_tp = i_tp; v_clut = i_clut; v_tw = i_tw; v_da = i_da;
-    gl_Position = vec4(i_pos.x / 512.0 - 1.0, i_pos.y / 256.0 - 1.0, i_ord, 1.0);
+    // Negate Y: SDL_GPU offscreen targets are Y-up, so VRAM row 0 -> NDC y=+1 -> texture row 0 (matches the
+    // uploaded backdrop). gl_FragCoord.y then equals the VRAM row, which the draw-area clip + in-shader
+    // semi blend (vram_at(px,py)) rely on. See tri.vert.
+    gl_Position = vec4(i_pos.x / 512.0 - 1.0, -(i_pos.y / 256.0 - 1.0), i_ord, 1.0);
 }

@@ -15,10 +15,12 @@ layout(location = 2) flat in ivec4 v_tp;     // tpx, tpy, mode, raw
 layout(location = 3) flat in ivec4 v_clut;   // clutx, cluty, semi, blend
 layout(location = 4) flat in ivec4 v_tw;     // texture window
 layout(location = 5) flat in ivec4 v_da;     // draw-area clip
-layout(set = 2, binding = 0) uniform usampler2D u_vram;
-layout(location = 0) out uint o_px;
+// VRAM is R8G8_UNORM (R=low byte, G=high byte of the 1555 word — SDL_GPU forbids integer SAMPLER formats).
+layout(set = 2, binding = 0) uniform sampler2D u_vram;
+layout(location = 0) out vec4 o_col;
 
-uint vram_at(int x, int y) { return texelFetch(u_vram, ivec2(x & 1023, y & 511), 0).r; }
+uint vram_at(int x, int y) { vec2 rg = texelFetch(u_vram, ivec2(x & 1023, y & 511), 0).rg;
+                             return uint(rg.r * 255.0 + 0.5) | (uint(rg.g * 255.0 + 0.5) << 8); }
 
 void main() {
     int px = int(gl_FragCoord.x), py = int(gl_FragCoord.y);
@@ -60,5 +62,5 @@ void main() {
         rr=clamp(rr,0,31); rg=clamp(rg,0,31); rb=clamp(rb,0,31);
         texel = uint(rr) | (uint(rg)<<5) | (uint(rb)<<10) | (stp<<15);
     }
-    o_px = texel;
+    o_col = vec4(float(texel & 0xFFu) / 255.0, float((texel >> 8) & 0xFFu) / 255.0, 0.0, 1.0);
 }
