@@ -390,6 +390,17 @@ render subsystem replaces them.
     node[0x2B]=0 at the tail. State 3 -> FUN_8007A624. Dead `addiu v1,v0,-1936` (0x800BF870, never
     stored/read) dropped. Transcribed 1:1; control flow + direct node/global writes owned native. Verified
     live: `obj80132400verify` 750+ matches, 0 mismatch; gate-off field clean (151 nodes, 0 bad opcode).
+  - **Behavior handler FUN_80133D6C owned native+live (2026-06-25):** added `engine/objbeh_80133d6c.cpp`
+    (~x778/field-frame on seaside, ~180 instr). Outer state machine on node[4]. State 0 INIT (a0 clobbered
+    to 2 by the beq-delay → node[8]=node[9]=2): mem[0x800ED098]<2 gate (→node[4]=3), else seed
+    node[0x80/0x82]=140/node[0x84]=10/node[0x86]=70 + allocate 2 child records (FUN_8007AAE8) into
+    node[0xC0]/node[0xC4] (rec0{[6]=-1,[0]=0}, rec1{[6]=0,[0]=-140}) + FUN_80051B04(rec,12,iter). State 1:
+    steer rec0[0x0C] ±5 toward a1 / rec1[0x0C] ±10 toward a3 (snap-on-overshoot), targets keyed on
+    node[0x29] (and, when ==1, on FUN_800781E0 dist of scratch[0x160/0x164]-rec0[0x2C/0x34]); then if
+    mem[0x800E7EAA]<22 and FUN_8007778C(node)!=0 → FUN_800517F8(node). State 3 → FUN_8007A624. a0 fidelity
+    in the record loop: first FUN_8007AAE8 a0=2, FUN_80051B04 leaves a0=rec for the 2nd. The step-clamp
+    snaps to the FULL 32-bit target truncated to 16 bits (sh), not its sign-extension. Transcribed 1:1.
+    Verified live: `obj80133d6cverify` 750+ matches, 0 mismatch; gate-off field clean (151 nodes, 0 bad opcode).
   - **NEXT — extend the contiguity:** own the remaining per-object behavior handlers
     (e.g. the overlay-resident 0x801xxxxx handlers; the model-attach sites FUN_80077B38 +
     other per-object render-record callers) so the full graphics-bind set runs native; own the remaining
