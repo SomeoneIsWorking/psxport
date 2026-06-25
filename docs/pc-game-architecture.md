@@ -449,6 +449,13 @@ render subsystem replaces them.
     node[3]. Preserves the state-2 case-0xB fallthrough (->2/7/8) and the state-1 cross-case goto (cases
     0/1 -> case 4's FUN_8012185C). State 3 clears node[0x1B]&0x40 or despawns. Verified live:
     `actor_move_smverify` 750+ matches, 0 mismatch; gate-off field clean (151 nodes).
+  - **Behavior handler FUN_8011D578 = `beh_variant_actor_sm` owned native+live (2026-06-25, Ghidra flow +
+    raw cross-check):** state 0 INIT gated on FUN_800519E0 seeds a behavior table @node[0x7C]=0x8014DE54 +
+    node[0x2C/0x30/0x34] 32-bit consts + a node[3]-variant (node[0x56]/node[0x7B]); state 1 routes node[3]
+    (0->FUN_8011D108) / node[5] (0: scratch/FUN_8007778C-gated FUN_80042354/80040D68 advance; 1: FUN_80077E7C
+    + node[0x70] retreat) + FUN_80041098/8004190C; state 3 despawn; tail FUN_800518FC/8011D82C. GOTCHA fixed
+    vs Ghidra: several `lbu == 0xFF` it typed as `== -1` (mem[0x800BF8BC], node[0x70]); scratch[0x160] is a
+    SIGNED lh. Verified live: `variant_actor_smverify` 750+ matches, 0 mismatch; gate-off field clean (151).
   - **NEXT — extend the contiguity:** own the remaining per-object behavior handlers
     (e.g. the overlay-resident 0x801xxxxx handlers; the model-attach sites FUN_80077B38 +
     other per-object render-record callers) so the full graphics-bind set runs native; own the remaining
