@@ -429,6 +429,39 @@ void pad_service_frame(Core* c) {
       pad.buttons = rep_buf[rec_fc];        // force the recorded mask (overrides host/repl/force)
     }
     if (rec_fp) { uint16_t m = pad.buttons; fwrite(&m, 2, 1, rec_fp); fflush(rec_fp); }
+    // PSXPORT_PAD_SHOT_AT=f0,f1,... : during replay, screenshot at these EXACT replay (pad) frame
+    // indices to scratch/screenshots/padshot_<frame>.ppm. The pad-frame axis (rec_fc) is the faithful
+    // one (gpu_frame_no drifts because boot/FMV presents extra frames), so this captures a deterministic
+    // visual timeline of a replayed session. Done here, after the mask is applied for THIS frame.
+    static int      shot_init = 0;
+    static uint32_t shot_at[64]; static int shot_n = 0;
+    if (!shot_init) {
+      shot_init = 1;
+      const char* s = cfg_str("PSXPORT_PAD_SHOT_AT");
+      if (s) { char buf[512]; snprintf(buf, sizeof buf, "%s", s);
+        for (char* t = strtok(buf, ","); t && shot_n < 64; t = strtok(nullptr, ","))
+          shot_at[shot_n++] = (uint32_t)strtoul(t, 0, 0); }
+    }
+    for (int i = 0; i < shot_n; i++) if (shot_at[i] == rec_fc) {
+      void gpu_vk_shot(Core*, const char*); char p[96];
+      snprintf(p, sizeof p, "scratch/screenshots/padshot_%u.ppm", rec_fc);
+      gpu_vk_shot(c, p);
+      fprintf(stderr, "[padrec] shot at replay-frame %u -> %s\n", rec_fc, p);
+    }
+    // PSXPORT_PAD_TRACE=lo-hi : log the transition/scene markers EVERY replay frame in [lo,hi] (pad-frame
+    // indexed — the faithful axis). Finds which field moves when the player walks into the hut (the
+    // seamless sub-scene transition). All fixed-address globals; sm = *0x1f800138.
+    static int trace_init = 0; static uint32_t trace_lo = 1, trace_hi = 0;
+    if (!trace_init) { trace_init = 1; const char* s = cfg_str("PSXPORT_PAD_TRACE");
+      if (s) { unsigned a=0,b=0; if (sscanf(s,"%u-%u",&a,&b)==2){trace_lo=a;trace_hi=b;} else if (sscanf(s,"%u",&a)==1){trace_lo=0;trace_hi=a;} } }
+    if (rec_fc >= trace_lo && rec_fc <= trace_hi) {
+      uint32_t sm = c->mem_r32(0x1f800138u);
+      fprintf(stderr, "[padtr] f%-4u bf839=%02X bf80f=%02X i236=%02X sm4a=%u sm4c=%u sm4e=%u scene=%u bf870=%02X bf809=%02X bf89c=%02X e7e68=%08X tX=%d tZ=%d\n",
+        rec_fc, c->mem_r8(0x800bf839u), c->mem_r8(0x800bf80fu), c->mem_r8(0x1f800236u),
+        c->mem_r16(sm+0x4a), c->mem_r16(sm+0x4c), c->mem_r16(sm+0x4e),
+        c->mem_r32(0x800be258u), c->mem_r8(0x800bf870u), c->mem_r8(0x800bf809u), c->mem_r8(0x800bf89cu),
+        c->mem_r32(0x800e7e68u), (int16_t)c->mem_r16(0x800fe916u), (int16_t)c->mem_r16(0x800fe91eu));
+    }
     rec_fc++;
   }
 
