@@ -362,6 +362,15 @@ render subsystem replaces them.
     0x800ED098<4 path is overwritten by node[4]=1 at the tail (END RAM identical). Transcribed 1:1; control
     flow + direct node/record/global writes owned native. Verified live: `obj80135d64verify` 1550+ matches,
     0 mismatch; gate-off field clean (151 nodes, 0 bad opcode).
+  - **Behavior handler FUN_8013B2E4 owned native+live (2026-06-25):** added `engine/objbeh_8013b2e4.cpp`
+    (~x778/field-frame on seaside, ~150 instr). State 0 INIT: FUN_800519E0(node,3,mem[0x800ECFD4],0x8015AABC)
+    gate, node[0x3C]=mem[0x800ECFD8], global mem[0x800BF873] gate (-> node[4]=3), bit node[3] of mem[0x800BFA13]
+    selects FUN_8013AF18(node,1,31) vs node[0x5E]=0, then FUN_80077C40(node,0x8001B7B0,a2); seeds node fields +
+    node[4]++ (+ node[5]=4 when node[0x5E]==0). State 1: FUN_8007778C + FUN_80076D68, per node[6] sub-machine
+    (timer node[0x40] countdown, node[0x2B]==3 block firing FUN_8004ED94(97|98,65) + global 0x800BF809 toggle),
+    then FUN_8013B024(node,31) + FUN_800518FC; tail clears node[0x29]=node[0x2B]=0. State 3 -> FUN_8007A624.
+    srav masked to (node[3]&31). Transcribed 1:1; control flow + direct node/global writes owned native.
+    Verified live: `obj8013b2e4verify` 750+ matches, 0 mismatch; gate-off field clean (151 nodes, 0 bad opcode).
   - **NEXT — extend the contiguity:** own the remaining per-object behavior handlers
     (e.g. the overlay-resident 0x801xxxxx handlers; the model-attach sites FUN_80077B38 +
     other per-object render-record callers) so the full graphics-bind set runs native; own the remaining
