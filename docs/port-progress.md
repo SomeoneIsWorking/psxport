@@ -343,6 +343,27 @@ for content fns (call it). Do NOT mimic PSX hardware (GTE/GP0/OT) — remove Bee
     mesh + resident terrain + main ground are ALL world-coord float now (no GTE for those pictures).
   - ☐ NEXT (render): own 0x8003c8f4 (billboard-quad pickups, 0x8003c2d4/c464) projection via eproj to finish
     the per-object render GTE-free; audit remaining RTPS/RTPT callers at the field; 0x8003cdd8 secondary cases.
+  - ☐ **FADE — own the cutscene/area screen-FADE PC-native (DESIGN COMPLETE, 2026-06-25; user-priority).**
+    ROOT CAUSE of the "renderer struggling with cutscene fades": the fade is DELIVERED as a PSX full-screen
+    semi-transparent OT RECT (`FUN_8007e9c8`: cmd 0x62, (0,0) 320x240, into OT @0x800ed8c8) and the PC
+    renderer must HEURISTICALLY re-detect it (`gpu_native.cpp` `fade_full_2d`, ≥¾-screen test → force to top
+    2D band) — fragile, and the prohibited "read the PSX OT" pattern. Two callers, BOTH now native: the SOP
+    intro SM `ov_bg_scene_transition_sm` (fade_rect→FUN_8007e9c8) and the area-transition fade
+    `engine_stage.cpp` case 10 (`d3(0x8007e9c8, (u<<16|u<<8|u), 0, 0)`).
+    **BLEND SEMANTICS (RE'd from FUN_80083de0 — the E1 draw-mode word's ABR field, bits 5-6):**
+    `FUN_8007e9c8(color, a1, a2)` sets a3=0x20 when a1!=0 else 0x40; FUN_80083de0 puts a3 into the E1 ABR →
+    a3=0x20 ⇒ ABR=1 = **ADDITIVE (B+F)**, a3=0x40 ⇒ ABR=2 = **SUBTRACTIVE (B−F)**. So `a1==0` ⇒ subtractive =
+    fade to/from BLACK; `a1!=0` ⇒ additive = fade to/from WHITE. The fade op is therefore a per-channel
+    ADD or SUBTRACT of the rect's RGB, CLAMPed — NOT rgb*brightness. (Intro SM a1=P[3]: 0=black-fade,
+    1=white-fade; area-transition a1=0 = black-fade. color grey u or 0xffffff.)
+    **FIX:** own `FUN_8007e9c8` PC-native — instead of building the OT rect, store an engine fade global
+    {r,g,b, mode(add/sub), active}; clear `active` at frame start; gpu_vk applies `clamp(frame ± color)` to
+    the finished image. CRITICAL (headless/windowed parity): apply into `s_tex` (read by BOTH the present
+    blit AND the `shot` readback, gpu_vk.cpp ~1946/2020) so a headless screenshot matches the window — NOT
+    only in present.frag. Then delete the `fade_full_2d` OT heuristic (verify the pause-dim #21 path first).
+    Owning FUN_8007e9c8 fixes BOTH fade callers at once. Verify = USER eyeball a headless fade-ramp shot
+    (trigger via the area-transition force, or the intro). NB this will break the bgscenesmverify gate's
+    rect-region compare (expected — the fade delivery changed by design).
   - ✅ SOP per-frame field update's FIRST leaf owned: `FUN_8002655c` = `ov_bg_scene_transition_sm`
     (engine/bg_scene_transition_sm.cpp, 2026-06-25) — the SOP intro BG scene-transition / screen-FADE state
     machine (states 0-4 over struct 0x80100400; driven by DAT_1f800236 + the 0x800bf80f direction byte;
