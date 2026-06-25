@@ -506,6 +506,37 @@ static void ov_80078610(Core* c) {
   call_fn(c, 0x800846F0u);
 }
 
+// 0x80074F24 — per-area STATE-INDEX select + apply. Early-out if scratchpad 0x1F800137==1 or area
+// 0x800BF870==21 (both leave a fixed v0). Otherwise pick an index s0: 42 if (area!=15 && 0x800BF873!=0);
+// 10 if (a0==6 && 9<=0x800BF871<15); else a bit of the area mask 0x800BFE56 (shifted by a0) selects table
+// 0x800A4F68 / 0x800A4F50, indexed by a0. Then call 0x800750D8(s0,1), publish s0 to scratchpad 0x1F80023B,
+// clear 0x800BE22B. RE'd 1:1 from disas 0x80074F24. a0 is the area byte (caller passes 0x800BF870). The
+// callee 0x800750D8 stays a PSX leaf. Incidental v0: early-outs leave 1 / 21; the work path leaves the
+// last lui value 0x800C0000.
+static void ov_80074F24(Core* c) {
+  if (c->mem_r8(0x1F800137u) == 1) { c->r[2] = 1; return; }
+  uint32_t m = c->mem_r8(0x800BF870u);
+  if (m == 21) { c->r[2] = 21; return; }
+  uint32_t q = c->r[4] & 0xFFu;                       // a0 (area byte)
+
+  uint32_t s0 = 0; bool have = false;
+  if (m != 15 && c->mem_r8(0x800BF873u) != 0) { s0 = 42; have = true; }
+  if (!have && q == 6) {
+    uint32_t p = c->mem_r8(0x800BF871u);
+    if (p >= 9 && p < 15) { s0 = 10; have = true; }
+  }
+  if (!have) {
+    uint32_t w = c->mem_r16(0x800BFE56u);
+    uint32_t tbl = ((w >> (q & 31)) & 1u) ? 0x800A4F68u : 0x800A4F50u;
+    s0 = c->mem_r8(tbl + q);
+  }
+
+  c->r[4] = s0; c->r[5] = 1; call_fn(c, 0x800750D8u);
+  c->mem_w8(0x1F80023Bu, (uint8_t)s0);
+  c->mem_w8(0x800BE22Bu, 0);
+  c->r[2] = 0x800C0000u;   // incidental v0
+}
+
 // Shared inline A/B gate for the once-per-field-load WORLD inits wired into engine_stage case-0.
 // Runs the native body, snapshots+rolls back, super-calls the recomp body, and diffs full
 // main-RAM (excl. the dead stack window) + scratchpad + v0. Prints EVERY match (record_gate is
@@ -562,6 +593,11 @@ void ov_78610_run(Core* c) {                              // 0x80078610 — fina
   static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("init78610verify") ? 1 : 0;
   if (!s_v) { ov_80078610(c); return; }
   static long ng = 0, nb = 0; world_init_gate(c, ov_80078610, 0x80078610u, "init78610verify", &ng, &nb);
+}
+void ov_74f24_run(Core* c) {                              // 0x80074F24 — per-area state-index select (a0=area)
+  static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("init74f24verify") ? 1 : 0;
+  if (!s_v) { ov_80074F24(c); return; }
+  static long ng = 0, nb = 0; world_init_gate(c, ov_80074F24, 0x80074F24u, "init74f24verify", &ng, &nb);
 }
 
 // 0x8007B2C0 — load a 4-entry u16 weight ramp into the scratchpad at 0x1F800170: a0==0 → descending

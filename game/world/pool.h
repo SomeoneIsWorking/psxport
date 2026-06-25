@@ -14,4 +14,6 @@ void ov_75240_run(Core* c);
 void ov_783dc_run(Core* c);
 // 0x80078610 — final per-area view init (field case-0 prefix). GATED (channel `init78610verify`).
 void ov_78610_run(Core* c);
+// 0x80074F24 — per-area state-index select (field case-0 tail; a0=area byte). GATED (`init74f24verify`).
+void ov_74f24_run(Core* c);
 #endif

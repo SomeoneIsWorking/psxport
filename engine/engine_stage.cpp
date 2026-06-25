@@ -329,7 +329,7 @@ static void ov_field_run(Core* c) {
       if (c->mem_r8(0x800bf89cu) == 2) { c->mem_w16(sm + 0x4e, 9); }
       else if (c->mem_r8(0x800bf870u) == 8) { d0(c, 0x80114b90u); }
       else if (c->mem_r32(0x800bf870u) == 0x15) { c->mem_w16(sm + 0x4e, 0xb); return; }
-      d1(c, 0x80074f24u, c->mem_r8(0x800bf870u));
+      c->r[4] = c->mem_r8(0x800bf870u); ov_74f24_run(c);   // OWNED native — replaces d1(0x80074f24, area)
       break;
     case 2:
       d2(c, 0x80058304u, 0x800e7e80u, 0xc);

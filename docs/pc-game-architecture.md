@@ -189,6 +189,14 @@ render subsystem replaces them.
     `init78610verify` match #1/#2 byte-exact (incidental v0=0x80100000 mirrored — the `lui v0,0x8010` value
     survives to return). 151 nodes gate-off. **The ENTIRE field case-0 prefix is now PC-native** (pool init →
     796dc → 263e8 → placement → 75240 → 783dc → 78610); no rec_dispatch leaves remain in it.
+  - **Case-0 tail state-index select FUN_80074F24 owned native+live (2026-06-25):** the field case-0 tail
+    leaf → `ov_74f24_run` (game/world/pool.cpp), replacing `d1(0x80074f24, area)`. Early-outs on scratchpad
+    0x1F800137==1 / area==21; else selects a per-area state index s0 (42, 10, or a bit-masked table lookup of
+    0x800BFE56 → 0x800A4F68/0x800A4F50), calls 0x800750D8(s0,1), publishes s0 to scratchpad 0x1F80023B,
+    clears 0x800BE22B. Callee 0x800750D8 stays a PSX leaf. Gate `init74f24verify` match #1/#2 byte-exact
+    (incidental v0 mirrored for both early-outs and the work path). 151 nodes gate-off. **The whole field
+    stage case-0 is now PC-native** (only the area==8 conditional 0x80114b90 leaf remains, never hit on
+    seaside).
   - **NEXT — extend the contiguity:** own the per-object behavior handlers
     (the model-attach sites FUN_80077B38 +
     other per-object render-record callers) so the full graphics-bind set runs native; own the remaining
