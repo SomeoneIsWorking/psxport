@@ -411,7 +411,13 @@ void pad_service_frame(Core* c) {
     static uint32_t  rec_fc = 0;           // shared record/replay frame index
     if (!rec_init) {
       rec_init = 1;
+      // Recording is ALWAYS ON by default (so a hand-played session — e.g. on the user's macOS build —
+      // is captured and can be sent over for deterministic replay/diagnosis). Default sink:
+      // scratch/bin/pad_session.pad, overwritten each run. Override the path with PSXPORT_PAD_RECORD=<path>;
+      // disable with PSXPORT_PAD_RECORD=0. Skipped while REPLAYING (no point re-capturing the replayed input).
       const char* rpath = cfg_str("PSXPORT_PAD_RECORD");
+      if (rpath && !strcmp(rpath, "0")) rpath = nullptr;                 // explicit disable
+      else if (!rpath && !cfg_str("PSXPORT_PAD_REPLAY")) rpath = "scratch/bin/pad_session.pad";  // default-on
       if (rpath) { rec_fp = fopen(rpath, "wb");
         fprintf(stderr, "[padrec] recording -> %s\n", rec_fp ? rpath : "(open FAILED)"); }
       const char* ppath = cfg_str("PSXPORT_PAD_REPLAY");
@@ -447,6 +453,20 @@ void pad_service_frame(Core* c) {
       snprintf(p, sizeof p, "scratch/screenshots/padshot_%u.ppm", rec_fc);
       gpu_vk_shot(c, p);
       fprintf(stderr, "[padrec] shot at replay-frame %u -> %s\n", rec_fc, p);
+    }
+    // PSXPORT_PAD_DUMP_AT=f0,f1,... : dump 2MB guest RAM (+.spad) at these REPLAY frames to
+    // scratch/bin/padram_<f>.bin — for A/B diffing scene state (e.g. village vs hut interior).
+    static int dump_init = 0; static uint32_t dump_at[32]; static int dump_n = 0;
+    if (!dump_init) { dump_init = 1; const char* s = cfg_str("PSXPORT_PAD_DUMP_AT");
+      if (s) { char buf[256]; snprintf(buf, sizeof buf, "%s", s);
+        for (char* t = strtok(buf, ","); t && dump_n < 32; t = strtok(nullptr, ","))
+          dump_at[dump_n++] = (uint32_t)strtoul(t, 0, 0); } }
+    for (int i = 0; i < dump_n; i++) if (dump_at[i] == rec_fc) {
+      char p[96]; snprintf(p, sizeof p, "scratch/bin/padram_%u.bin", rec_fc);
+      FILE* fp = fopen(p, "wb"); if (fp) { fwrite(c->ram, 1, 0x200000, fp); fclose(fp); }
+      char sp[112]; snprintf(sp, sizeof sp, "%s.spad", p);
+      FILE* spf = fopen(sp, "wb"); if (spf) { fwrite(c->scratch, 1, sizeof c->scratch, spf); fclose(spf); }
+      fprintf(stderr, "[padrec] dumpram at replay-frame %u -> %s\n", rec_fc, p);
     }
     // PSXPORT_PAD_TRACE=lo-hi : log the transition/scene markers EVERY replay frame in [lo,hi] (pad-frame
     // indexed — the faithful axis). Finds which field moves when the player walks into the hut (the
