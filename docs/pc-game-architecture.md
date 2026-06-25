@@ -335,6 +335,20 @@ render subsystem replaces them.
     clobbering c->r[4] between FUN_80051B04 and the next FUN_8007AAE8. Transcribed 1:1; control flow + direct
     node/record writes owned native. Verified live: `obj8013a900verify` 1550+ matches, 0 mismatch; gate-off
     field clean (151 nodes, 0 bad opcode).
+  - **Behavior handler FUN_80117658 owned native+live (2026-06-25):** added `engine/objbeh_80117658.cpp`
+    (~x1552/field-frame on seaside, ~430 instr — the biggest overlay handler owned so far). Two-level state
+    machine on node[4] with s2 = node[0x10] (a guest pointer the handler writes velocity/timer fields through,
+    s2[14/20/22/24/26]): state 0 INIT seeds node fields per node[3] (0/1) + calls FUN_80077B38/FUN_80051B70,
+    then FUN_8004B354 and node[4]++; state 1 is a per node[5]/node[94]/node[3] sub-machine driving the s2 fields
+    (3 PRNG draws via FUN_8009A450) that converges on a shared node[3] dispatch (node[3]==0 -> FUN_8007778C +
+    FUN_80077B5C + FUN_8004B374; node[3]==1 -> scratchpad[0x207]<5 gate + node[0xC0] struct -> pos update via
+    FUN_800517F8); state 2 fires sound/effect leaves (FUN_8004D4C4/4F4, FUN_8004ED94, FUN_8004B0D8,
+    FUN_8004BD04/BEA8, FUN_80042354, FUN_80040CDC, FUN_8005308C) + area-flag poke 0x800BF9DC|=1; state 3 ->
+    FUN_8007A624. Transcribed 1:1 as a register machine (goto labels = guest addresses); delay-slot stores
+    before a jal (node[0x3c]/0x5e/0x4/0x2b) mirrored to execute before the callee; lh/sra signed vs lhu/lbu
+    unsigned preserved. PRNG draws return via c->r[2] and advance the shared RNG (gate rolls RAM back so both
+    sides draw the same sequence). Control flow + direct node/s2/global writes owned native. Verified live:
+    `obj80117658verify` 1550+ matches, 0 mismatch; gate-off field clean (151 nodes, 0 bad opcode).
   - **NEXT — extend the contiguity:** own the remaining per-object behavior handlers
     (e.g. the overlay-resident 0x801xxxxx handlers; the model-attach sites FUN_80077B38 +
     other per-object render-record callers) so the full graphics-bind set runs native; own the remaining
