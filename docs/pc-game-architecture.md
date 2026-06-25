@@ -381,6 +381,15 @@ render subsystem replaces them.
     guest a0 at first FUN_8007AAE8 is the original state byte (set c->r[4]=orig, don't touch across loop).
     Transcribed 1:1; control flow + direct node/record/global writes owned native. Verified live:
     `obj80131d08verify` 750+ matches, 0 mismatch; gate-off field clean (151 nodes, 0 bad opcode).
+  - **Behavior handler FUN_80132400 owned native+live (2026-06-25):** added `engine/objbeh_80132400.cpp`
+    (~x778/field-frame on seaside, ~80 instr). Outer state machine on node[4]. State 0 INIT:
+    v0=FUN_80051B70(node,12,37); bail if v0!=0, else seed node[0x80..0x86]=30/60/50/100,
+    node[0x60]=-2350/node[0x62]=-1630/node[0x50]=1920, node[0]=1, node[0x29]=0, node[0x5E]=0, node[4]++,
+    node[0x32]+=128, node[3]=0, then node[0x10]=FUN_8013A730(node). State 1: if mem[0x800BF89C]==2 OR
+    mem[0x800E7EAA]!=node[4] -> v0=FUN_8007778C(node); if v0!=0 -> FUN_80132020 + FUN_800517F8; ALWAYS
+    node[0x2B]=0 at the tail. State 3 -> FUN_8007A624. Dead `addiu v1,v0,-1936` (0x800BF870, never
+    stored/read) dropped. Transcribed 1:1; control flow + direct node/global writes owned native. Verified
+    live: `obj80132400verify` 750+ matches, 0 mismatch; gate-off field clean (151 nodes, 0 bad opcode).
   - **NEXT — extend the contiguity:** own the remaining per-object behavior handlers
     (e.g. the overlay-resident 0x801xxxxx handlers; the model-attach sites FUN_80077B38 +
     other per-object render-record callers) so the full graphics-bind set runs native; own the remaining
