@@ -2249,6 +2249,13 @@ void GpuVkState::shot(const char* path) {
   vk_dump_to(path, s_last_sx, s_last_sy, s_last_w, s_last_h);
   fprintf(stderr, "[vk_shot] wrote %s (%dx%d @ %d,%d)\n", path, s_last_w, s_last_h, s_last_sx, s_last_sy);
 }
+// SBS: capture render TARGET 1 (s_tex_b = core B / right pane) instead of s_tex. The plain shot reads
+// s_tex (target 0 = core A); under PSXPORT_SBS this lets a debug-server `shotb` read the OTHER core's pane.
+void GpuVkState::shot_b(const char* path) {
+  if (!gpu_vk_enabled() || !s_inited) { fprintf(stderr, "[vk_shot] VK not active\n"); return; }
+  s_rb_img = s_tex_b; vk_dump_to(path, s_last_sx, s_last_sy, s_last_w, s_last_h); s_rb_img = 0;
+  fprintf(stderr, "[vk_shot] wrote %s (target B, %dx%d @ %d,%d)\n", path, s_last_w, s_last_h, s_last_sx, s_last_sy);
+}
 // Read back an ARBITRARY VK VRAM region (e.g. a texture atlas page) to a PPM — to verify a texture
 // is actually present in the VK image (s_tex) where the semi pass samples it. (debug server `vkvram`)
 void gpu_vk_vram_region(const char* path, int x, int y, int w, int h) {
@@ -2556,6 +2563,7 @@ void gpu_vk_draw_tri(Core* core, int x0,int y0,int r0,int g0,int b0, int x1,int 
 void gpu_vk_draw_tritri(Core* core, const int* xs, const int* ys, const int* us, const int* vs, const unsigned char* rs, const unsigned char* gs, const unsigned char* bs, int tpx, int tpy, int mode, int raw, int clutx, int cluty, int twmx, int twmy, int twox, int twoy, int dax0, int day0, int dax1, int day1) { core->game->gpu_vk.draw_tritri(xs,ys,us,vs,rs,gs,bs,tpx,tpy,mode,raw,clutx,cluty,twmx,twmy,twox,twoy,dax0,day0,dax1,day1); }
 void gpu_vk_draw_semi(Core* core, const int* xs, const int* ys, const int* us, const int* vs, const unsigned char* rs, const unsigned char* gs, const unsigned char* bs, int tpx, int tpy, int mode, int raw, int clutx, int cluty, int twmx, int twmy, int twox, int twoy, int dax0, int day0, int dax1, int day1, int blend) { core->game->gpu_vk.draw_semi(xs,ys,us,vs,rs,gs,bs,tpx,tpy,mode,raw,clutx,cluty,twmx,twmy,twox,twoy,dax0,day0,dax1,day1,blend); }
 void gpu_vk_shot(Core* core, const char* path) { core->game->gpu_vk.shot(path); }
+void gpu_vk_shot_b(Core* core, const char* path) { core->game->gpu_vk.shot_b(path); }   // SBS: core B / right pane
 void gpu_vk_frame_end(Core* core, const uint16_t* svram, int frame) { core->game->gpu_vk.frame_end(svram, frame); }
 void gpu_vk_tritest(Core* core) { core->game->gpu_vk.tritest(); }
 // Dual-view: select which geometry batch the emit path accumulates into (0=native/left, 1=PSX/right).

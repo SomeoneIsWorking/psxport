@@ -213,6 +213,12 @@ static void dbg_exec(FILE* out, const char* line) {
     char spath[264]; snprintf(spath, sizeof spath, "%s.spad", path);
     FILE* sp = fopen(spath, "wb");
     if (sp) { fwrite(s_ctx->scratch, 1, sizeof s_ctx->scratch, sp); fclose(sp); fprintf(out, "dumpram scratchpad -> %s\n", spath); }
+  } else if (!strcmp(cmd, "shotb")) {
+    // SBS only: capture render TARGET 1 (core B / right pane). Plain `shot` reads target 0 (core A).
+    char path[256] = "scratch/screenshots/dbg_b.ppm";
+    sscanf(line, "%*s %255s", path);
+    void gpu_vk_shot_b(Core*, const char*); gpu_vk_shot_b(s_ctx, path);
+    fprintf(out, "shotb (VK target B) -> %s\n", path);
   } else if (!strcmp(cmd, "vkshot")) {
     char path[256] = "scratch/screenshots/dbg_vk.ppm";
     sscanf(line, "%*s %255s", path);

@@ -90,6 +90,7 @@ struct GpuVkState {
                  int tpx, int tpy, int mode, int raw, int clutx, int cluty,
                  int twmx, int twmy, int twox, int twoy, int dax0, int day0, int dax1, int day1, int blend);
   void shot(const char* path);
+  void shot_b(const char* path);   // SBS: capture target 1 (core B / right pane)
   void frame_end(const uint16_t* svram, int frame);
   void tritest();
   // internal helpers (called via this from the methods above)

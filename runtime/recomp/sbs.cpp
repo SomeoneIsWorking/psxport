@@ -104,6 +104,12 @@ uint32_t s_frame = 0;                           // lockstep frame counter (since
 
 // --- divergence record (frame-boundary RAM/scratchpad diff) ---
 bool     s_div_found = false;
+// The frame-boundary divergence check is only meaningful in actual FREE-ROAM gameplay — during boot / logos /
+// FMV / menu / the intro cutscene the native and PSX cores legitimately differ (different code owns those),
+// so checking there just spuriously pauses the harness. ARM it only once BOTH cores reach free-roam, detected
+// per core as "the cutscene flag went up (intro) and then back down" (mirrors nav_step's gameplay-start test).
+bool     s_div_armed = false;
+bool     s_seen_cut_a = false, s_seen_cut_b = false, s_fr_a = false, s_fr_b = false;
 uint32_t s_div_frame = 0, s_div_addr = 0, s_div_end = 0;
 char     s_bt_a[4096] = {0}, s_bt_b[4096] = {0};
 bool     s_have_dbgsrv = false;   // PSXPORT_DEBUG_SERVER set? — only PAUSE-on-divergence when it is (so the
@@ -373,8 +379,9 @@ void sbs_run(const char* exe_path) {
   // the user watches both boot side by side and each PAUSES its auto-input at free-roam while the other
   // catches up (CD/GTE/SPU/MDEC are now all per-instance, so concurrent boot is safe — see *_bind). After
   // both reach free-roam the main lockstep loop below takes over (driven by host/server input).
-  navigate_both();
-  fprintf(stderr, "[sbs] both cores at gameplay-start — LOCKSTEP begins. Drive with the window; inspect via the debug server.\n");
+  // You drive BOTH cores yourself from frame 0 (boot → logos → menu → game) with the window — no auto-skip,
+  // so front-end / transition bugs are fully shown. The lockstep loop below is host-input-driven.
+  fprintf(stderr, "[sbs] LOCKSTEP from boot — drive both panes with the window; inspect via the debug server.\n");
 
   for (;;) {
     Core* sel = s_sel ? &g_b->core : &g_a->core;
@@ -402,7 +409,13 @@ void sbs_run(const char* exe_path) {
       g_a->core.wwatch_arm(0, 0); g_b->core.wwatch_arm(0, 0);
       dbg_set_paused(1);
     } else if (!s_div_found) {
-      check_divergence();
+      if (!s_div_armed) {   // arm only once BOTH cores reach free-roam (cutscene flag went up then down)
+        if (g_a->core.mem_r8(CUT_FLAG)) s_seen_cut_a = true; else if (s_seen_cut_a) s_fr_a = true;
+        if (g_b->core.mem_r8(CUT_FLAG)) s_seen_cut_b = true; else if (s_seen_cut_b) s_fr_b = true;
+        if (s_fr_a && s_fr_b) { s_div_armed = true;
+          fprintf(stderr, "[sbs] both cores at FREE-ROAM (f%u) — divergence check ARMED.\n", s_frame); }
+      }
+      if (s_div_armed) check_divergence();
     }
     s_frame++;
   }

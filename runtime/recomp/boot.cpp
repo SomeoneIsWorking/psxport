@@ -95,7 +95,9 @@ int main(int argc, char** argv) {
   // lockstep with identical input, differing only by mode (render / gameplay / both); auto-pauses on the
   // first guest-RAM divergence and serves the divergence + guest backtraces over the debug server. Like
   // DUALCORE it owns its own Game instances, so the primary `c`/`game` above is left unused.
-  if (cfg_on("PSXPORT_SBS")) {
+  // Setting PSXPORT_SBS_MODE is enough to enable the harness (no need to ALSO set PSXPORT_SBS=1) —
+  // a mode selection with the harness off was just a foot-gun. PSXPORT_SBS=1 alone still works (default mode).
+  if (cfg_on("PSXPORT_SBS") || cfg_str("PSXPORT_SBS_MODE")) {
     void sbs_run(const char* exe_path);
     sbs_run(path);
     return 0;
