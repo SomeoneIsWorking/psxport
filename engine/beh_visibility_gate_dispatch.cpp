@@ -192,9 +192,14 @@ post_c604:                                             // @0x8004c604
   goto tail_c750;                                      // 0x8004c60c
 
 tail_c74c:                                             // @0x8004c74c
-  c->mem_w8(obj + 0x29, 0);                            // 0x8004c74c: node[0x29] = 0
   // falls into tail_c750
 tail_c750:                                             // @0x8004c750
+  // Every recomp path that reaches c750 has just written node[0x29]=0: tail_c74c (0x8004c74c) and ALSO
+  // each cases-6-14 `j c750` sets node[0x29]=0 in its DELAY SLOT (0x8004c634/c64c/c65c/c66c/c690/c6a8/
+  // c6c0/c6d8/c6f0/c700/c710/c720/c730/c740). The earlier transcription dropped those delay-slot stores
+  // for cases 6-14; clearing node[0x29] here covers all of them faithfully (redundant for cases 0-5,
+  // which already cleared it in post_c48c/post_c604). (later-232c fix)
+  c->mem_w8(obj + 0x29, 0);                            // node[0x29] = 0 (all c750 predecessors)
   c->mem_w8(obj + 0x2b, 0);                            // 0x8004c754 (delay slot of j c920): node[0x2b]=0
   return;                                              // -> EPI
 
@@ -273,8 +278,9 @@ void ov_beh_visibility_gate_dispatch(Core* c) {
   int so = -1; for (uint32_t a = 0; a < 0x400; a++) if (c->scratch[a] != spadN[a]) { so = (int)a; break; }
   static long ng = 0, nb = 0;
   if (ro >= 0 || so >= 0) {
-    if (nb++ < 40) fprintf(stderr, "[visibility_gate_dispatchverify] MISMATCH obj=%08x st=%u sub=%u ram@%x spad@%x\n",
-                           obj, c->mem_r8(obj + 4), c->mem_r8(obj + 5), ro, so);
+    if (nb++ < 40) fprintf(stderr, "[visibility_gate_dispatchverify] MISMATCH obj=%08x st=%u n5e=%u sub=%u ram@%x (nat=%02x ora=%02x) spad@%x\n",
+                           obj, c->mem_r8(obj + 4), c->mem_r8(obj + 0x5e), c->mem_r8(obj + 5), ro,
+                           ro >= 0 ? ramN[ro] : 0, ro >= 0 ? c->ram[ro] : 0, so);
   } else if (++ng % 50 == 0) fprintf(stderr, "[visibility_gate_dispatchverify] %ld matches\n", ng);
 }
 

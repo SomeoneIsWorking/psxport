@@ -123,8 +123,7 @@ static bool dispatch_native_behavior(Core* c, uint32_t h) {
     case 0x8013A330u: ov_beh_lift_platform_run(c); return true;
     case 0x80136954u: ov_beh_event_record_machine_run(c); return true;
     case 0x8011C164u: ov_beh_typed_variant_router_run(c); return true;
-    // 0x8004C238: native body written (beh_visibility_gate_dispatch.cpp) but A/B gate shows 40 MISMATCH (later-232c) —
-    // NOT wired until fixed; runs as PSX (rec_dispatch).
+    case 0x8004C238u: ov_beh_visibility_gate_dispatch_run(c); return true;  // resident; cases-6-14 0x29 delay-slot fixed (later-232c)
     default: return false;
   }
 }

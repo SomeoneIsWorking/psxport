@@ -206,7 +206,7 @@ render subsystem replaces them.
     FUN_80077EFC, node[1]=1. Control flow + all writes owned native; the 7 sub-behavior leaves stay PSX via
     rec_dispatch. Verified live on seaside: `obj8004ce14verify` 950+ matches, 0 mismatch (full RAM+scratchpad
     A/B); gate-off native-driven reaches the field clean (151 nodes, 0 bad opcode). One more resident handler
-    (0x8006F2D0, ~450 instr) + the overlay handlers remain; 0x8004C238 still has its 40-mismatch bug.
+    (0x8006F2D0, ~450 instr) + the overlay handlers remain.
   - **Behavior handler FUN_8006F2D0 owned native+live (2026-06-25):** added `engine/beh_pad_child_linker.cpp`
     and routed it through `dispatch_native_behavior`. THE hottest still-PSX resident handler (~x777/field-frame,
     ~450 instr) — a state machine on node[4]: state 0 allocates a node[8]-long record list (FUN_8007AAE8 per
@@ -218,7 +218,7 @@ render subsystem replaces them.
     delay-slot clobbers are exact (e.g. the f570 `v1=512` that deads the f574/f5b8 sub-branches). Control flow +
     all writes owned native; the 9 sub-behavior leaves stay PSX via rec_dispatch. Verified live on seaside:
     `obj8006f2d0verify` 750+ matches, 0 mismatch (full RAM+scratchpad A/B); gate-off native-driven reaches the
-    field clean (151 nodes, 0 bad opcode). Overlay handlers remain; 0x8004C238 still has its 40-mismatch bug.
+    field clean (151 nodes, 0 bad opcode). Overlay handlers remain.
   - **Behavior handler FUN_8013C538 owned native+live (2026-06-25):** added `engine/beh_scatter_record_dither.cpp`
     and routed it through `dispatch_native_behavior`. THE hottest still-PSX OVERLAY handler (~x6091/field-frame
     on seaside; ~110 instr) — an area-overlay routine NOT in MAIN.EXE, disassembled from the field RAM dump
@@ -485,6 +485,13 @@ render subsystem replaces them.
     case-2's FUN_8004bd64 takes a 5th *stacked* arg → mirror the recomp frame (sp-0x30) into guest stack
     below entry sp + dispatch with that frame sp. Verified live: `typed_variant_routerverify` 750+ matches,
     0 mismatch; gate-off field clean (151 nodes, 0 bad opcode).
+  - **Behavior handler FUN_8004C238 = `beh_visibility_gate_dispatch` now LIVE (2026-06-25, later-232c fix):**
+    the long-written resident handler that had a 40-mismatch gate bug is now wired and verified. Root cause:
+    STATE-1 cases 6-14 each clear `node[0x29]=0` in the DELAY SLOT of their `j 0x8004c750` (0x8004c634/c64c/
+    c65c/c66c/c690/c6a8/c6c0/c6d8/c6f0/c700/c710/c720/c730/c740) — the original transcription dropped those
+    delay-slot stores and just fell through to the c750 tail (which only cleared node[0x2b]). Fix: clear
+    node[0x29]=0 at the shared c750 tail (every recomp predecessor of c750 has it 0, so exact). Verified live
+    on seaside: `visibility_gate_dispatchverify` 3100+ matches, 0 mismatch; gate-off field clean (151 nodes).
   - **NEXT — extend the contiguity:** own the remaining per-object behavior handlers
     (e.g. the overlay-resident 0x801xxxxx handlers; the model-attach sites FUN_80077B38 +
     other per-object render-record callers) so the full graphics-bind set runs native; own the remaining
