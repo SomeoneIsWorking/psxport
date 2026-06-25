@@ -65,8 +65,10 @@ or level — they can't be a bare channel:
   `CULL`/`CULL_FAR`/`CULL_FOV`, `*_RECOMP` (`OT_/LZ_/GEOM_/RECOMP_OBJWALK`), `TRANSPLANT`.
 - **SDL_GPU renderer (gpu_gpu.cpp):** `GPU_TRACE` (per-present src-VRAM occupancy + sampled disp region +
   readback nonzero count), `GPU_DEBUG` (enable the SDL_GPU device validation layer — slows pipeline
-  compile, can trip the boot watchdog; raise `WATCHDOG_BOOT` when using it). `VK_HEADLESS` (offscreen, no
-  window) and `FULLSCREEN`/`WINDOWED` are honored unchanged.
+  compile, can trip the boot watchdog; raise `WATCHDOG_BOOT` when using it), `GPU_SELFTEST` (headless
+  renderer regression test: render a known VRAM pattern through the present pipeline into an offscreen
+  RGBA8 target and assert orientation + 1555 unpack, then exit 0=PASS/1=FAIL — runs `tools/test_gpu_render.sh`;
+  no disc needed). `VK_HEADLESS` (offscreen, no window) and `FULLSCREEN`/`WINDOWED` are honored unchanged.
 - **Boot / automation:** `NO_FMV`, `NOAUDIO`, `NOPACE`, `NOSKIP`, `NATIVE_FRAMES`, `AUTO_GAMEPLAY`,
   `AUTO_NEWGAME`, `SCEA_SKIP`, `WATCHDOG`, `REPL`, `DEBUG_SERVER`, `T2_NOSEQTICK`, `FMV_*`, `FORCE_*`.
 - **Paths:** `TOMBA2_DISC`, `TOMBA2_CARD`, `DISC`.

@@ -119,11 +119,12 @@ static SDL_GPUShader* make_shader(const uint32_t* code, unsigned len, SDL_GPUSha
 // A fullscreen-triangle pipeline (no vertex input) sampling one fragment texture, with one fragment
 // uniform buffer, no depth, no blend — used for both present (R16_UINT VRAM) and image (RGBA8) passes.
 static SDL_GPUGraphicsPipeline* make_fullscreen_pipeline(const uint32_t* vs_code, unsigned vs_len,
-                                                         const uint32_t* fs_code, unsigned fs_len) {
+                                                         const uint32_t* fs_code, unsigned fs_len,
+                                                         SDL_GPUTextureFormat fmt) {
   SDL_GPUShader* vs = make_shader(vs_code, vs_len, SDL_GPU_SHADERSTAGE_VERTEX, 0, 0);
   SDL_GPUShader* fs = make_shader(fs_code, fs_len, SDL_GPU_SHADERSTAGE_FRAGMENT, 1, 1);
   SDL_GPUColorTargetDescription ct = {};
-  ct.format = s_swap_fmt;   // blend disabled (enable_blend = false by zero-init); writes all channels
+  ct.format = fmt;   // blend disabled (enable_blend = false by zero-init); writes all channels
   SDL_GPUGraphicsPipelineCreateInfo gp = {};
   gp.vertex_shader = vs; gp.fragment_shader = fs;
   gp.primitive_type = SDL_GPU_PRIMITIVETYPE_TRIANGLELIST;
@@ -180,8 +181,8 @@ static void init_gpu(void) {
 
   // Pipelines need the swapchain format (color target) — windowed only; headless never runs a render pass.
   if (!s_headless) {
-    s_present_pipe = make_fullscreen_pipeline(spv_g_present_vert, spv_g_present_vert_len, spv_g_present_frag, spv_g_present_frag_len);
-    s_image_pipe   = make_fullscreen_pipeline(spv_g_image_vert,   spv_g_image_vert_len,   spv_g_image_frag,   spv_g_image_frag_len);
+    s_present_pipe = make_fullscreen_pipeline(spv_g_present_vert, spv_g_present_vert_len, spv_g_present_frag, spv_g_present_frag_len, s_swap_fmt);
+    s_image_pipe   = make_fullscreen_pipeline(spv_g_image_vert,   spv_g_image_vert_len,   spv_g_image_frag,   spv_g_image_frag_len, s_swap_fmt);
   }
   fprintf(stderr, "[gpu_gpu] %s renderer up (VRAM %dx%d R16_UINT)\n", s_headless ? "headless" : "windowed", VRAM_W, VRAM_H);
 }
@@ -427,7 +428,71 @@ void GpuVkState::present_sbs(const uint16_t* vramA, const uint16_t* vramB, int s
   (void)vramB; (void)repaint;
   if (vramA) present(vramA, sx, sy, w, h);
 }
-void GpuVkState::tritest() {}
+// PSXPORT_GPU_SELFTEST=1: headless renderer self-test, then exit. Renders a KNOWN VRAM pattern through the
+// REAL present pipeline (present.vert/frag) into an offscreen RGBA8 target, reads it back, and asserts:
+//   (1) ORIENTATION — VRAM row 0 (top) lands at the TOP of the output, not the bottom. This is the
+//       regression guard for the SDL_GPU swapchain Y-flip (the "rendering upside down" bug).
+//   (2) 1555 UNPACK — the present.frag 1555→RGB decode is correct (red marker decodes red, blue→blue).
+// No disc/game needed (boot.cpp calls this before load_exe). Prints PASS/FAIL and exits with that status.
+void GpuVkState::tritest() {
+  if (!cfg_on("PSXPORT_GPU_SELFTEST")) return;
+  s_headless = 1;                      // force offscreen — no window/swapchain
+  if (!s_inited) init_gpu();
+  const int TW = 320, TH = 240;        // 4:3 offscreen target (so present's letterbox is full-viewport)
+
+  // Offscreen RGBA8 color target + its present pipeline + a download buffer.
+  SDL_GPUTextureCreateInfo ti = {};
+  ti.type = SDL_GPU_TEXTURETYPE_2D; ti.format = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM;
+  ti.usage = SDL_GPU_TEXTUREUSAGE_COLOR_TARGET; ti.width = TW; ti.height = TH;
+  ti.layer_count_or_depth = 1; ti.num_levels = 1;
+  SDL_GPUTexture* tgt = SDL_CreateGPUTexture(s_dev, &ti); GPUCHK(tgt, "selftest target");
+  SDL_GPUGraphicsPipeline* pp = make_fullscreen_pipeline(spv_g_present_vert, spv_g_present_vert_len,
+      spv_g_present_frag, spv_g_present_frag_len, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM);
+  SDL_GPUTransferBufferCreateInfo dni = {}; dni.usage = SDL_GPU_TRANSFERBUFFERUSAGE_DOWNLOAD; dni.size = TW * TH * 4;
+  SDL_GPUTransferBuffer* dl = SDL_CreateGPUTransferBuffer(s_dev, &dni); GPUCHK(dl, "selftest dl");
+
+  // Pattern: VRAM top half (rows < 256) = PSX red (1555 0x001F), bottom half = PSX blue (0x7C00).
+  static uint16_t pat[VRAM_W * VRAM_H];
+  for (int y = 0; y < VRAM_H; y++) for (int x = 0; x < VRAM_W; x++)
+    pat[y * VRAM_W + x] = (y < VRAM_H / 2) ? 0x001F : 0x7C00;
+
+  SDL_GPUCommandBuffer* cmd = SDL_AcquireGPUCommandBuffer(s_dev); GPUCHK(cmd, "selftest cmd");
+  upload_vram(cmd, pat);
+  SDL_GPUColorTargetInfo cti = {}; cti.texture = tgt; cti.clear_color = (SDL_FColor){ 0, 0, 0, 1 };
+  cti.load_op = SDL_GPU_LOADOP_CLEAR; cti.store_op = SDL_GPU_STOREOP_STORE;
+  SDL_GPURenderPass* rp = SDL_BeginGPURenderPass(cmd, &cti, 1, NULL);
+  PresentPC pc; pc.disp[0] = 0; pc.disp[1] = 0; pc.disp[2] = VRAM_W; pc.disp[3] = VRAM_H;
+  pc.fade[0] = pc.fade[1] = pc.fade[2] = pc.fade[3] = 0;
+  SDL_PushGPUFragmentUniformData(cmd, 0, &pc, sizeof pc);
+  SDL_GPUViewport vp = { 0, 0, (float)TW, (float)TH, 0.0f, 1.0f };
+  SDL_Rect sc = { 0, 0, TW, TH };
+  SDL_BindGPUGraphicsPipeline(rp, pp);
+  SDL_SetGPUViewport(rp, &vp); SDL_SetGPUScissor(rp, &sc);
+  SDL_GPUTextureSamplerBinding tsb = { s_vram_tex, s_samp_nearest };
+  SDL_BindGPUFragmentSamplers(rp, 0, &tsb, 1);
+  SDL_DrawGPUPrimitives(rp, 3, 1, 0, 0);
+  SDL_EndGPURenderPass(rp);
+  SDL_GPUCopyPass* cp = SDL_BeginGPUCopyPass(cmd);
+  SDL_GPUTextureRegion srcr = {}; srcr.texture = tgt; srcr.w = TW; srcr.h = TH; srcr.d = 1;
+  SDL_GPUTextureTransferInfo dsti = {}; dsti.transfer_buffer = dl; dsti.pixels_per_row = TW; dsti.rows_per_layer = TH;
+  SDL_DownloadFromGPUTexture(cp, &srcr, &dsti);
+  SDL_EndGPUCopyPass(cp);
+  SDL_GPUFence* fence = SDL_SubmitGPUCommandBufferAndAcquireFence(cmd);
+  SDL_WaitForGPUFences(s_dev, true, &fence, 1); SDL_ReleaseGPUFence(s_dev, fence);
+
+  const uint8_t* px = (const uint8_t*)SDL_MapGPUTransferBuffer(s_dev, dl, false);
+  const uint8_t* top = px + ((size_t)(TH / 4) * TW + TW / 2) * 4;        // y=60: should be RED (VRAM row ~64)
+  const uint8_t* bot = px + ((size_t)(3 * TH / 4) * TW + TW / 2) * 4;    // y=180: should be BLUE (VRAM row ~448)
+  int top_red  = (top[0] > 200 && top[1] < 60 && top[2] < 60);
+  int bot_blue = (bot[2] > 200 && bot[0] < 60 && bot[1] < 60);
+  int ok = top_red && bot_blue;
+  fprintf(stderr, "[gpu_selftest] top(%d,%d,%d) expect RED  bottom(%d,%d,%d) expect BLUE  orientation+1555 => %s\n",
+          top[0], top[1], top[2], bot[0], bot[1], bot[2], ok ? "PASS" : "FAIL");
+  if (!ok && bot[0] > 200 && top[2] > 200)
+    fprintf(stderr, "[gpu_selftest] (top is BLUE, bottom is RED → image is UPSIDE DOWN — the swapchain Y-flip regressed)\n");
+  SDL_UnmapGPUTransferBuffer(s_dev, dl);
+  exit(ok ? 0 : 1);
+}
 
 // ---- shadow capture / dynamic-state hooks (3D-only; inert in Pass 1) --------------------------------
 int  gpu_vk_shadows_active(void) { return 0; }
