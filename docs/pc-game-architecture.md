@@ -414,6 +414,17 @@ render subsystem replaces them.
     FUN_80051B04 carries a0=rec); FUN_801252C0 cascade rec[20]/rec[16] mirrored before the next call.
     Transcribed 1:1. Verified live: `obj80134fd8verify` 750+ matches, 0 mismatch; gate-off field clean
     (151 nodes, 0 bad opcode).
+  - **Behavior handler FUN_80136158 owned native+live (2026-06-25):** added `engine/objbeh_80136158.cpp`
+    (~x778/field-frame on seaside, ~290 instr — a movement/steering handler with a sin step). State 0 INIT:
+    FUN_80051B70 gate + node[0x80]=576/node[0x82]=1152 + FUN_8004766C/FUN_80048750 + seed node[0x90..0x94]
+    from node[0x2E/0x32/0x36], falls through to State 1. State 1 inner node[5] machine: a should-run gate
+    (scratch[0x207]>=24 AND mem[0x800BF816]!=1), then the MATH block (gated mem[0x800BF809]==0) clamps
+    node[0x44] to a ±window, derives an angular step (rounding divides), sin(s2)·832>>12 into node[0x36]
+    (+ mem[0x800E7EB6] accumulate when node[0x29]==1), stores rec[0x0C]=s2 / node[0x44]=s1; post-math runs
+    the mem[0x800E7EAA]-keyed FUN_8007703C/8007778C + velocity-magnitude SFX (FUN_80074AF0/80074590).
+    Transcribed 1:1 with `goto L<hex>` labels (delay-slot-faithful: branch reads pre-delay reg, delay-slot
+    writes still execute). FUN_80083E80 = owned sin leaf (no GTE). Verified live: `obj80136158verify` 750+
+    matches, 0 mismatch; gate-off field clean (151 nodes, 0 bad opcode).
   - **NEXT — extend the contiguity:** own the remaining per-object behavior handlers
     (e.g. the overlay-resident 0x801xxxxx handlers; the model-attach sites FUN_80077B38 +
     other per-object render-record callers) so the full graphics-bind set runs native; own the remaining
