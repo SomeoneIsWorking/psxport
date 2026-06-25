@@ -8604,3 +8604,36 @@ capture s_tex to scratch/screenshots/fade_NNN.ppm. Deterministic capture of a tr
 NEXT: reproduce the demo→menu return WINDOWED with fadeshot (run long enough for a full attract loop, or skip
 the demo via input), capture the corrupt menu frame, identify the exact VRAM region it samples vs the menu
 texgroup target, then gate/sequence the menu render on the reload. Verify on the live windowed game (user).
+
+---
+
+## later-252 (2026-06-25): FIXED — opening-cutscene narration renders nothing on the native FIELD path (2D overlay drop)
+
+THE BUG (user-reported): selecting New Game → the opening STORY cutscene ("Tomba is living peacefully in the
+country when Zippo finds a mysterious...") drew NOTHING on native; the prior menu's stale VRAM showed through.
+
+ROOT CAUSE (definitive): the cutscene runs in the FIELD/GAME stage (0x8010637C). ov_draw_otag's field branch
+(game_tomba2.cpp) runs ov_scene_native (PC-native 3D world) and SKIPPED the PSX OT walk ENTIRELY — exactly the
+frontier note it carried ("scenenative skips ALL the PSX 2D for the field"). The narration is PSX 2D glyph
+SPRITES submitted into the OT (verified live: scene classifier saw rect=60 + 1 vramcopy on the field OT, with
+the glyph prims linked at OT[1]); the field path never walked them, so all 2D was dropped.
+
+THE PORT (the fix — 2D-overlay enumeration on the native field path):
+- runtime/recomp/gpu_native.cpp: new `g_ot_2d_only` mode for the OT walk (gpu_dma2_linked_list/gpu_gp0). When
+  set, the prim classifier DROPS all guest-OT POLYS (the GTE 3D world — OWNED by ov_scene_native, redundant in
+  the OT; and is3d is UNRELIABLE here: projprim has no records on the native field path, so is3d==0 for every
+  poly — keeping them re-emits the whole world as flat HUD → render-queue overflow + the free-roam crash) and
+  keeps only the 2D HUD SPRITES (cutscene text, dialog, item bubbles, HUD). bg sprites are dropped too.
+- engine/game_tomba2.cpp: the field branch now runs ov_scene_native THEN a 2D-only OT walk
+  (g_ot_2d_only=1; gpu_dma2_linked_list; g_ot_2d_only=0) — queued as RQ_HUD on top of the native world. This is
+  THE behavior (not a debug channel). scenenativehud kept as a DIAGNOSTIC (full walk incl. world).
+- VERIFIED LIVE (windowed, real New Game flow): the narration renders correctly on black, no stale-menu garbage.
+
+ALSO FIXED (separate real bug, runtime/recomp/dbg_server.cpp): the debug server's write() to a socket raised
+SIGPIPE with the DEFAULT disposition = TERMINATE THE WHOLE GAME, so a dropped/timed-out dbgclient connection
+killed the live port (masqueraded as a "crash" entering the New-Game cutscene). Now signal(SIGPIPE, SIG_IGN).
+
+FRONTIER LEFT: 2D-POLY overlays (gradient/fade panels) and world-billboard SPRITES are not yet discriminated on
+the field 2D-only walk (provenance — projprim/obj_depth — is empty there); the cutscene text + common HUD are
+sprites and work. A separate pre-existing DERAIL on one New-Game→free-roam entry path (bad opcode at pc=8) was
+observed and is NOT caused by this change (the OT walk executes no guest code); track separately.

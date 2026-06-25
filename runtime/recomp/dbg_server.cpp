@@ -28,6 +28,7 @@
 #include <unistd.h>
 #include <time.h>
 #include <errno.h>
+#include <signal.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
@@ -367,6 +368,11 @@ void dbg_server_start(Core* c) {
   const char* e = cfg_str("PSXPORT_DEBUG_SERVER");
   if (!e || !atoi(e)) return;
   int port = atoi(e); if (port == 1) port = 5959;
+  // A debug client that disconnects mid-reply makes the server's write() raise SIGPIPE; with the default
+  // disposition that TERMINATES THE WHOLE GAME (a dropped/timed-out dbgclient connection killed the live
+  // port — looked like a crash on entering the New-Game cutscene, but the process was merely SIGPIPE'd).
+  // Ignore it process-wide so the server just sees write()<0 and drops that one connection.
+  signal(SIGPIPE, SIG_IGN);
   gpu_provat_enable(c);                // so `provat` works at any time (not gated on PSXPORT_PROVAT)
   pthread_t t;
   if (pthread_create(&t, NULL, dbg_thread, (void*)(intptr_t)port) != 0) {

@@ -193,6 +193,7 @@ static void ov_set_geom_screen(Core* c) {       // SetGeomScreen(h) — projecti
 // This is the engine's draw submission, owned.
 void gpu_blank_display(Core* core);
 extern "C" int g_render_psx;   // engine_render.cpp — A/B compare switch (forces the PSX OT walk)
+extern int g_ot_2d_only;       // gpu_native.cpp — OT walk queues ONLY 2D HUD prims (world/bg owned natively)
 void ov_draw_otag(Core* c) {   // called directly from native_step_frame (PC-driven); NOT an override
   // #7/#11 finish: while the DEMO/title front-end is still LOADING its assets (sub-SM task0+0x48 < 2, the
   // s4a load ramp), the title composites its menu/font over whatever VRAM the FMV/SCEA splash left — so the
@@ -217,8 +218,18 @@ void ov_draw_otag(Core* c) {   // called directly from native_step_frame (PC-dri
   // bubbles appear they need native 2D (RQ_HUD/OVERLAY) or they'll be missing. Free-roam is correct now.
   bool field = (c->mem_r32(0x801FE00Cu) == 0x8010637Cu);
   if (!g_render_psx && (field || cfg_dbg("scenenative"))) {
-    if (cfg_dbg("scenenativehud")) gpu_dma2_linked_list(c, c->r[4]);   // bring-up: keep PSX 2D on top
     void ov_scene_native(Core*); ov_scene_native(c);
+    // The native field path owns the 3D world + backdrop, but the field still submits its 2D OVERLAY
+    // through the PSX OT: the opening-cutscene narration glyphs, in-game dialog / item bubbles, menus,
+    // HUD. Enumerate the OT in 2D-overlay-only mode (g_ot_2d_only) so those 2D prims are queued as
+    // RQ_HUD on top of the native world while the OT's 3D-world / backdrop prims are dropped (owned
+    // natively — keeping them would double-draw the world). This is THE behavior, not a debug channel:
+    // without it the opening story cutscene rendered nothing and the prior menu's stale VRAM showed
+    // through. (scenenativehud kept as a DIAGNOSTIC: full walk incl. world, to A/B the native world
+    // render against the PSX 2D-on-top composite.)
+    g_ot_2d_only = cfg_dbg("scenenativehud") ? 0 : 1;
+    gpu_dma2_linked_list(c, c->r[4]);
+    g_ot_2d_only = 0;
   } else {
     gpu_dma2_linked_list(c, c->r[4]);
   }

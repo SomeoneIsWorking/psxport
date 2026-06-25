@@ -161,6 +161,16 @@ int GpuState::obj_depth_lookup(uint32_t node, float* ord) {
 void gpu_obj_depth_add(Core* core, uint32_t lo, uint32_t hi, float ord) { core->game->gpu.obj_depth_add(lo, hi, ord); }
 static long s_gp0_words = 0, s_dma2 = 0;  // diagnostics: GP0 words + DMA2 triggers per frame
 long g_nd_3d = 0, g_nd_2d = 0;   // Phase-2 native-depth diag: prims drawn with real depth vs OT-order band
+// 2D-OVERLAY-ONLY OT enumeration. When the FIELD render path owns the 3D world + backdrop natively
+// (ov_scene_native), it STILL needs the guest's leftover 2D overlay prims — the opening-cutscene
+// narration glyphs, in-game dialog/item bubbles, menus, HUD — which the field code submits as PSX
+// sprites/polys into the OT. Those are not owned natively yet, so we enumerate them from the OT and
+// queue them as RQ_HUD on top of the native world. Set during that 2nd OT walk so the gpu_gp0 prim
+// classifier DROPS the 3D-world (RQ_WORLD) and backdrop (RQ_BACKGROUND) drawables (the native render
+// already produced them — keeping them would DOUBLE-draw the world); only RQ_HUD 2D prims are queued.
+// State commands (E1 texpage / E2 texwindow / draw-area/offset) are still applied for every node, so
+// the kept 2D prims bind the correct texpage. (engine owns 3D + bg; guest OT supplies leftover 2D.)
+int g_ot_2d_only = 0;
 
 // Engine-owned 2D WIDESCREEN layout. The wide 3D world is centered in the scratch FB by fb_x0=margin*ss
 // (push_wide); 2D prims share that relocation shader, so they get the same +margin. We map each native-320
@@ -999,12 +1009,25 @@ void GpuState::gp0_exec(Core* core) {
         // Engine owns ordering: hand the prim to the render queue tagged with its layer + depth mode.
         int layer = is3d ? RQ_WORLD : (bg ? RQ_BACKGROUND : RQ_HUD);
         int om    = is3d ? RQ_OM_DEPTH : (bg ? RQ_OM_2D_BG : RQ_OM_2D_FG);
+        // 2D-overlay-only field pass: drop ALL guest-OT POLYS. In the field the GTE-projected 3D world
+        // arrives as polys and is OWNED by the native render (ov_scene_native draws it via VK) — these
+        // guest polys are the redundant copy the field path never drew before. We CANNOT keep "2D" polys
+        // via the is3d test here: projprim has no records on the native field path (the projection
+        // provenance is built by the owned submit path, not this separate OT walk), so is3d==0 for EVERY
+        // poly — keeping them would re-emit the whole 3D world as flat HUD prims (render-queue overflow +
+        // double-draw, observed as the free-roam crash). 2D-poly overlays (gradient/fade panels) are a
+        // known frontier; the cutscene narration + the common HUD are SPRITES, handled below. (engine
+        // owns the field's 3D geometry; the guest OT supplies only the leftover 2D SPRITES.)
+        extern int g_ot_2d_only;
+        if (g_ot_2d_only) { /* field 3D world is native-owned; guest polys are redundant — skip */ }
+        else {
         rq_emit_or_queue(core, 1, layer, om, nv, semi, rw, xs, ys, 0, 0, us, vs, rs, gs, bs,
                          is3d ? dep : 0, mode, s_tp_x, s_tp_y, s_clut_x, s_clut_y,
                          s_tw_mx, s_tw_my, s_tw_ox, s_tw_oy, s_da_x0, s_da_y0, s_da_x1, s_da_y1, s_tp_blend);
         // fps60: a 2D billboard prim (obj_depth-tagged) gets stamped here, at queue time, as an anchor-
         // reproject billboard keyed on its object's identity (node→span lookup) — no build_lerp pre-pass.
         if (billboard) { void fps60_stamp_billboard(Core*, uint32_t); fps60_stamp_billboard(core, s_cur_node); }
+        }
       } else {
       gpu_vk_set_order(core, ord_idx);           // OT submission order -> depth (preserve opaque/semi order)
       if (!is3d) {                               // 2D band select
@@ -1157,12 +1180,17 @@ void GpuState::gp0_exec(Core* core) {
         if (objz) { dep[0] = dep[1] = dep[2] = dep[3] = od; s_seen3d = 1; }
         int layer = objz ? RQ_WORLD     : (bg ? RQ_BACKGROUND : RQ_HUD);
         int om    = objz ? RQ_OM_DEPTH  : (bg ? RQ_OM_2D_BG   : RQ_OM_2D_FG);
+        // 2D-overlay-only field pass: drop the 3D-world / backdrop prims (owned natively); keep 2D HUD.
+        extern int g_ot_2d_only;
+        if (g_ot_2d_only && layer != RQ_HUD) { /* world/bg owned by ov_scene_native — skip */ }
+        else {
         rq_emit_or_queue(core, 1, layer, om, 4, semi, rw, qx, qy, 0, 0, qu, qv, qr, qg, qb, objz ? dep : 0, mode,
                          s_tp_x, s_tp_y, s_clut_x, s_clut_y, s_tw_mx, s_tw_my, s_tw_ox, s_tw_oy,
                          s_da_x0, s_da_y0, s_da_x1, s_da_y1, s_tp_blend);
         // fps60: a 2D billboard sprite (obj_depth-tagged) gets stamped here, at queue time, as an anchor-
         // reproject billboard keyed on its object's identity (node→span lookup) — no build_lerp pre-pass.
         if (objz) { void fps60_stamp_billboard(Core*, uint32_t); fps60_stamp_billboard(core, s_cur_node); }
+        }
       } else {
       gpu_vk_set_order(core, ord_idx);          // OT submission order -> depth (preserve opaque/semi order)
       if (bg) gpu_vk_set_order_2d_bg(core, ord_idx); else gpu_vk_set_order_2d(core, ord_idx);
