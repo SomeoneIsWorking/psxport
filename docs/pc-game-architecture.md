@@ -514,10 +514,16 @@ render subsystem replaces them.
     loop relies on a0/a1 LEFTOVER — FUN_8007aae8 carries the a0 left by the prior rec_dispatch (FUN_80073750
     first iter, FUN_80051b04 after, which leaves a0=rec), so c->r[4] is NOT written before FUN_8007aae8.
     Verified live: `cube_text_spawnverify` 100 matches, 0 mismatch; gate-off field clean (151 nodes).
-  - **NEXT — extend the contiguity:** own the remaining per-object behavior handlers
-    (e.g. the overlay-resident 0x801xxxxx handlers; the model-attach sites FUN_80077B38 +
-    other per-object render-record callers) so the full graphics-bind set runs native; own the remaining
-    case-0 prefix leaves (0x800796dc / 0x800263e8 / …). Each verified via its A/B gate. (Render itself =
-    the `game/render/` decoupled native path, in progress separately.)
+  - **MILESTONE — per-object behavior-handler frontier essentially CLEARED (2026-06-25).** Of the 46
+    distinct per-object handlers exercised in headless seaside (`debug behhist`), **44 are owned native**.
+    Only two remain unowned, both deliberately: **0x80127798** — its defining path is the node[5]==3
+    cutscene/AREA-TRANSITION phase machine (div ops + scene-load FUN_80054198/FUN_80054d14 + many globals);
+    NO headless coverage of that path = no gate, so per the "don't own un-verifiable area-transition code"
+    rule it stays PSX (decomp ready at scratch/decomp/field2/80127798.c if a verifiable approach appears);
+    **0x8013C1DC** — only ~x4/run, too rare to gate meaningfully.
+  - **NEXT — beyond the behavior handlers:** advance the spine to the next still-PSX layer — the model-attach
+    sites (FUN_80077B38 + the per-object render-record callers) so the full graphics-bind set runs native,
+    the remaining case-0 prefix leaves (0x800796dc / 0x800263e8 / …), and the `game/render/` decoupled native
+    render path. Each verified via its A/B gate or (for render) the live-eyeball gate. See docs/port-progress.md.
 ```
 ```
