@@ -1105,6 +1105,10 @@ static void ov_game_main(Core* c) {
   // PSXPORT_AUTO_SKIP needs time to tap through title -> GAME -> field: raise the headless smoke cap so a
   // no-REPL run actually reaches free-roam before the loop ends (REPL runs gate frames via `run N` instead).
   if (!repl_mode && !gpu_windowed() && cfg_str("PSXPORT_AUTO_SKIP")) nframes = 1500;
+  // When the debug server is up (headless, no REPL), the run is INTERACTIVELY DRIVEN over the socket
+  // (rw/w16/press/shot/dumpram, step/play) — do NOT cap it, or it exits before we can drive. The
+  // server's `quit` command (or SIGINT) ends it. AUTO_SKIP still auto-drives to free-roam first.
+  if (!repl_mode && !gpu_windowed() && cfg_on("PSXPORT_DEBUG_SERVER")) nframes = 0;
   fprintf(stderr, "[native_boot] entering native frame loop (%s)\n",
           nframes ? "capped" : "interactive (until window close)");
   void hle_deliver_event(Core* c, uint32_t ev_class, uint32_t spec);

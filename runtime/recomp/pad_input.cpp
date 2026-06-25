@@ -394,6 +394,44 @@ void pad_service_frame(Core* c) {
   }
   s_fc++;
 
+  // ---- INPUT RECORD / REPLAY (deterministic pad capture) ---------------------------------------
+  // The engine has no wall-clock/RNG (Date/random are banned, see CLAUDE.md), so the per-frame final
+  // pad mask fully determines a run. PSXPORT_PAD_RECORD=<path> appends the finalized active-low mask
+  // (uint16 LE) every frame from boot; PSXPORT_PAD_REPLAY=<path> forces that exact sequence back,
+  // reproducing a hand-played session (e.g. a hut entry) exactly, every time, headless. Recording
+  // captures the COMBINED result of auto-skip + host input; replay overrides the mask AFTER all other
+  // input sources so it wins. A dedicated frame counter (rec_fc) matches record↔replay (both tick once
+  // per pad_service_frame call from frame 0). Past the recording's end, replay stops overriding
+  // (hands-off) so the game free-runs.
+  {
+    static int      rec_init = 0;
+    static FILE*     rec_fp = nullptr;     // record sink
+    static uint16_t* rep_buf = nullptr;    // replay source (loaded once)
+    static size_t    rep_n = 0;
+    static uint32_t  rec_fc = 0;           // shared record/replay frame index
+    if (!rec_init) {
+      rec_init = 1;
+      const char* rpath = cfg_str("PSXPORT_PAD_RECORD");
+      if (rpath) { rec_fp = fopen(rpath, "wb");
+        fprintf(stderr, "[padrec] recording -> %s\n", rec_fp ? rpath : "(open FAILED)"); }
+      const char* ppath = cfg_str("PSXPORT_PAD_REPLAY");
+      if (ppath) {
+        FILE* f = fopen(ppath, "rb");
+        if (f) { fseek(f, 0, SEEK_END); long sz = ftell(f); fseek(f, 0, SEEK_SET);
+          rep_n = (size_t)(sz / 2); rep_buf = (uint16_t*)malloc(rep_n * 2);
+          if (rep_buf && fread(rep_buf, 2, rep_n, f) != rep_n) { free(rep_buf); rep_buf = nullptr; rep_n = 0; }
+          fclose(f);
+          fprintf(stderr, "[padrec] replaying %zu frames <- %s\n", rep_n, ppath);
+        } else fprintf(stderr, "[padrec] replay open FAILED: %s\n", ppath);
+      }
+    }
+    if (rep_buf && rec_fc < rep_n) {
+      pad.buttons = rep_buf[rec_fc];        // force the recorded mask (overrides host/repl/force)
+    }
+    if (rec_fp) { uint16_t m = pad.buttons; fwrite(&m, 2, 1, rec_fp); fflush(rec_fp); }
+    rec_fc++;
+  }
+
   uint8_t pk[4];
   pad_fill_buffer(c, pk);
   uint32_t bufs[2] = { PAD_SLOT0_BUF, PAD_SLOT1_BUF };       // fixed game pad buffers

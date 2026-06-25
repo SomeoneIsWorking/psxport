@@ -201,6 +201,18 @@ static void dbg_exec(FILE* out, const char* line) {
     sscanf(line, "%*s %255s", path);
     if (gpu_vk_enabled()) { gpu_vk_shot(s_ctx, path); fprintf(out, "shot (VK) -> %s\n", path); }
     else                  { gpu_native_shot(s_ctx, path); fprintf(out, "shot (SW) -> %s\n", path); }
+  } else if (!strcmp(cmd, "dumpram")) {
+    // Full 2MB guest-RAM dump (+ .spad scratchpad sidecar), mirroring the REPL `dumpram`. Lets an
+    // interactively-driven debug-server session capture before/after RAM for A/B diffing and feed
+    // overlays to `disas.py --ram`. The main-RAM diff is BLIND to scratchpad, hence the sidecar.
+    char path[256] = "scratch/bin/dbg_ram.bin";
+    sscanf(line, "%*s %255s", path);
+    FILE* fp = fopen(path, "wb");
+    if (fp) { fwrite(s_ctx->ram, 1, 0x200000, fp); fclose(fp); fprintf(out, "dumpram -> %s\n", path); }
+    else { fprintf(out, "dumpram: cannot open %s\n", path); }
+    char spath[264]; snprintf(spath, sizeof spath, "%s.spad", path);
+    FILE* sp = fopen(spath, "wb");
+    if (sp) { fwrite(s_ctx->scratch, 1, sizeof s_ctx->scratch, sp); fclose(sp); fprintf(out, "dumpram scratchpad -> %s\n", spath); }
   } else if (!strcmp(cmd, "vkshot")) {
     char path[256] = "scratch/screenshots/dbg_vk.ppm";
     sscanf(line, "%*s %255s", path);
