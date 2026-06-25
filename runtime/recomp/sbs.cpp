@@ -262,6 +262,24 @@ void check_divergence() {
 void step_core(Game* g, int which) {
   g->core.game->diff_mode  = 1;
   g->core.game->sbs_render = 1;
+  // PSXPORT_SBS intro-FMV: the OP.STR opening movie is OWNED by the native FMV player, which is skipped
+  // in SBS (native_fmv.cpp: `if (g_sbs) return 0`). But the PSX core (B) runs the GUEST demo machine,
+  // whose STR streamer strNext (FUN_8010755c) then waits for CD-streamed STR sectors that are NEVER fed
+  // here — it busy-polls StGetNext (FUN_8008d030) ~2000x2000 times per attract cycle (~4M interpreted
+  // polls, multi-second), a non-yielding spin that STALLS the lockstep = the "frozen" SBS + repeated
+  // "time out in strNext()". Convert that async wait to a SYNC skip using the game's OWN skip-request
+  // flag DAT_1f80019d: the demo machine's prologue (guest FUN_80106f80 / native demo_menu_machine
+  // engine_demo.cpp:401) forces the teardown sub-state when it is set, so the FMV-streaming states are
+  // never entered. Set it only while the DEMO stage (0x801062E4) is in its intro-FMV sub-state
+  // (demo SM[0x48]==1) so the GAME-stage opening cutscene — the actual SBS comparison target — is never
+  // skipped. The demo consumes/clears the flag at teardown; re-setting per frame keeps every attract
+  // cycle from re-entering the spin.
+  { Core* c = &g->core;
+    if (c->mem_r32(0x801fe00cu) == 0x801062E4u) {            // DEMO stage (per-core memory)
+      uint32_t sm = c->mem_r32(0x1f800138u);                 // demo state-machine block ptr
+      if (sm && c->mem_r16(sm + 0x48u) == 1)                 // SM[0x48]==1 -> intro-FMV sub-state (s1)
+        c->mem_w8(0x1f80019du, 1);                           // request skip (the game's Start-skip flag)
+    } }
   apply_mode(which);
   gpu_vk_select_target(which);        // A -> batch 0 (left pane), B -> batch 1 (right pane)
   dc_step_frame(&g->core, s_frame);   // native_step_frame binds THIS core's per-instance GTE/SPU/MDEC/CD

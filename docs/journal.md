@@ -8637,3 +8637,48 @@ FRONTIER LEFT: 2D-POLY overlays (gradient/fade panels) and world-billboard SPRIT
 the field 2D-only walk (provenance — projprim/obj_depth — is empty there); the cutscene text + common HUD are
 sprites and work. A separate pre-existing DERAIL on one New-Game→free-roam entry path (bad opcode at pc=8) was
 observed and is NOT caused by this change (the OT walk executes no guest code); track separately.
+
+---
+
+## later-253 (2026-06-25): FIXED — SBS `both` mode freezes on the intro OP.STR movie (guest STR streamer spin)
+
+SYMPTOM: `PSXPORT_SBS_MODE=both ./run.sh` froze right after `[fmv] MOVIE/OP.STR -> LBA 152238`, printing
+the game's own `time out in strNext()` repeatedly (seconds apart). NOT caused by later-252 (the cutscene
+2D fix) — it's in the FMV/CD path. PSXPORT_NO_FMV=1 does NOT help (that flag is read by NATIVE code; the
+PSX core runs guest recomp that never sees it).
+
+ROOT CAUSE (definitive, traced live + via decomp): the OP.STR opening movie is OWNED by the native FMV
+player, which is ALREADY skipped in SBS (native_fmv.cpp:677 `if (g_sbs) return 0`), so core A is fine.
+The PSX core (B) runs the GUEST demo machine (FUN_80106f80, DEMO.bin overlay). Its STR streamer
+strNext (FUN_8010755c) waits for CD-streamed STR sectors that are NEVER fed on the interp path (no
+async STR ring-buffer fill). strNext busy-polls: outer loop 0x7d0 (2000) x inner FUN_801075f8 0x7d0
+(2000) calls to StGetNext (FUN_8008d030) = ~4M INTERPRETED polls per attract cycle, a NON-YIELDING
+multi-second spin that stalls the SBS lockstep (step_core A, step_core B, present) = the "frozen" window.
+StGetNext just dequeues a decoded frame from the StPlay ring (0x80102728, idx 0x80102714, 32-byte slots,
+slot[0]==2 means frame ready); the ring is never filled -> always returns 1 (no frame) -> the spin.
+
+KEY SUPPORTING FACTS (so nobody re-derives them):
+- CdSync (FUN_8008a6ec) IS already HLE'd sync: cd_override.cpp:397 -> ov_cd_sync sets v0=2 (CdlComplete).
+  So the demo teardown's `do { FUN_80089e1c(9,0,0)=CdControlB(CdlPause) } while(==0)` loop COMPLETES (it
+  returns FUN_8008a6ec(..)==2). The teardown is NOT the hang.
+- The platform-HLE table (sync_overrides.cpp / cd_override.cpp platform_hle_register) is consulted on
+  the INTERPRETER path (interp.cpp coro_native_call / hle.cpp) for every jal. Runtime is INTERPRETER-ONLY
+  (dispatch.cpp: rec_func_index always -1; generated/shard_*.c are offline analysis, NOT linked). So HLE
+  fires on the PSX core too — strNext just doesn't reach a HLE'd leaf in its hot poll (StGetNext is plain
+  guest code at 0x8008d030; faking its frame output is a MINEFIELD: success re-enters the decode-wait
+  spin at FUN_80106f80 case 6 `do{}while(_DAT_1f800034==0)` 0x7fffff iters, and corrupts SM[0x4a] 7->8).
+- The game's OWN skip-request flag DAT_1f80019d, when set, makes the demo machine prologue force the
+  teardown sub-state: guest FUN_80106f80 (`if (DAT_1f80019d) SM[0x4a]=7`) AND native demo_menu_machine
+  (engine_demo.cpp:401 `s4a = mem_r8(0x1f80019d) ? 7 : SM[0x4a]`). It's the Start-skip; case 7 clears it.
+- Only ONE guest caller of StGetNext (DEMO.bin.asm:1278 = the demo OP.STR fetch). In-game cutscene FMV +
+  XA voice/BGM are native (native_fmv / xa_stream), so skipping the guest demo FMV affects nothing else.
+
+FIX (sbs.cpp step_core): while THIS core is in the DEMO stage (0x801fe00c==0x801062E4) and its demo SM
+sub-state SM[0x48]==1 (the intro-FMV phase s1), set DAT_1f80019d=1. The demo prologue then forces the
+teardown path and the never-satisfiable STR streaming is skipped SYNCHRONOUSLY (the movie is owned
+natively). Confined to the DEMO stage so the GAME-stage (0x8010637C) opening cutscene — the SBS
+comparison target — is NEVER skipped. VERIFIED headless: `time out in strNext` 0 occurrences (was
+repeated), 3s frame-progress watchdog never fires (frames advance), no abort.
+
+ALSO (this session, separate, later-252 commit): SIGPIPE killed the whole game when a debug-server client
+disconnected mid-reply — now signal(SIGPIPE, SIG_IGN) in dbg_server.cpp.
