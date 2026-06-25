@@ -438,6 +438,11 @@ render subsystem replaces them.
     flow):** 4-state machine — state 0 seeds size/box params node[0x80..0x86] + node[0x40]=30; state 1 gates
     FUN_8013AC98 on FUN_8007778C; state 2 re-arms node[5]=node[0x5E] then FUN_8013AC98; state 3 FUN_8007A624.
     Verified live: `box_rearm_subverify` 750+ matches, 0 mismatch; gate-off field clean (151 nodes).
+  - **Behavior handler FUN_8011CBD0 = `beh_node3_router` owned native+live (2026-06-25, Ghidra flow):**
+    4-state machine — state 0 (gated mem[0x800BF89C]>3) seeds box params + node[0x3C]=mem32[0x800ECFA4]
+    (shared context ptr); state 1 routes on node[3] to FUN_8011C674/FUN_8011CA04 + node[1]-gated
+    FUN_800518FC + tail FUN_8011CD14; state 2 sets node[4]=3; state 3 FUN_8007A624. Verified live:
+    `node3_routerverify` 750+ matches, 0 mismatch; gate-off field clean (151 nodes).
   - **NEXT — extend the contiguity:** own the remaining per-object behavior handlers
     (e.g. the overlay-resident 0x801xxxxx handlers; the model-attach sites FUN_80077B38 +
     other per-object render-record callers) so the full graphics-bind set runs native; own the remaining
