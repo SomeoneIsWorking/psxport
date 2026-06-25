@@ -371,6 +371,16 @@ render subsystem replaces them.
     then FUN_8013B024(node,31) + FUN_800518FC; tail clears node[0x29]=node[0x2B]=0. State 3 -> FUN_8007A624.
     srav masked to (node[3]&31). Transcribed 1:1; control flow + direct node/global writes owned native.
     Verified live: `obj8013b2e4verify` 750+ matches, 0 mismatch; gate-off field clean (151 nodes, 0 bad opcode).
+  - **Behavior handler FUN_80131D08 owned native+live (2026-06-25):** added `engine/objbeh_80131d08.cpp`
+    (~x778/field-frame on seaside, ~135 instr). State 0 INIT: global mem[0x800ED098]<2 gate (-> node[4]=3),
+    else seed node fields + node[4]++ and allocate 2 child records (FUN_8007AAE8) into node[0xC0]/node[0xC4]
+    (each zeroed, rec[6]=-1), then FUN_80051B04(rec0,12,2) + FUN_80051B04(rec1,12,3), rec1[0]=6/rec1[2]=-1400,
+    seed node[0x80..0x86]/node[0x40..0x4C]. State 1: per node[5] (==1 -> FUN_80131840; ==0 -> node[5] set from
+    mem[0x800BF8B8]==255), then a1=sign16(scratch[0x162]-node[0x32]), FUN_800778E4(node,a1); if !=0 ->
+    rec1[10]=(rec1[10]-32)&0xFFF + FUN_800517F8. State 3 -> FUN_8007A624. a0 fidelity in the record loop:
+    guest a0 at first FUN_8007AAE8 is the original state byte (set c->r[4]=orig, don't touch across loop).
+    Transcribed 1:1; control flow + direct node/record/global writes owned native. Verified live:
+    `obj80131d08verify` 750+ matches, 0 mismatch; gate-off field clean (151 nodes, 0 bad opcode).
   - **NEXT — extend the contiguity:** own the remaining per-object behavior handlers
     (e.g. the overlay-resident 0x801xxxxx handlers; the model-attach sites FUN_80077B38 +
     other per-object render-record callers) so the full graphics-bind set runs native; own the remaining
