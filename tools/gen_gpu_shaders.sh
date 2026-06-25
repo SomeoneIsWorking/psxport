@@ -36,5 +36,9 @@ PY
   emit present.frag spv_g_present_frag
   emit image.vert   spv_g_image_vert
   emit image.frag   spv_g_image_frag
+  emit tri.vert     spv_g_tri_vert      # Pass 2: native 3D raster (untextured opaque)
+  emit tri.frag     spv_g_tri_frag
+  emit tritex.vert  spv_g_tritex_vert   # native 3D raster (textured + in-shader semi blend)
+  emit tritex.frag  spv_g_tritex_frag
 } > "$OUT"
 echo "[gen_gpu_shaders] wrote $OUT"
