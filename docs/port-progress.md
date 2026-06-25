@@ -59,6 +59,36 @@ picture, have the USER eyeball a build (`shot` + ask). Do NOT conclude from a si
 verify on the running game. Tools that remain: `tools/disas.py` (RE a function), the REPL/debug-server
 inspection commands above, and the F1 imgui overlay for live-tuning enhancements.
 
+## SBS — the DIVERGENCE GATE (use this so you NEVER flounder on "no idea why") ★ READ THIS
+The recurring failure mode — "something is wrong, no idea why", weeks lost — is now STRUCTURALLY SOLVED.
+`PSXPORT_SBS=1` (runtime/recomp/sbs.cpp) runs TWO cores in ONE process, IN-PROCESS, and mechanically
+pinpoints the FIRST place the native path diverges from the PSX path, with the exact corrupting-write
+GUEST STACK TRACE. It is the self-contained oracle the old text said we lacked. **Gate EVERY subsystem
+rebuild on it; never proceed on a vibe.**
+- `PSXPORT_SBS_MODE=render` — A = native gameplay + NATIVE render, B = native gameplay + PSX render.
+  Native render MUST leave guest RAM identical to PSX render → run it, drive `sbs diff` to ZERO. A nonzero
+  diff = the native render is RUNNING CONTENT / corrupting guest state (it must read guest data, write only
+  host memory). Each surfaced address is a leak to fix.
+- `PSXPORT_SBS_MODE=gameplay` — A = native gameplay, B = PSX gameplay (psx_fallback), render identical.
+  A native gameplay subsystem MUST match the PSX body BYTE-FOR-BYTE → `sbs diff` ZERO. First nonzero
+  address + `sbs watch` + `sbs bt` = the exact instruction that drifted. This is the gate for owning any
+  per-frame gameplay/AI/physics function.
+- `PSXPORT_SBS_MODE=both` — full native vs full PSX.
+- Both cores sync at the gameplay-start flag (barrier), then lockstep on identical input; the first
+  divergence AUTO-PAUSES. Inspect over the debug server (`tools/dbgclient.py --port N`):
+  `sbs status | diff | bt | watch [hex] | show a|b | resume | step [n]`. `sbs watch` arms a per-core
+  write-watchpoint so the diverging WRITE re-pauses mid-frame with each core's exact guest backtrace —
+  that backtrace IS the answer to "why". Run: `MAIN.EXE` as argv[1], disc via `PSXPORT_TOMBA2_DISC`
+  (NOT the CHD as argv[1] — that loads the disc as a PS-EXE and derails).
+- This works because the subsystems are now per-instance (no shared state between cores): Core (RAM/regs/
+  scratchpad), and the Beetle singletons GTE/SPU/MDEC (GteRegs/SpuState/MdecState, bound per core
+  frame-step). Keep it that way — any new global mutable machine state breaks the gate.
+
+THE REBUILD LOOP (every subsystem, same every time): (1) reimplement it native; (2) pick the SBS mode
+that isolates it (render-diff or gameplay-diff); (3) drive `sbs diff` to ZERO, fixing each surfaced
+divergence at its `sbs bt` write-site — that is "knowing why"; (4) USER eyeballs the picture for render;
+(5) commit. If you ever can't explain a behavior, you have not run the SBS yet — run it.
+
 ## THE BOUNDARY (one line; full text in CLAUDE.md)
 PSX keeps ONLY game CONTENT: per-character/enemy **AI & behavior**, **physics/collision response**, **level
 data**, **quest/event/progression rules**. EVERYTHING else is PC-owned (engine): boot, menus, loading, scene/
