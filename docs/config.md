@@ -63,6 +63,10 @@ or level — they can't be a bare channel:
   toggle live: wide/ires/fps60/ssao/light; ` or F1 to hide; forces native-depth + deferred infra on so
   the toggles work live; seeds g_mods in mods.c), `ATTACH`, `PROJPROBE`,
   `CULL`/`CULL_FAR`/`CULL_FOV`, `*_RECOMP` (`OT_/LZ_/GEOM_/RECOMP_OBJWALK`), `TRANSPLANT`.
+- **SDL_GPU renderer (gpu_gpu.cpp):** `GPU_TRACE` (per-present src-VRAM occupancy + sampled disp region +
+  readback nonzero count), `GPU_DEBUG` (enable the SDL_GPU device validation layer — slows pipeline
+  compile, can trip the boot watchdog; raise `WATCHDOG_BOOT` when using it). `VK_HEADLESS` (offscreen, no
+  window) and `FULLSCREEN`/`WINDOWED` are honored unchanged.
 - **Boot / automation:** `NO_FMV`, `NOAUDIO`, `NOPACE`, `NOSKIP`, `NATIVE_FRAMES`, `AUTO_GAMEPLAY`,
   `AUTO_NEWGAME`, `SCEA_SKIP`, `WATCHDOG`, `REPL`, `DEBUG_SERVER`, `T2_NOSEQTICK`, `FMV_*`, `FORCE_*`.
 - **Paths:** `TOMBA2_DISC`, `TOMBA2_CARD`, `DISC`.

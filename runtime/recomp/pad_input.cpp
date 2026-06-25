@@ -70,7 +70,7 @@ void pad_fill_buffer(Core* c, uint8_t* buf) {
 // unless pad_set_buttons() / pad_poll_sdl() updates it. SDL is compiled in only
 // under PSXPORT_SDL, matching gpu_native.c's optional-SDL style.
 #ifdef PSXPORT_SDL
-#include <SDL.h>
+#include <SDL3/SDL.h>
 #include <stdio.h>   // diagnostic fprintf in pad_poll_sdl (controller-driving-directions notice)
 #include <stdlib.h>  // atoi (PSXPORT_PAD_NOPAD parse)
 
@@ -85,16 +85,16 @@ extern "C" int rmlui_overlay_wants_keyboard(void);
 // Up to this many simultaneously-open controllers; hotswap-aware (DEVICEADDED/REMOVED handled by a
 // per-frame rescan in pad_rescan_controllers() so NO other file needs editing — see pad_poll_sdl).
 #define PAD_MAX_GC 4
-static SDL_GameController* s_gc[PAD_MAX_GC] = { nullptr, nullptr, nullptr, nullptr };
-static int                s_gc_inst[PAD_MAX_GC] = { -1, -1, -1, -1 };  // SDL_JoystickID per slot (-1 = empty)
-static int                s_gc_sub_init = 0;                            // lazily added the gamecontroller subsystem?
+static SDL_Gamepad* s_gc[PAD_MAX_GC] = { nullptr, nullptr, nullptr, nullptr };
+static int          s_gc_inst[PAD_MAX_GC] = { -1, -1, -1, -1 };  // SDL_JoystickID per slot (-1 = empty)
+static int          s_gc_sub_init = 0;                            // lazily added the gamepad subsystem?
 
-// Lazily ensure SDL's gamecontroller subsystem is up. SDL_Init(SDL_INIT_VIDEO) happens in gpu_vk.cpp
-// (not owned here); the controller subsystem is independent, so we add it on first use. Idempotent.
+// Lazily ensure SDL's gamepad subsystem is up. SDL_Init(SDL_INIT_VIDEO) happens in gpu_gpu.cpp
+// (not owned here); the gamepad subsystem is independent, so we add it on first use. Idempotent.
 static void pad_ensure_gc_subsystem(void) {
   if (s_gc_sub_init) return;
-  if (SDL_WasInit(SDL_INIT_GAMECONTROLLER) == 0)
-    SDL_InitSubSystem(SDL_INIT_GAMECONTROLLER);
+  if ((SDL_WasInit(SDL_INIT_GAMEPAD) & SDL_INIT_GAMEPAD) == 0)
+    SDL_InitSubSystem(SDL_INIT_GAMEPAD);
   s_gc_sub_init = 1;
 }
 
@@ -110,36 +110,35 @@ static void pad_rescan_controllers(void) {
   if (nopad < 0) { const char* v = cfg_str("PSXPORT_PAD_NOPAD"); nopad = (v && atoi(v) != 0) ? 1 : 0; }
   if (nopad) {
     for (int s = 0; s < PAD_MAX_GC; s++)
-      if (s_gc[s]) { SDL_GameControllerClose(s_gc[s]); s_gc[s] = nullptr; s_gc_inst[s] = -1; }
+      if (s_gc[s]) { SDL_CloseGamepad(s_gc[s]); s_gc[s] = nullptr; s_gc_inst[s] = -1; }
     return;
   }
   pad_ensure_gc_subsystem();
   // 1) Drop slots whose controller was unplugged.
   for (int s = 0; s < PAD_MAX_GC; s++) {
-    if (s_gc[s] && !SDL_GameControllerGetAttached(s_gc[s])) {
-      SDL_GameControllerClose(s_gc[s]);
+    if (s_gc[s] && !SDL_GamepadConnected(s_gc[s])) {
+      SDL_CloseGamepad(s_gc[s]);
       s_gc[s] = nullptr; s_gc_inst[s] = -1;
     }
   }
-  // 2) Open any attached controller we don't already hold (dedup by instance id).
-  //    Linux note: SDL enumerates a lot of /dev/input nodes; SDL_IsGameController already filters to
-  //    devices with a real gamecontroller mapping, so we don't open accelerometers/phantom joysticks
-  //    here and then read garbage axes from them (which used to inject a permanent phantom direction).
-  int n = SDL_NumJoysticks();
+  // 2) Open any attached gamepad we don't already hold (dedup by instance id). SDL3 SDL_GetGamepads
+  //    returns instance IDs of devices with a real gamepad mapping (no accelerometers/phantom joysticks),
+  //    so we don't open garbage-axis devices that used to inject a permanent phantom direction.
+  int n = 0; SDL_JoystickID* ids = SDL_GetGamepads(&n);
   for (int i = 0; i < n; i++) {
-    if (!SDL_IsGameController(i)) continue;
-    SDL_JoystickID inst = SDL_JoystickGetDeviceInstanceID(i);
+    SDL_JoystickID inst = ids[i];
     int already = 0;
-    for (int s = 0; s < PAD_MAX_GC; s++) if (s_gc_inst[s] == inst) { already = 1; break; }
+    for (int s = 0; s < PAD_MAX_GC; s++) if (s_gc_inst[s] == (int)inst) { already = 1; break; }
     if (already) continue;
     for (int s = 0; s < PAD_MAX_GC; s++) {
       if (!s_gc[s]) {
-        SDL_GameController* gc = SDL_GameControllerOpen(i);
-        if (gc) { s_gc[s] = gc; s_gc_inst[s] = SDL_JoystickInstanceID(SDL_GameControllerGetJoystick(gc)); }
+        SDL_Gamepad* gc = SDL_OpenGamepad(inst);
+        if (gc) { s_gc[s] = gc; s_gc_inst[s] = (int)SDL_GetGamepadID(gc); }
         break;
       }
     }
   }
+  SDL_free(ids);
 }
 
 // OR one controller's buttons + analog sticks into the active-low PSX mask.
@@ -159,27 +158,27 @@ static void pad_rescan_controllers(void) {
 // direction makes the game look "stuck"/unresponsive to WASD (it fights or saturates movement), which
 // is exactly the "WASD doesn't move the player / maybe analog mode" symptom on the Linux machine. Keep
 // the threshold high (~70%) so only a deliberate stick push registers and resting drift never does.
-static void pad_apply_controller(SDL_GameController* gc, uint16_t* mask) {
-  #define BTN(b) SDL_GameControllerGetButton(gc, (b))
+static void pad_apply_controller(SDL_Gamepad* gc, uint16_t* mask) {
+  #define BTN(b) SDL_GetGamepadButton(gc, (b))
   const int STICK = 22000;   // ~67% of 32767 deflection -> treat as a directional press (drift-proof)
-  Sint16 lx = SDL_GameControllerGetAxis(gc, SDL_CONTROLLER_AXIS_LEFTX);
-  Sint16 ly = SDL_GameControllerGetAxis(gc, SDL_CONTROLLER_AXIS_LEFTY);
-  if (BTN(SDL_CONTROLLER_BUTTON_DPAD_UP)    || ly < -STICK) *mask &= ~0x0010u; // Up
-  if (BTN(SDL_CONTROLLER_BUTTON_DPAD_RIGHT) || lx >  STICK) *mask &= ~0x0020u; // Right
-  if (BTN(SDL_CONTROLLER_BUTTON_DPAD_DOWN)  || ly >  STICK) *mask &= ~0x0040u; // Down
-  if (BTN(SDL_CONTROLLER_BUTTON_DPAD_LEFT)  || lx < -STICK) *mask &= ~0x0080u; // Left
-  if (BTN(SDL_CONTROLLER_BUTTON_START))        *mask &= ~0x0008u; // Start
-  if (BTN(SDL_CONTROLLER_BUTTON_BACK))         *mask &= ~0x0001u; // Select
-  if (BTN(SDL_CONTROLLER_BUTTON_A))            *mask &= ~0x4000u; // Cross
-  if (BTN(SDL_CONTROLLER_BUTTON_B))            *mask &= ~0x2000u; // Circle
-  if (BTN(SDL_CONTROLLER_BUTTON_X))            *mask &= ~0x8000u; // Square
-  if (BTN(SDL_CONTROLLER_BUTTON_Y))            *mask &= ~0x1000u; // Triangle
-  if (BTN(SDL_CONTROLLER_BUTTON_LEFTSHOULDER)) *mask &= ~0x0400u; // L1
-  if (BTN(SDL_CONTROLLER_BUTTON_RIGHTSHOULDER))*mask &= ~0x0800u; // R1
-  if (BTN(SDL_CONTROLLER_BUTTON_LEFTSTICK))    *mask &= ~0x0002u; // L3
-  if (BTN(SDL_CONTROLLER_BUTTON_RIGHTSTICK))   *mask &= ~0x0004u; // R3
-  if (SDL_GameControllerGetAxis(gc, SDL_CONTROLLER_AXIS_TRIGGERLEFT)  > STICK) *mask &= ~0x0100u; // L2
-  if (SDL_GameControllerGetAxis(gc, SDL_CONTROLLER_AXIS_TRIGGERRIGHT) > STICK) *mask &= ~0x0200u; // R2
+  Sint16 lx = SDL_GetGamepadAxis(gc, SDL_GAMEPAD_AXIS_LEFTX);
+  Sint16 ly = SDL_GetGamepadAxis(gc, SDL_GAMEPAD_AXIS_LEFTY);
+  if (BTN(SDL_GAMEPAD_BUTTON_DPAD_UP)    || ly < -STICK) *mask &= ~0x0010u; // Up
+  if (BTN(SDL_GAMEPAD_BUTTON_DPAD_RIGHT) || lx >  STICK) *mask &= ~0x0020u; // Right
+  if (BTN(SDL_GAMEPAD_BUTTON_DPAD_DOWN)  || ly >  STICK) *mask &= ~0x0040u; // Down
+  if (BTN(SDL_GAMEPAD_BUTTON_DPAD_LEFT)  || lx < -STICK) *mask &= ~0x0080u; // Left
+  if (BTN(SDL_GAMEPAD_BUTTON_START))         *mask &= ~0x0008u; // Start
+  if (BTN(SDL_GAMEPAD_BUTTON_BACK))          *mask &= ~0x0001u; // Select
+  if (BTN(SDL_GAMEPAD_BUTTON_SOUTH))         *mask &= ~0x4000u; // Cross  (SDL3 SOUTH = bottom)
+  if (BTN(SDL_GAMEPAD_BUTTON_EAST))          *mask &= ~0x2000u; // Circle (EAST = right)
+  if (BTN(SDL_GAMEPAD_BUTTON_WEST))          *mask &= ~0x8000u; // Square (WEST = left)
+  if (BTN(SDL_GAMEPAD_BUTTON_NORTH))         *mask &= ~0x1000u; // Triangle (NORTH = top)
+  if (BTN(SDL_GAMEPAD_BUTTON_LEFT_SHOULDER)) *mask &= ~0x0400u; // L1
+  if (BTN(SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER))*mask &= ~0x0800u; // R1
+  if (BTN(SDL_GAMEPAD_BUTTON_LEFT_STICK))    *mask &= ~0x0002u; // L3
+  if (BTN(SDL_GAMEPAD_BUTTON_RIGHT_STICK))   *mask &= ~0x0004u; // R3
+  if (SDL_GetGamepadAxis(gc, SDL_GAMEPAD_AXIS_LEFT_TRIGGER)  > STICK) *mask &= ~0x0100u; // L2
+  if (SDL_GetGamepadAxis(gc, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER) > STICK) *mask &= ~0x0200u; // R2
   #undef BTN
 }
 
@@ -190,22 +189,11 @@ void pad_poll_sdl(Core* c) {
   SDL_PumpEvents();
   uint16_t mask = PAD_NONE;
 
-  // GitHub #18: keep SDL text input (IME) OFF during gameplay. SDL leaves text input ON by default and
-  // RmlUi's SDL backend re-enables it via its IME handler whenever the overlay window is focused, so this
-  // MUST run every frame (one-shot disabling is not enough). With IME on, KDE/Wayland compositors pop an
-  // "alternative character"/compose widget that swallows WASD before SDL_GetKeyboardState() sees it ->
-  // the player won't move. Only stop it when no UI text field actually wants the keyboard, so focused
-  // RmlUi fields can still type.
-  if (!rmlui_overlay_wants_keyboard() && SDL_IsTextInputActive()) {
-    SDL_StopTextInput();
-    static int s_ime_noted = 0;
-    if (!s_ime_noted) { s_ime_noted = 1; fprintf(stderr, "[pad] IME/text-input disabled during gameplay (GH#18)\n"); }
-  }
-
-  // Suppress the keyboard ONLY while the user is typing into an RmlUi text field (see the extern decl).
-  // A merely-visible overlay does NOT block WASD — that was the bug. The debug pause/step keys below stay
-  // outside this guard intentionally so P/'.' still work even with a field focused.
-  const Uint8* ks = (rmlui_overlay_wants_keyboard() ? nullptr : SDL_GetKeyboardState(NULL));
+  // SDL3 leaves text input OFF by default (it is per-window and opt-in), and the RmlUi overlay is dropped
+  // from the SDL_GPU build, so there is no IME/compose widget to suppress here any more (the old GH#18
+  // SDL_StopTextInput dance is unnecessary). The keyboard read is gated only by rmlui_overlay_wants_keyboard
+  // (stubbed to 0 in this build), so WASD always drives the game.
+  const bool* ks = (rmlui_overlay_wants_keyboard() ? nullptr : SDL_GetKeyboardState(NULL));
   if (ks) {
     #define KEYDOWN(sc) (ks[(sc)] != 0)
     if (KEYDOWN(SDL_SCANCODE_UP)     || KEYDOWN(SDL_SCANCODE_W)) mask &= ~0x0010u; // Up
@@ -230,7 +218,7 @@ void pad_poll_sdl(Core* c) {
   // `ks` above) so these still work even when RmlUi suppressed gameplay keys. Handled here because
   // pad_poll_sdl runs every frame in BOTH the running loop and the paused wait. (dbg_server.c)
   { void dbg_toggle_pause(void); void dbg_add_step(int);
-    const Uint8* dks = SDL_GetKeyboardState(NULL);
+    const bool* dks = SDL_GetKeyboardState(NULL);
     static int prev_p = 0, prev_step = 0;
     int p  = dks && dks[SDL_SCANCODE_P]      != 0;
     int st = dks && dks[SDL_SCANCODE_PERIOD] != 0;
@@ -248,7 +236,7 @@ void pad_poll_sdl(Core* c) {
   // the frames right after a controller is opened the button/axis reads could be stale (Linux: stale
   // axes read as a held direction). An explicit update guarantees fresh state before we read it.
   pad_rescan_controllers();
-  SDL_GameControllerUpdate();
+  SDL_UpdateGamepads();
   uint16_t before_pads = mask;
   for (int s = 0; s < PAD_MAX_GC; s++)
     if (s_gc[s]) pad_apply_controller(s_gc[s], &mask);
@@ -277,7 +265,7 @@ void pad_poll_sdl(Core* c) {
 // Close any open controllers (call on shutdown if desired). Safe to call multiple times.
 void pad_close_controllers(void) {
   for (int s = 0; s < PAD_MAX_GC; s++)
-    if (s_gc[s]) { SDL_GameControllerClose(s_gc[s]); s_gc[s] = nullptr; s_gc_inst[s] = -1; }
+    if (s_gc[s]) { SDL_CloseGamepad(s_gc[s]); s_gc[s] = nullptr; s_gc_inst[s] = -1; }
 }
 #endif // PSXPORT_SDL
 

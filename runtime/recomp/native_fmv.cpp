@@ -615,28 +615,29 @@ int xa_decode_sector(const uint8_t* raw, int16_t* out, int16_t hist[2][2], int* 
 
 // ---- FMV audio output (dedicated SDL device at the XA rate) + audio-master pacing --------
 #ifdef PSXPORT_SDL
-#include <SDL.h>
+#include <SDL3/SDL.h>
 // shared: host audio-output singleton (NOT guest machine state). One physical speaker → one device;
-// a lockstep dual-core RAM diff is unaffected by it, so it stays file-scope shared by design.
-static SDL_AudioDeviceID s_fmv_dev = 0;
+// a lockstep dual-core RAM diff is unaffected by it, so it stays file-scope shared by design. SDL3
+// push-model audio stream bound to the default playback device.
+static SDL_AudioStream* s_fmv_stream = 0;
 static int s_fmv_freq = 0, s_fmv_bytes_per_frame = 4;   // S16 stereo
 static void fmv_audio_open(int freq) {
   if (cfg_on("PSXPORT_NOAUDIO")) return;
-  if (s_fmv_dev && s_fmv_freq == freq) { SDL_ClearQueuedAudio(s_fmv_dev); return; }
-  if (s_fmv_dev) { SDL_CloseAudioDevice(s_fmv_dev); s_fmv_dev = 0; }
-  if (SDL_InitSubSystem(SDL_INIT_AUDIO) != 0) return;
-  SDL_AudioSpec want, have; SDL_memset(&want, 0, sizeof want);
-  want.freq = freq; want.format = AUDIO_S16SYS; want.channels = 2; want.samples = 2048;
-  s_fmv_dev = SDL_OpenAudioDevice(NULL, 0, &want, &have, 0);   // 0 = no changes; SDL converts
-  if (s_fmv_dev) { s_fmv_freq = freq; SDL_PauseAudioDevice(s_fmv_dev, 0); }
+  if (s_fmv_stream && s_fmv_freq == freq) { SDL_ClearAudioStream(s_fmv_stream); return; }
+  if (s_fmv_stream) { SDL_DestroyAudioStream(s_fmv_stream); s_fmv_stream = 0; }
+  if (!SDL_InitSubSystem(SDL_INIT_AUDIO)) return;
+  SDL_AudioSpec spec; SDL_memset(&spec, 0, sizeof spec);
+  spec.freq = freq; spec.format = SDL_AUDIO_S16; spec.channels = 2;
+  s_fmv_stream = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, NULL, NULL);
+  if (s_fmv_stream) { s_fmv_freq = freq; SDL_ResumeAudioStreamDevice(s_fmv_stream); }
 }
 static void fmv_audio_queue(const int16_t* pcm, int frames) {
-  if (s_fmv_dev) SDL_QueueAudio(s_fmv_dev, pcm, (uint32_t)frames * 4);
+  if (s_fmv_stream) SDL_PutAudioStreamData(s_fmv_stream, pcm, frames * 4);
 }
 static uint32_t fmv_audio_backlog_bytes(void) {
-  return s_fmv_dev ? SDL_GetQueuedAudioSize(s_fmv_dev) : 0;
+  return s_fmv_stream ? (uint32_t)SDL_GetAudioStreamQueued(s_fmv_stream) : 0;
 }
-static void fmv_audio_close(void) { if (s_fmv_dev) { SDL_ClearQueuedAudio(s_fmv_dev); } }
+static void fmv_audio_close(void) { if (s_fmv_stream) { SDL_ClearAudioStream(s_fmv_stream); } }
 
 // Pace playback to the AUDIO/media clock: media_frames audio sample-pairs at `freq` Hz define
 // the elapsed media time; sleep until wall-clock catches up. This is the real PSX rate (the

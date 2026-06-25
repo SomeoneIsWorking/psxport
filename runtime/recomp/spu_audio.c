@@ -16,7 +16,7 @@
 #include <string.h>
 #include <time.h>
 #ifdef PSXPORT_SDL
-#include <SDL.h>
+#include <SDL3/SDL.h>
 #endif
 
 // SPU lift interface (spu_beetle.c). Declared here rather than via a shared header so
@@ -52,7 +52,7 @@ void spu_audio_frame(void);
 #define AUDIO_QUEUE_CAP_BYTES (4 * SPU_FRAMES_PER_VIDEO_FRAME * 2 * (int)sizeof(int16_t))
 
 #ifdef PSXPORT_SDL
-static SDL_AudioDeviceID s_dev;   // 0 = not open / failed / disabled
+static SDL_AudioStream* s_stream;   // NULL = not open / failed / disabled (SDL3 push-model audio stream)
 #endif
 static int s_state = 0;           // 0 = uninit, 1 = enabled+open, -1 = disabled/failed
 
@@ -128,7 +128,7 @@ void spu_audio_init(void)
      } }
 
 #ifdef PSXPORT_SDL
-   if (SDL_InitSubSystem(SDL_INIT_AUDIO) != 0)
+   if (!SDL_InitSubSystem(SDL_INIT_AUDIO))
    {
       fprintf(stderr, "[spu_audio] SDL_InitSubSystem(AUDIO) failed: %s — audio disabled\n",
               SDL_GetError());
@@ -136,24 +136,24 @@ void spu_audio_init(void)
       return;
    }
 
-   SDL_AudioSpec want, have;
-   SDL_memset(&want, 0, sizeof want);
-   want.freq     = 44100;
-   want.format   = AUDIO_S16SYS;
-   want.channels = 2;
-   want.samples  = 1024;         // device buffer; we feed it via SDL_QueueAudio
-   want.callback = NULL;         // push model (queue), not pull (callback)
+   // SDL3 push-model: open a stream bound to the default playback device (44100 Hz S16 stereo). We feed
+   // it via SDL_PutAudioStreamData each frame (no callback). The device buffer is managed by SDL.
+   SDL_AudioSpec spec;
+   SDL_memset(&spec, 0, sizeof spec);
+   spec.freq     = 44100;
+   spec.format   = SDL_AUDIO_S16;   // native-endian signed 16-bit
+   spec.channels = 2;
 
-   s_dev = SDL_OpenAudioDevice(NULL, 0, &want, &have, 0);
-   if (s_dev == 0)
+   s_stream = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, NULL, NULL);
+   if (!s_stream)
    {
-      fprintf(stderr, "[spu_audio] SDL_OpenAudioDevice failed: %s — audio disabled\n",
+      fprintf(stderr, "[spu_audio] SDL_OpenAudioDeviceStream failed: %s — audio disabled\n",
               SDL_GetError());
       s_state = -1;
       return;
    }
 
-   SDL_PauseAudioDevice(s_dev, 0);   // start playback
+   SDL_ResumeAudioStreamDevice(s_stream);   // start playback (streams are paused at open)
    s_state = 1;
 #else
    // No SDL compiled in: cleanly disabled.
@@ -171,7 +171,7 @@ void spu_audio_frame(void)
    // We advance + drain the SPU when SOMETHING consumes it: the SDL device (playback) OR a
    // WAV capture (PSXPORT_WAV, works headless). If neither is active, leave the SPU idle.
 #ifdef PSXPORT_SDL
-   int sdl_on = (s_state == 1 && s_dev != 0);
+   int sdl_on = (s_state == 1 && s_stream != NULL);
 #else
    int sdl_on = 0;
 #endif
@@ -250,21 +250,21 @@ void spu_audio_frame(void)
        struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
        double now = ts.tv_sec + ts.tv_nsec/1e9; if (!have) { t0 = now; have = 1; }
        samp += frames; calls++;
-       if ((int)SDL_GetQueuedAudioSize(s_dev) > AUDIO_QUEUE_CAP_BYTES) drops++;
+       if (SDL_GetAudioStreamQueued(s_stream) > AUDIO_QUEUE_CAP_BYTES) drops++;
        double dt = now - t0;
-       if (dt >= 2.0) { fprintf(stderr, "[audio_rate] %.0f samples/s (want 44100), %ld calls/%.1fs, drops=%ld, backlog=%u\n",
-                                samp/dt, calls, dt, drops, SDL_GetQueuedAudioSize(s_dev));
+       if (dt >= 2.0) { fprintf(stderr, "[audio_rate] %.0f samples/s (want 44100), %ld calls/%.1fs, drops=%ld, backlog=%d\n",
+                                samp/dt, calls, dt, drops, SDL_GetAudioStreamQueued(s_stream));
                         t0 = now; samp = 0; calls = 0; drops = 0; } } }
    // Drop (don't queue) when the backlog is already too deep — keeps latency bounded.
-   if ((int)SDL_GetQueuedAudioSize(s_dev) > AUDIO_QUEUE_CAP_BYTES)
+   if (SDL_GetAudioStreamQueued(s_stream) > AUDIO_QUEUE_CAP_BYTES)
       return;
 
-   SDL_QueueAudio(s_dev, buf, (Uint32)frames * 2 * sizeof(int16_t));
+   SDL_PutAudioStreamData(s_stream, buf, (int)(frames * 2 * sizeof(int16_t)));
 
    // Diagnostics: PSXPORT_AUDIO_LOG=1 reports the device backlog each frame so the queue
    // can be observed to grow / stay bounded (used by the smoke test; off by default).
    if (cfg_dbg("audio"))
-      fprintf(stderr, "[spu_audio] rendered %d frames, queued=%u bytes\n",
-              frames, SDL_GetQueuedAudioSize(s_dev));
+      fprintf(stderr, "[spu_audio] rendered %d frames, queued=%d bytes\n",
+              frames, SDL_GetAudioStreamQueued(s_stream));
 #endif
 }

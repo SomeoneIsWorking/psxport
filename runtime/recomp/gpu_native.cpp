@@ -21,7 +21,7 @@
 #include <string.h>
 #include <time.h>    // clock_gettime / nanosleep — portable PC-owned frame pacer (gpu_pace_subframe)
 #ifdef PSXPORT_SDL
-#include <SDL.h>
+#include <SDL3/SDL.h>
 #endif
 
 extern int g_fps60_on;           // fps60: capture/synth enabled (PSXPORT_FPS60); 0 = faithful path
@@ -1410,58 +1410,14 @@ void GpuState::gpu_gp1(uint32_t w) {
 // pixel aspect and keeps 2D art / FMVs un-stretched regardless of window size. (This is the display
 // scaler, independent of the — currently blocked — widescreen GEOMETRY tier; we do not widen here.)
 #ifdef PSXPORT_SDL
-static SDL_Window* s_win; static SDL_Renderer* s_ren; static SDL_Texture* s_tex;
-static int s_tex_w, s_tex_h;
-static int win_enabled(void) { return gpu_windowed(); }   // a live on-screen window is up (gpu_vk.cpp)
-void GpuState::ensure_window() {
-  if (!s_win) {
-    SDL_Init(SDL_INIT_VIDEO);
-    SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "1");   // linear filter for a smooth upscale
-    // Default: borderless fullscreen at the desktop resolution ("adapt to screen"). PSXPORT_WINDOWED=1
-    // opens a resizable 3x window instead (handy for dev). The 4:3 fit below applies to both.
-    int windowed = cfg_str("PSXPORT_WINDOWED") && atoi(cfg_str("PSXPORT_WINDOWED")) != 0;
-    Uint32 flags = windowed ? SDL_WINDOW_RESIZABLE : SDL_WINDOW_FULLSCREEN_DESKTOP;
-    s_win = SDL_CreateWindow("Tomba! 2 (native PC port)", SDL_WINDOWPOS_CENTERED,
-                             SDL_WINDOWPOS_CENTERED, s_disp_w * 3, s_disp_h * 3, flags);
-    // No PRESENTVSYNC: the manual pacer (gpu_pace_subframe) is the single timing authority, so the
-    // loop runs at the right wall-clock rate (and audio stays realtime) on ANY monitor refresh rate.
-    s_ren = SDL_CreateRenderer(s_win, -1, SDL_RENDERER_ACCELERATED);
-  }
-  if (!s_tex || s_tex_w != s_disp_w || s_tex_h != s_disp_h) {
-    if (s_tex) SDL_DestroyTexture(s_tex);
-    s_tex = SDL_CreateTexture(s_ren, SDL_PIXELFORMAT_ABGR8888, SDL_TEXTUREACCESS_STREAMING,
-                              s_disp_w, s_disp_h);
-    s_tex_w = s_disp_w; s_tex_h = s_disp_h;
-  }
-}
-// Blit one display-sized region [sx,sy .. +disp_w,disp_h] of `src` (s_vram) to the window,
-// fit to a 4:3 rect with black bars — never stretched (correct PSX pixel aspect for 2D / FMV / any res).
-int  gpu_vk_enabled(void);                                   // gpu_vk.c — Vulkan present backend (M0)
+// The legacy SDL_Renderer software-present window is RETIRED: the SDL_GPU renderer (gpu_gpu.cpp) is THE
+// present path (gpu_vk_enabled() is always 1), windowed or headless. blit_src forwards the display region
+// to it; ensure_window is a no-op (the GPU backend owns the window). This drops the SDL2 SDL_Renderer /
+// SDL_Texture code that SDL3 doesn't carry verbatim.
+int  gpu_vk_enabled(void);                                   // gpu_gpu.cpp — SDL_GPU present backend
+void GpuState::ensure_window() {}
 void GpuState::blit_src(const uint16_t* src, int sx, int sy) {
-  // VK first: headless offscreen VK (PSXPORT_VK_HEADLESS) renders without a window, so it must run even
-  // when win_enabled() is false. The SW window path below needs a real window.
-  if (gpu_vk_enabled()) { gpu_vk_present(&game->core, src, sx, sy, s_disp_w, s_disp_h); return; }  // HW path (incl. headless)
-  if (!win_enabled()) return;
-  ensure_window();
-  static uint32_t buf[VRAM_W * VRAM_H];
-  for (int y = 0; y < s_disp_h; y++)
-    for (int x = 0; x < s_disp_w; x++) {
-      uint16_t p = src[((sy + y) & 511) * VRAM_W + ((sx + x) & 1023)];
-      buf[y * s_disp_w + x] = 0xFF000000u | (((p >> 10) & 31) << 19) | (((p >> 5) & 31) << 11) | ((p & 31) << 3);
-    }
-  SDL_UpdateTexture(s_tex, NULL, buf, s_disp_w * 4);
-  int ow = 0, oh = 0; SDL_GetRendererOutputSize(s_ren, &ow, &oh);
-  SDL_Rect dst;
-  if (ow * 3 >= oh * 4) { dst.h = oh; dst.w = oh * 4 / 3; }   // screen wider than 4:3 -> pillarbox
-  else                  { dst.w = ow; dst.h = ow * 3 / 4; }   // screen taller than 4:3 -> letterbox
-  dst.x = (ow - dst.w) / 2; dst.y = (oh - dst.h) / 2;
-  SDL_SetRenderDrawColor(s_ren, 0, 0, 0, 255);
-  SDL_RenderClear(s_ren); SDL_RenderCopy(s_ren, s_tex, NULL, &dst); SDL_RenderPresent(s_ren);
-  SDL_Event e;
-  while (SDL_PollEvent(&e)) {
-    if (e.type == SDL_QUIT) exit(0);
-    if (e.type == SDL_KEYDOWN && e.key.keysym.scancode == SDL_SCANCODE_ESCAPE) exit(0);
-  }
+  gpu_vk_present(&game->core, src, sx, sy, s_disp_w, s_disp_h);   // SDL_GPU present (incl. headless upload)
 }
 void GpuState::present_window() { blit_src(s_vram, s_disp_x, s_disp_y); }   // the live front buffer
 // Re-present the CURRENT frame without advancing game logic — used by the debug-server pause loop so
