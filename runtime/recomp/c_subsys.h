@@ -15,7 +15,7 @@ void watchdog_pet(void);
 void watchdog_suspend(void);   // cancel the timeout during intentional idle (pause / REPL input wait)
 void watchdog_disable(void);   // permanently disable (SBS debugger pauses indefinitely on a divergence)
 
-// gpu_vk.cpp — is a live on-screen window up (the single windowed/headless discriminator; replaces
+// gpu_gpu.cpp — is a live on-screen window up (the single windowed/headless discriminator; replaces
 // the old PSXPORT_GPU_WINDOW env gate). C-linkage so C and C++ subsystems share one source of truth.
 int gpu_windowed(void);
 

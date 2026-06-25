@@ -39,7 +39,7 @@ int disc_read_raw(uint32_t lba, uint8_t* out, uint32_t n);   // disc.c (raw 2352
 // The streaming/clip state below used to be file-scope statics; it now lives on the bound XaState so two
 // cores keep SEPARATE streaming state. xa_bind_state() points `s_xa` at the active core's XaState before
 // that core runs (native_step_frame). The historical `s_*` field spellings are kept as macros over
-// `s_xa->*` (like gpu_vk's BIND_BATCH shadow-names) so the function bodies below are byte-unchanged.
+// `s_xa->*` (like gpu_gpu's BIND_BATCH shadow-names) so the function bodies below are byte-unchanged.
 // s_dbg stays a file-scope cache (config-derived, immutable after first read — not machine state).
 static int       s_dbg = -1;
 static XaState   s_default = { .src_freq = 37800 };

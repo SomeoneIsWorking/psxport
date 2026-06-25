@@ -1175,12 +1175,12 @@ runtime diagnostics:
   `PSXPORT_AUDIO_RATE` production-rate meter.
 
 ## 2026-06-17 (later-88) — HW renderer M0–M2 + M2b: Vulkan present + GPU VRAM image + triangle rasterizer; finding: Tomba2 is texture-dominated.
-Built the Vulkan/MoltenVK renderer foundation (approved plan; runtime/recomp/gpu_vk.c, PSXPORT_VK=1):
+Built the Vulkan/MoltenVK renderer foundation (approved plan; runtime/recomp/gpu_gpu.c, PSXPORT_VK=1):
 - **M0**: SDL_Vulkan swapchain + fullscreen-quad present (SW still rasterizes s_vram, VK presents it).
 - **M1**: VRAM as a device image (R16_UINT 1024x512 = 1555); present samples it + unpacks in-shader.
 - **M2**: GPU triangle pipeline (flat/gouraud) drawing into the VRAM image; readback. Self-test
   PSXPORT_VK_TRITEST=1 PASSES (flat fill 0x001f exact, gouraud interpolated, clear correct).
-- **M2b**: tee UNTEXTURED polys from gp0_exec into gpu_vk_draw_tri (absolute VRAM coords) + a per-frame
+- **M2b**: tee UNTEXTURED polys from gp0_exec into gpu_gpu_draw_tri (absolute VRAM coords) + a per-frame
   VK-vs-SW diff (PSXPORT_VK_DIFF=frame: upload SW VRAM as bg, draw VK tris on top, readback, count
   mismatches, dump scratch/screenshots/vk_diff.ppm).
 - **FINDING:** gameplay frames have **zero untextured polys** (f2500/f4500 both "no untextured tris").
@@ -4829,7 +4829,7 @@ SEND renders for the user to eyeball, don't naive-pixel-diff. M4 sprites tee'd (
 
 ## 2026-06-17 (later-91) — HW renderer COMPLETE: Vulkan is the DEFAULT renderer; SW retired to oracle/fallback.
 M5 finished. VK owns VRAM and renders every PSX primitive type (polys, sprites, lines-as-quads, fills/
-copies/uploads via dirty-region mirroring, semi-transparency 4 blend modes). gpu_vk_enabled() now
+copies/uploads via dirty-region mirroring, semi-transparency 4 blend modes). gpu_gpu_enabled() now
 DEFAULTS ON for windowed runs; PSXPORT_SW_GPU=1 (or PSXPORT_VK=0) forces the SW rasterizer (the proven
 oracle). Headless always stays SW (no window -> no VK). Validated: 5000-frame windowed run across boot/
 title/ship-demo/field-demo/tutorial = ZERO validation errors (RADV); frames render indistinguishably
@@ -4843,7 +4843,7 @@ from SW (user-confirmed "looks great"). PSXPORT_VK_SHOT=frame dumps the live VK 
 ## 2026-06-17 (later-92) — Widescreen WORKS on Tomba2 (falsifies the old "ineffective" note) + extended culling.
 With the native VK renderer owning display, the GTE widescreen hack works on Tomba2:
 - **PSXPORT_WIDE=1**: gte_init() sets widescreen_hack=1 + aspect 16:9 (squish projected X around centre);
-  gpu_vk present fits 16:9 instead of 4:3 -> wider horizontal FOV. (Old later-era note "ineffective on
+  gpu_gpu present fits 16:9 instead of 4:3 -> wider horizontal FOV. (Old later-era note "ineffective on
   Tomba2" was on the oracle; FALSIFIED here.) 2D/sprites bypass the GTE (HUD-stretch is the next per-game item).
 - **PSXPORT_CULL=1 (extended culling, user-requested):** the game's FUN_8007712c culls each object by
   distance AND a FOV cone (depth/dist < ~0x370 ≈ ±77°) — over-culls (pop-in; widescreen edges dropped).
@@ -4865,7 +4865,7 @@ a PC game, don't squish anything." Replaced with a genuinely native renderer-sid
   + wider target. widescreen_hack now hard-OFF in gte_beetle.c.
 - **Where the wide image lives (VRAM is fully packed — can't widen in place):** the VK R16_UINT image is
   grown VRAM_H(512) -> IMG_H(992); rows [512, 992) are a VK-only scratch framebuffer (FB_Y0=512, up to
-  856x480 = 16:9 @ 2x). gpu_vk.c relocates the tee'd geometry into the FB via a VERTEX push-constant
+  856x480 = 16:9 @ 2x). gpu_gpu.c relocates the tee'd geometry into the FB via a VERTEX push-constant
   transform (tritex.vert): local = i_pos - i_da.xy (da.xy = active framebuffer origin), fb =
   ((local.x+WIDE_OFF)*ss + fb_x0, FB_Y0 + local.y*ss); clip overridden to the FB rect so wide geometry
   isn't dropped. Textures still sampled from VRAM rows <512 (unchanged). Present samples the 16:9 FB 1:1
@@ -4882,7 +4882,7 @@ a PC game, don't squish anything." Replaced with a genuinely native renderer-sid
   present shader, HUD edge-anchoring (2D sprite path), shaders/lighting. WATCH: aggressive cull can cause
   entity walk-through ghosts (journal later-52) — needs playtesting now that the user is engaged.
 - **later-93b (same session):** PSXPORT_SS now defaults to 2 (FB 856x480 = fills the image exactly;
-  sharper than 428x240 upscaled to the window). **HUD edge-anchoring done** (gpu_vk_sprite_anchor_dx,
+  sharper than 428x240 upscaled to the window). **HUD edge-anchoring done** (gpu_gpu_sprite_anchor_dx,
   wired in the gp0 0x60-0x7F sprite tee in gpu_native.c): 2D sprites bypass the GTE, so instead of the
   renderer centering them, each sprite shifts by (Xc-160)*(FBW/ss-320)/320 native px before the ss scale
   — Xc=160 stays centered, Xc=0 pins to the new left edge, Xc=320 to the right. Native size preserved.
@@ -4924,7 +4924,7 @@ in gte_beetle.c. Implemented it for real instead of leaving 3D snapped-to-intege
   key collision lookup just misses -> integer fallback, so a wrong match can only cost smoothing, never
   correctness. **Reset every presented frame** (gpu_native gpu_present_ex) so a stale precise value from
   a prior frame can't be re-applied to a freshly integer-placed vertex (the cross-frame-wobble trap).
-- **gpu_vk.c:** added float-position draw entries `gpu_vk_draw_tritri_f`/`gpu_vk_draw_semi_f` (TexVtx.x
+- **gpu_gpu.c:** added float-position draw entries `gpu_gpu_draw_tritri_f`/`gpu_gpu_draw_semi_f` (TexVtx.x
   was already float; the vertex shader already divides floats). The old int entries are now thin
   wrappers that widen to float -> one impl. (+ stubs in the no-VK build.)
 - **gpu_native.c:** ONLY the polygon tee (op 0x20-0x3F = GTE-projected 3D) looks up the precise coords
@@ -4963,7 +4963,7 @@ reconstruction, then layer directional light + fog + AO. Built the foundation + 
   (IR1/IR2/IR3 = rotation·V + translation, read via GTE_ReadDR(9/10/11) at PGXP_pushSXYZ2f time, where
   TransformXY hasn't touched IR yet). New `pgxp_lookup_view(sx,sy,...)`. This is the ONLY normal source —
   the game has no GTE lighting (later-96).
-- **Per-face normal (gpu_vk.c tex_emit):** for each triangle with 3 view-space verts (looked up in the
+- **Per-face normal (gpu_gpu.c tex_emit):** for each triangle with 3 view-space verts (looked up in the
   polygon tee, gpu_native.c), normal = normalize(cross(e1,e2)), oriented toward the camera at the origin
   (flip if dot(N, faceCenter) > 0). depth = view Z. Passed as new TexVtx fields nx/ny/nz/depth (vertex
   attrs loc 7/8). 2D sprites/lines/HUD pass NULL view -> zero normal -> shader leaves them untouched (they
@@ -4975,7 +4975,7 @@ reconstruction, then layer directional light + fog + AO. Built the foundation + 
   refactor (handoff). Native fog = mix(color, tint, depth ramp).
 - **Config (gpu_native.c, env one-shot):** PSXPORT_LIGHT=0/1/2, PSXPORT_LIGHT_DIR="x,y,z",
   PSXPORT_LIGHT_AMB / PSXPORT_LIGHT_DIFF, PSXPORT_FOG=1 + FOG_NEAR/FAR/RGB. Default OFF (byte-identical to
-  later-96 unless enabled). `gpu_vk_set_light()` pushes the LPC each tritex batch.
+  later-96 unless enabled). `gpu_gpu_set_light()` pushes the LPC each tritex batch.
 - **VALIDATED:** normal-viz (PSXPORT_LIGHT=2, scratch/screenshots/normviz_1500.png) shows the 3D world
   cleanly colored by face orientation — vertical tower uniformly green, ground red, catapult/barrel faceted
   = reconstruction is CORRECT. Directional light (=1) shades the world (tower left-dark/right-bright, grass
@@ -5031,11 +5031,11 @@ Direction: stop black-boxing the graphics; reimplement the engine's draw path in
   or render), NOT my OFX change. Readback buffer is correctly sized (VRAM_W*IMG_H), so not a shot-size bug;
   cause not yet found (suspect a change between later-93 and now). Reverted the wide experiment to keep the
   tree clean; widescreen is off by default (./run.sh = 4:3, unaffected). NEXT: isolate the wide-FB bars
-  (bisect gpu_vk since later-93 / compare live-window vs VK_SHOT), then re-land native widescreen on OFX.
+  (bisect gpu_gpu since later-93 / compare live-window vs VK_SHOT), then re-land native widescreen on OFX.
 - **later-99b — wide bars ROOT-CAUSED + tricks removed:** bisected — wide is CLEAN at SS=2, BARS at SS=1.
   The vertical bars are a wide-FB rasterization gap at native 1x (the 320→428 +54-shifted geometry leaves
   periodic 1px column gaps that SS=2 covers); NOT my OFX/DrawOTag change (bars persist with both reverted).
-  My SS default 2→1 exposed it. Action: **reset the renderer (gpu_vk.c/gpu_native.c/shaders) to the clean
+  My SS default 2→1 exposed it. Action: **reset the renderer (gpu_gpu.c/gpu_native.c/shaders) to the clean
   pre-session state (e6de790), removing the user-rejected PGXP + lighting tricks entirely**; re-applied only
   SS=1 default + the scene classifier (RE tool). Native projection + DrawOTag overrides (game_tomba2) kept,
   re-verified **0-pixel-diff** vs recomp on the default path. Default ./run.sh = 4:3 native, clean, no tricks.
@@ -5173,13 +5173,13 @@ normal run with "unbound variable" (the var is unset unless you ask for the anal
 the interpreter-only pivot) from run.sh + build_port.sh, and refreshed the stale "recompiler input" /
 "compiles the recompiled core" comments. run.sh now builds+launches+exits cleanly end-to-end.
 
-NEXT (handoff remainder): #2 SBS visual verify (PSXPORT_SBS shotseq not writing — debug gpu_vk.c
-gpu_vk_shotseq), #3 overlay-banner depth semantics (ASK user), #4 optional generated/ include trim
+NEXT (handoff remainder): #2 SBS visual verify (PSXPORT_SBS shotseq not writing — debug gpu_gpu.c
+gpu_gpu_shotseq), #3 overlay-banner depth semantics (ASK user), #4 optional generated/ include trim
 (done for the build scripts; rec_decls.h is no longer included by any linked TU).
 
 ## later-104 — DONE: native-depth occlusion fixed (3-band depth model) + SBS visual verify
 Handoff #2 (visual verify) + #3 (depth semantics, user steer: "more ownership"). The SBS A/B dump
-(now working — fixed a silent `fopen` failure in gpu_vk.c gpu_vk_dump: it never `mkdir`'d the
+(now working — fixed a silent `fopen` failure in gpu_gpu.c gpu_gpu_dump: it never `mkdir`'d the
 PSXPORT_VK_SHOTSEQ dir) revealed that **task #6's "98% native-depth coverage" did NOT yield correct
 occlusion**: with PSXPORT_NATIVE_DEPTH=1 the **entire foreground (terrain/hut/trees/Tomba) was occluded
 by the water+sky background** — only the GTE-projected 3D objects (fruit, bird) survived. Reproduced in
@@ -5191,13 +5191,13 @@ layers with NO GTE projection** (engine_re.md "Water/reflection"), so every back
 and got dumped into the NEAR overlay band (nearest, wins) → it covered the whole 3D world. The overlay
 band is right for HUD (composite OVER the world) but wrong for backdrops (must sit BEHIND it).
 
-**Fix — 3-band depth model** (gpu_vk.c + gpu_native.c tee): split the non-3D prims into
+**Fix — 3-band depth model** (gpu_gpu.c + gpu_native.c tee): split the non-3D prims into
 - **2D BACKGROUND band [0, NATIVE_3D_MIN=0.0625)** — backdrops (water/sky), FAR, behind the world,
 - **3D WORLD band [0.0625, 0.9375]** — real per-vertex depth (proj_pz_to_ord remapped via `ord3d()`),
 - **2D OVERLAY band (0.9375, 1]** — HUD/UI/banners, NEAR, over the world (unchanged).
 
 Background vs HUD is split by **OT submission order**: a 2D prim drawn BEFORE any 3D prim this frame is
-a backdrop (`gpu_vk_set_order_2d_bg{,_n}` → far band); AFTER, it's HUD (overlay band). Tracked by a
+a backdrop (`gpu_gpu_set_order_2d_bg{,_n}` → far band); AFTER, it's HUD (overlay band). Tracked by a
 per-frame `s_seen3d` flag (reset with s_prim_order). This matches the painter/OT semantics (backdrops
 are submitted first, HUD last) and is what "owning more" of the depth means — the backdrop now gets a
 deliberate native far depth instead of an accidental near one.
@@ -5216,7 +5216,7 @@ per-layer call.
 
 ## later-105 — 60fps + widescreen SEPARATED (rename wide60 → fps60) + feature readiness
 User direction: finish 60fps, but first SEPARATE the widescreen and 60fps code (they were conflated
-under the "wide60" name even though widescreen lives in gpu_vk.c PSXPORT_WIDE/IRES and 60fps lives in
+under the "wide60" name even though widescreen lives in gpu_gpu.c PSXPORT_WIDE/IRES and 60fps lives in
 engine/wide60.c). The two were already decoupled in code (neither references the other); the conflation
 was purely the name. Renamed the PORT's 60fps feature wide60 → fps60: `engine/wide60.c`→`engine/fps60.c`,
 `wide60_*`→`fps60_*`, `gpu_w60_*`→`gpu_fps60_*`, `g_wide60_on`→`g_fps60_on`, `PSXPORT_WIDE60[_GATE/_SYNTH/
@@ -5226,7 +5226,7 @@ in hle.c/native_boot.c that cite the oracle's HLE. Verified pure-rename: full bu
 diff** at f540 (faithful gate), 60fps measures identically under PSXPORT_FPS60.
 
 Feature readiness audit (asked "ready for hi-res/widescreen/60fps/lighting/AO mods?"):
-- **Higher internal resolution** (PSXPORT_IRES=N, gpu_vk.c) — WORKS (verified: genuine denser
+- **Higher internal resolution** (PSXPORT_IRES=N, gpu_gpu.c) — WORKS (verified: genuine denser
   rasterization, crisp 3D edges; up to 3x 4:3 / 2x 16:9, VRAM_W-capped).
 - **Widescreen** (PSXPORT_WIDE) — WORKS (verified: true wider FOV, more world on the sides, no stretch;
   HUD edge-anchoring). Native depth makes both render correctly now.
@@ -5261,7 +5261,7 @@ translation — blocked (Prim.obj=0, all snap); (b) build_remap SXY reprojection
 separate s_interp buffer — looked "terrible/smeared" (later-86) because re-rasterizing the captured 2D
 GP0 SUBSET is lossy (missing occluders/fills → hidden geo reappears, no depth). The RIGHT approach now
 that we own the native renderer + 3-band native depth: for the in-between frame, interpolate each matched
-object's transform and RE-SUBMIT the display list through the NATIVE VK renderer (gpu_vk_draw_* with the
+object's transform and RE-SUBMIT the display list through the NATIVE VK renderer (gpu_gpu_draw_* with the
 D32 depth), so occlusion is correct — no lossy s_interp re-rasterize. Present frame-behind: A, lerp(A,B),
 B… NEXT: wire build_remap's per-vertex SXY remap into a native-renderer re-submit + a motion-scene visual
 check (idle field has motion but driving Tomba/camera pan shows it best).
@@ -5310,7 +5310,7 @@ unblocked by the 3-band native depth (D32 s_depth exists); (2) better lighting �
 Task #1 from the handoff. Built a screen-space ambient-occlusion post pass over the VK renderer, gated
 `PSXPORT_SSAO` (implies NATIVE_DEPTH; OR'd into the native-depth gates in gpu_native.c + gte_beetle
 attach_enabled; disabled under SBS). New: `shaders_vk/ssao.frag` (+present.vert reused as its vertex
-stage), gpu_vk.c `create_ssao`/`ssao_pass` (own R16_UINT target s_ssao_img, color-only rpass ending in
+stage), gpu_gpu.c `create_ssao`/`ssao_pass` (own R16_UINT target s_ssao_img, color-only rpass ending in
 TRANSFER_SRC, 2-binding descriptor color+depth, pipeline), s_depth gets SAMPLED_BIT, gte_beetle
 `proj_near_pz()` getter. AO'd color → s_ssao_img → copied back into s_tex (present/dump pick it up free).
 Depth linearize: stored depth = ord3d(proj_pz_to_ord(pz)), affine in 1/pz → undo band remap + affine
@@ -5343,7 +5343,7 @@ Task #2. User steer on the prior (rejected) lighting: "I don't remember but if i
 the agent did it or it wasn't PC native like it was hacky." So: do it the PROPER PC-native way, not the
 old PGXP per-face-normal hack (value-keyed cache, entangled in the forward tritex pass). Built a
 DEFERRED directional light that **reconstructs real geometric normals from the depth buffer** —
-shares the SSAO deferred pass (ssao.frag + gpu_vk.c ssao_pass, now AO+light), gated PSXPORT_LIGHT
+shares the SSAO deferred pass (ssao.frag + gpu_gpu.c ssao_pass, now AO+light), gated PSXPORT_LIGHT
 (implies NATIVE_DEPTH via the same gates; disabled under SBS). No GTE/PGXP coupling.
 
 How: per depth pixel reconstruct view pos P = ((sx-cx)*pz/H, (sy-cy)*pz/H, pz) — cx,cy,H from new
@@ -5370,7 +5370,7 @@ toggles there later — this overlay is the stopgap UI).
 
 - **Vendored Dear ImGui** stable v1.91.9b into `vendor/imgui/` (core + SDL2 + Vulkan backends; MIT).
 - **Live mod state** `runtime/recomp/mods.{h,c}` — `g_mods` (ui/wide/ires/ssao/light + ssao & light
-  params), seeded once from cfg by mods_init(), then mutated LIVE by the overlay. gpu_vk.c now reads
+  params), seeded once from cfg by mods_init(), then mutated LIVE by the overlay. gpu_gpu.c now reads
   g_mods EVERY frame (s_wide/s_ires became accessor macros over g_mods; ssao_on/light_on read g_mods;
   ssao_pass params read g_mods live) so a toggle/slider takes effect immediately. 60fps = the existing
   extern int g_fps60_on, flipped directly by the overlay.
@@ -5489,7 +5489,7 @@ runs ~7× the native-loop frame — at native-frame 420 s_frame≈3006; dumped a
 - **Conclusion (confirms audit B1/B3/B4, empirically):** the engine produces NO wider content. OFX stays
   160, the clip stays 320, the frustum cull stays 4:3, and water/sky/HUD stay screen-space 320 — nothing in
   the aspect path touches the engine's submission. Today's "widescreen" is entirely a **present-time shader
-  effect**: `gpu_vk.c` `push_wide` takes the fixed 320-wide projection and (per `tritex.vert` wide branch)
+  effect**: `gpu_gpu.c` `push_wide` takes the fixed 320-wide projection and (per `tritex.vert` wide branch)
   CENTERS it into a wider scratch FB (`local.x + WIDE_OFF`, WIDE_OFF=(428-320)/2=54), then the present
   stretches that FB to the window. So 16:9 = 4:3 content stretched, not a wider FOV. That IS the "fake".
 - **Levers verified for the genuine fix:** (1) Beetle's GTE does the real RTPS/RTPT projection using CR24
@@ -5508,17 +5508,17 @@ Implemented the first "no faking" widescreen lever: the ENGINE projects a genuin
 (via Beetle's GTE) instead of the present-time FB spread. Gated `PSXPORT_WIDE_ENGINE` (default OFF) so the
 faithful 4:3 path is untouched (the 0-diff gate).
 - **OFX widen** in the already-owned `ov_set_geom_offset` (engine/game_tomba2.c): the gameplay projection
-  center is 160 (=320/2); when `gpu_vk_wide_engine()` is on, substitute the aspect center (214 @16:9 =
+  center is 160 (=320/2); when `gpu_gpu_wide_engine()` is on, substitute the aspect center (214 @16:9 =
   428/2) so CR24 drives Beetle's RTPS/RTPT to project across the wider screen. Only the gameplay config
   (ofx==160) is widened; InitGeom's reset (ofx==0) is left alone. Verified: headless logs
   `[geom] WIDE_ENGINE OFX 160 -> 214` + `CR24=00D60000` (wide), and the default run keeps `OFX=160`
   `CR24=00A00000` with NO WIDE_ENGINE line — 4:3 path provably untouched.
-- **1:1 placement** in `gpu_vk.c push_wide`: WIDE_OFF (the 320-in-428 re-center) is the SPREAD; in
+- **1:1 placement** in `gpu_gpu.c push_wide`: WIDE_OFF (the 320-in-428 re-center) is the SPREAD; in
   wide-engine the projection is already wide, so pass wide_off=0 → content placed 1:1 in the scratch FB.
   For the non-wide-engine path the expression is byte-identical (`s_wide ? WIDE_OFF() : 0`), so the
   existing FB-hack path is unchanged (no regression).
-- **Accessors** in gpu_vk.c: `gpu_vk_wide_engine()` (PSXPORT_WIDE_ENGINE && aspect!=4:3),
-  `gpu_vk_wide_engine_ofx()` (wide_native_w/2), `gpu_vk_wide_engine_w()` (wide clip width).
+- **Accessors** in gpu_gpu.c: `gpu_gpu_wide_engine()` (PSXPORT_WIDE_ENGINE && aspect!=4:3),
+  `gpu_gpu_wide_engine_ofx()` (wide_native_w/2), `gpu_gpu_wide_engine_w()` (wide clip width).
 - **Verified (headless VK shot at the field, s_frame=2900, `scratch/screenshots/field_{43,wide169,fbhack169}.png`):**
   - 4:3 (320×224): faithful scene, correct.
   - genuine-wide 16:9 (428×240): the 3D world is genuinely WIDER — terrain+structure on the far left and
@@ -5561,8 +5561,8 @@ native depth. Everything needs to be PC GAME." Acted on it.
 ## later-118b — genuine-wide 2D backdrop fills the frame (kills the vertical stripes)
 The genuine-wide 16:9 (later-117) showed vertical sky/backdrop STRIPES. Root cause (confirmed, not
 eyeballed): the screen-space 2D sprites (sky/water = 355 rects in the field) were spread apart by the
-per-sprite `gpu_vk_sprite_anchor_dx` FB-hack — adjacent backdrop tiles get DIFFERENT anchor shifts →
-gaps. Fix (gpu_native.c sprite path, gated `gpu_vk_wide_engine()`): in genuine-wide, scale the whole 2D
+per-sprite `gpu_gpu_sprite_anchor_dx` FB-hack — adjacent backdrop tiles get DIFFERENT anchor shifts →
+gaps. Fix (gpu_native.c sprite path, gated `gpu_gpu_wide_engine()`): in genuine-wide, scale the whole 2D
 plane uniformly to the wide width about the framebuffer origin (`XL/XR = o + (X-o)*wide_w/320`) so a tiled
 backdrop fills the frame contiguously (no gaps). Verified: `scratch/screenshots/field_wide169b.png` — sky
 gradient + ocean now fill the 16:9 frame cleanly, stripes gone. STEPPING STONE: this also scales HUD size;
@@ -5573,7 +5573,7 @@ bg/HUD flag — next. The HUD banner cut at 320 also remains (a clip item, B4/st
 later-118b widened 2D SPRITES; the HUD banner is drawn as screen-space 2D POLYS (not sprites), so it
 stayed left-anchored/cut at 320. Now that native depth is always-on, the poly path has the `is3d`
 classification every run → a poly with is3d==0 is a screen-space 2D element. Fix (gpu_native.c poly path,
-gated `s_ndepth && !is3d && gpu_vk_wide_engine()`): scale its x to the wide width about the framebuffer
+gated `s_ndepth && !is3d && gpu_gpu_wide_engine()`): scale its x to the wide width about the framebuffer
 origin, same transform as the 2D sprites. Verified `scratch/screenshots/field_wide169c.png`: the banner
 planks now spread across the 16:9 frame (vs left-clustered before). RESIDUAL: the last ~2 planks ("se!")
 still drop at the far-right edge (a clip/source-position item, B4 polish — not chased from a still).
@@ -5587,7 +5587,7 @@ User: "there is terrain on the right in the real game — do more RE, port more 
   / GT4 `0x8008007C`) frustum-culls a prim if ALL its verts have `SX >= 320` (off the 4:3 right edge).
   In genuine-wide the screen extends to 428, so geometry projected into the [320,428) right band is
   ON-screen but the engine's own submit DROPPED it -> ocean where terrain should be. Fix: `submit_xmax()`
-  = 428 (wide width) when `gpu_vk_wide_engine()`, else 320 (faithful). Applied to BOTH GT3 + GT4 culls.
+  = 428 (wide width) when `gpu_gpu_wide_engine()`, else 320 (faithful). Applied to BOTH GT3 + GT4 culls.
   (The byte-packed GT4 variant `submit_poly_gt4_bp` `0x80027768` has NO SX cull, so it was already wide;
   the overlay-scanned submitters share the GT3/GT4 native impl, so they widen too.) Verified
   `scratch/screenshots/v2_field.png`: the hut/structure + terrain on the right now appear (was ocean).
@@ -5620,7 +5620,7 @@ User: "NO FB HACK. PC NATIVE FB. toggling resolution/widescreen breaks the game.
   PSXPORT_ASPECT_SWITCH (new diag: switch aspect/ires at a present-frame headless): a FRESH FB-hack 16:9 at
   f2860 is IDENTICAL to one toggled at f2850 — both show the FB-hack's broken output. So the user toggles
   widescreen -> gets the broken FB-hack. Fix = make the GOOD path the default.
-- **Genuine-wide is now the DEFAULT wide path** (`gpu_vk_wide_engine()` default ON; legacy FB-spread is
+- **Genuine-wide is now the DEFAULT wide path** (`gpu_gpu_wide_engine()` default ON; legacy FB-spread is
   opt-out `PSXPORT_WIDE_FBHACK=1` for A/B). So selecting 16:9/21:9 in the overlay (or PSXPORT_ASPECT) gives
   the real wider FOV + native FB, no spread. Verified `scratch/screenshots/def2_field.png`: field renders
   genuinely wide (FOV, right terrain, native depth, 2D filled) with NO flag.
@@ -5632,7 +5632,7 @@ User: "NO FB HACK. PC NATIVE FB. toggling resolution/widescreen breaks the game.
   full FB incl. off-screen margins that hold stale content — so the "right-side garbage" seen on the
   pause-menu shots may be CROPPED-OUT margin the user never sees. Verify menu/2D-screens with a WINDOWED
   shot, not the headless FB dump.
-- **OPEN:** (1) FB-hack code (WIDE_OFF centering, gpu_vk_sprite_anchor_dx, the push_wide wide_off branch) is
+- **OPEN:** (1) FB-hack code (WIDE_OFF centering, gpu_gpu_sprite_anchor_dx, the push_wide wide_off branch) is
   now DEAD (wide_engine default-on) — DELETE it (user: "NO FB HACK"); remove the PSXPORT_WIDE_FBHACK opt-out
   too. (2) Live-OFX-toggle: OFX is widened in ov_set_geom_offset when the game calls SetGeomOffset (scene
   setup) — a live aspect toggle mid-scene won't reproject the 3D until the next SetGeomOffset; re-apply OFX
@@ -5645,9 +5645,9 @@ spread"), so the ONLY widescreen path is the genuine wider-FOV engine frame.
 - **Removed:** `WIDE_OFF()` (the 320-in-428 re-center) and every use of it; the `push_wide` wide_off
   push-constant value (slot kept as reserved 0 to preserve the 32-byte VPC layout); `tritex.vert`'s
   `+ w.wb.x` re-center term (now `fx = local.x*ss + fb_x0`); the deferred screen-map `off_x = s_wide ?
-  WIDE_OFF : 0` term; `gpu_vk_sprite_anchor_dx()` + its 2D-sprite FB-hack caller branch in gpu_native.c
+  WIDE_OFF : 0` term; `gpu_gpu_sprite_anchor_dx()` + its 2D-sprite FB-hack caller branch in gpu_native.c
   (and the VK-disabled stub + the gpu_differ stub); the `PSXPORT_WIDE_FBHACK` opt-out itself.
-  `gpu_vk_wide_engine()` is now simply `g_mods.aspect != ASPECT_4_3`.
+  `gpu_gpu_wide_engine()` is now simply `g_mods.aspect != ASPECT_4_3`.
 - **Verified — 4:3 byte-identical (the 0-diff gate):** every removed term was provably already 0 on the
   4:3 path (s_wide=0 ⇒ WIDE_OFF branch=0, sprite_anchor_dx returns 0 when !s_wide, off_x=0). Empirically
   the 4:3 headless field shot logs NO WIDE_ENGINE line and depth records=1807 / miss=34 — EXACTLY the
@@ -5694,7 +5694,7 @@ state-packets that precede it in the OT. Consequences:
 
 **NEXT (the port, not pokes):** own DrawOTag as a NATIVE classified display list — reimplement the libgpu
 primitive builders so prims+env flow into PC-native structs (carrying draw-time state + native view-Z),
-render that list directly via gpu_vk_draw_*; keep the recomp body as A/B oracle. Then widescreen = native
+render that list directly via gpu_gpu_draw_*; keep the recomp body as A/B oracle. Then widescreen = native
 projection (proj_native_vertex with a render-OFX) on the native list, guest GTE untouched. Open snag for
 the native-projection step: proj_native_vertex is 0-diff at the GTE-op hook (PROJPROBE) but diverged in
 BOTH X and Y when called from the submit call-site (e.g. native 012F00B2 vs gte 015F00B7) — a register/
@@ -6434,11 +6434,11 @@ My headless shots looked perfect. Root cause found by reproducing the user's EXA
 headless shots ran ui=0 (no settings load) → ires=1 → the simple path. DIFFERENT RENDER PATH. (The "good
 shots while screen is broken" was the key clue — the user spotted it.)
 
-THE BUG (gpu_vk.c present/compose): the scaled scratch FB (rows ≥ FB_Y0) holds ONLY tee'd geometry (the
+THE BUG (gpu_gpu.c present/compose): the scaled scratch FB (rows ≥ FB_Y0) holds ONLY tee'd geometry (the
 vertex shader relocates it there when use_fb). Pure-2D screens (SCEA/FMV/title/menu) are VRAM-RESIDENT —
 an uploaded image displayed via the display area, NO tee'd geometry — so the scratch FB is EMPTY for them,
 yet the present sampled the scratch FB whenever use_fb() → black/garbled 2D screens. The 4:3-pillarbox path
-that should have caught this was gated on `gpu_vk_wide_engine()` (wide only), so 4:3 + hi-res fell through.
+that should have caught this was gated on `gpu_gpu_wide_engine()` (wide only), so 4:3 + hi-res fell through.
 
 THE FIX (own the FB-vs-VRAM decision with ONE consistent predicate): `frame_via_fb() = use_fb() &&
 gpu_seen3d_this_frame()` — a frame's content is in the scratch FB only when hi-res/wide is configured AND
@@ -6447,7 +6447,7 @@ walk tees before present, so it's final — no 1-frame lag, unlike the old s_pre
 Replaced use_fb() with frame_via_fb() at every render+present decision site: the scratch-FB clear +
 push_wide relocation (panel_render), the present sample region + aspect (2D frame → native VRAM region at
 4:3; 3D frame → scratch FB at the selected aspect), the headless readback, the SSAO screen map, and
-gpu_vk_dump. So relocation and present always agree.
+gpu_gpu_dump. So relocation and present always agree.
 
 VERIFIED (headless, real-disc boot path): SCEA @ires=2 — was text shoved bottom-left + mostly black; now
 centered + complete. 3D field @ires=2 — renders hi-res 640×480 crisp from the scratch FB (unchanged).
@@ -6455,7 +6455,7 @@ ires=1 path BYTE-UNCHANGED (frame_via_fb==false at 4:3/ires1, same as old use_fb
 tooling unaffected. Runs to f800 @ires=2, no hang.
 
 IMPORTANT framing correction (later-138/139 were chasing the wrong thing): this breakage is 100% host-side
-C++ in gpu_vk.c — it never touches guest memory. So "writing guest memory corrupts the game; move
+C++ in gpu_gpu.c — it never touches guest memory. So "writing guest memory corrupts the game; move
 everything to host to fix it" (the later-138 handoff premise) is FALSIFIED for the on-screen corruption.
 The corruption is in the native render/present layer itself. SEPARATE STILL-OPEN issue: the ocean
 exploded-geometry (spiky stretched tris) reproduces even at ires=1 with ALL native overrides off (pure
@@ -7132,7 +7132,7 @@ Worked the 8 open GitHub render bugs (specs in docs/reference/issues/).
   headless.** #4 flame-hut + #5 barrel are past free-roam (driving §5 blocker); their fix branches on
   whether the prim is OT-walked-shared-obj_depth vs owned-GT4 (must confirm live with `provat`/`objz`).
   #6 HUD gray box is LATENT until the menu page handler is owned native (doesn't reproduce now). #12
-  cutscene black bar doesn't reproduce headless and the fix is delicate present-region math (gpu_vk.cpp
+  cutscene black bar doesn't reproduce headless and the fix is delicate present-region math (gpu_gpu.cpp
   :1221) that would touch ALL frames — unsafe to change without a repro to verify. Applying any of these
   blind = bandaid/regression risk (forbidden). Specs carry the exact live repro recipe for the user.
 
@@ -7401,14 +7401,14 @@ else snapped), PASS 2 = the real frame. The dynamic-shadow GEOMETRY is captured 
 the host-persistent `s_shadow_vbuf` (count `s_shadow_n`) during the engine submit walk — at the real
 frame-B world positions. Both passes go through `panel_render(s_tex)`, and the gate
 `if (shadows_on() && tgt == s_tex) shadow_pass()` DID fire on both. BUT PASS 1's
-`gpu_fps60_present_pass` → `gpu_vk_frame_end` → `frame_end` ZEROED `s_shadow_n`, so PASS 2 (the real, final-
+`gpu_fps60_present_pass` → `gpu_gpu_frame_end` → `frame_end` ZEROED `s_shadow_n`, so PASS 2 (the real, final-
 presented frame) rasterized an EMPTY shadow map. Probe `PSXPORT_DEBUG=fps60shadow` showed the smoking gun:
 `shadow_pass: s_shadow_n=2565 / 0 / 2565 / 0 …` (interp had the shadow, real had none) → 30Hz strobe.
 NOTE the brief's guess (`shadows only run for s_tex, never for the interp frame`) was the INVERSE of the
 real mechanism — both passes share s_tex; the bug was the stream reset, not the gate.
 
 FIX: don't let the interp present-pass consume the shadow stream. Added
-`GpuVkState::frame_end(..., int keep_shadow=0)` + `gpu_vk_frame_end_keepshadow`; the interp pass calls the
+`GpuGpuState::frame_end(..., int keep_shadow=0)` + `gpu_gpu_frame_end_keepshadow`; the interp pass calls the
 keepshadow variant (resets only the draw batch s_tri/tex/semi, KEEPS s_shadow_n). Both passes now rasterize
 the SAME shadow map (B positions) → probe shows `2556 / 2556` on every frame. This matches the user's chosen
 cheap design: the dynamic shadow is NOT interpolated — it comes from the real composite (B) on both displayed
@@ -7427,7 +7427,7 @@ shadow) vs `after_real` (shadow) diff (16.8% px) lights up exactly the hut/folia
 
 ## later-201: 60fps rearchitected to ONE pipeline — interp frame = the same full queue, twice (keep_shadow + HUD-bypass REMOVED)
 USER DIRECTIVE: "There shouldn't be any difference between how 60fps renders and how 30fps does — integrate
-into the 3D pipeline." The later-200 `keep_shadow` flag and the HUD's direct `gpu_vk_draw_tritri` bypass were
+into the 3D pipeline." The later-200 `keep_shadow` flag and the HUD's direct `gpu_gpu_draw_tritri` bypass were
 SYMPTOMS of a SEPARATE interp path: a subsystem that lands on only one of the two presents needs a per-feature
 patch to also run on the other. The fix is to make the in-between go through the IDENTICAL pipeline, not to
 patch each subsystem.
@@ -7436,15 +7436,15 @@ REARCHITECTURE: the render queue is now THE COMPLETE FRAME; each 60fps present e
 the full present pipeline (panel_render = opaque/semi + shadow_pass + ssao_pass + 2D). Two things were moved
 INTO the queue so they ride both passes by construction:
 - HUD → queue. `engine/hud.cpp` `hud_quad` now calls `rq_push_2d_quad` (new, gpu_native.cpp) → an RqItem on
-  layer RQ_HUD, instead of a direct `gpu_vk_draw_tritri`. The HUD is part of the snapshot, emitted on BOTH
+  layer RQ_HUD, instead of a direct `gpu_gpu_draw_tritri`. The HUD is part of the snapshot, emitted on BOTH
   passes → no flicker.
 - Dynamic shadow geometry → queue. RqItem gained host-only `sh_cast` + `sh_vx/vy/vz[4]` (the opaque world
   prim's view-space verts). `gpu_draw_world_quad` takes an `sv` arg; the GT3/GT4 submitters (engine_submit.cpp
-  `shadow_verts`) and native_terrain.cpp fill it instead of calling `gpu_vk_shadow_push_tri` directly.
+  `shadow_verts`) and native_terrain.cpp fill it instead of calling `gpu_gpu_shadow_push_tri` directly.
   `gpu_emit_rq_item` re-pushes the shadow tris on EVERY emit → the shadow map rebuilds identically on each
   pass. Shadows stay un-interpolated (build_lerp leaves sh_v* at B), per the user's design.
 
-REMOVED: `keep_shadow` param on `GpuVkState::frame_end`, `gpu_vk_frame_end_keepshadow` (header + both defs),
+REMOVED: `keep_shadow` param on `GpuGpuState::frame_end`, `gpu_gpu_frame_end_keepshadow` (header + both defs),
 and the keepshadow call in `gpu_fps60_present_pass` — `frame_end` now resets the shadow stream every present,
 refilled by the next queue emit. No per-feature special-casing remains.
 
@@ -8543,7 +8543,7 @@ render real-depth, stable 200+ frames of motion, no derail.
 Investigated the handoff's bug #1 (user's macOS title menu shows a garbled top-left quadrant: blocky
 texture-page data + noise, rest of title fine). Could NOT reproduce on Linux (RADV + Wayland). Findings:
 - **Headless `shot` reads `s_tex` back DIRECTLY** (`vk_readback_to_rb` → vkCmdCopyImageToBuffer from s_tex,
-  gpu_vk.cpp:2208), bypassing the windowed `present.frag` sampling path. So NO headless capture can ever
+  gpu_gpu.cpp:2208), bypassing the windowed `present.frag` sampling path. So NO headless capture can ever
   show a windowed/present bug. Every headless title shot is clean for this reason — not because the bug is absent.
 - **DISPROVEN: "uninitialized VRAM image" theory** (handoff guess). Added a temp diagnostic that fills
   s_tex/s_tex_b/s_vram_tex with loud-magenta poison at creation (PSXPORT_VRAM_POISON, since reverted) → the

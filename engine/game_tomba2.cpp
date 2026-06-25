@@ -158,7 +158,7 @@ void ov_frame_update(Core* c) {
 // PSXPORT_OBJLOG=1: dump every object the cull dispatcher visits (addr + type@+0xc +
 // pos@+0x2e/32/36). Empirically maps the active-object pool/list for the native entity
 // manager (Phase 1) — more reliable than static-tracing the overlay handler dispatch.
-int gpu_vk_wide_engine(void);   // gpu_vk.c — genuine engine-wide active (PSXPORT_WIDE_ENGINE && aspect!=4:3)
+int gpu_gpu_wide_engine(void);   // gpu_gpu.c — genuine engine-wide active (PSXPORT_WIDE_ENGINE && aspect!=4:3)
 
 // --- Native ownership of the GTE projection setters (libgte) -------------------------------------
 // The engine configures its projection via libgte SetGeomOffset/SetGeomScreen (RE: docs/engine_re.md,

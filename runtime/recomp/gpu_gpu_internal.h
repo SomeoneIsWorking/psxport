@@ -1,41 +1,41 @@
-// gpu_vk_internal.h — the Vulkan present backend's per-instance render machine state.
+// gpu_gpu_internal.h — the Vulkan present backend's per-instance render machine state.
 //
-// De-globalization R2 (2026-06-19): gpu_vk.cpp's PER-FRAME mutable render state (batch counters, the
+// De-globalization R2 (2026-06-19): gpu_gpu.cpp's PER-FRAME mutable render state (batch counters, the
 // current prim's depth/order, the semi-transparency overlap grouping, the dirty-VRAM region list, this
-// frame's present origin and the last-frame diag snapshots) now lives on a `GpuVkState` instance owned
+// frame's present origin and the last-frame diag snapshots) now lives on a `GpuGpuState` instance owned
 // by `Game` (game.h), not in file-scope globals — so two cores can render independently and be diffed.
-// The touching gpu_vk functions are methods of GpuVkState (field names keep their historical `s_`
+// The touching gpu_gpu functions are methods of GpuGpuState (field names keep their historical `s_`
 // spelling so the bodies are unchanged by the move); the public C-style API stays stable via thin
-// free-function wrappers reached through `core->game->gpu_vk`.
+// free-function wrappers reached through `core->game->gpu_gpu`.
 //
-// What STAYS file-scope SHARED in gpu_vk.cpp (NOT here): the Vulkan device/swapchain/pipeline/buffer
+// What STAYS file-scope SHARED in gpu_gpu.cpp (NOT here): the Vulkan device/swapchain/pipeline/buffer
 // HANDLES (one VK device per process — host-output singletons, not machine state) and config-caches.
 // NOT a public API; internal to the GPU TUs.
-#ifndef GPU_VK_INTERNAL_H
-#define GPU_VK_INTERNAL_H
+#ifndef GPU_GPU_INTERNAL_H
+#define GPU_GPU_INTERNAL_H
 #include <stdint.h>
 
 struct Game;     // back-pointer target (game.h); only frame_via_fb() uses it (to reach s_seen3d via Core)
-struct Panel;    // gpu_vk.cpp: a self-contained per-target render view (Vulkan-typed; pointer-only here)
-struct TexVtx;   // gpu_vk.cpp: a textured vertex (defined there; pointer-only in the tex_emit signature)
+struct Panel;    // gpu_gpu.cpp: a self-contained per-target render view (Vulkan-typed; pointer-only here)
+struct TexVtx;   // gpu_gpu.cpp: a textured vertex (defined there; pointer-only in the tex_emit signature)
 struct Core;     // CPU/RAM handle (core.h)
 
-// Capacities for the moved array members (also used by the gpu_vk.cpp bodies via this header).
+// Capacities for the moved array members (also used by the gpu_gpu.cpp bodies via this header).
 #define SEMI_GRP_CAP 2048
 #define DIRTY_CAP    4096
 
-// A SW-written VRAM region to mirror into the persistent VK image (gpu_vk_dirty). Plain int rect — NOT
-// Vulkan's VkRect2D; named VkRect to keep the gpu_vk.cpp bodies byte-unchanged.
+// A SW-written VRAM region to mirror into the persistent VK image (gpu_gpu_dirty). Plain int rect — NOT
+// Vulkan's VkRect2D; named VkRect to keep the gpu_gpu.cpp bodies byte-unchanged.
 struct VkRect { int x, y, w, h; };
 
-// ---- GpuVkState — the VK backend's per-instance, per-frame render machine state + its methods --------
-struct GpuVkState {
+// ---- GpuGpuState — the VK backend's per-instance, per-frame render machine state + its methods --------
+struct GpuGpuState {
   Game* game = nullptr;   // set by Game(); reached only by frame_via_fb() for s_seen3d (via game->core)
 
   // M2/M3 batch state (counters + the three host vertex buffers + the semi-overlap grouping + the dirty-
-  // VRAM list) moved OUT of GpuVkState into the file-scope GeomBatch s_gb[2] in gpu_vk.cpp, so the renderer
+  // VRAM list) moved OUT of GpuGpuState into the file-scope GeomBatch s_gb[2] in gpu_gpu.cpp, so the renderer
   // holds TWO independent batches and draws each into its own panel image (dual-view native-vs-PSX
-  // side-by-side, 2026-06-24). The touching methods bind them via BIND_BATCH() — see gpu_vk.cpp.
+  // side-by-side, 2026-06-24). The touching methods bind them via BIND_BATCH() — see gpu_gpu.cpp.
 
   // Current prim's depth/order (set by the gp0 tee before each draw). s_vd/s_vdn = per-vertex native depth
   // (NULL = fall back to the per-prim OT-order s_cur_ord/s_cur_ordn). ordn = the PSXPORT_SBS native channel.
@@ -54,12 +54,12 @@ struct GpuVkState {
   // see the note above; each render target owns its own.)
 
   // This frame's faithful display origin (for the LIGHT screen map) and the last-presented region
-  // (on-demand gpu_vk_shot) + last frame's batched vertex counts (vkstats probe).
+  // (on-demand gpu_gpu_shot) + last frame's batched vertex counts (vkstats probe).
   int s_present_sx = 0, s_present_sy = 0;
   int s_last_sx = 0, s_last_sy = 0, s_last_w = 320, s_last_h = 240;
   int s_dbg_tri = 0, s_dbg_tex = 0, s_dbg_semi = 0;
 
-  // ---- methods (bodies in gpu_vk.cpp; reached via core->game->gpu_vk from the wrappers) ----
+  // ---- methods (bodies in gpu_gpu.cpp; reached via core->game->gpu_gpu from the wrappers) ----
   // public-API methods
   void set_vd(const float* d3);
   void set_vd_n(const float* d3);
@@ -108,4 +108,4 @@ struct GpuVkState {
   void tri_over_bg_readback(const uint16_t* bg, uint16_t* out);
 };
 
-#endif // GPU_VK_INTERNAL_H
+#endif // GPU_GPU_INTERNAL_H

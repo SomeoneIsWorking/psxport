@@ -1,4 +1,4 @@
-// Integration glue between the Vulkan present path (gpu_vk.cpp) and the RmlUi overlay
+// Integration glue between the Vulkan present path (gpu_gpu.cpp) and the RmlUi overlay
 // (rmlui_overlay.cpp). Keeps all overlay-specific orchestration out of the renderer — see
 // overlay_glue.h. Built as C++ (reads guest RAM via Core); the public hooks have C linkage.
 #include "overlay_glue.h"
@@ -18,7 +18,7 @@ void overlay_glue_event(const SDL_Event* e) {
 void overlay_glue_frame_begin(Core* core) {
     // Live world-position HUD: camera/Tomba position (int16 world units in scratchpad) + the current
     // stage entry pointer. These guest addresses are the same ones the engine RE established for the
-    // coordinate readout; reading them here keeps gpu_vk.cpp free of overlay concerns.
+    // coordinate readout; reading them here keeps gpu_gpu.cpp free of overlay concerns.
     if (core) {
         rmlui_overlay_set_world((int16_t)core->mem_r16(0x1F8000D2u),
                                 (int16_t)core->mem_r16(0x1F8000D6u),

@@ -13,7 +13,7 @@
 #include <stdint.h>
 
 struct Core;             // CPU/RAM handle (core.h); methods below take Core* but only by pointer
-struct Game;             // back-pointer target (game.h); blit_src reaches gpu_vk via game->core
+struct Game;             // back-pointer target (game.h); blit_src reaches gpu_gpu via game->core
 
 #define VRAM_W 1024
 #define VRAM_H 512
@@ -29,9 +29,9 @@ typedef struct { int x, y; uint8_t r, g, b; int u, v; } Vtx;   // rasterizer ver
 // Owned by Game (game.h has `GpuState gpu;`). Field names keep their historical `s_`/`g_` spelling so
 // the rasterizer bodies are unchanged by the move (they now read members via implicit `this`).
 struct GpuState {
-  Game* game = nullptr;   // set by Game(); blit_src uses &game->core to reach the gpu_vk present wrapper
+  Game* game = nullptr;   // set by Game(); blit_src uses &game->core to reach the gpu_gpu present wrapper
 
-  // Backdrop-vs-HUD / gameplay-frame discrimination (read by the gpu_vk present path via Core).
+  // Backdrop-vs-HUD / gameplay-frame discrimination (read by the gpu_gpu present path via Core).
   int s_seen3d = 0;       // has any GTE-projected (3D) prim been teed yet this frame? (else 2D backdrop band)
   int bg_2d(int bx0, int by0, int bx1, int by1);   // FALLBACK 2D backdrop-vs-HUD by screen coverage (un-owned scenes)
   int s_prev_had3d = 0;   // did LAST frame draw any 3D? = "this is a gameplay (3D) frame" (wide pillarbox gate)
@@ -185,7 +185,7 @@ int  gpu_frame_no(Core* core);
 void gpu_provat_enable(Core* core);
 uint16_t gpu_vram_peek(Core* core, int x, int y);
 // PC-native SCEA decode: baked 4bpp+CLUT asset -> flat RGBA8 at the 640x468 screen positions (text =
-// CLUT color, else transparent black). PSX-free source for gpu_vk_present_image. `out` = 640*468*4 bytes.
+// CLUT color, else transparent black). PSX-free source for gpu_gpu_present_image. `out` = 640*468*4 bytes.
 void gpu_scea_decode_rgba(uint8_t* out);
 void gpu_vram_load(Core* core, const uint16_t* src);
 void gpu_vram_save(Core* core, uint16_t* dst);

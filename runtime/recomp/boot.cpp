@@ -42,8 +42,8 @@ int main(int argc, char** argv) {
   const char* path = argc > 1 ? argv[1] : "scratch/bin/tomba2/MAIN.EXE";
   Game* game = new Game();    // the whole machine (owns the Core + every subsystem's state — no globals)
   Core* c = &game->core;      // the CPU/RAM handle threaded through the interp (2 MB RAM lives in Game)
-  void gpu_vk_tritest(Core*);
-  gpu_vk_tritest(c);          // PSXPORT_VK_TRITEST=1: GPU triangle-rasterizer self-test, then exit (needs the GpuVkState)
+  void gpu_gpu_tritest(Core*);
+  gpu_gpu_tritest(c);          // PSXPORT_VK_TRITEST=1: GPU triangle-rasterizer self-test, then exit (needs the GpuGpuState)
   void watchdog_init(void);
   watchdog_init();            // PSXPORT_WATCHDOG=<sec>: abort+backtrace if a frame stalls
   load_exe(path, c);

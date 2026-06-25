@@ -42,17 +42,17 @@ set(RMLUI_LOTTIE_PLUGIN  OFF CACHE BOOL   "" FORCE)
 set(RMLUI_FONT_ENGINE    freetype CACHE STRING "" FORCE)
 add_subdirectory(vendor/rmlui EXCLUDE_FROM_ALL)
 
-# ---- generated Vulkan SPIR-V header (runtime/recomp/gpu_vk_shaders.h) --------------------------
+# ---- generated Vulkan SPIR-V header (runtime/recomp/gpu_gpu_shaders.h) --------------------------
 # tools/gen_vk_shaders.sh compiles shaders_vk/*.{vert,frag} and embeds the SPIR-V; it writes into the
 # source tree (as the shell build does). Re-run it when a shader source changes.
 file(GLOB SHADER_SRCS CONFIGURE_DEPENDS
   ${CMAKE_SOURCE_DIR}/${RT}/shaders_vk/*.vert ${CMAKE_SOURCE_DIR}/${RT}/shaders_vk/*.frag)
-set(SHADERS_H ${CMAKE_SOURCE_DIR}/${RT}/gpu_vk_shaders.h)
+set(SHADERS_H ${CMAKE_SOURCE_DIR}/${RT}/gpu_gpu_shaders.h)
 add_custom_command(OUTPUT ${SHADERS_H}
   COMMAND bash ${CMAKE_SOURCE_DIR}/tools/gen_vk_shaders.sh
   DEPENDS ${SHADER_SRCS} ${CMAKE_SOURCE_DIR}/tools/gen_vk_shaders.sh
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-  COMMENT "Generating Vulkan SPIR-V header (gpu_vk_shaders.h)"
+  COMMENT "Generating Vulkan SPIR-V header (gpu_gpu_shaders.h)"
   VERBATIM)
 add_custom_target(gen_vk_shaders DEPENDS ${SHADERS_H})
 
@@ -63,7 +63,7 @@ set(PORT_SRC
   ${RT}/pad_input.cpp ${RT}/memcard.cpp ${RT}/native_fmv.cpp
   ${MED}/psx/gte.c ${RT}/gte_beetle.cpp ${MED}/psx/mdec.c ${RT}/mdec_beetle.c ${MED}/psx/spu.c ${RT}/spu_beetle.c
   ${RT}/disc.c ${RT}/cd_override.cpp ${RT}/cdc_native.c ${RT}/xa_stream.c ${RT}/timing.cpp
-  ${RT}/gpu_vk.cpp ${RT}/gpu_perf.cpp ${RT}/mods.c
+  ${RT}/gpu_gpu.cpp ${RT}/gpu_perf.cpp ${RT}/mods.c
   ${ENG}/game_tomba2.cpp ${ENG}/asset.cpp ${ENG}/mathlib.cpp ${ENG}/cull.cpp ${ENG}/collision.cpp
   ${ENG}/hitbox.cpp ${ENG}/grid_offset.cpp ${ENG}/entity.cpp ${ENG}/entity_spawn.cpp
   ${ENG}/actor_sm_24448.cpp ${ENG}/objbeh_739ac.cpp ${ENG}/objbeh_73cd8.cpp ${ENG}/objbeh_741dc.cpp

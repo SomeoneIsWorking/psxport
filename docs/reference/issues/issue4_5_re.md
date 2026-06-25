@@ -55,7 +55,7 @@ the per-object dispatch `ov_render_cmd` (`:123`, the universal chokepoint at `0x
 `ov_rwalk_aux_bcf4`/`_bf00`/`_eec0` (`:837/:899/:952`, addresses `0x8003BCF4/0x8003BF00/0x8003EEC0`,
 registered `game_tomba2.cpp:1392-1397`).
 
-### Band layout (`runtime/recomp/gpu_vk.cpp:184-201`)
+### Band layout (`runtime/recomp/gpu_gpu.cpp:184-201`)
 Single D32 buffer, nearer = larger ord, clear 0.0, compare GREATER_OR_EQUAL:
 - 2D **BACKGROUND** band `[0, 0.0625)` — `set_order_2d_bg`, for non-projected backdrops (sky/sea/**painted
   tilemap**), ordered by OT index.

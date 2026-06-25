@@ -2,7 +2,7 @@
 
 #include "core.h"
 #include "cfg.h"
-#include "gpu_vk.h"
+#include "gpu_gpu.h"
 #include <stdint.h>
 #include <stdio.h>
 

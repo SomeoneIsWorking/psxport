@@ -38,7 +38,7 @@ tools/recomp/tomba2_funcs.txt
 .claude/
 
 # generated Vulkan SPIR-V header (tools/gen_vk_shaders.sh)
-runtime/recomp/gpu_vk_shaders.h
+runtime/recomp/gpu_gpu_shaders.h
 # generated SDL_GPU SPIR-V header (tools/gen_gpu_shaders.sh)
 runtime/recomp/gpu_gpu_shaders.h
 

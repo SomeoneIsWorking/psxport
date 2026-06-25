@@ -79,7 +79,7 @@ export -f compile_one objof; export CC CXX CFLAGS CXXFLAGS OBJ
 TODO=""
 for s in $SRC; do
   o="$(objof "$s")"
-  # gpu_vk.c embeds the generated SPIR-V header — recompile it when that header changes too, else a
+  # gpu_gpu.c embeds the generated SPIR-V header — recompile it when that header changes too, else a
   # shader-only edit relinks a STALE object with old bytecode (cost a long debug session once).
   hdr_dep=""; case "$s" in *gpu_gpu.cpp) hdr_dep="$RT/gpu_gpu_shaders.h";; esac
   if [ "$FORCE" = "all" ] || [ ! -f "$o" ] || [ "$s" -nt "$o" ] || \

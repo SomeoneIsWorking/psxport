@@ -106,12 +106,12 @@ int  rq_active(void);                  // PSXPORT_RQ — route owned world geome
 RqItem* rq_push(Core* core);           // reserve a slot (lazy per-frame reset); NULL on overflow
 void rq_flush(Core* core);             // emit the frame's queued items in engine order
 
-// Emit one resolved item to the VK rasterizer (defined in gpu_native.cpp, where the gpu_vk_* draw
+// Emit one resolved item to the VK rasterizer (defined in gpu_native.cpp, where the gpu_gpu_* draw
 // entries live). Used by both the inline path and the queue flush so emission logic lives in one place.
 void gpu_emit_rq_item(Core* core, const RqItem* it);
 
 // Enqueue a 2D textured quad (HUD / overlay) into the render queue so it is part of THE FRAME and gets
-// re-emitted on both 60fps present passes (no direct gpu_vk_draw_tritri bypass that lands on one pass).
+// re-emitted on both 60fps present passes (no direct gpu_gpu_draw_tritri bypass that lands on one pass).
 // layer = RQ_OVERLAY / RQ_HUD; order picks the 2D far/near band. Defined in gpu_native.cpp (RqItem fill).
 void rq_push_2d_quad(Core* core, int layer, int order_2d_fg,
                      const int* xs, const int* ys, const int* us, const int* vs,

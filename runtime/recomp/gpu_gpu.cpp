@@ -1,9 +1,9 @@
 #include "core.h"
-#include "game.h"    // Game / GpuVkState (per-instance render state)
-#include "gpu_vk.h"  // public Core*-threaded API decls (wrappers below forward to core->game->gpu_vk)
+#include "game.h"    // Game / GpuGpuState (per-instance render state)
+#include "gpu_gpu.h"  // public Core*-threaded API decls (wrappers below forward to core->game->gpu_gpu)
 // gpu_gpu.cpp — SDL3 GPU API present backend for the Tomba2Engine port.
 //
-// This is the PC-native renderer re-expressed on the SDL3 GPU API (SDL_gpu.h), replacing gpu_vk.cpp
+// This is the PC-native renderer re-expressed on the SDL3 GPU API (SDL_gpu.h), replacing gpu_gpu.cpp
 // (Vulkan + SDL2). ONE stack — SDL3 owns the window, input, audio AND the GPU device — so the Mac runs
 // native Metal (the original MoltenVK SBS-black bug is gone) and Linux/Windows run Vulkan/D3D12.
 //
@@ -16,8 +16,8 @@
 // VRAM snapshot (the original pre-HW-blend approach). Until then draw_* are STOPGAP no-ops (3D world is
 // dark; 2D screens render). This is the phasing the handoff prescribes.
 //
-// State model mirrors gpu_vk.cpp: the SDL_GPU device/window/pipelines are file-static (one per process);
-// the wrappers ignore Core* exactly as before. The per-frame batch state lives on GpuVkState (game.h).
+// State model mirrors gpu_gpu.cpp: the SDL_GPU device/window/pipelines are file-static (one per process);
+// the wrappers ignore Core* exactly as before. The per-frame batch state lives on GpuGpuState (game.h).
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_gpu.h>
 #include "cfg.h"
@@ -49,7 +49,7 @@ static SDL_GPUSampler*        s_samp_linear;  // RGBA image sampler (linear)
 static SDL_GPUGraphicsPipeline* s_present_pipe;
 static SDL_GPUGraphicsPipeline* s_image_pipe;
 
-// Fullscreen IMAGE present (gpu_vk_present_image): RGBA8 texture, recreated on size change.
+// Fullscreen IMAGE present (gpu_gpu_present_image): RGBA8 texture, recreated on size change.
 static SDL_GPUTexture*        s_img_tex;
 static SDL_GPUTransferBuffer* s_img_xfer;
 static int                    s_img_w, s_img_h;
@@ -65,7 +65,7 @@ struct PresentPC { int32_t disp[4]; int32_t fade[4]; };
 
 // ---- Pass 2: native 3D / textured raster (depth-ordered, in-shader semi blend) ----------------------
 // The engine draws the world AND the 2D menus/HUD/sprites as textured/flat prims through the tee
-// (gpu_vk_draw_tri/tritri/semi). Each present: upload CPU VRAM into the R16_UINT COLOR-TARGET image AND a
+// (gpu_gpu_draw_tri/tritri/semi). Each present: upload CPU VRAM into the R16_UINT COLOR-TARGET image AND a
 // SAMPLER snapshot, then render the accumulated geometry batch ON TOP into the color target with a D32
 // depth buffer (the 3 ordering bands), then present samples that image. The 4 PSX semi modes are blended
 // IN-SHADER against the snapshot (SDL_GPU has no HW blend on integer targets / no format alias).
@@ -92,15 +92,15 @@ static SDL_GPUGraphicsPipeline* s_semi_pipe;    // textured semi (depth test, NO
 static int s_have_3d;                           // 3D resources created (windowed-only, needs depth/pipes)
 static void create_3d(void);
 
-// ---- enable / windowed gates (mirror gpu_vk.cpp) ----------------------------------------------------
-int gpu_vk_enabled(void) {
+// ---- enable / windowed gates (mirror gpu_gpu.cpp) ----------------------------------------------------
+int gpu_gpu_enabled(void) {
   if (s_gpu_on < 0) {
     s_headless = cfg_on("PSXPORT_VK_HEADLESS") ? 1 : 0;   // keep the env name stable across the backend swap
     s_gpu_on = 1;
   }
   return s_gpu_on;
 }
-extern "C" int gpu_windowed(void)   { return gpu_vk_enabled() && !s_headless; }
+extern "C" int gpu_windowed(void)   { return gpu_gpu_enabled() && !s_headless; }
 extern "C" int gpu_has_window(void) { return s_win != 0; }
 
 // Live window size in pixels (swapchain extent). Fall back to native 4:3 before the window exists.
@@ -117,10 +117,10 @@ static int wide_native_w(void) {
     default:          return 320;
   }
 }
-int gpu_vk_wide_engine(void)     { mods_init(); return g_mods.aspect != ASPECT_4_3; }
-int gpu_vk_wide_engine_ofx(void) { return wide_native_w() / 2; }
-int gpu_vk_wide_engine_w(void)   { return wide_native_w(); }
-void gpu_vk_video_status(int* native_w, int* ires, int* fbw, int* fbh, int* ww, int* wh, int* ires_cap) {
+int gpu_gpu_wide_engine(void)     { mods_init(); return g_mods.aspect != ASPECT_4_3; }
+int gpu_gpu_wide_engine_ofx(void) { return wide_native_w() / 2; }
+int gpu_gpu_wide_engine_w(void)   { return wide_native_w(); }
+void gpu_gpu_video_status(int* native_w, int* ires, int* fbw, int* fbh, int* ww, int* wh, int* ires_cap) {
   mods_init();
   int nw = wide_native_w(), cap = VRAM_W / nw; if (cap < 1) cap = 1; if (cap > 3) cap = 3;
   int i = g_mods.ires < 1 ? 1 : (g_mods.ires > cap ? cap : g_mods.ires);
@@ -129,7 +129,7 @@ void gpu_vk_video_status(int* native_w, int* ires, int* fbw, int* fbh, int* ww, 
   if (ires_cap) *ires_cap = cap;
 }
 // Pass 1: no scaled scratch FB yet (3D is Pass 2), so a frame never renders via the FB.
-int GpuVkState::frame_via_fb() { return 0; }
+int GpuGpuState::frame_via_fb() { return 0; }
 
 // ---- SDL_GPU helpers --------------------------------------------------------------------------------
 #define GPUCHK(p, what) do { if (!(p)) { fprintf(stderr, "[gpu_gpu] %s failed: %s\n", what, SDL_GetError()); exit(2); } } while (0)
@@ -366,8 +366,8 @@ static void render_geom(SDL_GPUCommandBuffer* cmd, const uint16_t* src, int* dtr
 }
 
 // ---- present: upload CPU VRAM, render the 3D/textured batch on top, sample [sx,sy,w,h] to the swapchain
-void GpuVkState::present(const uint16_t* src, int sx, int sy, int w, int h) {
-  if (!gpu_vk_enabled()) return;
+void GpuGpuState::present(const uint16_t* src, int sx, int sy, int w, int h) {
+  if (!gpu_gpu_enabled()) return;
   if (!s_inited) init_gpu();
   mods_init();
   s_present_sx = sx; s_present_sy = sy;
@@ -423,9 +423,9 @@ static void img_make_tex(int iw, int ih) {
   s_img_xfer = SDL_CreateGPUTransferBuffer(s_dev, &up); GPUCHK(s_img_xfer, "CreateGPUTransferBuffer(image)");
   s_img_w = iw; s_img_h = ih;
 }
-void gpu_vk_present_image(Core* core, const uint8_t* rgba, int iw, int ih, float fade) {
+void gpu_gpu_present_image(Core* core, const uint8_t* rgba, int iw, int ih, float fade) {
   (void)core;
-  if (!gpu_vk_enabled() || iw <= 0 || ih <= 0) return;
+  if (!gpu_gpu_enabled() || iw <= 0 || ih <= 0) return;
   if (!s_inited) init_gpu();
   img_make_tex(iw, ih);
   if (fade < 0.0f) fade = 0.0f; if (fade > 1.0f) fade = 1.0f;
@@ -496,24 +496,24 @@ static void dump_to(const char* path, int sx, int sy, int w, int h) {
   fclose(f);
   SDL_UnmapGPUTransferBuffer(s_dev, s_rb_xfer);
 }
-void GpuVkState::shot(const char* path) {
-  if (!gpu_vk_enabled() || !s_inited) { fprintf(stderr, "[gpu_shot] GPU not active\n"); return; }
+void GpuGpuState::shot(const char* path) {
+  if (!gpu_gpu_enabled() || !s_inited) { fprintf(stderr, "[gpu_shot] GPU not active\n"); return; }
   dump_to(path, s_last_sx, s_last_sy, s_last_w, s_last_h);
   fprintf(stderr, "[gpu_shot] wrote %s (%dx%d @ %d,%d)\n", path, s_last_w, s_last_h, s_last_sx, s_last_sy);
 }
-void GpuVkState::shot_b(const char* path) { shot(path); }   // Pass 1: single target
-void gpu_vk_shot_region(Core* core, const char* path, int sx, int sy, int w, int h) {
-  (void)core; if (!gpu_vk_enabled() || !s_inited) return;
+void GpuGpuState::shot_b(const char* path) { shot(path); }   // Pass 1: single target
+void gpu_gpu_shot_region(Core* core, const char* path, int sx, int sy, int w, int h) {
+  (void)core; if (!gpu_gpu_enabled() || !s_inited) return;
   dump_to(path, sx, sy, w, h);
   fprintf(stderr, "[gpu_shot] wrote %s (%dx%d @ %d,%d)\n", path, w, h, sx, sy);
 }
-void gpu_vk_vram_region(const char* path, int x, int y, int w, int h) {
-  if (!gpu_vk_enabled() || !s_inited) return;
+void gpu_gpu_vram_region(const char* path, int x, int y, int w, int h) {
+  if (!gpu_gpu_enabled() || !s_inited) return;
   dump_to(path, x, y, w, h);
   fprintf(stderr, "[gpu_vram] wrote %s (%dx%d @ %d,%d)\n", path, w, h, x, y);
 }
-void gpu_vk_vram_raw(const char* path) {
-  if (!gpu_vk_enabled() || !s_inited) return;
+void gpu_gpu_vram_raw(const char* path) {
+  if (!gpu_gpu_enabled() || !s_inited) return;
   const uint16_t* vram = readback_vram();
   FILE* f = fopen(path, "wb"); if (!f) { SDL_UnmapGPUTransferBuffer(s_dev, s_rb_xfer); return; }
   for (int y = 0; y < VRAM_H; y++) fwrite(&vram[y * VRAM_W], 2, VRAM_W, f);
@@ -523,29 +523,29 @@ void gpu_vk_vram_raw(const char* path) {
 }
 
 // ---- per-prim state setters (depth/order; consumed by the 3D raster) --------------------------------
-void GpuVkState::set_vd(const float* d3) { s_vd = d3; }
-void GpuVkState::set_vd_n(const float* d3) { s_vdn = d3; }
-void GpuVkState::set_xyf(const float* xf, const float* yf) { s_xf = xf; s_yf = yf; }
-void GpuVkState::set_order(unsigned idx) { s_cur_ord = (float)(idx + 1) / 65536.0f; if (s_cur_ord > 1.0f) s_cur_ord = 1.0f;
+void GpuGpuState::set_vd(const float* d3) { s_vd = d3; }
+void GpuGpuState::set_vd_n(const float* d3) { s_vdn = d3; }
+void GpuGpuState::set_xyf(const float* xf, const float* yf) { s_xf = xf; s_yf = yf; }
+void GpuGpuState::set_order(unsigned idx) { s_cur_ord = (float)(idx + 1) / 65536.0f; if (s_cur_ord > 1.0f) s_cur_ord = 1.0f;
                                            s_cur_ordn = s_cur_ord; s_vd = 0; s_vdn = 0; s_xf = 0; s_yf = 0; }
-void GpuVkState::set_order_2d(unsigned idx) { float t = (float)(idx + 1) / 65536.0f; if (t > 1.0f) t = 1.0f;
+void GpuGpuState::set_order_2d(unsigned idx) { float t = (float)(idx + 1) / 65536.0f; if (t > 1.0f) t = 1.0f;
                                               s_cur_ord = NATIVE_3D_MAX + (1.0f - NATIVE_3D_MAX) * t; s_vd = 0; }
-void GpuVkState::set_order_2d_n(unsigned idx) { float t = (float)(idx + 1) / 65536.0f; if (t > 1.0f) t = 1.0f;
+void GpuGpuState::set_order_2d_n(unsigned idx) { float t = (float)(idx + 1) / 65536.0f; if (t > 1.0f) t = 1.0f;
                                                 s_cur_ordn = NATIVE_3D_MAX + (1.0f - NATIVE_3D_MAX) * t; s_vdn = 0; }
-void GpuVkState::set_order_2d_bg(unsigned idx) { float t = (float)(idx + 1) / 65536.0f; if (t > 1.0f) t = 1.0f;
+void GpuGpuState::set_order_2d_bg(unsigned idx) { float t = (float)(idx + 1) / 65536.0f; if (t > 1.0f) t = 1.0f;
                                                  s_cur_ord = NATIVE_3D_MIN * t; s_vd = 0; }
-void GpuVkState::set_order_2d_bg_n(unsigned idx) { float t = (float)(idx + 1) / 65536.0f; if (t > 1.0f) t = 1.0f;
+void GpuGpuState::set_order_2d_bg_n(unsigned idx) { float t = (float)(idx + 1) / 65536.0f; if (t > 1.0f) t = 1.0f;
                                                    s_cur_ordn = NATIVE_3D_MIN * t; s_vdn = 0; }
-void GpuVkState::semi_group(int x0, int y0, int x1, int y1) { (void)x0; (void)y0; (void)x1; (void)y1; }
-void GpuVkState::dirty(int x, int y, int w, int h) { (void)x; (void)y; (void)w; (void)h; }
-void GpuVkState::stats(int* tri, int* tex, int* semi) { if (tri) *tri = s_dbg_tri_c; if (tex) *tex = s_dbg_tex_c; if (semi) *semi = s_dbg_semi_c; }
+void GpuGpuState::semi_group(int x0, int y0, int x1, int y1) { (void)x0; (void)y0; (void)x1; (void)y1; }
+void GpuGpuState::dirty(int x, int y, int w, int h) { (void)x; (void)y; (void)w; (void)h; }
+void GpuGpuState::stats(int* tri, int* tex, int* semi) { if (tri) *tri = s_dbg_tri_c; if (tex) *tex = s_dbg_tex_c; if (semi) *semi = s_dbg_semi_c; }
 // Per-logic-frame reset of the host geometry batch (present consumed it; the next frame re-emits the queue).
-void GpuVkState::frame_end(const uint16_t* svram, int frame) { (void)svram; (void)frame; s_tri_n = s_tex_n = s_semi_n = 0; }
+void GpuGpuState::frame_end(const uint16_t* svram, int frame) { (void)svram; (void)frame; s_tri_n = s_tex_n = s_semi_n = 0; }
 
 // ---- native 3D / textured raster: accumulate the tee'd geometry into the host batch (Pass 2) ---------
 // Append one flat triangle (VRAM coords + per-vertex RGB 0..255); depth = per-vertex native (s_vd) or the
 // per-prim OT-order (s_cur_ord) band.
-void GpuVkState::draw_tri(int x0,int y0,int r0,int g0,int b0, int x1,int y1,int r1,int g1,int b1,
+void GpuGpuState::draw_tri(int x0,int y0,int r0,int g0,int b0, int x1,int y1,int r1,int g1,int b1,
                           int x2,int y2,int r2,int g2,int b2) {
   if (!s_have_3d || s_tri_n + 3 > TRI_CAP) return;
   TriVtx* v = s_tri_buf + s_tri_n;
@@ -556,7 +556,7 @@ void GpuVkState::draw_tri(int x0,int y0,int r0,int g0,int b0, int x1,int y1,int 
 }
 // Fill 3 textured vertices: per-vertex pos/uv/color + shared page/CLUT/window/clip/semi/blend state. Uses
 // the sub-pixel float XY (s_xf/s_yf) for the world path when set, else the integer xs/ys (2D/HUD).
-void GpuVkState::tex_emit(TexVtx* t, const int* xs, const int* ys, const int* us, const int* vs,
+void GpuGpuState::tex_emit(TexVtx* t, const int* xs, const int* ys, const int* us, const int* vs,
                           const unsigned char* rs, const unsigned char* gs, const unsigned char* bs,
                           int tpx, int tpy, int mode, int raw, int clutx, int cluty,
                           int twmx, int twmy, int twox, int twoy, int dax0, int day0, int dax1, int day1,
@@ -573,7 +573,7 @@ void GpuVkState::tex_emit(TexVtx* t, const int* xs, const int* ys, const int* us
     t[i].ord = s_vd ? ord3d(s_vd[i]) : s_cur_ord;
   }
 }
-void GpuVkState::draw_tritri(const int* xs, const int* ys, const int* us, const int* vs,
+void GpuGpuState::draw_tritri(const int* xs, const int* ys, const int* us, const int* vs,
                              const unsigned char* rs, const unsigned char* gs, const unsigned char* bs,
                              int tpx, int tpy, int mode, int raw, int clutx, int cluty,
                              int twmx, int twmy, int twox, int twoy, int dax0, int day0, int dax1, int day1) {
@@ -582,7 +582,7 @@ void GpuVkState::draw_tritri(const int* xs, const int* ys, const int* us, const 
            twmx, twmy, twox, twoy, dax0, day0, dax1, day1, 0, 0);
   s_tex_n += 3;
 }
-void GpuVkState::draw_semi(const int* xs, const int* ys, const int* us, const int* vs,
+void GpuGpuState::draw_semi(const int* xs, const int* ys, const int* us, const int* vs,
                            const unsigned char* rs, const unsigned char* gs, const unsigned char* bs,
                            int tpx, int tpy, int mode, int raw, int clutx, int cluty,
                            int twmx, int twmy, int twox, int twoy, int dax0, int day0, int dax1, int day1, int blend) {
@@ -591,13 +591,13 @@ void GpuVkState::draw_semi(const int* xs, const int* ys, const int* us, const in
            twmx, twmy, twox, twoy, dax0, day0, dax1, day1, 1, blend);
   s_semi_n += 3;
 }
-void GpuVkState::tri_render_and_readback(uint16_t* out) { (void)out; }
-void GpuVkState::tri_over_bg_readback(const uint16_t* bg, uint16_t* out) { (void)bg; (void)out; }
-void GpuVkState::panel_upload(Panel* p) { (void)p; }
-void GpuVkState::panel_render(Panel* p) { (void)p; }
-void GpuVkState::ssao_pass() {}
-void GpuVkState::shadow_pass() {}
-void GpuVkState::present_sbs(const uint16_t* vramA, const uint16_t* vramB, int sx, int sy, int w, int h, int repaint) {
+void GpuGpuState::tri_render_and_readback(uint16_t* out) { (void)out; }
+void GpuGpuState::tri_over_bg_readback(const uint16_t* bg, uint16_t* out) { (void)bg; (void)out; }
+void GpuGpuState::panel_upload(Panel* p) { (void)p; }
+void GpuGpuState::panel_render(Panel* p) { (void)p; }
+void GpuGpuState::ssao_pass() {}
+void GpuGpuState::shadow_pass() {}
+void GpuGpuState::present_sbs(const uint16_t* vramA, const uint16_t* vramB, int sx, int sy, int w, int h, int repaint) {
   // STOPGAP: SBS two-pane composite is Pass 3. For now present core A's frame so the window stays live.
   (void)vramB; (void)repaint;
   if (vramA) present(vramA, sx, sy, w, h);
@@ -608,7 +608,7 @@ void GpuVkState::present_sbs(const uint16_t* vramA, const uint16_t* vramB, int s
 //       regression guard for the SDL_GPU swapchain Y-flip (the "rendering upside down" bug).
 //   (2) 1555 UNPACK — the present.frag 1555→RGB decode is correct (red marker decodes red, blue→blue).
 // No disc/game needed (boot.cpp calls this before load_exe). Prints PASS/FAIL and exits with that status.
-void GpuVkState::tritest() {
+void GpuGpuState::tritest() {
   if (!cfg_on("PSXPORT_GPU_SELFTEST")) return;
   s_headless = 1;                      // force offscreen — no window/swapchain
   if (!s_inited) init_gpu();
@@ -669,23 +669,23 @@ void GpuVkState::tritest() {
 }
 
 // ---- shadow capture / dynamic-state hooks (3D-only; inert in Pass 1) --------------------------------
-int  gpu_vk_shadows_active(void) { return 0; }
-void gpu_vk_shadow_push_tri(Core* core, const float* v0, const float* v1, const float* v2) { (void)core; (void)v0; (void)v1; (void)v2; }
+int  gpu_gpu_shadows_active(void) { return 0; }
+void gpu_gpu_shadow_push_tri(Core* core, const float* v0, const float* v1, const float* v2) { (void)core; (void)v0; (void)v1; (void)v2; }
 int  gpu_seen3d_this_frame(Core* core);   // defined in gpu_native.cpp
 int  gpu_had3d_last_frame(Core* core);
 
 // ---- dual-view / SBS target selection (single target in Pass 1) -------------------------------------
-void gpu_vk_select_target(int t) { (void)t; }
-int  gpu_vk_target_count(int t) { (void)t; return 0; }
-void gpu_vk_rawdump_arm(const char* path, int frame) { (void)path; (void)frame; }
+void gpu_gpu_select_target(int t) { (void)t; }
+int  gpu_gpu_target_count(int t) { (void)t; return 0; }
+void gpu_gpu_rawdump_arm(const char* path, int frame) { (void)path; (void)frame; }
 
 // SBS per-pane render: render ONE core's VRAM + geometry batch into s_vram_tex (NO swapchain present),
 // then read the display region [sx,sy,w,h] back to host RGBA8 (`rgba` holds w*h*4). The SBS composites the
-// two returned panes via gpu_vk_present_sbs2. Reuses the proven upload+geom+readback path; the engine
+// two returned panes via gpu_gpu_present_sbs2. Reuses the proven upload+geom+readback path; the engine
 // screen-fade is applied (same math as dump_to / present.frag).
-void gpu_vk_render_readback(Core* core, const uint16_t* vram, int sx, int sy, int w, int h, uint8_t* rgba) {
+void gpu_gpu_render_readback(Core* core, const uint16_t* vram, int sx, int sy, int w, int h, uint8_t* rgba) {
   (void)core;
-  if (!gpu_vk_enabled()) { memset(rgba, 0, (size_t)w * h * 4); return; }
+  if (!gpu_gpu_enabled()) { memset(rgba, 0, (size_t)w * h * 4); return; }
   if (!s_inited) init_gpu();
   SDL_GPUCommandBuffer* cmd = SDL_AcquireGPUCommandBuffer(s_dev); GPUCHK(cmd, "render_readback cmd");
   upload_vram(cmd, vram);
@@ -717,8 +717,8 @@ static void sbs_make_tex(int i, int w, int h) {
   s_sbs_xfer[i] = SDL_CreateGPUTransferBuffer(s_dev, &up); GPUCHK(s_sbs_xfer[i], "sbs xfer");
   s_sbs_w[i] = w; s_sbs_h[i] = h;
 }
-void gpu_vk_present_sbs2(const uint8_t* rgbaA, int wA, int hA, const uint8_t* rgbaB, int wB, int hB) {
-  if (!gpu_vk_enabled() || s_headless) return;
+void gpu_gpu_present_sbs2(const uint8_t* rgbaA, int wA, int hA, const uint8_t* rgbaB, int wB, int hB) {
+  if (!gpu_gpu_enabled() || s_headless) return;
   if (!s_inited) init_gpu();
   if (wA < 1) wA = 1; if (hA < 1) hA = 1; if (wB < 1) wB = 1; if (hB < 1) hB = 1;
   sbs_make_tex(0, wA, hA); sbs_make_tex(1, wB, hB);
@@ -757,29 +757,29 @@ void gpu_vk_present_sbs2(const uint8_t* rgbaA, int wA, int hA, const uint8_t* rg
   poll_quit();
 }
 
-// ---- Public API: thin free-function wrappers over the per-instance GpuVkState methods ---------------
-void gpu_vk_set_vd(Core* core, const float* d3) { core->game->gpu_vk.set_vd(d3); }
-void gpu_vk_set_vd_n(Core* core, const float* d3) { core->game->gpu_vk.set_vd_n(d3); }
-void gpu_vk_set_xyf(Core* core, const float* xf, const float* yf) { core->game->gpu_vk.set_xyf(xf, yf); }
-void gpu_vk_set_order(Core* core, unsigned idx) { core->game->gpu_vk.set_order(idx); }
-void gpu_vk_set_order_2d(Core* core, unsigned idx) { core->game->gpu_vk.set_order_2d(idx); }
-void gpu_vk_set_order_2d_n(Core* core, unsigned idx) { core->game->gpu_vk.set_order_2d_n(idx); }
-void gpu_vk_set_order_2d_bg(Core* core, unsigned idx) { core->game->gpu_vk.set_order_2d_bg(idx); }
-void gpu_vk_set_order_2d_bg_n(Core* core, unsigned idx) { core->game->gpu_vk.set_order_2d_bg_n(idx); }
-void gpu_vk_semi_group(Core* core, int x0, int y0, int x1, int y1) { core->game->gpu_vk.semi_group(x0, y0, x1, y1); }
-void gpu_vk_stats(Core* core, int* tri, int* tex, int* semi) { core->game->gpu_vk.stats(tri, tex, semi); }
-void gpu_vk_dirty(Core* core, int x, int y, int w, int h) { core->game->gpu_vk.dirty(x, y, w, h); }
-void gpu_vk_present(Core* core, const uint16_t* src, int sx, int sy, int w, int h) { core->game->gpu_vk.present(src, sx, sy, w, h); }
-void gpu_vk_present_sbs(Core* coreA, const uint16_t* vramA, const uint16_t* vramB, int sx, int sy, int w, int h) {
-  coreA->game->gpu_vk.present_sbs(vramA, vramB, sx, sy, w, h, 0);
+// ---- Public API: thin free-function wrappers over the per-instance GpuGpuState methods ---------------
+void gpu_gpu_set_vd(Core* core, const float* d3) { core->game->gpu_gpu.set_vd(d3); }
+void gpu_gpu_set_vd_n(Core* core, const float* d3) { core->game->gpu_gpu.set_vd_n(d3); }
+void gpu_gpu_set_xyf(Core* core, const float* xf, const float* yf) { core->game->gpu_gpu.set_xyf(xf, yf); }
+void gpu_gpu_set_order(Core* core, unsigned idx) { core->game->gpu_gpu.set_order(idx); }
+void gpu_gpu_set_order_2d(Core* core, unsigned idx) { core->game->gpu_gpu.set_order_2d(idx); }
+void gpu_gpu_set_order_2d_n(Core* core, unsigned idx) { core->game->gpu_gpu.set_order_2d_n(idx); }
+void gpu_gpu_set_order_2d_bg(Core* core, unsigned idx) { core->game->gpu_gpu.set_order_2d_bg(idx); }
+void gpu_gpu_set_order_2d_bg_n(Core* core, unsigned idx) { core->game->gpu_gpu.set_order_2d_bg_n(idx); }
+void gpu_gpu_semi_group(Core* core, int x0, int y0, int x1, int y1) { core->game->gpu_gpu.semi_group(x0, y0, x1, y1); }
+void gpu_gpu_stats(Core* core, int* tri, int* tex, int* semi) { core->game->gpu_gpu.stats(tri, tex, semi); }
+void gpu_gpu_dirty(Core* core, int x, int y, int w, int h) { core->game->gpu_gpu.dirty(x, y, w, h); }
+void gpu_gpu_present(Core* core, const uint16_t* src, int sx, int sy, int w, int h) { core->game->gpu_gpu.present(src, sx, sy, w, h); }
+void gpu_gpu_present_sbs(Core* coreA, const uint16_t* vramA, const uint16_t* vramB, int sx, int sy, int w, int h) {
+  coreA->game->gpu_gpu.present_sbs(vramA, vramB, sx, sy, w, h, 0);
 }
-void gpu_vk_present_sbs_repaint(Core* coreA, int sx, int sy, int w, int h) {
-  coreA->game->gpu_vk.present_sbs(nullptr, nullptr, sx, sy, w, h, 1);
+void gpu_gpu_present_sbs_repaint(Core* coreA, int sx, int sy, int w, int h) {
+  coreA->game->gpu_gpu.present_sbs(nullptr, nullptr, sx, sy, w, h, 1);
 }
-void gpu_vk_draw_tri(Core* core, int x0,int y0,int r0,int g0,int b0, int x1,int y1,int r1,int g1,int b1, int x2,int y2,int r2,int g2,int b2) { core->game->gpu_vk.draw_tri(x0,y0,r0,g0,b0,x1,y1,r1,g1,b1,x2,y2,r2,g2,b2); }
-void gpu_vk_draw_tritri(Core* core, const int* xs, const int* ys, const int* us, const int* vs, const unsigned char* rs, const unsigned char* gs, const unsigned char* bs, int tpx, int tpy, int mode, int raw, int clutx, int cluty, int twmx, int twmy, int twox, int twoy, int dax0, int day0, int dax1, int day1) { core->game->gpu_vk.draw_tritri(xs,ys,us,vs,rs,gs,bs,tpx,tpy,mode,raw,clutx,cluty,twmx,twmy,twox,twoy,dax0,day0,dax1,day1); }
-void gpu_vk_draw_semi(Core* core, const int* xs, const int* ys, const int* us, const int* vs, const unsigned char* rs, const unsigned char* gs, const unsigned char* bs, int tpx, int tpy, int mode, int raw, int clutx, int cluty, int twmx, int twmy, int twox, int twoy, int dax0, int day0, int dax1, int day1, int blend) { core->game->gpu_vk.draw_semi(xs,ys,us,vs,rs,gs,bs,tpx,tpy,mode,raw,clutx,cluty,twmx,twmy,twox,twoy,dax0,day0,dax1,day1,blend); }
-void gpu_vk_shot(Core* core, const char* path) { core->game->gpu_vk.shot(path); }
-void gpu_vk_shot_b(Core* core, const char* path) { core->game->gpu_vk.shot_b(path); }
-void gpu_vk_frame_end(Core* core, const uint16_t* svram, int frame) { core->game->gpu_vk.frame_end(svram, frame); }
-void gpu_vk_tritest(Core* core) { core->game->gpu_vk.tritest(); }
+void gpu_gpu_draw_tri(Core* core, int x0,int y0,int r0,int g0,int b0, int x1,int y1,int r1,int g1,int b1, int x2,int y2,int r2,int g2,int b2) { core->game->gpu_gpu.draw_tri(x0,y0,r0,g0,b0,x1,y1,r1,g1,b1,x2,y2,r2,g2,b2); }
+void gpu_gpu_draw_tritri(Core* core, const int* xs, const int* ys, const int* us, const int* vs, const unsigned char* rs, const unsigned char* gs, const unsigned char* bs, int tpx, int tpy, int mode, int raw, int clutx, int cluty, int twmx, int twmy, int twox, int twoy, int dax0, int day0, int dax1, int day1) { core->game->gpu_gpu.draw_tritri(xs,ys,us,vs,rs,gs,bs,tpx,tpy,mode,raw,clutx,cluty,twmx,twmy,twox,twoy,dax0,day0,dax1,day1); }
+void gpu_gpu_draw_semi(Core* core, const int* xs, const int* ys, const int* us, const int* vs, const unsigned char* rs, const unsigned char* gs, const unsigned char* bs, int tpx, int tpy, int mode, int raw, int clutx, int cluty, int twmx, int twmy, int twox, int twoy, int dax0, int day0, int dax1, int day1, int blend) { core->game->gpu_gpu.draw_semi(xs,ys,us,vs,rs,gs,bs,tpx,tpy,mode,raw,clutx,cluty,twmx,twmy,twox,twoy,dax0,day0,dax1,day1,blend); }
+void gpu_gpu_shot(Core* core, const char* path) { core->game->gpu_gpu.shot(path); }
+void gpu_gpu_shot_b(Core* core, const char* path) { core->game->gpu_gpu.shot_b(path); }
+void gpu_gpu_frame_end(Core* core, const uint16_t* svram, int frame) { core->game->gpu_gpu.frame_end(svram, frame); }
+void gpu_gpu_tritest(Core* core) { core->game->gpu_gpu.tritest(); }

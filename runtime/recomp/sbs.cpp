@@ -13,8 +13,8 @@
 // only because EVERY per-machine subsystem is per-instance: GTE/SPU/MDEC (BindState) AND the CD layer —
 // CD-controller registers (cdc_native.c CdcState/cdc_bind) + the XA streamer (xa_stream.c XaState/xa_bind),
 // the remaining shared-singleton blocker the user called out; the read-only CHD/disc image stays shared by
-// design. Each core's frame EMITS into its OWN VK geometry batch (step_core sets gpu_vk_select_target) and
-// uploads its OWN VRAM to its pane (gpu_vk_present_sbs: a separate staging buffer per pane); ONE acquire/
+// design. Each core's frame EMITS into its OWN VK geometry batch (step_core sets gpu_gpu_select_target) and
+// uploads its OWN VRAM to its pane (gpu_gpu_present_sbs: a separate staging buffer per pane); ONE acquire/
 // command-buffer/submit/present per window frame, so the two cores never collide on the single VK present.
 // Each core's auto-skip stops injecting input once IT reaches free-roam ("pause at goal") but keeps running
 // (rendering) so the user can drive it. The dual-pane present is via g_dualview's panel machinery, but with
@@ -69,13 +69,13 @@ extern "C" void guest_backtrace_to(Core* c, FILE* out);
 extern "C" int  g_render_psx;                 // engine_render.cpp — 0 = native render walks, 1 = PSX recomp render
 extern void (*g_store_watch_cb)(Core*, uint32_t a, uint32_t v);   // mem.cpp — armed write-watch callback
 extern "C" int  g_sbs;                        // PSXPORT_SBS: forces 2 VK render targets + skips the in-engine dualview pass
-// Per-core render+readback + front-buffer/display-region accessors (gpu_vk.cpp / gpu_native.cpp). The SBS
+// Per-core render+readback + front-buffer/display-region accessors (gpu_gpu.cpp / gpu_native.cpp). The SBS
 // now renders each core into the shared VK target (no swapchain present) and read
-// back to a CPU RGBA buffer (gpu_vk_render_readback), then composites the two panes side by side (gpu_vk_present_sbs2). This
-// replaces the two-pane VK swapchain composite (gpu_vk_present_sbs) that MoltenVK rendered black on macOS.
-void gpu_vk_render_readback(Core* core, const uint16_t* vram, int sx, int sy, int w, int h, uint8_t* rgba);
-void gpu_vk_select_target(int t);
-void gpu_vk_frame_end(Core* core, const uint16_t* svram, int frame);   // gpu_native.cpp -> resets the VK batch
+// back to a CPU RGBA buffer (gpu_gpu_render_readback), then composites the two panes side by side (gpu_gpu_present_sbs2). This
+// replaces the two-pane VK swapchain composite (gpu_gpu_present_sbs) that MoltenVK rendered black on macOS.
+void gpu_gpu_render_readback(Core* core, const uint16_t* vram, int sx, int sy, int w, int h, uint8_t* rgba);
+void gpu_gpu_select_target(int t);
+void gpu_gpu_frame_end(Core* core, const uint16_t* svram, int frame);   // gpu_native.cpp -> resets the VK batch
 const uint16_t* gpu_vram_ptr(Core* core);
 void gpu_disp_region(Core* core, int* sx, int* sy, int* w, int* h);
 void pad_set_buttons(Core* c, uint16_t mask);   // pad_input.cpp — feed the active-low pad mask (SDL_GPU window input)
@@ -88,10 +88,10 @@ extern "C" {
   void sbs_rl_shutdown(void);
 }
 
-// PSXPORT_SBS marker, DEFINED here (sbs.cpp owns the harness). gpu_vk.cpp forces 2 VK render targets when
+// PSXPORT_SBS marker, DEFINED here (sbs.cpp owns the harness). gpu_gpu.cpp forces 2 VK render targets when
 // set, and native_boot.cpp skips the in-engine dualview second pass (core B fills target 1 instead). 0
 // outside the SBS harness, so the single-core game and the dualview path are completely unaffected.
-extern "C" { int g_sbs = 0; int g_sbs_rl = 0; }   // g_sbs_rl: SDL_GPU window present -> single VK target (gpu_vk.cpp)
+extern "C" { int g_sbs = 0; int g_sbs_rl = 0; }   // g_sbs_rl: SDL_GPU window present -> single VK target (gpu_gpu.cpp)
 
 namespace {
 
@@ -251,7 +251,7 @@ void check_divergence() {
 
 // Step ONE core's frame for the SBS composite: diff_mode=1 suppresses its OWN per-core present/pace/audio
 // (the SBS loop owns the single window present), sbs_render=1 re-enables the render-submit so it EMITS its
-// geometry into VK batch `which` (gpu_vk_select_target). Neither core presents; the SBS composite does.
+// geometry into VK batch `which` (gpu_gpu_select_target). Neither core presents; the SBS composite does.
 void step_core(Game* g, int which) {
   g->core.game->diff_mode  = 1;
   g->core.game->sbs_render = 1;
@@ -274,20 +274,20 @@ void step_core(Game* g, int which) {
         c->mem_w8(0x1f80019du, 1);                           // request skip (the game's Start-skip flag)
     } }
   apply_mode(which);
-  gpu_vk_select_target(which);        // single VK target under g_sbs_rl: both cores emit into batch 0
+  gpu_gpu_select_target(which);        // single VK target under g_sbs_rl: both cores emit into batch 0
   dc_step_frame(&g->core, s_frame);   // native_step_frame binds THIS core's per-instance GTE/SPU/MDEC/CD
 }
 
 // Render ONE core's just-emitted frame into the shared VK target HEADLESS and read it back to its CPU RGBA
 // pane buffer (SDL_GPU window then draws it). Resets the VK geometry batch so the NEXT core renders into a clean
 // target. Records the live display-region size for the SDL_GPU window upload. This is the per-core PROVEN path
-// (single-mode headless render + readback, the same gpu_vk_shot uses), which works on macOS/MoltenVK.
+// (single-mode headless render + readback, the same gpu_gpu_shot uses), which works on macOS/MoltenVK.
 void grab_pane(Game* g, uint8_t* rgba, int* ow, int* oh) {
   int sx, sy, w, h; gpu_disp_region(&g->core, &sx, &sy, &w, &h);
   if (w < 1) w = 1; if (h < 1) h = 1;
   if (w > 1024) w = 1024; if (h > 512) h = 512;
-  gpu_vk_render_readback(&g->core, gpu_vram_ptr(&g->core), sx, sy, w, h, rgba);
-  gpu_vk_frame_end(&g->core, gpu_vram_ptr(&g->core), (int)s_frame);   // reset the VK geometry batch
+  gpu_gpu_render_readback(&g->core, gpu_vram_ptr(&g->core), sx, sy, w, h, rgba);
+  gpu_gpu_frame_end(&g->core, gpu_vram_ptr(&g->core), (int)s_frame);   // reset the VK geometry batch
   *ow = w; *oh = h;
 }
 
@@ -378,8 +378,8 @@ void sbs_run(const char* exe_path) {
   g_store_watch_cb = sbs_store_cb;
   g_sbs = 1;            // skip the in-engine dualview second pass (each core renders its OWN pane)
   g_sbs_rl = 1;         // sequential single-target render+readback per core (both cores emit into batch 0)
-  // The SBS composite is now drawn by the SDL_GPU renderer's OWN window (gpu_vk_present_sbs2), so each core
-  // renders into the VRAM image WITHOUT presenting to the swapchain (gpu_vk_render_readback), then both
+  // The SBS composite is now drawn by the SDL_GPU renderer's OWN window (gpu_gpu_present_sbs2), so each core
+  // renders into the VRAM image WITHOUT presenting to the swapchain (gpu_gpu_render_readback), then both
   // panes are composited side by side in ONE window frame. No second window, so VK is NOT forced headless
   // (the old SDL_GPU window path opened its own GL window, which is why this used to set PSXPORT_VK_HEADLESS — that
   // two-window workaround is gone). The window opens lazily on the first render_readback.

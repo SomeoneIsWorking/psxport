@@ -357,9 +357,9 @@ for content fns (call it). Do NOT mimic PSX hardware (GTE/GP0/OT) — remove Bee
     ADD or SUBTRACT of the rect's RGB, CLAMPed — NOT rgb*brightness. (Intro SM a1=P[3]: 0=black-fade,
     1=white-fade; area-transition a1=0 = black-fade. color grey u or 0xffffff.)
     **FIX:** own `FUN_8007e9c8` PC-native — instead of building the OT rect, store an engine fade global
-    {r,g,b, mode(add/sub), active}; clear `active` at frame start; gpu_vk applies `clamp(frame ± color)` to
+    {r,g,b, mode(add/sub), active}; clear `active` at frame start; gpu_gpu applies `clamp(frame ± color)` to
     the finished image. CRITICAL (headless/windowed parity): apply into `s_tex` (read by BOTH the present
-    blit AND the `shot` readback, gpu_vk.cpp ~1946/2020) so a headless screenshot matches the window — NOT
+    blit AND the `shot` readback, gpu_gpu.cpp ~1946/2020) so a headless screenshot matches the window — NOT
     only in present.frag. Then delete the `fade_full_2d` OT heuristic (verify the pause-dim #21 path first).
     Owning FUN_8007e9c8 fixes BOTH fade callers at once. Verify = USER eyeball a headless fade-ramp shot
     (trigger via the area-transition force, or the intro). NB this will break the bgscenesmverify gate's
@@ -1082,7 +1082,7 @@ Two independent root causes, both override-removal casualties:
 - **DUST: PARKED by user.** It is a quad-cluster particle effect, not a sprite strip; format owned + tooling
   in 85ebb98 (tex_export --scanbav/--bavsheet/bav_layout, REPL `vramraw`). Finish = decode per-quad records.
 - **HUD rebuilt PC-NATIVE (88741d6):** engine/hud.cpp draws the gauge/icon as textured quads on the engine's
-  own 2D overlay layer (gpu_vk_draw_tritri + gpu_vk_set_order_2d), owning overlay order — NO GP0 packet/OT/
+  own 2D overlay layer (gpu_gpu_draw_tritri + gpu_gpu_set_order_2d), owning overlay order — NO GP0 packet/OT/
   rec_dispatch. Engine owns visibility → draws all 3 indicator sprites (the PSX 4:3 da-clip ate 2; #14 fix).
   Content interface 0-diff (all field-A/B diffs in the PSX render packet pools the native HUD stops writing).
   TODO: glow-pulse modulation; panel/numeric-glyph counts + quest-banner text (state not yet RE'd).

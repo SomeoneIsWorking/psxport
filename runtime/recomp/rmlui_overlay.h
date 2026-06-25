@@ -1,6 +1,6 @@
 #ifndef PSXPORT_RMLUI_OVERLAY_H
 #define PSXPORT_RMLUI_OVERLAY_H
-// C bridge to the RmlUi mod-toggle overlay (implemented in rmlui_overlay.cpp). gpu_vk.c drives it
+// C bridge to the RmlUi mod-toggle overlay (implemented in rmlui_overlay.cpp). gpu_gpu.c drives it
 // from the windowed present path; it edits g_mods (mods.h) + g_fps60_on live. No-op until init'd.
 #include <SDL2/SDL.h>
 #include <vulkan/vulkan.h>

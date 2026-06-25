@@ -10,16 +10,16 @@ ONE render behavior (native per-pixel depth always on, no oracle to diff against
    **`gp0_exec`** (gpu_native.c) per primitive. `gp0_exec` decodes each packet (poly/sprite/fill/copy/
    upload/env) — this is the single chokepoint where every drawn primitive passes.
 3. **VK is THE renderer:** `gp0_exec` **tees** each poly/sprite prim to the GPU via
-   `gpu_vk_draw_tritri` / `_draw_semi` (gpu_vk.c). VK owns poly/sprite raster; the rest
-   (fills/copies/uploads) go through `gpu_vk_dirty` to mirror VRAM regions into the GPU image. A CPU
+   `gpu_gpu_draw_tritri` / `_draw_semi` (gpu_gpu.c). VK owns poly/sprite raster; the rest
+   (fills/copies/uploads) go through `gpu_gpu_dirty` to mirror VRAM regions into the GPU image. A CPU
    `s_vram` (1024×512 R16_UINT) still backs those fill/copy/upload ops so the mirrored image stays in
    sync. VK runs both windowed and headless.
 4. **Present:** the per-frame loop (`native_boot.c`, via the `0x800788ac` tick override) → `gpu_present`
-   → `gpu_present_ex` → `present_window` → **`blit_src`** (gpu_native.c) → `gpu_vk_present(src, …)`,
+   → `gpu_present_ex` → `present_window` → **`blit_src`** (gpu_native.c) → `gpu_gpu_present(src, …)`,
    which renders the tee'd batch into the GPU VRAM image, then presents to the swapchain — or, headless,
    just renders + stops. **VK runs even with no window.**
 
-## VK backend (gpu_vk.c) at a glance
+## VK backend (gpu_gpu.c) at a glance
 - One persistent **R16_UINT 1024×512 VRAM image** (`s_tex`) = PSX VRAM; SW-written regions are uploaded
   each frame, drawn geometry is rendered on top. Textured prims sample a snapshot (`s_vram_tex`) to avoid
   a render/sample feedback loop. Semi-transparent prims draw in OT-order groups, each re-snapshotting the
@@ -27,10 +27,10 @@ ONE render behavior (native per-pixel depth always on, no oracle to diff against
 - **Depth = a D32 buffer. Native per-pixel depth is THE depth model — always on, the single render
   behavior.** For a prim whose every vertex resolves to a projected 3D vertex, `gp0_exec` looks up the
   native view-space depth (`projprim_lookup_pz`→`pz`, `proj_pz_to_ord` → inverse-depth in [0,1]) and
-  hands it per-vertex via `gpu_vk_set_vd`; the D32 buffer then does true per-pixel occlusion (opaque
+  hands it per-vertex via `gpu_gpu_set_vd`; the D32 buffer then does true per-pixel occlusion (opaque
   writes depth, compare `GREATER_OR_EQUAL`, clear 0.0; semi tests, no write). The single buffer is
   partitioned: **3D world** in `[0, NATIVE_3D_MAX=0.9375]`, and a **2D/HUD overlay band** in
-  `(0.9375, 1]` via `gpu_vk_set_order_2d` — any prim where a vertex misses the 3D lookup (a screen-space
+  `(0.9375, 1]` via `gpu_gpu_set_order_2d` — any prim where a vertex misses the 3D lookup (a screen-space
   / UI prim) lands in this band, ordered by its OT index so the painter's order is preserved *within the
   overlay* and UI composites over the world. **This is a PC GAME: real per-pixel depth, not the PSX
   OT-order painter's algorithm.** The deferred SHADING pass (SSAO/light) is separate. (later-118; field
@@ -51,7 +51,7 @@ ONE render behavior (native per-pixel depth always on, no oracle to diff against
 mods.h is g_mods.) The technical pass below is unchanged; only the enable mechanism moved from
 `PSXPORT_SSAO`/`PSXPORT_LIGHT` to the overlay toggle.
 
-A fullscreen deferred pass run **inside `panel_render`, between the opaque and semi passes** (gpu_vk.c
+A fullscreen deferred pass run **inside `panel_render`, between the opaque and semi passes** (gpu_gpu.c
 `ssao_pass`; shaders_vk/ssao.frag) that applies ambient occlusion (AO) and/or a directional
 light reconstructed PURELY from the depth buffer — no PSX GTE hooks, no per-face PGXP
 normals. Both are properties of the OPAQUE geometry: running before the translucent pass means UI/water

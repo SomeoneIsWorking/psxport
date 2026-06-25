@@ -67,7 +67,7 @@ op65 native_x=176 w=32 s_off_x=0 bg=0 X=176 XL=176 XR=208 da_x0=144 anchor=0 wid
   are all inside L=106..R=213). The thirds logic is NOT the cause.
 - `da_x0=144`. The FB-relocation shader does `fx = (i_pos.x - i_da.x0)*ss + fb_x0`
   (`runtime/recomp/shaders_vk/tritex.vert:34-35`), with `fb_x0 = margin*ss = 54`
-  (`runtime/recomp/gpu_vk.cpp:807-808`, `push_wide`). So:
+  (`runtime/recomp/gpu_gpu.cpp:807-808`, `push_wide`). So:
   - ball 112 → (112−144)+54 = **22**
   - ball 144 → (144−144)+54 = **54**
   - ball 176 → (176−144)+54 = **86**
@@ -130,7 +130,7 @@ screen-space 2D HUD. Options, in order of preference:
    feed the FB present a coordinate that already accounts for centring — never run it through the
    `i_pos - i_da.xy` buffer-relative transform meant for 3D.
 2. **Short of owning the emitter:** in the sprite path (`gpu_native.cpp` ~line 991, the
-   `gpu_vk_wide_engine() && s_prev_had3d` block), make the 2D HUD sprite coordinates buffer-relative
+   `gpu_gpu_wide_engine() && s_prev_had3d` block), make the 2D HUD sprite coordinates buffer-relative
    *before* they reach the shader so the shader's `i_da.x0` subtraction is correct — i.e. pass HUD sprite
    X already expressed in the same origin the shader subtracts (add `s_da_x0` back to the HUD-anchored X,
    or pass `i_da.x0 = 0` for these prims). The probe that added `s_da_x0` confirms this re-centres them.
@@ -147,7 +147,7 @@ of one wider glyph that overlap on the real path), the engine should treat them 
 **Files / lines**
 - `runtime/recomp/shaders_vk/tritex.vert:30-39` — FB relocation `fx = (i_pos.x - i_da.x0)*ss + fb_x0`
   (the `i_da.x0` subtraction is Defect 1's mechanism).
-- `runtime/recomp/gpu_vk.cpp:801-809` — `push_wide`: `fb_x0 = margin*ss` (the only re-centring added back).
+- `runtime/recomp/gpu_gpu.cpp:801-809` — `push_wide`: `fb_x0 = margin*ss` (the only re-centring added back).
 - `runtime/recomp/gpu_native.cpp:990-994` — sprite 2D wide block (`ws_2d_local_x`); the place to make HUD
   sprite X buffer-relative / cancel the `i_da.x0` term (Fix 1 option 2).
 - `runtime/recomp/gpu_native.cpp:121-129` — `ws_2d_anchor_off` thirds (NOT the cause here; anchor=0).

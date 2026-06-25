@@ -2,7 +2,6 @@
 #include <RmlUi/Core/Vertex.h>
 #include <cstring>
 #include <cstdio>
-#include "gpu_vk_shaders.h"   // generated: spv_rml_vert / spv_rml_frag (tools/gen_vk_shaders.sh)
 
 namespace {
 

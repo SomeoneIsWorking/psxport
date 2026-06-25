@@ -205,7 +205,7 @@ static void ov_game_s4c(Core* c) {
 void ov_sop_field_mode(Core*);           // engine/sop.cpp — native SOP field-mode machine
 void native_transition_area_load(Core*); // engine/sop.cpp — sync transition area-DATA load
 void engine_fade_set(Core*, uint32_t color, uint32_t a1);  // engine/gpu_lib.cpp — engine-owned screen fade
-void gpu_clear_fade(void);                                 // runtime/recomp/gpu_vk.cpp — per-frame fade reset
+void gpu_clear_fade(void);                                 // runtime/recomp/gpu_gpu.cpp — per-frame fade reset
 void ov_objwalk(Core*);                  // engine/engine_tomba2.cpp — native FUN_8007a904 object-list walk
 void ov_disp_26c88(Core*);               // engine/entity.cpp — native FUN_80026c88 display update
 static void ov_game_submode0(Core* c);   // fwd

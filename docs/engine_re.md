@@ -918,7 +918,7 @@ Screen X = OFX + IR1·H/Sz, screen Y = OFY + IR2·H/Sz.
   near the double-buffer/OT setup `FUN_80081458` / disp-env; needed to widen the clip to match OFX.
 - **Higher res (native, not supersampling) — IMPLEMENTED (`PSXPORT_IRES=N`, default 1 = faithful):**
   the VK backend rasterizes the engine's submitted geometry into the scratch FB at N×(320|428)×240 by
-  scaling the rasterization viewport (`gpu_vk.c` `s_ires`/`use_fb`/`push_wide`, shader already maps
+  scaling the rasterization viewport (`gpu_gpu.c` `s_ires`/`use_fb`/`push_wide`, shader already maps
   framebuffer-local×scale). Same engine output, sampled denser — crisp 3D edges; textures still sampled
   from PSX-res VRAM. Caps within the 1024-wide VRAM image: 4:3 → 3×, 16:9 → 2×. A dedicated >1024 render
   target would lift the cap (next). Distinct from the rejected supersample-and-downscale FB-cram trick.
@@ -971,7 +971,7 @@ shading, SSAO, and a replacement per-pixel fog (read the scene FarColor from CR2
 all replacing/augmenting the baked color + GTE depth-cue. (Camera basis: see Camera section / CR24-31.)
 
 ## Graphics pipeline — the REAL draw path (libgpu), the ownership target (later-99)
-Today the recompiled game runs **Sony libgpu** → writes GP0/GP1 → our GPU emulator (gpu_native/gpu_vk)
+Today the recompiled game runs **Sony libgpu** → writes GP0/GP1 → our GPU emulator (gpu_native/gpu_gpu)
 just rasterizes the resulting byte stream. "Owning the graphics" = reimplementing the libgpu layer in
 native C (game calls into OUR DrawOTag/PutDrawEnv/primitive code), so every draw is understood, not
 black-boxed. The layer is small and standard (libgpu), dispatched via a jump-table at **0x800A5998**
@@ -1210,8 +1210,8 @@ This is the port ACCOUNTING for every draw instead of blind GP0 rasterization. F
     new env-gated, renderer-independent probes in gpu_native.c: **`PSXPORT_FADEDBG="a:b"`** (per-frame
     max prim colour, semi colour range, bigsemi count, disp/draw origin) and **`PSXPORT_SEMIDUMP=frame`**
     (each semi prim's blend mode + colour + bbox). The GP0 colour ramp is identical under SW and VK, so
-    these settle "engine vs renderer" without VK. **FIX (gpu_vk.c + gpu_native.c):** partition the semi
-    batch into overlap GROUPS (`gpu_vk_semi_group(bbox)` per semi prim; a prim that overlaps the current
+    these settle "engine vs renderer" without VK. **FIX (gpu_gpu.c + gpu_native.c):** partition the semi
+    batch into overlap GROUPS (`gpu_gpu_semi_group(bbox)` per semi prim; a prim that overlaps the current
     group's accumulated bbox starts a new group) and draw each group with its OWN fresh framebuffer
     snapshot, so a later group blends against earlier groups' results — exactly the sequential PSX/SW
     order. Non-overlapping semis (e.g. water tiles) stay ONE group → no extra cost. **VERIFIED:** VK fade

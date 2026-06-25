@@ -1,7 +1,7 @@
 // SCEA license-screen texture, baked from SCUS_944.54's VRAM upload (the boot stub's LoadImage).
 // Captured once from the running stub (decoded-verified as "Sony Computer Entertainment America
 // Presents"). Lets the PC-native boot decode SCEA to an RGBA image (gpu_scea_decode_rgba) and draw it
-// the PC way (gpu_vk_present_image) WITHOUT interpreting the PSX stub or touching VRAM/GP0/CLUT-in-VRAM.
+// the PC way (gpu_gpu_present_image) WITHOUT interpreting the PSX stub or touching VRAM/GP0/CLUT-in-VRAM.
 // 4bpp texture page (160 rows: the 3 sprite rects sample v in [0,160)) + 16-entry RGB555 CLUT.
 #pragma once
 #define SCEA_TEX_W 64

@@ -1,11 +1,11 @@
 #ifndef PSXPORT_OVERLAY_GLUE_H
 #define PSXPORT_OVERLAY_GLUE_H
-// Thin integration layer between the Vulkan present path (gpu_vk.cpp) and the RmlUi mod/debug overlay
-// (rmlui_overlay.cpp). gpu_vk.cpp calls these four hooks and nothing more — all overlay-specific logic
+// Thin integration layer between the Vulkan present path (gpu_gpu.cpp) and the RmlUi mod/debug overlay
+// (rmlui_overlay.cpp). gpu_gpu.cpp calls these four hooks and nothing more — all overlay-specific logic
 // (full-window viewport build for the menu, the live world-position latch read from guest RAM, the
 // per-frame CPU update, and the present-pass record) lives HERE, not crammed into the renderer.
 //
-// Implemented in C++ (reads Core via core.h); exposed with C linkage so gpu_vk.cpp's call sites are
+// Implemented in C++ (reads Core via core.h); exposed with C linkage so gpu_gpu.cpp's call sites are
 // trivial. All hooks are no-ops until the overlay is initialised (windowed only).
 #include <SDL2/SDL.h>
 #include <vulkan/vulkan.h>
@@ -28,7 +28,7 @@ void overlay_glue_event(const SDL_Event* e);
 } // extern "C"
 
 // Per-frame CPU step: latch the live world readout from guest RAM (camera/Tomba pos + stage) for the
-// menu's HUD line, then run the overlay's CPU update. Called from GpuVkState::present before recording.
+// menu's HUD line, then run the overlay's CPU update. Called from GpuGpuState::present before recording.
 // (C++-only: takes a Core*.)
 void overlay_glue_frame_begin(Core* core);
 

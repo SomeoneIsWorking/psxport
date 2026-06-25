@@ -1,7 +1,7 @@
 #pragma once
 // RmlUi render interface for the Tomba2 port's Vulkan present pass. Records the menu's 2D geometry
 // into an EXTERNALLY-PROVIDED command buffer + render pass (the port's swapchain present pass in
-// gpu_vk.cpp), so the menu draws on top of the game's frame. This is NOT the stock RmlUi VK backend
+// gpu_gpu.cpp), so the menu draws on top of the game's frame. This is NOT the stock RmlUi VK backend
 // (RmlUi_Renderer_VK.cpp) — that one owns its own device/swapchain/present and is wrong for a renderer
 // that already has all of those. Adapted from soh3d's RmlRenderInterfaceVk (same record-into-host-pass
 // model), but using the port's pre-compiled SPIR-V (no runtime glslang dependency) and the port's own

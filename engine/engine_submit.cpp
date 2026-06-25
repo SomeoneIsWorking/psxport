@@ -76,12 +76,12 @@ struct PktSpanSession {
 
 
 // Right-edge frustum-cull threshold. The submit drops a prim only if ALL its verts are off the right of
-// the screen. In 4:3 that's SX>=320 (faithful). Genuine engine-wide (gpu_vk_wide_engine) extends the
+// the screen. In 4:3 that's SX>=320 (faithful). Genuine engine-wide (gpu_gpu_wide_engine) extends the
 // screen to the wide width (428@16:9), so geometry projected into the [320,wide) right band is ON-screen
 // and MUST NOT be dropped — widen the threshold to the wide width. THIS is why the right-side terrain was
 // missing in wide: the engine's own submit culled it to 4:3. (Vertical 240 cull unchanged.) later-119.
-int gpu_vk_wide_engine(void), gpu_vk_wide_engine_w(void);
-static int submit_xmax(void) { return gpu_vk_wide_engine() ? gpu_vk_wide_engine_w() : 320; }
+int gpu_gpu_wide_engine(void), gpu_gpu_wide_engine_w(void);
+static int submit_xmax(void) { return gpu_gpu_wide_engine() ? gpu_gpu_wide_engine_w() : 320; }
 
 // PSXPORT_DEBUG=geomblk — geometry-record CAPTURE probe. Dumps the RAW primitive records of every geomblk
 // submitted through the three natively-owned submitters (GT3 0x8007FDB0, GT4 0x8008007C, GT4bp 0x80027768).
@@ -323,13 +323,13 @@ void  gpu_draw_world_quad(Core* c, const float* px, const float* py, const float
                           const int* u, const int* v, const uint8_t* r, const uint8_t* g,
                           const uint8_t* b, uint16_t tp, uint16_t clut, int semi,
                           const float (*sv)[3]);
-int  gpu_vk_shadows_active(void);
+int  gpu_gpu_shadows_active(void);
 // Fill `vv` with the prim's 4 view-space verts (x=ir1=vx, y=ir2=vy, z=pz) — the shadow VBO input — and
 // return a pointer to it (NULL when this prim doesn't cast: semi, or shadows off). The shadow geometry is
 // then carried ON the queued RqItem (gpu_draw_world_quad's sv arg) so it is rebuilt per present pass from
 // the queue, NOT pushed here into a side stream — that is what removes the keep_shadow strobe hack.
 static inline const float (*shadow_verts(const ProjVtx* p, int nv, int semi, float vv[4][3]))[3] {
-  if (semi || !gpu_vk_shadows_active()) return nullptr;          // only opaque world casts shadows
+  if (semi || !gpu_gpu_shadows_active()) return nullptr;          // only opaque world casts shadows
   for (int k = 0; k < 4; k++) { int s = k < nv ? k : nv - 1;
     vv[k][0] = p[s].vx; vv[k][1] = p[s].vy; vv[k][2] = p[s].pz; }   // view space (x=ir1, y=ir2, z=pz)
   return vv;

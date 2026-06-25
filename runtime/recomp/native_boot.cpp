@@ -506,7 +506,7 @@ static void native_step_frame(Core* c, uint32_t f) {
     // so the PSX pass must run from the PRE-render state captured in ov_field_frame (dv_snapshot, before
     // the native render ran), not from the post-native-render state. We then restore the POST-FRAME state
     // so the canonical game (which includes the post-render per-frame area update) is undisturbed.
-    extern int g_dualview, g_dv_have_pre; extern void gpu_vk_select_target(int);
+    extern int g_dualview, g_dv_have_pre; extern void gpu_gpu_select_target(int);
     extern void dv_capture_post(Core*), dv_restore_pre(Core*), dv_restore_post(Core*);
     // SBS owns BOTH panes (core A | core B); its target-1 batch is core B's render, NOT a PSX re-render of
     // THIS core — so skip the in-engine dualview second pass. g_sbs declared at file scope below.
@@ -519,11 +519,11 @@ static void native_step_frame(Core* c, uint32_t f) {
       c->mem_w16(0x800e809c, 0);                                // dwell counter
       c->mem_w32(0x800bf4f4, c->mem_r32(0x800bf544));
       c->mem_w32(0x800bf544, (0x800bfe68u) & 0xffffff);         // reset packet pool ptr
-      gpu_vk_select_target(1);
+      gpu_gpu_select_target(1);
       rec_dispatch(c, 0x8003f9a8u);                             // PSX field render orchestrator (full OT build)
       rec_dispatch(c, 0x8010810cu);                             // render submit (faithful to ov_field_frame)
       c->r[4] = envp + 0x1ffcu; ov_draw_otag(c);                // walk PSX OT -> target-1 batch
-      gpu_vk_select_target(0);
+      gpu_gpu_select_target(0);
       dv_restore_post(c);            // restore the real canonical state (PSX pass fully undone)
       g_dv_have_pre = 0;
     }
@@ -691,9 +691,9 @@ static long native_repl_read(Core* c, uint32_t f) {
     else if (!strcmp(cmd, "shot")) { char path[200] = {0}; if (sscanf(line, "%*s %199s", path) == 1) { void gpu_native_shot(Core*, const char*); gpu_native_shot(c, path); } }
     else if (!strcmp(cmd, "vram")) { char path[200] = {0}; unsigned x=0,y=0,w=1024,h=512;
       if (sscanf(line, "%*s %199s %u %u %u %u", path, &x,&y,&w,&h) >= 1) {
-        void gpu_vk_vram_region(const char*, int, int, int, int); gpu_vk_vram_region(path, (int)x,(int)y,(int)w,(int)h); } }
+        void gpu_gpu_vram_region(const char*, int, int, int, int); gpu_gpu_vram_region(path, (int)x,(int)y,(int)w,(int)h); } }
     else if (!strcmp(cmd, "vramraw")) { char path[200] = {0};
-      if (sscanf(line, "%*s %199s", path) == 1) { void gpu_vk_vram_raw(const char*); gpu_vk_vram_raw(path); } }
+      if (sscanf(line, "%*s %199s", path) == 1) { void gpu_gpu_vram_raw(const char*); gpu_gpu_vram_raw(path); } }
     else if (!strcmp(cmd, "dumpram")) {
       char path[200] = {0};
       if (sscanf(line, "%*s %199s", path) == 1) {

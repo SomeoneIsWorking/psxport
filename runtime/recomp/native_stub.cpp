@@ -78,7 +78,7 @@ static void scea_dump_ppm(const uint8_t* rgba, float fade01, const char* path) {
 
 static void native_scea_splash(Core* c) {
   void gpu_scea_decode_rgba(uint8_t*);
-  void gpu_vk_present_image(Core*, const uint8_t*, int, int, float);
+  void gpu_gpu_present_image(Core*, const uint8_t*, int, int, float);
   void gpu_pace_frame(Core*); void gpu_clear_display(Core*); uint16_t pad_buttons(Core*);
   // Decode the baked SCEA asset into a PC-native RGBA8 screen image ONCE (no PSX VRAM / GP0 / CLUT path).
   static uint8_t scea_rgba[SCEA_DISP_W * SCEA_DISP_H * 4];
@@ -94,7 +94,7 @@ static void native_scea_splash(Core* c) {
     if (f < SCEA_FADE_IN)                  fade = f * 128 / SCEA_FADE_IN;
     else if (f < SCEA_FADE_IN + SCEA_HOLD) fade = 128;
     else                                   fade = (SCEA_FRAMES - 1 - f) * 128 / SCEA_FADE_OUT;
-    gpu_vk_present_image(c, scea_rgba, SCEA_DISP_W, SCEA_DISP_H, fade / 128.0f);
+    gpu_gpu_present_image(c, scea_rgba, SCEA_DISP_W, SCEA_DISP_H, fade / 128.0f);
     // Headless: present_image only uploads (no swapchain) — dump the CPU rgba (faded) at the hold midpoint
     // so the decode/layout can be verified offline.
     if (!dumped && f == SCEA_FADE_IN + SCEA_HOLD / 2) {

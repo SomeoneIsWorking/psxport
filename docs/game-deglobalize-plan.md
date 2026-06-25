@@ -28,7 +28,7 @@ bug (Tomba falls through the floor in the fisherman cutscene; f400 model corrupt
   → SIGSEGV in interpreted guest code (looks unrelated). Always `build_port.sh all` per phase.
 
 ## Global inventory (file-scope `static` counts; targets, hardest last)
-runtime/recomp: gpu_vk 107, gpu_native 46, gte_beetle 20, interp 16, native_fmv 12, dbg_server 12,
+runtime/recomp: gpu_gpu 107, gpu_native 46, gte_beetle 20, interp 16, native_fmv 12, dbg_server 12,
 gpu_trace 11, hle 10, native_stub 9, cd_override 8, native_boot 7, imgui_overlay 6, pad_input 5,
 memcard 5, sync_overrides 4, threads 3, timing 2, mem 1, boot 1. (~459 lines; many are CONST tables /
 fn-ptr tables / string literals that are read-only and may stay shared — only MUTABLE state must move.)
@@ -97,22 +97,22 @@ Flag init-once-then-read tables case by case; when in doubt, move it (safe).
   `gpu_provat_display`/`gpu_scene_dump*`) + dbg_server + fps60's synth path (`fps60_synthesize`/dumptest) +
   the Core*-less `gpu_gp1`/`gpu_frame_no`/`gpu_native_*`/`gpu_repaint`/`gpu_fps60_*`. Cross-file `s_frame`
   reads (engine_submit, margin_render, game_tomba2) → `gpu_frame_no(c)`. **DEFERRED to R2:** `s_seen3d`/
-  `s_prev_had3d` stay file-scope shared (read by gpu_vk's Core*-less present path; move when gpu_vk is
+  `s_prev_had3d` stay file-scope shared (read by gpu_gpu's Core*-less present path; move when gpu_gpu is
   threaded). Diagnostics/host-singletons stay shared per policy (s_prims, s_fade_*, s_cw_*, texwatch,
   s_sbs_on, SDL s_win/s_ren/s_tex, g_nd_*). Gates: frame-50 RAM 0-diff vs baseline ✓ AND field-frame 520
   VK render byte-identical pre-vs-post ✓.
-- **R2 (done):** gpu_vk.cpp per-frame render state → `GpuVkState` on Game (`core->game->gpu_vk`). MOVED
+- **R2 (done):** gpu_gpu.cpp per-frame render state → `GpuGpuState` on Game (`core->game->gpu_gpu`). MOVED
   (now members, `s_`-spelling kept so bodies are byte-unchanged): batch counters `s_tri_n`/`s_tex_n`/
   `s_semi_n`, current prim depth/order `s_vd`/`s_vdn`/`s_cur_ord`/`s_cur_ordn`, semi grouping `s_semi_grp[]`/
   `s_semi_grp_n`/`s_sg_*`, dirty regions `s_dirty[]`/`s_dirty_n`, present origin `s_present_sx/sy`, diag
-  snapshots `s_dbg_*`/`s_last_*`. The touching fns are now **GpuVkState methods** (scripted, body-preserving:
-  scratch/r2_gpu_vk.py) — set_*/semi_group/stats/dirty/present/draw_*/shot/dump/frame_end/tritest + the
+  snapshots `s_dbg_*`/`s_last_*`. The touching fns are now **GpuGpuState methods** (scripted, body-preserving:
+  scratch/r2_gpu_gpu.py) — set_*/semi_group/stats/dirty/present/draw_*/shot/dump/frame_end/tritest + the
   internal helpers panel_upload/panel_render/ssao_pass/tex_emit/tri_*_readback/frame_via_fb. Public C API
-  kept stable via thin **wrappers** taking `Core*` (gpu_vk.h, the single decl site — scattered local
+  kept stable via thin **wrappers** taking `Core*` (gpu_gpu.h, the single decl site — scattered local
   forward-decls in the gp0 tee dropped). Panel/TexVtx made named structs so they can be forward-declared in
   the header. **`s_seen3d`/`s_prev_had3d` (R1 deferral) moved onto GpuState** (writer side stays byte-
   identical); `gpu_seen3d_this_frame`/`gpu_had3d_last_frame` now take `Core*`; `frame_via_fb` reads them via
-  a `Game*` back-pointer added to GpuVkState (and to GpuState, used by `blit_src` → `&game->core`). Threaded
+  a `Game*` back-pointer added to GpuGpuState (and to GpuState, used by `blit_src` → `&game->core`). Threaded
   callers: gpu_native gp0 tee + present (have `core`), boot.cpp (tritest moved AFTER `new Game()`, passes
   `c`), dbg_server (shot/stats take `s_ctx`). STAYS SHARED (documented): all Vulkan device/swapchain/
   pipeline/buffer handles (one VK device per process), config-caches (s_vk_on/s_sbs/sbs_on), `s_rawdump_*`.
@@ -123,7 +123,7 @@ Flag init-once-then-read tables case by case; when in doubt, move it (safe).
   read-only w.r.t. guest RAM (it snapshots VRAM + records GP0 words, then writes a trace FILE for gpu_differ).
   They do NOT affect Core::ram, so per the "Debug/trace statics" policy they STAY SHARED (two lockstep cores
   are both unarmed/no-op or armed identically; the capture buffers can't diverge core.ram). No code change.
-- **Next (order):** ~~gpu_native~~(R1) → ~~gpu_vk~~(R2) → ~~gpu_trace/gpu_debug~~(R3 audit) → ~~dbg_server~~(audit) →
+- **Next (order):** ~~gpu_native~~(R1) → ~~gpu_gpu~~(R2) → ~~gpu_trace/gpu_debug~~(R3 audit) → ~~dbg_server~~(audit) →
   ~~native_boot~~(done) → **gte/spu/mdec (Beetle FORK — do this next; architectural decision below)** → engine
   modules (fps60, engine_submit, native_path*, game_tomba2). (mem 1 static, boot 1 — sweep at the end.) THEN
   the dual-core diff + the submit_terrain fix.
@@ -159,7 +159,7 @@ Flag init-once-then-read tables case by case; when in doubt, move it (safe).
   render byte-identical ✓ (both fps60-off) AND **fps60-ON synth byte-identical** (PSXPORT_FPS60=1
   FPS60_SYNTH=520: A/in-between/B PPMs identical + sdbg fingerprint prims=590 tagged=211 translated=199
   snapped=391 unchanged) — the off-path gates don't exercise fps60, so the on-path check is the real gate.
-- **RENDER SUBSYSTEM = FULLY DE-GLOBALIZED** (R1 gpu_native, R2 gpu_vk, R3 trace/debug audit, native_dl,
+- **RENDER SUBSYSTEM = FULLY DE-GLOBALIZED** (R1 gpu_native, R2 gpu_gpu, R3 trace/debug audit, native_dl,
   fps60). The core.ram-affecting de-globalization is COMPLETE. Only harness-level (Beetle fork) + the
   mem/boot 1-static sweep remain before building the dual-core diff.
 - **mem/boot sweep (done):** mem.cpp's function-local `static uint32_t toggle` (the GPUSTAT 0x1F801814
@@ -174,7 +174,7 @@ Flag init-once-then-read tables case by case; when in doubt, move it (safe).
   core runs between switches → sufficient for the lockstep diff). This is the only remaining file-scope
   mutable state and it stays as-is.
 - **DE-GLOBALIZATION COMPLETE (2026-06-19):** every piece of OUR per-instance machine state is on `Game`
-  (Core + timing/cd/hle/pad/fmv/stub/sched + gpu/gpu_vk/ndl/fps60 + the GPUSTAT toggle on Core). The only
+  (Core + timing/cd/hle/pad/fmv/stub/sched + gpu/gpu_gpu/ndl/fps60 + the GPUSTAT toggle on Core). The only
   globals left are the Beetle fork (handled by harness snapshot/restore, being cut later) and documented
   shared singletons (SDL/VK host devices, config-caches, diag/trace). Ready to build the dual-core diff.
 - **dbg_server.cpp (AUDIT — stays shared):** all file-scope statics are the HOST debug-interface singleton
@@ -198,7 +198,7 @@ Asked defer-vs-migrate for the renderer, the user chose **migrate render fully f
 file-scope global" literally; enables future per-core render-output diffing). Biggest chunk (~164 of
 ~459 statics) and **cross-module**: the VRAM/display state is NOT mere file-scope statics — `s_vram`,
 `s_prov`, `s_disp_x/y` are plain globals exported via `runtime/recomp/gpu_native_internal.h` and
-consumed by gpu_native, gpu_vk, gpu_trace, gpu_debug.
+consumed by gpu_native, gpu_gpu, gpu_trace, gpu_debug.
 - **Design:** put ALL render state on a `GpuState` member of `Game` (VRAM `s_vram`+`s_interp`+`s_prov`,
   `s_fb_base`, draw clip `s_da_*`, offset `s_off_*`, tex mode `s_tp_*`, CLUT `s_clut_*`, GP0 parse
   `s_fcount/s_fneed/s_xfer*`, tex window `s_tw_*`, display `s_disp_*`, prim counters `s_prim_*`,
@@ -206,12 +206,12 @@ consumed by gpu_native, gpu_vk, gpu_trace, gpu_debug.
   already carry `Core*` (`gpu_gp0(Core*)`, `gp0_exec(Core*)`, `gpu_present(Core*)`).
 - **Threading crux:** LEAF helpers (`fb()`, `sample_tex`, GP0 sub-handlers, `blit_src`, `gpu_gp1` which
   has NO Core*) carry no handle. Re-thread them to take `GpuState&`/`Core*` (mechanical but large in
-  gpu_native.cpp), and update the internal header + cross-file consumers (gpu_vk/gpu_trace/gpu_debug)
+  gpu_native.cpp), and update the internal header + cross-file consumers (gpu_gpu/gpu_trace/gpu_debug)
   that read `s_vram`/`s_prov`. Existing OOP direction ([[oop-core-refactor-directive]], cpp-scope memory)
   favors making the heavy GPU fns **methods of GpuState** — clean but a big rewrite; method-ize or pass
   `GpuState&`.
 - **Stay SHARED (documented host-output singletons / config / diag, NOT machine state):** SDL window/
-  renderer/texture (`s_win/s_ren/s_tex/s_tex_w/s_tex_h/s_win_on`); Vulkan device/swapchain in gpu_vk are
+  renderer/texture (`s_win/s_ren/s_tex/s_tex_w/s_tex_h/s_win_on`); Vulkan device/swapchain in gpu_gpu are
   the same category (host GPU singletons, one per process). Config-caches (`s_sbs_on`, `g_log`,
   `s_reddbg`) and pure diagnostics (`s_prims`, `s_gp0_words`, `s_dma2`, `s_cur_node`, `s_fade_*`) stay
   shared per policy. Document each in-code.

@@ -14,7 +14,7 @@ recompiled code. "Owning" a function = replacing its interpreted execution with 
 **Direction (user-confirmed, later-115): FULL ownership of the engine layer — NO faking.** Own the entire
 **render + camera + submit + loop pipeline** natively, and **retire every renderer-side fake**: the
 FB-widescreen hack (`push_wide` / `WIDE_OFF` / the wide scratch FB) and the sprite-anchor FB hack
-(`gpu_vk_sprite_anchor_dx`) all go away once the engine itself produces a genuinely wider frame. Widescreen
+(`gpu_gpu_sprite_anchor_dx`) all go away once the engine itself produces a genuinely wider frame. Widescreen
 and PC effects must come from a real wider frustum, not a post-stretch. **Gameplay logic (per-entity AI,
 physics, rules) STAYS running on the interpreter (the real PSX code in guest RAM)** — it is our bit-exact
 oracle, not a black box; reimplementing it by hand would be enormous and throw away what proves each native
@@ -76,7 +76,7 @@ Ordered by how directly each blocks faithful widescreen/effects.
 ### B4. Screen-space 2D layers: water / sky backdrop + HUD sprites
 - Water + sky are **NOT GTE-projected** — fixed screen-space layers (`engine_re.md` "Water + sky"). HUD/UI
   sprites (GP0 `0x60-0x7F`) likewise bypass the GTE. In widescreen these must be widened/edge-anchored at the
-  SOURCE (their submit), not via the FB shader hack `gpu_vk_sprite_anchor_dx`. Currently interpreted + FB-hack.
+  SOURCE (their submit), not via the FB shader hack `gpu_gpu_sprite_anchor_dx`. Currently interpreted + FB-hack.
 
 ### B5. The dominant projection-and-submit OVERLAY emitters
 - `0x80109C80` (4689/frame) and `0x801099B4` (2025/frame) are **runtime-loaded overlay code**, not statically

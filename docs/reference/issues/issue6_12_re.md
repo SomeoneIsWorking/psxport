@@ -24,7 +24,7 @@ prior static RE (engine/engine_ui_rect.cpp draft + issue #6 gh comments) with th
      points at, and it is NEW relative to the prior RE (which only chased the CLUT).
 - **#12** (cutscene mid-frame black bar) = the scratch-FB present path **discards the PSX display vertical
   crop**. A cutscene letterboxes via the GP1-0x07 display vertical-range (a narrow `vy0..vy1`), but
-  `frame_via_fb` present samples the **whole** FB `[0,FBH]` (gpu_vk.cpp:1221) and ignores `s_disp_y`/the
+  `frame_via_fb` present samples the **whole** FB `[0,FBH]` (gpu_gpu.cpp:1221) and ignores `s_disp_y`/the
   vertical range, so VRAM rows the PSX would have cropped to black bars become visible — a black/undrawn
   band lands mid-screen. Wide/ires-only (the 4:3 path honors the display region).
 
@@ -104,9 +104,9 @@ thirds anchoring.
   buffer) is reproduced correctly here — the cropped rows simply aren't sampled.
 - The **scratch-FB present path** (wide/ires, `frame_via_fb()`) OVERRIDES the sampled region to the full
   FB and throws the display crop away:
-  - windowed present: **gpu_vk.cpp:1220-1221** `int via_fb = frame_via_fb(); if (via_fb) { sx=0;
+  - windowed present: **gpu_gpu.cpp:1220-1221** `int via_fb = frame_via_fb(); if (via_fb) { sx=0;
     sy=FB_Y0; w=FBW(); h=FBH(); }`
-  - headless: **gpu_vk.cpp:1205** and shot/dump: **:1647**, all `{ sx=0; sy=FB_Y0; w=FBW(); h=FBH(); }`
+  - headless: **gpu_gpu.cpp:1205** and shot/dump: **:1647**, all `{ sx=0; sy=FB_Y0; w=FBW(); h=FBH(); }`
   - i.e. it samples the WHOLE scratch FB `[0,FBH]` and never consults `s_disp_y` / `s_disp_vy0..vy1`.
 - The scratch FB is filled by relocating the 3D content (tritex.vert:30-39, `fy = FB_Y0 + (y - da_y0)*ss`)
   over the full draw area. VRAM rows that the cutscene's display vertical-range would have **clipped off
@@ -161,7 +161,7 @@ region instead of blasting the whole FB. The PC-native fix: when `frame_via_fb()
 vertical-range into the scaled FB and sample/clip to THAT, not `[0,FBH]`:
 - top of the sampled FB region = `FB_Y0 + (s_disp_y_eff - da_y0)*ires` (where `s_disp_y_eff` accounts for
   GP1-0x05 start and the GP1-0x07 `vy0`), height = `(displayed_lines)*ires`, instead of `sy=FB_Y0;
-  h=FBH()` at gpu_vk.cpp:1221 (and the headless/shot/dump twins at :1205 and :1647).
+  h=FBH()` at gpu_gpu.cpp:1221 (and the headless/shot/dump twins at :1205 and :1647).
 - Equivalently and more PC-native: have the engine draw real letterbox bars itself in its 2D layer (top
   and bottom of the *display* aspect) and never present FB rows outside the cutscene's display window.
   The bars then sit at the frame edges by construction, regardless of ires/wide.
@@ -179,8 +179,8 @@ wide/ires frames — fix the region math once.
 - `runtime/recomp/gpu_native.cpp:824, 973-974` — `ws_2d_local_x` call sites (poly + sprite 2D widen).
 - `runtime/recomp/gpu_native.cpp:55-58` — `bg_2d` backdrop-vs-HUD coverage classifier.
 - `runtime/recomp/gpu_native.cpp:1214-1224` — GP1 0x05/0x07/0x08 set the PSX display region/vertical crop.
-- `runtime/recomp/gpu_vk.cpp:318-325` — `use_fb`/`frame_via_fb` (scratch FB only on 3D + wide/ires).
-- `runtime/recomp/gpu_vk.cpp:1205, 1220-1221, 1647` — FB present samples `[0,FBH]`, ignores display crop (#12).
+- `runtime/recomp/gpu_gpu.cpp:318-325` — `use_fb`/`frame_via_fb` (scratch FB only on 3D + wide/ires).
+- `runtime/recomp/gpu_gpu.cpp:1205, 1220-1221, 1647` — FB present samples `[0,FBH]`, ignores display crop (#12).
 - `runtime/recomp/shaders_vk/tritex.vert:30-39` — FB relocation `fy = FB_Y0 + (y-da_y0)*ires`.
 - `runtime/recomp/shaders_vk/present.frag:8-16` — present samples a single contiguous `disp` rect.
 

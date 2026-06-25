@@ -60,8 +60,8 @@ This is the map. Keep it current when the layout changes.
 `native_boot.cpp` (**boot + the native per-frame loop `native_scheduler_step` + the AUTO_* test-drive
 automation + diagnostics — 694 lines, split candidate**), `sync_overrides.cpp`, `watchdog.c`, `stubs.cpp`,
 `cfg.c` (the `PSXPORT_*` config + `PSXPORT_DEBUG=chan` channels), `mods.c`.
-**GPU/present:** `gpu_native.cpp` (GP0/GP1, VRAM, packet pool — 1544 ln), `gpu_vk.cpp` (Vulkan backend + present —
-1746 ln) + `gpu_vk_shaders.h`/`gpu_vk_internal.h`, `gpu_native_internal.h`, `gpu_debug.cpp`, `imgui_overlay.cpp`.
+**GPU/present:** `gpu_native.cpp` (GP0/GP1, VRAM, packet pool — 1544 ln), `gpu_gpu.cpp` (Vulkan backend + present —
+1746 ln) + `gpu_gpu_shaders.h`/`gpu_gpu_internal.h`, `gpu_native_internal.h`, `gpu_debug.cpp`, `imgui_overlay.cpp`.
 **Audio:** `spu_beetle.c` (Beetle spu.c mixer lift), `spu_audio.c` (SDL sink + PSXPORT_WAV), `xa_stream.c`
 (in-game XA-ADPCM streaming).
 **CD/disc:** `cd_override.cpp` (libcd/engine read primitives → native), `cdc_native.c`, `disc.c` (libchdr),
@@ -79,7 +79,7 @@ NOT a reference emulator), `vendor/imgui`.
 - **One module per SYSTEM, named for the system** (`engine_camera.cpp`, not `native_path_a3.cpp`). New ported
   systems get their own `engine/<system>.cpp`. Name functions `ov_<what_it_does>`, not `ov_<hexaddr>`.
 - **Keep files focused; ~400–500 lines is the soft cap for a mixed-responsibility file.** Cohesive
-  single-responsibility backends (gpu_vk, gpu_native) may be larger.
+  single-responsibility backends (gpu_gpu, gpu_native) may be larger.
 - **Known debt (fix incrementally; don't churn working, verified code all at once):**
   1. `engine/native_path*.cpp` (9 files, ~2600 ln) — legacy 1:1 transcription of the boot path with
      `ov_<hexaddr>` names split into arbitrary "batches" a1/a2/b3. SUPERSEDE as the top-down port reaches each
@@ -125,7 +125,7 @@ oracle. To verify:
 
 ## Rendering, present, and config — see the dedicated docs
 - **`docs/render-arch.md`** — the GP0→screen path, the VK rasterizer + present dispatch
-  (`blit_src`→`gpu_vk_present`), headless **offscreen VK** (`PSXPORT_VK_HEADLESS`), and the depth model.
+  (`blit_src`→`gpu_gpu_present`), headless **offscreen VK** (`PSXPORT_VK_HEADLESS`), and the depth model.
   Render is ONE PC-native behavior: native per-pixel depth is ALWAYS on (no faithful/OT-order toggle),
   single VK panel, the render queue owns ordering. Read before touching graphics/VK.
 - **`docs/config.md`** — the `cfg` module (`cfg_on/cfg_int/cfg_str/cfg_dbg`). Diagnostics are REPL-driven:

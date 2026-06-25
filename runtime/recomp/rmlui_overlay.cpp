@@ -8,7 +8,7 @@
 // Brought up on the port's existing Vulkan device + present render pass via RmlRenderInterfaceVk
 // (records into the swapchain command buffer the present pass hands it). ESC toggles the menu; quit
 // lives in the menu's "Quit Game" row. The public C entry points keep the historical rmlui_overlay_*
-// names so gpu_vk.cpp / overlay_glue.cpp and pad_input.cpp's rmlui_overlay_wants_keyboard link
+// names so gpu_gpu.cpp / overlay_glue.cpp and pad_input.cpp's rmlui_overlay_wants_keyboard link
 // unchanged. Built as C++ and linked into the otherwise-C port.
 
 #include "rmlui_overlay.h"
@@ -39,7 +39,7 @@ extern "C" {
 }
 extern "C" int g_fps60_on;                  // engine/fps60.c — the 60fps interpolation gate
 extern "C" int cfg_on(const char* name);    // cfg.c
-void gpu_vk_video_status(int* native_w, int* ires, int* fbw, int* fbh, int* ww, int* wh, int* ires_cap);
+void gpu_gpu_video_status(int* native_w, int* ires, int* fbw, int* fbh, int* ww, int* wh, int* ires_cap);
 
 // ---- static state ---------------------------------------------------------------------------------
 static bool s_inited = false;
@@ -53,7 +53,7 @@ static SystemInterface_SDL* s_sys = nullptr;
 static RmlRenderInterfaceVk* s_render = nullptr;
 static int s_active_tab = 0;
 
-// Live world readout, pushed each frame from gpu_vk before NewFrame.
+// Live world readout, pushed each frame from gpu_gpu before NewFrame.
 static int s_wpos[3] = {0,0,0};
 static uint32_t s_wstage = 0;
 static int s_wvalid = 0;
@@ -152,7 +152,7 @@ static void refresh_all_rows() {
 static void refresh_readouts() {
     if (!s_doc) return;
     int nw = 320, ir = 1, fbw = 320, fbh = 240, ww = 0, wh = 0, cap = 3;
-    gpu_vk_video_status(&nw, &ir, &fbw, &fbh, &ww, &wh, &cap);
+    gpu_gpu_video_status(&nw, &ir, &fbw, &fbh, &ww, &wh, &cap);
     char buf[192];
     if (Rml::Element* e = s_doc->GetElementById("video_readout")) {
         snprintf(buf, sizeof buf, "render %dx%d &middot; window %dx%d &middot; internal %dx", fbw, fbh, ww, wh, ir);
@@ -346,7 +346,7 @@ void rmlui_overlay_shutdown(void) {
 // ---- event pump -----------------------------------------------------------------------------------
 void rmlui_overlay_event(const SDL_Event* e) {
     if (!s_inited || !e) return;
-    // ESC toggles the menu (the game's old "ESC quits" was removed in gpu_vk.cpp). In options-mode the
+    // ESC toggles the menu (the game's old "ESC quits" was removed in gpu_gpu.cpp). In options-mode the
     // game owns visibility (Circle/Triangle), so don't fight it.
     if (!s_options_mode && e->type == SDL_KEYDOWN && e->key.repeat == 0 &&
         e->key.keysym.scancode == SDL_SCANCODE_ESCAPE) {

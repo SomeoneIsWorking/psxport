@@ -13,7 +13,7 @@
 //   - an ambient term + ambient color
 //   - up to LIGHTING_MAX_POINTS point lights {pos (VIEW space), color, radius, intensity}
 //
-// The renderer (gpu_vk ssao_pass) calls lighting_select() once per frame, then feeds the result into the
+// The renderer (gpu_gpu ssao_pass) calls lighting_select() once per frame, then feeds the result into the
 // deferred shader as uniforms. The DEFAULT config is the village SUN, so an area we don't recognise still
 // reads as believable outdoor daylight (and the no-override look is at least as good as today's).
 //
@@ -21,7 +21,7 @@
 // region (area_base = 0x80182000). lighting_area_key() reads a small, stable FINGERPRINT from that region
 // (the per-area offset header) so the registry can recognise specific areas. Unknown fingerprint -> SUN.
 //
-// Pure C-callable so gpu_vk.cpp can include it without C++ coupling.
+// Pure C-callable so gpu_gpu.cpp can include it without C++ coupling.
 #ifdef __cplusplus
 extern "C" {
 #endif

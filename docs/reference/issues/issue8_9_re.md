@@ -54,7 +54,7 @@ guest OT, OR as textured quads (POLY_GT4) — both funnel into the same texel sa
   (`gpu_native.cpp:978`). **So the top-right/bottom-right corner U is `u0 + w`** — and `w` is the sprite's
   *screen* width (`:907`, from the WH word, or 8/16 for sized sprites). The shader then linearly
   interpolates U across `[u0, u0+w]`.
-- Tee'd to VK: `gpu_vk_draw_semi` (semi) / `gpu_vk_draw_tritri` (opaque) (`:995-1003` non-RQ;
+- Tee'd to VK: `gpu_gpu_draw_semi` (semi) / `gpu_gpu_draw_tritri` (opaque) (`:995-1003` non-RQ;
   `rq_emit_or_queue` `:987` under the render queue), carrying `s_tp_x,s_tp_y, mode, s_clut_x,s_clut_y,
   s_tw_mx,s_tw_my,s_tw_ox,s_tw_oy`.
 
@@ -159,7 +159,7 @@ constant that happens to hide one scene.
      effect renderer sets GP0-0xE2 (texture window) for the effect's texpage and ensure our DRAW-ORDER
      GP0 replay applies it *before* the effect's packets (the comment at `gpu_native.cpp:1612-1617` notes
      E1/E2 must be applied in draw order — verify the effect's E2 isn't being dropped/re-ordered). The
-     engine-owned path then carries the correct `tw_*` into `gpu_vk_draw_semi`/`draw_tritri` and the
+     engine-owned path then carries the correct `tw_*` into `gpu_gpu_draw_semi`/`draw_tritri` and the
      existing wrap (`tritex.frag:30-31`) confines U to the cell — no clamp needed.
    - **mask!=0 but the bars persist** → the window IS set but our wrap or the `u0/w` span is wrong for
      that mode; re-derive the cell size from the window mask and clamp the sprite's U extent to the cell
@@ -257,7 +257,7 @@ whether the bars are the atlas columns just right of the cell (off-page march, c
 - `runtime/recomp/shaders_vk/tritex.vert:14,27` — UV affine (`noperspective`) interpolation.
 - `engine/engine_submit.cpp:300-340` — `submit_poly_gt4_native`: per-corner UV/CLUT/texpage, the
   GT4 billboard path (#9-stretched-quad candidate).
-- `runtime/recomp/gpu_vk.cpp:1464-1485` — `draw_tritri`/`draw_semi` → `tex_emit` (carry `tw_*` to vertex).
+- `runtime/recomp/gpu_gpu.cpp:1464-1485` — `draw_tritri`/`draw_semi` → `tex_emit` (carry `tw_*` to vertex).
 - prior commits: `2a11b4f` (the un-clamp "fix" that did not close #8/#9), `ca01e70` (tex_export
   `--frames` CLUT sprite-sheet decoder, built to RE the dust atlas).
 

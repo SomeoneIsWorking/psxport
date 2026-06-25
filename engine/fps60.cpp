@@ -501,7 +501,7 @@ int Fps60State::build_lerp() {
   return s_nCur;
 }
 
-void gpu_vk_shot(Core* core, const char* path);   // diagnostic: dump the CURRENT s_tex (the just-presented frame)
+void gpu_gpu_shot(Core* core, const char* path);   // diagnostic: dump the CURRENT s_tex (the just-presented frame)
 // PSXPORT_DEBUG=fps60pass — prove the two 60fps presents emit the SAME COMPLETE frame: count the HUD-layer
 // items and the shadow-casting prims in a queue set. Both passes must report identical counts (the HUD and
 // the shadow are in the queue, so each pass emits them — no per-feature replay/keep_shadow).
@@ -527,7 +527,7 @@ void Fps60State::fps60_present_vk(Core* core) {
         if (armed) { const char* col = strrchr(e, ':');
           if (col) { tfence = atoi(col + 1); snprintf(path, sizeof path, "%.*s", (int)(col - e), e); }
           else snprintf(path, sizeof path, "%s", e); } }
-      if (armed == 1 && (tfence < 0 || s_fence >= tfence)) { gpu_vk_shot(core, path); armed = 2;
+      if (armed == 1 && (tfence < 0 || s_fence >= tfence)) { gpu_gpu_shot(core, path); armed = 2;
         fprintf(stderr, "[fps60] interp-frame shot (f%ld) -> %s\n", s_fence, path); } }
     gpu_pace_subframe(core, 2);
   }

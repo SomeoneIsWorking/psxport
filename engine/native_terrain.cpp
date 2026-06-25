@@ -29,7 +29,7 @@ void  gpu_draw_world_quad(Core* c, const float* px, const float* py, const float
                           const int* u, const int* v, const uint8_t* r, const uint8_t* g,
                           const uint8_t* b, uint16_t tp, uint16_t clut, int semi,
                           const float (*sv)[3]);
-int   gpu_vk_shadows_active(void);
+int   gpu_gpu_shadows_active(void);
 
 #define SCR              0x1F800000u          // PSX scratchpad base (engine's GTE-compose temp area)
 #define TERRAIN_GEOMBLK  0x8009FAE8u          // terrain prim-record buffer (recomp 0x8002AB5C: lui 0x800A+addiu -1304)
@@ -151,7 +151,7 @@ void terrain_render_pc(Core* c) {
     // the shadow map (self-occlusion across hills) and RECEIVES shadows. Carried on the queued item (sv) so
     // it rebuilds per present pass from the queue — no separate shadow stream, no keep_shadow.
     float sv[4][3]; const float (*cast)[3] = nullptr;
-    if (!semi && gpu_vk_shadows_active()) {
+    if (!semi && gpu_gpu_shadows_active()) {
       for (int kk = 0; kk < 4; kk++) { float pz = wv[kk][2]; if (pz < nearp) pz = nearp;
         sv[kk][0] = wv[kk][0]; sv[kk][1] = wv[kk][1]; sv[kk][2] = pz; }
       cast = sv;

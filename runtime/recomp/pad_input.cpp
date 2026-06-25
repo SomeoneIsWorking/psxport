@@ -100,7 +100,7 @@ static void pad_ensure_gc_subsystem(void) {
 
 // HOTSWAP: open any newly-connected controllers and drop any that vanished. Self-contained per-frame
 // rescan so we don't depend on SDL_CONTROLLERDEVICEADDED/REMOVED events reaching us through an event
-// pump we don't own (the pump lives in gpu_vk.cpp). Cheap: SDL_NumJoysticks is a count, and we only
+// pump we don't own (the pump lives in gpu_gpu.cpp). Cheap: SDL_NumJoysticks is a count, and we only
 // call SDL_GameControllerOpen for indices we haven't already opened.
 static void pad_rescan_controllers(void) {
   // ESCAPE HATCH (Linux WASD-dead): PSXPORT_PAD_NOPAD=1 ignores ALL game controllers and uses the
@@ -230,7 +230,7 @@ void pad_poll_sdl(Core* c) {
   // mask (additive with the keyboard, so both work simultaneously). Self-contained — no dependency on
   // SDL_CONTROLLERDEVICE* events from the (unowned) event pump.
   //
-  // SDL_GameControllerUpdate() FIRST: the joystick/controller event pump lives in another TU (gpu_vk's
+  // SDL_GameControllerUpdate() FIRST: the joystick/controller event pump lives in another TU (gpu_gpu's
   // poll_quit) and our SDL_PumpEvents() above only refreshes controller state if the GC subsystem was
   // already up at pump time. The subsystem is lazily initialized inside pad_rescan_controllers(), so on
   // the frames right after a controller is opened the button/axis reads could be stale (Linux: stale
@@ -345,7 +345,7 @@ void pad_service_frame(Core* c) {
   static uint32_t s_fc = 0;       // internal frame counter for the pulse (== native frame index)
   static uint16_t s_hold_mask = PAD_NONE;  // headless test hook: a HELD (not pulsed) mask...
   static uint32_t s_hold_at = 0;           // ...applied from this native frame onward
-  s_have_window = gpu_windowed();                // a live on-screen window is up (gpu_vk.cpp)
+  s_have_window = gpu_windowed();                // a live on-screen window is up (gpu_gpu.cpp)
 #ifdef PSXPORT_SDL
   if (s_have_window) pad_poll_sdl(c);            // host keyboard/gamepad -> c->game->pad.buttons
 #endif
@@ -437,9 +437,9 @@ void pad_service_frame(Core* c) {
           shot_at[shot_n++] = (uint32_t)strtoul(t, 0, 0); }
     }
     for (int i = 0; i < shot_n; i++) if (shot_at[i] == rec_fc) {
-      void gpu_vk_shot(Core*, const char*); char p[96];
+      void gpu_gpu_shot(Core*, const char*); char p[96];
       snprintf(p, sizeof p, "scratch/screenshots/padshot_%u.ppm", rec_fc);
-      gpu_vk_shot(c, p);
+      gpu_gpu_shot(c, p);
       fprintf(stderr, "[padrec] shot at replay-frame %u -> %s\n", rec_fc, p);
     }
     // PSXPORT_PAD_DUMP_AT=f0,f1,... : dump 2MB guest RAM (+.spad) at these REPLAY frames to

@@ -10,9 +10,9 @@
 //
 // THIS MODULE REBUILDS THE HUD PC-NATIVE: it overrides the HUD draw helpers and, instead of emitting a
 // PSX packet, reads the HUD element's STATE (screen position + which atlas cell) and DRAWS it directly
-// with the PC renderer's 2D textured-quad path (gpu_vk_draw_tritri), sampling the HUD sprite ATLAS in
+// with the PC renderer's 2D textured-quad path (gpu_gpu_draw_tritri), sampling the HUD sprite ATLAS in
 // VRAM (tpage/CLUT/UV captured live from the running game), on the engine's OWN 2D overlay layer
-// (gpu_vk_set_order_2d puts the HUD on top of the 3D scene). No GP0 packet is built, no PSX OT is
+// (gpu_gpu_set_order_2d puts the HUD on top of the 3D scene). No GP0 packet is built, no PSX OT is
 // consulted for ordering — the engine decides the HUD is an on-top 2D layer and draws it.
 //
 // THE HUD ATLAS + STATE (RE'd LIVE on the field via the `hudprobe` channel; see scratch/logs/probe*.log)
@@ -39,13 +39,13 @@
 // color only (via the VK rasterizer), so guest RAM is UNAFFECTED (the field guest-RAM A/B stays 0-diff).
 #include "core.h"
 #include "cfg.h"
-#include "gpu_vk.h"
+#include "gpu_gpu.h"
 #include "render_queue.h"
 #include <stdint.h>
 #include <stdio.h>
 
 void rec_super_call(Core*, uint32_t);
-int  gpu_vk_enabled(void);
+int  gpu_gpu_enabled(void);
 
 namespace {
 
@@ -66,11 +66,11 @@ constexpr unsigned HUD_ORDER = 60000;            // overlay order for the `textt
 // Draw one textured quad (the engine's 2D overlay path): screen rect (x,y,w,h) sampling the HUD atlas at
 // (u,v) of the same size, modulated by color (cr,cg,cb). Enqueued as an RqItem on the engine's HUD layer
 // (RQ_HUD, on top) via rq_push_2d_quad — so the HUD is part of THE FRAME (the render queue) and is
-// re-emitted on BOTH 60fps present passes (no direct gpu_vk_draw_tritri that lands on only one pass and
+// re-emitted on BOTH 60fps present passes (no direct gpu_gpu_draw_tritri that lands on only one pass and
 // strobes). No PSX packet, no OT; the queue owns 2D order (HUD layer above the world).
 void hud_quad(Core* c, int x, int y, int w, int h, int u, int v, int cr, int cg, int cb,
               int tpx, int tpy, int mode, int clutx, int cluty) {
-  if (!gpu_vk_enabled()) return;
+  if (!gpu_gpu_enabled()) return;
   int xs[4] = { x,     x + w, x,     x + w };
   int ys[4] = { y,     y,     y + h, y + h };
   int us[4] = { u,     u + w, u,     u + w };
@@ -169,7 +169,7 @@ void ov_hud_rect(Core* c) {
 //   and 0x20 (space)/0x0a (newline) are handled like the body.
 // We REBUILD this PC-native (CLAUDE.md engine UI rule): instead of emitting a PSX op-0x65 packet into the
 // guest OT, we read the SAME state and draw each glyph as a PC textured quad from the font atlas on the
-// engine's OWN 2D overlay layer (gpu_vk_draw_tritri + gpu_vk_set_order_2d), exactly like ov_hud_sprite.
+// engine's OWN 2D overlay layer (gpu_gpu_draw_tritri + gpu_gpu_set_order_2d), exactly like ov_hud_sprite.
 // No guest writes (the recomp body is NOT run) -> the content interface / guest RAM is untouched.
 //
 // Font atlas tpage: tp=(960,256), 4bpp (docs/engine_re.md "font/UI texpage tp=(960,256)"); CLUT from a2.
@@ -344,9 +344,9 @@ void ov_glyph_string(Core* c) {
       int xs[4]={x,x+cellW,x,x+cellW}, ys[4]={y,y,y+cellH,y+cellH};
       int us[4]={0,0,0,0}, vs[4]={0,0,0,0};
       unsigned char R[4]={255,255,255,255},G[4]={0,0,0,0},B[4]={255,255,255,255};
-      gpu_vk_set_order(c, HUD_ORDER); gpu_vk_set_order_2d(c, HUD_ORDER);
-      gpu_vk_draw_tritri(c, xs,ys,us,vs,R,G,B, FONT_TPX,FONT_TPY,FONT_MODE,1,clutx,cluty,0,0,0,0,0,0,1023,511);
-      gpu_vk_draw_tritri(c, &xs[1],&ys[1],&us[1],&vs[1],&R[1],&G[1],&B[1], FONT_TPX,FONT_TPY,FONT_MODE,1,clutx,cluty,0,0,0,0,0,0,1023,511);
+      gpu_gpu_set_order(c, HUD_ORDER); gpu_gpu_set_order_2d(c, HUD_ORDER);
+      gpu_gpu_draw_tritri(c, xs,ys,us,vs,R,G,B, FONT_TPX,FONT_TPY,FONT_MODE,1,clutx,cluty,0,0,0,0,0,0,1023,511);
+      gpu_gpu_draw_tritri(c, &xs[1],&ys[1],&us[1],&vs[1],&R[1],&G[1],&B[1], FONT_TPX,FONT_TPY,FONT_MODE,1,clutx,cluty,0,0,0,0,0,0,1023,511);
       x += 8; continue;
     }
     hud_quad(c, x, y, cellW, cellH, u, v, cr, cg, cb, FONT_TPX, FONT_TPY, FONT_MODE, clutx, cluty);
