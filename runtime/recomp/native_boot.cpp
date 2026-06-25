@@ -404,8 +404,22 @@ extern "C" void dv_capture_post(Core* c) { dv_save(c, s_dv_post_ram, s_dv_post_s
 extern "C" void dv_restore_pre (Core* c) { dv_load(c, s_dv_pre_ram,  s_dv_pre_spad,  s_dv_pre_gc,  s_dv_pre_gd ); }
 extern "C" void dv_restore_post(Core* c) { dv_load(c, s_dv_post_ram, s_dv_post_spad, s_dv_post_gc, s_dv_post_gd); }
 
+// Bind THIS core's per-instance SPU state (Beetle spu.c), lazily powering it on first use. Like gte_bind,
+// called per core frame-step + at boot, from the explicit Core — two cores keep SEPARATE SPU state.
+static void spu_bind(Core* c) {
+  SPU_BindState(c->game->spu_state);
+  if (!c->game->spu_powered) { SPU_Power(); c->game->spu_powered = 1; }
+}
+// Same for MDEC (per-instance; lazy power on first bind — MDEC has no separate global init).
+static void mdec_bind(Core* c) {
+  MDEC_BindState(c->game->mdec_state);
+  if (!c->game->mdec_powered) { MDEC_Power(); c->game->mdec_powered = 1; }
+}
+
 static void native_step_frame(Core* c, uint32_t f) {
   void gte_bind(Core*); gte_bind(c);   // bind THIS core's GTE register file (per-instance — no shared GTE)
+  spu_bind(c);                          // bind THIS core's SPU state (per-instance — no shared SPU)
+  mdec_bind(c);                         // bind THIS core's MDEC state (per-instance — no shared MDEC)
   void hle_deliver_event(Core* c, uint32_t ev_class, uint32_t spec);
   ffspan_reset_frame();   // backdrop-attribution: reset the per-frame builder span table
   void pad_service_frame(Core*);
@@ -1059,11 +1073,13 @@ static void ov_game_init(Core* c) {
 
 // Dual-core harness hooks (dualcore.cpp): boot a core to the start of the frame loop, then step it one
 // frame at a time. dc_boot_init = crt0 setup + the init prefix/bootstrap; dc_step_frame = one frame.
-void dc_boot_init(Core* c) { void gte_bind(Core*); gte_bind(c); crt0_setup(c); ov_game_init(c); }
+void dc_boot_init(Core* c) { void gte_bind(Core*); gte_bind(c); spu_bind(c); mdec_bind(c); crt0_setup(c); ov_game_init(c); }
 void dc_step_frame(Core* c, uint32_t f) { native_step_frame(c, f); }
 
 static void ov_game_main(Core* c) {
   void gte_bind(Core*); gte_bind(c);   // bind this core's GTE before the init prefix / frame loop
+  spu_bind(c);                          // and this core's SPU
+  mdec_bind(c);                         // and this core's MDEC
   ov_game_init(c);
   // --- native frame loop (replaces LAB_80050c6c). Per frame, faithful to the game-main loop
   // body but with the scheduler call FUN_80051e60 replaced by native stage stepping (added

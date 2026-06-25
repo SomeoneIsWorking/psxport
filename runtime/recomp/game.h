@@ -13,6 +13,8 @@
 #pragma once
 #include "core.h"
 #include "gte_state.h"             // GteRegs — per-instance GTE (COP2) register file (Beetle gte.c)
+#include "spu_state.h"             // per-instance SPU state handle (Beetle spu.c) — SPU_NewState/Bind
+#include "mdec_state.h"            // per-instance MDEC state handle (Beetle mdec.c) — MDEC_NewState/Bind
 #include "gpu_native_internal.h"   // GpuState — the native GPU's per-instance render machine state
 #include "gpu_vk_internal.h"       // GpuVkState — the Vulkan present backend's per-instance render state
 #include "fps60_internal.h"        // Fps60State — the interpolated-60fps tier's per-instance state
@@ -109,6 +111,10 @@ public:
   Fps60State  fps60; // interpolated-60fps tier: capture buffers + matcher + remap (fps60.cpp)
   GteRegs     gte{}; // GTE (COP2) register file — per-instance so two cores keep SEPARATE GTE state
                      // (Beetle gte.c bound to this via GTE_BindState; see gte_bind, gte_beetle.cpp)
+  void* spu_state = nullptr;  // per-instance SPU state (Beetle spu.c), heap-allocated; bound via SPU_BindState
+  int   spu_powered = 0;      // SPU_Power run on this instance's state yet? (lazy power on first bind)
+  void* mdec_state = nullptr; // per-instance MDEC state (Beetle mdec.c), heap-allocated; bound via MDEC_BindState
+  int   mdec_powered = 0;     // MDEC_Power run on this instance's state yet? (lazy power on first bind)
 
   // ---- PSX-fallback gate (diagnostic, user 2026-06-23) --------------------------------------------
   // ONE switch: keep BOOT (native crt0/FMV/init) and the FRAME LOOP skeleton native, but run EVERYTHING
@@ -135,5 +141,7 @@ public:
   // core.game / gpu.game / gpu_vk.game are back-pointers so a subsystem holding one of those handles can
   // reach the rest of the machine (e.g. blit_src -> gpu_vk via gpu.game; frame_via_fb -> s_seen3d via
   // gpu_vk.game->core). Set once here so no file-scope global is needed.
-  Game() { core.game = this; gpu.game = this; gpu_vk.game = this; }
+  Game() { core.game = this; gpu.game = this; gpu_vk.game = this;
+           spu_state = SPU_NewState(); mdec_state = MDEC_NewState(); }
+  ~Game() { SPU_FreeState(spu_state); MDEC_FreeState(mdec_state); }
 };
