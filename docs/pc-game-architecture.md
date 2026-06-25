@@ -456,6 +456,16 @@ render subsystem replaces them.
     + node[0x70] retreat) + FUN_80041098/8004190C; state 3 despawn; tail FUN_800518FC/8011D82C. GOTCHA fixed
     vs Ghidra: several `lbu == 0xFF` it typed as `== -1` (mem[0x800BF8BC], node[0x70]); scratch[0x160] is a
     SIGNED lh. Verified live: `variant_actor_smverify` 750+ matches, 0 mismatch; gate-off field clean (151).
+  - **Behavior handler FUN_8013A330 = `beh_lift_platform` owned native+live (2026-06-25, Ghidra+raw, biggest
+    this session):** a 13-segment vertical mover that follows a parent's direction; registers itself as the
+    singleton mem32[0x800BF854]. State 0 allocates 13 child records + FUN_80118974/8013A184/8013989C init;
+    state 1 mirrors parent[0x5E] into node[0x5E] to drive node[0x30] up/down by node[0x50]*±0x100, clamps to
+    node[0x60]/node[0x62] (toggling mem[0x800BF9EE] + node[0xBF]), plays SFX 0x8D (FUN_80074590), runs a
+    node[5] sub-machine (FUN_80139E64/80139C2C/8013A008) + FUN_800517F8; tail writes node[1] into each
+    record[0x3F] + FUN_80139A70. KEY GOTCHA: Ghidra's `unaff_s0` else-path = the INCOMING guest s0 (c->r[16],
+    callee-saved → preserved across rec_dispatch) — reading it reproduces the recomp's register flow exactly;
+    `mem[0x800BF8B9] == -1` is `== 255`; mem[0x800ED098] is a signed lh. Verified live: `lift_platformverify`
+    750+ matches, 0 mismatch; gate-off field clean (151 nodes).
   - **NEXT — extend the contiguity:** own the remaining per-object behavior handlers
     (e.g. the overlay-resident 0x801xxxxx handlers; the model-attach sites FUN_80077B38 +
     other per-object render-record callers) so the full graphics-bind set runs native; own the remaining
