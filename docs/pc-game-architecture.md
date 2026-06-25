@@ -173,7 +173,15 @@ render subsystem replaces them.
     counters) around three PSX leaf calls (0x80075D58/0x80075824/0x80099490). Gate `init75240verify` match
     #1/#2 byte-exact. With this, the FIRST FOUR case-0 prefix steps + placement are all native; only
     0x800783dc / 0x80078610 remain PSX in the prefix. 151 nodes gate-off.
-  - **NEXT — extend the contiguity:** own more behavior handlers (the model-attach sites FUN_80077B38 +
+  - **Per-area view/scroll setup FUN_800783DC owned native+live (2026-06-25):** next case-0 prefix leaf →
+    `ov_783dc_run` (game/world/pool.cpp). Builds the view control block at 0x800E7E80 from the area control
+    block 0x800BF870 (mode-3 path allocs a record via 0x80072DDC; other modes read a per-mode geometry table
+    0x800A54A8 or the saved-camera scratchpad fields), then publishes four fields into the scratchpad camera
+    (0x1F800207/0160/0162/0164). Two callees (0x80048D3C, 0x80072DDC) stay PSX leaves. Gate `init783dcverify`
+    match #1/#2 byte-exact (incidental v0=0x1F800000 mirrored). 151 nodes gate-off. Only 0x80078610 now
+    remains PSX in the case-0 prefix.
+  - **NEXT — extend the contiguity:** own the last case-0 prefix leaf 0x80078610, then more behavior handlers
+    (the model-attach sites FUN_80077B38 +
     other per-object render-record callers) so the full graphics-bind set runs native; own the remaining
     case-0 prefix leaves (0x800796dc / 0x800263e8 / …). Each verified via its A/B gate. (Render itself =
     the `game/render/` decoupled native path, in progress separately.)

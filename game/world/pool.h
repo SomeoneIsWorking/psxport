@@ -10,4 +10,6 @@ void ov_796dc_run(Core* c);
 void ov_263e8_run(Core* c);
 // 0x80075240 — clamp/control-block reset (field case-0 prefix). GATED (channel `init75240verify`).
 void ov_75240_run(Core* c);
+// 0x800783DC — per-area view/scroll setup (field case-0 prefix). GATED (channel `init783dcverify`).
+void ov_783dc_run(Core* c);
 #endif

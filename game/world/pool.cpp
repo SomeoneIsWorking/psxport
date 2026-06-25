@@ -385,6 +385,80 @@ static void ov_80075240(Core* c) {
   c->mem_w8(b + 50, 0); c->mem_w8(b + 51, 0);
 }
 
+// 0x800783DC — per-area VIEW/SCROLL setup. Calls a leaf (0x80048D3C) with the entry a0, builds the view
+// control block at 0x800E7E80 from the area control block at 0x800BF870, then publishes four fields into the
+// scratchpad camera (0x1F800207/0160/0162/0164). RE'd 1:1 from disas 0x800783DC. The two callees (0x80048D3C,
+// and 0x80072DDC on the mode==3 path) stay PSX leaves via rec_dispatch. Incidental v0 = 0x1F800000 (the
+// epilogue's lui-loaded scratchpad base, left in v0 on every return path).
+static void ov_800783DC(Core* c) {
+  const uint32_t S0 = 0x800E7E80u;   // view control block
+  const uint32_t A  = 0x800BF870u;   // area control block
+
+  call_fn(c, 0x80048D3Cu);           // a0 = entry a0 (matches recomp: jal precedes any arg setup)
+
+  c->mem_w8 (S0, 3);
+  c->mem_w16(S0 + 370, 60);
+  if (c->mem_r8(A + 16) == 0) {
+    uint32_t v = c->mem_r8(A + 13);
+    c->mem_w16(S0 + 366, (uint16_t)v); c->mem_w16(S0 + 368, (uint16_t)v);
+  } else {
+    uint32_t v = c->mem_r16(0x1F800194u);
+    c->mem_w8(A + 16, 0);
+    c->mem_w16(S0 + 366, (uint16_t)v); c->mem_w16(S0 + 368, (uint16_t)v);
+  }
+
+  c->mem_w8 (S0 + 108, (uint8_t) c->mem_r8 (A + 28));
+  c->mem_w8 (S0 + 109, (uint8_t) c->mem_r8 (A + 29));
+  c->mem_w16(S0 + 382, (uint16_t)c->mem_r16(A + 46));
+  c->mem_w8 (S0 + 372, (uint8_t) c->mem_r8 (A + 17));
+
+  uint32_t mode = c->mem_r8(A);
+  if (mode == 3) {
+    c->r[4] = 0; c->r[5] = 3; c->r[6] = 4; c->r[7] = 27;
+    call_fn(c, 0x80072DDCu);
+    uint32_t v0 = c->r[2];
+    c->mem_w32(v0 + 28, 0x8010B37Cu);
+    c->mem_w32(S0 + 16, v0);
+  } else {
+    if (c->mem_r8(0x1F800134u) != 0) {
+      uint8_t vb = c->mem_r8(A + 1480);
+      c->mem_w32(S0 + 44, c->mem_r32(A + 32));
+      c->mem_w32(S0 + 48, c->mem_r32(A + 36));
+      c->mem_w32(S0 + 52, c->mem_r32(A + 40));
+      c->mem_w8 (0x1F800134u, 0);
+      c->mem_w8 (S0 + 348, 0);
+      c->mem_w8 (S0 + 42, vb);
+    } else {
+      uint32_t tbl = c->mem_r32(0x800A54A8u + mode * 4u);
+      uint32_t a0  = tbl + (uint32_t)c->mem_r8(A + 1) * 8u;
+      int16_t  h0  = (int16_t)c->mem_r16(a0 + 0);
+      int16_t  s17e = (int16_t)c->mem_r16(S0 + 382);
+      c->mem_w32(S0 + 44, (uint32_t)((int32_t)h0 << 16));
+      c->mem_w32(S0 + 48, (uint32_t)((int32_t)(int16_t)c->mem_r16(a0 + 2) << 16));
+      if (s17e < 0) c->mem_w16(S0 + 50, (uint16_t)(c->mem_r16(S0 + 50) + 70));
+      c->mem_w32(S0 + 52, (uint32_t)((int32_t)(int16_t)c->mem_r16(a0 + 4) << 16));
+      uint32_t a0h = c->mem_r16(a0 + 6);              // lhu (zero-extended)
+      c->mem_w8(S0 + 42,  (uint8_t)(a0h & 0x7f));
+      c->mem_w8(S0 + 348, (uint8_t)((a0h >> 7) & 1));
+      c->mem_w8(S0 + 327, (uint8_t)((a0h >> 8) & 1));
+      if (a0h & 0x800) {
+        c->mem_w8(0x800BF816u, 1);
+        c->mem_w8(0x800BF817u, (uint8_t)(((uint32_t)((int32_t)(int16_t)a0h & 0xf000)) >> 12));
+      }
+    }
+    uint8_t s = c->mem_r8(0x1F800236u);
+    if ((uint32_t)(s - 5) < 2u)                       // s in {5,6}
+      c->mem_w16(S0 + 50, (uint16_t)(c->mem_r16(S0 + 50) - 1000));
+  }
+
+  // common epilogue: publish into the scratchpad camera fields
+  c->mem_w8 (0x1F800207u, (uint8_t) c->mem_r8 (S0 + 42));
+  c->mem_w16(0x1F800160u, (uint16_t)c->mem_r16(S0 + 46));
+  c->mem_w16(0x1F800162u, (uint16_t)c->mem_r16(S0 + 50));
+  c->mem_w16(0x1F800164u, (uint16_t)c->mem_r16(S0 + 54));
+  c->r[2] = 0x1F800000u;   // incidental v0
+}
+
 // Shared inline A/B gate for the once-per-field-load WORLD inits wired into engine_stage case-0.
 // Runs the native body, snapshots+rolls back, super-calls the recomp body, and diffs full
 // main-RAM (excl. the dead stack window) + scratchpad + v0. Prints EVERY match (record_gate is
@@ -431,6 +505,11 @@ void ov_75240_run(Core* c) {                              // 0x80075240 — clam
   static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("init75240verify") ? 1 : 0;
   if (!s_v) { ov_80075240(c); return; }
   static long ng = 0, nb = 0; world_init_gate(c, ov_80075240, 0x80075240u, "init75240verify", &ng, &nb);
+}
+void ov_783dc_run(Core* c) {                              // 0x800783DC — per-area view/scroll setup
+  static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("init783dcverify") ? 1 : 0;
+  if (!s_v) { ov_800783DC(c); return; }
+  static long ng = 0, nb = 0; world_init_gate(c, ov_800783DC, 0x800783DCu, "init783dcverify", &ng, &nb);
 }
 
 // 0x8007B2C0 — load a 4-entry u16 weight ramp into the scratchpad at 0x1F800170: a0==0 → descending
