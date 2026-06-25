@@ -33,7 +33,7 @@ game/
     transform/   scene-node transforms / hierarchy
   actors/      characters & behavior (content; port where hot/needed)
     player/      Tomba controller (move/jump/attack)                           (engine_player)
-    npc/ enemy/  per-object state machines / AI                               (objbeh_*, actor_sm_*)
+    npc/ enemy/  per-object state machines / AI                               (beh_*, actor_sm_*)
   camera/      camera system                                                   (engine_camera)
   physics/     collision grid + response, hitboxes, cull/LOD                   (collision, hitbox, grid_offset, cull)
   assets/      resource load & decode (archives, textures, models, anim, palettes) (asset, engine_bav)
@@ -148,7 +148,7 @@ render subsystem replaces them.
     instead of rec_dispatch. So "assigning graphics" runs PC-native live for these handlers. Verified:
     handler gates 0 mismatch (obj739ac 1150 / obj73cd8 2300 / obj741dc 550), gate-off native-driven binds
     geomblks into node+0xC0 (ents gb0=…), field clean.
-  - **Behavior handler FUN_80071A3C owned native+live (2026-06-24):** added `engine/objbeh_80071a3c.cpp`
+  - **Behavior handler FUN_80071A3C owned native+live (2026-06-24):** added `engine/beh_area_event_dispatch.cpp`
     and routed it through `dispatch_native_behavior`. A resident state machine on node[4] (state 0 runs
     FUN_800716B4 + a global-flag-gated overlay event dispatch on 0x800BFAE1/0x800BFAE6 vs area 0x800BF870;
     state 1 FUN_80071768 + conditional FUN_800518FC; state 3 FUN_8007A624) — control flow owned native, the
@@ -197,7 +197,7 @@ render subsystem replaces them.
     (incidental v0 mirrored for both early-outs and the work path). 151 nodes gate-off. **The whole field
     stage case-0 is now PC-native** (only the area==8 conditional 0x80114b90 leaf remains, never hit on
     seaside).
-  - **Behavior handler FUN_8004CE14 owned native+live (2026-06-25):** added `engine/objbeh_8004ce14.cpp`
+  - **Behavior handler FUN_8004CE14 owned native+live (2026-06-25):** added `engine/beh_record_list_scanner.cpp`
     and routed it through `dispatch_native_behavior`. A resident per-object state machine on node[4]: state 0
     seeds node fields + a record-list ptr from table 0x800A3F00[node[3]] then falls through; states 0/1 walk
     a 16-byte record list (node[0x6c]) to a 0xFF terminator, running a short-circuit visibility test per
@@ -207,7 +207,7 @@ render subsystem replaces them.
     rec_dispatch. Verified live on seaside: `obj8004ce14verify` 950+ matches, 0 mismatch (full RAM+scratchpad
     A/B); gate-off native-driven reaches the field clean (151 nodes, 0 bad opcode). One more resident handler
     (0x8006F2D0, ~450 instr) + the overlay handlers remain; 0x8004C238 still has its 40-mismatch bug.
-  - **Behavior handler FUN_8006F2D0 owned native+live (2026-06-25):** added `engine/objbeh_8006f2d0.cpp`
+  - **Behavior handler FUN_8006F2D0 owned native+live (2026-06-25):** added `engine/beh_pad_child_linker.cpp`
     and routed it through `dispatch_native_behavior`. THE hottest still-PSX resident handler (~x777/field-frame,
     ~450 instr) — a state machine on node[4]: state 0 allocates a node[8]-long record list (FUN_8007AAE8 per
     record) seeded from table 0x800A4BA8 + base *(u32*)0x800ECF5C; state 1 reads the input/area block at
@@ -219,7 +219,7 @@ render subsystem replaces them.
     all writes owned native; the 9 sub-behavior leaves stay PSX via rec_dispatch. Verified live on seaside:
     `obj8006f2d0verify` 750+ matches, 0 mismatch (full RAM+scratchpad A/B); gate-off native-driven reaches the
     field clean (151 nodes, 0 bad opcode). Overlay handlers remain; 0x8004C238 still has its 40-mismatch bug.
-  - **Behavior handler FUN_8013C538 owned native+live (2026-06-25):** added `engine/objbeh_8013c538.cpp`
+  - **Behavior handler FUN_8013C538 owned native+live (2026-06-25):** added `engine/beh_scatter_record_dither.cpp`
     and routed it through `dispatch_native_behavior`. THE hottest still-PSX OVERLAY handler (~x6091/field-frame
     on seaside; ~110 instr) — an area-overlay routine NOT in MAIN.EXE, disassembled from the field RAM dump
     (`scratch/ram/field_seaside.bin`). State machine on node[4]: state 0 reads area byte 0x800BF9E0, picks a
@@ -233,7 +233,7 @@ render subsystem replaces them.
     the 5 sub-behavior leaves stay PSX via rec_dispatch. Verified live on seaside: `obj8013c538verify` 6100+
     matches, 0 mismatch (full RAM+scratchpad A/B); gate-off native-driven reaches the field clean (151 nodes,
     0 bad opcode). Disassemble further overlay handlers from the RAM dump (`tools/disas.py --ram …`).
-  - **Behavior handler FUN_8013C3F4 owned native+live (2026-06-25):** added `engine/objbeh_8013c3f4.cpp`
+  - **Behavior handler FUN_8013C3F4 owned native+live (2026-06-25):** added `engine/beh_area_threshold_ptr_swap.cpp`
     (2nd-hottest overlay handler ~x4632/field-frame on seaside, ~80 instr; disassembled from the field RAM
     dump). State machine on node[4]: state 0 gates on area byte 0x800BF9E0 (>=28 -> node[4]=3) then node[4]=1
     and FALLS INTO state 1, which sets node[0x34] from node[0x38] (or overlay data ptrs 0x8014AC18/0x8014AF20
@@ -242,7 +242,7 @@ render subsystem replaces them.
     all node writes owned native; the 3 sub-behavior leaves stay PSX via rec_dispatch. Verified live:
     `obj8013c3f4verify` 4600+ matches, 0 mismatch (full RAM+scratchpad A/B); gate-off field clean (151 nodes,
     0 bad opcode).
-  - **Behavior handler FUN_8013C9C0 owned native+live (2026-06-25):** added `engine/objbeh_8013c9c0.cpp`
+  - **Behavior handler FUN_8013C9C0 owned native+live (2026-06-25):** added `engine/beh_scatter_ramp_machine.cpp`
     (3rd-hottest overlay handler ~x4302/field-frame on seaside, ~190 instr). A TWO-LEVEL state machine
     disassembled from the field RAM dump incl. its two in-overlay jump tables (jt0 @0x8010A000 [11 entries,
     node[5]] + jt1 @0x8010A030 [10 entries, node[5]-1]). Outer state node[4]: state 0 seeds node fields from
@@ -254,14 +254,14 @@ render subsystem replaces them.
     switch->goto; signed-byte timer tests (sll v0,24;bgez) preserved. Control flow + all node/global/overlay
     writes owned native; the 3 leaves stay PSX via rec_dispatch. Verified live: `obj8013c9c0verify` 4300+
     matches, 0 mismatch (full RAM+scratchpad A/B); gate-off field clean (151 nodes, 0 bad opcode).
-  - **Behavior handler FUN_80136D9C owned native+live (2026-06-25):** added `engine/objbeh_80136d9c.cpp`
+  - **Behavior handler FUN_80136D9C owned native+live (2026-06-25):** added `engine/beh_pure_inner_dispatch.cpp`
     (~x2334/field-frame on seaside, ~90 instr). A pure CONTROL-FLOW dispatcher — owns no node writes; all
     effects are in its 8 sub-behavior leaves. Two-level dispatch (outer node[4], inner node[5]): state 0 ->
     FUN_80136F08; state 3 -> FUN_8007A624; state 1 conditionally calls FUN_8007778C then routes node[5] to
     FUN_80138A64/FUN_8018CDC4/FUN_80137198/FUN_8018CA1C and finally FUN_801389C8 (gated on node[1]/node[3] and
     area bytes 0x800BF89C/0x800E7EAA/0x800BF809). Transcribed 1:1; all leaves stay PSX via rec_dispatch.
     Verified live: `obj80136d9cverify` 2300+ matches, 0 mismatch; gate-off field clean (151 nodes, 0 bad opcode).
-  - **Behavior handler FUN_80129C00 owned native+live (2026-06-25):** added `engine/objbeh_80129c00.cpp`
+  - **Behavior handler FUN_80129C00 owned native+live (2026-06-25):** added `engine/beh_anim_trigger_gates.cpp`
     (~x2334/field-frame on seaside, ~130 instr). Two-level state machine with an in-overlay jump table
     (jt @0x80109C5C, 5 cases on node[3]). State 0 routes node[3] to FUN_801296E0/FUN_8012982C/FUN_80129984;
     state 1 dispatches jt: cases 0/1 are animation-triggers (gate on area bytes 0x800E7EAA/0x800E7FC7, set
@@ -270,7 +270,7 @@ render subsystem replaces them.
     FUN_80051C8C. Transcribed 1:1; jump table -> switch->goto; signed hword tests preserved. Control flow +
     direct node/record writes owned native; leaves stay PSX via rec_dispatch. Verified live:
     `obj80129c00verify` 2300+ matches, 0 mismatch; gate-off field clean (151 nodes, 0 bad opcode).
-  - **Behavior handler FUN_8012A0B8 owned native+live (2026-06-25):** added `engine/objbeh_8012a0b8.cpp`
+  - **Behavior handler FUN_8012A0B8 owned native+live (2026-06-25):** added `engine/beh_box_seed_phase_gate.cpp`
     (~x2334/field-frame on seaside, ~135 instr). Outer state machine on node[4]: states 2/3 -> FUN_8007A624;
     state 0 is the INIT path (node[11]=32, node[4]=1, node[8]=node[9]=0, node[0x18]=0x8013EA64), routes node[3]
     to FUN_801360F4 + FUN_80139838 x2 (node[3]<2) or FUN_8013AC34 (>=2), then copies a per-node[3] record from
@@ -280,7 +280,7 @@ render subsystem replaces them.
     embedded). Transcribed 1:1; signed (lh/sra) vs unsigned (lhu/lbu) preserved; control flow + direct node
     writes owned native, leaves stay PSX via rec_dispatch. Verified live: `obj8012a0b8verify` 2300+ matches,
     0 mismatch; gate-off field clean (151 nodes, 0 bad opcode).
-  - **Behavior handler FUN_8012DA04 owned native+live (2026-06-25):** added `engine/objbeh_8012da04.cpp`
+  - **Behavior handler FUN_8012DA04 owned native+live (2026-06-25):** added `engine/beh_typed_anim_spawn.cpp`
     (~x2331/field-frame on seaside, ~200 instr). Outer state machine on node[4] with TWO in-overlay jump
     tables (jt0 @0x80109DAC INIT, jt1 @0x80109DCC the per-node[3] animation/spawn sub-states), both indexed
     by node[3]<8. State 0 resets the node block or calls FUN_80051B70/FUN_800517F8; state 1's jt1 cases drive
@@ -291,7 +291,7 @@ render subsystem replaces them.
     Transcribed 1:1; both jump tables READ live from overlay RAM; control flow + direct node writes owned
     native, leaves stay PSX via rec_dispatch. Verified live: `obj8012da04verify` 2300+ matches, 0 mismatch;
     gate-off field clean (151 nodes, 0 bad opcode).
-  - **Behavior handler FUN_80121978 owned native+live (2026-06-25):** added `engine/objbeh_80121978.cpp`
+  - **Behavior handler FUN_80121978 owned native+live (2026-06-25):** added `engine/beh_id_routed_dispatch.cpp`
     (hottest still-PSX overlay handler ~x1592/field-frame on seaside, ~115 instr). Outer state machine on
     node[4]: state 0 INIT (FUN_800519E0 + FUN_80077C40, seeds node[0x80..0x86]=140/280/128/256, node[0x44]=384,
     node[4]+=1); state 1 routes node[3] to a per-id sub-behavior leaf (0/1/95/96/97/98/99 ->
@@ -299,21 +299,21 @@ render subsystem replaces them.
     FUN_80122BF4(node)+node[0x2B]=0; state 3 -> FUN_8007A624. No leaf takes a stack arg. Transcribed 1:1;
     control flow + direct node writes owned native, leaves stay PSX via rec_dispatch. Verified live:
     `obj80121978verify` 1550+ matches, 0 mismatch; gate-off field clean (151 nodes, 0 bad opcode).
-  - **Behavior handler FUN_80125E0C owned native+live (2026-06-25):** added `engine/objbeh_80125e0c.cpp`
+  - **Behavior handler FUN_80125E0C owned native+live (2026-06-25):** added `engine/beh_pure_substate_dispatch.cpp`
     (~x1556/field-frame on seaside, ~80 instr). PURE control-flow dispatcher (no direct node writes of its
     own). State 0 -> FUN_801253E8; state 1 -> FUN_8007778C then node[5] 0/1/2 -> FUN_80125FE0/801255CC/80125800;
     state 2 -> FUN_8007778C then FUN_801261FC when node[5] in {2,3}; states 1/2 share a tail (FUN_800518FC when
     node[1]!=0); state 3 -> FUN_8007A624. Transcribed 1:1; control flow owned native, all sub-behavior leaves
     stay PSX via rec_dispatch. Verified live: `obj80125e0cverify` 1550+ matches, 0 mismatch; gate-off field
     clean (151 nodes, 0 bad opcode).
-  - **Behavior handler FUN_80128760 owned native+live (2026-06-25):** added `engine/objbeh_80128760.cpp`
+  - **Behavior handler FUN_80128760 owned native+live (2026-06-25):** added `engine/beh_linked_advance_branch.cpp`
     (~x1556/field-frame on seaside, ~95 instr). Outer state machine on node[4]: state 0 -> FUN_80128308;
     state 1 splits on node[3] (0 -> branch A, 1 -> branch B), both gate an "advance node[5]" reset
     (node[11]=0, node[0x10]=0, node[5]+=1) on the linked object node[0x10][0x5E]; branch A -> FUN_801281B8,
     branch B drops to a scratchpad[0x207]<6 gate that runs FUN_801281B8+FUN_801285EC; state 3 -> FUN_8007A624.
     Transcribed 1:1; control flow + direct node writes owned native, leaves stay PSX via rec_dispatch.
     Verified live: `obj80128760verify` 1550+ matches, 0 mismatch; gate-off field clean (151 nodes, 0 bad opcode).
-  - **Behavior handler FUN_80118240 owned native+live (2026-06-25):** added `engine/objbeh_80118240.cpp`
+  - **Behavior handler FUN_80118240 owned native+live (2026-06-25):** added `engine/beh_typed_init_exit_poker.cpp`
     (~x1556/field-frame on seaside, ~370 instr — the biggest of the hot set). Outer state machine on node[4],
     each state sub-dispatching on node[3] (+node[5]/node[0x5E] inner sub-states). State 0 INIT per node[3]
     (FUN_80077B38 model-attach + node[0x80..0x86] sizes, node[3] 0/3 also FUN_8004B354, then node[4]+=1);
@@ -324,7 +324,7 @@ render subsystem replaces them.
     (sp-=48) for the stack arg. Transcribed 1:1; control flow + direct node/area-flag writes owned native,
     leaves stay PSX via rec_dispatch. Verified live: `obj80118240verify` 1550+ matches, 0 mismatch; gate-off
     field clean (151 nodes, 0 bad opcode).
-  - **Behavior handler FUN_8013A900 owned native+live (2026-06-25):** added `engine/objbeh_8013a900.cpp`
+  - **Behavior handler FUN_8013A900 owned native+live (2026-06-25):** added `engine/beh_child_trig_motion.cpp`
     (~x1554/field-frame on seaside, ~205 instr). Outer state machine on node[4]: state 0 INIT gates on global
     0x800ED098, seeds node fields + sizes, allocates node[8] child records (FUN_8007AAE8) filled from the
     per-node[3] source table @0x8014AAB0 (8 bytes/rec) + FUN_80051B04, then per node[3] (0 -> FUN_801252C0
@@ -335,7 +335,7 @@ render subsystem replaces them.
     clobbering c->r[4] between FUN_80051B04 and the next FUN_8007AAE8. Transcribed 1:1; control flow + direct
     node/record writes owned native. Verified live: `obj8013a900verify` 1550+ matches, 0 mismatch; gate-off
     field clean (151 nodes, 0 bad opcode).
-  - **Behavior handler FUN_80117658 owned native+live (2026-06-25):** added `engine/objbeh_80117658.cpp`
+  - **Behavior handler FUN_80117658 owned native+live (2026-06-25):** added `engine/beh_prng_velocity_machine.cpp`
     (~x1552/field-frame on seaside, ~430 instr — the biggest overlay handler owned so far). Two-level state
     machine on node[4] with s2 = node[0x10] (a guest pointer the handler writes velocity/timer fields through,
     s2[14/20/22/24/26]): state 0 INIT seeds node fields per node[3] (0/1) + calls FUN_80077B38/FUN_80051B70,
@@ -349,7 +349,7 @@ render subsystem replaces them.
     unsigned preserved. PRNG draws return via c->r[2] and advance the shared RNG (gate rolls RAM back so both
     sides draw the same sequence). Control flow + direct node/s2/global writes owned native. Verified live:
     `obj80117658verify` 1550+ matches, 0 mismatch; gate-off field clean (151 nodes, 0 bad opcode).
-  - **Behavior handler FUN_80135D64 owned native+live (2026-06-25):** added `engine/objbeh_80135d64.cpp`
+  - **Behavior handler FUN_80135D64 owned native+live (2026-06-25):** added `engine/beh_quad_record_table_seed.cpp`
     (~x1552/field-frame on seaside, ~230 instr). Same record-alloc shape as FUN_8013A900. State 0: if
     node[3]<2 and global 0x800ED098 >= 4, allocate node[8]=4 child records (FUN_8007AAE8) filled from the
     per-node[3] source table @0x8014A780 (8 bytes/rec) + FUN_80051B04; then seed the common block (node[4]=
@@ -362,7 +362,7 @@ render subsystem replaces them.
     0x800ED098<4 path is overwritten by node[4]=1 at the tail (END RAM identical). Transcribed 1:1; control
     flow + direct node/record/global writes owned native. Verified live: `obj80135d64verify` 1550+ matches,
     0 mismatch; gate-off field clean (151 nodes, 0 bad opcode).
-  - **Behavior handler FUN_8013B2E4 owned native+live (2026-06-25):** added `engine/objbeh_8013b2e4.cpp`
+  - **Behavior handler FUN_8013B2E4 owned native+live (2026-06-25):** added `engine/beh_flagbit_timer_machine.cpp`
     (~x778/field-frame on seaside, ~150 instr). State 0 INIT: FUN_800519E0(node,3,mem[0x800ECFD4],0x8015AABC)
     gate, node[0x3C]=mem[0x800ECFD8], global mem[0x800BF873] gate (-> node[4]=3), bit node[3] of mem[0x800BFA13]
     selects FUN_8013AF18(node,1,31) vs node[0x5E]=0, then FUN_80077C40(node,0x8001B7B0,a2); seeds node fields +
@@ -371,7 +371,7 @@ render subsystem replaces them.
     then FUN_8013B024(node,31) + FUN_800518FC; tail clears node[0x29]=node[0x2B]=0. State 3 -> FUN_8007A624.
     srav masked to (node[3]&31). Transcribed 1:1; control flow + direct node/global writes owned native.
     Verified live: `obj8013b2e4verify` 750+ matches, 0 mismatch; gate-off field clean (151 nodes, 0 bad opcode).
-  - **Behavior handler FUN_80131D08 owned native+live (2026-06-25):** added `engine/objbeh_80131d08.cpp`
+  - **Behavior handler FUN_80131D08 owned native+live (2026-06-25):** added `engine/beh_two_child_steer.cpp`
     (~x778/field-frame on seaside, ~135 instr). State 0 INIT: global mem[0x800ED098]<2 gate (-> node[4]=3),
     else seed node fields + node[4]++ and allocate 2 child records (FUN_8007AAE8) into node[0xC0]/node[0xC4]
     (each zeroed, rec[6]=-1), then FUN_80051B04(rec0,12,2) + FUN_80051B04(rec1,12,3), rec1[0]=6/rec1[2]=-1400,
@@ -381,7 +381,7 @@ render subsystem replaces them.
     guest a0 at first FUN_8007AAE8 is the original state byte (set c->r[4]=orig, don't touch across loop).
     Transcribed 1:1; control flow + direct node/record/global writes owned native. Verified live:
     `obj80131d08verify` 750+ matches, 0 mismatch; gate-off field clean (151 nodes, 0 bad opcode).
-  - **Behavior handler FUN_80132400 owned native+live (2026-06-25):** added `engine/objbeh_80132400.cpp`
+  - **Behavior handler FUN_80132400 owned native+live (2026-06-25):** added `engine/beh_single_child_cull.cpp`
     (~x778/field-frame on seaside, ~80 instr). Outer state machine on node[4]. State 0 INIT:
     v0=FUN_80051B70(node,12,37); bail if v0!=0, else seed node[0x80..0x86]=30/60/50/100,
     node[0x60]=-2350/node[0x62]=-1630/node[0x50]=1920, node[0]=1, node[0x29]=0, node[0x5E]=0, node[4]++,
@@ -390,7 +390,7 @@ render subsystem replaces them.
     node[0x2B]=0 at the tail. State 3 -> FUN_8007A624. Dead `addiu v1,v0,-1936` (0x800BF870, never
     stored/read) dropped. Transcribed 1:1; control flow + direct node/global writes owned native. Verified
     live: `obj80132400verify` 750+ matches, 0 mismatch; gate-off field clean (151 nodes, 0 bad opcode).
-  - **Behavior handler FUN_80133D6C owned native+live (2026-06-25):** added `engine/objbeh_80133d6c.cpp`
+  - **Behavior handler FUN_80133D6C owned native+live (2026-06-25):** added `engine/beh_twin_record_steer.cpp`
     (~x778/field-frame on seaside, ~180 instr). Outer state machine on node[4]. State 0 INIT (a0 clobbered
     to 2 by the beq-delay → node[8]=node[9]=2): mem[0x800ED098]<2 gate (→node[4]=3), else seed
     node[0x80/0x82]=140/node[0x84]=10/node[0x86]=70 + allocate 2 child records (FUN_8007AAE8) into
@@ -401,7 +401,7 @@ render subsystem replaces them.
     in the record loop: first FUN_8007AAE8 a0=2, FUN_80051B04 leaves a0=rec for the 2nd. The step-clamp
     snaps to the FULL 32-bit target truncated to 16 bits (sh), not its sign-extension. Transcribed 1:1.
     Verified live: `obj80133d6cverify` 750+ matches, 0 mismatch; gate-off field clean (151 nodes, 0 bad opcode).
-  - **Behavior handler FUN_80134FD8 owned native+live (2026-06-25):** added `engine/objbeh_80134fd8.cpp`
+  - **Behavior handler FUN_80134FD8 owned native+live (2026-06-25):** added `engine/beh_multi_record_phase_machine.cpp`
     (~x778/field-frame on seaside, ~260 instr — TWO-level state machine, outer node[4] / inner node[5]).
     Outer state 0 INIT: mem[0x800ED098]<10 gate (→node[4]=3); else node[8]=node[9]=10 + allocate node[8]
     child records (FUN_8007AAE8/FUN_80051B04) into node[0xC0+4*i] with rec[8]=tbl@0x8014A758[i], then
@@ -414,7 +414,7 @@ render subsystem replaces them.
     FUN_80051B04 carries a0=rec); FUN_801252C0 cascade rec[20]/rec[16] mirrored before the next call.
     Transcribed 1:1. Verified live: `obj80134fd8verify` 750+ matches, 0 mismatch; gate-off field clean
     (151 nodes, 0 bad opcode).
-  - **Behavior handler FUN_80136158 owned native+live (2026-06-25):** added `engine/objbeh_80136158.cpp`
+  - **Behavior handler FUN_80136158 owned native+live (2026-06-25):** added `engine/beh_sine_motion_sfx.cpp`
     (~x778/field-frame on seaside, ~290 instr — a movement/steering handler with a sin step). State 0 INIT:
     FUN_80051B70 gate + node[0x80]=576/node[0x82]=1152 + FUN_8004766C/FUN_80048750 + seed node[0x90..0x94]
     from node[0x2E/0x32/0x36], falls through to State 1. State 1 inner node[5] machine: a should-run gate

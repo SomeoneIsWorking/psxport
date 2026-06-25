@@ -253,9 +253,9 @@ void games_tomba2_init(void) {
   { void engine_submit_register_autodetect(void); engine_submit_register_autodetect(); }
   { void entity_spawn_register(void);  entity_spawn_register();  }
   { void actor_sm_24448_register(void); actor_sm_24448_register(); }
-  { void objbeh_739ac_register(void);  objbeh_739ac_register();  }
-  { void objbeh_73cd8_register(void);  objbeh_73cd8_register();  }
-  { void objbeh_741dc_register(void);  objbeh_741dc_register();  }
+  { void beh_scene_ui_trigger_register(void);  beh_scene_ui_trigger_register();  }
+  { void beh_typed_init_scene_trigger_register(void);  beh_typed_init_scene_trigger_register();  }
+  { void beh_pickup_collect_trigger_register(void);  beh_pickup_collect_trigger_register();  }
   { void inventory_register(void);     inventory_register();     }
   fps60_init();
   void engine_tomba2_init(void);

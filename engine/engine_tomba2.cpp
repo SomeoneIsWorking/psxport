@@ -35,81 +35,81 @@ static long s_walks = 0;
 // makes the native bodies LIVE: native-only when the gate channel is off, A/B-vs-recomp when it is on.
 // This is the start of owning the entity-behavior layer (the object SYSTEM's logic), top-down by hotness.
 void ov_sm40558(Core* c);          // 0x80040558 (entity.h)
-void ov_beh_739ac_run(Core* c);    // 0x800739AC (objbeh_739ac.cpp)
-void ov_beh_73cd8_run(Core* c);    // 0x80073CD8 (objbeh_73cd8.cpp)
-void ov_beh_741dc_run(Core* c);    // 0x800741DC (objbeh_741dc.cpp)
-void ov_beh_8012eb54_run(Core* c); // 0x8012EB54 (objbeh_8012eb54.cpp — overlay)
-void ov_beh_80124e74_run(Core* c); // 0x80124E74 (objbeh_80124e74.cpp — overlay)
-void ov_beh_80133c14_run(Core* c); // 0x80133C14 (objbeh_80133c14.cpp — overlay)
-void ov_beh_80138fc8_run(Core* c); // 0x80138FC8 (objbeh_80138fc8.cpp — overlay)
-void ov_beh_8013259c_run(Core* c); // 0x8013259C (objbeh_8013259c.cpp — overlay)
-void ov_beh_80145230_run(Core* c); // 0x80145230 (objbeh_80145230.cpp — overlay)
-void ov_beh_8012d4ec_run(Core* c); // 0x8012D4EC (objbeh_8012d4ec.cpp — overlay)
-void ov_beh_8012d404_run(Core* c); // 0x8012D404 (objbeh_8012d404.cpp — overlay)
-void ov_beh_801395c0_run(Core* c); // 0x801395C0 (objbeh_801395c0.cpp — overlay)
-void ov_beh_8004c238_run(Core* c); // 0x8004C238 (objbeh_8004c238.cpp — resident)
-void ov_beh_8004ce14_run(Core* c); // 0x8004CE14 (objbeh_8004ce14.cpp — resident)
-void ov_beh_80071a3c_run(Core* c); // 0x80071A3C (objbeh_80071a3c.cpp — resident)
-void ov_beh_8006f2d0_run(Core* c); // 0x8006F2D0 (objbeh_8006f2d0.cpp — resident)
-void ov_beh_8013c538_run(Core* c); // 0x8013C538 (objbeh_8013c538.cpp — overlay)
-void ov_beh_8013c3f4_run(Core* c); // 0x8013C3F4 (objbeh_8013c3f4.cpp — overlay)
-void ov_beh_8013c9c0_run(Core* c); // 0x8013C9C0 (objbeh_8013c9c0.cpp — overlay)
-void ov_beh_80136d9c_run(Core* c); // 0x80136D9C (objbeh_80136d9c.cpp — overlay)
-void ov_beh_80129c00_run(Core* c); // 0x80129C00 (objbeh_80129c00.cpp — overlay)
-void ov_beh_8012a0b8_run(Core* c); // 0x8012A0B8 (objbeh_8012a0b8.cpp — overlay)
-void ov_beh_8012da04_run(Core* c); // 0x8012DA04 (objbeh_8012da04.cpp — overlay)
-void ov_beh_80121978_run(Core* c); // 0x80121978 (objbeh_80121978.cpp — overlay)
-void ov_beh_80125e0c_run(Core* c); // 0x80125E0C (objbeh_80125e0c.cpp — overlay)
-void ov_beh_80128760_run(Core* c); // 0x80128760 (objbeh_80128760.cpp — overlay)
-void ov_beh_80118240_run(Core* c); // 0x80118240 (objbeh_80118240.cpp — overlay)
-void ov_beh_8013a900_run(Core* c); // 0x8013A900 (objbeh_8013a900.cpp — overlay)
-void ov_beh_80117658_run(Core* c); // 0x80117658 (objbeh_80117658.cpp — overlay)
-void ov_beh_80135d64_run(Core* c); // 0x80135D64 (objbeh_80135d64.cpp — overlay)
-void ov_beh_8013b2e4_run(Core* c); // 0x8013B2E4 (objbeh_8013b2e4.cpp — overlay)
-void ov_beh_80131d08_run(Core* c); // 0x80131D08 (objbeh_80131d08.cpp — overlay)
-void ov_beh_80132400_run(Core* c); // 0x80132400 (objbeh_80132400.cpp — overlay)
-void ov_beh_80133d6c_run(Core* c); // 0x80133D6C (objbeh_80133d6c.cpp — overlay)
-void ov_beh_80134fd8_run(Core* c); // 0x80134FD8 (objbeh_80134fd8.cpp — overlay)
-void ov_beh_80136158_run(Core* c); // 0x80136158 (objbeh_80136158.cpp — overlay)
+void ov_beh_scene_ui_trigger_run(Core* c);    // 0x800739AC (beh_scene_ui_trigger.cpp)
+void ov_beh_typed_init_scene_trigger_run(Core* c);    // 0x80073CD8 (beh_typed_init_scene_trigger.cpp)
+void ov_beh_pickup_collect_trigger_run(Core* c);    // 0x800741DC (beh_pickup_collect_trigger.cpp)
+void ov_beh_substate_edge_orchestrator_run(Core* c); // 0x8012EB54 (beh_substate_edge_orchestrator.cpp — overlay)
+void ov_beh_jumptable_release_trigger_run(Core* c); // 0x80124E74 (beh_jumptable_release_trigger.cpp — overlay)
+void ov_beh_typed_table_seed_gate_run(Core* c); // 0x80133C14 (beh_typed_table_seed_gate.cpp — overlay)
+void ov_beh_typed_jumptable_pair_run(Core* c); // 0x80138FC8 (beh_typed_jumptable_pair.cpp — overlay)
+void ov_beh_cull_substate_orchestrator_run(Core* c); // 0x8013259C (beh_cull_substate_orchestrator.cpp — overlay)
+void ov_beh_id_compare_motion_dispatch_run(Core* c); // 0x80145230 (beh_id_compare_motion_dispatch.cpp — overlay)
+void ov_beh_jumptable_flag_gate_run(Core* c); // 0x8012D4EC (beh_jumptable_flag_gate.cpp — overlay)
+void ov_beh_cull_tick_render_run(Core* c); // 0x8012D404 (beh_cull_tick_render.cpp — overlay)
+void ov_beh_sibling_angle_track_run(Core* c); // 0x801395C0 (beh_sibling_angle_track.cpp — overlay)
+void ov_beh_visibility_gate_dispatch_run(Core* c); // 0x8004C238 (beh_visibility_gate_dispatch.cpp — resident)
+void ov_beh_record_list_scanner_run(Core* c); // 0x8004CE14 (beh_record_list_scanner.cpp — resident)
+void ov_beh_area_event_dispatch_run(Core* c); // 0x80071A3C (beh_area_event_dispatch.cpp — resident)
+void ov_beh_pad_child_linker_run(Core* c); // 0x8006F2D0 (beh_pad_child_linker.cpp — resident)
+void ov_beh_scatter_record_dither_run(Core* c); // 0x8013C538 (beh_scatter_record_dither.cpp — overlay)
+void ov_beh_area_threshold_ptr_swap_run(Core* c); // 0x8013C3F4 (beh_area_threshold_ptr_swap.cpp — overlay)
+void ov_beh_scatter_ramp_machine_run(Core* c); // 0x8013C9C0 (beh_scatter_ramp_machine.cpp — overlay)
+void ov_beh_pure_inner_dispatch_run(Core* c); // 0x80136D9C (beh_pure_inner_dispatch.cpp — overlay)
+void ov_beh_anim_trigger_gates_run(Core* c); // 0x80129C00 (beh_anim_trigger_gates.cpp — overlay)
+void ov_beh_box_seed_phase_gate_run(Core* c); // 0x8012A0B8 (beh_box_seed_phase_gate.cpp — overlay)
+void ov_beh_typed_anim_spawn_run(Core* c); // 0x8012DA04 (beh_typed_anim_spawn.cpp — overlay)
+void ov_beh_id_routed_dispatch_run(Core* c); // 0x80121978 (beh_id_routed_dispatch.cpp — overlay)
+void ov_beh_pure_substate_dispatch_run(Core* c); // 0x80125E0C (beh_pure_substate_dispatch.cpp — overlay)
+void ov_beh_linked_advance_branch_run(Core* c); // 0x80128760 (beh_linked_advance_branch.cpp — overlay)
+void ov_beh_typed_init_exit_poker_run(Core* c); // 0x80118240 (beh_typed_init_exit_poker.cpp — overlay)
+void ov_beh_child_trig_motion_run(Core* c); // 0x8013A900 (beh_child_trig_motion.cpp — overlay)
+void ov_beh_prng_velocity_machine_run(Core* c); // 0x80117658 (beh_prng_velocity_machine.cpp — overlay)
+void ov_beh_quad_record_table_seed_run(Core* c); // 0x80135D64 (beh_quad_record_table_seed.cpp — overlay)
+void ov_beh_flagbit_timer_machine_run(Core* c); // 0x8013B2E4 (beh_flagbit_timer_machine.cpp — overlay)
+void ov_beh_two_child_steer_run(Core* c); // 0x80131D08 (beh_two_child_steer.cpp — overlay)
+void ov_beh_single_child_cull_run(Core* c); // 0x80132400 (beh_single_child_cull.cpp — overlay)
+void ov_beh_twin_record_steer_run(Core* c); // 0x80133D6C (beh_twin_record_steer.cpp — overlay)
+void ov_beh_multi_record_phase_machine_run(Core* c); // 0x80134FD8 (beh_multi_record_phase_machine.cpp — overlay)
+void ov_beh_sine_motion_sfx_run(Core* c); // 0x80136158 (beh_sine_motion_sfx.cpp — overlay)
 static bool dispatch_native_behavior(Core* c, uint32_t h) {
   switch (h) {
     case 0x80040558u: ov_sm40558(c);          return true;
-    case 0x8004CE14u: ov_beh_8004ce14_run(c); return true;
-    case 0x8006F2D0u: ov_beh_8006f2d0_run(c); return true;
-    case 0x80071A3Cu: ov_beh_80071a3c_run(c); return true;
-    case 0x800739ACu: ov_beh_739ac_run(c);    return true;
-    case 0x80073CD8u: ov_beh_73cd8_run(c);    return true;
-    case 0x800741DCu: ov_beh_741dc_run(c);    return true;
-    case 0x8012EB54u: ov_beh_8012eb54_run(c); return true;
-    case 0x80124E74u: ov_beh_80124e74_run(c); return true;
-    case 0x80133C14u: ov_beh_80133c14_run(c); return true;
-    case 0x80138FC8u: ov_beh_80138fc8_run(c); return true;
-    case 0x8013259Cu: ov_beh_8013259c_run(c); return true;
-    case 0x80145230u: ov_beh_80145230_run(c); return true;
-    case 0x8012D4ECu: ov_beh_8012d4ec_run(c); return true;
-    case 0x8012D404u: ov_beh_8012d404_run(c); return true;
-    case 0x801395C0u: ov_beh_801395c0_run(c); return true;
-    case 0x8013C538u: ov_beh_8013c538_run(c); return true;
-    case 0x8013C3F4u: ov_beh_8013c3f4_run(c); return true;
-    case 0x8013C9C0u: ov_beh_8013c9c0_run(c); return true;
-    case 0x80136D9Cu: ov_beh_80136d9c_run(c); return true;
-    case 0x80129C00u: ov_beh_80129c00_run(c); return true;
-    case 0x8012A0B8u: ov_beh_8012a0b8_run(c); return true;
-    case 0x8012DA04u: ov_beh_8012da04_run(c); return true;
-    case 0x80121978u: ov_beh_80121978_run(c); return true;
-    case 0x80125E0Cu: ov_beh_80125e0c_run(c); return true;
-    case 0x80128760u: ov_beh_80128760_run(c); return true;
-    case 0x80118240u: ov_beh_80118240_run(c); return true;
-    case 0x8013A900u: ov_beh_8013a900_run(c); return true;
-    case 0x80117658u: ov_beh_80117658_run(c); return true;
-    case 0x80135D64u: ov_beh_80135d64_run(c); return true;
-    case 0x8013B2E4u: ov_beh_8013b2e4_run(c); return true;
-    case 0x80131D08u: ov_beh_80131d08_run(c); return true;
-    case 0x80132400u: ov_beh_80132400_run(c); return true;
-    case 0x80133D6Cu: ov_beh_80133d6c_run(c); return true;
-    case 0x80134FD8u: ov_beh_80134fd8_run(c); return true;
-    case 0x80136158u: ov_beh_80136158_run(c); return true;
-    // 0x8004C238: native body written (objbeh_8004c238.cpp) but A/B gate shows 40 MISMATCH (later-232c) —
+    case 0x8004CE14u: ov_beh_record_list_scanner_run(c); return true;
+    case 0x8006F2D0u: ov_beh_pad_child_linker_run(c); return true;
+    case 0x80071A3Cu: ov_beh_area_event_dispatch_run(c); return true;
+    case 0x800739ACu: ov_beh_scene_ui_trigger_run(c);    return true;
+    case 0x80073CD8u: ov_beh_typed_init_scene_trigger_run(c);    return true;
+    case 0x800741DCu: ov_beh_pickup_collect_trigger_run(c);    return true;
+    case 0x8012EB54u: ov_beh_substate_edge_orchestrator_run(c); return true;
+    case 0x80124E74u: ov_beh_jumptable_release_trigger_run(c); return true;
+    case 0x80133C14u: ov_beh_typed_table_seed_gate_run(c); return true;
+    case 0x80138FC8u: ov_beh_typed_jumptable_pair_run(c); return true;
+    case 0x8013259Cu: ov_beh_cull_substate_orchestrator_run(c); return true;
+    case 0x80145230u: ov_beh_id_compare_motion_dispatch_run(c); return true;
+    case 0x8012D4ECu: ov_beh_jumptable_flag_gate_run(c); return true;
+    case 0x8012D404u: ov_beh_cull_tick_render_run(c); return true;
+    case 0x801395C0u: ov_beh_sibling_angle_track_run(c); return true;
+    case 0x8013C538u: ov_beh_scatter_record_dither_run(c); return true;
+    case 0x8013C3F4u: ov_beh_area_threshold_ptr_swap_run(c); return true;
+    case 0x8013C9C0u: ov_beh_scatter_ramp_machine_run(c); return true;
+    case 0x80136D9Cu: ov_beh_pure_inner_dispatch_run(c); return true;
+    case 0x80129C00u: ov_beh_anim_trigger_gates_run(c); return true;
+    case 0x8012A0B8u: ov_beh_box_seed_phase_gate_run(c); return true;
+    case 0x8012DA04u: ov_beh_typed_anim_spawn_run(c); return true;
+    case 0x80121978u: ov_beh_id_routed_dispatch_run(c); return true;
+    case 0x80125E0Cu: ov_beh_pure_substate_dispatch_run(c); return true;
+    case 0x80128760u: ov_beh_linked_advance_branch_run(c); return true;
+    case 0x80118240u: ov_beh_typed_init_exit_poker_run(c); return true;
+    case 0x8013A900u: ov_beh_child_trig_motion_run(c); return true;
+    case 0x80117658u: ov_beh_prng_velocity_machine_run(c); return true;
+    case 0x80135D64u: ov_beh_quad_record_table_seed_run(c); return true;
+    case 0x8013B2E4u: ov_beh_flagbit_timer_machine_run(c); return true;
+    case 0x80131D08u: ov_beh_two_child_steer_run(c); return true;
+    case 0x80132400u: ov_beh_single_child_cull_run(c); return true;
+    case 0x80133D6Cu: ov_beh_twin_record_steer_run(c); return true;
+    case 0x80134FD8u: ov_beh_multi_record_phase_machine_run(c); return true;
+    case 0x80136158u: ov_beh_sine_motion_sfx_run(c); return true;
+    // 0x8004C238: native body written (beh_visibility_gate_dispatch.cpp) but A/B gate shows 40 MISMATCH (later-232c) —
     // NOT wired until fixed; runs as PSX (rec_dispatch).
     default: return false;
   }

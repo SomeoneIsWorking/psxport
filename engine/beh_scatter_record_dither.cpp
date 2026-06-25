@@ -1,0 +1,174 @@
+// engine/beh_scatter_record_dither.cpp — PC-native per-object BEHAVIOR handler FUN_8013C538.
+//
+// The HOTTEST still-PSX OVERLAY handler (~x6091/field-frame on seaside), an area-overlay routine
+// (prologue 0x8013C538; `jr ra` at 0x8013C7E8). Lives only at runtime in the area overlay (NOT in
+// MAIN.EXE) — disassembled from scratch/ram/field_seaside.bin. Same ownership model as the resident
+// siblings (the FUN_8006f2d0 handler / the FUN_8004ce14 handler / …): a state machine on the node's state byte node[4].
+//
+//   STATE >=4 : nothing (exit).            STATE 2/3 : FUN_8007A624(node), exit.
+//   STATE 0   : read area byte 0x800BF9E0; <28 ? choose a small scatter count (node[0x4e]=7,n=7 when
+//               <6, else node[0x4e]=1,n=1) and seed n stride-8 records at node[0x50] with random
+//               offsets via FUN_80032A44(a0,a1); set node[4]=1, then FALL INTO state-1 logic.
+//               (If 0x800BF9E0 >= 28 -> node[4]=3, exit.)
+//   STATE 1   : a0=0x800E7E80 area block. If byte[+363]==1 exit. If byte[+42] >= 12 -> node[4]=3 exit;
+//               else node[0x34]=node[0x38]; if node[0x38]==0 -> node[4]=3 exit. Else read 0x800BF9E0
+//               again: <6 picks the &3 jitter loop (counts -1/-14/-2), >=6 the &7 loop (-3/-14/-4),
+//               each running node[0x4e] iterations of 3x FUN_8009A450() to dither the node[0x50] recs.
+//               Then FUN_8002B278(node): nonzero -> exit; else FUN_80031780(node).
+//
+// Ownership model (identical to the siblings): CONTROL FLOW + the node memory WRITES owned native;
+// every sub-behavior CALL (FUN_80032A44 scatter-rng, FUN_8009A450 rng, FUN_8002B278, FUN_80031780,
+// FUN_8007A624) stays reachable by address via rec_dispatch (pure-PSX leaf, no recursion). NO GTE,
+// NO render packets. Transcribed 1:1 as a register machine (locals = guest regs, goto labels = guest
+// addresses) so delay-slot effects stay exact; the byte-exact A/B gate (full RAM+scratchpad vs
+// rec_super_call) is the safety net. a0/a1 are written into c->r ONLY where the guest writes them, so
+// c->r evolves identically to the recomp across the leaf rec_dispatch calls (the no-arg FUN_8009A450
+// calls inherit whatever the prior leaf left, exactly as the recomp does). v0 (handler return) is NOT
+// reproduced (the per-object dispatcher ignores it; the gate compares only RAM+scratchpad).
+
+#include "core.h"
+#include "cfg.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+void rec_super_call(Core*, uint32_t);
+void rec_dispatch(Core*, uint32_t);
+
+namespace {
+
+constexpr uint32_t BEH_FN = 0x8013C538u;
+
+void beh_scatter_record_dither(Core* c) {
+  uint32_t obj = c->r[4];                        // s3 = a0 (node)
+  uint32_t v0, v1;
+  int s0 = 0, s1 = 0, s2 = 0;                    // guest s0/s2 = running record ptrs, s1 = counter
+  // c558 sets a0=1 right after the prologue; it survives only into the STATE 0 < 28 / >= 6 branch
+  // (node[0x4e] = a0 = 1) — handled inline there. We don't mirror it into c->r since no leaf reads
+  // a0 before it is overwritten (L63c writes a0 = 0x800E7E80).
+
+  uint8_t st = c->mem_r8(obj + 4);               // node[4] = state
+  if (st == 1) goto L63c;
+  if (st < 2) { if (st == 0) goto L590; goto L7d4; }  // st<2 -> only st==0 reachable
+  if (st < 4) goto L7cc;                              // st in {2,3}
+  goto L7d4;                                          // st >= 4 default
+
+ L7cc:                                           // STATE 2/3 — FUN_8007A624(node)
+  c->r[4] = obj; rec_dispatch(c, 0x8007A624u);
+  goto L7d4;
+
+ L590:                                           // STATE 0 — seed the scatter record list
+  v1 = c->mem_r8(0x800BF9E0u);
+  if (!(v1 < 28)) goto L678;                     // >= 28 -> node[4]=3
+  if (v1 < 6) { c->mem_w16(obj + 0x4e, 7); s1 = 7; }
+  else        { c->mem_w16(obj + 0x4e, 1); s1 = 1; }   // a0==1 here
+  if (s1 <= 0) goto L634;
+  s2 = (int)(obj + 0x50);
+  s0 = (int)(obj + 0x56);
+ L5cc:
+  c->r[4] = 0; c->r[5] = 128; rec_dispatch(c, 0x80032A44u); v0 = c->r[2];
+  s1 -= 1;
+  v1 = (uint16_t)(c->mem_r16(obj + 0x2c) + v0);
+  c->mem_w16((uint32_t)s2 + 0, v1);
+  c->r[4] = (uint32_t)-128; c->r[5] = 0; rec_dispatch(c, 0x80032A44u); v0 = c->r[2];
+  v1 = (uint16_t)(c->mem_r16(obj + 0x2e) + v0);
+  s2 += 8;
+  c->mem_w16((uint32_t)s0 - 4, v1);
+  c->r[4] = 0; c->r[5] = 32; rec_dispatch(c, 0x80032A44u); v0 = c->r[2];
+  v1 = (uint16_t)(c->mem_r16(obj + 0x30) + v0);
+  c->mem_w16((uint32_t)s0 - 2, v1);
+  c->r[4] = 224; c->r[5] = 288; rec_dispatch(c, 0x80032A44u); v0 = c->r[2];
+  c->mem_w16((uint32_t)s0 + 0, v0);
+  s0 += 8;                                       // c630 delay slot (always executes)
+  if (s1 > 0) goto L5cc;
+ L634:
+  c->mem_w8(obj + 4, 1);
+  // fall through to STATE 1
+
+ L63c:                                           // STATE 1
+  c->r[4] = 0x800E7E80u;                         // a0 = area block base
+  v1 = c->mem_r8(0x800E7FEBu);                   // lbu 363(a0)
+  if (v1 == 1) goto L7d4;
+  v0 = c->mem_r8(0x800E7EAAu);                   // lbu 42(a0)
+  if (!(v0 < 12)) goto L678;                     // >= 12 -> node[4]=3
+  v0 = c->mem_r32(obj + 0x38);
+  c->mem_w32(obj + 0x34, v0);                    // node[0x34] = node[0x38]
+  if (v0 != 0) goto L684;
+  // node[0x38] == 0 -> fall into L678
+ L678:
+  c->mem_w8(obj + 4, 3);
+  goto L7d4;
+
+ L684:
+  v0 = c->mem_r8(0x800BF9E0u);
+  if (!(v0 < 6)) goto L728;                      // >= 6 -> the &7 jitter loop
+  s2 = (int)(obj + 0x50);
+  if ((int16_t)c->mem_r16(obj + 0x4e) <= 0) goto L7ac;
+  s1 = 0;
+  s0 = (int)(obj + 0x54);
+ L6b0:
+  rec_dispatch(c, 0x8009A450u); v0 = c->r[2];
+  s1 += 1;
+  v1 = (uint16_t)(c->mem_r16((uint32_t)s2 + 0) - 1 + (uint32_t)(((int32_t)v0 >> 7) & 3));
+  c->mem_w16((uint32_t)s2 + 0, v1);
+  rec_dispatch(c, 0x8009A450u); v0 = c->r[2];
+  v1 = (uint16_t)(c->mem_r16((uint32_t)s0 - 2) - 14 - (uint32_t)(((int32_t)v0 >> 8) & 0xf));
+  c->mem_w16((uint32_t)s0 - 2, v1);
+  rec_dispatch(c, 0x8009A450u); v0 = c->r[2];
+  s2 += 8;
+  v1 = (uint16_t)(c->mem_r16((uint32_t)s0 + 0) - 2 + (uint32_t)(((int32_t)v0 >> 7) & 3));
+  c->mem_w16((uint32_t)s0 + 0, v1);
+  s0 += 8;                                       // c71c delay slot
+  if (s1 < (int16_t)c->mem_r16(obj + 0x4e)) goto L6b0;
+  goto L7ac;
+ L728:
+  if ((int16_t)c->mem_r16(obj + 0x4e) <= 0) goto L7ac;
+  s1 = 0;
+  s0 = (int)(obj + 0x54);
+ L73c:
+  rec_dispatch(c, 0x8009A450u); v0 = c->r[2];
+  s1 += 1;
+  v1 = (uint16_t)(c->mem_r16((uint32_t)s2 + 0) - 3 + (uint32_t)(((int32_t)v0 >> 7) & 7));
+  c->mem_w16((uint32_t)s2 + 0, v1);
+  rec_dispatch(c, 0x8009A450u); v0 = c->r[2];
+  v1 = (uint16_t)(c->mem_r16((uint32_t)s0 - 2) - 14 - (uint32_t)(((int32_t)v0 >> 8) & 0xf));
+  c->mem_w16((uint32_t)s0 - 2, v1);
+  rec_dispatch(c, 0x8009A450u); v0 = c->r[2];
+  s2 += 8;
+  v1 = (uint16_t)(c->mem_r16((uint32_t)s0 + 0) - 4 + (uint32_t)(((int32_t)v0 >> 7) & 7));
+  c->mem_w16((uint32_t)s0 + 0, v1);
+  s0 += 8;                                       // c7a8 delay slot
+  if (s1 < (int16_t)c->mem_r16(obj + 0x4e)) goto L73c;
+ L7ac:
+  c->r[4] = obj; rec_dispatch(c, 0x8002B278u); v0 = c->r[2];
+  if (v0 != 0) goto L7d4;
+  c->r[4] = obj; rec_dispatch(c, 0x80031780u);
+ L7d4:
+  return;
+}
+
+void ov_beh_scatter_record_dither(Core* c) {
+  static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("scatter_record_ditherverify") ? 1 : 0;
+  if (!s_v) { beh_scatter_record_dither(c); return; }
+  static uint8_t* ram0 = (uint8_t*)malloc(0x200000);
+  static uint8_t* ramN = (uint8_t*)malloc(0x200000);
+  uint8_t spad0[0x400], spadN[0x400];
+  uint32_t regs0[32]; memcpy(regs0, c->r, sizeof regs0);
+  uint32_t obj = c->r[4];
+  memcpy(ram0, c->ram, 0x200000); memcpy(spad0, c->scratch, 0x400);
+  beh_scatter_record_dither(c);
+  memcpy(ramN, c->ram, 0x200000); memcpy(spadN, c->scratch, 0x400);
+  memcpy(c->ram, ram0, 0x200000); memcpy(c->scratch, spad0, 0x400); memcpy(c->r, regs0, sizeof regs0);
+  rec_super_call(c, BEH_FN);
+  uint32_t sp = regs0[29] & 0x1FFFFFu, flo = (sp >= 0x800) ? sp - 0x800 : 0;
+  int ro = -1; for (uint32_t a = 0; a < 0x200000; a++) if (c->ram[a] != ramN[a] && !(a >= flo && a < sp)) { ro = (int)a; break; }
+  int so = -1; for (uint32_t a = 0; a < 0x400; a++) if (c->scratch[a] != spadN[a]) { so = (int)a; break; }
+  static long ng = 0, nb = 0;
+  if (ro >= 0 || so >= 0) {
+    if (nb++ < 40) fprintf(stderr, "[scatter_record_ditherverify] MISMATCH obj=%08x st=%u ram@%x spad@%x\n",
+                           obj, c->mem_r8(obj + 4), ro, so);
+  } else if (++ng % 50 == 0) fprintf(stderr, "[scatter_record_ditherverify] %ld matches\n", ng);
+}
+
+}  // namespace
+
+void ov_beh_scatter_record_dither_run(Core* c) { ov_beh_scatter_record_dither(c); }
