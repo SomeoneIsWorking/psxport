@@ -215,6 +215,9 @@ static int s_tgt = 0;          // which batch the emit path accumulates into (0=
 static int s_ntgt = 1;         // live batch count this frame (2 in dual-view)
 extern "C" int g_dualview;     // dual-view side-by-side native-vs-PSX render (native_boot REPL `dualview`)
 extern "C" int g_sbs;          // PSXPORT_SBS two-core side-by-side (sbs.cpp) — also forces 2 render targets
+extern "C" int g_sbs_rl;       // PSXPORT_SBS raylib present: each core renders SEQUENTIALLY into ONE target
+                               // (s_tex), read back to a CPU buffer, then raylib draws the two panes. So the
+                               // VK side stays SINGLE-target (the proven single-mode headless render path).
 #define BIND_BATCH() GeomBatch& _gb = s_gb[s_tgt]; \
   int& s_tri_n = _gb.tri_n; int& s_tex_n = _gb.tex_n; int& s_semi_n = _gb.semi_n; \
   VkBuffer& s_vbuf = _gb.vbuf; VkBuffer& s_tvbuf = _gb.tvbuf; VkBuffer& s_semibuf = _gb.semibuf; \
@@ -610,7 +613,9 @@ static void recreate_swapchain(void) {
 
 static void init_vk(void) {
   s_inited = 1;
-  s_ntgt = (g_dualview || g_sbs) ? 2 : 1;   // dual-view OR SBS: allocate + draw two geometry batches
+  // dual-view OR (the OLD VK-composite) SBS: two geometry batches. The raylib SBS (g_sbs_rl) renders the
+  // two cores SEQUENTIALLY into ONE target and reads each back, so it stays single-target.
+  s_ntgt = ((g_dualview || g_sbs) && !g_sbs_rl) ? 2 : 1;
   mods_init();   // seed the live mod state from cfg before any ssao_on()/ui_infra() decision below
   // instance extensions: SDL surface exts (+ portability enumeration if the loader has it). Headless
   // (offscreen) needs no window/surface extensions at all.
@@ -2213,6 +2218,27 @@ static void vk_dump_to(const char* path, int sx, int sy, int w, int h) {
     fwrite(c, 1, 3, f); }
   fclose(f);
 }
+// PSXPORT_SBS raylib present: render the CURRENT (already-emitted) geometry batch headless into s_tex, then
+// read the display region [sx,sy,w,h] back to host RGBA8 (`rgba` must hold w*h*4 bytes). This reuses the
+// PROVEN single-mode headless present + VRAM readback + 1555->RGB conversion (the exact path `gpu_vk_shot`
+// uses, which works on macOS), so each SBS pane is driven by the render path that is known-good there —
+// instead of the two-pane VK swapchain composite (present_sbs) that MoltenVK rendered black. The engine
+// screen-fade is applied (same math as vk_dump_to / present.frag) so a faded pane matches the game.
+void gpu_vk_render_readback(Core* core, const uint16_t* vram, int sx, int sy, int w, int h, uint8_t* rgba) {
+  if (!gpu_vk_enabled()) { memset(rgba, 0, (size_t)w * h * 4); return; }
+  core->game->gpu_vk.present(vram, sx, sy, w, h);   // headless (s_headless): render batch 0 into s_tex + submit (self-inits)
+  s_rb_img = 0; vk_readback_to_rb();                // wait on s_fence (render done) + copy s_tex -> s_rb_ptr
+  const uint16_t* src = (const uint16_t*)s_rb_ptr;
+  for (int y = 0; y < h; y++) for (int x = 0; x < w; x++) {
+    uint16_t p = src[((sy + y) % IMG_H) * VRAM_W + ((sx + x) & 1023)];
+    int r = (p & 31) << 3, g = ((p >> 5) & 31) << 3, b = ((p >> 10) & 31) << 3;
+    if (s_fade_mode == 1)      { r += s_fade_r; g += s_fade_g; b += s_fade_b; if (r>255)r=255; if (g>255)g=255; if (b>255)b=255; }
+    else if (s_fade_mode == 2) { r -= s_fade_r; g -= s_fade_g; b -= s_fade_b; if (r<0)r=0; if (g<0)g=0; if (b<0)b=0; }
+    uint8_t* o = rgba + ((size_t)y * w + x) * 4;
+    o[0] = (uint8_t)r; o[1] = (uint8_t)g; o[2] = (uint8_t)b; o[3] = 255;
+  }
+}
+
 // DUAL-VIEW: dump panel 0 (native) | panel 1 (PSX) side by side into one 2w×h PPM, with a 2px divider.
 // Reads both VK images back (s_tex then s_tex_b) into the shared readback buffer in turn.
 static void vk_dump_dual(const char* path, int sx, int sy, int w, int h) {

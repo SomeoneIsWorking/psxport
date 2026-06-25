@@ -69,18 +69,29 @@ extern "C" void guest_backtrace_to(Core* c, FILE* out);
 extern "C" int  g_render_psx;                 // engine_render.cpp — 0 = native render walks, 1 = PSX recomp render
 extern void (*g_store_watch_cb)(Core*, uint32_t a, uint32_t v);   // mem.cpp — armed write-watch callback
 extern "C" int  g_sbs;                        // PSXPORT_SBS: forces 2 VK render targets + skips the in-engine dualview pass
-// PSXPORT_SBS two-core composite present + per-core front-buffer/display-region accessors (gpu_vk.cpp/gpu_native.cpp).
-void gpu_vk_present_sbs(Core* coreA, const uint16_t* vramA, const uint16_t* vramB, int sx, int sy, int w, int h);
-void gpu_vk_present_sbs_repaint(Core* coreA, int sx, int sy, int w, int h);   // re-present last frames (paused)
+// Per-core render+readback + front-buffer/display-region accessors (gpu_vk.cpp / gpu_native.cpp). The SBS
+// now presents through raylib (OpenGL): each core is rendered HEADLESS into the shared VK target and read
+// back to a CPU RGBA buffer (gpu_vk_render_readback), then raylib draws the two panes side by side. This
+// replaces the two-pane VK swapchain composite (gpu_vk_present_sbs) that MoltenVK rendered black on macOS.
+void gpu_vk_render_readback(Core* core, const uint16_t* vram, int sx, int sy, int w, int h, uint8_t* rgba);
 void gpu_vk_select_target(int t);
-void gpu_vk_frame_end(Core* core, const uint16_t* svram, int frame);   // gpu_native.cpp -> resets both VK batches
+void gpu_vk_frame_end(Core* core, const uint16_t* svram, int frame);   // gpu_native.cpp -> resets the VK batch
 const uint16_t* gpu_vram_ptr(Core* core);
 void gpu_disp_region(Core* core, int* sx, int* sy, int* w, int* h);
+void pad_set_buttons(Core* c, uint16_t mask);   // pad_input.cpp — feed the active-low pad mask (raylib input)
+// raylib SBS presenter (sbs_raylib.cpp) — owns the window, draws the two CPU panes, polls keyboard input.
+extern "C" {
+  void sbs_rl_init(void);
+  int  sbs_rl_should_close(void);
+  unsigned short sbs_rl_poll_input(void);
+  void sbs_rl_present(const unsigned char* rgbaA, int wA, int hA, const unsigned char* rgbaB, int wB, int hB);
+  void sbs_rl_shutdown(void);
+}
 
 // PSXPORT_SBS marker, DEFINED here (sbs.cpp owns the harness). gpu_vk.cpp forces 2 VK render targets when
 // set, and native_boot.cpp skips the in-engine dualview second pass (core B fills target 1 instead). 0
 // outside the SBS harness, so the single-core game and the dualview path are completely unaffected.
-extern "C" { int g_sbs = 0; }
+extern "C" { int g_sbs = 0; int g_sbs_rl = 0; }   // g_sbs_rl: raylib present -> single VK target (gpu_vk.cpp)
 
 namespace {
 
@@ -92,6 +103,12 @@ constexpr uint16_t BTN_CROSS = 0x4000, BTN_START = 0x0008, BTN_NONE = 0xFFFF;
 
 Game*    g_a = nullptr;
 Game*    g_b = nullptr;
+
+// Per-pane CPU RGBA8 frames read back from each core's headless VK render (raylib uploads + draws these).
+// Sized to the full VRAM extent (1024x512) so any display region fits; the live region size is tracked.
+uint8_t  s_rgba_a[1024 * 512 * 4];
+uint8_t  s_rgba_b[1024 * 512 * 4];
+int      s_wa = 0, s_ha = 0, s_wb = 0, s_hb = 0;
 int      s_mode = M_RENDER;
 int      s_sel  = 0;                            // 0 = A, 1 = B (window + debug-server target core)
 uint32_t s_lo   = 0x800B0000u, s_hi = 0x80110000u;
@@ -194,30 +211,6 @@ void apply_mode(int which) {
   }
 }
 
-void step_core(Game* g, int which);   // defined below (steps one core into its pane's batch, no present)
-void present_both();                  // defined below (one window present: pane 0 = A, pane 1 = B)
-
-// CONCURRENT navigation: step BOTH cores toward gameplay-start IN LOCKSTEP (one frame each per iteration)
-// and present BOTH panes every frame — so the user watches both cores boot side by side from frame 0. Both
-// cores are ALWAYS stepped (so each keeps RENDERING its pane); nav_step only injects the auto-skip INPUT,
-// and stops once that core reaches free-roam ("pause at goal" = stop auto-driving, not stop running). This
-// replaces the old sequential navigate(A) then navigate(B) that froze A's pane while B booted. Returns once
-// BOTH have reached gameplay-start (or the cap). After this the main lockstep loop takes over (user input).
-void navigate_both() {
-  Nav na, nb;
-  bool da = false, db = false;
-  for (uint32_t f = 0; f < 12000 && !(da && db); f++) {
-    dbg_server_service(s_sel ? &g_b->core : &g_a->core);
-    if (!da && nav_step(&g_a->core, na, f, "A(left)"))  da = true;   // A reached free-roam: stop auto-input
-    if (!db && nav_step(&g_b->core, nb, f, "B(right)")) db = true;   // B reached free-roam: stop auto-input
-    step_core(g_a, 0);   // ALWAYS step + render both, every frame (a done core idles at free-roam)
-    step_core(g_b, 1);
-    present_both();
-  }
-  if (!da) fprintf(stderr, "[sbs] A(left) did NOT reach gameplay-start within 12000 frames\n");
-  if (!db) fprintf(stderr, "[sbs] B(right) did NOT reach gameplay-start within 12000 frames\n");
-}
-
 // Scratchpad is the 1 KB window 0x1F800000..0x1F8003FF — NOT "addr >= 0x1F800000" (KSEG0 RAM 0x80xxxxxx
 // is numerically larger and would be misclassified, indexing the 1 KB scratch[] far out of bounds).
 inline bool is_spad(uint32_t a) { return a >= 0x1F800000u && a < 0x1F800400u; }
@@ -281,24 +274,32 @@ void step_core(Game* g, int which) {
         c->mem_w8(0x1f80019du, 1);                           // request skip (the game's Start-skip flag)
     } }
   apply_mode(which);
-  gpu_vk_select_target(which);        // A -> batch 0 (left pane), B -> batch 1 (right pane)
+  gpu_vk_select_target(which);        // single VK target under g_sbs_rl: both cores emit into batch 0
   dc_step_frame(&g->core, s_frame);   // native_step_frame binds THIS core's per-instance GTE/SPU/MDEC/CD
 }
 
-// Composite both cores into the window: pane 0 = core A's VRAM+batch, pane 1 = core B's VRAM+batch, ONE
-// present. Then reset BOTH VK batches for the next frame (frame_end resets s_gb[0] and s_gb[1]).
-void present_both() {
-  int sx, sy, w, h; gpu_disp_region(&g_a->core, &sx, &sy, &w, &h);   // both cores share the same scene/region
-  gpu_vk_present_sbs(&g_a->core, gpu_vram_ptr(&g_a->core), gpu_vram_ptr(&g_b->core), sx, sy, w, h);
-  gpu_vk_frame_end(&g_a->core, gpu_vram_ptr(&g_a->core), (int)s_frame);   // reset both geometry batches
+// Render ONE core's just-emitted frame into the shared VK target HEADLESS and read it back to its CPU RGBA
+// pane buffer (raylib then draws it). Resets the VK geometry batch so the NEXT core renders into a clean
+// target. Records the live display-region size for the raylib upload. This is the per-core PROVEN path
+// (single-mode headless render + readback, the same gpu_vk_shot uses), which works on macOS/MoltenVK.
+void grab_pane(Game* g, uint8_t* rgba, int* ow, int* oh) {
+  int sx, sy, w, h; gpu_disp_region(&g->core, &sx, &sy, &w, &h);
+  if (w < 1) w = 1; if (h < 1) h = 1;
+  if (w > 1024) w = 1024; if (h > 512) h = 512;
+  gpu_vk_render_readback(&g->core, gpu_vram_ptr(&g->core), sx, sy, w, h, rgba);
+  gpu_vk_frame_end(&g->core, gpu_vram_ptr(&g->core), (int)s_frame);   // reset the VK geometry batch
+  *ow = w; *oh = h;
 }
 
-// Re-present the two panes' LAST frames without re-rendering (cores aren't stepping) — keeps the window
-// responsive while PAUSED. No batch reset (nothing was emitted; the persistent panel images still hold
-// each core's last frame).
-void present_repaint() {
-  int sx, sy, w, h; gpu_disp_region(&g_a->core, &sx, &sy, &w, &h);
-  gpu_vk_present_sbs_repaint(&g_a->core, sx, sy, w, h);
+// Draw the two most-recently grabbed panes (A left, B right) in one raylib window frame.
+void present_panes() { sbs_rl_present(s_rgba_a, s_wa, s_ha, s_rgba_b, s_wb, s_hb); }
+
+// Feed the SAME host pad mask (polled from raylib) to BOTH cores (mirrored input). repl_on stays 0 in
+// normal play, so pad_service_frame leaves this mask intact for the game to read.
+void feed_input() {
+  uint16_t mask = (uint16_t)sbs_rl_poll_input();
+  pad_set_buttons(&g_a->core, mask);
+  pad_set_buttons(&g_b->core, mask);
 }
 
 } // namespace
@@ -375,7 +376,14 @@ void sbs_run(const char* exe_path) {
   { const char* e = getenv("PSXPORT_SBS_LO"); if (e && *e) s_lo = (uint32_t)strtoul(e, 0, 0); }
   { const char* e = getenv("PSXPORT_SBS_HI"); if (e && *e) s_hi = (uint32_t)strtoul(e, 0, 0); }
   g_store_watch_cb = sbs_store_cb;
-  g_sbs = 1;            // two render targets (s_ntgt=2) + skip the in-engine dualview second pass (it's core B's job)
+  g_sbs = 1;            // skip the in-engine dualview second pass (each core renders its OWN pane)
+  g_sbs_rl = 1;         // raylib present: single VK target, sequential per-core headless render+readback
+  // The SBS presents through raylib (OpenGL), NOT the VK swapchain — so run VK HEADLESS (offscreen render
+  // into s_tex, no SDL window / swapchain). This MUST be set before the FIRST gpu_vk_enabled() latches
+  // s_headless — which happens during boot (eng_init_display), not in the render loop. Set it too late and
+  // VK latches windowed and opens its OWN SDL window IN ADDITION to raylib's (the two-window bug). Headless
+  // boot is the proven REPL-screenshot path, so this does not affect boot.
+  setenv("PSXPORT_VK_HEADLESS", "1", 1);
 
   // psx_fallback per mode: gameplay/both run PSX gameplay on core B; render runs native gameplay on both.
   int fb_b = (s_mode == M_RENDER) ? 0 : 1;
@@ -383,6 +391,8 @@ void sbs_run(const char* exe_path) {
   g_b = new Game(); g_b->psx_fallback = fb_b;
   load_exe(exe_path, &g_a->core); dc_boot_init(&g_a->core);
   load_exe(exe_path, &g_b->core); dc_boot_init(&g_b->core);
+
+  sbs_rl_init();        // create the raylib window + GL context (the one and only window)
 
   fprintf(stderr, "[sbs] LIVE side-by-side: mode=%s  A=%s  B=%s  diff region 0x%08X..0x%08X + scratchpad\n",
           mode_name(),
@@ -399,26 +409,27 @@ void sbs_run(const char* exe_path) {
   // both reach free-roam the main lockstep loop below takes over (driven by host/server input).
   // You drive BOTH cores yourself from frame 0 (boot → logos → menu → game) with the window — no auto-skip,
   // so front-end / transition bugs are fully shown. The lockstep loop below is host-input-driven.
-  fprintf(stderr, "[sbs] LOCKSTEP from boot — drive both panes with the window; inspect via the debug server.\n");
+  fprintf(stderr, "[sbs] LOCKSTEP from boot — drive both panes with the raylib window's keyboard "
+                  "(WASD/arrows, K=Cross, Enter=Start, …); inspect via the debug server.\n");
 
   for (;;) {
+    if (sbs_rl_should_close()) { fprintf(stderr, "[sbs] window closed — exiting.\n"); break; }
     Core* sel = s_sel ? &g_b->core : &g_a->core;
     dbg_server_service(sel);                 // service one queued debug-server command on the selected core
-    // PAUSED (a divergence with the debug server up, or a manual `sbs` pause): keep the WINDOW LIVE — pump
-    // host input for both cores, re-present both panes' last frames, and service the server — instead of a
-    // bare usleep (which leaves SDL marking the window "Not Responding"). Mirrors native_boot's pause loop.
+    feed_input();                            // raylib keyboard -> BOTH cores' pad (mirrored host input)
+    // PAUSED (a divergence with the debug server up, or a manual `sbs` pause): keep the WINDOW LIVE — the
+    // raylib present re-draws the last grabbed panes and polls input, so the window stays responsive.
     if (dbg_is_paused() && !dbg_step_pending()) {
-      pad_service_frame(&g_a->core); pad_service_frame(&g_b->core);
-      present_repaint();
+      present_panes();
       usleep(15000);
       continue;
     }
     if (dbg_step_pending()) dbg_consume_step();
 
     s_ww_hit = 0;
-    step_core(g_a, 0);
-    step_core(g_b, 1);
-    present_both();                          // ONE window present: pane 0 = core A, pane 1 = core B
+    step_core(g_a, 0); grab_pane(g_a, s_rgba_a, &s_wa, &s_ha);   // render A headless -> CPU readback (single VK target)
+    step_core(g_b, 1); grab_pane(g_b, s_rgba_b, &s_wb, &s_hb);   // then render B headless -> CPU readback
+    present_panes();                                             // raylib window: pane A (left) | pane B (right)
 
     if (s_ww_armed && s_ww_hit) {            // the diverging write fired — pause with the exact site captured
       fprintf(stderr, "[sbs] write-watch caught 0x%08X (A=%08X B=%08X) at frame %u — paused; see `sbs bt`.\n",
@@ -437,4 +448,6 @@ void sbs_run(const char* exe_path) {
     }
     s_frame++;
   }
+  sbs_rl_shutdown();
+  exit(0);   // the SBS debugger owns the process; closing the window ends it (mirrors the old never-return)
 }
