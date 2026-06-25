@@ -514,13 +514,23 @@ render subsystem replaces them.
     loop relies on a0/a1 LEFTOVER — FUN_8007aae8 carries the a0 left by the prior rec_dispatch (FUN_80073750
     first iter, FUN_80051b04 after, which leaves a0=rec), so c->r[4] is NOT written before FUN_8007aae8.
     Verified live: `cube_text_spawnverify` 100 matches, 0 mismatch; gate-off field clean (151 nodes).
-  - **MILESTONE — per-object behavior-handler frontier essentially CLEARED (2026-06-25).** Of the 46
-    distinct per-object handlers exercised in headless seaside (`debug behhist`), **44 are owned native**.
-    Only two remain unowned, both deliberately: **0x80127798** — its defining path is the node[5]==3
-    cutscene/AREA-TRANSITION phase machine (div ops + scene-load FUN_80054198/FUN_80054d14 + many globals);
-    NO headless coverage of that path = no gate, so per the "don't own un-verifiable area-transition code"
-    rule it stays PSX (decomp ready at scratch/decomp/field2/80127798.c if a verifiable approach appears);
-    **0x8013C1DC** — only ~x4/run, too rare to gate meaningfully.
+  - **Behavior handler FUN_80127798 = `beh_area_transition_machine` owned native+live (2026-06-25, overlay):**
+    THE area-transition / cutscene-fade driver (~x774). node[4] state machine; STATE 2's node[5]==3 path runs
+    a node[6] PHASE MACHINE that fades out (DAT_800bf9b5=3 + FUN_80042354/FUN_80040b48), FIRES the next-area
+    load (FUN_80054198 + FUN_80054d14), animates the transition camera (FUN_80085690 + `<<8`/`/64` deltas into
+    node[0x4e/50/52] + the DAT_800e80xx block + FUN_80074590), integrates the deltas into DAT_800e7eac/eb0/eb4,
+    and re-seeds. Tail re-projects (FUN_8004bd64, 5th arg STACKED) + commits the camera (FUN_8006cba8). Owning
+    this is what lets the cutscene FADE be driven PC-native and enables a debug area-switch (node[5]==3 IS the
+    switch mechanism). GOTCHAs: scratchpad[0x207] gate is unsigned `(v-29)<3`; Ghidra FALSELY flagged
+    FUN_80054d14 "noreturn" (it returns — case-2's camera setup after it is real); case-4 writes are CONCAT22
+    (store the HI halfword); camera div is signed `/64` (truncate toward 0); `<<16>>8` == (int16)<<8. VERIFIED
+    headless: hot paths (state 0/1/2 sub<3) `area_transition_machineverify` 750+ matches, 0 mismatch; AND the
+    full node[5]==3 transition machine — phases 0/1/2/3/4 + the FUN_8004bd64/FUN_8006cba8 tail — gate-verified
+    0 mismatch by forcing a live object through each phase via the REPL (the A/B compare is valid from any
+    forced snapshot; even phase-2's real area-load re-ran deterministically). Gate-off field clean (151 nodes).
+  - **MILESTONE — per-object behavior-handler frontier CLEARED (2026-06-25).** Of the 46 distinct per-object
+    handlers exercised in headless seaside (`debug behhist`), **45 are owned native**. The only one left is
+    **0x8013C1DC** — ~x4/run, too rare to gate meaningfully.
   - **NEXT — beyond the behavior handlers:** advance the spine to the next still-PSX layer — the model-attach
     sites (FUN_80077B38 + the per-object render-record callers) so the full graphics-bind set runs native,
     the remaining case-0 prefix leaves (0x800796dc / 0x800263e8 / …), and the `game/render/` decoupled native
