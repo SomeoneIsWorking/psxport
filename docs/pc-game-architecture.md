@@ -254,6 +254,13 @@ render subsystem replaces them.
     switch->goto; signed-byte timer tests (sll v0,24;bgez) preserved. Control flow + all node/global/overlay
     writes owned native; the 3 leaves stay PSX via rec_dispatch. Verified live: `obj8013c9c0verify` 4300+
     matches, 0 mismatch (full RAM+scratchpad A/B); gate-off field clean (151 nodes, 0 bad opcode).
+  - **Behavior handler FUN_80136D9C owned native+live (2026-06-25):** added `engine/objbeh_80136d9c.cpp`
+    (~x2334/field-frame on seaside, ~90 instr). A pure CONTROL-FLOW dispatcher — owns no node writes; all
+    effects are in its 8 sub-behavior leaves. Two-level dispatch (outer node[4], inner node[5]): state 0 ->
+    FUN_80136F08; state 3 -> FUN_8007A624; state 1 conditionally calls FUN_8007778C then routes node[5] to
+    FUN_80138A64/FUN_8018CDC4/FUN_80137198/FUN_8018CA1C and finally FUN_801389C8 (gated on node[1]/node[3] and
+    area bytes 0x800BF89C/0x800E7EAA/0x800BF809). Transcribed 1:1; all leaves stay PSX via rec_dispatch.
+    Verified live: `obj80136d9cverify` 2300+ matches, 0 mismatch; gate-off field clean (151 nodes, 0 bad opcode).
   - **NEXT — extend the contiguity:** own the remaining per-object behavior handlers
     (e.g. the overlay-resident 0x801xxxxx handlers; the model-attach sites FUN_80077B38 +
     other per-object render-record callers) so the full graphics-bind set runs native; own the remaining
