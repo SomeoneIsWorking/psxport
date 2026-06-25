@@ -425,6 +425,19 @@ render subsystem replaces them.
     Transcribed 1:1 with `goto L<hex>` labels (delay-slot-faithful: branch reads pre-delay reg, delay-slot
     writes still execute). FUN_80083E80 = owned sin leaf (no GTE). Verified live: `obj80136158verify` 750+
     matches, 0 mismatch; gate-off field clean (151 nodes, 0 bad opcode).
+  - **TOOLING SHIFT (user, 2026-06-25): handlers now get REAL descriptive names + are ported from GHIDRA
+    decomp, not hand-disassembly.** All 36 prior `objbeh_<addr>.cpp` renamed to `beh_<descriptive>.cpp`
+    (guest addr kept in the header comment + BEH_FN + the dispatch case). Decompile any overlay handler to
+    readable C with `<local-notes>/skills/decomp-port/DecompDump.py` against the Ghidra project
+    `scratch/ghidra/proj/tomba2_field` (program **field_seaside.bin**, base 0x80000000, MIPS:LE:32 — NOT the
+    stale field_ram.bin which is zeros in the overlay). `DECOMP_TARGETS=<file> DECOMP_OUT=scratch/decomp/field2
+    analyzeHeadless … -process field_seaside.bin -noanalysis -postScript DecompDump.py`. DecompDump now
+    creates a function on demand when the analyzer never reached the overlay address. Don't write "NO GTE" in
+    comments (GTE paths aren't forbidden; the PC renderer just owns its own rendering).
+  - **Behavior handler FUN_8013ADBC = `beh_box_rearm_sub` owned native+live (2026-06-25, first via the Ghidra
+    flow):** 4-state machine — state 0 seeds size/box params node[0x80..0x86] + node[0x40]=30; state 1 gates
+    FUN_8013AC98 on FUN_8007778C; state 2 re-arms node[5]=node[0x5E] then FUN_8013AC98; state 3 FUN_8007A624.
+    Verified live: `box_rearm_subverify` 750+ matches, 0 mismatch; gate-off field clean (151 nodes).
   - **NEXT — extend the contiguity:** own the remaining per-object behavior handlers
     (e.g. the overlay-resident 0x801xxxxx handlers; the model-attach sites FUN_80077B38 +
     other per-object render-record callers) so the full graphics-bind set runs native; own the remaining
