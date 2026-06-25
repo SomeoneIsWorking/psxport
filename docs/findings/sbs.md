@@ -1,0 +1,8 @@
+# Findings — SBS dual-core compare harness (PSXPORT_SBS)
+
+## SBS panes render BLACK for the field (both panes all-black / region-nonzero=0)
+- **symptom:** `PSXPORT_SBS_MODE=both` dump at free-roam is all black; `PSXPORT_GPU_TRACE=1` readback shows `region-nonzero=0/76800 ... batch tri=0 tex=0 worldquads=1109` — the native core EMITS 1109 world quads but the geometry batch is empty at `grab_pane`.
+- **status:** fixed (render_queue.cpp flush diff_mode gate)
+- **cause:** `psxport_settings.ini` has `fps60=1`, so `g_fps60_on` is set. `RenderQueue::flush` (render_queue.cpp) diverted the sorted queue to `fps60.rq_capture()` and RETURNED without the inline `gpu_emit_rq_item` loop — on the assumption that `fps60_present_vk` would emit+present both interpolated halves later. But under SBS both cores set `diff_mode=1`, and `ov_frame_update` (game_tomba2.cpp:129) early-returns on `diff_mode` BEFORE `fps60_frame_commit`/present — so the captured queue was NEVER drawn. Net: world quads queued, fps60 captured them, nothing emitted them to the batch, `gpu_gpu_render_readback` rendered an empty batch = black pane. (Matches the trace exactly: worldquads>0, tex=0.)
+- **fix:** gate the fps60 capture on `!core->game->diff_mode` (render_queue.cpp flush). In diff_mode the per-core present is suppressed and the SBS composite reads the geometry batch directly via `gpu_gpu_render_readback`, so the flush must do the inline emit. Verified: both panes now full (native region-nonzero=76800/76800 tex=11382; PSX 76796/76800 tex=4497); scratch/screenshots/sbs.png.
+- **refs:** engine/render_queue.cpp flush (g_fps60_on && !diff_mode); engine/game_tomba2.cpp:129 (diff_mode early-return); runtime/recomp/sbs.cpp grab_pane; scratch/screenshots/sbs.png

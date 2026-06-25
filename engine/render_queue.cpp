@@ -215,8 +215,14 @@ void RenderQueue::flush(Core* core) {
   // fps60: the interpolated-60fps tier OWNS presentation — it needs to emit this frame TWICE (the lerped
   // in-between, then the real frame), so it must hold the items rather than have flush emit them now.
   // Snapshot the sorted queue to it and skip the inline emit; fps60_present_vk emits + presents both.
+  // BUT only when this core actually presents per-frame: under diff_mode (the SBS dual-core compare) the
+  // per-core present is suppressed (ov_frame_update early-returns on diff_mode), so fps60_present_vk NEVER
+  // runs — capturing here would leave the captured queue undrawn and the geometry batch EMPTY, which is
+  // exactly why the SBS panes rendered black (worldquads queued, batch tex=0). In diff_mode the SBS
+  // composite reads the geometry batch directly via gpu_gpu_render_readback, so the flush MUST do the
+  // inline emit to fill that batch. Gate the fps60 capture on !diff_mode.
   extern int g_fps60_on;
-  if (g_fps60_on) { core->game->fps60.rq_capture(items, n); mark_consumed(); return; }
+  if (g_fps60_on && !core->game->diff_mode) { core->game->fps60.rq_capture(items, n); mark_consumed(); return; }
   if (!n) { mark_consumed(); return; }
   for (int i = 0; i < n; i++) gpu_emit_rq_item(core, &items[i]);
   mark_consumed();
