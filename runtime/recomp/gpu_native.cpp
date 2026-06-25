@@ -1799,6 +1799,14 @@ void gpu_dma2_linked_list(Core* core, uint32_t madr) { core->game->gpu.gpu_dma2_
 void gpu_dma2_block(Core* core, uint32_t madr, int count, int to_gpu) { core->game->gpu.gpu_dma2_block(core, madr, count, to_gpu); }
 void gpu_present(Core* core) { core->game->gpu.gpu_present(core); }
 void gpu_present_ex(Core* core, int do_blit) { core->game->gpu.gpu_present_ex(core, do_blit); }
+// PSXPORT_SBS accessors: each core's CPU front-buffer (s_vram) + its current display region, so the SBS
+// composite can present each core's frame into its own pane (gpu_vk_present_sbs). GpuState is a plain
+// struct (all-public), so these reach the members directly.
+const uint16_t* gpu_vram_ptr(Core* core) { return core->game->gpu.s_vram; }
+void gpu_disp_region(Core* core, int* sx, int* sy, int* w, int* h) {
+  GpuState& g = core->game->gpu;
+  if (sx) *sx = g.s_disp_x; if (sy) *sy = g.s_disp_y; if (w) *w = g.s_disp_w; if (h) *h = g.s_disp_h;
+}
 void gpu_clear_display(Core* core) { core->game->gpu.gpu_clear_display(core); }
 void gpu_blank_display(Core* core) { core->game->gpu.gpu_blank_display(); }
 void gpu_fps60_present_pass(Core* core) { core->game->gpu.gpu_fps60_present_pass(core); }

@@ -73,6 +73,10 @@ struct GpuVkState {
   void stats(int* tri, int* tex, int* semi);
   void dirty(int x, int y, int w, int h);
   void present(const uint16_t* src, int sx, int sy, int w, int h);
+  // PSXPORT_SBS: composite TWO different cores' frames (already emitted into batches 0 and 1) into the
+  // two side-by-side panes in ONE window frame. vramA/vramB are each core's CPU VRAM; each is uploaded to
+  // its own staging buffer + panel so the two panes show the two cores. One acquire/cmd/submit/present.
+  void present_sbs(const uint16_t* vramA, const uint16_t* vramB, int sx, int sy, int w, int h);
   void draw_tri(int x0,int y0,int r0,int g0,int b0, int x1,int y1,int r1,int g1,int b1,
                 int x2,int y2,int r2,int g2,int b2);
   void draw_tritri(const int* xs, const int* ys, const int* us, const int* vs,

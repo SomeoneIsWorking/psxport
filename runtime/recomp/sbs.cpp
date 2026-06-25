@@ -6,22 +6,39 @@
 //   both:               A = full native (native gp + native render),  B = full PSX (PSX gp + PSX render)
 // Select with PSXPORT_SBS_MODE=render|gameplay|both.
 //
-// Both cores navigate to the gameplay-START flag INDEPENDENTLY (their load timing differs — FMV/loads), a
-// BARRIER (user: "whoever reaches the flag waits for the other"): only once BOTH are at gameplay-start does
-// the lockstep begin, so the cores are compared in equal state, never tripping on boot/FMV/load desync.
+// TRUE side-by-side, CONCURRENT FROM BOOT (user, 2026-06-25): both cores boot IN LOCKSTEP — stepped one
+// frame each per iteration and PRESENTED to two side-by-side panes every frame (pane 0 = A/left, pane 1 =
+// B/right) — so the user watches both boot at once, never a frozen pane while the other loads. The old
+// SEQUENTIAL navigate(A)-then-navigate(B) (which froze A's pane while B booted) is GONE. This is safe now
+// only because EVERY per-machine subsystem is per-instance: GTE/SPU/MDEC (BindState) AND the CD layer —
+// CD-controller registers (cdc_native.c CdcState/cdc_bind) + the XA streamer (xa_stream.c XaState/xa_bind),
+// the remaining shared-singleton blocker the user called out; the read-only CHD/disc image stays shared by
+// design. Each core's frame EMITS into its OWN VK geometry batch (step_core sets gpu_vk_select_target) and
+// uploads its OWN VRAM to its pane (gpu_vk_present_sbs: a separate staging buffer per pane); ONE acquire/
+// command-buffer/submit/present per window frame, so the two cores never collide on the single VK present.
+// Each core's auto-skip stops injecting input once IT reaches free-roam ("pause at goal") but keeps running
+// (rendering) so the user can drive it. The dual-pane present is via g_dualview's panel machinery, but with
+// TWO DIFFERENT CORES instead of one core rendered twice (g_sbs forces 2 targets + skips the in-engine
+// dualview second pass). Two cores feed the SAME host input each frame (mirrored).
 //
-// Each lockstep frame: feed both cores the SAME host input, step both, then DIFF the guest RAM region +
-// scratchpad (legit render-only regions excluded). The FIRST divergence PAUSES the loop and is held for
-// inspection over the debug server (PSXPORT_DEBUG_SERVER, tools/dbgclient.py):
+// Diff/inspection: each lockstep frame, after presenting, DIFF the guest RAM region + scratchpad (legit
+// render-only regions excluded). The FIRST divergence PAUSES the loop, held for inspection over the debug
+// server (PSXPORT_DEBUG_SERVER, tools/dbgclient.py):
 //   sbs                 status: mode, frame, selected core, divergence summary, watch state
 //   sbs diff            the divergence detail (frame, first diverging addr/range, A bytes vs B bytes)
 //   sbs bt              guest stack backtrace of BOTH cores at the divergence (frame-boundary)
 //   sbs watch           arm a write-watchpoint on the diverging address; on `sbs resume`, the WRITE that
 //                       diverges pauses mid-frame with the EXACT guest backtrace of each writing core
-//   sbs show a|b        which core the window displays AND which core r/rw/ents/node/scene/etc target
+//   sbs show a|b        which core r/rw/ents/node/scene/etc target (BOTH panes always show; this only
+//                       selects which core the debug-server inspection commands act on)
 //   sbs resume          unpause;   sbs step [n]   advance n lockstep frames then re-pause
-// The window shows the SELECTED core live; drive BOTH with the host keyboard (mirrored automatically since
-// each core reads the same host pad each frame). r/rw/ents/... operate on the selected core (use `sbs show`).
+// Both panes are always live; drive BOTH with the host keyboard (each core reads the same host pad each
+// frame). r/rw/ents/... operate on the selected core (use `sbs show`).
+//
+// Modes (PSXPORT_SBS_MODE=render|gameplay|both):
+//   render   (default): A = native gameplay + NATIVE render,  B = native gameplay + PSX render
+//   gameplay:           A = native gameplay,  B = PSX gameplay (psx_fallback); render IDENTICAL (PSX) on both
+//   both:               A = full native (native gp + native render),  B = full PSX (PSX gp + PSX render)
 //
 // Diagnostic, not behavior (one PC-native game ships; this is a debugger). Like dualcore.cpp it owns its
 // own Game instances and never returns (the process exits when the window closes).
@@ -49,6 +66,18 @@ extern "C" void watchdog_disable(void);   // SBS pauses indefinitely on a diverg
 extern "C" void guest_backtrace_to(Core* c, FILE* out);
 extern "C" int  g_render_psx;                 // engine_render.cpp — 0 = native render walks, 1 = PSX recomp render
 extern void (*g_store_watch_cb)(Core*, uint32_t a, uint32_t v);   // mem.cpp — armed write-watch callback
+extern "C" int  g_sbs;                        // PSXPORT_SBS: forces 2 VK render targets + skips the in-engine dualview pass
+// PSXPORT_SBS two-core composite present + per-core front-buffer/display-region accessors (gpu_vk.cpp/gpu_native.cpp).
+void gpu_vk_present_sbs(Core* coreA, const uint16_t* vramA, const uint16_t* vramB, int sx, int sy, int w, int h);
+void gpu_vk_select_target(int t);
+void gpu_vk_frame_end(Core* core, const uint16_t* svram, int frame);   // gpu_native.cpp -> resets both VK batches
+const uint16_t* gpu_vram_ptr(Core* core);
+void gpu_disp_region(Core* core, int* sx, int* sy, int* w, int* h);
+
+// PSXPORT_SBS marker, DEFINED here (sbs.cpp owns the harness). gpu_vk.cpp forces 2 VK render targets when
+// set, and native_boot.cpp skips the in-engine dualview second pass (core B fills target 1 instead). 0
+// outside the SBS harness, so the single-core game and the dualview path are completely unaffected.
+extern "C" { int g_sbs = 0; }
 
 namespace {
 
@@ -65,9 +94,10 @@ int      s_sel  = 0;                            // 0 = A, 1 = B (window + debug-
 uint32_t s_lo   = 0x800B0000u, s_hi = 0x80110000u;
 uint32_t s_frame = 0;                           // lockstep frame counter (since gameplay-start barrier)
 
-// GTE state is now PER-INSTANCE (game.h GteRegs; bound per core frame-step in native_step_frame via
-// gte_bind) — two cores keep separate GTE registers, so the old save/restore shadow is unnecessary.
-// SPU/MDEC follow the same path as they de-globalize.
+// ALL per-machine state is PER-INSTANCE now (bound per core frame-step in native_step_frame): GTE (gte_bind),
+// SPU (spu_bind), MDEC (mdec_bind), and the CD layer — CD-controller registers (cdc_bind) + XA streamer
+// (xa_bind). Two cores keep entirely separate machine state, so there is no save/restore shadow and
+// concurrent boot through FMV/loads is safe. The CHD/disc image is read-only data, shared by design.
 
 // --- divergence record (frame-boundary RAM/scratchpad diff) ---
 bool     s_div_found = false;
@@ -133,16 +163,28 @@ void apply_mode(int which) {
   }
 }
 
-void navigate(Game* g, const char* tag) {
-  Nav nv;
-  g->core.game->diff_mode = 0;                 // present this core's boot to the window
-  apply_mode(g == g_a ? 0 : 1);
-  for (uint32_t f = 0; f < 6000; f++) {
-    dbg_server_service(&g->core);
-    if (nav_step(&g->core, nv, f, tag)) return;
-    dc_step_frame(&g->core, f);
+void step_core(Game* g, int which);   // defined below (steps one core into its pane's batch, no present)
+void present_both();                  // defined below (one window present: pane 0 = A, pane 1 = B)
+
+// CONCURRENT navigation: step BOTH cores toward gameplay-start IN LOCKSTEP (one frame each per iteration)
+// and present BOTH panes every frame — so the user watches both cores boot side by side from frame 0. Both
+// cores are ALWAYS stepped (so each keeps RENDERING its pane); nav_step only injects the auto-skip INPUT,
+// and stops once that core reaches free-roam ("pause at goal" = stop auto-driving, not stop running). This
+// replaces the old sequential navigate(A) then navigate(B) that froze A's pane while B booted. Returns once
+// BOTH have reached gameplay-start (or the cap). After this the main lockstep loop takes over (user input).
+void navigate_both() {
+  Nav na, nb;
+  bool da = false, db = false;
+  for (uint32_t f = 0; f < 12000 && !(da && db); f++) {
+    dbg_server_service(s_sel ? &g_b->core : &g_a->core);
+    if (!da && nav_step(&g_a->core, na, f, "A(left)"))  da = true;   // A reached free-roam: stop auto-input
+    if (!db && nav_step(&g_b->core, nb, f, "B(right)")) db = true;   // B reached free-roam: stop auto-input
+    step_core(g_a, 0);   // ALWAYS step + render both, every frame (a done core idles at free-roam)
+    step_core(g_b, 1);
+    present_both();
   }
-  fprintf(stderr, "[sbs] %s did NOT reach gameplay-start within 6000 frames\n", tag);
+  if (!da) fprintf(stderr, "[sbs] A(left) did NOT reach gameplay-start within 12000 frames\n");
+  if (!db) fprintf(stderr, "[sbs] B(right) did NOT reach gameplay-start within 12000 frames\n");
 }
 
 // Scratchpad is the 1 KB window 0x1F800000..0x1F8003FF — NOT "addr >= 0x1F800000" (KSEG0 RAM 0x80xxxxxx
@@ -175,10 +217,23 @@ void check_divergence() {
   for (uint32_t i = 0; i < 0x400; i++) if (g_a->core.scratch[i] != g_b->core.scratch[i]) { record_divergence(0x1F800000u + i); return; }
 }
 
+// Step ONE core's frame for the SBS composite: diff_mode=1 suppresses its OWN per-core present/pace/audio
+// (the SBS loop owns the single window present), sbs_render=1 re-enables the render-submit so it EMITS its
+// geometry into VK batch `which` (gpu_vk_select_target). Neither core presents; the SBS composite does.
 void step_core(Game* g, int which) {
-  g->core.game->diff_mode = (which == s_sel) ? 0 : 1;   // only the selected core presents to the window
+  g->core.game->diff_mode  = 1;
+  g->core.game->sbs_render = 1;
   apply_mode(which);
-  dc_step_frame(&g->core, s_frame);   // native_step_frame binds THIS core's per-instance GTE (gte_bind)
+  gpu_vk_select_target(which);        // A -> batch 0 (left pane), B -> batch 1 (right pane)
+  dc_step_frame(&g->core, s_frame);   // native_step_frame binds THIS core's per-instance GTE/SPU/MDEC/CD
+}
+
+// Composite both cores into the window: pane 0 = core A's VRAM+batch, pane 1 = core B's VRAM+batch, ONE
+// present. Then reset BOTH VK batches for the next frame (frame_end resets s_gb[0] and s_gb[1]).
+void present_both() {
+  int sx, sy, w, h; gpu_disp_region(&g_a->core, &sx, &sy, &w, &h);   // both cores share the same scene/region
+  gpu_vk_present_sbs(&g_a->core, gpu_vram_ptr(&g_a->core), gpu_vram_ptr(&g_b->core), sx, sy, w, h);
+  gpu_vk_frame_end(&g_a->core, gpu_vram_ptr(&g_a->core), (int)s_frame);   // reset both geometry batches
 }
 
 } // namespace
@@ -255,6 +310,7 @@ void sbs_run(const char* exe_path) {
   { const char* e = getenv("PSXPORT_SBS_LO"); if (e && *e) s_lo = (uint32_t)strtoul(e, 0, 0); }
   { const char* e = getenv("PSXPORT_SBS_HI"); if (e && *e) s_hi = (uint32_t)strtoul(e, 0, 0); }
   g_store_watch_cb = sbs_store_cb;
+  g_sbs = 1;            // two render targets (s_ntgt=2) + skip the in-engine dualview second pass (it's core B's job)
 
   // psx_fallback per mode: gameplay/both run PSX gameplay on core B; render runs native gameplay on both.
   int fb_b = (s_mode == M_RENDER) ? 0 : 1;
@@ -271,11 +327,11 @@ void sbs_run(const char* exe_path) {
 
   dbg_server_start(&g_a->core);   // PSXPORT_DEBUG_SERVER — inspect/control the harness live
 
-  // BARRIER: navigate each core to gameplay-start independently (their boot/FMV/load timing differs), then
-  // compare in equal state. We run A's nav fully, then B's (the Beetle GTE/MDEC singletons make concurrent
-  // boot unsafe; sequential nav is fine). After this, both are at the gameplay-start flag.
-  navigate(g_a, "A(left)");
-  navigate(g_b, "B(right)");
+  // CONCURRENT boot to gameplay-start: step BOTH cores in lockstep, presenting both panes every frame, so
+  // the user watches both boot side by side and each PAUSES its auto-input at free-roam while the other
+  // catches up (CD/GTE/SPU/MDEC are now all per-instance, so concurrent boot is safe — see *_bind). After
+  // both reach free-roam the main lockstep loop below takes over (driven by host/server input).
+  navigate_both();
   fprintf(stderr, "[sbs] both cores at gameplay-start — LOCKSTEP begins. Drive with the window; inspect via the debug server.\n");
 
   for (;;) {
@@ -287,6 +343,7 @@ void sbs_run(const char* exe_path) {
     s_ww_hit = 0;
     step_core(g_a, 0);
     step_core(g_b, 1);
+    present_both();                          // ONE window present: pane 0 = core A, pane 1 = core B
 
     if (s_ww_armed && s_ww_hit) {            // the diverging write fired — pause with the exact site captured
       fprintf(stderr, "[sbs] write-watch caught 0x%08X (A=%08X B=%08X) at frame %u — paused; see `sbs bt`.\n",

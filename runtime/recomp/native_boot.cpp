@@ -381,6 +381,7 @@ extern "C" void perf_frame_begin(void), perf_mark_pre(void), perf_frame_end(void
 // PSX render pass runs from this; "post" = the real post-frame canonical state, restored after the PSX
 // pass so the running game is unaffected by the extra render. See native_step_frame's dual-view block.
 extern "C" int g_dualview;       // defined in engine_render.cpp
+extern "C" int g_sbs;            // defined in sbs.cpp (PSXPORT_SBS two-core side-by-side harness)
 extern "C" { int g_dv_have_pre = 0; }
 static uint8_t  s_dv_pre_ram[0x200000],  s_dv_post_ram[0x200000];
 static uint8_t  s_dv_pre_spad[0x400],    s_dv_post_spad[0x400];
@@ -415,11 +416,19 @@ static void mdec_bind(Core* c) {
   MDEC_BindState(c->game->mdec_state);
   if (!c->game->mdec_powered) { MDEC_Power(); c->game->mdec_powered = 1; }
 }
+// Bind THIS core's per-instance CD-controller (cdc_native.c) and XA streamer (xa_stream.c) state, so two
+// cores (native vs PSX-recomp) keep SEPARATE CD state — the recomp core busy-polls the CD registers /
+// streams XA, the native core mostly bypasses them via cd_override. Plain-C BindState (cdc_state.h /
+// xa_state.h), same per-frame-step contract as gte/spu/mdec.
+static void cdc_bind(Core* c) { cdc_bind_state(&c->game->cdc); }   // decls in cdc_state.h (via game.h, extern "C")
+static void xa_bind(Core* c)  { xa_bind_state(&c->game->xa); }     // decls in xa_state.h  (via game.h, extern "C")
 
 static void native_step_frame(Core* c, uint32_t f) {
   void gte_bind(Core*); gte_bind(c);   // bind THIS core's GTE register file (per-instance — no shared GTE)
   spu_bind(c);                          // bind THIS core's SPU state (per-instance — no shared SPU)
   mdec_bind(c);                         // bind THIS core's MDEC state (per-instance — no shared MDEC)
+  cdc_bind(c);                          // bind THIS core's CD-controller registers (per-instance — no shared CD)
+  xa_bind(c);                           // bind THIS core's XA streamer state (per-instance — no shared XA)
   void hle_deliver_event(Core* c, uint32_t ev_class, uint32_t spec);
   ffspan_reset_frame();   // backdrop-attribution: reset the per-frame builder span table
   void pad_service_frame(Core*);
@@ -479,7 +488,10 @@ static void native_step_frame(Core* c, uint32_t f) {
   // that depended on the two structs lining up). One fixed page, drawn and displayed; nothing PSX in the
   // display path. (env0's draw area starts at VRAM (0,0); the display W/H stay as the boot env's mode set.)
   // Dual-core diff mode skips the whole display/OT-submit block (host render output, shared VK singleton).
-  if (!c->game->diff_mode && c->mem_r16(0x1f80019c) == 0) {
+  // SBS: both cores set diff_mode=1 (suppress per-core present at the engine frame tail) but ALSO
+  // sbs_render=1 to re-enable THIS render-submit block, so each core EMITS its geometry into its own VK
+  // batch (the SBS composite then draws each into its pane). So gate on "not-diff-mode OR sbs_render".
+  if ((!c->game->diff_mode || c->game->sbs_render) && c->mem_r16(0x1f80019c) == 0) {
     rc1(c, 0x800815d0, envp + 0x2014);                        // PutDrawEnv (draw area/offset/clip for page 0)
     gpu_set_disp_origin(c, 0, 0);                             // PC-native: present scans the page we draw
     // DrawOTag, PC-native: call ov_draw_otag DIRECTLY (top-down) instead of interpreting the PSX FUN_80081560.
@@ -496,7 +508,9 @@ static void native_step_frame(Core* c, uint32_t f) {
     // so the canonical game (which includes the post-render per-frame area update) is undisturbed.
     extern int g_dualview, g_dv_have_pre; extern void gpu_vk_select_target(int);
     extern void dv_capture_post(Core*), dv_restore_pre(Core*), dv_restore_post(Core*);
-    if (g_dualview && g_dv_have_pre) {
+    // SBS owns BOTH panes (core A | core B); its target-1 batch is core B's render, NOT a PSX re-render of
+    // THIS core — so skip the in-engine dualview second pass. g_sbs declared at file scope below.
+    if (g_dualview && g_dv_have_pre && !g_sbs) {
       void ov_draw_otag(Core*);
       dv_capture_post(c);            // save the real post-frame canonical state
       dv_restore_pre(c);             // rewind to the pre-render (post-gameplay) state the PSX pass needs
@@ -1073,13 +1087,15 @@ static void ov_game_init(Core* c) {
 
 // Dual-core harness hooks (dualcore.cpp): boot a core to the start of the frame loop, then step it one
 // frame at a time. dc_boot_init = crt0 setup + the init prefix/bootstrap; dc_step_frame = one frame.
-void dc_boot_init(Core* c) { void gte_bind(Core*); gte_bind(c); spu_bind(c); mdec_bind(c); crt0_setup(c); ov_game_init(c); }
+void dc_boot_init(Core* c) { void gte_bind(Core*); gte_bind(c); spu_bind(c); mdec_bind(c); cdc_bind(c); xa_bind(c); crt0_setup(c); ov_game_init(c); }
 void dc_step_frame(Core* c, uint32_t f) { native_step_frame(c, f); }
 
 static void ov_game_main(Core* c) {
   void gte_bind(Core*); gte_bind(c);   // bind this core's GTE before the init prefix / frame loop
   spu_bind(c);                          // and this core's SPU
   mdec_bind(c);                         // and this core's MDEC
+  cdc_bind(c);                          // and this core's CD-controller registers
+  xa_bind(c);                           // and this core's XA streamer
   ov_game_init(c);
   // --- native frame loop (replaces LAB_80050c6c). Per frame, faithful to the game-main loop
   // body but with the scheduler call FUN_80051e60 replaced by native stage stepping (added

@@ -164,9 +164,16 @@ struct Panel {
 static Panel s_panels[2];
 static int   s_npanels = 1;
 
-static VkBuffer        s_stage;
-static VkDeviceMemory  s_stage_mem;
-static void*           s_stage_ptr;
+// VRAM staging (host-visible). Index 0 is the normal single-core / dual-view buffer. Index 1 exists ONLY
+// for PSXPORT_SBS, where the two panes show TWO DIFFERENT cores' VRAM: each pane's upload + its texture
+// snapshot must source the matching core's buffer, so we cannot reuse one staging buffer (the GPU reads it
+// at submit time, after both memcpys land). s_upload_src selects which buffer panel_upload/panel_render
+// read; it stays 0 for everything except the SBS composite, where it is flipped per pane.
+static VkBuffer        s_stage[2];
+static VkDeviceMemory  s_stage_mem[2];
+static void*           s_stage_ptr[2];
+static int             s_stage_b_made = 0;   // index-1 buffer allocated yet (lazily, only when SBS asks)
+static int             s_upload_src = 0;     // which s_stage[] panel_upload/panel_render read (0 normally)
 static VkDeviceSize    s_stage_sz;
 static VkBuffer        s_rb;          // readback buffer (VRAM image -> host, for VK-vs-SW diff)
 static VkDeviceMemory  s_rb_mem;
@@ -207,6 +214,7 @@ static int    s_dirty_n = 0;
 static int s_tgt = 0;          // which batch the emit path accumulates into (0=native, 1=psx)
 static int s_ntgt = 1;         // live batch count this frame (2 in dual-view)
 extern "C" int g_dualview;     // dual-view side-by-side native-vs-PSX render (native_boot REPL `dualview`)
+extern "C" int g_sbs;          // PSXPORT_SBS two-core side-by-side (sbs.cpp) — also forces 2 render targets
 #define BIND_BATCH() GeomBatch& _gb = s_gb[s_tgt]; \
   int& s_tri_n = _gb.tri_n; int& s_tex_n = _gb.tex_n; int& s_semi_n = _gb.semi_n; \
   VkBuffer& s_vbuf = _gb.vbuf; VkBuffer& s_tvbuf = _gb.tvbuf; VkBuffer& s_semibuf = _gb.semibuf; \
@@ -602,7 +610,7 @@ static void recreate_swapchain(void) {
 
 static void init_vk(void) {
   s_inited = 1;
-  s_ntgt = g_dualview ? 2 : 1;   // dual-view: allocate + draw two geometry batches (native | PSX)
+  s_ntgt = (g_dualview || g_sbs) ? 2 : 1;   // dual-view OR SBS: allocate + draw two geometry batches
   mods_init();   // seed the live mod state from cfg before any ssao_on()/ui_infra() decision below
   // instance extensions: SDL surface exts (+ portability enumeration if the loader has it). Headless
   // (offscreen) needs no window/surface extensions at all.
@@ -882,14 +890,14 @@ static void create_vram(void) {
   s_stage_sz = (VkDeviceSize)VRAM_W * VRAM_H * 2;   // uint16 per texel
   VkBufferCreateInfo bi = { VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO };
   bi.size = s_stage_sz; bi.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT; bi.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-  VKC(vkCreateBuffer(s_dev, &bi, 0, &s_stage));
-  VkMemoryRequirements br; vkGetBufferMemoryRequirements(s_dev, s_stage, &br);
+  VKC(vkCreateBuffer(s_dev, &bi, 0, &s_stage[0]));
+  VkMemoryRequirements br; vkGetBufferMemoryRequirements(s_dev, s_stage[0], &br);
   VkMemoryAllocateInfo bm = { VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO };
   bm.allocationSize = br.size; bm.memoryTypeIndex = mem_type(br.memoryTypeBits,
       VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-  VKC(vkAllocateMemory(s_dev, &bm, 0, &s_stage_mem));
-  VKC(vkBindBufferMemory(s_dev, s_stage, s_stage_mem, 0));
-  VKC(vkMapMemory(s_dev, s_stage_mem, 0, s_stage_sz, 0, &s_stage_ptr));
+  VKC(vkAllocateMemory(s_dev, &bm, 0, &s_stage_mem[0]));
+  VKC(vkBindBufferMemory(s_dev, s_stage[0], s_stage_mem[0], 0));
+  VKC(vkMapMemory(s_dev, s_stage_mem[0], 0, s_stage_sz, 0, &s_stage_ptr[0]));
 
   VkDescriptorImageInfo di = { s_sampler, s_tex_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
   VkWriteDescriptorSet wr = { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
@@ -994,7 +1002,7 @@ void GpuVkState::panel_upload(Panel* p) {
     VkBufferImageCopy bc = {0};
     bc.imageSubresource = (VkImageSubresourceLayers){ VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
     bc.imageExtent = (VkExtent3D){ VRAM_W, VRAM_H, 1 };
-    vkCmdCopyBufferToImage(s_cmd, s_stage, p->color, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &bc);
+    vkCmdCopyBufferToImage(s_cmd, s_stage[s_upload_src], p->color, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &bc);
     if (s_vkprof > 0 && p == &s_panels[0]) s_vp_full_uploads++;   // vkprof: a FULL 1MB image upload happened
   } else {
     if (s_vkprof > 0 && p == &s_panels[0]) {   // vkprof: per-frame dirty-region upload volume (panel 0 only)
@@ -1009,7 +1017,7 @@ void GpuVkState::panel_upload(Panel* p) {
       r.imageSubresource = (VkImageSubresourceLayers){ VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
       r.imageOffset = (VkOffset3D){ s_dirty[d].x, s_dirty[d].y, 0 };
       r.imageExtent = (VkExtent3D){ (uint32_t)s_dirty[d].w, (uint32_t)s_dirty[d].h, 1 };
-      vkCmdCopyBufferToImage(s_cmd, s_stage, p->color, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &r);
+      vkCmdCopyBufferToImage(s_cmd, s_stage[s_upload_src], p->color, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &r);
     }
   }
   p->color_undef = 0;
@@ -1036,7 +1044,7 @@ void GpuVkState::panel_render(Panel* p) {
                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
                    VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_SHADER_READ_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
     s_vram_tex_undef = 0;
-    vkCmdCopyBufferToImage(s_cmd, s_stage, s_vram_tex, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &bc);
+    vkCmdCopyBufferToImage(s_cmd, s_stage[s_upload_src], s_vram_tex, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &bc);
     img_barrier_on(s_vram_tex, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                    VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
                    VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
@@ -1512,7 +1520,7 @@ void GpuVkState::present(const uint16_t* src, int sx, int sy, int w, int h) {
   // M2+ will draw into this image directly and skip the upload for drawn regions). The display region
   // [sx,sy,w,h] is selected at sample time via the present push constant.
   double t_up = vp ? now_ms() : 0;
-  memcpy(s_stage_ptr, src, (size_t)VRAM_W * VRAM_H * 2);
+  memcpy(s_stage_ptr[0], src, (size_t)VRAM_W * VRAM_H * 2);   // single-core / dual-view: staging buffer 0
   if (vp) s_vp_upload_ms += now_ms() - t_up;
 
   VKC(vkWaitForFences(s_dev, 1, &s_fence, VK_TRUE, UINT64_MAX));
@@ -1640,6 +1648,115 @@ void GpuVkState::present(const uint16_t* src, int sx, int sy, int w, int h) {
   else if (pres != VK_SUCCESS) { fprintf(stderr, "[gpu_vk] present %d\n", pres); exit(2); }
   if (vp) { s_vp_submit_ms += now_ms() - t_sub; vkprof_tick(); }
 
+  poll_quit();
+}
+
+// Lazily allocate the SECOND VRAM staging buffer (index 1), used only by the SBS composite so the two
+// panes can each upload a DIFFERENT core's VRAM. Same size/usage/memory as s_stage[0].
+static void sbs_stage_b_ensure() {
+  if (s_stage_b_made) return;
+  VkBufferCreateInfo bi = { VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO };
+  bi.size = s_stage_sz; bi.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT; bi.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+  VKC(vkCreateBuffer(s_dev, &bi, 0, &s_stage[1]));
+  VkMemoryRequirements br; vkGetBufferMemoryRequirements(s_dev, s_stage[1], &br);
+  VkMemoryAllocateInfo bm = { VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO };
+  bm.allocationSize = br.size; bm.memoryTypeIndex = mem_type(br.memoryTypeBits,
+      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+  VKC(vkAllocateMemory(s_dev, &bm, 0, &s_stage_mem[1]));
+  VKC(vkBindBufferMemory(s_dev, s_stage[1], s_stage_mem[1], 0));
+  VKC(vkMapMemory(s_dev, s_stage_mem[1], 0, s_stage_sz, 0, &s_stage_ptr[1]));
+  s_stage_b_made = 1;
+}
+
+// PSXPORT_SBS two-core composite: pane 0 shows core A (VRAM vramA, geometry batch s_gb[0]); pane 1 shows
+// core B (VRAM vramB, geometry batch s_gb[1]). Both cores have ALREADY emitted their geometry into their
+// batch this lockstep frame (sbs.cpp set s_tgt per core before stepping). This records BOTH panel uploads
+// + renders + the side-by-side composite into ONE command buffer and submits/presents ONCE — so there is
+// no per-core present collision on the single s_cmd/s_fence/swapchain image. Mirrors present()'s structure
+// but uses a SEPARATE staging buffer per pane (the GPU reads staging at submit time, so one buffer can't
+// hold two different VRAMs). Always 2 panes; this is a debugger, so it ignores the wide/use_fb 3D-FB path
+// and presents each pane's native 4:3 display region (the SBS field both cores render is 3D into VRAM, and
+// for a debugger a faithful 1:1 of each core's display region side-by-side is exactly what we want).
+void GpuVkState::present_sbs(const uint16_t* vramA, const uint16_t* vramB, int sx, int sy, int w, int h) {
+  if (!gpu_vk_enabled()) return;
+  if (!s_inited) init_vk();
+  if (s_headless) return;          // SBS is an interactive windowed debugger; nothing to present headless
+  wide_init();
+  sbs_stage_b_ensure();
+  overlay_glue_frame_begin(&game->core);
+
+  // Stage BOTH cores' VRAM up front into their own buffers (so each pane's GPU-side copy reads the right one).
+  memcpy(s_stage_ptr[0], vramA, (size_t)VRAM_W * VRAM_H * 2);
+  memcpy(s_stage_ptr[1], vramB, (size_t)VRAM_W * VRAM_H * 2);
+
+  VKC(vkWaitForFences(s_dev, 1, &s_fence, VK_TRUE, UINT64_MAX));
+
+  uint32_t idx = 0;
+  VkExtent2D now = surface_extent_now();
+  if (s_swap_dirty || ((now.width != s_extent.width || now.height != s_extent.height) && now.width && now.height)) {
+    s_swap_dirty = 0; recreate_swapchain(); return;   // skip this SBS frame; next one renders at the new size
+  }
+  VkResult acq = vkAcquireNextImageKHR(s_dev, s_swap, UINT64_MAX, s_sem_acq, VK_NULL_HANDLE, &idx);
+  if (acq == VK_ERROR_OUT_OF_DATE_KHR) { recreate_swapchain(); return; }
+  if (acq != VK_SUCCESS && acq != VK_SUBOPTIMAL_KHR) { fprintf(stderr, "[gpu_vk] sbs acquire %d\n", acq); exit(2); }
+  VKC(vkResetFences(s_dev, 1, &s_fence));
+
+  VKC(vkResetCommandBuffer(s_cmd, 0));
+  VkCommandBufferBeginInfo bi = { VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO };
+  bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+  VKC(vkBeginCommandBuffer(s_cmd, &bi));
+
+  // Record each pane's panel from its OWN staging buffer + batch. Force a FULL upload each frame
+  // (color_undef): the shared dirty-rect list can't describe two different VRAMs, and a debugger can
+  // afford two 1 MB copies. s_upload_src selects which staging buffer panel_upload/panel_render read.
+  s_npanels = 2;
+  for (int p = 0; p < 2; p++) {
+    s_tgt = p; s_upload_src = p; s_panels[p].color_undef = 1;
+    panel_upload(&s_panels[p]);
+    panel_render(&s_panels[p]);
+  }
+  s_tgt = 0; s_upload_src = 0;
+
+  VkClearValue clear = {{{0, 0, 0, 1}}};
+  VkRenderPassBeginInfo rp = { VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
+  rp.renderPass = s_rpass; rp.framebuffer = s_swap_fb[idx];
+  rp.renderArea.extent = s_extent; rp.clearValueCount = 1; rp.pClearValues = &clear;
+  vkCmdBeginRenderPass(s_cmd, &rp, VK_SUBPASS_CONTENTS_INLINE);
+
+  int aw = 4, ah = 3;   // each pane letterboxes its native display region 4:3 (debugger faithful)
+  int ow = s_extent.width, oh = s_extent.height, npanes = 2;
+  VkRect2D sc = { {0, 0}, s_extent };
+  vkCmdSetScissor(s_cmd, 0, 1, &sc);
+  vkCmdBindPipeline(s_cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, s_pipe);
+  int32_t disp[4] = { sx, sy, w, h };
+  vkCmdPushConstants(s_cmd, s_pll, VK_SHADER_STAGE_FRAGMENT_BIT, 0, 16, disp);
+  int32_t fade[4] = { s_fade_mode, s_fade_r, s_fade_g, s_fade_b };
+  vkCmdPushConstants(s_cmd, s_pll, VK_SHADER_STAGE_FRAGMENT_BIT, 48, 16, fade);
+  for (int p = 0; p < npanes; p++) {
+    int paneW = ow / npanes, paneX = p * paneW, dw, dh;
+    if (paneW * ah >= oh * aw) { dh = oh; dw = oh * aw / ah; } else { dw = paneW; dh = paneW * ah / aw; }
+    VkViewport vpt = { (float)(paneX + (paneW - dw) / 2), (float)((oh - dh) / 2), (float)dw, (float)dh, 0.0f, 1.0f };
+    vkCmdSetViewport(s_cmd, 0, 1, &vpt);
+    vkCmdBindDescriptorSets(s_cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, s_pll, 0, 1, &s_panels[p].dset_present, 0, 0);
+    vkCmdDraw(s_cmd, 3, 1, 0, 0);
+  }
+  overlay_glue_record(s_cmd, idx, s_extent);
+  vkCmdEndRenderPass(s_cmd);
+  VKC(vkEndCommandBuffer(s_cmd));
+
+  VkPipelineStageFlags wait = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+  VkSubmitInfo su = { VK_STRUCTURE_TYPE_SUBMIT_INFO };
+  su.waitSemaphoreCount = 1; su.pWaitSemaphores = &s_sem_acq; su.pWaitDstStageMask = &wait;
+  su.commandBufferCount = 1; su.pCommandBuffers = &s_cmd;
+  su.signalSemaphoreCount = 1; su.pSignalSemaphores = &s_sem_rel[idx];
+  VKC(vkQueueSubmit(s_queue, 1, &su, s_fence));
+
+  VkPresentInfoKHR pr = { VK_STRUCTURE_TYPE_PRESENT_INFO_KHR };
+  pr.waitSemaphoreCount = 1; pr.pWaitSemaphores = &s_sem_rel[idx];
+  pr.swapchainCount = 1; pr.pSwapchains = &s_swap; pr.pImageIndices = &idx;
+  VkResult pres = vkQueuePresentKHR(s_queue, &pr);
+  if (pres == VK_ERROR_OUT_OF_DATE_KHR || pres == VK_SUBOPTIMAL_KHR) recreate_swapchain();
+  else if (pres != VK_SUCCESS) { fprintf(stderr, "[gpu_vk] sbs present %d\n", pres); exit(2); }
   poll_quit();
 }
 
@@ -1987,7 +2104,7 @@ static void img_barrier_on(VkImage im, VkImageLayout from, VkImageLayout to, VkP
 // rasterization/sampling matches SW, out==bg; mismatches reveal rule deltas. Avoids render/sample loop.
 void GpuVkState::tri_over_bg_readback(const uint16_t* bg, uint16_t* out) {
   BIND_BATCH();
-  memcpy(s_stage_ptr, bg, (size_t)VRAM_W * VRAM_H * 2);
+  memcpy(s_stage_ptr[0], bg, (size_t)VRAM_W * VRAM_H * 2);
   VKC(vkWaitForFences(s_dev, 1, &s_fence, VK_TRUE, UINT64_MAX));
   VKC(vkResetFences(s_dev, 1, &s_fence));
   VKC(vkResetCommandBuffer(s_cmd, 0));
@@ -2003,7 +2120,7 @@ void GpuVkState::tri_over_bg_readback(const uint16_t* bg, uint16_t* out) {
               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
               VK_PIPELINE_STAGE_TRANSFER_BIT, 0, VK_ACCESS_TRANSFER_WRITE_BIT);
   s_tex_undef = 0;
-  vkCmdCopyBufferToImage(s_cmd, s_stage, s_tex, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &bc);
+  vkCmdCopyBufferToImage(s_cmd, s_stage[0], s_tex, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &bc);
   img_barrier(VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
               VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
               VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
@@ -2012,7 +2129,7 @@ void GpuVkState::tri_over_bg_readback(const uint16_t* bg, uint16_t* out) {
                  VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
                  VK_PIPELINE_STAGE_TRANSFER_BIT, 0, VK_ACCESS_TRANSFER_WRITE_BIT);
   s_vram_tex_undef = 0;
-  vkCmdCopyBufferToImage(s_cmd, s_stage, s_vram_tex, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &bc);
+  vkCmdCopyBufferToImage(s_cmd, s_stage[0], s_vram_tex, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &bc);
   img_barrier_on(s_vram_tex, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                  VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
                  VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
@@ -2418,6 +2535,11 @@ void gpu_vk_semi_group(Core* core, int x0, int y0, int x1, int y1) { core->game-
 void gpu_vk_stats(Core* core, int* tri, int* tex, int* semi) { core->game->gpu_vk.stats(tri, tex, semi); }
 void gpu_vk_dirty(Core* core, int x, int y, int w, int h) { core->game->gpu_vk.dirty(x, y, w, h); }
 void gpu_vk_present(Core* core, const uint16_t* src, int sx, int sy, int w, int h) { core->game->gpu_vk.present(src, sx, sy, w, h); }
+// PSXPORT_SBS: composite two cores side-by-side in one window frame (statics are shared, so either core's
+// GpuVkState drives it; pass core A's). vramA/vramB are the two cores' CPU VRAM; sx,sy,w,h the display rect.
+void gpu_vk_present_sbs(Core* coreA, const uint16_t* vramA, const uint16_t* vramB, int sx, int sy, int w, int h) {
+  coreA->game->gpu_vk.present_sbs(vramA, vramB, sx, sy, w, h);
+}
 void gpu_vk_draw_tri(Core* core, int x0,int y0,int r0,int g0,int b0, int x1,int y1,int r1,int g1,int b1, int x2,int y2,int r2,int g2,int b2) { core->game->gpu_vk.draw_tri(x0,y0,r0,g0,b0,x1,y1,r1,g1,b1,x2,y2,r2,g2,b2); }
 void gpu_vk_draw_tritri(Core* core, const int* xs, const int* ys, const int* us, const int* vs, const unsigned char* rs, const unsigned char* gs, const unsigned char* bs, int tpx, int tpy, int mode, int raw, int clutx, int cluty, int twmx, int twmy, int twox, int twoy, int dax0, int day0, int dax1, int day1) { core->game->gpu_vk.draw_tritri(xs,ys,us,vs,rs,gs,bs,tpx,tpy,mode,raw,clutx,cluty,twmx,twmy,twox,twoy,dax0,day0,dax1,day1); }
 void gpu_vk_draw_semi(Core* core, const int* xs, const int* ys, const int* us, const int* vs, const unsigned char* rs, const unsigned char* gs, const unsigned char* bs, int tpx, int tpy, int mode, int raw, int clutx, int cluty, int twmx, int twmy, int twox, int twoy, int dax0, int day0, int dax1, int day1, int blend) { core->game->gpu_vk.draw_semi(xs,ys,us,vs,rs,gs,bs,tpx,tpy,mode,raw,clutx,cluty,twmx,twmy,twox,twoy,dax0,day0,dax1,day1,blend); }
@@ -2434,6 +2556,7 @@ int  gpu_vk_enabled(void) { return 0; }
 extern "C" int gpu_windowed(void) { return 0; }
 extern "C" int gpu_has_window(void) { return 0; }
 void gpu_vk_present(Core* core, const uint16_t* src, int sx, int sy, int w, int h) { (void)core;(void)src;(void)sx;(void)sy;(void)w;(void)h; }
+void gpu_vk_present_sbs(Core* a, const uint16_t* va, const uint16_t* vb, int sx, int sy, int w, int h) { (void)a;(void)va;(void)vb;(void)sx;(void)sy;(void)w;(void)h; }
 void gpu_vk_present_image(Core* core, const uint8_t* rgba, int iw, int ih, float fade) { (void)core;(void)rgba;(void)iw;(void)ih;(void)fade; }
 void gpu_vk_tritest(Core* core) { (void)core; }
 void gpu_vk_frame_end(Core* core, const uint16_t* svram, int frame) { (void)core;(void)svram; (void)frame; }

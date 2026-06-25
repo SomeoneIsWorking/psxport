@@ -25,6 +25,7 @@
 // accumulator + linear interpolation.
 #include <stdint.h>
 #include "cfg.h"
+#include "xa_state.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -34,34 +35,35 @@
 int xa_decode_sector(const uint8_t* raw, int16_t* out, int16_t hist[2][2], int* freq);
 int disc_read_raw(uint32_t lba, uint8_t* out, uint32_t n);   // disc.c (raw 2352B sector)
 
-// ---- streaming state -----------------------------------------------------------------
-static int      s_active;                 // 1 while ReadS streaming with XA-ADPCM enabled
-static uint32_t s_lba;                    // next CHD sector to read
-static uint8_t  s_mode;                   // last Setmode
-static int      s_filter_set;             // a Setfilter was issued
-static uint8_t  s_filter_file, s_filter_chan;
-static int      s_dbg = -1;
+// ---- streaming state — PER-INSTANCE (bound XaState, one per Game; see xa_state.h) -------------------
+// The streaming/clip state below used to be file-scope statics; it now lives on the bound XaState so two
+// cores keep SEPARATE streaming state. xa_bind_state() points `s_xa` at the active core's XaState before
+// that core runs (native_step_frame). The historical `s_*` field spellings are kept as macros over
+// `s_xa->*` (like gpu_vk's BIND_BATCH shadow-names) so the function bodies below are byte-unchanged.
+// s_dbg stays a file-scope cache (config-derived, immutable after first read — not machine state).
+static int       s_dbg = -1;
+static XaState   s_default = { .src_freq = 37800 };
+static XaState*  s_xa = &s_default;
 
-// ---- native voice/BGM clip state (xa_stream_play, the engine port of FUN_8001cfc8) ------
-// The game's voice/BGM streaming used a PSX task (slot 2, FUN_8001cfc8) that issued the CD
-// commands and busy-polled GetlocL for the clip end. We replace that whole task with a native
-// clip player: the engine voice APIs (FUN_8001d2a8) call xa_stream_play() directly, we own task
-// slot 2, and signal completion (clip head past end) so the cutscene's `while(DAT_801fe0e0!=0)`
-// wait advances. No PSX coroutine, no faked GetlocL.
-static int      s_owns_slot2;             // 1 while we're the native owner of voice task slot 2
-static uint32_t s_end_lba;                // clip end LBA (0 = open-ended, e.g. CdControl path)
-static uint32_t s_clip_start;             // clip start LBA (for idempotency + loop restart)
-static uint8_t  s_clip_chan;              // clip channel (for idempotency)
-static int      s_loop;                   // loop the clip when the head passes the end
+void xa_state_init(XaState* s) { memset(s, 0, sizeof *s); s->src_freq = 37800; }
+void xa_bind_state(XaState* s) { s_xa = s ? s : &s_default; }
 
-// Decoded-sample ring (interleaved S16 stereo) at the XA source rate. Sized well above one
-// sector (2016 frames) so we never overflow: we only decode when the ring is nearly drained.
-#define XA_RING_FRAMES 16384
-static int16_t  s_ring[XA_RING_FRAMES][2];
-static uint32_t s_wr;                     // total frames written (monotonic); storage index = s_wr % N
-static double   s_rd;                     // total frames read (monotonic, fractional)
-static int16_t  s_hist[2][2];             // XA IIR history, persists across sectors
-static int      s_src_freq = 37800;
+#define s_active      (s_xa->active)
+#define s_lba         (s_xa->lba)
+#define s_mode        (s_xa->mode)
+#define s_filter_set  (s_xa->filter_set)
+#define s_filter_file (s_xa->filter_file)
+#define s_filter_chan (s_xa->filter_chan)
+#define s_owns_slot2  (s_xa->owns_slot2)
+#define s_end_lba     (s_xa->end_lba)
+#define s_clip_start  (s_xa->clip_start)
+#define s_clip_chan   (s_xa->clip_chan)
+#define s_loop        (s_xa->loop)
+#define s_ring        (s_xa->ring)
+#define s_wr          (s_xa->wr)
+#define s_rd          (s_xa->rd)
+#define s_hist        (s_xa->hist)
+#define s_src_freq    (s_xa->src_freq)
 
 static void xa_reset_buffers(void) {
   s_wr = 0; s_rd = 0.0;

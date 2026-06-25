@@ -13,6 +13,8 @@
 #pragma once
 #include "core.h"
 #include "gte_state.h"             // GteRegs — per-instance GTE (COP2) register file (Beetle gte.c)
+#include "cdc_state.h"             // CdcState — per-instance native CD-controller register model (cdc_native.c)
+#include "xa_state.h"              // XaState  — per-instance native XA-ADPCM CD-audio streamer (xa_stream.c)
 #include "spu_state.h"             // per-instance SPU state handle (Beetle spu.c) — SPU_NewState/Bind
 #include "mdec_state.h"            // per-instance MDEC state handle (Beetle mdec.c) — MDEC_NewState/Bind
 #include "gpu_native_internal.h"   // GpuState — the native GPU's per-instance render machine state
@@ -36,6 +38,11 @@ struct CdState {
   uint32_t pm_start = 0;        // was s_pm_start
   uint32_t pm_end   = 0;        // was s_pm_end
 };
+
+// CdcState / XaState — native CD-controller register model + XA-ADPCM streamer, PER-INSTANCE so two
+// cores (native vs PSX-recomp) keep SEPARATE CD state. Plain-C structs in their own headers (like
+// gte_state.h's GteRegs) so cdc_native.c / xa_stream.c stay C; bound per frame-step via cdc_bind /
+// xa_bind (those files), exactly like gte_bind/spu_bind/mdec_bind. See cdc_state.h / xa_state.h.
 
 // hle.cpp — BIOS HLE: event control blocks, native first-fit heap, IRQ/work-area flags.
 struct HleEvCB { int open, enabled, fired; uint32_t ev_class, spec, mode, func; };  // was EvCB
@@ -100,6 +107,8 @@ public:
   // ---- migrated subsystem state (one member per migrated subsystem) ----
   TimingState timing;
   CdState     cd;
+  CdcState    cdc;   // native CD-controller register model (per-instance; cdc_native.c, bound via cdc_bind)
+  XaState     xa;    // native XA-ADPCM CD-audio/voice streamer (per-instance; xa_stream.c, bound via xa_bind)
   HleState    hle;
   PadState    pad;
   FmvState    fmv;
@@ -132,6 +141,15 @@ public:
   // so we can diff their guest RAM (PSX-fallback core vs native core) to find what the native loader drops.
   int diff_mode = 0;
 
+  // ---- SBS render-submit flag (sbs.cpp, PSXPORT_SBS) ----------------------------------------------
+  // In the side-by-side dual-core debugger BOTH cores must EMIT their frame geometry into their own VK
+  // batch (so the SBS composite can draw each into its pane), but NEITHER core may PRESENT to the window
+  // (the SBS loop owns the single composite present). diff_mode=1 suppresses the per-core present (and
+  // pace/audio) at the engine frame tail; sbs_render=1 RE-enables ONLY the render-submit block in
+  // native_step_frame (native_boot.cpp) that diff_mode would otherwise skip. So SBS sets BOTH: present
+  // off (diff_mode), geometry emit on (sbs_render). Default 0 (the shipped single-core game presents).
+  int sbs_render = 0;
+
   // Dual-core diff control: the per-core override-neutralize flag. The terrain override (ov_terrain,
   // engine_submit.cpp) is in the SHARED dispatch table; each core decides ON vs neutralized by reading
   // THIS flag (not divergent override tables — see docs game-deglobalize-plan P7). The harness sets it on
@@ -142,6 +160,7 @@ public:
   // reach the rest of the machine (e.g. blit_src -> gpu_vk via gpu.game; frame_via_fb -> s_seen3d via
   // gpu_vk.game->core). Set once here so no file-scope global is needed.
   Game() { core.game = this; gpu.game = this; gpu_vk.game = this;
-           spu_state = SPU_NewState(); mdec_state = MDEC_NewState(); }
+           spu_state = SPU_NewState(); mdec_state = MDEC_NewState();
+           cdc_state_init(&cdc); xa_state_init(&xa); }   // per-instance CD-controller + XA streamer defaults
   ~Game() { SPU_FreeState(spu_state); MDEC_FreeState(mdec_state); }
 };
