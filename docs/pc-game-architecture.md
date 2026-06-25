@@ -466,6 +466,14 @@ render subsystem replaces them.
     callee-saved → preserved across rec_dispatch) — reading it reproduces the recomp's register flow exactly;
     `mem[0x800BF8B9] == -1` is `== 255`; mem[0x800ED098] is a signed lh. Verified live: `lift_platformverify`
     750+ matches, 0 mismatch; gate-off field clean (151 nodes).
+  - **Behavior handler FUN_80136954 = `beh_event_record_machine` owned native+live (2026-06-25, Ghidra+raw):**
+    a 4-record object that fires an event/cutscene via a node[5] jump-table machine. State 0 allocates 4
+    records from the 5-short table @0x8014A7E4 + seeds node[0x60..0x6E]; state 1 (FUN_8007778C-gated) runs
+    node[5] cases: 0 = mem[0x800BF8B9]==255 gate, 2 = mem[0x800BF9DD]==12 advance, 3 = FUN_8013681C, 4 = a
+    node[6] sub-phase that fires the event (DAT_800E7E84/85 + FUN_80042354/80042310/8006FF10 spawn +
+    FUN_800440E4); tail FUN_800517F8 + node[0x2B]=0. GOTCHAs: `== -1` is `== 255` (lbu); `DAT_800bf80c._2_1_`
+    = mem8(0x800BF80E); case-4 FUN_800440E4 reached only via the n6==1/n6==2-success fallthrough. Verified
+    live: `event_record_machineverify` 750+ matches, 0 mismatch; gate-off field clean (151 nodes).
   - **NEXT — extend the contiguity:** own the remaining per-object behavior handlers
     (e.g. the overlay-resident 0x801xxxxx handlers; the model-attach sites FUN_80077B38 +
     other per-object render-record callers) so the full graphics-bind set runs native; own the remaining
