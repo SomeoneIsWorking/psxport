@@ -8538,3 +8538,27 @@ render real-depth, stable 200+ frames of motion, no derail.
   the PSX walk here and make scenenative the behavior (ungate), and confirm 60fps/ires/lighting ride one path.
 - Tools added this session: REPL `ents` (enumerate objects), `PSXPORT_PCTRAP=0xADDR`(+_SKIP=N) guest-call-chain
   tracer, `PSXPORT_AUTO_SKIP=1` (reach real free-roam). RE: docs/engine_re.md ★ GAME-STAGE OBJECT PIPELINE.
+
+## later-249 (2026-06-25): title "top-left quadrant" corruption is macOS/MoltenVK-specific — NOT uninitialized VRAM
+Investigated the handoff's bug #1 (user's macOS title menu shows a garbled top-left quadrant: blocky
+texture-page data + noise, rest of title fine). Could NOT reproduce on Linux (RADV + Wayland). Findings:
+- **Headless `shot` reads `s_tex` back DIRECTLY** (`vk_readback_to_rb` → vkCmdCopyImageToBuffer from s_tex,
+  gpu_vk.cpp:2208), bypassing the windowed `present.frag` sampling path. So NO headless capture can ever
+  show a windowed/present bug. Every headless title shot is clean for this reason — not because the bug is absent.
+- **DISPROVEN: "uninitialized VRAM image" theory** (handoff guess). Added a temp diagnostic that fills
+  s_tex/s_tex_b/s_vram_tex with loud-magenta poison at creation (PSXPORT_VRAM_POISON, since reverted) → the
+  title still renders perfectly clean. Reason: the title's displayed region (VRAM rows <512) is FULLY uploaded
+  every present from zero-init CPU `s_vram` (panel_upload first-use full upload covers rows 0..511; s_vram_tex
+  gets a full VRAM_W×VRAM_H upload each panel_render). So the display region is defined on macOS too. (NB the
+  FB scratch rows ≥512 ARE left undefined on 2D frames — but a 2D title samples rows <512, so that's not this bug.)
+- **RADV windowed is CLEAN** through the entire title/intro via present.frag: captured SCEA, Whoopee Camp logo,
+  Tomba!2 logo fade-in, and the attract cutscene with `spectacle` — all clean, no quadrant garbage.
+  ⇒ The corruption is **MoltenVK/macOS-specific**, not in the committed logic path.
+- Remaining suspects (NOT verifiable from Linux): (a) the cross-stage OVERLAPPING push-constant range used by
+  the tri/tritex pipeline layout `s_pll` — vertex uses bytes [16,48), fragment uses [0,16)∪[48,48..64); MoltenVK
+  mishandles overlapping/disjoint push ranges more often than desktop drivers; (b) the R16_UINT integer sampler
+  / MUTABLE_FORMAT aliased image (s_tex carries both R16_UINT and A1B5G5R5_UNORM views) under Metal; (c) a
+  macOS-only asset/CD upload gap leaving CPU s_vram garbage in that region (macOS HLE has known CD-fs gaps,
+  see tomba2-hle-irq.md:220) — but that would be black-after-clear on RADV, not seen here.
+- BLOCKER: any #1 fix needs the user's macOS build to verify (no MoltenVK on this Linux box; user is the visual
+  authority). Did NOT ship a speculative MoltenVK change blind (would be an unverifiable guess). Tree clean.
