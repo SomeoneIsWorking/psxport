@@ -261,6 +261,15 @@ render subsystem replaces them.
     FUN_80138A64/FUN_8018CDC4/FUN_80137198/FUN_8018CA1C and finally FUN_801389C8 (gated on node[1]/node[3] and
     area bytes 0x800BF89C/0x800E7EAA/0x800BF809). Transcribed 1:1; all leaves stay PSX via rec_dispatch.
     Verified live: `obj80136d9cverify` 2300+ matches, 0 mismatch; gate-off field clean (151 nodes, 0 bad opcode).
+  - **Behavior handler FUN_80129C00 owned native+live (2026-06-25):** added `engine/objbeh_80129c00.cpp`
+    (~x2334/field-frame on seaside, ~130 instr). Two-level state machine with an in-overlay jump table
+    (jt @0x80109C5C, 5 cases on node[3]). State 0 routes node[3] to FUN_801296E0/FUN_8012982C/FUN_80129984;
+    state 1 dispatches jt: cases 0/1 are animation-triggers (gate on area bytes 0x800E7EAA/0x800E7FC7, set
+    node[1]=1, bump node[0xC0][+12] += 16, FUN_800517F8); cases 2/3 -> FUN_80129160/FUN_801292E4; case 4
+    early-outs on 0x800BF816/0x800BF8BC then bumps node[8] records' field[+8] by +16 when < -127 and calls
+    FUN_80051C8C. Transcribed 1:1; jump table -> switch->goto; signed hword tests preserved. Control flow +
+    direct node/record writes owned native; leaves stay PSX via rec_dispatch. Verified live:
+    `obj80129c00verify` 2300+ matches, 0 mismatch; gate-off field clean (151 nodes, 0 bad opcode).
   - **NEXT — extend the contiguity:** own the remaining per-object behavior handlers
     (e.g. the overlay-resident 0x801xxxxx handlers; the model-attach sites FUN_80077B38 +
     other per-object render-record callers) so the full graphics-bind set runs native; own the remaining
