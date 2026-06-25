@@ -860,6 +860,12 @@ static void ov_bg_tilemap_native(Core* c, uint32_t t4) {
   uint16_t clutbase = c->mem_r16(t4 + 0x06);
   int tp_x = (tpage & 0xF) * 64, tp_y = ((tpage >> 4) & 1) * 256;
   int mode = (tpage >> 7) & 3; if (mode > 2) mode = 2;
+  // Publish THIS frame's backdrop texpage so the OT walk can recognize the GUEST background drawer's
+  // redundant sky/sea tiles (FUN_80115598) and drop them on the field: the native backdrop (this fn) already
+  // owns the sky/sea as RQ_BACKGROUND. Replaces the dead ov_bg_tilemap packet-span provenance (orphaned by
+  // the override-system removal 2026-06-22), which is why the redundant tiles regressed to RQ_HUD and
+  // occluded the world (render.md OPEN #1). Data-derived (real backdrop tpage), not a magic constant.
+  void gpu_bg_texpage_set(Core*, int, int); gpu_bg_texpage_set(c, tp_x, tp_y);
   // Starting tile row/col = (scroll - screen-center) >> 4, wrapped into [0,H) / [0,W).
   int rowtile = ((scrollY - 120) >> 4) % H; if (rowtile < 0) rowtile += H;
   int coltile = ((scrollX - 160) >> 4) % W; if (coltile < 0) coltile += W;

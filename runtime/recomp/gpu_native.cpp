@@ -87,6 +87,21 @@ int GpuState::node_is_bg(uint32_t node) {
 // pool span it produced so the OT-walk classifies those prims as RQ_BACKGROUND by provenance.
 void gpu_bg_range_add(Core* core, uint32_t lo, uint32_t hi) { core->game->gpu.bg_range_add(lo, hi); }
 
+// TEXPAGE-PROVENANCE backdrop test (replaces the dead packet-span ov_bg_tilemap provenance). The native
+// backdrop drawer (engine_submit.cpp ov_bg_tilemap_native) publishes the active sky/sea tilemap texpage
+// here each frame; the OT-walk then recognizes the GUEST background drawer's redundant tiles (same texpage)
+// and classifies them RQ_BACKGROUND so the field's 2D-only walk DROPS them (the native backdrop owns the
+// sky/sea). Stamped per frame so a stale value from a prior frame/area is never honored. (render.md OPEN #1)
+void gpu_bg_texpage_set(Core* core, int tp_x, int tp_y) {
+  GpuState& s = core->game->gpu;
+  s.s_bgtp_x = tp_x; s.s_bgtp_y = tp_y; s.s_bgtp_frame = s.s_frame;
+}
+// Does this sprite's texpage match THIS frame's published backdrop texpage? (redundant guest backdrop tile)
+static int sprite_is_bg_texpage(Core* core, int tp_x, int tp_y) {
+  GpuState& s = core->game->gpu;
+  return s.s_bgtp_frame == s.s_frame && tp_x == s.s_bgtp_x && tp_y == s.s_bgtp_y;
+}
+
 // PC-native per-object depth: the engine's native render walk records each object's packet-pool span +
 // its WORLD-POSITION view-depth, so a 2D billboard prim rasterized later (deferred OT walk) occludes by
 // the object's real depth instead of sprite order. Stamped per frame (a stale span is never honored).
@@ -594,6 +609,28 @@ void gpu_gpu_shadow_push_tri(Core* core, const float* v0, const float* v1, const
 void gpu_emit_rq_item(Core* core, const RqItem* it) {
   if (!gpu_gpu_enabled()) return;
   GpuState& s = core->game->gpu;
+  // PSXPORT_PAINTWORLD=1 (diag): force every opaque RQ_WORLD prim to untextured solid magenta so we can SEE
+  // exactly where the native 3D world geometry rasterizes (vs the backdrop). Answers the recurring "the
+  // native field shows only sky/sea — where did the world go?" question: if magenta covers the land area,
+  // the world IS built+drawn (occlusion/blend bug); if magenta is absent/sparse, ov_scene_native isn't
+  // producing that geometry. (diag, 2026-06-26; render.md OPEN #1)
+  RqItem pw;
+  { static int p=-2; if(p==-2){ const char* e=cfg_str("PSXPORT_PAINTWORLD"); p=e?atoi(e):0; }
+    if (p && it->layer == RQ_WORLD && !it->semi) { pw = *it; pw.mode = 3; pw.raw = 0;
+      for (int i=0;i<4;i++){ pw.rs[i]=255; pw.gs[i]=0; pw.bs[i]=255; } it = &pw; } }
+  // PSXPORT_ONLYWORLD=1 (diag): emit ONLY RQ_WORLD prims — drop backdrop/overlay/HUD — so the readback
+  // shows EXACTLY the native 3D world geometry on a black field, with NO shader-paint dependency. Reliable
+  // answer to "is the world built but occluded, or is it not landing on-screen?" (diag, 2026-06-26; OPEN #1)
+  { static int o=-2; if(o==-2){ const char* e=cfg_str("PSXPORT_ONLYWORLD"); o=e?atoi(e):0; }
+    if (o && it->layer != RQ_WORLD) return; }
+  // PSXPORT_NOBG=1 (diag): drop ONLY the RQ_BACKGROUND (sky/sea tilemap) — keep world+overlay+HUD. If the
+  // world becomes visible, the backdrop is the occluder (despite its far 2D-BG ord). (diag, 2026-06-26)
+  { static int nb=-2; if(nb==-2){ const char* e=cfg_str("PSXPORT_NOBG"); nb=e?atoi(e):0; }
+    if (nb && it->layer == RQ_BACKGROUND) return; }
+  // PSXPORT_NOHUD=1 (diag): drop ONLY the RQ_HUD prims — if the world becomes visible, the sky/sea backdrop
+  // is being MIS-CLASSIFIED as HUD (nearest band) and occluding the world. (diag, 2026-06-26; OPEN #1)
+  { static int nh=-2; if(nh==-2){ const char* e=cfg_str("PSXPORT_NOHUD"); nh=e?atoi(e):0; }
+    if (nh && it->layer == RQ_HUD) return; }
   // Shadow geometry is part of the frame: re-push this prim's view-space verts to the shadow VBO on EVERY
   // emit, so the shadow map rebuilds identically on each 60fps present pass (no keep_shadow side-channel).
   // gpu_gpu_shadow_push_tri no-ops when shadows are off; verts are the B (un-interpolated) positions.
@@ -608,8 +645,8 @@ void gpu_emit_rq_item(Core* core, const RqItem* it) {
   // PSXPORT_PRIMAT="x,y" (DISPLAY coords): also log WORLD/queue prims (gpu_draw_world_quad etc.) that cover
   // that pixel — primat in gp0_exec is blind to these (they bypass the OT walk). Shows the real-depth
   // occluders. (diag, 2026-06-24)
-  { static int qx=-2, qy=-1; if (qx==-2){ qx=-1; const char* pa=cfg_str("PSXPORT_PRIMAT"); if(pa) sscanf(pa,"%d,%d",&qx,&qy); }
-    if (qx>=0) { int ax=s.s_disp_x+qx, ay=s.s_disp_y+qy;
+  { static int qx=-2, qy=-1, qf0=0; if (qx==-2){ qx=-1; const char* pa=cfg_str("PSXPORT_PRIMAT"); if(pa) sscanf(pa,"%d,%d,%d",&qx,&qy,&qf0); }
+    if (qx>=0 && (int)s.s_frame>=qf0) { int ax=s.s_disp_x+qx, ay=s.s_disp_y+qy;
       auto edge=[](int ax_,int ay_,int x0,int y0,int x1,int y1){ return (int64_t)(x1-x0)*(ay_-y0)-(int64_t)(y1-y0)*(ax_-x0); };
       auto intri=[&](int i0,int i1,int i2){ int64_t w0=edge(ax,ay,xs[i1],ys[i1],xs[i2],ys[i2]);
         int64_t w1=edge(ax,ay,xs[i2],ys[i2],xs[i0],ys[i0]); int64_t w2=edge(ax,ay,xs[i0],ys[i0],xs[i1],ys[i1]);
@@ -974,8 +1011,8 @@ void GpuState::gp0_exec(Core* core) {
         // with its 3D/2D classification + per-vertex depth (ord) + node + color. Unlike provat (blind to
         // VK polys), this is the gp0 tee, so it sees the actual occlusion contestants. Frontmost opaque =
         // max ord. Tagged f%d so a multi-frame run can be grepped for the shot frame. (diag, 2026-06-24)
-        { static int qx=-2, qy=-1; if (qx==-2){ qx=-1; const char* pa=cfg_str("PSXPORT_PRIMAT"); if(pa) sscanf(pa,"%d,%d",&qx,&qy); }
-          if (qx>=0) { int ax=s_disp_x+qx, ay=s_disp_y+qy;
+        { static int qx=-2, qy=-1, qf0=0; if (qx==-2){ qx=-1; const char* pa=cfg_str("PSXPORT_PRIMAT"); if(pa) sscanf(pa,"%d,%d,%d",&qx,&qy,&qf0); }
+          if (qx>=0 && (int)s_frame>=qf0) { int ax=s_disp_x+qx, ay=s_disp_y+qy;
             auto edge=[](int ax_,int ay_,int x0,int y0,int x1,int y1){ return (int64_t)(x1-x0)*(ay_-y0)-(int64_t)(y1-y0)*(ax_-x0); };
             auto intri=[&](int i0,int i1,int i2){ int64_t w0=edge(ax,ay,xs[i1],ys[i1],xs[i2],ys[i2]);
               int64_t w1=edge(ax,ay,xs[i2],ys[i2],xs[i0],ys[i0]); int64_t w2=edge(ax,ay,xs[i0],ys[i0],xs[i1],ys[i1]);
@@ -1152,6 +1189,10 @@ void GpuState::gp0_exec(Core* core) {
       // A full-screen SEMI sprite is a fade/overlay (NOT a backdrop) -> keep it out of the bg band so it
       // composites on top of the world (opaque full-screen sprites stay backdrops).
       int bg = node_is_bg(s_cur_node) || (!semi && bg_2d(x, y, x + w, y + h));
+      // Texpage provenance: a field sprite sampling THIS frame's native backdrop texpage is a redundant copy
+      // of the sky/sea the native drawer already owns (ov_bg_tilemap_native) — classify it bg so the 2D-only
+      // field walk drops it (else its 16×16 tiles fall to RQ_HUD and occlude the world; render.md OPEN #1).
+      if (!semi && sprite_is_bg_texpage(core, s_tp_x, s_tp_y)) bg = 1;
       { static int pm=-2; if(pm==-2){ const char* e=cfg_str("PSXPORT_PAINTER"); pm=e?atoi(e):0; } if(pm) bg=0; }  // DIAG painter
       // FADE/DIM (#21): a full-screen SEMI sprite is a fade/dim overlay -> stretch-to-fill the wide FB so it
       // covers the margins too, while staying in the topmost (HUD) band (not a backdrop). See ws_2d_local_x.

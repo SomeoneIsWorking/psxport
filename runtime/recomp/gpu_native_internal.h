@@ -119,6 +119,9 @@ struct GpuState {
 
   // Frame + OT bookkeeping
   int s_frame = 0;                                            // present-frame counter
+  // Backdrop texpage provenance (per-core — SBS runs two cores): published by ov_bg_tilemap_native each
+  // field frame; the OT walk drops guest backdrop sprites sampling it (render.md OPEN #1). -1 = unset.
+  int s_bgtp_x = -1, s_bgtp_y = -1, s_bgtp_frame = -1;
   uint32_t s_cur_node = 0;                                    // RAM addr of the OT node being fed to GP0
   uint32_t g_ot_madr = 0;                                     // last OT DMA root
   uint32_t g_dma_src = 0;                                     // last block-DMA source

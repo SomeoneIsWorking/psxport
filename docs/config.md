@@ -50,7 +50,17 @@ together: `debug spu,cdcmd,bgm`. Old → new channel:
 
 New channels (no legacy var): `schedf` (per-frame cooperative task0/1/2 state + GAME `sm[0x48/4a/4c/5c]`
 trace, native_boot.cpp — for stage/scheduler debugging) · `stage` (GAME stage-machine native-ownership log,
-engine_stage.cpp). See journal later-168 / engine_re.md "GAME stage state machine".
+engine_stage.cpp) · `rqhist` (per-frame render-queue layer×opaque/semi histogram, render_queue.cpp — "is
+the world even being queued?"). See journal later-168 / engine_re.md "GAME stage state machine".
+
+**`PSXPORT_DEBUG=chanA,chanB` env now works at launch** (seeded once in `cfg_dbg`, runtime/recomp/cfg.c) —
+previously channels were ONLY settable via the REPL/debug-server `debug` command, so headless/SBS runs
+couldn't enable one despite this doc claiming the env drove it. A later REPL `debug …` overrides the seed.
+
+Render layer-isolation diags (value flags, `cfg_str`, gpu_native.cpp gpu_emit_rq_item) for "where did the
+native world go?": `PSXPORT_ONLYWORLD=1` (emit ONLY RQ_WORLD), `PSXPORT_NOBG=1` (drop RQ_BACKGROUND),
+`PSXPORT_NOHUD=1` (drop RQ_HUD). `PSXPORT_PRIMAT="x,y[,f0]"` gained an optional min-frame `f0` so the
+6000-line cap isn't exhausted before the target scene (e.g. reach free-roam at f216 with `,400`).
 
 ## Flags that kept their own var (they carry a VALUE, not just on/off)
 These stay as `PSXPORT_*` (read via `cfg_int`/`cfg_str`) because they take a frame number, coords, path,

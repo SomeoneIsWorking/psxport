@@ -53,6 +53,12 @@ void cfg_dbg_set(const char* chans) {
     s_dbg_ch[s_dbg_nch++] = p;
 }
 int cfg_dbg(const char* chan) {
+  // Lazy one-time seed from the PSXPORT_DEBUG env var. The header + docs/config.md document cfg_dbg as
+  // "driven by PSXPORT_DEBUG=chanA,chanB,… (or =all)", but nothing wired that env in (channels were only
+  // settable via the REPL/debug-server `debug` command) — so headless/SBS runs couldn't enable a channel.
+  // Seed once here so the documented env actually works; a later REPL `debug …` (cfg_dbg_set) overrides it.
+  static int s_env_seeded = 0;
+  if (!s_env_seeded) { s_env_seeded = 1; const char* e = getenv("PSXPORT_DEBUG"); if (e && *e) cfg_dbg_set(e); }
   if (s_dbg_all) return 1;
   for (int i = 0; i < s_dbg_nch; i++) if (!strcmp(s_dbg_ch[i], chan)) return 1;
   return 0;

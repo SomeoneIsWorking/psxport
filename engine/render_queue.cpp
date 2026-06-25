@@ -224,6 +224,17 @@ void RenderQueue::flush(Core* core) {
   extern int g_fps60_on;
   if (g_fps60_on && !core->game->diff_mode) { core->game->fps60.rq_capture(items, n); mark_consumed(); return; }
   if (!n) { mark_consumed(); return; }
+  // `debug rqhist` (diag): per-frame histogram of what the queue actually emits, by layer × opaque/semi.
+  // Answers "the native field shows only sky/sea — is the LAND geometry even being queued as opaque world
+  // prims?" without depending on shader paint behavior (PAINTWORLD's mode=3 is unreliable through the
+  // textured pipe). bg=RQ_BACKGROUND world=RQ_WORLD ovl=RQ_OVERLAY hud=RQ_HUD. (diag, 2026-06-26; render.md OPEN #1)
+  if (cfg_dbg("rqhist")) {
+    int c[4][2] = {{0,0},{0,0},{0,0},{0,0}};
+    for (int i = 0; i < n; i++) { int L = items[i].layer & 3, sm = items[i].semi ? 1 : 0; c[L][sm]++; }
+    static int lf = 0; if ((lf++ % 30) == 0)
+      fprintf(stderr, "[rqhist] n=%d  bg(op/semi)=%d/%d  WORLD=%d/%d  ovl=%d/%d  hud=%d/%d\n",
+              n, c[0][0],c[0][1], c[1][0],c[1][1], c[2][0],c[2][1], c[3][0],c[3][1]);
+  }
   for (int i = 0; i < n; i++) gpu_emit_rq_item(core, &items[i]);
   mark_consumed();
 }
