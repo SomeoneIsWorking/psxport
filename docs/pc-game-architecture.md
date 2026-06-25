@@ -401,6 +401,19 @@ render subsystem replaces them.
     in the record loop: first FUN_8007AAE8 a0=2, FUN_80051B04 leaves a0=rec for the 2nd. The step-clamp
     snaps to the FULL 32-bit target truncated to 16 bits (sh), not its sign-extension. Transcribed 1:1.
     Verified live: `obj80133d6cverify` 750+ matches, 0 mismatch; gate-off field clean (151 nodes, 0 bad opcode).
+  - **Behavior handler FUN_80134FD8 owned native+live (2026-06-25):** added `engine/objbeh_80134fd8.cpp`
+    (~x778/field-frame on seaside, ~260 instr — TWO-level state machine, outer node[4] / inner node[5]).
+    Outer state 0 INIT: mem[0x800ED098]<10 gate (→node[4]=3); else node[8]=node[9]=10 + allocate node[8]
+    child records (FUN_8007AAE8/FUN_80051B04) into node[0xC0+4*i] with rec[8]=tbl@0x8014A758[i], then
+    node[8]=9 + seed node[0x60..0x6E]. Inner node[5]==0: mem[0x800BF9DD]>=15 init (tbl2@0x8014A76C loop)
+    else node[5]=1; ALWAYS node[8]++/FUN_800517F8/node[8]-- + 6x FUN_801252C0 record cascade
+    ({[20]=node,[16]=node[0xC8/0xD8/0xC4/0xCC/0xD0]}) + FUN_8004CC64(node[0xD4],12). Inner node[5]==1:
+    FUN_801344AC + node[6]/mem[0x800E7EAA]-gated FUN_80077EBC vs FUN_800779D0(node,0,-400,600). Inner
+    node[5]==2: mem[0x800E7EAA]==37/range-gated FUN_80077EBC vs FUN_8007778C, then FUN_801347E4. Common
+    tail node[8]++/FUN_800517F8/node[8]--. a0 fidelity in the record loop (first FUN_8007AAE8 a0=node,
+    FUN_80051B04 carries a0=rec); FUN_801252C0 cascade rec[20]/rec[16] mirrored before the next call.
+    Transcribed 1:1. Verified live: `obj80134fd8verify` 750+ matches, 0 mismatch; gate-off field clean
+    (151 nodes, 0 bad opcode).
   - **NEXT — extend the contiguity:** own the remaining per-object behavior handlers
     (e.g. the overlay-resident 0x801xxxxx handlers; the model-attach sites FUN_80077B38 +
     other per-object render-record callers) so the full graphics-bind set runs native; own the remaining
