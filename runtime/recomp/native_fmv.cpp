@@ -48,6 +48,7 @@
 
 // ---- runtime pieces we call (declared here to avoid header churn; do NOT modify them) ----
 
+extern "C" int g_sbs;    // sbs.cpp — PSXPORT_SBS harness active: skip the (blocking) intro FMVs (see play_lba)
 int      mdec_dma_can_read(void);
 
 // Pump the MDEC decode state machine. Beetle's MDEC only advances its decode loop when it
@@ -668,6 +669,12 @@ static int fmv_pace(Core* core, long m, int f, uint32_t t, int u) { (void)core;(
 // STR demux + top-level play
 // ====================================================================================
 int native_fmv_play_lba(Core* core, uint32_t lba, uint32_t size_bytes) {
+  // PSXPORT_SBS: the side-by-side debugger compares the FIELD (gameplay + render); the intro movies are
+  // identical pre-field content, and this player is a BLOCKING decode loop whose Start-skip reads the raw
+  // host pad (pad_poll_sdl), which the harness's auto-skip (repl-injected Start) can't drive — so leaving
+  // it in would freeze both panes in the FMV. Skip it entirely (like a headless run does at the call site),
+  // so the concurrent-lockstep nav reaches free-roam. Both cores skip identically, so they stay in step.
+  if (g_sbs) return 0;
   gpu_native_init();
   mdec_init();
 

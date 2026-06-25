@@ -1677,7 +1677,7 @@ static void sbs_stage_b_ensure() {
 // hold two different VRAMs). Always 2 panes; this is a debugger, so it ignores the wide/use_fb 3D-FB path
 // and presents each pane's native 4:3 display region (the SBS field both cores render is 3D into VRAM, and
 // for a debugger a faithful 1:1 of each core's display region side-by-side is exactly what we want).
-void GpuVkState::present_sbs(const uint16_t* vramA, const uint16_t* vramB, int sx, int sy, int w, int h) {
+void GpuVkState::present_sbs(const uint16_t* vramA, const uint16_t* vramB, int sx, int sy, int w, int h, int repaint) {
   if (!gpu_vk_enabled()) return;
   if (!s_inited) init_vk();
   if (s_headless) return;          // SBS is an interactive windowed debugger; nothing to present headless
@@ -1685,9 +1685,14 @@ void GpuVkState::present_sbs(const uint16_t* vramA, const uint16_t* vramB, int s
   sbs_stage_b_ensure();
   overlay_glue_frame_begin(&game->core);
 
-  // Stage BOTH cores' VRAM up front into their own buffers (so each pane's GPU-side copy reads the right one).
-  memcpy(s_stage_ptr[0], vramA, (size_t)VRAM_W * VRAM_H * 2);
-  memcpy(s_stage_ptr[1], vramB, (size_t)VRAM_W * VRAM_H * 2);
+  // repaint = re-present the EXISTING persistent panel images (last rendered frames) WITHOUT re-uploading
+  // VRAM or re-recording geometry — used while the harness is PAUSED so the window stays live + both panes
+  // keep showing their last frame (the cores aren't stepping, so there's nothing new to render).
+  if (!repaint) {
+    // Stage BOTH cores' VRAM up front into their own buffers (so each pane's GPU-side copy reads the right one).
+    memcpy(s_stage_ptr[0], vramA, (size_t)VRAM_W * VRAM_H * 2);
+    memcpy(s_stage_ptr[1], vramB, (size_t)VRAM_W * VRAM_H * 2);
+  }
 
   VKC(vkWaitForFences(s_dev, 1, &s_fence, VK_TRUE, UINT64_MAX));
 
@@ -1709,13 +1714,16 @@ void GpuVkState::present_sbs(const uint16_t* vramA, const uint16_t* vramB, int s
   // Record each pane's panel from its OWN staging buffer + batch. Force a FULL upload each frame
   // (color_undef): the shared dirty-rect list can't describe two different VRAMs, and a debugger can
   // afford two 1 MB copies. s_upload_src selects which staging buffer panel_upload/panel_render read.
+  // (Skipped on repaint: the persistent panel images already hold each core's last rendered frame.)
   s_npanels = 2;
-  for (int p = 0; p < 2; p++) {
-    s_tgt = p; s_upload_src = p; s_panels[p].color_undef = 1;
-    panel_upload(&s_panels[p]);
-    panel_render(&s_panels[p]);
+  if (!repaint) {
+    for (int p = 0; p < 2; p++) {
+      s_tgt = p; s_upload_src = p; s_panels[p].color_undef = 1;
+      panel_upload(&s_panels[p]);
+      panel_render(&s_panels[p]);
+    }
+    s_tgt = 0; s_upload_src = 0;
   }
-  s_tgt = 0; s_upload_src = 0;
 
   VkClearValue clear = {{{0, 0, 0, 1}}};
   VkRenderPassBeginInfo rp = { VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
@@ -2538,7 +2546,11 @@ void gpu_vk_present(Core* core, const uint16_t* src, int sx, int sy, int w, int 
 // PSXPORT_SBS: composite two cores side-by-side in one window frame (statics are shared, so either core's
 // GpuVkState drives it; pass core A's). vramA/vramB are the two cores' CPU VRAM; sx,sy,w,h the display rect.
 void gpu_vk_present_sbs(Core* coreA, const uint16_t* vramA, const uint16_t* vramB, int sx, int sy, int w, int h) {
-  coreA->game->gpu_vk.present_sbs(vramA, vramB, sx, sy, w, h);
+  coreA->game->gpu_vk.present_sbs(vramA, vramB, sx, sy, w, h, 0);
+}
+// Re-present the two panes' LAST frames (no re-render) — keeps the window live while the harness is paused.
+void gpu_vk_present_sbs_repaint(Core* coreA, int sx, int sy, int w, int h) {
+  coreA->game->gpu_vk.present_sbs(nullptr, nullptr, sx, sy, w, h, 1);
 }
 void gpu_vk_draw_tri(Core* core, int x0,int y0,int r0,int g0,int b0, int x1,int y1,int r1,int g1,int b1, int x2,int y2,int r2,int g2,int b2) { core->game->gpu_vk.draw_tri(x0,y0,r0,g0,b0,x1,y1,r1,g1,b1,x2,y2,r2,g2,b2); }
 void gpu_vk_draw_tritri(Core* core, const int* xs, const int* ys, const int* us, const int* vs, const unsigned char* rs, const unsigned char* gs, const unsigned char* bs, int tpx, int tpy, int mode, int raw, int clutx, int cluty, int twmx, int twmy, int twox, int twoy, int dax0, int day0, int dax1, int day1) { core->game->gpu_vk.draw_tritri(xs,ys,us,vs,rs,gs,bs,tpx,tpy,mode,raw,clutx,cluty,twmx,twmy,twox,twoy,dax0,day0,dax1,day1); }
@@ -2557,6 +2569,7 @@ extern "C" int gpu_windowed(void) { return 0; }
 extern "C" int gpu_has_window(void) { return 0; }
 void gpu_vk_present(Core* core, const uint16_t* src, int sx, int sy, int w, int h) { (void)core;(void)src;(void)sx;(void)sy;(void)w;(void)h; }
 void gpu_vk_present_sbs(Core* a, const uint16_t* va, const uint16_t* vb, int sx, int sy, int w, int h) { (void)a;(void)va;(void)vb;(void)sx;(void)sy;(void)w;(void)h; }
+void gpu_vk_present_sbs_repaint(Core* a, int sx, int sy, int w, int h) { (void)a;(void)sx;(void)sy;(void)w;(void)h; }
 void gpu_vk_present_image(Core* core, const uint8_t* rgba, int iw, int ih, float fade) { (void)core;(void)rgba;(void)iw;(void)ih;(void)fade; }
 void gpu_vk_tritest(Core* core) { (void)core; }
 void gpu_vk_frame_end(Core* core, const uint16_t* svram, int frame) { (void)core;(void)svram; (void)frame; }

@@ -55,6 +55,8 @@ void dc_boot_init(Core* c);
 void dc_step_frame(Core* c, uint32_t f);
 void pad_repl_hold(Core* c, uint16_t active_low_mask);
 void pad_repl_tap(Core* c, uint16_t active_low_mask, int n);
+void pad_service_frame(Core* c);              // pad_input.cpp — pump host input (keeps the window responsive)
+extern "C" int cfg_on(const char*);           // cfg.c — env flag (PSXPORT_DEBUG_SERVER presence check)
 void dbg_server_start(Core* c);
 void dbg_server_service(Core* c);
 int  dbg_is_paused(void);
@@ -69,6 +71,7 @@ extern void (*g_store_watch_cb)(Core*, uint32_t a, uint32_t v);   // mem.cpp —
 extern "C" int  g_sbs;                        // PSXPORT_SBS: forces 2 VK render targets + skips the in-engine dualview pass
 // PSXPORT_SBS two-core composite present + per-core front-buffer/display-region accessors (gpu_vk.cpp/gpu_native.cpp).
 void gpu_vk_present_sbs(Core* coreA, const uint16_t* vramA, const uint16_t* vramB, int sx, int sy, int w, int h);
+void gpu_vk_present_sbs_repaint(Core* coreA, int sx, int sy, int w, int h);   // re-present last frames (paused)
 void gpu_vk_select_target(int t);
 void gpu_vk_frame_end(Core* core, const uint16_t* svram, int frame);   // gpu_native.cpp -> resets both VK batches
 const uint16_t* gpu_vram_ptr(Core* core);
@@ -103,6 +106,9 @@ uint32_t s_frame = 0;                           // lockstep frame counter (since
 bool     s_div_found = false;
 uint32_t s_div_frame = 0, s_div_addr = 0, s_div_end = 0;
 char     s_bt_a[4096] = {0}, s_bt_b[4096] = {0};
+bool     s_have_dbgsrv = false;   // PSXPORT_DEBUG_SERVER set? — only PAUSE-on-divergence when it is (so the
+                                  // user can `sbs diff`). Without it, a divergence LOGS and CONTINUES so a
+                                  // plain windowed PSXPORT_SBS=1 run keeps driving both panes (never hangs).
 
 // --- write-watchpoint record (exact corrupting-write site) ---
 bool     s_ww_armed = false;
@@ -113,11 +119,30 @@ char     s_ww_bt_a[4096] = {0}, s_ww_bt_b[4096] = {0};
 
 const char* mode_name() { return s_mode == M_RENDER ? "render" : s_mode == M_GAMEPLAY ? "gameplay" : "both"; }
 
-// Legit render-only guest regions: the native vs PSX render paths write GP0 packets / OT / pool pointers
-// here (render mode + both mode). Divergence here is render noise, not the gameplay corruption we hunt.
+// Legit render-only guest regions in MAIN RAM: the native vs PSX render paths write GP0 packets / OT /
+// pool pointers here (render + both mode). Divergence here is render noise, not the gameplay we hunt.
 bool is_render_region(uint32_t a) {
   if (a >= 0x800BF4F0u && a < 0x800BF54Cu) return true;   // pool ptrs + dwell
   if (a >= 0x800BFE68u && a < 0x800EA200u) return true;   // packet pool (×2) + OT (×2) + env
+  return false;
+}
+
+// Legit render-only SCRATCHPAD workspace. In render/both mode the two cores run IDENTICAL gameplay but
+// DIFFERENT render layers (A=native render, B=PSX recomp render). The PSX render path writes GTE / render
+// scratchpad the native render path does not (and vice-versa), so these regions differ BY DESIGN and must
+// NOT trip the divergence detector. The render workspace addresses are documented in engine_submit.cpp /
+// engine_project.cpp (#define SCR 0x1F800000) — grep of those + engine_render/camera shows two bands:
+//   0x1F800000..0x1F800100  GTE-compose work matrices, camera/RotMatrix area, intermediate transforms,
+//                           world-readout (0x1F8000D2/D6/DA)
+//   0x1F800140..0x1F800160  per-frame render-list write-ptr (0x148) / count (0x150) / cap
+// The GAP 0x1F800100..0x1F800140 is GAMEPLAY scratchpad (e.g. the cutscene-active flag 0x1F800137, sub-mode
+// bytes 0x134-0x138) and is STILL diffed, so real gameplay corruption is caught. Excluded ONLY when the
+// render paths actually differ (render/both); gameplay mode renders PSX on both, so nothing here diverges
+// and we keep the FULL scratchpad diff there.
+bool is_render_spad(uint32_t a) {
+  if (s_mode == M_GAMEPLAY) return false;                 // identical PSX render on both → no render-noise to mask
+  if (a >= 0x1F800000u && a < 0x1F800100u) return true;   // GTE-compose work matrices + camera/RotMatrix + readout
+  if (a >= 0x1F800140u && a < 0x1F800160u) return true;   // per-frame render-list write-ptr/count/cap
   return false;
 }
 
@@ -197,15 +222,22 @@ void record_divergence(uint32_t addr) {
   uint32_t end_addr = spad ? 0x1F800400u : s_hi;
   uint32_t last = addr, gap = 0;
   for (uint32_t x = addr + 1; x < end_addr && gap < 64; x++) {
-    if (g_a->core.mem_r8(x) != g_b->core.mem_r8(x) && (spad || !is_render_region(x))) { last = x; gap = 0; } else gap++;
+    bool noise = spad ? is_render_spad(x) : is_render_region(x);
+    if (g_a->core.mem_r8(x) != g_b->core.mem_r8(x) && !noise) { last = x; gap = 0; } else gap++;
   }
   s_div_found = true; s_div_frame = s_frame; s_div_addr = addr; s_div_end = last + 1;
   cap_bt(&g_a->core, s_bt_a, sizeof s_bt_a);
   cap_bt(&g_b->core, s_bt_b, sizeof s_bt_b);
   fprintf(stderr, "\n[sbs] *** DIVERGENCE at lockstep frame %u: 0x%08X..0x%08X (mode=%s) ***\n",
           s_frame, s_div_addr, s_div_end, mode_name());
-  fprintf(stderr, "[sbs] paused. Inspect over the debug server: `sbs diff`, `sbs bt`, `sbs watch`.\n");
-  dbg_set_paused(1);
+  // PAUSE for inspection ONLY when the debug server is up (so the user can `sbs diff`/`sbs bt`). Otherwise
+  // (plain windowed PSXPORT_SBS=1) LOG and CONTINUE — the run keeps driving both panes; never hang.
+  if (s_have_dbgsrv) {
+    fprintf(stderr, "[sbs] paused. Inspect over the debug server: `sbs diff`, `sbs bt`, `sbs watch`.\n");
+    dbg_set_paused(1);
+  } else {
+    fprintf(stderr, "[sbs] (no debug server: logging and continuing; set PSXPORT_DEBUG_SERVER=1 to pause + `sbs diff`)\n");
+  }
 }
 
 // Frame-boundary diff: report the first non-render-noise divergence in the RAM region, else the scratchpad.
@@ -214,7 +246,8 @@ void check_divergence() {
   const uint8_t* b = g_b->core.ram + (s_lo - 0x80000000u);
   uint32_t n = s_hi - s_lo;
   for (uint32_t i = 0; i < n; i++) if (a[i] != b[i] && !is_render_region(s_lo + i)) { record_divergence(s_lo + i); return; }
-  for (uint32_t i = 0; i < 0x400; i++) if (g_a->core.scratch[i] != g_b->core.scratch[i]) { record_divergence(0x1F800000u + i); return; }
+  for (uint32_t i = 0; i < 0x400; i++)
+    if (g_a->core.scratch[i] != g_b->core.scratch[i] && !is_render_spad(0x1F800000u + i)) { record_divergence(0x1F800000u + i); return; }
 }
 
 // Step ONE core's frame for the SBS composite: diff_mode=1 suppresses its OWN per-core present/pace/audio
@@ -234,6 +267,14 @@ void present_both() {
   int sx, sy, w, h; gpu_disp_region(&g_a->core, &sx, &sy, &w, &h);   // both cores share the same scene/region
   gpu_vk_present_sbs(&g_a->core, gpu_vram_ptr(&g_a->core), gpu_vram_ptr(&g_b->core), sx, sy, w, h);
   gpu_vk_frame_end(&g_a->core, gpu_vram_ptr(&g_a->core), (int)s_frame);   // reset both geometry batches
+}
+
+// Re-present the two panes' LAST frames without re-rendering (cores aren't stepping) — keeps the window
+// responsive while PAUSED. No batch reset (nothing was emitted; the persistent panel images still hold
+// each core's last frame).
+void present_repaint() {
+  int sx, sy, w, h; gpu_disp_region(&g_a->core, &sx, &sy, &w, &h);
+  gpu_vk_present_sbs_repaint(&g_a->core, sx, sy, w, h);
 }
 
 } // namespace
@@ -325,6 +366,7 @@ void sbs_run(const char* exe_path) {
           s_mode == M_RENDER ? "native-gp/PSX-render"    : s_mode == M_GAMEPLAY ? "PSX-gp/PSX-render"   : "FULL PSX",
           s_lo, s_hi);
 
+  s_have_dbgsrv = cfg_on("PSXPORT_DEBUG_SERVER") != 0;   // pause-on-divergence only when the server is up
   dbg_server_start(&g_a->core);   // PSXPORT_DEBUG_SERVER — inspect/control the harness live
 
   // CONCURRENT boot to gameplay-start: step BOTH cores in lockstep, presenting both panes every frame, so
@@ -337,7 +379,15 @@ void sbs_run(const char* exe_path) {
   for (;;) {
     Core* sel = s_sel ? &g_b->core : &g_a->core;
     dbg_server_service(sel);                 // service one queued debug-server command on the selected core
-    if (dbg_is_paused() && !dbg_step_pending()) { usleep(8000); continue; }   // frozen: inspect via server
+    // PAUSED (a divergence with the debug server up, or a manual `sbs` pause): keep the WINDOW LIVE — pump
+    // host input for both cores, re-present both panes' last frames, and service the server — instead of a
+    // bare usleep (which leaves SDL marking the window "Not Responding"). Mirrors native_boot's pause loop.
+    if (dbg_is_paused() && !dbg_step_pending()) {
+      pad_service_frame(&g_a->core); pad_service_frame(&g_b->core);
+      present_repaint();
+      usleep(15000);
+      continue;
+    }
     if (dbg_step_pending()) dbg_consume_step();
 
     s_ww_hit = 0;
