@@ -492,6 +492,18 @@ render subsystem replaces them.
     delay-slot stores and just fell through to the c750 tail (which only cleared node[0x2b]). Fix: clear
     node[0x29]=0 at the shared c750 tail (every recomp predecessor of c750 has it 0, so exact). Verified live
     on seaside: `visibility_gate_dispatchverify` 3100+ matches, 0 mismatch; gate-off field clean (151 nodes).
+  - **Behavior handler FUN_80059ED8 = `beh_camera_target_follow` owned native+live (2026-06-25, resident,
+    THE hottest still-PSX resident handler ~x741):** a camera/view tracker. node[0x10] = the tracked target
+    object; the handler derives view extents (node[0x40]/[0x42] by sign of target[0x17e]), the look-at
+    (node[0x48]/[0x4a]/[0x4c] + smooth params [0x56]/[0x58]) via three branches (target[0x29]==0||[0x78]!=0
+    → A: target[0x16b]==8 immediate else FUN_800489e4 + scratchpad 0x1f8001a0..a6 gating; else → B:
+    target[0x6a] nibble!=2 copy), scroll-clamps node[0x4e]/[0x50] to [0,0x80]/[0,0x100], then dispatches a
+    per-area camera routine (switch on 0x800BF870: 0/4/6→FUN_8010c5a8/80115afc/80114294 gated mem8(0x800bf816)
+    ==0, 8→FUN_8011332c, 0xb→FUN_8010bc10, 0xe→FUN_8010b238) gated on 0x800BF873==0 && mem8(0x800bf80d)==0 &&
+    target[0x158]==0. States 2&3 → FUN_8007a624. GOTCHAs: target[0x17e]/[0x44]/[0x32]/[0x4a] signed `lh`;
+    mem16(0x1f80017c) is `lhu`; 0x1f8001a6 nibble=((int16)v>>8)&0xf, signbit=(int16)v&0x8000; scroll math
+    arithmetic >>2 on a signed delta. Verified live: `camera_target_followverify` 700+ matches, 0 mismatch;
+    gate-off field clean (151 nodes, 0 bad opcode).
   - **NEXT — extend the contiguity:** own the remaining per-object behavior handlers
     (e.g. the overlay-resident 0x801xxxxx handlers; the model-attach sites FUN_80077B38 +
     other per-object render-record callers) so the full graphics-bind set runs native; own the remaining
