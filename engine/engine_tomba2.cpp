@@ -77,6 +77,7 @@ void ov_beh_actor_move_sm_run(Core* c); // 0x8011D988 (beh_actor_move_sm.cpp —
 void ov_beh_variant_actor_sm_run(Core* c); // 0x8011D578 (beh_variant_actor_sm.cpp — overlay)
 void ov_beh_lift_platform_run(Core* c); // 0x8013A330 (beh_lift_platform.cpp — overlay)
 void ov_beh_event_record_machine_run(Core* c); // 0x80136954 (beh_event_record_machine.cpp — overlay)
+void ov_beh_typed_variant_router_run(Core* c); // 0x8011C164 (beh_typed_variant_router.cpp — overlay)
 static bool dispatch_native_behavior(Core* c, uint32_t h) {
   switch (h) {
     case 0x80040558u: ov_sm40558(c);          return true;
@@ -121,6 +122,7 @@ static bool dispatch_native_behavior(Core* c, uint32_t h) {
     case 0x8011D578u: ov_beh_variant_actor_sm_run(c); return true;
     case 0x8013A330u: ov_beh_lift_platform_run(c); return true;
     case 0x80136954u: ov_beh_event_record_machine_run(c); return true;
+    case 0x8011C164u: ov_beh_typed_variant_router_run(c); return true;
     // 0x8004C238: native body written (beh_visibility_gate_dispatch.cpp) but A/B gate shows 40 MISMATCH (later-232c) —
     // NOT wired until fixed; runs as PSX (rec_dispatch).
     default: return false;

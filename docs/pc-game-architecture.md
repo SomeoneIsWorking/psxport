@@ -474,6 +474,17 @@ render subsystem replaces them.
     FUN_800440E4); tail FUN_800517F8 + node[0x2B]=0. GOTCHAs: `== -1` is `== 255` (lbu); `DAT_800bf80c._2_1_`
     = mem8(0x800BF80E); case-4 FUN_800440E4 reached only via the n6==1/n6==2-success fallthrough. Verified
     live: `event_record_machineverify` 750+ matches, 0 mismatch; gate-off field clean (151 nodes).
+  - **Behavior handler FUN_8011C164 = `beh_typed_variant_router` owned native+live (2026-06-25, Ghidra+raw,
+    biggest handler ~1196 B):** a TYPE-routed actor. node[3] = variant, node[4] = outer state. State 0 INIT
+    seeds node[0x3c]=*PTR(0x800ecf80), box node[0x80..0x86], FUN_80077b38(.,0x8014c808,8), and for type<2
+    copies the 8-byte entry @0x80148914+type*8 → node[0x2e]/[0x32]/[0x36](16b)+node[0x2a](8b); type==3 sets
+    node[4]=3 when mem8(0x800bf8bc)==255. State 1 ACTIVE = `switch(node[3])` 0..0x14 → per-type sub-behaviors
+    (FUN_8011bc3c/b324/b738/ada8/c090/bf04); cases 0 & 1 are identical PRNG (FUN_8009a450) substate machines
+    on node[6] with a node[0x40] countdown; every state-1 exit sets node[0x29]=0. State 2 ENTER, state 3
+    EXIT (FUN_8007a624). GOTCHAs: `mem8(0x800e7eaa) < 0x1a` is unsigned `sltiu`; `== -1` is `== 255` (lbu);
+    case-2's FUN_8004bd64 takes a 5th *stacked* arg → mirror the recomp frame (sp-0x30) into guest stack
+    below entry sp + dispatch with that frame sp. Verified live: `typed_variant_routerverify` 750+ matches,
+    0 mismatch; gate-off field clean (151 nodes, 0 bad opcode).
   - **NEXT — extend the contiguity:** own the remaining per-object behavior handlers
     (e.g. the overlay-resident 0x801xxxxx handlers; the model-attach sites FUN_80077B38 +
     other per-object render-record callers) so the full graphics-bind set runs native; own the remaining
