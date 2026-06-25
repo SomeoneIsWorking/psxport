@@ -242,6 +242,18 @@ render subsystem replaces them.
     all node writes owned native; the 3 sub-behavior leaves stay PSX via rec_dispatch. Verified live:
     `obj8013c3f4verify` 4600+ matches, 0 mismatch (full RAM+scratchpad A/B); gate-off field clean (151 nodes,
     0 bad opcode).
+  - **Behavior handler FUN_8013C9C0 owned native+live (2026-06-25):** added `engine/objbeh_8013c9c0.cpp`
+    (3rd-hottest overlay handler ~x4302/field-frame on seaside, ~190 instr). A TWO-LEVEL state machine
+    disassembled from the field RAM dump incl. its two in-overlay jump tables (jt0 @0x8010A000 [11 entries,
+    node[5]] + jt1 @0x8010A030 [10 entries, node[5]-1]). Outer state node[4]: state 0 seeds node fields from
+    word/stride-6 overlay tables @0x80109FC4/0x80109FD6 (by node[3]) then falls into state 1; state 1
+    early-outs on area bytes (0x800E7FEB / 0x800BF9E0>=20 / 0x800BF816 / 0x800E7EAA>=17), runs a node[6]/[7]
+    countdown, then dispatches jt0[node[5]] — an 11-way inner sub-state that ramps a node[0x56] counter and
+    node[0x54] timers, toggles area bytes 0x800BF9E0/0x80109FC0, and twice calls FUN_80074590; tail dispatches
+    jt1 to FUN_8002B278 for some (node[3],node[5]) combos. Transcribed 1:1; the two guest jump tables become
+    switch->goto; signed-byte timer tests (sll v0,24;bgez) preserved. Control flow + all node/global/overlay
+    writes owned native; the 3 leaves stay PSX via rec_dispatch. Verified live: `obj8013c9c0verify` 4300+
+    matches, 0 mismatch (full RAM+scratchpad A/B); gate-off field clean (151 nodes, 0 bad opcode).
   - **NEXT — extend the contiguity:** own the remaining per-object behavior handlers
     (e.g. the overlay-resident 0x801xxxxx handlers; the model-attach sites FUN_80077B38 +
     other per-object render-record callers) so the full graphics-bind set runs native; own the remaining
