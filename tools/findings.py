@@ -68,6 +68,21 @@ def gen_index():
         fh.write("\n".join(out) + "\n")
     print(f"[findings] wrote docs/findings/INDEX.md ({len(rows)} findings)")
 
+def search_journal(terms):
+    """Raw search of docs/journal.md `## ` entries — the un-promoted history. Returns (title, snippet)."""
+    jpath = os.path.join(ROOT, "docs", "journal.md")
+    if not os.path.exists(jpath):
+        return
+    with open(jpath) as f:
+        text = f.read()
+    for b in re.split(r"(?m)^## +", text)[1:]:
+        title = b.splitlines()[0].strip()
+        low = b.lower()
+        if all(t in low for t in terms):
+            # one-line snippet: the first non-blank line after the title
+            snip = next((l.strip() for l in b.splitlines()[1:] if l.strip()), "")
+            yield title, snip[:200]
+
 def query(words):
     terms = [w.lower() for w in words]
     hits = 0
@@ -79,9 +94,17 @@ def query(words):
             for k in FIELDS:
                 if k in f:
                     print(f"  {k:8}: {f[k]}")
-    if not hits:
-        print(f"[findings] no match for {words!r} — likely NOT yet investigated. "
-              "Solve it, then add a block to docs/findings/<subsystem>.md.")
+    # Also search the raw journal (un-promoted history) so NOTHING is unfindable. Curated registry
+    # findings above are authoritative; journal hits are raw leads — promote one to docs/findings/ if
+    # it's still relevant and you had to dig for it.
+    jhits = list(search_journal(terms))
+    if jhits:
+        print(f"\n--- {len(jhits)} raw journal hit(s) (docs/journal.md — promote to a finding if useful) ---")
+        for title, snip in jhits:
+            print(f"  journal ## {title}\n      {snip}")
+    if not hits and not jhits:
+        print(f"[findings] no match for {words!r} in the registry OR the journal — likely NOT yet "
+              "investigated. Solve it, then add a block to docs/findings/<subsystem>.md.")
 
 def main():
     os.makedirs(FDIR, exist_ok=True)

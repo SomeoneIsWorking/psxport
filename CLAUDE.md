@@ -17,9 +17,11 @@ file** — keep CLAUDE.md lean (durable DIRECTIVES only); findings go to the reg
 trackers.
 
 - **BEFORE investigating any bug, search the findings registry:** `tools/findings.py <symptom words>`.
-  It answers "have we already solved / ruled this out?" If it matches, use it; don't re-derive. The
-  registry is `docs/findings/<subsystem>.md` (greppable, tagged by symptom) + an auto-built
-  `docs/findings/INDEX.md` (read it at session start).
+  It answers "have we already solved / ruled this out?" If it matches, use it; don't re-derive. It
+  searches BOTH the curated registry (`docs/findings/<subsystem>.md`, tagged by symptom, authoritative)
+  AND the raw `docs/journal.md` history (so the ~140 un-promoted entries are still findable). Read
+  `docs/findings/INDEX.md` at session start. When a raw journal hit was useful, PROMOTE it to a curated
+  finding (that's the opportunistic backfill — the journal is raw, the registry is the distilled layer).
 - **AFTER you fix/learn something durable, record it** as a block in `docs/findings/<subsystem>.md`
   (format at the top of `tools/findings.py`: symptom / status / cause / fix / refs — record DEAD ENDS
   too), then run `tools/findings.py` to regenerate the index. A finding's home is the registry, not the
