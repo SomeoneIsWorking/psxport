@@ -302,6 +302,28 @@ void feed_input() {
   pad_set_buttons(&g_b->core, mask);
 }
 
+// PSXPORT_SBS_DUMP=path: write the current two panes (A left | B right) as ONE side-by-side PPM. Lets a
+// headless/remote session SEE the comparison without the window (the readback panes are the same pixels
+// the window composites). Called once both cores reach free-roam (and on demand via `sbs dump`).
+void dump_sbs_ppm(const char* path) {
+  int H = s_ha > s_hb ? s_ha : s_hb; int W = s_wa + s_wb;
+  if (W < 1 || H < 1) return;
+  FILE* f = fopen(path, "wb"); if (!f) { fprintf(stderr, "[sbs] dump: cannot open %s\n", path); return; }
+  fprintf(f, "P6\n%d %d\n255\n", W, H);
+  for (int y = 0; y < H; y++) {
+    for (int x = 0; x < W; x++) {
+      const uint8_t* rgba; int px, pw, ph;
+      if (x < s_wa) { rgba = s_rgba_a; px = x;        pw = s_wa; ph = s_ha; }
+      else          { rgba = s_rgba_b; px = x - s_wa; pw = s_wb; ph = s_hb; }
+      uint8_t rgb[3] = {0,0,0};
+      if (px < pw && y < ph) { const uint8_t* p = rgba + ((size_t)y * pw + px) * 4; rgb[0]=p[0]; rgb[1]=p[1]; rgb[2]=p[2]; }
+      fwrite(rgb, 1, 3, f);
+    }
+  }
+  fclose(f);
+  fprintf(stderr, "[sbs] dumped side-by-side panes (A %dx%d | B %dx%d) -> %s\n", s_wa, s_ha, s_wb, s_hb, path);
+}
+
 } // namespace
 
 // Write-watch callback (mem.cpp). Fired mid-frame by whichever core writes the armed address; capture that
@@ -363,8 +385,11 @@ int sbs_dbg_cmd(FILE* out, const char* line) {
     unsigned n = 0; sscanf(line, "%*s %*s %u", &n); if (!n) n = 1;
     void dbg_add_step(int); dbg_add_step((int)n);
     fprintf(out, "step +%u\n", n);
+  } else if (!strcmp(sub, "dump")) {
+    char path[256] = {0}; if (sscanf(line, "%*s %*s %255s", path) != 1) snprintf(path, sizeof path, "scratch/screenshots/sbs.ppm");
+    dump_sbs_ppm(path); fprintf(out, "dumped side-by-side panes -> %s\n", path);
   } else {
-    fprintf(out, "sbs subcommands: status | diff | bt | watch [hex] | show a|b | resume | step [n]\n");
+    fprintf(out, "sbs subcommands: status | diff | bt | watch [hex] | show a|b | resume | step [n] | dump [path]\n");
   }
   return 1;
 }
@@ -408,14 +433,26 @@ void sbs_run(const char* exe_path) {
   // both reach free-roam the main lockstep loop below takes over (driven by host/server input).
   // You drive BOTH cores yourself from frame 0 (boot → logos → menu → game) with the window — no auto-skip,
   // so front-end / transition bugs are fully shown. The lockstep loop below is host-input-driven.
-  fprintf(stderr, "[sbs] LOCKSTEP from boot — drive both panes with the SDL_GPU window window's keyboard "
-                  "(WASD/arrows, K=Cross, Enter=Start, …); inspect via the debug server.\n");
+  // Auto-drive BOTH cores to the GAME free-roam field (the same 3-phase Cross/Start nav AUTO_SKIP uses),
+  // THEN hand control to interactive window/server input — so you land in the field ready to walk around and
+  // compare, instead of driving from boot every run. Disable with PSXPORT_SBS_NOAUTO=1 (drive from frame 0).
+  const char* sbs_noauto = getenv("PSXPORT_SBS_NOAUTO");
+  const bool sbs_autonav = !(sbs_noauto && *sbs_noauto);
+  const char* sbs_dump_path = getenv("PSXPORT_SBS_DUMP");   // write the side-by-side panes once at free-roam
+  static Nav nav_a, nav_b; static bool s_dumped = false;
+  fprintf(stderr, "[sbs] %s — then drive both panes with the window keyboard (WASD/arrows, K=Cross, "
+                  "Enter=Start, …) or the debug server; inspect via `sbs` cmds.\n",
+          sbs_autonav ? "AUTO-NAV to the field" : "LOCKSTEP from boot (no auto-nav)");
 
   for (;;) {
     if (sbs_rl_should_close()) { fprintf(stderr, "[sbs] window closed — exiting.\n"); break; }
     Core* sel = s_sel ? &g_b->core : &g_a->core;
     dbg_server_service(sel);                 // service one queued debug-server command on the selected core
-    feed_input();                            // SDL_GPU window keyboard -> BOTH cores' pad (mirrored host input)
+    // Until both cores reach free-roam, auto-nav drives them (Cross/Start taps per core); after that, hand
+    // off to interactive input so you can walk Tomba and compare PSX vs native at any spot.
+    bool nav_done = !sbs_autonav || (nav_a.phase == DONE && nav_b.phase == DONE);
+    if (!nav_done) { nav_step(&g_a->core, nav_a, s_frame, "A"); nav_step(&g_b->core, nav_b, s_frame, "B"); }
+    else feed_input();                       // SDL_GPU window keyboard -> BOTH cores' pad (mirrored host input)
     // PAUSED (a divergence with the debug server up, or a manual `sbs` pause): keep the WINDOW LIVE — the
     // SDL_GPU window present re-draws the last grabbed panes and polls input, so the window stays responsive.
     if (dbg_is_paused() && !dbg_step_pending()) {
@@ -429,6 +466,9 @@ void sbs_run(const char* exe_path) {
     step_core(g_a, 0); grab_pane(g_a, s_rgba_a, &s_wa, &s_ha);   // render A headless -> CPU readback (single VK target)
     step_core(g_b, 1); grab_pane(g_b, s_rgba_b, &s_wb, &s_hb);   // then render B headless -> CPU readback
     present_panes();                                             // SDL_GPU window window: pane A (left) | pane B (right)
+    // PSXPORT_SBS_DUMP: once both cores are at the field, write the side-by-side composite once (so a
+    // headless/remote session can confirm the panes aren't black and eyeball PSX-vs-native).
+    if (sbs_dump_path && nav_done && !s_dumped && s_wa > 0 && s_wb > 0) { dump_sbs_ppm(sbs_dump_path); s_dumped = true; }
 
     if (s_ww_armed && s_ww_hit) {            // the diverging write fired — pause with the exact site captured
       fprintf(stderr, "[sbs] write-watch caught 0x%08X (A=%08X B=%08X) at frame %u — paused; see `sbs bt`.\n",

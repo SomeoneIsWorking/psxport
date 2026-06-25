@@ -700,6 +700,8 @@ void gpu_gpu_render_readback(Core* core, const uint16_t* vram, int sx, int sy, i
   int a, b, c; render_geom(cmd, vram, &a, &b, &c);
   SDL_SubmitGPUCommandBuffer(cmd);                 // render into s_vram_tex; NO swapchain present
   const uint16_t* src = readback_vram();           // download s_vram_tex (RG8 bytes == uint16 1555 words)
+  if (cfg_on("PSXPORT_GPU_TRACE")) { long nz = 0; for (int yy=0; yy<h; yy++) for (int xx=0; xx<w; xx++) if (src[((sy+yy)%VRAM_H)*VRAM_W + ((sx+xx)&1023)]) nz++;
+    fprintf(stderr, "[gpu_gpu] readback region sx=%d sy=%d %dx%d region-nonzero=%ld/%d fade=%d(%d,%d,%d) batch tri=%d tex=%d semi=%d\n", sx, sy, w, h, nz, w*h, s_fade_mode, s_fade_r, s_fade_g, s_fade_b, a, b, c); }
   for (int y = 0; y < h; y++) for (int x = 0; x < w; x++) {
     uint16_t p = src[((sy + y) % VRAM_H) * VRAM_W + ((sx + x) & 1023)];
     int r = (p & 31) << 3, g = ((p >> 5) & 31) << 3, bl = ((p >> 10) & 31) << 3;
