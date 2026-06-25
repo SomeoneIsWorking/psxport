@@ -197,8 +197,18 @@ render subsystem replaces them.
     (incidental v0 mirrored for both early-outs and the work path). 151 nodes gate-off. **The whole field
     stage case-0 is now PC-native** (only the area==8 conditional 0x80114b90 leaf remains, never hit on
     seaside).
-  - **NEXT — extend the contiguity:** own the per-object behavior handlers
-    (the model-attach sites FUN_80077B38 +
+  - **Behavior handler FUN_8004CE14 owned native+live (2026-06-25):** added `engine/objbeh_8004ce14.cpp`
+    and routed it through `dispatch_native_behavior`. A resident per-object state machine on node[4]: state 0
+    seeds node fields + a record-list ptr from table 0x800A3F00[node[3]] then falls through; states 0/1 walk
+    a 16-byte record list (node[0x6c]) to a 0xFF terminator, running a short-circuit visibility test per
+    record (flag bit7 → FUN_8004D7EC vs FUN_8004D868, mask node[0x74]) and OR-ing an act-bit into node[0x70]
+    when FUN_80077ACC / FUN_80111CCC returns nonzero; at the terminator stamps node[0x6a]=count, node[11]=31,
+    FUN_80077EFC, node[1]=1. Control flow + all writes owned native; the 7 sub-behavior leaves stay PSX via
+    rec_dispatch. Verified live on seaside: `obj8004ce14verify` 950+ matches, 0 mismatch (full RAM+scratchpad
+    A/B); gate-off native-driven reaches the field clean (151 nodes, 0 bad opcode). One more resident handler
+    (0x8006F2D0, ~450 instr) + the overlay handlers remain; 0x8004C238 still has its 40-mismatch bug.
+  - **NEXT — extend the contiguity:** own the remaining per-object behavior handlers
+    (e.g. resident 0x8006F2D0; the model-attach sites FUN_80077B38 +
     other per-object render-record callers) so the full graphics-bind set runs native; own the remaining
     case-0 prefix leaves (0x800796dc / 0x800263e8 / …). Each verified via its A/B gate. (Render itself =
     the `game/render/` decoupled native path, in progress separately.)
