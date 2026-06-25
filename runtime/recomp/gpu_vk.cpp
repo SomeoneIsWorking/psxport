@@ -373,11 +373,16 @@ static int ui_infra(void)    { return g_mods.ui; }
 // loop), its descriptor set, the textured pipeline, and a textured-vertex batch.
 struct TexVtx { float x, y, u, v, r, g, b; int32_t tp[4], clut[4], tw[4], da[4]; float ord, ordn; };  // 100 bytes
 #define TEX_CAP 196608
-static VkImage         s_vram_tex;    // texture-source snapshot (copy of VRAM before a draw batch)
-static VkDeviceMemory  s_vram_tex_mem;
-static VkImageView     s_vram_tex_view;
-static int             s_vram_tex_undef;
-static VkDescriptorSet s_dset_tex;    // binding0 = s_vram_tex
+// texture-source snapshot (copy of VRAM before a draw batch). PER-PANE [2]: the SBS composite records
+// BOTH panes into ONE command buffer, so a single shared snapshot image would be overwritten by pane 1
+// before pane 0's draw executes — a write-after-sample hazard. RADV tolerates it; MoltenVK/Metal does
+// NOT (both SBS panes rendered black on Apple M2). One image+view+descriptor per pane removes the shared
+// resource entirely. Index 0 is also the single-mode (non-SBS) path. s_upload_src = the active pane.
+static VkImage         s_vram_tex[2];
+static VkDeviceMemory  s_vram_tex_mem[2];
+static VkImageView     s_vram_tex_view[2];
+static int             s_vram_tex_undef[2];
+static VkDescriptorSet s_dset_tex[2];    // binding0 = s_vram_tex[i]
 static VkPipeline      s_tritex_pipe[2];   // [0]=default OT depth, [1]=native depth
 // s_tvbuf / s_semibuf (textured-opaque + semi vertex batches) moved into GeomBatch (see s_gb above) so
 // each render target owns its own batch for the dual-view side-by-side. Bound via BIND_BATCH().
@@ -802,14 +807,15 @@ static void init_vk(void) {
   si.magFilter = si.minFilter = VK_FILTER_NEAREST;   // R16_UINT VRAM: integer texture (no linear filter)
   si.addressModeU = si.addressModeV = si.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
   VKC(vkCreateSampler(s_dev, &si, 0, &s_sampler));
-  VkDescriptorPoolSize ps = { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 3 };
+  VkDescriptorPoolSize ps = { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 4 };   // +1 for the per-pane snapshot
   VkDescriptorPoolCreateInfo dpi = { VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO };
-  dpi.maxSets = 3; dpi.poolSizeCount = 1; dpi.pPoolSizes = &ps;
+  dpi.maxSets = 4; dpi.poolSizeCount = 1; dpi.pPoolSizes = &ps;
   VKC(vkCreateDescriptorPool(s_dev, &dpi, 0, &s_dpool));
   VkDescriptorSetAllocateInfo dai = { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO };
   dai.descriptorPool = s_dpool; dai.descriptorSetCount = 1; dai.pSetLayouts = &s_dsl;
   VKC(vkAllocateDescriptorSets(s_dev, &dai, &s_dset));        // binding0 = VRAM image (present)
-  VKC(vkAllocateDescriptorSets(s_dev, &dai, &s_dset_tex));    // binding0 = VRAM snapshot (textured sampling)
+  VKC(vkAllocateDescriptorSets(s_dev, &dai, &s_dset_tex[0])); // binding0 = VRAM snapshot (textured sampling), pane 0 / single-mode
+  VKC(vkAllocateDescriptorSets(s_dev, &dai, &s_dset_tex[1])); // binding0 = VRAM snapshot, pane 1 (SBS core B)
   VKC(vkAllocateDescriptorSets(s_dev, &dai, &s_dset_b));      // binding0 = SBS native-depth VRAM image (present)
 
   // command pool + buffer, sync
@@ -924,18 +930,20 @@ static void create_vram(void) {
   // Sampled-only R16_UINT: no blend alias needed, so drop the mutable flag / format list.
   VkImageCreateInfo ti = ii; ti.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
   ti.flags = 0; ti.pNext = 0;
-  VKC(vkCreateImage(s_dev, &ti, 0, &s_vram_tex));
-  VkMemoryRequirements tr; vkGetImageMemoryRequirements(s_dev, s_vram_tex, &tr);
-  VkMemoryAllocateInfo tm = { VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO };
-  tm.allocationSize = tr.size; tm.memoryTypeIndex = mem_type(tr.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-  VKC(vkAllocateMemory(s_dev, &tm, 0, &s_vram_tex_mem));
-  VKC(vkBindImageMemory(s_dev, s_vram_tex, s_vram_tex_mem, 0));
-  VkImageViewCreateInfo tv = vi; tv.image = s_vram_tex;
-  VKC(vkCreateImageView(s_dev, &tv, 0, &s_vram_tex_view));
-  s_vram_tex_undef = 1;
-  VkDescriptorImageInfo tdi = { s_sampler, s_vram_tex_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
-  VkWriteDescriptorSet twr = wr; twr.dstSet = s_dset_tex; twr.pImageInfo = &tdi;
-  vkUpdateDescriptorSets(s_dev, 1, &twr, 0, 0);
+  for (int t = 0; t < 2; t++) {   // [0] = single-mode / SBS pane A; [1] = SBS pane B (own image, no shared hazard)
+    VKC(vkCreateImage(s_dev, &ti, 0, &s_vram_tex[t]));
+    VkMemoryRequirements tr; vkGetImageMemoryRequirements(s_dev, s_vram_tex[t], &tr);
+    VkMemoryAllocateInfo tm = { VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO };
+    tm.allocationSize = tr.size; tm.memoryTypeIndex = mem_type(tr.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    VKC(vkAllocateMemory(s_dev, &tm, 0, &s_vram_tex_mem[t]));
+    VKC(vkBindImageMemory(s_dev, s_vram_tex[t], s_vram_tex_mem[t], 0));
+    VkImageViewCreateInfo tv = vi; tv.image = s_vram_tex[t];
+    VKC(vkCreateImageView(s_dev, &tv, 0, &s_vram_tex_view[t]));
+    s_vram_tex_undef[t] = 1;
+    VkDescriptorImageInfo tdi = { s_sampler, s_vram_tex_view[t], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+    VkWriteDescriptorSet twr = wr; twr.dstSet = s_dset_tex[t]; twr.pImageInfo = &tdi;
+    vkUpdateDescriptorSets(s_dev, 1, &twr, 0, 0);
+  }
 }
 
 static void img_barrier(VkImageLayout from, VkImageLayout to, VkPipelineStageFlags ss, VkPipelineStageFlags ds,
@@ -1038,14 +1046,15 @@ void GpuVkState::panel_render(Panel* p) {
   VkBufferImageCopy bc = {0};
   bc.imageSubresource = (VkImageSubresourceLayers){ VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
   bc.imageExtent = (VkExtent3D){ VRAM_W, VRAM_H, 1 };
+  VkImage vtex = s_vram_tex[s_upload_src];   // this pane's OWN snapshot image (no cross-pane shared hazard)
   if (s_tri_n || s_tex_n || s_semi_n) {
-    // snapshot the uploaded VRAM -> vram_tex (the textures) for the opaque pass
-    img_barrier_on(s_vram_tex, s_vram_tex_undef ? VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+    // snapshot the uploaded VRAM -> this pane's vram_tex (the textures) for the opaque pass
+    img_barrier_on(vtex, s_vram_tex_undef[s_upload_src] ? VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
                    VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_SHADER_READ_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
-    s_vram_tex_undef = 0;
-    vkCmdCopyBufferToImage(s_cmd, s_stage[s_upload_src], s_vram_tex, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &bc);
-    img_barrier_on(s_vram_tex, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+    s_vram_tex_undef[s_upload_src] = 0;
+    vkCmdCopyBufferToImage(s_cmd, s_stage[s_upload_src], vtex, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &bc);
+    img_barrier_on(vtex, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                    VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
                    VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
     img_barrier_on(tgt, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
@@ -1074,7 +1083,7 @@ void GpuVkState::panel_render(Panel* p) {
       vkCmdClearAttachments(s_cmd, 1, &ca, 1, &cr);
     }
     push_wide(frame_via_fb());   // relocate into the FB only for 3D frames; 2D screens stay 1:1 in VRAM
-    vkCmdBindDescriptorSets(s_cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, s_pll, 0, 1, &s_dset_tex, 0, 0);
+    vkCmdBindDescriptorSets(s_cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, s_pll, 0, 1, &s_dset_tex[s_upload_src], 0, 0);
     if (s_tri_n) { vkCmdBindPipeline(s_cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, s_tri_pipe[native]);
                    vkCmdBindVertexBuffers(s_cmd, 0, 1, &s_vbuf, &go); vkCmdDraw(s_cmd, s_tri_n, 1, 0, 0); }
     if (s_tex_n) { vkCmdBindPipeline(s_cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, s_tritex_pipe[native]);
@@ -1088,7 +1097,7 @@ void GpuVkState::panel_render(Panel* p) {
     // submission order is preserved; blend always composites over what's already there. Textures still come
     // from the pre-opaque s_vram_tex snapshot (the texel SOURCE); the blend DST is the attachment itself.
     if (s_semi_n) {
-      vkCmdBindDescriptorSets(s_cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, s_pll, 0, 1, &s_dset_tex, 0, 0);
+      vkCmdBindDescriptorSets(s_cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, s_pll, 0, 1, &s_dset_tex[s_upload_src], 0, 0);
       vkCmdBindVertexBuffers(s_cmd, 0, 1, &s_semibuf, &go);
       const TexVtx* sv = (const TexVtx*)s_semibuf_ptr;
       int i = 0;
@@ -2132,13 +2141,14 @@ void GpuVkState::tri_over_bg_readback(const uint16_t* bg, uint16_t* out) {
   img_barrier(VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
               VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
               VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
-  // snapshot bg into the texture-source image (sampled by the textured pipeline)
-  img_barrier_on(s_vram_tex, s_vram_tex_undef ? VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+  // snapshot bg into the texture-source image (sampled by the textured pipeline). Single-mode readback path
+  // -> pane 0's snapshot image (s_vram_tex[0]).
+  img_barrier_on(s_vram_tex[0], s_vram_tex_undef[0] ? VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                  VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
                  VK_PIPELINE_STAGE_TRANSFER_BIT, 0, VK_ACCESS_TRANSFER_WRITE_BIT);
-  s_vram_tex_undef = 0;
-  vkCmdCopyBufferToImage(s_cmd, s_stage[0], s_vram_tex, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &bc);
-  img_barrier_on(s_vram_tex, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+  s_vram_tex_undef[0] = 0;
+  vkCmdCopyBufferToImage(s_cmd, s_stage[0], s_vram_tex[0], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &bc);
+  img_barrier_on(s_vram_tex[0], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                  VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
                  VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
 
@@ -2148,7 +2158,7 @@ void GpuVkState::tri_over_bg_readback(const uint16_t* bg, uint16_t* out) {
   VkViewport vpt = { 0, 0, VRAM_W, VRAM_H, 0.0f, 1.0f }; VkRect2D sc = { {0,0}, { VRAM_W, VRAM_H } };
   vkCmdSetViewport(s_cmd, 0, 1, &vpt); vkCmdSetScissor(s_cmd, 0, 1, &sc);
   push_wide(0);
-  vkCmdBindDescriptorSets(s_cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, s_pll, 0, 1, &s_dset_tex, 0, 0);
+  vkCmdBindDescriptorSets(s_cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, s_pll, 0, 1, &s_dset_tex[0], 0, 0);
   VkDeviceSize off = 0;
   if (s_tri_n) { vkCmdBindPipeline(s_cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, s_tri_pipe[0]);
                  vkCmdBindVertexBuffers(s_cmd, 0, 1, &s_vbuf, &off); vkCmdDraw(s_cmd, s_tri_n, 1, 0, 0); }
