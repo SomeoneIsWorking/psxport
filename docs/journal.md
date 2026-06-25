@@ -8604,22 +8604,3 @@ capture s_tex to scratch/screenshots/fade_NNN.ppm. Deterministic capture of a tr
 NEXT: reproduce the demo→menu return WINDOWED with fadeshot (run long enough for a full attract loop, or skip
 the demo via input), capture the corrupt menu frame, identify the exact VRAM region it samples vs the menu
 texgroup target, then gate/sequence the menu render on the reload. Verify on the live windowed game (user).
-
-## later-251 (2026-06-25): title-menu garbage = the menu OVERSTAYS into the new-game load — FIXED (engine_demo s5 blank)
-User's decisive clarification: "the menu itself is fine, it only becomes garbage because it overstays after
-starting a new game." ROOT CAUSE (confirmed live via PSXPORT_DEBUG_SERVER on the paused corrupt frame —
-vkvram showed the menu texgroup pages at VRAM (640,256)/(768,256) full of GARBAGE; provat showed the top-left
-is VK-teed menu polys sampling those garbage texpages):
-- Selecting Start Game runs demo s3→s5 (engine_demo.cpp). s5 = demo_start_stage(2) = native_start_stage →
-  native_load_overlay loads the GAME overlay SYNCHRONOUSLY in ONE frame, clobbering the menu's texgroup in
-  VRAM. But the GAME stage then spends many frames loading its intro before it first renders, so the LAST MENU
-  PRESENT PERSISTS on screen — now sampling the clobbered VRAM = the garbled menu. On real HW the load is async
-  so the menu stays clean during it; our fail-fast SYNC load clobbers VRAM instantly under the still-shown menu.
-- This is the "render doesn't follow scene state" class: the menu render overstays past the menu→game handoff.
-FIX (engine/engine_demo.cpp demo_frame_s5): engine_fade_set(c, 0xffffff, 0) — blank to BLACK as we leave the
-front-end, BEFORE demo_start_stage clobbers VRAM. Nothing stale is shown over the loading game's VRAM; the GAME
-stage's own engine_fade_set fade-in (engine_stage.cpp) then takes over from black = the intended "jump from menu
-straight to the cutscene fade-in", no corrupt menu fade-out. Verified headless newgame still renders gameplay
-(fade correctly cleared by the game stage, not stuck black). NEEDS windowed user verification of the live repro.
-Supersedes the later-249/250 reproduction struggle — the bug is the demo→game render overstay, not a fade-path
-or uninitialized-VRAM issue. Both demo→game paths (s3→s5 new game, s4→s5 load game) funnel through demo_frame_s5.

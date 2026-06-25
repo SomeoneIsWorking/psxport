@@ -39,8 +39,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-void engine_fade_set(Core*, uint32_t color, uint32_t a1);  // engine/gpu_lib.cpp — engine-owned screen fade
-
 static const uint32_t SM_PTR   = 0x1f800138u;
 static const uint32_t TAIL_CF2C = 0x80106650u;  // jal 0x8001cf2c (engine update) -> attract render -> yield
 static const uint32_t TAIL_REND = 0x80106658u;  // jal 0x80075a80 (attract render) -> yield
@@ -541,15 +539,6 @@ static void demo_frame_s3(Core* c) {
 // GAME). Native: call the stage transition; the scheduler detects the DEMO->GAME entry change and hands
 // off to GAME next frame (native_boot.cpp). No tail render (we are leaving the front-end).
 static void demo_frame_s5(Core* c) {
-  // The DEMO->GAME handoff overstays VISUALLY: native_start_stage loads the GAME overlay SYNCHRONOUSLY in
-  // this one frame (clobbering the menu texgroup in VRAM), but the GAME stage then spends many frames
-  // loading its intro before it first renders — so the last menu present PERSISTS on screen, now sampling
-  // the clobbered VRAM = the "menu overstays / turns to garbage after starting a new game" bug (on real HW
-  // the load is async, so the menu stays clean during it). The engine OWNS this transition: blank the
-  // screen to BLACK as we leave the front-end, so nothing stale is shown over the loading game's VRAM. The
-  // GAME stage's own fade-in then takes over from black (== the intended "jump from menu straight to the
-  // cutscene fade-in", with no corrupt menu fade-out).
-  engine_fade_set(c, 0xffffffu, 0);            // a1=0 = subtractive, color 0xffffff = full screen to BLACK
   void demo_start_stage(Core*, uint32_t);
   demo_start_stage(c, 2);                      // = FUN_80052078(2): load GAME overlay, restart task 0
 }
