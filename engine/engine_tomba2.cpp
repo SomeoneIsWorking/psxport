@@ -50,10 +50,12 @@ void ov_beh_801395c0_run(Core* c); // 0x801395C0 (objbeh_801395c0.cpp — overla
 void ov_beh_8004c238_run(Core* c); // 0x8004C238 (objbeh_8004c238.cpp — resident)
 void ov_beh_8004ce14_run(Core* c); // 0x8004CE14 (objbeh_8004ce14.cpp — resident)
 void ov_beh_80071a3c_run(Core* c); // 0x80071A3C (objbeh_80071a3c.cpp — resident)
+void ov_beh_8006f2d0_run(Core* c); // 0x8006F2D0 (objbeh_8006f2d0.cpp — resident)
 static bool dispatch_native_behavior(Core* c, uint32_t h) {
   switch (h) {
     case 0x80040558u: ov_sm40558(c);          return true;
     case 0x8004CE14u: ov_beh_8004ce14_run(c); return true;
+    case 0x8006F2D0u: ov_beh_8006f2d0_run(c); return true;
     case 0x80071A3Cu: ov_beh_80071a3c_run(c); return true;
     case 0x800739ACu: ov_beh_739ac_run(c);    return true;
     case 0x80073CD8u: ov_beh_73cd8_run(c);    return true;

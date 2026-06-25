@@ -207,8 +207,20 @@ render subsystem replaces them.
     rec_dispatch. Verified live on seaside: `obj8004ce14verify` 950+ matches, 0 mismatch (full RAM+scratchpad
     A/B); gate-off native-driven reaches the field clean (151 nodes, 0 bad opcode). One more resident handler
     (0x8006F2D0, ~450 instr) + the overlay handlers remain; 0x8004C238 still has its 40-mismatch bug.
+  - **Behavior handler FUN_8006F2D0 owned native+live (2026-06-25):** added `engine/objbeh_8006f2d0.cpp`
+    and routed it through `dispatch_native_behavior`. THE hottest still-PSX resident handler (~x777/field-frame,
+    ~450 instr) — a state machine on node[4]: state 0 allocates a node[8]-long record list (FUN_8007AAE8 per
+    record) seeded from table 0x800A4BA8 + base *(u32*)0x800ECF5C; state 1 reads the input/area block at
+    0x800E7E80, branches on pad 0x1F80018E / 0x1F8001A8 to set node[1] + the rec[0xC0]/[0xC4] anim words
+    (FUN_8004766C / FUN_80047B5C), runs FUN_8006F138 then spawns/despawns the linked node[0x14]/node[0x10]
+    children (FUN_8006EFF4 / FUN_8007E038 / FUN_8006F02C) gated by area flags at 0x800BF840; states 2/3 trivial;
+    EVERY exit clears byte 0x800BF840. Transcribed 1:1 as a register machine (goto labels = guest addresses) so
+    delay-slot clobbers are exact (e.g. the f570 `v1=512` that deads the f574/f5b8 sub-branches). Control flow +
+    all writes owned native; the 9 sub-behavior leaves stay PSX via rec_dispatch. Verified live on seaside:
+    `obj8006f2d0verify` 750+ matches, 0 mismatch (full RAM+scratchpad A/B); gate-off native-driven reaches the
+    field clean (151 nodes, 0 bad opcode). Overlay handlers remain; 0x8004C238 still has its 40-mismatch bug.
   - **NEXT — extend the contiguity:** own the remaining per-object behavior handlers
-    (e.g. resident 0x8006F2D0; the model-attach sites FUN_80077B38 +
+    (e.g. the overlay-resident 0x801xxxxx handlers; the model-attach sites FUN_80077B38 +
     other per-object render-record callers) so the full graphics-bind set runs native; own the remaining
     case-0 prefix leaves (0x800796dc / 0x800263e8 / …). Each verified via its A/B gate. (Render itself =
     the `game/render/` decoupled native path, in progress separately.)
