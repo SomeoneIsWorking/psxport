@@ -469,6 +469,15 @@ static void interp_flat(Core* c, uint32_t pc, uint32_t stop_ra) {
         for (uint32_t a = sp; a < sp + 1024 && shown < 24; a += 4) { uint32_t w = c->mem_r32(a); uint32_t k = w & 0x1FFFFFFF;
           if (k >= 0x10000 && k < 0x200000 && (w & 3) == 0) { fprintf(stderr, "    [sp+0x%03X] 0x%08X\n", a - sp, w); shown++; } }
         fflush(stderr); } } }
+    // DIAG (debug chan `fadeshot`): every recomp screen-fade call FUN_8007E9C8(color=a0) — capture s_tex
+    // and log color+ra, to see the intro menu->cutscene transition's "two fade-ins" render state deterministically.
+    if (pc == 0x8007E9C8u) {
+      static int fs = -2; if (fs == -2) fs = cfg_dbg("fadeshot") ? 1 : 0;
+      if (fs) { void gpu_vk_shot(Core*, const char*); static int fn = 0;
+        fprintf(stderr, "[fadeshot] call=%d color=0x%06X ra=0x%08X\n", fn, c->r[4] & 0xffffff, c->r[31]);
+        if (fn < 120) { char p[128]; snprintf(p, sizeof p, "scratch/screenshots/fade_%03d.ppm", fn); gpu_vk_shot(c, p); }
+        fn++; }
+    }
     // PSXPORT_DEBUG=keyon (oracle, temporary): trace every libsnd voice keyon 0x800939A0
     // (a0=seq|chan<<8, a1=vab id, a2=program, a3=note, sp+16=velocity). Reveals which sequences/
     // instruments/notes actually compose a song — ground truth for the offline snd_render tool.

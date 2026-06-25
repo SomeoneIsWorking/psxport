@@ -8562,3 +8562,45 @@ texture-page data + noise, rest of title fine). Could NOT reproduce on Linux (RA
   see tomba2-hle-irq.md:220) — but that would be black-after-clear on RADV, not seen here.
 - BLOCKER: any #1 fix needs the user's macOS build to verify (no MoltenVK on this Linux box; user is the visual
   authority). Did NOT ship a speculative MoltenVK change blind (would be an unverifiable guess). Tree clean.
+
+## later-250 (2026-06-25): title-menu corruption ROOT-CAUSED — demo→menu return, render doesn't follow reloaded menu state (windowed-only)
+Supersedes later-249's "macOS-specific" conclusion — the USER REPRODUCED IT ON LINUX (windowed). It is NOT
+macOS-specific. The corruption = the StartGame/Options main menu drawn with raw VRAM texture-page garbage in
+the top-left + cyan speckle over the title art. User's behavioral description (decisive): "it does two fade-ins,
+one in corrupt menu then immediately again in the cutscene back to back, but the cutscene is already started
+when the corrupt menu fade is happening — it's supposed to just jump from menu to fade in straight."
+
+MECHANISM (mapped this session):
+- The front-end is the DEMO/menu stage machine (engine/engine_demo.cpp, sm=*0x1F800138, sm[0x48]=substate).
+  Cycle: menu s1 → attract demo s7 (countdown sm[0x5a]) → timer expires → **s0 init: reloads the menu texgroup
+  (meta 0x800FB170)** → back to menu s1. The corrupt menu re-appears here, while the attract demo's scene/VRAM
+  is still resident.
+- The intro/transition screen fade is the recomp FUN_8002655c (bg scene-transition SM) calling FUN_8007e9c8
+  (PSX fade-rect builder), confirmed via PSXPORT_PCTRAP=0x8002655c / 0x8007e9c8 (both fire in the intro).
+  FUN_8007e9c8 builds a PSX OT rect that the engine's PC-native render IGNORES (engine owns ordering) → the
+  fade is "fake"/not applied = the user's "fake fade". The native equivalent that routes through engine_fade_set
+  (engine/bg_scene_transition_sm.cpp, ov_bg_scene_transition_sm) is ORPHAN — NOT wired into this intro path.
+- HEADLESS SHOWS THE CORRECT BEHAVIOR: captured the full fade sequence with the new `fadeshot` channel (interp
+  hook on FUN_8007e9c8): call0 white init (0xFFFFFF) then 31 steps 0xF8→0x08 = ONE clean fade-in of the cutscene
+  emerging from the menu — exactly the "jump menu→fade straight" the user expects. The buggy EXTRA corrupt-menu
+  fade-in does NOT occur headless because headless collapses the real-time menu display + attract loop.
+- At the demo→menu return in headless, s0-init reloads the menu texgroup but the RENDER STAYS ON THE DEMO SCENE
+  (no menu drawn) — i.e. render-doesn't-follow-reloaded-state, just a different visible outcome than windowed.
+
+WHY IT'S WINDOWED-ONLY / UNREPRODUCIBLE HEADLESS: the bug needs the real-time menu↔attract cadence. Headless is
+uncapped and collapses it; the corrupt interleave (menu fade rendering while attract VRAM is resident) never
+forms. Windowed iteration is minutes-per-cycle (the attract loop is long real-time) → slow + needs the user's
+eyeball (can't self-verify a render). Tools tried: frame-indexed shots (drift, unreliable), PAD axis, bgshot
+hook on the orphan native SM (never fires), fadeshot (works, but only the headless single-fade).
+
+ROOT CAUSE (model, needs windowed confirm): on the demo→menu return the menu texgroup reload + menu render are
+not sequenced/gated against the still-resident attract scene, so the menu fades in over stale demo VRAM (raw
+texture pages). This is the "native render doesn't follow scene/sub-scene state" class (standing directive). The
+fix is to make the menu render own/clear the scene on reload (and ideally route the transition fade through
+engine_fade_set so it's actually applied) — NOT to reproduce PSX OT order.
+
+TOOL ADDED: `debug fadeshot` (interp.cpp) — on every recomp FUN_8007e9c8 screen-fade call, log color+ra and
+capture s_tex to scratch/screenshots/fade_NNN.ppm. Deterministic capture of a transition's fade frames.
+NEXT: reproduce the demo→menu return WINDOWED with fadeshot (run long enough for a full attract loop, or skip
+the demo via input), capture the corrupt menu frame, identify the exact VRAM region it samples vs the menu
+texgroup target, then gate/sequence the menu render on the reload. Verify on the live windowed game (user).
