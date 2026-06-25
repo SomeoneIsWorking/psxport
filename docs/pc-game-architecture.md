@@ -504,6 +504,16 @@ render subsystem replaces them.
     mem16(0x1f80017c) is `lhu`; 0x1f8001a6 nibble=((int16)v>>8)&0xf, signbit=(int16)v&0x8000; scroll math
     arithmetic >>2 on a signed delta. Verified live: `camera_target_followverify` 700+ matches, 0 mismatch;
     gate-off field clean (151 nodes, 0 bad opcode).
+  - **Behavior handler FUN_8003AD48 = `beh_cube_text_spawn` owned native+live (2026-06-25, resident):** the
+    "cube letters" text actor (~x142). State 0 measures a string (node[3]==2 -> "Clear" @0x800a3a8c, else
+    table mem32(0x800a33cc + node[0x60]*12)) via FUN_80073750, stores the length in node[8] (+1 for Clear),
+    handles overflow (>=33 chars -> two FUN_8009a730 logs + node[4]=2), gates on mem16(0x800ed098), then
+    spawns node[8] glyph records (FUN_8007aae8 + FUN_80051b04(rec,1,uVar7) per glyph) and seeds the layout
+    fields. State 1 routes node[3] to FUN_8003a790/a9a0/abe4 then node[1]=1 + FUN_800517f8; state 2 sets
+    node[4]=3 and decrements globals 0x800bf849/0x800ed06c; state 3 FUN_8007a624. GOTCHA: the record-alloc
+    loop relies on a0/a1 LEFTOVER — FUN_8007aae8 carries the a0 left by the prior rec_dispatch (FUN_80073750
+    first iter, FUN_80051b04 after, which leaves a0=rec), so c->r[4] is NOT written before FUN_8007aae8.
+    Verified live: `cube_text_spawnverify` 100 matches, 0 mismatch; gate-off field clean (151 nodes).
   - **NEXT — extend the contiguity:** own the remaining per-object behavior handlers
     (e.g. the overlay-resident 0x801xxxxx handlers; the model-attach sites FUN_80077B38 +
     other per-object render-record callers) so the full graphics-bind set runs native; own the remaining
