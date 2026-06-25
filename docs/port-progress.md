@@ -873,9 +873,18 @@ in-port profiler (later-186, `interp.cpp`) gives the TIME + FREQUENCY histograms
     Wire it where the field renders terrain (confirm path: 0x80109fe0 tile render uses GTE control words +
     per-tile FUN_801099b4/80109c80; vs the geomblk terrain gen_func_8002AB5C that ov_terrain rebuilds — RE
     which one the live field uses, scratch/decomp/field/{80109fe0,8010a0e0}.c).
-  - per-object TRANSFORM 0x8003CCA4 (submit_perobj_render still `rec_super_call`s the PSX body) — own it
-    PC-native (float matrix compose + projection, real depth) so WIDESCREEN/ires project correctly. This is
-    the big render leaf; it's what makes wide/ires reliable instead of override-fragile.
+  - per-object TRANSFORM 0x8003CCA4 — ✅ ALREADY PC-NATIVE (note was STALE, corrected 2026-06-25). The
+    transform+projection is `submit_perobj_flush` (engine_submit.cpp:793) → `eproj_compose_object`
+    (engine_project.cpp:32, float Rcam·Robj/4096 + Rcam·Tobj/4096+Tcam) → `native_gt3gt4` (float-projected
+    GT3/GT4, real depth) — NO gte_op, NO CR0-7, NO PSX packet. `submit_perobj_render` (engine_submit.cpp:950)
+    only `rec_super_call`s the SECONDARY-EFFECT cases idx 1/2/3/8 (FUN_8003f4c4/f3f4/d584/f594/f344), which
+    are GP0-PACKET post-passes (semi-transparency/blend/brightness), NOT transforms — and they DON'T fire at
+    seaside (only idx0 flush-only). REMAINING per-object-render work: (1) own idx 1/2/3/8 as RQ-submit
+    effects (semi/blend/brightness flags threaded into the render-queue item, not packet-byte patches) — only
+    verifiable in an area that uses them (find via `debug ccase`); (2) the widescreen-margin path
+    (margin_render.cpp:62-64 still rec_dispatches T2_BUILD_XFORM+T2_PEROBJ_RENDER → route through
+    submit_perobj_render so wide edges project via the float path); (3) 0x8013DD34 in ov_bg_render =
+    scratchpad temps only, leave PSX. Verify = USER eyeball (no render A/B gate).
   - then ov_render_cmd (0x8003F698) + the per-type render handlers (cases 1-8,0x10-0x14 in 0x8003c048).
   - TOOLING established this session: Ghidra-headless decompile pipeline for overlay code — import a RAM dump
     (base 0x80000000) → analyze → DecompDump.py per-fn clean C (scratch/decomp/). Field dump =
