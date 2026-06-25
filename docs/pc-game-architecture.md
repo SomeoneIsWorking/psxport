@@ -313,6 +313,17 @@ render subsystem replaces them.
     branch B drops to a scratchpad[0x207]<6 gate that runs FUN_801281B8+FUN_801285EC; state 3 -> FUN_8007A624.
     Transcribed 1:1; control flow + direct node writes owned native, leaves stay PSX via rec_dispatch.
     Verified live: `obj80128760verify` 1550+ matches, 0 mismatch; gate-off field clean (151 nodes, 0 bad opcode).
+  - **Behavior handler FUN_80118240 owned native+live (2026-06-25):** added `engine/objbeh_80118240.cpp`
+    (~x1556/field-frame on seaside, ~370 instr — the biggest of the hot set). Outer state machine on node[4],
+    each state sub-dispatching on node[3] (+node[5]/node[0x5E] inner sub-states). State 0 INIT per node[3]
+    (FUN_80077B38 model-attach + node[0x80..0x86] sizes, node[3] 0/3 also FUN_8004B354, then node[4]+=1);
+    state 1 is the heavy one (FUN_80077EFC, FUN_8004BD64 5-arg/stack arg, a shared block calling FUN_80051D90
+    to fill scratchpad 0x1F8000C0 then copy node[0x2E]/0x32/0x36 + FUN_8004B374); state 2 runs FUN_8004D4C4+
+    FUN_8004B0D8 exit tails, node[4]=3, and pokes area-flag bytes (0x800BF9DF|=0x20, 0x800BF9EA clears bits at
+    node[0x60]&31 / (node[0x60]+4)&31, 0x800BF9EE|=2); state 3 -> FUN_8007A624. Mirrors the guest prologue
+    (sp-=48) for the stack arg. Transcribed 1:1; control flow + direct node/area-flag writes owned native,
+    leaves stay PSX via rec_dispatch. Verified live: `obj80118240verify` 1550+ matches, 0 mismatch; gate-off
+    field clean (151 nodes, 0 bad opcode).
   - **NEXT — extend the contiguity:** own the remaining per-object behavior handlers
     (e.g. the overlay-resident 0x801xxxxx handlers; the model-attach sites FUN_80077B38 +
     other per-object render-record callers) so the full graphics-bind set runs native; own the remaining
