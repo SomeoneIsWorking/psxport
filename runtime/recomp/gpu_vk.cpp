@@ -1048,9 +1048,15 @@ void GpuVkState::panel_render(Panel* p) {
     img_barrier_on(s_vram_tex, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                    VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
                    VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
+    // The panel render pass below uses loadOp LOAD (it preserves the just-uploaded VRAM backdrop, then
+    // draws geometry on top), so beginning it READS this attachment. The transition must therefore grant
+    // COLOR_ATTACHMENT_READ as well as WRITE — without READ, the load-read isn't synchronized against the
+    // transfer-write above. RADV ignores the missing READ (renders fine); MoltenVK/Metal ENFORCES it, so
+    // the load read nothing and both SBS panes rendered black on macOS (SYNC-HAZARD-READ-AFTER-WRITE,
+    // caught by VK_LAYER_KHRONOS_validation sync validation). See docs/findings/tooling.md.
     img_barrier_on(tgt, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                 VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-                VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
+                VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_READ_BIT);
     if (p->depth_undef) {   // first use: UNDEFINED -> DEPTH_STENCIL_ATTACHMENT_OPTIMAL (stays there)
       VkImageMemoryBarrier b = { VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
       b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED; b.newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
