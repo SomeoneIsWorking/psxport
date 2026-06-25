@@ -343,7 +343,15 @@ for content fns (call it). Do NOT mimic PSX hardware (GTE/GP0/OT) — remove Bee
     mesh + resident terrain + main ground are ALL world-coord float now (no GTE for those pictures).
   - ☐ NEXT (render): own 0x8003c8f4 (billboard-quad pickups, 0x8003c2d4/c464) projection via eproj to finish
     the per-object render GTE-free; audit remaining RTPS/RTPT callers at the field; 0x8003cdd8 secondary cases.
-  - ☐ NEXT (gameplay): descend the SOP per-frame field update `FUN_801092b4` (entity update FUN_8010a0e0,
+  - ✅ SOP per-frame field update's FIRST leaf owned: `FUN_8002655c` = `ov_bg_scene_transition_sm`
+    (engine/bg_scene_transition_sm.cpp, 2026-06-25) — the SOP intro BG scene-transition / screen-FADE state
+    machine (states 0-4 over struct 0x80100400; driven by DAT_1f800236 + the 0x800bf80f direction byte;
+    fade rect via the still-PSX FUN_8007e9c8 leaf). Wired in sop.cpp:192 (was rec_dispatch). Verified
+    `bgscenesmverify` 0 mismatch: states 0/1/2 during the AUTO_SKIP intro, states 3/4 by forcing the struct
+    via REPL `w8`. Gate-off boot clean to GAME free-roam (sm[0x4a]=1). NB the fade is still DELIVERED as a
+    PSX OT rect (FUN_8007e9c8) — owning the fade PC-native (engine brightness scalar) is a separate render
+    frontier (see the FADE note below).
+  - ☐ NEXT (gameplay): descend the rest of the SOP per-frame field update `FUN_801092b4` (entity update FUN_8010a0e0,
     Tomba update 0x8007b008, BG draw, entity render FUN_80109fe0) — own its sub-systems native, re-wiring the
     orphaned cull/spawn/collision/object-walk natives as their callers become native. Also own the
     remaining sm[0x4a] running sub-modes (2..5) + the area-machine RUNNING sub-states (0x80106b98 etc.,

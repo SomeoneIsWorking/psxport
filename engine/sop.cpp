@@ -24,6 +24,7 @@
 static void d0(Core* c, uint32_t fn);
 extern "C" void ffspan_begin(void), ffspan_end(const char*);   // PSXPORT_BDTAG attribution (engine_stage.cpp)
 void ov_field_entity_render(Core*);   // engine_submit.cpp — native reimpl of SOP FUN_80109fe0
+void ov_bg_scene_transition_sm(Core*);  // bg_scene_transition_sm.cpp — native FUN_8002655c
 static void d1(Core* c, uint32_t fn, uint32_t a0);
 static void d2(Core* c, uint32_t fn, uint32_t a0, uint32_t a1);
 static void d3(Core* c, uint32_t fn, uint32_t a0, uint32_t a1, uint32_t a2);
@@ -189,7 +190,7 @@ void ov_sop_field_update(Core* c) {
   if (delay != 0) {
     c->mem_w16(sm + 0x60, (uint16_t)(delay - 1));          // startup delay: just count down
   } else {
-    ffspan_begin(); d1(c, 0x8002655cu, 0x80100400u); ffspan_end("bgscene");   // BG scene transition SM
+    ffspan_begin(); ov_bg_scene_transition_sm(c); ffspan_end("bgscene");   // BG scene transition SM (native, FUN_8002655c)
     ffspan_begin(); d1(c, 0x8010a0e0u, 0x800f2418u); ffspan_end("entupd");    // entity update loop
     d0(c, 0x8007b008u);                                    // Tomba update
     c->mem_w8(0x1f800234u, 1);
