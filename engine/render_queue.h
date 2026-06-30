@@ -87,7 +87,12 @@ struct RqItem {
   float    sh_vx[4], sh_vy[4], sh_vz[4];   // view-space verts (the shadow VBO input)
 };
 
-#define RQ_MAX 32768
+// Per-frame prim capacity. Measured worst case in real play (later-273): steady-state field ≈ 1k prims/frame,
+// but the AREA-TRANSITION frame (first field-load frame, sm[0x4e]→9) spikes to ≈ 43k as the whole area's
+// geometry is submitted at once. 32768 was too small for that transient (it silently dropped prims). Sized
+// to comfortably hold the observed worst case with headroom; push() FAIL-FASTS above this (a true runaway —
+// e.g. a stuck render walk re-submitting forever — is a real bug, not a drop-and-continue).
+#define RQ_MAX 65536
 
 // Per-instance (on Game) so two cores keep independent queues; pure host render data (never guest RAM),
 // so it does not affect a Core::ram lockstep diff.

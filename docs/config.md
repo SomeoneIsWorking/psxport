@@ -51,7 +51,10 @@ together: `debug spu,cdcmd,bgm`. Old → new channel:
 New channels (no legacy var): `schedf` (per-frame cooperative task0/1/2 state + GAME `sm[0x48/4a/4c/5c]`
 trace, native_boot.cpp — for stage/scheduler debugging) · `stage` (GAME stage-machine native-ownership log,
 engine_stage.cpp) · `rqhist` (per-frame render-queue layer×opaque/semi histogram, render_queue.cpp — "is
-the world even being queued?"). See journal later-168 / engine_re.md "GAME stage state machine".
+the world even being queued?") · `ovload` (per-core MODE/AREA-slot overlay residency: logs each
+`overlay_note_load` — `core A/B slot N <- TAG` — so you can see WHICH overlay each core thinks is resident
+and WHEN it loaded; the tool that pinned later-273's "A00 code overlay never loaded on the PSX core",
+overlay_router.cpp). See journal later-168 / engine_re.md "GAME stage state machine".
 
 Full-PSX (psx_fallback / SBS core-B) coroutine diagnostics (native_boot.cpp `ov_switch`): `sched` (coro
 start/resume/out + task slot state) · `yieldpc` (per-yield `ra`/`r16`/`r29` + the stale-on-inner-frames

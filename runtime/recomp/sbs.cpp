@@ -371,6 +371,10 @@ extern "C" void sbs_store_cb(Core* c, uint32_t a, uint32_t v) {
   s_ww_hit |= (1 << which);
 }
 
+// Diagnostics for cross-TU instrumentation (overlay_router): which SBS core is this, and the lockstep frame.
+extern "C" int sbs_core_id(Core* c) { if (!g_a) return -1; return (g_b && c == &g_b->core) ? 1 : 0; }
+extern "C" uint32_t sbs_frame_num() { return s_frame; }
+
 // `sbs ...` debug-server commands. Returns 1 if it handled the line (so dbg_exec stops), 0 otherwise.
 int sbs_dbg_cmd(FILE* out, const char* line) {
   char cmd[16] = {0}, sub[32] = {0};

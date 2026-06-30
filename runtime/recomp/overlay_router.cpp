@@ -16,10 +16,13 @@
 #include "core.h"
 #include "game.h"              // SchedulerState::resident_ov (per-core resident-overlay-by-slot map)
 #include "overlay_table.h"     // generated: REC_MAIN_LO/HI, main_dispatch, g_rec_overlays[]
+#include "cfg.h"               // cfg_dbg("ovload") — per-core MODE-slot overlay residency trace
 #include <string.h>
 #include <stdio.h>
 
 void rec_dispatch_miss(Core* c, uint32_t addr);
+extern "C" int sbs_core_id(Core*) __attribute__((weak));
+extern "C" uint32_t sbs_frame_num() __attribute__((weak));
 
 // Overlap-slot bases (the addresses where mutually-exclusive overlays load) -> a 0..2 index into the
 // per-core resident_ov[] map. Kept in sync with emit.py OVERLAY_BASES / overlay_base().
@@ -41,12 +44,22 @@ void overlay_note_load(Core* c, uint32_t dest) {
   int s = slot_index(dest);
   if (s < 0) return;
   const unsigned char* ram = c->ram + (dest & 0x1FFFFFFF);
+  int dbg = cfg_dbg("ovload");
+  int cid = (dbg && sbs_core_id) ? sbs_core_id(c) : -1;
+  uint32_t fr = (dbg && sbs_frame_num) ? sbs_frame_num() : 0;
   for (int i = 0; i < g_rec_overlay_count; i++) {
     const RecOverlay* o = &g_rec_overlays[i];
     if ((o->base & 0x1FFFFFFF) != (dest & 0x1FFFFFFF)) continue;
-    if (memcmp(o->sig, ram, o->siglen) == 0) { c->game->sched.resident_ov[s] = o; return; }
+    if (memcmp(o->sig, ram, o->siglen) == 0) {
+      c->game->sched.resident_ov[s] = o;
+      if (dbg) fprintf(stderr, "[ovload] core %c slot %d <- %s (frame %u)\n",
+                       cid < 0 ? '?' : cid ? 'B' : 'A', s, o->name, fr);
+      return;
+    }
   }
   c->game->sched.resident_ov[s] = 0;   // unknown content in this slot -> fall back to signature scan
+  if (dbg) fprintf(stderr, "[ovload] core %c slot %d <- (none/unmatched, dest=0x%08X, frame %u)\n",
+                   cid < 0 ? '?' : cid ? 'B' : 'A', s, dest, fr);
 }
 
 // Which overlay currently occupies `base`? The overlays overlap, so we identify the resident one by
@@ -75,6 +88,21 @@ static const RecOverlay* resident_overlay(Core* c, uint32_t base) {
       cache_base = base; cache_ov = o;
       memcpy(cache_sig, ram, o->siglen);
       return o;
+    }
+  }
+  return 0;
+}
+
+// Diagnostic for the miss path (hle.cpp): for a slot-range address, report which overlay is currently
+// resident in that slot (the one rec_dispatch routed to before its switch fell to the miss default).
+// Returns the overlay name, or "none" (slot empty / unmatched), or 0 if addr is not in any slot range.
+const char* overlay_router_resident_name(Core* c, uint32_t addr) {
+  uint32_t a = addr & 0x1FFFFFFF;
+  for (int i = 0; i < g_rec_overlay_count; i++) {
+    const RecOverlay* o = &g_rec_overlays[i];
+    if (a >= (o->base & 0x1FFFFFFF) && a < (o->end & 0x1FFFFFFF)) {
+      const RecOverlay* res = resident_overlay(c, o->base);
+      return res ? res->name : "none";
     }
   }
   return 0;

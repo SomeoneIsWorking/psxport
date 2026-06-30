@@ -245,11 +245,29 @@ void rec_dispatch_miss(Core* c, uint32_t addr) {
     // (the render submitters / field logic live in \BIN\*.BIN) which the static recompiler does not
     // cover yet, OR a cooperative task that tried to resume mid-function. Abort with the call site +
     // a guest-stack backtrace so we get a worklist of exactly what to recompile/port next.
+    extern const char* overlay_router_resident_name(Core*, uint32_t);
+    const char* resov = overlay_router_resident_name(c, addr);
+    // GAME-stage / SOP state-machine context for an overlay-dispatch miss (the common case: a render-walk
+    // node references an area-overlay submitter whose overlay was never loaded). sm[0x50]>0 with
+    // 1f80019b=1 means the area machine marked the load DONE yet the code overlay is absent (later-273).
+    if (addr >= 0x80108F9Cu && addr < 0x8018A000u) {       // a MODE/area-slot overlay address
+      uint32_t stage = c->mem_r32(0x801fe00cu);
+      uint32_t sm = c->mem_r32(0x1f800138u);
+      fprintf(stderr, "[miss-state] stage=0x%08X sm=0x%08X sm[48]=%u [4a]=%u [4c]=%u [4e]=%u [50]=%u [52]=%u "
+                      "1f80019b=%u areaidx(800bf870)=%u sopsig(80109450)=0x%08X 1f800234=%u\n",
+              stage, sm,
+              sm ? c->mem_r16(sm + 0x48) : 0xffff, sm ? c->mem_r16(sm + 0x4a) : 0xffff,
+              sm ? c->mem_r16(sm + 0x4c) : 0xffff, sm ? c->mem_r16(sm + 0x4e) : 0xffff,
+              sm ? c->mem_r16(sm + 0x50) : 0xffff, sm ? c->mem_r16(sm + 0x52) : 0xffff,
+              c->mem_r8(0x1f80019bu), c->mem_r8(0x800bf870u), c->mem_r32(0x80109450u), c->mem_r8(0x1f800234u));
+    }
     fprintf(stderr,
       "\n[recomp-MISS %d] no recompiled fn for 0x%08X  (caller ra=0x%08X, a0=0x%08X)\n"
+      "  resident overlay for this slot = %s (if non-A00 but addr is an A00 fn -> stale pointer /\n"
+      "  wrong overlay resident; if matches but still missed -> function-discovery gap in that overlay)\n"
       "  not a recompiled MAIN fn / native override / platform-HLE leaf — likely overlay code or a\n"
       "  mid-function coroutine resume. The interpreter is removed; this is fail-fast by design.\n",
-      g_miss++, addr, c->r[31], c->r[4]);
+      g_miss++, addr, c->r[31], c->r[4], resov ? resov : "(addr not in any slot range)");
     guest_backtrace_to(c, stderr);
     fflush(stderr);
     abort();

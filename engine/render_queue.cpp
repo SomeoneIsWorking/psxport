@@ -7,6 +7,8 @@
 #include <algorithm>
 #include <unordered_map>
 #include <stdio.h>
+#include <stdlib.h>
+#include <execinfo.h>
 
 // Debug object-ID overlay: split into QUAD (billboard) and 3D-OBJECT (mesh) highlighting so the user can
 // box only one class. On when its RmlUi/cfg toggle is set. `objid` channel + legacy debug_ids = both.
@@ -193,9 +195,16 @@ void RenderQueue::reset() { n = 0; seq = 0; consumed = 0; }
 RqItem* RenderQueue::push() {
   if (consumed) { reset(); fps60_bb_frame_reset(); }   // first push after a flush -> new frame (clear bb registry too)
   if (n >= RQ_MAX) {
-    static int warned = 0;
-    if (!warned++) fprintf(stderr, "[rq] WARN: render queue full (%d) — dropping prims\n", RQ_MAX);
-    return 0;
+    // FAIL-FAST (user 2026-06-30): never silently drop prims. RQ_MAX already covers the real worst-case
+    // scene (the area-transition spike, ~43k — see render_queue.h); exceeding it means a submit path is
+    // running away (e.g. a stuck render walk re-submitting the same scene every frame — the bug-1 / later-273
+    // symptom). Abort with a C backtrace so that submit path is visible rather than hidden behind a drop.
+    fprintf(stderr, "\n[rq] FATAL: render queue full (%d items) — refusing to drop prims (fail-fast).\n"
+                    "  A submit path produced > %d prims this frame (runaway re-submission?). Backtrace:\n",
+            RQ_MAX, RQ_MAX);
+    void* bt[32]; int nbt = backtrace(bt, 32); backtrace_symbols_fd(bt, nbt, 2);
+    fflush(stderr);
+    abort();
   }
   RqItem* it = &items[n++];
   it->seq = seq++;
