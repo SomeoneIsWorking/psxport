@@ -266,12 +266,90 @@ static int run_oracle(const char* path) {
   return 0;
 }
 
+// ---- ORACLE DIVERGENCE DIFF (later-278) -----------------------------------------------------------
+// The state-synced divergence compare (docs/oracle.md): boot the NATIVE port core (A) and the pure-PSX
+// INTERPRETER oracle core (B) in ONE process and diff their guest RAM at GAME-STATE CHECKPOINTS — NOT at
+// equal frame numbers (the interpreter spends real frames on CD loads/waits the native side does
+// synchronously, so frame N is a different point in the game). Each checkpoint is a value of the SOP
+// narration scene byte 0x800bf9b4 (the beats: field/letter -> void scene 5 -> cliff scene 7). We advance
+// each core INDEPENDENTLY until it reaches the checkpoint (parking the faster one), then diff the
+// engine-state RAM band, excluding the render/timing regions that differ BY DESIGN (the native render path
+// writes a different OT/packet pool than the PSX one). Surviving divergences are native-reimplementation
+// bugs — e.g. scene state the native side fails to set up (the void "effect" we are missing). PSXPORT_SELFTEST=oraclediff.
+static bool od_is_render(uint32_t a) {
+  if (a >= 0x800BF4F0u && a < 0x800BF54Cu) return true;   // render pool ptrs + dwell
+  if (a >= 0x800BFE68u && a < 0x800EA200u) return true;   // packet pool (x2) + OT (x2) + env (render-only)
+  return false;
+}
+// Drive a core (no input) until 0x800bf9b4 == target, or cap frames elapse. Returns frames stepped; sets
+// *reached. The caller threads each core's own frame counter.
+static uint32_t od_advance_to_scene(Core* c, uint32_t& f, uint8_t target, uint32_t cap, bool* reached) {
+  void dc_step_frame(Core*, uint32_t); uint32_t n = 0;
+  while (n < cap && c->mem_r8(0x800bf9b4u) != target) { dc_step_frame(c, f); f++; n++; }
+  *reached = (c->mem_r8(0x800bf9b4u) == target);
+  return n;
+}
+static int run_oraclediff(const char* path) {
+  const int verbose = cfg_on("PSXPORT_SELFTEST_VERBOSE");
+  Game* A = new Game(); A->psx_fallback = 0;                              // native port core
+  Game* B = new Game(); B->psx_fallback = 1; B->core.use_interp = 1;      // pure-PSX interpreter oracle core
+  load_exe(path, &A->core); dc_boot_init(&A->core);
+  load_exe(path, &B->core); dc_boot_init(&B->core);
+  auto stageA = [&]{ return A->core.mem_r32(TASKBASE + 0xc); };
+  auto stageB = [&]{ return B->core.mem_r32(TASKBASE + 0xc); };
+
+  // Drive both to the GAME stage (mash Start), each on its own frame clock.
+  uint32_t fa = 0, fb = 0;
+  for (; fa < 4000 && stageA() != STAGE_GAME; fa++) { bool on=(fa%16u)<8u; pad_repl_hold(&A->core, on?((fa&16u)?PAD_CROSS:PAD_START):PAD_NONE); dc_step_frame(&A->core, fa); }
+  for (; fb < 4000 && stageB() != STAGE_GAME; fb++) { bool on=(fb%16u)<8u; pad_repl_hold(&B->core, on?((fb&16u)?PAD_CROSS:PAD_START):PAD_NONE); dc_step_frame(&B->core, fb); }
+  if (stageA() != STAGE_GAME || stageB() != STAGE_GAME) {
+    fprintf(stderr, "[oraclediff] FAIL: reach GAME — A stage=0x%08X (f%u), B stage=0x%08X (f%u)\n", stageA(), fa, stageB(), fb);
+    return 1;
+  }
+  pad_repl_hold(&A->core, PAD_NONE); pad_repl_hold(&B->core, PAD_NONE);
+  fprintf(stderr, "[oraclediff] both at GAME (A f%u, B f%u). Checkpoint-diffing the narration beats.\n", fa, fb);
+
+  const uint8_t CKPTS[] = { 2, 3, 5, 7 };   // narration scene ids (field/letter, transitions, void=5, cliff=7)
+  int total_div = 0;
+  for (uint8_t ck : CKPTS) {
+    bool ra=false, rb=false;
+    od_advance_to_scene(&A->core, fa, ck, 4000, &ra);
+    od_advance_to_scene(&B->core, fb, ck, 8000, &rb);   // B (interp+CD) gets a larger cap
+    if (!ra || !rb) {
+      fprintf(stderr, "[oraclediff] CHECKPOINT scene=%u UNREACHED: native=%d(f%u) oracle=%d(f%u) "
+                      "— one core never reaches this beat (a divergence in itself).\n", ck, ra, fa, rb, fb);
+      continue;
+    }
+    // RAM diff the engine-state band, coalescing consecutive diffs into ranges.
+    const uint32_t LO = 0x800B0000u, HI = 0x80110000u;
+    const uint8_t* a = A->core.ram + (LO - 0x80000000u);
+    const uint8_t* b = B->core.ram + (LO - 0x80000000u);
+    int ranges = 0; uint32_t total_bytes = 0;
+    fprintf(stderr, "[oraclediff] === scene %u (native f%u, oracle f%u) ===\n", ck, fa, fb);
+    for (uint32_t i = 0; i < HI - LO; ) {
+      if (a[i] == b[i] || od_is_render(LO + i)) { i++; continue; }
+      uint32_t start = i, bytes = 0;
+      while (i < HI - LO && a[i] != b[i] && !od_is_render(LO + i)) { i++; bytes++; }
+      total_bytes += bytes; total_div++;
+      if (ranges++ < 24)
+        fprintf(stderr, "[oraclediff]   diff @0x%08X..0x%08X (%u B)  nat[0]=%02X ora[0]=%02X\n",
+                LO + start, LO + start + bytes, bytes, a[start], b[start]);
+    }
+    fprintf(stderr, "[oraclediff]   scene %u: %d diverging ranges, %u bytes total%s\n",
+            ck, ranges, total_bytes, ranges > 24 ? " (first 24 shown)" : "");
+    (void)verbose;
+  }
+  fprintf(stderr, "[oraclediff] DONE: %d total diverging ranges across the narration beats.\n", total_div);
+  return 0;   // diagnostic harness: always exit 0 (it reports, it doesn't pass/fail)
+}
+
 // Dispatched from boot.cpp when PSXPORT_SELFTEST is set.
 int selftest_run(const char* path) {
   const char* which = cfg_str("PSXPORT_SELFTEST");
   if (which && !strcmp(which, "startgame")) return run_startgame(path);
   if (which && !strcmp(which, "narration")) return run_narration(path);
   if (which && !strcmp(which, "oracle"))    return run_oracle(path);
-  fprintf(stderr, "[selftest] unknown PSXPORT_SELFTEST='%s' (known: startgame, narration, oracle)\n", which ? which : "");
+  if (which && !strcmp(which, "oraclediff")) return run_oraclediff(path);
+  fprintf(stderr, "[selftest] unknown PSXPORT_SELFTEST='%s' (known: startgame, narration, oracle, oraclediff)\n", which ? which : "");
   return 2;
 }
