@@ -168,6 +168,7 @@ set(PORT_SRC
   engine/engine_submit.cpp
   engine/engine_project.cpp
   engine/engine_render.cpp
+  engine/engine_render_walk.cpp
   engine/engine_stage.cpp
   engine/sop.cpp
   engine/engine_demo.cpp

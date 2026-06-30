@@ -1,5 +1,29 @@
 # Debug / progress journal
 
+## later-274 — narration miss 0x80146478 FIXED (native walk owns the unowned node cases) + render-walk split out of engine_submit.cpp
+Two things. (1) The narration-cutscene recomp-MISS 0x80146478 (later-273) is fixed the PC-game way. The live
+backtrace was `ov_scene_native → ov_render_walk → gen_func_8003C048 (super-call) → 8003CCA4 → 8003CDD8 →
+8003F698 → MISS`, NOT the predicted 0x8010A0E0 chain: the NATIVE `submit_render_walk` FELL BACK to
+`rec_super_call(0x8003C048)` because the narration scene has a render-list node of TYPE 16 the native walk
+didn't own. The whole-body super-call then ran the recompiled per-object chain down to the per-AREA dispatch
+8003F698 → A00's 0x80146478 (overlay not resident during the data-only SOP intro) → abort. The native
+per-object path (`submit_perobj_flush → native_gt3gt4`) bypasses 8003F698, so the only thing forcing PSX was
+the one unowned node type. FIX: own the remaining simple master-walk cases natively — the render-nothing skip
+cases (types 9-14,21-31 → 0x8003C2AC) and the special-effect leaf cases (types 16-19 → leaves
+0x8003C2D4/464/5F8/788, which only call resident-MAIN library fns, never 8003F698 / an overlay). type-4 (per
+later-239) and type-20 (overlay-dependent leaf 0x8011be5c) keep falling back. Verified: 0x80146478 gone;
+AUTO_SKIP free-roam 0-miss; emit 14/14; SELFTEST=startgame PASS. The narration now advances to a SEPARATE
+later miss `0x8010BF54` (SOP-overlay routing — next frontier; the SOP overlay HAS ov_sop_func_8010BF54 but the
+router didn't route it).
+(2) WORKFLOW/structure (user directive: "don't cram all the code in engine_submit.cpp, build a PC game file
+structure"). engine_submit.cpp (2274 lines, ~5 subsystems) was split: the render-list WALK subsystem
+(ov_scene_native + the master/snapshot/aux list walks + per-object render/flush + native backdrop) moved to
+`engine/engine_render_walk.cpp` (sibling of engine_render.cpp, the orchestrator that already fwd-declares
+them). Shared internals (PktSpanSession, cur_render_node/obj_world_ord/fps60_bb_node inline helpers,
+native_gt3gt4 + ov_field_entity_render decls) moved to `engine/render_internal.h`. engine_submit.cpp now holds
+the geometry-SUBMIT subsystem (poly submitters, render-cmd dispatcher, transform/matrix orchestration). Pure
+mechanical move — all gates above pass unchanged.
+
 ## later-270 — headless SPU/XA advance so audio-gated game logic progresses; selftest runs the intro clip
 The strong selftest (later-269) exposed the NEXT layer: after the GAME loop runs, entering the first area
 starts an intro XA voice clip [66515..75523] and the field waits `while(*(0x801fe0e0)!=0)` for it to finish —
