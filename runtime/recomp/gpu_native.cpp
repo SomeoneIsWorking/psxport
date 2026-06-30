@@ -945,7 +945,7 @@ void GpuState::gp0_exec(Core* core) {
     { void fps60_join_poly(Core*, int, int); fps60_join_poly(core, v[0].x, v[0].y); }  // fps60: object join
     // VK backend (M5): tee polys to the GPU rasterizer in absolute VRAM coords. Opaque textured/
     // untextured -> opaque batch; semi -> semi batch (mode 3 = untextured flat). VK owns these now.
-    if (gpu_gpu_enabled()) {
+    if (vk_path()) {
       unsigned ord_idx = s_prim_order++;
       int xs[4], ys[4], us[4], vs[4]; unsigned char rs[4], gs[4], bs[4];
       for (int i = 0; i < nv; i++) { xs[i]=v[i].x+s_off_x; ys[i]=v[i].y+s_off_y; us[i]=v[i].u; vs[i]=v[i].v;
@@ -1128,7 +1128,7 @@ void GpuState::gp0_exec(Core* core) {
     }
     prov_begin(op, textured ? 1 : 0, semi, v[0].r, v[0].g, v[0].b,
                v[0].x + s_off_x, v[0].y + s_off_y, v[0].u, v[0].v);
-    if (!gpu_gpu_enabled()) {                  // VK owns poly raster now (tee'd above); SW does the rest
+    if (sw_path()) {                           // VK owns poly raster now (tee'd above); SW does the rest
       tri(v[0], v[1], v[2], textured, shade, semi, raw);
       if (quad) tri(v[1], v[2], v[3], textured, shade, semi, raw);
     }
@@ -1179,9 +1179,9 @@ void GpuState::gp0_exec(Core* core) {
     // bit0=1 -> raw texel; bit0=0 -> modulate by command color (beetle sprite decode table:
     // 0x64/0x66 = TM1 modulate, 0x65/0x67 = TM0 raw). Modulating unconditionally once wrongly
     // tinted raw 0x65 sprites (turned a blue item green).
-    if (!gpu_gpu_enabled()) raster_sprite(op, x, y, u0, v0, w, h, cr, cg, cb, textured, semi);  // VK owns it (tee'd below)
+    if (sw_path()) raster_sprite(op, x, y, u0, v0, w, h, cr, cg, cb, textured, semi);  // VK owns it (tee'd below)
     // VK backend (M5): tee rects/sprites as two triangles (opaque or semi; mode 3 = untextured solid).
-    if (gpu_gpu_enabled()) {
+    if (vk_path()) {
       unsigned ord_idx = s_prim_order++;
       // sprites/rects are screen-space (no GTE projection) -> 2D backdrop/HUD band by screen coverage.
       int use_rq = rq_active();
@@ -1258,7 +1258,7 @@ void GpuState::gp0_exec(Core* core) {
     int x = xy & 0x3F0, y = (xy >> 16) & 0x1FF, w = ((wh & 0x3FF) + 0xF) & ~0xF, h = (wh >> 16) & 0x1FF;
     uint16_t col = to555(cr, cg, cb);
     for (int dy = 0; dy < h; dy++) for (int dx = 0; dx < w; dx++) *vram(x + dx, y + dy) = col;
-    if (gpu_gpu_enabled()) gpu_gpu_dirty(core, x, y, w, h);   // mirror fill to VK
+    if (vk_path()) gpu_gpu_dirty(core, x, y, w, h);   // mirror fill to VK
   } else if (op >= 0x40 && op <= 0x5F) {     // line / poly-line (flat or gouraud)
     int semi = (op & 0x02) ? 1 : 0, gouraud = (op & 0x10) ? 1 : 0;
     // Collect the vertex list from s_fifo (cmd carries v0's colour). Single lines have 2 verts;
@@ -1273,7 +1273,7 @@ void GpuState::gp0_exec(Core* core) {
       vx[nv] = cx(s_fifo[i]); vy[nv] = cy(s_fifo[i]); vr[nv] = r; vg[nv] = g; vb[nv] = b; nv++; i++;
     }
     for (int s = 0; s + 1 < nv; s++) {        // flat colour = start vertex
-      if (!gpu_gpu_enabled())
+      if (sw_path())
         raster_line(vx[s], vy[s], vx[s+1], vy[s+1], vr[s], vg[s], vb[s], semi);
       else {                                   // VK: tee the segment as a 1px-thick quad (mode 3 flat)
         int x0=vx[s]+s_off_x, y0=vy[s]+s_off_y, x1=vx[s+1]+s_off_x, y1=vy[s+1]+s_off_y;
@@ -1378,7 +1378,7 @@ void GpuState::gpu_gp0(Core* core, uint32_t w) {
       s_xfer_w = ((s_fifo[2] & 0x3FF) ? (s_fifo[2] & 0x3FF) : 1024);
       s_xfer_h = (((s_fifo[2] >> 16) & 0x1FF) ? ((s_fifo[2] >> 16) & 0x1FF) : 512);
       s_xfer_px = 0; s_xfer = 1;
-      if (gpu_gpu_enabled()) gpu_gpu_dirty(core, s_xfer_x, s_xfer_y, s_xfer_w, s_xfer_h);   // mirror upload to VK
+      if (vk_path()) gpu_gpu_dirty(core, s_xfer_x, s_xfer_y, s_xfer_w, s_xfer_h);   // mirror upload to VK
       vram_guard_check(core, "A0", s_xfer_x, s_xfer_y, s_xfer_w, s_xfer_h, 0x80000000u | g_dma_src);
       clutwatch_xfer("A0", s_xfer_x, s_xfer_y, s_xfer_w, s_xfer_h);
       if (cfg_dbg("upload")) {
@@ -1401,7 +1401,7 @@ void GpuState::gpu_gp0(Core* core, uint32_t w) {
       // clobber even though the copy still proceeds (diagnostic, non-mutating; the catch is the point).
       vram_guard_check(core, "80copy", dx, dy, w2, h2, 0x80000000u | ((uint32_t)(sy * VRAM_W + sx) * 2));
       for (int y = 0; y < h2; y++) for (int x = 0; x < w2; x++) *vram(dx + x, dy + y) = *vram(sx + x, sy + y);
-      if (gpu_gpu_enabled()) gpu_gpu_dirty(core, dx, dy, w2, h2);   // mirror VRAM->VRAM copy to VK
+      if (vk_path()) gpu_gpu_dirty(core, dx, dy, w2, h2);   // mirror VRAM->VRAM copy to VK
       clutwatch_xfer("80copy", dx, dy, w2, h2);
       if (texwatch_overlap(dx, dy, w2, h2)) {
         fprintf(stderr, "[texwatch] f%d 80copy src=(%d,%d) dest=(%d,%d) %dx%d node=0x%08X words=%08X,%08X,%08X,%08X\n",
@@ -1513,7 +1513,8 @@ void gpu_pace_frame(Core* core) { gpu_pace_subframe(core, 1); }
 // interactive driver is (title / menu / attract / gameplay) instead of guessing from stage numbers.
 void GpuState::gpu_native_shot(Core* core, const char* path) {
   // VK render lives in the GPU image, not s_vram — read it back over the current display region.
-  if (gpu_gpu_enabled()) {
+  // (soft_gpu oracle: VK is off for this Core, so fall through to the s_vram PPM dump below.)
+  if (vk_path()) {
     void gpu_gpu_shot_region(Core*, const char*, int, int, int, int);
     int dw = s_disp_w > 0 ? s_disp_w : 320, dh = s_disp_h > 0 ? s_disp_h : 240;
     gpu_gpu_shot_region(core, path, s_disp_x, s_disp_y, dw, dh);

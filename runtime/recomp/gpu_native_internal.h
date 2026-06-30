@@ -31,6 +31,15 @@ typedef struct { int x, y; uint8_t r, g, b; int u, v; } Vtx;   // rasterizer ver
 struct GpuState {
   Game* game = nullptr;   // set by Game(); blit_src uses &game->core to reach the gpu_gpu present wrapper
 
+  // ORACLE soft-GPU (docs/oracle.md Phase 2): when set, this GpuState rasterizes its GP0 stream into
+  // s_vram in SOFTWARE (the existing tri()/raster_sprite()/raster_line() path) and NEVER touches the VK
+  // backend — even though the native port Core keeps the VK backend up (gpu_gpu_enabled()==1 is global).
+  // The diff harness sets it on the interpreter oracle Core so we get the REAL PSX cutscene framebuffer
+  // (s_vram) to dump/diff, fully decoupled from the native render path. Default 0 = the shipping VK path.
+  int soft_gpu = 0;
+  inline bool vk_path() const { extern int gpu_gpu_enabled(void); return gpu_gpu_enabled() && !soft_gpu; }
+  inline bool sw_path() const { extern int gpu_gpu_enabled(void); return soft_gpu || !gpu_gpu_enabled(); }
+
   // Backdrop-vs-HUD / gameplay-frame discrimination (read by the gpu_gpu present path via Core).
   int s_seen3d = 0;       // has any GTE-projected (3D) prim been teed yet this frame? (else 2D backdrop band)
   int bg_2d(int bx0, int by0, int bx1, int by1);   // FALLBACK 2D backdrop-vs-HUD by screen coverage (un-owned scenes)

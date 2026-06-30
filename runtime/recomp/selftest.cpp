@@ -219,9 +219,11 @@ static int run_oracle(const char* path) {
   Game* game = new Game();
   game->psx_fallback = 1;                  // FULL PSX: cooperative tasks run as coroutine-resumed bodies...
   game->core.use_interp = 1;               // ...but INTERPRETED (the oracle engine), not the recomp substrate
+  game->gpu.soft_gpu = 1;                  // ...and SOFTWARE-rasterized (docs/oracle.md Phase 2) into its own s_vram
   Core* c = &game->core;
   load_exe(path, c);
   dc_boot_init(c);
+  void gpu_native_shot(Core*, const char*);
 
   auto stage = [&]{ return c->mem_r32(TASKBASE + 0xc); };
   auto sm48  = [&]{ return (uint32_t)c->mem_r16(TASKBASE + 0x48); };
@@ -246,12 +248,21 @@ static int run_oracle(const char* path) {
   // Run a long window; track the loop counter and the furthest SOP scene id seen.
   uint32_t c0 = loopc(), max_scene = 0;
   const uint32_t RUN = 3000;
+  uint8_t shot_done[256] = {0};
   for (uint32_t k = 0; k < RUN; k++, f++) {
     dc_step_frame(c, f);
-    if (scene() > max_scene) max_scene = scene();
+    uint8_t sc = scene();
+    if (sc > max_scene) max_scene = sc;
+    // Phase-2 deliverable: dump the oracle's SOFTWARE-rendered framebuffer the first time we reach each
+    // narration beat — this is the REAL PSX cutscene render (void scene 5, cliff scene 7) we need to see.
+    if (sc && !shot_done[sc]) {
+      shot_done[sc] = 1;
+      char p[160]; snprintf(p, sizeof p, "scratch/screenshots/oracle_scene%u_f%u.ppm", sc, f);
+      gpu_native_shot(c, p);
+    }
     if (verbose && (k % 250) == 0)
       fprintf(stderr, "[selftest]   oracle f=%u loop=%u sm[0x48]=%u scene(bf9b4)=%u\n",
-              f, loopc(), sm48(), scene());
+              f, loopc(), sm48(), sc);
   }
   uint32_t adv = (uint16_t)(loopc() - c0);
   // The recomp full-PSX path froze with adv≈0 (counter stuck ~34). The interpreter must advance FAR past that.
