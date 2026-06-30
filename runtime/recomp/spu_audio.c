@@ -31,6 +31,13 @@ int     spu_render(int16_t *out, int max_frames);
 int     native_music_render(int16_t *out, int nframes);
 int     native_music_active(void);
 
+// XA/CD streamer (xa_stream.c). When a clip is streaming, GAME LOGIC may BLOCK waiting for it to
+// finish (the field/cutscene `while(*(0x801fe0e0)!=0)` wait, driven by the read head passing the
+// clip's end LBA). That progress only happens inside spu_update -> CDC_GetCDAudioSample, so the SPU
+// must be advanced for the wait to clear EVEN when there is no audio output consumer (headless /
+// PSXPORT_NOAUDIO). Declared here to keep this sink self-contained.
+int     xa_stream_is_active(void);
+
 // Public interface (this module).
 void spu_audio_init(void);
 void spu_audio_frame(void);
@@ -169,13 +176,19 @@ void spu_audio_init(void)
 void spu_audio_frame(void)
 {
    // We advance + drain the SPU when SOMETHING consumes it: the SDL device (playback) OR a
-   // WAV capture (PSXPORT_WAV, works headless). If neither is active, leave the SPU idle.
+   // WAV capture (PSXPORT_WAV, works headless). We ALSO advance it (output discarded) when an XA
+   // clip is streaming, because game LOGIC blocks until the clip's read head passes its end LBA and
+   // that progress lives inside spu_update -> CDC_GetCDAudioSample — so a headless run (no device, no
+   // WAV) must still tick the SPU or an audio-gated cutscene/voice wait NEVER clears (the field
+   // freeze: "frozen, music would keep playing"). One spu_update == one video frame == correct
+   // realtime-equivalent pacing, so the clip can't over-advance. If nothing consumes AND nothing
+   // streams, the SPU is genuinely idle — leave it.
 #ifdef PSXPORT_SDL
    int sdl_on = (s_state == 1 && s_stream != NULL);
 #else
    int sdl_on = 0;
 #endif
-   if (!sdl_on && !s_wav)
+   if (!sdl_on && !s_wav && !xa_stream_is_active())
       return;
 
    // Advance the mixer by exactly one video frame of system clocks. spu_render drains

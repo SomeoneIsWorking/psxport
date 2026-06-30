@@ -1,5 +1,23 @@
 # Debug / progress journal
 
+## later-270 — headless SPU/XA advance so audio-gated game logic progresses; selftest runs the intro clip
+The strong selftest (later-269) exposed the NEXT layer: after the GAME loop runs, entering the first area
+starts an intro XA voice clip [66515..75523] and the field waits `while(*(0x801fe0e0)!=0)` for it to finish —
+but headless the clip never advanced, so the wait hung. ROOT CAUSE: `xa_decode_next_sector` is driven only by
+`CDC_GetCDAudioSample` (per output sample, inside `spu_update`), and `spu_audio_frame` early-returned when no
+output consumer (SDL device / WAV) was active — conflating OUTPUT gating with STREAM-CLOCK gating. FIX: advance
+the SPU+XA whenever `xa_stream_is_active()` (discard the samples); keep OUTPUT gated. One spu_update == one
+video frame == correct realtime-equivalent pacing; windowed/shipping always has a consumer so it's unchanged.
+The clip now PLAYS + COMPLETES headless (this is the "present" headless-pump the cutscene needed — it also lets
+ANY headless run progress through audio-gated logic). Selftest now asserts BOTH verified fixes (GAME loop runs
++ intro clip plays→ends). All gates clean.
+
+DEEPER LIMIT FOUND (NOT fixed, tracked): running the FULL recompiled field-mode under coroutines doesn't fully
+progress past the intro cutscene — the outer loop counter stalls and the field-mode (overlay 0x80109450) parks
+in a deep sub-wait. This is the SBS DIAGNOSTIC full-PSX path; the SHIPPING NATIVE field runs fine (4000 frames
+clean). Next session: capture the GAME coro's GUEST BACKTRACE at the freeze (the mem_r32(sp+16) waitloop
+heuristic is unreliable on inner frames) and compare to ov_sop_field_mode. See docs/findings/sbs.md.
+
 ## later-269 — full-PSX Start→field FREEZE fixed: recompiler now flows a split stage prologue into its loop (TDD)
 User clarified Issue 1: full-PSX (SBS core B) RESPONDS to Start (starts the game) then FREEZES in the field —
 and asked for TDD. Built `PSXPORT_SELFTEST=startgame` (runtime/recomp/selftest.cpp): boots one psx_fallback

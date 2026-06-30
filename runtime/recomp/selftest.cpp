@@ -16,6 +16,7 @@
 
 extern "C" int xa_stream_owns_slot2(void);
 extern "C" int xa_stream_voice_busy(void);
+extern "C" int xa_stream_is_active(void);
 void load_exe(const char* path, Core* c);
 void dc_boot_init(Core* c);
 void dc_step_frame(Core* c, uint32_t f);
@@ -82,23 +83,37 @@ static int run_startgame(const char* path) {
       // reaching 2) is decisively distinguished here: pre-fix sm[0x48] is STUCK at 0; post-fix it reaches
       // 2 AND the GAME loop actually executes. Confirm the loop ran (its per-iteration counter
       // *(0x1F800198), bumped at 0x80106470, advanced > 0) so this isn't a one-frame fluke.
-      // NB: we do NOT require the loop to keep advancing indefinitely here — entering the first area kicks
-      // off a long one-shot voice clip and the field's `while(*(0x801fe0e0)!=0)` wait legitimately pauses
-      // the outer loop until the clip ENDS, and clip progress is driven by real-time audio consumption
-      // (CDC_GetCDAudioSample). Headless logic-frames outrun the 44.1kHz audio, so the clip can't finish in
-      // a few hundred frames — that's an audio-gated cutscene, NOT a freeze. (A headless fast-forward XA
-      // pump would let this test run the whole cutscene deterministically — future workflow improvement.)
+      // Two things must hold (the two verified fixes):
+      //  (1) PROLOGUE-SPLIT (later-269): the GAME loop must actually RUN — its per-iteration counter
+      //      *(0x1F800198) advances. Pre-fix it was stuck at 0 (the prologue returned, the task was reaped).
+      //  (2) SPU-ADVANCE-HEADLESS (later-270): entering the first area starts an intro XA voice clip and the
+      //      field waits on it; the SPU/XA stream is now ticked even headless, so the clip COMPLETES
+      //      (xa_active goes 1 -> 0) instead of hanging the wait forever (the old headless artifact). We
+      //      assert the clip both PLAYED and ENDED.
+      // NB: we do NOT assert the field keeps advancing past the intro cutscene — running the full recompiled
+      // field under coroutines (the SBS DIAGNOSTIC core; the shipping game is the NATIVE path) hits a deeper
+      // field-mode cooperative-wait that doesn't resolve headless. That's a known full-PSX limit, tracked
+      // separately (docs/findings/sbs.md), not this test's subject.
       uint32_t c0 = c->mem_r16(0x1F800198u);
-      const uint32_t WIN = 180;
-      for (uint32_t k = 0; k < WIN; k++, f++) dc_step_frame(c, f);
-      uint32_t adv = (uint16_t)(c->mem_r16(0x1F800198u) - c0);
-      if (adv > 0) {
-        fprintf(stderr, "[selftest] PASS: field free-roam reached at frame %u and the GAME loop RAN "
-                        "(loop counter +%u over %u frames; sm[0x48]=%u)\n", f, adv, WIN, sm48());
+      int saw_clip = 0, clip_ended = 0;
+      const uint32_t WIN = 200, MAX_WINS = 40;
+      for (uint32_t w = 0; w < MAX_WINS && !clip_ended; w++) {
+        for (uint32_t k = 0; k < WIN; k++, f++) dc_step_frame(c, f);
+        if (xa_stream_is_active()) saw_clip = 1;
+        else if (saw_clip) clip_ended = 1;
+        if (verbose) fprintf(stderr, "[selftest]   window %u: loop raw=%u xa_active=%d\n",
+                             w, c->mem_r16(0x1F800198u), xa_stream_is_active());
+      }
+      uint32_t loop_adv = (uint16_t)(c->mem_r16(0x1F800198u) - c0);
+      int loop_ran = (loop_adv > 0) || (sm48() == 2 && c->mem_r16(0x1F800198u) != c0);
+      if (loop_ran && saw_clip && clip_ended) {
+        fprintf(stderr, "[selftest] PASS: GAME loop RAN (prologue flows into loop) and the intro XA clip "
+                        "PLAYED then COMPLETED headless (SPU advanced without an audio device).\n");
         return 0;
       }
-      fprintf(stderr, "[selftest] FAIL: field reached sm[0x48]==2 but the GAME loop never executed "
-                      "(loop counter *(0x1F800198) did not advance over %u frames).\n", WIN);
+      fprintf(stderr, "[selftest] FAIL: loop_ran=%d (counter +%u) saw_clip=%d clip_ended=%d "
+                      "(xa_active=%d sm[0x48]=%u).\n",
+              loop_ran, loop_adv, saw_clip, clip_ended, xa_stream_is_active(), sm48());
       return 1;
     }
     if (stage() != STAGE_GAME) {   // bounced back out of GAME (e.g. froze->reset) — not free-roam

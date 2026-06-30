@@ -127,9 +127,11 @@ oracle. To verify:
 - **Headless behavioral self-tests** (`PSXPORT_SELFTEST=<name>`, runtime/recomp/selftest.cpp): deterministic
   RED/GREEN assertions on a single full-PSX (psx_fallback) core — no render, no oracle. Exit 0=pass, 1=fail
   (so CI/run.sh can gate). `=startgame`: mash Start, assert the field reaches free-roam (sm[0x48]==2) and the
-  GAME loop runs (guards the recompiler stage-split freeze, later-269). `PSXPORT_SELFTEST_VERBOSE=1` traces
-  per-frame stage/SM. Add a new case in `selftest_run()`. (Caveat: audio-gated cutscene waits can't complete
-  headless — clip progress is real-time audio-driven; don't assert past such a wait.)
+  GAME loop runs (guards the recompiler stage-split freeze, later-269) AND the intro XA clip plays→completes
+  headless (later-270: the SPU/XA stream is now advanced even without an audio device, so audio-gated game
+  logic progresses headless). `PSXPORT_SELFTEST_VERBOSE=1` traces per-frame stage/SM. Add a new case in
+  `selftest_run()`. (The full-PSX field still doesn't progress PAST the intro cutscene under coroutines — a
+  known diagnostic-path limit, docs/findings/sbs.md; the shipping NATIVE field is unaffected.)
 
 ## Rendering, present, and config — see the dedicated docs
 - **`docs/render-arch.md`** — the GP0→screen path, the VK rasterizer + present dispatch
