@@ -1,5 +1,20 @@
 # Debug / progress journal
 
+## later-264b — overlay router by LOAD-TIME identity → SBS both/gameplay run clean (full-PSX alive)
+After the coro fix (later-264) got full-PSX past the mid-function-resume wall, SBS mode=gameplay/both hit
+a router miss at 0x801063F4 (GAME loop top), caller ra=0x801063F4 (core A's native game_coop resume). The
+diagnostic I added to overlay_router.cpp showed the cause: the resident-overlay identification compared the
+raw GAME.BIN first-32-bytes signature against live RAM, but the game MUTATES its header pointer table at
+runtime — GAME +0x08 swapped from 0x80106510 (raw) to 0x80106470 (live), 14/16 byte match → no overlay
+matched → fail-fast. (This is a latent bug in the NATIVE path too; it just wasn't hit in my test runs.)
+Fix: record the resident overlay at LOAD time, when the freshly-written image still matches its signature,
+into a per-core map SchedulerState::resident_ov[slot] (overlay_note_load, called from the CD loaders
+ov_cd_loadfile/ov_cd_async_read in cd_override.cpp). The router (resident_overlay) routes by that IDENTITY,
+falling back to the live signature scan only when a slot has no noted load. Robust to runtime header
+mutation. Result: native gates stay 0-miss (plain + AUTO_SKIP field DEMO→GAME); PSXPORT_SBS_MODE=gameplay
+AND =both now boot BOTH cores START→DEMO→GAME with 0 recomp-MISS and no crash/hang (the full-PSX reference
+core is alive again). Tools: tests 12/12 + test_coro all-pass. Finding promoted to docs/findings/sbs.md.
+
 ## later-263 — ensure_recomp.py: one hash-checked recomp step; attract-path misses resolved by all-overlay build
 Two things from the handoff (scratch/handoff_ensure_recomp_and_attract.md), both done.
 (1) USER directive — `tools/ensure_recomp.py` is now the SINGLE recomp-provisioning step. It resolves the

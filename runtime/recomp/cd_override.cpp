@@ -148,6 +148,8 @@ static void ov_cd_loadfile(Core* c) {
   }
   if (g_cd_verbose)
     fprintf(stderr, "[cd] loadfile %u B @ LBA %u -> 0x%08X ra=0x%08X\n", size, lba, dest, c->r[31]);
+  void overlay_note_load(Core*, uint32_t);
+  overlay_note_load(c, dest);   // record the resident overlay now (fresh image matches its signature)
   c->r[V0] = size;
 }
 
@@ -192,6 +194,8 @@ void ov_cd_async_read(Core* c) {
   if (nsec) c->mem_w32(0x800be0e0, lba + nsec - 1);  // DAT_800be0e0 = last sector read (pos tracker)
   if (g_cd_verbose)
     fprintf(stderr, "[cd] async read %u words (%u B) @ LBA %u -> 0x%08X\n", words, bytes, lba, dest);
+  void overlay_note_load(Core*, uint32_t);
+  overlay_note_load(c, dest);   // an A0* field-area code overlay may load here (MODE slot) — note it
 }
 
 // Direct-call native FUN_8001DC40(dest, lba, size_bytes): the inline (NON-spawning) sync reader the

@@ -17,7 +17,7 @@ already solved or ruled out. 10 findings across 4 subsystems.
 
 ## sbs
 
-- **Full-PSX SBS modes (gameplay/both) fail-fast at a scheduler yield-return (post-interpreter)** [known-issue (architectural; native is the shipping behavior)] — `PSXPORT_SBS_MODE=both` (or `=gameplay`) aborts at frame 0 with `[recomp-MISS 0] no recompiled fn for 0x80051FA4 (caller ra=0x80051FA4, a0=0xFF000000)`. `mode=render` is fine (runs indefinitely).  ↪ docs/findings/sbs.md
+- **Full-PSX SBS modes (gameplay/both) fail-fast at a scheduler yield-return (post-interpreter)** [fixed (later-264) — full-PSX runs recompiler-only via thread-fiber coroutines + load-time overlay-identity routing; both cores boot START→DEMO→GAME with 0 recomp-MISS, no crash/hang.] — `PSXPORT_SBS_MODE=both` (or `=gameplay`) aborts at frame 0 with `[recomp-MISS 0] no recompiled fn for 0x80051FA4 (caller ra=0x80051FA4, a0=0xFF000000)`. `mode=render` is fine (runs indefinitely).  ↪ docs/findings/sbs.md
 - **SBS panes render BLACK for the field (both panes all-black / region-nonzero=0)** [fixed (render_queue.cpp flush diff_mode gate)] — `PSXPORT_SBS_MODE=both` dump at free-roam is all black; `PSXPORT_GPU_TRACE=1` readback shows `region-nonzero=0/76800 ... batch tri=0 tex=0 worldquads=1109` — the native core EMITS 1109 world quads but the geometry batch is empty at `grab_pane`.  ↪ docs/findings/sbs.md
 
 ## tooling

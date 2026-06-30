@@ -81,7 +81,8 @@ struct FmvState {
 // memory across all tasks (saving a whole Core here would give each task its own RAM snapshot — the OOP
 // regression where the loader task read a pre-fill file-table snapshot and stalled boot; see
 // oop-regression-hunt). So task_ctx slices to the R3000 base on save/restore.
-class Coro;   // runtime/recomp/coro.h — thread-fiber for full-PSX mid-function resume (later-264)
+class Coro;          // runtime/recomp/coro.h — thread-fiber for full-PSX mid-function resume (later-264)
+struct RecOverlay;   // generated overlay_table.h — descriptor of one recompiled overlay image
 struct SchedulerState {
   jmp_buf yield_jmp;          // longjmp target = the setjmp in native_scheduler_step (was g_yield_jmp)
   R3000   task_ctx[3] = {};   // saved CPU register context per task slot, registers only (was g_task_ctx)
@@ -111,6 +112,14 @@ struct SchedulerState {
   // Coro::exit_now on task-end) vs longjmp; Coro owns its own unwind jmp_buf for end/cancel.
   Coro*   coro[3] = {};          // per-slot fiber (heap; nullptr = no live full-PSX task on this slot)
   int     cur_is_coro = 0;       // 1 while a Coro task is running -> ov_switch yields via the fiber
+
+  // Resident overlay per OVERLAP SLOT (0x80106228 stage / 0x80108F9C mode / 0x8018A000 area), recorded
+  // by overlay_note_load() at LOAD time — when the freshly-written image still matches its raw .BIN
+  // signature, BEFORE the game mutates its header pointer table at runtime. The router routes by this
+  // IDENTITY (robust), falling back to a content-signature scan only when unset. Fixes the overlay-router
+  // miss when GAME's header pointer @+0x08 is swapped at runtime so the raw-bytes signature no longer
+  // matches (later-264). Per-instance for SBS (each core has its own resident set).
+  const RecOverlay* resident_ov[3] = {};
 };
 
 // native_stub.cpp — the SCEA boot-stub (SCUS_944.54) interpreter that draws SCEA + LoadExec's MAIN.
