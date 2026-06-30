@@ -272,8 +272,21 @@ void ov_sop_field_mode(Core* c) {
       break;
     }
     case 1: {  // FADE-IN
+      // BUG-1 (double fade-in) ROOT CAUSE + FIX. This state's fade ramps sm[0x6c] 0x1f->0 over 31 frames,
+      // but the area's 30-frame STARTUP DELAY (sm[0x60], counted down inside ov_sop_field_update) is still
+      // running for the first 30 of them. During that delay ov_sop_field_update does NOT run the per-frame
+      // scene content / the bg-scene-transition machine — yet the end-of-area TEXT scroller (tail) AND our
+      // native ov_scene_native still draw, so this fade reveals a half-built frame ("only the text fades
+      // in"). Then once the delay ends, ov_bg_scene_transition_sm runs its OWN state-0 full-black + state-1
+      // fade-in (the real "scene appears" fade, run AFTER the scene is built) — so the screen visibly fades
+      // twice. On PSX the scene render is suppressed during the delay, so this fade ramps over BLACK and is
+      // invisible; the single visible fade-in is the bg-transition's. Match that: HOLD BLACK while the
+      // startup delay is active and let ov_bg_scene_transition_sm own the one fade-in. The sm[0x6c] ramp
+      // still counts down so state 1 ends exactly as the delay ends (then bg-transition has taken over).
+      // Shared with every SOP area (free-roam too) — correct there as well (same delay-then-bg-fade entry).
       uint32_t u = (uint32_t)c->mem_r8(sm + 0x6c) & 0x1f;
-      engine_fade_set(c, (u << 19) | (u << 11) | (u << 3), 0);   // FADE-IN: a1=0 = subtractive (from black)
+      bool startup_delay = (int16_t)c->mem_r16(sm + 0x60) != 0;
+      engine_fade_set(c, startup_delay ? 0xffffffu : ((u << 19) | (u << 11) | (u << 3)), 0);   // hold black during delay; else subtractive fade-in
       uint8_t v = (uint8_t)(c->mem_r8(sm + 0x6c) - 1);
       c->mem_w8(sm + 0x6c, v);
       if (v == 0) { c->mem_w8(sm + 0x6c, 0x1f); c->mem_w16(sm + 0x50, (uint16_t)(c->mem_r16(sm + 0x50) + 1)); }
