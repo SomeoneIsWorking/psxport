@@ -928,6 +928,7 @@ def main():
             if not fn.upper().endswith(".BIN"):
                 continue
             data = open(os.path.join(ov_dir, fn), "rb").read()
+            data = data[:len(data) & ~3]      # align to a word; trailing 1-3 padding bytes aren't code
             stem = fn[:-4].upper()
             base = overlay_base(stem)
             if base is None:

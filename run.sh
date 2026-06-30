@@ -96,7 +96,11 @@ fi
 # runs under the substrate. Game data — gitignored scratch.
 OVL=scratch/bin/overlays
 mkdir -p "$OVL"
-for b in START DEMO GAME SOP OPN CRD; do
+# Stage/mode overlays + the per-area FIELD CODE overlays (A0*.BIN). The area overlays MUST be present:
+# emit.py recompiles each, AND overlay-scan seeds the resident MAIN functions they call — so a checkout
+# missing them recompiles fewer MAIN fns and fail-fasts on the field/attract path (different miss per box).
+for b in START DEMO GAME SOP OPN CRD \
+         A00 A01 A02 A03 A04 A05 A06 A07 A08 A09 A0A A0B A0C A0D A0E A0F A0G A0H A0I A0J A0K A0L; do
   [ -f "$OVL/$b.BIN" ] || "$DISCDUMP" get "BIN/$b.BIN" "$DISC" "$OVL" >/dev/null 2>&1 || true
 done
 

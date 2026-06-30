@@ -8887,3 +8887,15 @@ Result: PSXPORT_AUTO_SKIP drives DEMO -> GAME -> SOP -> A00 field and runs the G
 frames with ZERO recomp-MISS (deepest the port has run); sm[0x48] advances across the run. Plain headless
 smoke still clean (frame 90, 0 misses); recompiler tests 12/12. RENDER correctness (does the field draw)
 is the next thing to eyeball — separate from this mechanical milestone.
+
+## later-262 — run.sh extracts A0* area overlays; emit overlay word-align fix (portability)
+USER hit a DIFFERENT recomp-miss than me on macOS (0x800810F0 vs my 0x800739AC) on a plain `./run.sh`:
+root cause = run.sh extracted only the 6 stage overlays, NOT the A00..A0L field area overlays, so
+overlay_funcs() seeded fewer resident MAIN fns (the area overlays jal into MAIN) → fewer MAIN fns
+recompiled → a different MAIN miss per box. Fixed: run.sh now extracts A00..A0L too; emit.py word-aligns
+overlay data (`data[:len(data)&~3]`) — a non-4-aligned A0* size overran a scan (IndexError). emit now
+generates 28 overlay modules clean. NEXT (handoff scratch/handoff_ensure_recomp_and_attract.md):
+(1) USER directive — move all recomp provisioning into a single HASH-CHECKED `tools/ensure_recomp.py`
+that run.sh just calls ("ensure all recomp is there and matches a hash"); (2) resolve the attract-path
+(plain, no AUTO_SKIP) misses 0x800739AC (indirect jalr → seed) and 0x800810F0 (coroutine resume → maybe
+another game_coop-style loop). The AUTO_SKIP field path is clean and renders.
