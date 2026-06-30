@@ -55,6 +55,7 @@ add_custom_target(gen_gpu_shaders DEPENDS ${SHADERS_H})
 # ---- source list (KEEP IN SYNC with run.sh / tools/build_port.sh) -----------------------------
 set(PORT_SRC
   runtime/recomp/dispatch.cpp
+  runtime/recomp/interp.cpp          # ORACLE engine (later-278): pure-MIPS interpreter for the oracle Core
   runtime/recomp/coro.cpp
   runtime/recomp/overlay_router.cpp
   runtime/recomp/cfg.c

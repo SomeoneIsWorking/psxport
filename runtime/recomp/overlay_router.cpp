@@ -135,7 +135,13 @@ int rec_addr_has_entry(Core* c, uint32_t addr) {
   return 1;
 }
 
+void interp_run(Core* c, uint32_t addr);   // interp.cpp — pure-interpreter engine (oracle Core)
+
 void rec_dispatch(Core* c, uint32_t addr) {
+  // ORACLE Core (later-278): interpret the target instead of routing to a recompiled body. The
+  // interpreter handles overlay/non-recompiled code natively (no fail-fast miss), which is exactly why
+  // the oracle uses it. The native port Core (use_interp==0) takes the substrate route below.
+  if (c->use_interp) { interp_run(c, addr); return; }
   uint32_t a = addr & 0x1FFFFFFF;
   if (a >= REC_MAIN_LO && a < REC_MAIN_HI) { main_dispatch(c, addr); return; }
   for (int i = 0; i < g_rec_overlay_count; i++) {

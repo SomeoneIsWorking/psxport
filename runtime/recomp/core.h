@@ -40,6 +40,14 @@ public:
   // returns, consumed (and cleared) by the interp at the next control transfer. See interp.cpp.
   uint32_t coro_redirect_pc = 0;
 
+  // ORACLE engine select (later-278, docs/oracle.md). 0 = run guest code as the recomp SUBSTRATE
+  // (the shipping native port). 1 = run guest code through the pure MIPS INTERPRETER (interp.cpp) —
+  // used ONLY by the oracle Core in the divergence harness, which must interpret the real overlay
+  // cutscene code the recompiler has no entry for (so it neither freezes nor hits a recomp-MISS).
+  // The four engine entry points (rec_dispatch / rec_coro_run / rec_interp / rec_super_call) check
+  // this and route to interp_run / interp_coro_run when set.
+  int use_interp = 0;
+
   Core();
 
   // Memory access (delegates to host_ptr / the I/O map). PSX is little-endian == host.
