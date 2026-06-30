@@ -12,10 +12,13 @@ What it does, in order:
      AND the per-area field-code overlays (A00..A0L). The area overlays MUST all be present: emit.py
      recompiles each AND its overlay-scan seeds the resident MAIN functions they jal into, so a box
      missing them recompiles fewer MAIN fns and fail-fasts on a DIFFERENT miss than a complete box.
-  3. Hash the INPUTS (MAIN.EXE + stub + each overlay .BIN + the recompiler module sources). If the
-     stored hash (generated/.recomp.hash) matches AND the generated set is complete, do nothing.
-     Otherwise re-run emit.py and rewrite the hash. Deterministic: "ensure present AND matches",
-     no silent drift — every machine builds byte-identical recomp from the same disc.
+  3. Compute the recomp IDENTITY = emit.py's RECOMP_VERSION + a hash of the INPUTS (MAIN.EXE + stub +
+     each overlay .BIN + the recompiler module sources). If the stored identity (generated/.recomp.hash)
+     matches, the on-disk version stamp (generated/.recomp_version) matches RECOMP_VERSION, AND the
+     generated set is complete, do nothing. Otherwise re-run emit.py and rewrite the identity. The
+     RECOMP_VERSION is the EXPLICIT staleness knob: bumping it in emit.py forces every machine to
+     regenerate, catching a stale-but-self-consistent generated/ that an input hash alone would miss
+     (the cross-platform drift that left macOS fail-fasting on 0x800810F0 while Linux was clean).
 
 Usage: python3 tools/ensure_recomp.py [/path/to/disc.chd]
 Env:   PSXPORT_TOMBA2_DISC (disc path), PSXPORT_DISCDUMP (discdump binary override),
@@ -45,6 +48,17 @@ OVL_DIR = "scratch/bin/overlays"
 GEN_DIR = "generated"
 GEN_MAIN = "generated/tomba2_rec.c"
 HASH_FILE = "generated/.recomp.hash"
+VERSION_FILE = "generated/.recomp_version"
+
+
+def recomp_version():
+    """The RECOMP_VERSION constant declared in tools/recomp/emit.py (read textually so we don't import
+    the whole recompiler just for one string). This is the explicit, machine-independent staleness knob."""
+    src = open(os.path.join(ROOT, "tools/recomp/emit.py")).read()
+    m = re.search(r'^RECOMP_VERSION\s*=\s*"([^"]+)"', src, re.M)
+    if not m:
+        die("could not read RECOMP_VERSION from tools/recomp/emit.py")
+    return m.group(1)
 
 
 def say(msg):
@@ -160,31 +174,44 @@ def main():
         else:
             say(f"WARNING: overlay BIN/{stem}.BIN not on the disc — skipping")
 
-    # 2. Hash the inputs; skip the emit if everything is present and current.
+    # 2. Compute the recomp IDENTITY = RECOMP_VERSION + input hash; skip the emit only if the stored
+    #    identity matches, the on-disk version stamp matches, AND the generated set is complete.
     os.makedirs(os.path.join(ROOT, GEN_DIR), exist_ok=True)
-    want = input_hash(overlay_files)
+    version = recomp_version()
+    want = version + ":" + input_hash(overlay_files)
     have = ""
     if os.path.isfile(os.path.join(ROOT, HASH_FILE)):
         have = open(os.path.join(ROOT, HASH_FILE)).read().strip()
+    stamp = ""
+    if os.path.isfile(os.path.join(ROOT, VERSION_FILE)):
+        stamp = open(os.path.join(ROOT, VERSION_FILE)).read().strip()
     force = os.environ.get("PSXPORT_FORCE_RECOMP", "") not in ("", "0")
-    if not force and have == want and generated_complete():
-        say(f"recomp up to date (hash {want[:12]}…) — nothing to do")
+    if not force and have == want and stamp == version and generated_complete():
+        say(f"recomp up to date (version {version}) — nothing to do")
         return
 
     if force:
         say("PSXPORT_FORCE_RECOMP set — re-emitting")
+    elif stamp and stamp != version:
+        say(f"recomp version changed ({stamp} -> {version}) — re-emitting")
     elif have and have != want:
-        say(f"inputs changed (hash {have[:12]}… -> {want[:12]}…) — re-emitting")
-    elif not have:
-        say("no recorded hash — emitting")
+        say("inputs changed — re-emitting")
+    elif not have or not stamp:
+        say(f"no recorded recomp identity — emitting (version {version})")
     else:
         say("generated set incomplete — re-emitting")
 
-    run_emit()
+    run_emit()   # emit.py writes generated/.recomp_version = RECOMP_VERSION
     if not generated_complete():
         die("emit.py ran but the generated set is still incomplete")
+    new_stamp = ""
+    if os.path.isfile(os.path.join(ROOT, VERSION_FILE)):
+        new_stamp = open(os.path.join(ROOT, VERSION_FILE)).read().strip()
+    if new_stamp != version:
+        die(f"emit.py stamped version {new_stamp!r} but ensure_recomp expected {version!r} — "
+            f"emit.py RECOMP_VERSION out of sync")
     open(os.path.join(ROOT, HASH_FILE), "w").write(want + "\n")
-    say(f"recomp current (hash {want[:12]}…)")
+    say(f"recomp current (version {version})")
 
 
 if __name__ == "__main__":

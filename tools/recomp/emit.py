@@ -27,6 +27,13 @@ import psexe
 import decode as D
 from decode import decode
 
+# Recomp version stamp — BUMP this whenever the recompiler logic or the seed set changes in a way that
+# must invalidate every machine's existing generated/ output. tools/ensure_recomp.py folds it into the
+# recomp identity and re-emits when the stamp on disk (generated/.recomp_version) differs, so a stale
+# generated/ on another box (which an input-content hash alone failed to catch — a box can build a
+# self-consistent-but-outdated set) is forced to regenerate. Date + a per-day counter; keep it terse.
+RECOMP_VERSION = "2026-06-30.4"
+
 R = lambda n: f"c->r[{n}]"
 
 
@@ -976,6 +983,11 @@ def main():
 
     # Stub the old monolith path so a stale copy is never compiled.
     open(out_path, "w").write("// recompiled core is split into shard_*.c — see rec_decls.h\n")
+
+    # Stamp the recomp version into the output so ensure_recomp.py can detect a stale generated/ produced
+    # by an older recompiler (the explicit, machine-independent staleness signal — see RECOMP_VERSION).
+    open(os.path.join(out_dir, ".recomp_version"), "w").write(RECOMP_VERSION + "\n")
+    print(f"[recomp] version {RECOMP_VERSION}")
 
 
 def overlay_internal_jal_targets(exe):
