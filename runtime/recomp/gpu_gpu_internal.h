@@ -53,6 +53,12 @@ struct GpuGpuState {
   // (semi-overlap grouping s_semi_grp[]/s_sg_* and the dirty-VRAM list s_dirty[] moved into GeomBatch —
   // see the note above; each render target owns its own.)
 
+  // Engine-owned screen FADE — PER INSTANCE (was a file-scope static, which made one core's fade bleed
+  // into BOTH SBS panes). Set per logic frame via gpu_set_fade(core,…)/cleared via gpu_clear_fade(core),
+  // applied in present.frag (windowed) + the headless readback. mode 0=none, 1=additive(white), 2=sub(black).
+  int     s_fade_mode = 0;
+  uint8_t s_fade_r = 0, s_fade_g = 0, s_fade_b = 0;
+
   // This frame's faithful display origin (for the LIGHT screen map) and the last-presented region
   // (on-demand gpu_gpu_shot) + last frame's batched vertex counts (vkstats probe).
   int s_present_sx = 0, s_present_sy = 0;

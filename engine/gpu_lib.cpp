@@ -15,9 +15,8 @@ void rec_syscall(Core*, uint32_t);
 // compute the exact brightness curve (the grey level in `color`); we only change DELIVERY from a PSX rect
 // to engine fade state, applied PC-native in present.frag + the headless readback. NOT a PSX packet.
 void engine_fade_set(Core* core, uint32_t color, uint32_t a1) {
-  (void)core;
   int mode = (a1 != 0u) ? 1 /*additive/white*/ : 2 /*subtractive/black*/;
-  gpu_set_fade(mode, (uint8_t)(color & 0xffu), (uint8_t)((color >> 8) & 0xffu), (uint8_t)((color >> 16) & 0xffu));
+  gpu_set_fade(core, mode, (uint8_t)(color & 0xffu), (uint8_t)((color >> 8) & 0xffu), (uint8_t)((color >> 16) & 0xffu));
 }
 
 static inline void call_fn(Core* c, uint32_t fn) { rec_dispatch(c, fn); }

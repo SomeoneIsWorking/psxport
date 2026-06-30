@@ -57,8 +57,8 @@ void gpu_gpu_tritest(Core* core);
 // Engine-owned screen FADE (replaces the PSX full-screen semi OT rect + the gpu_native fade_full_2d
 // heuristic). The engine sets the fade each logic frame; present.frag + the headless readback apply
 // clamp(rgb +/- color/255). mode: 0 none, 1 additive (to/from white), 2 subtractive (to/from black).
-void gpu_set_fade(int mode, uint8_t r, uint8_t g, uint8_t b);
-void gpu_clear_fade(void);
+void gpu_set_fade(Core* core, int mode, uint8_t r, uint8_t g, uint8_t b);   // PER-CORE (SBS-isolated)
+void gpu_clear_fade(Core* core);
 // Caller-facing wrapper mirroring the old FUN_8007e9c8(color, a1, otslot) SCREEN-FADE entry: a1!=0 =>
 // additive (white), a1==0 => subtractive (black); color channels r=color&0xff, g=(color>>8)&0xff,
 // b=(color>>16)&0xff. (Core* kept for symmetry with the other engine entries; currently unused.)

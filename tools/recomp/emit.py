@@ -32,7 +32,7 @@ from decode import decode
 # recomp identity and re-emits when the stamp on disk (generated/.recomp_version) differs, so a stale
 # generated/ on another box (which an input-content hash alone failed to catch — a box can build a
 # self-consistent-but-outdated set) is forced to regenerate. Date + a per-day counter; keep it terse.
-RECOMP_VERSION = "2026-06-30.5"
+RECOMP_VERSION = "2026-06-30.8"
 
 R = lambda n: f"c->r[{n}]"
 
@@ -554,6 +554,48 @@ def overlay_funcs(exe, overlay_dir, base=0x80106228):
     return targets
 
 
+def overlay_data_func_pointers(exe, overlay_dir):
+    """Seed resident MAIN functions the \\BIN\\*.BIN overlays reference via a runtime function-POINTER
+    that neither MAIN's jal-discovery nor overlay_funcs' jal-scan can see. Two ways an overlay names a
+    MAIN handler/task-entry, both covered here:
+      (a) as a DATA WORD — per-object TEMPLATES whose behavior-handler field points into MAIN code (the
+          FUN_739ac / FUN_73cd8 … object-behavior family); the engine copies the template into an object,
+          then a dispatcher (FUN_8007A904) jalrs the pointer.
+      (b) BUILT IN OVERLAY CODE — `lui rX,H; addiu/ori rX,…,L` reconstructing a MAIN function address that
+          is then registered as a cooperative TASK ENTRY (obj+0xc) and dispatched fresh by the scheduler
+          (ra=DEAD0000), e.g. START.BIN→0x8004514C, DEMO/GAME.BIN→0x800452C0.
+    Either way the no-interpreter substrate fail-fasts on the un-recompiled target (the attract demo plays
+    an area and hits exactly these). Seed every MAIN function ENTRY (is_func_entry) so named; discover_funcs
+    follows each one's call graph. Bounded, fully general — no per-address EXTRA_SEEDS whack-a-mole."""
+    if not overlay_dir or not os.path.isdir(overlay_dir):
+        return set()
+    lo, hi = exe.load, exe.text_end
+    out = set()
+    for fn in sorted(os.listdir(overlay_dir)):
+        if not fn.upper().endswith(".BIN"):
+            continue
+        data = open(os.path.join(overlay_dir, fn), "rb").read()
+        words = [int.from_bytes(data[o:o + 4], "little") for o in range(0, len(data) & ~3, 4)]
+        for idx, w in enumerate(words):
+            # (a) data word that is a MAIN function entry
+            if lo <= w < hi and is_func_entry(exe, w):
+                out.add(w)
+            # (b) lui rX,H followed (short window, same dest reg) by addiu/ori L -> a MAIN function entry
+            ins = decode(0, w)   # PC irrelevant for lui/addiu immediate reconstruction
+            if ins.op != "lui":
+                continue
+            rd, H = ins.rt, ins.imm
+            for j2 in range(idx + 1, min(idx + 6, len(words))):
+                k = decode(0, words[j2])
+                if getattr(k, "op", None) in ("addiu", "ori") and getattr(k, "rt", None) == rd \
+                   and getattr(k, "rs", None) == rd:
+                    val = ((H << 16) + k.simm) & 0xFFFFFFFF if k.op == "addiu" else ((H << 16) | (k.imm & 0xFFFF))
+                    if lo <= val < hi and is_func_entry(exe, val):
+                        out.add(val)
+                    break
+    return out
+
+
 def is_func_entry(exe, w):
     """Does in-text address `w` look like a FUNCTION ENTRY? Two strong, independent signals:
       (a) standard prologue `addiu sp, sp, -N` (0x27BD8000 mask, negative imm), or
@@ -840,7 +882,9 @@ def main():
         #     so neither direct-jal nor the pointer scans find them. Needed for PSXPORT_SBS_MODE=both/
         #     gameplay (full-PSX core B); the native path owns these stages so it never dispatches them.
         #     Surfaced empirically by the full-PSX miss-loop (later-264).
-        0x8004514C,  # full-PSX task entry (addiu sp,-32; lui 0x8015 ...) — DEMO/front-end sub-task
+        # (the object-behavior handler family 0x800739AC/0x80073CD8/… AND the overlay-registered task
+        #  entries 0x8004514C/0x800452C0/… are seeded GENERALLY by overlay_data_func_pointers — handler
+        #  pointers live in area-overlay object templates; task entries are lui+addiu-built in overlay code.)
         # --- engine render functions reached ONLY via a function pointer (so direct-jal discovery
         #     misses them) — seeded to EMIT readable C for the native-engine RE/port (later-135). The
         #     runtime is interpreter-only, so seeding doesn't change execution; it makes the body
@@ -875,9 +919,10 @@ def main():
     # (jalr) that discovery can't see is NOT recompiled, so a call to it FAILS FAST at runtime — seed
     # it in EXTRA_SEEDS above when the boot surfaces it. (Set PSXPORT_USE_GHIDRA=1 to additionally
     # seed from the Ghidra decomp / committed list, recompiling more up-front.)
-    seeds = ({exe.entry} | EXTRA_SEEDS | pointer_table_funcs(exe)
-             | constructed_func_pointers(exe) | code_pointer_tables(exe))
     ov_dir = sys.argv[sys.argv.index("--overlays") + 1] if "--overlays" in sys.argv else None
+    seeds = ({exe.entry} | EXTRA_SEEDS | pointer_table_funcs(exe)
+             | constructed_func_pointers(exe) | code_pointer_tables(exe)
+             | overlay_data_func_pointers(exe, ov_dir))   # object-behavior handlers in overlay templates
     out_dir = os.path.dirname(out_path) or "."
     # Output is split into SHARDS translation units so the build compiles them in parallel.
     SHARDS = max(1, int(os.environ.get("PSXPORT_SHARDS", "8")))

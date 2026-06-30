@@ -467,11 +467,11 @@ void sbs_run(const char* exe_path) {
   // both reach free-roam the main lockstep loop below takes over (driven by host/server input).
   // You drive BOTH cores yourself from frame 0 (boot → logos → menu → game) with the window — no auto-skip,
   // so front-end / transition bugs are fully shown. The lockstep loop below is host-input-driven.
-  // Auto-drive BOTH cores to the GAME free-roam field (the same 3-phase Cross/Start nav AUTO_SKIP uses),
-  // THEN hand control to interactive window/server input — so you land in the field ready to walk around and
-  // compare, instead of driving from boot every run. Disable with PSXPORT_SBS_NOAUTO=1 (drive from frame 0).
-  const char* sbs_noauto = getenv("PSXPORT_SBS_NOAUTO");
-  const bool sbs_autonav = !(sbs_noauto && *sbs_noauto);
+  // YOU DRIVE both cores from frame 0 by default (user 2026-06-30: "I want to control it myself") — the
+  // SDL_GPU window keyboard feeds the SAME input to both panes (mirrored). Opt INTO the 3-phase Cross/Start
+  // auto-nav (drive both to the GAME free-roam field, then hand off) with PSXPORT_SBS_AUTONAV=1.
+  const char* sbs_autonav_env = getenv("PSXPORT_SBS_AUTONAV");
+  const bool sbs_autonav = sbs_autonav_env && *sbs_autonav_env && strcmp(sbs_autonav_env, "0") != 0;
   const char* sbs_dump_path = getenv("PSXPORT_SBS_DUMP");   // write the side-by-side panes once at free-roam
   static Nav nav_a, nav_b; static bool s_dumped = false;
   fprintf(stderr, "[sbs] %s — then drive both panes with the window keyboard (WASD/arrows, K=Cross, "
@@ -504,20 +504,15 @@ void sbs_run(const char* exe_path) {
     // headless/remote session can confirm the panes aren't black and eyeball PSX-vs-native).
     if (sbs_dump_path && nav_done && !s_dumped && s_wa > 0 && s_wb > 0) { dump_sbs_ppm(sbs_dump_path); s_dumped = true; }
 
-    if (s_ww_armed && s_ww_hit) {            // the diverging write fired — pause with the exact site captured
+    // The frame-boundary diff NO LONGER auto-pauses (user 2026-06-30: drive both games freely with the same
+    // input, don't freeze on a divergence). Inspect divergences ON DEMAND with `sbs ramdiff` instead. The
+    // OPT-IN write-watch (`sbs watch <addr>`) still pauses on the exact diverging write, since you asked for it.
+    if (s_ww_armed && s_ww_hit) {            // an EXPLICITLY-armed write-watch fired — pause with the site captured
       fprintf(stderr, "[sbs] write-watch caught 0x%08X (A=%08X B=%08X) at frame %u — paused; see `sbs bt`.\n",
               s_ww_addr, s_ww_va, s_ww_vb, s_frame);
       s_ww_armed = false;
       g_a->core.wwatch_arm(0, 0); g_b->core.wwatch_arm(0, 0);
       dbg_set_paused(1);
-    } else if (!s_div_found) {
-      if (!s_div_armed) {   // arm only once BOTH cores reach free-roam (cutscene flag went up then down)
-        if (g_a->core.mem_r8(CUT_FLAG)) s_seen_cut_a = true; else if (s_seen_cut_a) s_fr_a = true;
-        if (g_b->core.mem_r8(CUT_FLAG)) s_seen_cut_b = true; else if (s_seen_cut_b) s_fr_b = true;
-        if (s_fr_a && s_fr_b) { s_div_armed = true;
-          fprintf(stderr, "[sbs] both cores at FREE-ROAM (f%u) — divergence check ARMED.\n", s_frame); }
-      }
-      if (s_div_armed) check_divergence();
     }
     s_frame++;
   }

@@ -55,11 +55,17 @@ static SDL_GPUTexture*        s_img_tex;
 static SDL_GPUTransferBuffer* s_img_xfer;
 static int                    s_img_w, s_img_h;
 
-// Engine-owned screen FADE (set per logic frame by the engine; applied in present.frag + the readback).
-static int     s_fade_mode = 0;
-static uint8_t s_fade_r = 0, s_fade_g = 0, s_fade_b = 0;
-void gpu_set_fade(int mode, uint8_t r, uint8_t g, uint8_t b) { s_fade_mode = mode; s_fade_r = r; s_fade_g = g; s_fade_b = b; }
-void gpu_clear_fade(void) { s_fade_mode = 0; s_fade_r = s_fade_g = s_fade_b = 0; }
+// Engine-owned screen FADE — now PER INSTANCE on GpuGpuState (was a file-scope static: one core's fade
+// leaked into BOTH SBS panes). Set/cleared per logic frame for a SPECIFIC core; applied in present.frag
+// (windowed) and the headless readback, each reading THAT core's fade.
+void gpu_set_fade(Core* core, int mode, uint8_t r, uint8_t g, uint8_t b) {
+  GpuGpuState& s = core->game->gpu_gpu;
+  s.s_fade_mode = mode; s.s_fade_r = r; s.s_fade_g = g; s.s_fade_b = b;
+}
+void gpu_clear_fade(Core* core) {
+  GpuGpuState& s = core->game->gpu_gpu;
+  s.s_fade_mode = 0; s.s_fade_r = s.s_fade_g = s.s_fade_b = 0;
+}
 
 // Present-pass fragment uniform: matches present.frag's `PC { ivec4 disp; ivec4 fade; }`.
 struct PresentPC { int32_t disp[4]; int32_t fade[4]; };
@@ -492,15 +498,16 @@ static const uint16_t* readback_vram(void) {
     fprintf(stderr, "[gpu_gpu] readback nonzero=%ld/%d\n", nz, VRAM_W * VRAM_H); }
   return p;
 }
-static void dump_to(const char* path, int sx, int sy, int w, int h) {
+static void dump_to(const char* path, int sx, int sy, int w, int h,
+                    int fade_mode, uint8_t fade_r, uint8_t fade_g, uint8_t fade_b) {
   const uint16_t* vram = readback_vram();
   FILE* f = fopen(path, "wb"); if (!f) { SDL_UnmapGPUTransferBuffer(s_dev, s_rb_xfer); return; }
   fprintf(f, "P6\n%d %d\n255\n", w, h);
   for (int y = 0; y < h; y++) for (int x = 0; x < w; x++) {
     uint16_t p = vram[((sy + y) % VRAM_H) * VRAM_W + ((sx + x) & 1023)];
     int r = (p & 31) << 3, g = ((p >> 5) & 31) << 3, b = ((p >> 10) & 31) << 3;
-    if (s_fade_mode == 1)      { r += s_fade_r; g += s_fade_g; b += s_fade_b; if (r>255)r=255; if (g>255)g=255; if (b>255)b=255; }
-    else if (s_fade_mode == 2) { r -= s_fade_r; g -= s_fade_g; b -= s_fade_b; if (r<0)r=0; if (g<0)g=0; if (b<0)b=0; }
+    if (fade_mode == 1)      { r += fade_r; g += fade_g; b += fade_b; if (r>255)r=255; if (g>255)g=255; if (b>255)b=255; }
+    else if (fade_mode == 2) { r -= fade_r; g -= fade_g; b -= fade_b; if (r<0)r=0; if (g<0)g=0; if (b<0)b=0; }
     unsigned char c[3] = { (unsigned char)r, (unsigned char)g, (unsigned char)b };
     fwrite(c, 1, 3, f);
   }
@@ -509,18 +516,19 @@ static void dump_to(const char* path, int sx, int sy, int w, int h) {
 }
 void GpuGpuState::shot(const char* path) {
   if (!gpu_gpu_enabled() || !s_inited) { fprintf(stderr, "[gpu_shot] GPU not active\n"); return; }
-  dump_to(path, s_last_sx, s_last_sy, s_last_w, s_last_h);
+  dump_to(path, s_last_sx, s_last_sy, s_last_w, s_last_h, s_fade_mode, s_fade_r, s_fade_g, s_fade_b);
   fprintf(stderr, "[gpu_shot] wrote %s (%dx%d @ %d,%d)\n", path, s_last_w, s_last_h, s_last_sx, s_last_sy);
 }
 void GpuGpuState::shot_b(const char* path) { shot(path); }   // Pass 1: single target
 void gpu_gpu_shot_region(Core* core, const char* path, int sx, int sy, int w, int h) {
-  (void)core; if (!gpu_gpu_enabled() || !s_inited) return;
-  dump_to(path, sx, sy, w, h);
+  if (!gpu_gpu_enabled() || !s_inited) return;
+  GpuGpuState& s = core->game->gpu_gpu;
+  dump_to(path, sx, sy, w, h, s.s_fade_mode, s.s_fade_r, s.s_fade_g, s.s_fade_b);
   fprintf(stderr, "[gpu_shot] wrote %s (%dx%d @ %d,%d)\n", path, w, h, sx, sy);
 }
 void gpu_gpu_vram_region(const char* path, int x, int y, int w, int h) {
   if (!gpu_gpu_enabled() || !s_inited) return;
-  dump_to(path, x, y, w, h);
+  dump_to(path, x, y, w, h, 0, 0, 0, 0);   // raw VRAM region dump — no engine fade applied
   fprintf(stderr, "[gpu_vram] wrote %s (%dx%d @ %d,%d)\n", path, w, h, x, y);
 }
 void gpu_gpu_vram_raw(const char* path) {
@@ -695,7 +703,8 @@ void gpu_gpu_rawdump_arm(const char* path, int frame) { (void)path; (void)frame;
 // two returned panes via gpu_gpu_present_sbs2. Reuses the proven upload+geom+readback path; the engine
 // screen-fade is applied (same math as dump_to / present.frag).
 void gpu_gpu_render_readback(Core* core, const uint16_t* vram, int sx, int sy, int w, int h, uint8_t* rgba) {
-  (void)core;
+  GpuGpuState& fs = core->game->gpu_gpu;   // THIS core's fade (per-instance — no SBS cross-pane bleed)
+  const int s_fade_mode = fs.s_fade_mode; const uint8_t s_fade_r = fs.s_fade_r, s_fade_g = fs.s_fade_g, s_fade_b = fs.s_fade_b;
   if (!gpu_gpu_enabled()) { memset(rgba, 0, (size_t)w * h * 4); return; }
   if (!s_inited) init_gpu();
   SDL_GPUCommandBuffer* cmd = SDL_AcquireGPUCommandBuffer(s_dev); GPUCHK(cmd, "render_readback cmd");
