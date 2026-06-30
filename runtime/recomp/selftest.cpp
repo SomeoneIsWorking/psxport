@@ -148,10 +148,69 @@ static int run_startgame(const char* path) {
   return 1;
 }
 
+// NARRATION — the NATIVE shipping path (psx_fallback=0), driven through the full intro narration that the
+// player does NOT skip: reach the GAME stage (mash Start/Cross at the title = "New Game"), then release all
+// input and let the opening narration play and auto-transition into the first field area. This is the path
+// that crashed at the SOP->A00 transition: ov_scene_native renders A00 entity objects before their models
+// are attached (cmd+0x40 still holds an unrelocated area-data pointer 0x8018Axxx), so native_gt3gt4 reads a
+// garbage prim count and overflows the render queue ([rq] FATAL, an abort). The assertions: (1) the run
+// SURVIVES well past the transition (an abort kills this process = fail); (2) the GAME loop KEEPS RUNNING
+// across it (its per-iteration counter *(0x1F800198) advances) — so we test the field actually progresses,
+// not merely that we dodged the abort. RED before the narration->field transition is owned; GREEN after.
+static int run_narration(const char* path) {
+  const int verbose = cfg_on("PSXPORT_SELFTEST_VERBOSE");
+  Game* game = new Game();
+  game->psx_fallback = 0;                  // NATIVE shipping path (not the SBS full-PSX coroutine core)
+  Core* c = &game->core;
+  load_exe(path, c);
+  dc_boot_init(c);
+
+  auto stage = [&]{ return c->mem_r32(TASKBASE + 0xc); };
+  auto sm48  = [&]{ return (uint32_t)c->mem_r16(TASKBASE + 0x48); };
+
+  const uint32_t REACH_CAP = 2500;
+  uint32_t f = 0;
+  for (; f < REACH_CAP && stage() != STAGE_GAME; f++) {
+    bool on = (f % 16u) < 8u;
+    pad_repl_hold(c, on ? ((f & 16u) ? PAD_CROSS : PAD_START) : PAD_NONE);
+    dc_step_frame(c, f);
+  }
+  if (stage() != STAGE_GAME) {
+    fprintf(stderr, "[selftest] FAIL: never reached GAME stage after %u frames (stuck stage=0x%08X)\n",
+            f, stage());
+    return 1;
+  }
+  fprintf(stderr, "[selftest] reached GAME at frame %u — now playing the intro narration (no input) "
+                  "through the field transition\n", f);
+
+  // Release input and run a long window spanning the narration AND the SOP->field transition (the crash was
+  // ~frame 1105 into GAME). If the render-queue overflow fires, the process aborts here and the test dies.
+  pad_repl_hold(c, PAD_NONE);
+  uint32_t c0 = c->mem_r16(0x1F800198u);
+  const uint32_t RUN = 2500;
+  for (uint32_t k = 0; k < RUN; k++, f++) {
+    dc_step_frame(c, f);
+    if (verbose && (k % 200u) == 0)
+      fprintf(stderr, "[selftest]   narration f=%u sm[0x48]=%u loop=%u\n", f, sm48(), c->mem_r16(0x1F800198u));
+  }
+  uint32_t adv = (uint16_t)(c->mem_r16(0x1F800198u) - c0);
+  if (adv < 50) {
+    fprintf(stderr, "[selftest] FAIL: GAME loop did not progress through the narration (counter advanced "
+                    "only %u over %u frames; sm[0x48]=%u). The narration->field transition stalled.\n",
+            adv, RUN, sm48());
+    return 1;
+  }
+  fprintf(stderr, "[selftest] PASS: the un-skipped intro narration played through the field transition "
+                  "WITHOUT a render-queue overflow, and the GAME loop kept running (counter +%u over %u "
+                  "frames).\n", adv, RUN);
+  return 0;
+}
+
 // Dispatched from boot.cpp when PSXPORT_SELFTEST is set.
 int selftest_run(const char* path) {
   const char* which = cfg_str("PSXPORT_SELFTEST");
   if (which && !strcmp(which, "startgame")) return run_startgame(path);
-  fprintf(stderr, "[selftest] unknown PSXPORT_SELFTEST='%s' (known: startgame)\n", which ? which : "");
+  if (which && !strcmp(which, "narration")) return run_narration(path);
+  fprintf(stderr, "[selftest] unknown PSXPORT_SELFTEST='%s' (known: startgame, narration)\n", which ? which : "");
   return 2;
 }
