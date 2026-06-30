@@ -32,7 +32,7 @@ from decode import decode
 # recomp identity and re-emits when the stamp on disk (generated/.recomp_version) differs, so a stale
 # generated/ on another box (which an input-content hash alone failed to catch — a box can build a
 # self-consistent-but-outdated set) is forced to regenerate. Date + a per-day counter; keep it terse.
-RECOMP_VERSION = "2026-06-30.11"
+RECOMP_VERSION = "2026-06-30.12"
 
 R = lambda n: f"c->r[{n}]"
 
@@ -858,7 +858,14 @@ def emit_module(exe, out_dir, N, seeds, ov_dir=None, limit=None, shards=8, soft_
         lo, hi = exe.load, exe.text_end
         jal_tgts = {decode(a, exe.word(a)).target for a in range(lo, hi, 4)
                     if decode(a, exe.word(a)).op == "jal"}
-        removable = (set(soft_seeds) - set(seeds)) - jal_tgts
+        # A soft boundary that allocates its OWN stack frame (`addiu sp, sp, -N` prologue) is a GENUINE
+        # function entry, not a mid-body early-return continuation (which keeps using the existing frame).
+        # NEVER merge it: an overlay handler reached ONLY via a runtime object-method pointer is invisible
+        # to static jal discovery, so merging it away makes that computed call fail-fast (recomp-MISS
+        # 0x80146478 — the narration-cutscene actor's update method, an `addiu sp,sp,-0x20` fn). The merge's
+        # real targets (shared epilogues / mid-body early returns: 0x80113328, 0x801316C4) have NO prologue.
+        has_prologue = {f for f in soft_seeds if (exe.word(f) & 0xFFFF8000) == 0x27BD8000}
+        removable = (set(soft_seeds) - set(seeds) - has_prologue) - jal_tgts
         before = len(funcs)
         funcs = merge_early_return_boundaries(exe, funcs, removable, set(seeds) | jal_tgts)
         if len(funcs) != before:

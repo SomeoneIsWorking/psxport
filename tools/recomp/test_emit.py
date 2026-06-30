@@ -260,6 +260,42 @@ def test_jumptable_base_built_in_separate_reg():
     assert jt[jr_addr] == tgts, jt[jr_addr]
 
 
+def test_prologue_soft_seed_survives_merge():
+    # Regression (later-272): a soft boundary (func_entries_after_return, preceded by `jr ra`) that
+    # allocates its OWN stack frame (`addiu sp,sp,-N` prologue) is a GENUINE function — even when an
+    # earlier function has a forward branch crossing it (the shared-tail/early-return pattern the merge
+    # normally collapses). It must NOT be merged: an overlay handler reached ONLY via a runtime
+    # object-method pointer is invisible to static jal discovery, so merging it makes that computed call
+    # fail-fast (recomp-MISS 0x80146478, the narration-cutscene actor's `addiu sp,-0x20` update method).
+    a = Asm(0x80010000)
+    a.addiu("sp", "sp", -0x20)      # 0x00  H: a real function (hard entry)
+    a.beq("a0", "zero", "cross")    # 0x04  forward branch that crosses g into [g, next)
+    a.nop()                          # 0x08
+    a.addu("v0", "v0", "v1")        # 0x0C  H body
+    a.nop()                          # 0x10
+    a.nop()                          # 0x14
+    a.jr("ra")                       # 0x18  (so 0x20 is a func_entries_after_return soft seed)
+    a.nop()                          # 0x1C  delay
+    a.addiu("sp", "sp", -0x10)      # 0x20  g: a REAL function — its OWN prologue; soft seed
+    a.nop()                          # 0x24
+    a.label("cross")
+    a.addu("v0", "a0", "a1")        # 0x28  branch target (lands inside g's range)
+    a.jr("ra")                       # 0x2C
+    a.nop()                          # 0x30
+    data, end = a.assemble()
+    e = exe_of(data)
+    H, g = 0x80010000, 0x80010020
+    has_prologue = {f for f in (g,) if (e.word(f) & 0xFFFF8000) == 0x27BD8000}
+    assert g in has_prologue, "g must be recognized as a stack-prologue function"
+    # NEW: prologue g excluded from `removable` -> merge KEEPS it.
+    kept = emit.merge_early_return_boundaries(e, [H, g], {g} - has_prologue, {H})
+    assert g in kept, f"prologue soft-seed wrongly merged: {[hex(x) for x in kept]}"
+    # The branch genuinely crosses g, so the OLD behavior (g removable) WOULD merge it — confirms the
+    # test exercises the merge path, i.e. the prologue guard is what saves g.
+    merged = emit.merge_early_return_boundaries(e, [H, g], {g}, {H})
+    assert g not in merged, "expected the branch-cross to merge g when it is removable"
+
+
 
 
 

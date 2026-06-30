@@ -46,6 +46,7 @@
 #include "game.h"
 #include <cstdio>
 #include <cstring>
+#include <vector>
 #include <cstdlib>
 #include <unistd.h>
 
@@ -294,10 +295,43 @@ void grab_pane(Game* g, uint8_t* rgba, int* ow, int* oh) {
 // Draw the two most-recently grabbed panes (A left, B right) in one SDL_GPU window window frame.
 void present_panes() { sbs_rl_present(s_rgba_a, s_wa, s_ha, s_rgba_b, s_wb, s_hb); }
 
-// Feed the SAME host pad mask (polled from SDL_GPU window) to BOTH cores (mirrored input). repl_on stays 0 in
-// normal play, so pad_service_frame leaves this mask intact for the game to read.
+// PSXPORT_SBS_KEYS — scripted timed input for HEADLESS repro (no window): a comma list of
+// "FROM-TO:BTN" entries holding BTN (active-low) over frames [FROM,TO]. BTN is a libpad bit name:
+// start(0x0008) cross(0x4000) up/down/left/right(0x1000/0x4000.../0x8000/0x2000) — see pad. Example
+// (reproduce the narration: tap Start ~every 70f): PSXPORT_SBS_KEYS="250-256:start,320-326:start,...".
+// Lets a headless session DRIVE the exact path the windowed user reports, instead of needing the window.
+struct SbsKey { uint32_t from, to; uint16_t btn; };
+static std::vector<SbsKey> s_keys;
+static bool s_keys_parsed = false;
+static uint16_t sbs_btn_bit(const char* n) {
+  if (!strcmp(n, "start")) return 0x0008; if (!strcmp(n, "select")) return 0x0001;
+  if (!strcmp(n, "cross")) return 0x4000; if (!strcmp(n, "circle")) return 0x2000;
+  if (!strcmp(n, "square")) return 0x8000; if (!strcmp(n, "triangle")) return 0x1000;
+  if (!strcmp(n, "up")) return 0x1000; if (!strcmp(n, "down")) return 0x4000;
+  if (!strcmp(n, "left")) return 0x8000; if (!strcmp(n, "right")) return 0x2000;
+  return 0;
+}
+static void parse_sbs_keys() {
+  s_keys_parsed = true;
+  const char* e = getenv("PSXPORT_SBS_KEYS"); if (!e || !*e) return;
+  char buf[2048]; strncpy(buf, e, sizeof buf - 1); buf[sizeof buf - 1] = 0;
+  for (char* p = strtok(buf, ","); p; p = strtok(0, ",")) {
+    uint32_t from = 0, to = 0; char name[32] = {0};
+    if (sscanf(p, "%u-%u:%31s", &from, &to, name) == 3) {
+      uint16_t b = sbs_btn_bit(name);
+      if (b) s_keys.push_back({from, to, b});
+    }
+  }
+  fprintf(stderr, "[sbs] PSXPORT_SBS_KEYS: %zu scripted input ranges\n", s_keys.size());
+}
+
+// Feed the SAME host pad mask to BOTH cores (mirrored input). repl_on stays 0 in normal play, so
+// pad_service_frame leaves this mask intact for the game to read. PSXPORT_SBS_KEYS injects timed input.
 void feed_input() {
+  if (!s_keys_parsed) parse_sbs_keys();
   uint16_t mask = (uint16_t)sbs_rl_poll_input();
+  for (const SbsKey& k : s_keys)
+    if (s_frame >= k.from && s_frame <= k.to) mask &= ~k.btn;   // active-low: pressed = bit cleared
   pad_set_buttons(&g_a->core, mask);
   pad_set_buttons(&g_b->core, mask);
 }
