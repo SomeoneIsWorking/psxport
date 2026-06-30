@@ -8738,3 +8738,23 @@ raw to 0x80106228+) hold the DEMO/field code and the render submitters. They mus
 own module(s) keyed at the overlay base, with rec_dispatch routing 0x80106228.. to the currently-loaded
 overlay. (The stub is already emitted as a separate module — same pattern.) Until then, any call into
 overlay code fails fast by design.
+
+## later-256 — overlay-recompilation design notes (the FRONTIER after later-255)
+The substrate boots to DEMO frame 2 then fails fast at `0x80106F80` (overlay code). To run overlays
+under the substrate (no interpreter) they must be STATICALLY RECOMPILED. Key facts gathered:
+- **Overlays OVERLAP** — DEMO.BIN / GAME.BIN / SOP.BIN all load RAW to the SAME base **0x80106228**
+  (engine_re.md:284/387; journal:514 "aliases GAME.BIN, distinguished by the root prologue sig"). So a
+  given address (e.g. 0x80106F80) is DIFFERENT code depending on which stage overlay is resident →
+  static address→fn mapping is ambiguous; need runtime CURRENT-OVERLAY dispatch.
+- Two overlapping overlay SLOTS (at least): (1) stage slot @0x80106228 — START/DEMO/GAME/SOP/OPN/CRD.BIN
+  (small, 1.6–17 KB); (2) area/field slot @ ~0x80113000+ — the big A0*.BIN area overlays (75–234 KB)
+  holding the field render submitters (0x8013e9d8/0x8013fae0/0x8013f4dc/0x8013fb88 etc.).
+- emit.py ALREADY emits a SEPARATE module for the boot stub (STUB_NAMES: stub_func_/stub_dispatch) — the
+  same pattern is the template for per-overlay modules.
+
+**DESIGN (N64Recomp overlay model):** (a) emit.py: recompile each .BIN as its own module, functions keyed
+at base+offset, with its own dispatch table (reuse the Names/emit_module machinery). (b) Runtime registry:
+map an overlay-range address → the CURRENTLY-loaded overlay module; cd_loadfile_native(dest,...) sets the
+current overlay for the dest range (it knows the file). (c) rec_dispatch for an overlay-range address →
+current overlay's func; still a MISS (fail fast) if no overlay covers it. First impl task: instrument
+cd_loadfile_native to log (file, dest, size) over a boot→field run to get the EXACT per-overlay bases.
