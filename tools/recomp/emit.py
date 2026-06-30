@@ -921,6 +921,13 @@ def main():
     # per-frame resume dispatches to a recompiled body (the loop runs one frame then yields via ov_switch).
     OVERLAY_EXTRA_SEEDS = {
         "GAME": {0x801063F4},
+        # START.BIN is the stage-0 FILE-TABLE overlay: its header is a filename string table (count@base=6,
+        # "\CD\SWDATA.BIN;1" ...), so NO scan finds code. The bootstrap FUN_800499e8 builds task0 with
+        # entry PC = base+0x274 = 0x8010649C (a `addiu sp,-0x1c8` prologue, the START stage fn). The native
+        # path owns that bootstrap (native_task0_bootstrap) so it never dispatches the recompiled body — but
+        # the FULL-PSX path (PSXPORT_SBS_MODE=both core B, psx_fallback) runs task0 under the substrate and
+        # resumes at 0x8010649C, so seed it (a documented runtime-computed re-entry, like GAME's loop top).
+        "START": {0x8010649C},
     }
     overlays = []   # (tag, NAME, base, end, sig32 bytes, Names)
     if ov_dir and os.path.isdir(ov_dir):

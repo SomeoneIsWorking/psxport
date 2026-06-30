@@ -27,7 +27,15 @@
 #include <setjmp.h>
 #include <unistd.h>   // usleep (debug-server pause/step idle wait)
 
-void rec_coro_run(Core* c, uint32_t pc); // flat coroutine interpreter (resumable, see interp.c)
+// Generic cooperative-task entry. POST-INTERPRETER (later-254): this is now just rec_dispatch
+// (dispatch.cpp) — it can only ENTER a recompiled function at its top, NOT resume a yielded task at a
+// saved mid-function PC. So it only works for a FRESH task entry; resuming a full-PSX (psx_fallback)
+// task whose saved r31 is mid-body fail-fasts (no recompiled entry there). That is why the full-PSX
+// reference modes (PSXPORT_SBS_MODE=gameplay/both core B) abort at the first scheduler yield-return
+// (e.g. 0x80051FA4). The native path avoids this entirely: each stage runs as a synchronous per-frame
+// native dispatcher (DEMO/GAME/SOP) and the GAME field re-enters at its loop top (game_coop), never a
+// mid-function resume. See docs/findings/recomp.md "full-PSX coroutine resume".
+void rec_coro_run(Core* c, uint32_t pc);
 
 // Native XA voice/BGM clip player (xa_stream.c) owns task slot 2 — it replaced the FUN_8001cfc8
 // streaming-reader coroutine. The scheduler skips slot 2 while owned and reflects clip completion
