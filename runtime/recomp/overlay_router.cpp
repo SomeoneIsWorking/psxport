@@ -68,29 +68,35 @@ void overlay_note_load(Core* c, uint32_t dest) {
 // the hot path (per-frame overlay dispatch) is a single memcmp; the cache self-corrects when the
 // resident overlay (or the running core's RAM) changes.
 static const RecOverlay* resident_overlay(Core* c, uint32_t base) {
-  // Prefer the IDENTITY recorded at load time (robust to runtime header mutation). Fall back to the
-  // content-signature scan only when no load was noted for this slot (an overlay loaded by a path that
-  // didn't route through overlay_note_load).
-  int s = slot_index(base);
-  if (s >= 0 && c->game->sched.resident_ov[s]) return c->game->sched.resident_ov[s];
   const unsigned char* ram = c->ram + (base & 0x1FFFFFFF);
-  static uint32_t cache_base = 0;
-  static const RecOverlay* cache_ov = 0;
-  static unsigned char cache_sig[32];
-  if (cache_ov && cache_base == base && cache_ov->siglen <= sizeof(cache_sig)
-      && memcmp(cache_sig, ram, cache_ov->siglen) == 0)
-    return cache_ov;
+  int s = slot_index(base);
+  const RecOverlay* cached = (s >= 0) ? c->game->sched.resident_ov[s] : 0;
+  // Trust the load-time IDENTITY only while the live RAM still matches its signature. The cache becomes
+  // STALE when the slot is reloaded with a different overlay by a path that bypasses overlay_note_load,
+  // or when a noted load was a transient preload later overwritten by another overlay. A 32-byte memcmp
+  // against the cached overlay's signature catches that; on a mismatch we re-scan for the overlay whose
+  // image is ACTUALLY resident now and refresh the cache. (Root cause of the 0x8010BF54 recomp-MISS,
+  // later-275: at GAME setup A00 was noted into the MODE slot, then SOP was reloaded there for the
+  // never-dismissed intro narration; the cache still said A00, so the SOP narration renderer 0x8010BF54
+  // mis-routed to A00's switch — which has no function entry there, only a mid-function label — and the
+  // dispatch fell to a fail-fast miss. The live RAM at the base matched sig_sop exactly the whole time.)
+  if (cached && cached->siglen <= 32 && memcmp(cached->sig, ram, cached->siglen) == 0)
+    return cached;
+  // Signature scan: find the overlay whose image is in the slot right now (the overlays overlap at a base,
+  // so they are distinguished only by content). On a hit, refresh the per-core load-time identity so the
+  // common path (cached match above) stays a single memcmp.
   for (int i = 0; i < g_rec_overlay_count; i++) {
     const RecOverlay* o = &g_rec_overlays[i];
-    if (o->base != base || o->siglen > sizeof(cache_sig))
+    if (o->base != base || o->siglen > 32)
       continue;
     if (memcmp(o->sig, ram, o->siglen) == 0) {
-      cache_base = base; cache_ov = o;
-      memcpy(cache_sig, ram, o->siglen);
+      if (s >= 0) c->game->sched.resident_ov[s] = o;
       return o;
     }
   }
-  return 0;
+  // No signature matched (e.g. the resident overlay mutated its own header pointer table after load). The
+  // load-time identity is the best remaining guess for the truly-resident overlay; fall back to it.
+  return cached;
 }
 
 // Diagnostic for the miss path (hle.cpp): for a slot-range address, report which overlay is currently
@@ -106,6 +112,27 @@ const char* overlay_router_resident_name(Core* c, uint32_t addr) {
     }
   }
   return 0;
+}
+
+// Is `addr` a real function ENTRY in whatever recompiled module owns it right now (MAIN, or the overlay
+// currently resident in addr's slot)? Used by the native render walk to REFUSE executing a node whose
+// render-fn is a DANGLING pointer into an overlay that has since been evicted — e.g. a SOP intro-narration
+// render node that survives into the A00 field: its renderer 0x8010BF54 is a valid SOP entry but, once A00
+// is resident in the MODE slot, that address is mid-function in A00 (no entry) and dispatching it would
+// fail-fast. The engine owns its render visibility, so it skips such stale content rather than run it.
+// (later-275.) Returns 0 only when addr falls in a recompiled module range but is not an entry there;
+// addresses outside every recompiled range return 1 (let rec_dispatch route them — native/HLE leaves).
+extern "C" int rec_func_index(uint32_t);
+int rec_addr_has_entry(Core* c, uint32_t addr) {
+  uint32_t a = addr & 0x1FFFFFFF;
+  if (a >= REC_MAIN_LO && a < REC_MAIN_HI) return rec_func_index(addr) >= 0;
+  for (int i = 0; i < g_rec_overlay_count; i++) {
+    const RecOverlay* o = &g_rec_overlays[i];
+    if (a < (o->base & 0x1FFFFFFF) || a >= (o->end & 0x1FFFFFFF)) continue;
+    const RecOverlay* res = resident_overlay(c, o->base);
+    return res && res->idx && res->idx(addr) >= 0;
+  }
+  return 1;
 }
 
 void rec_dispatch(Core* c, uint32_t addr) {

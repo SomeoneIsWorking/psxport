@@ -1,5 +1,38 @@
 # Debug / progress journal
 
+## later-275 — narration recomp-MISS 0x8010BF54 fixed (overlay-ID re-validation + dangling-render-pointer guard); next blocker = A00 objects render pre-model-attach
+The narration cutscene (full intro, NOT skipped — `newgame` then `run`, no Start) hit `recomp-MISS
+0x8010BF54`. TWO distinct substrate bugs, both fixed; then a THIRD (a real render-timing bug) is exposed.
+1) **Overlay mis-identification (overlay_router.cpp).** `resident_overlay()` trusted the load-time identity
+   cache (`resident_ov[slot]`) without re-checking it against live RAM. During the SOP intro the MODE slot
+   genuinely holds SOP (live base bytes match sig_sop exactly), but A00 had been NOTED into that slot earlier
+   at GAME setup, so the cache said A00. The SOP narration renderer 0x8010BF54 thus routed to A00's switch
+   (mid-function there, no entry) → fail-fast. FIX: validate the cached identity by a 32-byte signature
+   memcmp against live RAM; on mismatch, re-scan for the overlay actually resident and refresh the cache;
+   fall back to the cache only when nothing matches (the header-mutation case the cache was built for).
+2) **Dangling overlay render pointer (engine_render_walk.cpp).** Once A00 *does* load over the MODE slot
+   (the field transition), the leftover SOP narration node (0x800ED9E8, type 32, default-case renderer
+   node+24 = 0x8010BF54) is a DANGLING pointer (0x8010BF54 is mid-function in A00). The master render walk
+   dispatched it → miss. FIX: new router query `rec_addr_has_entry(c,addr)` (uses the per-overlay
+   `ov_<tag>_func_index`, now exposed on `RecOverlay.idx` via emit.py — RECOMP_VERSION 2026-07-01.1); the
+   walk's default case SKIPS a node whose render-fn is not a real entry of the resident module. The engine
+   owns its render visibility and refuses to execute a render pointer into an evicted overlay. (This is a
+   GUARD; the deeper fix is tearing the stale narration node out of the render list at the SOP→field
+   transition — not yet done.)
+3) **NEXT BLOCKER (real render-timing bug, NOT substrate).** With (1)+(2), the narration advances past
+   0x8010BF54 and the master walk completes — then the per-object entity loop in `ov_scene_native` overflows
+   the render queue: `[rq] FATAL: render queue full (65536)`. ROOT CAUSE (pinned via a count-sanity probe in
+   native_gt3gt4): node 0x800FBB70 (an A00 area object) renders with a geomblk pointing into the AREA-DATA
+   slot 0x8018A000 holding UNRELOCATED pointers (e.g. geomblk 0x8018A034 = 0x8018AA14, read as 43540 tris).
+   I.e. `ov_scene_native` renders A00 entity objects DURING the area-init transition frame, BEFORE their
+   models are attached — model-attach (FUN_80077b38) runs from per-object BEHAVIOR handlers during the
+   object-update frame (ov_field_frame), not at placement (ov_field_run case 0). On the case-0 init frame the
+   objects exist but `cmd+0x40` still holds the raw area-data pointer. AUTO_SKIP (Start pressed) does not hit
+   it (skips the narration's auto-transition). Verified: AUTO_SKIP 0-miss + free-roam renders 105 objs, and
+   SELFTEST=startgame PASS, all unchanged by (1)+(2). The fix is owning the narration→field transition so the
+   field renders only attached objects (or not at all while the load fade is black) — the next frontier, with
+   a `PSXPORT_SELFTEST=narration` TDD harness.
+
 ## later-274 — narration miss 0x80146478 FIXED (native walk owns the unowned node cases) + render-walk split out of engine_submit.cpp
 Two things. (1) The narration-cutscene recomp-MISS 0x80146478 (later-273) is fixed the PC-game way. The live
 backtrace was `ov_scene_native → ov_render_walk → gen_func_8003C048 (super-call) → 8003CCA4 → 8003CDD8 →

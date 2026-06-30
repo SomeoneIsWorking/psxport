@@ -32,7 +32,7 @@ from decode import decode
 # recomp identity and re-emits when the stamp on disk (generated/.recomp_version) differs, so a stale
 # generated/ on another box (which an input-content hash alone failed to catch — a box can build a
 # self-consistent-but-outdated set) is forced to regenerate. Date + a per-day counter; keep it terse.
-RECOMP_VERSION = "2026-06-30.12"
+RECOMP_VERSION = "2026-07-01.1"
 
 R = lambda n: f"c->r[{n}]"
 
@@ -1154,11 +1154,13 @@ def write_overlay_table(out_dir, main_exe, overlays):
          "  uint32_t base, end;            // guest address range this overlay occupies when resident",
          "  const char* name;             // overlay file stem (DEMO/GAME/...), for diagnostics",
          "  void (*disp)(Core*, uint32_t); // this overlay's address->fn switch",
+         "  int  (*idx)(uint32_t);        // addr -> function-entry index, or -1 if addr is not an entry",
          "  const unsigned char* sig;     // first 32 bytes of the overlay image (resident-ID signature)",
          "  unsigned siglen;",
          "} RecOverlay;", ""]
     for tag, NAME, base, end, sig, N in overlays:
         h.append(f"void {N.dispatch}(Core*, uint32_t);")
+        h.append(f"int {N.index}(uint32_t);")
     h += ["extern const RecOverlay g_rec_overlays[];", "extern const int g_rec_overlay_count;", ""]
     open(os.path.join(out_dir, "overlay_table.h"), "w").write("\n".join(h) + "\n")
 
@@ -1169,7 +1171,7 @@ def write_overlay_table(out_dir, main_exe, overlays):
     c.append("")
     c.append("const RecOverlay g_rec_overlays[] = {")
     for tag, NAME, base, end, sig, N in overlays:
-        c.append(f"  {{ 0x{base:08X}u, 0x{end:08X}u, \"{NAME}\", {N.dispatch}, "
+        c.append(f"  {{ 0x{base:08X}u, 0x{end:08X}u, \"{NAME}\", {N.dispatch}, {N.index}, "
                  f"sig_{tag}, {len(sig)} }},")
     c.append("};")
     c.append(f"const int g_rec_overlay_count = {len(overlays)};")

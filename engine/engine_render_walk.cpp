@@ -23,6 +23,7 @@
 
 void rec_dispatch(Core*, uint32_t);
 void rec_super_call(Core*, uint32_t);
+int  rec_addr_has_entry(Core*, uint32_t);   // overlay_router.cpp — is fn a real entry in the resident module?
 void ov_terrain(Core* c);
 #define OTBASE_PTR   0x800ED8C8u             // *this = the active ordering-table base
 #define SCR          0x1F800000u             // PSX scratchpad base (the engine's GTE-compose temp area)
@@ -364,6 +365,9 @@ static void submit_render_walk(Core* c) {
           else if (fn == 0x8013E9D8u && cfg_dbg("nobg")) { /* skip bg */ }
           else if (fn == 0x8002AB5Cu) { ffspan_begin(); c->r[4] = n; ov_terrain(c); ffspan_end("rwT_terrain"); }   // PC-native world-coord terrain (self-draws)
           else if (fn == 0x8013E9D8u) { ffspan_begin(); c->r[4] = n; ov_bg_render(c); ffspan_end("rwB_bg"); }   // PC-native world-coord ground/BG node
+          else if (!rec_addr_has_entry(c, fn)) { /* STALE node: its renderer is a dangling pointer into an
+              evicted overlay (e.g. a SOP intro-narration node surviving into the A00 field — later-275).
+              The engine owns its render visibility: skip it rather than dispatch into mid-overlay garbage. */ }
           else {
             ffspan_begin();
             uint32_t slo, shi; PktSpanSession sess;
