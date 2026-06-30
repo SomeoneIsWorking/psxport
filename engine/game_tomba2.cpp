@@ -39,6 +39,7 @@ void fps60_init(void);            // fps60: read PSXPORT_FPS60
 uint32_t g_render_object = 0;
 extern int g_fps60_on;            // fps60: capture enabled (PSXPORT_FPS60)
 extern "C" void spu_audio_frame(void);        // SPU: advance the mixer one frame + feed the audio device
+extern "C" void spu_audio_frame_logic(void);  // SPU: advance XA stream for game logic only (SBS diff_mode)
 void rec_dispatch(Core*, uint32_t);  // hybrid call: recomp body if emitted, else interpret
 
 #define DISPLAY_COUNTER 0x800E809Cu   // DAT_800e809c (u16) — the dwell's vblank counter
@@ -126,8 +127,19 @@ void ov_frame_update(Core* c) {
   // below is host OUTPUT (audio device feed, fps60, present, pace) — skip it so two cores can step in one
   // process without the shared SPU/VK singletons fighting. (The sequencer tick mutates guest libsnd state,
   // but its only purpose is audio playback we aren't producing here, so skip the whole audio block.)
-  if (c->game->diff_mode) return;
   int quota = c->mem_r8(VBLANK_QUOTA); if (quota < 1) quota = 1;
+  if (c->game->diff_mode) {
+    // SBS/dual-core: skip host OUTPUT (device feed, fps60, present, pace) + the sequencer tick so two
+    // cores step in one process without the shared output/VK singletons fighting. BUT game LOGIC can
+    // block on an XA voice clip finishing — the intro-area cutscene wait `while(*(0x801fe0e0)!=0)` (the
+    // XA voice task-2 state). That progress lives in spu_update->CDC_GetCDAudioSample, which the early
+    // return used to skip entirely, so BOTH SBS cores froze in the field (the user bug, later-271).
+    // Advance THIS core's per-instance XA stream logic-only (output discarded — no double audio); run it
+    // `quota` times like the real path so the clip paces at the realtime-equivalent rate. No-op when no
+    // clip is streaming.
+    for (int v = 0; v < quota; v++) spu_audio_frame_logic();
+    return;
+  }
   uint32_t seqfn = c->mem_r32(SEQ_FUNC_PTR);
   int seq_ok = !cfg_on("PSXPORT_T2_NOSEQTICK") && native_gate("seqtick")
                && (seqfn & 0x1FFFFFFFu) >= 0x10000u && (seqfn & 0x1FFFFFFFu) < 0x200000u;

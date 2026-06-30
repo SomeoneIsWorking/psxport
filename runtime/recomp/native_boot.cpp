@@ -26,6 +26,7 @@
 #include <string.h>
 #include <setjmp.h>
 #include <unistd.h>   // usleep (debug-server pause/step idle wait)
+#include <execinfo.h>
 #include "coro.h"      // thread-fiber for full-PSX mid-function resume (later-264)
 
 // Generic cooperative-task entry. POST-INTERPRETER (later-254): this is now just rec_dispatch
@@ -113,6 +114,7 @@ static void rc4(Core* c, uint32_t fn, uint32_t a0, uint32_t a1, uint32_t a2, uin
 // no-op returning the handle, exactly as the stubbed thread layer did. The caller (FUN_80051f80
 // etc.) has already run its real body, so register side effects it needs on resume (e.g. it
 // leaves v0=0x1f800000 for the stage loop head's `lw t0,0x138(v0)`) are captured.
+extern "C" void guest_backtrace_to(Core*, FILE*);   // sync_overrides.cpp — guest-stack backtrace (btyield)
 void ov_switch(Core* c) {
   if (!c->game->sched.in_stage) { c->r[2] = c->r[4]; return; }   // no-op: return the handle arg in v0
   if (cfg_dbg("yieldpc")) fprintf(stderr, "[yieldpc] ov_switch yield ra=0x%08X waitloop=0x%08X r16=0x%08X r29=0x%08X 801fe0e0=0x%X\n",
@@ -130,6 +132,15 @@ void ov_switch(Core* c) {
       c->game->sched.coro[slot]->exit_now();
     }
     if (cfg_dbg("yieldpc")) fprintf(stderr, "[sched]   ov_switch YIELD slot %d ra=0x%08X\n", slot, c->r[31]);
+    // btyield: dump the coro's guest call chain at the yield point (the live regs ARE the yielding
+    // field-mode frame). Diagnoses WHERE a full-PSX task is parked (e.g. the deep field-mode sub-wait).
+    if (cfg_dbg("btyield")) {
+      fprintf(stderr, "[btyield] slot %d ra=0x%08X r16=0x%08X r17=0x%08X r18=0x%08X r19=0x%08X r29=0x%08X\n",
+              slot, c->r[31], c->r[16], c->r[17], c->r[18], c->r[19], c->r[29]);
+      guest_backtrace_to(c, stderr);
+      { void* bt[40]; int n = backtrace(bt, 40); fprintf(stderr, "[btyield] C-stack (recomp func chain):\n");
+        backtrace_symbols_fd(bt, n, 2); }
+    }
     c->game->sched.coro[slot]->yield();
     return;
   }

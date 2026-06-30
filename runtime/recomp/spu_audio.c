@@ -41,6 +41,7 @@ int     xa_stream_is_active(void);
 // Public interface (this module).
 void spu_audio_init(void);
 void spu_audio_frame(void);
+void spu_audio_frame_logic(void);
 
 // The SPU is clocked off the PSX system clock and divides it by 768 to yield 44100 Hz
 // samples (Beetle: spu.c clock_divider = 768). One NTSC video frame is 1/60 s, so:
@@ -173,7 +174,7 @@ void spu_audio_init(void)
 // Bounds the device queue: if the backlog exceeds AUDIO_QUEUE_CAP_BYTES we still advance
 // the SPU (so its mixer state stays correct) but drop the rendered samples instead of
 // queueing, letting the device drain and resync latency.
-void spu_audio_frame(void)
+static void spu_audio_frame_ex(int output)
 {
    // We advance + drain the SPU when SOMETHING consumes it: the SDL device (playback) OR a
    // WAV capture (PSXPORT_WAV, works headless). We ALSO advance it (output discarded) when an XA
@@ -183,12 +184,18 @@ void spu_audio_frame(void)
    // freeze: "frozen, music would keep playing"). One spu_update == one video frame == correct
    // realtime-equivalent pacing, so the clip can't over-advance. If nothing consumes AND nothing
    // streams, the SPU is genuinely idle — leave it.
+   //
+   // output==0 (logic-only): used by the SBS/dual-core diff path, where two cores share the ONE
+   // output device singleton so neither may feed it (that would double the audio). We still must
+   // advance THIS core's per-instance XA stream so its game LOGIC progresses past the clip wait —
+   // so advance + drain (driving CDC_GetCDAudioSample) but skip native-music mix / WAV / device feed.
 #ifdef PSXPORT_SDL
-   int sdl_on = (s_state == 1 && s_stream != NULL);
+   int sdl_on = output && (s_state == 1 && s_stream != NULL);
 #else
    int sdl_on = 0;
 #endif
-   if (!sdl_on && !s_wav && !xa_stream_is_active())
+   int wav_on = output && s_wav;
+   if (!sdl_on && !wav_on && !xa_stream_is_active())
       return;
 
    // Advance the mixer by exactly one video frame of system clocks. spu_render drains
@@ -221,6 +228,10 @@ void spu_audio_frame(void)
       spu_update(SPU_CLOCKS_PER_VIDEO_FRAME);
 
    int frames = spu_render(buf, SPU_FRAMES_PER_VIDEO_FRAME + 64);
+   // Logic-only (SBS): the XA read-head has now advanced (clip progresses toward its end LBA); the
+   // rendered PCM is discarded. No native-music mix, no WAV, no device feed.
+   if (!output)
+      return;
    if (frames <= 0)
    {
       // The SPU produced nothing this frame, but native music may still need output. Emit a full
@@ -245,7 +256,7 @@ void spu_audio_frame(void)
    }
 
    // WAV capture: append the drained PCM (every frame, regardless of SDL). Capped.
-   if (s_wav && s_wav_bytes < WAV_MAX_BYTES)
+   if (wav_on && s_wav_bytes < WAV_MAX_BYTES)
    {
       size_t bytes = (size_t)frames * 2 * sizeof(int16_t);
       fwrite(buf, 1, bytes, s_wav);
@@ -281,3 +292,11 @@ void spu_audio_frame(void)
               frames, SDL_GetAudioStreamQueued(s_stream));
 #endif
 }
+
+// Normal per-frame call: advance the SPU/XA and feed the output (device / WAV / native music).
+void spu_audio_frame(void) { spu_audio_frame_ex(1); }
+
+// SBS/dual-core diff path: advance THIS core's XA stream for game-LOGIC progress only (the cutscene
+// `while(*(0x801fe0e0)!=0)` clip wait), with output suppressed — see spu_audio_frame_ex. No-op when
+// no clip is streaming. Two cores share the one output device, so neither feeds it (no double audio).
+void spu_audio_frame_logic(void) { spu_audio_frame_ex(0); }

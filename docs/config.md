@@ -53,6 +53,13 @@ trace, native_boot.cpp — for stage/scheduler debugging) · `stage` (GAME stage
 engine_stage.cpp) · `rqhist` (per-frame render-queue layer×opaque/semi histogram, render_queue.cpp — "is
 the world even being queued?"). See journal later-168 / engine_re.md "GAME stage state machine".
 
+Full-PSX (psx_fallback / SBS core-B) coroutine diagnostics (native_boot.cpp `ov_switch`): `sched` (coro
+start/resume/out + task slot state) · `yieldpc` (per-yield `ra`/`r16`/`r29` + the stale-on-inner-frames
+`waitloop` heuristic — prefer btyield) · `btyield` (at each coro yield: guest-stack scan AND a PRECISE
+C-level `backtrace()` of the fiber thread = the recompiled `func_XXXX`/`ov_*_gen_*` call chain, so you can
+see exactly which recomp function yields and read its callee-saved regs — the reliable tool for the
+deep-field-coro freeze; see findings/sbs.md).
+
 **`PSXPORT_DEBUG=chanA,chanB` env now works at launch** (seeded once in `cfg_dbg`, runtime/recomp/cfg.c) —
 previously channels were ONLY settable via the REPL/debug-server `debug` command, so headless/SBS runs
 couldn't enable one despite this doc claiming the env drove it. A later REPL `debug …` overrides the seed.
