@@ -894,15 +894,18 @@ def main():
     #     resident at 0x80106228). cd-log: "async read 4415 words (17660 B) @LBA1895 -> 0x80108F9C";
     #     == engine_demo.cpp:445 "the overlay slot right after GAME.BIN". GAME [0x80106228,0x80108F9C) and
     #     SOP [0x80108F9C,..) are both resident together (adjacent, non-overlapping ranges).
-    #   OPN/CRD.BIN — opening-movie / credits sub-mode overlays; NOT on the field path and not yet observed
-    #     loading, so their base is UNVERIFIED. Tentatively the MODE slot; if a run ever dispatches into one
-    #     it fail-fasts (the signature won't match at the wrong base) — capture its real dest then and fix.
+    #   OPN.BIN — a sub-overlay loaded into the AREA slot 0x8018A000 (cd-log: "async read 13596 B @LBA1888
+    #     -> 0x8018A000"; its header fn-ptrs (0x8018A348..) confirm that base). The big area DATA also loads
+    #     to 0x8018A000 at other times; the resident-signature routing distinguishes them.
+    #   CRD.BIN — credits sub-mode overlay; NOT on the field path and not yet observed loading, so its base
+    #     is UNVERIFIED (tentatively the MODE slot). If a run dispatches into it, it fail-fasts (the
+    #     signature won't match at the wrong base) — capture its real dest then and fix.
     #   A0*.BIN — the per-area FIELD CODE overlays (A00..A0L); each loads to the MODE slot 0x80108F9C
     #     (swapping out SOP), holding the field render submitters (0x8013xxxx). cd-log:
     #     "loadfile 285096 B @LBA374 -> 0x80108F9C" (A00). All A0* are interchangeable at this base.
     OVERLAY_BASES = {
         "START": 0x80106228, "DEMO": 0x80106228, "GAME": 0x80106228,
-        "SOP": 0x80108F9C, "OPN": 0x80108F9C, "CRD": 0x80108F9C,
+        "SOP": 0x80108F9C, "OPN": 0x8018A000, "CRD": 0x80108F9C,
     }
     def overlay_base(stem):
         if stem in OVERLAY_BASES:

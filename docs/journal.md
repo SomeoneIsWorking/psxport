@@ -8847,3 +8847,25 @@ test_exec_cross_function_shared_epilogue (a branch to an epilogue past `hi` must
 then green. Verified on the game: plain headless smoke CLEAN (frame 90, 0 misses — the vtable state machine
 that flood-fill broke is unaffected); autoskip now runs DEMO->GAME->SOP->A00 PAST 0x80113328 to a new
 frontier at 0x8018BD30 (code in the area-data region 0x8018xxxx — another loaded overlay to map/recompile).
+
+## later-260 — OPN base fix → past 0x8018BD30; FRONTIER = coroutine resume (GAME field task)
+OPN.BIN's load base was wrong in OVERLAY_BASES (guessed 0x80108F9C). cd-log shows it loads to the AREA
+slot 0x8018A000 (its header fn-ptrs 0x8018A348.. confirm), shared by-signature with the big area data.
+Fixed OPN -> 0x8018A000; the field run now passes the OPN miss (0x8018BD30) and advances to the next,
+architectural, frontier.
+
+**FRONTIER = mid-function COROUTINE RESUME.** The field run fails fast at 0x801063F4 — caller `ra` ==
+target, dispatched directly by the native scheduler (native_boot), and 0x801063F4 is MID-function in the
+GAME task loop (`lw v0,0x138(s1)`, not a function entry). This is the cooperative-task RESUME the handoff
+flagged: task-0 yields once per frame (FUN_80051f80 -> ov_switch longjmps OUT to the scheduler, which works
+— it unwinds the C stack), but the scheduler then resumes the task at the saved mid-function PC, and the
+recompiled substrate has NO resumable mid-function entry (a recompiled body is a plain C function; you
+can't jump into its middle). DEMO sidestepped this because engine_demo.cpp owns its substates natively
+(each synchronous, one frame, no mid-fn yield). GAME's field loop genuinely yields mid-body.
+Two ways forward (a real decision, NOT a hack):
+  (a) OWN the GAME field task loop natively (top-down, like engine_demo owns DEMO) so it never yields
+      inside a recompiled function — the cooperative yield becomes a native frame boundary; or
+  (b) STACKFUL coroutines for the substrate (run the recompiled task on a ucontext/separate stack that can
+      be suspended at the yield and resumed) — a general fix, larger.
+Overlay STATIC RECOMPILATION (the later-256 goal) is essentially done: DEMO/GAME/SOP/A00/OPN all recompiled
+and running under the substrate; the remaining blocker is this resume model, a separate workstream.
