@@ -157,19 +157,35 @@ void ov_scene_native(Core* c) {
     if (bgstate == 0) ov_bg_tilemap_native(c, 0x800ed018u);
   }
   if (cfg_dbg("bgonly")) { c->r[4] = saved; return; }  // PROBE: backdrop only (test if ov_render_frame already drew the world)
-  // (a) TERRAIN + per-object world geometry via the native render walks (self-route to ov_terrain etc.).
-  ov_rwalk_aux_bf00(c); ov_rwalk_aux_eec0(c); ov_rwalk_b588(c); ov_render_walk_snapshot(c);
-  ov_rwalk_aux_bcf4(c); ov_render_walk(c);
-  // (b) SCENE TABLE (grass / props / sky-sea backdrop) — native world-coord render of 0x800F2418.
-  c->r[4] = 0x800F2418u; ov_field_entity_render(c);
-  // (c) the field's OBJECTS — walk the 3 entity lists, render each object's geomblk natively (real depth).
-  for (int h = 0; h < 3; h++) {
-    uint32_t n = c->mem_r32(HEADS[h]);
-    for (int g = 0; n && g < 400; g++, n = c->mem_r32(n + 0x24)) {
-      if (c->mem_r8(n + 8) == 0 || c->mem_r8(n + 9) == 0) continue;   // no render commands
-      g_sn_objs++; g_sn_cmds += c->mem_r8(n + 8);
-      c->r[4] = n;
-      submit_perobj_flush(c);
+  // AREA-INIT SUPPRESSION: on the GAME field-area-machine OBJECT-PLACEMENT init frame (stage GAME, sm[0x48]==2
+  // RUNNING, sm[0x4a]==1 field-area-machine, sm[0x4e]==0 = the ov_field_run case-0 init), the new area's
+  // objects have just been spawned but their MODELS are NOT yet attached — attach runs from per-object
+  // behaviours on the following running frames (sm[0x4e]>=1), so each object's render-command geomblk
+  // (cmd+0x40) still holds an unrelocated area-data pointer (0x8018Axxx). The real game does not draw the
+  // field during this init (the area transition holds the screen faded black); drawing it here feeds garbage
+  // prim counts into native_gt3gt4 and overflows the render queue (later-275). Skip the field scene for that
+  // frame; the backdrop above still draws. Read from task0's GAME state machine (persistent guest RAM, so it
+  // is robust to the GAME loop's coroutine scheduling — a per-frame "did the field render run" latch is not,
+  // because the field update and this display pass need not fall in the same native_step_frame).
+  bool field_area_init = c->mem_r32(0x801fe00cu) == 0x8010637Cu   // GAME stage resident
+                      && c->mem_r16(0x801fe048u) == 2             // sm[0x48] == RUNNING
+                      && c->mem_r16(0x801fe04au) == 1             // sm[0x4a] == field area machine
+                      && c->mem_r16(0x801fe04eu) == 0;            // sm[0x4e] == object-placement init (pre-attach)
+  if (!field_area_init) {
+    // (a) TERRAIN + per-object world geometry via the native render walks (self-route to ov_terrain etc.).
+    ov_rwalk_aux_bf00(c); ov_rwalk_aux_eec0(c); ov_rwalk_b588(c); ov_render_walk_snapshot(c);
+    ov_rwalk_aux_bcf4(c); ov_render_walk(c);
+    // (b) SCENE TABLE (grass / props / sky-sea backdrop) — native world-coord render of 0x800F2418.
+    c->r[4] = 0x800F2418u; ov_field_entity_render(c);
+    // (c) the field's OBJECTS — walk the 3 entity lists, render each object's geomblk natively (real depth).
+    for (int h = 0; h < 3; h++) {
+      uint32_t n = c->mem_r32(HEADS[h]);
+      for (int g = 0; n && g < 400; g++, n = c->mem_r32(n + 0x24)) {
+        if (c->mem_r8(n + 8) == 0 || c->mem_r8(n + 9) == 0) continue;   // no render commands
+        g_sn_objs++; g_sn_cmds += c->mem_r8(n + 8);
+        c->r[4] = n;
+        submit_perobj_flush(c);
+      }
     }
   }
   c->r[4] = saved;

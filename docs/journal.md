@@ -29,9 +29,19 @@ The narration cutscene (full intro, NOT skipped — `newgame` then `run`, no Sta
    object-update frame (ov_field_frame), not at placement (ov_field_run case 0). On the case-0 init frame the
    objects exist but `cmd+0x40` still holds the raw area-data pointer. AUTO_SKIP (Start pressed) does not hit
    it (skips the narration's auto-transition). Verified: AUTO_SKIP 0-miss + free-roam renders 105 objs, and
-   SELFTEST=startgame PASS, all unchanged by (1)+(2). The fix is owning the narration→field transition so the
-   field renders only attached objects (or not at all while the load fade is black) — the next frontier, with
-   a `PSXPORT_SELFTEST=narration` TDD harness.
+   SELFTEST=startgame PASS, all unchanged by (1)+(2).
+   **FIXED (TDD):** added `PSXPORT_SELFTEST=narration` (native shipping path, plays the un-skipped intro
+   through the transition; asserts no overflow + the GAME loop keeps running) — RED, then GREEN. The fix is an
+   AREA-INIT render suppression in `ov_scene_native`: skip the field-scene render on the GAME field-area-
+   machine object-placement init frame (stage GAME, sm[0x48]==2, sm[0x4a]==1, sm[0x4e]==0 = ov_field_run
+   case-0, pre-attach). Gated on the PERSISTENT task0 GAME state machine (0x801fe00c/048/04a/04e), NOT a
+   per-frame latch — a latch set by the render-build pass is unreliable because the GAME loop runs in a
+   coroutine whose step need not fall in the same native_step_frame as the display pass (an earlier latch
+   attempt blanked free-roam for exactly this reason). The backdrop still draws on the init frame; this
+   matches the real game not drawing the field during the area transition. Verified GREEN: narration selftest
+   PASS (loop +2467/2500), `newgame; run 3000` 0-crash, AUTO_SKIP 0-miss, free-roam 105 objs, startgame PASS.
+   REMAINING (user-reported, needs eyeball): the intro shows TWO fade-ins (narration text fade, then black,
+   then field fade) — confirm whether that double-fade is faithful to the original.
 
 ## later-274 — narration miss 0x80146478 FIXED (native walk owns the unowned node cases) + render-walk split out of engine_submit.cpp
 Two things. (1) The narration-cutscene recomp-MISS 0x80146478 (later-273) is fixed the PC-game way. The live
