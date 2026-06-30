@@ -281,6 +281,14 @@ static bool od_is_render(uint32_t a) {
   if (a >= 0x800BFE68u && a < 0x800EA200u) return true;   // packet pool (x2) + OT (x2) + env (render-only)
   return false;
 }
+// The guest CdSearchFile directory/file cache (FUN_8008b8f0 / FUN_8008bbe8): a 128-entry stride-0x2c dir
+// table @0x80102D6C, a stride-0x20 file-record table @*0x80102728, working vars 0x801026E0.., and the
+// 0x10-block read buffer @0x80104368. The native port resolves CD files via disc_find_file natively and
+// NEVER builds this guest cache → all-zero on native, populated on the interpreter oracle. This is a
+// BY-DESIGN native replacement, not a divergence bug, so it is excluded from the compare.
+static bool od_is_cd_cache(uint32_t a) {
+  return a >= 0x801026E0u && a < 0x80104C00u;
+}
 // Drive a core (no input) until 0x800bf9b4 == target, or cap frames elapse. Returns frames stepped; sets
 // *reached. The caller threads each core's own frame counter.
 static uint32_t od_advance_to_scene(Core* c, uint32_t& f, uint8_t target, uint32_t cap, bool* reached) {
@@ -325,18 +333,23 @@ static int run_oraclediff(const char* path) {
     const uint8_t* a = A->core.ram + (LO - 0x80000000u);
     const uint8_t* b = B->core.ram + (LO - 0x80000000u);
     int ranges = 0; uint32_t total_bytes = 0;
+    uint32_t pagehist[0x60] = {0};   // per-0x1000-page diverging-byte counts across 0x800B0000..0x80110000
     fprintf(stderr, "[oraclediff] === scene %u (native f%u, oracle f%u) ===\n", ck, fa, fb);
     for (uint32_t i = 0; i < HI - LO; ) {
-      if (a[i] == b[i] || od_is_render(LO + i)) { i++; continue; }
+      if (a[i] == b[i] || od_is_render(LO + i) || od_is_cd_cache(LO + i)) { i++; continue; }
       uint32_t start = i, bytes = 0;
-      while (i < HI - LO && a[i] != b[i] && !od_is_render(LO + i)) { i++; bytes++; }
+      while (i < HI - LO && a[i] != b[i] && !od_is_render(LO + i) && !od_is_cd_cache(LO + i)) { i++; bytes++; }
       total_bytes += bytes; total_div++;
-      if (ranges++ < 24)
+      pagehist[(LO + start - 0x800B0000u) >> 12] += bytes;
+      if (ranges++ < 48)
         fprintf(stderr, "[oraclediff]   diff @0x%08X..0x%08X (%u B)  nat[0]=%02X ora[0]=%02X\n",
                 LO + start, LO + start + bytes, bytes, a[start], b[start]);
     }
-    fprintf(stderr, "[oraclediff]   scene %u: %d diverging ranges, %u bytes total%s\n",
-            ck, ranges, total_bytes, ranges > 24 ? " (first 24 shown)" : "");
+    fprintf(stderr, "[oraclediff]   scene %u: %d diverging ranges, %u bytes total%s (CD-cache excluded)\n",
+            ck, ranges, total_bytes, ranges > 48 ? " (first 48 shown)" : "");
+    for (uint32_t p = 0; p < 0x60; p++)
+      if (pagehist[p]) fprintf(stderr, "[oraclediff]     page 0x%08X: %u diverging bytes\n",
+                               0x800B0000u + (p << 12), pagehist[p]);
     (void)verbose;
   }
   fprintf(stderr, "[oraclediff] DONE: %d total diverging ranges across the narration beats.\n", total_div);

@@ -94,3 +94,8 @@ cores each frame" must become "drive each core toward its next checkpoint indepe
 - 2026-07-01: scoped; this doc + memory written. Bug-1 (double fade-in) fixed natively (later-277, committed).
   Bug-2 (void draws sea) reverted — pure-black was wrong, there is supposed to be an EFFECT; needs the oracle.
   Phase 1 implementation starting.
+- 2026-07-01 (later-279): **Phase-1 RAM diff EXHAUSTED — narration state is convergent.** oraclediff with the
+  guest CdSearchFile CD-cache (0x80102xxx) excluded shows only benign drift (PRNG LCG 0x80105EE8, a 0..15
+  callback-ring counter 0x80105BAC, the stdio line buffer 0x80105EF8). The native side runs the cutscene
+  LOGIC correctly; the void-effect / cliff-water bugs are RENDER-only. → Phase 2 (software GPU) is now the
+  critical path. (docs/findings/sbs.md "oraclediff: narration GAME STATE is convergent".)
