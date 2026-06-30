@@ -11,7 +11,6 @@
 # The RmlUi mod/debug overlay (ESC) links the vendored static librmlui(_debugger) + system freetype.
 
 option(PSXPORT_BUILD_PORT "Build the Tomba!2 native port binary (tomba2_port)" ON)
-option(PSXPORT_SUBSTRATE  "Link recompiled shards (generated/) instead of interpreter-only" OFF)
 
 if(NOT PSXPORT_BUILD_PORT)
   return()
@@ -61,7 +60,6 @@ set(PORT_SRC
   runtime/recomp/stubs.cpp
   runtime/recomp/hle.cpp
   runtime/recomp/threads.cpp
-  runtime/recomp/interp.cpp
   runtime/recomp/gpu_native.cpp
   runtime/recomp/gpu_debug.cpp
   runtime/recomp/vram_xfer.cpp
@@ -200,17 +198,16 @@ set(PORT_SRC
   runtime/recomp/overlay_glue.cpp
   vendor/rmlui/Backends/RmlUi_Platform_SDL.cpp)
 
-# PSXPORT_SUBSTRATE: link the statically-recompiled shards (C++ content in .c files) instead of the
-# interpreter-only default. Compile them as C++ (the shell build uses `$CXX -x c++`).
-if(PSXPORT_SUBSTRATE)
-  list(APPEND PORT_SRC generated/shard_disp.c generated/shard_0.c generated/shard_1.c generated/shard_2.c
-                       generated/shard_3.c generated/shard_4.c generated/shard_5.c generated/shard_6.c
-                       generated/shard_7.c)
-  set_source_files_properties(
-    generated/shard_disp.c generated/shard_0.c generated/shard_1.c generated/shard_2.c
-    generated/shard_3.c generated/shard_4.c generated/shard_5.c generated/shard_6.c generated/shard_7.c
-    PROPERTIES LANGUAGE CXX COMPILE_OPTIONS "-O1")
-endif()
+# The recompiler substrate: link the statically-recompiled shards (C++ content in .c files). The
+# interpreter was removed (2026-06-30) — these shards ARE the execution substrate for every
+# non-native guest function. Compiled as C++ at -O1.
+list(APPEND PORT_SRC generated/shard_disp.c generated/shard_0.c generated/shard_1.c generated/shard_2.c
+                     generated/shard_3.c generated/shard_4.c generated/shard_5.c generated/shard_6.c
+                     generated/shard_7.c)
+set_source_files_properties(
+  generated/shard_disp.c generated/shard_0.c generated/shard_1.c generated/shard_2.c
+  generated/shard_3.c generated/shard_4.c generated/shard_5.c generated/shard_6.c generated/shard_7.c
+  PROPERTIES LANGUAGE CXX COMPILE_OPTIONS "-O1")
 
 add_executable(tomba2_port ${PORT_SRC} ${SHADERS_H})
 add_dependencies(tomba2_port gen_gpu_shaders)
@@ -230,8 +227,7 @@ target_include_directories(tomba2_port PRIVATE
   ${SDL3_INCLUDE_DIRS} ${FREETYPE_INCLUDE_DIRS})
 
 target_compile_definitions(tomba2_port PRIVATE
-  PSXPORT_SDL _XOPEN_SOURCE=700 RMLUI_STATIC_LIB RMLUI_SDL_VERSION_MAJOR=3
-  $<$<BOOL:${PSXPORT_SUBSTRATE}>:PSXPORT_SUBSTRATE>)
+  PSXPORT_SDL _XOPEN_SOURCE=700 RMLUI_STATIC_LIB RMLUI_SDL_VERSION_MAJOR=3)
 
 # -w (warnings off) and -O2 -g, matching the shell build; -fpermissive + narrowing-suppression only for
 # C++ (clang has no -fpermissive and treats braced-init narrowing as a hard error). Keeps the CMake

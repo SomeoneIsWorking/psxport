@@ -9,6 +9,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+extern "C" void guest_backtrace_to(Core* c, FILE* out);  // sync_overrides.cpp — guest-stack backtrace
+
 // MIPS o32 register indices (== c->r[]).
 enum { A0=4, A1=5, A2=6, A3=7, T1=9, V0=2 };
 
@@ -219,8 +221,6 @@ void rec_break(Core* c, uint32_t code) {
   (void)c;
 }
 
-void rec_interp(Core* c, uint32_t pc);  // hybrid fallback (interp.c)
-
 static int g_miss = 0;
 void rec_dispatch_miss(Core* c, uint32_t addr) {
   uint32_t a = addr & 0x1FFFFFFF;
@@ -232,20 +232,27 @@ void rec_dispatch_miss(Core* c, uint32_t addr) {
     return;
   }
   // Non-recompiled code in RAM (loaded overlay, the boot stub, or an in-function computed-jump
-  // target the recompiler routed here): run it with the hybrid interpreter. Skip the low
-  // exception/scratchpad region (< 0x10000) which is never a call target. First honor a native
-  // interp override for this address (the boot stub's libcd waits are replaced this way) — a
-  // recompiled jalr into a non-recompiled stub fn enters here, bypassing call_addr's check.
+  // target the recompiler routed here). Skip the low exception/scratchpad region (< 0x10000) which
+  // is never a call target. First honor the PLATFORM HLE table (sync_overrides.cpp): PSX
+  // BIOS-library HW-sync leaves (libcd/libetc/libmdec) that busy-spin on an unmodelled IRQ/status
+  // bit are resolved natively here (same class as A0/B0/C0).
   if (a >= 0x10000 && a < 0x200000) {
-    // OVERRIDE SYSTEM REMOVED (2026-06-22): no native-override flip here either — interpret the RAM body.
-    // EXCEPT the PLATFORM HLE table (sync_overrides.cpp): PSX BIOS-library HW-sync leaves
-    // (libcd/libetc/libmdec) that busy-spin on an unmodelled IRQ/status bit are resolved natively here
-    // too, so a direct rec_dispatch of one (not just an interpreted jal) doesn't stall. Restricted to
-    // the BIOS-library window; never a game/engine fn (those are owned top-down). Same class as A0/B0/C0.
     { extern OverrideFn platform_hle_lookup(uint32_t);
       OverrideFn pf = platform_hle_lookup(addr | 0x80000000u);
       if (pf) { pf(c); return; } }
-    rec_interp(c, addr); return;
+    // FAIL FAST (2026-06-30): the interpreter is gone. Any RAM code that is not a recompiled MAIN
+    // function, a native override, or a platform-HLE leaf is a MISS — almost always overlay code
+    // (the render submitters / field logic live in \BIN\*.BIN) which the static recompiler does not
+    // cover yet, OR a cooperative task that tried to resume mid-function. Abort with the call site +
+    // a guest-stack backtrace so we get a worklist of exactly what to recompile/port next.
+    fprintf(stderr,
+      "\n[recomp-MISS %d] no recompiled fn for 0x%08X  (caller ra=0x%08X, a0=0x%08X)\n"
+      "  not a recompiled MAIN fn / native override / platform-HLE leaf — likely overlay code or a\n"
+      "  mid-function coroutine resume. The interpreter is removed; this is fail-fast by design.\n",
+      g_miss++, addr, c->r[31], c->r[4]);
+    guest_backtrace_to(c, stderr);
+    fflush(stderr);
+    abort();
   }
   fprintf(stderr, "[miss %d] addr 0x%08X (no recompiled fn / overlay)\n", g_miss++, addr);
 }

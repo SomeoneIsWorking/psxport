@@ -48,9 +48,9 @@ trackers.
   don't ask which side of a "boundary" something is on, don't offer a keep-PSX option. There is NO
   engine-vs-content fence: the engine systems (below) AND the game content/logic (per-enemy AI/NPC
   behavior, how Tomba moves/jumps/lands, physics/collision, quest/event/progression/game-rule logic, the
-  game objects) are ALL valid native-ownership targets. Un-ported code keeps running as the recomp body
-  so the game stays playable at every step; "it's content" is not a reason not to port it. When in doubt,
-  own it — just build it, don't ask.
+  game objects) are ALL valid native-ownership targets. Un-ported code runs as the statically-recompiled
+  shard body (the substrate) where it was recompiled (resident MAIN.EXE); "it's content" is not a reason
+  not to port it. When in doubt, own it — just build it, don't ask.
 - **ONE behavior = the PC game; the enemy is UNTRACKED env sprawl, not gating itself.** Two separate
   things: (a) **behavior** must be single — do NOT add an env toggle to A/B a new native path against the
   old one "until verified"; make it THE behavior, verified via `./run.sh`. Legacy A/B / `*_RECOMP` /
@@ -71,18 +71,21 @@ trackers.
 - **Top-down, PC-driven; PSX never calls PC.** The override/flip system is REMOVED — do NOT use or add
   `rec_set_override` / `rec_super_call`. Ownership starts at boot/main and grows DOWNWARD: a native
   function is reached because its PARENT is native and calls it directly (a plain C call). PC calls PC for
-  what it owns; `rec_dispatch(c, leaf)` runs a still-PSX leaf as pure recomp (it can never re-enter
-  native). Contiguity is required — own a function only once its caller is PC; no island overrides of deep
-  leaves. The recomp body is the behavioral REFERENCE (read it to learn what to build) and the live
-  fallback for un-owned leaves.
+  what it owns; `rec_dispatch(c, leaf)` runs a still-PSX leaf via the static-recomp SUBSTRATE — the
+  generated `func_<addr>` body (it can never re-enter native). Contiguity is required — own a function only
+  once its caller is PC; no island overrides of deep leaves. The recomp body is the behavioral REFERENCE
+  (read it to learn what to build) and the substrate that runs un-owned RESIDENT leaves. **The interpreter
+  is GONE (later-254):** a `rec_dispatch` to any address NOT in the recompiled set (overlay code, an
+  indirect/computed target discovery missed) FAILS FAST (abort + backtrace) — there is no interpreter
+  fallback. Resolve a miss by seeding it into the recompiler (resident, indirectly-reached) or porting it.
 - **FAIL-FAST.** All I/O and timing must be PC-native and synchronous. Any PSX async/wait/hardware-poll
   primitive (VSync waits, CD command-waits CD_cw/CdSync, the async CD reader, GPU/MDEC DMA timeouts,
   IRQ-driven loops) and any invalid state (a derailed opcode) must NOT be papered over (instant-return
   stub, fake-complete, spew-and-continue). Either make it PC-native + synchronous (the work is done inline
   so no wait is reached) or, if reached, ABORT with a diagnostic (caller `ra` + guest-stack backtrace).
-  Implemented: `sync_overrides.cpp` platform-HLE table (traps VSync; native-syncs CD/GPU/MDEC); interp
-  bad-opcode handler aborts. Do NOT re-introduce instant-VSync / fake-CD bandaids or env escape hatches
-  (`PSXPORT_VSYNC_OK`-style).
+  Implemented: `sync_overrides.cpp` platform-HLE table (traps VSync; native-syncs CD/GPU/MDEC); a recomp
+  MISS (no recompiled fn for an address) aborts in `rec_dispatch_miss` (hle.cpp). Do NOT re-introduce
+  instant-VSync / fake-CD bandaids or env escape hatches (`PSXPORT_VSYNC_OK`-style), or an interpreter.
 - **No bandaids / no magic constant offsets.** Name the root cause; document every lifted function /
   patched value with the RE that justifies it. (See the global "No bandaids" rule.)
 
@@ -134,8 +137,8 @@ a PC renderer. Instead:
   don't look for or recreate it.
 - **Repo (N64Recomp model — a reusable PSX→PC framework + the game on top, established in-tree first):**
   `engine/` = the game-specific native engine + RE (game_tomba2, wide60, engine_*); `runtime/recomp/` =
-  common PSX→PC platform (interp/hle/boot/native_boot, PSX-hw natives gpu_native/spu/gte/mdec/cd, CD/XA/FMV
-  subsystems); `tools/` = recompiler + tooling; `generated/` = recompiled MAIN.EXE (gitignored);
+  common PSX→PC platform (dispatch/hle/boot/native_boot, PSX-hw natives gpu_native/spu/gte/mdec/cd, CD/XA/FMV
+  subsystems); `tools/` = recompiler + tooling; `generated/` = recompiled MAIN.EXE shards = the SUBSTRATE (gitignored);
   `vendor/beetle-psx` = committed GPL-2 fork used as the GTE/MDEC/SPU/CHD HARDWARE BACKEND (NOT a reference
   emulator; going off it = porting those native, a long-term goal). Natives live in SUBSYSTEM files
   (clib, gte, gpu_lib, engine_camera, engine_submit, cd_override, …) ordered by guest address — the old

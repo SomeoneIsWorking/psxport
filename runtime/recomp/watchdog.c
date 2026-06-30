@@ -22,7 +22,10 @@ static int g_boot_secs;  // generous grace for the FIRST presented frame (cold p
 static volatile sig_atomic_t g_armed;
 static volatile sig_atomic_t g_first_frame_done;  // 0 until the first present pets the watchdog
 
-extern volatile uint32_t g_interp_pc;  // last PC the hybrid interpreter executed (interp.c)
+// The interpreter is gone (2026-06-30): under the recomp substrate the C backtrace below names the
+// gen_func_<addr> chain directly (the guest call stack), so there is no separate "interp PC" to
+// report. (Core::pc holds the per-core guest fn, but a signal handler has no Core handle and the
+// backtrace supersedes it.)
 
 static void on_alarm(int sig) {
   (void)sig;
@@ -33,10 +36,6 @@ static void on_alarm(int sig) {
                                "compile, not a hang; re-run, or raise PSXPORT_WATCHDOG_BOOT)\n";
     write(2, hint, sizeof(hint) - 1);
   }
-  // Report where the interpreter is spinning (async-signal-safe hex emit; no fprintf).
-  { char b[] = "[watchdog] interp PC = 0x00000000\n"; uint32_t p = g_interp_pc;
-    for (int i = 0; i < 8; i++) b[32 - i] = "0123456789abcdef"[(p >> (i * 4)) & 0xF];
-    write(2, b, sizeof(b) - 1); }
 #ifdef HAVE_BACKTRACE
   void* bt[64];
   int n = backtrace(bt, 64);
@@ -49,9 +48,6 @@ static void on_fault(int sig) {
   static const char msg[] = "\n[watchdog] FAULT (signal): backtrace:\n";
   write(2, msg, sizeof(msg) - 1);
   { char b[] = "[watchdog] signal = 00\n"; b[20] = '0' + (sig / 10) % 10; b[21] = '0' + sig % 10;
-    write(2, b, sizeof(b) - 1); }
-  { char b[] = "[watchdog] interp PC = 0x00000000\n"; uint32_t p = g_interp_pc;
-    for (int i = 0; i < 8; i++) b[32 - i] = "0123456789abcdef"[(p >> (i * 4)) & 0xF];
     write(2, b, sizeof(b) - 1); }
 #ifdef HAVE_BACKTRACE
   void* bt[64]; int n = backtrace(bt, 64); backtrace_symbols_fd(bt, n, 2);
@@ -71,9 +67,6 @@ static void on_interrupt(int sig) {
   g_int_seen = 1;
   static const char msg[] = "\n[watchdog] INTERRUPT (SIGINT/SIGTERM) — where it was stuck:\n";
   write(2, msg, sizeof(msg) - 1);
-  { char b[] = "[watchdog] interp PC = 0x00000000\n"; uint32_t p = g_interp_pc;
-    for (int i = 0; i < 8; i++) b[32 - i] = "0123456789abcdef"[(p >> (i * 4)) & 0xF];
-    write(2, b, sizeof(b) - 1); }
 #ifdef HAVE_BACKTRACE
   void* bt[64]; int n = backtrace(bt, 64); backtrace_symbols_fd(bt, n, 2);
 #endif
@@ -82,8 +75,8 @@ static void on_interrupt(int sig) {
 
 // Enable with PSXPORT_WATCHDOG=<seconds> (0/unset disables). Call once at startup.
 void watchdog_init(void) {
-  // A crash (SIGSEGV/SIGABRT) during boot should report WHERE (C backtrace + interpreter PC),
-  // not silently dump core — install the fault handler regardless of the frame-watchdog setting.
+  // A crash (SIGSEGV/SIGABRT) during boot should report WHERE (C backtrace names the gen_func_<addr>
+  // guest call chain), not silently dump core — install the fault handler regardless of the setting.
   struct sigaction fa = {0};
   fa.sa_handler = on_fault;
   sigaction(SIGSEGV, &fa, 0);

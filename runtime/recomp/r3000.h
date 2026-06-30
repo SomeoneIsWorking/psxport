@@ -16,6 +16,10 @@ extern "C" {
 typedef struct R3000 {
   uint32_t r[32];   // GPRs; r[0] is hardwired 0
   uint32_t hi, lo;  // mult/div result registers
+  uint32_t pc;      // program counter — PER-CORE. Under the recomp substrate each recompiled
+                    // function wrapper sets it to its own guest address on entry (emit.py), so
+                    // diagnostics (mem watch / store trap / backtrace) report which guest function
+                    // THIS core is in. No global "current PC"; two Cores have two independent pc.
 } R3000;
 
 #ifdef __cplusplus

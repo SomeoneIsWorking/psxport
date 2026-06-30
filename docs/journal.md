@@ -8682,3 +8682,36 @@ repeated), 3s frame-progress watchdog never fires (frames advance), no abort.
 
 ALSO (this session, separate, later-252 commit): SIGPIPE killed the whole game when a debug-server client
 disconnected mid-reply — now signal(SIGPIPE, SIG_IGN) in dbg_server.cpp.
+
+## later-254 — PIVOT: interpreter REMOVED → static-recomp shards ARE the runtime substrate (fail-fast on miss)
+**User directive (2026-06-30):** "remove the interpreter, every recomp miss should crash the game and give
+us a log … no legacy, we don't keep legacy." REVERSES the later-101..103 interpreter-only pivot.
+
+**What changed.** The flat interpreter (`runtime/recomp/interp.cpp`) is DELETED. The statically-recompiled
+shards (`generated/shard_*.c` from `tools/recomp/emit.py`) are now LINKED and are the execution substrate
+for every non-native guest function. `shard_disp.c` generates `rec_dispatch` (an address→`func_<addr>`
+switch); a recompiled body runs as a plain C call. A MISS (overlay code, a non-recompiled address, a
+computed/fn-pointer jump target) falls through `rec_dispatch_miss` (hle.cpp) which now FAILS FAST — prints
+`[recomp-MISS] no recompiled fn for 0x… (caller ra, a0)` + a guest-stack backtrace and `abort()`s. There is
+NO interpreter fallback. BIOS A0/B0/C0 vectors and the platform-HLE sync table (sync_overrides.cpp) still
+resolve natively first; only genuine non-native RAM code aborts.
+
+**Files:** removed `interp.cpp`; `dispatch.cpp` rewritten to shims (`rec_super_call`/`rec_interp`/
+`rec_coro_run`/`stub_dispatch` → generated `rec_dispatch`; `rec_coro_redirect` setter kept) + holds
+`g_override_tgt`; `hle.cpp` `rec_dispatch_miss` RAM path → abort+`guest_backtrace_to`; `cmake/
+tomba2_port.cmake` drops the `PSXPORT_SUBSTRATE` option (shards always linked, interp.cpp never compiled);
+`run.sh` regenerates shards whenever missing/stale (build REQUIRES them; generated/ is gitignored).
+
+**PC is now PER-CORE (OO).** Removed the global `g_interp_pc`. Added `uint32_t pc` to `R3000` (r3000.h);
+each recompiled wrapper sets `c->pc = <its guest addr>` on entry (emit.py). Diagnostics that read the old
+global now use `c->pc` (mem.cpp store/SPU-DMA logs, sync_overrides trap). The watchdog signal handler drops
+its PC line — the C backtrace already names the `gen_func_<addr>` guest call chain.
+
+**Status:** builds clean; boots stub→native crt0→recompiled MAIN, then FAILS FAST at the first miss:
+`0x80085CB4` (caller gen_func_80085B20 → `lw v0,*(0x800abda0); jalr v0+0xC`, a0=0x8010622C GAME overlay).
+That is an INDIRECT (fn-pointer) call target jal-discovery can't see — the first worklist item. Backtrace is
+clean (`gen_func_80085B20 → func_80085B20 → rec_dispatch → rec_dispatch_miss → abort`).
+
+**NEXT (miss-resolution loop):** each miss is either (a) a resident MAIN fn reached only indirectly → seed in
+emit.py EXTRA_SEEDS + regen; (b) overlay code → needs overlay static recompilation (the big phase); or (c) a
+fn to port native. Grind the log top-down.

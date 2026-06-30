@@ -52,7 +52,7 @@ void Core::cw_check(uint32_t a, uint32_t v, int width) {
   if (s_cw_hi && p >= s_cw_lo && p < s_cw_hi) {
     s_cw_n++;
     if (s_cw_n <= 64) {
-      fprintf(stderr, "[cw] #%d store w%d [%08X]=%08X  interp_pc=%08X\n", s_cw_n, width, 0x80000000u|p, v, g_interp_pc);
+      fprintf(stderr, "[cw] #%d store w%d [%08X]=%08X  interp_pc=%08X\n", s_cw_n, width, 0x80000000u|p, v, pc);
       if (cfg_str("PSXPORT_CW_BT")) { void* bt[32]; int n = backtrace(bt, 32); backtrace_symbols_fd(bt, n, 2); fprintf(stderr, "----\n"); }
     }
   }
@@ -75,7 +75,7 @@ void Core::wwatch_check(uint32_t a, uint32_t v) {
   uint32_t ka = a | 0x80000000u;
   if (s_ww_hi && ka >= s_ww_lo && ka < s_ww_hi) {
     if (cfg_str("PSXPORT_WWATCH"))
-      fprintf(stderr, "[wwatch] store [%08X]=%08X by pc=%08X stage=%08X\n", ka, v, g_interp_pc, mem_r32(0x801fe00c));
+      fprintf(stderr, "[wwatch] store [%08X]=%08X by pc=%08X stage=%08X\n", ka, v, pc, mem_r32(0x801fe00c));
     if (g_store_watch_cb) g_store_watch_cb(this, ka, v);
   }
 }
@@ -145,7 +145,7 @@ void Core::io_write(uint32_t a, uint32_t v, uint32_t bytes) {
         for (int i = 0; i < n; i++) s_dma_buf[i] = mem_r32(da + i * 4);
         if (cfg_str("PSXPORT_SPUDMA")) {           // log VAB/sample transfers: source -> SPU dest, size
           fprintf(stderr, "[spudma] RAM 0x%08X -> SPU 0x%06X  %d words (%d B)  pc=%08X stage=%08X\n",
-                  0x80000000u | da, s_spu_xfer_addr, n, n * 4, g_interp_pc, mem_r32(0x801fe00c));
+                  0x80000000u | da, s_spu_xfer_addr, n, n * 4, pc, mem_r32(0x801fe00c));
           if (n > 20000) {                         // big VAB bank: dump engine-range guest return addrs
             uint32_t sp = r[29] & 0x1FFFFFFF; fprintf(stderr, "  [vab-caller-chain]");
             for (uint32_t o = 0; o < 0x800 && sp + o + 4 <= 0x200000; o += 4) {

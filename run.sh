@@ -72,7 +72,7 @@ DISCDUMP=build/tools/discdump
 [ -x "$DISCDUMP" ] || DISCDUMP=build/tools/discdump.exe
 [ -x "$DISCDUMP" ] || die "discdump build failed"
 
-# ---- 3. extract MAIN.EXE (the interpreter runs it from RAM) + the stage overlays ----
+# ---- 3. extract MAIN.EXE (recompiled to the shard substrate by emit.py) + the stage overlays ----
 MAIN=scratch/bin/tomba2/MAIN.EXE
 if [ ! -f "$MAIN" ]; then
   say "extracting MAIN.EXE from the disc…"
@@ -91,24 +91,25 @@ fi
 [ -f "$STUB" ] || die "could not extract the boot stub SCUS_944.54"
 
 # Stage overlays (\BIN\{START,DEMO,GAME}.BIN): runtime-loaded game code the game pulls off the
-# disc into RAM; the interpreter runs them in place. (Also fed to emit.py --overlays when the
-# offline analysis recompiler is requested.) Game data — gitignored scratch.
+# disc into RAM. Fed to emit.py --overlays so the recompiler seeds the resident MAIN functions the
+# overlays call. (The overlay CODE itself is not yet recompiled — calls into it currently fail fast;
+# overlay static recompilation is the next phase.) Game data — gitignored scratch.
 OVL=scratch/bin/overlays
 mkdir -p "$OVL"
 for b in START DEMO GAME; do
   [ -f "$OVL/$b.BIN" ] || "$DISCDUMP" get "BIN/$b.BIN" "$DISC" "$OVL" >/dev/null 2>&1 || true
 done
 
-# ---- 4. (analysis only) recompile to C, then build the native runtime ---------------
-# The interpreter-only runtime does NOT link the recompiled C — MAIN.EXE + the stub run from RAM via
-# the interpreter. emit.py is kept as an OFFLINE analysis aid (readable pseudo-C for RE); regenerate
-# generated/ only when asked (PSXPORT_RECOMP=1) so a normal run doesn't depend on the recompiler.
+# ---- 4. recompile MAIN.EXE + boot stub -> C, then build the native runtime ----------
+# The interpreter is GONE (2026-06-30): the statically-recompiled shards (generated/shard_*.c) ARE the
+# execution substrate for every non-native guest function, so the build REQUIRES them. generated/ is
+# gitignored (regenerable), so regenerate whenever it is missing or stale (MAIN/stub/emit.py changed).
 GEN=generated/tomba2_rec.c
 RT=runtime/recomp       # common PSX->PC platform (future psxport submodule)
 ENG=engine              # Tomba2Engine — game-specific native engine + RE
 mkdir -p generated scratch/bin
-if [ -n "${PSXPORT_RECOMP:-}" ] && { [ ! -f "$GEN" ] || [ "$MAIN" -nt "$GEN" ] || [ "$STUB" -nt "$GEN" ] || [ tools/recomp/emit.py -nt "$GEN" ]; }; then
-  say "recompiling MAIN.EXE + boot stub -> C (analysis aid)…"
+if [ ! -f generated/shard_disp.c ] || [ ! -f "$GEN" ] || [ "$MAIN" -nt "$GEN" ] || [ "$STUB" -nt "$GEN" ] || [ tools/recomp/emit.py -nt "$GEN" ]; then
+  say "recompiling MAIN.EXE + boot stub -> C (the execution substrate)…"
   python3 tools/recomp/emit.py "$MAIN" "$GEN" --overlays "$OVL" --stub "$STUB" >/dev/null
 fi
 

@@ -71,7 +71,6 @@ static void ov_gpu_timeout_chk(Core* c) { c->r[V0] = 0; }   // 0 = not timed out
 // must be PC-owned (ported top-down to read the native frame clock / pace via the native loop). There
 // are NO exceptions: every mode, every caller, traps. (The prior instant-return / query carve-out /
 // boot counter-bump were bandaids — removed.) The trap prints the caller and aborts so it can be owned.
-extern volatile uint32_t g_interp_pc;
 
 // Walk the guest stack (sp upward) printing plausible return addresses in resident-code range, so a
 // trap shows the call chain that reached it (e.g. async-read issuer -> CD_cw -> VSync). Best-effort:
@@ -92,10 +91,10 @@ extern "C" void guest_backtrace_to(Core* c, FILE* out) {
 static void guest_backtrace(Core* c) { guest_backtrace_to(c, stderr); }
 
 static void trap_abort(Core* c, const char* what, uint32_t addr) {
-  fprintf(stderr, "\n[%s-TRAP] reached 0x%08X  a0=%d ra=0x%08X interp_pc=0x%08X\n"
+  fprintf(stderr, "\n[%s-TRAP] reached 0x%08X  a0=%d ra=0x%08X pc=0x%08X\n"
                   "  Everything must be PC-native + SYNCHRONOUS (no PSX vblank/IRQ waits, no async CD).\n"
                   "  This caller must be PC-owned (ported top-down) so it never reaches this primitive.\n",
-          what, addr, (int)c->r[4], c->r[31], g_interp_pc);
+          what, addr, (int)c->r[4], c->r[31], c->pc);
   guest_backtrace(c);
   fflush(stderr);
   abort();

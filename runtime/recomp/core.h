@@ -90,10 +90,7 @@ typedef void (*OverrideFn)(Core*);
 
 extern "C" {
 
-// The PC currently being interpreted (watchdog/diagnostics). Defined in interp.cpp.
-extern volatile uint32_t g_interp_pc;
-
-// ---- Dispatch & traps (interp.cpp / dispatch.cpp / hle.cpp) ----
+// ---- Dispatch & traps (dispatch.cpp / hle.cpp) ----
 void rec_dispatch(Core* c, uint32_t addr);
 void rec_dispatch_miss(Core* c, uint32_t addr);
 void rec_syscall(Core* c, uint32_t code);

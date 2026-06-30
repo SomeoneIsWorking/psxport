@@ -1,42 +1,45 @@
-// Single-substrate dispatch (interpreter-only runtime).
+// Dispatch entry points for the recomp-substrate runtime.
 //
-// This replaces the generated dispatch infrastructure (generated/shard_disp.c + stub_disp.c). The
-// runtime no longer links any statically-recompiled function bodies: MAIN.EXE and the boot stub both
-// execute from g_ram via the interpreter (interp.c). The static recompiler (tools/recomp/emit.py ->
-// generated/*.c) is retained ONLY as an offline analysis aid — readable, Ghidra-like pseudo-C used to
-// reverse-engineer functions — and is not part of the build. See docs/journal.md "later-101".
-//
-// One execution model: rec_dispatch interprets the original bytes (BIOS vectors -> HLE). The override
-// table is GONE (2026-06-22) — PC calls native code directly. rec_super_call is the "run the real body"
-// path (the former gen_func_XXXX(c) pattern).
+// The interpreter is GONE (2026-06-30). The static recompiler (tools/recomp/emit.py ->
+// generated/shard_*.c) is the SUBSTRATE: every non-native guest function runs as recompiled C.
+// shard_disp.c GENERATES rec_dispatch (an address->func_<addr> switch) and rec_func_index; this file
+// only provides the remaining dispatch entry points the engine/runtime call (rec_super_call /
+// rec_interp / rec_coro_run / stub_dispatch), routing them all to the generated rec_dispatch — a
+// recompiled body is invoked as a plain C call. A MISS (overlay code, a non-recompiled address, a
+// computed jump target) falls through rec_dispatch_miss, which FAILS FAST (abort + guest backtrace).
+// There is NO interpreter fallback. (User directive 2026-06-30: drop the interpreter; every recomp
+// miss must crash with a log so we can see what to port/recompile next.)
 #include "core.h"
 
-void rec_interp(Core* c, uint32_t pc);
-void rec_dispatch_miss(Core* c, uint32_t addr);  // BIOS vectors -> HLE; else RAM code -> interp (hle.c)
+void rec_dispatch(Core* c, uint32_t addr);        // generated (shard_disp.c)
+void rec_dispatch_miss(Core* c, uint32_t addr);   // BIOS vectors -> HLE; else FAIL FAST (hle.cpp)
 
-// Interpreter-only build: there is no statically-recompiled function table; every function runs via
-// interp.c, so rec_func_index is always -1.
-// "Is this address a statically-recompiled function?" — interpreter-only build: never.
-int rec_func_index(uint32_t addr) { (void)addr; return -1; }
+// g_override_tgt is set by native code (native_boot / engine_submit) to carry the body an override
+// intercepted; it is plain shared state, not interpreter-owned. (The per-core program counter is now
+// Core::pc — r3000.h — set by each recompiled wrapper, not a global.)
+uint32_t g_override_tgt = 0;
 
-// OVERRIDE SYSTEM REMOVED (2026-06-22) — top-down PC-driven model: PC calls PC directly; PSX never
-// calls PC. There is no override table any more — native code is invoked by PC calling the native
-// function directly, NOT by registering an address. rec_dispatch is the PC->PSX-leaf call: it runs the
-// original recomp body (pure PSX) — BIOS vectors to HLE, RAM code interpreted — and never re-enters
-// native code.
-//
-// Run the PSX function at `addr` as pure recomp: rec_dispatch_miss routes BIOS vectors (A0/B0/C0) to the
-// HLE BIOS and interprets RAM code (overlays / MAIN / stub). Crucial for PSX BIOS calls (`li $t2,0xA0;
-// jr $t2`), which must NOT be interpreted as code at 0xA0.
-void rec_dispatch(Core* c, uint32_t addr) {
-  rec_dispatch_miss(c, addr);
-}
+// Former interpreter entry points — under the substrate they are all the same thing: run the
+// recompiled body at `addr` as a plain C call (rec_dispatch resolves the func_<addr> wrapper; a miss
+// aborts in rec_dispatch_miss). rec_super_call was "interpret the original body" (the old
+// gen_func_XXXX(c) super-call); rec_coro_run was a cooperative-task entry.
+void rec_super_call(Core* c, uint32_t addr) { rec_dispatch(c, addr); }
+void rec_interp(Core* c, uint32_t addr)     { rec_dispatch(c, addr); }
+void rec_coro_run(Core* c, uint32_t addr)   { rec_dispatch(c, addr); }
 
-// Super-call / A/B oracle: interpret the ORIGINAL function body, bypassing its own entry override (so
-// a native override can invoke the real PSX code). rec_interp does not re-check the entry override, so
-// this is just an interpret-from-addr. Replaces the old `gen_func_XXXX(c)` super-calls.
-void rec_super_call(Core* c, uint32_t addr) { rec_interp(c, addr); }
+// Cooperative-yield redirect handshake (later-169): an override stashed the PC the flat interpreter
+// should resume at. With the interpreter gone there is no resumable mid-function PSX PC; keep the
+// setter so callers compile, but a task that actually yields cannot resume in recompiled C and will
+// fail fast at the next miss. (Resumable coroutines under the substrate are future work.)
+void rec_coro_redirect(Core* c, uint32_t target) { c->coro_redirect_pc = target; }
 
-// The boot stub shared MAIN.EXE's address space and used to have its own recompiled dispatcher; it now
-// interprets from RAM like everything else.
+// The boot stub shares MAIN.EXE's address space (decoded natively now); route any stray dispatch
+// through the same substrate.
 void stub_dispatch(Core* c, uint32_t addr) { rec_dispatch(c, addr); }
+
+// Former interpreter REPL/diagnostic hooks (interp.cpp is no longer compiled) — no-op stubs so the
+// REPL (`prof …`, `trace …`) and native_stub still link.
+void interp_trace_open(const char*) {}
+void prof_start(void) {}
+void prof_stop(void) {}
+void prof_dump(const char*) {}

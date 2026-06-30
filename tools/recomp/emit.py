@@ -466,8 +466,11 @@ def emit_module(exe, out_dir, N, seeds, ov_dir=None, limit=None, shards=8):
          f"OverrideFn {N.ovtab}[{max(1, len(funcs))}];"]
     for a in funcs:
         i = idx[a]
-        d.append(f"void {N.wrap}_{a:08X}(Core* c) {{ if ({N.ovtab}[{i}]) {{ {N.ovtab}[{i}](c); "
-                 f"return; }} {N.gen}_{a:08X}(c); }}")
+        # c->pc = this function's guest address — the PER-CORE program counter (r3000.h). Set on
+        # every recompiled-function entry so mem-watch / store-trap / backtrace diagnostics report
+        # which guest function THIS core is in (the substrate's analog of the old interpreter PC).
+        d.append(f"void {N.wrap}_{a:08X}(Core* c) {{ c->pc = 0x{a:08X}u; if ({N.ovtab}[{i}]) {{ "
+                 f"{N.ovtab}[{i}](c); return; }} {N.gen}_{a:08X}(c); }}")
     d.append(f"int {N.index}(uint32_t addr) {{\n  switch (addr & 0x1FFFFFFFu) {{")
     for a in funcs:
         d.append(f"    case 0x{a & 0x1FFFFFFF:08X}u: return {idx[a]};")
