@@ -281,26 +281,35 @@ def collect_jt_targets(exe, funcs, text_end):
 
 
 def emit_func(exe, lo, hi, funcset, out, name, N):
-    """Emit one C function covering [lo, hi) under the given C name (the pure recomp body)."""
+    """Emit one C function covering [lo, hi) under the given C name (the pure recomp body). Linear walk
+    over the contiguous body — the proven model. (A CFG-flood-fill variant was tried to auto-duplicate
+    shared epilogues but mis-recompiled a register-jump-table state machine into an infinite loop, so it
+    was reverted; cross-function shared-epilogue targets are handled by seeding/merge instead.)"""
     ins = {a: decode(a, exe.word(a)) for a in range(lo, hi, 4)}
     jt = find_jump_tables(exe, ins, lo, hi)
 
-    # Simulate the emission walk to find the exact set of "standalone" addresses (those
-    # emitted as their own statement; a control op consumes the next word as its delay
-    # slot). A branch/jump target is a real label only if it coincides with a standalone
-    # address — targets that land inside data (or on a consumed delay slot) instead route
-    # through rec_dispatch, so generated code never references an undefined label.
+    # `standalone` = addresses emitted as their own statement; a control op consumes the next word as its
+    # delay slot, so that word is NOT standalone. A branch/jump target is a real label only if it
+    # coincides with a standalone address (else it routes through the router, never an undefined label).
     standalone, a = set(), lo
     while a < hi:
         standalone.add(a)
         a += 8 if ins[a].kind in (D.BRANCH, D.JUMP, D.JUMPR) else 4
-    labels = {i.target for i in ins.values()
-              if i.kind in (D.BRANCH, D.JUMP) and i.target in standalone and lo <= i.target < hi}
-    # jump-table case-label targets are real labels too (the recovered `switch` gotos into them)
+    all_targets = {i.target for i in ins.values()
+                   if i.kind in (D.BRANCH, D.JUMP) and i.target is not None and lo <= i.target < hi}
     for tgts in jt.values():
-        for t in tgts:
-            if t in standalone:
-                labels.add(t)
+        all_targets |= {t for t in tgts if lo <= t < hi}
+    labels = {t for t in all_targets if t in standalone}
+    # BRANCH-INTO-DELAY-SLOT (MAIN 0x80084080: a `bltz` jumps to 0x800840C8, the delay slot of the
+    # preceding unconditional `beq $0,$0`). Such a target is NOT standalone, so without help it routes to
+    # the dispatcher. Emit a label for it: after the owning control op drop `L_<ds>: <slot>` (guarded by a
+    # skip-goto so the op's own fall-through doesn't re-run the slot); a jump INTO the delay slot runs the
+    # slot then falls through. (The slot instruction is duplicated — harmless, a single non-control op.)
+    ctrl_delayslots = {a2 + 4 for a2 in standalone
+                       if ins[a2].kind in (D.BRANCH, D.JUMP, D.JUMPR)
+                       and (a2 + 4) in ins and ins[a2 + 4].kind not in (D.BRANCH, D.JUMP, D.JUMPR)}
+    ds_label_targets = {t for t in all_targets if t not in standalone and t in ctrl_delayslots}
+    labels |= ds_label_targets
 
     out.append(f"void {name}(Core* c) {{")
     a = lo
@@ -313,6 +322,10 @@ def emit_func(exe, lo, hi, funcset, out, name, N):
             ds_c = emit_simple(slot) if (slot and slot.kind not in
                    (D.BRANCH, D.JUMP, D.JUMPR)) else "/* DS */"
             out.extend(emit_control(i, ds_c, funcset, labels, N, jt.get(a)))
+            if (a + 4) in ds_label_targets:        # the delay slot is also a branch target
+                out.append(f"  goto L_DSAFTER_{a:08X};")
+                out.append(f"L_{a + 4:08X}:; {ds_c}")
+                out.append(f"L_DSAFTER_{a:08X}:;")
             a += 8
         else:
             s = emit_simple(i)
@@ -549,17 +562,56 @@ def discover_funcs(exe, seeds):
     return sorted(funcs)
 
 
-def emit_module(exe, out_dir, N, seeds, ov_dir=None, limit=None, shards=8):
+def merge_early_return_boundaries(exe, funcs, removable, hard):
+    """Fix FALSE function boundaries from func_entries_after_return: a `jr ra` is NOT always a function
+    end — a function may have an EARLY RETURN mid-body (an `if(...) return;`) or several returns sharing a
+    tail epilogue, and continue/branch across that point. The boundary scan would split it there, so an
+    intra-function branch/`j` that targets PAST the split routes through the router -> fail-fast (A00
+    0x80131600 branches to its 0x801316C4 tail; 0x801130C4 branches to the 0x80113328 shared epilogue).
+    A soft boundary g is FALSE if ANY instruction in the REAL function it sits inside — [H, g), where H is
+    the nearest HARD entry (real jal/pointer/explicit function start) at or before g — has a forward
+    branch/`j` whose target lands in [g, next). Drop such g (merging extends the function); only
+    `removable` boundaries (soft seeds, never a hard entry) are dropped. Iterate to a fixpoint."""
+    funcs = sorted(funcs)
+    hard = set(hard)
+    changed = True
+    while changed:
+        changed = False
+        for idx in range(1, len(funcs)):
+            g = funcs[idx]
+            if g not in removable:
+                continue
+            nxt = funcs[idx + 1] if idx + 1 < len(funcs) else exe.text_end
+            # scan back to the nearest HARD entry (the real function start this g sits inside)
+            j = idx - 1
+            while j > 0 and funcs[j] not in hard:
+                j -= 1
+            crosses = False
+            for x in range(funcs[j], g, 4):
+                i = decode(x, exe.word(x))
+                if (i.kind == D.BRANCH or i.op == "j") and i.target is not None and g <= i.target < nxt:
+                    crosses = True
+                    break
+            if crosses:
+                funcs.pop(idx)
+                changed = True
+                break
+    return funcs
+
+
+def emit_module(exe, out_dir, N, seeds, ov_dir=None, limit=None, shards=8, soft_seeds=None):
     """Discover the recompiled function set for `exe` and emit its module (shards + dispatch TU +
     decls header) under the symbol/file names in `N`. Shared by the MAIN.EXE module and the boot-
     stub module; the stub gets distinct names so its func_<addr> don't collide with MAIN's."""
     ov = overlay_funcs(exe, ov_dir)
     if ov:
         print(f"[{N.wrap}] overlay seeds: {len(ov)} resident fns reached from {ov_dir}")
-    seeds = set(seeds) | ov
+    hard = set(seeds) | ov                       # real call targets (never merged away)
+    soft = set(soft_seeds or ())                 # func_entries_after_return boundaries (mergeable)
     if os.environ.get("PSXPORT_USE_GHIDRA"):
-        seeds |= set(ghidra_funcs(exe.load, exe.text_end))
-    funcs = discover_funcs(exe, seeds)
+        hard |= set(ghidra_funcs(exe.load, exe.text_end))
+    seeds = hard                                  # for the jt-prune "keep seeds" guard below
+    funcs = discover_funcs(exe, hard | soft)
     # PRUNE jump-table case labels wrongly seeded/discovered as functions: they are mid-function code,
     # and leaving them in truncates the containing function so its switch can't be recovered (the
     # substrate-derail root cause). Keep any that ARE a seed entry (defensive: a real fn shouldn't be a
@@ -568,6 +620,21 @@ def emit_module(exe, out_dir, N, seeds, ov_dir=None, limit=None, shards=8):
     if jt_labels:
         funcs = [f for f in funcs if f not in jt_labels]
         print(f"[{N.wrap}] pruned {len(jt_labels)} jump-table case labels from the function set")
+    # Merge FALSE early-return boundaries (soft func_entries_after_return seeds that split a function with
+    # a mid-body `jr ra`). removable = soft seeds that are NOT a real call target (jal/pointer entry).
+    if soft_seeds:
+        lo, hi = exe.load, exe.text_end
+        jal_tgts = {decode(a, exe.word(a)).target for a in range(lo, hi, 4)
+                    if decode(a, exe.word(a)).op == "jal"}
+        removable = (set(soft_seeds) - set(seeds)) - jal_tgts
+        before = len(funcs)
+        funcs = merge_early_return_boundaries(exe, funcs, removable, set(seeds) | jal_tgts)
+        if len(funcs) != before:
+            print(f"[{N.wrap}] merged {before - len(funcs)} false early-return boundaries")
+    # (Shared-epilogue / cross-function branch targets are NOT seeded as separate functions — emit_func's
+    # CFG flood-fill DUPLICATES such tails into each function that branches to them, so a function is never
+    # split at a point its own internal branches cross. floodfill_func is the single source of truth for a
+    # function's instruction extent.)
     print(f"[{N.wrap}] functions: {len(seeds)} seeds -> {len(funcs)} recompiled after jal "
           f"discovery (a call to any non-recompiled address fails fast at runtime)")
     funcset = set(funcs)
@@ -711,10 +778,19 @@ def main():
     #   OPN/CRD.BIN — opening-movie / credits sub-mode overlays; NOT on the field path and not yet observed
     #     loading, so their base is UNVERIFIED. Tentatively the MODE slot; if a run ever dispatches into one
     #     it fail-fasts (the signature won't match at the wrong base) — capture its real dest then and fix.
+    #   A0*.BIN — the per-area FIELD CODE overlays (A00..A0L); each loads to the MODE slot 0x80108F9C
+    #     (swapping out SOP), holding the field render submitters (0x8013xxxx). cd-log:
+    #     "loadfile 285096 B @LBA374 -> 0x80108F9C" (A00). All A0* are interchangeable at this base.
     OVERLAY_BASES = {
         "START": 0x80106228, "DEMO": 0x80106228, "GAME": 0x80106228,
         "SOP": 0x80108F9C, "OPN": 0x80108F9C, "CRD": 0x80108F9C,
     }
+    def overlay_base(stem):
+        if stem in OVERLAY_BASES:
+            return OVERLAY_BASES[stem]
+        if re.fullmatch(r"A0[0-9A-Z]", stem):    # field area code overlays -> MODE slot
+            return 0x80108F9C
+        return None
     overlays = []   # (tag, NAME, base, end, sig32 bytes, Names)
     if ov_dir and os.path.isdir(ov_dir):
         for fn in sorted(os.listdir(ov_dir)):
@@ -722,7 +798,7 @@ def main():
                 continue
             data = open(os.path.join(ov_dir, fn), "rb").read()
             stem = fn[:-4].upper()
-            base = OVERLAY_BASES.get(stem)
+            base = overlay_base(stem)
             if base is None:
                 print(f"[overlays] WARNING: {fn} has no known load base — defaulting to 0x80106228; "
                       f"capture its real dest with PSXPORT_DEBUG=cd and add it to OVERLAY_BASES")
@@ -730,10 +806,11 @@ def main():
             ovexe = psexe.PsxExe(base, 0, base, len(data), 0, 0, data)
             tag = re.sub(r"[^a-z0-9]", "_", fn[:-4].lower())
             N = overlay_names(tag)
-            seeds_ov = (pointer_table_funcs(ovexe) | constructed_func_pointers(ovexe)
-                        | code_pointer_tables(ovexe) | func_entries_after_return(ovexe)
-                        | overlay_internal_jal_targets(ovexe))
-            src_files += emit_module(ovexe, out_dir, N, seeds_ov, None, None, shards=2)
+            hard_ov = (pointer_table_funcs(ovexe) | constructed_func_pointers(ovexe)
+                       | code_pointer_tables(ovexe) | overlay_internal_jal_targets(ovexe))
+            soft_ov = func_entries_after_return(ovexe)   # jr-ra boundaries (mergeable if false)
+            src_files += emit_module(ovexe, out_dir, N, hard_ov, None, None, shards=2,
+                                     soft_seeds=soft_ov)
             overlays.append((tag, fn[:-4].upper(), base, base + len(data), data[:32], N))
 
     # Overlay routing table consumed by overlay_router.cpp.

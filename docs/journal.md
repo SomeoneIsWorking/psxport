@@ -8796,3 +8796,42 @@ routed by signature) → SOP field-mode (LOAD/FADE/GAMEPLAY sm[0x50] 0→4, area
 → FAILS FAST at the field AREA-CODE overlay: a 285096-B blob @ LBA 374 loaded to 0x80108F9C (MODE slot,
 swaps out SOP), holding the field render submitters (0x8013xxxx). NEXT FRONTIER = extract + recompile that
 area overlay (and the other A0*.BIN field overlays) at base 0x80108F9C.
+
+## later-258 — recompiler TDD harness; field area overlay A00; recomp transforms (no flood-fill)
+Continued the overlay frontier into the FIELD area code overlay, and added a TDD suite for the
+recompiler (user directive: "put some TDD in the recompiler too" / "add game-specific tailorings").
+
+**Recompiler TDD (tools/recomp/test_emit.py).** Two layers, runnable standalone or via pytest:
+- STRUCTURAL: a tiny MIPS assembler (`Asm`) + asserts on the static analyses — find_jump_tables BOTH
+  idiom variants (A: `lui base;addiu;addu base,base,idx`, B: `addu B,idx,tbl` overlay form), is_func_entry,
+  code_pointer_tables seeding a vtable while EXCLUDING switch_table_spans (the printf-parser class).
+- EXECUTION (differential TDD): assemble a fn → emit_func → C → compile against a minimal Core → RUN on
+  concrete reg/mem → assert state. Covers basic ALU, a loop, a recovered jump table, branch-into-delay-
+  slot, shared-epilogue register restore, tail-call dispatch, and a 200k-iteration TAIL-JUMP LOOP that
+  only completes in O(1) stack with sibling-call optimization (pins the build-flag requirement). 11 tests.
+
+**Field area overlay.** A0*.BIN are the per-area FIELD CODE overlays; each loads to the MODE slot
+0x80108F9C (swapping out SOP), holding the 0x8013xxxx render submitters (cd-log: A00 = 285096 B @LBA374 ->
+0x80108F9C). emit.py recompiles A00 (OVERLAY_BASES + `A0[0-9A-Z]` rule). Boot now drives DEMO -> GAME ->
+SOP intro/fade -> A00 area load with no miss until the shared-epilogue gap below.
+
+**Transforms kept (tested):** find_jump_tables `addu B,idx,tbl` variant (overlay menu machine 0x80106F80);
+code_pointer_tables (vtable targets is_func_entry misses) + switch_table_spans exclusion;
+merge_early_return_boundaries (a `jr ra` mid-body is an early return, not a function end — merges the false
+split so a branch past it stays an in-fn goto; fixes A00 0x80131600->0x801316C4); branch-into-delay-slot
+labels (MAIN 0x80084080). Build flags for the generated shards: `-foptimize-sibling-calls` (a guest tail-
+jump loop -> `dispatch(c,x);return;` must be a real tail call or the C stack grows -> SIGSEGV) +
+`-fno-strict-aliasing -fwrapv` (recomp-safety).
+
+**Tried + REVERTED — CFG flood-fill.** Rewrote emit_func to emit each function as the CFG closure from its
+entry (auto-duplicating shared epilogues, following `j` chains). It MIS-recompiled the resident vtable
+state machine (0x8007E2F8 <-> 0x8007E620, register-based jump table) into an INFINITE LOOP (plain smoke hung
+at DEMO frame 5; HEAD's linear emit runs it clean to frame 90). Too many subtle pitfalls (emission order /
+entry-must-be-first, fall-through between disjoint blocks, merge-back into the main body). Reverted to the
+proven linear [lo,hi) walk. Lesson: the linear contiguous-body model is the source of truth; handle cross-
+function shared tails by seeding/merge, not by recomputing the whole-function CFG.
+
+**FRONTIER = cross-function shared epilogue.** A00 0x80113100 branches into 0x80113314's epilogue at
+0x80113328 (compiler tail-merged a common epilogue across sibling dispatch handlers). Linear emit routes the
+cross-fn branch to the dispatcher -> fail-fast. Needs a TESTED surgical fix (seed the shared-epilogue target
++ make its owner tail-call it on fall-through, scoped to genuine epilogues only — NOT the global flood-fill).

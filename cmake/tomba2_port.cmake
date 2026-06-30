@@ -203,12 +203,22 @@ set(PORT_SRC
 # interpreter was removed (2026-06-30) — these shards ARE the execution substrate for every
 # non-native guest function. The MAIN module + each OVERLAY module (overlapping \BIN\*.BIN stage
 # overlays) emit a dynamic set of TUs, so emit.py writes the exact list to generated/rec_sources.cmake
-# (GEN_REC_SRCS, basenames). Compiled as C++ at -O1.
+# (GEN_REC_SRCS, basenames). Compiled as C++.
+#
+# -foptimize-sibling-calls IS REQUIRED, NOT an optimization nicety: a guest TAIL JUMP (a computed `jr`
+# routed to rec_dispatch, or a `j`/branch to a framed sibling) is emitted as `dispatch(c,x); return;` /
+# `func_<addr>(c); return;` in tail position. The guest uses such tail jumps for LOOPS (e.g. the
+# register-based jump-table state machine at 0x8007E2F8) that iterate indefinitely. Without sibling-call
+# optimization each iteration is a real C call -> the stack grows per loop -> SIGSEGV. With it, the whole
+# rec_dispatch -> main_dispatch -> func_<addr> -> gen_func_<addr> tail chain collapses to a jump, so the
+# loop runs in O(1) stack. -O2 enables it; we set it explicitly atop -O1 so the dependency is documented
+# and survives an -O level change.
 include(${CMAKE_SOURCE_DIR}/generated/rec_sources.cmake)
 list(TRANSFORM GEN_REC_SRCS PREPEND generated/)
 list(APPEND PORT_SRC ${GEN_REC_SRCS})
 set_source_files_properties(${GEN_REC_SRCS}
-  PROPERTIES LANGUAGE CXX COMPILE_OPTIONS "-O1")
+  PROPERTIES LANGUAGE CXX
+  COMPILE_OPTIONS "-O1;-foptimize-sibling-calls;-fno-strict-aliasing;-fwrapv")
 
 add_executable(tomba2_port ${PORT_SRC} ${SHADERS_H})
 add_dependencies(tomba2_port gen_gpu_shaders)
