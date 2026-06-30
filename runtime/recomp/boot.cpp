@@ -91,6 +91,13 @@ int main(int argc, char** argv) {
     dualcore_run(path);
     return 0;
   }
+  // PSXPORT_SELFTEST: headless TDD regression (selftest.cpp) — boots a single full-PSX (psx_fallback) core,
+  // drives it like a player, and asserts a behavior (e.g. mash-Start reaches field free-roam). Exit code is
+  // the pass/fail (0/1), so CI/`./run.sh` can gate on it. Owns its own Game instance.
+  if (cfg_str("PSXPORT_SELFTEST")) {
+    int selftest_run(const char* exe_path);
+    return selftest_run(path);
+  }
   // PSXPORT_SBS: LIVE side-by-side two-core divergence debugger (sbs.cpp). Two native-boot cores in
   // lockstep with identical input, differing only by mode (render / gameplay / both); auto-pauses on the
   // first guest-RAM divergence and serves the divergence + guest backtraces over the debug server. Like

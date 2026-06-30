@@ -32,7 +32,7 @@ from decode import decode
 # recomp identity and re-emits when the stamp on disk (generated/.recomp_version) differs, so a stale
 # generated/ on another box (which an input-content hash alone failed to catch — a box can build a
 # self-consistent-but-outdated set) is forced to regenerate. Date + a per-day counter; keep it terse.
-RECOMP_VERSION = "2026-06-30.8"
+RECOMP_VERSION = "2026-06-30.10"
 
 R = lambda n: f"c->r[{n}]"
 
@@ -389,7 +389,7 @@ def collect_tail_dups(exe, lo, hi, funcset, ins, jt):
     return dup, blocks
 
 
-def emit_func(exe, lo, hi, funcset, out, name, N):
+def emit_func(exe, lo, hi, funcset, out, name, N, reentry=()):
     """Emit one C function: the proven LINEAR walk over the contiguous body [lo,hi), PLUS appended
     DUPLICATED tail blocks for shared-epilogue targets that live outside [lo,hi) (collect_tail_dups).
     The [lo,hi) emission is unchanged; the entry (lo) is always first; tails are reached only by goto.
@@ -448,9 +448,37 @@ def emit_func(exe, lo, hi, funcset, out, name, N):
                     out.append("  " + st)
                 a += 4
 
+    # A function cut at a DELIBERATE mid-function RE-ENTRY SEED (reentry) whose body runs off its end into
+    # that seed must CONTINUE into it, not `return`. Case: GAME's prologue 0x8010637C falls through into its
+    # cooperative-loop top 0x801063F4 (both seeded so the native game_coop path can re-enter the loop top per
+    # frame). With a bare `return`, the FULL-PSX coro runs the prologue, returns, and the scheduler reaps the
+    # task as "done" — the title-Start field freeze. Emit a TAIL-CALL to `hi` on genuine fall-through (the
+    # nested call preserves the C stack, so a deep yield inside hi suspends correctly on the coro). SCOPED to
+    # `hi in reentry`: a natural function boundary (most fns end in `jr ra`) is unaffected, and we don't
+    # execute previously-unreached fall-through code in other overlays (which would surface jal targets the
+    # discovery scan never seeded -> recomp-MISS). `hi` falls through unless the body's last instruction is
+    # an unconditional transfer (`j`/`jr`); a normal insn / conditional branch / `jal` all reach `hi`.
+    def body_falls_through():
+        a, last = lo, None
+        while a < hi:
+            i = ins.get(a)
+            if i is None:
+                return False                # a gap/data hole — be conservative, don't tail-call
+            last = i
+            a += 8 if i.kind in (D.BRANCH, D.JUMP, D.JUMPR) else 4
+        if last is None:
+            return False
+        if last.kind == D.JUMPR:            # jr (jr ra or computed) — unconditional, no fall-through
+            return False
+        if last.kind == D.JUMP and last.op == "j":   # unconditional j — no fall-through
+            return False
+        return True                          # normal / conditional branch / jal -> reaches hi
     out.append(f"void {name}(Core* c) {{")
     emit_run(lo, hi)                        # the proven contiguous body — entry (lo) always first
-    out.append("  return;")
+    if hi in funcset and hi in reentry and body_falls_through():
+        out.append(f"  {call_or_dispatch(hi, funcset, N)} return;")  # fall-through into the re-entry seed
+    else:
+        out.append("  return;")
     # DUPLICATED shared-epilogue tails (collect_tail_dups), reached only via goto from the body / a tail.
     # Each ends at its own terminator; a run that falls back into the main body gets an explicit goto.
     for s, e, fall in dup_blocks:
@@ -767,7 +795,7 @@ def merge_early_return_boundaries(exe, funcs, removable, hard):
     return funcs
 
 
-def emit_module(exe, out_dir, N, seeds, ov_dir=None, limit=None, shards=8, soft_seeds=None):
+def emit_module(exe, out_dir, N, seeds, ov_dir=None, limit=None, shards=8, soft_seeds=None, reentry=()):
     """Discover the recompiled function set for `exe` and emit its module (shards + dispatch TU +
     decls header) under the symbol/file names in `N`. Shared by the MAIN.EXE module and the boot-
     stub module; the stub gets distinct names so its func_<addr> don't collide with MAIN's."""
@@ -825,7 +853,7 @@ def emit_module(exe, out_dir, N, seeds, ov_dir=None, limit=None, shards=8, soft_
 
     shard = [["// GENERATED — DO NOT EDIT.", f'#include "{N.decls}"', ""] for _ in range(shards)]
     for k, a in enumerate(funcs):
-        emit_func(exe, a, nxt_of[a], funcset, shard[k % shards], f"{N.gen}_{a:08X}", N)
+        emit_func(exe, a, nxt_of[a], funcset, shard[k % shards], f"{N.gen}_{a:08X}", N, reentry)
     for s in range(shards):
         open(os.path.join(out_dir, f"{N.shardpfx}_{s}.c"), "w").write("\n".join(shard[s]) + "\n")
 
@@ -1013,7 +1041,7 @@ def main():
                        | OVERLAY_EXTRA_SEEDS.get(stem, set()))
             soft_ov = func_entries_after_return(ovexe)   # jr-ra boundaries (mergeable if false)
             src_files += emit_module(ovexe, out_dir, N, hard_ov, None, None, shards=2,
-                                     soft_seeds=soft_ov)
+                                     soft_seeds=soft_ov, reentry=OVERLAY_EXTRA_SEEDS.get(stem, set()))
             overlays.append((tag, fn[:-4].upper(), base, base + len(data), data[:32], N))
 
     # Overlay routing table consumed by overlay_router.cpp.

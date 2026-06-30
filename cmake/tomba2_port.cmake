@@ -194,6 +194,7 @@ set(PORT_SRC
   runtime/recomp/dualcore.cpp
   runtime/recomp/sbs.cpp
   runtime/recomp/sbs_present_sdl.cpp
+  runtime/recomp/selftest.cpp
   runtime/recomp/boot.cpp
   runtime/recomp/rmlui_overlay.cpp
   runtime/recomp/rmlui_render_gpu.cpp

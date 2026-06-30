@@ -124,8 +124,12 @@ void ov_switch(Core* c) {
     // here), the body will never be resumed — unwind the fiber thread so its body returns and the Coro
     // finishes (else the thread blocks forever). Otherwise BLOCK the fiber (its whole C stack preserved);
     // the scheduler's co->resume() returns and we continue here on the next resume — mid-function.
-    if (c->mem_r16(TASKBASE + (uint32_t)slot * TASKSTRIDE) == 0)
+    if (c->mem_r16(TASKBASE + (uint32_t)slot * TASKSTRIDE) == 0) {
+      if (cfg_dbg("sched")) fprintf(stderr, "[sched]   ov_switch EXIT slot %d (base.state==0) ra=0x%08X\n",
+                                    slot, c->r[31]);
       c->game->sched.coro[slot]->exit_now();
+    }
+    if (cfg_dbg("yieldpc")) fprintf(stderr, "[sched]   ov_switch YIELD slot %d ra=0x%08X\n", slot, c->r[31]);
     c->game->sched.coro[slot]->yield();
     return;
   }
@@ -361,6 +365,9 @@ static void native_scheduler_step(Core* c) {
       co->resume();                                               // run until ov_switch yields / body returns
       c->game->sched.cur_is_coro = 0;
       c->game->sched.in_stage = 0;
+      if (cfg_dbg("sched"))
+        fprintf(stderr, "[sched]   slot %d coro out: done=%d base.state=%u entry=0x%08X\n",
+                i, co->done() ? 1 : 0, c->mem_r16(base), c->mem_r32(base + 0xc));
       // A handler may LEAVE the stage (rewrite base+0xc / set state) — guest owns base state. If the body
       // finished, or the guest ended the task (state 0), free the slot + reap the fiber.
       if (co->done() || c->mem_r16(base) == 0) {

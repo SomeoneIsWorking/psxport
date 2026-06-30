@@ -1,5 +1,26 @@
 # Debug / progress journal
 
+## later-269 — full-PSX Start→field FREEZE fixed: recompiler now flows a split stage prologue into its loop (TDD)
+User clarified Issue 1: full-PSX (SBS core B) RESPONDS to Start (starts the game) then FREEZES in the field —
+and asked for TDD. Built `PSXPORT_SELFTEST=startgame` (runtime/recomp/selftest.cpp): boots one psx_fallback
+core, mashes Start, asserts it reaches GAME free-roam (sm[0x48]==2) AND the GAME loop runs (*(0x1F800198)
+advances). RED: the field froze at sm[0x48]=0 — the GAME coro `start`ed once (entry 0x8010637C) then `done=1`
+with no ov_switch yield. **Root cause (recompiler):** the GAME stage fn is a PROLOGUE 0x8010637C that FALLS
+THROUGH into its cooperative LOOP at 0x801063F4; both are seeded as separate fns (so native game_coop can
+re-enter the loop top per frame), but emit_func emitted a bare `return;` at every fn end — so func_8010637C
+returned after the prologue instead of flowing into the loop, and the full-PSX coro reaped the task as done →
+field never ran. **Fix:** emit_func now emits a TAIL-CALL to the next fn on genuine fall-through (last insn not
+`j`/`jr`), SCOPED to deliberate re-entry seeds (OVERLAY_EXTRA_SEEDS) — a global version regressed the native
+field (executed dead fall-through regions in area overlays that jal undiscovered fns → recomp-MISS 0x80124448).
+func_8010637C now ends `ov_game_func_801063F4(c); return;`. GREEN. All gates pass (emit 12/12, test_coro,
+native plain + AUTO_SKIP 0-miss, SBS both no-crash, selftest). RECOMP_VERSION → 2026-06-30.10 (full regen).
+NOTE: the selftest does NOT require the loop to advance forever — entering the first area starts a long
+one-shot voice clip and the field's `while(*(0x801fe0e0)!=0)` wait legitimately pauses the loop until the clip
+ends; clip progress is REAL-TIME audio-driven (CDC_GetCDAudioSample), which headless logic-frames outrun. That
+audio-gated cutscene is NOT a freeze (with audio it resolves). This is also the likely shape of Issue 2 ("field
+frozen, music keeps playing") — same audio-gated-wait family, to confirm on the user's machine. See
+docs/findings/sbs.md.
+
 ## later-268 — dead libetc VSync counter revived (recomp timebase) → SBS core-B title-freeze partial fix
 Investigating the two freezes (scratch/handoff_two_freezes.md). **Root cause found for the timebase half:**
 the libetc VSync counter `DAT_800abde0` was NEVER advancing — `ov_vsync`/`frame_tick` (timing.cpp) are dead
@@ -8,11 +29,13 @@ code (VSync 0x80085900 is TRAPPED by sync_overrides, so they never run) and noth
 and any still-recomp leaf) reads `0x800abde0` to pace animations/timers → frozen. FIX: `timing_frame_tick()`
 bumps `timing.vblank` + writes `0x800abde0` once per native frame, called at the top of `native_step_frame`
 for ALL cores. Verified: counter now increments (was 0); native plain + AUTO_SKIP field 0-miss; emit 12/12 +
-test_coro pass; SBS both no crash. **Still open (Issue 1 deeper):** core B's recomp menu correctly idles to
-the attract substate `sm[0x48]=7` (s7) but its phase index `sm[0x4a]=7` is GARBAGE (s7 phase machine
-0x80106C24 expects 0/1/2 → falls through to do-nothing epilogue), so the attract never plays — a coro-resume
-fidelity divergence in the recompiled menu sub-machine, separate from the timebase. Visual confirm needs
-windowed SBS (headless SBS renders BLACK at the menu). **Issue 2 (native field freeze on macOS):** NOT
+test_coro pass; SBS both no crash. **Still open (Issue 1):** whether the timebase fix alone unfreezes core
+B's title is UNCONFIRMED — headless SBS renders BLACK at the menu so it can't be verified here; needs WINDOWED
+SBS (user). DEAD-END NOTE: I tried reading the demo SM via raw `0x801fe048` and saw 7/7, but that read is
+UNRELIABLE — the demo SM_PTR is `*(0x1f800138)` in SCRATCHPAD and the debug server is BLIND to scratchpad
+(reads main RAM literally; in the GAME stage the same trap showed garbage 25712 vs the real `sm[48]=2`). So
+the earlier "s7 phase=7 divergence" guess is NOT trustworthy; the next session needs the REAL SM_PTR (a
+per-frame log on the psx_fallback path, or a scratchpad-aware probe) before any per-substate claim. **Issue 2 (native field freeze on macOS):** NOT
 reproducible on Linux — area warp (0→1, 138 nodes) + AUTO_SKIP field both run 0-miss; needs the user's macOS
 env or a manual-play repro. See docs/findings/sbs.md.
 
