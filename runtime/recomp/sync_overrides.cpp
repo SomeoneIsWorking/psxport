@@ -136,6 +136,15 @@ void platform_hle_register(uint32_t addr, OverrideFn fn) {
   s_plat_addr[s_plat_n] = addr; s_plat_fn[s_plat_n] = fn; s_plat_n++;
   if (addr < s_plat_lo) s_plat_lo = addr;
   if (addr > s_plat_hi) s_plat_hi = addr;
+  // CRITICAL (later-257, substrate): these HW-sync primitives are now RECOMPILED MAIN functions, so a
+  // call to one routes rec_dispatch -> main_dispatch -> func_<addr> -> the recompiled BUSY-WAIT body,
+  // which never reaches rec_dispatch_miss (where platform_hle_lookup used to intercept). That spins on
+  // an IRQ/status bit our no-IRQ runtime never sets -> "CD timeout" / "VSync: timeout". Wire the HLE
+  // into the recomp OVERRIDE table too (func_<addr>'s wrapper checks g_override[idx] FIRST), so the
+  // native sync resolves it before the recompiled wait ever runs. No-op if `addr` isn't recompiled
+  // (rec_func_index < 0) — that caller still hits platform_hle_lookup via rec_dispatch_miss.
+  extern void shard_set_override(uint32_t, OverrideFn);
+  shard_set_override(addr, fn);
 }
 
 // Fast lookup (called on every interpreted call target). The [min,max] gate makes it ~free for the

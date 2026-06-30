@@ -179,28 +179,44 @@ BRANCH_COND = {
 
 
 class Names:
-    """Symbol naming for one emitted module. A second EXE (the boot stub) that overlaps MAIN.EXE's
-    address space gets its OWN module — distinct wrapper/body/dispatch/override symbols + output
-    files — so func_<addr> never collides between the two images. Both share rec_dispatch_miss
-    (BIOS/interp) for dispatch misses."""
-    def __init__(self, gen, wrap, dispatch, index, setov, ovtab, decls, shardpfx, disp):
+    """Symbol naming for one emitted module. Each EXE/overlay that overlaps MAIN.EXE's address space
+    gets its OWN module — distinct wrapper/body/dispatch/override symbols + output files — so
+    func_<addr> never collides between images that share guest addresses (the boot stub, and the
+    OVERLAPPING stage overlays which all load to base 0x80106228). `dispatch` is the module's OWN
+    address->fn switch (a unique name per module); `router` is the GLOBAL cross-module dispatch a
+    recompiled body CALLS for any target outside its own function set (the hand-written rec_dispatch
+    in overlay_router.cpp, which range-routes to the right module's switch). All modules share the
+    single router so a call from overlay code into MAIN (or vice versa) resolves correctly."""
+    def __init__(self, gen, wrap, dispatch, index, setov, ovtab, decls, shardpfx, disp,
+                 router="rec_dispatch"):
         self.gen, self.wrap, self.dispatch = gen, wrap, dispatch
         self.index, self.setov, self.ovtab = index, setov, ovtab
         self.decls, self.shardpfx, self.disp = decls, shardpfx, disp
+        self.router = router
 
-MAIN_NAMES = Names("gen_func", "func", "rec_dispatch", "rec_func_index", "shard_set_override",
+MAIN_NAMES = Names("gen_func", "func", "main_dispatch", "rec_func_index", "shard_set_override",
                    "g_override", "rec_decls.h", "shard", "shard_disp")
 STUB_NAMES = Names("stub_gen_func", "stub_func", "stub_dispatch", "stub_func_index",
                    "stub_set_override", "g_stub_override", "stub_decls.h", "stub_shard", "stub_disp")
 
+def overlay_names(tag):
+    """Per-overlay module names keyed by a short tag (e.g. 'demo' from DEMO.BIN). All overlays share
+    the global router (rec_dispatch); each has its own switch ov_<tag>_dispatch."""
+    return Names(f"ov_{tag}_gen", f"ov_{tag}_func", f"ov_{tag}_dispatch", f"ov_{tag}_func_index",
+                 f"ov_{tag}_set_override", f"g_ov_{tag}_override", f"ov_{tag}_decls.h",
+                 f"ov_{tag}_shard", f"ov_{tag}_disp")
 
-def find_jump_tables(exe, ins, lo, hi, validate=True):
+
+def find_jump_tables(exe, ins, lo, hi, validate=True, tbl_spans=None):
     """Recover in-function jump tables (C `switch`) so a computed `jr` stays INSIDE the compiled body
     instead of routing through rec_dispatch (which, under the no-interpreter substrate, would dispatch
     the table's mid-function case labels as fake functions -> stack corruption; see docs/native-port-
-    plan.md). Detects the MIPS switch idiom around a `jr rN` (rN != ra):
+    plan.md). Detects the MIPS switch idiom around a `jr rN` (rN != ra), in two compiler variants —
+    in both, the lw's base reg B is set by `addu B, X, Y`, and the table address (lui[/addiu]) targets
+    B itself OR one of the addends X/Y (the other addend being idx<<2):
         sltiu cond, idx, COUNT ; (beqz cond, default) ; sll t, idx, 2
-        lui   base, HI ; [addiu base, base, LO] ; addu base, base, t ; lw rN, OFF(base) ; jr rN
+      (A) lui base,HI ; [addiu base,base,LO] ; addu base,base,t ; lw rN,OFF(base) ; jr rN  (MAIN)
+      (B) lui tbl,HI  ; addiu tbl,tbl,LO     ; addu B,t,tbl     ; lw rN,OFF(B)    ; jr rN  (overlays)
     The jump table is at HI<<16 (+LO) + OFF; read COUNT word targets from the EXE image. Returns
     {jr_addr: [target_addr,...]} (targets are the case-label code addresses)."""
     jt = {}
@@ -209,17 +225,23 @@ def find_jump_tables(exe, ins, lo, hi, validate=True):
         if not (i.kind == D.JUMPR and i.op == "jr" and i.rs and i.rs != 31):
             continue
         base_reg = off = hi_val = lo_add = count = None
+        base_regs = set()        # registers that may hold the table base (lw base B + addu addends)
         for b in range(a - 4, max(lo, a - 0x40) - 4, -4):
             if b not in ins:
                 break
             j = ins[b]
             if base_reg is None and j.op == "lw" and j.rt == i.rs:   # the table load into the jr reg
                 base_reg, off = j.rs, j.simm
+                base_regs = {base_reg}
                 continue
             if base_reg is not None:
-                if hi_val is None and j.op == "lui" and j.rt == base_reg:
+                # `addu B, X, Y` defining a candidate base reg -> either addend can hold the table base
+                # (the overlays build the table addr in a separate reg and `addu` it to the index reg).
+                if j.op in ("addu", "add") and j.rd in base_regs:
+                    base_regs |= {j.rs, j.rt}
+                if hi_val is None and j.op == "lui" and j.rt in base_regs:
                     hi_val = j.imm << 16
-                elif lo_add is None and j.op == "addiu" and j.rt == base_reg and j.rs == base_reg:
+                elif lo_add is None and j.op == "addiu" and j.rt in base_regs and j.rs == j.rt:
                     lo_add = j.simm
             if count is None and j.op == "sltiu":
                 count = j.imm
@@ -234,6 +256,8 @@ def find_jump_tables(exe, ins, lo, hi, validate=True):
             continue
         if validate and any(not (lo <= t < hi) for t in targets):  # a real switch jumps within its fn
             continue
+        if tbl_spans is not None:                  # the DATA table occupies [tbl, tbl+4*count)
+            tbl_spans.add((tbl, count))
         jt[a] = targets
     return jt
 
@@ -302,7 +326,7 @@ def emit_func(exe, lo, hi, funcset, out, name, N):
 
 def call_or_dispatch(target, funcset, N):
     return (f"{N.wrap}_{target:08X}(c);" if target in funcset
-            else f"{N.dispatch}(c, 0x{target:08X}u);")
+            else f"{N.router}(c, 0x{target:08X}u);")
 
 
 def emit_control(i, ds_c, funcset, labels, N, jtargets=None):
@@ -345,12 +369,12 @@ def emit_control(i, ds_c, funcset, labels, N, jtargets=None):
                 seen.add(t)
                 cases.append(f"case 0x{t:08X}u: goto L_{t:08X};")
             L.append(f"  {{ {ds_c} switch ({R(i.rs)}) {{ {' '.join(cases)} "
-                     f"default: {N.dispatch}(c, {R(i.rs)}); return; }} }}")
+                     f"default: {N.router}(c, {R(i.rs)}); return; }} }}")
         else:
-            L.append(f"  {ds_c} {N.dispatch}(c, {R(i.rs)}); return;")
+            L.append(f"  {ds_c} {N.router}(c, {R(i.rs)}); return;")
     else:  # jalr rd, rs
         L.append(f"  {R(i.rd)} = 0x{i.addr + 8:08X}u;")
-        L.append(f"  {ds_c} {N.dispatch}(c, {R(i.rs)});")
+        L.append(f"  {ds_c} {N.router}(c, {R(i.rs)});")
     return L
 
 
@@ -409,6 +433,18 @@ def is_func_entry(exe, w):
     return False
 
 
+def func_entries_after_return(exe):
+    """Overlay function-boundary scan: every in-text address whose preceding two words are
+    `jr ra; <delay>` — i.e. a function starts right after the previous one returns. For a self-
+    contained overlay blob (no symbol table, reached via computed `jr`/`j` not just `jal`) this
+    recovers the contiguous function layout directly. Unlike a blanket is_func_entry scan it does
+    NOT false-positive on a mid-prologue `addiu sp` (only signal (b)), so a lui/lbu-prologue function
+    like 0x80106F80 is seeded at its true start, not split. decode filters trailing data."""
+    lo, hi = exe.load, exe.text_end
+    return {a for a in range(lo + 8, hi, 4)
+            if exe.word(a - 8) == 0x03E00008 and decode(a, exe.word(a)).kind != D.UNKNOWN}
+
+
 def pointer_table_funcs(exe):
     """Seed functions reached ONLY via a function pointer (jalr through a table / vtable slot) —
     invisible to direct-jal discovery. With the interpreter gone (later-254) a call to such a fn fails
@@ -418,6 +454,52 @@ def pointer_table_funcs(exe):
     data island — still needs a manual EXTRA_SEEDS when the boot surfaces it.)"""
     lo, hi = exe.load, exe.text_end
     return {exe.word(a) for a in range(lo, hi, 4) if is_func_entry(exe, exe.word(a))}
+
+
+def switch_table_spans(exe):
+    """All in-function SWITCH jump-table data spans (set of guest addresses occupied by the word
+    tables a `jr` indexes). Scanned over the WHOLE text (no function boundaries) via the same idiom
+    matcher find_jump_tables uses. code_pointer_tables excludes these so a switch's case-label array
+    (a run of in-text code addresses) is NOT mistaken for a vtable and seeded as fake functions —
+    which would shred the containing function (e.g. the printf/format parser 0x8009A76C)."""
+    lo, hi = exe.load, exe.text_end
+    ins = {a: decode(a, exe.word(a)) for a in range(lo, hi, 4)}
+    spans = set()
+    find_jump_tables(exe, ins, lo, hi, validate=True, tbl_spans=spans)
+    occupied = set()
+    for tbl, count in spans:
+        occupied.update(range(tbl, tbl + 4 * count, 4))
+    return occupied
+
+
+def code_pointer_tables(exe, min_run=4, exclude=None):
+    """Seed functions reached via a function-POINTER TABLE (a vtable / handler dispatch table) whose
+    entries don't match is_func_entry — e.g. stackless leaf handlers that start with `lw`/`addu`, not
+    an `addiu sp` prologue, and aren't preceded by `jr ra` (so neither pointer_table_funcs nor the
+    boundary scan sees them). A run of >=min_run CONSECUTIVE 4-aligned image words that all point into
+    text and decode as real instructions at their targets is an unambiguous code-pointer table (a lone
+    in-text-looking data word is not — hence the run requirement). Seed every target in such a run;
+    discover_funcs then follows their call graphs. Catches the DEMO menu / scene-handler vtables that
+    the no-interpreter substrate would otherwise fail-fast on (each entry is jalr'd, never jal'd).
+    `exclude` (a set of addresses, from switch_table_spans) is SKIPPED so a switch's case-label array
+    is not mis-seeded as a vtable (its targets are in-function labels, recovered as `goto`s instead)."""
+    lo, hi = exe.load, exe.text_end
+    exclude = exclude if exclude is not None else switch_table_spans(exe)
+    out, run, a = set(), [], lo
+    def intext_code(w):
+        return lo <= w < hi and (w & 3) == 0 and decode(w, exe.word(w)).kind != D.UNKNOWN
+    while a + 4 <= hi:
+        w = exe.word(a)
+        if a not in exclude and intext_code(w):
+            run.append(w)
+        else:
+            if len(run) >= min_run:
+                out.update(run)
+            run = []
+        a += 4
+    if len(run) >= min_run:
+        out.update(run)
+    return out
 
 
 def constructed_func_pointers(exe):
@@ -433,7 +515,7 @@ def constructed_func_pointers(exe):
         if ins.op != "lui":
             continue
         rd, H = ins.rt, ins.imm
-        for b in range(a + 4, a + 24, 4):
+        for b in range(a + 4, min(a + 24, hi - 3), 4):
             j = decode(b, exe.word(b))
             if getattr(j, "op", None) in ("addiu", "ori") and getattr(j, "rt", None) == rd \
                and getattr(j, "rs", None) == rd:
@@ -487,7 +569,7 @@ def emit_module(exe, out_dir, N, seeds, ov_dir=None, limit=None, shards=8):
         funcs = [f for f in funcs if f not in jt_labels]
         print(f"[{N.wrap}] pruned {len(jt_labels)} jump-table case labels from the function set")
     print(f"[{N.wrap}] functions: {len(seeds)} seeds -> {len(funcs)} recompiled after jal "
-          f"discovery (rest run via the interpreter)")
+          f"discovery (a call to any non-recompiled address fails fast at runtime)")
     funcset = set(funcs)
     if limit:
         funcs = funcs[:limit]
@@ -537,6 +619,9 @@ def emit_module(exe, out_dir, N, seeds, ov_dir=None, limit=None, shards=8):
     open(os.path.join(out_dir, f"{N.disp}.c"), "w").write("\n".join(d) + "\n")
     print(f"[{N.wrap}] emitted {len(funcs)} functions -> {out_dir}/{N.shardpfx}_*.c "
           f"({shards} shards) + {N.decls}")
+    # The source TUs this module wrote (basenames) — collected into generated/rec_sources.cmake so
+    # the build links exactly what was emitted (overlay count is dynamic).
+    return [f"{N.disp}.c"] + [f"{N.shardpfx}_{s}.c" for s in range(shards)]
 
 
 def main():
@@ -591,23 +676,123 @@ def main():
     # (jalr) that discovery can't see is NOT recompiled, so a call to it FAILS FAST at runtime — seed
     # it in EXTRA_SEEDS above when the boot surfaces it. (Set PSXPORT_USE_GHIDRA=1 to additionally
     # seed from the Ghidra decomp / committed list, recompiling more up-front.)
-    seeds = {exe.entry} | EXTRA_SEEDS | pointer_table_funcs(exe) | constructed_func_pointers(exe)
+    seeds = ({exe.entry} | EXTRA_SEEDS | pointer_table_funcs(exe)
+             | constructed_func_pointers(exe) | code_pointer_tables(exe))
     ov_dir = sys.argv[sys.argv.index("--overlays") + 1] if "--overlays" in sys.argv else None
     out_dir = os.path.dirname(out_path) or "."
     # Output is split into SHARDS translation units so the build compiles them in parallel.
     SHARDS = max(1, int(os.environ.get("PSXPORT_SHARDS", "8")))
-    emit_module(exe, out_dir, MAIN_NAMES, seeds, ov_dir, limit, SHARDS)
+    # NOTE: --overlays is NOT passed to the MAIN module's emit_module anymore (no `ov_dir`). The old
+    # overlay_funcs() seeding (resident fns the overlays jal into) is still useful, so keep it:
+    src_files = emit_module(exe, out_dir, MAIN_NAMES, seeds, ov_dir, limit, SHARDS)
 
     # The disc's boot stub (SCUS_944.54): the real PSX entry — draws SCEA, then LoadExec's MAIN.
     # It overlaps MAIN.EXE's address space, so it is emitted as a SEPARATE module (STUB_NAMES) with
     # its own dispatch/override symbols (stub_dispatch/stub_set_override) — see native_stub.c. Its
-    # only seed is its entry; discovery follows the stub's own jal graph.
+    # only seed is its entry; discovery follows the stub's own jal graph. (NOT linked today —
+    # native_stub.cpp renders SCEA natively — so it stays out of the source manifest.)
     if "--stub" in sys.argv:
         stub = psexe.load(sys.argv[sys.argv.index("--stub") + 1])
         emit_module(stub, out_dir, STUB_NAMES, {stub.entry}, None, None, shards=2)
 
+    # ---- OVERLAYS (two stacked stage slots) -----------------------------------------------------
+    # The \BIN\*.BIN overlays are read RAW to a FIXED per-overlay base and run in place. They OVERLAP:
+    # a given guest address is different code depending on which overlay is resident, so each is its OWN
+    # module (ov_<tag>_*) keyed at its base+offset, and the runtime router (overlay_router.cpp) routes a
+    # slot address to the CURRENTLY resident overlay (identified by a content signature of guest RAM at
+    # the base). Bases below are the EXACT load destinations observed in the CD load-log (PSXPORT_DEBUG=cd
+    # over a boot->field run); they are deterministic game facts, NOT magic offsets:
+    #   STAGE slot 0x80106228 — START/DEMO/GAME.BIN (the main stage; mutually exclusive). cd-log:
+    #     "loadfile 1648 B @LBA1904->0x80106228" (START), "5372 B @LBA1879" (DEMO), "11636 B @LBA1882" (GAME).
+    #   MODE slot 0x80108F9C — SOP.BIN (the field/sub-mode overlay loaded RIGHT AFTER GAME.BIN, which stays
+    #     resident at 0x80106228). cd-log: "async read 4415 words (17660 B) @LBA1895 -> 0x80108F9C";
+    #     == engine_demo.cpp:445 "the overlay slot right after GAME.BIN". GAME [0x80106228,0x80108F9C) and
+    #     SOP [0x80108F9C,..) are both resident together (adjacent, non-overlapping ranges).
+    #   OPN/CRD.BIN — opening-movie / credits sub-mode overlays; NOT on the field path and not yet observed
+    #     loading, so their base is UNVERIFIED. Tentatively the MODE slot; if a run ever dispatches into one
+    #     it fail-fasts (the signature won't match at the wrong base) — capture its real dest then and fix.
+    OVERLAY_BASES = {
+        "START": 0x80106228, "DEMO": 0x80106228, "GAME": 0x80106228,
+        "SOP": 0x80108F9C, "OPN": 0x80108F9C, "CRD": 0x80108F9C,
+    }
+    overlays = []   # (tag, NAME, base, end, sig32 bytes, Names)
+    if ov_dir and os.path.isdir(ov_dir):
+        for fn in sorted(os.listdir(ov_dir)):
+            if not fn.upper().endswith(".BIN"):
+                continue
+            data = open(os.path.join(ov_dir, fn), "rb").read()
+            stem = fn[:-4].upper()
+            base = OVERLAY_BASES.get(stem)
+            if base is None:
+                print(f"[overlays] WARNING: {fn} has no known load base — defaulting to 0x80106228; "
+                      f"capture its real dest with PSXPORT_DEBUG=cd and add it to OVERLAY_BASES")
+                base = 0x80106228
+            ovexe = psexe.PsxExe(base, 0, base, len(data), 0, 0, data)
+            tag = re.sub(r"[^a-z0-9]", "_", fn[:-4].lower())
+            N = overlay_names(tag)
+            seeds_ov = (pointer_table_funcs(ovexe) | constructed_func_pointers(ovexe)
+                        | code_pointer_tables(ovexe) | func_entries_after_return(ovexe)
+                        | overlay_internal_jal_targets(ovexe))
+            src_files += emit_module(ovexe, out_dir, N, seeds_ov, None, None, shards=2)
+            overlays.append((tag, fn[:-4].upper(), base, base + len(data), data[:32], N))
+
+    # Overlay routing table consumed by overlay_router.cpp.
+    write_overlay_table(out_dir, exe, overlays)
+    src_files.append("overlay_table.c")
+
+    # Source manifest: cmake reads generated/rec_sources.cmake to link exactly the emitted TUs (the
+    # overlay set is dynamic). Deterministic — no globbing (which would wrongly pull the unlinked
+    # stub TUs and collide with dispatch.cpp's stub_dispatch).
+    manifest = "set(GEN_REC_SRCS\n  " + "\n  ".join(sorted(set(src_files))) + ")\n"
+    open(os.path.join(out_dir, "rec_sources.cmake"), "w").write(manifest)
+
     # Stub the old monolith path so a stale copy is never compiled.
     open(out_path, "w").write("// recompiled core is split into shard_*.c — see rec_decls.h\n")
+
+
+def overlay_internal_jal_targets(exe):
+    """Direct-jal targets that land WITHIN this overlay (seed them so discover_funcs follows the
+    overlay's internal call graph). jals to MAIN resident addresses are outside [load,text_end) and
+    routed through the global router at runtime, not seeded here."""
+    lo, hi = exe.load, exe.text_end
+    return {ins.target for a in range(lo, hi, 4)
+            for ins in (decode(a, exe.word(a)),)
+            if ins.op == "jal" and lo <= ins.target < hi}
+
+
+def write_overlay_table(out_dir, main_exe, overlays):
+    """Emit generated/overlay_table.{h,c}: MAIN text range + per-overlay (base,end,name,dispatch,sig)
+    descriptors for the runtime router (overlay_router.cpp)."""
+    mlo, mhi = main_exe.load & 0x1FFFFFFF, main_exe.text_end & 0x1FFFFFFF
+    h = ["// GENERATED by tools/recomp/emit.py — DO NOT EDIT.", "#pragma once",
+         '#include "core.h"', "",
+         f"#define REC_MAIN_LO 0x{mlo:08X}u", f"#define REC_MAIN_HI 0x{mhi:08X}u", "",
+         "void main_dispatch(Core*, uint32_t);", "",
+         "typedef struct RecOverlay {",
+         "  uint32_t base, end;            // guest address range this overlay occupies when resident",
+         "  const char* name;             // overlay file stem (DEMO/GAME/...), for diagnostics",
+         "  void (*disp)(Core*, uint32_t); // this overlay's address->fn switch",
+         "  const unsigned char* sig;     // first 32 bytes of the overlay image (resident-ID signature)",
+         "  unsigned siglen;",
+         "} RecOverlay;", ""]
+    for tag, NAME, base, end, sig, N in overlays:
+        h.append(f"void {N.dispatch}(Core*, uint32_t);")
+    h += ["extern const RecOverlay g_rec_overlays[];", "extern const int g_rec_overlay_count;", ""]
+    open(os.path.join(out_dir, "overlay_table.h"), "w").write("\n".join(h) + "\n")
+
+    c = ["// GENERATED by tools/recomp/emit.py — DO NOT EDIT.", '#include "overlay_table.h"', ""]
+    for tag, NAME, base, end, sig, N in overlays:
+        bytes_c = ", ".join(f"0x{b:02X}" for b in sig)
+        c.append(f"static const unsigned char sig_{tag}[{len(sig)}] = {{ {bytes_c} }};")
+    c.append("")
+    c.append("const RecOverlay g_rec_overlays[] = {")
+    for tag, NAME, base, end, sig, N in overlays:
+        c.append(f"  {{ 0x{base:08X}u, 0x{end:08X}u, \"{NAME}\", {N.dispatch}, "
+                 f"sig_{tag}, {len(sig)} }},")
+    c.append("};")
+    c.append(f"const int g_rec_overlay_count = {len(overlays)};")
+    open(os.path.join(out_dir, "overlay_table.c"), "w").write("\n".join(c) + "\n")
+    print(f"[overlays] {len(overlays)} overlay module(s) -> overlay_table.c")
 
 
 if __name__ == "__main__":

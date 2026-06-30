@@ -90,13 +90,13 @@ if [ ! -f "$STUB" ]; then
 fi
 [ -f "$STUB" ] || die "could not extract the boot stub SCUS_944.54"
 
-# Stage overlays (\BIN\{START,DEMO,GAME}.BIN): runtime-loaded game code the game pulls off the
-# disc into RAM. Fed to emit.py --overlays so the recompiler seeds the resident MAIN functions the
-# overlays call. (The overlay CODE itself is not yet recompiled — calls into it currently fail fast;
-# overlay static recompilation is the next phase.) Game data — gitignored scratch.
+# Stage overlays (\BIN\{START,DEMO,GAME,SOP,OPN,CRD}.BIN): runtime-loaded game code the game pulls off
+# the disc into RAM. Fed to emit.py --overlays: the recompiler seeds the resident MAIN functions the
+# overlays call AND statically recompiles each overlay as its own module (later-257), so overlay code
+# runs under the substrate. Game data — gitignored scratch.
 OVL=scratch/bin/overlays
 mkdir -p "$OVL"
-for b in START DEMO GAME; do
+for b in START DEMO GAME SOP OPN CRD; do
   [ -f "$OVL/$b.BIN" ] || "$DISCDUMP" get "BIN/$b.BIN" "$DISC" "$OVL" >/dev/null 2>&1 || true
 done
 
@@ -108,7 +108,7 @@ GEN=generated/tomba2_rec.c
 RT=runtime/recomp       # common PSX->PC platform (future psxport submodule)
 ENG=engine              # Tomba2Engine — game-specific native engine + RE
 mkdir -p generated scratch/bin
-if [ ! -f generated/shard_disp.c ] || [ ! -f "$GEN" ] || [ "$MAIN" -nt "$GEN" ] || [ "$STUB" -nt "$GEN" ] || [ tools/recomp/emit.py -nt "$GEN" ]; then
+if [ ! -f generated/shard_disp.c ] || [ ! -f generated/rec_sources.cmake ] || [ ! -f "$GEN" ] || [ "$MAIN" -nt "$GEN" ] || [ "$STUB" -nt "$GEN" ] || [ tools/recomp/emit.py -nt "$GEN" ]; then
   say "recompiling MAIN.EXE + boot stub -> C (the execution substrate)…"
   python3 tools/recomp/emit.py "$MAIN" "$GEN" --overlays "$OVL" --stub "$STUB" >/dev/null
 fi

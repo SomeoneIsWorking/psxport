@@ -55,6 +55,7 @@ add_custom_target(gen_gpu_shaders DEPENDS ${SHADERS_H})
 # ---- source list (KEEP IN SYNC with run.sh / tools/build_port.sh) -----------------------------
 set(PORT_SRC
   runtime/recomp/dispatch.cpp
+  runtime/recomp/overlay_router.cpp
   runtime/recomp/cfg.c
   runtime/recomp/mem.cpp
   runtime/recomp/stubs.cpp
@@ -200,13 +201,13 @@ set(PORT_SRC
 
 # The recompiler substrate: link the statically-recompiled shards (C++ content in .c files). The
 # interpreter was removed (2026-06-30) — these shards ARE the execution substrate for every
-# non-native guest function. Compiled as C++ at -O1.
-list(APPEND PORT_SRC generated/shard_disp.c generated/shard_0.c generated/shard_1.c generated/shard_2.c
-                     generated/shard_3.c generated/shard_4.c generated/shard_5.c generated/shard_6.c
-                     generated/shard_7.c)
-set_source_files_properties(
-  generated/shard_disp.c generated/shard_0.c generated/shard_1.c generated/shard_2.c
-  generated/shard_3.c generated/shard_4.c generated/shard_5.c generated/shard_6.c generated/shard_7.c
+# non-native guest function. The MAIN module + each OVERLAY module (overlapping \BIN\*.BIN stage
+# overlays) emit a dynamic set of TUs, so emit.py writes the exact list to generated/rec_sources.cmake
+# (GEN_REC_SRCS, basenames). Compiled as C++ at -O1.
+include(${CMAKE_SOURCE_DIR}/generated/rec_sources.cmake)
+list(TRANSFORM GEN_REC_SRCS PREPEND generated/)
+list(APPEND PORT_SRC ${GEN_REC_SRCS})
+set_source_files_properties(${GEN_REC_SRCS}
   PROPERTIES LANGUAGE CXX COMPILE_OPTIONS "-O1")
 
 add_executable(tomba2_port ${PORT_SRC} ${SHADERS_H})
@@ -219,7 +220,8 @@ set_target_properties(tomba2_port PROPERTIES
   RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/scratch/bin)
 
 target_include_directories(tomba2_port PRIVATE
-  ${RT} ${ENG} game/world game/render game/render/scene game/render/mesh
+  ${RT} ${ENG} ${CMAKE_SOURCE_DIR}/generated
+  game/world game/render game/render/scene game/render/mesh
   ${MED} ${MED}/psx
   vendor/beetle-psx/libretro-common/include vendor/beetle-psx
   vendor/beetle-psx/deps/libchdr/include

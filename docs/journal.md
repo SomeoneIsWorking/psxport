@@ -8758,3 +8758,41 @@ map an overlay-range address → the CURRENTLY-loaded overlay module; cd_loadfil
 current overlay for the dest range (it knows the file). (c) rec_dispatch for an overlay-range address →
 current overlay's func; still a MISS (fail fast) if no overlay covers it. First impl task: instrument
 cd_loadfile_native to log (file, dest, size) over a boot→field run to get the EXACT per-overlay bases.
+
+## later-257 — overlay STATIC RECOMPILATION: DEMO+GAME+SOP run under the substrate (no interpreter)
+Implemented the overlay model (the later-256 frontier). The stage/mode overlays \BIN\*.BIN are now
+statically recompiled as their OWN modules and run under the substrate — the boot drives DEMO → GAME →
+SOP through the full intro/fade/gameplay cycle with ZERO recomp miss (was: fail-fast at DEMO frame 2).
+
+**Recompiler (tools/recomp/emit.py).**
+- Per-overlay module emission: each .BIN → emit_module with a PsxExe(load=base) and its own Names
+  (ov_<tag>_*), keyed at base+offset, with its own dispatch switch. Seeds = pointer_table_funcs ∪
+  constructed_func_pointers ∪ code_pointer_tables ∪ func_entries_after_return (jr-ra boundary scan) ∪
+  internal jal targets.
+- GLOBAL ROUTER split: `Names.router` ("rec_dispatch", shared) is what a recompiled body CALLS for any
+  out-of-module target; `Names.dispatch` is the module's OWN switch (main_dispatch / ov_<tag>_dispatch).
+  Hand-written rec_dispatch (runtime/recomp/overlay_router.cpp) range-routes: MAIN range → main_dispatch;
+  an overlay-slot address → the CURRENTLY RESIDENT overlay (identified by a 32-byte content signature of
+  guest RAM at the slot base, cached); else rec_dispatch_miss (fail-fast).
+- code_pointer_tables(): seed vtable/handler-table targets (runs of ≥4 consecutive in-text code pointers)
+  that is_func_entry misses (stackless leaves). EXCLUDES switch_table_spans() so a switch jump-table
+  (array of in-function labels) isn't mis-seeded as a vtable and shred the containing fn (the printf
+  parser 0x8009A76C class). Caught the resident vtable handler 0x8007E2F8.
+- find_jump_tables() generalized to the `addu B,idx,tbl` idiom (table addr built in a SEPARATE reg from
+  the index reg) — the form the overlays emit; recovered the DEMO menu machine 0x80106F80's switch.
+- EXACT overlay bases from the CD load-log (OVERLAY_BASES, evidence-documented, NOT magic): STAGE slot
+  0x80106228 (START/DEMO/GAME, mutually exclusive); MODE slot 0x80108F9C (SOP, loaded right after GAME
+  which stays resident). cmake links the dynamic TU set via generated/rec_sources.cmake.
+
+**Platform-HLE bypass fix (the "CD timeout" / VSync spin).** The HW-sync primitives (libcd/libetc/libmdec
+VSync/CdSync/DecDCTinSync …) are RECOMPILED MAIN fns, so a call routed main_dispatch → the recompiled
+BUSY-WAIT body, never reaching rec_dispatch_miss where platform_hle_lookup intercepts → spun to "CD
+timeout"/"VSync: timeout". Fix: platform_hle_register() now ALSO wires each into the recomp OVERRIDE table
+(shard_set_override) — func_<addr>'s wrapper checks g_override FIRST, so the native sync resolves before
+the recompiled wait runs. (User report: "CD timeout … should be trapped like vsync, everything is sync.")
+
+**Status:** boot → DEMO (menu machine + substates) → GAME stage transition (GAME.BIN swaps in at 0x80106228,
+routed by signature) → SOP field-mode (LOAD/FADE/GAMEPLAY sm[0x50] 0→4, area intro) → area machine advances
+→ FAILS FAST at the field AREA-CODE overlay: a 285096-B blob @ LBA 374 loaded to 0x80108F9C (MODE slot,
+swaps out SOP), holding the field render submitters (0x8013xxxx). NEXT FRONTIER = extract + recompile that
+area overlay (and the other A0*.BIN field overlays) at base 0x80108F9C.

@@ -11,7 +11,8 @@
 // miss must crash with a log so we can see what to port/recompile next.)
 #include "core.h"
 
-void rec_dispatch(Core* c, uint32_t addr);        // generated (shard_disp.c)
+void rec_dispatch(Core* c, uint32_t addr);        // global router (overlay_router.cpp): range-routes
+                                                  // to main_dispatch / the resident overlay's switch
 void rec_dispatch_miss(Core* c, uint32_t addr);   // BIOS vectors -> HLE; else FAIL FAST (hle.cpp)
 
 // g_override_tgt is set by native code (native_boot / engine_submit) to carry the body an override
