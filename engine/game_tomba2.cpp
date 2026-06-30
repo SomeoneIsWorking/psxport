@@ -249,12 +249,14 @@ void ov_draw_otag(Core* c) {   // called directly from native_step_frame (PC-dri
     // SOP code into the guest OT — full-screen fills, the semi-transparent textured EFFECT quads, character
     // sprites, the sea tiles, and text — so we walk the FULL OT (g_ot_2d_only=0), NOT the 2D-only filter that
     // dropped the fills/effect (which left the void's stale sea showing).
-    // The 3D WORLD beats (village/letter/cliff) additionally need the native entity-list scene render
-    // (ov_scene_native: terrain + characters with real depth). The dark "VOID" beat (SOP scene byte
-    // 0x800bf9b4==5) is a pure 2D effect scene with NO 3D world — running ov_scene_native there draws a stale
-    // field/sea behind the swirl effect (the original bug-2). Gate the native 3D render on the scene type:
-    // skip it for the void, run it for the world beats. (Scene byte = the game's own per-beat state, not a
-    // render magic constant.)
+    // The 3D WORLD beats (village/letter == scene 0-3, the void->cliff transition == 6, cliff == 7) need the
+    // native entity-list scene render (ov_scene_native: terrain + characters with real depth) — on the native
+    // port this is the ONLY source of that 3D geometry (the native SOP submit tees to VK, it does not build
+    // the geometry into the guest OT the way the real PSX does). The dark "VOID" swirl beat (SOP scene byte
+    // 0x800bf9b4==5) is the one beat with NO 3D world (the oracle draws pure black + swirl effect + text);
+    // running ov_scene_native there draws a stale field/sea behind the swirl (the original bug-2). Gate the
+    // native 3D render off only for the void — the SOP scene byte is the game's per-beat state, not a magic
+    // render constant. (Scene 6 IS a 3D beat: the cliff fading in — gating it off loses the cliff geometry.)
     if (c->mem_r8(0x800BF9B4u) != 5) { void ov_scene_native(Core*); ov_scene_native(c); }
     gpu_dma2_linked_list(c, c->r[4]);
   } else if (!g_render_psx && (field || cfg_dbg("scenenative"))) {
