@@ -99,3 +99,15 @@ cores each frame" must become "drive each core toward its next checkpoint indepe
   callback-ring counter 0x80105BAC, the stdio line buffer 0x80105EF8). The native side runs the cutscene
   LOGIC correctly; the void-effect / cliff-water bugs are RENDER-only. → Phase 2 (software GPU) is now the
   critical path. (docs/findings/sbs.md "oraclediff: narration GAME STATE is convergent".)
+- 2026-07-01 (later-280): **Phase 2 DONE — software-GPU oracle renders the real PSX cutscene.** Per-GpuState
+  `soft_gpu` flag routes the interpreter oracle Core's GP0 stream through the existing SW rasterizer
+  (tri/raster_sprite/fill/A0) into its own s_vram, fully decoupled from the native VK path. PSXPORT_SELFTEST=
+  oracle dumps each beat's framebuffer (+ a `g_oracle_prim_log` GP0 prim-trace). Ground truth: void = black
+  fill + semi-transparent textured swirl EFFECT + Tomba + text; cliff = full scene incl. clean sea tiles.
+- 2026-07-01 (later-281): **Bugs 2 & 3 FIXED, oracle-verified.** The narration was treated as the walkable
+  field (ov_scene_native + 2D-only OT), which drew the void's stale sea and dropped the cutscene's own
+  fills/effect. Fix (engine/game_tomba2.cpp): detect the narration by the SOP overlay sig *(0x80109450)==
+  0x3C021F80; walk the FULL guest OT; run ov_scene_native only for the 3D-world beats (skip the void scene 5).
+  Native now matches the oracle for every beat; free-roam unaffected; gates green. All three reported
+  cutscene render bugs (later-277 fade, later-281 void+cliff) are now resolved. Remaining: user eyeball on a
+  real ./run.sh is the final confirmation (docs/findings/render.md "Intro-narration cutscene rendered wrong").
