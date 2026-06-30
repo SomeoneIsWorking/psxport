@@ -8869,3 +8869,21 @@ Two ways forward (a real decision, NOT a hack):
       be suspended at the yield and resumed) — a general fix, larger.
 Overlay STATIC RECOMPILATION (the later-256 goal) is essentially done: DEMO/GAME/SOP/A00/OPN all recompiled
 and running under the substrate; the remaining blocker is this resume model, a separate workstream.
+
+## later-261 — GAME field runs under the substrate: cooperative loop = PC per-frame re-entry (NO MISS)
+The coroutine-resume frontier (later-260) is solved the PC-game way (USER: "make a PC game, don't limit
+yourself by PSX constraints"). The GAME cooperative task loop yields once per frame and the PSX scheduler
+resumes it at the saved mid-yield PC — which the recompiled substrate can't continue (the loop's C frame is
+longjmp'd away at the yield). Instead we treat the per-frame yield as a PLAIN PC FRAME BOUNDARY: the
+scheduler now RE-ENTERS the recompiled loop at its TOP every frame.
+- emit.py OVERLAY_EXTRA_SEEDS: seed the GAME loop top 0x801063F4 (a documented re-entry point; mid-fn, so
+  no scan finds it — the prologue 0x8010637C is owned natively by ov_game_stage_main). gen_func for it =
+  the loop body (dispatch the SM, then yield).
+- SchedulerState.game_coop[] (game.h) + native_boot.cpp: when ov_game_frame returns "not owned" (the field
+  state), mark the slot game_coop and, every frame, resume it at 0x801063F4 with the loop's callee-saved
+  regs (s0=s1=0x1f800000, s2=1) — NOT the saved yield PC. All loop state lives in guest RAM, so re-entry ==
+  continue; cleared on area transition (base+0xc changes).
+Result: PSXPORT_AUTO_SKIP drives DEMO -> GAME -> SOP -> A00 field and runs the GAME field loop for 1500
+frames with ZERO recomp-MISS (deepest the port has run); sm[0x48] advances across the run. Plain headless
+smoke still clean (frame 90, 0 misses); recompiler tests 12/12. RENDER correctness (does the field draw)
+is the next thing to eyeball — separate from this mechanical milestone.

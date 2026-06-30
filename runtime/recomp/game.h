@@ -91,6 +91,14 @@ struct SchedulerState {
                                  // coroutine): ov_demo_frame is called once per frame, state in guest RAM.
   int     game_native[3] = {};   // slot runs the GAME stage as a NATIVE per-frame dispatcher (ov_game_frame
                                  // once per frame; state in guest RAM). Mirrors demo_native.
+  int     game_coop[3] = {};     // slot runs the GAME COOPERATIVE task loop (a GAME state not yet owned
+                                 // natively). As a PC game the per-frame cooperative yield is just a frame
+                                 // boundary: RE-ENTER the recompiled loop at its TOP (0x801063F4) every
+                                 // frame with the loop's callee-saved regs, instead of resuming at the saved
+                                 // mid-yield PC (which the substrate can't continue — the loop's C frame was
+                                 // longjmp'd away at the yield). All loop state lives in guest RAM, so
+                                 // re-entry == continue. (native_boot.cpp; the loop body is the seeded
+                                 // ov_game_func_801063F4.)
 };
 
 // native_stub.cpp — the SCEA boot-stub (SCUS_944.54) interpreter that draws SCEA + LoadExec's MAIN.

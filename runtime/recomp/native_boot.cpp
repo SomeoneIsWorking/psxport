@@ -285,6 +285,7 @@ static void native_scheduler_step(Core* c) {
           c->r[31] = 0x801063F4u;                                          // resume PC = guest loop top
           c->game->sched.task_ctx[i] = static_cast<R3000&>(*c);
           c->game->sched.game_native[i] = 0;                               // -> generic cooperative path
+          c->game->sched.game_coop[i] = 1;       // PC-game: re-enter at the loop top every frame (below)
           c->mem_w16(base, 2);
           if (cfg_dbg("sched")) fprintf(stderr, "[sched] GAME -> cooperative guest loop (state not yet "
                                                  "owned native; field reachable)\n");
@@ -307,7 +308,18 @@ static void native_scheduler_step(Core* c) {
       c->game->sched.task_ctx[i].r[31] = 0xDEAD0000u;      // sentinel return
       c->game->sched.task_started[i] = 1;
       c->game->sched.demo_native[i] = 0;       // a non-DEMO fresh entry (e.g. GAME): leave native-DEMO mode
+    } else if (st == 2 && c->game->sched.game_coop[i]
+               && c->mem_r32(base + 0xc) == 0x8010637Cu) {
+      // GAME cooperative loop: as a PC game, re-enter at the loop TOP every frame (not the saved mid-yield
+      // PC, which the substrate can't continue). gen_func_801063F4 runs one frame from the top — dispatch
+      // the SM, then yield — with the loop's callee-saved regs; all SM state persists in guest RAM.
+      resume_pc = 0x801063F4u;
+      c->game->sched.task_ctx[i].r[16] = 0x1f800000u;
+      c->game->sched.task_ctx[i].r[17] = 0x1f800000u;
+      c->game->sched.task_ctx[i].r[18] = 1;
+      c->game->sched.task_ctx[i].r[31] = 0x801063F4u;
     } else if (st == 2) {                     // runnable: resume after the previous yield
+      c->game->sched.game_coop[i] = 0;        // left the GAME cooperative loop (e.g. area transition)
       resume_pc = c->game->sched.task_ctx[i].r[31];
     } else {
       continue;                               // sleeping this frame (state==1)

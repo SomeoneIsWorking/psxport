@@ -913,6 +913,15 @@ def main():
         if re.fullmatch(r"A0[0-9A-Z]", stem):    # field area code overlays -> MODE slot
             return 0x80108F9C
         return None
+    # Explicit per-overlay seeds: addresses reached NOT by a jal/pointer the scans see, but as a CLEAN
+    # RE-ENTRY POINT the runtime resumes at — a "game-specific tailoring" (documented game fact). GAME's
+    # cooperative task loop is re-entered each frame at its LOOP TOP 0x801063F4 (native_boot.cpp:285, the
+    # scheduler sets resume PC = loop top after the GAME-stage SM yields). It is mid the task fn (the
+    # prologue 0x8010637C is owned natively by ov_game_stage_main), so no scan finds it — seed it so the
+    # per-frame resume dispatches to a recompiled body (the loop runs one frame then yields via ov_switch).
+    OVERLAY_EXTRA_SEEDS = {
+        "GAME": {0x801063F4},
+    }
     overlays = []   # (tag, NAME, base, end, sig32 bytes, Names)
     if ov_dir and os.path.isdir(ov_dir):
         for fn in sorted(os.listdir(ov_dir)):
@@ -929,7 +938,8 @@ def main():
             tag = re.sub(r"[^a-z0-9]", "_", fn[:-4].lower())
             N = overlay_names(tag)
             hard_ov = (pointer_table_funcs(ovexe) | constructed_func_pointers(ovexe)
-                       | code_pointer_tables(ovexe) | overlay_internal_jal_targets(ovexe))
+                       | code_pointer_tables(ovexe) | overlay_internal_jal_targets(ovexe)
+                       | OVERLAY_EXTRA_SEEDS.get(stem, set()))
             soft_ov = func_entries_after_return(ovexe)   # jr-ra boundaries (mergeable if false)
             src_files += emit_module(ovexe, out_dir, N, hard_ov, None, None, shards=2,
                                      soft_seeds=soft_ov)
