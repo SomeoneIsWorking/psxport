@@ -828,6 +828,12 @@ def main():
     # OR a native printf override to work (see docs/recomp_port_plan.md).
     EXTRA_SEEDS = {
         0x8009A76C,  # printf/format-parser, reached only via fn-pointer (jalr), Ghidra-missed
+        # --- FULL-PSX (psx_fallback) cooperative TASK ENTRIES: stored at task-obj+0xc by a runtime
+        #     task-register call and reached only as the scheduler's fresh-entry dispatch (ra=DEAD0000),
+        #     so neither direct-jal nor the pointer scans find them. Needed for PSXPORT_SBS_MODE=both/
+        #     gameplay (full-PSX core B); the native path owns these stages so it never dispatches them.
+        #     Surfaced empirically by the full-PSX miss-loop (later-264).
+        0x8004514C,  # full-PSX task entry (addiu sp,-32; lui 0x8015 ...) — DEMO/front-end sub-task
         # --- engine render functions reached ONLY via a function pointer (so direct-jal discovery
         #     misses them) — seeded to EMIT readable C for the native-engine RE/port (later-135). The
         #     runtime is interpreter-only, so seeding doesn't change execution; it makes the body
@@ -920,7 +926,12 @@ def main():
     # prologue 0x8010637C is owned natively by ov_game_stage_main), so no scan finds it — seed it so the
     # per-frame resume dispatches to a recompiled body (the loop runs one frame then yields via ov_switch).
     OVERLAY_EXTRA_SEEDS = {
-        "GAME": {0x801063F4},
+        # GAME loop top (per-frame re-entry) + the GAME stage-main 0x8010637C and DEMO stage-main
+        # 0x801062E4. The stage-main entries are owned NATIVELY (ov_demo/ov_game dispatchers), so the
+        # native path never dispatches them and no scan seeds them — but the FULL-PSX path (psx_fallback /
+        # SBS gameplay/both) runs each stage as a pure recompiled body from its entry, so seed them.
+        "GAME": {0x801063F4, 0x8010637C},
+        "DEMO": {0x801062E4},
         # START.BIN is the stage-0 FILE-TABLE overlay: its header is a filename string table (count@base=6,
         # "\CD\SWDATA.BIN;1" ...), so NO scan finds code. The bootstrap FUN_800499e8 builds task0 with
         # entry PC = base+0x274 = 0x8010649C (a `addiu sp,-0x1c8` prologue, the START stage fn). The native

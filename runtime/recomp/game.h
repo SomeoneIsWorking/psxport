@@ -81,6 +81,7 @@ struct FmvState {
 // memory across all tasks (saving a whole Core here would give each task its own RAM snapshot — the OOP
 // regression where the loader task read a pre-fill file-table snapshot and stalled boot; see
 // oop-regression-hunt). So task_ctx slices to the R3000 base on save/restore.
+class Coro;   // runtime/recomp/coro.h — thread-fiber for full-PSX mid-function resume (later-264)
 struct SchedulerState {
   jmp_buf yield_jmp;          // longjmp target = the setjmp in native_scheduler_step (was g_yield_jmp)
   R3000   task_ctx[3] = {};   // saved CPU register context per task slot, registers only (was g_task_ctx)
@@ -99,6 +100,17 @@ struct SchedulerState {
                                  // longjmp'd away at the yield). All loop state lives in guest RAM, so
                                  // re-entry == continue. (native_boot.cpp; the loop body is the seeded
                                  // ov_game_func_801063F4.)
+
+  // ---- FULL-PSX (psx_fallback) thread-fiber coroutines (later-264) -----------------------------
+  // The native path above re-enters at a loop top / runs synchronous dispatchers, so it never needs a
+  // true mid-function resume. The FULL-PSX path (PSXPORT_SBS_MODE=gameplay/both core B) runs pure
+  // recompiled task bodies that yield mid-function (ov_switch); the substrate can't re-enter mid-body,
+  // so each such task runs on its OWN Coro thread that BLOCKS at a yield (preserving its C stack) and
+  // CONTINUES on resume — recompiler-only, no interpreter (USER 2026-06-30). Active ONLY when
+  // psx_fallback is on; the native path is untouched. cur_is_coro tells ov_switch to coro-yield (or
+  // Coro::exit_now on task-end) vs longjmp; Coro owns its own unwind jmp_buf for end/cancel.
+  Coro*   coro[3] = {};          // per-slot fiber (heap; nullptr = no live full-PSX task on this slot)
+  int     cur_is_coro = 0;       // 1 while a Coro task is running -> ov_switch yields via the fiber
 };
 
 // native_stub.cpp — the SCEA boot-stub (SCUS_944.54) interpreter that draws SCEA + LoadExec's MAIN.

@@ -26,6 +26,7 @@
 #include <string.h>
 #include <setjmp.h>
 #include <unistd.h>   // usleep (debug-server pause/step idle wait)
+#include "coro.h"      // thread-fiber for full-PSX mid-function resume (later-264)
 
 // Generic cooperative-task entry. POST-INTERPRETER (later-254): this is now just rec_dispatch
 // (dispatch.cpp) — it can only ENTER a recompiled function at its top, NOT resume a yielded task at a
@@ -114,10 +115,21 @@ static void rc4(Core* c, uint32_t fn, uint32_t a0, uint32_t a1, uint32_t a2, uin
 // leaves v0=0x1f800000 for the stage loop head's `lw t0,0x138(v0)`) are captured.
 void ov_switch(Core* c) {
   if (!c->game->sched.in_stage) { c->r[2] = c->r[4]; return; }   // no-op: return the handle arg in v0
-  if (cfg_dbg("yieldpc")) fprintf(stderr, "[yieldpc] ov_switch longjmp from ra=0x%08X 801fe0e0=0x%X\n",
+  if (cfg_dbg("yieldpc")) fprintf(stderr, "[yieldpc] ov_switch yield from ra=0x%08X 801fe0e0=0x%X\n",
                                   c->r[31], c->mem_r32(0x801fe0e0u));
-  c->game->sched.task_ctx[c->game->sched.cur_slot] = static_cast<R3000&>(*c);  // save REGISTERS only (r29=task SP, r31=resume ra)
-  longjmp(c->game->sched.yield_jmp, 1);
+  int slot = c->game->sched.cur_slot;
+  c->game->sched.task_ctx[slot] = static_cast<R3000&>(*c);  // save REGISTERS only (r29=task SP, r31=resume ra)
+  if (c->game->sched.cur_is_coro) {
+    // FULL-PSX thread-fiber task. If the guest just ENDED this task (FUN_80051fb4 set state=0 then funneled
+    // here), the body will never be resumed — unwind the fiber thread so its body returns and the Coro
+    // finishes (else the thread blocks forever). Otherwise BLOCK the fiber (its whole C stack preserved);
+    // the scheduler's co->resume() returns and we continue here on the next resume — mid-function.
+    if (c->mem_r16(TASKBASE + (uint32_t)slot * TASKSTRIDE) == 0)
+      c->game->sched.coro[slot]->exit_now();
+    c->game->sched.coro[slot]->yield();
+    return;
+  }
+  longjmp(c->game->sched.yield_jmp, 1);   // native path: unwind to the scheduler's setjmp
 }
 
 // One scheduler pass over the 3 task slots (replaces FUN_80051e60).
@@ -304,6 +316,62 @@ static void native_scheduler_step(Core* c) {
         continue;
       }
     }
+    // ---- FULL-PSX (psx_fallback) task: thread-fiber coroutine — TRUE mid-function resume ----------
+    // The native dispatchers above are OFF in psx_fallback, so the stage/loader tasks run as pure
+    // recompiled PSX bodies that yield mid-function via ov_switch. The substrate can't re-enter a fn
+    // mid-body, so run each task on its OWN Coro thread: a yield BLOCKS the thread (its whole nested C
+    // call stack is preserved) and a resume CONTINUES it exactly there — recompiler-only, no interpreter
+    // (USER 2026-06-30: "the PSX path needs to work recompiler-only; condvars with pause-resume"). The
+    // shared register file Core::r[] is save/restored around the handoff just like the longjmp path:
+    // ov_switch saves task_ctx[i] before blocking; we restore it before resuming. The NATIVE path
+    // (native_content) is untouched — it falls through to the existing setjmp scheduler below.
+    if (!native_content) {
+      Coro*& co = c->game->sched.coro[i];
+      int co_fresh = (st == 3 || (st == 2 && !c->game->sched.task_started[i]));
+      if (co_fresh) {
+        if (co) { delete co; co = nullptr; }                       // discard an abandoned task on this slot
+        uint32_t entry = c->mem_r32(base + 0xc);                   // task entry pc
+        c->game->sched.task_ctx[i] = loop;                         // inherit gp; fresh sp/ra below
+        c->game->sched.task_ctx[i].r[29] = c->mem_r32(base + 8);   // per-task PSX stack top (obj+8)
+        c->game->sched.task_ctx[i].r[31] = 0xDEAD0000u;            // sentinel return (task fn `jr ra` => end)
+        c->game->sched.task_started[i] = 1;
+        c->game->sched.demo_native[i] = 0; c->game->sched.game_native[i] = 0; c->game->sched.game_coop[i] = 0;
+        Core* cc = c;
+        co = new Coro();
+        co->start([cc, entry] {
+          rec_coro_run(cc, entry);   // pure recompiled PSX body; ov_switch yields/exits back to the Coro
+        });
+      } else if (st == 2 && co && !co->done()) {
+        /* resume the suspended fiber (regs restored below) */
+      } else if (st == 2) {
+        c->game->sched.task_started[i] = 0;      // state==2 but no live fiber (stale) -> drop, re-arm later
+        continue;
+      } else {
+        continue;                                // sleeping this frame (state==1)
+      }
+      c->mem_w16(base, 4);                                         // running
+      c->mem_w32(CUR_TASK, base);
+      c->game->sched.cur_slot = i;
+      c->game->sched.in_stage = 1;
+      c->game->sched.cur_is_coro = 1;
+      static_cast<R3000&>(*c) = c->game->sched.task_ctx[i];        // load regs (fresh: gp/sp/ra; resume: saved)
+      if (cfg_dbg("sched"))
+        fprintf(stderr, "[sched] slot %d coro %s st=%u entry=0x%08X sp=0x%08X\n", i,
+                co_fresh ? "start" : "resume", st, c->mem_r32(base + 0xc), c->game->sched.task_ctx[i].r[29]);
+      co->resume();                                               // run until ov_switch yields / body returns
+      c->game->sched.cur_is_coro = 0;
+      c->game->sched.in_stage = 0;
+      // A handler may LEAVE the stage (rewrite base+0xc / set state) — guest owns base state. If the body
+      // finished, or the guest ended the task (state 0), free the slot + reap the fiber.
+      if (co->done() || c->mem_r16(base) == 0) {
+        c->mem_w16(base, 0);
+        c->game->sched.task_started[i] = 0;
+        delete co; co = nullptr;
+      }
+      // else: yielded mid-body. The guest set base state (FUN_80051f80 -> 1); FUN_800506d0 re-arms 1->2.
+      continue;
+    }
+
     uint32_t resume_pc;
     int fresh = 0;
     // state==3 (restart at new entry) or state==2 on a slot with no live context (freshly
