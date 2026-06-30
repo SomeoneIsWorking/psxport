@@ -206,11 +206,72 @@ static int run_narration(const char* path) {
   return 0;
 }
 
+// ORACLE smoke test (later-278) — boot ONE core as the pure-PSX INTERPRETER oracle (psx_fallback + the new
+// use_interp engine) and prove it runs the intro cutscene WITHOUT the recomp substrate's two failure modes:
+// the recomp-MISS on the un-recompiled overlay code (the interpreter interprets it) and the mis-emitted
+// in-function `jr` freeze that stuck the full-PSX GAME loop counter at ~34 (later-272 — the interpreter runs
+// the jump directly, so no corruption). PASS = reaches GAME, the loop counter advances FAR past 34 over a
+// sustained window, and the SOP narration scene byte (0x800bf9b4) progresses through the beats (it reaches
+// the void/cliff scene ids 5..7). This is the foundation check for the divergence harness (docs/oracle.md);
+// the state-sync barrier + VRAM diff build on top. Selected by PSXPORT_SELFTEST=oracle.
+static int run_oracle(const char* path) {
+  const int verbose = cfg_on("PSXPORT_SELFTEST_VERBOSE");
+  Game* game = new Game();
+  game->psx_fallback = 1;                  // FULL PSX: cooperative tasks run as coroutine-resumed bodies...
+  game->core.use_interp = 1;               // ...but INTERPRETED (the oracle engine), not the recomp substrate
+  Core* c = &game->core;
+  load_exe(path, c);
+  dc_boot_init(c);
+
+  auto stage = [&]{ return c->mem_r32(TASKBASE + 0xc); };
+  auto sm48  = [&]{ return (uint32_t)c->mem_r16(TASKBASE + 0x48); };
+  auto loopc = [&]{ return c->mem_r16(0x1F800198u); };
+  auto scene = [&]{ return c->mem_r8(0x800bf9b4u); };
+
+  const uint32_t REACH_CAP = 4000;
+  uint32_t f = 0;
+  for (; f < REACH_CAP && stage() != STAGE_GAME; f++) {
+    bool on = (f % 16u) < 8u;
+    pad_repl_hold(c, on ? ((f & 16u) ? PAD_CROSS : PAD_START) : PAD_NONE);
+    dc_step_frame(c, f);
+  }
+  if (stage() != STAGE_GAME) {
+    fprintf(stderr, "[selftest] FAIL(oracle): interpreter core never reached GAME after %u frames "
+                    "(stuck stage=0x%08X sm[0x48]=%u)\n", f, stage(), sm48());
+    return 1;
+  }
+  fprintf(stderr, "[selftest] oracle: reached GAME at frame %u — now running the cutscene interpreted\n", f);
+  pad_repl_hold(c, PAD_NONE);
+
+  // Run a long window; track the loop counter and the furthest SOP scene id seen.
+  uint32_t c0 = loopc(), max_scene = 0;
+  const uint32_t RUN = 3000;
+  for (uint32_t k = 0; k < RUN; k++, f++) {
+    dc_step_frame(c, f);
+    if (scene() > max_scene) max_scene = scene();
+    if (verbose && (k % 250) == 0)
+      fprintf(stderr, "[selftest]   oracle f=%u loop=%u sm[0x48]=%u scene(bf9b4)=%u\n",
+              f, loopc(), sm48(), scene());
+  }
+  uint32_t adv = (uint16_t)(loopc() - c0);
+  // The recomp full-PSX path froze with adv≈0 (counter stuck ~34). The interpreter must advance FAR past that.
+  if (adv < 100) {
+    fprintf(stderr, "[selftest] FAIL(oracle): GAME loop did not advance under interpretation "
+                    "(counter +%u over %u frames; sm[0x48]=%u, max scene=%u) — the interpreter oracle froze.\n",
+            adv, RUN, sm48(), max_scene);
+    return 1;
+  }
+  fprintf(stderr, "[selftest] PASS(oracle): interpreter core RAN the cutscene without freeze/MISS "
+                  "(GAME loop +%u over %u frames; furthest SOP scene id=%u).\n", adv, RUN, max_scene);
+  return 0;
+}
+
 // Dispatched from boot.cpp when PSXPORT_SELFTEST is set.
 int selftest_run(const char* path) {
   const char* which = cfg_str("PSXPORT_SELFTEST");
   if (which && !strcmp(which, "startgame")) return run_startgame(path);
   if (which && !strcmp(which, "narration")) return run_narration(path);
-  fprintf(stderr, "[selftest] unknown PSXPORT_SELFTEST='%s' (known: startgame, narration)\n", which ? which : "");
+  if (which && !strcmp(which, "oracle"))    return run_oracle(path);
+  fprintf(stderr, "[selftest] unknown PSXPORT_SELFTEST='%s' (known: startgame, narration, oracle)\n", which ? which : "");
   return 2;
 }
