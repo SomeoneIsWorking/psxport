@@ -8715,3 +8715,26 @@ clean (`gen_func_80085B20 → func_80085B20 → rec_dispatch → rec_dispatch_mi
 **NEXT (miss-resolution loop):** each miss is either (a) a resident MAIN fn reached only indirectly → seed in
 emit.py EXTRA_SEEDS + regen; (b) overlay code → needs overlay static recompilation (the big phase); or (c) a
 fn to port native. Grind the log top-down.
+
+## later-255 — substrate boot: auto-seed indirect/vtable fn targets; reach the overlay boundary
+Resolving the later-254 fail-fast misses top-down. The boot's early misses were all RESIDENT MAIN
+functions reached ONLY via a function pointer (jalr through a vtable / callback), invisible to emit.py's
+direct-jal discovery. Added TWO binary-only discovery scans (tools/recomp/emit.py), unioned into the seed
+set so they're recompiled up-front instead of aborting one-by-one:
+- `pointer_table_funcs`: scan the whole EXE image for WORDS that point at a function entry in text
+  (`is_func_entry`: `addiu sp,sp,-N` prologue OR preceded by `jr ra` — the latter catches stackless leaf
+  fns). Catches static fn-pointer tables / vtables baked in data.
+- `constructed_func_pointers`: scan code for `lui rD,H; addiu/ori rD,rD,L` that builds an in-text
+  function-entry address — catches vtable slots whose pointer is BUILT IN CODE then stored (so the
+  address never appears as a single data word). e.g. FUN_8008651C (installed via code, word nowhere).
+
+Result: recompiled set 1238 → 1533; the boot now runs native crt0 → init → loads START.BIN overlay →
+native frame loop → **2 frames of the DEMO stage (0x801062E4)**, then fails fast at the first OVERLAY
+miss: `ov_demo_frame → rec_coro_run(0x80106F80)`. 0x80106F80 is inside the stage overlay loaded at
+0x80106228 (NOT in MAIN.EXE), so the static recompiler doesn't cover it.
+
+**FRONTIER = overlay static recompilation.** The stage overlays (\BIN\{START,DEMO,GAME,...}.BIN, loaded
+raw to 0x80106228+) hold the DEMO/field code and the render submitters. They must be recompiled as their
+own module(s) keyed at the overlay base, with rec_dispatch routing 0x80106228.. to the currently-loaded
+overlay. (The stub is already emitted as a separate module — same pattern.) Until then, any call into
+overlay code fails fast by design.

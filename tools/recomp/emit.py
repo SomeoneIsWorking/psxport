@@ -391,6 +391,59 @@ def overlay_funcs(exe, overlay_dir, base=0x80106228):
     return targets
 
 
+def is_func_entry(exe, w):
+    """Does in-text address `w` look like a FUNCTION ENTRY? Two strong, independent signals:
+      (a) standard prologue `addiu sp, sp, -N` (0x27BD8000 mask, negative imm), or
+      (b) the word at w-8 is `jr ra` (0x03E00008) — i.e. w starts right after the previous function's
+          return + delay slot (catches STACKLESS LEAF fns that start with lui/lw, no frame setup).
+    Requires w in text, 4-aligned, and decoding as a real instruction (filters data)."""
+    lo, hi = exe.load, exe.text_end
+    if not (lo <= w < hi and (w & 3) == 0):
+        return False
+    if decode(w, exe.word(w)).kind == D.UNKNOWN:
+        return False
+    if (exe.word(w) & 0xFFFF8000) == 0x27BD8000:        # (a) addiu sp, sp, -N
+        return True
+    if w - 8 >= lo and exe.word(w - 8) == 0x03E00008:   # (b) preceded by `jr ra; <delay>`
+        return True
+    return False
+
+
+def pointer_table_funcs(exe):
+    """Seed functions reached ONLY via a function pointer (jalr through a table / vtable slot) —
+    invisible to direct-jal discovery. With the interpreter gone (later-254) a call to such a fn fails
+    fast, so we must recompile them. Scan the WHOLE EXE image (text + data) for words that point at a
+    function ENTRY in text (is_func_entry). discover_funcs then follows each one's direct-jal call
+    graph. (A truly stackless leaf that is also NOT preceded by `jr ra` — e.g. the first fn after a
+    data island — still needs a manual EXTRA_SEEDS when the boot surfaces it.)"""
+    lo, hi = exe.load, exe.text_end
+    return {exe.word(a) for a in range(lo, hi, 4) if is_func_entry(exe, exe.word(a))}
+
+
+def constructed_func_pointers(exe):
+    """Seed functions whose pointer is BUILT IN CODE (`lui rD, H; addiu/ori rD, rD, L`) and stored into
+    a vtable / passed as a callback — so the address never appears as a single data word (pointer_table_
+    funcs misses it) and it is reached only by jalr (direct-jal discovery misses it). For each `lui`
+    followed (within a short window, same dest reg) by an `addiu`/`ori`, reconstruct the 32-bit value
+    and seed it if it is a function entry (is_func_entry). addiu sign-extends L; ori zero-extends."""
+    lo, hi = exe.load, exe.text_end
+    out = set()
+    for a in range(lo, hi, 4):
+        ins = decode(a, exe.word(a))
+        if ins.op != "lui":
+            continue
+        rd, H = ins.rt, ins.imm
+        for b in range(a + 4, a + 24, 4):
+            j = decode(b, exe.word(b))
+            if getattr(j, "op", None) in ("addiu", "ori") and getattr(j, "rt", None) == rd \
+               and getattr(j, "rs", None) == rd:
+                val = ((H << 16) + j.simm) & 0xFFFFFFFF if j.op == "addiu" else ((H << 16) | (j.imm & 0xFFFF))
+                if is_func_entry(exe, val):
+                    out.add(val)
+                break
+    return out
+
+
 def discover_funcs(exe, seeds):
     """Grow the function set by following direct `jal` targets to a fixpoint. Each function
     body is scanned only up to its first UNKNOWN word (real code is 0% unknown), so trailing
@@ -519,6 +572,11 @@ def main():
         0x8009BAF0,  # _card_read   (B0:0x4E) — override target (memcard.c ov_card_read)
         0x8009C600,  # _card_write  (B0:0x4F) — override target (memcard.c ov_card_write)
         0x8009C610,  # _card_status (B0:0x5C) — override target (memcard.c ov_card_status)
+        # NOTE (later-254): resident fns reached ONLY via a function pointer (jalr) — invisible to
+        # direct-jal discovery — are now auto-seeded by pointer_table_funcs + constructed_func_pointers
+        # (data-word AND lui+addiu code-built vtable pointers). Add a manual seed here ONLY for a fn
+        # those two scans can't see (e.g. a stackless leaf not preceded by `jr ra`, or a pointer built
+        # by an unusual instruction sequence) when the fail-fast boot surfaces it as a [recomp-MISS].
         # NOTE: 0x80003A4C (per-VBlank pad read FUN_80003a4c) is intentionally NOT seeded here.
         # It lives at 0x80003A4C, BELOW MAIN.EXE's text [0x80010000,0x800BE800) — it is part of
         # the boot-stub/resident low-text SIO driver loaded at runtime, NOT present in MAIN.EXE
@@ -529,10 +587,11 @@ def main():
     }
     # Seed purely from the BINARY — the entry point + indirectly-reached helpers — and grow the
     # recompiled set by following direct jal targets (discover_funcs). No Ghidra / external
-    # function list: anything reached only via a function pointer (jalr) that discovery can't see
-    # is run by the hybrid interpreter (interp.c) at runtime, faithfully. (Set PSXPORT_USE_GHIDRA=1
-    # to additionally seed from the Ghidra decomp / committed list, recompiling more for speed.)
-    seeds = {exe.entry} | EXTRA_SEEDS
+    # function list. The interpreter is GONE (later-254): a fn reached only via a function pointer
+    # (jalr) that discovery can't see is NOT recompiled, so a call to it FAILS FAST at runtime — seed
+    # it in EXTRA_SEEDS above when the boot surfaces it. (Set PSXPORT_USE_GHIDRA=1 to additionally
+    # seed from the Ghidra decomp / committed list, recompiling more up-front.)
+    seeds = {exe.entry} | EXTRA_SEEDS | pointer_table_funcs(exe) | constructed_func_pointers(exe)
     ov_dir = sys.argv[sys.argv.index("--overlays") + 1] if "--overlays" in sys.argv else None
     out_dir = os.path.dirname(out_path) or "."
     # Output is split into SHARDS translation units so the build compiles them in parallel.
