@@ -388,8 +388,42 @@ int sbs_dbg_cmd(FILE* out, const char* line) {
   } else if (!strcmp(sub, "dump")) {
     char path[256] = {0}; if (sscanf(line, "%*s %*s %255s", path) != 1) snprintf(path, sizeof path, "scratch/screenshots/sbs.ppm");
     dump_sbs_ppm(path); fprintf(out, "dumped side-by-side panes -> %s\n", path);
+  } else if (!strcmp(sub, "ramdiff")) {
+    // ON-DEMAND full-region diff (ungated by free-roam arming): scan the whole gameplay RAM region +
+    // scratchpad NOW and summarize EVERY diverging span (render-noise regions excluded). Use it to find
+    // PSX(B)-vs-PC(A) divergences at whatever common state the two cores have reached. `sbs ramdiff N`
+    // caps the listed spans (default 24); the totals always reflect the full scan.
+    unsigned cap = 0; sscanf(line, "%*s %*s %u", &cap); if (!cap) cap = 24;
+    const uint8_t* a = g_a->core.ram + (s_lo - 0x80000000u);
+    const uint8_t* b = g_b->core.ram + (s_lo - 0x80000000u);
+    uint32_t n = s_hi - s_lo, spans = 0, bytes = 0, listed = 0;
+    for (uint32_t i = 0; i < n; ) {
+      if (a[i] != b[i] && !is_render_region(s_lo + i)) {
+        uint32_t start = s_lo + i;
+        while (i < n && a[i] != b[i] && !is_render_region(s_lo + i)) { i++; bytes++; }
+        spans++;
+        if (listed++ < cap)
+          fprintf(out, "  RAM  0x%08X..0x%08X (%u B)  A=%02X%02X%02X%02X B=%02X%02X%02X%02X\n",
+                  start, s_lo + i, (s_lo + i) - start,
+                  g_a->core.mem_r8(start), g_a->core.mem_r8(start+1), g_a->core.mem_r8(start+2), g_a->core.mem_r8(start+3),
+                  g_b->core.mem_r8(start), g_b->core.mem_r8(start+1), g_b->core.mem_r8(start+2), g_b->core.mem_r8(start+3));
+      } else i++;
+    }
+    uint32_t sspans = 0, sbytes = 0;
+    for (uint32_t i = 0; i < 0x400; ) {
+      if (g_a->core.scratch[i] != g_b->core.scratch[i] && !is_render_spad(0x1F800000u + i)) {
+        uint32_t start = 0x1F800000u + i;
+        while (i < 0x400 && g_a->core.scratch[i] != g_b->core.scratch[i] && !is_render_spad(0x1F800000u + i)) { i++; sbytes++; }
+        sspans++;
+        if (listed++ < cap)
+          fprintf(out, "  SPAD 0x%08X..0x%08X (%u B)\n", start, 0x1F800000u + i, (0x1F800000u + i) - start);
+      } else i++;
+    }
+    fprintf(out, "sbs ramdiff @frame %u: RAM %u spans / %u B diverge (region 0x%08X..0x%08X), "
+                 "scratchpad %u spans / %u B. A=PC(native) B=PSX(full-recomp).\n",
+            s_frame, spans, bytes, s_lo, s_hi, sspans, sbytes);
   } else {
-    fprintf(out, "sbs subcommands: status | diff | bt | watch [hex] | show a|b | resume | step [n] | dump [path]\n");
+    fprintf(out, "sbs subcommands: status | diff | bt | watch [hex] | show a|b | resume | step [n] | dump [path] | ramdiff [N]\n");
   }
   return 1;
 }

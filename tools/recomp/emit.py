@@ -32,7 +32,7 @@ from decode import decode
 # recomp identity and re-emits when the stamp on disk (generated/.recomp_version) differs, so a stale
 # generated/ on another box (which an input-content hash alone failed to catch — a box can build a
 # self-consistent-but-outdated set) is forced to regenerate. Date + a per-day counter; keep it terse.
-RECOMP_VERSION = "2026-06-30.4"
+RECOMP_VERSION = "2026-06-30.5"
 
 R = lambda n: f"c->r[{n}]"
 

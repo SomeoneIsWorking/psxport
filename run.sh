@@ -63,11 +63,13 @@ fi
 say "disc: $DISC"
 
 # ---- 2. build the CHD tooling (libchdr + discdump) via CMake ------------------------
-if [ ! -x build/tools/discdump ] && [ ! -x build/tools/discdump.exe ]; then
-  say "building libchdr + discdump (CMake)…"
-  cmake -S . -B build -DCMAKE_BUILD_TYPE=Release >/dev/null
-  cmake --build build -j "$JOBS" --target discdump >/dev/null
-fi
+# ALWAYS (re)build discdump — CMake is incremental (fast when up to date), and a STALE binary is the
+# macOS "not playing" trap: a discdump built before nested BIN/ path support (FindFileInTree, 2026-06-14)
+# silently can't extract the BIN/*.BIN overlays, so the recomp set is built without them and fail-fasts
+# (0x800810F0). The old `if [ ! -x ]` guard never rebuilt a stale binary. Don't reintroduce it.
+say "building libchdr + discdump (CMake)…"
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release >/dev/null || die "cmake configure failed"
+cmake --build build -j "$JOBS" --target discdump >/dev/null || die "discdump build failed"
 DISCDUMP=build/tools/discdump
 [ -x "$DISCDUMP" ] || DISCDUMP=build/tools/discdump.exe
 [ -x "$DISCDUMP" ] || die "discdump build failed"

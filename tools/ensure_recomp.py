@@ -102,19 +102,33 @@ def find_discdump():
 
 
 def extract(discdump, disc, disc_path, dest_dir, optional=False):
-    """Pull one file off the disc into dest_dir, if not already present. Returns the local path
-    (or None when an optional file is absent on the disc)."""
+    """Pull one file off the disc into dest_dir, if not already present. Returns the local path,
+    or None on failure (with discdump's real stderr captured into _last_extract_err). Never swallows
+    the diagnostic — a missing overlay is a build-breaker, not a warning to bury."""
+    global _last_extract_err
     out = os.path.join(ROOT, dest_dir, os.path.basename(disc_path))
     if os.path.isfile(out):
         return out
     os.makedirs(os.path.join(ROOT, dest_dir), exist_ok=True)
     r = subprocess.run([discdump, "get", disc_path, disc, os.path.join(ROOT, dest_dir)],
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                       stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
     if r.returncode != 0 or not os.path.isfile(out):
+        _last_extract_err = (r.stderr or b"").decode(errors="replace").strip()
         if optional:
             return None
-        die(f"could not extract {disc_path} from the disc")
+        die(f"could not extract {disc_path} from the disc"
+            + (f"\n  discdump: {_last_extract_err}" if _last_extract_err else ""))
     return out
+
+
+_last_extract_err = ""
+
+
+def disc_tree(discdump, disc):
+    """`discdump list <disc>` — the full ISO9660 file tree, for diagnosing where the overlays actually
+    live when extraction by the expected BIN/<stem>.BIN path fails."""
+    r = subprocess.run([discdump, "list", disc], stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    return (r.stdout or b"").decode(errors="replace")
 
 
 def input_hash(overlay_files):
@@ -166,13 +180,30 @@ def main():
     # 1. Extract the recompiler inputs (idempotent — only fetches what's missing).
     extract(discdump, disc, "MAIN.EXE", "scratch/bin/tomba2")
     extract(discdump, disc, "SCUS_944.54", "scratch/bin/tomba2")
-    overlay_files = []
+    overlay_files, missing = [], []
     for stem in ALL_OVERLAYS:
         p = extract(discdump, disc, f"BIN/{stem}.BIN", OVL_DIR, optional=True)
         if p:
             overlay_files.append(os.path.basename(p))
         else:
-            say(f"WARNING: overlay BIN/{stem}.BIN not on the disc — skipping")
+            missing.append(stem)
+    # The overlays are NOT optional: emit.py recompiles each AND seeds the resident MAIN functions they
+    # call, so a build missing them recompiles a DIFFERENT (smaller) set and fail-fasts at runtime (the
+    # macOS-vs-Linux 0x800810F0 drift). If the STAGE overlays are missing, the extraction itself is broken
+    # (e.g. discdump can't descend BIN/ on this disc) — FAIL HARD with the real discdump error + the disc
+    # tree, instead of silently building a broken 0-overlay substrate and declaring it "up to date".
+    essential = [s for s in STAGE_OVERLAYS if s in missing]
+    if essential:
+        sys.stderr.write("\n")
+        die(f"could not extract the stage overlays {essential} (and {len(missing)} overlays total) from "
+            f"{disc}.\n  discdump reported: {_last_extract_err or '(no message)'}\n"
+            f"  The overlays live in BIN/ on the disc; if discdump can't read that subdirectory the build "
+            f"is broken (this is the macOS 'not playing' cause).\n"
+            f"  Disc tree (discdump list) follows — check where BIN/*.BIN actually is:\n"
+            + disc_tree(discdump, disc))
+    if missing:
+        say(f"WARNING: {len(missing)} area overlay(s) missing ({', '.join(missing)}) — "
+            f"the field/attract path may fail-fast; check the disc has BIN/A0*.BIN")
 
     # 2. Compute the recomp IDENTITY = RECOMP_VERSION + input hash; skip the emit only if the stored
     #    identity matches, the on-disk version stamp matches, AND the generated set is complete.
