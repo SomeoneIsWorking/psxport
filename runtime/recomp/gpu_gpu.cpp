@@ -468,6 +468,9 @@ void gpu_gpu_present_image(Core* core, const uint8_t* rgba, int iw, int ih, floa
   SDL_GPUTextureSamplerBinding tsb = { s_img_tex, s_samp_linear };
   SDL_BindGPUFragmentSamplers(rp, 0, &tsb, 1);
   SDL_DrawGPUPrimitives(rp, 3, 1, 0, 0);
+  // RmlUi mod/debug overlay (ESC) composites ON TOP of the image, same as the game present (gpu_present
+  // above) — otherwise the manually-drawn SCEA splash would cover the overlay. No-op when hidden.
+  overlay_glue_record(cmd, rp, (int)sw, (int)sh);
   SDL_EndGPURenderPass(rp);
   SDL_SubmitGPUCommandBuffer(cmd);
   poll_quit();
