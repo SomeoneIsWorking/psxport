@@ -321,17 +321,20 @@ def _have_cxx():
     return None
 
 
-def run_func(data, base, regs=None, mem=None, hooks="", base_exe=0x80010000, funcset=None, precall=""):
+def run_func(data, base, regs=None, mem=None, hooks="", base_exe=0x80010000, funcset=None, precall="",
+             hi=None):
     """emit_func(base) -> C, compile with the harness, run with regs/mem, return {'r':[...],'lo','hi',
     'dispatch'}. `hooks` = extra C (e.g. stub func_<addr> tail-call targets); `precall` = C run in main
-    just before the entry call (e.g. set g_dispatch_fn for a self-dispatch loop)."""
+    just before the entry call (e.g. set g_dispatch_fn for a self-dispatch loop); `hi` overrides the
+    function end (so a branch target PAST hi exercises out-of-[lo,hi) handling)."""
     cc = _have_cxx()
     if not cc:
         return None
     e = exe_of(data, base_exe)
     funcset = funcset or {base}
     out = []
-    emit.emit_func(e, base, e.text_end, set(funcset), out, f"gen_func_{base:08X}", emit.MAIN_NAMES)
+    emit.emit_func(e, base, hi if hi is not None else e.text_end, set(funcset), out,
+                   f"gen_func_{base:08X}", emit.MAIN_NAMES)
     body = "\n".join(out)
     src = (HARNESS.replace("__BODY__", body)
                   .replace("__ENTRY__", f"gen_func_{base:08X}")
@@ -507,6 +510,35 @@ def test_exec_tail_call_dispatches():
     data, _ = a.assemble()
     res = run_func(data, 0x80010000, regs={})
     assert res["dispatch"] == (0x80055555 & ~3), f"tail call not dispatched: {res['dispatch']:#x}"
+
+
+def test_exec_cross_function_shared_epilogue():
+    # A branch to a SHARED EPILOGUE that lives PAST this function's `hi` (in a sibling's range) — the A00
+    # 0x80113100 -> 0x80113328 shape. emit_func must DUPLICATE the out-of-[lo,hi) tail so the branch runs
+    # it (restoring s0) instead of routing to the dispatcher (which would skip the restore). hi is set to
+    # exclude the epilogue.
+    a = Asm(0x80010000)
+    a.addiu("sp", "sp", -16)
+    a.sw("s0", 8, "sp")            # save caller s0
+    a.addiu("s0", "zero", 0x77)    # clobber s0
+    a.bne("a0", "zero", "epi")     # branch to the shared epilogue (past hi)
+    a.nop()
+    a.addiu("v0", "zero", 1)       # a0==0 path
+    a.b("epi")
+    a.nop()
+    hi_marker = len(a.items)       # epilogue starts here -> compute its address as hi
+    a.label("epi")
+    a.lw("s0", 8, "sp")            # RESTORE s0  (shared epilogue, conceptually owned by a sibling)
+    a.addiu("sp", "sp", 16)
+    a.jr("ra")
+    a.nop()
+    data, end = a.assemble()
+    epi = a.labels["epi"]
+    for a0 in (0, 1):
+        res = run_func(data, 0x80010000, regs={"a0": a0, "sp": 0x801000, "s0": 0xCAFE}, hi=epi)
+        assert res is not None
+        assert res["r"][16] == 0xCAFE, \
+            f"a0={a0}: s0={res['r'][16]:#x} not restored (out-of-range shared epilogue not duplicated)"
 
 
 def test_exec_tail_jump_loop_is_O1_stack():

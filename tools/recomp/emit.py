@@ -280,25 +280,131 @@ def collect_jt_targets(exe, funcs, text_end):
     return out
 
 
+def walk_standalone(ins, lo, hi):
+    """The 'standalone' addresses in a CONTIGUOUS run [lo,hi): each is emitted as its own statement; a
+    control op consumes the next word as its delay slot, so that word is NOT standalone."""
+    st, a = set(), lo
+    while a < hi:
+        st.add(a)
+        a += 8 if ins[a].kind in (D.BRANCH, D.JUMP, D.JUMPR) else 4
+    return st
+
+
+def collect_tail_dups(exe, lo, hi, funcset, ins, jt):
+    """Find SHARED-EPILOGUE / tail-merged blocks this function branches to that live OUTSIDE [lo,hi) (a
+    sibling tail-merged a common epilogue; A00 0x80113100 -> 0x80113328). A cross-fn branch to such a
+    target would route to the dispatcher and fail fast, so we DUPLICATE the block here. We follow ONLY
+    out-of-[lo,hi), in-module, NON-entry targets (a sibling ENTRY is a real tail call, left to
+    emit_control); we never re-enter [lo,hi) (that's a goto to an existing label). Returns
+    (dup_ins, dup_blocks) where dup_blocks = [(start, end, fall_into_main_addr_or_None)] — each a maximal
+    contiguous run; fall target set when the run flows back into [lo,hi) (needs a goto)."""
+    LO_M, HI_M = exe.load, exe.text_end
+    def in_main(x):
+        return lo <= x < hi
+    def want(t):
+        return t is not None and LO_M <= t < HI_M and not in_main(t) and t not in funcset
+    dup = {}
+    seeds = []
+    def gather(src_ins, src_jt):
+        for a, i in src_ins.items():
+            if i.kind in (D.BRANCH, D.JUMP) and i.op != "jal" and want(i.target):
+                seeds.append(i.target)
+            if i.kind == D.JUMPR and i.op == "jr":
+                seeds.extend(t for t in src_jt.get(a, ()) if want(t))
+    gather(ins, jt)
+    while seeds:
+        T = seeds.pop()
+        if T in dup:
+            continue
+        a = T
+        while LO_M <= a < HI_M and not in_main(a) and a not in dup:
+            i = decode(a, exe.word(a))
+            dup[a] = i
+            if i.kind in (D.BRANCH, D.JUMP, D.JUMPR):
+                ds = a + 4
+                if LO_M <= ds < HI_M and not in_main(ds) and ds not in dup:
+                    dup[ds] = decode(ds, exe.word(ds))
+                if i.kind == D.BRANCH:
+                    if want(i.target):
+                        seeds.append(i.target)
+                    a = ds + 4
+                elif i.kind == D.JUMP:
+                    if i.op == "jal":
+                        a = ds + 4
+                    else:
+                        if want(i.target):
+                            seeds.append(i.target)
+                        break
+                else:
+                    break    # jr: terminator (its table, if any, is recovered in the recomputed jt below)
+            else:
+                a += 4
+    # recompute jt over main+dup so a jr inside a dup block gets its switch; re-gather any new tail targets
+    if dup:
+        alljt = find_jump_tables(exe, {**ins, **dup}, lo, HI_M, validate=True)
+        more = []
+        for a, i in dup.items():
+            if i.kind == D.JUMPR and i.op == "jr":
+                more.extend(t for t in alljt.get(a, ()) if want(t) and t not in dup)
+        seeds = more
+        while seeds:
+            T = seeds.pop()
+            if T in dup:
+                continue
+            a = T
+            while LO_M <= a < HI_M and not in_main(a) and a not in dup:
+                i = decode(a, exe.word(a)); dup[a] = i
+                if i.kind in (D.BRANCH, D.JUMP, D.JUMPR):
+                    ds = a + 4
+                    if LO_M <= ds < HI_M and not in_main(ds) and ds not in dup:
+                        dup[ds] = decode(ds, exe.word(ds))
+                    if i.kind == D.BRANCH:
+                        a = ds + 4
+                    elif i.kind == D.JUMP and i.op == "jal":
+                        a = ds + 4
+                    else:
+                        break
+                else:
+                    a += 4
+    # form maximal contiguous runs; record where a run falls through into [lo,hi)
+    blocks = []
+    addrs = sorted(dup)
+    k = 0
+    while k < len(addrs):
+        s = addrs[k]
+        e = s
+        while e in dup:
+            e += 4
+        fall = e if in_main(e) else None      # the run flows back into the main body -> goto needed
+        blocks.append((s, e, fall))
+        while k < len(addrs) and addrs[k] < e:
+            k += 1
+    return dup, blocks
+
+
 def emit_func(exe, lo, hi, funcset, out, name, N):
-    """Emit one C function covering [lo, hi) under the given C name (the pure recomp body). Linear walk
-    over the contiguous body — the proven model. (A CFG-flood-fill variant was tried to auto-duplicate
-    shared epilogues but mis-recompiled a register-jump-table state machine into an infinite loop, so it
-    was reverted; cross-function shared-epilogue targets are handled by seeding/merge instead.)"""
+    """Emit one C function: the proven LINEAR walk over the contiguous body [lo,hi), PLUS appended
+    DUPLICATED tail blocks for shared-epilogue targets that live outside [lo,hi) (collect_tail_dups).
+    The [lo,hi) emission is unchanged; the entry (lo) is always first; tails are reached only by goto.
+    (A whole-function CFG flood-fill was tried and reverted — it mis-recompiled a register-jump-table
+    state machine into an infinite loop; this is the additive, minimal version.)"""
     ins = {a: decode(a, exe.word(a)) for a in range(lo, hi, 4)}
     jt = find_jump_tables(exe, ins, lo, hi)
+    dup_ins, dup_blocks = collect_tail_dups(exe, lo, hi, funcset, ins, jt)
+    if dup_ins:
+        ins = {**ins, **dup_ins}
+        jt = find_jump_tables(exe, ins, lo, exe.text_end, validate=True)
 
-    # `standalone` = addresses emitted as their own statement; a control op consumes the next word as its
-    # delay slot, so that word is NOT standalone. A branch/jump target is a real label only if it
-    # coincides with a standalone address (else it routes through the router, never an undefined label).
-    standalone, a = set(), lo
-    while a < hi:
-        standalone.add(a)
-        a += 8 if ins[a].kind in (D.BRANCH, D.JUMP, D.JUMPR) else 4
-    all_targets = {i.target for i in ins.values()
-                   if i.kind in (D.BRANCH, D.JUMP) and i.target is not None and lo <= i.target < hi}
-    for tgts in jt.values():
-        all_targets |= {t for t in tgts if lo <= t < hi}
+    standalone = walk_standalone(ins, lo, hi)
+    for s, e, _ in dup_blocks:
+        standalone |= walk_standalone(ins, s, e)
+    # targets that may be labels: branch/jump targets + jump-table case labels, anywhere in the covered
+    # set (main body + duplicated tails). A duplicated tail is reachable, so its targets are real labels.
+    all_targets = {i.target for x, i in ins.items()
+                   if i.kind in (D.BRANCH, D.JUMP) and i.target is not None and i.target in ins}
+    for x, tgts in jt.items():
+        if x in ins:
+            all_targets |= {t for t in tgts if t in ins}
     labels = {t for t in all_targets if t in standalone}
     # BRANCH-INTO-DELAY-SLOT (MAIN 0x80084080: a `bltz` jumps to 0x800840C8, the delay slot of the
     # preceding unconditional `beq $0,$0`). Such a target is NOT standalone, so without help it routes to
@@ -310,29 +416,42 @@ def emit_func(exe, lo, hi, funcset, out, name, N):
                        and (a2 + 4) in ins and ins[a2 + 4].kind not in (D.BRANCH, D.JUMP, D.JUMPR)}
     ds_label_targets = {t for t in all_targets if t not in standalone and t in ctrl_delayslots}
     labels |= ds_label_targets
+    # a duplicated tail that flows back into the main body jumps to L_<fall>; force that to be a label.
+    labels |= {fall for _, _, fall in dup_blocks if fall is not None}
+
+    def emit_run(s, e):
+        a = s
+        while a < e:
+            i = ins[a]
+            if a in labels:
+                out.append(f"L_{a:08X}:;")
+            if i.kind in (D.BRANCH, D.JUMP, D.JUMPR):
+                slot = ins.get(a + 4)
+                ds_c = emit_simple(slot) if (slot and slot.kind not in
+                       (D.BRANCH, D.JUMP, D.JUMPR)) else "/* DS */"
+                out.extend(emit_control(i, ds_c, funcset, labels, N, jt.get(a)))
+                if (a + 4) in ds_label_targets:        # the delay slot is also a branch target
+                    out.append(f"  goto L_DSAFTER_{a:08X};")
+                    out.append(f"L_{a + 4:08X}:; {ds_c}")
+                    out.append(f"L_DSAFTER_{a:08X}:;")
+                a += 8
+            else:
+                st = emit_simple(i)
+                if st:
+                    out.append("  " + st)
+                a += 4
 
     out.append(f"void {name}(Core* c) {{")
-    a = lo
-    while a < hi:
-        i = ins[a]
-        if a in labels:
-            out.append(f"L_{a:08X}:;")
-        if i.kind in (D.BRANCH, D.JUMP, D.JUMPR):
-            slot = ins.get(a + 4)
-            ds_c = emit_simple(slot) if (slot and slot.kind not in
-                   (D.BRANCH, D.JUMP, D.JUMPR)) else "/* DS */"
-            out.extend(emit_control(i, ds_c, funcset, labels, N, jt.get(a)))
-            if (a + 4) in ds_label_targets:        # the delay slot is also a branch target
-                out.append(f"  goto L_DSAFTER_{a:08X};")
-                out.append(f"L_{a + 4:08X}:; {ds_c}")
-                out.append(f"L_DSAFTER_{a:08X}:;")
-            a += 8
-        else:
-            s = emit_simple(i)
-            if s:
-                out.append("  " + s)
-            a += 4
+    emit_run(lo, hi)                        # the proven contiguous body — entry (lo) always first
     out.append("  return;")
+    # DUPLICATED shared-epilogue tails (collect_tail_dups), reached only via goto from the body / a tail.
+    # Each ends at its own terminator; a run that falls back into the main body gets an explicit goto.
+    for s, e, fall in dup_blocks:
+        emit_run(s, e)
+        if fall is not None:
+            out.append(f"  goto L_{fall:08X};")
+        else:
+            out.append("  return;")
     out.append("}")
     out.append("")
 

@@ -8835,3 +8835,15 @@ function shared tails by seeding/merge, not by recomputing the whole-function CF
 0x80113328 (compiler tail-merged a common epilogue across sibling dispatch handlers). Linear emit routes the
 cross-fn branch to the dispatcher -> fail-fast. Needs a TESTED surgical fix (seed the shared-epilogue target
 + make its owner tail-call it on fall-through, scoped to genuine epilogues only — NOT the global flood-fill).
+
+## later-259 — shared-epilogue tail duplication (additive, TDD'd) — past the A00 0x80113328 frontier
+The cross-function shared-epilogue gap (later-258 frontier) is fixed with ADDITIVE tail duplication —
+the opposite design from the reverted flood-fill. emit_func keeps the proven LINEAR [lo,hi) body
+UNCHANGED (entry always first, state machines untouched) and only APPENDS duplicated tail blocks for
+branch/jump targets that land OUTSIDE [lo,hi) in a sibling's range (a tail-merged shared epilogue) —
+collect_tail_dups follows out-of-range, in-module, NON-entry targets (a sibling ENTRY stays a real tail
+call), never re-entering [lo,hi); a tail that flows back into the body emits an explicit `goto`. TDD first:
+test_exec_cross_function_shared_epilogue (a branch to an epilogue past `hi` must still restore s0) — red,
+then green. Verified on the game: plain headless smoke CLEAN (frame 90, 0 misses — the vtable state machine
+that flood-fill broke is unaffected); autoskip now runs DEMO->GAME->SOP->A00 PAST 0x80113328 to a new
+frontier at 0x8018BD30 (code in the area-data region 0x8018xxxx — another loaded overlay to map/recompile).
