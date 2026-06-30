@@ -70,9 +70,11 @@ automation + diagnostics — 694 lines, split candidate**), `sync_overrides.cpp`
 `mdec_beetle.c` (mdec.c), `native_fmv.cpp` (STR/MDEC FMV + shared XA decoder), `pad_input.cpp`.
 
 ## Tools, generated, vendor
-`tools/` — `recomp/emit.py` (recompiler), `disas.py` (MAIN.EXE disasm), `dbgclient.py` (debug-server REPL
+`tools/` — `recomp/emit.py` (recompiler), `ensure_recomp.py` (the SINGLE hash-checked recomp step run.sh
+calls — extracts MAIN.EXE/stub/overlays, runs emit.py, verifies generated/ matches a SHA-256 of the inputs
+in generated/.recomp.hash), `disas.py` (MAIN.EXE disasm), `dbgclient.py` (debug-server REPL
 client), `build_port.sh`, bgm/frame tooling. `generated/` — recompiled MAIN.EXE `shard_*.c` (gitignored,
-run.sh rebuilds). `vendor/beetle-psx` (committed GPL fork — the port's GTE/MDEC/SPU/CHD **hardware backend**,
+run.sh rebuilds via ensure_recomp.py). `vendor/beetle-psx` (committed GPL fork — the port's GTE/MDEC/SPU/CHD **hardware backend**,
 NOT a reference emulator), `vendor/imgui`.
 
 ## ORGANIZATION conventions + known DEBT

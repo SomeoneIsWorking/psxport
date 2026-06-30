@@ -72,50 +72,16 @@ DISCDUMP=build/tools/discdump
 [ -x "$DISCDUMP" ] || DISCDUMP=build/tools/discdump.exe
 [ -x "$DISCDUMP" ] || die "discdump build failed"
 
-# ---- 3. extract MAIN.EXE (recompiled to the shard substrate by emit.py) + the stage overlays ----
+# ---- 3. ensure the recompiled substrate is present AND matches its input hash --------
+# ONE step does all recomp provisioning: extract MAIN.EXE + the boot stub SCUS_944.54 + every overlay
+# the recompiler needs (stage START/DEMO/GAME/SOP/OPN/CRD + per-area A00..A0L), run emit.py, and verify
+# the generated set matches a deterministic hash of the inputs — so every machine builds byte-identical
+# recomp (the area overlays MUST all be present, else a box seeds fewer resident MAIN fns and fail-fasts
+# on a different miss; that determinism is exactly what the hash enforces). See tools/ensure_recomp.py.
 MAIN=scratch/bin/tomba2/MAIN.EXE
-if [ ! -f "$MAIN" ]; then
-  say "extracting MAIN.EXE from the disc…"
-  mkdir -p scratch/bin/tomba2
-  "$DISCDUMP" get MAIN.EXE "$DISC" scratch/bin/tomba2 >/dev/null
-fi
-[ -f "$MAIN" ] || die "could not extract MAIN.EXE"
-
-# The disc's boot executable (SCUS_944.54): the real PSX entry point. It draws the SCEA screen,
-# then LoadExec's MAIN.EXE — we run it as the authentic boot (runtime/recomp/native_stub.c).
-STUB=scratch/bin/tomba2/SCUS_944.54
-if [ ! -f "$STUB" ]; then
-  say "extracting the boot stub SCUS_944.54 from the disc…"
-  "$DISCDUMP" get SCUS_944.54 "$DISC" scratch/bin/tomba2 >/dev/null 2>&1 || true
-fi
-[ -f "$STUB" ] || die "could not extract the boot stub SCUS_944.54"
-
-# Stage overlays (\BIN\{START,DEMO,GAME,SOP,OPN,CRD}.BIN): runtime-loaded game code the game pulls off
-# the disc into RAM. Fed to emit.py --overlays: the recompiler seeds the resident MAIN functions the
-# overlays call AND statically recompiles each overlay as its own module (later-257), so overlay code
-# runs under the substrate. Game data — gitignored scratch.
-OVL=scratch/bin/overlays
-mkdir -p "$OVL"
-# Stage/mode overlays + the per-area FIELD CODE overlays (A0*.BIN). The area overlays MUST be present:
-# emit.py recompiles each, AND overlay-scan seeds the resident MAIN functions they call — so a checkout
-# missing them recompiles fewer MAIN fns and fail-fasts on the field/attract path (different miss per box).
-for b in START DEMO GAME SOP OPN CRD \
-         A00 A01 A02 A03 A04 A05 A06 A07 A08 A09 A0A A0B A0C A0D A0E A0F A0G A0H A0I A0J A0K A0L; do
-  [ -f "$OVL/$b.BIN" ] || "$DISCDUMP" get "BIN/$b.BIN" "$DISC" "$OVL" >/dev/null 2>&1 || true
-done
-
-# ---- 4. recompile MAIN.EXE + boot stub -> C, then build the native runtime ----------
-# The interpreter is GONE (2026-06-30): the statically-recompiled shards (generated/shard_*.c) ARE the
-# execution substrate for every non-native guest function, so the build REQUIRES them. generated/ is
-# gitignored (regenerable), so regenerate whenever it is missing or stale (MAIN/stub/emit.py changed).
-GEN=generated/tomba2_rec.c
-RT=runtime/recomp       # common PSX->PC platform (future psxport submodule)
-ENG=engine              # Tomba2Engine — game-specific native engine + RE
 mkdir -p generated scratch/bin
-if [ ! -f generated/shard_disp.c ] || [ ! -f generated/rec_sources.cmake ] || [ ! -f "$GEN" ] || [ "$MAIN" -nt "$GEN" ] || [ "$STUB" -nt "$GEN" ] || [ tools/recomp/emit.py -nt "$GEN" ]; then
-  say "recompiling MAIN.EXE + boot stub -> C (the execution substrate)…"
-  python3 tools/recomp/emit.py "$MAIN" "$GEN" --overlays "$OVL" --stub "$STUB" >/dev/null
-fi
+PSXPORT_DISCDUMP="$DISCDUMP" python3 tools/ensure_recomp.py "$DISC" || die "recomp provisioning failed"
+[ -f "$MAIN" ] || die "ensure_recomp.py did not produce MAIN.EXE"
 
 # ---- 4b. build the native port via CMake (single source of truth: cmake/tomba2_port.cmake) ----------
 # CMake owns the whole port build: the source list, the vendored RmlUi static-lib subbuild + link, the

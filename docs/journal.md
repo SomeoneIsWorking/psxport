@@ -1,5 +1,24 @@
 # Debug / progress journal
 
+## later-263 — ensure_recomp.py: one hash-checked recomp step; attract-path misses resolved by all-overlay build
+Two things from the handoff (scratch/handoff_ensure_recomp_and_attract.md), both done.
+(1) USER directive — `tools/ensure_recomp.py` is now the SINGLE recomp-provisioning step. It resolves the
+disc (CLI > $PSXPORT_TOMBA2_DISC > .env > *.chd, mirroring run.sh), extracts MAIN.EXE + SCUS_944.54 + every
+overlay (6 stage + 22 A0* area), runs emit.py, and VERIFIES the generated set against a SHA-256 of the
+INPUTS (MAIN.EXE + stub + each .BIN + emit.py/decode.py/psexe.py) stored at generated/.recomp.hash. Hash
+match + complete generated set ⇒ no-op; else re-emit and rewrite the hash. So every machine builds
+byte-identical recomp from the same disc — which is exactly the determinism the per-box-miss bug needed.
+run.sh §3 collapsed from the extract-loop + emit-staleness block to one `python3 tools/ensure_recomp.py`
+call (discdump still built by run.sh, passed via $PSXPORT_DISCDUMP). Env: PSXPORT_FORCE_RECOMP=1 forces
+re-emit; PSXPORT_DISCDUMP overrides the binary.
+(2) The attract-path misses (0x800739AC mine / 0x800810F0 USER's macOS) were artifacts of the incomplete
+per-box build (later-262). With all A0* overlays extracted + the hash-checked build, NO misses remain on my
+box: plain headless 1500 frames = 0 miss (stays in DEMO attract menu, no field load); AUTO_SKIP field =
+0 miss; and MASHING START through boot (REPL `tap start` + `run`, USER's suggested repro) drives
+DEMO → GAME → field with 0 miss and RENDERS the field (Tomba on the green island over water,
+scratch/screenshots/mash_field.png). The per-box divergence is gone because both boxes now build identical
+recomp. Build clean, ensure_recomp skip/emit paths both verified.
+
 ## later-245 (2026-06-24) — scenenative made FIELD-DEFAULT (invisible-Tomba fixed); RENDER ARCH mapped + the 2D gap
 USER (./run.sh): invisible Tomba (occluded), missing 2D (pickups, attack weapon), atlas judders on camera
 turn at 60fps, cutscene fades missing, some Z-fighting (a pot's red top), and spurious `[miss N] addr
