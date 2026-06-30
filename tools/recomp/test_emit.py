@@ -219,6 +219,47 @@ def test_jumptable_idiom_B():
     assert jt[jr_addr] == tgts, jt[jr_addr]
 
 
+def test_jumptable_base_built_in_separate_reg():
+    # Regression (later-272): the table BASE is built in one reg via `lui tmp,HI ; addiu base,tmp,LO`
+    # where the addiu's src != dst (base is a SEPARATE reg from the lui target), then `addu jr, idx, base`.
+    # This is FUN_8003c048's entity-handler dispatcher (`lui v0,0x8001 ; addiu s3,v0,0x4db8 ; ... ;
+    # addu v0,idx,s3 ; lw v0,0(v0) ; jr v0`, table 0x80014db8). Pre-fix find_jump_tables captured the HI
+    # half but DROPPED the LO (it required addiu rs==rt) -> wrong table addr -> recovery failed -> the
+    # in-function `jr` fell back to `rec_dispatch(...);return;`, skipping the epilogue (callee-saved + SP
+    # restore) and corrupting the caller (the GAME-loop freeze). Must recover the table so a C `switch`
+    # keeps the `jr` INSIDE the function.
+    # Faithful to FUN_8003c048: table base in callee-saved s3 built at entry via `lui t0; addiu s3,t0,LO`
+    # (rs!=rt), and the index reg v0 is REUSED both as the `lw` base / `jr` reg AND by an intervening
+    # `lui v0` scratch between the table setup and the jr. The fix must (a) follow `addiu s3,src,LO` to its
+    # `lui src` even though src!=s3, and (b) drop the scaled-index reg v0 so the intervening `lui v0` trap
+    # isn't matched as the table HI.
+    a = Asm(0x80010000)
+    a.lui("t0", 0x8001)            # t0 = table HI
+    a.addiu("s3", "t0", 0x0400)    # s3 = 0x80010400  (rs=t0 != rt=s3 — the separate-base form)
+    a.sltiu("v0", "a0", 3)          # bounds check -> COUNT (=3)
+    a.beq("v0", "zero", "deflt")
+    a.lui("v0", 0x1f80)            # TRAP: scratch lui to v0 (would be matched as HI if v0 not excluded)
+    a.sll("v0", "a0", 2)            # v0 = idx*4   (index reg == lw base == jr reg, like FUN_8003c048)
+    a.addu("v0", "v0", "s3")       # v0 = idx*4 + table base
+    a.lw("v0", 0, "v0")
+    a.jr("v0")
+    a.nop()
+    a.label("deflt")
+    a.jr("ra")
+    a.nop()
+    data, end = a.assemble()
+    tgts = [0x80010020, 0x80010024, 0x80010028]
+    blob = bytearray(0x400 + 12)
+    blob[0:len(data)] = data
+    struct.pack_into("<3I", blob, 0x400, *tgts)
+    e = exe_of(bytes(blob))
+    ins = {x: decode(x, e.word(x)) for x in range(e.load, e.load + len(data), 4)}
+    jt = emit.find_jump_tables(e, ins, e.load, e.load + len(data))
+    jr_addr = 0x80010000 + 8 * 4   # lui,addiu,sltiu,beq,lui(trap),sll,addu,lw,JR -> index 8
+    assert jr_addr in jt, f"separate-base table not recovered (rs!=rt addiu / index-reg reuse): {jt}"
+    assert jt[jr_addr] == tgts, jt[jr_addr]
+
+
 
 
 

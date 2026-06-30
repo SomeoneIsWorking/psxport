@@ -107,8 +107,30 @@ static int run_startgame(const char* path) {
       uint32_t loop_adv = (uint16_t)(c->mem_r16(0x1F800198u) - c0);
       int loop_ran = (loop_adv > 0) || (sm48() == 2 && c->mem_r16(0x1F800198u) != c0);
       if (loop_ran && saw_clip && clip_ended) {
-        fprintf(stderr, "[selftest] PASS: GAME loop RAN (prologue flows into loop) and the intro XA clip "
-                        "PLAYED then COMPLETED headless (SPU advanced without an audio device).\n");
+        // DEEPER GUARD (later-272): reaching free-roam + the clip completing is NOT enough — the field must
+        // KEEP RUNNING. The full-PSX field froze the GAME loop at counter ~34 because the entity-update
+        // dispatcher FUN_8003c048 has an IN-FUNCTION jump-table `jr v0` (0x8003C0AC, table 0x80014db8) that
+        // the recompiler mis-emitted as `rec_dispatch(c, target); return;` (it failed to recover the table —
+        // its base reg s3 is built `lui v0,HI; addiu s3,v0,LO` with rs!=rt, which find_jump_tables didn't
+        // handle). That `return` SKIPS the function epilogue, so dispatching the first entity (the area's
+        // terrain actor, ~loop iter 36) leaks 112 (0x70) bytes of guest SP and loses callee-saved s0–s3 →
+        // the GAME loop's base reg s0 (0x1f800000) corrupts to 1 → its counter write `*(s0+0x198)` diverts
+        // to main RAM 0x80000198 and sm[0x48] dispatch reads garbage → the field spins dead. Assert the
+        // counter keeps advancing well past 34 over a sustained window (RED before the emit fix, GREEN after).
+        uint32_t before = c->mem_r16(0x1F800198u);
+        const uint32_t RUN = 600;
+        for (uint32_t k = 0; k < RUN; k++, f++) dc_step_frame(c, f);
+        uint32_t adv = (uint16_t)(c->mem_r16(0x1F800198u) - before);
+        if (adv < 50) {
+          fprintf(stderr, "[selftest] FAIL: field FROZE after the intro clip — GAME loop counter "
+                          "*(0x1F800198) advanced only %u over %u frames (stuck=%u). The full-PSX field is "
+                          "not progressing (recomp-coro callee-saved-register corruption — see "
+                          "docs/findings/sbs.md / FUN_8003c048 jump-table emit).\n",
+                  adv, RUN, c->mem_r16(0x1F800198u));
+          return 1;
+        }
+        fprintf(stderr, "[selftest] PASS: GAME loop RAN, the intro XA clip PLAYED then COMPLETED headless, "
+                        "AND the field KEEPS running (counter +%u over %u frames).\n", adv, RUN);
         return 0;
       }
       fprintf(stderr, "[selftest] FAIL: loop_ran=%d (counter +%u) saw_clip=%d clip_ended=%d "

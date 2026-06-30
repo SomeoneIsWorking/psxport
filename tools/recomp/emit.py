@@ -32,7 +32,7 @@ from decode import decode
 # recomp identity and re-emits when the stamp on disk (generated/.recomp_version) differs, so a stale
 # generated/ on another box (which an input-content hash alone failed to catch — a box can build a
 # self-consistent-but-outdated set) is forced to regenerate. Date + a per-day counter; keep it terse.
-RECOMP_VERSION = "2026-06-30.10"
+RECOMP_VERSION = "2026-06-30.11"
 
 R = lambda n: f"c->r[{n}]"
 
@@ -214,6 +214,50 @@ def overlay_names(tag):
                  f"ov_{tag}_shard", f"ov_{tag}_disp")
 
 
+def _scan_jt_idiom(ins, a, jr_reg, lo, enhanced):
+    """Backward-scan the MIPS switch idiom around the `jr` at `a` (jr reg = jr_reg). Returns
+    (base_reg, off, hi_val, lo_add, count) or None. `enhanced` enables two extra forms needed by a few
+    functions but which can MISLEAD other recoveries (so the caller tries enhanced ONLY as a fallback):
+      - the table base built in a SEPARATE temp reg: `lui tmp,HI ; addiu base,tmp,LO` (rs != rt), and
+      - dropping the SCALED-INDEX reg (the `sll` result) from the base-candidate set, so a NEARER
+        `lui` that reuses the index reg as scratch isn't mismatched as the table HI.
+    See find_jump_tables + docs/findings/sbs.md later-272 (FUN_8003c048's entity-handler table)."""
+    base_reg = off = hi_val = lo_add = count = None
+    base_regs = set()
+    for b in range(a - 4, max(lo, a - 0x40) - 4, -4):
+        if b not in ins:
+            break
+        j = ins[b]
+        if base_reg is None and j.op == "lw" and j.rt == jr_reg:    # the table load into the jr reg
+            base_reg, off = j.rs, j.simm
+            base_regs = {base_reg}
+            continue
+        if base_reg is not None:
+            # `addu B, X, Y` defining a candidate base reg -> either addend can hold the table base
+            # (the overlays build the table addr in a separate reg and `addu` it to the index reg).
+            if j.op in ("addu", "add") and j.rd in base_regs:
+                base_regs |= {j.rs, j.rt}
+            # ENHANCED: the scaled index (`sll t, idx, 2` feeding the addu) is never the table base; drop
+            # it so a nearer `lui` reusing that reg as scratch isn't matched as the table HI.
+            if enhanced and j.op in ("sll", "sllv") and j.rd in base_regs:
+                base_regs.discard(j.rd)
+            if hi_val is None and j.op == "lui" and j.rt in base_regs:
+                hi_val = j.imm << 16
+            elif lo_add is None and j.op == "addiu" and j.rt in base_regs and (enhanced or j.rs == j.rt):
+                # `addiu base, src, LO`. Classic: src==base. ENHANCED: src may be a separate temp holding
+                # the lui'd HI (`lui tmp,HI ; addiu base,tmp,LO`) -> add src so its `lui` is still matched.
+                lo_add = j.simm
+                if enhanced:
+                    base_regs |= {j.rs}
+        if count is None and j.op == "sltiu":
+            count = j.imm
+        if hi_val is not None and count is not None:
+            break
+    if base_reg is None or hi_val is None or off is None or not count or count > 4096:
+        return None
+    return base_reg, off, hi_val, lo_add, count
+
+
 def find_jump_tables(exe, ins, lo, hi, validate=True, tbl_spans=None):
     """Recover in-function jump tables (C `switch`) so a computed `jr` stays INSIDE the compiled body
     instead of routing through rec_dispatch (which, under the no-interpreter substrate, would dispatch
@@ -225,44 +269,36 @@ def find_jump_tables(exe, ins, lo, hi, validate=True, tbl_spans=None):
       (A) lui base,HI ; [addiu base,base,LO] ; addu base,base,t ; lw rN,OFF(base) ; jr rN  (MAIN)
       (B) lui tbl,HI  ; addiu tbl,tbl,LO     ; addu B,t,tbl     ; lw rN,OFF(B)    ; jr rN  (overlays)
     The jump table is at HI<<16 (+LO) + OFF; read COUNT word targets from the EXE image. Returns
-    {jr_addr: [target_addr,...]} (targets are the case-label code addresses)."""
+    {jr_addr: [target_addr,...]} (targets are the case-label code addresses).
+
+    Per jr we try the STRICT idiom first; only if it yields no readable/in-range table do we retry with
+    the ENHANCED idiom (separate-temp base reg + scaled-index exclusion). Strict-first is essential: the
+    enhanced heuristics, applied unconditionally, MISLED already-correct recoveries (A00 FUN_80124328's
+    switch lost cases -> recomp-MISS 0x80124448). Strict-first means a switch the original logic already
+    recovered is byte-identical; enhanced only RESCUES jrs the strict logic missed (FUN_8003c048)."""
+    def resolve(scan):
+        if scan is None:
+            return None
+        base_reg, off, hi_val, lo_add, count = scan
+        tbl = (hi_val + (lo_add or 0) + off) & 0xFFFFFFFF
+        try:
+            targets = [exe.word(tbl + k * 4) for k in range(count)]
+        except Exception:
+            return None
+        if validate and any(not (lo <= t < hi) for t in targets):   # a real switch jumps within its fn
+            return None
+        return tbl, count, targets
     jt = {}
     for a in sorted(ins):
         i = ins[a]
         if not (i.kind == D.JUMPR and i.op == "jr" and i.rs and i.rs != 31):
             continue
-        base_reg = off = hi_val = lo_add = count = None
-        base_regs = set()        # registers that may hold the table base (lw base B + addu addends)
-        for b in range(a - 4, max(lo, a - 0x40) - 4, -4):
-            if b not in ins:
-                break
-            j = ins[b]
-            if base_reg is None and j.op == "lw" and j.rt == i.rs:   # the table load into the jr reg
-                base_reg, off = j.rs, j.simm
-                base_regs = {base_reg}
-                continue
-            if base_reg is not None:
-                # `addu B, X, Y` defining a candidate base reg -> either addend can hold the table base
-                # (the overlays build the table addr in a separate reg and `addu` it to the index reg).
-                if j.op in ("addu", "add") and j.rd in base_regs:
-                    base_regs |= {j.rs, j.rt}
-                if hi_val is None and j.op == "lui" and j.rt in base_regs:
-                    hi_val = j.imm << 16
-                elif lo_add is None and j.op == "addiu" and j.rt in base_regs and j.rs == j.rt:
-                    lo_add = j.simm
-            if count is None and j.op == "sltiu":
-                count = j.imm
-            if hi_val is not None and count is not None:
-                break
-        if base_reg is None or hi_val is None or off is None or not count or count > 4096:
+        res = resolve(_scan_jt_idiom(ins, a, i.rs, lo, enhanced=False))
+        if res is None:
+            res = resolve(_scan_jt_idiom(ins, a, i.rs, lo, enhanced=True))
+        if res is None:
             continue
-        tbl = (hi_val + (lo_add or 0) + off) & 0xFFFFFFFF
-        try:
-            targets = [exe.word(tbl + k * 4) for k in range(count)]
-        except Exception:
-            continue
-        if validate and any(not (lo <= t < hi) for t in targets):  # a real switch jumps within its fn
-            continue
+        tbl, count, targets = res
         if tbl_spans is not None:                  # the DATA table occupies [tbl, tbl+4*count)
             tbl_spans.add((tbl, count))
         jt[a] = targets
@@ -831,6 +867,32 @@ def emit_module(exe, out_dir, N, seeds, ov_dir=None, limit=None, shards=8, soft_
     # CFG flood-fill DUPLICATES such tails into each function that branches to them, so a function is never
     # split at a point its own internal branches cross. floodfill_func is the single source of truth for a
     # function's instruction extent.)
+    # CROSS-BOUNDARY SWITCH TARGETS (later-272): a jump-table case that lands OUTSIDE the jr's own function
+    # — because a SIBLING function entry (a real pointer-table fn) splits the switch — is unreachable as an
+    # in-function `goto`; emit_func routes it via `default: rec_dispatch(target)`. So that target MUST be a
+    # function ENTRY or the dispatch fails fast (recomp-MISS) the moment the game's runtime index selects it
+    # (A00 jr 0x80124354 -> 0x80124448/0x80124488, which fall inside sibling fn 0x801243E8). Seed every such
+    # cross-boundary target so rec_dispatch resolves it (faithful: it runs from that label exactly as the
+    # original `jr` did). This was always latent; the FUN_8003c048 jump-table fix merely lets the field
+    # progress far enough to reach these cases.
+    import bisect as _bisect
+    fs = sorted(funcs)
+    fs_set = set(fs)
+    def _fn_hi(addr):
+        k = _bisect.bisect_right(fs, addr)
+        return fs[k] if k < len(fs) else exe.text_end
+    xb = set()
+    for a in fs:
+        hi_f = _fn_hi(a)
+        ins_f = {x: decode(x, exe.word(x)) for x in range(a, hi_f, 4)}
+        for jr, tgts in find_jump_tables(exe, ins_f, a, hi_f, validate=False).items():
+            for t in tgts:
+                if not (a <= t < hi_f) and t not in fs_set and exe.load <= t < exe.text_end \
+                        and decode(t, exe.word(t)).kind != D.UNKNOWN:
+                    xb.add(t)
+    if xb:
+        funcs = sorted(set(funcs) | xb)
+        print(f"[{N.wrap}] seeded {len(xb)} cross-boundary switch targets (else recomp-MISS via switch default)")
     print(f"[{N.wrap}] functions: {len(seeds)} seeds -> {len(funcs)} recompiled after jal "
           f"discovery (a call to any non-recompiled address fails fast at runtime)")
     funcset = set(funcs)
