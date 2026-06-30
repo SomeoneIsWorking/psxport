@@ -523,6 +523,9 @@ static void native_step_frame(Core* c, uint32_t f) {
   void gpu_set_disp_origin(Core* c, int x, int y);
   (void)f;
   perf_frame_begin();   // perf: start the frame clock (top of the deterministic per-frame work)
+  // Advance the libetc VSync counter (DAT_800abde0) — one vblank per native frame. VSync(0) is trapped,
+  // so this is the only thing that ticks the recomp timebase (recomp tasks read it to pace animations).
+  { void timing_frame_tick(Core*); timing_frame_tick(c); }
   // Per-frame IRQ-driven events the game's waits poll via TestEvent (VBlank classes + sound-DMA-complete).
   hle_deliver_event(c, 0xF2000003u, 0xFFFFFFFFu);
   hle_deliver_event(c, 0xF0000001u, 0xFFFFFFFFu);

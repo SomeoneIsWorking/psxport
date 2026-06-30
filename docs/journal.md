@@ -1,5 +1,21 @@
 # Debug / progress journal
 
+## later-268 — dead libetc VSync counter revived (recomp timebase) → SBS core-B title-freeze partial fix
+Investigating the two freezes (scratch/handoff_two_freezes.md). **Root cause found for the timebase half:**
+the libetc VSync counter `DAT_800abde0` was NEVER advancing — `ov_vsync`/`frame_tick` (timing.cpp) are dead
+code (VSync 0x80085900 is TRAPPED by sync_overrides, so they never run) and nothing else bumped it. It sat at
+0 forever. Native paths reimplement their own pacing and ignore it, but RECOMP code (the full-PSX SBS core B,
+and any still-recomp leaf) reads `0x800abde0` to pace animations/timers → frozen. FIX: `timing_frame_tick()`
+bumps `timing.vblank` + writes `0x800abde0` once per native frame, called at the top of `native_step_frame`
+for ALL cores. Verified: counter now increments (was 0); native plain + AUTO_SKIP field 0-miss; emit 12/12 +
+test_coro pass; SBS both no crash. **Still open (Issue 1 deeper):** core B's recomp menu correctly idles to
+the attract substate `sm[0x48]=7` (s7) but its phase index `sm[0x4a]=7` is GARBAGE (s7 phase machine
+0x80106C24 expects 0/1/2 → falls through to do-nothing epilogue), so the attract never plays — a coro-resume
+fidelity divergence in the recompiled menu sub-machine, separate from the timebase. Visual confirm needs
+windowed SBS (headless SBS renders BLACK at the menu). **Issue 2 (native field freeze on macOS):** NOT
+reproducible on Linux — area warp (0→1, 138 nodes) + AUTO_SKIP field both run 0-miss; needs the user's macOS
+env or a manual-play repro. See docs/findings/sbs.md.
+
 ## later-264b — overlay router by LOAD-TIME identity → SBS both/gameplay run clean (full-PSX alive)
 After the coro fix (later-264) got full-PSX past the mid-function-resume wall, SBS mode=gameplay/both hit
 a router miss at 0x801063F4 (GAME loop top), caller ra=0x801063F4 (core A's native game_coop resume). The

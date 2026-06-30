@@ -51,5 +51,17 @@ void ov_vsync(Core* c) {
 
 uint32_t timing_vblank(Core* c) { return c->game->timing.vblank; }
 
+// Advance the canonical libetc VSync counter once per native frame. The PC-native frame loop owns
+// timing (one logic frame == one vblank), and VSync(0) is trapped (sync_overrides) so ov_vsync never
+// runs — meaning DAT_800abde0 would otherwise stay 0 forever. Native code reimplements its own paced
+// logic and ignores this counter, but RECOMP code (full-PSX core in SBS, and any still-recomp leaf)
+// reads DAT_800abde0 to pace animations/idle timers; if it never ticks, those tasks freeze in place
+// (SBS core-B title-menu freeze). Bump it every frame for ALL cores so the recomp timebase advances.
+void timing_frame_tick(Core* c) {
+  uint32_t& vblank = c->game->timing.vblank;
+  vblank += 1u;
+  c->mem_w32(VBLANK_COUNT, vblank);
+}
+
 void timing_init(void) {
 }
