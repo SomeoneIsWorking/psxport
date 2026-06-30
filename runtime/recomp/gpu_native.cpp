@@ -175,6 +175,7 @@ int GpuState::obj_depth_lookup(uint32_t node, float* ord) {
 }
 void gpu_obj_depth_add(Core* core, uint32_t lo, uint32_t hi, float ord) { core->game->gpu.obj_depth_add(lo, hi, ord); }
 static long s_gp0_words = 0, s_dma2 = 0;  // diagnostics: GP0 words + DMA2 triggers per frame
+int g_oracle_prim_log = 0;  // ORACLE diag: when >0, log each soft_gpu primitive (oracle GP0 trace, selftest.cpp)
 long g_nd_3d = 0, g_nd_2d = 0;   // Phase-2 native-depth diag: prims drawn with real depth vs OT-order band
 // 2D-OVERLAY-ONLY OT enumeration. When the FIELD render path owns the 3D world + backdrop natively
 // (ov_scene_native), it STILL needs the guest's leftover 2D overlay prims — the opening-cutscene
@@ -1128,6 +1129,13 @@ void GpuState::gp0_exec(Core* core) {
     }
     prov_begin(op, textured ? 1 : 0, semi, v[0].r, v[0].g, v[0].b,
                v[0].x + s_off_x, v[0].y + s_off_y, v[0].u, v[0].v);
+    extern int g_oracle_prim_log;
+    if (g_oracle_prim_log && soft_gpu) {
+      int xmn=v[0].x,xmx=v[0].x,ymn=v[0].y,ymx=v[0].y;
+      for (int i=1;i<nv;i++){ if(v[i].x<xmn)xmn=v[i].x; if(v[i].x>xmx)xmx=v[i].x; if(v[i].y<ymn)ymn=v[i].y; if(v[i].y>ymx)ymx=v[i].y; }
+      fprintf(stderr, "[oraprim] POLY op=%02X nv=%d tex=%d semi=%d bbox=(%d,%d)-(%d,%d) col=(%d,%d,%d) tp=(%d,%d) clut=(%d,%d)\n",
+              op, nv, textured?1:0, semi, xmn+s_off_x, ymn+s_off_y, xmx+s_off_x, ymx+s_off_y, v[0].r,v[0].g,v[0].b, s_tp_x, s_tp_y, s_clut_x, s_clut_y);
+    }
     if (sw_path()) {                           // VK owns poly raster now (tee'd above); SW does the rest
       tri(v[0], v[1], v[2], textured, shade, semi, raw);
       if (quad) tri(v[1], v[2], v[3], textured, shade, semi, raw);
@@ -1179,6 +1187,10 @@ void GpuState::gp0_exec(Core* core) {
     // bit0=1 -> raw texel; bit0=0 -> modulate by command color (beetle sprite decode table:
     // 0x64/0x66 = TM1 modulate, 0x65/0x67 = TM0 raw). Modulating unconditionally once wrongly
     // tinted raw 0x65 sprites (turned a blue item green).
+    { extern int g_oracle_prim_log;
+      if (g_oracle_prim_log && soft_gpu)
+        fprintf(stderr, "[oraprim] SPR  op=%02X tex=%d semi=%d at=(%d,%d) %dx%d col=(%d,%d,%d) uv=(%d,%d) tp=(%d,%d) clut=(%d,%d)\n",
+                op, textured?1:0, semi, x+s_off_x, y+s_off_y, w, h, cr, cg, cb, u0, v0, s_tp_x, s_tp_y, s_clut_x, s_clut_y); }
     if (sw_path()) raster_sprite(op, x, y, u0, v0, w, h, cr, cg, cb, textured, semi);  // VK owns it (tee'd below)
     // VK backend (M5): tee rects/sprites as two triangles (opaque or semi; mode 3 = untextured solid).
     if (vk_path()) {
@@ -1258,6 +1270,9 @@ void GpuState::gp0_exec(Core* core) {
     int x = xy & 0x3F0, y = (xy >> 16) & 0x1FF, w = ((wh & 0x3FF) + 0xF) & ~0xF, h = (wh >> 16) & 0x1FF;
     uint16_t col = to555(cr, cg, cb);
     for (int dy = 0; dy < h; dy++) for (int dx = 0; dx < w; dx++) *vram(x + dx, y + dy) = col;
+    { extern int g_oracle_prim_log;
+      if (g_oracle_prim_log && soft_gpu)
+        fprintf(stderr, "[oraprim] FILL at=(%d,%d) %dx%d col=(%d,%d,%d)\n", x, y, w, h, cr, cg, cb); }
     if (vk_path()) gpu_gpu_dirty(core, x, y, w, h);   // mirror fill to VK
   } else if (op >= 0x40 && op <= 0x5F) {     // line / poly-line (flat or gouraud)
     int semi = (op & 0x02) ? 1 : 0, gouraud = (op & 0x10) ? 1 : 0;

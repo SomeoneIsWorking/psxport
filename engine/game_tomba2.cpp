@@ -229,7 +229,35 @@ void ov_draw_otag(Core* c) {   // called directly from native_step_frame (PC-dri
   // NOTE (frontier): scenenative skips ALL the PSX 2D for the field — once in-gameplay dialog/menus/item
   // bubbles appear they need native 2D (RQ_HUD/OVERLAY) or they'll be missing. Free-roam is correct now.
   bool field = (c->mem_r32(0x801FE00Cu) == 0x8010637Cu);
-  if (!g_render_psx && (field || cfg_dbg("scenenative"))) {
+  // SOP INTRO NARRATION (GAME stage, SOP field mode sm[0x4a]==0; free-roam is sm[0x4a]>=1): this is NOT the
+  // walkable 3D field — it is a 2D-composited cutscene (full-screen black/colour fills, semi-transparent
+  // textured EFFECT quads, character sprites, and text) built entirely by the dispatched PSX SOP code into
+  // the guest OT. The native field path (ov_scene_native) wrongly draws the walkable field's terrain/entity
+  // world here (e.g. the SEA + characters during the dark "void" beat scene 0x800bf9b4==5) AND the 2D-only OT
+  // filter DROPS the cutscene's own fills/effect quads (classified as backdrop/world) — so the void rendered
+  // as the sea instead of black+effect, and the cliff water banded. The oracle (interpreter + software GPU,
+  // docs/oracle.md) PROVES the PSX renders the whole cutscene from its GP0 stream. So for the narration we
+  // walk the FULL guest OT (no native field render, no 2D-only filter) — reproducing the PSX cutscene exactly.
+  // The SOP intro narration is active exactly when the loaded MODE overlay is the SOP one — the SAME check
+  // the GAME submode-0 dispatcher uses to run ov_sop_field_mode (engine_stage.cpp: *(0x80109450) is the
+  // overlay's first instruction; the SOP overlay starts `lui v0,0x1f80` == 0x3C021F80). The walkable field
+  // loads a different overlay (e.g. 0x801138A4), so this cleanly separates the cutscene from free-roam
+  // (sm[0x4a] does NOT — free-roam settles back to sm[0x4a]==0 like the narration).
+  bool sop_narration = field && c->mem_r32(0x80109450u) == 0x3C021F80u;
+  if (sop_narration && !g_render_psx) {
+    // SOP narration render (oracle-derived, docs/oracle.md). The cutscene's full picture is built by the PSX
+    // SOP code into the guest OT — full-screen fills, the semi-transparent textured EFFECT quads, character
+    // sprites, the sea tiles, and text — so we walk the FULL OT (g_ot_2d_only=0), NOT the 2D-only filter that
+    // dropped the fills/effect (which left the void's stale sea showing).
+    // The 3D WORLD beats (village/letter/cliff) additionally need the native entity-list scene render
+    // (ov_scene_native: terrain + characters with real depth). The dark "VOID" beat (SOP scene byte
+    // 0x800bf9b4==5) is a pure 2D effect scene with NO 3D world — running ov_scene_native there draws a stale
+    // field/sea behind the swirl effect (the original bug-2). Gate the native 3D render on the scene type:
+    // skip it for the void, run it for the world beats. (Scene byte = the game's own per-beat state, not a
+    // render magic constant.)
+    if (c->mem_r8(0x800BF9B4u) != 5) { void ov_scene_native(Core*); ov_scene_native(c); }
+    gpu_dma2_linked_list(c, c->r[4]);
+  } else if (!g_render_psx && (field || cfg_dbg("scenenative"))) {
     void ov_scene_native(Core*); ov_scene_native(c);
     // The native field path owns the 3D world + backdrop, but the field still submits its 2D OVERLAY
     // through the PSX OT: the opening-cutscene narration glyphs, in-game dialog / item bubbles, menus,

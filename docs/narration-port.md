@@ -89,3 +89,14 @@ handler + the water draw; own it natively (PC-native water, real depth) per the 
    route the SOP dispatch to it). Keep the recomp body as the behavioral reference.
 3. Gate progress on the USER eyeball (no oracle) + keep `PSXPORT_SELFTEST=narration` green for the no-crash/
    progression invariants.
+
+## STATUS UPDATE (later-281, oracle-verified) — bugs 2 & 3 FIXED
+The software-GPU ORACLE (docs/oracle.md) proved the intro narration is a 2D-COMPOSITED cutscene rendered
+ENTIRELY by the dispatched PSX SOP GP0 stream (void = full-screen black fill + semi-transparent textured
+swirl EFFECT quads + Tomba sprite + text; cliff = full scene incl. clean sea tiles). The native port had
+treated it as the walkable FIELD (ov_scene_native + g_ot_2d_only=1), which drew a stale field SEA in the
+void and dropped the cutscene's own fills/effect. FIX (engine/game_tomba2.cpp): detect the narration by the
+SOP overlay signature *(0x80109450)==0x3C021F80 (NOT sm[0x4a]); walk the FULL guest OT; run ov_scene_native
+only for the 3D-world beats (skip the void, scene byte 0x800bf9b4==5). Native now matches the oracle for
+every beat; free-roam unaffected. Bug 1 (double fade) was already fixed (later-277). See
+docs/findings/render.md "Intro-narration cutscene rendered wrong".

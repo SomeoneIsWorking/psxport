@@ -260,6 +260,12 @@ static int run_oracle(const char* path) {
       char p[160]; snprintf(p, sizeof p, "scratch/screenshots/oracle_scene%u_f%u.ppm", sc, f);
       gpu_native_shot(c, p);
     }
+    // Extra void/cliff captures DEEP into the beat (the first-reach frame is too early to show the effect/
+    // characters): dump scene 5 and 7 every 40 frames so we can compare native vs oracle at matched sub-beats.
+    if ((sc == 5 || sc == 7) && (k % 40) == 0) {
+      char p[160]; snprintf(p, sizeof p, "scratch/screenshots/oracle_s%u_k%u.ppm", sc, k);
+      gpu_native_shot(c, p);
+    }
     if (verbose && (k % 250) == 0)
       fprintf(stderr, "[selftest]   oracle f=%u loop=%u sm[0x48]=%u scene(bf9b4)=%u\n",
               f, loopc(), sm48(), sc);
