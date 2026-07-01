@@ -30,6 +30,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "spawn.h"   // world_despawn
+#include "mathlib.h"  // ov_bittest_4d7ec (FUN_8004D7EC)
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
@@ -88,7 +89,7 @@ void beh_record_list_scanner(Core* c) {
     uint32_t s1 = 1u << (s3 & 31);
     int verdict = -2;                                           // -2 = undecided, 0 = skip, 1 = act
     if (s2 == 0) {
-      c->r[4] = lh(c, s4 + 10); c->r[5] = 0; rec_dispatch(c, 0x8004D7ECu);
+      c->r[4] = lh(c, s4 + 10); c->r[5] = 0; ov_bittest_4d7ec(c);
       if (c->r[2] != 0) verdict = 0;
     }
     if (verdict == -2 && (c->mem_r32(obj + 0x74) & s1) != 0) verdict = 0;

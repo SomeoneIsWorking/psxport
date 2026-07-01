@@ -11,6 +11,7 @@
 #include <string.h>
 #include "script.h"
 #include "spawn.h"   // world_despawn
+#include "mathlib.h"  // ov_bittest_4d7ec (FUN_8004D7EC)
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
@@ -79,7 +80,7 @@ static void script_vm_4ce14(Core* c) {
     bool skip = false;
     if (!s2set) {                                        // bit7 clear -> predicate 0x8004D7EC
       c->r[4] = (uint32_t)(int32_t)(int16_t)c->mem_r16(s4 + 10); c->r[5] = 0;
-      rec_dispatch(c, 0x8004D7ECu);
+      ov_bittest_4d7ec(c);
       if (c->r[2] != 0) skip = true;
     }
     if (!skip && (c->mem_r32(s5 + 20) & mask)) skip = true;   // slot already done

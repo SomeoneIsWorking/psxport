@@ -83,7 +83,7 @@ Totals: 412 native fns, 226 owned addresses, 104 LIVE / 308 ORPHAN.
 | 0x800499E8 | ORPHAN | `ov_task0_boot` | game/scene/engine_level.cpp:134 |  |  |
 | 0x800499E8 | LIVE | `native_task0_bootstrap` | game/scene/engine_stage.cpp:1432 |  | resolve \BIN\START.BIN natively, record its {LBA,size}, switch task 0 … |
 | 0x8004BD64 | ORPHAN | `ov_obj_pos_compose` | game/world/graphics_bind.cpp:174 |  |  |
-| 0x8004CE14 | ORPHAN | `ov_script_vm_4ce14` | game/items/script.cpp:113 | 0x8004CE14 |  |
+| 0x8004CE14 | ORPHAN | `ov_script_vm_4ce14` | game/items/script.cpp:114 | 0x8004CE14 |  |
 | 0x8004CE14 | ORPHAN | `ov_script_vm_4ce14` | game/items/script.h:8 |  |  |
 | 0x8004D338 | ORPHAN | `ov_inventory_add` | game/items/inventory.cpp:149 |  |  |
 | 0x8004D4C4 | ORPHAN | `ov_inventory_give_and_flag` | game/items/inventory.cpp:162 |  |  |
