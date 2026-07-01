@@ -9057,3 +9057,21 @@ generates 28 overlay modules clean. NEXT (handoff scratch/handoff_ensure_recomp_
 that run.sh just calls ("ensure all recomp is there and matches a hash"); (2) resolve the attract-path
 (plain, no AUTO_SKIP) misses 0x800739AC (indirect jalr → seed) and 0x800810F0 (coroutine resume → maybe
 another game_coop-style loop). The AUTO_SKIP field path is clean and renders.
+
+## later-284b — intro-cutscene FREEZE + red corruption FIXED by removing the redundant PSX-render-underneath
+The later-284 root-cause (PSX-render-underneath `d0(0x8003f9a8)` recursing deep on task0's ~2KB guest
+stack → sm[0x48]=17 clobber → freeze; game_coop r29 SP-leak → red-diagonal corruption) is fixed by
+DELETING the underhood re-render from ov_field_frame (engine_stage.cpp). Key empirical finding: the
+handoff assumed we must FIRST make ov_render_frame guest-memory-free and then delete BOTH the underhood
+AND the dv_snapshot/restore rewind. Not so — `dv_restore_pre` already restores the FULL post-gameplay
+guest state (2MB RAM+scratchpad+GTE), so removing ONLY the redundant re-render (and keeping dv_restore
+as the decoupling mechanism) fixes the freeze + corruption with guest state provably correct. VERIFIED:
+PSXPORT_SELFTEST=oraclediff stays convergent native-vs-oracle (only the ~26 benign baseline bytes) through
+all narration checkpoints AND free-roam onset (native f1131, oracle f1133); nothing consumed the PSX-built
+OT/packets (native display re-derives from node data). Screenshots fx_700 (narration text+Tomba), fx_1000
+("And then…" cliff/sea), fx_1145 (walkable field, Tomba on the fishing line) render clean — the opening the
+original NEVER reached (it froze on the fishing-line pose). NEXT FRONTIER (exposed by the fix): free-roam
+aborts ~f1184 at `jal 0x80109450` with A00 resident in the MODE slot — A00's 0x80109450 is a jump-table,
+not a fn (SOP's is a fn); the GAME-stage dispatcher at 0x8010882c drives it when sm[0x4c]==0 && sm[0x4e]==1.
+See docs/findings/render.md ("Free-roam recomp-MISS: jal 0x80109450"). Making ov_render_frame write ZERO
+guest memory (native-float A00 object render → drop the dv rewind for perf) remains a valid FOLLOW-UP.

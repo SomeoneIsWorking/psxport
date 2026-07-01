@@ -291,20 +291,26 @@ static void ov_field_frame(Core* c) {
   dv_snapshot(c);
   if (c->mem_r8(0x1f800136u) < 2) ov_render_frame(c);   // 0x8003f9a8 — NATIVE render orchestrator + walk
   FFS("ff_submit810c", d0(c, 0x8010810cu));     // render submit
-  // PSX RENDER UNDERNEATH (user 2026-06-24 architecture): the native renderer must leave NO guest-memory
-  // side effects — only native GAMEPLAY may write guest memory. The native render above (ov_render_frame +
-  // submit) scribbles guest scratchpad/OT (e.g. the RotMatrix angle SVECTOR at 0x1F8000C0) as PSX-GTE
-  // transform workspace, which the still-recomp content then reads back wrong (the gameplay regression the
-  // PSXPORT_DUALCORE harness pinned to scratchpad 0x1F8000C0). So rewind to the post-gameplay state captured
-  // by dv_snapshot above and run the PSX render: guest OT/packets/scratchpad end in the correct PSX state.
-  // The native DISPLAY is produced later by ov_scene_native (ov_draw_otag), which RE-DERIVES its transforms
-  // from node/entity data — not from leftover scratchpad — so it is unaffected by this guest rewind. We do
-  // NOT call ov_draw_otag here, so the PSX render only maintains guest state and emits no VK. Skipped in the
-  // PSX-render compare mode (already PSX) and in dual-view (its own block runs the PSX pass).
+  // RENDER GUEST-MEMORY DECOUPLING (user 2026-06-24: the native renderer must leave NO guest-memory side
+  // effect — only native GAMEPLAY may write guest memory). The native render above (ov_render_frame + submit)
+  // still scribbles guest scratchpad/OT (e.g. the RotMatrix SVECTOR at 0x1F8000xx) as PSX-GTE transform
+  // workspace, which still-recomp content reads back wrong (the regression the DUALCORE harness pinned to
+  // scratchpad 0x1F8000C0). dv_restore_pre rewinds the FULL post-gameplay guest state captured by dv_snapshot
+  // above — undoing EVERY guest write the native render made — so content reads the correct PSX state.
+  //
+  // later-284: we USED to also re-run the PSX render (d0(0x8003f9a8)+d0(0x8010810c)) here "to leave guest
+  // OT/packets PSX-correct." That was REDUNDANT and HARMFUL: dv_restore_pre already yields the exact
+  // post-gameplay guest state, and NOTHING consumes the PSX-built OT/packets (the native display,
+  // ov_scene_native/ov_draw_otag, re-derives its transforms from node/entity data, not leftover OT). Proven:
+  // with the re-render removed, oraclediff stays convergent native-vs-oracle through the whole opening incl.
+  // free-roam onset (only the benign baseline bytes differ). The re-render was ALSO the intro-cutscene FREEZE
+  // + red-diagonal corruption: 0x8003f9a8 recurses deep (A00 object render chain) on task0's ~2KB guest stack
+  // and overflowed into the task table, clobbering sm[0x48]=17 -> ov_game_frame ret 0 -> game_coop yield-loop
+  // freeze (+ the game_coop r29 SP leak that grew the red corruption). Removing it fixes all of it at once.
+  // The TRUE end-state (make ov_render_frame write ZERO guest memory so dv_snapshot/restore can go too) is a
+  // separate perf/architecture follow-up; the rewind correctly enforces the invariant meanwhile.
   if (!g_render_psx && !g_dualview && c->mem_r8(0x1f800136u) < 2) {
     dv_restore_pre(c);
-    FFS("ff_psx_underhood", d0(c, 0x8003f9a8u));   // PSX field render orchestrator -> correct guest state
-    FFS("ff_psx_submit",    d0(c, 0x8010810cu));   // render submit (faithful), guest-state only (no VK)
   }
   FFS("ff_77d8c", d0(c, 0x80077d8cu));
   FFS("ff_area75a80", d0(c, 0x80075a80u));      // per-frame area update

@@ -885,6 +885,24 @@ in-port profiler (later-186, `interp.cpp`) gives the TIME + FREQUENCY histograms
 ---
 
 # CURRENT FRONTIER (work these, in this order)
+**SESSION 2026-07-01 (later-284b) — intro-cutscene FREEZE + red corruption FIXED; NEW frontier = free-roam
+`jal 0x80109450` recomp-MISS.** The later-284 root-cause (PSX-render-underneath recursing deep on task0's
+~2KB guest stack → sm[0x48]=17 clobber → freeze + game_coop r29 SP-leak → red corruption) is FIXED by
+DELETING the redundant underhood re-render in ov_field_frame (engine_stage.cpp) — `dv_restore_pre` alone
+keeps guest state PSX-correct (nothing consumes the PSX-built OT/packets; the native display re-derives from
+node data). VERIFIED: oraclediff convergent native-vs-oracle through free-roam onset; the opening now PLAYS
+(narration→cliff→walkable field) and renders clean (fx_700/1000/1145). Overturned the handoff's assumption
+that dv_snapshot/restore had to go too — the rewind is a valid decoupling mechanism; the render bug only
+needed the redundant re-render gone. (Making ov_render_frame write ZERO guest memory → drop the rewind for
+perf = a valid FOLLOW-UP, not required.)
+- ☐ **NEXT FRONTIER — free-roam aborts ~f1184 at `jal 0x80109450` with A00 resident in the MODE slot.** The
+  GAME-stage dispatcher 0x8010882c does a hardcoded `jal 0x80109450` when sm[0x4c]==0 && sm[0x4e]==1. In SOP
+  0x80109450 is a fn; in A00 (correctly resident at free-roam) it is a jump-table (data). Both native & oracle
+  reach it with A00 resident → NOT a residency divergence. Decode the A00 field-frame flow (is this branch even
+  meant to run under A00? is A00's 0x80109450 reached via the pointer table = indexed jalr, not this direct
+  jal?), then own the A00 field-frame handler native or seed the right entry — no empty stub. Full writeup:
+  docs/findings/render.md "Free-roam recomp-MISS: jal 0x80109450".
+
 **SESSION 2026-07-01 (later-283) — INTERACTIVE-PLAY oracle scan added; the render-leaf frontier below was
 STALE (corrected).** Two corrections + one new capability this session:
 - **CORRECTION: `ov_terrain` is NOT orphaned — it is wired and FIRING in the live free-roam field.** The
