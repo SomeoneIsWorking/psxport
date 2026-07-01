@@ -981,8 +981,13 @@ ov_field_frame's 9 substrate children owned native (was 2 native/9, now 4 native
   `ov_field_frame_x` still went through the substrate. Added `extern "C" void cam_update(Core* c)` shim
   (thin wrapper over `CutsceneCamera(c, CAM_OBJ).update()`) and replaced both sites. Smoke: newgame + skip
   500 + run 200 = 727 frames clean, no derail. ov_field_frame is now 7 native/9 direct children.
-- ☐ **NEXT — the content-heavy dispatchers** (engine_stage.cpp ~L285, still `d0(...)` in ov_field_frame):
-  0x80050de4 (42-overlay-calls, scene-table @0x800f2418), 0x8001cac0 (22-way state dispatch @0x800bf870) — they descend into per-area A00 object behaviors (the 0x8013xxxx
+- ✅ **DONE (later-291) — 0x8001CAC0 wired native as `Engine::areaModeDispatch`.** 22-way area-mode
+  jump table on the byte at 0x800BF870 (extracted verbatim from MAIN.EXE .text @0x80010000: 12
+  overlay handlers + 10 no-op defaults). Skips the tiny resident stubs 0x8001CBxx and rec_dispatches
+  the overlay handler directly (identical behavior; the stub is `jal <h>; j <default>`). Smoke: 2000
+  frames clean. ov_field_frame is now 8 native / 9 direct children.
+- ☐ **NEXT — the last content-heavy dispatcher** (engine_stage.cpp, still `d0(...)` in ov_field_frame):
+  0x80050de4 (42-overlay-calls, scene-table @0x800f2418). — they descend into per-area A00 object behaviors (the 0x8013xxxx
   handlers, ~5/frame each in recdep). Method: reimplement the DISPATCHER faithfully, route methods via
   dispatch_native_behavior|rec_dispatch, A/B RAM+spad 0-diff (build native vs `git stash` substrate, dumpram
   at f1500, cmp). Re-run `recdep` after each to re-rank.

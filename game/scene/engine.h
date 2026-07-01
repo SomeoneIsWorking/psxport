@@ -30,4 +30,12 @@ public:
   //   handled here (was `ov_game_frame`).
   void stagePrologue();
   int  frame();
+
+  // ── ov_field_frame direct children (progressive class-ification) ──────────────────────────
+  // areaModeDispatch: the 22-way area-mode jump-table dispatcher at guest 0x8001CAC0. Reads the
+  //   area RENDER-MODE byte at 0x800BF870 and dispatches to the overlay handler that owns that
+  //   mode (each mode = an entry in the resident table at 0x80010000; 10 of 22 slots are the
+  //   "no-op default" stub 0x8001CB98, the other 12 jal one specific overlay leaf then return).
+  //   Replaces `d0(c, 0x8001cac0u)` in the field-frame body.
+  void areaModeDispatch();
 };

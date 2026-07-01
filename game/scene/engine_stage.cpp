@@ -394,7 +394,8 @@ static void ov_field_frame(Core* c) {
     FFS("ff_26368", ov_arr8_dispatch_26368(c)); FFS("ff_objwalk", ov_objwalk(c));     // 0x80026368/0x8007a904 NATIVE
     FFS("ff_25588", ov_scene_25588(c)); FFS("ff_4fe84", ov_scene_4fe84(c));           // 0x80025588/0x8004fe84 NATIVE
     FFS("ff_disp26c88", ov_disp_26c88(c)); FFS("ff_22a80", d0(c, 0x80022a80u));       // 0x80026c88 NATIVE
-    FFS("ff_6ec44", CutsceneCamera::runFieldUpdate(c)); FFS("ff_50de4", d0(c, 0x80050de4u)); FFS("ff_1cac0", d0(c, 0x8001cac0u));   // 0x8006ec44 NATIVE (CutsceneCamera::update)
+    FFS("ff_6ec44", CutsceneCamera::runFieldUpdate(c)); FFS("ff_50de4", d0(c, 0x80050de4u));   // 0x8006ec44 NATIVE (CutsceneCamera::update)
+    FFS("ff_1cac0", c->engine.areaModeDispatch());   // 0x8001cac0 NATIVE (Engine::areaModeDispatch)
   }
   // DUAL-VIEW: snapshot the post-gameplay / pre-render state so the side-by-side PSX render pass can run
   // from it (the native render below consumes per-frame queues, so it is not re-runnable). No-op unless on.
@@ -1073,6 +1074,31 @@ void ov_game_stage_main(Core* c) {
 #include "engine.h"
 void Engine::stagePrologue() { ov_game_stage_prologue(core); }
 int  Engine::frame()         { return ov_game_frame(core); }
+
+// Engine::areaModeDispatch — the 22-way area-mode dispatcher at guest 0x8001CAC0. See engine.h.
+// The 22-entry jump table lives in MAIN.EXE .text at 0x80010000 (extracted from MAIN.EXE below);
+// each valid entry is a small resident stub (0x8001CB00, 0x8001CB10, ..., 0x8001CB90) that
+// `jal <overlay-handler>` then falls through to the shared epilogue 0x8001CB98. Modes 1,2,3,8,9,
+// 12,14,16,17,18,19,20 point to the epilogue directly (no-op for that mode). We skip the stub
+// hop and rec_dispatch the overlay handler directly. a0 = 0x800ED018 (fixed arg the dispatcher
+// sets before the indirect jr, kept identical).
+void Engine::areaModeDispatch() {
+  Core* c = core;
+  uint8_t idx = c->mem_r8(0x800BF870u);
+  if (idx >= 22) return;
+  static const uint32_t handlers[22] = {
+    /* 0*/ 0x8011534Cu, /* 1*/ 0,           /* 2*/ 0,           /* 3*/ 0,
+    /* 4*/ 0x8013EE84u, /* 5*/ 0x80136CDCu, /* 6*/ 0x8014189Cu, /* 7*/ 0x8012F6ECu,
+    /* 8*/ 0,           /* 9*/ 0,           /*10*/ 0x801140D0u, /*11*/ 0x80113F94u,
+    /*12*/ 0,           /*13*/ 0x80116980u, /*14*/ 0,           /*15*/ 0x80116560u,
+    /*16*/ 0,           /*17*/ 0,           /*18*/ 0,           /*19*/ 0,
+    /*20*/ 0,           /*21*/ 0x8010B918u,
+  };
+  uint32_t target = handlers[idx];
+  if (!target) return;
+  c->r[4] = 0x800ED018u;
+  rec_dispatch(c, target);
+}
 
 // Register the GAME-stage area-init overrides when this just-loaded overlay is GAME.BIN at the stage base.
 // Detect by the fixed entry + handler signatures (START.BIN/DEMO.BIN are smaller and hold stale bytes at
