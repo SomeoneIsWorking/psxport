@@ -25,6 +25,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "graphics_bind.h"   // ov_obj_render_update (FUN_800517F8)
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
@@ -115,7 +116,7 @@ void beh_two_child_steer(Core* c) {
    if (leafr2(c, nd, a1, 0x800778e4u) == 0) goto Lret;   // FUN_800778E4(node, a1)
    uint32_t rc1 = c->mem_r32(nd + 0xc4);
    c->mem_w16(rc1 + 10, (uint16_t)((c->mem_r16(rc1 + 10) - 32) & 0x0fff));
-   leaf1(c, nd, 0x800517f8u);                        // FUN_800517F8(node)
+   c->r[4] = nd; ov_obj_render_update(c);                        // FUN_800517F8(node)
    goto Lret;
  }
 

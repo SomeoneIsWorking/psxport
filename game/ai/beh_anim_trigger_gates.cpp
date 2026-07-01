@@ -26,6 +26,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "spawn.h"   // world_despawn
+#include "graphics_bind.h"   // ov_obj_render_update (FUN_800517F8)
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
@@ -94,7 +95,7 @@ void beh_anim_trigger_gates(Core* c) {
   {
     uint32_t rec = c->mem_r32(obj + 0xC0);
     c->mem_w16(rec + 12, (uint16_t)(c->mem_r16(rec + 12) + 16));
-    leaf(c, obj, 0x800517F8u);
+    c->r[4] = obj; ov_obj_render_update(c);
   }
   goto Lret;
 

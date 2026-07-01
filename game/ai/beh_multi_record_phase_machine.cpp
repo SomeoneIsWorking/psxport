@@ -36,6 +36,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "graphics_bind.h"   // ov_obj_render_update (FUN_800517F8)
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
@@ -57,7 +58,7 @@ static inline void leaf4(Core* c, uint32_t a0, uint32_t a1, uint32_t a2, uint32_
 // COMMON TAIL (0x801353C8): node[8]++ / FUN_800517F8(node) / node[8]--.
 static inline void common_tail(Core* c, uint32_t nd) {
   c->mem_w8(nd + 8, (uint8_t)(c->mem_r8(nd + 8) + 1));
-  leaf1(c, nd, 0x800517f8u);
+  c->r[4] = nd; ov_obj_render_update(c);
   c->mem_w8(nd + 8, (uint8_t)(c->mem_r8(nd + 8) - 1));
 }
 
@@ -149,7 +150,7 @@ void beh_multi_record_phase_machine(Core* c) {
    }
    // common cascade (0x80135238): node[8]++/FUN_800517F8/node[8]--, then 6x FUN_801252C0 + FUN_8004CC64
    c->mem_w8(nd + 8, (uint8_t)(c->mem_r8(nd + 8) + 1));
-   leaf1(c, nd, 0x800517f8u);
+   c->r[4] = nd; ov_obj_render_update(c);
    c->mem_w8(nd + 8, (uint8_t)(c->mem_r8(nd + 8) - 1));
    uint32_t a3;
    a3 = leafr3(c, nd, 1, 0, 0x801252c0u);

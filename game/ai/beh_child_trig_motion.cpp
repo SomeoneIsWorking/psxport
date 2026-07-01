@@ -26,6 +26,7 @@
 #include <string.h>
 #include "spawn.h"   // world_despawn
 #include "trig.h"    // class Trig — libgte rsin/rcos
+#include "graphics_bind.h"   // ov_obj_render_update (FUN_800517F8)
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
@@ -152,7 +153,7 @@ void beh_child_trig_motion(Core* c) {
   }
 
  L8c00:
-  leaf1(c, nd, 0x800517F8u);                          // FUN_800517F8(node)
+  c->r[4] = nd; ov_obj_render_update(c);                          // FUN_800517F8(node)
  Lret:
   return;
 }

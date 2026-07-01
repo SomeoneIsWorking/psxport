@@ -87,13 +87,13 @@ void beh_typed_anim_spawn(Core* c) {
       if (c->r[2] != 0) goto Lret;
       uint32_t rec = c->mem_r32(s0 + 0xC0);         // node[0xC0]
       c->mem_w16(rec + 8, (uint16_t)(n3 == 3 ? 182 : (uint16_t)(int16_t)-182));
-      leaf1(c, s0, 0x800517F8u);                    // FUN_800517F8(node)
+      c->r[4] = s0; ov_obj_render_update(c);                    // FUN_800517F8(node)
       goto Lret;
     }
     case 5:                                         // jt0 -> 0x8012db08
       (c->r[4]=s0, c->r[5]=12, c->r[6]=7, ov_obj_record_init(c));             // FUN_80051B70(node, 12, 7)
       if (c->r[2] != 0) goto Lret;
-      leaf1(c, s0, 0x800517F8u);                    // FUN_800517F8(node)
+      c->r[4] = s0; ov_obj_render_update(c);                    // FUN_800517F8(node)
       goto Lret;
   }
   goto Lret;

@@ -23,6 +23,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "graphics_bind.h"   // ov_obj_render_update (FUN_800517F8)
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
@@ -78,7 +79,7 @@ void beh_single_child_cull(Core* c) {
    if (work) {
      if (leafr1(c, nd, 0x8007778cu) != 0) {        // FUN_8007778C(node)
        leaf1(c, nd, 0x80132020u);                  // FUN_80132020(node)
-       leaf1(c, nd, 0x800517f8u);                  // FUN_800517F8(node)
+       c->r[4] = nd; ov_obj_render_update(c);                  // FUN_800517F8(node)
      }
    }
    c->mem_w8(nd + 0x2b, 0);                         // node[0x2B] = 0 (every STATE-1 path)

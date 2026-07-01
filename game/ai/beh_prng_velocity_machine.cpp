@@ -26,6 +26,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "graphics_bind.h"   // ov_obj_render_update (FUN_800517F8)
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
@@ -273,7 +274,7 @@ void beh_prng_velocity_machine(Core* c) {
    goto L7b84;
  }
  L7b84: {
-   call1(c, s1, 0x800517f8u);                        // FUN_800517F8(node)
+   c->r[4] = s1; ov_obj_render_update(c);            // FUN_800517F8(node) — native
    call2(c, s1, 1, 0x8004b374u);                     // FUN_8004B374(node, 1)
    goto Lret;
  }

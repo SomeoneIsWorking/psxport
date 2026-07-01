@@ -31,6 +31,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "graphics_bind.h"   // ov_obj_render_update (FUN_800517F8)
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
@@ -163,7 +164,7 @@ void beh_lift_platform(Core* c) {
       c->mem_w8(nd + 6, 0);
       c->mem_w8(nd + 5, (uint8_t)(c->mem_r8(nd + 5) - 1));
     }
-    leaf1(c, nd, 0x800517f8u);                             // FUN_800517F8
+    c->r[4] = nd; ov_obj_render_update(c);                             // FUN_800517F8
   }
 
  L6c4:

@@ -28,6 +28,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "graphics_bind.h"   // ov_obj_render_update (FUN_800517F8)
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
@@ -152,7 +153,7 @@ void beh_quad_record_table_seed(Core* c) {
  // ================= shared tail (state 0 & 1) =================
  L60b4:
   leaf1(c, nd, 0x80135414u);                         // FUN_80135414(node)
-  leaf1(c, nd, 0x800517f8u);                          // FUN_800517F8(node)
+  c->r[4] = nd; ov_obj_render_update(c);                          // FUN_800517F8(node)
  Lret:
   return;
 }
