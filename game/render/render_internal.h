@@ -98,6 +98,18 @@ static inline void sil_bbox_log(const char* tag, const float* px, const float* p
   if (maxx < -10 || minx > 40 || maxy < 120 || miny > 150) return;   // outside the repro window, skip
   fprintf(stderr, "[silbbox] %s bbox x=[%.1f,%.1f] y=[%.1f,%.1f]\n", tag, minx, maxx, miny, maxy);
 }
+// Same, but also identifies WHICH entity node emitted the quad (cur_render_node(c) at call time) — use
+// at per-object submit sites so overlapping bboxes at the repro window can be traced back to the object.
+static inline void sil_bbox_log_node(const char* tag, const float* px, const float* py, int n, uint32_t node) {
+  if (!cfg_dbg("silbbox")) return;
+  float minx = 1e9f, maxx = -1e9f, miny = 1e9f, maxy = -1e9f;
+  for (int i = 0; i < n; i++) {
+    if (px[i] < minx) minx = px[i]; if (px[i] > maxx) maxx = px[i];
+    if (py[i] < miny) miny = py[i]; if (py[i] > maxy) maxy = py[i];
+  }
+  if (maxx < -10 || minx > 40 || maxy < 120 || miny > 150) return;
+  fprintf(stderr, "[silbbox] %s node=%08X bbox x=[%.1f,%.1f] y=[%.1f,%.1f]\n", tag, node, minx, maxx, miny, maxy);
+}
 static inline void sil_bbox_log_i(const char* tag, const int* xs, const int* ys, int n) {
   if (!cfg_dbg("silbbox")) return;
   float pxf[8], pyf[8]; n = n > 8 ? 8 : n;

@@ -14,6 +14,7 @@
 #include "game.h"
 #include "cfg.h"
 #include "mods.h"   // g_mods — engine-native directional lighting on the terrain (matches engine_submit)
+#include "render_internal.h"   // sil_bbox_log_node (dark-outline coverage-gap diag)
 #include <stdint.h>
 #include <stdio.h>
 #include <math.h>
@@ -156,6 +157,7 @@ void terrain_render_pc(Core* c) {
         sv[kk][0] = wv[kk][0]; sv[kk][1] = wv[kk][1]; sv[kk][2] = pz; }
       cast = sv;
     }
+    sil_bbox_log_node("terrain", px, py, 4, node);
     gpu_draw_world_quad(c, px, py, depth, u, v, r, g, b, tp, clut, semi, cast);
     drawn++;
     if (ctl <= 0) break;                                   // control sign marks the last record

@@ -422,7 +422,7 @@ static void submit_poly_gt3_native(Core* c) {
     u[3] = u[2]; v[3] = v[2]; r[3] = r[2]; g[3] = g[2]; b[3] = b[2];
     int semi = (code & 0x02000000) ? 1 : 0;
     if (!semi) engine_shade_face(p, 3, r, g, b);             // engine-native lighting (opaque only)
-    sil_bbox_log("gt3_native", px, py, 3);
+    sil_bbox_log_node("gt3_native", px, py, 3, cur_render_node(c));
     { float vv[4][3]; const float (*sv)[3] = shadow_verts(p, 3, semi, vv);   // dynamic shadow verts (carried on the item)
       gpu_draw_world_quad(c, px, py, depth, u, v, r, g, b, tp, clut, semi, sv); }
     fps60_stamp(c, p, 3);                                    // fps60: capture for midpoint reprojection
@@ -478,7 +478,7 @@ static void submit_poly_gt4_native(Core* c) {
     }
     int semi = (code0 & 0x02000000) ? 1 : 0;                  // GP0 op byte (code0>>24) bit1 = semi-transparency
     if (!semi) engine_shade_face(p, 4, r, g, b);             // engine-native lighting (opaque only)
-    sil_bbox_log("gt4_native", px, py, 4);
+    sil_bbox_log_node("gt4_native", px, py, 4, cur_render_node(c));
     { float vv[4][3]; const float (*sv)[3] = shadow_verts(p, 4, semi, vv);   // dynamic shadow verts (carried on the item)
       gpu_draw_world_quad(c, px, py, depth, u, v, r, g, b, tp, clut, semi, sv); }
     fps60_stamp(c, p, 4);                                    // fps60: capture for midpoint reprojection
@@ -557,7 +557,7 @@ static void submit_poly_gt4_bp(Core* c) {
       }
       int semi = (ctl & 0x40000000) ? 1 : 0;
       if (!semi) engine_shade_face(p, 4, r, g, b);      // engine-native lighting (opaque only)
-      sil_bbox_log("gt4_bp", px, py, 4);
+      sil_bbox_log_node("gt4_bp", px, py, 4, cur_render_node(c));
       { float vv[4][3]; const float (*sv)[3] = shadow_verts(p, 4, semi, vv);   // dynamic shadow verts (carried on the item)
         gpu_draw_world_quad(c, px, py, depth, u, v, r, g, b, tp, clut, semi, sv); }
       fps60_stamp(c, p, 4);                             // fps60: capture for midpoint reprojection

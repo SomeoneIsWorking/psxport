@@ -17,6 +17,45 @@
   base vertex-color / geomblk data (native_terrain.cpp's own comment flags "FIRST CUT: no DPCT/DPCS depth-cue"
   as a known gap), and whether that's even wrong vs just how the original renders. NEEDS non-visual state
   inspection (provat/scene channels) on a live reproduction, not more screenshots.
+- **ROOT-CAUSED (2026-07-01, session 4) — the "dark outline" IS a quantified per-pixel divergence between
+  native (A) and the TRUE independent oracle (B, `PSXPORT_SBS_MODE=oracle`), not a lighting/SSAO artifact.**
+  Reproduced at the coastal-cliff-over-the-sea view (village start area, tap Cross to wake Tomba then hold
+  Left once — deterministic via `scratch/bin/pad_session.pad` / `PSXPORT_PAD_REPLAY`, though replay currently
+  desyncs across the 2 SBS cores' shared static replay-frame counter in `pad_input.cpp`, so re-driving the
+  same 3 dbgclient commands live is more reliable for now). A column-by-column scan
+  (`scratch/silhouette_scan2.py`) of an `sbs dump` side-by-side PPM found a SYSTEMATIC 1-2px near-black run
+  (RGB roughly (8-24,16-32,24-40)) at the water/cliff-edge boundary across x=0..59 y≈143-157 on pane A
+  (~300+ of 320 columns hit) and ZERO matching hits on pane B in that x-range (B's only near-black-crack
+  hits are unrelated tree-shadow noise at x≈166-213). This is conclusive: it is a NATIVE-RENDERER-ONLY
+  coverage crack, not PSX-authentic shading.
+  **Located the exact source** via the new `silbbox`/`sil_bbox_log_node` diag (game/render/render_internal.h,
+  wired into `submit_poly_gt3_native`/`submit_poly_gt4_native`/`submit_poly_gt4_bp` in engine_submit.cpp and
+  `terrain_render_pc` in native_terrain.cpp): at the repro, ONLY two `gt4_native` quads (submit_poly_gt4_native,
+  the generic per-object GT3/GT4 library) overlap the crack window, and BOTH come from the SAME entity node
+  `0x800E7E80` — a `type=00 handler=00000000` static-scenery prop with 17 render commands
+  (`node+0xC0[0..16]`, 17 distinct geomblks), i.e. one multi-chunk static mesh (almost certainly the
+  sea/cliff-edge terrain-decoration model), NOT the walkable ground (`native_terrain.cpp` logged NOTHING in
+  this window, confirming last session's terrain ruling-out). The two quads' bboxes are
+  `y=[149.6,168.7]` and `y=[140.1,155.3]` — they overlap by ~5px in Y exactly where the crack sits, meaning
+  this is a SEAM between two of that object's 17 independently-submitted geomblk chunks (each chunk goes
+  through its own `eproj_compose_object` + `native_gt3gt4` call in `submit_perobj_flush`,
+  engine_render_walk.cpp), not a gap to the sky backdrop as originally hypothesized.
+  **NOT yet determined:** whether the two chunks' shared boundary vertices are bit-identical in the source
+  geomblk data (in which case the crack is purely a FLOAT reprojection/rasterization precision issue —
+  independent per-quad screen-space rounding leaving a sub-pixel gap neither triangle claims) or whether the
+  original PSX fixed-point data itself has a small deliberate offset between chunks that the PSX's
+  integer/OT-based renderer happened to not gap on. Next step: dump the two specific cmd's geomblk vertex
+  data at the shared edge and diff them; if bit-identical, the fix is likely a small screen-space overscan
+  (nudge each object-chunk quad's silhouette-facing edges out by a sub-pixel epsilon) or switching adjacent
+  chunks of ONE object to a single indexed draw so the rasterizer's edge rule doesn't re-decide coverage
+  per-chunk.
+  **Tooling note:** `PSXPORT_PAD_REPLAY=<path>` + the always-on `PSXPORT_PAD_RECORD` (default
+  `scratch/bin/pad_session.pad`) IS the way to reproduce a hand/scripted-navigated repro spot deterministically
+  headless — but its frame counter (`pad_input.cpp` `rec_fc`, a function-local static) is shared across BOTH
+  SBS cores' per-frame calls, so a recording made during a 2-core SBS session and replayed into a fresh
+  2-core SBS session can desync (each core's step consumes one array slot, interleaved). Works fine for
+  single-core (AUTO_SKIP) recordings replayed into a single-core run. Worth fixing (per-core replay index) if
+  this keeps mattering.
 - **cause (3, root-caused via live debug-server inspection, non-destructive, on the user's own paused session):**
   `FUN_8007E9C8` (the PSX fade-rect builder, native reimpl already exists as `ov_8007E9C8`
   game/render/gpu_lib.cpp:75 but is ORPHAN) is called from 24 guest sites across 8 recompiled shard files:
