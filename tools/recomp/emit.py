@@ -32,7 +32,7 @@ from decode import decode
 # recomp identity and re-emits when the stamp on disk (generated/.recomp_version) differs, so a stale
 # generated/ on another box (which an input-content hash alone failed to catch — a box can build a
 # self-consistent-but-outdated set) is forced to regenerate. Date + a per-day counter; keep it terse.
-RECOMP_VERSION = "2026-07-01.1"
+RECOMP_VERSION = "2026-07-01.3"
 
 R = lambda n: f"c->r[{n}]"
 
@@ -511,8 +511,20 @@ def emit_func(exe, lo, hi, funcset, out, name, N, reentry=()):
         return True                          # normal / conditional branch / jal -> reaches hi
     out.append(f"void {name}(Core* c) {{")
     emit_run(lo, hi)                        # the proven contiguous body — entry (lo) always first
-    if hi in funcset and hi in reentry and body_falls_through():
-        out.append(f"  {call_or_dispatch(hi, funcset, N)} return;")  # fall-through into the re-entry seed
+    if hi in funcset and body_falls_through():
+        # GENUINE FALL-THROUGH into the next function (hi). Chain to it (a nested call preserves the C
+        # stack so a deep yield inside hi suspends correctly on the coro). This models real MIPS execution
+        # for a function SPLIT mid-body — e.g. a jump-table case fragment (0x80022854) whose last insn is a
+        # `jal` and which then falls through into the next case/epilogue fragment (0x8002285c). A bare
+        # `return` here DROPS that control-flow edge: the shared-frame epilogue (addiu sp,+N; jr ra) in the
+        # fall-through fragment never runs, LEAKING the caller's stack frame every time the path is taken
+        # (later-286: 0x28/frame guest-sp leak overflowed task0's stack into the task table after ~50 field
+        # frames -> free-roam recomp-MISS crash). SCOPED by body_falls_through(): a normal `jr ra`/`j`
+        # terminator returns False, so a natural function boundary is unaffected; only a body whose last
+        # instruction actually reaches `hi` (normal insn / conditional branch / jal) chains. If chaining
+        # surfaces an unseeded jal target -> recomp-MISS, that reveals a REAL reachable path to seed, which
+        # is correct (fail-fast) — far better than silently corrupting the guest stack.
+        out.append(f"  {call_or_dispatch(hi, funcset, N)} return;")  # fall-through into the next fragment
     else:
         out.append("  return;")
     # DUPLICATED shared-epilogue tails (collect_tail_dups), reached only via goto from the body / a tail.
@@ -988,6 +1000,15 @@ def main():
         #     available in generated/ for RE (and rec_set_override works on them by address regardless).
         0x8002AB5C,  # field terrain/map renderer — node+24 render-fn ptr of the t32 render-list node
         0x80051C8C,  # per-object transform builder (node+0x98 matrix from euler angles + position)
+        # --- per-object RENDER sub-handlers reached ONLY via a runtime handler pointer (the perobj
+        #     render dispatcher FUN_8003CCA4 `jr v0` where v0 = a node's render-cmd fn ptr, built at
+        #     area-load into guest data — NOT the static table 0x80014EC8). They are ALSO jump-table
+        #     case labels of the sibling FUN_8003D584's own switch, so discovery treated them as
+        #     mid-function labels and did NOT emit function entries; a runtime dispatch to them then
+        #     recomp-MISSes via FUN_8003CCA4's switch default. Latent until the task0 stack-leak fix
+        #     (later-286) let free-roam run long enough to render the object that carries this handler.
+        0x8003D5CC,  # FUN_8003CCA4/FUN_8003D584 perobj render sub-handler (switch case target)
+        0x8003D8AC,  # FUN_8003CCA4/FUN_8003D584 perobj render sub-handler (switch case target) — the observed miss
         # --- native-override targets: seed so the func_<addr> wrapper exists and
         #     rec_set_override(addr,fn) reaches them (rec_set_override only works on RECOMPILED
         #     entries). libcard B0-vector I/O trampolines, overridden by memcard.c for native

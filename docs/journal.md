@@ -1,5 +1,26 @@
 # Debug / progress journal
 
+## later-286 — free-roam recomp-MISS FIXED: recompiler dropped a fall-through edge → 0x28/frame guest-sp leak (later-284c AND later-285 both wrong)
+The free-roam crash (`newgame; run 4000` → abort ~f1184 at `[recomp-MISS] 0x80109450`) is FIXED. Both prior
+diagnoses were falsified: later-284c blamed the A00 render recursion; later-285 blamed a "gameplay object-graph
+recursion ~4× deeper than the oracle." Neither was a recursion-depth issue at all. **Root cause: the recompiler
+(`emit.py`) DROPPED a control-flow edge.** `emit_func` only chained a function that FALLS THROUGH into the next
+function (`hi`) when `hi in reentry` (a narrow GAME-prologue special-case); every other genuine fall-through got a
+bare `return;`. `gen_func_80022854` (a jump-table case fragment of the object-update loop 0x80022760, fires
+once/frame at free-roam) ends in `jal 0x80022190` then FALLS THROUGH into the shared-frame epilogue at 0x8002285c
+(`addiu sp,+0x28; jr ra`); the bare `return;` skipped that epilogue → the 0x28 frame 0x80022760's prologue
+allocated leaked EVERY frame. Guest sp is persisted across frames in the task ctx, so it accumulated: after ~50
+frames sp bled from ~0x801FEA00 to ~0x801FE0F8, and the per-frame native render pass (ov_render_frame →
+ov_a00_gen_80122974 → …→ 0x80146478, substrate on task0's stack) then overflowed into the task table at
+0x801FE04C → sm corrupt → ov_game_frame ret 0 → game_coop → jal 0x80109450 MISS. The interpreter follows the real
+fall-through so the oracle never leaked (its task0 sp stayed at 0x801FE7A8 — the datum later-285 misread as
+"recurses less deep"). Found via a min-sp probe (entry sp −0x28/frame = leak not recursion), then net-sp bisect to
+d0(0x80022a80) → 0x80022760 → gen_func_80022854. **Fix:** (1) `emit.py` chains the fall-through whenever
+`hi in funcset and body_falls_through()` (general recompiler correctness fix; natural `jr ra`/`j` boundaries
+unaffected). (2) That surfaced a latent later-272-class discovery gap — FUN_8003CCA4's perobj `jr v0` dispatches a
+node handler 0x8003D8AC (a case-label inside FUN_8003D584, no function entry) → seeded 0x8003D5CC/0x8003D8AC.
+Verified: `newgame; run 6000` holds free-roam steady, zero net sp leak, clean exit. See findings/render.md.
+
 ## later-275 — narration recomp-MISS 0x8010BF54 fixed (overlay-ID re-validation + dangling-render-pointer guard); next blocker = A00 objects render pre-model-attach
 The narration cutscene (full intro, NOT skipped — `newgame` then `run`, no Start) hit `recomp-MISS
 0x8010BF54`. TWO distinct substrate bugs, both fixed; then a THIRD (a real render-timing bug) is exposed.
