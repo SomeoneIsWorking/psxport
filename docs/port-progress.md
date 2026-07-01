@@ -986,8 +986,15 @@ ov_field_frame's 9 substrate children owned native (was 2 native/9, now 4 native
   overlay handlers + 10 no-op defaults). Skips the tiny resident stubs 0x8001CBxx and rec_dispatches
   the overlay handler directly (identical behavior; the stub is `jal <h>; j <default>`). Smoke: 2000
   frames clean. ov_field_frame is now 8 native / 9 direct children.
-- ☐ **NEXT — the last content-heavy dispatcher** (engine_stage.cpp, still `d0(...)` in ov_field_frame):
-  0x80050de4 (42-overlay-calls, scene-table @0x800f2418). — they descend into per-area A00 object behaviors (the 0x8013xxxx
+- ✅ **DONE (later-292) — 0x80050DE4 wired native as `Engine::sceneStateStep`.** The SCENE-INIT /
+  SCENE-RUN state machine (phase byte @0x800F2418; two 22-entry overlay handler tables extracted
+  verbatim from MAIN.EXE .text @0x80015A40 init / @0x80015A98 run, 21 overlay leaves + 1 default
+  each, indexed by the same 0x800BF870 render-mode byte). Phase 0 = call INIT handler then set
+  phase=1; phase 1 = per-frame RUN handler; phase <0 or ≥2 = no-op. Handlers get a0 = 0x800F2418.
+  Smoke: 2000 frames clean. **ov_field_frame is now 9 native / 9 direct children — every direct
+  child of the per-frame field driver is native.** The recomp-dep frontier moves down to those
+  natives' own leaves (rand 0x8009A450, matrix 0x80051794, libgpu, and each overlay handler's
+  callees). — they descend into per-area A00 object behaviors (the 0x8013xxxx
   handlers, ~5/frame each in recdep). Method: reimplement the DISPATCHER faithfully, route methods via
   dispatch_native_behavior|rec_dispatch, A/B RAM+spad 0-diff (build native vs `git stash` substrate, dumpram
   at f1500, cmp). Re-run `recdep` after each to re-rank.

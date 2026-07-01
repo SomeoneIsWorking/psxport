@@ -38,4 +38,15 @@ public:
   //   "no-op default" stub 0x8001CB98, the other 12 jal one specific overlay leaf then return).
   //   Replaces `d0(c, 0x8001cac0u)` in the field-frame body.
   void areaModeDispatch();
+
+  // sceneStateStep: the per-frame area SCENE-INIT / SCENE-RUN state machine at guest 0x80050DE4.
+  //   Two overlay-handler tables of 22 entries each (indexed by the same render-mode byte
+  //   0x800BF870 that areaModeDispatch uses), plus a scene-phase byte at 0x800F2418:
+  //     phase == 0 -> INIT: call the INIT handler for the current area mode, set phase=1.
+  //     phase == 1 -> RUN:  call the RUN handler for the current area mode (per-frame update).
+  //     phase < 0 or >= 2 -> no-op.
+  //   Both handler tables extracted verbatim from MAIN.EXE .text (@0x80015A40 init, @0x80015A98 run,
+  //   21 overlay leaves + 1 default no-op each). Handlers take a0 = 0x800F2418 (the scene-state
+  //   base). Replaces `d0(c, 0x80050de4u)` in the field-frame body.
+  void sceneStateStep();
 };

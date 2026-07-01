@@ -394,8 +394,9 @@ static void ov_field_frame(Core* c) {
     FFS("ff_26368", ov_arr8_dispatch_26368(c)); FFS("ff_objwalk", ov_objwalk(c));     // 0x80026368/0x8007a904 NATIVE
     FFS("ff_25588", ov_scene_25588(c)); FFS("ff_4fe84", ov_scene_4fe84(c));           // 0x80025588/0x8004fe84 NATIVE
     FFS("ff_disp26c88", ov_disp_26c88(c)); FFS("ff_22a80", d0(c, 0x80022a80u));       // 0x80026c88 NATIVE
-    FFS("ff_6ec44", CutsceneCamera::runFieldUpdate(c)); FFS("ff_50de4", d0(c, 0x80050de4u));   // 0x8006ec44 NATIVE (CutsceneCamera::update)
-    FFS("ff_1cac0", c->engine.areaModeDispatch());   // 0x8001cac0 NATIVE (Engine::areaModeDispatch)
+    FFS("ff_6ec44", CutsceneCamera::runFieldUpdate(c));         // 0x8006ec44 NATIVE (CutsceneCamera::update)
+    FFS("ff_50de4", c->engine.sceneStateStep());                 // 0x80050de4 NATIVE (Engine::sceneStateStep)
+    FFS("ff_1cac0", c->engine.areaModeDispatch());               // 0x8001cac0 NATIVE (Engine::areaModeDispatch)
   }
   // DUAL-VIEW: snapshot the post-gameplay / pre-render state so the side-by-side PSX render pass can run
   // from it (the native render below consumes per-frame queues, so it is not re-runnable). No-op unless on.
@@ -1098,6 +1099,55 @@ void Engine::areaModeDispatch() {
   if (!target) return;
   c->r[4] = 0x800ED018u;
   rec_dispatch(c, target);
+}
+
+// Engine::sceneStateStep — the SCENE-INIT / SCENE-RUN state machine at guest 0x80050DE4. See engine.h.
+// Two 22-entry overlay-handler tables (extracted verbatim from MAIN.EXE .text @0x80015A40 init,
+// @0x80015A98 run, both keyed by 0x800BF870 = the area render-mode byte). Handlers take a0 = the
+// scene-state base 0x800F2418; the INIT branch transitions phase 0 -> 1 after dispatch (default
+// idx 9 sets phase=1 too — the recomp's L_80050F90 label). All non-INIT/RUN phases no-op.
+void Engine::sceneStateStep() {
+  Core* c = core;
+  static constexpr uint32_t SCENE_STATE = 0x800F2418u;
+  int8_t phase = (int8_t)c->mem_r8(SCENE_STATE);
+
+  if (phase == 1) {
+    // RUN table (@0x80015A98). Idx 9 = default 0x80051118 = no-op return.
+    uint8_t idx = c->mem_r8(0x800BF870u);
+    if (idx >= 22) return;
+    static const uint32_t run[22] = {
+      /* 0*/ 0x8013EFA8u, /* 1*/ 0x8012EE14u, /* 2*/ 0x80123E1Cu, /* 3*/ 0x8010E964u,
+      /* 4*/ 0x80116CCCu, /* 5*/ 0x80136488u, /* 6*/ 0x8013D6D8u, /* 7*/ 0x8012E2F4u,
+      /* 8*/ 0x8012AB30u, /* 9*/ 0,           /*10*/ 0x80110A14u, /*11*/ 0x80113770u,
+      /*12*/ 0x801144D4u, /*13*/ 0x80113D68u, /*14*/ 0x80114A78u, /*15*/ 0x80115DECu,
+      /*16*/ 0x8010C9FCu, /*17*/ 0x8010BCDCu, /*18*/ 0x8010C160u, /*19*/ 0x8010B140u,
+      /*20*/ 0x80116B9Cu, /*21*/ 0x8010B200u,
+    };
+    uint32_t target = run[idx];
+    if (!target) return;
+    c->r[4] = SCENE_STATE;
+    rec_dispatch(c, target);
+    return;
+  }
+  if (phase != 0) return;   // < 0 or >= 2 -> no-op (signed slti 2 + neq 0)
+
+  // INIT table (@0x80015A40). Idx 9 = default 0x80050F90 (no-op body, then set phase=1).
+  uint8_t idx = c->mem_r8(0x800BF870u);
+  if (idx >= 22) return;
+  static const uint32_t init[22] = {
+    /* 0*/ 0x8013FB4Cu, /* 1*/ 0x8012F89Cu, /* 2*/ 0x80124678u, /* 3*/ 0x8010F174u,
+    /* 4*/ 0x801175D0u, /* 5*/ 0x80136CB0u, /* 6*/ 0x8013E144u, /* 7*/ 0x8012EB50u,
+    /* 8*/ 0x8012B3E8u, /* 9*/ 0,           /*10*/ 0x80111238u, /*11*/ 0x80113F68u,
+    /*12*/ 0x80114CCCu, /*13*/ 0x80114560u, /*14*/ 0x80115270u, /*15*/ 0x80116534u,
+    /*16*/ 0x8010D21Cu, /*17*/ 0x8010C4FCu, /*18*/ 0x8010C980u, /*19*/ 0x8010B960u,
+    /*20*/ 0x801173A8u, /*21*/ 0x8010B8ECu,
+  };
+  uint32_t target = init[idx];
+  if (target) {
+    c->r[4] = SCENE_STATE;
+    rec_dispatch(c, target);
+  }
+  c->mem_w8(SCENE_STATE, 1);   // advance to RUN (all L_80050F94 paths, incl. the default at idx 9)
 }
 
 // Register the GAME-stage area-init overrides when this just-loaded overlay is GAME.BIN at the stage base.
