@@ -8,6 +8,7 @@
 #include "core.h"
 #include "mods.h"   // g_mods (objid/debug-ids gate for the fps60 billboard recorder)
 #include "cfg.h"    // cfg_dbg
+#include <stdio.h>  // sil_bbox_log diag fprintf
 
 // --- per-object depth helpers (the engine owns object depth from the object's real world placement) ---
 void  gpu_obj_depth_add(Core*, uint32_t lo, uint32_t hi, float ord);
@@ -80,3 +81,26 @@ struct PktSpanSession {
 void native_gt3gt4(Core* c, uint32_t geomblk, uint32_t otbase);
 // Scene-table (0x800F2418) world-coord render (engine_submit.cpp, uses the static poly submitters there).
 void ov_field_entity_render(Core* c);
+
+// DIAG (debug channel "silbbox", scratch/handoff.md 2026-07-01 "dark outline" investigation): log the
+// screen bbox of any drawn quad overlapping the known repro window (coastal-ridge dark silhouette line,
+// pixel-measured x=5..30 y=134-138 — see the handoff). Every quad submitter (native_terrain, the GT3/GT4
+// library, the byte-packed variant, and the sky/backdrop tilemap) should call this so the next session can
+// see which pass(es) DO or DON'T cover that region — the hypothesis is a sub-pixel coverage gap between
+// the hillside object's quad(s) and the sky backdrop letting the black clear color show through.
+static inline void sil_bbox_log(const char* tag, const float* px, const float* py, int n) {
+  if (!cfg_dbg("silbbox")) return;
+  float minx = 1e9f, maxx = -1e9f, miny = 1e9f, maxy = -1e9f;
+  for (int i = 0; i < n; i++) {
+    if (px[i] < minx) minx = px[i]; if (px[i] > maxx) maxx = px[i];
+    if (py[i] < miny) miny = py[i]; if (py[i] > maxy) maxy = py[i];
+  }
+  if (maxx < -10 || minx > 40 || maxy < 120 || miny > 150) return;   // outside the repro window, skip
+  fprintf(stderr, "[silbbox] %s bbox x=[%.1f,%.1f] y=[%.1f,%.1f]\n", tag, minx, maxx, miny, maxy);
+}
+static inline void sil_bbox_log_i(const char* tag, const int* xs, const int* ys, int n) {
+  if (!cfg_dbg("silbbox")) return;
+  float pxf[8], pyf[8]; n = n > 8 ? 8 : n;
+  for (int i = 0; i < n; i++) { pxf[i] = (float)xs[i]; pyf[i] = (float)ys[i]; }
+  sil_bbox_log(tag, pxf, pyf, n);
+}

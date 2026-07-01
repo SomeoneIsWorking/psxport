@@ -58,7 +58,10 @@ overlay_router.cpp) · `recdep` (RECOMP-DEPENDENCY meter: histograms every subst
 routes to and dumps the top-40 by call count at exit, overlay_router.cpp — the metric for the "minimize
 recomp" goal; run `PSXPORT_DEBUG=recdep` on a free-roam session to rank which substrate functions to own
 natively next. 410 unique in free-roam; #1 is `rand` 0x8009A450 @ 86/frame). See journal later-168 /
-engine_re.md "GAME stage state machine".
+engine_re.md "GAME stage state machine" · `silbbox` (dark-outline render-bug diag, `render_internal.h`
+`sil_bbox_log`/`_i`: logs the screen bbox of every quad — native_gt3gt4's GT3/GT4/byte-packed submitters,
+`ov_bg_tilemap_native`'s sky backdrop — that overlaps the coastal-ridge repro window x=5..30 y=134-138, see
+`docs/findings/render.md` "Screen-fade transitions" / `scratch/handoff.md`).
 
 Full-PSX (psx_fallback / SBS core-B) coroutine diagnostics (native_boot.cpp `ov_switch`): `sched` (coro
 start/resume/out + task slot state) · `yieldpc` (per-yield `ra`/`r16`/`r29` + the stale-on-inner-frames

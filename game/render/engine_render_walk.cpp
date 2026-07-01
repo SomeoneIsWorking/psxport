@@ -131,6 +131,7 @@ static void ov_bg_tilemap_native(Core* c, uint32_t t4) {
       int clut_x = (clut & 0x3F) * 16, clut_y = (clut >> 6) & 0x1FF;
       int xs[4] = { X, X + 16, X, X + 16 }, ys[4] = { Y, Y, Y + 16, Y + 16 };
       int us[4] = { u, u + 16, u, u + 16 }, vs[4] = { v, v, v + 16, v + 16 };
+      sil_bbox_log_i("bg_tilemap", xs, ys, 4);
       rq_push_2d_quad(c, RQ_BACKGROUND, /*order_2d_fg=*/0, xs, ys, us, vs, col, col, col,
                       tp_x, tp_y, mode, /*raw=*/1, clut_x, clut_y, 0, 0, 0, 0, 0, 0, 1023, 511);
       g_sn_cmds++;
