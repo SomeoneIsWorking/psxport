@@ -596,197 +596,22 @@ void GpuState::set_texpage(uint16_t tp) {
 }
 void GpuState::set_clut(uint16_t cl) { s_clut_x = (cl & 0x3F) * 16; s_clut_y = (cl >> 6) & 0x1FF; }
 
-// PC-NATIVE world-quad draw (the render-PC-native path — NOT a PSX-packet transcription). Takes a quad
-// already projected to FLOAT screen coords + normalized per-vertex depth (proj_pz_to_ord) + decoded
-// UV/RGB/texpage/clut, and tees two triangles straight to the VK rasterizer with real per-pixel depth —
-// no GP0 packet, no OT, no guest write. The renderer's D32 buffer does true occlusion from the depth.
-// Used by engine/native_terrain.cpp. Free function (reaches the per-instance GPU state via core->game->gpu),
-// mirroring the geometry tee in gp0_exec (this file ~522-595) but fed float scene data instead of a packet.
-// Emit one resolved RqItem to the VK rasterizer. The emission logic (set_order/semi_group/set_vd/draw)
-// lives ONLY here; both the inline draw and the engine render-queue flush funnel through it. set_order
-// uses the live GpuState counter so the order value reflects actual emit sequence (the 2D-fallback/
-// faithful-depth band); real per-vertex depth (set_vd) drives true occlusion for world prims.
-void gpu_gpu_shadow_push_tri(Core* core, const float* v0, const float* v1, const float* v2);
-void gpu_emit_rq_item(Core* core, const RqItem* it) {
-  if (!gpu_gpu_enabled()) return;
-  GpuState& s = core->game->gpu;
-  // PSXPORT_PAINTWORLD=1 (diag): force every opaque RQ_WORLD prim to untextured solid magenta so we can SEE
-  // exactly where the native 3D world geometry rasterizes (vs the backdrop). Answers the recurring "the
-  // native field shows only sky/sea — where did the world go?" question: if magenta covers the land area,
-  // the world IS built+drawn (occlusion/blend bug); if magenta is absent/sparse, ov_scene_native isn't
-  // producing that geometry. (diag, 2026-06-26; render.md OPEN #1)
-  RqItem pw;
-  { static int p=-2; if(p==-2){ const char* e=cfg_str("PSXPORT_PAINTWORLD"); p=e?atoi(e):0; }
-    if (p && it->layer == RQ_WORLD && !it->semi) { pw = *it; pw.mode = 3; pw.raw = 0;
-      for (int i=0;i<4;i++){ pw.rs[i]=255; pw.gs[i]=0; pw.bs[i]=255; } it = &pw; } }
-  // PSXPORT_ONLYWORLD=1 (diag): emit ONLY RQ_WORLD prims — drop backdrop/overlay/HUD — so the readback
-  // shows EXACTLY the native 3D world geometry on a black field, with NO shader-paint dependency. Reliable
-  // answer to "is the world built but occluded, or is it not landing on-screen?" (diag, 2026-06-26; OPEN #1)
-  { static int o=-2; if(o==-2){ const char* e=cfg_str("PSXPORT_ONLYWORLD"); o=e?atoi(e):0; }
-    if (o && it->layer != RQ_WORLD) return; }
-  // PSXPORT_NOBG=1 (diag): drop ONLY the RQ_BACKGROUND (sky/sea tilemap) — keep world+overlay+HUD. If the
-  // world becomes visible, the backdrop is the occluder (despite its far 2D-BG ord). (diag, 2026-06-26)
-  { static int nb=-2; if(nb==-2){ const char* e=cfg_str("PSXPORT_NOBG"); nb=e?atoi(e):0; }
-    if (nb && it->layer == RQ_BACKGROUND) return; }
-  // PSXPORT_NOHUD=1 (diag): drop ONLY the RQ_HUD prims — if the world becomes visible, the sky/sea backdrop
-  // is being MIS-CLASSIFIED as HUD (nearest band) and occluding the world. (diag, 2026-06-26; OPEN #1)
-  { static int nh=-2; if(nh==-2){ const char* e=cfg_str("PSXPORT_NOHUD"); nh=e?atoi(e):0; }
-    if (nh && it->layer == RQ_HUD) return; }
-  // Shadow geometry is part of the frame: re-push this prim's view-space verts to the shadow VBO on EVERY
-  // emit, so the shadow map rebuilds identically on each 60fps present pass (no keep_shadow side-channel).
-  // gpu_gpu_shadow_push_tri no-ops when shadows are off; verts are the B (un-interpolated) positions.
-  if (it->sh_cast) {
-    float v[4][3]; for (int k = 0; k < 4; k++) { v[k][0]=it->sh_vx[k]; v[k][1]=it->sh_vy[k]; v[k][2]=it->sh_vz[k]; }
-    gpu_gpu_shadow_push_tri(core, v[0], v[1], v[2]);
-    if ((it->nv ? it->nv : 4) == 4) gpu_gpu_shadow_push_tri(core, v[1], v[2], v[3]);
-  }
-  const int* xs = it->xs; const int* ys = it->ys; const int* us = it->us; const int* vs = it->vs;
-  const unsigned char* rs = it->rs; const unsigned char* gs = it->gs; const unsigned char* bs = it->bs;
-  const float* depth = it->depth; int mode = it->mode, raw = it->raw, nv = it->nv ? it->nv : 4;
-  // PSXPORT_PRIMAT="x,y" (DISPLAY coords): also log WORLD/queue prims (gpu_draw_world_quad etc.) that cover
-  // that pixel — primat in gp0_exec is blind to these (they bypass the OT walk). Shows the real-depth
-  // occluders. (diag, 2026-06-24)
-  { static int qx=-2, qy=-1, qf0=0; if (qx==-2){ qx=-1; const char* pa=cfg_str("PSXPORT_PRIMAT"); if(pa) sscanf(pa,"%d,%d,%d",&qx,&qy,&qf0); }
-    if (qx>=0 && (int)s.s_frame>=qf0) { int ax=s.s_disp_x+qx, ay=s.s_disp_y+qy;
-      auto edge=[](int ax_,int ay_,int x0,int y0,int x1,int y1){ return (int64_t)(x1-x0)*(ay_-y0)-(int64_t)(y1-y0)*(ax_-x0); };
-      auto intri=[&](int i0,int i1,int i2){ int64_t w0=edge(ax,ay,xs[i1],ys[i1],xs[i2],ys[i2]);
-        int64_t w1=edge(ax,ay,xs[i2],ys[i2],xs[i0],ys[i0]); int64_t w2=edge(ax,ay,xs[i0],ys[i0],xs[i1],ys[i1]);
-        return (w0>=0&&w1>=0&&w2>=0)||(w0<=0&&w1<=0&&w2<=0); };
-      if (intri(0,1,2) || (nv==4 && intri(1,2,3))) { static int n=0; if(n++<6000)
-        fprintf(stderr,"[primat-rq] f%d dbgnode=%08X layer=%d om=%d semi=%d depth=[%.4f %.4f %.4f %.4f] col=(%d,%d,%d) xy0=(%d,%d) xy2=(%d,%d)\n",
-          s.s_frame, it->dbg_node, it->layer, it->order_mode, it->semi,
-          depth?depth[0]:-1.f, depth?depth[1]:-1.f, depth?depth[2]:-1.f, (depth&&nv==4)?depth[3]:-1.f,
-          rs[0],gs[0],bs[0], xs[0],ys[0], xs[2],ys[2]); } } }
-  unsigned ord = s.s_prim_order++;
-  gpu_gpu_set_order(core, ord);
-  // Depth: 3D world prims carry real per-vertex view-Z (set_vd); 2D prims select the renderer's far/near
-  // screen-space band (preserving the existing 2D depth semantics — only the ORDER is now engine-decided).
-  int om = it->order_mode;
-  if      (om == RQ_OM_2D_BG) gpu_gpu_set_order_2d_bg(core, ord);
-  else if (om == RQ_OM_2D_FG) gpu_gpu_set_order_2d(core, ord);
-  #define RQ_SETVD(p) do { if (om == RQ_OM_DEPTH) gpu_gpu_set_vd(core, (p)); } while (0)
-  // Vertex smoothing (#15): for the world path, hand the rasterizer the sub-pixel float screen XY. The base
-  // pointer maps to vertex [0]; the second triangle of a quad is emitted from &xs[1], so it gets &xsf[1].
-  // gpu_gpu_set_order (inside set_order, fired per draw via the *_set_vd/order path) clears s_xf, so a NULL
-  // here for non-world prims leaves them snapping to the integer xs/ys. set after set_order, before draw.
-  const float* xsf = it->has_xyf ? it->xsf : nullptr;
-  const float* ysf = it->has_xyf ? it->ysf : nullptr;
-  #define RQ_SETXYF(o) do { gpu_gpu_set_xyf(core, xsf ? xsf+(o) : nullptr, ysf ? ysf+(o) : nullptr); } while (0)
-  if (it->semi) {
-    int bx0=xs[0],by0=ys[0],bx1=xs[0],by1=ys[0];
-    for (int i=1;i<nv;i++){ if(xs[i]<bx0)bx0=xs[i]; if(xs[i]>bx1)bx1=xs[i]; if(ys[i]<by0)by0=ys[i]; if(ys[i]>by1)by1=ys[i]; }
-    gpu_gpu_semi_group(core, bx0, by0, bx1, by1);
-    RQ_SETVD(depth); RQ_SETXYF(0);
-    gpu_gpu_draw_semi(core, (int*)xs, (int*)ys, (int*)us, (int*)vs, (unsigned char*)rs, (unsigned char*)gs, (unsigned char*)bs,
-                     it->tp_x, it->tp_y, mode, raw, it->clut_x, it->clut_y,
-                     it->tw_mx, it->tw_my, it->tw_ox, it->tw_oy, it->da_x0, it->da_y0, it->da_x1, it->da_y1, it->tp_blend);
-    if (nv == 4) { RQ_SETVD(&depth[1]); RQ_SETXYF(1);
-      gpu_gpu_draw_semi(core, (int*)&xs[1], (int*)&ys[1], (int*)&us[1], (int*)&vs[1], (unsigned char*)&rs[1], (unsigned char*)&gs[1], (unsigned char*)&bs[1],
-                       it->tp_x, it->tp_y, mode, raw, it->clut_x, it->clut_y,
-                       it->tw_mx, it->tw_my, it->tw_ox, it->tw_oy, it->da_x0, it->da_y0, it->da_x1, it->da_y1, it->tp_blend); }
-  } else {
-    RQ_SETVD(depth); RQ_SETXYF(0);
-    gpu_gpu_draw_tritri(core, (int*)xs, (int*)ys, (int*)us, (int*)vs, (unsigned char*)rs, (unsigned char*)gs, (unsigned char*)bs,
-                       it->tp_x, it->tp_y, mode, raw, it->clut_x, it->clut_y,
-                       it->tw_mx, it->tw_my, it->tw_ox, it->tw_oy, it->da_x0, it->da_y0, it->da_x1, it->da_y1);
-    if (nv == 4) { RQ_SETVD(&depth[1]); RQ_SETXYF(1);
-      gpu_gpu_draw_tritri(core, (int*)&xs[1], (int*)&ys[1], (int*)&us[1], (int*)&vs[1], (unsigned char*)&rs[1], (unsigned char*)&gs[1], (unsigned char*)&bs[1],
-                         it->tp_x, it->tp_y, mode, raw, it->clut_x, it->clut_y,
-                         it->tw_mx, it->tw_my, it->tw_ox, it->tw_oy, it->da_x0, it->da_y0, it->da_x1, it->da_y1); }
-  }
-  gpu_gpu_set_xyf(core, nullptr, nullptr);   // clear so the next prim (if not world) snaps to integer xs/ys
-  #undef RQ_SETVD
-  #undef RQ_SETXYF
-}
-
-// Build an RqItem from already-resolved quad/tri data + material snapshot, then either queue it (engine
-// owns the order, flushed at the draw kick) or emit it now. The ONE place the three submit paths (world
-// quad, guest poly, guest sprite) funnel through. `capture` routes to the queue (set during the OT walk
-// under PSXPORT_RQ); otherwise it draws inline immediately (default — identical to pre-queue behavior).
-static void rq_emit_or_queue(Core* core, int capture, int layer, int order_mode, int nv, int semi, int raw,
-                             const int* xs, const int* ys, const float* xsf, const float* ysf,
-                             const int* us, const int* vs,
-                             const unsigned char* rs, const unsigned char* gs, const unsigned char* bs,
-                             const float* depth, int mode, int tp_x, int tp_y, int clut_x, int clut_y,
-                             int tw_mx, int tw_my, int tw_ox, int tw_oy, int da_x0, int da_y0, int da_x1, int da_y1,
-                             int tp_blend, const float (*sv)[3] = nullptr) {
-  RqItem it;
-  it.layer = (uint8_t)layer; it.semi = semi ? 1 : 0; it.nv = (uint8_t)nv; it.raw = raw ? 1 : 0;
-  it.order_mode = (uint8_t)order_mode;
-  it.fps_world = 0;   // fps60 capture: cleared here, set only by fps60_stamp_world on GTE-composed world prims
-  // objid overlay: stamp the entity node the native render walk is currently rendering (engine_submit.cpp).
-  // Every world prim an object emits gets its node, so the overlay labels ALL rendered objects. Terrain/
-  // static/background prims render with no per-object scope (g_dbg_render_node==0) → correctly unlabeled.
-  { extern uint32_t g_dbg_render_node; it.dbg_node = (layer == RQ_WORLD) ? g_dbg_render_node : 0; }
-  // Shadow capture: an opaque world prim with view-space verts casts into the shadow map. Carried on the
-  // item so gpu_emit_rq_item re-pushes it to the shadow VBO on EVERY emit (= on both 60fps present passes).
-  it.sh_cast = sv ? 1 : 0;
-  if (sv) for (int k = 0; k < 4; k++) { int s = k < nv ? k : nv - 1;
-            it.sh_vx[k] = sv[s][0]; it.sh_vy[k] = sv[s][1]; it.sh_vz[k] = sv[s][2]; }
-  it.has_xyf = (xsf && ysf) ? 1 : 0;   // sub-pixel float XY (vertex smoothing) supplied by the world path
-  for (int i = 0; i < nv; i++) { it.xs[i]=xs[i]; it.ys[i]=ys[i]; it.us[i]=us[i]; it.vs[i]=vs[i];
-                                 it.xsf[i]= it.has_xyf ? xsf[i] : (float)xs[i];
-                                 it.ysf[i]= it.has_xyf ? ysf[i] : (float)ys[i];
-                                 it.rs[i]=rs[i]; it.gs[i]=gs[i]; it.bs[i]=bs[i];
-                                 it.depth[i] = depth ? depth[i] : 0.0f; }
-  it.mode = mode; it.tp_x = tp_x; it.tp_y = tp_y; it.clut_x = clut_x; it.clut_y = clut_y;
-  it.tw_mx = tw_mx; it.tw_my = tw_my; it.tw_ox = tw_ox; it.tw_oy = tw_oy;
-  it.da_x0 = da_x0; it.da_y0 = da_y0; it.da_x1 = da_x1; it.da_y1 = da_y1; it.tp_blend = tp_blend;
-  if (capture) { RqItem* slot = rq_push(core); if (slot) { uint32_t sq = slot->seq; *slot = it; slot->seq = sq; } }
-  else         gpu_emit_rq_item(core, &it);
-}
-
 // sv (optional, NULL = no shadow): the prim's 4 VIEW-SPACE verts (x=vx, y=vy, z=pz) for the shadow map.
 // When non-NULL and opaque, the queued item carries them and gpu_emit_rq_item re-pushes them as two tris
 // to the shadow VBO on every emit (= on both 60fps present passes — see render_queue.h sh_cast).
 extern "C" const char* ffspan_lookup(uint32_t);   // engine_stage.cpp — PSXPORT_BDTAG builder attribution
 extern "C" void ffspan_dump(uint32_t);
 
-long g_dbg_world_quads = 0;   // PSXPORT_GPU_TRACE: world quads emitted (SBS black-pane diag)
-void gpu_draw_world_quad(Core* core, const float* px, const float* py, const float* depth,
-                         const int* u, const int* v, const uint8_t* r, const uint8_t* g,
-                         const uint8_t* b, uint16_t tp, uint16_t clut, int semi,
-                         const float (*sv)[3]) {
-  if (!gpu_gpu_enabled()) return;
-  g_dbg_world_quads++;   // PSXPORT_GPU_TRACE: world quads this frame (SBS diag)
-  GpuState& s = core->game->gpu;
-  s.set_texpage(tp);
-  s.set_clut(clut);
-  s.s_seen3d = 1;                              // a projected world prim has now been drawn this frame
-  int xs[4], ys[4], us[4], vs[4]; unsigned char rs[4], gs[4], bs[4];
-  float xsf[4], ysf[4];
-  for (int i = 0; i < 4; i++) {
-    // Vertex smoothing (#15): keep the engine's SUB-PIXEL float screen XY (draw offset applied in float)
-    // for the rasterizer, and round only for the integer xs/ys still used by the 2D bbox/semi-group path.
-    xsf[i] = px[i] + (float)s.s_off_x;
-    ysf[i] = py[i] + (float)s.s_off_y;
-    xs[i] = (int)(px[i] < 0 ? px[i] - 0.5f : px[i] + 0.5f) + s.s_off_x;  // round, then draw offset
-    ys[i] = (int)(py[i] < 0 ? py[i] - 0.5f : py[i] + 0.5f) + s.s_off_y;
-    us[i] = u[i]; vs[i] = v[i]; rs[i] = r[i]; gs[i] = g[i]; bs[i] = b[i];
-  }
-  // World geometry: engine layer WORLD with real per-vertex depth. The queue is the render path.
-  // Only opaque prims cast a shadow (semi water etc. must not occlude the light); drop the cast if semi.
-  const float (*cast)[3] = (sv && !semi) ? sv : nullptr;
-  rq_emit_or_queue(core, 1, RQ_WORLD, RQ_OM_DEPTH, 4, semi ? 1 : 0, 0,
-                   xs, ys, xsf, ysf, us, vs, rs, gs, bs, depth, s.s_tp_mode,
-                   s.s_tp_x, s.s_tp_y, s.s_clut_x, s.s_clut_y, s.s_tw_mx, s.s_tw_my, s.s_tw_ox, s.s_tw_oy,
-                   s.s_da_x0, s.s_da_y0, s.s_da_x1, s.s_da_y1, s.s_tp_blend, cast);
-}
-
-// 2D quad enqueue (HUD / overlay) — funnels through rq_emit_or_queue so a 2D drawable is a queued RqItem
-// (part of THE FRAME), not a direct gpu_gpu_draw_tritri that lands on only one 60fps present pass.
-void rq_push_2d_quad(Core* core, int layer, int order_2d_fg,
-                     const int* xs, const int* ys, const int* us, const int* vs,
-                     const unsigned char* rs, const unsigned char* gs, const unsigned char* bs,
-                     int tp_x, int tp_y, int mode, int raw, int clut_x, int clut_y,
-                     int tw_mx, int tw_my, int tw_ox, int tw_oy, int da_x0, int da_y0, int da_x1, int da_y1) {
-  if (!gpu_gpu_enabled()) return;
-  int om = order_2d_fg ? RQ_OM_2D_FG : RQ_OM_2D_BG;
-  rq_emit_or_queue(core, 1, layer, om, 4, 0, raw,
-                   xs, ys, nullptr, nullptr, us, vs, rs, gs, bs, nullptr, mode,
-                   tp_x, tp_y, clut_x, clut_y, tw_mx, tw_my, tw_ox, tw_oy,
-                   da_x0, da_y0, da_x1, da_y1, 0, nullptr);
-}
+// rq_emit_or_queue now lives in game/render/render_queue.cpp (2026-07 restructure, alongside
+// gpu_emit_rq_item/gpu_draw_world_quad/rq_push_2d_quad); this file's guest GP0/OT-walk poly + sprite
+// submit paths (below) still funnel their queued items through that one same place.
+void rq_emit_or_queue(Core* core, int capture, int layer, int order_mode, int nv, int semi, int raw,
+                       const int* xs, const int* ys, const float* xsf, const float* ysf,
+                       const int* us, const int* vs,
+                       const unsigned char* rs, const unsigned char* gs, const unsigned char* bs,
+                       const float* depth, int mode, int tp_x, int tp_y, int clut_x, int clut_y,
+                       int tw_mx, int tw_my, int tw_ox, int tw_oy, int da_x0, int da_y0, int da_x1, int da_y1,
+                       int tp_blend, const float (*sv)[3] = nullptr);
 
 // Begin a primitive for provenance tracking: bump the global id and record this prim's details
 // (frame/node/op/clut/texpage/color/first-vertex) so put_px_b can stamp each pixel it writes.

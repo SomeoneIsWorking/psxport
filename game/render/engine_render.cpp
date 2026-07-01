@@ -1,18 +1,15 @@
 // engine_render.cpp — PC-native per-frame RENDER ORCHESTRATION. (See engine_render.h.)
 //
-// TOP-DOWN render ownership. The native field per-frame update (engine_stage.cpp ov_field_frame) now calls
-// ov_render_frame DIRECTLY (a plain C call) instead of rec_dispatching MAIN.EXE 0x8003f9a8. ov_render_frame
-// mirrors that orchestrator's render passes; the per-object render-queue WALKS it drives already have
-// PC-native bodies in engine_submit.cpp (ov_rwalk_aux_bf00, ov_rwalk_aux_eec0, ov_render_walk_snapshot,
-// ov_rwalk_aux_bcf4) — written under the old override model but ORPHANED since the override table was
-// removed. Owning the orchestrator natively is the contiguous parent that lets us WIRE those orphan
-// walkers back into the LIVE field render (they attach each object's PC-native WORLD-POSITION depth via
-// gpu_obj_depth_add, so render ordering is engine-owned from real world coords, not the PSX OT).
-//
-// The render-queue walks run through their native bodies; the non-walk passes (0x8004fd30, 0x80025d98,
-// 0x8003d0bc, 0x8003f024, 0x8003df04, 0x8003c048) and the diagnostic-only 0x8003b588 (no real native)
-// stay PSX (rec_dispatch). VERIFIED (later-225): the seaside walkable field renders correctly in
-// widescreen — the world-coord depth path drives the engine-owned render extent.
+// TOP-DOWN render ownership. The native field per-frame update (engine_stage.cpp ov_field_frame) calls
+// ov_render_frame DIRECTLY (a plain C call) instead of rec_dispatching MAIN.EXE 0x8003f9a8. The render-queue
+// WALK cluster (0x8003bf00/eec0/bb50/bcf4/b588/c048 — ov_rwalk_aux_bf00, ov_rwalk_aux_eec0, ov_rwalk_b588,
+// ov_render_walk_snapshot, ov_rwalk_aux_bcf4, ov_render_walk) used to also run from HERE, but that duplicated
+// the SAME walk cluster ov_scene_native (game/render/engine_render_walk.cpp) already runs every field-stage
+// frame via ov_draw_otag (game_tomba2.cpp) — every terrain/scene-table/object prim was projected and
+// submitted TWICE per frame, the root cause of the documented render-order/sliver bugs. The walk cluster is
+// now owned SOLELY by ov_scene_native; ov_render_frame / ov_render_frame_x below perform only the remaining
+// non-walk PSX passes (display atlas, ground-table fallback, backdrop state machine, and the 2D atlas/sprite
+// bands) that ov_scene_native does not cover.
 //
 // RE (MAIN.EXE, tools/disas.py):
 //   0x8003f9a8 render orchestrator: jal 0x8004fd30, 0x80025d98, 0x8003bf00, 0x8003eec0, 0x8003b588,
@@ -26,16 +23,8 @@
 #include <stdlib.h>
 #include <stdio.h>
 void ov_field_entity_render(Core* c);  // engine_submit.cpp — native world-space GT3/GT4 scene-table render
+                                        // (used by the groundnative diagnostic branch below)
 
-// Native render-queue walkers (engine_submit.cpp). void(Core*); each drains its queue/list, dispatches
-// every live object's per-type renderer (still-PSX content), and tags the produced packet span with the
-// object's PC-native world depth.
-void ov_rwalk_aux_bf00(Core* c);       // 0x8003bf00
-void ov_rwalk_aux_eec0(Core* c);       // 0x8003eec0
-void ov_render_walk_snapshot(Core* c); // 0x8003bb50
-void ov_rwalk_aux_bcf4(Core* c);       // 0x8003bcf4
-void ov_rwalk_b588(Core* c);           // 0x8003b588 — field WATER pass, native real-depth (engine_submit.cpp)
-void ov_render_walk(Core* c);          // 0x8003c048 (master phase-2 list walk; routes terrain to ov_terrain)
 void ov_ground_probe(Core* c);         // DIAG: decode ground scene table 0x800F2418 (later-234 blocker)
 
 // DIAG skippass: PSXPORT_SKIPPASS=0xADDR skips that one rec_dispatch'd render pass, to attribute a prim to
@@ -61,21 +50,16 @@ extern "C" { int g_render_psx = 0; }
 // the GPU's two-batch allocation + side-by-side present. (REPL `dualview on|off` mirrors PSXPORT_DUALVIEW.)
 extern "C" { int g_dualview = 0; }
 
-// 0x8003f9a8 — per-frame render orchestrator (11 passes). The render-queue walks (0x8003bf00/eec0/bb50/
-// bcf4) run through their PC-native bodies (engine_submit.cpp), which attach each object's PC-native
-// world-position depth — engine-owned render ordering from real world coords. 0x8003b588 has no real
-// native (only a diagnostic counter), and the non-walk passes stay PSX, so both rec_dispatch.
+// 0x8003f9a8 — per-frame render orchestrator. The render-queue WALK passes (0x8003bf00/eec0/b588/bb50/bcf4/
+// c048) are owned SOLELY by ov_scene_native (engine_render_walk.cpp), which ov_draw_otag already runs every
+// field-stage frame — running them again here would double-submit every terrain/object prim. This function
+// now performs only the remaining non-walk PSX passes ov_scene_native does not cover.
 extern "C" void ffspan_begin(void), ffspan_end(const char*);   // PSXPORT_BDTAG attribution (engine_stage.cpp)
 void ov_render_frame(Core* c) {
   if (cfg_dbg("rfprobe")) { static int n=0; if ((n++ % 60)==0) fprintf(::stderr,"[rfprobe] ov_render_frame run #%d\n", n); }
   if (g_render_psx) { d0(c, 0x8003f9a8u); return; }   // COMPARE: render the field via the PSX recomp path
   ffspan_begin(); d0(c, 0x8004fd30u); ffspan_end("rf_4fd30");
   ffspan_begin(); d0(c, 0x80025d98u); ffspan_end("rf_25d98");   // 2D atlas SPRITE band (op-0x65)
-  ffspan_begin(); ov_rwalk_aux_bf00(c); ffspan_end("rw_bf00");          // 0x8003bf00
-  ffspan_begin(); ov_rwalk_aux_eec0(c); ffspan_end("rw_eec0");          // 0x8003eec0
-  ffspan_begin(); ov_rwalk_b588(c); ffspan_end("rw_b588");              // 0x8003b588 — field WATER, NATIVE real-depth
-  ffspan_begin(); ov_render_walk_snapshot(c); ffspan_end("rw_bb50");    // 0x8003bb50
-  ffspan_begin(); ov_rwalk_aux_bcf4(c); ffspan_end("rw_bcf4");          // 0x8003bcf4
   ov_ground_probe(c);                // DIAG groundprobe: decode the ground scene table (no draw; later-235)
   // DIAG groundnative: route the ground table real-depth via ov_field_entity_render. Decode is CORRECT, but
   // the 2D sea/water backdrop then composites OVER it (later-235 render-ordering blocker) — OFF by default.
@@ -83,19 +67,13 @@ void ov_render_frame(Core* c) {
   else { ffspan_begin(); d1(c, 0x8003d0bcu, 0x800f2418u); ffspan_end("rf_ground"); } // STILL-PSX GROUND (later-229)
   ffspan_begin(); d0(c, 0x8003f024u); ffspan_end("rf_3f024");
   ffspan_begin(); d0(c, 0x8003df04u); ffspan_end("rf_3df04");
-  ffspan_begin(); ov_render_walk(c); ffspan_end("rw_c048");   // 0x8003c048 (native — terrain world-coord via ov_terrain)
 }
 
-// 0x8003fa44 — mid-transition render orchestrator twin (reduced pass set, same native walks).
+// 0x8003fa44 — mid-transition render orchestrator twin (reduced pass set). The walk cluster is owned by
+// ov_scene_native (see ov_render_frame above); only the non-walk passes remain here.
 void ov_render_frame_x(Core* c) {
   if (g_render_psx) { d0(c, 0x8003fa44u); return; }   // COMPARE: render the field via the PSX recomp path
   d0(c, 0x8004fd30u);
   d0(c, 0x80025d98u);
-  ov_rwalk_aux_bf00(c);              // 0x8003bf00
-  ov_rwalk_aux_eec0(c);             // 0x8003eec0
-  ov_rwalk_b588(c);                  // 0x8003b588 — field WATER, NATIVE real-depth
-  ov_render_walk_snapshot(c);        // 0x8003bb50
-  ov_rwalk_aux_bcf4(c);              // 0x8003bcf4
-  ov_render_walk(c);                  // 0x8003c048 (native — terrain world-coord)
   d0(c, 0x8003f024u);
 }

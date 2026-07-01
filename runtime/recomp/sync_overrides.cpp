@@ -25,6 +25,7 @@
 // directive 2026-06-22: "no busy-waits anywhere; everything must be PC-native sync calls that resolve
 // as fast as the PC can" + "platform-HLE table" chosen as the mechanism.
 #include "core.h"
+#include "scheduler.h"
 #include <cstdio>
 #include <cstdlib>
 
@@ -173,5 +174,5 @@ void sync_overrides_init(void) {
   // yield from an interpreted task coroutine saves the task's resume context and longjmps back to the
   // native scheduler (native_boot.cpp). Without this, every GAME-stage per-frame yield spins forever
   // (the override table that used to carry this was removed). ov_switch no-ops outside a task run.
-  { void ov_switch(Core*); plat_register(0x80080880u, ov_switch); }   // ChangeThread -> scheduler yield
+  plat_register(0x80080880u, ov_switch);   // ChangeThread -> scheduler yield (scheduler.h/scheduler.cpp)
 }

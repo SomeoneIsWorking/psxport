@@ -80,7 +80,7 @@ extern "C" int  music_list_now_playing(void);
 #define GAME_STAGE_ADDR 0x801062ECu   // current-stage cell (c->mem_r32) — 0x8010637C while in the field
 #define AREA_BUNDLE     0x182000u     // guest 0x80182000 -> RAM offset
 
-extern "C" int native_gate(const char* name);   // native_boot.cpp — REPL `native <name> on|off`
+#include "native_gate.h"
 
 static void field_bgm_director(Core* c) {
   if (!native_gate("music")) return;   // gated off -> recomp libsnd is the (oracle) music path

@@ -23,7 +23,6 @@
 // dispatch a still-recomp leaf with up to 3 args set (helpers for the SOP/transition machines).
 static void d0(Core* c, uint32_t fn);
 extern "C" void ffspan_begin(void), ffspan_end(const char*);   // PSXPORT_BDTAG attribution (engine_stage.cpp)
-void ov_field_entity_render(Core*);   // engine_submit.cpp — native reimpl of SOP FUN_80109fe0
 void ov_bg_scene_transition_sm(Core*);  // bg_scene_transition_sm.cpp — native FUN_8002655c
 void engine_fade_set(Core*, uint32_t color, uint32_t a1);  // engine/gpu_lib.cpp — engine-owned screen fade
 static void d1(Core* c, uint32_t fn, uint32_t a0);
@@ -205,18 +204,13 @@ void ov_sop_field_update(Core* c) {
     }
     d0(c, 0x80075a80u);                                    // per-frame area update
     if (c->mem_r8(0x800bf9b4u) != 5) { ffspan_begin(); d1(c, 0x8010bffcu, 0x800ed018u); ffspan_end("parallaxBG"); }   // parallax BG draw
-    // SOP-mode entity render. The native world-coord version (ov_field_entity_render, engine_submit.cpp)
-    // is ready but UNWIRED — this SOP path isn't exercised by the walkable field (which renders via
-    // 0x8010810c -> 0x8003D074 -> 0x8003F698), so wiring it native is unverified. Own the live chain first.
-    // OWN the SOP entity render FUN_80109fe0 NATIVE (later-238): its loop over 0x800f2418 + its GT3/GT4
-    // submitters (FUN_801099b4 stride36 / FUN_80109c80 stride44, both RTPT/RTPS-projecting) are byte-identical
-    // to ov_field_entity_render's loop + submit_poly_gt3/gt4_native. Routing it native projects every record
-    // (grass scene AND the sky/sea backdrop, all GTE world geometry) through float eproj with REAL per-vertex
-    // depth — so the backdrop sorts behind the world instead of compositing on top (is3d=0). This is the LIVE
-    // field render path (NOT ov_render_frame). later-238 pinned this as the "sea on top" builder.
-    c->r[4] = 0x800f2418u; ov_field_entity_render(c);          // was d1(c, 0x80109fe0u, 0x800f2418u) (PSX)
-    void ov_render_walk(Core*);                            // engine_submit.cpp — NATIVE 0x8003c048 walk
-    ffspan_begin(); ov_render_walk(c); ffspan_end("renderwalk");   // object render-list walk (PC-native depth + fps60)
+    // NOTE: no entity-render / object-walk call here. ov_scene_native (engine_render_walk.cpp) is the
+    // SOLE owner of both the scene-table render (ov_field_entity_render, 0x800f2418) and the object
+    // render-list walk (ov_render_walk, 0x8003c048); it runs every field-stage frame from
+    // game_tomba2.cpp's ov_draw_otag regardless of SOP mode, SOP-mode frames included. This function
+    // owns only SOP gameplay/state logic (BG transition SM, entity update, Tomba update, BG layer SM,
+    // parallax/scroll) — a second render-walk call here duplicated ov_scene_native's submission
+    // (fixed alongside the equivalent duplicate in ov_render_frame, step 1 of this pass).
     if (c->mem_r8(0x800bf9b4u) != 5) { ffspan_begin(); d1(c, 0x8010c26cu, 0x800ed018u); ffspan_end("bgscroll"); }   // BG tile scroller
     c->mem_w8(0x1f800234u, 0);
   }

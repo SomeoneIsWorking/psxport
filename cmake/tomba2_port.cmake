@@ -83,6 +83,7 @@ set(PORT_SRC
   runtime/recomp/gpu_gpu.cpp
   runtime/recomp/gpu_perf.cpp
   runtime/recomp/mods.c
+  runtime/recomp/native_gate.cpp
   game/game_tomba2.cpp
   game/core/asset.cpp
   game/math/mathlib.cpp
@@ -160,12 +161,14 @@ set(PORT_SRC
   game/ui/engine_bav.cpp
   game/items/save.cpp
   game/audio/sound.cpp
+  game/audio/music_dialog_coord.cpp
   game/scene/engine_init.cpp
   game/ui/engine_font.cpp
   game/scene/engine_level.cpp
   game/render/fps60.cpp
   game/object/engine_tomba2.cpp
   game/render/engine_submit.cpp
+  game/render/render_debug_probes.cpp
   game/render/engine_project.cpp
   game/render/engine_render.cpp
   game/render/engine_render_walk.cpp
@@ -187,7 +190,10 @@ set(PORT_SRC
   game/audio/native_music.c
   game/audio/music_list.c
   runtime/recomp/sync_overrides.cpp
+  runtime/recomp/scheduler.cpp
   runtime/recomp/native_boot.cpp
+  runtime/recomp/dualview_snapshot.cpp
+  runtime/recomp/hw_bind.cpp
   runtime/recomp/repl.cpp
   runtime/recomp/dbg_server.cpp
   runtime/recomp/native_stub.cpp

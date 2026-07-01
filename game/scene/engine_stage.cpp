@@ -28,6 +28,8 @@
 #include "engine_render.h"          // ov_render_frame / ov_render_frame_x (native per-frame render driver)
 #include "placement.h"              // ov_place_objects — native field object-placement driver (game/world)
 #include "pool.h"                    // ov_pool_init_run — native object-pool init (game/world)
+#include "c_subsys.h"                // disc_find_file — native ISO9660 resolver (native_task0_bootstrap/ov_start_bin_stage)
+#include "asset.h"                   // preload_texgroup / preload_stage1 (native_stage0_sm)
 #include <stdio.h>
 
 // dispatch a still-recomp leaf with up to 3 args set (helpers for the native stage machines).
@@ -1064,4 +1066,147 @@ void ov_game_stage_main(Core* c) {
 void stage_scan_overlay(Core* c, uint32_t base, uint32_t size) {
   (void)c; (void)base; (void)size;
   (void)ov_game_s48_0; (void)ov_game_s48_1; (void)ov_game_s48_2; (void)ov_game_s4c;
+}
+
+// ===== Stage-0/START.BIN task-switch + preload state machine (moved from native_boot.cpp, 2026-07
+// restructure). Same stage-machine-orchestration domain this file already owns for the GAME stage; this
+// cluster owns task-0's stage SWITCH (native_start_stage/native_load_overlay), the START.BIN file-table
+// builder (ov_start_bin_stage), and the stage-0 preload SM (native_stage0_sm), which hands off to
+// native_start_stage(c,1) to enter DEMO.
+
+#include "scheduler.h"    // CUR_TASK + ov_switch (native_boot.cpp scheduler; scheduler.cpp)
+
+// --- PC-native task-0 bootstrap: own the START.BIN resolve + stage-0 overlay load top-down ----------
+// Replaces the FUN_800499e8 -> FUN_80052078 -> FUN_800450bc CD subtree, which (run as a pure-PSX leaf
+// now that the CD overrides are unregistered) busy-waits forever on the libcd Init/Read handshake.
+// Behavioural reference (read via tools/disas.py):
+//   FUN_800499e8 : CdSearchFile("\BIN\START.BIN") -> {MSF,size}; store {LBA,size} at 0x800be1e0/e4;
+//                  FUN_80052078(0).
+//   FUN_80052078 : FUN_800450bc(task+0xc, 0); task.state=3; task[0x6f]=0; a few libgpu/BIOS resets.
+//   FUN_800450bc : FUN_8001db8c(0x80106228, LBA, size) [= ov_cd_loadfile]; entry = STAGE_ENTRY[0]
+//                  (0x8010649c); task+0xc = task+0x10 = entry.
+// The per-stage {LBA,size} table lives at 0x800be1e0 (stride 8); the stage-entry table at 0x800a3ecc.
+static const uint32_t STAGE_ENTRY_TBL = 0x800a3ecc;  // [0]=0x8010649c [1]=0x801062e4 [2]=0x8010637c
+static const uint32_t STAGE_FILE_TBL  = 0x800be1e0;  // {LBA,size} per stage, stride 8
+
+void cd_loadfile_native(Core* c, uint32_t dest, uint32_t lba, uint32_t size);   // cd_override.cpp (sync 0x8001DB8C/DC40)
+
+// FUN_800450bc: load the stage overlay (if any) and point the task's restart entry at the stage code.
+static void native_load_overlay(Core* c, uint32_t taskfields, uint32_t stage) {
+  uint32_t entry;
+  if (stage == 3) {
+    entry = c->mem_r32(STAGE_ENTRY_TBL + 3 * 4);     // stage 3 is already resident: no overlay load
+  } else {
+    uint32_t lba  = c->mem_r32(STAGE_FILE_TBL + stage * 8);
+    uint32_t size = c->mem_r32(STAGE_FILE_TBL + stage * 8 + 4);
+    cd_loadfile_native(c, 0x80106228, lba, size);    // = FUN_8001db8c / ov_cd_loadfile
+    // FUN_80051f80(1) cooperative yield is a no-op with the native scheduler — skipped.
+    entry = c->mem_r32(STAGE_ENTRY_TBL + stage * 4);
+  }
+  c->mem_w32(taskfields, entry);                     // task+0xc = restart PC
+  c->mem_w32(taskfields + 4, entry);                 // task+0x10
+}
+
+// FUN_80052078: switch task 0 to the given stage (load overlay + reset the display/BIOS bits).
+static void native_start_stage(Core* c, uint32_t stage) {
+  uint32_t task = c->mem_r32(0x1f800138);            // current task (= task 0, 0x801fe000)
+  native_load_overlay(c, task + 0xc, stage);
+  c->mem_w16(task, 3);                               // task state = 3 (active)
+  c->mem_w8(task + 0x6f, 0);
+  rec_dispatch(c, 0x80080890u);                      // EnterCriticalSection (BIOS leaf)
+  c->r[4] = c->mem_r32(task + 4);
+  rec_dispatch(c, 0x80080870u);                      // B(0Fh) reset (BIOS leaf)
+  rec_dispatch(c, 0x800808a0u);                      // ExitCriticalSection (BIOS leaf)
+  c->r[4] = 0xff000000u;
+  rec_dispatch(c, 0x80080880u);                      // B(10h) reset (BIOS leaf)
+}
+
+// Public entry for the front-end (engine_demo.cpp s5 = LEAVE DEMO -> GAME). FUN_80052078(2): the DEMO
+// substate s5's whole body is `jal 0x80052078(2)` — switch task 0 to stage 2 (GAME). The scheduler's
+// DEMO branch detects the entry change and hands off to GAME (see native_scheduler_step).
+void demo_start_stage(Core* c, uint32_t stage) { native_start_stage(c, stage); }
+
+// FUN_800499e8: resolve \BIN\START.BIN natively, record its {LBA,size}, switch task 0 to stage 0.
+// Non-static: called directly from native_boot.cpp's ov_game_init (the boot-init prefix).
+void native_task0_bootstrap(Core* c) {
+  uint32_t lba = 0, size = 0;
+  if (!disc_find_file("\\BIN\\START.BIN", &lba, &size)) {
+    fprintf(stderr, "[native_boot] FATAL: cannot resolve \\BIN\\START.BIN on disc\n");
+    return;
+  }
+  c->mem_w32(STAGE_FILE_TBL, lba);                   // 0x800be1e0 = START.BIN LBA
+  c->mem_w32(STAGE_FILE_TBL + 4, size);              // 0x800be1e4 = START.BIN size
+  fprintf(stderr, "[native_boot] START.BIN resolved: LBA %u, %u bytes\n", lba, size);
+  native_start_stage(c, 0);
+}
+
+// Read a NUL-terminated guest string into `out` (bounded). Used to pull the START.BIN filename
+// tables (which live in the loaded overlay) for native resolution.
+static void read_guest_str(Core* c, uint32_t addr, char* out, int cap) {
+  int k = 0;
+  for (; k < cap - 1; k++) { char ch = (char)c->mem_r8(addr + k); out[k] = ch; if (!ch) break; }
+  out[k] = 0;
+}
+
+// preload_texgroup / preload_cel / preload_build_vram / preload_stage1 (the stage-0/stage-1
+// area/asset PRELOAD chain) live in game/core/asset.cpp (2026-07 restructure) — same
+// asset-loading domain as ov_load_texgroup/ov_unpack_group. See asset.h for the two
+// cross-TU-callable entry points used below (preload_texgroup, preload_stage1).
+
+// Stage-0 START.BIN state machine (overlay 0x80106728), PC-native + synchronous. Original loop yields
+// one frame per state; synchronous, we run them in order then transition task0 to DEMO and yield (so
+// the slot keeps its state=3 restart, exactly like the GAME stage transition — a plain return would
+// hit the scheduler's task-ended path and free the slot before the restart).
+static void native_stage0_sm(Core* c) {
+  uint32_t task = c->mem_r32(CUR_TASK);
+  c->mem_w16(task + 0x48, 0);
+  c->mem_w16(task + 0x4a, 0);
+  preload_texgroup(c, 0, 0);          // state 0: index/asset preload
+  preload_stage1(c);                  // state 1: SWDATA + DAT + cel/sprite VRAM build
+  native_start_stage(c, 1);           // state 3: switch task0 -> stage 1 (DEMO 0x801062e4), state=3
+  ov_switch(c);                       // yield (longjmp to the scheduler); never returns
+}
+
+// Stage-0 START.BIN entry (0x8010649c): own the file-table BUILDER PC-native, then hand the small
+// stage state-machine back to the PSX body in-task. The builder is a set of CdSearchFile loops that
+// resolve ~36 disc filenames and record each {LBA,size}; run as pure PSX (overrides gone) every
+// CdSearchFile busy-waits on libcd forever. Replace the resolution with the native ISO9660 resolver
+// (disc_find_file) — the filename tables and destination layout are read from the loaded overlay, so
+// nothing is hard-coded. Reference: dumped overlay disas of 0x8010649c..0x80106728 (later-211).
+//   Loop A: 25 names @0x80106808 -> {LBA,size} table 0x800be118 (stride 8)  [\BIN\OPN/CRD/SOP/A00..A0L]
+//   Loop B:  3 names @0x8010686c -> 0x800be1e0  [START/DEMO/GAME.BIN — fills the per-stage file table]
+//   Loop C:  5 names @0x801067f4 -> 0x800be0f0  [\CD\TOMBA2.IDX/IMG/DAT/SND, SWDATA.BIN]
+//   3 inline singletons -> scratchpad LBA: \CD\VOICE.XA->0x1f80021c, DEMO.XA->0x1f800220, BGM.XA->0x1f800224
+// Then s2(reg18)=1 (the SM's "1" constant) and continue into the PSX state machine at 0x80106728,
+// whose FUN_80044bd4 cooperative loads run correctly in-task (via rec_coro_run).
+void ov_start_bin_stage(Core* c) {
+  struct { uint32_t names, dest, n; } loops[] = {
+    { 0x80106808u, 0x800be118u, 25 },
+    { 0x8010686cu, 0x800be1e0u, 3  },
+    { 0x801067f4u, 0x800be0f0u, 5  },
+  };
+  char name[80];
+  for (auto& L : loops) {
+    for (uint32_t i = 0; i < L.n; i++) {
+      read_guest_str(c, c->mem_r32(L.names + i * 4), name, sizeof name);
+      uint32_t lba = 0, size = 0;
+      if (disc_find_file(name, &lba, &size)) {
+        c->mem_w32(L.dest + i * 8, lba);
+        c->mem_w32(L.dest + i * 8 + 4, size);
+      } else {
+        fprintf(stderr, "[start.bin] Not found file name %s\n", name);   // matches the PSX error path
+      }
+    }
+  }
+  struct { uint32_t str, dest; } sing[] = {
+    { 0x8010646cu, 0x1f80021cu }, { 0x8010647cu, 0x1f800220u }, { 0x8010648cu, 0x1f800224u },
+  };
+  for (auto& S : sing) {
+    read_guest_str(c, S.str, name, sizeof name);
+    uint32_t lba = 0, size = 0;
+    if (disc_find_file(name, &lba, &size)) c->mem_w32(S.dest, lba);   // XA stream LBA (only LBA stored)
+    else fprintf(stderr, "[start.bin] Not found file name %s\n", name);
+  }
+  fprintf(stderr, "[start.bin] file table built (native); running stage-0 preload SM (native + sync)\n");
+  native_stage0_sm(c);                // own the 4-state preload + transition to DEMO; yields (no return)
 }

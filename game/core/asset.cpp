@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include "asset.h"
+#include "guest_call.h" // rc1-4 guest-call helpers (used by the preload_* chain below)
 void rec_dispatch(Core*, uint32_t);
 // gpu_native_load_image is declared in core.h (the native CPU->VRAM upload).
 
@@ -170,4 +171,84 @@ void ov_upload_image(Core* c) {
   const int x = (int16_t)c->mem_r16(desc + 0), y = (int16_t)c->mem_r16(desc + 2);
   const int w = (int16_t)c->mem_r16(desc + 4), h = (int16_t)c->mem_r16(desc + 6);
   if (w > 0 && h > 0) gpu_native_load_image(c, x, y, w, h, src);
+}
+
+// ===== Stage-0/stage-1 area/asset PRELOAD — PC-native + SYNCHRONOUS (moved from native_boot.cpp,
+// 2026-07 restructure). Reuses the existing leaf natives above (cd_loadfile_native for the sync CD
+// reads, ov_unpack_group for decompress+VRAM upload) — same content-loading domain as the texgroup
+// loader.
+
+void cd_loadfile_native(Core* c, uint32_t dest, uint32_t lba, uint32_t size);  // cd_override.cpp (sync 0x8001DB8C/DC40)
+
+// FUN_80044F58 texture-group load, synchronous. (Mirrors engine/asset.cpp ov_load_texgroup but driven
+// by explicit (mode,set) — no task-1 spawn, no terminal yield.) Header sector -> archive -> unpack ->
+// copy the 42-word per-set metadata table the still-recomp content reads back.
+void preload_texgroup(Core* c, uint32_t mode, uint32_t set) {
+  uint32_t hdr_sector = c->mem_r32(0x800BE0F0u) + set;             // filebase0 + set
+  if (mode == 2) {                                                 // mode-2 per-set 4/26-sector bias
+    uint16_t mask = (uint16_t)c->mem_r16(0x800BFE56u);
+    hdr_sector += ((mask >> (set & 31)) & 1) ? 26u : 4u;
+  }
+  cd_loadfile_native(c, 0x800EF478u, hdr_sector, 2048);           // 1. 2KB header
+  uint32_t h0 = c->mem_r32(0x800EF478u), h1 = c->mem_r32(0x800EF47Cu);
+  cd_loadfile_native(c, 0x8018A000u, c->mem_r32(0x800BE0F8u) + (h0 >> 11), h1 - h0);  // 2. compressed archive
+  c->r[4] = 0x8018A000u; c->r[5] = 0x1FD000u; ov_unpack_group(c); // 3. decompress + VRAM upload (native)
+  for (uint32_t i = 0; i < 42; i++)                                // 4. per-set metadata table
+    c->mem_w32(0x800FB170u + i * 4, c->mem_r32(0x800EF478u + 0x100u + i * 4));
+}
+
+// FUN_800753D4 cel-load, SYNCHRONOUS. Original: FUN_80096480 (slot alloc + BAV cel load) -> store slot
+// at `out` -> FUN_80096980 (kick the upload state machine) -> cross-frame poll FUN_80096a40 until the
+// GPU-DMA upload completes. The alloc + kick carry no async wait (they leave the slot in state 1), so
+// run them as the recomp REFERENCE; our native GPU upload is synchronous, so we DROP the cross-frame
+// poll (the "no async" directive) instead of yielding for a DMA that already happened.
+static void preload_cel(Core* c, uint32_t out, uint32_t desc, uint32_t cbarg) {
+  int16_t slot = (int16_t)(rc3(c, 0x80096480u, desc, (uint32_t)-1, cbarg), c->r[2]);  // FUN_80096480(desc,-1,cbarg)
+  c->mem_w16(out, (uint16_t)slot);                               // *(u16*)out = allocated slot
+  rc2(c, 0x80096980u, cbarg, (uint32_t)slot);                    // FUN_80096980(cbarg, slot): kick upload
+  // Drain the BAV upload queue SYNCHRONOUSLY so this cel's VAB bank reaches SPU (and its slot frees so the
+  // NEXT cel can allocate). The real FUN_800753d4 polls 0x80096a40, whose 0x800993a0 sync busy-waits on the
+  // upload's DMA-complete IRQ event — which never fires in this no-IRQ preload, so the original code dropped
+  // the poll and silently skipped a whole VAB bank (proved by the dual-core SPU-DMA diff: 1 transfer vs PSX's
+  // 2). Deliver the sound-DMA-complete event first so 0x800993a0 returns immediately (no busy-wait, no yield),
+  // then run the sync once. (later: in-game music VAB.)
+  void hle_deliver_event(Core* c, uint32_t ev_class, uint32_t spec);
+  hle_deliver_event(c, 0xF0000009u, 0xFFFFFFFFu);                // sound/DMA-complete event
+  rc1(c, 0x80096a40u, 0);                                        // FUN_80096a40(0): upload sync (now non-blocking)
+}
+
+// FUN_800754F4 cel/sprite VRAM build, synchronous. FUN_800753ac is itself an async CD read -> use the
+// sync loadfile; the two FUN_800753d4 cel-loads go through preload_cel; the ten FUN_80075448
+// sprite-cell registrations carry no CD/async wait, so run as recomp. `base` = work base 0x80182000.
+static void preload_build_vram(Core* c, uint32_t base) {
+  uint32_t s0 = base + 0x51000u;                                   // descriptor table (filled by the read)
+  cd_loadfile_native(c, base, c->mem_r32(0x800BE108u), 0x51800u);  // FUN_800753ac: read SND file (idx3)
+  preload_cel(c, 0x800BED84u, base + c->mem_r32(s0 + 0x28), base + c->mem_r32(s0 + 0x30));
+  preload_cel(c, 0x800BED82u, base + c->mem_r32(s0 + 0x2c), base + c->mem_r32(s0 + 0x34));
+  static const struct { uint32_t off, sz; } cells[10] = {
+    {0x0c,14},{0x08,14},{0x04,14},{0x00,14},{0x10,8},{0x14,8},{0x18,8},{0x1c,14},{0x20,14},{0x24,14},
+  };
+  uint32_t cell_h = (uint32_t)(int32_t)(int16_t)c->mem_r16(0x800BED82u);
+  for (int i = 0; i < 10; i++)
+    rc4(c, 0x80075448u, (uint32_t)i, base + c->mem_r32(s0 + cells[i].off), cells[i].sz, cell_h);
+  c->r[2] = base + 26356;                                          // v0 = base + 0x66f4
+}
+
+// FUN_8004514C — the stage-1 callback. SWDATA + DAT load, shared texgroup sub-load, relocation table,
+// then the cel/sprite VRAM build.
+void preload_stage1(Core* c) {
+  cd_loadfile_native(c, 0x80157000u, c->mem_r32(0x800BE110u), c->mem_r32(0x800BE114u));  // SWDATA.BIN
+  preload_texgroup(c, 1, 1);                                       // shared texgroup sub-load
+  uint32_t lo = c->mem_r32(0x800EF480u), hi = c->mem_r32(0x800EF484u);
+  cd_loadfile_native(c, 0x80158000u, c->mem_r32(0x800BE100u) + (lo >> 11), hi - lo);     // DAT payload
+  uint32_t dat_end = (hi - lo) + 0x80158000u;
+  c->mem_w32(0x1F800228u, dat_end);
+  c->mem_w32(0x800ED014u, dat_end);
+  int32_t n = (int32_t)c->mem_r32(0x800EF488u);                    // relocation table (blez -> skip)
+  for (int32_t i = 0; i < n; i++) {
+    uint32_t word = c->mem_r32(0x800EF48Cu + i * 4);
+    c->mem_w32(0x800ECF58u + (word >> 24) * 4, (word & 0x00FFFFFFu) + 0x80158000u);
+  }
+  preload_build_vram(c, 0x80182000u);
+  c->mem_w32(0x1F80022Cu, c->r[2]);
 }

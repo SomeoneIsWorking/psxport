@@ -15,9 +15,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-// gate registry lives with native_gate in native_boot.cpp; the `gate` command drives it.
-void native_gate_set(const char* name, int on);
-void native_gate_list();
+#include "native_gate.h"  // gate registry (native_gate.cpp); the `gate` command drives it.
 void pad_repl_release(Core* c);
 
 // ---- Interactive REPL (PSXPORT_REPL=1) — drive the native port from stdin --------------------

@@ -35,7 +35,7 @@
 
 void rec_super_call(Core*, uint32_t);   // interpret the original PSX body (A/B oracle / super-call)
 void rec_dispatch(Core*, uint32_t);     // hybrid call: recomp body if emitted, else interpret
-void xa_music_cut_if_dialog(Core*);     // cd_override.cpp: cut looping ingame music when a dialog tone starts
+void xa_music_cut_if_dialog(Core*);     // music_dialog_coord.cpp: cut looping ingame music when a dialog tone starts
 
 // ---- engine sound STATE (the guest fields this module owns) ---------------------------------------
 #define SND_SONG        0x800BED80u   // current-song index (s16; 0xFFFF = none)
