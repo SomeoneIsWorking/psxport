@@ -49,6 +49,22 @@
 - **refs:** game/camera/cutscene_camera.cpp (update/dispatchMode/init), cutscene_camera_test.cpp (cases 13/14);
   tools/disas.py 0x8006EC44 / 0x8006EA7C; jump tables @0x80016A44 (18) + @0x800169EC (21); 2026-07-01.
 
+## ✅ DONE: driver modes 2/3/4 owned — snap-follow variants (later-294b)
+- **what:** owned the three scripted-camera SNAP follow orchestrators the driver dispatches for modes 2/3/4,
+  plus the two trivial snap-accumulator leaves they share:
+  - `snapAccXZ` = 0x8006D934 (w32 S+0x0C/S+0x14 from target); `snapAccY` = 0x8006D950 (w32 S+0x10). snapFollow
+    refactored to use both (still 0-diff).
+  - `snapFollowA` = 0x8006E294 (mode 2 + the init post-check): snapXZ+snapY, then look-build A, then lookAt.
+  - `pitchFollow` = 0x8006E360 (mode 3): pitch(), snapXZ+snapY, lookAt. (Confirms pitch() is correct when
+    called with a1=target — it hardcodes its G reads, so the arg is irrelevant.)
+  - `snapFollowB` = 0x8006E2FC (mode 4): snapXZ+snapY, then look-build B, then lookAt.
+- **still substrate (a cohesive FUTURE unit — the scripted LOOK-ANGLE builders):** 0x8006DC38/DF88 (build A),
+  0x8006DAD8/DEF0 (build B) — rsin/rcos heading+pitch builders writing the S block; dispatched via `sub()`
+  like trackFollow. Also still substrate: init's 0x8006E918/0x8006CBA8 and the post-mode tail 0x8006C988.
+- **verified:** oracle unit test snapFollowA/pitchFollow/snapFollowB = 0 mismatching words, 0 skips (no
+  overlay involvement); the driver's modes 2/3/4 now call these native methods instead of the substrate.
+- **refs:** game/camera/cutscene_camera.cpp; cutscene_camera_test.cpp cases 13/14/15; 2026-07-01.
+
 ## Superseded earlier conclusions (kept so the dead ends aren't re-walked)
 - later-290 "resident camera is CUTSCENE-only, free-roam camera is in the 0x8013xxxx overlay" — WRONG
   (rec_dispatch-blindness artifact, see above). The 0x8013xxxx cluster is field render/objects.

@@ -66,10 +66,18 @@ public:
   void mainFollow();                   // FUN_8006E0F0 — the smoothing MAIN follow (dist→track→pitch→…).
   void simpleFollow(uint32_t target);  // FUN_8006E3F4 — track XZ then Y (settled bits), then lookAt.
   void trackFollow(uint32_t target);   // FUN_8006E228 — track + 2 substrate sub-fns, then lookAt.
+  // Scripted-camera SNAP variants (driver modes 2/3/4). Each SNAPs the accumulators to the target, adds an
+  // extra step, then lookAt. The scripted look-angle builders they use (0x8006DC38/DF88/DAD8/DEF0) stay
+  // substrate for now (a cohesive future unit — rsin/rcos heading/pitch builders into the S block).
+  void snapFollowA(uint32_t target);   // FUN_8006E294 (mode 2 + init post-check): snap + look-build A.
+  void pitchFollow(uint32_t target);   // FUN_8006E360 (mode 3): pitch, then snap, then lookAt.
+  void snapFollowB(uint32_t target);   // FUN_8006E2FC (mode 4): snap + look-build B.
 
   // ── Sub-ops (the follow pipeline steps; public so the per-call verify wrappers can drive them). ──
   bool trackXZ(uint32_t target);       // FUN_8006D960 — smooth camera X/Z toward target; ret settled.
   bool trackY(uint32_t target);        // FUN_8006DA54 — smooth camera Y toward target;   ret settled.
+  void snapAccXZ(uint32_t target);     // FUN_8006D934 — SNAP the X/Z follow accumulators to the target.
+  void snapAccY(uint32_t target);      // FUN_8006D950 — SNAP the Y follow accumulator to the target.
   void distSolve();                    // FUN_8006D2AC — distance/zoom solver + planar placement.
   void pitch();                        // FUN_8006D654 — vertical-look height smoother.
   void yFloor();                       // FUN_8006C80C — per-render-mode camera-Y floor clamp.

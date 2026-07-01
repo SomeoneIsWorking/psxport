@@ -532,10 +532,34 @@ void CutsceneCamera::lookAt() {   // FUN_8006D02C
 }
 
 // ── orchestrators (per-frame camera modes) ───────────────────────────────────────────────────────
-void CutsceneCamera::snapFollow(uint32_t target) {   // FUN_8006E3B0
-  w32(S + 0x0C, r32(target + 0));      // snap XZ accumulators to target (no smoothing)
-  w32(S + 0x14, r32(target + 8));
+void CutsceneCamera::snapAccXZ(uint32_t target) {    // FUN_8006D934
+  w32(S + 0x0C, r32(target + 0));      // snap X accumulator
+  w32(S + 0x14, r32(target + 8));      // snap Z accumulator
+}
+void CutsceneCamera::snapAccY(uint32_t target) {     // FUN_8006D950
   w32(S + 0x10, r32(target + 4));      // snap Y accumulator
+}
+void CutsceneCamera::snapFollow(uint32_t target) {   // FUN_8006E3B0
+  snapAccXZ(target);                   // snap the follow accumulators to target (no smoothing)
+  snapAccY(target);
+  lookAt();
+}
+void CutsceneCamera::snapFollowA(uint32_t target) {  // FUN_8006E294 (driver mode 2 + init post-check)
+  snapAccXZ(target);
+  snapAccY(target);
+  if (camR8(0x76) == 0) { sub(0x8006DC38u); sub(0x8006DF88u, 1); }   // scripted look-build A (substrate)
+  lookAt();
+}
+void CutsceneCamera::pitchFollow(uint32_t target) {  // FUN_8006E360 (driver mode 3)
+  pitch();
+  snapAccXZ(target);
+  snapAccY(target);
+  lookAt();
+}
+void CutsceneCamera::snapFollowB(uint32_t target) {  // FUN_8006E2FC (driver mode 4)
+  snapAccXZ(target);
+  snapAccY(target);
+  if (camR8(0x76) == 0) { sub(0x8006DAD8u); sub(0x8006DEF0u); }      // scripted look-build B (substrate)
   lookAt();
 }
 void CutsceneCamera::mainFollow() {   // FUN_8006E0F0
@@ -570,9 +594,6 @@ void CutsceneCamera::trackFollow(uint32_t target) {   // FUN_8006E228
 // Still-unowned resident camera LEAVES reached by the mode dispatch / init (a1-taking follow variants and
 // the init sub-fns). Kept substrate until they're rebuilt as methods — contiguous top-down ownership owns
 // the CALLER (update/init) first, its unowned children run via the substrate (0-diff, same as trackFollow).
-static constexpr uint32_t SUB_E294 = 0x8006E294u;   // mode 2 / init follow-variant (a0=cam, a1=cam+0x38)
-static constexpr uint32_t SUB_E360 = 0x8006E360u;   // mode 3
-static constexpr uint32_t SUB_E2FC = 0x8006E2FCu;   // mode 4
 static constexpr uint32_t SUB_E918 = 0x8006E918u;   // init: post-mainFollow sub
 static constexpr uint32_t SUB_CBA8 = 0x8006CBA8u;   // init: pre-snap sub (a0=G+0x2c)
 static constexpr uint32_t SUB_C988 = 0x8006C988u;   // post-mode tail (runs after every mode)
@@ -605,9 +626,9 @@ void CutsceneCamera::dispatchMode(uint8_t mode) {
       trackFollow(cam_ + 0x38);
       break;
     }
-    case 2:  sub(SUB_E294, cam_ + 0x38); break;
-    case 3:  sub(SUB_E360, cam_ + 0x38); break;
-    case 4:  sub(SUB_E2FC, cam_ + 0x38); break;
+    case 2:  snapFollowA(cam_ + 0x38); break;
+    case 3:  pitchFollow(cam_ + 0x38); break;
+    case 4:  snapFollowB(cam_ + 0x38); break;
     case 5:  snapFollow(G + 0x2c);       break;   // snap to MASTER position
     case 6:  camW8(0x64, 0); camW32(0x0c, r32(G + 0x30)); break;   // freeze: cam[0x0c] = master Y
     case 7:
@@ -681,7 +702,7 @@ void CutsceneCamera::init() {   // FUN_8006EA7C (first-frame field reset + rende
     camW8(0x64, 15);
     camW16(0x6c, 1400); camW16(0x6e, 64);
     camW16(0x70, (uint16_t)(r16(G + 0x140) + 1024));
-    sub(SUB_E294, cam_ + 0x38);                 // a0=cam, a1=cam+0x38
+    snapFollowA(cam_ + 0x38);
     snapFollow(G + 0x2c);
   }
 }

@@ -9247,3 +9247,13 @@ no overlay is loaded → skipped, expected; the test's check() now tolerates a n
 yet (reached via camera-object behaviour ptr; substrate runs it 0-diff meanwhile) — wire when the object
 walk that dispatches the camera node is native. docs/findings/camera.md updated. Also fixed the stale
 "cutscene-only, free-roam is a separate overlay" comments in cutscene_camera.{h,cpp} (superseded later-293).
+
+## later-294b — camera driver modes 2/3/4 owned native (snap-follow variants, 0-diff)
+Continuing top-down from the dispatcher: owned the three scripted SNAP follow orchestrators the driver
+picks for modes 2/3/4 — snapFollowA (0x8006E294, mode 2 + init post-check), pitchFollow (0x8006E360, mode 3),
+snapFollowB (0x8006E2FC, mode 4) — plus the trivial snap-accumulator leaves snapAccXZ (0x8006D934) / snapAccY
+(0x8006D950); snapFollow refactored onto them. The scripted look-angle builders they call (0x8006DC38/DF88 for
+A, 0x8006DAD8/DEF0 for B — rsin/rcos heading+pitch into the S block) stay substrate as a cohesive future unit.
+VERIFIED: oracle unit test cases snapFollowA/pitchFollow/snapFollowB = 0 mismatching words, 0 skips (no overlay
+path). pitchFollow passing confirms pitch() is arg-independent (hardcodes its G reads). The driver's modes
+2/3/4 now call native methods; the resident camera follow tree is native except the look-angle builder unit.
