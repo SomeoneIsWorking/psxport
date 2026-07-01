@@ -19,6 +19,12 @@ int32_t Trig::rsin(Core* c, int32_t angle) {
   return sign * r;
 }
 
+int32_t Trig::angleCmp(int32_t a, int32_t b, int32_t mode) {
+  uint32_t d = (uint32_t)(a - b - 1024) & 0xFFFu;
+  int32_t inFirstHalf = (d < 2048u) ? 1 : 0;
+  return (mode == 0) ? inFirstHalf : (inFirstHalf ^ 1);
+}
+
 int32_t Trig::rcos(Core* c, int32_t angle) {
   if (angle < 0) angle = -angle;                         // cos is even; guest's bgez wrapper
   angle &= 0xFFF;

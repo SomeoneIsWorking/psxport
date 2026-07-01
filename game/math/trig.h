@@ -19,4 +19,10 @@ public:
   static int32_t rsin(Core* c, int32_t angle);
   // rcos (guest FUN_80083F50): cos(angle12) -> Q12.
   static int32_t rcos(Core* c, int32_t angle);
+
+  // angleCmp (guest FUN_80077768): angle-signed-half compare. Returns 1 iff `(a-b-1024) & 0xFFF`
+  //   sits in the first half [0, 2048) of the 12-bit angle circle (when mode==0), OR in the second
+  //   half [2048, 4096) (when mode!=0). A "does angle a lead angle b by π/4..3π/4" test used by the
+  //   scripted-camera path (CutsceneCamera::snapFollowA).
+  static int32_t angleCmp(int32_t a, int32_t b, int32_t mode);
 };

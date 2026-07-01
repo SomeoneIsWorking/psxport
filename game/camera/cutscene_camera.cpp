@@ -17,7 +17,7 @@
 // methods Trig::rsin / Trig::rcos have superseded the T2_RSIN / T2_RCOS `call(...)` shims here.
 static constexpr uint32_t T2_ISQRT  = 0x80084080u;   // isqrt(x)      -> floor(sqrt)
 static constexpr uint32_t T2_RATAN2 = 0x80085690u;   // ratan2(y,x)   -> angle12
-static constexpr uint32_t T2_ANGCMP = 0x80077768u;   // angle-compare helper (special cam mode 2-case-1)
+// angleCmp (0x80077768) is owned by class Trig (game/math/trig.h) — Trig::angleCmp superseded T2_ANGCMP.
 // lookAt's matrix helpers (NB its isqrt is a DIFFERENT entry from rotBuild's).
 static constexpr uint32_t LA_ISQRT  = 0x80077FB0u;
 static constexpr uint32_t LA_RATAN2 = 0x80085690u;
@@ -187,7 +187,7 @@ void CutsceneCamera::table2(int32_t radius) {
     }
   } else if (idx2 == 1) {
     if (a1 & 1) {
-      int32_t r = call(T2_ANGCMP, (int16_t)r16(G + 0x56), (int16_t)r16(G + 0x140));
+      int32_t r = Trig::angleCmp((int16_t)r16(G + 0x56), (int16_t)r16(G + 0x140), 0);   // FUN_80077768(a,b,mode=0) -> native
       theta = (int32_t)r16(G + 0x140) + (r == 0 ? 512 : 1536);
     } else {
       int32_t a = (int16_t)r16(0x1F800194u);
