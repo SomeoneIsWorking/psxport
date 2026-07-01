@@ -9075,3 +9075,25 @@ aborts ~f1184 at `jal 0x80109450` with A00 resident in the MODE slot — A00's 0
 not a fn (SOP's is a fn); the GAME-stage dispatcher at 0x8010882c drives it when sm[0x4c]==0 && sm[0x4e]==1.
 See docs/findings/render.md ("Free-roam recomp-MISS: jal 0x80109450"). Making ov_render_frame write ZERO
 guest memory (native-float A00 object render → drop the dv rewind for perf) remains a valid FOLLOW-UP.
+
+## later-285 — free-roam recomp-MISS root cause CORRECTED: gameplay object-graph recursion (native ~4× deeper than oracle), NOT the render
+later-284c blamed the A00 per-object RENDER chain overflowing task0's ~2.5KB guest stack, and prescribed
+"own the A00 render native-float." That diagnosis is FALSIFIED. Evidence (this session):
+- Prototyped the native A00 render (native ov_a00_node_render = submit_perobj_render for the model +
+  faithful 0x8013DD34 marshalling, routed from the master walk RCASE_DEFAULT + rq_dispatch_case). It did
+  NOT stop the crash (still aborts ~f1184 at `jal 0x80109450`). Reverted (correct-by-RE but tangential).
+- `debug skip3d` (new probe) skipping the ENTIRE ov_render_frame orchestrator + the submit 0x8010810c
+  STILL crashes at the same frame → the deep recursion is NOT in the render pass at all.
+- A `g_in_scene_native` scope flag + a min-sp probe (`debug lowsp`) in rec_dispatch/interp show the deepest
+  dispatches are `in_scene_native=0` — task0's own GAMEPLAY update, specifically the object-graph recursion
+  through the indirect thunk 0x80022AB8 (`jalr v0`, ~10 levels), interleaving the object 2D-marker projector
+  0x8013DD34 and the libgpu OT/GS-sort walker 0x80082D04↔0x80082734, kicked off from ov_field_frame's
+  gameplay pass `d0(c,0x80022a80)`.
+- DECISIVE: `PSXPORT_SELFTEST=oracle PSXPORT_DEBUG=lowsp` runs the pure interpreter through the whole opening
+  to f4235 (free-roam A00) with global-min task0 sp = 0x801FE7A8 (uses ~0x258 bytes), SAME task0 layout
+  (obj 0x801FE000, top 0x801FEA00). The native port at the same free-roam scene reaches 0x801FE078 (~0x988,
+  ~10 levels) — ~4× deeper. The stack is NOT too small; the native port RECURSES TOO DEEP.
+NEXT: bisect WHY native recurses ~4× deeper — (A) a native override in the object-update path leaks guest
+sp (like the game_coop r29 leak fixed in a766217), or (B) a native spawn/placement divergence builds a
+longer/looping child chain than the oracle. Diff native-vs-oracle object graph + recursion backtrace at the
+~f1181 divergence point. Full detail: docs/findings/render.md correction block (later-285).
