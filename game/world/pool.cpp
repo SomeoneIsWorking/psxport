@@ -4,6 +4,7 @@
 #include "cfg.h"
 #include "pool.h"
 #include "verify_gate.h"
+#include "mtx.h"          // class Mtx — libgte helpers (MR_init, ...)
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -198,8 +199,8 @@ static void ov_80078610(Core* c) {
   const uint32_t V = 0x800E7E80u;   // s1: view control block (built by ov_800783DC)
   const uint32_t P = 0x1F8000D0u;   // v1 = s2-40: scratchpad control block
 
-  c->r[4] = 0x1F8000F8u; call_fn(c, 0x80051794u);   // a0 = s2
-  c->r[4] = 0x1F800118u; call_fn(c, 0x80051794u);   // a0 = s2+32
+  Mtx::identity(c, 0x1F8000F8u);   // MR_init(s2)     — native class Mtx (was 0x80051794)
+  Mtx::identity(c, 0x1F800118u);   // MR_init(s2+32)  — native class Mtx (was 0x80051794)
 
   c->mem_w16(P + 30, (uint16_t)-1750);
   c->mem_w16(P + 28, 4096);
