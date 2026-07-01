@@ -150,7 +150,7 @@ static void load_mat3(Core* c, uint32_t p, int16_t m[3][3]) {
   m[1][0]=(int16_t)(w1>>16); m[1][1]=(int16_t)w2;       m[1][2]=(int16_t)(w2>>16);
   m[2][0]=(int16_t)w3;       m[2][1]=(int16_t)(w3>>16); m[2][2]=(int16_t)w4;
 }
-static void ov_mat_mul(Core* c) {
+void ov_mat_mul(Core* c) {
   int16_t R[3][3], M[3][3], P[3][3];
   load_mat3(c, c->r[4], R);
   load_mat3(c, c->r[5], M);
@@ -350,9 +350,9 @@ static void rotpair(Core* c, uint32_t rowA, uint32_t rowB, int posSin) {
   for (int i = 0; i < 3; i++) c->mem_w16(m + rowB + i*2, (uint16_t)(int16_t)(((int32_t)s*A[i]  + (int32_t)co*B[i]) >> 12));
   c->r[2] = m;
 }
-static void ov_rot_z(Core* c) { rotpair(c, 0, 6, +1); }   // FUN_80085050
-static void ov_rot_y(Core* c) { rotpair(c, 0, 12, -1); }  // FUN_80084EB0
-static void ov_rot_x(Core* c) { rotpair(c, 6, 12, +1); }  // FUN_80084D10
+void ov_rot_z(Core* c) { rotpair(c, 0, 6, +1); }   // FUN_80085050
+void ov_rot_y(Core* c) { rotpair(c, 0, 12, -1); }  // FUN_80084EB0
+void ov_rot_x(Core* c) { rotpair(c, 6, 12, +1); }  // FUN_80084D10
 // shared comparator: diff the 6 written halfwords (at rowA{+0,2,4}, rowB{+0,2,4}) vs the recomp ref
 static void rotpair_verify(Core* c, uint32_t addr, void(*fn)(Core*), uint32_t rowA, uint32_t rowB, const char* tag) {
   uint32_t rsave[32]; memcpy(rsave, c->r, sizeof rsave);
@@ -381,7 +381,7 @@ static void ov_rot_x_verify(Core* c){ rotpair_verify(c, 0x80084D10u, ov_rot_x, 6
 // mx=ROT, v=V0, cv=Null, lm=0) reading the rotation matrix from CR0-4 (loaded by a prior CTC2), then
 // SWC2 IR1-3 → a1. USER 2026-06-21: GTE math PC-native (the matrix is read from CR — i.e. content the
 // engine/game previously loaded — so this is content-interface; the C MVMVA must be GTE-exact).
-static void ov_apply_matlv(Core* c) {
+void ov_apply_matlv(Core* c) {
   uint32_t w0 = c->mem_r32(c->r[4]), w1 = c->mem_r32(c->r[4]+4);
   int16_t v[3] = { (int16_t)w0, (int16_t)(w0>>16), (int16_t)w1 };
   // rotation matrix R from GTE CONTROL regs CR0..CR4 (same packing as load_mat3 but from ctrl)

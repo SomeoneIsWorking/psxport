@@ -24,6 +24,7 @@
 #include "lighting.h" // PER-AREA light registry (sun / lava+torch); selected per frame in engine_shade_select
 #include "render_queue.h" // RQ_BACKGROUND + rq_push_2d_quad — native backdrop tilemap path
 #include "render_internal.h" // shared render internals (PktSpanSession, obj_world_ord, native_gt3gt4)
+#include "engine_math.h"     // ov_mat_mul/ov_apply_matlv/ov_rot_x/y/z — the GTE-transform cluster
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -835,9 +836,9 @@ static void build_xform(Core* c) {
   c->mem_w32(node + 152, 0x1000); c->mem_w32(node + 156, 0); c->mem_w32(node + 160, 0x1000);
   c->mem_w32(node + 164, 0);      c->mem_w32(node + 168, 0x1000); c->mem_w32(node + 172, 0);
   c->mem_w32(node + 176, 0);      c->mem_w32(node + 180, 0);
-  c->r[4] = (uint32_t)(int16_t)c->mem_r16(node + 84); c->r[5] = node + 152; rec_dispatch(c, 0x80084D10u);
-  c->r[4] = (uint32_t)(int16_t)c->mem_r16(node + 86); c->r[5] = node + 152; rec_dispatch(c, 0x80084EB0u);
-  c->r[4] = (uint32_t)(int16_t)c->mem_r16(node + 88); c->r[5] = node + 152; rec_dispatch(c, 0x80085050u);
+  c->r[4] = (uint32_t)(int16_t)c->mem_r16(node + 84); c->r[5] = node + 152; ov_rot_x(c);
+  c->r[4] = (uint32_t)(int16_t)c->mem_r16(node + 86); c->r[5] = node + 152; ov_rot_y(c);
+  c->r[4] = (uint32_t)(int16_t)c->mem_r16(node + 88); c->r[5] = node + 152; ov_rot_z(c);
   c->mem_w32(node + 172, (uint32_t)(int16_t)c->mem_r16(node + 46));
   c->mem_w32(node + 176, (uint32_t)(int16_t)c->mem_r16(node + 50));
   c->mem_w32(node + 180, (uint32_t)(int16_t)c->mem_r16(node + 54));
@@ -870,19 +871,19 @@ static void xform_propagate_body(Core* c) {
     c->mem_w32(0x1F800010u, 4096); c->mem_w32(0x1F800014u, 0);
     c->mem_w32(0x1F800018u, 0);    c->mem_w32(0x1F80001Cu, 0);
     int16_t sentinel = (int16_t)c->mem_r16(child + 6);
-    c->r[4] = (uint32_t)(int32_t)(int16_t)c->mem_r16(child + 8);  c->r[5] = 0x1F800000u; rec_dispatch(c, 0x80084D10u); // rot_x
-    c->r[4] = (uint32_t)(int32_t)(int16_t)c->mem_r16(child + 10); c->r[5] = 0x1F800000u; rec_dispatch(c, 0x80084EB0u); // rot_y
-    c->r[4] = (uint32_t)(int32_t)(int16_t)c->mem_r16(child + 12); c->r[5] = 0x1F800000u; rec_dispatch(c, 0x80085050u); // rot_z
+    c->r[4] = (uint32_t)(int32_t)(int16_t)c->mem_r16(child + 8);  c->r[5] = 0x1F800000u; ov_rot_x(c); // rot_x
+    c->r[4] = (uint32_t)(int32_t)(int16_t)c->mem_r16(child + 10); c->r[5] = 0x1F800000u; ov_rot_y(c); // rot_y
+    c->r[4] = (uint32_t)(int32_t)(int16_t)c->mem_r16(child + 12); c->r[5] = 0x1F800000u; ov_rot_z(c); // rot_z
     if (sentinel == -1) {                                        // ROOT: parent = this node
-      c->r[4] = node + 152; c->r[5] = 0x1F800000u; c->r[6] = child + 24; rec_dispatch(c, 0x80084110u); // child_mat = node_mat × work
-      c->r[4] = child; c->r[5] = child + 44; rec_dispatch(c, 0x80084220u);                              // MVMVA → child+0x2C
+      c->r[4] = node + 152; c->r[5] = 0x1F800000u; c->r[6] = child + 24; ov_mat_mul(c); // child_mat = node_mat × work
+      c->r[4] = child; c->r[5] = child + 44; ov_apply_matlv(c);                              // MVMVA → child+0x2C
       c->mem_w32(child + 0x2C, c->mem_r32(child + 0x2C) + c->mem_r32(node + 0xAC));
       c->mem_w32(child + 0x30, c->mem_r32(child + 0x30) + c->mem_r32(node + 0xB0));
       c->mem_w32(child + 0x34, c->mem_r32(child + 0x34) + c->mem_r32(node + 0xB4));
     } else {                                                     // SIBLING: parent = node[0xC0 + 4*sentinel]
       uint32_t p = c->mem_r32(node + 0xC0 + 4u * (uint32_t)(int)sentinel);
-      c->r[4] = p + 24; c->r[5] = 0x1F800000u; c->r[6] = child + 24; rec_dispatch(c, 0x80084110u); // child_mat = sibling_mat × work
-      c->r[4] = child; c->r[5] = child + 44; rec_dispatch(c, 0x80084220u);
+      c->r[4] = p + 24; c->r[5] = 0x1F800000u; c->r[6] = child + 24; ov_mat_mul(c); // child_mat = sibling_mat × work
+      c->r[4] = child; c->r[5] = child + 44; ov_apply_matlv(c);
       c->mem_w32(child + 0x2C, c->mem_r32(child + 0x2C) + c->mem_r32(p + 0x2C));
       c->mem_w32(child + 0x30, c->mem_r32(child + 0x30) + c->mem_r32(p + 0x30));
       c->mem_w32(child + 0x34, c->mem_r32(child + 0x34) + c->mem_r32(p + 0x34));
@@ -984,17 +985,17 @@ static void xform51128_body(Core* c) {
     c->mem_w32(0x1F800010u, (uint32_t)(int32_t)(int16_t)c->mem_r16(child + 60));
     int16_t sentinel = (int16_t)c->mem_r16(child + 6);
     c->r[4] = child + 8; c->r[5] = 0x1F800020u; rec_dispatch(c, 0x80085480u);                       // ov_rotmat
-    c->r[4] = 0x1F800020u; c->r[5] = 0x1F800000u; c->r[6] = 0x1F800040u; rec_dispatch(c, 0x80084110u); // ov_mat_mul
+    c->r[4] = 0x1F800020u; c->r[5] = 0x1F800000u; c->r[6] = 0x1F800040u; ov_mat_mul(c); // ov_mat_mul
     if (sentinel == -1) {                                        // ROOT: parent = this node
-      c->r[4] = node + 152; c->r[5] = 0x1F800040u; c->r[6] = child + 24; rec_dispatch(c, 0x80084110u);
-      c->r[4] = child; c->r[5] = child + 44; rec_dispatch(c, 0x80084220u);
+      c->r[4] = node + 152; c->r[5] = 0x1F800040u; c->r[6] = child + 24; ov_mat_mul(c);
+      c->r[4] = child; c->r[5] = child + 44; ov_apply_matlv(c);
       c->mem_w32(child + 0x2C, c->mem_r32(child + 0x2C) + c->mem_r32(node + 0xAC));
       c->mem_w32(child + 0x30, c->mem_r32(child + 0x30) + c->mem_r32(node + 0xB0));
       c->mem_w32(child + 0x34, c->mem_r32(child + 0x34) + c->mem_r32(node + 0xB4));
     } else {                                                     // SIBLING: parent = node[0xC0 + 4*sentinel]
       uint32_t p = c->mem_r32(node + 0xC0 + 4u * (uint32_t)(int)sentinel);
-      c->r[4] = p + 24; c->r[5] = 0x1F800040u; c->r[6] = child + 24; rec_dispatch(c, 0x80084110u);
-      c->r[4] = child; c->r[5] = child + 44; rec_dispatch(c, 0x80084220u);
+      c->r[4] = p + 24; c->r[5] = 0x1F800040u; c->r[6] = child + 24; ov_mat_mul(c);
+      c->r[4] = child; c->r[5] = child + 44; ov_apply_matlv(c);
       c->mem_w32(child + 0x2C, c->mem_r32(child + 0x2C) + c->mem_r32(p + 0x2C));
       c->mem_w32(child + 0x30, c->mem_r32(child + 0x30) + c->mem_r32(p + 0x30));
       c->mem_w32(child + 0x34, c->mem_r32(child + 0x34) + c->mem_r32(p + 0x34));
@@ -1077,7 +1078,7 @@ static void orch597AC_body(Core* c) {
   c->mem_w16(0x1F8000C4u, 0);
   c->r[4]=0x1F8000C0u; c->r[5]=0x1F800020u; rec_dispatch(c, 0x800851F0u);
   // node+0x98 = (0x1F800020 × 0x1F800000) then ×= 0x1F800040 (CompMatrixLV), then 80084470(node+0x98,node+0x88,node+0xAC)
-  c->r[4]=0x1F800020u; c->r[5]=0x1F800000u; c->r[6]=node+0x98; rec_dispatch(c, 0x80084110u);
+  c->r[4]=0x1F800020u; c->r[5]=0x1F800000u; c->r[6]=node+0x98; ov_mat_mul(c);
   c->r[4]=0x1F800040u; c->r[5]=node+0x98;                       rec_dispatch(c, 0x80084360u);
   c->r[4]=node+0x98;   c->r[5]=node+0x88;  c->r[6]=node+0xAC;   rec_dispatch(c, 0x80084470u);
   // translation accumulate: node+0xAC/B0/B4 += node->h[0x2E/32/36]
@@ -1094,7 +1095,7 @@ static void orch597AC_body(Core* c) {
     c->mem_w16(0x1F8000C4u, 0);
     c->mem_w16(0x1F8000C2u, (uint16_t)HU(node+0x56));
     c->r[4]=0x1F8000C0u; c->r[5]=0x1F800040u; rec_dispatch(c, 0x80085480u);
-    c->r[4]=0x1F800020u; c->r[5]=0x1F800000u; c->r[6]=0x1F800060u; rec_dispatch(c, 0x80084110u);
+    c->r[4]=0x1F800020u; c->r[5]=0x1F800000u; c->r[6]=0x1F800060u; ov_mat_mul(c);
     c->r[4]=0x1F800040u; c->r[5]=0x1F800060u;                      rec_dispatch(c, 0x80084360u);
     c->r[4]=0x1F800060u; c->r[5]=node+0x88; c->r[6]=0x1F800074u;   rec_dispatch(c, 0x80084470u);
     c->mem_w32(0x1F800074u, c->mem_r32(0x1F800074u) + R16(node+0x2E));
@@ -1111,30 +1112,30 @@ static void orch597AC_body(Core* c) {
       // SetVector(0x1F800000, child->h[0x38/3A/3C]); RotMatrix(child+8 → 0x1F800020); mat 0x1F800040 = 0x1F800020 × 0x1F800000
       c->r[4]=0x1F800000u; c->r[5]=R16(child+0x38); c->r[6]=R16(child+0x3A); c->r[7]=R16(child+0x3C); rec_dispatch(c, 0x800517BCu);
       c->r[4]=child+8; c->r[5]=0x1F800020u; rec_dispatch(c, 0x80085480u);
-      c->r[4]=0x1F800020u; c->r[5]=0x1F800000u; c->r[6]=0x1F800040u; rec_dispatch(c, 0x80084110u);
+      c->r[4]=0x1F800020u; c->r[5]=0x1F800000u; c->r[6]=0x1F800040u; ov_mat_mul(c);
       if (psel >= 0) {                                            // SIBLING-by-index: parent = node[0xC0 + 4*psel]
         uint32_t p = c->mem_r32(node + 0xC0 + 4u*(uint32_t)psel);
-        c->r[4]=p+24; c->r[5]=0x1F800040u; c->r[6]=child+24; rec_dispatch(c, 0x80084110u);
-        c->r[4]=child; c->r[5]=child+44; rec_dispatch(c, 0x80084220u);
+        c->r[4]=p+24; c->r[5]=0x1F800040u; c->r[6]=child+24; ov_mat_mul(c);
+        c->r[4]=child; c->r[5]=child+44; ov_apply_matlv(c);
         c->mem_w32(child+0x2C, c->mem_r32(child+0x2C) + c->mem_r32(p+0x2C));
         c->mem_w32(child+0x30, c->mem_r32(child+0x30) + c->mem_r32(p+0x30));
         c->mem_w32(child+0x34, c->mem_r32(child+0x34) + c->mem_r32(p+0x34));
       } else if (s6 == 0) {                                       // parent = this node (matrix node+0x98, trans node+0xAC)
-        c->r[4]=node+0x98; c->r[5]=0x1F800040u; c->r[6]=child+24; rec_dispatch(c, 0x80084110u);
-        c->r[4]=child; c->r[5]=child+44; rec_dispatch(c, 0x80084220u);
+        c->r[4]=node+0x98; c->r[5]=0x1F800040u; c->r[6]=child+24; ov_mat_mul(c);
+        c->r[4]=child; c->r[5]=child+44; ov_apply_matlv(c);
         c->mem_w32(child+0x2C, c->mem_r32(child+0x2C) + c->mem_r32(node+0xAC));
         c->mem_w32(child+0x30, c->mem_r32(child+0x30) + c->mem_r32(node+0xB0));
         c->mem_w32(child+0x34, c->mem_r32(child+0x34) + c->mem_r32(node+0xB4));
       } else if (s7 == 0) {                                       // first secondary child: matrix 0x1F800060, trans 0x1F800074
-        c->r[4]=0x1F800060u; c->r[5]=0x1F800040u; c->r[6]=child+24; rec_dispatch(c, 0x80084110u);
-        c->r[4]=child; c->r[5]=child+44; rec_dispatch(c, 0x80084220u);
+        c->r[4]=0x1F800060u; c->r[5]=0x1F800040u; c->r[6]=child+24; ov_mat_mul(c);
+        c->r[4]=child; c->r[5]=child+44; ov_apply_matlv(c);
         c->mem_w32(child+0x2C, c->mem_r32(child+0x2C) + c->mem_r32(0x1F800074u));
         c->mem_w32(child+0x30, c->mem_r32(child+0x30) + c->mem_r32(0x1F800078u));
         c->mem_w32(child+0x34, c->mem_r32(child+0x34) + c->mem_r32(0x1F80007Cu));
         s7 = 1;
       } else {                                                    // subsequent secondary children: parent = this node again
-        c->r[4]=node+0x98; c->r[5]=0x1F800040u; c->r[6]=child+24; rec_dispatch(c, 0x80084110u);
-        c->r[4]=child; c->r[5]=child+44; rec_dispatch(c, 0x80084220u);
+        c->r[4]=node+0x98; c->r[5]=0x1F800040u; c->r[6]=child+24; ov_mat_mul(c);
+        c->r[4]=child; c->r[5]=child+44; ov_apply_matlv(c);
         c->mem_w32(child+0x2C, c->mem_r32(child+0x2C) + c->mem_r32(node+0xAC));
         c->mem_w32(child+0x30, c->mem_r32(child+0x30) + c->mem_r32(node+0xB0));
         c->mem_w32(child+0x34, c->mem_r32(child+0x34) + c->mem_r32(node+0xB4));

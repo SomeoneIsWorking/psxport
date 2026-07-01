@@ -439,10 +439,24 @@ for content fns (call it). Do NOT mimic PSX hardware (GTE/GP0/OT) — remove Bee
     32 call sites total, all mechanical (register-set-then-`rec_dispatch` → the same registers then the
     native fn), verified by rebuilding clean + a headless free-roam smoke run + turning on the LIVE
     diagnostic gates (`rendupdverify`/`recinitverify`/`setgeomverify`/`randverify`) under real gameplay
-    traffic: **0 mismatches** (`randverify` alone saw 220000+ live calls). `ov_apply_matlv`
-    (`FUN_80084220`, 8 external call sites in `game/render/engine_submit.cpp`) is a further candidate but is
-    `static` (file-local) in `engine_math.cpp` — needs exposing via a header first; left for a follow-up.
-    `ov_inventory_give_and_flag` (`FUN_8004D4C4`, 8 sites) similarly has no header yet.
+    traffic: **0 mismatches** (`randverify` alone saw 220000+ live calls).
+    `ov_inventory_give_and_flag` (`FUN_8004D4C4`, 8 sites) similarly has no header yet — a follow-up.
+  - ✅ later-297 (2026-07-01): **wired the whole GTE-transform cluster onto the live path** — `ov_mat_mul`
+    (`FUN_80084110`), `ov_apply_matlv` (`FUN_80084220`), `ov_rot_x/y/z` (`FUN_80084D10`/`EB0`/`85050`).
+    These were `static` in `engine_math.cpp` (not even visible to other TUs), so this is a BIGGER version of
+    the later-295/296 pattern: the "115000+/55000+ live calls, 0-diff" verification numbers earlier in this
+    doc were measured back when the (now-removed, 2026-06-22) override-flip system hooked these addresses —
+    since that removal these GTE natives had been silently orphaned too, running as pure interpreted
+    substrate the whole time despite being GTE-exact verified. Exposed all 5 via a new
+    `game/math/engine_math.h` and replaced 26 call sites in `game/render/engine_submit.cpp`'s node-transform
+    propagation (`xform_propagate_body` + 3 sibling transform-compose functions) with direct calls — this is
+    the HOT per-object transform path (every rendered node with children), so the highest-value substrate-
+    reduction found this session. The `mathverify`/`rotXverify`-style per-call gates are themselves now dead
+    (they were also only reachable via the removed override hook — nothing calls the `_verify` wrappers),
+    so verification here was: clean rebuild, headless free-roam smoke run (no regression), and a `shot`
+    screenshot of the seaside village scene — Tomba + the tree-hut render correctly, matching
+    `docs/reference/ORACLE_village_f520.png` (no corruption, correct object placement/shading). Flag for the
+    user to eyeball other scenes too since this touches every 3D object's transform.
 - ✅ `FUN_8007712c` per-object CULL / LOD = `ov_object_cull` (game_tomba2.cpp). **BODY now PC-native
   (later-188)** — was a `rec_super_call` WRAP (recomp body ran hot, ~11.2% of sampled interp time); now
   `cull_native_body` reimplements the full decision (RE'd from the disasm: jump table 0x80016cc0, 5 state
