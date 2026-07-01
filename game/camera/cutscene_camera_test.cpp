@@ -158,6 +158,7 @@ int run_camera_oracle(const char* path) {
     {"initSeedGrp",0x8006CBA8u, 0},   // init: seed cam group; a0=source (=CAM here, from check's a0)
     {"init",       0x8006EA7Cu, 0},   // the mode selector (0x8006EA7C)
     {"update",     0x8006EC44u, 0},   // the per-frame driver (0x8006EC44); reads its state from RAM
+    {"shakeTail",  0x8006C988u, 0},   // post-mode shake state machine (0x8006C988)
   };
   const int NC = sizeof(cases) / sizeof(cases[0]);
 
@@ -176,6 +177,7 @@ int run_camera_oracle(const char* path) {
         c->mem_w8(CAM + 1, (uint8_t)(rnd() & 1));      //   sub-state 0/1
         c->mem_w8(CAM + 0x64, (uint8_t)((rnd() % 20) | (rnd() & 0xC0)));   // mode + gate bits
       }
+      if (ci == 24) c->mem_w8(CAM + 0x76, (uint8_t)(rnd() % 12));   // shakeTail: sweep every state + default
       CutsceneCamera cam(c, CAM);
       uint32_t a1 = t.usesTarget ? TGT : 0;
       std::function<void()> nat;
@@ -204,6 +206,7 @@ int run_camera_oracle(const char* path) {
         case 21: nat = [&]{ cam.initSeedGrp(CAM); }; break;
         case 22: nat = [&]{ cam.init(); }; break;
         case 23: nat = [&]{ cam.update(); }; break;
+        case 24: nat = [&]{ cam.shakeTail(); }; break;
       }
       int m = check(c, t.name, t.addr, nat, CAM, a1);
       if (m < 0) skip++; else { bad += m; ran++; }

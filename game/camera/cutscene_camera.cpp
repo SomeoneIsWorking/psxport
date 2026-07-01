@@ -23,6 +23,9 @@ static constexpr uint32_t LA_MRINIT = 0x80051794u;   // MR_init (identity)
 static constexpr uint32_t LA_MULMAT = 0x80084250u;   // MulMatrix0(a0,a1)
 static constexpr uint32_t LA_APPLYLV= 0x80084470u;   // ApplyMatrixLV(m,v,out)
 static constexpr uint32_t LA_COPYMAT= 0x800847B0u;   // CopyMatrix(a0,a1)
+// shakeTail's helpers (a utility RNG + a sound/rumble-effect request queue — a library, kept substrate).
+static constexpr uint32_t SHAKE_RAND = 0x8009A450u;    // PSX-style rand(): next = next*0x41c64e6d+12345
+static constexpr uint32_t SHAKE_FX   = 0x800521F4u;    // queue a shake sound effect (a0,a1,id,pri)
 
 // clamp(delta, -maxStep, +maxStep) on sign-extended s16 (engine FUN_8006CE74).
 static inline int32_t cam_clamp(int16_t delta, int16_t maxStep) {
@@ -32,8 +35,8 @@ static inline int32_t cam_clamp(int16_t delta, int16_t maxStep) {
 // 32-bit mult-lo, matching the recomp's exact truncating arithmetic.
 static inline int32_t mlo(int32_t a, int32_t b) { return (int32_t)((uint32_t)a * (uint32_t)b); }
 
-int32_t CutsceneCamera::call(uint32_t fn, int32_t a0, int32_t a1, int32_t a2) {
-  c->r[4] = (uint32_t)a0; c->r[5] = (uint32_t)a1; c->r[6] = (uint32_t)a2;
+int32_t CutsceneCamera::call(uint32_t fn, int32_t a0, int32_t a1, int32_t a2, int32_t a3) {
+  c->r[4] = (uint32_t)a0; c->r[5] = (uint32_t)a1; c->r[6] = (uint32_t)a2; c->r[7] = (uint32_t)a3;
   rec_dispatch(c, fn);
   return (int32_t)c->r[2];
 }
@@ -635,11 +638,85 @@ void CutsceneCamera::trackFollow(uint32_t target) {   // FUN_8006E228
   lookAt();
 }
 
+// ── post-mode TAIL (0x8006C988) — the camera SHAKE state machine ───────────────────────────────────
+// cam[0x76] is the shake state, driven by external code (0 = idle, no-op). Two families:
+//   * 3-axis free-running shake: 1 (capture anchor, ->2) -> 2 (jitter X/Y/Z around the anchor every frame,
+//     fx id 129, stays at 2) -> 3 (external code sets this to stop: restore the exact anchor, ->0).
+//   * Y-only shake, three variants sharing the same shape (capture-then-jitter):
+//       4->5: free-running (like 1->2, but Y-only, fx id 241, stays at 5 until externally reset).
+//       6->7, 8->9: ONE-SHOT pulses (states 6/8 fall straight into 7/9's jitter in the SAME frame — that's
+//       the recompiled control flow, not a bug); 7/9 abort (->0, no jitter) if cam[0x64] is busy, else
+//       jitter once (±32 for 7, ±16 for 9) and always end at state 0.
+void CutsceneCamera::shakeTail() {   // FUN_8006C988
+  uint8_t state = camR8(0x76);
+  if (state >= 10) return;
+  switch (state) {
+    case 1:
+      camW16(0x86, r16(S + 0x02));
+      camW16(0x88, r16(S + 0x06));
+      camW8(0x76, 2);
+      camW16(0x8a, r16(S + 0x0a));
+      break;
+    case 2: {
+      int32_t rx = call(SHAKE_RAND) & 0x1f;
+      w16(S + 0x02, (uint16_t)((int32_t)camR16(0x86) - 16 + rx));
+      int32_t rz = call(SHAKE_RAND) & 0x1f;
+      w16(S + 0x0a, (uint16_t)((int32_t)camR16(0x8a) - 16 + rz));
+      int32_t ry = call(SHAKE_RAND) & 0xf;
+      w16(S + 0x06, (uint16_t)((int32_t)camR16(0x88) - 8 + ry));
+      call(SHAKE_FX, 0, 0, 129, 2);
+      break;
+    }
+    case 3:
+      w16(S + 0x02, camR16(0x86));
+      w16(S + 0x06, camR16(0x88));
+      w16(S + 0x0a, camR16(0x8a));
+      camW8(0x76, 0);
+      break;
+    case 4:
+      camW16(0x88, r16(S + 0x06));
+      camW8(0x76, 5);
+      break;
+    case 5: {
+      int32_t r = call(SHAKE_RAND) & 0x3f;
+      w16(S + 0x06, (uint16_t)((int32_t)camR16(0x88) - 32 + r));
+      call(SHAKE_FX, 0, 0, 241, 2);
+      break;
+    }
+    case 6:
+      camW16(0x88, r16(S + 0x06));
+      camW8(0x76, 7);
+      [[fallthrough]];
+    case 7:
+      if (camR8(0x64) != 0) { camW8(0x76, 0); break; }
+      {
+        int32_t r = call(SHAKE_RAND) & 0x3f;
+        w16(S + 0x06, (uint16_t)((int32_t)camR16(0x88) - 32 + r));
+        call(SHAKE_FX, 0, 0, 129, 2);
+      }
+      camW8(0x76, 0);
+      break;
+    case 8:
+      camW16(0x88, r16(S + 0x06));
+      camW8(0x76, 9);
+      [[fallthrough]];
+    case 9:
+      if (camR8(0x64) != 0) { camW8(0x76, 0); break; }
+      {
+        int32_t r = call(SHAKE_RAND) & 0x1f;
+        w16(S + 0x06, (uint16_t)((int32_t)camR16(0x88) - 16 + r));
+        call(SHAKE_FX, 0, 0, 129, 2);
+      }
+      camW8(0x76, 0);
+      break;
+    default: break;
+  }
+}
+
 // ── driver + init (the camera dispatcher) ─────────────────────────────────────────────────────────
 // Still-unowned resident camera LEAVES reached by the mode dispatch / init (a1-taking follow variants and
 // the init sub-fns). Kept substrate until they're rebuilt as methods — contiguous top-down ownership owns
 // the CALLER (update/init) first, its unowned children run via the substrate (0-diff, same as trackFollow).
-static constexpr uint32_t SUB_C988 = 0x8006C988u;   // post-mode tail (runs after every mode)
 // FIELD OVERLAY handlers reached by some modes / render sub-modes: they live in loaded \BIN\*.BIN overlays,
 // not resident MAIN, so they dispatch through the overlay router. (In the oracle unit test no overlay is
 // loaded, so these modes MISS and are skipped — same class as the yFloor recompiler gap.)
@@ -718,7 +795,7 @@ void CutsceneCamera::update() {   // FUN_8006EC44 (resident per-frame camera dri
   uint8_t mode = (uint8_t)(camR8(0x64) & 0x3f);
   camW8(0x66, 0);
   if (mode < 18) dispatchMode(mode);
-  sub(SUB_C988);                                // post-mode tail (always, after any mode)
+  shakeTail();                                  // post-mode tail (always, after any mode)
 }
 
 void CutsceneCamera::init() {   // FUN_8006EA7C (first-frame field reset + render-mode-keyed mode selector)

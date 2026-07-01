@@ -696,6 +696,13 @@ for content fns (call it). Do NOT mimic PSX hardware (GTE/GP0/OT) — remove Bee
     native method vs the recomp oracle (`rec_interp`), diffs cam struct + scratchpad + globals. **0 mismatches over
     39000 runs** (390 oracle-skipped = states the recompiler can't evaluate, e.g. yFloor render-mode 1 — see
     docs/findings/camera.md). Deterministic, render-free; `PSXPORT_SELFTEST_ITERS=N` / `_VERBOSE=1`.
+  - ✅ later-294..294e (2026-07-01): owned the whole camera TREE natively — the driver `update()`/`dispatchMode`
+    (0x8006EC44), `init()` + its deps `initPlace`/`initSeedGrp`, all follow orchestrators (mainFollow/
+    simpleFollow/trackFollow/snapFollowA/pitchFollow/snapFollowB), all sub-ops, the scripted look-angle
+    builders, and the post-mode TAIL `shakeTail()` (0x8006C988, a screen-shake state machine on cam[0x76]).
+    **CAMERA TREE FULLY NATIVE** (oracle 0-diff on every method) except the true field OVERLAYS reached by
+    driver modes 0/1/9/10/17 (loaded `\BIN\*.BIN` content — a separate porting track). See docs/findings/
+    camera.md. Next subsystem: ObjectWorld (entity pool + spawn + node/animation walk).
 - ✅ Math helper `FUN_80077FB0` = `ov_isqrt` (engine_math.cpp, later-186) — 16-bit ROUNDING integer sqrt
   (libgte-style leaf). Was 8.41% of all interpreter instructions; owning it native dropped the field run
   42.93M→38.99M insns/300fr (−9.2%). Bit-exact: 65000+ live calls 0-diff vs recomp (`mathverify` gate).

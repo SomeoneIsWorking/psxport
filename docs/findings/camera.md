@@ -93,6 +93,30 @@
 - **refs:** game/camera/cutscene_camera.cpp (initPlace/initSeedGrp); cutscene_camera_test.cpp cases 20/21;
   2026-07-01 (later-294d).
 
+## ✅ DONE: post-mode TAIL owned — `shakeTail()`, the camera SHAKE state machine (later-294e)
+- **what:** owned 0x8006C988 (`CutsceneCamera::shakeTail()`), which `update()` runs after every driver mode,
+  every frame. It's a screen-shake state machine on `cam[0x76]`, driven externally (0 = idle/no-op):
+  - **3-axis free-running shake:** state 1 captures the current look position (S+0x02/0x06/0x0a) into an
+    anchor (cam[0x86/0x88/0x8a]) and moves to 2; state 2 jitters X/Z ±16 and Y ±8 around the anchor every
+    frame (a fresh PSX-style LCG rand() per axis) and fires a shake sound-effect request (id 129), staying
+    at 2 until external code sets state 3, which restores the exact anchor and returns to 0.
+  - **Y-only shake, three variants of the same capture→jitter shape:** 4→5 mirrors 1→2 but Y-only (±32
+    jitter, fx id 241, free-running at 5); 6→7 and 8→9 are ONE-SHOT pulses — states 6/8 capture the anchor
+    and fall straight into 7/9's jitter **in the same frame** (this is the actual recompiled control flow,
+    not a bug: no jump back to the dispatcher between them). 7/9 abort to state 0 (no jitter) if `cam[0x64]`
+    is busy, else jitter once (±32 for 7, ±16 for 9, fx id 129) and always end at state 0.
+  - The two callees (0x8009A450 PSX-style `rand()`, 0x800521F4 a shake sound-effect request queue) are a
+    utility library, not camera math — kept substrate via the existing `call()` helper (extended with an a3
+    param since this fn takes 4 register args, unlike the trig helpers).
+- **verified:** oracle unit test `shakeTail` = **0 mismatching words over 3000 iters, 0 skips** (cam[0x76]
+  seeded `rnd()%12` to sweep every state label + the >=10 default).
+- **CAMERA TREE NOW FULLY NATIVE** except the true field OVERLAYS reached by driver modes 0/1 (render
+  dispatch) and 9/10/17 — those are loaded `\BIN\*.BIN` content, a separate porting track (docs/pc-subsystem-
+  rebuild.md). Next subsystem: ObjectWorld (entity pool + spawn + node/animation walk) per
+  docs/port-progress.md.
+- **refs:** game/camera/cutscene_camera.{h,cpp} (shakeTail); cutscene_camera_test.cpp case 24; 2026-07-01
+  (later-294e).
+
 ## Superseded earlier conclusions (kept so the dead ends aren't re-walked)
 - later-290 "resident camera is CUTSCENE-only, free-roam camera is in the 0x8013xxxx overlay" — WRONG
   (rec_dispatch-blindness artifact, see above). The 0x8013xxxx cluster is field render/objects.

@@ -94,6 +94,11 @@ public:
   void angleStep();                    // FUN_8006E010 — angle accumulator step.
   void rotBuild();                     // FUN_8006E464 — rotation/look-at builder (special-cam modes).
   void lookAt();                       // FUN_8006D02C — build the camera basis/view matrix into S.
+  // Post-mode TAIL (0x8006C988) — the camera SHAKE state machine; update() runs it after every mode, every
+  // frame. cam[0x76] is the shake state (driven by external code: 0=idle); cam[0x86/0x88/0x8a] hold the
+  // pre-shake anchor snapshot of the look position (S+0x02/0x06/0x0a). See cutscene_camera.cpp for the
+  // per-state breakdown (3-axis free-running shake, Y-only free-running shake, two Y-only one-shot pulses).
+  void shakeTail();                    // FUN_8006C988
 
   Core* c;
   uint32_t cam_;
@@ -120,7 +125,7 @@ private:
   bool followAxis(uint32_t accAddr, uint32_t tgt32Addr, uint16_t tgtInt, uint16_t curInt, int16_t maxStep);
   // Call a retained libgte trig/matrix helper (rsin/rcos/ratan2/isqrt/…) via the substrate — they are a
   // math library, not PSX hardware, so they stay substrate. Returns v0.
-  int32_t call(uint32_t fn, int32_t a0, int32_t a1 = 0, int32_t a2 = 0);
+  int32_t call(uint32_t fn, int32_t a0 = 0, int32_t a1 = 0, int32_t a2 = 0, int32_t a3 = 0);
   // Dispatch a still-unowned resident camera LEAF (or a field overlay handler) via the substrate, mirroring
   // the driver's `jal fn` exactly: set only a0 (=cam_) and, when given, a1 — leave a2/a3 alone (verified the
   // targets don't read them). update()/init() use these for the leaves/overlays they don't own yet.
