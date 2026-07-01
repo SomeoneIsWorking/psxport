@@ -991,10 +991,30 @@ ov_field_frame's 9 substrate children owned native (was 2 native/9, now 4 native
   verbatim from MAIN.EXE .text @0x80015A40 init / @0x80015A98 run, 21 overlay leaves + 1 default
   each, indexed by the same 0x800BF870 render-mode byte). Phase 0 = call INIT handler then set
   phase=1; phase 1 = per-frame RUN handler; phase <0 or ≥2 = no-op. Handlers get a0 = 0x800F2418.
-  Smoke: 2000 frames clean. **ov_field_frame is now 9 native / 9 direct children — every direct
-  child of the per-frame field driver is native.** The recomp-dep frontier moves down to those
-  natives' own leaves (rand 0x8009A450, matrix 0x80051794, libgpu, and each overlay handler's
-  callees). — they descend into per-area A00 object behaviors (the 0x8013xxxx
+  Smoke: 2000 frames clean.
+- ✅ **DONE (later-293) — the last 3 substrate leaves in ov_field_frame owned native.**
+  `Engine::modePerFrameDispatch` (0x80022A80): 24-way mode-keyed dispatcher, table @0x8009D1D4,
+  mode 3 skipped, no bounds check (faithful).
+  `Engine::postRenderTick` (0x80077D8C): 3-state fx-trigger + countdown on byte 0x800BF842
+  (fx-trigger leaf FUN_80074590 stays substrate).
+  `Engine::frameStartTick` (0x80059D28): per-frame prologue — counter + heading mask + flag
+  reset + mode-keyed handler (2/3/7/20 or default 0x8005950C) + scratchpad master-pos seed
+  + LFSR rand advance.
+  **ov_field_frame per-frame gameplay block now has ZERO substrate dispatches** — every direct
+  child is a native method or a native free function. The remaining `d0(...)` in the file are
+  either (a) leaf callees of native methods (each overlay handler's leaves, mode-keyed FX
+  trigger, per-frame area update 0x80075A80), or (b) inside the tail (0x80075A80 = ~156-line
+  per-frame area update state machine — separate port task).
+- ✅ **DONE (later-294) — first library subsystem class-ified: `class Rng` (game/math/rng.h/.cpp)
+  for the PSX libc rand LCG at 0x8009A450.** Seed at guest 0x80105EE8 (hard ABI; shared with
+  still-substrate callers so RNG streams don't diverge). Embedded as `Core::rng`, wired the same
+  way as `ScreenFade` / `Engine`. `Engine::frameStartTick`'s per-frame rand tick now calls
+  `c->rng.next()` directly instead of rec_dispatch — one less substrate hop per field frame.
+- ☐ **NEXT — advance either axis:** (a) port 0x80075A80 (the last substrate leaf in ov_field_frame's
+  tail, 156 lines — per-frame area update state machine, iterates a 24-entry 10-byte-per-slot table
+  based at 0x800BE238 keyed by counter at 0x800BED78); or (b) descend into each overlay handler's
+  callees (the recdep-hot ones — matrix 0x80051794, libgpu 0x80082xxx/0x80083xxx — each a small
+  class in the same pattern as `Rng`, so multiple substrate hops fold at once). — they descend into per-area A00 object behaviors (the 0x8013xxxx
   handlers, ~5/frame each in recdep). Method: reimplement the DISPATCHER faithfully, route methods via
   dispatch_native_behavior|rec_dispatch, A/B RAM+spad 0-diff (build native vs `git stash` substrate, dumpram
   at f1500, cmp). Re-run `recdep` after each to re-rank.
