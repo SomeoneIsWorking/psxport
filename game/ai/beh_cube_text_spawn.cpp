@@ -30,6 +30,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "spawn.h"   // world_despawn
+#include "graphics_bind.h"   // ov_obj_render_update (FUN_800517F8)
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
@@ -55,7 +56,7 @@ void beh_cube_text_spawn(Core* c) {
     else if (type == 0) { c->r[4] = nd; rec_dispatch(c, 0x8003A790u); }
     else if (type == 2) { c->r[4] = nd; rec_dispatch(c, 0x8003ABE4u); }
     c->mem_w8(nd + 1, 1);
-    c->r[4] = nd; rec_dispatch(c, 0x800517F8u);                 // FUN_800517f8
+    c->r[4] = nd; ov_obj_render_update(c);                 // FUN_800517f8
     return;
   }
   if (st >= 2) {

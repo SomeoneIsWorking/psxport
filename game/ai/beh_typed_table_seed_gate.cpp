@@ -107,7 +107,7 @@ void beh_typed_table_seed_gate(Core* c) {
 
   // ---- render tail (80133D34..80133D44) ----
   c->r[4] = obj; rec_dispatch(c, 0x8004766Cu);        // 80133D34 jal 0x8004766c (a0=s1)
-  c->r[4] = obj; rec_dispatch(c, 0x800517F8u);        // 80133D3C jal 0x800517f8 (a0=s1)
+  c->r[4] = obj; ov_obj_render_update(c);        // 80133D3C jal 0x800517f8 (a0=s1)
   // 80133D44 j epilogue
 }
 

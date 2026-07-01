@@ -192,7 +192,7 @@ void beh_typed_init_scene_trigger(Core* c) {
     }
   }
   c->mem_w8(obj + 0x2b, 0);
-  c->r[4] = obj; rec_dispatch(c, 0x800517F8u);
+  c->r[4] = obj; ov_obj_render_update(c);
 }
 
 void ov_beh_typed_init_scene_trigger(Core* c) {

@@ -37,7 +37,7 @@ constexpr uint32_t S1     = 0x800E7E80u;   // the prologue's s1 base (0x800e0000
 inline void render_and_return(Core* c, uint32_t obj) {
   c->mem_w8(obj + 0x2b, 0);
   c->r[4] = obj;
-  rec_dispatch(c, 0x800517F8u);
+  ov_obj_render_update(c);
 }
 
 // LAB_80073be0 — shared "SFX + advance" tail of cases 1/2: node[5]++, FUN_80074590(0x11, 0, 0).

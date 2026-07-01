@@ -78,7 +78,7 @@ void beh_cull_tick_render(Core* c) {
   c->r[4] = obj; rec_dispatch(c, 0x8007778Cu);     // 8012D4AC jal 0x8007778c (a0=s0)  cull
   if (c->r[2] == 0) return;                         // 8012D4B4 beqz v0 -> 0x8012d4dc (culled -> epilogue)
   c->r[4] = obj; rec_dispatch(c, 0x8012D27Cu);     // 8012D4BC jal 0x8012d27c (a0=s0)  per-type tick
-  c->r[4] = obj; rec_dispatch(c, 0x800517F8u);     // 8012D4C4 jal 0x800517f8 (a0=s0)  render-state update
+  c->r[4] = obj; ov_obj_render_update(c);     // 8012D4C4 jal 0x800517f8 (a0=s0)  render-state update
   // 8012D4CC j 0x8012d4dc (epilogue)
 }
 

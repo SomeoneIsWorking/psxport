@@ -165,7 +165,7 @@ void beh_sibling_angle_track(Core* c) {
   c->mem_w16(obj + 0x32, (uint16_t)newv);              // 801397FC sh v0, 0x32(s2)  (delay slot)
   rec_dispatch(c, 0x8007778Cu);                         // 801397F8 jal 0x8007778c (cull)
   if (c->r[2] == 0) return;                             // 80139800 beqz v0 -> epilogue
-  c->r[4] = obj; rec_dispatch(c, 0x800517F8u);          // 80139808 jal 0x800517f8 (render; a0=s2 delay)
+  c->r[4] = obj; ov_obj_render_update(c);          // 80139808 jal 0x800517f8 (render; a0=s2 delay)
   // 80139810 j 0x80139820 (epilogue)
 }
 

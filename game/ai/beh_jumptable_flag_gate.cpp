@@ -47,7 +47,7 @@ constexpr uint32_t BEH_FN = 0x8012D4ECu;
 // LAB_8012d848: node[1]=v0; jal 0x800517f8(a0=obj); j epilogue.  (caller supplies v0; here always 1)
 inline void tail_set1_and_render(Core* c, uint32_t obj) {  // 0x8012d844 / 0x8012d848 / 0x8012d84c
   c->mem_w8(obj + 1, 1);                                    // 8012D848 sb v0(=1),1(s0)
-  c->r[4] = obj; rec_dispatch(c, 0x800517F8u);             // 8012D84C jal 0x800517f8 ; 8012D850 move a0,s0
+  c->r[4] = obj; ov_obj_render_update(c);             // 8012D84C jal 0x800517f8 ; 8012D850 move a0,s0
 }
 
 // LAB_8012d82c..8012d840: set bit (4 if node[3]==0 else 8) in DAT_800bf9df; node[0x18..0x1a]=0; node[4]=3.
@@ -132,7 +132,7 @@ void beh_jumptable_flag_gate(Core* c) {
     // sltiu v1,node[3],2 ; beqz v1 -> 0x8012d5a4  (taken when node[3] >= 2)
     if (n3 >= 2) {                                          // 8012D578 beqz -> 0x8012d5a4
       c->mem_w8(obj + 0xb, 2);                              // 8012D5AC sb v0(=2),0xb(s0)
-      c->r[4] = obj; rec_dispatch(c, 0x800517F8u);          // 8012D84C jal 0x800517f8 (via j 0x8012d84c)
+      c->r[4] = obj; ov_obj_render_update(c);          // 8012D84C jal 0x800517f8 (via j 0x8012d84c)
       return;                                               // 8012D854 j epilogue
     }
     // node[3] < 2:
@@ -141,7 +141,7 @@ void beh_jumptable_flag_gate(Core* c) {
       return;                                               // 8012D594 j 0x8012d8f4 (epilogue)
     }
     c->mem_w8(obj + 0xb, 0);                                // 8012D5A0 sb zero,0xb(s0)  (delay slot of j 0x8012d84c)
-    c->r[4] = obj; rec_dispatch(c, 0x800517F8u);            // 8012D84C jal 0x800517f8
+    c->r[4] = obj; ov_obj_render_update(c);            // 8012D84C jal 0x800517f8
     return;                                                 // 8012D854 j epilogue
   }
 

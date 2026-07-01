@@ -30,6 +30,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "graphics_bind.h"   // ov_obj_render_update (FUN_800517F8)
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
@@ -266,7 +267,7 @@ void beh_sine_motion_sfx(Core* c) {
   L4fc:
    v0 = (int32_t)c->mem_r8(nd + 1);      // lbu node[1]
    if (v0 == 0) goto L598;
-   c->r[4] = nd; rec_dispatch(c, 0x800517f8u);     // FUN_800517F8(node)
+   c->r[4] = nd; ov_obj_render_update(c);     // FUN_800517F8(node)
    v0 = (int32_t)c->mem_r8(0x800bf809u);
    if (v0 != 0) goto L598;
    v0 = (int16_t)(uint16_t)s1;           // sext16(s1)

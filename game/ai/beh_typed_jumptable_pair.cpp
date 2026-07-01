@@ -331,7 +331,7 @@ void beh_typed_jumptable_pair(Core* c) {
 
   // ---- common tail (0x80139580) ----
   if (c->mem_r8(obj + 1) != 0) {                      // 80139580 lbu v0,1(s0) ; 80139588 beqz -> 0x80139598
-    c->r[4] = obj; rec_dispatch(c, 0x800517F8u);      // 80139590 jal 0x800517f8 (a0=s0)
+    c->r[4] = obj; ov_obj_render_update(c);      // 80139590 jal 0x800517f8 (a0=s0)
   }
   c->mem_w8(obj + 0x29, 0);                           // 80139598 sb zero, 0x29(s0)
   c->mem_w8(obj + 0x2b, 0);                           // 801395A0 sb zero, 0x2b(s0)  (delay slot of j epilogue)

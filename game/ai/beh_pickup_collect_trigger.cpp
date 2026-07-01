@@ -80,7 +80,7 @@ bool beh_pickup_collect_trigger_body(Core* c) {
     uint16_t sid = c->mem_r16(0x800A4CECu + (uint32_t)c->mem_r8(obj + 3) * 2);
     c->mem_w16(obj + 0x58, 0);
     c->mem_w16(obj + 0x56, sid);
-    c->r[4] = obj; rec_dispatch(c, 0x800517F8u);
+    c->r[4] = obj; ov_obj_render_update(c);
     return true;
   }
 
