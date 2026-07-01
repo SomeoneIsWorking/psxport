@@ -206,6 +206,26 @@ void ov_sop_field_mode(Core*);           // engine/sop.cpp — native SOP field-
 void native_transition_area_load(Core*); // engine/sop.cpp — sync transition area-DATA load
 void engine_fade_set(Core*, uint32_t color, uint32_t a1);  // engine/gpu_lib.cpp — engine-owned screen fade
 void gpu_clear_fade(Core* core);                           // runtime/recomp/gpu_gpu.cpp — per-frame fade reset (per-core)
+void ov_game_func_801084F8(Core*);                          // generated/ov_game_disp.c — still-recomp: draw pause
+                                                             // menu + cursor/page-transition handling
+
+// FUN_8010810C page-1 dim-fade branch (task+0x6B == 1, "draw main pause menu" — see game/ui/menu.cpp's RE
+// of the same dispatcher). Disasm (generated/ov_game_shard_0.c:1312-1320, label L_8010829C): while the
+// pause-menu page-1 handler is selected, EVERY frame it runs an UNCONDITIONAL, NON-RAMPING flat-gray dim
+// (FUN_8007E9C8(0x00808080, a1=0, weight=4) -> engine_fade_set) then falls through to FUN_801084F8 (menu
+// draw + cursor/page nav, still recomp). This is NOT the reference per-node fade SM (no ramp counter, no
+// node state) — own JUST this page's shape here; the other 11 pages + the dispatcher's bounds-check/table
+// jump stay recomp via d0(c, 0x8010810cu) (own-caller-before-callee: the caller (ov_field_frame et al.) is
+// already native, but the callee's other pages are unexplored, so full transcription is out of scope).
+static void ov_game_submit_810c(Core* c) {
+  uint32_t task = c->mem_r32(0x1F800138u);
+  if (task && c->mem_r8(task + 0x6Bu) == 1) {
+    engine_fade_set(c, 0x00808080u, 0u);   // FUN_8007E9C8(0x808080,0,4) -- flat gray, non-ramping
+    ov_game_func_801084F8(c);              // still recomp: menu draw + cursor/page transitions
+    return;
+  }
+  d0(c, 0x8010810cu);
+}
 void ov_objwalk(Core*);                  // engine/engine_tomba2.cpp — native FUN_8007a904 object-list walk
 void ov_disp_26c88(Core*);               // engine/entity.cpp — native FUN_80026c88 display update
 void ov_list_walk_69b28(Core*);          // engine/engine_tomba2.cpp — native FUN_80069b28 2nd object-list walk
@@ -378,7 +398,7 @@ static void ov_field_frame(Core* c) {
   // from it (the native render below consumes per-frame queues, so it is not re-runnable). No-op unless on.
   dv_snapshot(c);
   if (c->mem_r8(0x1f800136u) < 2) ov_render_frame(c);   // 0x8003f9a8 — NATIVE render orchestrator + walk
-  FFS("ff_submit810c", d0(c, 0x8010810cu));     // render submit
+  FFS("ff_submit810c", ov_game_submit_810c(c)); // render submit (page-1 dim-fade owned; other pages recomp)
   // RENDER GUEST-MEMORY DECOUPLING (user 2026-06-24: the native renderer must leave NO guest-memory side
   // effect — only native GAMEPLAY may write guest memory). The native render above (ov_render_frame + submit)
   // still scribbles guest scratchpad/OT (e.g. the RotMatrix SVECTOR at 0x1F8000xx) as PSX-GTE transform
@@ -402,6 +422,125 @@ static void ov_field_frame(Core* c) {
   }
   FFS("ff_77d8c", d0(c, 0x80077d8cu));
   FFS("ff_area75a80", d0(c, 0x80075a80u));      // per-frame area update
+}
+
+// ov_scene_fade_seq — GAME-overlay a0l screen-fade sequencer (guest FUN_8010957C / ov_a0l_gen_8010957C,
+// generated/ov_a0l_shard_1.c:146-310), reached from ov_field_run's sm[0x4e]==0xb via the FIXED global node
+// 0x800E8008 (not a walked object). This is a DISTINCT state machine from the a06 door/sub-scene fade
+// (ov_transition_main above) — it only shares the low-level screen-fade primitive engine_fade_set
+// (FUN_8007E9C8), not the SM shape: an outer 0/1 gate (node+2) wrapping a bounds-checked 6-step jump table
+// on an inner index (node+3), a ~20-tick delay counter (node+104), and a fade "level" ramp (node+106,
+// re-seeded to 31 on entry/reset).
+//
+// OPEN ISSUE (not yet resolved — flag before trusting this live): FUN_8007E9C8's real signature is
+// (color, a1, a2); every OTHER known call site (ov_transition_main, door fades) always passed a2==4, which
+// engine_fade_set's 2-arg (color, a1) signature already assumed away. THIS function's guest calls use
+// a2==0 (state-0 init) and a2==1 (every ramp step) instead — a distinct pattern engine_fade_set has no
+// parameter for. What guest a2 actually controls is unresolved; wiring onto engine_fade_set as-is silently
+// drops that distinction, so the fade blend mode here may not match the PSX reference until that's dug up.
+//
+// Callees NOT decoded (left as rec_dispatch leaves, contiguity-correct — port only after this leaf is
+// verified live): FUN_8005082C(0,0,0), FUN_8001D71C(11) [state-0 init, purpose unknown]; ov_a0l_func_8010D030
+// (a0=node) [generic per-node init helper]; ov_a0l_func_8010CC68(a0) [polled "sub-step done" helper,
+// return gates steps 0/3 by return value, steps 1/4 by fade-level reaching 0 instead].
+//
+// 0x800BF839/0x800BF83A are the SAME globals ov_field_run (below) already reads to drive its own state
+// (case 1 checks 0x800bf839==3, case 8 rewrites both) — this function and ov_field_run communicate through
+// guest memory, not a call, which is fine (guest-memory-direct is an accepted PC-native pattern here) but
+// worth knowing at both ends.
+static void ov_scene_fade_seq(Core* c, uint32_t node) {
+  uint8_t outer = c->mem_r8(node + 2);
+
+  if (outer == 0) {
+    d3(c, 0x8005082cu, 0, 0, 0);             // FUN_8005082C(0,0,0) -- not yet decoded
+    d1(c, 0x8001d71cu, 11);                  // FUN_8001D71C(11)    -- not yet decoded
+    c->mem_w8(0x800bfa55u, 0);
+    c->mem_w8(node + 3, 0);
+    c->mem_w8(node + 2, (uint8_t)(outer + 1));   // -> outer state 1
+    d1(c, 0x8010d030u, node);                // ov_a0l_func_8010D030(node) -- not yet decoded
+    c->mem_w16(node + 106, 31);
+    engine_fade_set(c, 0x00ffffffu, /*a1=*/0);   // NOTE: guest a2 was 0 here — see OPEN ISSUE above
+    return;
+  }
+
+  if (outer != 1) return;   // any other outer value: permanent no-op (matches reference: no default handler)
+
+  uint8_t step = c->mem_r8(node + 3);
+  if (step >= 6) return;    // bounds check -- once step reaches 6 this function is inert forever
+
+  auto ramp_level = [&](int32_t sign) -> uint32_t {
+    // v = (level << 3) [negated if sign<0] & 0xFF, replicated into R/G/B (same "gray" packing shape as the
+    // a06 reference's state-2, but here the source is level<<3, not the raw level byte).
+    int16_t level = (int16_t)c->mem_r16(node + 106);
+    uint32_t v = (uint32_t)((sign < 0) ? -(level << 3) : (level << 3)) & 0xffu;
+    return (v << 16) | (v << 8) | v;
+  };
+  auto decrement_level_clamped = [&]() {
+    int16_t level = (int16_t)c->mem_r16(node + 106);
+    if (level != 0) c->mem_w16(node + 106, (uint16_t)(level - 1));
+  };
+  auto advance_step = [&]() {
+    uint8_t s = c->mem_r8(node + 3);
+    c->mem_w8(node + 3, (uint8_t)(s + 1));
+  };
+
+  switch (step) {
+    case 0: {                                    // ramp UP, gated by helper return value
+      engine_fade_set(c, ramp_level(+1), /*a1=*/1);   // guest a2 was 1 here — see OPEN ISSUE above
+      decrement_level_clamped();
+      d1(c, 0x8010cc68u, 0);                          // ov_a0l_func_8010CC68(0) -> result in c->r[2]
+      if (c->r[2] == 0) return;                       // not done yet
+      c->mem_w16(node + 106, 31);
+      advance_step();
+      return;
+    }
+    case 1: {                                    // ramp DOWN, gated by fade LEVEL reaching 0
+      engine_fade_set(c, ramp_level(-1), /*a1=*/1);
+      decrement_level_clamped();
+      d1(c, 0x8010cc68u, 0);                          // result unused this branch
+      if ((int16_t)c->mem_r16(node + 106) != 0) return;
+      advance_step();
+      c->mem_w16(node + 104, 20);                     // arm the step-2 delay counter
+      return;
+    }
+    case 2: {                                    // plain ~20-tick delay, then reset level + advance
+      uint16_t d = (uint16_t)(c->mem_r16(node + 104) - 1);
+      c->mem_w16(node + 104, d);
+      if (d != 0) return;
+      c->mem_w16(node + 106, 31);
+      advance_step();
+      return;
+    }
+    case 3: {                                    // same as case 0 but helper called with a0=1
+      engine_fade_set(c, ramp_level(+1), /*a1=*/1);
+      decrement_level_clamped();
+      d1(c, 0x8010cc68u, 1);
+      if (c->r[2] == 0) return;
+      c->mem_w16(node + 106, 31);
+      advance_step();
+      return;
+    }
+    case 4: {                                    // same as case 1 but helper called with a0=1;
+                                                  // on completion does NOT reset the level to 31
+      engine_fade_set(c, ramp_level(-1), /*a1=*/1);
+      decrement_level_clamped();
+      d1(c, 0x8010cc68u, 1);
+      if ((int16_t)c->mem_r16(node + 106) != 0) return;
+      advance_step();
+      return;
+    }
+    case 5: {                                    // completion tail: poke the shared "sm" struct + the
+                                                  // 0x800BF839/0x800BF83A control globals, advance
+      uint32_t sm = c->mem_r32(0x1f800138u);
+      c->mem_w16(sm + 74, 1);
+      c->mem_w16(sm + 76, 2);
+      c->mem_w16(sm + 78, 6);
+      c->mem_w8(0x800bf839u, 3);
+      c->mem_w16(0x800bf83au, 0x1501);
+      advance_step();
+      return;
+    }
+  }
 }
 
 // FIELD RUNNING sub-machine 0x80106b98 — native control flow + state bodies (decomp:
@@ -534,7 +673,7 @@ static void ov_field_run(Core* c) {
       break;
     }
     case 0xb:
-      d1(c, 0x8010957cu, 0x800e8008u);
+      ov_scene_fade_seq(c, 0x800e8008u);   // OWNED native — replaces d1(0x8010957c, node) (a0l fade sequencer)
       break;
     default: break;
   }
@@ -556,7 +695,7 @@ static void ov_field_frame_x(Core* c) {
     d0(c, 0x8006ec44u);
   }
   if (c->mem_r8(0x1f800136u) < 2) ov_render_frame_x(c); // 0x8003fa44 — NATIVE render orchestrator twin
-  d0(c, 0x8010810cu);                           // render submit
+  ov_game_submit_810c(c);                      // render submit (page-1 dim-fade owned; other pages recomp)
   d0(c, 0x80077d8cu);
   d0(c, 0x80075a80u);                           // per-frame area update
 }

@@ -42,15 +42,23 @@
   This may also be entangled with the ALREADY-DOCUMENTED open frontier bug just above ("2D-poly overlays...
   on the field 2D-only walk") since a fade rect is exactly the kind of 2D poly that gets dropped/misclassified
   there.
-- **fix (3, NOT yet implemented — scoped plan):** (a) RE + natively port the generic per-node fade SM pattern
-  (reference instance: a06 `0x80117AAC`, generated/ov_a06_shard_0.c:6689-6757) once, wire it at each of its
-  per-overlay addresses (a06/a08/a0l + verify game shard_1 `0x80108E58` isn't the same shape). (b) Port GAME's
-  remaining `FUN_8010810C` (render-submit dispatcher — only the sub-branch containing the fade call needs
-  isolating, not the whole submit path) and `FUN_80108EBC`. (c) Once fade rects are natively `engine_fade_set`
-  everywhere, ALSO fix `present()`'s raw-VRAM-passthrough-during-empty-frames (hold the last composited frame
-  or an explicit black instead of sampling live VRAM when nothing was drawn this frame) — user directive:
-  build this as an explicit, faithful fade/transition state machine (matching what each real PSX transition
-  already does), not an ad-hoc "cache last frame" heuristic.
+- **fix (3, partially implemented, 2026-07-01):** GAME's `ov_a0l_shard_1` fade sequencer (all 5 calls, guest
+  `FUN_8010957C` / `ov_a0l_gen_8010957C` reached via `ov_field_run` sm[0x4e]==0xb) is now natively owned as
+  `ov_scene_fade_seq` (engine_stage.cpp) — a 6-step per-node ramp/delay SM on the FIXED global node
+  `0x800E8008`. GAME's `FUN_8010810C` render-submit dispatcher's pause-menu page-1 dim-fade sub-branch (task
+  byte @0x6B==1: unconditional flat-gray non-ramping fade before falling to still-recomp menu draw
+  `FUN_801084F8`) is now `ov_game_submit_810c` — the other 11 dispatcher pages stay recomp (`d0` fallback).
+  **OPEN in `ov_scene_fade_seq`:** guest `FUN_8007E9C8`'s 3rd arg (a2) is `0`/`1` at this call site (every
+  other known site always passed a2==4); `engine_fade_set`'s 2-arg signature has no parameter for it, so what
+  a2 controls here is unresolved and the fade blend mode may not exactly match PSX until dug up. NOT yet
+  live-verified (needs reaching the a0l area + the pause menu in a running session).
+  Remaining unowned: (a) RE + natively port the generic per-node fade SM pattern shared by a06/a08 (reference
+  instance: a06 `0x80117AAC`, generated/ov_a06_shard_0.c:6689-6757; a06 8 calls + a08 1 call) — verify GAME
+  shard_1 `0x80108E58`/`0x80108EBC` isn't the same shape first. (b) Once fade rects are natively
+  `engine_fade_set` everywhere, ALSO fix `present()`'s raw-VRAM-passthrough-during-empty-frames (hold the
+  last composited frame or an explicit black instead of sampling live VRAM when nothing was drawn this frame)
+  — user directive: build this as an explicit, faithful fade/transition state machine (matching what each
+  real PSX transition already does), not an ad-hoc "cache last frame" heuristic.
 - **verification note:** each area's port needs a LIVE reproduction (reach that specific area/overlay in
   gameplay) to RAM/scene-diff — this is NOT verifiable by screenshot alone (see the AO-outline miss above).
   Use the debug server (`tools/dbgclient.py`, `PSXPORT_DEBUG_SERVER=1`) to inspect a paused live session
