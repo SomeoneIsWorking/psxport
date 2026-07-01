@@ -94,7 +94,7 @@ void beh_record_list_scanner(Core* c) {
     }
     if (verdict == -2 && (c->mem_r32(obj + 0x74) & s1) != 0) verdict = 0;
     if (verdict == -2 && s2 != 0) {
-      c->r[4] = lh(c, s4 + 10); c->r[5] = 0; rec_dispatch(c, 0x8004D868u);
+      c->r[4] = lh(c, s4 + 10); c->r[5] = 0; ov_bittest_4d868(c);
       if (c->r[2] != 0) verdict = 0;
     }
     if (verdict == -2) verdict = ((c->mem_r32(obj + 0x74) & s1) != 0) ? 0 : 1;

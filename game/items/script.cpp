@@ -86,7 +86,7 @@ static void script_vm_4ce14(Core* c) {
     if (!skip && (c->mem_r32(s5 + 20) & mask)) skip = true;   // slot already done
     if (!skip && s2set) {                                // bit7 set -> predicate 0x8004D868
       c->r[4] = (uint32_t)(int32_t)(int16_t)c->mem_r16(s4 + 10); c->r[5] = 0;
-      rec_dispatch(c, 0x8004D868u);
+      ov_bittest_4d868(c);
       if (c->r[2] != 0) skip = true;
     }
     if (!skip && (c->mem_r32(s5 + 20) & mask)) skip = true;   // re-check (predicate may have set it)

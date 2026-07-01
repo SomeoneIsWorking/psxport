@@ -7,7 +7,7 @@ A native may exist already. **LIVE** = reachable by direct C call from a native_
 dispatch root (actually runs). **ORPHAN** = native exists but only the REMOVED override
 table used to reach it — it is dead code until a native parent calls it directly.
 
-Totals: 412 native fns, 226 owned addresses, 104 LIVE / 308 ORPHAN.
+Totals: 413 native fns, 228 owned addresses, 104 LIVE / 309 ORPHAN.
 
 | addr | status | symbol | file:line | depends-on (still-PSX) | summary |
 |------|--------|--------|-----------|------------------------|---------|
@@ -89,6 +89,8 @@ Totals: 412 native fns, 226 owned addresses, 104 LIVE / 308 ORPHAN.
 | 0x8004D4C4 | ORPHAN | `ov_inventory_give_and_flag` | game/items/inventory.cpp:162 |  |  |
 | 0x8004D4F4 | ORPHAN | `ov_inventory_give` | game/items/inventory.cpp:171 |  |  |
 | 0x8004D7EC | ORPHAN | `ov_bittest_4d7ec` | game/math/mathlib.cpp:30 | 0x8004D7EC | pure bitmap bit-test (~2%, 6.8k calls): byte = bitmap[(int16)(a0/8)] t… |
+| 0x8004D7EC | ORPHAN | `ov_bittest_4d868` | game/math/mathlib.cpp:51 | 0x8004D868 | sibling of FUN_8004D7EC (bit-test) against a fixed third bitmap @0x800… |
+| 0x8004D868 | ORPHAN | `ov_bittest_4d868` | game/math/mathlib.cpp:51 | 0x8004D868 | sibling of FUN_8004D7EC (bit-test) against a fixed third bitmap @0x800… |
 | 0x8004FE84 | ORPHAN | `Engine::sceneRenderListBuilder` | game/scene/engine_stage.cpp:354 |  | Native FUN_8004FE84 — a 2-phase scene/render-list builder driver (stru… |
 | 0x800509B4 | LIVE | `eng_init_display` | game/scene/engine_init.cpp:50 | 0x80050738 | engine DISPLAY + GTE-projection init, PC-native. Sets the GTE projecti… |
 | 0x80050A0C | LIVE | `eng_init_framestate` | game/scene/engine_init.cpp:30 |  | engine frame-state init: zero the vblank counter and the double-buffer… |
@@ -237,7 +239,7 @@ Totals: 412 native fns, 226 owned addresses, 104 LIVE / 308 ORPHAN.
 | 0x80096370 | LIVE | `ov_font_bank2_store` | game/ui/engine_font.cpp:40 |  | font-bank2 store. `*0x80105d28(sb) = a0; jr ra`. Leaf; does NOT set a … |
 | 0x800963A0 | LIVE | `ov_font_bank_select` | game/ui/engine_font.cpp:27 |  | font-bank selector. a0 = bank index. If ((a0-1)&0xff) < 24, store the … |
 | 0x80096590 | ORPHAN | `ov_bav_load` | game/ui/engine_bav.cpp:286 | 0x80096590 |  |
-| 0x8009A450 | ORPHAN | `ov_rand` | game/math/mathlib.cpp:48 | 0x8009A450 |  |
+| 0x8009A450 | ORPHAN | `ov_rand` | game/math/mathlib.cpp:69 | 0x8009A450 |  |
 | 0x8009A450 | ORPHAN | `ov_rand` | game/math/mathlib.h:8 |  |  |
 | 0x8009CAEC | ORPHAN | `ov_sync_ok` | runtime/recomp/sync_overrides.cpp:38 |  | DecDCTinSync / 0x8009CB80 DecDCToutSync — libmdec in/out sync. Real bo… |
 | 0x8009CB80 | ORPHAN | `ov_sync_ok` | runtime/recomp/sync_overrides.cpp:38 |  | DecDCTinSync / 0x8009CB80 DecDCToutSync — libmdec in/out sync. Real bo… |
@@ -248,6 +250,7 @@ Totals: 412 native fns, 226 owned addresses, 104 LIVE / 308 ORPHAN.
 | 0x800BF51A | LIVE | `eng_init_alloc` | game/scene/engine_init.cpp:185 | 0x80086738 0x80089160 0x8009A340 | engine ALLOCATOR / dispatch-table init. a0/a1 = a struct span (0x800bf… |
 | 0x800BF548 | ORPHAN | `Engine::sceneRenderListBuilder` | game/scene/engine_stage.cpp:354 |  | Native FUN_8004FE84 — a 2-phase scene/render-list builder driver (stru… |
 | 0x800BF842 | LIVE | `Engine::postRenderTick` | game/scene/engine_stage.cpp:1172 | 0x80074590 | Engine::postRenderTick — 3-state fx-trigger + countdown on byte 0x800B… |
+| 0x800BFDB4 | ORPHAN | `ov_bittest_4d868` | game/math/mathlib.cpp:51 | 0x8004D868 | sibling of FUN_8004D7EC (bit-test) against a fixed third bitmap @0x800… |
 | 0x800E8008 | ORPHAN | `CutsceneCamera::initSeedGrp` | game/camera/cutscene_camera.cpp:783 |  |  |
 | 0x800E8008 | LIVE | `CutsceneCamera::update` | game/camera/cutscene_camera.cpp:789 |  |  |
 | 0x800E8008 | LIVE | `ov_80078610` | game/world/pool.cpp:197 | 0x8006D02C 0x800846F0 | final per-area view init: zero two control blocks (scratchpad 0x1F8000… |

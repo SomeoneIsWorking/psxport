@@ -45,6 +45,27 @@ void ov_bittest_4d7ec(Core* c) {
   c->r[2] = mine;
 }
 
+// FUN_8004D868 — sibling of FUN_8004D7EC (bit-test) against a fixed third bitmap @0x800BFDB4
+// (no a1 selector). Same q=a0/8 toward-zero, r=a0%8, return byte & (1<<r). Pure guest-bitmap read.
+// Shares the `bitverify` gate with ov_bittest_4d7ec.
+void ov_bittest_4d868(Core* c) {
+  static int v = -1; if (v < 0) v = cfg_dbg("bitverify") ? 1 : 0;
+  int a0 = (int)c->r[4];
+  int q  = (a0 >= 0) ? a0 : (a0 + 7);
+  int a2 = q >> 3;                        // a0/8 toward zero
+  int a3 = a0 - (a2 << 3);                // a0%8
+  uint32_t base = 0x800BF870u + 1348u;    // = 0x800BFDB4
+  uint8_t byte = c->mem_r8(base + (uint32_t)(int32_t)(int16_t)a2);
+  uint32_t mine = (uint32_t)byte & (1u << ((uint32_t)(int32_t)(int16_t)a3 & 31u));
+  if (v) {
+    rec_super_call(c, 0x8004D868u);
+    static long ng = 0, nb = 0;
+    if ((uint32_t)c->r[2] != mine) { if (nb++ < 20) fprintf(stderr, "[bitverify868] MISMATCH a0=%d mine=%x oracle=%x\n", a0, mine, (uint32_t)c->r[2]); }
+    else if (++ng % 20000 == 0) fprintf(stderr, "[bitverify868] %ld matches\n", ng);
+  }
+  c->r[2] = mine;
+}
+
 void ov_rand(Core* c) {
   static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("randverify") ? 1 : 0;
   if (!s_v) { c->r[2] = rand_lcg(c); return; }
