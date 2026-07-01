@@ -29,6 +29,7 @@
 #include "render_internal.h" // shared render internals (PktSpanSession, obj_world_ord, native_gt3gt4)
 #include "engine_math.h"     // ov_mat_mul/ov_apply_matlv/ov_rot_x/y/z — the GTE-transform cluster
 #include "mtx.h"              // class Mtx — libgte helpers (identity, diagonal, ...)
+#include "trig.h"             // class Trig — libgte rsin/rcos
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -1189,8 +1190,7 @@ void ov_rwalk_b588(Core* c) {
         } else {                                                 // @5f4
           uint32_t v1b = c->mem_r8(node + 0x0D);
           if (v1b & 0x80) {                                      // @5fc≠0 → @604/@684 (v0 computed, then 32/32)
-            c->r[4] = (g & 0x0F) << 7; rec_dispatch(c, 0x80083E80u);
-            int32_t r = ((int32_t)(c->r[2] << 16)) >> 22;        // sll16/sra22
+            int32_t r = ((int32_t)((uint32_t)Trig::rsin(c, (int32_t)((g & 0x0F) << 7)) << 16)) >> 22;   // FUN_80083E80 -> native Trig::rsin
             c->mem_w8(node + 0x18, (uint8_t)(r + 48)); c->mem_w8(node + 0x19, 32); c->mem_w8(node + 0x1A, 32);
           } else if (v1b & 0x40) {                               // @62c → @634 (v0=32)
             c->mem_w8(node + 0x18, 32); c->mem_w8(node + 0x19, 32); c->mem_w8(node + 0x1A, 32);
@@ -1200,8 +1200,7 @@ void ov_rwalk_b588(Core* c) {
         }
       } else {                                                   // @64c: (v1&0x10)==0
         if (v1 & 0x80) {                                         // @650≠0 → @654/@680/@684 (v0=r+16+32, then 32/32)
-          c->r[4] = (g & 0x0F) << 7; rec_dispatch(c, 0x80083E80u);
-          int32_t r = ((int32_t)(c->r[2] << 16)) >> 22;
+          int32_t r = ((int32_t)((uint32_t)Trig::rsin(c, (int32_t)((g & 0x0F) << 7)) << 16)) >> 22;   // FUN_80083E80 -> native Trig::rsin
           c->mem_w8(node + 0x18, (uint8_t)(r + 48)); c->mem_w8(node + 0x19, 32); c->mem_w8(node + 0x1A, 32);
         } else {                                                 // @67c → @680/@684 (v0=0+32)
           c->mem_w8(node + 0x18, 32); c->mem_w8(node + 0x19, 32); c->mem_w8(node + 0x1A, 32);

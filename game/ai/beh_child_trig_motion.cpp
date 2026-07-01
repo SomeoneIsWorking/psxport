@@ -25,6 +25,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "spawn.h"   // world_despawn
+#include "trig.h"    // class Trig — libgte rsin/rcos
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
@@ -135,8 +136,8 @@ void beh_child_trig_motion(Core* c) {
       int32_t ang;
       if (c->mem_r8(0x800E7FC7u) & 1) ang = -(int32_t)(int16_t)c->mem_r16(0x800E7ED8u);
       else                            ang =  (int32_t)(int16_t)c->mem_r16(0x800E7ED8u);
-      uint32_t v0e = leafr(c, (uint32_t)ang, 0x80083E80u);   // FUN_80083E80(ang)
-      uint32_t v0f = leafr(c, (uint32_t)ang, 0x80083F50u);   // FUN_80083F50(ang)
+      uint32_t v0e = (uint32_t)Trig::rsin(c, ang);   // FUN_80083E80(ang) -> native Trig::rsin
+      uint32_t v0f = (uint32_t)Trig::rcos(c, ang);   // FUN_80083F50(ang) -> native Trig::rcos
       int32_t s0 = (-(int32_t)v0e) >> 9;             // sra 9 (arithmetic)
       int32_t s1 =  ((int32_t)v0f) >> 9;
       uint32_t vA = leafr2(c, (uint32_t)s1, 110, 0x80085690u);  // FUN_80085690(s1, 110)

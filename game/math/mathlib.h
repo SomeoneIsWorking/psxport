@@ -5,9 +5,9 @@
 #ifndef ENGINE_MATHLIB_H
 #define ENGINE_MATHLIB_H
 struct Core;
-void ov_rand(Core* c);            // FUN_8009A450 — platform PRNG (glibc LCG)
-void ov_trig_sin(Core* c);        // FUN_80083E80 — sin LUT
-void ov_trig_cos(Core* c);        // FUN_80083F50 — cos LUT
-void ov_trig_lut(Core* c);        // FUN_80083EBC — sin-quadrant lookup
+void ov_rand(Core* c);            // FUN_8009A450 — platform PRNG (glibc LCG); prefer c->rng.next()
 void ov_bittest_4d7ec(Core* c);   // FUN_8004D7EC — pure bitmap bit-test
+// FUN_80083E80 sin / FUN_80083F50 cos: use Trig::rsin(c, x) / Trig::rcos(c, x) directly
+// (game/math/trig.h). The old ov_trig_sin / ov_trig_cos / ov_trig_lut orphan override handlers
+// were removed 2026-07-02; callers migrated to the class.
 #endif

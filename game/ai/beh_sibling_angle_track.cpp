@@ -39,6 +39,7 @@
 #include <string.h>
 #include "spawn.h"   // world_despawn
 #include "graphics_bind.h"   // ov_obj_record_init
+#include "trig.h"            // class Trig — libgte rsin/rcos
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
@@ -152,9 +153,7 @@ void beh_sibling_angle_track(Core* c) {
   int32_t quot = (den != 0) ? (num / den) : 0;          // 801397B4 mflo a0 (quotient)
 
   int16_t s0 = (int16_t)(uint16_t)(c->mem_r16(s1 + 0x50) - c->mem_r16(s1 + 0x32));  // 801397B8/BC/C4 s0 = s1[0x50]-s1[0x32]
-  c->r[4] = (uint32_t)(int32_t)(int16_t)quot;          // 801397C8/D0 sll a0,16 ; sra a0,16 (a0 = (int16)quot)
-  rec_dispatch(c, 0x80083E80u);                         // 801397CC jal 0x80083e80 (angle helper)
-  int32_t trig = (int32_t)c->r[2];                      // v0 = return
+  int32_t trig = Trig::rsin(c, (int32_t)(int16_t)quot);  // 801397CC jal 0x80083e80 -> native class Trig::rsin
 
   int64_t prod = (int64_t)(int32_t)s0 * (int32_t)trig; // 801397DC mult s0,v0 (s0 sign-extended @801397D4/D8)
   int32_t v1 = (int32_t)(prod >> 12);                   // 801397EC sra v1,0xc  (mflo >> 12)
