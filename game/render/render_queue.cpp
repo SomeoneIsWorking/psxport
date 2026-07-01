@@ -411,6 +411,7 @@ void gpu_draw_world_quad(Core* core, const float* px, const float* py, const flo
                          const float (*sv)[3]) {
   if (!gpu_gpu_enabled()) return;
   g_dbg_world_quads++;   // PSXPORT_GPU_TRACE: world quads this frame (SBS diag)
+  if (cfg_dbg("silbbox")) { static int once=0; if (!once++) fprintf(stderr, "[silbbox] s_off=(%d,%d)\n", core->game->gpu.s_off_x, core->game->gpu.s_off_y); }
   GpuState& s = core->game->gpu;
   s.set_texpage(tp);
   s.set_clut(clut);

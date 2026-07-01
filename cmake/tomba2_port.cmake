@@ -181,10 +181,7 @@ set(PORT_SRC
   game/player/engine_player.cpp
   game/render/native_terrain.cpp
   game/render/render_queue.cpp
-  game/core/clib.cpp
-  game/math/gte.cpp
-  game/render/gpu_lib.cpp
-  game/audio/sound_voice.cpp
+  game/render/screen_fade/screen_fade.cpp
   game/render/margin_render.cpp
   game/audio/native_audio.c
   game/audio/native_music.c

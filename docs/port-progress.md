@@ -975,9 +975,14 @@ ov_field_frame's 9 substrate children owned native (was 2 native/9, now 4 native
   @0x800bf548), both in game/scene/engine_stage.cpp above ov_field_frame; their 10 leaf callees stay
   substrate. ov_field_frame is now 6 native/9 direct children. (Also fixed a codemap heuristic gap: an
   orphan doc-comment block glued to the next def, hiding the new addresses — separated with a blank line.)
+- ✅ **DONE (later-290) — 0x8006ec44 wired to native.** The camera driver at 0x8006EC44 was ALREADY owned as
+  `CutsceneCamera::update()` (game/camera/cutscene_camera.cpp; oracle-unit-tested end-to-end in
+  cutscene_camera_test.cpp) but ORPHANED — the `d0(c, 0x8006ec44u)` calls in `ov_field_frame` and
+  `ov_field_frame_x` still went through the substrate. Added `extern "C" void cam_update(Core* c)` shim
+  (thin wrapper over `CutsceneCamera(c, CAM_OBJ).update()`) and replaced both sites. Smoke: newgame + skip
+  500 + run 200 = 727 frames clean, no derail. ov_field_frame is now 7 native/9 direct children.
 - ☐ **NEXT — the content-heavy dispatchers** (engine_stage.cpp ~L285, still `d0(...)` in ov_field_frame):
-  0x80050de4 (42-overlay-calls, scene-table @0x800f2418), 0x8001cac0 (22-way state dispatch @0x800bf870),
-  0x8006ec44 (scene-event @0x800e8008) — they descend into per-area A00 object behaviors (the 0x8013xxxx
+  0x80050de4 (42-overlay-calls, scene-table @0x800f2418), 0x8001cac0 (22-way state dispatch @0x800bf870) — they descend into per-area A00 object behaviors (the 0x8013xxxx
   handlers, ~5/frame each in recdep). Method: reimplement the DISPATCHER faithfully, route methods via
   dispatch_native_behavior|rec_dispatch, A/B RAM+spad 0-diff (build native vs `git stash` substrate, dumpram
   at f1500, cmp). Re-run `recdep` after each to re-rank.

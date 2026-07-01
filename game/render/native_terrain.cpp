@@ -157,7 +157,7 @@ void terrain_render_pc(Core* c) {
         sv[kk][0] = wv[kk][0]; sv[kk][1] = wv[kk][1]; sv[kk][2] = pz; }
       cast = sv;
     }
-    sil_bbox_log_node("terrain", px, py, 4, node);
+    sil_bbox_log_verts("terrain", px, py, depth, 4, node, rec, r, g, b);
     gpu_draw_world_quad(c, px, py, depth, u, v, r, g, b, tp, clut, semi, cast);
     drawn++;
     if (ctl <= 0) break;                                   // control sign marks the last record

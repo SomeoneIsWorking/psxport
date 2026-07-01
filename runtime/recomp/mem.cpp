@@ -32,6 +32,8 @@ Core::Core() {
   memset((R3000*)this, 0, sizeof(R3000));
   memset(ram, 0, sizeof(ram));
   memset(scratch, 0, sizeof(scratch));
+  // Wire up owned subsystems' back-pointers so their methods can reach this Core's guest memory.
+  screenFade.core = this;
 }
 
 // PSXPORT_CW="lo,hi" — host-backtrace watchpoint: when ANY store lands in physical byte range

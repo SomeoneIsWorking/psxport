@@ -234,6 +234,14 @@ static void dbg_exec(FILE* out, const char* line) {
     sscanf(line, "%*s %u %u %u %u %255s", &x, &y, &w, &h, path);
     gpu_gpu_vram_region(path, (int)x, (int)y, (int)w, (int)h);
     fprintf(out, "vkvram (%u,%u %ux%u) -> %s\n", x, y, w, h, path);
+  } else if (!strcmp(cmd, "vkpix")) {          // raw 16-bit VRAM word(s) at x,y (dark-outline STP diag)
+    unsigned x = 0, y = 0, n = 1; sscanf(line, "%*s %u %u %u", &x, &y, &n);
+    uint16_t words[64]; if (n > 64) n = 64;
+    void gpu_gpu_vram_words(int, int, int, uint16_t*);
+    gpu_gpu_vram_words((int)x, (int)y, (int)n, words);
+    fprintf(out, "vkpix (%u,%u x%u):", x, y, n);
+    for (unsigned i = 0; i < n; i++) fprintf(out, " %04X", words[i]);
+    fprintf(out, "\n");
   } else if (!strcmp(cmd, "debug")) {
     char ch[200] = {0}; sscanf(line, "%*s %199[^\n]", ch);
     void cfg_dbg_set(const char*); cfg_dbg_set(ch);

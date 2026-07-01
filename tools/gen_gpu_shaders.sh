@@ -38,9 +38,13 @@ PY
   emit image.frag   spv_g_image_frag
   emit tri.vert     spv_g_tri_vert      # Pass 2: native 3D raster (untextured opaque)
   emit tri.frag     spv_g_tri_frag
-  emit tritex.vert  spv_g_tritex_vert   # native 3D raster (textured + in-shader semi blend)
+  emit tritex.vert  spv_g_tritex_vert   # native 3D raster (textured, opaque + semi-source sampling)
   emit tritex.frag  spv_g_tritex_frag
   emit rml.vert     spv_g_rml_vert      # RmlUi 2D mod/debug overlay (textured + premult-alpha blend)
   emit rml.frag     spv_g_rml_frag
+  emit fsq.vert       spv_g_fsq_vert        # semi real-HW-blend intermediate: shared fullscreen-tri vert
+  emit decode.frag    spv_g_decode_frag     # 1555 VRAM -> float RGBA (before the semi pass)
+  emit encode.frag    spv_g_encode_frag     # float RGBA -> 1555 VRAM (after the semi pass)
+  emit trisemi_hw.frag spv_g_trisemi_hw_frag # real HW-blend textured semi (reuses tritex.vert)
 } > "$OUT"
 echo "[gen_gpu_shaders] wrote $OUT"

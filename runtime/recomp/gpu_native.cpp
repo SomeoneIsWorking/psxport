@@ -55,7 +55,7 @@ int GpuState::bg_2d(int bx0, int by0, int bx1, int by1) {
   return (w * 4 >= dw * 3) && (h * 4 >= dh * 3);    // covers >=3/4 of the display in both axes = backdrop
 }
 // FULL-SCREEN PSX-OVERLAY coverage test (issue #21). NOTE (FADE ownership, 2026-06-25): the cutscene/area
-// SCREEN-FADE is NO LONGER delivered as a PSX OT rect — it is engine-owned (gpu_set_fade, applied in
+// SCREEN-FADE is NO LONGER delivered as a PSX OT rect — it is engine-owned (class ScreenFade, applied in
 // present.frag + the headless readback), so it never reaches this path. This test now serves ONLY the
 // RESIDUAL genuinely-PSX full-screen semi overlays still emitted as OT rects (the slot-0x74 transition/wipe
 // effect FUN_80034548 0x404040, and a pause-menu dim if it fires): such a near-full-screen SEMI prim must

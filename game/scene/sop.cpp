@@ -24,7 +24,7 @@
 static void d0(Core* c, uint32_t fn);
 extern "C" void ffspan_begin(void), ffspan_end(const char*);   // PSXPORT_BDTAG attribution (engine_stage.cpp)
 void ov_bg_scene_transition_sm(Core*);  // bg_scene_transition_sm.cpp — native FUN_8002655c
-void engine_fade_set(Core*, uint32_t color, uint32_t a1);  // engine/gpu_lib.cpp — engine-owned screen fade
+#include "render/screen_fade/screen_fade.h"   // class ScreenFade — the single fade driver
 static void d1(Core* c, uint32_t fn, uint32_t a0);
 static void d2(Core* c, uint32_t fn, uint32_t a0, uint32_t a1);
 extern "C" void cam_snap_follow(Core* c, uint32_t cam, uint32_t target);   // game/camera/camera.cpp
@@ -237,8 +237,9 @@ void ov_sop_field_mode(Core* c) {
   uint32_t sm = c->mem_r32(0x1f800138u);
   uint16_t st = c->mem_r16(sm + 0x50);
   switch (st) {
-    case 0: {  // LOAD
-      engine_fade_set(c, 0xffffffu, 0);       // LOAD: a1=0 = subtractive 0xffffff = full screen to BLACK
+    case 0: {  // LOAD — screen held fully black for this one-frame state (state 1 next frame keeps holding
+      //                 during startup delay, then ramps in). Matches PSX FUN_8007e9c8(0xffffff,0,4) per-frame.
+      c->screenFade.set(ScreenFade::SUBTRACTIVE, 0xff, 0xff, 0xff);
       native_sop_area_load(c);                 // INLINE sync load (replaces FUN_80044bd4) -> 1f80019b=1
       d0(c, 0x8007b18cu);
       d0(c, 0x800796dcu);
@@ -279,27 +280,35 @@ void ov_sop_field_mode(Core* c) {
       // startup delay is active and let ov_bg_scene_transition_sm own the one fade-in. The sm[0x6c] ramp
       // still counts down so state 1 ends exactly as the delay ends (then bg-transition has taken over).
       // Shared with every SOP area (free-roam too) — correct there as well (same delay-then-bg-fade entry).
-      uint32_t u = (uint32_t)c->mem_r8(sm + 0x6c) & 0x1f;
       bool startup_delay = (int16_t)c->mem_r16(sm + 0x60) != 0;
-      engine_fade_set(c, startup_delay ? 0xffffffu : ((u << 19) | (u << 11) | (u << 3)), 0);   // hold black during delay; else subtractive fade-in
-      uint8_t v = (uint8_t)(c->mem_r8(sm + 0x6c) - 1);
-      c->mem_w8(sm + 0x6c, v);
-      if (v == 0) { c->mem_w8(sm + 0x6c, 0x1f); c->mem_w16(sm + 0x50, (uint16_t)(c->mem_r16(sm + 0x50) + 1)); }
+      if (startup_delay) {
+        c->screenFade.set(ScreenFade::SUBTRACTIVE, 0xff, 0xff, 0xff);   // hold black through the startup-delay window
+      } else {
+        uint32_t u = (uint32_t)c->mem_r8(sm + 0x6c) & 0x1f;
+        uint8_t v = (uint8_t)((u << 3) & 0xff);
+        c->screenFade.set(ScreenFade::SUBTRACTIVE, v, v, v);            // subtractive fade-in ramp (matches guest FUN_8007e9c8(...,0,4))
+      }
+      uint8_t nv = (uint8_t)(c->mem_r8(sm + 0x6c) - 1);
+      c->mem_w8(sm + 0x6c, nv);
+      if (nv == 0) {
+        c->mem_w8(sm + 0x6c, 0x1f);
+        c->mem_w16(sm + 0x50, (uint16_t)(c->mem_r16(sm + 0x50) + 1));   // advance to state 2 (GAMEPLAY)
+      }
       ov_sop_field_update(c);                  // native per-frame field update
       break;
     }
-    case 2: {  // GAMEPLAY
+    case 2: {  // GAMEPLAY — no fade call, so ScreenFade::frameStart's NONE persists = scene visible
       ov_sop_field_update(c);
       if (c->mem_r8(0x800bf839u) != 0 || (c->mem_r32(0x800e7e68u) & 8) != 0)
         c->mem_w16(sm + 0x50, (uint16_t)(c->mem_r16(sm + 0x50) + 1));
       break;
     }
-    case 3: {  // FADE-OUT
-      uint32_t u = ((uint32_t)c->mem_r8(sm + 0x6c) * (uint32_t)-8) & 0xff;
-      engine_fade_set(c, (u << 16) | (u << 8) | u, 0);   // FADE-OUT: a1=0 = subtractive (to black)
-      uint8_t v = (uint8_t)(c->mem_r8(sm + 0x6c) - 1);
-      c->mem_w8(sm + 0x6c, v);
-      if (v == 0) c->mem_w16(sm + 0x50, (uint16_t)(c->mem_r16(sm + 0x50) + 1));
+    case 3: {  // FADE-OUT — subtractive ramp (guest FUN_8007e9c8(...,0,4) per-frame equivalent)
+      uint8_t u = (uint8_t)(((uint32_t)c->mem_r8(sm + 0x6c) * (uint32_t)-8) & 0xff);
+      c->screenFade.set(ScreenFade::SUBTRACTIVE, u, u, u);
+      uint8_t nv = (uint8_t)(c->mem_r8(sm + 0x6c) - 1);
+      c->mem_w8(sm + 0x6c, nv);
+      if (nv == 0) c->mem_w16(sm + 0x50, (uint16_t)(c->mem_r16(sm + 0x50) + 1));
       ov_sop_field_update(c);
       break;
     }

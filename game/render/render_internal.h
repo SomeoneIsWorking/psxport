@@ -95,7 +95,7 @@ static inline void sil_bbox_log(const char* tag, const float* px, const float* p
     if (px[i] < minx) minx = px[i]; if (px[i] > maxx) maxx = px[i];
     if (py[i] < miny) miny = py[i]; if (py[i] > maxy) maxy = py[i];
   }
-  if (maxx < -10 || minx > 40 || maxy < 120 || miny > 150) return;   // outside the repro window, skip
+  if (maxx < -20 || minx > 160 || maxy < 100 || miny > 200) return;   // outside the repro window, skip
   fprintf(stderr, "[silbbox] %s bbox x=[%.1f,%.1f] y=[%.1f,%.1f]\n", tag, minx, maxx, miny, maxy);
 }
 // Same, but also identifies WHICH entity node emitted the quad (cur_render_node(c) at call time) — use
@@ -107,7 +107,7 @@ static inline void sil_bbox_log_node(const char* tag, const float* px, const flo
     if (px[i] < minx) minx = px[i]; if (px[i] > maxx) maxx = px[i];
     if (py[i] < miny) miny = py[i]; if (py[i] > maxy) maxy = py[i];
   }
-  if (maxx < -10 || minx > 40 || maxy < 120 || miny > 150) return;
+  if (maxx < -20 || minx > 160 || maxy < 100 || miny > 200) return;
   fprintf(stderr, "[silbbox] %s node=%08X bbox x=[%.1f,%.1f] y=[%.1f,%.1f]\n", tag, node, minx, maxx, miny, maxy);
 }
 static inline void sil_bbox_log_i(const char* tag, const int* xs, const int* ys, int n) {
@@ -115,4 +115,26 @@ static inline void sil_bbox_log_i(const char* tag, const int* xs, const int* ys,
   float pxf[8], pyf[8]; n = n > 8 ? 8 : n;
   for (int i = 0; i < n; i++) { pxf[i] = (float)xs[i]; pyf[i] = (float)ys[i]; }
   sil_bbox_log(tag, pxf, pyf, n);
+}
+// Same repro-window gate as sil_bbox_log_node, but also dumps every vertex's screen coord + depth and the
+// source record address, so a coverage gap can be told apart from a wrong-color draw (2026-07-01 dark-outline
+// direct-inspection pass, scratch/handoff.md).
+static inline void sil_bbox_log_verts(const char* tag, const float* px, const float* py, const float* depth,
+                                       int n, uint32_t node, uint32_t rec_addr,
+                                       const uint8_t* r = nullptr, const uint8_t* g = nullptr, const uint8_t* b = nullptr) {
+  if (!cfg_dbg("silbbox")) return;
+  float minx = 1e9f, maxx = -1e9f, miny = 1e9f, maxy = -1e9f;
+  for (int i = 0; i < n; i++) {
+    if (px[i] < minx) minx = px[i]; if (px[i] > maxx) maxx = px[i];
+    if (py[i] < miny) miny = py[i]; if (py[i] > maxy) maxy = py[i];
+  }
+  if (maxx < -20 || minx > 160 || maxy < 100 || miny > 200) return;
+  fprintf(stderr, "[silbbox] %s node=%08X rec=%08X bbox x=[%.1f,%.1f] y=[%.1f,%.1f] verts:",
+          tag, node, rec_addr, minx, maxx, miny, maxy);
+  for (int i = 0; i < n; i++) {
+    fprintf(stderr, " (%.2f,%.2f,z=%.4f", px[i], py[i], depth[i]);
+    if (r) fprintf(stderr, ",rgb=%d,%d,%d", r[i], g[i], b[i]);
+    fprintf(stderr, ")");
+  }
+  fprintf(stderr, "\n");
 }

@@ -850,6 +850,13 @@ void CutsceneCamera::init() {   // FUN_8006EA7C (first-frame field reset + rende
 // SOP/cutscene BG camera: called every frame from game/scene/sop.cpp (replaces d2(c,0x8006e3b0,cam,tgt)).
 // Under PSXPORT_DEBUG=camverify it A/B-compares the native run vs the recomp oracle (rec_interp 0x8006e3b0)
 // on the same inputs — the regression gate for the restructure (cam struct + full scratchpad, 0 mismatch).
+// Per-frame camera DRIVER shim — replaces `d0(c, 0x8006ec44u)` in the field spine. Fixed cam obj @0x800E8008
+// (the resident driver hardcodes it). Class is oracle-unit-tested end-to-end (cutscene_camera_test.cpp),
+// so no per-call live A/B gate here (unlike cam_snap_follow, which precedes those tests).
+extern "C" void cam_update(Core* c) {
+  CutsceneCamera(c, CutsceneCamera::CAM_OBJ).update();
+}
+
 extern "C" void cam_snap_follow(Core* c, uint32_t cam, uint32_t target) {
   if (!cfg_dbg("camverify")) { CutsceneCamera(c, cam).snapFollow(target); return; }
 

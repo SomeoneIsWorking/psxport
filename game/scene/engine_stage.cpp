@@ -206,8 +206,8 @@ static void ov_game_s4c(Core* c) {
 
 void ov_sop_field_mode(Core*);           // engine/sop.cpp — native SOP field-mode machine
 void native_transition_area_load(Core*); // engine/sop.cpp — sync transition area-DATA load
-void engine_fade_set(Core*, uint32_t color, uint32_t a1);  // engine/gpu_lib.cpp — engine-owned screen fade
-void gpu_clear_fade(Core* core);                           // runtime/recomp/gpu_gpu.cpp — per-frame fade reset (per-core)
+#include "render/screen_fade/screen_fade.h"   // class ScreenFade — the single fade driver
+extern "C" void cam_update(Core* c);            // camera/cutscene_camera.cpp — resident driver 0x8006EC44 (native)
 void ov_game_func_801084F8(Core*);                          // generated/ov_game_disp.c — still-recomp: draw pause
                                                              // menu + cursor/page-transition handling
 
@@ -222,7 +222,7 @@ void ov_game_func_801084F8(Core*);                          // generated/ov_game
 static void ov_game_submit_810c(Core* c) {
   uint32_t task = c->mem_r32(0x1F800138u);
   if (task && c->mem_r8(task + 0x6Bu) == 1) {
-    engine_fade_set(c, 0x00808080u, 0u);   // FUN_8007E9C8(0x808080,0,4) -- flat gray, non-ramping
+    c->screenFade.set(ScreenFade::SUBTRACTIVE, 0x80, 0x80, 0x80);   // pause-menu dim: flat gray, held each frame page-1 handler runs
     ov_game_func_801084F8(c);              // still recomp: menu draw + cursor/page transitions
     return;
   }
@@ -394,7 +394,7 @@ static void ov_field_frame(Core* c) {
     FFS("ff_26368", ov_arr8_dispatch_26368(c)); FFS("ff_objwalk", ov_objwalk(c));     // 0x80026368/0x8007a904 NATIVE
     FFS("ff_25588", ov_scene_25588(c)); FFS("ff_4fe84", ov_scene_4fe84(c));           // 0x80025588/0x8004fe84 NATIVE
     FFS("ff_disp26c88", ov_disp_26c88(c)); FFS("ff_22a80", d0(c, 0x80022a80u));       // 0x80026c88 NATIVE
-    FFS("ff_6ec44", d0(c, 0x8006ec44u)); FFS("ff_50de4", d0(c, 0x80050de4u)); FFS("ff_1cac0", d0(c, 0x8001cac0u));
+    FFS("ff_6ec44", cam_update(c)); FFS("ff_50de4", d0(c, 0x80050de4u)); FFS("ff_1cac0", d0(c, 0x8001cac0u));   // 0x8006ec44 NATIVE (CutsceneCamera::update)
   }
   // DUAL-VIEW: snapshot the post-gameplay / pre-render state so the side-by-side PSX render pass can run
   // from it (the native render below consumes per-frame queues, so it is not re-runnable). No-op unless on.
@@ -461,7 +461,7 @@ static void ov_scene_fade_seq(Core* c, uint32_t node) {
     c->mem_w8(node + 2, (uint8_t)(outer + 1));   // -> outer state 1
     d1(c, 0x8010d030u, node);                // ov_a0l_func_8010D030(node) -- not yet decoded
     c->mem_w16(node + 106, 31);
-    engine_fade_set(c, 0x00ffffffu, /*a1=*/0);   // NOTE: guest a2 was 0 here — see OPEN ISSUE above
+    c->screenFade.applyLeafCall(0x00ffffffu, 0);   // = guest FUN_8007e9c8(0xffffff, 0, ?): full black; NOTE guest a2 was 0 (see OPEN ISSUE)
     return;
   }
 
@@ -488,7 +488,7 @@ static void ov_scene_fade_seq(Core* c, uint32_t node) {
 
   switch (step) {
     case 0: {                                    // ramp UP, gated by helper return value
-      engine_fade_set(c, ramp_level(+1), /*a1=*/1);   // guest a2 was 1 here — see OPEN ISSUE above
+      c->screenFade.applyLeafCall(ramp_level(+1), 1);      // = guest FUN_8007e9c8(color, 1, ?) additive; NOTE guest a2 was 1 (see OPEN ISSUE)
       decrement_level_clamped();
       d1(c, 0x8010cc68u, 0);                          // ov_a0l_func_8010CC68(0) -> result in c->r[2]
       if (c->r[2] == 0) return;                       // not done yet
@@ -497,7 +497,7 @@ static void ov_scene_fade_seq(Core* c, uint32_t node) {
       return;
     }
     case 1: {                                    // ramp DOWN, gated by fade LEVEL reaching 0
-      engine_fade_set(c, ramp_level(-1), /*a1=*/1);
+      c->screenFade.applyLeafCall(ramp_level(-1), 1);      // = guest FUN_8007e9c8(color, 1, ?) additive; NOTE guest a2 was 1 (see OPEN ISSUE)
       decrement_level_clamped();
       d1(c, 0x8010cc68u, 0);                          // result unused this branch
       if ((int16_t)c->mem_r16(node + 106) != 0) return;
@@ -514,7 +514,7 @@ static void ov_scene_fade_seq(Core* c, uint32_t node) {
       return;
     }
     case 3: {                                    // same as case 0 but helper called with a0=1
-      engine_fade_set(c, ramp_level(+1), /*a1=*/1);
+      c->screenFade.applyLeafCall(ramp_level(+1), 1);
       decrement_level_clamped();
       d1(c, 0x8010cc68u, 1);
       if (c->r[2] == 0) return;
@@ -524,7 +524,7 @@ static void ov_scene_fade_seq(Core* c, uint32_t node) {
     }
     case 4: {                                    // same as case 1 but helper called with a0=1;
                                                   // on completion does NOT reset the level to 31
-      engine_fade_set(c, ramp_level(-1), /*a1=*/1);
+      c->screenFade.applyLeafCall(ramp_level(-1), 1);
       decrement_level_clamped();
       d1(c, 0x8010cc68u, 1);
       if ((int16_t)c->mem_r16(node + 106) != 0) return;
@@ -668,10 +668,14 @@ static void ov_field_run(Core* c) {
       ov_field_frame(c);
       sm = c->mem_r32(0x1f800138u);
       uint32_t u = ((uint32_t)c->mem_r8(sm + 0x6e) * (uint32_t)-8) & 0xff;
-      engine_fade_set(c, (u << 16) | (u << 8) | u, 0);   // area-transition fade-out: a1=0 = subtractive (black)
+      c->screenFade.applyLeafCall((u << 16) | (u << 8) | u, 0);   // = guest FUN_8007e9c8(color, 0, 4): area-transition subtractive fade-out ramp
       uint8_t nv = (uint8_t)(c->mem_r8(sm + 0x6e) - 1);
       c->mem_w8(sm + 0x6e, nv);
-      if (nv == 0) { c->mem_w16(sm + 0x4e, 7); d0(c, 0x8001cf2cu); }
+      if (nv == 0) {
+        c->mem_w16(sm + 0x4e, 7);
+        d0(c, 0x8001cf2cu);
+        // NOTE: no persistent hold_black on fade-out exit — see sop.cpp state 3 note (regression 2026-07-01).
+      }
       break;
     }
     case 0xb:
@@ -694,7 +698,7 @@ static void ov_field_frame_x(Core* c) {
   if (c->mem_r8(0x1f800136u) == 0) {            // not paused: reduced gameplay update
     d0(c, 0x80059d28u); d0(c, 0x80069b28u); d0(c, 0x80026368u); d0(c, 0x8007b04cu);   // 0x8007b04c obj update
     ov_scene_25588(c); ov_scene_4fe84(c); ov_disp_26c88(c); d0(c, 0x80022a80u);       // 25588/4fe84/26c88 NATIVE
-    d0(c, 0x8006ec44u);
+    cam_update(c);   // 0x8006ec44 NATIVE (CutsceneCamera::update)
   }
   if (c->mem_r8(0x1f800136u) < 2) ov_render_frame_x(c); // 0x8003fa44 — NATIVE render orchestrator twin
   ov_game_submit_810c(c);                      // render submit (page-1 dim-fade owned; other pages recomp)
@@ -739,29 +743,34 @@ static void ov_transition_main(Core* c) {
       sm = c->mem_r32(0x1f800138u);
       c->mem_w8(sm + 0x6b, 0x1f);
       c->mem_w16(sm + 0x4e, (uint16_t)(c->mem_r16(sm + 0x4e) + 1));
-      engine_fade_set(c, 0xffffffu, 0);                          // FUN_8007e9c8(0xffffff,0,4)
+      c->screenFade.applyLeafCall(0xffffffu, 0);                 // = guest FUN_8007e9c8(0xffffff, 0, 4): full black held (one-frame state)
       native_area_load_bd4(c, c->mem_r8(0x800bf870u), 0);        // FUN_80044bd4(0x800452c0,bf870,0,1)
       return;
-    case 1: {                                                    // FADE-OUT
+    case 1: {                                                    // FADE-OUT — subtractive ramp
       uint32_t u = (uint32_t)c->mem_r8(sm + 0x6b) & 0x1f;
-      engine_fade_set(c, (u << 19) | (u << 11) | (u << 3), 0);   // FUN_8007e9c8(...,0,4)
+      c->screenFade.applyLeafCall((u << 19) | (u << 11) | (u << 3), 0);
       uint8_t v = (uint8_t)(c->mem_r8(sm + 0x6b) - 1);
       c->mem_w8(sm + 0x6b, v);
       if (v == 0) c->mem_w16(sm + 0x4e, (uint16_t)(c->mem_r16(sm + 0x4e) + 1));
       break;
     }
     case 2:                                                      // await sync load (1f80019b set by load)
+      // NOTE: no fade call this state. On PSX slot 4 goes empty each frame -> scene shows the newly
+      // loaded content darkened only by whatever the prior fade-out left in VRAM. Matches PSX.
       if (c->mem_r8(0x1f80019bu) != 0) {
         c->mem_w8(sm + 0x6b, 0x1f);
         c->mem_w16(sm + 0x4e, (uint16_t)(c->mem_r16(sm + 0x4e) + 1));
       }
       break;
-    case 3: {                                                    // FADE-IN
+    case 3: {                                                    // FADE-IN — additive ramp
       uint32_t u = ((uint32_t)c->mem_r8(sm + 0x6b) * (uint32_t)-8) & 0xff;
-      engine_fade_set(c, (u << 16) | (u << 8) | u, 1);           // FUN_8007e9c8(...,1,4)
+      c->screenFade.applyLeafCall((u << 16) | (u << 8) | u, 1);
       uint8_t v = (uint8_t)(c->mem_r8(sm + 0x6b) - 1);
       c->mem_w8(sm + 0x6b, v);
-      if (v == 0) { c->mem_w16(sm + 0x4e, (uint16_t)(c->mem_r16(sm + 0x4e) + 1)); d1(c, 0x80050894u, 0); }
+      if (v == 0) {
+        c->mem_w16(sm + 0x4e, (uint16_t)(c->mem_r16(sm + 0x4e) + 1));
+        d1(c, 0x80050894u, 0);
+      }
       break;
     }
     case 4:                                                      // done -> back to the field area machine
@@ -979,9 +988,11 @@ static void ov_game_submode1(Core* c) {
 // in scratch/gameplay_start_flow_re.md) to extend native ownership and shrink the cooperative fallback.
 // Returning 0 keeps the field REACHABLE (no derail) until those are owned.
 int ov_game_frame(Core* c) {
-  // Per-logic-frame reset of the engine-owned screen fade: clear it before the field machines run, so a fade
-  // that stops being set this frame disappears (the field machines below call engine_fade_set when fading).
-  gpu_clear_fade(c);
+  // Screen fade: reset at the top of every logic frame (PSX-faithful — OT slot 4 empties each frame,
+  // so a frame with no NATIVE fade caller = no fade rect. Native SMs push after this via
+  // c->screenFade.applyLeafCall / set. Still-recomp SMs' fade calls don't reach the class yet — those
+  // are the top-down port frontier for closing coverage.
+  c->screenFade.frameStart();
   uint32_t sm = c->mem_r32(0x1f800138u);
   uint16_t s48 = c->mem_r16(sm + 0x48);
   if (s48 == 2) {
