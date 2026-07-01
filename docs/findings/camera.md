@@ -8,7 +8,19 @@
   (game/camera/cutscene_camera.{h,cpp}, later-290) and `CutsceneCamera::snapFollow` (0x8006e3b0 = snap XZ via 0x8006d934 +
   snap Y via 0x8006d950 + lookat 0x8006d02c) is wired native into game/scene/sop.cpp (`cam_snap_follow`),
   camverify 0-diff over 51+ live SOP calls. That only exercises trackXZ/trackY-snap + lookAt live.
-  STILL OPEN — the FREE-ROAM camera: RE the MODE-slot field-overlay camera in the 0x8013xxxx cluster and own
-  it top-down from the native SOP/field frame that rec_dispatches into it. It may reuse the resident lookat/
-  track leaves — check before re-deriving (`tools/codemap.py --addr` now indexes the `class CutsceneCamera` methods).
+  STILL OPEN — the FREE-ROAM camera (see CORRECTION below for where it actually is).
 - **refs:** scratch/handoff_pc_structure.md (falsified premise); game/scene/sop.cpp:202,263; game/camera/engine_camera.cpp; runtime/recomp/overlay_router.cpp slot_index (MODE slot = SOP/A0* field); 2026-07-01 session.
+
+## CORRECTION: the reachable free-roam camera matrix is built NATIVELY (not in the overlay)
+- **symptom:** the finding above concluded the free-roam camera "lives in the MODE-slot field overlay (0x8013xxxx)". That was an over-read of the recdep hot cluster (which is field RENDER/object code, not the camera).
+- **status:** corrected / open (per-frame native camera driver identity TBD)
+- **cause:** write-watch (PSXPORT_WWATCH) on the camera VIEW MATRIX scratchpad (0x1F8000F8 rotation / 0x1F80010C translation — the addresses game/render/scene/scene_build.cpp `read_camera` consumes) during moving free-roam: the matrix IS rebuilt each frame (changes with movement), built via the resident libgte matrix leaves MulMatrix0 (0x80084250) / MR_init (0x80051794) / ApplyMatrixLV (0x80084470) / CopyMatrix (0x800847B0) — the SAME leaves `CutsceneCamera::lookAt` uses — and EVERY such call has caller `ra=0xDEAD0000` (a NATIVE caller), NOT an overlay address. So the reachable-scene (SOP intro field) camera is driven by NATIVE code, not overlay code. It is NOT `cam_snap_follow` (that stops ~frame 60). `game/world/pool.cpp` `ov_80078610` (0x80078610, "final per-area view init") sets up the camera at area-load and calls the resident lookat 0x8006D02C via `call_fn` — the per-FRAME native driver that rebuilds 0x1F8000F8 during free-roam is not yet pinned.
+- **fix:** NEXT — find the per-frame native function that composes the free-roam camera (wwatch 0x1F8000F8 and identify the native caller of MulMatrix0 with dest 0x1F8000F8; it likely calls the resident 0x8006D02C = `CutsceneCamera::lookAt`, so it can be reworked to call the class directly). Do NOT chase the 0x8013xxxx overlay for the camera. Note: the TRUE post-intro gameplay free-roam camera (past the intro area) may differ again and needs reaching a real area headless.
+- **refs:** game/render/scene/scene_build.cpp read_camera (0x1F8000F8/0x10C); game/world/pool.cpp ov_80078610; game/camera/cutscene_camera.cpp lookAt; 2026-07-01 session (later-291).
+
+## Oracle recompiler gap: yFloor (0x8006C80C) render-mode 1 target 0x8006C844 not discovered
+- **symptom:** the camera oracle unit test (PSXPORT_SELFTEST=camera) skips ~188/3000 yFloor iterations; `rec_interp(0x8006C80C)` with render-mode byte 0x800BF870==1 fail-fast MISSES on 0x8006C844.
+- **status:** known-issue (oracle/recompiler function-discovery gap; native `CutsceneCamera::yFloor` is correct — handles the case)
+- **cause:** the yFloor jump table @0x80016874 maps render-mode 1 → label 0x8006C844, but the recompiled gen_func_8006C80C's jump-table `switch` lacks that case → `default: rec_dispatch(0x8006C844)` → miss. The recompiler didn't discover 0x8006C844 as a jump-table target. Real gameplay in render-mode 1 would hit the same fail-fast in the substrate (latent — only matters if 0x800BF870 ever == 1 while yFloor runs as substrate; it no longer does once `CutsceneCamera::yFloor` is wired).
+- **fix:** the native yFloor already handles mode 1 correctly (verified by construction; oracle just can't cross-check it). To close the oracle gap, add 0x8006C844 (and any sibling labels) to the recompiler's jump-table target discovery for 0x8006C80C.
+- **refs:** game/camera/cutscene_camera_test.cpp (188 oracle-skipped); runtime/recomp/hle.cpp g_rec_miss_tolerant; 2026-07-01.

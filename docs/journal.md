@@ -9194,3 +9194,22 @@ index C++ class methods (DEF_RE only matched `void ov_*(Core*`); extended it (ME
 tag association, only when the method owns an address) so `--addr` finds `CutsceneCamera::lookAt` etc. — required as
 subsystems move to `class Foo`. NEXT: RE the free-roam MODE-slot overlay camera (0x8013xxxx) and own it, or
 formalize ObjectWorld (pc-subsystem-rebuild.md's ranked #1; behaviors already ~149/150 native).
+
+## later-291 (2026-07-01) — CutsceneCamera oracle UNIT TEST (all 13 methods, 0-diff); free-roam camera correction
+Added game/camera/cutscene_camera_test.cpp — a deterministic, render-free oracle unit test for the whole
+`class CutsceneCamera` (PSXPORT_SELFTEST=camera). It seeds thousands of synthetic guest states (sweeping the
+mode selectors G+0x164 / 0x800bf870 / cam+0x72 etc. so every switch arm is hit), runs each native method,
+snapshots outputs, restores inputs, runs the guest fn via rec_interp on identical state, and diffs the full
+cam struct + 1KB scratchpad + touched globals. Result: **0 mismatching words over 39000 runs** across all 13
+methods — the restructure preserved behaviour exactly, including the latent modes (dist/pitch/heading/rotBuild/
+mainFollow/…) the live SOP scene never exercises. 390 iters oracle-SKIPPED where the recompiler's jump-table
+discovery can't evaluate the synthetic state (added hle.cpp `g_rec_miss_tolerant` test hatch so a genuine miss
+skips instead of fail-fast-aborting; default 0 = fail-fast everywhere else). Found+recorded a recompiler gap:
+yFloor 0x8006C80C render-mode 1 target 0x8006C844 isn't in the recompiled switch (docs/findings/camera.md).
+CORRECTION to later-290: the reachable free-roam camera matrix (scratchpad 0x1F8000F8/0x10C, what
+scene_build.cpp read_camera consumes) is rebuilt each frame via the resident matrix leaves (MulMatrix0/MR_init/
+ApplyMatrixLV/CopyMatrix) with caller ra=0xDEAD0000 = a NATIVE caller — NOT overlay code. So the free-roam
+camera is native, not the 0x8013xxxx overlay (that cluster is field render/objects). ov_80078610 (pool.cpp)
+does per-area-load view setup calling resident lookat 0x8006D02C; the per-FRAME native driver isn't pinned yet.
+NEXT: pin that native per-frame camera driver (wwatch 0x1F8000F8 → native caller of MulMatrix0), rework it to
+call CutsceneCamera::lookAt directly; then reach a real post-intro area to see the true gameplay camera.

@@ -688,7 +688,12 @@ for content fns (call it). Do NOT mimic PSX hardware (GTE/GP0/OT) — remove Bee
     the one LIVE-verified via snapFollow). All restructured into methods; lookAt proven 0-diff live.
   - ✅ per-MODE orchestrators = `CutsceneCamera::mainFollow` (FUN_8006e0f0) / `CutsceneCamera::trackFollow` (FUN_8006e228) /
     `CutsceneCamera::simpleFollow` (FUN_8006e3f4) / `CutsceneCamera::snapFollow` (FUN_8006e3b0, the live SOP one). Latent
-    except snapFollow until their scenes are driven (or the free-roam-overlay camera is RE'd → own it next).
+    except snapFollow until their scenes are driven (or the free-roam camera driver is pinned → own it next).
+  - ✅ **UNIT TEST** (all 13 methods, not just the SOP-live ones): `PSXPORT_SELFTEST=camera ./scratch/bin/tomba2_port
+    scratch/bin/tomba2/MAIN.EXE` — seeds thousands of synthetic states sweeping every mode selector, runs each
+    native method vs the recomp oracle (`rec_interp`), diffs cam struct + scratchpad + globals. **0 mismatches over
+    39000 runs** (390 oracle-skipped = states the recompiler can't evaluate, e.g. yFloor render-mode 1 — see
+    docs/findings/camera.md). Deterministic, render-free; `PSXPORT_SELFTEST_ITERS=N` / `_VERBOSE=1`.
 - ✅ Math helper `FUN_80077FB0` = `ov_isqrt` (engine_math.cpp, later-186) — 16-bit ROUNDING integer sqrt
   (libgte-style leaf). Was 8.41% of all interpreter instructions; owning it native dropped the field run
   42.93M→38.99M insns/300fr (−9.2%). Bit-exact: 65000+ live calls 0-diff vs recomp (`mathverify` gate).

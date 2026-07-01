@@ -173,6 +173,7 @@ set(PORT_SRC
   game/scene/sop.cpp
   game/scene/engine_demo.cpp
   game/camera/cutscene_camera.cpp
+  game/camera/cutscene_camera_test.cpp
   game/math/engine_math.cpp
   game/player/engine_player.cpp
   game/render/native_terrain.cpp

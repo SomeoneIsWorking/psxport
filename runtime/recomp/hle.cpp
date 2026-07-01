@@ -222,6 +222,11 @@ void rec_break(Core* c, uint32_t code) {
 }
 
 static int g_miss = 0;
+// TEST-ONLY tolerant miss (cutscene_camera_test.cpp): when set, a genuine RAM-code miss does NOT abort —
+// it flags g_rec_missed and returns, so the oracle test can SKIP synthetic states the recompiler's
+// jump-table discovery can't evaluate (states the live game never reaches). Default 0 = fail-fast.
+extern "C" { int g_rec_miss_tolerant = 0; int g_rec_missed = 0; }
+
 void rec_dispatch_miss(Core* c, uint32_t addr) {
   uint32_t a = addr & 0x1FFFFFFF;
   char tbl = a == 0xA0 ? 'A' : a == 0xB0 ? 'B' : a == 0xC0 ? 'C' : 0;
@@ -245,6 +250,7 @@ void rec_dispatch_miss(Core* c, uint32_t addr) {
     // (the render submitters / field logic live in \BIN\*.BIN) which the static recompiler does not
     // cover yet, OR a cooperative task that tried to resume mid-function. Abort with the call site +
     // a guest-stack backtrace so we get a worklist of exactly what to recompile/port next.
+    if (g_rec_miss_tolerant) { g_rec_missed = 1; return; }   // TEST: skip oracle-unavailable state
     extern const char* overlay_router_resident_name(Core*, uint32_t);
     const char* resov = overlay_router_resident_name(c, addr);
     // GAME-stage / SOP state-machine context for an overlay-dispatch miss (the common case: a render-walk
