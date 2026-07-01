@@ -1,5 +1,65 @@
 # Findings — render / engine submit
 
+## Screen-fade transitions: SSAO/dynamic-shadows are dead stubs; FUN_8007E9C8 (fade-rect builder) only PARTIALLY native-owned
+- **symptom (3 user reports, 2026-07-01):** (1) vanilla (all mods off) shadows/shading "too dark" (marukage);
+  (2) a dark rim/outline resembling AO on some objects even with AO shown Off in the RmlUi; (3) some
+  cutscene/area-transition fades show garbage (raw VRAM/texture-atlas noise) instead of a clean fade.
+- **status:** (1)/(2) NOT YET diagnosed past ruling out SSAO/light (see below) — needs non-visual RE, not
+  screenshot-eyeballing (a still of the "AO-looking" horizon dark-outline was inconclusive; user corrected
+  the agent for trying to conclude from it — see CLAUDE.md "no visual self-verify"). (3) ROOT-CAUSED, partial
+  fix scoped, NOT fully implemented — see below.
+- **cause (1/2, partial):** `GpuGpuState::ssao_pass()` and `::shadow_pass()` (runtime/recomp/gpu_gpu.cpp:617-618)
+  are EMPTY STUBS — dead code copied from the deleted Vulkan renderer (already empty there too, confirmed via
+  `git show 9f1ab11`). Toggling SSAO/Shadows in the RmlUi overlay has ZERO visual effect currently; whatever
+  darkening the user sees is NOT from those systems. The live `psxport_settings.ini` had `ssao=0 light=0`
+  when bug 2 was reported, ruling out `g_mods.light`'s engine_shade_face path too (correctly gated, `if
+  (!g_mods.light) return;` in engine_submit.cpp / native_terrain.cpp). Remaining candidates NOT yet checked:
+  base vertex-color / geomblk data (native_terrain.cpp's own comment flags "FIRST CUT: no DPCT/DPCS depth-cue"
+  as a known gap), and whether that's even wrong vs just how the original renders. NEEDS non-visual state
+  inspection (provat/scene channels) on a live reproduction, not more screenshots.
+- **cause (3, root-caused via live debug-server inspection, non-destructive, on the user's own paused session):**
+  `FUN_8007E9C8` (the PSX fade-rect builder, native reimpl already exists as `ov_8007E9C8`
+  game/render/gpu_lib.cpp:75 but is ORPHAN) is called from 24 guest sites across 8 recompiled shard files:
+  `ov_sop_shard_0`(3), `ov_game_shard_0`(6)+`ov_game_shard_1`(1), `ov_a06_shard_0`(3)+`ov_a06_shard_1`(5),
+  `ov_a08_shard_1`(1), `ov_a0l_shard_1`(5). Of these, SOP (sop.cpp, all 3) and GAME's door/area-transition
+  FUN_80107AFC (engine_stage.cpp, all 3) and FUN_80106B98 case-10 (engine_stage.cpp, 1) are natively wired to
+  `engine_fade_set` already — 7/24 done. The GAME render-submit dispatcher FUN_8010810C (1 call) and two more
+  GAME node-handlers FUN_80108EBC/FUN_80108E58 (not yet RE'd) are NOT yet native (`tools/codemap.py --addr`
+  confirms all three: NO native owner). The a06/a08/a0l overlay call sites (13 total) are in AREA-SPECIFIC
+  overlay .BIN code (outside MAIN.EXE's text range — `tools/disas.py` can't reach them, only the recompiled
+  generated/ C shows them) and are ENTIRELY unowned (their enclosing functions, e.g. `0x80117AAC` in a06, have
+  NO native code at all per codemap). BUT: several of these enclosing functions are small (~70 lines),
+  self-contained per-NODE fade state machines operating on a generic node pointer (state byte at node+6,
+  countdown at node+64) — the SAME shape recurs at `0x80117AAC`(a06) and similar addresses in a08/a0l/game
+  shard_1, strongly suggesting ONE shared utility function got compiled into each overlay separately (a
+  standard PSX overlay-linking pattern), not 13 independent area-specific machines. Porting THIS ONE pattern
+  (RE once, reimplement once, wire at each address) is much more tractable than "port each area."
+  A specific reproduction was captured live: paused mid field-area-load (`sm[0x48]=2` RUNNING → `sm[0x4a]=1`
+  FIELD → `sm[0x4c]=2` → `ov_field_run` case 0/pool-init), the frame's classified scene showed `poly=0 rect=0
+  fill=0` (nothing drew) yet the display showed raw texture-atlas noise — `present()`
+  (runtime/recomp/gpu_gpu.cpp) unconditionally blits the WHOLE live VRAM buffer and samples the display rect,
+  so any texture/asset upload landing in that rect during a state with no held fade bleeds straight through.
+  This may also be entangled with the ALREADY-DOCUMENTED open frontier bug just above ("2D-poly overlays...
+  on the field 2D-only walk") since a fade rect is exactly the kind of 2D poly that gets dropped/misclassified
+  there.
+- **fix (3, NOT yet implemented — scoped plan):** (a) RE + natively port the generic per-node fade SM pattern
+  (reference instance: a06 `0x80117AAC`, generated/ov_a06_shard_0.c:6689-6757) once, wire it at each of its
+  per-overlay addresses (a06/a08/a0l + verify game shard_1 `0x80108E58` isn't the same shape). (b) Port GAME's
+  remaining `FUN_8010810C` (render-submit dispatcher — only the sub-branch containing the fade call needs
+  isolating, not the whole submit path) and `FUN_80108EBC`. (c) Once fade rects are natively `engine_fade_set`
+  everywhere, ALSO fix `present()`'s raw-VRAM-passthrough-during-empty-frames (hold the last composited frame
+  or an explicit black instead of sampling live VRAM when nothing was drawn this frame) — user directive:
+  build this as an explicit, faithful fade/transition state machine (matching what each real PSX transition
+  already does), not an ad-hoc "cache last frame" heuristic.
+- **verification note:** each area's port needs a LIVE reproduction (reach that specific area/overlay in
+  gameplay) to RAM/scene-diff — this is NOT verifiable by screenshot alone (see the AO-outline miss above).
+  Use the debug server (`tools/dbgclient.py`, `PSXPORT_DEBUG_SERVER=1`) to inspect a paused live session
+  non-destructively (frame/stage/scene commands) rather than guessing from stills.
+- **refs:** runtime/recomp/gpu_gpu.cpp:617-618 (ssao_pass/shadow_pass stubs), commit 9f1ab11 (shaders_vk
+  deletion), game/render/gpu_lib.cpp:75 (ov_8007E9C8, orphan), game/scene/sop.cpp + engine_stage.cpp
+  (existing engine_fade_set call sites), generated/ov_a06_shard_0.c:6689 (reference per-node fade SM),
+  docs/findings/render.md "2D-poly overlays... open frontier" (above), tools/dbgclient.py (live inspection)
+
 ## Opening-cutscene narration renders nothing on the native FIELD path
 - **symptom:** New Game → the opening story cutscene ("Tomba is living peacefully in the country when Zippo finds a mysterious...") draws NOTHING; the prior menu's stale VRAM shows through (looks like the menu "overstays"/garbles).
 - **status:** fixed 10a07e0
