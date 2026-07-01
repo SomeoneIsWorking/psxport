@@ -756,21 +756,33 @@ static long native_repl_read(Core* c, uint32_t f) {
       // intrinsic @+0xb (0x10..0x14 = sprite/billboard, 0/0xf = mesh), behavior handler @+0x1c (the object's
       // "what is it" — different per Tomba / enemy / prop), model id @+0xe & 0x3fff, world pos @+0x2e/32/36,
       // and the 3D MODEL = geomblk of render cmd[0] (cmd @+0xc0, geomblk @ cmd+0x40). later-241.
+      // OWNERSHIP + IDENTITY (later-287, for drive/diagnose): flag each object's behavior handler as
+      // native-OWNED (readable C, shown by name) or still-PSX substrate; and mark the PLAYER node (the one
+      // whose int16 pos mirrors Tomba's 16.16 master position at 0x800E7EAC/B0/B4). This makes "what is
+      // this object and is its logic ours" answerable at a glance.
+      const char* behavior_native_name(uint32_t h);   // engine/engine_tomba2.cpp
+      int16_t px = (int16_t)(c->mem_r32(0x800E7EACu) >> 16), pz = (int16_t)(c->mem_r32(0x800E7EB4u) >> 16);
       const uint32_t heads[3] = { 0x800FB168u, 0x800F2624u, 0x800F2738u };
-      int total = 0;
+      int total = 0, owned = 0;
       for (int h = 0; h < 3; h++) {
         uint32_t n = c->mem_r32(heads[h]);
         fprintf(stderr, "[ents] -- list %d head=%08X --\n", h, n);
         for (int g = 0; n && g < 400; g++, n = c->mem_r32(n + 0x24)) {
           uint32_t cmd0 = c->mem_r8(n + 8) ? c->mem_r32(n + 0xC0) : 0;
-          fprintf(stderr, "[ents]  %08X t=%02X ri=%02X model=%04X h=%08X pos=(%6d,%6d,%6d) rf=%u cmds=%u gb0=%08X\n",
-                  n, c->mem_r8(n + 0xc), c->mem_r8(n + 0xb), c->mem_r16(n + 0xe) & 0x3fff, c->mem_r32(n + 0x1c),
-                  (int16_t)c->mem_r16(n + 0x2e), (int16_t)c->mem_r16(n + 0x32), (int16_t)c->mem_r16(n + 0x36),
-                  c->mem_r8(n + 1), c->mem_r8(n + 8), cmd0 ? c->mem_r32(cmd0 + 0x40) : 0);
+          uint32_t hh = c->mem_r32(n + 0x1c);
+          const char* bn = behavior_native_name(hh);
+          int16_t nx = (int16_t)c->mem_r16(n + 0x2e), nz = (int16_t)c->mem_r16(n + 0x36);
+          int is_player = (c->mem_r32(n + 0x38) == 0) && (nx == px) && (nz == pz);
+          if (bn) owned++;
+          fprintf(stderr, "[ents]  %08X t=%02X ri=%02X model=%04X h=%08X pos=(%6d,%6d,%6d) rf=%u cmds=%u gb0=%08X  %s%s\n",
+                  n, c->mem_r8(n + 0xc), c->mem_r8(n + 0xb), c->mem_r16(n + 0xe) & 0x3fff, hh,
+                  (int16_t)c->mem_r16(n + 0x2e), (int16_t)c->mem_r16(n + 0x32), nz,
+                  c->mem_r8(n + 1), c->mem_r8(n + 8), cmd0 ? c->mem_r32(cmd0 + 0x40) : 0,
+                  bn ? bn : "PSX", is_player ? "  <== PLAYER" : "");
           total++;
         }
       }
-      fprintf(stderr, "[ents] (%d nodes)\n", total);
+      fprintf(stderr, "[ents] (%d nodes; %d native-owned, %d still-PSX)\n", total, owned, total - owned);
     }
     else if (!strcmp(cmd, "tp")) { int x=0,y=0,z=0;
       if (sscanf(line, "%*s %d %d %d", &x, &y, &z) == 3) { cam_teleport(x, y, z); fprintf(stderr, "[repl] tp camera -> (%d,%d,%d)\n", x, y, z); }
