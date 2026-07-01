@@ -88,6 +88,7 @@ set(PORT_SRC
   game/core/asset.cpp
   game/math/mathlib.cpp
   game/math/rng.cpp
+  game/math/mtx.cpp
   game/render/cull.cpp
   game/player/collision.cpp
   game/player/hitbox.cpp
