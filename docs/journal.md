@@ -9257,3 +9257,14 @@ A, 0x8006DAD8/DEF0 for B — rsin/rcos heading+pitch into the S block) stay subs
 VERIFIED: oracle unit test cases snapFollowA/pitchFollow/snapFollowB = 0 mismatching words, 0 skips (no overlay
 path). pitchFollow passing confirms pitch() is arg-independent (hardcodes its G reads). The driver's modes
 2/3/4 now call native methods; the resident camera follow tree is native except the look-angle builder unit.
+
+## later-294c — scripted look-angle builder unit owned; camera follow tree fully native (0-diff)
+Finished the camera follow subsystem: owned the 4 scripted look-angle builders snapFollowA/B call (were
+substrate) — posBuildA (0x8006DC38: rcos/rsin place, overwrite S+0/S+8, cam66|=1), posBuildB (0x8006DAD8:
+place + yaw/dist ACCUMULATE tail identical to lookatTail → extracted shared yawDistAccumulate(dx,dz)),
+headBuildA (0x8006DF88), headBuildB (0x8006DEF0: heading step with ±10 snap). BIT-PRECISION the oracle
+pinned: posBuildB truncates its P to int16 (posBuildA keeps 32-bit); posBuildB reads S positions lhu
+(unsigned) vs posBuildA lh (signed). VERIFIED: oracle unit test all 4 = 0 mismatching words over 8000 iters
+each, 0 skips; snapFollowA/B still 0-diff with native builders wired. Resident camera follow tree now fully
+native (orchestrators + sub-ops + builders). Remaining camera substrate: init subs 0x8006E918/0x8006CBA8,
+post-mode tail 0x8006C988, and true field overlays (modes 0/1 render, 9/10/17).

@@ -78,6 +78,13 @@ public:
   bool trackY(uint32_t target);        // FUN_8006DA54 — smooth camera Y toward target;   ret settled.
   void snapAccXZ(uint32_t target);     // FUN_8006D934 — SNAP the X/Z follow accumulators to the target.
   void snapAccY(uint32_t target);      // FUN_8006D950 — SNAP the Y follow accumulator to the target.
+  // Scripted-camera LOOK-ANGLE builders (used by snapFollowA/B). posBuild* place the X/Z look accumulators
+  // (S+0/S+8) from the camera's rcos/rsin angles (cam[0x6c/0x6e/0x70]); headBuild* step the heading
+  // accumulator (S+6). Pair A (posBuildA+headBuildA) serves mode 2; pair B serves mode 4.
+  void posBuildA();                    // FUN_8006DC38 — direct place (overwrite S+0/S+8).
+  void posBuildB();                    // FUN_8006DAD8 — place then yaw/dist ACCUMULATE (shares lookat tail).
+  void headBuildA(uint32_t nonzero);   // FUN_8006DF88 — heading step (a1==0: fixed offset; else: rsin step).
+  void headBuildB();                   // FUN_8006DEF0 — heading step with the ±10 snap (like heading()).
   void distSolve();                    // FUN_8006D2AC — distance/zoom solver + planar placement.
   void pitch();                        // FUN_8006D654 — vertical-look height smoother.
   void yFloor();                       // FUN_8006C80C — per-render-mode camera-Y floor clamp.
@@ -122,6 +129,9 @@ private:
   // Shared look-at tail (rotBuild's modes): place a look point around the scene centre at (theta,radius),
   // fold yaw+distance into the pitch accumulators.
   void lookatTail(int32_t theta, int32_t radius);
+  // The yaw/dist accumulate tail shared by lookatTail and posBuildB: from a look-relative (dx,dz), turn the
+  // heading toward it and fold cos·dist/2, sin·dist/2 into the S+0/S+8 accumulators; settle bit if dist<401.
+  void yawDistAccumulate(int32_t dx, int32_t dz);
   void joinE640(int32_t delta, int32_t radius);
   int32_t table1Delta();
   void table2(int32_t radius);

@@ -58,12 +58,29 @@
   - `pitchFollow` = 0x8006E360 (mode 3): pitch(), snapXZ+snapY, lookAt. (Confirms pitch() is correct when
     called with a1=target — it hardcodes its G reads, so the arg is irrelevant.)
   - `snapFollowB` = 0x8006E2FC (mode 4): snapXZ+snapY, then look-build B, then lookAt.
-- **still substrate (a cohesive FUTURE unit — the scripted LOOK-ANGLE builders):** 0x8006DC38/DF88 (build A),
-  0x8006DAD8/DEF0 (build B) — rsin/rcos heading+pitch builders writing the S block; dispatched via `sub()`
-  like trackFollow. Also still substrate: init's 0x8006E918/0x8006CBA8 and the post-mode tail 0x8006C988.
 - **verified:** oracle unit test snapFollowA/pitchFollow/snapFollowB = 0 mismatching words, 0 skips (no
   overlay involvement); the driver's modes 2/3/4 now call these native methods instead of the substrate.
 - **refs:** game/camera/cutscene_camera.cpp; cutscene_camera_test.cpp cases 13/14/15; 2026-07-01.
+
+## ✅ DONE: scripted LOOK-ANGLE builder unit owned — follow tree now fully native (later-294c)
+- **what:** owned the four scripted look-angle builders that snapFollowA/B call (previously substrate),
+  completing the resident camera FOLLOW tree — every orchestrator, sub-op, and builder is now native:
+  - `posBuildA` = 0x8006DC38 (pair A): rcos/rsin place → OVERWRITE the X/Z look accumulators S+0/S+8, set
+    cam[0x66]|=1. `posBuildB` = 0x8006DAD8 (pair B): same rcos/rsin place, then the yaw/dist ACCUMULATE tail
+    (ratan2/isqrt, += cos·dist/2 into S+0, −= sin·dist/2 into S+8) — that tail is IDENTICAL to lookatTail's,
+    so it was extracted into a shared `yawDistAccumulate(dx,dz)` (lookatTail now calls it too, still 0-diff).
+  - `headBuildA` = 0x8006DF88, `headBuildB` = 0x8006DEF0 (heading steppers writing S+6/S+4, set cam[0x66]|=2;
+    headBuildB has the same ±10 snap as heading()).
+- **BIT-PRECISION gotchas the oracle caught/confirmed:** posBuildB's intermediate `P` is truncated to
+  int16 (`sra 12; sll 16; sra 16`) whereas posBuildA keeps it 32-bit; posBuildB reads the S positions with
+  lhu (unsigned) whereas posBuildA uses lh (signed). Replicated exactly.
+- **verified:** oracle unit test posBuildA/posBuildB/headBuildA/headBuildB = **0 mismatching words over 8000
+  iters each, 0 skips**. snapFollowA/B still 0-diff with the native builders wired in.
+- **remaining substrate from the camera (small, non-follow):** init's 0x8006E918 / 0x8006CBA8 and the
+  post-mode tail 0x8006C988 (runs after every mode), plus the true field OVERLAYS (modes 0/1 render dispatch,
+  modes 9/10/17). Those are the next candidates if the camera is revisited.
+- **refs:** game/camera/cutscene_camera.cpp (posBuild*/headBuild*/yawDistAccumulate); cutscene_camera_test.cpp
+  cases 16-19; 2026-07-01.
 
 ## Superseded earlier conclusions (kept so the dead ends aren't re-walked)
 - later-290 "resident camera is CUTSCENE-only, free-roam camera is in the 0x8013xxxx overlay" — WRONG

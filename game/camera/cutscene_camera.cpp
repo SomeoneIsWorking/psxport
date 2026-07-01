@@ -74,6 +74,15 @@ bool CutsceneCamera::trackY(uint32_t target) {   // FUN_8006DA54
 }
 
 // ── rotBuild (special-camera rotation / look-at builder) ─────────────────────────────────────────
+void CutsceneCamera::yawDistAccumulate(int32_t dx, int32_t dz) {
+  int32_t yaw  = (int16_t)call(T2_RATAN2, -dz, dx);
+  int32_t dist = (int16_t)call(T2_ISQRT, dx * dx + dz * dz);
+  int32_t rc2  = call(T2_RCOS, yaw);
+  w32(S + 0x00, r32(S + 0x00) + ((rc2 * dist) >> 1));
+  int32_t rs2  = call(T2_RSIN, yaw);
+  w32(S + 0x08, r32(S + 0x08) - ((rs2 * dist) >> 1));
+  if (dist < 401) camW8(0x66, camR8(0x66) | 1);
+}
 void CutsceneCamera::lookatTail(int32_t theta, int32_t radius) {
   int32_t rc    = call(T2_RCOS, theta);
   int32_t lookX = (int32_t)r16(0x1F800160u) + ((rc * radius) >> 12);
@@ -83,13 +92,49 @@ void CutsceneCamera::lookatTail(int32_t theta, int32_t radius) {
   int32_t camX = (int32_t)r16(S + 0x02);
   int32_t dz   = (int16_t)(lookZ - camZ);
   int32_t dx   = (int16_t)(lookX - camX);
-  int32_t yaw  = (int16_t)call(T2_RATAN2, -dz, dx);
-  int32_t dist = (int16_t)call(T2_ISQRT, dx * dx + dz * dz);
-  int32_t rc2  = call(T2_RCOS, yaw);
-  w32(S + 0x00, r32(S + 0x00) + ((rc2 * dist) >> 1));
-  int32_t rs2  = call(T2_RSIN, yaw);
-  w32(S + 0x08, r32(S + 0x08) - ((rs2 * dist) >> 1));
-  if (dist < 401) camW8(0x66, camR8(0x66) | 1);
+  yawDistAccumulate(dx, dz);
+}
+
+// ── scripted-camera look-angle builders (0x8006DC38/DAD8/DF88/DEF0 — used by snapFollowA/B) ─────────
+void CutsceneCamera::posBuildA() {   // FUN_8006DC38 — overwrite the X/Z look accumulators
+  int32_t P  = mlo(call(T2_RCOS, (int16_t)camR16(0x6e)), (int16_t)camR16(0x6c)) >> 12;
+  int32_t x  = (int32_t)(int16_t)r16(S + 0x0e) + (mlo(call(T2_RCOS, (int16_t)camR16(0x70)), P) >> 12);
+  int32_t cz = mlo(call(T2_RSIN, (int16_t)camR16(0x70)), P) >> 12;
+  w32(S + 0x00, (uint32_t)(x << 16));
+  int32_t z  = (int32_t)(int16_t)r16(S + 0x16) - cz;
+  w32(S + 0x08, (uint32_t)(z << 16));
+  camW8(0x66, camR8(0x66) | 1);
+}
+void CutsceneCamera::posBuildB() {   // FUN_8006DAD8 — place a look point then yaw/dist accumulate
+  int32_t P  = (int16_t)(mlo(call(T2_RCOS, (int16_t)camR16(0x6e)), (int16_t)camR16(0x6c)) >> 12);
+  int32_t x  = (int32_t)(uint16_t)r16(S + 0x0e) + (mlo(call(T2_RCOS, (int16_t)camR16(0x70)), P) >> 12);
+  int32_t cz = mlo(call(T2_RSIN, (int16_t)camR16(0x70)), P) >> 12;
+  int32_t dz = (int16_t)((int32_t)(uint16_t)r16(S + 0x16) - cz - (int32_t)(uint16_t)r16(S + 0x0a));
+  int32_t dx = (int16_t)(x - (int32_t)(uint16_t)r16(S + 0x02));
+  yawDistAccumulate(dx, dz);
+}
+void CutsceneCamera::headBuildA(uint32_t nonzero) {   // FUN_8006DF88
+  if (nonzero == 0) {
+    int32_t off = (int32_t)(int16_t)camR16(0x26) - 320;
+    w16(S + 6, (uint16_t)((int32_t)r16(S + 0x12) + off));
+  } else {
+    int32_t step = mlo(call(T2_RSIN, (int16_t)camR16(0x6e)), (int16_t)camR16(0x6c)) >> 12;
+    w16(S + 6, (uint16_t)((int32_t)r16(S + 0x12) - step));
+  }
+  camW8(0x66, camR8(0x66) | 2);
+}
+void CutsceneCamera::headBuildB() {   // FUN_8006DEF0
+  int32_t step = mlo(call(T2_RSIN, (int16_t)camR16(0x6e)), (int16_t)camR16(0x6c)) >> 12;
+  int32_t s6  = (int32_t)r16(S + 6);
+  int32_t s12 = (int32_t)r16(S + 0x12);
+  int32_t d   = (s6 + step) - s12;
+  if ((uint16_t)(d + 10) < 21) {                 // |d| <= 10 -> snap
+    w16(S + 6, (uint16_t)(s12 - step));
+    camW8(0x66, camR8(0x66) | 2);
+  } else {
+    int32_t s = (int32_t)((uint32_t)d << 16) >> 3;
+    w32(S + 4, (uint32_t)((int32_t)r32(S + 4) - s));
+  }
 }
 void CutsceneCamera::joinE640(int32_t delta, int32_t radius) {
   int32_t sum = (int32_t)r16(G + 0x140) + (int32_t)camR16(0x52) + delta;
@@ -547,7 +592,7 @@ void CutsceneCamera::snapFollow(uint32_t target) {   // FUN_8006E3B0
 void CutsceneCamera::snapFollowA(uint32_t target) {  // FUN_8006E294 (driver mode 2 + init post-check)
   snapAccXZ(target);
   snapAccY(target);
-  if (camR8(0x76) == 0) { sub(0x8006DC38u); sub(0x8006DF88u, 1); }   // scripted look-build A (substrate)
+  if (camR8(0x76) == 0) { posBuildA(); headBuildA(1); }   // scripted look-build A
   lookAt();
 }
 void CutsceneCamera::pitchFollow(uint32_t target) {  // FUN_8006E360 (driver mode 3)
@@ -559,7 +604,7 @@ void CutsceneCamera::pitchFollow(uint32_t target) {  // FUN_8006E360 (driver mod
 void CutsceneCamera::snapFollowB(uint32_t target) {  // FUN_8006E2FC (driver mode 4)
   snapAccXZ(target);
   snapAccY(target);
-  if (camR8(0x76) == 0) { sub(0x8006DAD8u); sub(0x8006DEF0u); }      // scripted look-build B (substrate)
+  if (camR8(0x76) == 0) { posBuildB(); headBuildB(); }              // scripted look-build B
   lookAt();
 }
 void CutsceneCamera::mainFollow() {   // FUN_8006E0F0
