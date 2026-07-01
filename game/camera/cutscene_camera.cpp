@@ -660,11 +660,11 @@ void CutsceneCamera::shakeTail() {   // FUN_8006C988
       camW16(0x8a, r16(S + 0x0a));
       break;
     case 2: {
-      int32_t rx = call(SHAKE_RAND) & 0x1f;
+      int32_t rx = c->rng.next() & 0x1f;
       w16(S + 0x02, (uint16_t)((int32_t)camR16(0x86) - 16 + rx));
-      int32_t rz = call(SHAKE_RAND) & 0x1f;
+      int32_t rz = c->rng.next() & 0x1f;
       w16(S + 0x0a, (uint16_t)((int32_t)camR16(0x8a) - 16 + rz));
-      int32_t ry = call(SHAKE_RAND) & 0xf;
+      int32_t ry = c->rng.next() & 0xf;
       w16(S + 0x06, (uint16_t)((int32_t)camR16(0x88) - 8 + ry));
       call(SHAKE_FX, 0, 0, 129, 2);
       break;
@@ -680,7 +680,7 @@ void CutsceneCamera::shakeTail() {   // FUN_8006C988
       camW8(0x76, 5);
       break;
     case 5: {
-      int32_t r = call(SHAKE_RAND) & 0x3f;
+      int32_t r = c->rng.next() & 0x3f;
       w16(S + 0x06, (uint16_t)((int32_t)camR16(0x88) - 32 + r));
       call(SHAKE_FX, 0, 0, 241, 2);
       break;
@@ -692,7 +692,7 @@ void CutsceneCamera::shakeTail() {   // FUN_8006C988
     case 7:
       if (camR8(0x64) != 0) { camW8(0x76, 0); break; }
       {
-        int32_t r = call(SHAKE_RAND) & 0x3f;
+        int32_t r = c->rng.next() & 0x3f;
         w16(S + 0x06, (uint16_t)((int32_t)camR16(0x88) - 32 + r));
         call(SHAKE_FX, 0, 0, 129, 2);
       }
@@ -705,7 +705,7 @@ void CutsceneCamera::shakeTail() {   // FUN_8006C988
     case 9:
       if (camR8(0x64) != 0) { camW8(0x76, 0); break; }
       {
-        int32_t r = call(SHAKE_RAND) & 0x1f;
+        int32_t r = c->rng.next() & 0x1f;
         w16(S + 0x06, (uint16_t)((int32_t)camR16(0x88) - 16 + r));
         call(SHAKE_FX, 0, 0, 129, 2);
       }
