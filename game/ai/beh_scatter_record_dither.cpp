@@ -33,6 +33,7 @@
 #include <string.h>
 #include "spawn.h"   // world_despawn
 #include "rng.h"       // class Rng (via c->rng.next())
+#include "collision.h"  // ov_list_scan_31780 (FUN_80031780)
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
@@ -143,7 +144,7 @@ void beh_scatter_record_dither(Core* c) {
  L7ac:
   c->r[4] = obj; rec_dispatch(c, 0x8002B278u); v0 = c->r[2];
   if (v0 != 0) goto L7d4;
-  c->r[4] = obj; rec_dispatch(c, 0x80031780u);
+  c->r[4] = obj; ov_list_scan_31780(c);
  L7d4:
   return;
 }

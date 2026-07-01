@@ -30,6 +30,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "collision.h"  // ov_list_scan_31780 (FUN_80031780)
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
@@ -76,7 +77,7 @@ void beh_rand_phase_cull(Core* c) {
     if (c->mem_r32(nd + 0x38) == 0) {
       c->mem_w8(nd + 4, 2);
     } else if (cull == 0) {
-      leaf1(c, nd, 0x80031780u);                            // FUN_80031780(node)
+      c->r[4] = nd; ov_list_scan_31780(c);                  // FUN_80031780(node) — native
     }
   }
 }

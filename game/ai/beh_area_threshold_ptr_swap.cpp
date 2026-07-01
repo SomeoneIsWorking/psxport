@@ -28,6 +28,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "spawn.h"   // world_despawn
+#include "collision.h"  // ov_list_scan_31780 (FUN_80031780)
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
@@ -80,7 +81,7 @@ void beh_area_threshold_ptr_swap(Core* c) {
   if (!(c->mem_r8(0x800E7EAAu) < 12)) goto L518; // >= 12 -> node[4]=3
   c->r[4] = obj; rec_dispatch(c, 0x8002B278u); v0 = c->r[2];
   if (v0 != 0) goto L528;
-  c->r[4] = obj; rec_dispatch(c, 0x80031780u);
+  c->r[4] = obj; ov_list_scan_31780(c);
   goto L528;
  L518:
   c->mem_w8(obj + 4, 3);
