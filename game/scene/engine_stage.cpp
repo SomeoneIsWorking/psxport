@@ -390,7 +390,7 @@ static void ov_field_frame(Core* c) {
   c->mem_w16(0x1f80017cu, (uint16_t)(c->mem_r16(0x1f80017cu) + 1));   // frame counter
   c->mem_w32(0x800bf878u, c->mem_r32(0x800bf878u) + 1);
   if (c->mem_r8(0x1f800136u) == 0) {            // not paused: full gameplay update
-    FFS("ff_59d28", d0(c, 0x80059d28u)); FFS("ff_69b28", ov_list_walk_69b28(c));      // 0x80069b28 NATIVE
+    FFS("ff_59d28", c->engine.frameStartTick()); FFS("ff_69b28", ov_list_walk_69b28(c));    // 0x80059d28/0x80069b28 NATIVE
     FFS("ff_26368", ov_arr8_dispatch_26368(c)); FFS("ff_objwalk", ov_objwalk(c));     // 0x80026368/0x8007a904 NATIVE
     FFS("ff_25588", ov_scene_25588(c)); FFS("ff_4fe84", ov_scene_4fe84(c));           // 0x80025588/0x8004fe84 NATIVE
     FFS("ff_disp26c88", ov_disp_26c88(c));                                            // 0x80026c88 NATIVE
@@ -1187,6 +1187,64 @@ void Engine::postRenderTick() {
     return;
   }
   c->mem_w8(0x800BF842u, (uint8_t)(b - 1));
+}
+
+// Engine::frameStartTick — per-frame prologue at guest 0x80059D28 (FIRST call in ov_field_frame's
+// gameplay-update block). Faithful port of the disasm; see engine.h for the step-by-step contract.
+// Callees kept substrate: the mode-keyed overlay handler (branches at (e)), FUN_8005950C default,
+// and the rand LFSR advance at 0x8009A450 (the top recdep hit — 86 calls/frame — a future target).
+void Engine::frameStartTick() {
+  Core* c = core;
+  static constexpr uint32_t G = 0x800E7E80u;   // master G block base (== s0 in the guest)
+
+  // (a) counter@0x800BF819: if nonzero, decrement + mask two 12-bit heading fields.
+  uint8_t cnt = c->mem_r8(0x800BF819u);
+  if (cnt != 0) {
+    c->mem_w8(0x800BF819u, (uint8_t)(cnt - 1));
+    c->mem_w16(0x800ECF54u, (uint16_t)(c->mem_r16(0x800ECF54u) & 0x0FFFu));
+    c->mem_w16(0x800E7E68u, (uint16_t)(c->mem_r16(0x800E7E68u) & 0x0FFFu));
+  }
+  // (b) zero frame-scoped flag bank.
+  c->mem_w8(G + 0x177u, 0);
+  c->mem_w8(G + 0x179u, 0);
+  c->mem_w8(G + 0x17Au, 0);
+  c->mem_w8(G + 0x17Bu, 0);
+  c->mem_w8(0x1F80027Au, 0);
+  // (c) per-frame stamp++.
+  c->mem_w8(0x1F800247u, (uint8_t)(c->mem_r8(0x1F800247u) + 1u));
+
+  // (d) if 0x800BF841 == 0: mode-keyed per-frame handler dispatch, clear 0x1F800230.
+  if (c->mem_r8(0x800BF841u) == 0) {
+    uint8_t mode = c->mem_r8(0x800BF870u);
+    uint32_t target;
+    switch (mode) {
+      case 2:  target = 0x8010F63Cu; break;
+      case 3:  target = 0x80109024u; break;
+      case 7:  target = 0x80112220u; break;
+      case 20: target = 0x8010F654u; break;
+      default: target = 0x8005950Cu; break;
+    }
+    c->r[4] = G;
+    rec_dispatch(c, target);
+    c->mem_w8(0x1F800230u, 0);
+  }
+
+  // (e) master position + heading -> scratchpad (for projection/cull).
+  c->mem_w16(0x1F800160u, c->mem_r16(G + 0x2Eu));
+  c->mem_w16(0x1F800162u, c->mem_r16(G + 0x32u));
+  c->mem_w16(0x1F800164u, c->mem_r16(G + 0x36u));
+  c->mem_w16(0x1F80016Au, c->mem_r16(G + 0x58u));
+  c->mem_w16(0x1F800168u, c->mem_r16(G + 0x56u));   // written unconditionally (delay slot)
+  // (f) latch 0x800BF81E = 1 when 0x800BF9C3 & 0x80.
+  if (c->mem_r8(0x800BF9C3u) & 0x80u) c->mem_w8(0x800BF81Eu, 1);
+
+  // (g) tick sub-counter G+0x180 when 0x1F800137 (pause) == 0.
+  if (c->mem_r8(0x1F800137u) == 0) {
+    uint8_t v = c->mem_r8(G + 0x180u);
+    if (v != 0) c->mem_w8(G + 0x180u, (uint8_t)(v - 1));
+  }
+  // (h) advance rand LFSR.
+  rec_dispatch(c, 0x8009A450u);
 }
 
 // Register the GAME-stage area-init overrides when this just-loaded overlay is GAME.BIN at the stage base.

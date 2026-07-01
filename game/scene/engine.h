@@ -63,4 +63,15 @@ public:
   //   FX 42 then clear b42; otherwise = decrement b42. Trigger call = FUN_80074590(id, 2, -65) — a
   //   sound/vibration fx queue leaf, still substrate. Replaces `d0(c, 0x80077d8cu)` in ov_field_frame.
   void postRenderTick();
+
+  // frameStartTick: the first call in ov_field_frame's gameplay block (guest 0x80059D28). A per-frame
+  //   prologue that (a) decrements the frame counter at 0x800BF819 and masks two 12-bit heading fields
+  //   when it fires, (b) zeroes a bank of frame-scoped flags at G+0x177..0x17B and 0x1F80027A,
+  //   (c) increments the per-frame stamp at 0x1F800247, (d) if 0x800BF841 == 0 dispatches a mode-keyed
+  //   per-frame handler (modes 2/3/7/20 -> overlay-specific, else 0x8005950C) with G as a0 and clears
+  //   0x1F800230, (e) seeds the master position + heading (G+0x2E/0x32/0x36/0x56/0x58) into scratchpad
+  //   0x1F800160..0x1F80016A for the projection to read, (f) latches 0x800BF81E=1 when 0x800BF9C3&0x80,
+  //   (g) ticks the sub-counter at G+0x180 when 0x1F800137 (pause flag) is 0, (h) advances the LFSR
+  //   rand at 0x8009A450 every frame. Replaces `d0(c, 0x80059d28u)` in ov_field_frame.
+  void frameStartTick();
 };
