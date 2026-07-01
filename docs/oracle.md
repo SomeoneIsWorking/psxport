@@ -138,3 +138,27 @@ cores each frame" must become "drive each core toward its next checkpoint indepe
   leaves are all native-or-intentionally-PSX, so the render-leaf frontier is done-or-blocked at the opening.
   NEXT: reach actual player control, then validate interactive convergence + drive to the second AREA (effect
   cases idx1/2/3/8). (docs/findings/sbs.md "oraclediff: interactive-play SCAN added"; port-progress later-283.)
+- 2026-07-01 (later-298): **The ORACLE wired into the LIVE interactive SBS harness (`PSXPORT_SBS_MODE=oracle`),
+  not just the one-shot `PSXPORT_SELFTEST=oracle/oraclediff`.** User finding that triggered this: running
+  `PSXPORT_SBS_MODE=both` and eyeballing a native-render silhouette-crack bug (a 1px black line tracing
+  terrain-against-sky edges — docs/findings/render.md "Screen-fade transitions"... no, see the dark-outline
+  entry) showed the artifact on BOTH panes — but `both`'s B pane is `psx_fallback` (recomp substrate), which
+  shares A's SAME native gpu_native.cpp/gpu_gpu.cpp rasterizer (only the SCENE-WALK differs); it is not an
+  independent pixel oracle, so seeing the bug on both panes proved nothing about whether it's PSX-authentic.
+  Added `sbs.cpp` mode `M_ORACLE`: boots core B with `use_interp=1` + `gpu.soft_gpu=1` (the exact recipe
+  `run_oracle`/`run_oraclediff` already use) instead of `psx_fallback` — B never touches the native
+  rasterizer at all; its pixels come 100% from the software rasterizer into its own `s_vram`. `grab_pane`/
+  `gpu_gpu_render_readback` needed NO changes — they already just upload a core's CPU `s_vram` + an (empty,
+  for the oracle) native geometry batch, so re-using them for the oracle core is a degenerate case of the
+  same path. Verified live (headless, `PSXPORT_SBS=1 PSXPORT_SBS_MODE=oracle PSXPORT_SBS_AUTONAV=1`): both
+  cores reach free-roam at the SAME lockstep frame (f216) via the existing per-core `nav_step`; `sbs dump`
+  shows the two panes rendering the same village scene from two fully independent pipelines (SDL_GPU native
+  vs the CPU software rasterizer). ALSO fixed a pre-existing bug found while testing this: `PSXPORT_SBS_KEYS`
+  (scripted headless input) had up/down/left/right aliased to the SAME bit values as triangle/cross/square/
+  circle (a copy-paste of the face-button table), so scripted D-pad input silently did nothing — corrected to
+  the real PSX digital-pad bits (UP=0x10 RIGHT=0x20 DOWN=0x40 LEFT=0x80), matching `dbg_server.cpp`'s
+  `dbg_btn()`. NOT yet re-verified: whether the silhouette-crack bug reproduces on the TRUE oracle pane at the
+  coastal ridge — reaching that exact spot via scripted headless taps proved fiddly (later-283 already found
+  Tomba is in a non-interactive scripted "caught" pose right at the free-roam onset checkpoint; simple held
+  D-pad input doesn't move him there) — recommend driving `PSXPORT_SBS_MODE=oracle` interactively via a real
+  windowed run instead of headless scripting for this specific check.

@@ -4,7 +4,16 @@
 //   render   (default): A = native gameplay + NATIVE render,  B = native gameplay + PSX render
 //   gameplay:           A = native gameplay,  B = PSX gameplay (psx_fallback); render IDENTICAL (PSX) on both
 //   both:               A = full native (native gp + native render),  B = full PSX (PSX gp + PSX render)
-// Select with PSXPORT_SBS_MODE=render|gameplay|both.
+//   oracle:              A = full native (native gp + native render),  B = PURE ORACLE — the interpreter
+//                        engine (use_interp, docs/oracle.md) + the software rasterizer (soft_gpu), NOT the
+//                        recomp substrate (`psx_fallback` alone). B's `render|gameplay|both` psx_fallback
+//                        pane shares the SAME shared native rasterizer as A (gpu_native.cpp/gpu_gpu.cpp) —
+//                        it is a scene-walk A/B, not an independent pixel oracle (user finding, 2026-07-01:
+//                        SBS=both still showed the render-crack on "both" panes). `oracle` mode is the actual
+//                        ground truth: B never touches gpu_gpu.cpp/the VK batch at all; its picture comes
+//                        100% from soft_gpu's own s_vram, so a native-only render bug (the silhouette crack)
+//                        will NOT reproduce on B unless it is a genuine PSX/content characteristic.
+// Select with PSXPORT_SBS_MODE=render|gameplay|both|oracle.
 //
 // TRUE side-by-side, CONCURRENT FROM BOOT (user, 2026-06-25): both cores boot IN LOCKSTEP — stepped one
 // frame each per iteration and PRESENTED to two side-by-side panes every frame (pane 0 = A/left, pane 1 =
@@ -96,7 +105,7 @@ extern "C" { int g_sbs = 0; int g_sbs_rl = 0; }   // g_sbs_rl: SDL_GPU window pr
 
 namespace {
 
-enum Mode { M_RENDER, M_GAMEPLAY, M_BOTH };
+enum Mode { M_RENDER, M_GAMEPLAY, M_BOTH, M_ORACLE };
 constexpr uint32_t GAME_ENTRY  = 0x8010637Cu;  // task0 entry while the GAME stage runs (in the field)
 constexpr uint32_t TASK0_ENTRY = 0x801fe00cu;  // task0 obj +0xc = current stage entry
 constexpr uint32_t CUT_FLAG    = 0x1F800137u;  // cutscene-active byte (1 = intro cutscene, 0 = free-roam)
@@ -141,7 +150,8 @@ int      s_ww_hit   = 0;                        // bit0 = A wrote, bit1 = B wrot
 uint32_t s_ww_va = 0, s_ww_vb = 0;
 char     s_ww_bt_a[4096] = {0}, s_ww_bt_b[4096] = {0};
 
-const char* mode_name() { return s_mode == M_RENDER ? "render" : s_mode == M_GAMEPLAY ? "gameplay" : "both"; }
+const char* mode_name() { return s_mode == M_RENDER ? "render" : s_mode == M_GAMEPLAY ? "gameplay" :
+                                 s_mode == M_ORACLE ? "oracle" : "both"; }
 
 // Legit render-only guest regions in MAIN RAM: the native vs PSX render paths write GP0 packets / OT /
 // pool pointers here (render + both mode). Divergence here is render noise, not the gameplay we hunt.
@@ -209,6 +219,9 @@ void apply_mode(int which) {
     case M_RENDER:   g_render_psx = which;            break;   // A native render (0), B PSX render (1)
     case M_GAMEPLAY: g_render_psx = 1;                break;   // PSX render on BOTH (isolate gameplay)
     case M_BOTH:     g_render_psx = which;            break;   // A native render, B PSX render
+    case M_ORACLE:   g_render_psx = 0;                break;   // A native; B never consults this (use_interp
+                                                                // bypasses the native/PSX g_render_psx flip
+                                                                // entirely — it's fully interpreted+soft-rasterized)
   }
 }
 
@@ -297,7 +310,8 @@ void present_panes() { sbs_rl_present(s_rgba_a, s_wa, s_ha, s_rgba_b, s_wb, s_hb
 
 // PSXPORT_SBS_KEYS — scripted timed input for HEADLESS repro (no window): a comma list of
 // "FROM-TO:BTN" entries holding BTN (active-low) over frames [FROM,TO]. BTN is a libpad bit name:
-// start(0x0008) cross(0x4000) up/down/left/right(0x1000/0x4000.../0x8000/0x2000) — see pad. Example
+// start(0x0008) cross(0x4000) circle(0x2000) triangle(0x1000) square(0x8000)
+// up(0x0010) right(0x0020) down(0x0040) left(0x0080) — see pad. Example
 // (reproduce the narration: tap Start ~every 70f): PSXPORT_SBS_KEYS="250-256:start,320-326:start,...".
 // Lets a headless session DRIVE the exact path the windowed user reports, instead of needing the window.
 struct SbsKey { uint32_t from, to; uint16_t btn; };
@@ -307,8 +321,12 @@ static uint16_t sbs_btn_bit(const char* n) {
   if (!strcmp(n, "start")) return 0x0008; if (!strcmp(n, "select")) return 0x0001;
   if (!strcmp(n, "cross")) return 0x4000; if (!strcmp(n, "circle")) return 0x2000;
   if (!strcmp(n, "square")) return 0x8000; if (!strcmp(n, "triangle")) return 0x1000;
-  if (!strcmp(n, "up")) return 0x1000; if (!strcmp(n, "down")) return 0x4000;
-  if (!strcmp(n, "left")) return 0x8000; if (!strcmp(n, "right")) return 0x2000;
+  // D-PAD bits (bug fix: these were aliased to the face-button values above, so up/down/left/right
+  // scripted keys actually pressed triangle/cross/square/circle and never moved anything). Real PSX
+  // digital-pad bit layout (active-low): UP=0x0010 RIGHT=0x0020 DOWN=0x0040 LEFT=0x0080 — matches
+  // dbg_server.cpp's dbg_btn() (used by the live debug-server press/tap commands).
+  if (!strcmp(n, "up")) return 0x0010; if (!strcmp(n, "down")) return 0x0040;
+  if (!strcmp(n, "left")) return 0x0080; if (!strcmp(n, "right")) return 0x0020;
   return 0;
 }
 static void parse_sbs_keys() {
@@ -469,7 +487,8 @@ int sbs_dbg_cmd(FILE* out, const char* line) {
 void sbs_run(const char* exe_path) {
   watchdog_disable();   // the SBS pauses indefinitely on a divergence for live inspection — not a hang
   const char* m = getenv("PSXPORT_SBS_MODE");
-  if (m) { if (!strcmp(m, "gameplay")) s_mode = M_GAMEPLAY; else if (!strcmp(m, "both")) s_mode = M_BOTH; else s_mode = M_RENDER; }
+  if (m) { if (!strcmp(m, "gameplay")) s_mode = M_GAMEPLAY; else if (!strcmp(m, "both")) s_mode = M_BOTH;
+            else if (!strcmp(m, "oracle")) s_mode = M_ORACLE; else s_mode = M_RENDER; }
   { const char* e = getenv("PSXPORT_SBS_LO"); if (e && *e) s_lo = (uint32_t)strtoul(e, 0, 0); }
   { const char* e = getenv("PSXPORT_SBS_HI"); if (e && *e) s_hi = (uint32_t)strtoul(e, 0, 0); }
   g_store_watch_cb = sbs_store_cb;
@@ -481,10 +500,13 @@ void sbs_run(const char* exe_path) {
   // (the old SDL_GPU window path opened its own GL window, which is why this used to set PSXPORT_VK_HEADLESS — that
   // two-window workaround is gone). The window opens lazily on the first render_readback.
 
-  // psx_fallback per mode: gameplay/both run PSX gameplay on core B; render runs native gameplay on both.
+  // psx_fallback per mode: gameplay/both run PSX gameplay on core B; render runs native gameplay on both;
+  // oracle runs the PURE interpreter+soft-rasterizer oracle on B (docs/oracle.md) — NOT the recomp-substrate
+  // psx_fallback pane, which shares A's native rasterizer and so cannot isolate a native-render-only bug.
   int fb_b = (s_mode == M_RENDER) ? 0 : 1;
   g_a = new Game(); g_a->psx_fallback = 0;
   g_b = new Game(); g_b->psx_fallback = fb_b;
+  if (s_mode == M_ORACLE) { g_b->core.use_interp = 1; g_b->gpu.soft_gpu = 1; }
   load_exe(exe_path, &g_a->core); dc_boot_init(&g_a->core);
   load_exe(exe_path, &g_b->core); dc_boot_init(&g_b->core);
 
@@ -493,7 +515,8 @@ void sbs_run(const char* exe_path) {
   fprintf(stderr, "[sbs] LIVE side-by-side: mode=%s  A=%s  B=%s  diff region 0x%08X..0x%08X + scratchpad\n",
           mode_name(),
           s_mode == M_RENDER ? "native-gp/native-render" : s_mode == M_GAMEPLAY ? "native-gp/PSX-render" : "FULL native",
-          s_mode == M_RENDER ? "native-gp/PSX-render"    : s_mode == M_GAMEPLAY ? "PSX-gp/PSX-render"   : "FULL PSX",
+          s_mode == M_RENDER ? "native-gp/PSX-render"    : s_mode == M_GAMEPLAY ? "PSX-gp/PSX-render"   :
+          s_mode == M_ORACLE ? "PURE-ORACLE(interp+softGPU)" : "FULL PSX",
           s_lo, s_hi);
 
   s_have_dbgsrv = cfg_on("PSXPORT_DEBUG_SERVER") != 0;   // pause-on-divergence only when the server is up
