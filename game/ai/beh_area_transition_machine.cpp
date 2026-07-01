@@ -41,6 +41,7 @@
 #include <string.h>
 #include "spawn.h"   // world_despawn
 #include "graphics_bind.h"   // ov_obj_record_init
+#include "trig.h"    // class Trig — libgte ratan2
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
@@ -111,9 +112,7 @@ static void node6_phase(Core* c, uint32_t nd) {
       int s2 = (int16_t)(8268  - c->mem_r16(G_eb6));   // (int16)(0x204c - hi(eb4))
       int s0 = (int16_t)(18867 - c->mem_r16(G_eae));   // (int16)(0x49b3 - hi(eac))
       int s1 = (int)(-1388 - (int)c->mem_r16(G_eb2));  // -1388 - mem16(eb2) (NOT yet 16-bit-clamped)
-      c->r[4] = (uint32_t)(int32_t)(-s2); c->r[5] = (uint32_t)(int32_t)s0;
-      rec_dispatch(c, 0x80085690u);                    // FUN_80085690(-s2, s0) -> angle in v0
-      uint32_t ang = c->r[2];
+      uint32_t ang = (uint32_t)Trig::ratan2(c, -s2, s0);   // FUN_80085690(-s2, s0) -> angle
       int s0d = (s0 << 8) / 64;                         // <<8 then signed /64 (truncate toward 0)
       int s1d = ((int16_t)s1 << 8) / 64;               // (s1<<16>>8)/64 == ((int16)s1<<8)/64
       int s2d = (s2 << 8) / 64;

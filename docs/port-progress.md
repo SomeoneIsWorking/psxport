@@ -1010,6 +1010,14 @@ ov_field_frame's 9 substrate children owned native (was 2 native/9, now 4 native
   still-substrate callers so RNG streams don't diverge). Embedded as `Core::rng`, wired the same
   way as `ScreenFade` / `Engine`. `Engine::frameStartTick`'s per-frame rand tick now calls
   `c->rng.next()` directly instead of rec_dispatch — one less substrate hop per field frame.
+- ✅ **DONE (later-295) — `Trig::ratan2` (guest FUN_80085690, ~94 instructions).** libgte atan2 owned
+  native: sign-strip → first-octant reduction with an overflow-guard split (`(y<<10)/x` if `y` fits
+  in low 21 bits, else `y/(x>>10)`) → 1025-entry int16 table at 0x800AA490 → quadrant fixup
+  (`2048-v` for x_neg, negate for y_neg). Wired every native call site:
+  cutscene_camera.cpp (4 — yawDistAccumulate yaw, ang, pitch, headBuild yaw),
+  beh_child_trig_motion.cpp (2 — the trig motion pair), beh_area_transition_machine.cpp (1 — the
+  cutscene camera-delta angle). Camera oracle (75000 runs, 25 methods) 0 mismatches; headless
+  smoke 2027 frames clean.
 - ☐ **NEXT — advance either axis:** (a) port 0x80075A80 (the last substrate leaf in ov_field_frame's
   tail, 156 lines — per-frame area update state machine, iterates a 24-entry 10-byte-per-slot table
   based at 0x800BE238 keyed by counter at 0x800BED78); or (b) descend into each overlay handler's

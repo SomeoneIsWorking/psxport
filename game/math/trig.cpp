@@ -19,6 +19,45 @@ int32_t Trig::rsin(Core* c, int32_t angle) {
   return sign * r;
 }
 
+int32_t Trig::ratan2(Core* c, int32_t y_in, int32_t x_in) {
+  // Guest FUN_80085690. MIPS convention: a0=y, a1=x. Returns 12-bit angle (4096 == 2π).
+  // Two flags — a2 = "x was negative", a3 = "y was negative"; sign-strip both, table-lookup atan on the
+  // first octant, quadrant fixup at the tail. `q * 2` is the table offset (int16 entries at guest 0x800AA490).
+  uint32_t a0 = (uint32_t)y_in;
+  uint32_t a1 = (uint32_t)x_in;
+  int32_t x_neg = 0, y_neg = 0;
+  if ((int32_t)a1 < 0) { x_neg = 1; a1 = 0u - a1; }
+  if ((int32_t)a0 < 0) { y_neg = 1; a0 = 0u - a0; }
+  if (a1 == 0 && a0 == 0) return 0;
+  auto lh = [&](uint32_t idx) -> int32_t {
+    return (int32_t)(int16_t)c->mem_r16(ATAN_TAB + idx * 2u);
+  };
+  int32_t v1;
+  if ((int32_t)a0 < (int32_t)a1) {
+    // |y| < |x| — atan(y/x). Guest uses (y<<10)/x, or if y already has top-10 bits set, y/(x>>10) to
+    // keep the divisor in range. First-octant so q ∈ [0, 1024] and table[q] is atan(q/1024)*4096/2π.
+    uint32_t q;
+    if (a0 & 0x7FE00000u) {
+      q = (uint32_t)((int32_t)a0 / ((int32_t)a1 >> 10));
+    } else {
+      q = (uint32_t)((int32_t)(a0 << 10) / (int32_t)a1);
+    }
+    v1 = lh(q);
+  } else {
+    // |y| >= |x| — π/2 - atan(x/y). Same overflow-guard split.
+    uint32_t q;
+    if (a1 & 0x7FE00000u) {
+      q = (uint32_t)((int32_t)a1 / ((int32_t)a0 >> 10));
+    } else {
+      q = (uint32_t)((int32_t)(a1 << 10) / (int32_t)a0);
+    }
+    v1 = 1024 - lh(q);
+  }
+  if (x_neg) v1 = 2048 - v1;
+  if (y_neg) v1 = -v1;
+  return v1;
+}
+
 int32_t Trig::angleCmp(int32_t a, int32_t b, int32_t mode) {
   uint32_t d = (uint32_t)(a - b - 1024) & 0xFFFu;
   int32_t inFirstHalf = (d < 2048u) ? 1 : 0;

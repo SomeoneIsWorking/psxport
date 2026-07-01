@@ -16,11 +16,10 @@
 // rsin (0x80083E80) and rcos (0x80083F50) are owned by class Trig (game/math/trig.h) — the class
 // methods Trig::rsin / Trig::rcos have superseded the T2_RSIN / T2_RCOS `call(...)` shims here.
 static constexpr uint32_t T2_ISQRT  = 0x80084080u;   // isqrt(x)      -> floor(sqrt)
-static constexpr uint32_t T2_RATAN2 = 0x80085690u;   // ratan2(y,x)   -> angle12
-// angleCmp (0x80077768) is owned by class Trig (game/math/trig.h) — Trig::angleCmp superseded T2_ANGCMP.
+// ratan2 (0x80085690) is owned by class Trig (game/math/trig.h) — Trig::ratan2 superseded T2_RATAN2/LA_RATAN2.
+// angleCmp (0x80077768) is owned by class Trig — Trig::angleCmp superseded T2_ANGCMP.
 // lookAt's matrix helpers (NB its isqrt is a DIFFERENT entry from rotBuild's).
 static constexpr uint32_t LA_ISQRT  = 0x80077FB0u;
-static constexpr uint32_t LA_RATAN2 = 0x80085690u;
 static constexpr uint32_t LA_MRINIT = 0x80051794u;   // MR_init (identity)
 static constexpr uint32_t LA_MULMAT = 0x80084250u;   // MulMatrix0(a0,a1)
 static constexpr uint32_t LA_APPLYLV= 0x80084470u;   // ApplyMatrixLV(m,v,out)
@@ -80,7 +79,7 @@ bool CutsceneCamera::trackY(uint32_t target) {   // FUN_8006DA54
 
 // ── rotBuild (special-camera rotation / look-at builder) ─────────────────────────────────────────
 void CutsceneCamera::yawDistAccumulate(int32_t dx, int32_t dz) {
-  int32_t yaw  = (int16_t)call(T2_RATAN2, -dz, dx);
+  int32_t yaw  = (int16_t)Trig::ratan2(c, -dz, dx);
   int32_t dist = (int16_t)call(T2_ISQRT, dx * dx + dz * dz);
   int32_t rc2  = Trig::rcos(c, yaw);
   w32(S + 0x00, r32(S + 0x00) + ((rc2 * dist) >> 1));
@@ -297,7 +296,7 @@ void CutsceneCamera::distSolve() {   // FUN_8006D2AC
   int32_t s2q = (s2 - coordX) >> 8;
   int32_t s1q = (s1 - coordZ) >> 8;
   int32_t s0d = call(T2_ISQRT, mlo(s2q, s2q) + mlo(s1q, s1q)) << 8;
-  int32_t ang = call(T2_RATAN2, -s1q, s2q);
+  int32_t ang = Trig::ratan2(c, -s1q, s2q);
   int32_t angd = (ang - (int32_t)r16(G + 0x140) - 1024) & 0xfff;
 
   // 4. smooth cam[+0x14] toward the distance, accumulate into cam[+0x58], place camera X/Z
@@ -546,7 +545,7 @@ void CutsceneCamera::lookAt() {   // FUN_8006D02C
     Mtx::identity(c, S + 40);
     int32_t sinp = cam_idiv(c, dY  << 12, s18);
     int32_t cosp = cam_idiv(c, s19 << 12, s18);
-    int32_t pitch = (int16_t)call(LA_RATAN2, sinp, cosp);
+    int32_t pitch = (int16_t)Trig::ratan2(c, sinp, cosp);
     w16(S + 32, (uint16_t)pitch);
     w16(S + 48, (uint16_t)cosp);
     w16(S + 56, (uint16_t)cosp);
@@ -556,7 +555,7 @@ void CutsceneCamera::lookAt() {   // FUN_8006D02C
     if (s19 != 0) {
       int32_t a = cam_idiv(c, (-dX) << 12, s19);
       int32_t b = cam_idiv(c, dZ    << 12, s19);
-      int32_t yaw = (int16_t)call(LA_RATAN2, a, b);
+      int32_t yaw = (int16_t)Trig::ratan2(c, a, b);
       w16(S + 34, (uint16_t)yaw);
       Mtx::identity(c, 0x1F800000u);
       w16(0x1F800000u, (uint16_t)b);
