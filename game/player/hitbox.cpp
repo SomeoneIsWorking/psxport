@@ -36,8 +36,8 @@
 // window is needed (its own 0-byte frame: it never adjusts sp). Native run -> snapshot+rollback ->
 // rec_super_call -> diff.
 
-#include "../runtime/recomp/core.h"
-#include "../runtime/recomp/cfg.h"
+#include "core.h"
+#include "cfg.h"
 #include <cstdint>
 #include <cstdio>
 #include <cstring>

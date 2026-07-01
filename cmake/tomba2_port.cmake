@@ -26,7 +26,6 @@ if(NOT (SDL3_FOUND AND FREETYPE_FOUND))
 endif()
 
 set(RT runtime/recomp)
-set(ENG engine)
 set(MED vendor/beetle-psx/mednafen)
 
 # ---- vendored RmlUi (HTML/CSS mod overlay), static, Core + Debugger only ----------------------
@@ -84,13 +83,13 @@ set(PORT_SRC
   runtime/recomp/gpu_gpu.cpp
   runtime/recomp/gpu_perf.cpp
   runtime/recomp/mods.c
-  engine/game_tomba2.cpp
-  engine/asset.cpp
-  engine/mathlib.cpp
-  engine/cull.cpp
-  engine/collision.cpp
-  engine/hitbox.cpp
-  engine/grid_offset.cpp
+  game/game_tomba2.cpp
+  game/core/asset.cpp
+  game/math/mathlib.cpp
+  game/render/cull.cpp
+  game/player/collision.cpp
+  game/player/hitbox.cpp
+  game/player/grid_offset.cpp
   game/world/spawn.cpp
   game/world/placement.cpp
   game/world/graphics_bind.cpp
@@ -100,94 +99,94 @@ set(PORT_SRC
   game/render/render_native.cpp
   game/render/scene/scene_build.cpp
   game/render/mesh/mesh_draw.cpp
-  engine/actor_sm_24448.cpp
-  engine/beh_scene_ui_trigger.cpp
-  engine/beh_typed_init_scene_trigger.cpp
-  engine/beh_pickup_collect_trigger.cpp
-  engine/beh_substate_edge_orchestrator.cpp
-  engine/beh_jumptable_release_trigger.cpp
-  engine/beh_typed_table_seed_gate.cpp
-  engine/beh_typed_jumptable_pair.cpp
-  engine/beh_cull_substate_orchestrator.cpp
-  engine/beh_id_compare_motion_dispatch.cpp
-  engine/beh_jumptable_flag_gate.cpp
-  engine/beh_cull_tick_render.cpp
-  engine/beh_sibling_angle_track.cpp
-  engine/beh_visibility_gate_dispatch.cpp
-  engine/beh_record_list_scanner.cpp
-  engine/beh_area_event_dispatch.cpp
-  engine/beh_pad_child_linker.cpp
-  engine/beh_scatter_record_dither.cpp
-  engine/beh_area_threshold_ptr_swap.cpp
-  engine/beh_scatter_ramp_machine.cpp
-  engine/beh_pure_inner_dispatch.cpp
-  engine/beh_anim_trigger_gates.cpp
-  engine/beh_box_seed_phase_gate.cpp
-  engine/beh_typed_anim_spawn.cpp
-  engine/beh_id_routed_dispatch.cpp
-  engine/beh_pure_substate_dispatch.cpp
-  engine/beh_linked_advance_branch.cpp
-  engine/beh_typed_init_exit_poker.cpp
-  engine/beh_child_trig_motion.cpp
-  engine/beh_prng_velocity_machine.cpp
-  engine/beh_quad_record_table_seed.cpp
-  engine/beh_flagbit_timer_machine.cpp
-  engine/beh_two_child_steer.cpp
-  engine/beh_single_child_cull.cpp
-  engine/beh_twin_record_steer.cpp
-  engine/beh_multi_record_phase_machine.cpp
-  engine/beh_sine_motion_sfx.cpp
-  engine/beh_box_rearm_sub.cpp
-  engine/beh_node3_router.cpp
-  engine/beh_actor_move_sm.cpp
-  engine/beh_variant_actor_sm.cpp
-  engine/beh_lift_platform.cpp
-  engine/beh_event_record_machine.cpp
-  engine/beh_typed_variant_router.cpp
-  engine/beh_camera_target_follow.cpp
-  engine/beh_cube_text_spawn.cpp
-  engine/beh_area_transition_machine.cpp
-  engine/beh_rand_phase_cull.cpp
-  engine/beh_pos_history_trail.cpp
-  engine/beh_variant_overlay_lifecycle.cpp
-  engine/bg_scene_transition_sm.cpp
-  engine/script.cpp
-  engine/animation.cpp
-  engine/input.cpp
-  engine/menu.cpp
-  engine/inventory.cpp
-  engine/hud.cpp
-  engine/lighting.cpp
-  engine/engine_bav.cpp
-  engine/save.cpp
-  engine/sound.cpp
-  engine/engine_init.cpp
-  engine/engine_font.cpp
-  engine/engine_level.cpp
-  engine/fps60.cpp
-  engine/engine_tomba2.cpp
-  engine/engine_submit.cpp
-  engine/engine_project.cpp
-  engine/engine_render.cpp
-  engine/engine_render_walk.cpp
-  engine/engine_stage.cpp
-  engine/sop.cpp
-  engine/engine_demo.cpp
-  engine/engine_camera.cpp
-  engine/engine_math.cpp
-  engine/engine_player.cpp
-  engine/native_terrain.cpp
-  engine/render_queue.cpp
-  engine/clib.cpp
-  engine/gte.cpp
-  engine/gpu_lib.cpp
-  engine/sound_voice.cpp
-  engine/native_misc.cpp
+  game/object/actor_sm_24448.cpp
+  game/ai/beh_scene_ui_trigger.cpp
+  game/ai/beh_typed_init_scene_trigger.cpp
+  game/ai/beh_pickup_collect_trigger.cpp
+  game/ai/beh_substate_edge_orchestrator.cpp
+  game/ai/beh_jumptable_release_trigger.cpp
+  game/ai/beh_typed_table_seed_gate.cpp
+  game/ai/beh_typed_jumptable_pair.cpp
+  game/ai/beh_cull_substate_orchestrator.cpp
+  game/ai/beh_id_compare_motion_dispatch.cpp
+  game/ai/beh_jumptable_flag_gate.cpp
+  game/ai/beh_cull_tick_render.cpp
+  game/ai/beh_sibling_angle_track.cpp
+  game/ai/beh_visibility_gate_dispatch.cpp
+  game/ai/beh_record_list_scanner.cpp
+  game/ai/beh_area_event_dispatch.cpp
+  game/ai/beh_pad_child_linker.cpp
+  game/ai/beh_scatter_record_dither.cpp
+  game/ai/beh_area_threshold_ptr_swap.cpp
+  game/ai/beh_scatter_ramp_machine.cpp
+  game/ai/beh_pure_inner_dispatch.cpp
+  game/ai/beh_anim_trigger_gates.cpp
+  game/ai/beh_box_seed_phase_gate.cpp
+  game/ai/beh_typed_anim_spawn.cpp
+  game/ai/beh_id_routed_dispatch.cpp
+  game/ai/beh_pure_substate_dispatch.cpp
+  game/ai/beh_linked_advance_branch.cpp
+  game/ai/beh_typed_init_exit_poker.cpp
+  game/ai/beh_child_trig_motion.cpp
+  game/ai/beh_prng_velocity_machine.cpp
+  game/ai/beh_quad_record_table_seed.cpp
+  game/ai/beh_flagbit_timer_machine.cpp
+  game/ai/beh_two_child_steer.cpp
+  game/ai/beh_single_child_cull.cpp
+  game/ai/beh_twin_record_steer.cpp
+  game/ai/beh_multi_record_phase_machine.cpp
+  game/ai/beh_sine_motion_sfx.cpp
+  game/ai/beh_box_rearm_sub.cpp
+  game/ai/beh_node3_router.cpp
+  game/ai/beh_actor_move_sm.cpp
+  game/ai/beh_variant_actor_sm.cpp
+  game/ai/beh_lift_platform.cpp
+  game/ai/beh_event_record_machine.cpp
+  game/ai/beh_typed_variant_router.cpp
+  game/ai/beh_camera_target_follow.cpp
+  game/ai/beh_cube_text_spawn.cpp
+  game/ai/beh_area_transition_machine.cpp
+  game/ai/beh_rand_phase_cull.cpp
+  game/ai/beh_pos_history_trail.cpp
+  game/ai/beh_variant_overlay_lifecycle.cpp
+  game/scene/bg_scene_transition_sm.cpp
+  game/items/script.cpp
+  game/object/animation.cpp
+  game/input/input.cpp
+  game/ui/menu.cpp
+  game/items/inventory.cpp
+  game/ui/hud.cpp
+  game/render/lighting.cpp
+  game/ui/engine_bav.cpp
+  game/items/save.cpp
+  game/audio/sound.cpp
+  game/scene/engine_init.cpp
+  game/ui/engine_font.cpp
+  game/scene/engine_level.cpp
+  game/render/fps60.cpp
+  game/object/engine_tomba2.cpp
+  game/render/engine_submit.cpp
+  game/render/engine_project.cpp
+  game/render/engine_render.cpp
+  game/render/engine_render_walk.cpp
+  game/scene/engine_stage.cpp
+  game/scene/sop.cpp
+  game/scene/engine_demo.cpp
+  game/camera/engine_camera.cpp
+  game/math/engine_math.cpp
+  game/player/engine_player.cpp
+  game/render/native_terrain.cpp
+  game/render/render_queue.cpp
+  game/core/clib.cpp
+  game/math/gte.cpp
+  game/render/gpu_lib.cpp
+  game/audio/sound_voice.cpp
+  game/core/native_misc.cpp
   runtime/recomp/peripheral_misc.cpp
-  engine/margin_render.cpp
-  engine/audio/native_audio.c
-  engine/audio/native_music.c
-  engine/audio/music_list.c
+  game/render/margin_render.cpp
+  game/audio/native_audio.c
+  game/audio/native_music.c
+  game/audio/music_list.c
   runtime/recomp/sync_overrides.cpp
   runtime/recomp/native_boot.cpp
   runtime/recomp/dbg_server.cpp
@@ -234,7 +233,8 @@ set_target_properties(tomba2_port PROPERTIES
   RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/scratch/bin)
 
 target_include_directories(tomba2_port PRIVATE
-  ${RT} ${ENG} ${CMAKE_SOURCE_DIR}/generated
+  ${RT} ${CMAKE_SOURCE_DIR}/generated
+  game  game/ai  game/audio  game/camera  game/core  game/input  game/items  game/math  game/object  game/player  game/render  game/scene  game/ui
   game/world game/render game/render/scene game/render/mesh
   ${MED} ${MED}/psx
   vendor/beetle-psx/libretro-common/include vendor/beetle-psx
