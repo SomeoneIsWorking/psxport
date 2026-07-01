@@ -412,6 +412,16 @@ static void native_scheduler_step(Core* c) {
       c->game->sched.task_ctx[i].r[17] = 0x1f800000u;
       c->game->sched.task_ctx[i].r[18] = 1;
       c->game->sched.task_ctx[i].r[31] = 0x801063F4u;
+      // RESTORE the loop's STACK POINTER too (later-284c). We re-enter at 0x801063F4, which is PAST the
+      // 0x8010637C prologue `addiu sp,-0x20`, so the loop body always runs with sp = task-stack-top - 0x20.
+      // The saved r29 from the previous yield is DEEPER: the per-frame yield FUN_80051f80 does `addiu sp,-0x18`
+      // and we re-enter at the loop top BEFORE its `addiu sp,+0x18` epilogue runs, so that 0x18 is never
+      // unwound — leaking 0x18/frame off task0's ~2.5KB guest stack. Left unreset, after ~100 field frames sp
+      // reaches the task table at 0x801FE000 and a leaf's `sw`-spill clobbers sm[0x48]/sm[0x4a] -> ov_game_frame
+      // sees s4a=0 with A00 (not SOP) resident -> jal 0x80109450 into A00's jump-table data -> recomp-MISS.
+      // Pinning sp to the loop frame base every re-entry kills the leak (matches the fresh-entry sp after the
+      // prologue). 0x20 = the verified 0x8010637C prologue frame size (GAME.BIN disasm), not a fudge factor.
+      c->game->sched.task_ctx[i].r[29] = c->mem_r32(base + 8) - 0x20u;
     } else if (st == 2) {                     // runnable: resume after the previous yield
       c->game->sched.game_coop[i] = 0;        // left the GAME cooperative loop (e.g. area transition)
       resume_pc = c->game->sched.task_ctx[i].r[31];
