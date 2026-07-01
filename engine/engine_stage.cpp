@@ -755,9 +755,9 @@ int ov_game_frame(Core* c) {
     // (0x801088d8, the walkable field — its load is sync via native_transition_area_load, its running
     // states are yield-free). Other sub-modes (2..5, the area-machine variants) aren't owned yet.
     if (s4a == 0) {
-      if (c->mem_r32(0x80109450u) != 0x3C021F80u) return 0;            // SOP not loaded -> cooperative
+      if (c->mem_r32(0x80109450u) != 0x3C021F80u) { if (cfg_dbg("gframe")) fprintf(stderr, "[gframe] ret0 s48=2 s4a=0 SOP-not-loaded ov=%08X sm@%08X\n", c->mem_r32(0x80109450u), sm); return 0; } // SOP not loaded -> cooperative
     } else if (s4a != 1) {
-      return 0;                                                        // unowned running sub-mode
+      if (cfg_dbg("gframe")) fprintf(stderr, "[gframe] ret0 s48=2 s4a=%u unowned-submode sm@%08X\n", s4a, sm); return 0; // unowned running sub-mode
     }
     ov_game_s48_2_frame(c);
   } else if (s48 == 0) {
@@ -765,7 +765,7 @@ int ov_game_frame(Core* c) {
   } else if (s48 == 1) {
     ffspan_begin(); ov_game_s48_1(c); ffspan_end("s48_1");
   } else {
-    return 0;                                                          // unknown top state -> cooperative
+    if (cfg_dbg("gframe")) fprintf(stderr, "[gframe] ret0 unknown s48=%u sm@%08X\n", s48, sm); return 0; // unknown top state -> cooperative
   }
   c->mem_w16(0x1f800198u, (uint16_t)(c->mem_r16(0x1f800198u) + 1));   // loop tail 0x8010645c
   return 1;

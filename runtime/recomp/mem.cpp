@@ -52,7 +52,7 @@ void Core::cw_check(uint32_t a, uint32_t v, int width) {
   if (s_cw_hi && p >= s_cw_lo && p < s_cw_hi) {
     s_cw_n++;
     if (s_cw_n <= 64) {
-      fprintf(stderr, "[cw] #%d store w%d [%08X]=%08X  interp_pc=%08X\n", s_cw_n, width, 0x80000000u|p, v, pc);
+      fprintf(stderr, "[cw] #%d store w%d [%08X]=%08X  interp_pc=%08X sp=%08X\n", s_cw_n, width, 0x80000000u|p, v, pc, r[29]);
       if (cfg_str("PSXPORT_CW_BT")) { void* bt[32]; int n = backtrace(bt, 32); backtrace_symbols_fd(bt, n, 2); fprintf(stderr, "----\n"); }
     }
   }

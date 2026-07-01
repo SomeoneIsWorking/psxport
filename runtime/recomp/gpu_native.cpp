@@ -1583,10 +1583,12 @@ void GpuState::gpu_present_ex(Core* core, int do_blit) {
         fprintf(stderr, "[ndepth f%d] real-depth(3D) prims=%ld  OT-band(2D) prims=%ld  3D%%=%.1f\n",
                 s_frame, g_nd_3d, g_nd_2d, (g_nd_3d+g_nd_2d) ? 100.0*g_nd_3d/(g_nd_3d+g_nd_2d) : 0.0);
       { extern long g_pp_set, g_pp_hit, g_pp_miss;
-        fprintf(stderr, "    projprim(vtx) records=%ld  lookups hit=%ld miss=%ld\n", g_pp_set, g_pp_hit, g_pp_miss);
+        if (cfg_dbg("ndepth") && s_frame > 0 && (s_frame % 60) == 0)
+          fprintf(stderr, "    projprim(vtx) records=%ld  lookups hit=%ld miss=%ld\n", g_pp_set, g_pp_hit, g_pp_miss);
         g_pp_set = g_pp_hit = g_pp_miss = 0; }
       { extern long g_od_add, g_od_hit, g_od_miss;
-        fprintf(stderr, "    obj_depth spans=%ld  2D-prim lookups hit=%ld miss=%ld\n", g_od_add, g_od_hit, g_od_miss);
+        if (cfg_dbg("ndepth") && s_frame > 0 && (s_frame % 60) == 0)
+          fprintf(stderr, "    obj_depth spans=%ld  2D-prim lookups hit=%ld miss=%ld\n", g_od_add, g_od_hit, g_od_miss);
         g_od_add = g_od_hit = g_od_miss = 0; }
       extern long g_nd2d_hist[256];
       if (cfg_dbg("ndepth") && s_frame > 0 && (s_frame % 60) == 0) {

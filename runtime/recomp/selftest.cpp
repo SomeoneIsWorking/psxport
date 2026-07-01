@@ -249,7 +249,7 @@ static int run_oracle(const char* path) {
 
   // Run a long window; track the loop counter and the furthest SOP scene id seen.
   uint32_t c0 = loopc(), max_scene = 0;
-  const uint32_t RUN = 3000;
+  const uint32_t RUN = 4200;
   uint8_t shot_done[256] = {0};
   int freeroam_since = -1;   // frame index (k) at which the walkable-field overlay first appeared
   for (uint32_t k = 0; k < RUN; k++, f++) {
@@ -262,7 +262,9 @@ static int run_oracle(const char* path) {
     if (ovsig() == 0x801138A4u && sc == 0) {
       if (freeroam_since < 0) { freeroam_since = (int)k; fprintf(stderr, "[selftest]   oracle: FREE-ROAM field reached at f=%u\n", f); }
       int held = (int)k - freeroam_since;
-      if (held == 30 || held == 120 || held == 300) {
+      if (held == 30 || held == 120 || held == 300 ||
+          held == 600 || held == 1200 || held == 1800 ||
+          held == 2400 || held == 2550 || held == 2600 || held == 2700) {
         char p[160]; snprintf(p, sizeof p, "scratch/screenshots/oracle_field_h%d_f%u.ppm", held, f);
         gpu_native_shot(c, p);
         fprintf(stderr, "[selftest]   oracle: dumped free-roam field framebuffer %s\n", p);
@@ -421,6 +423,9 @@ static int run_oraclediff(const char* path) {
       // RAM diff at the EXACT onset frame (both cores parked at the overlay flip) — this is where state is
       // aligned. Free-running past it drifts (the two cores animate the scripted opening at slightly different
       // sub-frame cadence: the interp core does real CD loads), so any post-step diff is drift, not a bug.
+      fprintf(stderr, "[oraclediff] ONSET area id: A(native) bf870=%u bf9b4=%u sm48=%u | B(oracle) bf870=%u bf9b4=%u sm48=%u\n",
+              A->core.mem_r8(0x800bf870u), A->core.mem_r8(0x800bf9b4u), A->core.mem_r16(0x801fe048u),
+              B->core.mem_r8(0x800bf870u), B->core.mem_r8(0x800bf9b4u), B->core.mem_r16(0x801fe048u));
       int onset_ranges = diff_band("free-roam");
       summary_div = total_div;   // freeze the summary count here — the interactive walk's diff below is render noise
 
@@ -456,6 +461,32 @@ static int run_oraclediff(const char* path) {
       gpu_native_shot(&A->core, "scratch/screenshots/oraclediff_freeroam_native.ppm");
       gpu_native_shot(&B->core, "scratch/screenshots/oraclediff_freeroam_oracle.ppm");
       fprintf(stderr, "[oraclediff] post-walk framebuffers: oraclediff_freeroam_{native,oracle}.ppm (native VK vs PSX soft-GPU content match — still-convergent; Tomba stays in the scripted caught pose, so this is not yet an interactive-movement test)\n");
+
+      // NO-INPUT SCRIPTED-OPENING PROGRESSION (later-284): from the free-roam onset, drive BOTH cores with
+      // NO input and dump each core's soft-GPU framebuffer at matched held frames. The pure-PSX reference (B)
+      // plays out the scripted opening (caught-island -> tree -> cliff-fishing -> "house on fire" dialogue)
+      // with no input; if the NATIVE engine (A) does not advance the same way, that is a game-LOGIC divergence
+      // in a native reimplementation (NOT render noise). Cadence drifts (B does real CD loads), so this is a
+      // gross progression check, not a frame-exact diff.
+      {
+        const int PROG_FRAMES = 2800;
+        const int marks[] = { 300, 600, 1200, 1800, 2600 };
+        int mi = 0;
+        for (int k = 0; k < PROG_FRAMES; k++) {
+          pad_repl_hold(&A->core, PAD_NONE); dc_step_frame(&A->core, fa); fa++;
+          pad_repl_hold(&B->core, PAD_NONE); dc_step_frame(&B->core, fb); fb++;
+          if (mi < (int)(sizeof marks/sizeof marks[0]) && k == marks[mi]) {
+            char pa[160], pb[160];
+            snprintf(pa, sizeof pa, "scratch/screenshots/prog_native_h%d.ppm", marks[mi]);
+            snprintf(pb, sizeof pb, "scratch/screenshots/prog_oracle_h%d.ppm", marks[mi]);
+            gpu_native_shot(&A->core, pa); gpu_native_shot(&B->core, pb);
+            fprintf(stderr, "[oraclediff]   progression h%d: native scene=%u ovsig=0x%08X sm48=%u | oracle scene=%u ovsig=0x%08X sm48=%u\n",
+                    marks[mi], A->core.mem_r8(0x800bf9b4u), A->core.mem_r32(0x80109450u), A->core.mem_r16(0x801fe048u),
+                    B->core.mem_r8(0x800bf9b4u), B->core.mem_r32(0x80109450u), B->core.mem_r16(0x801fe048u));
+            mi++;
+          }
+        }
+      }
     }
   }
 
