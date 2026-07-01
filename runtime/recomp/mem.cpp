@@ -34,6 +34,7 @@ Core::Core() {
   memset(scratch, 0, sizeof(scratch));
   // Wire up owned subsystems' back-pointers so their methods can reach this Core's guest memory.
   screenFade.core = this;
+  engine.core     = this;
 }
 
 // PSXPORT_CW="lo,hi" — host-backtrace watchpoint: when ANY store lands in physical byte range

@@ -28,7 +28,6 @@
 // tracks it naturally. Kept as free functions — they are REPL glue, not camera behaviour.
 void cam_teleport(int x, int y, int z);
 void cam_teleport_off(void);
-void engine_camera_register(void);   // wiring entry (called from game_tomba2 boot)
 
 class CutsceneCamera {
 public:
@@ -49,6 +48,16 @@ public:
   static constexpr uint32_t CAM_OBJ = 0x800E8008u;
 
   CutsceneCamera(Core* c, uint32_t cam) : c(c), cam_(cam) {}
+
+  // ── Live-spine entry points (bind + run, called from engine_stage / sop) ─────────────────────────
+  // runFieldUpdate: the resident driver 0x8006EC44 (fixed cam CAM_OBJ). Replaces d0(c, 0x8006ec44u) in
+  //   ov_field_frame / ov_field_frame_x. Class is oracle-unit-tested end-to-end (cutscene_camera_test.cpp),
+  //   so no per-call live A/B gate here.
+  // runSnapFollow: 0x8006E3B0 (SOP/BG). Replaces d2(c,0x8006e3b0,cam,tgt) at sop.cpp cutscene camera sites.
+  //   Under PSXPORT_DEBUG=camverify, A/B-compares native vs the recomp oracle (rec_interp 0x8006E3B0) on
+  //   the same inputs — the regression gate for the restructure (cam struct + full scratchpad, 0 mismatch).
+  static void runFieldUpdate(Core* c);
+  static void runSnapFollow(Core* c, uint32_t cam, uint32_t target);
 
   // ── Per-frame DRIVER (0x8006EC44) + init/mode-selector (0x8006EA7C) ──────────────────────────────
   // update(): the resident camera driver — reads the outer state from cam[0] (0=first-frame init, 1=run,

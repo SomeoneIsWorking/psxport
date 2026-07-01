@@ -297,7 +297,6 @@ void games_tomba2_init(void) {
   // as future DIRECT-CALL targets, wired top-down as each parent is owned. The *_register() helpers below
   // are plain C calls into the subsystem init (now no-ops where their bodies only registered overrides),
   // left in place so re-introducing direct wiring per subsystem is a one-line change.
-  { void engine_camera_register(void); engine_camera_register(); }
   { void engine_math_register(void);   engine_math_register();   }
   { void save_register(void);          save_register();          }
   { void sound_register(void);         sound_register();         }

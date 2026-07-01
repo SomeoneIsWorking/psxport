@@ -235,11 +235,10 @@ void native_scheduler_step(Core* c) {
         c->game->sched.cur_slot = i;
         static_cast<R3000&>(*c) = c->game->sched.task_ctx[i];       // restore REGISTERS
         c->game->sched.in_stage = 1;
-        void ov_game_stage_prologue(Core*); int ov_game_frame(Core*);
         int handled = 1;
         if (setjmp(c->game->sched.yield_jmp) == 0) {
-          if (game_fresh) ov_game_stage_prologue(c);                // prologue (sets sm[0x48] from 0x134)
-          ffspan_begin(); handled = ov_game_frame(c); ffspan_end("gameframe");  // one frame: sm[0x48] dispatch + tail
+          if (game_fresh) c->engine.stagePrologue();                // prologue (sets sm[0x48] from 0x134)
+          ffspan_begin(); handled = c->engine.frame(); ffspan_end("gameframe");  // one frame: sm[0x48] dispatch + tail
         } else if (cfg_dbg("sched")) {
           static int w = 0; if (!w++) fprintf(stderr, "[sched] caught a GAME substate yield (a leaf not "
                                                       "yet sync) — frontier\n");

@@ -27,7 +27,7 @@ void ov_bg_scene_transition_sm(Core*);  // bg_scene_transition_sm.cpp — native
 #include "render/screen_fade/screen_fade.h"   // class ScreenFade — the single fade driver
 static void d1(Core* c, uint32_t fn, uint32_t a0);
 static void d2(Core* c, uint32_t fn, uint32_t a0, uint32_t a1);
-extern "C" void cam_snap_follow(Core* c, uint32_t cam, uint32_t target);   // game/camera/camera.cpp
+#include "camera/cutscene_camera.h"   // class CutsceneCamera — SOP/BG cutscene camera (0x8006E3B0)
 static void d3(Core* c, uint32_t fn, uint32_t a0, uint32_t a1, uint32_t a2);
 
 // Owned synchronous area-DATA load (replaces the body of LAB_80109164 0x80109164). Runs in the
@@ -199,7 +199,7 @@ void ov_sop_field_update(Core* c) {
     if (bg == 0) { c->mem_w8(0x800e8008u, 1); c->mem_w8(0x800e806cu, 0); }
     else if (bg == 1) {
       uint8_t sub = c->mem_r8(0x800e806cu);
-      if (sub == 0) cam_snap_follow(c, 0x800e8008u, 0x800e8040u);   // native class CutsceneCamera (was 0x8006e3b0)
+      if (sub == 0) CutsceneCamera::runSnapFollow(c, 0x800e8008u, 0x800e8040u);   // native class CutsceneCamera (was 0x8006e3b0)
       else if (sub == 1) c->mem_w8(0x800e806cu, 0);
     }
     d0(c, 0x80075a80u);                                    // per-frame area update
@@ -256,7 +256,7 @@ void ov_sop_field_mode(Core* c) {
         c->mem_w32(node + 0x1c, c->mem_r32(t + 8));   // per-scene handler (content)
       }
       d2(c, 0x8006cbd0u, 0x800e8008u, 0x8010c95cu);   // BG xform setup
-      cam_snap_follow(c, 0x800e8008u, 0x800e8040u);   // BG init (native class CutsceneCamera; was 0x8006e3b0)
+      CutsceneCamera::runSnapFollow(c, 0x800e8008u, 0x800e8040u);   // BG init (native class CutsceneCamera; was 0x8006e3b0)
       sm = c->mem_r32(0x1f800138u);                   // (callees don't move sm, but reload defensively)
       c->mem_w16(sm + 0x50, 1);
       d0(c, 0x80075240u);

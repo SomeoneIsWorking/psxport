@@ -207,7 +207,7 @@ static void ov_game_s4c(Core* c) {
 void ov_sop_field_mode(Core*);           // engine/sop.cpp — native SOP field-mode machine
 void native_transition_area_load(Core*); // engine/sop.cpp — sync transition area-DATA load
 #include "render/screen_fade/screen_fade.h"   // class ScreenFade — the single fade driver
-extern "C" void cam_update(Core* c);            // camera/cutscene_camera.cpp — resident driver 0x8006EC44 (native)
+#include "camera/cutscene_camera.h"           // class CutsceneCamera — resident driver 0x8006EC44 (native)
 void ov_game_func_801084F8(Core*);                          // generated/ov_game_disp.c — still-recomp: draw pause
                                                              // menu + cursor/page-transition handling
 
@@ -394,7 +394,7 @@ static void ov_field_frame(Core* c) {
     FFS("ff_26368", ov_arr8_dispatch_26368(c)); FFS("ff_objwalk", ov_objwalk(c));     // 0x80026368/0x8007a904 NATIVE
     FFS("ff_25588", ov_scene_25588(c)); FFS("ff_4fe84", ov_scene_4fe84(c));           // 0x80025588/0x8004fe84 NATIVE
     FFS("ff_disp26c88", ov_disp_26c88(c)); FFS("ff_22a80", d0(c, 0x80022a80u));       // 0x80026c88 NATIVE
-    FFS("ff_6ec44", cam_update(c)); FFS("ff_50de4", d0(c, 0x80050de4u)); FFS("ff_1cac0", d0(c, 0x8001cac0u));   // 0x8006ec44 NATIVE (CutsceneCamera::update)
+    FFS("ff_6ec44", CutsceneCamera::runFieldUpdate(c)); FFS("ff_50de4", d0(c, 0x80050de4u)); FFS("ff_1cac0", d0(c, 0x8001cac0u));   // 0x8006ec44 NATIVE (CutsceneCamera::update)
   }
   // DUAL-VIEW: snapshot the post-gameplay / pre-render state so the side-by-side PSX render pass can run
   // from it (the native render below consumes per-frame queues, so it is not re-runnable). No-op unless on.
@@ -698,7 +698,7 @@ static void ov_field_frame_x(Core* c) {
   if (c->mem_r8(0x1f800136u) == 0) {            // not paused: reduced gameplay update
     d0(c, 0x80059d28u); d0(c, 0x80069b28u); d0(c, 0x80026368u); d0(c, 0x8007b04cu);   // 0x8007b04c obj update
     ov_scene_25588(c); ov_scene_4fe84(c); ov_disp_26c88(c); d0(c, 0x80022a80u);       // 25588/4fe84/26c88 NATIVE
-    cam_update(c);   // 0x8006ec44 NATIVE (CutsceneCamera::update)
+    CutsceneCamera::runFieldUpdate(c);   // 0x8006ec44 NATIVE (CutsceneCamera::update)
   }
   if (c->mem_r8(0x1f800136u) < 2) ov_render_frame_x(c); // 0x8003fa44 — NATIVE render orchestrator twin
   ov_game_submit_810c(c);                      // render submit (page-1 dim-fade owned; other pages recomp)
@@ -1065,6 +1065,14 @@ void ov_game_stage_main(Core* c) {
   ov_game_stage_prologue(c);
   rec_coro_redirect(c, 0x801063F4u);
 }
+
+// ── class Engine — OOP entry points (called as `c->engine.method()`; see game/scene/engine.h) ──
+// The two GAME-stage entry points the scheduler drives each frame. They forward to the existing
+// static implementations in this TU while the rest of the engine_stage.cpp free functions await
+// progressive class-ification. `core` is set by Core's constructor (runtime/recomp/mem.cpp).
+#include "engine.h"
+void Engine::stagePrologue() { ov_game_stage_prologue(core); }
+int  Engine::frame()         { return ov_game_frame(core); }
 
 // Register the GAME-stage area-init overrides when this just-loaded overlay is GAME.BIN at the stage base.
 // Detect by the fixed entry + handler signatures (START.BIN/DEMO.BIN are smaller and hold stale bytes at

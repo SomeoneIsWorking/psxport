@@ -88,6 +88,14 @@ trackers.
   instant-VSync / fake-CD bandaids or env escape hatches (`PSXPORT_VSYNC_OK`-style), or an interpreter.
 - **No bandaids / no magic constant offsets.** Name the root cause; document every lifted function /
   patched value with the RE that justifies it. (See the global "No bandaids" rule.)
+- **REAL C++ CLASSES, no `extern "C"` shims.** Every PC-native subsystem is a `class Foo` with instance
+  methods, embedded as a `Core::foo` member (back-pointer wired in `Core::Core()` — see `ScreenFade`,
+  `CutsceneCamera`, `Engine`). Call sites do `c->foo.method(args)` directly — NO free-function shim, NO
+  `extern "C"` wrapper. Cross-file entry points use `static` class methods (e.g. `CutsceneCamera::runFieldUpdate(c)`),
+  not `extern "C" void cam_update(Core*)`. Legacy free-function/`extern "C"` scaffolding in touched files
+  is CLEANUP TERRITORY — when you edit a subsystem, class-ify the surrounding free functions and drop the
+  `extern "C"` in the same commit. Don't leave old shape half-alive alongside the new one. (User directive,
+  2026-07-01; enforced going forward — "every agent should do a cleanup like this as they work".)
 
 ## RENDER — reimplement, don't transcribe (the clearest case)
 The old "native" render (`engine_submit.cpp` submit_terrain / ov_submit_poly_gt4_bp / native_dl) was a
