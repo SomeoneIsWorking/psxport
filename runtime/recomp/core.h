@@ -17,6 +17,7 @@
 #include "r3000.h"
 #include "render/screen_fade/screen_fade.h"   // Core owns a ScreenFade instance directly
 #include "scene/engine.h"                     // Core owns an Engine instance (GAME/STAGE driver)
+#include "math/rng.h"                         // Core owns an Rng instance (PSX libc rand LCG)
 
 #ifdef __cplusplus
 
@@ -35,6 +36,7 @@ public:
   // Back-pointers to `this` are wired by Core's constructor (below).
   ScreenFade screenFade;
   Engine     engine;
+  Rng        rng;
 
   uint32_t io_gpustat_toggle = 0;  // GPUSTAT (0x1F801814) even/odd line bit — per-instance HW state
 

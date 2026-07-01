@@ -1243,8 +1243,8 @@ void Engine::frameStartTick() {
     uint8_t v = c->mem_r8(G + 0x180u);
     if (v != 0) c->mem_w8(G + 0x180u, (uint8_t)(v - 1));
   }
-  // (h) advance rand LFSR.
-  rec_dispatch(c, 0x8009A450u);
+  // (h) advance rand LFSR (native class Rng — shared seed at 0x80105EE8 with substrate callers).
+  (void)c->rng.next();
 }
 
 // Register the GAME-stage area-init overrides when this just-loaded overlay is GAME.BIN at the stage base.

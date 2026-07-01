@@ -87,6 +87,7 @@ set(PORT_SRC
   game/game_tomba2.cpp
   game/core/asset.cpp
   game/math/mathlib.cpp
+  game/math/rng.cpp
   game/render/cull.cpp
   game/player/collision.cpp
   game/player/hitbox.cpp
