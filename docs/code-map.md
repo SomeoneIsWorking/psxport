@@ -7,7 +7,7 @@ A native may exist already. **LIVE** = reachable by direct C call from a native_
 dispatch root (actually runs). **ORPHAN** = native exists but only the REMOVED override
 table used to reach it — it is dead code until a native parent calls it directly.
 
-Totals: 480 native fns, 281 owned addresses, 103 LIVE / 377 ORPHAN.
+Totals: 482 native fns, 283 owned addresses, 103 LIVE / 379 ORPHAN.
 
 | addr | status | symbol | file:line | depends-on (still-PSX) | summary |
 |------|--------|--------|-----------|------------------------|---------|
@@ -119,6 +119,7 @@ Totals: 480 native fns, 281 owned addresses, 103 LIVE / 377 ORPHAN.
 | 0x800597AC | ORPHAN | `ov_orch597AC` | game/render/engine_submit.cpp:1208 |  |  |
 | 0x80069B28 | LIVE | `ov_list_walk_69b28` | game/object/engine_tomba2.cpp:220 |  | Native FUN_80069B28 — a second per-frame object-list walk (head 0x800F… |
 | 0x8006C80C | ORPHAN | `CutsceneCamera::yFloor` | game/camera/cutscene_camera.cpp:341 |  | ── yFloor (camera-Y floor clamp, per render mode) ────────────────────… |
+| 0x8006CBA8 | ORPHAN | `CutsceneCamera::initSeedGrp` | game/camera/cutscene_camera.cpp:705 |  |  |
 | 0x8006CBD0 | ORPHAN | `ov_obj_set_xformblk` | game/world/graphics_bind.cpp:132 |  |  |
 | 0x8006D02C | ORPHAN | `CutsceneCamera::lookAt` | game/camera/cutscene_camera.cpp:530 |  |  |
 | 0x8006D2AC | ORPHAN | `CutsceneCamera::distSolve` | game/camera/cutscene_camera.cpp:224 |  | ── distSolve (distance/zoom solver) ──────────────────────────────────… |
@@ -141,8 +142,9 @@ Totals: 480 native fns, 281 owned addresses, 103 LIVE / 377 ORPHAN.
 | 0x8006E3B0 | ORPHAN | `CutsceneCamera::snapFollow` | game/camera/cutscene_camera.cpp:587 |  |  |
 | 0x8006E3F4 | ORPHAN | `CutsceneCamera::simpleFollow` | game/camera/cutscene_camera.cpp:622 |  |  |
 | 0x8006E464 | ORPHAN | `CutsceneCamera::rotBuild` | game/camera/cutscene_camera.cpp:204 |  |  |
-| 0x8006EA7C | ORPHAN | `CutsceneCamera::init` | game/camera/cutscene_camera.cpp:707 |  |  |
-| 0x8006EC44 | ORPHAN | `CutsceneCamera::update` | game/camera/cutscene_camera.cpp:694 |  |  |
+| 0x8006E918 | ORPHAN | `CutsceneCamera::initPlace` | game/camera/cutscene_camera.cpp:692 |  |  |
+| 0x8006EA7C | ORPHAN | `CutsceneCamera::init` | game/camera/cutscene_camera.cpp:724 |  |  |
+| 0x8006EC44 | ORPHAN | `CutsceneCamera::update` | game/camera/cutscene_camera.cpp:711 |  |  |
 | 0x80072A78 | LIVE | `ov_place_objects` | game/world/placement.cpp:104 | 0x80072A78 |  |
 | 0x80072A78 | LIVE | `ov_place_objects` | game/world/placement.h:8 |  |  |
 | 0x80072DDC | LIVE | `ov_spawn_with_parent` | game/world/placement.cpp:147 | 0x80072DDC |  |
@@ -316,7 +318,8 @@ Totals: 480 native fns, 281 owned addresses, 103 LIVE / 377 ORPHAN.
 | 0x800BF4F8 | LIVE | `eng_init_alloc` | game/scene/engine_init.cpp:185 | 0x80086738 0x80089160 0x8009A340 | engine ALLOCATOR / dispatch-table init. a0/a1 = a struct span (0x800bf… |
 | 0x800BF51A | LIVE | `eng_init_alloc` | game/scene/engine_init.cpp:185 | 0x80086738 0x80089160 0x8009A340 | engine ALLOCATOR / dispatch-table init. a0/a1 = a struct span (0x800bf… |
 | 0x800BF548 | LIVE | `ov_scene_4fe84` | game/scene/engine_stage.cpp:331 |  | Native FUN_8004FE84 — a 2-phase scene/render-list builder driver (stru… |
-| 0x800E8008 | ORPHAN | `CutsceneCamera::update` | game/camera/cutscene_camera.cpp:694 |  |  |
+| 0x800E8008 | ORPHAN | `CutsceneCamera::initSeedGrp` | game/camera/cutscene_camera.cpp:705 |  |  |
+| 0x800E8008 | ORPHAN | `CutsceneCamera::update` | game/camera/cutscene_camera.cpp:711 |  |  |
 | 0x800E8008 | LIVE | `ov_80078610` | game/world/pool.cpp:468 | 0x80051794 0x8006D02C 0x800846F0 | final per-area view init: zero two control blocks (scratchpad 0x1F8000… |
 | 0x800ED058 | LIVE | `ov_scene_25588` | game/scene/engine_stage.cpp:285 |  | Native FUN_80025588 — the field EVENT/COMMAND-QUEUE state machine (str… |
 | 0x800F2418 | LIVE | `ov_ground_probe` | game/render/engine_submit.cpp:670 |  | DIAGNOSTIC (later-234 ground blocker): decode the GROUND scene table 0… |

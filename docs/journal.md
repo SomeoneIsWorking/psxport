@@ -9268,3 +9268,12 @@ pinned: posBuildB truncates its P to int16 (posBuildA keeps 32-bit); posBuildB r
 each, 0 skips; snapFollowA/B still 0-diff with native builders wired. Resident camera follow tree now fully
 native (orchestrators + sub-ops + builders). Remaining camera substrate: init subs 0x8006E918/0x8006CBA8,
 post-mode tail 0x8006C988, and true field overlays (modes 0/1 render, 9/10/17).
+
+## later-294d — init() fully native: initPlace (0x8006E918) + initSeedGrp (0x8006CBA8) (0-diff)
+Owned init()'s last two substrate deps. initPlace (0x8006E918): places the camera X/Z base S+0x02/S+0x0a
+from the heading (rcos/rsin of G+0x140 + cam[0x52] ± cam[0x56] scaled by −radius 0x1F8000EE, over base
+G+0x2e/G+0x36). initSeedGrp (0x8006CBA8): copies a 3-halfword group from a source struct into the FIXED
+driver cam 0x800E8008 (cam[0x3a/0x3e/0x42]) — hardcodes 0x800E8008. Oracle unit test both = 0 mismatching
+words over 4000 iters, 0 skips. init() is now 100% native. ONLY camera substrate left: the post-mode tail
+0x8006C988 (per-frame, big/indirect-jump-heavy — next unit) + true field overlays (driver modes 0/1 render
+dispatch, 9/10/17). Whole camera tree (driver/init/orchestrators/sub-ops/builders) native + oracle-verified.

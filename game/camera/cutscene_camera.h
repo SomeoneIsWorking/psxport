@@ -59,6 +59,8 @@ public:
   //   substrate. Reached indirectly (camera object behaviour pointer) — wire when the object walk is native.
   void update();
   void init();   // 0x8006EA7C — first-frame field reset + render-mode-keyed mode selector.
+  void initPlace();               // FUN_8006E918 — init: place camera X/Z base (S+0x02/S+0x0a) from heading.
+  void initSeedGrp(uint32_t src); // FUN_8006CBA8 — init: seed cam[0x3a/0x3e/0x42] from a source group.
 
   // ── Orchestrators (per-frame camera MODES). One is picked per frame by the caller/mode selector. ──
   void snapFollow(uint32_t target);    // FUN_8006E3B0 — SOP/cutscene: SNAP the follow accumulators to

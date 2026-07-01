@@ -639,8 +639,6 @@ void CutsceneCamera::trackFollow(uint32_t target) {   // FUN_8006E228
 // Still-unowned resident camera LEAVES reached by the mode dispatch / init (a1-taking follow variants and
 // the init sub-fns). Kept substrate until they're rebuilt as methods — contiguous top-down ownership owns
 // the CALLER (update/init) first, its unowned children run via the substrate (0-diff, same as trackFollow).
-static constexpr uint32_t SUB_E918 = 0x8006E918u;   // init: post-mainFollow sub
-static constexpr uint32_t SUB_CBA8 = 0x8006CBA8u;   // init: pre-snap sub (a0=G+0x2c)
 static constexpr uint32_t SUB_C988 = 0x8006C988u;   // post-mode tail (runs after every mode)
 // FIELD OVERLAY handlers reached by some modes / render sub-modes: they live in loaded \BIN\*.BIN overlays,
 // not resident MAIN, so they dispatch through the overlay router. (In the oracle unit test no overlay is
@@ -691,6 +689,25 @@ void CutsceneCamera::dispatchMode(uint8_t mode) {
   }
 }
 
+void CutsceneCamera::initPlace() {   // FUN_8006E918 (init: place the camera X/Z base from the heading)
+  int32_t g140 = (int16_t)r16(G + 0x140);
+  uint16_t cam56 = camR16(0x56);
+  // s0: cam[0x56], negated unless the scene heading G+0x140 already equals the target heading G+0x56.
+  int32_t s0 = (g140 == (int16_t)r16(G + 0x56)) ? (int16_t)cam56
+                                                : (int16_t)(uint16_t)(0u - (uint32_t)cam56);
+  int32_t s1 = (int16_t)(uint16_t)(0u - (uint32_t)r16(0x1F8000EEu));   // -(radius) as int16
+  int32_t angle = g140 + (int16_t)r16(cam_ + 0x52) + s0;
+  int32_t cx = (int32_t)(uint16_t)r16(G + 0x2e) + (mlo(call(T2_RCOS, angle), s1) >> 12);
+  w16(S + 0x02, (uint16_t)cx);
+  int32_t cz = (int32_t)(uint16_t)r16(G + 0x36) - (mlo(call(T2_RSIN, angle), s1) >> 12);
+  w16(S + 0x0a, (uint16_t)cz);
+}
+void CutsceneCamera::initSeedGrp(uint32_t src) {   // FUN_8006CBA8 (writes the FIXED driver cam @0x800E8008)
+  w16(CAM_OBJ + 0x3a, r16(src + 2));
+  w16(CAM_OBJ + 0x3e, r16(src + 6));
+  w16(CAM_OBJ + 0x42, r16(src + 10));
+}
+
 void CutsceneCamera::update() {   // FUN_8006EC44 (resident per-frame camera driver; cam obj @0x800E8008)
   uint8_t outer = camR8(0);                     // cam[0] = outer state
   if (outer == 0) { camW8(0, 1); init(); return; }   // first frame: init (no post-mode tail)
@@ -734,11 +751,11 @@ void CutsceneCamera::init() {   // FUN_8006EA7C (first-frame field reset + rende
     camW8(0x64, 0); mainPath = true;            // default label (incl. rm>=21)
   }
 
-  if (mainPath) { mainFollow(); sub(SUB_E918); }
+  if (mainPath) { mainFollow(); initPlace(); }
 
   // post-check (0x8006EBA8): when render-timing byte 0x1F800236 is 5 or 6, seed a scripted follow.
   if ((uint8_t)(r8(0x1F800236u) - 5) < 2) {
-    c->r[4] = G + 0x2c; rec_dispatch(c, SUB_CBA8);   // 0x8006CBA8(a0 = G+0x2c)
+    initSeedGrp(G + 0x2c);
     uint16_t d3e = camR16(0x3e);
     camW16(0x3e, (uint16_t)(d3e + 1000));
     if (r8(G + 2) != 0) return;

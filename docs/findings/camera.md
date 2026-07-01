@@ -76,11 +76,22 @@
   lhu (unsigned) whereas posBuildA uses lh (signed). Replicated exactly.
 - **verified:** oracle unit test posBuildA/posBuildB/headBuildA/headBuildB = **0 mismatching words over 8000
   iters each, 0 skips**. snapFollowA/B still 0-diff with the native builders wired in.
-- **remaining substrate from the camera (small, non-follow):** init's 0x8006E918 / 0x8006CBA8 and the
-  post-mode tail 0x8006C988 (runs after every mode), plus the true field OVERLAYS (modes 0/1 render dispatch,
-  modes 9/10/17). Those are the next candidates if the camera is revisited.
 - **refs:** game/camera/cutscene_camera.cpp (posBuild*/headBuild*/yawDistAccumulate); cutscene_camera_test.cpp
   cases 16-19; 2026-07-01.
+
+## ✅ DONE: init() fully native — initPlace (0x8006E918) + initSeedGrp (0x8006CBA8) (later-294d)
+- **what:** owned init()'s last two substrate deps, so `init()` is now 100% native:
+  - `initPlace` = 0x8006E918: places the camera X/Z base S+0x02/S+0x0a from the heading (rcos/rsin of
+    G+0x140 + cam[0x52] ± cam[0x56], scaled by −radius 0x1F8000EE); reads G+0x2e/G+0x36 as the base.
+  - `initSeedGrp` = 0x8006CBA8: copies a 3-halfword group from a source struct into the FIXED driver cam
+    object 0x800E8008 (cam[0x3a/0x3e/0x42]) — note it hardcodes 0x800E8008, not the passed cam base.
+- **verified:** oracle unit test initPlace/initSeedGrp = 0 mismatching words over 4000 iters, 0 skips.
+- **REMAINING camera substrate (only these left):** the post-mode TAIL **0x8006C988** (runs after every
+  mode — big, indirect-jump/jump-table heavy, no direct callees; a proper next unit), plus the true field
+  OVERLAYS reached by driver modes 0/1 (render dispatch) and 9/10/17. Everything else in the camera tree
+  (driver, init, all follow orchestrators, sub-ops, look-angle builders) is native + oracle-verified.
+- **refs:** game/camera/cutscene_camera.cpp (initPlace/initSeedGrp); cutscene_camera_test.cpp cases 20/21;
+  2026-07-01 (later-294d).
 
 ## Superseded earlier conclusions (kept so the dead ends aren't re-walked)
 - later-290 "resident camera is CUTSCENE-only, free-roam camera is in the 0x8013xxxx overlay" — WRONG

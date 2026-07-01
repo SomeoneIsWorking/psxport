@@ -154,6 +154,8 @@ int run_camera_oracle(const char* path) {
     {"posBuildB",  0x8006DAD8u, 0},   // look-build B: place then yaw/dist accumulate
     {"headBuildA", 0x8006DF88u, 1},   // heading step A (a1!=0 branch — the live one)
     {"headBuildB", 0x8006DEF0u, 0},   // heading step B (with ±10 snap)
+    {"initPlace",  0x8006E918u, 0},   // init: place camera X/Z base from heading
+    {"initSeedGrp",0x8006CBA8u, 0},   // init: seed cam group; a0=source (=CAM here, from check's a0)
     {"init",       0x8006EA7Cu, 0},   // the mode selector (0x8006EA7C)
     {"update",     0x8006EC44u, 0},   // the per-frame driver (0x8006EC44); reads its state from RAM
   };
@@ -168,8 +170,8 @@ int run_camera_oracle(const char* path) {
       seed(c);
       // Driver/init depend on the render-mode byte across its FULL range (init's 21-entry jump table +
       // the mode-0/1 render dispatch reach labels the default seed() range (0..14) misses); widen it here.
-      if (ci == 20 || ci == 21) c->mem_w8(0x800BF870u, (uint8_t)(rnd() % 22));
-      if (ci == 21) {                                  // update: force the run state + a real mode byte
+      if (ci == 22 || ci == 23) c->mem_w8(0x800BF870u, (uint8_t)(rnd() % 22));
+      if (ci == 23) {                                  // update: force the run state + a real mode byte
         c->mem_w8(CAM + 0, 1);                         //   outer state = 1 (run)
         c->mem_w8(CAM + 1, (uint8_t)(rnd() & 1));      //   sub-state 0/1
         c->mem_w8(CAM + 0x64, (uint8_t)((rnd() % 20) | (rnd() & 0xC0)));   // mode + gate bits
@@ -198,8 +200,10 @@ int run_camera_oracle(const char* path) {
         case 17: nat = [&]{ cam.posBuildB(); }; break;
         case 18: nat = [&]{ cam.headBuildA(TGT); }; break;   // a1=TGT (nonzero) — matches oracle a1
         case 19: nat = [&]{ cam.headBuildB(); }; break;
-        case 20: nat = [&]{ cam.init(); }; break;
-        case 21: nat = [&]{ cam.update(); }; break;
+        case 20: nat = [&]{ cam.initPlace(); }; break;
+        case 21: nat = [&]{ cam.initSeedGrp(CAM); }; break;
+        case 22: nat = [&]{ cam.init(); }; break;
+        case 23: nat = [&]{ cam.update(); }; break;
       }
       int m = check(c, t.name, t.addr, nat, CAM, a1);
       if (m < 0) skip++; else { bad += m; ran++; }
