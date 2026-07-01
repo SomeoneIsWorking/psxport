@@ -92,7 +92,12 @@ int check(Core* c, const char* name, uint32_t addr, std::function<void()> nat, u
   snap(c, in);
   memcpy(rs, c->r, sizeof rs);
 
+  // The native run itself may reach a field-overlay leaf via the substrate (the driver's overlay modes) —
+  // no overlay is loaded in the test, so tolerate the miss and SKIP (same as an oracle miss below).
+  g_rec_missed = 0; g_rec_miss_tolerant = 1;
   nat();
+  g_rec_miss_tolerant = 0;
+  if (g_rec_missed) return -1;
   snap(c, mine);
 
   restore(c, in);
@@ -142,6 +147,8 @@ int run_camera_oracle(const char* path) {
     {"mainFollow", 0x8006E0F0u, 0},
     {"simpleFollow",0x8006E3F4u,1},
     {"trackFollow",0x8006E228u, 1},
+    {"init",       0x8006EA7Cu, 0},   // the mode selector (0x8006EA7C)
+    {"update",     0x8006EC44u, 0},   // the per-frame driver (0x8006EC44); reads its state from RAM
   };
   const int NC = sizeof(cases) / sizeof(cases[0]);
 
@@ -152,6 +159,14 @@ int run_camera_oracle(const char* path) {
     for (int it = 0; it < ITERS; it++) {
       if (cfg_on("PSXPORT_SELFTEST_VERBOSE")) { fprintf(stderr, "[camtest]  %s iter %d seed=%08x\n", t.name, it, g_seed); fflush(stderr); }
       seed(c);
+      // Driver/init depend on the render-mode byte across its FULL range (init's 21-entry jump table +
+      // the mode-0/1 render dispatch reach labels the default seed() range (0..14) misses); widen it here.
+      if (ci == 13 || ci == 14) c->mem_w8(0x800BF870u, (uint8_t)(rnd() % 22));
+      if (ci == 14) {                                  // update: force the run state + a real mode byte
+        c->mem_w8(CAM + 0, 1);                         //   outer state = 1 (run)
+        c->mem_w8(CAM + 1, (uint8_t)(rnd() & 1));      //   sub-state 0/1
+        c->mem_w8(CAM + 0x64, (uint8_t)((rnd() % 20) | (rnd() & 0xC0)));   // mode + gate bits
+      }
       CutsceneCamera cam(c, CAM);
       uint32_t a1 = t.usesTarget ? TGT : 0;
       std::function<void()> nat;
@@ -169,6 +184,8 @@ int run_camera_oracle(const char* path) {
         case 10: nat = [&]{ cam.mainFollow(); }; break;
         case 11: nat = [&]{ cam.simpleFollow(TGT); }; break;
         case 12: nat = [&]{ cam.trackFollow(TGT); }; break;
+        case 13: nat = [&]{ cam.init(); }; break;
+        case 14: nat = [&]{ cam.update(); }; break;
       }
       int m = check(c, t.name, t.addr, nat, CAM, a1);
       if (m < 0) skip++; else { bad += m; ran++; }

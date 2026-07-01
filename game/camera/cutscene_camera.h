@@ -1,12 +1,15 @@
-// class CutsceneCamera — the CUTSCENE / scripted-mode camera of Tomba! 2, PC-native, expressed as PC-game
+// class CutsceneCamera — the general FIELD / FOLLOW camera of Tomba! 2, PC-native, expressed as PC-game
 // STRUCTURE (named state, methods) rather than a register-convention transcription.
 //
-// CUTSCENE vs INGAME (verified 2026-07-01, correcting the handoff — docs/findings/camera.md): the resident
-// MAIN.EXE camera code this class owns is the SOP / CUTSCENE + special-mode camera. It is driven live by
-// game/scene/sop.cpp (the intro-cutscene BG camera, `snapFollow`). The A00 **INGAME free-roam** field
-// camera is a SEPARATE subsystem — it is NOT this code (measured: zero resident-camera dispatch across 200
-// moving free-roam frames); it lives in the MODE-slot field overlay (0x8013xxxx cluster) and is a distinct
-// future class (`class FieldCamera`). Do not conflate the two: this is the cutscene camera only.
+// SCOPE (RESOLVED 2026-07-01, later-293 — docs/findings/camera.md): this IS the free-roam field camera, not
+// a cutscene-only camera. The earlier "cutscene-only, free-roam lives in a 0x8013xxxx overlay" conclusion was
+// a MEASUREMENT ARTIFACT: camtrace/recdep hook `rec_dispatch`, but the recompiler emits intra-MAIN calls as
+// DIRECT C calls (`func_8006EC44(c)`), so resident→resident camera dispatch was invisible to those meters. A
+// guest-stack backtrace at the view-matrix write proved the free-roam chain is the resident driver
+// 0x8006EC44 → snapFollow (0x8006E3B0) → lookAt (0x8006D02C) — all owned here. The class name is now a
+// misnomer (rename to `Camera` deferred, low priority); it serves SOP/cutscene AND free-roam.
+//
+// The per-frame DRIVER + its jump-table MODES + the init/mode-selector are `update()` / `init()` below.
 //
 // STATE MODEL. The camera keeps its working state in two places, both accessed guest-direct behind named
 // accessors (no mandatory mirror, per docs/pc-subsystem-rebuild.md):
@@ -40,7 +43,22 @@ public:
   static constexpr uint32_t MASTER_Y = G + 0x30;   // 0x800E7EB0
   static constexpr uint32_t MASTER_Z = G + 0x34;   // 0x800E7EB4
 
+  // The resident per-frame driver (0x8006EC44) hardcodes the camera OBJECT at this fixed base; `update()`
+  // operates on it. (The SOP snapFollow wiring passes a per-scene base instead, which is fine — the object
+  // layout is identical; only the driver hardcodes 0x800E8008.)
+  static constexpr uint32_t CAM_OBJ = 0x800E8008u;
+
   CutsceneCamera(Core* c, uint32_t cam) : c(c), cam_(cam) {}
+
+  // ── Per-frame DRIVER (0x8006EC44) + init/mode-selector (0x8006EA7C) ──────────────────────────────
+  // update(): the resident camera driver — reads the outer state from cam[0] (0=first-frame init, 1=run,
+  //   else idle), runs the sub-state machine, then dispatches on the MODE byte cam[0x64]&0x3F (18-entry
+  //   jump table) to one of the follow orchestrators / a still-substrate leaf / a field-overlay handler,
+  //   and finally runs the post-mode tail (0x8006C988). Owns the CALLER of the already-owned orchestrators
+  //   (contiguous top-down ownership); still-unowned resident leaves + all field overlays run via the
+  //   substrate. Reached indirectly (camera object behaviour pointer) — wire when the object walk is native.
+  void update();
+  void init();   // 0x8006EA7C — first-frame field reset + render-mode-keyed mode selector.
 
   // ── Orchestrators (per-frame camera MODES). One is picked per frame by the caller/mode selector. ──
   void snapFollow(uint32_t target);    // FUN_8006E3B0 — SOP/cutscene: SNAP the follow accumulators to
@@ -86,6 +104,13 @@ private:
   // Call a retained libgte trig/matrix helper (rsin/rcos/ratan2/isqrt/…) via the substrate — they are a
   // math library, not PSX hardware, so they stay substrate. Returns v0.
   int32_t call(uint32_t fn, int32_t a0, int32_t a1 = 0, int32_t a2 = 0);
+  // Dispatch a still-unowned resident camera LEAF (or a field overlay handler) via the substrate, mirroring
+  // the driver's `jal fn` exactly: set only a0 (=cam_) and, when given, a1 — leave a2/a3 alone (verified the
+  // targets don't read them). update()/init() use these for the leaves/overlays they don't own yet.
+  void sub(uint32_t fn)              { c->r[4] = cam_; rec_dispatch(c, fn); }
+  void sub(uint32_t fn, uint32_t a1) { c->r[4] = cam_; c->r[5] = a1; rec_dispatch(c, fn); }
+  // update()'s MODE-byte (cam[0x64]&0x3F) dispatch — split out to keep update() readable.
+  void dispatchMode(uint8_t mode);
   // Shared look-at tail (rotBuild's modes): place a look point around the scene centre at (theta,radius),
   // fold yaw+distance into the pitch accumulators.
   void lookatTail(int32_t theta, int32_t radius);

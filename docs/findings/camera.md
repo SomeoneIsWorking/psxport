@@ -20,14 +20,34 @@
   identical, proven). There is NO separate overlay/native free-roam camera to find. The class name
   "CutsceneCamera" is now a misnomer — it is the general field/follow camera (SOP + free-roam). (Rename to
   `class Camera` deferred; low priority.)
-- **remaining work (top-down ownership, not a mystery hunt):** to make free-roam run the native class
-  (instead of the equivalent substrate), own the camera DISPATCHER chain natively — `0x8006ec4c` (the
-  per-frame camera driver that calls snapFollow at 0x8006eef0) and `0x8006ea7c` (the mode selector: 21-entry
-  jump table on render-mode 0x800bf870 → picks snapFollow/mainFollow/…) — as `CutsceneCamera::update()`, and
-  wire it from the native field frame (0x80022xxx caller). The leaves are already owned; this is contiguous
-  top-down ownership of the caller, verifiable with the oracle unit test (add an `update`/dispatcher case).
 - **refs:** generated/shard_3.c:16799 / shard_4.c:11310 (`func_8006E3B0(c)` direct); guest backtrace via
   PSXPORT_WWATCH=9F8000F8,.. + PSXPORT_WWATCH_BT; game/camera/cutscene_camera.cpp; 2026-07-01 (later-293).
+
+## ✅ DONE: camera DISPATCHER owned natively — `CutsceneCamera::update()` + `::init()` (later-294)
+- **what:** owned the per-frame camera DRIVER and the mode selector as methods, completing contiguous
+  top-down ownership of the whole camera tree (the leaves/orchestrators were already owned):
+  - `update()` = **0x8006EC44** (NOT 0x8006ec4c — the recompiled fn entry is 0x8006EC44; the handoff's
+    0x8006ec4c is 8 bytes into it. gen_func_8006EC44 exists; gen_func_8006EC4C does not). ARG-LESS: it
+    hardcodes the camera object at **0x800E8008** and reads its OUTER STATE from `cam[0]` (0=first-frame
+    init, 1=run, else idle), runs the `cam[1]` sub-state machine, then dispatches on `cam[0x64]&0x3F`
+    (18-entry jump table @0x80016A44) to a follow orchestrator / a still-substrate leaf / a field overlay,
+    then always runs the post-mode tail 0x8006C988.
+  - `init()` = **0x8006EA7C** — first-frame field reset + a render-mode-keyed (0x800BF870) 21-entry jump
+    table @0x800169EC selecting the initial mode, then an optional mainFollow path + a scripted-follow
+    post-check (timing byte 0x1F800236 ∈ {5,6}).
+- **ownership model:** owned methods (mainFollow/rotBuild/trackFollow/snapFollow/simpleFollow) are called
+  DIRECTLY; still-unowned resident leaves (0x8006E294/E360/E2FC/E918/CBA8/C988) and ALL field overlays
+  (mode 0/1 render dispatch via table @0x800A4AA0, modes 9/10/17 = 0x8018B924/0x8010D89C/0x80111AB4) run via
+  the substrate (`sub()` = rec_dispatch), exactly as trackFollow already does. Same 0-diff guarantee.
+- **verified:** oracle unit test (PSXPORT_SELFTEST=camera) `init` + `update` cases, **0 mismatching words
+  over ~10k verified iters** (skips = mainFollow-inherited oracle gaps + the overlay modes, which MISS since
+  no overlay is loaded in the test — expected, same class as the yFloor gap). The test's `check()` now
+  tolerates a MISS during the native run too (overlay modes) and skips those states.
+- **NOT yet wired:** update() is reached indirectly (camera-object behaviour pointer → rec_dispatch). It is a
+  verified-but-latent method; the substrate `gen_func_8006EC44` runs it 0-diff in the live game. Wire it when
+  the object walk that dispatches the camera node is native (route that node → CutsceneCamera::update).
+- **refs:** game/camera/cutscene_camera.cpp (update/dispatchMode/init), cutscene_camera_test.cpp (cases 13/14);
+  tools/disas.py 0x8006EC44 / 0x8006EA7C; jump tables @0x80016A44 (18) + @0x800169EC (21); 2026-07-01.
 
 ## Superseded earlier conclusions (kept so the dead ends aren't re-walked)
 - later-290 "resident camera is CUTSCENE-only, free-roam camera is in the 0x8013xxxx overlay" — WRONG

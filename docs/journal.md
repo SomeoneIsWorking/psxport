@@ -9230,3 +9230,20 @@ camera; rename to class Camera deferred, low priority). The handoff's original p
 later-290 refutation was the artifact. NEXT (top-down ownership, not a hunt): own the camera dispatcher
 0x8006ec4c (calls snapFollow at 0x8006eef0) + 0x8006ea7c (mode selector, 21-entry jump table on 0x800bf870)
 as CutsceneCamera::update(), wired from the native field frame; verify via the oracle unit test.
+
+## later-294 — camera DISPATCHER owned native: CutsceneCamera::update() + init() (0-diff oracle)
+Owned the per-frame camera DRIVER and mode selector, completing the camera tree top-down (leaves were
+already owned). CORRECTION to the handoff: the recompiled driver entry is **0x8006EC44**, not 0x8006ec4c
+(gen_func_8006EC44 exists; 0x8006EC4C is 8 bytes into it and isn't a separate fn). The driver is ARG-LESS:
+it hardcodes the camera object at 0x800E8008 and reads its outer state from cam[0] (0=init/1=run/else idle),
+runs the cam[1] sub-state machine, dispatches on cam[0x64]&0x3F (18-entry table @0x80016A44) to a follow
+orchestrator / substrate leaf / field overlay, then always runs tail 0x8006C988. init()=0x8006EA7C: field
+reset + render-mode-keyed (0x800BF870) 21-entry table @0x800169EC → initial mode, optional mainFollow path,
+scripted-follow post-check (0x1F800236 ∈ {5,6}). Owned orchestrators called directly; unowned resident
+leaves (E294/E360/E2FC/E918/CBA8/C988) + all field overlays (mode 0/1 render table @0x800A4AA0; modes
+9/10/17 = 0x8018B924/0x8010D89C/0x80111AB4) via substrate rec_dispatch (sub()), like trackFollow. VERIFIED:
+oracle unit test cases init+update = 0 mismatching words over ~10k verified iters (overlay modes MISS since
+no overlay is loaded → skipped, expected; the test's check() now tolerates a native-run miss too). NOT wired
+yet (reached via camera-object behaviour ptr; substrate runs it 0-diff meanwhile) — wire when the object
+walk that dispatches the camera node is native. docs/findings/camera.md updated. Also fixed the stale
+"cutscene-only, free-roam is a separate overlay" comments in cutscene_camera.{h,cpp} (superseded later-293).

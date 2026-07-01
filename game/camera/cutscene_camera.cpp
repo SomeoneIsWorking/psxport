@@ -1,8 +1,9 @@
-// class CutsceneCamera — SOP/cutscene + special-mode engine camera, PC-native (see cutscene_camera.h; the
-// INGAME free-roam camera is a SEPARATE overlay subsystem, not this file — docs/findings/camera.md).
+// class CutsceneCamera — the general FIELD / FOLLOW engine camera, PC-native (see cutscene_camera.h). It is
+// the free-roam camera as well as the SOP/cutscene one (RESOLVED later-293 — docs/findings/camera.md).
 // The arithmetic is the RE'd engine behaviour (docs/engine_re.md "CutsceneCamera"; later-173..176); this file
 // restructures it into methods over named state (no guest register convention). It is verified per-call
-// against the recomp oracle on the live SOP scene via `cam_snap_follow` (PSXPORT_DEBUG=camverify).
+// against the recomp oracle on the live SOP scene via `cam_snap_follow` (PSXPORT_DEBUG=camverify) and by the
+// oracle UNIT TEST over every method incl. the driver (game/camera/cutscene_camera_test.cpp).
 #include "cutscene_camera.h"
 #include "cfg.h"
 #include <stdint.h>
@@ -563,6 +564,126 @@ void CutsceneCamera::trackFollow(uint32_t target) {   // FUN_8006E228
     c->r[4] = cam_; rec_dispatch(c, 0x8006DEF0u);
   }
   lookAt();
+}
+
+// ── driver + init (the camera dispatcher) ─────────────────────────────────────────────────────────
+// Still-unowned resident camera LEAVES reached by the mode dispatch / init (a1-taking follow variants and
+// the init sub-fns). Kept substrate until they're rebuilt as methods — contiguous top-down ownership owns
+// the CALLER (update/init) first, its unowned children run via the substrate (0-diff, same as trackFollow).
+static constexpr uint32_t SUB_E294 = 0x8006E294u;   // mode 2 / init follow-variant (a0=cam, a1=cam+0x38)
+static constexpr uint32_t SUB_E360 = 0x8006E360u;   // mode 3
+static constexpr uint32_t SUB_E2FC = 0x8006E2FCu;   // mode 4
+static constexpr uint32_t SUB_E918 = 0x8006E918u;   // init: post-mainFollow sub
+static constexpr uint32_t SUB_CBA8 = 0x8006CBA8u;   // init: pre-snap sub (a0=G+0x2c)
+static constexpr uint32_t SUB_C988 = 0x8006C988u;   // post-mode tail (runs after every mode)
+// FIELD OVERLAY handlers reached by some modes / render sub-modes: they live in loaded \BIN\*.BIN overlays,
+// not resident MAIN, so they dispatch through the overlay router. (In the oracle unit test no overlay is
+// loaded, so these modes MISS and are skipped — same class as the yFloor recompiler gap.)
+static constexpr uint32_t OV_RENDER_RM2_M0 = 0x80115F58u, OV_RENDER_RM7_M0 = 0x80112DECu, OV_RENDER_RM20_M0 = 0x8010AD0Cu;
+static constexpr uint32_t OV_RENDER_RM2_M1 = 0x80116918u, OV_RENDER_RM7_M1 = 0x80113660u, OV_RENDER_RM20_M1 = 0x8010B2F0u;
+static constexpr uint32_t OV_MODE9  = 0x8018B924u;   // mode 9  field-overlay camera handler
+static constexpr uint32_t OV_A00_CAM= 0x8010D89Cu;   // mode 10 A00 scripted-camera state machine
+static constexpr uint32_t OV_MODE17 = 0x80111AB4u;   // mode 17 field-overlay handler
+static constexpr uint32_t RENDER_FP_TABLE = 0x800A4AA0u;   // mode 0 render-mode → fn-pointer table (resident data)
+
+void CutsceneCamera::dispatchMode(uint8_t mode) {
+  switch (mode) {
+    case 0: {   // main follow, gated, then a render-mode-keyed handler
+      uint8_t rm = r8(0x800BF870u);
+      if      (rm == 7)  { sub(OV_RENDER_RM7_M0);  break; }
+      else if (rm == 2)  { sub(OV_RENDER_RM2_M0);  break; }
+      else if (rm == 20) { sub(OV_RENDER_RM20_M0); break; }
+      if (!(camR8(0x64) & 0x80)) { mainFollow(); rotBuild(); }
+      sub(r32(RENDER_FP_TABLE + (uint32_t)rm * 4));   // indirect render fn (field overlay)
+      break;
+    }
+    case 1: {   // track follow, with the same render-mode-keyed overlay prologue
+      uint8_t rm = r8(0x800BF870u);
+      if      (rm == 7)  { sub(OV_RENDER_RM7_M1);  break; }
+      else if (rm == 2)  { sub(OV_RENDER_RM2_M1);  break; }
+      else if (rm == 20) { sub(OV_RENDER_RM20_M1); break; }
+      trackFollow(cam_ + 0x38);
+      break;
+    }
+    case 2:  sub(SUB_E294, cam_ + 0x38); break;
+    case 3:  sub(SUB_E360, cam_ + 0x38); break;
+    case 4:  sub(SUB_E2FC, cam_ + 0x38); break;
+    case 5:  snapFollow(G + 0x2c);       break;   // snap to MASTER position
+    case 6:  camW8(0x64, 0); camW32(0x0c, r32(G + 0x30)); break;   // freeze: cam[0x0c] = master Y
+    case 7:
+    case 14: snapFollow(cam_ + 0x38);    break;
+    case 8:  simpleFollow(cam_ + 0x38);  break;
+    case 9:  sub(OV_MODE9);              break;
+    case 10: sub(OV_A00_CAM);            break;
+    case 11:
+    case 12: camW8(0x64, 0); camW8(2, 0); camW8(3, 0); break;   // reset
+    case 13: camW8(0x64, 6);            break;
+    case 15: simpleFollow(G + 0x2c);     break;
+    case 16: /* tail only */            break;
+    case 17: sub(OV_MODE17);            break;
+    default: break;
+  }
+}
+
+void CutsceneCamera::update() {   // FUN_8006EC44 (resident per-frame camera driver; cam obj @0x800E8008)
+  uint8_t outer = camR8(0);                     // cam[0] = outer state
+  if (outer == 0) { camW8(0, 1); init(); return; }   // first frame: init (no post-mode tail)
+  if (outer != 1) return;                       // idle
+  uint8_t ss = camR8(1);                        // cam[1] = sub-state
+  if (ss == 0) { camW8(1, 1); camW8(2, 0); camW8(3, 0); }   // fall through into the run state
+  else if (ss != 1) return;
+  uint8_t mode = (uint8_t)(camR8(0x64) & 0x3f);
+  camW8(0x66, 0);
+  if (mode < 18) dispatchMode(mode);
+  sub(SUB_C988);                                // post-mode tail (always, after any mode)
+}
+
+void CutsceneCamera::init() {   // FUN_8006EA7C (first-frame field reset + render-mode-keyed mode selector)
+  camW16(0x56, 256); camW8(0x72, 0); camW8(0x76, 0); camW8(0x77, 0); camW8(0x74, 0);
+  camW16(6, 0);
+  camW32(0x0c, r32(0x1F8000E0u));
+  camW16(0x52, 1024); camW16(0x22, 240); camW16(0x8c, 0);
+
+  uint8_t rm = r8(0x800BF870u);
+  bool mainPath = false;   // whether we take the mainFollow(+E918) branch after selecting the mode
+  // Render-mode jump table @0x800169EC: rm 0 -> special; {2,7,20} -> mode 0-cleared; 3 -> mode 14;
+  // {16..19} -> mode 128; everything else (incl. rm>=21) -> default (mode 0-cleared + mainFollow path).
+  if (rm == 0) {
+    if (r8(0x800BF89Cu) == 2) {                 // pre-scripted camera fixup
+      camW8(0x64, 7);
+      camW16(0x3a, 2746); camW16(0x3e, (uint16_t)(int16_t)-800); camW16(0x42, 3808);
+      w16(0x1F8000D2u, 3387); w16(0x1F8000D6u, (uint16_t)(int16_t)-2691); w16(0x1F8000DAu, 3506);
+    } else if (r8(0x800BF816u) != 0) {
+      /* skip mode-clear + mainFollow, go straight to the post-check */
+    } else {
+      camW8(0x64, 0); mainPath = true;
+    }
+  } else if (rm == 2 || rm == 7 || rm == 20) {
+    camW8(0x64, 0);
+  } else if (rm == 3) {
+    camW8(0x64, 14);
+  } else if (rm >= 16 && rm <= 19) {
+    camW8(0x64, 128);
+  } else {
+    camW8(0x64, 0); mainPath = true;            // default label (incl. rm>=21)
+  }
+
+  if (mainPath) { mainFollow(); sub(SUB_E918); }
+
+  // post-check (0x8006EBA8): when render-timing byte 0x1F800236 is 5 or 6, seed a scripted follow.
+  if ((uint8_t)(r8(0x1F800236u) - 5) < 2) {
+    c->r[4] = G + 0x2c; rec_dispatch(c, SUB_CBA8);   // 0x8006CBA8(a0 = G+0x2c)
+    uint16_t d3e = camR16(0x3e);
+    camW16(0x3e, (uint16_t)(d3e + 1000));
+    if (r8(G + 2) != 0) return;
+    camW16(0x3e, (uint16_t)(d3e + 860));
+    camW16(0x0e, (uint16_t)(d3e + 860));
+    camW8(0x64, 15);
+    camW16(0x6c, 1400); camW16(0x6e, 64);
+    camW16(0x70, (uint16_t)(r16(G + 0x140) + 1024));
+    sub(SUB_E294, cam_ + 0x38);                 // a0=cam, a1=cam+0x38
+    snapFollow(G + 0x2c);
+  }
 }
 
 // ── live wiring + per-call verify ────────────────────────────────────────────────────────────────

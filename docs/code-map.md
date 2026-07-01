@@ -7,7 +7,7 @@ A native may exist already. **LIVE** = reachable by direct C call from a native_
 dispatch root (actually runs). **ORPHAN** = native exists but only the REMOVED override
 table used to reach it — it is dead code until a native parent calls it directly.
 
-Totals: 469 native fns, 270 owned addresses, 103 LIVE / 366 ORPHAN.
+Totals: 471 native fns, 272 owned addresses, 103 LIVE / 368 ORPHAN.
 
 | addr | status | symbol | file:line | depends-on (still-PSX) | summary |
 |------|--------|--------|-----------|------------------------|---------|
@@ -118,20 +118,22 @@ Totals: 469 native fns, 270 owned addresses, 103 LIVE / 366 ORPHAN.
 | 0x80056B48 | ORPHAN | `ov_player_move` | game/player/engine_player.cpp:75 | 0x80056B48 | playerverify — full RAM+scratchpad A/B gate (like the scriptvm/pad931c… |
 | 0x800597AC | ORPHAN | `ov_orch597AC` | game/render/engine_submit.cpp:1208 |  |  |
 | 0x80069B28 | LIVE | `ov_list_walk_69b28` | game/object/engine_tomba2.cpp:220 |  | Native FUN_80069B28 — a second per-frame object-list walk (head 0x800F… |
-| 0x8006C80C | ORPHAN | `CutsceneCamera::yFloor` | game/camera/cutscene_camera.cpp:295 |  | ── yFloor (camera-Y floor clamp, per render mode) ────────────────────… |
+| 0x8006C80C | ORPHAN | `CutsceneCamera::yFloor` | game/camera/cutscene_camera.cpp:296 |  | ── yFloor (camera-Y floor clamp, per render mode) ────────────────────… |
 | 0x8006CBD0 | ORPHAN | `ov_obj_set_xformblk` | game/world/graphics_bind.cpp:132 |  |  |
-| 0x8006D02C | ORPHAN | `CutsceneCamera::lookAt` | game/camera/cutscene_camera.cpp:484 |  |  |
-| 0x8006D2AC | ORPHAN | `CutsceneCamera::distSolve` | game/camera/cutscene_camera.cpp:178 |  | ── distSolve (distance/zoom solver) ──────────────────────────────────… |
-| 0x8006D654 | ORPHAN | `CutsceneCamera::pitch` | game/camera/cutscene_camera.cpp:332 |  | ── pitch (vertical-look height smoother) ─────────────────────────────… |
-| 0x8006D960 | ORPHAN | `CutsceneCamera::trackXZ` | game/camera/cutscene_camera.cpp:58 |  | ── follow accumulators ───────────────────────────────────────────────… |
-| 0x8006DA54 | ORPHAN | `CutsceneCamera::trackY` | game/camera/cutscene_camera.cpp:71 |  |  |
-| 0x8006DCF4 | ORPHAN | `CutsceneCamera::heading` | game/camera/cutscene_camera.cpp:416 |  | ── heading (heading tracker) ─────────────────────────────────────────… |
-| 0x8006E010 | ORPHAN | `CutsceneCamera::angleStep` | game/camera/cutscene_camera.cpp:275 |  | ── angleStep ─────────────────────────────────────────────────────────… |
-| 0x8006E0F0 | ORPHAN | `CutsceneCamera::mainFollow` | game/camera/cutscene_camera.cpp:540 |  |  |
-| 0x8006E228 | ORPHAN | `CutsceneCamera::trackFollow` | game/camera/cutscene_camera.cpp:557 | 0x8006DAD8 0x8006DEF0 |  |
-| 0x8006E3B0 | ORPHAN | `CutsceneCamera::snapFollow` | game/camera/cutscene_camera.cpp:534 |  | ── orchestrators (per-frame camera modes) ────────────────────────────… |
-| 0x8006E3F4 | ORPHAN | `CutsceneCamera::simpleFollow` | game/camera/cutscene_camera.cpp:552 |  |  |
-| 0x8006E464 | ORPHAN | `CutsceneCamera::rotBuild` | game/camera/cutscene_camera.cpp:158 |  |  |
+| 0x8006D02C | ORPHAN | `CutsceneCamera::lookAt` | game/camera/cutscene_camera.cpp:485 |  |  |
+| 0x8006D2AC | ORPHAN | `CutsceneCamera::distSolve` | game/camera/cutscene_camera.cpp:179 |  | ── distSolve (distance/zoom solver) ──────────────────────────────────… |
+| 0x8006D654 | ORPHAN | `CutsceneCamera::pitch` | game/camera/cutscene_camera.cpp:333 |  | ── pitch (vertical-look height smoother) ─────────────────────────────… |
+| 0x8006D960 | ORPHAN | `CutsceneCamera::trackXZ` | game/camera/cutscene_camera.cpp:59 |  | ── follow accumulators ───────────────────────────────────────────────… |
+| 0x8006DA54 | ORPHAN | `CutsceneCamera::trackY` | game/camera/cutscene_camera.cpp:72 |  |  |
+| 0x8006DCF4 | ORPHAN | `CutsceneCamera::heading` | game/camera/cutscene_camera.cpp:417 |  | ── heading (heading tracker) ─────────────────────────────────────────… |
+| 0x8006E010 | ORPHAN | `CutsceneCamera::angleStep` | game/camera/cutscene_camera.cpp:276 |  | ── angleStep ─────────────────────────────────────────────────────────… |
+| 0x8006E0F0 | ORPHAN | `CutsceneCamera::mainFollow` | game/camera/cutscene_camera.cpp:541 |  |  |
+| 0x8006E228 | ORPHAN | `CutsceneCamera::trackFollow` | game/camera/cutscene_camera.cpp:558 | 0x8006DAD8 0x8006DEF0 |  |
+| 0x8006E3B0 | ORPHAN | `CutsceneCamera::snapFollow` | game/camera/cutscene_camera.cpp:535 |  | ── orchestrators (per-frame camera modes) ────────────────────────────… |
+| 0x8006E3F4 | ORPHAN | `CutsceneCamera::simpleFollow` | game/camera/cutscene_camera.cpp:553 |  |  |
+| 0x8006E464 | ORPHAN | `CutsceneCamera::rotBuild` | game/camera/cutscene_camera.cpp:159 |  |  |
+| 0x8006EA7C | ORPHAN | `CutsceneCamera::init` | game/camera/cutscene_camera.cpp:641 |  |  |
+| 0x8006EC44 | ORPHAN | `CutsceneCamera::update` | game/camera/cutscene_camera.cpp:628 |  |  |
 | 0x80072A78 | LIVE | `ov_place_objects` | game/world/placement.cpp:104 | 0x80072A78 |  |
 | 0x80072A78 | LIVE | `ov_place_objects` | game/world/placement.h:8 |  |  |
 | 0x80072DDC | LIVE | `ov_spawn_with_parent` | game/world/placement.cpp:147 | 0x80072DDC |  |
@@ -305,6 +307,7 @@ Totals: 469 native fns, 270 owned addresses, 103 LIVE / 366 ORPHAN.
 | 0x800BF4F8 | LIVE | `eng_init_alloc` | game/scene/engine_init.cpp:185 | 0x80086738 0x80089160 0x8009A340 | engine ALLOCATOR / dispatch-table init. a0/a1 = a struct span (0x800bf… |
 | 0x800BF51A | LIVE | `eng_init_alloc` | game/scene/engine_init.cpp:185 | 0x80086738 0x80089160 0x8009A340 | engine ALLOCATOR / dispatch-table init. a0/a1 = a struct span (0x800bf… |
 | 0x800BF548 | LIVE | `ov_scene_4fe84` | game/scene/engine_stage.cpp:331 |  | Native FUN_8004FE84 — a 2-phase scene/render-list builder driver (stru… |
+| 0x800E8008 | ORPHAN | `CutsceneCamera::update` | game/camera/cutscene_camera.cpp:628 |  |  |
 | 0x800E8008 | LIVE | `ov_80078610` | game/world/pool.cpp:468 | 0x80051794 0x8006D02C 0x800846F0 | final per-area view init: zero two control blocks (scratchpad 0x1F8000… |
 | 0x800ED058 | LIVE | `ov_scene_25588` | game/scene/engine_stage.cpp:285 |  | Native FUN_80025588 — the field EVENT/COMMAND-QUEUE state machine (str… |
 | 0x800F2418 | LIVE | `ov_ground_probe` | game/render/engine_submit.cpp:670 |  | DIAGNOSTIC (later-234 ground blocker): decode the GROUND scene table 0… |
