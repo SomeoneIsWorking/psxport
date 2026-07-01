@@ -900,19 +900,23 @@ STALE (corrected).** Two corrections + one new capability this session:
   ⇒ **The render-leaf frontier is DONE-or-BLOCKED at the verifiable opening**: what remains is either
   correctly-PSX setup, or effect leaves that only fire in LATER AREAS (unreachable/un-oracle-gated at the
   opening). Advancing them needs a scene that exercises them — i.e. extend the oracle envelope first.
-- **NEW: `oraclediff` now runs an INTERACTIVE-PLAY scan (selftest.cpp run_oraclediff).** From the aligned
-  free-roam onset it drives BOTH cores with IDENTICAL pad input (hold D-pad Right = walk) for 90 frames, then
-  dumps both framebuffers. RESULT (later-283, verified): the post-walk framebuffers MATCH — native VK and PSX
-  soft-GPU put Tomba in the same pose/position in the same world → **native INTERACTIVE gameplay is convergent
-  with the oracle too**, not just the scripted opening. (The RAM diff during the walk is render-path NOISE —
-  gameplay+render share node structs; the native-VK vs PSX-soft-GPU render paths populate node render-caches /
-  the OT 0x800ED000..0x800F1000 / render-queue lists 0x800F24xx differently — so the framebuffer match is the
-  gameplay verdict, not the RAM count. A clean RAM gameplay gate needs per-field node separation, a larger RE.)
-- ☐ **NEXT (real frontier — extend the verified envelope so the effect-leaf work becomes reachable+gated):**
-  drive PAST the opening area into the SECOND area (area transition + loader), which exercises the effect cases
-  idx1/2/3/8 + per-area submitters; add an oracle checkpoint there; own those leaves gated. Or diff deeper
-  interactive play (jump/attack/pick-up) via matched pad scripting. The opening is fully verified — the
-  untested frontier is beyond it.
+- **NEW (harness): `oraclediff` interactive-play SCAN scaffold (selftest.cpp run_oraclediff).** From the
+  aligned free-roam onset it drives BOTH cores with IDENTICAL pad input (hold D-pad Right) for 90 frames, then
+  dumps both framebuffers. **LIMITATION (later-283, verified — corrects the first commit's overclaim):** at
+  this checkpoint Tomba is STILL in the scripted "caught on the fishing line" pose and does NOT respond to
+  movement input — holding Right (or mashing buttons) for 1400+ frames leaves him in the EXACT same position in
+  the native core. So the scan currently only RE-CONFIRMS the still-frame convergence already proven at the
+  onset (later-282); it is NOT yet an interactive-MOVEMENT test (there is no movement to diff here). The
+  framebuffer match is real but is the same still-convergence, not proof of interactive-gameplay convergence.
+  (The RAM diff during the walk is render-path NOISE — gameplay+render share node structs; native-VK vs PSX-
+  soft-GPU populate node render-caches / OT 0x800ED000..0x800F1000 / render-queue lists 0x800F24xx differently.)
+- ☐ **NEXT (real frontier — reach actual player control, THEN validate interactive convergence + advance):**
+  the opening free-roam onset is a scripted caught pose, not player control. Find how Tomba becomes
+  controllable (progress/skip the caught opening — button-mash and long walk-holds do NOT free him; needs RE of
+  the opening sequence / the fisherman-pull event). Then (a) run the interactive scan THERE to actually verify
+  movement/physics convergence, and (b) drive to the SECOND area (area transition + loader), which exercises the
+  effect cases idx1/2/3/8 + per-area submitters — add an oracle checkpoint, own those leaves gated. The opening
+  STILL-STATE + render is fully verified; the untested frontier is actual interactive control and beyond.
 
 **SESSION 2026-07-01 (later-282) — the ORACLE now verifies the field; free-roam opening is CONVERGENT.**
 The in-process interpreter+softGPU oracle (docs/oracle.md) has been extended to FREE-ROAM: it drives past the

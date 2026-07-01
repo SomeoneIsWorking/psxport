@@ -424,24 +424,23 @@ static int run_oraclediff(const char* path) {
       int onset_ranges = diff_band("free-roam");
       summary_div = total_div;   // freeze the summary count here — the interactive walk's diff below is render noise
 
-      // INTERACTIVE-PLAY convergence scan (later-283): the scripted opening is verified convergent; the
-      // UNTESTED frontier is INTERACTIVE gameplay — Tomba under player control, exercising the native-ported
-      // movement/physics/collision/animation content. From the ALIGNED free-roam onset drive BOTH cores with
-      // IDENTICAL pad input (hold D-pad Right = walk east) for WALK_FRAMES, then compare.
+      // INTERACTIVE-PLAY scan HARNESS (later-283): the scaffold for diffing INTERACTIVE gameplay (Tomba under
+      // player control) native-vs-oracle — from the aligned free-roam onset drive BOTH cores with IDENTICAL pad
+      // input for WALK_FRAMES, then compare framebuffers.
       //
-      // VERDICT = the post-walk FRAMEBUFFER match (native VK vs PSX soft-GPU): if native interactive behaviour
-      // matches the oracle, Tomba ends the walk in the SAME pose/position in the SAME world (later-283 confirmed
-      // this — a content match, so native interactive gameplay is convergent). This is the reliable signal, in
-      // keeping with the project's "verify render by eyeball" principle.
+      // IMPORTANT LIMITATION (later-283, verified): at THIS checkpoint (the free-roam overlay-flip onset) Tomba
+      // is still in the scripted "caught on the fishing line" pose and does NOT respond to movement input —
+      // holding Right (or mashing buttons) for 1400+ frames leaves him in the EXACT same position in the native
+      // core. So this scan currently only RE-CONFIRMS the still-frame convergence already proven at the onset
+      // (later-282); it does NOT yet verify interactive MOVEMENT convergence, because there is no movement to
+      // diff here. To make it a real interactive test, first reach the point where Tomba becomes player-
+      // controllable (progress/skip the caught opening), then run this scan there.
       //
       // The RAM diff below is printed for transparency but is DOMINATED BY RENDER-PATH NOISE during active
       // rendering: gameplay and render state share the same node structs, and the native (VK) vs oracle (PSX
       // soft-GPU) render paths populate each node's render-cache fields (matrix cache node+0x98, render-command
       // array node+0xC0, OT link words, the ordering table 0x800ED000..0x800F1000, the render-queue lists
       // 0x800F24xx) DIFFERENTLY — so hundreds of "divergences" here are expected and are NOT gameplay bugs.
-      // A clean RAM gameplay-divergence gate would need per-field gameplay/render separation of the node structs
-      // (a larger RE task); until then, trust the framebuffer match, and treat a SUDDEN jump in a low, non-
-      // scene-graph page (e.g. 0x800B_xxxx object structs) as the thing to investigate.
       {
         const int WALK_FRAMES = 90;
         fprintf(stderr, "[oraclediff] === interactive-play scan: hold RIGHT %d frames from onset (baseline=%d benign ranges) ===\n",
@@ -451,12 +450,12 @@ static int run_oraclediff(const char* path) {
           pad_repl_hold(&B->core, PAD_RIGHT); dc_step_frame(&B->core, fb); fb++;
         }
         int nd = diff_band("interactive-play (post-walk, render-noise-dominated)");
-        fprintf(stderr, "[oraclediff]   post-walk RAM: %d ranges (render scene-graph noise — see comment; VERDICT is the framebuffer match)\n", nd);
+        fprintf(stderr, "[oraclediff]   post-walk RAM: %d ranges (render scene-graph noise). NOTE: Tomba is NOT controllable at this checkpoint (scripted caught pose) — this re-confirms still-convergence, it is NOT yet an interactive-MOVEMENT test.\n", nd);
       }
       pad_repl_hold(&A->core, PAD_NONE); pad_repl_hold(&B->core, PAD_NONE);
       gpu_native_shot(&A->core, "scratch/screenshots/oraclediff_freeroam_native.ppm");
       gpu_native_shot(&B->core, "scratch/screenshots/oraclediff_freeroam_oracle.ppm");
-      fprintf(stderr, "[oraclediff] post-walk framebuffers: oraclediff_freeroam_{native,oracle}.ppm (matched RIGHT walk from onset — the VERDICT: native VK vs PSX soft-GPU content match = interactive gameplay convergent)\n");
+      fprintf(stderr, "[oraclediff] post-walk framebuffers: oraclediff_freeroam_{native,oracle}.ppm (native VK vs PSX soft-GPU content match — still-convergent; Tomba stays in the scripted caught pose, so this is not yet an interactive-movement test)\n");
     }
   }
 
