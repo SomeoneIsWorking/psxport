@@ -49,4 +49,12 @@ public:
   //   21 overlay leaves + 1 default no-op each). Handlers take a0 = 0x800F2418 (the scene-state
   //   base). Replaces `d0(c, 0x80050de4u)` in the field-frame body.
   void sceneStateStep();
+
+  // modePerFrameDispatch: the second per-frame render-mode dispatcher at guest 0x80022A80 (ov_field_frame
+  //   calls it right after the object dispatcher). Keyed by the same render-mode byte 0x800BF870;
+  //   reads a 24-entry function-pointer table at 0x8009D1D4 (MAIN.EXE .rodata, one entry per area
+  //   mode, all pointing at overlay leaves in the 0x8010xxxx..0x80117xxx range that the currently-
+  //   loaded overlay owns). Mode 3 (A00 fisherman village) is explicitly SKIPPED before the table
+  //   read — the only special case. Replaces `d0(c, 0x80022a80u)` in the field-frame body.
+  void modePerFrameDispatch();
 };

@@ -393,7 +393,8 @@ static void ov_field_frame(Core* c) {
     FFS("ff_59d28", d0(c, 0x80059d28u)); FFS("ff_69b28", ov_list_walk_69b28(c));      // 0x80069b28 NATIVE
     FFS("ff_26368", ov_arr8_dispatch_26368(c)); FFS("ff_objwalk", ov_objwalk(c));     // 0x80026368/0x8007a904 NATIVE
     FFS("ff_25588", ov_scene_25588(c)); FFS("ff_4fe84", ov_scene_4fe84(c));           // 0x80025588/0x8004fe84 NATIVE
-    FFS("ff_disp26c88", ov_disp_26c88(c)); FFS("ff_22a80", d0(c, 0x80022a80u));       // 0x80026c88 NATIVE
+    FFS("ff_disp26c88", ov_disp_26c88(c));                                            // 0x80026c88 NATIVE
+    FFS("ff_22a80", c->engine.modePerFrameDispatch());                                // 0x80022a80 NATIVE (Engine::modePerFrameDispatch)
     FFS("ff_6ec44", CutsceneCamera::runFieldUpdate(c));         // 0x8006ec44 NATIVE (CutsceneCamera::update)
     FFS("ff_50de4", c->engine.sceneStateStep());                 // 0x80050de4 NATIVE (Engine::sceneStateStep)
     FFS("ff_1cac0", c->engine.areaModeDispatch());               // 0x8001cac0 NATIVE (Engine::areaModeDispatch)
@@ -1148,6 +1149,21 @@ void Engine::sceneStateStep() {
     rec_dispatch(c, target);
   }
   c->mem_w8(SCENE_STATE, 1);   // advance to RUN (all L_80050F94 paths, incl. the default at idx 9)
+}
+
+// Engine::modePerFrameDispatch — the mode-keyed per-frame overlay handler at guest 0x80022A80.
+// Faithful to the disasm: skip mode 3 (A00 village) explicitly, then read the fn-pointer table
+// at 0x8009D1D4 (MAIN.EXE .rodata, indexed by 0x800BF870) and dispatch the current overlay's
+// entry. NO bounds check in the guest — the render-mode byte is bounded by the writer sites, not
+// here. No a0 setup (the guest jalr inherits whatever a0 the caller had; ov_field_frame doesn't
+// touch a0 before the call, so handlers that read a0 are dead code in this path — none observed).
+void Engine::modePerFrameDispatch() {
+  Core* c = core;
+  uint8_t idx = c->mem_r8(0x800BF870u);
+  if (idx == 3) return;
+  uint32_t target = c->mem_r32(0x8009D1D4u + (uint32_t)idx * 4u);
+  if (!target) return;
+  rec_dispatch(c, target);
 }
 
 // Register the GAME-stage area-init overrides when this just-loaded overlay is GAME.BIN at the stage base.
