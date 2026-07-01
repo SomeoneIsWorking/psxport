@@ -122,9 +122,10 @@ a PC renderer. Instead:
 
 ## Build / drive / repo
 - **`scratch/bin/tomba2_port` IS THE GAME** — recompiled MAIN.EXE (`generated/shard_*.c` from
-  `tools/recomp/emit.py`) + native engine (`engine/*`) + PSX platform (`runtime/recomp/*`). **The build is
+  `tools/recomp/emit.py`) + native game (`game/*`) + PSX platform (`runtime/recomp/*`). **The build is
   CMake** (`cmake/tomba2_port.cmake` owns the source list, RmlUi static-lib subbuild, SDL_GPU shader gen,
-  and link — keep that list in sync when adding an `engine/*` / `runtime/recomp/*` file).
+  and link — keep that list in sync when adding a `game/*` / `runtime/recomp/*` file; every `game/`
+  subsystem folder is on the include path, so `#include "foo.h"` resolves regardless of subfolder).
   - `./run.sh [disc.chd]` — full: extract MAIN.EXE + `cmake --build build --target tomba2_port` + run.
   - Incremental rebuild without running: `cmake --build build --target tomba2_port` (configure once with
     `cmake -S . -B build`). Renderer regression check: `tools/test_gpu_render.sh`. (The old per-file
@@ -136,14 +137,18 @@ a PC renderer. Instead:
   `docs/driving-the-game.md`. **The oracle is GONE** — no reference emulator, no diff/compare tooling;
   don't look for or recreate it.
 - **Repo (N64Recomp model — a reusable PSX→PC framework + the game on top, established in-tree first):**
-  `engine/` = the game-specific native engine + RE (game_tomba2, wide60, engine_*); `runtime/recomp/` =
+  `game/` = the PC-native game, organized like a PC game engine by SUBSYSTEM FOLDER — `ai/` (per-object
+  behaviors), `object/` (object-list walk+dispatch, animation), `world/` (entity/pool/spawn/placement),
+  `render/` (submit/walk/project/cull/fps60/gpu_lib/lighting/terrain + scene/ + mesh/), `camera/`, `scene/`
+  (stage/demo/level/init/cutscene), `audio/`, `input/`, `player/` (collision/hitbox), `ui/`, `items/`,
+  `math/`, `core/` (clib/asset); top-level `game_tomba2.cpp` + `tomba2_types.h`. `runtime/recomp/` = the
   common PSX→PC platform (dispatch/hle/boot/native_boot, PSX-hw natives gpu_native/spu/gte/mdec/cd, CD/XA/FMV
   subsystems); `tools/` = recompiler + tooling; `generated/` = recompiled MAIN.EXE shards = the SUBSTRATE (gitignored);
   `vendor/beetle-psx` = committed GPL-2 fork used as the GTE/MDEC/SPU/CHD HARDWARE BACKEND (NOT a reference
-  emulator; going off it = porting those native, a long-term goal). Natives live in SUBSYSTEM files
-  (clib, gte, gpu_lib, engine_camera, engine_submit, cd_override, …) ordered by guest address — the old
-  `native_path*.cpp` grab-bags are GONE; never recreate them. `scratch/` = gitignored artifacts by type
-  (**never /tmp** — RAM tmpfs ~6 GB).
+  emulator; going off it = porting those native, a long-term goal). Put a new native in the SUBSYSTEM FOLDER
+  it belongs to — never a general-purpose grab-bag file, never cram unrelated subsystems into one file (the
+  old flat `engine/` and `native_path*.cpp` grab-bags are GONE; never recreate them). `scratch/` = gitignored
+  artifacts by type (**never /tmp** — RAM tmpfs ~6 GB).
 
 ## Hard rules
 - **Single `main` branch.** Verified milestones are committed AND pushed to `origin`
