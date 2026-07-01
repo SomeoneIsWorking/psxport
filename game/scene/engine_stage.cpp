@@ -425,7 +425,7 @@ static void ov_field_frame(Core* c) {
   if (!g_render_psx && !g_dualview && c->mem_r8(0x1f800136u) < 2) {
     dv_restore_pre(c);
   }
-  FFS("ff_77d8c", d0(c, 0x80077d8cu));
+  FFS("ff_77d8c", c->engine.postRenderTick());   // 0x80077d8c NATIVE (Engine::postRenderTick)
   FFS("ff_area75a80", d0(c, 0x80075a80u));      // per-frame area update
 }
 
@@ -1164,6 +1164,29 @@ void Engine::modePerFrameDispatch() {
   uint32_t target = c->mem_r32(0x8009D1D4u + (uint32_t)idx * 4u);
   if (!target) return;
   rec_dispatch(c, target);
+}
+
+// Engine::postRenderTick — 3-state fx-trigger + countdown on byte 0x800BF842 at guest 0x80077D8C.
+// Faithful to the disasm: low 7 bits select (== 1: fire FX 41, set b42 = 0x87), (== 2: fire FX 42,
+// clear b42), other/nonzero: decrement b42. Zero = no-op. FX 41/42 leaf FUN_80074590 stays substrate.
+void Engine::postRenderTick() {
+  Core* c = core;
+  uint8_t b = c->mem_r8(0x800BF842u);
+  if (b == 0) return;
+  uint8_t low = (uint8_t)(b & 0x7F);
+  if (low == 1) {
+    c->r[4] = 41; c->r[5] = 2; c->r[6] = 0xFFFFFFBFu;   // (-65) sign-extended
+    rec_dispatch(c, 0x80074590u);
+    c->mem_w8(0x800BF842u, 0x87);
+    return;
+  }
+  if (low == 2) {
+    c->r[4] = 42; c->r[5] = 2; c->r[6] = 0xFFFFFFBFu;
+    rec_dispatch(c, 0x80074590u);
+    c->mem_w8(0x800BF842u, 0);
+    return;
+  }
+  c->mem_w8(0x800BF842u, (uint8_t)(b - 1));
 }
 
 // Register the GAME-stage area-init overrides when this just-loaded overlay is GAME.BIN at the stage base.

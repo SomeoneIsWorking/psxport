@@ -57,4 +57,10 @@ public:
   //   loaded overlay owns). Mode 3 (A00 fisherman village) is explicitly SKIPPED before the table
   //   read — the only special case. Replaces `d0(c, 0x80022a80u)` in the field-frame body.
   void modePerFrameDispatch();
+
+  // postRenderTick: small 3-state machine on byte 0x800BF842 at guest 0x80077D8C, called after the
+  //   per-frame render submit. `b42 & 0x7F` selects: 1 = trigger FX 41 then set b42=0x87; 2 = trigger
+  //   FX 42 then clear b42; otherwise = decrement b42. Trigger call = FUN_80074590(id, 2, -65) — a
+  //   sound/vibration fx queue leaf, still substrate. Replaces `d0(c, 0x80077d8cu)` in ov_field_frame.
+  void postRenderTick();
 };
