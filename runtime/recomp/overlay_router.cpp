@@ -137,11 +137,29 @@ int rec_addr_has_entry(Core* c, uint32_t addr) {
 
 void interp_run(Core* c, uint32_t addr);   // interp.cpp — pure-interpreter engine (oracle Core)
 
+#include <map>
+#include <vector>
+#include <algorithm>
+#include <cstdlib>
+// recdep (later-286): RECOMP-DEPENDENCY meter — histogram every substrate function rec_dispatch routes to
+// (the native port; the oracle interp path is excluded), dumped top-40 at exit. The metric for the
+// "minimize recomp" goal: rank which substrate fns to own natively next. Gated on cfg_dbg("recdep").
+static std::map<uint32_t,uint64_t> g_recdep;
+extern "C" void recdep_dump() {
+  if (!cfg_dbg("recdep")) return;
+  std::vector<std::pair<uint64_t,uint32_t>> v;
+  for (auto& kv : g_recdep) v.push_back({kv.second, kv.first});
+  std::sort(v.rbegin(), v.rend());
+  fprintf(stderr, "[recdep] top substrate dispatch targets (addr: calls), %zu unique:\n", v.size());
+  for (size_t i = 0; i < v.size() && i < 40; i++)
+    fprintf(stderr, "  0x%08X : %llu\n", v[i].second, (unsigned long long)v[i].first);
+}
 void rec_dispatch(Core* c, uint32_t addr) {
   // ORACLE Core (later-278): interpret the target instead of routing to a recompiled body. The
   // interpreter handles overlay/non-recompiled code natively (no fail-fast miss), which is exactly why
   // the oracle uses it. The native port Core (use_interp==0) takes the substrate route below.
   if (c->use_interp) { interp_run(c, addr); return; }
+  if (cfg_dbg("recdep")) { static int reg=0; if(!reg){reg=1;atexit(recdep_dump);} g_recdep[(addr & 0x1FFFFFFF) | 0x80000000]++; }
   uint32_t a = addr & 0x1FFFFFFF;
   if (a >= REC_MAIN_LO && a < REC_MAIN_HI) { main_dispatch(c, addr); return; }
   for (int i = 0; i < g_rec_overlay_count; i++) {

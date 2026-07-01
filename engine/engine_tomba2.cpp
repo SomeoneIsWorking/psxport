@@ -187,6 +187,45 @@ void ov_objwalk(Core* c) {
   s_walks++;
 }
 
+// Route ONE object method natively-or-substrate, mirroring call_handler's dispatch (a0 = object, fps60
+// current-object tracking, native behavior if owned else the recomp leaf). Shared by the field-frame
+// object dispatchers below. No guest-sp munging: the handler allocates its own frame below the current
+// sp, exactly as the guest `jalr` did.
+static inline void dispatch_obj_method(Core* c, uint32_t obj, uint32_t h) {
+  uint32_t prev = c->game->fps60.current_object;
+  c->game->fps60.current_object = obj;
+  c->r[4] = obj;                                     // $a0
+  if (!dispatch_native_behavior(c, h)) rec_dispatch(c, h);
+  c->game->fps60.current_object = prev;
+}
+
+// Native FUN_80069B28 — a second per-frame object-list walk (head 0x800F2738; method ptr at node+0x1C,
+// next at node+0x24). Read next BEFORE the call (a handler may unlink the node). Faithful to the recomp
+// body: unlike ov_objwalk it does NOT clear a render flag. A direct child of the native ov_field_frame
+// (was `d0(c, 0x80069b28)`); owning it removes the dispatcher body from the substrate.
+void ov_list_walk_69b28(Core* c) {
+  for (uint32_t n = c->mem_r32(0x800F2738u); n; ) {
+    uint32_t h    = c->mem_r32(n + 0x1Cu);
+    uint32_t next = c->mem_r32(n + 0x24u);
+    dispatch_obj_method(c, n, h);
+    n = next;
+  }
+}
+
+// Native FUN_80026368 — iterate the 8-slot fixed object array at 0x80100400 (stride 0x4C); for each
+// ACTIVE slot (byte[0] != 0) dispatch its method by type byte[2] through the jump table 0x8009D314
+// (a0 = slot). Faithful: no type bound-check (the guest indexes the table raw); inactive slots still
+// advance. A direct child of the native ov_field_frame (was `d0(c, 0x80026368)`).
+void ov_arr8_dispatch_26368(Core* c) {
+  for (int i = 0; i < 8; i++) {
+    uint32_t slot = 0x80100400u + (uint32_t)i * 0x4Cu;
+    if (c->mem_r8(slot) == 0) continue;
+    uint32_t type = c->mem_r8(slot + 2);
+    uint32_t h = c->mem_r32(0x8009D314u + type * 4u);
+    dispatch_obj_method(c, slot, h);
+  }
+}
+
 void engine_tomba2_init(void) {
   if (cfg_dbg("engine"))
     fprintf(stderr, "[engine] native object-list walk active (FUN_8007a904)\n");

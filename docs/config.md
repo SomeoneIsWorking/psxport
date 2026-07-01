@@ -54,7 +54,11 @@ engine_stage.cpp) · `rqhist` (per-frame render-queue layer×opaque/semi histogr
 the world even being queued?") · `ovload` (per-core MODE/AREA-slot overlay residency: logs each
 `overlay_note_load` — `core A/B slot N <- TAG` — so you can see WHICH overlay each core thinks is resident
 and WHEN it loaded; the tool that pinned later-273's "A00 code overlay never loaded on the PSX core",
-overlay_router.cpp). See journal later-168 / engine_re.md "GAME stage state machine".
+overlay_router.cpp) · `recdep` (RECOMP-DEPENDENCY meter: histograms every substrate function `rec_dispatch`
+routes to and dumps the top-40 by call count at exit, overlay_router.cpp — the metric for the "minimize
+recomp" goal; run `PSXPORT_DEBUG=recdep` on a free-roam session to rank which substrate functions to own
+natively next. 410 unique in free-roam; #1 is `rand` 0x8009A450 @ 86/frame). See journal later-168 /
+engine_re.md "GAME stage state machine".
 
 Full-PSX (psx_fallback / SBS core-B) coroutine diagnostics (native_boot.cpp `ov_switch`): `sched` (coro
 start/resume/out + task slot state) · `yieldpc` (per-yield `ra`/`r16`/`r29` + the stale-on-inner-frames

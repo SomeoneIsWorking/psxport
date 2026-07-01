@@ -885,6 +885,27 @@ in-port profiler (later-186, `interp.cpp`) gives the TIME + FREQUENCY histograms
 ---
 
 # CURRENT FRONTIER (work these, in this order)
+**SESSION 2026-07-01 (later-286) — free-roam recomp-MISS FIXED; NEW frontier = MINIMIZE RECOMP DEPENDENCY
+(top-down descent, `recdep`-prioritized).** The free-roam abort (later-284c/285's frontier) was a recompiler
+bug — `emit.py` dropped a fall-through edge, leaking 0x28 of guest sp per field frame until the render pass
+overflowed task0's stack (findings/render.md). Fixed; `newgame; run 6000` holds free-roam steady.
+**USER DIRECTION (2026-07-01): reduce recomp dependency to as little as possible.** The `recdep` channel
+(`PSXPORT_DEBUG=recdep`, docs/config.md) measures it: 410 unique substrate fns run per free-roam frame.
+The lever is TOP-DOWN ownership — own `ov_field_frame`'s direct substrate children, and wire their leaf
+calls (rand 0x8009A450 @86/frame, matrix 0x80051794, libgpu 0x80082xxx/0x80083xxx) to the native subsystem
+impls, so the hot leaves get captured as their parents become native. Landed this session (0-diff RAM+spad
+A/B verified): `ov_list_walk_69b28` (FUN_80069b28) + `ov_arr8_dispatch_26368` (FUN_80026368) — two more of
+ov_field_frame's 9 substrate children owned native (was 2 native/9, now 4 native/9).
+- ☐ **NEXT — own the remaining ov_field_frame substrate children** (engine_stage.cpp ~L283): the pure
+  engine-layer ones first (0x80025588 ~111 insns / 0x8004fe84 ~76 insns — 0 overlay calls, A/B-verifiable),
+  then the content-heavy dispatchers (0x80050de4 42-overlay-calls, 0x8001cac0, 0x8006ec44) which descend into
+  per-area A00 object behaviors (the 0x8013xxxx handlers, ~5/frame each in recdep). Method: reimplement
+  faithfully, route methods via dispatch_native_behavior|rec_dispatch, A/B RAM+spad 0-diff (build native vs
+  `git stash` substrate, dumpram at f1500, cmp). Re-run `recdep` after each to re-rank.
+- ✅ **DONE (later-286) — free-roam aborts ~f1184 at `jal 0x80109450`.** Root cause was NOT residency or the
+  A00 field-frame flow — it was the recompiler fall-through/sp-leak (findings/render.md). Fixed in emit.py +
+  seeded 0x8003D5CC/0x8003D8AC.
+
 **SESSION 2026-07-01 (later-284b) — intro-cutscene FREEZE + red corruption FIXED; NEW frontier = free-roam
 `jal 0x80109450` recomp-MISS.** The later-284 root-cause (PSX-render-underneath recursing deep on task0's
 ~2KB guest stack → sm[0x48]=17 clobber → freeze + game_coop r29 SP-leak → red corruption) is FIXED by

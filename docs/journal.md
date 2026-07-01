@@ -1,5 +1,18 @@
 # Debug / progress journal
 
+## later-287 — MINIMIZE-RECOMP frontier: `recdep` dependency meter + own 2 more ov_field_frame children native
+USER direction (2026-07-01): reduce recomp dependency to as little as possible. Built the `recdep` diagnostic
+(`PSXPORT_DEBUG=recdep`, overlay_router.cpp + config.md) — histograms every substrate fn rec_dispatch routes to,
+dumps top-40 at exit. Free-roam runs 410 unique substrate fns; the distribution is top-heavy: #1 is rand
+0x8009A450 @ 172K calls (86/frame), then the cull cluster (already native) + libgpu 0x80082/83xxx + matrix
+0x80051794 + the A00 object handlers 0x8013xxxx (~5/frame each). The lever is TOP-DOWN ownership: own
+ov_field_frame's direct substrate children, wiring their leaf calls to native subsystem impls so the hot leaves
+get captured as parents go native. Owned 2 more of ov_field_frame's 9 children native (engine_tomba2.cpp):
+ov_list_walk_69b28 (FUN_80069b28, 2nd object-list walk head 0x800f2738) + ov_arr8_dispatch_26368 (FUN_80026368,
+8-slot array 0x80100400 stride 0x4c, jumptable 0x8009d314) — both route methods via
+dispatch_native_behavior|rec_dispatch (no sp munging). A/B RAM+scratchpad 0-diff at f1500 (native vs `git stash`
+substrate baseline). Now 4 native / 9 substrate children. Next: the pure engine ones 0x80025588 / 0x8004fe84.
+
 ## later-286 — free-roam recomp-MISS FIXED: recompiler dropped a fall-through edge → 0x28/frame guest-sp leak (later-284c AND later-285 both wrong)
 The free-roam crash (`newgame; run 4000` → abort ~f1184 at `[recomp-MISS] 0x80109450`) is FIXED. Both prior
 diagnoses were falsified: later-284c blamed the A00 render recursion; later-285 blamed a "gameplay object-graph
