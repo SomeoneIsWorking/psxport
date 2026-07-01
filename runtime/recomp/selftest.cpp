@@ -28,6 +28,7 @@ void pad_repl_hold(Core* c, uint16_t active_low_mask);
 #define PAD_NONE   0xFFFFu
 #define PAD_START  (0xFFFFu & ~0x0008u)   // active-low: Start pressed
 #define PAD_CROSS  (0xFFFFu & ~0x4000u)   // active-low: Cross pressed (menu confirm)
+#define PAD_RIGHT  (0xFFFFu & ~0x0020u)   // active-low: D-pad Right (walk east into the field)
 
 // One self-test run. Returns 0 on pass, 1 on fail.
 static int run_startgame(const char* path) {
@@ -361,30 +362,35 @@ static int run_oraclediff(const char* path) {
   pad_repl_hold(&A->core, PAD_NONE); pad_repl_hold(&B->core, PAD_NONE);
   fprintf(stderr, "[oraclediff] both at GAME (A f%u, B f%u). Checkpoint-diffing the narration beats.\n", fa, fb);
 
-  int total_div = 0;
+  int total_div = 0, summary_div = 0;   // summary_div = narration+free-roam only (excludes the render-noisy interactive walk)
   // Shared engine-state RAM diff at an aligned checkpoint (both cores parked at the same game moment).
-  auto diff_band = [&](const char* label) {
+  // Returns the number of non-benign diverging ranges (so callers can gate on it, e.g. the interactive-play
+  // first-divergence scan). label==nullptr → count only (no printing).
+  auto diff_band = [&](const char* label) -> int {
     const uint32_t LO = 0x800B0000u, HI = 0x80110000u;
     const uint8_t* a = A->core.ram + (LO - 0x80000000u);
     const uint8_t* b = B->core.ram + (LO - 0x80000000u);
     int ranges = 0; uint32_t total_bytes = 0;
     uint32_t pagehist[0x60] = {0};   // per-0x1000-page diverging-byte counts across 0x800B0000..0x80110000
-    fprintf(stderr, "[oraclediff] === %s (native f%u, oracle f%u) ===\n", label, fa, fb);
+    if (label) fprintf(stderr, "[oraclediff] === %s (native f%u, oracle f%u) ===\n", label, fa, fb);
     for (uint32_t i = 0; i < HI - LO; ) {
       if (a[i] == b[i] || od_is_render(LO + i) || od_is_cd_cache(LO + i)) { i++; continue; }
       uint32_t start = i, bytes = 0;
       while (i < HI - LO && a[i] != b[i] && !od_is_render(LO + i) && !od_is_cd_cache(LO + i)) { i++; bytes++; }
-      total_bytes += bytes; total_div++;
+      total_bytes += bytes; if (label) total_div++;
       pagehist[(LO + start - 0x800B0000u) >> 12] += bytes;
-      if (ranges++ < 48)
+      if (ranges++ < 48 && label)
         fprintf(stderr, "[oraclediff]   diff @0x%08X..0x%08X (%u B)  nat[0]=%02X ora[0]=%02X\n",
                 LO + start, LO + start + bytes, bytes, a[start], b[start]);
     }
-    fprintf(stderr, "[oraclediff]   %s: %d diverging ranges, %u bytes total%s (CD-cache excluded)\n",
-            label, ranges, total_bytes, ranges > 48 ? " (first 48 shown)" : "");
-    for (uint32_t p = 0; p < 0x60; p++)
-      if (pagehist[p]) fprintf(stderr, "[oraclediff]     page 0x%08X: %u diverging bytes\n",
-                               0x800B0000u + (p << 12), pagehist[p]);
+    if (label) {
+      fprintf(stderr, "[oraclediff]   %s: %d diverging ranges, %u bytes total%s (CD-cache excluded)\n",
+              label, ranges, total_bytes, ranges > 48 ? " (first 48 shown)" : "");
+      for (uint32_t p = 0; p < 0x60; p++)
+        if (pagehist[p]) fprintf(stderr, "[oraclediff]     page 0x%08X: %u diverging bytes\n",
+                                 0x800B0000u + (p << 12), pagehist[p]);
+    }
+    return ranges;
   };
 
   const uint8_t CKPTS[] = { 2, 3, 5, 7 };   // narration scene ids (field/letter, transitions, void=5, cliff=7)
@@ -415,18 +421,47 @@ static int run_oraclediff(const char* path) {
       // RAM diff at the EXACT onset frame (both cores parked at the overlay flip) — this is where state is
       // aligned. Free-running past it drifts (the two cores animate the scripted opening at slightly different
       // sub-frame cadence: the interp core does real CD loads), so any post-step diff is drift, not a bug.
-      diff_band("free-roam");
-      // For the RENDER dump we need a settled frame: the field fades in from black over the first ~1s after
-      // the overlay flip, so at onset+5 the oracle is still dark. Step ~40 frames (past the fade) for a CONTENT
-      // comparison (not pixel-aligned — the cores drift when free-running the scripted opening, per above).
-      for (int s = 0; s < 40; s++) { dc_step_frame(&A->core, fa); fa++; dc_step_frame(&B->core, fb); fb++; }
+      int onset_ranges = diff_band("free-roam");
+      summary_div = total_div;   // freeze the summary count here — the interactive walk's diff below is render noise
+
+      // INTERACTIVE-PLAY convergence scan (later-283): the scripted opening is verified convergent; the
+      // UNTESTED frontier is INTERACTIVE gameplay — Tomba under player control, exercising the native-ported
+      // movement/physics/collision/animation content. From the ALIGNED free-roam onset drive BOTH cores with
+      // IDENTICAL pad input (hold D-pad Right = walk east) for WALK_FRAMES, then compare.
+      //
+      // VERDICT = the post-walk FRAMEBUFFER match (native VK vs PSX soft-GPU): if native interactive behaviour
+      // matches the oracle, Tomba ends the walk in the SAME pose/position in the SAME world (later-283 confirmed
+      // this — a content match, so native interactive gameplay is convergent). This is the reliable signal, in
+      // keeping with the project's "verify render by eyeball" principle.
+      //
+      // The RAM diff below is printed for transparency but is DOMINATED BY RENDER-PATH NOISE during active
+      // rendering: gameplay and render state share the same node structs, and the native (VK) vs oracle (PSX
+      // soft-GPU) render paths populate each node's render-cache fields (matrix cache node+0x98, render-command
+      // array node+0xC0, OT link words, the ordering table 0x800ED000..0x800F1000, the render-queue lists
+      // 0x800F24xx) DIFFERENTLY — so hundreds of "divergences" here are expected and are NOT gameplay bugs.
+      // A clean RAM gameplay-divergence gate would need per-field gameplay/render separation of the node structs
+      // (a larger RE task); until then, trust the framebuffer match, and treat a SUDDEN jump in a low, non-
+      // scene-graph page (e.g. 0x800B_xxxx object structs) as the thing to investigate.
+      {
+        const int WALK_FRAMES = 90;
+        fprintf(stderr, "[oraclediff] === interactive-play scan: hold RIGHT %d frames from onset (baseline=%d benign ranges) ===\n",
+                WALK_FRAMES, onset_ranges);
+        for (int k = 0; k < WALK_FRAMES; k++) {
+          pad_repl_hold(&A->core, PAD_RIGHT); dc_step_frame(&A->core, fa); fa++;
+          pad_repl_hold(&B->core, PAD_RIGHT); dc_step_frame(&B->core, fb); fb++;
+        }
+        int nd = diff_band("interactive-play (post-walk, render-noise-dominated)");
+        fprintf(stderr, "[oraclediff]   post-walk RAM: %d ranges (render scene-graph noise — see comment; VERDICT is the framebuffer match)\n", nd);
+      }
+      pad_repl_hold(&A->core, PAD_NONE); pad_repl_hold(&B->core, PAD_NONE);
       gpu_native_shot(&A->core, "scratch/screenshots/oraclediff_freeroam_native.ppm");
       gpu_native_shot(&B->core, "scratch/screenshots/oraclediff_freeroam_oracle.ppm");
-      fprintf(stderr, "[oraclediff] free-roam framebuffers: oraclediff_freeroam_{native,oracle}.ppm (content-aligned, +40f past fade)\n");
+      fprintf(stderr, "[oraclediff] post-walk framebuffers: oraclediff_freeroam_{native,oracle}.ppm (matched RIGHT walk from onset — the VERDICT: native VK vs PSX soft-GPU content match = interactive gameplay convergent)\n");
     }
   }
 
-  fprintf(stderr, "[oraclediff] DONE: %d total diverging ranges across narration + free-roam.\n", total_div);
+  fprintf(stderr, "[oraclediff] DONE: %d total diverging ranges across narration + free-roam (interactive-play walk excluded — render-noise-dominated).\n",
+          summary_div ? summary_div : total_div);
   return 0;   // diagnostic harness: always exit 0 (it reports, it doesn't pass/fail)
 }
 

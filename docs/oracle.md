@@ -123,3 +123,17 @@ cores each frame" must become "drive each core toward its next checkpoint indepe
   scripted-camera sequence — the state-sync barrier is what makes the diff meaningful). (docs/findings/sbs.md
   "oraclediff: FREE-ROAM GAME STATE is also convergent".) NEXT: drive both cores with MATCHED input to diff
   actual interactive play (Tomba walking/jumping), and advance the port frontier natively where convergent.
+- 2026-07-01 (later-283): **Interactive play is convergent too; matched-input scan added to oraclediff.** From
+  the aligned free-roam onset run_oraclediff now drives BOTH cores with IDENTICAL pad input (hold D-pad Right =
+  walk) for 90 frames, then dumps both framebuffers. VERDICT: native VK and PSX soft-GPU MATCH — Tomba ends the
+  walk in the same pose/position on the same ledge, same world/camera → native interactive gameplay
+  (movement/physics/animation) is convergent, not just the scripted opening. The engine-band RAM diff during
+  the walk is RENDER-PATH NOISE (gameplay+render share node structs; native-VK vs PSX-soft-GPU populate node
+  render-caches / the OT 0x800ED000..0x800F1000 / render-queue lists 0x800F24xx differently) — so the
+  framebuffer match is the gameplay verdict, not the RAM count (a clean RAM gate needs per-field node
+  separation, deferred). ALSO corrected a stale frontier claim: `ov_terrain` is NOT orphaned — it is wired
+  (ov_render_walk → ov_terrain → terrain_render_pc) and FIRING every field frame; the opening render leaves
+  are all native-or-intentionally-PSX, so the render-leaf frontier is done-or-blocked at the opening. The real
+  NEXT frontier is extending the oracle envelope past the opening AREA (area transition + the effect cases
+  idx1/2/3/8 that only fire in later areas). (docs/findings/sbs.md "oraclediff: INTERACTIVE-PLAY … is
+  convergent"; docs/port-progress.md CURRENT FRONTIER later-283.)

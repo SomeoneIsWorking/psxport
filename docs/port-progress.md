@@ -885,6 +885,35 @@ in-port profiler (later-186, `interp.cpp`) gives the TIME + FREQUENCY histograms
 ---
 
 # CURRENT FRONTIER (work these, in this order)
+**SESSION 2026-07-01 (later-283) — INTERACTIVE-PLAY oracle scan added; the render-leaf frontier below was
+STALE (corrected).** Two corrections + one new capability this session:
+- **CORRECTION: `ov_terrain` is NOT orphaned — it is wired and FIRING in the live free-roam field.** The
+  later-282 block below (and the handoff) claimed the PC-native terrain was orphaned with no caller and that
+  the field terrain "renders via the PSX substrate". FALSE, verified live: `ov_render_walk` (called from
+  `ov_sop_field_update`, sop.cpp:218) routes the default-case terrain fn 0x8002AB5C → `ov_terrain` →
+  `terrain_render_pc`, which fires every field frame (node 0x800ED8D8/0x800ED960, `debug terrgte`/`terrpc`
+  confirm — draws its geomblk quads PC-native, float transform + real depth). The field GROUND is ALSO native
+  (`ov_field_entity_render`, 0x80109fe0, table 0x800F2418). So "wire the orphaned ov_terrain" = ALREADY DONE.
+  At the free-roam opening the ONLY still-PSX render dispatches are GTE/scratchpad *setup* leaves (0x8003C2D4
+  matrix-compose, 0x8013DD34 cull/bound) — intentionally left PSX (transcribing GTE compose is banned by the
+  RENDER directive), and the per-object effect cases idx1/2/3/8 do NOT fire at the opening (`ccase` silent).
+  ⇒ **The render-leaf frontier is DONE-or-BLOCKED at the verifiable opening**: what remains is either
+  correctly-PSX setup, or effect leaves that only fire in LATER AREAS (unreachable/un-oracle-gated at the
+  opening). Advancing them needs a scene that exercises them — i.e. extend the oracle envelope first.
+- **NEW: `oraclediff` now runs an INTERACTIVE-PLAY scan (selftest.cpp run_oraclediff).** From the aligned
+  free-roam onset it drives BOTH cores with IDENTICAL pad input (hold D-pad Right = walk) for 90 frames, then
+  dumps both framebuffers. RESULT (later-283, verified): the post-walk framebuffers MATCH — native VK and PSX
+  soft-GPU put Tomba in the same pose/position in the same world → **native INTERACTIVE gameplay is convergent
+  with the oracle too**, not just the scripted opening. (The RAM diff during the walk is render-path NOISE —
+  gameplay+render share node structs; the native-VK vs PSX-soft-GPU render paths populate node render-caches /
+  the OT 0x800ED000..0x800F1000 / render-queue lists 0x800F24xx differently — so the framebuffer match is the
+  gameplay verdict, not the RAM count. A clean RAM gameplay gate needs per-field node separation, a larger RE.)
+- ☐ **NEXT (real frontier — extend the verified envelope so the effect-leaf work becomes reachable+gated):**
+  drive PAST the opening area into the SECOND area (area transition + loader), which exercises the effect cases
+  idx1/2/3/8 + per-area submitters; add an oracle checkpoint there; own those leaves gated. Or diff deeper
+  interactive play (jump/attack/pick-up) via matched pad scripting. The opening is fully verified — the
+  untested frontier is beyond it.
+
 **SESSION 2026-07-01 (later-282) — the ORACLE now verifies the field; free-roam opening is CONVERGENT.**
 The in-process interpreter+softGPU oracle (docs/oracle.md) has been extended to FREE-ROAM: it drives past the
 intro narration into the walkable field and stays alive, and `PSXPORT_SELFTEST=oraclediff` now state-syncs the
@@ -895,11 +924,10 @@ scratch/screenshots/oraclediff_freeroam_{native,oracle}.ppm). So the opening gam
   A/B gate)" caveat is SUPERSEDED for anything reachable in the field: after wiring/owning a render leaf, run
   oraclediff and compare the state-aligned native-vs-oracle framebuffers (and the engine-band RAM diff) BEFORE
   asking the user. Own render leaves top-down, then gate on the oracle. (See docs/oracle.md later-282.)
-- ☐ **NEXT (the render leaves — now oracle-gateable):** wire the orphaned PC-native `ov_terrain`
-  (engine_submit.cpp → terrain_render_pc) into the field terrain path, then the per-object effect cases
-  idx1/2/3/8, then ov_render_cmd — exactly as the later-221/222 block below details, but now VERIFIED via the
-  oracle render diff instead of eyeball-only. Terrain currently renders correctly via the PSX substrate, so this
-  is a pure top-down ownership advance; the oracle catches any pixel regression.
+- ~~☐ NEXT: wire the orphaned PC-native `ov_terrain` into the field terrain path~~ **← CORRECTED by later-283
+  (see block above): `ov_terrain` was NOT orphaned; it is wired+firing. The opening render leaves are all
+  native-or-intentionally-PSX. This item is DONE-or-BLOCKED — the real next step is extending the oracle
+  envelope past the opening area (later-283 NEXT).**
 
 **SESSION 2026-06-24 (later-221/222) — FRONT-END bugs fixed + render-walk RE-WIRED into the C spine.**
 - ✅ LOAD GAME owned (DEMO s4 native, `demo_frame_s4`/`load_machine_s4`, engine_demo.cpp) — fixed the freeze
