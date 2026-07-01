@@ -659,8 +659,17 @@ for content fns (call it). Do NOT mimic PSX hardware (GTE/GP0/OT) — remove Bee
   transient cur+8 store is dead, overwritten) — had it inverted with the freeze case first; (4) the apply
   path RE-READS s0+14 after 0x80075f0c (the applier may modify it) for the freeze-bit OR.
 - ✅ `FUN_80051C8C` per-object TRANSFORM build = `ov_build_xform`.
-- **Camera update (engine_camera.cpp):**
-  - ✅ position X/Z `FUN_8006d960` = `ov_cam_track_xz`; ✅ position Y `FUN_8006da54` = `ov_cam_track_y` (later-174).
+- **Camera update — now `class CutsceneCamera` (game/camera/cutscene_camera.{h,cpp}), restructured from the old orphaned
+  the old `engine_camera.cpp` register-convention statics into PC-game structure (methods over named state, no
+  `c->r[4]=cam`).** ⚠️ SCOPE CORRECTION (2026-07-01, docs/findings/camera.md): this resident camera is the
+  **SOP/CUTSCENE + special-mode** camera, NOT the A00 free-roam camera. Measured (camtrace+recdep, moving
+  free-roam): ZERO resident-camera dispatch in free-roam; the free-roam camera lives in the MODE-slot field
+  overlay (0x8013xxxx). The handoff's "0x8006E3B0 @ ~967/1000 frames" was the SOP intro. ✅ WIRED + VERIFIED:
+  `CutsceneCamera::snapFollow` (FUN_8006E3B0) is called native from `game/scene/sop.cpp` via `cam_snap_follow`
+  (replacing `d2(c,0x8006e3b0)`); `PSXPORT_DEBUG=camverify` = **0 mismatch over 51+ live SOP calls** (cam
+  struct + full scratchpad vs recomp oracle) — exercises trackXZ/trackY snap + the full `lookAt` matrix
+  builder. Remaining orchestrators/sub-ops are restructured + compile-clean but only latent (not SOP-live).
+  - ✅ position X/Z `FUN_8006d960` = `CutsceneCamera::trackXZ`; ✅ position Y `FUN_8006da54` = `CutsceneCamera::trackY` (later-174).
   - ✅ rotation / LOOK-AT builder `FUN_8006e464` = `ov_cam_rotbuild` (engine_camera.cpp, later-175) — 2 jump
     tables + common look-at tail; owns control flow + arithmetic native, CALLS libgte rsin/rcos/ratan2/isqrt
     via rec_dispatch. Output 0x1f8000d0/d8 is SCRATCHPAD (main-RAM diff is blind) → gated by per-call
@@ -674,10 +683,12 @@ for content fns (call it). Do NOT mimic PSX hardware (GTE/GP0/OT) — remove Bee
     NEAR-path final test NEGATES s0d when angd<2048 — a missed delay-slot effect (caught by the trig-spy diff).
   - ✅ angle-accumulator step `FUN_8006e010` = `ov_cam_angle_step` (engine_camera.cpp) — ±8 rate-limit of
     cam[+0x34] toward a mode-selected target; main-RAM output, camverify 0-diff (1000+ calls, motion scene).
-  - ☐ remaining sub-fns of `FUN_8006e0f0`: 0x8006d654 (pitch smoother), 0x8006c80c (Y-floor clamp),
-    0x8006dcf4 (heading tracker), 0x8006d02c (orient/look-at matrix builder, uses GTE leaves). Full per-fn
-    port specs (inputs/outputs/hazards/pseudocode/verify) in scratch/handoff_camera_subfns.md (this session).
-  - ☐ per-MODE orchestrators `FUN_8006e0f0` / `FUN_8006e228` / `FUN_8006e3f4` (call the smoothers; multi-mode).
+  - ✅ remaining sub-fns: 0x8006d654 = `CutsceneCamera::pitch`, 0x8006c80c = `CutsceneCamera::yFloor`, 0x8006dcf4 =
+    `CutsceneCamera::heading`, 0x8006d02c = `CutsceneCamera::lookAt` (orient/look-at matrix builder, uses GTE leaves —
+    the one LIVE-verified via snapFollow). All restructured into methods; lookAt proven 0-diff live.
+  - ✅ per-MODE orchestrators = `CutsceneCamera::mainFollow` (FUN_8006e0f0) / `CutsceneCamera::trackFollow` (FUN_8006e228) /
+    `CutsceneCamera::simpleFollow` (FUN_8006e3f4) / `CutsceneCamera::snapFollow` (FUN_8006e3b0, the live SOP one). Latent
+    except snapFollow until their scenes are driven (or the free-roam-overlay camera is RE'd → own it next).
 - ✅ Math helper `FUN_80077FB0` = `ov_isqrt` (engine_math.cpp, later-186) — 16-bit ROUNDING integer sqrt
   (libgte-style leaf). Was 8.41% of all interpreter instructions; owning it native dropped the field run
   42.93M→38.99M insns/300fr (−9.2%). Bit-exact: 65000+ live calls 0-diff vs recomp (`mathverify` gate).

@@ -6,7 +6,7 @@ already solved or ruled out. 26 findings across 5 subsystems.
 
 ## camera
 
-- **The resident engine_camera code is the CUTSCENE/SOP camera, NOT the free-roam field camera** [dead-end (premise falsified) / open (real free-roam camera not yet located)] — handoff/plan assumed `0x8006E3B0` (and the `game/camera/engine_camera.cpp` sub-ops/orchestrators `0x8006c80c`–`0x8006e464`, `e0f0`/`e228`/`e3f4`) is the LIVE per-frame free-roam camera ("recdep shows 0x8006E3B0 @ ~967/1000 frames"). Wiring plan targeted it as the free-roam camera.  ↪ docs/findings/camera.md
+- **The resident engine_camera code is the CUTSCENE/SOP camera, NOT the free-roam field camera** [dead-end (premise falsified) / done-partial (SOP camera now `class CutsceneCamera`, wired+verified) / open (free-roam overlay camera not yet located)] — handoff/plan assumed `0x8006E3B0` (and the `game/camera/engine_camera.cpp` sub-ops/orchestrators `0x8006c80c`–`0x8006e464`, `e0f0`/`e228`/`e3f4`) is the LIVE per-frame free-roam camera ("recdep shows 0x8006E3B0 @ ~967/1000 frames"). Wiring plan targeted it as the free-roam camera.  ↪ docs/findings/camera.md
 
 ## fmv-cd
 

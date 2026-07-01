@@ -9173,3 +9173,24 @@ NEXT: bisect WHY native recurses ~4× deeper — (A) a native override in the ob
 sp (like the game_coop r29 leak fixed in a766217), or (B) a native spawn/placement divergence builds a
 longer/looping child chain than the oracle. Diff native-vs-oracle object graph + recursion backtrace at the
 ~f1181 divergence point. Full detail: docs/findings/render.md correction block (later-285).
+
+## later-290 (2026-07-01) — camera restructured to `class CutsceneCamera`; SOP snap-follow wired+verified; free-roam-camera premise falsified
+The handoff's premise ("0x8006E3B0 is the live free-roam camera, wire it into ov_field_frame/objwalk") was
+FALSIFIED by measurement: instrumented rec_dispatch (camtrace) + recdep on A00 free-roam WITH real player
+movement (`press right`, player X 0x800E7EAC advanced 0x0F64→0x1770) show ZERO dispatch of any resident
+camera fn (0x8006c800–0x8006e480) across 200 moving frames. The ~967/1000 figure was the SOP INTRO CUTSCENE
+(frames 0–216), where sop.cpp natively drives 0x8006e3b0 each frame. The free-roam camera is in the MODE-slot
+FIELD OVERLAY (hot recdep cluster 0x8013xxxx). → docs/findings/camera.md.
+DONE regardless (the restructure is the directive): rebuilt the orphaned register-convention statics of
+the old `engine_camera.cpp` into `game/camera/cutscene_camera.{h,cpp}` = `class CutsceneCamera` — methods over named state (Core*+cam_
+members, named MASTER_X/Y/Z + G/S blocks, enum-ish mode methods), NO `c->r[4]=cam` register convention, guest
+accessors (r8/r16/r32/camR*/…) behind names. 9 sub-ops + 4 orchestrators (added snapFollow=0x8006e3b0). Wired
+`CutsceneCamera::snapFollow` into sop.cpp via `cam_snap_follow` (replaces both `d2(c,0x8006e3b0)` sites). VERIFIED:
+`PSXPORT_DEBUG=camverify` A/B vs recomp oracle (rec_interp 0x8006e3b0) = **0 mismatch over 51+ live SOP calls**
+(cam struct + full 1KB scratchpad) — exercises trackXZ/trackY snap + the full lookAt matrix builder (isqrt/
+ratan2/MulMatrix0/ApplyMatrixLV/CopyMatrix + cpu_div). No regression (free-roam still reached f216; the boot
+`[miss 0]` at ~f115 is PRE-EXISTING — same in the substrate build). WORKFLOW FIX: `tools/codemap.py` didn't
+index C++ class methods (DEF_RE only matched `void ov_*(Core*`); extended it (METHOD_RE + def-line `// FUN_`
+tag association, only when the method owns an address) so `--addr` finds `CutsceneCamera::lookAt` etc. — required as
+subsystems move to `class Foo`. NEXT: RE the free-roam MODE-slot overlay camera (0x8013xxxx) and own it, or
+formalize ObjectWorld (pc-subsystem-rebuild.md's ranked #1; behaviors already ~149/150 native).

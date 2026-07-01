@@ -35,6 +35,10 @@ ROOTS = {"ov_game_stage_main", "ov_start_bin_stage", "native_task0_bootstrap",
          "ov_game_main", "native_boot_run"}
 
 DEF_RE  = re.compile(r'^\s*(?:static\s+)?(?:inline\s+)?void\s+((?:ov_|native_|eng_)\w+)\s*\(\s*Core\s*\*')
+# PC-game-structure natives are C++ CLASS METHODS (e.g. `void Camera::lookAt()`), which take no Core*
+# param (they hold it as a member). Index those too; the owned guest FUN_/addr is read from a trailing
+# `// FUN_xxxx` on the def line or the comment block above (same association logic as free functions).
+METHOD_RE = re.compile(r'^\s*(?:static\s+)?(?:inline\s+)?[\w:*&<>]+\s+(\w+::\w+)\s*\(')
 ADDR_RE = re.compile(r'0x(8[0-9A-Fa-f]{7})')
 FUN_RE  = re.compile(r'FUN_(8[0-9a-fA-F]{7})')
 NAMEHEX = re.compile(r'^(?:ov|native|eng)_([0-9A-Fa-f]{6,8})$')
@@ -70,6 +74,10 @@ def parse_file(path, natives):
     i = 0
     while i < len(lines):
         m = DEF_RE.match(lines[i])
+        is_method = False
+        if not m:
+            m = METHOD_RE.match(lines[i])
+            is_method = True
         if not m:
             i += 1
             continue
@@ -80,6 +88,9 @@ def parse_file(path, natives):
         while c >= 0 and lines[c].lstrip().startswith("//"):
             comment.append(lines[c].strip()); c -= 1
         comment.reverse()
+        # a trailing `// ...` on the def line itself: class methods tag their guest FUN address there
+        # (e.g. `void Camera::lookAt() {   // FUN_8006D02C`). Scan it first so it wins the association.
+        defcomment = lines[i][lines[i].index("//"):].strip() if "//" in lines[i] else ""
         # gather the body until brace balance returns to 0 (handles one-liners and multiline)
         body, depth, started = [], 0, False
         j = i
@@ -102,6 +113,10 @@ def parse_file(path, natives):
             nh = NAMEHEX.match(sym)
             if nh:
                 impl.append(nh.group(1).upper())
+            # def-line trailing comment (class-method FUN tag) takes precedence for the owned address
+            for a in ADDR_RE.findall(defcomment) + [x.upper() for x in FUN_RE.findall(defcomment)]:
+                if a.upper() not in impl:
+                    impl.append(a.upper())
             header = []
             for cl in comment:
                 header.append(cl)
@@ -115,6 +130,11 @@ def parse_file(path, natives):
                 for a in ADDR_RE.findall(" ".join(comment)) + [x.upper() for x in FUN_RE.findall(" ".join(comment))]:
                     impl.append(a.upper()); break
 
+        # A class method is only a NATIVE OWNER if it implements a guest address (FUN tag / comment addr).
+        # Un-owned helper methods tree-wide must NOT pollute the index.
+        if is_method and not impl:
+            i = j + 1
+            continue
         deps = sorted({d.upper() for d in DEP_RE.findall(bodytext)})
         desc = ""
         if comment:

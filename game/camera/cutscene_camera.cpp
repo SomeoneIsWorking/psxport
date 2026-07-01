@@ -1,0 +1,606 @@
+// class CutsceneCamera — SOP/cutscene + special-mode engine camera, PC-native (see cutscene_camera.h; the
+// INGAME free-roam camera is a SEPARATE overlay subsystem, not this file — docs/findings/camera.md).
+// The arithmetic is the RE'd engine behaviour (docs/engine_re.md "CutsceneCamera"; later-173..176); this file
+// restructures it into methods over named state (no guest register convention). It is verified per-call
+// against the recomp oracle on the live SOP scene via `cam_snap_follow` (PSXPORT_DEBUG=camverify).
+#include "cutscene_camera.h"
+#include "cfg.h"
+#include <stdint.h>
+#include <stdio.h>
+#include <string.h>
+
+// Retained libgte helpers (a math library — kept substrate, not PSX hardware).
+static constexpr uint32_t T2_RSIN   = 0x80083E80u;   // rsin(angle12) -> Q12
+static constexpr uint32_t T2_RCOS   = 0x80083F50u;   // rcos(angle12) -> Q12
+static constexpr uint32_t T2_ISQRT  = 0x80084080u;   // isqrt(x)      -> floor(sqrt)
+static constexpr uint32_t T2_RATAN2 = 0x80085690u;   // ratan2(y,x)   -> angle12
+static constexpr uint32_t T2_ANGCMP = 0x80077768u;   // angle-compare helper (special cam mode 2-case-1)
+// lookAt's matrix helpers (NB its isqrt is a DIFFERENT entry from rotBuild's).
+static constexpr uint32_t LA_ISQRT  = 0x80077FB0u;
+static constexpr uint32_t LA_RATAN2 = 0x80085690u;
+static constexpr uint32_t LA_MRINIT = 0x80051794u;   // MR_init (identity)
+static constexpr uint32_t LA_MULMAT = 0x80084250u;   // MulMatrix0(a0,a1)
+static constexpr uint32_t LA_APPLYLV= 0x80084470u;   // ApplyMatrixLV(m,v,out)
+static constexpr uint32_t LA_COPYMAT= 0x800847B0u;   // CopyMatrix(a0,a1)
+
+// clamp(delta, -maxStep, +maxStep) on sign-extended s16 (engine FUN_8006CE74).
+static inline int32_t cam_clamp(int16_t delta, int16_t maxStep) {
+  if (delta >= 0) return delta < maxStep ? delta : maxStep;
+  return delta < (int16_t)(-maxStep) ? (int16_t)(-maxStep) : delta;
+}
+// 32-bit mult-lo, matching the recomp's exact truncating arithmetic.
+static inline int32_t mlo(int32_t a, int32_t b) { return (int32_t)((uint32_t)a * (uint32_t)b); }
+
+int32_t CutsceneCamera::call(uint32_t fn, int32_t a0, int32_t a1, int32_t a2) {
+  c->r[4] = (uint32_t)a0; c->r[5] = (uint32_t)a1; c->r[6] = (uint32_t)a2;
+  rec_dispatch(c, fn);
+  return (int32_t)c->r[2];
+}
+
+bool CutsceneCamera::followAxis(uint32_t accAddr, uint32_t tgt32Addr, uint16_t tgtInt, uint16_t curInt,
+                        int16_t maxStep) {
+  int16_t delta = (int16_t)(tgtInt - curInt);          // low-16 sign-extended
+  if ((uint16_t)(delta + 10) < 21) {                   // |delta| <= 10 -> snap to the target
+    w32(accAddr, r32(tgt32Addr));
+    return true;
+  }
+  int32_t step = cam_clamp(delta, maxStep) << 13;
+  w32(accAddr, r32(accAddr) + (uint32_t)step);
+  return false;
+}
+
+// ── teleport hook (REPL) ─────────────────────────────────────────────────────────────────────────
+static int g_tp_pending = 0; static int32_t g_tp_x, g_tp_y, g_tp_z;
+void cam_teleport(int x, int y, int z) { g_tp_x = x; g_tp_y = y; g_tp_z = z; g_tp_pending = 1; }
+void cam_teleport_off(void) { g_tp_pending = 0; }
+
+// ── follow accumulators ──────────────────────────────────────────────────────────────────────────
+bool CutsceneCamera::trackXZ(uint32_t target) {   // FUN_8006D960
+  if (g_tp_pending) {                                   // one-shot debug teleport of Tomba's master pos
+    g_tp_pending = 0;
+    w32(MASTER_X, (uint32_t)g_tp_x << 16);
+    w32(MASTER_Y, (uint32_t)g_tp_y << 16);
+    w32(MASTER_Z, (uint32_t)g_tp_z << 16);
+    w32(G + 0x44, 0);                                   // master speed
+    fprintf(stderr, "[tp] Tomba -> (%d,%d,%d)\n", g_tp_x, g_tp_y, g_tp_z);
+  }
+  bool snapX = followAxis(S + 0x0C, target + 0, r16(target + 2),  r16(S + 0x0E), 6144);
+  bool snapZ = followAxis(S + 0x14, target + 8, r16(target + 10), r16(S + 0x16), 6144);
+  return snapX && snapZ;
+}
+bool CutsceneCamera::trackY(uint32_t target) {   // FUN_8006DA54
+  return followAxis(S + 0x10, target + 4, r16(target + 6), r16(S + 0x12), 5632);
+}
+
+// ── rotBuild (special-camera rotation / look-at builder) ─────────────────────────────────────────
+void CutsceneCamera::lookatTail(int32_t theta, int32_t radius) {
+  int32_t rc    = call(T2_RCOS, theta);
+  int32_t lookX = (int32_t)r16(0x1F800160u) + ((rc * radius) >> 12);
+  int32_t rs    = call(T2_RSIN, theta);
+  int32_t lookZ = (int32_t)r16(0x1F800164u) - ((rs * radius) >> 12);
+  int32_t camZ = (int32_t)r16(S + 0x0A);
+  int32_t camX = (int32_t)r16(S + 0x02);
+  int32_t dz   = (int16_t)(lookZ - camZ);
+  int32_t dx   = (int16_t)(lookX - camX);
+  int32_t yaw  = (int16_t)call(T2_RATAN2, -dz, dx);
+  int32_t dist = (int16_t)call(T2_ISQRT, dx * dx + dz * dz);
+  int32_t rc2  = call(T2_RCOS, yaw);
+  w32(S + 0x00, r32(S + 0x00) + ((rc2 * dist) >> 1));
+  int32_t rs2  = call(T2_RSIN, yaw);
+  w32(S + 0x08, r32(S + 0x08) - ((rs2 * dist) >> 1));
+  if (dist < 401) camW8(0x66, camR8(0x66) | 1);
+}
+void CutsceneCamera::joinE640(int32_t delta, int32_t radius) {
+  int32_t sum = (int32_t)r16(G + 0x140) + (int32_t)camR16(0x52) + delta;
+  uint16_t theta16 = (uint16_t)sum;
+  camW16(0x8C, theta16);
+  lookatTail((int16_t)theta16, radius);
+}
+static inline int32_t t1_e570(CutsceneCamera* self, Core* c, uint32_t G, uint32_t cam) {
+  int32_t g140 = (int16_t)c->mem_r16(G + 0x140), g56 = (int16_t)c->mem_r16(G + 0x56);
+  int32_t cam56 = (int32_t)c->mem_r16(cam + 0x56);
+  return (g140 == g56) ? cam56 : -cam56;
+}
+int32_t CutsceneCamera::table1Delta() {
+  uint8_t idx = r8(G + 0x164);
+  switch (idx) {
+    case 1: case 9: case 11: {
+      if (r32(G + 0x158) == 0) return t1_e570(this, c, G, cam_);
+      int32_t g140 = (int16_t)r16(G + 0x140), g56 = (int16_t)r16(G + 0x56);
+      int32_t cam56 = (int32_t)camR16(0x56);
+      return (g140 == g56) ? -cam56 : cam56;                    // inverted sense
+    }
+    case 3: {
+      if (camR8(0x77) != 0)          return t1_e570(this, c, G, cam_);
+      if (r8(0x800BF870u) == 6)      return t1_e570(this, c, G, cam_);
+      int32_t g140 = (int16_t)r16(G + 0x140), g56 = (int16_t)r16(G + 0x56);
+      int32_t cam56 = (int32_t)camR16(0x56);
+      int32_t g168  = (int32_t)r8(G + 0x168) << 6;
+      return (g140 != g56) ? (g168 - cam56) : (cam56 - g168);
+    }
+    default:
+      return t1_e570(this, c, G, cam_);
+  }
+}
+void CutsceneCamera::table2(int32_t radius) {
+  uint32_t a1   = r8(G + 0x61);
+  uint32_t idx2 = ((a1 & 0xff) >> 4) - 1;        // unsigned; >=8 -> default
+  int32_t  theta;
+  if (idx2 == 0) {
+    if (a1 & 1) theta = (int32_t)r16(0x1F800196u) + 512;
+    else {
+      int32_t s196 = (int16_t)r16(0x1F800196u);
+      int32_t g140 = (int16_t)r16(G + 0x140);
+      int32_t d    = ((s196 - g140) & 0xfff) >> 1;
+      theta = (int32_t)r16(0x1F800196u) + d;
+    }
+  } else if (idx2 == 1) {
+    if (a1 & 1) {
+      int32_t r = call(T2_ANGCMP, (int16_t)r16(G + 0x56), (int16_t)r16(G + 0x140));
+      theta = (int32_t)r16(G + 0x140) + (r == 0 ? 512 : 1536);
+    } else {
+      int32_t a = (int16_t)r16(0x1F800194u);
+      int32_t b = (int16_t)r16(0x1F800196u);
+      theta = (int32_t)r16(G + 0x140) + (a != b ? 512 : 1536);
+    }
+  } else if (idx2 == 2) {
+    int32_t vu = (int32_t)r16(0x1F800196u);
+    theta = vu + ((int16_t)vu / 2);
+  } else if (idx2 == 3) {
+    theta = (int32_t)r16(0x1F800196u) + 512;
+  } else if (idx2 == 7) {
+    theta = (int32_t)r16(G + 0x140) + 1024;
+  } else {
+    theta = (int32_t)r16(G + 0x140) + 512;
+  }
+  lookatTail(theta & 0xfff, radius);
+}
+void CutsceneCamera::rotBuild() {   // FUN_8006E464
+  if (camR8(0x76)) return;                              // disabled this frame
+  uint32_t a1 = r8(G + 0x61);
+  uint32_t a0 = a1 & 0xff;
+  if (a0 != 0 && (camR8(0x72) & 0x80)) return;
+  int32_t negEE  = -(int32_t)r16(0x1F8000EEu);
+  int32_t radius = (int16_t)negEE;
+  uint8_t c114   = camR8(0x72);
+  if (c114 & 0x40) { lookatTail((int16_t)camR16(0x8C), radius); return; }   // SHAPE A
+  if (a0 != 0 && (a1 & 1) == 0) { table2(radius); return; }
+  if (r8(G + 0x17a)) { joinE640(0, (int16_t)(negEE - 600)); return; }       // radius override
+  if (c114 & 2) {
+    int32_t delta = (c114 & 1) ? -(int32_t)camR16(0x56) : (int32_t)camR16(0x56);
+    joinE640(delta, radius);
+    return;
+  }
+  joinE640(table1Delta(), radius);                     // TABLE 1
+}
+
+// ── distSolve (distance/zoom solver) ─────────────────────────────────────────────────────────────
+void CutsceneCamera::distSolve() {   // FUN_8006D2AC
+  // 1. settle timer cam[+0x22]
+  uint8_t g61 = r8(G + 0x61);
+  int16_t timer;
+  if      (g61 & 0x80)             timer = 0;
+  else if (r8(G + 0x17a))          timer = 0;
+  else if ((g61 & 0xff) == 0)      timer = 240;
+  else if (g61 & 1)                timer = 240;
+  else if (r8(0x800BF816u))        timer = 0;
+  else                             timer = 240;
+  camW16(0x22, (uint16_t)timer);
+  uint8_t flags = camR8(0x72);
+  if (flags & 4) camW16(0x22, 0);
+  flags = camR8(0x72);
+
+  // 2. target planar point (tX,tZ in 16.16) + heading "mode" byte
+  int32_t tX, tZ, mode;
+  if (flags & 2) {
+    tX = (int32_t)r32(G + 0x2c);
+    tZ = (int32_t)r32(G + 0x34);
+    mode = flags & 1;
+  } else {
+    uint8_t idx = r8(G + 0x164);
+    uint8_t g147 = r8(G + 0x147);
+    if (idx >= 13) idx = 8;
+    switch (idx) {
+      case 2: case 3: {
+        uint32_t p = r32(G + 0x10);
+        tX = (int32_t)(r32(p + 0x2c) << 16);
+        tZ = (int32_t)(r32(p + 0x34) << 16);
+        mode = g147; break;
+      }
+      case 12: {
+        tX = (int32_t)(r16(0x1F800200u) << 16);
+        tZ = (int32_t)(r16(0x1F800204u) << 16);
+        mode = g147; break;
+      }
+      case 7: {
+        tX = (int32_t)(r16(G + 0x14c) << 16);
+        tZ = (int32_t)(r16(G + 0x150) << 16);
+        mode = g147; break;
+      }
+      case 8: {
+        tX = (int32_t)r32(G + 0x2c);
+        tZ = (int32_t)r32(G + 0x34);
+        mode = g147; break;
+      }
+      default: {
+        tX = (int32_t)r32(G + 0x2c);
+        tZ = (int32_t)r32(G + 0x34);
+        mode = (r32(G + 0x158) == 0) ? (int32_t)g147 : (1 - (int32_t)g147);
+        break;
+      }
+    }
+  }
+
+  // 3. base heading + the look-point offset using the settle timer
+  int32_t baseAng = (int32_t)r16(G + 0x140);
+  if (mode & 0xff) baseAng += 2048;
+  int32_t s0a   = (int16_t)(uint16_t)baseAng;
+  int32_t cam22 = (int16_t)camR16(0x22);
+  int32_t s2 = tX + (mlo(call(T2_RCOS, s0a), cam22) << 4);
+  int32_t s1 = tZ - (mlo(call(T2_RSIN, s0a), cam22) << 4);
+
+  int32_t g140s = (int16_t)r16(G + 0x140);
+  int32_t cam58 = (int32_t)camR32(0x58);
+  int32_t coordX = tX + (mlo(call(T2_RCOS, g140s), cam58) >> 4);
+  int32_t coordZ = tZ - (mlo(call(T2_RSIN, g140s), cam58) >> 4);
+  int32_t s2q = (s2 - coordX) >> 8;
+  int32_t s1q = (s1 - coordZ) >> 8;
+  int32_t s0d = call(T2_ISQRT, mlo(s2q, s2q) + mlo(s1q, s1q)) << 8;
+  int32_t ang = call(T2_RATAN2, -s1q, s2q);
+  int32_t angd = (ang - (int32_t)r16(G + 0x140) - 1024) & 0xfff;
+
+  // 4. smooth cam[+0x14] toward the distance, accumulate into cam[+0x58], place camera X/Z
+  int32_t cam14;
+  int32_t cur = (int32_t)camR32(0x14);
+  if (0x140000 < s0d) {
+    if (angd < 2048) {
+      int32_t neg = -s0d;
+      if (cur < neg)        cam14 = ((int32_t)0xffd80000 < neg) ? neg : (int32_t)0xffd80000;
+      else                  cam14 = (cur > 0 ? 0 : cur) - 65536;
+    } else {
+      if (s0d < cur)        cam14 = (0x0027ffff < s0d) ? 0x00280000 : s0d;
+      else                  cam14 = (cur < 0 ? 0 : cur) + 65536;
+    }
+  } else {
+    cam14 = (angd < 2048) ? -s0d : s0d;
+  }
+  camW32(0x14, (uint32_t)cam14);
+  int32_t cam58n = cam58 + (cam14 >> 8);
+  camW32(0x58, (uint32_t)cam58n);
+  camW32(0x08, (uint32_t)(tX + (mlo(call(T2_RCOS, g140s), cam58n) >> 4)));
+  camW32(0x10, (uint32_t)(tZ - (mlo(call(T2_RSIN, g140s), cam58n) >> 4)));
+}
+
+// ── angleStep ────────────────────────────────────────────────────────────────────────────────────
+void CutsceneCamera::angleStep() {   // FUN_8006E010
+  int32_t cur = (int32_t)camR32(0x34);
+  if (r8(G + 0x164) != 3) {                             // not mode 3: drive cam[+0x34] toward 0 by ±8
+    if (cur <= 0) { int32_t r = cur + 8; camW32(0x34, (uint32_t)r); if (r >= 0) camW32(0x34, 0); }
+    else          { int32_t r = cur - 8; camW32(0x34, (uint32_t)r); if (r <= 0) camW32(0x34, 0); }
+    return;
+  }
+  uint8_t idx = r8(G + 0x168);
+  int32_t target;
+  switch (idx >= 5 ? 4 : idx) {
+    case 0: case 1: target = 0;    break;
+    case 2:         target = -128; break;
+    case 3:         target = -256; break;
+    default:        target = -384; break;
+  }
+  if (target < cur) { int32_t r = cur - 8; camW32(0x34, (uint32_t)r); if (r < target) camW32(0x34, (uint32_t)target); }
+  else              { int32_t r = cur + 8; camW32(0x34, (uint32_t)r); if (target < r) camW32(0x34, (uint32_t)target); }
+}
+
+// ── yFloor (camera-Y floor clamp, per render mode) ───────────────────────────────────────────────
+void CutsceneCamera::yFloor() {   // FUN_8006C80C
+  uint8_t mode1 = r8(0x800BF870u);
+  uint32_t idx = (uint32_t)(uint8_t)(mode1 - 1);
+  if (idx >= 13) return;
+  const uint32_t YA = 0x1F8000E2u;
+  int32_t Y = (int16_t)r16(YA);
+  switch (idx) {
+    case 0:
+      if (Y < -10140) w16(YA, (uint16_t)(int16_t)-10140);
+      break;
+    case 3: {
+      if (r8(0x800BF871u) == 7) {
+        if ((int16_t)r16(0x800E7EB6u) < 6800) {
+          if (Y < -7299) { if (!(Y < -6499)) w16(YA, (uint16_t)(int16_t)-6500); }
+          else           { w16(YA, (uint16_t)(int16_t)-7300); }
+        }
+      } else {
+        if (!(Y < -6599)) w16(YA, (uint16_t)(int16_t)-6600);
+      }
+      break;
+    }
+    case 5:
+      if (r8(0x1F800207u) == 14) { if (Y < -7200) w16(YA, (uint16_t)(int16_t)-7200); }
+      else                       { if (Y < -9200) w16(YA, (uint16_t)(int16_t)-9200); }
+      break;
+    case 9:
+      if (Y < -2160) w16(YA, (uint16_t)(int16_t)-2160);
+      break;
+    case 12:
+      if (!(Y < -1399)) w16(YA, (uint16_t)(int16_t)-1400);
+      break;
+    default:
+      break;
+  }
+}
+
+// ── pitch (vertical-look height smoother) ────────────────────────────────────────────────────────
+void CutsceneCamera::pitch() {   // FUN_8006D654
+  int32_t g30  = (int32_t)r32(G + 0x30);
+  int16_t g17e = (int16_t)r16(G + 0x17e);
+  int sign = (g17e & 0x8000) != 0;
+
+  int32_t r5 = g30; int viaC8 = 0;
+  uint8_t idx = r8(G + 0x164);
+  if (idx >= 13) idx = 7;
+  switch (idx) {
+    case 2: { uint32_t p = r32(G + 0x10); r5 = (int32_t)(r32(p + 0x30) << 16); viaC8 = 1; break; }
+    case 3: { uint32_t p = r32(G + 0x10); r5 = (int32_t)(r32(p + 0x30) << 16); break; }
+    case 12: {
+      int32_t a = (int16_t)r16(0x1F800202u);
+      int32_t sum = (a << 16) + g30;
+      r5 = (int32_t)((sum + (int32_t)((uint32_t)sum >> 31)) >> 1); viaC8 = 1; break;
+    }
+    case 7: case 8: r5 = g30; viaC8 = 1; break;
+    default: {
+      uint8_t m  = r8(0x800BF821u);
+      uint8_t gm = r8(G + 0x145);
+      if (m == 1) {
+        r5 = g30 - (200 << 16);
+      } else if (m != 0) {
+        if (gm == 2) r5 = g30 + (sign ? -(240 << 16) : (40 << 16));
+        else         r5 = g30 + (sign ? -(310 << 16) : -(240 << 16));
+      } else {
+        if (gm == 2) r5 = sign ? g30 : (g30 + (200 << 16));
+        else         r5 = sign ? (g30 - (70 << 16)) : g30;
+      }
+      break;
+    }
+  }
+  if (viaC8) r5 += (200 << 16);
+  int32_t target = r5 - (600 << 16);
+
+  int32_t delta = target - (int32_t)camR32(0x0c);
+  int32_t r7 = (g17e < 0) ? (20 << 16)  : (140 << 16);
+  int32_t r4 = (g17e < 0) ? (580 << 16) : (460 << 16);
+
+  int dir; int32_t r3;
+  int32_t t = delta + r4;
+  if (t >= 0) { dir = 0; r3 = t; }
+  else {
+    int32_t t2 = t + r7;
+    if (t2 < 0) { dir = 1; r3 = t2; }
+    else { camW32(0x18, 0); return; }
+  }
+
+  if (dir == 0) {
+    if (!(0x80000 < r3)) { camW32(0x0c, (uint32_t)(r5 + r4 - (600 << 16))); return; }
+    int32_t cv = (int32_t)camR32(0x18);
+    if (!(r3 < cv)) {
+      if (cv < 0) camW32(0x18, 0);
+      camW32(0x18, (uint32_t)((int32_t)camR32(0x18) + (16 << 16)));
+    } else if (0x4FFFFF < r3) {
+      camW32(0x18, (uint32_t)(80 << 16));
+    } else {
+      camW32(0x18, (uint32_t)r3);
+    }
+  } else {
+    uint8_t g145 = r8(G + 0x145);
+    if (g145 != 0) {
+      if (!(r3 < -(256 << 16))) return;
+      r3 += (256 << 16);
+      if (-(96 << 16) < r3) camW32(0x18, (uint32_t)r3);
+      else                  camW32(0x18, (uint32_t)-(96 << 16));
+    } else {
+      if (!(r3 < -(22 << 16))) {
+        camW32(0x18, (uint32_t)r3);
+      } else {
+        int32_t cv = (int32_t)camR32(0x18);
+        if (!(cv < r3)) {
+          if (cv > 0) camW32(0x18, 0);
+          camW32(0x18, (uint32_t)((int32_t)camR32(0x18) + (int32_t)0xFFFEA000u));
+        } else {
+          camW32(0x18, (uint32_t)-(22 << 16));
+        }
+      }
+    }
+  }
+  camW32(0x0c, (uint32_t)((int32_t)camR32(0x0c) + (int32_t)camR32(0x18)));
+}
+
+// ── heading (heading tracker) ────────────────────────────────────────────────────────────────────
+void CutsceneCamera::heading() {   // FUN_8006DCF4
+  if (camR8(0x74) & 4) { camW8(0x66, camR8(0x66) | 2); return; }
+
+  int32_t off = 0;
+  uint8_t g61 = r8(G + 0x61);
+  int useTable;
+  if (g61 == 0)            useTable = 1;
+  else if ((g61 & 1) == 0) { off = 768; useTable = 0; }
+  else                     useTable = 1;
+
+  if (useTable) {
+    uint8_t idx = r8(G + 0x164);
+    if (idx >= 13) return;
+    switch (idx) {
+      case 0: case 4: {
+        if (r8(G + 0x145) == 0) { off = 320; break; }
+        int32_t g4a_s = (int16_t)r16(G + 0x4a);
+        uint32_t r3v  = (uint16_t)r16(G + 0x4a);
+        if (g4a_s < 0) r3v = (uint32_t)(0 - r3v);
+        r3v += (r8(G + 0x165) == 0) ? (uint32_t)-14976 : (uint32_t)-16384;
+        int32_t s = (int32_t)((uint32_t)r3v << 16) >> 21;
+        off = 320 - s;
+        break;
+      }
+      case 1: case 11: {
+        uint32_t sub = r32(G + 0x158);
+        off = (r8(sub + 0xc) == 4 && r8(sub + 0x2) != 0) ? 1100 : 700;
+        break;
+      }
+      case 9:  off = -320; break;
+      case 3:  off = 700;  break;
+      case 12: {
+        uint32_t diff = (uint32_t)(uint16_t)r16(G + 0x32) - (uint32_t)(uint16_t)r16(0x1F800202u);
+        off = ((int16_t)diff < 501) ? (int32_t)diff : 500;
+        break;
+      }
+      default: return;
+    }
+  }
+
+  int32_t s06 = (uint16_t)r16(S + 6);
+  int32_t c26 = (uint16_t)camR16(0x26);
+  int32_t s12 = (uint16_t)r16(S + 0x12);
+  int32_t r5  = s06 + off - c26 - s12;
+  if ((uint16_t)(r5 + 10) < 21) {
+    w16(S + 6, (uint16_t)(c26 + (s12 - off)));
+    camW8(0x66, camR8(0x66) | 2);
+  } else {
+    int32_t step = (int32_t)((uint32_t)r5 << 16) >> 3;
+    w32(S + 4, (uint32_t)((int32_t)r32(S + 4) - step));
+  }
+
+  uint8_t f = camR8(0x74);
+  int cond = 0, active = 1;
+  if (f & 2)      cond = ((int16_t)r16(S + 6) < (int16_t)camR16(0x4a));
+  else if (f & 8) cond = ((int16_t)camR16(0x4a) < (int16_t)r16(S + 6));
+  else            active = 0;
+  if (active && !cond) {
+    w16(S + 6, (uint16_t)camR16(0x4a));
+    camW8(0x66, camR8(0x66) | 2);
+  }
+}
+
+// ── lookAt (camera basis / view-matrix builder) ──────────────────────────────────────────────────
+static inline int32_t cam_idiv(Core* c, int32_t num, int32_t den) {
+  cpu_div(c, (uint32_t)num, (uint32_t)den);
+  return (int32_t)c->lo;
+}
+void CutsceneCamera::lookAt() {   // FUN_8006D02C
+  int32_t dX = (int16_t)r16(S + 14) - (int16_t)r16(S + 2);
+  int32_t dZ = (int16_t)r16(S + 22) - (int16_t)r16(S + 10);
+  int32_t dY = (int16_t)r16(S + 18) - (int16_t)r16(S + 6);
+  int32_t xz = dX * dX + dZ * dZ;
+  int32_t s18 = call(LA_ISQRT, xz + dY * dY) & 0xffff;
+  int32_t s19 = call(LA_ISQRT, xz) & 0xffff;
+  camW32(0x5c, (uint32_t)s18);
+  camW32(0x60, (uint32_t)s19);
+
+  if (s18 != 0) {
+    call(LA_MRINIT, (int32_t)(S + 40));
+    int32_t sinp = cam_idiv(c, dY  << 12, s18);
+    int32_t cosp = cam_idiv(c, s19 << 12, s18);
+    int32_t pitch = (int16_t)call(LA_RATAN2, sinp, cosp);
+    w16(S + 32, (uint16_t)pitch);
+    w16(S + 48, (uint16_t)cosp);
+    w16(S + 56, (uint16_t)cosp);
+    w16(S + 50, (uint16_t)(-sinp));
+    w16(S + 54, (uint16_t)sinp);
+
+    if (s19 != 0) {
+      int32_t a = cam_idiv(c, (-dX) << 12, s19);
+      int32_t b = cam_idiv(c, dZ    << 12, s19);
+      int32_t yaw = (int16_t)call(LA_RATAN2, a, b);
+      w16(S + 34, (uint16_t)yaw);
+      call(LA_MRINIT, 0x1F800000u);
+      w16(0x1F800000u, (uint16_t)b);
+      w16(0x1F800004u, (uint16_t)a);
+      w16(0x1F800010u, (uint16_t)b);
+      w16(0x1F80000Cu, (uint16_t)(-a));
+      call(LA_MULMAT, (int32_t)(S + 40), 0x1F800000);
+    }
+  }
+
+  uint32_t M = S + 40;
+  uint16_t r104 = r16(S + 52);
+  uint16_t r106 = r16(S + 54);
+  uint16_t r108 = r16(S + 56);
+  w16(S + 24, r104);
+  w16(S + 26, r106);
+  w16(S + 28, r108);
+  w16(0x1F8000C0u, (uint16_t)(0u - (uint32_t)r16(S + 2)));
+  w16(0x1F8000C2u, (uint16_t)(0u - (uint32_t)r16(S + 6)));
+  w16(0x1F8000C4u, (uint16_t)(0u - (uint32_t)r16(S + 10)));
+  call(LA_APPLYLV, (int32_t)M, 0x1F8000C0, 0x1F80010C);
+  call(LA_COPYMAT, (int32_t)M, (int32_t)(S + 72));
+}
+
+// ── orchestrators (per-frame camera modes) ───────────────────────────────────────────────────────
+void CutsceneCamera::snapFollow(uint32_t target) {   // FUN_8006E3B0
+  w32(S + 0x0C, r32(target + 0));      // snap XZ accumulators to target (no smoothing)
+  w32(S + 0x14, r32(target + 8));
+  w32(S + 0x10, r32(target + 4));      // snap Y accumulator
+  lookAt();
+}
+void CutsceneCamera::mainFollow() {   // FUN_8006E0F0
+  distSolve();
+  trackXZ(cam_ + 8);
+  pitch();
+  trackY(cam_ + 8);
+  yFloor();
+  if (camR8(0x76) == 0 && r8(G + 0x17a) == 0) heading();
+  lookAt();
+  if (camR8(0x77) == 0) angleStep();
+  int32_t acc = (int32_t)camR32(0x28) + (int32_t)camR32(0x34);
+  w32(S + 0x44, r32(S + 0x44) - (uint32_t)acc);
+}
+void CutsceneCamera::simpleFollow(uint32_t target) {   // FUN_8006E3F4
+  if (trackXZ(target)) camW8(0x66, camR8(0x66) | 1);
+  if (trackY(target))  camW8(0x66, camR8(0x66) | 2);
+  lookAt();
+}
+void CutsceneCamera::trackFollow(uint32_t target) {   // FUN_8006E228
+  trackXZ(target);
+  trackY(target);
+  camW16(0x0e, r16(0x1F8000E2u));
+  if (camR8(0x76) == 0) {
+    c->r[4] = cam_; rec_dispatch(c, 0x8006DAD8u);      // still-substrate sub-fns (read a0 only)
+    c->r[4] = cam_; rec_dispatch(c, 0x8006DEF0u);
+  }
+  lookAt();
+}
+
+// ── live wiring + per-call verify ────────────────────────────────────────────────────────────────
+// SOP/cutscene BG camera: called every frame from game/scene/sop.cpp (replaces d2(c,0x8006e3b0,cam,tgt)).
+// Under PSXPORT_DEBUG=camverify it A/B-compares the native run vs the recomp oracle (rec_interp 0x8006e3b0)
+// on the same inputs — the regression gate for the restructure (cam struct + full scratchpad, 0 mismatch).
+extern "C" void cam_snap_follow(Core* c, uint32_t cam, uint32_t target) {
+  if (!cfg_dbg("camverify")) { CutsceneCamera(c, cam).snapFollow(target); return; }
+
+  uint32_t cam0[64], sp0[256], rsave[32];
+  for (int i = 0; i < 64;  i++) cam0[i] = c->mem_r32(cam + i * 4);
+  for (int i = 0; i < 256; i++) sp0[i]  = c->mem_r32(0x1F800000u + i * 4);
+  memcpy(rsave, c->r, sizeof rsave);
+
+  CutsceneCamera(c, cam).snapFollow(target);
+  uint32_t camM[64], spM[256];
+  for (int i = 0; i < 64;  i++) camM[i] = c->mem_r32(cam + i * 4);
+  for (int i = 0; i < 256; i++) spM[i]  = c->mem_r32(0x1F800000u + i * 4);
+
+  for (int i = 0; i < 64;  i++) c->mem_w32(cam + i * 4, cam0[i]);
+  for (int i = 0; i < 256; i++) c->mem_w32(0x1F800000u + i * 4, sp0[i]);
+  memcpy(c->r, rsave, sizeof rsave);
+  c->r[4] = cam; c->r[5] = target;
+  rec_interp(c, 0x8006E3B0u);
+  uint32_t camO[64], spO[256];
+  for (int i = 0; i < 64;  i++) camO[i] = c->mem_r32(cam + i * 4);
+  for (int i = 0; i < 256; i++) spO[i]  = c->mem_r32(0x1F800000u + i * 4);
+
+  static int nbad = 0, ngood = 0; int bad = 0;
+  for (int i = 0; i < 64; i++) if (camM[i] != camO[i]) { bad = 1;
+    if (nbad++ < 60) fprintf(stderr, "[camverify] snapFollow cam+0x%02x mine=%08x oracle=%08x\n", i*4, camM[i], camO[i]); }
+  for (int i = 0; i < 256; i++) if (spM[i] != spO[i]) { bad = 1;
+    if (nbad++ < 60) fprintf(stderr, "[camverify] snapFollow sp+0x%03x mine=%08x oracle=%08x\n", i*4, spM[i], spO[i]); }
+  if (!bad && (ngood++ % 200) == 0) fprintf(stderr, "[camverify] snapFollow match #%d\n", ngood);
+}
+
+void engine_camera_register(void) {
+  // CutsceneCamera sub-fns/orchestrators are direct-call targets wired top-down (no override table). The live
+  // wiring point is cam_snap_follow (game/scene/sop.cpp). (void) keeps the linkage symbol.
+  (void)cfg_dbg;
+}
