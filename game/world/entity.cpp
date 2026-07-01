@@ -14,7 +14,7 @@
 #include "entity.h"
 #include "spawn.h"   // world_despawn
 #include "graphics_bind.h"   // ov_obj_render_update
-#include "mathlib.h"   // ov_rand
+#include "rng.h"       // class Rng (via c->rng.next())
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
@@ -433,8 +433,7 @@ static void osc_fd10(Core* c) {
   uint32_t r = c->mem_r16(0x1F80017Cu) & 1u;      // scratchpad halfword & 1
   uint32_t node = c->mem_r32(obj + 0xC0);
   c->mem_w16(node + 2, (uint16_t)(r * 6u));       // sh in the ov_rand delay slot (pre-call node/value)
-  c->r[4] = obj; ov_rand(c);    // ov_rand
-  uint32_t rr = c->r[2] & 3u;
+  uint32_t rr = (uint32_t)c->rng.next() & 3u;   // FUN_8009A450 -> native class Rng
   uint32_t v0 = (uint32_t)((int32_t)rr - 2);
   c->mem_w16(node + 0, (uint16_t)(v0 * 6u));
 }
