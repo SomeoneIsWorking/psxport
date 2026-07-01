@@ -9213,3 +9213,20 @@ camera is native, not the 0x8013xxxx overlay (that cluster is field render/objec
 does per-area-load view setup calling resident lookat 0x8006D02C; the per-FRAME native driver isn't pinned yet.
 NEXT: pin that native per-frame camera driver (wwatch 0x1F8000F8 → native caller of MulMatrix0), rework it to
 call CutsceneCamera::lookAt directly; then reach a real post-intro area to see the true gameplay camera.
+
+## later-293 (2026-07-01) — RESOLVED: free-roam camera IS the resident snapFollow; recdep is blind to intra-MAIN calls
+Root-caused the later-290..292 confusion. A GUEST-STACK backtrace (PSXPORT_WWATCH on the camera view matrix
+0x1F8000F8 + guest_backtrace_to) at a moving free-roam frame showed the live chain: field frame 0x80022xxx →
+0x8006EEF8 (resident camera driver @0x8006ec4c) → 0x8006E3B0 (snapFollow) → 0x8006E3E0 (post-lookat return) →
+MulMatrix0. So the resident camera IS the free-roam field camera. Why camtrace/recdep showed "zero camera
+dispatch in free-roam": the recompiler emits **intra-MAIN calls as DIRECT C calls** `func_8006E3B0(c)` (see
+generated/shard_3.c:16799, shard_4/5), NOT rec_dispatch — so any hook in rec_dispatch (recdep, camtrace) is
+STRUCTURALLY BLIND to resident→resident calls. "0 in recdep" ≠ "dead". Recorded as a tooling caveat
+(docs/findings/tooling.md) and the camera finding rewritten (docs/findings/camera.md).
+CONSEQUENCE: `CutsceneCamera::snapFollow`/`lookAt` (owned, camverify 0-diff, oracle-unit-tested 0-diff over
+39k runs) ARE the free-roam field camera; it currently runs as the equivalent substrate gen_func in free-roam.
+There is NO separate overlay/native free-roam camera. "CutsceneCamera" is a misnomer (it's the general field
+camera; rename to class Camera deferred, low priority). The handoff's original premise was CORRECT; my
+later-290 refutation was the artifact. NEXT (top-down ownership, not a hunt): own the camera dispatcher
+0x8006ec4c (calls snapFollow at 0x8006eef0) + 0x8006ea7c (mode selector, 21-entry jump table on 0x800bf870)
+as CutsceneCamera::update(), wired from the native field frame; verify via the oracle unit test.

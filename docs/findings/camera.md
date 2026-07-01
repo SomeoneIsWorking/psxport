@@ -1,33 +1,47 @@
 # Findings — camera
 
-## The resident engine_camera code is the CUTSCENE/SOP camera, NOT the free-roam field camera
-- **symptom:** handoff/plan assumed `0x8006E3B0` (and the `game/camera/engine_camera.cpp` sub-ops/orchestrators `0x8006c80c`–`0x8006e464`, `e0f0`/`e228`/`e3f4`) is the LIVE per-frame free-roam camera ("recdep shows 0x8006E3B0 @ ~967/1000 frames"). Wiring plan targeted it as the free-roam camera.
-- **status:** dead-end (premise falsified) / done-partial (SOP camera now `class CutsceneCamera`, wired+verified) / open (free-roam overlay camera not yet located)
-- **cause:** measured with camtrace (temp instrument in rec_dispatch, range 0x0006c800–0x0006e480) + recdep on A00 free-roam WITH real player movement (`press right`, verified player X 0x800E7EAC advanced 0x0F64→0x1770): **ZERO** dispatches of any resident camera fn across 200 moving frames. The `~967/1000` figure was dominated by the SOP INTRO CUTSCENE (frames 0–216), where `game/scene/sop.cpp` natively calls `d2(c,0x8006e3b0, 0x800e8008/BGcam, 0x800e8040)` every frame. The A00 free-roam camera lives in the MODE-slot FIELD OVERLAY (base 0x00108F9C; the hot recdep cluster during movement is 0x8013xxxx: 0x80130AC4/0x80131134/0x801316CC/0x8012F494/0x80133550/0x80132A88/0x80132954/0x801337E4), not in resident MAIN.EXE.
-- **fix:** DONE for the SOP camera: the resident camera was restructured into `class CutsceneCamera`
-  (game/camera/cutscene_camera.{h,cpp}, later-290) and `CutsceneCamera::snapFollow` (0x8006e3b0 = snap XZ via 0x8006d934 +
-  snap Y via 0x8006d950 + lookat 0x8006d02c) is wired native into game/scene/sop.cpp (`cam_snap_follow`),
-  camverify 0-diff over 51+ live SOP calls. That only exercises trackXZ/trackY-snap + lookAt live.
-  STILL OPEN — the FREE-ROAM camera (see CORRECTION below for where it actually is).
-- **refs:** scratch/handoff_pc_structure.md (falsified premise); game/scene/sop.cpp:202,263; game/camera/engine_camera.cpp; runtime/recomp/overlay_router.cpp slot_index (MODE slot = SOP/A0* field); 2026-07-01 session.
+## ✅ RESOLVED: the free-roam camera IS the resident camera (snapFollow→lookat), already owned + verified
+- **symptom:** across later-290/291/292 I repeatedly concluded the resident MAIN.EXE camera "never runs in
+  A00 free-roam" (camtrace/recdep showed zero camera dispatch with the player moving) and chased a phantom
+  overlay / per-frame native camera. That conclusion was WRONG.
+- **status:** resolved (2026-07-01, later-293). The free-roam field camera IS the resident camera.
+- **root cause of the wrong conclusion — a MEASUREMENT ARTIFACT:** `recdep`/`camtrace` hook `rec_dispatch`,
+  but the recompiler emits **intra-MAIN-module calls as DIRECT C calls** (`func_8006E3B0(c)`), NOT via
+  `rec_dispatch` (which is only for cross-module/overlay/unknown targets). So `rec_dispatch` is STRUCTURALLY
+  BLIND to every resident→resident call. The resident field code calls the resident camera directly, so it
+  never appeared in camtrace/recdep. Proof: a GUEST-STACK backtrace (`PSXPORT_WWATCH` on the camera view
+  matrix 0x1F8000F8 + `guest_backtrace_to`) at a moving-free-roam frame showed the chain
+  `…0x80022AB8 → 0x8006EEF8 (field camera driver @0x8006ec4c) → 0x8006E3B0 (snapFollow) → 0x8006E3E0
+  (post-lookat return) → MulMatrix0`. And `generated/shard_*.c` call `func_8006E3B0(c)` / `func_8006D02C(c)`
+  directly (shard_3/4/5), confirming the bypass.
+- **implication:** `CutsceneCamera::snapFollow` (0x8006E3B0) + `lookAt` (0x8006D02C) — already restructured,
+  wired into sop.cpp, camverify 0-diff, and oracle-unit-tested 0-diff over 39k runs — ARE the free-roam
+  field camera. It currently runs as the equivalent substrate `gen_func_8006E3B0` in free-roam (behaviourally
+  identical, proven). There is NO separate overlay/native free-roam camera to find. The class name
+  "CutsceneCamera" is now a misnomer — it is the general field/follow camera (SOP + free-roam). (Rename to
+  `class Camera` deferred; low priority.)
+- **remaining work (top-down ownership, not a mystery hunt):** to make free-roam run the native class
+  (instead of the equivalent substrate), own the camera DISPATCHER chain natively — `0x8006ec4c` (the
+  per-frame camera driver that calls snapFollow at 0x8006eef0) and `0x8006ea7c` (the mode selector: 21-entry
+  jump table on render-mode 0x800bf870 → picks snapFollow/mainFollow/…) — as `CutsceneCamera::update()`, and
+  wire it from the native field frame (0x80022xxx caller). The leaves are already owned; this is contiguous
+  top-down ownership of the caller, verifiable with the oracle unit test (add an `update`/dispatcher case).
+- **refs:** generated/shard_3.c:16799 / shard_4.c:11310 (`func_8006E3B0(c)` direct); guest backtrace via
+  PSXPORT_WWATCH=9F8000F8,.. + PSXPORT_WWATCH_BT; game/camera/cutscene_camera.cpp; 2026-07-01 (later-293).
 
-## CORRECTION: the reachable free-roam camera matrix is built NATIVELY (not in the overlay)
-- **symptom:** the finding above concluded the free-roam camera "lives in the MODE-slot field overlay (0x8013xxxx)". That was an over-read of the recdep hot cluster (which is field RENDER/object code, not the camera).
-- **status:** corrected / open (per-frame native camera driver identity TBD)
-- **cause:** write-watch (PSXPORT_WWATCH) on the camera VIEW MATRIX scratchpad (0x1F8000F8 rotation / 0x1F80010C translation — the addresses game/render/scene/scene_build.cpp `read_camera` consumes) during moving free-roam: the matrix IS rebuilt each frame (changes with movement), built via the resident libgte matrix leaves MulMatrix0 (0x80084250) / MR_init (0x80051794) / ApplyMatrixLV (0x80084470) / CopyMatrix (0x800847B0) — the SAME leaves `CutsceneCamera::lookAt` uses — and EVERY such call has caller `ra=0xDEAD0000` (a NATIVE caller), NOT an overlay address. So the reachable-scene (SOP intro field) camera is driven by NATIVE code, not overlay code. It is NOT `cam_snap_follow` (that stops ~frame 60). `game/world/pool.cpp` `ov_80078610` (0x80078610, "final per-area view init") sets up the camera at area-load and calls the resident lookat 0x8006D02C via `call_fn` — the per-FRAME native driver that rebuilds 0x1F8000F8 during free-roam is not yet pinned.
-- **fix:** NEXT — find the per-frame native function that composes the free-roam camera (wwatch 0x1F8000F8 and identify the native caller of MulMatrix0 with dest 0x1F8000F8; it likely calls the resident 0x8006D02C = `CutsceneCamera::lookAt`, so it can be reworked to call the class directly). Do NOT chase the 0x8013xxxx overlay for the camera. Note: the TRUE post-intro gameplay free-roam camera (past the intro area) may differ again and needs reaching a real area headless.
-- **refs:** game/render/scene/scene_build.cpp read_camera (0x1F8000F8/0x10C); game/world/pool.cpp ov_80078610; game/camera/cutscene_camera.cpp lookAt; 2026-07-01 session (later-291).
-
-## Free-roam camera RE — concrete A00 leads + the real blocker (scene reachability)
-- **status:** open / blocked-on-reachability
-- **cause / leads (later-292):** deeper trace of the reachable scene. Key facts: (1) idle free-roam leaves the camera view matrix 0x1F8000F8 STATIC; it changes only on player MOVEMENT (so a follow camera exists). (2) The ONLY `MulMatrix0(a0=0x1F8000F8)` via rec_dispatch is my SOP `CutsceneCamera::lookAt` (host backtrace: lookAt←cam_snap_follow←ov_sop_field_mode), and `cam_snap_follow` stops ~frame 60. (3) The A00 overlay's own `MulMatrix0` (ov_a00_gen_801389C8, shard_1.c:21471) is per-OBJECT model matrices (a0=object+24, a1=0x1F800000), NOT the camera. (4) The A00 overlay DOES call the resident lookat 0x8006D02C at ov_a00_gen_8010D89C (0x8010D89C, shard_1.c:1254) — it seeds the camera scratch look-point block (writes 0x1F8000D0+2/6/10/14/18/22) then lookAt — but with HARDCODED constants (-3410/4914/12807/…) = a SCRIPTED camera pose, not a player-follow.
-- **the real blocker:** the AUTO_SKIP "free-roam" is the SOP INTRO field (A00 resident, SOP field loop driving), a hybrid scene — which is why live wwatch (shows 0x1F8000F8 rebuilt) and camtrace (shows no per-frame camera dispatch) CONTRADICT. The TRUE post-intro gameplay free-roam camera is not reachable headless via AUTO_SKIP. So RE'ing the real ingame follow camera is BLOCKED on first solving "drive headless into a real post-intro gameplay area" (a driving/reachability problem, docs/driving-the-game.md), OR doing it fully statically from the A00 shard (search A00 for the camera-scratch look-point writer that reads player pos, not hardcoded constants).
-- **fix:** two independent next steps — (a) extend the headless driver to reach a real gameplay area past the intro; then live-trace the follow camera there. (b) static-RE the A00 shard: enumerate all writers of the lookAt-input scratch (0x1F8000DE/E2/E6 = look point) and find the one deriving it from the player/target position — that's the follow camera; own it to call `CutsceneCamera::lookAt`.
-- **refs:** generated/ov_a00_shard_1.c:1254 (ov_a00_gen_8010D89C → 0x8006D02C), :21471 (object matrices); 2026-07-01 session (later-292).
+## Superseded earlier conclusions (kept so the dead ends aren't re-walked)
+- later-290 "resident camera is CUTSCENE-only, free-roam camera is in the 0x8013xxxx overlay" — WRONG
+  (rec_dispatch-blindness artifact, see above). The 0x8013xxxx cluster is field render/objects.
+- later-292 "A00 overlay camera ov_a00_gen_8010D89C" — that IS a real A00 SCRIPTED-camera state machine (5
+  states; follow states call snapFollow 0x8006E3B0) but it is NOT the per-frame free-roam driver; the
+  per-frame driver is the resident 0x8006ec4c reached by direct MAIN calls.
 
 ## Oracle recompiler gap: yFloor (0x8006C80C) render-mode 1 target 0x8006C844 not discovered
-- **symptom:** the camera oracle unit test (PSXPORT_SELFTEST=camera) skips ~188/3000 yFloor iterations; `rec_interp(0x8006C80C)` with render-mode byte 0x800BF870==1 fail-fast MISSES on 0x8006C844.
-- **status:** known-issue (oracle/recompiler function-discovery gap; native `CutsceneCamera::yFloor` is correct — handles the case)
-- **cause:** the yFloor jump table @0x80016874 maps render-mode 1 → label 0x8006C844, but the recompiled gen_func_8006C80C's jump-table `switch` lacks that case → `default: rec_dispatch(0x8006C844)` → miss. The recompiler didn't discover 0x8006C844 as a jump-table target. Real gameplay in render-mode 1 would hit the same fail-fast in the substrate (latent — only matters if 0x800BF870 ever == 1 while yFloor runs as substrate; it no longer does once `CutsceneCamera::yFloor` is wired).
-- **fix:** the native yFloor already handles mode 1 correctly (verified by construction; oracle just can't cross-check it). To close the oracle gap, add 0x8006C844 (and any sibling labels) to the recompiler's jump-table target discovery for 0x8006C80C.
-- **refs:** game/camera/cutscene_camera_test.cpp (188 oracle-skipped); runtime/recomp/hle.cpp g_rec_miss_tolerant; 2026-07-01.
+- **symptom:** the camera oracle unit test (PSXPORT_SELFTEST=camera) skips ~188/3000 yFloor iterations;
+  `rec_interp(0x8006C80C)` with render-mode byte 0x800BF870==1 fail-fast MISSES on 0x8006C844.
+- **status:** known-issue (oracle/recompiler function-discovery gap; native `CutsceneCamera::yFloor` handles it).
+- **cause:** the yFloor jump table @0x80016874 maps render-mode 1 → label 0x8006C844, but the recompiled
+  gen_func_8006C80C's jump-table `switch` lacks that case → `default: rec_dispatch(0x8006C844)` → miss.
+- **fix:** native yFloor already handles mode 1; to close the oracle gap add 0x8006C844 to the recompiler's
+  jump-table target discovery for 0x8006C80C.
+- **refs:** game/camera/cutscene_camera_test.cpp (188 oracle-skipped); runtime/recomp/hle.cpp g_rec_miss_tolerant.

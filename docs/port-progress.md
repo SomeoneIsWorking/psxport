@@ -661,10 +661,12 @@ for content fns (call it). Do NOT mimic PSX hardware (GTE/GP0/OT) — remove Bee
 - ✅ `FUN_80051C8C` per-object TRANSFORM build = `ov_build_xform`.
 - **Camera update — now `class CutsceneCamera` (game/camera/cutscene_camera.{h,cpp}), restructured from the old orphaned
   the old `engine_camera.cpp` register-convention statics into PC-game structure (methods over named state, no
-  `c->r[4]=cam`).** ⚠️ SCOPE CORRECTION (2026-07-01, docs/findings/camera.md): this resident camera is the
-  **SOP/CUTSCENE + special-mode** camera, NOT the A00 free-roam camera. Measured (camtrace+recdep, moving
-  free-roam): ZERO resident-camera dispatch in free-roam; the free-roam camera lives in the MODE-slot field
-  overlay (0x8013xxxx). The handoff's "0x8006E3B0 @ ~967/1000 frames" was the SOP intro. ✅ WIRED + VERIFIED:
+  `c->r[4]=cam`).** ✅ RESOLVED (2026-07-01, later-293, docs/findings/camera.md): this resident camera IS the
+  free-roam FIELD camera — `snapFollow`(0x8006E3B0)→`lookAt`(0x8006D02C), driven by the resident dispatcher
+  0x8006ec4c from the field frame via DIRECT intra-MAIN calls (`func_8006E3B0(c)`) — which are invisible to
+  recdep/camtrace (they hook only rec_dispatch; that blindness caused the earlier "never runs in free-roam"
+  false trail, now corrected). The handoff's "0x8006E3B0 is the live free-roam camera" was CORRECT.
+  ✅ WIRED + VERIFIED:
   `CutsceneCamera::snapFollow` (FUN_8006E3B0) is called native from `game/scene/sop.cpp` via `cam_snap_follow`
   (replacing `d2(c,0x8006e3b0)`); `PSXPORT_DEBUG=camverify` = **0 mismatch over 51+ live SOP calls** (cam
   struct + full scratchpad vs recomp oracle) — exercises trackXZ/trackY snap + the full `lookAt` matrix

@@ -1,5 +1,12 @@
 # Findings — tooling / debug server / harness
 
+## recdep / any rec_dispatch hook is BLIND to resident→resident (intra-MAIN) calls
+- **symptom:** `recdep` and ad-hoc `camtrace`-style hooks in `rec_dispatch` show ZERO calls to a resident MAIN function (e.g. the camera 0x8006E3B0/0x8006D02C) even while it demonstrably runs every frame — leading to a WRONG "that code never runs here" conclusion (cost later-290..292 chasing a phantom free-roam camera).
+- **status:** known-issue / measurement caveat (2026-07-01, later-293)
+- **cause:** the recompiler emits **intra-module (MAIN→MAIN) calls as DIRECT C calls** `func_XXXX(c)` (see generated/shard_*.c, shard_disp.c `func_XXXX`), NOT via `rec_dispatch`. `rec_dispatch` only fires for CROSS-module / overlay / unknown-indirect targets. So any hook in `rec_dispatch` (recdep histogram, camtrace) sees ONLY cross-module and indirect calls — it is structurally blind to the (large) set of resident→resident calls. Absence from recdep does NOT mean "not executed".
+- **fix / how to actually tell if a resident fn runs:** don't infer from recdep. Use a GUEST-STACK backtrace at a known side effect (`PSXPORT_WWATCH=<addr>` on a memory location the fn writes + `guest_backtrace_to`, i.e. PSXPORT_WWATCH_BT), or instrument the recompiled `func_XXXX` / `gen_func_XXXX` directly, or grep the shards for `func_XXXX(c)` call sites. recdep remains valid for its stated purpose (ranking substrate/overlay dependency to minimize cross-module dispatch) — just never read "0 in recdep" as "dead".
+- **refs:** runtime/recomp/overlay_router.cpp rec_dispatch (only cross-module); generated/shard_3.c:16799 func_8006E3B0(c) direct; docs/findings/camera.md (the false trail this caused).
+
 ## A debug-server client disconnect kills the whole game (SIGPIPE)
 - **symptom:** the live port dies ("connection refused" on the next dbgclient call) when a debug client is killed / times out mid-reply — looked like a crash on entering a scene, but no abort/diagnostic is printed.
 - **status:** fixed 10a07e0
