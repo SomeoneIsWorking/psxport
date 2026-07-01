@@ -25,6 +25,7 @@
 
 #include "core.h"
 #include "cfg.h"
+#include "engine.h"                 // class Engine — GAME/STAGE driver + per-frame method impls below
 #include "engine_render.h"          // ov_render_frame / ov_render_frame_x (native per-frame render driver)
 #include "placement.h"              // ov_place_objects — native field object-placement driver (game/world)
 #include "pool.h"                    // ov_pool_init_run — native object-pool init (game/world)
@@ -304,7 +305,7 @@ static void ov_game_submode0(Core* c) {
 // of base[8] (phase 2/7, gated on 0x800bf816==0 && (0x800e7e68 & 0x0c00)); phases 3/20 do neither. Always
 // ends with 0x80077b5c. All leaf callees stay substrate; only the control flow is native. Faithful to the
 // recomp body; a direct child of ov_field_frame (was `d0(c, 0x80025588)`).
-static void ov_scene_25588(Core* c) {
+void Engine::sceneEventFifo() { Core* c = core;
   const uint32_t B = 0x800ed058u;
   uint8_t st = c->mem_r8(B + 2);
   if (st == 0) {
@@ -350,7 +351,7 @@ static void ov_scene_25588(Core* c) {
 // 2->0x8004f514, 3->0x8004f6d0, >=4 none). After the sub-state, set bit0 of flag byte @0x800bf822 when
 // (base[1]!=0 || base[0x0a]!=0) else clear it. phase>=2 is a no-op. Leaf callees stay substrate. Faithful
 // to the recomp body; a direct child of ov_field_frame (was `d0(c, 0x8004fe84)`).
-static void ov_scene_4fe84(Core* c) {
+void Engine::sceneRenderListBuilder() { Core* c = core;
   const uint32_t B = 0x800bf548u;
   uint8_t phase = c->mem_r8(B + 0);
   if (phase == 0) {
@@ -392,7 +393,7 @@ static void ov_field_frame(Core* c) {
   if (c->mem_r8(0x1f800136u) == 0) {            // not paused: full gameplay update
     FFS("ff_59d28", c->engine.frameStartTick()); FFS("ff_69b28", ov_list_walk_69b28(c));    // 0x80059d28/0x80069b28 NATIVE
     FFS("ff_26368", ov_arr8_dispatch_26368(c)); FFS("ff_objwalk", ov_objwalk(c));     // 0x80026368/0x8007a904 NATIVE
-    FFS("ff_25588", ov_scene_25588(c)); FFS("ff_4fe84", ov_scene_4fe84(c));           // 0x80025588/0x8004fe84 NATIVE
+    FFS("ff_25588", c->engine.sceneEventFifo()); FFS("ff_4fe84", c->engine.sceneRenderListBuilder());   // 0x80025588/0x8004fe84 NATIVE (Engine methods)
     FFS("ff_disp26c88", ov_disp_26c88(c));                                            // 0x80026c88 NATIVE
     FFS("ff_22a80", c->engine.modePerFrameDispatch());                                // 0x80022a80 NATIVE (Engine::modePerFrameDispatch)
     FFS("ff_6ec44", CutsceneCamera::runFieldUpdate(c));         // 0x8006ec44 NATIVE (CutsceneCamera::update)
@@ -700,7 +701,7 @@ static void ov_field_frame_x(Core* c) {
   c->mem_w32(0x800bf878u, c->mem_r32(0x800bf878u) + 1);
   if (c->mem_r8(0x1f800136u) == 0) {            // not paused: reduced gameplay update
     d0(c, 0x80059d28u); d0(c, 0x80069b28u); d0(c, 0x80026368u); d0(c, 0x8007b04cu);   // 0x8007b04c obj update
-    ov_scene_25588(c); ov_scene_4fe84(c); ov_disp_26c88(c); d0(c, 0x80022a80u);       // 25588/4fe84/26c88 NATIVE
+    c->engine.sceneEventFifo(); c->engine.sceneRenderListBuilder(); ov_disp_26c88(c); c->engine.modePerFrameDispatch();   // 25588/4fe84/26c88/22a80 NATIVE
     CutsceneCamera::runFieldUpdate(c);   // 0x8006ec44 NATIVE (CutsceneCamera::update)
   }
   if (c->mem_r8(0x1f800136u) < 2) ov_render_frame_x(c); // 0x8003fa44 — NATIVE render orchestrator twin
@@ -1073,7 +1074,6 @@ void ov_game_stage_main(Core* c) {
 // The two GAME-stage entry points the scheduler drives each frame. They forward to the existing
 // static implementations in this TU while the rest of the engine_stage.cpp free functions await
 // progressive class-ification. `core` is set by Core's constructor (runtime/recomp/mem.cpp).
-#include "engine.h"
 void Engine::stagePrologue() { ov_game_stage_prologue(core); }
 int  Engine::frame()         { return ov_game_frame(core); }
 

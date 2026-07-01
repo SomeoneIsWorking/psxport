@@ -39,6 +39,17 @@ public:
   //   Replaces `d0(c, 0x8001cac0u)` in the field-frame body.
   void areaModeDispatch();
 
+  // sceneEventFifo: the field EVENT/COMMAND-QUEUE state machine at guest 0x80025588 (struct
+  //   @0x800ed058). 3-state top switch on base[2]: state 0 arms + falls through to state 1
+  //   (active body drains a small FIFO); state >=2 no-op. Was `d0(c, 0x80025588)`.
+  void sceneEventFifo();
+
+  // sceneRenderListBuilder: 2-phase scene/render-list builder driver at guest 0x8004FE84 (struct
+  //   @0x800bf548). Phase 0 arms it (snapshot list ptr 0x800ecf64 into base+0x2b0..0x2b8, advance
+  //   phase to 1); phase 1 dispatches a sub-state handler (base[1] 0..3 -> distinct overlays);
+  //   flag @0x800bf822 bit 0 latched from (base[1]!=0 || base[0x0a]!=0). Was `d0(c, 0x8004fe84)`.
+  void sceneRenderListBuilder();
+
   // sceneStateStep: the per-frame area SCENE-INIT / SCENE-RUN state machine at guest 0x80050DE4.
   //   Two overlay-handler tables of 22 entries each (indexed by the same render-mode byte
   //   0x800BF870 that areaModeDispatch uses), plus a scene-phase byte at 0x800F2418:
