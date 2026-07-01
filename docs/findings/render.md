@@ -56,6 +56,38 @@
   2-core SBS session can desync (each core's step consumes one array slot, interleaved). Works fine for
   single-core (AUTO_SKIP) recordings replayed into a single-core run. Worth fixing (per-core replay index) if
   this keeps mattering.
+- **FOLLOW-UP (same session) — found the actual mechanism: `ov_field_entity_render(0x800F2418)` (the
+  "scene table" — grass/props/sky-sea backdrop, including node `0x800E7E80`) is called from TWO separate
+  per-frame code paths that can BOTH be live during ordinary walkable-field gameplay:**
+  1. `game/render/engine_render_walk.cpp:180`, inside `ov_render_frame` (the "ONE NATIVE RENDER PATH"
+     orchestrator), gated only by `!field_area_init` and reached via `native_boot`'s
+     `if (c->mem_r8(0x1F800136) < 2) ov_render_frame(c)` — **confirmed live this session** (read
+     `0x1F800136 == 0` on the actual repro session).
+  2. `game/scene/sop.cpp:217`, inside `ov_sop_field_update` — called from `ov_sop_field_mode` states 1/2/3,
+     which per other findings (`[[camera-system-done-demo-re]]`, journal later-238/295) is the driver
+     ACTUALLY steering ordinary walkable-field gameplay (`sm48=2 RUNNING, sm4a=1 field-area, sm4c=2, sm4e=1`
+     matched live during the repro). The comment at sop.cpp:208-216 claims "this SOP path isn't exercised by
+     the walkable field... [engine_render_walk's] IS the live field render path" — **that assumption looks
+     STALE/WRONG**: SOP field-mode is what's actually driving our repro, so its `ov_field_entity_render`
+     call fires too, alongside `ov_render_frame`'s.
+  Each call computes its OWN camera/object transform independently (`eproj_compose_camera`/
+  `eproj_compose_object` inside `ov_field_entity_render`'s loop), so the SAME scene-table entity gets
+  projected TWICE per frame through two not-necessarily-identical transforms — exactly matching the live
+  evidence: geomblk `0x8017ECE4` (node `0x800E7E80`, 2 GT4 records that are a mirror-winding pair for
+  double-sided rendering, one culled per submission) produces TWO `gt4_native` submissions per frame with
+  DIFFERENT screen bboxes (`y=[149.6,168.7]` vs `y=[140.1,155.3]`) — a double-projected copy of the same
+  quad, offset by a few pixels, leaving an uncovered sliver between them where the black clear color shows
+  through. This is a genuine violation of the project's own "ONE native render path, decoupled"
+  architecture goal (`[[one-native-render-path-decoupled]]`) — two orchestrators are unknowingly sharing
+  (and double-driving) the same scene-table submission.
+  **Fix (not yet applied — needs a decision, not a quick patch):** determine which ONE of the two call sites
+  should own scene-table (`0x800F2418`) submission during ordinary field gameplay and stop the other from
+  calling `ov_field_entity_render` when SOP field-mode is active for this frame (e.g. gate
+  `engine_render_walk.cpp`'s scene-table call on the SAME "is SOP field-mode driving this frame" condition
+  sop.cpp already knows, or vice versa) — do NOT just suppress one blindly without confirming it doesn't
+  regress the OTHER scenario each path was presumably added for (cutscenes / non-SOP field states). Re-run
+  the `sbs oracle` A/B pixel scan at this same repro spot after the fix — the crack should vanish and A
+  should match B in that x-range.
 - **cause (3, root-caused via live debug-server inspection, non-destructive, on the user's own paused session):**
   `FUN_8007E9C8` (the PSX fade-rect builder, native reimpl already exists as `ov_8007E9C8`
   game/render/gpu_lib.cpp:75 but is ORPHAN) is called from 24 guest sites across 8 recompiled shard files:
