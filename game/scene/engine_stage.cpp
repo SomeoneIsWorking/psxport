@@ -271,6 +271,92 @@ static void ov_game_submode0(Core* c) {
 //     These are YIELD-FREE (transitive jal-graph scan: no FUN_80051f80 once CD/audio-busy are sync
 //     leaves), so they rec_dispatch synchronously per-frame and return = the frame's gameplay work.
 //   sm[0x4c] >= 7 -> no-op (falls to the epilogue).
+
+// Native FUN_80025588 — the field EVENT/COMMAND-QUEUE state machine (struct @0x800ed058). A 3-state top
+// switch on base[2]: state 0 ARMS it (base[2]=1, base[9]=0, snapshot list head 0x800ecf58 into base[0x3c],
+// clear 0x800bfa5c, run setup 0x80024e00) then FALLS THROUGH into the active body; state 1 is the active
+// body; state >=2 is a no-op. Active body drains a small FIFO when base[0x14]==0 && base[0x15]!=0: entry 0
+// is dispatched via 0x80040aa4(id,kind) then 0x80074bf8(kind==0 ? 2 : 3, only for kind 0/1); the two
+// parallel byte arrays base[0x16] (id) / base[0x1c] (kind) shift down one; base[0x15]--, base[0x14]++.
+// Then 0x80024f18 always, and per the GAME phase 0x800bf870 either 0x800251f0 (default) or a light-toggle
+// of base[8] (phase 2/7, gated on 0x800bf816==0 && (0x800e7e68 & 0x0c00)); phases 3/20 do neither. Always
+// ends with 0x80077b5c. All leaf callees stay substrate; only the control flow is native. Faithful to the
+// recomp body; a direct child of ov_field_frame (was `d0(c, 0x80025588)`).
+static void ov_scene_25588(Core* c) {
+  const uint32_t B = 0x800ed058u;
+  uint8_t st = c->mem_r8(B + 2);
+  if (st == 0) {
+    c->mem_w8(B + 2, 1);
+    c->mem_w8(B + 9, 0);
+    uint32_t head = c->mem_r32(0x800ecf58u);
+    c->mem_w8(0x800bfa5cu, 0);
+    c->mem_w32(B + 0x3c, head);
+    d1(c, 0x80024e00u, B);
+    // fall through into the active body
+  } else if (st != 1) {
+    return;                      // st >= 2: guest jumps straight to the epilogue
+  }
+  if (c->mem_r8(B + 0x14) == 0 && c->mem_r8(B + 0x15) != 0) {
+    d2(c, 0x80040aa4u, c->mem_r8(B + 0x16), c->mem_r8(B + 0x1c));
+    uint8_t kind = c->mem_r8(B + 0x1c);
+    if (kind == 0)      d1(c, 0x80074bf8u, 2);
+    else if (kind == 1) d1(c, 0x80074bf8u, 3);
+    int n = (int)c->mem_r8(B + 0x15) - 1;                   // shift the FIFO down by one (drop entry 0)
+    for (int i = 0; i < n; i++) {
+      c->mem_w8(B + 0x16 + i, c->mem_r8(B + 0x16 + i + 1));
+      c->mem_w8(B + 0x1c + i, c->mem_r8(B + 0x1c + i + 1));
+    }
+    c->mem_w8(B + 0x15, (uint8_t)(c->mem_r8(B + 0x15) - 1));
+    c->mem_w8(B + 0x14, (uint8_t)(c->mem_r8(B + 0x14) + 1));
+  }
+  d1(c, 0x80024f18u, B);
+  uint8_t phase = c->mem_r8(0x800bf870u);
+  if (phase == 3 || phase == 20) {
+    // neither the light-toggle nor 0x800251f0
+  } else if (phase == 2 || phase == 7) {
+    if (c->mem_r8(0x800bf816u) == 0 && (c->mem_r16(0x800e7e68u) & 0x0c00) != 0)
+      c->mem_w8(B + 8, (uint8_t)(1 - c->mem_r8(B + 8)));
+  } else {
+    d1(c, 0x800251f0u, B);
+  }
+  d1(c, 0x80077b5cu, B);
+}
+
+// Native FUN_8004FE84 — a 2-phase scene/render-list builder driver (struct @0x800bf548). base[0] is the
+// phase: 0 -> ARM (snapshot list ptr 0x800ecf64 into base+0x2b0, +0x2b4 = ptr+0x10, +0x2b8 = ptr+0x10 +
+// (*(u16)ptr << 1); base[1]=0, base[0]=1); 1 -> run sub-state base[1] (0->0x8004f430, 1->0x8004f474,
+// 2->0x8004f514, 3->0x8004f6d0, >=4 none). After the sub-state, set bit0 of flag byte @0x800bf822 when
+// (base[1]!=0 || base[0x0a]!=0) else clear it. phase>=2 is a no-op. Leaf callees stay substrate. Faithful
+// to the recomp body; a direct child of ov_field_frame (was `d0(c, 0x8004fe84)`).
+static void ov_scene_4fe84(Core* c) {
+  const uint32_t B = 0x800bf548u;
+  uint8_t phase = c->mem_r8(B + 0);
+  if (phase == 0) {
+    uint32_t p = c->mem_r32(0x800ecf64u);
+    c->mem_w32(B + 0x2b0, p);
+    c->mem_w32(B + 0x2b4, p + 0x10);
+    uint16_t h = c->mem_r16(p);
+    c->mem_w8(B + 1, 0);
+    c->mem_w8(B + 0, 1);
+    c->mem_w32(B + 0x2b8, (p + 0x10) + ((uint32_t)h << 1));
+    return;
+  }
+  if (phase != 1) return;         // phase >= 2: epilogue only
+  switch (c->mem_r8(B + 1)) {
+    case 0: d1(c, 0x8004f430u, B); break;
+    case 1: d1(c, 0x8004f474u, B); break;
+    case 2: d1(c, 0x8004f514u, B); break;
+    case 3: d1(c, 0x8004f6d0u, B); break;
+    default: break;               // sub >= 4: no sub-handler (guest j 8004ff60)
+  }
+  uint32_t flag = 0x800bf822u;
+  uint8_t v = c->mem_r8(flag);
+  if (c->mem_r8(B + 1) != 0 || (int16_t)c->mem_r16(B + 0x0a) != 0)
+    c->mem_w8(flag, (uint8_t)(v | 1));
+  else
+    c->mem_w8(flag, (uint8_t)(v & 0xfe));
+}
+
 // FIELD PER-FRAME UPDATE 0x80108b0c — native control flow (the field frame's work driver, called by
 // the running states of the sm[0x4e] machine). Faithful to the disasm: bump *0x1f80017c and *0x800bf878;
 // if NOT paused (*0x1f800136==0) run the 11-call gameplay-update block; if *0x1f800136 < 2 run 0x8003f9a8;
@@ -284,7 +370,7 @@ static void ov_field_frame(Core* c) {
   if (c->mem_r8(0x1f800136u) == 0) {            // not paused: full gameplay update
     FFS("ff_59d28", d0(c, 0x80059d28u)); FFS("ff_69b28", ov_list_walk_69b28(c));      // 0x80069b28 NATIVE
     FFS("ff_26368", ov_arr8_dispatch_26368(c)); FFS("ff_objwalk", ov_objwalk(c));     // 0x80026368/0x8007a904 NATIVE
-    FFS("ff_25588", d0(c, 0x80025588u)); FFS("ff_4fe84", d0(c, 0x8004fe84u));
+    FFS("ff_25588", ov_scene_25588(c)); FFS("ff_4fe84", ov_scene_4fe84(c));           // 0x80025588/0x8004fe84 NATIVE
     FFS("ff_disp26c88", ov_disp_26c88(c)); FFS("ff_22a80", d0(c, 0x80022a80u));       // 0x80026c88 NATIVE
     FFS("ff_6ec44", d0(c, 0x8006ec44u)); FFS("ff_50de4", d0(c, 0x80050de4u)); FFS("ff_1cac0", d0(c, 0x8001cac0u));
   }
@@ -466,7 +552,7 @@ static void ov_field_frame_x(Core* c) {
   c->mem_w32(0x800bf878u, c->mem_r32(0x800bf878u) + 1);
   if (c->mem_r8(0x1f800136u) == 0) {            // not paused: reduced gameplay update
     d0(c, 0x80059d28u); d0(c, 0x80069b28u); d0(c, 0x80026368u); d0(c, 0x8007b04cu);   // 0x8007b04c obj update
-    d0(c, 0x80025588u); d0(c, 0x8004fe84u); ov_disp_26c88(c); d0(c, 0x80022a80u);     // 0x80026c88 NATIVE
+    ov_scene_25588(c); ov_scene_4fe84(c); ov_disp_26c88(c); d0(c, 0x80022a80u);       // 25588/4fe84/26c88 NATIVE
     d0(c, 0x8006ec44u);
   }
   if (c->mem_r8(0x1f800136u) < 2) ov_render_frame_x(c); // 0x8003fa44 — NATIVE render orchestrator twin

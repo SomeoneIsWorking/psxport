@@ -896,12 +896,18 @@ calls (rand 0x8009A450 @86/frame, matrix 0x80051794, libgpu 0x80082xxx/0x80083xx
 impls, so the hot leaves get captured as their parents become native. Landed this session (0-diff RAM+spad
 A/B verified): `ov_list_walk_69b28` (FUN_80069b28) + `ov_arr8_dispatch_26368` (FUN_80026368) — two more of
 ov_field_frame's 9 substrate children owned native (was 2 native/9, now 4 native/9).
-- ☐ **NEXT — own the remaining ov_field_frame substrate children** (engine_stage.cpp ~L283): the pure
-  engine-layer ones first (0x80025588 ~111 insns / 0x8004fe84 ~76 insns — 0 overlay calls, A/B-verifiable),
-  then the content-heavy dispatchers (0x80050de4 42-overlay-calls, 0x8001cac0, 0x8006ec44) which descend into
-  per-area A00 object behaviors (the 0x8013xxxx handlers, ~5/frame each in recdep). Method: reimplement
-  faithfully, route methods via dispatch_native_behavior|rec_dispatch, A/B RAM+spad 0-diff (build native vs
-  `git stash` substrate, dumpram at f1500, cmp). Re-run `recdep` after each to re-rank.
+- ✅ **DONE (later-289) — the two PURE engine children owned native** (0-diff RAM+spad A/B @ f1500, 0
+  recomp-MISS @ f4000): `ov_scene_25588` (FUN_80025588, the field EVENT/COMMAND-FIFO state machine, struct
+  @0x800ed058) + `ov_scene_4fe84` (FUN_8004fe84, the 2-phase scene/render-list builder driver, struct
+  @0x800bf548), both in game/scene/engine_stage.cpp above ov_field_frame; their 10 leaf callees stay
+  substrate. ov_field_frame is now 6 native/9 direct children. (Also fixed a codemap heuristic gap: an
+  orphan doc-comment block glued to the next def, hiding the new addresses — separated with a blank line.)
+- ☐ **NEXT — the content-heavy dispatchers** (engine_stage.cpp ~L285, still `d0(...)` in ov_field_frame):
+  0x80050de4 (42-overlay-calls, scene-table @0x800f2418), 0x8001cac0 (22-way state dispatch @0x800bf870),
+  0x8006ec44 (scene-event @0x800e8008) — they descend into per-area A00 object behaviors (the 0x8013xxxx
+  handlers, ~5/frame each in recdep). Method: reimplement the DISPATCHER faithfully, route methods via
+  dispatch_native_behavior|rec_dispatch, A/B RAM+spad 0-diff (build native vs `git stash` substrate, dumpram
+  at f1500, cmp). Re-run `recdep` after each to re-rank.
 - ✅ **DONE (later-286) — free-roam aborts ~f1184 at `jal 0x80109450`.** Root cause was NOT residency or the
   A00 field-frame flow — it was the recompiler fall-through/sp-leak (findings/render.md). Fixed in emit.py +
   seeded 0x8003D5CC/0x8003D8AC.

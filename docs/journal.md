@@ -1,5 +1,25 @@
 # Debug / progress journal
 
+## later-289 — own the two PURE-engine ov_field_frame children native (FUN_80025588 / FUN_8004fe84)
+Top-down descent per the minimize-recomp frontier (later-287): owned the two remaining ov_field_frame
+direct children that make NO overlay/content calls, so they are cleanly A/B-verifiable.
+- `ov_scene_25588` (FUN_80025588, game/scene/engine_stage.cpp) — the field EVENT/COMMAND-FIFO state
+  machine (struct @0x800ed058): 3-state top switch; state 0 arms (snapshot list head 0x800ecf58, run
+  setup 0x80024e00) and falls through; active body drains a 2-array byte FIFO (id @+0x16 / kind @+0x1c,
+  count @+0x15, head-idx @+0x14), dispatching entry 0 via 0x80040aa4 then 0x80074bf8, then per GAME phase
+  0x800bf870 runs 0x800251f0 (default) or a light-toggle (phase 2/7) or nothing (phase 3/20); always ends
+  0x80077b5c. 10 leaf callees stay substrate.
+- `ov_scene_4fe84` (FUN_8004fe84) — the 2-phase scene/render-list builder driver (struct @0x800bf548):
+  phase 0 arms (snapshot list ptr 0x800ecf64 → +0x2b0/+0x2b4/+0x2b8), phase 1 runs sub-state base[1]
+  (0x8004f430/f474/f514/f6d0), then sets/clears bit0 of flag @0x800bf822.
+Wired both into ov_field_frame AND ov_field_frame_x (replaced the `d0(...)` calls). ov_field_frame is now
+6 native / 9 direct substrate children.
+VERIFY: `newgame; run 1500; dumpram` native vs `git stash` substrate → main RAM 0-diff AND scratchpad
+0-diff; `newgame; run 4000` → 0 recomp-MISS.
+WORKFLOW FIX: codemap.py was mapping the new natives to the wrong guest address because a pre-existing
+orphan doc-comment (the "handler 0x801088d8" block, no function under it) merged into the new comment
+block; a blank-line separator fixes it. Recorded in docs/findings/tooling.md.
+
 ## later-288 — restructure finish: deleted the 2 dead grab-bag files (native_misc, peripheral_misc)
 USER directive: no grab-bag files in the codebase, ever. After the engine/->game/ consolidation, two
 `*misc*` grab-bags remained: `game/core/native_misc.cpp` and `runtime/recomp/peripheral_misc.cpp`. PROVEN
