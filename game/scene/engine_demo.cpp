@@ -504,14 +504,14 @@ static void demo_frame_s2(Core* c) {
     }
     c->mem_w16(sm + 0x4a, 0);
   }
-  rec_dispatch(c, 0x80075a80u);                // TAIL_REND: attract render (draws the title)
+  c->engine.areaUpdateTail();                 // 0x80075A80 NATIVE — TAIL_REND
 }
 
 // TAIL helpers (the guest loop's per-frame tail render, run inline after a substate's transition):
 //   TAIL_REND 0x80106658 = attract render 0x80075A80.  TAIL_CF2C 0x80106650 = engine-update 0x8001CF2C
 //   then the attract render.  TAIL_NONE = no render. (The per-frame counter is bumped by ov_demo_frame.)
-static void demo_tail_rend(Core* c) { rec_dispatch(c, 0x80075a80u); }
-static void demo_tail_cf2c(Core* c) { rec_dispatch(c, 0x8001cf2cu); rec_dispatch(c, 0x80075a80u); }
+static void demo_tail_rend(Core* c) { c->engine.areaUpdateTail(); }
+static void demo_tail_cf2c(Core* c) { rec_dispatch(c, 0x8001cf2cu); c->engine.areaUpdateTail(); }
 
 // Substate s3 (0x801064E8) — main-menu sub-machine 0x80106AC4 (mirror of 0x8010696C). Return-based
 // twin of ov_demo_s3. Outcome 1 -> s7 (attract); 2 -> phase on sm[0x68]: ==2 -> s5 (LEAVE DEMO/New

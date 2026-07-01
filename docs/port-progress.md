@@ -1010,6 +1010,20 @@ ov_field_frame's 9 substrate children owned native (was 2 native/9, now 4 native
   still-substrate callers so RNG streams don't diverge). Embedded as `Core::rng`, wired the same
   way as `ScreenFade` / `Engine`. `Engine::frameStartTick`'s per-frame rand tick now calls
   `c->rng.next()` directly instead of rec_dispatch — one less substrate hop per field frame.
+- ✅ **DONE (later-296) — `Engine::areaUpdateTail` (guest FUN_80075A80, 156 instructions).** The
+  LAST substrate leaf in ov_field_frame's tail is now native — ov_field_frame is 9/9 native direct
+  children. Slot-table state machine over 24×12-byte entries at 0x800BE238, keyed by counter at
+  0x800BED78; 3 arms (kind=0 skip / kind=0xFF action-leaf FUN_80092660 / other decrement-until-slot[8]==4
+  latches a 24-bit mask at 0x800BE358) + a buf post-check that zeroes slot[1]; then mask-drain
+  FUN_80098F90(0), common tail FUN_80075824+FUN_80099490, and a key2 branch (0x800BED80 s16)
+  that probes an 8-byte table at 0x800BE368 via FUN_8008E0C0 and finally calls FUN_80074BF8 or
+  FUN_80074E48. All 8 callees stay substrate. sp -= 88 to mirror the guest's stack frame (the
+  buf-fill leaf and the action leaf's 4 stacked args need it). Wired every native caller (5):
+  ov_field_frame / ov_field_frame_x (engine_stage.cpp), ov_game_s4c (the coro-redirect s4c handler),
+  sop.cpp per-frame area update, and 3 sites in engine_demo.cpp (attract render + demo_tail_rend +
+  demo_tail_cf2c). GATE: A/B RAM+scratchpad diff (500 frames free-roam) native vs substrate =
+  **0 words differ** in main RAM AND 0 in scratchpad. Camera oracle 75k runs 0 mismatches; headless
+  smoke 2027 frames clean.
 - ✅ **DONE (later-295) — `Trig::ratan2` (guest FUN_80085690, ~94 instructions).** libgte atan2 owned
   native: sign-strip → first-octant reduction with an overflow-guard split (`(y<<10)/x` if `y` fits
   in low 21 bits, else `y/(x>>10)`) → 1025-entry int16 table at 0x800AA490 → quadrant fixup

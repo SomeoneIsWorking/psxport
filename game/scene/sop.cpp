@@ -202,7 +202,7 @@ void ov_sop_field_update(Core* c) {
       if (sub == 0) CutsceneCamera::runSnapFollow(c, 0x800e8008u, 0x800e8040u);   // native class CutsceneCamera (was 0x8006e3b0)
       else if (sub == 1) c->mem_w8(0x800e806cu, 0);
     }
-    d0(c, 0x80075a80u);                                    // per-frame area update
+    c->engine.areaUpdateTail();                            // 0x80075a80 NATIVE
     if (c->mem_r8(0x800bf9b4u) != 5) { ffspan_begin(); d1(c, 0x8010bffcu, 0x800ed018u); ffspan_end("parallaxBG"); }   // parallax BG draw
     // NOTE: no entity-render / object-walk call here. ov_scene_native (engine_render_walk.cpp) is the
     // SOLE owner of both the scene-table render (ov_field_entity_render, 0x800f2418) and the object
