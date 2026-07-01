@@ -341,8 +341,10 @@ static uint32_t od_advance_to_scene(Core* c, uint32_t& f, uint8_t target, uint32
 }
 static int run_oraclediff(const char* path) {
   const int verbose = cfg_on("PSXPORT_SELFTEST_VERBOSE");
-  Game* A = new Game(); A->psx_fallback = 0;                              // native port core
+  Game* A = new Game(); A->psx_fallback = 0;                              // native port core (renders via VK)
   Game* B = new Game(); B->psx_fallback = 1; B->core.use_interp = 1;      // pure-PSX interpreter oracle core
+  B->gpu.soft_gpu = 1;                                                     // ...soft-rasterized into its own s_vram (render-diff decoupled from A's VK)
+  void gpu_native_shot(Core*, const char*);
   load_exe(path, &A->core); dc_boot_init(&A->core);
   load_exe(path, &B->core); dc_boot_init(&B->core);
   auto stageA = [&]{ return A->core.mem_r32(TASKBASE + 0xc); };
@@ -409,8 +411,19 @@ static int run_oraclediff(const char* path) {
     od_advance_to_ovsig(&B->core, fb, 0x801138A4u, 8000, &rb);
     if (!ra || !rb)
       fprintf(stderr, "[oraclediff] FREE-ROAM UNREACHED: native=%d(f%u) oracle=%d(f%u)\n", ra, fa, rb, fb);
-    else
+    else {
+      // RAM diff at the EXACT onset frame (both cores parked at the overlay flip) — this is where state is
+      // aligned. Free-running past it drifts (the two cores animate the scripted opening at slightly different
+      // sub-frame cadence: the interp core does real CD loads), so any post-step diff is drift, not a bug.
       diff_band("free-roam");
+      // For the RENDER dump we need a settled frame: the field fades in from black over the first ~1s after
+      // the overlay flip, so at onset+5 the oracle is still dark. Step ~40 frames (past the fade) for a CONTENT
+      // comparison (not pixel-aligned — the cores drift when free-running the scripted opening, per above).
+      for (int s = 0; s < 40; s++) { dc_step_frame(&A->core, fa); fa++; dc_step_frame(&B->core, fb); fb++; }
+      gpu_native_shot(&A->core, "scratch/screenshots/oraclediff_freeroam_native.ppm");
+      gpu_native_shot(&B->core, "scratch/screenshots/oraclediff_freeroam_oracle.ppm");
+      fprintf(stderr, "[oraclediff] free-roam framebuffers: oraclediff_freeroam_{native,oracle}.ppm (content-aligned, +40f past fade)\n");
+    }
   }
 
   fprintf(stderr, "[oraclediff] DONE: %d total diverging ranges across narration + free-roam.\n", total_div);
