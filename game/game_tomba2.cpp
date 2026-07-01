@@ -291,8 +291,7 @@ void games_tomba2_init(void) {
   // directive is no gating + drive toward removing the interpreter entirely, so they are retired). Every
   // override below IS the behavior; the user verifies it via ./run.sh.
   // Hand-written native C++ for the boot→first-cutscene path (engine/native_path.cpp).
-  void games_native_path_init(void);
-  games_native_path_init();
+  // (games_native_path_init removed: native_misc.cpp was dead reference scaffolding — later-288)
   // OVERRIDE SYSTEM REMOVED (2026-06-22): every rec_set_override(...) registration that used to live in
   // this init was deleted. The ov_* native fns are KEPT (in native_path.cpp / engine_submit.cpp / etc.)
   // as future DIRECT-CALL targets, wired top-down as each parent is owned. The *_register() helpers below

@@ -58,8 +58,8 @@ Every subfolder is on the include path, so `#include "foo.h"` resolves regardles
 **Core / glue:** `interp.cpp` (flat R3000 interpreter), `mem.cpp` (bus dispatch + watchpoints PSXPORT_WWATCH/CW),
 `core.h`/`game.h` (the `Core`/`Game` objects), `dispatch.cpp` (override table), `hle.cpp` (BIOS HLE),
 `threads.cpp`/`timing.cpp` (cooperative threads + timers), `boot.cpp` + `native_stub.cpp` (SCUS entry → MAIN),
-`native_boot.cpp` (**boot + the native per-frame loop `native_scheduler_step` + the AUTO_* test-drive
-automation + diagnostics — 694 lines, split candidate**), `sync_overrides.cpp`, `watchdog.c`, `stubs.cpp`,
+`native_boot.cpp` (boot + the native per-frame loop `native_scheduler_step` + diagnostics; the interactive
+REPL was extracted to `repl.cpp`/`repl.h`, dispatch helpers to `guest_call.h`), `sync_overrides.cpp`, `watchdog.c`, `stubs.cpp`,
 `cfg.c` (the `PSXPORT_*` config + `PSXPORT_DEBUG=chan` channels), `mods.c`.
 **GPU/present:** `gpu_native.cpp` (GP0/GP1, VRAM, packet pool — 1544 ln), `gpu_gpu.cpp` (Vulkan backend + present —
 1746 ln) + `gpu_gpu_shaders.h`/`gpu_gpu_internal.h`, `gpu_native_internal.h`, `gpu_debug.cpp`, `imgui_overlay.cpp`.
@@ -85,11 +85,14 @@ NOT a reference emulator), `vendor/imgui`.
   `native_path*.cpp` are GONE — do not recreate them).
 - **Keep files focused; ~400–500 lines is the soft cap for a mixed-responsibility file.** Cohesive
   single-responsibility backends (gpu_gpu, gpu_native) may be larger.
-- **Known debt (fix incrementally; don't churn working, verified code all at once):**
-  1. `runtime/recomp/native_boot.cpp` (1500+ ln) crams boot + the native per-frame scheduler + the REPL/`ents`
-     command handler + diagnostics — split when next touched (boot vs frame-loop scheduler vs REPL).
-  2. `game/core/native_misc.cpp` — residual small leaf pokes + DISABLED reference reimpls (mostly dead
-     scaffolding); distribute the live ones to their subsystem folders or drop the dead ones as they're touched.
+- **No grab-bag files** (verified: no `*misc*`/`*util*`/`*common*`/`native_path*`/`native_dl*` anywhere). The
+  two dead `*misc*` grab-bags were deleted (later-288, proven 100% dead + 0-diff), and the REPL driver was
+  extracted from `native_boot.cpp` into `runtime/recomp/repl.cpp` (+ `repl.h`, and shared `guest_call.h` for
+  the rc0-4 dispatch helpers). If you catch yourself creating a `misc`/`util` dumping ground, STOP — put each
+  native in its subsystem file.
+- **Remaining size debt (not grab-bags, just large cohesive files — split only when next touched):**
+  `native_boot.cpp` still holds boot + the native per-frame scheduler (cohesive; a boot/scheduler split is
+  optional). `gpu_native.cpp`/`gpu_gpu.cpp`/`engine_submit.cpp` are large single-responsibility backends.
 
 ## CD path — the part that's easy to get wrong
 The port does NOT emulate the CD controller for the game; `cd_override.c` replaces libcd/engine

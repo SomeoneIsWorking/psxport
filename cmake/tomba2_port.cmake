@@ -181,14 +181,13 @@ set(PORT_SRC
   game/math/gte.cpp
   game/render/gpu_lib.cpp
   game/audio/sound_voice.cpp
-  game/core/native_misc.cpp
-  runtime/recomp/peripheral_misc.cpp
   game/render/margin_render.cpp
   game/audio/native_audio.c
   game/audio/native_music.c
   game/audio/music_list.c
   runtime/recomp/sync_overrides.cpp
   runtime/recomp/native_boot.cpp
+  runtime/recomp/repl.cpp
   runtime/recomp/dbg_server.cpp
   runtime/recomp/native_stub.cpp
   runtime/recomp/watchdog.c

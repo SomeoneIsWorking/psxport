@@ -1,5 +1,27 @@
 # Debug / progress journal
 
+## later-288 — restructure finish: deleted the 2 dead grab-bag files (native_misc, peripheral_misc)
+USER directive: no grab-bag files in the codebase, ever. After the engine/->game/ consolidation, two
+`*misc*` grab-bags remained: `game/core/native_misc.cpp` and `runtime/recomp/peripheral_misc.cpp`. PROVEN
+100% DEAD — every function is `static`/unreferenced and the only exported symbol (`games_native_path_init`,
+called from game_tomba2.cpp) ran only empty stubs; the build LINKS and is A/B RAM+scratchpad 0-diff at f1500
+WITHOUT them. They were orphaned reference reimplementations abandoned when the override system was removed
+(2026-06-22) — reachable only via the deleted `rec_set_override` table. Deleted both + the empty
+games_native_path_init wiring. Recoverable from git if a caller is later ported and wants the leaf.
+DEAD-END NOTES preserved from native_misc's disabled-reimpl TODOs (these were reimplemented and FAILED A/B
+vs the recomp body — do not re-derive without fixing the noted cause):
+  - FUN_80097540: A/B 2 bytes off — return-selection edge case (a0==-1/-2 path).
+  - FUN_800752B4: A/B 167 bytes — stride-12 band-classify table @0x800BE238, wrong records.
+  - FUN_80090160: A/B 80 bytes — varint stream consumer, wrong accumulation.
+  - FUN_80094C10: A/B 15 bytes — fixed-point mixer/pan, reciprocal-magic divides.
+  - FUN_80077FB0: A/B 4 bytes — 16-bit integer sqrt, wrong result (cascades into 0x800E806x).
+Also extracted the interactive REPL driver (repl_btn/wav/xadump + native_repl_read + the g_nav_* auto-drive
+state) OUT of native_boot.cpp (1569->1298 ln) into `runtime/recomp/repl.cpp` (+ `repl.h` interface), and the
+rc0-4 guest-call helpers into shared `runtime/recomp/guest_call.h`. native_boot.cpp is now boot + scheduler,
+not boot + scheduler + REPL. Verified: build clean, REPL functional (ents/dumpram run), A/B RAM+scratchpad
+0-diff at f1500. No grab-bag files remain (verified: no *misc*/*util*/*common*/native_path*/native_dl* under
+game/ or runtime/). Restructure COMPLETE.
+
 ## later-287 — MINIMIZE-RECOMP frontier: `recdep` dependency meter + own 2 more ov_field_frame children native
 USER direction (2026-07-01): reduce recomp dependency to as little as possible. Built the `recdep` diagnostic
 (`PSXPORT_DEBUG=recdep`, overlay_router.cpp + config.md) — histograms every substrate fn rec_dispatch routes to,
