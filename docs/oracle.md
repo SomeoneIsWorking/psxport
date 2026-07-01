@@ -111,3 +111,15 @@ cores each frame" must become "drive each core toward its next checkpoint indepe
   Native now matches the oracle for every beat; free-roam unaffected; gates green. All three reported
   cutscene render bugs (later-277 fade, later-281 void+cliff) are now resolved. Remaining: user eyeball on a
   real ./run.sh is the final confirmation (docs/findings/render.md "Intro-narration cutscene rendered wrong").
+- 2026-07-01 (later-282): **Oracle extended to FREE-ROAM gameplay — native opening is convergent.** The
+  interpreter+softGPU oracle core drives PAST the narration into the walkable field (MODE overlay 0x80109450
+  → 0x801138A4, SOP scene byte → 0, reached ~f1132) and STAYS ALIVE there (ran to f3035, no freeze/MISS —
+  the interp handles the field overlay + CD area-loads). `PSXPORT_SELFTEST=oracle` now also dumps the oracle's
+  soft-GPU FIELD framebuffer (scratch/screenshots/oracle_field_h*.ppm). `PSXPORT_SELFTEST=oraclediff` now has
+  a FREE-ROAM checkpoint (both cores parked at the first walkable-field frame, engine band diffed): the ONLY
+  divergences are the same three benign ones as the narration (PRNG 0x80105EE8, ring ctr 0x80105BAC, stdio
+  0x80105EF8). ⇒ the native free-roam GAME STATE matches the real PSX. Render eyeball also matches (cliff-fall
+  → water-island → tree, all present in both cores; frame-N snapshots misalign because the opening is a
+  scripted-camera sequence — the state-sync barrier is what makes the diff meaningful). (docs/findings/sbs.md
+  "oraclediff: FREE-ROAM GAME STATE is also convergent".) NEXT: drive both cores with MATCHED input to diff
+  actual interactive play (Tomba walking/jumping), and advance the port frontier natively where convergent.

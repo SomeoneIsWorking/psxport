@@ -229,6 +229,7 @@ static int run_oracle(const char* path) {
   auto sm48  = [&]{ return (uint32_t)c->mem_r16(TASKBASE + 0x48); };
   auto loopc = [&]{ return c->mem_r16(0x1F800198u); };
   auto scene = [&]{ return c->mem_r8(0x800bf9b4u); };
+  auto ovsig = [&]{ return c->mem_r32(0x80109450u); };   // MODE overlay: 0x3C021F80=SOP narration, 0x801138A4=walkable field
 
   const uint32_t REACH_CAP = 4000;
   uint32_t f = 0;
@@ -249,10 +250,23 @@ static int run_oracle(const char* path) {
   uint32_t c0 = loopc(), max_scene = 0;
   const uint32_t RUN = 3000;
   uint8_t shot_done[256] = {0};
+  int freeroam_since = -1;   // frame index (k) at which the walkable-field overlay first appeared
   for (uint32_t k = 0; k < RUN; k++, f++) {
     dc_step_frame(c, f);
     uint8_t sc = scene();
     if (sc > max_scene) max_scene = sc;
+    // FREE-ROAM oracle capture (later-282): once the cutscene settles into the walkable field
+    // (overlay 0x801138A4, scene byte back to 0), dump the soft-GPU field framebuffer at a couple of
+    // settled frames so we can diff the REAL PSX field render against the native VK shot.
+    if (ovsig() == 0x801138A4u && sc == 0) {
+      if (freeroam_since < 0) { freeroam_since = (int)k; fprintf(stderr, "[selftest]   oracle: FREE-ROAM field reached at f=%u\n", f); }
+      int held = (int)k - freeroam_since;
+      if (held == 30 || held == 120 || held == 300) {
+        char p[160]; snprintf(p, sizeof p, "scratch/screenshots/oracle_field_h%d_f%u.ppm", held, f);
+        gpu_native_shot(c, p);
+        fprintf(stderr, "[selftest]   oracle: dumped free-roam field framebuffer %s\n", p);
+      }
+    }
     // Phase-2 deliverable: dump the oracle's SOFTWARE-rendered framebuffer the first time we reach each
     // narration beat — this is the REAL PSX cutscene render (void scene 5, cliff scene 7) we need to see.
     if (sc && !shot_done[sc]) {
@@ -267,9 +281,11 @@ static int run_oracle(const char* path) {
       gpu_native_shot(c, p);
     }
     if (verbose && (k % 250) == 0)
-      fprintf(stderr, "[selftest]   oracle f=%u loop=%u sm[0x48]=%u scene(bf9b4)=%u\n",
-              f, loopc(), sm48(), sc);
+      fprintf(stderr, "[selftest]   oracle f=%u loop=%u sm[0x48]=%u scene(bf9b4)=%u ovsig=0x%08X\n",
+              f, loopc(), sm48(), sc, ovsig());
   }
+  fprintf(stderr, "[selftest]   oracle END-OF-CUTSCENE: f=%u scene=%u ovsig=0x%08X (0x801138A4=free-roam field)\n",
+          f, scene(), ovsig());
   uint32_t adv = (uint16_t)(loopc() - c0);
   // The recomp full-PSX path froze with adv≈0 (counter stuck ~34). The interpreter must advance FAR past that.
   if (adv < 100) {
@@ -308,6 +324,15 @@ static bool od_is_cd_cache(uint32_t a) {
 }
 // Drive a core (no input) until 0x800bf9b4 == target, or cap frames elapse. Returns frames stepped; sets
 // *reached. The caller threads each core's own frame counter.
+// Drive a core (no input) until the MODE-overlay signature 0x80109450 == target (0x801138A4 = walkable
+// free-roam field), or cap frames elapse. Used to park BOTH cores at the first free-roam frame — the field
+// has just loaded, state is freshly initialised, so it is the most stable point to diff native vs oracle.
+static uint32_t od_advance_to_ovsig(Core* c, uint32_t& f, uint32_t target, uint32_t cap, bool* reached) {
+  void dc_step_frame(Core*, uint32_t); uint32_t n = 0;
+  while (n < cap && c->mem_r32(0x80109450u) != target) { dc_step_frame(c, f); f++; n++; }
+  *reached = (c->mem_r32(0x80109450u) == target);
+  return n;
+}
 static uint32_t od_advance_to_scene(Core* c, uint32_t& f, uint8_t target, uint32_t cap, bool* reached) {
   void dc_step_frame(Core*, uint32_t); uint32_t n = 0;
   while (n < cap && c->mem_r8(0x800bf9b4u) != target) { dc_step_frame(c, f); f++; n++; }
@@ -334,24 +359,15 @@ static int run_oraclediff(const char* path) {
   pad_repl_hold(&A->core, PAD_NONE); pad_repl_hold(&B->core, PAD_NONE);
   fprintf(stderr, "[oraclediff] both at GAME (A f%u, B f%u). Checkpoint-diffing the narration beats.\n", fa, fb);
 
-  const uint8_t CKPTS[] = { 2, 3, 5, 7 };   // narration scene ids (field/letter, transitions, void=5, cliff=7)
   int total_div = 0;
-  for (uint8_t ck : CKPTS) {
-    bool ra=false, rb=false;
-    od_advance_to_scene(&A->core, fa, ck, 4000, &ra);
-    od_advance_to_scene(&B->core, fb, ck, 8000, &rb);   // B (interp+CD) gets a larger cap
-    if (!ra || !rb) {
-      fprintf(stderr, "[oraclediff] CHECKPOINT scene=%u UNREACHED: native=%d(f%u) oracle=%d(f%u) "
-                      "— one core never reaches this beat (a divergence in itself).\n", ck, ra, fa, rb, fb);
-      continue;
-    }
-    // RAM diff the engine-state band, coalescing consecutive diffs into ranges.
+  // Shared engine-state RAM diff at an aligned checkpoint (both cores parked at the same game moment).
+  auto diff_band = [&](const char* label) {
     const uint32_t LO = 0x800B0000u, HI = 0x80110000u;
     const uint8_t* a = A->core.ram + (LO - 0x80000000u);
     const uint8_t* b = B->core.ram + (LO - 0x80000000u);
     int ranges = 0; uint32_t total_bytes = 0;
     uint32_t pagehist[0x60] = {0};   // per-0x1000-page diverging-byte counts across 0x800B0000..0x80110000
-    fprintf(stderr, "[oraclediff] === scene %u (native f%u, oracle f%u) ===\n", ck, fa, fb);
+    fprintf(stderr, "[oraclediff] === %s (native f%u, oracle f%u) ===\n", label, fa, fb);
     for (uint32_t i = 0; i < HI - LO; ) {
       if (a[i] == b[i] || od_is_render(LO + i) || od_is_cd_cache(LO + i)) { i++; continue; }
       uint32_t start = i, bytes = 0;
@@ -362,14 +378,42 @@ static int run_oraclediff(const char* path) {
         fprintf(stderr, "[oraclediff]   diff @0x%08X..0x%08X (%u B)  nat[0]=%02X ora[0]=%02X\n",
                 LO + start, LO + start + bytes, bytes, a[start], b[start]);
     }
-    fprintf(stderr, "[oraclediff]   scene %u: %d diverging ranges, %u bytes total%s (CD-cache excluded)\n",
-            ck, ranges, total_bytes, ranges > 48 ? " (first 48 shown)" : "");
+    fprintf(stderr, "[oraclediff]   %s: %d diverging ranges, %u bytes total%s (CD-cache excluded)\n",
+            label, ranges, total_bytes, ranges > 48 ? " (first 48 shown)" : "");
     for (uint32_t p = 0; p < 0x60; p++)
       if (pagehist[p]) fprintf(stderr, "[oraclediff]     page 0x%08X: %u diverging bytes\n",
                                0x800B0000u + (p << 12), pagehist[p]);
+  };
+
+  const uint8_t CKPTS[] = { 2, 3, 5, 7 };   // narration scene ids (field/letter, transitions, void=5, cliff=7)
+  for (uint8_t ck : CKPTS) {
+    bool ra=false, rb=false;
+    od_advance_to_scene(&A->core, fa, ck, 4000, &ra);
+    od_advance_to_scene(&B->core, fb, ck, 8000, &rb);   // B (interp+CD) gets a larger cap
+    if (!ra || !rb) {
+      fprintf(stderr, "[oraclediff] CHECKPOINT scene=%u UNREACHED: native=%d(f%u) oracle=%d(f%u) "
+                      "— one core never reaches this beat (a divergence in itself).\n", ck, ra, fa, rb, fb);
+      continue;
+    }
+    char lbl[32]; snprintf(lbl, sizeof lbl, "scene %u", ck);
+    diff_band(lbl);
     (void)verbose;
   }
-  fprintf(stderr, "[oraclediff] DONE: %d total diverging ranges across the narration beats.\n", total_div);
+
+  // FREE-ROAM checkpoint (later-282): park both cores at the first walkable-field frame (MODE overlay
+  // 0x80109450 -> 0x801138A4). The field has just loaded, so state is freshly initialised — the most stable
+  // point to diff native gameplay against the PSX oracle beyond the scripted narration.
+  {
+    bool ra=false, rb=false;
+    od_advance_to_ovsig(&A->core, fa, 0x801138A4u, 4000, &ra);
+    od_advance_to_ovsig(&B->core, fb, 0x801138A4u, 8000, &rb);
+    if (!ra || !rb)
+      fprintf(stderr, "[oraclediff] FREE-ROAM UNREACHED: native=%d(f%u) oracle=%d(f%u)\n", ra, fa, rb, fb);
+    else
+      diff_band("free-roam");
+  }
+
+  fprintf(stderr, "[oraclediff] DONE: %d total diverging ranges across narration + free-roam.\n", total_div);
   return 0;   // diagnostic harness: always exit 0 (it reports, it doesn't pass/fail)
 }
 
