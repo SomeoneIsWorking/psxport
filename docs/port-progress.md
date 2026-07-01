@@ -885,6 +885,22 @@ in-port profiler (later-186, `interp.cpp`) gives the TIME + FREQUENCY histograms
 ---
 
 # CURRENT FRONTIER (work these, in this order)
+**SESSION 2026-07-01 (later-282) — the ORACLE now verifies the field; free-roam opening is CONVERGENT.**
+The in-process interpreter+softGPU oracle (docs/oracle.md) has been extended to FREE-ROAM: it drives past the
+intro narration into the walkable field and stays alive, and `PSXPORT_SELFTEST=oraclediff` now state-syncs the
+native core vs the PSX oracle at a free-roam checkpoint. RESULT: the native free-roam opening is CONVERGENT —
+RAM (only PRNG/ring/stdio drift) AND render (native VK vs PSX soft-GPU dumps are a near-perfect content match,
+scratch/screenshots/oraclediff_freeroam_{native,oracle}.ppm). So the opening gameplay has NO divergence to fix.
+- **⇒ THE ORACLE IS NOW A RENDER GATE for the frontier work below.** The old "Verify = USER eyeball (no render
+  A/B gate)" caveat is SUPERSEDED for anything reachable in the field: after wiring/owning a render leaf, run
+  oraclediff and compare the state-aligned native-vs-oracle framebuffers (and the engine-band RAM diff) BEFORE
+  asking the user. Own render leaves top-down, then gate on the oracle. (See docs/oracle.md later-282.)
+- ☐ **NEXT (the render leaves — now oracle-gateable):** wire the orphaned PC-native `ov_terrain`
+  (engine_submit.cpp → terrain_render_pc) into the field terrain path, then the per-object effect cases
+  idx1/2/3/8, then ov_render_cmd — exactly as the later-221/222 block below details, but now VERIFIED via the
+  oracle render diff instead of eyeball-only. Terrain currently renders correctly via the PSX substrate, so this
+  is a pure top-down ownership advance; the oracle catches any pixel regression.
+
 **SESSION 2026-06-24 (later-221/222) — FRONT-END bugs fixed + render-walk RE-WIRED into the C spine.**
 - ✅ LOAD GAME owned (DEMO s4 native, `demo_frame_s4`/`load_machine_s4`, engine_demo.cpp) — fixed the freeze
   (s4 was the unhandled `default` in ov_demo_frame) + the cancel-replays-OP-movie bug (root prologue
