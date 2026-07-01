@@ -28,6 +28,7 @@
 #include "render_queue.h" // RQ_BACKGROUND + rq_push_2d_quad — native backdrop tilemap path
 #include "render_internal.h" // shared render internals (PktSpanSession, obj_world_ord, native_gt3gt4)
 #include "engine_math.h"     // ov_mat_mul/ov_apply_matlv/ov_rot_x/y/z — the GTE-transform cluster
+#include "mtx.h"              // class Mtx — libgte helpers (identity, diagonal, ...)
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -994,7 +995,7 @@ static void orch597AC_body(Core* c) {
   if ((c->mem_r16(node + 0x17E) & 0x20) && c->mem_r8(node + 0x179) != 0)
     c->mem_w8(node + 8, c->mem_r8(node + 9));
   // SetVector(0x1F800000, node->h[0xB8/BA/BC])
-  c->r[4]=0x1F800000u; c->r[5]=R16(node+0xB8); c->r[6]=R16(node+0xBA); c->r[7]=R16(node+0xBC); rec_dispatch(c, 0x800517BCu);
+  Mtx::diagonal(c, 0x1F800000u, (int32_t)R16(node+0xB8), (int32_t)R16(node+0xBA), (int32_t)R16(node+0xBC));   // was 0x800517BCu
   // RotMatrix(angles=node->hu[0x54/56/58] → 0x1F8000C0, out 0x1F800040)
   c->mem_w16(0x1F8000C0u, (uint16_t)HU(node+0x54));
   c->mem_w16(0x1F8000C2u, (uint16_t)HU(node+0x56));
@@ -1039,7 +1040,7 @@ static void orch597AC_body(Core* c) {
       uint32_t child = c->mem_r32(node + 0xC0 + 4u*(uint32_t)i);
       int psel = (int)(int16_t)c->mem_r16(child + 6);             // parent select (signed)
       // SetVector(0x1F800000, child->h[0x38/3A/3C]); RotMatrix(child+8 → 0x1F800020); mat 0x1F800040 = 0x1F800020 × 0x1F800000
-      c->r[4]=0x1F800000u; c->r[5]=R16(child+0x38); c->r[6]=R16(child+0x3A); c->r[7]=R16(child+0x3C); rec_dispatch(c, 0x800517BCu);
+      Mtx::diagonal(c, 0x1F800000u, (int32_t)R16(child+0x38), (int32_t)R16(child+0x3A), (int32_t)R16(child+0x3C));   // was 0x800517BCu
       c->r[4]=child+8; c->r[5]=0x1F800020u; rec_dispatch(c, 0x80085480u);
       c->r[4]=0x1F800020u; c->r[5]=0x1F800000u; c->r[6]=0x1F800040u; ov_mat_mul(c);
       if (psel >= 0) {                                            // SIBLING-by-index: parent = node[0xC0 + 4*psel]
