@@ -33,6 +33,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "spawn.h"   // world_despawn
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
@@ -61,7 +62,7 @@ void beh_id_compare_motion_dispatch(Core* c) {
           c->mem_w8(obj + 0x1b, (uint8_t)(n1b & 0xbf));// sb v0,0x1b(s0)  [delay slot @0x80145648]
           return;                                      // j 0x80145654 (NO despawn)
         }
-        c->r[4] = obj; rec_dispatch(c, 0x8007A624u);   // FUN_8007a624 (despawn)      [0x8014564C]
+        world_despawn(c, obj);   // FUN_8007a624 (despawn)      [0x8014564C]
         return;                                        // j 0x80145654 (epilogue)
       }
       return;                                          // other (>=2) -> epilogue     [0x80145290]
@@ -255,8 +256,7 @@ second_cull:;
         c->mem_w16(gsp + 0x12, (uint16_t)c->mem_r16(obj + 0x2e));  // sh node[0x2e],0x12(sp) [0x8014559C]
         c->mem_w16(gsp + 0x16, (uint16_t)c->mem_r16(s4 + 0xa));    // sh node[0x6a],0x16(sp) [0x801455A8]
         c->mem_w16(gsp + 0x1a, (uint16_t)c->mem_r16(obj + 0x36));  // sh node[0x36],0x1a(sp) [0x801455B8]
-        c->r[4] = 8; c->r[5] = gsp + 0x10; c->r[6] = (uint32_t)(int32_t)-0x50;
-        rec_dispatch(c, 0x8003116Cu);                   // FUN_8003116c (spawn)         [0x801455B4]
+        world_spawn_and_init(c, 8, gsp + 0x10, (uint32_t)(int32_t)-0x50);   // FUN_8003116c (spawn) [0x801455B4]
         c->mem_w8(0x8014BF5Eu, 0xa);                    // sb 0xa,DAT_8014bf5e          [0x801455C0]
       }
       c->mem_w16(s4 + 8, 0);                            // sh zero,8(s1)=node[0x68]     [0x801455C4]

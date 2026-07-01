@@ -19,6 +19,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "spawn.h"   // world_despawn
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
@@ -38,7 +39,7 @@ void beh_pure_inner_dispatch(Core* c) {
   if (st == 3) goto Lef0;
   goto Lret;                                       // st >= 4 default
 
- Lef0:  leaf(c, obj, 0x8007A624u); goto Lret;      // STATE 3
+ Lef0:  world_despawn(c, obj); goto Lret;      // STATE 3
  Ldf0:  leaf(c, obj, 0x80136F08u); goto Lret;      // STATE 0
 
  Le00:                                             // STATE 1

@@ -26,6 +26,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "spawn.h"   // world_despawn
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
@@ -70,7 +71,7 @@ void beh_typed_init_exit_poker(Core* c) {
   if (st == 1) goto S1;
   if ((int32_t)st < 2) { if (st == 0) goto S0; goto Lret; }
   if (st == 2) goto S2;
-  if (st == 3) { leaf1(c, nd, 0x8007A624u); goto Lret; }   // STATE 3
+  if (st == 3) { world_despawn(c, nd); goto Lret; }   // STATE 3
   goto Lret;                                         // st >= 4
 
  // ================= STATE 0 (INIT) =================

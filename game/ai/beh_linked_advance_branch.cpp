@@ -21,6 +21,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "spawn.h"   // world_despawn
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
@@ -39,7 +40,7 @@ void beh_linked_advance_branch(Core* c) {
   if (v1 == 1) goto S1;
   if ((int32_t)v1 < 2) { if (v1 == 0) { leaf(c, s0, 0x80128308u); } goto Lret; }  // STATE 0
   if (v1 == 2) goto Lret;                           // STATE 2 nothing
-  if (v1 == 3) { leaf(c, s0, 0x8007A624u); goto Lret; }  // STATE 3
+  if (v1 == 3) { world_despawn(c, s0); goto Lret; }  // STATE 3
   goto Lret;                                        // v1 >= 4
 
  // ---------------- STATE 1 ----------------

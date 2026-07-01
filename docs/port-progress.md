@@ -409,6 +409,18 @@ for content fns (call it). Do NOT mimic PSX hardware (GTE/GP0/OT) — remove Bee
   free link +0x24). Gate `despawnverify` 0-diff over 100+ live despawns. **Object-pool lifecycle now COMPLETE
   (alloc + free).** GOTCHA: the deactivate epilogue clears far more of the node than node[0]/[4] (first try
   diverged at node+0x0a) — RE the full 0x8007a7d0 epilogue.
+  - ✅ later-295 (2026-07-01): **wired despawn onto the LIVE path.** The oracle-verified native `ov_despawn`
+    sat ORPHAN since the override-flip removal (2026-06-22) — every one of the ~34 per-object AI behavior
+    handlers (`game/ai/beh_*.cpp`) that reach STATE 3 (despawn) still called `rec_dispatch(c, 0x8007A624u)`,
+    running the PSX recomp body instead of the already-verified native code sitting right next to it. Added
+    typed live-wiring entries `world_despawn(c, node)` / `world_spawn_and_init(c, a0, posSrc, a2)` (spawn.h)
+    and replaced every `rec_dispatch`/`leaf1(...)` call site targeting `0x8007A624u` (34 sites) and the one
+    targeting `0x8003116Cu` (spawn) with a direct native call — PC calls PC for what it owns, per the
+    top-down-ownership rule. No behavior change (same oracle-verified bodies), pure substrate-dependency
+    reduction; smoke-tested via headless `PSXPORT_AUTO_SKIP=1` (reaches free-roam, no regression) + the
+    camera oracle test (0-diff, unaffected). ObjectWorld is the next port-progress candidate (formalize
+    pool+spawn+despawn as `class ObjectWorld`, docs/pc-subsystem-rebuild.md) — this session activated the
+    dormant code first since that was higher-value and lower-risk than a speculative class wrap.
 - ✅ `FUN_8007712c` per-object CULL / LOD = `ov_object_cull` (game_tomba2.cpp). **BODY now PC-native
   (later-188)** — was a `rec_super_call` WRAP (recomp body ran hot, ~11.2% of sampled interp time); now
   `cull_native_body` reimplements the full decision (RE'd from the disasm: jump table 0x80016cc0, 5 state

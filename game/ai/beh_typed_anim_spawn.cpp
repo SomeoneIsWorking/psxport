@@ -27,6 +27,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "spawn.h"   // world_despawn
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
@@ -202,7 +203,7 @@ void beh_typed_anim_spawn(Core* c) {
 
  // ---------------- STATE 3 ----------------
  S3:
-  leaf1(c, s0, 0x8007A624u);                        // FUN_8007A624(node)
+  world_despawn(c, s0);                        // FUN_8007A624(node)
  Lret:
   c->r[29] = entry_sp;                              // restore caller sp (mirror epilogue)
   return;

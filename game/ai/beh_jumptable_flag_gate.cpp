@@ -32,6 +32,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "spawn.h"   // world_despawn
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
@@ -113,7 +114,7 @@ void beh_jumptable_flag_gate(Core* c) {
     if (st >= 2) {                                          // 8012D514 slti v0,v1,2 ; 8012D518 beqz -> 0x8012d530
       if (st == 2) return;                                  // 8012D534 beq v1,2 -> 0x8012d8f4 (epilogue)
       if (st == 3) {                                        // 8012D53C beq v1,3 -> 0x8012d8ec (despawn)
-        c->r[4] = obj; rec_dispatch(c, 0x8007A624u);        // 8012D8EC jal 0x8007a624 ; 8012D8F0 move a0,s0
+        world_despawn(c, obj);        // 8012D8EC jal 0x8007a624 ; 8012D8F0 move a0,s0
       }
       return;                                               // 8012D544 j 0x8012d8f4 (epilogue; other >=2 = no-op)
     }

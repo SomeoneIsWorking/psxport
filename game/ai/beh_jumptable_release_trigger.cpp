@@ -29,6 +29,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "spawn.h"   // world_despawn
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
@@ -51,7 +52,7 @@ void beh_jumptable_release_trigger(Core* c) {
       }
       if (st == 3) {
         // ---- STATE 3 (0x8012529c): despawn ----
-        c->r[4] = obj; rec_dispatch(c, 0x8007A624u);   // 8012529C jal 0x8007a624 (a0=s2)
+        world_despawn(c, obj);   // 8012529C jal 0x8007a624 (a0=s2)
         return;                                        // 801252A4 epilogue
       }
       return;                                          // 80124EC8 j 0x801252a4 (epilogue, no-op)

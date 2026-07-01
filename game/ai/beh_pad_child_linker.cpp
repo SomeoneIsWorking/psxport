@@ -32,6 +32,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "spawn.h"   // world_despawn
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
@@ -54,7 +55,7 @@ void beh_pad_child_linker(Core* c) {
   goto L9ac;                                           // default (state > 3)
 
  L9a4:                                          // STATE 3 — FUN_8007A624(node)
-  c->r[4] = obj; rec_dispatch(c, 0x8007A624u);
+  world_despawn(c, obj);
   goto L9ac;
 
  L334:                                          // STATE 0 — build the record list

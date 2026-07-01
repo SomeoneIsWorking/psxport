@@ -29,6 +29,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "spawn.h"   // world_despawn
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
@@ -44,7 +45,7 @@ void beh_record_list_scanner(Core* c) {
   uint8_t state = c->mem_r8(obj + 4);
 
   if (state == 2) return;                                       // no-op
-  if (state == 3) { c->r[4] = obj; rec_dispatch(c, 0x8007A624u); return; }
+  if (state == 3) { world_despawn(c, obj); return; }
   if (state > 3) return;                                        // default
 
   if (state == 0) {

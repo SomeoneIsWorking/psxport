@@ -31,6 +31,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "spawn.h"   // world_despawn
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
@@ -185,7 +186,7 @@ void beh_typed_variant_router(Core* c) {
   }
 
   if (st == 3) {
-    leaf1(c, nd, 0x8007A624u);                                           // FUN_8007a624
+    world_despawn(c, nd);                                           // FUN_8007a624
   }
 }
 

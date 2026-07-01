@@ -31,6 +31,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "spawn.h"   // world_despawn
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
@@ -51,7 +52,7 @@ void beh_cull_substate_orchestrator(Core* c) {
         return;                                        // 0x80132708  j 0x8013271C (epilogue)
       }
       if (st == 3) {                                   // 0x801325E0  beq a0,3 -> 0x80132714
-        c->r[4] = obj; rec_dispatch(c, 0x8007A624u);   // 0x80132714  jal FUN_8007a624 (a0=s0)  (despawn)
+        world_despawn(c, obj);   // 0x80132714  jal FUN_8007a624 (a0=s0)  (despawn)
         return;                                        // 0x80132718  falls into epilogue
       }
       return;                                          // 0x801325E8  j 0x8013271C (other >=2 -> epilogue)

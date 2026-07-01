@@ -27,6 +27,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "spawn.h"   // world_despawn
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
@@ -43,7 +44,7 @@ void beh_substate_edge_orchestrator(Core* c) {
     if (st >= 2) {                                    // slti s0,2 / beqz [0x8012EB74..78]
       if (st == 2) return;                            // beq s0,2 -> epilogue   [0x8012EB94]
       if (st == 3) {                                  // beq s0,3 -> despawn     [0x8012EB9C]
-        c->r[4] = obj; rec_dispatch(c, 0x8007A624u);  // FUN_8007a624           [0x8012ED68]
+        world_despawn(c, obj);  // FUN_8007a624           [0x8012ED68]
       }
       return;                                         // other (>=2) -> epilogue [0x8012EBA4]
     }

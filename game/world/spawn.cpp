@@ -497,6 +497,14 @@ void ov_spawn_and_init(Core* c) {   // FUN_8003116C (defined above, gated here a
   record_gate(c, spawn_and_init, 0x8003116Cu, "spawninitverify", s_v);
 }
 
+// ── typed live-wiring entries (called directly from native AI behavior handlers) ───────────────────
+void world_despawn(Core* c, uint32_t node) { c->r[4] = node; ov_despawn(c); }
+uint32_t world_spawn_and_init(Core* c, uint32_t a0, uint32_t posSrc, uint32_t a2) {
+  c->r[4] = a0; c->r[5] = posSrc; c->r[6] = a2;
+  ov_spawn_and_init(c);
+  return c->r[2];
+}
+
 // ------------------------------------------------------------------------------------------------
 // Public registration — ONE line from game_tomba2.cpp init.
 // ------------------------------------------------------------------------------------------------

@@ -25,6 +25,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "spawn.h"   // world_despawn
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
@@ -59,7 +60,7 @@ bool beh_pickup_collect_trigger_body(Core* c) {
     if (st >= 2) {                                   // 2 idle / 3 despawn / other
       if (st == 2) return true;
       if (st != 3) return true;
-      c->r[4] = obj; rec_dispatch(c, 0x8007A624u);   // despawn
+      world_despawn(c, obj);   // despawn
       return true;
     }
     if (st != 0) return true;

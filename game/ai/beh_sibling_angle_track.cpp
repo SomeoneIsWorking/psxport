@@ -37,6 +37,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "spawn.h"   // world_despawn
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
@@ -58,7 +59,7 @@ void beh_sibling_angle_track(Core* c) {
       // 80139608 beq v1,2 -> epilogue (0x80139820) ; 80139610 beq v1,3 -> despawn (0x80139818)
       if (st == 2) return;                              // idle
       if (st == 3) {                                    // 0x80139818: despawn
-        c->r[4] = obj; rec_dispatch(c, 0x8007A624u);    // 80139818 jal 0x8007a624 (a0=s2)
+        world_despawn(c, obj);    // 80139818 jal 0x8007a624 (a0=s2)
       }
       return;                                           // 80139618 j 0x80139820 (epilogue, no-op)
     }

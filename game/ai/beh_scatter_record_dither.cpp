@@ -31,6 +31,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "spawn.h"   // world_despawn
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
@@ -53,7 +54,7 @@ void beh_scatter_record_dither(Core* c) {
   goto L7d4;                                          // st >= 4 default
 
  L7cc:                                           // STATE 2/3 — FUN_8007A624(node)
-  c->r[4] = obj; rec_dispatch(c, 0x8007A624u);
+  world_despawn(c, obj);
   goto L7d4;
 
  L590:                                           // STATE 0 — seed the scatter record list

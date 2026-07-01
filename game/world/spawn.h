@@ -10,4 +10,12 @@ struct Core;
 void ov_entity_spawn(Core* c);   // FUN_80079C3C — pool-pop + field-init + list-link spawn primitive
 void spawn_dispatch(Core*);      // FUN_8007A980 — per-type spawn dispatcher (used by placement.cpp)
 void entity_spawn_register(void);
+// world_despawn(c, node) — FUN_8007A624, the DESPAWN primitive (oracle-verified 0-diff, see ov_despawn in
+// spawn.cpp). Typed live-wiring entry: the per-object AI behavior handlers (game/ai/beh_*.cpp) call this
+// directly in place of `rec_dispatch(c, 0x8007A624u)` wherever their own control flow is already native —
+// PC calls PC for what it owns, instead of round-tripping through the substrate for an owned leaf.
+void world_despawn(Core* c, uint32_t node);
+// world_spawn_and_init(c, a0, posSrc, a2) — FUN_8003116C, the SPAWN-AND-INIT helper (oracle-verified via
+// spawninitverify, see ov_spawn_and_init). Same live-wiring role as world_despawn, for spawn call sites.
+uint32_t world_spawn_and_init(Core* c, uint32_t a0, uint32_t posSrc, uint32_t a2);
 #endif

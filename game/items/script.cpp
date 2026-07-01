@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "script.h"
+#include "spawn.h"   // world_despawn
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
@@ -32,7 +33,7 @@ static void script_vm_4ce14(Core* c) {
   const uint32_t s5  = obj + 96;
   uint8_t state = c->mem_r8(obj + 4);
   if (state == 2) { c->r[2] = 2; return; }
-  if (state == 3) { c->r[4] = obj; rec_dispatch(c, 0x8007A624u); return; }   // v0 = sub return
+  if (state == 3) { world_despawn(c, obj); return; }   // v0 = sub return
   if (state > 3)  { c->r[2] = 3; return; }
   if (state == 0) {
     if (c->mem_r8(0x800BF873u) != 0) { c->mem_w8(obj + 4, 3); c->r[2] = 3; return; }  // global not enabled yet

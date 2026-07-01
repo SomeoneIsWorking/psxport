@@ -28,6 +28,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "spawn.h"   // world_despawn
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
@@ -47,7 +48,7 @@ void beh_cull_tick_render(Core* c) {
       // 8012D440 beq v1,2 -> 0x8012d4dc (epilogue, idle no-op)
       // 8012D448 beq v1,3 -> 0x8012d4d4 (despawn) ; else 8012D450 j 0x8012d4dc
       if (st == 3) {
-        c->r[4] = obj; rec_dispatch(c, 0x8007A624u);  // 8012D4D4 jal 0x8007a624 (a0=s0)
+        world_despawn(c, obj);  // 8012D4D4 jal 0x8007a624 (a0=s0)
       }
       return;                                      // 8012D4DC epilogue (state 2 / other)
     }
