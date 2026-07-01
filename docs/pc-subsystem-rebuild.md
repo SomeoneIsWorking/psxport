@@ -1,22 +1,26 @@
 # PC-native subsystem rebuild — the "class Scene + guest mirror" methodology
 
-USER DIRECTIVE (2026-07-01): rebuild the game's subsystems as **real native C++ classes** (`class Scene`,
-`class Camera`, `class ObjectWorld`, …) that OWN their data model, AND **write-through mirror** the fields
-that still-substrate content reads back into guest RAM, so the recompiled game keeps working. Do BOTH.
-"I just don't want you to do what we could just do via Ghidra" — i.e. do NOT hand-translate MIPS bodies
-op-by-op (`c->r[29]-=24; sw ra,16(sp)`, raw `mem_r8(base+0x14)` FIFO shifts). Build a genuine engine.
+USER DIRECTIVE (2026-07-01, refined): rebuild the game's subsystems as **real PC-game structure** — C++
+classes (`class Scene`, `class Camera`, `class ObjectWorld`, …) with named state, enums, and meaningful
+methods. The code MAY read/write **guest memory directly** so the still-recompiled parts keep working —
+**no mandatory mirror layer**. The thing to avoid is NOT "touching guest RAM"; it is **structureless
+op-by-op transcription** — "what we could just do via Ghidra": magic constants, magic compares, magic
+call-args, raw `mem_r8(base+0x14)` byte pushing, and especially MIPS-in-C (`c->r[29]-=24; sw ra,16(sp)`).
 
-## What "native, not transcription" means here
-- **Native model owns the truth.** A subsystem's state lives in native fields with real names/types and
-  real logic (`enum Phase`, `std::deque<Cmd>`, `float pos[3]`). The per-frame update reads/writes those
-  native fields, expressed as normal C++.
-- **The guest mirror is a boundary layer, not the model.** A `mirror_to_guest(Core*)` writes the native
-  fields into the guest addresses that substrate readers consume; `sync_from_guest(Core*)` pulls back any
-  field a substrate leaf mutated. Mirror ONLY the fields substrate actually reads — private native state
-  never touches guest RAM.
-- **0-diff A/B proves the MIRROR, not the code shape.** Keep the RAM+scratchpad 0-diff gate as a
-  correctness check on `mirror_to_guest`, but let the code be written as an engine. If a field isn't read
-  by substrate, it doesn't need to match and doesn't belong in the mirror.
+## What "PC-game structure, not transcription" means
+- **THE ANTI-PATTERN (do not do this):** `ov_scene_77d8c` — a countdown byte with magic compares (`==1`,
+  `==2`), a substrate call with magic args (`0x80074590(41,2,-65)`), magic writes (`135`/`0`) back to a
+  raw guest address. No named concept anywhere. That is a decompiler's output wearing a C function.
+- **THE GOAL:** the SAME behavior expressed as PC-game structure — e.g. a named SFX-cue timer with an
+  `enum Cue`, a named countdown field, and a `tick()` that plays the cue by name. It is FINE for `tick()`
+  to keep the state in guest RAM (via a named accessor) and to call the still-substrate sound leaf — what
+  changed is that the code now has *meaning* (types, names, methods), not raw offsets and magic numbers.
+- **Direct guest use is allowed and expected.** A subsystem class can hold its state in guest RAM behind
+  named accessors, or in native fields, or both — whatever is cleanest. A mirror/write-back is only worth
+  building when it genuinely simplifies the code, NOT as a rule.
+- **0-diff A/B stays a REGRESSION check** wherever the owned code still shares guest RAM with substrate
+  (proves you didn't corrupt the interface) — but it does NOT dictate the code shape, and a subsystem that
+  no longer shares a field with substrate needn't keep that field byte-identical.
 
 ## KEY FINDING — why the top-down ov_field_frame descent forced transcription (later-289 retro)
 Descending `ov_field_frame`'s children one control-function at a time lands on clusters whose DATA is
@@ -41,14 +45,13 @@ around every leaf call — a sync wrapper around PSX code, i.e. transcription. S
   render/collision still reads.
 
 ## Method (per subsystem)
-1. RE the subsystem's data model — what state, what lifecycle. Name the native fields.
-2. Find the MIRROR SURFACE: which guest addresses does still-substrate code READ? (grep generated/substrate
-   + the leaves). Those are the only fields `mirror_to_guest` must write. Everything else stays native-only.
-3. Build `class Foo` (game/<subsystem>/): native fields + native update logic + `mirror_to_guest` /
-   `sync_from_guest`.
-4. Wire it into the native frame loop; drop the substrate dispatch for what it replaces.
-5. Verify: `./run.sh` (USER eyeballs it plays right) AND, while substrate still reads the mirror, the
-   A/B RAM+scratchpad 0-diff (proves the mirror). Drop the 0-diff gate for a field once nothing reads it.
+1. RE the subsystem's data model + lifecycle. Give the state real names, types, and enums.
+2. Build `class Foo` (game/<subsystem>/): meaningful methods over named state. State may live in guest RAM
+   behind named accessors, in native fields, or both — pick what reads cleanly. No magic constants: name
+   the modes/cues/flags. Keep calling still-substrate leaves where the cluster isn't owned yet.
+3. Wire it into the native frame loop; drop the substrate dispatch for what it replaces.
+4. Verify: `./run.sh` (USER eyeballs it plays right) AND, wherever the owned code still shares guest RAM
+   with substrate, the A/B RAM+scratchpad 0-diff as a REGRESSION check (you didn't corrupt the interface).
 
 ## Candidate ranking (first target)
 1. **ObjectWorld / entity system** — behaviors already native; formalize pool+spawn+node as a class.
