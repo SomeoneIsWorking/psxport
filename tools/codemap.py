@@ -149,7 +149,9 @@ def build(natives):
     # direct C call graph: for each native, which other native symbols its body references
     sym_set = set(by_sym)
     callers = {s: set() for s in sym_set}
-    callee_re = re.compile(r'\b(ov_\w+|native_\w+|eng_\w+)\b')
+    # Match ov_*/native_*/eng_* free-function calls AND ClassName::method calls (the OOP wiring
+    # — Engine::foo, CutsceneCamera::runFieldUpdate, Mtx::identity, etc.).
+    callee_re = re.compile(r'\b(ov_\w+|native_\w+|eng_\w+|[A-Z][A-Za-z0-9_]*::[A-Za-z_]\w*)\b')
     for n in natives:
         for cal in callee_re.findall(n["body"]):
             if cal in sym_set and cal != n["sym"]:
