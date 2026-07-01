@@ -34,6 +34,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "spawn.h"   // world_despawn
+#include "mathlib.h"   // ov_rand
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
@@ -231,7 +232,7 @@ second_cull:;
   if (c->r[2] == 0) goto after_no_cull;                 // beqz v0 -> 0x8014560c        [0x80145518]
   {
     if (c->mem_r8(s4 + 7) == 1) {                       // lbu node[0x67]; bne 1 -> 0x80145548 [0x80145528]
-      rec_dispatch(c, 0x8009A450u);                     // FUN_8009a450 -> v0           [0x80145530]
+      ov_rand(c);                     // FUN_8009a450 -> v0           [0x80145530]
       c->r[4] = 0x87; c->r[5] = (c->r[2] & 3); c->r[6] = 0;  // a0=0x87, a1=v0&3, a2=0  [0x80145538..44]
       rec_dispatch(c, 0x80074590u);                     // FUN_80074590                [0x80145540]
     }

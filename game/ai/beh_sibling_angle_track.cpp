@@ -38,6 +38,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "spawn.h"   // world_despawn
+#include "graphics_bind.h"   // ov_obj_record_init
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
@@ -69,7 +70,7 @@ void beh_sibling_angle_track(Core* c) {
     // STATE 0 (0x80139620): cull-record init + per-type field seed from TD
     // ============================================================================================
     c->r[4] = obj; c->r[5] = 0xc; c->r[6] = 0x16;       // 80139620 a1=0xc ; 80139628 a2=0x16 (delay) ; a0=s2
-    rec_dispatch(c, 0x80051B70u);                       // 80139624 jal 0x80051b70
+    ov_obj_record_init(c);                       // 80139624 jal 0x80051b70
     if (c->r[2] != 0) return;                           // 8013962C bnez v0 -> 0x80139820 (init busy)
 
     c->mem_w8(obj + 4, (uint8_t)(c->mem_r8(obj + 4) + 1));  // 80139638/40/44 lbu v0,4 ; +1 ; sb -> state 1

@@ -43,6 +43,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "spawn.h"   // world_despawn
+#include "graphics_bind.h"   // ov_obj_record_init
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
@@ -78,7 +79,7 @@ void beh_typed_jumptable_pair(Core* c) {
     // 80139020 lui v0,0x8015 ; 80139028 addiu v0,-0x5658 -> TA ; addu v1,node3,TA ; lbu a2,(v1)
     uint8_t a2 = c->mem_r8(TA + c->mem_r8(obj + 3));  // 80139030 lbu a2, (TA + node3)
     c->r[4] = obj; c->r[5] = 0xc; c->r[6] = a2;       // 80139038 a1=0xc ; a2 (delay) ; a0=s0
-    rec_dispatch(c, 0x80051B70u);                     // 80139034 jal 0x80051b70
+    ov_obj_record_init(c);                     // 80139034 jal 0x80051b70
     if (c->r[2] != 0) return;                         // 8013903C bnez v0 -> 0x801395ac (init busy)
 
     uint16_t v56 = c->mem_r16(obj + 0x56);            // 80139048 lhu v1, 0x56(s0)

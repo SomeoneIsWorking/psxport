@@ -33,6 +33,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "spawn.h"   // world_despawn
+#include "graphics_bind.h"   // ov_obj_record_init
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
@@ -123,7 +124,7 @@ void beh_jumptable_flag_gate(Core* c) {
     // ---- STATE 0 [0x8012D54C]: box/size init ----
     uint8_t n3 = c->mem_r8(obj + 3);                        // 8012D54C lbu a2,3(s0)
     c->r[4] = obj; c->r[5] = 0xc; c->r[6] = (uint32_t)n3 + 0x48;  // 8012D550 a1=0xc ; 8012D558 a2=node[3]+0x48
-    rec_dispatch(c, 0x80051B70u);                           // 8012D554 jal 0x80051b70
+    ov_obj_record_init(c);                           // 8012D554 jal 0x80051b70
     if (c->r[2] != 0) return;                               // 8012D55C bnez v0 -> 0x8012d8f4 (init busy -> epilogue)
     n3 = c->mem_r8(obj + 3);                                // 8012D568 lbu v1,3(s0)
     c->mem_w8(obj + 0, 1);                                  // 8012D56C sb s1(=1),0(s0)  node[0]=1

@@ -166,7 +166,7 @@ static uint32_t obj_pos_compose(Core* c) {
   }
   if ((c->mem_r8(obj + 0x28) & 0x7fu) != 0) {
     c->r[4] = obj;
-    rec_dispatch(c, 0x800517F8u);
+    ov_obj_render_update(c);
     return c->r[2];
   }
   return last;

@@ -23,7 +23,7 @@ Totals: 483 native fns, 284 owned addresses, 103 LIVE / 380 ORPHAN.
 | 0x80026368 | LIVE | `ov_arr8_dispatch_26368` | game/object/engine_tomba2.cpp:233 |  | Native FUN_80026368 — iterate the 8-slot fixed object array at 0x80100… |
 | 0x800263E8 | LIVE | `ov_800263E8` | game/world/pool.cpp:355 | 0x8007AD98 | area object-record seeding. Selects a per-area byte sequence (table 0x… |
 | 0x800263E8 | LIVE | `ov_263e8_run` | game/world/pool.cpp:577 |  |  |
-| 0x80026C88 | LIVE | `ov_disp_26c88` | game/world/entity.cpp:131 | 0x80026C88 |  |
+| 0x80026C88 | LIVE | `ov_disp_26c88` | game/world/entity.cpp:134 | 0x80026C88 |  |
 | 0x80027768 | ORPHAN | `ov_submit_poly_gt4_bp` | game/render/engine_submit.cpp:567 |  |  |
 | 0x8002AB5C | LIVE | `ov_terrain` | game/render/engine_render_walk.cpp:27 |  |  |
 | 0x8002AB5C | LIVE | `ov_terrain` | game/render/engine_render_walk.cpp:376 |  | default case: the node's own render fn (node+24) — e.g. a collectable'… |
@@ -59,11 +59,11 @@ Totals: 483 native fns, 284 owned addresses, 103 LIVE / 380 ORPHAN.
 | 0x8003F698 | ORPHAN | `ov_render_cmd` | game/render/engine_submit.cpp:168 |  |  |
 | 0x8003FA44 | LIVE | `ov_render_frame_x` | game/render/engine_render.cpp:90 |  | mid-transition render orchestrator twin (reduced pass set, same native… |
 | 0x8003FB84 | ORPHAN | `ov_transition_d3c` | game/scene/engine_stage.cpp:638 |  | transition variant (sm[0x4c]==5/6). sm[0x4e]: 0 load, 1 effect 0x8003f… |
-| 0x8003FD10 | ORPHAN | `ov_osc_fd10` | game/world/entity.cpp:498 | 0x8003FD10 |  |
-| 0x80040410 | ORPHAN | `ov_child_spawn_40410` | game/world/entity.cpp:75 | 0x80040410 |  |
+| 0x8003FD10 | ORPHAN | `ov_osc_fd10` | game/world/entity.cpp:501 | 0x8003FD10 |  |
+| 0x80040410 | ORPHAN | `ov_child_spawn_40410` | game/world/entity.cpp:78 | 0x80040410 |  |
 | 0x80040410 | ORPHAN | `ov_child_spawn_40410` | game/world/entity.h:8 |  |  |
 | 0x80040558 | ORPHAN | `ov_sm40558` | game/object/engine_tomba2.cpp:37 |  | Call one node's handler exactly as the recomp does: a0 = node, jalr *(… |
-| 0x80040558 | ORPHAN | `ov_sm40558` | game/world/entity.cpp:364 | 0x80040558 |  |
+| 0x80040558 | ORPHAN | `ov_sm40558` | game/world/entity.cpp:367 | 0x80040558 |  |
 | 0x80044BD4 | ORPHAN | `native_area_load_bd4` | game/scene/engine_stage.cpp:580 |  | Native replacement for FUN_80044bd4(0x800452c0, area, mode, 1): seed t… |
 | 0x80044D8C | ORPHAN | `ov_lz_decompress` | game/core/asset.cpp:53 |  |  |
 | 0x80044D8C | ORPHAN | `ov_lz_decompress` | game/core/asset.h:7 |  |  |
@@ -85,7 +85,7 @@ Totals: 483 native fns, 284 owned addresses, 103 LIVE / 380 ORPHAN.
 | 0x800499E8 | ORPHAN | `ov_task0_boot` | game/scene/engine_level.cpp:134 |  |  |
 | 0x800499E8 | LIVE | `native_task0_bootstrap` | runtime/recomp/native_boot.cpp:724 |  | resolve \BIN\START.BIN natively, record its {LBA,size}, switch task 0 … |
 | 0x8004BD64 | ORPHAN | `ov_obj_pos_compose` | game/world/graphics_bind.cpp:174 |  |  |
-| 0x8004CE14 | ORPHAN | `ov_script_vm_4ce14` | game/items/script.cpp:112 | 0x8004CE14 |  |
+| 0x8004CE14 | ORPHAN | `ov_script_vm_4ce14` | game/items/script.cpp:113 | 0x8004CE14 |  |
 | 0x8004CE14 | ORPHAN | `ov_script_vm_4ce14` | game/items/script.h:8 |  |  |
 | 0x8004D338 | ORPHAN | `ov_inventory_add` | game/items/inventory.cpp:149 |  |  |
 | 0x8004D4C4 | ORPHAN | `ov_inventory_give_and_flag` | game/items/inventory.cpp:162 |  |  |
@@ -182,7 +182,7 @@ Totals: 483 native fns, 284 owned addresses, 103 LIVE / 380 ORPHAN.
 | 0x8007982C | ORPHAN | `ov_8007982C` | game/world/pool.cpp:171 | 0x8009A420 | zero the 1524-byte control block at 0x800BF870 (via 0x8009A420), then … |
 | 0x800798F8 | ORPHAN | `ov_800798F8` | game/world/pool.cpp:185 |  |  |
 | 0x80079C3C | ORPHAN | `ov_entity_spawn` | game/world/spawn.cpp:171 | 0x80079C3C |  |
-| 0x80079C3C | ORPHAN | `ov_entity_spawn` | game/world/spawn.h:10 |  |  |
+| 0x80079C3C | ORPHAN | `ov_entity_spawn` | game/world/spawn.h:10 | 0x8007A624 |  |
 | 0x80079DDC | ORPHAN | `ov_spawn_pool2` | game/world/spawn.cpp:323 | 0x80079DDC |  |
 | 0x80079F90 | ORPHAN | `ov_spawn_var2` | game/world/spawn.cpp:310 |  |  |
 | 0x8007A12C | ORPHAN | `ov_8007A12C` | game/world/pool.cpp:210 |  |  |
@@ -192,7 +192,7 @@ Totals: 483 native fns, 284 owned addresses, 103 LIVE / 380 ORPHAN.
 | 0x8007A810 | ORPHAN | `ov_8007A810` | game/world/pool.cpp:275 | 0x8009A420 | init a 4-entry, stride-264 array at 0x80100690: zero a 388-byte header… |
 | 0x8007A8E0 | ORPHAN | `ov_8007A8E0` | game/world/pool.cpp:289 | 0x8007982C | call 0x8007982C (block init) then clear the scratchpad u16 at 0x1F8001… |
 | 0x8007A904 | LIVE | `ov_objwalk` | game/object/engine_tomba2.cpp:188 |  | Native FUN_8007a904. Second list head is re-read fresh after list 1 (h… |
-| 0x8007A904 | ORPHAN | `ov_entity_walk_7a904` | game/world/entity.cpp:472 | 0x8007A904 |  |
+| 0x8007A904 | ORPHAN | `ov_entity_walk_7a904` | game/world/entity.cpp:475 | 0x8007A904 |  |
 | 0x8007A980 | ORPHAN | `ov_spawn_dispatch` | game/world/spawn.cpp:222 | 0x8007A980 |  |
 | 0x8007AA38 | ORPHAN | `ov_replace_dispatch` | game/world/spawn.cpp:394 | 0x8007AA38 |  |
 | 0x8007AAE8 | ORPHAN | `ov_record_alloc_g` | game/world/graphics_bind.cpp:71 |  |  |

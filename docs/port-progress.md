@@ -421,6 +421,28 @@ for content fns (call it). Do NOT mimic PSX hardware (GTE/GP0/OT) — remove Bee
     camera oracle test (0-diff, unaffected). ObjectWorld is the next port-progress candidate (formalize
     pool+spawn+despawn as `class ObjectWorld`, docs/pc-subsystem-rebuild.md) — this session activated the
     dormant code first since that was higher-value and lower-risk than a speculative class wrap.
+  - ✅ later-296 (2026-07-01): **swept for more orphaned-but-verified natives with the same shape** (a
+    `docs/code-map.md` ORPHAN entry whose exact guest address is still `rec_dispatch`'d from other native
+    files, even though a verified native impl already exists right there) and wired the biggest ones onto
+    the live path — same pattern as later-295, direct drop-in since `record_gate`/the `ov_*` entries already
+    set `c->r[2]` exactly like `rec_dispatch` would:
+    - `ov_obj_render_update` (`FUN_800517F8`, per-object render-state refresh, `graphics_bind.cpp`) — 5 sites
+      (`game/world/entity.cpp` ×4, `graphics_bind.cpp`'s own `obj_pos_compose`).
+    - `ov_obj_set_geom` (`FUN_80077B38`, geometry-block/model attach, `graphics_bind.cpp`) — 10 sites across
+      `beh_jumptable_release_trigger`/`beh_typed_variant_router`/`beh_typed_init_exit_poker`/`beh_typed_anim_spawn`.
+    - `ov_obj_record_init` (`FUN_80051B70`, per-object cull-record init, `graphics_bind.cpp`) — 8 sites across
+      `beh_cull_tick_render`/`beh_area_transition_machine`/`beh_jumptable_flag_gate`/`beh_sibling_angle_track`/
+      `beh_typed_jumptable_pair`/`beh_typed_table_seed_gate`/`beh_typed_anim_spawn`.
+    - `ov_rand` (`FUN_8009A450`, the platform LCG PRNG, `game/math/mathlib.cpp`) — 9 sites across
+      `game/world/entity.cpp`, `beh_id_compare_motion_dispatch`, `beh_typed_variant_router`'s `prng()`
+      helper, `beh_scatter_record_dither` (×6).
+    32 call sites total, all mechanical (register-set-then-`rec_dispatch` → the same registers then the
+    native fn), verified by rebuilding clean + a headless free-roam smoke run + turning on the LIVE
+    diagnostic gates (`rendupdverify`/`recinitverify`/`setgeomverify`/`randverify`) under real gameplay
+    traffic: **0 mismatches** (`randverify` alone saw 220000+ live calls). `ov_apply_matlv`
+    (`FUN_80084220`, 8 external call sites in `game/render/engine_submit.cpp`) is a further candidate but is
+    `static` (file-local) in `engine_math.cpp` — needs exposing via a header first; left for a follow-up.
+    `ov_inventory_give_and_flag` (`FUN_8004D4C4`, 8 sites) similarly has no header yet.
 - ✅ `FUN_8007712c` per-object CULL / LOD = `ov_object_cull` (game_tomba2.cpp). **BODY now PC-native
   (later-188)** — was a `rec_super_call` WRAP (recomp body ran hot, ~11.2% of sampled interp time); now
   `cull_native_body` reimplements the full decision (RE'd from the disasm: jump table 0x80016cc0, 5 state

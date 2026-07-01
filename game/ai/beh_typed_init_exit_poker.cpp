@@ -27,6 +27,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "spawn.h"   // world_despawn
+#include "graphics_bind.h"   // ov_obj_set_geom
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
@@ -85,7 +86,7 @@ void beh_typed_init_exit_poker(Core* c) {
       c->mem_w16(nd + 0x5C, 0);
       c->mem_w8 (nd + 13, 0);
       c->mem_w32(nd + 0x3C, c->mem_r32(0x800ECF80u));
-      leaf3(c, nd, A1_M0, 15, 0x80077B38u);
+      (c->r[4]=nd, c->r[5]=A1_M0, c->r[6]=15, ov_obj_set_geom(c));
       c->mem_w16(nd + 0x80, 20);
       c->mem_w16(nd + 0x82, 40);
       c->mem_w16(nd + 0x84, 20);
@@ -98,7 +99,7 @@ void beh_typed_init_exit_poker(Core* c) {
       c->mem_w16(nd + 0x5C, 0);
       c->mem_w8 (nd + 13, 0);
       c->mem_w32(nd + 0x3C, c->mem_r32(0x800ECF80u));
-      leaf3(c, nd, A1_M0, 0, 0x80077B38u);
+      (c->r[4]=nd, c->r[5]=A1_M0, c->r[6]=0, ov_obj_set_geom(c));
       c->mem_w16(nd + 0x2E, 17260);
       c->mem_w16(nd + 0x32, (uint16_t)(int16_t)-1900);
       c->mem_w16(nd + 0x36, 11200);
@@ -112,7 +113,7 @@ void beh_typed_init_exit_poker(Core* c) {
       c->mem_w16(nd + 0x5C, 0);
       c->mem_w8 (nd + 13, 0);
       c->mem_w32(nd + 0x3C, c->mem_r32(0x800ECF58u));
-      leaf3(c, nd, A1_M2, 2, 0x80077B38u);
+      (c->r[4]=nd, c->r[5]=A1_M2, c->r[6]=2, ov_obj_set_geom(c));
       goto L83d0;                                    // shared size block -> node[4]+=1
     case 3:                                          // sub3 @0x801183f4
       c->mem_w8 (nd + 11, 16);
@@ -121,7 +122,7 @@ void beh_typed_init_exit_poker(Core* c) {
       c->mem_w16(nd + 0x5C, 0);
       c->mem_w8 (nd + 13, 0);
       c->mem_w32(nd + 0x3C, c->mem_r32(0x800ECF80u));
-      leaf3(c, nd, A1_M0, 26, 0x80077B38u);
+      (c->r[4]=nd, c->r[5]=A1_M0, c->r[6]=26, ov_obj_set_geom(c));
       c->mem_w16(nd + 0x80, 32);
       c->mem_w16(nd + 0x82, 64);
       c->mem_w16(nd + 0x84, 20);

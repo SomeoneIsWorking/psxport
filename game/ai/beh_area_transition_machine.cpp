@@ -40,6 +40,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "spawn.h"   // world_despawn
+#include "graphics_bind.h"   // ov_obj_record_init
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
@@ -205,7 +206,7 @@ void beh_area_transition_machine(Core* c) {
 
   // ---------- STATE 0 (init) ----------
   c->r[4] = nd; c->r[5] = 0xc; c->r[6] = 0x52;
-  rec_dispatch(c, 0x80051B70u);                        // FUN_80051b70(node, 0xc, 0x52)
+  ov_obj_record_init(c);                        // FUN_80051b70(node, 0xc, 0x52)
   if (c->r[2] != 0) return;
   c->mem_w16(nd + 0x2e, 0x4f00);
   c->mem_w16(nd + 0x32, 0xed5e);

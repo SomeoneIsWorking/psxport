@@ -32,6 +32,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include "spawn.h"   // world_despawn
+#include "graphics_bind.h"   // ov_obj_set_geom
+#include "mathlib.h"   // ov_rand
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
@@ -41,11 +43,11 @@ constexpr uint32_t BEH_FN = 0x8011C164u;
 
 static inline void     leaf1(Core* c, uint32_t a0, uint32_t fn) { c->r[4] = a0; rec_dispatch(c, fn); }
 static inline uint32_t leafr1(Core* c, uint32_t a0, uint32_t fn) { c->r[4] = a0; rec_dispatch(c, fn); return c->r[2]; }
-static inline uint32_t prng(Core* c) { rec_dispatch(c, 0x8009A450u); return c->r[2]; }   // FUN_8009a450 (no args)
+static inline uint32_t prng(Core* c) { ov_rand(c); return c->r[2]; }   // FUN_8009a450 (no args)
 
 // FUN_80077b38(node, 0x8014c808, n)
 static inline void call_77b38(Core* c, uint32_t nd, uint32_t n) {
-  c->r[4] = nd; c->r[5] = 0x8014C808u; c->r[6] = n; rec_dispatch(c, 0x80077B38u);
+  c->r[4] = nd; c->r[5] = 0x8014C808u; c->r[6] = n; ov_obj_set_geom(c);
 }
 
 // STATE 1, cases 0 & 1 (identical): PRNG-driven substate machine on node[6]. Always ends node[0x29]=0.

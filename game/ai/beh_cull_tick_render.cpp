@@ -29,6 +29,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "spawn.h"   // world_despawn
+#include "graphics_bind.h"   // ov_obj_record_init
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
@@ -61,7 +62,7 @@ void beh_cull_tick_render(Core* c) {
     // 8012D464 sll v0,1 ; 8012D468 addu ; 8012D46C lh a2,(v0)  (SIGNED halfword)
     int16_t tv = (int16_t)c->mem_r16(0x8014A260u + (uint32_t)n3a * 2);
     c->r[4] = obj; c->r[5] = 0xc; c->r[6] = (uint32_t)(int32_t)tv;
-    rec_dispatch(c, 0x80051B70u);                  // 8012D470 jal 0x80051b70 ; 8012D474 (delay) a1=0xc
+    ov_obj_record_init(c);                  // 8012D470 jal 0x80051b70 ; 8012D474 (delay) a1=0xc
     if (c->r[2] != 0) return;                       // 8012D478 bnez v0 -> 0x8012d4dc (init busy/failed -> epilogue)
 
     c->mem_w8(obj + 4, (uint8_t)(c->mem_r8(obj + 4) + 1));  // 8012D480..8C lbu v0,4(s0); +1; sb v0,4(s0) -> state 1

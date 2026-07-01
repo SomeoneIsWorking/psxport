@@ -28,6 +28,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "spawn.h"   // world_despawn
+#include "graphics_bind.h"   // ov_obj_set_geom
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
@@ -82,7 +83,7 @@ void beh_typed_anim_spawn(Core* c) {
       c->mem_w8 (s0 + 8, 240);                      // node[8] = 240 (delay-slot store)
       goto Lret;
     case 3: case 4: {                               // jt0 -> 0x8012dab8
-      leaf3(c, s0, 12, 79, 0x80051B70u);            // FUN_80051B70(node, 12, 79)
+      (c->r[4]=s0, c->r[5]=12, c->r[6]=79, ov_obj_record_init(c));            // FUN_80051B70(node, 12, 79)
       if (c->r[2] != 0) goto Lret;
       uint32_t rec = c->mem_r32(s0 + 0xC0);         // node[0xC0]
       c->mem_w16(rec + 8, (uint16_t)(n3 == 3 ? 182 : (uint16_t)(int16_t)-182));
@@ -90,7 +91,7 @@ void beh_typed_anim_spawn(Core* c) {
       goto Lret;
     }
     case 5:                                         // jt0 -> 0x8012db08
-      leaf3(c, s0, 12, 7, 0x80051B70u);             // FUN_80051B70(node, 12, 7)
+      (c->r[4]=s0, c->r[5]=12, c->r[6]=7, ov_obj_record_init(c));             // FUN_80051B70(node, 12, 7)
       if (c->r[2] != 0) goto Lret;
       leaf1(c, s0, 0x800517F8u);                    // FUN_800517F8(node)
       goto Lret;
@@ -108,7 +109,7 @@ void beh_typed_anim_spawn(Core* c) {
         if (c->mem_r8(0x800BF9DDu) != 9) goto Lret;
         c->mem_w8(s0 + 5, 1);                       // node[5] = 1
         c->mem_w32(s0 + 0x3C, c->mem_r32(0x800ECF80u)); // node[0x3C] = *(0x800ECF80) (delay slot)
-        leaf3(c, s0, A1_MODEL, 15, 0x80077B38u);    // FUN_80077B38(node, 0x8014C808, 15)
+        (c->r[4]=s0, c->r[5]=A1_MODEL, c->r[6]=15, ov_obj_set_geom(c));    // FUN_80077B38(node, 0x8014C808, 15)
         c->mem_w16(s0 + 0x60, 64);
         c->mem_w16(s0 + 0x62, 0);
         c->mem_w16(s0 + 0x64, (uint16_t)(int16_t)-32);
@@ -133,7 +134,7 @@ void beh_typed_anim_spawn(Core* c) {
       if (s1 == 0) {                                // 0x8012dc40
         c->mem_w8(s0 + 5, 1);                       // node[5] = 1
         c->mem_w32(s0 + 0x3C, c->mem_r32(0x800ECF80u));
-        leaf3(c, s0, A1_MODEL, 2, 0x80077B38u);     // FUN_80077B38(node, 0x8014C808, 2)
+        (c->r[4]=s0, c->r[5]=A1_MODEL, c->r[6]=2, ov_obj_set_geom(c));     // FUN_80077B38(node, 0x8014C808, 2)
         c->mem_w16(s0 + 0x60, 32);
         c->mem_w16(s0 + 0x62, 16);
         c->mem_w16(s0 + 0x64, 0);
@@ -152,7 +153,7 @@ void beh_typed_anim_spawn(Core* c) {
       if (s1 == 0) {                                // 0x8012dcd0
         c->mem_w8(s0 + 5, 1);
         c->mem_w32(s0 + 0x3C, c->mem_r32(0x800ECF80u));
-        leaf3(c, s0, A1_MODEL, 17, 0x80077B38u);    // FUN_80077B38(node, 0x8014C808, 17)
+        (c->r[4]=s0, c->r[5]=A1_MODEL, c->r[6]=17, ov_obj_set_geom(c));    // FUN_80077B38(node, 0x8014C808, 17)
         c->mem_w16(s0 + 0x60, (uint16_t)(int16_t)-200);
         c->mem_w16(s0 + 0x62, 32);
         c->mem_w16(s0 + 0x64, 0);
@@ -169,7 +170,7 @@ void beh_typed_anim_spawn(Core* c) {
       if (s1 == 0) {                                // 0x8012dd6c
         c->mem_w8(s0 + 5, 1);
         c->mem_w32(s0 + 0x3C, c->mem_r32(0x800ECF80u));
-        leaf3(c, s0, A1_MODEL, 14, 0x80077B38u);    // FUN_80077B38(node, 0x8014C808, 14)
+        (c->r[4]=s0, c->r[5]=A1_MODEL, c->r[6]=14, ov_obj_set_geom(c));    // FUN_80077B38(node, 0x8014C808, 14)
         c->mem_w16(s0 + 0x60, (uint16_t)(int16_t)-200);
         c->mem_w16(s0 + 0x62, 48);
         c->mem_w16(s0 + 0x64, 0);

@@ -32,6 +32,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "spawn.h"   // world_despawn
+#include "mathlib.h"   // ov_rand
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
@@ -107,14 +108,14 @@ void beh_scatter_record_dither(Core* c) {
   s1 = 0;
   s0 = (int)(obj + 0x54);
  L6b0:
-  rec_dispatch(c, 0x8009A450u); v0 = c->r[2];
+  ov_rand(c); v0 = c->r[2];
   s1 += 1;
   v1 = (uint16_t)(c->mem_r16((uint32_t)s2 + 0) - 1 + (uint32_t)(((int32_t)v0 >> 7) & 3));
   c->mem_w16((uint32_t)s2 + 0, v1);
-  rec_dispatch(c, 0x8009A450u); v0 = c->r[2];
+  ov_rand(c); v0 = c->r[2];
   v1 = (uint16_t)(c->mem_r16((uint32_t)s0 - 2) - 14 - (uint32_t)(((int32_t)v0 >> 8) & 0xf));
   c->mem_w16((uint32_t)s0 - 2, v1);
-  rec_dispatch(c, 0x8009A450u); v0 = c->r[2];
+  ov_rand(c); v0 = c->r[2];
   s2 += 8;
   v1 = (uint16_t)(c->mem_r16((uint32_t)s0 + 0) - 2 + (uint32_t)(((int32_t)v0 >> 7) & 3));
   c->mem_w16((uint32_t)s0 + 0, v1);
@@ -126,14 +127,14 @@ void beh_scatter_record_dither(Core* c) {
   s1 = 0;
   s0 = (int)(obj + 0x54);
  L73c:
-  rec_dispatch(c, 0x8009A450u); v0 = c->r[2];
+  ov_rand(c); v0 = c->r[2];
   s1 += 1;
   v1 = (uint16_t)(c->mem_r16((uint32_t)s2 + 0) - 3 + (uint32_t)(((int32_t)v0 >> 7) & 7));
   c->mem_w16((uint32_t)s2 + 0, v1);
-  rec_dispatch(c, 0x8009A450u); v0 = c->r[2];
+  ov_rand(c); v0 = c->r[2];
   v1 = (uint16_t)(c->mem_r16((uint32_t)s0 - 2) - 14 - (uint32_t)(((int32_t)v0 >> 8) & 0xf));
   c->mem_w16((uint32_t)s0 - 2, v1);
-  rec_dispatch(c, 0x8009A450u); v0 = c->r[2];
+  ov_rand(c); v0 = c->r[2];
   s2 += 8;
   v1 = (uint16_t)(c->mem_r16((uint32_t)s0 + 0) - 4 + (uint32_t)(((int32_t)v0 >> 7) & 7));
   c->mem_w16((uint32_t)s0 + 0, v1);
