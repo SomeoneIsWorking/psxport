@@ -51,6 +51,16 @@ public:
   void submode0();
   void submode1();
 
+  // sm[0x48] state handlers (0=area INIT, 1=area RESUME-INIT, 2=RUNNING dispatcher) and the
+  // sm[0x4c] area LOAD/TRANSITION machine. Formerly `ov_game_s48_0..2` / `ov_game_s4c` /
+  // `ov_game_s48_2_frame` free statics in engine_stage.cpp. All operate on the sm task-state
+  // block at *0x1F800138 that Engine already owns.
+  void s48_0();
+  void s48_1();
+  void s48_2();
+  void s4c();
+  void s48_2_frame();
+
   // ── ov_field_frame direct children (progressive class-ification) ──────────────────────────
   // areaModeDispatch: the 22-way area-mode jump-table dispatcher at guest 0x8001CAC0. Reads the
   //   area RENDER-MODE byte at 0x800BF870 and dispatches to the overlay handler that owns that

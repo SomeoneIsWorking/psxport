@@ -94,7 +94,7 @@ static inline void d3(Core* c, uint32_t fn, uint32_t a0, uint32_t a1, uint32_t a
 
 // sm[0x48] == 0 — area INIT: advance to running (sm[0x48]=2), reset the sub-machine state, run the per-area
 // setup fns. (GAME.BIN 0x801086e0) Verified runtime-exercised + RAM 0-diff.
-static void ov_game_s48_0(Core* c) {
+void Engine::s48_0() { Core* c = core;
   uint32_t ra = c->r[31], sp = c->r[29];
   c->r[29] = sp - 0x18; c->mem_w32(c->r[29] + 0x10, ra);   // mirror prologue: addiu sp,-0x18; sw ra,0x10(sp)
   uint32_t sm = c->mem_r32(0x1f800138);
@@ -111,7 +111,7 @@ static void ov_game_s48_0(Core* c) {
 // flag resets. (GAME.BIN 0x80108720) Faithful transcription of the disasm; the field-intro path used to
 // verify (later-168) does not hit sm[0x48]==1, so this handler is not yet runtime-exercised — its callee
 // FUN_8007b3f4 is synchronous like the init pair, so it is registered alongside ov_game_s48_0.
-static void ov_game_s48_1(Core* c) {
+void Engine::s48_1() { Core* c = core;
   uint32_t ra = c->r[31], sp = c->r[29];
   c->r[29] = sp - 0x18; c->mem_w32(c->r[29] + 0x10, ra);   // mirror prologue: addiu sp,-0x18; sw ra,0x10(sp)
   uint32_t sm = c->mem_r32(0x1f800138);
@@ -142,7 +142,7 @@ static void ov_game_s48_1(Core* c) {
 // handler's guest return (the `jal handler`'s ra = jal_addr+8 = the trampoline's `j 0x8010881c`, byte-
 // identical so the handler's saved-ra on its stack matches the reference) and redirect to the handler;
 // else redirect to the guest epilogue 0x8010881c (which restores ra from 0x10(sp) and returns).
-static void ov_game_s48_2(Core* c) {
+void Engine::s48_2() { Core* c = core;
   static const uint32_t handler[6] = {
     0x8010882cu, 0x801088d8u, 0x80106478u, 0x80106a24u, 0x801089c4u, 0x80108a60u,
   };
@@ -177,7 +177,7 @@ static void ov_game_s48_2(Core* c) {
 //   each state runs then `j 0x80106a14` (shared epilogue: lw ra,0x14(sp); lw s0,0x10(sp); jr ra).
 // The states are reached by `jr v0` (computed), so they run with ra UNCHANGED (= this fn's caller ra, which
 // rec_dispatch restores) and return only via `j 0x80106a14` — so we leave r[31] alone and just redirect.
-static void ov_game_s4c(Core* c) {
+void Engine::s4c() { Core* c = core;
   static const uint32_t state[9] = {
     0x801064c4u, 0x80106510u, 0x80106580u, 0x801065b8u, 0x801066b8u,
     0x80106830u, 0x80106930u, 0x8010694cu, 0x801069b4u,
@@ -239,7 +239,7 @@ static void ov_field_transition(Core* c);// fwd — native FUN_80108a60 (sm[0x4a
 // sm[0x48]==2 RUNNING, per-frame variant: dispatch sm[0x4a] handler. handler[0] = the GAME->SOP bridge
 // 0x8010882c (owned native, ov_game_submode0); the others stay rec_dispatch leaves (synchronous; a
 // not-yet-sync leaf that yields is contained by the scheduler setjmp = frame-done).
-static void ov_game_s48_2_frame(Core* c) {
+void Engine::s48_2_frame() { Core* c = core;
   static const uint32_t handler[6] = {
     0x8010882cu, 0x801088d8u, 0x80106478u, 0x80106a24u, 0x801089c4u, 0x80108a60u,
   };
@@ -1008,11 +1008,11 @@ int ov_game_frame(Core* c) {
     } else if (s4a != 1) {
       if (cfg_dbg("gframe")) fprintf(stderr, "[gframe] ret0 s48=2 s4a=%u unowned-submode sm@%08X\n", s4a, sm); return 0; // unowned running sub-mode
     }
-    ov_game_s48_2_frame(c);
+    c->engine.s48_2_frame();
   } else if (s48 == 0) {
-    ffspan_begin(); ov_game_s48_0(c); ffspan_end("s48_0");
+    ffspan_begin(); c->engine.s48_0(); ffspan_end("s48_0");
   } else if (s48 == 1) {
-    ffspan_begin(); ov_game_s48_1(c); ffspan_end("s48_1");
+    ffspan_begin(); c->engine.s48_1(); ffspan_end("s48_1");
   } else {
     if (cfg_dbg("gframe")) fprintf(stderr, "[gframe] ret0 unknown s48=%u sm@%08X\n", s48, sm); return 0; // unknown top state -> cooperative
   }
@@ -1365,7 +1365,7 @@ void Engine::areaUpdateTail() {
 // (native_boot.cpp). The sub-handler ov_game_* defs are kept as future direct-call targets. No-op.
 void stage_scan_overlay(Core* c, uint32_t base, uint32_t size) {
   (void)c; (void)base; (void)size;
-  (void)ov_game_s48_0; (void)ov_game_s48_1; (void)ov_game_s48_2; (void)ov_game_s4c;
+  // (all four sm-handler methods now live on Engine — Engine::s48_0/s48_1/s48_2/s4c)
 }
 
 // ===== Stage-0/START.BIN task-switch + preload state machine (moved from native_boot.cpp, 2026-07
