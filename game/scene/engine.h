@@ -17,6 +17,7 @@
 #pragma once
 #include "scene_transition.h"    // Engine owns the SceneTransition subsystem instance
 #include "transition_state3.h"   // Engine owns the TransitionState3 walker instance
+#include "object_list.h"         // Engine owns the ObjectList entity-list walkers
 class Core;
 
 class Engine {
@@ -28,6 +29,7 @@ public:
   // Callers reach them as `c->engine.sceneTransition.method(args)`.
   SceneTransition sceneTransition;   // area-mask trigger + sub-scene swap handshake
   TransitionState3 transitionState3;  // mid-transition entity walker (guest FUN_8007B04C)
+  ObjectList       objectList;        // per-frame entity-list walkers (guest FUN_8007A904 / FUN_80069B28)
 
   // ── GAME-stage entry points (called by the scheduler each frame) ────────────────────────────
   // stagePrologue: one-time prologue that runs when the GAME task enters — task-slot setup, first

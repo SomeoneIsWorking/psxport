@@ -23,9 +23,6 @@
 
 extern void     rec_dispatch(Core* c, uint32_t addr);   // run a function by address (override or interp)
 
-static int  s_dbg   = -1;
-static long s_walks = 0;
-
 // Call one node's handler exactly as the recomp does: a0 = node, jalr *(node+0x1c). Tag g_current_object
 // = node around the WHOLE handler so fps60 attributes ALL geometry it submits to this entity (the
 // interpolation identity), independent of whether projection happens inside the cull subtree.
@@ -142,7 +139,9 @@ static const NativeBeh g_native_beh[] = {
   { 0x80029B40u, ov_beh_pos_history_trail_run,        "pos_history_trail" },          // resident
   { 0x8007DC38u, ov_beh_variant_overlay_lifecycle_run,"variant_overlay_lifecycle" },  // resident
 };
-static bool dispatch_native_behavior(Core* c, uint32_t h) {
+// Exposed (non-static) so class-owned walkers (ObjectList::walkAll/walkAux, TransitionState3::walkOnce)
+// in game/object|scene/*.cpp can share this native-behavior table lookup.
+bool dispatch_native_behavior(Core* c, uint32_t h) {
   for (const NativeBeh& b : g_native_beh)
     if (b.addr == h) { b.fn(c); return true; }
   return false;
@@ -154,52 +153,7 @@ const char* behavior_native_name(uint32_t h) {
   return nullptr;
 }
 
-static inline void call_handler(Core* c, uint32_t node) {
-  uint32_t prev = c->game->fps60.current_object;
-  c->game->fps60.current_object = node;
-  c->r[4] = node;                                  // $a0
-  uint32_t h = c->mem_r32(node + T2OBJ_HANDLER);
-  // DIAG `behhist`: tally distinct per-object behavior handlers (node+0x1C) so we know the concrete
-  // entity-behavior set to own natively (the bulk of the still-PSX object SYSTEM logic). (later-230)
-  if (cfg_dbg("behhist")) {
-    static uint32_t addr[64]; static long cnt[64]; static int nh=0; static long w=0;
-    int i=0; for(; i<nh; i++) if(addr[i]==h) break;
-    if(i==nh && nh<64){ addr[nh]=h; cnt[nh]=0; nh++; }
-    if(i<64) cnt[i]++;
-    if((++w % 300)==0){ fprintf(stderr,"[behhist] distinct=%d handlers:\n", nh);
-      for(int j=0;j<nh;j++) fprintf(stderr,"   %08X  x%ld\n", addr[j], cnt[j]); }
-  }
-  if (!dispatch_native_behavior(c, h)) rec_dispatch(c, h);   // owned behavior → native; else PSX leaf
-  c->game->fps60.current_object = prev;
-}
-
-static void walk_list(Core* c, uint32_t head, long* count) {
-  for (uint32_t n = head; n; ) {
-    uint32_t next = c->mem_r32(n + T2OBJ_NEXT);       // read next BEFORE the handler may unlink the node
-    c->mem_w8(n + T2OBJ_RENDER_FLAG, 0);              // engine clears the per-frame render flag
-    call_handler(c, n);
-    n = next; (*count)++;
-  }
-}
-
-// Native FUN_8007a904. Second list head is re-read fresh after list 1 (handlers in list 1 may mutate
-// it) — matches the recomp body, which reloads DAT_800f2624 across the first loop.
-// Non-static: called DIRECTLY from the native field per-frame update (engine_stage.cpp ov_field_frame).
-void ov_objwalk(Core* c) {
-  long nodes = 0;
-  walk_list(c, c->mem_r32(T2_OBJLIST_HEAD_1), &nodes);
-  walk_list(c, c->mem_r32(T2_OBJLIST_HEAD_2), &nodes);
-
-  // Native widescreen margin (later-133): render the objects the wide frustum re-included (collected by
-  // ov_object_cull during the walk) via per-node flushes here — after all handlers ran, before the OT is
-  // submitted. No +1 poke -> the handlers stayed in their culled branch -> gameplay 0-diff.
-  margin_render_flush(c);
-
-  if (s_dbg < 0) s_dbg = cfg_dbg("engine") ? 1 : 0;
-  if (s_dbg && (s_walks % 300) == 0)
-    fprintf(stderr, "[engine] objwalk #%ld: %ld nodes\n", s_walks, nodes);
-  s_walks++;
-}
+// (call_handler / walk_list moved to ObjectList — game/object/object_list.cpp.)
 
 // Route ONE object method natively-or-substrate, mirroring call_handler's dispatch (a0 = object, fps60
 // current-object tracking, native behavior if owned else the recomp leaf). Shared by the field-frame
@@ -215,18 +169,7 @@ void dispatch_obj_method(Core* c, uint32_t obj, uint32_t h) {
   c->game->fps60.current_object = prev;
 }
 
-// Native FUN_80069B28 — a second per-frame object-list walk (head 0x800F2738; method ptr at node+0x1C,
-// next at node+0x24). Read next BEFORE the call (a handler may unlink the node). Faithful to the recomp
-// body: unlike ov_objwalk it does NOT clear a render flag. A direct child of the native ov_field_frame
-// (was `d0(c, 0x80069b28)`); owning it removes the dispatcher body from the substrate.
-void ov_list_walk_69b28(Core* c) {
-  for (uint32_t n = c->mem_r32(0x800F2738u); n; ) {
-    uint32_t h    = c->mem_r32(n + 0x1Cu);
-    uint32_t next = c->mem_r32(n + 0x24u);
-    dispatch_obj_method(c, n, h);
-    n = next;
-  }
-}
+// (ov_list_walk_69b28 was moved to ObjectList::walkAux — game/object/object_list.cpp.)
 
 // Native FUN_80026368 — iterate the 8-slot fixed object array at 0x80100400 (stride 0x4C); for each
 // ACTIVE slot (byte[0] != 0) dispatch its method by type byte[2] through the jump table 0x8009D314

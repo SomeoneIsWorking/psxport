@@ -157,6 +157,7 @@ set(PORT_SRC
   game/scene/bg_scene_transition_sm.cpp
   game/scene/scene_transition.cpp
   game/scene/transition_state3.cpp
+  game/object/object_list.cpp
   game/items/script.cpp
   game/object/animation.cpp
   game/input/input.cpp
