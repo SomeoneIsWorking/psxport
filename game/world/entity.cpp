@@ -202,7 +202,7 @@ static void sm40558(Core* c) {
     uint32_t s5 = c->mem_r8(obj + 5);
     if (s5 == 0) {
       c->r[4] = obj; c->r[5] = c->mem_r8(obj + 3);
-      rec_dispatch(c, 0x80040410u);
+      ov_child_spawn_40410(c);
       if (c->r[2] != 0) c->mem_w8(obj + 5, (uint8_t)(c->mem_r8(obj + 5) + 1));
       c->mem_w16(obj + 128, 64);
       c->mem_w16(obj + 130, 128);
