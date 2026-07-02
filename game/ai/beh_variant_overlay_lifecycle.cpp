@@ -30,6 +30,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "spawn.h"   // world_despawn (FUN_8007A624)
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
@@ -92,7 +93,7 @@ void beh_variant_overlay_lifecycle(Core* c) {
     if (c->mem_r8(nd + 3) == 0) {
       c->mem_w8(OVL_FLAG, (uint8_t)(c->mem_r8(OVL_FLAG) & 0xfb));
     }
-    leaf1(c, nd, 0x8007a624u);                              // FUN_8007A624 (despawn)
+    world_despawn(c, nd);                              // FUN_8007A624 (despawn)
   }
 }
 

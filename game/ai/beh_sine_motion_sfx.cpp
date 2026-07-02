@@ -30,6 +30,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "spawn.h"   // world_despawn (FUN_8007A624)
 #include "graphics_bind.h"   // ov_obj_render_update (FUN_800517F8)
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
@@ -299,7 +300,7 @@ void beh_sine_motion_sfx(Core* c) {
   goto Lret;
 
  L5a0:
-  c->r[4] = nd; rec_dispatch(c, 0x8007a624u);   // FUN_8007A624(node)
+  world_despawn(c, nd);                        // FUN_8007A624(node) — native
 
  Lret:
   return;

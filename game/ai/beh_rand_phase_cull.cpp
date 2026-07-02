@@ -30,6 +30,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "spawn.h"   // world_despawn (FUN_8007A624)
 #include "collision.h"  // ov_list_scan_31780 (FUN_80031780)
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
@@ -49,7 +50,7 @@ void beh_rand_phase_cull(Core* c) {
   if (st != 1) {
     if (st > 1) {                                // 1 < bVar1
       if (st > 3) return;                        // 3 < bVar1 -> nothing
-      leaf1(c, nd, 0x8007a624u);                 // STATE 2/3: FUN_8007A624(node)
+      world_despawn(c, nd);                 // STATE 2/3: FUN_8007A624(node)
       return;
     }
     if (st != 0) return;                         // st < 2, not 1, not 0 -> nothing

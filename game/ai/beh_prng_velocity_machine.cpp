@@ -26,6 +26,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "spawn.h"   // world_despawn (FUN_8007A624)
 #include "graphics_bind.h"   // ov_obj_render_update (FUN_800517F8)
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
@@ -342,7 +343,7 @@ void beh_prng_velocity_machine(Core* c) {
 
  // ---------------------------------------------------------------- STATE 3
  L7cd8: {
-   call1(c, s1, 0x8007a624u);                        // FUN_8007A624(node)
+   world_despawn(c, s1);                             // FUN_8007A624(node) — native
    goto Lret;
  }
 

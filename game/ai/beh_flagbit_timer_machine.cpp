@@ -25,6 +25,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "spawn.h"   // world_despawn (FUN_8007A624)
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
@@ -51,7 +52,7 @@ void beh_flagbit_timer_machine(Core* c) {
   if (s0 == 1) goto L42c;
   if ((int32_t)s0 < 2) { if (s0 == 0) goto S0; goto Lret; }
   if (s0 == 2) goto Lret;
-  if (s0 == 3) { leaf1(c, nd, 0x8007a624u); goto Lret; }
+  if (s0 == 3) { world_despawn(c, nd); goto Lret; }
   goto Lret;
 
  // ================= STATE 0 (INIT) =================

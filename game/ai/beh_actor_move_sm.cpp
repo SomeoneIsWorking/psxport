@@ -27,6 +27,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "spawn.h"   // world_despawn (FUN_8007A624)
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
@@ -54,7 +55,7 @@ void beh_actor_move_sm(Core* c) {
       uint8_t f = c->mem_r8(nd + 0x1b);
       if (f & 0x40) { c->mem_w8(nd + 0x1b, (uint8_t)(f & 0xbf)); return; }
       c->mem_w32(c->mem_r32(nd + 0x10) + 0xc, 0);
-      leaf1(c, nd, 0x8007a624u);                          // FUN_8007A624
+      world_despawn(c, nd);                          // FUN_8007A624
       return;
     }
     // STATE 2

@@ -39,6 +39,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "spawn.h"   // world_despawn (FUN_8007A624)
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
@@ -89,7 +90,7 @@ void beh_pos_history_trail(Core* c) {
     if (st != 2) {
       if (st != 3) return;
       // ---- STATE 3 ----
-      leaf1(c, nd, 0x8007a624u);                 // FUN_8007A624 (still-PSX leaf)
+      world_despawn(c, nd);                 // FUN_8007A624 (still-PSX leaf)
       return;
     }
     // ---- STATE 2 : RETIRE-WALK ----
