@@ -161,8 +161,8 @@ static void ov_800783DC(Core* c) {
     } else {
       uint32_t tbl = c->mem_r32(0x800A54A8u + mode * 4u);
       uint32_t a0  = tbl + (uint32_t)c->mem_r8(A + 1) * 8u;
-      int16_t  h0  = (int16_t)c->mem_r16(a0 + 0);
-      int16_t  s17e = (int16_t)c->mem_r16(S0 + 382);
+      int16_t  h0  = c->mem_r16s(a0 + 0);
+      int16_t  s17e = c->mem_r16s(S0 + 382);
       c->mem_w32(S0 + 44, (uint32_t)((int32_t)h0 << 16));
       c->mem_w32(S0 + 48, (uint32_t)(c->mem_r16s(a0 + 2) << 16));
       if (s17e < 0) c->mem_w16(S0 + 50, (uint16_t)(c->mem_r16(S0 + 50) + 70));

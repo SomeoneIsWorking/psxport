@@ -69,7 +69,7 @@ void beh_anim_trigger_gates(Core* c) {
   {
     uint8_t val = c->mem_r8(0x800E7EAAu);
     if (val == 31) {
-      if ((int16_t)c->mem_r16(0x800E7EB6u) < 8710) c->mem_w8(obj + 1, 1);
+      if (c->mem_r16s(0x800E7EB6u) < 8710) c->mem_w8(obj + 1, 1);
       goto Ld44;
     }
     if ((uint8_t)(val - 26) < 5) {                 // (val-26)&0xff < 5  ->  val in [26,30]
@@ -106,7 +106,7 @@ void beh_anim_trigger_gates(Core* c) {
     uint32_t a2 = obj; int a0i = 0;
     do {
       uint32_t rec = c->mem_r32(a2 + 0xC0);
-      if ((int16_t)c->mem_r16(rec + 8) < -127)
+      if (c->mem_r16s(rec + 8) < -127)
         c->mem_w16(rec + 8, (uint16_t)(c->mem_r16(rec + 8) + 16));
       a0i += 1; a2 += 4;
     } while (a0i < (int)c->mem_r8(obj + 8));

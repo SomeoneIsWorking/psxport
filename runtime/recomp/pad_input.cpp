@@ -458,7 +458,7 @@ void Pad::serviceFrame() {
         rec_fc, c->mem_r8(0x800bf839u), c->mem_r8(0x800bf80fu), c->mem_r8(0x1f800236u),
         c->mem_r16(sm+0x4a), c->mem_r16(sm+0x4c), c->mem_r16(sm+0x4e),
         c->mem_r32(0x800be258u), c->mem_r8(0x800bf870u), c->mem_r8(0x800bf809u), c->mem_r8(0x800bf89cu),
-        c->mem_r32(0x800e7e68u), (int16_t)c->mem_r16(0x800fe916u), (int16_t)c->mem_r16(0x800fe91eu));
+        c->mem_r32(0x800e7e68u), c->mem_r16s(0x800fe916u), c->mem_r16s(0x800fe91eu));
     }
     rec_fc++;
   }

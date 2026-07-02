@@ -34,9 +34,9 @@ static inline uint32_t cur_render_node(Core* c) {
 // origin projection only before the scene camera is known (first frame / no terrain in scene).
 static inline float obj_world_ord(Core* c, uint32_t node) {
   if (node && camview_valid()) {
-    float wx = (float)(int16_t)c->mem_r16(node + 0x2E);
-    float wy = (float)(int16_t)c->mem_r16(node + 0x32);
-    float wz = (float)(int16_t)c->mem_r16(node + 0x36);
+    float wx = (float)c->mem_r16s(node + 0x2E);
+    float wy = (float)c->mem_r16s(node + 0x32);
+    float wz = (float)c->mem_r16s(node + 0x36);
     return proj_camview_world_ord(wx, wy, wz);
   }
   return proj_obj_center_ord();

@@ -69,7 +69,7 @@ static void place_objects(Core* c) {
   if (rec == 0 || c->mem_r8(rec) == 0xff) return;
   uint8_t area = c->mem_r8(0x800BF870u);
   do {
-    int16_t cond = (int16_t)c->mem_r16(rec + 0x0e);
+    int16_t cond = c->mem_r16s(rec + 0x0e);
     bool skip = false;
     if (cond == 1) {
       uint32_t bits = c->mem_r16(0x800BFE56u);          // u16, zero-extended
@@ -93,8 +93,8 @@ static void place_objects(Core* c) {
         c->mem_w16(node + 0x32, c->mem_r16(rec + 4));
         c->mem_w16(node + 0x54, 0);
         c->mem_w16(node + 0x36, c->mem_r16(rec + 6));
-        c->mem_w16(node + 0x56, place_deg2ang((int16_t)c->mem_r16(rec + 0x0a)));
-        c->mem_w16(node + 0x58, place_deg2ang((int16_t)c->mem_r16(rec + 0x0c)));
+        c->mem_w16(node + 0x56, place_deg2ang(c->mem_r16s(rec + 0x0a)));
+        c->mem_w16(node + 0x58, place_deg2ang(c->mem_r16s(rec + 0x0c)));
       }
     }
     rec += 0x14;

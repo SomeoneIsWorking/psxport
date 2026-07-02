@@ -204,9 +204,9 @@ static void exec_simple(Core* c, uint32_t in) {
     case 0x0C: W(RT(in), c->r[RS(in)] & IMM(in)); break;                    // andi
     case 0x0D: W(RT(in), c->r[RS(in)] | IMM(in)); break;                    // ori
     case 0x0E: W(RT(in), c->r[RS(in)] ^ IMM(in)); break;                    // xori
-    case 0x20: W(RT(in), (uint32_t)(int8_t)c->mem_r8(c->r[RS(in)] + SIMM(in))); break;   // lb
+    case 0x20: W(RT(in), (uint32_t)c->mem_r8s(c->r[RS(in)] + SIMM(in))); break;   // lb
     case 0x24: W(RT(in), (uint32_t)c->mem_r8(c->r[RS(in)] + SIMM(in))); break;           // lbu
-    case 0x21: W(RT(in), (uint32_t)(int16_t)c->mem_r16(c->r[RS(in)] + SIMM(in))); break; // lh
+    case 0x21: W(RT(in), (uint32_t)c->mem_r16s(c->r[RS(in)] + SIMM(in))); break; // lh
     case 0x25: W(RT(in), (uint32_t)c->mem_r16(c->r[RS(in)] + SIMM(in))); break;          // lhu
     case 0x23: W(RT(in), c->mem_r32(c->r[RS(in)] + SIMM(in))); break;                    // lw
     case 0x22: W(RT(in), c->mem_lwl(c->r[RT(in)], c->r[RS(in)] + SIMM(in))); break;      // lwl

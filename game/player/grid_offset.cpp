@@ -79,7 +79,7 @@ static uint32_t grid_offset_48360(Core* c) {
   uint32_t t3 = a3;
   if (t2 & 8u) {
     // sheared X-from-Z: dz -= a3 + ((((a2 - a3) * dx) ) >> 6);  dx := 0
-    int32_t  dxs = (int16_t)c->mem_r16(SP + 0x1C2);
+    int32_t  dxs = c->mem_r16s(SP + 0x1C2);
     int32_t  prod = (int32_t)mlo((int32_t)(a2 - t3), dxs);
     c->mem_w16(SP + 0x1C2, 0);
     uint32_t dz  = c->mem_r16(SP + 0x1C6);
@@ -88,7 +88,7 @@ static uint32_t grid_offset_48360(Core* c) {
     c->mem_w16(SP + 0x1C6, (uint16_t)(dz - sub));
   } else {
     // divided Z-from-X: dz -= ((dx_signed - a3) * a2) / (a3 ^ 0x3F);  dx := 0
-    int32_t  dxs = (int16_t)c->mem_r16(SP + 0x1C2);
+    int32_t  dxs = c->mem_r16s(SP + 0x1C2);
     int32_t  num = (int32_t)mlo((int32_t)(a2 & 0xFFFFu), (dxs - (int32_t)(t3 & 0xFFFFu)));
     int32_t  den = (int32_t)(a3 ^ 0x3Fu);
     int32_t  qv  = mdiv(num, den);

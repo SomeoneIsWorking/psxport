@@ -151,11 +151,11 @@ void beh_jumptable_flag_gate(Core* c) {
   uint8_t p0 = c->mem_r8(0x1F800207u);                      // 8012D5B4 lbu a0,0x207(1f80)
   if (p0 < 0x16) return;                                    // 8012D5C0 bnez(p0<0x16) -> 0x8012d8f4 epilogue
   if (p0 == 0x16) {                                         // 8012D5C8 bne a0,0x16 -> 0x8012d5e4 (skip when !=)
-    int16_t cnt = (int16_t)c->mem_r16(0x800E7EB6u);         // 8012D5D0 lh v0,0x36(a1)  (a1=0x800e7e80)
+    int16_t cnt = c->mem_r16s(0x800E7EB6u);         // 8012D5D0 lh v0,0x36(a1)  (a1=0x800e7e80)
     if (cnt < 0x2a30) return;                               // 8012D5DC bnez(cnt<0x2a30) -> 0x8012d8f4 epilogue
   }
   // [0x8012D5E4] entry gate on DAT_800bf80d
-  if ((int8_t)c->mem_r8(0x800BF80Du) != 0) {                // 8012D5E4 lb v0 (signed) ; 8012D5EC beqz -> 0x8012d5fc
+  if (c->mem_r8s(0x800BF80Du) != 0) {                // 8012D5E4 lb v0 (signed) ; 8012D5EC beqz -> 0x8012d5fc
     c->mem_w8(obj + 1, 1);                                  // 8012D5F8 sb v1(=node[4]=1),1(s0)  node[1]=1
     return;                                                 // 8012D594... j 0x8012d8f4 epilogue
   }
@@ -198,7 +198,7 @@ void beh_jumptable_flag_gate(Core* c) {
       }
       // 0x8012d73c:
       if (c->mem_r8(0x1F800207u) < 0x1c) return;           // 8012D748 bnez(p<0x1c) -> 0x8012d8f4 epilogue
-      if ((int16_t)c->mem_r16(0x1F8000DEu) < 0x3f8c) return;  // 8012D758/75C bnez(lh<0x3f8c) -> 0x8012d8f4 epilogue
+      if (c->mem_r16s(0x1F8000DEu) < 0x3f8c) return;  // 8012D758/75C bnez(lh<0x3f8c) -> 0x8012d8f4 epilogue
       c->mem_w8(obj + 1, 1);                                // 8012D768 sb v0(=1),1(s0)  (j 0x8012d8f4 delay slot)
       return;                                               // 8012D764 j epilogue
     }

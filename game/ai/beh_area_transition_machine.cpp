@@ -60,7 +60,7 @@ constexpr uint32_t G_e84 = 0x800E7E84u, G_e85 = 0x800E7E85u, G_e86 = 0x800E7E86u
 constexpr uint32_t G_f5c = 0x800E7F5Cu;
 constexpr uint32_t G_806c = 0x800E806Cu, G_8074 = 0x800E8074u, G_8076 = 0x800E8076u, G_8078 = 0x800E8078u;
 
-static inline int16_t s16(Core* c, uint32_t a) { return (int16_t)c->mem_r16(a); }
+static inline int16_t s16(Core* c, uint32_t a) { return c->mem_r16s(a); }
 
 static void cd0_tail(Core* c, uint32_t nd) {           // @0x80127cd0
   c->mRender->mNodeXform.build(nd);                              // was rec_dispatch 0x80051844

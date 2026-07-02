@@ -51,7 +51,7 @@ void beh_typed_init_scene_trigger(Core* c) {
     if (st != 0) return;                             // (only state 0 left)
     // ---- STATE 0: cull-record init + size/box setup ----
     uint8_t area = c->mem_r8(0x800BF870u);
-    int16_t tv = (int16_t)c->mem_r16(0x800A4C94u + (uint32_t)area * 2);
+    int16_t tv = c->mem_r16s(0x800A4C94u + (uint32_t)area * 2);
     c->r[4] = obj; c->r[5] = 0xc; c->r[6] = (uint32_t)(int32_t)tv;
     c->engine.graphicsBind.recordInit();   // OWNED native graphics-bind (render-record alloc + geomblk resolve into node+0xC0)
     if (c->r[2] != 0) return;                        // init busy/failed -> EPI
@@ -147,7 +147,7 @@ void beh_typed_init_scene_trigger(Core* c) {
             use_table = false;
           }
         }
-        if (use_table) sv4 = (int16_t)c->mem_r16(0x800A4CA8u + (uint32_t)n3 * 2);
+        if (use_table) sv4 = c->mem_r16s(0x800A4CA8u + (uint32_t)n3 * 2);
         c->r[4] = (uint32_t)(int32_t)sv4; c->r[5] = 0;
         rec_dispatch(c, 0x8007E110u);
         c->mem_w32(obj + 0x14, c->r[2]);

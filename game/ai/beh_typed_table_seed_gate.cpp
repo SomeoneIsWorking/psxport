@@ -94,7 +94,7 @@ void beh_typed_table_seed_gate(Core* c) {
     c->r[4] = obj; rec_dispatch(c, 0x80077EBCu);      // 80133D2C jal 0x80077ebc (a0=s1)
     // fall into render tail (80133D34)
   } else {
-    int16_t a1v = (int16_t)c->mem_r16(obj + 0x60);    // 80133D0C lh a1,0x60(s1) (sign-extend)
+    int16_t a1v = c->mem_r16s(obj + 0x60);    // 80133D0C lh a1,0x60(s1) (sign-extend)
     c->r[4] = obj; c->r[5] = (uint32_t)(int32_t)a1v;
     rec_dispatch(c, 0x800778E4u);                     // 80133D10 jal 0x800778e4 (a0=s1, a1=node[0x60])
     if (c->r[2] == 0) {                               // 80133D18 bnez v0 -> render tail ; else fall to 0x80133D20

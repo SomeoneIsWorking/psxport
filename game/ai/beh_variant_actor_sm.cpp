@@ -99,7 +99,7 @@ void beh_variant_actor_sm(Core* c) {
 
     uint8_t n5 = c->mem_r8(nd + 5);
     if (n5 == 0) {
-      if (c->mem_r8(0x1f800207u) != 10 || (int16_t)c->mem_r16(0x1f800160u) >= 8000) {
+      if (c->mem_r8(0x1f800207u) != 10 || c->mem_r16s(0x1f800160u) >= 8000) {
         if (leafr1(c, nd, 0x8007778cu) == 0) {              // FUN_8007778C
           if (c->mem_r8(0x800bf8bcu) == 255) c->mem_w8(nd + 4, 3);
         } else if (c->mem_r8(nd + 0x2b) == 3) {

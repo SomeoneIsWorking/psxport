@@ -33,7 +33,7 @@ void cd_loadfile_native(Core* c, uint32_t dest, uint32_t lba, uint32_t size);  /
 uint32_t Asset::lzDecompress(uint32_t desc, uint32_t dst, uint32_t src0, uint32_t srclen) {
   Core* c = this->core;
   const uint32_t src_end = src0 + srclen;
-  const int32_t stride = (int16_t)c->mem_r16(desc + 4);
+  const int32_t stride = c->mem_r16s(desc + 4);
   int32_t offtab[8];
   for (int i = 0; i < 8; i++) {
     const int32_t base   = (int32_t)c->mem_r32(LZ_OFFTAB_BASE + i * 8 + 0);
@@ -82,12 +82,12 @@ void Asset::unpackGroup(uint32_t tablePtr, uint32_t anchorEnd) {
         fprintf(stderr, "[unpack] dumped live input -> %s (table=0x%08X count=%d)\n", p, tablePtr, count); } } }
   for (int32_t i = 0; i < count; i++) {
     const uint32_t desc   = entry;
-    const int32_t  stride = (int16_t)c->mem_r16(desc + 4);
-    const int32_t  field  = (int16_t)c->mem_r16(desc + 6);
+    const int32_t  stride = c->mem_r16s(desc + 4);
+    const int32_t  field  = c->mem_r16s(desc + 6);
     const uint32_t srclen = c->mem_r32(desc + 8);
     const uint32_t dst    = anchorEnd - (uint32_t)(2 * stride * field);
     if (dbg) fprintf(stderr, "[unpack]  e%d dst=(%d,%d) %dx%d src=0x%08X len=%u srcbytes:"
-                     " %02X %02X %02X %02X\n", i, (int16_t)c->mem_r16(desc), (int16_t)c->mem_r16(desc+2),
+                     " %02X %02X %02X %02X\n", i, c->mem_r16s(desc), c->mem_r16s(desc+2),
                      stride, field, src, srclen, c->mem_r8(src), c->mem_r8(src+1), c->mem_r8(src+2), c->mem_r8(src+3));
     lzDecompress(desc, dst, src, srclen);                // native decompress into transient scratch
     src   += srclen;
@@ -166,8 +166,8 @@ void Asset::loadTexgroup() {
 // slots), so no draw reads a slot mid-overwrite.
 void Asset::uploadImage(uint32_t desc, uint32_t src) {
   Core* c = this->core;
-  const int x = (int16_t)c->mem_r16(desc + 0), y = (int16_t)c->mem_r16(desc + 2);
-  const int w = (int16_t)c->mem_r16(desc + 4), h = (int16_t)c->mem_r16(desc + 6);
+  const int x = c->mem_r16s(desc + 0), y = c->mem_r16s(desc + 2);
+  const int w = c->mem_r16s(desc + 4), h = c->mem_r16s(desc + 6);
   if (w > 0 && h > 0) gpu_native_load_image(c, x, y, w, h, src);
 }
 

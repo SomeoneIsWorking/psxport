@@ -54,7 +54,7 @@ void beh_two_child_steer(Core* c) {
 
  // ================= STATE 0 (INIT) =================
  S0: {
-   if ((int16_t)c->mem_r16(0x800ed098u) < 2) { c->mem_w8(nd + 4, 3); goto Lret; }
+   if (c->mem_r16s(0x800ed098u) < 2) { c->mem_w8(nd + 4, 3); goto Lret; }
    uint32_t orig = c->mem_r8(nd + 4);              // guest a0 for FUN_8007AAE8 (state before ++)
    c->mem_w8(nd + 8, 2);
    c->mem_w8(nd + 9, 2);

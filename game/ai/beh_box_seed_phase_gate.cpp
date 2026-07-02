@@ -74,14 +74,14 @@ void beh_box_seed_phase_gate(Core* c) {
     c->mem_w16(s1 + 0x86, c->mem_r16(elem + 8));    // node[0x86] = tbl[+8]
 
     // node[0x2E] = node[0x4E] = (tbl[+2] + tbl[+6]) / 2  (signed, round toward zero)
-    int32_t s_26 = (int16_t)c->mem_r16(elem + 2) + (int16_t)c->mem_r16(elem + 6);
+    int32_t s_26 = c->mem_r16s(elem + 2) + c->mem_r16s(elem + 6);
     int32_t avg1 = (int32_t)(((uint32_t)s_26 + ((uint32_t)s_26 >> 31)) >> 1);  // sra((x + signbit),1)
     c->mem_w16(s1 + 0x2E, (uint16_t)avg1);
     c->mem_w16(s1 + 0x32, c->mem_r16(elem + 0));    // node[0x32] = tbl[+0]
     c->mem_w16(s1 + 0x4E, c->mem_r16(s1 + 0x2E));   // node[0x4E] = node[0x2E]
 
     // node[0x36] = (tbl[+4] + tbl[+8]) / 2  (signed, round toward zero)
-    int32_t s_36 = (int16_t)c->mem_r16(elem + 4) + (int16_t)c->mem_r16(elem + 8);
+    int32_t s_36 = c->mem_r16s(elem + 4) + c->mem_r16s(elem + 8);
     int32_t avg2 = (int32_t)(((uint32_t)s_36 + ((uint32_t)s_36 >> 31)) >> 1);
     uint16_t v32 = c->mem_r16(s1 + 0x32);           // node[0x32]
     c->mem_w16(s1 + 0x36, (uint16_t)avg2);

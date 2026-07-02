@@ -75,7 +75,7 @@ void beh_lift_platform(Core* c) {
     // STATE 0 (INIT)
     c->mem_w32(0x800bf854u, nd);
     c->mem_w8(nd + 0xbf, 0);
-    if ((int16_t)c->mem_r16(0x800ed098u) < 13) { c->mem_w8(nd + 4, 3); return; }
+    if (c->mem_r16s(0x800ed098u) < 13) { c->mem_w8(nd + 4, 3); return; }
     c->mem_w8(nd + 8, 13);
     c->mem_w8(nd + 9, 13);
     c->mem_w8(nd + 0x0b, 0);
@@ -130,8 +130,8 @@ void beh_lift_platform(Core* c) {
     else c->mem_w8(nd + 0x5e, 0);
 
     if (c->mem_r8(nd + 0x5e) == 1) {
-      c->mem_w32(nd + 0x30, (uint32_t)((int32_t)c->mem_r32(nd + 0x30) + (int16_t)c->mem_r16(nd + 0x50) * -0x100));
-      if ((int16_t)c->mem_r16(nd + 0x60) < (int16_t)c->mem_r16(nd + 0x32)) {
+      c->mem_w32(nd + 0x30, (uint32_t)((int32_t)c->mem_r32(nd + 0x30) + c->mem_r16s(nd + 0x50) * -0x100));
+      if (c->mem_r16s(nd + 0x60) < c->mem_r16s(nd + 0x32)) {
         c->mem_w8(0x800bf9eeu, (uint8_t)(c->mem_r8(0x800bf9eeu) & 0xfe));
         lift_sfx(c, s0);
       } else {
@@ -141,8 +141,8 @@ void beh_lift_platform(Core* c) {
         c->mem_w8(nd + 0xbf, 0);
       }
     } else if (c->mem_r8(nd + 0x5e) == 2) {
-      c->mem_w32(nd + 0x30, (uint32_t)((int32_t)c->mem_r32(nd + 0x30) + (int16_t)c->mem_r16(nd + 0x50) * 0x100));
-      if ((int16_t)c->mem_r16(nd + 0x32) < (int16_t)c->mem_r16(nd + 0x62)) {
+      c->mem_w32(nd + 0x30, (uint32_t)((int32_t)c->mem_r32(nd + 0x30) + c->mem_r16s(nd + 0x50) * 0x100));
+      if (c->mem_r16s(nd + 0x32) < c->mem_r16s(nd + 0x62)) {
         lift_sfx(c, s0);
       } else {
         c->mem_w32(nd + 0x30, (uint32_t)(c->mem_r16s(nd + 0x62) << 16));

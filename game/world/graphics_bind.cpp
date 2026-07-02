@@ -29,7 +29,7 @@ struct SceneObject {
 //   if ((s16)cnt <= 0) return 0;                      // pool empty
 //   record = *cursor; cursor += 4; cnt--; return record;
 static uint32_t record_alloc(Core* c) {
-  int16_t cnt = (int16_t)c->mem_r16(0x800ED098u);
+  int16_t cnt = c->mem_r16s(0x800ED098u);
   if (cnt <= 0) return 0;
   uint32_t cursor = c->mem_r32(0x800E7E74u);
   c->mem_w16(0x800ED098u, (uint16_t)(cnt - 1));
@@ -50,7 +50,7 @@ static uint32_t record_alloc(Core* c) {
 //   return 0;
 static uint32_t obj_record_init(Core* c) {
   uint32_t obj = c->r[4], a1 = c->r[5], a2 = c->r[6];
-  if ((int16_t)c->mem_r16(0x800ED098u) <= 0) { c->mem_w8(obj + 4, 3); return 1; }
+  if (c->mem_r16s(0x800ED098u) <= 0) { c->mem_w8(obj + 4, 3); return 1; }
   c->mem_w8(obj + 8, 1);
   c->mem_w8(obj + 9, 1);
   c->mem_w8(obj + 0xd, 0);

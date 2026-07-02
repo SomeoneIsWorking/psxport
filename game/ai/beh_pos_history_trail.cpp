@@ -100,14 +100,14 @@ void beh_pos_history_trail(Core* c) {
     c->mem_w16(nd + 0x3c, 0);
     c->mem_w8(nd + 1, 1);
     if (c->mem_r8(nd + 5) > 1) {                  // (byte)node[5] > 1
-      int8_t cv = (int8_t)c->mem_r8(nd + 0x2c);
+      int8_t cv = c->mem_r8s(nd + 0x2c);
       int8_t nv = (int8_t)(cv + 1);
       if (nv > 4) nv = 0;                         // 0..4 wrap (matches '\x04' < (char)(cv+1))
       c->mem_w8(nd + 0x2c, (uint8_t)nv);
       c->mem_w16(nd + 0x38u + 2u * ((uint32_t)(int32_t)nv * 4u + 3u), 0); // puVar10[nv*4+3] = 0
       uint16_t m36 = c->mem_r16(nd + 0x36);
       if ((m36 & 7) < 3) c->mem_w16(nd + 0x36, (uint16_t)(m36 + 1));
-      if ((int8_t)c->mem_r8(nd + 0x2c) != (int8_t)c->mem_r8(nd + 0x2d)) return;
+      if (c->mem_r8s(nd + 0x2c) != c->mem_r8s(nd + 0x2d)) return;
       c->mem_w8(nd + 4, 3);
       return;
     }
@@ -122,7 +122,7 @@ void beh_pos_history_trail(Core* c) {
   if (n5 == 1) {
     goto Lc70;
   } else if (n5 < 2) {                            // n5 == 0
-    if ((int8_t)c->mem_r8(tgt + 0) == 2) {
+    if (c->mem_r8s(tgt + 0) == 2) {
       c->mem_w8(nd + 5, 1);
       goto Lc70;
     }
@@ -134,7 +134,7 @@ void beh_pos_history_trail(Core* c) {
   }
 
  Lc70:
-  if (!((int8_t)c->mem_r8(tgt + 0) == 1 && (int8_t)c->mem_r8(tgt + 0x5e) == 1)) goto Lddc;
+  if (!(c->mem_r8s(tgt + 0) == 1 && c->mem_r8s(tgt + 0x5e) == 1)) goto Lddc;
   c->mem_w8(nd + 5, (uint8_t)(c->mem_r8(nd + 5) + 1));
  Lca0:
   c->mem_w16(nd + 0x30, c->mem_r16(tgt + 0x2e));
@@ -143,16 +143,16 @@ void beh_pos_history_trail(Core* c) {
   c->mem_w16(nd + 0x36, (uint16_t)(c->mem_r16(tgt + 0x6a) & 0xff0));
   n3 = c->mem_r8(nd + 3);
   if (n3 == 0) {
-    if ((int8_t)c->mem_r8(tgt + 0) != 1) goto Ld98;
+    if (c->mem_r8s(tgt + 0) != 1) goto Ld98;
   } else {
     if (n3 > 2) {
       if (n3 < 6) {                               // node[3] in {3,4,5}
-        if ((int8_t)c->mem_r8(tgt + 0x2b) != 2) {
+        if (c->mem_r8s(tgt + 0x2b) != 2) {
           uint8_t n6 = c->mem_r8(nd + 6);
           c->mem_w8(nd + 6, (uint8_t)(n6 + 1));
           if (n6 < 4) goto Lddc;
         }
-      } else if ((int8_t)c->mem_r8(tgt + 0x2b) != 3) {  // node[3] >= 6
+      } else if (c->mem_r8s(tgt + 0x2b) != 3) {  // node[3] >= 6
         uint8_t n6 = c->mem_r8(nd + 6);
         c->mem_w8(nd + 6, (uint8_t)(n6 + 1));
         if (n6 < 3) goto Lddc;
@@ -160,7 +160,7 @@ void beh_pos_history_trail(Core* c) {
       goto Ld98;
     }
     // node[3] in {1,2}
-    if ((int8_t)c->mem_r8(tgt + 0) != 1 || (int8_t)c->mem_r8(tgt + 0x29) != 0) goto Ld98;
+    if (c->mem_r8s(tgt + 0) != 1 || c->mem_r8s(tgt + 0x29) != 0) goto Ld98;
   }
   c->mem_w8(nd + 6, (uint8_t)(c->mem_r8(nd + 6) + 1));
   goto Lddc;

@@ -93,7 +93,7 @@ void ov_hud_sprite(Core* c) {
   uint32_t vtable = c->r[4];          // a0
   int geom_a = (int16_t)c->r[5];      // a1 -> screen X anchor
   int geom_b = (int16_t)c->r[6];      // a2 -> screen Y anchor
-  int slice_idx = (int16_t)c->mem_r16(c->r[29] + 16);   // arg5 on caller stack
+  int slice_idx = c->mem_r16s(c->r[29] + 16);   // arg5 on caller stack
 
   // BUG 2 — weapon carousel: show ONLY the current (center) weapon, not prev+current+next.
   // The carousel routine (RE'd at 0x80025c00) calls this helper THREE times per frame for slice 211:
@@ -109,10 +109,10 @@ void ov_hud_sprite(Core* c) {
   // Resolve the cell record exactly as the emitter does: SLICE_TABLE[slice_idx] -> slice_rec;
   // hdr = vtable + lh(slice_rec)*4; count = lh(hdr+0); celloff = lh(hdr+2); cellbase = vtable + celloff.
   uint32_t slice_rec = c->mem_r32(SLICE_TABLE + (uint32_t)slice_idx * 4u);
-  int idx0  = (int16_t)c->mem_r16(slice_rec + 0);
+  int idx0  = c->mem_r16s(slice_rec + 0);
   uint32_t hdr = vtable + (uint32_t)idx0 * 4u;
-  int count = (int16_t)c->mem_r16(hdr + 0);
-  int celloff = (int16_t)c->mem_r16(hdr + 2);
+  int count = c->mem_r16s(hdr + 0);
+  int celloff = c->mem_r16s(hdr + 2);
   uint32_t cellbase = vtable + (uint32_t)celloff;
 
   // Each cell record (16 bytes), decoded from the captured ball cell bytes
@@ -125,8 +125,8 @@ void ov_hud_sprite(Core* c) {
     int v  = c->mem_r8(cell + 1);
     int w  = c->mem_r8(cell + 10);
     int h  = c->mem_r8(cell + 11);
-    int dx = (int8_t)c->mem_r8(cell + 14);
-    int dy = (int8_t)c->mem_r8(cell + 15);
+    int dx = c->mem_r8s(cell + 14);
+    int dy = c->mem_r8s(cell + 15);
     if (w <= 0) w = 32;
     if (h <= 0) h = 24;
     int x = geom_a + dx;
@@ -289,7 +289,7 @@ void ov_glyph_string(Core* c) {
   int clutx = (int)((clutw & 0x3f) * 16);
   int cluty = (int)(clutw >> 6);
 
-  int fontbase = (int16_t)c->mem_r16(0x1f800180u);   // s16 glyph-index base
+  int fontbase = c->mem_r16s(0x1f800180u);   // s16 glyph-index base
 
   // Token icons (bytes 0x01..0x04) are now OWNED natively below (see TOKEN_GLYPH_IDX / the loop); there
   // is NO recomp fallback any more — every string is drawn PC-native.
@@ -364,7 +364,7 @@ void ov_glyph_string(Core* c) {
 void probe_rect(Core* c) {
   if (cfg_dbg("bannerprobe")) {
     uint32_t a0=c->r[4],a1=c->r[5],a2=c->r[6],a3=c->r[7];
-    int w=(int16_t)c->mem_r16(a0+4), h=(int16_t)c->mem_r16(a0+6);
+    int w=c->mem_r16s(a0+4), h=c->mem_r16s(a0+6);
     uint16_t d2=c->mem_r16(a3+2);
     static long cnt=0; if(++cnt<=80) fprintf(stderr,"[bp] rect geom=%08x w=%d h=%d idx@a1=%08x tbl=%08x desc=%08x op=%02x ot=%02x d2=%04x\n",
         a0,w,h,a1,a2,a3,c->mem_r8(a3),c->mem_r8(a3+1),d2);

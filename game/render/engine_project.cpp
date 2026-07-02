@@ -27,7 +27,7 @@ uint32_t gte_read_ctrl(uint32_t reg);
 
 #define SCR 0x1F800000u
 
-static inline int16_t r16(Core* c, uint32_t a) { return (int16_t)c->mem_r16(a); }
+static inline int16_t r16(Core* c, uint32_t a) { return c->mem_r16s(a); }
 
 void eproj_compose_object(Core* c, uint32_t cmd, EObjXform* out) {
   // camera view rotation Rcam from scratchpad 0x1F8000F8 (CR0-4 halfword packing).

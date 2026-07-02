@@ -44,16 +44,16 @@ static void player_move_56b48(Core* c) {
   uint32_t a0 = c->r[4];
   uint32_t a1 = c->r[5];
 
-  int32_t speed = (int16_t)c->mem_r16(a0 + 0x44);   // lh a0+72
-  int32_t dirX  = (int16_t)c->mem_r16(a0 + 0x48);   // lh a0+72(+0x48)
+  int32_t speed = c->mem_r16s(a0 + 0x44);   // lh a0+72
+  int32_t dirX  = c->mem_r16s(a0 + 0x48);   // lh a0+72(+0x48)
   // posX += dirX*speed   (mult dirX,speed -> mflo a2; addu posX,a2)
   c->mem_w32(a0 + 0x2C, c->mem_r32(a0 + 0x2C) + (uint32_t)(dirX * speed));
   // posZ += dirZ*speed   (dirZ @ +0x4C)
-  int32_t dirZ = (int16_t)c->mem_r16(a0 + 0x4C);    // lh a0+76 (+0x4C)
+  int32_t dirZ = c->mem_r16s(a0 + 0x4C);    // lh a0+76 (+0x4C)
   c->mem_w32(a0 + 0x34, c->mem_r32(a0 + 0x34) + (uint32_t)(dirZ * speed));
 
   if (a1 == 0) {                                     // bne a1,zero skips the Y integrate
-    int32_t dirY = (int16_t)c->mem_r16(a0 + 0x4A);   // lh a0+74 (+0x4A)
+    int32_t dirY = c->mem_r16s(a0 + 0x4A);   // lh a0+74 (+0x4A)
     c->mem_w32(a0 + 0x30, c->mem_r32(a0 + 0x30) + (uint32_t)(dirY * speed));
   }
 

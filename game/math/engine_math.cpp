@@ -107,7 +107,7 @@ static void ov_gte_norm(Core* c) {
   int32_t t4 = (t3 < 0) ? ((int32_t)a0 >> ((24 - t2) & 31))   // srav (arithmetic)
                         : (int32_t)(a0 << (t3 & 31));         // sllv (logical)
   int32_t elem = t4 - 64;                                     // signed halfword index
-  int16_t lutv = (int16_t)c->mem_r16(0x800a6310u + (uint32_t)(elem * 2));
+  int16_t lutv = c->mem_r16s(0x800a6310u + (uint32_t)(elem * 2));
   uint32_t t5 = (uint32_t)((int32_t)lutv << (t1 & 31));
   c->r[2] = t5 >> 12;
 }
@@ -218,7 +218,7 @@ uint32_t Math::rotmat(Core* c, uint32_t anglesPtr, uint32_t out) {
   int sx,cx,sy,cy,sz,cz;
   rotmat_trig(c, (int16_t)w0,        &sx, &cx);            // vx (low half of +0)
   rotmat_trig(c, (int16_t)(w0>>16),  &sy, &cy);            // vy (high half of +0)
-  rotmat_trig(c, (int16_t)c->mem_r16(anglesPtr+4), &sz, &cz);   // vz (+4)
+  rotmat_trig(c, c->mem_r16s(anglesPtr+4), &sz, &cz);   // vz (+4)
   // GPF rounds (clamped scalar×vector products), in the asm's order:
   int16_t cxsy = gpf1(cx, sy), cxsz = gpf1(cx, sz), cxcz = gpf1(cx, cz);            // R1: IR0=cx
   int16_t sxsy = gpf1(sx, sy), sxsz = gpf1(sx, sz), sxcz = gpf1(sx, cz);            // R2: IR0=sx
@@ -282,7 +282,7 @@ static inline void rotpair_trig(Core* c, uint32_t a0, int posSin, int* s, int* c
 static uint32_t rotpair(Core* c, int16_t angle, uint32_t matPtr, uint32_t rowA, uint32_t rowB, int posSin) {
   int s, co; rotpair_trig(c, (uint32_t)(int32_t)angle, posSin, &s, &co);
   int16_t A[3], B[3];
-  for (int i = 0; i < 3; i++) { A[i] = (int16_t)c->mem_r16(matPtr + rowA + i*2); B[i] = (int16_t)c->mem_r16(matPtr + rowB + i*2); }
+  for (int i = 0; i < 3; i++) { A[i] = c->mem_r16s(matPtr + rowA + i*2); B[i] = c->mem_r16s(matPtr + rowB + i*2); }
   for (int i = 0; i < 3; i++) c->mem_w16(matPtr + rowA + i*2, (uint16_t)(int16_t)(((int32_t)co*A[i] - (int32_t)s*B[i]) >> 12));
   for (int i = 0; i < 3; i++) c->mem_w16(matPtr + rowB + i*2, (uint16_t)(int16_t)(((int32_t)s*A[i]  + (int32_t)co*B[i]) >> 12));
   return matPtr;

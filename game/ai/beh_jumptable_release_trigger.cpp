@@ -275,7 +275,7 @@ state2:
   // ============================================================================================
   {
     c->r[4] = obj; rec_dispatch(c, 0x8007778Cu);      // 801251F0 jal 0x8007778c (a0=s2)  (result IGNORED)
-    int8_t sub = (int8_t)c->mem_r8(obj + 5);          // 801251F8 lbu v1, 5(s2)
+    int8_t sub = c->mem_r8s(obj + 5);          // 801251F8 lbu v1, 5(s2)
     // 80125200 bltz v1 -> epilogue ; 80125204 slti v0,v1,2 ; 80125208 bnez -> epilogue (v1<2)
     // 8012520C slti v0,v1,4 ; 80125210 beqz -> epilogue (v1>=4)   => active only when 2<=v1<4
     if (sub < 0 || sub < 2 || sub >= 4) return;        // 801252A4 epilogue
@@ -289,7 +289,7 @@ state2:
     // 80125244 bnez v1 -> 0x8012526c
     if (n3 == 0) {
       // ---- 8012524c: node[3]==0 -> set bit (1<<node[0x60]) in 0x800BF9E7 ----
-      int16_t sh = (int16_t)c->mem_r16(obj + 0x60);    // 80125254 lh v1, 0x60(s2)  (signed lh; shift amount)
+      int16_t sh = c->mem_r16s(obj + 0x60);    // 80125254 lh v1, 0x60(s2)  (signed lh; shift amount)
       uint8_t cur = c->mem_r8(0x800BF9E7u);            // 80125258 lbu a0, 0x177(v0=0x800bf870)
       uint32_t bit = (uint32_t)1u << (sh & 31);         // 8012525C sllv v1, s0(=1), v1
       c->mem_w8(0x800BF9E7u, (uint8_t)(cur | bit));     // 80125260 or ; 80125268 sb a0, 0x177(v0)
@@ -298,7 +298,7 @@ state2:
     // 8012526C beq v1,1 -> 0x8012527c ; 80125270 (delay v0=5) ; 80125274 bne v1,5 -> epilogue
     if (n3 == 1 || n3 == 5) {
       // ---- 8012527c: node[3]==1 or 5 -> set bit (1<<node[0x60]) in 0x800BF9E8 ----
-      int16_t sh = (int16_t)c->mem_r16(obj + 0x60);    // 80125284 lh v1, 0x60(s2)
+      int16_t sh = c->mem_r16s(obj + 0x60);    // 80125284 lh v1, 0x60(s2)
       uint8_t cur = c->mem_r8(0x800BF9E8u);            // 80125288 lbu a0, 0x178(v0=0x800bf870)
       uint32_t bit = (uint32_t)1u << (sh & 31);         // 8012528C sllv v1, s0(=1), v1
       c->mem_w8(0x800BF9E8u, (uint8_t)(cur | bit));     // 80125290 or ; 80125298 sb a0, 0x178(v0)

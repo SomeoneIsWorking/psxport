@@ -101,7 +101,7 @@ void beh_typed_jumptable_pair(Core* c) {
       // node[0x60]: if TC.lh@0 != 0 -> node[0x60] = TC.lhu@0 - node[0x2e]; else node[0x60] = TC.lhu@0
       uint8_t  n3   = c->mem_r8(obj + 3);             // 80139098 lbu a0, 3(s0)
       uint32_t e    = TC + (uint32_t)n3 * 12;         // 801390A0..AC sll/addu/sll/addu -> TC + n3*12
-      int16_t  e0s  = (int16_t)c->mem_r16(e + 0);     // 801390B0 lh   v1, (v0)
+      int16_t  e0s  = c->mem_r16s(e + 0);     // 801390B0 lh   v1, (v0)
       uint16_t e0u  = c->mem_r16(e + 0);              // 801390B4 lhu  a0, (v0)
       if (e0s != 0) {                                 // 801390B8 beqz v1 -> 0x801390d4
         uint16_t n2e = c->mem_r16(obj + 0x2e);        // 801390C0 lhu  v0, 0x2e(s0)
@@ -112,7 +112,7 @@ void beh_typed_jumptable_pair(Core* c) {
       // node[0x64]: TC struct re-derived (n3 reloaded), uses .lh@4 / .lhu@4
       n3  = c->mem_r8(obj + 3);                       // 801390DC lbu a0, 3(s0)
       e   = TC + (uint32_t)n3 * 12;                   // 801390E0..F0
-      int16_t  e4s = (int16_t)c->mem_r16(e + 4);      // 801390F4 lh   v1, 4(v0)
+      int16_t  e4s = c->mem_r16s(e + 4);      // 801390F4 lh   v1, 4(v0)
       uint16_t e4u = c->mem_r16(e + 4);               // 801390F8 lhu  a0, 4(v0)
       if (e4s != 0) {                                 // 801390FC beqz v1 -> 0x80139118
         uint16_t n36 = c->mem_r16(obj + 0x36);        // 80139104 lhu  v0, 0x36(s0)

@@ -60,7 +60,7 @@ void beh_cull_tick_render(Core* c) {
     uint8_t n3a = c->mem_r8(obj + 3);              // 8012D45C lbu v0, 3(s0)
     // 8012D458 lui v1,0x8015 ; 8012D460 addiu v1,-0x5da0 -> 0x8014A260
     // 8012D464 sll v0,1 ; 8012D468 addu ; 8012D46C lh a2,(v0)  (SIGNED halfword)
-    int16_t tv = (int16_t)c->mem_r16(0x8014A260u + (uint32_t)n3a * 2);
+    int16_t tv = c->mem_r16s(0x8014A260u + (uint32_t)n3a * 2);
     c->r[4] = obj; c->r[5] = 0xc; c->r[6] = (uint32_t)(int32_t)tv;
     c->engine.graphicsBind.recordInit();                  // 8012D470 jal 0x80051b70 ; 8012D474 (delay) a1=0xc
     if (c->r[2] != 0) return;                       // 8012D478 bnez v0 -> 0x8012d4dc (init busy/failed -> epilogue)

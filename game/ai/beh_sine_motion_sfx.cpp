@@ -126,7 +126,7 @@ void beh_sine_motion_sfx(Core* c) {
  L2b4: {                                 // inner C (MATH block)
    v0 = (int32_t)c->mem_r8(0x800bf809u); // lbu mem[0x800BF809]
    if (v0 != 0) goto L48c;               // bne v0,zero,0x8013648c
-   v1 = (int16_t)c->mem_r16(nd + 0x44);  // lh node[0x44] (signed)
+   v1 = c->mem_r16s(nd + 0x44);  // lh node[0x44] (signed)
    uint32_t recp = c->mem_r32(nd + 0xc0);// lw 192
    s2 = (int32_t)c->mem_r16(recp + 0x0c);// lhu rec[0x0C]
    bool lt1281 = (v1 < 1281);
@@ -282,7 +282,7 @@ void beh_sine_motion_sfx(Core* c) {
      goto L598;
    }
    // >=256 (L558):
-   v0 = (int16_t)c->mem_r16(nd + 0x64);  // lh node[0x64]
+   v0 = c->mem_r16s(nd + 0x64);  // lh node[0x64]
    if (v0 >= 0) goto L56c;
    v0 = -v0;
   L56c:

@@ -105,7 +105,7 @@ void beh_scatter_record_dither(Core* c) {
   v0 = c->mem_r8(0x800BF9E0u);
   if (!(v0 < 6)) goto L728;                      // >= 6 -> the &7 jitter loop
   s2 = (int)(obj + 0x50);
-  if ((int16_t)c->mem_r16(obj + 0x4e) <= 0) goto L7ac;
+  if (c->mem_r16s(obj + 0x4e) <= 0) goto L7ac;
   s1 = 0;
   s0 = (int)(obj + 0x54);
  L6b0:
@@ -121,10 +121,10 @@ void beh_scatter_record_dither(Core* c) {
   v1 = (uint16_t)(c->mem_r16((uint32_t)s0 + 0) - 2 + (uint32_t)(((int32_t)v0 >> 7) & 3));
   c->mem_w16((uint32_t)s0 + 0, v1);
   s0 += 8;                                       // c71c delay slot
-  if (s1 < (int16_t)c->mem_r16(obj + 0x4e)) goto L6b0;
+  if (s1 < c->mem_r16s(obj + 0x4e)) goto L6b0;
   goto L7ac;
  L728:
-  if ((int16_t)c->mem_r16(obj + 0x4e) <= 0) goto L7ac;
+  if (c->mem_r16s(obj + 0x4e) <= 0) goto L7ac;
   s1 = 0;
   s0 = (int)(obj + 0x54);
  L73c:
@@ -140,7 +140,7 @@ void beh_scatter_record_dither(Core* c) {
   v1 = (uint16_t)(c->mem_r16((uint32_t)s0 + 0) - 4 + (uint32_t)(((int32_t)v0 >> 7) & 7));
   c->mem_w16((uint32_t)s0 + 0, v1);
   s0 += 8;                                       // c7a8 delay slot
-  if (s1 < (int16_t)c->mem_r16(obj + 0x4e)) goto L73c;
+  if (s1 < c->mem_r16s(obj + 0x4e)) goto L73c;
  L7ac:
   c->r[4] = obj; rec_dispatch(c, 0x8002B278u); v0 = c->r[2];
   if (v0 != 0) goto L7d4;

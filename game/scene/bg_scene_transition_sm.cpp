@@ -83,9 +83,9 @@ void bg_scene_transition_sm(Core* c) {
       break;
     }
     case 1: {
-      uint32_t u = (uint32_t)(((int)(int16_t)c->mem_r16(P + 0xa) * (int)(int16_t)c->mem_r16(P + 8)) & 0xff);
+      uint32_t u = (uint32_t)(((int)c->mem_r16s(P + 0xa) * (int)c->mem_r16s(P + 8)) & 0xff);
       fade_rect(c, (u << 16) | (u << 8) | u);
-      int16_t before = (int16_t)c->mem_r16(P + 8);
+      int16_t before = c->mem_r16s(P + 8);
       c->mem_w16(P + 8, (uint16_t)(before - 1));
       if (before == 1) {
         c->mem_w8(P + 4, (uint8_t)(c->mem_r8(P + 4) + 1));
@@ -106,11 +106,11 @@ void bg_scene_transition_sm(Core* c) {
       }
       break;
     case 3: {
-      uint32_t u = (uint32_t)(((int)(int16_t)c->mem_r16(P + 8) * -8) & 0xff);
+      uint32_t u = (uint32_t)(((int)c->mem_r16s(P + 8) * -8) & 0xff);
       fade_rect(c, (u << 16) | (u << 8) | u);
       if ((c->mem_r8(G_dir) & 0x80) == 0)
-        c->mem_w16(P + 8, (uint16_t)((int16_t)c->mem_r16(P + 8) - 1));
-      if ((int16_t)c->mem_r16(P + 8) == 0) {
+        c->mem_w16(P + 8, (uint16_t)(c->mem_r16s(P + 8) - 1));
+      if (c->mem_r16s(P + 8) == 0) {
         c->mem_w8(P + 4, (uint8_t)(c->mem_r8(P + 4) + 1));
         c->mem_w8(G_dir, 0);
         rec_dispatch(c, 0x80026510u);

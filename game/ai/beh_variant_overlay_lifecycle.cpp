@@ -66,7 +66,7 @@ void beh_variant_overlay_lifecycle(Core* c) {
   } else if (st < 2) {
     // ---------- STATE 0 (spawn/init) ----------  (st == 0)
     int32_t  base = (int32_t)c->mem_r32(nd + 0x4c);
-    int16_t  idx  = (int16_t)c->mem_r16(nd + 0x5e);
+    int16_t  idx  = c->mem_r16s(nd + 0x5e);
     uint16_t tv   = c->mem_r16(base + (uint32_t)(int32_t)(idx * 4));
     int32_t  pos  = (int32_t)c->mem_r32(nd + 0x50) + (int32_t)(uint32_t)tv;
     c->mem_w32(nd + 0x10, (uint32_t)pos);

@@ -44,7 +44,7 @@ static uint32_t child_spawn_40410(Core* c) {
   const uint32_t obj = c->r[4];
   const uint32_t a1  = c->r[5] & 0xffu;
   c->mem_w8(obj + 8, 2);
-  if ((int16_t)c->mem_r16(0x800ed098u) < 2) { c->mem_w8(obj + 4, 3); return 0; }
+  if (c->mem_r16s(0x800ed098u) < 2) { c->mem_w8(obj + 4, 3); return 0; }
   c->mem_w8(obj + 9, 2);
   c->mem_w8(obj + 13, 0);
   c->mem_w8(obj + 11, 0);
@@ -249,7 +249,7 @@ static void sm40558(Core* c) {
     }
     // @7e0 common block
     if (c->mem_r8(0x800BF816u) != 0
-        && c->mem_r8(0x800BF817u) == (uint32_t)(uint16_t)(int16_t)c->mem_r16(obj + 106)) {
+        && c->mem_r8(0x800BF817u) == (uint32_t)(uint16_t)c->mem_r16s(obj + 106)) {
       if (c->mem_r8(obj + 40) & 0x80) {
         c->mem_w8(obj + 1, 1);
         c->r[4]=obj; rec_dispatch(c, 0x80077E7Cu);
@@ -307,7 +307,7 @@ static void sm40558(Core* c) {
     }
     // @99c: mirror of state-1 @7e0..tail (global checks + cull/transform), with obj fields
     if (c->mem_r8(0x800BF816u) != 0
-        && c->mem_r8(0x800BF817u) == (uint32_t)(uint16_t)(int16_t)c->mem_r16(obj + 106)) {
+        && c->mem_r8(0x800BF817u) == (uint32_t)(uint16_t)c->mem_r16s(obj + 106)) {
       if (c->mem_r8(obj + 40) & 0x80) {
         c->mem_w8(obj + 1, 1);
         c->r[4]=obj; rec_dispatch(c, 0x80077E7Cu);

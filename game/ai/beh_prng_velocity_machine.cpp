@@ -141,7 +141,7 @@ void beh_prng_velocity_machine(Core* c) {
  L7874: {                                          // node[94]!=1
    uint32_t n3 = c->mem_r8(s1 + 3);
    if (n3 != 0) goto L78fc;
-   int16_t s20 = (int16_t)c->mem_r16(s2 + 20);
+   int16_t s20 = c->mem_r16s(s2 + 20);
    if (s20 != 0) goto L7a30;
    uint16_t s22 = (uint16_t)(c->mem_r16(s2 + 22) - 1);
    c->mem_w16(s2 + 22, s22);
@@ -175,7 +175,7 @@ void beh_prng_velocity_machine(Core* c) {
  L7954: {
    uint32_t n43 = c->mem_r8(s1 + 0x2b);
    if (n43 != 2) goto L7984;
-   int16_t e = (int16_t)c->mem_r16(s2 + 14);
+   int16_t e = c->mem_r16s(s2 + 14);
    uint16_t eu = c->mem_r16(s2 + 14);
    uint16_t nv = (e < 2048) ? (uint16_t)(eu - 4096) : (uint16_t)(-(int32_t)eu);
    c->mem_w16(s2 + 14, nv);
@@ -183,7 +183,7 @@ void beh_prng_velocity_machine(Core* c) {
    goto L7a30;
  }
  L7984: {
-   int16_t e = (int16_t)c->mem_r16(s2 + 14);
+   int16_t e = c->mem_r16s(s2 + 14);
    uint16_t eu = c->mem_r16(s2 + 14);
    uint16_t nv = (e < -2047) ? (uint16_t)(-(int32_t)eu) : (uint16_t)(eu + 4096);
    c->mem_w16(s2 + 14, nv);
@@ -191,7 +191,7 @@ void beh_prng_velocity_machine(Core* c) {
    goto L7a30;
  }
  L79ac: {                                          // node[5]==1
-   int16_t s24 = (int16_t)c->mem_r16(s2 + 24);
+   int16_t s24 = c->mem_r16s(s2 + 24);
    uint16_t s24u = c->mem_r16(s2 + 24);
    if (s24 == 0) goto L79d0;                         // v0 = -10240
    uint32_t n94 = c->mem_r8(s1 + 0x5e);
@@ -258,11 +258,11 @@ void beh_prng_velocity_machine(Core* c) {
    uint32_t n5 = c->mem_r8(s1 + 5);
    if (n5 != 2) {                                    // L7b2c
      uint32_t p = c->mem_r32(s1 + 0xc0);
-     int16_t e = (int16_t)c->mem_r16(p + 26);
+     int16_t e = c->mem_r16s(p + 26);
      int32_t v1 = ((int32_t)e * 9) >> 8;
      uint16_t a = c->mem_r16(lp + 0);
      c->mem_w16(s1 + 0x2e, (uint16_t)(a + v1));
-     int16_t f = (int16_t)c->mem_r16(p + 32);
+     int16_t f = c->mem_r16s(p + 32);
      int32_t v0 = ((int32_t)f * 9) >> 8;
      uint16_t b = c->mem_r16(lp + 2);
      c->mem_w16(s1 + 0x32, (uint16_t)(b + v0));

@@ -373,7 +373,7 @@ void Engine::sceneRenderListBuilder() { Core* c = core;
   }
   uint32_t flag = 0x800bf822u;
   uint8_t v = c->mem_r8(flag);
-  if (c->mem_r8(B + 1) != 0 || (int16_t)c->mem_r16(B + 0x0a) != 0)
+  if (c->mem_r8(B + 1) != 0 || c->mem_r16s(B + 0x0a) != 0)
     c->mem_w8(flag, (uint8_t)(v | 1));
   else
     c->mem_w8(flag, (uint8_t)(v & 0xfe));
@@ -476,12 +476,12 @@ void Engine::fadeSequencer(uint32_t node) { Core* c = core;
   auto ramp_level = [&](int32_t sign) -> uint32_t {
     // v = (level << 3) [negated if sign<0] & 0xFF, replicated into R/G/B (same "gray" packing shape as the
     // a06 reference's state-2, but here the source is level<<3, not the raw level byte).
-    int16_t level = (int16_t)c->mem_r16(node + 106);
+    int16_t level = c->mem_r16s(node + 106);
     uint32_t v = (uint32_t)((sign < 0) ? -(level << 3) : (level << 3)) & 0xffu;
     return (v << 16) | (v << 8) | v;
   };
   auto decrement_level_clamped = [&]() {
-    int16_t level = (int16_t)c->mem_r16(node + 106);
+    int16_t level = c->mem_r16s(node + 106);
     if (level != 0) c->mem_w16(node + 106, (uint16_t)(level - 1));
   };
   auto advance_step = [&]() {
@@ -503,7 +503,7 @@ void Engine::fadeSequencer(uint32_t node) { Core* c = core;
       c->screenFade.applyLeafCall(ramp_level(-1), 1);      // = guest FUN_8007e9c8(color, 1, ?) additive; NOTE guest a2 was 1 (see OPEN ISSUE)
       decrement_level_clamped();
       d1(c, 0x8010cc68u, 0);                          // result unused this branch
-      if ((int16_t)c->mem_r16(node + 106) != 0) return;
+      if (c->mem_r16s(node + 106) != 0) return;
       advance_step();
       c->mem_w16(node + 104, 20);                     // arm the step-2 delay counter
       return;
@@ -530,7 +530,7 @@ void Engine::fadeSequencer(uint32_t node) { Core* c = core;
       c->screenFade.applyLeafCall(ramp_level(-1), 1);
       decrement_level_clamped();
       d1(c, 0x8010cc68u, 1);
-      if ((int16_t)c->mem_r16(node + 106) != 0) return;
+      if (c->mem_r16s(node + 106) != 0) return;
       advance_step();
       return;
     }
@@ -929,7 +929,7 @@ void Engine::fieldRunX() { Core* c = core;
     d0(c, 0x80074bc4u);
     sm = c->mem_r32(0x1f800138u);
     c->mem_w16(sm + 0x4c, 2);                     // back to normal running handler
-    int16_t  e_s = (int16_t)c->mem_r16(0x800e7feeu);
+    int16_t  e_s = c->mem_r16s(0x800e7feeu);
     uint16_t e_u = c->mem_r16(0x800e7feeu);
     if (e_s != 0) {
       c->mem_w8(0x800bf880u, 1);
@@ -1102,7 +1102,7 @@ void Engine::areaModeDispatch() {
 void Engine::sceneStateStep() {
   Core* c = core;
   static constexpr uint32_t SCENE_STATE = 0x800F2418u;
-  int8_t phase = (int8_t)c->mem_r8(SCENE_STATE);
+  int8_t phase = c->mem_r8s(SCENE_STATE);
 
   if (phase == 1) {
     // RUN table (@0x80015A98). Idx 9 = default 0x80051118 = no-op return.
@@ -1270,10 +1270,10 @@ void Engine::areaUpdateTail() {
       int16_t hword;
       uint32_t a3;
       if (s3b & 0x80u) {
-        hword = (int16_t)c->mem_r16(0x800A4F7Eu);
+        hword = c->mem_r16s(0x800A4F7Eu);
         a3    = (uint32_t)(s3b & 0x0Fu);
       } else {
-        hword = (int16_t)c->mem_r16(0x800BED84u);
+        hword = c->mem_r16s(0x800BED84u);
         a3    = (uint32_t)s3b;
       }
       c->mem_w32(sp + 0x10u, (uint32_t)c->mem_r8(s0 + 3u));
@@ -1322,11 +1322,11 @@ void Engine::areaUpdateTail() {
   c->r[4] = S5; rec_dispatch(c, 0x80099490u);
 
   // (5) Key2 branch: if the s16 at 0x800BED80 != -1, look up the entry hword and probe with FUN_8008E0C0.
-  int16_t key2 = (int16_t)c->mem_r16(0x800BED80u);
+  int16_t key2 = c->mem_r16s(0x800BED80u);
   if (key2 != -1) {
     c->mem_w32(S5, 0);
     uint32_t entry_addr = 0x800BE368u + (uint32_t)((int32_t)key2 * 8);
-    int16_t entry_hw = (int16_t)c->mem_r16(entry_addr);
+    int16_t entry_hw = c->mem_r16s(entry_addr);
     c->r[4] = (uint32_t)(int32_t)entry_hw;
     c->r[5] = 0;
     rec_dispatch(c, 0x8008E0C0u);

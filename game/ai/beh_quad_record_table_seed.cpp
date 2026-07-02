@@ -58,7 +58,7 @@ void beh_quad_record_table_seed(Core* c) {
    uint8_t n3 = c->mem_r8(nd + 3);
    if ((int32_t)n3 >= 2) goto L5eac;               // node[3]>=2 -> skip alloc loop (node[4]=1 at tail)
    if ((int32_t)n3 < 0) goto L5eac;                // bltz (dead: lbu is 0..255)
-   if ((int16_t)c->mem_r16(0x800ed098u) < 4) { c->mem_w8(nd + 4, 3); goto L5eac; }  // transient =3
+   if (c->mem_r16s(0x800ed098u) < 4) { c->mem_w8(nd + 4, 3); goto L5eac; }  // transient =3
    // alloc loop: node[8]=node[9]=4 records
    c->mem_w8(nd + 8, 4);
    c->mem_w8(nd + 9, 4);
@@ -78,7 +78,7 @@ void beh_quad_record_table_seed(Core* c) {
        c->mem_w16(rec + 4, c->mem_r16(s4 + 4));
        c->mem_w32(rec + 8, 0);
        c->mem_w32(rec + 12, 0);
-       uint32_t a2 = (uint32_t)(int16_t)c->mem_r16(s4 + 6);
+       uint32_t a2 = (uint32_t)c->mem_r16s(s4 + 6);
        leaf3(c, rec, 12, a2, 0x80051b04u);          // FUN_80051B04(rec, 12, (int16)src[6])
        s4 += 8;
        s0 += 4;
@@ -109,7 +109,7 @@ void beh_quad_record_table_seed(Core* c) {
    c->mem_w16(nd + 0x58, 0);
    c->mem_w16(nd + 0x56, c->mem_r16(e + 6));
    if (n3 == 0) {
-     if ((int16_t)c->mem_r16(nd + 0x2e) < (int16_t)c->mem_r16(0x1f800160u))
+     if (c->mem_r16s(nd + 0x2e) < c->mem_r16s(0x1f800160u))
        c->mem_w16(nd + 0x2e, c->mem_r16(0x8014a7bau));
    }
    // L5f80:
@@ -127,8 +127,8 @@ void beh_quad_record_table_seed(Core* c) {
    uint8_t n3 = c->mem_r8(nd + 3);
    if (n3 == 0) {
      if (c->mem_r16(0x800e7e84u) == 770) {
-       int16_t x = (int16_t)c->mem_r16(0x1f800160u);
-       int16_t y = (int16_t)c->mem_r16(0x8014a7bau);
+       int16_t x = c->mem_r16s(0x1f800160u);
+       int16_t y = c->mem_r16s(0x8014a7bau);
        a0 = (x < y) ? 1u : 0u;
      }
    }
@@ -144,7 +144,7 @@ void beh_quad_record_table_seed(Core* c) {
    // L6054: scratchpad gate
    uint8_t sp = c->mem_r8(0x1f800207u);
    if (sp < 22) goto Lret;
-   if (sp == 23) { if ((int16_t)c->mem_r16(0x1f8000dau) < 11000) goto Lret; }
+   if (sp == 23) { if (c->mem_r16s(0x1f8000dau) < 11000) goto Lret; }
    // L608c:
    if (!(c->mem_r8(0x800e7eaau) < 32)) goto Lret;
    if (leafr(c, nd, 0x8007778cu) == 0) goto Lret;

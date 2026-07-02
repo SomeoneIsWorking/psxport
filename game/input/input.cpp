@@ -44,7 +44,7 @@ static void input_dispatch_931c0(Core* c) {
   c->mem_w32(0x80105BACu, ridx);
   c->mem_w32(0x80105BB0u + ridx * 4, 0);
   // P1
-  for (int s0 = 0; s0 < (int)(int8_t)c->mem_r8(0x80105CECu); s0++) {
+  for (int s0 = 0; s0 < (int)c->mem_r8s(0x80105CECu); s0++) {
     uint32_t rec = 0x801054CEu + (uint32_t)s0 * 56;
     c->r[4] = (uint32_t)s0; c->r[5] = rec; rec_dispatch(c, 0x8009A1D0u);
     if (c->mem_r16(rec) == 0) {
@@ -53,13 +53,13 @@ static void input_dispatch_931c0(Core* c) {
     }
   }
   // P2
-  if ((int8_t)c->mem_r8(0x80105D28u) == 0) {
+  if (c->mem_r8s(0x80105D28u) == 0) {
     uint32_t acc = 0xFFFFFFFFu;
     for (int k = 0; k < 15; k++) acc &= c->mem_r32(0x80105BB0u + (uint32_t)k * 4);
-    for (int s0 = 0; s0 < (int)(int8_t)c->mem_r8(0x80105CECu); s0++) {
+    for (int s0 = 0; s0 < (int)c->mem_r8s(0x80105CECu); s0++) {
       if (acc & (1u << (s0 & 31))) {
         uint32_t recb = 0x801054E5u + (uint32_t)s0 * 56;
-        if ((int8_t)c->mem_r8(recb) == 2) {
+        if (c->mem_r8s(recb) == 2) {
           uint32_t a1 = (s0 < 16) ? (uint32_t)(int32_t)(int16_t)(uint16_t)(1u << s0)
                                   : (((1u << ((s0 - 16) & 31)) & 0xffu) << 16);
           c->r[4] = 0; c->r[5] = a1; rec_dispatch(c, 0x80097E10u);

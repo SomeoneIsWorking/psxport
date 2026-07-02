@@ -77,7 +77,7 @@ void beh_id_compare_motion_dispatch(Core* c) {
 
   // ================= STATE 1 (active) [0x801452A8] =================
   // ---- despawn gate [0x801452A8..0x801452EC] ----
-  int16_t n32 = (int16_t)c->mem_r16(obj + 0x32);       // lh a0,0x32(s0)              [0x801452A8]
+  int16_t n32 = c->mem_r16s(obj + 0x32);       // lh a0,0x32(s0)              [0x801452A8]
   // a0>0 forces v0=1 (delay slot) and SKIPS the xori; a0<=0 computes cond then xori.
   bool to_state3;
   if (n32 > 0) {                                       // bgtz a0 -> 0x801452e0       [0x801452B0]
@@ -170,7 +170,7 @@ void beh_id_compare_motion_dispatch(Core* c) {
     // ---- default / node[3]==0 block [0x801453EC] ----
     c->r[4] = obj; rec_dispatch(c, 0x80143A00u);        // FUN_80143a00                [0x801453EC]
     if (c->mem_r8(obj + 0x2a) == 1) {                   // lbu node[0x2a]; bne 1 -> 0x80145510 [0x801453FC]
-      int16_t n2e = (int16_t)c->mem_r16(obj + 0x2e);    // lh node[0x2e]              [0x80145404]
+      int16_t n2e = c->mem_r16s(obj + 0x2e);    // lh node[0x2e]              [0x80145404]
       if (n2e >= 0x31a9) {                              // slti 0x31a9; bnez -> 0x80145510 (skip) [0x8014540C/10]
         c->mem_w16(obj + 0x2e, 0x31a8);                 // sh 0x31a8,node[0x2e] [delay slot @0x8014541C]
       }
@@ -190,10 +190,10 @@ n3_motion:;
       goto second_cull;                                 // j 0x80145510
     }
     // node[3]!=2: compute heading bucket, FUN_800781e0, then FUN_801409c0 [0x8014544C..0x801454CC]
-    int16_t a2 = (int16_t)c->mem_r16(obj + 0x2e);       // lh a2,0x2e(s0)
-    int16_t t0 = (int16_t)c->mem_r16(0x1F800160u);      // lh a0,0x160(0x1f80_0000)
-    int16_t s36 = (int16_t)c->mem_r16(obj + 0x36);      // lh v0,0x36(s0)
-    int16_t t1 = (int16_t)c->mem_r16(0x1F800164u);      // lh a1,0x164(0x1f80_0000)
+    int16_t a2 = c->mem_r16s(obj + 0x2e);       // lh a2,0x2e(s0)
+    int16_t t0 = c->mem_r16s(0x1F800160u);      // lh a0,0x160(0x1f80_0000)
+    int16_t s36 = c->mem_r16s(obj + 0x36);      // lh v0,0x36(s0)
+    int16_t t1 = c->mem_r16s(0x1F800164u);      // lh a1,0x164(0x1f80_0000)
     c->r[4] = (uint32_t)(int32_t)(int16_t)(a2 - t0);    // a0 = node[0x2e]-DAT_1f800160 (subu, used as arg)
     c->r[5] = (uint32_t)(int32_t)(int16_t)(s36 - t1);   // a1 = node[0x36]-DAT_1f800164
     rec_dispatch(c, 0x800781E0u);                       // FUN_800781e0 -> v0           [0x80145464]
@@ -248,7 +248,7 @@ second_cull:;
       } else if (kind != 2) {                           // bne kind,2 -> 0x801455c4     [0x80145578]
         spawn = false;
       } else {                                          // kind==2
-        spawn = ((int16_t)c->mem_r16(obj + 0x4e) >= 0x501);  // lh node[0x4e]; slti 0x501; bnez skip [0x80145588]
+        spawn = (c->mem_r16s(obj + 0x4e) >= 0x501);  // lh node[0x4e]; slti 0x501; bnez skip [0x80145588]
       }
       if (spawn) {                                      // ---- spawn at 0x80145594 ----
         // FUN_8003116c takes a1 = GUEST pointer to an on-stack arg struct. Reproduce the sp-relative

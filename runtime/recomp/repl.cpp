@@ -135,12 +135,12 @@ long native_repl_read(Core* c, uint32_t f) {
           uint32_t cmd0 = c->mem_r8(n + 8) ? c->mem_r32(n + 0xC0) : 0;
           uint32_t hh = c->mem_r32(n + 0x1c);
           const char* bn = behavior_native_name(hh);
-          int16_t nx = (int16_t)c->mem_r16(n + 0x2e), nz = (int16_t)c->mem_r16(n + 0x36);
+          int16_t nx = c->mem_r16s(n + 0x2e), nz = c->mem_r16s(n + 0x36);
           int is_player = (c->mem_r32(n + 0x38) == 0) && (nx == px) && (nz == pz);
           if (bn) owned++;
           fprintf(stderr, "[ents]  %08X t=%02X ri=%02X model=%04X h=%08X pos=(%6d,%6d,%6d) rf=%u cmds=%u gb0=%08X  %s%s\n",
                   n, c->mem_r8(n + 0xc), c->mem_r8(n + 0xb), c->mem_r16(n + 0xe) & 0x3fff, hh,
-                  (int16_t)c->mem_r16(n + 0x2e), (int16_t)c->mem_r16(n + 0x32), nz,
+                  c->mem_r16s(n + 0x2e), c->mem_r16s(n + 0x32), nz,
                   c->mem_r8(n + 1), c->mem_r8(n + 8), cmd0 ? c->mem_r32(cmd0 + 0x40) : 0,
                   bn ? bn : "PSX", is_player ? "  <== PLAYER" : "");
           total++;
@@ -271,7 +271,7 @@ long native_repl_read(Core* c, uint32_t f) {
     else if (!strcmp(cmd, "stage")) fprintf(stderr, "[repl] stage=%08X sm48=%d\n", c->mem_r32(0x801fe00c), (int)c->mem_r16(0x801fe048));
     else if (!strcmp(cmd, "regs")) { for (int i = 0; i < 32; i++) { fprintf(stderr, " r%-2d=%08X", i, c->r[i]); if ((i & 3) == 3) fprintf(stderr, "\n"); } fprintf(stderr, " hi=%08X lo=%08X\n", c->hi, c->lo); }
     else if (!strcmp(cmd, "seq")) fprintf(stderr, "[repl] seq open=%d playmask=%04X tickmode=%d seqfn=%08X stage=%08X\n",
-                                          (int16_t)c->mem_r16(0x801054B0), c->mem_r32(0x80104C28) & 0xFFFF, c->mem_r8(0x800AC424), c->mem_r32(0x800AC42C), c->mem_r32(0x801fe00c));
+                                          c->mem_r16s(0x801054B0), c->mem_r32(0x80104C28) & 0xFFFF, c->mem_r8(0x800AC424), c->mem_r32(0x800AC42C), c->mem_r32(0x801fe00c));
     else fprintf(stderr, "[repl] ? %s\n", cmd);
     fflush(stderr);
   }

@@ -97,8 +97,8 @@ static void ov_bg_tilemap_native(Core* c, uint32_t t4) {
   if (W == 0 || H == 0) return;
   int rowstride = W * 2;                          // s0 — bytes per map row
   int mapbytes  = rowstride * H;                  // s3 — total map bytes (wrap modulus)
-  int scrollX = (int16_t)c->mem_r16(t4 + 0x28);
-  int scrollY = (int16_t)c->mem_r16(t4 + 0x2a);
+  int scrollX = c->mem_r16s(t4 + 0x28);
+  int scrollY = c->mem_r16s(t4 + 0x2a);
   uint32_t map      = c->mem_r32(t4 + 0x14);
   uint16_t tpage    = c->mem_r16(t4 + 0x04);
   uint16_t clutbase = c->mem_r16(t4 + 0x06);
@@ -488,7 +488,7 @@ static void submit_render_walk_snapshot(Core* c) {
     c->mem_w16(RQ_SNAP_CNT, cnt);
     c->mem_w32(RQ_CURSOR, lst);
   }
-  int16_t count = (int16_t)c->mem_r16(RQ_SNAP_CNT);
+  int16_t count = c->mem_r16s(RQ_SNAP_CNT);
   uint32_t cursor = c->mem_r32(RQ_CURSOR);
   while (count != 0) {
     uint32_t node = c->mem_r32(cursor);
@@ -594,7 +594,7 @@ void ov_rwalk_aux_bcf4(Core* c) {
     c->mem_w16(AUX_BCF4_SNAPCNT, cnt);
     c->mem_w32(AUX_BCF4_CURSOR, lst);
   }
-  int16_t count = (int16_t)c->mem_r16(AUX_BCF4_SNAPCNT);
+  int16_t count = c->mem_r16s(AUX_BCF4_SNAPCNT);
   uint32_t cursor = c->mem_r32(AUX_BCF4_CURSOR);
   while (count != 0) {
     uint32_t node = c->mem_r32(cursor);
@@ -655,7 +655,7 @@ void ov_rwalk_aux_bf00(Core* c) {
     c->mem_w16(AUX_BF00_SNAPCNT, cnt);
     c->mem_w32(AUX_BF00_CURSOR, lst);
   }
-  int16_t count = (int16_t)c->mem_r16(AUX_BF00_SNAPCNT);
+  int16_t count = c->mem_r16s(AUX_BF00_SNAPCNT);
   uint32_t cursor = c->mem_r32(AUX_BF00_CURSOR);
   while (count != 0) {
     uint32_t node = c->mem_r32(cursor);

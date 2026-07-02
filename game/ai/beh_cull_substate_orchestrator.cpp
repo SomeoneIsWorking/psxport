@@ -89,7 +89,7 @@ void beh_cull_substate_orchestrator(Core* c) {
     }
     if (!skip_cull && to_timer) {
       // 0x80132640: lh v0, 0x1F800160 (scratchpad, signed) ; slti v0,v0,0x4651 ; beqz -> 0x8013265C
-      int16_t timer = (int16_t)c->mem_r16(0x1F800160u);
+      int16_t timer = c->mem_r16s(0x1F800160u);
       if (timer < 0x4651) {
         c->r[4] = obj; rec_dispatch(c, 0x8007778Cu);   // 0x80132654  jal FUN_8007778C (a0=s0)  (cull; result IGNORED)
       }

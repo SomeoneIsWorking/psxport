@@ -297,8 +297,8 @@ static void grid_step_4798c(Core* c, uint32_t obj) {
   uint32_t lo = c->mem_r16(SP + 0x1AE), hi = c->mem_r16(SP + 0x1B0);
   if (lo < hi) {
     // Z branch: clamp 0x1C0 into [0x1AC, 0x1AC + 0x1B0], then recompute 0x1BC
-    int32_t  a2 = (int16_t)c->mem_r16(SP + 0x1C0);
-    int32_t  a1 = (int16_t)c->mem_r16(SP + 0x1AC);
+    int32_t  a2 = c->mem_r16s(SP + 0x1C0);
+    int32_t  a1 = c->mem_r16s(SP + 0x1AC);
     uint32_t v1u = c->mem_r16(SP + 0x1AC);
     if (a2 < a1) {
       c->mem_w16(SP + 0x1C0, (uint16_t)v1u);
@@ -306,16 +306,16 @@ static void grid_step_4798c(Core* c, uint32_t obj) {
       uint32_t a0u = c->mem_r16(SP + 0x1B0);
       if ((int32_t)((uint32_t)a1 + a0u) < a2) c->mem_w16(SP + 0x1C0, (uint16_t)(v1u + a0u));
     }
-    int32_t  cv  = (int16_t)c->mem_r16(SP + 0x1C0);
+    int32_t  cv  = c->mem_r16s(SP + 0x1C0);
     uint32_t cb  = c->mem_r16(SP + 0x1B4);
-    int32_t  pit = (int16_t)c->mem_r16(SP + 0x1BA);
+    int32_t  pit = c->mem_r16s(SP + 0x1BA);
     int32_t  prod = (int32_t)((uint32_t)((uint32_t)cv - cb) * (uint32_t)pit);  // lo(mult)
     int32_t  v = prod >> 14;
     c->mem_w16(SP + 0x1BC, (uint16_t)(c->mem_r16(SP + 0x1B2) + (uint32_t)v));
   } else {
     // X branch: clamp 0x1BC into [0x1AA, 0x1AA + 0x1AE], then recompute 0x1C0
-    int32_t  a2 = (int16_t)c->mem_r16(SP + 0x1BC);
-    int32_t  a1 = (int16_t)c->mem_r16(SP + 0x1AA);
+    int32_t  a2 = c->mem_r16s(SP + 0x1BC);
+    int32_t  a1 = c->mem_r16s(SP + 0x1AA);
     uint32_t v1u = c->mem_r16(SP + 0x1AA);
     if (a2 < a1) {
       c->mem_w16(SP + 0x1BC, (uint16_t)v1u);
@@ -323,9 +323,9 @@ static void grid_step_4798c(Core* c, uint32_t obj) {
       uint32_t a0u = c->mem_r16(SP + 0x1AE);
       if ((int32_t)((uint32_t)a1 + a0u) < a2) c->mem_w16(SP + 0x1BC, (uint16_t)(v1u + a0u));
     }
-    int32_t  cv  = (int16_t)c->mem_r16(SP + 0x1BC);
+    int32_t  cv  = c->mem_r16s(SP + 0x1BC);
     uint32_t cb  = c->mem_r16(SP + 0x1B2);
-    int32_t  pit = (int16_t)c->mem_r16(SP + 0x1BA);
+    int32_t  pit = c->mem_r16s(SP + 0x1BA);
     int32_t  prod = (int32_t)((uint32_t)((uint32_t)cv - cb) * (uint32_t)pit);  // lo(mult)
     int32_t  v = prod >> 14;
     c->mem_w16(SP + 0x1C0, (uint16_t)(c->mem_r16(SP + 0x1B4) + (uint32_t)v));

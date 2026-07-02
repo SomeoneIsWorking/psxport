@@ -147,7 +147,7 @@ void CutsceneCamera::joinE640(int32_t delta, int32_t radius) {
   lookatTail((int16_t)theta16, radius);
 }
 static inline int32_t t1_e570(CutsceneCamera* self, Core* c, uint32_t G, uint32_t cam) {
-  int32_t g140 = (int16_t)c->mem_r16(G + 0x140), g56 = (int16_t)c->mem_r16(G + 0x56);
+  int32_t g140 = c->mem_r16s(G + 0x140), g56 = c->mem_r16s(G + 0x56);
   int32_t cam56 = (int32_t)c->mem_r16(cam + 0x56);
   return (g140 == g56) ? cam56 : -cam56;
 }

@@ -251,7 +251,7 @@ extern volatile uint32_t g_bgm_frame;
 void xa_audio_trace(Core* c, const char* tag) {
   if (!cfg_str("PSXPORT_XA_DBG")) return;
   static int t=1<<30,cur,mas,s19a,s137,song,act,lp,gate;
-  int nt=(int16_t)c->mem_r16(0x800be222), ncur=(int16_t)c->mem_r16(0x800be224), nmas=(int16_t)c->mem_r16(0x800be220);
+  int nt=c->mem_r16s(0x800be222), ncur=c->mem_r16s(0x800be224), nmas=c->mem_r16s(0x800be220);
   int n19a=c->mem_r8(0x1f80019a), n137=c->mem_r8(0x1f800137);
   int nsong=c->mem_r16(0x800bed80)&0xffff, nact=xa_stream_is_active(), nlp=xa_stream_is_looping();
   int ngate=c->mem_r16(0x801fe0e0)&0xffff;

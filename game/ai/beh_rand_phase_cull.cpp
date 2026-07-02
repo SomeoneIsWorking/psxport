@@ -60,7 +60,7 @@ void beh_rand_phase_cull(Core* c) {
     c->mem_w32(nd + 0x34, c->mem_r32(nd + 0x38));            // 32-bit copy
     int32_t r = (int32_t)call0(c, 0x8009a450u);             // rand() draw
     c->mem_w8(nd + 6, (uint8_t)((int8_t)(int32_t)(r >> 0xb) + 8));
-    if (c->mem_r8(nd + 3) == 0x35u && (int16_t)c->mem_r16(0x800E7FFEu) < 0) {  // node[3]=='5' && DAT_800E7FFE < 0
+    if (c->mem_r8(nd + 3) == 0x35u && c->mem_r16s(0x800E7FFEu) < 0) {  // node[3]=='5' && DAT_800E7FFE < 0
       int32_t r2 = (int32_t)call0(c, 0x8009a450u);          // rand() draw
       c->mem_w8(nd + 6, (uint8_t)((int8_t)(int32_t)(r2 >> 0xc) + 3));
     }
@@ -69,9 +69,9 @@ void beh_rand_phase_cull(Core* c) {
 
   // ---- COMMON TAIL (STATE 1, or after STATE-0 init) ----
   int32_t r3 = (int32_t)call0(c, 0x8009a450u);              // rand() draw
-  c->mem_w8(nd + 7, (uint8_t)((int8_t)c->mem_r8(nd + 7) + (int8_t)(int32_t)(r3 >> 9)));
+  c->mem_w8(nd + 7, (uint8_t)(c->mem_r8s(nd + 7) + (int8_t)(int32_t)(r3 >> 9)));
   int16_t cull = (int16_t)call1(c, nd, 0x8002b278u);        // sVar2 = FUN_8002B278(node) (short)
-  if ((int8_t)c->mem_r8(nd + 7) < 0) {
+  if (c->mem_r8s(nd + 7) < 0) {
     c->mem_w8(nd + 7, (uint8_t)(c->mem_r8(nd + 7) - 0x80));  // (int8)node[7] += -0x80  == clear sign bit
   } else {
     c->mem_w32(nd + 0x34, c->mem_r32(nd + 0x38));
@@ -102,7 +102,7 @@ void ov_beh_rand_phase_cull(Core* c) {
   static long ng = 0, nb = 0;
   if (ro >= 0 || so >= 0) {
     if (nb++ < 40) fprintf(stderr, "[rand_phase_cullverify] MISMATCH obj=%08x st=%u n3=%u n7=%d ram@%x spad@%x\n",
-                           obj, c->mem_r8(obj + 4), c->mem_r8(obj + 3), (int8_t)c->mem_r8(obj + 7), ro, so);
+                           obj, c->mem_r8(obj + 4), c->mem_r8(obj + 3), c->mem_r8s(obj + 7), ro, so);
   } else if (++ng % 50 == 0) fprintf(stderr, "[rand_phase_cullverify] %ld matches\n", ng);
 }
 

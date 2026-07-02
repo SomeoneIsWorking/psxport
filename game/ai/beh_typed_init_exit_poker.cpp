@@ -170,7 +170,7 @@ void beh_typed_init_exit_poker(Core* c) {
     leaf1(c, nd, 0x80077EFCu);                       // FUN_80077EFC(node)
     c->mem_w8(nd + 1, 1);                            // node[1] = s1
     {
-      int16_t v = (int16_t)c->mem_r16(c->mem_r32(nd + 0x10) + 0x16);
+      int16_t v = c->mem_r16s(c->mem_r32(nd + 0x10) + 0x16);
       if (v != 2) c->mem_w8(nd + 0, 1);              // node[0] = s1
       else        c->mem_w8(nd + 0, (uint8_t)v);     // node[0] = v (==2)
     }
@@ -227,7 +227,7 @@ void beh_typed_init_exit_poker(Core* c) {
       leaf1(c, nd, 0x80077EFCu);                      // FUN_80077EFC(node)
       c->mem_w8(nd + 1, 1);                           // node[1] = s1
       {
-        int16_t v = (int16_t)c->mem_r16(c->mem_r32(nd + 0x10) + 0x16);
+        int16_t v = c->mem_r16s(c->mem_r32(nd + 0x10) + 0x16);
         if (v != 2) c->mem_w8(nd + 0, (uint8_t)v);    // node[0] = v   (s0 == node[3] == 2)
         else        c->mem_w8(nd + 0, 1);             // node[0] = s1
       }
@@ -266,7 +266,7 @@ void beh_typed_init_exit_poker(Core* c) {
       c->mem_w8(nd + 4, 3);                           // node[4] = 3 (delay slot)
       leaf1(c, nd, 0x8004B0D8u);                      // FUN_8004B0D8(node)
       uint8_t flg = c->mem_r8(0x800BF9EAu);
-      int16_t p   = (int16_t)c->mem_r16(nd + 0x60);
+      int16_t p   = c->mem_r16s(nd + 0x60);
       flg = (uint8_t)(flg & ~(1u << ((uint32_t)p & 31)));
       c->mem_w8(0x800BF9EAu, flg);
       flg = (uint8_t)(flg & ~(1u << (((uint32_t)p + 4) & 31)));

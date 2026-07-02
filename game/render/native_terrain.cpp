@@ -35,7 +35,7 @@ int   gpu_gpu_shadows_active(void);
 #define SCR              0x1F800000u          // PSX scratchpad base (engine's GTE-compose temp area)
 #define TERRAIN_GEOMBLK  0x8009FAE8u          // terrain prim-record buffer (recomp 0x8002AB5C: lui 0x800A+addiu -1304)
 
-static inline float r16f(Core* c, uint32_t a) { return (float)(int16_t)c->mem_r16(a); }
+static inline float r16f(Core* c, uint32_t a) { return (float)c->mem_r16s(a); }
 
 // gen_func_8002AB5C, rebuilt PC-native. a0(=r4) = the terrain render-list node.
 void terrain_render_pc(Core* c) {
@@ -101,9 +101,9 @@ void terrain_render_pc(Core* c) {
     int32_t ctl = (int32_t)c->mem_r32(rec + 4);
     float px[4], py[4], depth[4]; int u[4], v[4]; uint8_t r[4], g[4], b[4]; float wv[4][3];
     for (int kk = 0; kk < 4; kk++) {
-      float vx = (float)((int)(int8_t)c->mem_r8(rec + XO[kk]) << 8);
-      float vy = (float)((int)(int8_t)c->mem_r8(rec + YO[kk]) << 8);
-      float vz = (float)((int)(int8_t)c->mem_r8(rec + ZO[kk]) << 8);
+      float vx = (float)((int)c->mem_r8s(rec + XO[kk]) << 8);
+      float vy = (float)((int)c->mem_r8s(rec + YO[kk]) << 8);
+      float vz = (float)((int)c->mem_r8s(rec + ZO[kk]) << 8);
       float w0 = Rview[0][0]*vx + Rview[0][1]*vy + Rview[0][2]*vz + Tview[0];
       float w1 = Rview[1][0]*vx + Rview[1][1]*vy + Rview[1][2]*vz + Tview[1];
       float w2 = Rview[2][0]*vx + Rview[2][1]*vy + Rview[2][2]*vz + Tview[2];

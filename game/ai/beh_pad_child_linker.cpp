@@ -63,7 +63,7 @@ void beh_pad_child_linker(Core* c) {
   c->mem_w8(obj + 8, 2);
   c->mem_w8(obj + 1, 0);
   c->mem_w8(obj + 0x2a, 0);
-  if (!((int16_t)c->mem_r16(0x800ED098u) < 2)) goto L360;
+  if (!(c->mem_r16s(0x800ED098u) < 2)) goto L360;
   c->mem_w8(obj + 4, 3);
   goto L9ac;
  L360:
@@ -92,7 +92,7 @@ void beh_pad_child_linker(Core* c) {
   p = c->mem_r32(s0 + 0xC0); c->mem_w16(p + 8, 0);
   p = c->mem_r32(s0 + 0xC0); c->mem_w16(p + 10, 0);
   p = c->mem_r32(s0 + 0xC0); c->mem_w16(p + 12, 0);
-  idx = (int16_t)c->mem_r16(s1 + 6);
+  idx = c->mem_r16s(s1 + 6);
   s1 += 8;
   v0 = c->mem_r32(s5 + ((uint32_t)(int32_t)idx << 2));
   p = c->mem_r32(s0 + 0xC0);
@@ -173,7 +173,7 @@ void beh_pad_child_linker(Core* c) {
   c->mem_w16(v1 + 12, v0);
   goto L6cc;
  L618:
-  v0 = (uint16_t)(int16_t)c->mem_r16(s1 + 364);
+  v0 = (uint16_t)c->mem_r16s(s1 + 364);
   v1 = 0xC000;
   v0 = v0 & 0xC000;
   if (v0 != v1) goto L6cc;
@@ -216,7 +216,7 @@ void beh_pad_child_linker(Core* c) {
   c->mem_w16(v1 + 10, v0);
  L724:
   v0 = c->mem_r32(obj + 0xC4);
-  v1 = (uint16_t)(int16_t)c->mem_r16(v0 + 12);
+  v1 = (uint16_t)c->mem_r16s(v0 + 12);
   {
     bool ne = (v1 != 3584);
     v1 = 0x800A0000u;                           // f738 delay (always executes)

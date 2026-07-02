@@ -94,7 +94,7 @@ static CullDecision cull_decide(Core* c) {
   int32_t dx = (int16_t)c->r[5], dy = (int16_t)c->r[6], dz = (int16_t)c->r[7];   // pos - camera
   uint32_t sum  = (uint32_t)(dx*dx) + (uint32_t)(dy*dy) + (uint32_t)(dz*dz);     // addu-wrap, matches MIPS
   uint32_t dist = eng_isqrt16(sum) & 0xffffu;
-  int32_t fx = (int16_t)c->mem_r16(0x1F8000E8u), fy = (int16_t)c->mem_r16(0x1F8000EAu), fz = (int16_t)c->mem_r16(0x1F8000ECu);
+  int32_t fx = c->mem_r16s(0x1F8000E8u), fy = c->mem_r16s(0x1F8000EAu), fz = c->mem_r16s(0x1F8000ECu);
   CullDecision R = { 0, 0, 0 };
   uint32_t state;
   if (c->mem_r8(0x800BF870u) == 4) { R.wrote_state2 = 1; state = 2; }
@@ -146,7 +146,7 @@ static void cull_native_body(Core* c) {
   c->r[2] = 1;
   if (R.queue) {
     int qi = R.queue - 1;
-    int32_t cnt = (int16_t)c->mem_r16(CULL_QCNT[qi]);
+    int32_t cnt = c->mem_r16s(CULL_QCNT[qi]);
     if (cnt < CULL_QCAP[qi]) {
       uint32_t ptr = c->mem_r32(CULL_QPTR[qi]);
       c->mem_w32(CULL_QPTR[qi], ptr - 4);
@@ -206,12 +206,12 @@ static void cull_verify_body(Core* c) {
 // and return 1; on reject, return 0 and leave node[1] untouched. Pure leaf (only calls the owned isqrt).
 static int cone_cull_2b278(Core* c, int commit) {
   uint32_t node = c->r[4];
-  int32_t dx = (int16_t)c->mem_r16(node + 0x2C) - (int16_t)c->mem_r16(0x1F8000D2u);
-  int32_t dy = (int16_t)c->mem_r16(node + 0x2E) - (int16_t)c->mem_r16(0x1F8000D6u);
-  int32_t dz = (int16_t)c->mem_r16(node + 0x30) - (int16_t)c->mem_r16(0x1F8000DAu);
+  int32_t dx = c->mem_r16s(node + 0x2C) - c->mem_r16s(0x1F8000D2u);
+  int32_t dy = c->mem_r16s(node + 0x2E) - c->mem_r16s(0x1F8000D6u);
+  int32_t dz = c->mem_r16s(node + 0x30) - c->mem_r16s(0x1F8000DAu);
   uint32_t sum  = (uint32_t)(dx*dx) + (uint32_t)(dy*dy) + (uint32_t)(dz*dz);   // addu-wrap, matches MIPS
   uint32_t dist = eng_isqrt16(sum) & 0xffffu;
-  int32_t fx = (int16_t)c->mem_r16(0x1F8000E8u), fy = (int16_t)c->mem_r16(0x1F8000EAu), fz = (int16_t)c->mem_r16(0x1F8000ECu);
+  int32_t fx = c->mem_r16s(0x1F8000E8u), fy = c->mem_r16s(0x1F8000EAu), fz = c->mem_r16s(0x1F8000ECu);
   // Issue #22: this standalone view-cone cull (FUN_8002B278) shares the 7169 stock far; extend it with
   // the same named CULL_FAR_MULT so distant world geometry on this path also keeps rendering. The cone
   // threshold below stays a relative dot >= dist*3424 (independent of far), so only the far gate moves.

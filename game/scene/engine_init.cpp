@@ -74,7 +74,7 @@ void eng_init_display(Core* c) {
 void eng_init_camera(Core* c) {
   eng_identity_matrix(c, 0x1F8000F8);
   eng_identity_matrix(c, 0x1F800118);
-  int32_t h = (int16_t)c->mem_r16(0x801003F8);   // projection plane H (set earlier; signed lh)
+  int32_t h = c->mem_r16s(0x801003F8);   // projection plane H (set earlier; signed lh)
   c->mem_w32(0x1F8000DC, 0); c->mem_w32(0x1F8000E0, 0); c->mem_w32(0x1F8000E4, 0);
   c->mem_w32(0x1F8000D0, 0); c->mem_w32(0x1F8000D4, 0);
   c->mem_w16(0x1F8000E8, 0); c->mem_w16(0x1F8000EA, 0);

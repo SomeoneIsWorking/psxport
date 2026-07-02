@@ -115,11 +115,11 @@ void beh_scatter_ramp_machine(Core* c) {
   goto Lccc4;                                      // (a0/a1/a2 = 7,0,0 set in Lccc4)
 
  Lcbc8:                                          // sub-state 2
-  if ((int16_t)c->mem_r16(a3 + 6) < -199) { c->mem_w8(obj + 5, 3); goto Lcc24; }
+  if (c->mem_r16s(a3 + 6) < -199) { c->mem_w8(obj + 5, 3); goto Lcc24; }
   goto Lcc44;
 
  Lcbe4:                                          // sub-state 3
-  if ((int16_t)c->mem_r16(a3 + 6) < 0) goto Lcc7c;
+  if (c->mem_r16s(a3 + 6) < 0) goto Lcc7c;
   c->mem_w8(obj + 5, 4);
   c->mem_w8(a3 + 4, 96);                          // node[0x54] = 96
   goto Lcd60;
@@ -137,7 +137,7 @@ void beh_scatter_ramp_machine(Core* c) {
   goto Lcd60;
 
  Lcc30:                                          // sub-state 5
-  if ((int16_t)c->mem_r16(a3 + 6) < -199) {
+  if (c->mem_r16s(a3 + 6) < -199) {
     c->mem_w8(obj + 5, 6);
     c->mem_w8(a3 + 4, 24);
     c->mem_w8(0x80109FC0u, 8);
@@ -150,7 +150,7 @@ void beh_scatter_ramp_machine(Core* c) {
   goto Lcd60;
 
  Lcc6c:                                          // sub-state 6
-  if ((int16_t)c->mem_r16(a3 + 6) >= 0) {
+  if (c->mem_r16s(a3 + 6) >= 0) {
     c->mem_w8(0x800BF9E0u, 7);
     c->mem_w8(obj + 5, 7);
     goto Lcd60;
@@ -172,7 +172,7 @@ void beh_scatter_ramp_machine(Core* c) {
   goto Lcd60;
 
  Lcce4:                                          // sub-state 8
-  if ((int16_t)c->mem_r16(a3 + 6) < -199) {
+  if (c->mem_r16s(a3 + 6) < -199) {
     c->mem_w8(0x800BF9E0u, 17);
     c->mem_w8(obj + 5, 9);
     c->mem_w8(a3 + 4, 120);                       // node[0x54] = 120
@@ -183,7 +183,7 @@ void beh_scatter_ramp_machine(Core* c) {
   goto Lcd60;
 
  Lcd20:                                          // sub-state 9
-  if ((int16_t)c->mem_r16(a3 + 6) < 0)
+  if (c->mem_r16s(a3 + 6) < 0)
     c->mem_w16(a3 + 6, (uint16_t)(c->mem_r16(a3 + 6) + 3));   // node[0x56] += 3
   {
     uint8_t nv = (uint8_t)(c->mem_r8(a3 + 4) - 1);

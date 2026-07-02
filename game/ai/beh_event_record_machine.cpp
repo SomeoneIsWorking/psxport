@@ -63,7 +63,7 @@ void beh_event_record_machine(Core* c) {
     }
     if (st != 0) return;
     // STATE 0 (INIT)
-    if ((int16_t)c->mem_r16(0x800ed098u) < 4) { c->mem_w8(nd + 4, 3); return; }
+    if (c->mem_r16s(0x800ed098u) < 4) { c->mem_w8(nd + 4, 3); return; }
     c->mem_w8(nd + 8, 4);
     c->mem_w8(nd + 9, 4);
     c->mem_w8(nd + 0x0b, 3);
@@ -84,7 +84,7 @@ void beh_event_record_machine(Core* c) {
         c->mem_w16(rec + 4, c->mem_r16(tbl + 6));
         c->mem_w32(rec + 8, 0);
         c->mem_w32(rec + 0xc, 0);
-        int16_t t4 = (int16_t)c->mem_r16(tbl + 8);
+        int16_t t4 = c->mem_r16s(tbl + 8);
         tbl += 10;
         c->r[4] = rec; c->r[5] = 0xc; c->r[6] = (uint32_t)(int32_t)t4; rec_dispatch(c, 0x80051b04u);
         base += 4;

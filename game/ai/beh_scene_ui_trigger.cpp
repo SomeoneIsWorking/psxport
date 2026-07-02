@@ -60,7 +60,7 @@ void beh_scene_ui_trigger(Core* c) {
     if (st != 0) return;                             // (dead path; only 0 left here)
     // ---- STATE 0: cull-record init + size/box setup ----
     uint8_t area = c->mem_r8(0x800BF870u);
-    int16_t tv = (int16_t)c->mem_r16(0x800A4C80u + (uint32_t)area * 2);
+    int16_t tv = c->mem_r16s(0x800A4C80u + (uint32_t)area * 2);
     c->r[4] = obj; c->r[5] = 0xc; c->r[6] = (uint32_t)(int32_t)tv;
     c->engine.graphicsBind.recordInit();   // OWNED native graphics-bind (render-record alloc + geomblk resolve into node+0xC0)
     if (c->r[2] != 0) return;                        // init busy/failed -> EPI

@@ -40,7 +40,7 @@ constexpr uint32_t BEH_FN = 0x8003AD48u;
 
 // string-table entry pointer: mem32(0x800a33c8 + (node[0x60]*3 << 2) + 4)   (node[0x60] is signed lh)
 static inline uint32_t tbl_strp(Core* c, uint32_t nd) {
-  int32_t i = (int16_t)c->mem_r16(nd + 0x60);
+  int32_t i = c->mem_r16s(nd + 0x60);
   uint32_t off = (uint32_t)(i * 3) << 2;
   return c->mem_r32(0x800A33C8u + off + 4);
 }
@@ -96,7 +96,7 @@ void beh_cube_text_spawn(Core* c) {
   }
 
   // common @0x8003ae44
-  if ((int16_t)c->mem_r16(0x800ED098u) < (int)(uint8_t)c->mem_r8(nd + 8)) {
+  if (c->mem_r16s(0x800ED098u) < (int)(uint8_t)c->mem_r8(nd + 8)) {
     c->mem_w8(nd + 4, 2);
     return;
   }

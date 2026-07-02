@@ -75,7 +75,7 @@ void beh_multi_record_phase_machine(Core* c) {
 
  // ================= OUTER STATE 0 (INIT) =================
  S0: {
-   if ((int16_t)c->mem_r16(0x800ed098u) < 10) { c->mem_w8(nd + 4, 3); goto Lret; }
+   if (c->mem_r16s(0x800ed098u) < 10) { c->mem_w8(nd + 4, 3); goto Lret; }
    c->mem_w8(nd + 8, 10);
    c->mem_w8(nd + 9, 10);
    c->mem_w8(nd + 11, 1);

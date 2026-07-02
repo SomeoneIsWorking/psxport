@@ -247,9 +247,9 @@ state2:
 state2_n5_1:                                            // @0x8004c8c8 (node[5] == 1)
   {
     uint8_t nv = 3;                                    // GOTCHA: v0=3 set in branch delay slots -> node[4]=3
-    if ((int16_t)c->mem_r16(obj + 0x60) != 0) {        // 0x8004c8c8: lh node[0x60]; beq->c910 (delay v0=3)
+    if (c->mem_r16s(obj + 0x60) != 0) {        // 0x8004c8c8: lh node[0x60]; beq->c910 (delay v0=3)
       uint16_t flags = c->mem_r16(obj + 0x64);         // 0x8004c8d8: lhu node[0x64]
-      int16_t arg = (int16_t)c->mem_r16(obj + 0x62);   // node[0x62] (s16)
+      int16_t arg = c->mem_r16s(obj + 0x62);   // node[0x62] (s16)
       if (flags & 0x4) {                               // 0x8004c8e4: bne -> c900
         c->r[4] = (uint32_t)(int32_t)arg; c->r[5] = 1; rec_dispatch(c, 0x8004D79Cu); // 0x8004c904
       } else {

@@ -39,7 +39,7 @@ namespace {
 
 constexpr uint32_t BEH_FN = 0x80059ED8u;
 
-static inline int16_t  s16(Core* c, uint32_t a) { return (int16_t)c->mem_r16(a); }
+static inline int16_t  s16(Core* c, uint32_t a) { return c->mem_r16s(a); }
 
 void beh_camera_target_follow(Core* c) {
   const uint32_t nd = c->r[4];                          // s0 = node

@@ -31,7 +31,7 @@ uint32_t gte_read_ctrl(uint32_t reg);
 
 #define SCR 0x1F800000u
 
-static inline float r16f(Core* c, uint32_t a) { return (float)(int16_t)c->mem_r16(a); }
+static inline float r16f(Core* c, uint32_t a) { return (float)c->mem_r16s(a); }
 
 // Build a 3x3 rotation from ZYX euler angles given as PSX fixed-point (4096 = 2*pi / 0x1000 ticks =
 // one full turn). The game stores angles as s16 where 0x1000 == 360 deg. We convert to radians and
@@ -95,9 +95,9 @@ int render_scene_collect(Core* c, RenderScene* out) {
       float ax = r16f(c, n + 0x54), ay = r16f(c, n + 0x56), az = r16f(c, n + 0x58);
       float Rmodel[3][3]; euler_to_R(ax, ay, az, Rmodel);
       // scale (node+0xb8/0xba/0xbc; 0x1000 = 1.0)
-      float sx = (float)(int16_t)c->mem_r16(n + 0xB8) / 4096.0f;
-      float sy = (float)(int16_t)c->mem_r16(n + 0xBA) / 4096.0f;
-      float sz = (float)(int16_t)c->mem_r16(n + 0xBC) / 4096.0f;
+      float sx = (float)c->mem_r16s(n + 0xB8) / 4096.0f;
+      float sy = (float)c->mem_r16s(n + 0xBA) / 4096.0f;
+      float sz = (float)c->mem_r16s(n + 0xBC) / 4096.0f;
       if (sx == 0.0f && sy == 0.0f && sz == 0.0f) { sx = sy = sz = 1.0f; }   // unset scale -> identity
       float Rms[3][3];
       for (int i = 0; i < 3; i++) { Rms[i][0]=Rmodel[i][0]*sx; Rms[i][1]=Rmodel[i][1]*sy; Rms[i][2]=Rmodel[i][2]*sz; }

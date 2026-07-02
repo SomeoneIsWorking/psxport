@@ -101,10 +101,10 @@ void sm_24448(Core* c) {
   const uint32_t obj = c->r[R_A0];
 
   // --- entry: pick maxiter from +0x17E, read velocity, clear floor-type-out ---
-  int16_t  mode  = (int16_t)c->mem_r16(obj + 0x17E);          // lh +0x17E
+  int16_t  mode  = c->mem_r16s(obj + 0x17E);          // lh +0x17E
   uint32_t maxit = (mode < 0) ? 0x25u : 0x4Au;                // bltz -> 37 else 74
   uint16_t yvel  = c->mem_r16(obj + 0x68);                    // lhu +0x68 (Y-vel)
-  int16_t  xvel  = (int16_t)c->mem_r16(obj + 0x66);           // lh  +0x66 (X-vel = speed)
+  int16_t  xvel  = c->mem_r16s(obj + 0x66);           // lh  +0x66 (X-vel = speed)
   c->mem_w8(obj + 0x17D, 0);                                  // sb zero, +0x17D
   int32_t  ystep = (int32_t)(int16_t)(uint16_t)(-(int32_t)yvel); // negate, sign-extend 16
 

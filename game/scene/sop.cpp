@@ -190,7 +190,7 @@ static void d3(Core* c, uint32_t fn, uint32_t a0, uint32_t a1, uint32_t a2) {
 // the per-scene content). Called from ov_sop_field_mode states 1/2/3.
 void Sop::fieldUpdate() { Core* c = core;
   uint32_t sm = c->mem_r32(0x1f800138u);
-  int16_t delay = (int16_t)c->mem_r16(sm + 0x60);
+  int16_t delay = c->mem_r16s(sm + 0x60);
   if (delay != 0) {
     c->mem_w16(sm + 0x60, (uint16_t)(delay - 1));          // startup delay: just count down
   } else {
@@ -284,7 +284,7 @@ void Sop::fieldMode() { Core* c = core;
       // startup delay is active and let ov_bg_scene_transition_sm own the one fade-in. The sm[0x6c] ramp
       // still counts down so state 1 ends exactly as the delay ends (then bg-transition has taken over).
       // Shared with every SOP area (free-roam too) — correct there as well (same delay-then-bg-fade entry).
-      bool startup_delay = (int16_t)c->mem_r16(sm + 0x60) != 0;
+      bool startup_delay = c->mem_r16s(sm + 0x60) != 0;
       if (startup_delay) {
         c->screenFade.set(ScreenFade::SUBTRACTIVE, 0xff, 0xff, 0xff);   // hold black through the startup-delay window
       } else {
@@ -319,7 +319,7 @@ void Sop::fieldMode() { Core* c = core;
     case 4: {  // RESET -> next area
       d0(c, 0x8001cf2cu);                             // kill load task slot 2 (settle CD)
       c->mem_w8(0x1f800137u, 0);
-      int16_t s4c = (int16_t)c->mem_r16(sm + 0x4c);
+      int16_t s4c = c->mem_r16s(sm + 0x4c);
       c->mem_w16(sm + 0x4e, 0);
       c->mem_w16(sm + 0x50, 0);
       c->mem_w16(sm + 0x52, 0);

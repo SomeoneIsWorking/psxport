@@ -538,9 +538,9 @@ static void submit_poly_gt4_bp(Core* c) {
     uint32_t ctl = c->mem_r32(rec + 4);                 // control word (sign = last record; bit30 = semi)
     ProjVtx p[4]; float px[4], py[4], depth[4]; int u[4], v[4]; uint8_t r[4], g[4], b[4];
     for (int k = 0; k < 4; k++) {
-      int vx = (int)(int8_t)c->mem_r8(rec + XO[k]) << 8;
-      int vy = (int)(int8_t)c->mem_r8(rec + YO[k]) << 8;
-      int vz = (int)(int8_t)c->mem_r8(rec + ZO[k]) << 8;
+      int vx = (int)c->mem_r8s(rec + XO[k]) << 8;
+      int vy = (int)c->mem_r8s(rec + YO[k]) << 8;
+      int vz = (int)c->mem_r8s(rec + ZO[k]) << 8;
       proj_native_xform(vx, vy, vz, &p[k]);
       px[k] = p[k].px; py[k] = p[k].py; depth[k] = proj_pz_to_ord(p[k].pz);
     }
@@ -660,7 +660,7 @@ void Render::fieldEntityRender(uint32_t es) {
     uint32_t cmd0 = base + (uint32_t)c->mem_r16(es+0x10)*4; uint32_t s0d=c->mem_r32(cmd0);
     uint32_t rec = cmd0+4 + ((s0d&0xFF)*36);   // skip GT3s to first GT4 record (44B)
     for (int k=0;k<2;k++){ uint32_t r2=rec+k*44;
-      int16_t vx=(int16_t)c->mem_r16(r2+20), vy=(int16_t)(c->mem_r32(r2+20)>>16), vz=(int16_t)c->mem_r16(r2+24);
+      int16_t vx=c->mem_r16s(r2+20), vy=(int16_t)(c->mem_r32(r2+20)>>16), vz=c->mem_r16s(r2+24);
       ProjVtx pv; eproj_vertex_active(vx,vy,vz,&pv);
       fprintf(stderr,"   gt4[%d] model=(%d,%d,%d) -> px=%.1f py=%.1f pz=%.1f sx=%d sy=%d\n",
         k, vx,vy,vz, (double)pv.px,(double)pv.py,(double)pv.pz, pv.sx, pv.sy); } } }
@@ -707,8 +707,8 @@ void Render::fieldEntityRender(uint32_t es) {
 void terrain_prep_object_matrix(Core* c, uint32_t node) {
   // depth-cue: FarColor=0, IR0 factor staged for the submitter
   gte_write_ctrl(21, 0); gte_write_ctrl(22, 0); gte_write_ctrl(23, 0);
-  uint32_t ir0 = (uint32_t)((128 - (int16_t)c->mem_r16(node + 78)) << 5);
-  int32_t a80 = (int16_t)c->mem_r16(node + 80);
+  uint32_t ir0 = (uint32_t)((128 - c->mem_r16s(node + 78)) << 5);
+  int32_t a80 = c->mem_r16s(node + 80);
   // The two sway-angle bytes (0x800A2014/2016) are written by the recomp terrain body and read back
   // by it (scaled <<2) into the secondary-rotation args; the middle byte 0x800A2015 is set elsewhere.
   // We write them to guest exactly as the recomp does (the no-guest-write rule was discarded — these
@@ -770,12 +770,12 @@ static void build_xform(Core* c) {
   c->mem_w32(node + 152, 0x1000); c->mem_w32(node + 156, 0); c->mem_w32(node + 160, 0x1000);
   c->mem_w32(node + 164, 0);      c->mem_w32(node + 168, 0x1000); c->mem_w32(node + 172, 0);
   c->mem_w32(node + 176, 0);      c->mem_w32(node + 180, 0);
-  Math::rotX(c,(int16_t)c->mem_r16(node + 84), node + 152);
-  Math::rotY(c,(int16_t)c->mem_r16(node + 86), node + 152);
-  Math::rotZ(c,(int16_t)c->mem_r16(node + 88), node + 152);
-  c->mem_w32(node + 172, (uint32_t)(int16_t)c->mem_r16(node + 46));
-  c->mem_w32(node + 176, (uint32_t)(int16_t)c->mem_r16(node + 50));
-  c->mem_w32(node + 180, (uint32_t)(int16_t)c->mem_r16(node + 54));
+  Math::rotX(c,c->mem_r16s(node + 84), node + 152);
+  Math::rotY(c,c->mem_r16s(node + 86), node + 152);
+  Math::rotZ(c,c->mem_r16s(node + 88), node + 152);
+  c->mem_w32(node + 172, (uint32_t)c->mem_r16s(node + 46));
+  c->mem_w32(node + 176, (uint32_t)c->mem_r16s(node + 50));
+  c->mem_w32(node + 180, (uint32_t)c->mem_r16s(node + 54));
   c->r[4] = node; ov_xform_propagate(c);
 }
 void ov_build_xform(Core* c) {
@@ -804,10 +804,10 @@ static void xform_propagate_body(Core* c) {
     c->mem_w32(0x1F800008u, 4096); c->mem_w32(0x1F80000Cu, 0);
     c->mem_w32(0x1F800010u, 4096); c->mem_w32(0x1F800014u, 0);
     c->mem_w32(0x1F800018u, 0);    c->mem_w32(0x1F80001Cu, 0);
-    int16_t sentinel = (int16_t)c->mem_r16(child + 6);
-    Math::rotX(c,(int16_t)c->mem_r16(child + 8),  0x1F800000u);
-    Math::rotY(c,(int16_t)c->mem_r16(child + 10), 0x1F800000u);
-    Math::rotZ(c,(int16_t)c->mem_r16(child + 12), 0x1F800000u);
+    int16_t sentinel = c->mem_r16s(child + 6);
+    Math::rotX(c,c->mem_r16s(child + 8),  0x1F800000u);
+    Math::rotY(c,c->mem_r16s(child + 10), 0x1F800000u);
+    Math::rotZ(c,c->mem_r16s(child + 12), 0x1F800000u);
     if (sentinel == -1) {                                        // ROOT: parent = this node
       Math::matMul(c,node + 152, 0x1F800000u, child + 24);   // child_mat = node_mat × work
       Math::applyMatlv(c,child, child + 44);                // MVMVA → child+0x2C
@@ -917,7 +917,7 @@ static void xform51128_body(Core* c) {
     c->mem_w32(0x1F800000u, (uint32_t)c->mem_r16s(child + 56));
     c->mem_w32(0x1F800008u, (uint32_t)c->mem_r16s(child + 58));
     c->mem_w32(0x1F800010u, (uint32_t)c->mem_r16s(child + 60));
-    int16_t sentinel = (int16_t)c->mem_r16(child + 6);
+    int16_t sentinel = c->mem_r16s(child + 6);
     Math::rotmat(c,child + 8, 0x1F800020u);                                     // RotMatrix
     Math::matMul(c,0x1F800020u, 0x1F800000u, 0x1F800040u);                      // matmul
     if (sentinel == -1) {                                        // ROOT: parent = this node
@@ -1042,7 +1042,7 @@ static void orch597AC_body(Core* c) {
     int s7 = 0, i = 0;
     while (i < (int)(uint8_t)c->mem_r8(node+8)) {                 // top check (node[8], possibly forced to node[9])
       uint32_t child = c->mem_r32(node + 0xC0 + 4u*(uint32_t)i);
-      int psel = (int)(int16_t)c->mem_r16(child + 6);             // parent select (signed)
+      int psel = (int)c->mem_r16s(child + 6);             // parent select (signed)
       // SetVector(0x1F800000, child->h[0x38/3A/3C]); RotMatrix(child+8 → 0x1F800020); mat 0x1F800040 = 0x1F800020 × 0x1F800000
       Mtx::diagonal(c, 0x1F800000u, (int32_t)R16(child+0x38), (int32_t)R16(child+0x3A), (int32_t)R16(child+0x3C));   // was 0x800517BCu
       Math::rotmat(c,child+8, 0x1F800020u);
@@ -1360,15 +1360,15 @@ static inline void tilescan_scanline(Core* c, uint32_t obj, int s2, int s5, int 
   if (s2 < 0) return;                              // bltz s2 → skip (advance handled by caller)
   int s3 = s5 >> 16;                               // right end x
   int s1 = s6 >> 16;                               // left start x
-  int width = (int16_t)c->mem_r16(obj + 10);       // obj[10] (row stride + y-bound)
+  int width = c->mem_r16s(obj + 10);       // obj[10] (row stride + y-bound)
   if (!(s2 < width)) return;                       // slt s2,width ; beq → skip scanline
-  int xb = (int16_t)c->mem_r16(obj + 8);           // obj[8] = x-bound
+  int xb = c->mem_r16s(obj + 8);           // obj[8] = x-bound
   if (!(s3 < xb)) s3 = xb - 1;                     // clamp right to xb-1
   if (s1 < 0) s1 = 0;                              // clamp left to 0
   uint32_t base = c->mem_r32(0x800ecf78u) + 4;     // cell-array base past the 2-halfword header
   for (; s1 <= s3; s1++) {
     uint32_t s0 = base + 2u * (uint32_t)(s1 * width + s2);   // row-major (s1,s2) cell address
-    int v1 = (int16_t)c->mem_r16(s0);
+    int v1 = c->mem_r16s(s0);
     if (v1 != -1) {                                // skip empty cell: dedup beq v1,v0 where v0=-1 (delay slot 0x8013f798)
       uint32_t look = tile_lookup_calc(c, (uint32_t)s1, (uint32_t)s2);  // jal 0x8013fae0 (owned leaf)
       if ((uint16_t)look != 0) {                   // sll v0,16 ; beq zero → low16 nonzero

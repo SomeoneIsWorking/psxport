@@ -112,7 +112,7 @@ void beh_substate_edge_orchestrator(Core* c) {
       uint16_t nv = (n78 & 0x8000) ? 0x8002 : 2;      // bnez (v1&0x8000) -> 0x8002 else 2 [0x8012ECF8/D00]
       c->mem_w16(obj + 0x78, nv);                     // sh v0,0x78(s1) [0x8012ED04]
       // node[0x48] -> node[0x4e] sign clamp [0x8012ED08..28]
-      int16_t x = (int16_t)c->mem_r16(obj + 0x48);    // lh v0,0x48(s1)
+      int16_t x = c->mem_r16s(obj + 0x48);    // lh v0,0x48(s1)
       if (x > 0)      c->mem_w16(obj + 0x4e, (uint16_t)(uint32_t)(int32_t)-0x80);  // blez false -> -0x80
       else if (x < 0) c->mem_w16(obj + 0x4e, 0x80);   // bgez false (x<0) -> +0x80
       // x == 0: node[0x4e] unchanged (bgez true -> goto ed2c)

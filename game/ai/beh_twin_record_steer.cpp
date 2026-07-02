@@ -75,7 +75,7 @@ void beh_twin_record_steer(Core* c) {
  // ================= STATE 0 (INIT) =================
  S0: {
    c->mem_w8(nd + 8, 2);                            // node[8] = a0 (clobbered to 2)
-   if ((int16_t)c->mem_r16(0x800ed098u) < 2) { c->mem_w8(nd + 4, 3); goto Lret; }
+   if (c->mem_r16s(0x800ed098u) < 2) { c->mem_w8(nd + 4, 3); goto Lret; }
    c->mem_w16(nd + 0x82, 140);
    c->mem_w16(nd + 0x80, 140);
    c->mem_w16(nd + 0x84, 10);
@@ -108,8 +108,8 @@ void beh_twin_record_steer(Core* c) {
    uint32_t a1v, a3v;
    if (n29 == 1) {
      uint32_t rec0 = c->mem_r32(nd + 0xc0);
-     int32_t aa = (int16_t)c->mem_r16(0x1f800160u) - (int32_t)c->mem_r32(rec0 + 0x2c);
-     int32_t bb = (int16_t)c->mem_r16(0x1f800164u) - (int32_t)c->mem_r32(rec0 + 0x34);
+     int32_t aa = c->mem_r16s(0x1f800160u) - (int32_t)c->mem_r32(rec0 + 0x2c);
+     int32_t bb = c->mem_r16s(0x1f800164u) - (int32_t)c->mem_r32(rec0 + 0x34);
      int32_t v1 = (int32_t)leafr2(c, (uint32_t)aa, (uint32_t)bb, 0x800781e0u);   // FUN_800781E0
      if (v1 < 60)        { a1v = 0; a3v = 0; }
      else if (v1 < 140)  { a1v = ((uint32_t)(-v1)) >> 1; a3v = 0; }
@@ -120,10 +120,10 @@ void beh_twin_record_steer(Core* c) {
 
    uint32_t rec0 = c->mem_r32(nd + 0xc0);
    uint16_t nv;
-   if (clamp_step((int16_t)c->mem_r16(rec0 + 0x0c), a1v, 5, &nv))
+   if (clamp_step(c->mem_r16s(rec0 + 0x0c), a1v, 5, &nv))
      c->mem_w16(c->mem_r32(nd + 0xc0) + 0x0c, nv);
    uint32_t rec1 = c->mem_r32(nd + 0xc4);
-   if (clamp_step((int16_t)c->mem_r16(rec1 + 0x0c), a3v, 10, &nv))
+   if (clamp_step(c->mem_r16s(rec1 + 0x0c), a3v, 10, &nv))
      c->mem_w16(c->mem_r32(nd + 0xc4) + 0x0c, nv);
 
    if (c->mem_r8(0x800e7eaau) < 22) {

@@ -77,7 +77,7 @@ void rec_dispatch(Core*, uint32_t);     // hybrid call: recomp body if emitted, 
 // (FUN_80074590) below, which is pure control flow (0-diff verified). stop_bgm_body is retained as
 // the documented native reference but is NOT registered (see sound_register).
 static void stop_bgm_body(Core* c) {
-  int32_t song = (int16_t)c->mem_r16(SND_SONG);
+  int32_t song = c->mem_r16s(SND_SONG);
   if (song == -1) return;
   uint32_t seq = c->mem_r16(SND_SEQTAB + (uint32_t)song * 8);  // lh a0,0(v1) — handle
   c->r[4] = seq; rec_dispatch(c, LF_SEQ_STOP);                  // SsSeqStop(seq)
@@ -137,7 +137,7 @@ static void play_bgm_body(Core* c) {
   uint32_t s2 = (idx & 0x80u) ? 0u : 1u;   // sltiu (a0&0x80) < 1
   if (s0 >= 14) return;                      // sltiu s0,14 == 0 -> tail/return
 
-  int32_t cur = (int16_t)c->mem_r16(SND_SONG);
+  int32_t cur = c->mem_r16s(SND_SONG);
   bool do_start = true;
 
   // ---- classification (jump table on s0) ----
@@ -183,7 +183,7 @@ static void play_bgm_body(Core* c) {
   seqh = c->mem_r16(SND_SEQTAB + (uint32_t)s0 * 8);
   c->r[4] = seqh; c->r[5] = 1; c->r[6] = s2; rec_dispatch(c, LF_SEQ_PLAY);  // SsSeqPlay(seq, 1, s2)
 
-  int32_t vcount = (int16_t)c->mem_r16(SND_SEQTAB + (uint32_t)s0 * 8 + 4);  // lh v1,4(seqtab[s0]) — vcount at +4 (low byte = bank)
+  int32_t vcount = c->mem_r16s(SND_SEQTAB + (uint32_t)s0 * 8 + 4);  // lh v1,4(seqtab[s0]) — vcount at +4 (low byte = bank)
   if (vcount > 0) {
     c->mem_w32(SND_VOICE_CNT, (uint32_t)vcount);                // sw v1, 0x800bed78
     uint32_t e = SND_VOICETAB;
@@ -268,7 +268,7 @@ static void sound_verify(Core* c, uint32_t addr, void(*body)(Core*), const char*
   if (ro >= 0 || so >= 0 || v0_n != v0_o) {
     if (nb++ < 40)
       fprintf(stderr, "[soundverify] %s MISMATCH v0 n=%x o=%x ram@%x spad@%x sp=%x a0=%x song=%x\n",
-                           nm, v0_n, v0_o, ro, so, sp, regs0[4], (int16_t)c->mem_r16(SND_SONG));
+                           nm, v0_n, v0_o, ro, so, sp, regs0[4], c->mem_r16s(SND_SONG));
   } else if (++ng % 100 == 0) fprintf(stderr, "[soundverify] %ld matches (last %s)\n", ng, nm);
 }
 

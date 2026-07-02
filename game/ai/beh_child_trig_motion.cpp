@@ -57,7 +57,7 @@ void beh_child_trig_motion(Core* c) {
 
  // ================= STATE 0 (INIT) =================
  S0:
-  if ((int16_t)c->mem_r16(0x800ED098u) < 2) { c->mem_w8(nd + 4, 3); goto Lret; }  // 0x800ED098 gate
+  if (c->mem_r16s(0x800ED098u) < 2) { c->mem_w8(nd + 4, 3); goto Lret; }  // 0x800ED098 gate
   c->mem_w8 (nd + 8, 2);
   c->mem_w8 (nd + 9, 2);
   c->mem_w16(nd + 0x80, 30);
@@ -87,7 +87,7 @@ void beh_child_trig_motion(Core* c) {
         c->mem_w32(rec + 8, 0);
         src += 2;
         c->mem_w32(rec + 12, 0);
-        uint32_t a2 = (uint32_t)(int16_t)c->mem_r16(src);
+        uint32_t a2 = (uint32_t)c->mem_r16s(src);
         leaf3(c, rec, 12, a2, 0x80051B04u);          // FUN_80051B04(rec, 12, (int16)*src)
         src += 2;
         s2 += 1;

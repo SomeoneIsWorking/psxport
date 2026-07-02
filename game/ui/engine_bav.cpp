@@ -157,7 +157,7 @@ static uint32_t bav_load_native(Core* c) {
   c->mem_w16(G_CDA, (uint16_t)clamp);
 
   uint32_t field18 = c->mem_r16(desc + 18);             // hu
-  int32_t  clamp_s = (int16_t)c->mem_r16(G_CDA);        // reload (== clamp)
+  int32_t  clamp_s = c->mem_r16s(G_CDA);        // reload (== clamp)
   if (clamp_s < (int32_t)field18) {                     // slt(clamp, field18): field18 > clamp -> error
     c->mem_w8(G_D18 + (uint32_t)((int32_t)(int16_t)s2), 0); // free slot
     v0 = (uint32_t)(int32_t)(int16_t)s2;                // leftover v0 = slot (0x8009673c)

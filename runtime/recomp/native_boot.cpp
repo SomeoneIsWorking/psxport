@@ -440,7 +440,7 @@ static void ov_game_main(Core* c) {
       uint32_t st = (c->mem_r16(0x801054B0) << 16) | (c->mem_r32(0x80104C28) & 0xFFFF);
       if (st != ls) {
         fprintf(stderr, "[seqdbg] f%u open=%d playmask=0x%04X tickmode=%d seqfn=0x%08X stage=0x%08X\n",
-                f, (int16_t)c->mem_r16(0x801054B0), c->mem_r32(0x80104C28) & 0xFFFF,
+                f, c->mem_r16s(0x801054B0), c->mem_r32(0x80104C28) & 0xFFFF,
                 c->mem_r8(0x800AC424), c->mem_r32(0x800AC42C), c->mem_r32(TASKBASE + 0xc));
         ls = st;
       }
@@ -454,8 +454,8 @@ static void ov_game_main(Core* c) {
     // PSXPORT_DEBUG=cam — per-frame camera pos (tracks Tomba). Used to determine controls empirically:
     // hold one button and watch for a vertical (Y) excursion = a JUMP, vs a planar (X/Z) shift = walking.
     if (cfg_dbg("cam"))
-      fprintf(stderr, "[cam] f%u (%d,%d,%d)\n", f, (int16_t)c->mem_r16(0x1f8000d2u),
-              (int16_t)c->mem_r16(0x1f8000d6u), (int16_t)c->mem_r16(0x1f8000dau));
+      fprintf(stderr, "[cam] f%u (%d,%d,%d)\n", f, c->mem_r16s(0x1f8000d2u),
+              c->mem_r16s(0x1f8000d6u), c->mem_r16s(0x1f8000dau));
     if (cfg_dbg("state")) {
       uint64_t sig = 0; int menu_slot = -1; uint8_t menu_page = 0;
       for (int i = 0; i < 3; i++) {
@@ -477,8 +477,8 @@ static void ov_game_main(Core* c) {
         fprintf(stderr, "  MENU=%s", menu_slot >= 0 ? "OPEN" : "no");
         if (menu_slot >= 0) fprintf(stderr, "(slot%d page=%u)", menu_slot, menu_page);
         fprintf(stderr, "  cam=(%d,%d,%d) sm[0x4a]=%u\n",
-                (int16_t)c->mem_r16(0x1f8000d2u), (int16_t)c->mem_r16(0x1f8000d6u),
-                (int16_t)c->mem_r16(0x1f8000dau), c->mem_r16(0x801fe000u + 0x4au));
+                c->mem_r16s(0x1f8000d2u), c->mem_r16s(0x1f8000d6u),
+                c->mem_r16s(0x1f8000dau), c->mem_r16(0x801fe000u + 0x4au));
       }
     }
     // BGM-active probe (PSXPORT_BGMDBG): each frame scan the 14 libsnd sequence slots
