@@ -5,6 +5,7 @@
 #include "pool.h"
 #include "verify_gate.h"
 #include "mtx.h"          // class Mtx — libgte helpers (MR_init, ...)
+#include "placement.h"    // ov_spawn_with_parent (FUN_80072DDC)
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -144,7 +145,7 @@ static void ov_800783DC(Core* c) {
   uint32_t mode = c->mem_r8(A);
   if (mode == 3) {
     c->r[4] = 0; c->r[5] = 3; c->r[6] = 4; c->r[7] = 27;
-    call_fn(c, 0x80072DDCu);
+    ov_spawn_with_parent(c);
     uint32_t v0 = c->r[2];
     c->mem_w32(v0 + 28, 0x8010B37Cu);
     c->mem_w32(S0 + 16, v0);

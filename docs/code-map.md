@@ -7,7 +7,7 @@ A native may exist already. **LIVE** = reachable by direct C call from a native_
 dispatch root (actually runs). **ORPHAN** = native exists but only the REMOVED override
 table used to reach it — it is dead code until a native parent calls it directly.
 
-Totals: 413 native fns, 212 owned addresses, 107 LIVE / 306 ORPHAN.
+Totals: 414 native fns, 212 owned addresses, 107 LIVE / 307 ORPHAN.
 
 | addr | status | symbol | file:line | depends-on (still-PSX) | summary |
 |------|--------|--------|-----------|------------------------|---------|
@@ -36,8 +36,8 @@ Totals: 413 native fns, 212 owned addresses, 107 LIVE / 306 ORPHAN.
 | 0x80031780 | ORPHAN | `ov_list_scan_31780` | game/player/collision.h:8 |  |  |
 | 0x8003B220 | ORPHAN | `ov_hitbox_3b220` | game/player/hitbox.cpp:114 | 0x8003B220 |  |
 | 0x8003B220 | ORPHAN | `ov_hitbox_3b220` | game/player/hitbox.h:6 |  |  |
-| 0x8003B320 | ORPHAN | `ov_subcnt_b320` | game/render/engine_submit.cpp:1161 |  |  |
-| 0x8003B588 | LIVE | `ov_rwalk_b588` | game/render/engine_submit.cpp:1177 | 0x800597AC | PSXPORT_DEBUG=rwalk — phase-2 render-walk caller counter. The per-obje… |
+| 0x8003B320 | ORPHAN | `ov_subcnt_b320` | game/render/engine_submit.cpp:1163 |  |  |
+| 0x8003B588 | LIVE | `ov_rwalk_b588` | game/render/engine_submit.cpp:1179 | 0x800597AC | PSXPORT_DEBUG=rwalk — phase-2 render-walk caller counter. The per-obje… |
 | 0x8003BB50 | LIVE | `ov_render_walk_snapshot` | game/render/engine_render_walk.cpp:512 |  |  |
 | 0x8003BCF4 | LIVE | `ov_rwalk_aux_bcf4` | game/render/engine_render_walk.cpp:587 |  |  |
 | 0x8003BF00 | LIVE | `ov_rwalk_aux_bf00` | game/render/engine_render_walk.cpp:648 |  |  |
@@ -45,7 +45,7 @@ Totals: 413 native fns, 212 owned addresses, 107 LIVE / 306 ORPHAN.
 | 0x8003C048 | LIVE | `ov_render_walk` | game/render/engine_render_walk.cpp:402 |  |  |
 | 0x8003C048 | ORPHAN | `ov_rlist_probe` | game/render/render_debug_probes.cpp:103 | 0x8003C048 | PSXPORT_DEBUG=rlist — dump the gen_func_8003C048 render-list node TYPE… |
 | 0x8003C8F4 | ORPHAN | `ov_collectable_quad` | game/render/engine_render_walk.cpp:415 | 0x8003C8F4 |  |
-| 0x8003C8F4 | ORPHAN | `ov_subcnt_c8f4` | game/render/engine_submit.cpp:1162 |  |  |
+| 0x8003C8F4 | ORPHAN | `ov_subcnt_c8f4` | game/render/engine_submit.cpp:1164 |  |  |
 | 0x8003CCA4 | LIVE | `ov_perobj_render` | game/render/engine_render_walk.cpp:235 |  |  |
 | 0x8003CCA4 | ORPHAN | `ov_ccase_probe` | game/render/render_debug_probes.cpp:125 | 0x8003CCA4 |  |
 | 0x8003CDD8 | ORPHAN | `ov_perobj_flush` | game/render/engine_render_walk.cpp:65 |  |  |
@@ -81,9 +81,9 @@ Totals: 413 native fns, 212 owned addresses, 107 LIVE / 306 ORPHAN.
 | 0x8004BD64 | ORPHAN | `ov_obj_pos_compose` | game/world/graphics_bind.cpp:173 |  |  |
 | 0x8004CE14 | ORPHAN | `ov_script_vm_4ce14` | game/items/script.cpp:114 | 0x8004CE14 |  |
 | 0x8004CE14 | ORPHAN | `ov_script_vm_4ce14` | game/items/script.h:8 |  |  |
-| 0x8004D338 | ORPHAN | `ov_inventory_add` | game/items/inventory.cpp:149 |  |  |
-| 0x8004D4C4 | ORPHAN | `ov_inventory_give_and_flag` | game/items/inventory.cpp:162 |  |  |
-| 0x8004D4F4 | ORPHAN | `ov_inventory_give` | game/items/inventory.cpp:171 |  |  |
+| 0x8004D338 | ORPHAN | `Inventory::addEntry` | game/items/inventory.cpp:148 |  |  |
+| 0x8004D4C4 | ORPHAN | `Inventory::giveAndFlagEntry` | game/items/inventory.cpp:161 |  |  |
+| 0x8004D4F4 | ORPHAN | `Inventory::giveEntry` | game/items/inventory.cpp:170 |  |  |
 | 0x8004D7EC | ORPHAN | `ov_bittest_4d7ec` | game/math/mathlib.cpp:30 | 0x8004D7EC | pure bitmap bit-test (~2%, 6.8k calls): byte = bitmap[(int16)(a0/8)] t… |
 | 0x8004D868 | ORPHAN | `ov_bittest_4d868` | game/math/mathlib.cpp:51 | 0x8004D868 | sibling of FUN_8004D7EC (bit-test) against a fixed third bitmap @0x800… |
 | 0x8004FE84 | ORPHAN | `Engine::sceneRenderListBuilder` | game/scene/engine_stage.cpp:354 |  | Native FUN_8004FE84 — a 2-phase scene/render-list builder driver (stru… |
@@ -94,20 +94,21 @@ Totals: 413 native fns, 212 owned addresses, 107 LIVE / 306 ORPHAN.
 | 0x80050B08 | LIVE | `ov_game_main` | runtime/recomp/native_boot.cpp:281 |  |  |
 | 0x80050B08 | LIVE | `native_boot_run` | runtime/recomp/native_boot.cpp:575 |  | Wired from boot.c when PSXPORT_NATIVE_BOOT is set. Registers the main … |
 | 0x80050DE4 | LIVE | `Engine::sceneStateStep` | game/scene/engine_stage.cpp:1110 |  | Engine::sceneStateStep — the SCENE-INIT / SCENE-RUN state machine at g… |
-| 0x80051128 | ORPHAN | `ov_xform51128` | game/render/engine_submit.cpp:972 |  |  |
-| 0x80051464 | ORPHAN | `ov_xform_propagate` | game/render/engine_submit.cpp:867 |  |  |
+| 0x80051128 | ORPHAN | `ov_xform51128` | game/render/engine_submit.cpp:974 |  |  |
+| 0x80051464 | ORPHAN | `ov_xform_propagate` | game/render/engine_submit.cpp:757 |  |  |
+| 0x80051464 | ORPHAN | `ov_xform_propagate` | game/render/engine_submit.cpp:869 |  |  |
 | 0x80051794 | LIVE | `eng_identity_matrix` | game/scene/engine_init.cpp:20 |  | set an identity 3x3 rotation matrix (0x1000 = 1.0 fixed on the diagona… |
 | 0x800517BC | ORPHAN | `ov_settrans` | game/math/engine_math.cpp:623 |  | write a 0x20-byte vector block: a1/a2/a3 (each sign-extended s16) at a… |
 | 0x800517F8 | ORPHAN | `ov_obj_render_update` | game/world/graphics_bind.cpp:96 |  |  |
 | 0x80051B04 | ORPHAN | `ov_cmdenq_probe` | game/render/engine_submit.cpp:271 | 0x80051B04 | PSXPORT_DEBUG=cmdenq — render-command ENQUEUE tap (later-132). gen_fun… |
 | 0x80051B70 | ORPHAN | `ov_obj_record_init` | game/world/graphics_bind.cpp:74 |  |  |
-| 0x80051C8C | ORPHAN | `ov_build_xform` | game/render/engine_submit.cpp:778 |  |  |
+| 0x80051C8C | ORPHAN | `ov_build_xform` | game/render/engine_submit.cpp:780 |  |  |
 | 0x80052078 | ORPHAN | `eng_stage_transition` | game/scene/engine_level.cpp:70 |  | (stageIdx) — the cooperative STAGE TRANSITION: load the next stage's o… |
 | 0x80052078 | ORPHAN | `ov_stage_transition` | game/scene/engine_level.cpp:87 |  |  |
 | 0x80052078 | LIVE | `native_start_stage` | game/scene/engine_stage.cpp:1412 | 0x80080870 0x80080890 0x800808A0 | switch task 0 to the given stage (load overlay + reset the display/BIO… |
 | 0x800520E0 | LIVE | `eng_init_entity_pool` | game/scene/engine_init.cpp:106 |  | engine SUBSYSTEM init (init-prefix slot, dispatched at native_boot.cpp… |
 | 0x80056B48 | ORPHAN | `ov_player_move` | game/player/engine_player.cpp:75 | 0x80056B48 | playerverify — full RAM+scratchpad A/B gate (like the scriptvm/pad931c… |
-| 0x800597AC | ORPHAN | `ov_orch597AC` | game/render/engine_submit.cpp:1140 |  |  |
+| 0x800597AC | ORPHAN | `ov_orch597AC` | game/render/engine_submit.cpp:1142 |  |  |
 | 0x80059D28 | ORPHAN | `Engine::frameStartTick` | game/scene/engine_stage.cpp:1196 |  | Engine::frameStartTick — per-frame prologue at guest 0x80059D28 (FIRST… |
 | 0x80069B28 | LIVE | `ov_list_walk_69b28` | game/object/engine_tomba2.cpp:220 |  | Native FUN_80069B28 — a second per-frame object-list walk (head 0x800F… |
 | 0x8006C80C | ORPHAN | `CutsceneCamera::yFloor` | game/camera/cutscene_camera.cpp:345 |  | ── yFloor (camera-Y floor clamp, per render mode) ────────────────────… |
@@ -269,4 +270,4 @@ Totals: 413 native fns, 212 owned addresses, 107 LIVE / 306 ORPHAN.
 | 0x8010957C | LIVE | `ov_scene_fade_seq` | game/scene/engine_stage.cpp:457 |  | ov_scene_fade_seq — GAME-overlay a0l screen-fade sequencer (guest FUN_… |
 | 0x80109FE0 | LIVE | `ov_field_entity_render` | game/render/engine_submit.cpp:646 |  | FIELD ENTITY RENDER LOOP — PC-native ownership of the SOP field-overla… |
 | 0x8013E9D8 | ORPHAN | `ov_bg_render` | game/render/engine_render_walk.cpp:248 | 0x8013DD34 | NATIVE seaside-area GROUND/BG node renderer — OVERLAY 0x8013E9D8 (the … |
-| 0x80146478 | ORPHAN | `ov_gt3gt4_caller` | game/render/engine_submit.cpp:1239 |  | -- Auto-ownership of the SAME submit library when it appears in a runt… |
+| 0x80146478 | ORPHAN | `ov_gt3gt4_caller` | game/render/engine_submit.cpp:1241 |  | -- Auto-ownership of the SAME submit library when it appears in a runt… |
