@@ -721,7 +721,7 @@ void terrain_prep_object_matrix(Core* c, uint32_t node) {
   uint8_t sway1 = c->mem_r8(A2_PARAM + 1);                 // external (set elsewhere)
   c->mem_w32(IR0_STAGE, ir0);
   // build object rotation matrix at scratch SCR from the node's euler angles (node+84/86/88)
-  Math::rotmat(c,node + 84, SCR);
+  c->math.rotmat(node + 84, SCR);
   // Secondary sway rotation by the host-computed angle bytes (scaled <<2). The recomp body 0x8002AB5C
   // stages these three angle words on its OWN STACK FRAME (r29 -= 56; words at r29+16/20/24), NOT in
   // scratchpad — and passes that stack pointer as 0x80084520's arg. The prior native code wrote them to
@@ -770,9 +770,9 @@ static void build_xform(Core* c) {
   c->mem_w32(node + 152, 0x1000); c->mem_w32(node + 156, 0); c->mem_w32(node + 160, 0x1000);
   c->mem_w32(node + 164, 0);      c->mem_w32(node + 168, 0x1000); c->mem_w32(node + 172, 0);
   c->mem_w32(node + 176, 0);      c->mem_w32(node + 180, 0);
-  Math::rotX(c,c->mem_r16s(node + 84), node + 152);
-  Math::rotY(c,c->mem_r16s(node + 86), node + 152);
-  Math::rotZ(c,c->mem_r16s(node + 88), node + 152);
+  c->math.rotX(c->mem_r16s(node + 84), node + 152);
+  c->math.rotY(c->mem_r16s(node + 86), node + 152);
+  c->math.rotZ(c->mem_r16s(node + 88), node + 152);
   c->mem_w32(node + 172, (uint32_t)c->mem_r16s(node + 46));
   c->mem_w32(node + 176, (uint32_t)c->mem_r16s(node + 50));
   c->mem_w32(node + 180, (uint32_t)c->mem_r16s(node + 54));
@@ -805,19 +805,19 @@ static void xform_propagate_body(Core* c) {
     c->mem_w32(0x1F800010u, 4096); c->mem_w32(0x1F800014u, 0);
     c->mem_w32(0x1F800018u, 0);    c->mem_w32(0x1F80001Cu, 0);
     int16_t sentinel = c->mem_r16s(child + 6);
-    Math::rotX(c,c->mem_r16s(child + 8),  0x1F800000u);
-    Math::rotY(c,c->mem_r16s(child + 10), 0x1F800000u);
-    Math::rotZ(c,c->mem_r16s(child + 12), 0x1F800000u);
+    c->math.rotX(c->mem_r16s(child + 8),  0x1F800000u);
+    c->math.rotY(c->mem_r16s(child + 10), 0x1F800000u);
+    c->math.rotZ(c->mem_r16s(child + 12), 0x1F800000u);
     if (sentinel == -1) {                                        // ROOT: parent = this node
-      Math::matMul(c,node + 152, 0x1F800000u, child + 24);   // child_mat = node_mat × work
-      Math::applyMatlv(c,child, child + 44);                // MVMVA → child+0x2C
+      c->math.matMul(node + 152, 0x1F800000u, child + 24);   // child_mat = node_mat × work
+      c->math.applyMatlv(child, child + 44);                // MVMVA → child+0x2C
       c->mem_w32(child + 0x2C, c->mem_r32(child + 0x2C) + c->mem_r32(node + 0xAC));
       c->mem_w32(child + 0x30, c->mem_r32(child + 0x30) + c->mem_r32(node + 0xB0));
       c->mem_w32(child + 0x34, c->mem_r32(child + 0x34) + c->mem_r32(node + 0xB4));
     } else {                                                     // SIBLING: parent = node[0xC0 + 4*sentinel]
       uint32_t p = c->mem_r32(node + 0xC0 + 4u * (uint32_t)(int)sentinel);
-      Math::matMul(c,p + 24, 0x1F800000u, child + 24);      // child_mat = sibling_mat × work
-      Math::applyMatlv(c,child, child + 44);
+      c->math.matMul(p + 24, 0x1F800000u, child + 24);      // child_mat = sibling_mat × work
+      c->math.applyMatlv(child, child + 44);
       c->mem_w32(child + 0x2C, c->mem_r32(child + 0x2C) + c->mem_r32(p + 0x2C));
       c->mem_w32(child + 0x30, c->mem_r32(child + 0x30) + c->mem_r32(p + 0x30));
       c->mem_w32(child + 0x34, c->mem_r32(child + 0x34) + c->mem_r32(p + 0x34));
@@ -918,18 +918,18 @@ static void xform51128_body(Core* c) {
     c->mem_w32(0x1F800008u, (uint32_t)c->mem_r16s(child + 58));
     c->mem_w32(0x1F800010u, (uint32_t)c->mem_r16s(child + 60));
     int16_t sentinel = c->mem_r16s(child + 6);
-    Math::rotmat(c,child + 8, 0x1F800020u);                                     // RotMatrix
-    Math::matMul(c,0x1F800020u, 0x1F800000u, 0x1F800040u);                      // matmul
+    c->math.rotmat(child + 8, 0x1F800020u);                                     // RotMatrix
+    c->math.matMul(0x1F800020u, 0x1F800000u, 0x1F800040u);                      // matmul
     if (sentinel == -1) {                                        // ROOT: parent = this node
-      Math::matMul(c,node + 152, 0x1F800040u, child + 24);
-      Math::applyMatlv(c,child, child + 44);
+      c->math.matMul(node + 152, 0x1F800040u, child + 24);
+      c->math.applyMatlv(child, child + 44);
       c->mem_w32(child + 0x2C, c->mem_r32(child + 0x2C) + c->mem_r32(node + 0xAC));
       c->mem_w32(child + 0x30, c->mem_r32(child + 0x30) + c->mem_r32(node + 0xB0));
       c->mem_w32(child + 0x34, c->mem_r32(child + 0x34) + c->mem_r32(node + 0xB4));
     } else {                                                     // SIBLING: parent = node[0xC0 + 4*sentinel]
       uint32_t p = c->mem_r32(node + 0xC0 + 4u * (uint32_t)(int)sentinel);
-      Math::matMul(c,p + 24, 0x1F800040u, child + 24);
-      Math::applyMatlv(c,child, child + 44);
+      c->math.matMul(p + 24, 0x1F800040u, child + 24);
+      c->math.applyMatlv(child, child + 44);
       c->mem_w32(child + 0x2C, c->mem_r32(child + 0x2C) + c->mem_r32(p + 0x2C));
       c->mem_w32(child + 0x30, c->mem_r32(child + 0x30) + c->mem_r32(p + 0x30));
       c->mem_w32(child + 0x34, c->mem_r32(child + 0x34) + c->mem_r32(p + 0x34));
@@ -1004,7 +1004,7 @@ static void orch597AC_body(Core* c) {
   c->mem_w16(0x1F8000C0u, (uint16_t)HU(node+0x54));
   c->mem_w16(0x1F8000C2u, (uint16_t)HU(node+0x56));
   c->mem_w16(0x1F8000C4u, (uint16_t)HU(node+0x58));
-  Math::rotmat(c,0x1F8000C0u, 0x1F800040u);
+  c->math.rotmat(0x1F8000C0u, 0x1F800040u);
   // CPU RotMatrix: angle = (node->byte[0x177]&1) ? node->hu[0x14E] : 0, around Y → 0x1F800020
   uint32_t a1ang = (c->mem_r8(node+0x177) & 1) ? HU(node+0x14E) : 0;
   c->mem_w16(0x1F8000C0u, 0);
@@ -1012,7 +1012,7 @@ static void orch597AC_body(Core* c) {
   c->mem_w16(0x1F8000C4u, 0);
   c->r[4]=0x1F8000C0u; c->r[5]=0x1F800020u; rec_dispatch(c, 0x800851F0u);
   // node+0x98 = (0x1F800020 × 0x1F800000) then ×= 0x1F800040 (CompMatrixLV), then 80084470(node+0x98,node+0x88,node+0xAC)
-  Math::matMul(c,0x1F800020u, 0x1F800000u, node+0x98);
+  c->math.matMul(0x1F800020u, 0x1F800000u, node+0x98);
   c->r[4]=0x1F800040u; c->r[5]=node+0x98;                       rec_dispatch(c, 0x80084360u);
   c->r[4]=node+0x98;   c->r[5]=node+0x88;  c->r[6]=node+0xAC;   rec_dispatch(c, 0x80084470u);
   // translation accumulate: node+0xAC/B0/B4 += node->h[0x2E/32/36]
@@ -1028,8 +1028,8 @@ static void orch597AC_body(Core* c) {
     c->mem_w16(0x1F8000C0u, (uint16_t)HU(node+0x54));
     c->mem_w16(0x1F8000C4u, 0);
     c->mem_w16(0x1F8000C2u, (uint16_t)HU(node+0x56));
-    Math::rotmat(c,0x1F8000C0u, 0x1F800040u);
-    Math::matMul(c,0x1F800020u, 0x1F800000u, 0x1F800060u);
+    c->math.rotmat(0x1F8000C0u, 0x1F800040u);
+    c->math.matMul(0x1F800020u, 0x1F800000u, 0x1F800060u);
     c->r[4]=0x1F800040u; c->r[5]=0x1F800060u;                      rec_dispatch(c, 0x80084360u);
     c->r[4]=0x1F800060u; c->r[5]=node+0x88; c->r[6]=0x1F800074u;   rec_dispatch(c, 0x80084470u);
     c->mem_w32(0x1F800074u, c->mem_r32(0x1F800074u) + R16(node+0x2E));
@@ -1045,31 +1045,31 @@ static void orch597AC_body(Core* c) {
       int psel = (int)c->mem_r16s(child + 6);             // parent select (signed)
       // SetVector(0x1F800000, child->h[0x38/3A/3C]); RotMatrix(child+8 → 0x1F800020); mat 0x1F800040 = 0x1F800020 × 0x1F800000
       Mtx::diagonal(c, 0x1F800000u, (int32_t)R16(child+0x38), (int32_t)R16(child+0x3A), (int32_t)R16(child+0x3C));   // was 0x800517BCu
-      Math::rotmat(c,child+8, 0x1F800020u);
-      Math::matMul(c,0x1F800020u, 0x1F800000u, 0x1F800040u);
+      c->math.rotmat(child+8, 0x1F800020u);
+      c->math.matMul(0x1F800020u, 0x1F800000u, 0x1F800040u);
       if (psel >= 0) {                                            // SIBLING-by-index: parent = node[0xC0 + 4*psel]
         uint32_t p = c->mem_r32(node + 0xC0 + 4u*(uint32_t)psel);
-        Math::matMul(c,p+24, 0x1F800040u, child+24);
-        Math::applyMatlv(c,child, child+44);
+        c->math.matMul(p+24, 0x1F800040u, child+24);
+        c->math.applyMatlv(child, child+44);
         c->mem_w32(child+0x2C, c->mem_r32(child+0x2C) + c->mem_r32(p+0x2C));
         c->mem_w32(child+0x30, c->mem_r32(child+0x30) + c->mem_r32(p+0x30));
         c->mem_w32(child+0x34, c->mem_r32(child+0x34) + c->mem_r32(p+0x34));
       } else if (s6 == 0) {                                       // parent = this node (matrix node+0x98, trans node+0xAC)
-        Math::matMul(c,node+0x98, 0x1F800040u, child+24);
-        Math::applyMatlv(c,child, child+44);
+        c->math.matMul(node+0x98, 0x1F800040u, child+24);
+        c->math.applyMatlv(child, child+44);
         c->mem_w32(child+0x2C, c->mem_r32(child+0x2C) + c->mem_r32(node+0xAC));
         c->mem_w32(child+0x30, c->mem_r32(child+0x30) + c->mem_r32(node+0xB0));
         c->mem_w32(child+0x34, c->mem_r32(child+0x34) + c->mem_r32(node+0xB4));
       } else if (s7 == 0) {                                       // first secondary child: matrix 0x1F800060, trans 0x1F800074
-        Math::matMul(c,0x1F800060u, 0x1F800040u, child+24);
-        Math::applyMatlv(c,child, child+44);
+        c->math.matMul(0x1F800060u, 0x1F800040u, child+24);
+        c->math.applyMatlv(child, child+44);
         c->mem_w32(child+0x2C, c->mem_r32(child+0x2C) + c->mem_r32(0x1F800074u));
         c->mem_w32(child+0x30, c->mem_r32(child+0x30) + c->mem_r32(0x1F800078u));
         c->mem_w32(child+0x34, c->mem_r32(child+0x34) + c->mem_r32(0x1F80007Cu));
         s7 = 1;
       } else {                                                    // subsequent secondary children: parent = this node again
-        Math::matMul(c,node+0x98, 0x1F800040u, child+24);
-        Math::applyMatlv(c,child, child+44);
+        c->math.matMul(node+0x98, 0x1F800040u, child+24);
+        c->math.applyMatlv(child, child+44);
         c->mem_w32(child+0x2C, c->mem_r32(child+0x2C) + c->mem_r32(node+0xAC));
         c->mem_w32(child+0x30, c->mem_r32(child+0x30) + c->mem_r32(node+0xB0));
         c->mem_w32(child+0x34, c->mem_r32(child+0x34) + c->mem_r32(node+0xB4));

@@ -85,7 +85,7 @@ void GraphicsBind::recordInit() { Core* c = core;
 // The two callees stay PSX via rec_dispatch; we own the control flow + the position snapshot.
 static uint32_t obj_render_update(Core* c) {
   uint32_t obj = c->r[4];
-  Math::rotmat(c,obj + 0x54, obj + 0x98);
+  c->math.rotmat(obj + 0x54, obj + 0x98);
   c->mem_w32(obj + 0xac, (uint32_t)c->mem_r16s(obj + 0x2e));
   c->mem_w32(obj + 0xb0, (uint32_t)c->mem_r16s(obj + 0x32));
   c->mem_w32(obj + 0xb4, (uint32_t)c->mem_r16s(obj + 0x36));

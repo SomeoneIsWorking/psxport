@@ -151,7 +151,7 @@ static void load_mat3(Core* c, uint32_t p, int16_t m[3][3]) {
   m[1][0]=(int16_t)(w1>>16); m[1][1]=(int16_t)w2;       m[1][2]=(int16_t)(w2>>16);
   m[2][0]=(int16_t)w3;       m[2][1]=(int16_t)(w3>>16); m[2][2]=(int16_t)w4;
 }
-uint32_t Math::matMul(Core* c, uint32_t rPtr, uint32_t mPtr, uint32_t outPtr) {
+uint32_t Math::matMul(uint32_t rPtr, uint32_t mPtr, uint32_t outPtr) { Core* c = this->core;
   int16_t R[3][3], M[3][3], P[3][3];
   load_mat3(c, rPtr, R);
   load_mat3(c, mPtr, M);
@@ -213,7 +213,7 @@ static inline void rotmat_trig(Core* c, int32_t angle, int* s, int* co) {
 }
 static inline int16_t gpf1(int ir0, int ir) { return clamp16s(((int32_t)ir0 * ir) >> 12); }  // MAC=(IR0*IR)>>12, clamp16
 static inline uint8_t lmC(int32_t v) { return (uint8_t)(v < 0 ? 0 : (v > 255 ? 255 : v)); }  // GTE Lm_C
-uint32_t Math::rotmat(Core* c, uint32_t anglesPtr, uint32_t out) {
+uint32_t Math::rotmat(uint32_t anglesPtr, uint32_t out) { Core* c = this->core;
   uint32_t w0 = c->mem_r32(anglesPtr);
   int sx,cx,sy,cy,sz,cz;
   rotmat_trig(c, (int16_t)w0,        &sx, &cx);            // vx (low half of +0)
@@ -287,9 +287,9 @@ static uint32_t rotpair(Core* c, int16_t angle, uint32_t matPtr, uint32_t rowA, 
   for (int i = 0; i < 3; i++) c->mem_w16(matPtr + rowB + i*2, (uint16_t)(int16_t)(((int32_t)s*A[i]  + (int32_t)co*B[i]) >> 12));
   return matPtr;
 }
-uint32_t Math::rotZ(Core* c, int16_t angle, uint32_t matPtr) { return rotpair(c, angle, matPtr, 0,  6, +1); }   // FUN_80085050
-uint32_t Math::rotY(Core* c, int16_t angle, uint32_t matPtr) { return rotpair(c, angle, matPtr, 0, 12, -1); }   // FUN_80084EB0
-uint32_t Math::rotX(Core* c, int16_t angle, uint32_t matPtr) { return rotpair(c, angle, matPtr, 6, 12, +1); }   // FUN_80084D10
+uint32_t Math::rotZ(int16_t angle, uint32_t matPtr) { Core* c = this->core; return rotpair(c, angle, matPtr, 0,  6, +1); }   // FUN_80085050
+uint32_t Math::rotY(int16_t angle, uint32_t matPtr) { Core* c = this->core; return rotpair(c, angle, matPtr, 0, 12, -1); }   // FUN_80084EB0
+uint32_t Math::rotX(int16_t angle, uint32_t matPtr) { Core* c = this->core; return rotpair(c, angle, matPtr, 6, 12, +1); }   // FUN_80084D10
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
 // FUN_80084220 — MVMVA the rotation matrix already in the GTE CR regs by a vector → IR1-3 (libgte
@@ -298,7 +298,7 @@ uint32_t Math::rotX(Core* c, int16_t angle, uint32_t matPtr) { return rotpair(c,
 // mx=ROT, v=V0, cv=Null, lm=0) reading the rotation matrix from CR0-4 (loaded by a prior CTC2), then
 // SWC2 IR1-3 → a1. USER 2026-06-21: GTE math PC-native (the matrix is read from CR — i.e. content the
 // engine/game previously loaded — so this is content-interface; the C MVMVA must be GTE-exact).
-uint32_t Math::applyMatlv(Core* c, uint32_t inPtr, uint32_t out) {
+uint32_t Math::applyMatlv(uint32_t inPtr, uint32_t out) { Core* c = this->core;
   uint32_t w0 = c->mem_r32(inPtr), w1 = c->mem_r32(inPtr+4);
   int16_t v[3] = { (int16_t)w0, (int16_t)(w0>>16), (int16_t)w1 };
   // rotation matrix R from GTE CONTROL regs CR0..CR4 (same packing as load_mat3 but from ctrl)

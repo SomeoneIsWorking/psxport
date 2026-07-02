@@ -19,6 +19,7 @@
 #include "scene/engine.h"                     // Core owns an Engine instance (GAME/STAGE driver)
 #include "math/rng.h"                         // Core owns an Rng instance (PSX libc rand LCG)
 #include "math/trig.h"                        // Core owns a Trig instance (libgte sin/cos/atan2)
+#include "math/engine_math.h"                 // Core owns a Math instance (GTE matrix cluster)
 #include "items/inventory.h"                  // Core owns an Inventory instance
 
 #ifdef __cplusplus
@@ -42,6 +43,7 @@ public:
   Engine     engine;
   Rng        rng;
   Trig       trig;
+  Math       math;
   Inventory  inventory;
   Render*    mRender = nullptr;   // render subsystem umbrella (owned; ctor/dtor in core.cpp)
 
