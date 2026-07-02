@@ -77,7 +77,7 @@ static void dat_tail(Core* c, uint32_t nd) {           // @0x80127c9c (sub==3 on
   c->mem_w32(fsp + 0x10, 0x1F8000C0u);                 // FUN_8004bd64's 5th arg, stacked at sp+0x10
   c->r[4] = nd; c->r[5] = 0; c->r[6] = a2; c->r[7] = a2;
   uint32_t save = c->r[29]; c->r[29] = fsp;
-  ov_obj_pos_compose(c);                               // FUN_8004bd64(node,0,*0x800e7f5c,same,&0x1f8000c0)
+  c->engine.graphicsBind.posCompose();                               // FUN_8004bd64(node,0,*0x800e7f5c,same,&0x1f8000c0)
   c->r[29] = save;
   CutsceneCamera::runInitSeedGrp(c, G_eac);            // FUN_8006cba8(&DAT_800e7eac) — native
 }
@@ -207,7 +207,7 @@ void beh_area_transition_machine(Core* c) {
 
   // ---------- STATE 0 (init) ----------
   c->r[4] = nd; c->r[5] = 0xc; c->r[6] = 0x52;
-  ov_obj_record_init(c);                        // FUN_80051b70(node, 0xc, 0x52)
+  c->engine.graphicsBind.recordInit();                        // FUN_80051b70(node, 0xc, 0x52)
   if (c->r[2] != 0) return;
   c->mem_w16(nd + 0x2e, 0x4f00);
   c->mem_w16(nd + 0x32, 0xed5e);

@@ -87,7 +87,7 @@ void beh_twin_record_steer(Core* c) {
    c->mem_w16(nd + 0x86, 70);
    c->r[4] = 2;                                     // mirror guest a0 for the first FUN_8007AAE8
    for (int iter = 0; iter < 2; iter++) {
-     ov_record_alloc_g(c);                  // FUN_8007AAE8() -> v0 (alloc); a0 carried from prior
+     c->engine.graphicsBind.recordAlloc();                  // FUN_8007AAE8() -> v0 (alloc); a0 carried from prior
      uint32_t rec = c->r[2];
      c->mem_w32(nd + 0xc0 + 4 * iter, rec);
      c->mem_w16(rec + 6, (uint16_t)(int16_t)(iter - 1));   // rec[6] = s1-1 (-1, then 0)
@@ -128,7 +128,7 @@ void beh_twin_record_steer(Core* c) {
 
    if (c->mem_r8(0x800e7eaau) < 22) {
      if (leafr1(c, nd, 0x8007778cu) != 0)           // FUN_8007778C(node)
-       c->r[4] = nd; ov_obj_render_update(c);                   // FUN_800517F8(node)
+       c->r[4] = nd; c->engine.graphicsBind.renderUpdate();                   // FUN_800517F8(node)
    }
    goto Lret;
  }

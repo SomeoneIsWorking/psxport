@@ -52,7 +52,7 @@ void beh_single_child_cull(Core* c) {
 
  // ================= STATE 0 (INIT) =================
  S0: {
-   c->r[4] = nd; c->r[5] = 12; c->r[6] = 37; ov_obj_record_init(c);   // FUN_80051B70(node,12,37) -> bail if !=0
+   c->r[4] = nd; c->r[5] = 12; c->r[6] = 37; c->engine.graphicsBind.recordInit();   // FUN_80051B70(node,12,37) -> bail if !=0
    if (c->r[2] != 0) goto Lret;
    c->mem_w16(nd + 0x80, 30);
    c->mem_w16(nd + 0x82, 60);
@@ -81,7 +81,7 @@ void beh_single_child_cull(Core* c) {
    if (work) {
      if (leafr1(c, nd, 0x8007778cu) != 0) {        // FUN_8007778C(node)
        leaf1(c, nd, 0x80132020u);                  // FUN_80132020(node)
-       c->r[4] = nd; ov_obj_render_update(c);                  // FUN_800517F8(node)
+       c->r[4] = nd; c->engine.graphicsBind.renderUpdate();                  // FUN_800517F8(node)
      }
    }
    c->mem_w8(nd + 0x2b, 0);                         // node[0x2B] = 0 (every STATE-1 path)

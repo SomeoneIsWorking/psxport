@@ -84,17 +84,17 @@ void beh_typed_anim_spawn(Core* c) {
       c->mem_w8 (s0 + 8, 240);                      // node[8] = 240 (delay-slot store)
       goto Lret;
     case 3: case 4: {                               // jt0 -> 0x8012dab8
-      (c->r[4]=s0, c->r[5]=12, c->r[6]=79, ov_obj_record_init(c));            // FUN_80051B70(node, 12, 79)
+      (c->r[4]=s0, c->r[5]=12, c->r[6]=79, c->engine.graphicsBind.recordInit());            // FUN_80051B70(node, 12, 79)
       if (c->r[2] != 0) goto Lret;
       uint32_t rec = c->mem_r32(s0 + 0xC0);         // node[0xC0]
       c->mem_w16(rec + 8, (uint16_t)(n3 == 3 ? 182 : (uint16_t)(int16_t)-182));
-      c->r[4] = s0; ov_obj_render_update(c);                    // FUN_800517F8(node)
+      c->r[4] = s0; c->engine.graphicsBind.renderUpdate();                    // FUN_800517F8(node)
       goto Lret;
     }
     case 5:                                         // jt0 -> 0x8012db08
-      (c->r[4]=s0, c->r[5]=12, c->r[6]=7, ov_obj_record_init(c));             // FUN_80051B70(node, 12, 7)
+      (c->r[4]=s0, c->r[5]=12, c->r[6]=7, c->engine.graphicsBind.recordInit());             // FUN_80051B70(node, 12, 7)
       if (c->r[2] != 0) goto Lret;
-      c->r[4] = s0; ov_obj_render_update(c);                    // FUN_800517F8(node)
+      c->r[4] = s0; c->engine.graphicsBind.renderUpdate();                    // FUN_800517F8(node)
       goto Lret;
   }
   goto Lret;
@@ -110,7 +110,7 @@ void beh_typed_anim_spawn(Core* c) {
         if (c->mem_r8(0x800BF9DDu) != 9) goto Lret;
         c->mem_w8(s0 + 5, 1);                       // node[5] = 1
         c->mem_w32(s0 + 0x3C, c->mem_r32(0x800ECF80u)); // node[0x3C] = *(0x800ECF80) (delay slot)
-        (c->r[4]=s0, c->r[5]=A1_MODEL, c->r[6]=15, ov_obj_set_geom(c));    // FUN_80077B38(node, 0x8014C808, 15)
+        (c->r[4]=s0, c->r[5]=A1_MODEL, c->r[6]=15, c->engine.graphicsBind.setGeom());    // FUN_80077B38(node, 0x8014C808, 15)
         c->mem_w16(s0 + 0x60, 64);
         c->mem_w16(s0 + 0x62, 0);
         c->mem_w16(s0 + 0x64, (uint16_t)(int16_t)-32);
@@ -120,7 +120,7 @@ void beh_typed_anim_spawn(Core* c) {
         c->r[4] = s0; c->r[5] = 2;
         c->r[6] = c->mem_r32(0x800E7F5Cu); c->r[7] = c->mem_r32(0x800E7F50u);
         c->mem_w32(c->r[29] + 16, s0 + 0x60);
-        ov_obj_pos_compose(c);                      // FUN_8004BD64(node,2,*0x800E7F5C,*0x800E7F50,&node[0x60])
+        c->engine.graphicsBind.posCompose();                      // FUN_8004BD64(node,2,*0x800E7F5C,*0x800E7F50,&node[0x60])
         c->mem_w8(s0 + 1, (uint8_t)s1);             // node[1] = s1 (=1)
         if (c->mem_r8(0x800BF9DDu) != 11) goto Lret;
         c->mem_w8(s0 + 4, 3);                       // node[4] = 3
@@ -137,14 +137,14 @@ void beh_typed_anim_spawn(Core* c) {
       if (s1 == 0) {                                // 0x8012dc40
         c->mem_w8(s0 + 5, 1);                       // node[5] = 1
         c->mem_w32(s0 + 0x3C, c->mem_r32(0x800ECF80u));
-        (c->r[4]=s0, c->r[5]=A1_MODEL, c->r[6]=2, ov_obj_set_geom(c));     // FUN_80077B38(node, 0x8014C808, 2)
+        (c->r[4]=s0, c->r[5]=A1_MODEL, c->r[6]=2, c->engine.graphicsBind.setGeom());     // FUN_80077B38(node, 0x8014C808, 2)
         c->mem_w16(s0 + 0x60, 32);
         c->mem_w16(s0 + 0x62, 16);
         c->mem_w16(s0 + 0x64, 0);
       } else if (s1 != 1) goto Lret;                // s1 >= 2
       // fall-through (s1==0 and s1==1) -> 0x8012dc7c
       c->r[4]=s0; c->r[5]=1; c->r[6]=c->mem_r32(rec + 0xDC); c->r[7]=0;
-      c->mem_w32(c->r[29] + 16, s0 + 0x60); ov_obj_pos_compose(c);   // FUN_8004BD64 — native
+      c->mem_w32(c->r[29] + 16, s0 + 0x60); c->engine.graphicsBind.posCompose();   // FUN_8004BD64 — native
       c->mem_w8(s0 + 1, c->mem_r8(rec + 1));        // node[1] = node[0x10][1]
       goto Lret;
     }
@@ -157,14 +157,14 @@ void beh_typed_anim_spawn(Core* c) {
       if (s1 == 0) {                                // 0x8012dcd0
         c->mem_w8(s0 + 5, 1);
         c->mem_w32(s0 + 0x3C, c->mem_r32(0x800ECF80u));
-        (c->r[4]=s0, c->r[5]=A1_MODEL, c->r[6]=17, ov_obj_set_geom(c));    // FUN_80077B38(node, 0x8014C808, 17)
+        (c->r[4]=s0, c->r[5]=A1_MODEL, c->r[6]=17, c->engine.graphicsBind.setGeom());    // FUN_80077B38(node, 0x8014C808, 17)
         c->mem_w16(s0 + 0x60, (uint16_t)(int16_t)-200);
         c->mem_w16(s0 + 0x62, 32);
         c->mem_w16(s0 + 0x64, 0);
       } else if (s1 != 1) goto Lret;
       // fall-through -> 0x8012dd0c
       c->r[4]=s0; c->r[5]=2; c->r[6]=0; c->r[7]=c->mem_r32(rec + 0xD0);
-      c->mem_w32(c->r[29] + 16, s0 + 0x60); ov_obj_pos_compose(c);   // FUN_8004BD64 — native
+      c->mem_w32(c->r[29] + 16, s0 + 0x60); c->engine.graphicsBind.posCompose();   // FUN_8004BD64 — native
       c->mem_w8(s0 + 1, c->mem_r8(rec + 1));        // node[1] = node[0x10][1]
       if (c->mem_r8(0x800BF9B5u) != 5) goto Lret;
       goto Ltail14;                                 // 0x8012ddfc with a0=14
@@ -175,14 +175,14 @@ void beh_typed_anim_spawn(Core* c) {
       if (s1 == 0) {                                // 0x8012dd6c
         c->mem_w8(s0 + 5, 1);
         c->mem_w32(s0 + 0x3C, c->mem_r32(0x800ECF80u));
-        (c->r[4]=s0, c->r[5]=A1_MODEL, c->r[6]=14, ov_obj_set_geom(c));    // FUN_80077B38(node, 0x8014C808, 14)
+        (c->r[4]=s0, c->r[5]=A1_MODEL, c->r[6]=14, c->engine.graphicsBind.setGeom());    // FUN_80077B38(node, 0x8014C808, 14)
         c->mem_w16(s0 + 0x60, (uint16_t)(int16_t)-200);
         c->mem_w16(s0 + 0x62, 48);
         c->mem_w16(s0 + 0x64, 0);
       } else if (s1 != 1) goto Lret;
       // fall-through -> 0x8012dda8
       c->r[4]=s0; c->r[5]=2; c->r[6]=0; c->r[7]=c->mem_r32(rec + 0xD0);
-      c->mem_w32(c->r[29] + 16, s0 + 0x60); ov_obj_pos_compose(c);   // FUN_8004BD64 — native
+      c->mem_w32(c->r[29] + 16, s0 + 0x60); c->engine.graphicsBind.posCompose();   // FUN_8004BD64 — native
       c->mem_w8(s0 + 1, c->mem_r8(rec + 1));        // node[1] = node[0x10][1]
       if (c->mem_r8(0x800BF9B5u) != 6) goto Lret;
       goto Ltail35;                                 // 0x8012ddfc with a0=35

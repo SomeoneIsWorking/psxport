@@ -71,7 +71,7 @@ void beh_prng_velocity_machine(Core* c) {
    c->mem_w8(s1 + 0x0d, 0);
    uint32_t t = c->mem_r32(0x800ecf80u);
    c->mem_w32(s1 + 0x3c, t);                      // node[0x3c] = mem[0x800ecf80] (jal delay slot)
-   c->r[4] = s1; c->r[5] = 0x8015c808u; c->r[6] = 1; ov_obj_set_geom(c);   // FUN_80077B38(node, 0x8015C808, 1) — native
+   c->r[4] = s1; c->r[5] = 0x8015c808u; c->r[6] = 1; c->engine.graphicsBind.setGeom();   // FUN_80077B38(node, 0x8015C808, 1) — native
    c->mem_w32(s1 + 0x2c, 0x13d20000u);
    uint16_t v1 = c->mem_r16(s1 + 0x2e);
    c->mem_w32(s1 + 0x30, 0xf7e00000u);
@@ -93,7 +93,7 @@ void beh_prng_velocity_machine(Core* c) {
  L7788: {                                         // node[3]==1
    c->mem_w8(s1 + 0, 4);
    c->mem_w8(s1 + 0x5e, 0);                       // node[0x5e]=0 (jal delay slot, before callee)
-   c->r[4] = s1; c->r[5] = 1; c->r[6] = 0; ov_obj_record_init(c); uint32_t r = c->r[2];  // FUN_80051B70(node, 1, 0)
+   c->r[4] = s1; c->r[5] = 1; c->r[6] = 0; c->engine.graphicsBind.recordInit(); uint32_t r = c->r[2];  // FUN_80051B70(node, 1, 0)
    if (r != 0) goto Lret;
    c->mem_w32(s1 + 0x2c, 0x28d20000u);
    uint16_t v1 = c->mem_r16(s1 + 0x2e);
@@ -276,7 +276,7 @@ void beh_prng_velocity_machine(Core* c) {
    goto L7b84;
  }
  L7b84: {
-   c->r[4] = s1; ov_obj_render_update(c);            // FUN_800517F8(node) — native
+   c->r[4] = s1; c->engine.graphicsBind.renderUpdate();            // FUN_800517F8(node) — native
    call2(c, s1, 1, 0x8004b374u);                     // FUN_8004B374(node, 1)
    goto Lret;
  }

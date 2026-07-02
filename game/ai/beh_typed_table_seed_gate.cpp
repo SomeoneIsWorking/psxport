@@ -61,7 +61,7 @@ void beh_typed_table_seed_gate(Core* c) {
     if (st != 0) return;                      // 80133C44 beqz s0 -> state 0; else 80133C4C j epilogue
     // ---- STATE 0 (80133C68..80133CE0): cull-record init + field/box setup ----
     c->r[4] = obj; c->r[5] = 0xc; c->r[6] = 0x14;     // 80133C68 a1=0xc ; 80133C70 a2=0x14 ; a0=s1
-    ov_obj_record_init(c);                     // 80133C6C jal 0x80051b70
+    c->engine.graphicsBind.recordInit();                     // 80133C6C jal 0x80051b70
     if (c->r[2] != 0) return;                         // 80133C74 bnez v0 -> epilogue (init busy)
     c->mem_w8 (obj + 0x2a, 0x22);            // 80133C80 sb 0x22,0x2a(s1)
     c->mem_w16(obj + 0x80, 0x1e);            // 80133C88 sh 0x1e,0x80(s1)
@@ -107,7 +107,7 @@ void beh_typed_table_seed_gate(Core* c) {
 
   // ---- render tail (80133D34..80133D44) ----
   c->r[4] = obj; rec_dispatch(c, 0x8004766Cu);        // 80133D34 jal 0x8004766c (a0=s1)
-  c->r[4] = obj; ov_obj_render_update(c);        // 80133D3C jal 0x800517f8 (a0=s1)
+  c->r[4] = obj; c->engine.graphicsBind.renderUpdate();        // 80133D3C jal 0x800517f8 (a0=s1)
   // 80133D44 j epilogue
 }
 

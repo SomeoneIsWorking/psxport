@@ -77,7 +77,7 @@ void beh_child_trig_motion(Core* c) {
       int s2 = 0;                                    // record index
       uint32_t s1 = nd;                              // node + i*4
       do {
-        ov_record_alloc_g(c);                // FUN_8007AAE8() -> v0 (alloc); a0 = guest a0
+        c->engine.graphicsBind.recordAlloc();                // FUN_8007AAE8() -> v0 (alloc); a0 = guest a0
         uint32_t rec = c->r[2];
         c->mem_w32(s1 + 0xC0, rec);
         c->mem_w16(rec + 6, (uint16_t)(s2 - 1));
@@ -153,7 +153,7 @@ void beh_child_trig_motion(Core* c) {
   }
 
  L8c00:
-  c->r[4] = nd; ov_obj_render_update(c);                          // FUN_800517F8(node)
+  c->r[4] = nd; c->engine.graphicsBind.renderUpdate();                          // FUN_800517F8(node)
  Lret:
   return;
 }

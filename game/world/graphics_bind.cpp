@@ -68,11 +68,11 @@ static uint32_t obj_record_init(Core* c) {
   c->mem_w32(rec + 0x40, base + off);
   return 0;
 }
-void ov_record_alloc_g(Core* c) {
+void GraphicsBind::recordAlloc() { Core* c = core;
   static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("recallocverify") ? 1 : 0;
   record_gate(c, record_alloc, 0x8007AAE8u, "recallocverify", s_v);
 }
-void ov_obj_record_init(Core* c) {
+void GraphicsBind::recordInit() { Core* c = core;
   static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("recinitverify") ? 1 : 0;
   record_gate(c, obj_record_init, 0x80051B70u, "recinitverify", s_v);
 }
@@ -94,7 +94,7 @@ static uint32_t obj_render_update(Core* c) {
   rec_dispatch(c, 0x80051300u);
   return c->r[2];
 }
-void ov_obj_render_update(Core* c) {
+void GraphicsBind::renderUpdate() { Core* c = core;
   static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("rendupdverify") ? 1 : 0;
   record_gate(c, obj_render_update, 0x800517F8u, "rendupdverify", s_v);
 }
@@ -109,7 +109,7 @@ static uint32_t obj_set_geom(Core* c) {
   c->mem_w16(obj + 0x0e, (uint16_t)cnt);
   return cnt;   // incidental v0 the recomp leaves (callers treat this void)
 }
-void ov_obj_set_geom(Core* c) {
+void GraphicsBind::setGeom() { Core* c = core;
   static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("setgeomverify") ? 1 : 0;
   record_gate(c, obj_set_geom, 0x80077B38u, "setgeomverify", s_v);
 }
@@ -129,7 +129,7 @@ static uint32_t obj_set_xformblk(Core* c) {
   c->mem_w16(obj + 0x42, (uint16_t)last);
   return last;   // incidental v0
 }
-void ov_obj_set_xformblk(Core* c) {
+void GraphicsBind::setXformBlk() { Core* c = core;
   static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("setxblkverify") ? 1 : 0;
   record_gate(c, obj_set_xformblk, 0x8006CBD0u, "setxblkverify", s_v);
 }
@@ -166,12 +166,12 @@ static uint32_t obj_pos_compose(Core* c) {
   }
   if ((c->mem_r8(obj + 0x28) & 0x7fu) != 0) {
     c->r[4] = obj;
-    ov_obj_render_update(c);
+    c->engine.graphicsBind.renderUpdate();
     return c->r[2];
   }
   return last;
 }
-void ov_obj_pos_compose(Core* c) {
+void GraphicsBind::posCompose() { Core* c = core;
   static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("poscomposeverify") ? 1 : 0;
   record_gate(c, obj_pos_compose, 0x8004BD64u, "poscomposeverify", s_v);
 }

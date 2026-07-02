@@ -25,6 +25,7 @@
 #include "bg_scene_transition_sm.h"  // Engine owns the BG scene-transition fade manager
 #include "world/pool.h"          // Engine owns the Pool per-area init subsystem
 #include "world/placement.h"     // Engine owns the Placement field-object driver
+#include "world/graphics_bind.h" // Engine owns the GraphicsBind object render-bind subsystem
 class Core;
 
 class Engine {
@@ -44,6 +45,7 @@ public:
   BgSceneTransitionSm bgSceneTransitionSm;  // BG scene-transition fade manager (guest FUN_8002655C)
   Pool             pool;              // per-area object-pool + control-block init (world subsystem)
   Placement        placement;         // field object-placement driver (guest FUN_80072A78/DDC)
+  GraphicsBind     graphicsBind;      // per-object render-bind subsystem (guest FUN_8007AAE8 et al.)
 
   // ── GAME-stage entry points (called by the scheduler each frame) ────────────────────────────
   // stagePrologue: one-time prologue that runs when the GAME task enters — task-slot setup, first

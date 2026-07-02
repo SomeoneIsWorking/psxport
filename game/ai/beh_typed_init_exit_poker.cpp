@@ -87,7 +87,7 @@ void beh_typed_init_exit_poker(Core* c) {
       c->mem_w16(nd + 0x5C, 0);
       c->mem_w8 (nd + 13, 0);
       c->mem_w32(nd + 0x3C, c->mem_r32(0x800ECF80u));
-      (c->r[4]=nd, c->r[5]=A1_M0, c->r[6]=15, ov_obj_set_geom(c));
+      (c->r[4]=nd, c->r[5]=A1_M0, c->r[6]=15, c->engine.graphicsBind.setGeom());
       c->mem_w16(nd + 0x80, 20);
       c->mem_w16(nd + 0x82, 40);
       c->mem_w16(nd + 0x84, 20);
@@ -100,7 +100,7 @@ void beh_typed_init_exit_poker(Core* c) {
       c->mem_w16(nd + 0x5C, 0);
       c->mem_w8 (nd + 13, 0);
       c->mem_w32(nd + 0x3C, c->mem_r32(0x800ECF80u));
-      (c->r[4]=nd, c->r[5]=A1_M0, c->r[6]=0, ov_obj_set_geom(c));
+      (c->r[4]=nd, c->r[5]=A1_M0, c->r[6]=0, c->engine.graphicsBind.setGeom());
       c->mem_w16(nd + 0x2E, 17260);
       c->mem_w16(nd + 0x32, (uint16_t)(int16_t)-1900);
       c->mem_w16(nd + 0x36, 11200);
@@ -114,7 +114,7 @@ void beh_typed_init_exit_poker(Core* c) {
       c->mem_w16(nd + 0x5C, 0);
       c->mem_w8 (nd + 13, 0);
       c->mem_w32(nd + 0x3C, c->mem_r32(0x800ECF58u));
-      (c->r[4]=nd, c->r[5]=A1_M2, c->r[6]=2, ov_obj_set_geom(c));
+      (c->r[4]=nd, c->r[5]=A1_M2, c->r[6]=2, c->engine.graphicsBind.setGeom());
       goto L83d0;                                    // shared size block -> node[4]+=1
     case 3:                                          // sub3 @0x801183f4
       c->mem_w8 (nd + 11, 16);
@@ -123,7 +123,7 @@ void beh_typed_init_exit_poker(Core* c) {
       c->mem_w16(nd + 0x5C, 0);
       c->mem_w8 (nd + 13, 0);
       c->mem_w32(nd + 0x3C, c->mem_r32(0x800ECF80u));
-      (c->r[4]=nd, c->r[5]=A1_M0, c->r[6]=26, ov_obj_set_geom(c));
+      (c->r[4]=nd, c->r[5]=A1_M0, c->r[6]=26, c->engine.graphicsBind.setGeom());
       c->mem_w16(nd + 0x80, 32);
       c->mem_w16(nd + 0x82, 64);
       c->mem_w16(nd + 0x84, 20);
@@ -200,7 +200,7 @@ void beh_typed_init_exit_poker(Core* c) {
       if (v == 1) {                                  // 0x801185c0
         if (c->mem_r8(0x800BFAF9u) == 0) { c->mem_w8(nd + 4, 3); goto Lret; }  // 0x80118750
         c->r[4]=nd; c->r[5]=1; c->r[6]=c->mem_r32(0x800E7F5Cu); c->r[7]=0;
-        c->mem_w32(c->r[29] + 16, nd + 0x60); ov_obj_pos_compose(c);   // FUN_8004BD64 — native
+        c->mem_w32(c->r[29] + 16, nd + 0x60); c->engine.graphicsBind.posCompose();   // FUN_8004BD64 — native
         goto L185e8;
       }
       goto Lret;                                     // v >= 2

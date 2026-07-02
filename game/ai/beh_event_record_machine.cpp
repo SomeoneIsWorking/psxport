@@ -75,7 +75,7 @@ void beh_event_record_machine(Core* c) {
       int i = 0;
       do {
         i++;
-        ov_record_alloc_g(c);                      // FUN_8007AAE8 -> rec (a0 carried)
+        c->engine.graphicsBind.recordAlloc();                      // FUN_8007AAE8 -> rec (a0 carried)
         uint32_t rec = c->r[2];
         c->mem_w32(base + 0xc0, rec);
         c->mem_w16(rec + 6, c->mem_r16(tbl + 0));
@@ -177,7 +177,7 @@ void beh_event_record_machine(Core* c) {
     }
     default: break;
   }
-  c->r[4] = nd; ov_obj_render_update(c);                               // FUN_800517F8
+  c->r[4] = nd; c->engine.graphicsBind.renderUpdate();                               // FUN_800517F8
   c->mem_w8(nd + 0x2b, 0);
 }
 

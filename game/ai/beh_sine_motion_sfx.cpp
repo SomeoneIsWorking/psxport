@@ -61,7 +61,7 @@ void beh_sine_motion_sfx(Core* c) {
 
  L1b0:                                   // ===== STATE 0 (INIT) =====
   // FUN_80051B70(node,12,6)
-  c->r[4] = nd; c->r[5] = 12; c->r[6] = 6; ov_obj_record_init(c); v0 = (int32_t)c->r[2];
+  c->r[4] = nd; c->r[5] = 12; c->r[6] = 6; c->engine.graphicsBind.recordInit(); v0 = (int32_t)c->r[2];
   if (v0 != 0) goto Lret;                // bne v0,zero,0x801365a8 ; delay v0=576
   v0 = 576;
   a0 = (int32_t)nd;
@@ -268,7 +268,7 @@ void beh_sine_motion_sfx(Core* c) {
   L4fc:
    v0 = (int32_t)c->mem_r8(nd + 1);      // lbu node[1]
    if (v0 == 0) goto L598;
-   c->r[4] = nd; ov_obj_render_update(c);     // FUN_800517F8(node)
+   c->r[4] = nd; c->engine.graphicsBind.renderUpdate();     // FUN_800517F8(node)
    v0 = (int32_t)c->mem_r8(0x800bf809u);
    if (v0 != 0) goto L598;
    v0 = (int16_t)(uint16_t)s1;           // sext16(s1)

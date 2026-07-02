@@ -79,7 +79,7 @@ void beh_typed_jumptable_pair(Core* c) {
     // 80139020 lui v0,0x8015 ; 80139028 addiu v0,-0x5658 -> TA ; addu v1,node3,TA ; lbu a2,(v1)
     uint8_t a2 = c->mem_r8(TA + c->mem_r8(obj + 3));  // 80139030 lbu a2, (TA + node3)
     c->r[4] = obj; c->r[5] = 0xc; c->r[6] = a2;       // 80139038 a1=0xc ; a2 (delay) ; a0=s0
-    ov_obj_record_init(c);                     // 80139034 jal 0x80051b70
+    c->engine.graphicsBind.recordInit();                     // 80139034 jal 0x80051b70
     if (c->r[2] != 0) return;                         // 8013903C bnez v0 -> 0x801395ac (init busy)
 
     uint16_t v56 = c->mem_r16(obj + 0x56);            // 80139048 lhu v1, 0x56(s0)
@@ -331,7 +331,7 @@ void beh_typed_jumptable_pair(Core* c) {
 
   // ---- common tail (0x80139580) ----
   if (c->mem_r8(obj + 1) != 0) {                      // 80139580 lbu v0,1(s0) ; 80139588 beqz -> 0x80139598
-    c->r[4] = obj; ov_obj_render_update(c);      // 80139590 jal 0x800517f8 (a0=s0)
+    c->r[4] = obj; c->engine.graphicsBind.renderUpdate();      // 80139590 jal 0x800517f8 (a0=s0)
   }
   c->mem_w8(obj + 0x29, 0);                           // 80139598 sb zero, 0x29(s0)
   c->mem_w8(obj + 0x2b, 0);                           // 801395A0 sb zero, 0x2b(s0)  (delay slot of j epilogue)

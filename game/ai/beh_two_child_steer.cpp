@@ -66,7 +66,7 @@ void beh_two_child_steer(Core* c) {
    uint32_t s0 = nd;
    int s2 = 0;
    do {
-     ov_record_alloc_g(c);                  // FUN_8007AAE8() -> v0 (alloc); a0 = guest a0
+     c->engine.graphicsBind.recordAlloc();                  // FUN_8007AAE8() -> v0 (alloc); a0 = guest a0
      uint32_t rec = c->r[2];
      s2 += 1;
      c->mem_w32(s0 + 0xc0, rec);
@@ -117,7 +117,7 @@ void beh_two_child_steer(Core* c) {
    if (leafr2(c, nd, a1, 0x800778e4u) == 0) goto Lret;   // FUN_800778E4(node, a1)
    uint32_t rc1 = c->mem_r32(nd + 0xc4);
    c->mem_w16(rc1 + 10, (uint16_t)((c->mem_r16(rc1 + 10) - 32) & 0x0fff));
-   c->r[4] = nd; ov_obj_render_update(c);                        // FUN_800517F8(node)
+   c->r[4] = nd; c->engine.graphicsBind.renderUpdate();                        // FUN_800517F8(node)
    goto Lret;
  }
 

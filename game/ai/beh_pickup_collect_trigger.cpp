@@ -67,7 +67,7 @@ bool beh_pickup_collect_trigger_body(Core* c) {
     // ---- STATE 0 ----
     if (c->mem_r8(0x800BF873u) != 0) { c->mem_w8(obj + 4, 3); return true; }
     c->r[4] = obj; c->r[5] = 1; c->r[6] = 0x18;
-    ov_obj_record_init(c);   // OWNED native graphics-bind (render-record alloc + geomblk resolve into node+0xC0)
+    c->engine.graphicsBind.recordInit();   // OWNED native graphics-bind (render-record alloc + geomblk resolve into node+0xC0)
     if (c->r[2] != 0) return true;
     c->mem_w16(obj + 0x80, 0x140);
     c->mem_w16(obj + 0x82, 0x280);
@@ -80,7 +80,7 @@ bool beh_pickup_collect_trigger_body(Core* c) {
     uint16_t sid = c->mem_r16(0x800A4CECu + (uint32_t)c->mem_r8(obj + 3) * 2);
     c->mem_w16(obj + 0x58, 0);
     c->mem_w16(obj + 0x56, sid);
-    c->r[4] = obj; ov_obj_render_update(c);
+    c->r[4] = obj; c->engine.graphicsBind.renderUpdate();
     return true;
   }
 

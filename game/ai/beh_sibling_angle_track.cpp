@@ -71,7 +71,7 @@ void beh_sibling_angle_track(Core* c) {
     // STATE 0 (0x80139620): cull-record init + per-type field seed from TD
     // ============================================================================================
     c->r[4] = obj; c->r[5] = 0xc; c->r[6] = 0x16;       // 80139620 a1=0xc ; 80139628 a2=0x16 (delay) ; a0=s2
-    ov_obj_record_init(c);                       // 80139624 jal 0x80051b70
+    c->engine.graphicsBind.recordInit();                       // 80139624 jal 0x80051b70
     if (c->r[2] != 0) return;                           // 8013962C bnez v0 -> 0x80139820 (init busy)
 
     c->mem_w8(obj + 4, (uint8_t)(c->mem_r8(obj + 4) + 1));  // 80139638/40/44 lbu v0,4 ; +1 ; sb -> state 1
@@ -165,7 +165,7 @@ void beh_sibling_angle_track(Core* c) {
   c->mem_w16(obj + 0x32, (uint16_t)newv);              // 801397FC sh v0, 0x32(s2)  (delay slot)
   rec_dispatch(c, 0x8007778Cu);                         // 801397F8 jal 0x8007778c (cull)
   if (c->r[2] == 0) return;                             // 80139800 beqz v0 -> epilogue
-  c->r[4] = obj; ov_obj_render_update(c);          // 80139808 jal 0x800517f8 (render; a0=s2 delay)
+  c->r[4] = obj; c->engine.graphicsBind.renderUpdate();          // 80139808 jal 0x800517f8 (render; a0=s2 delay)
   // 80139810 j 0x80139820 (epilogue)
 }
 

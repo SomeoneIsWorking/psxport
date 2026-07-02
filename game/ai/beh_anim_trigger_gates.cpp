@@ -95,7 +95,7 @@ void beh_anim_trigger_gates(Core* c) {
   {
     uint32_t rec = c->mem_r32(obj + 0xC0);
     c->mem_w16(rec + 12, (uint16_t)(c->mem_r16(rec + 12) + 16));
-    c->r[4] = obj; ov_obj_render_update(c);
+    c->r[4] = obj; c->engine.graphicsBind.renderUpdate();
   }
   goto Lret;
 

@@ -56,7 +56,7 @@ void beh_cube_text_spawn(Core* c) {
     else if (type == 0) { c->r[4] = nd; rec_dispatch(c, 0x8003A790u); }
     else if (type == 2) { c->r[4] = nd; rec_dispatch(c, 0x8003ABE4u); }
     c->mem_w8(nd + 1, 1);
-    c->r[4] = nd; ov_obj_render_update(c);                 // FUN_800517f8
+    c->r[4] = nd; c->engine.graphicsBind.renderUpdate();                 // FUN_800517f8
     return;
   }
   if (st >= 2) {
@@ -111,7 +111,7 @@ void beh_cube_text_spawn(Core* c) {
   if (n != 0) {
     uint32_t s0 = nd; int i6 = 0;
     do {
-      ov_record_alloc_g(c);                            // FUN_8007aae8() — DO NOT set a0 (leftover)
+      c->engine.graphicsBind.recordAlloc();                            // FUN_8007aae8() — DO NOT set a0 (leftover)
       uint32_t rec = c->r[2];
       c->mem_w32(s0 + 0xc0, rec);
       c->mem_w16(rec + 6, 0xffff);

@@ -85,7 +85,7 @@ void beh_lift_platform(Core* c) {
       uint32_t base = nd;
       int i = 0;
       do {
-        ov_record_alloc_g(c);                      // FUN_8007AAE8 -> rec (a0 carried)
+        c->engine.graphicsBind.recordAlloc();                      // FUN_8007AAE8 -> rec (a0 carried)
         uint32_t rec = c->r[2];
         c->mem_w32(base + 0xc0, rec);
         c->r[4] = rec; c->r[5] = 0xc; c->r[6] = (uint32_t)(i + 0x26); rec_dispatch(c, 0x80051b04u);
@@ -165,7 +165,7 @@ void beh_lift_platform(Core* c) {
       c->mem_w8(nd + 6, 0);
       c->mem_w8(nd + 5, (uint8_t)(c->mem_r8(nd + 5) - 1));
     }
-    c->r[4] = nd; ov_obj_render_update(c);                             // FUN_800517F8
+    c->r[4] = nd; c->engine.graphicsBind.renderUpdate();                             // FUN_800517F8
   }
 
  L6c4:

@@ -37,7 +37,7 @@ constexpr uint32_t S1     = 0x800E7E80u;   // the prologue's s1 base (0x800e0000
 inline void render_and_return(Core* c, uint32_t obj) {
   c->mem_w8(obj + 0x2b, 0);
   c->r[4] = obj;
-  ov_obj_render_update(c);
+  c->engine.graphicsBind.renderUpdate();
 }
 
 // LAB_80073be0 — shared "SFX + advance" tail of cases 1/2: node[5]++, FUN_80074590(0x11, 0, 0).
@@ -62,7 +62,7 @@ void beh_scene_ui_trigger(Core* c) {
     uint8_t area = c->mem_r8(0x800BF870u);
     int16_t tv = (int16_t)c->mem_r16(0x800A4C80u + (uint32_t)area * 2);
     c->r[4] = obj; c->r[5] = 0xc; c->r[6] = (uint32_t)(int32_t)tv;
-    ov_obj_record_init(c);   // OWNED native graphics-bind (render-record alloc + geomblk resolve into node+0xC0)
+    c->engine.graphicsBind.recordInit();   // OWNED native graphics-bind (render-record alloc + geomblk resolve into node+0xC0)
     if (c->r[2] != 0) return;                        // init busy/failed -> EPI
     c->mem_w8(obj + 0, 1);
     c->mem_w8(obj + 4, (uint8_t)(c->mem_r8(obj + 4) + 1));  // -> state 1

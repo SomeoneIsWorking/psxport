@@ -127,7 +127,7 @@ void beh_jumptable_release_trigger(Core* c) {
         c->r[4] = obj;                                  // 80124FD0 move a0,s2
         c->r[5] = 0x8015C808u;                          // 80124FD4 lui a1,0x8015 ; 80124FD8 addiu a1,-0x37f8
         c->r[6] = 4;                                    // 80124FDC addiu a2,zero,4
-        ov_obj_set_geom(c);                   // 80124FE4 jal 0x80077b38
+        c->engine.graphicsBind.setGeom();                   // 80124FE4 jal 0x80077b38
         c->mem_w8 (obj + 6, (uint8_t)c->r[2]);          // 80124FE8 sb v0, 6(s2)  (delay slot; v0=ret)
         c->mem_w8 (obj + 0xb, 0x10);                    // 80124FF0 sb 0x10, 0xb(s2)
         c->mem_w16(obj + 0x5a, 0xa00);                  // 80124FF8 sh 0xa00, 0x5a(s2)
@@ -176,7 +176,7 @@ void beh_jumptable_release_trigger(Core* c) {
         c->r[4] = obj;                                  // 801250A4 move a0,s2
         c->r[5] = 0x8015C808u;                          // 801250A8 lui/addiu a1
         c->r[6] = 4;                                    // 801250B4 addiu a2,zero,4 (delay slot)
-        ov_obj_set_geom(c);                   // 801250B0 jal 0x80077b38
+        c->engine.graphicsBind.setGeom();                   // 801250B0 jal 0x80077b38
         c->mem_w8(obj + 0x29, 0);                       // 801250BC sb zero, 0x29(s2)  (delay slot)
         goto epilogue;                                  // 801250B8 j 0x801252a4
       }

@@ -59,7 +59,7 @@ static inline void leaf4(Core* c, uint32_t a0, uint32_t a1, uint32_t a2, uint32_
 // COMMON TAIL (0x801353C8): node[8]++ / FUN_800517F8(node) / node[8]--.
 static inline void common_tail(Core* c, uint32_t nd) {
   c->mem_w8(nd + 8, (uint8_t)(c->mem_r8(nd + 8) + 1));
-  c->r[4] = nd; ov_obj_render_update(c);
+  c->r[4] = nd; c->engine.graphicsBind.renderUpdate();
   c->mem_w8(nd + 8, (uint8_t)(c->mem_r8(nd + 8) - 1));
 }
 
@@ -87,7 +87,7 @@ void beh_multi_record_phase_machine(Core* c) {
      uint32_t s3 = 0x8014a758u;                             // tbl base
      int i = 0;
      do {
-       ov_record_alloc_g(c);                        // FUN_8007AAE8() -> v0 (a0 carried)
+       c->engine.graphicsBind.recordAlloc();                        // FUN_8007AAE8() -> v0 (a0 carried)
        uint32_t rec = c->r[2];
        c->mem_w32(s0 + 0xc0, rec);
        c->mem_w16(rec + 6, (uint16_t)(int16_t)(i - 1));
@@ -151,7 +151,7 @@ void beh_multi_record_phase_machine(Core* c) {
    }
    // common cascade (0x80135238): node[8]++/FUN_800517F8/node[8]--, then 6x FUN_801252C0 + FUN_8004CC64
    c->mem_w8(nd + 8, (uint8_t)(c->mem_r8(nd + 8) + 1));
-   c->r[4] = nd; ov_obj_render_update(c);
+   c->r[4] = nd; c->engine.graphicsBind.renderUpdate();
    c->mem_w8(nd + 8, (uint8_t)(c->mem_r8(nd + 8) - 1));
    uint32_t a3;
    a3 = leafr3(c, nd, 1, 0, 0x801252c0u);

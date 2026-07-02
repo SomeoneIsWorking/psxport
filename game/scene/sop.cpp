@@ -261,7 +261,7 @@ void Sop::fieldMode() { Core* c = core;
         c->mem_w16(node + 0x36, c->mem_r16(t + 4));
         c->mem_w32(node + 0x1c, c->mem_r32(t + 8));   // per-scene handler (content)
       }
-      c->r[4] = 0x800e8008u; c->r[5] = 0x8010c95cu; ov_obj_set_xformblk(c);   // BG xform setup — native (was 0x8006cbd0)
+      c->r[4] = 0x800e8008u; c->r[5] = 0x8010c95cu; c->engine.graphicsBind.setXformBlk();   // BG xform setup — native (was 0x8006cbd0)
       CutsceneCamera::runSnapFollow(c, 0x800e8008u, 0x800e8040u);   // BG init (native class CutsceneCamera; was 0x8006e3b0)
       sm = c->mem_r32(0x1f800138u);                   // (callees don't move sm, but reload defensively)
       c->mem_w16(sm + 0x50, 1);

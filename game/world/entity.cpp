@@ -57,7 +57,7 @@ static uint32_t child_spawn_40410(Core* c) {
   uint32_t s3 = a1 << 2;             // tblB byte offset = (a1&0xff)*4, +2 per iter
   const uint32_t s5 = 0x800a3b28u;   // tblB base
   for (uint32_t i = 0; i < count; i++) {
-    c->r[4] = 0; ov_record_alloc_g(c);     // allocate child node
+    c->r[4] = 0; c->engine.graphicsBind.recordAlloc();     // allocate child node
     uint32_t node = c->r[2];
     c->mem_w32(s0 + 0xC0, node);
     c->mem_w16(node + 6, (uint16_t)(i - 1));        // node[6] = (i-1) as s16
@@ -254,7 +254,7 @@ static void sm40558(Core* c) {
         c->mem_w8(obj + 1, 1);
         c->r[4]=obj; rec_dispatch(c, 0x80077E7Cu);
         // @878
-        c->r[4]=obj; ov_obj_render_update(c);
+        c->r[4]=obj; c->engine.graphicsBind.renderUpdate();
         c->mem_w8(obj + 41, 0);
         return;
       }
@@ -270,7 +270,7 @@ static void sm40558(Core* c) {
       else                        { c->r[4]=obj; rec_dispatch(c, 0x8007778Cu); v0=c->r[2]; }
       if (v0 == 0) { c->mem_w8(obj + 41, 0); return; }                    // @8c8
       // @878
-      c->r[4]=obj; ov_obj_render_update(c);
+      c->r[4]=obj; c->engine.graphicsBind.renderUpdate();
       c->mem_w8(obj + 41, 0);
       return;
     }
@@ -312,7 +312,7 @@ static void sm40558(Core* c) {
         c->mem_w8(obj + 1, 1);
         c->r[4]=obj; rec_dispatch(c, 0x80077E7Cu);
         // @a30
-        c->r[4]=obj; ov_obj_render_update(c);
+        c->r[4]=obj; c->engine.graphicsBind.renderUpdate();
         return;
       }
       return;                                         // (obj[40]&0x80)==0 -> @a48
@@ -325,7 +325,7 @@ static void sm40558(Core* c) {
       else                        { c->r[4]=obj; rec_dispatch(c, 0x8007778Cu); v0=c->r[2]; }
       if (v0 == 0) return;                            // @a48
       // @a30
-      c->r[4]=obj; ov_obj_render_update(c);
+      c->r[4]=obj; c->engine.graphicsBind.renderUpdate();
       return;
     }
   }
