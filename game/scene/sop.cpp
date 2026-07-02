@@ -143,7 +143,7 @@ void native_transition_area_load(Core* c) {
   d2(c, 0x80045080u, 0x80108f9cu, (uint32_t)((s6e + 3) & 0xff));
   // FUN_8007566c(*0x800bf870, *0x1f80022c)   — area BGM/asset trigger
   d2(c, 0x8007566cu, c->mem_r8(0x800bf870u), c->mem_r32(0x1f80022cu));
-  d0(c, 0x80044f58u);                                  // ov_load_texgroup (sync)
+  ov_load_texgroup(c);                                 // 0x80044F58 — native (sync texgroup load)
   // FUN_8001dc40(0x8018a000, *0x800be100 + (*0x800ef480>>11), *0x800ef484 - *0x800ef480);
   //   *0x800a3ec8 = *0x800ef480>>11    (the area-asset overlay DMA load)
   uint32_t l = c->mem_r32(0x800ef480u);

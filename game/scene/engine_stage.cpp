@@ -706,7 +706,7 @@ static void ov_field_frame_x(Core* c) {
   }
   if (c->mem_r8(0x1f800136u) < 2) ov_render_frame_x(c); // 0x8003fa44 — NATIVE render orchestrator twin
   ov_game_submit_810c(c);                      // render submit (page-1 dim-fade owned; other pages recomp)
-  d0(c, 0x80077d8cu);
+  c->engine.postRenderTick();                   // 0x80077D8C NATIVE (was d0)
   c->engine.areaUpdateTail();                   // 0x80075a80 NATIVE
 }
 
