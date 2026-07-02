@@ -43,7 +43,7 @@
 #include "graphics_bind.h"   // ov_obj_record_init
 #include "trig.h"    // class Trig — libgte ratan2
 #include "camera/cutscene_camera.h"   // CutsceneCamera::runInitSeedGrp (was rec_dispatch 0x8006CBA8)
-// core.h already brings in render/node_xform.h (Core owns a NodeXform instance).
+#include "render/render.h"   // c->mRender->mNodeXform (was rec_dispatch 0x80051844)
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
@@ -63,7 +63,7 @@ constexpr uint32_t G_806c = 0x800E806Cu, G_8074 = 0x800E8074u, G_8076 = 0x800E80
 static inline int16_t s16(Core* c, uint32_t a) { return (int16_t)c->mem_r16(a); }
 
 static void cd0_tail(Core* c, uint32_t nd) {           // @0x80127cd0
-  c->nodeXform.build(nd);                              // was rec_dispatch 0x80051844
+  c->mRender->mNodeXform.build(nd);                              // was rec_dispatch 0x80051844
   c->mem_w8(nd + 1, 1);
   c->r[4] = nd; rec_dispatch(c, 0x80077E7Cu);          // FUN_80077e7c
 }
@@ -173,7 +173,7 @@ void beh_area_transition_machine(Core* c) {
     if (d >= 3 && c->mem_r8(0x800BF9B5u) != 1) return;             // !((v-29)<3) && mem8(0x800bf9b5)!=1
     c->r[4] = nd; rec_dispatch(c, 0x8007778Cu);                    // FUN_8007778c gate
     if (c->r[2] == 0) return;
-    c->nodeXform.build(nd);                                        // was rec_dispatch 0x80051844
+    c->mRender->mNodeXform.build(nd);                                        // was rec_dispatch 0x80051844
     return;
   }
   if (st >= 2) {

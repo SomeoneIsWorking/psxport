@@ -28,17 +28,7 @@ void     spu_dma_write(const uint32_t* words, int count);
 int      spu_dma_read(uint32_t* words, int count);
 }
 
-Core::Core() {
-  memset((R3000*)this, 0, sizeof(R3000));
-  memset(ram, 0, sizeof(ram));
-  memset(scratch, 0, sizeof(scratch));
-  // Wire up owned subsystems' back-pointers so their methods can reach this Core's guest memory.
-  screenFade.core = this;
-  engine.core     = this;
-  rng.core        = this;
-  inventory.core  = this;
-  nodeXform.core  = this;
-}
+// Core::Core / ~Core moved to runtime/recomp/core.cpp (lifetime + subsystem wiring live there).
 
 // PSXPORT_CW="lo,hi" — host-backtrace watchpoint: when ANY store lands in physical byte range
 // [lo,hi), dump a C backtrace. Finds runtime code that clobbers a region the decompressor wrote.

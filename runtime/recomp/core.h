@@ -19,12 +19,13 @@
 #include "scene/engine.h"                     // Core owns an Engine instance (GAME/STAGE driver)
 #include "math/rng.h"                         // Core owns an Rng instance (PSX libc rand LCG)
 #include "items/inventory.h"                  // Core owns an Inventory instance
-#include "render/node_xform.h"                // Core owns a NodeXform instance (scene-node world xform)
 
 #ifdef __cplusplus
 
 class Game;   // the whole-machine owner (game.h); Core::game points back to it so any code holding a
               // Core* reaches migrated subsystem state via c->game->... (de-globalization, 2026-06-19).
+class Render; // owned by pointer (`Core::mRender`); allocated/wired in Core::Core() (core.cpp), holds
+              // the per-Core render-side subsystems (NodeXform, …). Full defn in game/render/render.h.
 
 class Core : public R3000 {
 public:
@@ -40,7 +41,7 @@ public:
   Engine     engine;
   Rng        rng;
   Inventory  inventory;
-  NodeXform  nodeXform;
+  Render*    mRender = nullptr;   // render subsystem umbrella (owned; ctor/dtor in core.cpp)
 
   uint32_t io_gpustat_toggle = 0;  // GPUSTAT (0x1F801814) even/odd line bit — per-instance HW state
 
@@ -62,6 +63,7 @@ public:
   int use_interp = 0;
 
   Core();
+  ~Core();
 
   // Memory access (delegates to host_ptr / the I/O map). PSX is little-endian == host.
   uint8_t  mem_r8 (uint32_t a);
