@@ -33,7 +33,7 @@
 #include "coro.h"      // thread-fiber for full-PSX mid-function resume (later-264)
 #include "dualview_snapshot.h"  // dv_capture_post/dv_restore_pre/dv_restore_post (extern "C" linkage)
 #include "guest_call.h" // rc0-4 guest-call helpers (shared with repl.cpp)
-#include "repl.h"       // native_repl_read + the REPL-armed g_nav_* auto-drive state
+#include "repl.h"       // class Repl — REPL driver + auto-drive request state (per-Core, on Game)
 
 // Native XA voice/BGM clip player (xa_stream.c) owns task slot 2 — it replaced the FUN_8001cfc8
 // streaming-reader coroutine. The scheduler skips slot 2 while owned and reflects clip completion
@@ -323,7 +323,7 @@ static void game_main(Core* c) {
       // Blocking on stdin for the next command is an intentional idle, not a hang — suspend the
       // frame-progress watchdog while waiting so it doesn't fire at a paused REPL prompt.
       if (repl_budget <= 0) watchdog_suspend();
-      while (repl_budget <= 0) { repl_budget = native_repl_read(c, f); if (repl_budget < 0) break; }
+      while (repl_budget <= 0) { repl_budget = c->game->repl.read(c, f); if (repl_budget < 0) break; }
       if (repl_budget < 0) break;
       repl_budget--;
     }
@@ -367,12 +367,12 @@ static void game_main(Core* c) {
     // commands. `newgame` pulses Cross at the title until task0 enters the GAME prologue (0x8010637C),
     // then returns to the REPL prompt. `skip N` then pulses Start each frame for N frames to advance the
     // post-newgame fisherman dialog cutscene into the field. Manual walking = `press`/`run`/`release`.
-    if (g_nav_newgame) {
+    if (c->game->repl.navNewgame) {
       if (c->mem_r32(0x801fe00c) != 0x8010637Cu) {
         if ((f % 12u) == 0) c->game->pad.driveTap((uint16_t)(0xFFFF & ~0x4000), 6);   // tap Cross
       } else {
         fprintf(stderr, "[repl] newgame: reached GAME prologue at frame %u\n", f);
-        g_nav_newgame = 0; repl_budget = 0;                                     // back to the REPL prompt
+        c->game->repl.navNewgame = 0; repl_budget = 0;                                     // back to the REPL prompt
         // Do NOT run this frame's native_step_frame: it would advance into the GAME loop body (area
         // INIT -> running sub-mode) and, with the area-code overlay not yet loaded, derail before the
         // REPL prompt regains control. `continue` freezes task0 right after the GAME prologue (before
@@ -380,9 +380,9 @@ static void game_main(Core* c) {
         continue;
       }
     }
-    if (g_skip_frames > 0) {
+    if (c->game->repl.skipFrames > 0) {
       if ((f % 24u) == 0) c->game->pad.driveTap((uint16_t)(0xFFFF & ~0x0008), 6);     // pulse Start
-      if (--g_skip_frames == 0) { c->game->pad.driveRelease();
+      if (--c->game->repl.skipFrames == 0) { c->game->pad.driveRelease();
         fprintf(stderr, "[repl] skip done at frame %u\n", f); }
     }
     // `warp` — fire the armed area change. We replicate the NON-yielding essential body of the GAME-stage
@@ -394,8 +394,8 @@ static void game_main(Core* c) {
     // restart AREA-LOAD TASK slot 1 at its entry. The cooperative area-load task then runs naturally over
     // the following frames (commits 0x800bf870=translate(dest), pulls the area overlay from the table at
     // 0x800be118[id+3], walks the asset table) — no nested-yield hazard. Both callees are non-yielding.
-    if (g_warp_armed) {
-      g_warp_armed = 0;
+    if (c->game->repl.warpArmed) {
+      c->game->repl.warpArmed = 0;
       // The IN-GAME area reload (no DEMO/title bounce) is driven by the GAME-stage steady handler
       // 0x801088d8 case sm[0x4c]==0 (running sub-mode sm[0x4a]==1): it calls
       // FUN_80044bd4(0x800452c0, a1=lbu@0x800bf870, a2=0, a3=2) IN-CONTEXT (task0), so FUN_80044bd4's
@@ -408,8 +408,8 @@ static void game_main(Core* c) {
       // the title/DEMO teardown, NOT an area-to-area warp — verified it bounces to stage DEMO.)
       const uint32_t TASK0 = 0x801fe000u;
       fprintf(stderr, "[repl] warp: dest=%u at f%u (cur area=%u) -> seed area id + drive GAME case0\n",
-              g_warp_dest, f, c->mem_r8(0x800bf870u));
-      c->mem_w8(0x800bf870u, (uint8_t)g_warp_dest);    // area id global = dest (case0 passes it to FUN_80044bd4)
+              c->game->repl.warpDest, f, c->mem_r8(0x800bf870u));
+      c->mem_w8(0x800bf870u, (uint8_t)c->game->repl.warpDest);    // area id global = dest (case0 passes it to FUN_80044bd4)
       c->mem_w16(TASK0 + 0x4au, 1);                    // sm[0x4a] = 1 (running sub-mode -> handler 0x801088d8)
       c->mem_w16(TASK0 + 0x4cu, 0);                    // sm[0x4c] = 0 -> case0 = FUN_80044bd4 area-load
       fprintf(stderr, "[repl] warp: drove GAME case0; sm[0x4a]=%u sm[0x4c]=%u — run frames to load\n",

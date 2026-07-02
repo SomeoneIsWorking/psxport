@@ -1,8 +1,8 @@
 // repl.cpp — interactive REPL driver (PSXPORT_REPL=1): read commands from stdin and drive the native
 // port (run/step, memory peek/poke, input, screenshots, RAM dumps, entity/scene inspection, area warp,
 // audio dumps). Extracted from native_boot.cpp (later-288) so the boot + scheduler file is not crammed
-// with the debug driver. The scheduler (native_boot.cpp) calls native_repl_read and reads the g_nav_*
-// auto-drive state (see repl.h).
+// with the debug driver. The scheduler (native_boot.cpp) calls c->game->repl.read() between frames and
+// consumes the class Repl's auto-drive request fields (navNewgame / skipFrames / warpArmed / warpDest).
 #include "core.h"
 #include "game.h"
 #include "c_subsys.h"
@@ -76,10 +76,8 @@ static void repl_xadump(uint8_t chan, uint32_t start_lba, const char* path, int 
   repl_wav_write(path, out, frames, freq);
 }
 
-// REPL-armed auto-drive state, consumed by the frame loop (see the loop body). `newgame` pulses Cross
-// to the GAME prologue; `skip N` pulses Start for N frames to advance the intro cutscene into the field.
-int  g_nav_newgame = 0;
-long g_skip_frames  = 0;
+// REPL auto-drive state (navNewgame / skipFrames / warpArmed / warpDest) lives on class Repl (repl.h) —
+// arm here on the appropriate command, the native scheduler frame loop consumes on subsequent frames.
 // `warp <id>` (dev/diagnostic): arm an AREA WARP. The GAME-stage area machine loads the area whose id is
 // in the current-area global 0x800bf870; an area CHANGE is driven by FUN_80044bd4(area_task_entry=0x800452c0,
 // dest_area_id, mode, phase) from inside the GAME stage SM (the steady handler 0x801088d8 case0 calls it with
@@ -88,11 +86,9 @@ long g_skip_frames  = 0;
 // table at 0x800be118, stride 8, indexed by id+3) to 0x80182000, and walks the per-area asset table at
 // area_base+0x51000. We arm the dest id here and fire FUN_80044bd4 from the frame loop (scheduler context
 // active, like `newgame`). See docs/engine_re.md "Area WARP / destination mechanism".
-int      g_warp_armed = 0;
-uint32_t g_warp_dest   = 0;
 
 // Read+execute REPL commands until a `run N` (returns N) or quit/EOF (returns -1).
-long native_repl_read(Core* c, uint32_t f) {
+long Repl::read(Core* c, uint32_t f) {
   static uint16_t held = 0xFFFF;              // active-low held mask (all released)
   char line[256];
   fprintf(stderr, "[repl] frame=%u ready\n", f); fflush(stderr);
@@ -167,8 +163,8 @@ long native_repl_read(Core* c, uint32_t f) {
         c->inventory.giveAndFlag(t, m);  // FUN_8004D4C4 give_and_flag
       }
       fprintf(stderr, "[repl] invtest: fired %d vector(s) through inventory overrides\n", n * 3); }
-    else if (!strcmp(cmd, "newgame")) { g_nav_newgame = 1; fprintf(stderr, "[repl] newgame: pulsing to GAME prologue\n"); return 100000; }
-    else if (!strcmp(cmd, "skip")) { a = 0; sscanf(line, "%*s %u", &a); if (!a) a = 500; g_skip_frames = (long)a; fprintf(stderr, "[repl] skip %u frames\n", a); return (long)a; }
+    else if (!strcmp(cmd, "newgame")) { this->navNewgame = 1; fprintf(stderr, "[repl] newgame: pulsing to GAME prologue\n"); return 100000; }
+    else if (!strcmp(cmd, "skip")) { a = 0; sscanf(line, "%*s %u", &a); if (!a) a = 500; this->skipFrames = (long)a; fprintf(stderr, "[repl] skip %u frames\n", a); return (long)a; }
     else if (!strcmp(cmd, "warp")) {
       // warp <area_id> — load a different area on demand (foundation for a level/boss selector). Only valid
       // from the field (GAME stage 0x8010637C, sm[0x48]==2). Arms the dest; the frame loop fires it.
@@ -177,7 +173,7 @@ long native_repl_read(Core* c, uint32_t f) {
           fprintf(stderr, "[repl] warp: not in GAME stage (stage=%08X) — reach the field first (newgame/skip)\n",
                   c->mem_r32(0x801fe00c));
         else {
-          g_warp_dest = a; g_warp_armed = 1;
+          this->warpDest = a; this->warpArmed = 1;
           fprintf(stderr, "[repl] warp: armed dest area id=%u (cur=%u) — run frames to load\n",
                   a, c->mem_r8(0x800bf870u));
         }

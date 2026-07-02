@@ -21,6 +21,7 @@
 #include "gpu_gpu_internal.h"       // GpuGpuState — the Vulkan present backend's per-instance render state
 #include "fps60_internal.h"        // Fps60 — the interpolated-60fps tier's per-instance state
 #include "render_queue.h"          // RenderQueue — the engine-owned draw-order authority
+#include "repl.h"                  // class Repl — REPL driver + auto-drive request state
 #include <stdint.h>
 #include <setjmp.h>
 
@@ -188,6 +189,7 @@ public:
   XaState     xa;    // native XA-ADPCM CD-audio/voice streamer (per-instance; xa_stream.c, bound via xa_bind)
   Hle         hle;
   Pad         pad;
+  Repl        repl;  // interactive REPL driver + REPL-armed auto-drive requests (repl.cpp)
   FmvState    fmv;
   StubState   stub;
   SchedulerState sched;  // native cooperative task scheduler (native_boot.cpp)
