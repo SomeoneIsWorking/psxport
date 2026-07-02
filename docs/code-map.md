@@ -7,7 +7,7 @@ A native may exist already. **LIVE** = reachable by direct C call from a native_
 dispatch root (actually runs). **ORPHAN** = native exists but only the REMOVED override
 table used to reach it — it is dead code until a native parent calls it directly.
 
-Totals: 413 native fns, 228 owned addresses, 104 LIVE / 309 ORPHAN.
+Totals: 413 native fns, 228 owned addresses, 105 LIVE / 308 ORPHAN.
 
 | addr | status | symbol | file:line | depends-on (still-PSX) | summary |
 |------|--------|--------|-----------|------------------------|---------|
@@ -71,7 +71,7 @@ Totals: 413 native fns, 228 owned addresses, 104 LIVE / 309 ORPHAN.
 | 0x800450BC | ORPHAN | `ov_load_stage` | game/scene/engine_level.cpp:45 |  |  |
 | 0x800450BC | LIVE | `native_load_overlay` | game/scene/engine_stage.cpp:1396 |  | load the stage overlay (if any) and point the task's restart entry at … |
 | 0x800452C0 | LIVE | `native_area_load_bd4` | game/scene/engine_stage.cpp:729 |  | Native replacement for FUN_80044bd4(0x800452c0, area, mode, 1): seed t… |
-| 0x800452C0 | LIVE | `native_transition_area_load` | game/scene/sop.cpp:101 |  | Synchronous TRANSITION area-DATA load — replaces the cooperative spawn… |
+| 0x800452C0 | LIVE | `native_transition_area_load` | game/scene/sop.cpp:102 |  | Synchronous TRANSITION area-DATA load — replaces the cooperative spawn… |
 | 0x8004798C | ORPHAN | `ov_grid_step_4798c` | game/player/collision.cpp:333 | 0x8004798C |  |
 | 0x80047CBC | ORPHAN | `ov_grid_query_47cbc` | game/player/collision.cpp:171 | 0x80047CBC |  |
 | 0x80048360 | ORPHAN | `ov_grid_offset_48360` | game/player/grid_offset.cpp:143 | 0x80048360 |  |
@@ -118,7 +118,7 @@ Totals: 413 native fns, 228 owned addresses, 104 LIVE / 309 ORPHAN.
 | 0x8006C80C | ORPHAN | `CutsceneCamera::yFloor` | game/camera/cutscene_camera.cpp:345 |  | ── yFloor (camera-Y floor clamp, per render mode) ────────────────────… |
 | 0x8006C988 | ORPHAN | `CutsceneCamera::shakeTail` | game/camera/cutscene_camera.cpp:651 |  | ── post-mode TAIL (0x8006C988) — the camera SHAKE state machine ──────… |
 | 0x8006CBA8 | ORPHAN | `CutsceneCamera::initSeedGrp` | game/camera/cutscene_camera.cpp:783 |  |  |
-| 0x8006CBD0 | ORPHAN | `ov_obj_set_xformblk` | game/world/graphics_bind.cpp:132 |  |  |
+| 0x8006CBD0 | LIVE | `ov_obj_set_xformblk` | game/world/graphics_bind.cpp:132 |  |  |
 | 0x8006D02C | ORPHAN | `CutsceneCamera::lookAt` | game/camera/cutscene_camera.cpp:534 |  |  |
 | 0x8006D2AC | ORPHAN | `CutsceneCamera::distSolve` | game/camera/cutscene_camera.cpp:228 |  | ── distSolve (distance/zoom solver) ──────────────────────────────────… |
 | 0x8006D654 | ORPHAN | `CutsceneCamera::pitch` | game/camera/cutscene_camera.cpp:382 |  | ── pitch (vertical-look height smoother) ─────────────────────────────… |
@@ -283,8 +283,8 @@ Totals: 413 native fns, 228 owned addresses, 104 LIVE / 309 ORPHAN.
 | 0x80108A60 | LIVE | `ov_field_transition` | game/scene/engine_stage.cpp:893 |  | sm[0x4a]==5 transition dispatcher on sm[0x4c]. 0/9 = done (return to t… |
 | 0x80108B0C | LIVE | `ov_field_frame` | game/scene/engine_stage.cpp:390 |  | FIELD PER-FRAME UPDATE 0x80108b0c — native control flow (the field fra… |
 | 0x80108BE4 | LIVE | `ov_field_frame_x` | game/scene/engine_stage.cpp:699 |  | FIELD PER-FRAME UPDATE VARIANT 0x80108be4 — the mid-TRANSITION field f… |
-| 0x801092B4 | LIVE | `ov_sop_field_update` | game/scene/sop.cpp:188 |  | SOP per-frame FIELD UPDATE — native ownership of FUN_801092b4 (decomp … |
-| 0x80109450 | LIVE | `ov_sop_field_mode` | game/scene/sop.cpp:236 |  | SOP FIELD-MODE MACHINE — native ownership of FUN_80109450 (decomp scra… |
+| 0x801092B4 | LIVE | `ov_sop_field_update` | game/scene/sop.cpp:189 |  | SOP per-frame FIELD UPDATE — native ownership of FUN_801092b4 (decomp … |
+| 0x80109450 | LIVE | `ov_sop_field_mode` | game/scene/sop.cpp:237 |  | SOP FIELD-MODE MACHINE — native ownership of FUN_80109450 (decomp scra… |
 | 0x8010957C | LIVE | `ov_scene_fade_seq` | game/scene/engine_stage.cpp:457 |  | ov_scene_fade_seq — GAME-overlay a0l screen-fade sequencer (guest FUN_… |
 | 0x80109FE0 | LIVE | `ov_field_entity_render` | game/render/engine_submit.cpp:646 |  | FIELD ENTITY RENDER LOOP — PC-native ownership of the SOP field-overla… |
 | 0x8013E9D8 | ORPHAN | `ov_bg_render` | game/render/engine_render_walk.cpp:248 | 0x8013DD34 | NATIVE seaside-area GROUND/BG node renderer — OVERLAY 0x8013E9D8 (the … |

@@ -28,6 +28,7 @@ void ov_bg_scene_transition_sm(Core*);  // bg_scene_transition_sm.cpp — native
 static void d1(Core* c, uint32_t fn, uint32_t a0);
 static void d2(Core* c, uint32_t fn, uint32_t a0, uint32_t a1);
 #include "camera/cutscene_camera.h"   // class CutsceneCamera — SOP/BG cutscene camera (0x8006E3B0)
+#include "world/graphics_bind.h"  // ov_obj_set_xformblk (FUN_8006CBD0)
 static void d3(Core* c, uint32_t fn, uint32_t a0, uint32_t a1, uint32_t a2);
 
 // Owned synchronous area-DATA load (replaces the body of LAB_80109164 0x80109164). Runs in the
@@ -255,7 +256,7 @@ void ov_sop_field_mode(Core* c) {
         c->mem_w16(node + 0x36, c->mem_r16(t + 4));
         c->mem_w32(node + 0x1c, c->mem_r32(t + 8));   // per-scene handler (content)
       }
-      d2(c, 0x8006cbd0u, 0x800e8008u, 0x8010c95cu);   // BG xform setup
+      c->r[4] = 0x800e8008u; c->r[5] = 0x8010c95cu; ov_obj_set_xformblk(c);   // BG xform setup — native (was 0x8006cbd0)
       CutsceneCamera::runSnapFollow(c, 0x800e8008u, 0x800e8040u);   // BG init (native class CutsceneCamera; was 0x8006e3b0)
       sm = c->mem_r32(0x1f800138u);                   // (callees don't move sm, but reload defensively)
       c->mem_w16(sm + 0x50, 1);

@@ -140,7 +140,8 @@ void beh_typed_anim_spawn(Core* c) {
         c->mem_w16(s0 + 0x64, 0);
       } else if (s1 != 1) goto Lret;                // s1 >= 2
       // fall-through (s1==0 and s1==1) -> 0x8012dc7c
-      leaf5(c, s0, 1, c->mem_r32(rec + 0xDC), 0, s0 + 0x60, 0x8004BD64u);
+      c->r[4]=s0; c->r[5]=1; c->r[6]=c->mem_r32(rec + 0xDC); c->r[7]=0;
+      c->mem_w32(c->r[29] + 16, s0 + 0x60); ov_obj_pos_compose(c);   // FUN_8004BD64 — native
       c->mem_w8(s0 + 1, c->mem_r8(rec + 1));        // node[1] = node[0x10][1]
       goto Lret;
     }
@@ -159,7 +160,8 @@ void beh_typed_anim_spawn(Core* c) {
         c->mem_w16(s0 + 0x64, 0);
       } else if (s1 != 1) goto Lret;
       // fall-through -> 0x8012dd0c
-      leaf5(c, s0, 2, 0, c->mem_r32(rec + 0xD0), s0 + 0x60, 0x8004BD64u);
+      c->r[4]=s0; c->r[5]=2; c->r[6]=0; c->r[7]=c->mem_r32(rec + 0xD0);
+      c->mem_w32(c->r[29] + 16, s0 + 0x60); ov_obj_pos_compose(c);   // FUN_8004BD64 — native
       c->mem_w8(s0 + 1, c->mem_r8(rec + 1));        // node[1] = node[0x10][1]
       if (c->mem_r8(0x800BF9B5u) != 5) goto Lret;
       goto Ltail14;                                 // 0x8012ddfc with a0=14
@@ -176,7 +178,8 @@ void beh_typed_anim_spawn(Core* c) {
         c->mem_w16(s0 + 0x64, 0);
       } else if (s1 != 1) goto Lret;
       // fall-through -> 0x8012dda8
-      leaf5(c, s0, 2, 0, c->mem_r32(rec + 0xD0), s0 + 0x60, 0x8004BD64u);
+      c->r[4]=s0; c->r[5]=2; c->r[6]=0; c->r[7]=c->mem_r32(rec + 0xD0);
+      c->mem_w32(c->r[29] + 16, s0 + 0x60); ov_obj_pos_compose(c);   // FUN_8004BD64 — native
       c->mem_w8(s0 + 1, c->mem_r8(rec + 1));        // node[1] = node[0x10][1]
       if (c->mem_r8(0x800BF9B5u) != 6) goto Lret;
       goto Ltail35;                                 // 0x8012ddfc with a0=35

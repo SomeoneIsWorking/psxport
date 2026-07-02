@@ -198,7 +198,8 @@ void beh_typed_init_exit_poker(Core* c) {
       }
       if (v == 1) {                                  // 0x801185c0
         if (c->mem_r8(0x800BFAF9u) == 0) { c->mem_w8(nd + 4, 3); goto Lret; }  // 0x80118750
-        leaf5(c, nd, 1, c->mem_r32(0x800E7F5Cu), 0, nd + 0x60, 0x8004BD64u);
+        c->r[4]=nd; c->r[5]=1; c->r[6]=c->mem_r32(0x800E7F5Cu); c->r[7]=0;
+        c->mem_w32(c->r[29] + 16, nd + 0x60); ov_obj_pos_compose(c);   // FUN_8004BD64 — native
         goto L185e8;
       }
       goto Lret;                                     // v >= 2

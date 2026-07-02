@@ -69,7 +69,7 @@ void beh_prng_velocity_machine(Core* c) {
    c->mem_w8(s1 + 0x0d, 0);
    uint32_t t = c->mem_r32(0x800ecf80u);
    c->mem_w32(s1 + 0x3c, t);                      // node[0x3c] = mem[0x800ecf80] (jal delay slot)
-   call3(c, s1, 0x8015c808u, 1, 0x80077b38u);     // FUN_80077B38(node, 0x8015C808, 1)
+   c->r[4] = s1; c->r[5] = 0x8015c808u; c->r[6] = 1; ov_obj_set_geom(c);   // FUN_80077B38(node, 0x8015C808, 1) — native
    c->mem_w32(s1 + 0x2c, 0x13d20000u);
    uint16_t v1 = c->mem_r16(s1 + 0x2e);
    c->mem_w32(s1 + 0x30, 0xf7e00000u);
