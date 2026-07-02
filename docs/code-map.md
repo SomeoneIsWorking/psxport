@@ -7,7 +7,7 @@ A native may exist already. **LIVE** = reachable by direct C call from a native_
 dispatch root (actually runs). **ORPHAN** = native exists but only the REMOVED override
 table used to reach it — it is dead code until a native parent calls it directly.
 
-Totals: 414 native fns, 212 owned addresses, 107 LIVE / 307 ORPHAN.
+Totals: 415 native fns, 212 owned addresses, 107 LIVE / 308 ORPHAN.
 
 | addr | status | symbol | file:line | depends-on (still-PSX) | summary |
 |------|--------|--------|-----------|------------------------|---------|
@@ -95,6 +95,7 @@ Totals: 414 native fns, 212 owned addresses, 107 LIVE / 307 ORPHAN.
 | 0x80050B08 | LIVE | `native_boot_run` | runtime/recomp/native_boot.cpp:575 |  | Wired from boot.c when PSXPORT_NATIVE_BOOT is set. Registers the main … |
 | 0x80050DE4 | LIVE | `Engine::sceneStateStep` | game/scene/engine_stage.cpp:1110 |  | Engine::sceneStateStep — the SCENE-INIT / SCENE-RUN state machine at g… |
 | 0x80051128 | ORPHAN | `ov_xform51128` | game/render/engine_submit.cpp:974 |  |  |
+| 0x80051128 | ORPHAN | `ov_xform51128` | game/render/node_xform.cpp:22 |  | ov_xform51128 lives in engine_submit.cpp (its verify wrapper and body … |
 | 0x80051464 | ORPHAN | `ov_xform_propagate` | game/render/engine_submit.cpp:757 |  |  |
 | 0x80051464 | ORPHAN | `ov_xform_propagate` | game/render/engine_submit.cpp:869 |  |  |
 | 0x80051794 | LIVE | `eng_identity_matrix` | game/scene/engine_init.cpp:20 |  | set an identity 3x3 rotation matrix (0x1000 = 1.0 fixed on the diagona… |

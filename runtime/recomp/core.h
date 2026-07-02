@@ -19,6 +19,7 @@
 #include "scene/engine.h"                     // Core owns an Engine instance (GAME/STAGE driver)
 #include "math/rng.h"                         // Core owns an Rng instance (PSX libc rand LCG)
 #include "items/inventory.h"                  // Core owns an Inventory instance
+#include "render/node_xform.h"                // Core owns a NodeXform instance (scene-node world xform)
 
 #ifdef __cplusplus
 
@@ -39,6 +40,7 @@ public:
   Engine     engine;
   Rng        rng;
   Inventory  inventory;
+  NodeXform  nodeXform;
 
   uint32_t io_gpustat_toggle = 0;  // GPUSTAT (0x1F801814) even/odd line bit — per-instance HW state
 

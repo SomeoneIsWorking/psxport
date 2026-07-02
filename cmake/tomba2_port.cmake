@@ -171,6 +171,7 @@ set(PORT_SRC
   game/render/fps60.cpp
   game/object/engine_tomba2.cpp
   game/render/engine_submit.cpp
+  game/render/node_xform.cpp
   game/render/render_debug_probes.cpp
   game/render/engine_project.cpp
   game/render/engine_render.cpp

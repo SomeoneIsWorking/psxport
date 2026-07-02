@@ -37,6 +37,7 @@ Core::Core() {
   engine.core     = this;
   rng.core        = this;
   inventory.core  = this;
+  nodeXform.core  = this;
 }
 
 // PSXPORT_CW="lo,hi" — host-backtrace watchpoint: when ANY store lands in physical byte range
