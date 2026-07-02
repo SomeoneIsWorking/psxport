@@ -140,14 +140,13 @@ void native_scheduler_step(Core* c) {
         c->game->sched.cur_slot = i;
         static_cast<R3000&>(*c) = c->game->sched.task_ctx[i];        // restore REGISTERS
         c->game->sched.in_stage = 1;
-        void ov_demo_stage_main(Core*); void ov_demo_frame(Core*);
         // Contain any cooperative yield from a rec_dispatch'd guest substate (e.g. a menu state that
         // spawns an async CD read and FUN_80051f80-yields): without this setjmp the yield's longjmp
         // would hit a stale jmp_buf and corrupt the scheduler. A yield = the substate isn't fully
         // synchronous yet (a CD load to own native+sync — the frontier); treat it as frame-done.
         if (setjmp(c->game->sched.yield_jmp) == 0) {
-          if (demo_fresh) ov_demo_stage_main(c);                     // prologue + s0 (sets sm[0x48]=1)
-          ov_demo_frame(c);                                          // one frame: substate dispatch + tail
+          if (demo_fresh) c->engine.demo.stageMain();                // prologue + s0 (sets sm[0x48]=1)
+          c->engine.demo.frame();                                    // one frame: substate dispatch + tail
         } else if (cfg_dbg("demo")) {
           static int w = 0; if (!w++) fprintf(stderr, "[demo] caught a substate yield (async CD not yet "
                                                       "owned native+sync) — frontier\n");

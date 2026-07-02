@@ -57,7 +57,7 @@ static void demo_log(const char* who, Core* c) {
 // s1 0x8010641C — wait/advance: v0 = inner menu input machine 0x80106f80(0). If v0 != 0 the page is
 // done -> sm[0x4a]=0, sm[0x48] += 1 (1 -> 2). Else if any pad edge (*0x800E7E68) request a skip
 // (*0x1F80019D = 1). Always -> TAIL_NONE. (Faithful to 0x8010641C.)
-static void ov_demo_s1(Core* c) {
+void Demo::s1() { Core* c = core;
   demo_log("s1", c);
   c->r[4] = 0;                              // a0 = 0
   rec_dispatch(c, 0x80106f80u);             // inner menu input machine (SYNC)
@@ -77,7 +77,7 @@ static void ov_demo_s1(Core* c) {
 // Outcome 2 -> two-phase cursor trick on sm[0x68]: first pass (==0) -> s3 (sm[0x48]=3, sm[0x68]=2);
 // second pass (!=0) -> s4 (sm[0x48]=4, sm[0x50]=0, sm[0x6b]=0, engine-update 0x8001cf2c,
 // *0x800BF84A=0). Both phases then clear sm[0x4a] and -> TAIL_REND. Other outcomes -> TAIL_REND.
-static void ov_demo_s2(Core* c) {
+void Demo::s2() { Core* c = core;
   demo_log("s2", c);
   rec_dispatch(c, 0x8010696cu);             // sub-machine (SYNC)
   uint32_t v0 = c->r[2];
@@ -112,7 +112,7 @@ static void ov_demo_s2(Core* c) {
 // SHARED block as s2's outcome-1). Outcome 2 -> phase on sm[0x68]: ==2 -> s5 (sm[0x48]=5, sm[0x68]=0,
 // *0x1F800134=0); else -> s6 (sm[0x48]=6, sm[0x6b]=0, sm[0x50]=0, page-close 0x800750d8,
 // *0x800BF808=0). Outcome 3 (back/cancel) -> s2 (sm[0x48]=2, sm[0x68]=0). All -> TAIL_REND.
-static void ov_demo_s3(Core* c) {
+void Demo::s3() { Core* c = core;
   demo_log("s3", c);
   rec_dispatch(c, 0x80106ac4u);             // sub-machine (SYNC)
   uint32_t v0 = c->r[2];
@@ -144,7 +144,7 @@ static void ov_demo_s3(Core* c) {
 // s6 0x801065EC — page sub-machine 0x8007b45c(); if sm[0x50]==3 fire the commit pair 0x80106824(1,1)
 // + 0x80106690(1). Then on sm[0x6b]: ==1 -> s3 (sm[0x48]=3, sm[0x68]=3) + TAIL_CF2C; ==2 -> s3
 // (sm[0x48]=3, sm[0x68]=2) + TAIL_CF2C; else stay -> TAIL_REND.
-static void ov_demo_s6(Core* c) {
+void Demo::s6() { Core* c = core;
   demo_log("s6", c);
   rec_dispatch(c, 0x8007b45cu);             // page sub-machine (SYNC)
   uint32_t sm = c->mem_r32(SM_PTR);
@@ -201,7 +201,7 @@ static void ov_demo_s6(Core* c) {
 // args) then falls through into the s1 body (0x8010641C) and on to TAIL_NONE — all in-context. The
 // jal's delay slot re-writes sm[0x4a]=0 (idempotent, same value). The first jal sets its own ra
 // (=0x801063EC), so we leave ra alone. sm[0x48] read as the CURRENT substate (0 here) then +1 = 1.
-static void ov_demo_s0(Core* c) {
+void Demo::s0() { Core* c = core;
   demo_log("s0", c);
   uint32_t sm = c->mem_r32(SM_PTR);
   c->mem_w8 (sm + 0x68, 0);                  // sb zero,0x68(v1)  sm[0x68] = 0
@@ -298,7 +298,7 @@ static void ov_demo_s0(Core* c) {
 //     0x80106670). Same reasoning as phase2's return.
 static const uint32_t S7_PHASE0_BODY = 0x80106c74u;
 static const uint32_t S7_PHASE1_BODY = 0x80106d4cu;
-static void ov_demo_s7_phase(Core* c) {
+void Demo::s7Phase() { Core* c = core;
   uint32_t sm = c->mem_r32(SM_PTR);
   uint16_t phase = c->mem_r16(sm + 0x4a);
   if (cfg_dbg("demo"))
@@ -352,7 +352,7 @@ static void demo_frame_s0(Core* c);  // defined in the per-frame dispatcher sect
 //   *0x1F80019A(u8)=0; *0x1F80019D(u8)=0; s0=0x1f800000; s2=1; s1=2; s3=3; v1=*0x1F800138;
 //   sm[0x48](u16)=0; sm[0x6E](u8)=0; jal 0x8005082C (input/pad reset); fall into loop @0x80106388.
 // Register state the loop body reads MUST hold on hand-off: s0=0x1f800000, s2=1, s1=2, s3=3.
-void ov_demo_stage_main(Core* c) {
+void Demo::stageMain() { Core* c = core;
   uint32_t ra = c->r[31], sp = c->r[29];
   uint32_t s0_in = c->r[16], s1_in = c->r[17], s2_in = c->r[18], s3_in = c->r[19];
   c->r[29] = sp - 0x30;
@@ -696,7 +696,7 @@ static void demo_frame_s7(Core* c) {
 }
 
 // Called once per frame by the native scheduler for the DEMO task.
-void ov_demo_frame(Core* c) {
+void Demo::frame() { Core* c = core;
   uint32_t sm = c->mem_r32(SM_PTR);
   uint16_t s48 = c->mem_r16(sm + 0x48);
   switch (s48) {
@@ -726,5 +726,5 @@ void ov_demo_frame(Core* c) {
 // is gone; these become future direct-call targets, wired top-down. No-op.
 void demo_scan_overlay(Core* c, uint32_t base, uint32_t size) {
   (void)c; (void)base; (void)size;
-  (void)ov_demo_s0; (void)ov_demo_s1; (void)ov_demo_s2; (void)ov_demo_s3; (void)ov_demo_s6; (void)ov_demo_s7_phase;
+  // (Demo substates now live on class Demo — c->engine.demo.s{0..3,6,7Phase})
 }

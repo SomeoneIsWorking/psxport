@@ -20,6 +20,7 @@
 #include "object_list.h"         // Engine owns the ObjectList entity-list walkers
 #include "array8_dispatch.h"     // Engine owns the Array8Dispatch fixed-array dispatcher
 #include "object_table.h"        // Engine owns the ObjectTable 40-slot dispatcher
+#include "demo.h"                // Engine owns the Demo front-end MENU stage machine
 class Core;
 
 class Engine {
@@ -34,6 +35,7 @@ public:
   ObjectList       objectList;        // per-frame entity-list walkers (guest FUN_8007A904 / FUN_80069B28)
   Array8Dispatch   array8Dispatch;    // 8-slot fixed array dispatcher   (guest FUN_80026368)
   ObjectTable      objectTable;       // 40-slot fixed object table       (guest FUN_80026C88)
+  Demo             demo;              // front-end DEMO / MENU stage machine (docs/engine_re.md)
 
   // ── GAME-stage entry points (called by the scheduler each frame) ────────────────────────────
   // stagePrologue: one-time prologue that runs when the GAME task enters — task-slot setup, first
