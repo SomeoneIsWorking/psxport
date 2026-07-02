@@ -7,6 +7,7 @@
 // FUN_800450bc(task, stage) = THIS loader. RE: scratch/decomp + tools/disas.py (later-162).
 #include "core.h"
 #include "cfg.h"
+#include "scheduler.h"   // ov_switch (FUN_80080880)
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -80,7 +81,7 @@ static void eng_stage_transition(Core* c) {
   c->mem_w8(task + 0x6f, 0);                        // task[0x6f] = 0
   c->r[16] = s0; c->r[29] = sp; c->r[31] = ra;      // epilogue: restore s0/sp/ra (for the boot no-op-return path)
   c->r[4] = 0xff000000u;                            // ChangeThread handle arg
-  rec_dispatch(c, 0x80080880u);                     // ov_switch: yield (mid-game) / no-op return (boot)
+  ov_switch(c);                                     // yield (mid-game) / no-op return (boot) — native
 }
 
 void ov_stage_transition(Core* c) {

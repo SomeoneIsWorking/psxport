@@ -1419,7 +1419,7 @@ static void native_start_stage(Core* c, uint32_t stage) {
   rec_dispatch(c, 0x80080870u);                      // B(0Fh) reset (BIOS leaf)
   rec_dispatch(c, 0x800808a0u);                      // ExitCriticalSection (BIOS leaf)
   c->r[4] = 0xff000000u;
-  rec_dispatch(c, 0x80080880u);                      // B(10h) reset (BIOS leaf)
+  ov_switch(c);                                      // ChangeThread — native scheduler yield
 }
 
 // Public entry for the front-end (engine_demo.cpp s5 = LEAVE DEMO -> GAME). FUN_80052078(2): the DEMO
