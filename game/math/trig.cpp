@@ -1,7 +1,8 @@
 #include "trig.h"
 #include "core.h"
 
-int32_t Trig::rsin(Core* c, int32_t angle) {
+int32_t Trig::rsin(int32_t angle) const {
+  Core* c = this->core;
   int32_t sign = 1;
   if (angle < 0) { sign = -1; angle = -angle; }
   angle &= 0xFFF;
@@ -19,7 +20,8 @@ int32_t Trig::rsin(Core* c, int32_t angle) {
   return sign * r;
 }
 
-int32_t Trig::ratan2(Core* c, int32_t y_in, int32_t x_in) {
+int32_t Trig::ratan2(int32_t y_in, int32_t x_in) const {
+  Core* c = this->core;
   // Guest FUN_80085690. MIPS convention: a0=y, a1=x. Returns 12-bit angle (4096 == 2π).
   // Two flags — a2 = "x was negative", a3 = "y was negative"; sign-strip both, table-lookup atan on the
   // first octant, quadrant fixup at the tail. `q * 2` is the table offset (int16 entries at guest 0x800AA490).
@@ -64,7 +66,8 @@ int32_t Trig::angleCmp(int32_t a, int32_t b, int32_t mode) {
   return (mode == 0) ? inFirstHalf : (inFirstHalf ^ 1);
 }
 
-int32_t Trig::rcos(Core* c, int32_t angle) {
+int32_t Trig::rcos(int32_t angle) const {
+  Core* c = this->core;
   if (angle < 0) angle = -angle;                         // cos is even; guest's bgez wrapper
   angle &= 0xFFF;
   auto lh = [&](uint32_t off) -> int32_t { return c->mem_r16s(SIN_TAB + off); };

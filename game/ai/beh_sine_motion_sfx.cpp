@@ -209,7 +209,7 @@ void beh_sine_motion_sfx(Core* c) {
    s3 = (int32_t)c->mem_r16(nd + 0x36);  // lhu node[0x36]
    a0 = (int32_t)((uint32_t)s2 << 16) >> 16;  // delay sra a0,a0,16 = sext16(s2)
    {
-     int32_t sn = Trig::rsin(c, a0);                        // FUN_80083E80(sin) [native]
+     int32_t sn = c->trig.rsin(a0);                        // FUN_80083E80(sin) [native]
      int32_t t = sn << 1; t = t + sn; t = t << 2; t = t + sn;
      t = (int32_t)((uint32_t)t << 6);   // *832
      v0 = (int32_t)c->mem_r16(nd + 0x94);  // lhu node[0x94]

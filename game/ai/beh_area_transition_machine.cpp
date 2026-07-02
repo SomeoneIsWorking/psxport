@@ -114,7 +114,7 @@ static void node6_phase(Core* c, uint32_t nd) {
       int s2 = (int16_t)(8268  - c->mem_r16(G_eb6));   // (int16)(0x204c - hi(eb4))
       int s0 = (int16_t)(18867 - c->mem_r16(G_eae));   // (int16)(0x49b3 - hi(eac))
       int s1 = (int)(-1388 - (int)c->mem_r16(G_eb2));  // -1388 - mem16(eb2) (NOT yet 16-bit-clamped)
-      uint32_t ang = (uint32_t)Trig::ratan2(c, -s2, s0);   // FUN_80085690(-s2, s0) -> angle
+      uint32_t ang = (uint32_t)c->trig.ratan2(-s2, s0);   // FUN_80085690(-s2, s0) -> angle
       int s0d = (s0 << 8) / 64;                         // <<8 then signed /64 (truncate toward 0)
       int s1d = ((int16_t)s1 << 8) / 64;               // (s1<<16>>8)/64 == ((int16)s1<<8)/64
       int s2d = (s2 << 8) / 64;

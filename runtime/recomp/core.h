@@ -18,6 +18,7 @@
 #include "render/screen_fade/screen_fade.h"   // Core owns a ScreenFade instance directly
 #include "scene/engine.h"                     // Core owns an Engine instance (GAME/STAGE driver)
 #include "math/rng.h"                         // Core owns an Rng instance (PSX libc rand LCG)
+#include "math/trig.h"                        // Core owns a Trig instance (libgte sin/cos/atan2)
 #include "items/inventory.h"                  // Core owns an Inventory instance
 
 #ifdef __cplusplus
@@ -40,6 +41,7 @@ public:
   ScreenFade screenFade;
   Engine     engine;
   Rng        rng;
+  Trig       trig;
   Inventory  inventory;
   Render*    mRender = nullptr;   // render subsystem umbrella (owned; ctor/dtor in core.cpp)
 

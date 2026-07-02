@@ -39,6 +39,7 @@ Core::Core() {
   engine.spawn.core = this;             // Engine-owned entity spawn/despawn subsystem
   engine.behaviors.core = this;         // Engine-owned per-object behavior dispatcher
   rng.core        = this;
+  trig.core       = this;
   inventory.core  = this;
   // Render umbrella (owned by pointer): allocate, wire its back-pointer + each embedded sub-subsystem.
   mRender = new Render();

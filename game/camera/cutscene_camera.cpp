@@ -79,18 +79,18 @@ bool CutsceneCamera::trackY(uint32_t target) {   // FUN_8006DA54
 
 // ── rotBuild (special-camera rotation / look-at builder) ─────────────────────────────────────────
 void CutsceneCamera::yawDistAccumulate(int32_t dx, int32_t dz) {
-  int32_t yaw  = (int16_t)Trig::ratan2(c, -dz, dx);
+  int32_t yaw  = (int16_t)c->trig.ratan2(-dz, dx);
   int32_t dist = (int16_t)call(T2_ISQRT, dx * dx + dz * dz);
-  int32_t rc2  = Trig::rcos(c, yaw);
+  int32_t rc2  = c->trig.rcos(yaw);
   w32(S + 0x00, r32(S + 0x00) + ((rc2 * dist) >> 1));
-  int32_t rs2  = Trig::rsin(c, yaw);
+  int32_t rs2  = c->trig.rsin(yaw);
   w32(S + 0x08, r32(S + 0x08) - ((rs2 * dist) >> 1));
   if (dist < 401) camW8(0x66, camR8(0x66) | 1);
 }
 void CutsceneCamera::lookatTail(int32_t theta, int32_t radius) {
-  int32_t rc    = Trig::rcos(c, theta);
+  int32_t rc    = c->trig.rcos(theta);
   int32_t lookX = (int32_t)r16(0x1F800160u) + ((rc * radius) >> 12);
-  int32_t rs    = Trig::rsin(c, theta);
+  int32_t rs    = c->trig.rsin(theta);
   int32_t lookZ = (int32_t)r16(0x1F800164u) - ((rs * radius) >> 12);
   int32_t camZ = (int32_t)r16(S + 0x0A);
   int32_t camX = (int32_t)r16(S + 0x02);
@@ -101,18 +101,18 @@ void CutsceneCamera::lookatTail(int32_t theta, int32_t radius) {
 
 // ── scripted-camera look-angle builders (0x8006DC38/DAD8/DF88/DEF0 — used by snapFollowA/B) ─────────
 void CutsceneCamera::posBuildA() {   // FUN_8006DC38 — overwrite the X/Z look accumulators
-  int32_t P  = mlo(Trig::rcos(c, (int16_t)camR16(0x6e)), (int16_t)camR16(0x6c)) >> 12;
-  int32_t x  = (int32_t)(int16_t)r16(S + 0x0e) + (mlo(Trig::rcos(c, (int16_t)camR16(0x70)), P) >> 12);
-  int32_t cz = mlo(Trig::rsin(c, (int16_t)camR16(0x70)), P) >> 12;
+  int32_t P  = mlo(c->trig.rcos((int16_t)camR16(0x6e)), (int16_t)camR16(0x6c)) >> 12;
+  int32_t x  = (int32_t)(int16_t)r16(S + 0x0e) + (mlo(c->trig.rcos((int16_t)camR16(0x70)), P) >> 12);
+  int32_t cz = mlo(c->trig.rsin((int16_t)camR16(0x70)), P) >> 12;
   w32(S + 0x00, (uint32_t)(x << 16));
   int32_t z  = (int32_t)(int16_t)r16(S + 0x16) - cz;
   w32(S + 0x08, (uint32_t)(z << 16));
   camW8(0x66, camR8(0x66) | 1);
 }
 void CutsceneCamera::posBuildB() {   // FUN_8006DAD8 — place a look point then yaw/dist accumulate
-  int32_t P  = (int16_t)(mlo(Trig::rcos(c, (int16_t)camR16(0x6e)), (int16_t)camR16(0x6c)) >> 12);
-  int32_t x  = (int32_t)(uint16_t)r16(S + 0x0e) + (mlo(Trig::rcos(c, (int16_t)camR16(0x70)), P) >> 12);
-  int32_t cz = mlo(Trig::rsin(c, (int16_t)camR16(0x70)), P) >> 12;
+  int32_t P  = (int16_t)(mlo(c->trig.rcos((int16_t)camR16(0x6e)), (int16_t)camR16(0x6c)) >> 12);
+  int32_t x  = (int32_t)(uint16_t)r16(S + 0x0e) + (mlo(c->trig.rcos((int16_t)camR16(0x70)), P) >> 12);
+  int32_t cz = mlo(c->trig.rsin((int16_t)camR16(0x70)), P) >> 12;
   int32_t dz = (int16_t)((int32_t)(uint16_t)r16(S + 0x16) - cz - (int32_t)(uint16_t)r16(S + 0x0a));
   int32_t dx = (int16_t)(x - (int32_t)(uint16_t)r16(S + 0x02));
   yawDistAccumulate(dx, dz);
@@ -122,13 +122,13 @@ void CutsceneCamera::headBuildA(uint32_t nonzero) {   // FUN_8006DF88
     int32_t off = (int32_t)(int16_t)camR16(0x26) - 320;
     w16(S + 6, (uint16_t)((int32_t)r16(S + 0x12) + off));
   } else {
-    int32_t step = mlo(Trig::rsin(c, (int16_t)camR16(0x6e)), (int16_t)camR16(0x6c)) >> 12;
+    int32_t step = mlo(c->trig.rsin((int16_t)camR16(0x6e)), (int16_t)camR16(0x6c)) >> 12;
     w16(S + 6, (uint16_t)((int32_t)r16(S + 0x12) - step));
   }
   camW8(0x66, camR8(0x66) | 2);
 }
 void CutsceneCamera::headBuildB() {   // FUN_8006DEF0
-  int32_t step = mlo(Trig::rsin(c, (int16_t)camR16(0x6e)), (int16_t)camR16(0x6c)) >> 12;
+  int32_t step = mlo(c->trig.rsin((int16_t)camR16(0x6e)), (int16_t)camR16(0x6c)) >> 12;
   int32_t s6  = (int32_t)r16(S + 6);
   int32_t s12 = (int32_t)r16(S + 0x12);
   int32_t d   = (s6 + step) - s12;
@@ -286,17 +286,17 @@ void CutsceneCamera::distSolve() {   // FUN_8006D2AC
   if (mode & 0xff) baseAng += 2048;
   int32_t s0a   = (int16_t)(uint16_t)baseAng;
   int32_t cam22 = (int16_t)camR16(0x22);
-  int32_t s2 = tX + (mlo(Trig::rcos(c, s0a), cam22) << 4);
-  int32_t s1 = tZ - (mlo(Trig::rsin(c, s0a), cam22) << 4);
+  int32_t s2 = tX + (mlo(c->trig.rcos(s0a), cam22) << 4);
+  int32_t s1 = tZ - (mlo(c->trig.rsin(s0a), cam22) << 4);
 
   int32_t g140s = (int16_t)r16(G + 0x140);
   int32_t cam58 = (int32_t)camR32(0x58);
-  int32_t coordX = tX + (mlo(Trig::rcos(c, g140s), cam58) >> 4);
-  int32_t coordZ = tZ - (mlo(Trig::rsin(c, g140s), cam58) >> 4);
+  int32_t coordX = tX + (mlo(c->trig.rcos(g140s), cam58) >> 4);
+  int32_t coordZ = tZ - (mlo(c->trig.rsin(g140s), cam58) >> 4);
   int32_t s2q = (s2 - coordX) >> 8;
   int32_t s1q = (s1 - coordZ) >> 8;
   int32_t s0d = call(T2_ISQRT, mlo(s2q, s2q) + mlo(s1q, s1q)) << 8;
-  int32_t ang = Trig::ratan2(c, -s1q, s2q);
+  int32_t ang = c->trig.ratan2(-s1q, s2q);
   int32_t angd = (ang - (int32_t)r16(G + 0x140) - 1024) & 0xfff;
 
   // 4. smooth cam[+0x14] toward the distance, accumulate into cam[+0x58], place camera X/Z
@@ -317,8 +317,8 @@ void CutsceneCamera::distSolve() {   // FUN_8006D2AC
   camW32(0x14, (uint32_t)cam14);
   int32_t cam58n = cam58 + (cam14 >> 8);
   camW32(0x58, (uint32_t)cam58n);
-  camW32(0x08, (uint32_t)(tX + (mlo(Trig::rcos(c, g140s), cam58n) >> 4)));
-  camW32(0x10, (uint32_t)(tZ - (mlo(Trig::rsin(c, g140s), cam58n) >> 4)));
+  camW32(0x08, (uint32_t)(tX + (mlo(c->trig.rcos(g140s), cam58n) >> 4)));
+  camW32(0x10, (uint32_t)(tZ - (mlo(c->trig.rsin(g140s), cam58n) >> 4)));
 }
 
 // ── angleStep ────────────────────────────────────────────────────────────────────────────────────
@@ -545,7 +545,7 @@ void CutsceneCamera::lookAt() {   // FUN_8006D02C
     Mtx::identity(c, S + 40);
     int32_t sinp = cam_idiv(c, dY  << 12, s18);
     int32_t cosp = cam_idiv(c, s19 << 12, s18);
-    int32_t pitch = (int16_t)Trig::ratan2(c, sinp, cosp);
+    int32_t pitch = (int16_t)c->trig.ratan2(sinp, cosp);
     w16(S + 32, (uint16_t)pitch);
     w16(S + 48, (uint16_t)cosp);
     w16(S + 56, (uint16_t)cosp);
@@ -555,7 +555,7 @@ void CutsceneCamera::lookAt() {   // FUN_8006D02C
     if (s19 != 0) {
       int32_t a = cam_idiv(c, (-dX) << 12, s19);
       int32_t b = cam_idiv(c, dZ    << 12, s19);
-      int32_t yaw = (int16_t)Trig::ratan2(c, a, b);
+      int32_t yaw = (int16_t)c->trig.ratan2(a, b);
       w16(S + 34, (uint16_t)yaw);
       Mtx::identity(c, 0x1F800000u);
       w16(0x1F800000u, (uint16_t)b);
@@ -772,9 +772,9 @@ void CutsceneCamera::initPlace() {   // FUN_8006E918 (init: place the camera X/Z
                                                 : (int16_t)(uint16_t)(0u - (uint32_t)cam56);
   int32_t s1 = (int16_t)(uint16_t)(0u - (uint32_t)r16(0x1F8000EEu));   // -(radius) as int16
   int32_t angle = g140 + (int16_t)r16(cam_ + 0x52) + s0;
-  int32_t cx = (int32_t)(uint16_t)r16(G + 0x2e) + (mlo(Trig::rcos(c, angle), s1) >> 12);
+  int32_t cx = (int32_t)(uint16_t)r16(G + 0x2e) + (mlo(c->trig.rcos(angle), s1) >> 12);
   w16(S + 0x02, (uint16_t)cx);
-  int32_t cz = (int32_t)(uint16_t)r16(G + 0x36) - (mlo(Trig::rsin(c, angle), s1) >> 12);
+  int32_t cz = (int32_t)(uint16_t)r16(G + 0x36) - (mlo(c->trig.rsin(angle), s1) >> 12);
   w16(S + 0x0a, (uint16_t)cz);
 }
 void CutsceneCamera::initSeedGrp(uint32_t src) {   // FUN_8006CBA8 (writes the FIXED driver cam @0x800E8008)

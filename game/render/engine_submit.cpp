@@ -1193,7 +1193,7 @@ void ov_rwalk_b588(Core* c) {
         } else {                                                 // @5f4
           uint32_t v1b = c->mem_r8(node + 0x0D);
           if (v1b & 0x80) {                                      // @5fc≠0 → @604/@684 (v0 computed, then 32/32)
-            int32_t r = ((int32_t)((uint32_t)Trig::rsin(c, (int32_t)((g & 0x0F) << 7)) << 16)) >> 22;   // FUN_80083E80 -> native Trig::rsin
+            int32_t r = ((int32_t)((uint32_t)c->trig.rsin((int32_t)((g & 0x0F) << 7)) << 16)) >> 22;   // FUN_80083E80 -> native Trig::rsin
             c->mem_w8(node + 0x18, (uint8_t)(r + 48)); c->mem_w8(node + 0x19, 32); c->mem_w8(node + 0x1A, 32);
           } else if (v1b & 0x40) {                               // @62c → @634 (v0=32)
             c->mem_w8(node + 0x18, 32); c->mem_w8(node + 0x19, 32); c->mem_w8(node + 0x1A, 32);
@@ -1203,7 +1203,7 @@ void ov_rwalk_b588(Core* c) {
         }
       } else {                                                   // @64c: (v1&0x10)==0
         if (v1 & 0x80) {                                         // @650≠0 → @654/@680/@684 (v0=r+16+32, then 32/32)
-          int32_t r = ((int32_t)((uint32_t)Trig::rsin(c, (int32_t)((g & 0x0F) << 7)) << 16)) >> 22;   // FUN_80083E80 -> native Trig::rsin
+          int32_t r = ((int32_t)((uint32_t)c->trig.rsin((int32_t)((g & 0x0F) << 7)) << 16)) >> 22;   // FUN_80083E80 -> native Trig::rsin
           c->mem_w8(node + 0x18, (uint8_t)(r + 48)); c->mem_w8(node + 0x19, 32); c->mem_w8(node + 0x1A, 32);
         } else {                                                 // @67c → @680/@684 (v0=0+32)
           c->mem_w8(node + 0x18, 32); c->mem_w8(node + 0x19, 32); c->mem_w8(node + 0x1A, 32);
