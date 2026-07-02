@@ -30,6 +30,7 @@ static void d2(Core* c, uint32_t fn, uint32_t a0, uint32_t a1);
 #include "camera/cutscene_camera.h"   // class CutsceneCamera — SOP/BG cutscene camera (0x8006E3B0)
 #include "world/graphics_bind.h"  // ov_obj_set_xformblk (FUN_8006CBD0)
 #include "core/asset.h"           // ov_unpack_group (FUN_80044E84)
+#include "world/spawn.h"          // spawn_dispatch (FUN_8007A980)
 static void d3(Core* c, uint32_t fn, uint32_t a0, uint32_t a1, uint32_t a2);
 
 // Owned synchronous area-DATA load (replaces the body of LAB_80109164 0x80109164). Runs in the
@@ -249,7 +250,8 @@ void ov_sop_field_mode(Core* c) {
       d1(c, 0x8010a8d4u, 0x800f2418u);         // SOP bg-ptr setup
       // 3 scene objects: spawn + stamp fields from the SOP overlay tables @0x8010c98c (stride 12).
       for (int i = 0; i < 3; i++) {
-        d3(c, 0x8007a980u, 3, 3, 1);           // spawn -> node in v0
+        c->r[4] = 3; c->r[5] = 3; c->r[6] = 1; spawn_dispatch(c);   // FUN_8007A980 — native
+
         uint32_t node = c->r[2];
         uint32_t t = 0x8010c98cu + (uint32_t)i * 12;
         c->mem_w16(node + 0x2e, c->mem_r16(t + 0));

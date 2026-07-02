@@ -377,7 +377,7 @@ static uint32_t spawn_and_init(Core* c) {
   uint32_t a0 = c->r[4], a1 = c->r[5], a2 = c->r[6];
   if (c->mem_r8(0x800E7E7Cu) < 7) return 0;
   c->r[4] = 0; c->r[5] = 6; c->r[6] = 1;
-  rec_dispatch(c, 0x8007A980u);
+  spawn_dispatch(c);   // FUN_8007A980 — native
   uint32_t node = c->r[2];
   if (node == 0) return 0;
   if (a1 != 0) {
