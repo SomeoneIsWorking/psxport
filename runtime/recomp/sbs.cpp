@@ -53,6 +53,7 @@
 // own Game instances and never returns (the process exits when the window closes).
 
 #include "game.h"
+#include "render/render.h"    // Render::setPsxRender (per-Core render-path switch)
 #include <cstdio>
 #include <cstring>
 #include <vector>
@@ -74,7 +75,7 @@ void dbg_set_paused(int p);
 extern "C" void watchdog_suspend(void);
 extern "C" void watchdog_disable(void);   // SBS pauses indefinitely on a divergence — kill the frame watchdog
 extern "C" void guest_backtrace_to(Core* c, FILE* out);
-extern "C" int  g_render_psx;                 // engine_render.cpp — 0 = native render walks, 1 = PSX recomp render
+// g_render_psx retired — now per-Core Render::mPsxRender. Reach via g_a/g_b->core.mRender->setPsxRender(bool).
 extern void (*g_store_watch_cb)(Core*, uint32_t a, uint32_t v);   // mem.cpp — armed write-watch callback
 extern "C" int  g_sbs;                        // PSXPORT_SBS: forces 2 VK render targets + skips the in-engine dualview pass
 // Per-core render+readback + front-buffer/display-region accessors (gpu_gpu.cpp / gpu_native.cpp). The SBS
@@ -118,7 +119,16 @@ uint8_t  s_rgba_b[1024 * 512 * 4];
 int      s_wa = 0, s_ha = 0, s_wb = 0, s_hb = 0;
 int      s_mode = M_RENDER;
 int      s_sel  = 0;                            // 0 = A, 1 = B (window + debug-server target core)
-uint32_t s_lo   = 0x800B0000u, s_hi = 0x80110000u;
+// Default diff region covers ALMOST ALL of main RAM (0x80010000..0x80200000, ~2 MB minus the low BIOS
+// vectors + BIOS-owned kernel scratch page). The earlier 384 KB default (0x800B0000..0x80110000) covered
+// only the core engine data window and MISSED everything CD-loaded above it — including area bundles at
+// 0x80182000 (game/audio/music_list.h:29), which carry the per-area VAB/tone bindings. A divergence in
+// VAB-binding between native area-load and psx_fallback area-load lives above 0x80110000, so it never
+// surfaced and the two panes read as "identical" (user observation, 2026-07-02, wrong-SFX investigation).
+// Widen the default so real content-load divergences are caught. Render/asset-write noise in high RAM is
+// filtered by is_render_region() (add addresses there if new noise appears); PSXPORT_SBS_LO/HI still
+// override for narrowed hunts.
+uint32_t s_lo   = 0x80010000u, s_hi = 0x80200000u;
 uint32_t s_frame = 0;                           // lockstep frame counter (since gameplay-start barrier)
 
 // ALL per-machine state is PER-INSTANCE now (bound per core frame-step in native_step_frame): GTE (gte_bind),
@@ -209,16 +219,18 @@ bool nav_step(Core* c, Nav& nv, uint32_t f, const char* tag) {
   return false;
 }
 
-// Per-core, per-step configuration of the SHARED render/gameplay switches (g_render_psx is a global, so it
-// MUST be set right before each core's step). psx_fallback is per-Game, set once at boot.
-void apply_mode(int which) {
+// Per-core render-path config. Now sets THIS core's Render::mPsxRender — no shared global (was the
+// process-global g_render_psx, which contaminated both cores in-process, deglobalize-game 2026-07-02).
+// psx_fallback is per-Game, set once at boot; render mode is set per core, per step.
+void apply_mode(Game* g, int which) {
+  Render* r = g->core.mRender;
   switch (s_mode) {
-    case M_RENDER:   g_render_psx = which;            break;   // A native render (0), B PSX render (1)
-    case M_GAMEPLAY: g_render_psx = 1;                break;   // PSX render on BOTH (isolate gameplay)
-    case M_BOTH:     g_render_psx = which;            break;   // A native render, B PSX render
-    case M_ORACLE:   g_render_psx = 0;                break;   // A native; B never consults this (use_interp
-                                                                // bypasses the native/PSX g_render_psx flip
-                                                                // entirely — it's fully interpreted+soft-rasterized)
+    case M_RENDER:   r->setPsxRender(which != 0);    break;   // A native render (0), B PSX render (1)
+    case M_GAMEPLAY: r->setPsxRender(true);           break;   // PSX render on BOTH (isolate gameplay)
+    case M_BOTH:     r->setPsxRender(which != 0);    break;   // A native render, B PSX render
+    case M_ORACLE:   r->setPsxRender(false);          break;   // A native; B never consults this
+                                                                // (use_interp bypasses the render flip
+                                                                // entirely — fully interpreted+soft-rasterized)
   }
 }
 
@@ -284,7 +296,7 @@ void step_core(Game* g, int which) {
       if (sm && c->mem_r16(sm + 0x48u) == 1)                 // SM[0x48]==1 -> intro-FMV sub-state (s1)
         c->mem_w8(0x1f80019du, 1);                           // request skip (the game's Start-skip flag)
     } }
-  apply_mode(which);
+  apply_mode(g, which);
   gpu_gpu_select_target(which);        // single VK target under g_sbs_rl: both cores emit into batch 0
   dc_step_frame(&g->core, s_frame);   // native_step_frame binds THIS core's per-instance GTE/SPU/MDEC/CD
 }

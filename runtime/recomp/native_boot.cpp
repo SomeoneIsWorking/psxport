@@ -22,6 +22,7 @@
 #include "c_subsys.h"
 #include "cfg.h"
 #include "asset.h"     // class Asset — c->engine.asset (unpackGroup / uploadImage / preload*)
+#include "render/render.h"  // Render::setPsxRender/psxRender (per-Core render-path switch)
 #include "audio/music_list.h"   // native sound-test: music_list_play/stop (engine/audio/)
 #include <stdio.h>
 #include <stdlib.h>
@@ -66,7 +67,7 @@ extern "C" void perf_frame_begin(void), perf_mark_pre(void), perf_frame_end(void
 // Save/restore of full guest state (main RAM + scratchpad + GTE regs) lives in dualview_snapshot.cpp
 // (dv_snapshot / dv_capture_post / dv_restore_pre / dv_restore_post + g_dv_have_pre). See
 // native_step_frame's dual-view block below for how the sequence is driven.
-extern "C" int g_dualview;       // defined in engine_render.cpp
+// g_dualview retired 2026-07-02 — per-Core Render::mDualview / dualview() / setDualview(bool).
 extern "C" int g_sbs;            // defined in sbs.cpp (PSXPORT_SBS two-core side-by-side harness)
 
 static void native_step_frame(Core* c, uint32_t f) {
@@ -153,10 +154,10 @@ static void native_step_frame(Core* c, uint32_t f) {
     // so the PSX pass must run from the PRE-render state captured in ov_field_frame (dv_snapshot, before
     // the native render ran), not from the post-native-render state. We then restore the POST-FRAME state
     // so the canonical game (which includes the post-render per-frame area update) is undisturbed.
-    extern int g_dualview, g_dv_have_pre; extern void gpu_gpu_select_target(int);
+    extern int g_dv_have_pre; extern void gpu_gpu_select_target(int);
     // SBS owns BOTH panes (core A | core B); its target-1 batch is core B's render, NOT a PSX re-render of
     // THIS core — so skip the in-engine dualview second pass. g_sbs declared at file scope below.
-    if (g_dualview && g_dv_have_pre && !g_sbs) {
+    if (c->mRender->dualview() && g_dv_have_pre && !g_sbs) {
       dv_capture_post(c);            // save the real post-frame canonical state
       dv_restore_pre(c);             // rewind to the pre-render (post-gameplay) state the PSX pass needs
       rc2(c, 0x80081458, envp, 0x800);                          // ClearOTagR(ot, 0x800)
@@ -573,14 +574,15 @@ void native_boot_run(Core* c) {
     fprintf(stderr, "[native_boot] psx_fallback=%d (%s)\n", c->game->psx_fallback,
             c->game->psx_fallback ? "native boot+frameloop, PSX everything else (sync)" : "full native"); }
   // RENDER-path compare switch: PSXPORT_RENDER_PSX renders the field via the PSX recomp path (native state).
-  { extern int g_render_psx; const char* r = cfg_str("PSXPORT_RENDER_PSX");
-    if (r && *r) g_render_psx = (atoi(r) != 0);
-    if (g_render_psx) fprintf(stderr, "[native_boot] g_render_psx=1 (field render via PSX recomp path)\n"); }
+  // Per-Core now (Render::mPsxRender) — was the process-global g_render_psx.
+  { const char* r = cfg_str("PSXPORT_RENDER_PSX");
+    if (r && *r) c->mRender->setPsxRender(atoi(r) != 0);
+    if (c->mRender->psxRender()) fprintf(stderr, "[native_boot] Render::psxRender=1 (field render via PSX recomp path)\n"); }
   // DUAL-VIEW: render the SAME game state TWICE per frame — engine-native (left) + PSX-recomp (right) — and
   // composite side by side. Set at launch (PSXPORT_DUALVIEW=1) so the GPU allocates two geometry batches.
-  { extern int g_dualview; const char* r = cfg_str("PSXPORT_DUALVIEW");
-    if (r && *r) g_dualview = (atoi(r) != 0);
-    if (g_dualview) fprintf(stderr, "[native_boot] g_dualview=1 (side-by-side native | PSX render)\n"); }
+  { const char* r = cfg_str("PSXPORT_DUALVIEW");
+    if (r && *r) c->mRender->setDualview(atoi(r) != 0);
+    if (c->mRender->dualview()) fprintf(stderr, "[native_boot] Render::dualview=1 (side-by-side native | PSX render)\n"); }
   // Intro FMVs: the real boot is SCEA (stub) -> Whoopee logo (LOGO.STR) -> opening movie (OP.STR) ->
   // title/menu. The game's own STR streaming (strNext) TIMES OUT under our runtime (we don't feed
   // CD-streamed FMV sectors to its StrPlayer — see "time out in strNext()" in the DEMO stage), so the

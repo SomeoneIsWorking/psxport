@@ -15,6 +15,8 @@
 #include "r3000.h"
 #include "cfg.h"
 #include "gpu_native_internal.h"   // shared VRAM/state/helpers (also used by gpu_debug.cpp)
+#include "mods.h"                   // g_mods.fps60 (was g_fps60_on)
+#include "render/render.h"          // Render::mDbgRenderNode (was g_dbg_render_node)
 #include "scea_asset.h"            // baked SCEA license-screen texture+CLUT (PC-native boot splash)
 #include <stdio.h>
 #include <stdlib.h>
@@ -24,7 +26,7 @@
 #include <SDL3/SDL.h>
 #endif
 
-extern int g_fps60_on;           // fps60: capture/synth enabled (PSXPORT_FPS60); 0 = faithful path
+// g_fps60_on retired — read g_mods.fps60 (mods.h; #included above)
 // VRAM_W/VRAM_H and vram() now live in gpu_native_internal.h
 
 // ---- Draw state (set by GP0 env commands E1..E6) ------------------------------------
@@ -844,9 +846,9 @@ void GpuState::gp0_exec(Core* core) {
               int64_t w1=edge(ax,ay,xs[i2],ys[i2],xs[i0],ys[i0]); int64_t w2=edge(ax,ay,xs[i0],ys[i0],xs[i1],ys[i1]);
               return (w0>=0&&w1>=0&&w2>=0)||(w0<=0&&w1<=0&&w2<=0); };
             int cover = intri(0,1,2) || (nv==4 && intri(1,2,3));
-            if (cover) { static int n=0; extern uint32_t g_dbg_render_node; if (n++<6000)
+            if (cover) { static int n=0; if (n++<6000)
               fprintf(stderr,"[primat] f%d objnode=%08X pktnode=%08X op=%02X is3d=%d bg=%d bb=%d semi=%d tex=%d mode=%d raw=%d tp=(%d,%d) clut=(%d,%d) uv0=(%d,%d) da=(%d,%d)-(%d,%d) off=(%d,%d) col=(%d,%d,%d) bbox=(%d,%d)-(%d,%d)\n",
-                s_frame, g_dbg_render_node, s_cur_node, op, is3d, bg, billboard, semi, textured?1:0, mode, rw, s_tp_x, s_tp_y, s_clut_x, s_clut_y,
+                s_frame, core->mRender->mDbgRenderNode, s_cur_node, op, is3d, bg, billboard, semi, textured?1:0, mode, rw, s_tp_x, s_tp_y, s_clut_x, s_clut_y,
                 us[0], vs[0], s_da_x0,s_da_y0,s_da_x1,s_da_y1, s_off_x,s_off_y,
                 rs[0],gs[0],bs[0], bx0,by0,bx1,by1); } } }
         // PSXPORT_PAINTFG=1 (diag): force every 2D-FG (HUD-band) poly to opaque solid magenta so we can SEE

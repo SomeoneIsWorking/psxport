@@ -1,6 +1,7 @@
 // Engine-owned render queue — see render_queue.h. Per-instance state lives on Game (game.h);
 // the free rq_* API forwards to core->game->rq.
 #include "render_queue.h"
+#include "render.h"    // Render::mDbgRenderNode (was g_dbg_render_node)
 #include "game.h"
 #include "cfg.h"
 #include "mods.h"
@@ -232,8 +233,7 @@ void RenderQueue::flush(Core* core) {
   // exactly why the SBS panes rendered black (worldquads queued, batch tex=0). In diff_mode the SBS
   // composite reads the geometry batch directly via gpu_gpu_render_readback, so the flush MUST do the
   // inline emit to fill that batch. Gate the fps60 capture on !diff_mode.
-  extern int g_fps60_on;
-  if (g_fps60_on && !core->game->diff_mode) { core->game->fps60.rq_capture(items, n); mark_consumed(); return; }
+  if (g_mods.fps60 && !core->game->diff_mode) { core->game->fps60.rq_capture(items, n); mark_consumed(); return; }
   if (!n) { mark_consumed(); return; }
   // `debug rqhist` (diag): per-frame histogram of what the queue actually emits, by layer × opaque/semi.
   // Answers "the native field shows only sky/sea — is the LAND geometry even being queued as opaque world
@@ -378,8 +378,8 @@ void rq_emit_or_queue(Core* core, int capture, int layer, int order_mode, int nv
   it.fps_world = 0;   // fps60 capture: cleared here, set only by fps60_stamp_world on GTE-composed world prims
   // objid overlay: stamp the entity node the native render walk is currently rendering (engine_submit.cpp).
   // Every world prim an object emits gets its node, so the overlay labels ALL rendered objects. Terrain/
-  // static/background prims render with no per-object scope (g_dbg_render_node==0) → correctly unlabeled.
-  { extern uint32_t g_dbg_render_node; it.dbg_node = (layer == RQ_WORLD) ? g_dbg_render_node : 0; }
+  // static/background prims render with no per-object scope (mDbgRenderNode==0) → correctly unlabeled.
+  it.dbg_node = (layer == RQ_WORLD) ? core->mRender->mDbgRenderNode : 0;
   // Shadow capture: an opaque world prim with view-space verts casts into the shadow map. Carried on the
   // item so gpu_emit_rq_item re-pushes it to the shadow VBO on EVERY emit (= on both 60fps present passes).
   it.sh_cast = sv ? 1 : 0;

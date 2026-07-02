@@ -7,7 +7,7 @@
 // wrappers. The whole tier is RENDER-SIDE (never writes guest RAM) and gated behind PSXPORT_FPS60.
 //
 // STAYS SHARED (not here): the config-caches s_disp_gate/s_ocen_gate/s_sdbg + the live UI gate
-// g_fps60_on (a process-wide mode toggle, edited by the overlay) + function-local diag statics.
+// g_mods.fps60 (the overlay-edited persistent user setting) + function-local diag statics.
 #ifndef FPS60_INTERNAL_H
 #define FPS60_INTERNAL_H
 #include <stdint.h>

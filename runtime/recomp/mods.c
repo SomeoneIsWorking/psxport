@@ -7,8 +7,6 @@
 
 ModState g_mods;
 static int s_done = 0;
-extern int g_fps60_on;   // engine/fps60.c — 60fps interpolation gate (persisted with the mods)
-int g_fps60_on_get(void) { return g_fps60_on; }
 
 // Settings persistence — this is a PC GAME: the in-overlay choices (aspect, internal res, SSAO/light,
 // 60fps, their params) are written to a settings file and restored next launch. Path: PSXPORT_SETTINGS
@@ -19,7 +17,7 @@ static const char* mods_path(void) { const char* p = cfg_str("PSXPORT_SETTINGS")
 void mods_save(void) {
   FILE* f = fopen(mods_path(), "w"); if (!f) return;
   fprintf(f, "aspect=%d\nires=%d\nires_auto=%d\nssao=%d\nlight=%d\nshadows=%d\nfps60=%d\n",
-          g_mods.aspect, g_mods.ires, g_mods.ires_auto, g_mods.ssao, g_mods.light, g_mods.shadows, g_fps60_on);
+          g_mods.aspect, g_mods.ires, g_mods.ires_auto, g_mods.ssao, g_mods.light, g_mods.shadows, g_mods.fps60);
   fprintf(f, "ssao_strength=%g\nssao_radius=%g\nssao_bias=%g\nssao_range=%g\nshadow_strength=%g\n",
           g_mods.ssao_strength, g_mods.ssao_radius, g_mods.ssao_bias, g_mods.ssao_range, g_mods.shadow_strength);
   fprintf(f, "light_dir=%g,%g,%g\nlight_ambient=%g\nlight_diffuse=%g\n",
@@ -40,7 +38,7 @@ void mods_load(void) {
     else if (!strcmp(k, "light"))         g_mods.light = atoi(v);
     else if (!strcmp(k, "shadows"))       g_mods.shadows = atoi(v);
     else if (!strcmp(k, "shadow_strength")) g_mods.shadow_strength = (float)atof(v);
-    else if (!strcmp(k, "fps60"))         g_fps60_on = atoi(v);
+    else if (!strcmp(k, "fps60"))         g_mods.fps60 = atoi(v);
     else if (!strcmp(k, "ssao_strength")) g_mods.ssao_strength = (float)atof(v);
     else if (!strcmp(k, "ssao_radius"))   g_mods.ssao_radius = (float)atof(v);
     else if (!strcmp(k, "ssao_bias"))     g_mods.ssao_bias = (float)atof(v);

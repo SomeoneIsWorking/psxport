@@ -37,7 +37,7 @@
 extern "C" {
 #include "mods.h"
 }
-extern "C" int g_fps60_on;                  // engine/fps60.c — the 60fps interpolation gate
+// g_fps60_on retired — read g_mods.fps60 (mods.h; #included above via the overlay's other includes)
 extern "C" int cfg_on(const char* name);    // cfg.c
 void gpu_gpu_video_status(int* native_w, int* ires, int* fbw, int* fbh, int* ww, int* wh, int* ires_cap);
 
@@ -73,7 +73,7 @@ static bool row_value_text(const std::string& kind, const std::string& id, std::
             int a = g_mods.aspect; if (a < 0 || a > 3) a = 0; out = A[a]; return true;
         }
         if (id == "ires_auto") { out = g_mods.ires_auto ? "On" : "Off"; return true; }
-        if (id == "fps60")     { out = g_fps60_on ? "On" : "Off"; return true; }
+        if (id == "fps60")     { out = g_mods.fps60 ? "On" : "Off"; return true; }
         if (id == "ssao")      { out = g_mods.ssao ? "On" : "Off"; return true; }
         if (id == "light")     { out = g_mods.light ? "On" : "Off"; return true; }
         if (id == "shadows")   { out = g_mods.shadows ? "On" : "Off"; return true; }
@@ -100,7 +100,7 @@ static bool row_value_text(const std::string& kind, const std::string& id, std::
 static void do_toggle(const std::string& id) {
     if (id == "aspect")          g_mods.aspect = (g_mods.aspect + 1) & 3;
     else if (id == "ires_auto")  g_mods.ires_auto = !g_mods.ires_auto;
-    else if (id == "fps60")      g_fps60_on = !g_fps60_on;
+    else if (id == "fps60")      g_mods.fps60 = !g_mods.fps60;
     else if (id == "ssao")       g_mods.ssao = !g_mods.ssao;
     else if (id == "light")      g_mods.light = !g_mods.light;
     else if (id == "shadows")    g_mods.shadows = !g_mods.shadows;

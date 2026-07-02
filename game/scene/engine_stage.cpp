@@ -42,7 +42,7 @@
 extern int g_pkt_track; extern uint32_t g_pkt_lo, g_pkt_hi;
 extern "C" void dv_snapshot(Core*);    // capture post-gameplay/pre-render guest state (native_boot.cpp)
 extern "C" void dv_restore_pre(Core*); // restore that snapshot (native_boot.cpp)
-extern "C" int  g_render_psx, g_dualview;   // engine_render.cpp — render-path compare switches
+// (g_render_psx + g_dualview both retired 2026-07-02 — reach as c->mRender->psxRender() / dualview())
 struct FFSpan { const char* name; uint32_t lo, hi; };
 static FFSpan s_ffspan[40]; static int s_ffspan_n = 0; static int s_bdtag = -1;
 static inline int bdtag_on() { if (s_bdtag < 0) s_bdtag = cfg_str("PSXPORT_BDTAG") ? 1 : 0; return s_bdtag; }
@@ -422,7 +422,7 @@ void Engine::fieldFrame() { Core* c = core;
   // freeze (+ the game_coop r29 SP leak that grew the red corruption). Removing it fixes all of it at once.
   // The TRUE end-state (make ov_render_frame write ZERO guest memory so dv_snapshot/restore can go too) is a
   // separate perf/architecture follow-up; the rewind correctly enforces the invariant meanwhile.
-  if (!g_render_psx && !g_dualview && c->mem_r8(0x1f800136u) < 2) {
+  if (!c->mRender->psxRender() && !c->mRender->dualview() && c->mem_r8(0x1f800136u) < 2) {
     dv_restore_pre(c);
   }
   FFS("ff_77d8c", c->engine.postRenderTick());   // 0x80077d8c NATIVE (Engine::postRenderTick)

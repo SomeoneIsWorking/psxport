@@ -9,6 +9,7 @@
 #include "cfg.h"
 #include "asset.h"
 #include "audio/music_list.h"
+#include "render/render.h"    // Render::psxRender / setPsxRender (per-Core render-path switch)
 #include "guest_call.h"
 #include "repl.h"
 #include <stdio.h>
@@ -224,10 +225,10 @@ long native_repl_read(Core* c, uint32_t f) {
     // renderpsx on|off — render the FIELD via the PSX recomp path (vs the native world-coord path) with the
     // SAME native game state, for a native-vs-PSX RENDER diff (must match at 1x/4:3/30fps). Diagnostic.
     else if (!strcmp(cmd, "renderpsx")) {
-      extern int g_render_psx; char st[16] = {0};
+      char st[16] = {0};
       if (sscanf(line, "%*s %15s", st) == 1)
-        g_render_psx = (!strcmp(st, "off") || !strcmp(st, "0")) ? 0 : 1;
-      fprintf(stderr, "[repl] g_render_psx = %d\n", g_render_psx);
+        c->mRender->setPsxRender(!(!strcmp(st, "off") || !strcmp(st, "0")));
+      fprintf(stderr, "[repl] Render::psxRender = %d\n", c->mRender->psxRender());
     }
     // seqsolo <i> — stop ALL open libsnd sequences then SsSeqPlay just sequence <i> at full vol, via the
     // GAME'S OWN sequencer. Lets each area SEP sequence be rendered in isolation (the area's field theme

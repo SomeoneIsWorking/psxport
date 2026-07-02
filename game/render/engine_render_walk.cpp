@@ -70,7 +70,7 @@ void Render::perObjFlush() {
 // through the native float-projection submitters (eproj + D32 depth + engine lighting). This is the
 // single mechanism depth/60fps/ires/lighting attach to. It runs as its OWN pass (not bolted onto the
 // PSX OT-walk) so the draw state is the native pass's. Gated `debug scenenative` while standing it up.
-extern "C" int g_scene_native_diag;  int g_scene_native_diag = 0;   // counters for the bring-up probe
+// (g_scene_native_diag was defined here but never read; dead — removed 2026-07-02)
 extern "C" long g_sn_objs, g_sn_cmds; long g_sn_objs = 0, g_sn_cmds = 0;
 // NATIVE BACKDROP tilemap drawer — overlay FUN_80115598 (the seaside field's state-0 background drawer,
 // reached via 0x8003df04's 16-state jump table @0x80014fc0; state 0 → 0x8003df74 → 0x80115598). This is the
@@ -209,7 +209,7 @@ void Render::sceneNative() { Core* c = mCore;
 void Render::perObjRender() {
   Core* c = mCore;
   uint32_t node = c->r[4];
-  g_dbg_render_node = node;                               // objid: tag this object's prims
+  c->mRender->mDbgRenderNode = node;                      // objid: tag this object's prims
   c->mem_w32(SCR + 0x28C, node);                          // current render object (read by downstream code)
   uint32_t idx = c->mem_r8(node + 0xD) & 0xB;
   if (idx >= 9) return;                                // not rendered
@@ -223,7 +223,7 @@ void Render::perObjRender() {
   else                    { rec_super_call(c, 0x8003CCA4u); }                          // secondary-effect case
   if (sess.close(&slo, &shi)) { float od = obj_world_ord(c, node);   // PC-native depth from real world position
     gpu_obj_depth_add(c, slo, shi, od); fps60_bb_node(c, slo, shi, node); }   // fps60: this object's billboards reproject at midpoint
-  g_dbg_render_node = 0;                                  // objid: end this object's render scope
+  c->mRender->mDbgRenderNode = 0;                         // objid: end this object's render scope
 }
 // NATIVE seaside-area GROUND/BG node renderer — OVERLAY 0x8013E9D8 (the renderfn of the field's BG/world
 // node 0x800FC5C0, dispatched by the master render-list walk's default case). The recomp wrapper: copy a
@@ -468,9 +468,9 @@ void Render::renderWalkSnapshot() {
     // Render the object, tagging the packet-pool span it produces with its PC-native world-position depth
     // so its 2D billboard prims (collectable quads, etc.) occlude for real at the deferred OT walk.
     uint32_t slo, shi; PktSpanSession sess;
-    g_dbg_render_node = node;                                // objid: tag every prim this object emits
+    c->mRender->mDbgRenderNode = node;                       // objid: tag every prim this object emits
     rq_dispatch_case(c, node, tgt);                          // run the object's per-type renderer (guest content)
-    g_dbg_render_node = 0;
+    c->mRender->mDbgRenderNode = 0;
     if (sess.close(&slo, &shi)) { float od = obj_world_ord(c, node);   // PC-native depth from real world position
       gpu_obj_depth_add(c, slo, shi, od); fps60_bb_node(c, slo, shi, node); }   // fps60: object billboards reproject at midpoint
   }

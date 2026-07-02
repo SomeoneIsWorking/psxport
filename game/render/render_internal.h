@@ -16,17 +16,17 @@ float proj_camview_world_ord(float wx, float wy, float wz);
 int   camview_valid(void);
 float proj_obj_center_ord(void);
 void  fps60_record_billboard_span(Core* c, uint32_t lo, uint32_t hi, uint32_t ident);
-extern int g_fps60_on;
+// g_fps60_on retired — read g_mods.fps60 (mods.h)
 
-// The entity node the native render walk is currently rendering (set around each per-object dispatch). The
-// PER-INSTANCE identity for every prim an object emits — including a 2D billboard whose quad rasterizes
-// later at the OT walk. Shared with gpu_native (objid overlay) and both render subsystems.
-extern uint32_t g_dbg_render_node;
+// g_dbg_render_node retired 2026-07-02 — per-Core Render::mDbgRenderNode (set around each per-object
+// dispatch in the native render walk; PER-INSTANCE identity for every prim an object emits, incl.
+// billboards rasterized later at the OT walk).
+#include "render.h"    // Render (needed for cur_render_node below)
 
 // The real per-instance render object: the walk's node when set, else the guest "current render object"
 // scratch (0x1F80028C). Prefer the native walk's node — 0x28C is shared/stale for some billboard paths.
 static inline uint32_t cur_render_node(Core* c) {
-  return g_dbg_render_node ? g_dbg_render_node : c->mem_r32(0x1F80028Cu);
+  return c->mRender->mDbgRenderNode ? c->mRender->mDbgRenderNode : c->mem_r32(0x1F80028Cu);
 }
 
 // The engine's PC-native depth for an object: project its REAL spawned WORLD position (node+0x2e/0x32/0x36)
@@ -44,7 +44,7 @@ static inline float obj_world_ord(Core* c, uint32_t node) {
 
 // fps60: record the billboard entry mirroring a just-published gpu_obj_depth_add(span, node-depth).
 static inline void fps60_bb_node(Core* c, uint32_t lo, uint32_t hi, uint32_t node) {
-  if (g_fps60_on || g_mods.debug_ids || cfg_dbg("objid")) fps60_record_billboard_span(c, lo, hi, node);
+  if (g_mods.fps60 || g_mods.debug_ids || cfg_dbg("objid")) fps60_record_billboard_span(c, lo, hi, node);
 }
 
 // NESTING-SAFE packet-pool span tracking (issue #4 — ropes/flames drew over terrain). Per-object depth

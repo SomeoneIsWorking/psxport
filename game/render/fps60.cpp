@@ -26,7 +26,7 @@ extern "C" {  // Beetle GTE (mednafen gte.c, compiled as C)
 #include <string.h>
 
 
-int g_fps60_on = 0;          // read by the gte_op tap; set by fps60_init from PSXPORT_FPS60
+// g_fps60_on retired 2026-07-02 — read g_mods.fps60 (persisted with the other user settings in mods.h)
 
 // ---- per-frame projected-geometry fingerprint (rate detector input) -----------------
 
@@ -123,7 +123,7 @@ static uint32_t interp_packed(uint32_t a, uint32_t b) {
 
 // gte_op RTP tap. op 0x01 = RTPS (one new SXY, DR14); 0x30 = RTPT (three, DR12/13/14).
 void Fps60::rtp(uint32_t op) {
-  if (!g_fps60_on) return;
+  if (!g_mods.fps60) return;
   s_rtp_calls++; if (current_object) s_rtp_with_obj++;
   xobj_rtp(op);                 // capture this vertex's GTE transform-group (native object)
   unsigned lo = (op == 0x30) ? 12 : 14, hi = 14;
@@ -137,7 +137,7 @@ void Fps60::rtp(uint32_t op) {
 
 // gp0_exec polygon tap: join the packet's lead vertex to a captured SXY.
 void Fps60::join_poly(int px, int py) {
-  if (!g_fps60_on) return;
+  if (!g_mods.fps60) return;
   if (grid_get(px, py)) s_join_hit++; else s_join_miss++;
 }
 
@@ -155,7 +155,7 @@ static void rate_tick(RateDet* d, uint64_t set_hash) {
 
 // ---- per-logic-frame fence (games_tomba2.c ov_frame_update) -------------------------
 void Fps60::frame_commit(Core* core) {
-  if (!g_fps60_on) return;
+  if (!g_mods.fps60) return;
   uint64_t set_hash = (s_frame_geom > 0) ? s_frame_hash : 0xFFFFFFFFFFFFFFFFull;
   rate_tick(&s_rd, set_hash);
   s_fence++;
@@ -259,7 +259,7 @@ static int s_nBBCur = 0;
 // (which labels billboards with their object id in any mode). So record/lookup/stamp whenever EITHER is
 // active. In 60fps-off mode the registry is reset per frame from the render queue (fps60_bb_frame_reset,
 // called from RenderQueue::push); the 60fps path resets it in frame_commit as before.
-static inline int bb_active(void) { return g_fps60_on || g_mods.debug_ids || cfg_dbg("objid"); }
+static inline int bb_active(void) { return g_mods.fps60 || g_mods.debug_ids || cfg_dbg("objid"); }
 void fps60_bb_frame_reset(void) { s_nBBCur = 0; }
 // (GTE_ReadCR is declared in the extern "C" block at the top of this file.)
 
@@ -545,8 +545,8 @@ void Fps60::fps60_present_vk(Core* core) {
 }
 
 void fps60_init(void) {
-  // 60fps is toggled in the F1 overlay (persisted to psxport_settings.ini via mods); g_fps60_on is loaded
+  // 60fps is toggled in the F1 overlay (persisted to psxport_settings.ini via mods); g_mods.fps60 is loaded
   // by mods_init BEFORE this runs. NO env gate (user directive): do not read PSXPORT_FPS60 — that would
   // clobber the persisted overlay setting. Just report the loaded state.
-  if (g_fps60_on) fprintf(stderr, "[fps60] interpolated 60fps ON (overlay)\n");
+  if (g_mods.fps60) fprintf(stderr, "[fps60] interpolated 60fps ON (overlay)\n");
 }

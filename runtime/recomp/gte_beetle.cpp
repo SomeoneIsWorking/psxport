@@ -139,7 +139,7 @@ void ws_sx_dump(const char* tag) {
   s_sx_n = s_sx_oob_lo = s_sx_oob_hi = 0;
 }
 
-extern int g_fps60_on;                            // fps60.c: gates the capture taps
+#include "mods.h"                                 // g_mods.fps60 gates the capture tap (was g_fps60_on)
 
 // --- GTE/lighting RE probe (PSXPORT_GTEPROBE=N) -------------------------------------------------
 // Logs which GTE commands ACTUALLY execute (static call-site counts in generated/ aren't run-weighted)
@@ -553,7 +553,7 @@ void     gte_op(Core* c, uint32_t insn)         { GTE_Instruction(insn);
                                                    if (op == 0x01 || op == 0x30) {
                                                      ws_sx_record();          // self-gated (PSXPORT_WS_SXHIST)
                                                      rtpcaller_record(c->r[31]);   // self-gated (PSXPORT_RTPCALLER)
-                                                     if (g_fps60_on) c->game->fps60.rtp(op);
+                                                     if (g_mods.fps60) c->game->fps60.rtp(op);
                                                      if (s_projprobe < 0) { s_projprobe = cfg_on("PSXPORT_PROJPROBE") ? 1 : 0;
                                                                             if (s_projprobe && !s_divtab_init) proj_divtab_init(); }
                                                      if (s_projprobe > 0) {

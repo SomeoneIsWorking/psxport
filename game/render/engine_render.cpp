@@ -41,11 +41,8 @@ static inline void d1(Core* c, uint32_t fn, uint32_t a0) { c->r[4] = a0; rec_dis
 // touching the native frame loop / game state, so the SAME deterministic guest state can be rendered both
 // ways and diffed (native must match PSX under 1x / 4:3 / 30fps). Set by PSXPORT_RENDER_PSX / REPL
 // `renderpsx on|off`. This is a verification instrument, NOT a shipped behavior toggle.
-extern "C" { int g_render_psx = 0; }
-// DUAL-VIEW: render ONE game state two ways side by side (engine-native left | PSX-recomp right). Set at
-// launch (PSXPORT_DUALVIEW). The second (PSX) render pass is driven by native_step_frame; this flag gates
-// the GPU's two-batch allocation + side-by-side present. (REPL `dualview on|off` mirrors PSXPORT_DUALVIEW.)
-extern "C" { int g_dualview = 0; }
+// g_render_psx REMOVED (2026-07-02, deglobalize-game): now Render::mPsxRender / psxRender().
+// g_dualview  REMOVED (2026-07-02, deglobalize-game): now Render::mDualview / dualview().
 
 // 0x8003f9a8 — per-frame render orchestrator. The render-queue WALK passes (0x8003bf00/eec0/b588/bb50/bcf4/
 // c048) are owned SOLELY by ov_scene_native (engine_render_walk.cpp), which ov_draw_otag already runs every
@@ -54,7 +51,7 @@ extern "C" { int g_dualview = 0; }
 extern "C" void ffspan_begin(void), ffspan_end(const char*);   // PSXPORT_BDTAG attribution (engine_stage.cpp)
 void Render::frame() { Core* c = mCore;
   if (cfg_dbg("rfprobe")) { static int n=0; if ((n++ % 60)==0) fprintf(::stderr,"[rfprobe] ov_render_frame run #%d\n", n); }
-  if (g_render_psx) { d0(c, 0x8003f9a8u); return; }   // COMPARE: render the field via the PSX recomp path
+  if (mPsxRender) { d0(c, 0x8003f9a8u); return; }   // COMPARE: render the field via the PSX recomp path
   ffspan_begin(); d0(c, 0x8004fd30u); ffspan_end("rf_4fd30");
   ffspan_begin(); d0(c, 0x80025d98u); ffspan_end("rf_25d98");   // 2D atlas SPRITE band (op-0x65)
   // DIAG groundnative: route the ground table real-depth via Render::fieldEntityRender. Decode is CORRECT, but
@@ -68,7 +65,7 @@ void Render::frame() { Core* c = mCore;
 // 0x8003fa44 — mid-transition render orchestrator twin (reduced pass set). The walk cluster is owned by
 // ov_scene_native (see ov_render_frame above); only the non-walk passes remain here.
 void Render::frameX() { Core* c = mCore;
-  if (g_render_psx) { d0(c, 0x8003fa44u); return; }   // COMPARE: render the field via the PSX recomp path
+  if (mPsxRender) { d0(c, 0x8003fa44u); return; }   // COMPARE: render the field via the PSX recomp path
   d0(c, 0x8004fd30u);
   d0(c, 0x80025d98u);
   d0(c, 0x8003f024u);
