@@ -36,10 +36,7 @@
 
 void rec_super_call(Core*, uint32_t);   // interpret the original PSX body (super-call / A/B oracle)
 void fps60_init(void);            // fps60: read PSXPORT_FPS60
-// geomblk capture probe (engine_submit.c): the LAST object the cull ran on. Unlike g_current_object this is
-// NOT restored on return — a handler calls its cull (FUN_8007712c) then immediately submits its geometry, so
-// across that submit g_render_object identifies the rendering object. Pure probe key; no gameplay effect.
-uint32_t g_render_object = 0;
+// g_render_object retired 2026-07-03 — was defined + written by Cull::objectCull but never read; dead.
 // g_fps60_on retired — read g_mods.fps60 (mods.h)
 extern "C" void spu_audio_frame(void);        // SPU: advance the mixer one frame + feed the audio device
 extern "C" void spu_audio_frame_logic(void);  // SPU: advance XA stream for game logic only (SBS diff_mode)

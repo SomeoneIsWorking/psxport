@@ -247,7 +247,7 @@ void cd_to_spu_mix(Core* c, int on) { c->r[A0] = on ? 1 : 0; rec_dispatch(c, 0x8
 // Diagnostic: trace the game's CD-volume fade state + XA stream lifecycle, on change only.
 // tgt/cur = DAT_800be222/224 (fade target/current), mas = DAT_800be220 (master),
 // 19a/137 = state bytes gating FUN_80075824's ramp, song = 0x800bed80, gate = 0x801fe0e0.
-extern volatile uint32_t g_bgm_frame;
+// g_bgm_frame retired — c->game->timing.logicFrame.
 void xa_audio_trace(Core* c, const char* tag) {
   if (!cfg_str("PSXPORT_XA_DBG")) return;
   static int t=1<<30,cur,mas,s19a,s137,song,act,lp,gate;
@@ -257,7 +257,7 @@ void xa_audio_trace(Core* c, const char* tag) {
   int ngate=c->mem_r16(0x801fe0e0)&0xffff;
   if (nt!=t||ncur!=cur||nmas!=mas||n19a!=s19a||n137!=s137||nsong!=song||nact!=act||nlp!=lp||ngate!=gate) {
     fprintf(stderr,"[xa f%u %-5s] tgt=%d cur=%d mas=%d 19a=%d 137=%d song=%d act=%d loop=%d gate=%d\n",
-            g_bgm_frame,tag,nt,ncur,nmas,n19a,n137,nsong,nact,nlp,ngate);
+            c->game->timing.logicFrame,tag,nt,ncur,nmas,n19a,n137,nsong,nact,nlp,ngate);
     t=nt;cur=ncur;mas=nmas;s19a=n19a;s137=n137;song=nsong;act=nact;lp=nlp;gate=ngate;
   }
 }

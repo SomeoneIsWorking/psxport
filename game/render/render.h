@@ -12,6 +12,7 @@
 #include "render_mode.h"
 #include "render_diag.h"
 #include "pkt_span.h"
+#include "dualview_snapshot.h"
 class Core;
 
 class Render {
@@ -19,10 +20,11 @@ public:
   Core* mCore = nullptr;
 
   // ---- render-side per-Core subsystems ------------------------------------
-  RenderMode mode;         // compare-mode toggles (psxRender / dualview)
-  RenderDiag diag;         // per-object walk-scope tags (currentNode, currentGeomblk)
-  PktSpan    pktSpan;      // packet-pool store-address-span tracker (per-Core; Core::mem_w* calls track)
-  NodeXform mNodeXform;   // scene-node WORLD-TRANSFORM builder (guest FUN_80051844)
+  RenderMode        mode;              // compare-mode toggles (psxRender / dualview)
+  RenderDiag        diag;              // per-object walk-scope tags (currentNode, currentGeomblk)
+  PktSpan           pktSpan;           // packet-pool store-address-span tracker (Core::mem_w* -> track)
+  DualviewSnapshot  dualviewSnapshot;  // dual-view render harness's per-Core RAM+scratchpad+GTE snapshots
+  NodeXform         mNodeXform;        // scene-node WORLD-TRANSFORM builder (guest FUN_80051844)
 
   // ---- per-frame render orchestrators (called by Engine::fieldFrame/X) ----
   // frame  (guest 0x8003F9A8) — the primary per-frame render orchestrator; runs the non-walk PSX

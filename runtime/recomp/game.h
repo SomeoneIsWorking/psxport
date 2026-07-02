@@ -34,7 +34,9 @@ class Game;
 class Timing {
 public:
   Game* game = nullptr;
-  uint32_t vblank = 0;   // libetc VSync counter mirror (was g_vblank)
+  uint32_t vblank = 0;      // libetc VSync counter mirror (was g_vblank)
+  uint32_t logicFrame = 0;  // logic-frame counter, advanced by native_step_frame each iteration.
+                            // Read by xa_audio_trace / [bgmreq]-style diags. Was global g_bgm_frame.
 
   // vsyncCallback(): 0x80085BB0 FUN_80085bb0 VSyncCallback(func) — no-op. Native frame loop
   //   owns pacing; the libapi per-vblank IRQ vector isn't modeled. Was ov_vsync_callback.

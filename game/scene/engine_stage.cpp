@@ -40,8 +40,7 @@
 // span table persists across the present (which classifies the prior frame's OT) because it is reset only at
 // the TOP of the next ov_field_frame. `ffspan_lookup(addr)` returns the builder name (latest-span-wins).
 // g_pkt_track/lo/hi retired 2026-07-02 — per-Core Render::mPktTrack/mPktLo/mPktHi (reached below).
-extern "C" void dv_snapshot(Core*);    // capture post-gameplay/pre-render guest state (native_boot.cpp)
-extern "C" void dv_restore_pre(Core*); // restore that snapshot (native_boot.cpp)
+#include "dualview_snapshot.h"    // c->mRender->dualviewSnapshot.capturePre/restorePre
 // (g_render_psx + g_dualview both retired 2026-07-02 — reach as c->mRender->mode.psxRender() / dualview())
 struct FFSpan { const char* name; uint32_t lo, hi; };
 static FFSpan s_ffspan[40]; static int s_ffspan_n = 0; static int s_bdtag = -1;
@@ -404,7 +403,7 @@ void Engine::fieldFrame() { Core* c = core;
   }
   // DUAL-VIEW: snapshot the post-gameplay / pre-render state so the side-by-side PSX render pass can run
   // from it (the native render below consumes per-frame queues, so it is not re-runnable). No-op unless on.
-  dv_snapshot(c);
+  c->mRender->dualviewSnapshot.capturePre(c);
   if (c->mem_r8(0x1f800136u) < 2) c->mRender->frame();   // 0x8003f9a8 — NATIVE render orchestrator + walk
   FFS("ff_submit810c", c->engine.submitPage810c()); // render submit (page-1 dim-fade owned; other pages recomp)
   // RENDER GUEST-MEMORY DECOUPLING (user 2026-06-24: the native renderer must leave NO guest-memory side
@@ -426,7 +425,7 @@ void Engine::fieldFrame() { Core* c = core;
   // The TRUE end-state (make ov_render_frame write ZERO guest memory so dv_snapshot/restore can go too) is a
   // separate perf/architecture follow-up; the rewind correctly enforces the invariant meanwhile.
   if (!c->mRender->mode.psxRender() && !c->mRender->mode.dualview() && c->mem_r8(0x1f800136u) < 2) {
-    dv_restore_pre(c);
+    c->mRender->dualviewSnapshot.restorePre(c);
   }
   FFS("ff_77d8c", c->engine.postRenderTick());   // 0x80077d8c NATIVE (Engine::postRenderTick)
   FFS("ff_area75a80", c->engine.areaUpdateTail());   // 0x80075a80 NATIVE (Engine::areaUpdateTail)

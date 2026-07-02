@@ -50,7 +50,7 @@ extern "C" void ffspan_reset_frame(void), ffspan_begin(Core*), ffspan_end(Core*,
 // FUN_80074BF8(idx) starts BGM #idx; FUN_80074E48() stops it. These are now OWNED PC-native by
 // engine/sound.cpp (sound_register), which also carries the instant-CD dialog-music cut hook. Only
 // the shared frame counter remains here (cd_override.cpp externs it for its own BGM trace).
-volatile uint32_t g_bgm_frame = 0;   // current logic frame (extern: cd_override.cpp trace)
+// g_bgm_frame retired 2026-07-03 — per-Core Timing::logicFrame (c->game->timing.logicFrame).
 void rec_super_call(Core*, uint32_t);   // interpret the original PSX body (A/B oracle / super-call)
 
 // ONE frame of deterministic guest work — the steppable core of the native frame loop, factored out so
@@ -154,12 +154,13 @@ static void native_step_frame(Core* c, uint32_t f) {
     // so the PSX pass must run from the PRE-render state captured in ov_field_frame (dv_snapshot, before
     // the native render ran), not from the post-native-render state. We then restore the POST-FRAME state
     // so the canonical game (which includes the post-render per-frame area update) is undisturbed.
-    extern int g_dv_have_pre; extern void gpu_gpu_select_target(int);
+    extern void gpu_gpu_select_target(int);
     // SBS owns BOTH panes (core A | core B); its target-1 batch is core B's render, NOT a PSX re-render of
     // THIS core — so skip the in-engine dualview second pass. g_sbs declared at file scope below.
-    if (c->mRender->mode.dualview() && g_dv_have_pre && !g_sbs) {
-      dv_capture_post(c);            // save the real post-frame canonical state
-      dv_restore_pre(c);             // rewind to the pre-render (post-gameplay) state the PSX pass needs
+    DualviewSnapshot& dv = c->mRender->dualviewSnapshot;
+    if (c->mRender->mode.dualview() && dv.havePre() && !g_sbs) {
+      dv.capturePost(c);             // save the real post-frame canonical state
+      dv.restorePre(c);              // rewind to the pre-render (post-gameplay) state the PSX pass needs
       rc2(c, 0x80081458, envp, 0x800);                          // ClearOTagR(ot, 0x800)
       c->mem_w32(0x800ed8c8, envp);                             // OT base
       c->mem_w16(0x800e809c, 0);                                // dwell counter
@@ -170,8 +171,8 @@ static void native_step_frame(Core* c, uint32_t f) {
       rec_dispatch(c, 0x8010810cu);                             // render submit (faithful to ov_field_frame)
       c->engine.drawOTag(envp + 0x1ffcu);                       // walk PSX OT -> target-1 batch
       gpu_gpu_select_target(0);
-      dv_restore_post(c);            // restore the real canonical state (PSX pass fully undone)
-      g_dv_have_pre = 0;
+      dv.restorePost(c);             // restore the real canonical state (PSX pass fully undone)
+      dv.clearPre();
     }
   }
   perf_frame_end();   // perf: close the frame (post-tick remainder + full wall time) + emit rolling avg
@@ -315,7 +316,7 @@ static void game_main(Core* c) {
   dbg_server_start(c);    // PSXPORT_DEBUG_SERVER: non-blocking live TCP debug server (dbg_server.c)
   long repl_budget = 0;   // frames remaining in the current REPL `run N`
   for (uint32_t f = 0; nframes == 0 || f < nframes; f++) {
-    g_bgm_frame = f;
+    c->game->timing.logicFrame = f;
     // REPL: when the run-budget is exhausted, block reading stdin commands until a `run N` refills
     // it (immediate commands — r/w/watch/input/regs/seq — execute between frames). Quit/EOF breaks.
     if (repl_mode) {

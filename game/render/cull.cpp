@@ -16,7 +16,7 @@
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 uint32_t eng_isqrt16(uint32_t);
-extern uint32_t g_render_object;   // weak probe key (last-culled object); defined in game_tomba2.cpp
+// g_render_object retired (was defined + written but never read anywhere; dead).
 
 static int s_objlog = -1;
 static inline uint16_t obj_r16(Core* c, uint32_t a) { return (uint16_t)(c->mem_r8(a) | (c->mem_r8(a + 1) << 8)); }
@@ -188,8 +188,7 @@ void Cull::coneCull2b278() { Core* c = core;
 void Cull::objectCull() { Core* c = core;
   uint32_t prev = c->game->fps60.current_object;
   uint32_t o = c->r[4];                            // a0 = object* (MIPS arg register $a0)
-  c->game->fps60.current_object = o;
-  g_render_object  = o;                            // probe key: NOT restored — the submit that follows is o's
+  c->game->fps60.current_object = o;               // fps60: tag every subsequent RTP with this object
 
   if (s_objlog < 0) s_objlog = cfg_dbg("obj") ? 1 : 0;
   if (s_objlog)
