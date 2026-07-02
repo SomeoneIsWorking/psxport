@@ -25,7 +25,6 @@
 void rec_dispatch(Core*, uint32_t);
 void rec_super_call(Core*, uint32_t);
 int  rec_addr_has_entry(Core*, uint32_t);   // overlay_router.cpp — is fn a real entry in the resident module?
-void ov_terrain(Core* c);
 #define OTBASE_PTR   0x800ED8C8u             // *this = the active ordering-table base
 #define SCR          0x1F800000u             // PSX scratchpad base (the engine's GTE-compose temp area)
 
@@ -369,16 +368,15 @@ void Render::renderWalk() {
         }
         else {
           // default case: the node's own render fn (node+24) — e.g. a collectable's billboard-quad drawer,
-          // or the field TERRAIN renderer (0x8002AB5C). Terrain is owned PC-native (ov_terrain → the float
-          // terrain_render_pc, real per-pixel depth, NO GTE/packet) — route it there; everything else stays
-          // PSX content (rec_dispatch), with its produced span tagged by the object's PC-native world depth.
-          void ov_terrain(Core* c);
+          // or the field TERRAIN renderer (0x8002AB5C). Terrain is owned PC-native (Render::terrain → the
+          // float terrain_render_pc, real per-pixel depth, NO GTE/packet) — route it there; everything else
+          // stays PSX content (rec_dispatch), with its span tagged by the object's PC-native world depth.
           uint32_t fn = c->mem_r32(n + 24);
           // DIAG probes (cfg_dbg): noterr skips the native terrain pass, nobg skips the native BG node —
           // to attribute the "stale village still drawn in the hut interior" bug to a specific native pass.
           if (fn == 0x8002AB5Cu && cfg_dbg("noterr")) { /* skip terrain */ }
           else if (fn == 0x8013E9D8u && cfg_dbg("nobg")) { /* skip bg */ }
-          else if (fn == 0x8002AB5Cu) { ffspan_begin(); c->r[4] = n; ov_terrain(c); ffspan_end("rwT_terrain"); }   // PC-native world-coord terrain (self-draws)
+          else if (fn == 0x8002AB5Cu) { ffspan_begin(); c->r[4] = n; c->mRender->terrain(); ffspan_end("rwT_terrain"); }   // PC-native world-coord terrain (self-draws)
           else if (fn == 0x8013E9D8u) { ffspan_begin(); c->r[4] = n; c->mRender->bgRender(); ffspan_end("rwB_bg"); }   // PC-native world-coord ground/BG node
           else if (!rec_addr_has_entry(c, fn)) { /* STALE node: its renderer is a dangling pointer into an
               evicted overlay (e.g. a SOP intro-narration node surviving into the A00 field — later-275).

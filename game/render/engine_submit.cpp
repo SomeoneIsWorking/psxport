@@ -480,8 +480,9 @@ void terrain_prep_object_matrix(Core* c, uint32_t node) {
 }
 
 void terrain_render_pc(Core* c);             // engine/native_terrain.cpp — PC-native float terrain render
-void ov_terrain(Core* c) {
-  if (cfg_dbg("terrgte")) fprintf(stderr, "[ov_terrain] node(a0=r4)=%08X\n", c->r[4]);
+void Render::terrain() {
+  Core* c = mCore;
+  if (cfg_dbg("terrgte")) fprintf(stderr, "[Render::terrain] node(a0=r4)=%08X\n", c->r[4]);
   // Pick this area's light config ONCE per world frame (terrain renders first); the per-face shader reads
   // the cached pointer. Cheap guest-RAM fingerprint read; unknown area -> village SUN default.
   if (g_mods.light) engine_shade_select(c);

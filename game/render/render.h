@@ -52,6 +52,11 @@ public:
   // depth. Was ov_render_walk_snapshot.
   void renderWalkSnapshot();
 
+  // terrain (guest 0x8002AB5C): the field terrain render entry. Picks the area's light config for
+  // the frame, then either super-calls the recomp body (dual-core diff neutralize path) or runs the
+  // PC-native float terrain render. Taxi-parameter c->r[4] = node. Was ov_terrain.
+  void terrain();
+
   // sceneNative: the master scene-render walker (per-frame terrain + entity/object walk over
   // the 3 doubly-linked object lists, with backdrop + collectable-quad + native BG tilemap).
   // Called by game_tomba2.cpp's ov_draw_otag every field-stage frame (and by margin_render's
