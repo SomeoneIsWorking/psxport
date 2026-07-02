@@ -2,9 +2,9 @@
 //
 // De-globalization (2026-06-19): fps60.cpp's RTP-tap capture buffers, the render-queue snapshots and
 // the rate detector live on an `Fps60` instance owned by Game (game.h), reached via core->game->
-// fps60. The touching functions are methods of Fps60 (field names keep their historical s_ spelling);
-// the public capture API (fps60_rtp/join_poly/frame_commit) stays C-style via Core*-taking wrappers. The
-// whole tier is RENDER-SIDE (never writes guest RAM) and gated behind PSXPORT_FPS60.
+// fps60. All external touching functions ARE methods of Fps60 (field names keep their historical s_
+// spelling); callers reach them directly as `c->game->fps60.rtp(op)` etc. — no free-function
+// wrappers. The whole tier is RENDER-SIDE (never writes guest RAM) and gated behind PSXPORT_FPS60.
 //
 // STAYS SHARED (not here): the config-caches s_disp_gate/s_ocen_gate/s_sdbg + the live UI gate
 // g_fps60_on (a process-wide mode toggle, edited by the overlay) + function-local diag statics.

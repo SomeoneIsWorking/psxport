@@ -158,7 +158,7 @@ void Engine::frameUpdate() {
   // fps60 (when enabled) OWNS presentation: it presents the interpolated in-between + the real frame
   // (60 fps, 1 frame behind) and paces both halves — see fps60_present_vk. The faithful path
   // presents frame B once and paces a full frame.
-  fps60_frame_commit(c);
+  c->game->fps60.frame_commit(c);
   if (!g_fps60_on) {
     perf_phase_begin(2);                             // perf: PRESENT-cpu = VRAM mirror upload + VK record/submit
     gpu_present(c);

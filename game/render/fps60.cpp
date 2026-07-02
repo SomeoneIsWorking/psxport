@@ -544,12 +544,6 @@ void Fps60::fps60_present_vk(Core* core) {
   s_nBBCur = 0;
 }
 
-// ---- Public capture API: thin free-function wrappers over the per-instance Fps60 methods.
-// Keep the C-style call sites stable; each forwards to core->game->fps60 (de-globalization, 2026-06-19). ----
-void fps60_rtp(Core* core, uint32_t op) { core->game->fps60.rtp(op); }
-void fps60_join_poly(Core* core, int px, int py) { core->game->fps60.join_poly(px, py); }
-void fps60_frame_commit(Core* core) { core->game->fps60.frame_commit(core); }
-
 void fps60_init(void) {
   // 60fps is toggled in the F1 overlay (persisted to psxport_settings.ini via mods); g_fps60_on is loaded
   // by mods_init BEFORE this runs. NO env gate (user directive): do not read PSXPORT_FPS60 — that would
