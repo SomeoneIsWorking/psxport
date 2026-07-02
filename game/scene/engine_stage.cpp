@@ -26,7 +26,7 @@
 #include "core.h"
 #include "cfg.h"
 #include "engine.h"                 // class Engine — GAME/STAGE driver + per-frame method impls below
-#include "engine_render.h"          // ov_render_frame / ov_render_frame_x (native per-frame render driver)
+#include "render.h"                 // class Render — c->mRender->frame() / frameX() (per-frame render driver)
 #include "placement.h"              // ov_place_objects — native field object-placement driver (game/world)
 #include "pool.h"                    // ov_pool_init_run — native object-pool init (game/world)
 #include "c_subsys.h"                // disc_find_file — native ISO9660 resolver (native_task0_bootstrap/ov_start_bin_stage)
@@ -402,7 +402,7 @@ void Engine::fieldFrame() { Core* c = core;
   // DUAL-VIEW: snapshot the post-gameplay / pre-render state so the side-by-side PSX render pass can run
   // from it (the native render below consumes per-frame queues, so it is not re-runnable). No-op unless on.
   dv_snapshot(c);
-  if (c->mem_r8(0x1f800136u) < 2) ov_render_frame(c);   // 0x8003f9a8 — NATIVE render orchestrator + walk
+  if (c->mem_r8(0x1f800136u) < 2) c->mRender->frame();   // 0x8003f9a8 — NATIVE render orchestrator + walk
   FFS("ff_submit810c", c->engine.submitPage810c()); // render submit (page-1 dim-fade owned; other pages recomp)
   // RENDER GUEST-MEMORY DECOUPLING (user 2026-06-24: the native renderer must leave NO guest-memory side
   // effect — only native GAMEPLAY may write guest memory). The native render above (ov_render_frame + submit)
@@ -703,7 +703,7 @@ void Engine::fieldFrameX() { Core* c = core;
     c->engine.sceneEventFifo(); c->engine.sceneRenderListBuilder(); c->engine.objectTable.dispatch(); c->engine.modePerFrameDispatch();   // 25588/4fe84/26c88/22a80 NATIVE
     CutsceneCamera::runFieldUpdate(c);   // 0x8006ec44 NATIVE (CutsceneCamera::update)
   }
-  if (c->mem_r8(0x1f800136u) < 2) ov_render_frame_x(c); // 0x8003fa44 — NATIVE render orchestrator twin
+  if (c->mem_r8(0x1f800136u) < 2) c->mRender->frameX(); // 0x8003fa44 — NATIVE render orchestrator twin
   c->engine.submitPage810c();                      // render submit (page-1 dim-fade owned; other pages recomp)
   c->engine.postRenderTick();                   // 0x80077D8C NATIVE (was d0)
   c->engine.areaUpdateTail();                   // 0x80075a80 NATIVE

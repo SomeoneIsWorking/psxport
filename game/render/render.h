@@ -17,4 +17,12 @@ public:
 
   // ---- render-side per-Core subsystems ------------------------------------
   NodeXform mNodeXform;   // scene-node WORLD-TRANSFORM builder (guest FUN_80051844)
+
+  // ---- per-frame render orchestrators (called by Engine::fieldFrame/X) ----
+  // frame  (guest 0x8003F9A8) — the primary per-frame render orchestrator; runs the non-walk PSX
+  //   passes (the walk cluster is owned by SceneNative::render in engine_render_walk.cpp).
+  //   Was ov_render_frame in engine_render.cpp.
+  // frameX (guest 0x8003FA44) — the mid-transition variant (reduced pass set). Was ov_render_frame_x.
+  void frame();
+  void frameX();
 };

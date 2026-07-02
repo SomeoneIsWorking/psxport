@@ -18,6 +18,7 @@
 //     0x8003bb50, 0x8003bcf4, 0x8003c048, 0x8003f024.
 
 #include "engine_render.h"
+#include "render.h"    // class Render — methods live here
 #include "core.h"
 #include "cfg.h"
 #include <stdlib.h>
@@ -55,7 +56,7 @@ extern "C" { int g_dualview = 0; }
 // field-stage frame — running them again here would double-submit every terrain/object prim. This function
 // now performs only the remaining non-walk PSX passes ov_scene_native does not cover.
 extern "C" void ffspan_begin(void), ffspan_end(const char*);   // PSXPORT_BDTAG attribution (engine_stage.cpp)
-void ov_render_frame(Core* c) {
+void Render::frame() { Core* c = mCore;
   if (cfg_dbg("rfprobe")) { static int n=0; if ((n++ % 60)==0) fprintf(::stderr,"[rfprobe] ov_render_frame run #%d\n", n); }
   if (g_render_psx) { d0(c, 0x8003f9a8u); return; }   // COMPARE: render the field via the PSX recomp path
   ffspan_begin(); d0(c, 0x8004fd30u); ffspan_end("rf_4fd30");
@@ -71,7 +72,7 @@ void ov_render_frame(Core* c) {
 
 // 0x8003fa44 — mid-transition render orchestrator twin (reduced pass set). The walk cluster is owned by
 // ov_scene_native (see ov_render_frame above); only the non-walk passes remain here.
-void ov_render_frame_x(Core* c) {
+void Render::frameX() { Core* c = mCore;
   if (g_render_psx) { d0(c, 0x8003fa44u); return; }   // COMPARE: render the field via the PSX recomp path
   d0(c, 0x8004fd30u);
   d0(c, 0x80025d98u);
