@@ -168,11 +168,11 @@ struct SchedulerState {
   const RecOverlay* resident_ov[3] = {};
 };
 
-// native_stub.cpp — the SCEA boot-stub (SCUS_944.54) interpreter that draws SCEA + LoadExec's MAIN.
+// native_stub.cpp — the native SCEA boot-stub (renders SCEA + LoadExec's MAIN.EXE). Only field
+// still in use is main_path (2 reads in native_stub_run); the old boot-stub VBlank counter and
+// LoadExec longjmp target are gone in the current PC-native boot path.
 struct StubState {
-  uint32_t    vblank    = 0;        // boot-stub VBlank counter during SCEA fades (was g_stub_vblank)
   const char* main_path = nullptr;  // MAIN.EXE path, reloaded at LoadExec hand-off (was g_main_path)
-  jmp_buf     exit_jmp;             // longjmp target = native_stub_run's setjmp (was g_stub_exit)
 };
 
 class Game {
