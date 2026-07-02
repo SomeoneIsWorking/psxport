@@ -74,8 +74,7 @@ void Render::perObjFlush() {
 extern "C" int g_scene_native_diag;  int g_scene_native_diag = 0;   // counters for the bring-up probe
 extern "C" long g_sn_objs, g_sn_cmds; long g_sn_objs = 0, g_sn_cmds = 0;
 void ov_render_walk(Core* c);
-void ov_rwalk_aux_bf00(Core* c), ov_rwalk_aux_eec0(Core* c), ov_rwalk_b588(Core* c),
-     ov_render_walk_snapshot(Core* c), ov_rwalk_aux_bcf4(Core* c);
+void ov_rwalk_b588(Core* c), ov_render_walk_snapshot(Core* c);
 // NATIVE BACKDROP tilemap drawer — overlay FUN_80115598 (the seaside field's state-0 background drawer,
 // reached via 0x8003df04's 16-state jump table @0x80014fc0; state 0 → 0x8003df74 → 0x80115598). This is the
 // sky + distant parallax hills (the only thing the decoupled native scene was missing — verified by SKIPPASS
@@ -172,8 +171,8 @@ void Render::sceneNative() { Core* c = mCore;
                       && c->mem_r16(0x801fe04eu) == 0;            // sm[0x4e] == object-placement init (pre-attach)
   if (!field_area_init) {
     // (a) TERRAIN + per-object world geometry via the native render walks (self-route to ov_terrain etc.).
-    ov_rwalk_aux_bf00(c); ov_rwalk_aux_eec0(c); ov_rwalk_b588(c); ov_render_walk_snapshot(c);
-    ov_rwalk_aux_bcf4(c); ov_render_walk(c);
+    rwalkAuxBf00(); rwalkAuxEec0(); ov_rwalk_b588(c); ov_render_walk_snapshot(c);
+    rwalkAuxBcf4(); ov_render_walk(c);
     // (b) SCENE TABLE (grass / props / sky-sea backdrop) — native world-coord render of 0x800F2418.
     fieldEntityRender(0x800F2418u);
     // (c) the field's OBJECTS — walk the 3 entity lists, render each object's geomblk natively (real depth).
@@ -562,7 +561,8 @@ static void aux_bcf4_case(Core* c, uint32_t node, uint32_t tgt) {
   }
 }
 
-void ov_rwalk_aux_bcf4(Core* c) {
+void Render::rwalkAuxBcf4() {
+  Core* c = mCore;
   if (c->mem_r8(AUX_BCF4_SWAP) == 0) {              // queue double-buffer swap (only when swap_flag==0)
     uint16_t cnt = c->mem_r16(AUX_BCF4_LIVECNT);
     uint32_t lst = c->mem_r32(AUX_BCF4_LISTPTR);
@@ -623,7 +623,8 @@ static void aux_bf00_case(Core* c, uint32_t node, uint32_t tgt) {
   }
 }
 
-void ov_rwalk_aux_bf00(Core* c) {
+void Render::rwalkAuxBf00() {
+  Core* c = mCore;
   if (c->mem_r8(AUX_BF00_SWAP) == 0) {             // queue double-buffer swap (only when swap_flag==0)
     uint16_t cnt = c->mem_r16(AUX_BF00_LIVECNT);
     uint32_t lst = c->mem_r32(AUX_BF00_LISTPTR);
@@ -675,7 +676,8 @@ static void aux_eec0_case(Core* c, uint32_t node, uint32_t tgt) {
   }
 }
 
-void ov_rwalk_aux_eec0(Core* c) {
+void Render::rwalkAuxEec0() {
+  Core* c = mCore;
   uint32_t node = c->mem_r32(AUX_EEC0_HEAD);
   while (node) {
     uint32_t next = c->mem_r32(node + 36);                   // captured before dispatch (recomp s1)
