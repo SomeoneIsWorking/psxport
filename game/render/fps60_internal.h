@@ -80,6 +80,15 @@ struct Fps60 {
   int  build_lerp();                                    // match cur<->prev, lerp to midpoint; returns count
   void fps60_present_vk(Core* core);                    // emit in-between + real frame, paced (60fps)
 
+  // ---- billboard registry (was file-scope s_bbCur / s_nBBCur in fps60.cpp) --------
+  // Per-Core so SBS's two cores don't share the same billboard registry between their emits
+  // (engine_submit calls record_billboard_span from THIS core's frame; the OT walk reads it
+  // via billboard_for_node — must be same core's) (deglobalize 2026-07-03).
+  static constexpr int kBbMax = 1024;
+  struct Billboard { uint32_t lo, hi; uint32_t ident; uint32_t crM[11]; };
+  Billboard s_bbCur[kBbMax] = {};
+  int       s_nBBCur = 0;
+
   // ---- methods (bodies in fps60.cpp; reached via core->game->fps60) ----
   void     fold(uint32_t v);
   void     grid_put(int sx, int sy, uint32_t obj);
@@ -90,6 +99,10 @@ struct Fps60 {
   void     rtp(uint32_t op);
   void     join_poly(int px, int py);
   void     frame_commit(Core* core);
+  // billboard-registry methods (former file-scope free fns)
+  void bbFrameReset() { s_nBBCur = 0; }
+  void recordBillboardSpan(uint32_t lo, uint32_t hi, uint32_t ident);
+  int  billboardForNode(uint32_t node, uint32_t* identOut, uint32_t crOut[11]) const;
 };
 
 #endif // FPS60_INTERNAL_H

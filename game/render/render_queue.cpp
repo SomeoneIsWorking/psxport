@@ -196,7 +196,12 @@ int rq_active(void) { return 1; }
 void RenderQueue::reset() { n = 0; seq = 0; consumed = 0; }
 
 RqItem* RenderQueue::push() {
-  if (consumed) { reset(); fps60_bb_frame_reset(); }   // first push after a flush -> new frame (clear bb registry too)
+  if (consumed) {
+    reset();
+    // Per-Core billboard-registry reset (was file-scope fps60_bb_frame_reset → shared across SBS cores).
+    // Reach THIS core's Fps60 via the RenderQueue's back-pointer to Game.
+    if (game) game->fps60.bbFrameReset();
+  }
   if (n >= RQ_MAX) {
     // FAIL-FAST (user 2026-06-30): never silently drop prims. RQ_MAX already covers the real worst-case
     // scene (the area-transition spike, ~43k — see render_queue.h); exceeding it means a submit path is

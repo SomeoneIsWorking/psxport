@@ -249,46 +249,47 @@ void fps60_stamp_world(Core* c, const int16_t mv[4][3], int nv, uint32_t key) {
 // pre-pass, no depth-ord matching. The previous frame's transform is found by fps_key out of the prev
 // RqItems (which now carry it), exactly like the mesh path — so the s_bbPrev registry is no longer needed
 // to hold prev transforms; the registry is purely the CURRENT-frame node→transform map for queue-time tagging.
-// File-scope (not on Fps60 — fps60_internal.h is not ours to edit); the 60fps present path is single-
-// core in practice, like the s_lerpdbg/s_chk statics. Host-only; never touches guest RAM.
-struct Fps60Billboard { uint32_t lo, hi; uint32_t ident; uint32_t crM[11]; };
-#define FPS60_BB_MAX 1024
-static Fps60Billboard s_bbCur[FPS60_BB_MAX];
-static int s_nBBCur = 0;
-// The billboard-identity registry is needed both by the 60fps reproject AND by the `debug objid` overlay
-// (which labels billboards with their object id in any mode). So record/lookup/stamp whenever EITHER is
-// active. In 60fps-off mode the registry is reset per frame from the render queue (fps60_bb_frame_reset,
-// called from RenderQueue::push); the 60fps path resets it in frame_commit as before.
+// Billboard registry (was file-scope s_bbCur / s_nBBCur here) moved onto Fps60 members in
+// fps60_internal.h — per-Core so SBS's two cores keep separate frame billboard maps. The free-function
+// bridges below (fps60_record_billboard_span / fps60_bb_frame_reset) forward to Fps60 methods.
 static inline int bb_active(void) { return g_mods.fps60 || g_mods.debug_ids || cfg_dbg("objid"); }
-void fps60_bb_frame_reset(void) { s_nBBCur = 0; }
-// (GTE_ReadCR is declared in the extern "C" block at the top of this file.)
 
 // Called from engine_submit.cpp right after gpu_obj_depth_add(lo, hi, ord). Capture this object's billboard
 // reprojection inputs: its packet-pool SPAN [lo,hi) (the key the OT walk matches the item's node against,
 // identical to GpuState::obj_depth_lookup), its stable cross-frame IDENTITY, and the live composed
-// camera×object transform (CR0-7 + the frame projection constants CR24/25/26). No-op unless fps60 is on.
-void fps60_record_billboard_span(Core* /*c*/, uint32_t lo, uint32_t hi, uint32_t ident) {
+// camera×object transform (CR0-7 + the frame projection constants CR24/25/26). No-op unless bb_active.
+void Fps60::recordBillboardSpan(uint32_t lo, uint32_t hi, uint32_t ident) {
   if (!bb_active() || !ident || hi <= lo) return;
-  if (s_nBBCur >= FPS60_BB_MAX) return;
-  Fps60Billboard* e = &s_bbCur[s_nBBCur++];
+  if (s_nBBCur >= kBbMax) return;
+  Billboard* e = &s_bbCur[s_nBBCur++];
   e->lo = lo | 0x80000000u; e->hi = hi | 0x80000000u; e->ident = ident;   // KSEG, matching s_cur_node form
   for (int i = 0; i < 8; i++) e->crM[i] = GTE_ReadCR(i);            // composed camera×object CR0-7 (live)
   e->crM[8] = GTE_ReadCR(24); e->crM[9] = GTE_ReadCR(25); e->crM[10] = GTE_ReadCR(26);  // OFX/OFY/H
 }
 
 // Queue-time lookup (called from the OT walk in gpu_native.cpp): if `node` falls in a recorded billboard
-// span this frame, return its identity + composed transform so the caller can stamp the RqItem as an
-// anchor-reproject billboard. Returns 1 on hit. node is the OT-node address (KSEG, == s_cur_node|0x80000000).
-static int fps60_billboard_for_node(uint32_t node, uint32_t* ident, uint32_t cr[11]) {
+// span this frame, return its identity + composed transform. node = OT-node address (KSEG, == s_cur_node|0x80000000).
+int Fps60::billboardForNode(uint32_t node, uint32_t* identOut, uint32_t crOut[11]) const {
   if (!bb_active()) return 0;
   uint32_t n = node | 0x80000000u;
   for (int i = 0; i < s_nBBCur; i++)
     if (n >= s_bbCur[i].lo && n < s_bbCur[i].hi) {
-      if (ident) *ident = s_bbCur[i].ident;
-      if (cr) for (int k = 0; k < 11; k++) cr[k] = s_bbCur[i].crM[k];
+      if (identOut) *identOut = s_bbCur[i].ident;
+      if (crOut) for (int k = 0; k < 11; k++) crOut[k] = s_bbCur[i].crM[k];
       return 1;
     }
   return 0;
+}
+
+// ---- Free-function bridges (kept for existing callers with a `Core* c` in scope) ------------------
+void fps60_record_billboard_span(Core* c, uint32_t lo, uint32_t hi, uint32_t ident) {
+  c->game->fps60.recordBillboardSpan(lo, hi, ident);
+}
+void fps60_bb_frame_reset(void) {
+  // Called from RenderQueue::push flush — no Core in scope. To keep the reset per-Core, this bridge is
+  // superseded by the class method Fps60::bbFrameReset; the queue calls the method directly. This free
+  // function stays as a temporary shim for any caller that hasn't been updated (grep confirms none as of
+  // 2026-07-03), and is a no-op if there's no way to reach the right instance without Core*.
 }
 
 // Stamp the JUST-PUSHED billboard RqItem as an anchor-reproject billboard. Called from the OT walk
@@ -308,7 +309,7 @@ void fps60_stamp_billboard(Core* c, uint32_t node) {
   if (it->fps_world) return;                            // already a native-mesh capture
   if (it->layer != RQ_WORLD || it->order_mode != RQ_OM_DEPTH) return;
   uint32_t ident; uint32_t cr[11];
-  if (!fps60_billboard_for_node(node, &ident, cr)) return;
+  if (!c->game->fps60.billboardForNode(node, &ident, cr)) return;
   it->fps_world = 1; it->fps_anchor = 1; it->fps_key = ident;
   // objid overlay: a 2D billboard (apple/gem/flame) rasterizes at the DEFERRED OT walk, after the render
   // walk's g_dbg_render_node scope ended — so rq_emit_or_queue stamped dbg_node=0. Recover it here from the
