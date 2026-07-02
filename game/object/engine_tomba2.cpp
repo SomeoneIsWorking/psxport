@@ -226,6 +226,42 @@ void ov_list_walk_69b28(Core* c) {
   }
 }
 
+// Native FUN_8007B04C — the MID-TRANSITION state-3 entity walker (docs/findings/scene.md hut-door
+// freeze; decomp scratch/decomp/ram_f1000_all.c L56987-L57017). Walks both entity lists (heads
+// T2_OBJLIST_HEAD_1 then T2_OBJLIST_HEAD_2, re-read AFTER list 1 in case handlers mutated it),
+// clears each node's per-frame render flag, and — GATED on node[0x28] & 0x80 — dispatches the
+// per-object handler via dispatch_obj_method (native beh if owned, substrate otherwise).
+//
+// Called from engine_stage.cpp's ov_field_frame_x (was `d0(c, 0x8007b04cu)`). Owning it here routes
+// mid-transition handler calls through dispatch_native_behavior — so the sub-scene swap state
+// machine (SceneTransition::stepSwapWaiter) runs UNDER NATIVE CODE during the transition, not
+// hidden inside substrate func_80138FC8. Prerequisite for observing / fixing the case-3
+// SECOND-branch deadlock (docs/findings/scene.md).
+void ov_state3_walk_8007b04c(Core* c) {
+  uint32_t l2 = c->mem_r32(T2_OBJLIST_HEAD_2);           // captured up-front (decomp: iVar3 = DAT_800f2624)
+  uint32_t n  = c->mem_r32(T2_OBJLIST_HEAD_1);
+  while (n) {
+    uint32_t next = c->mem_r32(n + T2OBJ_NEXT);
+    c->mem_w8 (n + T2OBJ_RENDER_FLAG, 0);
+    if (c->mem_r8(n + 0x28) & 0x80) {
+      uint32_t h = c->mem_r32(n + T2OBJ_HANDLER);
+      dispatch_obj_method(c, n, h);
+    }
+    l2 = c->mem_r32(T2_OBJLIST_HEAD_2);                  // re-read each iteration (handler may mutate)
+    n  = next;
+  }
+  n = l2;
+  while (n) {
+    uint32_t next = c->mem_r32(n + T2OBJ_NEXT);
+    c->mem_w8 (n + T2OBJ_RENDER_FLAG, 0);
+    if (c->mem_r8(n + 0x28) & 0x80) {
+      uint32_t h = c->mem_r32(n + T2OBJ_HANDLER);
+      dispatch_obj_method(c, n, h);
+    }
+    n = next;
+  }
+}
+
 // Native FUN_80026368 — iterate the 8-slot fixed object array at 0x80100400 (stride 0x4C); for each
 // ACTIVE slot (byte[0] != 0) dispatch its method by type byte[2] through the jump table 0x8009D314
 // (a0 = slot). Faithful: no type bound-check (the guest indexes the table raw); inactive slots still
