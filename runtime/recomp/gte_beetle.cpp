@@ -492,9 +492,14 @@ void projprim_reset(void) {           // per-frame: drop last frame's depths so 
   for (int i = 0; i < PP_HASH; i++) s_pp_head[i] = -1;
   s_pp_inited = 1;
 }
-extern long g_pp_set;
+// ProjPrim / depth-cache diag counters — file-scope statics (the projprim cache above is itself
+// process-wide, so counting is too). Exposed via projprim_stats_read/reset for the ndepth dump in
+// gpu_native.cpp. Was extern long g_pp_set / g_pp_hit / g_pp_miss (deglobalize-game 2026-07-03).
+static long s_pp_stat_set = 0, s_pp_stat_hit = 0, s_pp_stat_miss = 0;
+void projprim_stats_read(long* set, long* hit, long* miss) { if (set) *set = s_pp_stat_set; if (hit) *hit = s_pp_stat_hit; if (miss) *miss = s_pp_stat_miss; }
+void projprim_stats_reset(void) { s_pp_stat_set = s_pp_stat_hit = s_pp_stat_miss = 0; }
 void projprim_set_pz(uint32_t addr, float pz) {   // engine_submit records a vertex's view-Z at its addr
-  g_pp_set++;
+  s_pp_stat_set++;
   if (!s_pp_inited) projprim_reset();
   addr &= 0x1FFFFC;
   uint32_t h = pp_hash(addr);
@@ -503,14 +508,12 @@ void projprim_set_pz(uint32_t addr, float pz) {   // engine_submit records a ver
   PpEnt* e = &s_pp[s_pp_n];
   e->addr = addr; e->pz = pz; e->next = s_pp_head[h]; s_pp_head[h] = s_pp_n++;
 }
-long g_pp_set, g_pp_hit, g_pp_miss;   // ndepth diag: depth records made / lookups hit / lookups missed
-
 int projprim_lookup_pz(uint32_t addr, float* pz) {   // renderer: depth for the packet vertex word at addr
   if (!s_pp_inited) return 0;
   addr &= 0x1FFFFC;
   for (int i = s_pp_head[pp_hash(addr)]; i >= 0; i = s_pp[i].next) if (s_pp[i].addr == addr) {
-    if (pz) *pz = s_pp[i].pz; g_pp_hit++; return 1; }
-  g_pp_miss++;
+    if (pz) *pz = s_pp[i].pz; s_pp_stat_hit++; return 1; }
+  s_pp_stat_miss++;
   return 0;
 }
 int  projprim_overflowed(void) { return s_pp_overflow; }

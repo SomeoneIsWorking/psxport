@@ -71,7 +71,7 @@ void Render::perObjFlush() {
 // single mechanism depth/60fps/ires/lighting attach to. It runs as its OWN pass (not bolted onto the
 // PSX OT-walk) so the draw state is the native pass's. Gated `debug scenenative` while standing it up.
 // (g_scene_native_diag was defined here but never read; dead — removed 2026-07-02)
-extern "C" long g_sn_objs, g_sn_cmds; long g_sn_objs = 0, g_sn_cmds = 0;
+// g_sn_objs/g_sn_cmds retired 2026-07-03 — Render::stats.snObjs/snCmds (RenderStats).
 // NATIVE BACKDROP tilemap drawer — overlay FUN_80115598 (the seaside field's state-0 background drawer,
 // reached via 0x8003df04's 16-state jump table @0x80014fc0; state 0 → 0x8003df74 → 0x80115598). This is the
 // sky + distant parallax hills (the only thing the decoupled native scene was missing — verified by SKIPPASS
@@ -128,7 +128,7 @@ static void render_bg_tilemap_native(Core* c, uint32_t t4) {
       sil_bbox_log_i("bg_tilemap", xs, ys, 4);
       c->game->rq.push2dQuad(RQ_BACKGROUND, /*order_2d_fg=*/0, xs, ys, us, vs, col, col, col,
                              tp_x, tp_y, mode, /*raw=*/1, clut_x, clut_y, 0, 0, 0, 0, 0, 0, 1023, 511);
-      g_sn_cmds++;
+      c->mRender->stats.snCmds++;
       t0 += 2; if (t0 >= rowstride) t0 = 0;        // column wrap
       t1 += 16;
       if (!((int16_t)t1 < t5)) break;
@@ -142,7 +142,7 @@ static void render_bg_tilemap_native(Core* c, uint32_t t4) {
 void Render::sceneNative() { Core* c = mCore;
   static const uint32_t HEADS[3] = { 0x800FB168u, 0x800F2624u, 0x800F2738u };
   uint32_t saved = c->r[4];
-  g_sn_objs = g_sn_cmds = 0;
+  c->mRender->stats.snObjs = c->mRender->stats.snCmds = 0;
   // (0) BACKDROP (sky + distant parallax hills) — the field's background drawer, dispatched natively. The
   // PSX path is 0x8003df04's 16-state jump table @0x80014fc0 keyed on mem_r8(0x800bf870), gated by
   // mem_r8(0x800bf873)==0. Only state 0 (→ tilemap drawer 0x80115598) is owned natively so far; other
@@ -177,7 +177,7 @@ void Render::sceneNative() { Core* c = mCore;
       uint32_t n = c->mem_r32(HEADS[h]);
       for (int g = 0; n && g < 400; g++, n = c->mem_r32(n + 0x24)) {
         if (c->mem_r8(n + 8) == 0 || c->mem_r8(n + 9) == 0) continue;   // no render commands
-        g_sn_objs++; g_sn_cmds += c->mem_r8(n + 8);
+        c->mRender->stats.snObjs++; c->mRender->stats.snCmds += c->mem_r8(n + 8);
         c->r[4] = n;
         perObjFlush();
       }
@@ -185,7 +185,7 @@ void Render::sceneNative() { Core* c = mCore;
   }
   c->r[4] = saved;
   if (cfg_dbg("scenenative")) { int gpu_seen3d_this_frame(Core*); static int f = 0; if ((f++ % 60) == 0)
-    fprintf(stderr, "[scenenative] objs=%ld cmds=%ld seen3d=%d\n", g_sn_objs, g_sn_cmds, gpu_seen3d_this_frame(c)); }
+    fprintf(stderr, "[scenenative] objs=%ld cmds=%ld seen3d=%d\n", c->mRender->stats.snObjs, c->mRender->stats.snCmds, gpu_seen3d_this_frame(c)); }
 }
 
 // NATIVE per-object render DISPATCH — gen_func_8003CCA4 (later-135). The phase-2 per-object render entry:

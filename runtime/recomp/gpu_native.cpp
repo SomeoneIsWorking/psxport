@@ -107,7 +107,7 @@ static int sprite_is_bg_texpage(Core* core, int tp_x, int tp_y) {
 // PC-native per-object depth: the engine's native render walk records each object's packet-pool span +
 // its WORLD-POSITION view-depth, so a 2D billboard prim rasterized later (deferred OT walk) occludes by
 // the object's real depth instead of sprite order. Stamped per frame (a stale span is never honored).
-long g_od_add = 0, g_od_hit = 0, g_od_miss = 0;   // ndepth diag: obj-depth spans recorded / lookups hit / missed
+// g_od_add/hit/miss retired 2026-07-03 — Render::stats.odAdd/odHit/odMiss (RenderStats).
 void GpuState::obj_depth_add(uint32_t lo, uint32_t hi, float ord) {
   if (hi <= lo) return;
   if (s_od_frame != s_frame) { s_od_n = 0; s_od_frame = s_frame; }   // new frame -> clear prior spans
@@ -121,7 +121,7 @@ void GpuState::obj_depth_add(uint32_t lo, uint32_t hi, float ord) {
   // the object's PC-native world view-Z (proj_obj_center_ord / object_world_view_depth → proj_pz_to_ord),
   // so this is engine-owned occlusion, never a PSX OT order. `ord` is stored AS GIVEN.
   if (ord < 0.0f) ord = 0.0f; if (ord > 1.0f) ord = 1.0f;
-  if (s_od_n < OBJ_DEPTH_MAX) { s_od_lo[s_od_n] = lo; s_od_hi[s_od_n] = hi; s_od_ord[s_od_n] = ord; s_od_n++; g_od_add++; }
+  if (s_od_n < OBJ_DEPTH_MAX) { s_od_lo[s_od_n] = lo; s_od_hi[s_od_n] = hi; s_od_ord[s_od_n] = ord; s_od_n++; game->core.mRender->stats.odAdd++; }
 }
 // PC-native COPLANAR FACE SEPARATION for OT-walked objects (issue #5 — barrel red/blue z-fight).
 //
@@ -158,7 +158,7 @@ static int   s_od_eps_k     = 0;      // per-prim counter within that run (face 
 static const float OD_EPS_STEP = 1.0f / 65536.0f;   // per-face camera-ward step (pre-ord3d ord units)
 static const int   OD_EPS_KMAX = 256;               // cap the run so total drift stays << inter-object gap
 int GpuState::obj_depth_lookup(uint32_t node, float* ord) {
-  if (s_od_frame != s_frame) { g_od_miss++; return 0; }
+  if (s_od_frame != s_frame) { game->core.mRender->stats.odMiss++; return 0; }
   uint32_t n = node | 0x80000000u;
   for (int i = 0; i < s_od_n; i++) if (n >= s_od_lo[i] && n < s_od_hi[i]) {
     // Stable per-face epsilon: reset the run on a new frame or when a DIFFERENT object span is hit; the
@@ -170,15 +170,15 @@ int GpuState::obj_depth_lookup(uint32_t node, float* ord) {
     float v = s_od_ord[i] + (float)k * OD_EPS_STEP;     // camera-ward = larger ord (GREATER_OR_EQUAL wins)
     if (v > 1.0f) v = 1.0f;
     if (ord) *ord = v;
-    g_od_hit++; return 1;
+    game->core.mRender->stats.odHit++; return 1;
   }
-  g_od_miss++;
+  game->core.mRender->stats.odMiss++;
   return 0;
 }
 void gpu_obj_depth_add(Core* core, uint32_t lo, uint32_t hi, float ord) { core->game->gpu.obj_depth_add(lo, hi, ord); }
 static long s_gp0_words = 0, s_dma2 = 0;  // diagnostics: GP0 words + DMA2 triggers per frame
 int g_oracle_prim_log = 0;  // ORACLE diag: when >0, log each soft_gpu primitive (oracle GP0 trace, selftest.cpp)
-long g_nd_3d = 0, g_nd_2d = 0;   // Phase-2 native-depth diag: prims drawn with real depth vs OT-order band
+// g_nd_3d/nd_2d retired 2026-07-03 — Render::stats.nd3d/nd2d (RenderStats).
 // 2D-OVERLAY-ONLY OT enumeration. When the FIELD render path owns the 3D world + backdrop natively
 // (ov_scene_native), it STILL needs the guest's leftover 2D overlay prims — the opening-cutscene
 // narration glyphs, in-game dialog/item bubbles, menus, HUD — which the field code submits as PSX
@@ -835,7 +835,7 @@ void GpuState::gp0_exec(Core* core) {
                               const int* xs, const int* ys, uint8_t r, uint8_t g, uint8_t b, int tex, int semi);
           prim_dump_poly(core, s_frame, ord_idx, op, nv, is3d, is3d ? -1 : bg, xs, ys,
                          rs[0], gs[0], bs[0], textured ? 1 : 0, semi); }
-        extern long g_nd_3d, g_nd_2d; if (is3d) g_nd_3d++; else g_nd_2d++;
+        if (is3d) core->mRender->stats.nd3d++; else core->mRender->stats.nd2d++;
         // PSXPORT_PRIMAT="x,y" (DISPLAY coords): log EVERY poly whose triangle covers that display pixel,
         // with its 3D/2D classification + per-vertex depth (ord) + node + color. Unlike provat (blind to
         // VK polys), this is the gp0 tee, so it sees the actual occlusion contestants. Frontmost opaque =
@@ -1404,18 +1404,20 @@ void GpuState::gpu_present_ex(Core* core, int do_blit) {
     if (attach_enabled()) projprim_reset(); }
   {
     {
-      extern long g_nd_3d, g_nd_2d;
+
       if (cfg_dbg("ndepth") && s_frame > 0 && (s_frame % 60) == 0)
         fprintf(stderr, "[ndepth f%d] real-depth(3D) prims=%ld  OT-band(2D) prims=%ld  3D%%=%.1f\n",
-                s_frame, g_nd_3d, g_nd_2d, (g_nd_3d+g_nd_2d) ? 100.0*g_nd_3d/(g_nd_3d+g_nd_2d) : 0.0);
-      { extern long g_pp_set, g_pp_hit, g_pp_miss;
+                s_frame, core->mRender->stats.nd3d, core->mRender->stats.nd2d, (core->mRender->stats.nd3d+core->mRender->stats.nd2d) ? 100.0*core->mRender->stats.nd3d/(core->mRender->stats.nd3d+core->mRender->stats.nd2d) : 0.0);
+      { long pset = 0, phit = 0, pmiss = 0;
+        void projprim_stats_read(long*, long*, long*), projprim_stats_reset(void);
+        projprim_stats_read(&pset, &phit, &pmiss);
         if (cfg_dbg("ndepth") && s_frame > 0 && (s_frame % 60) == 0)
-          fprintf(stderr, "    projprim(vtx) records=%ld  lookups hit=%ld miss=%ld\n", g_pp_set, g_pp_hit, g_pp_miss);
-        g_pp_set = g_pp_hit = g_pp_miss = 0; }
-      { extern long g_od_add, g_od_hit, g_od_miss;
+          fprintf(stderr, "    projprim(vtx) records=%ld  lookups hit=%ld miss=%ld\n", pset, phit, pmiss);
+        projprim_stats_reset(); }
+      { RenderStats& st = core->mRender->stats;
         if (cfg_dbg("ndepth") && s_frame > 0 && (s_frame % 60) == 0)
-          fprintf(stderr, "    obj_depth spans=%ld  2D-prim lookups hit=%ld miss=%ld\n", g_od_add, g_od_hit, g_od_miss);
-        g_od_add = g_od_hit = g_od_miss = 0; }
+          fprintf(stderr, "    obj_depth spans=%ld  2D-prim lookups hit=%ld miss=%ld\n", st.odAdd, st.odHit, st.odMiss);
+        st.odAdd = st.odHit = st.odMiss = 0; }
       extern long g_nd2d_hist[256];
       if (cfg_dbg("ndepth") && s_frame > 0 && (s_frame % 60) == 0) {
         for (int o = 0; o < 256; o++) if (g_nd2d_hist[o]) {
@@ -1426,7 +1428,7 @@ void GpuState::gpu_present_ex(Core* core, int do_blit) {
                   gour?"G":"-", quad?"4":"3", tex?"T":"-", semi?"s":"-", k); }
         for (int o = 0; o < 256; o++) g_nd2d_hist[o] = 0;
       }
-      g_nd_3d = g_nd_2d = 0;
+      core->mRender->stats.nd3d = core->mRender->stats.nd2d = 0;
     } }
   // PSXPORT_PROVAT="x,y[:frame]" — at present time, report (in DISPLAY space, so the double buffer
   // is irrelevant) which primitive last wrote each pixel in a 7x7 box around (x,y), with how many

@@ -401,13 +401,13 @@ void rq_emit_or_queue(Core* core, int capture, int layer, int order_mode, int nv
 // sv (optional, NULL = no shadow): the prim's 4 VIEW-SPACE verts (x=vx, y=vy, z=pz) for the shadow map.
 // When non-NULL and opaque, the queued item carries them and gpu_emit_rq_item re-pushes them as two tris
 // to the shadow VBO on every emit (= on both 60fps present passes — see render_queue.h sh_cast).
-long g_dbg_world_quads = 0;   // PSXPORT_GPU_TRACE: world quads emitted (SBS black-pane diag)
+// g_dbg_world_quads retired 2026-07-03 — Render::stats.dbgWorldQuads (RenderStats).
 void gpu_draw_world_quad(Core* core, const float* px, const float* py, const float* depth,
                          const int* u, const int* v, const uint8_t* r, const uint8_t* g,
                          const uint8_t* b, uint16_t tp, uint16_t clut, int semi,
                          const float (*sv)[3]) {
   if (!gpu_gpu_enabled()) return;
-  g_dbg_world_quads++;   // PSXPORT_GPU_TRACE: world quads this frame (SBS diag)
+  core->mRender->stats.dbgWorldQuads++;   // PSXPORT_GPU_TRACE: world quads this frame (SBS diag)
   if (cfg_dbg("silbbox")) { static int once=0; if (!once++) fprintf(stderr, "[silbbox] s_off=(%d,%d)\n", core->game->gpu.s_off_x, core->game->gpu.s_off_y); }
   GpuState& s = core->game->gpu;
   s.set_texpage(tp);
