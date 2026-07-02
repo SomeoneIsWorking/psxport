@@ -27,4 +27,9 @@ public:
   static uint32_t frame();
   static int      dbgCmd(FILE* out, const char* line);
   static void     storeCb(Core* c, uint32_t addr, uint32_t val);
+
+  // Per-command core targeting for the debug server: 'a'/'A' → core A, 'b'/'B' → core B, else null.
+  // Returns nullptr when the SBS harness is NOT running (single-Core standalone), so callers can fall
+  // back to the frame-loop's current context. Enables `r@a 0x80000000` and `r@b 0x80000000` in dbg.
+  static Core*    coreByLetter(char which);
 };

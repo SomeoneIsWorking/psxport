@@ -43,6 +43,8 @@
 // --- guest RAM + GPU primitives provided by the rest of the port ---------------------------------
 #include "core.h"                  // Core, mem_*, rec_dispatch — for the RE commands (call/ents/node)
 #include "game.h"                  // Core::game->gpu (render state is per-instance now)
+#include "dbg_server.h"            // class DbgServer — singleton state holder
+#include "sbs.h"                   // class Sbs — Sbs::coreA()/coreB() for per-command core targeting
 void gpu_scene_dump_now(Core* c, FILE* out);
 void gpu_provat_display(Core* core, FILE* out, int qx, int qy);
 void gpu_native_shot(Core* core, const char* path);
@@ -64,19 +66,35 @@ static unsigned dbg_btn(const char* n) {
   if (!strcmp(n,"left"))return 0x0080; if (!strcmp(n,"right")) return 0x0020;
   return (unsigned)strtoul(n, 0, 16);
 }
-static unsigned short s_held = 0xFFFF;   // active-low held mask (all released)
+// Held-input / pause / step / ctx / started state live on `class DbgServer` (dbg_server.h). The
+// dispatcher and thread body below reach them via a `class DbgServerInternals` friend accessor —
+// keeping the class members truly private on the public API while the impl TU sees them raw.
+DbgServer& DbgServer::instance() { static DbgServer s; return s; }
+class DbgServerInternals {
+public:
+  static unsigned short& held()   { return DbgServer::instance().mHeld;   }
+  static bool&           paused() { return DbgServer::instance().mPaused; }
+  static int&            step()   { return DbgServer::instance().mStep;   }
+  static Core*&          ctx()    { return DbgServer::instance().mCtx;    }
+  static bool&           started(){ return DbgServer::instance().mStarted;}
+};
+// Impl-TU shorthand so the dispatcher below (a large switch) doesn't sprout `DbgServer::instance()`
+// every three lines. Not exported — this block is impl-private.
+#define s_held    (DbgServerInternals::held())
+#define s_paused  (DbgServerInternals::paused())
+#define s_step    (DbgServerInternals::step())
+#define s_ctx     (DbgServerInternals::ctx())
+#define s_started (DbgServerInternals::started())
 
-// --- Pause / frame-step (so transient bad frames can be inspected one frame at a time) -----------
-// All set/read on the MAIN thread (dbg_exec runs inside dbg_server_service); the frame loop polls
-// these to gate the game advance. paused = freeze; step = run exactly N more frames then re-freeze.
-static int s_paused = 0;
-static int s_step   = 0;
-int  dbg_is_paused(void)    { return s_paused; }
-int  dbg_step_pending(void) { return s_step > 0; }
-void dbg_consume_step(void) { if (s_step > 0) s_step--; }
-void dbg_set_paused(int p)  { s_paused = p ? 1 : 0; s_step = 0; }   // e.g. auto-pause at a scene entry
-void dbg_toggle_pause(void) { s_paused = !s_paused; s_step = 0; }    // keyboard P
-void dbg_add_step(int n)    { s_paused = 1; s_step += n; }           // keyboard . (freeze + advance n)
+// Legacy free-function bridges — one line each into the singleton method.
+int  dbg_is_paused(void)    { return DbgServer::instance().isPaused() ? 1 : 0; }
+int  dbg_step_pending(void) { return DbgServer::instance().stepPending() ? 1 : 0; }
+void dbg_consume_step(void) { DbgServer::instance().consumeStep(); }
+void dbg_set_paused(int p)  { DbgServer::instance().setPaused(p != 0); }
+void dbg_toggle_pause(void) { DbgServer::instance().togglePause(); }
+void dbg_add_step(int n)    { DbgServer::instance().addStep(n); }
+void dbg_server_start(Core* c)   { DbgServer::instance().start(c); }
+void dbg_server_service(Core* c) { DbgServer::instance().service(c); }
 
 // --- main<->server handoff: a single pending request, serviced on the main thread once per frame --
 static pthread_mutex_t s_mtx  = PTHREAD_MUTEX_INITIALIZER;
@@ -86,17 +104,41 @@ static int    s_req_pending;     // 1 while a command is queued for the main thr
 static int    s_resp_ready;      // 1 once the main thread has produced a result
 static char*  s_resp_buf;        // malloc'd result (main -> server); server frees after sending
 static size_t s_resp_len;
-static int    s_started;
-static Core* s_ctx;              // live CPU context (set per frame by dbg_server_service) for `call`
+// s_started and s_ctx now live on `class DbgServer`; access via the DbgServerInternals aliases above.
+
+// Per-command SBS core targeting. A leading "@a " / "@b " token (or "@A "/"@B ") swaps s_ctx to that
+// SBS core for the duration of ONE command, then restores the frame-loop's context. Lets one debug
+// endpoint drive BOTH SBS cores from a single connection without `sbs show` between every command.
+// Silently ignored when the SBS harness isn't running (no-op passthrough with the leading token
+// stripped) so scripts written for SBS work in standalone too.
+static bool parse_core_target(const char*& line, Core*& saved, Core*& override_ctx) {
+  saved = nullptr; override_ctx = nullptr;
+  // Skip leading whitespace so `  @a  r 0x80000000` still targets A.
+  while (*line == ' ' || *line == '\t') line++;
+  if (line[0] != '@') return false;
+  if (!line[1] || (line[2] != ' ' && line[2] != '\t')) return false;
+  char which = line[1];
+  Core* target = Sbs::coreByLetter(which);
+  if (!target) { line += 3; return false; }         // strip the token even if no-op
+  saved = s_ctx; override_ctx = target;
+  s_ctx = target;
+  line += 3; while (*line == ' ' || *line == '\t') line++;
+  return true;
+}
 
 // Execute one command, writing its textual result into `out` (a memstream). MAIN THREAD ONLY.
-#include "sbs.h"                        // class Sbs — handles `sbs ...` when the SBS harness is live
-
 static void dbg_exec(FILE* out, const char* line) {
   char cmd[32] = {0}, arg[256] = {0};
   unsigned a = 0, b = 0;
+  // Optional "@a "/"@b " prefix redirects this ONE command's Core context to the SBS core.
+  const char* p = line;
+  Core* saved_ctx = nullptr; Core* over_ctx = nullptr;
+  bool  targeted  = parse_core_target(p, saved_ctx, over_ctx);
+  struct RestoreCtx { Core*& ctx; Core* prev; bool on; ~RestoreCtx() { if (on) ctx = prev; } };
+  RestoreCtx rc{ s_ctx, saved_ctx, targeted };
+  line = p;                                  // dispatcher sees the command WITHOUT the target token
   if (sscanf(line, "%31s", cmd) != 1) { fprintf(out, "(empty)\n"); return; }
-  if (Sbs::dbgCmd(out, line)) return;   // SBS divergence-debugger commands (no-op when not running)
+  if (Sbs::dbgCmd(out, line)) return;        // SBS divergence-debugger commands
 
   if (!strcmp(cmd, "help")) {
     fprintf(out,
@@ -114,6 +156,7 @@ static void dbg_exec(FILE* out, const char* line) {
       "  shot [path]      screenshot of the presented output (VK readback if VK active, else SW)\n"
       "  vkshot [path]    force a VK-rendered readback to PPM\n"
       "  vkstats          last frame's VK batched vertex counts (flat/textured/semi)\n"
+      "  @a <cmd> / @b <cmd>  route this command to SBS core A / B (default: whichever `sbs show` selected)\n"
       "  press/release B  hold/release a pad button (up/down/left/right/x/o/triangle/square/start/select)\n"
       "  tap B [n]        tap a button for n frames (default 4)\n"
       "  hold <hex>       set the raw active-low pad mask\n"
@@ -269,7 +312,7 @@ static void dbg_exec(FILE* out, const char* line) {
 // Called once per frame from the native frame loop. Services at most one queued command.
 // `c` is the live frame-loop CPU context, stored for the `call` command (runs guest fns at this
 // frame boundary). Pass NULL from sites without a context (the call command then reports "no context").
-void dbg_server_service(Core* c) {
+void DbgServer::service(Core* c) {
   s_ctx = c;
   if (!s_started) return;
   pthread_mutex_lock(&s_mtx);
@@ -369,7 +412,7 @@ static void* dbg_thread(void* arg) {
 }
 
 // Start the debug server thread if PSXPORT_DEBUG_SERVER is set (=1 -> default port, =<n> -> port n).
-void dbg_server_start(Core* c) {
+void DbgServer::start(Core* c) {
   const char* e = cfg_str("PSXPORT_DEBUG_SERVER");
   if (!e || !atoi(e)) return;
   int port = atoi(e); if (port == 1) port = 5959;

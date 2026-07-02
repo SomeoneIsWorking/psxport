@@ -110,6 +110,11 @@ public:
     return (mB && c == &mB->core) ? 1 : 0;
   }
   uint32_t frameNum() const { return mFrame; }
+  Core* coreByLetter(char which) const {
+    if (which == 'a' || which == 'A') return mA ? &mA->core : nullptr;
+    if (which == 'b' || which == 'B') return mB ? &mB->core : nullptr;
+    return nullptr;
+  }
 
 private:
   static SbsHarness* sInstance;
@@ -560,3 +565,4 @@ void Sbs::storeCb(Core* c, uint32_t addr, uint32_t val)  { auto* h = SbsHarness:
 bool Sbs::active()                                        { auto* h = SbsHarness::getOrNull(); return h && h->active(); }
 int  Sbs::coreId(Core* c)                                 { auto* h = SbsHarness::getOrNull(); return h ? h->coreId(c) : -1; }
 uint32_t Sbs::frame()                                     { auto* h = SbsHarness::getOrNull(); return h ? h->frameNum() : 0; }
+Core* Sbs::coreByLetter(char which)                       { auto* h = SbsHarness::getOrNull(); return h ? h->coreByLetter(which) : nullptr; }
