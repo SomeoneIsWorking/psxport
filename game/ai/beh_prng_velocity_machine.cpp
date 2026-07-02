@@ -30,6 +30,7 @@
 #include "graphics_bind.h"   // ov_obj_render_update (FUN_800517F8)
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
+extern void ov_inventory_give(Core*);   // FUN_8004D4F4 (game/items/inventory.cpp)
 
 namespace {
 
@@ -315,7 +316,7 @@ void beh_prng_velocity_machine(Core* c) {
    goto Lret;
  }
  L7c10: {                                          // node[5]==0
-   call2(c, 40, 1, 0x8004d4f4u);                     // FUN_8004D4F4(40, 1)
+   c->r[4] = 40; c->r[5] = 1; ov_inventory_give(c);  // FUN_8004D4F4(40, 1) [native]
    call2(c, 45, 66, 0x8004ed94u);                    // FUN_8004ED94(45, 66)
    call1(c, s1, 0x8004b0d8u);                        // FUN_8004B0D8(node)
    uint32_t r = call3(c, s1, 0, 0, 0x8004bd04u);     // FUN_8004BD04(node, 0, 0)
