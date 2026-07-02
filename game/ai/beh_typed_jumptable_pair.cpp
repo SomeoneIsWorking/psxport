@@ -39,6 +39,7 @@
 
 #include "core.h"
 #include "cfg.h"
+#include "scene/scene_transition.h"   // class SceneTransition — the sub-scene swap handshake (FUN_80073328)
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -222,7 +223,7 @@ void beh_typed_jumptable_pair(Core* c) {
         if (s5 == 2) {
         jt1_0_eq2:
           // ---- 0x801393b8: node[5] == 2 ----
-          c->r[4] = obj; rec_dispatch(c, 0x80073328u);// 801393B8 jal 0x80073328 (a0=s0)
+          c->r[2] = (uint32_t)SceneTransition::stepSwapWaiter(c, obj);   // was rec_dispatch 0x80073328
           if (c->r[2] == 0) break;                    // 801393C0 beqz v0 -> 0x80139580 (tail)
           c->mem_w8(obj + 5, (uint8_t)(c->mem_r8(obj + 5) + 1));  // 801393C8/D0/D8 lbu ; +1 ; sb 5(s0)
           break;                                      // 801393D4 j 0x80139580
@@ -244,14 +245,14 @@ void beh_typed_jumptable_pair(Core* c) {
     }
 
     case 1: {                                         // jt1[1] = 0x801393f8
-      c->r[4] = obj; rec_dispatch(c, 0x80073328u);    // 801393F8 jal 0x80073328 (a0=s0)
+      (void)SceneTransition::stepSwapWaiter(c, obj);  // was rec_dispatch 0x80073328 (v0 discarded)
       c->r[4] = obj; c->r[5] = 0x45;                  // 80139400 move a0,s0 ; 80139408 addiu a1,zero,0x45
       rec_dispatch(c, 0x800735F4u);                   // 80139404 jal 0x800735f4
       break;                                          // 8013940C j 0x80139580
     }
 
     case 2: {                                         // jt1[2] = 0x80139414
-      c->r[4] = obj; rec_dispatch(c, 0x80073328u);    // 80139414 jal 0x80073328 (a0=s0)
+      (void)SceneTransition::stepSwapWaiter(c, obj);  // was rec_dispatch 0x80073328 (v0 discarded)
       c->r[4] = obj; c->r[5] = 0x46;                  // 8013941C move a0,s0 ; 80139424 addiu a1,zero,0x46
       rec_dispatch(c, 0x800735F4u);                   // 80139420 jal 0x800735f4
       // 0x800c0000 - 0x7ec = 0x800BF814 ; v0 = lw & 0xffff0000 ; compare to 0x02010000
