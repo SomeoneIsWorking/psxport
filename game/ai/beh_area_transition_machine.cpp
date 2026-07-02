@@ -39,7 +39,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "spawn.h"   // world_despawn
+#include "spawn.h"     // class Spawn (c->engine.spawn.despawn / dispatch / spawnAndInit)
 #include "graphics_bind.h"   // ov_obj_record_init
 #include "trig.h"    // class Trig — libgte ratan2
 #include "camera/cutscene_camera.h"   // CutsceneCamera::runInitSeedGrp (was rec_dispatch 0x8006CBA8)
@@ -200,7 +200,7 @@ void beh_area_transition_machine(Core* c) {
       cd0_tail(c, nd);
       return;
     }
-    if (st == 3) { world_despawn(c, nd); }   // STATE 3
+    if (st == 3) { c->engine.spawn.despawn(nd); }   // STATE 3
     return;
   }
   if (st != 0) return;

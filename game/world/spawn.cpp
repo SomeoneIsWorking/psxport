@@ -212,7 +212,8 @@ static const uint32_t SPAWN_VAR[5] = { 0x80079C3Cu, 0x80079DDCu, 0x80079F90u, 0x
 // list from r4..r7 and returning the node ptr. Replaces the former rec_dispatch(SPAWN_VAR[cls]) into the
 // PSX body — keeps the placement→spawn path fully native (PC calls PC). Defined after pool_spawn/POOL_VAR.
 static uint32_t spawn_variant_native(Core* c, uint32_t cls);
-uint32_t spawn_dispatch(Core* c, uint32_t cls_in, uint32_t type_in, uint32_t list) {
+uint32_t Spawn::dispatch(uint32_t cls_in, uint32_t type_in, uint32_t list) {
+  Core* c = this->core;
   uint32_t cls = cls_in & 0xffu;
   if (cls >= 5) { c->r[2] = 0; return 0; }
   uint32_t type = type_in & 0xffu;
@@ -226,14 +227,14 @@ void ov_spawn_dispatch(Core* c) {
   spawn_trace(c, "disp7a980", 0x8007A980u);
   static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("spawndispverify") ? 1 : 0;
   uint32_t cls_in = c->r[4], type_in = c->r[5], list = c->r[6];
-  if (!s_v) { spawn_dispatch(c, cls_in, type_in, list); return; }
+  if (!s_v) { c->engine.spawn.dispatch(cls_in, type_in, list); return; }
   static uint8_t* ram0 = (uint8_t*)malloc(0x200000);
   static uint8_t* ramN = (uint8_t*)malloc(0x200000);
   uint8_t spad0[0x400], spadN[0x400];
   uint32_t regs0[32]; memcpy(regs0, c->r, sizeof regs0);
   uint32_t a0 = cls_in;
   memcpy(ram0, c->ram, 0x200000); memcpy(spad0, c->scratch, 0x400);
-  spawn_dispatch(c, cls_in, type_in, list);
+  c->engine.spawn.dispatch(cls_in, type_in, list);
   uint32_t v0_n = c->r[2];
   memcpy(ramN, c->ram, 0x200000); memcpy(spadN, c->scratch, 0x400);
   memcpy(c->ram, ram0, 0x200000); memcpy(c->scratch, spad0, 0x400); memcpy(c->r, regs0, sizeof regs0);
@@ -380,7 +381,7 @@ static void replace_dispatch(Core* c) {
 static uint32_t spawn_and_init(Core* c) {
   uint32_t a0 = c->r[4], a1 = c->r[5], a2 = c->r[6];
   if (c->mem_r8(0x800E7E7Cu) < 7) return 0;
-  uint32_t node = spawn_dispatch(c, /*cls=*/0, /*type=*/6, /*list=*/1);   // FUN_8007A980 — native
+  uint32_t node = c->engine.spawn.dispatch(/*cls=*/0, /*type=*/6, /*list=*/1);   // FUN_8007A980 — native
   if (node == 0) return 0;
   if (a1 != 0) {
     c->mem_w16(node + 0x2c, c->mem_r16(a1 + 2));
@@ -438,8 +439,19 @@ static const PoolDesc DESPAWN_POOL[5] = {
   { 0x800ED8D4u, 0x800ED8C5u },   // class 3 (FUN_8007A12C)
   { 0x800ED8D0u, 0x800ED8C4u },   // class 4 (FUN_8007A2C8) + cleanup 0x8007ADDC
 };
-static void despawn(Core* c) {
-  uint32_t node = c->r[4];
+void Spawn::despawn(uint32_t node) {
+  Core* c = this->core;
+  static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("despawnverify") ? 1 : 0;
+  static uint8_t* ram0 = nullptr;
+  static uint8_t* ramN = nullptr;
+  uint8_t spad0[0x400], spadN[0x400];
+  uint32_t regs0[32];
+  if (s_v) {
+    if (!ram0) { ram0 = (uint8_t*)malloc(0x200000); ramN = (uint8_t*)malloc(0x200000); }
+    memcpy(regs0, c->r, sizeof regs0);
+    memcpy(ram0, c->ram, 0x200000);
+    memcpy(spad0, c->scratch, 0x400);
+  }
   // (1) unlink. head/tail: list 0 -> list-0 vars, ANY nonzero list -> list-1 vars (verbatim).
   uint32_t list = c->mem_r8(node + 0x0au);
   uint32_t head = (list == 0) ? LIST_HEAD[0] : LIST_HEAD[1];
@@ -461,28 +473,21 @@ static void despawn(Core* c) {
     c->mem_w8(p.cnt, (uint8_t)(c->mem_r8(p.cnt) + 1));    // cnt++
     if (cls == 4) { c->r[4] = node; rec_dispatch(c, 0x8007ADDCu); }   // pool-4 extra cleanup (content)
   }
-  // (4) epilogue (0x8007a7d0): deactivate — zero the node header words 0/4/8/c/10/14/18/38 (covers active
-  // byte +0, state +4, list-id +0x0a and type +0x0c) + the bytes +0x29/+0x2a/+0x2b/+0x5e. The free-list link
-  // (+0x24) is deliberately NOT cleared (it must survive in the free-list). Verbatim recomp.
+  // (4) epilogue (0x8007a7d0): deactivate — zero node header words 0/4/8/c/10/14/18/38 (active byte +0,
+  // state +4, list-id +0x0a, type +0x0c) + bytes +0x29/+0x2a/+0x2b/+0x5e. The free-list link (+0x24) is
+  // deliberately NOT cleared (it must survive in the free-list).
   const uint32_t zw[] = { 0, 4, 8, 0xc, 0x10, 0x14, 0x18, 0x38 };
   for (uint32_t o : zw) c->mem_w32(node + o, 0);
   c->mem_w8(node + 0x2a, 0);
   c->mem_w8(node + 0x2b, 0);
   c->mem_w8(node + 0x29, 0);
   c->mem_w8(node + 0x5e, 0);
-}
-void ov_despawn(Core* c) {
-  static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("despawnverify") ? 1 : 0;
-  if (!s_v) { despawn(c); return; }
-  static uint8_t* ram0 = (uint8_t*)malloc(0x200000);
-  static uint8_t* ramN = (uint8_t*)malloc(0x200000);
-  uint8_t spad0[0x400], spadN[0x400];
-  uint32_t regs0[32]; memcpy(regs0, c->r, sizeof regs0);
-  uint32_t a0 = c->r[4];
-  memcpy(ram0, c->ram, 0x200000); memcpy(spad0, c->scratch, 0x400);
-  despawn(c);
+
+  if (!s_v) return;
+  // `despawnverify` A/B: snapshot the native result, roll back, super-call the recomp, diff.
   memcpy(ramN, c->ram, 0x200000); memcpy(spadN, c->scratch, 0x400);
   memcpy(c->ram, ram0, 0x200000); memcpy(c->scratch, spad0, 0x400); memcpy(c->r, regs0, sizeof regs0);
+  c->r[4] = node;
   rec_super_call(c, 0x8007A624u);
   uint32_t sp = regs0[29] & 0x1FFFFFu, flo = (sp >= 0x800) ? sp - 0x800 : 0;
   int ro = -1; for (uint32_t a = 0; a < 0x200000; a++) if (c->ram[a] != ramN[a] && !(a >= flo && a < sp)) { ro = (int)a; break; }
@@ -490,25 +495,14 @@ void ov_despawn(Core* c) {
   static long ng = 0, nb = 0;
   if (ro >= 0 || so >= 0) {
     if (nb++ < 40) fprintf(stderr, "[despawnverify] MISMATCH node=%08x list=%u ram@%x spad@%x sp=%x\n",
-                           a0, c->mem_r8(a0 + 0x0au), ro, so, sp);
+                           node, c->mem_r8(node + 0x0au), ro, so, sp);
   } else if (++ng % 20 == 0) fprintf(stderr, "[despawnverify] %ld matches\n", ng);
 }
 
-void ov_spawn_and_init(Core* c) {   // FUN_8003116C (defined above, gated here after record_gate)
+uint32_t Spawn::spawnAndInit(uint32_t a0, uint32_t posSrc, uint32_t a2) {   // FUN_8003116C
+  Core* c = this->core;
+  c->r[4] = a0; c->r[5] = posSrc; c->r[6] = a2;
   static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("spawninitverify") ? 1 : 0;
   record_gate(c, spawn_and_init, 0x8003116Cu, "spawninitverify", s_v);
-}
-
-// ── typed live-wiring entries (called directly from native AI behavior handlers) ───────────────────
-void world_despawn(Core* c, uint32_t node) { c->r[4] = node; ov_despawn(c); }
-uint32_t world_spawn_and_init(Core* c, uint32_t a0, uint32_t posSrc, uint32_t a2) {
-  c->r[4] = a0; c->r[5] = posSrc; c->r[6] = a2;
-  ov_spawn_and_init(c);
   return c->r[2];
-}
-
-// ------------------------------------------------------------------------------------------------
-// Public registration — ONE line from game_tomba2.cpp init.
-// ------------------------------------------------------------------------------------------------
-void entity_spawn_register(void) {
 }

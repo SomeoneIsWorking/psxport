@@ -20,7 +20,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "spawn.h"   // world_despawn (FUN_8007A624)
+#include "spawn.h"     // class Spawn (c->engine.spawn.despawn / dispatch / spawnAndInit)
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
@@ -64,7 +64,7 @@ void beh_box_rearm_sub(Core* c) {
     }
     leaf1(c, nd, 0x8013ac98u);                                        // FUN_8013AC98
   } else if (st == 3) {
-    world_despawn(c, nd);                                        // FUN_8007A624
+    c->engine.spawn.despawn(nd);                                        // FUN_8007A624
   }
 }
 

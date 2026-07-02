@@ -31,7 +31,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "spawn.h"   // world_despawn
+#include "spawn.h"     // class Spawn (c->engine.spawn.despawn / dispatch / spawnAndInit)
 #include "rng.h"       // class Rng (via c->rng.next())
 #include "collision.h"  // Collision::listScan (FUN_80031780)
 void rec_super_call(Core*, uint32_t);
@@ -56,7 +56,7 @@ void beh_scatter_record_dither(Core* c) {
   goto L7d4;                                          // st >= 4 default
 
  L7cc:                                           // STATE 2/3 — FUN_8007A624(node)
-  world_despawn(c, obj);
+  c->engine.spawn.despawn(obj);
   goto L7d4;
 
  L590:                                           // STATE 0 — seed the scatter record list

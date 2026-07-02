@@ -27,7 +27,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "spawn.h"   // world_despawn
+#include "spawn.h"     // class Spawn (c->engine.spawn.despawn / dispatch / spawnAndInit)
 #include "collision.h"  // Collision::listScan (FUN_80031780)
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
@@ -47,7 +47,7 @@ void beh_area_threshold_ptr_swap(Core* c) {
   goto L528;                                          // st >= 4 default
 
  L520:                                           // STATE 2/3 — FUN_8007A624(node)
-  world_despawn(c, obj);
+  c->engine.spawn.despawn(obj);
   goto L528;
 
  L440:                                           // STATE 0

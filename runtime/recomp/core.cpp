@@ -36,6 +36,7 @@ Core::Core() {
   engine.musicCoord.core = this;        // Engine-owned dialog↔music coordination
   engine.collision.core = this;         // Engine-owned collision-grid subsystem
   engine.bit.core = this;               // Engine-owned game-flag bitmap bit-test subsystem
+  engine.spawn.core = this;             // Engine-owned entity spawn/despawn subsystem
   rng.core        = this;
   inventory.core  = this;
   // Render umbrella (owned by pointer): allocate, wire its back-pointer + each embedded sub-subsystem.

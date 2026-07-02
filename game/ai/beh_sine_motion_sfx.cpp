@@ -30,7 +30,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "spawn.h"   // world_despawn (FUN_8007A624)
+#include "spawn.h"     // class Spawn (c->engine.spawn.despawn / dispatch / spawnAndInit)
 #include "graphics_bind.h"   // ov_obj_render_update (FUN_800517F8)
 #include "math/trig.h"   // class Trig — rsin (FUN_80083E80)
 void rec_super_call(Core*, uint32_t);
@@ -300,7 +300,7 @@ void beh_sine_motion_sfx(Core* c) {
   goto Lret;
 
  L5a0:
-  world_despawn(c, nd);                        // FUN_8007A624(node) — native
+  c->engine.spawn.despawn(nd);                        // FUN_8007A624(node) — native
 
  Lret:
   return;

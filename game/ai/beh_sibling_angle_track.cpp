@@ -37,7 +37,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "spawn.h"   // world_despawn
+#include "spawn.h"     // class Spawn (c->engine.spawn.despawn / dispatch / spawnAndInit)
 #include "graphics_bind.h"   // ov_obj_record_init
 #include "trig.h"            // class Trig — libgte rsin/rcos
 void rec_super_call(Core*, uint32_t);
@@ -61,7 +61,7 @@ void beh_sibling_angle_track(Core* c) {
       // 80139608 beq v1,2 -> epilogue (0x80139820) ; 80139610 beq v1,3 -> despawn (0x80139818)
       if (st == 2) return;                              // idle
       if (st == 3) {                                    // 0x80139818: despawn
-        world_despawn(c, obj);    // 80139818 jal 0x8007a624 (a0=s2)
+        c->engine.spawn.despawn(obj);    // 80139818 jal 0x8007a624 (a0=s2)
       }
       return;                                           // 80139618 j 0x80139820 (epilogue, no-op)
     }

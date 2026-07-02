@@ -31,7 +31,7 @@ static void d2(Core* c, uint32_t fn, uint32_t a0, uint32_t a1);
 #include "camera/cutscene_camera.h"   // class CutsceneCamera — SOP/BG cutscene camera (0x8006E3B0)
 #include "world/graphics_bind.h"  // ov_obj_set_xformblk (FUN_8006CBD0)
 #include "core/asset.h"           // class Asset — unpackGroup / loadTexgroup (static)
-#include "world/spawn.h"          // spawn_dispatch (FUN_8007A980)
+#include "world/spawn.h"          // class Spawn (c->engine.spawn.dispatch)
 #include "world/pool.h"           // ov_pool_init_run (FUN_8007B18C)
 static void d3(Core* c, uint32_t fn, uint32_t a0, uint32_t a1, uint32_t a2);
 
@@ -250,7 +250,7 @@ void Sop::fieldMode() { Core* c = core;
       d1(c, 0x8010a8d4u, 0x800f2418u);         // SOP bg-ptr setup
       // 3 scene objects: spawn + stamp fields from the SOP overlay tables @0x8010c98c (stride 12).
       for (int i = 0; i < 3; i++) {
-        spawn_dispatch(c, /*cls=*/3, /*type=*/3, /*list=*/1);       // FUN_8007A980 — native
+        c->engine.spawn.dispatch(/*cls=*/3, /*type=*/3, /*list=*/1);       // FUN_8007A980 — native
 
         uint32_t node = c->r[2];
         uint32_t t = 0x8010c98cu + (uint32_t)i * 12;

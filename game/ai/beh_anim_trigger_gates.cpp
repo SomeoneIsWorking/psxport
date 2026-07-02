@@ -25,7 +25,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "spawn.h"   // world_despawn
+#include "spawn.h"     // class Spawn (c->engine.spawn.despawn / dispatch / spawnAndInit)
 #include "graphics_bind.h"   // ov_obj_render_update (FUN_800517F8)
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
@@ -44,7 +44,7 @@ void beh_anim_trigger_gates(Core* c) {
   if (st == 1) goto Lcb0;
   if (st < 2) { if (st == 0) goto Lc50; goto Lret; }   // st<2 -> only st==0
   if (st == 2) goto Lret;
-  if (st == 3) { world_despawn(c, obj); goto Lret; }
+  if (st == 3) { c->engine.spawn.despawn(obj); goto Lret; }
   goto Lret;                                       // st >= 4 default
 
  Lc50:                                            // STATE 0 — node[3] dispatch

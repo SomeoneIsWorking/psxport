@@ -31,7 +31,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "spawn.h"   // world_despawn (FUN_8007A624)
+#include "spawn.h"     // class Spawn (c->engine.spawn.despawn / dispatch / spawnAndInit)
 #include "graphics_bind.h"   // ov_obj_render_update (FUN_800517F8)
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
@@ -68,7 +68,7 @@ void beh_lift_platform(Core* c) {
     if (st >= 2) {
       if (st == 2) return;
       if (st != 3) return;
-      world_despawn(c, nd);                           // FUN_8007A624
+      c->engine.spawn.despawn(nd);                           // FUN_8007A624
       return;
     }
     if (st != 0) return;

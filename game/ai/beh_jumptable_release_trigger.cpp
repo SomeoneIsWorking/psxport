@@ -29,7 +29,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "spawn.h"   // world_despawn
+#include "spawn.h"     // class Spawn (c->engine.spawn.despawn / dispatch / spawnAndInit)
 #include "graphics_bind.h"   // ov_obj_set_geom
 #include "inventory.h"       // class Inventory — c->inventory.giveAndFlag (FUN_8004D4C4)
 void rec_super_call(Core*, uint32_t);
@@ -54,7 +54,7 @@ void beh_jumptable_release_trigger(Core* c) {
       }
       if (st == 3) {
         // ---- STATE 3 (0x8012529c): despawn ----
-        world_despawn(c, obj);   // 8012529C jal 0x8007a624 (a0=s2)
+        c->engine.spawn.despawn(obj);   // 8012529C jal 0x8007a624 (a0=s2)
         return;                                        // 801252A4 epilogue
       }
       return;                                          // 80124EC8 j 0x801252a4 (epilogue, no-op)

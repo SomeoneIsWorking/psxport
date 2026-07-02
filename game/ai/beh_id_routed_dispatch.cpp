@@ -22,7 +22,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "spawn.h"   // world_despawn
+#include "spawn.h"     // class Spawn (c->engine.spawn.despawn / dispatch / spawnAndInit)
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
@@ -83,7 +83,7 @@ void beh_id_routed_dispatch(Core* c) {
 
  // ---------------- STATE 3 ----------------
  S3:
-  world_despawn(c, s0);                          // FUN_8007A624(node)
+  c->engine.spawn.despawn(s0);                          // FUN_8007A624(node)
  Lret:
   return;
 }

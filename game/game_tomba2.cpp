@@ -306,7 +306,6 @@ void games_tomba2_init(void) {
   { void sound_register(void);         sound_register();         }
   { void hud_register(void);           hud_register();           }
   { void engine_submit_register_autodetect(void); engine_submit_register_autodetect(); }
-  { void entity_spawn_register(void);  entity_spawn_register();  }
   { void actor_sm_24448_register(void); actor_sm_24448_register(); }
   { void beh_scene_ui_trigger_register(void);  beh_scene_ui_trigger_register();  }
   { void beh_typed_init_scene_trigger_register(void);  beh_typed_init_scene_trigger_register();  }

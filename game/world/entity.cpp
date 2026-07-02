@@ -12,7 +12,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "entity.h"
-#include "spawn.h"   // world_despawn
+#include "spawn.h"     // class Spawn (c->engine.spawn.despawn / dispatch / spawnAndInit)
 #include "graphics_bind.h"   // ov_obj_render_update
 #include "rng.h"       // class Rng (via c->rng.next())
 void rec_super_call(Core*, uint32_t);
@@ -165,7 +165,7 @@ static void sm40558(Core* c) {
   const uint32_t G = 0x800BF870u;                 // global block base (0x800bf870 = mode byte)
   uint32_t st = c->mem_r8(obj + 4);
 
-  if (st == 3) { world_despawn(c, obj); return; }
+  if (st == 3) { c->engine.spawn.despawn(obj); return; }
 
   if (st == 0) {
     uint32_t s5 = c->mem_r8(obj + 5);

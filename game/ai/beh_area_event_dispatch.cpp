@@ -26,7 +26,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "spawn.h"   // world_despawn
+#include "spawn.h"     // class Spawn (c->engine.spawn.despawn / dispatch / spawnAndInit)
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
@@ -51,7 +51,7 @@ void beh_area_event_dispatch(Core* c) {
       if (c->mem_r8(obj + 1) != 0) { c->r[4] = obj; rec_dispatch(c, 0x800518FCu); }
       break;
     case 3:
-      world_despawn(c, obj);
+      c->engine.spawn.despawn(obj);
       break;
     default:  // state 2 and any other: no-op
       break;

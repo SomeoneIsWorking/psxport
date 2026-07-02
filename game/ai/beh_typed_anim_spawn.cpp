@@ -27,7 +27,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "spawn.h"   // world_despawn
+#include "spawn.h"     // class Spawn (c->engine.spawn.despawn / dispatch / spawnAndInit)
 #include "graphics_bind.h"   // ov_obj_set_geom
 #include "inventory.h"       // class Inventory — c->inventory.giveAndFlag (FUN_8004D4C4)
 void rec_super_call(Core*, uint32_t);
@@ -210,7 +210,7 @@ void beh_typed_anim_spawn(Core* c) {
 
  // ---------------- STATE 3 ----------------
  S3:
-  world_despawn(c, s0);                        // FUN_8007A624(node)
+  c->engine.spawn.despawn(s0);                 // FUN_8007A624(node)
  Lret:
   c->r[29] = entry_sp;                              // restore caller sp (mirror epilogue)
   return;

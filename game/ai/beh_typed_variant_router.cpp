@@ -31,7 +31,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "spawn.h"   // world_despawn
+#include "spawn.h"     // class Spawn (c->engine.spawn.despawn / dispatch / spawnAndInit)
 #include "graphics_bind.h"   // ov_obj_set_geom
 #include "rng.h"       // class Rng (via c->rng.next())
 void rec_super_call(Core*, uint32_t);
@@ -188,7 +188,7 @@ void beh_typed_variant_router(Core* c) {
   }
 
   if (st == 3) {
-    world_despawn(c, nd);                                           // FUN_8007a624
+    c->engine.spawn.despawn(nd);                                           // FUN_8007a624
   }
 }
 

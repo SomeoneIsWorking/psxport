@@ -32,7 +32,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "spawn.h"   // world_despawn
+#include "spawn.h"     // class Spawn (c->engine.spawn.despawn / dispatch / spawnAndInit)
 #include "graphics_bind.h"   // ov_obj_record_init
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
@@ -55,7 +55,7 @@ void beh_typed_table_seed_gate(Core* c) {
       // 80133C54 slti v0,s0,4 ; 80133C58 beqz -> epilogue (state>=4: no-op)
       if (st >= 4) return;
       // 80133C60 j 0x80133D4C  (state 2 OR 3 -> despawn)
-      world_despawn(c, obj);           // 80133D4C jal 0x8007a624
+      c->engine.spawn.despawn(obj);           // 80133D4C jal 0x8007a624
       return;                                 // -> epilogue
     }
     if (st != 0) return;                      // 80133C44 beqz s0 -> state 0; else 80133C4C j epilogue

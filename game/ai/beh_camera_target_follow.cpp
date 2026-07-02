@@ -31,7 +31,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "spawn.h"   // world_despawn
+#include "spawn.h"     // class Spawn (c->engine.spawn.despawn / dispatch / spawnAndInit)
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
@@ -49,7 +49,7 @@ void beh_camera_target_follow(Core* c) {
   if (st != 1) {
     if (st >= 2) {
       if (st >= 4) return;                              // 0x80059f18: st>=4 -> return
-      world_despawn(c, nd);       // 0x8005a380: states 2 & 3
+      c->engine.spawn.despawn(nd);       // 0x8005a380: states 2 & 3
       return;
     }
     if (st != 0) return;

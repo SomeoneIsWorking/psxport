@@ -42,7 +42,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "spawn.h"   // world_despawn
+#include "spawn.h"     // class Spawn (c->engine.spawn.despawn / dispatch / spawnAndInit)
 #include "graphics_bind.h"   // ov_obj_record_init
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
@@ -67,7 +67,7 @@ void beh_typed_jumptable_pair(Core* c) {
       // 80139008 beq v1,2 -> epilogue (0x801395ac) ; 80139010 beq v1,3 -> despawn (0x801395a4)
       if (st == 2) return;                            // idle
       if (st == 3) {                                  // 0x801395A4: despawn
-        world_despawn(c, obj);  // 801395A4 jal 0x8007a624 (a0=s0)
+        c->engine.spawn.despawn(obj);  // 801395A4 jal 0x8007a624 (a0=s0)
       }
       return;                                         // 80139018 j 0x801395ac (epilogue, no-op)
     }

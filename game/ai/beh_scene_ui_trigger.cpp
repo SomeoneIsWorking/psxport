@@ -23,7 +23,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "spawn.h"   // world_despawn
+#include "spawn.h"     // class Spawn (c->engine.spawn.despawn / dispatch / spawnAndInit)
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
@@ -54,7 +54,7 @@ void beh_scene_ui_trigger(Core* c) {
 
   if (st != 1) {
     if (st >= 2) {                                   // state 2 (idle) / 3 (despawn) / other
-      if (st == 3) { world_despawn(c, obj); }  // despawn
+      if (st == 3) { c->engine.spawn.despawn(obj); }  // despawn
       return;                                        // EPI
     }
     if (st != 0) return;                             // (dead path; only 0 left here)

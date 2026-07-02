@@ -26,7 +26,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "spawn.h"   // world_despawn (FUN_8007A624)
+#include "spawn.h"     // class Spawn (c->engine.spawn.despawn / dispatch / spawnAndInit)
 #include "graphics_bind.h"   // ov_obj_render_update (FUN_800517F8)
 #include "inventory.h"       // class Inventory — c->inventory.give (FUN_8004D4F4)
 void rec_super_call(Core*, uint32_t);
@@ -344,7 +344,7 @@ void beh_prng_velocity_machine(Core* c) {
 
  // ---------------------------------------------------------------- STATE 3
  L7cd8: {
-   world_despawn(c, s1);                             // FUN_8007A624(node) — native
+   c->engine.spawn.despawn(s1);                             // FUN_8007A624(node) — native
    goto Lret;
  }
 

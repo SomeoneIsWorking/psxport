@@ -21,7 +21,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "spawn.h"   // world_despawn
+#include "spawn.h"     // class Spawn (c->engine.spawn.despawn / dispatch / spawnAndInit)
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
@@ -38,7 +38,7 @@ void beh_pure_substate_dispatch(Core* c) {
   if (s0 == 1) goto S1;
   if ((int32_t)s0 < 2) { if (s0 == 0) { leaf(c, s1, 0x801253E8u); } goto Lret; }  // STATE 0
   if (s0 == 2) goto S2;
-  if (s0 == 3) { world_despawn(c, s1); goto Lret; }   // STATE 3
+  if (s0 == 3) { c->engine.spawn.despawn(s1); goto Lret; }   // STATE 3
   goto Lret;                                        // s0 >= 4
 
  S1: {

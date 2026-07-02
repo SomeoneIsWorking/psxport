@@ -31,7 +31,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "spawn.h"   // world_despawn
+#include "spawn.h"     // class Spawn (c->engine.spawn.despawn / dispatch / spawnAndInit)
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
@@ -79,7 +79,7 @@ void beh_visibility_gate_dispatch(Core* c) {
     if (st == 2) goto state2;                          // 0x8004c274
     if (st == 3) {                                     // 0x8004c27c
       // ---- STATE 3 (despawn) @0x8004c918 ----
-      world_despawn(c, obj);
+      c->engine.spawn.despawn(obj);
       return;                                          // -> EPI
     }
     return;                                            // 0x8004c284: default -> EPI

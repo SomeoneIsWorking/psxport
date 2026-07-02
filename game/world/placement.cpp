@@ -6,7 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "placement.h"
-#include "spawn.h"     // spawn_dispatch
+#include "spawn.h"     // class Spawn (c->engine.spawn.dispatch)
 void rec_super_call(Core*, uint32_t);
 
 // ================================================================================================
@@ -79,8 +79,7 @@ static void place_objects(Core* c) {
     }
     if (!skip) {
       uint8_t cls = c->mem_r8(rec + 1);
-      uint32_t node = spawn_dispatch(c,
-        /*cls=*/(uint32_t)(c->mem_r8(rec) & 0x7fu),
+      uint32_t node = c->engine.spawn.dispatch(/*cls=*/(uint32_t)(c->mem_r8(rec) & 0x7fu),
         /*type=*/(cls == 3) ? 3u : cls,
         /*list=*/(cls == 3) ? 1u : 0u);
       if (node != 0) {
@@ -131,8 +130,7 @@ void Placement::placeAreaObjects() { Core* c = core;
 //     return node;
 static uint32_t spawn_with_parent(Core* c) {
   uint32_t parent = c->r[4], type = c->r[5], cls = c->r[6] & 0xffu, flag = c->r[7];
-  uint32_t node = spawn_dispatch(c,
-    /*cls=*/type & 0x7fu,
+  uint32_t node = c->engine.spawn.dispatch(/*cls=*/type & 0x7fu,
     /*type=*/(cls == 3) ? 3u : cls,
     /*list=*/(cls == 3) ? 1u : 0u);
   if (node != 0) {

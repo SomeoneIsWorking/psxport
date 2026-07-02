@@ -29,7 +29,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "spawn.h"   // world_despawn
+#include "spawn.h"     // class Spawn (c->engine.spawn.despawn / dispatch / spawnAndInit)
 #include "mathlib.h"  // Bit::test7EC / test868 (FUN_8004D7EC / FUN_8004D868)
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
@@ -46,7 +46,7 @@ void beh_record_list_scanner(Core* c) {
   uint8_t state = c->mem_r8(obj + 4);
 
   if (state == 2) return;                                       // no-op
-  if (state == 3) { world_despawn(c, obj); return; }
+  if (state == 3) { c->engine.spawn.despawn(obj); return; }
   if (state > 3) return;                                        // default
 
   if (state == 0) {

@@ -27,7 +27,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "spawn.h"   // world_despawn (FUN_8007A624)
+#include "spawn.h"     // class Spawn (c->engine.spawn.despawn / dispatch / spawnAndInit)
 #include "animation.h" // Animation::step (FUN_80076D68)
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
@@ -56,7 +56,7 @@ void beh_actor_move_sm(Core* c) {
       uint8_t f = c->mem_r8(nd + 0x1b);
       if (f & 0x40) { c->mem_w8(nd + 0x1b, (uint8_t)(f & 0xbf)); return; }
       c->mem_w32(c->mem_r32(nd + 0x10) + 0xc, 0);
-      world_despawn(c, nd);                          // FUN_8007A624
+      c->engine.spawn.despawn(nd);                          // FUN_8007A624
       return;
     }
     // STATE 2

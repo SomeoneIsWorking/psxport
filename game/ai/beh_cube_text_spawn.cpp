@@ -29,7 +29,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "spawn.h"   // world_despawn
+#include "spawn.h"     // class Spawn (c->engine.spawn.despawn / dispatch / spawnAndInit)
 #include "graphics_bind.h"   // ov_obj_render_update (FUN_800517F8)
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
@@ -66,7 +66,7 @@ void beh_cube_text_spawn(Core* c) {
       c->mem_w8(0x800ED06Cu, (uint8_t)(c->mem_r8(0x800ED06Cu) - 1));
       return;
     }
-    if (st == 3) { world_despawn(c, nd); }  // STATE 3
+    if (st == 3) { c->engine.spawn.despawn(nd); }  // STATE 3
     return;
   }
   if (st != 0) return;

@@ -27,7 +27,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "spawn.h"   // world_despawn
+#include "spawn.h"     // class Spawn (c->engine.spawn.despawn / dispatch / spawnAndInit)
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
@@ -102,7 +102,7 @@ void beh_box_seed_phase_gate(Core* c) {
   goto Lret;
 
  La2bc:
-  world_despawn(c, s1);                         // FUN_8007A624(node)
+  c->engine.spawn.despawn(s1);                         // FUN_8007A624(node)
  Lret:
   return;
 }
