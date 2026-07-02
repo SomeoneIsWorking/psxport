@@ -36,6 +36,7 @@
 
 #include "core.h"
 #include "cfg.h"
+#include "world/pool.h"          // ov_pool_init_run (FUN_8007B18C)
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -655,7 +656,7 @@ static void demo_frame_s7(Core* c) {
     void native_transition_area_load(Core*);
     native_transition_area_load(c);                                 // = sync 0x800452c0; sets 1f80019b=1
     // reinit subsystems (all SYNC; no incoming args / self-args)
-    rec_dispatch(c, 0x8007b18cu);
+    ov_pool_init_run(c);       // 0x8007B18C — native (via LIVE gated entry)
     rec_dispatch(c, 0x800796dcu);
     rec_dispatch(c, 0x800263e8u);
     rec_dispatch(c, 0x80072a78u);

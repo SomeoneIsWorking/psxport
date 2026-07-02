@@ -31,6 +31,7 @@ static void d2(Core* c, uint32_t fn, uint32_t a0, uint32_t a1);
 #include "world/graphics_bind.h"  // ov_obj_set_xformblk (FUN_8006CBD0)
 #include "core/asset.h"           // ov_unpack_group (FUN_80044E84)
 #include "world/spawn.h"          // spawn_dispatch (FUN_8007A980)
+#include "world/pool.h"           // ov_pool_init_run (FUN_8007B18C)
 static void d3(Core* c, uint32_t fn, uint32_t a0, uint32_t a1, uint32_t a2);
 
 // Owned synchronous area-DATA load (replaces the body of LAB_80109164 0x80109164). Runs in the
@@ -244,7 +245,7 @@ void ov_sop_field_mode(Core* c) {
       //                 during startup delay, then ramps in). Matches PSX FUN_8007e9c8(0xffffff,0,4) per-frame.
       c->screenFade.set(ScreenFade::SUBTRACTIVE, 0xff, 0xff, 0xff);
       native_sop_area_load(c);                 // INLINE sync load (replaces FUN_80044bd4) -> 1f80019b=1
-      d0(c, 0x8007b18cu);
+      ov_pool_init_run(c);   // 0x8007B18C — native (via LIVE gated entry)
       d0(c, 0x800796dcu);
       d0(c, 0x80078610u);
       d1(c, 0x8010a8d4u, 0x800f2418u);         // SOP bg-ptr setup
