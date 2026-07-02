@@ -37,6 +37,7 @@ Core::Core() {
   engine.collision.core = this;         // Engine-owned collision-grid subsystem
   engine.bit.core = this;               // Engine-owned game-flag bitmap bit-test subsystem
   engine.spawn.core = this;             // Engine-owned entity spawn/despawn subsystem
+  engine.behaviors.core = this;         // Engine-owned per-object behavior dispatcher
   rng.core        = this;
   inventory.core  = this;
   // Render umbrella (owned by pointer): allocate, wire its back-pointer + each embedded sub-subsystem.

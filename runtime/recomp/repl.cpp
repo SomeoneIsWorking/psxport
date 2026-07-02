@@ -124,7 +124,6 @@ long native_repl_read(Core* c, uint32_t f) {
       // native-OWNED (readable C, shown by name) or still-PSX substrate; and mark the PLAYER node (the one
       // whose int16 pos mirrors Tomba's 16.16 master position at 0x800E7EAC/B0/B4). This makes "what is
       // this object and is its logic ours" answerable at a glance.
-      const char* behavior_native_name(uint32_t h);   // engine/engine_tomba2.cpp
       int16_t px = (int16_t)(c->mem_r32(0x800E7EACu) >> 16), pz = (int16_t)(c->mem_r32(0x800E7EB4u) >> 16);
       const uint32_t heads[3] = { 0x800FB168u, 0x800F2624u, 0x800F2738u };
       int total = 0, owned = 0;
@@ -134,7 +133,7 @@ long native_repl_read(Core* c, uint32_t f) {
         for (int g = 0; n && g < 400; g++, n = c->mem_r32(n + 0x24)) {
           uint32_t cmd0 = c->mem_r8(n + 8) ? c->mem_r32(n + 0xC0) : 0;
           uint32_t hh = c->mem_r32(n + 0x1c);
-          const char* bn = behavior_native_name(hh);
+          const char* bn = c->engine.behaviors.nativeName(hh);
           int16_t nx = c->mem_r16s(n + 0x2e), nz = c->mem_r16s(n + 0x36);
           int is_player = (c->mem_r32(n + 0x38) == 0) && (nx == px) && (nz == pz);
           if (bn) owned++;

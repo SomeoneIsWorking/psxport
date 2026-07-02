@@ -33,6 +33,7 @@
 #include "player/collision.h"    // Engine owns the Collision grid-family subsystem
 #include "math/mathlib.h"        // Engine owns the Bit game-flag bitmap subsystem
 #include "world/spawn.h"         // Engine owns the Spawn entity-spawn/despawn subsystem
+#include "object/behavior_dispatch.h" // Engine owns the per-object BehaviorDispatch subsystem
 class Core;
 
 class Engine {
@@ -60,6 +61,7 @@ public:
   Collision        collision;          // collision-grid family (list-scan + grid setup/query/resolve/step)
   Bit              bit;                // game progress-flag bitmap bit-test (FUN_8004D7EC / D868)
   Spawn            spawn;              // entity spawn/despawn dispatcher (FUN_8007A980 / A624 / 3116C)
+  BehaviorDispatch behaviors;          // per-object handler dispatch registry (50 native behaviors)
 
   // ── GAME-stage entry points (called by the scheduler each frame) ────────────────────────────
   // stagePrologue: one-time prologue that runs when the GAME task enters — task-slot setup, first

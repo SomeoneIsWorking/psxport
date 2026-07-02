@@ -14,15 +14,13 @@
 #include <stdio.h>
 
 void rec_dispatch(Core* c, uint32_t addr);
-bool dispatch_native_behavior(Core* c, uint32_t h);   // native-behavior table lookup (engine_tomba2.cpp)
 
 namespace {
 
-// Per-node handler dispatch (was static call_handler + walk_list helpers). Local to this TU.
+// Per-node handler dispatch: fps60 current-object bookkeeping + native-or-substrate route via
+// BehaviorDispatch (was static call_handler + walk_list helpers). Local to this TU. The `behhist`
+// diagnostic feeds top-down ownership decisions, so it lives here on the main walk path.
 inline void call_handler(Core* c, uint32_t node) {
-  uint32_t prev = c->game->fps60.current_object;
-  c->game->fps60.current_object = node;
-  c->r[4] = node;
   uint32_t h = c->mem_r32(node + T2OBJ_HANDLER);
   if (cfg_dbg("behhist")) {
     static uint32_t addr[64]; static long cnt[64]; static int nh=0; static long w=0;
@@ -32,8 +30,7 @@ inline void call_handler(Core* c, uint32_t node) {
     if((++w % 300)==0){ fprintf(stderr,"[behhist] distinct=%d handlers:\n", nh);
       for(int j=0;j<nh;j++) fprintf(stderr,"   %08X  x%ld\n", addr[j], cnt[j]); }
   }
-  if (!dispatch_native_behavior(c, h)) rec_dispatch(c, h);
-  c->game->fps60.current_object = prev;
+  c->engine.behaviors.dispatchObj(node, h);
 }
 
 inline void walk_list(Core* c, uint32_t head, long* count) {
@@ -65,11 +62,10 @@ void ObjectList::walkAll() {
 void ObjectList::walkAux() {
   Core* c = core;
   // FUN_80069B28: does NOT clear the render flag; dispatches per handler ptr via the shared path.
-  void dispatch_obj_method(Core* c, uint32_t obj, uint32_t h);
   for (uint32_t n = c->mem_r32(AUX_LIST_HEAD); n; ) {
     uint32_t h    = c->mem_r32(n + 0x1Cu);
     uint32_t next = c->mem_r32(n + 0x24u);
-    dispatch_obj_method(c, n, h);
+    c->engine.behaviors.dispatchObj(n, h);
     n = next;
   }
 }
