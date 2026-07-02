@@ -202,7 +202,7 @@ void Sop::fieldUpdate() { Core* c = core;
     if (bg == 0) { c->mem_w8(0x800e8008u, 1); c->mem_w8(0x800e806cu, 0); }
     else if (bg == 1) {
       uint8_t sub = c->mem_r8(0x800e806cu);
-      if (sub == 0) CutsceneCamera::runSnapFollow(c, 0x800e8008u, 0x800e8040u);   // native class CutsceneCamera (was 0x8006e3b0)
+      if (sub == 0) CutsceneCamera(c, 0x800e8008u).snapFollow(0x800e8040u);   // native class CutsceneCamera (was 0x8006e3b0)
       else if (sub == 1) c->mem_w8(0x800e806cu, 0);
     }
     c->engine.areaUpdateTail();                            // 0x80075a80 NATIVE
@@ -260,7 +260,7 @@ void Sop::fieldMode() { Core* c = core;
         c->mem_w32(node + 0x1c, c->mem_r32(t + 8));   // per-scene handler (content)
       }
       c->r[4] = 0x800e8008u; c->r[5] = 0x8010c95cu; c->engine.graphicsBind.setXformBlk();   // BG xform setup — native (was 0x8006cbd0)
-      CutsceneCamera::runSnapFollow(c, 0x800e8008u, 0x800e8040u);   // BG init (native class CutsceneCamera; was 0x8006e3b0)
+      CutsceneCamera(c, 0x800e8008u).snapFollow(0x800e8040u);   // BG init (native class CutsceneCamera; was 0x8006e3b0)
       sm = c->mem_r32(0x1f800138u);                   // (callees don't move sm, but reload defensively)
       c->mem_w16(sm + 0x50, 1);
       c->engine.pool.reset75240();   // 0x80075240 — native (via LIVE gated entry)

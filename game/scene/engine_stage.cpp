@@ -395,7 +395,7 @@ void Engine::fieldFrame() { Core* c = core;
     FFS("ff_25588", c->engine.sceneEventFifo()); FFS("ff_4fe84", c->engine.sceneRenderListBuilder());   // 0x80025588/0x8004fe84 NATIVE (Engine methods)
     FFS("ff_disp26c88", c->engine.objectTable.dispatch());                                            // 0x80026c88 NATIVE
     FFS("ff_22a80", c->engine.modePerFrameDispatch());                                // 0x80022a80 NATIVE (Engine::modePerFrameDispatch)
-    FFS("ff_6ec44", CutsceneCamera::runFieldUpdate(c));         // 0x8006ec44 NATIVE (CutsceneCamera::update)
+    FFS("ff_6ec44", CutsceneCamera(c, CutsceneCamera::CAM_OBJ).update());         // 0x8006ec44 NATIVE (CutsceneCamera::update)
     FFS("ff_50de4", c->engine.sceneStateStep());                 // 0x80050de4 NATIVE (Engine::sceneStateStep)
     FFS("ff_1cac0", c->engine.areaModeDispatch());               // 0x8001cac0 NATIVE (Engine::areaModeDispatch)
   }
@@ -701,7 +701,7 @@ void Engine::fieldFrameX() { Core* c = core;
   if (c->mem_r8(0x1f800136u) == 0) {            // not paused: reduced gameplay update
     c->engine.frameStartTick(); c->engine.objectList.walkAux(); d0(c, 0x80026368u); c->engine.transitionState3.walkOnce();   // 0x80059d28/0x80069b28/0x8007b04c NATIVE
     c->engine.sceneEventFifo(); c->engine.sceneRenderListBuilder(); c->engine.objectTable.dispatch(); c->engine.modePerFrameDispatch();   // 25588/4fe84/26c88/22a80 NATIVE
-    CutsceneCamera::runFieldUpdate(c);   // 0x8006ec44 NATIVE (CutsceneCamera::update)
+    CutsceneCamera(c, CutsceneCamera::CAM_OBJ).update();   // 0x8006ec44 NATIVE (CutsceneCamera::update)
   }
   if (c->mem_r8(0x1f800136u) < 2) c->mRender->frameX(); // 0x8003fa44 — NATIVE render orchestrator twin
   c->engine.submitPage810c();                      // render submit (page-1 dim-fade owned; other pages recomp)

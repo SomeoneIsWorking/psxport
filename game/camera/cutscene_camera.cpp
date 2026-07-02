@@ -589,9 +589,38 @@ void CutsceneCamera::snapAccY(uint32_t target) {     // FUN_8006D950
   w32(S + 0x10, r32(target + 4));      // snap Y accumulator
 }
 void CutsceneCamera::snapFollow(uint32_t target) {   // FUN_8006E3B0
+  static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("camverify") ? 1 : 0;
+  uint32_t cam0[64], sp0[256], rsave[32];
+  if (s_v) {
+    for (int i = 0; i < 64;  i++) cam0[i] = c->mem_r32(cam_ + i * 4);
+    for (int i = 0; i < 256; i++) sp0[i]  = c->mem_r32(0x1F800000u + i * 4);
+    memcpy(rsave, c->r, sizeof rsave);
+  }
+
   snapAccXZ(target);                   // snap the follow accumulators to target (no smoothing)
   snapAccY(target);
   lookAt();
+
+  if (!s_v) return;
+  // `camverify` A/B: capture the native result, roll back, super-call the recomp oracle at
+  // 0x8006E3B0, diff the resulting cam+scratchpad state.
+  uint32_t camM[64], spM[256];
+  for (int i = 0; i < 64;  i++) camM[i] = c->mem_r32(cam_ + i * 4);
+  for (int i = 0; i < 256; i++) spM[i]  = c->mem_r32(0x1F800000u + i * 4);
+  for (int i = 0; i < 64;  i++) c->mem_w32(cam_ + i * 4, cam0[i]);
+  for (int i = 0; i < 256; i++) c->mem_w32(0x1F800000u + i * 4, sp0[i]);
+  memcpy(c->r, rsave, sizeof rsave);
+  c->r[4] = cam_; c->r[5] = target;
+  rec_interp(c, 0x8006E3B0u);
+  uint32_t camO[64], spO[256];
+  for (int i = 0; i < 64;  i++) camO[i] = c->mem_r32(cam_ + i * 4);
+  for (int i = 0; i < 256; i++) spO[i]  = c->mem_r32(0x1F800000u + i * 4);
+  static int nbad = 0, ngood = 0; int bad = 0;
+  for (int i = 0; i < 64; i++) if (camM[i] != camO[i]) { bad = 1;
+    if (nbad++ < 60) fprintf(stderr, "[camverify] snapFollow cam+0x%02x mine=%08x oracle=%08x\n", i*4, camM[i], camO[i]); }
+  for (int i = 0; i < 256; i++) if (spM[i] != spO[i]) { bad = 1;
+    if (nbad++ < 60) fprintf(stderr, "[camverify] snapFollow sp+0x%03x mine=%08x oracle=%08x\n", i*4, spM[i], spO[i]); }
+  if (!bad && (ngood++ % 200) == 0) fprintf(stderr, "[camverify] snapFollow match #%d\n", ngood);
 }
 void CutsceneCamera::snapFollowA(uint32_t target) {  // FUN_8006E294 (driver mode 2 + init post-check)
   snapAccXZ(target);
@@ -844,41 +873,3 @@ void CutsceneCamera::init() {   // FUN_8006EA7C (first-frame field reset + rende
   }
 }
 
-// ── live-spine entry points (static; class member interface) ─────────────────────────────────────
-void CutsceneCamera::runFieldUpdate(Core* c) {
-  CutsceneCamera(c, CAM_OBJ).update();
-}
-
-void CutsceneCamera::runInitSeedGrp(Core* c, uint32_t src) {
-  CutsceneCamera(c, CAM_OBJ).initSeedGrp(src);
-}
-
-void CutsceneCamera::runSnapFollow(Core* c, uint32_t cam, uint32_t target) {
-  if (!cfg_dbg("camverify")) { CutsceneCamera(c, cam).snapFollow(target); return; }
-
-  uint32_t cam0[64], sp0[256], rsave[32];
-  for (int i = 0; i < 64;  i++) cam0[i] = c->mem_r32(cam + i * 4);
-  for (int i = 0; i < 256; i++) sp0[i]  = c->mem_r32(0x1F800000u + i * 4);
-  memcpy(rsave, c->r, sizeof rsave);
-
-  CutsceneCamera(c, cam).snapFollow(target);
-  uint32_t camM[64], spM[256];
-  for (int i = 0; i < 64;  i++) camM[i] = c->mem_r32(cam + i * 4);
-  for (int i = 0; i < 256; i++) spM[i]  = c->mem_r32(0x1F800000u + i * 4);
-
-  for (int i = 0; i < 64;  i++) c->mem_w32(cam + i * 4, cam0[i]);
-  for (int i = 0; i < 256; i++) c->mem_w32(0x1F800000u + i * 4, sp0[i]);
-  memcpy(c->r, rsave, sizeof rsave);
-  c->r[4] = cam; c->r[5] = target;
-  rec_interp(c, 0x8006E3B0u);
-  uint32_t camO[64], spO[256];
-  for (int i = 0; i < 64;  i++) camO[i] = c->mem_r32(cam + i * 4);
-  for (int i = 0; i < 256; i++) spO[i]  = c->mem_r32(0x1F800000u + i * 4);
-
-  static int nbad = 0, ngood = 0; int bad = 0;
-  for (int i = 0; i < 64; i++) if (camM[i] != camO[i]) { bad = 1;
-    if (nbad++ < 60) fprintf(stderr, "[camverify] snapFollow cam+0x%02x mine=%08x oracle=%08x\n", i*4, camM[i], camO[i]); }
-  for (int i = 0; i < 256; i++) if (spM[i] != spO[i]) { bad = 1;
-    if (nbad++ < 60) fprintf(stderr, "[camverify] snapFollow sp+0x%03x mine=%08x oracle=%08x\n", i*4, spM[i], spO[i]); }
-  if (!bad && (ngood++ % 200) == 0) fprintf(stderr, "[camverify] snapFollow match #%d\n", ngood);
-}

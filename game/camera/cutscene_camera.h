@@ -49,21 +49,6 @@ public:
 
   CutsceneCamera(Core* c, uint32_t cam) : c(c), cam_(cam) {}
 
-  // ── Live-spine entry points (bind + run, called from engine_stage / sop) ─────────────────────────
-  // runFieldUpdate: the resident driver 0x8006EC44 (fixed cam CAM_OBJ). Replaces d0(c, 0x8006ec44u) in
-  //   ov_field_frame / ov_field_frame_x. Class is oracle-unit-tested end-to-end (cutscene_camera_test.cpp),
-  //   so no per-call live A/B gate here.
-  // runSnapFollow: 0x8006E3B0 (SOP/BG). Replaces d2(c,0x8006e3b0,cam,tgt) at sop.cpp cutscene camera sites.
-  //   Under PSXPORT_DEBUG=camverify, A/B-compares native vs the recomp oracle (rec_interp 0x8006E3B0) on
-  //   the same inputs — the regression gate for the restructure (cam struct + full scratchpad, 0 mismatch).
-  static void runFieldUpdate(Core* c);
-  static void runSnapFollow(Core* c, uint32_t cam, uint32_t target);
-  // runInitSeedGrp: 0x8006CBA8 (init: seed the FIXED driver cam @0x800E8008 from a source group).
-  //   Static entry so AI area-transition callers can replace rec_dispatch(0x8006CBA8) with a direct
-  //   PC-native call. initSeedGrp writes CAM_OBJ +0x3a/0x3e/0x42 only — cam_ is unused, so the
-  //   temporary instance's cam parameter is a don't-care.
-  static void runInitSeedGrp(Core* c, uint32_t src);
-
   // ── Per-frame DRIVER (0x8006EC44) + init/mode-selector (0x8006EA7C) ──────────────────────────────
   // update(): the resident camera driver — reads the outer state from cam[0] (0=first-frame init, 1=run,
   //   else idle), runs the sub-state machine, then dispatches on the MODE byte cam[0x64]&0x3F (18-entry
