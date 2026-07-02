@@ -48,7 +48,6 @@ int main(int argc, char** argv) {
   watchdog_init();            // PSXPORT_WATCHDOG=<sec>: abort+backtrace if a frame stalls
   load_exe(path, c);
   void cd_overrides_init(void);
-  void timing_init(void);
   void games_tomba2_init(void);
   void sync_overrides_init(void);
   void pad_overrides_init(Core*);
@@ -68,7 +67,6 @@ int main(int argc, char** argv) {
   void cdc_init(void);
   cdc_init();               // native CD controller registers (0x1F801800-3) for raw-CD code
   cd_overrides_init();      // native CD: drive-ready + by-LBA read (S3)
-  timing_init();            // native VBlank/VSync source (S3)
   games_tomba2_init();      // Tomba2 per-game overrides (vblank pacing)
   sync_overrides_init();    // convert HW sync/wait stalls to native non-stall
   pad_overrides_init(c);    // native controller input (per-VBlank pad read override)

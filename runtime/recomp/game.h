@@ -26,9 +26,28 @@
 
 // ---- per-subsystem state structs (former file-scope statics), migrated one phase at a time ----
 
-// timing.cpp — native VBlank/VSync frame clock.
-struct TimingState {
+// timing.cpp — class Timing — native VBlank/VSync frame clock subsystem, owned by Game.
+// PROPER OOP: one instance per Game (`c->game->timing`). Back-pointer `game` wired in Game(). Owns
+// the libetc VSync counter mirror + the vsync/frame-tick behavior. Was the ov_vsync_callback /
+// ov_vsync / timing_frame_tick / timing_vblank / timing_init free functions in timing.cpp.
+class Game;
+class Timing {
+public:
+  Game* game = nullptr;
   uint32_t vblank = 0;   // libetc VSync counter mirror (was g_vblank)
+
+  // vsyncCallback(): 0x80085BB0 FUN_80085bb0 VSyncCallback(func) — no-op. Native frame loop
+  //   owns pacing; the libapi per-vblank IRQ vector isn't modeled. Was ov_vsync_callback.
+  void vsyncCallback();
+
+  // vsync(): 0x80085900 FUN_80085900 = libetc VSync(mode). Currently unreachable — sync_overrides
+  //   traps VSync (all pacing is PC-native). Kept for RE reference / future re-enable.
+  void vsync();
+
+  // frameTick(): advance the canonical libetc VSync counter once per native frame. Called from
+  //   the PC-native frame loop (native_scheduler_step) so recomp code reading DAT_800abde0 for
+  //   pacing/idle-timers keeps advancing.
+  void frameTick();
 };
 
 // cd_override.cpp — deferred ingame-music state (suppressed during dialog, resumed after).
@@ -134,7 +153,7 @@ public:
   Core core;            // CPU registers + 2 MB main RAM + 1 KB scratchpad (was the sole instance object)
 
   // ---- migrated subsystem state (one member per migrated subsystem) ----
-  TimingState timing;
+  Timing      timing;
   CdState     cd;
   CdcState    cdc;   // native CD-controller register model (per-instance; cdc_native.c, bound via cdc_bind)
   XaState     xa;    // native XA-ADPCM CD-audio/voice streamer (per-instance; xa_stream.c, bound via xa_bind)
@@ -188,7 +207,7 @@ public:
   // core.game / gpu.game / gpu_gpu.game are back-pointers so a subsystem holding one of those handles can
   // reach the rest of the machine (e.g. blit_src -> gpu_gpu via gpu.game; frame_via_fb -> s_seen3d via
   // gpu_gpu.game->core). Set once here so no file-scope global is needed.
-  Game() { core.game = this; gpu.game = this; gpu_gpu.game = this;
+  Game() { core.game = this; gpu.game = this; gpu_gpu.game = this; timing.game = this;
            spu_state = SPU_NewState(); mdec_state = MDEC_NewState();
            cdc_state_init(&cdc); xa_state_init(&xa); }   // per-instance CD-controller + XA streamer defaults
   ~Game() { SPU_FreeState(spu_state); MDEC_FreeState(mdec_state); }

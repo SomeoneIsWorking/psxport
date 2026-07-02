@@ -84,7 +84,7 @@ static void native_step_frame(Core* c, uint32_t f) {
   perf_frame_begin();   // perf: start the frame clock (top of the deterministic per-frame work)
   // Advance the libetc VSync counter (DAT_800abde0) — one vblank per native frame. VSync(0) is trapped,
   // so this is the only thing that ticks the recomp timebase (recomp tasks read it to pace animations).
-  { void timing_frame_tick(Core*); timing_frame_tick(c); }
+  c->game->timing.frameTick();
   // Per-frame IRQ-driven events the game's waits poll via TestEvent (VBlank classes + sound-DMA-complete).
   hle_deliver_event(c, 0xF2000003u, 0xFFFFFFFFu);
   hle_deliver_event(c, 0xF0000001u, 0xFFFFFFFFu);
@@ -255,7 +255,7 @@ static void ov_game_init(Core* c) {
   rc2(c, 0x80051f14, 0, 0x800499e8);        // register task 0, entry FUN_800499e8
   // VSyncCallback(LAB_800506b4): native no-op — we deliver no preemptive VBlank IRQ (the per-vblank
   // callback's unmodeled interrupt-vector deref is skipped). (was rc1 0x80085bb0)
-  { void ov_vsync_callback(Core*); c->r[4] = 0x800506b4; ov_vsync_callback(c); }
+  c->game->timing.vsyncCallback();          // callback ptr arg unused (no preemptive vblank IRQ delivered)
 
   fprintf(stderr, "[native_boot] init prefix complete\n");
 
