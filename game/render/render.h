@@ -31,6 +31,11 @@ public:
   // Taxi-parameter c->r[4] = node (recomp-shaped body, mirrors the guest ABI).
   void perObjFlush();
 
+  // bgRender: field seaside GROUND/BG node renderer — overlay 0x8013E9D8 native. Runs the GTE
+  // visibility/bound setup (rec_dispatch), then routes to submit_perobj_render for the native
+  // world-coord render. Taxi-parameter c->r[4] = node. Was ov_bg_render.
+  void bgRender();
+
   // sceneNative: the master scene-render walker (per-frame terrain + entity/object walk over
   // the 3 doubly-linked object lists, with backdrop + collectable-quad + native BG tilemap).
   // Called by game_tomba2.cpp's ov_draw_otag every field-stage frame (and by margin_render's

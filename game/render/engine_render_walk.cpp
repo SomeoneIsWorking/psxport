@@ -243,7 +243,8 @@ void ov_perobj_render(Core* c) {
 // visible seaside ground render PC-native from world coords. 0x8013DD34 stays PSX (rec_dispatch): it writes
 // only the scratchpad cull/bound temps (0x1F8000C0/0x1F800080), NOT the per-command transform eproj reads,
 // and the recomp calls 0x8003CCA4 UNCONDITIONALLY after it (it is a side-effect setup, not a gate).
-void ov_bg_render(Core* c) {
+void Render::bgRender() {
+  Core* c = mCore;
   uint32_t node = c->r[4], saved_sp = c->r[29], ra = c->r[31];
   uint32_t sp = saved_sp - 0x28; c->r[29] = sp;          // mirror the recomp frame (addiu sp,-0x28)
   uint32_t pp = c->mem_r32(node + 0x14);                  // position-source ptr
@@ -379,7 +380,7 @@ static void submit_render_walk(Core* c) {
           if (fn == 0x8002AB5Cu && cfg_dbg("noterr")) { /* skip terrain */ }
           else if (fn == 0x8013E9D8u && cfg_dbg("nobg")) { /* skip bg */ }
           else if (fn == 0x8002AB5Cu) { ffspan_begin(); c->r[4] = n; ov_terrain(c); ffspan_end("rwT_terrain"); }   // PC-native world-coord terrain (self-draws)
-          else if (fn == 0x8013E9D8u) { ffspan_begin(); c->r[4] = n; ov_bg_render(c); ffspan_end("rwB_bg"); }   // PC-native world-coord ground/BG node
+          else if (fn == 0x8013E9D8u) { ffspan_begin(); c->r[4] = n; c->mRender->bgRender(); ffspan_end("rwB_bg"); }   // PC-native world-coord ground/BG node
           else if (!rec_addr_has_entry(c, fn)) { /* STALE node: its renderer is a dangling pointer into an
               evicted overlay (e.g. a SOP intro-narration node surviving into the A00 field — later-275).
               The engine owns its render visibility: skip it rather than dispatch into mid-overlay garbage. */ }
