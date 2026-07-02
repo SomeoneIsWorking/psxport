@@ -5,6 +5,7 @@
 #include "core.h"
 #include "game.h"
 #include "cfg.h"
+#include "sbs.h"   // class Sbs — the PSXPORT_SBS live-two-core divergence debugger
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -101,8 +102,7 @@ int main(int argc, char** argv) {
   // Setting PSXPORT_SBS_MODE is enough to enable the harness (no need to ALSO set PSXPORT_SBS=1) —
   // a mode selection with the harness off was just a foot-gun. PSXPORT_SBS=1 alone still works (default mode).
   if (cfg_on("PSXPORT_SBS") || cfg_str("PSXPORT_SBS_MODE")) {
-    void sbs_run(const char* exe_path);
-    sbs_run(path);
+    Sbs::run(path);
     return 0;
   }
   void native_stub_run(Core*, const char* main_exe_path);

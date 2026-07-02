@@ -68,7 +68,7 @@ extern "C" void perf_frame_begin(void), perf_mark_pre(void), perf_frame_end(void
 // (dv_snapshot / dv_capture_post / dv_restore_pre / dv_restore_post + g_dv_have_pre). See
 // native_step_frame's dual-view block below for how the sequence is driven.
 // g_dualview retired 2026-07-02 — per-Core Render::mDualview / dualview() / setDualview(bool).
-extern "C" int sbs_active(void); // defined in sbs.cpp (PSXPORT_SBS two-core side-by-side harness)
+#include "sbs.h"                        // class Sbs — the PSXPORT_SBS two-core side-by-side harness
 
 static void native_step_frame(Core* c, uint32_t f) {
   void gte_bind(Core*); gte_bind(c);   // bind THIS core's GTE register file (per-instance — no shared GTE)
@@ -159,7 +159,7 @@ static void native_step_frame(Core* c, uint32_t f) {
     // SBS owns BOTH panes (core A | core B); its target-1 batch is core B's render, NOT a PSX re-render of
     // THIS core — so skip the in-engine dualview second pass. g_sbs declared at file scope below.
     DualviewSnapshot& dv = c->mRender->dualviewSnapshot;
-    if (c->mRender->mode.dualview() && dv.havePre() && !sbs_active()) {
+    if (c->mRender->mode.dualview() && dv.havePre() && !Sbs::active()) {
       dv.capturePost(c);             // save the real post-frame canonical state
       dv.restorePre(c);              // rewind to the pre-render (post-gameplay) state the PSX pass needs
       rc2(c, 0x80081458, envp, 0x800);                          // ClearOTagR(ot, 0x800)

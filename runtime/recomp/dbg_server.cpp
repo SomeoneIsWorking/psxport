@@ -90,13 +90,13 @@ static int    s_started;
 static Core* s_ctx;              // live CPU context (set per frame by dbg_server_service) for `call`
 
 // Execute one command, writing its textual result into `out` (a memstream). MAIN THREAD ONLY.
-int sbs_dbg_cmd(FILE* out, const char* line);   // sbs.cpp — handles `sbs ...` when the SBS harness is live
+#include "sbs.h"                        // class Sbs — handles `sbs ...` when the SBS harness is live
 
 static void dbg_exec(FILE* out, const char* line) {
   char cmd[32] = {0}, arg[256] = {0};
   unsigned a = 0, b = 0;
   if (sscanf(line, "%31s", cmd) != 1) { fprintf(out, "(empty)\n"); return; }
-  if (sbs_dbg_cmd(out, line)) return;   // SBS divergence-debugger commands (no-op when not running)
+  if (Sbs::dbgCmd(out, line)) return;   // SBS divergence-debugger commands (no-op when not running)
 
   if (!strcmp(cmd, "help")) {
     fprintf(out,
