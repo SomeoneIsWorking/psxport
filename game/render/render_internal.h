@@ -79,8 +79,7 @@ struct PktSpanSession {
 // --- cross-subsystem entry points ---
 // Fully-native generic GT3/GT4 submit (engine_submit.cpp). The per-object flush in the walk calls it directly.
 void native_gt3gt4(Core* c, uint32_t geomblk, uint32_t otbase);
-// Scene-table (0x800F2418) world-coord render (engine_submit.cpp, uses the static poly submitters there).
-void ov_field_entity_render(Core* c);
+// Scene-table (0x800F2418) world-coord render is now Render::fieldEntityRender in render.h.
 
 // DIAG (debug channel "silbbox", scratch/handoff.md 2026-07-01 "dark outline" investigation): log the
 // screen bbox of any drawn quad overlapping the known repro window (coastal-ridge dark silhouette line,

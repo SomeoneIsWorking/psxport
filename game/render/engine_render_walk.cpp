@@ -178,7 +178,7 @@ void Render::sceneNative() { Core* c = mCore;
     ov_rwalk_aux_bf00(c); ov_rwalk_aux_eec0(c); ov_rwalk_b588(c); ov_render_walk_snapshot(c);
     ov_rwalk_aux_bcf4(c); ov_render_walk(c);
     // (b) SCENE TABLE (grass / props / sky-sea backdrop) — native world-coord render of 0x800F2418.
-    c->r[4] = 0x800F2418u; ov_field_entity_render(c);
+    fieldEntityRender(0x800F2418u);
     // (c) the field's OBJECTS — walk the 3 entity lists, render each object's geomblk natively (real depth).
     for (int h = 0; h < 3; h++) {
       uint32_t n = c->mem_r32(HEADS[h]);

@@ -31,4 +31,12 @@ public:
   // Called by game_tomba2.cpp's ov_draw_otag every field-stage frame (and by margin_render's
   // widescreen re-include pass). Was ov_scene_native.
   void sceneNative();
+
+  // fieldEntityRender: world-space GT3/GT4 scene-table renderer. Walks the entity-list struct at
+  // `es` (per-list ptr headers at es+0x10..; packed geometry base at es+0xC; count at es+6),
+  // dispatches each entry through submit_poly_gt3_native / submit_poly_gt4_native under the
+  // camera-composed eproj xform. Called for the ground scene table 0x800F2418 (in Render::frame
+  // groundnative diag branch and in the field object walk in engine_render_walk). Was
+  // ov_field_entity_render (taxi-parameter c->r[4]).
+  void fieldEntityRender(uint32_t es);
 };

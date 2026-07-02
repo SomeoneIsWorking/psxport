@@ -30,6 +30,7 @@
 #include "engine_math.h"     // ov_mat_mul/ov_apply_matlv/ov_rot_x/y/z — the GTE-transform cluster
 #include "mtx.h"              // class Mtx — libgte helpers (identity, diagonal, ...)
 #include "trig.h"             // class Trig — libgte rsin/rcos
+#include "render.h"           // class Render — Render::fieldEntityRender lives here
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -643,8 +644,8 @@ void native_gt3gt4(Core* c, uint32_t geomblk, uint32_t otbase) {   // decl in re
 //   per entry: cmd = base + idx*4; s0 = *cmd (packed counts); records follow at cmd+4.
 //     GT3 submit(rec = cmd+4, ot, count = s0 & 0xff) -> returns the advanced record ptr = the GT4 base.
 //     GT4 submit(rec = <ret>,  ot, count = (s0 >> 16) & 0xff).
-void ov_field_entity_render(Core* c) {
-  uint32_t es = c->r[4];
+void Render::fieldEntityRender(uint32_t es) {
+  Core* c = mCore;
   uint8_t count = c->mem_r8(es + 6);
   if (count == 0) return;
   uint32_t otbase = c->mem_r32(OTBASE_PTR);
