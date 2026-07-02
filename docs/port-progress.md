@@ -73,7 +73,7 @@ rebuild on it; never proceed on a vibe.**
   A native gameplay subsystem MUST match the PSX body BYTE-FOR-BYTE → `sbs diff` ZERO. First nonzero
   address + `sbs watch` + `sbs bt` = the exact instruction that drifted. This is the gate for owning any
   per-frame gameplay/AI/physics function.
-- `PSXPORT_SBS_MODE=both` — full native vs full PSX.
+- `PSXPORT_SBS_MODE=full` — full native vs full PSX (`both` still accepted as a legacy alias).
 - Both cores sync at the gameplay-start flag (barrier), then lockstep on identical input; the first
   divergence AUTO-PAUSES. Inspect over the debug server (`tools/dbgclient.py --port N`):
   `sbs status | diff | bt | watch [hex] | show a|b | resume | step [n]`. `sbs watch` arms a per-core

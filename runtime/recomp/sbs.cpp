@@ -3,17 +3,19 @@
 // Runs TWO native-boot cores in ONE process, in lockstep, with IDENTICAL input, differing ONLY by MODE:
 //   render   (default): A = native gameplay + NATIVE render,  B = native gameplay + PSX render
 //   gameplay:           A = native gameplay,  B = PSX gameplay (psx_fallback); render IDENTICAL (PSX) on both
-//   both:               A = full native (native gp + native render),  B = full PSX (PSX gp + PSX render)
+//   full:               A = full native (native gp + native render),  B = full PSX (PSX gp + PSX render)
 //   oracle:              A = full native (native gp + native render),  B = PURE ORACLE — the interpreter
 //                        engine (use_interp, docs/oracle.md) + the software rasterizer (soft_gpu), NOT the
-//                        recomp substrate (`psx_fallback` alone). B's `render|gameplay|both` psx_fallback
+//                        recomp substrate (`psx_fallback` alone). B's `render|gameplay|full` psx_fallback
 //                        pane shares the SAME shared native rasterizer as A (gpu_native.cpp/gpu_gpu.cpp) —
 //                        it is a scene-walk A/B, not an independent pixel oracle (user finding, 2026-07-01:
-//                        SBS=both still showed the render-crack on "both" panes). `oracle` mode is the actual
+//                        SBS=full still showed the render-crack on "full" panes). `oracle` mode is the actual
 //                        ground truth: B never touches gpu_gpu.cpp/the VK batch at all; its picture comes
 //                        100% from soft_gpu's own s_vram, so a native-only render bug (the silhouette crack)
 //                        will NOT reproduce on B unless it is a genuine PSX/content characteristic.
-// Select with PSXPORT_SBS_MODE=render|gameplay|both|oracle.
+// Select with PSXPORT_SBS_MODE=render|gameplay|full|oracle.
+// Legacy alias: `both` is still accepted as a synonym of `full` (renamed 2026-07-03 — "both" implied
+// "both cores use PSX", but the mode is actually A-full-native vs B-full-PSX).
 //
 // TRUE side-by-side, CONCURRENT FROM BOOT (user, 2026-06-25): both cores boot IN LOCKSTEP — stepped one
 // frame each per iteration and PRESENTED to two side-by-side panes every frame (pane 0 = A/left, pane 1 =
@@ -44,10 +46,10 @@
 // Both panes are always live; drive BOTH with the host keyboard (each core reads the same host pad each
 // frame). r/rw/ents/... operate on the selected core (use `sbs show`).
 //
-// Modes (PSXPORT_SBS_MODE=render|gameplay|both):
+// Modes (PSXPORT_SBS_MODE=render|gameplay|full):
 //   render   (default): A = native gameplay + NATIVE render,  B = native gameplay + PSX render
 //   gameplay:           A = native gameplay,  B = PSX gameplay (psx_fallback); render IDENTICAL (PSX) on both
-//   both:               A = full native (native gp + native render),  B = full PSX (PSX gp + PSX render)
+//   full:               A = full native (native gp + native render),  B = full PSX (PSX gp + PSX render)
 //
 // Diagnostic, not behavior (one PC-native game ships; this is a debugger). Like dualcore.cpp it owns its
 // own Game instances and never returns (the process exits when the window closes).
@@ -105,7 +107,7 @@ extern "C" int sbs_active(void) { return s_sbs; }
 
 namespace {
 
-enum Mode { M_RENDER, M_GAMEPLAY, M_BOTH, M_ORACLE };
+enum Mode { M_RENDER, M_GAMEPLAY, M_FULL, M_ORACLE };
 constexpr uint32_t GAME_ENTRY  = 0x8010637Cu;  // task0 entry while the GAME stage runs (in the field)
 constexpr uint32_t TASK0_ENTRY = 0x801fe00cu;  // task0 obj +0xc = current stage entry
 constexpr uint32_t CUT_FLAG    = 0x1F800137u;  // cutscene-active byte (1 = intro cutscene, 0 = free-roam)
@@ -160,7 +162,7 @@ uint32_t s_ww_va = 0, s_ww_vb = 0;
 char     s_ww_bt_a[4096] = {0}, s_ww_bt_b[4096] = {0};
 
 const char* mode_name() { return s_mode == M_RENDER ? "render" : s_mode == M_GAMEPLAY ? "gameplay" :
-                                 s_mode == M_ORACLE ? "oracle" : "both"; }
+                                 s_mode == M_ORACLE ? "oracle" : "full"; }
 
 // Legit render-only guest regions in MAIN RAM: the native vs PSX render paths write GP0 packets / OT /
 // pool pointers here (render + both mode). Divergence here is render noise, not the gameplay we hunt.
@@ -229,7 +231,7 @@ void apply_mode(Game* g, int which) {
   switch (s_mode) {
     case M_RENDER:   r->mode.setPsxRender(which != 0);    break;   // A native render (0), B PSX render (1)
     case M_GAMEPLAY: r->mode.setPsxRender(true);           break;   // PSX render on BOTH (isolate gameplay)
-    case M_BOTH:     r->mode.setPsxRender(which != 0);    break;   // A native render, B PSX render
+    case M_FULL:     r->mode.setPsxRender(which != 0);    break;   // A native render, B PSX render
     case M_ORACLE:   r->mode.setPsxRender(false);          break;   // A native; B never consults this
                                                                 // (use_interp bypasses the render flip
                                                                 // entirely — fully interpreted+soft-rasterized)
@@ -498,7 +500,8 @@ int sbs_dbg_cmd(FILE* out, const char* line) {
 void sbs_run(const char* exe_path) {
   watchdog_disable();   // the SBS pauses indefinitely on a divergence for live inspection — not a hang
   const char* m = getenv("PSXPORT_SBS_MODE");
-  if (m) { if (!strcmp(m, "gameplay")) s_mode = M_GAMEPLAY; else if (!strcmp(m, "both")) s_mode = M_BOTH;
+  if (m) { if (!strcmp(m, "gameplay")) s_mode = M_GAMEPLAY;
+            else if (!strcmp(m, "full") || !strcmp(m, "both")) s_mode = M_FULL;   // "both" = legacy alias
             else if (!strcmp(m, "oracle")) s_mode = M_ORACLE; else s_mode = M_RENDER; }
   { const char* e = getenv("PSXPORT_SBS_LO"); if (e && *e) s_lo = (uint32_t)strtoul(e, 0, 0); }
   { const char* e = getenv("PSXPORT_SBS_HI"); if (e && *e) s_hi = (uint32_t)strtoul(e, 0, 0); }

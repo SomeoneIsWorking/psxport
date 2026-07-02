@@ -9,7 +9,7 @@ cliff water) proved un-fixable by guessing; without a trustworthy PSX reference 
 SOFTWARE/CPU rasterizer, run INTERLEAVED (lockstep) with the native port Core. NOT a separate-process
 emulator, NOT screenshots-only.
 
-**Why interpreter, not the existing SBS "PSX" core.** `sbs.cpp` (PSXPORT_SBS_MODE=both) already runs two
+**Why interpreter, not the existing SBS "PSX" core.** `sbs.cpp` (PSXPORT_SBS_MODE=full) already runs two
 Cores in lockstep with a per-frame RAM diff and pause-at-first-divergence — but its B core runs the RECOMP
 SUBSTRATE (`psx_fallback`), which FREEZES/aborts in the intro cutscene (recomp-coroutine limit later-272;
 recomp-MISS 0x80146478 on the un-recompiled overlay code). A PURE INTERPRETER executes whatever MIPS is in
@@ -140,7 +140,7 @@ cores each frame" must become "drive each core toward its next checkpoint indepe
   cases idx1/2/3/8). (docs/findings/sbs.md "oraclediff: interactive-play SCAN added"; port-progress later-283.)
 - 2026-07-01 (later-298): **The ORACLE wired into the LIVE interactive SBS harness (`PSXPORT_SBS_MODE=oracle`),
   not just the one-shot `PSXPORT_SELFTEST=oracle/oraclediff`.** User finding that triggered this: running
-  `PSXPORT_SBS_MODE=both` and eyeballing a native-render silhouette-crack bug (a 1px black line tracing
+  `PSXPORT_SBS_MODE=full` and eyeballing a native-render silhouette-crack bug (a 1px black line tracing
   terrain-against-sky edges — docs/findings/render.md "Screen-fade transitions"... no, see the dark-outline
   entry) showed the artifact on BOTH panes — but `both`'s B pane is `psx_fallback` (recomp substrate), which
   shares A's SAME native gpu_native.cpp/gpu_gpu.cpp rasterizer (only the SCENE-WALK differs); it is not an

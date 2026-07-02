@@ -19,7 +19,7 @@
 // (dispatch.cpp) — it can only ENTER a recompiled function at its top, NOT resume a yielded task at a
 // saved mid-function PC. So it only works for a FRESH task entry; resuming a full-PSX (psx_fallback)
 // task whose saved r31 is mid-body fail-fasts (no recompiled entry there). That is why the full-PSX
-// reference modes (PSXPORT_SBS_MODE=gameplay/both core B) abort at the first scheduler yield-return
+// reference modes (PSXPORT_SBS_MODE=gameplay/full core B) abort at the first scheduler yield-return
 // (e.g. 0x80051FA4). The native path avoids this entirely: each stage runs as a synchronous per-frame
 // native dispatcher (DEMO/GAME/SOP) and the GAME field re-enters at its loop top (game_coop), never a
 // mid-function resume. See docs/findings/recomp.md "full-PSX coroutine resume".

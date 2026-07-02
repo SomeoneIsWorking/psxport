@@ -154,7 +154,7 @@ struct SchedulerState {
 
   // ---- FULL-PSX (psx_fallback) thread-fiber coroutines (later-264) -----------------------------
   // The native path above re-enters at a loop top / runs synchronous dispatchers, so it never needs a
-  // true mid-function resume. The FULL-PSX path (PSXPORT_SBS_MODE=gameplay/both core B) runs pure
+  // true mid-function resume. The FULL-PSX path (PSXPORT_SBS_MODE=gameplay/full core B) runs pure
   // recompiled task bodies that yield mid-function (switch); the substrate can't re-enter mid-body,
   // so each such task runs on its OWN Coro thread that BLOCKS at a yield (preserving its C stack) and
   // CONTINUES on resume — recompiler-only, no interpreter (USER 2026-06-30). Active ONLY when
