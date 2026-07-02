@@ -26,6 +26,11 @@ public:
   void frame();
   void frameX();
 
+  // perObjFlush: per-object native GT3/GT4 flush — composes the float camera×object transform from
+  // the object's real world coords and submits every geomblk cmd on node+0xC0 through native_gt3gt4.
+  // Taxi-parameter c->r[4] = node (recomp-shaped body, mirrors the guest ABI).
+  void perObjFlush();
+
   // sceneNative: the master scene-render walker (per-frame terrain + entity/object walk over
   // the 3 doubly-linked object lists, with backdrop + collectable-quad + native BG tilemap).
   // Called by game_tomba2.cpp's ov_draw_otag every field-stage frame (and by margin_render's

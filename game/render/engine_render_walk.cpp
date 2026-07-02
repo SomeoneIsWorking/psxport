@@ -34,7 +34,8 @@ void ov_terrain(Core* c);
 // ran interpreted per-scene submitter variants for non-generic modes) is no longer consulted — every
 // per-object geomblk is submitted as generic GT3/GT4 through the native, world-coord projection.
 
-static void submit_perobj_flush(Core* c) {
+void Render::perObjFlush() {
+  Core* c = mCore;
   uint32_t node = c->r[4];
   if (c->mem_r8(node + 8) == 0) return;
   if (c->mem_r8(node + 9) == 0) return;
@@ -182,7 +183,7 @@ void Render::sceneNative() { Core* c = mCore;
         if (c->mem_r8(n + 8) == 0 || c->mem_r8(n + 9) == 0) continue;   // no render commands
         g_sn_objs++; g_sn_cmds += c->mem_r8(n + 8);
         c->r[4] = n;
-        submit_perobj_flush(c);
+        perObjFlush();
       }
     }
   }
@@ -223,7 +224,7 @@ static void submit_perobj_render(Core* c) {
   // billboard prims (apple quad, etc.) occlude by real depth at the deferred OT walk. (g_pkt_track records
   // the actual store range — the pool POINTER doesn't move for these renderers.)
   uint32_t slo, shi; PktSpanSession sess;
-  if (tgt == 0x8003CD00u) { c->r[4] = node; c->r[5] = flag; submit_perobj_flush(c); }  // flush-only (native)
+  if (tgt == 0x8003CD00u) { c->r[4] = node; c->r[5] = flag; c->mRender->perObjFlush(); }  // flush-only (native)
   else                    { rec_super_call(c, 0x8003CCA4u); }                          // secondary-effect case
   if (sess.close(&slo, &shi)) { float od = obj_world_ord(c, node);   // PC-native depth from real world position
     gpu_obj_depth_add(c, slo, shi, od); fps60_bb_node(c, slo, shi, node); }   // fps60: this object's billboards reproject at midpoint
