@@ -721,10 +721,3 @@ void Demo::frame() { Core* c = core;
 // DEMO 0x801062E4 = `addiu sp,sp,-48` (0x27bdffd0); GAME's entry is 0x8010637C = 0x27bdffe0 (and at
 // DEMO's 0x8010637C sits a `sh zero,0x48(v1)` 0xa4600048, so GAME's stage_scan signature won't match
 // DEMO either). AUTO so the overrides flush when the overlay unloads and the base is reused.
-// OVERRIDE SYSTEM REMOVED (2026-06-22): this scan registered the DEMO/front-end substate handlers
-// (ov_demo_s0/s1/s2/s3/s6/s7_phase) into the address-keyed override table when DEMO loaded. The table
-// is gone; these become future direct-call targets, wired top-down. No-op.
-void demo_scan_overlay(Core* c, uint32_t base, uint32_t size) {
-  (void)c; (void)base; (void)size;
-  // (Demo substates now live on class Demo — c->engine.demo.s{0..3,6,7Phase})
-}

@@ -1352,15 +1352,6 @@ void Engine::areaUpdateTail() {
 // Detect by the fixed entry + handler signatures (START.BIN/DEMO.BIN are smaller and hold stale bytes at
 // these addresses, so they never match). Called from the overlay-load scan (engine_submit.cpp); registered
 // AUTO so it is flushed when GAME.BIN unloads and another overlay reuses the base (mirrors the M3 scan).
-// OVERRIDE SYSTEM REMOVED (2026-06-22): this scan used to register the GAME stage-machine handlers
-// (ov_game_stage_main + sub-handlers s48_0/1/2) into the address-keyed override table when GAME.BIN
-// loaded. The table is gone; ov_game_stage_main is now called DIRECTLY from the scheduler
-// (native_boot.cpp). The sub-handler ov_game_* defs are kept as future direct-call targets. No-op.
-void stage_scan_overlay(Core* c, uint32_t base, uint32_t size) {
-  (void)c; (void)base; (void)size;
-  // (all four sm-handler methods now live on Engine — Engine::s48_0/s48_1/s48_2/s4c)
-}
-
 // ===== Stage-0/START.BIN task-switch + preload state machine (moved from native_boot.cpp, 2026-07
 // restructure). Same stage-machine-orchestration domain this file already owns for the GAME stage; this
 // cluster owns task-0's stage SWITCH (native_start_stage/native_load_overlay), the START.BIN file-table
