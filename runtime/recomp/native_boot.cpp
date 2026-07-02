@@ -227,10 +227,9 @@ static void ov_game_init(Core* c) {
   // 1:1 rec_dispatch transcription. FUN_800509b4 (display/GTE projection + PSX draw/disp double-buffer
   // env) stays dispatched for now — it sets DAT_801003f8 = H that eng_init_camera reads, and entangles
   // the PSX-GPU env, so it is the next target. (later-159, top-down engine port from main.)
-  void eng_init_framestate(Core*), eng_init_display(Core*), eng_init_camera(Core*);
-  eng_init_framestate(c);      // was rc0(c, 0x80050a0c)
-  eng_init_display(c);         // was rc0(c, 0x800509b4) — GTE projection + display (sets H=DAT_801003f8)
-  eng_init_camera(c);          // was rc0(c, 0x80050a80)
+  c->engine.initFrameState();      // was rc0(c, 0x80050a0c)
+  c->engine.initDisplay();         // was rc0(c, 0x800509b4) — GTE projection + display (sets H=DAT_801003f8)
+  c->engine.initCamera();          // was rc0(c, 0x80050a80)
   rc0(c, 0x80096a70);
   rc1(c, 0x80099310, 0x1010);
   rc1(c, 0x800991b0, 0x20000);
@@ -246,7 +245,7 @@ static void ov_game_init(Core* c) {
   c->engine.font.init();                       // was rc0(c, 0x80075130)
   rc1(c, 0x8009c620, 0);
   rc0(c, 0x8001cc00);
-  { void eng_init_subsystems(Core*); eng_init_subsystems(c); }  // was rc0(c, 0x800520e0) — own orchestration native
+  c->engine.initSubsystems();               // was rc0(c, 0x800520e0) — own orchestration native
   // (removed: VSync(1) — see above; PC owns timing, boot never calls VSync.)
   rc0(c, 0x80051e00);                       // scheduler-table init (task objs @0x801fe000)
   rc2(c, 0x80051f14, 0, 0x800499e8);        // register task 0, entry FUN_800499e8

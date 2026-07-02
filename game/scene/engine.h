@@ -221,4 +221,17 @@ public:
   //   sub-object id at 0x800BE22A, if zero call FUN_80074E48 else call FUN_80074BF8(id) and clear
   //   both 0x800BED80 and 0x800BE22A. All 8 callees stay substrate. Replaces `d0(c, 0x80075a80u)`.
   void areaUpdateTail();
+
+  // ── Boot-time INIT (called from native_boot.cpp before the scheduler starts) ──────────────────
+  // The engine's own PC-native init prefix (was the free functions `eng_init_*` in engine_init.cpp).
+  // Each method reimplements the corresponding guest init leaf: frame/display/camera state, the
+  // entity pool control block, the allocator + dispatch table, mode ctrl, input, and the orchestrator
+  // that sequences them. Called via c->engine.initX() from native_boot.
+  void initFrameState();               // FUN_80050A0C — vblank + double-buffer pacing state
+  void initDisplay();                  // FUN_800509B4 — GTE projection CRs + display H
+  void initCamera();                   // FUN_80050A80 — camera scratchpad matrices + state
+  void initEntityPool();               // FUN_8007B328 — entity-pool control block + fixed-pt scales
+  void initAlloc(uint32_t s1, uint32_t s2);  // FUN_80088B00 — allocator + 6-entry dispatch table
+  void initInput();                    // FUN_80087A60 → 80086970 — input subsystem
+  void initSubsystems();               // FUN_800520E0 — orchestrator (entity pool + alloc + mode + input)
 };
