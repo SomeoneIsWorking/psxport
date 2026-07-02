@@ -17,6 +17,7 @@
 #include "proj_prim.h"
 #include "pgxp.h"
 #include "proj_params.h"
+#include "engine_project.h"     // EObjXform (per-Core active per-object xform lives on Render below)
 class Core;
 
 class Render {
@@ -32,6 +33,12 @@ public:
   ProjPrim          projprim;          // vertex-depth cache for native depth path (per-Core; SBS-safe)
   Pgxp              pgxp;               // PGXP-lite subpixel cache (per-Core; PGXP_pushSXYZ2f target)
   ProjParams        projParams;         // camview + per-frame projection constants (per-Core)
+  // Active per-object xform for the GT3/GT4 submitters. Set once per render command by the per-object
+  // flush (eproj_set_active), read by the per-vertex projection (eproj_vertex_active), cleared by
+  // eproj_clear_active. Was file-scope in engine_project.cpp; per-Core here so SBS's two cores don't
+  // share a transform between their emits (2026-07-03).
+  EObjXform         mActiveXform{};
+  bool              mActiveXformSet = false;
   NodeXform         mNodeXform;        // scene-node WORLD-TRANSFORM builder (guest FUN_80051844)
 
   // ---- per-frame render orchestrators (called by Engine::fieldFrame/X) ----

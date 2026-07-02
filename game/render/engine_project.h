@@ -35,12 +35,14 @@ void eproj_vertex(const EObjXform* w, int vx, int vy, int vz, ProjVtx* out);
 
 // The per-object submitters project against the ACTIVE object xform, set once per render command by the
 // per-object flush. eproj_vertex_active is the submitters' projection entry — fully world-coord driven.
-void eproj_set_active(const EObjXform* w);
-void eproj_clear_active(void);
-int  eproj_active(void);
-void eproj_vertex_active(int vx, int vy, int vz, ProjVtx* out);
+// State moved onto Render (mActiveXform / mActiveXformSet) so SBS's two cores keep separate active
+// transforms; every entry takes Core* to reach THIS core's Render instance.
+void eproj_set_active(struct Core* c, const EObjXform* w);
+void eproj_clear_active(struct Core* c);
+int  eproj_active(struct Core* c);
+void eproj_vertex_active(struct Core* c, int vx, int vy, int vz, ProjVtx* out);
 
 // Pack the ACTIVE float xform into the CR0-7 + CR24/25/26 layout the 60fps midpoint reprojection consumes
 // (cr[0..7] = composed transform, cr[8]=OFX 16.16, cr[9]=OFY 16.16, cr[10]=H). Lets the fps60 mesh capture
 // work off the world-coord transform instead of reading the GTE the native path no longer populates.
-void eproj_active_cr(uint32_t cr[11]);
+void eproj_active_cr(struct Core* c, uint32_t cr[11]);

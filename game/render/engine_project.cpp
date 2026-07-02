@@ -119,32 +119,32 @@ void eproj_vertex(const EObjXform* w, int vx, int vy, int vz, ProjVtx* out) {
 
 // The active object xform: set once per render command by the per-object flush; the GT3/GT4 submitters
 // project every vertex through it. There is NO GTE fallback — a submitter that runs in the per-object path
-// always has an active xform.
-static EObjXform s_active;
-static int       s_active_set = 0;
-void eproj_set_active(const EObjXform* w) { s_active = *w; s_active_set = 1; }
-void eproj_clear_active(void) { s_active_set = 0; }
-int  eproj_active(void) { return s_active_set; }
-void eproj_vertex_active(int vx, int vy, int vz, ProjVtx* out) { eproj_vertex(&s_active, vx, vy, vz, out); }
+// always has an active xform. State lives on Render (per-Core; was file-scope s_active / s_active_set).
+#include "render.h"
+void eproj_set_active(Core* c, const EObjXform* w) { c->mRender->mActiveXform = *w; c->mRender->mActiveXformSet = true; }
+void eproj_clear_active(Core* c)                    { c->mRender->mActiveXformSet = false; }
+int  eproj_active(Core* c)                          { return c->mRender->mActiveXformSet ? 1 : 0; }
+void eproj_vertex_active(Core* c, int vx, int vy, int vz, ProjVtx* out) { eproj_vertex(&c->mRender->mActiveXform, vx, vy, vz, out); }
 
 static inline int32_t round_i16(float f) {
   int32_t v = (int32_t)(f < 0 ? f - 0.5f : f + 0.5f);
   return v < -32768 ? -32768 : v > 32767 ? 32767 : v;
 }
 static inline int32_t round_i32(float f) { return (int32_t)(f < 0 ? f - 0.5f : f + 0.5f); }
-void eproj_active_cr(uint32_t cr[11]) {
+void eproj_active_cr(Core* c, uint32_t cr[11]) {
   // pack R (1.3.12 scale) into CR0-4 halfword layout, T into CR5-7, projection consts into cr[8..10].
+  const EObjXform& a = c->mRender->mActiveXform;
   uint16_t R[3][3];
-  for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) R[i][j] = (uint16_t)round_i16(s_active.R[i][j]);
+  for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) R[i][j] = (uint16_t)round_i16(a.R[i][j]);
   cr[0] = (uint32_t)R[0][0] | ((uint32_t)R[0][1] << 16);
   cr[1] = (uint32_t)R[0][2] | ((uint32_t)R[1][0] << 16);
   cr[2] = (uint32_t)R[1][1] | ((uint32_t)R[1][2] << 16);
   cr[3] = (uint32_t)R[2][0] | ((uint32_t)R[2][1] << 16);
   cr[4] = (uint32_t)R[2][2];
-  cr[5] = (uint32_t)round_i32(s_active.T[0]);
-  cr[6] = (uint32_t)round_i32(s_active.T[1]);
-  cr[7] = (uint32_t)round_i32(s_active.T[2]);
-  cr[8] = (uint32_t)(int32_t)(s_active.ofx * 65536.0f);
-  cr[9] = (uint32_t)(int32_t)(s_active.ofy * 65536.0f);
-  cr[10] = (uint32_t)(uint16_t)s_active.H;
+  cr[5] = (uint32_t)round_i32(a.T[0]);
+  cr[6] = (uint32_t)round_i32(a.T[1]);
+  cr[7] = (uint32_t)round_i32(a.T[2]);
+  cr[8] = (uint32_t)(int32_t)(a.ofx * 65536.0f);
+  cr[9] = (uint32_t)(int32_t)(a.ofy * 65536.0f);
+  cr[10] = (uint32_t)(uint16_t)a.H;
 }

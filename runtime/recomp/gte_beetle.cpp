@@ -129,7 +129,7 @@ void gte_probe_dump(const char* tag) {
 // the reimplementation is faithful. Gated on PSXPORT_PROJPROBE (read-only, no effect on output).
 #include <compat/intrinsics.h>   // compat_clz_u16, matching Beetle's Divide() shift-bias
 
-typedef struct { int ir1, ir2, ir3, sz, sx, sy; float px, py, pz, vx, vy, vz; int mx, my, mz; } ProjVtx;
+// ProjVtx typedef comes from engine_project.h (included via render.h above); dropped the local decl.
 
 static uint8_t  s_divtab[0x101];
 static int      s_divtab_init = 0;
