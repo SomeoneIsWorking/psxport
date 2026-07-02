@@ -469,7 +469,7 @@ static void demo_frame_s0(Core* c) {
     c->mem_w8(0x1f80019bu, 1);
   }
   rec_dispatch(c, 0x8007982Cu);                // zero+seed the 1524B control block @0x800BF870 (SYNC)
-  rec_dispatch(c, 0x80075240u);                // voice/audio-attr control-block init (SYNC)
+  ov_75240_run(c);                             // 0x80075240 — native (voice/audio-attr control-block init)
   c->r[4] = 1; rec_dispatch(c, 0x8001CF00u);   // SpuSetCommonAttr CD->SPU mix on (SYNC)
   if (cfg_dbg("demo")) fprintf(stderr, "[demo] s0 init: menu resources loaded, sm[0x48]=1 "
                                "(texgroup meta[0x800FB170]=%08X)\n", c->mem_r32(0x800fb170u));
