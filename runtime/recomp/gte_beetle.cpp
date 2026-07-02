@@ -473,55 +473,8 @@ void rtpcaller_dump(Core* c, const char* tag) {
 }
 void rtpcaller_reset(void) { for (int i = 0; i < 64; i++) { s_rtpcaller[i].ra = 0; s_rtpcaller[i].n = 0; } }
 
-// --- Native per-vertex depth, recorded BY the owned submit path (engine/engine_submit.c) ------------
-// The engine that builds each GPU packet knows the real view-space Z of every vertex it projects, so it
-// records that depth keyed by the vertex word's guest ADDRESS in the packet (pkt+8/+20/+32[/+44] for a
-// POLY_GT3/GT4). The renderer (gpu_native gp0_exec) looks it up by each packet vertex word's read
-// address (s_fifo_addr). Exact and deterministic by construction. This REPLACED the value-keyed "attach"
-// ring (capture-at-gte_op + value-match-at-store), which could only CORRELATE projected SXY back to a
-// depth and was unreliable (same-pixel verts ambiguous; whole-frame staleness) — a measurement hack.
-//
-// The cache is PER-INSTANCE (ProjPrimState on Game) so SBS's two cores don't clobber each other's per-
-// frame depths — projprim_bind(c) sets s_cur to THIS core's cache before its frame runs (parallels
-// gte_bind). Before the first bind s_cur is null and the calls are no-ops (safe for tools/boot paths
-// that hit these APIs before a Game exists).
-static inline uint32_t pp_hash(uint32_t addr) { return ((addr >> 2) * 2654435761u) >> 18 & (PROJPRIM_PP_HASH - 1); }
-static ProjPrimState* s_cur = nullptr;
-void projprim_bind(Core* c) { s_cur = &c->game->projprim; }
-void projprim_reset(void) {           // per-frame: drop last frame's depths so none are read stale
-  ProjPrimState* p = s_cur; if (!p) return;
-  p->n = 0; p->overflow = 0;
-  for (int i = 0; i < PROJPRIM_PP_HASH; i++) p->head[i] = -1;
-  p->inited = 1;
-}
-void projprim_stats_read(long* set, long* hit, long* miss) {
-  ProjPrimState* p = s_cur;
-  if (set)  *set  = p ? p->set_ct  : 0;
-  if (hit)  *hit  = p ? p->hit_ct  : 0;
-  if (miss) *miss = p ? p->miss_ct : 0;
-}
-void projprim_stats_reset(void) { ProjPrimState* p = s_cur; if (!p) return; p->set_ct = p->hit_ct = p->miss_ct = 0; }
-void projprim_set_pz(uint32_t addr, float pz) {   // engine_submit records a vertex's view-Z at its addr
-  ProjPrimState* p = s_cur; if (!p) return;
-  p->set_ct++;
-  if (!p->inited) projprim_reset();
-  addr &= 0x1FFFFC;
-  uint32_t h = pp_hash(addr);
-  for (int i = p->head[h]; i >= 0; i = p->entries[i].next) if (p->entries[i].addr == addr) { p->entries[i].pz = pz; return; }
-  if (p->n >= PROJPRIM_PP_MAX) { p->overflow = 1; return; }
-  ProjPrimEnt* e = &p->entries[p->n];
-  e->addr = addr; e->pz = pz; e->next = p->head[h]; p->head[h] = p->n++;
-}
-int projprim_lookup_pz(uint32_t addr, float* pz) {   // renderer: depth for the packet vertex word at addr
-  ProjPrimState* p = s_cur; if (!p || !p->inited) return 0;
-  addr &= 0x1FFFFC;
-  for (int i = p->head[pp_hash(addr)]; i >= 0; i = p->entries[i].next) if (p->entries[i].addr == addr) {
-    if (pz) *pz = p->entries[i].pz; p->hit_ct++; return 1; }
-  p->miss_ct++;
-  return 0;
-}
-int  projprim_overflowed(void) { ProjPrimState* p = s_cur; return p ? p->overflow : 0; }
-int  projprim_count(void)      { ProjPrimState* p = s_cur; return p ? p->n : 0; }
+// Native per-vertex depth cache: now `class ProjPrim` on Render — reach as `c->mRender->projprim`.
+// See game/render/proj_prim.h. All previously free `projprim_*` functions retired 2026-07-03.
 
 // PC-native per-pixel depth is THE render behavior — this is a PC GAME, not an emulator. The OT-order
 // painter's algorithm is the PSX limitation we transcend; genuine widescreen needs real per-pixel

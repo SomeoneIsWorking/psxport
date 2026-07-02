@@ -72,7 +72,7 @@ extern "C" int sbs_active(void); // defined in sbs.cpp (PSXPORT_SBS two-core sid
 
 static void native_step_frame(Core* c, uint32_t f) {
   void gte_bind(Core*); gte_bind(c);   // bind THIS core's GTE register file (per-instance — no shared GTE)
-  projprim_bind(c);                     // bind THIS core's native-depth cache (per-instance — no shared ProjPrimState)
+  c->mRender->projprim.bind(c);         // bind THIS core's native-depth cache (class ProjPrim on Render)
   spu_bind(c);                          // bind THIS core's SPU state (per-instance — no shared SPU)
   mdec_bind(c);                         // bind THIS core's MDEC state (per-instance — no shared MDEC)
   cdc_bind(c);                          // bind THIS core's CD-controller registers (per-instance — no shared CD)
@@ -273,12 +273,12 @@ static void game_init(Core* c) {
 
 // Dual-core harness hooks (dualcore.cpp): boot a core to the start of the frame loop, then step it one
 // frame at a time. dc_boot_init = crt0 setup + the init prefix/bootstrap; dc_step_frame = one frame.
-void dc_boot_init(Core* c) { void gte_bind(Core*); gte_bind(c); projprim_bind(c); spu_bind(c); mdec_bind(c); cdc_bind(c); xa_bind(c); crt0_setup(c); game_init(c); }
+void dc_boot_init(Core* c) { void gte_bind(Core*); gte_bind(c); c->mRender->projprim.bind(c); spu_bind(c); mdec_bind(c); cdc_bind(c); xa_bind(c); crt0_setup(c); game_init(c); }
 void dc_step_frame(Core* c, uint32_t f) { native_step_frame(c, f); }
 
 static void game_main(Core* c) {
   void gte_bind(Core*); gte_bind(c);   // bind this core's GTE before the init prefix / frame loop
-  projprim_bind(c);                     // and this core's native depth-cache
+  c->mRender->projprim.bind(c);         // and this core's native depth-cache (class ProjPrim on Render)
   spu_bind(c);                          // and this core's SPU
   mdec_bind(c);                         // and this core's MDEC
   cdc_bind(c);                          // and this core's CD-controller registers

@@ -788,12 +788,11 @@ void GpuState::gp0_exec(Core* core) {
       float dep[4]; int is3d = 0, bg = 0, billboard = 0;   // billboard = a 2D prim that got obj_depth (fps60 anchor)
       int fade_full = 0;                         // full-screen SEMI overlay (fade/dim) -> stretch-to-fill, stay on top (#21)
       {
-        int projprim_lookup_pz(uint32_t, float*);
         float proj_pz_to_ord(float);
         is3d = 1;
         for (int i = 0; i < nv; i++) {
           float pz;
-          if (vaddr[i] && projprim_lookup_pz(vaddr[i], &pz)) dep[i] = proj_pz_to_ord(pz);
+          if (vaddr[i] && core->mRender->projprim.lookupPz(vaddr[i], &pz)) dep[i] = proj_pz_to_ord(pz);
           else { is3d = 0; break; }
         }
         if (is3d) s_seen3d = 1;            // a projected world prim has now been drawn this frame
@@ -1397,20 +1396,18 @@ void GpuState::gpu_present_ex(Core* core, int do_blit) {
   // Reset the per-vertex depth table EVERY frame the native-depth path is live (NATIVE_DEPTH or SBS),
   // here — after this frame's DrawOTag/lookups, before next frame's projections record into it — so a
   // vertex word never reads an OLD frame's depth. The engine (engine_submit.c) repopulates it each frame.
-  { int attach_enabled(void); void projprim_reset(void);
-    if (attach_enabled()) projprim_reset(); }
+  { int attach_enabled(void);
+    if (attach_enabled()) core->mRender->projprim.reset(); }
   {
     {
 
       if (cfg_dbg("ndepth") && s_frame > 0 && (s_frame % 60) == 0)
         fprintf(stderr, "[ndepth f%d] real-depth(3D) prims=%ld  OT-band(2D) prims=%ld  3D%%=%.1f\n",
                 s_frame, core->mRender->stats.nd3d, core->mRender->stats.nd2d, (core->mRender->stats.nd3d+core->mRender->stats.nd2d) ? 100.0*core->mRender->stats.nd3d/(core->mRender->stats.nd3d+core->mRender->stats.nd2d) : 0.0);
-      { long pset = 0, phit = 0, pmiss = 0;
-        void projprim_stats_read(long*, long*, long*), projprim_stats_reset(void);
-        projprim_stats_read(&pset, &phit, &pmiss);
+      { auto s = core->mRender->projprim.stats();
         if (cfg_dbg("ndepth") && s_frame > 0 && (s_frame % 60) == 0)
-          fprintf(stderr, "    projprim(vtx) records=%ld  lookups hit=%ld miss=%ld\n", pset, phit, pmiss);
-        projprim_stats_reset(); }
+          fprintf(stderr, "    projprim(vtx) records=%ld  lookups hit=%ld miss=%ld\n", s.set, s.hit, s.miss);
+        core->mRender->projprim.statsReset(); }
       { RenderStats& st = core->mRender->stats;
         if (cfg_dbg("ndepth") && s_frame > 0 && (s_frame % 60) == 0)
           fprintf(stderr, "    obj_depth spans=%ld  2D-prim lookups hit=%ld miss=%ld\n", st.odAdd, st.odHit, st.odMiss);

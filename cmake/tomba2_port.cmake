@@ -178,6 +178,7 @@ set(PORT_SRC
   game/object/behavior_dispatch.cpp
   game/render/engine_submit.cpp
   game/render/node_xform.cpp
+  game/render/proj_prim.cpp
   game/render/engine_project.cpp
   game/render/engine_render.cpp
   game/render/engine_render_walk.cpp

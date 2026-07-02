@@ -14,6 +14,7 @@
 #include "pkt_span.h"
 #include "dualview_snapshot.h"
 #include "render_stats.h"
+#include "proj_prim.h"
 class Core;
 
 class Render {
@@ -26,6 +27,7 @@ public:
   PktSpan           pktSpan;           // packet-pool store-address-span tracker (Core::mem_w* -> track)
   DualviewSnapshot  dualviewSnapshot;  // dual-view render harness's per-Core RAM+scratchpad+GTE snapshots
   RenderStats       stats;             // per-frame render diag counters (ndepth / obj-depth / projprim)
+  ProjPrim          projprim;          // vertex-depth cache for native depth path (per-Core; SBS-safe)
   NodeXform         mNodeXform;        // scene-node WORLD-TRANSFORM builder (guest FUN_80051844)
 
   // ---- per-frame render orchestrators (called by Engine::fieldFrame/X) ----
