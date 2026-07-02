@@ -990,7 +990,7 @@ void Engine::submode1() { Core* c = core;
 // (sm[0x4c] 0x80106478), and the non-SOP field overlays YIELD DEEP and aren't owned yet — own them (RE
 // in scratch/gameplay_start_flow_re.md) to extend native ownership and shrink the cooperative fallback.
 // Returning 0 keeps the field REACHABLE (no derail) until those are owned.
-int ov_game_frame(Core* c) {
+int Engine::frame() { Core* c = core;
   // Screen fade: reset at the top of every logic frame (PSX-faithful — OT slot 4 empties each frame,
   // so a frame with no NATIVE fade caller = no fade rect. Native SMs push after this via
   // c->screenFade.applyLeafCall / set. Still-recomp SMs' fade calls don't reach the class yet — those
@@ -1034,7 +1034,7 @@ int ov_game_frame(Core* c) {
 //   sw ra,0x1c; 0x1f800198=0; 0x800be0e4=0; sm[0x48]=a0; sm[0x4a]=sm[0x4c]=sm[0x4e]=sm[0x50]=0.
 // Non-static: called directly from the native scheduler (native_boot.cpp) — the ONE remaining native
 // task entry after the override system was removed (2026-06-22).
-void ov_game_stage_prologue(Core* c) {
+void Engine::stagePrologue() { Core* c = core;
   uint32_t ra = c->r[31], sp = c->r[29];
   uint32_t s0_in = c->r[16], s1_in = c->r[17], s2_in = c->r[18];
   c->r[29] = sp - 0x20;
@@ -1062,19 +1062,12 @@ void ov_game_stage_prologue(Core* c) {
 }
 
 // OLD guest-loop entry (prologue + coro-redirect into the guest loop 0x801063F4). SUPERSEDED by the
-// native per-frame path (game_native in native_scheduler_step calls ov_game_stage_prologue + ov_game_frame).
-// Retained as a reference / fallback; not on the live path.
-void ov_game_stage_main(Core* c) {
-  ov_game_stage_prologue(c);
+// native per-frame path (game_native in native_scheduler_step calls c->engine.stagePrologue +
+// c->engine.frame). Retained as a reference / fallback; not on the live path.
+void Engine::stageMain() { Core* c = core;
+  stagePrologue();
   rec_coro_redirect(c, 0x801063F4u);
 }
-
-// ── class Engine — OOP entry points (called as `c->engine.method()`; see game/scene/engine.h) ──
-// The two GAME-stage entry points the scheduler drives each frame. They forward to the existing
-// static implementations in this TU while the rest of the engine_stage.cpp free functions await
-// progressive class-ification. `core` is set by Core's constructor (runtime/recomp/mem.cpp).
-void Engine::stagePrologue() { ov_game_stage_prologue(core); }
-int  Engine::frame()         { return ov_game_frame(core); }
 
 // Engine::areaModeDispatch — the 22-way area-mode dispatcher at guest 0x8001CAC0. See engine.h.
 // The 22-entry jump table lives in MAIN.EXE .text at 0x80010000 (extracted from MAIN.EXE below);

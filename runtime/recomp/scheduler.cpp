@@ -391,9 +391,8 @@ void native_scheduler_step(Core* c) {
       if (native_content && fresh && resume_pc == 0x8010637Cu) {
         // The ONE native task entry: the GAME stage dispatcher (engine_stage.cpp). Called directly
         // (top-down PC-driven) instead of via the removed address-keyed override table.
-        void ov_game_stage_main(Core*);
         extern uint32_t g_override_tgt; g_override_tgt = resume_pc;
-        ov_game_stage_main(c);
+        c->engine.stageMain();
         start = c->coro_redirect_pc ? c->coro_redirect_pc : c->r[31];
         c->coro_redirect_pc = 0;
       } else if (native_content && fresh && resume_pc == 0x8010649Cu) {

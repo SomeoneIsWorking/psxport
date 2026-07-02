@@ -43,6 +43,9 @@ public:
   //   handled here (was `ov_game_frame`).
   void stagePrologue();
   int  frame();
+  // stageMain: OLD guest-loop entry (prologue + coro-redirect into 0x801063F4). Kept as reference /
+  // fallback (native per-frame path calls stagePrologue + frame directly). Was ov_game_stage_main.
+  void stageMain();
 
   // submode0 / submode1: the two sm[0x4a] state handlers under the GAME running sub-mode
   // (sm[0x48]==2). submode0 = SOP intro; submode1 = the walkable field area machine
