@@ -87,7 +87,7 @@ void beh_multi_record_phase_machine(Core* c) {
      uint32_t s3 = 0x8014a758u;                             // tbl base
      int i = 0;
      do {
-       rec_dispatch(c, 0x8007aae8u);                        // FUN_8007AAE8() -> v0 (a0 carried)
+       ov_record_alloc_g(c);                        // FUN_8007AAE8() -> v0 (a0 carried)
        uint32_t rec = c->r[2];
        c->mem_w32(s0 + 0xc0, rec);
        c->mem_w16(rec + 6, (uint16_t)(int16_t)(i - 1));

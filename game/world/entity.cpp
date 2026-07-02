@@ -57,7 +57,7 @@ static uint32_t child_spawn_40410(Core* c) {
   uint32_t s3 = a1 << 2;             // tblB byte offset = (a1&0xff)*4, +2 per iter
   const uint32_t s5 = 0x800a3b28u;   // tblB base
   for (uint32_t i = 0; i < count; i++) {
-    c->r[4] = 0; rec_dispatch(c, 0x8007aae8u);     // allocate child node
+    c->r[4] = 0; ov_record_alloc_g(c);     // allocate child node
     uint32_t node = c->r[2];
     c->mem_w32(s0 + 0xC0, node);
     c->mem_w16(node + 6, (uint16_t)(i - 1));        // node[6] = (i-1) as s16

@@ -111,7 +111,7 @@ void beh_cube_text_spawn(Core* c) {
   if (n != 0) {
     uint32_t s0 = nd; int i6 = 0;
     do {
-      rec_dispatch(c, 0x8007AAE8u);                            // FUN_8007aae8() — DO NOT set a0 (leftover)
+      ov_record_alloc_g(c);                            // FUN_8007aae8() — DO NOT set a0 (leftover)
       uint32_t rec = c->r[2];
       c->mem_w32(s0 + 0xc0, rec);
       c->mem_w16(rec + 6, 0xffff);

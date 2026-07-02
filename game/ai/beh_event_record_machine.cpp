@@ -75,7 +75,7 @@ void beh_event_record_machine(Core* c) {
       int i = 0;
       do {
         i++;
-        rec_dispatch(c, 0x8007aae8u);                      // FUN_8007AAE8 -> rec (a0 carried)
+        ov_record_alloc_g(c);                      // FUN_8007AAE8 -> rec (a0 carried)
         uint32_t rec = c->r[2];
         c->mem_w32(base + 0xc0, rec);
         c->mem_w16(rec + 6, c->mem_r16(tbl + 0));

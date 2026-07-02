@@ -32,6 +32,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "graphics_bind.h"   // ov_record_alloc_g (FUN_8007AAE8)
 #include "spawn.h"   // world_despawn
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
@@ -80,7 +81,7 @@ void beh_pad_child_linker(Core* c) {
   s1 = 0x800A4BA8u;
   s0 = obj;
  L3b0:
-  rec_dispatch(c, 0x8007AAE8u);                 // a0 left as-is (matches the guest, which never reloads it)
+  ov_record_alloc_g(c);                 // a0 left as-is (matches the guest, which never reloads it)
   s3 += 1;
   v0 = c->r[2];                                 // returned record ptr
   c->mem_w32(s0 + 0xC0, v0);

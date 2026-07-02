@@ -87,7 +87,7 @@ void beh_twin_record_steer(Core* c) {
    c->mem_w16(nd + 0x86, 70);
    c->r[4] = 2;                                     // mirror guest a0 for the first FUN_8007AAE8
    for (int iter = 0; iter < 2; iter++) {
-     rec_dispatch(c, 0x8007aae8u);                  // FUN_8007AAE8() -> v0 (alloc); a0 carried from prior
+     ov_record_alloc_g(c);                  // FUN_8007AAE8() -> v0 (alloc); a0 carried from prior
      uint32_t rec = c->r[2];
      c->mem_w32(nd + 0xc0 + 4 * iter, rec);
      c->mem_w16(rec + 6, (uint16_t)(int16_t)(iter - 1));   // rec[6] = s1-1 (-1, then 0)

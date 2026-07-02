@@ -77,7 +77,7 @@ void beh_child_trig_motion(Core* c) {
       int s2 = 0;                                    // record index
       uint32_t s1 = nd;                              // node + i*4
       do {
-        rec_dispatch(c, 0x8007AAE8u);                // FUN_8007AAE8() -> v0 (alloc); a0 = guest a0
+        ov_record_alloc_g(c);                // FUN_8007AAE8() -> v0 (alloc); a0 = guest a0
         uint32_t rec = c->r[2];
         c->mem_w32(s1 + 0xC0, rec);
         c->mem_w16(rec + 6, (uint16_t)(s2 - 1));

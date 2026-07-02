@@ -68,7 +68,7 @@ void beh_quad_record_table_seed(Core* c) {
      int s3 = 0;
      uint32_t s0 = nd;                              // node + i*4
      do {
-       rec_dispatch(c, 0x8007aae8u);                // FUN_8007AAE8() -> v0 (alloc); a0 = guest a0
+       ov_record_alloc_g(c);                // FUN_8007AAE8() -> v0 (alloc); a0 = guest a0
        uint32_t rec = c->r[2];
        s3 += 1;
        c->mem_w32(s0 + 0xc0, rec);
