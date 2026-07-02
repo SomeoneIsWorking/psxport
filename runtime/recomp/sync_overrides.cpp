@@ -35,7 +35,7 @@ enum { V0 = 2, A0 = 4, A1 = 5, A2 = 6 };
 // iters) on the MDEC1 status (DAT_800ad098 -> 0x1F801824) data-in busy bit 0x20000000 / DMA1 busy bit
 // 0x1000000 until an IRQ clears them, else print "MDEC_in_sync/out_sync" + return -1. MDEC decode + its
 // DMAs are synchronous here, so the sync is already done -> return 0 (complete).
-static void ov_sync_ok(Core* c) { c->r[V0] = 0; }   // 0 = sync complete, success
+static void sync_ok(Core* c) { c->r[V0] = 0; }   // 0 = sync complete, success
 
 // Zero a libcd result buffer (the 8-byte status packet a caller may inspect). On the boot path callers
 // branch on the return value; the IRQ-filled status bytes are reported "clear" so no stale flag is seen.
@@ -44,17 +44,17 @@ static void zero_result(Core* c, uint32_t p) { if (p) for (int i = 0; i < 8; i++
 // 0x8008A96C FUN_8008a96c(mode, result) — CdReadSync. Blocking path spins until the CD data-ready IRQ
 // sets DAT_800ac29a; the timeout path prints "CD timeout" + returns 0xFFFFFFFF. Native data reads
 // complete synchronously, so a read is always already done: report "nothing pending / complete" = 0.
-static void ov_cdreadsync(Core* c) { zero_result(c, c->r[A1]); c->r[V0] = 0; }
+static void cdreadsync(Core* c) { zero_result(c, c->r[A1]); c->r[V0] = 0; }
 
 // 0x8008B4B8 FUN_8008b4b8(mode) — CdDataSync (CD DMA-done wait). Real body spins while the CD DMA busy
 // bit is set, else times out. The CD DMA is never started here (reads are native file I/O) -> idle -> 0.
-static void ov_cddatasync(Core* c) { c->r[V0] = 0; }   // 0 = DMA idle / transfer complete
+static void cddatasync(Core* c) { c->r[V0] = 0; }   // 0 = DMA idle / transfer complete
 
 // 0x8008B2D8 low-level CdInit reset handshake — pokes the (unmodelled) CD HW registers then spins in
 // CD_cw on the controller-ready bit DAT_800ac298 nothing sets -> "CD timeout" -> "Init failed". We model
 // no controller; report drive ready (v0=0). (The boot init prefix bypasses the whole CdInit caller via
 // cd_hle_init; this entry covers any OTHER caller that reaches the handshake from interpreted code.)
-static void ov_cdinit_hs(Core* c) { c->r[V0] = 0; }
+static void cdinit_hs(Core* c) { c->r[V0] = 0; }
 
 // 0x800834A0 FUN_800834a0 / 0x800834D4 FUN_800834d4 — libgpu GPU-DMA-completion TIMEOUT (arm / check).
 // The DMA-send primitives (FUN_80082424 etc.) kick the GPU OT-linked-list DMA, then arm a vblank-based
@@ -63,8 +63,8 @@ static void ov_cdinit_hs(Core* c) { c->r[V0] = 0; }
 // SYNCHRONOUSLY on the channel-start write, so the transfer is already complete by the first poll — the
 // timeout is never needed. Own the pair natively so they never touch VSync: arm a far-future deadline
 // (no VSync read); report "not timed out" (the busy bit is already clear so the poll exits first anyway).
-static void ov_gpu_timeout_arm(Core* c) { c->mem_w32(0x800a5adcu, 0x7fffffffu); c->mem_w32(0x800a5ae0u, 0); }
-static void ov_gpu_timeout_chk(Core* c) { c->r[V0] = 0; }   // 0 = not timed out (DMA already done)
+static void gpu_timeout_arm(Core* c) { c->mem_w32(0x800a5adcu, 0x7fffffffu); c->mem_w32(0x800a5ae0u, 0); }
+static void gpu_timeout_chk(Core* c) { c->r[V0] = 0; }   // 0 = not timed out (DMA already done)
 
 // VSync TRAP (user 2026-06-22): the PC-native frame loop (native_boot.cpp for-loop + gpu_pace_frame)
 // OWNS all timing. NOTHING may reach libetc VSync 0x80085900 — not to WAIT for a vblank (pacing) and
@@ -101,7 +101,7 @@ static void trap_abort(Core* c, const char* what, uint32_t addr) {
   abort();
 }
 
-static void ov_vsync_trap(Core* c) { trap_abort(c, "VSYNC", 0x80085900u); }
+static void vsync_trap(Core* c) { trap_abort(c, "VSYNC", 0x80085900u); }
 
 // ---- the platform-HLE registry --------------------------------------------------------------------
 // Resident BIOS-library code window (SCEI libs linked into MAIN.EXE sit high in the resident text). The
@@ -158,21 +158,21 @@ OverrideFn platform_hle_lookup(uint32_t addr) {
 
 void sync_overrides_init(void) {
   // libmdec sync (reached from libgs FUN_8009c820/FUN_8009c9d0/FUN_8009ca60 etc. — interpreted).
-  plat_register(0x8009CAECu, ov_sync_ok);      // DecDCTinSync
-  plat_register(0x8009CB80u, ov_sync_ok);      // DecDCToutSync
+  plat_register(0x8009CAECu, sync_ok);      // DecDCTinSync
+  plat_register(0x8009CB80u, sync_ok);      // DecDCToutSync
   // libcd sync (reached from in-game/cutscene CD code — interpreted).
-  plat_register(0x8008A96Cu, ov_cdreadsync);   // CdReadSync
-  plat_register(0x8008B4B8u, ov_cddatasync);   // CdDataSync
-  plat_register(0x8008B2D8u, ov_cdinit_hs);    // low-level CdInit reset handshake
+  plat_register(0x8008A96Cu, cdreadsync);   // CdReadSync
+  plat_register(0x8008B4B8u, cddatasync);   // CdDataSync
+  plat_register(0x8008B2D8u, cdinit_hs);    // low-level CdInit reset handshake
   // libgpu GPU-DMA-completion timeout (arm/check) — native no-ops, never read VSync (GPU is synchronous).
-  plat_register(0x800834A0u, ov_gpu_timeout_arm);   // FUN_800834a0 arm deadline
-  plat_register(0x800834D4u, ov_gpu_timeout_chk);   // FUN_800834d4 check (not timed out)
-  // libetc VSync — TRAP every caller, every mode (the native loop owns ALL timing). See ov_vsync_trap.
-  plat_register(0x80085900u, ov_vsync_trap);   // VSync(mode)
+  plat_register(0x800834A0u, gpu_timeout_arm);   // FUN_800834a0 arm deadline
+  plat_register(0x800834D4u, gpu_timeout_chk);   // FUN_800834d4 check (not timed out)
+  // libetc VSync — TRAP every caller, every mode (the native loop owns ALL timing). See vsync_trap.
+  plat_register(0x80085900u, vsync_trap);   // VSync(mode)
   // Cooperative task-switch: ChangeThread (FUN_80080880) is the universal yield/task-end primitive
-  // (FUN_80051f80 yield + FUN_80051fb4 task-end both funnel through it). Wire it to ov_switch so a
+  // (FUN_80051f80 yield + FUN_80051fb4 task-end both funnel through it). Wire it to switch so a
   // yield from an interpreted task coroutine saves the task's resume context and longjmps back to the
   // native scheduler (native_boot.cpp). Without this, every GAME-stage per-frame yield spins forever
-  // (the override table that used to carry this was removed). ov_switch no-ops outside a task run.
-  plat_register(0x80080880u, ov_switch);   // ChangeThread -> scheduler yield (scheduler.h/scheduler.cpp)
+  // (the override table that used to carry this was removed). switch no-ops outside a task run.
+  plat_register(0x80080880u, scheduler_yield);   // ChangeThread -> scheduler yield (scheduler.h/scheduler.cpp)
 }

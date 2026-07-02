@@ -583,7 +583,7 @@ static void interp_flat(Core* c, uint32_t pc, uint32_t stop_ra) {
 
     // `break` is a program trap. We HLE the BIOS, so there is no exception handler to resume
     // into — the trap ENDS this run. In particular crt0 (0x800896E0) is `jal main; break`: on
-    // real PSX main never returns, but our native main (ov_game_main) returns after N headless
+    // real PSX main never returns, but our native main (game_main) returns after N headless
     // frames, so control reaches that terminal break. The old recursive rec_interp escaped it by
     // chance (it returned to C on the next `jr ra`, which fell through into a halt loop); the flat
     // loop must treat the break itself as the halt. (A `break` never executes on a hot path here —

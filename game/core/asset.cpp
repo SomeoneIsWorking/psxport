@@ -114,7 +114,7 @@ void Asset::unpackGroup(uint32_t tablePtr, uint32_t anchorEnd) {
 // ENGINE asset orchestration -> reimplemented PC-native; the CD read (via 0x8001DC40) and the terminal task
 // yield (the scheduler) stay the retained platform/content mechanism (called, not transcribed). The
 // mode/set inputs and the 0x800FB170 metadata are CONTENT-interface state, so this is gated on the main-
-// RAM A/B diff (later-177). For mode==0 the terminal yield does not return (ov_switch longjmps mid-game),
+// RAM A/B diff (later-177). For mode==0 the terminal yield does not return (switch longjmps mid-game),
 // exactly like eng_stage_transition's tail; there is no code after it.
 void Asset::loadTexgroup() {
   Core* c = this->core;
@@ -139,7 +139,7 @@ void Asset::loadTexgroup() {
   c->r[16] = s0; c->r[29] = sp; c->r[31] = ra;
   if (mode == 0) {                                                 // 5. terminal yield (streams one group/frame)
     c->mem_w8(0x1F80019Bu, 1);
-    rec_dispatch(c, 0x80051FB4u);                                  // ov_switch tail — does not return mid-game
+    rec_dispatch(c, 0x80051FB4u);                                  // switch tail — does not return mid-game
   }
 }
 

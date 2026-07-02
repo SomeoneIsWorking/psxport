@@ -19,7 +19,7 @@
 #include <stdio.h>
 
 // cd_override.cpp: enable/disable CD->SPU mixing (libsnd SpuSetCommonAttr via FUN_8001cf00(1)).
-// Stays defined there (still called locally by ov_voice_play); tick() below also needs it for
+// Stays defined there (still called locally by voice_play); tick() below also needs it for
 // the resumed-music path, so it is non-static there rather than duplicated here.
 void cd_to_spu_mix(Core* c, int on);
 

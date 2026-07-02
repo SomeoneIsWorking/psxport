@@ -151,13 +151,13 @@ struct SchedulerState {
   // ---- FULL-PSX (psx_fallback) thread-fiber coroutines (later-264) -----------------------------
   // The native path above re-enters at a loop top / runs synchronous dispatchers, so it never needs a
   // true mid-function resume. The FULL-PSX path (PSXPORT_SBS_MODE=gameplay/both core B) runs pure
-  // recompiled task bodies that yield mid-function (ov_switch); the substrate can't re-enter mid-body,
+  // recompiled task bodies that yield mid-function (switch); the substrate can't re-enter mid-body,
   // so each such task runs on its OWN Coro thread that BLOCKS at a yield (preserving its C stack) and
   // CONTINUES on resume — recompiler-only, no interpreter (USER 2026-06-30). Active ONLY when
-  // psx_fallback is on; the native path is untouched. cur_is_coro tells ov_switch to coro-yield (or
+  // psx_fallback is on; the native path is untouched. cur_is_coro tells switch to coro-yield (or
   // Coro::exit_now on task-end) vs longjmp; Coro owns its own unwind jmp_buf for end/cancel.
   Coro*   coro[3] = {};          // per-slot fiber (heap; nullptr = no live full-PSX task on this slot)
-  int     cur_is_coro = 0;       // 1 while a Coro task is running -> ov_switch yields via the fiber
+  int     cur_is_coro = 0;       // 1 while a Coro task is running -> switch yields via the fiber
 
   // Resident overlay per OVERLAP SLOT (0x80106228 stage / 0x80108F9C mode / 0x8018A000 area), recorded
   // by overlay_note_load() at LOAD time — when the freshly-written image still matches its raw .BIN
@@ -204,7 +204,7 @@ public:
   // ONE switch: keep BOOT (native crt0/FMV/init) and the FRAME LOOP skeleton native, but run EVERYTHING
   // the frame loop calls — the stage state machines, all asset/area LOADING, and content — as the PSX
   // RECOMP body instead of the native owners. CD reads still go through the platform CD layer (cd_override
-  // ov_cd_loadfile/ov_cd_dc40/ov_cd_async_read), so the PSX loaders run SYNCHRONOUSLY (no busy-wait). This
+  // cd_loadfile/cd_dc40/cd_async_read), so the PSX loaders run SYNCHRONOUSLY (no busy-wait). This
   // restores a working PSX baseline to compare the native path against. Set by PSXPORT_GATE (nonzero) and
   // the REPL `gate on|off`. Default OFF = full native (shipped behavior). Wired in native_boot.cpp.
   int psx_fallback = 0;

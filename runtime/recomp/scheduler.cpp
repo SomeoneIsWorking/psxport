@@ -57,9 +57,9 @@ void rec_coro_run(Core* c, uint32_t pc);
 // etc.) has already run its real body, so register side effects it needs on resume (e.g. it
 // leaves v0=0x1f800000 for the stage loop head's `lw t0,0x138(v0)`) are captured.
 extern "C" void guest_backtrace_to(Core*, FILE*);   // sync_overrides.cpp — guest-stack backtrace (btyield)
-void ov_switch(Core* c) {
+void scheduler_yield(Core* c) {
   if (!c->game->sched.in_stage) { c->r[2] = c->r[4]; return; }   // no-op: return the handle arg in v0
-  if (cfg_dbg("yieldpc")) fprintf(stderr, "[yieldpc] ov_switch yield ra=0x%08X waitloop=0x%08X r16=0x%08X r29=0x%08X 801fe0e0=0x%X\n",
+  if (cfg_dbg("yieldpc")) fprintf(stderr, "[yieldpc] switch yield ra=0x%08X waitloop=0x%08X r16=0x%08X r29=0x%08X 801fe0e0=0x%X\n",
                                   c->r[31], c->mem_r32(c->r[29] + 16), c->r[16], c->r[29], c->mem_r32(0x801fe0e0u));
   int slot = c->game->sched.cur_slot;
   c->game->sched.task_ctx[slot] = static_cast<R3000&>(*c);  // save REGISTERS only (r29=task SP, r31=resume ra)
@@ -69,11 +69,11 @@ void ov_switch(Core* c) {
     // finishes (else the thread blocks forever). Otherwise BLOCK the fiber (its whole C stack preserved);
     // the scheduler's co->resume() returns and we continue here on the next resume — mid-function.
     if (c->mem_r16(TASKBASE + (uint32_t)slot * TASKSTRIDE) == 0) {
-      if (cfg_dbg("sched")) fprintf(stderr, "[sched]   ov_switch EXIT slot %d (base.state==0) ra=0x%08X\n",
+      if (cfg_dbg("sched")) fprintf(stderr, "[sched]   switch EXIT slot %d (base.state==0) ra=0x%08X\n",
                                     slot, c->r[31]);
       c->game->sched.coro[slot]->exit_now();
     }
-    if (cfg_dbg("yieldpc")) fprintf(stderr, "[sched]   ov_switch YIELD slot %d ra=0x%08X\n", slot, c->r[31]);
+    if (cfg_dbg("yieldpc")) fprintf(stderr, "[sched]   switch YIELD slot %d ra=0x%08X\n", slot, c->r[31]);
     // btyield: dump the coro's guest call chain at the yield point (the live regs ARE the yielding
     // field-mode frame). Diagnoses WHERE a full-PSX task is parked (e.g. the deep field-mode sub-wait).
     if (cfg_dbg("btyield")) {
@@ -273,12 +273,12 @@ void native_scheduler_step(Core* c) {
     }
     // ---- FULL-PSX (psx_fallback) task: thread-fiber coroutine — TRUE mid-function resume ----------
     // The native dispatchers above are OFF in psx_fallback, so the stage/loader tasks run as pure
-    // recompiled PSX bodies that yield mid-function via ov_switch. The substrate can't re-enter a fn
+    // recompiled PSX bodies that yield mid-function via switch. The substrate can't re-enter a fn
     // mid-body, so run each task on its OWN Coro thread: a yield BLOCKS the thread (its whole nested C
     // call stack is preserved) and a resume CONTINUES it exactly there — recompiler-only, no interpreter
     // (USER 2026-06-30: "the PSX path needs to work recompiler-only; condvars with pause-resume"). The
     // shared register file Core::r[] is save/restored around the handoff just like the longjmp path:
-    // ov_switch saves task_ctx[i] before blocking; we restore it before resuming. The NATIVE path
+    // switch saves task_ctx[i] before blocking; we restore it before resuming. The NATIVE path
     // (native_content) is untouched — it falls through to the existing setjmp scheduler below.
     if (!native_content) {
       Coro*& co = c->game->sched.coro[i];
@@ -294,7 +294,7 @@ void native_scheduler_step(Core* c) {
         Core* cc = c;
         co = new Coro();
         co->start([cc, entry] {
-          rec_coro_run(cc, entry);   // pure recompiled PSX body; ov_switch yields/exits back to the Coro
+          rec_coro_run(cc, entry);   // pure recompiled PSX body; switch yields/exits back to the Coro
         });
       } else if (st == 2 && co && !co->done()) {
         /* resume the suspended fiber (regs restored below) */
@@ -313,7 +313,7 @@ void native_scheduler_step(Core* c) {
       if (cfg_dbg("sched"))
         fprintf(stderr, "[sched] slot %d coro %s st=%u entry=0x%08X sp=0x%08X\n", i,
                 co_fresh ? "start" : "resume", st, c->mem_r32(base + 0xc), c->game->sched.task_ctx[i].r[29]);
-      co->resume();                                               // run until ov_switch yields / body returns
+      co->resume();                                               // run until switch yields / body returns
       c->game->sched.cur_is_coro = 0;
       c->game->sched.in_stage = 0;
       if (cfg_dbg("sched"))

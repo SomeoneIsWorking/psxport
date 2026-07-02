@@ -1312,7 +1312,7 @@ void GpuState::present_window() {}
 void GpuState::gpu_repaint() {}
 #endif
 
-// Frame pacing: the native game loop (ov_game_main) runs UNTHROTTLED — at thousands of fps.
+// Frame pacing: the native game loop (game_main) runs UNTHROTTLED — at thousands of fps.
 // That's right for headless tests but unplayable windowed. When a window is up we throttle to
 // the game's own pace: DAT_1f800235 is the engine's vblank quota (vblanks at 60 Hz per displayed
 // frame; =2 => 30 fps, Tomba2's logic rate). PSXPORT_NOPACE disables (fast-forward); headless

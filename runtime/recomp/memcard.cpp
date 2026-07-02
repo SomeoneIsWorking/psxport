@@ -233,7 +233,7 @@ int card_hle_a0(uint32_t fn, Core* c) {
 // B0:0x4E _card_read(chan, sector, buf): read frame `sector` (128 B) into g_ram[buf].
 // Returns 1 (issue accepted) like the BIOS; the actual data is delivered immediately so the
 // caller's subsequent _card_status spin completes at once.
-static void ov_card_read(Core* c) {
+static void card_read(Core* c) {
   uint32_t sector = c->r[A1], buf = c->r[A2];
   uint8_t f[CARD_FRAME_SIZE];
   card_read_frame(sector, f);
@@ -243,7 +243,7 @@ static void ov_card_read(Core* c) {
 }
 
 // B0:0x4F _card_write(chan, sector, buf): write frame `sector` (128 B) from g_ram[buf].
-static void ov_card_write(Core* c) {
+static void card_write(Core* c) {
   uint32_t sector = c->r[A1], buf = c->r[A2];
   uint8_t f[CARD_FRAME_SIZE];
   for (uint32_t i = 0; i < CARD_FRAME_SIZE; i++) f[i] = c->mem_r8(buf + i);
@@ -254,7 +254,7 @@ static void ov_card_write(Core* c) {
 
 // B0:0x5C _card_status(chan): the game spins `while((status & 1) == 0)`; since our read/write
 // already completed synchronously, always report bit0 set (transfer complete, no error).
-static void ov_card_status(Core* c) { c->r[V0] = 1; }
+static void card_status(Core* c) { c->r[V0] = 1; }
 
 // ===== THE SAVE / LOAD HANG — REAL ROOT CAUSE (RE'd from the CRD.BIN card-menu overlay) ==========
 // A previous fix overrode the libcard ASYNC single-frame primitives FUN_8009BBFC/BC8C/BBEC and it did
@@ -370,7 +370,7 @@ static inline uint32_t mc_data_frame(int block, uint32_t off) {
 }
 
 // B0:0x32 open(name, mode): mode bit 0x0200 = create; block count = (mode >> 16) (Tomba uses 1).
-static void ov_file_open(Core* c) {
+static void file_open(Core* c) {
   char name[0x100]; mc_read_guest_str(c, c->r[A0], name, sizeof name);
   uint32_t mode = c->r[A1];
   int blk = mc_dir_find(name);
@@ -388,7 +388,7 @@ static void ov_file_open(Core* c) {
 }
 
 // B0:0x33 lseek(fd, off, whence): 0=SET,1=CUR,2=END. Returns new position.
-static void ov_file_lseek(Core* c) {
+static void file_lseek(Core* c) {
   int fd = (int)c->r[A0]; int32_t off = (int32_t)c->r[A1]; uint32_t whence = c->r[A2];
   if (fd >= 0 && fd <= 2) { c->r[V0] = 0; return; }   // console device fds: lseek is a no-op
   if (fd <= 0 || fd >= MC_FD_MAX || !s_fd[fd].used) { c->r[V0] = 0xFFFFFFFFu; return; }
@@ -399,7 +399,7 @@ static void ov_file_lseek(Core* c) {
 }
 
 // B0:0x34 read(fd, buf, len): copy `len` bytes from the card file into g_ram[buf]; deliver completion.
-static void ov_file_read(Core* c) {
+static void file_read(Core* c) {
   int fd = (int)c->r[A0]; uint32_t buf = c->r[A1], len = c->r[A2];
   if (fd >= 0 && fd <= 2) { c->r[V0] = 0; return; }   // console device fds: nothing to read
   if (fd <= 0 || fd >= MC_FD_MAX || !s_fd[fd].used) { c->r[V0] = 0xFFFFFFFFu; return; }
@@ -417,7 +417,7 @@ static void ov_file_read(Core* c) {
 }
 
 // B0:0x35 write(fd, buf, len): copy `len` bytes from g_ram[buf] into the card file; deliver completion.
-static void ov_file_write(Core* c) {
+static void file_write(Core* c) {
   int fd = (int)c->r[A0]; uint32_t buf = c->r[A1], len = c->r[A2];
   if (fd == 1 || fd == 2) {   // stdout/stderr (BIOS console device) — preserve printf/puts behavior
     for (uint32_t i = 0; i < len; i++) fputc(c->mem_r8(buf + i), stderr);
@@ -442,7 +442,7 @@ static void ov_file_write(Core* c) {
 }
 
 // B0:0x36 close(fd).
-static void ov_file_close(Core* c) {
+static void file_close(Core* c) {
   int fd = (int)c->r[A0];
   if (fd >= 0 && fd <= 2) { c->r[V0] = (uint32_t)fd; return; }   // console fds: nothing to free
   if (fd >= MC_FD_BASE && fd < MC_FD_MAX) s_fd[fd].used = 0;
@@ -451,7 +451,7 @@ static void ov_file_close(Core* c) {
 }
 
 // B0:0x45 erase(name): mark the file's directory block free. Returns 1 on success.
-static void ov_file_erase(Core* c) {
+static void file_erase(Core* c) {
   char name[0x100]; mc_read_guest_str(c, c->r[A0], name, sizeof name);
   int blk = mc_dir_find(name);
   if (blk < 0) { c->r[V0] = 0; if (g_card_verbose) fprintf(stderr, "[card] erase '%s' -> not found\n", name); return; }
@@ -468,11 +468,11 @@ static void ov_file_erase(Core* c) {
 // name directly (the 7-slot open loop), so a faithful firstfile is not strictly required here; report
 // "no more files" (v0=0) which the menu's open-by-name path handles gracefully. Kept as an explicit
 // override so the B0:0x43 trampoline never falls through to the unhandled HLE default.
-static void ov_file_firstfile(Core* c) { c->r[V0] = 0; }
+static void file_firstfile(Core* c) { c->r[V0] = 0; }
 
 // B0:0x4C _card_info(chan): the BIOS issues a "get card info" and delivers a completion event; the
 // card is always present + healthy here (host-backed), so accept and deliver completion immediately.
-static void ov_card_info(Core* c) { card_deliver_complete(c); c->r[V0] = 1; }
+static void card_info(Core* c) { card_deliver_complete(c); c->r[V0] = 1; }
 
 // B0 libcard dispatch — these run through the HLE B0 vector (the game's statically-linked libcard
 // wrappers call B0:idx via the `li t0,0xB0; jr t0` trampoline -> rec_dispatch_miss -> recomp_hle ->
@@ -488,11 +488,11 @@ int card_hle_b0(uint32_t fn, Core* c) {
     default: return 0;
   }
   switch (fn) {
-    case 0x4Cu: ov_card_info(c);   return 1;   // _card_info(chan)
-    case 0x4Eu: ov_card_read(c);   card_deliver_complete(c); return 1;   // _card_read(chan,sector,buf)
-    case 0x4Fu: ov_card_write(c);  card_deliver_complete(c); return 1;   // _card_write(chan,sector,buf)
+    case 0x4Cu: card_info(c);   return 1;   // _card_info(chan)
+    case 0x4Eu: card_read(c);   card_deliver_complete(c); return 1;   // _card_read(chan,sector,buf)
+    case 0x4Fu: card_write(c);  card_deliver_complete(c); return 1;   // _card_write(chan,sector,buf)
     case 0x50u: c->r[V0] = 0;      return 1;   // _card_chan() -> active channel (single card = 0)
-    case 0x5Cu: ov_card_status(c); return 1;   // _card_status(chan)
+    case 0x5Cu: card_status(c); return 1;   // _card_status(chan)
     default: return 0;
   }
 }

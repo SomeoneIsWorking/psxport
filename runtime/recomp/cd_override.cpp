@@ -27,18 +27,18 @@ enum { V0 = 2, A0 = 4, A1 = 5, A2 = 6 };
 // streaming commands the game uses for cutscene BGM / voice (Setmode XA bit, Setloc, ReadS).
 
 // 0x8008B2D8 FUN_8008b2d8: low-level CdInit -> success (drive ready), no HW handshake.
-static void ov_cdinit(Core* c) { c->r[V0] = 0; }
+static void cdinit(Core* c) { c->r[V0] = 0; }
 
 // libcd command/sync primitives whose real bodies spin in a CD_cw / CD timeout loop on the
 // IRQ-set status DAT_800ac298 (never set — no controller). Since every DATA read is served
-// natively by ov_cd_read, the remaining CdControl/CdSync calls (Setmode, Pause, Nop, ...)
+// natively by cd_read, the remaining CdControl/CdSync calls (Setmode, Pause, Nop, ...)
 // only need to report success so their waits fall through. We replace, not super-call: the
 // real bodies cannot return without the IRQ. Result bytes (drive status) the caller may copy
 // are zeroed — callers on the boot path branch on the return value, not the status bytes.
 static void zero_result(Core* c, uint32_t p) { if (p) for (int i = 0; i < 8; i++) c->mem_w8(p + i, 0); }
 
 // 0x8008AC34 FUN_8008ac34(cmd, param, result, mode) CdCommand -> 0 (success).
-static void ov_cd_command(Core* c) {
+static void cd_command(Core* c) {
   if (cfg_dbg("cdcmd")) {
     uint32_t cmd = c->r[A0] & 0xFF, param = c->r[A1];
     uint8_t p[4] = {0,0,0,0};
@@ -63,7 +63,7 @@ static void ov_cd_command(Core* c) {
   zero_result(c, c->r[A2]); c->r[V0] = 0;
 }
 // 0x8008A6EC FUN_8008a6ec(noblock, result) CdSync -> 2 (status: complete/ready).
-static void ov_cd_sync(Core* c) { zero_result(c, c->r[A1]); c->r[V0] = 2; }
+static void cd_sync(Core* c) { zero_result(c, c->r[A1]); c->r[V0] = 2; }
 
 // 0x8001CE90 FUN_8001ce90(cmd, param, result) — the engine's streaming-path CD-command
 // wrapper (FUN_8001ce90 -> FUN_8001ce04 -> FUN_80089ce8/FUN_80089b44). Used by the CD
@@ -80,7 +80,7 @@ static void ov_cd_sync(Core* c) { zero_result(c, c->r[A1]); c->r[V0] = 2; }
 // of spinning. All other streaming commands report success (our synchronous-CD model). This
 // only intercepts the FUN_8001ce90 wrapper — FUN_8001d940's reader calls FUN_8001ce04 directly
 // and is unaffected.
-static void ov_cd_cmd_stream(Core* c) {
+static void cd_cmd_stream(Core* c) {
   uint32_t cmd = c->r[A0] & 0xFF, result = c->r[A2];
   if (cfg_dbg("cdcmd")) {
     uint32_t pp = c->r[A1]; uint8_t p[4] = {0,0,0,0};
@@ -104,7 +104,7 @@ static void ov_cd_cmd_stream(Core* c) {
     // When not streaming this is a data seek/load: report the target sector (head "arrived",
     // no seek latency in our synchronous-CD model).
     // (XA voice/BGM no longer polls this — it's ported native via FUN_8001d2a8 -> xa_stream_play,
-    // see ov_voice_play. This path remains only for any data-streaming GetlocL.)
+    // see voice_play. This path remains only for any data-streaming GetlocL.)
     uint32_t task = c->mem_r32(0x1f800138);
     uint32_t lba = c->mem_r32(task + 0x54);
     int t = (int)lba + 150;                     // FUN_8008a00c: LBA -> MSF (sector = lba+150)
@@ -118,7 +118,7 @@ static void ov_cd_cmd_stream(Core* c) {
 
 // 0x8008C1EC FUN_8008c1ec(a0=blocks, a1=lba, a2=buf): native synchronous read.
 static int  g_cd_verbose = 0;  // PSXPORT_CD_VERBOSE=1
-static void ov_cd_read(Core* c) {
+static void cd_read(Core* c) {
   uint32_t blocks = c->r[A0], lba = c->r[A1], buf = c->r[A2];
   uint8_t sec[2048];
   for (uint32_t i = 0; i < blocks; i++) {
@@ -136,7 +136,7 @@ static void ov_cd_read(Core* c) {
 // no decompression) — an async streaming path our no-IRQ overrides can't feed. Replace it
 // with a native consecutive-sector read of the same bytes: ceil(size/2048) sectors from `lba`
 // into `dest`, copying exactly `size` bytes. Returns param_3 (size), as the original does.
-static void ov_cd_loadfile(Core* c) {
+static void cd_loadfile(Core* c) {
   uint32_t dest = c->r[A0], lba = c->r[A1], size = c->r[A2];
   uint8_t sec[2048];
   uint32_t done = 0;
@@ -157,7 +157,7 @@ static void ov_cd_loadfile(Core* c) {
 // stage-overlay load top-down instead of dispatching the PSX FUN_8001db8c). Same semantics.
 void cd_loadfile_native(Core* c, uint32_t dest, uint32_t lba, uint32_t size) {
   c->r[A0] = dest; c->r[A1] = lba; c->r[A2] = size;
-  ov_cd_loadfile(c);
+  cd_loadfile(c);
 }
 
 // 0x8001D940 FUN_8001d940: the engine's ASYNC streaming reader. It is spawned as task1 (its body
@@ -170,13 +170,13 @@ void cd_loadfile_native(Core* c, uint32_t dest, uint32_t lba, uint32_t size) {
 // reader never returns, FUN_8001db38 never sets the load-done flag DAT_1f80019b, and the GAME
 // state machine's level-load wait (outer state s48=2 -> 4a=1/4c=2/4e=8 leaf @ FUN_80106f68,
 // which polls DAT_1f80019b) spins forever — the level-intro renders once, then the screen stays
-// black. FIX (recomp-overrides, mirrors ov_cd_loadfile): do the read natively & synchronously.
+// black. FIX (recomp-overrides, mirrors cd_loadfile): do the read natively & synchronously.
 // _DAT_1f8001f4 is in 32-bit WORDS (0x200 words = 1 sector = 2048 B); copy words*4 bytes from
 // consecutive sectors starting at LBA _DAT_1f8001f0 into _DAT_1f8001f8, exactly word-granular as
 // FUN_8001d7c4 does (dest advances by words*4, no sector padding). Then zero the remaining count
 // and advance dest/position trackers to the post-read state so FUN_8001d940's caller FUN_8001db38
 // (task+0x6c is already 1 = success) sets DAT_1f80019b and ends task1.
-void ov_cd_async_read(Core* c) {
+void cd_async_read(Core* c) {
   uint32_t lba   = c->mem_r32(0x1f8001f0);
   uint32_t words = c->mem_r32(0x1f8001f4);
   uint32_t dest  = c->mem_r32(0x1f8001f8);
@@ -201,18 +201,18 @@ void ov_cd_async_read(Core* c) {
 // Direct-call native FUN_8001DC40(dest, lba, size_bytes): the inline (NON-spawning) sync reader the
 // indexed file loaders use (e.g. ov_80045080). FUN_8001DC40 stuffs the scratchpad read descriptor
 // (0x1f8001f8=dest, 0x1f8001f0=lba, 0x1f8001f4=ceil(size/4) words) then calls FUN_8001D940 inline; we
-// reproduce that by filling the same descriptor and running the synchronous ov_cd_async_read. Used by
+// reproduce that by filling the same descriptor and running the synchronous cd_async_read. Used by
 // the top-down PC-driven loaders (e.g. DEMO substate s0) so they never enter the IRQ-driven reader.
 void cd_dc40_sync(Core* c, uint32_t dest, uint32_t lba, uint32_t size) {
   c->mem_w32(0x1f8001f8, dest);
   c->mem_w32(0x1f8001f0, lba);
   c->mem_w32(0x1f8001f4, (size + 3u) >> 2);   // ceil(size/4) words, as FUN_8001DC40 computes
-  ov_cd_async_read(c);
+  cd_async_read(c);
   c->r[V0] = size;                            // FUN_8001DC40 returns size in v0
 }
 
 // Platform-HLE entry for FUN_8001DC40 (intercepted for any caller): (a0=dest, a1=lba, a2=size_bytes).
-void ov_cd_dc40(Core* c) { cd_dc40_sync(c, c->r[A0], c->r[A1], c->r[A2]); }
+void cd_dc40(Core* c) { cd_dc40_sync(c, c->r[A0], c->r[A1], c->r[A2]); }
 
 // 0x8001D2A8 FUN_8001d2a8(chan, start_lba, end_lba, flags): the engine's voice/BGM clip player.
 // It set task-2 fields + spawned the FUN_8001cfc8 streaming-reader coroutine (slot 2) which issued
@@ -262,7 +262,7 @@ void xa_audio_trace(Core* c, const char* tag) {
   }
 }
 
-static void ov_voice_play(Core* c) {
+static void voice_play(Core* c) {
   uint8_t  chan  = (uint8_t)(c->r[A0] & 0xFF);
   uint32_t start = c->r[A1], end = c->r[A2];
   int      loop  = (int)(c->r[7] & 1);              // a3 = flags
@@ -282,7 +282,7 @@ static void ov_voice_play(Core* c) {
 // comment there); this file keeps only the CD-controller HLE they call into.
 
 // 0x8001CF2C FUN_8001cf2c: stop the current voice/BGM clip.
-static void ov_voice_stop(Core* c) {
+static void voice_stop(Core* c) {
   xa_stream_stop(); c->mem_w16(0x801fe0e0, 0);
   // EXPLICIT stop: forget any remembered looping music so the per-frame MusicCoord::tick can't
   // resurrect it. Without this, navigating the front-end menus (title<->load<->options, each exit
@@ -331,31 +331,31 @@ void cd_overrides_init(void) {
   // also driven by the COOPERATIVE area-load task (FUN_80044bd4 -> task-1), whose descriptor setup differs;
   // force-syncing the core corrupted the area overlay. (User 2026-06-22: async CD read -> do it sync.)
   void platform_hle_register(uint32_t, OverrideFn);
-  void ov_cd_dc40(Core*);
-  platform_hle_register(0x8001DC40u, ov_cd_dc40);   // FUN_8001dc40 inline async loader -> sync
+  void cd_dc40(Core*);
+  platform_hle_register(0x8001DC40u, cd_dc40);   // FUN_8001dc40 inline async loader -> sync
   // Restore the rest of the CD subsystem's native HLEs (orphaned when the override table was removed;
   // original set recovered from the removal commit). All are I/O primitives in the platform-HLE window
   // (0x8001Cxxx engine CD glue / 0x8008xxxx libcd) — the FAIL-FAST sync model: every CD op is served
   // natively + synchronously, so the libcd IRQ/VSync busy-waits (CdSync/CdCommand) are never reached.
   // Without these, the cooperative streaming reader (task slot 2, FUN_8001cfc8) spins forever in libcd
   // CdSync (FUN_8008a6ec) and wedges the whole scheduler frame. Two DELIBERATE omissions vs the original:
-  //   - 0x8001D940 (ov_cd_async_read): do NOT intercept the shared async CORE — it is also driven by the
+  //   - 0x8001D940 (cd_async_read): do NOT intercept the shared async CORE — it is also driven by the
   //     cooperative area-load task and force-syncing it corrupts the area overlay (verified pitfall).
-  //   - 0x8008B2D8 (CdInit handshake): owned by sync_overrides_init (ov_cdinit_hs) — don't double-register.
-  platform_hle_register(0x8001D2A8u, ov_voice_play);    // voice/BGM clip player -> native xa_stream
-  platform_hle_register(0x8001CF2Cu, ov_voice_stop);    // stop voice/BGM -> native
-  platform_hle_register(0x8001DB8Cu, ov_cd_loadfile);   // engine file loader -> sync sector read
-  platform_hle_register(0x8008AC34u, ov_cd_command);    // libcd CdCommand -> success (no controller)
-  platform_hle_register(0x8008A6ECu, ov_cd_sync);       // libcd CdSync -> complete (CD is synchronous)
-  platform_hle_register(0x8001CE90u, ov_cd_cmd_stream); // streaming CD-cmd wrapper (GetlocL pos in range)
-  platform_hle_register(0x8008C1ECu, ov_cd_read);       // libcd by-LBA read -> native sync
-  // EXPERIMENT (later-215e): wire the shared async streaming core FUN_8001D940 -> ov_cd_async_read so the
+  //   - 0x8008B2D8 (CdInit handshake): owned by sync_overrides_init (cdinit_hs) — don't double-register.
+  platform_hle_register(0x8001D2A8u, voice_play);    // voice/BGM clip player -> native xa_stream
+  platform_hle_register(0x8001CF2Cu, voice_stop);    // stop voice/BGM -> native
+  platform_hle_register(0x8001DB8Cu, cd_loadfile);   // engine file loader -> sync sector read
+  platform_hle_register(0x8008AC34u, cd_command);    // libcd CdCommand -> success (no controller)
+  platform_hle_register(0x8008A6ECu, cd_sync);       // libcd CdSync -> complete (CD is synchronous)
+  platform_hle_register(0x8001CE90u, cd_cmd_stream); // streaming CD-cmd wrapper (GetlocL pos in range)
+  platform_hle_register(0x8008C1ECu, cd_read);       // libcd by-LBA read -> native sync
+  // EXPERIMENT (later-215e): wire the shared async streaming core FUN_8001D940 -> cd_async_read so the
   // cooperative area-DATA load (skip cutscene -> field: FUN_800452c0 -> FUN_8001db38 -> FUN_8001d940) reads
   // its sectors synchronously and drains the count, instead of yielding forever for a per-sector IRQ that
   // never fires (-> 0x1f80019b never set -> area machine cycles -> BLACK field). The old "do NOT sync the
   // core" pitfall predates the cooperative-yield fix (215c); re-test now that the scheduler runs tasks.
-  void ov_cd_async_read(Core*);
-  platform_hle_register(0x8001D940u, ov_cd_async_read);  // async streaming reader -> sync (area-DATA load)
+  void cd_async_read(Core*);
+  platform_hle_register(0x8001D940u, cd_async_read);  // async streaming reader -> sync (area-DATA load)
   // 0x8001DC40 FUN_8001dc40(a0=dest, a1=lba, a2=size_bytes): the intro sequencer's loader
   // variant. Same (dest, lba, size_bytes) contract as FUN_8001db8c — it sets the identical
   // _DAT_1f8001f8/f0/f4 read state — but runs the reader INLINE (calls FUN_8001d940 directly,

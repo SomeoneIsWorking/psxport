@@ -1,9 +1,9 @@
 // PC-native engine STARTUP/INIT — reimplementing the engine's own init from the game's main entry point
-// (crt0 -> FUN_80050b08 = ov_game_main). The engine boot does platform/PSX-library setup (ResetGraph,
+// (crt0 -> FUN_80050b08 = game_main). The engine boot does platform/PSX-library setup (ResetGraph,
 // CdInit, VSync, DMA, heap — owned by the native platform) and then sets up the engine's OWN state:
 // frame/double-buffer pacing, the display + GTE projection, and the camera. Those engine pieces are pure
 // state setters with no PSX mechanism to preserve, so they are reimplemented PC-native here (readable C
-// that sets the same engine state), replacing the 1:1 `rec_dispatch` transcription in ov_game_main.
+// that sets the same engine state), replacing the 1:1 `rec_dispatch` transcription in game_main.
 //
 // Per the boundary (CLAUDE.md): this is ENGINE init → reimplement PC-native. The values/widths are the
 // engine's interface state that the rest of the engine + the retained PSX content read back, so they are

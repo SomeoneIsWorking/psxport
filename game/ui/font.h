@@ -21,7 +21,7 @@ public:
   Core* core = nullptr;
 
   // init: FUN_80075130 — font / text system init orchestrator (no args, no return). Called
-  //   once from native_boot.cpp's ov_game_init prefix. Owns the direct engine-state writes +
+  //   once from native_boot.cpp's game_init prefix. Owns the direct engine-state writes +
   //   the 3 engine leaves; rec_dispatches the 8 libgpu/sound leaves in-order, in-context.
   //   The stack-struct dance (sp -= 48, sp+16..sp+26 populated for the FntOpen dispatches)
   //   is preserved verbatim — the dispatched callees read that struct.

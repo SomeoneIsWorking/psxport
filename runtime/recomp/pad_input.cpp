@@ -283,7 +283,7 @@ void Pad::pollSdl() {
 // pad buffer pointer for slot `slot` is at 0x0000AEC8 + slot*4 (FUN_800040c4 stores
 // them there; FUN_80003a4c reads them via &DAT_0000aec8 + slot*4).
 // FUN_80003a4c(slot): a0 = slot index.
-static void ov_pad_read(Core* c) {
+static void pad_read(Core* c) {
   uint32_t b = c->mem_r32(0x0000AEC8u + c->r[4] * 4u);   // registered slot buffer ptr
   if (b) {
     uint8_t pk[4];

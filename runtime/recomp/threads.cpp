@@ -22,9 +22,9 @@ uint32_t thread_close(Core* c) { (void)c; return 1; }
 // B0:0x10 ChangeThread(handle): no-op (no context switch in the native boot).
 void     thread_change(Core* c, uint32_t handle) { (void)c; (void)handle; }
 
-static void ov_open_thread(Core* c)   { c->r[2] = thread_open(c); }
-static void ov_close_thread(Core* c)  { c->r[2] = thread_close(c); }
-static void ov_change_thread(Core* c) { uint32_t h = c->r[4]; thread_change(c, h); c->r[2] = h; }
+static void open_thread(Core* c)   { c->r[2] = thread_open(c); }
+static void close_thread(Core* c)  { c->r[2] = thread_close(c); }
+static void change_thread(Core* c) { uint32_t h = c->r[4]; thread_change(c, h); c->r[2] = h; }
 
 void threads_register_overrides(void) {
 }

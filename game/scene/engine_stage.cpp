@@ -1358,7 +1358,7 @@ void Engine::areaUpdateTail() {
 // builder (ov_start_bin_stage), and the stage-0 preload SM (native_stage0_sm), which hands off to
 // native_start_stage(c,1) to enter DEMO.
 
-#include "scheduler.h"    // CUR_TASK + ov_switch (native_boot.cpp scheduler; scheduler.cpp)
+#include "scheduler.h"    // CUR_TASK + switch (native_boot.cpp scheduler; scheduler.cpp)
 
 // --- PC-native task-0 bootstrap: own the START.BIN resolve + stage-0 overlay load top-down ----------
 // Replaces the FUN_800499e8 -> FUN_80052078 -> FUN_800450bc CD subtree, which (run as a pure-PSX leaf
@@ -1367,7 +1367,7 @@ void Engine::areaUpdateTail() {
 //   FUN_800499e8 : CdSearchFile("\BIN\START.BIN") -> {MSF,size}; store {LBA,size} at 0x800be1e0/e4;
 //                  FUN_80052078(0).
 //   FUN_80052078 : FUN_800450bc(task+0xc, 0); task.state=3; task[0x6f]=0; a few libgpu/BIOS resets.
-//   FUN_800450bc : FUN_8001db8c(0x80106228, LBA, size) [= ov_cd_loadfile]; entry = STAGE_ENTRY[0]
+//   FUN_800450bc : FUN_8001db8c(0x80106228, LBA, size) [= cd_loadfile]; entry = STAGE_ENTRY[0]
 //                  (0x8010649c); task+0xc = task+0x10 = entry.
 // The per-stage {LBA,size} table lives at 0x800be1e0 (stride 8); the stage-entry table at 0x800a3ecc.
 static const uint32_t STAGE_ENTRY_TBL = 0x800a3ecc;  // [0]=0x8010649c [1]=0x801062e4 [2]=0x8010637c
@@ -1383,7 +1383,7 @@ static void native_load_overlay(Core* c, uint32_t taskfields, uint32_t stage) {
   } else {
     uint32_t lba  = c->mem_r32(STAGE_FILE_TBL + stage * 8);
     uint32_t size = c->mem_r32(STAGE_FILE_TBL + stage * 8 + 4);
-    cd_loadfile_native(c, 0x80106228, lba, size);    // = FUN_8001db8c / ov_cd_loadfile
+    cd_loadfile_native(c, 0x80106228, lba, size);    // = FUN_8001db8c / cd_loadfile
     // FUN_80051f80(1) cooperative yield is a no-op with the native scheduler — skipped.
     entry = c->mem_r32(STAGE_ENTRY_TBL + stage * 4);
   }
@@ -1402,7 +1402,7 @@ static void native_start_stage(Core* c, uint32_t stage) {
   rec_dispatch(c, 0x80080870u);                      // B(0Fh) reset (BIOS leaf)
   rec_dispatch(c, 0x800808a0u);                      // ExitCriticalSection (BIOS leaf)
   c->r[4] = 0xff000000u;
-  ov_switch(c);                                      // ChangeThread — native scheduler yield
+  scheduler_yield(c);                                      // ChangeThread — native scheduler yield
 }
 
 // Public entry for the front-end (engine_demo.cpp s5 = LEAVE DEMO -> GAME). FUN_80052078(2): the DEMO
@@ -1411,7 +1411,7 @@ static void native_start_stage(Core* c, uint32_t stage) {
 void demo_start_stage(Core* c, uint32_t stage) { native_start_stage(c, stage); }
 
 // FUN_800499e8: resolve \BIN\START.BIN natively, record its {LBA,size}, switch task 0 to stage 0.
-// Non-static: called directly from native_boot.cpp's ov_game_init (the boot-init prefix).
+// Non-static: called directly from native_boot.cpp's game_init (the boot-init prefix).
 void native_task0_bootstrap(Core* c) {
   uint32_t lba = 0, size = 0;
   if (!disc_find_file("\\BIN\\START.BIN", &lba, &size)) {
@@ -1448,7 +1448,7 @@ static void native_stage0_sm(Core* c) {
   c->engine.asset.preloadTexgroup(0, 0);    // state 0: index/asset preload
   c->engine.asset.preloadStage1();          // state 1: SWDATA + DAT + cel/sprite VRAM build
   native_start_stage(c, 1);           // state 3: switch task0 -> stage 1 (DEMO 0x801062e4), state=3
-  ov_switch(c);                       // yield (longjmp to the scheduler); never returns
+  scheduler_yield(c);                       // yield (longjmp to the scheduler); never returns
 }
 
 // Stage-0 START.BIN entry (0x8010649c): own the file-table BUILDER PC-native, then hand the small

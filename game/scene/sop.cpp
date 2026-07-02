@@ -6,7 +6,7 @@
 // FIRST OWNED PIECE — the area-DATA load (LAB_80109164, SOP.BIN 0x80109164).
 // In the PSX flow, SOP state-0 spawns this as a COOPERATIVE task in slot 1 (FUN_80044bd4 ->
 // FUN_80051f14(1, LAB_80109164)) and then BLOCKS on the byte *0x1f80019b until the task sets it.
-// LAB_80109164 itself does only SYNCHRONOUS work — 4 CD reads via FUN_8001dc40 (= ov_cd_dc40, the
+// LAB_80109164 itself does only SYNCHRONOUS work — 4 CD reads via FUN_8001dc40 (= cd_dc40, the
 // native synchronous sector read), an unpack (FUN_80044e84), a collision-grid load (FUN_80045258,
 // itself sync), and an ecf58 reloc-patch loop — then sets *0x1f80019b = 1 and calls FUN_80051fb4
 // (task-complete/yield). We reimplement the BODY natively (the leaves stay dispatched as they are

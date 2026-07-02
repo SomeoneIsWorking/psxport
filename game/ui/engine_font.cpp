@@ -1,4 +1,4 @@
-// PC-native engine FONT / TEXT system init — reimplementing FUN_80075130 (called from ov_game_main's
+// PC-native engine FONT / TEXT system init — reimplementing FUN_80075130 (called from game_main's
 // init prefix). Per the boundary (CLAUDE.md): the front-end UI / text system is ENGINE → reimplement
 // PC-native. FUN_80075130 sets a few engine-state fields directly and orchestrates 14 callees.
 //

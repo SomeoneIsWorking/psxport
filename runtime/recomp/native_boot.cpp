@@ -18,7 +18,7 @@
 #include "core.h"
 #include "game.h"      // SchedulerState (per-instance cooperative-task state) reached via c->game->sched
 #include "hw_bind.h"   // spu_bind/mdec_bind/cdc_bind/xa_bind (per-instance HW-peripheral binders)
-#include "scheduler.h" // ov_switch/native_scheduler_step + TASKBASE/TASKSTRIDE/CUR_TASK (scheduler.cpp)
+#include "scheduler.h" // switch/native_scheduler_step + TASKBASE/TASKSTRIDE/CUR_TASK (scheduler.cpp)
 #include "c_subsys.h"
 #include "cfg.h"
 #include "asset.h"     // class Asset — c->engine.asset (unpackGroup / uploadImage / preload*)
@@ -40,7 +40,7 @@
 // class MusicCoord (game/audio/music_coord.h) — reached as c->engine.musicCoord.tick() per frame
 void xa_audio_trace(Core* c, const char* tag);    // CD-vol fade + XA lifecycle trace (cd_override.cpp)
 
-// The native cooperative-task scheduler (ov_switch + native_scheduler_step — the FUN_80080880/
+// The native cooperative-task scheduler (switch + native_scheduler_step — the FUN_80080880/
 // FUN_80051e60 replacements) now lives in scheduler.cpp/scheduler.h; TASKBASE/TASKSTRIDE/CUR_TASK
 // (used by the REPL/debug state probes below) are reached via "scheduler.h".
 extern "C" void ffspan_reset_frame(void), ffspan_begin(void), ffspan_end(const char*);  // PSXPORT_BDTAG (engine_stage.cpp); native_step_frame below still calls these directly
@@ -178,10 +178,10 @@ static void native_step_frame(Core* c, uint32_t f) {
 
 // Native override of game-main FUN_80050b08: init prefix, then (later) native frame loop.
 
-static void ov_game_main(Core* c);
+static void game_main(Core* c);
 
 // PC-native crt0 (faithful reimplementation of FUN_800896E0): BSS-zero, heap setup, then a DIRECT
-// call to ov_game_main — the top of the top-down PC-driven spine. Replaces the old bootstrap flip
+// call to game_main — the top of the top-down PC-driven spine. Replaces the old bootstrap flip
 // (crt0 jal main -> override). The libc/heap init at 0x80089860 stays a dispatched PSX leaf.
 // crt0 register/heap setup only (no main call) — shared by native_crt0 and the dual-core harness.
 static void crt0_setup(Core* c) {
@@ -202,14 +202,14 @@ static void crt0_setup(Core* c) {
 
 static void native_crt0(Core* c) {
   crt0_setup(c);
-  ov_game_main(c);                                   // DIRECT PC call (was: crt0 jal main -> flip)
+  game_main(c);                                   // DIRECT PC call (was: crt0 jal main -> flip)
 }
 
 void native_task0_bootstrap(Core* c);   // engine_stage.cpp
 
 // Init prefix + task-0 bootstrap (everything FUN_80050b08 does before its scheduler loop). Factored out
-// of ov_game_main so the dual-core harness can init two cores then drive the frame loop itself.
-static void ov_game_init(Core* c) {
+// of game_main so the dual-core harness can init two cores then drive the frame loop itself.
+static void game_init(Core* c) {
   fprintf(stderr, "[native_boot] FUN_80050b08 override: running init prefix\n");
 
   // --- init prefix, transcribed from FUN_80050b08 (no scheduler loop) ---
@@ -238,7 +238,7 @@ static void ov_game_init(Core* c) {
   // on the controller ack (no IRQ -> "CdlSetmode timeout"). We model no CD drive mode (every read is
   // by LBA, served natively), so Setmode is a native no-op. (was rc3 0x80089bac)
   // (removed: VSync(3) display-settle wait — the PC-native frame loop owns ALL timing; boot does not
-  // call libetc VSync. Any code that reaches VSync now TRAPS (sync_overrides.cpp ov_vsync_trap).)
+  // call libetc VSync. Any code that reaches VSync now TRAPS (sync_overrides.cpp vsync_trap).)
   // FUN_80075130 font/text init reimplemented PC-native (engine/engine_font.cpp): owns the orchestration +
   // direct writes + the 3 engine-state callees (FUN_800963a0/80096370/800752b4); the 8 libgpu/sound callees
   // stay rec_dispatched in-context (later-182b nested-dispatch risk). Replaces the rc0 transcription.
@@ -270,24 +270,24 @@ static void ov_game_init(Core* c) {
 
 // Dual-core harness hooks (dualcore.cpp): boot a core to the start of the frame loop, then step it one
 // frame at a time. dc_boot_init = crt0 setup + the init prefix/bootstrap; dc_step_frame = one frame.
-void dc_boot_init(Core* c) { void gte_bind(Core*); gte_bind(c); spu_bind(c); mdec_bind(c); cdc_bind(c); xa_bind(c); crt0_setup(c); ov_game_init(c); }
+void dc_boot_init(Core* c) { void gte_bind(Core*); gte_bind(c); spu_bind(c); mdec_bind(c); cdc_bind(c); xa_bind(c); crt0_setup(c); game_init(c); }
 void dc_step_frame(Core* c, uint32_t f) { native_step_frame(c, f); }
 
-static void ov_game_main(Core* c) {
+static void game_main(Core* c) {
   void gte_bind(Core*); gte_bind(c);   // bind this core's GTE before the init prefix / frame loop
   spu_bind(c);                          // and this core's SPU
   mdec_bind(c);                         // and this core's MDEC
   cdc_bind(c);                          // and this core's CD-controller registers
   xa_bind(c);                           // and this core's XA streamer
-  ov_game_init(c);
+  game_init(c);
   // --- native frame loop (replaces LAB_80050c6c). Per frame, faithful to the game-main loop
   // body but with the scheduler call FUN_80051e60 replaced by native stage stepping (added
   // incrementally). native_step_frame calls ov_frame_update DIRECTLY (PC-driven, top-down): real
   // per-frame update (still-PSX leaf FUN_800788ac) + per-vblank audio + fps60 commit + gpu_present +
   // gpu_pace_frame + satisfies the vblank pacing dwell. PSXPORT_NATIVE_FRAMES caps the run (headless). ---
-  // ov_switch (the cooperative task-switch) is wired via the platform-HLE table — see
+  // switch (the cooperative task-switch) is wired via the platform-HLE table — see
   // sync_overrides_init: FUN_80080880 (ChangeThread, the universal yield/task-end primitive that
-  // FUN_80051f80/FUN_80051fb4 funnel through) -> ov_switch, so a yield from an interpreted task
+  // FUN_80051f80/FUN_80051fb4 funnel through) -> switch, so a yield from an interpreted task
   // coroutine longjmps back to the native scheduler. (Was the removed address-keyed override table.)
   // BGM start/stop (FUN_80074BF8 / FUN_80074E48) are now OWNED PC-native by engine/sound.cpp
   // (sound_register, called from games_tomba2_init). The instant-CD "cut looping ingame music when a
@@ -563,7 +563,7 @@ static void ov_game_main(Core* c) {
 }
 
 // Wired from boot.c when PSXPORT_NATIVE_BOOT is set. Registers the main override and enters
-// crt0; crt0's call to FUN_80050b08 lands in ov_game_main.
+// crt0; crt0's call to FUN_80050b08 lands in game_main.
 void native_boot_run(Core* c) {
   { void cfg_dump(void); cfg_dump(); }   // log active PSXPORT_* config once (see docs/config.md)
   // PSX-fallback gate (diagnostic): boot + frame-loop stay native; everything the loop calls runs as PSX
