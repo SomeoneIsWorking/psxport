@@ -32,6 +32,7 @@
 #include <string.h>
 #include "spawn.h"   // world_despawn (FUN_8007A624)
 #include "graphics_bind.h"   // ov_obj_render_update (FUN_800517F8)
+#include "math/trig.h"   // class Trig — rsin (FUN_80083E80)
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
@@ -208,8 +209,7 @@ void beh_sine_motion_sfx(Core* c) {
    s3 = (int32_t)c->mem_r16(nd + 0x36);  // lhu node[0x36]
    a0 = (int32_t)((uint32_t)s2 << 16) >> 16;  // delay sra a0,a0,16 = sext16(s2)
    {
-     c->r[4] = (uint32_t)a0; rec_dispatch(c, 0x80083e80u);   // FUN_80083E80(sin)
-     int32_t sn = (int32_t)c->r[2];
+     int32_t sn = Trig::rsin(c, a0);                        // FUN_80083E80(sin) [native]
      int32_t t = sn << 1; t = t + sn; t = t << 2; t = t + sn;
      t = (int32_t)((uint32_t)t << 6);   // *832
      v0 = (int32_t)c->mem_r16(nd + 0x94);  // lhu node[0x94]

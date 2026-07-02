@@ -23,8 +23,8 @@ Totals: 414 native fns, 212 owned addresses, 107 LIVE / 307 ORPHAN.
 | 0x80022A80 | LIVE | `Engine::modePerFrameDispatch` | game/scene/engine_stage.cpp:1160 |  | Engine::modePerFrameDispatch — the mode-keyed per-frame overlay handle… |
 | 0x80025588 | ORPHAN | `Engine::sceneEventFifo` | game/scene/engine_stage.cpp:308 |  | Native FUN_80025588 — the field EVENT/COMMAND-QUEUE state machine (str… |
 | 0x80026368 | LIVE | `ov_arr8_dispatch_26368` | game/object/engine_tomba2.cpp:233 |  | Native FUN_80026368 — iterate the 8-slot fixed object array at 0x80100… |
-| 0x800263E8 | LIVE | `ov_800263E8` | game/world/pool.cpp:84 | 0x8007AD98 | area object-record seeding. Selects a per-area byte sequence (table 0x… |
-| 0x800263E8 | LIVE | `ov_263e8_run` | game/world/pool.cpp:306 |  |  |
+| 0x800263E8 | LIVE | `ov_800263E8` | game/world/pool.cpp:85 | 0x8007AD98 | area object-record seeding. Selects a per-area byte sequence (table 0x… |
+| 0x800263E8 | LIVE | `ov_263e8_run` | game/world/pool.cpp:307 |  |  |
 | 0x80026C88 | LIVE | `ov_disp_26c88` | game/world/entity.cpp:134 | 0x80026C88 |  |
 | 0x80027768 | ORPHAN | `ov_submit_poly_gt4_bp` | game/render/engine_submit.cpp:578 |  |  |
 | 0x8002AB5C | LIVE | `ov_terrain` | game/render/engine_render_walk.cpp:27 |  |  |
@@ -142,11 +142,11 @@ Totals: 414 native fns, 212 owned addresses, 107 LIVE / 307 ORPHAN.
 | 0x80072A78 | LIVE | `ov_place_objects` | game/world/placement.cpp:104 | 0x80072A78 |  |
 | 0x80072A78 | LIVE | `ov_place_objects` | game/world/placement.h:8 |  |  |
 | 0x80072DDC | LIVE | `ov_spawn_with_parent` | game/world/placement.cpp:147 | 0x80072DDC |  |
-| 0x80074F24 | LIVE | `ov_80074F24` | game/world/pool.cpp:245 | 0x800750D8 | per-area STATE-INDEX select + apply. Early-out if scratchpad 0x1F80013… |
-| 0x80074F24 | LIVE | `ov_74f24_run` | game/world/pool.cpp:326 |  |  |
+| 0x80074F24 | LIVE | `ov_80074F24` | game/world/pool.cpp:246 | 0x800750D8 | per-area STATE-INDEX select + apply. Early-out if scratchpad 0x1F80013… |
+| 0x80074F24 | LIVE | `ov_74f24_run` | game/world/pool.cpp:327 |  |  |
 | 0x80075130 | LIVE | `ov_font_init` | game/ui/engine_font.cpp:68 | 0x8008E040 0x80090700 0x80090980 0x80091B50 0x80091D70 0x80098150 … | font / text system init orchestrator. No args, no return. Mirrors the … |
-| 0x80075240 | LIVE | `ov_80075240` | game/world/pool.cpp:104 | 0x80075824 0x80075D58 0x80099490 | reset the control block at 0x800BE1F8: call 0x80075D58 (leaf, entry a0… |
-| 0x80075240 | LIVE | `ov_75240_run` | game/world/pool.cpp:311 |  |  |
+| 0x80075240 | LIVE | `ov_80075240` | game/world/pool.cpp:105 | 0x80075824 0x80075D58 0x80099490 | reset the control block at 0x800BE1F8: call 0x80075D58 (leaf, entry a0… |
+| 0x80075240 | LIVE | `ov_75240_run` | game/world/pool.cpp:312 |  |  |
 | 0x800752B4 | LIVE | `ov_font_glyphclass_fill` | game/ui/engine_font.cpp:49 |  | glyph-class table fill. a0 = class. Iterates i = 0..23 over a 24-entry… |
 | 0x800753D4 | ORPHAN | `ov_cel_load_wait` | game/scene/engine_level.cpp:178 | 0x80075410 0x80096480 0x80096980 |  |
 | 0x80075A80 | LIVE | `Engine::areaUpdateTail` | game/scene/engine_stage.cpp:1256 | 0x80074BF8 0x80074E48 0x80075824 0x8008E0C0 0x80092660 0x80098F90 … | Engine::areaUpdateTail — the last direct child of ov_field_frame at gu… |
@@ -159,14 +159,14 @@ Totals: 414 native fns, 212 owned addresses, 107 LIVE / 307 ORPHAN.
 | 0x80077ACC | ORPHAN | `ov_cull_wrap_77acc` | game/render/cull.cpp:461 | 0x8007712C |  |
 | 0x80077B38 | ORPHAN | `ov_obj_set_geom` | game/world/graphics_bind.cpp:111 |  |  |
 | 0x80077EBC | ORPHAN | `ov_enqueue_probe` | game/render/engine_submit.cpp:211 | 0x80077EBC | PSXPORT_DEBUG=enq — ENQUEUE tap (later-131 NEXT). The render-command P… |
-| 0x800783DC | LIVE | `ov_800783DC` | game/world/pool.cpp:122 | 0x80048D3C 0x80072DDC | per-area VIEW/SCROLL setup. Calls a leaf (0x80048D3C) with the entry a… |
-| 0x800783DC | LIVE | `ov_783dc_run` | game/world/pool.cpp:316 |  |  |
-| 0x80078610 | LIVE | `ov_80078610` | game/world/pool.cpp:197 | 0x8006D02C 0x800846F0 | final per-area view init: zero two control blocks (scratchpad 0x1F8000… |
-| 0x80078610 | LIVE | `ov_78610_run` | game/world/pool.cpp:321 |  |  |
+| 0x800783DC | LIVE | `ov_800783DC` | game/world/pool.cpp:123 | 0x80048D3C | per-area VIEW/SCROLL setup. Calls a leaf (0x80048D3C) with the entry a… |
+| 0x800783DC | LIVE | `ov_783dc_run` | game/world/pool.cpp:317 |  |  |
+| 0x80078610 | LIVE | `ov_80078610` | game/world/pool.cpp:198 | 0x8006D02C 0x800846F0 | final per-area view init: zero two control blocks (scratchpad 0x1F8000… |
+| 0x80078610 | LIVE | `ov_78610_run` | game/world/pool.cpp:322 |  |  |
 | 0x800788AC | LIVE | `ov_frame_update` | game/game_tomba2.cpp:111 | 0x800788AC | Per-frame engine tick. Called DIRECTLY (a plain C call) from native_st… |
 | 0x80078CA8 | ORPHAN | `ov_glyph_string` | game/ui/hud.cpp:257 |  | PC-native glyph string drawer. Mirrors FUN_80078CA8's char loop + atla… |
-| 0x800796DC | LIVE | `ov_800796DC` | game/world/pool.cpp:21 | 0x8005082C 0x800508A8 0x800782F0 0x8009A420 | zero the 104-byte control block at 0x800BF808 (via 0x8009A420), seed t… |
-| 0x800796DC | LIVE | `ov_796dc_run` | game/world/pool.cpp:301 |  |  |
+| 0x800796DC | LIVE | `ov_800796DC` | game/world/pool.cpp:22 | 0x8005082C 0x800508A8 0x800782F0 0x8009A420 | zero the 104-byte control block at 0x800BF808 (via 0x8009A420), seed t… |
+| 0x800796DC | LIVE | `ov_796dc_run` | game/world/pool.cpp:302 |  |  |
 | 0x80079C3C | ORPHAN | `ov_entity_spawn` | game/world/spawn.cpp:172 | 0x80079C3C |  |
 | 0x80079C3C | ORPHAN | `ov_entity_spawn` | game/world/spawn.h:10 | 0x8007A624 |  |
 | 0x80079DDC | ORPHAN | `ov_spawn_pool2` | game/world/spawn.cpp:324 | 0x80079DDC |  |
@@ -180,8 +180,8 @@ Totals: 414 native fns, 212 owned addresses, 107 LIVE / 307 ORPHAN.
 | 0x8007AA38 | ORPHAN | `ov_replace_dispatch` | game/world/spawn.cpp:395 | 0x8007AA38 |  |
 | 0x8007AAE8 | ORPHAN | `ov_record_alloc_g` | game/world/graphics_bind.cpp:70 |  |  |
 | 0x8007AAE8 | ORPHAN | `ov_record_alloc_g` | game/world/graphics_bind.h:10 |  |  |
-| 0x8007B18C | ORPHAN | `ov_8007B18C` | game/world/pool.cpp:51 | 0x8004FB20 0x800798F8 0x8007A810 0x8007AC14 0x8007AC40 0x8007AC6C … | top-level object-pool init. Calls 0x8004FB20 then 0x800798F8; zeroes 5… |
-| 0x8007B18C | LIVE | `ov_pool_init_run` | game/world/pool.cpp:296 |  | Public GATED entries — the native field case-0 prefix (engine_stage.cp… |
+| 0x8007B18C | ORPHAN | `ov_8007B18C` | game/world/pool.cpp:52 | 0x8004FB20 0x800798F8 0x8007A810 0x8007AC14 0x8007AC40 0x8007AC6C … | top-level object-pool init. Calls 0x8004FB20 then 0x800798F8; zeroes 5… |
+| 0x8007B18C | LIVE | `ov_pool_init_run` | game/world/pool.cpp:297 |  | Public GATED entries — the native field case-0 prefix (engine_stage.cp… |
 | 0x8007B18C | LIVE | `ov_pool_init_run` | game/world/pool.h:6 |  | top-level object-pool init (field case-0 prefix). GATED (channel `pool… |
 | 0x8007B45C | ORPHAN | `ov_options_menu` | game/ui/menu.cpp:46 | 0x8007B45C |  |
 | 0x8007B45C | ORPHAN | `ov_options_menu` | game/ui/menu.h:8 |  |  |
