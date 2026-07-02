@@ -322,90 +322,6 @@ static void submit_poly_gt4_native(Core* c) {
 }
 
 // =====================================================================================================
-// Byte-packed POLY_GT4 submit variant — gen_func_80027768 (resident MAIN). A DISTINCT submitter from
-// the GT3/GT4 library above: it is the field's dominant world-poly emitter (~252 GT4/frame) and ran
-// interpreted, so it carried no native depth. Decoded from the recomp body (docs/engine_re.md):
-//   ABI:  a0 = record array; a1 = CLUT-Y bank offset (added <<22 to the uv0|clut word);
-//         a2 = OT-Z bias (sign-extended s16, added to AVSZ4 OTZ before the log-compress);
-//         a3 = U-texture offset (added to the U byte of all four uv words).
-//   NO count arg: the loop runs record-by-record and continues while the record's CONTROL word
-//   (rec+4) is > 0 (its sign marks the last record, which is still drawn).
-//   OT base is a GLOBAL (*0x800ED8C8), NOT an arg. IR0 depth-cue factor is read from scratchpad
-//   0x1F800090 each iteration. Returns r2 = 0x800C0000 (the body leaves the pool-base reg there).
-// Record (36 bytes): vertex X/Y/Z are SIGNED bytes scaled <<8 (a u16 GTE coord); the top byte of each
-//   RGB word doubles as that vertex's Z, so X/Y live in rec[0x1C..0x23] and Z in the RGB words:
-//     rec+0x00 uv0|clut(word) ->pkt+12   rec+0x04 control: low23 -> pkt+24 (uv1|clut), bit30 = semi-trans,
-//     value>0 = more records follow      rec+0x08 uv2(lo)|uv3(hi) -> pkt+36/+48
-//     rec+0x0C rgb0(+VZ0 in top byte) rec+0x10 rgb1(+VZ1) rec+0x14 rgb2(+VZ2) rec+0x18 rgb3(+VZ3)
-//     X: rec+0x1C=VX0 0x1D=VX1 0x20=VX2 0x21=VX3   Y: 0x1E=VY0 0x1F=VY1 0x22=VY2 0x23=VY3
-//     Z (top byte of the rgb word): 0x0F=VZ0 0x13=VZ1 0x17=VZ2 0x1B=VZ3
-//   Colors: DPCT depth-cues rgb0/rgb1/rgb2, DPCS depth-cues rgb3 (both toward FAR_COLOR via IR0).
-// Faithful-first: this reproduces the recomp body's writes/cull/return exactly (0-diff gate); when the
-// native-depth path is live it additionally records each vertex's real view-Z (the SZ FIFO) keyed by
-// its packet SXY-word address, exactly like the GT3/GT4 library above.
-#define OTBASE_PTR   0x800ED8C8u             // *this = the active ordering-table base for these variants
-
-// PC-NATIVE byte-packed GT4 submit. Verts are signed bytes <<8; the top byte of each RGB word is that
-// vertex's Z (<<8). Project natively (proj_native_xform) → float screen+depth, tee the quad to the VK
-// rasterizer with real per-pixel depth. The DPCT/DPCS depth-cue fog the PSX body applied to the colors is
-// dropped here — fog is the renderer's job (PSXPORT_FOG shader), not a per-vertex color bake. The OT-Z
-// bias (a2) is moot with a real depth buffer. CLUT bank (a1) and U offset (a3) ARE applied (texture
-// addressing). Same decode native_terrain.cpp uses; this is its general (any-geomblk) form.
-static void submit_poly_gt4_bp(Core* c) {
-  if (cfg_dbg("subc")) { static long n=0; if(n++%240==0) fprintf(stderr,"[subc] gt4_bp #%ld\n", n); }
-  uint32_t rec = c->r[4];
-  uint32_t clut_bank = c->r[5];                        // a1: CLUT-Y bank (added <<22 to the uv0|clut word)
-  uint32_t uoff = c->r[7] & 0xFF;                      // a3: U-texture offset (mod 256 per U byte)
-  proj_set_H((uint16_t)gte_read_ctrl(26));
-  static const uint32_t XO[4] = {0x1C,0x1D,0x20,0x21}, YO[4] = {0x1E,0x1F,0x22,0x23},
-                        ZO[4] = {0x0F,0x13,0x17,0x1B};
-  for (;;) {
-    uint32_t ctl = c->mem_r32(rec + 4);                 // control word (sign = last record; bit30 = semi)
-    ProjVtx p[4]; float px[4], py[4], depth[4]; int u[4], v[4]; uint8_t r[4], g[4], b[4];
-    for (int k = 0; k < 4; k++) {
-      int vx = (int)c->mem_r8s(rec + XO[k]) << 8;
-      int vy = (int)c->mem_r8s(rec + YO[k]) << 8;
-      int vz = (int)c->mem_r8s(rec + ZO[k]) << 8;
-      proj_native_xform(vx, vy, vz, &p[k]);
-      px[k] = p[k].px; py[k] = p[k].py; depth[k] = proj_pz_to_ord(p[k].pz);
-    }
-    float area = (p[1].px - p[0].px) * (p[2].py - p[0].py) - (p[2].px - p[0].px) * (p[1].py - p[0].py);
-    int cull = (area <= 0);
-    int xmax = submit_xmax();
-    if (p[0].sx >= xmax && p[1].sx >= xmax && p[2].sx >= xmax && p[3].sx >= xmax) cull = 1;
-    if (p[0].sy >= 240 && p[1].sy >= 240 && p[2].sy >= 240 && p[3].sy >= 240) cull = 1;
-    if (!cull) {
-      uint32_t uv0 = c->mem_r32(rec + 0) + (clut_bank << 22);  // uv0 | (clut + bank)
-      uint16_t clut = (uint16_t)(uv0 >> 16);
-      uint16_t tp   = (uint16_t)(((uint32_t)ctl & 0x7FFFFFu) >> 16);  // = packet uv1|tpage high half
-      uint32_t uv2  = c->mem_r32(rec + 8);
-      u[0] = (uv0 & 0xFF);            v[0] = (uv0 >> 8) & 0xFF;
-      u[1] = ((uint32_t)ctl & 0xFF); v[1] = ((uint32_t)ctl >> 8) & 0xFF;
-      u[2] = (uv2 & 0xFF);           v[2] = (uv2 >> 8) & 0xFF;
-      u[3] = ((uv2 >> 16) & 0xFF);   v[3] = (uv2 >> 24) & 0xFF;
-      for (int k = 0; k < 4; k++) {
-        u[k] = (u[k] + (int)uoff) & 0xFF;
-        uint32_t col = c->mem_r32(rec + 0x0C + 4 * k);  // raw RGB (top byte = Z, ignored); no DPCT/DPCS bake
-        r[k] = col & 0xFF; g[k] = (col >> 8) & 0xFF; b[k] = (col >> 16) & 0xFF;
-      }
-      int semi = (ctl & 0x40000000) ? 1 : 0;
-      if (!semi) engine_shade_face(p, 4, r, g, b);      // engine-native lighting (opaque only)
-      sil_bbox_log_verts("gt4_bp", px, py, depth, 4, cur_render_node(c), rec, r, g, b);
-      { float vv[4][3]; const float (*sv)[3] = shadow_verts(p, 4, semi, vv);   // dynamic shadow verts (carried on the item)
-        gpu_draw_world_quad(c, px, py, depth, u, v, r, g, b, tp, clut, semi, sv); }
-      fps60_stamp(c, p, 4);                             // fps60: capture for midpoint reprojection
-    }
-    if ((int32_t)ctl <= 0) break;                       // control sign marks the last record
-    rec += 36;
-  }
-  c->r[2] = 0x800C0000u;                                // return value the recomp body leaves in r2
-}
-
-void ov_submit_poly_gt4_bp(Core* c) {
-  submit_poly_gt4_bp(c);
-}
-
-// =====================================================================================================
 // NATIVE PER-OBJECT RENDER FLUSH — gen_func_8003CDD8 (THE world/margin render submission, later-133).
 //
 // This is the heart of "make it a PC game": the engine's per-object render — composing the camera ×
@@ -473,7 +389,7 @@ void Render::fieldEntityRender(uint32_t es) {
   Core* c = mCore;
   uint8_t count = c->mem_r8(es + 6);
   if (count == 0) return;
-  uint32_t otbase = c->mem_r32(OTBASE_PTR);
+  uint32_t otbase = c->mem_r32(0x800ED8C8u);              // *this = the active ordering-table base
   uint32_t base   = c->mem_r32(es + 0xC);
   EObjXform w; eproj_compose_camera(c, &w); eproj_set_active(&w);
   // DIAG groundproj: log the camera xform + first GT4 record's model verts and their eproj projection, so we
