@@ -6,6 +6,7 @@
 #include "verify_gate.h"
 #include "mtx.h"          // class Mtx — libgte helpers (MR_init, ...)
 #include "placement.h"    // ov_spawn_with_parent (FUN_80072DDC)
+#include "scene/scene_transition.h"   // class SceneTransition — area-mask trigger (FUN_800782F0)
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -36,7 +37,7 @@ static void ov_800796DC(Core* c) {
   c->mem_w32(S + 388, 0); c->mem_w32(S + 532, 0); c->mem_w32(S + 520, 0); c->mem_w32(S + 640, 0);
   c->mem_w8 (S + 561, 0); c->mem_w8 (S + 593, 0); c->mem_w8 (S + 562, 0);
   c->mem_w8 (S + 595, 0); c->mem_w8 (S + 563, 0); c->mem_w8 (S + 571, 0);
-  c->r[4]=a4; c->r[5]=a5; call_fn(c, 0x800782F0u);
+  SceneTransition::areaMaskTrigger(c, (uint8_t)a4, (uint8_t)a5);   // was rec_dispatch 0x800782F0
   call_fn(c, 0x800508A8u);
   uint32_t v = c->mem_r8(S + 566);
   uint32_t arg = (v == 0u || (uint32_t)(v - 7u) < 2u) ? 0u : 255u;

@@ -1,8 +1,23 @@
 # Findings — scene/area transitions
 
-## Door/area-transition freeze: FUN_80073328 case 3 FIRST-branch waits for bf818==6, which no code ever writes
-- **symptom:** headless repro from `scratch/handoff_door_freeze.md` (teleport Tomba X=0x39400000 = 14656 in the seaside village, tap right, run ~900 frames). At frame ~877 sm[0x4c] flips 2→3 and stays 3 forever (`sm[0x48]=2 4a=1 4c=3 4e=1`, bf818=2). Same freeze on both PC-native (default) AND PSX-substrate (`PSXPORT_GATE=1`) paths — verified 2026-07-02 on HEAD 169dff7. Not a native-only regression.
-- **status:** ROOT-CAUSED (RE'd via freeze-RAM dump + capstone). Repro artefact — the teleport puts the game in a state real gameplay never reaches; the freeze is deterministic given that state.
+## Door/area-transition freeze: FUN_80073328 case 3 stalls; native AND substrate both hang here on REAL gameplay input
+- **symptom:** deterministic pad-replay repro (2026-07-02, HEAD 4ad1119) — no teleport: `PSXPORT_AUTO_SKIP=1` reaches free-roam at f216 (spawn ~(3940,-1032,3968)), then walk right 34f + hold up 300f puts Tomba at (4675,-1023,4608) with `sm[0x48]=2 4a=1 4c=3 4e=1, bf818=2` STUCK forever (verified stable through f1234 = 600 idle frames after the walk). Same freeze under PSXPORT_GATE=1 substrate. Deterministic replay: `PSXPORT_PAD_REPLAY=scratch/bin/door_freeze.pad` reproduces bit-perfect. Dumps: `scratch/bin/door_freeze_f{634,934}.bin(+.spad)`.
+- **status:** ROOT CAUSE OPEN — the prior "repro artefact of teleport" claim (2026-07-02 morning) is FALSIFIED by this pad-replay: the freeze reproduces from PURE walking input (no `w` writes), so it IS a real gameplay bug the port ships with, hitting BOTH the PC-native path AND the PSXPORT_GATE=1 substrate. Something upstream (present in both) fails to advance the transition.
+- **freeze-state facts (from door_freeze_f634.bin):**
+  - `bf818 = 2` (u32), `bf870 = 0` (area id, unchanged — hut entry is a SUB-SCENE swap, not an area load; matches handoff_hut_fade.md), `scene-active 0x800BE258 = 2`.
+  - `DAT_800e7ea9 = 1` (NON-zero → contradicts the prior teleport-repro dump which had it 0), `DAT_800e7ffb = 0` (zero — the SECOND-branch condition is 2/3 met; only `node[0x29] != 0` is missing).
+  - 6 entities with handler `0x80138FC8` at 0x800EF92C..0x800EFD00, all `node[3]=0x80, node[6]=0x0E, node[0x28]=0, node[0x29]=0`. The state-3-walker gate `node[0x28] & 0x80` FAILS on all 6, so under the pad-replay repro FUN_80073328 case 3 is not being reached via `beh_typed_jumptable_pair` — meaning bf818=2 is being written by a DIFFERENT code path than the teleport-repro finding described. Re-RE bf818 writers under this repro before recomputing the case-3 waiter chain.
+- **the earlier case-3 RE (still valid as background but the entry path is now suspect):**
+  - **`FUN_80026ad0` case 3** (0x80026bbc) waits for `bf818 == 3`. In the freeze, bf818=2 forever.
+  - **Only 2 addresses ever write bf818=3:** `FUN_80073300` (0x8007331c) — called only from `FUN_80073328` case 3 (0x800734f0, 0x80073548).
+  - **`FUN_80073328` case 3** (decomp L52271) has two branches:
+    - **FIRST branch** (`node[0x29]==0 || DAT_800e7ea9==0 || DAT_800e7ffb!=0`) → waits `bf818 == 6` — but **NO code anywhere writes bf818=6** (RAM scan). Permanent dead-end.
+    - **SECOND branch** (`node[0x29]!=0 && DAT_800e7ea9!=0 && DAT_800e7ffb==0`) → immediately `FUN_80073300()`.
+  - Under the pad-replay repro, DAT_800e7ea9 IS nonzero and DAT_800e7ffb IS zero — only `node[0x29]!=0` is unmet. Some upstream code path is supposed to poke a specific entity's `node[0x29]` to unblock the case-3 waiter, and that upstream is NOT running.
+- **why PSXPORT_GATE=1 also freezes:** same state trap on the substrate. It runs the same substrate transition code and hits the same upstream miss. This narrows the bug to something SHARED by native and substrate — likely an HLE stub returning fake completion, or a wrong platform value both consult, or a coop scheduler edge both share.
+- **NEXT INVESTIGATION:** RE who writes `node[0x29]` to a live entity in the running port (dumpram-scan-diff pre- vs post-walk to find upstream writers under this repro), then trace who's supposed to invoke them at door-entry.
+- **do NOT** patch bf818 or node[0x29] directly to skip the freeze — that's a bandaid and only hides the missing upstream path.
+- **refs:** scratch/bin/door_freeze.pad (deterministic repro), scratch/bin/door_freeze_f{634,934}.bin(+.spad) (freeze-state dumps), scratch/handoff_door_freeze.md (superseded — its "orphaned cooperative task" hypothesis is not proven either way; the finding needs re-RE under this new repro), scratch/handoff_hut_fade.md (matches — hut entry is a sub-scene swap, area id stays 0), scratch/decomp/ram_f1000_all.c L52186-L52316 (FUN_80073328/300/2C0 decomp).
 - **the RE (drop this into future sessions instead of re-deriving):**
   - **Scene-transition dispatcher** = `FUN_80026368` (MAIN.EXE 0x80026368), sibling to the SOP dispatcher `FUN_80026c88`. It walks 8 slots × 76B at `0x80100400`, calls `*(u32*)(0x8009d314 + slot[2]*4)(slot)` for each active slot.
   - **Slot[3]** @ `0x801004e4` in the freeze state: `idx=04 → handler = 0x801167ac`, slot[3]=02, slot[4]=01, slot[5]=03. The handler at 0x801167ac dispatches on slot[4]: case 1 (@0x80116870) calls `FUN_80026ad0(slot)`. slot[5] is FUN_80026ad0's own substate — currently 3.

@@ -24,6 +24,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "spawn.h"   // world_despawn
+#include "scene/scene_transition.h"   // class SceneTransition — area-mask trigger (FUN_800782F0)
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
@@ -93,8 +94,7 @@ void beh_scene_ui_trigger(Core* c) {
         uint8_t v0 = c->mem_r8(obj + 5), v1 = c->mem_r8(obj + 3);
         c->mem_w8(obj + 5, (uint8_t)(v0 + 1));
         c->mem_w8(0x800BF871u, v1);
-        c->r[4] = c->mem_r8(0x800BF870u); c->r[5] = v1 & 0xffu;
-        rec_dispatch(c, 0x800782F0u);                // area/sub transition
+        SceneTransition::areaMaskTrigger(c, c->mem_r8(0x800BF870u), (uint8_t)v1);   // was rec_dispatch 0x800782F0
       }
       break;
     case 1:                                          // jt[1]=0x80073b60
