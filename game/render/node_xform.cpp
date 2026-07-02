@@ -17,10 +17,6 @@
 #include "core.h"
 #include "engine_math.h"     // Math::rotmat, Math::matMul (static)
 
-// ov_xform51128 lives in engine_submit.cpp (its verify wrapper and body would need moving with it);
-// forward-declare it here so we can call it directly without a header.
-void ov_xform51128(Core* c);
-
 void NodeXform::build(uint32_t node) {
   Core* c = core;
   const uint32_t SCR_M = 0x1F800000u;   // 8-word source matrix
@@ -38,5 +34,51 @@ void NodeXform::build(uint32_t node) {
   c->mem_w32(node + 172, (uint32_t)c->mem_r16s(node + 46));
   c->mem_w32(node + 176, (uint32_t)c->mem_r16s(node + 50));
   c->mem_w32(node + 180, (uint32_t)c->mem_r16s(node + 54));
-  c->r[4] = node; ov_xform51128(c);
+  propagate(node);
+}
+
+// FUN_80051128 — per-object CHILD-NODE TRANSFORM loop. RE'd from disas:
+//   guard: if node[9]==0 -> return
+//   loop s2 in [0, node[8]) with continue-bound node[9] (dual-bound idiom):
+//     child = node[0xC0 + 4*s2]
+//     seed scratchpad @0x1F800000: diagonal { child[56], 0, child[58], 0, child[60], 0, 0, 0 }
+//     rotmat(child+8 euler → 0x1F800020) ; matMul(rot, work → 0x1F800040)
+//     sentinel = child+6 (s16)
+//     ROOT (sentinel==-1): matMul(node+152, 0x1F800040 → child+24); applyMatlv(child → child+44);
+//       child[0x2C/0x30/0x34] += node[0xAC/0xB0/0xB4]
+//     SIBLING: p = node[0xC0 + 4*sentinel]; matMul(p+24, 0x1F800040 → child+24); applyMatlv(...)
+//       child[0x2C/0x30/0x34] += p[0x2C/0x30/0x34]
+// (GOTCHAS: +56/58/60 are sign-extended lhu+sll16+sra16; sentinel is sll'd by 2 before the branch
+// so in the sibling path it's already a byte offset. NO render packets, NO GTE ops.)
+void NodeXform::propagate(uint32_t node) {
+  Core* c = core;
+  if (c->mem_r8(node + 9) == 0) return;
+  int i = 0;
+  while (i < (int)(uint8_t)c->mem_r8(node + 8)) {
+    uint32_t child = c->mem_r32(node + 0xC0 + 4u * (uint32_t)i);
+    c->mem_w32(0x1F800004u, 0); c->mem_w32(0x1F80000Cu, 0); c->mem_w32(0x1F800014u, 0);
+    c->mem_w32(0x1F800018u, 0); c->mem_w32(0x1F80001Cu, 0);
+    c->mem_w32(0x1F800000u, (uint32_t)c->mem_r16s(child + 56));
+    c->mem_w32(0x1F800008u, (uint32_t)c->mem_r16s(child + 58));
+    c->mem_w32(0x1F800010u, (uint32_t)c->mem_r16s(child + 60));
+    int16_t sentinel = c->mem_r16s(child + 6);
+    c->math.rotmat(child + 8, 0x1F800020u);
+    c->math.matMul(0x1F800020u, 0x1F800000u, 0x1F800040u);
+    if (sentinel == -1) {
+      c->math.matMul(node + 152, 0x1F800040u, child + 24);
+      c->math.applyMatlv(child, child + 44);
+      c->mem_w32(child + 0x2C, c->mem_r32(child + 0x2C) + c->mem_r32(node + 0xAC));
+      c->mem_w32(child + 0x30, c->mem_r32(child + 0x30) + c->mem_r32(node + 0xB0));
+      c->mem_w32(child + 0x34, c->mem_r32(child + 0x34) + c->mem_r32(node + 0xB4));
+    } else {
+      uint32_t p = c->mem_r32(node + 0xC0 + 4u * (uint32_t)(int)sentinel);
+      c->math.matMul(p + 24, 0x1F800040u, child + 24);
+      c->math.applyMatlv(child, child + 44);
+      c->mem_w32(child + 0x2C, c->mem_r32(child + 0x2C) + c->mem_r32(p + 0x2C));
+      c->mem_w32(child + 0x30, c->mem_r32(child + 0x30) + c->mem_r32(p + 0x30));
+      c->mem_w32(child + 0x34, c->mem_r32(child + 0x34) + c->mem_r32(p + 0x34));
+    }
+    i++;
+    if (!(i < (int)(uint8_t)c->mem_r8(node + 9))) break;
+  }
 }

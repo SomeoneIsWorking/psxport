@@ -18,6 +18,13 @@ public:
   Core* core = nullptr;
 
   // build (guest FUN_80051844): compose this node's world matrix at node+0x98 from its local
-  // euler+translation, copy the world-pos triple, and propagate to children via ov_xform51128.
+  // euler+translation, copy the world-pos triple, and propagate to children via propagate().
   void build(uint32_t node);
+
+  // propagate (guest FUN_80051128): per-object CHILD-NODE TRANSFORM loop — for each child on
+  // node+0xC0 build the child's world matrix at child+0x18 and its world position at child+0x2C
+  // by composing rotation × parent frame + accumulating parent translation. Root children
+  // (sentinel child+6 == -1) reference this node; siblings reference node[0xC0 + sentinel*4].
+  // Uses scratchpad 0x1F800000/20/40 as work areas. No render packets, no GTE ops.
+  void propagate(uint32_t node);
 };
