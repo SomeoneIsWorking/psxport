@@ -29,6 +29,7 @@ static void d1(Core* c, uint32_t fn, uint32_t a0);
 static void d2(Core* c, uint32_t fn, uint32_t a0, uint32_t a1);
 #include "camera/cutscene_camera.h"   // class CutsceneCamera — SOP/BG cutscene camera (0x8006E3B0)
 #include "world/graphics_bind.h"  // ov_obj_set_xformblk (FUN_8006CBD0)
+#include "core/asset.h"           // ov_unpack_group (FUN_80044E84)
 static void d3(Core* c, uint32_t fn, uint32_t a0, uint32_t a1, uint32_t a2);
 
 // Owned synchronous area-DATA load (replaces the body of LAB_80109164 0x80109164). Runs in the
@@ -54,7 +55,7 @@ void native_sop_area_load(Core* c) {
   // UNPACK — FUN_80044e84(0x8018a000, 0x1f8000)  (0x801091e4)
   c->r[4] = 0x8018a000u;
   c->r[5] = 0x001f8000u;
-  rec_dispatch(c, 0x80044e84u);
+  ov_unpack_group(c);
 
   // LOAD 4 — FUN_8001dc40(0x8018a000, *0x800be100 + (*0x800ef480>>11), *0x800ef484 - *0x800ef480);
   //          *0x800a3ec8 = *0x800ef480>>11  (0x80109210/0x80109214)

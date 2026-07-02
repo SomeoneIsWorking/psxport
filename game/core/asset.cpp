@@ -134,7 +134,7 @@ void ov_load_texgroup(Core* c) {
   c->r[4] = 0x8018A000u; c->r[5] = c->mem_r32(0x800BE0F8u) + (h0 >> 11); c->r[6] = h1 - h0;
   rec_dispatch(c, 0x8001DC40u);                                    // 2. CD-load compressed archive -> staging
   c->r[4] = 0x8018A000u; c->r[5] = 0x1FD000u;
-  rec_dispatch(c, 0x80044E84u);                                    // 3. unpack -> decompress + VRAM upload (owned)
+  ov_unpack_group(c);                                              // 3. unpack -> decompress + VRAM upload (owned)
   for (uint32_t i = 0; i < 42; i++)                                // 4. per-set metadata table
     c->mem_w32(0x800FB170u + i * 4, c->mem_r32(HDR + 0x100u + i * 4));
   c->r[16] = s0; c->r[29] = sp; c->r[31] = ra;
