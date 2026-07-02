@@ -31,13 +31,14 @@
 
 // ---- Draw state (set by GP0 env commands E1..E6) ------------------------------------
 int gpu_gpu_enabled(void);                                    // gpu_gpu.c (declared early for the gp0 tee)
+// s_reddbg is a process-level env-gate cache (PSXPORT_REDDBG), so it stays file-scope.
 static int s_reddbg;              // PSXPORT_REDDBG: dark-red output anomaly probe
 
 // ---- Display control (GP1) ----------------------------------------------------------
 
 
-static int s_log = 0;             // PSXPORT_GPU_LOG
-static long s_prims = 0;          // primitives drawn since last present
+static int s_log = 0;             // PSXPORT_GPU_LOG (process-level env-gate cache)
+// s_prims moved to GpuState (deglobalize 2026-07-03) — was cross-core-shared per-frame draw counter.
 // s_seen3d / s_prev_had3d are per-instance GpuState members now (gpu_native_internal.h). The OT walk
 // tees geometry before present, so s_seen3d is final by the time the present/compose path queries it.
 // A frame with no tee'd 3D is a VRAM-resident 2D screen (SCEA/FMV/title/menu) — nothing in the scratch FB.
@@ -152,9 +153,8 @@ void GpuState::obj_depth_add(uint32_t lo, uint32_t hi, float ord) {
 // EPS_STEP (1/65536 in pre-ord3d [0,1] units → ~1.3e-5 after ord3d's ×0.875 band map) is FAR above D32
 // float resolution near these values (~1e-7) yet FAR below the gap between distinct world objects, and
 // the run is capped so even a many-faced object can never drift a face in front of genuinely nearer geo.
-static int   s_od_eps_frame = -1;     // frame the per-prim epsilon run belongs to
-static int   s_od_eps_span  = -1;     // span index the current run is separating (consecutive same-span hits)
-static int   s_od_eps_k     = 0;      // per-prim counter within that run (face ordinal)
+// s_od_eps_frame/span/k moved to GpuState — see gpu_native_internal.h. Two SBS cores contaminate each
+// other's per-face epsilon depth counter otherwise (deglobalize 2026-07-03).
 static const float OD_EPS_STEP = 1.0f / 65536.0f;   // per-face camera-ward step (pre-ord3d ord units)
 static const int   OD_EPS_KMAX = 256;               // cap the run so total drift stays << inter-object gap
 int GpuState::obj_depth_lookup(uint32_t node, float* ord) {
@@ -176,7 +176,7 @@ int GpuState::obj_depth_lookup(uint32_t node, float* ord) {
   return 0;
 }
 void gpu_obj_depth_add(Core* core, uint32_t lo, uint32_t hi, float ord) { core->game->gpu.obj_depth_add(lo, hi, ord); }
-static long s_gp0_words = 0, s_dma2 = 0;  // diagnostics: GP0 words + DMA2 triggers per frame
+// s_gp0_words / s_dma2 moved to GpuState (per-Core; was cross-core-shared per-frame diag).
 static int s_oracle_prim_log = 0;  // ORACLE diag (was g_oracle_prim_log): when >0, log each soft_gpu primitive
 // g_nd_3d/nd_2d retired 2026-07-03 — Render::stats.nd3d/nd2d (RenderStats).
 // 2D-OVERLAY-ONLY OT enumeration. When the FIELD render path owns the 3D world + backdrop natively
@@ -1552,9 +1552,8 @@ void gpu_scea_decode_rgba(uint8_t* out) {
       }
 }
 
-// Primitives drawn since the last gpu_present() (reset each present). The native frame loop uses
-// this to avoid flipping the double buffer to a buffer it didn't draw this frame (menu-load flicker).
-int gpu_prims_since_present(void) { return (int)s_prims; }
+// (Was `int gpu_prims_since_present(void)` reading a file-scope s_prims — retired 2026-07-03; s_prims
+// moved onto GpuState, and this accessor had no external callers. Read via `c->game->gpu.s_prims` now.)
 
 // Bulk VRAM load/save (1024x512x16). Used by the offline GP0 differ harness (tools/gpu_differ):
 // seed s_vram with a captured initial VRAM, replay a GP0 word stream via gpu_gp0(), then read back

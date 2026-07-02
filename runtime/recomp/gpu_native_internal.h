@@ -69,6 +69,12 @@ struct GpuState {
   float    s_od_ord[OBJ_DEPTH_MAX] = {};
   int s_od_n = 0;
   int s_od_frame = -1;
+  // Per-face epsilon-depth run state. Was file-scope in gpu_native.cpp (s_od_eps_*) — moved onto
+  // GpuState because obj_depth_lookup is a per-Core method; two SBS cores need SEPARATE counters
+  // so one core's face ordinal doesn't leak into the other's depth epsilon (2026-07-03).
+  int s_od_eps_frame = -1;
+  int s_od_eps_span  = -1;
+  int s_od_eps_k     = 0;
   void obj_depth_add(uint32_t lo, uint32_t hi, float ord);  // record an object's pool span + world depth
   int  obj_depth_lookup(uint32_t node, float* ord);         // depth ord for the OT node, if in an object span
 
@@ -128,6 +134,12 @@ struct GpuState {
 
   // Frame + OT bookkeeping
   int s_frame = 0;                                            // present-frame counter
+  // Per-frame draw stats — moved off file-scope in gpu_native.cpp so SBS's two cores keep separate
+  // per-frame counters (a core reading its own stats or a debug-server `frame` query wouldn't see the
+  // other core's contribution) (deglobalize 2026-07-03).
+  long s_prims = 0;                                           // primitives drawn since last present
+  long s_gp0_words = 0;                                       // GP0 words this frame
+  long s_dma2 = 0;                                            // DMA2 (OT linked-list) triggers this frame
   // Backdrop texpage provenance (per-core — SBS runs two cores): published by ov_bg_tilemap_native each
   // field frame; the OT walk drops guest backdrop sprites sampling it (render.md OPEN #1). -1 = unset.
   int s_bgtp_x = -1, s_bgtp_y = -1, s_bgtp_frame = -1;
