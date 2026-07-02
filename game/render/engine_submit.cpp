@@ -549,8 +549,7 @@ void Render::rwalkB588() {
   if (c->mem_r8(node + 1) != 0) {                                // @6a4: per-object RENDER (native real-depth)
     uint8_t s1 = c->mem_r8(node + 8);
     if ((c->mem_r16(node + 0x17E) & 0x20) && c->mem_r8(node + 0x179)) c->mem_w8(node + 8, c->mem_r8(node + 9));
-    void ov_perobj_render(Core*);                                // engine_render_walk.cpp (native per-object render)
-    c->r[4] = node; ov_perobj_render(c);                         // was inner jal 0x8003CCA4 (PSX GTE)
+    c->r[4] = node; perObjRender();                              // was inner jal 0x8003CCA4 (PSX GTE)
     c->mem_w8(node + 8, s1);
   }
 }

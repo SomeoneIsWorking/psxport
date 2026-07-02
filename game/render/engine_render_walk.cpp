@@ -85,7 +85,7 @@ extern "C" long g_sn_objs, g_sn_cmds; long g_sn_objs = 0, g_sn_cmds = 0;
 // Tile entry bits: [0:3]=atlas col, [4:7]=atlas row, [8:11]=clut sub-index. U=(t&0xF)<<4, V=(t&0xF0)+8 (the
 // half-tile V bias is in the source data layout — faithful), clut=clutbase+((t&0xF00)>>2). Texpage 0x0E =
 // 4bpp @ VRAM(896,0) (set once via a GP0(0xE1) prim in the PSX body; applied per-quad here).
-static void ov_bg_tilemap_native(Core* c, uint32_t t4) {
+static void render_bg_tilemap_native(Core* c, uint32_t t4) {
   int W = c->mem_r8(t4 + 0x10), H = c->mem_r8(t4 + 0x11);
   if (W == 0 || H == 0) return;
   int rowstride = W * 2;                          // s0 — bytes per map row
@@ -149,7 +149,7 @@ void Render::sceneNative() { Core* c = mCore;
   // fields' drawers are still-PSX and stay black here until ported (frontier). RQ_BACKGROUND → behind world.
   if (c->mem_r8(0x800bf873u) == 0) {
     uint32_t bgstate = c->mem_r8(0x800bf870u);
-    if (bgstate == 0) ov_bg_tilemap_native(c, 0x800ed018u);
+    if (bgstate == 0) render_bg_tilemap_native(c, 0x800ed018u);
   }
   if (cfg_dbg("bgonly")) { c->r[4] = saved; return; }  // PROBE: backdrop only (test if ov_render_frame already drew the world)
   // AREA-INIT SUPPRESSION: on the GAME field-area-machine OBJECT-PLACEMENT init frame (stage GAME, sm[0x48]==2
@@ -206,9 +206,8 @@ void Render::sceneNative() { Core* c = mCore;
 // (#4). The exact origin projection is "where the object actually is", so depth/occlusion is owned from the
 // object's real placement, not a quantized approximation. (engine owns placement → engine owns depth.)
 
-int g_perobj_psx = 0;   // BISECT: route the per-object render to the PSX body (compare which native piece diverges)
-static void submit_perobj_render(Core* c) {
-  if (g_perobj_psx) { rec_super_call(c, 0x8003CCA4u); return; }
+void Render::perObjRender() {
+  Core* c = mCore;
   uint32_t node = c->r[4];
   g_dbg_render_node = node;                               // objid: tag this object's prims
   c->mem_w32(SCR + 0x28C, node);                          // current render object (read by downstream code)
@@ -226,10 +225,6 @@ static void submit_perobj_render(Core* c) {
     gpu_obj_depth_add(c, slo, shi, od); fps60_bb_node(c, slo, shi, node); }   // fps60: this object's billboards reproject at midpoint
   g_dbg_render_node = 0;                                  // objid: end this object's render scope
 }
-void ov_perobj_render(Core* c) {
-  submit_perobj_render(c);
-}
-
 // NATIVE seaside-area GROUND/BG node renderer — OVERLAY 0x8013E9D8 (the renderfn of the field's BG/world
 // node 0x800FC5C0, dispatched by the master render-list walk's default case). The recomp wrapper: copy a
 // position triple (*(node+0x14)[0/2/4]) + node[0x4e/50/52] onto the stack, call the GTE visibility/setup
@@ -253,7 +248,7 @@ void Render::bgRender() {
   c->r[4] = sp + 0x10; c->r[5] = sp + 0x18;
   rec_dispatch(c, 0x8013DD34u);                           // PSX GTE visibility/bound setup (faithful side-effect)
   c->r[29] = saved_sp; c->r[31] = ra;                    // pop the frame
-  c->r[4] = node; submit_perobj_render(c);                // native world-coord per-object render
+  c->r[4] = node; perObjRender();                // native world-coord per-object render
 }
 
 // NATIVE phase-2 render-list WALK — gen_func_8003C048 (later-135). The master draining of the per-frame
@@ -347,7 +342,7 @@ void Render::renderWalk() {
       uint8_t t = c->mem_r8(n + 0xB);
       if (t < 33) {
         uint32_t tgt = c->mem_r32(RLIST_TABLE + t * 4);
-        if (tgt == RCASE_PEROBJ) { ffspan_begin(); c->r[4] = n; submit_perobj_render(c); ffspan_end(rw_tag("rwP", c->mem_r32(n+24))); }  // self-tags its world depth
+        if (tgt == RCASE_PEROBJ) { ffspan_begin(); c->r[4] = n; perObjRender(); ffspan_end(rw_tag("rwP", c->mem_r32(n+24))); }  // self-tags its world depth
         else if (tgt == RCASE_NOOP) { /* types 9-14,21-31: render nothing (loop continue) */ }
         else if (uint32_t leaf = rw_leaf_for(tgt)) {   // types 16-19: special-effect leaf renderer (guest content, native depth)
           ffspan_begin();
@@ -428,7 +423,7 @@ static void rq_dispatch_case(Core* c, uint32_t node, uint32_t tgt) {
     case 0x8003BC00u:   // per-object render dispatch, then the optional main renderer
     case 0x8003BC24u: { // alt scene/overlay submitter, then the optional main renderer
       c->r[4] = node;
-      if (tgt == 0x8003BC00u) submit_perobj_render(c);    // native (world-coord eproj projection)
+      if (tgt == 0x8003BC00u) c->mRender->perObjRender();    // native (world-coord eproj projection)
       else rec_dispatch(c, 0x80122974u);
       uint8_t b = c->mem_r8(node + 0xB);
       if (b & 0x40) { c->r[4] = node; c->r[5] = 80; c->r[6] = 0; rec_dispatch(c, 0x8002AE0Cu); }
@@ -527,7 +522,7 @@ void Render::renderWalkSnapshot() {
 
 static void aux_bcf4_case(Core* c, uint32_t node, uint32_t tgt) {
   switch (tgt) {
-    case 0x8003BDACu: c->r[4] = node; submit_perobj_render(c); break;   // native (world-coord eproj projection)
+    case 0x8003BDACu: c->r[4] = node; c->mRender->perObjRender(); break;   // native (world-coord eproj projection)
     case 0x8003BDBCu: { uint8_t g = c->mem_r8(G_RENDER_MODE);
                         if (g == 0)      { c->r[4] = node; rec_dispatch(c, 0x801341E8u); }
                         else if (g == 6) { c->r[4] = node; rec_dispatch(c, 0x80123C14u); }
@@ -603,7 +598,7 @@ void Render::rwalkAuxBcf4() {
 
 static void aux_bf00_case(Core* c, uint32_t node, uint32_t tgt) {
   switch (tgt) {
-    case 0x8003BFACu: c->r[4] = node; submit_perobj_render(c); break;   // native (world-coord eproj projection)
+    case 0x8003BFACu: c->r[4] = node; c->mRender->perObjRender(); break;   // native (world-coord eproj projection)
     case 0x8003BFBCu: c->r[4] = node; rec_dispatch(c, 0x8003C2D4u); break;
     case 0x8003BFCCu: c->r[4] = node; rec_dispatch(c, 0x8003C464u); break;
     case 0x8003BFDCu: c->r[4] = node; rec_dispatch(c, 0x8003C5F8u); break;
@@ -657,8 +652,8 @@ void Render::rwalkAuxBf00() {
 
 static void aux_eec0_case(Core* c, uint32_t node, uint32_t tgt) {
   switch (tgt) {
-    case 0x8003EF20u: c->r[4] = node; submit_perobj_render(c); break;   // native (world-coord eproj projection)
-    case 0x8003EF30u: c->r[4] = node; submit_perobj_render(c);          // native (world-coord eproj projection)
+    case 0x8003EF20u: c->r[4] = node; c->mRender->perObjRender(); break;   // native (world-coord eproj projection)
+    case 0x8003EF30u: c->r[4] = node; c->mRender->perObjRender();          // native (world-coord eproj projection)
                       c->r[4] = node; rec_dispatch(c, 0x8003B704u); break;
     case 0x8003EF40u: { c->r[4] = node; rec_dispatch(c, 0x8003C2D4u);
                         if (c->mem_r8(node + 2) == 1) { c->r[4] = node; rec_dispatch(c, 0x8003B704u); } break; }

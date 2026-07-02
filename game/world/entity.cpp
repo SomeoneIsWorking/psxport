@@ -75,35 +75,6 @@ static uint32_t child_spawn_40410(Core* c) {
   return 1;
 }
 
-void ov_child_spawn_40410(Core* c) {
-  static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("child40410") ? 1 : 0;
-  if (!s_v) { c->r[2] = child_spawn_40410(c); return; }
-  static uint8_t* ram0 = (uint8_t*)malloc(0x200000);
-  static uint8_t* ramN = (uint8_t*)malloc(0x200000);
-  uint8_t spad0[0x400], spadN[0x400];
-  uint32_t regs0[32]; memcpy(regs0, c->r, sizeof regs0);
-  uint32_t obj = c->r[4];
-  memcpy(ram0, c->ram, 0x200000); memcpy(spad0, c->scratch, 0x400);
-  c->r[2] = child_spawn_40410(c);
-  uint32_t v0_n = c->r[2];
-  memcpy(ramN, c->ram, 0x200000); memcpy(spadN, c->scratch, 0x400);
-  memcpy(c->ram, ram0, 0x200000); memcpy(c->scratch, spad0, 0x400); memcpy(c->r, regs0, sizeof regs0);
-  rec_super_call(c, 0x80040410u);
-  uint32_t v0_o = c->r[2];
-  // Same family rationale as the grid/scriptvm gates: the dispatched callees (0x8007aae8 allocator,
-  // 0x80051b04 setup) run in BOTH passes and leave transient residue in their own stack frames below
-  // entry sp; FUN_80040410's own 48-byte frame is also dead below sp on return. Exclude [sp-0x800, sp)
-  // (sp ~0x1FE9xx, RAM end 0x200000 — far above ALL game data; a real divergence alters persistent state).
-  uint32_t sp = regs0[29] & 0x1FFFFFu, flo = (sp >= 0x800) ? sp - 0x800 : 0;
-  int ro = -1; for (uint32_t a = 0; a < 0x200000; a++) if (c->ram[a] != ramN[a] && !(a >= flo && a < sp)) { ro = (int)a; break; }
-  int so = -1; for (uint32_t a = 0; a < 0x400; a++) if (c->scratch[a] != spadN[a]) { so = (int)a; break; }
-  static long ng = 0, nb = 0;
-  if (ro >= 0 || so >= 0 || v0_n != v0_o) {
-    if (nb++ < 40) fprintf(stderr, "[child40410] MISMATCH obj=%08x v0 n=%x o=%x ram@%x spad@%x sp=%x\n",
-                           obj, v0_n, v0_o, ro, so, sp);
-  } else if (++ng % 10 == 0) fprintf(stderr, "[child40410] %ld matches\n", ng);
-}
-
 // FUN_80026C88 — per-object DISPATCHER LOOP over the 40-entry, 64-byte-stride object table at 0x800ec188.
 // args: none. void return. Pure control flow — the loop body reads only obj[0] (active byte) and obj[1]
 // (handler index), loads a fn-ptr from the table at 0x800ad52c (stride 4), and tail-calls it with a0=obj.
@@ -171,7 +142,7 @@ static void sm40558(Core* c) {
     uint32_t s5 = c->mem_r8(obj + 5);
     if (s5 == 0) {
       c->r[4] = obj; c->r[5] = c->mem_r8(obj + 3);
-      ov_child_spawn_40410(c);
+      c->r[2] = child_spawn_40410(c);
       if (c->r[2] != 0) c->mem_w8(obj + 5, (uint8_t)(c->mem_r8(obj + 5) + 1));
       c->mem_w16(obj + 128, 64);
       c->mem_w16(obj + 130, 128);

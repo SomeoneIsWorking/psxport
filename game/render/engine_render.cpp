@@ -23,7 +23,6 @@
 #include "cfg.h"
 #include <stdlib.h>
 #include <stdio.h>
-void ov_ground_probe(Core* c);         // DIAG: decode ground scene table 0x800F2418 (later-234 blocker)
 
 // DIAG skippass: PSXPORT_SKIPPASS=0xADDR skips that one rec_dispatch'd render pass, to attribute a prim to
 // the pass producing it. NOTE: useless for PERSISTENT packets (built once at scene-load, re-walked from the
@@ -58,7 +57,6 @@ void Render::frame() { Core* c = mCore;
   if (g_render_psx) { d0(c, 0x8003f9a8u); return; }   // COMPARE: render the field via the PSX recomp path
   ffspan_begin(); d0(c, 0x8004fd30u); ffspan_end("rf_4fd30");
   ffspan_begin(); d0(c, 0x80025d98u); ffspan_end("rf_25d98");   // 2D atlas SPRITE band (op-0x65)
-  ov_ground_probe(c);                // DIAG groundprobe: decode the ground scene table (no draw; later-235)
   // DIAG groundnative: route the ground table real-depth via Render::fieldEntityRender. Decode is CORRECT, but
   // the 2D sea/water backdrop then composites OVER it (later-235 render-ordering blocker) — OFF by default.
   if (cfg_dbg("groundnative")) { fieldEntityRender(0x800f2418u); }

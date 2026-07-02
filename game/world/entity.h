@@ -4,7 +4,5 @@
 // into its own module (PC-game code structure); registered in game_tomba2.cpp's init block by these names.
 #ifndef ENGINE_ENTITY_H
 #define ENGINE_ENTITY_H
-struct Core;
-void ov_child_spawn_40410(Core* c);   // FUN_80040410 — per-object child-node spawn / sub-object builder
 // FUN_80026C88 moved to ObjectTable::dispatch — reach via c->engine.objectTable.dispatch()
 #endif

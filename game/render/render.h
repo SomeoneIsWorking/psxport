@@ -31,6 +31,12 @@ public:
   // Taxi-parameter c->r[4] = node (recomp-shaped body, mirrors the guest ABI).
   void perObjFlush();
 
+  // perObjRender: per-object render dispatch (guest 0x8003CCA4). Stashes current-object bookkeeping,
+  // picks a per-node dispatch case, routes flush-only via perObjFlush and secondary-effect cases via
+  // rec_super_call, then tags the produced packet span with the object's world-position depth.
+  // Taxi-parameter c->r[4] = node. Was ov_perobj_render / submit_perobj_render.
+  void perObjRender();
+
   // bgRender: field seaside GROUND/BG node renderer — overlay 0x8013E9D8 native. Runs the GTE
   // visibility/bound setup (rec_dispatch), then routes to submit_perobj_render for the native
   // world-coord render. Taxi-parameter c->r[4] = node. Was ov_bg_render.
