@@ -106,7 +106,7 @@ void beh_typed_variant_router(Core* c) {
         uint32_t a2 = c->mem_r32(v1 + 0xdc);
         c->r[4] = nd; c->r[5] = 1; c->r[6] = a2; c->r[7] = a2;
         uint32_t save_sp = c->r[29]; c->r[29] = fsp;
-        rec_dispatch(c, 0x8004BD64u);                                    // FUN_8004bd64
+        ov_obj_pos_compose(c);                                           // FUN_8004bd64
         c->r[29] = save_sp;
         leaf1(c, nd, 0x80077B5Cu);                                       // FUN_80077b5c
         c->mem_w8(nd + 1, 1);

@@ -75,7 +75,7 @@ static void dat_tail(Core* c, uint32_t nd) {           // @0x80127c9c (sub==3 on
   c->mem_w32(fsp + 0x10, 0x1F8000C0u);                 // FUN_8004bd64's 5th arg, stacked at sp+0x10
   c->r[4] = nd; c->r[5] = 0; c->r[6] = a2; c->r[7] = a2;
   uint32_t save = c->r[29]; c->r[29] = fsp;
-  rec_dispatch(c, 0x8004BD64u);                        // FUN_8004bd64(node,0,*0x800e7f5c,same,&0x1f8000c0)
+  ov_obj_pos_compose(c);                               // FUN_8004bd64(node,0,*0x800e7f5c,same,&0x1f8000c0)
   c->r[29] = save;
   c->r[4] = G_eac; rec_dispatch(c, 0x8006CBA8u);       // FUN_8006cba8(&DAT_800e7eac)
 }

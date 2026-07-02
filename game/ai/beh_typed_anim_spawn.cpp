@@ -116,8 +116,10 @@ void beh_typed_anim_spawn(Core* c) {
         goto Lret;
       }
       if (s1 == 1) {                                // 0x8012dbd8
-        leaf5(c, s0, 2, c->mem_r32(0x800E7F5Cu), c->mem_r32(0x800E7F50u),
-              s0 + 0x60, 0x8004BD64u);              // FUN_8004BD64(node,2,*0x800E7F5C,*0x800E7F50,&node[0x60])
+        c->r[4] = s0; c->r[5] = 2;
+        c->r[6] = c->mem_r32(0x800E7F5Cu); c->r[7] = c->mem_r32(0x800E7F50u);
+        c->mem_w32(c->r[29] + 16, s0 + 0x60);
+        ov_obj_pos_compose(c);                      // FUN_8004BD64(node,2,*0x800E7F5C,*0x800E7F50,&node[0x60])
         c->mem_w8(s0 + 1, (uint8_t)s1);             // node[1] = s1 (=1)
         if (c->mem_r8(0x800BF9DDu) != 11) goto Lret;
         c->mem_w8(s0 + 4, 3);                       // node[4] = 3
