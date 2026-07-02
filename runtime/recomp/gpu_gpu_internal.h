@@ -28,6 +28,11 @@ struct Core;     // CPU/RAM handle (core.h)
 // Vulkan's VkRect2D; named VkRect to keep the gpu_gpu.cpp bodies byte-unchanged.
 struct VkRect { int x, y, w, h; };
 
+// Per-instance vertex-batch descriptor. The concrete TriVtx / TexVtx structs live in gpu_gpu.cpp;
+// this header exposes only the count fields + opaque `void*` pointers to the CPU-side batches so the
+// batches themselves can be per-Core (SBS's two cores keep separate per-frame geometry).
+#define GGS_NUM_BLEND_MODES 4                   // PSX semi blend modes (0=avg 1=add 2=sub 3=add4)
+
 // ---- GpuGpuState — the VK backend's per-instance, per-frame render machine state + its methods --------
 struct GpuGpuState {
   Game* game = nullptr;   // set by Game(); reached only by frame_via_fb() for s_seen3d (via game->core)
@@ -61,6 +66,23 @@ struct GpuGpuState {
   int s_present_sx = 0, s_present_sy = 0;
   int s_last_sx = 0, s_last_sy = 0, s_last_w = 320, s_last_h = 240;
   int s_dbg_tri = 0, s_dbg_tex = 0, s_dbg_semi = 0;
+
+  // Per-Core CPU vertex batches — filled during gp0_exec (draw_tri/draw_tritri/draw_semi below), read
+  // by render_geom at grab_pane/present time, and RESET by frame_end. Two SBS cores each keep their
+  // own batches so one core's per-frame geometry can't leak into the other's render (2026-07-03).
+  // Opaque void*: the concrete TriVtx/TexVtx layouts live in gpu_gpu.cpp — the touching methods cast
+  // internally. Buffers are heap-allocated on first use (create_3d) and freed at process exit.
+  void* s_tri_buf = nullptr;
+  int   s_tri_n   = 0;
+  void* s_tex_buf = nullptr;
+  int   s_tex_n   = 0;
+  void* s_semi_buf[GGS_NUM_BLEND_MODES] = {nullptr, nullptr, nullptr, nullptr};
+  int   s_semi_n[GGS_NUM_BLEND_MODES]   = {0, 0, 0, 0};
+  // Last-frame draw counts (for the `vkstats` debug-server probe). Written by render_geom, read by
+  // `stats` — per-Core so `@a vkstats` / `@b vkstats` return each core's independent counts.
+  int   s_dbg_tri_c  = 0;
+  int   s_dbg_tex_c  = 0;
+  int   s_dbg_semi_c = 0;
 
   // ---- methods (bodies in gpu_gpu.cpp; reached via core->game->gpu_gpu from the wrappers) ----
   // public-API methods

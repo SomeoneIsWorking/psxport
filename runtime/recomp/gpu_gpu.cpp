@@ -79,13 +79,12 @@ struct PresentPC { int32_t disp[4]; int32_t fade[4]; };
 static inline float ord3d(float d) { return NATIVE_3D_MIN + d * (NATIVE_3D_MAX - NATIVE_3D_MIN); }
 #define TRI_CAP 196608   // max batched vertices (= 65536 tris)
 #define TEX_CAP 196608
+#define NUM_BLEND_MODES GGS_NUM_BLEND_MODES   // PSX semi blend modes (0=avg 1=add 2=sub 3=add4)
 struct TriVtx { float x, y, r, g, b, ord; };                                                    // 24 bytes
 struct TexVtx { float x, y, u, v, r, g, b; int32_t tp[4], clut[4], tw[4], da[4]; float ord; };   // 96 bytes
-static TriVtx* s_tri_buf;  static int s_tri_n;
-static TexVtx* s_tex_buf;  static int s_tex_n;
-#define NUM_BLEND_MODES 4   // PSX semi blend modes: 0=avg (B+F)/2, 1=add B+F, 2=sub B-F, 3=add4 F/4+B
-static TexVtx* s_semi_buf[NUM_BLEND_MODES]; static int s_semi_n[NUM_BLEND_MODES];   // bucketed by blend mode
-static int s_dbg_tri_c, s_dbg_tex_c, s_dbg_semi_c;   // last-frame counts (vkstats probe)
+// Batch buffers + counts moved onto GpuGpuState (per-Core) — reach as `this->s_tri_buf` (cast from
+// void* to TriVtx*) inside the methods. The `render_geom` free function below takes a `GpuGpuState&`
+// so it can pull the right instance's batches at present time.
 static SDL_GPUTexture*        s_vram_snap;   // texture-source snapshot (RG8 SAMPLER): CLUT/atlas source
 static SDL_GPUTransferBuffer* s_snap_xfer;
 static SDL_GPUTexture*        s_depth;       // D32 depth (ordering)
@@ -295,10 +294,10 @@ static void create_3d(void) {
   mkbuf(sizeof(TexVtx) * TEX_CAP, &s_tex_vbuf, &s_tex_xfer);
   for (int m = 0; m < NUM_BLEND_MODES; m++) {
     mkbuf(sizeof(TexVtx) * TEX_CAP, &s_semi_vbuf[m], &s_semi_xfer[m]);
-    s_semi_buf[m] = (TexVtx*)malloc(sizeof(TexVtx) * TEX_CAP);
   }
-  s_tri_buf  = (TriVtx*)malloc(sizeof(TriVtx) * TRI_CAP);
-  s_tex_buf  = (TexVtx*)malloc(sizeof(TexVtx) * TEX_CAP);
+  // CPU-side batch buffers moved onto GpuGpuState — allocated lazily in each draw_tri / draw_tritri /
+  // draw_semi call (see the alloc_batches guard at the top of each). Per-Core so SBS's two cores keep
+  // separate per-frame geometry (2026-07-03).
   // Float RGBA semi-blend intermediate (decode target / real-HW-blend target / encode source).
   SDL_GPUTextureCreateInfo cti = {}; cti.type = SDL_GPU_TEXTURETYPE_2D; cti.format = SDL_GPU_TEXTUREFORMAT_R16G16B16A16_FLOAT;
   cti.usage = SDL_GPU_TEXTUREUSAGE_SAMPLER | SDL_GPU_TEXTUREUSAGE_COLOR_TARGET;
@@ -440,16 +439,16 @@ static SDL_GPUViewport letterbox(int aw, int ah, int ow, int oh) {
 // transient wrong-colour flash on the first couple of frames after a scene fade-in (root cause not fully
 // chased down before this rewrite; REAL hardware blending removes the whole class of bug instead).
 // No-op if nothing was batched. Reports the drawn counts for vkstats.
-static void render_geom(SDL_GPUCommandBuffer* cmd, const uint16_t* src, int* dtri, int* dtex, int* dsemi) {
-  int semi_total = 0; for (int m = 0; m < NUM_BLEND_MODES; m++) semi_total += s_semi_n[m];
-  *dtri = s_tri_n; *dtex = s_tex_n; *dsemi = semi_total;
-  if (!s_have_3d || (s_tri_n + s_tex_n + semi_total) == 0) return;
+static void render_geom(GpuGpuState& g, SDL_GPUCommandBuffer* cmd, const uint16_t* src, int* dtri, int* dtex, int* dsemi) {
+  int semi_total = 0; for (int m = 0; m < NUM_BLEND_MODES; m++) semi_total += g.s_semi_n[m];
+  *dtri = g.s_tri_n; *dtex = g.s_tex_n; *dsemi = semi_total;
+  if (!s_have_3d || (g.s_tri_n + g.s_tex_n + semi_total) == 0) return;
   { void* p = SDL_MapGPUTransferBuffer(s_dev, s_snap_xfer, true); memcpy(p, src, (size_t)VRAM_W*VRAM_H*2); SDL_UnmapGPUTransferBuffer(s_dev, s_snap_xfer); }
-  if (s_tri_n)  { void* p = SDL_MapGPUTransferBuffer(s_dev, s_tri_xfer, true);  memcpy(p, s_tri_buf,  (size_t)s_tri_n*sizeof(TriVtx));  SDL_UnmapGPUTransferBuffer(s_dev, s_tri_xfer); }
-  if (s_tex_n)  { void* p = SDL_MapGPUTransferBuffer(s_dev, s_tex_xfer, true);  memcpy(p, s_tex_buf,  (size_t)s_tex_n*sizeof(TexVtx));  SDL_UnmapGPUTransferBuffer(s_dev, s_tex_xfer); }
-  for (int m = 0; m < NUM_BLEND_MODES; m++) if (s_semi_n[m]) {
+  if (g.s_tri_n)  { void* p = SDL_MapGPUTransferBuffer(s_dev, s_tri_xfer, true);  memcpy(p, g.s_tri_buf,  (size_t)g.s_tri_n*sizeof(TriVtx));  SDL_UnmapGPUTransferBuffer(s_dev, s_tri_xfer); }
+  if (g.s_tex_n)  { void* p = SDL_MapGPUTransferBuffer(s_dev, s_tex_xfer, true);  memcpy(p, g.s_tex_buf,  (size_t)g.s_tex_n*sizeof(TexVtx));  SDL_UnmapGPUTransferBuffer(s_dev, s_tex_xfer); }
+  for (int m = 0; m < NUM_BLEND_MODES; m++) if (g.s_semi_n[m]) {
     void* p = SDL_MapGPUTransferBuffer(s_dev, s_semi_xfer[m], true);
-    memcpy(p, s_semi_buf[m], (size_t)s_semi_n[m]*sizeof(TexVtx));
+    memcpy(p, g.s_semi_buf[m], (size_t)g.s_semi_n[m]*sizeof(TexVtx));
     SDL_UnmapGPUTransferBuffer(s_dev, s_semi_xfer[m]);
   }
   SDL_GPUCopyPass* cp = SDL_BeginGPUCopyPass(cmd);
@@ -460,9 +459,9 @@ static void render_geom(SDL_GPUCommandBuffer* cmd, const uint16_t* src, int* dtr
     SDL_GPUTransferBufferLocation s = {}; s.transfer_buffer = x;
     SDL_GPUBufferRegion d = {}; d.buffer = b; d.offset = 0; d.size = (Uint32)n*stride;
     SDL_UploadToGPUBuffer(cp, &s, &d, false); };
-  upv(s_tri_xfer, s_tri_vbuf, s_tri_n, sizeof(TriVtx));
-  upv(s_tex_xfer, s_tex_vbuf, s_tex_n, sizeof(TexVtx));
-  for (int m = 0; m < NUM_BLEND_MODES; m++) upv(s_semi_xfer[m], s_semi_vbuf[m], s_semi_n[m], sizeof(TexVtx));
+  upv(s_tri_xfer, s_tri_vbuf, g.s_tri_n, sizeof(TriVtx));
+  upv(s_tex_xfer, s_tex_vbuf, g.s_tex_n, sizeof(TexVtx));
+  for (int m = 0; m < NUM_BLEND_MODES; m++) upv(s_semi_xfer[m], s_semi_vbuf[m], g.s_semi_n[m], sizeof(TexVtx));
   SDL_EndGPUCopyPass(cp);
   SDL_GPUTextureSamplerBinding snap = { s_vram_snap, s_samp_nearest };
   SDL_GPUBufferBinding bb = {}; bb.offset = 0;
@@ -475,9 +474,9 @@ static void render_geom(SDL_GPUCommandBuffer* cmd, const uint16_t* src, int* dtr
     dt.stencil_load_op = SDL_GPU_LOADOP_DONT_CARE; dt.stencil_store_op = SDL_GPU_STOREOP_DONT_CARE;
     SDL_GPURenderPass* rp = SDL_BeginGPURenderPass(cmd, &ct, 1, &dt);
     SDL_SetGPUViewport(rp, &vp); SDL_SetGPUScissor(rp, &sc);
-    if (s_tri_n) { SDL_BindGPUGraphicsPipeline(rp, s_tri_pipe); bb.buffer = s_tri_vbuf; SDL_BindGPUVertexBuffers(rp, 0, &bb, 1); SDL_DrawGPUPrimitives(rp, s_tri_n, 1, 0, 0); }
-    if (s_tex_n) { SDL_BindGPUGraphicsPipeline(rp, s_tritex_pipe); bb.buffer = s_tex_vbuf; SDL_BindGPUVertexBuffers(rp, 0, &bb, 1);
-                   SDL_BindGPUFragmentSamplers(rp, 0, &snap, 1); SDL_DrawGPUPrimitives(rp, s_tex_n, 1, 0, 0); }
+    if (g.s_tri_n) { SDL_BindGPUGraphicsPipeline(rp, s_tri_pipe); bb.buffer = s_tri_vbuf; SDL_BindGPUVertexBuffers(rp, 0, &bb, 1); SDL_DrawGPUPrimitives(rp, g.s_tri_n, 1, 0, 0); }
+    if (g.s_tex_n) { SDL_BindGPUGraphicsPipeline(rp, s_tritex_pipe); bb.buffer = s_tex_vbuf; SDL_BindGPUVertexBuffers(rp, 0, &bb, 1);
+                   SDL_BindGPUFragmentSamplers(rp, 0, &snap, 1); SDL_DrawGPUPrimitives(rp, g.s_tex_n, 1, 0, 0); }
     SDL_EndGPURenderPass(rp);
   }
   if (!semi_total) return;
@@ -500,9 +499,9 @@ static void render_geom(SDL_GPUCommandBuffer* cmd, const uint16_t* src, int* dtr
     dt.stencil_load_op = SDL_GPU_LOADOP_DONT_CARE; dt.stencil_store_op = SDL_GPU_STOREOP_DONT_CARE;
     SDL_GPURenderPass* rp = SDL_BeginGPURenderPass(cmd, &ct, 1, &dt);
     SDL_SetGPUViewport(rp, &vp); SDL_SetGPUScissor(rp, &sc);
-    for (int m = 0; m < NUM_BLEND_MODES; m++) if (s_semi_n[m]) {
+    for (int m = 0; m < NUM_BLEND_MODES; m++) if (g.s_semi_n[m]) {
       SDL_BindGPUGraphicsPipeline(rp, s_semi_pipe[m]); bb.buffer = s_semi_vbuf[m]; SDL_BindGPUVertexBuffers(rp, 0, &bb, 1);
-      SDL_BindGPUFragmentSamplers(rp, 0, &snap, 1); SDL_DrawGPUPrimitives(rp, s_semi_n[m], 1, 0, 0);
+      SDL_BindGPUFragmentSamplers(rp, 0, &snap, 1); SDL_DrawGPUPrimitives(rp, g.s_semi_n[m], 1, 0, 0);
     }
     SDL_EndGPURenderPass(rp);
   }
@@ -547,7 +546,7 @@ void GpuGpuState::present(const uint16_t* src, int sx, int sy, int w, int h) {
   SDL_GPUCommandBuffer* cmd = SDL_AcquireGPUCommandBuffer(s_dev);
   GPUCHK(cmd, "AcquireGPUCommandBuffer");
   upload_vram(cmd, src);                                    // CPU VRAM -> s_vram_tex (2D backdrop)
-  render_geom(cmd, src, &s_dbg_tri_c, &s_dbg_tex_c, &s_dbg_semi_c);   // draw the tee batch on top (+depth)
+  render_geom(*this, cmd, src, &s_dbg_tri_c, &s_dbg_tex_c, &s_dbg_semi_c);   // draw the tee batch on top (+depth)
 
   if (s_headless) { SDL_SubmitGPUCommandBuffer(cmd); return; }   // shot reads s_vram_tex via its own cmd
 
@@ -730,10 +729,20 @@ void GpuGpuState::frame_end(const uint16_t* svram, int frame) { (void)svram; (vo
 // ---- native 3D / textured raster: accumulate the tee'd geometry into the host batch (Pass 2) ---------
 // Append one flat triangle (VRAM coords + per-vertex RGB 0..255); depth = per-vertex native (s_vd) or the
 // per-prim OT-order (s_cur_ord) band.
+// Lazy-alloc THIS core's CPU vertex batches on first use (the VK backend's create_3d already ran on
+// s_have_3d = 1, but the batches live on GpuGpuState now so each Core allocates its own).
+static inline void ggs_alloc_batches(GpuGpuState& g) {
+  if (!g.s_tri_buf)  g.s_tri_buf  = (TriVtx*)malloc(sizeof(TriVtx) * TRI_CAP);
+  if (!g.s_tex_buf)  g.s_tex_buf  = (TexVtx*)malloc(sizeof(TexVtx) * TEX_CAP);
+  for (int m = 0; m < NUM_BLEND_MODES; m++)
+    if (!g.s_semi_buf[m]) g.s_semi_buf[m] = (TexVtx*)malloc(sizeof(TexVtx) * TEX_CAP);
+}
+
 void GpuGpuState::draw_tri(int x0,int y0,int r0,int g0,int b0, int x1,int y1,int r1,int g1,int b1,
                           int x2,int y2,int r2,int g2,int b2) {
   if (!s_have_3d || s_tri_n + 3 > TRI_CAP) return;
-  TriVtx* v = s_tri_buf + s_tri_n;
+  ggs_alloc_batches(*this);
+  TriVtx* v = ((TriVtx*)s_tri_buf) + s_tri_n;
   v[0] = { (float)x0, (float)y0, r0/255.f, g0/255.f, b0/255.f, s_vd ? ord3d(s_vd[0]) : s_cur_ord };
   v[1] = { (float)x1, (float)y1, r1/255.f, g1/255.f, b1/255.f, s_vd ? ord3d(s_vd[1]) : s_cur_ord };
   v[2] = { (float)x2, (float)y2, r2/255.f, g2/255.f, b2/255.f, s_vd ? ord3d(s_vd[2]) : s_cur_ord };
@@ -763,7 +772,8 @@ void GpuGpuState::draw_tritri(const int* xs, const int* ys, const int* us, const
                              int tpx, int tpy, int mode, int raw, int clutx, int cluty,
                              int twmx, int twmy, int twox, int twoy, int dax0, int day0, int dax1, int day1) {
   if (!s_have_3d || s_tex_n + 3 > TEX_CAP) return;
-  tex_emit(s_tex_buf + s_tex_n, xs, ys, us, vs, rs, gs, bs, tpx, tpy, mode, raw, clutx, cluty,
+  ggs_alloc_batches(*this);
+  tex_emit(((TexVtx*)s_tex_buf) + s_tex_n, xs, ys, us, vs, rs, gs, bs, tpx, tpy, mode, raw, clutx, cluty,
            twmx, twmy, twox, twoy, dax0, day0, dax1, day1, 0, 0);
   s_tex_n += 3;
 }
@@ -773,7 +783,8 @@ void GpuGpuState::draw_semi(const int* xs, const int* ys, const int* us, const i
                            int twmx, int twmy, int twox, int twoy, int dax0, int day0, int dax1, int day1, int blend) {
   int m = blend & 3;   // bucket by PSX blend mode: one HW-blend pipeline/vertex-buffer per mode (see render_geom)
   if (!s_have_3d || s_semi_n[m] + 3 > TEX_CAP) return;
-  tex_emit(s_semi_buf[m] + s_semi_n[m], xs, ys, us, vs, rs, gs, bs, tpx, tpy, mode, raw, clutx, cluty,
+  ggs_alloc_batches(*this);
+  tex_emit(((TexVtx*)s_semi_buf[m]) + s_semi_n[m], xs, ys, us, vs, rs, gs, bs, tpx, tpy, mode, raw, clutx, cluty,
            twmx, twmy, twox, twoy, dax0, day0, dax1, day1, 1, blend);
   s_semi_n[m] += 3;
 }
@@ -877,7 +888,7 @@ void gpu_gpu_render_readback(Core* core, const uint16_t* vram, int sx, int sy, i
   if (!s_inited) init_gpu();
   SDL_GPUCommandBuffer* cmd = SDL_AcquireGPUCommandBuffer(s_dev); GPUCHK(cmd, "render_readback cmd");
   upload_vram(cmd, vram);
-  int a, b, c; render_geom(cmd, vram, &a, &b, &c);
+  int a, b, c; render_geom(core->game->gpu_gpu, cmd, vram, &a, &b, &c);
   SDL_SubmitGPUCommandBuffer(cmd);                 // render into s_vram_tex; NO swapchain present
   const uint16_t* src = readback_vram();           // download s_vram_tex (RG8 bytes == uint16 1555 words)
   if (cfg_on("PSXPORT_GPU_TRACE")) { long nz = 0; for (int yy=0; yy<h; yy++) for (int xx=0; xx<w; xx++) if (src[((sy+yy)%VRAM_H)*VRAM_W + ((sx+xx)&1023)]) nz++;
