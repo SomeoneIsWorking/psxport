@@ -48,7 +48,7 @@ already solved or ruled out. 39 findings across 6 subsystems.
 
 ## scene
 
-- **Door/area-transition freeze reproduces UNDER PSXPORT_GATE=1 → NOT a native-only regression** [DIAGNOSED — the falsified hypothesis is in the previous handoff; the actual likely cause is the repro itself.] — headless repro of the "seaside village X≈14656 door" freeze (handoff_door_freeze.md): teleport Tomba master-pos X=0x39400000 (16.16), tap `right`, run ~900 frames. `sm[0x4c]` flips 2→3 at frame ~877 and stays 3 forever (`sm[0x48]=2 4a=1 4c=3 4e=1`). Same freeze on both PC-native (default) AND PSX-substrate (`PSXPORT_GATE=1`) gameplay paths (`sm[0x4c]==3` at frame 890 in both), verified 2026-07-02 on HEAD `169dff7`.  ↪ docs/findings/scene.md
+- **Door/area-transition freeze: FUN_80073328 case 3 FIRST-branch waits for bf818==6, which no code ever writes** [ROOT-CAUSED (RE'd via freeze-RAM dump + capstone). Repro artefact — the teleport puts the game in a state real gameplay never reaches; the freeze is deterministic given that state.] — headless repro from `scratch/handoff_door_freeze.md` (teleport Tomba X=0x39400000 = 14656 in the seaside village, tap right, run ~900 frames). At frame ~877 sm[0x4c] flips 2→3 and stays 3 forever (`sm[0x48]=2 4a=1 4c=3 4e=1`, bf818=2). Same freeze on both PC-native (default) AND PSX-substrate (`PSXPORT_GATE=1`) paths — verified 2026-07-02 on HEAD 169dff7. Not a native-only regression.  ↪ docs/findings/scene.md
 
 ## tooling
 
