@@ -63,10 +63,6 @@ static void submit_perobj_flush(Core* c) {
   }
 }
 
-void ov_perobj_flush(Core* c) {
-  submit_perobj_flush(c);
-}
-
 // ===================================================================================================
 // ONE NATIVE RENDER PATH — world-data-driven scene render (Phase 1, user 2026-06-24 architecture:
 // [[one-native-render-path-decoupled]]). Driven from the GAME's WORLD DATA, NOT from PSX GP0 packets:
@@ -402,27 +398,6 @@ static void submit_render_walk(Core* c) {
 }
 void ov_render_walk(Core* c) {
   submit_render_walk(c);
-}
-
-// NATIVE depth for the collectable BILLBOARD-QUAD drawer — gen_func_8003C8F4. This is the single chokepoint
-// for the op-2D textured quads the collectables (apple + score pickups) draw as 2D billboards: it GTE-projects
-// the quad with the object's composed camera×object transform already live in CR0-7 (RTPT/RTPS @0x8003c98c/9dc).
-// The recomp body emits the quad packet into the OT with NO depth, so the pickups fell to the flat 2D band and
-// did not occlude. We compute the object's PC-native WORLD-POSITION view-Z from that live transform
-// (proj_obj_center_ord = our float proj of the object origin = CR5-7 view translation) and tag the packet span
-// the body writes, so the deferred OT walk gives each pickup its real world depth. Reached from multiple render
-// walks (owned and un-owned) — owning it HERE covers them all. Super-calls the body (content/packet unchanged).
-float proj_obj_center_ord(void);
-void ov_collectable_quad(Core* c) {
-  float ord = obj_world_ord(c, cur_render_node(c));  // PC-native depth from the object's real world position
-  uint32_t slo, shi; PktSpanSession sess;
-  rec_super_call(c, 0x8003C8F4u);
-  if (sess.close(&slo, &shi)) { gpu_obj_depth_add(c, slo, shi, ord);   // slo/shi already KSEG
-    // fps60: the collectable's billboard quad reprojects at the midpoint camera. Keyed by the SPAN [slo,shi)
-    // (the OT walk matches the item's source node against it) + identity = the current render object
-    // (scratch 0x1F80028C, set by submit_perobj_render); the composed camera×object transform is still live
-    // in CR0-7 here (proj_obj_center_ord just read it), so fps60_record_billboard_span captures it.
-    if (g_fps60_on || g_mods.debug_ids || cfg_dbg("objid")) fps60_record_billboard_span(c, slo, shi, cur_render_node(c)); }
 }
 
 // ===================================================================================================
