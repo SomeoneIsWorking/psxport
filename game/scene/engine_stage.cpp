@@ -233,8 +233,7 @@ static void ov_game_submit_810c(Core* c) {
 // (ov_disp_26c88 moved to ObjectTable::dispatch — c->engine.objectTable.dispatch())
 // (ov_list_walk_69b28 moved to ObjectList::walkAux — c->engine.objectList.walkAux())
 // (ov_arr8_dispatch_26368 moved to Array8Dispatch::tick — c->engine.array8Dispatch.tick())
-static void ov_game_submode0(Core* c);   // fwd
-static void ov_game_submode1(Core* c);   // fwd
+// (submode0 / submode1 are now Engine methods — Engine::submode0() / Engine::submode1())
 static void ov_field_transition(Core* c);// fwd — native FUN_80108a60 (sm[0x4a]==5 sub-scene/door transition)
 
 // sm[0x48]==2 RUNNING, per-frame variant: dispatch sm[0x4a] handler. handler[0] = the GAME->SOP bridge
@@ -247,8 +246,8 @@ static void ov_game_s48_2_frame(Core* c) {
   uint32_t sm = c->mem_r32(0x1f800138u);
   uint16_t s4a = c->mem_r16(sm + 0x4a);
   if (s4a >= 6) return;
-  if (s4a == 0) { ffspan_begin(); ov_game_submode0(c); ffspan_end("submode0"); return; }
-  if (s4a == 1) { ffspan_begin(); ov_game_submode1(c); ffspan_end("submode1"); return; }
+  if (s4a == 0) { ffspan_begin(); c->engine.submode0(); ffspan_end("submode0"); return; }
+  if (s4a == 1) { ffspan_begin(); c->engine.submode1(); ffspan_end("submode1"); return; }
   if (s4a == 5) { ffspan_begin(); ov_field_transition(c); ffspan_end("transition"); return; }  // native FUN_80108a60
   ffspan_begin(); rec_dispatch(c, handler[s4a]); ffspan_end("s48_2_handler");
 }
@@ -256,7 +255,7 @@ static void ov_game_s48_2_frame(Core* c) {
 // GAME sub-mode-0 bridge 0x8010882c (sm[0x4c]/sm[0x4e] dispatch) — native. Faithful to the disasm:
 // sm[0x4c]==0 & sm[0x4e]==0 -> input-reset 0x8005082c (sync leaf) + sm[0x50]=0, sm[0x4e]=1; sm[0x4e]==1
 // -> run the native SOP field-mode machine; sm[0x4c]==1 -> sm[0x4c]=0, sm[0x4a]++.
-static void ov_game_submode0(Core* c) {
+void Engine::submode0() { Core* c = core;
   uint32_t sm = c->mem_r32(0x1f800138u);
   uint16_t s4c = c->mem_r16(sm + 0x4c);
   if (s4c == 0) {
@@ -955,7 +954,7 @@ static void ov_field_run_x(Core* c) {
   c->mem_w16(sm + 0x4a, 1); c->mem_w16(sm + 0x4c, 2); c->mem_w16(sm + 0x4e, 6);
 }
 
-static void ov_game_submode1(Core* c) {
+void Engine::submode1() { Core* c = core;
   uint32_t sm = c->mem_r32(0x1f800138u);
   uint16_t s4c = c->mem_r16(sm + 0x4c);
   if (cfg_dbg("stage") && s4c <= 1)

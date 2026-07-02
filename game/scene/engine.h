@@ -44,6 +44,13 @@ public:
   void stagePrologue();
   int  frame();
 
+  // submode0 / submode1: the two sm[0x4a] state handlers under the GAME running sub-mode
+  // (sm[0x48]==2). submode0 = SOP intro; submode1 = the walkable field area machine
+  // (0x801088D8). Called by frame() when the corresponding sm[0x4a] is owned natively.
+  // Formerly `ov_game_submode0` / `ov_game_submode1` free functions in engine_stage.cpp.
+  void submode0();
+  void submode1();
+
   // ── ov_field_frame direct children (progressive class-ification) ──────────────────────────
   // areaModeDispatch: the 22-way area-mode jump-table dispatcher at guest 0x8001CAC0. Reads the
   //   area RENDER-MODE byte at 0x800BF870 and dispatches to the overlay handler that owns that
