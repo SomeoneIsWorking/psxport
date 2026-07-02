@@ -52,7 +52,6 @@ void gpu_gpu_present_image(Core* core, const uint8_t* rgba, int iw, int ih, floa
 void gpu_gpu_frame_end(Core* core, const uint16_t* svram, int frame);
 void gpu_gpu_shot(Core* core, const char* path);
 void gpu_gpu_stats(Core* core, int* tri, int* tex, int* semi);
-void gpu_gpu_tritest(Core* core);
 
 // (Engine-owned screen fade is now the PC-native subsystem class ScreenFade at
 // game/render/screen_fade/screen_fade.h. The old gpu_set_fade / gpu_clear_fade / engine_fade_set entries

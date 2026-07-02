@@ -421,7 +421,7 @@ static void ov_game_main(Core* c) {
       while (dbg_is_paused()) {
         if (dbg_step_pending()) { dbg_consume_step(); break; }   // run exactly one frame
         c->game->pad.serviceFrame();      // pump host input (keeps the window responsive)
-        gpu_repaint(c);           // re-present current frame: window stays live + readback is accurate
+        c->game->gpu.gpu_repaint();           // re-present current frame: window stays live + readback is accurate
         dbg_server_service(c);    // receive step/play/capture commands
         usleep(15000);
       } }

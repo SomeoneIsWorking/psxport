@@ -286,7 +286,7 @@ void GpuState::semi_dump(const char* kind, int blend, int r, int g, int b, int x
 // ProvMeta / PROVRING and the s_prov / s_provmeta / s_prov_on state live in gpu_native_internal.h
 // (shared with gpu_debug.c, which formats the provenance/scene dumps). Canonical defs here:
 void gpu_provat_display(FILE* out, int qx, int qy);   // present-time provenance at display coords (gpu_debug.c)
-void gpu_provat_enable(void);                          // turn on per-pixel provenance stamping
+// (gpu_provat_enable is a method on GpuState — no free-function fwd decl needed here)
 
 static inline int clampi(int v, int lo, int hi) { return v < lo ? lo : v > hi ? hi : v; }
 static inline uint16_t to555(uint8_t r, uint8_t g, uint8_t b) {
@@ -1678,14 +1678,11 @@ void gpu_disp_region(Core* core, int* sx, int* sy, int* w, int* h) {
   if (sx) *sx = g.s_disp_x; if (sy) *sy = g.s_disp_y; if (w) *w = g.s_disp_w; if (h) *h = g.s_disp_h;
 }
 void gpu_clear_display(Core* core) { core->game->gpu.gpu_clear_display(core); }
-void gpu_blank_display(Core* core) { core->game->gpu.gpu_blank_display(); }
 void gpu_fps60_present_pass(Core* core) { core->game->gpu.gpu_fps60_present_pass(core); }
 void gpu_native_load_image(Core* core, int x, int y, int w, int h, uint32_t src) { core->game->gpu.gpu_native_load_image(core, x, y, w, h, src); }
 int  gpu_native_load_vram(Core* core, const char* path) { return core->game->gpu.gpu_native_load_vram(path); }
 void gpu_native_shot(Core* core, const char* path) { core->game->gpu.gpu_native_shot(core, path); }
-void gpu_repaint(Core* core) { core->game->gpu.gpu_repaint(); }
 int  gpu_frame_no(Core* core) { return core->game->gpu.gpu_frame_no(); }
-void gpu_provat_enable(Core* core) { core->game->gpu.gpu_provat_enable(); }
 uint16_t gpu_vram_peek(Core* core, int x, int y) { return core->game->gpu.gpu_vram_peek(x, y); }
 void gpu_vram_load(Core* core, const uint16_t* src) { core->game->gpu.gpu_vram_load(src); }
 void gpu_vram_save(Core* core, uint16_t* dst) { core->game->gpu.gpu_vram_save(dst); }

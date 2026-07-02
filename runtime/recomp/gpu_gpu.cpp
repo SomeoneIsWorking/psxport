@@ -993,4 +993,3 @@ void gpu_gpu_draw_semi(Core* core, const int* xs, const int* ys, const int* us, 
 void gpu_gpu_shot(Core* core, const char* path) { core->game->gpu_gpu.shot(path); }
 void gpu_gpu_shot_b(Core* core, const char* path) { core->game->gpu_gpu.shot_b(path); }
 void gpu_gpu_frame_end(Core* core, const uint16_t* svram, int frame) { core->game->gpu_gpu.frame_end(svram, frame); }
-void gpu_gpu_tritest(Core* core) { core->game->gpu_gpu.tritest(); }

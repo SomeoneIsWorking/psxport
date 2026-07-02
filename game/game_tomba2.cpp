@@ -206,7 +206,6 @@ static void ov_set_geom_screen(Core* c) {       // SetGeomScreen(h) — projecti
 // natively in gpu_dma2_linked_list (walk OT -> decode each primitive -> rasterize). Overriding it routes
 // the draw straight through our native walk (synchronous), instead of the DMA-register emulation dance.
 // This is the engine's draw submission, owned.
-void gpu_blank_display(Core* core);
 extern "C" int g_render_psx;   // engine_render.cpp — A/B compare switch (forces the PSX OT walk)
 extern int g_ot_2d_only;       // gpu_native.cpp — OT walk queues ONLY 2D HUD prims (world/bg owned natively)
 void Engine::drawOTag(uint32_t otHead) {   // called directly from native_step_frame (PC-driven); NOT an override
@@ -217,7 +216,7 @@ void Engine::drawOTag(uint32_t otHead) {   // called directly from native_step_f
   // Blank the display FB to black BEFORE this frame's prims draw, every loading frame, so the title's
   // partial 2D layer always sits on opaque black. Once loaded (s48>=2) the title owns a full background and
   // this is a no-op-equivalent (its bg overwrites the black). Engine-owned, keyed on the stage's own signal.
-  if (c->mem_r32(0x801FE00Cu) == 0x801062E4u && c->mem_r8(0x801FE048u) < 2) gpu_blank_display(c);
+  if (c->mem_r32(0x801FE00Cu) == 0x801062E4u && c->mem_r8(0x801FE048u) < 2) c->game->gpu.gpu_blank_display();
   // Engine-owned ordering (the one render path): owned world geometry was queued during submit; the OT
   // walk queues the guest 2D / un-owned submit variants (instead of drawing them inline); then the queue
   // drains in ENGINE order (layer: background < world < overlay < hud; depth within world). The guest OT

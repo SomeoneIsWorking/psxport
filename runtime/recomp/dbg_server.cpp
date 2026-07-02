@@ -45,7 +45,6 @@
 #include "game.h"                  // Core::game->gpu (render state is per-instance now)
 void gpu_scene_dump_now(Core* c, FILE* out);
 void gpu_provat_display(Core* core, FILE* out, int qx, int qy);
-void gpu_provat_enable(Core* core);
 void gpu_native_shot(Core* core, const char* path);
 int  gpu_frame_no(Core* core);
 int  gpu_gpu_enabled(void);
@@ -379,7 +378,7 @@ void dbg_server_start(Core* c) {
   // port — looked like a crash on entering the New-Game cutscene, but the process was merely SIGPIPE'd).
   // Ignore it process-wide so the server just sees write()<0 and drops that one connection.
   signal(SIGPIPE, SIG_IGN);
-  gpu_provat_enable(c);                // so `provat` works at any time (not gated on PSXPORT_PROVAT)
+  c->game->gpu.gpu_provat_enable();                // so `provat` works at any time (not gated on PSXPORT_PROVAT)
   pthread_t t;
   if (pthread_create(&t, NULL, dbg_thread, (void*)(intptr_t)port) != 0) {
     fprintf(stderr, "[dbgsrv] pthread_create failed\n"); return;

@@ -188,13 +188,10 @@ void gpu_dma2_block(Core* core, uint32_t madr, int count, int to_gpu);
 void gpu_present(Core* core);
 void gpu_present_ex(Core* core, int do_blit);
 void gpu_clear_display(Core* core);   // FMV/splash teardown: black the display FB + present (no stale pixels)
-void gpu_blank_display(Core* core);   // zero the display FB rect WITHOUT presenting (caller presents)
 void gpu_native_load_image(Core* core, int x, int y, int w, int h, uint32_t src);
 int  gpu_native_load_vram(Core* core, const char* path);
 void gpu_native_shot(Core* core, const char* path);
-void gpu_repaint(Core* core);
 int  gpu_frame_no(Core* core);
-void gpu_provat_enable(Core* core);
 uint16_t gpu_vram_peek(Core* core, int x, int y);
 // PC-native SCEA decode: baked 4bpp+CLUT asset -> flat RGBA8 at the 640x468 screen positions (text =
 // CLUT color, else transparent black). PSX-free source for gpu_gpu_present_image. `out` = 640*468*4 bytes.
