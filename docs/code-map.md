@@ -78,7 +78,7 @@ Totals: 414 native fns, 212 owned addresses, 107 LIVE / 307 ORPHAN.
 | 0x800499E8 | ORPHAN | `eng_task0_boot` | game/scene/engine_level.cpp:102 | 0x8008A110 0x8008B8F0 0x8009A730 | task-0 INITIAL ENTRY (the engine's first-level bootstrap, registered a… |
 | 0x800499E8 | ORPHAN | `ov_task0_boot` | game/scene/engine_level.cpp:135 |  |  |
 | 0x800499E8 | LIVE | `native_task0_bootstrap` | game/scene/engine_stage.cpp:1432 |  | resolve \BIN\START.BIN natively, record its {LBA,size}, switch task 0 … |
-| 0x8004BD64 | ORPHAN | `ov_obj_pos_compose` | game/world/graphics_bind.cpp:173 |  |  |
+| 0x8004BD64 | ORPHAN | `ov_obj_pos_compose` | game/world/graphics_bind.cpp:174 |  |  |
 | 0x8004CE14 | ORPHAN | `ov_script_vm_4ce14` | game/items/script.cpp:114 | 0x8004CE14 |  |
 | 0x8004CE14 | ORPHAN | `ov_script_vm_4ce14` | game/items/script.h:8 |  |  |
 | 0x8004D338 | ORPHAN | `Inventory::addEntry` | game/items/inventory.cpp:148 |  |  |
@@ -99,9 +99,9 @@ Totals: 414 native fns, 212 owned addresses, 107 LIVE / 307 ORPHAN.
 | 0x80051464 | ORPHAN | `ov_xform_propagate` | game/render/engine_submit.cpp:869 |  |  |
 | 0x80051794 | LIVE | `eng_identity_matrix` | game/scene/engine_init.cpp:20 |  | set an identity 3x3 rotation matrix (0x1000 = 1.0 fixed on the diagona… |
 | 0x800517BC | ORPHAN | `ov_settrans` | game/math/engine_math.cpp:623 |  | write a 0x20-byte vector block: a1/a2/a3 (each sign-extended s16) at a… |
-| 0x800517F8 | ORPHAN | `ov_obj_render_update` | game/world/graphics_bind.cpp:96 |  |  |
+| 0x800517F8 | ORPHAN | `ov_obj_render_update` | game/world/graphics_bind.cpp:97 |  |  |
 | 0x80051B04 | ORPHAN | `ov_cmdenq_probe` | game/render/engine_submit.cpp:271 | 0x80051B04 | PSXPORT_DEBUG=cmdenq — render-command ENQUEUE tap (later-132). gen_fun… |
-| 0x80051B70 | ORPHAN | `ov_obj_record_init` | game/world/graphics_bind.cpp:74 |  |  |
+| 0x80051B70 | ORPHAN | `ov_obj_record_init` | game/world/graphics_bind.cpp:75 |  |  |
 | 0x80051C8C | ORPHAN | `ov_build_xform` | game/render/engine_submit.cpp:780 |  |  |
 | 0x80052078 | ORPHAN | `eng_stage_transition` | game/scene/engine_level.cpp:70 |  | (stageIdx) — the cooperative STAGE TRANSITION: load the next stage's o… |
 | 0x80052078 | ORPHAN | `ov_stage_transition` | game/scene/engine_level.cpp:87 |  |  |
@@ -114,7 +114,7 @@ Totals: 414 native fns, 212 owned addresses, 107 LIVE / 307 ORPHAN.
 | 0x8006C80C | ORPHAN | `CutsceneCamera::yFloor` | game/camera/cutscene_camera.cpp:345 |  | ── yFloor (camera-Y floor clamp, per render mode) ────────────────────… |
 | 0x8006C988 | ORPHAN | `CutsceneCamera::shakeTail` | game/camera/cutscene_camera.cpp:648 |  | ── post-mode TAIL (0x8006C988) — the camera SHAKE state machine ──────… |
 | 0x8006CBA8 | ORPHAN | `CutsceneCamera::initSeedGrp` | game/camera/cutscene_camera.cpp:780 |  |  |
-| 0x8006CBD0 | LIVE | `ov_obj_set_xformblk` | game/world/graphics_bind.cpp:131 |  |  |
+| 0x8006CBD0 | LIVE | `ov_obj_set_xformblk` | game/world/graphics_bind.cpp:132 |  |  |
 | 0x8006D02C | ORPHAN | `CutsceneCamera::lookAt` | game/camera/cutscene_camera.cpp:534 |  |  |
 | 0x8006D2AC | ORPHAN | `CutsceneCamera::distSolve` | game/camera/cutscene_camera.cpp:228 |  | ── distSolve (distance/zoom solver) ──────────────────────────────────… |
 | 0x8006D654 | ORPHAN | `CutsceneCamera::pitch` | game/camera/cutscene_camera.cpp:382 |  | ── pitch (vertical-look height smoother) ─────────────────────────────… |
@@ -157,7 +157,7 @@ Totals: 414 native fns, 212 owned addresses, 107 LIVE / 307 ORPHAN.
 | 0x8007778C | ORPHAN | `ov_cull_wrapper_prep` | game/render/cull.cpp:370 |  | camera-relative cull WRAPPER. Computes the object's delta from the cam… |
 | 0x8007778C | ORPHAN | `ov_cull_wrapper` | game/render/cull.cpp:414 | 0x8007712C |  |
 | 0x80077ACC | ORPHAN | `ov_cull_wrap_77acc` | game/render/cull.cpp:461 | 0x8007712C |  |
-| 0x80077B38 | ORPHAN | `ov_obj_set_geom` | game/world/graphics_bind.cpp:111 |  |  |
+| 0x80077B38 | ORPHAN | `ov_obj_set_geom` | game/world/graphics_bind.cpp:112 |  |  |
 | 0x80077EBC | ORPHAN | `ov_enqueue_probe` | game/render/engine_submit.cpp:211 | 0x80077EBC | PSXPORT_DEBUG=enq — ENQUEUE tap (later-131 NEXT). The render-command P… |
 | 0x800783DC | LIVE | `ov_800783DC` | game/world/pool.cpp:123 | 0x80048D3C | per-area VIEW/SCROLL setup. Calls a leaf (0x80048D3C) with the entry a… |
 | 0x800783DC | LIVE | `ov_783dc_run` | game/world/pool.cpp:317 |  |  |
@@ -178,7 +178,7 @@ Totals: 414 native fns, 212 owned addresses, 107 LIVE / 307 ORPHAN.
 | 0x8007A904 | ORPHAN | `ov_entity_walk_7a904` | game/world/entity.cpp:474 | 0x8007A904 |  |
 | 0x8007A980 | ORPHAN | `ov_spawn_dispatch` | game/world/spawn.cpp:223 | 0x8007A980 |  |
 | 0x8007AA38 | ORPHAN | `ov_replace_dispatch` | game/world/spawn.cpp:395 | 0x8007AA38 |  |
-| 0x8007AAE8 | ORPHAN | `ov_record_alloc_g` | game/world/graphics_bind.cpp:70 |  |  |
+| 0x8007AAE8 | ORPHAN | `ov_record_alloc_g` | game/world/graphics_bind.cpp:71 |  |  |
 | 0x8007AAE8 | ORPHAN | `ov_record_alloc_g` | game/world/graphics_bind.h:10 |  |  |
 | 0x8007B18C | ORPHAN | `ov_8007B18C` | game/world/pool.cpp:52 | 0x8004FB20 0x800798F8 0x8007A810 0x8007AC14 0x8007AC40 0x8007AC6C … | top-level object-pool init. Calls 0x8004FB20 then 0x800798F8; zeroes 5… |
 | 0x8007B18C | LIVE | `ov_pool_init_run` | game/world/pool.cpp:297 |  | Public GATED entries — the native field case-0 prefix (engine_stage.cp… |

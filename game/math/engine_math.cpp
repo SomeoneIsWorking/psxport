@@ -247,7 +247,7 @@ static inline void rotmat_trig(Core* c, int32_t angle, int* s, int* co) {
 }
 static inline int16_t gpf1(int ir0, int ir) { return clamp16s(((int32_t)ir0 * ir) >> 12); }  // MAC=(IR0*IR)>>12, clamp16
 static inline uint8_t lmC(int32_t v) { return (uint8_t)(v < 0 ? 0 : (v > 255 ? 255 : v)); }  // GTE Lm_C
-static void ov_rotmat(Core* c) {
+void ov_rotmat(Core* c) {
   uint32_t a0 = c->r[4], out = c->r[5];
   uint32_t w0 = c->mem_r32(a0);
   int sx,cx,sy,cy,sz,cz;

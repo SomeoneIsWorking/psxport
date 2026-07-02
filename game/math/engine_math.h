@@ -10,4 +10,5 @@ void ov_apply_matlv(Core* c);   // FUN_80084220 — MVMVA the CR0-4 rotation mat
 void ov_rot_x(Core* c);         // FUN_80084D10 — compose an X-axis rotation onto a 3x3 matrix
 void ov_rot_y(Core* c);         // FUN_80084EB0 — compose a  Y-axis rotation onto a 3x3 matrix
 void ov_rot_z(Core* c);         // FUN_80085050 — compose a  Z-axis rotation onto a 3x3 matrix
+void ov_rotmat(Core* c);        // FUN_80085480 — libgte RotMatrix: 3-euler SVECTOR* @a0 -> 3x3 MATRIX* @a1
 #endif

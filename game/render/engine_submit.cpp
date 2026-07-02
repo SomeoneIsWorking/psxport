@@ -720,7 +720,7 @@ void terrain_prep_object_matrix(Core* c, uint32_t node) {
   uint8_t sway1 = c->mem_r8(A2_PARAM + 1);                 // external (set elsewhere)
   c->mem_w32(IR0_STAGE, ir0);
   // build object rotation matrix at scratch SCR from the node's euler angles (node+84/86/88)
-  c->r[4] = node + 84; c->r[5] = SCR; rec_dispatch(c, 0x80085480u);
+  c->r[4] = node + 84; c->r[5] = SCR; ov_rotmat(c);
   // Secondary sway rotation by the host-computed angle bytes (scaled <<2). The recomp body 0x8002AB5C
   // stages these three angle words on its OWN STACK FRAME (r29 -= 56; words at r29+16/20/24), NOT in
   // scratchpad — and passes that stack pointer as 0x80084520's arg. The prior native code wrote them to
@@ -917,7 +917,7 @@ static void xform51128_body(Core* c) {
     c->mem_w32(0x1F800008u, (uint32_t)(int32_t)(int16_t)c->mem_r16(child + 58));
     c->mem_w32(0x1F800010u, (uint32_t)(int32_t)(int16_t)c->mem_r16(child + 60));
     int16_t sentinel = (int16_t)c->mem_r16(child + 6);
-    c->r[4] = child + 8; c->r[5] = 0x1F800020u; rec_dispatch(c, 0x80085480u);                       // ov_rotmat
+    c->r[4] = child + 8; c->r[5] = 0x1F800020u; ov_rotmat(c);                       // ov_rotmat
     c->r[4] = 0x1F800020u; c->r[5] = 0x1F800000u; c->r[6] = 0x1F800040u; ov_mat_mul(c); // ov_mat_mul
     if (sentinel == -1) {                                        // ROOT: parent = this node
       c->r[4] = node + 152; c->r[5] = 0x1F800040u; c->r[6] = child + 24; ov_mat_mul(c);
@@ -1003,7 +1003,7 @@ static void orch597AC_body(Core* c) {
   c->mem_w16(0x1F8000C0u, (uint16_t)HU(node+0x54));
   c->mem_w16(0x1F8000C2u, (uint16_t)HU(node+0x56));
   c->mem_w16(0x1F8000C4u, (uint16_t)HU(node+0x58));
-  c->r[4]=0x1F8000C0u; c->r[5]=0x1F800040u; rec_dispatch(c, 0x80085480u);
+  c->r[4]=0x1F8000C0u; c->r[5]=0x1F800040u; ov_rotmat(c);
   // CPU RotMatrix: angle = (node->byte[0x177]&1) ? node->hu[0x14E] : 0, around Y → 0x1F800020
   uint32_t a1ang = (c->mem_r8(node+0x177) & 1) ? HU(node+0x14E) : 0;
   c->mem_w16(0x1F8000C0u, 0);
@@ -1027,7 +1027,7 @@ static void orch597AC_body(Core* c) {
     c->mem_w16(0x1F8000C0u, (uint16_t)HU(node+0x54));
     c->mem_w16(0x1F8000C4u, 0);
     c->mem_w16(0x1F8000C2u, (uint16_t)HU(node+0x56));
-    c->r[4]=0x1F8000C0u; c->r[5]=0x1F800040u; rec_dispatch(c, 0x80085480u);
+    c->r[4]=0x1F8000C0u; c->r[5]=0x1F800040u; ov_rotmat(c);
     c->r[4]=0x1F800020u; c->r[5]=0x1F800000u; c->r[6]=0x1F800060u; ov_mat_mul(c);
     c->r[4]=0x1F800040u; c->r[5]=0x1F800060u;                      rec_dispatch(c, 0x80084360u);
     c->r[4]=0x1F800060u; c->r[5]=node+0x88; c->r[6]=0x1F800074u;   rec_dispatch(c, 0x80084470u);
@@ -1044,7 +1044,7 @@ static void orch597AC_body(Core* c) {
       int psel = (int)(int16_t)c->mem_r16(child + 6);             // parent select (signed)
       // SetVector(0x1F800000, child->h[0x38/3A/3C]); RotMatrix(child+8 → 0x1F800020); mat 0x1F800040 = 0x1F800020 × 0x1F800000
       Mtx::diagonal(c, 0x1F800000u, (int32_t)R16(child+0x38), (int32_t)R16(child+0x3A), (int32_t)R16(child+0x3C));   // was 0x800517BCu
-      c->r[4]=child+8; c->r[5]=0x1F800020u; rec_dispatch(c, 0x80085480u);
+      c->r[4]=child+8; c->r[5]=0x1F800020u; ov_rotmat(c);
       c->r[4]=0x1F800020u; c->r[5]=0x1F800000u; c->r[6]=0x1F800040u; ov_mat_mul(c);
       if (psel >= 0) {                                            // SIBLING-by-index: parent = node[0xC0 + 4*psel]
         uint32_t p = c->mem_r32(node + 0xC0 + 4u*(uint32_t)psel);
