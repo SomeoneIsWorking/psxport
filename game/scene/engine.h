@@ -110,6 +110,21 @@ public:
   // fieldRun's sm[0x4e]==0xb branch with node = 0x800E8008. Was ov_scene_fade_seq.
   void fadeSequencer(uint32_t node);
 
+  // frameUpdate: per-frame engine tick — the PC-driven game loop's frame body called directly
+  //   from native_step_frame (native_boot.cpp). Runs the still-PSX per-frame update leaf, then
+  //   owns the per-vblank audio (sequencer tick + SPU field advance), fps60 commit, and present
+  //   + pace. Was the free function `ov_frame_update` in game_tomba2.cpp.
+  void frameUpdate();
+
+  // drawOTag: PC-native DrawOTag (libgpu FUN_80081560 equivalent) — the per-frame draw kick.
+  //   Called directly from native_step_frame (top-down PC-driven, NOT an override). Owns the
+  //   engine's decoupled render path: for the FIELD stage builds the world natively via
+  //   Render::sceneNative (real depth); walks the guest OT for un-owned 2D/HUD prims (queued
+  //   into the engine render queue); flushes the queue in engine order via rq_flush. Takes the
+  //   OT head as an explicit parameter (taxi-parameter c->r[4] retired). Was the free function
+  //   `ov_draw_otag` in game_tomba2.cpp.
+  void drawOTag(uint32_t otHead);
+
   // startBinStage: task-0's START.BIN file-table builder (native ISO9660 resolver in place of the
   // PSX cooperative loader FUN_80044BD4). Populates the per-stage LBA/size tables at
   // 0x800BE118 (25 entries), 0x800BE1E0 (3 entries), 0x800BE0F0 (5 entries) + three XA scratchpad

@@ -115,7 +115,7 @@ static void native_step_frame(Core* c, uint32_t f) {
   // present happens here (before the OT submit below) so the VK batch shown is the one DrawOTag built last
   // frame, exactly as the override-era ordering did.
   ffspan_begin();
-  { void ov_frame_update(Core*); ov_frame_update(c); }        // tick + per-vblank audio + present + pace
+  c->engine.frameUpdate();                                    // tick + per-vblank audio + present + pace
   ffspan_end("frameupd");
   xa_audio_trace(c, "post");                                  // CD-vol fade state AFTER tick+mix
   perf_phase_begin(3);   // perf: SCHED-LOGIC = the cooperative scheduler step (the real per-frame GAME logic)
@@ -144,13 +144,13 @@ static void native_step_frame(Core* c, uint32_t f) {
   if ((!c->game->diff_mode || c->game->sbs_render) && c->mem_r16(0x1f80019c) == 0) {
     rc1(c, 0x800815d0, envp + 0x2014);                        // PutDrawEnv (draw area/offset/clip for page 0)
     gpu_set_disp_origin(c, 0, 0);                             // PC-native: present scans the page we draw
-    // DrawOTag, PC-native: call ov_draw_otag DIRECTLY (top-down) instead of interpreting the PSX FUN_80081560.
-    // ov_draw_otag walks the OT to ENUMERATE the leftover guest prims (its draw ORDER is discarded), QUEUES
+    // DrawOTag, PC-native: call Engine::drawOTag DIRECTLY (top-down) instead of interpreting the PSX FUN_80081560.
+    // drawOTag walks the OT to ENUMERATE the leftover guest prims (its draw ORDER is discarded), QUEUES
     // them into the engine render queue (rq_active() is always on), then rq_flush()es the queue in ENGINE
     // order. The interpreted PSX DrawOTag did the walk+queue but NOT the flush (rq_flush only lives in
-    // ov_draw_otag, orphaned by the override-table removal) — so the queue filled every frame and never
-    // drained, and NOTHING 2D reached the VK renderer (the whole front-end rendered black). a0 = OT head.
-    { void ov_draw_otag(Core*); c->r[4] = envp + 0x1ffcu; ov_draw_otag(c); }
+    // Engine::drawOTag, orphaned by the override-table removal) — so the queue filled every frame and never
+    // drained, and NOTHING 2D reached the VK renderer (the whole front-end rendered black). OT head arg.
+    c->engine.drawOTag(envp + 0x1ffcu);
     // ---- DUAL-VIEW second render pass: render the SAME game state via the PSX recomp path into render
     // target 1 (right panel). The engine render is NOT idempotent (its per-frame queues/OT get consumed),
     // so the PSX pass must run from the PRE-render state captured in ov_field_frame (dv_snapshot, before
@@ -160,7 +160,6 @@ static void native_step_frame(Core* c, uint32_t f) {
     // SBS owns BOTH panes (core A | core B); its target-1 batch is core B's render, NOT a PSX re-render of
     // THIS core — so skip the in-engine dualview second pass. g_sbs declared at file scope below.
     if (g_dualview && g_dv_have_pre && !g_sbs) {
-      void ov_draw_otag(Core*);
       dv_capture_post(c);            // save the real post-frame canonical state
       dv_restore_pre(c);             // rewind to the pre-render (post-gameplay) state the PSX pass needs
       rc2(c, 0x80081458, envp, 0x800);                          // ClearOTagR(ot, 0x800)
@@ -171,7 +170,7 @@ static void native_step_frame(Core* c, uint32_t f) {
       gpu_gpu_select_target(1);
       rec_dispatch(c, 0x8003f9a8u);                             // PSX field render orchestrator (full OT build)
       rec_dispatch(c, 0x8010810cu);                             // render submit (faithful to ov_field_frame)
-      c->r[4] = envp + 0x1ffcu; ov_draw_otag(c);                // walk PSX OT -> target-1 batch
+      c->engine.drawOTag(envp + 0x1ffcu);                       // walk PSX OT -> target-1 batch
       gpu_gpu_select_target(0);
       dv_restore_post(c);            // restore the real canonical state (PSX pass fully undone)
       g_dv_have_pre = 0;

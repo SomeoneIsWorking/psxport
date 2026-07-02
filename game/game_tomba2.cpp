@@ -29,6 +29,7 @@
 #include "animation.h"  // PC-native per-object animation-VM subsystem
 #include "input.h"      // PC-native per-frame input/controller subsystem
 #include "menu.h"       // PC-native in-game Options menu subsystem
+#include "scene/engine.h"  // class Engine — this file defines Engine::frameUpdate / Engine::drawOTag
 #include <stdlib.h>
 #include <stdio.h>
 
@@ -109,7 +110,8 @@ static void field_bgm_director(Core* c) {
 // this is the PC-driven game loop's frame body. It runs the still-PSX per-frame update leaf, then OWNS
 // the per-vblank audio, the fps60 commit, and present + pace (the things the now-removed override table
 // used to attach). NOT an override anymore; not static so native_boot can call it top-down.
-void ov_frame_update(Core* c) {
+void Engine::frameUpdate() {
+  Core* c = this->core;
   perf_phase_begin(0);                               // perf: LOGIC = all guest interpreter work + render submit
   rec_dispatch(c, 0x800788ACu);                      // real per-frame state update (still-PSX leaf)
   perf_phase_end(0);
@@ -207,7 +209,8 @@ static void ov_set_geom_screen(Core* c) {       // SetGeomScreen(h) — projecti
 void gpu_blank_display(Core* core);
 extern "C" int g_render_psx;   // engine_render.cpp — A/B compare switch (forces the PSX OT walk)
 extern int g_ot_2d_only;       // gpu_native.cpp — OT walk queues ONLY 2D HUD prims (world/bg owned natively)
-void ov_draw_otag(Core* c) {   // called directly from native_step_frame (PC-driven); NOT an override
+void Engine::drawOTag(uint32_t otHead) {   // called directly from native_step_frame (PC-driven); NOT an override
+  Core* c = this->core;
   // #7/#11 finish: while the DEMO/title front-end is still LOADING its assets (sub-SM task0+0x48 < 2, the
   // s4a load ramp), the title composites its menu/font over whatever VRAM the FMV/SCEA splash left — so the
   // SCEA text / FMV last-frame show through (the one-time hand-off clear can't cover the multi-frame ramp).
@@ -259,7 +262,7 @@ void ov_draw_otag(Core* c) {   // called directly from native_step_frame (PC-dri
     // native 3D render off only for the void — the SOP scene byte is the game's per-beat state, not a magic
     // render constant. (Scene 6 IS a 3D beat: the cliff fading in — gating it off loses the cliff geometry.)
     if (c->mem_r8(0x800BF9B4u) != 5) { c->mRender->sceneNative(); }
-    gpu_dma2_linked_list(c, c->r[4]);
+    gpu_dma2_linked_list(c, otHead);
   } else if (!g_render_psx && (field || cfg_dbg("scenenative"))) {
     c->mRender->sceneNative();
     // The native field path owns the 3D world + backdrop, but the field still submits its 2D OVERLAY
@@ -271,10 +274,10 @@ void ov_draw_otag(Core* c) {   // called directly from native_step_frame (PC-dri
     // through. (scenenativehud kept as a DIAGNOSTIC: full walk incl. world, to A/B the native world
     // render against the PSX 2D-on-top composite.)
     g_ot_2d_only = cfg_dbg("scenenativehud") ? 0 : 1;
-    gpu_dma2_linked_list(c, c->r[4]);
+    gpu_dma2_linked_list(c, otHead);
     g_ot_2d_only = 0;
   } else {
-    gpu_dma2_linked_list(c, c->r[4]);
+    gpu_dma2_linked_list(c, otHead);
   }
   // ADDITIVE native render subsystem (game/render/) — the decoupled "native experience" pass. Fully
   // separate from the PSX path above: it builds the frame from native SCENE DATA (entity lists + camera)
