@@ -1,5 +1,12 @@
 # Findings — tooling / debug server / harness
 
+## codemap.py mis-parsed inline description addresses as owner tags
+- **symptom:** `tools/codemap.py --addr <hex>` reported false owners for many addresses. E.g. `0x8003E264 → ov_transition_e20 [LIVE]` was wrong: ov_transition_e20's real guest address is 0x80107E20, and 0x8003E264 is just a description reference (`// FUN_80107e20 — … 1 effect 0x8003e264 …`). Trap: acting on that mapping would try to "wire" a substrate address as if it were already native.
+- **status:** fixed 7a396b4 (2026-07-02, session 15)
+- **cause:** the parser ran `ADDR_RE.findall(htext) + FUN_RE.findall(htext)` over the WHOLE first header comment line and treated every match as an owned address. Any callee reference / data-block address in the description prose became a false owner.
+- **fix:** owner harvest now runs only on the TAG PORTION of each header line (left of the first `—`/`:`/`- `). For headers without an in-tag address (mostly class methods like `Engine::frameStartTick — per-frame prologue at guest 0x80059D28`), the last-resort scan takes the FIRST address in textual order across the whole comment block, so a description-referenced callee (FUN_8005950C) doesn't outrank the earlier owner declaration (0x80059D28). Net: 228 → 212 owned addresses; all removed entries were description refs.
+- **refs:** tools/codemap.py parse_file tag_portion; commit 7a396b4.
+
 ## recdep / any rec_dispatch hook is BLIND to resident→resident (intra-MAIN) calls
 - **symptom:** `recdep` and ad-hoc `camtrace`-style hooks in `rec_dispatch` show ZERO calls to a resident MAIN function (e.g. the camera 0x8006E3B0/0x8006D02C) even while it demonstrably runs every frame — leading to a WRONG "that code never runs here" conclusion (cost later-290..292 chasing a phantom free-roam camera).
 - **status:** known-issue / measurement caveat (2026-07-01, later-293)
