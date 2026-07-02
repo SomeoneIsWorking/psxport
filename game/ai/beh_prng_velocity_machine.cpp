@@ -28,9 +28,9 @@
 #include <string.h>
 #include "spawn.h"   // world_despawn (FUN_8007A624)
 #include "graphics_bind.h"   // ov_obj_render_update (FUN_800517F8)
+#include "inventory.h"       // class Inventory — c->inventory.give (FUN_8004D4F4)
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
-extern void ov_inventory_give(Core*);   // FUN_8004D4F4 (game/items/inventory.cpp)
 
 namespace {
 
@@ -316,7 +316,7 @@ void beh_prng_velocity_machine(Core* c) {
    goto Lret;
  }
  L7c10: {                                          // node[5]==0
-   c->r[4] = 40; c->r[5] = 1; ov_inventory_give(c);  // FUN_8004D4F4(40, 1) [native]
+   c->inventory.give(40, 1);                         // FUN_8004D4F4(40, 1) [native]
    call2(c, 45, 66, 0x8004ed94u);                    // FUN_8004ED94(45, 66)
    call1(c, s1, 0x8004b0d8u);                        // FUN_8004B0D8(node)
    uint32_t r = call3(c, s1, 0, 0, 0x8004bd04u);     // FUN_8004BD04(node, 0, 0)

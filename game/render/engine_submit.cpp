@@ -754,6 +754,8 @@ void ov_terrain(Core* c) {
   terrain_render_pc(c);
 }
 
+void ov_xform_propagate(Core* c);   // fwd (defined below)
+
 // NATIVE per-object TRANSFORM BUILD — gen_func_80051C8C (later-135). Build the object's render matrix
 // cache at node+0x98 each frame: seed an identity (0x1000 diagonal), apply the three euler rotations
 // (node+0x54/56/58 via the matrix primitives 80084D10/EB0/85050), set the translation node+0xac/b0/b4
@@ -773,7 +775,7 @@ static void build_xform(Core* c) {
   c->mem_w32(node + 172, (uint32_t)(int16_t)c->mem_r16(node + 46));
   c->mem_w32(node + 176, (uint32_t)(int16_t)c->mem_r16(node + 50));
   c->mem_w32(node + 180, (uint32_t)(int16_t)c->mem_r16(node + 54));
-  c->r[4] = node; rec_dispatch(c, 0x80051464u);
+  c->r[4] = node; ov_xform_propagate(c);
 }
 void ov_build_xform(Core* c) {
   build_xform(c);

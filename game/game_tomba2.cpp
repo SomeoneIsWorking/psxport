@@ -307,7 +307,6 @@ void games_tomba2_init(void) {
   { void beh_scene_ui_trigger_register(void);  beh_scene_ui_trigger_register();  }
   { void beh_typed_init_scene_trigger_register(void);  beh_typed_init_scene_trigger_register();  }
   { void beh_pickup_collect_trigger_register(void);  beh_pickup_collect_trigger_register();  }
-  { void inventory_register(void);     inventory_register();     }
   fps60_init();
   void engine_tomba2_init(void);
   engine_tomba2_init();                            // native engine layer (Phase 1: object-list walk)

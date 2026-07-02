@@ -41,6 +41,7 @@
 // top-of-RAM stack window [sp-0x800, sp) — far above all game data.
 #include "core.h"
 #include "cfg.h"
+#include "inventory.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -58,14 +59,12 @@ void rec_dispatch(Core*, uint32_t);     // hybrid call: recomp body if emitted, 
 #define INV_QUESTREF    (INV_BASE + 0x344u)  // 0x800BFBB4 (questref[type])
 #define INV_QUEST_TABLE 0x800A2BE8u          // 12-byte stride
 
-// ---- module API (PC-game-shaped) ------------------------------------------------------------------
-// inventory_count(item)  : current owned count of an item type (0..99)
-// inventory_has(item)    : item owned (count > 0)
-int inventory_count(Core* c, int item) {
+// ---- class Inventory: query API (PC-game-shaped) --------------------------------------------------
+int Inventory::count(int item) const {
   if (item < 0 || item > 0xff) return 0;
-  return c->mem_r8(INV_COUNT + (uint32_t)item);
+  return core->mem_r8(INV_COUNT + (uint32_t)item);
 }
-int inventory_has(Core* c, int item) { return inventory_count(c, item) > 0; }
+int Inventory::has(int item) const { return count(item) > 0; }
 
 // PC-native reimplementation of FUN_8004D338 (inventory_add). Writes are byte-identical to the recomp body.
 static void inventory_add_native(Core* c, uint32_t type, uint32_t amount) {
@@ -146,7 +145,7 @@ static void inv_ab_gate(Core* c, uint32_t addr, void (*native)(Core*), int exclu
 static int s_invverify = -1;
 static inline int invverify_on(void) { if (s_invverify < 0) s_invverify = cfg_dbg("invverify") ? 1 : 0; return s_invverify; }
 
-void ov_inventory_add(Core* c) {          // FUN_8004D338
+void Inventory::addEntry(Core* c) {       // FUN_8004D338
   if (invverify_on() && !s_in_gate) { inv_ab_gate(c, 0x8004D338u, inv_add_body, 0, "invverify"); return; }
   inv_add_body(c);
 }
@@ -159,7 +158,7 @@ static void inv_give_and_flag_body(Core* c) {
   c->r[4] = type; c->r[5] = 2;                 // set_item_flag(type, 2)
   rec_dispatch(c, 0x8004ED0Cu);
 }
-void ov_inventory_give_and_flag(Core* c) {     // FUN_8004D4C4
+void Inventory::giveAndFlagEntry(Core* c) {    // FUN_8004D4C4
   if (invverify_on() && !s_in_gate) { inv_ab_gate(c, 0x8004D4C4u, inv_give_and_flag_body, 1, "invverify"); return; }
   inv_give_and_flag_body(c);
 }
@@ -168,11 +167,20 @@ void ov_inventory_give_and_flag(Core* c) {     // FUN_8004D4C4
 static void inv_give_body(Core* c) {
   inventory_add_native(c, c->r[4], c->r[5]);
 }
-void ov_inventory_give(Core* c) {              // FUN_8004D4F4
+void Inventory::giveEntry(Core* c) {           // FUN_8004D4F4
   if (invverify_on() && !s_in_gate) { inv_ab_gate(c, 0x8004D4F4u, inv_give_body, 1, "invverify"); return; }
   inv_give_body(c);
 }
 
-// ---- registration (ONE line from game_tomba2.cpp init) --------------------------------------------
-void inventory_register(void) {
+// (registration of the class is by value in Core; no init function needed.)
+
+// ---- PC-shape mutators: set the guest ABI regs and route through the static entry (invverify gate).
+void Inventory::add(uint32_t type, uint32_t amount) {
+  core->r[4] = type; core->r[5] = amount; Inventory::addEntry(core);
+}
+void Inventory::give(uint32_t type, uint32_t amount) {
+  core->r[4] = type; core->r[5] = amount; Inventory::giveEntry(core);
+}
+void Inventory::giveAndFlag(uint32_t type, uint32_t amount) {
+  core->r[4] = type; core->r[5] = amount; Inventory::giveAndFlagEntry(core);
 }

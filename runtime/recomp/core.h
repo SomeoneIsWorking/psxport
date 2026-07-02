@@ -18,6 +18,7 @@
 #include "render/screen_fade/screen_fade.h"   // Core owns a ScreenFade instance directly
 #include "scene/engine.h"                     // Core owns an Engine instance (GAME/STAGE driver)
 #include "math/rng.h"                         // Core owns an Rng instance (PSX libc rand LCG)
+#include "items/inventory.h"                  // Core owns an Inventory instance
 
 #ifdef __cplusplus
 
@@ -37,6 +38,7 @@ public:
   ScreenFade screenFade;
   Engine     engine;
   Rng        rng;
+  Inventory  inventory;
 
   uint32_t io_gpustat_toggle = 0;  // GPUSTAT (0x1F801814) even/odd line bit — per-instance HW state
 

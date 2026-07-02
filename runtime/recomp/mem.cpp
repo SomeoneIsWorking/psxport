@@ -36,6 +36,7 @@ Core::Core() {
   screenFade.core = this;
   engine.core     = this;
   rng.core        = this;
+  inventory.core  = this;
 }
 
 // PSXPORT_CW="lo,hi" — host-backtrace watchpoint: when ANY store lands in physical byte range

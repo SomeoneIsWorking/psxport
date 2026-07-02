@@ -1,0 +1,35 @@
+// class Inventory — the PC-native item / inventory-collection subsystem.
+//
+// PROPER OOP: an instance per Core (embedded as `Core::inventory`). Callers use it as
+// `c->inventory.give(type, amount)` — the natural PC-game shape. The FUN_xxx entry-shape
+// wrappers (Core*, args in r[4]/r[5]) remain as static class entrypoints for the
+// `invverify` A/B gate and any still-recomp-shaped caller (repl.cpp `give_only` etc.).
+//
+// State lives in guest memory in the save/state block at 0x800BF870 (memcard-serialized —
+// see inventory.cpp for the field layout). No per-instance C++ state beyond the Core
+// back-pointer wired in Core::Core().
+#pragma once
+#include <cstdint>
+class Core;
+
+class Inventory {
+public:
+  // Back-pointer set once by Core's constructor (same pattern as ScreenFade::core).
+  Core* core = nullptr;
+
+  // Query -------------------------------------------------------------------------------
+  int count(int item) const;                     // 0..99
+  int has(int item) const;                       // count > 0
+
+  // PC-shape mutators (call from native code) --------------------------------------------
+  void add(uint32_t type, uint32_t amount);           // FUN_8004D338 core
+  void give(uint32_t type, uint32_t amount);          // FUN_8004D4F4 — add only
+  void giveAndFlag(uint32_t type, uint32_t amount);   // FUN_8004D4C4 — add + flag emit
+
+  // FUN_xxx entry-shape statics (Core*, args in r[4]/r[5]). These carry the `invverify`
+  // A/B gate; still-recomp-shaped callers (repl.cpp / any leftover rec_dispatch wire)
+  // reach the native path through these.
+  static void addEntry(Core* c);          // FUN_8004D338
+  static void giveEntry(Core* c);         // FUN_8004D4F4
+  static void giveAndFlagEntry(Core* c);  // FUN_8004D4C4
+};

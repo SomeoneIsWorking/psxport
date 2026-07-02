@@ -165,9 +165,9 @@ long native_repl_read(Core* c, uint32_t f) {
       for (int i = 0; i < n; i++) {
         uint32_t t = (ty >= 0) ? (uint32_t)ty : (uint32_t)vt[i];
         uint32_t m = (am >= 0) ? (uint32_t)am : (ty >= 0 ? 1u : (uint32_t)va[i]);
-        rc2(c, 0x8004D338u, t, m);    // inventory_add core
-        rc2(c, 0x8004D4F4u, t, m);    // give_only
-        rc2(c, 0x8004D4C4u, t, m);    // give_and_flag
+        c->inventory.add(t, m);          // FUN_8004D338 core (via invverify gate)
+        c->inventory.give(t, m);         // FUN_8004D4F4 give_only
+        c->inventory.giveAndFlag(t, m);  // FUN_8004D4C4 give_and_flag
       }
       fprintf(stderr, "[repl] invtest: fired %d vector(s) through inventory overrides\n", n * 3); }
     else if (!strcmp(cmd, "newgame")) { g_nav_newgame = 1; fprintf(stderr, "[repl] newgame: pulsing to GAME prologue\n"); return 100000; }
