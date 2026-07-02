@@ -33,6 +33,7 @@ Core::Core() {
   engine.font.core = this;              // Engine-owned boot-time font/text init subsystem
   engine.animation.core = this;         // Engine-owned per-object animation-VM stepper
   engine.asset.core = this;             // Engine-owned asset loader subsystem
+  engine.musicCoord.core = this;        // Engine-owned dialog↔music coordination
   rng.core        = this;
   inventory.core  = this;
   // Render umbrella (owned by pointer): allocate, wire its back-pointer + each embedded sub-subsystem.

@@ -38,7 +38,7 @@ void pad_repl_tap(Core* c, uint16_t active_low_mask, int n);  // pad_input.cpp (
 // Native XA voice/BGM clip player (xa_stream.c) owns task slot 2 — it replaced the FUN_8001cfc8
 // streaming-reader coroutine. The scheduler skips slot 2 while owned and reflects clip completion
 // into the task-2 state byte (the cutscene waits `while (DAT_801fe0e0 != 0)`).
-void xa_dialog_coord(Core* c);          // dialog-vs-ingame-music coordination (game/audio/music_dialog_coord.cpp)
+// class MusicCoord (game/audio/music_coord.h) — reached as c->engine.musicCoord.tick() per frame
 void xa_audio_trace(Core* c, const char* tag);    // CD-vol fade + XA lifecycle trace (cd_override.cpp)
 
 // The native cooperative-task scheduler (ov_switch + native_scheduler_step — the FUN_80080880/
@@ -127,7 +127,7 @@ static void native_step_frame(Core* c, uint32_t f) {
   native_scheduler_step(c);                                   // <- replaces FUN_80051e60 (BIOS scheduler)
   ffspan_end("scheduler");
   perf_phase_end(3);
-  xa_dialog_coord(c);                                         // dialogs stop/restore ingame music
+  c->engine.musicCoord.tick();                                // dialogs stop/restore ingame music
   xa_audio_trace(c, "coord");                                 // CD-vol fade state AFTER coord
   rc1(c, 0x80080f6c, 0);                                      // draw sync
   rc0(c, 0x800506d0);                                         // task sleep-countdown (re-arm 1->2)
@@ -295,7 +295,7 @@ static void ov_game_main(Core* c) {
   // coroutine longjmps back to the native scheduler. (Was the removed address-keyed override table.)
   // BGM start/stop (FUN_80074BF8 / FUN_80074E48) are now OWNED PC-native by engine/sound.cpp
   // (sound_register, called from games_tomba2_init). The instant-CD "cut looping ingame music when a
-  // dialog tone starts" hook (xa_music_cut_if_dialog) moved into ov_sound_play_bgm there. The REPL
+  // dialog tone starts" hook (MusicCoord::cutIfDialog) moved into ov_sound_play_bgm there. The REPL
   // `bgm`/`bgmstop` commands still rc1/rc0 those addresses directly (now routed through the overrides).
 
   // Frame budget: an explicit PSXPORT_NATIVE_FRAMES always wins (headless tests). Otherwise, when

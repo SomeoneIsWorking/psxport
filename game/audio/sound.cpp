@@ -35,7 +35,7 @@
 
 void rec_super_call(Core*, uint32_t);   // interpret the original PSX body (A/B oracle / super-call)
 void rec_dispatch(Core*, uint32_t);     // hybrid call: recomp body if emitted, else interpret
-void xa_music_cut_if_dialog(Core*);     // music_dialog_coord.cpp: cut looping ingame music when a dialog tone starts
+// class MusicCoord (game/audio/music_coord.h) — cutIfDialog reached as c->engine.musicCoord.cutIfDialog()
 
 // ---- engine sound STATE (the guest fields this module owns) ---------------------------------------
 #define SND_SONG        0x800BED80u   // current-song index (s16; 0xFFFF = none)
@@ -283,7 +283,7 @@ static inline int verify_on(void) { if (s_verify < 0) s_verify = cfg_dbg("soundv
 // here is the instant-CD dialog-music cut hook (was native_boot ov_bgm_start) + the clean API.
 void ov_sound_play_bgm(Core* c) {
   rec_super_call(c, A_PLAY_BGM);                      // libsnd sequencer start (the leaf-coupled body)
-  xa_music_cut_if_dialog(c);                          // engine glue: cut looping ingame music on a dialog tone
+  c->engine.musicCoord.cutIfDialog();                 // engine glue: cut looping ingame music on a dialog tone
   // NB: the audible PC-native BGM is driven by the field_bgm_director in game_tomba2.cpp (per-frame,
   // off the GAME stage + live area bundle), NOT here — this override is dead in the no-override
   // architecture (PSX never calls PC), so a hook here would never fire. See later-218.

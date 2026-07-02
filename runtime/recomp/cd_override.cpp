@@ -234,15 +234,14 @@ void ov_cd_dc40(Core* c) { cd_dc40_sync(c, c->r[A0], c->r[A1], c->r[A2]); }
 // the dialog tone — the audible bug. Mod: while a dialog tone is the current song, keep the
 // looping ingame music suppressed and remembered; resume it once the dialog ends. One-shot voice
 // clips are unaffected (they ARE the dialog audio).
-// dialog_tone_active / music_fade_in / xa_music_cut_if_dialog / xa_dialog_coord (the
-// dialog-vs-ingame-music coordination logic) moved to game/audio/music_dialog_coord.cpp
-// (2026-07 restructure) — that is game AUDIO/DIALOG DESIGN behavior, not CD-controller HLE.
-int dialog_tone_active(Core* c);   // game/audio/music_dialog_coord.cpp
-void music_fade_in(Core* c);   // game/audio/music_dialog_coord.cpp
+// The dialog-vs-ingame-music coordination logic (dialog tone detection, fade-in ramp, per-frame
+// tick and BGM-start cut) moved to class MusicCoord in game/audio/music_coord.cpp (2026-07
+// restructure) — that is game AUDIO/DIALOG DESIGN behavior, not CD-controller HLE. Reached via
+// c->engine.musicCoord.{dialogToneActive/musicFadeIn/…}.
 
 // Enable CD->SPU mixing (libsnd SpuSetCommonAttr via FUN_8001cf00(1)); needed for the SPU to
 // actually mix the decoded XA (Beetle spu.c gates on SPUControl bit0). Non-static: also called
-// from xa_dialog_coord (game/audio/music_dialog_coord.cpp) on the dialog-end resume path.
+// from MusicCoord::tick() (game/audio/music_coord.cpp) on the dialog-end resume path.
 void cd_to_spu_mix(Core* c, int on) { c->r[A0] = on ? 1 : 0; rec_dispatch(c, 0x8001cf00u); }
 
 // Diagnostic: trace the game's CD-volume fade state + XA stream lifecycle, on change only.
@@ -271,21 +270,21 @@ static void ov_voice_play(Core* c) {
     fprintf(stderr, "[voice_play] chan=%u [%u..%u] loop=%d ra=%08X\n", chan, start, end, loop, c->r[31]);
   if (loop) {                                       // looping clip == ingame/area background music
     c->game->cd.pending_music = 1; c->game->cd.pm_chan = chan; c->game->cd.pm_start = start; c->game->cd.pm_end = end;
-    if (dialog_tone_active(c)) return;               // suppress during a dialog; resumed by xa_dialog_coord
+    if (c->engine.musicCoord.dialogToneActive()) return;   // suppress during a dialog; resumed by MusicCoord::tick
   }
   xa_stream_play(chan, start, end, loop);
   c->mem_w16(0x801fe0e0, 2);                            // task-2 state = running (cutscene wait gate)
   cd_to_spu_mix(c, 1);
-  if (loop) music_fade_in(c);                         // ingame music fades in from 0 (instant-CD mod)
+  if (loop) c->engine.musicCoord.musicFadeIn();       // ingame music fades in from 0 (instant-CD mod)
 }
 
-// xa_music_cut_if_dialog / xa_dialog_coord moved to game/audio/music_dialog_coord.cpp (see the
-// header comment there); this file keeps only the CD-controller HLE they call into.
+// MusicCoord::cutIfDialog / MusicCoord::tick moved to game/audio/music_coord.cpp (see the header
+// comment there); this file keeps only the CD-controller HLE they call into.
 
 // 0x8001CF2C FUN_8001cf2c: stop the current voice/BGM clip.
 static void ov_voice_stop(Core* c) {
   xa_stream_stop(); c->mem_w16(0x801fe0e0, 0);
-  // EXPLICIT stop: forget any remembered looping music so the per-frame xa_dialog_coord can't
+  // EXPLICIT stop: forget any remembered looping music so the per-frame MusicCoord::tick can't
   // resurrect it. Without this, navigating the front-end menus (title<->load<->options, each exit
   // runs 0x8001cf2c) stopped the looping menu clip then immediately had it RE-PLAYED by the
   // dialog-coord resume (pending_music was still set) — the audible "menu music starts over instead
@@ -293,7 +292,7 @@ static void ov_voice_stop(Core* c) {
   // this fn) and keeps pending_music, so its resume is unaffected. Guard on !dialog: during an
   // in-game dialog the area music is suppressed+pending, and a mid-dialog 0x8001cf2c (line change)
   // must NOT forget it, or it wouldn't resume when the dialog ends.
-  if (!dialog_tone_active(c)) c->game->cd.pending_music = 0;
+  if (!c->engine.musicCoord.dialogToneActive()) c->game->cd.pending_music = 0;
   c->r[A0] = 0; rec_dispatch(c, 0x8001cf00u);        // CD->SPU mix off
 }
 

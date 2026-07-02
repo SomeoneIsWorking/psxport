@@ -170,7 +170,7 @@ set(PORT_SRC
   game/ui/engine_bav.cpp
   game/items/save.cpp
   game/audio/sound.cpp
-  game/audio/music_dialog_coord.cpp
+  game/audio/music_coord.cpp
   game/scene/engine_init.cpp
   game/ui/engine_font.cpp
   game/scene/engine_level.cpp
