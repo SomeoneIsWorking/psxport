@@ -42,29 +42,3 @@ static void t2_call3(Core* c, uint32_t addr, uint32_t a0, uint32_t a1, uint32_t 
   rec_dispatch(c, addr);
   c->r[4] = s4; c->r[5] = s5; c->r[6] = s6;
 }
-
-void ov_options_menu(Core* c) {
-  if (cfg_dbg("ui")) {                                // PSXPORT_DEBUG=ui: confirm the page-3 handler is reached
-    static int n = 0; if (!n++) fprintf(stderr, "[ui] FUN_8007b45c reached (game Options selected)\n");
-  }
-  if (!rmlui_overlay_inited()) { rec_super_call(c, 0x8007B45Cu); return; }  // no overlay -> faithful menu
-  static int announced = 0;
-  if (!announced++) fprintf(stderr, "[ui] in-game Options -> PC-native overlay (Circle=back, Triangle=close)\n");
-  rmlui_overlay_set_options_mode(1);
-  rmlui_overlay_set_visible(1);                       // OUR menu IS the options screen now (no game draw)
-  uint16_t edge = c->mem_r16(T2_PAD_EDGE);
-  uint32_t task = c->mem_r32(T2_TASK_PTR);
-  if (edge & PAD_CIRCLE) {                            // back to the pause menu (FUN_8007b45c substate-0 cancel)
-    t2_call3(c, T2_SFX_FN, 0x14, 0xFFF7, 0);
-    c->mem_w8(task + 0x6B, 1);
-    c->mem_w8(T2_MENU_CURSOR, 0);
-    c->mem_w8(T2_MENU_DIRTY, 1);
-    rmlui_overlay_set_options_mode(0);
-    rmlui_overlay_set_visible(0);
-  } else if (edge & PAD_TRIANGLE) {                   // close the whole pause menu (FUN_8007b45c Triangle exit)
-    t2_call3(c, T2_SFX_FN, 0x11, 0, 0);
-    c->mem_w8(task + 0x6B, 2);
-    rmlui_overlay_set_options_mode(0);
-    rmlui_overlay_set_visible(0);
-  }
-}

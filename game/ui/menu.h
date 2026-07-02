@@ -5,5 +5,4 @@
 #ifndef ENGINE_MENU_H
 #define ENGINE_MENU_H
 struct Core;
-void ov_options_menu(Core* c);   // FUN_8007B45C — in-game Options submenu → PC-native overlay
 #endif

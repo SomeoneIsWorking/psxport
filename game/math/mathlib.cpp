@@ -69,18 +69,3 @@ uint32_t Bit::test868(int32_t idx) {
   c->r[2] = mine;
   return mine;
 }
-
-void ov_rand(Core* c) {
-  static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("randverify") ? 1 : 0;
-  if (!s_v) { c->r[2] = rand_lcg(c); return; }
-  uint32_t st0 = c->mem_r32(0x80105EE8u);
-  uint32_t mine = rand_lcg(c); uint32_t st_n = c->mem_r32(0x80105EE8u);
-  c->mem_w32(0x80105EE8u, st0);                      // restore
-  rec_super_call(c, 0x8009A450u);
-  static long ng = 0, nb = 0;
-  if (c->r[2] != mine || c->mem_r32(0x80105EE8u) != st_n) {
-    if (nb++ < 20) fprintf(stderr, "[randverify] MISMATCH v0 mine=%x oracle=%x state mine=%x oracle=%x\n",
-                          mine, (uint32_t)c->r[2], st_n, c->mem_r32(0x80105EE8u));
-  } else if (++ng % 20000 == 0) fprintf(stderr, "[randverify] %ld matches\n", ng);
-  c->r[2] = mine; c->mem_w32(0x80105EE8u, st_n);     // keep native
-}

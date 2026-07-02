@@ -4,5 +4,4 @@
 #ifndef ENGINE_INPUT_H
 #define ENGINE_INPUT_H
 struct Core;
-void ov_input_dispatch_931c0(Core* c);   // FUN_800931C0 — per-frame input/controller-state processor
 #endif

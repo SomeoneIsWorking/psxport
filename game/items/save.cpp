@@ -133,48 +133,5 @@ void save_dispatch_native(Core* c) {
   save_run_handler(c, c->r[R_A0]);
 }
 
-// ------------------------------------------------------------------------------------------------
-// saveverify gate (lazy REPL channel `saveverify`) — NON-DESTRUCTIVE dispatch-decision check.
-//
-// The save/load page handlers (esp. SAVE-EXECUTE) can YIELD across frames (libmcrd commits the write
-// over multiple frames), so a snapshot/rollback/super-call A/B that DOUBLE-RUNS the handler is unsafe
-// here (a yield in the native pass would longjmp out before the rollback). What this module OWNS is the
-// dispatch GLUE — the bounds check + table[substate] handler resolution + the prologue-frame tail-call —
-// so the gate verifies exactly that, WITHOUT running the handler twice: before dispatching, it confirms
-// the native body's chosen handler equals the address the recomp dispatcher's own `jr table[substate]`
-// would take (read the SAME table the same way), and that the frame-store layout matches the prologue.
-// The handler then runs exactly ONCE (the real native dispatch). This is sound for yielding handlers and
-// is the correct correctness gate for transcribed dispatch glue.
-// ------------------------------------------------------------------------------------------------
-void ov_save_dispatch(Core* c) {
-  static int s_v = -1;
-  if (s_v < 0) s_v = cfg_dbg("saveverify") ? 1 : 0;
-
-  if (s_v) {
-    uint32_t task = c->r[R_A0];
-    uint32_t substate = c->mem_r8(task + 1);
-    // The recomp dispatcher (FUN_80036DFC) computes: if substate<6 -> handler=table[substate]; jr it;
-    // else -> epilogue no-op return. Mirror that EXACT read and compare to what the native body picks.
-    uint32_t mine = (substate < (uint32_t)SAVE_NUM_STATES)
-                        ? c->mem_r32(SAVE_HANDLER_TBL + substate * 4u)
-                        : 0u;  // 0 = the no-op return path
-    uint32_t oracle = (substate < (uint32_t)SAVE_NUM_STATES)
-                          ? c->mem_r32(SAVE_HANDLER_TBL + substate * 4u)  // the table the recomp `jr` reads
-                          : 0u;
-    static long ng = 0, nb = 0, hits = 0;
-    if (hits++ < 200)
-      fprintf(stderr, "[saveverify] HIT #%ld substate=%u handler=%08x task=%08x ra=%08x\n",
-              hits, substate, mine, task, c->r[R_RA]);
-    if (mine != oracle) {
-      if (nb++ < 40)
-        fprintf(stderr, "[saveverify] MISMATCH substate=%u mine=%08x oracle=%08x\n", substate, mine, oracle);
-    } else if (++ng % 20 == 0) {
-      fprintf(stderr, "[saveverify] %ld dispatch-decisions match, 0 mismatches\n", ng);
-    }
-  }
-
-  save_dispatch_native(c);   // run the resolved page handler exactly ONCE (the real PC-native dispatch)
-}
-
 }  // namespace
 

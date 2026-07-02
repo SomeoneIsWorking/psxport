@@ -3,5 +3,4 @@
 #ifndef ENGINE_HITBOX_H
 #define ENGINE_HITBOX_H
 struct Core;
-void ov_hitbox_3b220(Core* c);  // FUN_8003B220 — 2D box / hitbox-corner builder (a0=dst, a1=base, a2=params)
 #endif

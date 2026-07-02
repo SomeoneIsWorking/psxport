@@ -67,39 +67,3 @@ static void player_move_56b48(Core* c) {
     c->r[2] = f;                                      // else-branch falls through with v0 = masked byte
   }
 }
-
-// playerverify — full RAM+scratchpad A/B gate (like the scriptvm/pad931c0 gates). Run native, snapshot,
-// roll back, run rec_super_call, compare. FUN_80056B48's own 24-byte stack frame [sp-24, sp) is excluded
-// (the gen prologue saves ra there; the native body never touches the guest stack). 0x80054650 (the only
-// callee, dispatched the same way both paths) does its work in guest RAM/scratchpad which the A/B covers.
-void ov_player_move(Core* c) {
-  static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("playerverify") ? 1 : 0;
-  if (!s_v) { player_move_56b48(c); return; }
-  static uint8_t* ram0 = (uint8_t*)malloc(0x200000);
-  static uint8_t* ramN = (uint8_t*)malloc(0x200000);
-  uint8_t spad0[0x400], spadN[0x400];
-  uint32_t regs0[32]; memcpy(regs0, c->r, sizeof regs0);
-  uint32_t a0 = c->r[4], a1 = c->r[5];
-  memcpy(ram0, c->ram, 0x200000); memcpy(spad0, c->scratch, 0x400);
-  player_move_56b48(c);
-  uint32_t v0_n = c->r[2];
-  memcpy(ramN, c->ram, 0x200000); memcpy(spadN, c->scratch, 0x400);
-  memcpy(c->ram, ram0, 0x200000); memcpy(c->scratch, spad0, 0x400); memcpy(c->r, regs0, sizeof regs0);
-  rec_super_call(c, 0x80056B48u);
-  uint32_t v0_o = c->r[2];
-  // Exclude the STACK SCRATCH below entry sp. FUN_80056B48 saves ra at [sp-24,sp), and on the common
-  // (flag363==0 && flag97==0) path it dispatches the settle helper 0x80054650 which runs in BOTH the
-  // native and the rec_super_call pass and leaves DIFFERENT transient values in its own deeper frame
-  // (the same A/B artifact documented for scriptvm/pad931c0: a twice-run sub-call's below-sp scratch
-  // legitimately differs). The guest stack lives at the top of RAM (entry sp ~0x1FE8F0), far above ALL
-  // game data (scene globals 0x0E7E80, pools <=0x102500), so excluding [sp-0x800, sp) cannot mask a
-  // behavioral bug — any real divergence would land in persistent RAM above sp (none does) or scratchpad.
-  uint32_t sp = regs0[29] & 0x1FFFFFu, flo = (sp >= 0x800) ? sp - 0x800 : 0;
-  int ro = -1; for (uint32_t a = 0; a < 0x200000; a++) if (c->ram[a] != ramN[a] && !(a >= flo && a < sp)) { ro = (int)a; break; }
-  int so = -1; for (uint32_t a = 0; a < 0x400; a++) if (c->scratch[a] != spadN[a]) { so = (int)a; break; }
-  static long ng = 0, nb = 0;
-  if (ro >= 0 || so >= 0 || v0_n != v0_o) {
-    if (nb++ < 40) fprintf(stderr, "[playerverify] MISMATCH a0=%08x a1=%x v0 n=%x o=%x ram@%x spad@%x sp=%x\n",
-                           a0, a1, v0_n, v0_o, ro, so, sp);
-  } else if (++ng % 500 == 0) fprintf(stderr, "[playerverify] %ld matches (last a0=%08x)\n", ng, a0);
-}

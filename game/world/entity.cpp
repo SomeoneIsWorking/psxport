@@ -333,33 +333,6 @@ static void sm40558(Core* c) {
   // st other (>3) -> @a48
 }
 
-void ov_sm40558(Core* c) {
-  static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("sm40558") ? 1 : 0;
-  if (!s_v) { sm40558(c); return; }
-  static uint8_t* ram0 = (uint8_t*)malloc(0x200000);
-  static uint8_t* ramN = (uint8_t*)malloc(0x200000);
-  uint8_t spad0[0x400], spadN[0x400];
-  uint32_t regs0[32]; memcpy(regs0, c->r, sizeof regs0);
-  uint32_t obj = c->r[4];
-  memcpy(ram0, c->ram, 0x200000); memcpy(spad0, c->scratch, 0x400);
-  sm40558(c);
-  memcpy(ramN, c->ram, 0x200000); memcpy(spadN, c->scratch, 0x400);
-  memcpy(c->ram, ram0, 0x200000); memcpy(c->scratch, spad0, 0x400); memcpy(c->r, regs0, sizeof regs0);
-  rec_super_call(c, 0x80040558u);
-  // Same family rationale as child40410/gridresolve: every dispatched callee runs in BOTH passes and leaves
-  // transient residue in its own stack frame below entry sp; FUN_80040558's own 24-byte frame is also dead
-  // below sp on return. Exclude [sp-0x800, sp) (sp ~0x1FE9xx, RAM end 0x200000 — far above all game data;
-  // a real divergence alters persistent state below). This fn returns void (no v0 to compare).
-  uint32_t sp = regs0[29] & 0x1FFFFFu, flo = (sp >= 0x800) ? sp - 0x800 : 0;
-  int ro = -1; for (uint32_t a = 0; a < 0x200000; a++) if (c->ram[a] != ramN[a] && !(a >= flo && a < sp)) { ro = (int)a; break; }
-  int so = -1; for (uint32_t a = 0; a < 0x400; a++) if (c->scratch[a] != spadN[a]) { so = (int)a; break; }
-  static long ng = 0, nb = 0;
-  if (ro >= 0 || so >= 0) {
-    if (nb++ < 40) fprintf(stderr, "[sm40558] MISMATCH obj=%08x st=%d s5=%d v94=%d ram@%x spad@%x sp=%x\n",
-                           obj, c->mem_r8(obj+4), c->mem_r8(obj+5), c->mem_r8(obj+94), ro, so, sp);
-  } else if (++ng % 200 == 0) fprintf(stderr, "[sm40558] %ld matches\n", ng);
-}
-
 // FUN_8003FD10 — per-object OSCILLATE / FRAME-TOGGLE sub-behavior (one of sm40558 STATE-1's obj[5] jump-table
 // handlers JT1[0], reached ~thousands×/run from the hot active-behavior path). a0 = obj. NO GTE, NO render
 // packets — pure object/scratchpad memory ops + ONE dispatched callee (0x8009A450 = ov_rand, owned). A
@@ -438,53 +411,4 @@ static void entity_walk_7a904(Core* c) {
       n = next;
     }
   }
-}
-
-void ov_entity_walk_7a904(Core* c) {
-  static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("walkverify") ? 1 : 0;
-  if (!s_v) { entity_walk_7a904(c); return; }
-  static uint8_t* ram0 = (uint8_t*)malloc(0x200000);
-  static uint8_t* ramN = (uint8_t*)malloc(0x200000);
-  uint8_t spad0[0x400], spadN[0x400];
-  uint32_t regs0[32]; memcpy(regs0, c->r, sizeof regs0);
-  memcpy(ram0, c->ram, 0x200000); memcpy(spad0, c->scratch, 0x400);
-  entity_walk_7a904(c);
-  memcpy(ramN, c->ram, 0x200000); memcpy(spadN, c->scratch, 0x400);
-  memcpy(c->ram, ram0, 0x200000); memcpy(c->scratch, spad0, 0x400); memcpy(c->r, regs0, sizeof regs0);
-  rec_super_call(c, 0x8007A904u);
-  // Same family rationale as disp26c88/sm40558: every dispatched handler runs in BOTH passes and leaves
-  // transient residue in its own stack frame below entry sp (the native loop calls handlers at the entry
-  // sp; the recomp body decrements sp by 24 first, so handler frames land 24 bytes apart between the two
-  // runs). FUN_8007a904's own 24-byte frame is also dead below sp on return. Exclude [sp-0x800, sp) (sp
-  // ~0x1FExxx, RAM end 0x200000 — far above ALL pool/game data; a real divergence alters persistent state).
-  uint32_t sp = regs0[29] & 0x1FFFFFu, flo = (sp >= 0x800) ? sp - 0x800 : 0;
-  int ro = -1; for (uint32_t a = 0; a < 0x200000; a++) if (c->ram[a] != ramN[a] && !(a >= flo && a < sp)) { ro = (int)a; break; }
-  int so = -1; for (uint32_t a = 0; a < 0x400; a++) if (c->scratch[a] != spadN[a]) { so = (int)a; break; }
-  static long ng = 0, nb = 0;
-  if (ro >= 0 || so >= 0) {
-    if (nb++ < 40) fprintf(stderr, "[walkverify] MISMATCH ram@%x spad@%x sp=%x\n", ro, so, sp);
-  } else if (++ng % 50 == 0) fprintf(stderr, "[walkverify] %ld matches\n", ng);
-}
-
-void ov_osc_fd10(Core* c) {
-  static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("fd10") ? 1 : 0;
-  if (!s_v) { osc_fd10(c); return; }
-  static uint8_t* ram0 = (uint8_t*)malloc(0x200000);
-  static uint8_t* ramN = (uint8_t*)malloc(0x200000);
-  uint8_t spad0[0x400], spadN[0x400];
-  uint32_t regs0[32]; memcpy(regs0, c->r, sizeof regs0);
-  uint32_t obj = c->r[4];
-  memcpy(ram0, c->ram, 0x200000); memcpy(spad0, c->scratch, 0x400);
-  osc_fd10(c);
-  memcpy(ramN, c->ram, 0x200000); memcpy(spadN, c->scratch, 0x400);
-  memcpy(c->ram, ram0, 0x200000); memcpy(c->scratch, spad0, 0x400); memcpy(c->r, regs0, sizeof regs0);
-  rec_super_call(c, 0x8003FD10u);
-  uint32_t sp = regs0[29] & 0x1FFFFFu, flo = (sp >= 0x800) ? sp - 0x800 : 0;
-  int ro = -1; for (uint32_t a = 0; a < 0x200000; a++) if (c->ram[a] != ramN[a] && !(a >= flo && a < sp)) { ro = (int)a; break; }
-  int so = -1; for (uint32_t a = 0; a < 0x400; a++) if (c->scratch[a] != spadN[a]) { so = (int)a; break; }
-  static long ng = 0, nb = 0;
-  if (ro >= 0 || so >= 0) {
-    if (nb++ < 40) fprintf(stderr, "[fd10] MISMATCH obj=%08x p6=%d ram@%x spad@%x sp=%x\n",
-                           obj, c->mem_r8(obj+6), ro, so, sp);
-  } else if (++ng % 200 == 0) fprintf(stderr, "[fd10] %ld matches\n", ng);
 }

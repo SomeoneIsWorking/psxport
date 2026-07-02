@@ -292,12 +292,6 @@ void ov_sound_play_bgm(Core* c) {
 void ov_sound_stop_bgm(Core* c) {
   rec_super_call(c, A_STOP_BGM);
 }
-// SFX / song-id ROUTER — fully OWNED PC-native (pure control flow; 0-diff verified via `soundverify`).
-void ov_sound_play_sfx(Core* c) {
-  if (s_sfx_reenter) { s_sfx_reenter = 0; rec_super_call(c, A_PLAY_SFX); return; }  // inner dispatch -> gen body
-  if (verify_on()) { sound_verify(c, A_PLAY_SFX, play_sfx_body, "play_sfx"); return; }
-  play_sfx_body(c);
-}
 
 // ---- public API (clean PC-game audio entry points) -----------------------------------------------
 // The engine-facing names; the engine can call them directly once more callers are owned. They marshal

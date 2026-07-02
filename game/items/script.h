@@ -5,5 +5,4 @@
 #ifndef ENGINE_SCRIPT_H
 #define ENGINE_SCRIPT_H
 struct Core;
-void ov_script_vm_4ce14(Core* c);   // FUN_8004CE14 — per-object script-VM tick
 #endif

@@ -7,7 +7,4 @@
 struct Core;
 void ov_child_spawn_40410(Core* c);   // FUN_80040410 — per-object child-node spawn / sub-object builder
 // FUN_80026C88 moved to ObjectTable::dispatch — reach via c->engine.objectTable.dispatch()
-void ov_sm40558(Core* c);             // FUN_80040558 — per-object state-machine head
-void ov_osc_fd10(Core* c);            // FUN_8003FD10 — per-object oscillate / frame-toggle sub-behavior
-void ov_entity_walk_7a904(Core* c);   // FUN_8007A904 — per-frame entity-list walk (native object driver)
 #endif

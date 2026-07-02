@@ -43,10 +43,6 @@ static void eng_load_stage(Core* c) {
   c->r[2] = (int32_t)stage;                                            // (recomp returns param_2; harmless)
 }
 
-void ov_load_stage(Core* c) {
-  eng_load_stage(c);
-}
-
 // FUN_80052078(stageIdx) — the cooperative STAGE TRANSITION: load the next stage's overlay and RESTART
 // task 0 at its new entry. The engine OWNS the transition; the actual overlay read stays the retained PSX
 // CD content (dispatched through eng_load_stage / FUN_800450bc). Reimplemented PC-native, NOT transcribed:
@@ -82,10 +78,6 @@ static void eng_stage_transition(Core* c) {
   c->r[16] = s0; c->r[29] = sp; c->r[31] = ra;      // epilogue: restore s0/sp/ra (for the boot no-op-return path)
   c->r[4] = 0xff000000u;                            // ChangeThread handle arg
   ov_switch(c);                                     // yield (mid-game) / no-op return (boot) — native
-}
-
-void ov_stage_transition(Core* c) {
-  eng_stage_transition(c);
 }
 
 // FUN_800499e8 — task-0 INITIAL ENTRY (the engine's first-level bootstrap, registered as task 0 by
@@ -132,10 +124,6 @@ static void eng_task0_boot(Core* c) {
   c->r[29] = sp;                                     // sp += 0x30
 }
 
-void ov_task0_boot(Core* c) {
-  eng_task0_boot(c);
-}
-
 // =================================================================================================
 // FUN_800753D4 — per-area CEL-GROUP LOAD-AND-WAIT (`ov_cel_load_wait`). Owned PC-native (prologue), with
 // the cross-frame DMA-wait poll loop handed back IN-CONTEXT via the coro-redirect handshake (later-169).
@@ -174,40 +162,3 @@ void ov_task0_boot(Core* c) {
 // content reads, and FUN_80096590 is itself an existing native override.
 // =================================================================================================
 static int32_t sext16(uint32_t v) { return (int32_t)(int16_t)(v & 0xffff); }
-
-void ov_cel_load_wait(Core* c) {
-  int s_v = cfg_dbg("celloadverify") ? 1 : 0;   // live-read so REPL `debug` mid-run takes effect
-  uint32_t out = c->r[4], desc = c->r[5], cbarg = c->r[6];
-  uint32_t ra = c->r[31], sp = c->r[29], s0_in = c->r[16], s1_in = c->r[17];
-
-  // ---- prologue (0x800753d4..0x800753ec): build the MIPS frame byte-faithfully so the recomp loop's
-  //      epilogue (lw ra/s1/s0; sp+=0x20) restores correctly after the redirect. ----
-  c->r[29] = sp - 0x20;
-  c->mem_w32(c->r[29] + 0x14, s1_in);            // sw s1, 0x14(sp)
-  c->mem_w32(c->r[29] + 0x10, s0_in);            // sw s0, 0x10(sp)
-  c->mem_w32(c->r[29] + 0x18, ra);               // sw ra, 0x18(sp)
-  c->r[17] = out;                                // s1 = a0 (out-slot ptr)
-  c->r[16] = cbarg;                              // s0 = a2 (callback arg4)
-
-  // ---- FUN_80096480(desc, -1, cbarg): load the cel group (auto-slot) via the native BAV loader. ----
-  c->r[4] = desc; c->r[5] = (uint32_t)-1; c->r[6] = cbarg;
-  c->r[31] = 0x800753F8u;                         // jal 0x80096480 @0x800753f0 -> ra = jal+8
-  rec_dispatch(c, 0x80096480u);
-  int32_t slot = sext16(c->r[2]);
-  c->mem_w16(out, (uint16_t)slot);                // *(u16*)out = allocated slot (0x80075408 / dup 0x8007540c)
-
-  // ---- FUN_80096980(cbarg, slot): kick the slot's upload state machine (state -> 1=allocating). ----
-  c->r[4] = cbarg; c->r[5] = (uint32_t)slot;
-  c->r[31] = 0x8007540Cu;                         // jal 0x80096980 @0x80075404 -> ra = jal+8
-  rec_dispatch(c, 0x80096980u);
-
-  if (s_v) {
-    static long s_hits = 0;
-    fprintf(stderr, "[celloadverify] HIT #%ld out=%08x desc=%08x slot=%d state(after kick)=%u -> redirect poll\n",
-            ++s_hits, out, desc, slot, (slot >= 0 && slot < 16) ? c->mem_r8(0x80105D18u + (uint32_t)slot) : 0xff);
-  }
-
-  // ---- hand the cross-frame DMA-wait poll loop back IN-CONTEXT (deep yield safe). ----
-  c->r[4] = 0;                                    // a0 = 0 (the loop's first FUN_80096a40 arg, set in delay slot)
-  rec_coro_redirect(c, 0x80075410u);              // continue the flat interp at the poll-loop head
-}

@@ -106,31 +106,3 @@ static void script_vm_4ce14(Core* c) {
   }
   c->r[2] = v0_ret;
 }
-
-void ov_script_vm_4ce14(Core* c) {
-  static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("scriptvm") ? 1 : 0;
-  if (!s_v) { script_vm_4ce14(c); return; }
-  static uint8_t* ram0 = (uint8_t*)malloc(0x200000);
-  static uint8_t* ramN = (uint8_t*)malloc(0x200000);
-  uint8_t spad0[0x400], spadN[0x400];
-  uint32_t regs0[32]; memcpy(regs0, c->r, sizeof regs0);
-  uint32_t obj = c->r[4];
-  memcpy(ram0, c->ram, 0x200000); memcpy(spad0, c->scratch, 0x400);
-  script_vm_4ce14(c);
-  uint32_t v0_n = c->r[2];
-  memcpy(ramN, c->ram, 0x200000); memcpy(spadN, c->scratch, 0x400);
-  memcpy(c->ram, ram0, 0x200000); memcpy(c->scratch, spad0, 0x400); memcpy(c->r, regs0, sizeof regs0);
-  rec_super_call(c, 0x8004CE14u);
-  uint32_t v0_o = c->r[2];
-  // Ignore FUN_8004CE14's OWN 56-byte stack frame [sp-56, sp): the gen prologue saves regs there and the
-  // native body never touches the guest stack, so those bytes are dead-below-sp on return. (Sub-call stack
-  // frames are identical between paths — both use the guest stack via rec_dispatch / interpreted jals.)
-  uint32_t sp = regs0[29] & 0x1FFFFFu, flo = (sp >= 56) ? sp - 56 : 0;
-  int ro = -1; for (uint32_t a = 0; a < 0x200000; a++) if (c->ram[a] != ramN[a] && !(a >= flo && a < sp)) { ro = (int)a; break; }
-  int so = -1; for (uint32_t a = 0; a < 0x400; a++) if (c->scratch[a] != spadN[a]) { so = (int)a; break; }
-  static long ng = 0, nb = 0;
-  if (ro >= 0 || so >= 0 || v0_n != v0_o) {
-    if (nb++ < 40) fprintf(stderr, "[scriptvm] MISMATCH obj=%08x state=%u v0 n=%x o=%x ram@%x spad@%x sp=%x\n",
-                           obj, c->mem_r8(obj + 4), v0_n, v0_o, ro, so, sp);
-  } else if (++ng % 2000 == 0) fprintf(stderr, "[scriptvm] %ld matches\n", ng);
-}

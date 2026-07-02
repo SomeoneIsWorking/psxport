@@ -21,7 +21,6 @@ extern "C" void rec_dispatch(Core* c, uint32_t addr);   // run a function by add
 // Behavior entry-point declarations. Each `beh_*` lives in its own game/ai/beh_*.cpp file as an
 // external-linkage function (the verify wrapper — no `_run` forwarder layer anymore). Kept as free-
 // function pointers in the table below; class-ifying each individual behavior is a separate axis.
-void ov_sm40558(Core* c);          // 0x80040558 (entity.h)
 void beh_scene_ui_trigger(Core* c);           // 0x800739AC
 void beh_typed_init_scene_trigger(Core* c);   // 0x80073CD8
 void beh_pickup_collect_trigger(Core* c);     // 0x800741DC
@@ -75,7 +74,6 @@ void beh_variant_overlay_lifecycle(Core* c);  // 0x8007DC38 (resident)
 namespace {
 struct NativeBeh { uint32_t addr; void (*fn)(Core*); const char* name; };
 constexpr NativeBeh kTable[] = {
-  { 0x80040558u, ov_sm40558,                          "sm40558" },
   { 0x8004CE14u, beh_record_list_scanner,      "record_list_scanner" },
   { 0x8006F2D0u, beh_pad_child_linker,         "pad_child_linker" },
   { 0x80071A3Cu, beh_area_event_dispatch,      "area_event_dispatch" },

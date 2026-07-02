@@ -5,5 +5,4 @@
 #ifndef ENGINE_GRID_OFFSET_H
 #define ENGINE_GRID_OFFSET_H
 struct Core;
-void ov_grid_offset_48360(Core* c);   // FUN_80048360 — collision-grid cell-relative offset transform
 #endif

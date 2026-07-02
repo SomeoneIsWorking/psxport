@@ -110,34 +110,3 @@ static void hitbox_build_3b220(Core* c) {
   // `boxverify` gate is byte-exact incl. the return register.
   c->r[2] = (uint32_t)last;
 }
-
-void ov_hitbox_3b220(Core* c) {
-  static int s_v = -1;
-  if (s_v < 0) s_v = cfg_dbg("boxverify") ? 1 : 0;
-  if (!s_v) { hitbox_build_3b220(c); return; }
-
-  // Full main-RAM + scratchpad + v0 A/B vs rec_super_call. No callees, no scratchpad use, no sp adjust ->
-  // no exclusion window needed.
-  static uint8_t* ram0 = (uint8_t*)malloc(0x200000);
-  static uint8_t* ramN = (uint8_t*)malloc(0x200000);
-  uint8_t spad0[0x400], spadN[0x400];
-  uint32_t regs0[32]; memcpy(regs0, c->r, sizeof regs0);
-  uint32_t a0 = c->r[4];
-  memcpy(ram0, c->ram, 0x200000); memcpy(spad0, c->scratch, 0x400);
-
-  hitbox_build_3b220(c);
-  uint32_t v0_n = c->r[2];
-  memcpy(ramN, c->ram, 0x200000); memcpy(spadN, c->scratch, 0x400);
-
-  memcpy(c->ram, ram0, 0x200000); memcpy(c->scratch, spad0, 0x400); memcpy(c->r, regs0, sizeof regs0);
-  rec_super_call(c, 0x8003B220u);
-  uint32_t v0_o = c->r[2];
-
-  int ro = -1; for (uint32_t a = 0; a < 0x200000; a++) if (c->ram[a] != ramN[a]) { ro = (int)a; break; }
-  int so = -1; for (uint32_t a = 0; a < 0x400;     a++) if (c->scratch[a] != spadN[a]) { so = (int)a; break; }
-  static long ng = 0, nb = 0;
-  if (ro >= 0 || so >= 0 || v0_n != v0_o) {
-    if (nb++ < 40) fprintf(stderr, "[boxverify] MISMATCH a0=%08x v0 n=%x o=%x ram@%x spad@%x\n",
-                           a0, v0_n, v0_o, ro, so);
-  } else if (++ng % 5000 == 0) fprintf(stderr, "[boxverify] %ld matches\n", ng);
-}

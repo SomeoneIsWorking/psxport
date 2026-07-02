@@ -114,34 +114,3 @@ static void input_dispatch_931c0(Core* c) {
   c->mem_w16(0x801054C0u, 0); c->mem_w16(0x801054C2u, 0);
   c->r[29] = old_sp;
 }
-
-void ov_input_dispatch_931c0(Core* c) {
-  // NB: re-check the channel each call (not a one-shot static) — this fn runs from BOOT, before the REPL's
-  // `debug pad931c0` is processed, so a first-call latch would pin the gate OFF. cfg_dbg is free when unset.
-  if (!cfg_dbg("pad931c0")) { input_dispatch_931c0(c); return; }
-  static uint8_t* ram0 = (uint8_t*)malloc(0x200000);
-  static uint8_t* ramN = (uint8_t*)malloc(0x200000);
-  uint8_t spad0[0x400], spadN[0x400];
-  uint32_t regs0[32]; memcpy(regs0, c->r, sizeof regs0);
-  // Exclude scratch STACK below the entry sp (the fn's own 120-byte frame + its callees' frames). The ABI
-  // guarantees nothing below sp is live across the call, so an A/B that double-runs the sub-calls
-  // legitimately leaves different scratch there (a deep callee reads a transient mid-fn global / hardware
-  // value that is reconciled before return — the struct passed in is byte-identical, all persistent state
-  // matches). A real behavioral bug would alter persistent state (a game table / object / scratchpad) and
-  // still be caught. The stack lives at the top of RAM (~0x801FFFxx); the window is far above all game data.
-  uint32_t old_sp = regs0[29] & 0x1FFFFFu;
-  uint32_t slo = (old_sp >= 0x1000) ? old_sp - 0x1000 : 0;
-  memcpy(ram0, c->ram, 0x200000); memcpy(spad0, c->scratch, 0x400);
-  input_dispatch_931c0(c);
-  uint32_t v0_n = c->r[2];
-  memcpy(ramN, c->ram, 0x200000); memcpy(spadN, c->scratch, 0x400);
-  memcpy(c->ram, ram0, 0x200000); memcpy(c->scratch, spad0, 0x400); memcpy(c->r, regs0, sizeof regs0);
-  rec_super_call(c, 0x800931C0u);
-  uint32_t v0_o = c->r[2];
-  int ro = -1; for (uint32_t a = 0; a < 0x200000; a++) if (c->ram[a] != ramN[a] && !(a >= slo && a < old_sp)) { ro = (int)a; break; }
-  int so = -1; for (uint32_t a = 0; a < 0x400; a++) if (c->scratch[a] != spadN[a]) { so = (int)a; break; }
-  static long ng = 0, nb = 0;
-  if (ro >= 0 || so >= 0 || v0_n != v0_o) {
-    if (nb++ < 40) fprintf(stderr, "[pad931c0] MISMATCH v0 n=%x o=%x ram@%x spad@%x sp=%x\n", v0_n, v0_o, ro, so, old_sp);
-  } else if (++ng % 1000 == 0) fprintf(stderr, "[pad931c0] %ld matches\n", ng);
-}

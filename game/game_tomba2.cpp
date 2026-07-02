@@ -175,32 +175,6 @@ void Engine::frameUpdate() {
 // manager (Phase 1) — more reliable than static-tracing the overlay handler dispatch.
 int gpu_gpu_wide_engine(void);   // gpu_gpu.c — genuine engine-wide active (PSXPORT_WIDE_ENGINE && aspect!=4:3)
 
-// --- Native ownership of the GTE projection setters (libgte) -------------------------------------
-// The engine configures its projection via libgte SetGeomOffset/SetGeomScreen (RE: docs/engine_re.md,
-// FUN_800509B4 -> screen center (160,120), focal length H=350). We reimplement them in native C
-// (byte-identical to gen_func_800846D0/800846F0) so the PROJECTION is ours: this is the genuine
-// widescreen FOV lever (widen OFX + the draw-env clip; no squish, no renderer re-center) and the
-// reference point the 60fps/hi-res paths build on. Owned unconditionally (no gating). Was the
-// recomp bodies for A/B. A one-time log prints the configured projection to confirm equivalence.
-static void ov_set_geom_offset(Core* c) {       // SetGeomOffset(ofx, ofy)
-  // FAITHFUL: write the game's exact projection offset. We do NOT widen OFX here anymore — CR24 is
-  // SHARED GTE state that the GAME's OWN logic reads back (its on-screen tests / placement run RTPS and
-  // consume the projected SXY). Widening it globally shifted those read-backs and corrupted the game.
-  // Genuine widescreen now happens ONLY inside our owned render submit (engine_submit.c), isolated from
-  // this guest-visible state — the PC engine drives the wide render; the game's logic stays untouched.
-  uint32_t ofx = c->r[4], ofy = c->r[5];
-  gte_write_ctrl(24, ofx << 16);                 // OFX
-  gte_write_ctrl(25, ofy << 16);                 // OFY
-  static int logged = 0;
-  if (!logged++) fprintf(stderr, "[geom] native SetGeomOffset OFX=%u OFY=%u (CR24=%08X CR25=%08X)\n",
-                         ofx, ofy, gte_read_ctrl(24), gte_read_ctrl(25));
-}
-static void ov_set_geom_screen(Core* c) {       // SetGeomScreen(h) — projection-plane distance (FOV)
-  gte_write_ctrl(26, c->r[4]);                   // H
-  static int logged = 0;
-  if (!logged++) fprintf(stderr, "[geom] native SetGeomScreen H=%u (CR26=%08X)\n", c->r[4], gte_read_ctrl(26));
-}
-
 // Native ownership of DrawOTag (libgpu FUN_80081560, the per-frame draw kick): the recomp body just
 // programs the GPU linked-list DMA to walk the ordering table at a0 — which our renderer already does
 // natively in gpu_dma2_linked_list (walk OT -> decode each primitive -> rasterize). Overriding it routes
