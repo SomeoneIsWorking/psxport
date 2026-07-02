@@ -7,7 +7,7 @@
 #include <string.h>
 #include "graphics_bind.h"
 #include "verify_gate.h"
-#include "engine_math.h"       // ov_rotmat — libgte RotMatrix (native)
+#include "engine_math.h"       // Math::rotmat — libgte RotMatrix (native, static)
 
 // Forward native scene-data record the decoupled native renderer will consume (geometry + float
 // transform + texture). Populated in a later pass; the object subsystem will fill one of these per
@@ -85,8 +85,7 @@ void GraphicsBind::recordInit() { Core* c = core;
 // The two callees stay PSX via rec_dispatch; we own the control flow + the position snapshot.
 static uint32_t obj_render_update(Core* c) {
   uint32_t obj = c->r[4];
-  c->r[4] = obj + 0x54; c->r[5] = obj + 0x98;
-  ov_rotmat(c);
+  Math::rotmat(c,obj + 0x54, obj + 0x98);
   c->mem_w32(obj + 0xac, (uint32_t)(int32_t)(int16_t)c->mem_r16(obj + 0x2e));
   c->mem_w32(obj + 0xb0, (uint32_t)(int32_t)(int16_t)c->mem_r16(obj + 0x32));
   c->mem_w32(obj + 0xb4, (uint32_t)(int32_t)(int16_t)c->mem_r16(obj + 0x36));

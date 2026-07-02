@@ -10,6 +10,7 @@
 // interpreter instructions (and a frequency leader). First port here.
 #include "core.h"
 #include "cfg.h"
+#include "engine_math.h"   // class Math — static entry surface + ov_* free-fn decls for internal reuse
 #include <stdio.h>
 #include <string.h>
 
@@ -651,4 +652,46 @@ void engine_math_register(void) {
   // the live path; ov_isqrt_verify is reachable as the per-call gate when the `mathverify` channel is set
   // before override install (same convention as camverify).
   int v = cfg_dbg("mathverify");
+}
+
+// ═════════════════════════════════════════════════════════════════════════════════════════════════
+// class Math — STATELESS namespace-class (all static). Each method is a thin wrapper that marshals
+// its typed args into the MIPS taxi registers (c->r[4/5/6]) and invokes the still-taxi ov_* body
+// above, so the same call chain, same guest-state writes, and same GTE data-reg leftover semantics
+// are preserved verbatim. Callers use `Math::foo(c, a, b)` instead of the `c->r[4]=a; c->r[5]=b;
+// ov_foo(c)` taxi pattern. No instance, no embedded member on Engine (see CLAUDE.md OOP rule).
+// ═════════════════════════════════════════════════════════════════════════════════════════════════
+
+uint32_t Math::matMul(Core* c, uint32_t rPtr, uint32_t mPtr, uint32_t outPtr) {
+  c->r[4] = rPtr; c->r[5] = mPtr; c->r[6] = outPtr;
+  ov_mat_mul(c);
+  return c->r[2];
+}
+
+uint32_t Math::applyMatlv(Core* c, uint32_t inPtr, uint32_t outPtr) {
+  c->r[4] = inPtr; c->r[5] = outPtr;
+  ov_apply_matlv(c);
+  return c->r[2];
+}
+
+uint32_t Math::rotmat(Core* c, uint32_t anglesPtr, uint32_t outPtr) {
+  c->r[4] = anglesPtr; c->r[5] = outPtr;
+  ov_rotmat(c);
+  return c->r[2];
+}
+
+uint32_t Math::rotX(Core* c, int16_t angle, uint32_t matPtr) {
+  c->r[4] = (uint32_t)(int32_t)angle; c->r[5] = matPtr;
+  ov_rot_x(c);
+  return c->r[2];
+}
+uint32_t Math::rotY(Core* c, int16_t angle, uint32_t matPtr) {
+  c->r[4] = (uint32_t)(int32_t)angle; c->r[5] = matPtr;
+  ov_rot_y(c);
+  return c->r[2];
+}
+uint32_t Math::rotZ(Core* c, int16_t angle, uint32_t matPtr) {
+  c->r[4] = (uint32_t)(int32_t)angle; c->r[5] = matPtr;
+  ov_rot_z(c);
+  return c->r[2];
 }

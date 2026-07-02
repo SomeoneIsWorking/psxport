@@ -15,7 +15,7 @@
 // scratchpad seeding + native-call orchestration. No rec_dispatch needed.
 #include "node_xform.h"
 #include "core.h"
-#include "engine_math.h"     // ov_rotmat, ov_mat_mul
+#include "engine_math.h"     // Math::rotmat, Math::matMul (static)
 
 // ov_xform51128 lives in engine_submit.cpp (its verify wrapper and body would need moving with it);
 // forward-declare it here so we can call it directly without a header.
@@ -33,8 +33,8 @@ void NodeXform::build(uint32_t node) {
   c->mem_w32(SCR_M +  0, (uint32_t)(int32_t)(int16_t)c->mem_r16(node + 184));
   c->mem_w32(SCR_M +  8, (uint32_t)(int32_t)(int16_t)c->mem_r16(node + 186));
   c->mem_w32(SCR_M + 16, (uint32_t)(int32_t)(int16_t)c->mem_r16(node + 188));
-  c->r[4] = node + 84; c->r[5] = SCR_R; ov_rotmat(c);
-  c->r[4] = SCR_R; c->r[5] = SCR_M; c->r[6] = node + 152; ov_mat_mul(c);
+  Math::rotmat(c,node + 84, SCR_R);                            // libgte RotMatrix at 0x80085480
+  Math::matMul(c,SCR_R, SCR_M, node + 152);                    // node.mat152 = rot × mat 0x80084110
   c->mem_w32(node + 172, (uint32_t)(int32_t)(int16_t)c->mem_r16(node + 46));
   c->mem_w32(node + 176, (uint32_t)(int32_t)(int16_t)c->mem_r16(node + 50));
   c->mem_w32(node + 180, (uint32_t)(int32_t)(int16_t)c->mem_r16(node + 54));

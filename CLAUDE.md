@@ -88,14 +88,28 @@ trackers.
   instant-VSync / fake-CD bandaids or env escape hatches (`PSXPORT_VSYNC_OK`-style), or an interpreter.
 - **No bandaids / no magic constant offsets.** Name the root cause; document every lifted function /
   patched value with the RE that justifies it. (See the global "No bandaids" rule.)
-- **REAL C++ CLASSES, no `extern "C"` shims.** Every PC-native subsystem is a `class Foo` with instance
-  methods, embedded as a `Core::foo` member (back-pointer wired in `Core::Core()` — see `ScreenFade`,
-  `CutsceneCamera`, `Engine`). Call sites do `c->foo.method(args)` directly — NO free-function shim, NO
-  `extern "C"` wrapper. Cross-file entry points use `static` class methods (e.g. `CutsceneCamera::runFieldUpdate(c)`),
-  not `extern "C" void cam_update(Core*)`. Legacy free-function/`extern "C"` scaffolding in touched files
-  is CLEANUP TERRITORY — when you edit a subsystem, class-ify the surrounding free functions and drop the
-  `extern "C"` in the same commit. Don't leave old shape half-alive alongside the new one. (User directive,
-  2026-07-01; enforced going forward — "every agent should do a cleanup like this as they work".)
+- **REAL C++ CLASSES, no `extern "C"` shims — but pick INSTANCE vs STATIC by whether there's real
+  state.** Every PC-native subsystem is a `class Foo`, never a grab-bag of free functions. Cross-file
+  entries are class methods (never `extern "C" void foo(Core*)`), and legacy free-function/`extern "C"`
+  scaffolding in touched files is CLEANUP TERRITORY — class-ify it in the same commit; don't leave two
+  shapes half-alive.
+  - **INSTANCE methods** (`class Foo` embedded as `Core::foo` with a `core` back-pointer wired in
+    `Core::Core()`; callers do `c->foo.method(args)`) when the subsystem OWNS PER-CORE STATE — cached
+    handles, buffers, mode/flag fields, subsystem-scoped RAM, sub-subsystem members. Examples:
+    `Engine`, `CutsceneCamera`, `ScreenFade`, `Render`.
+  - **STATIC methods on the class** (`Math::rotmat(c, a, b)` — `class Math { static uint32_t rotmat(Core*,
+    uint32_t, uint32_t); … };`) when the subsystem is PURE OPERATIONS OVER `Core*` with no per-instance
+    state. Don't fabricate a `core` back-pointer just to reach `c->r[]` / `c->mem_*` / GTE regs — that's
+    fake state, and the extra `Core*` arg at each callsite is not a real cost. Examples: `Math` (GTE
+    transform cluster), `Mtx` (matrix helpers). No embedded `Core::math` member; callers do
+    `Math::rotmat(c, a, b)`.
+  - **DON'T split the difference.** A "stateless class with a back-pointer to look like instance"
+    (`c->math.rotmat(a, b)` where `math` has only a `core` field) is the worst of both: fake state,
+    fake OOP, extra wiring for no benefit. Pick real instance OR real static.
+  - **Grouping matters more than state count.** A cohesive cluster (`Math` = 6 rot/mat entries) belongs
+    in one class even if empty — the class is the boundary. A single leaf that only lives inside another
+    subsystem doesn't need its own class; it's a method on the parent.
+  (User directive, 2026-07-01, refined 2026-07-02 — "does it need to be object oriented?")
 
 ## RENDER — reimplement, don't transcribe (the clearest case)
 The old "native" render (`engine_submit.cpp` submit_terrain / ov_submit_poly_gt4_bp / native_dl) was a
