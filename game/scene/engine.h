@@ -30,6 +30,7 @@
 #include "object/animation.h"    // Engine owns the Animation per-object VM stepper
 #include "core/asset.h"          // Engine owns the Asset loader subsystem
 #include "audio/music_coord.h"   // Engine owns the MusicCoord dialog↔music coordination
+#include "player/collision.h"    // Engine owns the Collision grid-family subsystem
 class Core;
 
 class Engine {
@@ -54,6 +55,7 @@ public:
   Animation        animation;         // per-object animation-VM stepper       (guest FUN_80076D68)
   Asset            asset;              // asset loader — LZ + texgroup + VRAM upload + boot preload
   MusicCoord       musicCoord;         // dialog ↔ ingame-music coordination (instant-CD-safe PC mod)
+  Collision        collision;          // collision-grid family (list-scan + grid setup/query/resolve/step)
 
   // ── GAME-stage entry points (called by the scheduler each frame) ────────────────────────────
   // stagePrologue: one-time prologue that runs when the GAME task enters — task-slot setup, first

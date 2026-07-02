@@ -1,13 +1,13 @@
-// engine/collision.cpp — PC-native COLLISION-GRID subsystem.
+// class Collision — PC-native COLLISION-GRID subsystem.
 // The collision-grid family that resolves an object's position against the level's spatial grid:
 // the list-tail resolver (FUN_80031780), the grid row-pointer setup (FUN_80049968), the cell query /
 // neighbor-walk (FUN_80047CBC), the resolve loop (FUN_800498C8), and the per-step origin/index setup
 // (FUN_8004798C). Pure control flow over scratchpad + object/grid memory — NO GTE, NO render packets.
-// Extracted verbatim from game_tomba2.cpp (one behavior, byte-identical) into its own module for
-// PC-game code structure. Diagnostic A/B gates (listscan/gridsetup/gridquery/gridresolve/gridstep)
-// are REPL channels, unchanged. The dispatched grid callees stay reachable by address (rec_dispatch).
+// Diagnostic A/B gates (listscan/gridsetup/gridquery/gridresolve/gridstep) are REPL channels,
+// unchanged. The dispatched grid callees stay reachable by address (rec_dispatch).
 #include "core.h"
 #include "cfg.h"
+#include "scene/engine.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -21,9 +21,11 @@ void rec_dispatch(Core*, uint32_t);
 // (a0[52]=a0[56]=0); else set the tail pointer a0[56] (off 0x38)=found entry. If a0[52]==0 at
 // entry it is a no-op. Pure guest-pointer/integer walk, no GP0/OT. `listscan` (lazy gate) A/B's
 // the two written words.
-void ov_list_scan_31780(Core* c) {
+void Collision::listScan(uint32_t obj) {
+  Core* c = this->core;
+  c->r[4] = obj;                                     // taxi-in for the still-taxi verify super-call
   static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("listscan") ? 1 : 0;
-  uint32_t a0 = c->r[4];
+  uint32_t a0 = obj;
   uint32_t o52 = c->mem_r32(a0 + 52), o56 = c->mem_r32(a0 + 56);
   uint32_t n52 = o52, n56 = o56, v0 = c->r[2];
   if (o52 != 0) {
@@ -48,9 +50,11 @@ void ov_list_scan_31780(Core* c) {
 // scratchpad row pointers from the record's halfword fields:
 //   0x1F8001CC = rec+0x14;  0x1F8001D0/D4/D8/DC = rec + rec[12/14/16/18]*2
 // Pure pointer arithmetic over scratchpad + guest record data. `gridsetup` A/B's the 5 written words.
-void ov_grid_setup_49968(Core* c) {
+void Collision::gridSetup(uint32_t layer) {
+  Core* c = this->core;
+  c->r[4] = layer;                                   // taxi-in for the verify super-call
   static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("gridsetup") ? 1 : 0;
-  uint32_t a0   = c->r[4] & 0xffu;
+  uint32_t a0   = layer & 0xffu;
   uint32_t base = c->mem_r32(0x1F8001C8u);
   uint32_t rec  = base + (uint32_t)c->mem_r16(base + a0 * 2) * 2;
   uint32_t cc = rec + 20;
@@ -168,9 +172,10 @@ static uint32_t grid_query_47cbc(Core* c) {
   }
 }
 
-void ov_grid_query_47cbc(Core* c) {
+int Collision::gridQuery() {
+  Core* c = this->core;
   static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("gridquery") ? 1 : 0;
-  if (!s_v) { c->r[2] = grid_query_47cbc(c); return; }
+  if (!s_v) { int r = (int)grid_query_47cbc(c); c->r[2] = (uint32_t)r; return r; }
   const uint32_t LO = 0x1F800080u, HI = 0x1F8001F0u, N = HI - LO;
   uint8_t snap[0x170], after[0x170];
   for (uint32_t a = LO; a < HI; a++) snap[a-LO] = c->mem_r8(a);
@@ -186,13 +191,14 @@ void ov_grid_query_47cbc(Core* c) {
   } else if (++ng % 2000 == 0) fprintf(stderr, "[gridquery] %ld matches\n", ng);
   (void)N;
   c->r[2] = oracle;                                            // keep oracle scratchpad state
+  return (int)oracle;
 }
 
 // FUN_800498C8 — collision-grid RESOLVE LOOP (top of the grid family; pairs with the owned
 // FUN_80049968 setup + FUN_80047CBC query). a0 = probe object. Iterates:
 //   jal 0x8004798C(obj)                    -- per-step grid-origin/index setup (kept dispatched; non-trivial)
-//   jal 0x80049968(u8 @0x1F8001FE)         -- row-pointer setup (owned ov_grid_setup_49968)
-//   v0 = jal 0x80047CBC()                  -- cell query/neighbor-walk (owned ov_grid_query_47cbc)
+//   jal 0x80049968(u8 @0x1F8001FE)         -- row-pointer setup (owned Collision::gridSetup)
+//   v0 = jal 0x80047CBC()                  -- cell query/neighbor-walk (owned Collision::gridQuery)
 //   if v0 == 0 -> return 0                  (query found nothing / off-grid -> done)
 //   v1 = w[0x1F8001E0] (the cell record ptr the query latched)
 //   if (h[v1] & 0x4000) == 0 -> return 1   (resolved cell is terminal -> done, keep)
@@ -202,12 +208,12 @@ void ov_grid_query_47cbc(Core* c) {
 // Pure control flow over scratchpad + object memory; ONE object write (obj+42); NO GTE, NO render
 // packets. The three callees stay PSX via rec_dispatch (the two grid leaves honor their own owned
 // override identically in the dispatched path). Return: 0 only when the query returns 0; otherwise 1.
-static uint32_t grid_resolve_498c8(Core* c) {
-  const uint32_t obj = c->r[4];
+static uint32_t grid_resolve_498c8(Core* c, uint32_t obj) {
+  Collision& col = c->engine.collision;
   for (;;) {
-    c->r[4] = obj; ov_grid_step_4798c(c);                        // per-step grid-origin/index setup — native
-    c->r[4] = (uint32_t)c->mem_r8(0x1F8001FEu); ov_grid_setup_49968(c);  // row-ptr setup — native
-    ov_grid_query_47cbc(c);                                      // cell query — native
+    col.gridStep(obj);                                           // per-step grid-origin/index setup — native
+    col.gridSetup((uint32_t)c->mem_r8(0x1F8001FEu));             // row-ptr setup — native
+    col.gridQuery();                                             // cell query — native
     if (c->r[2] == 0) return 0;
     uint32_t v1 = c->mem_r32(0x1F8001E0u);
     if ((c->mem_r16(v1) & 0x4000u) == 0) return 1;
@@ -218,9 +224,11 @@ static uint32_t grid_resolve_498c8(Core* c) {
   }
 }
 
-void ov_grid_resolve_498c8(Core* c) {
+int Collision::gridResolve(uint32_t obj) {
+  Core* c = this->core;
+  c->r[4] = obj;                                     // taxi-in for the verify super-call
   static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("gridresolve") ? 1 : 0;
-  if (!s_v) { c->r[2] = grid_resolve_498c8(c); return; }
+  if (!s_v) { int r = (int)grid_resolve_498c8(c, obj); c->r[2] = (uint32_t)r; return r; }
   // Full RAM+scratchpad A/B vs rec_super_call. The native path runs first, its writes are snapshotted
   // and rolled back, then the recomp body runs and we diff. The dispatched callees (incl. the deep
   // FUN_8004798C tree) run in BOTH passes; FUN_800498C8's own 32-byte stack frame [sp-32, sp) is dead
@@ -229,19 +237,12 @@ void ov_grid_resolve_498c8(Core* c) {
   static uint8_t* ramN = (uint8_t*)malloc(0x200000);
   uint8_t spad0[0x400], spadN[0x400];
   uint32_t regs0[32]; memcpy(regs0, c->r, sizeof regs0);
-  uint32_t obj = c->r[4];
   memcpy(ram0, c->ram, 0x200000); memcpy(spad0, c->scratch, 0x400);
-  c->r[2] = grid_resolve_498c8(c);
-  uint32_t v0_n = c->r[2];
+  uint32_t v0_n = grid_resolve_498c8(c, obj);
   memcpy(ramN, c->ram, 0x200000); memcpy(spadN, c->scratch, 0x400);
   memcpy(c->ram, ram0, 0x200000); memcpy(c->scratch, spad0, 0x400); memcpy(c->r, regs0, sizeof regs0);
   rec_super_call(c, 0x800498C8u);
   uint32_t v0_o = c->r[2];
-  // Exclude pure stack scratch below entry sp: the dispatched callee tree (FUN_8004798C -> 0x80048ecc/
-  // 0x80048fc4 + the grid leaves) runs in BOTH passes and leaves transient values in its OWN frames below
-  // sp; because FUN_800498C8's native frame is absent, the residual bytes there differ harmlessly (same as
-  // scriptvm/player). The exclusion window is the top-of-RAM stack (sp-0x800, sp) — far above ALL game
-  // data (sp ~0x1FE9xx, RAM end 0x200000); a real behavioral divergence would alter persistent state below.
   uint32_t sp = regs0[29] & 0x1FFFFFu, flo = (sp >= 0x800) ? sp - 0x800 : 0;
   int ro = -1; for (uint32_t a = 0; a < 0x200000; a++) if (c->ram[a] != ramN[a] && !(a >= flo && a < sp)) { ro = (int)a; break; }
   int so = -1; for (uint32_t a = 0; a < 0x400; a++) if (c->scratch[a] != spadN[a]) { so = (int)a; break; }
@@ -250,6 +251,7 @@ void ov_grid_resolve_498c8(Core* c) {
     if (nb++ < 40) fprintf(stderr, "[gridresolve] MISMATCH obj=%08x v0 n=%x o=%x ram@%x spad@%x sp=%x\n",
                            obj, v0_n, v0_o, ro, so, sp);
   } else if (++ng % 2000 == 0) fprintf(stderr, "[gridresolve] %ld matches\n", ng);
+  return (int)v0_o;
 }
 
 // FUN_8004798C — collision-grid PER-STEP ORIGIN/INDEX SETUP (the remaining dispatched callee inside
@@ -273,8 +275,8 @@ void ov_grid_resolve_498c8(Core* c) {
 // `gridstep` gate = full RAM+scratchpad A/B vs rec_super_call (the two dispatched callees run in BOTH
 // passes; this fn's own [sp-24, sp) stack frame + the callees' frames below sp differ harmlessly, so the
 // gate excludes [sp-0x800, sp) — same family rationale as gridresolve/scriptvm).
-static void grid_step_4798c(Core* c) {
-  const uint32_t SP = 0x1F800000u, obj = c->r[4];
+static void grid_step_4798c(Core* c, uint32_t obj) {
+  const uint32_t SP = 0x1F800000u;
   // ---- block 1: reload grid if the object's recorded id differs ----
   uint32_t v1 = c->mem_r8(obj + 42);
   uint32_t gid = c->mem_r8(SP + 0x1FE);
@@ -330,16 +332,17 @@ static void grid_step_4798c(Core* c) {
   }
 }
 
-void ov_grid_step_4798c(Core* c) {
+void Collision::gridStep(uint32_t obj) {
+  Core* c = this->core;
+  c->r[4] = obj;                                     // taxi-in for the verify super-call
   static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("gridstep") ? 1 : 0;
-  if (!s_v) { grid_step_4798c(c); return; }
+  if (!s_v) { grid_step_4798c(c, obj); return; }
   static uint8_t* ram0 = (uint8_t*)malloc(0x200000);
   static uint8_t* ramN = (uint8_t*)malloc(0x200000);
   uint8_t spad0[0x400], spadN[0x400];
   uint32_t regs0[32]; memcpy(regs0, c->r, sizeof regs0);
-  uint32_t obj = c->r[4];
   memcpy(ram0, c->ram, 0x200000); memcpy(spad0, c->scratch, 0x400);
-  grid_step_4798c(c);
+  grid_step_4798c(c, obj);
   memcpy(ramN, c->ram, 0x200000); memcpy(spadN, c->scratch, 0x400);
   memcpy(c->ram, ram0, 0x200000); memcpy(c->scratch, spad0, 0x400); memcpy(c->r, regs0, sizeof regs0);
   rec_super_call(c, 0x8004798Cu);

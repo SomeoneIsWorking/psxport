@@ -31,7 +31,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "spawn.h"   // world_despawn (FUN_8007A624)
-#include "collision.h"  // ov_list_scan_31780 (FUN_80031780)
+#include "collision.h"  // Collision::listScan (FUN_80031780)
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
@@ -78,7 +78,7 @@ void beh_rand_phase_cull(Core* c) {
     if (c->mem_r32(nd + 0x38) == 0) {
       c->mem_w8(nd + 4, 2);
     } else if (cull == 0) {
-      c->r[4] = nd; ov_list_scan_31780(c);                  // FUN_80031780(node) — native
+      c->engine.collision.listScan(nd);                     // FUN_80031780(node) — native
     }
   }
 }
