@@ -25,4 +25,10 @@ public:
   // frameX (guest 0x8003FA44) — the mid-transition variant (reduced pass set). Was ov_render_frame_x.
   void frame();
   void frameX();
+
+  // sceneNative: the master scene-render walker (per-frame terrain + entity/object walk over
+  // the 3 doubly-linked object lists, with backdrop + collectable-quad + native BG tilemap).
+  // Called by game_tomba2.cpp's ov_draw_otag every field-stage frame (and by margin_render's
+  // widescreen re-include pass). Was ov_scene_native.
+  void sceneNative();
 };

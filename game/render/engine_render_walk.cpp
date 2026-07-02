@@ -11,6 +11,7 @@
 // Split out of engine_submit.cpp (the geometry-SUBMIT subsystem) so the scene renderer is its own PC-game
 // file. Shared helpers (PktSpanSession, obj_world_ord/cur_render_node, native_gt3gt4) live in render_internal.h.
 #include "core.h"
+#include "render.h"
 #include "game.h"
 #include "cfg.h"
 #include "mods.h"
@@ -145,7 +146,7 @@ static void ov_bg_tilemap_native(Core* c, uint32_t t4) {
   }
 }
 
-void ov_scene_native(Core* c) {
+void Render::sceneNative() { Core* c = mCore;
   static const uint32_t HEADS[3] = { 0x800FB168u, 0x800F2624u, 0x800F2738u };
   uint32_t saved = c->r[4];
   g_sn_objs = g_sn_cmds = 0;

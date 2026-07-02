@@ -19,6 +19,7 @@
 #include "game.h"   // Fps60State::current_object (was g_current_object)
 #include "cfg.h"
 #include "margin_render.hpp"
+#include "render.h"           // class Render — c->mRender->sceneNative()
 #include "asset.h"      // PC-native asset-loading subsystem (extracted from this file)
 #include "mathlib.h"    // PC-native math/PRNG leaf primitives (rand, trig LUTs, bit-test)
 #include "cull.h"       // PC-native visibility cull / LOD subsystem
@@ -257,10 +258,10 @@ void ov_draw_otag(Core* c) {   // called directly from native_step_frame (PC-dri
     // running ov_scene_native there draws a stale field/sea behind the swirl (the original bug-2). Gate the
     // native 3D render off only for the void — the SOP scene byte is the game's per-beat state, not a magic
     // render constant. (Scene 6 IS a 3D beat: the cliff fading in — gating it off loses the cliff geometry.)
-    if (c->mem_r8(0x800BF9B4u) != 5) { void ov_scene_native(Core*); ov_scene_native(c); }
+    if (c->mem_r8(0x800BF9B4u) != 5) { c->mRender->sceneNative(); }
     gpu_dma2_linked_list(c, c->r[4]);
   } else if (!g_render_psx && (field || cfg_dbg("scenenative"))) {
-    void ov_scene_native(Core*); ov_scene_native(c);
+    c->mRender->sceneNative();
     // The native field path owns the 3D world + backdrop, but the field still submits its 2D OVERLAY
     // through the PSX OT: the opening-cutscene narration glyphs, in-game dialog / item bubbles, menus,
     // HUD. Enumerate the OT in 2D-overlay-only mode (g_ot_2d_only) so those 2D prims are queued as
