@@ -41,6 +41,8 @@ static inline uint32_t leafr3(Core* c, uint32_t a0, uint32_t a1, uint32_t a2, ui
   c->r[4] = a0; c->r[5] = a1; c->r[6] = a2; rec_dispatch(c, fn); return c->r[2];
 }
 
+}  // namespace
+
 void beh_actor_move_sm(Core* c) {
   uint32_t nd = c->r[4];
   uint8_t st = c->mem_r8(nd + 4);
@@ -139,29 +141,3 @@ void beh_actor_move_sm(Core* c) {
   c->mem_w8(nd + 0x29, 0);
   if (c->mem_r8(nd + 1) != 0) leaf1(c, nd, 0x800518fcu);  // FUN_800518FC
 }
-
-}  // namespace — ov_beh_actor_move_sm (below) is the exported entry point.
-
-void ov_beh_actor_move_sm(Core* c) {
-  static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("actor_move_smverify") ? 1 : 0;
-  if (!s_v) { beh_actor_move_sm(c); return; }
-  static uint8_t* ram0 = (uint8_t*)malloc(0x200000);
-  static uint8_t* ramN = (uint8_t*)malloc(0x200000);
-  uint8_t spad0[0x400], spadN[0x400];
-  uint32_t regs0[32]; memcpy(regs0, c->r, sizeof regs0);
-  uint32_t obj = c->r[4];
-  memcpy(ram0, c->ram, 0x200000); memcpy(spad0, c->scratch, 0x400);
-  beh_actor_move_sm(c);
-  memcpy(ramN, c->ram, 0x200000); memcpy(spadN, c->scratch, 0x400);
-  memcpy(c->ram, ram0, 0x200000); memcpy(c->scratch, spad0, 0x400); memcpy(c->r, regs0, sizeof regs0);
-  rec_super_call(c, BEH_FN);
-  uint32_t sp = regs0[29] & 0x1FFFFFu, flo = (sp >= 0x800) ? sp - 0x800 : 0;
-  int ro = -1; for (uint32_t a = 0; a < 0x200000; a++) if (c->ram[a] != ramN[a] && !(a >= flo && a < sp)) { ro = (int)a; break; }
-  int so = -1; for (uint32_t a = 0; a < 0x400; a++) if (c->scratch[a] != spadN[a]) { so = (int)a; break; }
-  static long ng = 0, nb = 0;
-  if (ro >= 0 || so >= 0) {
-    if (nb++ < 40) fprintf(stderr, "[actor_move_smverify] MISMATCH obj=%08x st=%u n5=%u ram@%x spad@%x\n",
-                           obj, c->mem_r8(obj + 4), c->mem_r8(obj + 5), ro, so);
-  } else if (++ng % 50 == 0) fprintf(stderr, "[actor_move_smverify] %ld matches\n", ng);
-}
-

@@ -18,113 +18,113 @@
 
 extern "C" void rec_dispatch(Core* c, uint32_t addr);   // run a function by address (override or interp)
 
-// Behavior entry-point declarations. Each `ov_beh_*` lives in its own game/ai/beh_*.cpp file as an
+// Behavior entry-point declarations. Each `beh_*` lives in its own game/ai/beh_*.cpp file as an
 // external-linkage function (the verify wrapper — no `_run` forwarder layer anymore). Kept as free-
 // function pointers in the table below; class-ifying each individual behavior is a separate axis.
 void ov_sm40558(Core* c);          // 0x80040558 (entity.h)
-void ov_beh_scene_ui_trigger(Core* c);           // 0x800739AC
-void ov_beh_typed_init_scene_trigger(Core* c);   // 0x80073CD8
-void ov_beh_pickup_collect_trigger(Core* c);     // 0x800741DC
-void ov_beh_substate_edge_orchestrator(Core* c); // 0x8012EB54 (overlay)
-void ov_beh_jumptable_release_trigger(Core* c);  // 0x80124E74 (overlay)
-void ov_beh_typed_table_seed_gate(Core* c);      // 0x80133C14 (overlay)
-void ov_beh_typed_jumptable_pair(Core* c);       // 0x80138FC8 (overlay)
-void ov_beh_cull_substate_orchestrator(Core* c); // 0x8013259C (overlay)
-void ov_beh_id_compare_motion_dispatch(Core* c); // 0x80145230 (overlay)
-void ov_beh_jumptable_flag_gate(Core* c);        // 0x8012D4EC (overlay)
-void ov_beh_cull_tick_render(Core* c);           // 0x8012D404 (overlay)
-void ov_beh_sibling_angle_track(Core* c);        // 0x801395C0 (overlay)
-void ov_beh_visibility_gate_dispatch(Core* c);   // 0x8004C238 (resident)
-void ov_beh_record_list_scanner(Core* c);        // 0x8004CE14 (resident)
-void ov_beh_area_event_dispatch(Core* c);        // 0x80071A3C (resident)
-void ov_beh_pad_child_linker(Core* c);           // 0x8006F2D0 (resident)
-void ov_beh_scatter_record_dither(Core* c);      // 0x8013C538 (overlay)
-void ov_beh_area_threshold_ptr_swap(Core* c);    // 0x8013C3F4 (overlay)
-void ov_beh_scatter_ramp_machine(Core* c);       // 0x8013C9C0 (overlay)
-void ov_beh_pure_inner_dispatch(Core* c);        // 0x80136D9C (overlay)
-void ov_beh_anim_trigger_gates(Core* c);         // 0x80129C00 (overlay)
-void ov_beh_box_seed_phase_gate(Core* c);        // 0x8012A0B8 (overlay)
-void ov_beh_typed_anim_spawn(Core* c);           // 0x8012DA04 (overlay)
-void ov_beh_id_routed_dispatch(Core* c);         // 0x80121978 (overlay)
-void ov_beh_pure_substate_dispatch(Core* c);     // 0x80125E0C (overlay)
-void ov_beh_linked_advance_branch(Core* c);      // 0x80128760 (overlay)
-void ov_beh_typed_init_exit_poker(Core* c);      // 0x80118240 (overlay)
-void ov_beh_child_trig_motion(Core* c);          // 0x8013A900 (overlay)
-void ov_beh_prng_velocity_machine(Core* c);      // 0x80117658 (overlay)
-void ov_beh_quad_record_table_seed(Core* c);     // 0x80135D64 (overlay)
-void ov_beh_flagbit_timer_machine(Core* c);      // 0x8013B2E4 (overlay)
-void ov_beh_two_child_steer(Core* c);            // 0x80131D08 (overlay)
-void ov_beh_single_child_cull(Core* c);          // 0x80132400 (overlay)
-void ov_beh_twin_record_steer(Core* c);          // 0x80133D6C (overlay)
-void ov_beh_multi_record_phase_machine(Core* c); // 0x80134FD8 (overlay)
-void ov_beh_sine_motion_sfx(Core* c);            // 0x80136158 (overlay)
-void ov_beh_box_rearm_sub(Core* c);              // 0x8013ADBC (overlay)
-void ov_beh_node3_router(Core* c);               // 0x8011CBD0 (overlay)
-void ov_beh_actor_move_sm(Core* c);              // 0x8011D988 (overlay)
-void ov_beh_variant_actor_sm(Core* c);           // 0x8011D578 (overlay)
-void ov_beh_lift_platform(Core* c);              // 0x8013A330 (overlay)
-void ov_beh_event_record_machine(Core* c);       // 0x80136954 (overlay)
-void ov_beh_typed_variant_router(Core* c);       // 0x8011C164 (overlay)
-void ov_beh_camera_target_follow(Core* c);       // 0x80059ED8 (resident)
-void ov_beh_cube_text_spawn(Core* c);            // 0x8003AD48 (resident)
-void ov_beh_area_transition_machine(Core* c);    // 0x80127798 (overlay)
-void ov_beh_rand_phase_cull(Core* c);            // 0x8002918C (resident)
-void ov_beh_pos_history_trail(Core* c);          // 0x80029B40 (resident)
-void ov_beh_variant_overlay_lifecycle(Core* c);  // 0x8007DC38 (resident)
+void beh_scene_ui_trigger(Core* c);           // 0x800739AC
+void beh_typed_init_scene_trigger(Core* c);   // 0x80073CD8
+void beh_pickup_collect_trigger(Core* c);     // 0x800741DC
+void beh_substate_edge_orchestrator(Core* c); // 0x8012EB54 (overlay)
+void beh_jumptable_release_trigger(Core* c);  // 0x80124E74 (overlay)
+void beh_typed_table_seed_gate(Core* c);      // 0x80133C14 (overlay)
+void beh_typed_jumptable_pair(Core* c);       // 0x80138FC8 (overlay)
+void beh_cull_substate_orchestrator(Core* c); // 0x8013259C (overlay)
+void beh_id_compare_motion_dispatch(Core* c); // 0x80145230 (overlay)
+void beh_jumptable_flag_gate(Core* c);        // 0x8012D4EC (overlay)
+void beh_cull_tick_render(Core* c);           // 0x8012D404 (overlay)
+void beh_sibling_angle_track(Core* c);        // 0x801395C0 (overlay)
+void beh_visibility_gate_dispatch(Core* c);   // 0x8004C238 (resident)
+void beh_record_list_scanner(Core* c);        // 0x8004CE14 (resident)
+void beh_area_event_dispatch(Core* c);        // 0x80071A3C (resident)
+void beh_pad_child_linker(Core* c);           // 0x8006F2D0 (resident)
+void beh_scatter_record_dither(Core* c);      // 0x8013C538 (overlay)
+void beh_area_threshold_ptr_swap(Core* c);    // 0x8013C3F4 (overlay)
+void beh_scatter_ramp_machine(Core* c);       // 0x8013C9C0 (overlay)
+void beh_pure_inner_dispatch(Core* c);        // 0x80136D9C (overlay)
+void beh_anim_trigger_gates(Core* c);         // 0x80129C00 (overlay)
+void beh_box_seed_phase_gate(Core* c);        // 0x8012A0B8 (overlay)
+void beh_typed_anim_spawn(Core* c);           // 0x8012DA04 (overlay)
+void beh_id_routed_dispatch(Core* c);         // 0x80121978 (overlay)
+void beh_pure_substate_dispatch(Core* c);     // 0x80125E0C (overlay)
+void beh_linked_advance_branch(Core* c);      // 0x80128760 (overlay)
+void beh_typed_init_exit_poker(Core* c);      // 0x80118240 (overlay)
+void beh_child_trig_motion(Core* c);          // 0x8013A900 (overlay)
+void beh_prng_velocity_machine(Core* c);      // 0x80117658 (overlay)
+void beh_quad_record_table_seed(Core* c);     // 0x80135D64 (overlay)
+void beh_flagbit_timer_machine(Core* c);      // 0x8013B2E4 (overlay)
+void beh_two_child_steer(Core* c);            // 0x80131D08 (overlay)
+void beh_single_child_cull(Core* c);          // 0x80132400 (overlay)
+void beh_twin_record_steer(Core* c);          // 0x80133D6C (overlay)
+void beh_multi_record_phase_machine(Core* c); // 0x80134FD8 (overlay)
+void beh_sine_motion_sfx(Core* c);            // 0x80136158 (overlay)
+void beh_box_rearm_sub(Core* c);              // 0x8013ADBC (overlay)
+void beh_node3_router(Core* c);               // 0x8011CBD0 (overlay)
+void beh_actor_move_sm(Core* c);              // 0x8011D988 (overlay)
+void beh_variant_actor_sm(Core* c);           // 0x8011D578 (overlay)
+void beh_lift_platform(Core* c);              // 0x8013A330 (overlay)
+void beh_event_record_machine(Core* c);       // 0x80136954 (overlay)
+void beh_typed_variant_router(Core* c);       // 0x8011C164 (overlay)
+void beh_camera_target_follow(Core* c);       // 0x80059ED8 (resident)
+void beh_cube_text_spawn(Core* c);            // 0x8003AD48 (resident)
+void beh_area_transition_machine(Core* c);    // 0x80127798 (overlay)
+void beh_rand_phase_cull(Core* c);            // 0x8002918C (resident)
+void beh_pos_history_trail(Core* c);          // 0x80029B40 (resident)
+void beh_variant_overlay_lifecycle(Core* c);  // 0x8007DC38 (resident)
 
 namespace {
 struct NativeBeh { uint32_t addr; void (*fn)(Core*); const char* name; };
 constexpr NativeBeh kTable[] = {
   { 0x80040558u, ov_sm40558,                          "sm40558" },
-  { 0x8004CE14u, ov_beh_record_list_scanner,      "record_list_scanner" },
-  { 0x8006F2D0u, ov_beh_pad_child_linker,         "pad_child_linker" },
-  { 0x80071A3Cu, ov_beh_area_event_dispatch,      "area_event_dispatch" },
-  { 0x800739ACu, ov_beh_scene_ui_trigger,         "scene_ui_trigger" },
-  { 0x80073CD8u, ov_beh_typed_init_scene_trigger, "typed_init_scene_trigger" },
-  { 0x800741DCu, ov_beh_pickup_collect_trigger,   "pickup_collect_trigger" },
-  { 0x8012EB54u, ov_beh_substate_edge_orchestrator,"substate_edge_orchestrator" },
-  { 0x80124E74u, ov_beh_jumptable_release_trigger,"jumptable_release_trigger" },
-  { 0x80133C14u, ov_beh_typed_table_seed_gate,    "typed_table_seed_gate" },
-  { 0x80138FC8u, ov_beh_typed_jumptable_pair,     "typed_jumptable_pair" },
-  { 0x8013259Cu, ov_beh_cull_substate_orchestrator,"cull_substate_orchestrator" },
-  { 0x80145230u, ov_beh_id_compare_motion_dispatch,"id_compare_motion_dispatch" },
-  { 0x8012D4ECu, ov_beh_jumptable_flag_gate,      "jumptable_flag_gate" },
-  { 0x8012D404u, ov_beh_cull_tick_render,         "cull_tick_render" },
-  { 0x801395C0u, ov_beh_sibling_angle_track,      "sibling_angle_track" },
-  { 0x8013C538u, ov_beh_scatter_record_dither,    "scatter_record_dither" },
-  { 0x8013C3F4u, ov_beh_area_threshold_ptr_swap,  "area_threshold_ptr_swap" },
-  { 0x8013C9C0u, ov_beh_scatter_ramp_machine,     "scatter_ramp_machine" },
-  { 0x80136D9Cu, ov_beh_pure_inner_dispatch,      "pure_inner_dispatch" },
-  { 0x80129C00u, ov_beh_anim_trigger_gates,       "anim_trigger_gates" },
-  { 0x8012A0B8u, ov_beh_box_seed_phase_gate,      "box_seed_phase_gate" },
-  { 0x8012DA04u, ov_beh_typed_anim_spawn,         "typed_anim_spawn" },
-  { 0x80121978u, ov_beh_id_routed_dispatch,       "id_routed_dispatch" },
-  { 0x80125E0Cu, ov_beh_pure_substate_dispatch,   "pure_substate_dispatch" },
-  { 0x80128760u, ov_beh_linked_advance_branch,    "linked_advance_branch" },
-  { 0x80118240u, ov_beh_typed_init_exit_poker,    "typed_init_exit_poker" },
-  { 0x8013A900u, ov_beh_child_trig_motion,        "child_trig_motion" },
-  { 0x80117658u, ov_beh_prng_velocity_machine,    "prng_velocity_machine" },
-  { 0x80135D64u, ov_beh_quad_record_table_seed,   "quad_record_table_seed" },
-  { 0x8013B2E4u, ov_beh_flagbit_timer_machine,    "flagbit_timer_machine" },
-  { 0x80131D08u, ov_beh_two_child_steer,          "two_child_steer" },
-  { 0x80132400u, ov_beh_single_child_cull,        "single_child_cull" },
-  { 0x80133D6Cu, ov_beh_twin_record_steer,        "twin_record_steer" },
-  { 0x80134FD8u, ov_beh_multi_record_phase_machine,"multi_record_phase_machine" },
-  { 0x80136158u, ov_beh_sine_motion_sfx,          "sine_motion_sfx" },
-  { 0x8013ADBCu, ov_beh_box_rearm_sub,            "box_rearm_sub" },
-  { 0x8011CBD0u, ov_beh_node3_router,             "node3_router" },
-  { 0x8011D988u, ov_beh_actor_move_sm,            "actor_move_sm" },
-  { 0x8011D578u, ov_beh_variant_actor_sm,         "variant_actor_sm" },
-  { 0x8013A330u, ov_beh_lift_platform,            "lift_platform" },
-  { 0x80136954u, ov_beh_event_record_machine,     "event_record_machine" },
-  { 0x8011C164u, ov_beh_typed_variant_router,     "typed_variant_router" },
-  { 0x80059ED8u, ov_beh_camera_target_follow,     "camera_target_follow" },
-  { 0x8003AD48u, ov_beh_cube_text_spawn,          "cube_text_spawn" },
-  { 0x80127798u, ov_beh_area_transition_machine,  "area_transition_machine" },
-  { 0x8004C238u, ov_beh_visibility_gate_dispatch, "visibility_gate_dispatch" },  // resident
-  { 0x8002918Cu, ov_beh_rand_phase_cull,          "rand_phase_cull" },           // resident
-  { 0x80029B40u, ov_beh_pos_history_trail,        "pos_history_trail" },          // resident
-  { 0x8007DC38u, ov_beh_variant_overlay_lifecycle,"variant_overlay_lifecycle" },  // resident
+  { 0x8004CE14u, beh_record_list_scanner,      "record_list_scanner" },
+  { 0x8006F2D0u, beh_pad_child_linker,         "pad_child_linker" },
+  { 0x80071A3Cu, beh_area_event_dispatch,      "area_event_dispatch" },
+  { 0x800739ACu, beh_scene_ui_trigger,         "scene_ui_trigger" },
+  { 0x80073CD8u, beh_typed_init_scene_trigger, "typed_init_scene_trigger" },
+  { 0x800741DCu, beh_pickup_collect_trigger,   "pickup_collect_trigger" },
+  { 0x8012EB54u, beh_substate_edge_orchestrator,"substate_edge_orchestrator" },
+  { 0x80124E74u, beh_jumptable_release_trigger,"jumptable_release_trigger" },
+  { 0x80133C14u, beh_typed_table_seed_gate,    "typed_table_seed_gate" },
+  { 0x80138FC8u, beh_typed_jumptable_pair,     "typed_jumptable_pair" },
+  { 0x8013259Cu, beh_cull_substate_orchestrator,"cull_substate_orchestrator" },
+  { 0x80145230u, beh_id_compare_motion_dispatch,"id_compare_motion_dispatch" },
+  { 0x8012D4ECu, beh_jumptable_flag_gate,      "jumptable_flag_gate" },
+  { 0x8012D404u, beh_cull_tick_render,         "cull_tick_render" },
+  { 0x801395C0u, beh_sibling_angle_track,      "sibling_angle_track" },
+  { 0x8013C538u, beh_scatter_record_dither,    "scatter_record_dither" },
+  { 0x8013C3F4u, beh_area_threshold_ptr_swap,  "area_threshold_ptr_swap" },
+  { 0x8013C9C0u, beh_scatter_ramp_machine,     "scatter_ramp_machine" },
+  { 0x80136D9Cu, beh_pure_inner_dispatch,      "pure_inner_dispatch" },
+  { 0x80129C00u, beh_anim_trigger_gates,       "anim_trigger_gates" },
+  { 0x8012A0B8u, beh_box_seed_phase_gate,      "box_seed_phase_gate" },
+  { 0x8012DA04u, beh_typed_anim_spawn,         "typed_anim_spawn" },
+  { 0x80121978u, beh_id_routed_dispatch,       "id_routed_dispatch" },
+  { 0x80125E0Cu, beh_pure_substate_dispatch,   "pure_substate_dispatch" },
+  { 0x80128760u, beh_linked_advance_branch,    "linked_advance_branch" },
+  { 0x80118240u, beh_typed_init_exit_poker,    "typed_init_exit_poker" },
+  { 0x8013A900u, beh_child_trig_motion,        "child_trig_motion" },
+  { 0x80117658u, beh_prng_velocity_machine,    "prng_velocity_machine" },
+  { 0x80135D64u, beh_quad_record_table_seed,   "quad_record_table_seed" },
+  { 0x8013B2E4u, beh_flagbit_timer_machine,    "flagbit_timer_machine" },
+  { 0x80131D08u, beh_two_child_steer,          "two_child_steer" },
+  { 0x80132400u, beh_single_child_cull,        "single_child_cull" },
+  { 0x80133D6Cu, beh_twin_record_steer,        "twin_record_steer" },
+  { 0x80134FD8u, beh_multi_record_phase_machine,"multi_record_phase_machine" },
+  { 0x80136158u, beh_sine_motion_sfx,          "sine_motion_sfx" },
+  { 0x8013ADBCu, beh_box_rearm_sub,            "box_rearm_sub" },
+  { 0x8011CBD0u, beh_node3_router,             "node3_router" },
+  { 0x8011D988u, beh_actor_move_sm,            "actor_move_sm" },
+  { 0x8011D578u, beh_variant_actor_sm,         "variant_actor_sm" },
+  { 0x8013A330u, beh_lift_platform,            "lift_platform" },
+  { 0x80136954u, beh_event_record_machine,     "event_record_machine" },
+  { 0x8011C164u, beh_typed_variant_router,     "typed_variant_router" },
+  { 0x80059ED8u, beh_camera_target_follow,     "camera_target_follow" },
+  { 0x8003AD48u, beh_cube_text_spawn,          "cube_text_spawn" },
+  { 0x80127798u, beh_area_transition_machine,  "area_transition_machine" },
+  { 0x8004C238u, beh_visibility_gate_dispatch, "visibility_gate_dispatch" },  // resident
+  { 0x8002918Cu, beh_rand_phase_cull,          "rand_phase_cull" },           // resident
+  { 0x80029B40u, beh_pos_history_trail,        "pos_history_trail" },          // resident
+  { 0x8007DC38u, beh_variant_overlay_lifecycle,"variant_overlay_lifecycle" },  // resident
 };
 }  // namespace
 

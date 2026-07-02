@@ -49,6 +49,8 @@ constexpr uint32_t BEH_FN = 0x801395C0u;
 
 constexpr uint32_t TD = 0x8014AA38u;   // lui 0x8015, addiu -0x55c8  (8-byte stride)
 
+}  // namespace
+
 void beh_sibling_angle_track(Core* c) {
   const uint32_t obj = c->r[4];                         // 801395C8  move s2, a0
   uint8_t st = c->mem_r8(obj + 4);                      // 801395DC  lbu v1, 4(s2)
@@ -168,29 +170,3 @@ void beh_sibling_angle_track(Core* c) {
   c->r[4] = obj; c->engine.graphicsBind.renderUpdate();          // 80139808 jal 0x800517f8 (render; a0=s2 delay)
   // 80139810 j 0x80139820 (epilogue)
 }
-
-}  // namespace — ov_beh_sibling_angle_track (below) is the exported entry point.
-
-void ov_beh_sibling_angle_track(Core* c) {
-  static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("sibling_angle_trackverify") ? 1 : 0;
-  if (!s_v) { beh_sibling_angle_track(c); return; }
-  static uint8_t* ram0 = (uint8_t*)malloc(0x200000);
-  static uint8_t* ramN = (uint8_t*)malloc(0x200000);
-  uint8_t spad0[0x400], spadN[0x400];
-  uint32_t regs0[32]; memcpy(regs0, c->r, sizeof regs0);
-  uint32_t obj = c->r[4];
-  memcpy(ram0, c->ram, 0x200000); memcpy(spad0, c->scratch, 0x400);
-  beh_sibling_angle_track(c);
-  memcpy(ramN, c->ram, 0x200000); memcpy(spadN, c->scratch, 0x400);
-  memcpy(c->ram, ram0, 0x200000); memcpy(c->scratch, spad0, 0x400); memcpy(c->r, regs0, sizeof regs0);
-  rec_super_call(c, BEH_FN);
-  uint32_t sp = regs0[29] & 0x1FFFFFu, flo = (sp >= 0x800) ? sp - 0x800 : 0;
-  int ro = -1; for (uint32_t a = 0; a < 0x200000; a++) if (c->ram[a] != ramN[a] && !(a >= flo && a < sp)) { ro = (int)a; break; }
-  int so = -1; for (uint32_t a = 0; a < 0x400; a++) if (c->scratch[a] != spadN[a]) { so = (int)a; break; }
-  static long ng = 0, nb = 0;
-  if (ro >= 0 || so >= 0) {
-    if (nb++ < 40) fprintf(stderr, "[sibling_angle_trackverify] MISMATCH obj=%08x st=%u sub=%u ram@%x spad@%x\n",
-                           obj, c->mem_r8(obj + 4), c->mem_r8(obj + 5), ro, so);
-  } else if (++ng % 50 == 0) fprintf(stderr, "[sibling_angle_trackverify] %ld matches\n", ng);
-}
-

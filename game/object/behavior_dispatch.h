@@ -5,7 +5,7 @@
 // `c->engine.behaviors.method(args)`.
 //
 // SCOPE: the single registry that maps a per-object HANDLER address to its native implementation
-// (each `beh_*.cpp` behavior file exposes a `ov_beh_*_run(Core*)` entry that's registered in the
+// (each `beh_*.cpp` behavior file exposes a `beh_*(Core*)` entry that's registered in the
 // table). Owns the dispatcher entry point every field walk / transition machine uses to hand off
 // one object's per-frame tick — the walker sets the current-object bookkeeping and picks native-
 // vs-substrate. Was the free functions `dispatch_obj_method` / `dispatch_native_behavior` /

@@ -56,6 +56,8 @@ constexpr uint32_t TB = 0x8014A9B0u;   // lui 0x8015, addiu -0x5650
 constexpr uint32_t TC = 0x8014A9B8u;   // lui 0x8015, addiu -0x5648  (12-byte stride)
 constexpr uint32_t TD = 0x8014AA38u;   // lui 0x8015, addiu -0x55c8  ( 8-byte stride, JT1 case 2)
 
+}  // namespace
+
 void beh_typed_jumptable_pair(Core* c) {
   const uint32_t obj = c->r[4];                       // 80138FD0  move s0, a0
   uint8_t st = c->mem_r8(obj + 4);                    // 80138FDC  lbu v1, 4(s0)
@@ -336,29 +338,3 @@ void beh_typed_jumptable_pair(Core* c) {
   c->mem_w8(obj + 0x29, 0);                           // 80139598 sb zero, 0x29(s0)
   c->mem_w8(obj + 0x2b, 0);                           // 801395A0 sb zero, 0x2b(s0)  (delay slot of j epilogue)
 }
-
-}  // namespace — ov_beh_typed_jumptable_pair (below) is the exported entry point.
-
-void ov_beh_typed_jumptable_pair(Core* c) {
-  static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("typed_jumptable_pairverify") ? 1 : 0;
-  if (!s_v) { beh_typed_jumptable_pair(c); return; }
-  static uint8_t* ram0 = (uint8_t*)malloc(0x200000);
-  static uint8_t* ramN = (uint8_t*)malloc(0x200000);
-  uint8_t spad0[0x400], spadN[0x400];
-  uint32_t regs0[32]; memcpy(regs0, c->r, sizeof regs0);
-  uint32_t obj = c->r[4];
-  memcpy(ram0, c->ram, 0x200000); memcpy(spad0, c->scratch, 0x400);
-  beh_typed_jumptable_pair(c);
-  memcpy(ramN, c->ram, 0x200000); memcpy(spadN, c->scratch, 0x400);
-  memcpy(c->ram, ram0, 0x200000); memcpy(c->scratch, spad0, 0x400); memcpy(c->r, regs0, sizeof regs0);
-  rec_super_call(c, BEH_FN);
-  uint32_t sp = regs0[29] & 0x1FFFFFu, flo = (sp >= 0x800) ? sp - 0x800 : 0;
-  int ro = -1; for (uint32_t a = 0; a < 0x200000; a++) if (c->ram[a] != ramN[a] && !(a >= flo && a < sp)) { ro = (int)a; break; }
-  int so = -1; for (uint32_t a = 0; a < 0x400; a++) if (c->scratch[a] != spadN[a]) { so = (int)a; break; }
-  static long ng = 0, nb = 0;
-  if (ro >= 0 || so >= 0) {
-    if (nb++ < 40) fprintf(stderr, "[typed_jumptable_pairverify] MISMATCH obj=%08x st=%u sub=%u ram@%x spad@%x\n",
-                           obj, c->mem_r8(obj + 4), c->mem_r8(obj + 5), ro, so);
-  } else if (++ng % 50 == 0) fprintf(stderr, "[typed_jumptable_pairverify] %ld matches\n", ng);
-}
-

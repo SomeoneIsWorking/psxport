@@ -60,6 +60,8 @@ static inline void lift_sfx(Core* c, uint32_t s0) {
     leaf3(c, 0x8d, 0, 0, 0x80074590u);                     // FUN_80074590(0x8D,0,0)
 }
 
+}  // namespace
+
 void beh_lift_platform(Core* c) {
   uint32_t nd = c->r[4];
   uint8_t st = c->mem_r8(nd + 4);
@@ -178,29 +180,3 @@ void beh_lift_platform(Core* c) {
     leaf1(c, nd, 0x80139a70u);                             // FUN_80139A70
   }
 }
-
-}  // namespace — ov_beh_lift_platform (below) is the exported entry point.
-
-void ov_beh_lift_platform(Core* c) {
-  static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("lift_platformverify") ? 1 : 0;
-  if (!s_v) { beh_lift_platform(c); return; }
-  static uint8_t* ram0 = (uint8_t*)malloc(0x200000);
-  static uint8_t* ramN = (uint8_t*)malloc(0x200000);
-  uint8_t spad0[0x400], spadN[0x400];
-  uint32_t regs0[32]; memcpy(regs0, c->r, sizeof regs0);
-  uint32_t obj = c->r[4];
-  memcpy(ram0, c->ram, 0x200000); memcpy(spad0, c->scratch, 0x400);
-  beh_lift_platform(c);
-  memcpy(ramN, c->ram, 0x200000); memcpy(spadN, c->scratch, 0x400);
-  memcpy(c->ram, ram0, 0x200000); memcpy(c->scratch, spad0, 0x400); memcpy(c->r, regs0, sizeof regs0);
-  rec_super_call(c, BEH_FN);
-  uint32_t sp = regs0[29] & 0x1FFFFFu, flo = (sp >= 0x800) ? sp - 0x800 : 0;
-  int ro = -1; for (uint32_t a = 0; a < 0x200000; a++) if (c->ram[a] != ramN[a] && !(a >= flo && a < sp)) { ro = (int)a; break; }
-  int so = -1; for (uint32_t a = 0; a < 0x400; a++) if (c->scratch[a] != spadN[a]) { so = (int)a; break; }
-  static long ng = 0, nb = 0;
-  if (ro >= 0 || so >= 0) {
-    if (nb++ < 40) fprintf(stderr, "[lift_platformverify] MISMATCH obj=%08x st=%u n5e=%u ram@%x spad@%x\n",
-                           obj, c->mem_r8(obj + 4), c->mem_r8(obj + 0x5e), ro, so);
-  } else if (++ng % 50 == 0) fprintf(stderr, "[lift_platformverify] %ld matches\n", ng);
-}
-

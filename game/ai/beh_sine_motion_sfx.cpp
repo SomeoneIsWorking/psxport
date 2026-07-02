@@ -40,6 +40,8 @@ namespace {
 
 constexpr uint32_t BEH_FN = 0x80136158u;
 
+}  // namespace
+
 void beh_sine_motion_sfx(Core* c) {
   uint32_t nd = c->r[4];                 // s0 (node) — constant
   int32_t s1 = 0, s2 = 0, s3 = 0;
@@ -305,29 +307,3 @@ void beh_sine_motion_sfx(Core* c) {
  Lret:
   return;
 }
-
-}  // namespace — ov_beh_sine_motion_sfx (below) is the exported entry point.
-
-void ov_beh_sine_motion_sfx(Core* c) {
-  static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("sine_motion_sfxverify") ? 1 : 0;
-  if (!s_v) { beh_sine_motion_sfx(c); return; }
-  static uint8_t* ram0 = (uint8_t*)malloc(0x200000);
-  static uint8_t* ramN = (uint8_t*)malloc(0x200000);
-  uint8_t spad0[0x400], spadN[0x400];
-  uint32_t regs0[32]; memcpy(regs0, c->r, sizeof regs0);
-  uint32_t obj = c->r[4];
-  memcpy(ram0, c->ram, 0x200000); memcpy(spad0, c->scratch, 0x400);
-  beh_sine_motion_sfx(c);
-  memcpy(ramN, c->ram, 0x200000); memcpy(spadN, c->scratch, 0x400);
-  memcpy(c->ram, ram0, 0x200000); memcpy(c->scratch, spad0, 0x400); memcpy(c->r, regs0, sizeof regs0);
-  rec_super_call(c, BEH_FN);
-  uint32_t sp = regs0[29] & 0x1FFFFFu, flo = (sp >= 0x800) ? sp - 0x800 : 0;
-  int ro = -1; for (uint32_t a = 0; a < 0x200000; a++) if (c->ram[a] != ramN[a] && !(a >= flo && a < sp)) { ro = (int)a; break; }
-  int so = -1; for (uint32_t a = 0; a < 0x400; a++) if (c->scratch[a] != spadN[a]) { so = (int)a; break; }
-  static long ng = 0, nb = 0;
-  if (ro >= 0 || so >= 0) {
-    if (nb++ < 40) fprintf(stderr, "[sine_motion_sfxverify] MISMATCH obj=%08x st=%u n5=%u ram@%x spad@%x\n",
-                           obj, c->mem_r8(obj + 4), c->mem_r8(obj + 5), ro, so);
-  } else if (++ng % 50 == 0) fprintf(stderr, "[sine_motion_sfxverify] %ld matches\n", ng);
-}
-

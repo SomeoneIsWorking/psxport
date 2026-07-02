@@ -43,6 +43,8 @@ namespace {
 
 constexpr uint32_t BEH_FN = 0x80145230u;
 
+}  // namespace
+
 void beh_id_compare_motion_dispatch(Core* c) {
   const uint32_t obj = c->r[4];                        // s0 = a0 = node              [0x80145238]
   const uint32_t s4  = obj + 0x60;                     // s4 = node+0x60              [0x8014525C]
@@ -280,29 +282,3 @@ after_no_cull:;
   c->mem_w8(s4 + 7, 0);                                 // sb zero,7(s4)=node[0x67] [delay slot @0x80145618]
   // j 0x80145654 (epilogue)
 }
-
-}  // namespace — ov_beh_id_compare_motion_dispatch (below) is the exported entry point.
-
-void ov_beh_id_compare_motion_dispatch(Core* c) {
-  static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("id_compare_motion_dispatchverify") ? 1 : 0;
-  if (!s_v) { beh_id_compare_motion_dispatch(c); return; }
-  static uint8_t* ram0 = (uint8_t*)malloc(0x200000);
-  static uint8_t* ramN = (uint8_t*)malloc(0x200000);
-  uint8_t spad0[0x400], spadN[0x400];
-  uint32_t regs0[32]; memcpy(regs0, c->r, sizeof regs0);
-  uint32_t obj = c->r[4];
-  memcpy(ram0, c->ram, 0x200000); memcpy(spad0, c->scratch, 0x400);
-  beh_id_compare_motion_dispatch(c);
-  memcpy(ramN, c->ram, 0x200000); memcpy(spadN, c->scratch, 0x400);
-  memcpy(c->ram, ram0, 0x200000); memcpy(c->scratch, spad0, 0x400); memcpy(c->r, regs0, sizeof regs0);
-  rec_super_call(c, BEH_FN);
-  uint32_t sp = regs0[29] & 0x1FFFFFu, flo = (sp >= 0x800) ? sp - 0x800 : 0;
-  int ro = -1; for (uint32_t a = 0; a < 0x200000; a++) if (c->ram[a] != ramN[a] && !(a >= flo && a < sp)) { ro = (int)a; break; }
-  int so = -1; for (uint32_t a = 0; a < 0x400; a++) if (c->scratch[a] != spadN[a]) { so = (int)a; break; }
-  static long ng = 0, nb = 0;
-  if (ro >= 0 || so >= 0) {
-    if (nb++ < 40) fprintf(stderr, "[id_compare_motion_dispatchverify] MISMATCH obj=%08x st=%u sub=%u ram@%x spad@%x\n",
-                           obj, c->mem_r8(obj + 4), c->mem_r8(obj + 5), ro, so);
-  } else if (++ng % 50 == 0) fprintf(stderr, "[id_compare_motion_dispatchverify] %ld matches\n", ng);
-}
-
