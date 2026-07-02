@@ -38,6 +38,7 @@
 #include "cfg.h"
 #include "world/pool.h"          // ov_pool_init_run (FUN_8007B18C) + siblings
 #include "world/placement.h"     // ov_place_objects (FUN_80072A78)
+#include "core/asset.h"          // class Asset — preloadTexgroup (static, area-load sync)
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -460,12 +461,11 @@ static void demo_frame_s0(Core* c) {
   }
   { // area-load FUN_80044BD4(callback=FUN_80044F58, a1=2, a2=0): native sync (no task spawn, no yield).
     // FUN_80044BD4 latches a1->0x801fe0de, a2->0x801fe0dd, clears 0x1f80019b, then the callback runs and
-    // sets 0x1f80019b=1. preload_texgroup(mode,set) IS the synchronous FUN_80044F58.
-    void preload_texgroup(Core*, uint32_t, uint32_t);
+    // sets 0x1f80019b=1. asset.preloadTexgroup(mode,set) IS the synchronous FUN_80044F58.
     c->mem_w8(0x801fe0deu, 2);
     c->mem_w8(0x801fe0ddu, 0);
     c->mem_w8(0x1f80019bu, 0);
-    preload_texgroup(c, 0, 2);   // FUN_80044BD4(set=2, mode=0)
+    c->engine.asset.preloadTexgroup(0, 2);   // FUN_80044BD4(set=2, mode=0)
     c->mem_w8(0x1f80019bu, 1);
   }
   rec_dispatch(c, 0x8007982Cu);                // zero+seed the 1524B control block @0x800BF870 (SYNC)

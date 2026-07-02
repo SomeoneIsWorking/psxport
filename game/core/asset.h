@@ -1,13 +1,56 @@
-// engine/asset.h — PC-native asset loading subsystem (texture-group load + LZ decompress + VRAM upload).
-// Extracted from game_tomba2.cpp into its own module (PC-game code structure). Registered in
-// game_tomba2.cpp's init block by these names.
+// game/core/asset.h — class Asset — PC-native ASSET LOADING subsystem owned by Engine
+// (LZ decompress + texture-group unpack + CPU→VRAM upload + stage-0/1 preload chain).
+//
+// PROPER OOP: one instance per Core, embedded on Engine (`c->engine.asset`). Back-pointer `core`
+// wired at Core construction time (same pattern as Font / Placement / Pool / GraphicsBind).
+// Subsystem, not a math library — Asset owns the engine's loading domain (staging buffers, VRAM
+// upload, the boot preload chain) even though the class has no fields today. See CLAUDE.md
+// "REAL C++ CLASSES" — default = instance for subsystems; static is only for pure-math libraries.
+//
+// SCOPE: the LZ image decompressor (FUN_80044D8C), the texture-group unpacker (FUN_80044E84),
+// the texture-group loader orchestration (FUN_80044F58), the CPU→VRAM upload (FUN_80081218), and
+// the stage-0/stage-1 boot PRELOAD chain (preloadTexgroup / preloadStage1).
+//
+// Was the free functions ov_lz_decompress / ov_unpack_group / ov_load_texgroup / ov_upload_image
+// + free helpers preload_texgroup / preload_stage1, each taking its arguments via MIPS taxi
+// parameters (c->r[4/5/6/7]) or as C args. Now real instance methods with explicit typed args.
 #ifndef ENGINE_ASSET_H
 #define ENGINE_ASSET_H
-struct Core;
-void ov_lz_decompress(Core* c);   // FUN_80044D8C — LZ image decompressor
-void ov_unpack_group(Core* c);    // FUN_80044E84 — texture-group unpacker (decompress+upload each image)
-void ov_load_texgroup(Core* c);   // FUN_80044F58 — texture-group LOADER orchestration (header+archive+unpack)
-void ov_upload_image(Core* c);    // FUN_80081218 — PC-native CPU->VRAM upload
-void preload_texgroup(Core* c, uint32_t mode, uint32_t set);   // FUN_80044F58 (stage-0/stage-1 texgroup preload, synchronous)
-void preload_stage1(Core* c);     // FUN_8004514C — SWDATA+DAT load, shared texgroup sub-load, relocation, cel/sprite VRAM build
+#include <stdint.h>
+class Core;
+
+class Asset {
+public:
+  Core* core = nullptr;
+
+  // lzDecompress(desc, dst, src, srclen): FUN_80044D8C — the LZ image decompressor. Returns
+  //   bytes written into dst. desc[+4] = row stride (s16) used for row-neighbour back-refs via
+  //   the offset table @0x800153C8.
+  uint32_t lzDecompress(uint32_t desc, uint32_t dst, uint32_t src, uint32_t srclen);
+
+  // unpackGroup(tablePtr, anchorEnd): FUN_80044E84 — texture-group unpacker. Iterates the
+  //   descriptor table (count @+0, 12-byte entries after +4), decompressing each image into
+  //   transient scratch ending at anchorEnd, then uploading (uploadImage) to its VRAM (x,y).
+  void unpackGroup(uint32_t tablePtr, uint32_t anchorEnd);
+
+  // loadTexgroup(): FUN_80044F58 — texture-group LOADER orchestration. mode/set inputs come from
+  //   the current task struct at *(0x1F800138u) — [+0x6D]=mode, [+0x6E]=set — so no explicit
+  //   args. CD-loads header + archive, unpacks, copies the 42-word metadata, then (mode==0) does
+  //   the terminal task yield (does not return mid-game).
+  void loadTexgroup();
+
+  // uploadImage(desc, src): FUN_80081218 — PC-native CPU→VRAM upload. desc = { x:s16, y:s16,
+  //   w:s16, h:s16 }; src = w*h contiguous 16-bit pixels (row-major). Bypasses the PSX
+  //   GsSortObject ring — writes straight into native VRAM.
+  void uploadImage(uint32_t desc, uint32_t src);
+
+  // preloadTexgroup(mode, set): stage-0/stage-1 texgroup PRELOAD — synchronous CD read +
+  //   loadTexgroup path with explicit mode/set (not read from the task struct). Used by the
+  //   native_stage0_sm boot preload chain in engine_stage.cpp and by engine_demo's area-load.
+  void preloadTexgroup(uint32_t mode, uint32_t set);
+
+  // preloadStage1(): FUN_8004514C — SWDATA + DAT load, shared texgroup sub-load, relocation,
+  //   cel/sprite VRAM build. Second state of the boot preload chain.
+  void preloadStage1();
+};
 #endif

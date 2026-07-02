@@ -30,7 +30,7 @@
 #include "placement.h"              // ov_place_objects — native field object-placement driver (game/world)
 #include "pool.h"                    // ov_pool_init_run — native object-pool init (game/world)
 #include "c_subsys.h"                // disc_find_file — native ISO9660 resolver (native_task0_bootstrap/ov_start_bin_stage)
-#include "asset.h"                   // preload_texgroup / preload_stage1 (native_stage0_sm)
+#include "asset.h"                   // class Asset — preloadTexgroup / preloadStage1 (native_stage0_sm)
 #include <stdio.h>
 
 // dispatch a still-recomp leaf with up to 3 args set (helpers for the native stage machines).
@@ -1454,8 +1454,8 @@ static void native_stage0_sm(Core* c) {
   uint32_t task = c->mem_r32(CUR_TASK);
   c->mem_w16(task + 0x48, 0);
   c->mem_w16(task + 0x4a, 0);
-  preload_texgroup(c, 0, 0);          // state 0: index/asset preload
-  preload_stage1(c);                  // state 1: SWDATA + DAT + cel/sprite VRAM build
+  c->engine.asset.preloadTexgroup(0, 0);    // state 0: index/asset preload
+  c->engine.asset.preloadStage1();          // state 1: SWDATA + DAT + cel/sprite VRAM build
   native_start_stage(c, 1);           // state 3: switch task0 -> stage 1 (DEMO 0x801062e4), state=3
   ov_switch(c);                       // yield (longjmp to the scheduler); never returns
 }

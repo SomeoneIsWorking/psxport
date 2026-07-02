@@ -28,6 +28,7 @@
 #include "world/graphics_bind.h" // Engine owns the GraphicsBind object render-bind subsystem
 #include "ui/font.h"             // Engine owns the Font boot-time init subsystem
 #include "object/animation.h"    // Engine owns the Animation per-object VM stepper
+#include "core/asset.h"          // Engine owns the Asset loader subsystem
 class Core;
 
 class Engine {
@@ -50,6 +51,7 @@ public:
   GraphicsBind     graphicsBind;      // per-object render-bind subsystem (guest FUN_8007AAE8 et al.)
   Font             font;              // boot-time font / text init subsystem (guest FUN_80075130)
   Animation        animation;         // per-object animation-VM stepper       (guest FUN_80076D68)
+  Asset            asset;              // asset loader — LZ + texgroup + VRAM upload + boot preload
 
   // ── GAME-stage entry points (called by the scheduler each frame) ────────────────────────────
   // stagePrologue: one-time prologue that runs when the GAME task enters — task-slot setup, first

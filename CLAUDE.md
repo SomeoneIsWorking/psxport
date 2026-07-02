@@ -88,28 +88,32 @@ trackers.
   instant-VSync / fake-CD bandaids or env escape hatches (`PSXPORT_VSYNC_OK`-style), or an interpreter.
 - **No bandaids / no magic constant offsets.** Name the root cause; document every lifted function /
   patched value with the RE that justifies it. (See the global "No bandaids" rule.)
-- **REAL C++ CLASSES, no `extern "C"` shims — but pick INSTANCE vs STATIC by whether there's real
-  state.** Every PC-native subsystem is a `class Foo`, never a grab-bag of free functions. Cross-file
-  entries are class methods (never `extern "C" void foo(Core*)`), and legacy free-function/`extern "C"`
-  scaffolding in touched files is CLEANUP TERRITORY — class-ify it in the same commit; don't leave two
-  shapes half-alive.
-  - **INSTANCE methods** (`class Foo` embedded as `Core::foo` with a `core` back-pointer wired in
-    `Core::Core()`; callers do `c->foo.method(args)`) when the subsystem OWNS PER-CORE STATE — cached
-    handles, buffers, mode/flag fields, subsystem-scoped RAM, sub-subsystem members. Examples:
-    `Engine`, `CutsceneCamera`, `ScreenFade`, `Render`.
-  - **STATIC methods on the class** (`Math::rotmat(c, a, b)` — `class Math { static uint32_t rotmat(Core*,
-    uint32_t, uint32_t); … };`) when the subsystem is PURE OPERATIONS OVER `Core*` with no per-instance
-    state. Don't fabricate a `core` back-pointer just to reach `c->r[]` / `c->mem_*` / GTE regs — that's
-    fake state, and the extra `Core*` arg at each callsite is not a real cost. Examples: `Math` (GTE
-    transform cluster), `Mtx` (matrix helpers). No embedded `Core::math` member; callers do
-    `Math::rotmat(c, a, b)`.
-  - **DON'T split the difference.** A "stateless class with a back-pointer to look like instance"
-    (`c->math.rotmat(a, b)` where `math` has only a `core` field) is the worst of both: fake state,
-    fake OOP, extra wiring for no benefit. Pick real instance OR real static.
-  - **Grouping matters more than state count.** A cohesive cluster (`Math` = 6 rot/mat entries) belongs
-    in one class even if empty — the class is the boundary. A single leaf that only lives inside another
-    subsystem doesn't need its own class; it's a method on the parent.
-  (User directive, 2026-07-01, refined 2026-07-02 — "does it need to be object oriented?")
+- **REAL C++ CLASSES, no `extern "C"` shims.** Every PC-native subsystem is a `class Foo`, never a
+  grab-bag of free functions. Cross-file entries are class methods (never `extern "C" void foo(Core*)`),
+  and legacy free-function/`extern "C"` scaffolding in touched files is CLEANUP TERRITORY — class-ify
+  it in the same commit; don't leave two shapes half-alive.
+  - **DEFAULT = INSTANCE method on a Core-owned subsystem.** `class Foo` is embedded on `Engine` (or
+    directly on `Core` for a platform subsystem) with a `core` back-pointer wired in `Core::Core()`;
+    callers do `c->engine.foo.method(args)`. This is the shape for every SUBSYSTEM — anything the
+    engine/platform OWNS (asset loading, font, placement, pool, sound, camera, render, fade, HUD, …),
+    even when the class has no fields today. The class IS the ownership boundary; the fact that a
+    subsystem grew state later is normal, and the back-pointer costs nothing. Examples: `Engine`,
+    `CutsceneCamera`, `ScreenFade`, `Render`, `Font`, `Placement`, `Pool`, `GraphicsBind`,
+    `Animation`, `Asset`.
+  - **NARROW EXCEPTION: `static` methods for pure-MATH / UTILITY libraries only.** Use `class Math`
+    with all-`static` methods (`Math::rotmat(c, a, b)`) when the class is a math/utility LIBRARY
+    with no owned engine domain — pure operations over `Core*` that any caller can invoke stateless,
+    the way `std::sqrt` is stateless. The bar is high: it's NOT "no fields today" (subsystems often
+    have no fields today either — see the default above); it's "this class will never own anything,
+    because it's a computation library, not a subsystem". Examples: `Math` (GTE transform cluster),
+    `Mtx` (matrix helpers), `Trig` (rsin/rcos). Static classes are NOT embedded on Engine — callers
+    reach them by `ClassName::method(c, …)`, not `c->engine.classname`.
+  - **When in doubt, INSTANCE.** A subsystem misclassified as static (`Asset::load(c, …)`) is worse
+    than an instance-with-empty-body: it reads as "this isn't really part of the engine", it breaks
+    the `c->engine.X.method()` pattern the rest of the codebase uses, and it fights back when the
+    subsystem grows real state.
+  (User directive, 2026-07-01, refined 2026-07-02 — "does it need to be object oriented?" for pure
+  math → static ok; but subsystems stay instance even when stateless.)
 
 ## RENDER — reimplement, don't transcribe (the clearest case)
 The old "native" render (`engine_submit.cpp` submit_terrain / ov_submit_poly_gt4_bp / native_dl) was a

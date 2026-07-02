@@ -14,9 +14,7 @@
 //
 // Was the free functions ov_mat_mul / ov_apply_matlv / ov_rotmat / ov_rot_x/y/z, each taking its
 // arguments via MIPS taxi parameters (c->r[4/5/6]). Now real static methods with typed pointer/angle
-// arguments. The internal bodies still run the taxi-marshalled ov_* free functions (kept alongside
-// for the `mathverify` A/B gate), so the class layer is a thin, safe façade — same body, same call
-// chain, same guest-state writes.
+// arguments — no taxi marshal at any layer, the body reads directly from the args.
 #ifndef GAME_MATH_ENGINE_MATH_H
 #define GAME_MATH_ENGINE_MATH_H
 #include <stdint.h>
@@ -45,12 +43,4 @@ public:
   static uint32_t rotZ(Core* c, int16_t angle, uint32_t matPtr);
 };
 
-// Internal free-function bodies (still-taxi ov_*), retained for the `mathverify` A/B gate + as the
-// bit-exact reference; external callers should use Math::*, not these.
-void ov_mat_mul(Core* c);
-void ov_apply_matlv(Core* c);
-void ov_rot_x(Core* c);
-void ov_rot_y(Core* c);
-void ov_rot_z(Core* c);
-void ov_rotmat(Core* c);
 #endif

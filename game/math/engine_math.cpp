@@ -151,14 +151,14 @@ static void load_mat3(Core* c, uint32_t p, int16_t m[3][3]) {
   m[1][0]=(int16_t)(w1>>16); m[1][1]=(int16_t)w2;       m[1][2]=(int16_t)(w2>>16);
   m[2][0]=(int16_t)w3;       m[2][1]=(int16_t)(w3>>16); m[2][2]=(int16_t)w4;
 }
-void ov_mat_mul(Core* c) {
+uint32_t Math::matMul(Core* c, uint32_t rPtr, uint32_t mPtr, uint32_t outPtr) {
   int16_t R[3][3], M[3][3], P[3][3];
-  load_mat3(c, c->r[4], R);
-  load_mat3(c, c->r[5], M);
+  load_mat3(c, rPtr, R);
+  load_mat3(c, mPtr, M);
   // Faithful CTC2: the real body loads R into the GTE rotation-matrix CR0-4 and leaves it there, so a
-  // following MVMVA (FUN_80084220 ov_apply_matlv reads CR0-4) sees this matrix. Replicate it so the CR
+  // following MVMVA (FUN_80084220 Math::applyMatlv reads CR0-4) sees this matrix. Replicate it so the CR
   // coupling is robust regardless of call order (was previously relying on a prior 80084470's CR write).
-  for (int i=0;i<5;i++) gte_write_ctrl(i, c->mem_r32(c->r[4]+i*4));
+  for (int i=0;i<5;i++) gte_write_ctrl(i, c->mem_r32(rPtr + i*4));
   int32_t mac1=0, mac2=0, mac3=0;  // trailing MAC1-3 = last column's pre-clamp results (GTE leftover)
   for (int j = 0; j < 3; j++) {              // column j of M = MVMVA vector Vj
     for (int i = 0; i < 3; i++) {            // matrix row i
@@ -171,12 +171,11 @@ void ov_mat_mul(Core* c) {
       if (j == 2) { if (i==0) mac1=mac; else if (i==1) mac2=mac; else mac3=mac; }
     }
   }
-  uint32_t a2 = c->r[6];
-  c->mem_w32(a2,    (uint16_t)P[0][0] | ((uint32_t)(uint16_t)P[0][1] << 16));
-  c->mem_w32(a2+4,  (uint16_t)P[0][2] | ((uint32_t)(uint16_t)P[1][0] << 16));
-  c->mem_w32(a2+8,  (uint16_t)P[1][1] | ((uint32_t)(uint16_t)P[1][2] << 16));
-  c->mem_w32(a2+12, (uint16_t)P[2][0] | ((uint32_t)(uint16_t)P[2][1] << 16));
-  c->mem_w32(a2+16, (uint32_t)(int32_t)P[2][2]);  // SWC2 IR3: sign-extended 32-bit, not a packed halfword
+  c->mem_w32(outPtr,    (uint16_t)P[0][0] | ((uint32_t)(uint16_t)P[0][1] << 16));
+  c->mem_w32(outPtr+4,  (uint16_t)P[0][2] | ((uint32_t)(uint16_t)P[1][0] << 16));
+  c->mem_w32(outPtr+8,  (uint16_t)P[1][1] | ((uint32_t)(uint16_t)P[1][2] << 16));
+  c->mem_w32(outPtr+12, (uint16_t)P[2][0] | ((uint32_t)(uint16_t)P[2][1] << 16));
+  c->mem_w32(outPtr+16, (uint32_t)(int32_t)P[2][2]);  // SWC2 IR3: sign-extended 32-bit, not a packed halfword
   // GTE leftover state a downstream gte_op reader could consume (the recomp body leaves the LAST
   // column's input vector in DR0/DR1 (VXY0/VZ0) + that column's MVMVA result in IR1-3/MAC1-3).
   gte_write_data(0, (uint32_t)(uint16_t)M[0][2] | ((uint32_t)(uint16_t)M[1][2] << 16));  // VXY0 = col2 (VX,VY)
@@ -187,41 +186,7 @@ void ov_mat_mul(Core* c) {
   gte_write_data(25, (uint32_t)mac1);                // MAC1
   gte_write_data(26, (uint32_t)mac2);                // MAC2
   gte_write_data(27, (uint32_t)mac3);                // MAC3
-  c->r[2] = a2;                                       // returns a2
-}
-
-// Comparator: diff a2 (5 words) AND all 32 GTE DATA regs, native vs the recomp reference. Snapshot regs
-// + a2 + GTE data/ctrl, run native, capture, restore everything, run oracle, capture, diff. Reveals
-// both output correctness and any GTE-state LEAKAGE the native path must replicate.
-static void ov_mat_mul_verify(Core* c) {
-  uint32_t rsave[32]; memcpy(rsave, c->r, sizeof rsave);
-  uint32_t a2 = c->r[6];
-  uint32_t a2save[5]; for (int i=0;i<5;i++) a2save[i]=c->mem_r32(a2+i*4);
-  uint32_t gd0[32], gc0[32]; for (int i=0;i<32;i++){ gd0[i]=gte_read_data(i); gc0[i]=gte_read_ctrl(i); }
-  ov_mat_mul(c);
-  uint32_t a2m[5]; for (int i=0;i<5;i++) a2m[i]=c->mem_r32(a2+i*4);
-  uint32_t gdm[32]; for (int i=0;i<32;i++) gdm[i]=gte_read_data(i);
-  // restore pre-state for the oracle
-  memcpy(c->r, rsave, sizeof rsave);
-  for (int i=0;i<5;i++) c->mem_w32(a2+i*4, a2save[i]);
-  for (int i=0;i<32;i++){ gte_write_data(i, gd0[i]); gte_write_ctrl(i, gc0[i]); }
-  rec_interp(c, 0x80084110u);
-  uint32_t a2o[5]; for (int i=0;i<5;i++) a2o[i]=c->mem_r32(a2+i*4);
-  uint32_t gdo[32]; for (int i=0;i<32;i++) gdo[i]=gte_read_data(i);
-  static int nbad=0, ngood=0; int bad=0;
-  for (int i=0;i<5;i++) if (a2m[i]!=a2o[i]) { bad=1; if (nbad<60) fprintf(stderr,"[mathverify] matmul a2+%d mine=%08x oracle=%08x\n", i*4, a2m[i], a2o[i]); }
-  for (int i=0;i<32;i++) {
-    // DR12-14 = XY_FIFO, DR15 = SXYP, DR31 = LZCR: FIFO/derived regs that MVMVA does NOT write, and the
-    // comparator's gte_write_data restore can't round-trip a FIFO (a write pushes it). Excluded — they
-    // diverge only as a snapshot artifact, not a real ov_mat_mul leak (both paths leave them untouched).
-    if (i>=12 && i<=15) continue; if (i==31) continue;
-    if (gdm[i]!=gdo[i]) { bad=1; if (nbad<60) fprintf(stderr,"[mathverify] matmul GTE-DR%d mine=%08x oracle=%08x\n", i, gdm[i], gdo[i]); }
-  }
-  if (bad) nbad++;
-  else if ((ngood++ % 5000)==0) fprintf(stderr,"[mathverify] matmul match #%d\n", ngood);
-  // keep native result live
-  memcpy(c->r, rsave, sizeof rsave); for (int i=0;i<5;i++) c->mem_w32(a2+i*4,a2m[i]);
-  for (int i=0;i<32;i++) gte_write_data(i, gdm[i]); c->r[2]=a2;
+  return outPtr;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
@@ -248,13 +213,12 @@ static inline void rotmat_trig(Core* c, int32_t angle, int* s, int* co) {
 }
 static inline int16_t gpf1(int ir0, int ir) { return clamp16s(((int32_t)ir0 * ir) >> 12); }  // MAC=(IR0*IR)>>12, clamp16
 static inline uint8_t lmC(int32_t v) { return (uint8_t)(v < 0 ? 0 : (v > 255 ? 255 : v)); }  // GTE Lm_C
-void ov_rotmat(Core* c) {
-  uint32_t a0 = c->r[4], out = c->r[5];
-  uint32_t w0 = c->mem_r32(a0);
+uint32_t Math::rotmat(Core* c, uint32_t anglesPtr, uint32_t out) {
+  uint32_t w0 = c->mem_r32(anglesPtr);
   int sx,cx,sy,cy,sz,cz;
   rotmat_trig(c, (int16_t)w0,        &sx, &cx);            // vx (low half of +0)
   rotmat_trig(c, (int16_t)(w0>>16),  &sy, &cy);            // vy (high half of +0)
-  rotmat_trig(c, (int16_t)c->mem_r16(a0+4), &sz, &cz);     // vz (+4)
+  rotmat_trig(c, (int16_t)c->mem_r16(anglesPtr+4), &sz, &cz);   // vz (+4)
   // GPF rounds (clamped scalar×vector products), in the asm's order:
   int16_t cxsy = gpf1(cx, sy), cxsz = gpf1(cx, sz), cxcz = gpf1(cx, cz);            // R1: IR0=cx
   int16_t sxsy = gpf1(sx, sy), sxsz = gpf1(sx, sz), sxcz = gpf1(sx, cz);            // R2: IR0=sx
@@ -272,7 +236,6 @@ void ov_rotmat(Core* c) {
   c->mem_w32(out+8,  (uint16_t)m11 | ((uint32_t)(uint16_t)m12 << 16));
   c->mem_w32(out+12, (uint16_t)m20 | ((uint32_t)(uint16_t)m21 << 16));
   c->mem_w16(out+16, (uint16_t)m22);
-  c->r[2] = out;
   // GTE leftover state a still-PSX gte_op reader could consume. The body runs 4 GPFs; the last leaves
   // IR0=sz, IR1-3=clamp16(R4 MACs), MAC1-3=raw R4 products, and the RGB FIFO holds R2/R3/R4 colors.
   int32_t r4m1=((int32_t)sz*cy)>>12, r4m2=((int32_t)sz*sxsy)>>12, r4m3=((int32_t)sz*cxsy)>>12;
@@ -293,33 +256,7 @@ void ov_rotmat(Core* c) {
   gte_write_data(21, MKCOL(r3m1,r3m2,r3m3));
   gte_write_data(22, MKCOL(r4m1,r4m2,r4m3));
   #undef MKCOL
-}
-
-// Comparator: diff the 5 output words + all 32 GTE data regs, native vs the recomp reference.
-static void ov_rotmat_verify(Core* c) {
-  uint32_t rsave[32]; memcpy(rsave, c->r, sizeof rsave);
-  uint32_t out = c->r[5];
-  uint32_t osave[5]; for (int i=0;i<5;i++) osave[i]=c->mem_r32(out+i*4);
-  uint32_t gd0[32], gc0[32]; for (int i=0;i<32;i++){ gd0[i]=gte_read_data(i); gc0[i]=gte_read_ctrl(i); }
-  ov_rotmat(c);
-  uint32_t om[5]; for (int i=0;i<5;i++) om[i]=c->mem_r32(out+i*4);
-  uint32_t gdm[32]; for (int i=0;i<32;i++) gdm[i]=gte_read_data(i);
-  memcpy(c->r, rsave, sizeof rsave);
-  for (int i=0;i<5;i++) c->mem_w32(out+i*4, osave[i]);
-  for (int i=0;i<32;i++){ gte_write_data(i, gd0[i]); gte_write_ctrl(i, gc0[i]); }
-  rec_interp(c, 0x80085480u);
-  uint32_t oo[5]; for (int i=0;i<5;i++) oo[i]=c->mem_r32(out+i*4);
-  uint32_t gdo[32]; for (int i=0;i<32;i++) gdo[i]=gte_read_data(i);
-  static int nbad=0, ngood=0; int bad=0;
-  for (int i=0;i<5;i++) if (om[i]!=oo[i]) { bad=1; if (nbad<60) fprintf(stderr,"[mathverify] rotmat out+%d mine=%08x oracle=%08x\n", i*4, om[i], oo[i]); }
-  for (int i=0;i<32;i++) {
-    if (i>=12 && i<=15) continue; if (i==31) continue;   // XY FIFO + LZCR: untouched / can't round-trip
-    if (gdm[i]!=gdo[i]) { bad=1; if (nbad<60) fprintf(stderr,"[mathverify] rotmat GTE-DR%d mine=%08x oracle=%08x\n", i, gdm[i], gdo[i]); }
-  }
-  if (bad) nbad++;
-  else if ((ngood++ % 5000)==0) fprintf(stderr,"[mathverify] rotmat match #%d\n", ngood);
-  memcpy(c->r, rsave, sizeof rsave); for (int i=0;i<5;i++) c->mem_w32(out+i*4,om[i]);
-  for (int i=0;i<32;i++) gte_write_data(i, gdm[i]); c->r[2]=out;
+  return out;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
@@ -342,38 +279,17 @@ static inline void rotpair_trig(Core* c, uint32_t a0, int posSin, int* s, int* c
   if (posSin < 0) sinv = -sinv;     // Y-axis variant flips the sign
   *s = sinv;
 }
-static void rotpair(Core* c, uint32_t rowA, uint32_t rowB, int posSin) {
-  uint32_t m = c->r[5];
-  int s, co; rotpair_trig(c, c->r[4], posSin, &s, &co);
+static uint32_t rotpair(Core* c, int16_t angle, uint32_t matPtr, uint32_t rowA, uint32_t rowB, int posSin) {
+  int s, co; rotpair_trig(c, (uint32_t)(int32_t)angle, posSin, &s, &co);
   int16_t A[3], B[3];
-  for (int i = 0; i < 3; i++) { A[i] = (int16_t)c->mem_r16(m + rowA + i*2); B[i] = (int16_t)c->mem_r16(m + rowB + i*2); }
-  for (int i = 0; i < 3; i++) c->mem_w16(m + rowA + i*2, (uint16_t)(int16_t)(((int32_t)co*A[i] - (int32_t)s*B[i]) >> 12));
-  for (int i = 0; i < 3; i++) c->mem_w16(m + rowB + i*2, (uint16_t)(int16_t)(((int32_t)s*A[i]  + (int32_t)co*B[i]) >> 12));
-  c->r[2] = m;
+  for (int i = 0; i < 3; i++) { A[i] = (int16_t)c->mem_r16(matPtr + rowA + i*2); B[i] = (int16_t)c->mem_r16(matPtr + rowB + i*2); }
+  for (int i = 0; i < 3; i++) c->mem_w16(matPtr + rowA + i*2, (uint16_t)(int16_t)(((int32_t)co*A[i] - (int32_t)s*B[i]) >> 12));
+  for (int i = 0; i < 3; i++) c->mem_w16(matPtr + rowB + i*2, (uint16_t)(int16_t)(((int32_t)s*A[i]  + (int32_t)co*B[i]) >> 12));
+  return matPtr;
 }
-void ov_rot_z(Core* c) { rotpair(c, 0, 6, +1); }   // FUN_80085050
-void ov_rot_y(Core* c) { rotpair(c, 0, 12, -1); }  // FUN_80084EB0
-void ov_rot_x(Core* c) { rotpair(c, 6, 12, +1); }  // FUN_80084D10
-// shared comparator: diff the 6 written halfwords (at rowA{+0,2,4}, rowB{+0,2,4}) vs the recomp ref
-static void rotpair_verify(Core* c, uint32_t addr, void(*fn)(Core*), uint32_t rowA, uint32_t rowB, const char* tag) {
-  uint32_t rsave[32]; memcpy(rsave, c->r, sizeof rsave);
-  uint32_t m = c->r[5];
-  uint32_t off[6] = { rowA, rowA+2, rowA+4, rowB, rowB+2, rowB+4 };
-  uint16_t save[6]; for (int i=0;i<6;i++) save[i]=(uint16_t)c->mem_r16(m+off[i]);
-  fn(c);
-  uint16_t mine[6]; for (int i=0;i<6;i++) mine[i]=(uint16_t)c->mem_r16(m+off[i]);
-  memcpy(c->r, rsave, sizeof rsave); for (int i=0;i<6;i++) c->mem_w16(m+off[i], save[i]);
-  rec_interp(c, addr);
-  uint16_t orc[6]; for (int i=0;i<6;i++) orc[i]=(uint16_t)c->mem_r16(m+off[i]);
-  static int nbad=0, ngood=0; int bad=0;
-  for (int i=0;i<6;i++) if (mine[i]!=orc[i]) { bad=1; if (nbad<80) fprintf(stderr,"[mathverify] %s hw%d mine=%04x oracle=%04x (ang=%08x)\n", tag, i, mine[i], orc[i], rsave[4]); }
-  if (bad) nbad++; else if ((ngood++%5000)==0) fprintf(stderr,"[mathverify] %s match #%d\n", tag, ngood);
-  for (int i=0;i<6;i++) c->mem_w16(m+off[i], mine[i]);
-  memcpy(c->r, rsave, sizeof rsave); c->r[2]=m;
-}
-static void ov_rot_z_verify(Core* c){ rotpair_verify(c, 0x80085050u, ov_rot_z, 0, 6,  "rotZ"); }
-static void ov_rot_y_verify(Core* c){ rotpair_verify(c, 0x80084EB0u, ov_rot_y, 0, 12, "rotY"); }
-static void ov_rot_x_verify(Core* c){ rotpair_verify(c, 0x80084D10u, ov_rot_x, 6, 12, "rotX"); }
+uint32_t Math::rotZ(Core* c, int16_t angle, uint32_t matPtr) { return rotpair(c, angle, matPtr, 0,  6, +1); }   // FUN_80085050
+uint32_t Math::rotY(Core* c, int16_t angle, uint32_t matPtr) { return rotpair(c, angle, matPtr, 0, 12, -1); }   // FUN_80084EB0
+uint32_t Math::rotX(Core* c, int16_t angle, uint32_t matPtr) { return rotpair(c, angle, matPtr, 6, 12, +1); }   // FUN_80084D10
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
 // FUN_80084220 — MVMVA the rotation matrix already in the GTE CR regs by a vector → IR1-3 (libgte
@@ -382,8 +298,8 @@ static void ov_rot_x_verify(Core* c){ rotpair_verify(c, 0x80084D10u, ov_rot_x, 6
 // mx=ROT, v=V0, cv=Null, lm=0) reading the rotation matrix from CR0-4 (loaded by a prior CTC2), then
 // SWC2 IR1-3 → a1. USER 2026-06-21: GTE math PC-native (the matrix is read from CR — i.e. content the
 // engine/game previously loaded — so this is content-interface; the C MVMVA must be GTE-exact).
-void ov_apply_matlv(Core* c) {
-  uint32_t w0 = c->mem_r32(c->r[4]), w1 = c->mem_r32(c->r[4]+4);
+uint32_t Math::applyMatlv(Core* c, uint32_t inPtr, uint32_t out) {
+  uint32_t w0 = c->mem_r32(inPtr), w1 = c->mem_r32(inPtr+4);
   int16_t v[3] = { (int16_t)w0, (int16_t)(w0>>16), (int16_t)w1 };
   // rotation matrix R from GTE CONTROL regs CR0..CR4 (same packing as load_mat3 but from ctrl)
   uint32_t cr0=gte_read_ctrl(0),cr1=gte_read_ctrl(1),cr2=gte_read_ctrl(2),cr3=gte_read_ctrl(3),cr4=gte_read_ctrl(4);
@@ -399,37 +315,14 @@ void ov_apply_matlv(Core* c) {
     t = sign44(t + (int32_t)R[i][2]*v[2]);
     mac[i] = (int32_t)(t >> 12); ir[i] = clamp16s(mac[i]);
   }
-  uint32_t out = c->r[5];
   c->mem_w32(out,   (uint32_t)(int32_t)ir[0]);
   c->mem_w32(out+4, (uint32_t)(int32_t)ir[1]);
   c->mem_w32(out+8, (uint32_t)(int32_t)ir[2]);
-  c->r[2] = out;
   // GTE leftover: VXY0/VZ0 = the MTC2'd input; IR1-3, MAC1-3 = the MVMVA result.
   gte_write_data(0, w0); gte_write_data(1, w1);
   gte_write_data(9,(uint32_t)(int32_t)ir[0]); gte_write_data(10,(uint32_t)(int32_t)ir[1]); gte_write_data(11,(uint32_t)(int32_t)ir[2]);
   gte_write_data(25,(uint32_t)mac[0]); gte_write_data(26,(uint32_t)mac[1]); gte_write_data(27,(uint32_t)mac[2]);
-}
-static void ov_apply_matlv_verify(Core* c) {
-  uint32_t rsave[32]; memcpy(rsave, c->r, sizeof rsave);
-  uint32_t out = c->r[5];
-  uint32_t osave[3]; for (int i=0;i<3;i++) osave[i]=c->mem_r32(out+i*4);
-  uint32_t gd0[32], gc0[32]; for (int i=0;i<32;i++){ gd0[i]=gte_read_data(i); gc0[i]=gte_read_ctrl(i); }
-  ov_apply_matlv(c);
-  uint32_t om[3]; for (int i=0;i<3;i++) om[i]=c->mem_r32(out+i*4);
-  uint32_t gdm[32]; for (int i=0;i<32;i++) gdm[i]=gte_read_data(i);
-  memcpy(c->r, rsave, sizeof rsave);
-  for (int i=0;i<3;i++) c->mem_w32(out+i*4, osave[i]);
-  for (int i=0;i<32;i++){ gte_write_data(i, gd0[i]); gte_write_ctrl(i, gc0[i]); }
-  rec_interp(c, 0x80084220u);
-  uint32_t oo[3]; for (int i=0;i<3;i++) oo[i]=c->mem_r32(out+i*4);
-  uint32_t gdo[32]; for (int i=0;i<32;i++) gdo[i]=gte_read_data(i);
-  static int nbad=0, ngood=0; int bad=0;
-  for (int i=0;i<3;i++) if (om[i]!=oo[i]) { bad=1; if (nbad<80) fprintf(stderr,"[mathverify] applylv out+%d mine=%08x oracle=%08x\n", i*4, om[i], oo[i]); }
-  for (int i=0;i<32;i++) { if (i>=12&&i<=15) continue; if (i==31) continue;
-    if (gdm[i]!=gdo[i]) { bad=1; if (nbad<80) fprintf(stderr,"[mathverify] applylv GTE-DR%d mine=%08x oracle=%08x\n", i, gdm[i], gdo[i]); } }
-  if (bad) nbad++; else if ((ngood++%5000)==0) fprintf(stderr,"[mathverify] applylv match #%d\n", ngood);
-  memcpy(c->r, rsave, sizeof rsave); for (int i=0;i<3;i++) c->mem_w32(out+i*4,om[i]);
-  for (int i=0;i<32;i++) gte_write_data(i, gdm[i]); c->r[2]=out;
+  return out;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
@@ -654,44 +547,3 @@ void engine_math_register(void) {
   int v = cfg_dbg("mathverify");
 }
 
-// ═════════════════════════════════════════════════════════════════════════════════════════════════
-// class Math — STATELESS namespace-class (all static). Each method is a thin wrapper that marshals
-// its typed args into the MIPS taxi registers (c->r[4/5/6]) and invokes the still-taxi ov_* body
-// above, so the same call chain, same guest-state writes, and same GTE data-reg leftover semantics
-// are preserved verbatim. Callers use `Math::foo(c, a, b)` instead of the `c->r[4]=a; c->r[5]=b;
-// ov_foo(c)` taxi pattern. No instance, no embedded member on Engine (see CLAUDE.md OOP rule).
-// ═════════════════════════════════════════════════════════════════════════════════════════════════
-
-uint32_t Math::matMul(Core* c, uint32_t rPtr, uint32_t mPtr, uint32_t outPtr) {
-  c->r[4] = rPtr; c->r[5] = mPtr; c->r[6] = outPtr;
-  ov_mat_mul(c);
-  return c->r[2];
-}
-
-uint32_t Math::applyMatlv(Core* c, uint32_t inPtr, uint32_t outPtr) {
-  c->r[4] = inPtr; c->r[5] = outPtr;
-  ov_apply_matlv(c);
-  return c->r[2];
-}
-
-uint32_t Math::rotmat(Core* c, uint32_t anglesPtr, uint32_t outPtr) {
-  c->r[4] = anglesPtr; c->r[5] = outPtr;
-  ov_rotmat(c);
-  return c->r[2];
-}
-
-uint32_t Math::rotX(Core* c, int16_t angle, uint32_t matPtr) {
-  c->r[4] = (uint32_t)(int32_t)angle; c->r[5] = matPtr;
-  ov_rot_x(c);
-  return c->r[2];
-}
-uint32_t Math::rotY(Core* c, int16_t angle, uint32_t matPtr) {
-  c->r[4] = (uint32_t)(int32_t)angle; c->r[5] = matPtr;
-  ov_rot_y(c);
-  return c->r[2];
-}
-uint32_t Math::rotZ(Core* c, int16_t angle, uint32_t matPtr) {
-  c->r[4] = (uint32_t)(int32_t)angle; c->r[5] = matPtr;
-  ov_rot_z(c);
-  return c->r[2];
-}

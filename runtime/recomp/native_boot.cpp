@@ -21,7 +21,7 @@
 #include "scheduler.h" // ov_switch/native_scheduler_step + TASKBASE/TASKSTRIDE/CUR_TASK (scheduler.cpp)
 #include "c_subsys.h"
 #include "cfg.h"
-#include "asset.h"     // ov_unpack_group / ov_upload_image — existing native asset leaves (call direct)
+#include "asset.h"     // class Asset — c->engine.asset (unpackGroup / uploadImage / preload*)
 #include "audio/music_list.h"   // native sound-test: music_list_play/stop (engine/audio/)
 #include <stdio.h>
 #include <stdlib.h>
