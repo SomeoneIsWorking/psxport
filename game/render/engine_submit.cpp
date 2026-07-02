@@ -615,7 +615,8 @@ void ov_xform51128(Core* c) {
 // inner jal 0x8003CCA4 emitted GTE packets the native renderer couldn't project (is3d=0) → the water drew
 // as a flat 2D FOREGROUND fill OVER the world (the "sea on top" bug). NB: own this TOGETHER with the native
 // ground (later-231 caveat) so both sort by real depth — a still-2D-FG ground would occlude the real-depth water.
-void ov_rwalk_b588(Core* c) {
+void Render::rwalkB588() {
+  Core* c = mCore;
   const uint32_t node = 0x800E7E80u;
   uint32_t v1 = c->mem_r8(node + 0x0D);
   if ((v1 & 0xD0) == 0) {

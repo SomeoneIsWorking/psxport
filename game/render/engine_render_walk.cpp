@@ -72,7 +72,6 @@ void Render::perObjFlush() {
 // PSX OT-walk) so the draw state is the native pass's. Gated `debug scenenative` while standing it up.
 extern "C" int g_scene_native_diag;  int g_scene_native_diag = 0;   // counters for the bring-up probe
 extern "C" long g_sn_objs, g_sn_cmds; long g_sn_objs = 0, g_sn_cmds = 0;
-void ov_rwalk_b588(Core* c);
 // NATIVE BACKDROP tilemap drawer — overlay FUN_80115598 (the seaside field's state-0 background drawer,
 // reached via 0x8003df04's 16-state jump table @0x80014fc0; state 0 → 0x8003df74 → 0x80115598). This is the
 // sky + distant parallax hills (the only thing the decoupled native scene was missing — verified by SKIPPASS
@@ -169,7 +168,7 @@ void Render::sceneNative() { Core* c = mCore;
                       && c->mem_r16(0x801fe04eu) == 0;            // sm[0x4e] == object-placement init (pre-attach)
   if (!field_area_init) {
     // (a) TERRAIN + per-object world geometry via the native render walks (self-route to ov_terrain etc.).
-    rwalkAuxBf00(); rwalkAuxEec0(); ov_rwalk_b588(c); renderWalkSnapshot();
+    rwalkAuxBf00(); rwalkAuxEec0(); rwalkB588(); renderWalkSnapshot();
     rwalkAuxBcf4(); renderWalk();
     // (b) SCENE TABLE (grass / props / sky-sea backdrop) — native world-coord render of 0x800F2418.
     fieldEntityRender(0x800F2418u);

@@ -57,6 +57,12 @@ public:
   // PC-native float terrain render. Taxi-parameter c->r[4] = node. Was ov_terrain.
   void terrain();
 
+  // rwalkB588 (guest 0x8003B588): the field WATER render pass — later-231 "Pass A". Owns the water
+  // node 0x800E7E80's byte-state bookkeeping natively, runs the PSX per-object transform SETUP leaf
+  // (rec_dispatch), then routes the render to the native submit_perobj_render for real-depth world-
+  // coord projection. Was ov_rwalk_b588.
+  void rwalkB588();
+
   // sceneNative: the master scene-render walker (per-frame terrain + entity/object walk over
   // the 3 doubly-linked object lists, with backdrop + collectable-quad + native BG tilemap).
   // Called by game_tomba2.cpp's ov_draw_otag every field-stage frame (and by margin_render's
