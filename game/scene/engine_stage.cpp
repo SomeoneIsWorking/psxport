@@ -205,7 +205,7 @@ void Engine::s4c() { Core* c = core;
 // handlers and descends ownership into gameplay (the SOP field-mode machine). Prereq landed (later-217b):
 // the SOP area load is native+synchronous, so SOP state-0 never yields.
 
-void ov_sop_field_mode(Core*);           // engine/sop.cpp — native SOP field-mode machine
+// (ov_sop_field_mode moved to Sop::fieldMode — c->engine.sop.fieldMode())
 void native_transition_area_load(Core*); // engine/sop.cpp — sync transition area-DATA load
 #include "render/screen_fade/screen_fade.h"   // class ScreenFade — the single fade driver
 #include "camera/cutscene_camera.h"           // class CutsceneCamera — resident driver 0x8006EC44 (native)
@@ -270,7 +270,7 @@ void Engine::submode0() { Core* c = core;
       // 0x80109450 is the loaded MODE overlay's field-mode fn. Our native machine is SOP-specific, so
       // only use it when SOP is actually loaded (signature = its first insn `lui v0,0x1f80` = 0x3C021F80);
       // for any other mode/field overlay, dispatch the guest fn (until that overlay is owned natively too).
-      if (c->mem_r32(0x80109450u) == 0x3C021F80u) ov_sop_field_mode(c);   // native SOP
+      if (c->mem_r32(0x80109450u) == 0x3C021F80u) c->engine.sop.fieldMode();   // native SOP
       else rec_dispatch(c, 0x80109450u);                                   // other overlay -> guest
     }
   } else if (s4c == 1) {

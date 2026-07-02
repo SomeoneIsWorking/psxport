@@ -25,6 +25,7 @@ Core::Core() {
   engine.array8Dispatch.core = this;    // Engine-owned 8-slot fixed-array dispatcher
   engine.objectTable.core = this;       // Engine-owned 40-slot object-table dispatcher
   engine.demo.core = this;              // Engine-owned front-end DEMO / MENU stage
+  engine.sop.core = this;               // Engine-owned SOP intro-cutscene FIELD stage
   rng.core        = this;
   inventory.core  = this;
   // Render umbrella (owned by pointer): allocate, wire its back-pointer + each embedded sub-subsystem.

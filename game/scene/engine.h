@@ -21,6 +21,7 @@
 #include "array8_dispatch.h"     // Engine owns the Array8Dispatch fixed-array dispatcher
 #include "object_table.h"        // Engine owns the ObjectTable 40-slot dispatcher
 #include "demo.h"                // Engine owns the Demo front-end MENU stage machine
+#include "sop.h"                 // Engine owns the Sop intro-cutscene field stage machine
 class Core;
 
 class Engine {
@@ -36,6 +37,7 @@ public:
   Array8Dispatch   array8Dispatch;    // 8-slot fixed array dispatcher   (guest FUN_80026368)
   ObjectTable      objectTable;       // 40-slot fixed object table       (guest FUN_80026C88)
   Demo             demo;              // front-end DEMO / MENU stage machine (docs/engine_re.md)
+  Sop              sop;               // SOP intro-cutscene FIELD stage machine (guest 0x80109450)
 
   // ── GAME-stage entry points (called by the scheduler each frame) ────────────────────────────
   // stagePrologue: one-time prologue that runs when the GAME task enters — task-slot setup, first

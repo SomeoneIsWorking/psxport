@@ -18,6 +18,7 @@
 
 #include "core.h"
 #include "cfg.h"
+#include "sop.h"
 #include <stdio.h>
 
 // dispatch a still-recomp leaf with up to 3 args set (helpers for the SOP/transition machines).
@@ -189,7 +190,7 @@ static void d3(Core* c, uint32_t fn, uint32_t a0, uint32_t a1, uint32_t a2) {
 // Control flow + every field write owned native; the heavy callees stay rec_dispatched (engine
 // subsystems to own next: entity update 0x8010a0e0 / render 0x80109fe0, Tomba update 0x8007b008; and
 // the per-scene content). Called from ov_sop_field_mode states 1/2/3.
-void ov_sop_field_update(Core* c) {
+void Sop::fieldUpdate() { Core* c = core;
   uint32_t sm = c->mem_r32(0x1f800138u);
   int16_t delay = (int16_t)c->mem_r16(sm + 0x60);
   if (delay != 0) {
@@ -237,7 +238,7 @@ void ov_sop_field_update(Core* c) {
 // owned native). CRITICAL: state 0 does NOT call FUN_80044bd4 (which clears 1f80019b, spawns the slot-1
 // load task, and yields-waits — fatal to re-enter per-frame). It calls native_sop_area_load INLINE.
 // Called from the native bridge ov_game_submode0 (per frame) once the GAME loop is native per-frame.
-void ov_sop_field_mode(Core* c) {
+void Sop::fieldMode() { Core* c = core;
   uint32_t sm = c->mem_r32(0x1f800138u);
   uint16_t st = c->mem_r16(sm + 0x50);
   switch (st) {
@@ -299,11 +300,11 @@ void ov_sop_field_mode(Core* c) {
         c->mem_w8(sm + 0x6c, 0x1f);
         c->mem_w16(sm + 0x50, (uint16_t)(c->mem_r16(sm + 0x50) + 1));   // advance to state 2 (GAMEPLAY)
       }
-      ov_sop_field_update(c);                  // native per-frame field update
+      fieldUpdate();                  // native per-frame field update
       break;
     }
     case 2: {  // GAMEPLAY — no fade call, so ScreenFade::frameStart's NONE persists = scene visible
-      ov_sop_field_update(c);
+      fieldUpdate();
       if (c->mem_r8(0x800bf839u) != 0 || (c->mem_r32(0x800e7e68u) & 8) != 0)
         c->mem_w16(sm + 0x50, (uint16_t)(c->mem_r16(sm + 0x50) + 1));
       break;
@@ -314,7 +315,7 @@ void ov_sop_field_mode(Core* c) {
       uint8_t nv = (uint8_t)(c->mem_r8(sm + 0x6c) - 1);
       c->mem_w8(sm + 0x6c, nv);
       if (nv == 0) c->mem_w16(sm + 0x50, (uint16_t)(c->mem_r16(sm + 0x50) + 1));
-      ov_sop_field_update(c);
+      fieldUpdate();
       break;
     }
     case 4: {  // RESET -> next area
