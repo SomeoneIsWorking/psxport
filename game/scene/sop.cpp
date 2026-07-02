@@ -264,7 +264,7 @@ void ov_sop_field_mode(Core* c) {
       CutsceneCamera::runSnapFollow(c, 0x800e8008u, 0x800e8040u);   // BG init (native class CutsceneCamera; was 0x8006e3b0)
       sm = c->mem_r32(0x1f800138u);                   // (callees don't move sm, but reload defensively)
       c->mem_w16(sm + 0x50, 1);
-      d0(c, 0x80075240u);
+      ov_75240_run(c);   // 0x80075240 — native (via LIVE gated entry)
       c->mem_w16(sm + 0x60, 0x1e);
       c->mem_w16(sm + 0x52, 0);
       c->mem_w16(sm + 0x54, 0);
