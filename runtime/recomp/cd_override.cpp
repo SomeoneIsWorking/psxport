@@ -17,6 +17,7 @@
 #include "game.h"
 #include "c_subsys.h"
 #include "cfg.h"
+#include "platform_hle.h"   // class PlatformHle — CD-subsystem HLE registrations go through the singleton
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -323,39 +324,22 @@ void cd_hle_init(Core* c) {
 
 void cd_overrides_init(void) {
   if (cfg_dbg("cd")) s_cd_verbose = 1;
-  // SYNC the inline async CD loader FUN_8001DC40(dest, lba, size_bytes): it stuffs the scratchpad read
-  // descriptor then runs the IRQ-driven reader FUN_8001D940 inline, which (no IRQ in our model) never
-  // drains the word count and hits CD_cw -> VSync (now trapped). Replace the whole entry with the native
-  // synchronous read (cd_dc40_sync sets the same descriptor + reads the sectors straight off the disc).
-  // NB intercept THIS entry (clean a0/a1/a2 contract), NOT the shared core FUN_8001D940 — that core is
-  // also driven by the COOPERATIVE area-load task (FUN_80044bd4 -> task-1), whose descriptor setup differs;
-  // force-syncing the core corrupted the area overlay. (User 2026-06-22: async CD read -> do it sync.)
-  void platform_hle_register(uint32_t, OverrideFn);
-  void cd_dc40(Core*);
-  platform_hle_register(0x8001DC40u, cd_dc40);   // FUN_8001dc40 inline async loader -> sync
-  // Restore the rest of the CD subsystem's native HLEs (orphaned when the override table was removed;
-  // original set recovered from the removal commit). All are I/O primitives in the platform-HLE window
-  // (0x8001Cxxx engine CD glue / 0x8008xxxx libcd) — the FAIL-FAST sync model: every CD op is served
+  // All CD-subsystem HLE handlers register with the process-wide PlatformHle table (class in
+  // platform_hle.h). Every entry is an I/O primitive in the platform-HLE window (0x8001Cxxx
+  // engine CD glue / 0x8008xxxx libcd) — the FAIL-FAST sync model: every CD op is served
   // natively + synchronously, so the libcd IRQ/VSync busy-waits (CdSync/CdCommand) are never reached.
-  // Without these, the cooperative streaming reader (task slot 2, FUN_8001cfc8) spins forever in libcd
-  // CdSync (FUN_8008a6ec) and wedges the whole scheduler frame. Two DELIBERATE omissions vs the original:
-  //   - 0x8001D940 (cd_async_read): do NOT intercept the shared async CORE — it is also driven by the
-  //     cooperative area-load task and force-syncing it corrupts the area overlay (verified pitfall).
-  //   - 0x8008B2D8 (CdInit handshake): owned by sync_overrides_init (cdinit_hs) — don't double-register.
-  platform_hle_register(0x8001D2A8u, voice_play);    // voice/BGM clip player -> native xa_stream
-  platform_hle_register(0x8001CF2Cu, voice_stop);    // stop voice/BGM -> native
-  platform_hle_register(0x8001DB8Cu, cd_loadfile);   // engine file loader -> sync sector read
-  platform_hle_register(0x8008AC34u, cd_command);    // libcd CdCommand -> success (no controller)
-  platform_hle_register(0x8008A6ECu, cd_sync);       // libcd CdSync -> complete (CD is synchronous)
-  platform_hle_register(0x8001CE90u, cd_cmd_stream); // streaming CD-cmd wrapper (GetlocL pos in range)
-  platform_hle_register(0x8008C1ECu, cd_read);       // libcd by-LBA read -> native sync
-  // EXPERIMENT (later-215e): wire the shared async streaming core FUN_8001D940 -> cd_async_read so the
-  // cooperative area-DATA load (skip cutscene -> field: FUN_800452c0 -> FUN_8001db38 -> FUN_8001d940) reads
-  // its sectors synchronously and drains the count, instead of yielding forever for a per-sector IRQ that
-  // never fires (-> 0x1f80019b never set -> area machine cycles -> BLACK field). The old "do NOT sync the
-  // core" pitfall predates the cooperative-yield fix (215c); re-test now that the scheduler runs tasks.
-  void cd_async_read(Core*);
-  platform_hle_register(0x8001D940u, cd_async_read);  // async streaming reader -> sync (area-DATA load)
+  //   0x8008B2D8 (CdInit handshake) is owned by PlatformHle::initBuiltins (cdinit_hs) — don't
+  //   double-register here.
+  auto& hle = PlatformHle::instance();
+  hle.register_(0x8001DC40u, cd_dc40);         // FUN_8001dc40 inline async loader -> sync
+  hle.register_(0x8001D2A8u, voice_play);      // voice/BGM clip player -> native xa_stream
+  hle.register_(0x8001CF2Cu, voice_stop);      // stop voice/BGM -> native
+  hle.register_(0x8001DB8Cu, cd_loadfile);     // engine file loader -> sync sector read
+  hle.register_(0x8008AC34u, cd_command);      // libcd CdCommand -> success (no controller)
+  hle.register_(0x8008A6ECu, cd_sync);         // libcd CdSync -> complete (CD is synchronous)
+  hle.register_(0x8001CE90u, cd_cmd_stream);   // streaming CD-cmd wrapper (GetlocL pos in range)
+  hle.register_(0x8008C1ECu, cd_read);         // libcd by-LBA read -> native sync
+  hle.register_(0x8001D940u, cd_async_read);   // async streaming reader -> sync (area-DATA load)
   // 0x8001DC40 FUN_8001dc40(a0=dest, a1=lba, a2=size_bytes): the intro sequencer's loader
   // variant. Same (dest, lba, size_bytes) contract as FUN_8001db8c — it sets the identical
   // _DAT_1f8001f8/f0/f4 read state — but runs the reader INLINE (calls FUN_8001d940 directly,

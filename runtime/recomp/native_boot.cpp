@@ -290,7 +290,7 @@ static void game_main(Core* c) {
   // per-frame update (still-PSX leaf FUN_800788ac) + per-vblank audio + fps60 commit + gpu_present +
   // gpu_pace_frame + satisfies the vblank pacing dwell. PSXPORT_NATIVE_FRAMES caps the run (headless). ---
   // switch (the cooperative task-switch) is wired via the platform-HLE table — see
-  // sync_overrides_init: FUN_80080880 (ChangeThread, the universal yield/task-end primitive that
+  // PlatformHle::initBuiltins: FUN_80080880 (ChangeThread, the universal yield/task-end primitive that
   // FUN_80051f80/FUN_80051fb4 funnel through) -> switch, so a yield from an interpreted task
   // coroutine longjmps back to the native scheduler. (Was the removed address-keyed override table.)
   // BGM start/stop (FUN_80074BF8 / FUN_80074E48) are now OWNED PC-native by engine/sound.cpp

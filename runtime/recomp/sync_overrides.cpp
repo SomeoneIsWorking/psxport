@@ -140,10 +140,4 @@ void PlatformHle::initBuiltins() {
   register_(0x80080880u, scheduler_yield);
 }
 
-// ---- Legacy free-function shims (thin bridges to the singleton) ------------------------------------
-// Kept so callers that still take an address-only free-function pointer (e.g. shard init tables) work
-// during the migration. New code should reach PlatformHle::instance().register_(...).
-
-void platform_hle_register(uint32_t addr, OverrideFn fn) { PlatformHle::instance().register_(addr, fn); }
-OverrideFn platform_hle_lookup(uint32_t addr)            { return PlatformHle::instance().lookup(addr); }
-void sync_overrides_init(void)                            { PlatformHle::instance().initBuiltins(); }
+// Free-function shims retired 2026-07-03 — all callers reach `PlatformHle::instance()` directly now.

@@ -5,7 +5,8 @@
 #include "core.h"
 #include "game.h"
 #include "cfg.h"
-#include "sbs.h"   // class Sbs — the PSXPORT_SBS live-two-core divergence debugger
+#include "sbs.h"           // class Sbs — the PSXPORT_SBS live-two-core divergence debugger
+#include "platform_hle.h"  // class PlatformHle — HW-sync HLE table (VSync/CdSync/MDEC/ChangeThread)
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -49,7 +50,6 @@ int main(int argc, char** argv) {
   load_exe(path, c);
   void cd_overrides_init(void);
   void games_tomba2_init(void);
-  void sync_overrides_init(void);
   void card_overrides_init(void);
   void threads_init(Core*);
   void threads_register_overrides(void);
@@ -67,7 +67,7 @@ int main(int argc, char** argv) {
   cdc_init();               // native CD controller registers (0x1F801800-3) for raw-CD code
   cd_overrides_init();      // native CD: drive-ready + by-LBA read (S3)
   games_tomba2_init();      // Tomba2 per-game overrides (vblank pacing)
-  sync_overrides_init();    // convert HW sync/wait stalls to native non-stall
+  PlatformHle::instance().initBuiltins();   // HW sync/wait stalls -> native non-stall (VSync/CdSync/MDEC)
   c->game->pad.overridesInit();    // native controller input (per-VBlank pad read override)
   card_overrides_init();    // native memory card (synchronous file-backed libcard I/O)
   threads_init(c);          // native BIOS threads (ucontext); main = slot 0
