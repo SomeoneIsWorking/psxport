@@ -23,6 +23,7 @@
 #include "demo.h"                // Engine owns the Demo front-end MENU stage machine
 #include "sop.h"                 // Engine owns the Sop intro-cutscene field stage machine
 #include "bg_scene_transition_sm.h"  // Engine owns the BG scene-transition fade manager
+#include "world/pool.h"          // Engine owns the Pool per-area init subsystem
 class Core;
 
 class Engine {
@@ -40,6 +41,7 @@ public:
   Demo             demo;              // front-end DEMO / MENU stage machine (docs/engine_re.md)
   Sop              sop;               // SOP intro-cutscene FIELD stage machine (guest 0x80109450)
   BgSceneTransitionSm bgSceneTransitionSm;  // BG scene-transition fade manager (guest FUN_8002655C)
+  Pool             pool;              // per-area object-pool + control-block init (world subsystem)
 
   // ── GAME-stage entry points (called by the scheduler each frame) ────────────────────────────
   // stagePrologue: one-time prologue that runs when the GAME task enters — task-slot setup, first

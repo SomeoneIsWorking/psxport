@@ -246,9 +246,9 @@ void Sop::fieldMode() { Core* c = core;
       //                 during startup delay, then ramps in). Matches PSX FUN_8007e9c8(0xffffff,0,4) per-frame.
       c->screenFade.set(ScreenFade::SUBTRACTIVE, 0xff, 0xff, 0xff);
       native_sop_area_load(c);                 // INLINE sync load (replaces FUN_80044bd4) -> 1f80019b=1
-      ov_pool_init_run(c);   // 0x8007B18C — native (via LIVE gated entry)
-      ov_796dc_run(c);       // 0x800796DC — native (via LIVE gated entry)
-      ov_78610_run(c);       // 0x80078610 — native (via LIVE gated entry)
+      c->engine.pool.init();   // 0x8007B18C — native (via LIVE gated entry)
+      c->engine.pool.resetControlBlock();       // 0x800796DC — native (via LIVE gated entry)
+      c->engine.pool.finalViewInit();       // 0x80078610 — native (via LIVE gated entry)
       d1(c, 0x8010a8d4u, 0x800f2418u);         // SOP bg-ptr setup
       // 3 scene objects: spawn + stamp fields from the SOP overlay tables @0x8010c98c (stride 12).
       for (int i = 0; i < 3; i++) {
@@ -265,7 +265,7 @@ void Sop::fieldMode() { Core* c = core;
       CutsceneCamera::runSnapFollow(c, 0x800e8008u, 0x800e8040u);   // BG init (native class CutsceneCamera; was 0x8006e3b0)
       sm = c->mem_r32(0x1f800138u);                   // (callees don't move sm, but reload defensively)
       c->mem_w16(sm + 0x50, 1);
-      ov_75240_run(c);   // 0x80075240 — native (via LIVE gated entry)
+      c->engine.pool.reset75240();   // 0x80075240 — native (via LIVE gated entry)
       c->mem_w16(sm + 0x60, 0x1e);
       c->mem_w16(sm + 0x52, 0);
       c->mem_w16(sm + 0x54, 0);

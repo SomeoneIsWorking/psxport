@@ -469,7 +469,7 @@ static void demo_frame_s0(Core* c) {
     c->mem_w8(0x1f80019bu, 1);
   }
   rec_dispatch(c, 0x8007982Cu);                // zero+seed the 1524B control block @0x800BF870 (SYNC)
-  ov_75240_run(c);                             // 0x80075240 — native (voice/audio-attr control-block init)
+  c->engine.pool.reset75240();                             // 0x80075240 — native (voice/audio-attr control-block init)
   c->r[4] = 1; rec_dispatch(c, 0x8001CF00u);   // SpuSetCommonAttr CD->SPU mix on (SYNC)
   if (cfg_dbg("demo")) fprintf(stderr, "[demo] s0 init: menu resources loaded, sm[0x48]=1 "
                                "(texgroup meta[0x800FB170]=%08X)\n", c->mem_r32(0x800fb170u));
@@ -657,13 +657,13 @@ static void demo_frame_s7(Core* c) {
     void native_transition_area_load(Core*);
     native_transition_area_load(c);                                 // = sync 0x800452c0; sets 1f80019b=1
     // reinit subsystems (all SYNC; no incoming args / self-args)
-    ov_pool_init_run(c);       // 0x8007B18C — native (via LIVE gated entry)
-    ov_796dc_run(c);           // 0x800796DC — native
-    ov_263e8_run(c);           // 0x800263E8 — native
+    c->engine.pool.init();       // 0x8007B18C — native (via LIVE gated entry)
+    c->engine.pool.resetControlBlock();           // 0x800796DC — native
+    c->engine.pool.seedAreaObjects();           // 0x800263E8 — native
     ov_place_objects(c);       // 0x80072A78 — native (field object-placement driver)
-    ov_75240_run(c);           // 0x80075240 — native
-    ov_783dc_run(c);           // 0x800783DC — native
-    ov_78610_run(c);           // 0x80078610 — native
+    c->engine.pool.reset75240();           // 0x80075240 — native
+    c->engine.pool.setupViewScroll();           // 0x800783DC — native
+    c->engine.pool.finalViewInit();           // 0x80078610 — native
     sm = c->mem_r32(SM_PTR);
     c->r[4] = c->mem_r8(sm + 0x6e); rec_dispatch(c, 0x80079464u);   // jal 0x80079464(sm[0x6e])
     c->mem_w8(0x1f80019au, 1);                                      // sb s1(=1),0x1f80019a

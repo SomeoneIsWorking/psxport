@@ -294,37 +294,45 @@ static void world_init_gate(Core* c, void (*fn)(Core*), uint32_t super, const ch
 // Public GATED entries — the native field case-0 prefix (engine_stage.cpp ov_field_run) calls these
 // directly (PC calls PC) instead of rec_dispatch. Native by default; A/B-vs-recomp when the channel
 // is on. The leaves each fn dispatches stay PSX via rec_dispatch.
-void ov_pool_init_run(Core* c) {                          // 0x8007B18C — object-pool init
+void Pool::init() {                                       // 0x8007B18C — object-pool init
+  Core* c = core;
   static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("poolinitverify") ? 1 : 0;
   if (!s_v) { ov_8007B18C(c); return; }
   static long ng = 0, nb = 0; world_init_gate(c, ov_8007B18C, 0x8007B18Cu, "poolinitverify", &ng, &nb);
 }
-void ov_796dc_run(Core* c) {                              // 0x800796DC — control-block reset + sub-inits
+void Pool::resetControlBlock() {                          // 0x800796DC — control-block reset + sub-inits
+  Core* c = core;
   static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("init796dcverify") ? 1 : 0;
   if (!s_v) { ov_800796DC(c); return; }
   static long ng = 0, nb = 0; world_init_gate(c, ov_800796DC, 0x800796DCu, "init796dcverify", &ng, &nb);
 }
-void ov_263e8_run(Core* c) {                              // 0x800263E8 — area object-record seeding
+void Pool::seedAreaObjects() {                            // 0x800263E8 — area object-record seeding
+  Core* c = core;
   static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("init263e8verify") ? 1 : 0;
   if (!s_v) { ov_800263E8(c); return; }
   static long ng = 0, nb = 0; world_init_gate(c, ov_800263E8, 0x800263E8u, "init263e8verify", &ng, &nb);
 }
-void ov_75240_run(Core* c) {                              // 0x80075240 — clamp/control-block reset
+void Pool::reset75240() {                                 // 0x80075240 — clamp/control-block reset
+  Core* c = core;
   static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("init75240verify") ? 1 : 0;
   if (!s_v) { ov_80075240(c); return; }
   static long ng = 0, nb = 0; world_init_gate(c, ov_80075240, 0x80075240u, "init75240verify", &ng, &nb);
 }
-void ov_783dc_run(Core* c) {                              // 0x800783DC — per-area view/scroll setup
+void Pool::setupViewScroll() {                            // 0x800783DC — per-area view/scroll setup
+  Core* c = core;
   static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("init783dcverify") ? 1 : 0;
   if (!s_v) { ov_800783DC(c); return; }
   static long ng = 0, nb = 0; world_init_gate(c, ov_800783DC, 0x800783DCu, "init783dcverify", &ng, &nb);
 }
-void ov_78610_run(Core* c) {                              // 0x80078610 — final per-area view init
+void Pool::finalViewInit() {                              // 0x80078610 — final per-area view init
+  Core* c = core;
   static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("init78610verify") ? 1 : 0;
   if (!s_v) { ov_80078610(c); return; }
   static long ng = 0, nb = 0; world_init_gate(c, ov_80078610, 0x80078610u, "init78610verify", &ng, &nb);
 }
-void ov_74f24_run(Core* c) {                              // 0x80074F24 — per-area state-index select (a0=area)
+void Pool::selectStateIndex(uint8_t area) {               // 0x80074F24 — per-area state-index select (a0=area)
+  Core* c = core;
+  c->r[4] = area;
   static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("init74f24verify") ? 1 : 0;
   if (!s_v) { ov_80074F24(c); return; }
   static long ng = 0, nb = 0; world_init_gate(c, ov_80074F24, 0x80074F24u, "init74f24verify", &ng, &nb);

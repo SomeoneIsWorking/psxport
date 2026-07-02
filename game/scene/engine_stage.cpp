@@ -558,20 +558,20 @@ void Engine::fieldRun() { Core* c = core;
   uint16_t s4e = c->mem_r16(sm + 0x4e);
   switch (s4e) {
     case 0:
-      ov_pool_init_run(c);   // OWNED native (game/world/pool.cpp) — replaces rec_dispatch(0x8007b18c)
-      ov_796dc_run(c);       // OWNED native (game/world/pool.cpp) — replaces rec_dispatch(0x800796dc)
-      ov_263e8_run(c);       // OWNED native (game/world/pool.cpp) — replaces rec_dispatch(0x800263e8)
+      c->engine.pool.init();   // OWNED native (game/world/pool.cpp) — replaces rec_dispatch(0x8007b18c)
+      c->engine.pool.resetControlBlock();       // OWNED native (game/world/pool.cpp) — replaces rec_dispatch(0x800796dc)
+      c->engine.pool.seedAreaObjects();       // OWNED native (game/world/pool.cpp) — replaces rec_dispatch(0x800263e8)
       ov_place_objects(c);   // OWNED native (game/world/placement.cpp) — replaces rec_dispatch(0x80072a78)
-      ov_75240_run(c);       // OWNED native (game/world/pool.cpp) — replaces rec_dispatch(0x80075240)
-      ov_783dc_run(c);       // OWNED native (game/world/pool.cpp) — replaces rec_dispatch(0x800783dc)
-      ov_78610_run(c);       // OWNED native (game/world/pool.cpp) — replaces rec_dispatch(0x80078610)
+      c->engine.pool.reset75240();       // OWNED native (game/world/pool.cpp) — replaces rec_dispatch(0x80075240)
+      c->engine.pool.setupViewScroll();       // OWNED native (game/world/pool.cpp) — replaces rec_dispatch(0x800783dc)
+      c->engine.pool.finalViewInit();       // OWNED native (game/world/pool.cpp) — replaces rec_dispatch(0x80078610)
       sm = c->mem_r32(0x1f800138u);
       c->mem_w16(sm + 0x4e, 1);
       c->mem_w8(sm + 0x6b, 0);
       if (c->mem_r8(0x800bf89cu) == 2) { c->mem_w16(sm + 0x4e, 9); }
       else if (c->mem_r8(0x800bf870u) == 8) { d0(c, 0x80114b90u); }
       else if (c->mem_r32(0x800bf870u) == 0x15) { c->mem_w16(sm + 0x4e, 0xb); return; }
-      c->r[4] = c->mem_r8(0x800bf870u); ov_74f24_run(c);   // OWNED native — replaces d1(0x80074f24, area)
+      c->engine.pool.selectStateIndex(c->mem_r8(0x800bf870u));   // OWNED native — replaces d1(0x80074f24, area)
       break;
     case 2:
       d2(c, 0x80058304u, 0x800e7e80u, 0xc);
