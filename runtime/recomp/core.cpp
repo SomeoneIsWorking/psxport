@@ -38,6 +38,7 @@ Core::Core() {
   engine.bit.core = this;               // Engine-owned game-flag bitmap bit-test subsystem
   engine.spawn.core = this;             // Engine-owned entity spawn/despawn subsystem
   engine.behaviors.core = this;         // Engine-owned per-object behavior dispatcher
+  engine.cull.core = this;              // Engine-owned visibility cull subsystem
   rng.core        = this;
   trig.core       = this;
   math.core       = this;

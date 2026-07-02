@@ -156,48 +156,6 @@ static void cull_native_body(Core* c) {
   }
 }
 
-// PSXPORT_DEBUG=cullverify — per-call gate: predict native (pure), let the recomp body do the real
-// writes, then compare the observed effects (visible flag @obj+1, state word, queue count deltas +
-// the pushed pointer) against the prediction. Scratchpad-blind to a plain RAM diff, so this is the
-// gate. 0 mismatches over many k live calls ⇒ flip to cull_native_body.
-static void cull_verify_body(Core* c) {
-  uint32_t obj = c->r[4];
-  uint32_t cnt_b[3], ptr_b[3];
-  for (int i = 0; i < 3; i++) { cnt_b[i] = (uint16_t)c->mem_r16(CULL_QCNT[i]); ptr_b[i] = c->mem_r32(CULL_QPTR[i]); }
-  CullDecision R = cull_decide(c);
-  rec_super_call(c, 0x8007712Cu);                         // authoritative writes
-  static long ngood = 0, nbad = 0;
-  int bad = 0;
-  int kept_a = c->mem_r8(obj + 1);
-  if (kept_a != R.kept) bad = 1;
-  if ((uint32_t)c->r[2] != (uint32_t)R.kept) bad = 1;
-  if (R.wrote_state2 && c->mem_r32(0x1F800084u) != 2) bad = 1;
-  // which queue actually changed (by count delta)?
-  int aq = 0; uint32_t pushed = 0;
-  for (int i = 0; i < 3; i++) {
-    uint32_t cnt_a = (uint16_t)c->mem_r16(CULL_QCNT[i]);
-    if (cnt_a != cnt_b[i]) {
-      aq = i + 1;
-      if (cnt_a != cnt_b[i] + 1) bad = 1;                 // exactly +1
-      uint32_t ptr_a = c->mem_r32(CULL_QPTR[i]);
-      if (ptr_a != ptr_b[i] - 4) bad = 1;                 // ptr advanced by -4
-      pushed = c->mem_r32(ptr_b[i] - 4);
-      if (pushed != obj) bad = 1;                         // obj stored at the new slot
-    }
-  }
-  // predicted queue: pushes only when not at cap (cap-skip leaves count unchanged → aq==0)
-  int pred_q = R.queue;
-  if (pred_q) { int qi = pred_q - 1; if (cnt_b[qi] >= (uint32_t)CULL_QCAP[qi]) pred_q = 0; }
-  if (aq != pred_q) bad = 1;
-  if (bad) {
-    if (nbad++ < 60)
-      fprintf(stderr, "[cullverify] MISMATCH obj=%08x type=%02x kept(n=%d a=%d) q(n=%d a=%d) state2=%d\n",
-              obj, c->mem_r8(obj + 0xc), R.kept, kept_a, pred_q, aq, R.wrote_state2);
-  } else if (++ngood % 20000 == 0) {
-    fprintf(stderr, "[cullverify] %ld matches (last obj=%08x kept=%d q=%d)\n", ngood, obj, R.kept, pred_q);
-  }
-}
-
 // FUN_8002B278 — standalone view-CONE cull (3.9% field hot). a0 = node. The multiply-form of the same
 // cone test as FUN_8007712C with fixed params {near=512, far=7169, thr≡856}: compute the camera-relative
 // distance dist = isqrt16(dx²+dy²+dz²) (dx = node->h[0x2C/2E/30] − cam@scratchpad 0x1F8000D2/D6/DA), reject
@@ -223,30 +181,11 @@ static int cone_cull_2b278(Core* c, int commit) {
   if (commit) c->mem_w8(node + 1, 1);
   return 1;
 }
-// PSXPORT_DEBUG=conecull — per-call gate: native (no commit), restore, recomp body, compare v0 + node[1].
-static void ov_cone_cull_2b278_verify(Core* c) {
-  uint32_t rs[32]; memcpy(rs, c->r, sizeof rs);
-  uint32_t node = c->r[4];
-  uint8_t b1_before = c->mem_r8(node + 1);
-  int mine_v0 = cone_cull_2b278(c, 0);
-  uint8_t mine_b1 = (mine_v0 ? 1 : b1_before);                 // native would set node[1]=1 only on keep
-  rec_super_call(c, 0x8002B278u);                              // authoritative writes
-  int orc_v0 = (int)c->r[2];
-  uint8_t orc_b1 = c->mem_r8(node + 1);
-  static long ngood = 0, nbad = 0;
-  if (mine_v0 != orc_v0 || mine_b1 != orc_b1) {
-    if (nbad++ < 60) fprintf(stderr, "[conecull] MISMATCH node=%08x v0(n=%d o=%d) b1(n=%02x o=%02x)\n", node, mine_v0, orc_v0, mine_b1, orc_b1);
-  } else if (++ngood % 20000 == 0) fprintf(stderr, "[conecull] %ld matches (last node=%08x v0=%d)\n", ngood, node, orc_v0);
-  memcpy(c->r, rs, sizeof rs);
-  c->mem_w8(node + 1, mine_b1); c->r[2] = (uint32_t)mine_v0;   // keep native result live
-}
-void ov_cone_cull_2b278(Core* c) {
-  static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("conecull") ? 1 : 0;
-  if (s_v) { ov_cone_cull_2b278_verify(c); return; }
+void Cull::coneCull2b278() { Core* c = core;
   c->r[2] = (uint32_t)cone_cull_2b278(c, 1);
 }
 
-void ov_object_cull(Core* c) {
+void Cull::objectCull() { Core* c = core;
   uint32_t prev = c->game->fps60.current_object;
   uint32_t o = c->r[4];                            // a0 = object* (MIPS arg register $a0)
   c->game->fps60.current_object = o;
@@ -257,10 +196,7 @@ void ov_object_cull(Core* c) {
     fprintf(stderr, "[objlog] obj=%08x type=%02x pos=(%d,%d,%d)\n", o, c->mem_r8(o + 0x0c),
             (int16_t)obj_r16(c, o + 0x2e), (int16_t)obj_r16(c, o + 0x32), (int16_t)obj_r16(c, o + 0x36));
   int p2 = (int16_t)c->r[5], p3 = (int16_t)c->r[6], p4 = (int16_t)c->r[7];   // pos - camera (s16 each)
-  static int s_cullverify = -1;
-  if (s_cullverify < 0) s_cullverify = cfg_dbg("cullverify") ? 1 : 0;
-  if (s_cullverify) cull_verify_body(c);           // diagnostic: predict native, recomp writes, compare
-  else              cull_native_body(c);            // PC-native cull (replaces the recomp body)
+  cull_native_body(c);                              // PC-native cull
   // The engine OWNS this margin, so it is ALWAYS active — not gated on widescreen. Even at 4:3 the
   // stock ±34° cone over-culls (edge pop-in), so we keep the wide region in every aspect; widescreen
   // then needs no extra special-casing. Env overrides remain for diagnostics only (PSXPORT_CULL_FAR/_FOV).
@@ -360,71 +296,28 @@ void ov_object_cull(Core* c) {
   c->game->fps60.current_object = prev;
 }
 
-// FUN_8007778C — camera-relative cull WRAPPER. Computes the object's delta from the camera
-// (obj pos − cam pos: a wrapping 16-bit subtraction, sign-extended), zeros the two cull scratchpad
-// flags (0x1F800080 push-enable, 0x1F800084 state), then forwards to the per-object cull body
-// FUN_8007712c (a0=object, a1=dx(X) → r5, a2=dz(Z) → r6, a3=dy(Y) → r7). Camera pos is the scratchpad
-// block @0x1F8000D0 (+2=X,+6=Z,+10=Y, u16). The cull body is itself owned (ov_object_cull) and re-reads
-// r5..r7 for the engine margin, so we route through it via rec_dispatch (NOT cull_native_body directly)
-// to keep current-object tracking + the widescreen margin. Returns v0 = visible (set by the cull body).
-static void ov_cull_wrapper_prep(Core* c) {
+// FUN_8007778C — camera-relative cull WRAPPER. Computes obj-cam delta (wrapping s16, sign-extended),
+// zeros the cull scratchpad flags 0x1F800080/0x1F800084, then forwards to the per-object cull body
+// FUN_8007712C via rec_dispatch (so current-object tracking + the widescreen margin still fire).
+// Camera pos @0x1F8000D0 (+2=X,+6=Z,+10=Y, u16). Was ov_cull_wrapper.
+void Cull::cullWrapper() { Core* c = core;
   uint32_t obj = c->r[4];
   uint16_t camx = (uint16_t)c->mem_r16(0x1F8000D2u);
   uint16_t camz = (uint16_t)c->mem_r16(0x1F8000D6u);
   uint16_t camy = (uint16_t)c->mem_r16(0x1F8000DAu);
   c->mem_w32(0x1F800080u, 0);
   c->mem_w32(0x1F800084u, 0);
-  c->r[5] = (uint32_t)(int32_t)(int16_t)(uint16_t)((uint16_t)c->mem_r16(obj + 0x2E) - camx);  // dx (X)
-  c->r[6] = (uint32_t)(int32_t)(int16_t)(uint16_t)((uint16_t)c->mem_r16(obj + 0x32) - camz);  // dz (Z)
-  c->r[7] = (uint32_t)(int32_t)(int16_t)(uint16_t)((uint16_t)c->mem_r16(obj + 0x36) - camy);  // dy (Y)
+  c->r[5] = (uint32_t)(int32_t)(int16_t)(uint16_t)((uint16_t)c->mem_r16(obj + 0x2E) - camx);
+  c->r[6] = (uint32_t)(int32_t)(int16_t)(uint16_t)((uint16_t)c->mem_r16(obj + 0x32) - camz);
+  c->r[7] = (uint32_t)(int32_t)(int16_t)(uint16_t)((uint16_t)c->mem_r16(obj + 0x36) - camy);
   c->r[4] = obj;
-}
-// PSXPORT_DEBUG=cullwrap — per-call gate. The only NEW logic here is the delta arithmetic + the two
-// flag zero-writes; the inner cull (ov_object_cull) is already verified. Run native (prep + dispatch),
-// capture the gameplay-relevant outputs, restore them, run the recomp wrapper, and diff. The inner cull
-// is deterministic given r5..7 + scratchpad, so any divergence reflects a wrong delta. (Render-margin
-// scratch is applied in both paths and not restored — diagnostic frames only.)
-static void ov_cull_wrapper_verify(Core* c) {
-  uint32_t rs[32]; memcpy(rs, c->r, sizeof rs);
-  uint32_t obj = c->r[4];
-  uint32_t cnt_b[3], ptr_b[3];
-  for (int i = 0; i < 3; i++) { cnt_b[i] = (uint16_t)c->mem_r16(CULL_QCNT[i]); ptr_b[i] = c->mem_r32(CULL_QPTR[i]); }
-  uint32_t kept_b = c->mem_r8(obj + 1), f84_b = c->mem_r32(0x1F800084u), f80_b = c->mem_r32(0x1F800080u);
-  // NATIVE
-  ov_cull_wrapper_prep(c); rec_dispatch(c, 0x8007712Cu);
-  uint32_t kept_n = c->mem_r8(obj + 1), v0_n = c->r[2], f84_n = c->mem_r32(0x1F800084u), f80_n = c->mem_r32(0x1F800080u);
-  uint32_t cnt_n[3], ptr_n[3];
-  for (int i = 0; i < 3; i++) { cnt_n[i] = (uint16_t)c->mem_r16(CULL_QCNT[i]); ptr_n[i] = c->mem_r32(CULL_QPTR[i]); }
-  // RESTORE outputs to the pre-call state
-  memcpy(c->r, rs, sizeof rs);
-  c->mem_w8(obj + 1, (uint8_t)kept_b); c->mem_w32(0x1F800084u, f84_b); c->mem_w32(0x1F800080u, f80_b);
-  for (int i = 0; i < 3; i++) { c->mem_w16(CULL_QCNT[i], (uint16_t)cnt_b[i]); c->mem_w32(CULL_QPTR[i], ptr_b[i]); }
-  // RECOMP
-  rec_super_call(c, 0x8007778Cu);
-  uint32_t kept_o = c->mem_r8(obj + 1), v0_o = c->r[2], f84_o = c->mem_r32(0x1F800084u), f80_o = c->mem_r32(0x1F800080u);
-  uint32_t cnt_o[3], ptr_o[3];
-  for (int i = 0; i < 3; i++) { cnt_o[i] = (uint16_t)c->mem_r16(CULL_QCNT[i]); ptr_o[i] = c->mem_r32(CULL_QPTR[i]); }
-  static long ngood = 0, nbad = 0; int bad = 0;
-  if (kept_n != kept_o || v0_n != v0_o || f84_n != f84_o || f80_n != f80_o) bad = 1;
-  for (int i = 0; i < 3; i++) if (cnt_n[i] != cnt_o[i] || ptr_n[i] != ptr_o[i]) bad = 1;
-  if (bad) { if (nbad++ < 60) fprintf(stderr, "[cullwrap] MISMATCH obj=%08x kept(n=%u o=%u) v0(n=%08x o=%08x) f84(n=%08x o=%08x) f80(n=%08x o=%08x)\n",
-                                       obj, kept_n, kept_o, v0_n, v0_o, f84_n, f84_o, f80_n, f80_o); }
-  else if (++ngood % 20000 == 0) fprintf(stderr, "[cullwrap] %ld matches (last obj=%08x)\n", ngood, obj);
-}
-void ov_cull_wrapper(Core* c) {
-  static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("cullwrap") ? 1 : 0;
-  if (s_v) { ov_cull_wrapper_verify(c); return; }
-  ov_cull_wrapper_prep(c);
   rec_dispatch(c, 0x8007712Cu);
 }
 
-// FUN_80077ACC — a second cull-wrapper variant (~2.3%, 9k calls). Unlike ov_cull_wrapper it takes the
-// position in a1/a2/a3 (caller-supplied, not obj fields) and sets the cull flags 0x1F800080=1 /
-// 0x1F800084=4 (vs 0/0), then makes the position camera-relative (a1 -= *0x1F8000D2, a2 -= *0x1F8000D6,
-// a3 -= *0x1F8000DA; sign-extend low16) and calls the owned cull body 0x8007712C. The cull is already
-// verified, so the only new logic is the flag writes + delta arithmetic. `cullwrap2` gate A/B's the
-// cull's outputs (obj+1, v0, flags, the 3 render queues) native vs the recomp wrapper.
-static void cull_wrap_77acc_prep(Core* c) {
+// FUN_80077ACC — cull-wrapper variant, caller-supplied position in a1/a2/a3 (not obj fields), flags
+// 0x1F800080=1 / 0x1F800084=4 (vs the 0/0 form above). Makes the position camera-relative then calls
+// the cull body 0x8007712C. Was ov_cull_wrap_77acc.
+void Cull::cullWrap77acc() { Core* c = core;
   c->mem_w32(0x1F800080u, 1);
   c->mem_w32(0x1F800084u, 4);
   uint16_t cx = (uint16_t)c->mem_r16(0x1F8000D2u);
@@ -433,34 +326,5 @@ static void cull_wrap_77acc_prep(Core* c) {
   c->r[5] = (uint32_t)(int32_t)(int16_t)(uint16_t)((uint16_t)c->r[5] - cx);
   c->r[6] = (uint32_t)(int32_t)(int16_t)(uint16_t)((uint16_t)c->r[6] - cz);
   c->r[7] = (uint32_t)(int32_t)(int16_t)(uint16_t)((uint16_t)c->r[7] - cy);
-}
-static void ov_cull_wrap_77acc_verify(Core* c) {
-  uint32_t rs[32]; memcpy(rs, c->r, sizeof rs);
-  uint32_t obj = c->r[4];
-  uint32_t cnt_b[3], ptr_b[3];
-  for (int i = 0; i < 3; i++) { cnt_b[i] = (uint16_t)c->mem_r16(CULL_QCNT[i]); ptr_b[i] = c->mem_r32(CULL_QPTR[i]); }
-  uint32_t kept_b = c->mem_r8(obj + 1), f84_b = c->mem_r32(0x1F800084u), f80_b = c->mem_r32(0x1F800080u);
-  cull_wrap_77acc_prep(c); rec_dispatch(c, 0x8007712Cu);
-  uint32_t kept_n = c->mem_r8(obj + 1), v0_n = c->r[2], f84_n = c->mem_r32(0x1F800084u), f80_n = c->mem_r32(0x1F800080u);
-  uint32_t cnt_n[3], ptr_n[3];
-  for (int i = 0; i < 3; i++) { cnt_n[i] = (uint16_t)c->mem_r16(CULL_QCNT[i]); ptr_n[i] = c->mem_r32(CULL_QPTR[i]); }
-  memcpy(c->r, rs, sizeof rs);
-  c->mem_w8(obj + 1, (uint8_t)kept_b); c->mem_w32(0x1F800084u, f84_b); c->mem_w32(0x1F800080u, f80_b);
-  for (int i = 0; i < 3; i++) { c->mem_w16(CULL_QCNT[i], (uint16_t)cnt_b[i]); c->mem_w32(CULL_QPTR[i], ptr_b[i]); }
-  rec_super_call(c, 0x80077ACCu);
-  uint32_t kept_o = c->mem_r8(obj + 1), v0_o = c->r[2], f84_o = c->mem_r32(0x1F800084u), f80_o = c->mem_r32(0x1F800080u);
-  uint32_t cnt_o[3], ptr_o[3];
-  for (int i = 0; i < 3; i++) { cnt_o[i] = (uint16_t)c->mem_r16(CULL_QCNT[i]); ptr_o[i] = c->mem_r32(CULL_QPTR[i]); }
-  static long ngood = 0, nbad = 0; int bad = 0;
-  if (kept_n != kept_o || v0_n != v0_o || f84_n != f84_o || f80_n != f80_o) bad = 1;
-  for (int i = 0; i < 3; i++) if (cnt_n[i] != cnt_o[i] || ptr_n[i] != ptr_o[i]) bad = 1;
-  if (bad) { if (nbad++ < 60) fprintf(stderr, "[cullwrap2] MISMATCH obj=%08x kept(n=%u o=%u) v0(n=%08x o=%08x) f84(n=%08x o=%08x) f80(n=%08x o=%08x)\n",
-                                       obj, kept_n, kept_o, v0_n, v0_o, f84_n, f84_o, f80_n, f80_o); }
-  else if (++ngood % 20000 == 0) fprintf(stderr, "[cullwrap2] %ld matches (last obj=%08x)\n", ngood, obj);
-}
-void ov_cull_wrap_77acc(Core* c) {
-  static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("cullwrap2") ? 1 : 0;
-  if (s_v) { ov_cull_wrap_77acc_verify(c); return; }
-  cull_wrap_77acc_prep(c);
   rec_dispatch(c, 0x8007712Cu);
 }

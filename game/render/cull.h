@@ -1,14 +1,34 @@
 // engine/cull.h — PC-native visibility CULL / LOD subsystem.
-// The engine OWNS the per-object visibility decision (per CLAUDE.md: render ordering / visibility is the
-// engine's, with its own widescreen-aware margin). The per-object cull body (FUN_8007712C), its two
-// camera-relative wrappers (FUN_8007778C / FUN_80077ACC), and the standalone view-cone cull
-// (FUN_8002B278). Extracted from game_tomba2.cpp into its own module (PC-game code structure);
-// registered in game_tomba2.cpp's init block by these names.
-#ifndef ENGINE_CULL_H
-#define ENGINE_CULL_H
-struct Core;
-void ov_object_cull(Core* c);       // FUN_8007712C — per-object cull body (+ widescreen margin re-include)
-void ov_cull_wrapper(Core* c);      // FUN_8007778C — camera-relative delta + flag reset → cull body
-void ov_cull_wrap_77acc(Core* c);   // FUN_80077ACC — cull-wrapper variant (flags 1/4, caller-supplied pos)
-void ov_cone_cull_2b278(Core* c);   // FUN_8002B278 — standalone view-cone cull
-#endif
+//
+// class Cull — instance subsystem owned by Engine. The engine OWNS the per-object visibility decision
+// (per CLAUDE.md: render ordering / visibility is the engine's, with its own widescreen-aware margin;
+// no PSX ±34° cone inheritance). Holds the per-object cull body (FUN_8007712C), its two camera-
+// relative wrappers (FUN_8007778C / FUN_80077ACC), and the standalone view-cone cull (FUN_8002B278).
+//
+// Currently ORPHANED — the top-down PC path hasn't reached the cull site yet. The class shape is here
+// so callers can hook in as `c->engine.cull.method()` once wired; the algorithmic body preserves the
+// RE'd cull-decide + widescreen margin re-include logic.
+#pragma once
+#include <cstdint>
+class Core;
+
+class Cull {
+public:
+  Core* core = nullptr;
+
+  // objectCull (FUN_8007712C): per-object cull body + widescreen margin re-include. Taxi-parameter
+  // c->r[4] = object, c->r[5]/[6]/[7] = camera-relative dx/dz/dy (s16 each). Was ov_object_cull.
+  void objectCull();
+
+  // cullWrapper (FUN_8007778C): camera-relative delta + flag reset → cull body. Taxi c->r[4] = object.
+  // Was ov_cull_wrapper.
+  void cullWrapper();
+
+  // cullWrap77acc (FUN_80077ACC): cull-wrapper variant, caller-supplied position in r5/r6/r7 (flags
+  // 1/4 rather than 0/0). Was ov_cull_wrap_77acc.
+  void cullWrap77acc();
+
+  // coneCull2b278 (FUN_8002B278): standalone view-cone cull, sets node visible flag on keep. Taxi
+  // c->r[4] = node. Was ov_cone_cull_2b278.
+  void coneCull2b278();
+};
