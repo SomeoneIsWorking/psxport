@@ -19,6 +19,7 @@ Core::Core() {
   // Wire up owned subsystems' back-pointers so their methods can reach this Core's guest memory.
   screenFade.core = this;
   engine.core     = this;
+  engine.sceneTransition.core = this;   // Engine-owned scene subsystem
   rng.core        = this;
   inventory.core  = this;
   // Render umbrella (owned by pointer): allocate, wire its back-pointer + each embedded sub-subsystem.

@@ -15,12 +15,17 @@
 // currently be a thin forwarder to a static ov_* function in that TU. As each is class-ified in
 // place, the forwarder collapses.
 #pragma once
+#include "scene_transition.h"    // Engine owns the SceneTransition subsystem instance
 class Core;
 
 class Engine {
 public:
   // Back-pointer set once by Core's constructor (same pattern as ScreenFade::core).
   Core* core = nullptr;
+
+  // ── Scene subsystem instances owned by Engine ─────────────────────────────────────
+  // Callers reach them as `c->engine.sceneTransition.method(args)`.
+  SceneTransition sceneTransition;   // area-mask trigger + sub-scene swap handshake
 
   // ── GAME-stage entry points (called by the scheduler each frame) ────────────────────────────
   // stagePrologue: one-time prologue that runs when the GAME task enters — task-slot setup, first
