@@ -27,7 +27,7 @@
 // command-buffer/submit/present per window frame, so the two cores never collide on the single VK present.
 // Each core's auto-skip stops injecting input once IT reaches free-roam ("pause at goal") but keeps running
 // (rendering) so the user can drive it. The dual-pane present is via g_dualview's panel machinery, but with
-// TWO DIFFERENT CORES instead of one core rendered twice (g_sbs forces 2 targets + skips the in-engine
+// TWO DIFFERENT CORES instead of one core rendered twice (s_sbs forces 2 targets + skips the in-engine
 // dualview second pass). Two cores feed the SAME host input each frame (mirrored).
 //
 // Diff/inspection: each lockstep frame, after presenting, DIFF the guest RAM region + scratchpad (legit
@@ -75,9 +75,8 @@ void dbg_set_paused(int p);
 extern "C" void watchdog_suspend(void);
 extern "C" void watchdog_disable(void);   // SBS pauses indefinitely on a divergence — kill the frame watchdog
 extern "C" void guest_backtrace_to(Core* c, FILE* out);
-// g_render_psx retired — now per-Core Render::mPsxRender. Reach via g_a/g_b->core.mRender->mode.setPsxRender(bool).
+// g_render_psx retired — now per-Core Render::mPsxRender. Reach via s_a/s_b->core.mRender->mode.setPsxRender(bool).
 extern "C" void mem_set_store_watch_cb(void (*cb)(Core*, uint32_t, uint32_t));   // mem.cpp — SBS write-watch install
-extern "C" int  g_sbs;                        // PSXPORT_SBS: forces 2 VK render targets + skips the in-engine dualview pass
 // Per-core render+readback + front-buffer/display-region accessors (gpu_gpu.cpp / gpu_native.cpp). The SBS
 // now renders each core into the shared VK target (no swapchain present) and read
 // back to a CPU RGBA buffer (gpu_gpu_render_readback), then composites the two panes side by side (gpu_gpu_present_sbs2). This
@@ -99,7 +98,10 @@ extern "C" {
 // PSXPORT_SBS marker, DEFINED here (sbs.cpp owns the harness). gpu_gpu.cpp forces 2 VK render targets when
 // set, and native_boot.cpp skips the in-engine dualview second pass (core B fills target 1 instead). 0
 // outside the SBS harness, so the single-core game and the dualview path are completely unaffected.
-extern "C" { int g_sbs = 0; int g_sbs_rl = 0; }   // g_sbs_rl: SDL_GPU window present -> single VK target (gpu_gpu.cpp)
+// s_sbs / /* g_sbs_rl retired */ 1 retired 2026-07-03 — file-scope static + public sbs_active() accessor.
+// /* g_sbs_rl retired */ 1 had no external reader (comment claimed gpu_gpu.cpp but grep proved no use) — deleted.
+static int s_sbs = 0;
+extern "C" int sbs_active(void) { return s_sbs; }
 
 namespace {
 
@@ -109,8 +111,8 @@ constexpr uint32_t TASK0_ENTRY = 0x801fe00cu;  // task0 obj +0xc = current stage
 constexpr uint32_t CUT_FLAG    = 0x1F800137u;  // cutscene-active byte (1 = intro cutscene, 0 = free-roam)
 constexpr uint16_t BTN_CROSS = 0x4000, BTN_START = 0x0008, BTN_NONE = 0xFFFF;
 
-Game*    g_a = nullptr;
-Game*    g_b = nullptr;
+static Game* s_a = nullptr;
+static Game* s_b = nullptr;
 
 // Per-pane CPU RGBA8 frames read back from each core's headless VK render (SDL_GPU window uploads + draws these).
 // Sized to the full VRAM extent (1024x512) so any display region fits; the live region size is tracked.
@@ -245,11 +247,11 @@ void record_divergence(uint32_t addr) {
   uint32_t last = addr, gap = 0;
   for (uint32_t x = addr + 1; x < end_addr && gap < 64; x++) {
     bool noise = spad ? is_render_spad(x) : is_render_region(x);
-    if (g_a->core.mem_r8(x) != g_b->core.mem_r8(x) && !noise) { last = x; gap = 0; } else gap++;
+    if (s_a->core.mem_r8(x) != s_b->core.mem_r8(x) && !noise) { last = x; gap = 0; } else gap++;
   }
   s_div_found = true; s_div_frame = s_frame; s_div_addr = addr; s_div_end = last + 1;
-  cap_bt(&g_a->core, s_bt_a, sizeof s_bt_a);
-  cap_bt(&g_b->core, s_bt_b, sizeof s_bt_b);
+  cap_bt(&s_a->core, s_bt_a, sizeof s_bt_a);
+  cap_bt(&s_b->core, s_bt_b, sizeof s_bt_b);
   fprintf(stderr, "\n[sbs] *** DIVERGENCE at lockstep frame %u: 0x%08X..0x%08X (mode=%s) ***\n",
           s_frame, s_div_addr, s_div_end, mode_name());
   // PAUSE for inspection ONLY when the debug server is up (so the user can `sbs diff`/`sbs bt`). Otherwise
@@ -264,12 +266,12 @@ void record_divergence(uint32_t addr) {
 
 // Frame-boundary diff: report the first non-render-noise divergence in the RAM region, else the scratchpad.
 void check_divergence() {
-  const uint8_t* a = g_a->core.ram + (s_lo - 0x80000000u);
-  const uint8_t* b = g_b->core.ram + (s_lo - 0x80000000u);
+  const uint8_t* a = s_a->core.ram + (s_lo - 0x80000000u);
+  const uint8_t* b = s_b->core.ram + (s_lo - 0x80000000u);
   uint32_t n = s_hi - s_lo;
   for (uint32_t i = 0; i < n; i++) if (a[i] != b[i] && !is_render_region(s_lo + i)) { record_divergence(s_lo + i); return; }
   for (uint32_t i = 0; i < 0x400; i++)
-    if (g_a->core.scratch[i] != g_b->core.scratch[i] && !is_render_spad(0x1F800000u + i)) { record_divergence(0x1F800000u + i); return; }
+    if (s_a->core.scratch[i] != s_b->core.scratch[i] && !is_render_spad(0x1F800000u + i)) { record_divergence(0x1F800000u + i); return; }
 }
 
 // Step ONE core's frame for the SBS composite: diff_mode=1 suppresses its OWN per-core present/pace/audio
@@ -279,7 +281,7 @@ void step_core(Game* g, int which) {
   g->core.game->diff_mode  = 1;
   g->core.game->sbs_render = 1;
   // PSXPORT_SBS intro-FMV: the OP.STR opening movie is OWNED by the native FMV player, which is skipped
-  // in SBS (native_fmv.cpp: `if (g_sbs) return 0`). But the PSX core (B) runs the GUEST demo machine,
+  // in SBS (native_fmv.cpp: `if (s_sbs) return 0`). But the PSX core (B) runs the GUEST demo machine,
   // whose STR streamer strNext (FUN_8010755c) then waits for CD-streamed STR sectors that are NEVER fed
   // here — it busy-polls StGetNext (FUN_8008d030) ~2000x2000 times per attract cycle (~4M interpreted
   // polls, multi-second), a non-yielding spin that STALLS the lockstep = the "frozen" SBS + repeated
@@ -297,7 +299,7 @@ void step_core(Game* g, int which) {
         c->mem_w8(0x1f80019du, 1);                           // request skip (the game's Start-skip flag)
     } }
   apply_mode(g, which);
-  gpu_gpu_select_target(which);        // single VK target under g_sbs_rl: both cores emit into batch 0
+  gpu_gpu_select_target(which);        // single VK target: both cores emit into batch 0
   dc_step_frame(&g->core, s_frame);   // native_step_frame binds THIS core's per-instance GTE/SPU/MDEC/CD
 }
 
@@ -359,8 +361,8 @@ void feed_input() {
   uint16_t mask = (uint16_t)sbs_rl_poll_input();
   for (const SbsKey& k : s_keys)
     if (s_frame >= k.from && s_frame <= k.to) mask &= ~k.btn;   // active-low: pressed = bit cleared
-  g_a->pad.setButtons(mask);
-  g_b->pad.setButtons(mask);
+  s_a->pad.setButtons(mask);
+  s_b->pad.setButtons(mask);
 }
 
 // PSXPORT_SBS_DUMP=path: write the current two panes (A left | B right) as ONE side-by-side PPM. Lets a
@@ -392,21 +394,21 @@ void dump_sbs_ppm(const char* path) {
 // after both cores finish the frame, with both write sites captured.
 extern "C" void sbs_store_cb(Core* c, uint32_t a, uint32_t v) {
   if (!s_ww_armed || (a & ~3u) != (s_ww_addr & ~3u)) return;
-  int which = (g_b && c == &g_b->core) ? 1 : 0;
+  int which = (s_b && c == &s_b->core) ? 1 : 0;
   if (which) { s_ww_vb = v; cap_bt(c, s_ww_bt_b, sizeof s_ww_bt_b); }
   else       { s_ww_va = v; cap_bt(c, s_ww_bt_a, sizeof s_ww_bt_a); }
   s_ww_hit |= (1 << which);
 }
 
 // Diagnostics for cross-TU instrumentation (overlay_router): which SBS core is this, and the lockstep frame.
-extern "C" int sbs_core_id(Core* c) { if (!g_a) return -1; return (g_b && c == &g_b->core) ? 1 : 0; }
+extern "C" int sbs_core_id(Core* c) { if (!s_a) return -1; return (s_b && c == &s_b->core) ? 1 : 0; }
 extern "C" uint32_t sbs_frame_num() { return s_frame; }
 
 // `sbs ...` debug-server commands. Returns 1 if it handled the line (so dbg_exec stops), 0 otherwise.
 int sbs_dbg_cmd(FILE* out, const char* line) {
   char cmd[16] = {0}, sub[32] = {0};
   if (sscanf(line, "%15s", cmd) != 1 || strcmp(cmd, "sbs") != 0) return 0;
-  if (!g_a) { fprintf(out, "sbs: harness not running (set PSXPORT_SBS=1)\n"); return 1; }
+  if (!s_a) { fprintf(out, "sbs: harness not running (set PSXPORT_SBS=1)\n"); return 1; }
   sscanf(line, "%*s %31s", sub);
 
   if (!sub[0] || !strcmp(sub, "status")) {
@@ -420,9 +422,9 @@ int sbs_dbg_cmd(FILE* out, const char* line) {
             s_div_frame, s_div_addr, s_div_end, is_spad(s_div_addr) ? "scratchpad" : "main RAM");
     uint32_t end = s_div_end; if (end > s_div_addr + 24) end = s_div_addr + 24;
     fprintf(out, "  A:");
-    for (uint32_t x = s_div_addr; x < end; x++) fprintf(out, " %02X", g_a->core.mem_r8(x));
+    for (uint32_t x = s_div_addr; x < end; x++) fprintf(out, " %02X", s_a->core.mem_r8(x));
     fprintf(out, "\n  B:");
-    for (uint32_t x = s_div_addr; x < end; x++) fprintf(out, " %02X", g_b->core.mem_r8(x));
+    for (uint32_t x = s_div_addr; x < end; x++) fprintf(out, " %02X", s_b->core.mem_r8(x));
     fprintf(out, "\n");
   } else if (!strcmp(sub, "bt")) {
     if (!s_div_found) { fprintf(out, "sbs: no divergence yet\n"); return 1; }
@@ -437,8 +439,8 @@ int sbs_dbg_cmd(FILE* out, const char* line) {
     if (sscanf(line, "%*s %*s %x", &addr) != 1) addr = s_div_addr;
     if (!addr) { fprintf(out, "sbs watch: no address (no divergence yet, give one: `sbs watch <hex>`)\n"); return 1; }
     s_ww_addr = addr; s_ww_armed = true; s_ww_hit = 0; s_ww_bt_a[0] = s_ww_bt_b[0] = 0;
-    g_a->core.wwatch_arm(addr & ~3u, (addr & ~3u) + 4);
-    g_b->core.wwatch_arm(addr & ~3u, (addr & ~3u) + 4);
+    s_a->core.wwatch_arm(addr & ~3u, (addr & ~3u) + 4);
+    s_b->core.wwatch_arm(addr & ~3u, (addr & ~3u) + 4);
     fprintf(out, "write-watch armed on 0x%08X — `sbs resume`; the diverging write will re-pause with the site.\n", addr);
   } else if (!strcmp(sub, "show")) {
     char w = 0; sscanf(line, "%*s %*s %c", &w);
@@ -459,8 +461,8 @@ int sbs_dbg_cmd(FILE* out, const char* line) {
     // PSX(B)-vs-PC(A) divergences at whatever common state the two cores have reached. `sbs ramdiff N`
     // caps the listed spans (default 24); the totals always reflect the full scan.
     unsigned cap = 0; sscanf(line, "%*s %*s %u", &cap); if (!cap) cap = 24;
-    const uint8_t* a = g_a->core.ram + (s_lo - 0x80000000u);
-    const uint8_t* b = g_b->core.ram + (s_lo - 0x80000000u);
+    const uint8_t* a = s_a->core.ram + (s_lo - 0x80000000u);
+    const uint8_t* b = s_b->core.ram + (s_lo - 0x80000000u);
     uint32_t n = s_hi - s_lo, spans = 0, bytes = 0, listed = 0;
     for (uint32_t i = 0; i < n; ) {
       if (a[i] != b[i] && !is_render_region(s_lo + i)) {
@@ -470,15 +472,15 @@ int sbs_dbg_cmd(FILE* out, const char* line) {
         if (listed++ < cap)
           fprintf(out, "  RAM  0x%08X..0x%08X (%u B)  A=%02X%02X%02X%02X B=%02X%02X%02X%02X\n",
                   start, s_lo + i, (s_lo + i) - start,
-                  g_a->core.mem_r8(start), g_a->core.mem_r8(start+1), g_a->core.mem_r8(start+2), g_a->core.mem_r8(start+3),
-                  g_b->core.mem_r8(start), g_b->core.mem_r8(start+1), g_b->core.mem_r8(start+2), g_b->core.mem_r8(start+3));
+                  s_a->core.mem_r8(start), s_a->core.mem_r8(start+1), s_a->core.mem_r8(start+2), s_a->core.mem_r8(start+3),
+                  s_b->core.mem_r8(start), s_b->core.mem_r8(start+1), s_b->core.mem_r8(start+2), s_b->core.mem_r8(start+3));
       } else i++;
     }
     uint32_t sspans = 0, sbytes = 0;
     for (uint32_t i = 0; i < 0x400; ) {
-      if (g_a->core.scratch[i] != g_b->core.scratch[i] && !is_render_spad(0x1F800000u + i)) {
+      if (s_a->core.scratch[i] != s_b->core.scratch[i] && !is_render_spad(0x1F800000u + i)) {
         uint32_t start = 0x1F800000u + i;
-        while (i < 0x400 && g_a->core.scratch[i] != g_b->core.scratch[i] && !is_render_spad(0x1F800000u + i)) { i++; sbytes++; }
+        while (i < 0x400 && s_a->core.scratch[i] != s_b->core.scratch[i] && !is_render_spad(0x1F800000u + i)) { i++; sbytes++; }
         sspans++;
         if (listed++ < cap)
           fprintf(out, "  SPAD 0x%08X..0x%08X (%u B)\n", start, 0x1F800000u + i, (0x1F800000u + i) - start);
@@ -501,8 +503,8 @@ void sbs_run(const char* exe_path) {
   { const char* e = getenv("PSXPORT_SBS_LO"); if (e && *e) s_lo = (uint32_t)strtoul(e, 0, 0); }
   { const char* e = getenv("PSXPORT_SBS_HI"); if (e && *e) s_hi = (uint32_t)strtoul(e, 0, 0); }
   mem_set_store_watch_cb(sbs_store_cb);
-  g_sbs = 1;            // skip the in-engine dualview second pass (each core renders its OWN pane)
-  g_sbs_rl = 1;         // sequential single-target render+readback per core (both cores emit into batch 0)
+  s_sbs = 1;            // skip the in-engine dualview second pass (each core renders its OWN pane)
+  // g_sbs_rl retired (no external reader) — sequential single-target render+readback per core is unconditional here.
   // The SBS composite is now drawn by the SDL_GPU renderer's OWN window (gpu_gpu_present_sbs2), so each core
   // renders into the VRAM image WITHOUT presenting to the swapchain (gpu_gpu_render_readback), then both
   // panes are composited side by side in ONE window frame. No second window, so VK is NOT forced headless
@@ -513,11 +515,11 @@ void sbs_run(const char* exe_path) {
   // oracle runs the PURE interpreter+soft-rasterizer oracle on B (docs/oracle.md) — NOT the recomp-substrate
   // psx_fallback pane, which shares A's native rasterizer and so cannot isolate a native-render-only bug.
   int fb_b = (s_mode == M_RENDER) ? 0 : 1;
-  g_a = new Game(); g_a->psx_fallback = 0;
-  g_b = new Game(); g_b->psx_fallback = fb_b;
-  if (s_mode == M_ORACLE) { g_b->core.use_interp = 1; g_b->gpu.soft_gpu = 1; }
-  load_exe(exe_path, &g_a->core); dc_boot_init(&g_a->core);
-  load_exe(exe_path, &g_b->core); dc_boot_init(&g_b->core);
+  s_a = new Game(); s_a->psx_fallback = 0;
+  s_b = new Game(); s_b->psx_fallback = fb_b;
+  if (s_mode == M_ORACLE) { s_b->core.use_interp = 1; s_b->gpu.soft_gpu = 1; }
+  load_exe(exe_path, &s_a->core); dc_boot_init(&s_a->core);
+  load_exe(exe_path, &s_b->core); dc_boot_init(&s_b->core);
 
   sbs_rl_init();        // no-op: the SDL_GPU renderer owns the (single) window, created on first present
 
@@ -529,7 +531,7 @@ void sbs_run(const char* exe_path) {
           s_lo, s_hi);
 
   s_have_dbgsrv = cfg_on("PSXPORT_DEBUG_SERVER") != 0;   // pause-on-divergence only when the server is up
-  dbg_server_start(&g_a->core);   // PSXPORT_DEBUG_SERVER — inspect/control the harness live
+  dbg_server_start(&s_a->core);   // PSXPORT_DEBUG_SERVER — inspect/control the harness live
 
   // CONCURRENT boot to gameplay-start: step BOTH cores in lockstep, presenting both panes every frame, so
   // the user watches both boot side by side and each PAUSES its auto-input at free-roam while the other
@@ -550,12 +552,12 @@ void sbs_run(const char* exe_path) {
 
   for (;;) {
     if (sbs_rl_should_close()) { fprintf(stderr, "[sbs] window closed — exiting.\n"); break; }
-    Core* sel = s_sel ? &g_b->core : &g_a->core;
+    Core* sel = s_sel ? &s_b->core : &s_a->core;
     dbg_server_service(sel);                 // service one queued debug-server command on the selected core
     // Until both cores reach free-roam, auto-nav drives them (Cross/Start taps per core); after that, hand
     // off to interactive input so you can walk Tomba and compare PSX vs native at any spot.
     bool nav_done = !sbs_autonav || (nav_a.phase == DONE && nav_b.phase == DONE);
-    if (!nav_done) { nav_step(&g_a->core, nav_a, s_frame, "A"); nav_step(&g_b->core, nav_b, s_frame, "B"); }
+    if (!nav_done) { nav_step(&s_a->core, nav_a, s_frame, "A"); nav_step(&s_b->core, nav_b, s_frame, "B"); }
     else feed_input();                       // SDL_GPU window keyboard -> BOTH cores' pad (mirrored host input)
     // PAUSED (a divergence with the debug server up, or a manual `sbs` pause): keep the WINDOW LIVE — the
     // SDL_GPU window present re-draws the last grabbed panes and polls input, so the window stays responsive.
@@ -567,8 +569,8 @@ void sbs_run(const char* exe_path) {
     if (dbg_step_pending()) dbg_consume_step();
 
     s_ww_hit = 0;
-    step_core(g_a, 0); grab_pane(g_a, s_rgba_a, &s_wa, &s_ha);   // render A headless -> CPU readback (single VK target)
-    step_core(g_b, 1); grab_pane(g_b, s_rgba_b, &s_wb, &s_hb);   // then render B headless -> CPU readback
+    step_core(s_a, 0); grab_pane(s_a, s_rgba_a, &s_wa, &s_ha);   // render A headless -> CPU readback (single VK target)
+    step_core(s_b, 1); grab_pane(s_b, s_rgba_b, &s_wb, &s_hb);   // then render B headless -> CPU readback
     present_panes();                                             // SDL_GPU window window: pane A (left) | pane B (right)
     // PSXPORT_SBS_DUMP: once both cores are at the field, write the side-by-side composite once (so a
     // headless/remote session can confirm the panes aren't black and eyeball PSX-vs-native).
@@ -581,7 +583,7 @@ void sbs_run(const char* exe_path) {
       fprintf(stderr, "[sbs] write-watch caught 0x%08X (A=%08X B=%08X) at frame %u — paused; see `sbs bt`.\n",
               s_ww_addr, s_ww_va, s_ww_vb, s_frame);
       s_ww_armed = false;
-      g_a->core.wwatch_arm(0, 0); g_b->core.wwatch_arm(0, 0);
+      s_a->core.wwatch_arm(0, 0); s_b->core.wwatch_arm(0, 0);
       dbg_set_paused(1);
     }
     s_frame++;
