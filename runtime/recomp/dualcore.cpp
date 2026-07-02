@@ -31,8 +31,6 @@
 void load_exe(const char* path, Core* c);
 void dc_boot_init(Core* c);
 void dc_step_frame(Core* c, uint32_t f);
-void pad_repl_hold(Core* c, uint16_t active_low_mask);
-void pad_repl_tap(Core* c, uint16_t active_low_mask, int n);
 extern "C" void watchdog_suspend(void);
 extern "C" int g_render_psx;   // engine_render.cpp — 0 = native render walks, 1 = PSX recomp render
 
@@ -63,13 +61,13 @@ bool nav_step(Core* c, Nav& nv, uint32_t f, const char* tag) {
   switch (nv.phase) {
     case REACH_GAME:
       if (c->mem_r32(TASK0_ENTRY) == GAME_ENTRY) { fprintf(stderr, "[dc] %s GAME @f%u\n", tag, f); nv.phase = AWAIT_CUT; }
-      else if ((f % 12u) == 0) pad_repl_tap(c, (uint16_t)(BTN_NONE & ~BTN_CROSS), 6);
+      else if ((f % 12u) == 0) c->game->pad.driveTap((uint16_t)(BTN_NONE & ~BTN_CROSS), 6);
       break;
     case AWAIT_CUT:
       if (cut) { fprintf(stderr, "[dc] %s cutscene up @f%u\n", tag, f); nv.phase = SKIP_CUT; nv.idle = 0; }
       break;
     case SKIP_CUT:
-      if (cut) { nv.idle = 0; if ((f % 40u) == 0) pad_repl_tap(c, (uint16_t)(BTN_NONE & ~BTN_START), 6); }
+      if (cut) { nv.idle = 0; if ((f % 40u) == 0) c->game->pad.driveTap((uint16_t)(BTN_NONE & ~BTN_START), 6); }
       else if (++nv.idle >= 60) { fprintf(stderr, "[dc] %s gameplay-start @f%u\n", tag, f); nv.phase = DONE; return true; }
       break;
     case DONE: return true;
@@ -80,8 +78,8 @@ bool nav_step(Core* c, Nav& nv, uint32_t f, const char* tag) {
 // IDENTICAL scripted gameplay input by frames-since-start k: hold Right (walk into the field), with a
 // Cross (jump) tap every 30 frames. Deterministic and the same for both cores.
 void scripted_input(Core* c, int k) {
-  pad_repl_hold(c, (uint16_t)(BTN_NONE & ~BTN_RIGHT));
-  if ((k % 30) == 10) pad_repl_tap(c, (uint16_t)(BTN_NONE & ~BTN_RIGHT & ~BTN_CROSS), 4);
+  c->game->pad.driveHold((uint16_t)(BTN_NONE & ~BTN_RIGHT));
+  if ((k % 30) == 10) c->game->pad.driveTap((uint16_t)(BTN_NONE & ~BTN_RIGHT & ~BTN_CROSS), 4);
 }
 
 // Boot one core, navigate to gameplay-start, then record `n` per-frame snapshots of [lo,hi) into `snaps`

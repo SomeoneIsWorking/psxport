@@ -78,14 +78,30 @@ struct HleState {
   int      irq_enabled = 1;       // was s_irq_enabled
 };
 
-// pad_input.cpp — native controller input: current host button state + the REPL drive control.
-// (Test-hook / config-cache statics inside pad_service_frame stay shared per the plan policy.)
-struct PadState {
+// pad_input.cpp — class Pad — native controller input subsystem, owned by Game (c->game->pad).
+// Carries the current host button state + REPL drive control + all the pad_* behavior (host poll,
+// per-VBlank fill buffer, REPL hold/tap/release). Was the pad_init/pad_set_buttons/pad_buttons/
+// pad_fill_buffer/pad_poll_sdl/pad_overrides_init/pad_repl_hold/pad_repl_tap/pad_repl_release free
+// functions in pad_input.cpp. (Test-hook / config-cache statics inside the SDL poll path stay
+// shared per the plan policy — those are host-wide, not per-Core.)
+class Pad {
+public:
+  Game* game = nullptr;
   uint16_t buttons    = 0xFFFF;  // current host button state, active-low (0 bit = pressed) (was s_buttons)
   uint16_t repl_hold  = 0xFFFF;  // REPL: bits cleared = held down (was s_repl_hold)
   uint16_t repl_tap   = 0xFFFF;  // REPL: active-low mask pressed for repl_tap_n frames (was s_repl_tap)
   int      repl_tap_n = 0;       // REPL: tap countdown frames (was s_repl_tap_n)
   int      repl_on    = 0;       // REPL drive active (was s_repl_on)
+
+  void init();                              // was pad_init(Core*)
+  void setButtons(uint16_t mask);           // was pad_set_buttons(Core*, mask) — feed the active-low mask
+  void fillBuffer(uint8_t* buf);            // was pad_fill_buffer(Core*, buf) — per-VBlank guest read pad
+  void pollSdl();                           // was pad_poll_sdl(Core*) — host SDL controller poll
+  void overridesInit();                     // was pad_overrides_init(Core*) — install per-VBlank pad-read override
+  void driveHold(uint16_t activeLowMask);   // was pad_repl_hold(c, mask) — REPL: hold down these bits
+  void driveTap(uint16_t activeLowMask, int nframes);  // was pad_repl_tap(c, mask, n) — press for n frames
+  void driveRelease();                      // was pad_repl_release(c) — clear REPL drive
+  void serviceFrame();                      // was pad_service_frame(c) — per-frame native pad service
 };
 
 // native_fmv.cpp — native .STR movie player. Its only per-instance mutable state is the Start-skip
@@ -158,7 +174,7 @@ public:
   CdcState    cdc;   // native CD-controller register model (per-instance; cdc_native.c, bound via cdc_bind)
   XaState     xa;    // native XA-ADPCM CD-audio/voice streamer (per-instance; xa_stream.c, bound via xa_bind)
   HleState    hle;
-  PadState    pad;
+  Pad         pad;
   FmvState    fmv;
   StubState   stub;
   SchedulerState sched;  // native cooperative task scheduler (native_boot.cpp)
@@ -207,7 +223,7 @@ public:
   // core.game / gpu.game / gpu_gpu.game are back-pointers so a subsystem holding one of those handles can
   // reach the rest of the machine (e.g. blit_src -> gpu_gpu via gpu.game; frame_via_fb -> s_seen3d via
   // gpu_gpu.game->core). Set once here so no file-scope global is needed.
-  Game() { core.game = this; gpu.game = this; gpu_gpu.game = this; timing.game = this;
+  Game() { core.game = this; gpu.game = this; gpu_gpu.game = this; timing.game = this; pad.game = this;
            spu_state = SPU_NewState(); mdec_state = MDEC_NewState();
            cdc_state_init(&cdc); xa_state_init(&xa); }   // per-instance CD-controller + XA streamer defaults
   ~Game() { SPU_FreeState(spu_state); MDEC_FreeState(mdec_state); }

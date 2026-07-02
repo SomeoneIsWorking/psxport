@@ -63,9 +63,7 @@
 void load_exe(const char* path, Core* c);
 void dc_boot_init(Core* c);
 void dc_step_frame(Core* c, uint32_t f);
-void pad_repl_hold(Core* c, uint16_t active_low_mask);
-void pad_repl_tap(Core* c, uint16_t active_low_mask, int n);
-void pad_service_frame(Core* c);              // pad_input.cpp — pump host input (keeps the window responsive)
+// pad access: c->game->pad.{driveHold, driveTap, serviceFrame, setButtons} — class Pad on Game (game.h)
 extern "C" int cfg_on(const char*);           // cfg.c — env flag (PSXPORT_DEBUG_SERVER presence check)
 void dbg_server_start(Core* c);
 void dbg_server_service(Core* c);
@@ -88,7 +86,6 @@ void gpu_gpu_select_target(int t);
 void gpu_gpu_frame_end(Core* core, const uint16_t* svram, int frame);   // gpu_native.cpp -> resets the VK batch
 const uint16_t* gpu_vram_ptr(Core* core);
 void gpu_disp_region(Core* core, int* sx, int* sy, int* w, int* h);
-void pad_set_buttons(Core* c, uint16_t mask);   // pad_input.cpp — feed the active-low pad mask (SDL_GPU window input)
 // SBS presenter (sbs_present_sdl.cpp): draws the two CPU panes + polls the window keyboard/quit.
 extern "C" {
   void sbs_rl_init(void);
@@ -198,13 +195,13 @@ bool nav_step(Core* c, Nav& nv, uint32_t f, const char* tag) {
   switch (nv.phase) {
     case REACH_GAME:
       if (c->mem_r32(TASK0_ENTRY) == GAME_ENTRY) { fprintf(stderr, "[sbs] %s GAME @f%u\n", tag, f); nv.phase = AWAIT_CUT; }
-      else if ((f % 12u) == 0) pad_repl_tap(c, (uint16_t)(BTN_NONE & ~BTN_CROSS), 6);
+      else if ((f % 12u) == 0) c->game->pad.driveTap((uint16_t)(BTN_NONE & ~BTN_CROSS), 6);
       break;
     case AWAIT_CUT:
       if (cut) { fprintf(stderr, "[sbs] %s cutscene up @f%u\n", tag, f); nv.phase = SKIP_CUT; nv.idle = 0; }
       break;
     case SKIP_CUT:
-      if (cut) { nv.idle = 0; if ((f % 40u) == 0) pad_repl_tap(c, (uint16_t)(BTN_NONE & ~BTN_START), 6); }
+      if (cut) { nv.idle = 0; if ((f % 40u) == 0) c->game->pad.driveTap((uint16_t)(BTN_NONE & ~BTN_START), 6); }
       else if (++nv.idle >= 60) { fprintf(stderr, "[sbs] %s gameplay-start @f%u\n", tag, f); nv.phase = DONE; return true; }
       break;
     case DONE: return true;
@@ -350,8 +347,8 @@ void feed_input() {
   uint16_t mask = (uint16_t)sbs_rl_poll_input();
   for (const SbsKey& k : s_keys)
     if (s_frame >= k.from && s_frame <= k.to) mask &= ~k.btn;   // active-low: pressed = bit cleared
-  pad_set_buttons(&g_a->core, mask);
-  pad_set_buttons(&g_b->core, mask);
+  g_a->pad.setButtons(mask);
+  g_b->pad.setButtons(mask);
 }
 
 // PSXPORT_SBS_DUMP=path: write the current two panes (A left | B right) as ONE side-by-side PPM. Lets a

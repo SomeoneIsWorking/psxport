@@ -20,7 +20,6 @@ extern "C" int xa_stream_is_active(void);
 void load_exe(const char* path, Core* c);
 void dc_boot_init(Core* c);
 void dc_step_frame(Core* c, uint32_t f);
-void pad_repl_hold(Core* c, uint16_t active_low_mask);
 
 #define TASKBASE   0x801fe000u   // scheduler task-0 object; the active STAGE runs here (entry @+0xc)
 #define STAGE_DEMO 0x801062E4u
@@ -59,7 +58,7 @@ static int run_startgame(const char* path) {
   // Pulsing (8 on / 8 off) makes each press a fresh input EDGE the menu's current&~prev logic sees.
   for (; f < REACH_CAP && stage() != STAGE_GAME; f++) {
     bool on = (f % 16u) < 8u;
-    pad_repl_hold(c, on ? ((f & 16u) ? PAD_CROSS : PAD_START) : PAD_NONE);
+    c->game->pad.driveHold(on ? ((f & 16u) ? PAD_CROSS : PAD_START) : PAD_NONE);
     dc_step_frame(c, f);
     log_change();
   }
@@ -73,7 +72,7 @@ static int run_startgame(const char* path) {
 
   // Phase 2 — DON'T touch Start in gameplay (Start = pause menu). Just step and require the GAME state
   // machine to advance to field free-roam (sm[0x48]==2). A freeze = it never gets there.
-  pad_repl_hold(c, PAD_NONE);
+  c->game->pad.driveHold(PAD_NONE);
   for (uint32_t g = 0; g < SETTLE_CAP; g++, f++) {
     dc_step_frame(c, f);
     log_change();
@@ -173,7 +172,7 @@ static int run_narration(const char* path) {
   uint32_t f = 0;
   for (; f < REACH_CAP && stage() != STAGE_GAME; f++) {
     bool on = (f % 16u) < 8u;
-    pad_repl_hold(c, on ? ((f & 16u) ? PAD_CROSS : PAD_START) : PAD_NONE);
+    c->game->pad.driveHold(on ? ((f & 16u) ? PAD_CROSS : PAD_START) : PAD_NONE);
     dc_step_frame(c, f);
   }
   if (stage() != STAGE_GAME) {
@@ -186,7 +185,7 @@ static int run_narration(const char* path) {
 
   // Release input and run a long window spanning the narration AND the SOP->field transition (the crash was
   // ~frame 1105 into GAME). If the render-queue overflow fires, the process aborts here and the test dies.
-  pad_repl_hold(c, PAD_NONE);
+  c->game->pad.driveHold(PAD_NONE);
   uint32_t c0 = c->mem_r16(0x1F800198u);
   const uint32_t RUN = 2500;
   for (uint32_t k = 0; k < RUN; k++, f++) {
@@ -236,7 +235,7 @@ static int run_oracle(const char* path) {
   uint32_t f = 0;
   for (; f < REACH_CAP && stage() != STAGE_GAME; f++) {
     bool on = (f % 16u) < 8u;
-    pad_repl_hold(c, on ? ((f & 16u) ? PAD_CROSS : PAD_START) : PAD_NONE);
+    c->game->pad.driveHold(on ? ((f & 16u) ? PAD_CROSS : PAD_START) : PAD_NONE);
     dc_step_frame(c, f);
   }
   if (stage() != STAGE_GAME) {
@@ -245,7 +244,7 @@ static int run_oracle(const char* path) {
     return 1;
   }
   fprintf(stderr, "[selftest] oracle: reached GAME at frame %u — now running the cutscene interpreted\n", f);
-  pad_repl_hold(c, PAD_NONE);
+  c->game->pad.driveHold(PAD_NONE);
 
   // Run a long window; track the loop counter and the furthest SOP scene id seen.
   uint32_t c0 = loopc(), max_scene = 0;
@@ -355,13 +354,13 @@ static int run_oraclediff(const char* path) {
 
   // Drive both to the GAME stage (mash Start), each on its own frame clock.
   uint32_t fa = 0, fb = 0;
-  for (; fa < 4000 && stageA() != STAGE_GAME; fa++) { bool on=(fa%16u)<8u; pad_repl_hold(&A->core, on?((fa&16u)?PAD_CROSS:PAD_START):PAD_NONE); dc_step_frame(&A->core, fa); }
-  for (; fb < 4000 && stageB() != STAGE_GAME; fb++) { bool on=(fb%16u)<8u; pad_repl_hold(&B->core, on?((fb&16u)?PAD_CROSS:PAD_START):PAD_NONE); dc_step_frame(&B->core, fb); }
+  for (; fa < 4000 && stageA() != STAGE_GAME; fa++) { bool on=(fa%16u)<8u; A->pad.driveHold(on?((fa&16u)?PAD_CROSS:PAD_START):PAD_NONE); dc_step_frame(&A->core, fa); }
+  for (; fb < 4000 && stageB() != STAGE_GAME; fb++) { bool on=(fb%16u)<8u; B->pad.driveHold(on?((fb&16u)?PAD_CROSS:PAD_START):PAD_NONE); dc_step_frame(&B->core, fb); }
   if (stageA() != STAGE_GAME || stageB() != STAGE_GAME) {
     fprintf(stderr, "[oraclediff] FAIL: reach GAME — A stage=0x%08X (f%u), B stage=0x%08X (f%u)\n", stageA(), fa, stageB(), fb);
     return 1;
   }
-  pad_repl_hold(&A->core, PAD_NONE); pad_repl_hold(&B->core, PAD_NONE);
+  A->pad.driveHold(PAD_NONE); B->pad.driveHold(PAD_NONE);
   fprintf(stderr, "[oraclediff] both at GAME (A f%u, B f%u). Checkpoint-diffing the narration beats.\n", fa, fb);
 
   int total_div = 0, summary_div = 0;   // summary_div = narration+free-roam only (excludes the render-noisy interactive walk)
@@ -451,13 +450,13 @@ static int run_oraclediff(const char* path) {
         fprintf(stderr, "[oraclediff] === interactive-play scan: hold RIGHT %d frames from onset (baseline=%d benign ranges) ===\n",
                 WALK_FRAMES, onset_ranges);
         for (int k = 0; k < WALK_FRAMES; k++) {
-          pad_repl_hold(&A->core, PAD_RIGHT); dc_step_frame(&A->core, fa); fa++;
-          pad_repl_hold(&B->core, PAD_RIGHT); dc_step_frame(&B->core, fb); fb++;
+          A->pad.driveHold(PAD_RIGHT); dc_step_frame(&A->core, fa); fa++;
+          B->pad.driveHold(PAD_RIGHT); dc_step_frame(&B->core, fb); fb++;
         }
         int nd = diff_band("interactive-play (post-walk, render-noise-dominated)");
         fprintf(stderr, "[oraclediff]   post-walk RAM: %d ranges (render scene-graph noise). NOTE: Tomba is NOT controllable at this checkpoint (scripted caught pose) — this re-confirms still-convergence, it is NOT yet an interactive-MOVEMENT test.\n", nd);
       }
-      pad_repl_hold(&A->core, PAD_NONE); pad_repl_hold(&B->core, PAD_NONE);
+      A->pad.driveHold(PAD_NONE); B->pad.driveHold(PAD_NONE);
       gpu_native_shot(&A->core, "scratch/screenshots/oraclediff_freeroam_native.ppm");
       gpu_native_shot(&B->core, "scratch/screenshots/oraclediff_freeroam_oracle.ppm");
       fprintf(stderr, "[oraclediff] post-walk framebuffers: oraclediff_freeroam_{native,oracle}.ppm (native VK vs PSX soft-GPU content match — still-convergent; Tomba stays in the scripted caught pose, so this is not yet an interactive-movement test)\n");
@@ -473,8 +472,8 @@ static int run_oraclediff(const char* path) {
         const int marks[] = { 300, 600, 1200, 1800, 2600 };
         int mi = 0;
         for (int k = 0; k < PROG_FRAMES; k++) {
-          pad_repl_hold(&A->core, PAD_NONE); dc_step_frame(&A->core, fa); fa++;
-          pad_repl_hold(&B->core, PAD_NONE); dc_step_frame(&B->core, fb); fb++;
+          A->pad.driveHold(PAD_NONE); dc_step_frame(&A->core, fa); fa++;
+          B->pad.driveHold(PAD_NONE); dc_step_frame(&B->core, fb); fb++;
           if (mi < (int)(sizeof marks/sizeof marks[0]) && k == marks[mi]) {
             char pa[160], pb[160];
             snprintf(pa, sizeof pa, "scratch/screenshots/prog_native_h%d.ppm", marks[mi]);

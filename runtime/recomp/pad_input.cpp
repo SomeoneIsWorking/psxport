@@ -32,37 +32,30 @@
 #include <stdint.h>
 #include "cfg.h"
 #include "core.h"
-#include "game.h"   // PadState lives on Game; reached via c->game->pad (de-globalization, 2026-06-19)
+#include "game.h"   // class Pad lives on Game; reached via c->game->pad (see class docs)
 #include "c_subsys.h" // gpu_windowed()
 
 // PSX digital button bits, active-low (0 = pressed). Default = nothing pressed.
 #define PAD_NONE 0xFFFFu
 
-// Host button state now lives on the instance: c->game->pad.buttons (was the file-scope s_buttons).
-
-void pad_init(Core* c) {
-  c->game->pad.buttons = PAD_NONE;
+void Pad::init() {
+  buttons = PAD_NONE;
 }
 
 // Host/PM feeds button state in the PSX active-low layout (0 bit = pressed).
-void pad_set_buttons(Core* c, uint16_t mask) {
-  c->game->pad.buttons = mask;
-}
-
-uint16_t pad_buttons(Core* c) {
-  return c->game->pad.buttons;
+void Pad::setButtons(uint16_t mask) {
+  buttons = mask;
 }
 
 // Write the standard digital auto-pad packet into a buffer the game polls.
 // `buf` must have room for at least 4 bytes. Layout matches FUN_80003a4c's output
 // for a connected digital pad (id 0x41).
-void pad_fill_buffer(Core* c, uint8_t* buf) {
+void Pad::fillBuffer(uint8_t* buf) {
   if (!buf) return;
-  uint16_t b = c->game->pad.buttons;
-  buf[0] = 0x00;                       // status: pad present / read ok
-  buf[1] = 0x41;                       // id: digital controller (1 halfword of data)
-  buf[2] = (uint8_t)(b & 0xFF);        // button mask low  (active-low)
-  buf[3] = (uint8_t)((b >> 8) & 0xFF); // button mask high (active-low)
+  buf[0] = 0x00;                                // status: pad present / read ok
+  buf[1] = 0x41;                                // id: digital controller (1 halfword of data)
+  buf[2] = (uint8_t)(buttons & 0xFF);           // button mask low  (active-low)
+  buf[3] = (uint8_t)((buttons >> 8) & 0xFF);    // button mask high (active-low)
 }
 
 // --- Optional SDL host input ------------------------------------------------
@@ -185,7 +178,7 @@ static void pad_apply_controller(SDL_Gamepad* gc, uint16_t* mask) {
 // Map keyboard + first connected gamepad to the PSX button mask. Call once per
 // frame (after SDL_PumpEvents elsewhere, or it pumps here). Builds an ACTIVE-LOW
 // mask: a bit is cleared when its control is pressed.
-void pad_poll_sdl(Core* c) {
+void Pad::pollSdl() {
   SDL_PumpEvents();
   uint16_t mask = PAD_NONE;
 
@@ -259,13 +252,7 @@ void pad_poll_sdl(Core* c) {
     }
   }
 
-  c->game->pad.buttons = mask;
-}
-
-// Close any open controllers (call on shutdown if desired). Safe to call multiple times.
-void pad_close_controllers(void) {
-  for (int s = 0; s < PAD_MAX_GC; s++)
-    if (s_gc[s]) { SDL_CloseGamepad(s_gc[s]); s_gc[s] = nullptr; s_gc_inst[s] = -1; }
+  buttons = mask;
 }
 #endif // PSXPORT_SDL
 
@@ -300,14 +287,14 @@ static void ov_pad_read(Core* c) {
   uint32_t b = c->mem_r32(0x0000AEC8u + c->r[4] * 4u);   // registered slot buffer ptr
   if (b) {
     uint8_t pk[4];
-    pad_fill_buffer(c, pk);
+    c->game->pad.fillBuffer(pk);
     for (int i = 0; i < 4; i++) c->mem_w8(b + i, pk[i]);
   }
   c->r[2] = 0;   // v0 = 0 (read complete / pad serviced)
 }
 
-void pad_overrides_init(Core* c) {
-  pad_init(c);
+void Pad::overridesInit() {
+  init();
 }
 
 // Per-frame native pad service. The real console fills the slot pad buffers from the per-VBlank
@@ -328,16 +315,16 @@ void pad_overrides_init(Core* c) {
 #define PAD_SLOT0_BUF 0x800BF4F8u
 #define PAD_SLOT1_BUF 0x800BF51Au
 
-// REPL pad control (native-port -repl): a held active-low mask + a tap countdown, now on the
-// instance (c->game->pad.repl_*). The REPL sets these; pad_service_frame applies them so the
-// interactive driver can press/hold/tap buttons.
-void pad_repl_hold(Core* c, uint16_t active_low_mask)  { c->game->pad.repl_on = 1; c->game->pad.repl_hold = active_low_mask; }
-void pad_repl_tap(Core* c, uint16_t active_low_mask, int n) { c->game->pad.repl_on = 1; c->game->pad.repl_tap = active_low_mask; c->game->pad.repl_tap_n = n; }
+// REPL pad control (native-port -repl): a held active-low mask + a tap countdown, applied by
+// serviceFrame() so the interactive driver can press/hold/tap buttons.
+void Pad::driveHold(uint16_t activeLowMask) { repl_on = 1; repl_hold = activeLowMask; }
+void Pad::driveTap(uint16_t activeLowMask, int nframes) { repl_on = 1; repl_tap = activeLowMask; repl_tap_n = nframes; }
 // Fully relinquish REPL pad control (repl_on=0) so neither a held mask nor a stale PAD_NONE keeps
 // overriding host/FORCE input. Used by the state-gated auto-navigator to go hands-off in gameplay.
-void pad_repl_release(Core* c) { c->game->pad.repl_on = 0; c->game->pad.repl_hold = PAD_NONE; c->game->pad.repl_tap = PAD_NONE; c->game->pad.repl_tap_n = 0; }
+void Pad::driveRelease() { repl_on = 0; repl_hold = PAD_NONE; repl_tap = PAD_NONE; repl_tap_n = 0; }
 
-void pad_service_frame(Core* c) {
+void Pad::serviceFrame() {
+  Core* c = &game->core;
   static int s_have_window = -1;
   static int s_force_init = 0;
   static int s_force_on = 0;
@@ -347,7 +334,7 @@ void pad_service_frame(Core* c) {
   static uint32_t s_hold_at = 0;           // ...applied from this native frame onward
   s_have_window = gpu_windowed();                // a live on-screen window is up (gpu_gpu.cpp)
 #ifdef PSXPORT_SDL
-  if (s_have_window) pad_poll_sdl(c);            // host keyboard/gamepad -> c->game->pad.buttons
+  if (s_have_window) pollSdl();                  // host keyboard/gamepad -> this->buttons
 #endif
   if (!s_force_init) {                           // headless test hook: pulse an active-low mask
     const char* force = cfg_str("PSXPORT_FORCE_BUTTONS");
@@ -371,14 +358,13 @@ void pad_service_frame(Core* c) {
   static long s_stop_at = -2;
   if (s_stop_at == -2) { const char* e = cfg_str("PSXPORT_FORCE_STOP_AT"); s_stop_at = e ? atol(e) : -1; }
   if (s_force_on && !(s_stop_at >= 0 && (long)s_fc >= s_stop_at)) {
-    if (s_hold_mask != PAD_NONE && s_fc >= s_hold_at) pad_set_buttons(c, s_hold_mask);
-    else pad_set_buttons(c, (s_fc % 32u) < 8u ? s_force_mask : PAD_NONE);
+    if (s_hold_mask != PAD_NONE && s_fc >= s_hold_at) setButtons(s_hold_mask);
+    else setButtons((s_fc % 32u) < 8u ? s_force_mask : PAD_NONE);
   }
   // REPL pad control: a tap (countdown) overrides the held mask while active.
-  PadState& pad = c->game->pad;
-  if (pad.repl_on) {
-    if (pad.repl_tap_n > 0) { pad_set_buttons(c, pad.repl_tap); pad.repl_tap_n--; }
-    else pad_set_buttons(c, pad.repl_hold);
+  if (repl_on) {
+    if (repl_tap_n > 0) { setButtons(repl_tap); repl_tap_n--; }
+    else setButtons(repl_hold);
   }
   s_fc++;
 
@@ -420,9 +406,9 @@ void pad_service_frame(Core* c) {
       }
     }
     if (rep_buf && rec_fc < rep_n) {
-      pad.buttons = rep_buf[rec_fc];        // force the recorded mask (overrides host/repl/force)
+      buttons = rep_buf[rec_fc];            // force the recorded mask (overrides host/repl/force)
     }
-    if (rec_fp) { uint16_t m = pad.buttons; fwrite(&m, 2, 1, rec_fp); fflush(rec_fp); }
+    if (rec_fp) { uint16_t m = buttons; fwrite(&m, 2, 1, rec_fp); fflush(rec_fp); }
     // PSXPORT_PAD_SHOT_AT=f0,f1,... : during replay, screenshot at these EXACT replay (pad) frame
     // indices to scratch/screenshots/padshot_<frame>.ppm. The pad-frame axis (rec_fc) is the faithful
     // one (gpu_frame_no drifts because boot/FMV presents extra frames), so this captures a deterministic
@@ -478,7 +464,7 @@ void pad_service_frame(Core* c) {
   }
 
   uint8_t pk[4];
-  pad_fill_buffer(c, pk);
+  fillBuffer(pk);
   uint32_t bufs[2] = { PAD_SLOT0_BUF, PAD_SLOT1_BUF };       // fixed game pad buffers
   for (int slot = 0; slot < 2; slot++) {
     uint32_t b = c->mem_r32(0x0000AEC8u + (uint32_t)slot * 4u); // registered ptr (NULL in this port)

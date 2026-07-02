@@ -79,16 +79,16 @@ static void scea_dump_ppm(const uint8_t* rgba, float fade01, const char* path) {
 static void native_scea_splash(Core* c) {
   void gpu_scea_decode_rgba(uint8_t*);
   void gpu_gpu_present_image(Core*, const uint8_t*, int, int, float);
-  void gpu_pace_frame(Core*); void gpu_clear_display(Core*); uint16_t pad_buttons(Core*);
+  void gpu_pace_frame(Core*); void gpu_clear_display(Core*);
   // Decode the baked SCEA asset into a PC-native RGBA8 screen image ONCE (no PSX VRAM / GP0 / CLUT path).
   static uint8_t scea_rgba[SCEA_DISP_W * SCEA_DISP_H * 4];
   gpu_scea_decode_rgba(scea_rgba);
   int dumped = 0;
   for (int f = 0; f < SCEA_FRAMES; f++) {
 #ifdef PSXPORT_SDL
-    { if (gpu_windowed()) { void pad_poll_sdl(Core*); pad_poll_sdl(c); } }
+    { if (gpu_windowed()) c->game->pad.pollSdl(); }
 #endif
-    if ((pad_buttons(c) & 0x0008u) == 0) {                // Start = skip the license screen
+    if ((c->game->pad.buttons & 0x0008u) == 0) {          // Start = skip the license screen
       fprintf(stderr, "[scea] skipped (Start) at frame %d\n", f); break; }
     int fade;                                             // 0..128: fade in, hold, fade out
     if (f < SCEA_FADE_IN)                  fade = f * 128 / SCEA_FADE_IN;

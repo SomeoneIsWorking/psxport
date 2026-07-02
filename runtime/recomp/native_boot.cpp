@@ -33,7 +33,6 @@
 #include "dualview_snapshot.h"  // dv_capture_post/dv_restore_pre/dv_restore_post (extern "C" linkage)
 #include "guest_call.h" // rc0-4 guest-call helpers (shared with repl.cpp)
 #include "repl.h"       // native_repl_read + the REPL-armed g_nav_* auto-drive state
-void pad_repl_tap(Core* c, uint16_t active_low_mask, int n);  // pad_input.cpp (debug-server auto-drive)
 
 // Native XA voice/BGM clip player (xa_stream.c) owns task slot 2 — it replaced the FUN_8001cfc8
 // streaming-reader coroutine. The scheduler skips slot 2 while owned and reflects clip completion
@@ -78,7 +77,6 @@ static void native_step_frame(Core* c, uint32_t f) {
   xa_bind(c);                           // bind THIS core's XA streamer state (per-instance — no shared XA)
   void hle_deliver_event(Core* c, uint32_t ev_class, uint32_t spec);
   ffspan_reset_frame();   // backdrop-attribution: reset the per-frame builder span table
-  void pad_service_frame(Core*);
   void gpu_set_disp_origin(Core* c, int x, int y);
   (void)f;
   perf_frame_begin();   // perf: start the frame clock (top of the deterministic per-frame work)
@@ -105,7 +103,7 @@ static void native_step_frame(Core* c, uint32_t f) {
   c->mem_w16(0x800e809c, 0);                                  // DAT_800e809c = 0 (dwell counter)
   c->mem_w32(0x800bf4f4, c->mem_r32(0x800bf544));             // keep last pool ptr (read by some submitters)
   c->mem_w32(0x800bf544, (parity * 0x14000 + 0x800bfe68) & 0xffffff);   // packet pool (now constant)
-  pad_service_frame(c);                                       // host input -> game pad buffer (pre-read)
+  c->game->pad.serviceFrame();                                       // host input -> game pad buffer (pre-read)
   xa_audio_trace(c, "pre");                                   // CD-vol fade state BEFORE tick+mix
   perf_mark_pre();   // perf: charge the pre-tick host work (input/IRQ/OT-clear) to `pre`
   // PC-driven frame body: per-frame state update (still-PSX leaf) + per-vblank audio + fps60 commit +
@@ -315,7 +313,6 @@ static void ov_game_main(Core* c) {
   fprintf(stderr, "[native_boot] entering native frame loop (%s)\n",
           nframes ? "capped" : "interactive (until window close)");
   void hle_deliver_event(Core* c, uint32_t ev_class, uint32_t spec);
-  void pad_service_frame(Core*);
   void dbg_server_start(Core* c); void dbg_server_service(Core* c);
   dbg_server_start(c);    // PSXPORT_DEBUG_SERVER: non-blocking live TCP debug server (dbg_server.c)
   long repl_budget = 0;   // frames remaining in the current REPL `run N`
@@ -352,18 +349,17 @@ static void ov_game_main(Core* c) {
       if (s_as_phase == 0) fprintf(stderr, "[autoskip] armed: drive into GAME free-roam\n");
     }
     if (s_as_phase < 3) {
-      void pad_repl_release(Core*);
       uint32_t stg = c->mem_r32(TASKBASE + 0xc);
       uint8_t  cut = c->mem_r8(0x1F800137u);             // cutscene-active flag
       if (s_as_phase == 0) {                             // tap Cross until the GAME stage
-        if (stg != 0x8010637Cu) { if ((f % 12u) == 0) pad_repl_tap(c, (uint16_t)(0xFFFF & ~0x4000), 6); }
+        if (stg != 0x8010637Cu) { if ((f % 12u) == 0) c->game->pad.driveTap((uint16_t)(0xFFFF & ~0x4000), 6); }
         else { s_as_phase = 1; fprintf(stderr, "[autoskip] reached GAME at frame %u\n", f); }
       } else if (s_as_phase == 1) {                      // wait for the cutscene to actually start (flag -> 1)
         if (cut) { s_as_phase = 2; fprintf(stderr, "[autoskip] intro cutscene up at frame %u; skipping (Start)\n", f); }
       } else {                                           // phase 2: pulse Start while the cutscene is active
-        if (cut) { s_as_idle = 0; if ((f % 40u) == 0) pad_repl_tap(c, (uint16_t)(0xFFFF & ~0x0008), 6); }
+        if (cut) { s_as_idle = 0; if ((f % 40u) == 0) c->game->pad.driveTap((uint16_t)(0xFFFF & ~0x0008), 6); }
         else if (++s_as_idle >= 60) {   // ~2s after the flag clears: lets the cutscene-END FADE finish before
-          pad_repl_release(c); s_as_phase = 3;   // hand-off, so a Start right after skip opens the pause menu
+          c->game->pad.driveRelease(); s_as_phase = 3;   // hand-off, so a Start right after skip opens the pause menu
           fprintf(stderr, "[autoskip] free-roam reached at frame %u (cutscene ended)\n", f);   // (not mid-fade)
         }
       }
@@ -374,7 +370,7 @@ static void ov_game_main(Core* c) {
     // post-newgame fisherman dialog cutscene into the field. Manual walking = `press`/`run`/`release`.
     if (g_nav_newgame) {
       if (c->mem_r32(0x801fe00c) != 0x8010637Cu) {
-        if ((f % 12u) == 0) pad_repl_tap(c, (uint16_t)(0xFFFF & ~0x4000), 6);   // tap Cross
+        if ((f % 12u) == 0) c->game->pad.driveTap((uint16_t)(0xFFFF & ~0x4000), 6);   // tap Cross
       } else {
         fprintf(stderr, "[repl] newgame: reached GAME prologue at frame %u\n", f);
         g_nav_newgame = 0; repl_budget = 0;                                     // back to the REPL prompt
@@ -386,8 +382,8 @@ static void ov_game_main(Core* c) {
       }
     }
     if (g_skip_frames > 0) {
-      if ((f % 24u) == 0) pad_repl_tap(c, (uint16_t)(0xFFFF & ~0x0008), 6);     // pulse Start
-      if (--g_skip_frames == 0) { void pad_repl_release(Core*); pad_repl_release(c);
+      if ((f % 24u) == 0) c->game->pad.driveTap((uint16_t)(0xFFFF & ~0x0008), 6);     // pulse Start
+      if (--g_skip_frames == 0) { c->game->pad.driveRelease();
         fprintf(stderr, "[repl] skip done at frame %u\n", f); }
     }
     // `warp` — fire the armed area change. We replicate the NON-yielding essential body of the GAME-stage
@@ -427,7 +423,7 @@ static void ov_game_main(Core* c) {
       if (dbg_is_paused()) watchdog_suspend();   // a debug pause is intentional idle, not a hang
       while (dbg_is_paused()) {
         if (dbg_step_pending()) { dbg_consume_step(); break; }   // run exactly one frame
-        pad_service_frame(c);      // pump host input (keeps the window responsive)
+        c->game->pad.serviceFrame();      // pump host input (keeps the window responsive)
         gpu_repaint(c);           // re-present current frame: window stays live + readback is accurate
         dbg_server_service(c);    // receive step/play/capture commands
         usleep(15000);

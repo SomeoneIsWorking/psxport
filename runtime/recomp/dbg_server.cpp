@@ -53,8 +53,6 @@ void gpu_gpu_shot(Core* core, const char* path);
 void gpu_gpu_stats(Core* core, int* tri, int* tex, int* semi);
 void gpu_gpu_vram_region(const char* path, int x, int y, int w, int h);
 // pad input (pad_input.c) — lets the debug server DRIVE the game (press/release/tap/hold)
-void pad_repl_hold(Core* c, uint16_t active_low_mask);
-void pad_repl_tap(Core* c, uint16_t active_low_mask, int n);
 
 // PSX pad: name -> active-HIGH bit (mirrors the REPL mapping in native_boot.c).
 static unsigned dbg_btn(const char* n) {
@@ -247,14 +245,14 @@ static void dbg_exec(FILE* out, const char* line) {
     void cfg_dbg_set(const char*); cfg_dbg_set(ch);
     fprintf(out, "debug channels = %s\n", ch[0] ? ch : "(none)");
   } else if (!strcmp(cmd, "press") && sscanf(line, "%*s %31s", arg) == 1) {
-    s_held &= ~(unsigned short)dbg_btn(arg); pad_repl_hold(s_ctx, s_held); fprintf(out, "held=%04X\n", s_held);
+    s_held &= ~(unsigned short)dbg_btn(arg); s_ctx->game->pad.driveHold(s_held); fprintf(out, "held=%04X\n", s_held);
   } else if (!strcmp(cmd, "release") && sscanf(line, "%*s %31s", arg) == 1) {
-    s_held |= (unsigned short)dbg_btn(arg); pad_repl_hold(s_ctx, s_held); fprintf(out, "held=%04X\n", s_held);
+    s_held |= (unsigned short)dbg_btn(arg); s_ctx->game->pad.driveHold(s_held); fprintf(out, "held=%04X\n", s_held);
   } else if (!strcmp(cmd, "tap") && sscanf(line, "%*s %31s %u", arg, &a) >= 1) {
-    if (!a) a = 4; pad_repl_tap(s_ctx, (unsigned short)(0xFFFF & ~dbg_btn(arg)), (int)a);
+    if (!a) a = 4; s_ctx->game->pad.driveTap((unsigned short)(0xFFFF & ~dbg_btn(arg)), (int)a);
     fprintf(out, "tap %s %u\n", arg, a);
   } else if (!strcmp(cmd, "hold") && sscanf(line, "%*s %x", &a) == 1) {
-    s_held = (unsigned short)a; pad_repl_hold(s_ctx, s_held); fprintf(out, "held=%04X\n", s_held);
+    s_held = (unsigned short)a; s_ctx->game->pad.driveHold(s_held); fprintf(out, "held=%04X\n", s_held);
   } else if (!strcmp(cmd, "pause")) {
     s_paused = 1; s_step = 0; fprintf(out, "paused at frame %d\n", gpu_frame_no(s_ctx));
   } else if (!strcmp(cmd, "play") || !strcmp(cmd, "resume")) {

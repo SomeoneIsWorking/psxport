@@ -62,8 +62,7 @@ static void mdec_pump(void) { MDEC_Run(0x40000000); }
 void gpu_gp1(Core*, uint32_t w);
 void gpu_native_init(void);
 
-void     pad_poll_sdl(Core*);                               // pad_input.cpp (host input)
-uint16_t pad_buttons(Core*);                                // active-low PSX button mask
+// pad access via c->game->pad — class Pad on Game (see game.h): pollSdl(), buttons field
 #define PAD_START 0x0008u                                   // Start button bit (active-low)
 
 static int fmv_resolve_path(const char* path, uint32_t* out_lba, uint32_t* out_size);
@@ -644,17 +643,17 @@ static void fmv_audio_close(void) { if (s_fmv_stream) { SDL_ClearAudioStream(s_f
 // fixed-15fps guess was too slow). Polls input and returns 1 if Start was pressed (skip).
 // uncapped (PSXPORT_FMV_FPS=0) disables pacing for fast headless dumps.
 static int fmv_pace(Core* core, long media_frames, int freq, uint32_t t0, int uncapped) {
-  pad_poll_sdl(core);
+  core->game->pad.pollSdl();
   int& start_prev = core->game->fmv.start_prev;
-  int pressed = ((pad_buttons(core) & PAD_START) == 0) && !start_prev;
-  start_prev = (pad_buttons(core) & PAD_START) == 0;
+  int pressed = ((core->game->pad.buttons & PAD_START) == 0) && !start_prev;
+  start_prev = (core->game->pad.buttons & PAD_START) == 0;
   if (uncapped || freq <= 0) return pressed;
   uint32_t target = (uint32_t)((long long)media_frames * 1000 / freq);
   while ((int)(SDL_GetTicks() - t0) < (int)target) {
     SDL_Delay(2);
-    pad_poll_sdl(core);
-    if (((pad_buttons(core) & PAD_START) == 0) && !start_prev) pressed = 1;
-    start_prev = (pad_buttons(core) & PAD_START) == 0;
+    core->game->pad.pollSdl();
+    if (((core->game->pad.buttons & PAD_START) == 0) && !start_prev) pressed = 1;
+    start_prev = (core->game->pad.buttons & PAD_START) == 0;
   }
   return pressed;
 }

@@ -16,16 +16,13 @@
 #include <string.h>
 #include <unistd.h>
 #include "native_gate.h"  // gate registry (native_gate.cpp); the `gate` command drives it.
-void pad_repl_release(Core* c);
 
 // ---- Interactive REPL (PSXPORT_REPL=1) — drive the native port from stdin --------------------
 // Mirrors the oracle's (wide60rt -repl) command set so one driver can step BOTH cores and diff.
 // Commands: run N | r addr [len] | rw addr [words] | w addr val | w8 addr val | watch lo hi |
 //   unwatch | hits | press/release <btn> | tap <btn> [frames] | regs | seq | quit. Memory is the
 //   game's address space (mem_r*/mem_w*); watchpoints via mem_set_watch (reported during `run`).
-void pad_repl_hold(Core* c, uint16_t active_low_mask);
 void cam_teleport(int x, int y, int z); void cam_teleport_off(void);   // engine_camera.cpp — REPL `tp`
-void pad_repl_tap(Core* c, uint16_t active_low_mask, int n);
 static uint16_t repl_btn(const char* n) {     // name -> active-HIGH PSX pad bit
   if (!strcmp(n,"start"))    return 0x0008; if (!strcmp(n,"select")) return 0x0001;
   if (!strcmp(n,"x")||!strcmp(n,"cross"))  return 0x4000;
@@ -114,9 +111,9 @@ long native_repl_read(Core* c, uint32_t f) {
     else if (!strcmp(cmd, "watch") && sscanf(line, "%*s %x %x", &a, &b) == 2) c->mem_set_watch(a, b);
     else if (!strcmp(cmd, "unwatch")) { c->mem_set_watch(0, 0); fprintf(stderr, "[repl] unwatch\n"); }
     else if (!strcmp(cmd, "hits")) fprintf(stderr, "[repl] watch hits=%d\n", c->mem_watch_hits());
-    else if (!strcmp(cmd, "press") && sscanf(line, "%*s %31s", arg) == 1)   { held &= ~repl_btn(arg); pad_repl_hold(c, held); fprintf(stderr, "[repl] held=%04X\n", held); }
-    else if (!strcmp(cmd, "release") && sscanf(line, "%*s %31s", arg) == 1) { held |= repl_btn(arg);  pad_repl_hold(c, held); fprintf(stderr, "[repl] held=%04X\n", held); }
-    else if (!strcmp(cmd, "tap") && sscanf(line, "%*s %31s %u", arg, &a) >= 1) { if (!a) a = 4; pad_repl_tap(c, (uint16_t)(0xFFFF & ~repl_btn(arg)), (int)a); fprintf(stderr, "[repl] tap %s %u\n", arg, a); }
+    else if (!strcmp(cmd, "press") && sscanf(line, "%*s %31s", arg) == 1)   { held &= ~repl_btn(arg); c->game->pad.driveHold(held); fprintf(stderr, "[repl] held=%04X\n", held); }
+    else if (!strcmp(cmd, "release") && sscanf(line, "%*s %31s", arg) == 1) { held |= repl_btn(arg);  c->game->pad.driveHold(held); fprintf(stderr, "[repl] held=%04X\n", held); }
+    else if (!strcmp(cmd, "tap") && sscanf(line, "%*s %31s %u", arg, &a) >= 1) { if (!a) a = 4; c->game->pad.driveTap((uint16_t)(0xFFFF & ~repl_btn(arg)), (int)a); fprintf(stderr, "[repl] tap %s %u\n", arg, a); }
     else if (!strcmp(cmd, "debug")) { char ch[200] = {0}; sscanf(line, "%*s %199[^\n]", ch); void cfg_dbg_set(const char*); cfg_dbg_set(ch); fprintf(stderr, "[repl] debug channels = %s\n", ch[0] ? ch : "(none)"); }
     else if (!strcmp(cmd, "ents")) {   // enumerate live GAME OBJECTS across the 3 entity lists, with identity
       // Each object is a node in a doubly-linked list (next @ +0x24). Identity fields: type @+0xc, render
