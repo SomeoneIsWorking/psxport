@@ -75,7 +75,7 @@ static void eng_stage_transition(Core* c) {
   c->mem_w32(c->r[29] + 0x14, ra);                  // sw ra,20(sp)
   uint32_t task = c->mem_r32(0x1f800138u);
   c->r[4] = task + 0xc; c->r[5] = stage;
-  rec_dispatch(c, 0x800450BCu);                     // eng_load_stage: load the overlay + set the task's new entry
+  eng_load_stage(c);                                // native (was rec_dispatch(0x800450BCu))
   task = c->mem_r32(0x1f800138u);
   c->mem_w16(task, 3);                              // task state = 3 (RESTART fresh at the new entry)
   c->mem_w8(task + 0x6f, 0);                        // task[0x6f] = 0
@@ -126,7 +126,7 @@ static void eng_task0_boot(Core* c) {
   }
   c->r[4] = 0;                                       // FUN_80052078(0): transition to stage 0
   c->r[31] = 0x80049A50u;                            // jal 0x80052078 @0x80049a48 -> ra
-  rec_dispatch(c, 0x80052078u);                      // (frame still down -> byte-faithful stack scratch)
+  eng_stage_transition(c);                           // native (was rec_dispatch(0x80052078u)) — frame still down for byte-faithful stack scratch
   c->r[16] = c->mem_r32(c->r[29] + 0x28);            // epilogue: lw s0,0x28(sp); lw ra,0x2c(sp)
   c->r[31] = c->mem_r32(c->r[29] + 0x2c);
   c->r[29] = sp;                                     // sp += 0x30
