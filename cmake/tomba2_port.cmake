@@ -239,7 +239,7 @@ set_source_files_properties(${GEN_REC_SRCS}
 add_executable(tomba2_port ${PORT_SRC} ${SHADERS_H})
 add_dependencies(tomba2_port gen_gpu_shaders)
 
-# C++17 + -fpermissive for this target (mednafen/engine), overriding the project-wide C++20.
+# C++17 for this target (mednafen/engine), overriding the project-wide C++20.
 set_target_properties(tomba2_port PROPERTIES
   CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON
   ENABLE_EXPORTS ON                                   # -rdynamic: watchdog backtrace symbol names
@@ -258,11 +258,10 @@ target_include_directories(tomba2_port PRIVATE
 target_compile_definitions(tomba2_port PRIVATE
   PSXPORT_SDL _XOPEN_SOURCE=700 RMLUI_STATIC_LIB RMLUI_SDL_VERSION_MAJOR=3)
 
-# -w (warnings off) and -O2 -g, matching the shell build; -fpermissive + narrowing-suppression only for
-# C++ (clang has no -fpermissive and treats braced-init narrowing as a hard error). Keeps the CMake
-# (macOS) build in step with run.sh / build_port.sh.
-target_compile_options(tomba2_port PRIVATE -w -O2 -g
-  $<$<COMPILE_LANGUAGE:CXX>:-fpermissive -Wno-c++11-narrowing -Wno-narrowing>
+# -w (warnings off) and -O2 -g, matching the shell build. Narrowing kept as a hard error under
+# both GCC and clang (see 2026-07-02 build-hygiene commit — -fpermissive removed, all narrowing
+# violations fixed with real fixes rather than silenced).
+target_compile_options(tomba2_port PRIVATE -w -O2 -g -Werror=narrowing
   ${SDL3_CFLAGS_OTHER} ${FREETYPE_CFLAGS_OTHER})
 
 target_link_libraries(tomba2_port PRIVATE
