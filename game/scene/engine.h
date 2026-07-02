@@ -70,6 +70,23 @@ public:
   void fieldFrame();
   void fieldFrameX();
 
+  // fieldTransition + its 4 workers: the sm[0x4a]==5 sub-scene / door / area FADE transition
+  // machine (guest FUN_80108A60 + FUN_80107xxx workers). fieldTransition dispatches on sm[0x4c]
+  // into one of the 4 workers or the "done -> return to field" epilogue. Formerly the
+  // ov_field_transition / ov_transition_main / ov_transition_d3c / ov_transition_e20 /
+  // ov_transition_f3c free statics in engine_stage.cpp.
+  void fieldTransition();
+  void transitionMain();
+  void transitionD3c();
+  void transitionE20();
+  void transitionF3c();
+
+  // fieldRun / fieldRunX: the sm[0x4c]==2 field RUNNING sub-machine on sm[0x4e] (guest
+  // FUN_80106B98) and its mid-transition twin (0x801070B4, sm[0x4c]==3). Formerly
+  // ov_field_run / ov_field_run_x. Called by Engine::submode1 / fieldFrameX.
+  void fieldRun();
+  void fieldRunX();
+
   // ── ov_field_frame direct children (progressive class-ification) ──────────────────────────
   // areaModeDispatch: the 22-way area-mode jump-table dispatcher at guest 0x8001CAC0. Reads the
   //   area RENDER-MODE byte at 0x800BF870 and dispatches to the overlay handler that owns that

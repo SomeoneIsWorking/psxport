@@ -234,7 +234,7 @@ static void ov_game_submit_810c(Core* c) {
 // (ov_list_walk_69b28 moved to ObjectList::walkAux — c->engine.objectList.walkAux())
 // (ov_arr8_dispatch_26368 moved to Array8Dispatch::tick — c->engine.array8Dispatch.tick())
 // (submode0 / submode1 are now Engine methods — Engine::submode0() / Engine::submode1())
-static void ov_field_transition(Core* c);// fwd — native FUN_80108a60 (sm[0x4a]==5 sub-scene/door transition)
+// (Engine::fieldTransition + workers are defined in this TU; forward declared via engine.h.)
 
 // sm[0x48]==2 RUNNING, per-frame variant: dispatch sm[0x4a] handler. handler[0] = the GAME->SOP bridge
 // 0x8010882c (owned native, ov_game_submode0); the others stay rec_dispatch leaves (synchronous; a
@@ -248,7 +248,7 @@ void Engine::s48_2_frame() { Core* c = core;
   if (s4a >= 6) return;
   if (s4a == 0) { ffspan_begin(); c->engine.submode0(); ffspan_end("submode0"); return; }
   if (s4a == 1) { ffspan_begin(); c->engine.submode1(); ffspan_end("submode1"); return; }
-  if (s4a == 5) { ffspan_begin(); ov_field_transition(c); ffspan_end("transition"); return; }  // native FUN_80108a60
+  if (s4a == 5) { ffspan_begin(); c->engine.fieldTransition(); ffspan_end("transition"); return; }  // native FUN_80108a60
   ffspan_begin(); rec_dispatch(c, handler[s4a]); ffspan_end("s48_2_handler");
 }
 
@@ -553,7 +553,7 @@ static void ov_scene_fade_seq(Core* c, uint32_t node) {
 // ov_field_frame (0x80108b0c) and the heavy leaf callees rec_dispatch. NB the guest fall-throughs are
 // faithful: case 2 -> 3, case 4 -> 1 (no break). sm[0x4e] >= 12 = no-op. This anchors the field frame
 // natively; the leaf callees (object-placement FUN_80072a78 etc.) are the next descent.
-static void ov_field_run(Core* c) {
+void Engine::fieldRun() { Core* c = core;
   uint32_t sm  = c->mem_r32(0x1f800138u);
   uint16_t s4e = c->mem_r16(sm + 0x4e);
   switch (s4e) {
@@ -736,7 +736,7 @@ static void native_area_load_bd4(Core* c, uint32_t area, uint32_t mode) {
 // FUN_80107afc — the MAIN door/sub-scene transition (sm[0x4c]==1..4). sm[0x4e]: 0 teardown+fade-clear+load,
 // 1 FADE-OUT (to black), 2 await load, 3 FADE-IN, 4 done->return to field. Cases 1/2/3 run the per-frame
 // update tail (fade frames keep the world ticking). Faithful to transition.c.
-static void ov_transition_main(Core* c) {
+void Engine::transitionMain() { Core* c = core;
   uint32_t sm = c->mem_r32(0x1f800138u);
   uint16_t st = c->mem_r16(sm + 0x4e);
   switch (st) {
@@ -788,7 +788,7 @@ static void ov_transition_main(Core* c) {
 }
 
 // FUN_80107d3c — transition variant (sm[0x4c]==5/6). sm[0x4e]: 0 load, 1 effect 0x8003fb84, 2 await->done.
-static void ov_transition_d3c(Core* c) {
+void Engine::transitionD3c() { Core* c = core;
   uint32_t sm = c->mem_r32(0x1f800138u);
   uint16_t st = c->mem_r16(sm + 0x4e);
   if (st == 1) {
@@ -809,7 +809,7 @@ static void ov_transition_d3c(Core* c) {
 }
 
 // FUN_80107e20 — transition variant (sm[0x4c]==7). sm[0x4e]: 0 setup+load, 1 effect 0x8003e264, 2 await->done.
-static void ov_transition_e20(Core* c) {
+void Engine::transitionE20() { Core* c = core;
   uint32_t sm = c->mem_r32(0x1f800138u);
   uint16_t st = c->mem_r16(sm + 0x4e);
   if (st == 1) {
@@ -835,7 +835,7 @@ static void ov_transition_e20(Core* c) {
 // FUN_80044bd4(0x80044f58, (DAT_1f800240+0x1a)&0xff, 0) where 0x80044f58 = ov_load_texgroup (a SYNC leaf,
 // also called directly in sop.cpp). So we run it inline + set 1f80019b=1 (faithful to the cooperative
 // spawn's net effect: texgroup loaded, load-done flag raised). Case 4 uses the normal 0x800452c0 loader.
-static void ov_transition_f3c(Core* c) {
+void Engine::transitionF3c() { Core* c = core;
   uint32_t sm = c->mem_r32(0x1f800138u);
   uint16_t st = c->mem_r16(sm + 0x4e);
   switch (st) {
@@ -889,7 +889,7 @@ static void ov_transition_f3c(Core* c) {
 
 // FUN_80108a60 — sm[0x4a]==5 transition dispatcher on sm[0x4c]. 0/9 = done (return to the field area
 // machine: sm[0x48]=2, sm[0x4a]=1, sm[0x4c]=0, sm[0x4e]=0); 1-4 main; 5/6 d3c; 7 e20; 8 f3c.
-static void ov_field_transition(Core* c) {
+void Engine::fieldTransition() { Core* c = core;
   uint32_t sm = c->mem_r32(0x1f800138u);
   uint16_t s4c = c->mem_r16(sm + 0x4c);
   switch (s4c) {
@@ -897,10 +897,10 @@ static void ov_field_transition(Core* c) {
       c->mem_w16(sm + 0x48, 2); c->mem_w16(sm + 0x4a, 1);
       c->mem_w16(sm + 0x4c, 0); c->mem_w16(sm + 0x4e, 0);
       break;
-    case 1: case 2: case 3: case 4: ov_transition_main(c); break;
-    case 5: case 6:                 ov_transition_d3c(c);  break;
-    case 7:                         ov_transition_e20(c);  break;
-    case 8:                         ov_transition_f3c(c);  break;
+    case 1: case 2: case 3: case 4: c->engine.transitionMain(); break;
+    case 5: case 6:                 c->engine.transitionD3c();  break;
+    case 7:                         c->engine.transitionE20();  break;
+    case 8:                         c->engine.transitionF3c();  break;
     default: break;
   }
 }
@@ -910,7 +910,7 @@ static void ov_field_transition(Core* c) {
 // reset) then fall into state 1; state 1 = run ov_field_frame_x and check the mode-3 / area-change exit
 // conditions to hand back to the normal running handler (sm[0x4c]=2); state 2 = bump to 1. Faithful to
 // the disasm (hand-decompiled from the field overlay).
-static void ov_field_run_x(Core* c) {
+void Engine::fieldRunX() { Core* c = core;
   uint32_t sm  = c->mem_r32(0x1f800138u);
   uint16_t s4e = c->mem_r16(sm + 0x4e);
   if (s4e >= 2) {
@@ -974,8 +974,8 @@ void Engine::submode1() { Core* c = core;
       c->mem_w16(sm + 0x4c, next);
       break;
     }
-    case 2: ffspan_begin(); ov_field_run(c); ffspan_end("fieldrun"); break;   // field RUNNING sub-machine (sm[0x4e]) — native
-    case 3: ov_field_run_x(c); break;              // mid-transition running sub-machine 0x801070b4 — native
+    case 2: ffspan_begin(); c->engine.fieldRun(); ffspan_end("fieldrun"); break;   // field RUNNING sub-machine (sm[0x4e]) — native
+    case 3: c->engine.fieldRunX(); break;              // mid-transition running sub-machine 0x801070b4 — native
     case 4: rec_dispatch(c, 0x80107230u); break;
     case 5: rec_dispatch(c, 0x8010766cu); break;
     case 6: rec_dispatch(c, 0x80107790u); break;
