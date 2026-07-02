@@ -31,6 +31,7 @@
 #include <string.h>
 #include "spawn.h"   // world_despawn
 #include "graphics_bind.h"   // ov_obj_set_geom
+#include "inventory.h"       // class Inventory — c->inventory.giveAndFlag (FUN_8004D4C4)
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
@@ -279,8 +280,7 @@ state2:
     // 8012520C slti v0,v1,4 ; 80125210 beqz -> epilogue (v1>=4)   => active only when 2<=v1<4
     if (sub < 0 || sub < 2 || sub >= 4) return;        // 801252A4 epilogue
     // 2 <= node[5] < 4:
-    c->r[4] = 0x77; c->r[5] = 1;                        // 80125218 addiu a0,zero,0x77 ; 80125220 addiu a1,zero,1
-    rec_dispatch(c, 0x8004D4C4u);                       // 8012521C jal 0x8004d4c4
+    c->inventory.giveAndFlag(0x77, 1);                  // 8012521C jal 0x8004d4c4 [native]
     c->r[4] = obj; rec_dispatch(c, 0x8004B0D8u);        // 80125224 jal 0x8004b0d8 (a0=s2)
     c->r[4] = 0x11; c->r[5] = 0; c->r[6] = 0;           // 8012522C a0=0x11 ; 80125230 a1=0 ; 80125238 a2=a1=0
     rec_dispatch(c, 0x80074590u);                       // 80125234 jal 0x80074590
