@@ -21,7 +21,7 @@
 // NOTE (2026-07 restructure): game/render/render_native.cpp (+ render/scene/scene_build.cpp +
 // render/mesh/mesh_draw.cpp) is the CLAUDE.md-mandated eventual replacement for this file.
 #include "core.h"
-#include "game.h"   // Fps60State::current_object (was g_current_object)
+#include "game.h"   // Fps60::current_object (was g_current_object)
 #include "cfg.h"
 #include "mods.h"   // g_mods — live PC-native lighting params (engine-native shading, not a deferred pass)
 #include "lighting.h" // PER-AREA light registry (sun / lava+torch); selected per frame in engine_shade_select

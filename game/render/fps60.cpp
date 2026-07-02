@@ -1,5 +1,5 @@
 #include "core.h"
-#include "game.h"   // Fps60State (per-instance render-interp state) via core->game->fps60
+#include "game.h"   // Fps60 (per-instance render-interp state) via core->game->fps60
 extern "C" {  // Beetle GTE (mednafen gte.c, compiled as C)
   uint32_t GTE_ReadDR(unsigned); uint32_t GTE_ReadCR(unsigned);
   void GTE_WriteDR(unsigned, uint32_t); void GTE_WriteCR(unsigned, uint32_t);
@@ -30,7 +30,7 @@ int g_fps60_on = 0;          // read by the gte_op tap; set by fps60_init from P
 
 // ---- per-frame projected-geometry fingerprint (rate detector input) -----------------
 
-void Fps60State::fold(uint32_t v) {
+void Fps60::fold(uint32_t v) {
   uint64_t h = s_frame_hash;
   for (int i = 0; i < 4; i++) { h ^= (v & 0xFF); h *= 1099511628211ull; v >>= 8; }
   s_frame_hash = h; s_frame_geom++;
@@ -40,12 +40,12 @@ void Fps60State::fold(uint32_t v) {
 // Last object that projected a vertex to each (sx,sy). Epoch-stamped so it resets per frame with
 // no 2 MB memset: a cell is live only when its stamp == the current epoch.
 
-void Fps60State::grid_put(int sx, int sy, uint32_t obj) {
+void Fps60::grid_put(int sx, int sy, uint32_t obj) {
   int x = sx & (GW - 1), y = sy & (GH - 1);
   int i = y * GW + x;
   s_obj_grid[i] = obj; s_obj_stamp[i] = s_epoch;
 }
-uint32_t Fps60State::grid_get(int px, int py) {  // ±2px search; returns the source object's node pointer
+uint32_t Fps60::grid_get(int px, int py) {  // ±2px search; returns the source object's node pointer
   for (int dy = -2; dy <= 2; dy++)          // (0 = no object near here / CPU-projected → caller snaps)
     for (int dx = -2; dx <= 2; dx++) {
       int x = (px + dx) & (GW - 1), y = (py + dy) & (GH - 1);
@@ -69,13 +69,13 @@ uint32_t Fps60State::grid_get(int px, int py) {  // ±2px search; returns the so
 static void xfold(XObj* o, uint32_t v) {     // fold a local-vertex word into the fingerprint
   o->fp ^= v + 0x9E3779B97F4A7C15ull + (o->fp << 6) + (o->fp >> 2);
 }
-void Fps60State::xvert(int16_t vx, int16_t vy, int16_t vz, uint32_t sxy) {
+void Fps60::xvert(int16_t vx, int16_t vy, int16_t vz, uint32_t sxy) {
   if (s_nv >= XV_MAX) return;
   s_lvx[s_nv] = vx; s_lvy[s_nv] = vy; s_lvz[s_nv] = vz; s_osxy[s_nv] = (int32_t)sxy; s_nv++;
 }
 
 // Called per RTPS(0x01)/RTPT(0x30) from fps60_rtp, with the GTE holding this vertex's transform.
-void Fps60State::xobj_rtp(uint32_t insn) {
+void Fps60::xobj_rtp(uint32_t insn) {
   uint32_t op = insn & 0x3F;
   if (op == 0x01) s_rtps_insn = insn;          // remember the game's RTPS flags for re-projection
   uint32_t r0 = GTE_ReadCR(0), r1 = GTE_ReadCR(1), r2 = GTE_ReadCR(2), r3 = GTE_ReadCR(3), r4 = GTE_ReadCR(4);
@@ -109,7 +109,7 @@ void Fps60State::xobj_rtp(uint32_t insn) {
   o->nrtps++;
 }
 
-void Fps60State::xobj_commit() {                 // swap A/B at frame end; reset the per-frame vert pool
+void Fps60::xobj_commit() {                 // swap A/B at frame end; reset the per-frame vert pool
   XObj* t = s_xA; s_xA = s_xB; s_xB = t; s_nxA = s_nxB; s_nxB = 0; s_xb_started = 0; s_nv = 0;
 }
 
@@ -122,7 +122,7 @@ static uint32_t interp_packed(uint32_t a, uint32_t b) {
 }
 
 // gte_op RTP tap. op 0x01 = RTPS (one new SXY, DR14); 0x30 = RTPT (three, DR12/13/14).
-void Fps60State::rtp(uint32_t op) {
+void Fps60::rtp(uint32_t op) {
   if (!g_fps60_on) return;
   s_rtp_calls++; if (current_object) s_rtp_with_obj++;
   xobj_rtp(op);                 // capture this vertex's GTE transform-group (native object)
@@ -136,7 +136,7 @@ void Fps60State::rtp(uint32_t op) {
 }
 
 // gp0_exec polygon tap: join the packet's lead vertex to a captured SXY.
-void Fps60State::join_poly(int px, int py) {
+void Fps60::join_poly(int px, int py) {
   if (!g_fps60_on) return;
   if (grid_get(px, py)) s_join_hit++; else s_join_miss++;
 }
@@ -154,7 +154,7 @@ static void rate_tick(RateDet* d, uint64_t set_hash) {
 }
 
 // ---- per-logic-frame fence (games_tomba2.c ov_frame_update) -------------------------
-void Fps60State::frame_commit(Core* core) {
+void Fps60::frame_commit(Core* core) {
   if (!g_fps60_on) return;
   uint64_t set_hash = (s_frame_geom > 0) ? s_frame_hash : 0xFFFFFFFFFFFFFFFFull;
   rate_tick(&s_rd, set_hash);
@@ -249,7 +249,7 @@ void fps60_stamp_world(Core* c, const int16_t mv[4][3], int nv, uint32_t key) {
 // pre-pass, no depth-ord matching. The previous frame's transform is found by fps_key out of the prev
 // RqItems (which now carry it), exactly like the mesh path — so the s_bbPrev registry is no longer needed
 // to hold prev transforms; the registry is purely the CURRENT-frame node→transform map for queue-time tagging.
-// File-scope (not on Fps60State — fps60_internal.h is not ours to edit); the 60fps present path is single-
+// File-scope (not on Fps60 — fps60_internal.h is not ours to edit); the 60fps present path is single-
 // core in practice, like the s_lerpdbg/s_chk statics. Host-only; never touches guest RAM.
 struct Fps60Billboard { uint32_t lo, hi; uint32_t ident; uint32_t crM[11]; };
 #define FPS60_BB_MAX 1024
@@ -322,7 +322,7 @@ void fps60_stamp_billboard(Core* c, uint32_t node) {
 
 static int s_lerpdbg = -1;        // PSXPORT_DEBUG=fps60 — per-frame reproject stats
 
-void Fps60State::rq_capture(const RqItem* items, int n) {
+void Fps60::rq_capture(const RqItem* items, int n) {
   if (!s_rqCur) s_rqCur = new RqItem[FPS60_RQ_MAX];
   if (n > FPS60_RQ_MAX) n = FPS60_RQ_MAX;
   if (n > 0) memcpy(s_rqCur, items, (size_t)n * sizeof(RqItem));
@@ -396,7 +396,7 @@ static void fps60_compose_mid(const uint32_t a[11], const uint32_t b[11], uint32
 // A static actor's transform differs across frames only by the camera → it reprojects under the half-camera
 // (correct pan); a mover's also by its own motion → midpoint pose. 2D/HUD, terrain, unkeyed or new-this-
 // frame actors, and any prim whose reprojection jumps more than the gate (cut/teleport) SNAP unchanged.
-int Fps60State::build_lerp() {
+int Fps60::build_lerp() {
   if (!s_rqLerp) s_rqLerp = new RqItem[FPS60_RQ_MAX];
   // Billboards are now tagged at QUEUE TIME by the OT walk (gpu_native.cpp → fps60_billboard_for_node), so a
   // billboard RqItem already carries fps_world=1/fps_anchor=1/fps_key/fps_cr/fps_mv=origin on BOTH the cur and
@@ -511,7 +511,7 @@ static void fps60_pass_stats(const char* tag, long fence, const RqItem* items, i
   for (int i = 0; i < n; i++) { if (items[i].layer == RQ_HUD) hud++; if (items[i].sh_cast) shcast++; }
   fprintf(stderr, "[fps60pass] f%ld %s: prims=%d HUD=%ld shadow_cast=%ld\n", fence, tag, n, hud, shcast);
 }
-void Fps60State::fps60_present_vk(Core* core) {
+void Fps60::fps60_present_vk(Core* core) {
   int nl = (s_have_prev && s_nCur > 0) ? build_lerp() : 0;
   if (nl > 0) {                                           // PASS 1 — the interpolated in-between
     fps60_pass_stats("interp", s_fence, s_rqLerp, nl);
@@ -544,7 +544,7 @@ void Fps60State::fps60_present_vk(Core* core) {
   s_nBBCur = 0;
 }
 
-// ---- Public capture API: thin free-function wrappers over the per-instance Fps60State methods.
+// ---- Public capture API: thin free-function wrappers over the per-instance Fps60 methods.
 // Keep the C-style call sites stable; each forwards to core->game->fps60 (de-globalization, 2026-06-19). ----
 void fps60_rtp(Core* core, uint32_t op) { core->game->fps60.rtp(op); }
 void fps60_join_poly(Core* core, int px, int py) { core->game->fps60.join_poly(px, py); }

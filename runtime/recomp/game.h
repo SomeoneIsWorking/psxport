@@ -19,7 +19,7 @@
 #include "mdec_state.h"            // per-instance MDEC state handle (Beetle mdec.c) — MDEC_NewState/Bind
 #include "gpu_native_internal.h"   // GpuState — the native GPU's per-instance render machine state
 #include "gpu_gpu_internal.h"       // GpuGpuState — the Vulkan present backend's per-instance render state
-#include "fps60_internal.h"        // Fps60State — the interpolated-60fps tier's per-instance state
+#include "fps60_internal.h"        // Fps60 — the interpolated-60fps tier's per-instance state
 #include "render_queue.h"          // RenderQueue — the engine-owned draw-order authority
 #include <stdint.h>
 #include <setjmp.h>
@@ -181,7 +181,7 @@ public:
   GpuState    gpu;   // native GPU: VRAM + draw/display state + the rasterizer (gpu_native.cpp)
   GpuGpuState  gpu_gpu;// Vulkan present backend: per-frame batch/depth/dirty/present state (gpu_gpu.cpp)
   RenderQueue rq;    // engine-owned render queue: the single draw-ORDER authority (render_queue.cpp)
-  Fps60State  fps60; // interpolated-60fps tier: capture buffers + matcher + remap (fps60.cpp)
+  Fps60  fps60; // interpolated-60fps tier: capture buffers + matcher + remap (fps60.cpp)
   GteRegs     gte{}; // GTE (COP2) register file — per-instance so two cores keep SEPARATE GTE state
                      // (Beetle gte.c bound to this via GTE_BindState; see gte_bind, gte_beetle.cpp)
   void* spu_state = nullptr;  // per-instance SPU state (Beetle spu.c), heap-allocated; bound via SPU_BindState

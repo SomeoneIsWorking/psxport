@@ -6,7 +6,7 @@
 // (FUN_8007778C / FUN_80077ACC), and the standalone view-cone cull (FUN_8002B278). Extracted verbatim
 // from game_tomba2.cpp (one behavior, byte-identical) into its own module for PC-game code structure.
 #include "core.h"
-#include "game.h"   // Fps60State::current_object
+#include "game.h"   // Fps60::current_object
 #include "cfg.h"
 #include "margin_render.hpp"
 #include "cull.h"

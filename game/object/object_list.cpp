@@ -7,7 +7,7 @@
 #include "object_list.h"
 #include "core.h"
 #include "cfg.h"
-#include "game.h"                 // Fps60State::current_object
+#include "game.h"                 // Fps60::current_object
 #include "tomba2_types.h"         // T2_OBJLIST_HEAD_1/2, T2OBJ_HANDLER/NEXT/RENDER_FLAG
 #include "margin_render.hpp"      // margin_render_flush (native widescreen margin pass)
 #include <stdint.h>

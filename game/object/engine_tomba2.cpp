@@ -13,7 +13,7 @@
 // The native walk IS the engine now — registered unconditionally (no gating). Was verified native==recomp:
 // VRAM bit-identical at frames 4000 and 4720 of real gameplay (1 MB cmp PASS each) — see docs/journal.md.
 #include "core.h"
-#include "game.h"   // Fps60State::current_object (was g_current_object)
+#include "game.h"   // Fps60::current_object (was g_current_object)
 #include "cfg.h"
 #include "tomba2_types.h"
 #include "margin_render.hpp"

@@ -16,7 +16,7 @@
 // produced (the cb at 0x800506B4 only increments that counter), computed directly.
 // (When a host present loop exists it will pace frames; this just removes the busy-wait.)
 #include "core.h"
-#include "game.h"   // Fps60State::current_object (was g_current_object)
+#include "game.h"   // Fps60::current_object (was g_current_object)
 #include "cfg.h"
 #include "margin_render.hpp"
 #include "render.h"           // class Render — c->mRender->sceneNative()

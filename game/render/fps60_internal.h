@@ -1,8 +1,8 @@
 // fps60_internal.h — the interpolated-60fps tier's per-instance state (fps60.cpp).
 //
 // De-globalization (2026-06-19): fps60.cpp's RTP-tap capture buffers, the render-queue snapshots and
-// the rate detector live on an `Fps60State` instance owned by Game (game.h), reached via core->game->
-// fps60. The touching functions are methods of Fps60State (field names keep their historical s_ spelling);
+// the rate detector live on an `Fps60` instance owned by Game (game.h), reached via core->game->
+// fps60. The touching functions are methods of Fps60 (field names keep their historical s_ spelling);
 // the public capture API (fps60_rtp/join_poly/frame_commit) stays C-style via Core*-taking wrappers. The
 // whole tier is RENDER-SIDE (never writes guest RAM) and gated behind PSXPORT_FPS60.
 //
@@ -30,8 +30,8 @@ typedef struct {
 
 typedef struct { uint64_t last_hash; int held; int period; int votes[9]; long changes; } RateDet;  // logic-rate detector
 
-// ---- Fps60State — the 60fps tier's per-instance render-interp state + methods --------------------
-struct Fps60State {
+// ---- Fps60 — the 60fps tier's per-instance render-interp state + methods --------------------
+struct Fps60 {
   // object tag (was the cross-TU global g_current_object): the object whose RTP ops are being tagged
   uint32_t current_object = 0;
 
