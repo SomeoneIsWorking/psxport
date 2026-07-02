@@ -91,6 +91,15 @@ def parse_file(path, natives):
         # a trailing `// ...` on the def line itself: class methods tag their guest FUN address there
         # (e.g. `void Camera::lookAt() {   // FUN_8006D02C`). Scan it first so it wins the association.
         defcomment = lines[i][lines[i].index("//"):].strip() if "//" in lines[i] else ""
+
+        def tag_portion(text):
+            """A header line names the owner LEFT of the first separator (—/:/-). Anything to the
+            RIGHT is description prose and may reference OTHER addresses (e.g. `// FUN_80107e20 —
+            transition variant … 1 effect 0x8003e264 …`); those must NOT be counted as owner tags."""
+            for sep in ("—", " - ", ":"):
+                if sep in text:
+                    return text.split(sep, 1)[0]
+            return text
         # gather the body until brace balance returns to 0 (handles one-liners and multiline)
         body, depth, started = [], 0, False
         j = i
@@ -113,8 +122,10 @@ def parse_file(path, natives):
             nh = NAMEHEX.match(sym)
             if nh:
                 impl.append(nh.group(1).upper())
-            # def-line trailing comment (class-method FUN tag) takes precedence for the owned address
-            for a in ADDR_RE.findall(defcomment) + [x.upper() for x in FUN_RE.findall(defcomment)]:
+            # def-line trailing comment (class-method FUN tag) takes precedence for the owned address.
+            # Only scan the tag portion (left of any separator) — addresses in description prose don't own.
+            dtag = tag_portion(defcomment)
+            for a in [x.upper() for x in FUN_RE.findall(dtag)] + ADDR_RE.findall(dtag):
                 if a.upper() not in impl:
                     impl.append(a.upper())
             header = []
@@ -122,13 +133,16 @@ def parse_file(path, natives):
                 header.append(cl)
                 if "—" in cl or " - " in cl or ":" in cl:
                     break
-            htext = " ".join(header)
-            for a in ADDR_RE.findall(htext) + [x.upper() for x in FUN_RE.findall(htext)]:
+            htext = " ".join(tag_portion(cl) for cl in header)
+            for a in [x.upper() for x in FUN_RE.findall(htext)] + ADDR_RE.findall(htext):
                 if a.upper() not in impl:
                     impl.append(a.upper())
-            if not impl:  # last resort: first address anywhere in the comment block
-                for a in ADDR_RE.findall(" ".join(comment)) + [x.upper() for x in FUN_RE.findall(" ".join(comment))]:
-                    impl.append(a.upper()); break
+            if not impl:  # last resort: first address anywhere in the comment block, in TEXTUAL order.
+                # A `Foo::bar — … guest 0x80059D28 …` class-method header names its owner in prose;
+                # taking the earliest hit avoids picking up a later callee reference (e.g. FUN_8005950C).
+                m2 = re.search(r'0x(8[0-9A-Fa-f]{7})|FUN_(8[0-9a-fA-F]{7})', " ".join(comment))
+                if m2:
+                    impl.append((m2.group(1) or m2.group(2)).upper())
 
         # A class method is only a NATIVE OWNER if it implements a guest address (FUN tag / comment addr).
         # Un-owned helper methods tree-wide must NOT pollute the index.
