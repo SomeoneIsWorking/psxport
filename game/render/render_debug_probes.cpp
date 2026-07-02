@@ -9,9 +9,6 @@
 // ProjVtx + EObjXform + eproj_* (world-coord projection) live in engine/engine_project.*.
 #include "engine_project.h"
 
-void rec_super_call(Core*, uint32_t);   // interpret the original PSX body (A/B oracle / super-call)
-int gpu_frame_no(Core*);
-
 // DIAGNOSTIC (later-234 ground blocker): decode the GROUND scene table 0x800F2418 through the EXACT same
 // record layout the native GT3/GT4 submitters use, and log the first few entries' decoded model verts +
 // their eproj projection — WITHOUT drawing (the PSX pass still draws the ground, so it stays visible). This
@@ -96,41 +93,3 @@ void ov_ground_probe(Core* c) {
   eproj_clear_active();
 }
 
-// PSXPORT_DEBUG=rlist — dump the gen_func_8003C048 render-list node TYPES (node+0xb) + jump-table target
-// (0x80014DB8[type]) for every node in the list, so we know the full type set the field's phase-2 flush
-// walk must handle to be ownable natively. Walk: head *0x800F2624, skip node+1==0, advance node+36. Once
-// per frame (first call), then super-calls the original walk.
-void ov_rlist_probe(Core* c) {
-  static int s_rl_last = -1;
-  if (gpu_frame_no(c) != s_rl_last) {     // 1/frame gate (own latch)
-    s_rl_last = gpu_frame_no(c);
-    fprintf(stderr, "[rlist] f%d:", gpu_frame_no(c));
-    uint32_t n = c->mem_r32(0x800F2624u); int guard = 0;
-    for (; n && guard < 64; n = c->mem_r32(n + 36), guard++) {
-      uint8_t live = c->mem_r8(n + 1), t = c->mem_r8(n + 0xB);
-      uint32_t tgt = (t < 33) ? c->mem_r32(0x80014DB8u + t * 4) : 0;
-      uint32_t rfn = c->mem_r32(n + 24);      // the node's own render fn ptr (used by the default case)
-      fprintf(stderr, " [%08x l%u t%u→%08x rfn=%08x]", n, live, t, tgt, rfn);
-    }
-    fprintf(stderr, "\n");
-  }
-  rec_super_call(c, 0x8003C048u);
-}
-
-// PSXPORT_DEBUG=ccase — gen_func_8003CCA4 case histogram. The per-object render dispatch selects a
-// secondary effect pass by idx = node[0xd]&0xb (idx>=9 = no render). Logs the idx + the jump-table
-// target (0x80014ec8[idx]) so we know which cases (and which secondary-pass fns) actually fire at the
-// field — i.e. whether owning 8003CCA4 natively needs the secondary passes or is flush-only. Super-calls.
-static uint32_t s_cc[12], s_cctgt[12]; static int s_cc_lastf = -1;
-void ov_ccase_probe(Core* c) {
-  uint32_t node = c->r[4];
-  uint32_t idx = c->mem_r8(node + 0xD) & 0xB;
-  if (gpu_frame_no(c) != s_cc_lastf) {
-    if (s_cc_lastf >= 0) { fprintf(stderr, "[ccase] f%d", s_cc_lastf);
-      for (int i = 0; i < 12; i++) if (s_cc[i]) fprintf(stderr, " idx%d=%u(t=%08x)", i, s_cc[i], s_cctgt[i]);
-      fprintf(stderr, "\n"); }
-    s_cc_lastf = gpu_frame_no(c); for (int i = 0; i < 12; i++) s_cc[i] = 0;
-  }
-  if (idx < 12) { s_cc[idx]++; s_cctgt[idx] = (idx < 9) ? c->mem_r32(0x80014EC8u + idx * 4) : 0; }
-  rec_super_call(c, 0x8003CCA4u);
-}
