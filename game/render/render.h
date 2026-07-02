@@ -43,6 +43,15 @@ public:
   void rwalkAuxBf00();
   void rwalkAuxEec0();
 
+  // renderWalk: the master phase-2 render-list WALK (gen_func_8003C048). Drains the primary render
+  // list, dispatching each live node by render type through the 33-entry jump table. Was ov_render_walk.
+  void renderWalk();
+
+  // renderWalkSnapshot: the SNAPSHOT-QUEUE object render driver (gen_func_8003BB50). Drains the
+  // per-object render QUEUE (scratchpad cursor), tagging each object's packet span with its world
+  // depth. Was ov_render_walk_snapshot.
+  void renderWalkSnapshot();
+
   // sceneNative: the master scene-render walker (per-frame terrain + entity/object walk over
   // the 3 doubly-linked object lists, with backdrop + collectable-quad + native BG tilemap).
   // Called by game_tomba2.cpp's ov_draw_otag every field-stage frame (and by margin_render's

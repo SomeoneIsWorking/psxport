@@ -73,8 +73,7 @@ void Render::perObjFlush() {
 // PSX OT-walk) so the draw state is the native pass's. Gated `debug scenenative` while standing it up.
 extern "C" int g_scene_native_diag;  int g_scene_native_diag = 0;   // counters for the bring-up probe
 extern "C" long g_sn_objs, g_sn_cmds; long g_sn_objs = 0, g_sn_cmds = 0;
-void ov_render_walk(Core* c);
-void ov_rwalk_b588(Core* c), ov_render_walk_snapshot(Core* c);
+void ov_rwalk_b588(Core* c);
 // NATIVE BACKDROP tilemap drawer — overlay FUN_80115598 (the seaside field's state-0 background drawer,
 // reached via 0x8003df04's 16-state jump table @0x80014fc0; state 0 → 0x8003df74 → 0x80115598). This is the
 // sky + distant parallax hills (the only thing the decoupled native scene was missing — verified by SKIPPASS
@@ -171,8 +170,8 @@ void Render::sceneNative() { Core* c = mCore;
                       && c->mem_r16(0x801fe04eu) == 0;            // sm[0x4e] == object-placement init (pre-attach)
   if (!field_area_init) {
     // (a) TERRAIN + per-object world geometry via the native render walks (self-route to ov_terrain etc.).
-    rwalkAuxBf00(); rwalkAuxEec0(); ov_rwalk_b588(c); ov_render_walk_snapshot(c);
-    rwalkAuxBcf4(); ov_render_walk(c);
+    rwalkAuxBf00(); rwalkAuxEec0(); ov_rwalk_b588(c); renderWalkSnapshot();
+    rwalkAuxBcf4(); renderWalk();
     // (b) SCENE TABLE (grass / props / sky-sea backdrop) — native world-coord render of 0x800F2418.
     fieldEntityRender(0x800F2418u);
     // (c) the field's OBJECTS — walk the 3 entity lists, render each object's geomblk natively (real depth).
@@ -321,7 +320,8 @@ static const char* rw_tag(const char* pfx, uint32_t fn) {
   return buf[i];
 }
 
-static void submit_render_walk(Core* c) {
+void Render::renderWalk() {
+  Core* c = mCore;
   uint32_t head = c->mem_r32(RLIST_HEAD);
   if (head == 0) return;
   // pre-scan: bail to the recomp body if any live node uses a case we don't own natively.
@@ -397,9 +397,6 @@ static void submit_render_walk(Core* c) {
     n = next;
   }
 }
-void ov_render_walk(Core* c) {
-  submit_render_walk(c);
-}
 
 // ===================================================================================================
 // NATIVE WORLD-BUILDING render walk — gen_func_8003BB50 (the SNAPSHOT-QUEUE object render driver).
@@ -453,7 +450,8 @@ static void rq_dispatch_case(Core* c, uint32_t node, uint32_t tgt) {
   }
 }
 
-static void submit_render_walk_snapshot(Core* c) {
+void Render::renderWalkSnapshot() {
+  Core* c = mCore;
   // Prologue: queue double-buffer SWAP (only when swap_flag==0) — capture the live count/cursor as the
   // read snapshot and reset the live write cursor to the list base for next frame's enqueues.
   if (c->mem_r8(RQ_SWAP_FLAG) == 0) {
@@ -484,10 +482,6 @@ static void submit_render_walk_snapshot(Core* c) {
     if (sess.close(&slo, &shi)) { float od = obj_world_ord(c, node);   // PC-native depth from real world position
       gpu_obj_depth_add(c, slo, shi, od); fps60_bb_node(c, slo, shi, node); }   // fps60: object billboards reproject at midpoint
   }
-}
-
-void ov_render_walk_snapshot(Core* c) {
-  submit_render_walk_snapshot(c);
 }
 
 // ===================================================================================================
