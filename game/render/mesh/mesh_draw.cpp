@@ -24,6 +24,8 @@
 #include "core.h"
 #include "cfg.h"
 #include "../scene/scene_data.h"
+#include "../render.h"          // class Render — reach `c->mRender->projParams` for depth-normalize
+#include "../proj_params.h"     // class ProjParams — setProjH + proj_pz_to_ord (kept as free fn, per-Core state)
 #include "mesh_draw.h"
 #include <stdint.h>
 #include <math.h>
@@ -33,9 +35,6 @@ void  gpu_draw_world_quad(Core* c, const float* px, const float* py, const float
                           const int* u, const int* v, const uint8_t* r, const uint8_t* g,
                           const uint8_t* b, uint16_t tp, uint16_t clut, int semi,
                           const float (*sv)[3]);
-// view-Z -> [0,1] depth for the D32 buffer (gte_beetle.cpp); set the projection plane first.
-float proj_pz_to_ord(float pz);
-void  proj_set_H(uint16_t h);
 
 static inline int16_t s16(uint32_t v) { return (int16_t)(v & 0xFFFF); }
 
@@ -61,7 +60,7 @@ int mesh_draw_object(Core* c, const SceneObject* o, const SceneCamera* cam) {
   if (n3 > 4096 || n4 > 4096) return 0;                  // sanity: not a geomblk
 
   float H = cam->H; if (H < 1.0f) H = 1.0f;
-  proj_set_H((uint16_t)H);
+  c->mRender->projParams.setProjH((uint16_t)H);
   float nearp = H * 0.5f; if (nearp < 1.0f) nearp = 1.0f;
 
   uint32_t rec = o->geomblk + 16;

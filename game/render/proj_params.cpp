@@ -1,9 +1,27 @@
 // class ProjParams — impl. See proj_params.h.
+//
+// Also owns the free-function bridges that live in proj_params.h — thin one-liners forwarding to
+// `ProjParams::current()`. They exist so callers with no `Core*` in scope (inner projection loops,
+// callback bodies) can still reach the currently-bound per-Core state.
 #include "proj_params.h"
+
+// GTE control-reg reads for camview_publish (CR24=OFX, CR25=OFY, CR26=H). Declared here to avoid
+// pulling the full Beetle GTE header into proj_params.h.
+extern "C" uint32_t GTE_ReadCR(unsigned which);
 
 ProjParams* ProjParams::sCurrent = nullptr;
 
 void ProjParams::bind(Core* /*c*/) { sCurrent = this; }
+
+// Depth-normalize (was file-scope proj_pz_to_ord in gte_beetle.cpp). Affine in 1/pz; nearer (smaller pz)
+// -> larger value, matching the renderer's GREATER_OR_EQUAL compare + 0.0 clear.
+float ProjParams::pzToOrd(float pz) const {
+  float nearp = projNearPz();
+  if (pz < nearp) pz = nearp;
+  float inv_near = 1.0f / nearp, inv_far = 1.0f / 65535.0f;
+  float ord = (1.0f / pz - inv_far) / (inv_near - inv_far);
+  return ord < 0.0f ? 0.0f : (ord > 1.0f ? 1.0f : ord);
+}
 
 void ProjParams::publishCam(const float R[3][3], const float T[3], float H, float OFX, float OFY) {
   for (int i = 0; i < 3; i++) {
@@ -18,8 +36,7 @@ void ProjParams::publishCam(const float R[3][3], const float T[3], float H, floa
 // that need to occlude by their real world position (consistent with the terrain they stand on).
 float ProjParams::camWorldOrd(float wx, float wy, float wz) const {
   float vz = mCamR[2][0]*wx + mCamR[2][1]*wy + mCamR[2][2]*wz + mCamT[2];
-  extern float proj_pz_to_ord(float);
-  return proj_pz_to_ord(vz);
+  return pzToOrd(vz);
 }
 
 // Full world→screen projection via the published stable scene camera. Same projection as
@@ -36,4 +53,35 @@ bool ProjParams::camWorldScreen(float wx, float wy, float wz, float* sx, float* 
   *sx = mCamOFX + vx * ph;
   *sy = mCamOFY + vy * ph;
   return true;
+}
+
+// ---- Free-function bridges (declared in proj_params.h) ---------------------------------------------
+// Thin forwards to `ProjParams::current()` for callers with no `Core*` in scope. When the harness has
+// bound this core (gte_bind), sCurrent points to `c->mRender->projParams` and every call reaches
+// this-core state; before the first bind these are safe null-checks.
+
+float proj_pz_to_ord(float pz) { auto* pp = ProjParams::current(); return pp ? pp->pzToOrd(pz) : 0.0f; }
+void  proj_set_H(uint16_t h)   { if (auto* pp = ProjParams::current()) pp->setProjH(h); }
+float proj_near_pz(void)       { auto* pp = ProjParams::current(); return pp ? pp->projNearPz() : 1.0f; }
+float proj_plane_h(void)       { auto* pp = ProjParams::current(); return pp ? pp->projPlaneH() : 1.0f; }
+void  proj_screen_center(float* cx, float* cy) {
+  auto* pp = ProjParams::current();
+  if (pp) pp->projScreenCenter(cx, cy);
+  else    { if (cx) *cx = 160.0f; if (cy) *cy = 120.0f; }
+}
+
+// camview_publish reads live GTE CR24/25/26 (per-instance Beetle GTE state via GTE_ReadCR) so the
+// projection constants match what proj_native_xform used this frame. Same shape as the old file-scope
+// function in gte_beetle.cpp; state lands on the currently-bound ProjParams.
+void camview_publish(const float R[3][3], const float T[3]) {
+  auto* pp = ProjParams::current(); if (!pp) return;
+  float H   = (float)(uint16_t)GTE_ReadCR(26);
+  float OFX = (float)(int32_t)GTE_ReadCR(24) / 65536.0f;
+  float OFY = (float)(int32_t)GTE_ReadCR(25) / 65536.0f;
+  pp->publishCam(R, T, H, OFX, OFY);
+}
+int   camview_valid(void)                                  { auto* pp = ProjParams::current(); return pp && pp->camValid() ? 1 : 0; }
+float proj_camview_world_ord(float wx, float wy, float wz) { auto* pp = ProjParams::current(); return pp ? pp->camWorldOrd(wx, wy, wz) : 0.0f; }
+int   proj_camview_world_screen(float wx, float wy, float wz, float* sx, float* sy) {
+  auto* pp = ProjParams::current(); return pp && pp->camWorldScreen(wx, wy, wz, sx, sy) ? 1 : 0;
 }

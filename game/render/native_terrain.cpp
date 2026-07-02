@@ -21,9 +21,9 @@
 
 // Shared faithful gameplay prep (sway bytes + object rotation matrix @ SCR) — engine_submit.cpp.
 void  terrain_prep_object_matrix(Core* c, uint32_t node);
-// Native depth normalization (gte_beetle.cpp): map view-Z -> [0,1] for the renderer's D32 buffer.
-float proj_pz_to_ord(float pz);
-void  proj_set_H(uint16_t h);
+// class ProjParams (per-Core) — depth-normalize + set-plane-H + camview publish. Header brings in the
+// free-function bridges (proj_pz_to_ord / proj_set_H / camview_publish) used below.
+#include "proj_params.h"
 // sv = the quad's 4 VIEW-SPACE verts (x,y,z) for the shadow map (NULL = no cast); carried on the queued
 // item so it rebuilds per present pass (render_queue.h sh_cast) — no separate shadow stream / keep_shadow.
 void  gpu_draw_world_quad(Core* c, const float* px, const float* py, const float* depth,
@@ -67,7 +67,7 @@ void terrain_render_pc(Core* c) {
   // (the per-object compose later overwrites the scratchpad with object-specific transforms, so reading it
   // at object-render time is volatile). gpu_native uses this to project each object's WORLD POSITION to a
   // stable view-Z, consistent with the terrain it stands on. See proj_camview_world_ord.
-  { void camview_publish(const float R[3][3], const float T[3]); camview_publish(Rcam, camT); }
+  camview_publish(Rcam, camT);
   // object position @ node+72 (x lo / y hi) and node+76 (z lo).
   uint32_t p72 = c->mem_r32(node+72);
   float objP[3] = { (float)(int16_t)p72, (float)(int16_t)(p72>>16), (float)(int16_t)c->mem_r32(node+76) };

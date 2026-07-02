@@ -137,19 +137,9 @@ static int      s_divtab_init = 0;
 // reach via `c->mRender->projParams.projH()` etc. Callers below without a Core* in scope go through
 // `ProjParams::current()` — the currently-bound instance, set by `bind()` at native_step_frame.
 
-// Phase 2: map a native view-space depth `pz` (= max(H/2, sz), so pz in [H/2, 65535]) into a
-// normalized [0,1] depth value for the renderer's D32 buffer. The value is AFFINE in 1/pz, so it
-// interpolates linearly in screen space (gl_Position.w==1 in the VK vertex shader -> no perspective
-// divide on z); nearer (smaller pz) -> larger value, matching the renderer's GREATER_OR_EQUAL compare
-// + 0.0 clear (nearer wins). Not OT submission order: this is true per-vertex perspective depth.
-float proj_pz_to_ord(float pz) {
-  auto* pp = ProjParams::current();
-  float nearp = pp ? pp->projNearPz() : 1.0f;      // near plane = H/2 (the proj pz clamp floor)
-  if (pz < nearp) pz = nearp;
-  float inv_near = 1.0f / nearp, inv_far = 1.0f / 65535.0f;
-  float ord = (1.0f / pz - inv_far) / (inv_near - inv_far);
-  return ord < 0.0f ? 0.0f : (ord > 1.0f ? 1.0f : ord);
-}
+// proj_pz_to_ord + the camview + projection-plane accessors moved to game/render/proj_params.cpp — see
+// the free-function bridges at the bottom of that file. They forward to ProjParams::current() (bound
+// per-frame by gte_bind), so callers with no Core* in scope keep working.
 static void proj_divtab_init(void) {                       // mirrors GTE_Init's DivTable build
   for (uint32_t d = 0x8000; d < 0x10000; d += 0x80) {
     uint32_t xa = 512;
@@ -246,20 +236,10 @@ float proj_obj_center_ord(void) { ProjVtx p; proj_native_xform(0, 0, 0, &p); ret
 // scratchpad holds the real scene camera, before the per-object compose overwrites it). Used to project an
 // object's WORLD POSITION to a STABLE view-Z (deterministic, render-order-independent), so a 2D billboard
 // occludes by where the object really is — consistent with the terrain it stands on. PC-owned, not PSX OT.
-// camview + world→screen projection moved to `class ProjParams` on Render (per-Core). Thin free-function
-// shims below route callers with no Core* in scope through `ProjParams::current()`.
-void camview_publish(const float R[3][3], const float T[3]) {
-  auto* pp = ProjParams::current(); if (!pp) return;
-  float H   = (float)(uint16_t)gte_read_ctrl(26);
-  float OFX = (float)(int32_t)gte_read_ctrl(24) / 65536.0f;
-  float OFY = (float)(int32_t)gte_read_ctrl(25) / 65536.0f;
-  pp->publishCam(R, T, H, OFX, OFY);
-}
-int camview_valid(void)                                          { auto* pp = ProjParams::current(); return pp && pp->camValid() ? 1 : 0; }
-float proj_camview_world_ord(float wx, float wy, float wz)       { auto* pp = ProjParams::current(); return pp ? pp->camWorldOrd(wx, wy, wz) : 0.0f; }
-int   proj_camview_world_screen(float wx, float wy, float wz, float* sx, float* sy) {
-  auto* pp = ProjParams::current(); return pp && pp->camWorldScreen(wx, wy, wz, sx, sy) ? 1 : 0;
-}
+// camview + world→screen projection moved to `class ProjParams` on Render (per-Core). The thin
+// free-function bridges (camview_publish/valid, proj_camview_world_ord/screen) live in proj_params.cpp;
+// this side keeps only the one that has to consult the GTE control regs (which are per-instance too but
+// reached via gte_read_ctrl below, not through ProjParams).
 
 // fps60 midpoint reprojection (engine/fps60.cpp): project up to 4 MODEL verts through an EXPLICIT composed
 // transform `cr` (CR0-4 rotation, CR5-7 translation — the A/B-midpoint of an actor's transform), returning
@@ -404,11 +384,8 @@ void rtpcaller_reset(void) { for (int i = 0; i < 64; i++) { s_rtpcaller[i].ra = 
 int native_depth_on(void) { return 1; }
 // The native-depth path gates the engine's depth recording + the per-frame reset. Always active.
 int attach_enabled(void) { return 1; }
-// Projection-plane setters/getters route through `class ProjParams` on Render (per-Core, SBS-safe).
-void  proj_set_H(uint16_t h)                              { if (auto* pp = ProjParams::current()) pp->setProjH(h); }
-float proj_near_pz(void)                                  { auto* pp = ProjParams::current(); return pp ? pp->projNearPz() : 1.0f; }
-float proj_plane_h(void)                                  { auto* pp = ProjParams::current(); return pp ? pp->projPlaneH() : 1.0f; }
-void  proj_screen_center(float* cx, float* cy)            { auto* pp = ProjParams::current(); if (pp) pp->projScreenCenter(cx, cy); else { if (cx) *cx = 160.0f; if (cy) *cy = 120.0f; } }
+// (Projection-plane setters/getters moved to game/render/proj_params.cpp — see the free-function
+// bridges at the bottom of that file. They forward to ProjParams::current(); no state here anymore.)
 
 // The GTE coprocessor is RETAINED for now ONLY as the PSX-content math service (collision/physics still
 // run as recompiled PSX and call gte_op). The GTE/Beetle dependency goes away by PORTING ITS CALLERS to

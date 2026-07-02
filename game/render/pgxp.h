@@ -41,3 +41,10 @@ private:
     return (h >> (32 - kBits)) & kMask;
   }
 };
+
+// ---- Free-function bridges (declared once here, defined in pgxp.cpp) -------------------------------
+// Thin forwards to `Pgxp::current()` for renderer callers that lack a `Core*` in scope. Bound per-core
+// via `Pgxp::bind()` inside gte_bind, so during a frame these reach this-core state.
+int  pgxp_lookup(int sx, int sy, float* px, float* py, float* pz);
+int  pgxp_lookup_view(int sx, int sy, float* vx, float* vy, float* vz);
+void pgxp_frame_reset(void);

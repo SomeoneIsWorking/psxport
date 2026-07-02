@@ -1,7 +1,8 @@
 // Engine-owned render queue — see render_queue.h. Per-instance state lives on Game (game.h);
 // the free rq_* API forwards to core->game->rq.
 #include "render_queue.h"
-#include "render.h"    // Render::mDbgRenderNode (was g_dbg_render_node)
+#include "render.h"        // Render::mDbgRenderNode (was g_dbg_render_node)
+#include "proj_params.h"   // class ProjParams — proj_camview_world_screen / camview_publish bridges
 #include "game.h"
 #include "cfg.h"
 #include "mods.h"
@@ -124,8 +125,7 @@ static void objid_box(Core* core, const RqItem* ref, int x0, int y0, int x1, int
 // classes have independent toggles (debug_quads / debug_objects) so the user can highlight ONLY quads.
 // Pure host overlay (reads guest RAM, writes only the queue).
 static void objid_overlay(RenderQueue* q, Core* core) {
-  int  proj_camview_world_screen(float, float, float, float*, float*);
-  void camview_publish(const float R[3][3], const float T[3]);
+  // class ProjParams free-function bridges (proj_camview_world_screen, camview_publish) — see proj_params.h.
   // Capture the STABLE scene camera from the scratchpad NOW (at flush = frame end): 0x1F8000F8 holds the
   // camera rotation (CR-packed, /4096) and 0x1F80010C the translation (int32 view units). The per-object
   // render uses a SEPARATE scratchpad matrix area (SCR+0), so the camera here is the frame's real scene

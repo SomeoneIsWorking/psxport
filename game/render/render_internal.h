@@ -12,10 +12,10 @@
 
 // --- per-object depth helpers (the engine owns object depth from the object's real world placement) ---
 void  gpu_obj_depth_add(Core*, uint32_t lo, uint32_t hi, float ord);
-float proj_camview_world_ord(float wx, float wy, float wz);
-int   camview_valid(void);
 float proj_obj_center_ord(void);
 void  fps60_record_billboard_span(Core* c, uint32_t lo, uint32_t hi, uint32_t ident);
+// class ProjParams (game/render/proj_params.h) — per-Core; brings in camview_valid/proj_camview_world_ord etc.
+#include "proj_params.h"
 // g_fps60_on retired — read g_mods.fps60 (mods.h)
 
 // g_dbg_render_node retired 2026-07-02 — per-Core Render::mDbgRenderNode (set around each per-object

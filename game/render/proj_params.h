@@ -39,6 +39,10 @@ public:
   float    projPlaneH() const                  { return mProjH ? (float)mProjH : 1.0f; }
   void     projScreenCenter(float* cx, float* cy) const { if (cx) *cx = mProjCx; if (cy) *cy = mProjCy; }
 
+  // Depth-normalize: view-Z → [0,1] D32 ord using this instance's projection plane. Kept as a
+  // non-static method so a caller with `Core* c` in scope can just do `c->mRender->projParams.pzToOrd(pz)`.
+  float pzToOrd(float pz) const;
+
 private:
   static ProjParams* sCurrent;
 
@@ -55,3 +59,17 @@ private:
   float    mProjCx = 160.0f;
   float    mProjCy = 120.0f;
 };
+
+// ---- Free-function thin bridges for callers with no `Core*` in scope -------------------------------
+// These are the ONE-LINE forwards to `ProjParams::current()->method()`. Kept in the public header so
+// the "declare inline anywhere I need it" pattern in game/render/*.cpp is gone — include this header
+// once and every helper is visible.
+float proj_pz_to_ord(float pz);
+void  proj_set_H(uint16_t h);
+float proj_near_pz(void);
+float proj_plane_h(void);
+void  proj_screen_center(float* cx, float* cy);
+void  camview_publish(const float R[3][3], const float T[3]);
+int   camview_valid(void);
+float proj_camview_world_ord(float wx, float wy, float wz);
+int   proj_camview_world_screen(float wx, float wy, float wz, float* sx, float* sy);

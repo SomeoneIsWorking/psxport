@@ -95,8 +95,9 @@ float proj_obj_center_ord(void);
 // live-GTE origin projection (proj_obj_center_ord reads whatever camera×object transform was composed LAST,
 // so render ORDER leaks into the depth and billboards get a wrong/too-far view-Z, losing the depth test to
 // terrain and vanishing). See obj_world_ord below.
-float proj_camview_world_ord(float wx, float wy, float wz);
-int   camview_valid(void);
+// class ProjParams (game/render/proj_params.h) — per-Core; the header brings in the free-function bridges
+// (proj_pz_to_ord, proj_set_H, proj_camview_world_ord, camview_valid) that used to be declared inline here.
+#include "proj_params.h"
 // g_fps60_on retired — read g_mods.fps60 (mods.h)
 // The entity node the native render walk is currently rendering (set around each per-object dispatch,
 // below). The PER-INSTANCE identity for every prim an object emits — including a 2D billboard whose quad
@@ -114,13 +115,11 @@ void  fps60_record_billboard_span(Core* c, uint32_t lo, uint32_t hi, uint32_t id
 // the renderer's D32 depth buffer does true per-pixel occlusion (PSXPORT_NATIVE_DEPTH / the SBS A/B
 // view) instead of OT-submission order. No correlation, no value-matching: the engine that emits the
 // vertex writes the depth for the exact address it stored the SXY to. Off (faithful) by default.
-void proj_set_H(uint16_t h);                     // tell proj_pz_to_ord the projection-plane H (CR26)
 // PC-NATIVE render path. ProjVtx + the per-object world-coord projection live in engine/engine_project.*.
 // proj_native_xform (gte_beetle) is the GTE-composed-transform projection still used by the resident
 // byte-packed GT4 emitter (submit_poly_gt4_bp), whose upstream compose is the still-PSX field code.
 #include "engine_project.h"
 void  proj_native_xform(int vx, int vy, int vz, ProjVtx* out);
-float proj_pz_to_ord(float pz);
 void  gpu_draw_world_quad(Core* c, const float* px, const float* py, const float* depth,
                           const int* u, const int* v, const uint8_t* r, const uint8_t* g,
                           const uint8_t* b, uint16_t tp, uint16_t clut, int semi,

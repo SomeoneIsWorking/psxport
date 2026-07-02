@@ -192,7 +192,7 @@ void gpu_fps60_present_pass(Core* core);
 void gpu_pace_subframe(Core* core, int n);
 // fps60 midpoint reprojection: project model verts through an explicit composed transform (gte_beetle.cpp).
 void proj_native_xform_cr(const uint32_t cr[11], const int16_t mv[4][3], int nv, float px[4], float py[4], float pz[4]);
-float proj_pz_to_ord(float pz);
+#include "proj_params.h"   // proj_pz_to_ord — bridges to `ProjParams::current()->pzToOrd(pz)`
 
 #define FPS60_RQ_MAX 16384
 
