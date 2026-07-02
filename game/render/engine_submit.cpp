@@ -259,7 +259,7 @@ static void submit_poly_gt3_native(Core* c) {
     u[3] = u[2]; v[3] = v[2]; r[3] = r[2]; g[3] = g[2]; b[3] = b[2];
     int semi = (code & 0x02000000) ? 1 : 0;
     if (!semi) engine_shade_face(p, 3, r, g, b);             // engine-native lighting (opaque only)
-    { char tag[32]; snprintf(tag, sizeof tag, "gt3_native@%08X", c->mRender->mDbgCurGeomblk); sil_bbox_log_verts(tag, px, py, depth, 3, cur_render_node(c), rec, r, g, b); }
+    { char tag[32]; snprintf(tag, sizeof tag, "gt3_native@%08X", c->mRender->diag.currentGeomblk()); sil_bbox_log_verts(tag, px, py, depth, 3, cur_render_node(c), rec, r, g, b); }
     { float vv[4][3]; const float (*sv)[3] = shadow_verts(p, 3, semi, vv);   // dynamic shadow verts (carried on the item)
       gpu_draw_world_quad(c, px, py, depth, u, v, r, g, b, tp, clut, semi, sv); }
     fps60_stamp(c, p, 3);                                    // fps60: capture for midpoint reprojection
@@ -313,7 +313,7 @@ static void submit_poly_gt4_native(Core* c) {
     }
     int semi = (code0 & 0x02000000) ? 1 : 0;                  // GP0 op byte (code0>>24) bit1 = semi-transparency
     if (!semi) engine_shade_face(p, 4, r, g, b);             // engine-native lighting (opaque only)
-    { char tag[32]; snprintf(tag, sizeof tag, "gt4_native@%08X", c->mRender->mDbgCurGeomblk); sil_bbox_log_verts(tag, px, py, depth, 4, cur_render_node(c), rec, r, g, b); }
+    { char tag[32]; snprintf(tag, sizeof tag, "gt4_native@%08X", c->mRender->diag.currentGeomblk()); sil_bbox_log_verts(tag, px, py, depth, 4, cur_render_node(c), rec, r, g, b); }
     { float vv[4][3]; const float (*sv)[3] = shadow_verts(p, 4, semi, vv);   // dynamic shadow verts (carried on the item)
       gpu_draw_world_quad(c, px, py, depth, u, v, r, g, b, tp, clut, semi, sv); }
     fps60_stamp(c, p, 4);                                    // fps60: capture for midpoint reprojection
@@ -364,7 +364,7 @@ void rec_dispatch(Core*, uint32_t);         // interpret/run a guest fn (unowned
 // submitters in sequence (tri-submit returns the advanced record pointer = the quad array base).
 // g_dbg_cur_geomblk retired — per-Core Render::mDbgCurGeomblk
 void native_gt3gt4(Core* c, uint32_t geomblk, uint32_t otbase) {   // decl in render_internal.h (used by render_walk.cpp)
-  c->mRender->mDbgCurGeomblk = geomblk;
+  c->mRender->diag.setGeomblk(geomblk);
   uint32_t counts = c->mem_r32(geomblk + 0);
   c->r[4] = geomblk + 16; c->r[5] = otbase; c->r[6] = counts & 0xFFFFu;
   submit_poly_gt3_native(c);
@@ -410,7 +410,7 @@ void Render::fieldEntityRender(uint32_t es) {
     uint32_t cmd = base + (uint32_t)c->mem_r16(p) * 4;
     uint32_t s0  = c->mem_r32(cmd);
     c->game->fps60.fps_cur_key = cmd;                                  // fps60: per-entity reproject key
-    c->mRender->mDbgCurGeomblk = cmd;   // sil_bbox_log diag: tag this entity's cmd record (native_gt3gt4 is NOT the caller here)
+    c->mRender->diag.setGeomblk(cmd);   // sil_bbox_log diag: tag this entity's cmd record (native_gt3gt4 is NOT the caller here)
     c->r[4] = cmd + 4;  c->r[5] = otbase; c->r[6] = s0 & 0xFF;          submit_poly_gt3_native(c);
     c->r[4] = c->r[2];  c->r[5] = otbase; c->r[6] = (s0 >> 16) & 0xFF;  submit_poly_gt4_native(c);
     c->game->fps60.fps_cur_key = 0;

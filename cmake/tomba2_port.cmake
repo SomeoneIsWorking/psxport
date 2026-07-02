@@ -196,6 +196,7 @@ set(PORT_SRC
   game/audio/native_music.c
   game/audio/music_list.c
   runtime/recomp/sync_overrides.cpp
+  game/render/pkt_span.cpp
   runtime/recomp/scheduler.cpp
   runtime/recomp/native_boot.cpp
   runtime/recomp/dualview_snapshot.cpp

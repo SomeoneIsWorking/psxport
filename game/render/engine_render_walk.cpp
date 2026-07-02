@@ -209,7 +209,7 @@ void Render::sceneNative() { Core* c = mCore;
 void Render::perObjRender() {
   Core* c = mCore;
   uint32_t node = c->r[4];
-  c->mRender->mDbgRenderNode = node;                      // objid: tag this object's prims
+  c->mRender->diag.beginObject(node);                      // objid: tag this object's prims
   c->mem_w32(SCR + 0x28C, node);                          // current render object (read by downstream code)
   uint32_t idx = c->mem_r8(node + 0xD) & 0xB;
   if (idx >= 9) return;                                // not rendered
@@ -223,7 +223,7 @@ void Render::perObjRender() {
   else                    { rec_super_call(c, 0x8003CCA4u); }                          // secondary-effect case
   if (sess.close(&slo, &shi)) { float od = obj_world_ord(c, node);   // PC-native depth from real world position
     gpu_obj_depth_add(c, slo, shi, od); fps60_bb_node(c, slo, shi, node); }   // fps60: this object's billboards reproject at midpoint
-  c->mRender->mDbgRenderNode = 0;                         // objid: end this object's render scope
+  c->mRender->diag.endObject();                         // objid: end this object's render scope
 }
 // NATIVE seaside-area GROUND/BG node renderer — OVERLAY 0x8013E9D8 (the renderfn of the field's BG/world
 // node 0x800FC5C0, dispatched by the master render-list walk's default case). The recomp wrapper: copy a
@@ -468,9 +468,9 @@ void Render::renderWalkSnapshot() {
     // Render the object, tagging the packet-pool span it produces with its PC-native world-position depth
     // so its 2D billboard prims (collectable quads, etc.) occlude for real at the deferred OT walk.
     uint32_t slo, shi; PktSpanSession sess(c);
-    c->mRender->mDbgRenderNode = node;                       // objid: tag every prim this object emits
+    c->mRender->diag.beginObject(node);                       // objid: tag every prim this object emits
     rq_dispatch_case(c, node, tgt);                          // run the object's per-type renderer (guest content)
-    c->mRender->mDbgRenderNode = 0;
+    c->mRender->diag.endObject();
     if (sess.close(&slo, &shi)) { float od = obj_world_ord(c, node);   // PC-native depth from real world position
       gpu_obj_depth_add(c, slo, shi, od); fps60_bb_node(c, slo, shi, node); }   // fps60: object billboards reproject at midpoint
   }

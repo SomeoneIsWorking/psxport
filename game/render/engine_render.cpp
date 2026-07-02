@@ -51,7 +51,7 @@ static inline void d1(Core* c, uint32_t fn, uint32_t a0) { c->r[4] = a0; rec_dis
 extern "C" void ffspan_begin(Core*), ffspan_end(Core*, const char*);   // PSXPORT_BDTAG attribution (engine_stage.cpp)
 void Render::frame() { Core* c = mCore;
   if (cfg_dbg("rfprobe")) { static int n=0; if ((n++ % 60)==0) fprintf(::stderr,"[rfprobe] ov_render_frame run #%d\n", n); }
-  if (mPsxRender) { d0(c, 0x8003f9a8u); return; }   // COMPARE: render the field via the PSX recomp path
+  if (mode.psxRender()) { d0(c, 0x8003f9a8u); return; }   // COMPARE: render the field via the PSX recomp path
   ffspan_begin(c); d0(c, 0x8004fd30u); ffspan_end(c, "rf_4fd30");
   ffspan_begin(c); d0(c, 0x80025d98u); ffspan_end(c, "rf_25d98");   // 2D atlas SPRITE band (op-0x65)
   // DIAG groundnative: route the ground table real-depth via Render::fieldEntityRender. Decode is CORRECT, but
@@ -65,7 +65,7 @@ void Render::frame() { Core* c = mCore;
 // 0x8003fa44 — mid-transition render orchestrator twin (reduced pass set). The walk cluster is owned by
 // ov_scene_native (see ov_render_frame above); only the non-walk passes remain here.
 void Render::frameX() { Core* c = mCore;
-  if (mPsxRender) { d0(c, 0x8003fa44u); return; }   // COMPARE: render the field via the PSX recomp path
+  if (mode.psxRender()) { d0(c, 0x8003fa44u); return; }   // COMPARE: render the field via the PSX recomp path
   d0(c, 0x8004fd30u);
   d0(c, 0x80025d98u);
   d0(c, 0x8003f024u);

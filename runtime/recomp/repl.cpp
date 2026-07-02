@@ -227,8 +227,8 @@ long native_repl_read(Core* c, uint32_t f) {
     else if (!strcmp(cmd, "renderpsx")) {
       char st[16] = {0};
       if (sscanf(line, "%*s %15s", st) == 1)
-        c->mRender->setPsxRender(!(!strcmp(st, "off") || !strcmp(st, "0")));
-      fprintf(stderr, "[repl] Render::psxRender = %d\n", c->mRender->psxRender());
+        c->mRender->mode.setPsxRender(!(!strcmp(st, "off") || !strcmp(st, "0")));
+      fprintf(stderr, "[repl] Render::psxRender = %d\n", c->mRender->mode.psxRender());
     }
     // seqsolo <i> — stop ALL open libsnd sequences then SsSeqPlay just sequence <i> at full vol, via the
     // GAME'S OWN sequencer. Lets each area SEP sequence be rendered in isolation (the area's field theme

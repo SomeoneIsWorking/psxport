@@ -9,46 +9,19 @@
 // own back-pointer is wired there too. Callers reach members as `c->mRender->mNodeXform.build(node)`.
 #pragma once
 #include "node_xform.h"
+#include "render_mode.h"
+#include "render_diag.h"
+#include "pkt_span.h"
 class Core;
 
 class Render {
 public:
   Core* mCore = nullptr;
 
-  // Route the field render through the PSX recomp path instead of the native scene-walk. A/B compare
-  // switch — one bool per Core (SBS/dualcore set it per-core; standalone set once at boot from
-  // PSXPORT_RENDER_PSX; live REPL toggle `renderpsx on|off`). Was the process-global `int g_render_psx`,
-  // which contaminated both cores in-process (SBS "both cores same" symptom, deglobalize-game 2026-07-02).
-  bool mPsxRender = false;
-  bool psxRender() const { return mPsxRender; }
-  void setPsxRender(bool on) { mPsxRender = on; }
-
-  // Dual-view: render ONE game state two ways side-by-side (engine-native left | PSX-recomp right).
-  // Set from PSXPORT_DUALVIEW at boot; gates the second (PSX) render pass in native_step_frame and the
-  // GPU's two-batch allocation. Per-Core — was the process-global `int g_dualview` (deglobalize-game 2026-07-02).
-  bool mDualview = false;
-  bool dualview() const { return mDualview; }
-  void setDualview(bool on) { mDualview = on; }
-
-  // Per-object diag scope — set/cleared around each per-object dispatch in the native render walk so
-  // downstream code (fps60 billboard recorder, render queue tagging, sil_bbox_log diag) can identify
-  // which live object emitted a prim. `mDbgRenderNode` = the object's node pointer (0 outside object
-  // scope); `mDbgCurGeomblk` = the geomblk chunk currently in native_gt3gt4. Per-Core — were the
-  // process-globals g_dbg_render_node / g_dbg_cur_geomblk (deglobalize-game 2026-07-02).
-  uint32_t mDbgRenderNode  = 0;
-  uint32_t mDbgCurGeomblk  = 0;
-
-  // Packet-tracking session: while armed (during one render-command dispatch — engine_submit's
-  // ov_render_cmd, or a bdtag span wrapper), record the address span of stores landing in the
-  // packet/OT pool [0x800BFE68,0x800E7E68). Read by Core::mem_w* via this->mRender. The span is
-  // then tagged with the object's world-position depth so 2D billboard prims occlude for real at
-  // the deferred OT walk (gpu_native). Per-Core — was the process-globals g_pkt_track/lo/hi
-  // (deglobalize-game 2026-07-02).
-  int      mPktTrack = 0;
-  uint32_t mPktLo    = 0xFFFFFFFFu;
-  uint32_t mPktHi    = 0;
-
   // ---- render-side per-Core subsystems ------------------------------------
+  RenderMode mode;         // compare-mode toggles (psxRender / dualview)
+  RenderDiag diag;         // per-object walk-scope tags (currentNode, currentGeomblk)
+  PktSpan    pktSpan;      // packet-pool store-address-span tracker (per-Core; Core::mem_w* calls track)
   NodeXform mNodeXform;   // scene-node WORLD-TRANSFORM builder (guest FUN_80051844)
 
   // ---- per-frame render orchestrators (called by Engine::fieldFrame/X) ----

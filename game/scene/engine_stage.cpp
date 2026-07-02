@@ -42,7 +42,7 @@
 // g_pkt_track/lo/hi retired 2026-07-02 — per-Core Render::mPktTrack/mPktLo/mPktHi (reached below).
 extern "C" void dv_snapshot(Core*);    // capture post-gameplay/pre-render guest state (native_boot.cpp)
 extern "C" void dv_restore_pre(Core*); // restore that snapshot (native_boot.cpp)
-// (g_render_psx + g_dualview both retired 2026-07-02 — reach as c->mRender->psxRender() / dualview())
+// (g_render_psx + g_dualview both retired 2026-07-02 — reach as c->mRender->mode.psxRender() / dualview())
 struct FFSpan { const char* name; uint32_t lo, hi; };
 static FFSpan s_ffspan[40]; static int s_ffspan_n = 0; static int s_bdtag = -1;
 static inline int bdtag_on() { if (s_bdtag < 0) s_bdtag = cfg_str("PSXPORT_BDTAG") ? 1 : 0; return s_bdtag; }
@@ -54,24 +54,23 @@ extern "C" const char* ffspan_lookup(uint32_t a) {
 }
 // Coarse top-level phase bracketing (called from native_step_frame): reset at frame top, then begin/end
 // around each frame phase to find WHICH phase builds the deferred backdrop packet (the gp0 classify runs
-// later in the same frame's DrawOTag). begin/end do NOT nest (single saved slot) — bracket sibling phases only.
-static struct { int ot; uint32_t lo, hi; } s_ff_stk[8]; static int s_ff_sp = 0;
+// later in the same frame's DrawOTag). Nestable via a small stack of PktSpan snapshots.
+static PktSpan::Snapshot s_ff_stk[8]; static int s_ff_sp = 0;
 extern "C" void ffspan_reset_frame(void) { if (bdtag_on()) { s_ffspan_n = 0; s_ff_sp = 0; } }
-extern "C" void ffspan_begin(Core* c) {       // NESTABLE: save outer, start a fresh empty span
+extern "C" void ffspan_begin(Core* c) {       // NESTABLE: save outer, open a fresh empty session
   if (!bdtag_on() || s_ff_sp >= 8) return;
-  Render* r = c->mRender;
-  s_ff_stk[s_ff_sp].ot = r->mPktTrack; s_ff_stk[s_ff_sp].lo = r->mPktLo; s_ff_stk[s_ff_sp].hi = r->mPktHi; s_ff_sp++;
-  r->mPktTrack = 1; r->mPktLo = 0xFFFFFFFFu; r->mPktHi = 0;
+  PktSpan& ps = c->mRender->pktSpan;
+  s_ff_stk[s_ff_sp++] = ps.save();
+  ps.open();
 }
 extern "C" void ffspan_end(Core* c, const char* nm) {
   if (!bdtag_on() || s_ff_sp <= 0) return;
-  Render* r = c->mRender;
-  uint32_t mlo = r->mPktLo, mhi = r->mPktHi;
-  if (mhi > mlo && s_ffspan_n < 40) { s_ffspan[s_ffspan_n].name = nm;
+  PktSpan& ps = c->mRender->pktSpan;
+  uint32_t mlo, mhi;
+  bool captured = ps.current(&mlo, &mhi);
+  if (captured && s_ffspan_n < 40) { s_ffspan[s_ffspan_n].name = nm;
     s_ffspan[s_ffspan_n].lo = mlo; s_ffspan[s_ffspan_n].hi = mhi; s_ffspan_n++; }
-  s_ff_sp--; r->mPktTrack = s_ff_stk[s_ff_sp].ot;            // restore outer; MERGE my writes into it
-  r->mPktLo = s_ff_stk[s_ff_sp].lo; r->mPktHi = s_ff_stk[s_ff_sp].hi;
-  if (mhi > mlo) { if (mlo < r->mPktLo) r->mPktLo = mlo; if (mhi > r->mPktHi) r->mPktHi = mhi; }
+  ps.restoreMerge(s_ff_stk[--s_ff_sp], captured ? mlo : 0xFFFFFFFFu, captured ? mhi : 0);
 }
 extern "C" void ffspan_dump(uint32_t a) {   // one-time: show the recorded spans vs an unattributed address
   static int done = 0; if (done) return; done = 1;
@@ -79,14 +78,14 @@ extern "C" void ffspan_dump(uint32_t a) {   // one-time: show the recorded spans
   for (int i = 0; i < s_ffspan_n; i++)
     fprintf(stderr, "[ffspan]   %-12s [%08x .. %08x)\n", s_ffspan[i].name, s_ffspan[i].lo, s_ffspan[i].hi);
 }
-// FFS: nested span tracker. c must be a Core* in scope.
+// FFS: nested span tracker. c must be a Core* in scope. Same shape as ffspan_begin/end inlined.
 #define FFS(nm, call) do { \
-  if (bdtag_on()) { Render* _r = c->mRender; \
-    int _ot = _r->mPktTrack; uint32_t _olo = _r->mPktLo, _ohi = _r->mPktHi; \
-    _r->mPktTrack = 1; _r->mPktLo = 0xFFFFFFFFu; _r->mPktHi = 0; call; \
-    if (_r->mPktHi > _r->mPktLo && s_ffspan_n < 40) { s_ffspan[s_ffspan_n].name = nm; \
-      s_ffspan[s_ffspan_n].lo = _r->mPktLo; s_ffspan[s_ffspan_n].hi = _r->mPktHi; s_ffspan_n++; } \
-    _r->mPktTrack = _ot; _r->mPktLo = _olo; _r->mPktHi = _ohi; } \
+  if (bdtag_on()) { PktSpan& _ps = c->mRender->pktSpan; \
+    PktSpan::Snapshot _outer = _ps.save(); _ps.open(); call; \
+    uint32_t _mlo, _mhi; bool _captured = _ps.current(&_mlo, &_mhi); \
+    if (_captured && s_ffspan_n < 40) { s_ffspan[s_ffspan_n].name = nm; \
+      s_ffspan[s_ffspan_n].lo = _mlo; s_ffspan[s_ffspan_n].hi = _mhi; s_ffspan_n++; } \
+    _ps.restoreMerge(_outer, _captured ? _mlo : 0xFFFFFFFFu, _captured ? _mhi : 0); } \
   else { call; } } while (0)
 
 static inline void d0(Core* c, uint32_t fn) { rec_dispatch(c, fn); }
@@ -426,7 +425,7 @@ void Engine::fieldFrame() { Core* c = core;
   // freeze (+ the game_coop r29 SP leak that grew the red corruption). Removing it fixes all of it at once.
   // The TRUE end-state (make ov_render_frame write ZERO guest memory so dv_snapshot/restore can go too) is a
   // separate perf/architecture follow-up; the rewind correctly enforces the invariant meanwhile.
-  if (!c->mRender->psxRender() && !c->mRender->dualview() && c->mem_r8(0x1f800136u) < 2) {
+  if (!c->mRender->mode.psxRender() && !c->mRender->mode.dualview() && c->mem_r8(0x1f800136u) < 2) {
     dv_restore_pre(c);
   }
   FFS("ff_77d8c", c->engine.postRenderTick());   // 0x80077d8c NATIVE (Engine::postRenderTick)

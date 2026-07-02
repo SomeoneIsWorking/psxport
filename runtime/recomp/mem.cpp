@@ -241,14 +241,12 @@ uint32_t Core::mem_r32(uint32_t a) {
 // map). The unowned overlay renderers write their GP0 packets HERE but WITHOUT advancing the pool pointer
 // 0x800BF544 — so the pointer can't bound them, but the stores can. The span is then tagged with the object's
 // world-position depth so its 2D billboard prims occlude for real at the deferred OT walk (gpu_native).
-// g_pkt_track / g_pkt_lo / g_pkt_hi retired 2026-07-02 — per-Core Render::mPktTrack/mPktLo/mPktHi.
-// Reached via this->mRender on the store hooks below.
+// g_pkt_track/lo/hi retired — per-Core Render::pktSpan (a real PktSpan class, method-oriented).
+// Every store routes through Core::mem_w* -> pktSpan.track(addr, bytes); the class is a no-op unless
+// armed by a PktSpanSession or ffspan span.
 #include "render/render.h"
 static inline void pkt_track(Core* c, uint32_t a, uint32_t bytes) {
-  Render* r = c->mRender;
-  if (!r->mPktTrack) return;
-  uint32_t k = a | 0x80000000u;
-  if (k >= 0x800BFE68u && k < 0x800E7E68u) { if (k < r->mPktLo) r->mPktLo = k; if (k + bytes > r->mPktHi) r->mPktHi = k + bytes; }
+  c->mRender->pktSpan.track(a, bytes);
 }
 void Core::mem_w8(uint32_t a, uint8_t v) {
   uint8_t* p = host_ptr(a, 1);

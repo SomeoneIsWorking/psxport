@@ -379,7 +379,7 @@ void rq_emit_or_queue(Core* core, int capture, int layer, int order_mode, int nv
   // objid overlay: stamp the entity node the native render walk is currently rendering (engine_submit.cpp).
   // Every world prim an object emits gets its node, so the overlay labels ALL rendered objects. Terrain/
   // static/background prims render with no per-object scope (mDbgRenderNode==0) → correctly unlabeled.
-  it.dbg_node = (layer == RQ_WORLD) ? core->mRender->mDbgRenderNode : 0;
+  it.dbg_node = (layer == RQ_WORLD) ? core->mRender->diag.currentNode() : 0;
   // Shadow capture: an opaque world prim with view-space verts casts into the shadow map. Carried on the
   // item so gpu_emit_rq_item re-pushes it to the shadow VBO on EVERY emit (= on both 60fps present passes).
   it.sh_cast = sv ? 1 : 0;

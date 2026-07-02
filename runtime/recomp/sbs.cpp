@@ -75,7 +75,7 @@ void dbg_set_paused(int p);
 extern "C" void watchdog_suspend(void);
 extern "C" void watchdog_disable(void);   // SBS pauses indefinitely on a divergence — kill the frame watchdog
 extern "C" void guest_backtrace_to(Core* c, FILE* out);
-// g_render_psx retired — now per-Core Render::mPsxRender. Reach via g_a/g_b->core.mRender->setPsxRender(bool).
+// g_render_psx retired — now per-Core Render::mPsxRender. Reach via g_a/g_b->core.mRender->mode.setPsxRender(bool).
 extern void (*g_store_watch_cb)(Core*, uint32_t a, uint32_t v);   // mem.cpp — armed write-watch callback
 extern "C" int  g_sbs;                        // PSXPORT_SBS: forces 2 VK render targets + skips the in-engine dualview pass
 // Per-core render+readback + front-buffer/display-region accessors (gpu_gpu.cpp / gpu_native.cpp). The SBS
@@ -225,10 +225,10 @@ bool nav_step(Core* c, Nav& nv, uint32_t f, const char* tag) {
 void apply_mode(Game* g, int which) {
   Render* r = g->core.mRender;
   switch (s_mode) {
-    case M_RENDER:   r->setPsxRender(which != 0);    break;   // A native render (0), B PSX render (1)
-    case M_GAMEPLAY: r->setPsxRender(true);           break;   // PSX render on BOTH (isolate gameplay)
-    case M_BOTH:     r->setPsxRender(which != 0);    break;   // A native render, B PSX render
-    case M_ORACLE:   r->setPsxRender(false);          break;   // A native; B never consults this
+    case M_RENDER:   r->mode.setPsxRender(which != 0);    break;   // A native render (0), B PSX render (1)
+    case M_GAMEPLAY: r->mode.setPsxRender(true);           break;   // PSX render on BOTH (isolate gameplay)
+    case M_BOTH:     r->mode.setPsxRender(which != 0);    break;   // A native render, B PSX render
+    case M_ORACLE:   r->mode.setPsxRender(false);          break;   // A native; B never consults this
                                                                 // (use_interp bypasses the render flip
                                                                 // entirely — fully interpreted+soft-rasterized)
   }

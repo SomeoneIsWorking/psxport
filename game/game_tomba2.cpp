@@ -181,7 +181,7 @@ int gpu_gpu_wide_engine(void);   // gpu_gpu.c — genuine engine-wide active (PS
 // natively in gpu_dma2_linked_list (walk OT -> decode each primitive -> rasterize). Overriding it routes
 // the draw straight through our native walk (synchronous), instead of the DMA-register emulation dance.
 // This is the engine's draw submission, owned.
-// (was extern int g_render_psx — moved onto Render::mPsxRender, reached as c->mRender->psxRender())
+// (was extern int g_render_psx — moved onto Render::mPsxRender, reached as c->mRender->mode.psxRender())
 extern int g_ot_2d_only;       // gpu_native.cpp — OT walk queues ONLY 2D HUD prims (world/bg owned natively)
 void Engine::drawOTag(uint32_t otHead) {   // called directly from native_step_frame (PC-driven); NOT an override
   Core* c = this->core;
@@ -222,7 +222,7 @@ void Engine::drawOTag(uint32_t otHead) {   // called directly from native_step_f
   // loads a different overlay (e.g. 0x801138A4), so this cleanly separates the cutscene from free-roam
   // (sm[0x4a] does NOT — free-roam settles back to sm[0x4a]==0 like the narration).
   bool sop_narration = field && c->mem_r32(0x80109450u) == 0x3C021F80u;
-  if (sop_narration && !c->mRender->psxRender()) {
+  if (sop_narration && !c->mRender->mode.psxRender()) {
     // SOP narration render (oracle-derived, docs/oracle.md). The cutscene's full picture is built by the PSX
     // SOP code into the guest OT — full-screen fills, the semi-transparent textured EFFECT quads, character
     // sprites, the sea tiles, and text — so we walk the FULL OT (g_ot_2d_only=0), NOT the 2D-only filter that
@@ -237,7 +237,7 @@ void Engine::drawOTag(uint32_t otHead) {   // called directly from native_step_f
     // render constant. (Scene 6 IS a 3D beat: the cliff fading in — gating it off loses the cliff geometry.)
     if (c->mem_r8(0x800BF9B4u) != 5) { c->mRender->sceneNative(); }
     gpu_dma2_linked_list(c, otHead);
-  } else if (!c->mRender->psxRender() && (field || cfg_dbg("scenenative"))) {
+  } else if (!c->mRender->mode.psxRender() && (field || cfg_dbg("scenenative"))) {
     c->mRender->sceneNative();
     // The native field path owns the 3D world + backdrop, but the field still submits its 2D OVERLAY
     // through the PSX OT: the opening-cutscene narration glyphs, in-game dialog / item bubbles, menus,

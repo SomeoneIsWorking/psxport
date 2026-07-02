@@ -26,7 +26,7 @@ void  fps60_record_billboard_span(Core* c, uint32_t lo, uint32_t hi, uint32_t id
 // The real per-instance render object: the walk's node when set, else the guest "current render object"
 // scratch (0x1F80028C). Prefer the native walk's node — 0x28C is shared/stale for some billboard paths.
 static inline uint32_t cur_render_node(Core* c) {
-  return c->mRender->mDbgRenderNode ? c->mRender->mDbgRenderNode : c->mem_r32(0x1F80028Cu);
+  return c->mRender->diag.currentNode() ? c->mRender->diag.currentNode() : c->mem_r32(0x1F80028Cu);
 }
 
 // The engine's PC-native depth for an object: project its REAL spawned WORLD position (node+0x2e/0x32/0x36)
@@ -47,34 +47,9 @@ static inline void fps60_bb_node(Core* c, uint32_t lo, uint32_t hi, uint32_t nod
   if (g_mods.fps60 || g_mods.debug_ids || cfg_dbg("objid")) fps60_record_billboard_span(c, lo, hi, node);
 }
 
-// NESTING-SAFE packet-pool span tracking (issue #4 — ropes/flames drew over terrain). Per-object depth
-// tagging captures the address span an object's renderer writes into the packet pool (Render::mPktTrack/
-// mPktLo/mPktHi via the Core::mem_w* store hook, mem.cpp), then stamps it with the object's world depth.
-// A session SAVES the outer session's state on open and, on close, RESTORES it while MERGING its own
-// [lo,hi) into the outer — so a renderer that internally dispatches the universal render command
-// (ov_render_cmd) for the same node keeps the outer walk's tracking alive and the outer's final
-// gpu_obj_depth_add covers ALL of the object's packets.
-struct PktSpanSession {
-  Render* r;
-  int outer_track; uint32_t outer_lo, outer_hi;
-  explicit PktSpanSession(Core* c) : r(c->mRender) {
-    outer_track = r->mPktTrack; outer_lo = r->mPktLo; outer_hi = r->mPktHi;
-    r->mPktTrack = 1; r->mPktLo = 0xFFFFFFFFu; r->mPktHi = 0;
-  }
-  // Close the session: returns 1 + fills lo/hi if this session captured a non-empty span (caller does the
-  // gpu_obj_depth_add with its own ord). Restores + merges into the outer session.
-  int close(uint32_t* lo, uint32_t* hi) {
-    uint32_t my_lo = r->mPktLo, my_hi = r->mPktHi;
-    r->mPktTrack = outer_track;                                   // resume the OUTER session (key fix)
-    r->mPktLo = outer_lo; r->mPktHi = outer_hi;
-    if (my_hi > my_lo) {                                          // merge my writes into the outer span
-      if (my_lo < r->mPktLo) r->mPktLo = my_lo;
-      if (my_hi > r->mPktHi) r->mPktHi = my_hi;
-      if (lo) *lo = my_lo; if (hi) *hi = my_hi; return 1;
-    }
-    return 0;
-  }
-};
+// PktSpan (per-Core packet-pool store-address-span tracker) + PktSpanSession (RAII object scope) live
+// in pkt_span.h — reached as c->mRender->pktSpan. PktSpanSession is defined there; its ctor/close
+// implementation is in pkt_span.cpp.
 
 // --- cross-subsystem entry points ---
 // Fully-native generic GT3/GT4 submit (engine_submit.cpp). The per-object flush in the walk calls it directly.

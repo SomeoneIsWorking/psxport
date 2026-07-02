@@ -157,7 +157,7 @@ static void native_step_frame(Core* c, uint32_t f) {
     extern int g_dv_have_pre; extern void gpu_gpu_select_target(int);
     // SBS owns BOTH panes (core A | core B); its target-1 batch is core B's render, NOT a PSX re-render of
     // THIS core — so skip the in-engine dualview second pass. g_sbs declared at file scope below.
-    if (c->mRender->dualview() && g_dv_have_pre && !g_sbs) {
+    if (c->mRender->mode.dualview() && g_dv_have_pre && !g_sbs) {
       dv_capture_post(c);            // save the real post-frame canonical state
       dv_restore_pre(c);             // rewind to the pre-render (post-gameplay) state the PSX pass needs
       rc2(c, 0x80081458, envp, 0x800);                          // ClearOTagR(ot, 0x800)
@@ -576,13 +576,13 @@ void native_boot_run(Core* c) {
   // RENDER-path compare switch: PSXPORT_RENDER_PSX renders the field via the PSX recomp path (native state).
   // Per-Core now (Render::mPsxRender) — was the process-global g_render_psx.
   { const char* r = cfg_str("PSXPORT_RENDER_PSX");
-    if (r && *r) c->mRender->setPsxRender(atoi(r) != 0);
-    if (c->mRender->psxRender()) fprintf(stderr, "[native_boot] Render::psxRender=1 (field render via PSX recomp path)\n"); }
+    if (r && *r) c->mRender->mode.setPsxRender(atoi(r) != 0);
+    if (c->mRender->mode.psxRender()) fprintf(stderr, "[native_boot] Render::psxRender=1 (field render via PSX recomp path)\n"); }
   // DUAL-VIEW: render the SAME game state TWICE per frame — engine-native (left) + PSX-recomp (right) — and
   // composite side by side. Set at launch (PSXPORT_DUALVIEW=1) so the GPU allocates two geometry batches.
   { const char* r = cfg_str("PSXPORT_DUALVIEW");
-    if (r && *r) c->mRender->setDualview(atoi(r) != 0);
-    if (c->mRender->dualview()) fprintf(stderr, "[native_boot] Render::dualview=1 (side-by-side native | PSX render)\n"); }
+    if (r && *r) c->mRender->mode.setDualview(atoi(r) != 0);
+    if (c->mRender->mode.dualview()) fprintf(stderr, "[native_boot] Render::dualview=1 (side-by-side native | PSX render)\n"); }
   // Intro FMVs: the real boot is SCEA (stub) -> Whoopee logo (LOGO.STR) -> opening movie (OP.STR) ->
   // title/menu. The game's own STR streaming (strNext) TIMES OUT under our runtime (we don't feed
   // CD-streamed FMV sectors to its StrPlayer — see "time out in strNext()" in the DEMO stage), so the
