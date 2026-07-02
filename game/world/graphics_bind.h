@@ -12,9 +12,6 @@
 //
 // The bridge between a world entity and the data the renderer consumes. Underlying guest bodies
 // stay as reference / super-call for the byte-A/B verify gates.
-//
-// ov_build_xform (FUN_80051C8C, node+0x98 matrix) still in engine/engine_submit.cpp pending
-// render-subsystem migration.
 #ifndef GAME_WORLD_GRAPHICS_BIND_CLASS_H
 #define GAME_WORLD_GRAPHICS_BIND_CLASS_H
 class Core;
