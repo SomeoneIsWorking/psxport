@@ -55,7 +55,7 @@ void state1_gate(Core* c, uint32_t obj) {
     if (c->mem_r8(0x800BF816u) == 0) {
       submit = false;                                 // 0x8004c344: -> skip
     } else if ((uint32_t)(uint8_t)c->mem_r8(0x800BF817u) !=
-               (uint32_t)(int32_t)(int16_t)c->mem_r16(obj + 0x6a)) {
+               (uint32_t)c->mem_r16s(obj + 0x6a)) {
       // 0x8004c358: bne compares full 32-bit regs: v1 = zero-ext byte, v0 = sign-ext halfword.
       submit = false;                                 // 0x8004c358: bne -> skip
     } else {

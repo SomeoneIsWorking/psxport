@@ -88,11 +88,11 @@ void Collision::gridSetup(uint32_t layer) {
 static uint32_t grid_query_47cbc(Core* c) {
   const uint32_t SP = 0x1F800000u, MASK = 0xFFFFFFC0u;
   // ---- phase A: initial cell from probe vs origin ----
-  int32_t t1 = ((int32_t)(int16_t)c->mem_r16(SP+0x1BC) - (int32_t)(int16_t)c->mem_r16(SP+0x1AA)) >> 6;  // grid Z idx (a3/t1)
+  int32_t t1 = (c->mem_r16s(SP+0x1BC) - c->mem_r16s(SP+0x1AA)) >> 6;  // grid Z idx (a3/t1)
   int32_t a3 = t1;
   uint32_t row0 = c->mem_r32(SP+0x1CC);
   uint32_t a1   = row0 + (uint32_t)(t1 << 2);                    // &row0[t1] (4-byte stride)
-  int32_t t0   = ((int32_t)(int16_t)c->mem_r16(SP+0x1C0) - (int32_t)(int16_t)c->mem_r16(SP+0x1AC)) >> 6;  // grid X idx (t0)
+  int32_t t0   = (c->mem_r16s(SP+0x1C0) - c->mem_r16s(SP+0x1AC)) >> 6;  // grid X idx (t0)
   uint32_t A1_0 = c->mem_r16(a1+0);
   if (t0 < (int32_t)A1_0) return 0;
   uint32_t a2 = (c->mem_r16(a1+2) + (uint32_t)t0) - A1_0;

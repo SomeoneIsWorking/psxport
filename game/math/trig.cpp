@@ -5,7 +5,7 @@ int32_t Trig::rsin(Core* c, int32_t angle) {
   int32_t sign = 1;
   if (angle < 0) { sign = -1; angle = -angle; }
   angle &= 0xFFF;
-  auto lh = [&](uint32_t off) -> int32_t { return (int32_t)(int16_t)c->mem_r16(SIN_TAB + off); };
+  auto lh = [&](uint32_t off) -> int32_t { return c->mem_r16s(SIN_TAB + off); };
   int32_t r;
   if (angle < 1025) {
     r = lh((uint32_t)angle * 2u);                        // Q1: sin(a) = tab[a]
@@ -30,7 +30,7 @@ int32_t Trig::ratan2(Core* c, int32_t y_in, int32_t x_in) {
   if ((int32_t)a0 < 0) { y_neg = 1; a0 = 0u - a0; }
   if (a1 == 0 && a0 == 0) return 0;
   auto lh = [&](uint32_t idx) -> int32_t {
-    return (int32_t)(int16_t)c->mem_r16(ATAN_TAB + idx * 2u);
+    return c->mem_r16s(ATAN_TAB + idx * 2u);
   };
   int32_t v1;
   if ((int32_t)a0 < (int32_t)a1) {
@@ -67,7 +67,7 @@ int32_t Trig::angleCmp(int32_t a, int32_t b, int32_t mode) {
 int32_t Trig::rcos(Core* c, int32_t angle) {
   if (angle < 0) angle = -angle;                         // cos is even; guest's bgez wrapper
   angle &= 0xFFF;
-  auto lh = [&](uint32_t off) -> int32_t { return (int32_t)(int16_t)c->mem_r16(SIN_TAB + off); };
+  auto lh = [&](uint32_t off) -> int32_t { return c->mem_r16s(SIN_TAB + off); };
   if (angle < 1025) {
     return lh((uint32_t)(1024 - angle) * 2u);            // Q1: cos(a) = tab[1024-a]
   } else if (angle < 2049) {

@@ -135,8 +135,8 @@ void beh_child_trig_motion(Core* c) {
     if (c->mem_r8(nd + 0x29) == 0) goto L8c00;       // node[0x29]
     {
       int32_t ang;
-      if (c->mem_r8(0x800E7FC7u) & 1) ang = -(int32_t)(int16_t)c->mem_r16(0x800E7ED8u);
-      else                            ang =  (int32_t)(int16_t)c->mem_r16(0x800E7ED8u);
+      if (c->mem_r8(0x800E7FC7u) & 1) ang = -c->mem_r16s(0x800E7ED8u);
+      else                            ang =  c->mem_r16s(0x800E7ED8u);
       uint32_t v0e = (uint32_t)Trig::rsin(c, ang);   // FUN_80083E80(ang) -> native Trig::rsin
       uint32_t v0f = (uint32_t)Trig::rcos(c, ang);   // FUN_80083F50(ang) -> native Trig::rcos
       int32_t s0 = (-(int32_t)v0e) >> 9;             // sra 9 (arithmetic)

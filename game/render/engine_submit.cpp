@@ -714,8 +714,8 @@ void terrain_prep_object_matrix(Core* c, uint32_t node) {
   // We write them to guest exactly as the recomp does (the no-guest-write rule was discarded — these
   // are part of the function's faithful behavior, and leaving them stale was the only true-gameplay
   // divergence vs the recomp body, root-caused via the A/B RAM diff). Compute, store, use.
-  uint8_t sway0 = (uint8_t)(((int32_t)(int16_t)c->mem_r16(node + 64) * a80) >> 11);
-  uint8_t sway2 = (uint8_t)(((int32_t)(int16_t)c->mem_r16(node + 66) * a80) >> 11);
+  uint8_t sway0 = (uint8_t)((c->mem_r16s(node + 64) * a80) >> 11);
+  uint8_t sway2 = (uint8_t)((c->mem_r16s(node + 66) * a80) >> 11);
   c->mem_w8(A2_PARAM + 0, sway0);
   c->mem_w8(A2_PARAM + 2, sway2);
   uint8_t sway1 = c->mem_r8(A2_PARAM + 1);                 // external (set elsewhere)
@@ -914,9 +914,9 @@ static void xform51128_body(Core* c) {
     // seed work matrix @0x1F800000: diagonal from child[56/58/60], the rest zero
     c->mem_w32(0x1F800004u, 0); c->mem_w32(0x1F80000Cu, 0); c->mem_w32(0x1F800014u, 0);
     c->mem_w32(0x1F800018u, 0); c->mem_w32(0x1F80001Cu, 0);
-    c->mem_w32(0x1F800000u, (uint32_t)(int32_t)(int16_t)c->mem_r16(child + 56));
-    c->mem_w32(0x1F800008u, (uint32_t)(int32_t)(int16_t)c->mem_r16(child + 58));
-    c->mem_w32(0x1F800010u, (uint32_t)(int32_t)(int16_t)c->mem_r16(child + 60));
+    c->mem_w32(0x1F800000u, (uint32_t)c->mem_r16s(child + 56));
+    c->mem_w32(0x1F800008u, (uint32_t)c->mem_r16s(child + 58));
+    c->mem_w32(0x1F800010u, (uint32_t)c->mem_r16s(child + 60));
     int16_t sentinel = (int16_t)c->mem_r16(child + 6);
     Math::rotmat(c,child + 8, 0x1F800020u);                                     // RotMatrix
     Math::matMul(c,0x1F800020u, 0x1F800000u, 0x1F800040u);                      // matmul
@@ -993,7 +993,7 @@ void ov_xform51128(Core* c) {
 //   child[6]>=0 → sibling node[0xC0+4*child[6]].
 static void orch597AC_body(Core* c) {
   uint32_t node = c->r[4];
-  #define R16(a)  ((uint32_t)(int32_t)(int16_t)c->mem_r16(a))   // lh: sign-extended
+  #define R16(a)  ((uint32_t)c->mem_r16s(a))   // lh: sign-extended
   #define HU(a)   ((uint32_t)c->mem_r16(a))                     // lhu: zero-extended
   uint8_t saved8 = c->mem_r8(node + 8);
   if ((c->mem_r16(node + 0x17E) & 0x20) && c->mem_r8(node + 0x179) != 0)

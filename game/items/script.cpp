@@ -11,7 +11,7 @@
 #include <string.h>
 #include "script.h"
 #include "spawn.h"   // world_despawn
-#include "mathlib.h"  // ov_bittest_4d7ec (FUN_8004D7EC)
+#include "mathlib.h"  // Bit::test7EC / test868 (FUN_8004D7EC / FUN_8004D868)
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
@@ -79,15 +79,11 @@ static void script_vm_4ce14(Core* c) {
     bool s2set = (flag & 0x80) != 0;
     bool skip = false;
     if (!s2set) {                                        // bit7 clear -> predicate 0x8004D7EC
-      c->r[4] = (uint32_t)(int32_t)(int16_t)c->mem_r16(s4 + 10); c->r[5] = 0;
-      ov_bittest_4d7ec(c);
-      if (c->r[2] != 0) skip = true;
+      if (c->engine.bit.test7EC(c->mem_r16s(s4 + 10), 0) != 0) skip = true;
     }
     if (!skip && (c->mem_r32(s5 + 20) & mask)) skip = true;   // slot already done
     if (!skip && s2set) {                                // bit7 set -> predicate 0x8004D868
-      c->r[4] = (uint32_t)(int32_t)(int16_t)c->mem_r16(s4 + 10); c->r[5] = 0;
-      ov_bittest_4d868(c);
-      if (c->r[2] != 0) skip = true;
+      if (c->engine.bit.test868(c->mem_r16s(s4 + 10)) != 0) skip = true;
     }
     if (!skip && (c->mem_r32(s5 + 20) & mask)) skip = true;   // re-check (predicate may have set it)
     if (!skip) {
@@ -98,9 +94,9 @@ static void script_vm_4ce14(Core* c) {
         ret = c->r[2];
       } else {
         c->r[4] = obj;
-        c->r[5] = (uint32_t)(int32_t)(int16_t)c->mem_r16(s4 + 4);
-        c->r[6] = (uint32_t)(int32_t)(int16_t)c->mem_r16(s4 + 6);
-        c->r[7] = (uint32_t)(int32_t)(int16_t)c->mem_r16(s4 + 8);
+        c->r[5] = (uint32_t)c->mem_r16s(s4 + 4);
+        c->r[6] = (uint32_t)c->mem_r16s(s4 + 6);
+        c->r[7] = (uint32_t)c->mem_r16s(s4 + 8);
         rec_dispatch(c, 0x80077ACCu);
         ret = c->r[2];
       }

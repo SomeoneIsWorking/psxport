@@ -80,7 +80,7 @@ static void anim_vm_76d68(Core* c) {
   //   retval: function return value
   auto exec_tail = [&](uint32_t cur_in, bool jump_target, uint32_t retval) {
     uint32_t a1 = jump_target ? c->mem_r32(cur_in + 8) : (cur_in + 8);
-    c->r[4] = s0; c->r[5] = a1; c->r[6] = (uint32_t)(int32_t)(int16_t)c->mem_r16(s0 + 14);
+    c->r[4] = s0; c->r[5] = a1; c->r[6] = (uint32_t)c->mem_r16s(s0 + 14);
     rec_dispatch(c, 0x80075ff8u);
     c->r[2] = retval;
   };

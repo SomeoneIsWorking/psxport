@@ -223,7 +223,7 @@ static uint32_t preload_build_vram(Core* c, uint32_t base) {
   static const struct { uint32_t off, sz; } cells[10] = {
     {0x0c,14},{0x08,14},{0x04,14},{0x00,14},{0x10,8},{0x14,8},{0x18,8},{0x1c,14},{0x20,14},{0x24,14},
   };
-  uint32_t cell_h = (uint32_t)(int32_t)(int16_t)c->mem_r16(0x800BED82u);
+  uint32_t cell_h = (uint32_t)c->mem_r16s(0x800BED82u);
   for (int i = 0; i < 10; i++)
     rc4(c, 0x80075448u, (uint32_t)i, base + c->mem_r32(s0 + cells[i].off), cells[i].sz, cell_h);
   return base + 26356;                                             // v0 = base + 0x66f4

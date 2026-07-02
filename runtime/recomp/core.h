@@ -69,6 +69,11 @@ public:
   uint8_t  mem_r8 (uint32_t a);
   uint16_t mem_r16(uint32_t a);
   uint32_t mem_r32(uint32_t a);
+  // Sign-extended halfword read (MIPS `lh`): read u16 and sign-extend to int32. Kills the pervasive
+  // `(int32_t)(int16_t)c->mem_r16(a)` double-cast at every arithmetic use of a signed s16 field.
+  int32_t  mem_r16s(uint32_t a) { return (int32_t)(int16_t)mem_r16(a); }
+  // Sign-extended byte read (MIPS `lb`): u8 → int32. Same rationale as mem_r16s for `int8_t` fields.
+  int32_t  mem_r8s (uint32_t a) { return (int32_t)(int8_t )mem_r8 (a); }
   void     mem_w8 (uint32_t a, uint8_t  v);
   void     mem_w16(uint32_t a, uint16_t v);
   void     mem_w32(uint32_t a, uint32_t v);

@@ -52,7 +52,7 @@ static void submit_perobj_flush(Core* c) {
       // OT base: node[0xd]&0xf == 4 selects a per-command sub-bucket (cmd[0x3f]*4 offset), else the base.
       uint32_t otbase = otbase_ptr;
       if ((c->mem_r8(node + 0xD) & 0xF) == 4)
-        otbase = otbase_ptr + (((int32_t)(int8_t)c->mem_r8(cmd + 0x3F)) << 2);
+        otbase = otbase_ptr + ((c->mem_r8s(cmd + 0x3F)) << 2);
       c->game->fps60.fps_cur_key = cmd;                 // fps60: tag this actor's world quads for reprojection
       native_gt3gt4(c, geomblk, otbase);                // fully-native generic GT3/GT4 submit (no PSX fallback)
       c->game->fps60.fps_cur_key = 0;
@@ -462,7 +462,7 @@ static void rq_dispatch_case(Core* c, uint32_t node, uint32_t tgt) {
       else rec_dispatch(c, 0x80122974u);
       uint8_t b = c->mem_r8(node + 0xB);
       if (b & 0x40) { c->r[4] = node; c->r[5] = 80; c->r[6] = 0; rec_dispatch(c, 0x8002AE0Cu); }
-      else if (b & 0x80) { c->r[4] = node; c->r[5] = (uint32_t)(int32_t)(int16_t)c->mem_r16(node + 0x80); c->r[6] = 0;
+      else if (b & 0x80) { c->r[4] = node; c->r[5] = (uint32_t)c->mem_r16s(node + 0x80); c->r[6] = 0;
                            rec_dispatch(c, 0x8002AE0Cu); }
       break; }
     case 0x8003BC6Cu: c->r[4] = node; rec_dispatch(c, 0x8003C2D4u); break;

@@ -31,6 +31,7 @@
 #include "core/asset.h"          // Engine owns the Asset loader subsystem
 #include "audio/music_coord.h"   // Engine owns the MusicCoord dialog↔music coordination
 #include "player/collision.h"    // Engine owns the Collision grid-family subsystem
+#include "math/mathlib.h"        // Engine owns the Bit game-flag bitmap subsystem
 class Core;
 
 class Engine {
@@ -56,6 +57,7 @@ public:
   Asset            asset;              // asset loader — LZ + texgroup + VRAM upload + boot preload
   MusicCoord       musicCoord;         // dialog ↔ ingame-music coordination (instant-CD-safe PC mod)
   Collision        collision;          // collision-grid family (list-scan + grid setup/query/resolve/step)
+  Bit              bit;                // game progress-flag bitmap bit-test (FUN_8004D7EC / D868)
 
   // ── GAME-stage entry points (called by the scheduler each frame) ────────────────────────────
   // stagePrologue: one-time prologue that runs when the GAME task enters — task-slot setup, first

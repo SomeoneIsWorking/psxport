@@ -56,12 +56,12 @@ static void hitbox_build_3b220(Core* c) {
   c->mem_w32(a0 + 0, a1);                                          // sw a1,0(a0)
 
   // X origin += (s8)a2[14]
-  int32_t dx = (int32_t)(int8_t)c->mem_r8(a2 + 14);
+  int32_t dx = c->mem_r8s(a2 + 14);
   uint16_t x0 = (uint16_t)((uint16_t)c->mem_r16(a0 + 0) + (uint32_t)dx);
   c->mem_w16(a0 + 0, x0);
 
   // Y origin += (s8)a2[15]; copy into a0[10]
-  int32_t dy = (int32_t)(int8_t)c->mem_r8(a2 + 15);
+  int32_t dy = c->mem_r8s(a2 + 15);
   uint16_t y0 = (uint16_t)((uint16_t)c->mem_r16(a0 + 2) + (uint32_t)dy);
   uint16_t xnow = (uint16_t)c->mem_r16(a0 + 0);                    // lhu v0,0(a0) (== x0)
   c->mem_w16(a0 + 2, y0);

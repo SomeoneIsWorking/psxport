@@ -24,46 +24,50 @@ static inline uint32_t rand_lcg(Core* c) {
 // static trig_sin/trig_cos/trig_lut helpers + ov_trig_sin/ov_trig_cos/ov_trig_lut orphan
 // override-handlers used to live here; all callers were migrated to Trig::rsin / Trig::rcos.
 
-// FUN_8004D7EC — pure bitmap bit-test (~2%, 6.8k calls): byte = bitmap[(int16)(a0/8)] then return
-// byte & (1 << ((int16)(a0%8) & 31)); bitmap base is 0x800BFD34 when (a1&0xff)!=0 else 0x800BFCB4.
+// FUN_8004D7EC — pure bitmap bit-test (~2%, 6.8k calls): byte = bitmap[(int16)(idx/8)] then return
+// byte & (1 << ((int16)(idx%8) & 31)); bitmap base is 0x800BFD34 when (sel&0xff)!=0 else 0x800BFCB4.
 // Pure function over a guest bitmap — exact native reimpl. `bitverify` (lazy gate) A/B's v0.
-void ov_bittest_4d7ec(Core* c) {
+uint32_t Bit::test7EC(int32_t idx, uint32_t sel) {
+  Core* c = this->core;
   static int v = -1; if (v < 0) v = cfg_dbg("bitverify") ? 1 : 0;
-  int a0 = (int)c->r[4]; uint32_t a1 = c->r[5];
-  int q  = (a0 >= 0) ? a0 : (a0 + 7);
-  int a2 = q >> 3;                        // a0/8 toward zero
-  int a3 = a0 - (a2 << 3);                // a0%8
-  uint32_t base = (a1 & 0xff) ? (0x800BF870u + 1220u) : (0x800BF870u + 1092u);
+  int q  = (idx >= 0) ? idx : (idx + 7);
+  int a2 = q >> 3;                        // idx/8 toward zero
+  int a3 = idx - (a2 << 3);               // idx%8
+  uint32_t base = (sel & 0xff) ? (0x800BF870u + 1220u) : (0x800BF870u + 1092u);
   uint8_t byte = c->mem_r8(base + (uint32_t)(int32_t)(int16_t)a2);
   uint32_t mine = (uint32_t)byte & (1u << ((uint32_t)(int32_t)(int16_t)a3 & 31u));
   if (v) {
+    c->r[4] = (uint32_t)idx; c->r[5] = sel;         // taxi-in for the still-taxi verify super-call
     rec_super_call(c, 0x8004D7ECu);
     static long ng = 0, nb = 0;
-    if ((uint32_t)c->r[2] != mine) { if (nb++ < 20) fprintf(stderr, "[bitverify] MISMATCH a0=%d a1=%x mine=%x oracle=%x\n", a0, a1, mine, (uint32_t)c->r[2]); }
+    if ((uint32_t)c->r[2] != mine) { if (nb++ < 20) fprintf(stderr, "[bitverify] MISMATCH idx=%d sel=%x mine=%x oracle=%x\n", idx, sel, mine, (uint32_t)c->r[2]); }
     else if (++ng % 20000 == 0) fprintf(stderr, "[bitverify] %ld matches\n", ng);
   }
   c->r[2] = mine;
+  return mine;
 }
 
 // FUN_8004D868 — sibling of FUN_8004D7EC (bit-test) against a fixed third bitmap @0x800BFDB4
-// (no a1 selector). Same q=a0/8 toward-zero, r=a0%8, return byte & (1<<r). Pure guest-bitmap read.
-// Shares the `bitverify` gate with ov_bittest_4d7ec.
-void ov_bittest_4d868(Core* c) {
+// (no sel selector). Same q=idx/8 toward-zero, r=idx%8, return byte & (1<<r). Pure guest-bitmap read.
+// Shares the `bitverify` gate with test7EC.
+uint32_t Bit::test868(int32_t idx) {
+  Core* c = this->core;
   static int v = -1; if (v < 0) v = cfg_dbg("bitverify") ? 1 : 0;
-  int a0 = (int)c->r[4];
-  int q  = (a0 >= 0) ? a0 : (a0 + 7);
-  int a2 = q >> 3;                        // a0/8 toward zero
-  int a3 = a0 - (a2 << 3);                // a0%8
+  int q  = (idx >= 0) ? idx : (idx + 7);
+  int a2 = q >> 3;                        // idx/8 toward zero
+  int a3 = idx - (a2 << 3);               // idx%8
   uint32_t base = 0x800BF870u + 1348u;    // = 0x800BFDB4
   uint8_t byte = c->mem_r8(base + (uint32_t)(int32_t)(int16_t)a2);
   uint32_t mine = (uint32_t)byte & (1u << ((uint32_t)(int32_t)(int16_t)a3 & 31u));
   if (v) {
+    c->r[4] = (uint32_t)idx;                        // taxi-in for the still-taxi verify super-call
     rec_super_call(c, 0x8004D868u);
     static long ng = 0, nb = 0;
-    if ((uint32_t)c->r[2] != mine) { if (nb++ < 20) fprintf(stderr, "[bitverify868] MISMATCH a0=%d mine=%x oracle=%x\n", a0, mine, (uint32_t)c->r[2]); }
+    if ((uint32_t)c->r[2] != mine) { if (nb++ < 20) fprintf(stderr, "[bitverify868] MISMATCH idx=%d mine=%x oracle=%x\n", idx, mine, (uint32_t)c->r[2]); }
     else if (++ng % 20000 == 0) fprintf(stderr, "[bitverify868] %ld matches\n", ng);
   }
   c->r[2] = mine;
+  return mine;
 }
 
 void ov_rand(Core* c) {

@@ -30,13 +30,13 @@ void NodeXform::build(uint32_t node) {
   c->mem_w32(SCR_M + 20, 0);
   c->mem_w32(SCR_M + 24, 0);
   c->mem_w32(SCR_M + 28, 0);
-  c->mem_w32(SCR_M +  0, (uint32_t)(int32_t)(int16_t)c->mem_r16(node + 184));
-  c->mem_w32(SCR_M +  8, (uint32_t)(int32_t)(int16_t)c->mem_r16(node + 186));
-  c->mem_w32(SCR_M + 16, (uint32_t)(int32_t)(int16_t)c->mem_r16(node + 188));
+  c->mem_w32(SCR_M +  0, (uint32_t)c->mem_r16s(node + 184));
+  c->mem_w32(SCR_M +  8, (uint32_t)c->mem_r16s(node + 186));
+  c->mem_w32(SCR_M + 16, (uint32_t)c->mem_r16s(node + 188));
   Math::rotmat(c,node + 84, SCR_R);                            // libgte RotMatrix at 0x80085480
   Math::matMul(c,SCR_R, SCR_M, node + 152);                    // node.mat152 = rot × mat 0x80084110
-  c->mem_w32(node + 172, (uint32_t)(int32_t)(int16_t)c->mem_r16(node + 46));
-  c->mem_w32(node + 176, (uint32_t)(int32_t)(int16_t)c->mem_r16(node + 50));
-  c->mem_w32(node + 180, (uint32_t)(int32_t)(int16_t)c->mem_r16(node + 54));
+  c->mem_w32(node + 172, (uint32_t)c->mem_r16s(node + 46));
+  c->mem_w32(node + 176, (uint32_t)c->mem_r16s(node + 50));
+  c->mem_w32(node + 180, (uint32_t)c->mem_r16s(node + 54));
   c->r[4] = node; ov_xform51128(c);
 }

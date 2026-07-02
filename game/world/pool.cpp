@@ -164,9 +164,9 @@ static void ov_800783DC(Core* c) {
       int16_t  h0  = (int16_t)c->mem_r16(a0 + 0);
       int16_t  s17e = (int16_t)c->mem_r16(S0 + 382);
       c->mem_w32(S0 + 44, (uint32_t)((int32_t)h0 << 16));
-      c->mem_w32(S0 + 48, (uint32_t)((int32_t)(int16_t)c->mem_r16(a0 + 2) << 16));
+      c->mem_w32(S0 + 48, (uint32_t)(c->mem_r16s(a0 + 2) << 16));
       if (s17e < 0) c->mem_w16(S0 + 50, (uint16_t)(c->mem_r16(S0 + 50) + 70));
-      c->mem_w32(S0 + 52, (uint32_t)((int32_t)(int16_t)c->mem_r16(a0 + 4) << 16));
+      c->mem_w32(S0 + 52, (uint32_t)(c->mem_r16s(a0 + 4) << 16));
       uint32_t a0h = c->mem_r16(a0 + 6);              // lhu (zero-extended)
       c->mem_w8(S0 + 42,  (uint8_t)(a0h & 0x7f));
       c->mem_w8(S0 + 348, (uint8_t)((a0h >> 7) & 1));
@@ -232,7 +232,7 @@ static void ov_80078610(Core* c) {
   uint32_t v0 = (c->mem_r8(0x800BF870u) == 3) ? 233u : 350u;
   c->mem_w16(0x801003F8u, (uint16_t)v0);
   c->r[2] = 0x80100000u;   // lui v0,0x8010 — survives to return (0x800846F0 leaves v0); incidental v0
-  c->r[4] = (uint32_t)(int32_t)(int16_t)c->mem_r16(0x801003F8u);
+  c->r[4] = (uint32_t)c->mem_r16s(0x801003F8u);
   call_fn(c, 0x800846F0u);
 }
 

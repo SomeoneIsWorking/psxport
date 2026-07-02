@@ -86,9 +86,9 @@ void GraphicsBind::recordInit() { Core* c = core;
 static uint32_t obj_render_update(Core* c) {
   uint32_t obj = c->r[4];
   Math::rotmat(c,obj + 0x54, obj + 0x98);
-  c->mem_w32(obj + 0xac, (uint32_t)(int32_t)(int16_t)c->mem_r16(obj + 0x2e));
-  c->mem_w32(obj + 0xb0, (uint32_t)(int32_t)(int16_t)c->mem_r16(obj + 0x32));
-  c->mem_w32(obj + 0xb4, (uint32_t)(int32_t)(int16_t)c->mem_r16(obj + 0x36));
+  c->mem_w32(obj + 0xac, (uint32_t)c->mem_r16s(obj + 0x2e));
+  c->mem_w32(obj + 0xb0, (uint32_t)c->mem_r16s(obj + 0x32));
+  c->mem_w32(obj + 0xb4, (uint32_t)c->mem_r16s(obj + 0x36));
   c->r[4] = obj;
   rec_dispatch(c, 0x80051300u);
   return c->r[2];

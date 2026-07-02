@@ -408,9 +408,9 @@ static void ov_compmatlv_verify(Core* c) {
 static void ov_rot84A80(Core* c) {
   uint32_t a0 = c->r[4], out = c->r[5];
   int s0,c0,s1,c1,s2,c2;
-  rotpair_trig(c, (uint32_t)(int32_t)(int16_t)c->mem_r16(a0+0), +1, &s0, &c0);
-  rotpair_trig(c, (uint32_t)(int32_t)(int16_t)c->mem_r16(a0+2), +1, &s1, &c1);
-  rotpair_trig(c, (uint32_t)(int32_t)(int16_t)c->mem_r16(a0+4), +1, &s2, &c2);
+  rotpair_trig(c, (uint32_t)c->mem_r16s(a0+0), +1, &s0, &c0);
+  rotpair_trig(c, (uint32_t)c->mem_r16s(a0+2), +1, &s1, &c1);
+  rotpair_trig(c, (uint32_t)c->mem_r16s(a0+4), +1, &s2, &c2);
   int32_t s0s1 = ((int32_t)s0*s1) >> 12;   // kept full 32-bit (re-multiplied below)
   int32_t s1c0 = ((int32_t)s1*c0) >> 12;
   int16_t m00 = (int16_t)(((int32_t)c1*c2) >> 12);
@@ -467,9 +467,9 @@ static inline int32_t nsh12(int32_t p) { return (int32_t)(0u - (uint32_t)p) >> 1
 static void ov_rot851F0(Core* c) {
   uint32_t a0 = c->r[4], out = c->r[5];
   int s0,c0,s1,c1,s2,c2;
-  rotpair_trig(c, (uint32_t)(int32_t)(int16_t)c->mem_r16(a0+0), +1, &s0, &c0);
-  rotpair_trig(c, (uint32_t)(int32_t)(int16_t)c->mem_r16(a0+2), +1, &s1, &c1);
-  rotpair_trig(c, (uint32_t)(int32_t)(int16_t)c->mem_r16(a0+4), +1, &s2, &c2);
+  rotpair_trig(c, (uint32_t)c->mem_r16s(a0+0), +1, &s0, &c0);
+  rotpair_trig(c, (uint32_t)c->mem_r16s(a0+2), +1, &s1, &c1);
+  rotpair_trig(c, (uint32_t)c->mem_r16s(a0+4), +1, &s2, &c2);
   int32_t s0s1 = ((int32_t)s0*s1) >> 12;
   int32_t s0c1 = ((int32_t)s0*c1) >> 12;
   int16_t m00 = (int16_t)((((int32_t)c2*c1) >> 12) - ((s0s1*s2) >> 12));
