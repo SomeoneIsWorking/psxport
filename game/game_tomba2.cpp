@@ -286,7 +286,7 @@ void Engine::drawOTag(uint32_t otHead) {   // called directly from native_step_f
   // pass is never invoked and the PSX-vanilla path is the only renderer. Emitted before rq_flush so its
   // world quads drain with this frame.
   if (cfg_dbg("rendernative")) { void render_scene_native(Core*); render_scene_native(c); }
-  rq_flush(c);
+  c->game->rq.flush(c);
 }
 
 void games_tomba2_init(void) {

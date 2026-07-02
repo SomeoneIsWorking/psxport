@@ -14,6 +14,7 @@
 #include <stdint.h>
 
 struct Core;
+class Game;
 
 // Explicit engine draw layers, painted low->high. The depth buffer resolves occlusion WITHIN RQ_WORLD;
 // the backdrop/HUD layers exist so screen-space 2D is ordered by what it IS, not by OT position.
@@ -97,31 +98,31 @@ struct RqItem {
 // Per-instance (on Game) so two cores keep independent queues; pure host render data (never guest RAM),
 // so it does not affect a Core::ram lockstep diff.
 struct RenderQueue {
+  Game*    game = nullptr;   // back-pointer wired in Game() so methods can reach Core (game->core)
   RqItem   items[RQ_MAX];
   int      n        = 0;
   uint32_t seq      = 0;
   int      consumed = 1;   // start consumed so the first push begins a clean frame
   void     reset();
-  RqItem*  push();         // NULL on overflow
+  RqItem*  push();         // NULL on overflow (reserves a slot; lazy per-frame reset)
   void     flush(Core* core);   // sort by (layer, seq), emit each, mark consumed
   void     mark_consumed();
+
+  // push2dQuad: enqueue a 2D textured quad (HUD / overlay / background) into the render queue so it is
+  // part of THE FRAME and gets re-emitted on both 60fps present passes (no direct gpu_gpu_draw_tritri
+  // bypass that lands on one pass). layer = RQ_BACKGROUND/RQ_OVERLAY/RQ_HUD; order_2d_fg picks the 2D
+  // far/near band. Body in render_queue.cpp.
+  void push2dQuad(int layer, int order_2d_fg,
+                  const int* xs, const int* ys, const int* us, const int* vs,
+                  const unsigned char* rs, const unsigned char* gs, const unsigned char* bs,
+                  int tp_x, int tp_y, int mode, int raw, int clut_x, int clut_y,
+                  int tw_mx, int tw_my, int tw_ox, int tw_oy, int da_x0, int da_y0, int da_x1, int da_y1);
 };
 
 int  rq_active(void);                  // PSXPORT_RQ — route owned world geometry through the queue
-RqItem* rq_push(Core* core);           // reserve a slot (lazy per-frame reset); NULL on overflow
-void rq_flush(Core* core);             // emit the frame's queued items in engine order
 
 // Emit one resolved item to the VK rasterizer (defined in gpu_native.cpp, where the gpu_gpu_* draw
 // entries live). Used by both the inline path and the queue flush so emission logic lives in one place.
 void gpu_emit_rq_item(Core* core, const RqItem* it);
-
-// Enqueue a 2D textured quad (HUD / overlay) into the render queue so it is part of THE FRAME and gets
-// re-emitted on both 60fps present passes (no direct gpu_gpu_draw_tritri bypass that lands on one pass).
-// layer = RQ_OVERLAY / RQ_HUD; order picks the 2D far/near band. Defined in gpu_native.cpp (RqItem fill).
-void rq_push_2d_quad(Core* core, int layer, int order_2d_fg,
-                     const int* xs, const int* ys, const int* us, const int* vs,
-                     const unsigned char* rs, const unsigned char* gs, const unsigned char* bs,
-                     int tp_x, int tp_y, int mode, int raw, int clut_x, int clut_y,
-                     int tw_mx, int tw_my, int tw_ox, int tw_oy, int da_x0, int da_y0, int da_x1, int da_y1);
 
 #endif

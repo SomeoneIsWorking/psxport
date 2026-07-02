@@ -250,9 +250,6 @@ void RenderQueue::flush(Core* core) {
   mark_consumed();
 }
 
-RqItem* rq_push(Core* core)   { return core->game->rq.push(); }
-void    rq_flush(Core* core)  { core->game->rq.flush(core); }
-
 // ---- Native render-queue EMISSION (moved from gpu_native.cpp, 2026-07 restructure): the engine's OWN
 // render-queue API (RqItem-based world/2D quad submission with real per-vertex depth + order_mode + shadow-
 // cast tagging), as distinct from gpu_native.cpp's PSX GP0-packet interpreter/rasterizer. gpu_draw_world_quad
@@ -397,7 +394,7 @@ void rq_emit_or_queue(Core* core, int capture, int layer, int order_mode, int nv
   it.mode = mode; it.tp_x = tp_x; it.tp_y = tp_y; it.clut_x = clut_x; it.clut_y = clut_y;
   it.tw_mx = tw_mx; it.tw_my = tw_my; it.tw_ox = tw_ox; it.tw_oy = tw_oy;
   it.da_x0 = da_x0; it.da_y0 = da_y0; it.da_x1 = da_x1; it.da_y1 = da_y1; it.tp_blend = tp_blend;
-  if (capture) { RqItem* slot = rq_push(core); if (slot) { uint32_t sq = slot->seq; *slot = it; slot->seq = sq; } }
+  if (capture) { RqItem* slot = core->game->rq.push(); if (slot) { uint32_t sq = slot->seq; *slot = it; slot->seq = sq; } }
   else         gpu_emit_rq_item(core, &it);
 }
 
@@ -436,14 +433,15 @@ void gpu_draw_world_quad(Core* core, const float* px, const float* py, const flo
                    s.s_da_x0, s.s_da_y0, s.s_da_x1, s.s_da_y1, s.s_tp_blend, cast);
 }
 
-// 2D quad enqueue (HUD / overlay) — funnels through rq_emit_or_queue so a 2D drawable is a queued RqItem
-// (part of THE FRAME), not a direct gpu_gpu_draw_tritri that lands on only one 60fps present pass.
-void rq_push_2d_quad(Core* core, int layer, int order_2d_fg,
-                     const int* xs, const int* ys, const int* us, const int* vs,
-                     const unsigned char* rs, const unsigned char* gs, const unsigned char* bs,
-                     int tp_x, int tp_y, int mode, int raw, int clut_x, int clut_y,
-                     int tw_mx, int tw_my, int tw_ox, int tw_oy, int da_x0, int da_y0, int da_x1, int da_y1) {
+// 2D quad enqueue (HUD / overlay / background) — funnels through rq_emit_or_queue so a 2D drawable is a
+// queued RqItem (part of THE FRAME), not a direct gpu_gpu_draw_tritri that lands on only one 60fps pass.
+void RenderQueue::push2dQuad(int layer, int order_2d_fg,
+                             const int* xs, const int* ys, const int* us, const int* vs,
+                             const unsigned char* rs, const unsigned char* gs, const unsigned char* bs,
+                             int tp_x, int tp_y, int mode, int raw, int clut_x, int clut_y,
+                             int tw_mx, int tw_my, int tw_ox, int tw_oy, int da_x0, int da_y0, int da_x1, int da_y1) {
   if (!gpu_gpu_enabled()) return;
+  Core* core = &game->core;
   int om = order_2d_fg ? RQ_OM_2D_FG : RQ_OM_2D_BG;
   rq_emit_or_queue(core, 1, layer, om, 4, 0, raw,
                    xs, ys, nullptr, nullptr, us, vs, rs, gs, bs, nullptr, mode,

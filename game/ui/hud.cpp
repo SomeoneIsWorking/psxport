@@ -41,6 +41,7 @@
 #include "cfg.h"
 #include "gpu_gpu.h"
 #include "render_queue.h"
+#include "game.h"    // c->game->rq.push2dQuad
 #include <stdint.h>
 #include <stdio.h>
 
@@ -80,8 +81,8 @@ void hud_quad(Core* c, int x, int y, int w, int h, int u, int v, int cr, int cg,
   unsigned char bs[4] = {(unsigned char)cb,(unsigned char)cb,(unsigned char)cb,(unsigned char)cb};
   // No draw-area clip (full FB) — the engine, not the PSX draw-area register, owns HUD visibility (this is
   // what fixed the old 4:3 da-clip that ate 2 of 3 balls). RQ_HUD sorts above the world; 2D-FG depth band.
-  rq_push_2d_quad(c, RQ_HUD, /*order_2d_fg=*/1, xs, ys, us, vs, rs, gs, bs,
-                  tpx, tpy, mode, /*raw=*/0, clutx, cluty, 0, 0, 0, 0, 0, 0, 1023, 511);
+  c->game->rq.push2dQuad(RQ_HUD, /*order_2d_fg=*/1, xs, ys, us, vs, rs, gs, bs,
+                         tpx, tpy, mode, /*raw=*/0, clutx, cluty, 0, 0, 0, 0, 0, 0, 1023, 511);
 }
 
 // FUN_8007E938 — HUD sprite-strip cell. Read the element's screen position (geom_a-16, geom_b-12) and the

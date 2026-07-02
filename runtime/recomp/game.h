@@ -235,7 +235,7 @@ public:
   // reach the rest of the machine (e.g. blit_src -> gpu_gpu via gpu.game; frame_via_fb -> s_seen3d via
   // gpu_gpu.game->core). Set once here so no file-scope global is needed.
   Game() { core.game = this; gpu.game = this; gpu_gpu.game = this; timing.game = this; pad.game = this;
-           hle.game = this;
+           hle.game = this; rq.game = this;
            spu_state = SPU_NewState(); mdec_state = MDEC_NewState();
            cdc_state_init(&cdc); xa_state_init(&xa); }   // per-instance CD-controller + XA streamer defaults
   ~Game() { SPU_FreeState(spu_state); MDEC_FreeState(mdec_state); }
