@@ -64,6 +64,12 @@ public:
   void s4c();
   void s48_2_frame();
 
+  // fieldFrame / fieldFrameX: the FIELD per-frame update body (guest 0x80108B0C) and its
+  // mid-transition twin (0x80108BE4, sm[0x4a]==5 running-during-fade variant). Called by the
+  // sm[0x4c] handlers and the transition drivers. Formerly ov_field_frame / ov_field_frame_x.
+  void fieldFrame();
+  void fieldFrameX();
+
   // ── ov_field_frame direct children (progressive class-ification) ──────────────────────────
   // areaModeDispatch: the 22-way area-mode jump-table dispatcher at guest 0x8001CAC0. Reads the
   //   area RENDER-MODE byte at 0x800BF870 and dispatches to the overlay handler that owns that

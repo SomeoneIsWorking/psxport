@@ -386,7 +386,7 @@ void Engine::sceneRenderListBuilder() { Core* c = core;
 // (transitive jal scan, 1021 fns). The object-walk 0x8007a904 and display 0x80026c88 now run as the
 // NATIVE ov_objwalk / ov_disp_26c88 (direct C calls — the previously-orphan bodies wired into the live
 // field frame); the remaining callees stay rec_dispatch leaves until owned in turn.
-static void ov_field_frame(Core* c) {
+void Engine::fieldFrame() { Core* c = core;
   c->mem_w16(0x1f80017cu, (uint16_t)(c->mem_r16(0x1f80017cu) + 1));   // frame counter
   c->mem_w32(0x800bf878u, c->mem_r32(0x800bf878u) + 1);
   if (c->mem_r8(0x1f800136u) == 0) {            // not paused: full gameplay update
@@ -592,7 +592,7 @@ static void ov_field_run(Core* c) {
       c->mem_w16(c->mem_r32(0x1f800138u) + 0x4e, 1);
       /* fallthrough */
     case 1: {
-      ffspan_begin(); ov_field_frame(c); ffspan_end("fieldframe");   // native field per-frame update (0x80108b0c)
+      ffspan_begin(); c->engine.fieldFrame(); ffspan_end("fieldframe");   // native field per-frame update (0x80108b0c)
       sm = c->mem_r32(0x1f800138u);
       if (c->mem_r8(0x800bf80du) == 3) {        // (signed byte) special mode 3
         if (c->mem_r8(0x800bf80fu) == 0) {
@@ -620,7 +620,7 @@ static void ov_field_run(Core* c) {
     case 5:
       if (c->mem_r8(0x800bf870u) == 7) { d0(c, 0x801128bcu); d0(c, 0x800508a8u); }
       c->mem_w16(c->mem_r32(0x1f800138u) + 0x4e, 1);
-      ov_field_frame(c);
+      c->engine.fieldFrame();
       break;
     case 6: {
       if (c->mem_r32(0x800e7feeu) != 0) { c->mem_w8(0x800bf880u, 1); c->mem_w32(0x1f800194u, c->mem_r32(0x800e7feeu)); }
@@ -659,7 +659,7 @@ static void ov_field_run(Core* c) {
       c->mem_w16(sm + 0x4a, 1); c->mem_w16(sm + 0x4c, 2); c->mem_w16(sm + 0x4e, 6);   // LAB_80106fac
       break;
     case 9:
-      ov_field_frame(c);
+      c->engine.fieldFrame();
       sm = c->mem_r32(0x1f800138u);
       if (c->mem_r8(0x800bf89cu) == 2 && (c->mem_r32(0x800e7e68u) & 8) != 0) {
         c->mem_w16(sm + 0x4e, (uint16_t)(c->mem_r16(sm + 0x4e) + 1));
@@ -668,7 +668,7 @@ static void ov_field_run(Core* c) {
       }
       break;
     case 10: {
-      ov_field_frame(c);
+      c->engine.fieldFrame();
       sm = c->mem_r32(0x1f800138u);
       uint32_t u = ((uint32_t)c->mem_r8(sm + 0x6e) * (uint32_t)-8) & 0xff;
       c->screenFade.applyLeafCall((u << 16) | (u << 8) | u, 0);   // = guest FUN_8007e9c8(color, 0, 4): area-transition subtractive fade-out ramp
@@ -695,7 +695,7 @@ static void ov_field_run(Core* c) {
 // Owned so the transition path is native+traceable (the door freeze lives below here): the heavy
 // callees stay rec_dispatch leaves to descend into next — esp. 0x8007b04c (the per-object update that
 // must, but currently does not, tick the screen-transition sequencer FUN_80026ad0 to completion).
-static void ov_field_frame_x(Core* c) {
+void Engine::fieldFrameX() { Core* c = core;
   c->mem_w16(0x1f80017cu, (uint16_t)(c->mem_r16(0x1f80017cu) + 1));   // frame counter
   c->mem_w32(0x800bf878u, c->mem_r32(0x800bf878u) + 1);
   if (c->mem_r8(0x1f800136u) == 0) {            // not paused: reduced gameplay update
@@ -923,7 +923,7 @@ static void ov_field_run_x(Core* c) {
     d3(c, 0x8005082cu, 0, 0, 0);                 // input reset
     // fall through to state 1
   }
-  ov_field_frame_x(c);                           // 0x80108be4 per-frame (state 1, 0x80107118)
+  c->engine.fieldFrameX();                           // 0x80108be4 per-frame (state 1, 0x80107118)
   if (c->mem_r8(0x800bf80du) == 3) {             // mode-3 exit (0x80107138)
     if (c->mem_r8(0x800bf80fu) != 0) return;
     d0(c, 0x80074bc4u);
