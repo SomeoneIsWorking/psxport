@@ -15,6 +15,8 @@
 #include "dualview_snapshot.h"
 #include "render_stats.h"
 #include "proj_prim.h"
+#include "pgxp.h"
+#include "proj_params.h"
 class Core;
 
 class Render {
@@ -28,6 +30,8 @@ public:
   DualviewSnapshot  dualviewSnapshot;  // dual-view render harness's per-Core RAM+scratchpad+GTE snapshots
   RenderStats       stats;             // per-frame render diag counters (ndepth / obj-depth / projprim)
   ProjPrim          projprim;          // vertex-depth cache for native depth path (per-Core; SBS-safe)
+  Pgxp              pgxp;               // PGXP-lite subpixel cache (per-Core; PGXP_pushSXYZ2f target)
+  ProjParams        projParams;         // camview + per-frame projection constants (per-Core)
   NodeXform         mNodeXform;        // scene-node WORLD-TRANSFORM builder (guest FUN_80051844)
 
   // ---- per-frame render orchestrators (called by Engine::fieldFrame/X) ----

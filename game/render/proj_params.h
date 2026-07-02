@@ -1,0 +1,57 @@
+// class ProjParams — per-Core camera view + projection constants used by the native depth path.
+//
+// Two clusters of state:
+//   (1) camview — the MAIN scene camera view matrix, PUBLISHED once per frame by native_terrain at
+//       terrain-draw time (when the scratchpad holds the real scene camera, before the per-object
+//       compose overwrites it). Read by object-position → view-Z / screen projections for stable
+//       billboard depth + the objid debug overlay's world→screen for 2D bounding boxes.
+//   (2) proj_H / proj_cx / proj_cy — per-frame projection constants captured inside proj_native_xform
+//       from the GTE control regs (CR24 OFX, CR25 OFY, CR26 H). Read by SSAO / lighting / depth
+//       normalization (proj_pz_to_ord, proj_near_pz, proj_plane_h, proj_screen_center).
+//
+// PROPER OOP: one instance per Core, embedded on Render (`c->mRender->projParams`) — was a cluster of
+// file-scope statics in gte_beetle.cpp (s_camR/T/H/OFX/OFY + s_proj_H/cx/cy). SBS's two cores need
+// SEPARATE state so their published camera + per-frame projection constants don't clobber each other.
+#pragma once
+#include <cstdint>
+class Core;
+
+class ProjParams {
+public:
+  void bind(Core* c);                              // set the currently-bound ProjParams to this
+  static ProjParams* current() { return sCurrent; }
+
+  // -- camview (main scene camera view matrix) --------------------------------
+  void  publishCam(const float R[3][3], const float T[3], float H, float OFX, float OFY);
+  bool  camValid() const { return mCamValid; }
+  float camWorldOrd(float wx, float wy, float wz) const;
+  bool  camWorldScreen(float wx, float wy, float wz, float* sx, float* sy) const;
+
+  // -- projection constants (per-frame; captured inside proj_native_xform) -----
+  void     setProjH(uint16_t H)                { mProjH = H; }
+  void     setProjCenter(float cx, float cy)   { mProjCx = cx; mProjCy = cy; }
+  uint16_t projH()      const                  { return mProjH; }
+  float    projCx()     const                  { return mProjCx; }
+  float    projCy()     const                  { return mProjCy; }
+  // Near-plane view-Z used by proj_pz_to_ord (= H/2, clamped >=1). SSAO needs it to invert the banded
+  // depth back to a linear view-space Z (1/pz is affine in the stored depth).
+  float    projNearPz() const                  { float n = mProjH ? (float)mProjH * 0.5f : 1.0f; return n < 1.0f ? 1.0f : n; }
+  float    projPlaneH() const                  { return mProjH ? (float)mProjH : 1.0f; }
+  void     projScreenCenter(float* cx, float* cy) const { if (cx) *cx = mProjCx; if (cy) *cy = mProjCy; }
+
+private:
+  static ProjParams* sCurrent;
+
+  // camview state
+  float mCamR[3][3] = {{1,0,0},{0,1,0},{0,0,1}};
+  float mCamT[3]    = {0, 0, 0};
+  float mCamH       = 0.0f;
+  float mCamOFX     = 0.0f;
+  float mCamOFY     = 0.0f;
+  bool  mCamValid   = false;
+
+  // projection constants (per-frame)
+  uint16_t mProjH  = 0;
+  float    mProjCx = 160.0f;
+  float    mProjCy = 120.0f;
+};

@@ -7,6 +7,9 @@
 #include "core.h"
 #include "game.h"   // Core::game->gte (per-instance GTE register file) for gte_bind
 #include "cfg.h"
+#include "render/render.h"       // Render::pgxp / projParams — per-Core class instances
+#include "render/pgxp.h"          // class Pgxp — subpixel-cache currently-bound accessor
+#include "render/proj_params.h"   // class ProjParams — camview + per-frame projection constants
 #include <stdint.h>
 #include <stdbool.h>
 
@@ -38,68 +41,8 @@ uint32_t gMode = 0;                             // PGXP mode 0 = off
 // back to the integer coords (a miss), so a wrong match can only ever cost smoothing, not correctness.
 // The cache is reset each presented frame (pgxp_frame_reset) so a stale precise value from a prior
 // frame can't be re-applied to a freshly-placed integer vertex (kills cross-frame wobble artifacts).
-#define PGXP_BITS 15
-#define PGXP_SIZE (1 << PGXP_BITS)
-#define PGXP_MASK (PGXP_SIZE - 1)
-// vx/vy/vz = the GTE's view-space vertex (IR1/IR2/IR3 = rotation*vertex + translation), captured at
-// projection time. The renderer reconstructs per-face normals from these (cross product) for native
-// lighting — Tomba2 has no GTE lighting of its own (later-96), so this is the only normal source.
-typedef struct { uint32_t key; float x, y, z; float vx, vy, vz; uint8_t valid; } PgxpEnt;
-static PgxpEnt s_pgxp[PGXP_SIZE];
-
-static inline uint32_t pgxp_key(int sx, int sy) {
-  // canonical 22-bit key = 11-bit signed sx | sy, matching the GP0 vertex word's usable range
-  return ((uint32_t)(sy & 0x7FF) << 11) | (uint32_t)(sx & 0x7FF);
-}
-static inline uint32_t pgxp_slot(uint32_t key) {
-  uint32_t h = key * 2654435761u;        // Knuth multiplicative hash
-  return (h >> (32 - PGXP_BITS)) & PGXP_MASK;
-}
-
-extern "C" void PGXP_pushSXYZ2f(float x, float y, float z, uint32_t v) {
-  int sx = (int16_t)(v & 0xFFFF), sy = (int16_t)(v >> 16);
-  uint32_t key = pgxp_key(sx, sy);
-  PgxpEnt* e = &s_pgxp[pgxp_slot(key)];
-  e->key = key; e->x = x; e->y = y; e->z = z;
-  // IR1/IR2/IR3 (data regs 9/10/11) still hold this vertex in view space at push time (TransformXY
-  // doesn't touch them) — capture for renderer-side normal reconstruction.
-  e->vx = (float)(int16_t)GTE_ReadDR(9);
-  e->vy = (float)(int16_t)GTE_ReadDR(10);
-  e->vz = (float)(int16_t)GTE_ReadDR(11);
-  e->valid = 1;
-}
-
-// Renderer hook: fetch the subpixel coords for an integer vertex (sx,sy). Returns 1 on a cache hit.
-int pgxp_lookup(int sx, int sy, float* px, float* py, float* pz) {
-  uint32_t key = pgxp_key(sx, sy);
-  PgxpEnt* e = &s_pgxp[pgxp_slot(key)];
-  if (e->valid && e->key == key) {
-    if (px) *px = e->x; if (py) *py = e->y; if (pz) *pz = e->z;
-    return 1;
-  }
-  return 0;
-}
-
-// Renderer hook: fetch the view-space vertex (for native lighting). Returns 1 on a cache hit.
-int pgxp_lookup_view(int sx, int sy, float* vx, float* vy, float* vz) {
-  uint32_t key = pgxp_key(sx, sy);
-  PgxpEnt* e = &s_pgxp[pgxp_slot(key)];
-  if (e->valid && e->key == key) {
-    if (vx) *vx = e->vx; if (vy) *vy = e->vy; if (vz) *vz = e->vz;
-    return 1;
-  }
-  return 0;
-}
-
-void pgxp_frame_reset(void) {
-  for (uint32_t i = 0; i < PGXP_SIZE; i++) s_pgxp[i].valid = 0;
-}
-
-extern "C" int   PGXP_NCLIP_valid(uint32_t a, uint32_t b, uint32_t c)   { (void)a;(void)b;(void)c; return 0; }
-extern "C" float PGXP_NCLIP(void)                                        { return 0.0f; }
-extern "C" int   MDFNSS_StateAction(void* st, int load, int data_only, void* sf, const char* name) {
-  (void)st; (void)load; (void)data_only; (void)sf; (void)name; return 1;  // savestate unused
-}
+// PGXP-lite subpixel cache moved to `class Pgxp` on Render (game/render/pgxp.h). The `PGXP_pushSXYZ2f`
+// Beetle callback + the `PGXP_NCLIP*` / `MDFNSS_StateAction` vestigial stubs live in pgxp.cpp now.
 
 // Recomp GTE interface (r3000.h) -> Beetle GTE. mfc2/cfc2/mtc2/ctc2/lwc2/swc2 map to the
 // data/control register ports; the COP2 ops map to GTE_Instruction.
@@ -190,8 +133,9 @@ typedef struct { int ir1, ir2, ir3, sz, sx, sy; float px, py, pz, vx, vy, vz; in
 
 static uint8_t  s_divtab[0x101];
 static int      s_divtab_init = 0;
-static uint16_t s_proj_H = 0;          // last projection-plane H (CR26); used by proj_pz_to_ord
-static float    s_proj_cx = 160.0f, s_proj_cy = 120.0f;   // screen projection center (OFX/OFY >> 16); for PSXPORT_LIGHT normal reconstruction
+// per-frame projection constants moved to `class ProjParams` on Render (per-Core, SBS-safe) —
+// reach via `c->mRender->projParams.projH()` etc. Callers below without a Core* in scope go through
+// `ProjParams::current()` — the currently-bound instance, set by `bind()` at native_step_frame.
 
 // Phase 2: map a native view-space depth `pz` (= max(H/2, sz), so pz in [H/2, 65535]) into a
 // normalized [0,1] depth value for the renderer's D32 buffer. The value is AFFINE in 1/pz, so it
@@ -199,8 +143,8 @@ static float    s_proj_cx = 160.0f, s_proj_cy = 120.0f;   // screen projection c
 // divide on z); nearer (smaller pz) -> larger value, matching the renderer's GREATER_OR_EQUAL compare
 // + 0.0 clear (nearer wins). Not OT submission order: this is true per-vertex perspective depth.
 float proj_pz_to_ord(float pz) {
-  float nearp = (s_proj_H ? (float)s_proj_H * 0.5f : 1.0f);  // near plane = H/2 (the proj pz clamp floor)
-  if (nearp < 1.0f) nearp = 1.0f;
+  auto* pp = ProjParams::current();
+  float nearp = pp ? pp->projNearPz() : 1.0f;      // near plane = H/2 (the proj pz clamp floor)
   if (pz < nearp) pz = nearp;
   float inv_near = 1.0f / nearp, inv_far = 1.0f / 65535.0f;
   float ord = (1.0f / pz - inv_far) / (inv_near - inv_far);
@@ -271,7 +215,7 @@ void proj_native_xform(int vx, int vy, int vz, ProjVtx* out) {
   out->vx  = (float)out->ir1; out->vy = (float)out->ir2; out->vz = (float)out->ir3;
   const int32_t OFX = (int32_t)gte_read_ctrl(24), OFY = (int32_t)gte_read_ctrl(25);
   const uint16_t H = (uint16_t)gte_read_ctrl(26);
-  s_proj_H = H;
+  if (auto* pp = ProjParams::current()) pp->setProjH(H);
   int64_t h_div_sz = proj_divide(H, (uint32_t)out->sz);
   out->sx = proj_clampi((int32_t)(((int64_t)OFX + out->ir1 * h_div_sz) >> 16), -1024, 1023);
   out->sy = proj_clampi((int32_t)(((int64_t)OFY + out->ir2 * h_div_sz) >> 16), -1024, 1023);
@@ -283,7 +227,7 @@ void proj_native_xform(int vx, int vy, int vz, ProjVtx* out) {
   float pz = (float)H * 0.5f; if (pzf > pz) pz = pzf;
   float ph = (float)H / pz;
   float fofx = (float)OFX / 65536.0f, fofy = (float)OFY / 65536.0f;
-  s_proj_cx = fofx; s_proj_cy = fofy;
+  if (auto* pp = ProjParams::current()) pp->setProjCenter(fofx, fofy);
   out->px = fofx + (float)out->ir1 * ph;
   out->py = fofy + (float)out->ir2 * ph;
   if (out->px < -1024.f) out->px = -1024.f; if (out->px > 1023.f) out->px = 1023.f;
@@ -302,41 +246,19 @@ float proj_obj_center_ord(void) { ProjVtx p; proj_native_xform(0, 0, 0, &p); ret
 // scratchpad holds the real scene camera, before the per-object compose overwrites it). Used to project an
 // object's WORLD POSITION to a STABLE view-Z (deterministic, render-order-independent), so a 2D billboard
 // occludes by where the object really is — consistent with the terrain it stands on. PC-owned, not PSX OT.
-static float s_camR[3][3] = {{1,0,0},{0,1,0},{0,0,1}}; static float s_camT[3] = {0,0,0};
-static int   s_camR_valid = 0;
-static float s_camH = 0, s_camOFX = 0, s_camOFY = 0;   // projection constants captured WITH the camera
+// camview + world→screen projection moved to `class ProjParams` on Render (per-Core). Thin free-function
+// shims below route callers with no Core* in scope through `ProjParams::current()`.
 void camview_publish(const float R[3][3], const float T[3]) {
-  for (int i = 0; i < 3; i++) { for (int j = 0; j < 3; j++) s_camR[i][j] = R[i][j]; s_camT[i] = T[i]; }
-  // Capture the projection constants live at terrain-draw time (CR24/25/26) so a world->screen projection
-  // uses the SAME OFX/OFY/H the per-vertex renderer used this frame (they are frame-constant; the per-object
-  // compose only touches CR0-7). Matches proj_native_xform's float screen path.
-  s_camH   = (float)(uint16_t)gte_read_ctrl(26);
-  s_camOFX = (float)(int32_t)gte_read_ctrl(24) / 65536.0f;
-  s_camOFY = (float)(int32_t)gte_read_ctrl(25) / 65536.0f;
-  s_camR_valid = 1;
+  auto* pp = ProjParams::current(); if (!pp) return;
+  float H   = (float)(uint16_t)gte_read_ctrl(26);
+  float OFX = (float)(int32_t)gte_read_ctrl(24) / 65536.0f;
+  float OFY = (float)(int32_t)gte_read_ctrl(25) / 65536.0f;
+  pp->publishCam(R, T, H, OFX, OFY);
 }
-int  camview_valid(void) { return s_camR_valid; }
-// Project a WORLD-space point (object position) to the normalized depth ord via the published camera. Only
-// the view-Z row (R[2]·P + T[2]) is needed for depth.
-float proj_camview_world_ord(float wx, float wy, float wz) {
-  float vz = s_camR[2][0]*wx + s_camR[2][1]*wy + s_camR[2][2]*wz + s_camT[2];
-  return proj_pz_to_ord(vz);
-}
-// Project a WORLD-space point to SCREEN pixel coords via the published stable scene camera. Returns 1 +
-// fills *sx,*sy when the point is in front of the camera; 0 if behind/at the camera plane. Same projection
-// as proj_native_xform's float path: sx = OFX/65536 + vx*(H/pz), pz = max(H/2, view-Z). Used by the objid
-// debug overlay to box each game object at its real world position (engine/render_queue.cpp).
-int proj_camview_world_screen(float wx, float wy, float wz, float* sx, float* sy) {
-  if (!s_camR_valid || s_camH <= 0.0f) return 0;
-  float vx = s_camR[0][0]*wx + s_camR[0][1]*wy + s_camR[0][2]*wz + s_camT[0];
-  float vy = s_camR[1][0]*wx + s_camR[1][1]*wy + s_camR[1][2]*wz + s_camT[1];
-  float vz = s_camR[2][0]*wx + s_camR[2][1]*wy + s_camR[2][2]*wz + s_camT[2];
-  if (vz <= 0.0f) return 0;                            // behind the camera -> not visible
-  float pz = s_camH * 0.5f; if (vz > pz) pz = vz;      // near-plane clamp (matches proj_native_xform)
-  float ph = s_camH / pz;
-  *sx = s_camOFX + vx * ph;
-  *sy = s_camOFY + vy * ph;
-  return 1;
+int camview_valid(void)                                          { auto* pp = ProjParams::current(); return pp && pp->camValid() ? 1 : 0; }
+float proj_camview_world_ord(float wx, float wy, float wz)       { auto* pp = ProjParams::current(); return pp ? pp->camWorldOrd(wx, wy, wz) : 0.0f; }
+int   proj_camview_world_screen(float wx, float wy, float wz, float* sx, float* sy) {
+  auto* pp = ProjParams::current(); return pp && pp->camWorldScreen(wx, wy, wz, sx, sy) ? 1 : 0;
 }
 
 // fps60 midpoint reprojection (engine/fps60.cpp): project up to 4 MODEL verts through an EXPLICIT composed
@@ -396,7 +318,7 @@ static void proj_native_vertex(unsigned vidx, uint32_t insn, ProjVtx* out) {
 
   const int32_t OFX = (int32_t)gte_read_ctrl(24), OFY = (int32_t)gte_read_ctrl(25);
   const uint16_t H = (uint16_t)gte_read_ctrl(26);
-  s_proj_H = H;                                             // remember the projection plane for depth-normalize
+  if (auto* pp = ProjParams::current()) pp->setProjH(H); // remember the projection plane for depth-normalize
   int64_t h_div_sz = proj_divide(H, (uint32_t)out->sz);    // integer UNR division (matches gameplay)
   out->sx = proj_clampi((int32_t)(((int64_t)OFX + out->ir1 * h_div_sz) >> 16), -1024, 1023);  // Lm_G
   out->sy = proj_clampi((int32_t)(((int64_t)OFY + out->ir2 * h_div_sz) >> 16), -1024, 1023);
@@ -409,7 +331,7 @@ static void proj_native_vertex(unsigned vidx, uint32_t insn, ProjVtx* out) {
   float pz = (float)H * 0.5f; if (pzf > pz) pz = pzf;
   float ph = (float)H / pz;
   float fofx = (float)OFX / 65536.0f, fofy = (float)OFY / 65536.0f;
-  s_proj_cx = fofx; s_proj_cy = fofy;                      // remember the projection center for PSXPORT_LIGHT
+  if (auto* pp = ProjParams::current()) pp->setProjCenter(fofx, fofy);
   out->px = fofx + (float)out->ir1 * ph;
   out->py = fofy + (float)out->ir2 * ph;
   if (out->px < -1024.f) out->px = -1024.f; if (out->px > 1023.f) out->px = 1023.f;
@@ -482,15 +404,11 @@ void rtpcaller_reset(void) { for (int i = 0; i < 64; i++) { s_rtpcaller[i].ra = 
 int native_depth_on(void) { return 1; }
 // The native-depth path gates the engine's depth recording + the per-frame reset. Always active.
 int attach_enabled(void) { return 1; }
-// engine_submit sets the projection-plane H (read from CR26) so proj_pz_to_ord normalizes depth correctly.
-void proj_set_H(uint16_t h) { s_proj_H = h; }
-// Near-plane view-Z used by proj_pz_to_ord (= H/2, clamped >=1). SSAO needs it to invert the banded
-// depth back to a linear view-space Z (1/pz is affine in the stored depth — see proj_pz_to_ord).
-float proj_near_pz(void) { float n = s_proj_H ? (float)s_proj_H * 0.5f : 1.0f; return n < 1.0f ? 1.0f : n; }
-// Projection plane distance H (CR26) and screen center (OFX/OFY) — PSXPORT_LIGHT reconstructs view-space
-// position from a depth pixel as P = ((sx-cx)*pz/H, (sy-cy)*pz/H, pz), then the surface normal from it.
-float proj_plane_h(void) { return s_proj_H ? (float)s_proj_H : 1.0f; }
-void  proj_screen_center(float* cx, float* cy) { if (cx) *cx = s_proj_cx; if (cy) *cy = s_proj_cy; }
+// Projection-plane setters/getters route through `class ProjParams` on Render (per-Core, SBS-safe).
+void  proj_set_H(uint16_t h)                              { if (auto* pp = ProjParams::current()) pp->setProjH(h); }
+float proj_near_pz(void)                                  { auto* pp = ProjParams::current(); return pp ? pp->projNearPz() : 1.0f; }
+float proj_plane_h(void)                                  { auto* pp = ProjParams::current(); return pp ? pp->projPlaneH() : 1.0f; }
+void  proj_screen_center(float* cx, float* cy)            { auto* pp = ProjParams::current(); if (pp) pp->projScreenCenter(cx, cy); else { if (cx) *cx = 160.0f; if (cy) *cy = 120.0f; } }
 
 // The GTE coprocessor is RETAINED for now ONLY as the PSX-content math service (collision/physics still
 // run as recompiled PSX and call gte_op). The GTE/Beetle dependency goes away by PORTING ITS CALLERS to
@@ -543,7 +461,14 @@ void     gte_op(Core* c, uint32_t insn)         { GTE_Instruction(insn);
                                                    } }
 // Bind the GTE math to THIS core's register file (game.h GteRegs) so two cores keep separate GTE state.
 // Called per core frame-step (native_step_frame) + at boot, from the explicit Core — no shared regs.
-void     gte_bind(Core* c)                       { GTE_BindState(&c->game->gte); }
+void     gte_bind(Core* c)                       {
+  GTE_BindState(&c->game->gte);
+  // Also bind THIS core's per-Core PGXP cache + projection-constant/camview state (both were file-scope
+  // process-wide before deglobalize-2026-07-03 → SBS's two cores would clobber each other's per-frame
+  // subpixel cache and projection center).
+  c->mRender->pgxp.bind(c);
+  c->mRender->projParams.bind(c);
+}
 void     gte_init(void)                          { GTE_Init(); GTE_Power();
   // PSXPORT_WIDE is PC-native widescreen now: the GTE keeps its NATIVE projection (NO squish) and the
   // renderer (gpu_gpu) re-centers the geometry into a wider scratch framebuffer at a true wider FOV.

@@ -179,6 +179,8 @@ set(PORT_SRC
   game/render/engine_submit.cpp
   game/render/node_xform.cpp
   game/render/proj_prim.cpp
+  game/render/pgxp.cpp
+  game/render/proj_params.cpp
   game/render/engine_project.cpp
   game/render/engine_render.cpp
   game/render/engine_render_walk.cpp
