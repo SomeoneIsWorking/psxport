@@ -34,7 +34,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "spawn.h"   // world_despawn
-#include "animation.h" // ov_anim_vm_76d68 (FUN_80076D68)
+#include "animation.h" // Animation::step (FUN_80076D68)
 #include "rng.h"       // class Rng (via c->rng.next())
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
@@ -264,7 +264,7 @@ second_cull:;
       c->mem_w16(s4 + 8, 0);                            // sh zero,8(s1)=node[0x68]     [0x801455C4]
     }
     // ---- render + flag fold [0x801455C8..0x80145608] ----
-    c->r[4] = obj; ov_anim_vm_76d68(c);                 // FUN_80076D68 (native)       [0x801455C8]
+    c->engine.animation.step(obj);                       // FUN_80076D68 (native)       [0x801455C8]
     c->r[4] = obj; rec_dispatch(c, 0x800518FCu);        // FUN_800518fc (render)       [0x801455D0]
     if (c->mem_r8(obj + 0x29) != 0) {                   // lbu node[0x29]; beqz -> 0x801455fc [0x801455E0]
       c->mem_w8(obj + 0xb, (uint8_t)((c->mem_r8(obj + 0xb) & 0xc0) | 0x80));  // node[0xb]&0xc0|0x80 [0x801455E8..F8]

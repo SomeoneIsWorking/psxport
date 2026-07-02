@@ -158,7 +158,9 @@ static void anim_vm_76d68(Core* c) {
   }
 }
 
-void ov_anim_vm_76d68(Core* c) {
+void Animation::step(uint32_t node) {
+  Core* c = this->core;
+  c->r[4] = node;                            // taxi-in for the still-taxi internal impl
   // Lazy gate (re-check each call): this fn can run before the REPL `debug animvm` is processed.
   if (!cfg_dbg("animvm")) { anim_vm_76d68(c); return; }
   static uint8_t* ram0 = (uint8_t*)malloc(0x200000);
