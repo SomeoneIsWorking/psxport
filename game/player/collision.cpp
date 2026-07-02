@@ -205,9 +205,9 @@ void ov_grid_query_47cbc(Core* c) {
 static uint32_t grid_resolve_498c8(Core* c) {
   const uint32_t obj = c->r[4];
   for (;;) {
-    c->r[4] = obj; rec_dispatch(c, 0x8004798Cu);                 // setup (dispatched)
-    c->r[4] = (uint32_t)c->mem_r8(0x1F8001FEu); rec_dispatch(c, 0x80049968u);  // row-ptr setup (owned)
-    rec_dispatch(c, 0x80047CBCu);                                // cell query (owned)
+    c->r[4] = obj; ov_grid_step_4798c(c);                        // per-step grid-origin/index setup — native
+    c->r[4] = (uint32_t)c->mem_r8(0x1F8001FEu); ov_grid_setup_49968(c);  // row-ptr setup — native
+    ov_grid_query_47cbc(c);                                      // cell query — native
     if (c->r[2] == 0) return 0;
     uint32_t v1 = c->mem_r32(0x1F8001E0u);
     if ((c->mem_r16(v1) & 0x4000u) == 0) return 1;
