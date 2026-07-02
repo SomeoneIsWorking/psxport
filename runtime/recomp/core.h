@@ -20,6 +20,7 @@
 #include "math/rng.h"                         // Core owns an Rng instance (PSX libc rand LCG)
 #include "math/trig.h"                        // Core owns a Trig instance (libgte sin/cos/atan2)
 #include "math/engine_math.h"                 // Core owns a Math instance (GTE matrix cluster)
+#include "math/mtx.h"                         // Core owns a Mtx instance (libgte matrix leaves)
 #include "items/inventory.h"                  // Core owns an Inventory instance
 
 #ifdef __cplusplus
@@ -44,6 +45,7 @@ public:
   Rng        rng;
   Trig       trig;
   Math       math;
+  Mtx        mtx;
   Inventory  inventory;
   Render*    mRender = nullptr;   // render subsystem umbrella (owned; ctor/dtor in core.cpp)
 

@@ -999,7 +999,7 @@ static void orch597AC_body(Core* c) {
   if ((c->mem_r16(node + 0x17E) & 0x20) && c->mem_r8(node + 0x179) != 0)
     c->mem_w8(node + 8, c->mem_r8(node + 9));
   // SetVector(0x1F800000, node->h[0xB8/BA/BC])
-  Mtx::diagonal(c, 0x1F800000u, (int32_t)R16(node+0xB8), (int32_t)R16(node+0xBA), (int32_t)R16(node+0xBC));   // was 0x800517BCu
+  c->mtx.diagonal(0x1F800000u, (int32_t)R16(node+0xB8), (int32_t)R16(node+0xBA), (int32_t)R16(node+0xBC));   // was 0x800517BCu
   // RotMatrix(angles=node->hu[0x54/56/58] → 0x1F8000C0, out 0x1F800040)
   c->mem_w16(0x1F8000C0u, (uint16_t)HU(node+0x54));
   c->mem_w16(0x1F8000C2u, (uint16_t)HU(node+0x56));
@@ -1044,7 +1044,7 @@ static void orch597AC_body(Core* c) {
       uint32_t child = c->mem_r32(node + 0xC0 + 4u*(uint32_t)i);
       int psel = (int)c->mem_r16s(child + 6);             // parent select (signed)
       // SetVector(0x1F800000, child->h[0x38/3A/3C]); RotMatrix(child+8 → 0x1F800020); mat 0x1F800040 = 0x1F800020 × 0x1F800000
-      Mtx::diagonal(c, 0x1F800000u, (int32_t)R16(child+0x38), (int32_t)R16(child+0x3A), (int32_t)R16(child+0x3C));   // was 0x800517BCu
+      c->mtx.diagonal(0x1F800000u, (int32_t)R16(child+0x38), (int32_t)R16(child+0x3A), (int32_t)R16(child+0x3C));   // was 0x800517BCu
       c->math.rotmat(child+8, 0x1F800020u);
       c->math.matMul(0x1F800020u, 0x1F800000u, 0x1F800040u);
       if (psel >= 0) {                                            // SIBLING-by-index: parent = node[0xC0 + 4*psel]

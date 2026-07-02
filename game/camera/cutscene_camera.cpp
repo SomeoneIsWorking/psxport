@@ -542,7 +542,7 @@ void CutsceneCamera::lookAt() {   // FUN_8006D02C
   camW32(0x60, (uint32_t)s19);
 
   if (s18 != 0) {
-    Mtx::identity(c, S + 40);
+    c->mtx.identity(S + 40);
     int32_t sinp = cam_idiv(c, dY  << 12, s18);
     int32_t cosp = cam_idiv(c, s19 << 12, s18);
     int32_t pitch = (int16_t)c->trig.ratan2(sinp, cosp);
@@ -557,7 +557,7 @@ void CutsceneCamera::lookAt() {   // FUN_8006D02C
       int32_t b = cam_idiv(c, dZ    << 12, s19);
       int32_t yaw = (int16_t)c->trig.ratan2(a, b);
       w16(S + 34, (uint16_t)yaw);
-      Mtx::identity(c, 0x1F800000u);
+      c->mtx.identity(0x1F800000u);
       w16(0x1F800000u, (uint16_t)b);
       w16(0x1F800004u, (uint16_t)a);
       w16(0x1F800010u, (uint16_t)b);

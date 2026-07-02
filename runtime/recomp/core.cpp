@@ -41,6 +41,7 @@ Core::Core() {
   rng.core        = this;
   trig.core       = this;
   math.core       = this;
+  mtx.core        = this;
   inventory.core  = this;
   // Render umbrella (owned by pointer): allocate, wire its back-pointer + each embedded sub-subsystem.
   mRender = new Render();
