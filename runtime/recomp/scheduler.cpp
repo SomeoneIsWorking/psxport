@@ -397,8 +397,7 @@ void native_scheduler_step(Core* c) {
       } else if (native_content && fresh && resume_pc == 0x8010649Cu) {
         // Stage-0 START.BIN entry: own the file-table builder native (disc_find_file), then continue
         // the PSX stage SM in-task. Same top-down direct-call pattern as the GAME stage above.
-        void ov_start_bin_stage(Core*);
-        ov_start_bin_stage(c);
+        c->engine.startBinStage();
         start = c->coro_redirect_pc ? c->coro_redirect_pc : c->r[31];
         c->coro_redirect_pc = 0;
       }

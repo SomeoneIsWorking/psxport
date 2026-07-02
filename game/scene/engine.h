@@ -104,6 +104,13 @@ public:
   // fieldRun's sm[0x4e]==0xb branch with node = 0x800E8008. Was ov_scene_fade_seq.
   void fadeSequencer(uint32_t node);
 
+  // startBinStage: task-0's START.BIN file-table builder (native ISO9660 resolver in place of the
+  // PSX cooperative loader FUN_80044BD4). Populates the per-stage LBA/size tables at
+  // 0x800BE118 (25 entries), 0x800BE1E0 (3 entries), 0x800BE0F0 (5 entries) + three XA scratchpad
+  // slots, then hands off to native_stage0_sm (the stage-0 preload SM). Called by the scheduler at
+  // task-0 boot (runtime/recomp/scheduler.cpp). Was ov_start_bin_stage.
+  void startBinStage();
+
   // ── ov_field_frame direct children (progressive class-ification) ──────────────────────────
   // areaModeDispatch: the 22-way area-mode jump-table dispatcher at guest 0x8001CAC0. Reads the
   //   area RENDER-MODE byte at 0x800BF870 and dispatches to the overlay handler that owns that

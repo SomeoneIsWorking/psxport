@@ -1472,7 +1472,7 @@ static void native_stage0_sm(Core* c) {
 //   3 inline singletons -> scratchpad LBA: \CD\VOICE.XA->0x1f80021c, DEMO.XA->0x1f800220, BGM.XA->0x1f800224
 // Then s2(reg18)=1 (the SM's "1" constant) and continue into the PSX state machine at 0x80106728,
 // whose FUN_80044bd4 cooperative loads run correctly in-task (via rec_coro_run).
-void ov_start_bin_stage(Core* c) {
+void Engine::startBinStage() { Core* c = core;
   struct { uint32_t names, dest, n; } loops[] = {
     { 0x80106808u, 0x800be118u, 25 },
     { 0x8010686cu, 0x800be1e0u, 3  },
