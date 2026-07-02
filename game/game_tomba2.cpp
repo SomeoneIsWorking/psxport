@@ -296,20 +296,11 @@ void games_tomba2_init(void) {
   // override below IS the behavior; the user verifies it via ./run.sh.
   // Hand-written native C++ for the boot→first-cutscene path (engine/native_path.cpp).
   // (games_native_path_init removed: native_misc.cpp was dead reference scaffolding — later-288)
-  // OVERRIDE SYSTEM REMOVED (2026-06-22): every rec_set_override(...) registration that used to live in
-  // this init was deleted. The ov_* native fns are KEPT (in native_path.cpp / engine_submit.cpp / etc.)
-  // as future DIRECT-CALL targets, wired top-down as each parent is owned. The *_register() helpers below
-  // are plain C calls into the subsystem init (now no-ops where their bodies only registered overrides),
-  // left in place so re-introducing direct wiring per subsystem is a one-line change.
-  { void engine_math_register(void);   engine_math_register();   }
-  { void save_register(void);          save_register();          }
-  { void sound_register(void);         sound_register();         }
-  { void hud_register(void);           hud_register();           }
-  { void engine_submit_register_autodetect(void); engine_submit_register_autodetect(); }
-  { void actor_sm_24448_register(void); actor_sm_24448_register(); }
-  { void beh_scene_ui_trigger_register(void);  beh_scene_ui_trigger_register();  }
-  { void beh_typed_init_scene_trigger_register(void);  beh_typed_init_scene_trigger_register();  }
-  { void beh_pickup_collect_trigger_register(void);  beh_pickup_collect_trigger_register();  }
+  // OVERRIDE SYSTEM REMOVED (2026-06-22): the whole `_register()` scaffolding block used to install
+  // rec_set_override() entries. The override table is gone; the per-subsystem register functions
+  // (engine_math_register, save_register, sound_register, hud_register, actor_sm_24448_register, and
+  // the beh_*_register siblings) were left as empty stubs "in case." Every stub had a zero- or single-
+  // dead-line body — dead scaffolding — and got deleted. Direct-call wiring is the shape now.
   fps60_init();
   void engine_tomba2_init(void);
   engine_tomba2_init();                            // native engine layer (Phase 1: object-list walk)

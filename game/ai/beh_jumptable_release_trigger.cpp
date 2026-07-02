@@ -333,9 +333,6 @@ void ov_beh_jumptable_release_trigger(Core* c) {
 
 }  // namespace
 
-void beh_jumptable_release_trigger_register(void) {
-}
-
 // Exported entry — the verify wrapper ov_beh_jumptable_release_trigger is in the anonymous namespace above (internal linkage);
 // the engine's per-object dispatch calls THIS to run the owned behavior.
 void ov_beh_jumptable_release_trigger_run(Core* c) { ov_beh_jumptable_release_trigger(c); }

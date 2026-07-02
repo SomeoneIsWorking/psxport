@@ -265,9 +265,6 @@ void ov_beh_jumptable_flag_gate(Core* c) {
 
 }  // namespace
 
-void beh_jumptable_flag_gate_register(void) {
-}
-
 // Exported entry — the verify wrapper ov_beh_jumptable_flag_gate is in the anonymous namespace above (internal linkage);
 // the engine's per-object dispatch calls THIS to run the owned behavior.
 void ov_beh_jumptable_flag_gate_run(Core* c) { ov_beh_jumptable_flag_gate(c); }

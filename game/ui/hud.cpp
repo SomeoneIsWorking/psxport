@@ -378,10 +378,3 @@ void probe_nine(Core* c) {
 
 }  // namespace
 
-void hud_register(void) {
-  // PC-native text glyph drawer (own FUN_80078CA8; draws font quads on the engine 2D overlay) — THE behavior.
-  // Box / 9-slice frame: not yet owned. Registered as pure super-call (behavior-identical to the recomp
-  // body) plus the `bannerprobe` diagnostic log, so the next session can RE them on the live banner scene.
-  // In-game MENU label visibility (GitHub #26): the text wrappers set a visible colour template for
-  // menu-cluster callers, then super-call the body. See the RE comment above ov_text_wrapper.
-}

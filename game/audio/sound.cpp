@@ -307,5 +307,3 @@ void sound_stop_bgm(Core* c)                        { ov_sound_stop_bgm(c); }
 void sound_play_sfx(Core* c, int id, int a1, int a2){ c->r[4]=(uint32_t)id; c->r[5]=(uint32_t)a1; c->r[6]=(uint32_t)a2; play_sfx_body(c); }
 
 // ONE line added to game_tomba2.cpp init: sound_register();
-void sound_register(void) {
-}

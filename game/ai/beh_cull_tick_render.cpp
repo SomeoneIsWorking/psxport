@@ -107,9 +107,6 @@ void ov_beh_cull_tick_render(Core* c) {
 
 }  // namespace
 
-void beh_cull_tick_render_register(void) {
-}
-
 // Exported entry — the verify wrapper ov_beh_cull_tick_render is in the anonymous namespace above (internal
 // linkage); the engine's per-object dispatch calls THIS to run the owned behavior.
 void ov_beh_cull_tick_render_run(Core* c) { ov_beh_cull_tick_render(c); }

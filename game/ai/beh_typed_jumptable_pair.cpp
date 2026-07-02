@@ -362,9 +362,6 @@ void ov_beh_typed_jumptable_pair(Core* c) {
 
 }  // namespace
 
-void beh_typed_jumptable_pair_register(void) {
-}
-
 // Exported entry — the verify wrapper ov_beh_typed_jumptable_pair is in the anonymous namespace above (internal
 // linkage); the engine's per-object dispatch calls THIS to run the owned behavior.
 void ov_beh_typed_jumptable_pair_run(Core* c) { ov_beh_typed_jumptable_pair(c); }

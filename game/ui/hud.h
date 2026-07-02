@@ -1,7 +1,6 @@
 // engine/hud.h — PC-native in-game HUD drawer (engine/hud.cpp).
-// Registers native overrides for the HUD sprite-strip / rect draw helpers so the in-game HUD (the
-// spiky-ball weapon indicator, AP/heart gauge cells, UI panel slices) is drawn by the PC renderer's
-// 2D overlay layer instead of the PSX GP0 packet emitter. Call once from the game init.
+// Post-override-removal (2026-06-22) this header is a placeholder — the HUD draw entry points in
+// hud.cpp are all file-local (anonymous namespace) and unreached, awaiting direct-call wiring from
+// a native parent. Kept so #include "hud.h" stays a valid marker in files that intend to use the
+// HUD subsystem later.
 #pragma once
-
-void hud_register(void);

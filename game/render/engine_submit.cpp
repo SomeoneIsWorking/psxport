@@ -1449,11 +1449,3 @@ void ov_tilescan(Core* c) {
   for (int i = 0; i < 254; i++) c->mem_w16(obj + 16 + 2u * i, list_n[i]);
 }
 
-// OVERRIDE SYSTEM REMOVED (2026-06-22): the overlay-load scan existed only to register AUTO overrides
-// (rec_set_interp_override_auto) on freshly-loaded overlay library fns (tile-lookup, tile-scan gatherer,
-// background tilemap, GT3/GT4 callers/submitters) plus the GAME/DEMO state-machine entries. With the
-// override table gone, there is nothing to register; native ownership is wired by PC calling the native
-// fn directly (top-down). The classify_*/ov_* defs above are kept as future direct-call targets.
-void engine_submit_register_autodetect(void) {
-  // No-op: no overlay-load hook to install (override table removed).
-}

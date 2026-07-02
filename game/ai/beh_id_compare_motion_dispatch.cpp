@@ -306,9 +306,6 @@ void ov_beh_id_compare_motion_dispatch(Core* c) {
 
 }  // namespace
 
-void beh_id_compare_motion_dispatch_register(void) {
-}
-
 // Exported entry — the verify wrapper ov_beh_id_compare_motion_dispatch is in the anonymous namespace above (internal
 // linkage); the engine's per-object dispatch calls THIS to run the owned behavior.
 void ov_beh_id_compare_motion_dispatch_run(Core* c) { ov_beh_id_compare_motion_dispatch(c); }

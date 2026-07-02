@@ -540,10 +540,3 @@ static void ov_settrans_verify(Core* c) {
   memcpy(c->r, rsave, sizeof rsave); for (int i=0;i<8;i++) c->mem_w32(a0+i*4, om[i]);
 }
 
-void engine_math_register(void) {
-  // Verified bit-exact: 65000+ live field calls 0-diff vs the recomp reference (later-186). ov_isqrt is
-  // the live path; ov_isqrt_verify is reachable as the per-call gate when the `mathverify` channel is set
-  // before override install (same convention as camverify).
-  int v = cfg_dbg("mathverify");
-}
-

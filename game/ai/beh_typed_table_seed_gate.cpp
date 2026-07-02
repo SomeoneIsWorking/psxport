@@ -136,9 +136,6 @@ void ov_beh_typed_table_seed_gate(Core* c) {
 
 }  // namespace
 
-void beh_typed_table_seed_gate_register(void) {
-}
-
 // Exported entry — the verify wrapper ov_beh_typed_table_seed_gate is in the anonymous namespace above (internal
 // linkage); the engine's per-object dispatch (engine_tomba2.cpp call_handler) calls THIS to run the
 // owned behavior.

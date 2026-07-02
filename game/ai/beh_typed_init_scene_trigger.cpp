@@ -220,9 +220,6 @@ void ov_beh_typed_init_scene_trigger(Core* c) {
 
 }  // namespace
 
-void beh_typed_init_scene_trigger_register(void) {
-}
-
 // Exported entry — the verify wrapper ov_beh_typed_init_scene_trigger is in the anonymous namespace above (internal linkage);
 // the engine's per-object dispatch (engine_tomba2.cpp call_handler) calls THIS to run the owned behavior.
 void ov_beh_typed_init_scene_trigger_run(Core* c) { ov_beh_typed_init_scene_trigger(c); }
