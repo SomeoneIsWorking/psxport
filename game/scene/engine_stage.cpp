@@ -232,7 +232,7 @@ static void ov_game_submit_810c(Core* c) {
 // (ov_objwalk moved to ObjectList::walkAll — c->engine.objectList.walkAll())
 void ov_disp_26c88(Core*);               // engine/entity.cpp — native FUN_80026c88 display update
 // (ov_list_walk_69b28 moved to ObjectList::walkAux — c->engine.objectList.walkAux())
-void ov_arr8_dispatch_26368(Core*);      // engine/engine_tomba2.cpp — native FUN_80026368 8-slot array dispatch
+// (ov_arr8_dispatch_26368 moved to Array8Dispatch::tick — c->engine.array8Dispatch.tick())
 static void ov_game_submode0(Core* c);   // fwd
 static void ov_game_submode1(Core* c);   // fwd
 static void ov_field_transition(Core* c);// fwd — native FUN_80108a60 (sm[0x4a]==5 sub-scene/door transition)
@@ -392,7 +392,7 @@ static void ov_field_frame(Core* c) {
   c->mem_w32(0x800bf878u, c->mem_r32(0x800bf878u) + 1);
   if (c->mem_r8(0x1f800136u) == 0) {            // not paused: full gameplay update
     FFS("ff_59d28", c->engine.frameStartTick()); FFS("ff_69b28", c->engine.objectList.walkAux());    // 0x80059d28/0x80069b28 NATIVE
-    FFS("ff_26368", ov_arr8_dispatch_26368(c)); FFS("ff_objwalk", c->engine.objectList.walkAll());     // 0x80026368/0x8007a904 NATIVE
+    FFS("ff_26368", c->engine.array8Dispatch.tick()); FFS("ff_objwalk", c->engine.objectList.walkAll());     // 0x80026368/0x8007a904 NATIVE
     FFS("ff_25588", c->engine.sceneEventFifo()); FFS("ff_4fe84", c->engine.sceneRenderListBuilder());   // 0x80025588/0x8004fe84 NATIVE (Engine methods)
     FFS("ff_disp26c88", ov_disp_26c88(c));                                            // 0x80026c88 NATIVE
     FFS("ff_22a80", c->engine.modePerFrameDispatch());                                // 0x80022a80 NATIVE (Engine::modePerFrameDispatch)

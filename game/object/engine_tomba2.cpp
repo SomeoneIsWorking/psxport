@@ -171,19 +171,7 @@ void dispatch_obj_method(Core* c, uint32_t obj, uint32_t h) {
 
 // (ov_list_walk_69b28 was moved to ObjectList::walkAux — game/object/object_list.cpp.)
 
-// Native FUN_80026368 — iterate the 8-slot fixed object array at 0x80100400 (stride 0x4C); for each
-// ACTIVE slot (byte[0] != 0) dispatch its method by type byte[2] through the jump table 0x8009D314
-// (a0 = slot). Faithful: no type bound-check (the guest indexes the table raw); inactive slots still
-// advance. A direct child of the native ov_field_frame (was `d0(c, 0x80026368)`).
-void ov_arr8_dispatch_26368(Core* c) {
-  for (int i = 0; i < 8; i++) {
-    uint32_t slot = 0x80100400u + (uint32_t)i * 0x4Cu;
-    if (c->mem_r8(slot) == 0) continue;
-    uint32_t type = c->mem_r8(slot + 2);
-    uint32_t h = c->mem_r32(0x8009D314u + type * 4u);
-    dispatch_obj_method(c, slot, h);
-  }
-}
+// (ov_arr8_dispatch_26368 was moved to Array8Dispatch::tick — game/object/array8_dispatch.cpp.)
 
 void engine_tomba2_init(void) {
   if (cfg_dbg("engine"))
