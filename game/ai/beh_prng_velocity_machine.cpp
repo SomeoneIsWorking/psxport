@@ -289,7 +289,7 @@ void beh_prng_velocity_machine(Core* c) {
    goto Lret;
  }
  L7bc0: {                                          // node[3]==0
-   call2(c, 58, 1, 0x8004d4c4u);                     // FUN_8004D4C4(58, 1)
+   c->inventory.giveAndFlag(58, 1);                  // FUN_8004D4C4(58, 1) [native]
    call1(c, s1, 0x8004b0d8u);                        // FUN_8004B0D8(node)
    c->mem_w8(s1 + 4, 3);                             // node[4]=3
    goto Lret;

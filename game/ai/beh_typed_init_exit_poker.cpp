@@ -28,6 +28,7 @@
 #include <string.h>
 #include "spawn.h"   // world_despawn
 #include "graphics_bind.h"   // ov_obj_set_geom
+#include "inventory.h"       // class Inventory — c->inventory.giveAndFlag (FUN_8004D4C4)
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
@@ -249,19 +250,19 @@ void beh_typed_init_exit_poker(Core* c) {
     case 0:                                          // st2sub0 @0x8011872c
       leaf1(c, 5, 0x80040B48u);                       // FUN_80040B48(5)
       if ((int32_t)c->r[2] >= 0) {
-        leaf2(c, 36, 1, 0x8004D4C4u);                 // FUN_8004D4C4(36, 1)
+        c->inventory.giveAndFlag(36, 1);              // FUN_8004D4C4(36, 1) [native]
         leaf1(c, nd, 0x8004B0D8u);                    // FUN_8004B0D8(node)
       }
       c->mem_w8(nd + 4, 3);                           // node[4] = 3
       goto Lret;
     case 1:                                          // st2sub1 @0x8011875c
-      leaf2(c, 69, 1, 0x8004D4C4u);                   // FUN_8004D4C4(69, 1)
+      c->inventory.giveAndFlag(69, 1);                // FUN_8004D4C4(69, 1) [native]
       leaf1(c, nd, 0x8004B0D8u);                      // FUN_8004B0D8(node)
       c->mem_w8(nd + 4, 3);
       c->mem_w8(0x800BF9DFu, (uint8_t)(c->mem_r8(0x800BF9DFu) | 0x20));
       goto Lret;
     case 2: {                                        // st2sub_v1 @0x80118794
-      leaf2(c, 120, 1, 0x8004D4C4u);                  // FUN_8004D4C4(120, 1)
+      c->inventory.giveAndFlag(120, 1);               // FUN_8004D4C4(120, 1) [native]
       c->mem_w8(nd + 4, 3);                           // node[4] = 3 (delay slot)
       leaf1(c, nd, 0x8004B0D8u);                      // FUN_8004B0D8(node)
       uint8_t flg = c->mem_r8(0x800BF9EAu);
@@ -274,7 +275,7 @@ void beh_typed_init_exit_poker(Core* c) {
       goto Lret;
     }
     case 3:                                          // st2sub3 @0x801187f8
-      leaf2(c, 83, 1, 0x8004D4C4u);                   // FUN_8004D4C4(83, 1)
+      c->inventory.giveAndFlag(83, 1);                // FUN_8004D4C4(83, 1) [native]
       leaf1(c, nd, 0x8004B0D8u);                      // FUN_8004B0D8(node)
       c->mem_w8(nd + 4, 3);                           // node[4] = s0 (==3)
       c->mem_w8(0x800BF9EEu, (uint8_t)(c->mem_r8(0x800BF9EEu) | 2));

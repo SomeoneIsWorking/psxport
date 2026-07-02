@@ -29,6 +29,7 @@
 #include <string.h>
 #include "spawn.h"   // world_despawn
 #include "graphics_bind.h"   // ov_obj_set_geom
+#include "inventory.h"       // class Inventory — c->inventory.giveAndFlag (FUN_8004D4C4)
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
@@ -193,14 +194,14 @@ void beh_typed_anim_spawn(Core* c) {
  S2:
   if (c->mem_r8(s0 + 3) != 2) goto Lret;            // node[3] != node[4](=2)
   // a0 = 29 -> shared tail 0x8012ddfc
-  leaf2(c, 29, 1, 0x8004D4C4u);                     // FUN_8004D4C4(29, 1)
+  c->inventory.giveAndFlag(29, 1);                  // FUN_8004D4C4(29, 1) [native]
   goto Ltail_after;
 
  Ltail14:
-  leaf2(c, 14, 1, 0x8004D4C4u);                     // FUN_8004D4C4(14, 1)
+  c->inventory.giveAndFlag(14, 1);                  // FUN_8004D4C4(14, 1) [native]
   goto Ltail_after;
  Ltail35:
-  leaf2(c, 35, 1, 0x8004D4C4u);                     // FUN_8004D4C4(35, 1)
+  c->inventory.giveAndFlag(35, 1);                  // FUN_8004D4C4(35, 1) [native]
   goto Ltail_after;
  Ltail_after:
   leaf1(c, s0, 0x8004B0D8u);                        // FUN_8004B0D8(node)
