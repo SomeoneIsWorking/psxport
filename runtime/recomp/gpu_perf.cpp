@@ -40,8 +40,8 @@ static inline double ms_between(clk::time_point a, clk::time_point b) {
 
 // Cached channel state, re-checked lazily: present()/native_step run from BOOT, long before the REPL
 // `debug perf` line is processed, so a one-shot static latch would pin it OFF. Re-read every N frames.
-int    g_perf = -1;             // -1 = unknown, 0/1 cached
-long   g_perf_recheck = 0;
+static int s_perf = -1;         // -1 = unknown, 0/1 cached (was global g_perf)
+static long s_perf_recheck = 0;
 
 // Phase accumulators (ms), summed across the averaging window, reset every report.
 struct Acc {
@@ -62,8 +62,8 @@ double* phase_slot(int p) {
 }
 
 inline int perf_on() {
-  if (--g_perf_recheck <= 0) { g_perf = cfg_dbg("perf"); g_perf_recheck = 30; }
-  return g_perf;
+  if (--s_perf_recheck <= 0) { s_perf = cfg_dbg("perf"); s_perf_recheck = 30; }
+  return s_perf;
 }
 
 } // namespace
@@ -79,7 +79,7 @@ void perf_frame_begin(void) {
 // Mark the boundary between the pre-tick host work and the next phase (charges elapsed since the last
 // mark to `pre`). Called just before the guest tick begins.
 void perf_mark_pre(void) {
-  if (g_perf <= 0) return;
+  if (s_perf <= 0) return;
   clk::time_point n = clk::now();
   g_acc.pre += ms_between(g_t_mark, n);
   g_t_mark = n;
@@ -87,14 +87,14 @@ void perf_mark_pre(void) {
 
 // Open a timed phase (LOGIC / AUDIO / PRESENT).
 void perf_phase_begin(int phase) {
-  if (g_perf <= 0) return;
+  if (s_perf <= 0) return;
   (void)phase;
   g_t_phase = clk::now();
 }
 
 // Close the open phase, charging its elapsed time to the phase slot and advancing the post-mark.
 void perf_phase_end(int phase) {
-  if (g_perf <= 0) return;
+  if (s_perf <= 0) return;
   clk::time_point n = clk::now();
   double* s = phase_slot(phase);
   if (s) *s += ms_between(g_t_phase, n);
@@ -104,7 +104,7 @@ void perf_phase_end(int phase) {
 // Bottom of native_step_frame: close the frame, accumulate the post-tick remainder + the full frame
 // wall time, and emit the rolling average every 60 frames.
 void perf_frame_end(void) {
-  if (g_perf <= 0) return;
+  if (s_perf <= 0) return;
   clk::time_point n = clk::now();
   g_acc.post  += ms_between(g_t_mark, n);
   g_acc.frame += ms_between(g_t_frame, n);

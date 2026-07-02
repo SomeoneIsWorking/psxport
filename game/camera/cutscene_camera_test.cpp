@@ -21,7 +21,7 @@
 #include <functional>
 
 void load_exe(const char* path, Core* c);
-extern "C" { extern int g_rec_miss_tolerant; extern int g_rec_missed; }
+// g_rec_miss_tolerant/g_rec_missed retired 2026-07-03 — per-Core Core::recMissTolerant/recMissed.
 
 namespace {
 
@@ -94,19 +94,19 @@ int check(Core* c, const char* name, uint32_t addr, std::function<void()> nat, u
 
   // The native run itself may reach a field-overlay leaf via the substrate (the driver's overlay modes) —
   // no overlay is loaded in the test, so tolerate the miss and SKIP (same as an oracle miss below).
-  g_rec_missed = 0; g_rec_miss_tolerant = 1;
+  c->recMissed = false; c->recMissTolerant = true;
   nat();
-  g_rec_miss_tolerant = 0;
-  if (g_rec_missed) return -1;
+  c->recMissTolerant = false;
+  if (c->recMissed) return -1;
   snap(c, mine);
 
   restore(c, in);
   memcpy(c->r, rs, sizeof rs);
   c->r[4] = a0; c->r[5] = a1;
-  g_rec_missed = 0; g_rec_miss_tolerant = 1;
+  c->recMissed = false; c->recMissTolerant = true;
   rec_interp(c, addr);
-  g_rec_miss_tolerant = 0;
-  if (g_rec_missed) return -1;   // oracle couldn't evaluate this synthetic state -> skip (not a failure)
+  c->recMissTolerant = false;
+  if (c->recMissed) return -1;   // oracle couldn't evaluate this synthetic state -> skip (not a failure)
 
   int bad = 0;
   for (int r = 0; r < NREG; r++)

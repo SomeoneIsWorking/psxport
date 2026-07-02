@@ -15,10 +15,7 @@ void rec_dispatch(Core* c, uint32_t addr);        // global router (overlay_rout
                                                   // to main_dispatch / the resident overlay's switch
 void rec_dispatch_miss(Core* c, uint32_t addr);   // BIOS vectors -> HLE; else FAIL FAST (hle.cpp)
 
-// g_override_tgt is set by native code (native_boot / engine_submit) to carry the body an override
-// intercepted; it is plain shared state, not interpreter-owned. (The per-core program counter is now
-// Core::pc — r3000.h — set by each recompiled wrapper, not a global.)
-uint32_t g_override_tgt = 0;
+// g_override_tgt retired 2026-07-03 — per-Core Core::override_tgt.
 
 // ORACLE engine (later-278, docs/oracle.md): when c->use_interp is set this Core is the pure-PSX
 // interpreter oracle — route these entry points to the interpreter (interp.cpp) instead of the recomp

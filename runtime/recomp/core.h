@@ -51,6 +51,14 @@ public:
 
   uint32_t io_gpustat_toggle = 0;  // GPUSTAT (0x1F801814) even/odd line bit — per-instance HW state
 
+  // Recomp-miss test gate (was extern "C" g_rec_miss_tolerant / g_rec_missed). Set by the oracle
+  // regression test harness (game/camera/cutscene_camera_test.cpp) around a synthetic guest state
+  // that may hit an un-recompiled address: rec_dispatch_miss (hle.cpp) checks recMissTolerant, and
+  // when true it flags recMissed and returns instead of the usual FAIL FAST abort. Per-Core so two
+  // cores in SBS never leak the tolerance flag into each other.
+  bool recMissTolerant = false;
+  bool recMissed       = false;
+
   // Cooperative-yield handshake (later-169): a native override of a YIELDING function cannot
   // rec_dispatch its callee (that nests a rec_interp with its own CORO_SENTINEL; a deep yield's
   // longjmp destroys that C frame, so the resume mis-reads the return as task-end). Instead the
@@ -59,6 +67,11 @@ public:
   // longjmps to the scheduler and resumes correctly. Transient: set right before the override
   // returns, consumed (and cleared) by the interp at the next control transfer. See interp.cpp.
   uint32_t coro_redirect_pc = 0;
+
+  // Set by native code (scheduler resume-across-override, engine_submit) to carry the body an override
+  // intercepted; the substrate consults it right before running func_<addr>. Per-Core execution state
+  // (each Core has its own scheduler / dispatch). Was the process-global g_override_tgt.
+  uint32_t override_tgt = 0;
 
   // ORACLE engine select (later-278, docs/oracle.md). 0 = run guest code as the recomp SUBSTRATE
   // (the shipping native port). 1 = run guest code through the pure MIPS INTERPRETER (interp.cpp) —
@@ -92,7 +105,7 @@ public:
   void mem_set_watch(uint32_t lo, uint32_t hi);
   int  mem_watch_hits();
   // Programmatic write-watchpoint (SBS divergence debugger): stores landing in [lo,hi) fire the global
-  // g_store_watch_cb (mem.cpp) with (this, addr, value) — used to catch the exact corrupting write.
+  // the mem.cpp store-watch callback (installed via mem_set_store_watch_cb) with (this, addr, value) —
   void wwatch_arm(uint32_t lo, uint32_t hi);
 
 private:

@@ -33,11 +33,11 @@ void interp_run(Core* c, uint32_t pc);
 // Diagnostics: the PC currently being interpreted (read by the watchdog on a stall to report
 // WHERE the interpreter is spinning). Optional call trace (PSXPORT_INTERP_TRACE=<path>) logs
 // jal/jalr targets — used to follow the boot stub and find where it wedges.
-volatile uint32_t g_interp_pc = 0;
+// g_interp_pc retired 2026-07-03 — Core::pc is set together on every interp step; no need for a shadow.
 // Entry address of the override currently being dispatched — set right before an override fn runs, so a
 // bracket override (one fn registered at SEVERAL scanned overlay entries) can super-call the exact body
 // it intercepted instead of a stale stored address. Read immediately on override entry.
-extern uint32_t g_override_tgt;   // owned by dispatch.cpp (substrate); referenced here
+// g_override_tgt retired — per-Core Core::override_tgt (see core.h). Referenced here via c->override_tgt.
 static FILE* g_trace_fp = 0;
 void interp_trace_open(const char* path) {
   if (path && *path) { g_trace_fp = fopen(path, "w"); if (!g_trace_fp) perror(path);
@@ -240,7 +240,7 @@ static void exec_simple(Core* c, uint32_t in) {
       // of "bad opcode" lines; abort immediately with the derail site + a guest-stack backtrace so the
       // broken jump/load can be found and fixed at its root.
       fprintf(stderr, "\n[DERAIL] bad opcode 0x%02X insn=0x%08X at pc=0x%08X ra=0x%08X sp=0x%08X\n",
-              op, in, g_interp_pc, c->r[31], c->r[29]);
+              op, in, c->pc, c->r[31], c->r[29]);
       { uint32_t sp = c->r[29]; int shown = 0;
         for (uint32_t a = sp; a < sp + 512 && shown < 16; a += 4) {
           uint32_t w = c->mem_r32(a), k = w & 0x1FFFFFFF;
@@ -465,7 +465,7 @@ static void interp_flat(Core* c, uint32_t pc, uint32_t stop_ra) {
         iters = 0; lo = hi = pc;
       }
     }
-    g_interp_pc = pc; c->pc = pc;   // per-core PC for backtraces/watchdog (oracle Core)
+    c->pc = pc;   // per-core PC for backtraces/watchdog (oracle Core)
     // PSXPORT_PCTRAP=0xADDR — when the interpreter first reaches ADDR, dump the guest call chain (ra + a
     // wide stack scan incl. OVERLAY code 0x80100000..0x80200000) so we can find the native->interpreted
     // handoff for a still-PSX path (e.g. the field render driver). later-242 (RE tool, not behavior).

@@ -76,7 +76,7 @@ extern "C" void watchdog_suspend(void);
 extern "C" void watchdog_disable(void);   // SBS pauses indefinitely on a divergence — kill the frame watchdog
 extern "C" void guest_backtrace_to(Core* c, FILE* out);
 // g_render_psx retired — now per-Core Render::mPsxRender. Reach via g_a/g_b->core.mRender->mode.setPsxRender(bool).
-extern void (*g_store_watch_cb)(Core*, uint32_t a, uint32_t v);   // mem.cpp — armed write-watch callback
+extern "C" void mem_set_store_watch_cb(void (*cb)(Core*, uint32_t, uint32_t));   // mem.cpp — SBS write-watch install
 extern "C" int  g_sbs;                        // PSXPORT_SBS: forces 2 VK render targets + skips the in-engine dualview pass
 // Per-core render+readback + front-buffer/display-region accessors (gpu_gpu.cpp / gpu_native.cpp). The SBS
 // now renders each core into the shared VK target (no swapchain present) and read
@@ -500,7 +500,7 @@ void sbs_run(const char* exe_path) {
             else if (!strcmp(m, "oracle")) s_mode = M_ORACLE; else s_mode = M_RENDER; }
   { const char* e = getenv("PSXPORT_SBS_LO"); if (e && *e) s_lo = (uint32_t)strtoul(e, 0, 0); }
   { const char* e = getenv("PSXPORT_SBS_HI"); if (e && *e) s_hi = (uint32_t)strtoul(e, 0, 0); }
-  g_store_watch_cb = sbs_store_cb;
+  mem_set_store_watch_cb(sbs_store_cb);
   g_sbs = 1;            // skip the in-engine dualview second pass (each core renders its OWN pane)
   g_sbs_rl = 1;         // sequential single-target render+readback per core (both cores emit into batch 0)
   // The SBS composite is now drawn by the SDL_GPU renderer's OWN window (gpu_gpu_present_sbs2), so each core
