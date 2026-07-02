@@ -90,6 +90,22 @@ public:
   //   and whose spec masks against `spec` as fired. Called by the frame VBlank tick, memcard
   //   completion, and sound-DMA completion so guest waits (TestEvent/WaitEvent) advance.
   void deliverEvent(uint32_t evClass, uint32_t spec);
+
+  // ---- BIOS-side helpers (was file-scope free fns in hle.cpp) ------------------
+  // heap: A0:0x33-0x39 native first-fit arena (bookkeeping outside PSX RAM).
+  void     heapInit(Core* c, uint32_t addr, uint32_t size);
+  uint32_t heapAlloc(Core* c, uint32_t size);
+  void     heapFree (Core* c, uint32_t addr);
+  uint32_t heapBlockSize(Core* c, uint32_t addr) const;
+  // work area (B0:0x56/0x57 GetC0Table/GetB0Table): publish a self-consistent native page.
+  void     workAreaInit(Core* c);
+  // events: index-lookup for B0:0x08/0x09/0x0A/0x0B/0x0C/0x0D
+  int      eventIndex(uint32_t id) const;
+  // BIOS-call dispatch (A0/B0/C0). Returns true if handled (Core V0 set).
+  bool     dispatchBios(char table, uint32_t fn, Core* c);
+
+private:
+  void     heapCoalesce();   // internal free-side merge pass; only touches this instance's blk[]
 };
 
 // pad_input.cpp — class Pad — native controller input subsystem, owned by Game (c->game->pad).
