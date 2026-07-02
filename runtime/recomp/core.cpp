@@ -20,6 +20,7 @@ Core::Core() {
   screenFade.core = this;
   engine.core     = this;
   engine.sceneTransition.core = this;   // Engine-owned scene subsystem
+  engine.transitionState3.core = this;  // Engine-owned mid-transition walker
   rng.core        = this;
   inventory.core  = this;
   // Render umbrella (owned by pointer): allocate, wire its back-pointer + each embedded sub-subsystem.

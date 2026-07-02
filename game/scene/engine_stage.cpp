@@ -232,7 +232,6 @@ static void ov_game_submit_810c(Core* c) {
 void ov_objwalk(Core*);                  // engine/engine_tomba2.cpp — native FUN_8007a904 object-list walk
 void ov_disp_26c88(Core*);               // engine/entity.cpp — native FUN_80026c88 display update
 void ov_list_walk_69b28(Core*);          // engine/engine_tomba2.cpp — native FUN_80069b28 2nd object-list walk
-void ov_state3_walk_8007b04c(Core*);     // engine/engine_tomba2.cpp — native FUN_8007B04C mid-transition walker
 void ov_arr8_dispatch_26368(Core*);      // engine/engine_tomba2.cpp — native FUN_80026368 8-slot array dispatch
 static void ov_game_submode0(Core* c);   // fwd
 static void ov_game_submode1(Core* c);   // fwd
@@ -701,7 +700,7 @@ static void ov_field_frame_x(Core* c) {
   c->mem_w16(0x1f80017cu, (uint16_t)(c->mem_r16(0x1f80017cu) + 1));   // frame counter
   c->mem_w32(0x800bf878u, c->mem_r32(0x800bf878u) + 1);
   if (c->mem_r8(0x1f800136u) == 0) {            // not paused: reduced gameplay update
-    c->engine.frameStartTick(); ov_list_walk_69b28(c); d0(c, 0x80026368u); ov_state3_walk_8007b04c(c);   // 0x80059d28/0x80069b28/0x8007b04c NATIVE
+    c->engine.frameStartTick(); ov_list_walk_69b28(c); d0(c, 0x80026368u); c->engine.transitionState3.walkOnce();   // 0x80059d28/0x80069b28/0x8007b04c NATIVE
     c->engine.sceneEventFifo(); c->engine.sceneRenderListBuilder(); ov_disp_26c88(c); c->engine.modePerFrameDispatch();   // 25588/4fe84/26c88/22a80 NATIVE
     CutsceneCamera::runFieldUpdate(c);   // 0x8006ec44 NATIVE (CutsceneCamera::update)
   }

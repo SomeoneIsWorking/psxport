@@ -205,7 +205,9 @@ void ov_objwalk(Core* c) {
 // current-object tracking, native behavior if owned else the recomp leaf). Shared by the field-frame
 // object dispatchers below. No guest-sp munging: the handler allocates its own frame below the current
 // sp, exactly as the guest `jalr` did.
-static inline void dispatch_obj_method(Core* c, uint32_t obj, uint32_t h) {
+// Exposed (non-static) so class-owned walkers in game/scene/*.cpp (TransitionState3::walkOnce, etc.)
+// can share this native/substrate dispatch path.
+void dispatch_obj_method(Core* c, uint32_t obj, uint32_t h) {
   uint32_t prev = c->game->fps60.current_object;
   c->game->fps60.current_object = obj;
   c->r[4] = obj;                                     // $a0
@@ -222,42 +224,6 @@ void ov_list_walk_69b28(Core* c) {
     uint32_t h    = c->mem_r32(n + 0x1Cu);
     uint32_t next = c->mem_r32(n + 0x24u);
     dispatch_obj_method(c, n, h);
-    n = next;
-  }
-}
-
-// Native FUN_8007B04C — the MID-TRANSITION state-3 entity walker (docs/findings/scene.md hut-door
-// freeze; decomp scratch/decomp/ram_f1000_all.c L56987-L57017). Walks both entity lists (heads
-// T2_OBJLIST_HEAD_1 then T2_OBJLIST_HEAD_2, re-read AFTER list 1 in case handlers mutated it),
-// clears each node's per-frame render flag, and — GATED on node[0x28] & 0x80 — dispatches the
-// per-object handler via dispatch_obj_method (native beh if owned, substrate otherwise).
-//
-// Called from engine_stage.cpp's ov_field_frame_x (was `d0(c, 0x8007b04cu)`). Owning it here routes
-// mid-transition handler calls through dispatch_native_behavior — so the sub-scene swap state
-// machine (SceneTransition::stepSwapWaiter) runs UNDER NATIVE CODE during the transition, not
-// hidden inside substrate func_80138FC8. Prerequisite for observing / fixing the case-3
-// SECOND-branch deadlock (docs/findings/scene.md).
-void ov_state3_walk_8007b04c(Core* c) {
-  uint32_t l2 = c->mem_r32(T2_OBJLIST_HEAD_2);           // captured up-front (decomp: iVar3 = DAT_800f2624)
-  uint32_t n  = c->mem_r32(T2_OBJLIST_HEAD_1);
-  while (n) {
-    uint32_t next = c->mem_r32(n + T2OBJ_NEXT);
-    c->mem_w8 (n + T2OBJ_RENDER_FLAG, 0);
-    if (c->mem_r8(n + 0x28) & 0x80) {
-      uint32_t h = c->mem_r32(n + T2OBJ_HANDLER);
-      dispatch_obj_method(c, n, h);
-    }
-    l2 = c->mem_r32(T2_OBJLIST_HEAD_2);                  // re-read each iteration (handler may mutate)
-    n  = next;
-  }
-  n = l2;
-  while (n) {
-    uint32_t next = c->mem_r32(n + T2OBJ_NEXT);
-    c->mem_w8 (n + T2OBJ_RENDER_FLAG, 0);
-    if (c->mem_r8(n + 0x28) & 0x80) {
-      uint32_t h = c->mem_r32(n + T2OBJ_HANDLER);
-      dispatch_obj_method(c, n, h);
-    }
     n = next;
   }
 }
