@@ -86,49 +86,7 @@ static int submit_xmax(void) { return gpu_gpu_wide_engine() ? gpu_gpu_wide_engin
 // the geomblk ENQUEUE site (where a handler registers its render command, while g_current_object = its node).
 // At the field the owned path carries the world/map renderer's geometry; the 78 margin objects enqueue via
 // UN-owned submitter variants and are invisible here. Off by default; pure logging, no state change.
-extern uint32_t g_render_object;
 int gpu_frame_no(Core*);
-// Optional single-frame gate (PSXPORT_GEOMBLK_FRAME=<frame>) shared by the geomblk + rcmd probes: bound the
-// firehose to one present frame so a 2900-frame headless run to the field doesn't emit gigabytes. Unset = every.
-static int s_probe_frame = -2;
-static inline int probe_frame_ok(Core* c) {
-  if (s_probe_frame == -2) { const char* f = cfg_str("PSXPORT_GEOMBLK_FRAME"); s_probe_frame = f ? atoi(f) : -1; }
-  return s_probe_frame < 0 || gpu_frame_no(c) == s_probe_frame;
-}
-static int s_geomblk = -1;
-static inline int geomblk_on(Core* c) {
-  if (s_geomblk < 0) s_geomblk = cfg_dbg("geomblk") ? 1 : 0;
-  return s_geomblk && probe_frame_ok(c);
-}
-static void geomblk_dump(Core* c, const char* kind, uint32_t rec, uint32_t count, uint32_t stride) {
-  if (!geomblk_on(c)) return;
-  uint32_t o = g_render_object;                    // weak hint: last-culled object (see header — not the source)
-  uint32_t handler = o ? c->mem_r32(o + 0x1c) : 0;
-  uint8_t  type    = o ? c->mem_r8(o + 0x0c) : 0xff;
-  fprintf(stderr, "[geomblk] f%d cur=%08x lastcull=%08x type=%02x handler=%08x %s n=%u\n",
-          gpu_frame_no(c), c->game->fps60.current_object, o, type, handler, kind, count);
-  for (uint32_t i = 0; i < count; i++) {
-    fprintf(stderr, "[geomblk]   rec%u:", i);
-    for (uint32_t b = 0; b < stride; b++) fprintf(stderr, "%s%02x", (b & 3) ? "" : " ", c->mem_r8(rec + i*stride + b));
-    fprintf(stderr, "\n");
-  }
-}
-
-// PSXPORT_DEBUG=rcmd — RENDER-COMMAND capture probe (the complete oracle, later-130). Taps the deferred-flush
-// mode dispatcher gen_func_8003F698: every queued render command passes through here as a SELF-CONTAINED unit
-// — mode (*0x800BF870 → which submitter variant runs), geomblk (a0), OT base (a1), flag (a2), and the per-
-// object GTE transform the flush just loaded into the GTE control regs (CR0-7: CR0-4 rotation, CR5-7
-// translation). This is the full input a native render-half must reproduce, for ALL modes (incl. the overlay
-// variants the margin handlers feed), not just the natively-owned GT3/GT4 path the geomblk probe decodes.
-// Registered only when the channel is on (game_tomba2.c init), so zero cost otherwise; super-calls the original.
-// NATIVE per-object DEPTH at the render-command dispatcher (gen_func_8003F698) — the UNIVERSAL chokepoint.
-// EVERY queued render command passes through here with the engine's composed camera×object transform live
-// in the GTE (CR0-7), regardless of which render walk drove it. We (a) compute the object's PC-native
-// world-position view-depth from that transform (proj_obj_center_ord), and (b) capture the packet-pool span
-// the command's renderer produces, recording span->depth. The geometry rasterizes LATER (deferred OT walk)
-// where the per-object context is gone; the span lets a 2D billboard prim recover its object's real depth
-// there (GpuState::obj_depth_lookup). Owned modes (generic GT3/GT4) carry per-VERTEX depth already and are
-// untouched; this gives the UNowned overlay-mode prims (the 2D billboards) their true world depth.
 void gpu_obj_depth_add(Core*, uint32_t lo, uint32_t hi, float ord);
 float proj_obj_center_ord(void);
 // PC-NATIVE object depth from real 3D placement. proj_camview_world_ord projects a WORLD point through the
@@ -150,58 +108,6 @@ uint32_t g_dbg_render_node = 0;
 // walk later matches each billboard item's source node against this span, identical to obj_depth_lookup).
 void  fps60_record_billboard_span(Core* c, uint32_t lo, uint32_t hi, uint32_t ident);
 #define PKT_POOL_PTR  0x800BF544u
-// Native replacement for the resident render-command DISPATCHER FUN_8003F698 (the interpreted body was
-// ~4% of field time). It reads a command byte at 0x800BF870, bounds-checks (<22), indexes the jump table
-// at 0x80015268, and `jr`s into a per-command thunk = `jal <handler>; j <epilogue>`. The dispatcher does
-// NO work after the handler and passes a0..a3 untouched, so a native tail-call to the handler is exactly
-// equivalent (same args, same return target, ra/sp net-zero) — render output unchanged, only the dispatch
-// GLUE goes native. Two guards force the DEFAULT handler 0x800803DC: busy flag 0x1F800234, and a2&1. Each
-// thunk's first insn is the `jal`, so the handler is decoded from it (the table's default entries already
-// point at the 0x800803DC thunk → cmd<22 needs no special case). RE: disas.py 0x8003F698 / table
-// 0x80015268 / thunks 0x8003F6E8..0x8003F790.
-static void render_cmd_dispatch(Core* c) {
-  uint32_t handler;
-  if (c->mem_r8(0x1F800234u) != 0 || (c->r[6] & 1u) != 0) {
-    handler = 0x800803DCu;
-  } else {
-    uint32_t cmd = c->mem_r8(0x800BF870u);
-    if (cmd >= 22u) handler = 0x800803DCu;
-    else {
-      uint32_t thunk = c->mem_r32(0x80015268u + cmd * 4u);
-      uint32_t jal   = c->mem_r32(thunk);
-      handler = ((jal & 0x03FFFFFFu) << 2) | 0x80000000u;
-    }
-  }
-  rec_dispatch(c, handler);
-}
-void ov_render_cmd(Core* c) {
-  if (cfg_dbg("rcmd") && probe_frame_ok(c)) {
-    uint8_t mode = c->mem_r8(0x800BF870u);
-    fprintf(stderr, "[rcmd] f%d mode=%02x geomblk=%08x ot=%08x flag=%08x ra=%08x M=",
-            gpu_frame_no(c), mode, c->r[4], c->r[5], c->r[6], c->r[31]);
-    for (int i = 0; i < 8; i++) fprintf(stderr, "%s%08x", i ? "," : "", (uint32_t)gte_read_ctrl(i));
-    fprintf(stderr, "\n");
-  }
-  float ord = obj_world_ord(c, cur_render_node(c));  // PC-native depth from the object's real world position
-  // Capture the packet-pool address span this command's renderer writes (the pool POINTER doesn't move for
-  // the overlay variants, so track the actual stores), and tag it with the object's world-position depth.
-  // NESTING-SAFE: this command is often dispatched from WITHIN an outer object-render session (e.g. the
-  // rope/flame renderer calls back here for the same node). The session restores + merges into the outer
-  // on close, so the outer walk keeps tracking the object's remaining quads (issue #4).
-  uint32_t slo, shi; PktSpanSession sess;
-  render_cmd_dispatch(c);                             // native dispatch (was rec_super_call(0x8003F698) — the ~4%)
-  if (sess.close(&slo, &shi)) {
-    gpu_obj_depth_add(c, slo, shi, ord);
-    // fps60: the unowned-mode (overlay/billboard) prims this command emits land in THIS inner span. Record an
-    // fps60 billboard entry keyed by that SPAN (the OT walk matches each item's source node against it) +
-    // the current render object (scratch 0x1F80028C) as the stable cross-frame identity. The composed
-    // camera×object transform is live in CR0-7 here (proj_obj_center_ord just read it).
-    if (g_fps60_on || g_mods.debug_ids || cfg_dbg("objid")) fps60_record_billboard_span(c, slo, shi, cur_render_node(c));
-    if (cfg_dbg("objz") && probe_frame_ok(c))
-      fprintf(stderr, "[rcmddep] mode=%02x span %08x->%08x (%dB) ord=%.4f\n",
-              c->mem_r8(0x800BF870u), slo, shi, (int)(shi - slo), (double)ord);
-  }
-}
 
 // PC-native per-vertex depth (Phase 2): because we OWN the projection, we know each vertex's real
 // view-space Z (the SZ the GTE just produced) — record it keyed by the packet vertex word's address so
