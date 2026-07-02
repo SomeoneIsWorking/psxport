@@ -11,6 +11,7 @@
 #include "core.h"
 #include "game.h"
 #include "platform_hle.h"   // class PlatformHle — sync-primitive HLE consulted on a RAM-code miss
+#include "memcard.h"        // card_hle_a0 / card_hle_b0 — libcard BIOS dispatch (class Memcard)
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -130,7 +131,6 @@ bool Hle::dispatchBios(char table, uint32_t fn, Core* c) {
       case 0x71: c->r[V0] = 0; return true;                              // _96_init no-op
       case 0x72: c->r[V0] = 0; return true;                              // _96_remove no-op
       default: {
-        int card_hle_a0(uint32_t, Core*);
         if (card_hle_a0(fn, c)) return true;
         return false;
       }
@@ -176,7 +176,6 @@ bool Hle::dispatchBios(char table, uint32_t fn, Core* c) {
       case 0x57: workAreaInit(c); c->r[V0] = HLE_B0TABLE; return true;    // GetB0Table
       case 0x5B: c->r[V0] = 0; return true;                              // ChangeClearPAD (no-op)
       default: {
-        int card_hle_b0(uint32_t, Core*);
         if (card_hle_b0(fn, c)) return true;
         return false;
       }
