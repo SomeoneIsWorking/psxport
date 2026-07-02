@@ -160,41 +160,6 @@ static uint32_t spawn_pool2(Core* c) {
   return node;
 }
 
-// --- spawntrace: log the CALLER (ra) of each spawn-entry, to find the field-load PLACEMENT driver
-// top-down. Enable with REPL `debug spawntrace`. Prints ra + args on every spawn-entry invocation.
-static void spawn_trace(Core* c, const char* who, uint32_t entry) {
-  static int s_t = -1; if (s_t < 0) s_t = cfg_dbg("spawntrace") ? 1 : 0;
-  if (!s_t) return;
-  fprintf(stderr, "[spawntrace] %s@%08x ra=%08x a0=%08x a1=%08x a2=%08x a3=%08x\n",
-          who, entry, c->r[31], c->r[4], c->r[5], c->r[6], c->r[7]);
-}
-
-void ov_entity_spawn(Core* c) {
-  spawn_trace(c, "spawn79c3c", 0x80079C3Cu);
-  static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("spawnverify") ? 1 : 0;
-  if (!s_v) { c->r[2] = entity_spawn(c); return; }
-  static uint8_t* ram0 = (uint8_t*)malloc(0x200000);
-  static uint8_t* ramN = (uint8_t*)malloc(0x200000);
-  uint8_t spad0[0x400], spadN[0x400];
-  uint32_t regs0[32]; memcpy(regs0, c->r, sizeof regs0);
-  uint32_t a0 = c->r[4], a2 = c->r[6], a3 = c->r[7];
-  memcpy(ram0, c->ram, 0x200000); memcpy(spad0, c->scratch, 0x400);
-  c->r[2] = entity_spawn(c);
-  uint32_t v0_n = c->r[2];
-  memcpy(ramN, c->ram, 0x200000); memcpy(spadN, c->scratch, 0x400);
-  memcpy(c->ram, ram0, 0x200000); memcpy(c->scratch, spad0, 0x400); memcpy(c->r, regs0, sizeof regs0);
-  rec_super_call(c, 0x80079C3Cu);
-  uint32_t v0_o = c->r[2];
-  uint32_t sp = regs0[29] & 0x1FFFFFu, flo = (sp >= 0x800) ? sp - 0x800 : 0;
-  int ro = -1; for (uint32_t a = 0; a < 0x200000; a++) if (c->ram[a] != ramN[a] && !(a >= flo && a < sp)) { ro = (int)a; break; }
-  int so = -1; for (uint32_t a = 0; a < 0x400; a++) if (c->scratch[a] != spadN[a]) { so = (int)a; break; }
-  static long ng = 0, nb = 0;
-  if (ro >= 0 || so >= 0 || v0_n != v0_o) {
-    if (nb++ < 40) fprintf(stderr, "[spawnverify] MISMATCH ref=%08x mode=%u list=%u v0 n=%x o=%x ram@%x spad@%x sp=%x\n",
-                           a0, a2, a3, v0_n, v0_o, ro, so, sp);
-  } else if (++ng % 20 == 0) fprintf(stderr, "[spawnverify] %ld matches\n", ng);
-}
-
 // FUN_8007A980 — the per-type SPAWN DISPATCHER: the entry point game logic calls to spawn an object. It
 // routes by CLASS (a0 & 0xff, 0..4) through table 0x80016E4C to one of 5 thin per-type handlers, each of
 // which calls its spawn VARIANT as `variant(a0=0 ref, a1=type&0xff, a2=3 tail-insert, a3=list)` and returns
@@ -223,34 +188,6 @@ uint32_t Spawn::dispatch(uint32_t cls_in, uint32_t type_in, uint32_t list) {
   return node;
 }
 void rec_dispatch(Core*, uint32_t);
-void ov_spawn_dispatch(Core* c) {
-  spawn_trace(c, "disp7a980", 0x8007A980u);
-  static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("spawndispverify") ? 1 : 0;
-  uint32_t cls_in = c->r[4], type_in = c->r[5], list = c->r[6];
-  if (!s_v) { c->engine.spawn.dispatch(cls_in, type_in, list); return; }
-  static uint8_t* ram0 = (uint8_t*)malloc(0x200000);
-  static uint8_t* ramN = (uint8_t*)malloc(0x200000);
-  uint8_t spad0[0x400], spadN[0x400];
-  uint32_t regs0[32]; memcpy(regs0, c->r, sizeof regs0);
-  uint32_t a0 = cls_in;
-  memcpy(ram0, c->ram, 0x200000); memcpy(spad0, c->scratch, 0x400);
-  c->engine.spawn.dispatch(cls_in, type_in, list);
-  uint32_t v0_n = c->r[2];
-  memcpy(ramN, c->ram, 0x200000); memcpy(spadN, c->scratch, 0x400);
-  memcpy(c->ram, ram0, 0x200000); memcpy(c->scratch, spad0, 0x400); memcpy(c->r, regs0, sizeof regs0);
-  rec_super_call(c, 0x8007A980u);
-  uint32_t v0_o = c->r[2];
-  // Same family rationale as spawnverify: the variant runs in BOTH passes; its + the dispatcher's stack
-  // frames are dead below entry sp on return, and the native path doesn't decrement sp so they sit 24B apart.
-  uint32_t sp = regs0[29] & 0x1FFFFFu, flo = (sp >= 0x800) ? sp - 0x800 : 0;
-  int ro = -1; for (uint32_t a = 0; a < 0x200000; a++) if (c->ram[a] != ramN[a] && !(a >= flo && a < sp)) { ro = (int)a; break; }
-  int so = -1; for (uint32_t a = 0; a < 0x400; a++) if (c->scratch[a] != spadN[a]) { so = (int)a; break; }
-  static long ng = 0, nb = 0;
-  if (ro >= 0 || so >= 0 || v0_n != v0_o) {
-    if (nb++ < 40) fprintf(stderr, "[spawndispverify] MISMATCH cls=%u v0 n=%x o=%x ram@%x spad@%x sp=%x\n",
-                           a0 & 0xff, v0_n, v0_o, ro, so, sp);
-  } else if (++ng % 20 == 0) fprintf(stderr, "[spawndispverify] %ld matches\n", ng);
-}
 
 // FUN_80079F90 / FUN_8007A12C / FUN_8007A2C8 — the remaining three pool spawn primitives (dispatcher
 // classes 2/3/4). RE'd from disas (0x80079F90 / 0x8007A12C / 0x8007A2C8): each is byte-identical to the
@@ -285,91 +222,6 @@ static uint32_t spawn_variant_native(Core* c, uint32_t cls) {
   }
 }
 
-// Shared A/B gate for a pool spawn variant: run native, snapshot+rollback, super-call the recomp body,
-// diff full main-RAM (excluding the dead stack window [sp-0x800, sp)) + scratchpad + v0. Same rationale as
-// spawnverify/pool2verify: the only callee-touched persistent state is the pool/list nodes the diff covers.
-static void spawn_variant_gate(Core* c, const PoolDesc& p, uint32_t super_addr, const char* gate, int on) {
-  if (!on) { c->r[2] = pool_spawn(c, p); return; }
-  static uint8_t* ram0 = (uint8_t*)malloc(0x200000);
-  static uint8_t* ramN = (uint8_t*)malloc(0x200000);
-  uint8_t spad0[0x400], spadN[0x400];
-  uint32_t regs0[32]; memcpy(regs0, c->r, sizeof regs0);
-  uint32_t a3 = c->r[7];
-  memcpy(ram0, c->ram, 0x200000); memcpy(spad0, c->scratch, 0x400);
-  c->r[2] = pool_spawn(c, p);
-  uint32_t v0_n = c->r[2];
-  memcpy(ramN, c->ram, 0x200000); memcpy(spadN, c->scratch, 0x400);
-  memcpy(c->ram, ram0, 0x200000); memcpy(c->scratch, spad0, 0x400); memcpy(c->r, regs0, sizeof regs0);
-  rec_super_call(c, super_addr);
-  uint32_t v0_o = c->r[2];
-  uint32_t sp = regs0[29] & 0x1FFFFFu, flo = (sp >= 0x800) ? sp - 0x800 : 0;
-  int ro = -1; for (uint32_t a = 0; a < 0x200000; a++) if (c->ram[a] != ramN[a] && !(a >= flo && a < sp)) { ro = (int)a; break; }
-  int so = -1; for (uint32_t a = 0; a < 0x400; a++) if (c->scratch[a] != spadN[a]) { so = (int)a; break; }
-  static long ng = 0, nb = 0;
-  if (ro >= 0 || so >= 0 || v0_n != v0_o) {
-    if (nb++ < 40) fprintf(stderr, "[%s] MISMATCH list=%u v0 n=%x o=%x ram@%x spad@%x sp=%x\n",
-                           gate, a3, v0_n, v0_o, ro, so, sp);
-  } else if (++ng % 20 == 0) fprintf(stderr, "[%s] %ld matches\n", gate, ng);
-}
-
-void ov_spawn_var2(Core* c) {   // FUN_80079F90 (class 2)
-  static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("spawnvarverify") ? 1 : 0;
-  spawn_variant_gate(c, POOL_VAR2, 0x80079F90u, "spawnvarverify", s_v);
-}
-void ov_spawn_var3(Core* c) {   // FUN_8007A12C (class 3)
-  static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("spawnvarverify") ? 1 : 0;
-  spawn_variant_gate(c, POOL_VAR3, 0x8007A12Cu, "spawnvarverify", s_v);
-}
-void ov_spawn_var4(Core* c) {   // FUN_8007A2C8 (class 4)
-  static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("spawnvarverify") ? 1 : 0;
-  spawn_variant_gate(c, POOL_VAR4, 0x8007A2C8u, "spawnvarverify", s_v);
-}
-
-void ov_spawn_pool2(Core* c) {   // FUN_80079DDC
-  static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("pool2verify") ? 1 : 0;
-  if (!s_v) { c->r[2] = spawn_pool2(c); return; }
-  static uint8_t* ram0 = (uint8_t*)malloc(0x200000);
-  static uint8_t* ramN = (uint8_t*)malloc(0x200000);
-  uint8_t spad0[0x400], spadN[0x400];
-  uint32_t regs0[32]; memcpy(regs0, c->r, sizeof regs0);
-  uint32_t a3 = c->r[7];
-  memcpy(ram0, c->ram, 0x200000); memcpy(spad0, c->scratch, 0x400);
-  c->r[2] = spawn_pool2(c);
-  uint32_t v0_n = c->r[2];
-  memcpy(ramN, c->ram, 0x200000); memcpy(spadN, c->scratch, 0x400);
-  memcpy(c->ram, ram0, 0x200000); memcpy(c->scratch, spad0, 0x400); memcpy(c->r, regs0, sizeof regs0);
-  rec_super_call(c, 0x80079DDCu);
-  uint32_t v0_o = c->r[2];
-  uint32_t sp = regs0[29] & 0x1FFFFFu, flo = (sp >= 0x800) ? sp - 0x800 : 0;
-  int ro = -1; for (uint32_t a = 0; a < 0x200000; a++) if (c->ram[a] != ramN[a] && !(a >= flo && a < sp)) { ro = (int)a; break; }
-  int so = -1; for (uint32_t a = 0; a < 0x400; a++) if (c->scratch[a] != spadN[a]) { so = (int)a; break; }
-  static long ng = 0, nb = 0;
-  if (ro >= 0 || so >= 0 || v0_n != v0_o) {
-    if (nb++ < 40) fprintf(stderr, "[pool2verify] MISMATCH list=%u v0 n=%x o=%x ram@%x spad@%x sp=%x\n",
-                           a3, v0_n, v0_o, ro, so, sp);
-  } else if (++ng % 20 == 0) fprintf(stderr, "[pool2verify] %ld matches\n", ng);
-}
-
-// FUN_8007AA38 — the SPAWN-RELATIVE-TO-OBJECT dispatcher (a second spawn entry, table 0x80016E64). Unlike
-// FUN_8007A980 (which forces ref=0, mode=3 tail-insert), this one spawns a new node RELATIVE to an existing
-// object `obj`, passing the caller's mode (a2) and list (a3) straight through. RE'd from disas 0x8007AA38 +
-// the 5 thin handlers 0x8007aa90..0x8007aad0 (each: a1 &= 0xff; jal SPAWN_VAR[class]; return its v0):
-//
-//   v0 = spawn_rel(a0=obj, a1=packed, a2=mode, a3=list):
-//     if ((u8)obj[+0x0a] != a3) return 0;          // guard: obj must already be in the expected list
-//     cls = (a1 >> 8) & 0x7f;  type = a1 & 0xff;
-//     if (cls >= 5) return 0;
-//     return SPAWN_VAR[cls](obj, type, a2, a3);     // ref=obj, type, mode=a2, list=a3
-//
-// The per-class spawn VARIANTS are all owned natively above; this just guards + routes (content-side type).
-static void replace_dispatch(Core* c) {
-  uint32_t obj = c->r[4], a1 = c->r[5], a2 = c->r[6], a3 = c->r[7];
-  if (c->mem_r8(obj + 0x0au) != a3) { c->r[2] = 0; return; }   // obj's list id (+0x0a) must equal a3
-  uint32_t cls = (a1 >> 8) & 0x7fu;
-  if (cls >= 5) { c->r[2] = 0; return; }
-  c->r[5] = a1 & 0xffu;                  // a1 = type (a0=obj, a2=mode, a3=list pass through)
-  c->r[2] = spawn_variant_native(c, cls); // run the per-type spawn variant (native) → v0
-}
 // FUN_8003116C — SPAWN-AND-INIT helper: spawn a type-6 object on list 1 (via the owned dispatcher
 // FUN_8007A980), seed its position from a1, stash a2, and run the object init FUN_80028E10. RE'd from disas
 // 0x8003116C:
@@ -392,32 +244,6 @@ static uint32_t spawn_and_init(Core* c) {
   c->r[4] = node; c->r[5] = a0;
   rec_dispatch(c, 0x80028E10u);
   return node;
-}
-
-void ov_replace_dispatch(Core* c) {
-  spawn_trace(c, "repl7aa38", 0x8007AA38u);
-  static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("replacedispverify") ? 1 : 0;
-  if (!s_v) { replace_dispatch(c); return; }
-  static uint8_t* ram0 = (uint8_t*)malloc(0x200000);
-  static uint8_t* ramN = (uint8_t*)malloc(0x200000);
-  uint8_t spad0[0x400], spadN[0x400];
-  uint32_t regs0[32]; memcpy(regs0, c->r, sizeof regs0);
-  uint32_t a1 = c->r[5];
-  memcpy(ram0, c->ram, 0x200000); memcpy(spad0, c->scratch, 0x400);
-  replace_dispatch(c);
-  uint32_t v0_n = c->r[2];
-  memcpy(ramN, c->ram, 0x200000); memcpy(spadN, c->scratch, 0x400);
-  memcpy(c->ram, ram0, 0x200000); memcpy(c->scratch, spad0, 0x400); memcpy(c->r, regs0, sizeof regs0);
-  rec_super_call(c, 0x8007AA38u);
-  uint32_t v0_o = c->r[2];
-  uint32_t sp = regs0[29] & 0x1FFFFFu, flo = (sp >= 0x800) ? sp - 0x800 : 0;
-  int ro = -1; for (uint32_t a = 0; a < 0x200000; a++) if (c->ram[a] != ramN[a] && !(a >= flo && a < sp)) { ro = (int)a; break; }
-  int so = -1; for (uint32_t a = 0; a < 0x400; a++) if (c->scratch[a] != spadN[a]) { so = (int)a; break; }
-  static long ng = 0, nb = 0;
-  if (ro >= 0 || so >= 0 || v0_n != v0_o) {
-    if (nb++ < 40) fprintf(stderr, "[replacedispverify] MISMATCH a1=%x cls=%u v0 n=%x o=%x ram@%x spad@%x sp=%x\n",
-                           a1, (a1 >> 8) & 0x7fu, v0_n, v0_o, ro, so, sp);
-  } else if (++ng % 20 == 0) fprintf(stderr, "[replacedispverify] %ld matches\n", ng);
 }
 
 // FUN_8007A624 — the DESPAWN primitive (the inverse of spawn): unlink a node from its active list, clear
