@@ -159,6 +159,7 @@ set(PORT_SRC
   game/scene/transition_state3.cpp
   game/object/object_list.cpp
   game/object/array8_dispatch.cpp
+  game/world/object_table.cpp
   game/items/script.cpp
   game/object/animation.cpp
   game/input/input.cpp

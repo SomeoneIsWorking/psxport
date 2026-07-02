@@ -23,6 +23,7 @@ Core::Core() {
   engine.transitionState3.core = this;  // Engine-owned mid-transition walker
   engine.objectList.core = this;        // Engine-owned entity-list walkers
   engine.array8Dispatch.core = this;    // Engine-owned 8-slot fixed-array dispatcher
+  engine.objectTable.core = this;       // Engine-owned 40-slot object-table dispatcher
   rng.core        = this;
   inventory.core  = this;
   // Render umbrella (owned by pointer): allocate, wire its back-pointer + each embedded sub-subsystem.

@@ -119,38 +119,7 @@ void ov_child_spawn_40410(Core* c) {
 // run in BOTH passes and leave transient residue in their own stack frames below entry sp (no native frame
 // there) + this fn's own 32-byte frame is dead below sp on return → exclude [sp-0x800, sp) (sp ~0x1FExxx,
 // RAM end 0x200000 — far above ALL game data; a real divergence would alter persistent state).
-static void disp_26c88(Core* c) {
-  const uint32_t TBL = 0x800ad52cu;   // handler fn-ptr table (stride 4)
-  uint32_t obj = 0x800ec188u;         // object table (stride 64)
-  for (int i = 0; i < 40; i++, obj += 64) {
-    if (c->mem_r8(obj + 0) == 0) continue;
-    uint32_t idx = c->mem_r8(obj + 1);
-    uint32_t fn  = c->mem_r32(TBL + (idx << 2));
-    c->r[4] = obj;
-    rec_dispatch(c, fn);                // handler(obj) — stays PSX / honors its own owned override
-  }
-}
-
-void ov_disp_26c88(Core* c) {
-  static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("disp26c88") ? 1 : 0;
-  if (!s_v) { disp_26c88(c); return; }
-  static uint8_t* ram0 = (uint8_t*)malloc(0x200000);
-  static uint8_t* ramN = (uint8_t*)malloc(0x200000);
-  uint8_t spad0[0x400], spadN[0x400];
-  uint32_t regs0[32]; memcpy(regs0, c->r, sizeof regs0);
-  memcpy(ram0, c->ram, 0x200000); memcpy(spad0, c->scratch, 0x400);
-  disp_26c88(c);
-  memcpy(ramN, c->ram, 0x200000); memcpy(spadN, c->scratch, 0x400);
-  memcpy(c->ram, ram0, 0x200000); memcpy(c->scratch, spad0, 0x400); memcpy(c->r, regs0, sizeof regs0);
-  rec_super_call(c, 0x80026C88u);
-  uint32_t sp = regs0[29] & 0x1FFFFFu, flo = (sp >= 0x800) ? sp - 0x800 : 0;
-  int ro = -1; for (uint32_t a = 0; a < 0x200000; a++) if (c->ram[a] != ramN[a] && !(a >= flo && a < sp)) { ro = (int)a; break; }
-  int so = -1; for (uint32_t a = 0; a < 0x400; a++) if (c->scratch[a] != spadN[a]) { so = (int)a; break; }
-  static long ng = 0, nb = 0;
-  if (ro >= 0 || so >= 0) {
-    if (nb++ < 40) fprintf(stderr, "[disp26c88] MISMATCH ram@%x spad@%x sp=%x\n", ro, so, sp);
-  } else if (++ng % 50 == 0) fprintf(stderr, "[disp26c88] %ld matches\n", ng);
-}
+// (disp_26c88 / ov_disp_26c88 moved to ObjectTable::dispatch — game/world/object_table.cpp.)
 
 // FUN_80040558 — per-object STATE-MACHINE HEAD (the dispatcher whose state-0 handler calls the just-owned
 // child-spawn FUN_80040410; owning the head advances the whole behavior family). a0 = obj. Pure control
