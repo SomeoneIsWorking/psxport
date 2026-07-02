@@ -36,7 +36,7 @@ static int s_reddbg;              // PSXPORT_REDDBG: dark-red output anomaly pro
 // ---- Display control (GP1) ----------------------------------------------------------
 
 
-static int g_log = 0;             // PSXPORT_GPU_LOG
+static int s_log = 0;             // PSXPORT_GPU_LOG
 static long s_prims = 0;          // primitives drawn since last present
 // s_seen3d / s_prev_had3d are per-instance GpuState members now (gpu_native_internal.h). The OT walk
 // tees geometry before present, so s_seen3d is final by the time the present/compose path queries it.
@@ -1446,7 +1446,7 @@ void GpuState::gpu_present_ex(Core* core, int do_blit) {
   if (cfg_dbg("stage") && (s_frame % 200) == 0)
     fprintf(stderr, "[stagetl] gpu f%d task0entry=%08X\n", s_frame, core->mem_r32(0x801fe00c));
   const char* dir = cfg_str("PSXPORT_GPU_DUMP");
-  if (g_log) fprintf(stderr, "[gpu] frame %d: %ld prims, %ld gp0words, %ld dma2, disp %dx%d @ (%d,%d)\n",
+  if (s_log) fprintf(stderr, "[gpu] frame %d: %ld prims, %ld gp0words, %ld dma2, disp %dx%d @ (%d,%d)\n",
                      s_frame, s_prims, s_gp0_words, s_dma2, s_disp_w, s_disp_h, s_disp_x, s_disp_y);
   // PSXPORT_VRAMDUMP="frame:path" — dump our full 1024x512x16 VRAM at `frame` (raw u16, no header),
   // matching the oracle's PSXPORT_VRAMDUMP (main.cpp) so the texture/CLUT ATLAS can be diffed across
@@ -1514,7 +1514,7 @@ void GpuState::gpu_fps60_present_pass(Core* core) {
 }
 
 void gpu_native_init(void) {
-  if (cfg_dbg("gpu") || cfg_on("PSXPORT_GPU_LOG")) g_log = 1;   // diagnostic: per-frame prim log via env
+  if (cfg_dbg("gpu") || cfg_on("PSXPORT_GPU_LOG")) s_log = 1;   // diagnostic: per-frame prim log via env
   if (cfg_dbg("red")) s_reddbg = 1;
   const char* cw = cfg_str("PSXPORT_CLUTWATCH");
   if (cw) { s_cw_x = 880; s_cw_y = 507; int x, y; if (sscanf(cw, "%d,%d", &x, &y) == 2) { s_cw_x = x; s_cw_y = y; } }

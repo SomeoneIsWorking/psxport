@@ -38,14 +38,14 @@ void interp_run(Core* c, uint32_t pc);
 // bracket override (one fn registered at SEVERAL scanned overlay entries) can super-call the exact body
 // it intercepted instead of a stale stored address. Read immediately on override entry.
 // g_override_tgt retired — per-Core Core::override_tgt (see core.h). Referenced here via c->override_tgt.
-static FILE* g_trace_fp = 0;
+static FILE* s_trace_fp = 0;
 void interp_trace_open(const char* path) {
-  if (path && *path) { g_trace_fp = fopen(path, "w"); if (!g_trace_fp) perror(path);
-    else setvbuf(g_trace_fp, 0, _IOLBF, 0); }
-  else if (g_trace_fp) { fclose(g_trace_fp); g_trace_fp = 0; }   // empty path = close
+  if (path && *path) { s_trace_fp = fopen(path, "w"); if (!s_trace_fp) perror(path);
+    else setvbuf(s_trace_fp, 0, _IOLBF, 0); }
+  else if (s_trace_fp) { fclose(s_trace_fp); s_trace_fp = 0; }   // empty path = close
 }
 static inline void trace_call(uint32_t from, uint32_t to) {
-  if (g_trace_fp) fprintf(g_trace_fp, "%08X -> %08X\n", from, to);
+  if (s_trace_fp) fprintf(s_trace_fp, "%08X -> %08X\n", from, to);
 }
 
 // ---- Differential NATIVE-CALL tracer (PSXPORT_NCALL_TRACE=<path>) ---------------------------------
@@ -56,22 +56,22 @@ static inline void trace_call(uint32_t from, uint32_t to) {
 // exact override whose conversion broke (a different return value / register effect); the first line
 // with differing INPUTS means an earlier call's memory side-effect diverged. tools/ncall_diff.py
 // runs both builds and reports that first divergence. Zero cost when the env var is unset.
-static FILE* g_ncall_fp = 0;
-static long  g_ncall_seq = 0;
-static int   g_ncall_init = 0;
+static FILE* s_ncall_fp = 0;
+static long  s_ncall_seq = 0;
+static int   s_ncall_init = 0;
 static void ncall_open_once(void) {
-  if (g_ncall_init) return;
-  g_ncall_init = 1;
+  if (s_ncall_init) return;
+  s_ncall_init = 1;
   const char* p = cfg_str("PSXPORT_NCALL_TRACE");
-  if (p && *p) { g_ncall_fp = fopen(p, "w"); if (!g_ncall_fp) perror(p);
-                 else setvbuf(g_ncall_fp, 0, _IOLBF, 0); }
+  if (p && *p) { s_ncall_fp = fopen(p, "w"); if (!s_ncall_fp) perror(p);
+                 else setvbuf(s_ncall_fp, 0, _IOLBF, 0); }
 }
 // kind: 'O' = address-keyed override, 'B' = BIOS vector. Logged AFTER the native fn runs.
 static inline void ncall_log(char kind, uint32_t tgt, uint32_t a0, uint32_t a1, uint32_t a2,
                              uint32_t a3, uint32_t v0, uint32_t v1) {
-  if (!g_ncall_fp) return;
-  fprintf(g_ncall_fp, "%ld %c %08X  a:%08X %08X %08X %08X -> v:%08X %08X\n",
-          g_ncall_seq++, kind, tgt, a0, a1, a2, a3, v0, v1);
+  if (!s_ncall_fp) return;
+  fprintf(s_ncall_fp, "%ld %c %08X  a:%08X %08X %08X %08X -> v:%08X %08X\n",
+          s_ncall_seq++, kind, tgt, a0, a1, a2, a3, v0, v1);
 }
 
 #define RS(i)  (((i) >> 21) & 31)
@@ -130,24 +130,24 @@ static int reads_gpr(uint32_t in, int r) {
     default: return 0;
   }
 }
-static int g_ldhaz = -1;
-static long g_ldhaz_n = 0;
-static uint32_t g_ld_last_in = 0, g_ld_last_pc = 0;   // last instruction in EXECUTION order
+static int s_ldhaz = -1;
+static long s_ldhaz_n = 0;
+static uint32_t s_ld_last_in = 0, s_ld_last_pc = 0;   // last instruction in EXECUTION order
 // Check the just-fetched instruction (`in`@`pc`, about to execute) against the previously
 // executed one, then make it the new "last". Called in execution order — INCLUDING delay slots —
 // so a load in a jump/branch delay slot is checked against the branch TARGET (the real next op).
 static inline void ldhaz_step(uint32_t in, uint32_t pc) {
-  if (g_ldhaz < 0) g_ldhaz = cfg_dbg("ldhazard") ? 1 : 0;
-  if (g_ldhaz) {
-    uint32_t p = g_ld_last_in; int t = ld_target(p);
+  if (s_ldhaz < 0) s_ldhaz = cfg_dbg("ldhazard") ? 1 : 0;
+  if (s_ldhaz) {
+    uint32_t p = s_ld_last_in; int t = ld_target(p);
     // Skip the lwl/lwr unaligned-merge idiom (same rt): our no-delay model merges correctly.
     int merge = ((p >> 26) == 0x22 && (in >> 26) == 0x26 && RT(p) == RT(in)) ||
                 ((p >> 26) == 0x26 && (in >> 26) == 0x22 && RT(p) == RT(in));
-    if (t && !merge && reads_gpr(in, t) && g_ldhaz_n++ < 60)
+    if (t && !merge && reads_gpr(in, t) && s_ldhaz_n++ < 60)
       fprintf(stderr, "[ldhaz] load r%d @%08X (%08X) -> read by next @%08X (%08X)\n",
-              t, g_ld_last_pc, p, pc, in);
+              t, s_ld_last_pc, p, pc, in);
   }
-  g_ld_last_in = in; g_ld_last_pc = pc;
+  s_ld_last_in = in; s_ld_last_pc = pc;
 }
 
 // OVERRIDE TABLE REMOVED (2026-06-22) — top-down PC-driven model: PC calls PC directly; PSX never
@@ -276,25 +276,25 @@ void rec_dispatch_miss(Core* c, uint32_t addr);
 // appended as `TO  <-from  count(so far=1)` so the file doubles as a representative call-edge map for
 // building the port tree top-down. Open-addressing set, line-buffered so a kill/timeout still yields
 // the list. Zero cost when the env var is unset.
-static FILE*    g_ifn_fp = 0;
-static int      g_ifn_init = 0;
-static uint32_t g_ifn_set[1 << 14];               // 16384 slots; addrs are non-zero so 0 == empty
-static int      g_ifn_count = 0;
+static FILE*    s_ifn_fp = 0;
+static int      s_ifn_init = 0;
+static uint32_t s_ifn_set[1 << 14];               // 16384 slots; addrs are non-zero so 0 == empty
+static int      s_ifn_count = 0;
 static void ifn_open_once(void) {
-  g_ifn_init = 1;
+  s_ifn_init = 1;
   const char* p = cfg_str("PSXPORT_INTERP_FUNCS");
-  if (p && *p) { g_ifn_fp = fopen(p, "w"); if (!g_ifn_fp) perror(p);
-                 else setvbuf(g_ifn_fp, 0, _IOLBF, 0); }
+  if (p && *p) { s_ifn_fp = fopen(p, "w"); if (!s_ifn_fp) perror(p);
+                 else setvbuf(s_ifn_fp, 0, _IOLBF, 0); }
 }
 static inline void ifn_record(uint32_t tgt, uint32_t from) {
-  if (!g_ifn_init) ifn_open_once();
-  if (!g_ifn_fp) return;
+  if (!s_ifn_init) ifn_open_once();
+  if (!s_ifn_fp) return;
   uint32_t h = (tgt * 2654435761u) >> 18, m = (1u << 14) - 1u;
   for (uint32_t i = 0; i < (1u << 14); i++) {
     uint32_t s = (h + i) & m;
-    if (g_ifn_set[s] == tgt) return;              // already recorded
-    if (g_ifn_set[s] == 0) { g_ifn_set[s] = tgt; g_ifn_count++;
-      fprintf(g_ifn_fp, "%08X  <-%08X  [#%d]\n", tgt, from, g_ifn_count); return; }
+    if (s_ifn_set[s] == tgt) return;              // already recorded
+    if (s_ifn_set[s] == 0) { s_ifn_set[s] = tgt; s_ifn_count++;
+      fprintf(s_ifn_fp, "%08X  <-%08X  [#%d]\n", tgt, from, s_ifn_count); return; }
   }
 }
 
@@ -302,7 +302,7 @@ static inline void ifn_record(uint32_t tgt, uint32_t from) {
 // The perf floor of the port: every un-owned engine fn + all game CONTENT runs through this flat
 // interpreter, so "where do interpreter instructions go?" == "which engine fn should I own next for
 // perf?" (the #1 priority — owning a hot fn natively both advances 100%-PC-native AND speeds it up).
-// Two cheap, exact (not sampled) histograms, gated behind g_prof_on so the hot path costs one
+// Two cheap, exact (not sampled) histograms, gated behind s_prof_on so the hot path costs one
 // predictable branch + one add when profiling is OFF, and one array increment when ON:
 //   1. PC histogram  — instructions executed per 16-byte bucket over main RAM 0x80000000..0x80200000
 //      (131072 buckets). Maps to functions offline via tools/prof_report.py + tomba2_funcs.txt. 16B
@@ -313,33 +313,33 @@ static inline void ifn_record(uint32_t tgt, uint32_t from) {
 //      coro_native_call's miss path. The FREQUENCY profile: a high-count target is worth owning even
 //      if each call is cheap. Open-addressing, same shape as the ifn set.
 // Overlay (DEMO/GAME.BIN) functions aren't in tomba2_funcs.txt; their hot addresses report raw.
-int             g_prof_on = 0;                    // toggled by REPL `prof start`/`prof off`
-static uint64_t g_prof_pc[1 << 17];               // 131072 buckets, 16 bytes each (aligns to fn starts)
-static uint64_t g_prof_total = 0;                 // total instructions counted
-static uint32_t g_prof_call_addr[1 << 14];        // call-target set (0 == empty)
-static uint64_t g_prof_call_n[1 << 14];           // parallel call counts
-static uint64_t g_prof_call_total = 0;            // total interpreted-fn entries counted
+static int      s_prof_on = 0;                    // toggled by REPL `prof start`/`prof off`
+static uint64_t s_prof_pc[1 << 17];               // 131072 buckets, 16 bytes each (aligns to fn starts)
+static uint64_t s_prof_total = 0;                 // total instructions counted
+static uint32_t s_prof_call_addr[1 << 14];        // call-target set (0 == empty)
+static uint64_t s_prof_call_n[1 << 14];           // parallel call counts
+static uint64_t s_prof_call_total = 0;            // total interpreted-fn entries counted
 
 static inline void prof_pc_tick(uint32_t pc) {
-  g_prof_pc[(pc & 0x1FFFFF) >> 4]++;
-  g_prof_total++;
+  s_prof_pc[(pc & 0x1FFFFF) >> 4]++;
+  s_prof_total++;
 }
 static inline void prof_call_tick(uint32_t tgt) {
   uint32_t h = (tgt * 2654435761u) >> 18, m = (1u << 14) - 1u;
   for (uint32_t i = 0; i < (1u << 14); i++) {
     uint32_t s = (h + i) & m;
-    if (g_prof_call_addr[s] == tgt) { g_prof_call_n[s]++; g_prof_call_total++; return; }
-    if (g_prof_call_addr[s] == 0)   { g_prof_call_addr[s] = tgt; g_prof_call_n[s] = 1; g_prof_call_total++; return; }
+    if (s_prof_call_addr[s] == tgt) { s_prof_call_n[s]++; s_prof_call_total++; return; }
+    if (s_prof_call_addr[s] == 0)   { s_prof_call_addr[s] = tgt; s_prof_call_n[s] = 1; s_prof_call_total++; return; }
   }
 }
 void prof_start(void) {
-  for (uint32_t i = 0; i < (1u << 17); i++) g_prof_pc[i] = 0;
-  for (uint32_t i = 0; i < (1u << 14); i++) { g_prof_call_addr[i] = 0; g_prof_call_n[i] = 0; }
-  g_prof_total = g_prof_call_total = 0;
-  g_prof_on = 1;
+  for (uint32_t i = 0; i < (1u << 17); i++) s_prof_pc[i] = 0;
+  for (uint32_t i = 0; i < (1u << 14); i++) { s_prof_call_addr[i] = 0; s_prof_call_n[i] = 0; }
+  s_prof_total = s_prof_call_total = 0;
+  s_prof_on = 1;
   fprintf(stderr, "[prof] profiling started (reset)\n");
 }
-void prof_stop(void) { g_prof_on = 0; fprintf(stderr, "[prof] profiling stopped\n"); }
+void prof_stop(void) { s_prof_on = 0; fprintf(stderr, "[prof] profiling stopped\n"); }
 
 void prof_dump(const char* path) {
   // Top PC buckets (time) + top call targets (frequency), sorted desc. Simple selection of top-N
@@ -348,34 +348,34 @@ void prof_dump(const char* path) {
   FILE* out = fp ? fp : stderr;
   const int NPC = 200, NCALL = 200;
   fprintf(out, "# prof: %llu instructions, %llu interpreted-fn entries\n",
-          (unsigned long long)g_prof_total, (unsigned long long)g_prof_call_total);
+          (unsigned long long)s_prof_total, (unsigned long long)s_prof_call_total);
   fprintf(out, "# --- TIME (top %d PC buckets, 16B each; addr = bucket base) ---\n", NPC);
   fprintf(out, "# bucket_addr   insns      pct\n");
   // copy bucket counts so we can zero out as we extract
   for (int k = 0; k < NPC; k++) {
     uint64_t best = 0; int bi = -1;
-    for (int i = 0; i < (1 << 17); i++) if (g_prof_pc[i] > best) { best = g_prof_pc[i]; bi = i; }
+    for (int i = 0; i < (1 << 17); i++) if (s_prof_pc[i] > best) { best = s_prof_pc[i]; bi = i; }
     if (bi < 0 || best == 0) break;
     uint32_t addr = 0x80000000u | ((uint32_t)bi << 4);
-    double pct = g_prof_total ? 100.0 * (double)best / (double)g_prof_total : 0.0;
+    double pct = s_prof_total ? 100.0 * (double)best / (double)s_prof_total : 0.0;
     fprintf(out, "%08X   %10llu   %5.2f%%\n", addr, (unsigned long long)best, pct);
-    g_prof_pc[bi] = 0;  // consume (g_prof_on is off during dump; start re-zeros anyway)
+    s_prof_pc[bi] = 0;  // consume (s_prof_on is off during dump; start re-zeros anyway)
   }
   fprintf(out, "# --- FREQUENCY (top %d interpreted-fn entry counts) ---\n", NCALL);
   fprintf(out, "# func_addr     calls      pct\n");
   for (int k = 0; k < NCALL; k++) {
     uint64_t best = 0; int bi = -1;
-    for (int i = 0; i < (1 << 14); i++) if (g_prof_call_addr[i] && g_prof_call_n[i] > best) { best = g_prof_call_n[i]; bi = i; }
+    for (int i = 0; i < (1 << 14); i++) if (s_prof_call_addr[i] && s_prof_call_n[i] > best) { best = s_prof_call_n[i]; bi = i; }
     if (bi < 0 || best == 0) break;
-    double pct = g_prof_call_total ? 100.0 * (double)best / (double)g_prof_call_total : 0.0;
-    fprintf(out, "%08X   %10llu   %5.2f%%\n", g_prof_call_addr[bi], (unsigned long long)best, pct);
-    g_prof_call_n[bi] = 0;  // consume
+    double pct = s_prof_call_total ? 100.0 * (double)best / (double)s_prof_call_total : 0.0;
+    fprintf(out, "%08X   %10llu   %5.2f%%\n", s_prof_call_addr[bi], (unsigned long long)best, pct);
+    s_prof_call_n[bi] = 0;  // consume
   }
   if (fp) { fclose(fp); fprintf(stderr, "[prof] dump -> %s\n", path); }
 }
 
-static uint32_t g_callring[64];   // derail diagnostics: ring of last compiled-function entries
-static int      g_callring_pos = 0;
+static uint32_t s_callring[64];   // derail diagnostics: ring of last compiled-function entries
+static int      s_callring_pos = 0;
 
 // Invoke a call target natively if it is a BIOS vector (returns 1), else 0 (caller jumps).
 // OVERRIDE SYSTEM REMOVED (2026-06-22): the interpreter NO LONGER flips into native overrides on a call.
@@ -384,7 +384,7 @@ static int      g_callring_pos = 0;
 // still route to HLE below — that is hardware emulation, not a function override.
 static int coro_native_call(Core* c, uint32_t tgt) {
   if (is_bios(tgt)) {
-    if (!g_ncall_init) ncall_open_once();
+    if (!s_ncall_init) ncall_open_once();
     uint32_t a0=c->r[4],a1=c->r[5],a2=c->r[6],a3=c->r[7];
     rec_dispatch_miss(c, tgt);
     ncall_log('B', tgt, a0,a1,a2,a3, c->r[2], c->r[3]);
@@ -414,11 +414,11 @@ static int coro_native_call(Core* c, uint32_t tgt) {
   // for use_interp cores; only is_bios + platform_hle (above) run native. Non-oracle (hybrid) cores keep
   // the recomp-body fast path.
   if (!c->use_interp && rec_func_index(tgt) >= 0 && (!(sg_lo | sg_hi) || (tgt >= sg_lo && tgt < sg_hi))) {
-    g_callring[g_callring_pos++ & 63] = tgt;   // derail diagnostics: last compiled entries
+    s_callring[s_callring_pos++ & 63] = tgt;   // derail diagnostics: last compiled entries
     rec_dispatch(c, tgt); return 1;            // recompiled target -> run its COMPILED body
   }
   ifn_record(tgt, c->r[31]);   // tripwire: the interpreter is about to run this (non-native) function
-  if (g_prof_on) prof_call_tick(tgt);  // perf: count entries into this un-owned (interpreted) function
+  if (s_prof_on) prof_call_tick(tgt);  // perf: count entries into this un-owned (interpreted) function
   return 0;
 }
 
@@ -553,7 +553,7 @@ static void interp_flat(Core* c, uint32_t pc, uint32_t stop_ra) {
                 fprintf(stderr, "[banksel] seq=%u chan=%u streambyte=0x%02x (-> slot[0x26])\n",
                         c->r[4] & 0xffff, c->r[5] & 0xffff, c->mem_r8(dp)); }
     }
-    if (g_prof_on) prof_pc_tick(pc);   // perf profiler: instructions-per-PC-bucket (time histogram)
+    if (s_prof_on) prof_pc_tick(pc);   // perf profiler: instructions-per-PC-bucket (time histogram)
     // PSXPORT_SPRITEDBG: when the sprite-flush routine copies the red-quad clut template
     // (0x7EF71100) into the OT (store at 0x8007E67C), dump the renderer's working registers so
     // the owning sprite object ($a3/$t5) and its descriptor list ($a2) can be identified.
@@ -576,7 +576,7 @@ static void interp_flat(Core* c, uint32_t pc, uint32_t stop_ra) {
               pc, in, c->r[31], c->r[29], c->r[28], stop_ra);
       for (int k = 0; k < 16; k++) fprintf(stderr, "  stk[%2d] @%08X = %08X\n", k, c->r[29] + k*4, c->mem_r32(c->r[29] + k*4));
       fprintf(stderr, "[derail] last compiled entries (newest last):\n");
-      for (int k = 24; k >= 1; k--) { uint32_t a = g_callring[(g_callring_pos - k) & 63]; if (a) fprintf(stderr, "  %08X\n", a); }
+      for (int k = 24; k >= 1; k--) { uint32_t a = s_callring[(s_callring_pos - k) & 63]; if (a) fprintf(stderr, "  %08X\n", a); }
       fflush(stderr); abort();
     }
     ldhaz_step(in, pc);                              // load-delay hazard detector (execution order)

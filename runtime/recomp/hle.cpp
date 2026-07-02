@@ -105,7 +105,7 @@ void     thread_change(Core* c, uint32_t handle);
 // cdrom:\MAIN.EXE;1; native_stub installs a hook here that loads MAIN.EXE into RAM and hands
 // control to the native MAIN boot (instead of jumping into the stub's loaded image). NULL
 // outside stub boot (then LoadExec is reported UNIMPL, as before).
-void (*g_loadexec_hook)(Core*) = 0;
+static void (*s_loadexec_hook)(Core*) = 0;   // (was extern void (*g_loadexec_hook)(Core*); never installed from outside)
 
 // Dispatch one A0/B0/C0 BIOS call. Returns 1 if handled (c->r[V0] set), 0 otherwise.
 static int recomp_hle(char table, uint32_t fn, Core* c) {
@@ -130,7 +130,7 @@ static int recomp_hle(char table, uint32_t fn, Core* c) {
       case 0x44: c->r[V0] = 0; return 1;                              // FlushCache (no-op)
       case 0x49: c->r[V0] = 0; return 1;                              // GPU_cw(gp0): GP0
         // command word — drops to the (not-yet-wired) GPU; harmless until S5 renderer.
-      case 0x51: if (g_loadexec_hook) { g_loadexec_hook(c); return 1; } return 0;  // LoadExec
+      case 0x51: if (s_loadexec_hook) { s_loadexec_hook(c); return 1; } return 0;  // LoadExec
       case 0x70: c->r[V0] = 0; return 1;                              // _bu_init (card) no-op
       case 0x71: c->r[V0] = 0; return 1;                              // _96_init (CD device) no-op
       case 0x72: c->r[V0] = 0; return 1;                              // _96_remove (no-op)
@@ -220,7 +220,7 @@ void rec_break(Core* c, uint32_t code) {
   (void)c;
 }
 
-static int g_miss = 0;
+static int s_miss = 0;
 // TEST-ONLY tolerant miss (cutscene_camera_test.cpp): when set, a genuine RAM-code miss does NOT abort —
 // it flags g_rec_missed and returns, so the oracle test can SKIP synthetic states the recompiler's
 // jump-table discovery can't evaluate (states the live game never reaches). Default 0 = fail-fast.
@@ -272,10 +272,10 @@ void rec_dispatch_miss(Core* c, uint32_t addr) {
       "  wrong overlay resident; if matches but still missed -> function-discovery gap in that overlay)\n"
       "  not a recompiled MAIN fn / native override / platform-HLE leaf — likely overlay code or a\n"
       "  mid-function coroutine resume. The interpreter is removed; this is fail-fast by design.\n",
-      g_miss++, addr, c->r[31], c->r[4], resov ? resov : "(addr not in any slot range)");
+      s_miss++, addr, c->r[31], c->r[4], resov ? resov : "(addr not in any slot range)");
     guest_backtrace_to(c, stderr);
     fflush(stderr);
     abort();
   }
-  fprintf(stderr, "[miss %d] addr 0x%08X (no recompiled fn / overlay)\n", g_miss++, addr);
+  fprintf(stderr, "[miss %d] addr 0x%08X (no recompiled fn / overlay)\n", s_miss++, addr);
 }

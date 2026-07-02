@@ -117,7 +117,7 @@ static void cd_cmd_stream(Core* c) {
 }
 
 // 0x8008C1EC FUN_8008c1ec(a0=blocks, a1=lba, a2=buf): native synchronous read.
-static int  g_cd_verbose = 0;  // PSXPORT_CD_VERBOSE=1
+static int  s_cd_verbose = 0;  // PSXPORT_CD_VERBOSE=1
 static void cd_read(Core* c) {
   uint32_t blocks = c->r[A0], lba = c->r[A1], buf = c->r[A2];
   uint8_t sec[2048];
@@ -125,7 +125,7 @@ static void cd_read(Core* c) {
     if (!disc_read_sector(lba + i, sec)) { c->r[V0] = 0; return; }  // bool: 0 = failure
     for (uint32_t j = 0; j < 2048; j++) c->mem_w8(buf + i * 2048u + j, sec[j]);
   }
-  if (g_cd_verbose)
+  if (s_cd_verbose)
     fprintf(stderr, "[cd] read %u blk @ LBA %u -> 0x%08X\n", blocks, lba, buf);
   c->r[V0] = 1;  // bool: success
 }
@@ -146,7 +146,7 @@ static void cd_loadfile(Core* c) {
     for (uint32_t j = 0; j < n; j++) c->mem_w8(dest + done + j, sec[j]);
     done += n;
   }
-  if (g_cd_verbose)
+  if (s_cd_verbose)
     fprintf(stderr, "[cd] loadfile %u B @ LBA %u -> 0x%08X ra=0x%08X\n", size, lba, dest, c->r[31]);
   void overlay_note_load(Core*, uint32_t);
   overlay_note_load(c, dest);   // record the resident overlay now (fresh image matches its signature)
@@ -192,7 +192,7 @@ void cd_async_read(Core* c) {
   c->mem_w32(0x1f8001f4, 0);                  // remaining count consumed (callback would zero it)
   c->mem_w32(0x1f8001f8, dest + done);        // dest advanced, as FUN_8001d7c4 leaves it
   if (nsec) c->mem_w32(0x800be0e0, lba + nsec - 1);  // DAT_800be0e0 = last sector read (pos tracker)
-  if (g_cd_verbose)
+  if (s_cd_verbose)
     fprintf(stderr, "[cd] async read %u words (%u B) @ LBA %u -> 0x%08X\n", words, bytes, lba, dest);
   void overlay_note_load(Core*, uint32_t);
   overlay_note_load(c, dest);   // an A0* field-area code overlay may load here (MODE slot) — note it
@@ -317,12 +317,12 @@ void cd_hle_init(Core* c) {
   c->mem_w32(0x800abfc0u, 0x80089994u);   // CD-ready-cb 2
   c->mem_w32(0x800abf24u, 0x800899bcu);   // CD event handler
   c->mem_w32(0x800abf28u, 0x00000000u);   // (cleared)
-  if (g_cd_verbose || cfg_dbg("cd"))
+  if (s_cd_verbose || cfg_dbg("cd"))
     fprintf(stderr, "[cd] HLE CdInit: drive ready (no controller, no handshake, no busy-wait)\n");
 }
 
 void cd_overrides_init(void) {
-  if (cfg_dbg("cd")) g_cd_verbose = 1;
+  if (cfg_dbg("cd")) s_cd_verbose = 1;
   // SYNC the inline async CD loader FUN_8001DC40(dest, lba, size_bytes): it stuffs the scratchpad read
   // descriptor then runs the IRQ-driven reader FUN_8001D940 inline, which (no IRQ in our model) never
   // drains the word count and hits CD_cw -> VSync (now trapped). Replace the whole entry with the native

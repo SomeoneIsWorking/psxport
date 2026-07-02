@@ -17,10 +17,10 @@
 #define HAVE_BACKTRACE 1
 #endif
 
-static int g_secs;       // 0 => disabled
-static int g_boot_secs;  // generous grace for the FIRST presented frame (cold pipeline compile)
-static volatile sig_atomic_t g_armed;
-static volatile sig_atomic_t g_first_frame_done;  // 0 until the first present pets the watchdog
+static int s_secs;       // 0 => disabled
+static int s_boot_secs;  // generous grace for the FIRST presented frame (cold pipeline compile)
+static volatile sig_atomic_t s_armed;
+static volatile sig_atomic_t s_first_frame_done;  // 0 until the first present pets the watchdog
 
 // The interpreter is gone (2026-06-30): under the recomp substrate the C backtrace below names the
 // gen_func_<addr> chain directly (the guest call stack), so there is no separate "interp PC" to
@@ -31,7 +31,7 @@ static void on_alarm(int sig) {
   (void)sig;
   static const char msg[] = "\n[watchdog] STUCK: no frame presented within the timeout — backtrace:\n";
   write(2, msg, sizeof(msg) - 1);
-  if (!g_first_frame_done) {
+  if (!s_first_frame_done) {
     static const char hint[] = "[watchdog] (tripped on the FIRST frame — likely cold GPU pipeline "
                                "compile, not a hang; re-run, or raise PSXPORT_WATCHDOG_BOOT)\n";
     write(2, hint, sizeof(hint) - 1);
@@ -60,11 +60,11 @@ static void on_fault(int sig) {
 // UI. Install our OWN handler so Ctrl+C always force-exits IMMEDIATELY — and report where it was
 // stuck (interp PC + C backtrace) on the way out, so a hang is diagnosable, not just killable.
 // A second signal hard-kills in case anything in the handler wedges.
-static volatile sig_atomic_t g_int_seen;
+static volatile sig_atomic_t s_int_seen;
 static void on_interrupt(int sig) {
   (void)sig;
-  if (g_int_seen) _exit(130);          // second Ctrl+C: bail without touching anything
-  g_int_seen = 1;
+  if (s_int_seen) _exit(130);          // second Ctrl+C: bail without touching anything
+  s_int_seen = 1;
   static const char msg[] = "\n[watchdog] INTERRUPT (SIGINT/SIGTERM) — where it was stuck:\n";
   write(2, msg, sizeof(msg) - 1);
 #ifdef HAVE_BACKTRACE
@@ -96,45 +96,45 @@ void watchdog_init(void) {
   // well under a second, so 3s is already far past any healthy frame; gameplay pets every present
   // and never trips it. Explicit PSXPORT_WATCHDOG=0 disables it; set higher only for slow debugging.
   const char* s = cfg_str("PSXPORT_WATCHDOG");
-  g_secs = s ? atoi(s) : 3;
-  if (g_secs <= 0) return;
+  s_secs = s ? atoi(s) : 3;
+  if (s_secs <= 0) return;
   // The FIRST presented frame is legitimately slow: RADV/AMD compiles every Vulkan pipeline (SSAO,
   // shadow map, tritex, present blit, …) on first use, so the first present blocks in the GPU fence
   // wait for several seconds on a cold shader cache (e.g. right after a full ./run.sh rebuild). That
   // is NOT a hang, so the 3s steady-state budget must not apply to it. Give the first frame a much
   // larger grace (still finite, so a real first-frame GPU hang is still caught + a Ctrl+C works).
-  // PSXPORT_WATCHDOG_BOOT overrides; default = max(g_secs, 45).
+  // PSXPORT_WATCHDOG_BOOT overrides; default = max(s_secs, 45).
   const char* sb = cfg_str("PSXPORT_WATCHDOG_BOOT");
-  g_boot_secs = sb ? atoi(sb) : (g_secs > 45 ? g_secs : 45);
+  s_boot_secs = sb ? atoi(sb) : (s_secs > 45 ? s_secs : 45);
   struct sigaction sa = {0};
   sa.sa_handler = on_alarm;
   sigaction(SIGALRM, &sa, 0);
-  g_armed = 1;
-  alarm((unsigned)g_boot_secs);
+  s_armed = 1;
+  alarm((unsigned)s_boot_secs);
   fprintf(stderr, "[watchdog] armed: %ds frame-progress timeout (%ds grace for the first frame)\n",
-          g_secs, g_boot_secs);
+          s_secs, s_boot_secs);
 }
 
 // Pet from the present path — one beat per produced frame. Re-arms the timer. The first present
 // switches from the boot grace to the steady-state budget.
 void watchdog_pet(void) {
-  if (!g_armed) return;
-  g_first_frame_done = 1;
-  alarm((unsigned)g_secs);
+  if (!s_armed) return;
+  s_first_frame_done = 1;
+  alarm((unsigned)s_secs);
 }
 
 // Suspend the frame-progress timeout during an INTENTIONAL idle where no frame is presented and that
 // is NOT a hang: a debug-server PAUSE/step-wait, or blocking on REPL stdin for the next command. The
 // next watchdog_pet (the next presented frame after resume) re-arms it. Without this the 3s timeout
-// fires on a deliberately paused/idle process. (cancel any pending alarm; keep g_armed so pet re-arms.)
+// fires on a deliberately paused/idle process. (cancel any pending alarm; keep s_armed so pet re-arms.)
 void watchdog_suspend(void) {
-  if (g_armed) alarm(0);
+  if (s_armed) alarm(0);
 }
 
 // Permanently disable the frame-progress watchdog. For the SBS divergence debugger, which PAUSES the
 // process indefinitely on a divergence for live inspection — "no frame presented" is the intended state
 // there, not a hang, and watchdog_suspend (a one-shot alarm cancel) can't keep up with an open pause.
 void watchdog_disable(void) {
-  g_armed = 0;
+  s_armed = 0;
   alarm(0);
 }

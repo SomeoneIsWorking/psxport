@@ -87,7 +87,7 @@ uint8_t* Core::host_ptr(uint32_t a, uint32_t bytes) {
   return 0;
 }
 
-static int g_io_verbose = 0;  // PSXPORT_IO_VERBOSE=1 to log every stray access (diagnostic only)
+static int s_io_verbose = 0;  // PSXPORT_IO_VERBOSE=1 to log every stray access (diagnostic only)
 
 static int dma_block_words(uint32_t bcr) {  // sync-mode-1 block DMA total word count
   uint32_t bs = bcr & 0xFFFF, bc = bcr >> 16;
@@ -120,7 +120,7 @@ uint32_t Core::io_read(uint32_t a, uint32_t bytes) {
   if (p == 0x1F8010E0) return s_dma6_madr;        // DMA6 OTC MADR
   if (p == 0x1F8010E4) return s_dma6_bcr;         // DMA6 OTC BCR
   if (p == 0x1F8010E8) return s_dma6_chcr;        // DMA6 OTC CHCR (busy bit already cleared)
-  if (g_io_verbose)
+  if (s_io_verbose)
     fprintf(stderr, "[io] read%u @ 0x%08X -> 0\n", bytes * 8, a);
   return 0;
 }
@@ -221,7 +221,7 @@ void Core::io_write(uint32_t a, uint32_t v, uint32_t bytes) {
     }
     return;
   }
-  if (g_io_verbose)
+  if (s_io_verbose)
     fprintf(stderr, "[io] write%u @ 0x%08X = 0x%08X\n", bytes * 8, a, v);
 }
 

@@ -55,19 +55,19 @@ bool CutsceneCamera::followAxis(uint32_t accAddr, uint32_t tgt32Addr, uint16_t t
 }
 
 // ── teleport hook (REPL) ─────────────────────────────────────────────────────────────────────────
-static int g_tp_pending = 0; static int32_t g_tp_x, g_tp_y, g_tp_z;
-void cam_teleport(int x, int y, int z) { g_tp_x = x; g_tp_y = y; g_tp_z = z; g_tp_pending = 1; }
-void cam_teleport_off(void) { g_tp_pending = 0; }
+static int s_tp_pending = 0; static int32_t s_tp_x, s_tp_y, s_tp_z;
+void cam_teleport(int x, int y, int z) { s_tp_x = x; s_tp_y = y; s_tp_z = z; s_tp_pending = 1; }
+void cam_teleport_off(void) { s_tp_pending = 0; }
 
 // ── follow accumulators ──────────────────────────────────────────────────────────────────────────
 bool CutsceneCamera::trackXZ(uint32_t target) {   // FUN_8006D960
-  if (g_tp_pending) {                                   // one-shot debug teleport of Tomba's master pos
-    g_tp_pending = 0;
-    w32(MASTER_X, (uint32_t)g_tp_x << 16);
-    w32(MASTER_Y, (uint32_t)g_tp_y << 16);
-    w32(MASTER_Z, (uint32_t)g_tp_z << 16);
+  if (s_tp_pending) {                                   // one-shot debug teleport of Tomba's master pos
+    s_tp_pending = 0;
+    w32(MASTER_X, (uint32_t)s_tp_x << 16);
+    w32(MASTER_Y, (uint32_t)s_tp_y << 16);
+    w32(MASTER_Z, (uint32_t)s_tp_z << 16);
     w32(G + 0x44, 0);                                   // master speed
-    fprintf(stderr, "[tp] Tomba -> (%d,%d,%d)\n", g_tp_x, g_tp_y, g_tp_z);
+    fprintf(stderr, "[tp] Tomba -> (%d,%d,%d)\n", s_tp_x, s_tp_y, s_tp_z);
   }
   bool snapX = followAxis(S + 0x0C, target + 0, r16(target + 2),  r16(S + 0x0E), 6144);
   bool snapZ = followAxis(S + 0x14, target + 8, r16(target + 10), r16(S + 0x16), 6144);

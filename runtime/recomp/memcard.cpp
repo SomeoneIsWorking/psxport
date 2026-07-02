@@ -193,7 +193,7 @@ void card_write_frame(uint32_t frame, const uint8_t* in128) {
 
 enum { V0 = 2, A0 = 4, A1 = 5, A2 = 6 };
 
-static int g_card_verbose = 0;           // PSXPORT_CARD_VERBOSE=1
+static int s_card_verbose = 0;           // PSXPORT_CARD_VERBOSE=1
 
 // Deliver the libcard I/O-complete event so a caller waiting on it (TestEvent spin / WaitEvent) wakes.
 // Our I/O is synchronous, so completion is "now". EvSpIOE (0x0004) = I/O end. Delivered to the standard
@@ -224,7 +224,7 @@ int card_hle_a0(uint32_t fn, Core* c) {
   switch (fn) {
     case 0xABu:   // _card_info(port)
     case 0xACu:   // _card_load(slot)
-      if (g_card_verbose) fprintf(stderr, "[card] A0:0x%02X(a0=%X a1=%X a2=%X)\n", fn, c->r[A0], c->r[A1], c->r[A2]);
+      if (s_card_verbose) fprintf(stderr, "[card] A0:0x%02X(a0=%X a1=%X a2=%X)\n", fn, c->r[A0], c->r[A1], c->r[A2]);
       card_deliver_complete(c); c->r[V0] = 1; return 1;
     default: return 0;
   }
@@ -238,7 +238,7 @@ static void card_read(Core* c) {
   uint8_t f[CARD_FRAME_SIZE];
   card_read_frame(sector, f);
   for (uint32_t i = 0; i < CARD_FRAME_SIZE; i++) c->mem_w8(buf + i, f[i]);
-  if (g_card_verbose) fprintf(stderr, "[card] read  frame %u -> 0x%08X\n", sector, buf);
+  if (s_card_verbose) fprintf(stderr, "[card] read  frame %u -> 0x%08X\n", sector, buf);
   c->r[V0] = 1;
 }
 
@@ -248,7 +248,7 @@ static void card_write(Core* c) {
   uint8_t f[CARD_FRAME_SIZE];
   for (uint32_t i = 0; i < CARD_FRAME_SIZE; i++) f[i] = c->mem_r8(buf + i);
   card_write_frame(sector, f);
-  if (g_card_verbose) fprintf(stderr, "[card] write frame %u <- 0x%08X\n", sector, buf);
+  if (s_card_verbose) fprintf(stderr, "[card] write frame %u <- 0x%08X\n", sector, buf);
   c->r[V0] = 1;
 }
 
@@ -378,13 +378,13 @@ static void file_open(Core* c) {
     uint32_t nblocks = (mode >> 16) & 0xFFFFu; if (!nblocks) nblocks = 1;
     blk = mc_dir_create(name, nblocks * (CARD_BLOCK_FRAMES - 1) * CARD_FRAME_SIZE);
   }
-  if (blk < 0) { c->r[V0] = 0xFFFFFFFFu; if (g_card_verbose) fprintf(stderr, "[card] open '%s' mode=%X -> FAIL\n", name, mode); return; }
+  if (blk < 0) { c->r[V0] = 0xFFFFFFFFu; if (s_card_verbose) fprintf(stderr, "[card] open '%s' mode=%X -> FAIL\n", name, mode); return; }
   // file size from the directory entry.
   uint8_t e[CARD_FRAME_SIZE]; card_read_frame((uint32_t)blk, e);
   uint32_t sz = (uint32_t)e[4] | ((uint32_t)e[5] << 8) | ((uint32_t)e[6] << 16) | ((uint32_t)e[7] << 24);
   int fd = mc_fd_alloc(blk, sz);
   c->r[V0] = (fd < 0) ? 0xFFFFFFFFu : (uint32_t)fd;
-  if (g_card_verbose) fprintf(stderr, "[card] open '%s' mode=%X -> fd=%d block=%d size=%u\n", name, mode, fd, blk, sz);
+  if (s_card_verbose) fprintf(stderr, "[card] open '%s' mode=%X -> fd=%d block=%d size=%u\n", name, mode, fd, blk, sz);
 }
 
 // B0:0x33 lseek(fd, off, whence): 0=SET,1=CUR,2=END. Returns new position.
@@ -395,7 +395,7 @@ static void file_lseek(Core* c) {
   uint32_t base = (whence == 1) ? s_fd[fd].pos : (whence == 2) ? s_fd[fd].size : 0u;
   s_fd[fd].pos = base + (uint32_t)off;
   c->r[V0] = s_fd[fd].pos;
-  if (g_card_verbose) fprintf(stderr, "[card] lseek fd=%d off=%d whence=%u -> pos=%u\n", fd, off, whence, s_fd[fd].pos);
+  if (s_card_verbose) fprintf(stderr, "[card] lseek fd=%d off=%d whence=%u -> pos=%u\n", fd, off, whence, s_fd[fd].pos);
 }
 
 // B0:0x34 read(fd, buf, len): copy `len` bytes from the card file into g_ram[buf]; deliver completion.
@@ -412,7 +412,7 @@ static void file_read(Core* c) {
   }
   s_fd[fd].pos += len;
   c->r[V0] = len;
-  if (g_card_verbose) fprintf(stderr, "[card] read  fd=%d -> 0x%08X len=%u (pos now %u)\n", fd, buf, len, s_fd[fd].pos);
+  if (s_card_verbose) fprintf(stderr, "[card] read  fd=%d -> 0x%08X len=%u (pos now %u)\n", fd, buf, len, s_fd[fd].pos);
   card_deliver_complete(c);   // SwCARD-0x8000 SUCCESS — the load menu's per-frame TestEvent(+28)
 }
 
@@ -437,7 +437,7 @@ static void file_write(Core* c) {
   if (cur_frame != 0xFFFFFFFFu) card_write_frame(cur_frame, fr);   // flush the last partial frame
   s_fd[fd].pos += len;
   c->r[V0] = len;
-  if (g_card_verbose) fprintf(stderr, "[card] write fd=%d <- 0x%08X len=%u (pos now %u)\n", fd, buf, len, s_fd[fd].pos);
+  if (s_card_verbose) fprintf(stderr, "[card] write fd=%d <- 0x%08X len=%u (pos now %u)\n", fd, buf, len, s_fd[fd].pos);
   card_deliver_complete(c);   // SwCARD-0x8000 SUCCESS — the save menu's per-frame TestEvent(+28)
 }
 
@@ -447,20 +447,20 @@ static void file_close(Core* c) {
   if (fd >= 0 && fd <= 2) { c->r[V0] = (uint32_t)fd; return; }   // console fds: nothing to free
   if (fd >= MC_FD_BASE && fd < MC_FD_MAX) s_fd[fd].used = 0;
   c->r[V0] = (fd >= MC_FD_BASE && fd < MC_FD_MAX) ? (uint32_t)fd : 0xFFFFFFFFu;
-  if (g_card_verbose) fprintf(stderr, "[card] close fd=%d\n", fd);
+  if (s_card_verbose) fprintf(stderr, "[card] close fd=%d\n", fd);
 }
 
 // B0:0x45 erase(name): mark the file's directory block free. Returns 1 on success.
 static void file_erase(Core* c) {
   char name[0x100]; mc_read_guest_str(c, c->r[A0], name, sizeof name);
   int blk = mc_dir_find(name);
-  if (blk < 0) { c->r[V0] = 0; if (g_card_verbose) fprintf(stderr, "[card] erase '%s' -> not found\n", name); return; }
+  if (blk < 0) { c->r[V0] = 0; if (s_card_verbose) fprintf(stderr, "[card] erase '%s' -> not found\n", name); return; }
   uint8_t e[CARD_FRAME_SIZE]; memset(e, 0, sizeof e);
   e[0] = DIR_FREE; e[8] = 0xFF; e[9] = 0xFF;
   uint8_t x = 0; for (uint32_t i = 0; i < 0x7F; i++) x ^= e[i]; e[0x7F] = x;
   card_write_frame((uint32_t)blk, e);
   c->r[V0] = 1;
-  if (g_card_verbose) fprintf(stderr, "[card] erase '%s' (block %d) -> ok\n", name, blk);
+  if (s_card_verbose) fprintf(stderr, "[card] erase '%s' (block %d) -> ok\n", name, blk);
 }
 
 // B0:0x43 firstfile(name_pattern, dir_entry_out): the menu uses this to enumerate save slots. Returns
@@ -483,7 +483,7 @@ static void card_info(Core* c) { card_deliver_complete(c); c->r[V0] = 1; }
 int card_hle_b0(uint32_t fn, Core* c) {
   switch (fn) {
     case 0x4Cu: case 0x4Eu: case 0x4Fu: case 0x50u: case 0x5Cu:
-      if (g_card_verbose) fprintf(stderr, "[card] B0:0x%02X(a0=%X a1=%X a2=%X)\n", fn, c->r[A0], c->r[A1], c->r[A2]);
+      if (s_card_verbose) fprintf(stderr, "[card] B0:0x%02X(a0=%X a1=%X a2=%X)\n", fn, c->r[A0], c->r[A1], c->r[A2]);
       break;
     default: return 0;
   }
@@ -498,7 +498,7 @@ int card_hle_b0(uint32_t fn, Core* c) {
 }
 
 void card_overrides_init(void) {
-  if (cfg_dbg("card")) g_card_verbose = 1;
+  if (cfg_dbg("card")) s_card_verbose = 1;
   card_init();
   // The low-level libcard B0 frame indices (_card_read/write/status/info, used by the FORMAT path
   // FUN_8009C2B0/C3F4 and the card-CHECK) are serviced in the HLE B0 dispatch (recomp_hle ->
