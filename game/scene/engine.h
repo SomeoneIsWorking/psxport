@@ -93,6 +93,11 @@ public:
   // fall through to substrate 0x8010810C. Was ov_game_submit_810c in engine_stage.cpp.
   void submitPage810c();
 
+  // fadeSequencer: the GAME-overlay a0l per-node screen-fade sequencer (guest FUN_8010957C).
+  // Runs the multi-step ramp state machine at node+2 / node+3 / node+106 (level). Called by
+  // fieldRun's sm[0x4e]==0xb branch with node = 0x800E8008. Was ov_scene_fade_seq.
+  void fadeSequencer(uint32_t node);
+
   // ── ov_field_frame direct children (progressive class-ification) ──────────────────────────
   // areaModeDispatch: the 22-way area-mode jump-table dispatcher at guest 0x8001CAC0. Reads the
   //   area RENDER-MODE byte at 0x800BF870 and dispatches to the overlay handler that owns that

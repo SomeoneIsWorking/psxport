@@ -453,7 +453,7 @@ void Engine::fieldFrame() { Core* c = core;
 // (case 1 checks 0x800bf839==3, case 8 rewrites both) — this function and ov_field_run communicate through
 // guest memory, not a call, which is fine (guest-memory-direct is an accepted PC-native pattern here) but
 // worth knowing at both ends.
-static void ov_scene_fade_seq(Core* c, uint32_t node) {
+void Engine::fadeSequencer(uint32_t node) { Core* c = core;
   uint8_t outer = c->mem_r8(node + 2);
 
   if (outer == 0) {
@@ -682,7 +682,7 @@ void Engine::fieldRun() { Core* c = core;
       break;
     }
     case 0xb:
-      ov_scene_fade_seq(c, 0x800e8008u);   // OWNED native — replaces d1(0x8010957c, node) (a0l fade sequencer)
+      c->engine.fadeSequencer(0x800e8008u);   // OWNED native — replaces d1(0x8010957c, node) (a0l fade sequencer)
       break;
     default: break;
   }
