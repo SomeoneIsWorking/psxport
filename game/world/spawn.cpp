@@ -141,16 +141,17 @@ static uint32_t entity_spawn(Core* c) {
 
 // FUN_80079DDC — the POOL-2 spawn primitive (spawn variant class 1). Same link/stamp as FUN_80079C3C but
 // pops a DIFFERENT free-list (head 0x800E80A0, count 0x800E7E7D), has NO pool-low guard, and when its pool
-// is EMPTY it DELEGATES to variant 2 (FUN_80079F90) with the original (ref, type&0xff, mode, list). RE'd
-// from disas 0x80079DDC. The fallback target stays content (rec_dispatch).
+// is EMPTY it DELEGATES to variant 2 (FUN_80079F90) — POOL_VAR2, owned natively via pool_spawn (byte-perfect
+// per spawn_variant_native, proven by the spawn_dispatch A/B wire in af27fd8).
+static uint32_t pool_spawn(Core* c, const PoolDesc& p);
 static const uint32_t POOL2_HEAD = 0x800E80A0u, POOL2_CNT = 0x800E7E7Du;
 static uint32_t spawn_pool2(Core* c) {
   const uint32_t ref = c->r[4], type = c->r[5] & 0xffu, mode = c->r[6], list = c->r[7];
   uint32_t node = c->mem_r32(POOL2_HEAD);
-  if (node == 0) {                                  // pool empty -> delegate to FUN_80079F90(ref,type,mode,list)
+  if (node == 0) {                                  // pool empty -> delegate to POOL_VAR2 (FUN_80079F90) natively
     c->r[4] = ref; c->r[5] = type;                  // a2/a3 already hold mode/list, untouched
-    rec_dispatch(c, 0x80079F90u);
-    return c->r[2];
+    static const PoolDesc P = { 0x800F2398u, 0x800ED8CCu };   // POOL_VAR2 (FUN_80079F90) — see defn below
+    return pool_spawn(c, P);
   }
   uint32_t cnt = c->mem_r8(POOL2_CNT);
   c->mem_w8(POOL2_CNT, (uint8_t)(cnt - 1));
