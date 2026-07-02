@@ -26,6 +26,7 @@
 #include "world/pool.h"          // Engine owns the Pool per-area init subsystem
 #include "world/placement.h"     // Engine owns the Placement field-object driver
 #include "world/graphics_bind.h" // Engine owns the GraphicsBind object render-bind subsystem
+#include "ui/font.h"             // Engine owns the Font boot-time init subsystem
 class Core;
 
 class Engine {
@@ -46,6 +47,7 @@ public:
   Pool             pool;              // per-area object-pool + control-block init (world subsystem)
   Placement        placement;         // field object-placement driver (guest FUN_80072A78/DDC)
   GraphicsBind     graphicsBind;      // per-object render-bind subsystem (guest FUN_8007AAE8 et al.)
+  Font             font;              // boot-time font / text init subsystem (guest FUN_80075130)
 
   // ── GAME-stage entry points (called by the scheduler each frame) ────────────────────────────
   // stagePrologue: one-time prologue that runs when the GAME task enters — task-slot setup, first

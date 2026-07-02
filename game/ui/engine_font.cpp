@@ -17,39 +17,40 @@
 // per-callee semantics in docs/engine_re.md "FUN_80075130 font / text init". Store widths are exact
 // (sb/sh/sw) — they are the engine-interface state the rest of the engine + retained PSX content read.
 #include "core.h"
+#include "ui/font.h"
 #include <stdint.h>
 
 void rec_dispatch(Core*, uint32_t);   // run a kept (libgpu/sound) callee in-context
 
-// FUN_800963a0 — font-bank selector. a0 = bank index. If ((a0-1)&0xff) < 24, store the bank byte at
-// 0x80105cec and return the sign-extended low byte of a0; otherwise return -1. (At the init call a0=24 →
+// FUN_800963a0 — font-bank selector. If ((bank-1)&0xff) < 24, store the bank byte at
+// 0x80105cec and return the sign-extended low byte; otherwise return -1. (At the init call bank=24 →
 // (24-1)&0xff = 23 < 24 → store 24, return 24.) Leaf, no sub-calls.
-void ov_font_bank_select(Core* c) {
-  uint32_t a0 = c->r[4];
-  uint32_t v = (a0 - 1) & 0xff;
+void Font::bankSelect(uint32_t bank) {
+  Core* c = this->core;
+  uint32_t v = (bank - 1) & 0xff;
   if (v < 24) {
-    c->mem_w8(0x80105cecu, (uint8_t)a0);
-    c->r[2] = (uint32_t)(int32_t)(int8_t)(uint8_t)a0;   // (a0<<24)>>24 : sign-extend low byte
+    c->mem_w8(0x80105cecu, (uint8_t)bank);
+    c->r[2] = (uint32_t)(int32_t)(int8_t)(uint8_t)bank;   // (bank<<24)>>24 : sign-extend low byte
   } else {
     c->r[2] = (uint32_t)-1;
   }
 }
 
-// FUN_80096370 — font-bank2 store. `*0x80105d28(sb) = a0; jr ra`. Leaf; does NOT set a return value
-// (v0 left untouched by the recomp body — the caller ignores it). At the init call a0=0.
-void ov_font_bank2_store(Core* c) {
-  c->mem_w8(0x80105d28u, (uint8_t)c->r[4]);
+// FUN_80096370 — font-bank2 store. `*0x80105d28(sb) = bank; jr ra`. Leaf; does NOT set v0
+// (recomp body left v0 untouched — the caller ignores it). At the init call bank=0.
+void Font::bank2Store(uint32_t bank) {
+  this->core->mem_w8(0x80105d28u, (uint8_t)bank);
 }
 
-// FUN_800752b4 — glyph-class table fill. a0 = class. Iterates i = 0..23 over a 24-entry table at base
-// 0x800be238 (stride 12, write byte at entry+8). Thresholds from a0: t1=24-a0, t0=16-a0, a3=12-a0,
-// a4=8-a0. The slt/bne tests branch AWAY when (i<thr) is true, so the fall-through (i>=thr) assigns:
+// FUN_800752b4 — glyph-class table fill. Iterates i = 0..23 over a 24-entry table at base
+// 0x800be238 (stride 12, write byte at entry+8). Thresholds from cls: t1=24-cls, t0=16-cls, a3=12-cls,
+// a4=8-cls. The slt/bne tests branch AWAY when (i<thr) is true, so the fall-through (i>=thr) assigns:
 //   i>=t1 ->4 ; i>=t0 ->1 ; i>=a3 ->3 ; i>=a4 ->2 ; else ->0   (exclusive cascade, first match wins).
 // Returns the count in v0 but the caller IGNORES it. Only writes 0x800be238 + i*12 + 8 (sb).
-void ov_font_glyphclass_fill(Core* c) {
-  int32_t a0 = (int32_t)c->r[4];
+void Font::glyphClassFill(int32_t cls) {
+  Core* c = this->core;
   const uint32_t base = 0x800be238u;
-  int32_t t1 = 24 - a0, t0 = 16 - a0, a3 = 12 - a0, a4 = 8 - a0;
+  int32_t t1 = 24 - cls, t0 = 16 - cls, a3 = 12 - cls, a4 = 8 - cls;
   for (int i = 0; i < 24; i++) {
     uint8_t val;
     if      (i >= t1) val = 4;
@@ -65,7 +66,8 @@ void ov_font_glyphclass_fill(Core* c) {
 // FUN_80075130 — font / text system init orchestrator. No args, no return. Mirrors the recomp frame
 // (sp -= 48; sw ra,40(sp)) because dispatched callees #11/#13 read a struct at sp+16. Owns the direct
 // writes + the 3 engine callees; rec_dispatches the 8 libgpu/sound callees IN ORDER, IN-CONTEXT.
-void ov_font_init(Core* c) {
+void Font::init() {
+  Core* c = this->core;
   uint32_t ra = c->r[31], sp = c->r[29];
   c->r[29] = sp - 48;
   uint32_t fsp = c->r[29];
@@ -75,9 +77,9 @@ void ov_font_init(Core* c) {
   rec_dispatch(c, 0x8008e040u);
 
   // #2 FUN_800963a0(24) — own
-  c->r[4] = 24; ov_font_bank_select(c);
+  bankSelect(24);
   // #3 FUN_80096370(0) — own
-  c->r[4] = 0;  ov_font_bank2_store(c);
+  bank2Store(0);
 
   // #4 FUN_80098f90(0, 0xffffff) — dispatched
   c->r[4] = 0; c->r[5] = 0x00ffffffu; rec_dispatch(c, 0x80098f90u);
@@ -95,7 +97,7 @@ void ov_font_init(Core* c) {
   // *0x800bed80 = -1 (sh)  — original is the DELAY SLOT of the #9 jal (v0=-1), runs before #9 body.
   c->mem_w16(0x800bed80u, 0xffff);
   // #9 FUN_800752b4(2) — own
-  c->r[4] = 2; ov_font_glyphclass_fill(c);
+  glyphClassFill(2);
 
   // direct: *0x800be358 = 0 (sw)  [once], then 14× sh 0 at 0x800be3d6 stepping -8.
   c->mem_w32(0x800be358u, 0);

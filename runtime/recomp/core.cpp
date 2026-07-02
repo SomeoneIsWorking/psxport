@@ -30,6 +30,7 @@ Core::Core() {
   engine.pool.core = this;              // Engine-owned per-area init subsystem
   engine.placement.core = this;         // Engine-owned field-placement driver
   engine.graphicsBind.core = this;      // Engine-owned per-object render-bind subsystem
+  engine.font.core = this;              // Engine-owned boot-time font/text init subsystem
   rng.core        = this;
   inventory.core  = this;
   // Render umbrella (owned by pointer): allocate, wire its back-pointer + each embedded sub-subsystem.
