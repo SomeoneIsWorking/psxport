@@ -480,44 +480,48 @@ void rtpcaller_reset(void) { for (int i = 0; i < 64; i++) { s_rtpcaller[i].ra = 
 // address (s_fifo_addr). Exact and deterministic by construction. This REPLACED the value-keyed "attach"
 // ring (capture-at-gte_op + value-match-at-store), which could only CORRELATE projected SXY back to a
 // depth and was unreliable (same-pixel verts ambiguous; whole-frame staleness) — a measurement hack.
-#define PP_MAX  65536
-#define PP_HASH 16384
-typedef struct { uint32_t addr; float pz; int next; } PpEnt;
-static PpEnt s_pp[PP_MAX];
-static int   s_pp_head[PP_HASH];
-static int   s_pp_n = 0, s_pp_inited = 0, s_pp_overflow = 0;
-static inline uint32_t pp_hash(uint32_t addr) { return ((addr >> 2) * 2654435761u) >> 18 & (PP_HASH - 1); }
+//
+// The cache is PER-INSTANCE (ProjPrimState on Game) so SBS's two cores don't clobber each other's per-
+// frame depths — projprim_bind(c) sets s_cur to THIS core's cache before its frame runs (parallels
+// gte_bind). Before the first bind s_cur is null and the calls are no-ops (safe for tools/boot paths
+// that hit these APIs before a Game exists).
+static inline uint32_t pp_hash(uint32_t addr) { return ((addr >> 2) * 2654435761u) >> 18 & (PROJPRIM_PP_HASH - 1); }
+static ProjPrimState* s_cur = nullptr;
+void projprim_bind(Core* c) { s_cur = &c->game->projprim; }
 void projprim_reset(void) {           // per-frame: drop last frame's depths so none are read stale
-  s_pp_n = 0; s_pp_overflow = 0;
-  for (int i = 0; i < PP_HASH; i++) s_pp_head[i] = -1;
-  s_pp_inited = 1;
+  ProjPrimState* p = s_cur; if (!p) return;
+  p->n = 0; p->overflow = 0;
+  for (int i = 0; i < PROJPRIM_PP_HASH; i++) p->head[i] = -1;
+  p->inited = 1;
 }
-// ProjPrim / depth-cache diag counters — file-scope statics (the projprim cache above is itself
-// process-wide, so counting is too). Exposed via projprim_stats_read/reset for the ndepth dump in
-// gpu_native.cpp. Was extern long g_pp_set / g_pp_hit / g_pp_miss (deglobalize-game 2026-07-03).
-static long s_pp_stat_set = 0, s_pp_stat_hit = 0, s_pp_stat_miss = 0;
-void projprim_stats_read(long* set, long* hit, long* miss) { if (set) *set = s_pp_stat_set; if (hit) *hit = s_pp_stat_hit; if (miss) *miss = s_pp_stat_miss; }
-void projprim_stats_reset(void) { s_pp_stat_set = s_pp_stat_hit = s_pp_stat_miss = 0; }
+void projprim_stats_read(long* set, long* hit, long* miss) {
+  ProjPrimState* p = s_cur;
+  if (set)  *set  = p ? p->set_ct  : 0;
+  if (hit)  *hit  = p ? p->hit_ct  : 0;
+  if (miss) *miss = p ? p->miss_ct : 0;
+}
+void projprim_stats_reset(void) { ProjPrimState* p = s_cur; if (!p) return; p->set_ct = p->hit_ct = p->miss_ct = 0; }
 void projprim_set_pz(uint32_t addr, float pz) {   // engine_submit records a vertex's view-Z at its addr
-  s_pp_stat_set++;
-  if (!s_pp_inited) projprim_reset();
+  ProjPrimState* p = s_cur; if (!p) return;
+  p->set_ct++;
+  if (!p->inited) projprim_reset();
   addr &= 0x1FFFFC;
   uint32_t h = pp_hash(addr);
-  for (int i = s_pp_head[h]; i >= 0; i = s_pp[i].next) if (s_pp[i].addr == addr) { s_pp[i].pz = pz; return; }
-  if (s_pp_n >= PP_MAX) { s_pp_overflow = 1; return; }
-  PpEnt* e = &s_pp[s_pp_n];
-  e->addr = addr; e->pz = pz; e->next = s_pp_head[h]; s_pp_head[h] = s_pp_n++;
+  for (int i = p->head[h]; i >= 0; i = p->entries[i].next) if (p->entries[i].addr == addr) { p->entries[i].pz = pz; return; }
+  if (p->n >= PROJPRIM_PP_MAX) { p->overflow = 1; return; }
+  ProjPrimEnt* e = &p->entries[p->n];
+  e->addr = addr; e->pz = pz; e->next = p->head[h]; p->head[h] = p->n++;
 }
 int projprim_lookup_pz(uint32_t addr, float* pz) {   // renderer: depth for the packet vertex word at addr
-  if (!s_pp_inited) return 0;
+  ProjPrimState* p = s_cur; if (!p || !p->inited) return 0;
   addr &= 0x1FFFFC;
-  for (int i = s_pp_head[pp_hash(addr)]; i >= 0; i = s_pp[i].next) if (s_pp[i].addr == addr) {
-    if (pz) *pz = s_pp[i].pz; s_pp_stat_hit++; return 1; }
-  s_pp_stat_miss++;
+  for (int i = p->head[pp_hash(addr)]; i >= 0; i = p->entries[i].next) if (p->entries[i].addr == addr) {
+    if (pz) *pz = p->entries[i].pz; p->hit_ct++; return 1; }
+  p->miss_ct++;
   return 0;
 }
-int  projprim_overflowed(void) { return s_pp_overflow; }
-int  projprim_count(void)      { return s_pp_n; }
+int  projprim_overflowed(void) { ProjPrimState* p = s_cur; return p ? p->overflow : 0; }
+int  projprim_count(void)      { ProjPrimState* p = s_cur; return p ? p->n : 0; }
 
 // PC-native per-pixel depth is THE render behavior — this is a PC GAME, not an emulator. The OT-order
 // painter's algorithm is the PSX limitation we transcend; genuine widescreen needs real per-pixel

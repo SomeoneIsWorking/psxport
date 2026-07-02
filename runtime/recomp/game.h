@@ -13,6 +13,7 @@
 #pragma once
 #include "core.h"
 #include "gte_state.h"             // GteRegs — per-instance GTE (COP2) register file (Beetle gte.c)
+#include "projprim_state.h"        // ProjPrimState — per-instance vertex-depth cache (native depth path)
 #include "cdc_state.h"             // CdcState — per-instance native CD-controller register model (cdc_native.c)
 #include "xa_state.h"              // XaState  — per-instance native XA-ADPCM CD-audio streamer (xa_stream.c)
 #include "spu_state.h"             // per-instance SPU state handle (Beetle spu.c) — SPU_NewState/Bind
@@ -199,6 +200,8 @@ public:
   Fps60  fps60; // interpolated-60fps tier: capture buffers + matcher + remap (fps60.cpp)
   GteRegs     gte{}; // GTE (COP2) register file — per-instance so two cores keep SEPARATE GTE state
                      // (Beetle gte.c bound to this via GTE_BindState; see gte_bind, gte_beetle.cpp)
+  ProjPrimState projprim{}; // vertex-depth cache for the native depth path — per-instance so SBS's
+                     // two cores don't clobber each other's per-frame depths (see projprim_bind, gte_beetle.cpp)
   void* spu_state = nullptr;  // per-instance SPU state (Beetle spu.c), heap-allocated; bound via SPU_BindState
   int   spu_powered = 0;      // SPU_Power run on this instance's state yet? (lazy power on first bind)
   void* mdec_state = nullptr; // per-instance MDEC state (Beetle mdec.c), heap-allocated; bound via MDEC_BindState
