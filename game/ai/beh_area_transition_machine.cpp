@@ -42,6 +42,7 @@
 #include "spawn.h"   // world_despawn
 #include "graphics_bind.h"   // ov_obj_record_init
 #include "trig.h"    // class Trig — libgte ratan2
+#include "camera/cutscene_camera.h"   // CutsceneCamera::runInitSeedGrp (was rec_dispatch 0x8006CBA8)
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
@@ -77,7 +78,7 @@ static void dat_tail(Core* c, uint32_t nd) {           // @0x80127c9c (sub==3 on
   uint32_t save = c->r[29]; c->r[29] = fsp;
   ov_obj_pos_compose(c);                               // FUN_8004bd64(node,0,*0x800e7f5c,same,&0x1f8000c0)
   c->r[29] = save;
-  c->r[4] = G_eac; rec_dispatch(c, 0x8006CBA8u);       // FUN_8006cba8(&DAT_800e7eac)
+  CutsceneCamera::runInitSeedGrp(c, G_eac);            // FUN_8006cba8(&DAT_800e7eac) — native
 }
 
 // node[6] phase machine (node[5]==3). Mutates node + DAT_800e* state; all cases converge to the DAT tail.

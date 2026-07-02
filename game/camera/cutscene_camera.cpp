@@ -632,10 +632,7 @@ void CutsceneCamera::trackFollow(uint32_t target) {   // FUN_8006E228
   trackXZ(target);
   trackY(target);
   camW16(0x0e, r16(0x1F8000E2u));
-  if (camR8(0x76) == 0) {
-    c->r[4] = cam_; rec_dispatch(c, 0x8006DAD8u);      // still-substrate sub-fns (read a0 only)
-    c->r[4] = cam_; rec_dispatch(c, 0x8006DEF0u);
-  }
+  if (camR8(0x76) == 0) { posBuildB(); headBuildB(); }   // scripted look-build B (see snapFollowB — same pattern)
   lookAt();
 }
 
@@ -850,6 +847,10 @@ void CutsceneCamera::init() {   // FUN_8006EA7C (first-frame field reset + rende
 // ── live-spine entry points (static; class member interface) ─────────────────────────────────────
 void CutsceneCamera::runFieldUpdate(Core* c) {
   CutsceneCamera(c, CAM_OBJ).update();
+}
+
+void CutsceneCamera::runInitSeedGrp(Core* c, uint32_t src) {
+  CutsceneCamera(c, CAM_OBJ).initSeedGrp(src);
 }
 
 void CutsceneCamera::runSnapFollow(Core* c, uint32_t cam, uint32_t target) {

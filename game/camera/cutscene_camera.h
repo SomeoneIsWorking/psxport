@@ -58,6 +58,11 @@ public:
   //   the same inputs — the regression gate for the restructure (cam struct + full scratchpad, 0 mismatch).
   static void runFieldUpdate(Core* c);
   static void runSnapFollow(Core* c, uint32_t cam, uint32_t target);
+  // runInitSeedGrp: 0x8006CBA8 (init: seed the FIXED driver cam @0x800E8008 from a source group).
+  //   Static entry so AI area-transition callers can replace rec_dispatch(0x8006CBA8) with a direct
+  //   PC-native call. initSeedGrp writes CAM_OBJ +0x3a/0x3e/0x42 only — cam_ is unused, so the
+  //   temporary instance's cam parameter is a don't-care.
+  static void runInitSeedGrp(Core* c, uint32_t src);
 
   // ── Per-frame DRIVER (0x8006EC44) + init/mode-selector (0x8006EA7C) ──────────────────────────────
   // update(): the resident camera driver — reads the outer state from cam[0] (0=first-frame init, 1=run,
