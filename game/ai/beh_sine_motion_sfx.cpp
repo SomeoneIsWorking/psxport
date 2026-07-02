@@ -60,7 +60,7 @@ void beh_sine_motion_sfx(Core* c) {
 
  L1b0:                                   // ===== STATE 0 (INIT) =====
   // FUN_80051B70(node,12,6)
-  c->r[4] = nd; c->r[5] = 12; c->r[6] = 6; rec_dispatch(c, 0x80051b70u); v0 = (int32_t)c->r[2];
+  c->r[4] = nd; c->r[5] = 12; c->r[6] = 6; ov_obj_record_init(c); v0 = (int32_t)c->r[2];
   if (v0 != 0) goto Lret;                // bne v0,zero,0x801365a8 ; delay v0=576
   v0 = 576;
   a0 = (int32_t)nd;

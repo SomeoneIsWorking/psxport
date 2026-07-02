@@ -52,7 +52,8 @@ void beh_single_child_cull(Core* c) {
 
  // ================= STATE 0 (INIT) =================
  S0: {
-   if (leafr3(c, nd, 12, 37, 0x80051b70u) != 0) goto Lret;   // FUN_80051B70(node,12,37) -> bail if !=0
+   c->r[4] = nd; c->r[5] = 12; c->r[6] = 37; ov_obj_record_init(c);   // FUN_80051B70(node,12,37) -> bail if !=0
+   if (c->r[2] != 0) goto Lret;
    c->mem_w16(nd + 0x80, 30);
    c->mem_w16(nd + 0x82, 60);
    c->mem_w16(nd + 0x84, 50);

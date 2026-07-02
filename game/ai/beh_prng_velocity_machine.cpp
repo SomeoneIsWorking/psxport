@@ -92,7 +92,7 @@ void beh_prng_velocity_machine(Core* c) {
  L7788: {                                         // node[3]==1
    c->mem_w8(s1 + 0, 4);
    c->mem_w8(s1 + 0x5e, 0);                       // node[0x5e]=0 (jal delay slot, before callee)
-   uint32_t r = call3(c, s1, 1, 0, 0x80051b70u);  // FUN_80051B70(node, 1, 0)
+   c->r[4] = s1; c->r[5] = 1; c->r[6] = 0; ov_obj_record_init(c); uint32_t r = c->r[2];  // FUN_80051B70(node, 1, 0)
    if (r != 0) goto Lret;
    c->mem_w32(s1 + 0x2c, 0x28d20000u);
    uint16_t v1 = c->mem_r16(s1 + 0x2e);
