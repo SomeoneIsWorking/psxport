@@ -68,6 +68,8 @@ void beh_pure_substate_dispatch(Core* c) {
   return;
 }
 
+}  // namespace — ov_beh_pure_substate_dispatch (below) is the exported entry point.
+
 void ov_beh_pure_substate_dispatch(Core* c) {
   static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("pure_substate_dispatchverify") ? 1 : 0;
   if (!s_v) { beh_pure_substate_dispatch(c); return; }
@@ -91,6 +93,3 @@ void ov_beh_pure_substate_dispatch(Core* c) {
   } else if (++ng % 50 == 0) fprintf(stderr, "[pure_substate_dispatchverify] %ld matches\n", ng);
 }
 
-}  // namespace
-
-void ov_beh_pure_substate_dispatch_run(Core* c) { ov_beh_pure_substate_dispatch(c); }

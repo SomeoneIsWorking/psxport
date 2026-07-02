@@ -162,6 +162,8 @@ void beh_camera_target_follow(Core* c) {
   }
 }
 
+}  // namespace — ov_beh_camera_target_follow (below) is the exported entry point.
+
 void ov_beh_camera_target_follow(Core* c) {
   static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("camera_target_followverify") ? 1 : 0;
   if (!s_v) { beh_camera_target_follow(c); return; }
@@ -185,6 +187,3 @@ void ov_beh_camera_target_follow(Core* c) {
   } else if (++ng % 50 == 0) fprintf(stderr, "[camera_target_followverify] %ld matches\n", ng);
 }
 
-}  // namespace
-
-void ov_beh_camera_target_follow_run(Core* c) { ov_beh_camera_target_follow(c); }

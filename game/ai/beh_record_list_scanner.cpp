@@ -114,6 +114,8 @@ void beh_record_list_scanner(Core* c) {
   }
 }
 
+}  // namespace — ov_beh_record_list_scanner (below) is the exported entry point.
+
 void ov_beh_record_list_scanner(Core* c) {
   static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("record_list_scannerverify") ? 1 : 0;
   if (!s_v) { beh_record_list_scanner(c); return; }
@@ -137,6 +139,3 @@ void ov_beh_record_list_scanner(Core* c) {
   } else if (++ng % 50 == 0) fprintf(stderr, "[record_list_scannerverify] %ld matches\n", ng);
 }
 
-}  // namespace
-
-void ov_beh_record_list_scanner_run(Core* c) { ov_beh_record_list_scanner(c); }

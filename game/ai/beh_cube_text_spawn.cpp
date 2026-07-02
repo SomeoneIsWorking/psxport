@@ -146,6 +146,8 @@ void beh_cube_text_spawn(Core* c) {
   c->mem_w8(nd + 0x5e, 1);
 }
 
+}  // namespace — ov_beh_cube_text_spawn (below) is the exported entry point.
+
 void ov_beh_cube_text_spawn(Core* c) {
   static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("cube_text_spawnverify") ? 1 : 0;
   if (!s_v) { beh_cube_text_spawn(c); return; }
@@ -169,6 +171,3 @@ void ov_beh_cube_text_spawn(Core* c) {
   } else if (++ng % 50 == 0) fprintf(stderr, "[cube_text_spawnverify] %ld matches\n", ng);
 }
 
-}  // namespace
-
-void ov_beh_cube_text_spawn_run(Core* c) { ov_beh_cube_text_spawn(c); }

@@ -97,6 +97,8 @@ void beh_variant_overlay_lifecycle(Core* c) {
   }
 }
 
+}  // namespace — ov_beh_variant_overlay_lifecycle (below) is the exported entry point.
+
 void ov_beh_variant_overlay_lifecycle(Core* c) {
   static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("variant_overlay_lifecycleverify") ? 1 : 0;
   if (!s_v) { beh_variant_overlay_lifecycle(c); return; }
@@ -120,6 +122,3 @@ void ov_beh_variant_overlay_lifecycle(Core* c) {
   } else if (++ng % 50 == 0) fprintf(stderr, "[variant_overlay_lifecycleverify] %ld matches\n", ng);
 }
 
-}  // namespace
-
-void ov_beh_variant_overlay_lifecycle_run(Core* c) { ov_beh_variant_overlay_lifecycle(c); }

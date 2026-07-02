@@ -134,6 +134,8 @@ void beh_substate_edge_orchestrator(Core* c) {
   c->mem_w8(obj + 0x2b, 0);                           // sb zero,0x2b(s1) [delay slot @ED64, always runs]
 }
 
+}  // namespace — ov_beh_substate_edge_orchestrator (below) is the exported entry point.
+
 void ov_beh_substate_edge_orchestrator(Core* c) {
   static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("substate_edge_orchestratorverify") ? 1 : 0;
   if (!s_v) { beh_substate_edge_orchestrator(c); return; }
@@ -157,8 +159,3 @@ void ov_beh_substate_edge_orchestrator(Core* c) {
   } else if (++ng % 50 == 0) fprintf(stderr, "[substate_edge_orchestratorverify] %ld matches\n", ng);
 }
 
-}  // namespace
-
-// Exported entry — the verify wrapper ov_beh_substate_edge_orchestrator is in the anonymous namespace above (internal
-// linkage); the engine's per-object dispatch calls THIS to run the owned behavior.
-void ov_beh_substate_edge_orchestrator_run(Core* c) { ov_beh_substate_edge_orchestrator(c); }

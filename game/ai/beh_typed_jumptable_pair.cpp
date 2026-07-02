@@ -337,6 +337,8 @@ void beh_typed_jumptable_pair(Core* c) {
   c->mem_w8(obj + 0x2b, 0);                           // 801395A0 sb zero, 0x2b(s0)  (delay slot of j epilogue)
 }
 
+}  // namespace — ov_beh_typed_jumptable_pair (below) is the exported entry point.
+
 void ov_beh_typed_jumptable_pair(Core* c) {
   static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("typed_jumptable_pairverify") ? 1 : 0;
   if (!s_v) { beh_typed_jumptable_pair(c); return; }
@@ -360,8 +362,3 @@ void ov_beh_typed_jumptable_pair(Core* c) {
   } else if (++ng % 50 == 0) fprintf(stderr, "[typed_jumptable_pairverify] %ld matches\n", ng);
 }
 
-}  // namespace
-
-// Exported entry — the verify wrapper ov_beh_typed_jumptable_pair is in the anonymous namespace above (internal
-// linkage); the engine's per-object dispatch calls THIS to run the owned behavior.
-void ov_beh_typed_jumptable_pair_run(Core* c) { ov_beh_typed_jumptable_pair(c); }

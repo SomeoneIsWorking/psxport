@@ -179,6 +179,8 @@ void beh_lift_platform(Core* c) {
   }
 }
 
+}  // namespace — ov_beh_lift_platform (below) is the exported entry point.
+
 void ov_beh_lift_platform(Core* c) {
   static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("lift_platformverify") ? 1 : 0;
   if (!s_v) { beh_lift_platform(c); return; }
@@ -202,6 +204,3 @@ void ov_beh_lift_platform(Core* c) {
   } else if (++ng % 50 == 0) fprintf(stderr, "[lift_platformverify] %ld matches\n", ng);
 }
 
-}  // namespace
-
-void ov_beh_lift_platform_run(Core* c) { ov_beh_lift_platform(c); }

@@ -311,6 +311,8 @@ void beh_pad_child_linker(Core* c) {
   c->mem_w8(0x800BF840u, 0);                    // epilogue: every exit clears this area flag
 }
 
+}  // namespace — ov_beh_pad_child_linker (below) is the exported entry point.
+
 void ov_beh_pad_child_linker(Core* c) {
   static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("pad_child_linkerverify") ? 1 : 0;
   if (!s_v) { beh_pad_child_linker(c); return; }
@@ -334,6 +336,3 @@ void ov_beh_pad_child_linker(Core* c) {
   } else if (++ng % 50 == 0) fprintf(stderr, "[pad_child_linkerverify] %ld matches\n", ng);
 }
 
-}  // namespace
-
-void ov_beh_pad_child_linker_run(Core* c) { ov_beh_pad_child_linker(c); }

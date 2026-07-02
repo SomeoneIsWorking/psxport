@@ -89,6 +89,8 @@ void beh_linked_advance_branch(Core* c) {
   return;
 }
 
+}  // namespace — ov_beh_linked_advance_branch (below) is the exported entry point.
+
 void ov_beh_linked_advance_branch(Core* c) {
   static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("linked_advance_branchverify") ? 1 : 0;
   if (!s_v) { beh_linked_advance_branch(c); return; }
@@ -112,6 +114,3 @@ void ov_beh_linked_advance_branch(Core* c) {
   } else if (++ng % 50 == 0) fprintf(stderr, "[linked_advance_branchverify] %ld matches\n", ng);
 }
 
-}  // namespace
-
-void ov_beh_linked_advance_branch_run(Core* c) { ov_beh_linked_advance_branch(c); }

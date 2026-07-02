@@ -92,6 +92,8 @@ void beh_single_child_cull(Core* c) {
   return;
 }
 
+}  // namespace — ov_beh_single_child_cull (below) is the exported entry point.
+
 void ov_beh_single_child_cull(Core* c) {
   static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("single_child_cullverify") ? 1 : 0;
   if (!s_v) { beh_single_child_cull(c); return; }
@@ -115,6 +117,3 @@ void ov_beh_single_child_cull(Core* c) {
   } else if (++ng % 50 == 0) fprintf(stderr, "[single_child_cullverify] %ld matches\n", ng);
 }
 
-}  // namespace
-
-void ov_beh_single_child_cull_run(Core* c) { ov_beh_single_child_cull(c); }

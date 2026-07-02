@@ -58,6 +58,8 @@ void beh_area_event_dispatch(Core* c) {
   }
 }
 
+}  // namespace — ov_beh_area_event_dispatch (below) is the exported entry point.
+
 void ov_beh_area_event_dispatch(Core* c) {
   static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("area_event_dispatchverify") ? 1 : 0;
   if (!s_v) { beh_area_event_dispatch(c); return; }
@@ -81,7 +83,3 @@ void ov_beh_area_event_dispatch(Core* c) {
   } else if (++ng % 50 == 0) fprintf(stderr, "[area_event_dispatchverify] %ld matches\n", ng);
 }
 
-}  // namespace
-
-// Exported entry — the engine's per-object dispatch calls THIS to run the owned behavior.
-void ov_beh_area_event_dispatch_run(Core* c) { ov_beh_area_event_dispatch(c); }

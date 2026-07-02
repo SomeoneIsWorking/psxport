@@ -89,6 +89,8 @@ void beh_area_threshold_ptr_swap(Core* c) {
   return;
 }
 
+}  // namespace — ov_beh_area_threshold_ptr_swap (below) is the exported entry point.
+
 void ov_beh_area_threshold_ptr_swap(Core* c) {
   static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("area_threshold_ptr_swapverify") ? 1 : 0;
   if (!s_v) { beh_area_threshold_ptr_swap(c); return; }
@@ -112,6 +114,3 @@ void ov_beh_area_threshold_ptr_swap(Core* c) {
   } else if (++ng % 50 == 0) fprintf(stderr, "[area_threshold_ptr_swapverify] %ld matches\n", ng);
 }
 
-}  // namespace
-
-void ov_beh_area_threshold_ptr_swap_run(Core* c) { ov_beh_area_threshold_ptr_swap(c); }

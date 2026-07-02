@@ -82,6 +82,8 @@ void beh_cull_tick_render(Core* c) {
   // 8012D4CC j 0x8012d4dc (epilogue)
 }
 
+}  // namespace — ov_beh_cull_tick_render (below) is the exported entry point.
+
 void ov_beh_cull_tick_render(Core* c) {
   static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("cull_tick_renderverify") ? 1 : 0;
   if (!s_v) { beh_cull_tick_render(c); return; }
@@ -105,8 +107,3 @@ void ov_beh_cull_tick_render(Core* c) {
   } else if (++ng % 50 == 0) fprintf(stderr, "[cull_tick_renderverify] %ld matches\n", ng);
 }
 
-}  // namespace
-
-// Exported entry — the verify wrapper ov_beh_cull_tick_render is in the anonymous namespace above (internal
-// linkage); the engine's per-object dispatch calls THIS to run the owned behavior.
-void ov_beh_cull_tick_render_run(Core* c) { ov_beh_cull_tick_render(c); }

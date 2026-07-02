@@ -195,6 +195,8 @@ void beh_typed_init_scene_trigger(Core* c) {
   c->r[4] = obj; c->engine.graphicsBind.renderUpdate();
 }
 
+}  // namespace — ov_beh_typed_init_scene_trigger (below) is the exported entry point.
+
 void ov_beh_typed_init_scene_trigger(Core* c) {
   static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("typed_init_scene_triggerverify") ? 1 : 0;
   if (!s_v) { beh_typed_init_scene_trigger(c); return; }
@@ -218,8 +220,3 @@ void ov_beh_typed_init_scene_trigger(Core* c) {
   } else if (++ng % 50 == 0) fprintf(stderr, "[typed_init_scene_triggerverify] %ld matches\n", ng);
 }
 
-}  // namespace
-
-// Exported entry — the verify wrapper ov_beh_typed_init_scene_trigger is in the anonymous namespace above (internal linkage);
-// the engine's per-object dispatch (engine_tomba2.cpp call_handler) calls THIS to run the owned behavior.
-void ov_beh_typed_init_scene_trigger_run(Core* c) { ov_beh_typed_init_scene_trigger(c); }

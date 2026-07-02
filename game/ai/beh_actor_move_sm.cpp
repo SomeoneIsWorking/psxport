@@ -140,6 +140,8 @@ void beh_actor_move_sm(Core* c) {
   if (c->mem_r8(nd + 1) != 0) leaf1(c, nd, 0x800518fcu);  // FUN_800518FC
 }
 
+}  // namespace — ov_beh_actor_move_sm (below) is the exported entry point.
+
 void ov_beh_actor_move_sm(Core* c) {
   static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("actor_move_smverify") ? 1 : 0;
   if (!s_v) { beh_actor_move_sm(c); return; }
@@ -163,6 +165,3 @@ void ov_beh_actor_move_sm(Core* c) {
   } else if (++ng % 50 == 0) fprintf(stderr, "[actor_move_smverify] %ld matches\n", ng);
 }
 
-}  // namespace
-
-void ov_beh_actor_move_sm_run(Core* c) { ov_beh_actor_move_sm(c); }

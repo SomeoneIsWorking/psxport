@@ -189,6 +189,8 @@ void beh_pos_history_trail(Core* c) {
   }
 }
 
+}  // namespace — ov_beh_pos_history_trail (below) is the exported entry point.
+
 void ov_beh_pos_history_trail(Core* c) {
   static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("pos_history_trailverify") ? 1 : 0;
   if (!s_v) { beh_pos_history_trail(c); return; }
@@ -212,6 +214,3 @@ void ov_beh_pos_history_trail(Core* c) {
   } else if (++ng % 50 == 0) fprintf(stderr, "[pos_history_trailverify] %ld matches\n", ng);
 }
 
-}  // namespace
-
-void ov_beh_pos_history_trail_run(Core* c) { ov_beh_pos_history_trail(c); }

@@ -306,6 +306,8 @@ void beh_sine_motion_sfx(Core* c) {
   return;
 }
 
+}  // namespace — ov_beh_sine_motion_sfx (below) is the exported entry point.
+
 void ov_beh_sine_motion_sfx(Core* c) {
   static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("sine_motion_sfxverify") ? 1 : 0;
   if (!s_v) { beh_sine_motion_sfx(c); return; }
@@ -329,6 +331,3 @@ void ov_beh_sine_motion_sfx(Core* c) {
   } else if (++ng % 50 == 0) fprintf(stderr, "[sine_motion_sfxverify] %ld matches\n", ng);
 }
 
-}  // namespace
-
-void ov_beh_sine_motion_sfx_run(Core* c) { ov_beh_sine_motion_sfx(c); }

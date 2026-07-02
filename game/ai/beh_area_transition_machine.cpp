@@ -232,6 +232,8 @@ void beh_area_transition_machine(Core* c) {
   rec_dispatch(c, 0x80041194u);                        // FUN_80041194(node, 0, 0, 0)
 }
 
+}  // namespace — ov_beh_area_transition_machine (below) is the exported entry point.
+
 void ov_beh_area_transition_machine(Core* c) {
   static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("area_transition_machineverify") ? 1 : 0;
   if (!s_v) { beh_area_transition_machine(c); return; }
@@ -256,6 +258,3 @@ void ov_beh_area_transition_machine(Core* c) {
   } else if (++ng % 50 == 0) fprintf(stderr, "[area_transition_machineverify] %ld matches\n", ng);
 }
 
-}  // namespace
-
-void ov_beh_area_transition_machine_run(Core* c) { ov_beh_area_transition_machine(c); }

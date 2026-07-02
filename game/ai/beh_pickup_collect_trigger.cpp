@@ -164,6 +164,8 @@ void beh_pickup_collect_trigger(Core* c) {
   c->r[29] += 0x30;
 }
 
+}  // namespace — ov_beh_pickup_collect_trigger (below) is the exported entry point.
+
 void ov_beh_pickup_collect_trigger(Core* c) {
   static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("pickup_collect_triggerverify") ? 1 : 0;
   if (!s_v) { beh_pickup_collect_trigger(c); return; }
@@ -187,8 +189,3 @@ void ov_beh_pickup_collect_trigger(Core* c) {
   } else if (++ng % 50 == 0) fprintf(stderr, "[pickup_collect_triggerverify] %ld matches\n", ng);
 }
 
-}  // namespace
-
-// Exported entry — the verify wrapper ov_beh_pickup_collect_trigger is in the anonymous namespace above (internal linkage);
-// the engine's per-object dispatch (engine_tomba2.cpp call_handler) calls THIS to run the owned behavior.
-void ov_beh_pickup_collect_trigger_run(Core* c) { ov_beh_pickup_collect_trigger(c); }

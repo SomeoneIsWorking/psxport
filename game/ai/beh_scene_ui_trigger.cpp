@@ -143,6 +143,8 @@ void beh_scene_ui_trigger(Core* c) {
   render_and_return(c, obj);
 }
 
+}  // namespace — ov_beh_scene_ui_trigger (below) is the exported entry point.
+
 void ov_beh_scene_ui_trigger(Core* c) {
   static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("scene_ui_triggerverify") ? 1 : 0;
   if (!s_v) { beh_scene_ui_trigger(c); return; }
@@ -166,8 +168,3 @@ void ov_beh_scene_ui_trigger(Core* c) {
   } else if (++ng % 50 == 0) fprintf(stderr, "[scene_ui_triggerverify] %ld matches\n", ng);
 }
 
-}  // namespace
-
-// Exported entry — the verify wrapper ov_beh_scene_ui_trigger is in the anonymous namespace above (internal linkage);
-// the engine's per-object dispatch (engine_tomba2.cpp call_handler) calls THIS to run the owned behavior.
-void ov_beh_scene_ui_trigger_run(Core* c) { ov_beh_scene_ui_trigger(c); }

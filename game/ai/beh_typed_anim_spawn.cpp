@@ -216,6 +216,8 @@ void beh_typed_anim_spawn(Core* c) {
   return;
 }
 
+}  // namespace — ov_beh_typed_anim_spawn (below) is the exported entry point.
+
 void ov_beh_typed_anim_spawn(Core* c) {
   static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("typed_anim_spawnverify") ? 1 : 0;
   if (!s_v) { beh_typed_anim_spawn(c); return; }
@@ -239,6 +241,3 @@ void ov_beh_typed_anim_spawn(Core* c) {
   } else if (++ng % 50 == 0) fprintf(stderr, "[typed_anim_spawnverify] %ld matches\n", ng);
 }
 
-}  // namespace
-
-void ov_beh_typed_anim_spawn_run(Core* c) { ov_beh_typed_anim_spawn(c); }

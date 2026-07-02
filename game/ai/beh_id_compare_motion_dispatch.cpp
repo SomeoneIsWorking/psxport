@@ -281,6 +281,8 @@ after_no_cull:;
   // j 0x80145654 (epilogue)
 }
 
+}  // namespace — ov_beh_id_compare_motion_dispatch (below) is the exported entry point.
+
 void ov_beh_id_compare_motion_dispatch(Core* c) {
   static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("id_compare_motion_dispatchverify") ? 1 : 0;
   if (!s_v) { beh_id_compare_motion_dispatch(c); return; }
@@ -304,8 +306,3 @@ void ov_beh_id_compare_motion_dispatch(Core* c) {
   } else if (++ng % 50 == 0) fprintf(stderr, "[id_compare_motion_dispatchverify] %ld matches\n", ng);
 }
 
-}  // namespace
-
-// Exported entry — the verify wrapper ov_beh_id_compare_motion_dispatch is in the anonymous namespace above (internal
-// linkage); the engine's per-object dispatch calls THIS to run the owned behavior.
-void ov_beh_id_compare_motion_dispatch_run(Core* c) { ov_beh_id_compare_motion_dispatch(c); }

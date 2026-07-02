@@ -207,6 +207,8 @@ void beh_multi_record_phase_machine(Core* c) {
   return;
 }
 
+}  // namespace — ov_beh_multi_record_phase_machine (below) is the exported entry point.
+
 void ov_beh_multi_record_phase_machine(Core* c) {
   static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("multi_record_phase_machineverify") ? 1 : 0;
   if (!s_v) { beh_multi_record_phase_machine(c); return; }
@@ -230,6 +232,3 @@ void ov_beh_multi_record_phase_machine(Core* c) {
   } else if (++ng % 50 == 0) fprintf(stderr, "[multi_record_phase_machineverify] %ld matches\n", ng);
 }
 
-}  // namespace
-
-void ov_beh_multi_record_phase_machine_run(Core* c) { ov_beh_multi_record_phase_machine(c); }

@@ -137,6 +137,8 @@ void beh_twin_record_steer(Core* c) {
   return;
 }
 
+}  // namespace — ov_beh_twin_record_steer (below) is the exported entry point.
+
 void ov_beh_twin_record_steer(Core* c) {
   static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("twin_record_steerverify") ? 1 : 0;
   if (!s_v) { beh_twin_record_steer(c); return; }
@@ -160,6 +162,3 @@ void ov_beh_twin_record_steer(Core* c) {
   } else if (++ng % 50 == 0) fprintf(stderr, "[twin_record_steerverify] %ld matches\n", ng);
 }
 
-}  // namespace
-
-void ov_beh_twin_record_steer_run(Core* c) { ov_beh_twin_record_steer(c); }

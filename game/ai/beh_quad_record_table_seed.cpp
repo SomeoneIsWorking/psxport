@@ -159,6 +159,8 @@ void beh_quad_record_table_seed(Core* c) {
   return;
 }
 
+}  // namespace — ov_beh_quad_record_table_seed (below) is the exported entry point.
+
 void ov_beh_quad_record_table_seed(Core* c) {
   static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("quad_record_table_seedverify") ? 1 : 0;
   if (!s_v) { beh_quad_record_table_seed(c); return; }
@@ -182,6 +184,3 @@ void ov_beh_quad_record_table_seed(Core* c) {
   } else if (++ng % 50 == 0) fprintf(stderr, "[quad_record_table_seedverify] %ld matches\n", ng);
 }
 
-}  // namespace
-
-void ov_beh_quad_record_table_seed_run(Core* c) { ov_beh_quad_record_table_seed(c); }

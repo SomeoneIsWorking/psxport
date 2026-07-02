@@ -289,6 +289,8 @@ void beh_typed_init_exit_poker(Core* c) {
   return;
 }
 
+}  // namespace — ov_beh_typed_init_exit_poker (below) is the exported entry point.
+
 void ov_beh_typed_init_exit_poker(Core* c) {
   static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("typed_init_exit_pokerverify") ? 1 : 0;
   if (!s_v) { beh_typed_init_exit_poker(c); return; }
@@ -312,6 +314,3 @@ void ov_beh_typed_init_exit_poker(Core* c) {
   } else if (++ng % 50 == 0) fprintf(stderr, "[typed_init_exit_pokerverify] %ld matches\n", ng);
 }
 
-}  // namespace
-
-void ov_beh_typed_init_exit_poker_run(Core* c) { ov_beh_typed_init_exit_poker(c); }
