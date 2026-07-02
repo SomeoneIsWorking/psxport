@@ -26,6 +26,7 @@ Core::Core() {
   engine.objectTable.core = this;       // Engine-owned 40-slot object-table dispatcher
   engine.demo.core = this;              // Engine-owned front-end DEMO / MENU stage
   engine.sop.core = this;               // Engine-owned SOP intro-cutscene FIELD stage
+  engine.bgSceneTransitionSm.core = this;  // Engine-owned BG scene-transition fade manager
   rng.core        = this;
   inventory.core  = this;
   // Render umbrella (owned by pointer): allocate, wire its back-pointer + each embedded sub-subsystem.

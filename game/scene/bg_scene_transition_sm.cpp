@@ -135,7 +135,7 @@ void bg_scene_transition_sm(Core* c) {
   }
 }
 
-void ov_bg_scene_transition_sm_impl(Core* c) {
+static void bg_scene_transition_sm_verify(Core* c) {
   static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("bgscenesmverify") ? 1 : 0;
   if (!s_v) { bg_scene_transition_sm(c); return; }
   static uint8_t* ram0 = (uint8_t*)malloc(0x200000);
@@ -160,4 +160,5 @@ void ov_bg_scene_transition_sm_impl(Core* c) {
 
 }  // namespace
 
-void ov_bg_scene_transition_sm(Core* c) { ov_bg_scene_transition_sm_impl(c); }
+#include "bg_scene_transition_sm.h"
+void BgSceneTransitionSm::step() { bg_scene_transition_sm_verify(core); }

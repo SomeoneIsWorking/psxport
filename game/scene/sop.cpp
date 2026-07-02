@@ -24,7 +24,7 @@
 // dispatch a still-recomp leaf with up to 3 args set (helpers for the SOP/transition machines).
 static void d0(Core* c, uint32_t fn);
 extern "C" void ffspan_begin(void), ffspan_end(const char*);   // PSXPORT_BDTAG attribution (engine_stage.cpp)
-void ov_bg_scene_transition_sm(Core*);  // bg_scene_transition_sm.cpp — native FUN_8002655c
+// (ov_bg_scene_transition_sm moved to BgSceneTransitionSm::step — c->engine.bgSceneTransitionSm.step())
 #include "render/screen_fade/screen_fade.h"   // class ScreenFade — the single fade driver
 static void d1(Core* c, uint32_t fn, uint32_t a0);
 static void d2(Core* c, uint32_t fn, uint32_t a0, uint32_t a1);
@@ -196,7 +196,7 @@ void Sop::fieldUpdate() { Core* c = core;
   if (delay != 0) {
     c->mem_w16(sm + 0x60, (uint16_t)(delay - 1));          // startup delay: just count down
   } else {
-    ffspan_begin(); ov_bg_scene_transition_sm(c); ffspan_end("bgscene");   // BG scene transition SM (native, FUN_8002655c)
+    ffspan_begin(); c->engine.bgSceneTransitionSm.step(); ffspan_end("bgscene");   // BG scene transition SM (native, FUN_8002655c)
     ffspan_begin(); d1(c, 0x8010a0e0u, 0x800f2418u); ffspan_end("entupd");    // entity update loop
     d0(c, 0x8007b008u);                                    // Tomba update
     c->mem_w8(0x1f800234u, 1);

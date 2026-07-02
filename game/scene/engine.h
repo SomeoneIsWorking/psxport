@@ -22,6 +22,7 @@
 #include "object_table.h"        // Engine owns the ObjectTable 40-slot dispatcher
 #include "demo.h"                // Engine owns the Demo front-end MENU stage machine
 #include "sop.h"                 // Engine owns the Sop intro-cutscene field stage machine
+#include "bg_scene_transition_sm.h"  // Engine owns the BG scene-transition fade manager
 class Core;
 
 class Engine {
@@ -38,6 +39,7 @@ public:
   ObjectTable      objectTable;       // 40-slot fixed object table       (guest FUN_80026C88)
   Demo             demo;              // front-end DEMO / MENU stage machine (docs/engine_re.md)
   Sop              sop;               // SOP intro-cutscene FIELD stage machine (guest 0x80109450)
+  BgSceneTransitionSm bgSceneTransitionSm;  // BG scene-transition fade manager (guest FUN_8002655C)
 
   // ── GAME-stage entry points (called by the scheduler each frame) ────────────────────────────
   // stagePrologue: one-time prologue that runs when the GAME task enters — task-slot setup, first
