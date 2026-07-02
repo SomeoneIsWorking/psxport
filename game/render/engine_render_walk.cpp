@@ -218,7 +218,7 @@ void Render::perObjRender() {
   // Tag the packet-pool span this object renders into with its PC-native WORLD-POSITION depth, so its 2D
   // billboard prims (apple quad, etc.) occlude by real depth at the deferred OT walk. (g_pkt_track records
   // the actual store range — the pool POINTER doesn't move for these renderers.)
-  uint32_t slo, shi; PktSpanSession sess;
+  uint32_t slo, shi; PktSpanSession sess(c);
   if (tgt == 0x8003CD00u) { c->r[4] = node; c->r[5] = flag; c->mRender->perObjFlush(); }  // flush-only (native)
   else                    { rec_super_call(c, 0x8003CCA4u); }                          // secondary-effect case
   if (sess.close(&slo, &shi)) { float od = obj_world_ord(c, node);   // PC-native depth from real world position
@@ -305,7 +305,7 @@ static uint32_t rw_leaf_for(uint32_t tgt) {
 
 // PSXPORT_BDTAG per-node attribution (later-239): name a node's render route + fn so the deferred gp0
 // OT-walk classifier pins which node in the master walk builds the steady backdrop (sky/terrain quads).
-extern "C" void ffspan_begin(void); extern "C" void ffspan_end(const char*);
+extern "C" void ffspan_begin(Core*); extern "C" void ffspan_end(Core*, const char*);
 static const char* rw_tag(const char* pfx, uint32_t fn) {
   static char buf[512][20]; static int bi = 0;       // ring (per-frame names; classify is deferred 1 frame)
   int i = bi; bi = (bi + 1) & 511;
@@ -342,23 +342,23 @@ void Render::renderWalk() {
       uint8_t t = c->mem_r8(n + 0xB);
       if (t < 33) {
         uint32_t tgt = c->mem_r32(RLIST_TABLE + t * 4);
-        if (tgt == RCASE_PEROBJ) { ffspan_begin(); c->r[4] = n; perObjRender(); ffspan_end(rw_tag("rwP", c->mem_r32(n+24))); }  // self-tags its world depth
+        if (tgt == RCASE_PEROBJ) { ffspan_begin(c); c->r[4] = n; perObjRender(); ffspan_end(c, rw_tag("rwP", c->mem_r32(n+24))); }  // self-tags its world depth
         else if (tgt == RCASE_NOOP) { /* types 9-14,21-31: render nothing (loop continue) */ }
         else if (uint32_t leaf = rw_leaf_for(tgt)) {   // types 16-19: special-effect leaf renderer (guest content, native depth)
-          ffspan_begin();
-          uint32_t slo, shi; PktSpanSession sess;
+          ffspan_begin(c);
+          uint32_t slo, shi; PktSpanSession sess(c);
           c->r[4] = n; rec_dispatch(c, leaf);
           if (sess.close(&slo, &shi)) { float od = obj_world_ord(c, n);
             gpu_obj_depth_add(c, slo, shi, od); fps60_bb_node(c, slo, shi, n); }
-          ffspan_end(rw_tag("rwL", leaf));
+          ffspan_end(c, rw_tag("rwL", leaf));
         }
         else if (tgt == RCASE_TYPE4) {     // type-4 multi-element object renderer (FUN_80039f4c) — guest leaf, native depth
-          ffspan_begin();
-          uint32_t slo, shi; PktSpanSession sess;
+          ffspan_begin(c);
+          uint32_t slo, shi; PktSpanSession sess(c);
           c->r[4] = n; rec_dispatch(c, RFN_TYPE4);
           if (sess.close(&slo, &shi)) { float od = obj_world_ord(c, n);
             gpu_obj_depth_add(c, slo, shi, od); fps60_bb_node(c, slo, shi, n); }
-          ffspan_end(rw_tag("rw4", RFN_TYPE4));
+          ffspan_end(c, rw_tag("rw4", RFN_TYPE4));
         }
         else {
           // default case: the node's own render fn (node+24) — e.g. a collectable's billboard-quad drawer,
@@ -370,18 +370,18 @@ void Render::renderWalk() {
           // to attribute the "stale village still drawn in the hut interior" bug to a specific native pass.
           if (fn == 0x8002AB5Cu && cfg_dbg("noterr")) { /* skip terrain */ }
           else if (fn == 0x8013E9D8u && cfg_dbg("nobg")) { /* skip bg */ }
-          else if (fn == 0x8002AB5Cu) { ffspan_begin(); c->r[4] = n; c->mRender->terrain(); ffspan_end("rwT_terrain"); }   // PC-native world-coord terrain (self-draws)
-          else if (fn == 0x8013E9D8u) { ffspan_begin(); c->r[4] = n; c->mRender->bgRender(); ffspan_end("rwB_bg"); }   // PC-native world-coord ground/BG node
+          else if (fn == 0x8002AB5Cu) { ffspan_begin(c); c->r[4] = n; c->mRender->terrain(); ffspan_end(c, "rwT_terrain"); }   // PC-native world-coord terrain (self-draws)
+          else if (fn == 0x8013E9D8u) { ffspan_begin(c); c->r[4] = n; c->mRender->bgRender(); ffspan_end(c, "rwB_bg"); }   // PC-native world-coord ground/BG node
           else if (!rec_addr_has_entry(c, fn)) { /* STALE node: its renderer is a dangling pointer into an
               evicted overlay (e.g. a SOP intro-narration node surviving into the A00 field — later-275).
               The engine owns its render visibility: skip it rather than dispatch into mid-overlay garbage. */ }
           else {
-            ffspan_begin();
-            uint32_t slo, shi; PktSpanSession sess;
+            ffspan_begin(c);
+            uint32_t slo, shi; PktSpanSession sess(c);
             c->r[4] = n; rec_dispatch(c, fn);
             if (sess.close(&slo, &shi)) { float od = obj_world_ord(c, n);   // PC-native depth from real world position
               gpu_obj_depth_add(c, slo, shi, od); fps60_bb_node(c, slo, shi, n); }
-            ffspan_end(rw_tag("rwD", fn));
+            ffspan_end(c, rw_tag("rwD", fn));
           }
         }
       }
@@ -467,7 +467,7 @@ void Render::renderWalkSnapshot() {
     if (tgt == 0x8003BCD0u) continue;                        // default/skip case
     // Render the object, tagging the packet-pool span it produces with its PC-native world-position depth
     // so its 2D billboard prims (collectable quads, etc.) occlude for real at the deferred OT walk.
-    uint32_t slo, shi; PktSpanSession sess;
+    uint32_t slo, shi; PktSpanSession sess(c);
     c->mRender->mDbgRenderNode = node;                       // objid: tag every prim this object emits
     rq_dispatch_case(c, node, tgt);                          // run the object's per-type renderer (guest content)
     c->mRender->mDbgRenderNode = 0;
@@ -568,7 +568,7 @@ void Render::rwalkAuxBcf4() {
     if (t >= 33) continue;                                   // out of jump-table range -> render nothing
     uint32_t tgt = c->mem_r32(AUX_BCF4_TABLE + t * 4);
     if (tgt == AUX_BCF4_SKIP) continue;                      // skip/default
-    uint32_t slo, shi; PktSpanSession sess;
+    uint32_t slo, shi; PktSpanSession sess(c);
     aux_bcf4_case(c, node, tgt);                             // per-type renderer (guest content)
     if (sess.close(&slo, &shi)) { float od = obj_world_ord(c, node);   // PC-native depth from real world position
       gpu_obj_depth_add(c, slo, shi, od); fps60_bb_node(c, slo, shi, node); }   // fps60: object billboards reproject at midpoint
@@ -630,7 +630,7 @@ void Render::rwalkAuxBf00() {
     if (t >= 32) continue;                                   // out of jump-table range -> render nothing
     uint32_t tgt = c->mem_r32(AUX_BF00_TABLE + t * 4);
     if (tgt == AUX_BF00_SKIP) continue;                      // skip/default
-    uint32_t slo, shi; PktSpanSession sess;
+    uint32_t slo, shi; PktSpanSession sess(c);
     aux_bf00_case(c, node, tgt);                             // per-type renderer (guest content)
     if (sess.close(&slo, &shi)) { float od = obj_world_ord(c, node);   // PC-native depth from real world position
       gpu_obj_depth_add(c, slo, shi, od); fps60_bb_node(c, slo, shi, node); }   // fps60: object billboards reproject at midpoint
@@ -672,7 +672,7 @@ void Render::rwalkAuxEec0() {
       if (t < 33) {
         uint32_t tgt = c->mem_r32(AUX_EEC0_TABLE + t * 4);
         if (tgt != AUX_EEC0_SKIP) {
-          uint32_t slo, shi; PktSpanSession sess;
+          uint32_t slo, shi; PktSpanSession sess(c);
           aux_eec0_case(c, node, tgt);                       // per-type renderer (guest content)
           if (sess.close(&slo, &shi)) { float od = obj_world_ord(c, node);   // PC-native depth from real world position
       gpu_obj_depth_add(c, slo, shi, od); fps60_bb_node(c, slo, shi, node); }   // fps60: object billboards reproject at midpoint

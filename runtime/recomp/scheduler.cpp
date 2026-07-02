@@ -90,7 +90,7 @@ void scheduler_yield(Core* c) {
 }
 
 // One scheduler pass over the 3 task slots (replaces FUN_80051e60).
-extern "C" void ffspan_reset_frame(void), ffspan_begin(void), ffspan_end(const char*);  // PSXPORT_BDTAG (engine_stage.cpp)
+extern "C" void ffspan_reset_frame(void), ffspan_begin(Core*), ffspan_end(Core*, const char*);  // PSXPORT_BDTAG (engine_stage.cpp)
 void native_scheduler_step(Core* c) {
   R3000 loop = *c;                           // frame-loop REGISTERS (gp etc. for fresh tasks); slices off RAM
   for (int i = 0; i < 3; i++) {
@@ -237,7 +237,7 @@ void native_scheduler_step(Core* c) {
         int handled = 1;
         if (setjmp(c->game->sched.yield_jmp) == 0) {
           if (game_fresh) c->engine.stagePrologue();                // prologue (sets sm[0x48] from 0x134)
-          ffspan_begin(); handled = c->engine.frame(); ffspan_end("gameframe");  // one frame: sm[0x48] dispatch + tail
+          ffspan_begin(c); handled = c->engine.frame(); ffspan_end(c, "gameframe");  // one frame: sm[0x48] dispatch + tail
         } else if (cfg_dbg("sched")) {
           static int w = 0; if (!w++) fprintf(stderr, "[sched] caught a GAME substate yield (a leaf not "
                                                       "yet sync) — frontier\n");
@@ -403,7 +403,7 @@ void native_scheduler_step(Core* c) {
       }
       // (The DEMO/front-end entry 0x801062E4 is handled by the native per-frame dispatcher above,
       //  never here — it `continue`s before reaching this generic coroutine path.)
-      ffspan_begin(); rec_coro_run(c, start); ffspan_end("coro");   // runs until ov_yield longjmps back here
+      ffspan_begin(c); rec_coro_run(c, start); ffspan_end(c, "coro");   // runs until ov_yield longjmps back here
       c->mem_w16(base, 0);                        // returned (jr ra sentinel): task ended -> free
       c->game->sched.task_started[i] = 0;
     }

@@ -38,6 +38,16 @@ public:
   uint32_t mDbgRenderNode  = 0;
   uint32_t mDbgCurGeomblk  = 0;
 
+  // Packet-tracking session: while armed (during one render-command dispatch — engine_submit's
+  // ov_render_cmd, or a bdtag span wrapper), record the address span of stores landing in the
+  // packet/OT pool [0x800BFE68,0x800E7E68). Read by Core::mem_w* via this->mRender. The span is
+  // then tagged with the object's world-position depth so 2D billboard prims occlude for real at
+  // the deferred OT walk (gpu_native). Per-Core — was the process-globals g_pkt_track/lo/hi
+  // (deglobalize-game 2026-07-02).
+  int      mPktTrack = 0;
+  uint32_t mPktLo    = 0xFFFFFFFFu;
+  uint32_t mPktHi    = 0;
+
   // ---- render-side per-Core subsystems ------------------------------------
   NodeXform mNodeXform;   // scene-node WORLD-TRANSFORM builder (guest FUN_80051844)
 

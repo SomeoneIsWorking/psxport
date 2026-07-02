@@ -48,28 +48,28 @@ static inline void fps60_bb_node(Core* c, uint32_t lo, uint32_t hi, uint32_t nod
 }
 
 // NESTING-SAFE packet-pool span tracking (issue #4 — ropes/flames drew over terrain). Per-object depth
-// tagging captures the address span an object's renderer writes into the packet pool (g_pkt_track/lo/hi in
-// mem.cpp), then stamps it with the object's world depth. A session SAVES the outer session's state on open
-// and, on close, RESTORES it while MERGING its own [lo,hi) into the outer — so a renderer that internally
-// dispatches the universal render command (ov_render_cmd) for the same node keeps the outer walk's tracking
-// alive and the outer's final gpu_obj_depth_add covers ALL of the object's packets.
+// tagging captures the address span an object's renderer writes into the packet pool (Render::mPktTrack/
+// mPktLo/mPktHi via the Core::mem_w* store hook, mem.cpp), then stamps it with the object's world depth.
+// A session SAVES the outer session's state on open and, on close, RESTORES it while MERGING its own
+// [lo,hi) into the outer — so a renderer that internally dispatches the universal render command
+// (ov_render_cmd) for the same node keeps the outer walk's tracking alive and the outer's final
+// gpu_obj_depth_add covers ALL of the object's packets.
 struct PktSpanSession {
+  Render* r;
   int outer_track; uint32_t outer_lo, outer_hi;
-  PktSpanSession() {
-    extern int g_pkt_track; extern uint32_t g_pkt_lo, g_pkt_hi;
-    outer_track = g_pkt_track; outer_lo = g_pkt_lo; outer_hi = g_pkt_hi;
-    g_pkt_track = 1; g_pkt_lo = 0xFFFFFFFFu; g_pkt_hi = 0;
+  explicit PktSpanSession(Core* c) : r(c->mRender) {
+    outer_track = r->mPktTrack; outer_lo = r->mPktLo; outer_hi = r->mPktHi;
+    r->mPktTrack = 1; r->mPktLo = 0xFFFFFFFFu; r->mPktHi = 0;
   }
   // Close the session: returns 1 + fills lo/hi if this session captured a non-empty span (caller does the
   // gpu_obj_depth_add with its own ord). Restores + merges into the outer session.
   int close(uint32_t* lo, uint32_t* hi) {
-    extern int g_pkt_track; extern uint32_t g_pkt_lo, g_pkt_hi;
-    uint32_t my_lo = g_pkt_lo, my_hi = g_pkt_hi;
-    g_pkt_track = outer_track;                                   // resume the OUTER session (key fix)
-    g_pkt_lo = outer_lo; g_pkt_hi = outer_hi;
+    uint32_t my_lo = r->mPktLo, my_hi = r->mPktHi;
+    r->mPktTrack = outer_track;                                   // resume the OUTER session (key fix)
+    r->mPktLo = outer_lo; r->mPktHi = outer_hi;
     if (my_hi > my_lo) {                                          // merge my writes into the outer span
-      if (my_lo < g_pkt_lo) g_pkt_lo = my_lo;
-      if (my_hi > g_pkt_hi) g_pkt_hi = my_hi;
+      if (my_lo < r->mPktLo) r->mPktLo = my_lo;
+      if (my_hi > r->mPktHi) r->mPktHi = my_hi;
       if (lo) *lo = my_lo; if (hi) *hi = my_hi; return 1;
     }
     return 0;

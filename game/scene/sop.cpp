@@ -23,7 +23,7 @@
 
 // dispatch a still-recomp leaf with up to 3 args set (helpers for the SOP/transition machines).
 static void d0(Core* c, uint32_t fn);
-extern "C" void ffspan_begin(void), ffspan_end(const char*);   // PSXPORT_BDTAG attribution (engine_stage.cpp)
+extern "C" void ffspan_begin(Core*), ffspan_end(Core*, const char*);   // PSXPORT_BDTAG attribution (engine_stage.cpp)
 // (ov_bg_scene_transition_sm moved to BgSceneTransitionSm::step — c->engine.bgSceneTransitionSm.step())
 #include "render/screen_fade/screen_fade.h"   // class ScreenFade — the single fade driver
 static void d1(Core* c, uint32_t fn, uint32_t a0);
@@ -194,8 +194,8 @@ void Sop::fieldUpdate() { Core* c = core;
   if (delay != 0) {
     c->mem_w16(sm + 0x60, (uint16_t)(delay - 1));          // startup delay: just count down
   } else {
-    ffspan_begin(); c->engine.bgSceneTransitionSm.step(); ffspan_end("bgscene");   // BG scene transition SM (native, FUN_8002655c)
-    ffspan_begin(); d1(c, 0x8010a0e0u, 0x800f2418u); ffspan_end("entupd");    // entity update loop
+    ffspan_begin(c); c->engine.bgSceneTransitionSm.step(); ffspan_end(c, "bgscene");   // BG scene transition SM (native, FUN_8002655c)
+    ffspan_begin(c); d1(c, 0x8010a0e0u, 0x800f2418u); ffspan_end(c, "entupd");    // entity update loop
     d0(c, 0x8007b008u);                                    // Tomba update
     c->mem_w8(0x1f800234u, 1);
     uint8_t bg = c->mem_r8(0x800e8008u);                   // BG layer SM
@@ -206,7 +206,7 @@ void Sop::fieldUpdate() { Core* c = core;
       else if (sub == 1) c->mem_w8(0x800e806cu, 0);
     }
     c->engine.areaUpdateTail();                            // 0x80075a80 NATIVE
-    if (c->mem_r8(0x800bf9b4u) != 5) { ffspan_begin(); d1(c, 0x8010bffcu, 0x800ed018u); ffspan_end("parallaxBG"); }   // parallax BG draw
+    if (c->mem_r8(0x800bf9b4u) != 5) { ffspan_begin(c); d1(c, 0x8010bffcu, 0x800ed018u); ffspan_end(c, "parallaxBG"); }   // parallax BG draw
     // NOTE: no entity-render / object-walk call here. ov_scene_native (engine_render_walk.cpp) is the
     // SOLE owner of both the scene-table render (ov_field_entity_render, 0x800f2418) and the object
     // render-list walk (ov_render_walk, 0x8003c048); it runs every field-stage frame from
@@ -214,7 +214,7 @@ void Sop::fieldUpdate() { Core* c = core;
     // owns only SOP gameplay/state logic (BG transition SM, entity update, Tomba update, BG layer SM,
     // parallax/scroll) — a second render-walk call here duplicated ov_scene_native's submission
     // (fixed alongside the equivalent duplicate in ov_render_frame, step 1 of this pass).
-    if (c->mem_r8(0x800bf9b4u) != 5) { ffspan_begin(); d1(c, 0x8010c26cu, 0x800ed018u); ffspan_end("bgscroll"); }   // BG tile scroller
+    if (c->mem_r8(0x800bf9b4u) != 5) { ffspan_begin(c); d1(c, 0x8010c26cu, 0x800ed018u); ffspan_end(c, "bgscroll"); }   // BG tile scroller
     c->mem_w8(0x1f800234u, 0);
   }
   // tail — sm[0x52]: 0 = intro zone setup, 1 = end-of-area text scroller, 2+ = done

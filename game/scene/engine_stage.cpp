@@ -39,7 +39,7 @@
 // to the call that BUILT it — reliable where per-pass tags / WWATCH-pc / pool-node-addresses are not. The
 // span table persists across the present (which classifies the prior frame's OT) because it is reset only at
 // the TOP of the next ov_field_frame. `ffspan_lookup(addr)` returns the builder name (latest-span-wins).
-extern int g_pkt_track; extern uint32_t g_pkt_lo, g_pkt_hi;
+// g_pkt_track/lo/hi retired 2026-07-02 — per-Core Render::mPktTrack/mPktLo/mPktHi (reached below).
 extern "C" void dv_snapshot(Core*);    // capture post-gameplay/pre-render guest state (native_boot.cpp)
 extern "C" void dv_restore_pre(Core*); // restore that snapshot (native_boot.cpp)
 // (g_render_psx + g_dualview both retired 2026-07-02 — reach as c->mRender->psxRender() / dualview())
@@ -57,19 +57,21 @@ extern "C" const char* ffspan_lookup(uint32_t a) {
 // later in the same frame's DrawOTag). begin/end do NOT nest (single saved slot) — bracket sibling phases only.
 static struct { int ot; uint32_t lo, hi; } s_ff_stk[8]; static int s_ff_sp = 0;
 extern "C" void ffspan_reset_frame(void) { if (bdtag_on()) { s_ffspan_n = 0; s_ff_sp = 0; } }
-extern "C" void ffspan_begin(void) {       // NESTABLE: save outer, start a fresh empty span
+extern "C" void ffspan_begin(Core* c) {       // NESTABLE: save outer, start a fresh empty span
   if (!bdtag_on() || s_ff_sp >= 8) return;
-  s_ff_stk[s_ff_sp].ot = g_pkt_track; s_ff_stk[s_ff_sp].lo = g_pkt_lo; s_ff_stk[s_ff_sp].hi = g_pkt_hi; s_ff_sp++;
-  g_pkt_track = 1; g_pkt_lo = 0xFFFFFFFFu; g_pkt_hi = 0;
+  Render* r = c->mRender;
+  s_ff_stk[s_ff_sp].ot = r->mPktTrack; s_ff_stk[s_ff_sp].lo = r->mPktLo; s_ff_stk[s_ff_sp].hi = r->mPktHi; s_ff_sp++;
+  r->mPktTrack = 1; r->mPktLo = 0xFFFFFFFFu; r->mPktHi = 0;
 }
-extern "C" void ffspan_end(const char* nm) {
+extern "C" void ffspan_end(Core* c, const char* nm) {
   if (!bdtag_on() || s_ff_sp <= 0) return;
-  uint32_t mlo = g_pkt_lo, mhi = g_pkt_hi;
+  Render* r = c->mRender;
+  uint32_t mlo = r->mPktLo, mhi = r->mPktHi;
   if (mhi > mlo && s_ffspan_n < 40) { s_ffspan[s_ffspan_n].name = nm;
     s_ffspan[s_ffspan_n].lo = mlo; s_ffspan[s_ffspan_n].hi = mhi; s_ffspan_n++; }
-  s_ff_sp--; g_pkt_track = s_ff_stk[s_ff_sp].ot;            // restore outer; MERGE my writes into it
-  g_pkt_lo = s_ff_stk[s_ff_sp].lo; g_pkt_hi = s_ff_stk[s_ff_sp].hi;
-  if (mhi > mlo) { if (mlo < g_pkt_lo) g_pkt_lo = mlo; if (mhi > g_pkt_hi) g_pkt_hi = mhi; }
+  s_ff_sp--; r->mPktTrack = s_ff_stk[s_ff_sp].ot;            // restore outer; MERGE my writes into it
+  r->mPktLo = s_ff_stk[s_ff_sp].lo; r->mPktHi = s_ff_stk[s_ff_sp].hi;
+  if (mhi > mlo) { if (mlo < r->mPktLo) r->mPktLo = mlo; if (mhi > r->mPktHi) r->mPktHi = mhi; }
 }
 extern "C" void ffspan_dump(uint32_t a) {   // one-time: show the recorded spans vs an unattributed address
   static int done = 0; if (done) return; done = 1;
@@ -77,12 +79,14 @@ extern "C" void ffspan_dump(uint32_t a) {   // one-time: show the recorded spans
   for (int i = 0; i < s_ffspan_n; i++)
     fprintf(stderr, "[ffspan]   %-12s [%08x .. %08x)\n", s_ffspan[i].name, s_ffspan[i].lo, s_ffspan[i].hi);
 }
+// FFS: nested span tracker. c must be a Core* in scope.
 #define FFS(nm, call) do { \
-  if (bdtag_on()) { int _ot = g_pkt_track; uint32_t _olo = g_pkt_lo, _ohi = g_pkt_hi; \
-    g_pkt_track = 1; g_pkt_lo = 0xFFFFFFFFu; g_pkt_hi = 0; call; \
-    if (g_pkt_hi > g_pkt_lo && s_ffspan_n < 40) { s_ffspan[s_ffspan_n].name = nm; \
-      s_ffspan[s_ffspan_n].lo = g_pkt_lo; s_ffspan[s_ffspan_n].hi = g_pkt_hi; s_ffspan_n++; } \
-    g_pkt_track = _ot; g_pkt_lo = _olo; g_pkt_hi = _ohi; } \
+  if (bdtag_on()) { Render* _r = c->mRender; \
+    int _ot = _r->mPktTrack; uint32_t _olo = _r->mPktLo, _ohi = _r->mPktHi; \
+    _r->mPktTrack = 1; _r->mPktLo = 0xFFFFFFFFu; _r->mPktHi = 0; call; \
+    if (_r->mPktHi > _r->mPktLo && s_ffspan_n < 40) { s_ffspan[s_ffspan_n].name = nm; \
+      s_ffspan[s_ffspan_n].lo = _r->mPktLo; s_ffspan[s_ffspan_n].hi = _r->mPktHi; s_ffspan_n++; } \
+    _r->mPktTrack = _ot; _r->mPktLo = _olo; _r->mPktHi = _ohi; } \
   else { call; } } while (0)
 
 static inline void d0(Core* c, uint32_t fn) { rec_dispatch(c, fn); }
@@ -246,10 +250,10 @@ void Engine::s48_2_frame() { Core* c = core;
   uint32_t sm = c->mem_r32(0x1f800138u);
   uint16_t s4a = c->mem_r16(sm + 0x4a);
   if (s4a >= 6) return;
-  if (s4a == 0) { ffspan_begin(); c->engine.submode0(); ffspan_end("submode0"); return; }
-  if (s4a == 1) { ffspan_begin(); c->engine.submode1(); ffspan_end("submode1"); return; }
-  if (s4a == 5) { ffspan_begin(); c->engine.fieldTransition(); ffspan_end("transition"); return; }  // native FUN_80108a60
-  ffspan_begin(); rec_dispatch(c, handler[s4a]); ffspan_end("s48_2_handler");
+  if (s4a == 0) { ffspan_begin(c); c->engine.submode0(); ffspan_end(c, "submode0"); return; }
+  if (s4a == 1) { ffspan_begin(c); c->engine.submode1(); ffspan_end(c, "submode1"); return; }
+  if (s4a == 5) { ffspan_begin(c); c->engine.fieldTransition(); ffspan_end(c, "transition"); return; }  // native FUN_80108a60
+  ffspan_begin(c); rec_dispatch(c, handler[s4a]); ffspan_end(c, "s48_2_handler");
 }
 
 // GAME sub-mode-0 bridge 0x8010882c (sm[0x4c]/sm[0x4e] dispatch) — native. Faithful to the disasm:
@@ -592,7 +596,7 @@ void Engine::fieldRun() { Core* c = core;
       c->mem_w16(c->mem_r32(0x1f800138u) + 0x4e, 1);
       /* fallthrough */
     case 1: {
-      ffspan_begin(); c->engine.fieldFrame(); ffspan_end("fieldframe");   // native field per-frame update (0x80108b0c)
+      ffspan_begin(c); c->engine.fieldFrame(); ffspan_end(c, "fieldframe");   // native field per-frame update (0x80108b0c)
       sm = c->mem_r32(0x1f800138u);
       if (c->mem_r8(0x800bf80du) == 3) {        // (signed byte) special mode 3
         if (c->mem_r8(0x800bf80fu) == 0) {
@@ -974,7 +978,7 @@ void Engine::submode1() { Core* c = core;
       c->mem_w16(sm + 0x4c, next);
       break;
     }
-    case 2: ffspan_begin(); c->engine.fieldRun(); ffspan_end("fieldrun"); break;   // field RUNNING sub-machine (sm[0x4e]) — native
+    case 2: ffspan_begin(c); c->engine.fieldRun(); ffspan_end(c, "fieldrun"); break;   // field RUNNING sub-machine (sm[0x4e]) — native
     case 3: c->engine.fieldRunX(); break;              // mid-transition running sub-machine 0x801070b4 — native
     case 4: rec_dispatch(c, 0x80107230u); break;
     case 5: rec_dispatch(c, 0x8010766cu); break;
@@ -1010,9 +1014,9 @@ int Engine::frame() { Core* c = core;
     }
     c->engine.s48_2_frame();
   } else if (s48 == 0) {
-    ffspan_begin(); c->engine.s48_0(); ffspan_end("s48_0");
+    ffspan_begin(c); c->engine.s48_0(); ffspan_end(c, "s48_0");
   } else if (s48 == 1) {
-    ffspan_begin(); c->engine.s48_1(); ffspan_end("s48_1");
+    ffspan_begin(c); c->engine.s48_1(); ffspan_end(c, "s48_1");
   } else {
     if (cfg_dbg("gframe")) fprintf(stderr, "[gframe] ret0 unknown s48=%u sm@%08X\n", s48, sm); return 0; // unknown top state -> cooperative
   }

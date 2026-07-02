@@ -44,7 +44,7 @@ void xa_audio_trace(Core* c, const char* tag);    // CD-vol fade + XA lifecycle 
 // The native cooperative-task scheduler (switch + native_scheduler_step — the FUN_80080880/
 // FUN_80051e60 replacements) now lives in scheduler.cpp/scheduler.h; TASKBASE/TASKSTRIDE/CUR_TASK
 // (used by the REPL/debug state probes below) are reached via "scheduler.h".
-extern "C" void ffspan_reset_frame(void), ffspan_begin(void), ffspan_end(const char*);  // PSXPORT_BDTAG (engine_stage.cpp); native_step_frame below still calls these directly
+extern "C" void ffspan_reset_frame(void), ffspan_begin(Core*), ffspan_end(Core*, const char*);  // PSXPORT_BDTAG (engine_stage.cpp); native_step_frame below still calls these directly
 
 // ---- BGM frame counter (PSXPORT_BGMDBG trace shared with cd_override.cpp) --------------------
 // FUN_80074BF8(idx) starts BGM #idx; FUN_80074E48() stops it. These are now OWNED PC-native by
@@ -112,18 +112,18 @@ static void native_step_frame(Core* c, uint32_t f) {
   // this was wired they were orphaned with the override table (a live window ran uncapped + stale). The
   // present happens here (before the OT submit below) so the VK batch shown is the one DrawOTag built last
   // frame, exactly as the override-era ordering did.
-  ffspan_begin();
+  ffspan_begin(c);
   c->engine.frameUpdate();                                    // tick + per-vblank audio + present + pace
-  ffspan_end("frameupd");
+  ffspan_end(c, "frameupd");
   xa_audio_trace(c, "post");                                  // CD-vol fade state AFTER tick+mix
   perf_phase_begin(3);   // perf: SCHED-LOGIC = the cooperative scheduler step (the real per-frame GAME logic)
   // The native scheduler is the frame-loop's task-stepping HARNESS (no BIOS threads — yields are setjmp/
   // longjmp coroutines, CD loads are synchronous). It stays native at every gate level. What the gate
   // controls is whether the TASK BODIES it steps run as native stage dispatchers + content (full native) or
   // as pure PSX recomp coroutines (psx_fallback on) — see the gate checks inside native_scheduler_step.
-  ffspan_begin();
+  ffspan_begin(c);
   native_scheduler_step(c);                                   // <- replaces FUN_80051e60 (BIOS scheduler)
-  ffspan_end("scheduler");
+  ffspan_end(c, "scheduler");
   perf_phase_end(3);
   c->engine.musicCoord.tick();                                // dialogs stop/restore ingame music
   xa_audio_trace(c, "coord");                                 // CD-vol fade state AFTER coord
