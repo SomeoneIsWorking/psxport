@@ -561,7 +561,7 @@ void Engine::fieldRun() { Core* c = core;
       c->engine.pool.init();   // OWNED native (game/world/pool.cpp) — replaces rec_dispatch(0x8007b18c)
       c->engine.pool.resetControlBlock();       // OWNED native (game/world/pool.cpp) — replaces rec_dispatch(0x800796dc)
       c->engine.pool.seedAreaObjects();       // OWNED native (game/world/pool.cpp) — replaces rec_dispatch(0x800263e8)
-      ov_place_objects(c);   // OWNED native (game/world/placement.cpp) — replaces rec_dispatch(0x80072a78)
+      c->engine.placement.placeAreaObjects();   // OWNED native (game/world/placement.cpp) — replaces rec_dispatch(0x80072a78)
       c->engine.pool.reset75240();       // OWNED native (game/world/pool.cpp) — replaces rec_dispatch(0x80075240)
       c->engine.pool.setupViewScroll();       // OWNED native (game/world/pool.cpp) — replaces rec_dispatch(0x800783dc)
       c->engine.pool.finalViewInit();       // OWNED native (game/world/pool.cpp) — replaces rec_dispatch(0x80078610)

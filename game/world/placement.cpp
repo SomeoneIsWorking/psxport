@@ -101,7 +101,7 @@ static void place_objects(Core* c) {
   } while (c->mem_r8(rec) != 0xff);
 }
 
-void ov_place_objects(Core* c) {
+void Placement::placeAreaObjects() { Core* c = core;
   static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("placeverify") ? 1 : 0;
   if (!s_v) { place_objects(c); return; }
   static uint8_t* ram0 = (uint8_t*)malloc(0x200000);
@@ -144,7 +144,7 @@ static uint32_t spawn_with_parent(Core* c) {
   }
   return node;
 }
-void ov_spawn_with_parent(Core* c) {
+void Placement::spawnWithParent() { Core* c = core;
   static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("spawnparentverify") ? 1 : 0;
   if (!s_v) { c->r[2] = spawn_with_parent(c); return; }
   static uint8_t* ram0 = (uint8_t*)malloc(0x200000);

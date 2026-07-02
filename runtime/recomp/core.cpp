@@ -28,6 +28,7 @@ Core::Core() {
   engine.sop.core = this;               // Engine-owned SOP intro-cutscene FIELD stage
   engine.bgSceneTransitionSm.core = this;  // Engine-owned BG scene-transition fade manager
   engine.pool.core = this;              // Engine-owned per-area init subsystem
+  engine.placement.core = this;         // Engine-owned field-placement driver
   rng.core        = this;
   inventory.core  = this;
   // Render umbrella (owned by pointer): allocate, wire its back-pointer + each embedded sub-subsystem.

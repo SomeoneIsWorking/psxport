@@ -660,7 +660,7 @@ static void demo_frame_s7(Core* c) {
     c->engine.pool.init();       // 0x8007B18C — native (via LIVE gated entry)
     c->engine.pool.resetControlBlock();           // 0x800796DC — native
     c->engine.pool.seedAreaObjects();           // 0x800263E8 — native
-    ov_place_objects(c);       // 0x80072A78 — native (field object-placement driver)
+    c->engine.placement.placeAreaObjects();       // 0x80072A78 — native (field object-placement driver)
     c->engine.pool.reset75240();           // 0x80075240 — native
     c->engine.pool.setupViewScroll();           // 0x800783DC — native
     c->engine.pool.finalViewInit();           // 0x80078610 — native
