@@ -19,7 +19,7 @@ enum { A0=4, A1=5, A2=6, A3=7, T1=9, V0=2 };
 // delivery in the recomp model, so WaitEvent cannot truly block — it reports the event
 // ready and clears `fired`, which terminates the game's wait-then-test loops. A native
 // frame source (timing.c) DeliverEvents the VBlank class each VSync so test loops advance.
-// EvCB/HeapBlock + their state now live on the instance (HleState in game.h): c->game->hle.*
+// EvCB/HeapBlock + their state now live on the instance (Hle in game.h): c->game->hle.*
 enum { EVCB_MAX = 16 };
 static const uint32_t EV_ID_BASE = 0xF1000000u;
 static int ev_index(Core* c, uint32_t id) {
@@ -27,10 +27,9 @@ static int ev_index(Core* c, uint32_t id) {
   return (idx < EVCB_MAX && c->game->hle.ev[idx].open) ? (int)idx : -1;
 }
 // Native VBlank delivery (called by the frame tick): mark matching open+enabled slots fired.
-void hle_deliver_event(Core* c, uint32_t ev_class, uint32_t spec) {
-  HleEvCB* ev = c->game->hle.ev;
+void Hle::deliverEvent(uint32_t evClass, uint32_t spec) {
   for (int i = 0; i < EVCB_MAX; i++)
-    if (ev[i].open && ev[i].enabled && ev[i].ev_class == ev_class && (ev[i].spec & spec))
+    if (ev[i].open && ev[i].enabled && ev[i].ev_class == evClass && (ev[i].spec & spec))
       ev[i].fired = 1;
 }
 
@@ -38,13 +37,13 @@ void hle_deliver_event(Core* c, uint32_t ev_class, uint32_t spec) {
 enum { HEAP_MAX_BLOCKS = 4096 };
 
 static void heap_init(Core* c, uint32_t addr, uint32_t size) {
-  HleState& h = c->game->hle;
+  Hle& h = c->game->hle;
   h.heap_base = addr; h.heap_size = size;
   h.nblk = 1; h.blk[0].addr = addr; h.blk[0].size = size; h.blk[0].used = 0;
   h.heap_ok = 1;
 }
 static uint32_t heap_alloc(Core* c, uint32_t size) {
-  HleState& h = c->game->hle;
+  Hle& h = c->game->hle;
   if (!h.heap_ok || size == 0) return 0;
   size = (size + 7u) & ~7u;
   for (int i = 0; i < h.nblk; i++) {
@@ -61,7 +60,7 @@ static uint32_t heap_alloc(Core* c, uint32_t size) {
   return 0;
 }
 static void heap_coalesce(Core* c) {
-  HleState& h = c->game->hle;
+  Hle& h = c->game->hle;
   for (int i = 0; i + 1 < h.nblk;) {
     if (!h.blk[i].used && !h.blk[i + 1].used) {
       h.blk[i].size += h.blk[i + 1].size;
@@ -72,12 +71,12 @@ static void heap_coalesce(Core* c) {
 }
 static void heap_free(Core* c, uint32_t addr) {
   if (!addr) return;
-  HleState& h = c->game->hle;
+  Hle& h = c->game->hle;
   for (int i = 0; i < h.nblk; i++)
     if (h.blk[i].addr == addr && h.blk[i].used) { h.blk[i].used = 0; heap_coalesce(c); return; }
 }
 static uint32_t heap_block_size(Core* c, uint32_t addr) {
-  HleState& h = c->game->hle;
+  Hle& h = c->game->hle;
   for (int i = 0; i < h.nblk; i++)
     if (h.blk[i].addr == addr && h.blk[i].used) return h.blk[i].size;
   return 0;
@@ -145,7 +144,7 @@ static int recomp_hle(char table, uint32_t fn, Core* c) {
   if (table == 'B') {
     switch (fn) {
       case 0x07:                                                      // DeliverEvent(cls,spec)
-        hle_deliver_event(c, a0, a1); c->r[V0] = 0; return 1;
+        c->game->hle.deliverEvent(a0, a1); c->r[V0] = 0; return 1;
       case 0x08: {                                                    // OpenEvent(cls,spec,mode,func)
         for (int i = 0; i < EVCB_MAX; i++)
           if (!s_ev[i].open) {

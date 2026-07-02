@@ -63,10 +63,16 @@ struct CdState {
 // gte_state.h's GteRegs) so cdc_native.c / xa_stream.c stay C; bound per frame-step via cdc_bind /
 // xa_bind (those files), exactly like gte_bind/spu_bind/mdec_bind. See cdc_state.h / xa_state.h.
 
-// hle.cpp — BIOS HLE: event control blocks, native first-fit heap, IRQ/work-area flags.
+// hle.cpp — class Hle — BIOS HLE subsystem (event control blocks, native first-fit heap, IRQ /
+// work-area flags), owned by Game (`c->game->hle`). Back-pointer `game` wired in Game(). Was
+// struct HleState; the deliverEvent method promotes the former free function hle_deliver_event
+// (called by timing/native_boot/memcard/asset for VBlank + memcard + sound-DMA event delivery)
+// so callers do c->game->hle.deliverEvent(class, spec) — no Core* arg on the surface.
 struct HleEvCB { int open, enabled, fired; uint32_t ev_class, spec, mode, func; };  // was EvCB
 struct HleHeapBlock { uint32_t addr, size; int used; };                             // was HeapBlock
-struct HleState {
+class Hle {
+public:
+  Game* game = nullptr;
   HleEvCB     ev[16]      = {};   // was s_ev[EVCB_MAX]
   HleHeapBlock blk[4096]  = {};   // was s_blk[HEAP_MAX_BLOCKS]
   int      nblk       = 0;        // was s_nblk
@@ -76,6 +82,11 @@ struct HleState {
   int      work_ok    = 0;        // was s_work_ok
   uint32_t int_handler = 0;       // was s_int_handler (B0:0x19 HookEntryInt)
   int      irq_enabled = 1;       // was s_irq_enabled
+
+  // deliverEvent(evClass, spec): mark every open+enabled event slot whose class matches evClass
+  //   and whose spec masks against `spec` as fired. Called by the frame VBlank tick, memcard
+  //   completion, and sound-DMA completion so guest waits (TestEvent/WaitEvent) advance.
+  void deliverEvent(uint32_t evClass, uint32_t spec);
 };
 
 // pad_input.cpp — class Pad — native controller input subsystem, owned by Game (c->game->pad).
@@ -173,7 +184,7 @@ public:
   CdState     cd;
   CdcState    cdc;   // native CD-controller register model (per-instance; cdc_native.c, bound via cdc_bind)
   XaState     xa;    // native XA-ADPCM CD-audio/voice streamer (per-instance; xa_stream.c, bound via xa_bind)
-  HleState    hle;
+  Hle         hle;
   Pad         pad;
   FmvState    fmv;
   StubState   stub;
@@ -224,6 +235,7 @@ public:
   // reach the rest of the machine (e.g. blit_src -> gpu_gpu via gpu.game; frame_via_fb -> s_seen3d via
   // gpu_gpu.game->core). Set once here so no file-scope global is needed.
   Game() { core.game = this; gpu.game = this; gpu_gpu.game = this; timing.game = this; pad.game = this;
+           hle.game = this;
            spu_state = SPU_NewState(); mdec_state = MDEC_NewState();
            cdc_state_init(&cdc); xa_state_init(&xa); }   // per-instance CD-controller + XA streamer defaults
   ~Game() { SPU_FreeState(spu_state); MDEC_FreeState(mdec_state); }

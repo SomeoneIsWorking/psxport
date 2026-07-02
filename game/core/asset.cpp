@@ -5,6 +5,7 @@
 // via rec_dispatch, not transcribed). See asset.h — instance-with-back-pointer subsystem, methods
 // take typed args directly (no MIPS taxi c->r[4..7] marshal).
 #include "core.h"
+#include "game.h"    // c->game->hle.deliverEvent — Hle subsystem lives on Game
 #include "cfg.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -207,8 +208,7 @@ static void preload_cel(Core* c, uint32_t out, uint32_t desc, uint32_t cbarg) {
   // the poll and silently skipped a whole VAB bank (proved by the dual-core SPU-DMA diff: 1 transfer vs PSX's
   // 2). Deliver the sound-DMA-complete event first so 0x800993a0 returns immediately (no busy-wait, no yield),
   // then run the sync once. (later: in-game music VAB.)
-  void hle_deliver_event(Core* c, uint32_t ev_class, uint32_t spec);
-  hle_deliver_event(c, 0xF0000009u, 0xFFFFFFFFu);                // sound/DMA-complete event
+  c->game->hle.deliverEvent(0xF0000009u, 0xFFFFFFFFu);           // sound/DMA-complete event
   rc1(c, 0x80096a40u, 0);                                        // FUN_80096a40(0): upload sync (now non-blocking)
 }
 

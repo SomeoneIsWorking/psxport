@@ -35,6 +35,7 @@
 // _card_status always reports "complete" so the spin falls through on its first check.
 
 #include "core.h"
+#include "game.h"     // c->game->hle.deliverEvent — Hle subsystem lives on Game
 #include "cfg.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -198,7 +199,6 @@ static int g_card_verbose = 0;           // PSXPORT_CARD_VERBOSE=1
 // Our I/O is synchronous, so completion is "now". EvSpIOE (0x0004) = I/O end. Delivered to the standard
 // card event classes (HwCARD/SwCARD); an unmatched class is a harmless no-op (hle_deliver_event only
 // fires OPEN events whose class+spec match). Confirmed classes recorded in the journal once captured.
-extern void hle_deliver_event(Core* c, uint32_t ev_class, uint32_t spec);
 static void card_deliver_complete(Core* c) {
   // RE'd from CRD.BIN (the SAVE/LOAD card menu overlay) + the resident card-event init FUN_8001cc00:
   // the front-end opens these card events (struct base 0x800BF498) and EACH save/load wait loop polls
@@ -212,9 +212,9 @@ static void card_deliver_complete(Core* c) {
   // save/load success the menu's +28 poll requires) and SwCARD/HwCARD IOE 0x0004 (the detect flow). We
   // deliberately do NOT deliver SwCARD 0x0100/0x2000 (those are the menu's error/new-card codes) nor
   // HwCARD 0x8000, so a real successful host-file write/read can never be misread as an error/timeout.
-  hle_deliver_event(c, 0xF4000001u, 0x8000u);   // SwCARD, save/load SUCCESS — the menu's +28 wait
-  hle_deliver_event(c, 0xF4000001u, 0x0004u);   // SwCARD, EvSpIOE — card-detect completion
-  hle_deliver_event(c, 0xF0000011u, 0x0004u);   // HwCARD, EvSpIOE — BIOS-level completion
+  c->game->hle.deliverEvent(0xF4000001u, 0x8000u);   // SwCARD, save/load SUCCESS — the menu's +28 wait
+  c->game->hle.deliverEvent(0xF4000001u, 0x0004u);   // SwCARD, EvSpIOE — card-detect completion
+  c->game->hle.deliverEvent(0xF0000011u, 0x0004u);   // HwCARD, EvSpIOE — BIOS-level completion
 }
 
 // A0 libcard table (_card_info / _card_load) — Tomba2's "Checking MEMORY CARD" uses A0:0xAB, not the B0

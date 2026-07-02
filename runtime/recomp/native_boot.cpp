@@ -75,7 +75,6 @@ static void native_step_frame(Core* c, uint32_t f) {
   mdec_bind(c);                         // bind THIS core's MDEC state (per-instance — no shared MDEC)
   cdc_bind(c);                          // bind THIS core's CD-controller registers (per-instance — no shared CD)
   xa_bind(c);                           // bind THIS core's XA streamer state (per-instance — no shared XA)
-  void hle_deliver_event(Core* c, uint32_t ev_class, uint32_t spec);
   ffspan_reset_frame();   // backdrop-attribution: reset the per-frame builder span table
   void gpu_set_disp_origin(Core* c, int x, int y);
   (void)f;
@@ -84,9 +83,9 @@ static void native_step_frame(Core* c, uint32_t f) {
   // so this is the only thing that ticks the recomp timebase (recomp tasks read it to pace animations).
   c->game->timing.frameTick();
   // Per-frame IRQ-driven events the game's waits poll via TestEvent (VBlank classes + sound-DMA-complete).
-  hle_deliver_event(c, 0xF2000003u, 0xFFFFFFFFu);
-  hle_deliver_event(c, 0xF0000001u, 0xFFFFFFFFu);
-  hle_deliver_event(c, 0xF0000009u, 0xFFFFFFFFu);
+  c->game->hle.deliverEvent(0xF2000003u, 0xFFFFFFFFu);
+  c->game->hle.deliverEvent(0xF0000001u, 0xFFFFFFFFu);
+  c->game->hle.deliverEvent(0xF0000009u, 0xFFFFFFFFu);
   // SINGLE-BUFFERED (PC-native) — the game's own PSX double-buffering is REMOVED (user: "remove the
   // game's own double buffering, it causes problems"). The PSX flips between two VRAM pages each frame:
   // OT region 0x800e80a8 + parity*0x2070 and packet pool 0x800bfe68 + parity*0x14000, with the display/
@@ -312,7 +311,6 @@ static void ov_game_main(Core* c) {
   if (!repl_mode && !gpu_windowed() && cfg_on("PSXPORT_DEBUG_SERVER")) nframes = 0;
   fprintf(stderr, "[native_boot] entering native frame loop (%s)\n",
           nframes ? "capped" : "interactive (until window close)");
-  void hle_deliver_event(Core* c, uint32_t ev_class, uint32_t spec);
   void dbg_server_start(Core* c); void dbg_server_service(Core* c);
   dbg_server_start(c);    // PSXPORT_DEBUG_SERVER: non-blocking live TCP debug server (dbg_server.c)
   long repl_budget = 0;   // frames remaining in the current REPL `run N`

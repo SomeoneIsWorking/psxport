@@ -13,8 +13,6 @@
 enum { A0 = 4, V0 = 2 };
 #define VBLANK_COUNT 0x800ABDE0u   // DAT_800abde0: libetc VSync counter (FUN_80085900 returns it)
 
-void hle_deliver_event(Core* c, uint32_t ev_class, uint32_t spec);
-
 // 0x80085BB0 FUN_80085bb0 VSyncCallback(func): no-op. The original routes the per-vblank
 // callback through the libapi interrupt vector we don't model; we don't deliver preemptive
 // VBlank IRQs at all — the game's vblank busy-waits are ported to PC behavior natively
@@ -28,8 +26,8 @@ void Timing::vsyncCallback() {
 // Deliver the VBlank event to whichever class the game opened it under (RCnt3 vblank, or the
 // libapi vblank class); broad spec so any opened+enabled vblank EvCB matches.
 static void deliver_vblank_events(Core* c) {
-  hle_deliver_event(c, 0xF2000003u, 0xFFFFFFFFu);
-  hle_deliver_event(c, 0xF0000001u, 0xFFFFFFFFu);
+  c->game->hle.deliverEvent(0xF2000003u, 0xFFFFFFFFu);
+  c->game->hle.deliverEvent(0xF0000001u, 0xFFFFFFFFu);
 }
 
 // 0x80085900 FUN_80085900 = libetc VSync(mode) reached via c->r[A0]:
