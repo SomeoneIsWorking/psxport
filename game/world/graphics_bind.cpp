@@ -56,8 +56,7 @@ static uint32_t obj_record_init(Core* c) {
   c->mem_w16(obj + 0xbc, 0x1000);
   c->mem_w16(obj + 0xba, 0x1000);
   c->mem_w16(obj + 0xb8, 0x1000);
-  rec_dispatch(c, 0x8007AAE8u);                  // allocate the record (native via ov_record_alloc)
-  uint32_t rec = c->r[2];
+  uint32_t rec = record_alloc(c);                // native (was rec_dispatch(0x8007AAE8u); record_alloc defined above)
   c->mem_w32(obj + 0xc0, rec);
   c->mem_w16(rec + 6, 0xffff);                   // -1
   c->mem_w16(rec + 0, 0);  c->mem_w16(rec + 2, 0);  c->mem_w16(rec + 4, 0);
