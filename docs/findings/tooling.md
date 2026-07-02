@@ -41,3 +41,10 @@
 - **cause:** the leaderboard measures rec_dispatch hits at CALL SITES — a hot substrate leaf can appear either because it has no native port OR because a written-but-orphan native port isn't wired into its native callers. The two states look identical at the recdep layer.
 - **fix / rule:** for EVERY frontier target the handoff (or recdep) lists, run `tools/codemap.py --addr 0xADDR` FIRST before disassembling. If it's already ORPHAN, the work is WIRING (grep the callers, replace `rec_dispatch(c, 0xADDR)` with the native call), not porting. Only if codemap says NO native owner do you disassemble and reimplement.
 - **refs:** game/render/cull.cpp (ov_cull_wrapper / ov_cull_wrap_77acc / ov_cone_cull_2b278 all ORPHAN); game/math/mathlib.cpp ov_bittest_4d7ec (was ORPHAN, wired e9f4b1e); scratch/logs/recdep_new.log
+
+## ORPHAN native with a `_verify` wrapper is NOT proof it's byte-perfect
+- **symptom:** trying to wire ov_orch597AC (FUN_800597AC) at engine_submit.cpp:1211 tripped a 9-byte main-RAM A/B mismatch @0x1FFCC9 at frame 500 even though the native has an `orchverify` gate. Wire had to be reverted.
+- **status:** workflow caveat (2026-07-02)
+- **cause:** a `*_verify` wrapper (record_gate / an inline snapshot+super_call harness) means someone WROTE the compare scaffolding, not that the compare has ever RUN clean. The gate is off by default (cfg_dbg("orchverify") is 0 unless set), so the default path is unverified native. Wire-time A/B may still fail if the native impl and recomp body actually differ.
+- **fix / rule:** the wire-time A/B (main-RAM + scratchpad cmp = 0) is the ONLY proof. If a wire trips a diff, revert immediately — the "byte-perfect" native was never actually proven. Optionally rerun with the gate on (e.g. `PSXPORT_DEBUG=orchverify`) to localize the divergence, but do NOT ship the wire.
+- **refs:** attempted wire reverted 2026-07-02; game/render/engine_submit.cpp ov_orch597AC (orchverify gate); the earlier successful wires in this session (ov_unpack_group, ov_obj_pos_compose, spawn_dispatch, ov_obj_record_init, the collision-grid trio) all had A/B = 0.
