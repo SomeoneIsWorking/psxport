@@ -181,8 +181,7 @@ int gpu_gpu_wide_engine(void);   // gpu_gpu.c — genuine engine-wide active (PS
 // natively in gpu_dma2_linked_list (walk OT -> decode each primitive -> rasterize). Overriding it routes
 // the draw straight through our native walk (synchronous), instead of the DMA-register emulation dance.
 // This is the engine's draw submission, owned.
-// (was extern int g_render_psx — moved onto Render::mPsxRender, reached as c->mRender->mode.psxRender())
-extern int g_ot_2d_only;       // gpu_native.cpp — OT walk queues ONLY 2D HUD prims (world/bg owned natively)
+// g_render_psx retired — now Render::mode; g_ot_2d_only retired — now a param to gpu_dma2_linked_list.
 void Engine::drawOTag(uint32_t otHead) {   // called directly from native_step_frame (PC-driven); NOT an override
   Core* c = this->core;
   // #7/#11 finish: while the DEMO/title front-end is still LOADING its assets (sub-SM task0+0x48 < 2, the
@@ -236,22 +235,20 @@ void Engine::drawOTag(uint32_t otHead) {   // called directly from native_step_f
     // native 3D render off only for the void — the SOP scene byte is the game's per-beat state, not a magic
     // render constant. (Scene 6 IS a 3D beat: the cliff fading in — gating it off loses the cliff geometry.)
     if (c->mem_r8(0x800BF9B4u) != 5) { c->mRender->sceneNative(); }
-    gpu_dma2_linked_list(c, otHead);
+    gpu_dma2_linked_list(c, otHead, /*twoDOnly=*/false);   // full walk incl. cutscene fills/effect quads
   } else if (!c->mRender->mode.psxRender() && (field || cfg_dbg("scenenative"))) {
     c->mRender->sceneNative();
     // The native field path owns the 3D world + backdrop, but the field still submits its 2D OVERLAY
     // through the PSX OT: the opening-cutscene narration glyphs, in-game dialog / item bubbles, menus,
-    // HUD. Enumerate the OT in 2D-overlay-only mode (g_ot_2d_only) so those 2D prims are queued as
-    // RQ_HUD on top of the native world while the OT's 3D-world / backdrop prims are dropped (owned
-    // natively — keeping them would double-draw the world). This is THE behavior, not a debug channel:
-    // without it the opening story cutscene rendered nothing and the prior menu's stale VRAM showed
-    // through. (scenenativehud kept as a DIAGNOSTIC: full walk incl. world, to A/B the native world
-    // render against the PSX 2D-on-top composite.)
-    g_ot_2d_only = cfg_dbg("scenenativehud") ? 0 : 1;
-    gpu_dma2_linked_list(c, otHead);
-    g_ot_2d_only = 0;
+    // HUD. Enumerate the OT in 2D-overlay-only mode so those 2D prims are queued as RQ_HUD on top of
+    // the native world while the OT's 3D-world / backdrop prims are dropped (owned natively —
+    // keeping them would double-draw the world). This is THE behavior, not a debug channel: without
+    // it the opening story cutscene rendered nothing and the prior menu's stale VRAM showed through.
+    // (scenenativehud kept as a DIAGNOSTIC: full walk incl. world, to A/B the native world render
+    // against the PSX 2D-on-top composite.)
+    gpu_dma2_linked_list(c, otHead, /*twoDOnly=*/!cfg_dbg("scenenativehud"));
   } else {
-    gpu_dma2_linked_list(c, otHead);
+    gpu_dma2_linked_list(c, otHead, /*twoDOnly=*/false);
   }
   // ADDITIVE native render subsystem (game/render/) — the decoupled "native experience" pass. Fully
   // separate from the PSX path above: it builds the frame from native SCENE DATA (entity lists + camera)

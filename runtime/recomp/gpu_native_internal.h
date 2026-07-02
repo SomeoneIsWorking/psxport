@@ -132,8 +132,12 @@ struct GpuState {
   // field frame; the OT walk drops guest backdrop sprites sampling it (render.md OPEN #1). -1 = unset.
   int s_bgtp_x = -1, s_bgtp_y = -1, s_bgtp_frame = -1;
   uint32_t s_cur_node = 0;                                    // RAM addr of the OT node being fed to GP0
-  uint32_t g_ot_madr = 0;                                     // last OT DMA root
-  uint32_t g_dma_src = 0;                                     // last block-DMA source
+  uint32_t s_ot_madr = 0;                                     // last OT DMA root (was global g_ot_madr)
+  uint32_t s_dma_src = 0;                                     // last block-DMA source (was global g_dma_src)
+  bool     s_ot_2d_only = false;                              // in-flight OT walk mode (was global g_ot_2d_only):
+                                                              // set at gpu_dma2_linked_list entry, read by gp0_exec
+                                                              // to drop the OT's 3D-world prims (owned by native
+                                                              // scene walk), cleared at walk exit.
 
   // ---- rasterizer / GP0 / present methods (bodies in gpu_native.cpp) ----
   uint16_t sample_tex(int u, int v);
@@ -156,7 +160,10 @@ struct GpuState {
   void gp0_exec(Core* core);
   void gpu_gp0(Core* core, uint32_t w);
   void gpu_gp1(uint32_t w);
-  void gpu_dma2_linked_list(Core* core, uint32_t madr);
+  // twoDOnly=true: enumerate the OT and DROP its 3D-world / backdrop prims (owned by the native
+  // scene walk); queue only 2D-overlay prims as RQ_HUD. Was the process-global g_ot_2d_only,
+  // set right before the call and cleared right after — now a real parameter.
+  void gpu_dma2_linked_list(Core* core, uint32_t madr, bool twoDOnly);
   void gpu_dma2_block(Core* core, uint32_t madr, int count, int to_gpu);
   void gpu_native_load_image(Core* core, int x, int y, int w, int h, uint32_t src);
   int  gpu_native_load_vram(const char* path);
@@ -183,7 +190,7 @@ void gpu_scene_dump(Core* core, FILE* out, uint32_t madr);   // classify an OT's
 // ---- Public GPU API (free functions; thin wrappers over GpuState methods, reached via Core*) ---
 void gpu_gp0(Core* core, uint32_t w);
 void gpu_gp1(Core* core, uint32_t w);
-void gpu_dma2_linked_list(Core* core, uint32_t madr);
+void gpu_dma2_linked_list(Core* core, uint32_t madr, bool twoDOnly);
 void gpu_dma2_block(Core* core, uint32_t madr, int count, int to_gpu);
 void gpu_present(Core* core);
 void gpu_present_ex(Core* core, int do_blit);

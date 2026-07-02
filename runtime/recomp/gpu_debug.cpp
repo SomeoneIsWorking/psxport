@@ -101,5 +101,5 @@ void gpu_scene_dump(Core* core, FILE* out, uint32_t madr) {
           s_frame, npoly, nrect, nline, nfill, ncopy, nup, nenv);
 }
 // On-demand scene dump for the live debug server (dbg_server.c): classify the CURRENT frame's
-// last-submitted OT (g_ot_madr, set by gpu_dma2_linked_list) into `out`.
-void gpu_scene_dump_now(Core* core, FILE* out) { gpu_scene_dump(core, out, core->game->gpu.g_ot_madr); }
+// last-submitted OT (Gpu::s_ot_madr, set by gpu_dma2_linked_list) into `out`.
+void gpu_scene_dump_now(Core* core, FILE* out) { gpu_scene_dump(core, out, core->game->gpu.s_ot_madr); }

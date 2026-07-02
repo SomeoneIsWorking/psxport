@@ -194,7 +194,7 @@ void Core::io_write(uint32_t a, uint32_t v, uint32_t bytes) {
     s_dma2_chcr = v;
     if (v & 0x01000000u) {                         // start/busy
       int sync = (v >> 9) & 3, to_gpu = v & 1;
-      if (sync == 2) gpu_dma2_linked_list(this, s_dma2_madr);       // ordering-table linked list
+      if (sync == 2) gpu_dma2_linked_list(this, s_dma2_madr, /*twoDOnly=*/false);   // ordering-table linked list — full walk
       else if (sync == 1) gpu_dma2_block(this, s_dma2_madr,         // block: BC = blocks*size
                (int)((s_dma2_bcr & 0xFFFF) * (s_dma2_bcr >> 16)), to_gpu);
       else gpu_dma2_block(this, s_dma2_madr, (int)(s_dma2_bcr & 0xFFFF), to_gpu);  // immediate

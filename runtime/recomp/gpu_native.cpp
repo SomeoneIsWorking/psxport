@@ -188,7 +188,8 @@ long g_nd_3d = 0, g_nd_2d = 0;   // Phase-2 native-depth diag: prims drawn with 
 // already produced them — keeping them would DOUBLE-draw the world); only RQ_HUD 2D prims are queued.
 // State commands (E1 texpage / E2 texwindow / draw-area/offset) are still applied for every node, so
 // the kept 2D prims bind the correct texpage. (engine owns 3D + bg; guest OT supplies leftover 2D.)
-int g_ot_2d_only = 0;
+// g_ot_2d_only retired 2026-07-03 — now a parameter of gpu_dma2_linked_list, stashed onto the walk's
+// per-Core GpuState as s_ot_2d_only for gp0_exec to read, cleared at walk exit. (deglobalize-game)
 
 // Engine-owned 2D WIDESCREEN layout. The wide 3D world is centered in the scratch FB by fb_x0=margin*ss
 // (push_wide); 2D prims share that relocation shader, so they get the same +margin. We map each native-320
@@ -885,8 +886,7 @@ void GpuState::gp0_exec(Core* core) {
         // double-draw, observed as the free-roam crash). 2D-poly overlays (gradient/fade panels) are a
         // known frontier; the cutscene narration + the common HUD are SPRITES, handled below. (engine
         // owns the field's 3D geometry; the guest OT supplies only the leftover 2D SPRITES.)
-        extern int g_ot_2d_only;
-        if (g_ot_2d_only) { /* field 3D world is native-owned; guest polys are redundant — skip */ }
+        if (s_ot_2d_only) { /* field 3D world is native-owned; guest polys are redundant — skip */ }
         else {
         rq_emit_or_queue(core, 1, layer, om, nv, semi, rw, xs, ys, 0, 0, us, vs, rs, gs, bs,
                          is3d ? dep : 0, mode, s_tp_x, s_tp_y, s_clut_x, s_clut_y,
@@ -1063,8 +1063,7 @@ void GpuState::gp0_exec(Core* core) {
         int layer = objz ? RQ_WORLD     : (bg ? RQ_BACKGROUND : RQ_HUD);
         int om    = objz ? RQ_OM_DEPTH  : (bg ? RQ_OM_2D_BG   : RQ_OM_2D_FG);
         // 2D-overlay-only field pass: drop the 3D-world / backdrop prims (owned natively); keep 2D HUD.
-        extern int g_ot_2d_only;
-        if (g_ot_2d_only && layer != RQ_HUD) { /* world/bg owned by ov_scene_native — skip */ }
+        if (s_ot_2d_only && layer != RQ_HUD) { /* world/bg owned by ov_scene_native — skip */ }
         else {
         rq_emit_or_queue(core, 1, layer, om, 4, semi, rw, qx, qy, 0, 0, qu, qv, qr, qg, qb, objz ? dep : 0, mode,
                          s_tp_x, s_tp_y, s_clut_x, s_clut_y, s_tw_mx, s_tw_my, s_tw_ox, s_tw_oy,
@@ -1221,17 +1220,17 @@ void GpuState::gpu_gp0(Core* core, uint32_t w) {
       s_xfer_h = (((s_fifo[2] >> 16) & 0x1FF) ? ((s_fifo[2] >> 16) & 0x1FF) : 512);
       s_xfer_px = 0; s_xfer = 1;
       if (vk_path()) gpu_gpu_dirty(core, s_xfer_x, s_xfer_y, s_xfer_w, s_xfer_h);   // mirror upload to VK
-      vram_guard_check(core, "A0", s_xfer_x, s_xfer_y, s_xfer_w, s_xfer_h, 0x80000000u | g_dma_src);
+      vram_guard_check(core, "A0", s_xfer_x, s_xfer_y, s_xfer_w, s_xfer_h, 0x80000000u | s_dma_src);
       clutwatch_xfer("A0", s_xfer_x, s_xfer_y, s_xfer_w, s_xfer_h);
       if (cfg_dbg("upload")) {
         fprintf(stderr, "[upload] f%d A0 dest=(%d,%d) %dx%d src=0x%08X\n",
-                s_frame, s_xfer_x, s_xfer_y, s_xfer_w, s_xfer_h, 0x80000000u | g_dma_src);
+                s_frame, s_xfer_x, s_xfer_y, s_xfer_w, s_xfer_h, 0x80000000u | s_dma_src);
       }
       if (texwatch_overlap(s_xfer_x, s_xfer_y, s_xfer_w, s_xfer_h)) {
-        uint32_t src = 0x80000000u | g_dma_src;
+        uint32_t src = 0x80000000u | s_dma_src;
         fprintf(stderr, "[texwatch] f%d A0 dest=(%d,%d) %dx%d src=0x%08X srcbytes:",
                 s_frame, s_xfer_x, s_xfer_y, s_xfer_w, s_xfer_h, src);
-        for (int k = 0; k < 12; k++) fprintf(stderr, " %02X", core->mem_r8(g_dma_src + k));
+        for (int k = 0; k < 12; k++) fprintf(stderr, " %02X", core->mem_r8(s_dma_src + k));
         fprintf(stderr, "\n");
       }
     } else if (op == 0x80) {                     // VRAM->VRAM copy
@@ -1252,7 +1251,7 @@ void GpuState::gpu_gp0(Core* core, uint32_t w) {
         // malformed node and the chain that reaches it can be examined offline.
         if (cfg_str("PSXPORT_CLOBBERDUMP")) { static int done = 0; if (!done++) {
           uint32_t na = s_cur_node & 0x1FFFFF;
-          fprintf(stderr, "[clobber] OT root madr=0x%08X node@0x%08X neighbourhood:\n", 0x80000000u|g_ot_madr, s_cur_node);
+          fprintf(stderr, "[clobber] OT root madr=0x%08X node@0x%08X neighbourhood:\n", 0x80000000u|s_ot_madr, s_cur_node);
           for (int k = -8; k <= 16; k++) fprintf(stderr, "  [%+d] 0x%08X: %08X\n", k,
                   0x80000000u | ((na + k*4) & 0x1FFFFF), core->mem_r32(0x80000000u | ((na + k*4) & 0x1FFFFF)));
           FILE* mf = fopen(cfg_str("PSXPORT_CLOBBERDUMP"), "wb");
@@ -1579,11 +1578,12 @@ void gpu_scene_dump(Core*, FILE*, uint32_t);
 // DMA channel 2 (GPU): walk an ordering-table linked list from `madr`, feeding each node's
 // GP0 words to the parser. Header word: bits[24..31]=word count, bits[0..23]=next node addr
 // (0xFFFFFF = end).
-void GpuState::gpu_dma2_linked_list(Core* core, uint32_t madr) {
+void GpuState::gpu_dma2_linked_list(Core* core, uint32_t madr, bool twoDOnly) {
   { static int sd = -2; if (sd == -2) { const char* e = cfg_str("PSXPORT_SCENEDUMP"); sd = e ? atoi(e) : -1; }
     if (sd >= 0 && s_frame == sd) gpu_scene_dump(core, stderr, madr); }
   s_dma2++;
-  g_ot_madr = madr & 0x1FFFFC;
+  s_ot_madr = madr & 0x1FFFFC;
+  s_ot_2d_only = twoDOnly;
   // PSXPORT_DEBUG=ot (diagnostic only — the driver no longer reads the OT): on a chain that fails to
   // terminate within an OT's worth of nodes (cyclic = malformed), dump its first 40 nodes once for diagnosis.
   // (Empty OTs are ~0x800 link-only nodes that DO terminate at the sentinel; a true cycle never terminates.)
@@ -1642,19 +1642,20 @@ void GpuState::gpu_dma2_linked_list(Core* core, uint32_t madr) {
     uint32_t pool = core->mem_r32(0x800BF544u);
     if ((int)pool > mx) mx = (int)pool;
     fprintf(stderr, "[pool] f%d madr=0x%08X nodes=%d pool=0x%08X hi=0x%08X\n",
-            s_frame, 0x80000000u | g_ot_madr, nodes, pool, (uint32_t)mx);
+            s_frame, 0x80000000u | s_ot_madr, nodes, pool, (uint32_t)mx);
   }
   if (guard >= 0x10000) {
     static int warned = 0;
     if (!warned++) fprintf(stderr, "[gpu] WARN: OT walk hit %d-node cap (madr=0x%08X) — "
-                           "malformed/cyclic ordering table\n", guard, 0x80000000u | g_ot_madr);
+                           "malformed/cyclic ordering table\n", guard, 0x80000000u | s_ot_madr);
   }
+  s_ot_2d_only = false;   // walk done — the parameter is scoped to this call
 }
 // DMA channel 2 block mode: `count` words from `madr` (to/from GP0). to_gpu=1 -> GP0 writes.
 void GpuState::gpu_dma2_block(Core* core, uint32_t madr, int count, int to_gpu) {
   s_dma2++;
   uint32_t addr = madr & 0x1FFFFC;
-  g_dma_src = addr;
+  s_dma_src = addr;
   for (int i = 0; i < count; i++) { if (to_gpu) gpu_gp0(core, core->mem_r32(addr)); addr += 4; }
 }
 
@@ -1667,7 +1668,7 @@ void gpu_gp1(Core* core, uint32_t w) { core->game->gpu.gpu_gp1(w); }
 // native_step_frame to display the single buffer the engine draws into. The display W/H are unchanged
 // (still driven by the mode/range GP1(0x07/0x08) the boot env sets once).
 void gpu_set_disp_origin(Core* core, int x, int y) { core->game->gpu.s_disp_x = x; core->game->gpu.s_disp_y = y; }
-void gpu_dma2_linked_list(Core* core, uint32_t madr) { core->game->gpu.gpu_dma2_linked_list(core, madr); }
+void gpu_dma2_linked_list(Core* core, uint32_t madr, bool twoDOnly) { core->game->gpu.gpu_dma2_linked_list(core, madr, twoDOnly); }
 void gpu_dma2_block(Core* core, uint32_t madr, int count, int to_gpu) { core->game->gpu.gpu_dma2_block(core, madr, count, to_gpu); }
 void gpu_present(Core* core) { core->game->gpu.gpu_present(core); }
 void gpu_present_ex(Core* core, int do_blit) { core->game->gpu.gpu_present_ex(core, do_blit); }
