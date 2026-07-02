@@ -8,7 +8,10 @@
 #define GAME_WORLD_SPAWN_H
 struct Core;
 void ov_entity_spawn(Core* c);   // FUN_80079C3C — pool-pop + field-init + list-link spawn primitive
-void spawn_dispatch(Core*);      // FUN_8007A980 — per-type spawn dispatcher (used by placement.cpp)
+// FUN_8007A980 — per-type spawn dispatcher. Was `c->r[4] = cls; c->r[5] = type; c->r[6] = list;
+// spawn_dispatch(c); c->r[2] gets node` (taxi). Now explicit typed args; returns node ptr (0 on
+// out-of-range class). Callers: placement.cpp / sop.cpp.
+uint32_t spawn_dispatch(Core* c, uint32_t cls, uint32_t type, uint32_t list);
 void entity_spawn_register(void);
 // world_despawn(c, node) — FUN_8007A624, the DESPAWN primitive (oracle-verified 0-diff, see ov_despawn in
 // spawn.cpp). Typed live-wiring entry: the per-object AI behavior handlers (game/ai/beh_*.cpp) call this

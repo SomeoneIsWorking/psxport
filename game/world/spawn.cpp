@@ -212,25 +212,28 @@ static const uint32_t SPAWN_VAR[5] = { 0x80079C3Cu, 0x80079DDCu, 0x80079F90u, 0x
 // list from r4..r7 and returning the node ptr. Replaces the former rec_dispatch(SPAWN_VAR[cls]) into the
 // PSX body — keeps the placement→spawn path fully native (PC calls PC). Defined after pool_spawn/POOL_VAR.
 static uint32_t spawn_variant_native(Core* c, uint32_t cls);
-void spawn_dispatch(Core* c) {
-  uint32_t cls = c->r[4] & 0xffu;
-  if (cls >= 5) { c->r[2] = 0; return; }
-  uint32_t type = c->r[5] & 0xffu, list = c->r[6];
+uint32_t spawn_dispatch(Core* c, uint32_t cls_in, uint32_t type_in, uint32_t list) {
+  uint32_t cls = cls_in & 0xffu;
+  if (cls >= 5) { c->r[2] = 0; return 0; }
+  uint32_t type = type_in & 0xffu;
   c->r[4] = 0; c->r[5] = type; c->r[6] = 3; c->r[7] = list;   // handler sets ref=0, type&0xff, mode=3, a3=list
-  c->r[2] = spawn_variant_native(c, cls);                     // run the per-type spawn variant (native) → v0
+  uint32_t node = spawn_variant_native(c, cls);               // run the per-type spawn variant (native)
+  c->r[2] = node;
+  return node;
 }
 void rec_dispatch(Core*, uint32_t);
 void ov_spawn_dispatch(Core* c) {
   spawn_trace(c, "disp7a980", 0x8007A980u);
   static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("spawndispverify") ? 1 : 0;
-  if (!s_v) { spawn_dispatch(c); return; }
+  uint32_t cls_in = c->r[4], type_in = c->r[5], list = c->r[6];
+  if (!s_v) { spawn_dispatch(c, cls_in, type_in, list); return; }
   static uint8_t* ram0 = (uint8_t*)malloc(0x200000);
   static uint8_t* ramN = (uint8_t*)malloc(0x200000);
   uint8_t spad0[0x400], spadN[0x400];
   uint32_t regs0[32]; memcpy(regs0, c->r, sizeof regs0);
-  uint32_t a0 = c->r[4];
+  uint32_t a0 = cls_in;
   memcpy(ram0, c->ram, 0x200000); memcpy(spad0, c->scratch, 0x400);
-  spawn_dispatch(c);
+  spawn_dispatch(c, cls_in, type_in, list);
   uint32_t v0_n = c->r[2];
   memcpy(ramN, c->ram, 0x200000); memcpy(spadN, c->scratch, 0x400);
   memcpy(c->ram, ram0, 0x200000); memcpy(c->scratch, spad0, 0x400); memcpy(c->r, regs0, sizeof regs0);
@@ -377,9 +380,7 @@ static void replace_dispatch(Core* c) {
 static uint32_t spawn_and_init(Core* c) {
   uint32_t a0 = c->r[4], a1 = c->r[5], a2 = c->r[6];
   if (c->mem_r8(0x800E7E7Cu) < 7) return 0;
-  c->r[4] = 0; c->r[5] = 6; c->r[6] = 1;
-  spawn_dispatch(c);   // FUN_8007A980 — native
-  uint32_t node = c->r[2];
+  uint32_t node = spawn_dispatch(c, /*cls=*/0, /*type=*/6, /*list=*/1);   // FUN_8007A980 — native
   if (node == 0) return 0;
   if (a1 != 0) {
     c->mem_w16(node + 0x2c, c->mem_r16(a1 + 2));

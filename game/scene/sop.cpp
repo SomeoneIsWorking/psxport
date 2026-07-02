@@ -250,7 +250,7 @@ void Sop::fieldMode() { Core* c = core;
       d1(c, 0x8010a8d4u, 0x800f2418u);         // SOP bg-ptr setup
       // 3 scene objects: spawn + stamp fields from the SOP overlay tables @0x8010c98c (stride 12).
       for (int i = 0; i < 3; i++) {
-        c->r[4] = 3; c->r[5] = 3; c->r[6] = 1; spawn_dispatch(c);   // FUN_8007A980 — native
+        spawn_dispatch(c, /*cls=*/3, /*type=*/3, /*list=*/1);       // FUN_8007A980 — native
 
         uint32_t node = c->r[2];
         uint32_t t = 0x8010c98cu + (uint32_t)i * 12;

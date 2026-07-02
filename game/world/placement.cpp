@@ -79,11 +79,10 @@ static void place_objects(Core* c) {
     }
     if (!skip) {
       uint8_t cls = c->mem_r8(rec + 1);
-      c->r[4] = c->mem_r8(rec) & 0x7fu;                  // a0 = type & 0x7f
-      c->r[5] = (cls == 3) ? 3u : cls;                   // a1 = class
-      c->r[6] = (cls == 3) ? 1u : 0u;                    // a2 = list (3 -> 1)
-      spawn_dispatch(c);
-      uint32_t node = c->r[2];
+      uint32_t node = spawn_dispatch(c,
+        /*cls=*/(uint32_t)(c->mem_r8(rec) & 0x7fu),
+        /*type=*/(cls == 3) ? 3u : cls,
+        /*list=*/(cls == 3) ? 1u : 0u);
       if (node != 0) {
         c->mem_w8 (node + 0x28, c->mem_r8 (rec));
         c->mem_w32(node + 0x1c, c->mem_r32(rec + 0x10));
@@ -132,11 +131,10 @@ void Placement::placeAreaObjects() { Core* c = core;
 //     return node;
 static uint32_t spawn_with_parent(Core* c) {
   uint32_t parent = c->r[4], type = c->r[5], cls = c->r[6] & 0xffu, flag = c->r[7];
-  c->r[4] = type & 0x7fu;
-  c->r[5] = (cls == 3) ? 3u : cls;
-  c->r[6] = (cls == 3) ? 1u : 0u;
-  spawn_dispatch(c);
-  uint32_t node = c->r[2];
+  uint32_t node = spawn_dispatch(c,
+    /*cls=*/type & 0x7fu,
+    /*type=*/(cls == 3) ? 3u : cls,
+    /*list=*/(cls == 3) ? 1u : 0u);
   if (node != 0) {
     c->mem_w8 (node + 0x28, type & 0xffu);   // full type byte (s0 = original a1, unmasked)
     c->mem_w32(node + 0x10, parent);
