@@ -361,8 +361,6 @@ static void submit_poly_gt3_native(Core* c) {
   c->r[2] = rec;
 }
 
-void ov_submit_poly_gt3(Core* c) { submit_poly_gt3_native(c); }
-
 // gen_func_8008007C — POLY_GT4 (gouraud-textured quad) submit, PC-NATIVE.
 // Record = 44 bytes: {+0 rgb0(rgb1=<<4), +4 rgb2(rgb3=<<4), +8 uv0|clut, +12 uv1|tpage,
 //   +16 uv2(lo)|uv3(hi), +20 VXY0, +24 VZ0(lo)|VZ1(hi), +28 VXY1, +32 VXY2, +36 VZ2(lo)|VZ3(hi), +40 VXY3}.
@@ -416,8 +414,6 @@ static void submit_poly_gt4_native(Core* c) {
   }
   c->r[2] = rec;                                              // return: record pointer advanced past the array
 }
-
-void ov_submit_poly_gt4(Core* c) { submit_poly_gt4_native(c); }
 
 // =====================================================================================================
 // Byte-packed POLY_GT4 submit variant — gen_func_80027768 (resident MAIN). A DISTINCT submitter from
@@ -528,7 +524,7 @@ void ov_submit_poly_gt4_bp(Core* c) {
 // The MVMVA matrix math stays a platform primitive (gte_op → the Beetle GTE), exactly as the recomp
 // body called it, so the composed CR0-7 are bit-identical. The scratchpad temps (0x1F8000xx) are the
 // SAME the recomp body uses — pure CPU scratch, not render packet/VRAM. The dispatch routes the common
-// world path natively (native_dispatch → native_gt3gt4 → the native ov_submit_poly_gt3/gt4 above);
+// world path natively (native_dispatch → native_gt3gt4 → the native submit_poly_gt3/gt4 above);
 // the per-scene OVERLAY submitter variants (mode-table entries other than the GT3/GT4 path) are NOT yet
 // owned, so for those modes the original per-mode renderer is invoked (rec_dispatch) — the documented
 // next RE target (engine_re "OPEN — full field depth coverage").
@@ -549,9 +545,9 @@ void native_gt3gt4(Core* c, uint32_t geomblk, uint32_t otbase) {   // decl in re
   g_dbg_cur_geomblk = geomblk;
   uint32_t counts = c->mem_r32(geomblk + 0);
   c->r[4] = geomblk + 16; c->r[5] = otbase; c->r[6] = counts & 0xFFFFu;
-  ov_submit_poly_gt3(c);
+  submit_poly_gt3_native(c);
   c->r[4] = c->r[2];      c->r[5] = otbase; c->r[6] = counts >> 16;
-  ov_submit_poly_gt4(c);
+  submit_poly_gt4_native(c);
 }
 
 // FIELD ENTITY RENDER LOOP — PC-native ownership of the SOP field-overlay entity render 0x80109fe0
