@@ -28,6 +28,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "spawn.h"   // world_despawn (FUN_8007A624)
+#include "animation.h" // ov_anim_vm_76d68 (FUN_80076D68)
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
@@ -98,7 +99,7 @@ void beh_actor_move_sm(Core* c) {
     uint8_t n3 = c->mem_r8(nd + 3);
     switch (n5) {
       case 0:
-        leaf1(c, nd, 0x80076d68u);                        // FUN_80076D68
+        c->r[4] = nd; ov_anim_vm_76d68(c);                 // FUN_80076D68 (native)
         if (n3 != 3 && (bf809 != 0 || s137 != 0)) break;
         if ((n3 & 1) == 0) leaf1(c, nd, 0x8011dfc0u);     // FUN_8011DFC0
         else               leaf1(c, nd, 0x8011e340u);     // FUN_8011E340
@@ -116,9 +117,9 @@ void beh_actor_move_sm(Core* c) {
       case 3:
         if (n3 == 3 || (bf809 == 0 && s137 == 0)) {
           leaf1(c, nd, 0x8011f998u);                      // FUN_8011F998
-          leaf1(c, nd, 0x80076d68u);
-          leaf1(c, nd, 0x80076d68u);
-          leaf1(c, nd, 0x80076d68u);
+          c->r[4] = nd; ov_anim_vm_76d68(c);               // FUN_80076D68 (native)
+          c->r[4] = nd; ov_anim_vm_76d68(c);
+          c->r[4] = nd; ov_anim_vm_76d68(c);
         }
         break;
       case 4:
@@ -127,7 +128,7 @@ void beh_actor_move_sm(Core* c) {
         leaf1(c, nd, 0x8012185cu);                        // FUN_8012185C
         break;
       case 5:
-        leaf1(c, nd, 0x80076d68u);
+        c->r[4] = nd; ov_anim_vm_76d68(c);                 // FUN_80076D68 (native)
         leaf1(c, nd, 0x80120c50u);                        // FUN_80120C50
         break;
       default: break;

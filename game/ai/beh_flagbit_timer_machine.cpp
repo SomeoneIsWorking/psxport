@@ -26,6 +26,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "spawn.h"   // world_despawn (FUN_8007A624)
+#include "animation.h" // ov_anim_vm_76d68 (FUN_80076D68)
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
@@ -84,7 +85,7 @@ void beh_flagbit_timer_machine(Core* c) {
  // ================= STATE 1 =================
  L42c: {
    if (leafr(c, nd, 0x8007778cu) == 0) goto L50c;   // FUN_8007778C
-   leaf1(c, nd, 0x80076d68u);                         // FUN_80076D68
+   c->r[4] = nd; ov_anim_vm_76d68(c);                  // FUN_80076D68 (native)
    uint8_t n6 = c->mem_r8(nd + 6);
    if (n6 == s0) goto L4cc;                            // s0 == 1
    if ((int32_t)n6 < 2) { if (n6 == 0) goto L484; goto L4f8; }
