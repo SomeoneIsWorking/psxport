@@ -87,6 +87,12 @@ public:
   void fieldRun();
   void fieldRunX();
 
+  // submitPage810c: the sm[task+0x6b]==1 page-1 (pause-menu dim) fade branch of the master submit
+  // dispatcher at guest 0x8010810C. Owns just the dim-fade shape (subtractive #808080 held on
+  // page-1) + a substrate dispatch to the still-unowned menu draw at 0x801084F8; other pages
+  // fall through to substrate 0x8010810C. Was ov_game_submit_810c in engine_stage.cpp.
+  void submitPage810c();
+
   // ── ov_field_frame direct children (progressive class-ification) ──────────────────────────
   // areaModeDispatch: the 22-way area-mode jump-table dispatcher at guest 0x8001CAC0. Reads the
   //   area RENDER-MODE byte at 0x800BF870 and dispatches to the overlay handler that owns that

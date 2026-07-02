@@ -220,7 +220,7 @@ void ov_game_func_801084F8(Core*);                          // generated/ov_game
 // node state) — own JUST this page's shape here; the other 11 pages + the dispatcher's bounds-check/table
 // jump stay recomp via d0(c, 0x8010810cu) (own-caller-before-callee: the caller (ov_field_frame et al.) is
 // already native, but the callee's other pages are unexplored, so full transcription is out of scope).
-static void ov_game_submit_810c(Core* c) {
+void Engine::submitPage810c() { Core* c = core;
   uint32_t task = c->mem_r32(0x1F800138u);
   if (task && c->mem_r8(task + 0x6Bu) == 1) {
     c->screenFade.set(ScreenFade::SUBTRACTIVE, 0x80, 0x80, 0x80);   // pause-menu dim: flat gray, held each frame page-1 handler runs
@@ -403,7 +403,7 @@ void Engine::fieldFrame() { Core* c = core;
   // from it (the native render below consumes per-frame queues, so it is not re-runnable). No-op unless on.
   dv_snapshot(c);
   if (c->mem_r8(0x1f800136u) < 2) ov_render_frame(c);   // 0x8003f9a8 — NATIVE render orchestrator + walk
-  FFS("ff_submit810c", ov_game_submit_810c(c)); // render submit (page-1 dim-fade owned; other pages recomp)
+  FFS("ff_submit810c", c->engine.submitPage810c()); // render submit (page-1 dim-fade owned; other pages recomp)
   // RENDER GUEST-MEMORY DECOUPLING (user 2026-06-24: the native renderer must leave NO guest-memory side
   // effect — only native GAMEPLAY may write guest memory). The native render above (ov_render_frame + submit)
   // still scribbles guest scratchpad/OT (e.g. the RotMatrix SVECTOR at 0x1F8000xx) as PSX-GTE transform
@@ -704,7 +704,7 @@ void Engine::fieldFrameX() { Core* c = core;
     CutsceneCamera::runFieldUpdate(c);   // 0x8006ec44 NATIVE (CutsceneCamera::update)
   }
   if (c->mem_r8(0x1f800136u) < 2) ov_render_frame_x(c); // 0x8003fa44 — NATIVE render orchestrator twin
-  ov_game_submit_810c(c);                      // render submit (page-1 dim-fade owned; other pages recomp)
+  c->engine.submitPage810c();                      // render submit (page-1 dim-fade owned; other pages recomp)
   c->engine.postRenderTick();                   // 0x80077D8C NATIVE (was d0)
   c->engine.areaUpdateTail();                   // 0x80075a80 NATIVE
 }
