@@ -36,7 +36,8 @@
 
 #include "core.h"
 #include "cfg.h"
-#include "world/pool.h"          // ov_pool_init_run (FUN_8007B18C)
+#include "world/pool.h"          // ov_pool_init_run (FUN_8007B18C) + siblings
+#include "world/placement.h"     // ov_place_objects (FUN_80072A78)
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -657,12 +658,12 @@ static void demo_frame_s7(Core* c) {
     native_transition_area_load(c);                                 // = sync 0x800452c0; sets 1f80019b=1
     // reinit subsystems (all SYNC; no incoming args / self-args)
     ov_pool_init_run(c);       // 0x8007B18C — native (via LIVE gated entry)
-    rec_dispatch(c, 0x800796dcu);
-    rec_dispatch(c, 0x800263e8u);
-    rec_dispatch(c, 0x80072a78u);
-    rec_dispatch(c, 0x80075240u);
-    rec_dispatch(c, 0x800783dcu);
-    rec_dispatch(c, 0x80078610u);
+    ov_796dc_run(c);           // 0x800796DC — native
+    ov_263e8_run(c);           // 0x800263E8 — native
+    ov_place_objects(c);       // 0x80072A78 — native (field object-placement driver)
+    ov_75240_run(c);           // 0x80075240 — native
+    ov_783dc_run(c);           // 0x800783DC — native
+    ov_78610_run(c);           // 0x80078610 — native
     sm = c->mem_r32(SM_PTR);
     c->r[4] = c->mem_r8(sm + 0x6e); rec_dispatch(c, 0x80079464u);   // jal 0x80079464(sm[0x6e])
     c->mem_w8(0x1f80019au, 1);                                      // sb s1(=1),0x1f80019a

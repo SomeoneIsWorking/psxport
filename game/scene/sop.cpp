@@ -246,8 +246,8 @@ void ov_sop_field_mode(Core* c) {
       c->screenFade.set(ScreenFade::SUBTRACTIVE, 0xff, 0xff, 0xff);
       native_sop_area_load(c);                 // INLINE sync load (replaces FUN_80044bd4) -> 1f80019b=1
       ov_pool_init_run(c);   // 0x8007B18C — native (via LIVE gated entry)
-      d0(c, 0x800796dcu);
-      d0(c, 0x80078610u);
+      ov_796dc_run(c);       // 0x800796DC — native (via LIVE gated entry)
+      ov_78610_run(c);       // 0x80078610 — native (via LIVE gated entry)
       d1(c, 0x8010a8d4u, 0x800f2418u);         // SOP bg-ptr setup
       // 3 scene objects: spawn + stamp fields from the SOP overlay tables @0x8010c98c (stride 12).
       for (int i = 0; i < 3; i++) {
