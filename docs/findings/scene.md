@@ -44,3 +44,41 @@
 - **REAL fix:** obtain a PROPER repro. Hand-drive a WINDOWED session that walks Tomba into a doorway (no teleport) with `PSXPORT_PAD_RECORD=scratch/bin/hut.pad` (recording is byte-perfect deterministic — verified today). Replay headless and dump the RAM at the swap frame. THAT will show what upstream write puts `node[0x29]!=0` (or `DAT_800e7ea9!=0 && DAT_800e7ffb==0`) into position to let FUN_80073328 case 3 SECOND branch fire. Only then can we say whether native regresses vs substrate on a real transition.
 - **do NOT** patch bf818 or node[0x29] directly to skip the freeze — that's a bandaid and only hides the missing upstream path.
 - **refs:** scratch/handoff_door_freeze.md (superseded — its "orphaned cooperative task" hypothesis is wrong), scratch/handoff_hut_fade.md, game/ai/beh_typed_jumptable_pair.cpp:225/247/254 (JT1 cases 0/1/2 dispatching FUN_80073328), game/scene/engine_stage.cpp:893 ov_field_transition + :699 ov_field_frame_x (state-3 mid-transition path, already native), game/world/pool.cpp:118 ov_800783DC (writes bf816=1 during area load — the initial kick), scratch/decomp/ram_f1000_all.c L6223/L52186-L52316 (FUN_80026ad0 + FUN_800732C0/300/328 decomp)
+
+## Cutscene SCRIPT INTERPRETER — resident dispatch loop + entry format + handler table (2026-07-03)
+- **symptom:** cutscene fade fn pointers (0x8013B29C, 0x8013B074, 0x8013B178, 0x80139728, 0x8013B274, 0x8013AEF0, 0x8013AFD8) live only as DATA WORDS in A06 script tables (e.g. 0x80149A20, 0x80149CDC), never as direct-jal targets. When investigating "who calls FUN_80139728" or trying to intercept the fade fnptr from a native override, greps return zero jal sites — you need to know it's dispatched through the script interpreter.
+- **status:** RE'd (structure fully identified); NATIVE PORT NOT YET LANDED (opcode inventory of ~63 handlers is a bounded follow-up).
+- **cause:** the fade fnptrs are OPCODE ARGS in a cutscene bytecode. A06 sets up an object with `FUN_80040CDC(obj, tableA, scriptPtr)` (script init) — passing e.g. `scriptPtr=0x80149A20` — then the scheduler ticks it via `FUN_80041098(obj)` (script step) each frame. `FUN_80041098` reads the current entry's opcode, indexes a HANDLER TABLE, and jalr's the handler. Op 0x03E's handler at `FUN_800412CC` is `lw v0, 0x74(a0); jalr v0` — it CALLS the fnptr stored in the entry's arg words.
+- **fix (interpreter structure — port this):**
+  - Entry format: **8 bytes** = `{ u16 opcodeWord, u16 argA, u16 argB, u16 argC }`. If flag bit 0x2000 of `opcodeWord` is set, the entry is **16 bytes** (extra `{argD..argG}` block at offset +8). Opcode ID is `opcodeWord & 0x07FF` (low 11 bits); the top 5 bits are FLAGS (0x0800 = branch/cond, 0x1000 = "valid entry" seen on every real entry, 0x2000 = has extra 8-byte block, 0x4000 = sets obj[+0x71] flag bit 2, 0x8000 = advance modifier).
+  - **`FUN_80040CDC` — init(obj, tableA, scriptPtr):** obj[+0x7C]=tableA, obj[+0x46]=0xFF, obj[+0x10]=0, obj[+0x70]=0 (progress counter), obj[+0x71]=0 (flag byte), obj[+0x78]=0. Reads first entry; if opcode bit 0x1000 → obj[+0x71]=2; if bit 0x4000 → obj[+0x71] |= 4. Calls FUN_80040DE0 to load current entry data.
+  - **`FUN_80040DE0` — loadCurrentEntry(obj, scriptPtr):** obj[+0x6C]=scriptPtr, obj[+0x72]=*(u16)(scriptPtr+2), obj[+0x74]=*(u16)(scriptPtr+4), obj[+0x76]=*(u16)(scriptPtr+6). If opcode bit 0x2000 set: also obj[+0x64..+0x6A] = *(u16*4)(scriptPtr+8..14). Because obj+0x74 and obj+0x76 are ADJACENT u16 halves loaded LE, a subsequent `lw` at obj+0x74 recovers a full 32-bit VALUE (used as a fn ptr for op 0x03E).
+  - **`FUN_80040E54` — advanceEntry(obj, kindArg):** reads current entry, extracts top 3 bits (opcodeWord & 0xE000), branches on 0x2000/0x4000/0x6000/0x8000/0xA000/0xC000/0xE000. Advances scriptPtr by 8 (base), 16 (0x2000 flag: skips extra block), 24 (0x6000 combo), or follows a branch pointer from the entry (via lw @+0x0C for 0x4000 / lw @+0x14 for 0x6000 branch targets — DAT-relative branches inside the script). Then re-calls FUN_80040DE0 to reload obj fields from the new position.
+  - **`FUN_80041098` — step(obj) — DISPATCH LOOP:**
+    ```
+    // s3 = 0x800A3B78 (handler table base — resident MAIN.EXE)
+    while (obj[+0x70] > 0) {                            // signed loop guard
+        u16 op = *(u16*)obj[+0x6C];
+        u32 oid = op & 0x07FF;
+        handler = *(u32*)(0x800A3B78 + oid*4);
+        a0 = obj; ret = handler(a0);                    // JALR
+        switch (ret) {
+            case 0: obj[+0x71] |= 2; return;            // pause script
+            case 1: continue;                           // re-run same entry (handler advanced internally)
+            case 2: FUN_80040FA0(obj, 0); continue;     // advance
+            case 3: FUN_80040FA0(obj, 1); continue;     // advance-branch (obj[+0x70]++ semantic)
+            default: return;                            // exit
+        }
+    }
+    ```
+    (FUN_80040FA0 is a small wrapper around FUN_80040E54 that increments obj[+0x70] and dispatches per the kindArg.)
+  - **Handler table at `0x800A3B78`, 63 entries (opcodes 0..62), each a 32-bit fn ptr into MAIN.EXE `0x8004xxxx`.** Known handlers so far:
+    - `0x03E → 0x800412CC` — CALL fnptr: `jalr obj[+0x74]` (the mechanism the fade dispatch rides).
+    - `0x000 → 0x80041C54`, `0x005 → 0x80042090`, `0x006 → 0x800420AC`, `0x00C → 0x80042448`, `0x013 → 0x800427F4`, `0x015 → 0x80042894`, `0x01E → 0x8004179C`, `0x01F → 0x80041468`, `0x02E → 0x80043A10`, `0x02F → 0x80043A40`, `0x030 → 0x80043BB0`, `0x031 → 0x80043BD4`, `0x034 → 0x80043EDC`, `0x037 → 0x80044144`. (Full inventory pending; each opcode's semantics is its own RE unit.)
+- **native port strategy (when landing):**
+  1. `class ScriptInterp` on Engine (`c->engine.script`) — instance subsystem per project OOP directive; not static because it will grow state (per-object script debug traces, etc.).
+  2. Method `step(uint32_t obj)` mirrors the FUN_80041098 loop. Op 0x03E's native path calls `c->engine.behaviors.dispatchObj(obj, fnptr)` — so any fade fnptr registered in `BehaviorDispatch::kTable` runs native automatically; unowned fnptrs fall through to `rec_dispatch` (substrate).
+  3. Wire the native step at guest 0x80041098 via `dispatch_native_behavior` (existing route). Do NOT reintroduce `rec_set_override` — the CLAUDE.md ban stands.
+  4. Once the loop is native, wire each fade fnptr from the script tables (0x8013B29C etc.) as its OWN `beh_*` in kTable — each is a small state machine to RE case-by-case. Only then do the two already-native fade sub-machines (whiteFlashPhaseRamp @0x801178A4, whiteFadeHold @0x80117AAC in `beh_a06_multi_actor.cpp`) share a "same visual mechanism, different SMs" family with them — the script-driven fns are DISTINCT addresses, not the same fns.
+- **misconception to avoid:** the handoff phrasing "porting this enables the two A06 fade sub-machines to be reached via native call chain" is imprecise — whiteFlashPhaseRamp/whiteFadeHold are ALREADY reached natively via `beh_a06_multi_actor` case 10 (they're static helpers there). The script interpreter dispatches a DIFFERENT family of fade fns (0x8013B*, 0x80139728). Both families likely coexist and drive different cutscene beats; landing the interpreter enables the SECOND family.
+- **refs:** commit 8ccbfca (fade sub-machines RE'd inline in beh_a06_multi_actor.cpp), tools/disas.py 0x80040CDC/0x80040DE0/0x80040E54/0x80041098/0x800412CC (interpreter fns), A06.BIN script tables around 0x80149A20 (fade scripts) and 0x80149CDC (opening-cutscene script header 0x0000000D), scratch/ghidra/A06 (Ghidra 12.0.4 project, base 0x80108F9C, 484 fns).
