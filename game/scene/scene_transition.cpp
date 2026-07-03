@@ -218,8 +218,31 @@ int SceneTransition::stepSwapWaiter(uint32_t node) {
         return 0;
       }
       case 5: {
-        c->r[4] = n; rec_dispatch(c, 0x80072F14u);
-        if (c->r[2] != 0) {
+        // FUN_80072F14 (inlined; disas 0x80072F14..0x80072FDC): REVERSE ramp — sibling of
+        // FUN_80072E60. Ramps obj[+0x50] TOWARD zero (dir==0 → was neg, add 64; dir==1 → was pos,
+        // sub 64) driven by direction byte obj[+0x46]. On zero-cross clamps to 0 and sets
+        // clampHit=1; if obj[+0xBF] != 0 also fires SFX 24 (0x18) via FUN_80074590(24,0,15). Tail
+        // writes obj[+0x56] = obj[+0x5A] - obj[+0x50] (the SUB form; FUN_80072EFC's semantic).
+        uint32_t clampHit = 0;
+        uint8_t dir = c->mem_r8(n + 0x46);
+        if (dir == 0) {
+          int16_t v = (int16_t)(c->mem_r16(n + 0x50) + 64);
+          c->mem_w16(n + 0x50, (uint16_t)v);
+          if (v > 0) { c->mem_w16(n + 0x50, 0); clampHit = 1; }
+        } else if (dir == 1) {
+          int16_t v = (int16_t)(c->mem_r16(n + 0x50) - 64);
+          c->mem_w16(n + 0x50, (uint16_t)v);
+          if (v < 0) { c->mem_w16(n + 0x50, 0); clampHit = 1; }
+        }
+        // ZERO-CROSS SFX: only when clampHit && obj[+0xBF] != 0
+        if (clampHit != 0 && c->mem_r8(n + 0xBF) != 0) {
+          c->r[4] = 24; c->r[5] = 0; c->r[6] = 15;
+          rec_dispatch(c, 0x80074590u);                     // sfxTrigger(24, 0, 15) — SFX cluster still substrate
+        }
+        // TAIL: obj[+0x56] = obj[+0x5A] - obj[+0x50]  (SUB form; matches FUN_80072EFC)
+        c->mem_w16(n + 0x56, (uint16_t)(c->mem_r16(n + 0x5A) - c->mem_r16(n + 0x50)));
+
+        if (clampHit != 0) {
           c->mem_w8 (n + 0, 1);
           c->mem_w8 (n + 6, 0);
           c->mem_w8 (n + 0x5F, (uint8_t)(1u - (uint32_t)c->mem_r8(n + 0x5F)));
