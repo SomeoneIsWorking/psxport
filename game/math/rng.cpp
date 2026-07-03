@@ -92,6 +92,13 @@ struct Tracer {
 };
 }  // namespace
 
+// Slip #5 systemic hook — see rng.h docstring. Every native replacement of a rec_dispatch(0x80044BD4)
+// site invokes this so all replacements share ONE gating point + ONE audit surface (grep the
+// callers with `grep -rn matchBd4Cadence game/` to enumerate every replacement).
+void Rng::matchBd4Cadence() {
+  if (core && core->game && core->game->sbs) (void)next();
+}
+
 int32_t Rng::next() {
   Tracer::instance().bump(core);
   uint32_t s = core->mem_r32(SEED_ADDR) * 0x41C64E6Du + 0x3039u;

@@ -258,6 +258,7 @@ void Sop::fieldMode() { Core* c = core;
         break;   // defer — sm[0x50] stays 0; next tick re-enters this case
       }
       c->game->sched.sop_field_step[0] = 0;   // completing now; arm again for the next area
+      c->rng.matchBd4Cadence();                 // Slip #5: replaces a rec_dispatch(0x80044BD4).
       c->engine.sop.areaLoad();                 // INLINE sync load (replaces FUN_80044bd4) -> 1f80019b=1
       c->engine.pool.init();   // 0x8007B18C — native (via LIVE gated entry)
       c->engine.pool.resetControlBlock();       // 0x800796DC — native (via LIVE gated entry)

@@ -742,6 +742,7 @@ static void native_area_load_bd4(Core* c, uint32_t area, uint32_t mode) {
   c->mem_w8(sm + 0x6e, (uint8_t)area);     // DAT_801fe0de = arg2 (area) == sm[0x6e]
   c->mem_w8(sm + 0x6d, (uint8_t)mode);     // DAT_801fe0dd = arg3 (mode) == sm[0x6d]
   c->mem_w8(0x1f80019bu, 0);               // DAT_1f80019b = 0 (load-done flag, set back to 1 by the load)
+  c->rng.matchBd4Cadence();                // Slip #5: this replaces a rec_dispatch(0x80044BD4).
   c->engine.sop.transitionAreaLoad();      // = the slot-1 task body 0x800452c0, run inline+sync
 }
 
@@ -993,6 +994,7 @@ void Engine::submode1() { Core* c = core;
       if (c->game && c->game->sbs) {
         if (!c->engine.mSubmode1LoadDeferred) {
           rec_dispatch(c, 0x8005245cu);          // FUN_8005245c (sound/CD setup, sync leaf)
+          c->rng.matchBd4Cadence();               // Slip #5: this replaces a rec_dispatch(0x80044BD4).
           c->engine.sop.transitionAreaLoad();     // INLINE sync load (replaces FUN_80044bd4) -> 1f80019b=1
           c->engine.mSubmode1LoadDeferred = true;
           return;                                 // yield: match recomp coro yield inside FUN_80044BD4
@@ -1554,11 +1556,9 @@ void Engine::startBinStage() { Core* c = core;
     if (disc_find_file(name, &lba, &size)) c->mem_w32(S.dest, lba);   // XA stream LBA (only LBA stored)
     else fprintf(stderr, "[start.bin] Not found file name %s\n", name);
   }
-  // Slip #5 fix (docs/findings/sbs.md): match B's boot RNG advance. Recomp's gen_func_8010649C
-  // fresh-boot tick calls FUN_80044BD4 which advances the RNG once. Native's inline preload
-  // replacement doesn't spawn the task and doesn't advance the RNG. Advance once here so A and B
-  // enter the gameplay window with the same seed. Gated on !SBS for live PC gameplay.
-  if (c->game && c->game->sbs) (void)c->rng.next();
+  // Slip #5: match B's boot RNG advance. Recomp's gen_func_8010649C fresh-boot tick calls
+  // FUN_80044BD4 which advances the RNG once; native's inline preload replacement skips it.
+  c->rng.matchBd4Cadence();
   uint32_t task = c->mem_r32(CUR_TASK);
   c->mem_w16(task + 0x48, 0);          // seed sm[0x48]=0 (recomp state 0 entry)
   c->mem_w16(task + 0x4a, 0);
@@ -1591,9 +1591,9 @@ int Engine::stage0Advance(uint8_t& step) { Core* c = core;
   switch (step) {
     case 0: c->engine.asset.preloadTexgroup(0, 0); c->mem_w16(task + 0x48, 1); break;   // state 0 -> 1
     case 1:
-      /* Slip #5 fix: recomp gen_func_8010649C hits its SECOND FUN_80044BD4 spawn (site 0x757 in the
-       * shard) around this scheduler tick, advancing the RNG a second time. Match that here. */
-      if (c->game && c->game->sbs) (void)c->rng.next();
+      /* Slip #5: recomp gen_func_8010649C hits its second FUN_80044BD4 spawn around this scheduler
+       * tick. */
+      c->rng.matchBd4Cadence();
       break;
     case 2: c->engine.asset.preloadStage1();       c->mem_w16(task + 0x48, 2); break;   // state 1 -> 2
     case 3: break;
