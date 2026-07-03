@@ -70,6 +70,13 @@ C-level `backtrace()` of the fiber thread = the recompiled `func_XXXX`/`ov_*_gen
 see exactly which recomp function yields and read its callee-saved regs — the reliable tool for the
 deep-field-coro freeze; see findings/sbs.md).
 
+`fadetrace` (screen_fade.cpp) — logs every native-path `ScreenFade::set` / `applyLeafCall` with the
+mode+rgb, and edge-logs HOLD latched / released transitions. Pairs with
+`PSXPORT_DISPWATCH=0x8007E9C8` (which surfaces every substrate fade dispatch with its guest stack).
+Together they show BOTH sides of the fade caller graph — essential when a cutscene fadeout stays
+stuck black: silent `fadetrace` + active `dispwatch` = the failing fade caller is a substrate SM
+handler that needs porting native. Issue #27.
+
 **`PSXPORT_DEBUG=chanA,chanB` env now works at launch** (seeded once in `cfg_dbg`, runtime/recomp/cfg.c) —
 previously channels were ONLY settable via the REPL/debug-server `debug` command, so headless/SBS runs
 couldn't enable one despite this doc claiming the env drove it. A later REPL `debug …` overrides the seed.
