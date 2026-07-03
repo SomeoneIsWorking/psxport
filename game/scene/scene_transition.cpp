@@ -84,10 +84,30 @@ void SceneTransition::resetSwap(uint32_t node) {
     rec_dispatch(c, 0x80074590u);
   }
   c->mem_w8(E7FC5_FLAG, 0);
-  c->r[4] = SCENE_BLOCK; rec_dispatch(c, 0x80054198u);
+  clearSwapBlock(SCENE_BLOCK);          // FUN_80054198 (native)
   c->mem_w8(SCENE_BLOCK + 5, 0);
   c->mem_w8(SCENE_BLOCK + 6, 0);
   c->mem_w8(SCENE_BLOCK + 7, 0);
+}
+
+// FUN_80054198 — small swap-block ephemeral clear. RE'd from disas 0x80054198..0x800541F0.
+// Note the (v0=2 into 329(a0)) short branch vs the (v = node[+0x147]+2, into 329/330(a0)) long
+// branch — the DELAY-SLOT constant reload (`addiu v0, zero, 2` after `bne v1, v0, ...`) is what
+// lets both paths share the eventual `sb v0, 329(a0)`. Ports verbatim.
+void SceneTransition::clearSwapBlock(uint32_t node) {
+  Core* c = core;
+  if (c->mem_r8(node + 0x146) == 4 && c->mem_r8(node + 0) == 2) return;
+  c->mem_w16(node + 0x44, 0);
+  c->mem_w16(node + 0x182, 0);
+  if (c->mem_r8(node + 2) != 0) {
+    c->mem_w8(node + 0x149, 2);
+    return;
+  }
+  c->mem_w16(node + 0x50, 0);
+  c->mem_w8(node + 0x148, 0);
+  uint8_t v = (uint8_t)(c->mem_r8(node + 0x147) + 2);
+  c->mem_w8(node + 0x14A, v);
+  c->mem_w8(node + 0x149, v);
 }
 
 void SceneTransition::beginSwap(uint32_t node) {

@@ -7,7 +7,7 @@ A native may exist already. **LIVE** = reachable by direct C call from a native_
 dispatch root (actually runs). **ORPHAN** = native exists but only the REMOVED override
 table used to reach it — it is dead code until a native parent calls it directly.
 
-Totals: 140 native fns, 123 owned addresses, 7 LIVE / 133 ORPHAN.
+Totals: 141 native fns, 124 owned addresses, 7 LIVE / 134 ORPHAN.
 
 | addr | status | symbol | file:line | depends-on (still-PSX) | summary |
 |------|--------|--------|-----------|------------------------|---------|
@@ -52,6 +52,7 @@ Totals: 140 native fns, 123 owned addresses, 7 LIVE / 133 ORPHAN.
 | 0x80052078 | ORPHAN | `eng_stage_transition` | game/scene/engine_level.cpp:66 |  | (stageIdx) — the cooperative STAGE TRANSITION: load the next stage's o… |
 | 0x80052078 | ORPHAN | `Engine::startStage` | game/scene/engine_stage.cpp:1409 | 0x80080870 0x80080890 0x800808A0 | switch task 0 to the given stage (load overlay + reset the display/BIO… |
 | 0x800520E0 | ORPHAN | `Engine::initEntityPool` | game/scene/engine_init.cpp:101 |  | engine SUBSYSTEM init (init-prefix slot, dispatched at native_boot.cpp… |
+| 0x80054198 | ORPHAN | `SceneTransition::clearSwapBlock` | game/scene/scene_transition.cpp:97 |  | small swap-block ephemeral clear. RE'd from disas 0x80054198..0x800541… |
 | 0x80059D28 | ORPHAN | `Engine::frameStartTick` | game/scene/engine_stage.cpp:1198 |  | Engine::frameStartTick — per-frame prologue at guest 0x80059D28 (FIRST… |
 | 0x8006C80C | ORPHAN | `CutsceneCamera::yFloor` | game/camera/cutscene_camera.cpp:352 |  | ── yFloor (camera-Y floor clamp, per render mode) ────────────────────… |
 | 0x8006C988 | ORPHAN | `CutsceneCamera::shakeTail` | game/camera/cutscene_camera.cpp:684 |  | ── post-mode TAIL (0x8006C988) — the camera SHAKE state machine ──────… |

@@ -285,9 +285,8 @@ void beh_typed_jumptable_pair(Core* c) {
           // ---- 0x801394f8 ----
           if (c->mem_r8(obj + 0x29) == 0) break;     // 801394F8 lbu v0,0x29(s0) ; 80139500 beqz -> tail
           c->mem_w8(obj + 6, (uint8_t)s5);           // 80139508 sb v1(=node[5]==1), 6(s0)
-          // a0 = 0x800e0000 + 0x7e80 = 0x800E7E80
-          c->r[4] = 0x800E7E80u;                      // 8013950C/14 lui/addiu a0
-          rec_dispatch(c, 0x80054198u);              // 80139510 jal 0x80054198
+          // FUN_80054198(0x800E7E80) — SceneTransition::clearSwapBlock (native)
+          c->engine.sceneTransition.clearSwapBlock(0x800E7E80u);
           c->r[4] = 0x6d; c->r[5] = 0x41;            // 80139518 a0=0x6d ; 80139520 a1=0x41
           rec_dispatch(c, 0x8004ED94u);              // 8013951C jal 0x8004ed94
           c->r[4] = 0x19; c->r[5] = 0; c->r[6] = 0xf;// 80139524 a0=0x19 ; 80139528 a1=0 ; 80139530 a2=0xf

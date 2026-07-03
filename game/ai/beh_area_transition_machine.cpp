@@ -108,7 +108,7 @@ static void node6_phase(Core* c, uint32_t nd) {
       c->mem_w8(G_e86, 0);
       c->mem_w8(G_ea9, 0);
       c->mem_w8(G_fc7, 1);
-      c->r[4] = G; rec_dispatch(c, 0x80054198u);       // FUN_80054198(&DAT_800e7e80)
+      c->engine.sceneTransition.clearSwapBlock(G);     // FUN_80054198 (native)
       c->r[4] = G; c->r[5] = 0x71; c->r[6] = 8; rec_dispatch(c, 0x80054D14u);  // FUN_80054d14(&DAT_800e7e80,0x71,8)
       // --- camera-transition setup (reachable; Ghidra's "noreturn" on FUN_80054d14 was wrong) ---
       c->mem_w8(nd + 6, (uint8_t)(c->mem_r8(nd + 6) + 1));

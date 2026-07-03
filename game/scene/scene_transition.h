@@ -71,4 +71,16 @@ public:
   // guest (only case 5's "consume" returns 1); the JT1[0]==2 caller reads it to decide whether
   // to advance node[5].
   int  stepSwapWaiter(uint32_t node);
+
+  // ── FUN_80054198: clear swap-block ephemerals ─────────────────────────────────────────────
+  // Small state-clearing helper called on the SCENE_BLOCK (0x800E7E80) — resetSwap uses it as its
+  // final substrate hop; beh_area_transition_machine + beh_typed_jumptable_pair fire it after
+  // completing certain 2→3-handshake sub-steps. Semantics (disas 0x80054198..0x800541F0):
+  //   * Early return with no writes when (node[+0x146] == 4 && node[+0] == 2)  (state 4/2 latch).
+  //   * Otherwise: node[+0x44] = 0; node[+0x182] = 0;
+  //     if (node[+2] != 0) { node[+0x149] = 2; return; }
+  //     else               { node[+0x50] = 0; node[+0x148] = 0;
+  //                          uint8_t v = node[+0x147] + 2;
+  //                          node[+0x14A] = v; node[+0x149] = v; }
+  void clearSwapBlock(uint32_t node);
 };
