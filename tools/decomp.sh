@@ -12,8 +12,12 @@
 # output C goes wherever you point <out.c> (default convention: scratch/decomp/).
 set -eu
 repo="$(cd "$(dirname "$0")/.." && pwd)"; cd "$repo"
-GHIDRA="${GHIDRA_HOME:-/opt/ghidra_11.0.3_PUBLIC}"
-HEADLESS="$GHIDRA/support/analyzeHeadless"
+GHIDRA="${GHIDRA_HOME:-<HOME>/dev/ghidra_12.0.4_PUBLIC}"
+# Ghidra 12.x requires the pyGhidra launcher for Python scripts (analyzeHeadless alone rejects
+# `.py` scripts as "Python not available"). Use `pyghidraRun -H` which is the headless-analyzer
+# launched with pyGhidra bindings enabled — same flags, forwards everything after `-H` verbatim.
+HEADLESS_BIN="$GHIDRA/support/pyghidraRun"
+HEADLESS_ARGS=(-H)
 PROJDIR="scratch/ghidra"
 PROC="MIPS:LE:32:default"
 mkdir -p "$PROJDIR" scratch/decomp scratch/logs
@@ -22,20 +26,20 @@ cmd="${1:?import|decomp|all}"; shift
 case "$cmd" in
   import)
     dump="${1:?dump.bin}"; proj="${2:-$(basename "$dump" .bin)}"
-    "$HEADLESS" "$PROJDIR" "$proj" -overwrite \
+    "$HEADLESS_BIN" "${HEADLESS_ARGS[@]}" "$PROJDIR" "$proj" -overwrite \
       -import "$dump" -loader BinaryLoader -loader-baseAddr 0x80000000 \
       -processor "$PROC" -scriptlog scratch/logs/ghidra.log
     ;;
   decomp)
     proj="${1:?projname}"; out="${2:?out.c}"; shift 2
-    "$HEADLESS" "$PROJDIR" "$proj" -process -noanalysis \
+    "$HEADLESS_BIN" "${HEADLESS_ARGS[@]}" "$PROJDIR" "$proj" -process -noanalysis \
       -scriptPath "$repo/tools" -postScript ghidra_decomp.py "$out" "$@" \
       -scriptlog scratch/logs/ghidra.log
     ;;
   all)
     dump="${1:?dump.bin}"; out="${2:?out.c}"; shift 2
     proj="$(basename "$dump" .bin)"
-    "$HEADLESS" "$PROJDIR" "$proj" -overwrite \
+    "$HEADLESS_BIN" "${HEADLESS_ARGS[@]}" "$PROJDIR" "$proj" -overwrite \
       -import "$dump" -loader BinaryLoader -loader-baseAddr 0x80000000 \
       -processor "$PROC" \
       -scriptPath "$repo/tools" -postScript ghidra_decomp.py "$out" "$@" \
