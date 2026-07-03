@@ -283,6 +283,23 @@ public:
   // the REPL `gate on|off`. Default OFF = full native (shipped behavior). Wired in native_boot.cpp.
   int psx_fallback = 0;
 
+  // ---- FAITHFUL execution mode (2026-07-03) -------------------------------------------------------
+  // Three-way behavior mode across the port:
+  //   PC (default, mIsFaithful=false, psx_fallback=0):
+  //       Native PC path with PSX-quirk SHORTCUTS taken where they're safe (collapse recomp coroutine
+  //       yields into one tick, ×4 cull-far mult, etc.). This is the shipped game.
+  //   PSX_FAITHFUL (mIsFaithful=true, psx_fallback=0):
+  //       Native PC path but every PSX-quirk shortcut is REPLACED by the bit-for-bit PSX behavior
+  //       (yield split, stock cull, etc.). Same code paths as PC, gated at every quirk site. Used
+  //       by the SBS harness so native gameplay diverges from the substrate only where there is a
+  //       real bug, not where we deliberately deviated.
+  //   RECOMP (psx_fallback=1, mIsFaithful is ignored):
+  //       Full substrate — the stage machines, loaders, and content run as the recompiled PSX body
+  //       instead of the native owners. Baseline for comparing native paths against.
+  // Currently mIsFaithful is set automatically when the SBS harness owns this Game (see Sbs::run);
+  // it may also be flipped explicitly for standalone A/B without SBS.
+  bool mIsFaithful = false;
+
   // ---- dual-core diff mode (dualcore.cpp) ----------------------------------------------------------
   // When set, the frame body runs ONLY the guest-state-mutating work (per-frame update + scheduler +
   // loaders) and SKIPS all host output — present, pace, audio device feed, render submit, FMV. This lets

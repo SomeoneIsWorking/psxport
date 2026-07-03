@@ -982,16 +982,16 @@ void Engine::submode1() { Core* c = core;
       // counter over the cutscene-skip window (95 vs 94 by gameplay-start), producing the 0x800EE0DD
       // periodic-flag divergence (FUN_8004B374's `& 0x1F` gate samples out-of-phase at f217).
       //
-      // FAITHFUL MODE (SBS active): split case 0 across two ticks to match coro cadence — run the load
-      // on tick 1 (return without falling through), consume the deferral flag on tick 2. sm[0x4c] stays
-      // 0 on tick 1, matching the recomp view where the coro is suspended inside FUN_80044BD4 with the
-      // sm[0x4c] write not yet reached.
+      // PSX_FAITHFUL MODE (mIsFaithful=true, e.g. under SBS): split case 0 across two ticks to match
+      // coro cadence — run the load on tick 1 (return without falling through), consume the deferral
+      // flag on tick 2. sm[0x4c] stays 0 on tick 1, matching the recomp view where the coro is
+      // suspended inside FUN_80044BD4 with the sm[0x4c] write not yet reached.
       //
-      // PC MODE (SBS off): the native engine can skip the coro yield outright — fall through in one
-      // tick, no per-frame cost. The faithful/PC split is by design: SBS demands cadence parity, live
-      // gameplay does not, and the two modes must not converge here since the recomp side lives with a
-      // real yield we don't want to inherit.
-      if (c->game && c->game->sbs) {
+      // PC MODE (mIsFaithful=false, default): the native engine can skip the coro yield outright —
+      // fall through in one tick, no per-frame cost. The faithful/PC split is by design: substrate
+      // parity demands cadence match, live gameplay does not, and the two modes must not converge
+      // here since the recomp side lives with a real yield we don't want to inherit.
+      if (c->game && c->game->mIsFaithful) {
         if (!c->engine.mSubmode1LoadDeferred) {
           rec_dispatch(c, 0x8005245cu);          // FUN_8005245c (sound/CD setup, sync leaf)
           (void)c->rng.next();               // Slip #5: this replaces a rec_dispatch(0x80044BD4).
@@ -1516,56 +1516,114 @@ static void native_stage0_sm(Core* c) {
   scheduler_yield(c);
 }
 
-// Stage-0 START.BIN entry (0x8010649c): own the file-table BUILDER PC-native, then hand the small
-// stage state-machine back to the PSX body in-task. The builder is a set of CdSearchFile loops that
-// resolve ~36 disc filenames and record each {LBA,size}; run as pure PSX (overrides gone) every
-// CdSearchFile busy-waits on libcd forever. Replace the resolution with the native ISO9660 resolver
-// (disc_find_file) — the filename tables and destination layout are read from the loaded overlay, so
-// nothing is hard-coded. Reference: dumped overlay disas of 0x8010649c..0x80106728 (later-211).
-//   Loop A: 25 names @0x80106808 -> {LBA,size} table 0x800be118 (stride 8)  [\BIN\OPN/CRD/SOP/A00..A0L]
-//   Loop B:  3 names @0x8010686c -> 0x800be1e0  [START/DEMO/GAME.BIN — fills the per-stage file table]
-//   Loop C:  5 names @0x801067f4 -> 0x800be0f0  [\CD\TOMBA2.IDX/IMG/DAT/SND, SWDATA.BIN]
-//   3 inline singletons -> scratchpad LBA: \CD\VOICE.XA->0x1f80021c, DEMO.XA->0x1f800220, BGM.XA->0x1f800224
-// Then s2(reg18)=1 (the SM's "1" constant) and continue into the PSX state machine at 0x80106728,
-// whose FUN_80044bd4 cooperative loads run correctly in-task (via rec_coro_run).
+// Stage-0 START.BIN entry (0x8010649C): own the file-table BUILDER PC-native. Original substrate is
+// a sequence of CdSearchFile loops that resolve ~36 disc filenames and record each {LBA,size}.
+// Reference: overlay disas of 0x8010649c..0x80106728 (later-211).
+//
+// Two build strategies, selected by c->game->mIsFaithful:
+//   PC mode  (default) — bypass libcd; walk the native ISO9660 directory with disc_find_file.
+//                        Faster; no dir-cache side effects. This is the shipping-game path.
+//   FAITHFUL mode      — call the substrate's CdSearchFile (0x8008B8F0) per name so libcd's dir
+//                        cache is populated as a side effect. Matches the substrate byte-for-byte
+//                        at DAT_800AC2D4 + the entry cache (0x80102768..). Selected on SBS compare
+//                        cores so the port's task0 side effects mirror the substrate.
+//
+// The three filename tables and one XA-singleton table below are baked into the START.BIN overlay
+// (0x8010649C body); their addresses and shapes are fixed by the game.
+struct StartBinLoop { uint32_t name_table, dest_table, count; };
+static constexpr StartBinLoop kStartBinLoops[] = {
+  { 0x80106808u, 0x800BE118u, 25 },   // \BIN\OPN/CRD/SOP/A00..A0L  -> per-overlay {LBA,size} array
+  { 0x8010686Cu, 0x800BE1E0u,  3 },   // \BIN\START/DEMO/GAME.BIN   -> per-stage entry-word table
+  { 0x801067F4u, 0x800BE0F0u,  5 },   // \CD\TOMBA2.IDX/IMG/DAT/SND + SWDATA.BIN
+};
+
+struct StartBinXa { uint32_t name_ptr, lba_dest; };
+static constexpr StartBinXa kStartBinXa[] = {
+  { 0x8010646Cu, 0x1F80021Cu },   // \CD\VOICE.XA -> scratchpad LBA
+  { 0x8010647Cu, 0x1F800220u },   // \CD\DEMO.XA
+  { 0x8010648Cu, 0x1F800224u },   // \CD\BGM.XA
+};
+
+// Guest addresses of the libcd primitives dispatched under FAITHFUL mode.
+static constexpr uint32_t kGuestCdSearchFile = 0x8008B8F0u;   // libcd CdSearchFile(&CdlFILE, name)
+static constexpr uint32_t kGuestCdPosToInt   = 0x8008A110u;   // libcd CdPosToInt(&CdlFILE) -> LBA
+
+// PC-mode resolver: bypass libcd, walk the native ISO9660 directory.
+static bool resolve_pc(Core* c, uint32_t name_ptr, uint32_t* lba, uint32_t* size) {
+  char name[80]; read_guest_str(c, name_ptr, name, sizeof name);
+  if (disc_find_file(name, lba, size)) return true;
+  fprintf(stderr, "[start.bin] not found: %s\n", name);
+  return false;
+}
+
+// FAITHFUL-mode resolver: rec_dispatch the substrate's CdSearchFile so libcd's dir cache is
+// populated as a side effect. Uses a caller-owned buffer in guest RAM for the 24-byte CdlFILE
+// record (pos[4] + size[4] + name[16]).
+static bool resolve_faithful(Core* c, uint32_t name_ptr, uint32_t buf,
+                             uint32_t* lba, uint32_t* size) {
+  c->r[4] = buf; c->r[5] = name_ptr;
+  rec_dispatch(c, kGuestCdSearchFile);
+  if (c->r[2] == 0) return false;                    // not found — matches PSX error path
+  c->r[4] = buf;
+  rec_dispatch(c, kGuestCdPosToInt);
+  *lba  = c->r[2];
+  *size = c->mem_r32(buf + 4);
+  return true;
+}
+
 void Engine::startBinStage() { Core* c = core;
-  struct { uint32_t names, dest, n; } loops[] = {
-    { 0x80106808u, 0x800be118u, 25 },
-    { 0x8010686cu, 0x800be1e0u, 3  },
-    { 0x801067f4u, 0x800be0f0u, 5  },
+  const bool faithful = c->game && c->game->mIsFaithful;
+
+  // Reserve a 32-byte guest-RAM buffer on the task stack for the CdlFILE record (24 bytes,
+  // aligned). Matches the substrate's use of the task stack for its per-iteration scratch;
+  // restored below so the task's saved SP is unchanged.
+  const uint32_t saved_sp = c->r[29];
+  c->r[29] -= 32;
+  const uint32_t cdlfile_buf = c->r[29] + 8;
+
+  auto resolve = [&](uint32_t name_ptr, uint32_t* lba, uint32_t* size) {
+    return faithful ? resolve_faithful(c, name_ptr, cdlfile_buf, lba, size)
+                    : resolve_pc     (c, name_ptr,             lba, size);
   };
-  char name[80];
-  for (auto& L : loops) {
-    for (uint32_t i = 0; i < L.n; i++) {
-      read_guest_str(c, c->mem_r32(L.names + i * 4), name, sizeof name);
+
+  for (const auto& L : kStartBinLoops) {
+    for (uint32_t i = 0; i < L.count; i++) {
       uint32_t lba = 0, size = 0;
-      if (disc_find_file(name, &lba, &size)) {
-        c->mem_w32(L.dest + i * 8, lba);
-        c->mem_w32(L.dest + i * 8 + 4, size);
-      } else {
-        fprintf(stderr, "[start.bin] Not found file name %s\n", name);   // matches the PSX error path
-      }
+      resolve(c->mem_r32(L.name_table + i * 4), &lba, &size);
+      c->mem_w32(L.dest_table + i * 8,     lba);
+      c->mem_w32(L.dest_table + i * 8 + 4, size);
     }
   }
-  struct { uint32_t str, dest; } sing[] = {
-    { 0x8010646cu, 0x1f80021cu }, { 0x8010647cu, 0x1f800220u }, { 0x8010648cu, 0x1f800224u },
-  };
-  for (auto& S : sing) {
-    read_guest_str(c, S.str, name, sizeof name);
+  for (const auto& X : kStartBinXa) {
     uint32_t lba = 0, size = 0;
-    if (disc_find_file(name, &lba, &size)) c->mem_w32(S.dest, lba);   // XA stream LBA (only LBA stored)
-    else fprintf(stderr, "[start.bin] Not found file name %s\n", name);
+    resolve(X.name_ptr, &lba, &size);
+    c->mem_w32(X.lba_dest, lba);
   }
-  // Slip #5: match B's boot RNG advance. Recomp's gen_func_8010649C fresh-boot tick calls
-  // FUN_80044BD4 which advances the RNG once; native's inline preload replacement skips it.
+
+  c->r[29] = saved_sp;
+
+  // Slip #5: match substrate's boot RNG advance (gen_func_8010649C fresh tick invokes FUN_80044BD4
+  // which advances the RNG once; our inline path skips it).
   (void)c->rng.next();
+
   uint32_t task = c->mem_r32(CUR_TASK);
-  c->mem_w16(task + 0x48, 0);          // seed sm[0x48]=0 (recomp state 0 entry)
   c->mem_w16(task + 0x4a, 0);
-  fprintf(stderr, "[start.bin] file table built (native); preload SM stepped across ticks via stage0Advance\n");
-  // No native_stage0_sm here anymore — the scheduler now steps the preload SM across ticks to match
-  // the recomp body's per-iteration yield cadence (docs/findings/sbs.md Slip #1). Returns; the
-  // scheduler will yield and re-enter via the stage0Advance branch on subsequent ticks.
+
+  // Preload cadence — see Slip #1 (docs/findings/sbs.md) + stage0Advance below.
+  //
+  // PC mode: seed sm[0x48]=0, let stage0Advance step 0 do the first preloadTexgroup one tick later.
+  // FAITHFUL mode: substrate's fresh tick runs FUN_80044BD4 which SYNCHRONOUSLY completes the first
+  //   preload in-tick (task-1 runs to completion in our port; the substrate's yield-wait resolves
+  //   immediately). To match B byte-for-byte at f0, do the same first preload here, and seed
+  //   sm[0x48]=1 so stage0Advance skips its state-0 work on tick 1.
+  if (faithful) {
+    asset.preloadTexgroup(0, 0);
+    c->mem_w16(task + 0x48, 1);
+  } else {
+    c->mem_w16(task + 0x48, 0);
+  }
+  fprintf(stderr, "[start.bin] file table built (%s); preload SM stepped across ticks via stage0Advance\n",
+          faithful ? "faithful/libcd" : "pc/iso9660");
 }
 
 // stage0Advance: one step of the STAGE-0 preload SM. Called by the scheduler on each tick after the
@@ -1588,8 +1646,13 @@ int Engine::stage0Advance(uint8_t& step) { Core* c = core;
   //   step 5 = task-1 slot (extra padding to match measured coro total)
   //   step 6 = recomp state 3 tick: startStage(1)
   uint32_t task = c->mem_r32(CUR_TASK);
+  const bool faithful = c->game && c->game->mIsFaithful;
   switch (step) {
-    case 0: c->engine.asset.preloadTexgroup(0, 0); c->mem_w16(task + 0x48, 1); break;   // state 0 -> 1
+    // State 0's work (preloadTexgroup + sm[0x48]:=1) — done inline by FAITHFUL startBinStage above, so
+    // this step is a no-op there. PC mode does it here to preserve the 8-tick pacing.
+    case 0:
+      if (!faithful) { c->engine.asset.preloadTexgroup(0, 0); c->mem_w16(task + 0x48, 1); }
+      break;
     case 1:
       /* Slip #5: recomp gen_func_8010649C hits its second FUN_80044BD4 spawn around this scheduler
        * tick. */

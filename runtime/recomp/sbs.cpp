@@ -220,26 +220,12 @@ public:
 
   // ---- helpers / stages ----
   const char* modeName() const;
-  bool  isRenderRegion(uint32_t a) const;
-  bool  isRenderSpad(uint32_t a) const;
-  bool  isCdCacheNoise(uint32_t a) const;
-  bool  isAudioNoise(uint32_t a) const;
-  bool  isObjectPoolNoise(uint32_t a) const;
-  bool  isDiffNoise(uint32_t a) const {
-    // Guest-stack area (0x801F0000..0x801FE000): both cores' coroutines use this area with
-    // different call chains. Recomp uses coro yields at deep call depths (leaves stack frames
-    // with saved regs from many nested calls); native runs synchronous so leaves nothing. Stack
-    // divergence is implementation state, not gameplay state — no code reads a specific stack
-    // offset by absolute address.
-    if (a >= 0x801F0000u && a < 0x801FE000u) return true;
-    // Task_0 register-save area (0x801FE010..0x801FE048): coro/setjmp context slots. Native (A)
-    // and recomp (B) save different context here — native has no coroutine to yield so most
-    // slots stay 0, while recomp stores callee-saved regs from the yielded task body. Neither
-    // side's game logic READS these slots; they're strictly resume-context storage. Task fields
-    // at +0x48 onward (sm[0x48] and beyond) ARE gameplay state and MUST be diffed.
-    if (a >= 0x801FE010u && a < 0x801FE048u) return true;
-    return isRenderRegion(a) || isCdCacheNoise(a) || isAudioNoise(a) || isObjectPoolNoise(a);
-  }
+  // Noise-filter methods (isRenderRegion / isCdCacheNoise / isAudioNoise / isObjectPoolNoise /
+  // isRenderSpad / isDiffNoise) were REMOVED 2026-07-03 per the standing rule: no RAM diverge may
+  // be waved off as "residual/known/expected" (memory: no_residual_ram_diverges). Every diff is
+  // fatal and gets root-caused, so filter ranges have no place here. If a diff is a PSX-quirk
+  // native deliberately skips, the fix is to gate the quirk on c->game->mIsFaithful at the write
+  // site (see cull.cpp / engine_stage.cpp), NOT to blacklist the address.
   static bool isSpad(uint32_t a) { return a >= 0x1F800000u && a < 0x1F800400u; }
   void  capBt(Core* c, char* buf, size_t n);
   bool  navStep(Core* c, Nav& nv, uint32_t f, const char* tag);
@@ -267,97 +253,7 @@ const char* Sbs::Impl::modeName() const {
          mMode == M_ORACLE ? "oracle" : "full";
 }
 
-// Legit render-only guest regions in MAIN RAM: the native vs PSX render paths write GP0 packets / OT /
-// pool pointers here (render + full mode). Divergence here is render noise, not the gameplay we hunt.
-bool Sbs::Impl::isRenderRegion(uint32_t a) const {
-  if (a >= 0x800BF4F0u && a < 0x800BF54Cu) return true;   // pool ptrs + dwell
-  if (a >= 0x800BFE68u && a < 0x800EA200u) return true;   // packet pool (×2) + OT (×2) + env
-  return false;
-}
-
-// libcd's CD_cachefile / CD_newmedia directory-cache tables. The native gameplay path
-// (`cd_override.cpp`) replaces the whole libcd read path with synchronous host disc I/O and NEVER
-// touches these tables; the recomp gameplay path (core B with psx_fallback=1) fills them as libcd
-// caches directory contents. Divergence here is CD-implementation noise: NO gameplay reader
-// consumes these (only libcd's own primitives — FUN_8008BE?? / FUN_8008bf50 read/write; grep of
-// scratch/decomp/ram_f1000_all.c shows no other consumers of 0x800AC2D4 or the cache tables).
-// Only applies to modes where B runs PSX gameplay (fb_b=1): GAMEPLAY / FULL / ORACLE. In RENDER
-// mode both cores run native gameplay, so no libcd path runs on either side.
-bool Sbs::Impl::isCdCacheNoise(uint32_t a) const {
-  if (mMode == M_RENDER) return false;
-  // libcd flags cluster (drive-ready, media-serial, cached-dir index, dir handles).
-  // Confirmed noise: 800AC2D4 (FUN_8008bf50 read/write, no other reader), 800AC2D8 (compared to
-  // 800ABFD0 media-serial by the CD file-search primitive, sets on rescan; no gameplay reader).
-  if (a >= 0x800AC280u && a < 0x800AC300u) return true;
-  if (a >= 0x801026E8u && a < 0x80102790u) return true;   // per-cache-entry result buffer
-  // Populated at boot by FUN_8008BF50's inner loop (writer pc=0x8008A00C, base s5=0x80102768,
-  // loop bumps s5 by entries with filenames like "BGM.XA;1" / "DEMO.XA;1" / "SWDATA.BIN"). This is
-  // the libcd directory-entry cache — an internal file-search accelerator populated by the recomp
-  // path during CD library init. Native path bypasses it entirely (disc_find_file resolves paths
-  // via native ISO9660 without needing the cache). B populates ~600B of table content; A leaves
-  // zeros. No native code reads this range, so the divergence is CD-library implementation noise.
-  if (a >= 0x80102790u && a < 0x80102D44u) return true;   // libcd dir-entry cache (post-EBD8 gap)
-  if (a >= 0x80102D44u && a < 0x80104344u) return true;   // 128-entry cache table (stride 0x2C)
-  if (a >= 0x80104368u && a < 0x80104B80u) return true;   // directory-scratch sector buffer
-  return false;
-}
-
-// libspu / libsnd voice-state cluster. FUN_80074B44 / FUN_8007496C / FUN_80092E3C write these; the
-// only readers are the audio driver's own voice-mode primitives (libspu). Native gameplay
-// (core A) drives audio via native_music + spu_audio (bypasses libspu voice tables); PSX
-// gameplay (core B) runs libsnd which fills 800BE238+ per voice tick. Divergence here is audio-
-// driver noise, not gameplay state.
-bool Sbs::Impl::isAudioNoise(uint32_t a) const {
-  if (mMode == M_RENDER) return false;
-  if (a >= 0x800BE238u && a < 0x800BE360u) return true;   // 24-voice × 12-byte SPU state + mask
-  // libsnd internal state block populated at ~f148 by fn 0x80092680 (SPU voice selection wrapper
-  // calling FUN_800962B0). Contains per-voice ADSR / envelope / channel-mask fields. Native
-  // (core A) drives audio via spu_audio directly, bypassing libsnd; recomp (core B) runs libsnd
-  // which fills this block. No native code reads it — implementation noise, same class as
-  // 0x800BE238 above. Range measured from the actual diff bytes at f217 (0x80105848..0x80105DXX).
-  if (a >= 0x80105848u && a < 0x80105E00u) return true;   // libsnd voice state block
-  return false;
-}
-
-
-// Object-list arena offset. In FULL / GAMEPLAY modes native gp (core A) and PSX substrate gp (core B)
-// allocate their per-list-slot object nodes at different arena positions (their pool head starts at the
-// same value 0x800F7734 but the two paths add objects at different rates during boot, so by field entry
-// the list-head pointer array at 0x800ED550..0x800EDF00 stores the same object types at different
-// addresses — verified 2026-07-03 in $CLAUDE_JOB_DIR/tmp/full5.log: both cores write the same head
-// 0x800F7734 at f28/f30, then diverge as objects allocate). The divergence is a fixed-delta pointer
-// offset (~10676 B on one repro = 157 × 68-byte objects); every entry in the pointer array inherits
-// it. NO gameplay code reads a literal 0x800F77xx / 0x800F4Dxx address (grep -E '0x800F77[0-9a-fA-F]{2}
-// |0x800F4D[0-9a-fA-F]{2}' game/ runtime/ = 0 hits), so the offset is invisible to game logic — it's
-// implementation noise, not a gameplay bug. Only the LIST HEADS at 0x800ED550+ are excluded (~1KB); the
-// actual object storage on the 0x800F0000 page is KEPT in the diff so real per-object state divergences
-// surface. In RENDER mode both cores are native gp — no allocator divergence, keep the whole diff.
-bool Sbs::Impl::isObjectPoolNoise(uint32_t a) const {
-  if (mMode == M_RENDER) return false;
-  if (a >= 0x800ED550u && a < 0x800EDF00u) return true;   // 3-list × N-slot pointer array (list heads)
-  // Field-frame counter — engine_stage.cpp:393 unconditional `mem_w32(0x800BF878, prev+1)`. Native
-  // gp (A) and PSX substrate gp (B) both tick it once per Engine::fieldFrame call, but the two
-  // paths enter the field at slightly different boot frames (native reaches it one frame earlier
-  // than the PSX coroutine yields into it), so the counter runs off-by-one for the whole session.
-  // Bounded, timing-only, no gameplay reader consumes the exact value — filter in FULL/GAMEPLAY.
-  if (a >= 0x800BF878u && a < 0x800BF87Cu) return true;
-  return false;
-}
-
-// Legit render-only SCRATCHPAD workspace. In render/full mode the two cores run IDENTICAL gameplay but
-// DIFFERENT render layers (A=native render, B=PSX recomp render). The render workspace addresses are
-// documented in engine_submit.cpp / engine_project.cpp (#define SCR 0x1F800000):
-//   0x1F800000..0x1F800100  GTE-compose work matrices, camera/RotMatrix, world-readout
-//   0x1F800140..0x1F800160  per-frame render-list write-ptr / count / cap
-// The GAP 0x1F800100..0x1F800140 is GAMEPLAY scratchpad (cutscene-active flag 0x1F800137, sub-mode bytes)
-// and is STILL diffed, so real gameplay corruption is caught. Excluded ONLY when the render paths actually
-// differ (render/full); gameplay mode renders PSX on both, so nothing here diverges — keep the FULL diff.
-bool Sbs::Impl::isRenderSpad(uint32_t a) const {
-  if (mMode == M_GAMEPLAY) return false;
-  if (a >= 0x1F800000u && a < 0x1F800100u) return true;
-  if (a >= 0x1F800140u && a < 0x1F800160u) return true;
-  return false;
-}
+// Noise-filter method DEFINITIONS were removed with their declarations above (2026-07-03).
 
 void Sbs::Impl::capBt(Core* c, char* buf, size_t n) {
   buf[0] = 0;
@@ -448,8 +344,7 @@ void Sbs::Impl::recordDivergence(uint32_t addr) {
   uint32_t end_addr = spad ? 0x1F800400u : mHi;
   uint32_t last = addr, gap = 0;
   for (uint32_t x = addr + 1; x < end_addr && gap < 64; x++) {
-    bool noise = spad ? isRenderSpad(x) : isDiffNoise(x);
-    if (mA->core.mem_r8(x) != mB->core.mem_r8(x) && !noise) { last = x; gap = 0; } else gap++;
+    if (mA->core.mem_r8(x) != mB->core.mem_r8(x)) { last = x; gap = 0; } else gap++;
   }
   mDivFound = true; mDivFrame = mFrame; mDivAddr = addr; mDivEnd = last + 1;
   capBt(&mA->core, mBtA, sizeof mBtA);
@@ -496,9 +391,9 @@ void Sbs::Impl::checkDivergence() {
   const uint8_t* a = mA->core.ram + (mLo - 0x80000000u);
   const uint8_t* b = mB->core.ram + (mLo - 0x80000000u);
   uint32_t n = mHi - mLo;
-  for (uint32_t i = 0; i < n; i++) if (a[i] != b[i] && !isDiffNoise(mLo + i)) { recordDivergence(mLo + i); return; }
+  for (uint32_t i = 0; i < n; i++) if (a[i] != b[i]) { recordDivergence(mLo + i); return; }
   for (uint32_t i = 0; i < 0x400; i++)
-    if (mA->core.scratch[i] != mB->core.scratch[i] && !isRenderSpad(0x1F800000u + i)) { recordDivergence(0x1F800000u + i); return; }
+    if (mA->core.scratch[i] != mB->core.scratch[i]) { recordDivergence(0x1F800000u + i); return; }
 }
 
 void Sbs::Impl::summarizeDivergence(uint32_t every) {
@@ -515,7 +410,6 @@ void Sbs::Impl::summarizeDivergence(uint32_t every) {
   uint32_t nDiff = 0, firstAddr = 0, lastAddr = 0;
   for (uint32_t i = 0; i < n; i++) {
     if (a[i] == b[i]) continue;
-    if (isDiffNoise(mLo + i)) continue;
     if (!nDiff) firstAddr = mLo + i;
     lastAddr = mLo + i;
     pageCount[(mLo + i - 0x80000000u) >> PAGE_SHIFT]++;
@@ -524,7 +418,6 @@ void Sbs::Impl::summarizeDivergence(uint32_t every) {
   uint32_t nSpad = 0;
   for (uint32_t i = 0; i < 0x400; i++) {
     if (mA->core.scratch[i] == mB->core.scratch[i]) continue;
-    if (isRenderSpad(0x1F800000u + i)) continue;
     nSpad++;
   }
   if (nDiff == 0 && nSpad == 0) {
@@ -797,9 +690,9 @@ int Sbs::Impl::dbgCmd(FILE* out, const char* line) {
     const uint8_t* b = mB->core.ram + (mLo - 0x80000000u);
     uint32_t n = mHi - mLo, spans = 0, bytes = 0, listed = 0;
     for (uint32_t i = 0; i < n; ) {
-      if (a[i] != b[i] && !isDiffNoise(mLo + i)) {
+      if (a[i] != b[i]) {
         uint32_t start = mLo + i;
-        while (i < n && a[i] != b[i] && !isDiffNoise(mLo + i)) { i++; bytes++; }
+        while (i < n && a[i] != b[i]) { i++; bytes++; }
         spans++;
         if (listed++ < cap)
           fprintf(out, "  RAM  0x%08X..0x%08X (%u B)  A=%02X%02X%02X%02X B=%02X%02X%02X%02X\n",
@@ -810,9 +703,9 @@ int Sbs::Impl::dbgCmd(FILE* out, const char* line) {
     }
     uint32_t sspans = 0, sbytes = 0;
     for (uint32_t i = 0; i < 0x400; ) {
-      if (mA->core.scratch[i] != mB->core.scratch[i] && !isRenderSpad(0x1F800000u + i)) {
+      if (mA->core.scratch[i] != mB->core.scratch[i]) {
         uint32_t start = 0x1F800000u + i;
-        while (i < 0x400 && mA->core.scratch[i] != mB->core.scratch[i] && !isRenderSpad(0x1F800000u + i)) { i++; sbytes++; }
+        while (i < 0x400 && mA->core.scratch[i] != mB->core.scratch[i]) { i++; sbytes++; }
         sspans++;
         if (listed++ < cap)
           fprintf(out, "  SPAD 0x%08X..0x%08X (%u B)\n", start, 0x1F800000u + i, (0x1F800000u + i) - start);
@@ -873,9 +766,11 @@ void Sbs::Impl::dumpAllocRa(FILE* out) {
 //           but both cores VISIT the same values with the same counts over the run. Filterable noise.
 //   REAL  : (value → count) maps differ — some value has A_count != B_count, or one core wrote a
 //           value the other never did. Genuine port gap. Needs decomp / code-level attribution.
-// Emits three sections: (1) per-byte classification (skips CLEAN bytes = same live RAM + same maps),
-// (2) contiguous PHASE runs with (lo, hi] ready to paste into isDiffNoise, (3) REAL bytes as concrete
-// investigation targets. Env PSXPORT_SBS_BYTETRACE_ALL=1 shows CLEAN bytes too (usually noise).
+// Emits two sections: (1) per-byte classification (skips CLEAN bytes = same live RAM + same maps),
+// (2) REAL bytes as concrete investigation targets. Env PSXPORT_SBS_BYTETRACE_ALL=1 shows CLEAN
+// bytes too (usually noise). PHASE/SOFT bytes are still classified so a bytetrace pass surfaces
+// their pattern, but they are NOT emitted as noise-filter suggestions — every diverging byte is
+// investigation-worthy (see no_residual_ram_diverges).
 void Sbs::Impl::dumpByteTrace(FILE* out) {
   if (!mByteTraceOn) { fprintf(out, "sbs bytetrace: PSXPORT_SBS_BYTETRACE=<lo>,<hi> required\n"); return; }
   bool showAll = false;
@@ -965,31 +860,7 @@ void Sbs::Impl::dumpByteTrace(FILE* out) {
     }
     fprintf(out, "  0x%08X  %-5s  0x%02X      0x%02X      %s\n", a, cls, ra_live, rb_live, note);
   }
-  // Section 2 — contiguous PHASE|SOFT runs, ready to paste into isDiffNoise (workflow-first: name
-  // once, filter forever — future PREWATCH hunts won't be misled by these bytes' flicker). Note:
-  // the runs are per-address SPECIFIC — same-shape bytes in a different node slot may not be phase
-  // there, so paste only after cross-checking with a second scene/repro.
-  fprintf(out, "\n[sbs bytetrace] suggested SBS noise-filter ranges (contiguous PHASE|SOFT runs):\n");
-  uint32_t run_lo = 0; bool in_run = false;
-  int runs = 0;
-  for (const auto& kv : classification) {
-    uint32_t a = kv.first;
-    bool is_noise = (kv.second == PHASE || kv.second == SOFT);
-    if (is_noise && !in_run) { run_lo = a; in_run = true; }
-    else if (!is_noise && in_run) {
-      fprintf(out, "  if (a >= 0x%08Xu && a < 0x%08Xu) return true;   // %u B (PHASE|SOFT)\n",
-              run_lo, a, a - run_lo);
-      in_run = false; runs++;
-    }
-  }
-  if (in_run) {
-    uint32_t hi = mByteTraceHi;
-    fprintf(out, "  if (a >= 0x%08Xu && a < 0x%08Xu) return true;   // %u B (PHASE|SOFT)\n",
-            run_lo, hi, hi - run_lo);
-    runs++;
-  }
-  if (!runs) fprintf(out, "  (no contiguous PHASE|SOFT runs)\n");
-  // Section 3 — REAL bytes as concrete investigation targets. Summarize with the TOP 3 divergent
+  // Section 2 — REAL bytes as concrete investigation targets. Summarize with the TOP 3 divergent
   // (val, A, B) rows sorted by |A-B|, plus a shape hint that names the asymmetry class:
   //   ONE-SIDED  A writes values B never wrote (or vice versa) — sharpest signal for a real bug.
   //   SKEWED     both cores write the same values but with wildly different counts (>2x).
@@ -1122,8 +993,8 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
   // psx_fallback per mode: gameplay/full run PSX gameplay on core B; render runs native gameplay on both;
   // oracle runs the PURE interpreter+soft-rasterizer oracle on B (docs/oracle.md).
   int fb_b = (mMode == M_RENDER) ? 0 : 1;
-  mA = new Game(); mA->psx_fallback = 0; mA->sbs = facade;
-  mB = new Game(); mB->psx_fallback = fb_b; mB->sbs = facade;
+  mA = new Game(); mA->psx_fallback = 0; mA->sbs = facade; mA->mIsFaithful = true;
+  mB = new Game(); mB->psx_fallback = fb_b; mB->sbs = facade; mB->mIsFaithful = true;
   if (mMode == M_ORACLE) { mB->core.use_interp = 1; mB->gpu.soft_gpu = 1; }
   load_exe(exePath, &mA->core); dc_boot_init(&mA->core);
   load_exe(exePath, &mB->core); dc_boot_init(&mB->core);

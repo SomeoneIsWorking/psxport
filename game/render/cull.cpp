@@ -76,14 +76,13 @@ static unsigned isqrt32(unsigned v) { unsigned r = 0, b = 1u << 30; while (b > v
 #ifndef CULL_FAR_MULT
 #define CULL_FAR_MULT 4   // ×4 the stock per-state far limits (4097..7169 → ~16388..28676)
 #endif
-// Faithful/PC-mode split (2026-07-03): under SBS the harness compares native gameplay against the
-// recomp REFERENCE which has stock (=1) cull limits. Returning the ×4 enhancement under SBS
-// creates the seemingly-benign divergence at 0x800EE489 (Cull::coneCull2b278 writes obj+1=1 on A
-// for objects outside the stock cone but inside the extended one; recomp culls them). Live game
-// still gets the ×4 boost — the two modes deliberately do not converge. Same shape as Slip #3
-// (docs/findings/sbs.md).
+// Faithful/PC-mode split (2026-07-03): PSX_FAITHFUL mode uses the stock (=1) cull limits so a
+// side-by-side compare against the recomp REFERENCE doesn't diverge at 0x800EE489 (Cull::coneCull2b278
+// writes obj+1=1 for objects outside the stock cone but inside the ×4 extended one; recomp culls them).
+// Live PC gameplay still gets the ×4 boost — the two modes deliberately do not converge. Same shape as
+// Slip #3 (docs/findings/sbs.md). Mode gate = c->game->mIsFaithful (was c->game->sbs).
 static int cull_far_mult(Core* c) {
-  if (c && c->game && c->game->sbs) return 1;   // FAITHFUL mode — stock cull for SBS parity
+  if (c && c->game && c->game->mIsFaithful) return 1;   // PSX_FAITHFUL — stock cull for substrate parity
   static int m = -1;
   if (m < 0) { const char* s = cfg_str("PSXPORT_CULL_FAR_MULT"); int v = s ? atoi(s) : 0;
                m = (v > 0) ? v : CULL_FAR_MULT; }
