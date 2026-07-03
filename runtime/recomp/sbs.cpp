@@ -130,6 +130,7 @@ public:
 
   // ---- write-watchpoint record (exact corrupting-write site) ----
   bool     mWwArmed = false;
+  bool     mWwPersist = false;      // PREWATCH: stay armed until first DIVERGENT write (not first write)
   uint32_t mWwAddr  = 0;
   int      mWwHit   = 0;            // bit0 = A wrote, bit1 = B wrote
   uint32_t mWwVa = 0, mWwVb = 0;
@@ -451,6 +452,9 @@ void Sbs::Impl::storeCb(Core* c, uint32_t a, uint32_t v) {
   if (which) { mWwVb = v; capBt(c, mWwBtB, sizeof mWwBtB); }
   else       { mWwVa = v; capBt(c, mWwBtA, sizeof mWwBtA); }
   mWwHit |= (1 << which);
+  if (mWwPersist)   // PREWATCH's continuous logging — per-store attribution to A vs B
+    fprintf(stderr, "[sbs-ww] f%u %c wrote [%08X]=%08X (pc=%08X stage=%08X)\n",
+            mFrame, which ? 'B' : 'A', a, v, c->pc, c->mem_r32(0x801fe00c));
 }
 
 // `sbs …` debug-server commands. Returns 1 if handled (dbg_exec stops), 0 otherwise.
@@ -474,12 +478,16 @@ int Sbs::Impl::dbgCmd(FILE* out, const char* line) {
     fprintf(out, "\n  B:"); for (uint32_t x = mDivAddr; x < end; x++) fprintf(out, " %02X", mB->core.mem_r8(x));
     fprintf(out, "\n");
   } else if (!strcmp(sub, "bt")) {
-    if (!mDivFound) { fprintf(out, "sbs: no divergence yet\n"); return 1; }
-    fprintf(out, "== core A backtrace (frame-boundary, @divergence) ==\n%s", mBtA);
-    fprintf(out, "== core B backtrace (frame-boundary, @divergence) ==\n%s", mBtB);
+    if (!mDivFound && !mWwHit) { fprintf(out, "sbs: no divergence yet, no write-watch hit yet\n"); return 1; }
+    if (mDivFound) {
+      fprintf(out, "== core A backtrace (frame-boundary, @divergence) ==\n%s", mBtA);
+      fprintf(out, "== core B backtrace (frame-boundary, @divergence) ==\n%s", mBtB);
+    }
     if (mWwHit) {
-      fprintf(out, "== WRITE SITE — core A wrote 0x%08X=%08X ==\n%s", mWwAddr, mWwVa, mWwBtA);
-      fprintf(out, "== WRITE SITE — core B wrote 0x%08X=%08X ==\n%s", mWwAddr, mWwVb, mWwBtB);
+      if (mWwHit & 1) fprintf(out, "== WRITE SITE — core A wrote 0x%08X=%08X ==\n%s", mWwAddr, mWwVa, mWwBtA);
+      else            fprintf(out, "== WRITE SITE — core A: no store this frame ==\n");
+      if (mWwHit & 2) fprintf(out, "== WRITE SITE — core B wrote 0x%08X=%08X ==\n%s", mWwAddr, mWwVb, mWwBtB);
+      else            fprintf(out, "== WRITE SITE — core B: no store this frame ==\n");
     }
   } else if (!strcmp(sub, "watch")) {
     unsigned addr = 0;
@@ -565,6 +573,17 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
   load_exe(exePath, &mA->core); dc_boot_init(&mA->core);
   load_exe(exePath, &mB->core); dc_boot_init(&mB->core);
 
+  // PSXPORT_SBS_PREWATCH=<hex> — arm SBS write-watch at boot so the FIRST divergent store to the
+  // address is caught, not the first store AFTER the frame-boundary divergence pause (which happens
+  // one frame late — you can never watch a write that already happened). Fires from frame 0.
+  if (const char* w = getenv("PSXPORT_SBS_PREWATCH"); w && *w) {
+    uint32_t addr = (uint32_t)strtoul(w, 0, 0);
+    mWwAddr = addr; mWwArmed = true; mWwPersist = true; mWwHit = 0; mWwBtA[0] = mWwBtB[0] = 0;
+    mA->core.wwatch_arm(addr & ~3u, (addr & ~3u) + 4);
+    mB->core.wwatch_arm(addr & ~3u, (addr & ~3u) + 4);
+    fprintf(stderr, "[sbs] PREWATCH armed at boot on 0x%08X — pauses at end of the first frame with a DIVERGENT store.\n", addr);
+  }
+
   sbs_rl_init();
 
   fprintf(stderr, "[sbs] LIVE side-by-side: mode=%s  A=%s  B=%s  diff region 0x%08X..0x%08X + scratchpad\n",
@@ -602,7 +621,7 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
     }
     if (dbg.stepPending()) dbg.consumeStep();
 
-    mWwHit = 0;
+    mWwHit = 0; mWwVa = mWwVb = 0;
     stepCore(mA, 0); grabPane(mA, mRgbaA, &mWa, &mHa);
     stepCore(mB, 1); grabPane(mB, mRgbaB, &mWb, &mHb);
     presentPanes();
@@ -618,11 +637,19 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
     if (sbsDumpPath && nav_done && !dumped && mWa > 0 && mWb > 0) { dumpPpm(sbsDumpPath); dumped = true; }
 
     if (mWwArmed && mWwHit) {
-      fprintf(stderr, "[sbs] write-watch caught 0x%08X (A=%08X B=%08X) at frame %u — paused; see `sbs bt`.\n",
-              mWwAddr, mWwVa, mWwVb, mFrame);
-      mWwArmed = false;
-      mA->core.wwatch_arm(0, 0); mB->core.wwatch_arm(0, 0);
-      mA->dbg_server.setPaused(true);
+      // A hit is divergent if only one core wrote (mask != 3) OR both wrote different values.
+      // Identical writes to a shared address don't cause divergence — keep the watch armed and
+      // let the loop advance. Non-PREWATCH `sbs watch` still pauses on the first hit either way
+      // (mWwPersist=false), matching pre-PREWATCH behavior.
+      bool divergent = (mWwHit != 3) || (mWwVa != mWwVb);
+      if (divergent || !mWwPersist) {
+        fprintf(stderr, "[sbs] write-watch caught 0x%08X (A=%08X B=%08X, mask=%d) at frame %u — paused; see `sbs bt`.\n",
+                mWwAddr, mWwVa, mWwVb, mWwHit, mFrame);
+        mWwArmed = false;
+        mA->core.wwatch_arm(0, 0); mB->core.wwatch_arm(0, 0);
+        mA->dbg_server.setPaused(true);
+      }
+      // Else: identical shared write in PREWATCH mode — silently continue and keep watching.
     }
     mFrame++;
   }
