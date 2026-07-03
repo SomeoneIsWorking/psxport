@@ -53,6 +53,13 @@ public:
   bool     mCamTpPending = false;
   int32_t  mCamTpX = 0, mCamTpY = 0, mCamTpZ = 0;
 
+  // Slip #3 fix (docs/findings/sbs.md): submode1 case 0 must yield ONCE mid-body to match the recomp
+  // coro cadence — recomp's FUN_80044BD4 (spawn-and-yield) yields between FUN_8005245C and the fall
+  // through into case 1. Native's transitionAreaLoad is synchronous, so we manually defer the fall
+  // through by one tick using this per-Engine flag. Set at the end of case 0's load body; consumed
+  // on the next tick to execute the case 1 body.
+  bool     mSubmode1LoadDeferred = false;
+
   // ── Scene subsystem instances owned by Engine ─────────────────────────────────────
   // Callers reach them as `c->engine.sceneTransition.method(args)`.
   SceneTransition sceneTransition;   // area-mask trigger + sub-scene swap handshake

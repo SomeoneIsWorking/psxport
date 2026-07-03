@@ -209,6 +209,7 @@ void Engine::s4c() { Core* c = core;
 
 // (ov_sop_field_mode moved to Sop::fieldMode — c->engine.sop.fieldMode())
 #include "sop.h"                              // class Sop — transitionAreaLoad (sync FIELD transition load)
+#include "game.h"                             // class Game — Game::sbs (Slip #3 faithful/PC-mode gate)
 #include "render/screen_fade/screen_fade.h"   // class ScreenFade — the single fade driver
 #include "camera/cutscene_camera.h"           // class CutsceneCamera — resident driver 0x8006EC44 (native)
 void ov_game_func_801084F8(Core*);                          // generated/ov_game_disp.c — still-recomp: draw pause
@@ -972,10 +973,34 @@ void Engine::submode1() { Core* c = core;
             s4c, c->mem_r8(0x800bf870u), c->mem_r8(0x80108f60u + c->mem_r8(0x800bf870u)));
   switch (s4c) {
     case 0:
-      rec_dispatch(c, 0x8005245cu);          // FUN_8005245c (sound/CD setup, sync leaf)
-      c->engine.sop.transitionAreaLoad();     // INLINE sync load (replaces FUN_80044bd4) -> 1f80019b=1
-      // FALL THROUGH to state 1: in the guest, 0x80108918 does NOT branch to the epilogue — it falls
-      // into 0x8010893c, so the load AND the next-state selection both run in this one frame.
+      // Slip #3 (docs/findings/sbs.md): the recomp body of 0x801088D8 case 0 calls FUN_80044BD4 which
+      // yields inside (task spawn-and-wait), so case 1's fall-through runs on the FOLLOWING tick when
+      // the coro resumes. Native's transitionAreaLoad is synchronous — if we fall through here, sm[0x4c]
+      // reaches 2 one tick earlier than the coro. That accumulates a +1 skew on the 0x1F80017C frame
+      // counter over the cutscene-skip window (95 vs 94 by gameplay-start), producing the 0x800EE0DD
+      // periodic-flag divergence (FUN_8004B374's `& 0x1F` gate samples out-of-phase at f217).
+      //
+      // FAITHFUL MODE (SBS active): split case 0 across two ticks to match coro cadence — run the load
+      // on tick 1 (return without falling through), consume the deferral flag on tick 2. sm[0x4c] stays
+      // 0 on tick 1, matching the recomp view where the coro is suspended inside FUN_80044BD4 with the
+      // sm[0x4c] write not yet reached.
+      //
+      // PC MODE (SBS off): the native engine can skip the coro yield outright — fall through in one
+      // tick, no per-frame cost. The faithful/PC split is by design: SBS demands cadence parity, live
+      // gameplay does not, and the two modes must not converge here since the recomp side lives with a
+      // real yield we don't want to inherit.
+      if (c->game && c->game->sbs) {
+        if (!c->engine.mSubmode1LoadDeferred) {
+          rec_dispatch(c, 0x8005245cu);          // FUN_8005245c (sound/CD setup, sync leaf)
+          c->engine.sop.transitionAreaLoad();     // INLINE sync load (replaces FUN_80044bd4) -> 1f80019b=1
+          c->engine.mSubmode1LoadDeferred = true;
+          return;                                 // yield: match recomp coro yield inside FUN_80044BD4
+        }
+        c->engine.mSubmode1LoadDeferred = false;  // second tick — consume the defer, fall through
+      } else {
+        rec_dispatch(c, 0x8005245cu);
+        c->engine.sop.transitionAreaLoad();
+      }
       /* fallthrough */
     case 1: {
       c->mem_w8(0x1f800234u, 0);
@@ -1544,14 +1569,26 @@ void Engine::startBinStage() { Core* c = core;
 // Sizing landed empirically from stagetrace: fresh tick + 6 advances left A one tick short (entered
 // DEMO at f7 vs B at f8), so 7 advances (steps 0..6) gives an 8-tick native path matching coro.
 int Engine::stage0Advance(uint8_t& step) { Core* c = core;
+  // Matches the recomp gen_func_8010649C state loop: reads task[+0x48], writes NEXT state, yields.
+  // B's cadence is spread across 8 wall-clock frames because between task-0 state ticks, task-1
+  // (the FUN_80044BD4-spawned asset loader) runs its own yield ticks. Preserving the empirical
+  // 7-step + fresh calibration (see docs/findings/sbs.md Slip #1 — put A at DEMO f8 matching B).
+  //   step 0 = recomp state 0 tick: preloadTexgroup + sm[0x48]=1
+  //   step 1 = task-1 asset-load slot (no state advance)
+  //   step 2 = recomp state 1 tick: preloadStage1 + sm[0x48]=2
+  //   step 3 = task-1 asset-load slot
+  //   step 4 = recomp state 2 tick: sm[0x48]=3
+  //   step 5 = task-1 slot (extra padding to match measured coro total)
+  //   step 6 = recomp state 3 tick: startStage(1)
+  uint32_t task = c->mem_r32(CUR_TASK);
   switch (step) {
-    case 0: c->engine.asset.preloadTexgroup(0, 0); break;                          // recomp sm==0
-    case 1: /* padding: recomp FUN_80044BD4(0x800CE858) waits ~2 ticks */ break;
-    case 2: c->engine.asset.preloadStage1(); break;                                // recomp sm==1
-    case 3: /* padding: recomp FUN_80044BD4(0x800CD54C) waits ~2 ticks */ break;
-    case 4: /* recomp sm==2 (no-op advance) */ break;
-    case 5: /* extra padding to match measured 8-tick coro total (stagetrace-calibrated) */ break;
-    case 6:                                                                        // recomp sm==3
+    case 0: c->engine.asset.preloadTexgroup(0, 0); c->mem_w16(task + 0x48, 1); break;   // state 0 -> 1
+    case 1: /* task-1 slot: recomp FUN_80044BD4(0x800CE858) yields ~2 ticks */ break;
+    case 2: c->engine.asset.preloadStage1();       c->mem_w16(task + 0x48, 2); break;   // state 1 -> 2
+    case 3: /* task-1 slot: recomp FUN_80044BD4(0x800CD54C) yields ~2 ticks */ break;
+    case 4:                                        c->mem_w16(task + 0x48, 3); break;   // state 2 -> 3
+    case 5: /* task-1 slot: extra padding to match measured 8-tick coro total */ break;
+    case 6:                                                                              // state 3
       startStage(1);                   // swap task0 to DEMO — rewrites task+0xc, sets state=3
       scheduler_yield(c);              // never returns; longjmp to scheduler
       return 0;                        // unreachable

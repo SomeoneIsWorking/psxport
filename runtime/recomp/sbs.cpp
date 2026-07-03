@@ -1058,6 +1058,38 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
   fprintf(stderr, "[sbs] core-map A=%p B=%p (use to attribute [wwatch] lines)\n",
           (void*)&mA->core, (void*)&mB->core);
 
+  // BOOT-SYNC CHECK: both cores just loaded the same MAIN.EXE and ran dc_boot_init. Their RAM +
+  // scratchpad should be BYTE-IDENTICAL at this point — anything else means the boot code itself
+  // diverges (a native boot step vs its recomp does something different, before autonav even
+  // starts). Report the first N differences so we can fix them, but DO NOT force sync (per user
+  // directive: verify, don't paper over). If different, downstream divergence hunts are chasing
+  // shadows — fix the boot divergence first.
+  {
+    int nDiff = 0, nSpad = 0, firstAddr = -1;
+    for (uint32_t a = 0; a < 0x200000; a++) {
+      if (mA->core.ram[a] != mB->core.ram[a]) {
+        if (firstAddr < 0) firstAddr = (int)a;
+        if (nDiff < 8) fprintf(stderr, "[sbs] BOOT-DIFF main 0x%08X: A=%02X B=%02X\n",
+                               0x80000000u + a, mA->core.ram[a], mB->core.ram[a]);
+        nDiff++;
+      }
+    }
+    for (uint32_t i = 0; i < 0x400; i++) {
+      if (mA->core.scratch[i] != mB->core.scratch[i]) {
+        if (nSpad < 8) fprintf(stderr, "[sbs] BOOT-DIFF spad 0x%08X: A=%02X B=%02X\n",
+                               0x1F800000u + i, mA->core.scratch[i], mB->core.scratch[i]);
+        nSpad++;
+      }
+    }
+    if (nDiff || nSpad) {
+      fprintf(stderr, "[sbs] *** BOOT DIVERGENCE: %d RAM bytes, %d spad bytes differ AT BOOT (first RAM addr 0x%08X). "
+                      "Downstream analysis is unreliable until this is fixed. ***\n",
+              nDiff, nSpad, 0x80000000u + firstAddr);
+    } else {
+      fprintf(stderr, "[sbs] BOOT sync verified: RAM + scratchpad byte-identical at boot start.\n");
+    }
+  }
+
   // ALLOCTRACE/BYTETRACE arm — after Cores exist. wwatch_check only fires the store callback for
   // armed addresses. Compose a single covering range: if BYTETRACE is on we use its range and, when
   // ALLOCTRACE is also on, extend so 0x800ED098 falls inside. If only ALLOCTRACE is on we arm just
