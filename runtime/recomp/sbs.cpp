@@ -87,6 +87,25 @@ enum Phase { REACH_GAME, AWAIT_CUT, SKIP_CUT, DONE };
 struct Nav { Phase phase = REACH_GAME; int idle = 0; };
 struct SbsKey { uint32_t from, to; uint16_t btn; };
 
+// One-frame rewind snapshot of the SchedulerState fields the harness must roll back alongside
+// guest RAM. Excludes jmp_buf yield_jmp (not trivially copyable — but only meaningful during a
+// task run; snapshot is taken outside one) and Coro* coro[] (fiber C-stack can't be rolled back;
+// rewind deletes fibers instead so the re-step re-spawns them).
+struct SbsSchedSnap {
+  R3000    task_ctx[3]{};
+  int      in_stage = 0;
+  int      cur_slot = 0;
+  int      task_started[3]{};
+  int      demo_native[3]{};
+  int      game_native[3]{};
+  int      game_coop[3]{};
+  int      cur_is_coro = 0;
+  uint8_t  stage0_step[3]{};
+  uint8_t  sop_field_step[3]{};
+  uint8_t  demo_leave_step[3]{};
+  const RecOverlay* resident_ov[3]{};
+};
+
 // Pimpl body — all Sbs state and dispatch lives here. Accessed from Sbs's public methods (below)
 // through `mImpl`; the header stays light.
 class Sbs::Impl {
@@ -172,6 +191,14 @@ public:
   uint32_t mPreRegsA[32]    = {0};
   uint32_t mPreRegsB[32]    = {0};
   uint32_t mPrePcA = 0, mPrePcB = 0;
+  // Per-core scheduler bookkeeping snapshot. On rewind, guest RAM + regs get restored but the
+  // scheduler's per-slot state (task_started[], stage0_step[], native-dispatcher flags, saved
+  // task-context registers) lives on the Game host object — the re-stepped frame would inherit
+  // stale bookkeeping from the pre-rewind execution and take the resume path with a mid-body
+  // task_ctx.r[31] that misses. Snap the trivially-copyable fields alongside RAM and restore in
+  // rewindAndArm. Fibers (coro[3]) are torn down separately — their C-stack can't be rolled back.
+  // (SchedSnap type lives at file scope below so the free-function helpers can name it.)
+  SbsSchedSnap mPreSchedA{}, mPreSchedB{};
   bool     mPreSnapValid = false;
   bool     mRewindActive = false;   // in the rewind re-step: don't snapshot, don't re-check divergence
   int      mRewindDone   = 0;       // 0=not-rewound, 1=rewound-and-restepped (headless exit gate)
@@ -318,10 +345,49 @@ static void sbs_restore_core(Core& c, const uint8_t* ram, const uint8_t* spad, c
   memcpy(c.r, regs, sizeof c.r);
   c.pc = pc;
 }
+// Snapshot the trivially-copyable SchedulerState fields (skip jmp_buf and Coro* — see SchedSnap
+// docstring on the harness class).
+static void sbs_snap_sched(const SchedulerState& s, SbsSchedSnap& out) {
+  memcpy(out.task_ctx,        s.task_ctx,        sizeof out.task_ctx);
+  out.in_stage    = s.in_stage;
+  out.cur_slot    = s.cur_slot;
+  memcpy(out.task_started,    s.task_started,    sizeof out.task_started);
+  memcpy(out.demo_native,     s.demo_native,     sizeof out.demo_native);
+  memcpy(out.game_native,     s.game_native,     sizeof out.game_native);
+  memcpy(out.game_coop,       s.game_coop,       sizeof out.game_coop);
+  out.cur_is_coro = s.cur_is_coro;
+  memcpy(out.stage0_step,     s.stage0_step,     sizeof out.stage0_step);
+  memcpy(out.sop_field_step,  s.sop_field_step,  sizeof out.sop_field_step);
+  memcpy(out.demo_leave_step, s.demo_leave_step, sizeof out.demo_leave_step);
+  memcpy(out.resident_ov,     s.resident_ov,     sizeof out.resident_ov);
+}
+// Restore scheduler bookkeeping AND tear down any live Coro fibers — a fiber's C-stack reflects
+// the pre-rewind PSX execution and cannot be rolled back, so we delete + null it. The re-stepped
+// frame will re-enter the fresh-coro branch (task_started[] just got zeroed for started slots),
+// which spawns a new fiber from a clean stack.
+static void sbs_restore_sched(SchedulerState& s, const SbsSchedSnap& in) {
+  memcpy(s.task_ctx,        in.task_ctx,        sizeof s.task_ctx);
+  s.in_stage    = in.in_stage;
+  s.cur_slot    = in.cur_slot;
+  memcpy(s.task_started,    in.task_started,    sizeof s.task_started);
+  memcpy(s.demo_native,     in.demo_native,     sizeof s.demo_native);
+  memcpy(s.game_native,     in.game_native,     sizeof s.game_native);
+  memcpy(s.game_coop,       in.game_coop,       sizeof s.game_coop);
+  s.cur_is_coro = in.cur_is_coro;
+  memcpy(s.stage0_step,     in.stage0_step,     sizeof s.stage0_step);
+  memcpy(s.sop_field_step,  in.sop_field_step,  sizeof s.sop_field_step);
+  memcpy(s.demo_leave_step, in.demo_leave_step, sizeof s.demo_leave_step);
+  memcpy(s.resident_ov,     in.resident_ov,     sizeof s.resident_ov);
+  for (int i = 0; i < 3; i++) {
+    if (s.coro[i]) { delete s.coro[i]; s.coro[i] = nullptr; }
+  }
+}
 void Sbs::Impl::takePreStepSnap() {
   if (!mPreRamA) { mPreRamA = (uint8_t*)malloc(0x200000); mPreRamB = (uint8_t*)malloc(0x200000); }
   sbs_snap_core(mA->core, mPreRamA, mPreSpadA, mPreRegsA, mPrePcA);
   sbs_snap_core(mB->core, mPreRamB, mPreSpadB, mPreRegsB, mPrePcB);
+  sbs_snap_sched(mA->sched, mPreSchedA);
+  sbs_snap_sched(mB->sched, mPreSchedB);
   mPreSnapValid = true;
 }
 void Sbs::Impl::rewindAndArm(uint32_t addr) {
@@ -329,6 +395,8 @@ void Sbs::Impl::rewindAndArm(uint32_t addr) {
   fprintf(stderr, "[sbs] rewinding one frame to catch the divergent write on 0x%08X on BOTH cores.\n", addr);
   sbs_restore_core(mA->core, mPreRamA, mPreSpadA, mPreRegsA, mPrePcA);
   sbs_restore_core(mB->core, mPreRamB, mPreSpadB, mPreRegsB, mPrePcB);
+  sbs_restore_sched(mA->sched, mPreSchedA);
+  sbs_restore_sched(mB->sched, mPreSchedB);
   mWwAddr = (addr & ~3u) | 0x80000000u; mWwArmed = true; mWwPersist = true;
   mWwHit = 0; mWwVa = mWwVb = 0; mWwBtA[0] = mWwBtB[0] = 0;
   mWwPcA = mWwPcB = mWwRaA = mWwRaB = mWwSpA = mWwSpB = 0;
