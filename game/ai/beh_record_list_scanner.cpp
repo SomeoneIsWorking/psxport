@@ -59,7 +59,7 @@ void beh_record_list_scanner(Core* c) {
     c->mem_w8(obj + 0, 1);
     uint32_t tv = c->mem_r32(0x800A3F00u + d3 * 4u);
     c->mem_w32(s5 + 20, 0);                                     // node[0x74] = 0
-    c->r[4] = obj; c->r[5] = 0; rec_dispatch(c, 0x8004B354u);
+    c->mem_w8(obj + 0x18, 0);           // FUN_8004B354(obj, 0) inlined — arg1==0 path: single-byte reset
     c->mem_w32(s5 + 12, tv);                                    // node[0x6c] = table value
   }
 

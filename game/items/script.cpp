@@ -44,7 +44,7 @@ static void script_vm_4ce14(Core* c) {
     c->mem_w8(obj + 0, 1);
     c->mem_w32(s5 + 20, 0);          // obj[116] = 0 (slot mask)
     c->mem_w32(s5 + 12, fnptr);      // obj[108] = behavior fn ptr (cursor base)
-    c->r[4] = obj; c->r[5] = 0; rec_dispatch(c, 0x8004B354u);
+    c->mem_w8(obj + 0x18, 0);           // FUN_8004B354(obj, 0) inlined — arg1==0 path: single-byte reset
     // fall through into state 1
   }
   // ---- STATE 1: pause/mode gate, then the command loop ----
