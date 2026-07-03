@@ -70,6 +70,16 @@ static uint32_t obj_record_init(Core* c) {
 }
 void GraphicsBind::recordAlloc() { Core* c = core;
   static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("recallocverify") ? 1 : 0;
+  // Attack (a) attribution: log the C return-address (caller of recordAlloc()) when
+  // PSXPORT_RECALLOC_TRACE=1. Combined with the [sbs] core-map line, tallies A-only ra's
+  // to name the native caller responsible for the +3 pool delta at 0x800ED098.
+  static int s_trace = -1;
+  if (s_trace < 0) s_trace = getenv("PSXPORT_RECALLOC_TRACE") ? 1 : 0;
+  if (s_trace) {
+    void* ra = __builtin_return_address(0);
+    fprintf(stderr, "[recalloc] core=%p ra=%p cnt_before=%d stage=%08X\n",
+            (void*)c, ra, (int)c->mem_r16s(0x800ED098u), c->mem_r32(0x801fe00c));
+  }
   record_gate(c, record_alloc, 0x8007AAE8u, "recallocverify", s_v);
 }
 void GraphicsBind::recordInit() { Core* c = core;

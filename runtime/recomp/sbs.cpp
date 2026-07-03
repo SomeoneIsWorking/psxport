@@ -633,6 +633,8 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
   if (mMode == M_ORACLE) { mB->core.use_interp = 1; mB->gpu.soft_gpu = 1; }
   load_exe(exePath, &mA->core); dc_boot_init(&mA->core);
   load_exe(exePath, &mB->core); dc_boot_init(&mB->core);
+  fprintf(stderr, "[sbs] core-map A=%p B=%p (use to attribute [wwatch] lines)\n",
+          (void*)&mA->core, (void*)&mB->core);
 
   // ALLOCTRACE arm — after Cores exist. wwatch_check only fires the store callback for armed
   // addresses; arm 0x800ED098 (word-aligned) on both cores so storeCb sees every write.

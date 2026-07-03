@@ -74,7 +74,8 @@ void Core::wwatch_check(uint32_t a, uint32_t v) {
   uint32_t ka = a | 0x80000000u;
   if (s_ww_hi && ka >= s_ww_lo && ka < s_ww_hi) {
     if (cfg_str("PSXPORT_WWATCH"))
-      fprintf(stderr, "[wwatch] store [%08X]=%08X by pc=%08X stage=%08X\n", ka, v, pc, mem_r32(0x801fe00c));
+      fprintf(stderr, "[wwatch] core=%p store [%08X]=%08X by pc=%08X ra=%08X stage=%08X\n",
+              (void*)this, ka, v, pc, r[31], mem_r32(0x801fe00c));
     if (s_store_watch_cb) s_store_watch_cb(this, ka, v);
   }
 }

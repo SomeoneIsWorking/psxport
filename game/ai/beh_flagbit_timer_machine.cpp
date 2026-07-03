@@ -61,6 +61,9 @@ void beh_flagbit_timer_machine(Core* c) {
  // ================= STATE 0 (INIT) =================
  S0: {
    uint32_t a2v = c->mem_r32(0x800ecfd4u);
+   if (getenv("PSXPORT_FLAGBIT_TRACE"))
+     fprintf(stderr, "[flagbit] core=%p S0 node=%08X cnt_before=%d stage=%08X\n",
+             (void*)c, nd, (int)c->mem_r16s(0x800ED098u), c->mem_r32(0x801fe00c));
    if (leaf4r(c, nd, 3, a2v, 0x8015aabcu, 0x800519e0u) != 0) goto Lret;   // FUN_800519E0
    c->mem_w32(nd + 0x3c, c->mem_r32(0x800ecfd8u));
    if (c->mem_r8(0x800bf873u) != 0) { c->mem_w8(nd + 4, 3); goto Lret; }
