@@ -57,6 +57,24 @@ void rec_coro_run(Core* c, uint32_t pc);
 // etc.) has already run its real body, so register side effects it needs on resume (e.g. it
 // leaves v0=0x1f800000 for the stage loop head's `lw t0,0x138(v0)`) are captured.
 extern "C" void guest_backtrace_to(Core*, FILE*);   // sync_overrides.cpp — guest-stack backtrace (btyield)
+
+// Native port of FUN_80051F14 (see scheduler.h). Verified via ram_menu Ghidra decomp: the substrate
+// writes entry, gp, state=2, tcb, +0x6F=0 to the slot base at 0x801FE000 + slot*0x70. BIOS OpenTh
+// (syscall B0:0x0E) is a no-op in our port — the port scheduler runs guest tasks via its own
+// setjmp/fiber machinery, not BIOS TCBs — but the observed placeholder handle 0xFF000000 is written
+// so any guest code inspecting task+0x04 sees the same value.
+static constexpr uint32_t kTaskTableBaseGuest = 0x801FE000u;
+static constexpr uint32_t kTaskSlotStrideGuest = 0x70u;
+static constexpr uint32_t kBiosTcbHandlePlaceholder = 0xFF000000u;
+void native_task_spawn(Core* c, int slot, uint32_t entry_pc) {
+  const uint32_t base = kTaskTableBaseGuest + (uint32_t)slot * kTaskSlotStrideGuest;
+  c->mem_w32(base + 0x0C, entry_pc);
+  c->mem_w32(base + 0x10, c->r[28]);                 // caller's gp — same as FUN_80080930() returns
+  c->mem_w16(base + 0x00, 2);                         // RUNNABLE — scheduler picks up next tick
+  c->mem_w32(base + 0x04, kBiosTcbHandlePlaceholder);
+  c->mem_w8 (base + 0x6F, 0);
+}
+
 void scheduler_yield(Core* c) {
   if (!c->game->sched.in_stage) { c->r[2] = c->r[4]; return; }   // no-op: return the handle arg in v0
   if (cfg_dbg("yieldpc")) fprintf(stderr, "[yieldpc] switch yield ra=0x%08X waitloop=0x%08X r16=0x%08X r29=0x%08X 801fe0e0=0x%X\n",
@@ -434,10 +452,9 @@ void native_scheduler_step(Core* c) {
         c->coro_redirect_pc = 0;
       } else if (native_content && fresh && resume_pc == 0x8010649Cu) {
         // Stage-0 START.BIN fresh entry: run the file-table build (native ISO9660 resolver), seed
-        // stage0_step=0, save regs, mark runnable, and RETURN — the preload SM will be stepped
-        // across subsequent scheduler ticks via Engine::stage0Advance to match the recomp body's
-        // per-iteration yield cadence (docs/findings/sbs.md Slip #1). Do NOT rec_coro_run the
-        // recomp body — A's recomp set is a strict subset of B's (misses 0x80051FA4 among others).
+        // stage0_step=0, save regs, mark runnable, and RETURN — the preload SM steps across
+        // subsequent scheduler ticks via Engine::stage0Advance to match the recomp body's
+        // per-iteration yield cadence (docs/findings/sbs.md Slip #1).
         c->engine.startBinStage();
         c->game->sched.stage0_step[i] = 0;
         c->game->sched.task_ctx[i] = static_cast<R3000&>(*c);
