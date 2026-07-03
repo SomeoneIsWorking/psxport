@@ -7,7 +7,7 @@ A native may exist already. **LIVE** = reachable by direct C call from a native_
 dispatch root (actually runs). **ORPHAN** = native exists but only the REMOVED override
 table used to reach it — it is dead code until a native parent calls it directly.
 
-Totals: 150 native fns, 133 owned addresses, 7 LIVE / 143 ORPHAN.
+Totals: 151 native fns, 134 owned addresses, 7 LIVE / 144 ORPHAN.
 
 | addr | status | symbol | file:line | depends-on (still-PSX) | summary |
 |------|--------|--------|-----------|------------------------|---------|
@@ -35,6 +35,7 @@ Totals: 150 native fns, 133 owned addresses, 7 LIVE / 143 ORPHAN.
 | 0x80049968 | ORPHAN | `Collision::gridSetup` | game/player/collision.cpp:53 | 0x80049968 | collision-grid ROW-POINTER setup. a0 = grid/layer index (&0xff). Reads… |
 | 0x800499E8 | ORPHAN | `eng_task0_boot` | game/scene/engine_level.cpp:94 | 0x8008A110 0x8008B8F0 0x8009A730 | task-0 INITIAL ENTRY (the engine's first-level bootstrap, registered a… |
 | 0x800499E8 | ORPHAN | `Engine::task0Bootstrap` | game/scene/engine_stage.cpp:1442 |  | resolve \BIN\START.BIN natively, record its {LBA,size}, switch task 0 … |
+| 0x8004B3F4 | ORPHAN | `Spawn::dropScoreGem` | game/world/spawn.cpp:443 | 0x80071B44 | SCORE-GEM DROP wrapper. Every callsite passes one of the eight fixed A… |
 | 0x8004D338 | ORPHAN | `Inventory::addEntry` | game/items/inventory.cpp:148 |  |  |
 | 0x8004D4C4 | ORPHAN | `Inventory::giveAndFlagEntry` | game/items/inventory.cpp:161 |  |  |
 | 0x8004D4F4 | ORPHAN | `Inventory::giveEntry` | game/items/inventory.cpp:170 |  |  |

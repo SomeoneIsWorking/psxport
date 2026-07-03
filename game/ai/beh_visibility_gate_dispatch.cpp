@@ -225,14 +225,14 @@ state2:
       switch (n3) {                                    // JT-C
         case 0:  c->r[4]=obj; c->r[5]=1;      rec_dispatch(c, 0x80049E54u); check_ret=true;  break; // c7a8
         case 1:  c->r[4]=obj; c->r[5]=2;      rec_dispatch(c, 0x80049E54u); check_ret=true;  break; // c7bc
-        case 4:  c->r[4]=obj; c->r[5]=100;    rec_dispatch(c, 0x8004B3F4u); check_ret=false; break; // c7d0
-        case 5:  c->r[4]=obj; c->r[5]=200;    rec_dispatch(c, 0x8004B3F4u); check_ret=false; break; // c7e4
-        case 6:  c->r[4]=obj; c->r[5]=500;    rec_dispatch(c, 0x8004B3F4u); check_ret=false; break; // c7f8
-        case 7:  c->r[4]=obj; c->r[5]=1000;   rec_dispatch(c, 0x8004B3F4u); check_ret=false; break; // c80c
-        case 8:  c->r[4]=obj; c->r[5]=5000;   rec_dispatch(c, 0x8004B3F4u); check_ret=false; break; // c820
-        case 9:  c->r[4]=obj; c->r[5]=10000;  rec_dispatch(c, 0x8004B3F4u); check_ret=false; break; // c834
-        case 10: c->r[4]=obj; c->r[5]=20000;  rec_dispatch(c, 0x8004B3F4u); check_ret=false; break; // c848
-        case 11: c->r[4]=obj; c->r[5]=0x186A0;rec_dispatch(c, 0x8004B3F4u); check_ret=false; break; // c85c (100000)
+        case 4:  c->engine.spawn.dropScoreGem(obj, 100);    check_ret=false; break; // c7d0 FUN_8004B3F4 (native)
+        case 5:  c->engine.spawn.dropScoreGem(obj, 200);    check_ret=false; break; // c7e4
+        case 6:  c->engine.spawn.dropScoreGem(obj, 500);    check_ret=false; break; // c7f8
+        case 7:  c->engine.spawn.dropScoreGem(obj, 1000);   check_ret=false; break; // c80c
+        case 8:  c->engine.spawn.dropScoreGem(obj, 5000);   check_ret=false; break; // c820
+        case 9:  c->engine.spawn.dropScoreGem(obj, 10000);  check_ret=false; break; // c834
+        case 10: c->engine.spawn.dropScoreGem(obj, 20000);  check_ret=false; break; // c848
+        case 11: c->engine.spawn.dropScoreGem(obj, 100000); check_ret=false; break; // c85c FUN_8004B3F4 (native)
         case 15: c->r[4]=obj;                 rec_dispatch(c, 0x8004A118u); check_ret=true;  break; // c874
         case 16: c->r[4]=obj;                 rec_dispatch(c, 0x8004A2A0u); check_ret=true;  break; // c884
         case 17: c->r[4]=obj;                 rec_dispatch(c, 0x8004B428u); check_ret=true;  break; // c894

@@ -43,6 +43,19 @@ public:
   //   stashes the return in Actor::sceneHandle (obj+0x14) and treats nonzero as "spawned"). The
   //   per-frame handler FUN_8007DDE0 stays reachable via its stored address (recomp substrate).
   uint32_t sceneEntity(uint16_t sceneId, uint8_t subtype);
+
+  // dropScoreGem(sourceNode, value): FUN_8004B3F4 — thin wrapper around the score-gem spawner
+  //   FUN_80071B44. Advances the running score-total counter at 0x800BF874 by `value`, then
+  //   invokes FUN_80071B44(sourceNode, value, 0) which allocates a gem entity from the spawner
+  //   pool, seeds its icon/hash from `value` (small-gem sprite 0x7C7E vs large-gem sprite 0x7C3E
+  //   at the 5000-point boundary), and plays SFX 0x11 (the gem-pickup jingle via Sfx::trigger).
+  //   The callee stays as substrate (gem spawner + SFX cluster). Used only by the item-drop
+  //   dispatcher `beh_visibility_gate_dispatch` node[3] cases 4..11 — the 8 AP-gem denominations
+  //   100/200/500/1000/5000/10000/20000/100000. Return is always 1 (recomp `addiu v0, zero, 1`).
+  //   NOTE: FUN_80071B44 has a param_3 branch that would double-bump 0x800BF874 when param_3==1,
+  //   but every callsite here (and the recomp wrapper itself) passes param_3=0, so the second
+  //   bump is dormant — replicate the wrapper's single unconditional bump.
+  void dropScoreGem(uint32_t sourceNode, int32_t value);
 };
 
 #endif

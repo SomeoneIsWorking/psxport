@@ -426,3 +426,24 @@ uint32_t Spawn::sceneEntity(uint16_t sceneId, uint8_t subtype) {
   c->engine.verifyGate.run(scene_entity_native, 0x8007E110u, "sceneentityverify", s_v);
   return c->r[2];
 }
+
+// FUN_8004B3F4 — SCORE-GEM DROP wrapper. Every callsite passes one of the eight fixed AP-gem
+// denominations (100/200/500/1000/5000/10000/20000/100000), so this is the drop primitive for
+// the score gems Tomba collects. RE'd from disas 0x8004B3F4..0x8004B424 (13 insns) and cross-
+// checked against the Ghidra decompile:
+//     DAT_800bf874 = DAT_800bf874 + param_2;      // running AP total
+//     FUN_80071b44(param_1, param_2, 0);          // spawn gem entity + play pickup SFX
+//     return 1;
+// The MIPS body puts the store `sw v0, 4(v1)` in the delay slot of the `jal FUN_80071B44` so
+// the score total at 0x800BF874 is updated BEFORE the callee begins. Since we don't reorder
+// with the substrate call (the callee still runs under interpretation and observes the same
+// sequential timing), a straight `total += value; call substrate;` matches semantically.
+// FUN_80071B44's own conditional double-bump is gated on its param_3, which is always 0 here —
+// so the wrapper's single unconditional bump is the entire delta observed.
+void Spawn::dropScoreGem(uint32_t sourceNode, int32_t value) {
+  Core* c = this->core;
+  c->mem_w32(0x800BF874u, c->mem_r32(0x800BF874u) + (uint32_t)value);
+  c->r[4] = sourceNode; c->r[5] = (uint32_t)value; c->r[6] = 0;
+  rec_dispatch(c, 0x80071B44u);
+  c->r[2] = 1;   // recomp returns v0 = 1 (unread by every current callsite, but faithful)
+}
