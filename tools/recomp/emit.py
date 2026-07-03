@@ -32,7 +32,7 @@ from decode import decode
 # recomp identity and re-emits when the stamp on disk (generated/.recomp_version) differs, so a stale
 # generated/ on another box (which an input-content hash alone failed to catch — a box can build a
 # self-consistent-but-outdated set) is forced to regenerate. Date + a per-day counter; keep it terse.
-RECOMP_VERSION = "2026-07-01.3"
+RECOMP_VERSION = "2026-07-04.1"
 
 R = lambda n: f"c->r[{n}]"
 
@@ -1118,6 +1118,13 @@ def main():
         # the FULL-PSX path (PSXPORT_SBS_MODE=both core B, psx_fallback) runs task0 under the substrate and
         # resumes at 0x8010649C, so seed it (a documented runtime-computed re-entry, like GAME's loop top).
         "START": {0x8010649C},
+        # SOP field-mode machine (FUN_80109450): the SOP.BIN overlay body dispatched from GAME.BIN
+        # (caller ra 0x801088B0 in gameplay-mode SBS, full-PSX field mode). It's the sm[0x4e]-indexed
+        # sub-mode dispatcher (per findings/render.md's later-286 note); the scan misses it because
+        # GAME.BIN calls it by hard-coded absolute 0x80109450 into the SOP overlay slot, and the
+        # cross-module discovery doesn't cross the resident->overlay boundary. Seed it so the full-PSX
+        # path can advance past field entry (SBS gameplay/full mode, or PSXPORT_GATE=1 field runs).
+        "SOP": {0x80109450},
         # Per-area object-init handlers indexed by DAT_800BF870 (area byte). The JT lives in
         # resident MAIN.EXE at 0x800A45B8; caller is FUN_80058648 (Tomba state-0 init)
         # `(*(&PTR_FUN_800A45B8)[DAT_800BF870])(&tomba)`. Each entry is a valid function prologue
