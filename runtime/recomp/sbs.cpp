@@ -263,6 +263,12 @@ bool Sbs::Impl::navStep(Core* c, Nav& nv, uint32_t f, const char* tag) {
 // per-Game, set once at boot; render mode is set per core, per step.
 void Sbs::Impl::applyMode(Game* g, int which) {
   Render* r = g->core.mRender;
+  // PSXPORT_SBS_FORCE_PSX_RENDER=1 — bisect: is a divergence coming from the native-render path?
+  // Force PSX render on BOTH cores regardless of mode. If a divergence that showed in RENDER mode
+  // (A native render vs B PSX render) DISAPPEARS with this on, the writer lives on the native
+  // render side. If it PERSISTS, native render is not the culprit. Cheap A/B one-liner.
+  static const int forcePsxRender = []{ const char* e = getenv("PSXPORT_SBS_FORCE_PSX_RENDER"); return e && *e && strcmp(e,"0")!=0 ? 1 : 0; }();
+  if (forcePsxRender) { r->mode.setPsxRender(true); return; }
   switch (mMode) {
     case M_RENDER:   r->mode.setPsxRender(which != 0);    break;   // A native render (0), B PSX render (1)
     case M_GAMEPLAY: r->mode.setPsxRender(true);          break;   // PSX render on BOTH (isolate gameplay)
@@ -452,9 +458,15 @@ void Sbs::Impl::storeCb(Core* c, uint32_t a, uint32_t v) {
   if (which) { mWwVb = v; capBt(c, mWwBtB, sizeof mWwBtB); }
   else       { mWwVa = v; capBt(c, mWwBtA, sizeof mWwBtA); }
   mWwHit |= (1 << which);
-  if (mWwPersist)   // PREWATCH's continuous logging — per-store attribution to A vs B
-    fprintf(stderr, "[sbs-ww] f%u %c wrote [%08X]=%08X (pc=%08X stage=%08X)\n",
-            mFrame, which ? 'B' : 'A', a, v, c->pc, c->mem_r32(0x801fe00c));
+  if (mWwPersist) {  // PREWATCH's continuous logging — per-store attribution to A vs B
+    fprintf(stderr, "[sbs-ww] f%u %c wrote [%08X]=%08X (pc=%08X stage=%08X) [c=%p mA=%p mB=%p]\n",
+            mFrame, which ? 'B' : 'A', a, v, c->pc, c->mem_r32(0x801fe00c),
+            (void*)c, (void*)&mA->core, (void*)&mB->core);
+    // Peek AFTER the actual host write, so we see the byte the store LANDED in. (mem_w8 does wwatch_check
+    // BEFORE the write, so we peek RIGHT NOW = pre-store, but the write is imminent one-line below.)
+    fprintf(stderr, "[sbs-ww]     pre-store peek A[%08X]=%u  B[%08X]=%u\n",
+            a, mA->core.mem_r8(a), a, mB->core.mem_r8(a));
+  }
 }
 
 // `sbs …` debug-server commands. Returns 1 if handled (dbg_exec stops), 0 otherwise.
@@ -610,10 +622,21 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
     if (sbs_rl_should_close()) { fprintf(stderr, "[sbs] window closed — exiting.\n"); break; }
     Core* sel = mSel ? &mB->core : &mA->core;
     DbgServer& dbg = mA->dbg_server;   // one endpoint per process; mA owns it
+    // TRACE: pre-service state
+    const bool ww_trace_ext = mWwArmed && mWwAddr == 0x800BF81Eu && mFrame >= 180 && mFrame <= 200;
+    if (ww_trace_ext)
+      fprintf(stderr, "[sbs-trace] f%u pre-service     A[0x800BF81E]=%u  B[0x800BF81E]=%u\n",
+              mFrame, mA->core.mem_r8(0x800BF81Eu), mB->core.mem_r8(0x800BF81Eu));
     dbg.service(sel);
+    if (ww_trace_ext)
+      fprintf(stderr, "[sbs-trace] f%u post-service    A[0x800BF81E]=%u  B[0x800BF81E]=%u\n",
+              mFrame, mA->core.mem_r8(0x800BF81Eu), mB->core.mem_r8(0x800BF81Eu));
     bool nav_done = !sbsAutonav || (mNavA.phase == DONE && mNavB.phase == DONE);
     if (!nav_done) { navStep(&mA->core, mNavA, mFrame, "A"); navStep(&mB->core, mNavB, mFrame, "B"); }
     else feedInput();
+    if (ww_trace_ext)
+      fprintf(stderr, "[sbs-trace] f%u post-nav/input  A[0x800BF81E]=%u  B[0x800BF81E]=%u\n",
+              mFrame, mA->core.mem_r8(0x800BF81Eu), mB->core.mem_r8(0x800BF81Eu));
     if (dbg.isPaused() && !dbg.stepPending()) {
       presentPanes();
       usleep(15000);
@@ -622,9 +645,20 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
     if (dbg.stepPending()) dbg.consumeStep();
 
     mWwHit = 0; mWwVa = mWwVb = 0;
-    stepCore(mA, 0); grabPane(mA, mRgbaA, &mWa, &mHa);
-    stepCore(mB, 1); grabPane(mB, mRgbaB, &mWb, &mHb);
-    presentPanes();
+    // TRACE 2026-07-03: instrument where 0x800BF81E flips during a frame in RENDER mode.
+    // Log the byte on both cores at each waypoint of the frame to name the exact stage.
+    const bool ww_trace = mWwArmed && mWwAddr == 0x800BF81Eu && mFrame >= 180 && mFrame <= 200;
+    auto ww_log = [&](const char* tag){
+      if (!ww_trace) return;
+      fprintf(stderr, "[sbs-trace] f%u %-14s  A[0x800BF81E]=%u  B[0x800BF81E]=%u\n",
+              mFrame, tag, mA->core.mem_r8(0x800BF81Eu), mB->core.mem_r8(0x800BF81Eu));
+    };
+    ww_log("frame-start");
+    stepCore(mA, 0);              ww_log("post-stepA");
+    grabPane(mA, mRgbaA, &mWa, &mHa); ww_log("post-grabA");
+    stepCore(mB, 1);              ww_log("post-stepB");
+    grabPane(mB, mRgbaB, &mWb, &mHb); ww_log("post-grabB");
+    presentPanes();               ww_log("post-present");
     // Parity surface: with both cores past AUTO-NAV, name any RAM/scratchpad divergence. On the
     // FIRST byte that differs, `checkDivergence` records the range + backtraces + pauses (via the
     // debug server) so `sbs diff` / `sbs bt` / `sbs watch` can inspect. The 30-frame summary is
