@@ -196,7 +196,7 @@ set(PORT_SRC
   game/render/screen_fade/screen_fade.cpp
   game/render/margin_render.cpp
   game/audio/native_audio.c
-  game/audio/native_music.c
+  game/audio/native_music.cpp
   game/audio/music_list.cpp
   runtime/recomp/sync_overrides.cpp
   game/render/pkt_span.cpp
