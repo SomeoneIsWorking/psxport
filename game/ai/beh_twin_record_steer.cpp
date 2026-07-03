@@ -22,6 +22,7 @@
 // A/B gate (full RAM+scratchpad vs rec_super_call) is the safety net. NO GTE.
 
 #include "core.h"
+#include "object/actor.h"     // Actor::boundsCull (FUN_8007778C — thin wrapper native)
 #include "cfg.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -129,7 +130,7 @@ void beh_twin_record_steer(Core* c) {
      c->mem_w16(c->mem_r32(nd + 0xc4) + 0x0c, nv);
 
    if (c->mem_r8(0x800e7eaau) < 22) {
-     if (leafr1(c, nd, 0x8007778cu) != 0)           // FUN_8007778C(node)
+     if (Actor(c, nd).boundsCull() != 0)             // FUN_8007778C — Actor::boundsCull
        c->r[4] = nd; c->engine.graphicsBind.renderUpdate();                   // FUN_800517F8(node)
    }
    goto Lret;

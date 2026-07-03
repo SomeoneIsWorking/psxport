@@ -22,6 +22,7 @@
 // The byte-exact A/B gate is the safety net.
 
 #include "core.h"
+#include "object/actor.h"     // Actor::boundsCull (FUN_8007778C — thin wrapper native)
 #include "cfg.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -107,7 +108,7 @@ void beh_event_record_machine(Core* c) {
   }
 
   // STATE 1
-  if (leafr1(c, nd, 0x8007778cu) == 0) return;             // FUN_8007778C
+  if (Actor(c, nd).boundsCull() == 0) return;              // FUN_8007778C — Actor::boundsCull
   switch (c->mem_r8(nd + 5)) {
     case 0:
       if (c->mem_r8(0x800bf8b9u) == 255) {

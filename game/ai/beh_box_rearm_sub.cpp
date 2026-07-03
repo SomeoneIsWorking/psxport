@@ -16,6 +16,7 @@
 // is the safety net.
 
 #include "core.h"
+#include "object/actor.h"     // Actor::boundsCull (FUN_8007778C — thin wrapper native)
 #include "cfg.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -40,7 +41,7 @@ void beh_box_rearm_sub(Core* c) {
   uint8_t st = c->mem_r8(nd + 4);
 
   if (st == 1) {
-    if (leafr1(c, nd, 0x8007778cu) != 0) leaf1(c, nd, 0x8013ac98u);   // FUN_8007778C / FUN_8013AC98
+    if (Actor(c, nd).boundsCull() != 0) leaf1(c, nd, 0x8013ac98u);   // FUN_8007778C native / FUN_8013AC98
     c->mem_w8(nd + 0x29, 0);
     c->mem_w8(nd + 0x2b, 0);
   } else if (st < 2) {

@@ -23,6 +23,7 @@
 // A/B gate (full RAM+scratchpad vs rec_super_call) is the safety net.
 
 #include "core.h"
+#include "object/actor.h"     // Actor::boundsCull (FUN_8007778C — thin wrapper native)
 #include "cfg.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -62,7 +63,7 @@ void beh_actor_move_sm(Core* c) {
       return;
     }
     // STATE 2
-    leaf1(c, nd, 0x8007778cu);                            // FUN_8007778C
+    Actor(c, nd).boundsCull();                             // FUN_8007778C — Actor::boundsCull (thin wrapper native)
     {
       uint8_t n5 = c->mem_r8(nd + 5);
       uint8_t bf809 = c->mem_r8(0x800bf809u);
@@ -89,7 +90,7 @@ void beh_actor_move_sm(Core* c) {
   }
 
   // STATE 1
-  leaf1(c, nd, 0x8007778cu);                              // FUN_8007778C
+  Actor(c, nd).boundsCull();                              // FUN_8007778C — Actor::boundsCull
   if (c->mem_r8(nd + 0x2b) != 0) {
     c->mem_w8(nd + 0x2b, (uint8_t)(c->mem_r8(nd + 0x2b) - 1));
     goto Lcommon;

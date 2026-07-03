@@ -15,6 +15,7 @@
 // rec_super_call) only confirms the routing chose the same leaves in the same order.
 
 #include "core.h"
+#include "object/actor.h"     // Actor::boundsCull (FUN_8007778C — thin wrapper native)
 #include "cfg.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -48,7 +49,7 @@ void beh_pure_inner_dispatch(Core* c) {
   // call FUN_8007778C unless (0x800BF89C != 2 && node[3]==2 && 0x800E7EAA==1)
   if (c->mem_r8(0x800BF89Cu) != 2 && c->mem_r8(obj + 3) == 2 && c->mem_r8(0x800E7EAAu) == 1)
     goto Le3c;
-  leaf(c, obj, 0x8007778Cu);
+  Actor(c, obj).boundsCull();          // FUN_8007778C — Actor::boundsCull
  Le3c:
   {
     uint8_t n5 = c->mem_r8(obj + 5);              // inner state
