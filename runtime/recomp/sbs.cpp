@@ -146,6 +146,9 @@ public:
   const char* modeName() const;
   bool  isRenderRegion(uint32_t a) const;
   bool  isRenderSpad(uint32_t a) const;
+  bool  isCdCacheNoise(uint32_t a) const;
+  bool  isAudioNoise(uint32_t a) const;
+  bool  isDiffNoise(uint32_t a) const { return isRenderRegion(a) || isCdCacheNoise(a) || isAudioNoise(a); }
   static bool isSpad(uint32_t a) { return a >= 0x1F800000u && a < 0x1F800400u; }
   void  capBt(Core* c, char* buf, size_t n);
   bool  navStep(Core* c, Nav& nv, uint32_t f, const char* tag);
@@ -176,6 +179,37 @@ const char* Sbs::Impl::modeName() const {
 bool Sbs::Impl::isRenderRegion(uint32_t a) const {
   if (a >= 0x800BF4F0u && a < 0x800BF54Cu) return true;   // pool ptrs + dwell
   if (a >= 0x800BFE68u && a < 0x800EA200u) return true;   // packet pool (×2) + OT (×2) + env
+  return false;
+}
+
+// libcd's CD_cachefile / CD_newmedia directory-cache tables. The native gameplay path
+// (`cd_override.cpp`) replaces the whole libcd read path with synchronous host disc I/O and NEVER
+// touches these tables; the recomp gameplay path (core B with psx_fallback=1) fills them as libcd
+// caches directory contents. Divergence here is CD-implementation noise: NO gameplay reader
+// consumes these (only libcd's own primitives — FUN_8008BE?? / FUN_8008bf50 read/write; grep of
+// scratch/decomp/ram_f1000_all.c shows no other consumers of 0x800AC2D4 or the cache tables).
+// Only applies to modes where B runs PSX gameplay (fb_b=1): GAMEPLAY / FULL / ORACLE. In RENDER
+// mode both cores run native gameplay, so no libcd path runs on either side.
+bool Sbs::Impl::isCdCacheNoise(uint32_t a) const {
+  if (mMode == M_RENDER) return false;
+  // libcd flags cluster (drive-ready, media-serial, cached-dir index, dir handles).
+  // Confirmed noise: 800AC2D4 (FUN_8008bf50 read/write, no other reader), 800AC2D8 (compared to
+  // 800ABFD0 media-serial by the CD file-search primitive, sets on rescan; no gameplay reader).
+  if (a >= 0x800AC280u && a < 0x800AC300u) return true;
+  if (a >= 0x801026E8u && a < 0x80102790u) return true;   // per-cache-entry result buffer
+  if (a >= 0x80102D44u && a < 0x80104344u) return true;   // 128-entry cache table (stride 0x2C)
+  if (a >= 0x80104368u && a < 0x80104B80u) return true;   // directory-scratch sector buffer
+  return false;
+}
+
+// libspu / libsnd voice-state cluster. FUN_80074B44 / FUN_8007496C / FUN_80092E3C write these; the
+// only readers are the audio driver's own voice-mode primitives (libspu). Native gameplay
+// (core A) drives audio via native_music + spu_audio (bypasses libspu voice tables); PSX
+// gameplay (core B) runs libsnd which fills 800BE238+ per voice tick. Divergence here is audio-
+// driver noise, not gameplay state.
+bool Sbs::Impl::isAudioNoise(uint32_t a) const {
+  if (mMode == M_RENDER) return false;
+  if (a >= 0x800BE238u && a < 0x800BE360u) return true;   // 24-voice × 12-byte SPU state + mask
   return false;
 }
 
@@ -262,7 +296,7 @@ void Sbs::Impl::checkDivergence() {
   const uint8_t* a = mA->core.ram + (mLo - 0x80000000u);
   const uint8_t* b = mB->core.ram + (mLo - 0x80000000u);
   uint32_t n = mHi - mLo;
-  for (uint32_t i = 0; i < n; i++) if (a[i] != b[i] && !isRenderRegion(mLo + i)) { recordDivergence(mLo + i); return; }
+  for (uint32_t i = 0; i < n; i++) if (a[i] != b[i] && !isDiffNoise(mLo + i)) { recordDivergence(mLo + i); return; }
   for (uint32_t i = 0; i < 0x400; i++)
     if (mA->core.scratch[i] != mB->core.scratch[i] && !isRenderSpad(0x1F800000u + i)) { recordDivergence(0x1F800000u + i); return; }
 }
@@ -272,12 +306,19 @@ void Sbs::Impl::summarizeDivergence(uint32_t every) {
   const uint8_t* a = mA->core.ram + (mLo - 0x80000000u);
   const uint8_t* b = mB->core.ram + (mLo - 0x80000000u);
   uint32_t n = mHi - mLo;
+  // Per-64 KB page cluster histogram: counts bytes-differing per page so the drift's ACTUAL hot
+  // regions surface (not just min/max bounds). The top-3 pages get reported so a large drift is
+  // named by where it lives, not just how big it is.
+  constexpr uint32_t PAGE_SHIFT = 16;   // 64 KB
+  constexpr uint32_t N_PAGES    = ((0x200000u) >> PAGE_SHIFT) + 1;
+  uint32_t pageCount[N_PAGES] = {0};
   uint32_t nDiff = 0, firstAddr = 0, lastAddr = 0;
   for (uint32_t i = 0; i < n; i++) {
     if (a[i] == b[i]) continue;
-    if (isRenderRegion(mLo + i)) continue;
+    if (isDiffNoise(mLo + i)) continue;
     if (!nDiff) firstAddr = mLo + i;
     lastAddr = mLo + i;
+    pageCount[(mLo + i - 0x80000000u) >> PAGE_SHIFT]++;
     nDiff++;
   }
   uint32_t nSpad = 0;
@@ -288,10 +329,21 @@ void Sbs::Impl::summarizeDivergence(uint32_t every) {
   }
   if (nDiff == 0 && nSpad == 0) {
     fprintf(stderr, "[sbs] f%u: A/B identical (mode=%s)\n", mFrame, modeName());
-  } else {
-    fprintf(stderr, "[sbs] f%u: A/B differ in %u RAM bytes [0x%08X..0x%08X] + %u scratchpad bytes (mode=%s)\n",
-            mFrame, nDiff, firstAddr, lastAddr, nSpad, modeName());
+    return;
   }
+  // Pick top-3 pages by count for the compact per-frame report.
+  uint32_t topIdx[3] = {0, 0, 0}, topCnt[3] = {0, 0, 0};
+  for (uint32_t p = 0; p < N_PAGES; p++) {
+    uint32_t c = pageCount[p];
+    if (c > topCnt[0])      { topCnt[2]=topCnt[1]; topIdx[2]=topIdx[1]; topCnt[1]=topCnt[0]; topIdx[1]=topIdx[0]; topCnt[0]=c; topIdx[0]=p; }
+    else if (c > topCnt[1]) { topCnt[2]=topCnt[1]; topIdx[2]=topIdx[1]; topCnt[1]=c; topIdx[1]=p; }
+    else if (c > topCnt[2]) { topCnt[2]=c; topIdx[2]=p; }
+  }
+  fprintf(stderr, "[sbs] f%u: A/B differ %u RAM bytes [0x%08X..0x%08X] + %u spad (mode=%s) | top pages:",
+          mFrame, nDiff, firstAddr, lastAddr, nSpad, modeName());
+  for (int k = 0; k < 3 && topCnt[k]; k++)
+    fprintf(stderr, " 0x%08X:%u", 0x80000000u + (topIdx[k] << PAGE_SHIFT), topCnt[k]);
+  fprintf(stderr, "\n");
 }
 
 // Step ONE core's frame for the SBS composite: diff_mode=1 suppresses its OWN per-core present/pace/audio
