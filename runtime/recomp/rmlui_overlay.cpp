@@ -6,10 +6,10 @@
 // compatible approach. Rows carry attributes the C++ reads: toggle / adjust / action.
 //
 // Brought up on the port's existing SDL_GPU device via RmlRenderInterfaceGpu (records into the present
-// render pass the present path hands it). ESC toggles the menu; quit
-// lives in the menu's "Quit Game" row. The public C entry points keep the historical rmlui_overlay_*
-// names so gpu_gpu.cpp / overlay_glue.cpp and pad_input.cpp's rmlui_overlay_wants_keyboard link
-// unchanged. Built as C++ and linked into the otherwise-C port.
+// render pass the present path hands it). ESC toggles the menu; quit lives in the menu's "Quit Game"
+// row. All UI state lives on the `RmlOverlay` singleton (one window per process); the legacy
+// `rmlui_overlay_*` free entry points are one-liners at the bottom that dispatch through it. Built as
+// C++ and linked into the otherwise-C port.
 
 #include "rmlui_overlay.h"
 #include "rmlui_render_gpu.h"
@@ -41,28 +41,40 @@ extern "C" {
 extern "C" int cfg_on(const char* name);    // cfg.c
 void gpu_gpu_video_status(int* native_w, int* ires, int* fbw, int* fbh, int* ww, int* wh, int* ires_cap);
 
-// ---- static state ---------------------------------------------------------------------------------
-static bool s_inited = false;
-static bool s_visible = false;          // ESC opens it; starts hidden
-static bool s_options_mode = false;     // stands in for the game's in-game Options menu
-
-static SDL_Window* s_win = nullptr;
-static Rml::Context* s_ctx = nullptr;
-static Rml::ElementDocument* s_doc = nullptr;
-static SystemInterface_SDL* s_sys = nullptr;
-static RmlRenderInterfaceGpu* s_render = nullptr;
-static int s_active_tab = 0;
-
-// Live world readout, pushed each frame from gpu_gpu before NewFrame.
-static int s_wpos[3] = {0,0,0};
-static uint32_t s_wstage = 0;
-static int s_wvalid = 0;
-
-extern "C" void rmlui_overlay_set_world(int x, int y, int z, unsigned stage) {
-    s_wpos[0] = x; s_wpos[1] = y; s_wpos[2] = z; s_wstage = stage; s_wvalid = 1;
+// ---- singleton -----------------------------------------------------------------------------------
+RmlOverlay& RmlOverlay::instance() {
+    static RmlOverlay inst;
+    return inst;
 }
 
-// ---- value formatting / live mod state per row ----------------------------------------------------
+// ---- typed accessors for the void* handles stored on the class ----------------------------------
+// The header keeps RmlUi types out (so C callers can include it). Impl-side helpers cast back.
+static inline Rml::Context*         ctx_(void* p)  { return (Rml::Context*)p; }
+static inline Rml::ElementDocument* doc_(void* p)  { return (Rml::ElementDocument*)p; }
+
+// ---- per-element event listeners (implementation-only classes) ----------------------------------
+// TabClick calls back into the singleton so all UI state stays on RmlOverlay.
+class TabClick : public Rml::EventListener {
+public:
+    explicit TabClick(int i) : idx(i) {}
+    void ProcessEvent(Rml::Event&) override { RmlOverlay::instance().setActiveTab(idx); }
+private:
+    int idx;
+};
+
+class RowClick : public Rml::EventListener {
+public:
+    void ProcessEvent(Rml::Event& e) override {
+        if (Rml::Element* el = e.GetCurrentElement()) {
+            el->Focus();
+            RmlOverlay::instance().activateFocused(+1);
+        }
+    }
+};
+
+using TabListVec = std::vector<std::unique_ptr<TabClick>>;
+
+// ---- value formatting / live mod state per row --------------------------------------------------
 static std::string fmt_f(float v, int prec) { char b[32]; snprintf(b, sizeof b, "%.*f", prec, v); return b; }
 
 // Build the <value> text for a row given its attribute kind/id. Returns false if unknown.
@@ -130,8 +142,9 @@ static void do_adjust(const std::string& id, int dir) {
     mods_save();
 }
 
-// ---- value-text + readout refresh -----------------------------------------------------------------
-static void set_row_value(Rml::Element* row) {
+// ---- value-text + readout refresh ---------------------------------------------------------------
+void RmlOverlay::setRowValue(void* rowRaw) {
+    Rml::Element* row = (Rml::Element*)rowRaw;
     std::string id, kind;
     if (!(id = row->GetAttribute<Rml::String>("toggle", "")).empty()) kind = "toggle";
     else if (!(id = row->GetAttribute<Rml::String>("adjust", "")).empty()) kind = "adjust";
@@ -142,163 +155,171 @@ static void set_row_value(Rml::Element* row) {
         if (v->GetInnerRML() != txt) v->SetInnerRML(txt);
 }
 
-static void refresh_all_rows() {
-    if (!s_doc) return;
+void RmlOverlay::refreshAllRows() {
+    Rml::ElementDocument* d = doc_(mDoc);
+    if (!d) return;
     Rml::ElementList rows;
-    s_doc->GetElementsByTagName(rows, "select-button");
-    for (Rml::Element* r : rows) set_row_value(r);
+    d->GetElementsByTagName(rows, "select-button");
+    for (Rml::Element* r : rows) setRowValue(r);
 }
 
-static void refresh_readouts() {
-    if (!s_doc) return;
+void RmlOverlay::refreshReadouts() {
+    Rml::ElementDocument* d = doc_(mDoc);
+    if (!d) return;
     int nw = 320, ir = 1, fbw = 320, fbh = 240, ww = 0, wh = 0, cap = 3;
     gpu_gpu_video_status(&nw, &ir, &fbw, &fbh, &ww, &wh, &cap);
     char buf[192];
-    if (Rml::Element* e = s_doc->GetElementById("video_readout")) {
+    if (Rml::Element* e = d->GetElementById("video_readout")) {
         snprintf(buf, sizeof buf, "render %dx%d &middot; window %dx%d &middot; internal %dx", fbw, fbh, ww, wh, ir);
         if (e->GetInnerRML() != buf) e->SetInnerRML(buf);
     }
-    if (Rml::Element* e = s_doc->GetElementById("music_readout")) {
+    if (Rml::Element* e = d->GetElementById("music_readout")) {
         int np = music_list_now_playing();
         std::string txt = (np >= 0 && music_list_name(np))
                             ? (std::string("playing: ") + music_list_name(np)) : "stopped";
         if (e->GetInnerRML() != txt) e->SetInnerRML(txt);
     }
-    if (Rml::Element* e = s_doc->GetElementById("world_readout")) {
+    if (Rml::Element* e = d->GetElementById("world_readout")) {
         std::string txt;
-        if (s_wvalid) {
-            const char* sname = s_wstage == 0x8010637Cu ? "GAME" : s_wstage == 0x801062E4u ? "DEMO"
-                              : s_wstage == 0x8010649Cu ? "START" : "?";
+        if (mWvalid) {
+            const char* sname = mWstage == 0x8010637Cu ? "GAME" : mWstage == 0x801062E4u ? "DEMO"
+                              : mWstage == 0x8010649Cu ? "START" : "?";
             snprintf(buf, sizeof buf, "pos X %d Y %d Z %d &middot; stage %s (0x%08X)",
-                     s_wpos[0], s_wpos[1], s_wpos[2], sname, s_wstage);
+                     mWpos[0], mWpos[1], mWpos[2], sname, mWstage);
             txt = buf;
         }
         if (e->GetInnerRML() != txt) e->SetInnerRML(txt);
     }
 }
 
-// ---- tab + focus navigation (mirrors soh3d's SohRmlUi) --------------------------------------------
-static void apply_visibility();
-
-static void scroll_focus_into_view() {
-    if (!s_ctx) return;
-    if (Rml::Element* f = s_ctx->GetFocusElement())
+// ---- tab + focus navigation (mirrors soh3d's SohRmlUi) ------------------------------------------
+void RmlOverlay::scrollFocusIntoView() {
+    Rml::Context* c = ctx_(mCtx);
+    if (!c) return;
+    if (Rml::Element* f = c->GetFocusElement())
         f->ScrollIntoView(Rml::ScrollIntoViewOptions(Rml::ScrollAlignment::Nearest));
 }
 
-static void focus_first_in_active_pane() {
-    if (!s_doc) return;
+void RmlOverlay::focusFirstInActivePane() {
+    Rml::ElementDocument* d = doc_(mDoc);
+    if (!d) return;
     Rml::ElementList panes;
-    s_doc->GetElementsByTagName(panes, "pane");
-    if (s_active_tab < 0 || s_active_tab >= (int)panes.size()) return;
-    if (Rml::Element* first = panes[s_active_tab]->QuerySelector("select-button")) {
+    d->GetElementsByTagName(panes, "pane");
+    if (mActiveTab < 0 || mActiveTab >= (int)panes.size()) return;
+    if (Rml::Element* first = panes[mActiveTab]->QuerySelector("select-button")) {
         first->Focus();
-        scroll_focus_into_view();
+        scrollFocusIntoView();
     }
 }
 
-static void set_active_tab(int index) {
-    if (!s_ctx || !s_doc) return;
+void RmlOverlay::setActiveTab(int index) {
+    Rml::Context* c = ctx_(mCtx);
+    Rml::ElementDocument* d = doc_(mDoc);
+    if (!c || !d) return;
     Rml::ElementList tabs, panes;
-    s_doc->GetElementsByTagName(tabs, "tab");
-    s_doc->GetElementsByTagName(panes, "pane");
+    d->GetElementsByTagName(tabs, "tab");
+    d->GetElementsByTagName(panes, "pane");
     const int n = (int)std::min(tabs.size(), panes.size());
     if (n == 0) return;
     if (index < 0) index = n - 1; else if (index >= n) index = 0;
-    s_active_tab = index;
+    mActiveTab = index;
     for (int i = 0; i < (int)tabs.size(); i++)  tabs[i]->SetClass("selected", i == index);
     for (int i = 0; i < (int)panes.size(); i++) panes[i]->SetClass("active", i == index);
-    refresh_all_rows();
-    refresh_readouts();
-    s_ctx->Update();
-    focus_first_in_active_pane();
+    refreshAllRows();
+    refreshReadouts();
+    c->Update();
+    focusFirstInActivePane();
 }
 
-static void focus_next() { if (s_ctx) { s_ctx->ProcessKeyDown(Rml::Input::KI_TAB, 0); s_ctx->ProcessKeyUp(Rml::Input::KI_TAB, 0); scroll_focus_into_view(); } }
-static void focus_prev() { if (s_ctx) { s_ctx->ProcessKeyDown(Rml::Input::KI_TAB, Rml::Input::KM_SHIFT); s_ctx->ProcessKeyUp(Rml::Input::KI_TAB, Rml::Input::KM_SHIFT); scroll_focus_into_view(); } }
-static void next_tab()   { set_active_tab(s_active_tab + 1); }
-static void prev_tab()   { set_active_tab(s_active_tab - 1); }
+void RmlOverlay::focusNext() {
+    Rml::Context* c = ctx_(mCtx);
+    if (!c) return;
+    c->ProcessKeyDown(Rml::Input::KI_TAB, 0);
+    c->ProcessKeyUp  (Rml::Input::KI_TAB, 0);
+    scrollFocusIntoView();
+}
+void RmlOverlay::focusPrev() {
+    Rml::Context* c = ctx_(mCtx);
+    if (!c) return;
+    c->ProcessKeyDown(Rml::Input::KI_TAB, Rml::Input::KM_SHIFT);
+    c->ProcessKeyUp  (Rml::Input::KI_TAB, Rml::Input::KM_SHIFT);
+    scrollFocusIntoView();
+}
 
 // Activate (Enter/A) or step (Left/Right with dir) the focused row.
-static void activate_focused(int dir) {
-    if (!s_ctx) return;
-    Rml::Element* f = s_ctx->GetFocusElement();
+void RmlOverlay::activateFocused(int dir) {
+    Rml::Context* c = ctx_(mCtx);
+    if (!c) return;
+    Rml::Element* f = c->GetFocusElement();
     if (!f) return;
     std::string id;
     if (!(id = f->GetAttribute<Rml::String>("action", "")).empty()) {
-        if (id == "quit") { fprintf(stderr, "[rmlui] quit from menu\n"); exit(0); }
-        if (id == "close") { s_visible = false; apply_visibility(); }
+        if (id == "quit")  { fprintf(stderr, "[rmlui] quit from menu\n"); exit(0); }
+        if (id == "close") { mVisible = false; applyVisibility(); }
         // Sound Test: action="music_<n>" plays catalogued track n; action="music_stop" stops.
         if (id.rfind("music_", 0) == 0) {
             if (id == "music_stop") music_list_stop();
             else music_list_play(atoi(id.c_str() + 6));
-            refresh_readouts();
+            refreshReadouts();
         }
         return;
     }
-    if (!(id = f->GetAttribute<Rml::String>("toggle", "")).empty()) { do_toggle(id); set_row_value(f); return; }
-    if (!(id = f->GetAttribute<Rml::String>("adjust", "")).empty()) { do_adjust(id, dir); set_row_value(f); return; }
+    if (!(id = f->GetAttribute<Rml::String>("toggle", "")).empty()) { do_toggle(id); setRowValue(f); return; }
+    if (!(id = f->GetAttribute<Rml::String>("adjust", "")).empty()) { do_adjust(id, dir); setRowValue(f); return; }
 }
 
-// Click handler bound to each <tab> so a mouse click also switches tabs.
-class TabClick : public Rml::EventListener {
-public:
-    explicit TabClick(int i) : idx(i) {}
-    void ProcessEvent(Rml::Event&) override { set_active_tab(idx); }
-private: int idx;
-};
-static std::vector<std::unique_ptr<TabClick>> s_tab_listeners;
+void RmlOverlay::attachHandlers() {
+    Rml::ElementDocument* d = doc_(mDoc);
+    if (!d) return;
+    if (!mTabListeners) mTabListeners = new TabListVec();
+    if (!mRowListener)  mRowListener  = new RowClick();
+    TabListVec* tabs_vec = (TabListVec*)mTabListeners;
+    RowClick*   row_l    = (RowClick*)mRowListener;
 
-// Click handler bound to each <select-button> so a mouse click activates it.
-class RowClick : public Rml::EventListener {
-public:
-    void ProcessEvent(Rml::Event& e) override {
-        if (Rml::Element* el = e.GetCurrentElement()) { el->Focus(); activate_focused(+1); }
-    }
-};
-static RowClick s_row_listener;
-
-static void attach_handlers() {
-    if (!s_doc) return;
     Rml::ElementList tabs;
-    s_doc->GetElementsByTagName(tabs, "tab");
-    s_tab_listeners.clear();
+    d->GetElementsByTagName(tabs, "tab");
+    tabs_vec->clear();
     for (int i = 0; i < (int)tabs.size(); i++) {
         auto l = std::make_unique<TabClick>(i);
         tabs[i]->AddEventListener("click", l.get());
-        s_tab_listeners.push_back(std::move(l));
+        tabs_vec->push_back(std::move(l));
     }
     Rml::ElementList rows;
-    s_doc->GetElementsByTagName(rows, "select-button");
-    for (Rml::Element* r : rows) r->AddEventListener("click", &s_row_listener);
+    d->GetElementsByTagName(rows, "select-button");
+    for (Rml::Element* r : rows) r->AddEventListener("click", row_l);
 }
 
-static void apply_visibility() {
-    if (!s_doc) return;
-    if (s_visible) {
-        s_doc->Show();
-        if (s_ctx) s_ctx->Update();
-        set_active_tab(s_active_tab);   // shows the pane, refreshes values, focuses the first row
+void RmlOverlay::applyVisibility() {
+    Rml::ElementDocument* d = doc_(mDoc);
+    if (!d) return;
+    if (mVisible) {
+        d->Show();
+        if (Rml::Context* c = ctx_(mCtx)) c->Update();
+        setActiveTab(mActiveTab);   // shows the pane, refreshes values, focuses the first row
     } else {
-        if (s_ctx) if (Rml::Element* fe = s_ctx->GetFocusElement()) fe->Blur();
-        s_doc->Hide();
+        if (Rml::Context* c = ctx_(mCtx))
+            if (Rml::Element* fe = c->GetFocusElement()) fe->Blur();
+        d->Hide();
     }
 }
 
-// ---- init -----------------------------------------------------------------------------------------
-void rmlui_overlay_init(SDL_Window* win, SDL_GPUDevice* dev, SDL_GPUTextureFormat swap_fmt) {
-    if (s_inited) return;
-    s_win = win;
+// ---- init ---------------------------------------------------------------------------------------
+void RmlOverlay::init(SDL_Window* win, SDL_GPUDevice* dev, SDL_GPUTextureFormat swap_fmt) {
+    if (mInited) return;
+    mWin = win;
 
-    s_render = new RmlRenderInterfaceGpu();
-    if (!s_render->Init(dev, swap_fmt)) {
+    auto* render = new RmlRenderInterfaceGpu();
+    if (!render->Init(dev, swap_fmt)) {
         fprintf(stderr, "[rmlui] render interface init failed; overlay disabled\n");
-        delete s_render; s_render = nullptr; return;
+        delete render; return;
     }
-    s_sys = new SystemInterface_SDL();
-    s_sys->SetWindow(win);
-    Rml::SetSystemInterface(s_sys);
-    Rml::SetRenderInterface(s_render);
+    mRender = render;
+
+    auto* sys = new SystemInterface_SDL();
+    sys->SetWindow(win);
+    mSys = sys;
+    Rml::SetSystemInterface(sys);
+    Rml::SetRenderInterface(render);
     if (!Rml::Initialise()) { fprintf(stderr, "[rmlui] Rml::Initialise failed; overlay disabled\n"); return; }
 
     const char* fonts[] = {
@@ -312,113 +333,137 @@ void rmlui_overlay_init(SDL_Window* win, SDL_GPUDevice* dev, SDL_GPUTextureForma
 
     int ww = 0, wh = 0; SDL_GetWindowSize(win, &ww, &wh);
     if (ww <= 0) ww = 1280; if (wh <= 0) wh = 720;
-    s_ctx = Rml::CreateContext("tomba2_menu", Rml::Vector2i(ww, wh));
-    if (!s_ctx) { fprintf(stderr, "[rmlui] CreateContext failed\n"); return; }
-    Rml::Debugger::Initialise(s_ctx);
+    Rml::Context* c = Rml::CreateContext("tomba2_menu", Rml::Vector2i(ww, wh));
+    if (!c) { fprintf(stderr, "[rmlui] CreateContext failed\n"); return; }
+    mCtx = c;
+    Rml::Debugger::Initialise(c);
 
-    s_doc = s_ctx->LoadDocument("assets/rml/menu.rml");
-    if (!s_doc) {
+    Rml::ElementDocument* d = c->LoadDocument("assets/rml/menu.rml");
+    if (!d) {
         fprintf(stderr, "[rmlui] LoadDocument(assets/rml/menu.rml) FAILED — menu unavailable\n");
     } else {
-        attach_handlers();
-        refresh_all_rows();
-        s_doc->Hide();   // start hidden; ESC shows it
+        mDoc = d;
+        attachHandlers();
+        refreshAllRows();
+        d->Hide();   // start hidden; ESC shows it
     }
 
-    s_inited = true;
+    mInited = true;
     fprintf(stderr, "[rmlui] overlay up (ESC to toggle the menu)\n");
 }
 
-void rmlui_overlay_shutdown(void) {
-    if (!s_inited) return;
+void RmlOverlay::shutdown() {
+    if (!mInited) return;
     Rml::Shutdown();   // destroys contexts/documents
-    s_ctx = nullptr; s_doc = nullptr;
-    s_tab_listeners.clear();
-    if (s_render) { s_render->Shutdown(); delete s_render; s_render = nullptr; }
-    if (s_sys) { delete s_sys; s_sys = nullptr; }
-    s_inited = false;
+    mCtx = nullptr; mDoc = nullptr;
+    if (mTabListeners) { delete (TabListVec*)mTabListeners; mTabListeners = nullptr; }
+    if (mRowListener)  { delete (RowClick*)mRowListener;    mRowListener  = nullptr; }
+    if (mRender) { ((RmlRenderInterfaceGpu*)mRender)->Shutdown(); delete (RmlRenderInterfaceGpu*)mRender; mRender = nullptr; }
+    if (mSys)    { delete (SystemInterface_SDL*)mSys; mSys = nullptr; }
+    mInited = false;
 }
 
-// ---- event pump -----------------------------------------------------------------------------------
-void rmlui_overlay_event(const SDL_Event* e) {
-    if (!s_inited || !e) return;
+// ---- event pump ---------------------------------------------------------------------------------
+void RmlOverlay::event(const SDL_Event* e) {
+    if (!mInited || !e) return;
+    Rml::Context* c = ctx_(mCtx);
     // ESC toggles the menu (the game's old "ESC quits" was removed in gpu_gpu.cpp). In options-mode the
     // game owns visibility (Circle/Triangle), so don't fight it. (SDL3 event/key field names.)
-    if (!s_options_mode && e->type == SDL_EVENT_KEY_DOWN && !e->key.repeat &&
+    if (!mOptionsMode && e->type == SDL_EVENT_KEY_DOWN && !e->key.repeat &&
         e->key.scancode == SDL_SCANCODE_ESCAPE) {
-        s_visible = !s_visible; apply_visibility(); return;
+        mVisible = !mVisible; applyVisibility(); return;
     }
     if (e->type == SDL_EVENT_KEY_DOWN && !e->key.repeat && e->key.scancode == SDL_SCANCODE_F1) {
         Rml::Debugger::SetVisible(!Rml::Debugger::IsVisible()); return;
     }
-    if (!s_visible || !s_ctx) return;
+    if (!mVisible || !c) return;
 
     // Menu open: arrows = nav, Enter/A = activate, Left/Right on a numeric row = step (else change tab),
     // mouse/text via the SDL platform shim.
     if (e->type == SDL_EVENT_KEY_DOWN) {
         switch (e->key.key) {
-            case SDLK_DOWN:  focus_next(); return;
-            case SDLK_UP:    focus_prev(); return;
+            case SDLK_DOWN:  focusNext(); return;
+            case SDLK_UP:    focusPrev(); return;
             case SDLK_RIGHT: {
-                Rml::Element* f = s_ctx->GetFocusElement();
+                Rml::Element* f = c->GetFocusElement();
                 std::string id = f ? f->GetAttribute<Rml::String>("adjust", "") : std::string();
-                if (!id.empty()) { do_adjust(id, +1); set_row_value(f); } else next_tab();
+                if (!id.empty()) { do_adjust(id, +1); setRowValue(f); } else nextTab();
                 return;
             }
             case SDLK_LEFT: {
-                Rml::Element* f = s_ctx->GetFocusElement();
+                Rml::Element* f = c->GetFocusElement();
                 std::string id = f ? f->GetAttribute<Rml::String>("adjust", "") : std::string();
-                if (!id.empty()) { do_adjust(id, -1); set_row_value(f); } else prev_tab();
+                if (!id.empty()) { do_adjust(id, -1); setRowValue(f); } else prevTab();
                 return;
             }
-            case SDLK_RETURN: case SDLK_KP_ENTER: case SDLK_SPACE: activate_focused(+1); return;
-            default: { SDL_Event ev = *e; RmlSDL::InputEventHandler(s_ctx, s_win, ev); return; }
+            case SDLK_RETURN: case SDLK_KP_ENTER: case SDLK_SPACE: activateFocused(+1); return;
+            default: { SDL_Event ev = *e; RmlSDL::InputEventHandler(c, mWin, ev); return; }
         }
     }
     // Mouse / wheel / keyup / text -> the SDL platform shim (hover, clicks, scrolling).
     SDL_Event ev = *e;
-    RmlSDL::InputEventHandler(s_ctx, s_win, ev);
+    RmlSDL::InputEventHandler(c, mWin, ev);
 }
 
-void rmlui_overlay_set_visible(int v) { s_visible = (v != 0); apply_visibility(); }
-void rmlui_overlay_set_options_mode(int v) { s_options_mode = (v != 0); }
+void RmlOverlay::setVisible(bool v)                            { mVisible = v; applyVisibility(); }
+void RmlOverlay::setWorld(int x, int y, int z, unsigned stage) { mWpos[0]=x; mWpos[1]=y; mWpos[2]=z; mWstage=stage; mWvalid=true; }
 
-// pad_input.cpp suppresses gameplay keyboard input while this returns nonzero. The menu uses arrow/Enter
+// pad_input.cpp suppresses gameplay keyboard input while this returns true. The menu uses arrow/Enter
 // nav (not typing), so we suppress whenever the menu is OPEN — otherwise arrow keys would also drive
 // Tomba. (No text fields exist in this menu; the input/textarea checks are kept for completeness.)
-extern "C" int rmlui_overlay_wants_keyboard(void) {
-    if (!s_inited || !s_ctx) return 0;
-    if (s_visible) return 1;
-    Rml::Element* fe = s_ctx->GetFocusElement();
-    if (!fe) return 0;
+bool RmlOverlay::wantsKeyboard() const {
+    Rml::Context* c = ctx_(mCtx);
+    if (!mInited || !c) return false;
+    if (mVisible) return true;
+    Rml::Element* fe = c->GetFocusElement();
+    if (!fe) return false;
     const Rml::String& tag = fe->GetTagName();
-    if (tag == "input") { Rml::String t = fe->GetAttribute<Rml::String>("type", "text"); if (t == "text" || t == "password") return 1; }
-    if (tag == "textarea") return 1;
-    return 0;
+    if (tag == "input") { Rml::String t = fe->GetAttribute<Rml::String>("type", "text"); if (t == "text" || t == "password") return true; }
+    if (tag == "textarea") return true;
+    return false;
 }
 
-// ---- per-frame ------------------------------------------------------------------------------------
-void rmlui_overlay_new_frame(void) {
-    if (!s_inited || !s_ctx) return;
-    if (s_win) {
-        int ww = 0, wh = 0; SDL_GetWindowSize(s_win, &ww, &wh);
+// ---- per-frame ----------------------------------------------------------------------------------
+void RmlOverlay::newFrame() {
+    Rml::Context* c = ctx_(mCtx);
+    if (!mInited || !c) return;
+    if (mWin) {
+        int ww = 0, wh = 0; SDL_GetWindowSize(mWin, &ww, &wh);
         if (ww > 0 && wh > 0) {
-            Rml::Vector2i cur = s_ctx->GetDimensions();
-            if (cur.x != ww || cur.y != wh) s_ctx->SetDimensions(Rml::Vector2i(ww, wh));
+            Rml::Vector2i cur = c->GetDimensions();
+            if (cur.x != ww || cur.y != wh) c->SetDimensions(Rml::Vector2i(ww, wh));
         }
     }
-    if (s_visible) refresh_readouts();   // keep the live video/world status lines current
-    s_ctx->Update();
+    if (mVisible) refreshReadouts();   // keep the live video/world status lines current
+    c->Update();
 }
 
-// Record the menu geometry into the present render pass. overlay_glue passes the FULL window size so the
-// menu covers the whole window.
+// Record the menu geometry into the present render pass. overlay_glue passes the FULL window size so
+// the menu covers the whole window.
+void RmlOverlay::recordGpu(SDL_GPUCommandBuffer* cmd, SDL_GPURenderPass* rp, int win_w, int win_h) {
+    Rml::Context* c = ctx_(mCtx);
+    if (!mInited || !c || !mRender) return;
+    if (!mVisible) return;
+    auto* r = (RmlRenderInterfaceGpu*)mRender;
+    r->BeginFrame(cmd, rp, win_w, win_h);
+    c->Render();
+    r->EndFrame();
+}
+
+// ---- Legacy free-function bridges — one-liners over the singleton -------------------------------
+extern "C" {
+void rmlui_overlay_init(SDL_Window* win, SDL_GPUDevice* dev, SDL_GPUTextureFormat swap_fmt) {
+    RmlOverlay::instance().init(win, dev, swap_fmt);
+}
+void rmlui_overlay_shutdown(void)                       { RmlOverlay::instance().shutdown(); }
+void rmlui_overlay_event(const SDL_Event* e)            { RmlOverlay::instance().event(e); }
+void rmlui_overlay_new_frame(void)                      { RmlOverlay::instance().newFrame(); }
 void rmlui_overlay_record_gpu(SDL_GPUCommandBuffer* cmd, SDL_GPURenderPass* rp, int win_w, int win_h) {
-    if (!s_inited || !s_ctx || !s_render) return;
-    if (!s_visible) return;
-    s_render->BeginFrame(cmd, rp, win_w, win_h);
-    s_ctx->Render();
-    s_render->EndFrame();
+    RmlOverlay::instance().recordGpu(cmd, rp, win_w, win_h);
 }
-
-int rmlui_overlay_inited(void) { return s_inited ? 1 : 0; }
+int  rmlui_overlay_inited(void)                         { return RmlOverlay::instance().inited() ? 1 : 0; }
+void rmlui_overlay_set_visible(int v)                   { RmlOverlay::instance().setVisible(v != 0); }
+void rmlui_overlay_set_options_mode(int v)              { RmlOverlay::instance().setOptionsMode(v != 0); }
+void rmlui_overlay_set_world(int x, int y, int z, unsigned s) { RmlOverlay::instance().setWorld(x, y, z, s); }
+int  rmlui_overlay_wants_keyboard(void)                 { return RmlOverlay::instance().wantsKeyboard() ? 1 : 0; }
+}
