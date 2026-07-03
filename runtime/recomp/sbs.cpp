@@ -149,7 +149,8 @@ public:
   bool  isRenderSpad(uint32_t a) const;
   bool  isCdCacheNoise(uint32_t a) const;
   bool  isAudioNoise(uint32_t a) const;
-  bool  isDiffNoise(uint32_t a) const { return isRenderRegion(a) || isCdCacheNoise(a) || isAudioNoise(a); }
+  bool  isObjectPoolNoise(uint32_t a) const;
+  bool  isDiffNoise(uint32_t a) const { return isRenderRegion(a) || isCdCacheNoise(a) || isAudioNoise(a) || isObjectPoolNoise(a); }
   static bool isSpad(uint32_t a) { return a >= 0x1F800000u && a < 0x1F800400u; }
   void  capBt(Core* c, char* buf, size_t n);
   bool  navStep(Core* c, Nav& nv, uint32_t f, const char* tag);
@@ -211,6 +212,30 @@ bool Sbs::Impl::isCdCacheNoise(uint32_t a) const {
 bool Sbs::Impl::isAudioNoise(uint32_t a) const {
   if (mMode == M_RENDER) return false;
   if (a >= 0x800BE238u && a < 0x800BE360u) return true;   // 24-voice × 12-byte SPU state + mask
+  return false;
+}
+
+// Object-list arena offset. In FULL / GAMEPLAY modes native gp (core A) and PSX substrate gp (core B)
+// allocate their per-list-slot object nodes at different arena positions (their pool head starts at the
+// same value 0x800F7734 but the two paths add objects at different rates during boot, so by field entry
+// the list-head pointer array at 0x800ED550..0x800EDF00 stores the same object types at different
+// addresses — verified 2026-07-03 in $CLAUDE_JOB_DIR/tmp/full5.log: both cores write the same head
+// 0x800F7734 at f28/f30, then diverge as objects allocate). The divergence is a fixed-delta pointer
+// offset (~10676 B on one repro = 157 × 68-byte objects); every entry in the pointer array inherits
+// it. NO gameplay code reads a literal 0x800F77xx / 0x800F4Dxx address (grep -E '0x800F77[0-9a-fA-F]{2}
+// |0x800F4D[0-9a-fA-F]{2}' game/ runtime/ = 0 hits), so the offset is invisible to game logic — it's
+// implementation noise, not a gameplay bug. Only the LIST HEADS at 0x800ED550+ are excluded (~1KB); the
+// actual object storage on the 0x800F0000 page is KEPT in the diff so real per-object state divergences
+// surface. In RENDER mode both cores are native gp — no allocator divergence, keep the whole diff.
+bool Sbs::Impl::isObjectPoolNoise(uint32_t a) const {
+  if (mMode == M_RENDER) return false;
+  if (a >= 0x800ED550u && a < 0x800EDF00u) return true;   // 3-list × N-slot pointer array (list heads)
+  // Field-frame counter — engine_stage.cpp:393 unconditional `mem_w32(0x800BF878, prev+1)`. Native
+  // gp (A) and PSX substrate gp (B) both tick it once per Engine::fieldFrame call, but the two
+  // paths enter the field at slightly different boot frames (native reaches it one frame earlier
+  // than the PSX coroutine yields into it), so the counter runs off-by-one for the whole session.
+  // Bounded, timing-only, no gameplay reader consumes the exact value — filter in FULL/GAMEPLAY.
+  if (a >= 0x800BF878u && a < 0x800BF87Cu) return true;
   return false;
 }
 
@@ -282,7 +307,7 @@ void Sbs::Impl::recordDivergence(uint32_t addr) {
   uint32_t end_addr = spad ? 0x1F800400u : mHi;
   uint32_t last = addr, gap = 0;
   for (uint32_t x = addr + 1; x < end_addr && gap < 64; x++) {
-    bool noise = spad ? isRenderSpad(x) : isRenderRegion(x);
+    bool noise = spad ? isRenderSpad(x) : isDiffNoise(x);
     if (mA->core.mem_r8(x) != mB->core.mem_r8(x) && !noise) { last = x; gap = 0; } else gap++;
   }
   mDivFound = true; mDivFrame = mFrame; mDivAddr = addr; mDivEnd = last + 1;
@@ -528,9 +553,9 @@ int Sbs::Impl::dbgCmd(FILE* out, const char* line) {
     const uint8_t* b = mB->core.ram + (mLo - 0x80000000u);
     uint32_t n = mHi - mLo, spans = 0, bytes = 0, listed = 0;
     for (uint32_t i = 0; i < n; ) {
-      if (a[i] != b[i] && !isRenderRegion(mLo + i)) {
+      if (a[i] != b[i] && !isDiffNoise(mLo + i)) {
         uint32_t start = mLo + i;
-        while (i < n && a[i] != b[i] && !isRenderRegion(mLo + i)) { i++; bytes++; }
+        while (i < n && a[i] != b[i] && !isDiffNoise(mLo + i)) { i++; bytes++; }
         spans++;
         if (listed++ < cap)
           fprintf(out, "  RAM  0x%08X..0x%08X (%u B)  A=%02X%02X%02X%02X B=%02X%02X%02X%02X\n",
@@ -672,10 +697,23 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
 
     if (mWwArmed && mWwHit) {
       // A hit is divergent if only one core wrote (mask != 3) OR both wrote different values.
-      // Identical writes to a shared address don't cause divergence — keep the watch armed and
-      // let the loop advance. Non-PREWATCH `sbs watch` still pauses on the first hit either way
-      // (mWwPersist=false), matching pre-PREWATCH behavior.
-      bool divergent = (mWwHit != 3) || (mWwVa != mWwVb);
+      // BUT: an asymmetric store where both sides wrote the SAME value is boot-timing noise (each
+      // core's boot init writes 0 to the address in a different frame — mask flips to 1 or 2 with
+      // mWwVa/mWwVb still zero). Those aren't real divergence — the address would agree the moment
+      // the other core catches up. So treat "mask asymmetric but values equal (or both zero)" as
+      // NOT divergent: keep the watch armed and continue. Real divergence = mask!=3 with the
+      // written value differing from the OTHER core's current byte value, or both wrote unequal
+      // values (mask==3, va!=vb). Non-PREWATCH `sbs watch` still pauses on the first hit either
+      // way (mWwPersist=false), matching pre-PREWATCH behavior.
+      bool divergent;
+      if (mWwHit == 3) {
+        divergent = (mWwVa != mWwVb);                    // both wrote — pause iff values differ
+      } else {
+        int which_wrote = (mWwHit == 1) ? 0 : 1;         // 0=A wrote, 1=B wrote
+        uint32_t v_written = which_wrote ? mWwVb : mWwVa;
+        uint32_t v_other   = which_wrote ? mA->core.mem_r8(mWwAddr) : mB->core.mem_r8(mWwAddr);
+        divergent = (v_written != v_other);              // asymmetric — pause iff writer's value ≠ other's current
+      }
       if (divergent || !mWwPersist) {
         fprintf(stderr, "[sbs] write-watch caught 0x%08X (A=%08X B=%08X, mask=%d) at frame %u — paused; see `sbs bt`.\n",
                 mWwAddr, mWwVa, mWwVb, mWwHit, mFrame);
