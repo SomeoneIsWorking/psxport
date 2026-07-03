@@ -152,6 +152,11 @@ public:
   void  applyMode(Game* g, int which);
   void  recordDivergence(uint32_t addr);
   void  checkDivergence();
+  // Per-frame divergence SUMMARY: count differing bytes (excluding render noise) across main RAM
+  // + scratchpad and log a one-line report each `every` frames. Doesn't pause on the first byte
+  // (that's `checkDivergence()`); it surfaces the running "how far apart are the two cores" number
+  // so a divergence trend is visible even before checkDivergence trips.
+  void  summarizeDivergence(uint32_t every);
   void  stepCore(Game* g, int which);
   void  grabPane(Game* g, uint8_t* rgba, int* ow, int* oh);
   void  presentPanes() { sbs_rl_present(mA, mRgbaA, mWa, mHa, mRgbaB, mWb, mHb); }
@@ -253,12 +258,40 @@ void Sbs::Impl::recordDivergence(uint32_t addr) {
 }
 
 void Sbs::Impl::checkDivergence() {
+  if (mDivFound) return;   // first-hit only: recordDivergence already captured + paused
   const uint8_t* a = mA->core.ram + (mLo - 0x80000000u);
   const uint8_t* b = mB->core.ram + (mLo - 0x80000000u);
   uint32_t n = mHi - mLo;
   for (uint32_t i = 0; i < n; i++) if (a[i] != b[i] && !isRenderRegion(mLo + i)) { recordDivergence(mLo + i); return; }
   for (uint32_t i = 0; i < 0x400; i++)
     if (mA->core.scratch[i] != mB->core.scratch[i] && !isRenderSpad(0x1F800000u + i)) { recordDivergence(0x1F800000u + i); return; }
+}
+
+void Sbs::Impl::summarizeDivergence(uint32_t every) {
+  if (!every || (mFrame % every) != 0) return;
+  const uint8_t* a = mA->core.ram + (mLo - 0x80000000u);
+  const uint8_t* b = mB->core.ram + (mLo - 0x80000000u);
+  uint32_t n = mHi - mLo;
+  uint32_t nDiff = 0, firstAddr = 0, lastAddr = 0;
+  for (uint32_t i = 0; i < n; i++) {
+    if (a[i] == b[i]) continue;
+    if (isRenderRegion(mLo + i)) continue;
+    if (!nDiff) firstAddr = mLo + i;
+    lastAddr = mLo + i;
+    nDiff++;
+  }
+  uint32_t nSpad = 0;
+  for (uint32_t i = 0; i < 0x400; i++) {
+    if (mA->core.scratch[i] == mB->core.scratch[i]) continue;
+    if (isRenderSpad(0x1F800000u + i)) continue;
+    nSpad++;
+  }
+  if (nDiff == 0 && nSpad == 0) {
+    fprintf(stderr, "[sbs] f%u: A/B identical (mode=%s)\n", mFrame, modeName());
+  } else {
+    fprintf(stderr, "[sbs] f%u: A/B differ in %u RAM bytes [0x%08X..0x%08X] + %u scratchpad bytes (mode=%s)\n",
+            mFrame, nDiff, firstAddr, lastAddr, nSpad, modeName());
+  }
 }
 
 // Step ONE core's frame for the SBS composite: diff_mode=1 suppresses its OWN per-core present/pace/audio
@@ -521,6 +554,15 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
     stepCore(mA, 0); grabPane(mA, mRgbaA, &mWa, &mHa);
     stepCore(mB, 1); grabPane(mB, mRgbaB, &mWb, &mHb);
     presentPanes();
+    // Parity surface: with both cores past AUTO-NAV, name any RAM/scratchpad divergence. On the
+    // FIRST byte that differs, `checkDivergence` records the range + backtraces + pauses (via the
+    // debug server) so `sbs diff` / `sbs bt` / `sbs watch` can inspect. The 30-frame summary is
+    // the running "how far apart are they" metric so you see divergence GROW even before the first
+    // recorded hit (in render/full modes the render regions are excluded by design).
+    if (nav_done) {
+      summarizeDivergence(30);
+      checkDivergence();
+    }
     if (sbsDumpPath && nav_done && !dumped && mWa > 0 && mWb > 0) { dumpPpm(sbsDumpPath); dumped = true; }
 
     if (mWwArmed && mWwHit) {
