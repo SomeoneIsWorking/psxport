@@ -276,6 +276,13 @@ bool Sbs::Impl::isCdCacheNoise(uint32_t a) const {
   // 800ABFD0 media-serial by the CD file-search primitive, sets on rescan; no gameplay reader).
   if (a >= 0x800AC280u && a < 0x800AC300u) return true;
   if (a >= 0x801026E8u && a < 0x80102790u) return true;   // per-cache-entry result buffer
+  // Populated at boot by FUN_8008BF50's inner loop (writer pc=0x8008A00C, base s5=0x80102768,
+  // loop bumps s5 by entries with filenames like "BGM.XA;1" / "DEMO.XA;1" / "SWDATA.BIN"). This is
+  // the libcd directory-entry cache — an internal file-search accelerator populated by the recomp
+  // path during CD library init. Native path bypasses it entirely (disc_find_file resolves paths
+  // via native ISO9660 without needing the cache). B populates ~600B of table content; A leaves
+  // zeros. No native code reads this range, so the divergence is CD-library implementation noise.
+  if (a >= 0x80102790u && a < 0x80102D44u) return true;   // libcd dir-entry cache (post-EBD8 gap)
   if (a >= 0x80102D44u && a < 0x80104344u) return true;   // 128-entry cache table (stride 0x2C)
   if (a >= 0x80104368u && a < 0x80104B80u) return true;   // directory-scratch sector buffer
   return false;
@@ -289,6 +296,12 @@ bool Sbs::Impl::isCdCacheNoise(uint32_t a) const {
 bool Sbs::Impl::isAudioNoise(uint32_t a) const {
   if (mMode == M_RENDER) return false;
   if (a >= 0x800BE238u && a < 0x800BE360u) return true;   // 24-voice × 12-byte SPU state + mask
+  // libsnd internal state block populated at ~f148 by fn 0x80092680 (SPU voice selection wrapper
+  // calling FUN_800962B0). Contains per-voice ADSR / envelope / channel-mask fields. Native
+  // (core A) drives audio via spu_audio directly, bypassing libsnd; recomp (core B) runs libsnd
+  // which fills this block. No native code reads it — implementation noise, same class as
+  // 0x800BE238 above. Range measured from the actual diff bytes at f217 (0x80105848..0x80105DXX).
+  if (a >= 0x80105848u && a < 0x80105E00u) return true;   // libsnd voice state block
   return false;
 }
 
