@@ -51,6 +51,9 @@ static inline uint32_t leaf4r(Core* c, uint32_t a0, uint32_t a1, uint32_t a2, ui
 void beh_flagbit_timer_machine(Core* c) {
   uint32_t nd = c->r[4];                          // s1 = a0 (node)
   uint32_t s0 = c->mem_r8(nd + 4);                // node[4] = outer state
+  if (getenv("PSXPORT_FLAGBIT_ENTRY"))
+    fprintf(stderr, "[flagbit-entry] core=%p node=%08X s0=%u stage=%08X\n",
+            (void*)c, nd, s0, c->mem_r32(0x801fe00c));
 
   if (s0 == 1) goto L42c;
   if ((int32_t)s0 < 2) { if (s0 == 0) goto S0; goto Lret; }

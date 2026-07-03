@@ -160,6 +160,19 @@ void rec_dispatch(Core* c, uint32_t addr) {
   // the oracle uses it. The native port Core (use_interp==0) takes the substrate route below.
   if (c->use_interp) { interp_run(c, addr); return; }
   if (cfg_dbg("recdep")) { static int reg=0; if(!reg){reg=1;atexit(recdep_dump);} s_recdep[(addr & 0x1FFFFFFF) | 0x80000000]++; }
+  // Attack (a) probe: attribute rec_dispatch calls to specific overlay handlers. Env=hex address, e.g.
+  // PSXPORT_DISPWATCH=0x8013B2E4. Prints per-core when reached; distinguishes "B never dispatches this
+  // handler" (real gap) from "B dispatches but the resident overlay isn't A00" (loader gap).
+  static uint32_t s_dw = (uint32_t)-1;
+  if (s_dw == (uint32_t)-1) { const char* e = getenv("PSXPORT_DISPWATCH"); s_dw = e ? (uint32_t)strtoul(e, 0, 0) : 0; }
+  if (s_dw && (addr & 0x1FFFFFFF) == (s_dw & 0x1FFFFFFF)) {
+    Sbs* sbs = c->game ? c->game->sbs : 0;
+    int cid = sbs ? sbs->coreId(c) : -1;
+    uint32_t nd = c->r[4];
+    uint32_t s0 = (nd & 0x1FFFFFFF) < 0x200000 ? c->mem_r8(nd + 4) : 0xff;
+    fprintf(stderr, "[dispwatch] core=%c addr=%08X node=%08X s0=%u stage=%08X\n",
+            cid < 0 ? '?' : (cid ? 'B' : 'A'), addr, nd, s0, c->mem_r32(0x801fe00c));
+  }
   uint32_t a = addr & 0x1FFFFFFF;
   if (a >= REC_MAIN_LO && a < REC_MAIN_HI) { main_dispatch(c, addr); return; }
   for (int i = 0; i < g_rec_overlay_count; i++) {

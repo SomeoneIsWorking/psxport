@@ -1,6 +1,33 @@
 # Findings — SBS dual-core compare harness (PSXPORT_SBS)
 
-## 3-slot 0x800ED098 delta CALLER NAMED — native `beh_flagbit_timer_machine` (FUN_8013B2E4) fires on A but NOT on B; each STATE 0 entry runs FUN_800519E0(node, count=3, …) = 3 record allocs
+## 3-slot 0x800ED098 delta caller **FALSIFIED** — flagbit_timer_machine STATE 0 fires 2× on BOTH cores (recomp path on B verified); +3 net source still unattributed
+- **finding (2026-07-03, dispwatch probe on rec_dispatch to 0x8013B2E4):** Landed a per-address per-core dispatch counter in `overlay_router.cpp:rec_dispatch` (env `PSXPORT_DISPWATCH=0x…`, logs `[dispwatch] core=A|B addr=… node=… s0=… stage=…`). Runs in the router before slot-based routing, so it catches every rec_dispatch to the watched address regardless of overlay residency.
+- **result — B DOES reach FUN_8013B2E4 via recomp, and hits STATE 0 the same 2 times as native A:**
+  ```
+  === A native beh_flagbit_timer_machine entries (PSXPORT_FLAGBIT_ENTRY=1) ===
+    s0=0:    2 fires (INIT — the 3-record alloc site)
+    s0=1: 6391 fires (RUNNING)
+  === B recomp dispatches to 0x8013B2E4 (PSXPORT_DISPWATCH=…) ===
+    s0=0:    2 fires  ← same INIT count as A
+    s0=1: 5329 fires  ← slower RUNNING dispatch (B ~1000 behind A in 30s)
+  ```
+- **so `beh_flagbit_timer_machine` STATE 0 contributes 3+3 = 6 record allocs on BOTH cores — symmetric. Not the source of the +3 net delta.** My prior "A-only fires" claim was measured with a NATIVE-ONLY probe (BehaviorDispatch entry) and didn't check the recomp path; the corrected two-sided probe shows B also runs the same init exactly twice.
+- **the ordinal-390 "3-alloc burst on A that B doesn't do" was a TIMING SHIFT, not a genuine allocation difference:**
+  ```
+  === per-ra decrement counts, full 30s run ===
+  ra=80051A74 (FUN_800519E0 multi-record loop):  A=401  B=401  delta=+0    ← SYMMETRIC
+  ra=80051BC4 (adjacent alloc site):             A= 14  B= 96  delta=-82
+  ra=DEAD0000 (native record_gate, A-only):      A=196  B=  0  delta=+196
+  first store landing at cnt=177 (peak of the "extra 3"): A@ordinal 392, B@ordinal 428
+  ```
+  Both cores follow the same total 401-count trajectory through the multi-record loop — they just get there at different wall-clock times. My prior "B stops at 180 while A goes to 177" was true at ORDINAL 390 but B still reaches 177, 36 stores later. Ordinal ≠ frame.
+- **the +3 net residual IS real** — end-of-30s-run: A cnt=76, B cnt=79, delta=-3 (A holds 3 more allocated). Total decrement counts: A=944, B=938, delta=+6. Both figures match the ALLOCTRACE cum=+6 and 0x800ED098 byte delta of 3 reported at f217. But the -82 delta at ra=80051BC4 vs +196 at DEAD0000 (native-only, no B counterpart) shows the +6 net is scattered across many callers, some going through native record_gate on A and their recomp equivalents on B. **The +3 is not a single caller — it's a scheduling asymmetry between native+recomp on A and pure-recomp on B, distributed across allocs.**
+- **manager's structural fix ("B's recomp dispatcher reaches overlay handler") is ALREADY SATISFIED:** overlay_router.cpp routes rec_dispatch(0x8013B2E4) via A00's resident switch, `ov_a00_func_8013B2E4` runs `ov_a00_gen_8013B2E4`, STATE 0 hits 2 times as expected. There is no missing dispatch path to close on this handler.
+- **corrected next probe (NOT landed):** the +3 residual is not attributable to one caller. To close it we'd need per-frame per-ra delta over the whole run (extend ALLOCTRACE to bucket by-ra) — that surfaces WHICH ra's contribute the residual +6 alloc after the timing shifts settle. Only then can we point at a specific native vs recomp asymmetry. My earlier close-out on flagbit_timer_machine was premature.
+- **workflow lesson (record dead ends too):** the initial `[flagbit] A=2 B=0` result was measured with a native-only probe (behavior_dispatch.cpp:106 entry), which structurally could never fire on B (psx_fallback=1). Concluding "B misses this behavior" from that measurement was a category error. The correct instrumentation for "does B run this behavior?" is at the RECOMP-router entry (`overlay_router.cpp:rec_dispatch`), not the NATIVE-dispatcher entry. When probing whether behavior X fires on the substrate side, hook the substrate router, not the native handoff.
+- **refs:** runtime/recomp/overlay_router.cpp:157-179 (rec_dispatch + PSXPORT_DISPWATCH), game/ai/beh_flagbit_timer_machine.cpp:51-55 (PSXPORT_FLAGBIT_ENTRY), `$CLAUDE_JOB_DIR/tmp/dw2.log` + `fe.log` (session captures — both-sides symmetric STATE 0 hit count).
+
+## PRIOR FINDING (kept for trail; falsified by the block above) — 3-slot 0x800ED098 delta CALLER NAMED — native `beh_flagbit_timer_machine` (FUN_8013B2E4) fires on A but NOT on B; each STATE 0 entry runs FUN_800519E0(node, count=3, …) = 3 record allocs
 - **finding (2026-07-03, probe 1 landed — per-store ra logging + core-attribution):** Added the two probe hooks the handoff called for and the previous "indirect via Sop::fieldMode" hypothesis is FALSIFIED in favor of a specific native-vs-PSX behavior-dispatch asymmetry:
   1. `mem.cpp:wwatch_check` now prints `[wwatch] core=%p store […]=… by pc=… ra=… stage=…` — pc alone can't attribute the caller (recomp always emits pc at basic-block entry of the target fn), but ra IS the caller's return address inside the recomp substrate.
   2. `sbs.cpp` prints `[sbs] core-map A=%p B=%p` once at boot so the raw `[wwatch]` stream can be split A vs B.
