@@ -97,6 +97,7 @@ set(PORT_SRC
   game/player/grid_offset.cpp
   game/world/spawn.cpp
   game/scene/scene_events.cpp
+  game/scene/script_interp.cpp
   game/audio/sfx.cpp
   game/world/placement.cpp
   game/world/graphics_bind.cpp
