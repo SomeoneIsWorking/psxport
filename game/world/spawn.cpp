@@ -297,7 +297,24 @@ void Spawn::despawn(uint32_t node) {
     c->mem_w32(node + 36, c->mem_r32(p.free_head));      // node->next = *free_head
     c->mem_w32(p.free_head, node);                        // *free_head = node
     c->mem_w8(p.cnt, (uint8_t)(c->mem_r8(p.cnt) + 1));    // cnt++
-    if (cls == 4) { c->r[4] = node; rec_dispatch(c, 0x8007ADDCu); }   // pool-4 extra cleanup (content)
+    if (cls == 4) {
+      // FUN_8007ADDC — pool-4 child-record cleanup, inlined (disas 0x8007ADDC..0x8007AE2C).
+      // Class-4 nodes own N child GraphicsBind records at node[+0xC0..+0xC0+4*(N-1)]; on despawn
+      // those records are pushed back onto the shared record freelist (ptr @0x800E7E74 grows down,
+      // count @0x800ED098). The recomp loops i from N-1 to 0, so the LAST child is freed first —
+      // matches the freelist's LIFO reuse. Tail zeroes node[+9] (the child count).
+      uint8_t n = c->mem_r8(node + 9);
+      while (n != 0) {
+        uint16_t freeCnt = c->mem_r16(0x800ED098u);
+        uint32_t freePtr = c->mem_r32(0x800E7E74u);
+        uint32_t child   = c->mem_r32(node + 0xC0u + ((uint32_t)n - 1u) * 4u);
+        c->mem_w16(0x800ED098u, (uint16_t)(freeCnt + 1));
+        c->mem_w32(0x800E7E74u, freePtr - 4);
+        c->mem_w32(freePtr - 4, child);
+        n--;
+      }
+      c->mem_w8(node + 9, 0);
+    }
   }
   // (4) epilogue (0x8007a7d0): deactivate — zero node header words 0/4/8/c/10/14/18/38 (active byte +0,
   // state +4, list-id +0x0a, type +0x0c) + bytes +0x29/+0x2a/+0x2b/+0x5e. The free-list link (+0x24) is
