@@ -28,6 +28,7 @@
 // writes there). v0 (handler return) is NOT reproduced.
 
 #include "core.h"
+#include "render/cull.h"    // Cull::coneCull2b278 (FUN_8002B278)
 #include "cfg.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -213,7 +214,7 @@ void beh_scatter_ramp_machine(Core* c) {
     }
   }
  Lcdac:
-  c->r[4] = obj; rec_dispatch(c, 0x8002B278u);
+  c->r[4] = obj; c->engine.cull.coneCull2b278();     // FUN_8002B278 (native)
  Lret:
   return;
 }
