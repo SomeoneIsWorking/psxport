@@ -66,7 +66,7 @@ set(PORT_SRC
   runtime/recomp/gpu_native.cpp
   runtime/recomp/gpu_debug.cpp
   runtime/recomp/vram_xfer.cpp
-  runtime/recomp/spu_audio.c
+  runtime/recomp/spu_audio.cpp
   runtime/recomp/pad_input.cpp
   runtime/recomp/memcard.cpp
   runtime/recomp/native_fmv.cpp
