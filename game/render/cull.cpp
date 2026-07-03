@@ -200,6 +200,22 @@ void Cull::enqueueVisibleClass4(uint32_t obj) { Core* c = core;
   c->mem_w16(CULL_QCNT[1], (uint16_t)(cnt + 1));
 }
 
+// Cull::enqueueQueueA — PC-native FUN_80077E7C body. Manual push of `obj` onto queue A (list ptr @
+// CULL_QPTR[0] = 0x1F80013C, counter @ CULL_QCNT[0] = 0x1F800144, cap 24). Sibling of
+// enqueueVisibleClass4 for queue B — same slti-24 gate + list-ptr decrement + write + counter bump.
+// RE'd from disas 0x80077E7C..0x80077EB8. Six substrate callers: game/world/entity.cpp (4x),
+// beh_variant_actor_sm, beh_jumptable_release_trigger.
+uint32_t Cull::enqueueQueueA(uint32_t obj) { Core* c = core;
+  int32_t cnt = c->mem_r16s(CULL_QCNT[0]);
+  if (cnt >= CULL_QCAP[0]) return 0;                      // queue full — v0 = 0 (matches recomp)
+  uint32_t ptr = c->mem_r32(CULL_QPTR[0]);
+  c->mem_w32(CULL_QPTR[0], ptr - 4);
+  c->mem_w32(ptr - 4, obj);
+  uint32_t newCnt = (uint32_t)cnt + 1u;
+  c->mem_w16(CULL_QCNT[0], (uint16_t)newCnt);
+  return newCnt;                                          // v0 = old_counter + 1 (recomp: addiu v0, a1, 1)
+}
+
 void Cull::objectCull() { Core* c = core;
   uint32_t prev = c->game->fps60.current_object;
   uint32_t o = c->r[4];                            // a0 = object* (MIPS arg register $a0)

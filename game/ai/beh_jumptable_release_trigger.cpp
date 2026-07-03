@@ -25,6 +25,7 @@
 //   0x800BF870 (base; +0x177 -> 0x800BF9E7, +0x178 -> 0x800BF9E8 bit-set tables in despawn tail)
 
 #include "core.h"
+#include "render/cull.h"    // Cull::enqueueQueueA (FUN_80077E7C)
 #include "object/actor.h"    // Actor::boundsCull (FUN_8007778C native)
 #include "cfg.h"
 #include <stdio.h>
@@ -147,10 +148,8 @@ void beh_jumptable_release_trigger(Core* c) {
       // ---- 8012501c: sub-case 1 (n6==1, or fell through from 0) ----
       (void)fall_into_1;
       if (c->mem_r8(s0 + 0x3f) == 0) goto epi_done;     // 8012501C lbu v0,0x3f(s0) ; 80125024 beqz -> 0x801251e8
-      // jal 0x80077e7c(a0=s3=obj) ; sb v0,1(s3)
-      c->r[4] = obj;                                    // 8012502C move a0,s3
-      rec_dispatch(c, 0x80077E7Cu);                     // 80125030 jal 0x80077e7c
-      c->mem_w8(obj + 1, (uint8_t)c->r[2]);            // 80125034 sb v0, 1(s3)  (delay slot; v0=ret)
+      // FUN_80077E7C → Cull::enqueueQueueA (native). Returns 0 on cap-hit, new count on push.
+      c->mem_w8(obj + 1, (uint8_t)c->engine.cull.enqueueQueueA(obj));  // sb v0, 1(s3) (was rec_dispatch)
       // jal 0x80051d90(a0=s0, a1=s3+0x88, a2=0x1f8000c0)
       c->r[4] = s0;                                     // 80125038 move a0,s0
       c->r[5] = obj + 0x88;                             // 8012503C addiu a1,s3,0x88

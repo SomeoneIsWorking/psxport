@@ -25,6 +25,7 @@
 // safety net.
 
 #include "core.h"
+#include "render/cull.h"    // Cull::enqueueQueueA (FUN_80077E7C)
 #include "cfg.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -114,7 +115,7 @@ void beh_variant_actor_sm(Core* c) {
       }
     } else if (n5 == 1) {
       c->mem_w8(nd + 1, 1);
-      leaf1(c, nd, 0x80077e7cu);                            // FUN_80077E7C
+      c->engine.cull.enqueueQueueA(nd);                     // FUN_80077E7C (native; return ignored)
       if (c->mem_r8(nd + 0x70) == 255)
         c->mem_w8(nd + 5, (uint8_t)(c->mem_r8(nd + 5) - 1)); // LAB_d7d4
     }

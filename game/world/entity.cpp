@@ -15,6 +15,7 @@
 #include "spawn.h"     // class Spawn (c->engine.spawn.despawn / dispatch / spawnAndInit)
 #include "graphics_bind.h"   // ov_obj_render_update
 #include "rng.h"       // class Rng (via c->rng.next())
+#include "render/cull.h"     // class Cull (c->engine.cull.enqueueQueueA — FUN_80077E7C)
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
@@ -208,7 +209,7 @@ static void sm40558(Core* c) {
       c->mem_w8(obj + 1, (uint8_t)v0);
       if ((v0 & 0xff) == 0) { c->mem_w8(obj + 41, 0); return; }        // @8c8
       c->r[4]=obj; rec_dispatch(c, 0x8012866Cu);
-      c->r[4]=obj; rec_dispatch(c, 0x80077E7Cu);
+      c->engine.cull.enqueueQueueA(obj);              // FUN_80077E7C (native)
       c->mem_w8(obj + 41, 0);
       return;
     }
@@ -223,7 +224,7 @@ static void sm40558(Core* c) {
         && c->mem_r8(0x800BF817u) == (uint32_t)(uint16_t)c->mem_r16s(obj + 106)) {
       if (c->mem_r8(obj + 40) & 0x80) {
         c->mem_w8(obj + 1, 1);
-        c->r[4]=obj; rec_dispatch(c, 0x80077E7Cu);
+        c->engine.cull.enqueueQueueA(obj);              // FUN_80077E7C (native)
         // @878
         c->r[4]=obj; c->engine.graphicsBind.renderUpdate();
         c->mem_w8(obj + 41, 0);
@@ -273,7 +274,7 @@ static void sm40558(Core* c) {
       uint32_t v0 = c->mem_r8(p + 1);
       c->mem_w8(obj + 1, (uint8_t)v0);
       c->r[4]=obj; rec_dispatch(c, 0x8012866Cu);
-      c->r[4]=obj; rec_dispatch(c, 0x80077E7Cu);
+      c->engine.cull.enqueueQueueA(obj);              // FUN_80077E7C (native)
       return;
     }
     // @99c: mirror of state-1 @7e0..tail (global checks + cull/transform), with obj fields
@@ -281,7 +282,7 @@ static void sm40558(Core* c) {
         && c->mem_r8(0x800BF817u) == (uint32_t)(uint16_t)c->mem_r16s(obj + 106)) {
       if (c->mem_r8(obj + 40) & 0x80) {
         c->mem_w8(obj + 1, 1);
-        c->r[4]=obj; rec_dispatch(c, 0x80077E7Cu);
+        c->engine.cull.enqueueQueueA(obj);              // FUN_80077E7C (native)
         // @a30
         c->r[4]=obj; c->engine.graphicsBind.renderUpdate();
         return;

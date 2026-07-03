@@ -35,6 +35,7 @@
 // + verifiable via the A/B gate the moment a transition is triggered. Byte-exact gate is the safety net.
 
 #include "core.h"
+#include "render/cull.h"    // Cull::enqueueQueueA (FUN_80077E7C)
 #include "object/actor.h"    // Actor::boundsCull (FUN_8007778C native)
 #include "cfg.h"
 #include <stdio.h>
@@ -66,7 +67,7 @@ static inline int16_t s16(Core* c, uint32_t a) { return c->mem_r16s(a); }
 static void cd0_tail(Core* c, uint32_t nd) {           // @0x80127cd0
   c->mRender->mNodeXform.build(nd);                              // was rec_dispatch 0x80051844
   c->mem_w8(nd + 1, 1);
-  c->r[4] = nd; rec_dispatch(c, 0x80077E7Cu);          // FUN_80077e7c
+  c->engine.cull.enqueueQueueA(nd);                    // FUN_80077E7C (native; return ignored)
 }
 
 static void dat_tail(Core* c, uint32_t nd) {           // @0x80127c9c (sub==3 only)

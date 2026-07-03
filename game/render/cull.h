@@ -39,6 +39,15 @@ public:
   // c->r[4] = node. Was ov_cone_cull_2b278.
   void coneCull2b278();
 
+  // enqueueQueueA (FUN_80077E7C): MANUAL push of `obj` onto queue A (0x1F80013C/0x1F800144, cap 24) —
+  // the render queue for object types 2/9 that cull_decide would auto-push. Six callers across
+  // game/world/entity.cpp + game/ai/beh_* use this as an unconditional queue insert (early bail if
+  // count >= 24; no visibility check). Body from disas 0x80077E7C.
+  //
+  // Returns v0 as the recomp does — on cap-hit v0=0 (the slti's false result); on success v0 =
+  // old_counter + 1 (i.e. the NEW 1-based count). beh_jumptable_release_trigger uses this return.
+  uint32_t enqueueQueueA(uint32_t obj);
+
   // enqueueVisibleClass4 (FUN_80077EBC): MANUAL push of `obj` onto render class 4's list — the same
   // list-add tail performBaseCull runs when the base cull KEEPS a class-4 object, but callable
   // directly by beh_ handlers whose scene-specific logic decides an object should render this frame

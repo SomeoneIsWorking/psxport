@@ -7,7 +7,7 @@ A native may exist already. **LIVE** = reachable by direct C call from a native_
 dispatch root (actually runs). **ORPHAN** = native exists but only the REMOVED override
 table used to reach it — it is dead code until a native parent calls it directly.
 
-Totals: 141 native fns, 124 owned addresses, 7 LIVE / 134 ORPHAN.
+Totals: 142 native fns, 125 owned addresses, 7 LIVE / 135 ORPHAN.
 
 | addr | status | symbol | file:line | depends-on (still-PSX) | summary |
 |------|--------|--------|-----------|------------------------|---------|
@@ -88,8 +88,9 @@ Totals: 141 native fns, 124 owned addresses, 7 LIVE / 134 ORPHAN.
 | 0x80075824 | ORPHAN | `MusicCoord::musicFadeIn` | game/audio/music_coord.cpp:51 |  | Fade the ingame music IN from silence using the GAME'S OWN CD-volume r… |
 | 0x80075A80 | ORPHAN | `Engine::areaUpdateTail` | game/scene/engine_stage.cpp:1258 | 0x80074BF8 0x80074E48 0x80075824 0x8008E0C0 0x80092660 0x80098F90 … | Engine::areaUpdateTail — the last direct child of ov_field_frame at gu… |
 | 0x8007712C | ORPHAN | `Cull::performBaseCull` | game/render/cull.cpp:142 |  | Cull::performBaseCull — byte-exact PC-native FUN_8007712C body (no mar… |
-| 0x8007778C | ORPHAN | `Cull::cullWrapper` | game/render/cull.cpp:317 | 0x8007712C | camera-relative cull WRAPPER. Computes obj-cam delta (wrapping s16, si… |
-| 0x80077ACC | ORPHAN | `Cull::cullWrap77acc` | game/render/cull.cpp:334 | 0x8007712C | cull-wrapper variant, caller-supplied position in a1/a2/a3 (not obj fi… |
+| 0x8007778C | ORPHAN | `Cull::cullWrapper` | game/render/cull.cpp:333 | 0x8007712C | camera-relative cull WRAPPER. Computes obj-cam delta (wrapping s16, si… |
+| 0x80077ACC | ORPHAN | `Cull::cullWrap77acc` | game/render/cull.cpp:350 | 0x8007712C | cull-wrapper variant, caller-supplied position in a1/a2/a3 (not obj fi… |
+| 0x80077E7C | ORPHAN | `Cull::enqueueQueueA` | game/render/cull.cpp:208 |  | Cull::enqueueQueueA — PC-native FUN_80077E7C body. Manual push of `obj… |
 | 0x80077EBC | ORPHAN | `Cull::enqueueVisibleClass4` | game/render/cull.cpp:194 |  | Cull::enqueueVisibleClass4 — PC-native FUN_80077EBC body. Manual push … |
 | 0x800783DC | ORPHAN | `Pool::setupViewScroll` | game/world/pool.cpp:118 | 0x80048D3C | per-area VIEW/SCROLL setup. Calls a leaf (0x80048D3C), builds the view… |
 | 0x80078610 | ORPHAN | `Pool::finalViewInit` | game/world/pool.cpp:190 | 0x8006D02C 0x800846F0 | final per-area view init: zero two control blocks, seed fixed view par… |
