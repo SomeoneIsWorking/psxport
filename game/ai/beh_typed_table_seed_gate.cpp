@@ -27,8 +27,6 @@
 //   - FUN_8004766C   per-object update called after box seed + inside render tail (matrix build?)
 //   - FUN_80077EBC   scenePhase==0x22 sub-behavior body
 //   - FUN_800778E4   spatial trigger check taking (obj, triggerParam) -> 0/nonzero (IN/OUT)
-//   - FUN_80077768   turn-direction lookup sub-behavior called by state_one_tick's subFlagX path
-//                    (args: obj[+0x5F]<<4, obj[+0x56], 0; returns nonzero → targetDelta=+256, else -256)
 //   - 0x800E7E80     "pilot-actor" region read by state_one_tick's TURN sub-states (mode @+0x147, yaw
 //                    @+0x58, state @+0x168). Likely Tomba's actor slot; future RE candidate for a
 //                    `class PilotActor` view.
@@ -55,11 +53,11 @@ constexpr uint32_t BEH_FN = 0x80133C14u;
 
 enum class Sta : uint8_t { Init = 0, Active = 1, DespawnA = 2, DespawnB = 3 };
 
-// Un-RE'd sub-behaviors still called via rec_dispatch by this handler.
+// Un-RE'd sub-behaviors still called via rec_dispatch by this handler. (FUN_80077768 turn-direction
+// lookup is NATIVE now — Trig::angleCmp; see run_turn_setup.)
 constexpr uint32_t SUB_OBJ_UPDATE     = 0x8004766Cu;
 constexpr uint32_t SUB_PHASE22_BODY   = 0x80077EBCu;
 constexpr uint32_t SUB_TRIGGER_CHECK  = 0x800778E4u;
-constexpr uint32_t SUB_TURN_LOOKUP    = 0x80077768u;  // state_one_tick subFlagX turn-direction lookup
 
 // Pilot-actor region (0x800E7E80..) — read by state_one_tick's TURN sub-states.
 constexpr uint32_t PILOT_BASE      = 0x800E7E80u;
@@ -76,14 +74,14 @@ constexpr uint32_t TBL_A6F4 = 0x8014A6F4u;
 bool run_turn_setup(Actor& a) {
   Core* c = a.core();
   const uint32_t obj = a.addr();
-  int16_t a1v = a.rotY();
-  uint8_t a0v = c->mem_r8(obj + 0x5F);
+  int16_t rotY = a.rotY();
+  uint8_t facing = c->mem_r8(obj + 0x5F);            // per-actor "target facing" byte (angle >> 4)
   a.setSubState(4);
-  c->r[4] = (uint32_t)a0v << 4;
-  c->r[5] = (uint32_t)(int32_t)a1v;
-  c->r[6] = 0;
-  rec_dispatch(c, SUB_TURN_LOOKUP);
-  a.setTargetDelta((c->r[2] != 0) ? (int16_t)256 : (int16_t)-256);
+  // Turn direction: signed-half angle compare — "does target-facing lead current rotY by π/4..3π/4?"
+  // Returns 1 for TURN LEFT (+256), 0 for TURN RIGHT (-256). Was rec_dispatch(0x80077768); now native
+  // via class Trig (game/math/trig.h — Trig::angleCmp is FUN_80077768 owned static).
+  int32_t leadCw = Trig::angleCmp((int32_t)facing << 4, (int32_t)rotY, 0);
+  a.setTargetDelta((leadCw != 0) ? (int16_t)256 : (int16_t)-256);
   a.setSubFlagX(0);
   return true;
 }
