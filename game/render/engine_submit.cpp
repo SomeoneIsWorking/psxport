@@ -161,7 +161,7 @@ static inline void fps60_stamp(Core* c, const ProjVtx* p, int nv) {
     mv[k][0] = (int16_t)p[s].mx; mv[k][1] = (int16_t)p[s].my; mv[k][2] = (int16_t)p[s].mz; }
   // World-coord native path: capture the composed transform from the active float xform; GTE path (the
   // resident byte-packed emitter) falls back to reading the live control registers.
-  if (eproj_active(c)) { uint32_t cr[11]; eproj_active_cr(c, cr); fps60_stamp_world_cr(c, mv, nv, c->game->fps60.fps_cur_key, cr); }
+  if (c->mRender->projActive()) { uint32_t cr[11]; c->mRender->projActiveCr(cr); fps60_stamp_world_cr(c, mv, nv, c->game->fps60.fps_cur_key, cr); }
   else                  fps60_stamp_world(c, mv, nv, c->game->fps60.fps_cur_key);
 }
 
@@ -234,9 +234,9 @@ static void submit_poly_gt3_native(Core* c) {
     uint32_t vz01 = c->mem_r32(rec + 20);
     uint32_t xy0 = c->mem_r32(rec + 16), xy1 = c->mem_r32(rec + 24), xy2 = c->mem_r32(rec + 28);
     ProjVtx p[3];
-    eproj_vertex_active(c, (int16_t)xy0, (int16_t)(xy0 >> 16), (int16_t)vz01,         &p[0]);
-    eproj_vertex_active(c, (int16_t)xy1, (int16_t)(xy1 >> 16), (int16_t)(vz01 >> 16), &p[1]);
-    eproj_vertex_active(c, (int16_t)xy2, (int16_t)(xy2 >> 16), (int16_t)c->mem_r32(rec + 32), &p[2]);
+    c->mRender->projVertexActive( (int16_t)xy0, (int16_t)(xy0 >> 16), (int16_t)vz01,         &p[0]);
+    c->mRender->projVertexActive( (int16_t)xy1, (int16_t)(xy1 >> 16), (int16_t)(vz01 >> 16), &p[1]);
+    c->mRender->projVertexActive( (int16_t)xy2, (int16_t)(xy2 >> 16), (int16_t)c->mem_r32(rec + 32), &p[2]);
     float area = (p[1].px - p[0].px) * (p[2].py - p[0].py) - (p[2].px - p[0].px) * (p[1].py - p[0].py);
     if (area <= 0) continue;                                  // backface
     int xmax = submit_xmax();
@@ -284,10 +284,10 @@ static void submit_poly_gt4_native(Core* c) {
     uint32_t xy0 = c->mem_r32(rec + 20), xy1 = c->mem_r32(rec + 28),
              xy2 = c->mem_r32(rec + 32), xy3 = c->mem_r32(rec + 40);
     ProjVtx p[4];
-    eproj_vertex_active(c, (int16_t)xy0, (int16_t)(xy0 >> 16), (int16_t)vz01,          &p[0]);
-    eproj_vertex_active(c, (int16_t)xy1, (int16_t)(xy1 >> 16), (int16_t)(vz01 >> 16),  &p[1]);
-    eproj_vertex_active(c, (int16_t)xy2, (int16_t)(xy2 >> 16), (int16_t)vz23,          &p[2]);
-    eproj_vertex_active(c, (int16_t)xy3, (int16_t)(xy3 >> 16), (int16_t)(vz23 >> 16),  &p[3]);
+    c->mRender->projVertexActive( (int16_t)xy0, (int16_t)(xy0 >> 16), (int16_t)vz01,          &p[0]);
+    c->mRender->projVertexActive( (int16_t)xy1, (int16_t)(xy1 >> 16), (int16_t)(vz01 >> 16),  &p[1]);
+    c->mRender->projVertexActive( (int16_t)xy2, (int16_t)(xy2 >> 16), (int16_t)vz23,          &p[2]);
+    c->mRender->projVertexActive( (int16_t)xy3, (int16_t)(xy3 >> 16), (int16_t)(vz23 >> 16),  &p[3]);
     // backface cull on the FRONT triangle's signed screen area (NCLIP: (SX1-SX0)*(SY2-SY0)-(SX2-SX0)*(SY1-SY0)).
     float area = (p[1].px - p[0].px) * (p[2].py - p[0].py) - (p[2].px - p[0].px) * (p[1].py - p[0].py);
     if (area <= 0) continue;                                  // backface (matches MAC0<=0 drop)
@@ -374,7 +374,7 @@ void native_gt3gt4(Core* c, uint32_t geomblk, uint32_t otbase) {   // decl in re
 // FIELD ENTITY RENDER LOOP — PC-native ownership of the SOP field-overlay entity render 0x80109fe0
 // (sop.cpp:203, "entity render loop"). The field loads the scene CAMERA into the GTE once, then submits
 // each entity's GT3/GT4 geometry whose vertices are already in WORLD space. We own it natively: build the
-// float camera-view transform from world coordinates (eproj_compose_camera) and route every entity through
+// float camera-view transform from world coordinates (Render::projComposeCamera) and route every entity through
 // the native GT3/GT4 submitters — projecting in float through that world-coord transform, with real depth.
 // NO gte_op, NO PSX submit library (0x801099b4 / 0x80109c80). This is the path that actually draws the
 // visible field (Tomba, props, terrain props); before this it ran 100% interpreted.
@@ -390,7 +390,7 @@ void Render::fieldEntityRender(uint32_t es) {
   if (count == 0) return;
   uint32_t otbase = c->mem_r32(0x800ED8C8u);              // *this = the active ordering-table base
   uint32_t base   = c->mem_r32(es + 0xC);
-  EObjXform w; eproj_compose_camera(c, &w); eproj_set_active(c, &w);
+  EObjXform w; c->mRender->projComposeCamera(&w); c->mRender->projSetActive(&w);
   // DIAG groundproj: log the camera xform + first GT4 record's model verts and their eproj projection, so we
   // can see whether the world-space scene-table geometry projects on-screen with sane depth. (later-231b)
   if (cfg_dbg("groundproj")) { static int n=0; if (n++ < 3) {
@@ -401,7 +401,7 @@ void Render::fieldEntityRender(uint32_t es) {
     uint32_t rec = cmd0+4 + ((s0d&0xFF)*36);   // skip GT3s to first GT4 record (44B)
     for (int k=0;k<2;k++){ uint32_t r2=rec+k*44;
       int16_t vx=c->mem_r16s(r2+20), vy=(int16_t)(c->mem_r32(r2+20)>>16), vz=c->mem_r16s(r2+24);
-      ProjVtx pv; eproj_vertex_active(c, vx,vy,vz,&pv);
+      ProjVtx pv; c->mRender->projVertexActive( vx,vy,vz,&pv);
       fprintf(stderr,"   gt4[%d] model=(%d,%d,%d) -> px=%.1f py=%.1f pz=%.1f sx=%d sy=%d\n",
         k, vx,vy,vz, (double)pv.px,(double)pv.py,(double)pv.pz, pv.sx, pv.sy); } } }
   uint32_t p = es + 0x10, end = es + 0x10 + (uint32_t)count * 2;
@@ -414,7 +414,7 @@ void Render::fieldEntityRender(uint32_t es) {
     c->r[4] = c->r[2];  c->r[5] = otbase; c->r[6] = (s0 >> 16) & 0xFF;  submit_poly_gt4_native(c);
     c->game->fps60.fps_cur_key = 0;
   }
-  eproj_clear_active(c);
+  c->mRender->projClearActive();
 }
 
 // ov_ground_probe (diagnostic, `debug groundprobe`) moved to render_debug_probes.cpp (2026-07 restructure).

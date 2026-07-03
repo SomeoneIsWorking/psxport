@@ -34,12 +34,28 @@ public:
   Pgxp              pgxp;               // PGXP-lite subpixel cache (per-Core; PGXP_pushSXYZ2f target)
   ProjParams        projParams;         // camview + per-frame projection constants (per-Core)
   // Active per-object xform for the GT3/GT4 submitters. Set once per render command by the per-object
-  // flush (eproj_set_active), read by the per-vertex projection (eproj_vertex_active), cleared by
-  // eproj_clear_active. Was file-scope in engine_project.cpp; per-Core here so SBS's two cores don't
+  // flush (projSetActive), read by the per-vertex projection (projVertexActive), cleared by
+  // projClearActive. Was file-scope in engine_project.cpp; per-Core here so SBS's two cores don't
   // share a transform between their emits (2026-07-03).
   EObjXform         mActiveXform{};
   bool              mActiveXformSet = false;
   NodeXform         mNodeXform;        // scene-node WORLD-TRANSFORM builder (guest FUN_80051844)
+
+  // ---- object-render projection ops (impl in engine_project.cpp) ----------
+  // Compose an EObjXform from the object's REAL WORLD coordinates: its world rotation matrix (cmd+0x18)
+  // and world position (cmd+0x2C), transformed by the live scene camera (scratchpad view matrix
+  // 0x1F8000F8 / translation 0x1F80010C). Projection constants are the camera's (CR24-26). No gte_op.
+  void projComposeObject(uint32_t cmd, EObjXform* out);
+  // Compose an EObjXform from the scene camera ALONE (no per-object matrix) — for geometry already in
+  // WORLD space (field entity render loop), where view = Rcam·world + Tcam directly. No gte_op.
+  void projComposeCamera(EObjXform* out);
+  // Per-command active xform (owned by the GT3/GT4 submitters).
+  void projSetActive(const EObjXform* w);
+  void projClearActive();
+  bool projActive() const { return mActiveXformSet; }
+  void projVertexActive(int vx, int vy, int vz, ProjVtx* out);
+  // Pack the ACTIVE float xform into the CR0-7 + CR24/25/26 layout the fps60 midpoint reprojection consumes.
+  void projActiveCr(uint32_t cr[11]);
 
   // ---- per-frame render orchestrators (called by Engine::fieldFrame/X) ----
   // frame  (guest 0x8003F9A8) — the primary per-frame render orchestrator; runs the non-walk PSX

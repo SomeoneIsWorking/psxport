@@ -211,7 +211,7 @@ void proj_native_xform_cr(const uint32_t cr[11], const int16_t mv[4][3], int nv,
 // Capture hook: stamp the just-pushed world RqItem with this prim's reprojection inputs. Called by the GTE
 // submitters (engine_submit.cpp) right after gpu_draw_world_quad. No-op unless fps60 is on.
 // Capture with an EXPLICIT composed transform `cr` (cr[0..7] = CR0-7, cr[8..10] = OFX/OFY/H). The native
-// world-coord render path supplies this from its float xform (engine_project eproj_active_cr); the GTE
+// world-coord render path supplies this from its float xform (Render::projActiveCr); the GTE
 // path supplies it from the live control registers (fps60_stamp_world below).
 void fps60_stamp_world_cr(Core* c, const int16_t mv[4][3], int nv, uint32_t key, const uint32_t cr[11]) {
   RenderQueue& q = c->game->rq;

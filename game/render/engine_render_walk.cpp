@@ -16,7 +16,7 @@
 #include "cfg.h"
 #include "mods.h"
 #include "render_queue.h"
-#include "engine_project.h"   // EObjXform + eproj_* (per-object world-coord float projection)
+#include "engine_project.h"   // EObjXform (per-object world-coord float projection; ops on Render)
 #include "render_internal.h"
 #include <stdio.h>
 #include <string.h>
@@ -47,8 +47,8 @@ void Render::perObjFlush() {
       // PC-NATIVE: compose the camera × object transform in FLOAT from the object's REAL WORLD coordinates
       // (its world matrix cmd+0x18 + world position cmd+0x2c, transformed by the scene camera) and make it
       // the ACTIVE projection. The submitters project every vertex through it — NO gte_op, NO CR0-7.
-      EObjXform w; eproj_compose_object(c, cmd, &w);
-      eproj_set_active(c, &w);
+      EObjXform w; c->mRender->projComposeObject(cmd, &w);
+      c->mRender->projSetActive(&w);
       // OT base: node[0xd]&0xf == 4 selects a per-command sub-bucket (cmd[0x3f]*4 offset), else the base.
       uint32_t otbase = otbase_ptr;
       if ((c->mem_r8(node + 0xD) & 0xF) == 4)
@@ -56,7 +56,7 @@ void Render::perObjFlush() {
       c->game->fps60.fps_cur_key = cmd;                 // fps60: tag this actor's world quads for reprojection
       native_gt3gt4(c, geomblk, otbase);                // fully-native generic GT3/GT4 submit (no PSX fallback)
       c->game->fps60.fps_cur_key = 0;
-      eproj_clear_active(c);
+      c->mRender->projClearActive();
     }
     i++;
     if (i >= (int)c->mem_r8(node + 9)) break;

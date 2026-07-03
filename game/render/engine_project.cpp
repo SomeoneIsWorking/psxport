@@ -1,10 +1,10 @@
 // engine/engine_project.cpp — PC-NATIVE object render transform & projection (see engine_project.h).
 //
-// The per-object render is decoupled from the PSX GTE here. eproj_compose_object builds the camera × object
-// transform in FLOAT from the object's real world coordinates; eproj_vertex runs the RTPT (rotate/translate
-// + perspective divide) in float. The math mirrors the engine's projection (gte_beetle proj_native_xform's
-// float path) so per-object geometry lines up with terrain and the rest of the scene — but the rotation and
-// translation come from world-space data, not the GTE-composed control registers.
+// The per-object render is decoupled from the PSX GTE here. Render::projComposeObject builds the camera ×
+// object transform in FLOAT from the object's real world coordinates; EObjXform::project runs the RTPT
+// (rotate/translate + perspective divide) in float. The math mirrors the engine's projection (gte_beetle
+// proj_native_xform's float path) so per-object geometry lines up with terrain and the rest of the scene —
+// but the rotation and translation come from world-space data, not the GTE-composed control registers.
 //
 // Compose, in world space (all int16 matrix elements are 1.3.12 fixed = value*4096):
 //   Rcam = scene camera view rotation   (scratchpad 0x1F8000F8, CR0-4 packing)
@@ -16,6 +16,7 @@
 // This is exactly view = Rcam·(Robj·v + Tobj) + Tcam — a standard model→world→view transform.
 
 #include "engine_project.h"
+#include "render.h"
 #include "core.h"
 #include "cfg.h"
 #include <stdio.h>
@@ -29,7 +30,8 @@ uint32_t gte_read_ctrl(uint32_t reg);
 
 static inline int16_t r16(Core* c, uint32_t a) { return c->mem_r16s(a); }
 
-void eproj_compose_object(Core* c, uint32_t cmd, EObjXform* out) {
+void Render::projComposeObject(uint32_t cmd, EObjXform* out) {
+  Core* c = mCore;
   // camera view rotation Rcam from scratchpad 0x1F8000F8 (CR0-4 halfword packing).
   uint32_t w0 = c->mem_r32(SCR + 0xF8), w1 = c->mem_r32(SCR + 0xFC), w2 = c->mem_r32(SCR + 0x100),
            w3 = c->mem_r32(SCR + 0x104), w4 = c->mem_r32(SCR + 0x108);
@@ -69,7 +71,8 @@ void eproj_compose_object(Core* c, uint32_t cmd, EObjXform* out) {
             n, cmd, (double)out->T[0], (double)out->T[1], (double)out->T[2], (double)out->H); }
 }
 
-void eproj_compose_camera(Core* c, EObjXform* out) {
+void Render::projComposeCamera(EObjXform* out) {
+  Core* c = mCore;
   // camera view rotation Rcam from scratchpad 0x1F8000F8 (CR0-4 halfword packing) — used directly as the
   // composed rotation (the field's entity verts are already world-space, so view = Rcam·world + Tcam).
   uint32_t w0 = c->mem_r32(SCR + 0xF8), w1 = c->mem_r32(SCR + 0xFC), w2 = c->mem_r32(SCR + 0x100),
@@ -85,13 +88,13 @@ void eproj_compose_camera(Core* c, EObjXform* out) {
   out->H   = (float)(uint16_t)gte_read_ctrl(26);
 }
 
-void eproj_vertex(const EObjXform* w, int vx, int vy, int vz, ProjVtx* out) {
+void EObjXform::project(int vx, int vy, int vz, ProjVtx* out) const {
   const float V0 = (float)(int16_t)vx, V1 = (float)(int16_t)vy, V2 = (float)(int16_t)vz;
   out->mx = (int16_t)vx; out->my = (int16_t)vy; out->mz = (int16_t)vz;   // model coords (fps60 reproj input)
   // view = R·V + T  (R in 1.3.12 scale, so divide the rotate product by 4096; T is raw view units).
   double view[3], vz_raw = 0;
   for (int i = 0; i < 3; i++) {
-    double t = (double)w->T[i] * 4096.0 + (double)w->R[i][0] * V0 + (double)w->R[i][1] * V1 + (double)w->R[i][2] * V2;
+    double t = (double)T[i] * 4096.0 + (double)R[i][0] * V0 + (double)R[i][1] * V1 + (double)R[i][2] * V2;
     if (i == 2) vz_raw = t;
     view[i] = t / 4096.0;
   }
@@ -104,10 +107,10 @@ void eproj_vertex(const EObjXform* w, int vx, int vy, int vz, ProjVtx* out) {
   float szf = (float)(vz_raw / 4096.0);
   int32_t szi = (int32_t)szf; out->sz = szi < 0 ? 0 : szi > 65535 ? 65535 : szi;
   // perspective: pz = max(H/2, view-Z); screen = OFX/OFY + IR * (H / pz).
-  float pz = w->H * 0.5f; if (szf > pz) pz = szf;
-  float ph = (pz > 0.0f) ? w->H / pz : 0.0f;
-  out->px = w->ofx + ir1 * ph;
-  out->py = w->ofy + ir2 * ph;
+  float pz = H * 0.5f; if (szf > pz) pz = szf;
+  float ph = (pz > 0.0f) ? H / pz : 0.0f;
+  out->px = ofx + ir1 * ph;
+  out->py = ofy + ir2 * ph;
   if (out->px < -1024.f) out->px = -1024.f; if (out->px > 1023.f) out->px = 1023.f;
   if (out->py < -1024.f) out->py = -1024.f; if (out->py > 1023.f) out->py = 1023.f;
   int32_t sxi = (int32_t)(out->px < 0 ? out->px - 0.5f : out->px + 0.5f);
@@ -119,21 +122,19 @@ void eproj_vertex(const EObjXform* w, int vx, int vy, int vz, ProjVtx* out) {
 
 // The active object xform: set once per render command by the per-object flush; the GT3/GT4 submitters
 // project every vertex through it. There is NO GTE fallback — a submitter that runs in the per-object path
-// always has an active xform. State lives on Render (per-Core; was file-scope s_active / s_active_set).
-#include "render.h"
-void eproj_set_active(Core* c, const EObjXform* w) { c->mRender->mActiveXform = *w; c->mRender->mActiveXformSet = true; }
-void eproj_clear_active(Core* c)                    { c->mRender->mActiveXformSet = false; }
-int  eproj_active(Core* c)                          { return c->mRender->mActiveXformSet ? 1 : 0; }
-void eproj_vertex_active(Core* c, int vx, int vy, int vz, ProjVtx* out) { eproj_vertex(&c->mRender->mActiveXform, vx, vy, vz, out); }
+// always has an active xform.
+void Render::projSetActive(const EObjXform* w) { mActiveXform = *w; mActiveXformSet = true; }
+void Render::projClearActive()                 { mActiveXformSet = false; }
+void Render::projVertexActive(int vx, int vy, int vz, ProjVtx* out) { mActiveXform.project(vx, vy, vz, out); }
 
 static inline int32_t round_i16(float f) {
   int32_t v = (int32_t)(f < 0 ? f - 0.5f : f + 0.5f);
   return v < -32768 ? -32768 : v > 32767 ? 32767 : v;
 }
 static inline int32_t round_i32(float f) { return (int32_t)(f < 0 ? f - 0.5f : f + 0.5f); }
-void eproj_active_cr(Core* c, uint32_t cr[11]) {
+void Render::projActiveCr(uint32_t cr[11]) {
   // pack R (1.3.12 scale) into CR0-4 halfword layout, T into CR5-7, projection consts into cr[8..10].
-  const EObjXform& a = c->mRender->mActiveXform;
+  const EObjXform& a = mActiveXform;
   uint16_t R[3][3];
   for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) R[i][j] = (uint16_t)round_i16(a.R[i][j]);
   cr[0] = (uint32_t)R[0][0] | ((uint32_t)R[0][1] << 16);
