@@ -41,6 +41,7 @@
 #include <vector>
 #include <cstdlib>
 #include <unistd.h>
+#include <tuple>
 
 // --- runtime entry points reused from the normal boot path / dual-core harness ---
 void load_exe(const char* path, Core* c);
@@ -669,6 +670,28 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
     }
     if (dbg.stepPending()) dbg.consumeStep();
 
+    // ATTACK-(a) trace: log stage/substate per core per frame during the DEMO→GAME→cutscene window
+    // where the 2-frame lead is introduced. Only enabled with PSXPORT_SBS_STAGETRACE=1.
+    static const bool stagetrace = []{ const char* e = getenv("PSXPORT_SBS_STAGETRACE"); return e && *e && strcmp(e,"0")!=0; }();
+    if (stagetrace && mFrame < 250) {
+      auto smState = [](Core* c) {
+        uint32_t sm = c->mem_r32(0x1f800138u);
+        return std::make_tuple(c->mem_r32(0x801fe00cu),
+                               c->mem_r16(sm + 0x48), c->mem_r16(sm + 0x4a),
+                               c->mem_r16(sm + 0x4c), c->mem_r16(sm + 0x4e),
+                               c->mem_r8(0x1f800137u));
+      };
+      auto [aE, a48, a4a, a4c, a4e, aCut] = smState(&mA->core);
+      auto [bE, b48, b4a, b4c, b4e, bCut] = smState(&mB->core);
+      static uint32_t aP=0, bP=0;
+      uint32_t aS = aE ^ (a48<<4) ^ (a4a<<8) ^ (a4c<<12) ^ (a4e<<16) ^ (aCut<<20);
+      uint32_t bS = bE ^ (b48<<4) ^ (b4a<<8) ^ (b4c<<12) ^ (b4e<<16) ^ (bCut<<20);
+      if (aS != aP || bS != bP) {
+        fprintf(stderr, "[stagetrace] f%u A entry=%08X sm48=%u/4a=%u/4c=%u/4e=%u cut=%u | B entry=%08X sm48=%u/4a=%u/4c=%u/4e=%u cut=%u\n",
+                mFrame, aE, a48, a4a, a4c, a4e, aCut, bE, b48, b4a, b4c, b4e, bCut);
+        aP = aS; bP = bS;
+      }
+    }
     mWwHit = 0; mWwVa = mWwVb = 0;
     // TRACE 2026-07-03: instrument where 0x800BF81E flips during a frame in RENDER mode.
     // Log the byte on both cores at each waypoint of the frame to name the exact stage.
