@@ -7,6 +7,7 @@
 // from game_tomba2.cpp (one behavior, byte-identical) into its own module for PC-game code structure.
 // Diagnostic A/B gates (child40410/disp26c88/sm40558/fd10) are REPL channels, unchanged.
 #include "core.h"
+#include "object/actor.h"    // Actor::boundsCull (FUN_8007778C)
 #include "cfg.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -238,7 +239,7 @@ static void sm40558(Core* c) {
     {
       uint32_t v0;
       if (c->mem_r8(G + 0) == 8) { c->r[4]=obj; rec_dispatch(c, 0x8012E168u); v0=c->r[2]; }
-      else                        { c->r[4]=obj; rec_dispatch(c, 0x8007778Cu); v0=c->r[2]; }
+      else                        { v0 = Actor(c, obj).boundsCull(); }  // FUN_8007778C (native)
       if (v0 == 0) { c->mem_w8(obj + 41, 0); return; }                    // @8c8
       // @878
       c->r[4]=obj; c->engine.graphicsBind.renderUpdate();
@@ -293,7 +294,7 @@ static void sm40558(Core* c) {
     {
       uint32_t v0;
       if (c->mem_r8(G + 0) == 8) { c->r[4]=obj; rec_dispatch(c, 0x8012E168u); v0=c->r[2]; }
-      else                        { c->r[4]=obj; rec_dispatch(c, 0x8007778Cu); v0=c->r[2]; }
+      else                        { v0 = Actor(c, obj).boundsCull(); }  // FUN_8007778C (native)
       if (v0 == 0) return;                            // @a48
       // @a30
       c->r[4]=obj; c->engine.graphicsBind.renderUpdate();
