@@ -44,7 +44,28 @@
 //                    needs FUN_80040A58 + a formal `class SceneEvents` on Engine (owns the arm-slot
 //                    table 0x800BF870, stream cursor 0x800BF874, arm counter 0x800BF8A8, and ring
 //                    at 0x800ED058) — its own arc.
-//   - FUN_8007E110   scene-entity spawn — returns a node pointer stored in Actor::sceneHandle
+//   - FUN_8007E110   SCENE-ENTITY SPAWN primitive. RE'd shape (disas 0x8007E110..0x8007E1B4):
+//                      * FUN_8007A5A8(3) — allocate a spawn slot with class=3. Returns 0 on pool
+//                        exhaustion → bail with 2 (fail sentinel; caller stores in sceneHandle and
+//                        checks nonzero to advance triggerSub).
+//                      * On success (node = a1):
+//                          node[+0x47] = 2                              (class marker byte)
+//                          node[+0x1C] = 0x8007DDE0                     (behavior handler ptr — the
+//                                                                        per-frame scene-entity tick)
+//                          node[+3]    = subtype (a1, arg 2)
+//                          node[+0x28] |= 0x80                          (alive/active flag)
+//                          base = *(u32)0x800ECF60                      (scene-entity data-table)
+//                          node[+0x48] = base                           (data head)
+//                          node[+0x4C] = base + 0x10                    (record start)
+//                          node[+0x5C] = -1                             (sentinel)
+//                          node[+0x5E] = sceneId (arg 1)                (index halfword)
+//                          node[+0x50] = base + 0x10 + hCount*4         (record end; hCount = *(u16)base)
+//                      * Returns node ptr on success, 2 on fail. Caller stores in Actor::sceneHandle
+//                        (obj+0x14) and treats nonzero as "spawned → advance triggerSub".
+//                    Native ownership needs FUN_8007A5A8 (spawn allocator class-3) + FUN_8007DDE0
+//                    (the scene-entity per-frame handler at behavior slot). Class home:
+//                    `class Spawn` already owns despawn/spawnAndInit/dispatch — this fits as
+//                    `c->engine.spawn.sceneEntity(u16 sceneId, u8 subtype)`. Its own arc.
 //   - 0x800A4C94     area-keyed CULL-RECORD SIZE table (halfword, indexed by area)
 //   - 0x800A4CA8     per-type SCENE-ID table (halfword, indexed by type)
 //   - 0x800E7E68     pad-edge bitmask (state 1 case 2 — new-frame padedge)
@@ -76,7 +97,10 @@ enum class Sta : uint8_t { Init = 0, Active = 1, Idle = 2, Despawn = 3 };
 // system; returns 1 on new arm, 0 if already armed, -1 if events gate off. The confirm flow below
 // treats nonzero as "consumed → advance triggerSub to 5".
 constexpr uint32_t SUB_EVENT_ARM        = 0x80040B48u;
-constexpr uint32_t SUB_SCENE_SPAWN      = 0x8007E110u;   // FUN_8007E110(a0, 0): returns sceneHandle
+// FUN_8007E110 = Spawn::sceneEntity(u16 sceneId, u8 subtype) — allocate class-3 spawn slot,
+// install scene-entity handler (0x8007DDE0), init data-table ptrs from *(u32)0x800ECF60. Returns
+// node ptr / 2 on pool exhaustion. See top-of-file "STILL OPAQUE" for the full RE'd shape.
+constexpr uint32_t SUB_SCENE_SPAWN      = 0x8007E110u;
 
 // Data-table addresses (halfword strides, indexed by area/type).
 constexpr uint32_t TBL_AREA_SIZE  = 0x800A4C94u;   // per-area cull-record size (state-0 recordInit cls)
@@ -206,7 +230,7 @@ void beh_typed_init_scene_trigger(Core* c) {
           else if (n3 == 0xe)  confirm_or_advance(a, 0x4f);
         }
         break;
-      case 1: case 5: {                                          // pick scene-id → FUN_8007E110 → sceneHandle
+      case 1: case 5: {                                          // pick scene-id → Spawn::sceneEntity(sid, 0) → sceneHandle
         int16_t sv4 = 0;
         uint8_t n3  = a.type();
         bool use_table;

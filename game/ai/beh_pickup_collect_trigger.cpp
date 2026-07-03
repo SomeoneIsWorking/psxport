@@ -39,7 +39,7 @@ inline void do_case0(Core* c, uint32_t obj) {
   if (c->mem_r8(obj + 0x2b) != 3) return;
   int16_t sid = c->mem_r16s(0x800A4CF8u + (uint32_t)c->mem_r8(obj + 3) * 2);
   c->r[4] = (uint32_t)(int32_t)sid; c->r[5] = 0;
-  rec_dispatch(c, 0x8007E110u);
+  rec_dispatch(c, 0x8007E110u);                                  // Spawn::sceneEntity(sid, 0) — FUN_8007E110 (RE'd, port pending); returns node/2
   c->mem_w32(obj + 0x14, c->r[2]);
   if (c->r[2] != 0) {
     if (c->mem_r8(0x800BF8EDu) == 0) {
