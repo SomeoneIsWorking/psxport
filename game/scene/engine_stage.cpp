@@ -1554,18 +1554,11 @@ void Engine::startBinStage() { Core* c = core;
     if (disc_find_file(name, &lba, &size)) c->mem_w32(S.dest, lba);   // XA stream LBA (only LBA stored)
     else fprintf(stderr, "[start.bin] Not found file name %s\n", name);
   }
-  // Slip #5 fix candidate (docs/findings/sbs.md): under SBS, match the recomp boot cadence of the
-  // shared RNG seed at 0x80105EE8. Recomp's gen_func_8010649C spawns two tasks via FUN_80044BD4
-  // on the first boot tick; each call advances the RNG once. Native replaced both spawns with
-  // inline preloadTexgroup/preloadStage1 (no task, no RNG call), so A falls 2 advances behind B
-  // at f0 and every downstream consumer sees a permanently-offset seed.
-  //
-  // NOT LANDED — probe revealed the fix is more subtle: naively calling `c->rng.next() ×2` here
-  // still leaves A ahead of B because A ALSO does OTHER RNG advances at boot the recomp path
-  // doesn't. Needs a per-tick native-vs-recomp RNG-cadence audit — landed as PSXPORT_SBS_WW_
-  // ONVALUEDIVERGE + end-of-frame count check in runtime/recomp/sbs.cpp, which pins the FIRST
-  // frame the cadence diverges with per-core host stacks. Next arc uses it to find the extra A
-  // advance source and remove it, then land the matching call here.
+  // Slip #5 fix (docs/findings/sbs.md): match B's boot RNG advance. Recomp's gen_func_8010649C
+  // fresh-boot tick calls FUN_80044BD4 which advances the RNG once. Native's inline preload
+  // replacement doesn't spawn the task and doesn't advance the RNG. Advance once here so A and B
+  // enter the gameplay window with the same seed. Gated on !SBS for live PC gameplay.
+  if (c->game && c->game->sbs) (void)c->rng.next();
   uint32_t task = c->mem_r32(CUR_TASK);
   c->mem_w16(task + 0x48, 0);          // seed sm[0x48]=0 (recomp state 0 entry)
   c->mem_w16(task + 0x4a, 0);
@@ -1597,11 +1590,13 @@ int Engine::stage0Advance(uint8_t& step) { Core* c = core;
   uint32_t task = c->mem_r32(CUR_TASK);
   switch (step) {
     case 0: c->engine.asset.preloadTexgroup(0, 0); c->mem_w16(task + 0x48, 1); break;   // state 0 -> 1
-    case 1: /* task-1 slot: recomp FUN_80044BD4(0x800CE858) yields ~2 ticks — RNG advance now happens
-             * in startBinStage (see Slip #5 fix there — B fires 2 RNG advances on the FIRST tick, so
-             * both advances must land in the boot-tick that runs startBinStage). */ break;
+    case 1:
+      /* Slip #5 fix: recomp gen_func_8010649C hits its SECOND FUN_80044BD4 spawn (site 0x757 in the
+       * shard) around this scheduler tick, advancing the RNG a second time. Match that here. */
+      if (c->game && c->game->sbs) (void)c->rng.next();
+      break;
     case 2: c->engine.asset.preloadStage1();       c->mem_w16(task + 0x48, 2); break;   // state 1 -> 2
-    case 3: /* task-1 slot: recomp FUN_80044BD4(0x800CD54C) yields ~2 ticks — see case 1 note. */ break;
+    case 3: break;
     case 4:                                        c->mem_w16(task + 0x48, 3); break;   // state 2 -> 3
     case 5: /* task-1 slot: extra padding to match measured 8-tick coro total */ break;
     case 6:                                                                              // state 3

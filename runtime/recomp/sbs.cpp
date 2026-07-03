@@ -689,15 +689,9 @@ void Sbs::Impl::storeCb(Core* c, uint32_t a, uint32_t v) {
     // values) to detect the FIRST frame where the two cores' cadence diverges. Not per-store
     // comparison — inter-store the seeds would mismatch every advance (naturally), only the
     // end-of-frame state matters.
-    int which_c = (mB && c == &mB->core) ? 1 : 0;
-    void** bt_buf   = which_c ? mWwHostBtB : mWwHostBtA;
-    int*   bt_count = which_c ? &mWwHostBtNB : &mWwHostBtNA;
-    *bt_count = backtrace(bt_buf, WW_HOST_BT_DEPTH);
-    uint32_t& lastV = which_c ? mWwVb : mWwVa;
-    lastV = v;
-    mWwHit |= (1 << which_c);
-    if (which_c) mWwCountB++; else mWwCountA++;
-    return;   // no mid-store pause — decision happens at frame boundary
+    // Counts + last-value + backtrace already updated by the block ABOVE (lines 673-678); just
+    // return here so the OLD PREWATCH pause-on-first-fire logic is skipped.
+    return;
   }
   if (mWwPersist) {  // PREWATCH's continuous logging — per-store attribution to A vs B
     // pc = c->pc (fn entry set by the last wrapper — often STALE, reflecting the last jal-callee).
