@@ -257,6 +257,14 @@ public:
   //   both 0x800BED80 and 0x800BE22A. All 8 callees stay substrate. Replaces `d0(c, 0x80075a80u)`.
   void areaUpdateTail();
 
+  // areaSlotAckIfMatch(arg): FUN_80074AF0 — SIGNATURE-MATCHED slot ack primitive against the same
+  // 24-entry × 12-byte slot table at 0x800BE238 that areaUpdateTail iterates. The `arg` carries the
+  // entry index in its low byte (arg & 0xFF) plus a 3-byte SIGNATURE in the high bytes; if the high
+  // 3 bytes match the u32 stored at slot[idx].w0, this method sets the "armed" bit at
+  // *(u32)0x800BE358 |= (1 << idx) AND clears the trigger-pending byte at slot[idx].b1.
+  // Mismatched signatures are a no-op. RE'd from disas 0x80074AF0..0x80074B40.
+  void areaSlotAckIfMatch(uint32_t arg);
+
   // ── Boot-time INIT (called from native_boot.cpp before the scheduler starts) ──────────────────
   // The engine's own PC-native init prefix (was the free functions `eng_init_*` in engine_init.cpp).
   // Each method reimplements the corresponding guest init leaf: frame/display/camera state, the

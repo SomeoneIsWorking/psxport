@@ -281,7 +281,7 @@ void beh_sine_motion_sfx(Core* c) {
   L538:
    if (v0 < 256) {                       // slti 256 ; beq -> >=256 goto L558
      a0 = (int32_t)c->mem_r32(nd + 0x68);// lw 104
-     c->r[4] = (uint32_t)a0; rec_dispatch(c, 0x80074af0u);  // FUN_80074AF0(node[0x68])
+     c->engine.areaSlotAckIfMatch((uint32_t)a0);   // FUN_80074AF0 (native)
      c->mem_w32(nd + 0x68, 0);
      goto L598;
    }
@@ -292,7 +292,7 @@ void beh_sine_motion_sfx(Core* c) {
   L56c:
    if (v0 >= 256) goto L598;
    a0 = (int32_t)c->mem_r32(nd + 0x68);
-   c->r[4] = (uint32_t)a0; rec_dispatch(c, 0x80074af0u);    // FUN_80074AF0(node[0x68])
+   c->engine.areaSlotAckIfMatch((uint32_t)a0);   // FUN_80074AF0 (native)
    c->r[4] = 129; c->r[5] = 0; c->r[6] = 0; rec_dispatch(c, 0x80074590u);  // FUN_80074590(129,0,0)
    v0 = (int32_t)c->r[2];
    c->mem_w32(nd + 0x68, (uint32_t)v0);

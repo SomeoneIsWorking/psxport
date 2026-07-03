@@ -1358,6 +1358,25 @@ void Engine::areaUpdateTail() {
   c->r[31] = ra_save;
 }
 
+// Engine::areaSlotAckIfMatch — FUN_80074AF0 body. Pure 21-instruction primitive over the same
+// slot table (0x800BE238, 12-byte stride) + armed-mask (0x800BE358) that areaUpdateTail iterates,
+// but scoped to a SINGLE ack event: the caller passes an arg encoding {entryIdx: arg & 0xFF,
+// signature: arg & 0xFFFFFF00}; if the signature matches the u32 stored at slot[idx].w0's high
+// 3 bytes, set the armed bit AND clear the slot's trigger-pending byte at +1. Signature mismatch
+// is a silent no-op (the recomp's `bne v0, a0, 0x80074B3C` short-circuits directly to jr ra).
+// RE'd verbatim from disas 0x80074AF0..0x80074B40.
+void Engine::areaSlotAckIfMatch(uint32_t arg) {
+  Core* c = core;
+  uint32_t idx = arg & 0xFFu;
+  uint32_t entry = 0x800BE238u + idx * 12u;
+  uint32_t stored_hi3 = c->mem_r32(entry) & 0xFFFFFF00u;
+  uint32_t arg_hi3    = arg & 0xFFFFFF00u;
+  if (stored_hi3 != arg_hi3) return;
+  uint32_t mask = c->mem_r32(0x800BE358u);
+  c->mem_w32(0x800BE358u, mask | (1u << idx));       // set armed bit `idx`
+  c->mem_w8 (entry + 1, 0);                            // clear trigger-pending byte
+}
+
 // Register the GAME-stage area-init overrides when this just-loaded overlay is GAME.BIN at the stage base.
 // Detect by the fixed entry + handler signatures (START.BIN/DEMO.BIN are smaller and hold stale bytes at
 // these addresses, so they never match). Called from the overlay-load scan (engine_submit.cpp); registered
