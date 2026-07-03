@@ -250,8 +250,8 @@ void beh_typed_init_exit_poker(Core* c) {
   n3 = c->mem_r8(nd + 3);
   switch (n3) {
     case 0:                                          // st2sub0 @0x8011872c
-      leaf1(c, 5, 0x80040B48u);                       // SceneEvents::arm(5) — FUN_80040B48 (RE'd, port pending)
-      if ((int32_t)c->r[2] >= 0) {
+      // FUN_80040B48 = SceneEvents::arm; caller advances only when events are enabled (r[2] >= 0).
+      if (c->engine.sceneEvents.arm(5) >= 0) {
         c->inventory.giveAndFlag(36, 1);              // FUN_8004D4C4(36, 1) [native]
         leaf1(c, nd, 0x8004B0D8u);                    // FUN_8004B0D8(node)
       }

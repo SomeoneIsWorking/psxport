@@ -26,24 +26,13 @@
 //   - FUN_8007712C   the 5-way bounds-cull body dispatched by Actor::boundsCull (jumptable at
 //                    0x80016CC0 on scratchpad byte *(0x1F800084); mode 4 area override for cull
 //                    mode 2). Thin wrapper FUN_8007778C is now native.
-//   - FUN_80040B48   SCENE-EVENT-ARM primitive. RE'd shape (disas 0x80040B48..0x80040BFC):
-//                      * global gate: if *(int16_t)0x800E7FEE == 0, return -1 (events off).
-//                      * per-slot armed flag: bail with 0 if *(u8)(0x800BF870+arg+68) already set;
-//                        else set it (arm slot 'arg' idempotently).
-//                      * bump global-arm counter *(u16)0x800BF8A8 by 1.
-//                      * call FUN_80040A58(arg, 0) → v0; advance the event-stream pointer
-//                        *(u32)0x800BF874 by v0.
-//                      * append to the event ring at base 0x800ED058 (write-head byte at
-//                        0x800ED06D): record[idx]+0x16 = arg, record[idx]+0x1C = 0, advance head.
-//                    Returns 1 on successful arm, 0 if slot already armed, -1 if events gate off.
-//                    Callers ignore the return in most cases (SFX/scene beats fire once, best-effort);
-//                    the confirm-helper flow here treats nonzero return as "consumed → advance". Six
-//                    callsites confirm the wide use: entity dispatch (arg=56), typed_init_exit_poker
-//                    (arg=5), pickup_collect_trigger (arg=0x39/0x3a — SFX), area_transition_machine
-//                    (arg=0x42), and per-type confirm here (args 0x50/0x4E/0x4F). Native ownership
-//                    needs FUN_80040A58 + a formal `class SceneEvents` on Engine (owns the arm-slot
-//                    table 0x800BF870, stream cursor 0x800BF874, arm counter 0x800BF8A8, and ring
-//                    at 0x800ED058) — its own arc.
+//   - (FUN_80040B48  SCENE-EVENT-ARM — NOW NATIVE via SceneEvents::arm on Engine (scene_events.cpp).
+//                    Bundles the FUN_80040A58 size-class helper as SceneEvents::classSize (public so
+//                    the multiple substrate callers of func_80040A58 also share it). Six callsites
+//                    all migrated: entity.cpp (arg=56), beh_typed_init_exit_poker (arg=5),
+//                    beh_pickup_collect_trigger (0x39/0x3a — SFX), beh_area_transition_machine
+//                    (0x42), and confirm_or_advance here (0x50/0x4E/0x4F per-type). Gated
+//                    `sceneeventsarmverify`.
 //   - (FUN_8007E110  SCENE-ENTITY SPAWN — NOW NATIVE via Spawn::sceneEntity, spawn.cpp. Inlined
 //                    FUN_8007A5A8 (class-3 list-1 tail-insert allocator) into the same method.
 //                    The per-frame handler FUN_8007DDE0 stays reachable via its address stored at
@@ -78,10 +67,7 @@ enum class Sta : uint8_t { Init = 0, Active = 1, Idle = 2, Despawn = 3 };
 // Un-RE'd sub-behaviors still called via rec_dispatch.
 // (FUN_8007778C bounds-cull wrapper is NATIVE now via Actor::boundsCull; the 5-way FUN_8007712C
 //  body it dispatches remains opaque and stays a rec_dispatch inside boundsCull.)
-// FUN_80040B48 = SCENE-EVENT-ARM (see top-of-file). Arms event id `arg` in the field-wide event
-// system; returns 1 on new arm, 0 if already armed, -1 if events gate off. The confirm flow below
-// treats nonzero as "consumed → advance triggerSub to 5".
-constexpr uint32_t SUB_EVENT_ARM        = 0x80040B48u;
+// (FUN_80040B48 = SceneEvents::arm — NOW NATIVE, callsites use c->engine.sceneEvents.arm.)
 // (FUN_8007E110 = Spawn::sceneEntity — NOW NATIVE, callsites use c->engine.spawn.sceneEntity.)
 
 // Data-table addresses (halfword strides, indexed by area/type).
@@ -98,13 +84,11 @@ constexpr uint32_t PAD_EDGE_HW      = 0x800E7E68u;   // new-frame pad-edge bitma
 constexpr uint32_t PAD_CUR_HW       = 0x1F800174u;   // current pad state
 constexpr uint32_t SPECIAL_AREA_TAG = 0x800E7E85u;   // guard on the special-area sceneHandle release (0x1F skips)
 
-// The confirm helper flow (state-1 triggerSub==0 branch): dispatch SUB_EVENT_ARM(arg); if it
-// returns nonzero, set triggerSub = 5 (skip to enter-active).
+// The confirm helper flow (state-1 triggerSub==0 branch): arm the event; if the arm succeeded
+// (fresh arm = 1, or events gate off = -1 → both nonzero), skip to triggerSub=5. Already-armed = 0
+// means retry next tick.
 inline void confirm_or_advance(Actor& a, uint32_t arg) {
-  Core* c = a.core();
-  c->r[4] = arg;
-  rec_dispatch(c, SUB_EVENT_ARM);
-  if (c->r[2] != 0) a.setTriggerSub(5);
+  if (a.core()->engine.sceneEvents.arm((uint8_t)arg) != 0) a.setTriggerSub(5);
 }
 
 // Special-area set for two paths (state-0 alive() + box override, tail sceneHandle release):

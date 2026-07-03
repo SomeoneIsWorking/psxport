@@ -44,7 +44,7 @@ inline void do_case0(Core* c, uint32_t obj) {
   if (sceneNode != 0) {
     if (c->mem_r8(0x800BF8EDu) == 0) {
       c->mem_w8(obj + 5, (uint8_t)(c->mem_r8(obj + 5) + 1));
-      c->r[4] = 0x39; rec_dispatch(c, 0x80040B48u);            // SceneEvents::arm(0x39) — SFX event id; FUN_80040B48 (RE'd, port pending)
+      c->engine.sceneEvents.arm(0x39);                          // SFX event; FUN_80040B48 (native)
     } else {
       c->mem_w8(obj + 5, (uint8_t)(c->mem_r8(obj + 5) + 2));
     }
@@ -122,7 +122,7 @@ bool beh_pickup_collect_trigger_body(Core* c) {
         uint32_t bit = 1u << (c->mem_r8(obj + 3) & 0x1f);
         c->mem_w8(0x800BFA23u, (uint8_t)(prev | (uint8_t)bit));
         if (c->mem_r8(0x800BF8EEu) == 0) {
-          c->r[4] = 0x3a; rec_dispatch(c, 0x80040B48u);          // SceneEvents::arm(0x3a) — SFX event id; FUN_80040B48 (RE'd, port pending)
+          c->engine.sceneEvents.arm(0x3a);                        // SFX event; FUN_80040B48 (native)
           c->mem_w8(obj + 0x2b, 0);
           return true;                               // early return (LAB at 0x8007454c)
         }

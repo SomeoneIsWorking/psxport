@@ -40,6 +40,7 @@ Core::Core() {
   engine.verifyGate.core = this;        // Engine-owned A/B snapshot+diff helper (diag only)
   engine.behaviors.core = this;         // Engine-owned per-object behavior dispatcher
   engine.cull.core = this;              // Engine-owned visibility cull subsystem
+  engine.sceneEvents.core = this;       // Engine-owned scene-event arm subsystem
   rng.core        = this;
   trig.core       = this;
   math.core       = this;
