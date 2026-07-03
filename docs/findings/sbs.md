@@ -1,5 +1,27 @@
 # Findings — SBS dual-core compare harness (PSXPORT_SBS)
 
+## Post-Slip-#1 wide BYTETRACE classification (2026-07-03) — most of remaining 1880 B ramdiff is low-signal; two actionable clusters named
+- **finding:** Ran two `PSXPORT_SBS_BYTETRACE=<lo>,<hi>` sweeps to classify what fills the 1880 B ramdiff after Slip #1 closed.
+  ```
+  range=0x800EE000..0x800EEA00  →  2287 CLEAN,  30 PHASE, 34 SOFT-PHASE, 209 REAL  (3 ONE-SIDED, 0 SKEWED, 17 MIXED in top-summary)
+  range=0x800EEA00..0x800EF400  →  2560 CLEAN,   0 PHASE,  0 SOFT-PHASE,   0 REAL  (fully clean; no writes settle here in the window)
+  range=0x800F0000..0x800F1000  →  4049 CLEAN,   0 PHASE, 42 SOFT-PHASE,   5 REAL  (5 ONE-SIDED at stride 0xC4)
+  ```
+- **actionable cluster 1 — 5 stride-0x88 MIXED bytes at offset 0x7C of 4 spawn nodes in 0x800EE104..0x800EE324 = TARGET-#2 architectural (do-not-re-derive block above).** Live values MATCH between A and B; write COUNTS differ ~2× (native render walks trigger extra writes that `dualviewSnapshot.restorePre` rewinds). Not a scheduling drift; not a transcription defect. Already parked as native-render-vs-PSX-render.
+- **actionable cluster 2 — 5 stride-0xC4 ONE-SIDED bytes at offset 0x36 of records in 0x800F00xx (0x36 / 0xFA / 0x1BE / 0x282 / 0x346) is a NEW candidate defect:**
+  - **live values DIFFER** on all 5 (A=0xC2/0xA1/0x8A/0xA9/0x8E vs B=0x48/0x87/0x70/0xBF/0x80) → genuine settled-state divergence, not just a transient rate mismatch.
+  - **RA signature is clean:**
+    ```
+    A-ras: DEAD0000×97   0x80133910×95   0x800799D0×3   (identical across all 5 addresses)
+    B-ras: 0x80133910×94 0x80133CEC×94  0x800799D0×3
+    ```
+    ra=0x80133910 is inside `ov_a00_gen_80133774` state-1 entry helper (called from beh_typed_table_seed_gate 0x80133C14); ra=0x80133CEC is inside `ov_a00_gen_80133C14` right after `ov_a00_func_801337E4(c)` (line 20577 generated/ov_a00_shard_0.c). A's DEAD0000×97 replaces those writes with native-inline (no r[31] update).
+  - **native handler already exists:** `game/ai/beh_typed_table_seed_gate.cpp` (0x80133C14, registered in behavior_dispatch.cpp:85). Native calls `rec_dispatch(0x801337E4)` for the state-1 entry helper. So both A and B execute the same recomp helper via the same dispatch — the divergence has to be either (a) in what a1..a3 registers hold at the dispatch, or (b) in whether native takes the same state-1 branch (g<0x1c / g==0x22 / else) as recomp.
+  - **not yet root-caused this session** — deferred as a target-#4 candidate. Fits the taxonomy checklist: cross-check state-1 branch bytes in the native (game/ai/beh_typed_table_seed_gate.cpp:88-108) against decomp of FUN_80133c14 at scratch/decomp/a00/ (which needs regeneration — only functions.csv is populated for a00). Prevention rule for the LUI+ADDIU class already applies — the TBL_A6E4 constant (0x8014A6E4 = 0x80150000 + sign_extend(-0x591C) = 0x8014A6E4) IS correct (comment on line 46 notes this), so that specific defect class is ruled out.
+- **not-actionable in the same range — 200 REAL bytes classified only by count difference, no top-summary shape.** These are 1–3-write count deltas on bytes whose top-3 divergent (value, count_A, count_B) rows didn't exceed the classifier's summary threshold — low-signal noise. Would need per-address wwatch to attribute individually; probably not worth the token spend when each is a 1-write transient.
+- **workflow lesson (wide sweep is cheap):** the two BYTETRACE runs classified 9216 bytes in ~40 s of run time each — the same tool that found target #1 in seconds also names what's LEFT after each fix, so a fixed-target cadence stays productive. Sweep-first-then-decide beats "which byte should I hit next?" every time.
+- **refs:** $CLAUDE_JOB_DIR/tmp/bt_wide_out.txt (post-Slip-#1 sweep of 0x800EE000..0x800EEA00), $CLAUDE_JOB_DIR/tmp/bt_f000.txt (0x800F0000..0x800F1000 sweep with stride-0xC4 signature), game/ai/beh_typed_table_seed_gate.cpp (native handler, RA source for A's DEAD0000 writes), generated/ov_a00_shard_0.c:20529-20599 (recomp of FUN_80133c14 state 1, RA source for B's 0x80133CEC writes).
+
 ## Slip #1 residual CLOSED — defer native DEMO substate 5 (LEAVE→GAME) by one tick to match coro yield cost (2026-07-03, 550178a)
 - **finding:** After START.BIN cadence match (block below) aligned boot to f8, the DEMO→GAME transition still slipped one tick. STAGETRACE snapshot pre-fix: at f26 A entry=0x8010637C sm48=5 (native_start_stage rewrote task-0 entry synchronously inside the demo.frame() dispatch of substate 5); B still at entry=0x801062E4, catching up at f27. Both cores had reached sm[0x48]==5 together at f25 — the drift was entirely in "how long the LEAVE-GAME substate takes to actually flip the entry pointer."
 - **root cause:** Native `demo.frame()` at sm[0x48]==5 dispatches native_start_stage inline in one scheduler tick. Coro of 0x801062E4 substate 5 in the recomp body yields at least once through FUN_80051f80 before completing, so B's entry rewrite lands one tick LATER than A's. Same class as the closed Slip #2 (SOP fieldMode case 0 yield vs native inline).
