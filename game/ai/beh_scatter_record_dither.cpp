@@ -27,6 +27,7 @@
 // reproduced (the per-object dispatcher ignores it; the gate compares only RAM+scratchpad).
 
 #include "core.h"
+#include "render/cull.h"    // Cull::coneCull2b278 (FUN_8002B278)
 #include "cfg.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -145,8 +146,8 @@ void beh_scatter_record_dither(Core* c) {
   s0 += 8;                                       // c7a8 delay slot
   if (s1 < c->mem_r16s(obj + 0x4e)) goto L73c;
  L7ac:
-  c->r[4] = obj; rec_dispatch(c, 0x8002B278u); v0 = c->r[2];
-  if (v0 != 0) goto L7d4;
+  c->r[4] = obj; c->engine.cull.coneCull2b278();   // FUN_8002B278 (native)
+  if (c->r[2] != 0) goto L7d4;
   c->engine.collision.listScan(obj);
  L7d4:
   return;

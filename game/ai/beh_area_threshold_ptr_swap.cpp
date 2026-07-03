@@ -23,6 +23,7 @@
 // is NOT reproduced; the gate compares only RAM+scratchpad vs rec_super_call.
 
 #include "core.h"
+#include "render/cull.h"    // Cull::coneCull2b278 (FUN_8002B278)
 #include "cfg.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -81,8 +82,8 @@ void beh_area_threshold_ptr_swap(Core* c) {
   }
  L4e0:
   if (!(c->mem_r8(0x800E7EAAu) < 12)) goto L518; // >= 12 -> node[4]=3
-  c->r[4] = obj; rec_dispatch(c, 0x8002B278u); v0 = c->r[2];
-  if (v0 != 0) goto L528;
+  c->r[4] = obj; c->engine.cull.coneCull2b278();   // FUN_8002B278 (native)
+  if (c->r[2] != 0) goto L528;
   c->engine.collision.listScan(obj);
   goto L528;
  L518:
