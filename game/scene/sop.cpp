@@ -17,6 +17,7 @@
 // of 0x80109164 (faithful below, addresses annotated).
 
 #include "core.h"
+#include "game.h"    // SchedulerState.sop_field_step (Slip #2 fix — docs/findings/sbs.md)
 #include "cfg.h"
 #include "sop.h"
 #include <stdio.h>
@@ -243,6 +244,18 @@ void Sop::fieldMode() { Core* c = core;
     case 0: {  // LOAD — screen held fully black for this one-frame state (state 1 next frame keeps holding
       //                 during startup delay, then ramps in). Matches PSX FUN_8007e9c8(0xffffff,0,4) per-frame.
       c->screenFade.set(ScreenFade::SUBTRACTIVE, 0xff, 0xff, 0xff);
+      // SLIP #2 FIX (docs/findings/sbs.md attack (a)): defer case 0 completion by one tick to match
+      // coro's cost. The recomp body of 0x80109450 calls FUN_80044BD4 which does a
+      // `while (DAT_1f80019b == 0) FUN_80051f80(1)` wait-loop (scratch/decomp/bd4.c) — yields at least
+      // once. Native runs `native_sop_area_load` inline sync = one tick less. Defer:
+      //   sop_field_step==0 → set to 1, RETURN (defer completion — screen stays black one tick)
+      //   sop_field_step==1 → run the actual case 0 work, reset step to 0 for the next area load
+      // Slot 0 is task-0 (the ONLY task that runs SOP fieldMode); array indexed for consistency.
+      if (c->game && c->game->sched.sop_field_step[0] == 0) {
+        c->game->sched.sop_field_step[0] = 1;
+        break;   // defer — sm[0x50] stays 0; next tick re-enters this case
+      }
+      c->game->sched.sop_field_step[0] = 0;   // completing now; arm again for the next area
       native_sop_area_load(c);                 // INLINE sync load (replaces FUN_80044bd4) -> 1f80019b=1
       c->engine.pool.init();   // 0x8007B18C — native (via LIVE gated entry)
       c->engine.pool.resetControlBlock();       // 0x800796DC — native (via LIVE gated entry)

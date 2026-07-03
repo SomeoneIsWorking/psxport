@@ -202,6 +202,16 @@ struct SchedulerState {
   // the entry finally rewrites to DEMO (and iter ends via scheduler_yield on the swap).
   uint8_t stage0_step[3] = {};   // per-task step counter for the native START.BIN step-spread
 
+  // ---- Native SOP fieldMode case-0 step-spread (attack (a), docs/findings/sbs.md Slip #2) ----
+  // The recomp body of 0x80109450's case 0 calls FUN_80044BD4 (scratch/decomp/bd4.c) which spawns a
+  // slot task and then `while (DAT_1f80019b == 0) FUN_80051f80(1)` — YIELDS AT LEAST ONCE waiting
+  // for the callback. Native Sop::fieldMode case 0 runs `native_sop_area_load` INLINE = no yield,
+  // completing in 1 tick vs coro's ~2. This flag defers native completion by one tick to match.
+  //   0 = fresh entry into case 0; set to 1 and RETURN without touching sm[0x50] (defers case 0)
+  //   1 = second tick; run the actual case 0 work, then reset to 0 for the next area load
+  // Not per-task since only task 0 runs SOP; using [3] for consistency with the other arrays.
+  uint8_t sop_field_step[3] = {};
+
   // Resident overlay per OVERLAP SLOT (0x80106228 stage / 0x80108F9C mode / 0x8018A000 area), recorded
   // by overlay_note_load() at LOAD time — when the freshly-written image still matches its raw .BIN
   // signature, BEFORE the game mutates its header pointer table at runtime. The router routes by this
