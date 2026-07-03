@@ -332,3 +332,80 @@ uint32_t Spawn::spawnAndInit(uint32_t a0, uint32_t posSrc, uint32_t a2) {   // F
   c->engine.verifyGate.run(spawn_and_init, 0x8003116Cu, "spawninitverify", s_v);
   return c->r[2];
 }
+
+// FUN_8007E110 — SCENE-ENTITY SPAWN primitive. RE'd from disas 0x8007E110..0x8007E1B4.
+// Shape: allocate a class-3 slot via FUN_8007A5A8, install per-frame handler 0x8007DDE0, initialise
+// scene-data pointers from *(u32)0x800ECF60. FUN_8007A5A8 is the SPECIALISED ALLOCATOR — always list 1,
+// always tail-insert, no ref/mode arg, no pool-low guard, class byte forced to 3. Inlined here (its
+// only caller was FUN_8007E110, so no separate primitive is worth exposing).
+//
+// FUN_8007A5A8 body (disas 0x8007A5A8..0x8007A620):
+//   node = *(u32)FREE_HEAD; if (node == 0) return 0;         # freelist empty
+//   nextFree = *(u32)(node+36);
+//   tail = *(u32)LIST_TAIL[1];
+//   *(u32)(node+36) = 0;                                     # clear next
+//   *(u8)FREE_CNT = *(u8)FREE_CNT - 1;
+//   *(u32)FREE_HEAD = nextFree;
+//   *(u32)(node+32) = tail;                                  # node.prev = tail (0 if list empty)
+//   if (tail == 0) *(u32)LIST_HEAD[1] = node;
+//   else            *(u32)(tail+36) = node;                  # tail.next = node
+//   *(u32)LIST_TAIL[1] = node;
+//   *(u8)(node+10) = 1;                                      # list id
+//   *(u8)(node+0)  = 2;                                      # alive
+//   *(u8)(node+12) = 3;                                      # class = 3 (constant arg)
+//
+// FUN_8007E110 body (post-alloc, disas 0x8007E144..0x8007E1A0):
+//   *(u8)(node+0x47) = 2;
+//   *(u32)(node+0x1C) = 0x8007DDE0;                          # behavior handler ptr (per-frame tick)
+//   *(u8)(node+3) = subtype;
+//   *(u8)(node+0x28) |= 0x80;                                # alive/active flag
+//   base = *(u32)0x800ECF60;                                 # scene-entity data-table pointer
+//   *(u32)(node+0x48) = base;
+//   *(u32)(node+0x4C) = base + 0x10;
+//   hCount = *(u16)base;
+//   *(u16)(node+0x5C) = 0xFFFF;                              # sentinel (-1)
+//   *(u16)(node+0x5E) = sceneId;
+//   *(u32)(node+0x50) = base + 0x10 + hCount*4;              # record-end
+//
+// Return: node ptr on success, 0 on freelist exhaustion (caller stashes in Actor::sceneHandle).
+// A/B'd via `sceneentityverify` (full main-RAM + scratchpad diff vs rec_super_call(0x8007E110u)).
+static uint32_t scene_entity_native(Core* c) {
+  const uint32_t sceneId = c->r[4] & 0xFFFFu;
+  const uint32_t subtype = c->r[5] & 0xFFu;
+  // ---- FUN_8007A5A8: alloc class-3 tail-insert into list 1 ------------------------------------
+  uint32_t node = c->mem_r32(FREE_HEAD);
+  if (node == 0) return 0;
+  uint32_t nextFree = c->mem_r32(node + 36);
+  uint32_t tail     = c->mem_r32(LIST_TAIL[1]);
+  c->mem_w32(node + 36, 0);
+  c->mem_w8(FREE_CNT, (uint8_t)(c->mem_r8(FREE_CNT) - 1));
+  c->mem_w32(FREE_HEAD, nextFree);
+  c->mem_w32(node + 32, tail);
+  if (tail == 0) c->mem_w32(LIST_HEAD[1], node);
+  else           c->mem_w32(tail + 36, node);
+  c->mem_w32(LIST_TAIL[1], node);
+  c->mem_w8(node + 10, 1);
+  c->mem_w8(node + 0,  2);
+  c->mem_w8(node + 12, 3);
+  // ---- FUN_8007E110: scene-entity init on the fresh node --------------------------------------
+  c->mem_w8 (node + 0x47, 2);
+  c->mem_w32(node + 0x1C, 0x8007DDE0u);
+  c->mem_w8 (node + 3,    (uint8_t)subtype);
+  c->mem_w8 (node + 0x28, (uint8_t)(c->mem_r8(node + 0x28) | 0x80));
+  uint32_t base   = c->mem_r32(0x800ECF60u);
+  uint16_t hCount = c->mem_r16(base);
+  c->mem_w32(node + 0x48, base);
+  c->mem_w32(node + 0x4C, base + 0x10);
+  c->mem_w16(node + 0x5C, (uint16_t)0xFFFFu);
+  c->mem_w16(node + 0x5E, (uint16_t)sceneId);
+  c->mem_w32(node + 0x50, base + 0x10 + (uint32_t)hCount * 4);
+  return node;
+}
+uint32_t Spawn::sceneEntity(uint16_t sceneId, uint8_t subtype) {
+  Core* c = this->core;
+  c->r[4] = sceneId;
+  c->r[5] = subtype;
+  static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("sceneentityverify") ? 1 : 0;
+  c->engine.verifyGate.run(scene_entity_native, 0x8007E110u, "sceneentityverify", s_v);
+  return c->r[2];
+}

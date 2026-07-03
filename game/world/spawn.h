@@ -35,6 +35,14 @@ public:
   //   position seed from `posSrc` + heading `a2`, then a PSX per-object init (FUN_80028E10) run via
   //   rec_dispatch. Returns node ptr (0 on pool-empty).
   uint32_t spawnAndInit(uint32_t a0, uint32_t posSrc, uint32_t a2);
+
+  // sceneEntity(sceneId, subtype): FUN_8007E110 — allocate a SCENE-ENTITY node (class-3 tail-insert
+  //   into active list 1 via the FUN_8007A5A8 allocator), install the per-frame scene-entity handler
+  //   (0x8007DDE0), and initialise the node's data-table pointers from *(u32)0x800ECF60 (the field
+  //   scene-entity data table). Returns node ptr on success or 0 on pool exhaustion (the caller
+  //   stashes the return in Actor::sceneHandle (obj+0x14) and treats nonzero as "spawned"). The
+  //   per-frame handler FUN_8007DDE0 stays reachable via its stored address (recomp substrate).
+  uint32_t sceneEntity(uint16_t sceneId, uint8_t subtype);
 };
 
 #endif

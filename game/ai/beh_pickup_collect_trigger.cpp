@@ -38,10 +38,10 @@ constexpr uint32_t BEH_FN = 0x800741DCu;
 inline void do_case0(Core* c, uint32_t obj) {
   if (c->mem_r8(obj + 0x2b) != 3) return;
   int16_t sid = c->mem_r16s(0x800A4CF8u + (uint32_t)c->mem_r8(obj + 3) * 2);
-  c->r[4] = (uint32_t)(int32_t)sid; c->r[5] = 0;
-  rec_dispatch(c, 0x8007E110u);                                  // Spawn::sceneEntity(sid, 0) — FUN_8007E110 (RE'd, port pending); returns node/2
-  c->mem_w32(obj + 0x14, c->r[2]);
-  if (c->r[2] != 0) {
+  // Spawn::sceneEntity — was rec_dispatch(0x8007E110); now native (spawn.cpp).
+  uint32_t sceneNode = c->engine.spawn.sceneEntity((uint16_t)sid, /*subtype=*/0);
+  c->mem_w32(obj + 0x14, sceneNode);
+  if (sceneNode != 0) {
     if (c->mem_r8(0x800BF8EDu) == 0) {
       c->mem_w8(obj + 5, (uint8_t)(c->mem_r8(obj + 5) + 1));
       c->r[4] = 0x39; rec_dispatch(c, 0x80040B48u);            // SceneEvents::arm(0x39) — SFX event id; FUN_80040B48 (RE'd, port pending)

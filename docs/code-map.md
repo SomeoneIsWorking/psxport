@@ -7,268 +7,139 @@ A native may exist already. **LIVE** = reachable by direct C call from a native_
 dispatch root (actually runs). **ORPHAN** = native exists but only the REMOVED override
 table used to reach it — it is dead code until a native parent calls it directly.
 
-Totals: 415 native fns, 212 owned addresses, 107 LIVE / 308 ORPHAN.
+Totals: 138 native fns, 121 owned addresses, 7 LIVE / 131 ORPHAN.
 
 | addr | status | symbol | file:line | depends-on (still-PSX) | summary |
 |------|--------|--------|-----------|------------------------|---------|
-| 0x80003A4C | ORPHAN | `ov_pad_read` | runtime/recomp/pad_input.cpp:299 |  | Slot-buffer pointer table base in the SIO driver's low-RAM globals: th… |
-| 0x8001CAC0 | LIVE | `Engine::areaModeDispatch` | game/scene/engine_stage.cpp:1087 |  | Engine::areaModeDispatch — the 22-way area-mode dispatcher at guest 0x… |
-| 0x8001CE90 | ORPHAN | `ov_cd_cmd_stream` | runtime/recomp/cd_override.cpp:83 |  | (cmd, param, result) — the engine's streaming-path CD-command |
-| 0x8001CF2C | ORPHAN | `ov_voice_stop` | runtime/recomp/cd_override.cpp:286 | 0x8001CF00 | stop the current voice/BGM clip. |
-| 0x8001D2A8 | ORPHAN | `ov_voice_play` | runtime/recomp/cd_override.cpp:266 |  |  |
-| 0x8001D940 | ORPHAN | `ov_cd_async_read` | runtime/recomp/cd_override.cpp:179 |  | the engine's ASYNC streaming reader. It is spawned as task1 (its body |
-| 0x8001DB8C | LIVE | `ov_cd_loadfile` | runtime/recomp/cd_override.cpp:139 |  | (a0=dest, a1=lba, a2=size_bytes): the engine's file loader. The |
-| 0x8001DC40 | LIVE | `ov_cd_loadfile` | runtime/recomp/cd_override.cpp:139 |  | (a0=dest, a1=lba, a2=size_bytes): the engine's file loader. The |
-| 0x8001DC40 | ORPHAN | `ov_cd_dc40` | runtime/recomp/cd_override.cpp:215 |  | Platform-HLE entry for FUN_8001DC40 (intercepted for any caller): (a0=… |
-| 0x80022A80 | LIVE | `Engine::modePerFrameDispatch` | game/scene/engine_stage.cpp:1160 |  | Engine::modePerFrameDispatch — the mode-keyed per-frame overlay handle… |
-| 0x80025588 | ORPHAN | `Engine::sceneEventFifo` | game/scene/engine_stage.cpp:308 |  | Native FUN_80025588 — the field EVENT/COMMAND-QUEUE state machine (str… |
-| 0x80026368 | LIVE | `ov_arr8_dispatch_26368` | game/object/engine_tomba2.cpp:233 |  | Native FUN_80026368 — iterate the 8-slot fixed object array at 0x80100… |
-| 0x800263E8 | LIVE | `ov_800263E8` | game/world/pool.cpp:85 | 0x8007AD98 | area object-record seeding. Selects a per-area byte sequence (table 0x… |
-| 0x800263E8 | LIVE | `ov_263e8_run` | game/world/pool.cpp:307 |  |  |
-| 0x80026C88 | LIVE | `ov_disp_26c88` | game/world/entity.cpp:134 | 0x80026C88 |  |
-| 0x80027768 | ORPHAN | `ov_submit_poly_gt4_bp` | game/render/engine_submit.cpp:578 |  |  |
-| 0x8002AB5C | LIVE | `ov_terrain` | game/render/engine_render_walk.cpp:27 |  |  |
-| 0x8002AB5C | LIVE | `ov_terrain` | game/render/engine_render_walk.cpp:377 |  | default case: the node's own render fn (node+24) — e.g. a collectable'… |
-| 0x8002AB5C | LIVE | `ov_terrain` | game/render/engine_submit.cpp:741 | 0x8002AB5C |  |
-| 0x8002B278 | ORPHAN | `ov_cone_cull_2b278` | game/render/cull.cpp:243 |  |  |
-| 0x8003116C | ORPHAN | `ov_spawn_and_init` | game/world/spawn.cpp:496 |  |  |
-| 0x80031780 | ORPHAN | `ov_list_scan_31780` | game/player/collision.cpp:24 | 0x80031780 | list-tail resolver / reset. Walks the 8-byte-stride linked list rooted… |
-| 0x80031780 | ORPHAN | `ov_list_scan_31780` | game/player/collision.h:8 |  |  |
-| 0x8003B220 | ORPHAN | `ov_hitbox_3b220` | game/player/hitbox.cpp:114 | 0x8003B220 |  |
-| 0x8003B220 | ORPHAN | `ov_hitbox_3b220` | game/player/hitbox.h:6 |  |  |
-| 0x8003B320 | ORPHAN | `ov_subcnt_b320` | game/render/engine_submit.cpp:1163 |  |  |
-| 0x8003B588 | LIVE | `ov_rwalk_b588` | game/render/engine_submit.cpp:1179 | 0x800597AC | PSXPORT_DEBUG=rwalk — phase-2 render-walk caller counter. The per-obje… |
-| 0x8003BB50 | LIVE | `ov_render_walk_snapshot` | game/render/engine_render_walk.cpp:512 |  |  |
-| 0x8003BCF4 | LIVE | `ov_rwalk_aux_bcf4` | game/render/engine_render_walk.cpp:587 |  |  |
-| 0x8003BF00 | LIVE | `ov_rwalk_aux_bf00` | game/render/engine_render_walk.cpp:648 |  |  |
-| 0x8003C048 | LIVE | `ov_render_walk` | game/render/engine_render_walk.cpp:78 |  |  |
-| 0x8003C048 | LIVE | `ov_render_walk` | game/render/engine_render_walk.cpp:402 |  |  |
-| 0x8003C048 | ORPHAN | `ov_rlist_probe` | game/render/render_debug_probes.cpp:103 | 0x8003C048 | PSXPORT_DEBUG=rlist — dump the gen_func_8003C048 render-list node TYPE… |
-| 0x8003C8F4 | ORPHAN | `ov_collectable_quad` | game/render/engine_render_walk.cpp:415 | 0x8003C8F4 |  |
-| 0x8003C8F4 | ORPHAN | `ov_subcnt_c8f4` | game/render/engine_submit.cpp:1164 |  |  |
-| 0x8003CCA4 | LIVE | `ov_perobj_render` | game/render/engine_render_walk.cpp:235 |  |  |
-| 0x8003CCA4 | ORPHAN | `ov_ccase_probe` | game/render/render_debug_probes.cpp:125 | 0x8003CCA4 |  |
-| 0x8003CDD8 | ORPHAN | `ov_perobj_flush` | game/render/engine_render_walk.cpp:65 |  |  |
-| 0x8003CDD8 | ORPHAN | `ov_flush2_probe` | game/render/engine_submit.cpp:246 | 0x8003CDD8 | PSXPORT_DEBUG=flush2 — the MAJOR flush tap (gen_func_8003CDD8). later-… |
-| 0x8003EEC0 | LIVE | `ov_rwalk_aux_eec0` | game/render/engine_render_walk.cpp:700 |  |  |
-| 0x8003F174 | ORPHAN | `ov_flush_probe` | game/render/engine_submit.cpp:225 | 0x8003F174 | PSXPORT_DEBUG=flush — render-command FLUSH tap (later-131 NEXT). Taps … |
-| 0x8003F698 | ORPHAN | `ov_render_cmd` | game/render/engine_submit.cpp:176 |  |  |
-| 0x8003FA44 | LIVE | `ov_render_frame_x` | game/render/engine_render.cpp:74 |  | mid-transition render orchestrator twin (reduced pass set). The walk c… |
-| 0x8003FD10 | ORPHAN | `ov_osc_fd10` | game/world/entity.cpp:500 | 0x8003FD10 |  |
-| 0x80040410 | ORPHAN | `ov_child_spawn_40410` | game/world/entity.cpp:78 | 0x80040410 |  |
-| 0x80040410 | ORPHAN | `ov_child_spawn_40410` | game/world/entity.h:8 |  |  |
-| 0x80040558 | ORPHAN | `ov_sm40558` | game/object/engine_tomba2.cpp:37 |  | Call one node's handler exactly as the recomp does: a0 = node, jalr *(… |
-| 0x80040558 | ORPHAN | `ov_sm40558` | game/world/entity.cpp:367 | 0x80040558 |  |
-| 0x80044BD4 | LIVE | `native_area_load_bd4` | game/scene/engine_stage.cpp:729 |  | Native replacement for FUN_80044bd4(0x800452c0, area, mode, 1): seed t… |
-| 0x80044BD4 | LIVE | `native_transition_area_load` | game/scene/sop.cpp:105 |  | Synchronous TRANSITION area-DATA load — replaces the cooperative spawn… |
-| 0x80044D8C | ORPHAN | `ov_lz_decompress` | game/core/asset.cpp:54 |  |  |
-| 0x80044D8C | ORPHAN | `ov_lz_decompress` | game/core/asset.h:7 |  |  |
-| 0x80044E84 | LIVE | `ov_unpack_group` | game/core/asset.cpp:67 | 0x80080F6C |  |
-| 0x80044F58 | LIVE | `ov_load_texgroup` | game/core/asset.cpp:120 | 0x8001DC40 0x80051FB4 | PC-native TEXTURE-GROUP LOADER — owns the asset-load ORCHESTRATION FUN… |
+| 0x80000000 | ORPHAN | `Fps60::billboardForNode` | game/render/fps60.cpp:272 |  | Queue-time lookup (called from the OT walk in gpu_native.cpp): if `nod… |
+| 0x80003A4C | ORPHAN | `Pad::fillBuffer` | runtime/recomp/pad_input.cpp:53 |  | Write the standard digital auto-pad packet into a buffer the game poll… |
+| 0x8001C000 | ORPHAN | `PlatformHle::inBiosWindow` | runtime/recomp/sync_overrides.cpp:89 |  | Two platform windows, both I/O / hardware-service, NEVER game logic: |
+| 0x8001CAC0 | ORPHAN | `Engine::areaModeDispatch` | game/scene/engine_stage.cpp:1089 |  | Engine::areaModeDispatch — the 22-way area-mode dispatcher at guest 0x… |
+| 0x80022A80 | ORPHAN | `Engine::modePerFrameDispatch` | game/scene/engine_stage.cpp:1162 |  | Engine::modePerFrameDispatch — the mode-keyed per-frame overlay handle… |
+| 0x80025588 | ORPHAN | `Engine::sceneEventFifo` | game/scene/engine_stage.cpp:309 |  | Native FUN_80025588 — the field EVENT/COMMAND-QUEUE state machine (str… |
+| 0x800263E8 | ORPHAN | `Pool::seedAreaObjects` | game/world/pool.cpp:83 | 0x8007AD98 | area object-record seeding. Selects a per-area byte sequence (table 0x… |
+| 0x8003116C | ORPHAN | `Spawn::spawnAndInit` | game/world/spawn.cpp:328 |  |  |
+| 0x80031780 | ORPHAN | `Collision::listScan` | game/player/collision.cpp:24 | 0x80031780 | list-tail resolver / reset. Walks the 8-byte-stride linked list rooted… |
+| 0x8003B588 | ORPHAN | `Render::rwalkB588` | game/render/engine_submit.cpp:512 | 0x800597AC | PSXPORT_DEBUG=rwalk — phase-2 render-walk caller counter. The per-obje… |
+| 0x8003FA44 | ORPHAN | `Render::frameX` | game/render/engine_render.cpp:67 |  | mid-transition render orchestrator twin (reduced pass set). The walk c… |
+| 0x80044BD4 | ORPHAN | `native_area_load_bd4` | game/scene/engine_stage.cpp:738 |  | Native replacement for FUN_80044bd4(0x800452c0, area, mode, 1): seed t… |
+| 0x80044BD4 | ORPHAN | `Sop::transitionAreaLoad` | game/scene/sop.cpp:106 |  | Synchronous TRANSITION area-DATA load — replaces the cooperative spawn… |
+| 0x80044E84 | ORPHAN | `Asset::unpackGroup` | game/core/asset.cpp:66 | 0x80080F6C | PC-owned texture-group unpacker — replaces recompiled FUN_80044E84 (0x… |
+| 0x80044F58 | ORPHAN | `Asset::loadTexgroup` | game/core/asset.cpp:119 | 0x8001DC40 0x80051FB4 | PC-native TEXTURE-GROUP LOADER — owns the asset-load ORCHESTRATION FUN… |
+| 0x80044F58 | ORPHAN | `Asset::preloadTexgroup` | game/core/asset.cpp:181 |  | texture-group load, synchronous. (Mirrors loadTexgroup but driven by e… |
 | 0x800450BC | ORPHAN | `eng_load_stage` | game/scene/engine_level.cpp:27 | 0x8001DB8C 0x80080930 | load a stage's overlay off the disc and set the task's stage entry poi… |
-| 0x800450BC | ORPHAN | `ov_load_stage` | game/scene/engine_level.cpp:46 |  |  |
-| 0x800450BC | LIVE | `native_load_overlay` | game/scene/engine_stage.cpp:1396 |  | load the stage overlay (if any) and point the task's restart entry at … |
-| 0x800452C0 | LIVE | `native_area_load_bd4` | game/scene/engine_stage.cpp:729 |  | Native replacement for FUN_80044bd4(0x800452c0, area, mode, 1): seed t… |
-| 0x8004798C | ORPHAN | `ov_grid_step_4798c` | game/player/collision.cpp:333 | 0x8004798C |  |
-| 0x80047CBC | ORPHAN | `ov_grid_query_47cbc` | game/player/collision.cpp:171 | 0x80047CBC |  |
-| 0x80048360 | ORPHAN | `ov_grid_offset_48360` | game/player/grid_offset.cpp:143 | 0x80048360 |  |
-| 0x80048360 | ORPHAN | `ov_grid_offset_48360` | game/player/grid_offset.h:8 |  |  |
-| 0x800498C8 | ORPHAN | `ov_grid_resolve_498c8` | game/player/collision.cpp:221 | 0x800498C8 |  |
-| 0x80049968 | ORPHAN | `ov_grid_setup_49968` | game/player/collision.cpp:51 | 0x80049968 | collision-grid ROW-POINTER setup. a0 = grid/layer index (&0xff). Reads… |
-| 0x800499E8 | ORPHAN | `eng_task0_boot` | game/scene/engine_level.cpp:102 | 0x8008A110 0x8008B8F0 0x8009A730 | task-0 INITIAL ENTRY (the engine's first-level bootstrap, registered a… |
-| 0x800499E8 | ORPHAN | `ov_task0_boot` | game/scene/engine_level.cpp:135 |  |  |
-| 0x800499E8 | LIVE | `native_task0_bootstrap` | game/scene/engine_stage.cpp:1432 |  | resolve \BIN\START.BIN natively, record its {LBA,size}, switch task 0 … |
-| 0x8004BD64 | ORPHAN | `ov_obj_pos_compose` | game/world/graphics_bind.cpp:174 |  |  |
-| 0x8004CE14 | ORPHAN | `ov_script_vm_4ce14` | game/items/script.cpp:114 | 0x8004CE14 |  |
-| 0x8004CE14 | ORPHAN | `ov_script_vm_4ce14` | game/items/script.h:8 |  |  |
+| 0x800450BC | ORPHAN | `native_load_overlay` | game/scene/engine_stage.cpp:1389 |  | load the stage overlay (if any) and point the task's restart entry at … |
+| 0x8004514C | ORPHAN | `Asset::preloadStage1` | game/core/asset.cpp:234 |  | the stage-1 callback. SWDATA + DAT load, shared texgroup sub-load, rel… |
+| 0x800452C0 | ORPHAN | `native_area_load_bd4` | game/scene/engine_stage.cpp:738 |  | Native replacement for FUN_80044bd4(0x800452c0, area, mode, 1): seed t… |
+| 0x80049968 | ORPHAN | `Collision::gridSetup` | game/player/collision.cpp:53 | 0x80049968 | collision-grid ROW-POINTER setup. a0 = grid/layer index (&0xff). Reads… |
+| 0x800499E8 | ORPHAN | `eng_task0_boot` | game/scene/engine_level.cpp:94 | 0x8008A110 0x8008B8F0 0x8009A730 | task-0 INITIAL ENTRY (the engine's first-level bootstrap, registered a… |
+| 0x800499E8 | ORPHAN | `Engine::task0Bootstrap` | game/scene/engine_stage.cpp:1425 |  | resolve \BIN\START.BIN natively, record its {LBA,size}, switch task 0 … |
 | 0x8004D338 | ORPHAN | `Inventory::addEntry` | game/items/inventory.cpp:148 |  |  |
 | 0x8004D4C4 | ORPHAN | `Inventory::giveAndFlagEntry` | game/items/inventory.cpp:161 |  |  |
 | 0x8004D4F4 | ORPHAN | `Inventory::giveEntry` | game/items/inventory.cpp:170 |  |  |
-| 0x8004D7EC | ORPHAN | `ov_bittest_4d7ec` | game/math/mathlib.cpp:30 | 0x8004D7EC | pure bitmap bit-test (~2%, 6.8k calls): byte = bitmap[(int16)(a0/8)] t… |
-| 0x8004D868 | ORPHAN | `ov_bittest_4d868` | game/math/mathlib.cpp:51 | 0x8004D868 | sibling of FUN_8004D7EC (bit-test) against a fixed third bitmap @0x800… |
-| 0x8004FE84 | ORPHAN | `Engine::sceneRenderListBuilder` | game/scene/engine_stage.cpp:354 |  | Native FUN_8004FE84 — a 2-phase scene/render-list builder driver (stru… |
-| 0x800509B4 | LIVE | `eng_init_display` | game/scene/engine_init.cpp:50 | 0x80050738 | engine DISPLAY + GTE-projection init, PC-native. Sets the GTE projecti… |
-| 0x80050A0C | LIVE | `eng_init_framestate` | game/scene/engine_init.cpp:30 |  | engine frame-state init: zero the vblank counter and the double-buffer… |
-| 0x80050A80 | LIVE | `eng_init_camera` | game/scene/engine_init.cpp:74 |  | engine CAMERA init: identity camera-rotation matrix at scratchpad 0x1F… |
-| 0x80050B08 | LIVE | `ov_game_main` | runtime/recomp/native_boot.cpp:185 | 0x80089860 |  |
-| 0x80050B08 | LIVE | `ov_game_main` | runtime/recomp/native_boot.cpp:281 |  |  |
-| 0x80050B08 | LIVE | `native_boot_run` | runtime/recomp/native_boot.cpp:575 |  | Wired from boot.c when PSXPORT_NATIVE_BOOT is set. Registers the main … |
-| 0x80050DE4 | LIVE | `Engine::sceneStateStep` | game/scene/engine_stage.cpp:1110 |  | Engine::sceneStateStep — the SCENE-INIT / SCENE-RUN state machine at g… |
-| 0x80051128 | ORPHAN | `ov_xform51128` | game/render/engine_submit.cpp:974 |  |  |
-| 0x80051128 | ORPHAN | `ov_xform51128` | game/render/node_xform.cpp:22 |  | ov_xform51128 lives in engine_submit.cpp (its verify wrapper and body … |
-| 0x80051464 | ORPHAN | `ov_xform_propagate` | game/render/engine_submit.cpp:757 |  |  |
-| 0x80051464 | ORPHAN | `ov_xform_propagate` | game/render/engine_submit.cpp:869 |  |  |
-| 0x80051794 | LIVE | `eng_identity_matrix` | game/scene/engine_init.cpp:20 |  | set an identity 3x3 rotation matrix (0x1000 = 1.0 fixed on the diagona… |
-| 0x800517BC | ORPHAN | `ov_settrans` | game/math/engine_math.cpp:623 |  | write a 0x20-byte vector block: a1/a2/a3 (each sign-extended s16) at a… |
-| 0x800517F8 | ORPHAN | `ov_obj_render_update` | game/world/graphics_bind.cpp:97 |  |  |
-| 0x80051B04 | ORPHAN | `ov_cmdenq_probe` | game/render/engine_submit.cpp:271 | 0x80051B04 | PSXPORT_DEBUG=cmdenq — render-command ENQUEUE tap (later-132). gen_fun… |
-| 0x80051B70 | ORPHAN | `ov_obj_record_init` | game/world/graphics_bind.cpp:75 |  |  |
-| 0x80051C8C | ORPHAN | `ov_build_xform` | game/render/engine_submit.cpp:780 |  |  |
-| 0x80052078 | ORPHAN | `eng_stage_transition` | game/scene/engine_level.cpp:70 |  | (stageIdx) — the cooperative STAGE TRANSITION: load the next stage's o… |
-| 0x80052078 | ORPHAN | `ov_stage_transition` | game/scene/engine_level.cpp:87 |  |  |
-| 0x80052078 | LIVE | `native_start_stage` | game/scene/engine_stage.cpp:1412 | 0x80080870 0x80080890 0x800808A0 | switch task 0 to the given stage (load overlay + reset the display/BIO… |
-| 0x800520E0 | LIVE | `eng_init_entity_pool` | game/scene/engine_init.cpp:106 |  | engine SUBSYSTEM init (init-prefix slot, dispatched at native_boot.cpp… |
-| 0x80056B48 | ORPHAN | `ov_player_move` | game/player/engine_player.cpp:75 | 0x80056B48 | playerverify — full RAM+scratchpad A/B gate (like the scriptvm/pad931c… |
-| 0x800597AC | ORPHAN | `ov_orch597AC` | game/render/engine_submit.cpp:1142 |  |  |
-| 0x80059D28 | ORPHAN | `Engine::frameStartTick` | game/scene/engine_stage.cpp:1196 |  | Engine::frameStartTick — per-frame prologue at guest 0x80059D28 (FIRST… |
-| 0x80069B28 | LIVE | `ov_list_walk_69b28` | game/object/engine_tomba2.cpp:220 |  | Native FUN_80069B28 — a second per-frame object-list walk (head 0x800F… |
-| 0x8006C80C | ORPHAN | `CutsceneCamera::yFloor` | game/camera/cutscene_camera.cpp:345 |  | ── yFloor (camera-Y floor clamp, per render mode) ────────────────────… |
-| 0x8006C988 | ORPHAN | `CutsceneCamera::shakeTail` | game/camera/cutscene_camera.cpp:648 |  | ── post-mode TAIL (0x8006C988) — the camera SHAKE state machine ──────… |
-| 0x8006CBA8 | ORPHAN | `CutsceneCamera::initSeedGrp` | game/camera/cutscene_camera.cpp:780 |  |  |
-| 0x8006CBD0 | LIVE | `ov_obj_set_xformblk` | game/world/graphics_bind.cpp:132 |  |  |
-| 0x8006D02C | ORPHAN | `CutsceneCamera::lookAt` | game/camera/cutscene_camera.cpp:534 |  |  |
-| 0x8006D2AC | ORPHAN | `CutsceneCamera::distSolve` | game/camera/cutscene_camera.cpp:228 |  | ── distSolve (distance/zoom solver) ──────────────────────────────────… |
-| 0x8006D654 | ORPHAN | `CutsceneCamera::pitch` | game/camera/cutscene_camera.cpp:382 |  | ── pitch (vertical-look height smoother) ─────────────────────────────… |
-| 0x8006D934 | ORPHAN | `CutsceneCamera::snapAccXZ` | game/camera/cutscene_camera.cpp:584 |  | ── orchestrators (per-frame camera modes) ────────────────────────────… |
-| 0x8006D950 | ORPHAN | `CutsceneCamera::snapAccY` | game/camera/cutscene_camera.cpp:588 |  |  |
-| 0x8006D960 | ORPHAN | `CutsceneCamera::trackXZ` | game/camera/cutscene_camera.cpp:63 |  | ── follow accumulators ───────────────────────────────────────────────… |
-| 0x8006DA54 | ORPHAN | `CutsceneCamera::trackY` | game/camera/cutscene_camera.cpp:76 |  |  |
-| 0x8006DAD8 | ORPHAN | `CutsceneCamera::posBuildB` | game/camera/cutscene_camera.cpp:112 |  |  |
-| 0x8006DC38 | ORPHAN | `CutsceneCamera::posBuildA` | game/camera/cutscene_camera.cpp:103 |  | ── scripted-camera look-angle builders (0x8006DC38/DAD8/DF88/DEF0 — us… |
-| 0x8006DCF4 | ORPHAN | `CutsceneCamera::heading` | game/camera/cutscene_camera.cpp:466 |  | ── heading (heading tracker) ─────────────────────────────────────────… |
-| 0x8006DEF0 | ORPHAN | `CutsceneCamera::headBuildB` | game/camera/cutscene_camera.cpp:130 |  |  |
-| 0x8006DF88 | ORPHAN | `CutsceneCamera::headBuildA` | game/camera/cutscene_camera.cpp:120 |  |  |
-| 0x8006E010 | ORPHAN | `CutsceneCamera::angleStep` | game/camera/cutscene_camera.cpp:325 |  | ── angleStep ─────────────────────────────────────────────────────────… |
-| 0x8006E0F0 | ORPHAN | `CutsceneCamera::mainFollow` | game/camera/cutscene_camera.cpp:614 |  |  |
-| 0x8006E228 | ORPHAN | `CutsceneCamera::trackFollow` | game/camera/cutscene_camera.cpp:631 |  |  |
-| 0x8006E294 | ORPHAN | `CutsceneCamera::snapFollowA` | game/camera/cutscene_camera.cpp:596 |  |  |
-| 0x8006E2FC | ORPHAN | `CutsceneCamera::snapFollowB` | game/camera/cutscene_camera.cpp:608 |  |  |
-| 0x8006E360 | ORPHAN | `CutsceneCamera::pitchFollow` | game/camera/cutscene_camera.cpp:602 |  |  |
-| 0x8006E3B0 | ORPHAN | `CutsceneCamera::snapFollow` | game/camera/cutscene_camera.cpp:591 |  |  |
-| 0x8006E3F4 | ORPHAN | `CutsceneCamera::simpleFollow` | game/camera/cutscene_camera.cpp:626 |  |  |
-| 0x8006E464 | ORPHAN | `CutsceneCamera::rotBuild` | game/camera/cutscene_camera.cpp:208 |  |  |
-| 0x8006E918 | ORPHAN | `CutsceneCamera::initPlace` | game/camera/cutscene_camera.cpp:767 |  |  |
-| 0x8006EA7C | ORPHAN | `CutsceneCamera::init` | game/camera/cutscene_camera.cpp:799 |  |  |
-| 0x8006EC44 | LIVE | `CutsceneCamera::update` | game/camera/cutscene_camera.cpp:786 |  |  |
-| 0x80072A78 | LIVE | `ov_place_objects` | game/world/placement.cpp:104 | 0x80072A78 |  |
-| 0x80072A78 | LIVE | `ov_place_objects` | game/world/placement.h:8 |  |  |
-| 0x80072DDC | LIVE | `ov_spawn_with_parent` | game/world/placement.cpp:147 | 0x80072DDC |  |
-| 0x80074F24 | LIVE | `ov_80074F24` | game/world/pool.cpp:246 | 0x800750D8 | per-area STATE-INDEX select + apply. Early-out if scratchpad 0x1F80013… |
-| 0x80074F24 | LIVE | `ov_74f24_run` | game/world/pool.cpp:327 |  |  |
-| 0x80075130 | LIVE | `ov_font_init` | game/ui/engine_font.cpp:68 | 0x8008E040 0x80090700 0x80090980 0x80091B50 0x80091D70 0x80098150 … | font / text system init orchestrator. No args, no return. Mirrors the … |
-| 0x80075240 | LIVE | `ov_80075240` | game/world/pool.cpp:105 | 0x80075824 0x80075D58 0x80099490 | reset the control block at 0x800BE1F8: call 0x80075D58 (leaf, entry a0… |
-| 0x80075240 | LIVE | `ov_75240_run` | game/world/pool.cpp:312 |  |  |
-| 0x800752B4 | LIVE | `ov_font_glyphclass_fill` | game/ui/engine_font.cpp:49 |  | glyph-class table fill. a0 = class. Iterates i = 0..23 over a 24-entry… |
-| 0x800753D4 | ORPHAN | `ov_cel_load_wait` | game/scene/engine_level.cpp:178 | 0x80075410 0x80096480 0x80096980 |  |
-| 0x80075A80 | LIVE | `Engine::areaUpdateTail` | game/scene/engine_stage.cpp:1256 | 0x80074BF8 0x80074E48 0x80075824 0x8008E0C0 0x80092660 0x80098F90 … | Engine::areaUpdateTail — the last direct child of ov_field_frame at gu… |
-| 0x80076D68 | ORPHAN | `ov_anim_vm_76d68` | game/object/animation.cpp:161 | 0x80076D68 |  |
-| 0x80076D68 | ORPHAN | `ov_anim_vm_76d68` | game/object/animation.h:7 |  |  |
-| 0x8007712C | ORPHAN | `ov_object_cull` | game/render/cull.cpp:249 |  |  |
-| 0x8007712C | ORPHAN | `ov_object_cull` | game/render/cull.h:10 |  |  |
-| 0x8007778C | ORPHAN | `ov_cull_wrapper_prep` | game/render/cull.cpp:370 |  | camera-relative cull WRAPPER. Computes the object's delta from the cam… |
-| 0x8007778C | ORPHAN | `ov_cull_wrapper` | game/render/cull.cpp:414 | 0x8007712C |  |
-| 0x80077ACC | ORPHAN | `ov_cull_wrap_77acc` | game/render/cull.cpp:461 | 0x8007712C |  |
-| 0x80077B38 | ORPHAN | `ov_obj_set_geom` | game/world/graphics_bind.cpp:112 |  |  |
-| 0x80077EBC | ORPHAN | `ov_enqueue_probe` | game/render/engine_submit.cpp:211 | 0x80077EBC | PSXPORT_DEBUG=enq — ENQUEUE tap (later-131 NEXT). The render-command P… |
-| 0x800783DC | LIVE | `ov_800783DC` | game/world/pool.cpp:123 | 0x80048D3C | per-area VIEW/SCROLL setup. Calls a leaf (0x80048D3C) with the entry a… |
-| 0x800783DC | LIVE | `ov_783dc_run` | game/world/pool.cpp:317 |  |  |
-| 0x80078610 | LIVE | `ov_80078610` | game/world/pool.cpp:198 | 0x8006D02C 0x800846F0 | final per-area view init: zero two control blocks (scratchpad 0x1F8000… |
-| 0x80078610 | LIVE | `ov_78610_run` | game/world/pool.cpp:322 |  |  |
-| 0x800788AC | LIVE | `ov_frame_update` | game/game_tomba2.cpp:111 | 0x800788AC | Per-frame engine tick. Called DIRECTLY (a plain C call) from native_st… |
-| 0x80078CA8 | ORPHAN | `ov_glyph_string` | game/ui/hud.cpp:257 |  | PC-native glyph string drawer. Mirrors FUN_80078CA8's char loop + atla… |
-| 0x800796DC | LIVE | `ov_800796DC` | game/world/pool.cpp:22 | 0x8005082C 0x800508A8 0x800782F0 0x8009A420 | zero the 104-byte control block at 0x800BF808 (via 0x8009A420), seed t… |
-| 0x800796DC | LIVE | `ov_796dc_run` | game/world/pool.cpp:302 |  |  |
-| 0x80079C3C | ORPHAN | `ov_entity_spawn` | game/world/spawn.cpp:172 | 0x80079C3C |  |
-| 0x80079C3C | ORPHAN | `ov_entity_spawn` | game/world/spawn.h:10 | 0x8007A624 |  |
-| 0x80079DDC | ORPHAN | `ov_spawn_pool2` | game/world/spawn.cpp:324 | 0x80079DDC |  |
-| 0x80079F90 | ORPHAN | `ov_spawn_var2` | game/world/spawn.cpp:311 |  |  |
-| 0x8007A12C | ORPHAN | `ov_spawn_var3` | game/world/spawn.cpp:315 |  |  |
-| 0x8007A2C8 | ORPHAN | `ov_spawn_var4` | game/world/spawn.cpp:319 |  |  |
-| 0x8007A624 | ORPHAN | `ov_despawn` | game/world/spawn.cpp:473 | 0x8007A624 |  |
-| 0x8007A904 | LIVE | `ov_objwalk` | game/object/engine_tomba2.cpp:188 |  | Native FUN_8007a904. Second list head is re-read fresh after list 1 (h… |
-| 0x8007A904 | ORPHAN | `ov_entity_walk_7a904` | game/world/entity.cpp:474 | 0x8007A904 |  |
-| 0x8007A980 | ORPHAN | `ov_spawn_dispatch` | game/world/spawn.cpp:223 | 0x8007A980 |  |
-| 0x8007AA38 | ORPHAN | `ov_replace_dispatch` | game/world/spawn.cpp:395 | 0x8007AA38 |  |
-| 0x8007AAE8 | ORPHAN | `ov_record_alloc_g` | game/world/graphics_bind.cpp:71 |  |  |
-| 0x8007AAE8 | ORPHAN | `ov_record_alloc_g` | game/world/graphics_bind.h:10 |  |  |
-| 0x8007B18C | ORPHAN | `ov_8007B18C` | game/world/pool.cpp:52 | 0x8004FB20 0x800798F8 0x8007A810 0x8007AC14 0x8007AC40 0x8007AC6C … | top-level object-pool init. Calls 0x8004FB20 then 0x800798F8; zeroes 5… |
-| 0x8007B18C | LIVE | `ov_pool_init_run` | game/world/pool.cpp:297 |  | Public GATED entries — the native field case-0 prefix (engine_stage.cp… |
-| 0x8007B18C | LIVE | `ov_pool_init_run` | game/world/pool.h:6 |  | top-level object-pool init (field case-0 prefix). GATED (channel `pool… |
-| 0x8007B45C | ORPHAN | `ov_options_menu` | game/ui/menu.cpp:46 | 0x8007B45C |  |
-| 0x8007B45C | ORPHAN | `ov_options_menu` | game/ui/menu.h:8 |  |  |
-| 0x8007E1B8 | ORPHAN | `ov_ui_rect_emit` | game/ui/engine_ui_rect.cpp:107 | 0x8007E1B8 | override — see the RE block above. |
-| 0x8007E8DC | ORPHAN | `ov_hud_rect` | game/ui/hud.cpp:142 |  | HUD UI panel slice (textured quad). Captured field slice: 16x16 quad a… |
-| 0x8007E938 | ORPHAN | `ov_hud_sprite` | game/ui/hud.cpp:90 |  | HUD sprite-strip cell. Read the element's screen position (geom_a-16, … |
-| 0x8007FDB0 | ORPHAN | `ov_submit_poly_gt3` | game/render/engine_submit.cpp:440 |  |  |
-| 0x8008007C | ORPHAN | `ov_submit_poly_gt4` | game/render/engine_submit.cpp:496 |  |  |
-| 0x80080860 | ORPHAN | `ov_open_thread` | runtime/recomp/threads.cpp:25 |  |  |
-| 0x80080870 | ORPHAN | `ov_close_thread` | runtime/recomp/threads.cpp:26 |  |  |
-| 0x80080880 | LIVE | `ov_switch` | runtime/recomp/scheduler.cpp:60 |  |  |
-| 0x80080880 | ORPHAN | `ov_change_thread` | runtime/recomp/threads.cpp:27 |  |  |
-| 0x800808B0 | ORPHAN | `ov_file_open` | runtime/recomp/memcard.cpp:373 |  | B0:0x32 open(name, mode): mode bit 0x0200 = create; block count = (mod… |
-| 0x800808C0 | ORPHAN | `ov_file_lseek` | runtime/recomp/memcard.cpp:391 |  | B0:0x33 lseek(fd, off, whence): 0=SET,1=CUR,2=END. Returns new positio… |
-| 0x800808D0 | ORPHAN | `ov_file_read` | runtime/recomp/memcard.cpp:402 |  | B0:0x34 read(fd, buf, len): copy `len` bytes from the card file into g… |
-| 0x800808E0 | ORPHAN | `ov_file_write` | runtime/recomp/memcard.cpp:420 |  | B0:0x35 write(fd, buf, len): copy `len` bytes from g_ram[buf] into the… |
-| 0x800808F0 | ORPHAN | `ov_file_close` | runtime/recomp/memcard.cpp:445 |  | B0:0x36 close(fd). |
-| 0x80080900 | ORPHAN | `ov_file_firstfile` | runtime/recomp/memcard.cpp:471 |  | B0:0x43 firstfile(name_pattern, dir_entry_out): the menu uses this to … |
-| 0x80080910 | ORPHAN | `ov_file_erase` | runtime/recomp/memcard.cpp:454 |  | B0:0x45 erase(name): mark the file's directory block free. Returns 1 o… |
-| 0x80081218 | LIVE | `ov_upload_image` | game/core/asset.cpp:169 |  | PC-native CPU->VRAM upload — replaces the game's libgs-style upload li… |
-| 0x80081218 | ORPHAN | `GpuState::gpu_native_load_vram` | runtime/recomp/gpu_native.cpp:555 |  | PC-native CPU->VRAM upload. The game's libgs-style upload library (FUN… |
-| 0x80081560 | LIVE | `ov_draw_otag` | game/game_tomba2.cpp:209 |  |  |
-| 0x800834A0 | ORPHAN | `ov_gpu_timeout_arm` | runtime/recomp/sync_overrides.cpp:66 |  | libgpu GPU-DMA-completion TIMEOUT (arm / check). |
-| 0x800834D4 | ORPHAN | `ov_gpu_timeout_arm` | runtime/recomp/sync_overrides.cpp:66 |  | libgpu GPU-DMA-completion TIMEOUT (arm / check). |
-| 0x80084110 | ORPHAN | `ov_mat_mul` | game/math/engine_math.h:8 |  |  |
-| 0x80084220 | ORPHAN | `ov_apply_matlv` | game/math/engine_math.cpp:384 |  | ──────────────────────────────────────────────────────────────────────… |
-| 0x80084360 | ORPHAN | `ov_compmatlv` | game/math/engine_math.cpp:442 |  | ──────────────────────────────────────────────────────────────────────… |
-| 0x800846D0 | ORPHAN | `ov_set_geom_offset` | game/game_tomba2.cpp:182 |  | -- Native ownership of the GTE projection setters (libgte) -----------… |
-| 0x800846F0 | ORPHAN | `ov_set_geom_screen` | game/game_tomba2.cpp:195 |  |  |
-| 0x80084A80 | ORPHAN | `ov_rot84A80` | game/math/engine_math.cpp:514 |  | ──────────────────────────────────────────────────────────────────────… |
-| 0x80084D10 | ORPHAN | `ov_rot_x` | game/math/engine_math.cpp:355 |  |  |
-| 0x80084EB0 | ORPHAN | `ov_rot_y` | game/math/engine_math.cpp:354 |  |  |
-| 0x80085050 | ORPHAN | `ov_rot_z` | game/math/engine_math.cpp:353 |  |  |
-| 0x80085900 | ORPHAN | `ov_vsync` | runtime/recomp/timing.cpp:37 |  | = libetc VSync(mode): |
-| 0x80085BB0 | LIVE | `ov_vsync_callback` | runtime/recomp/timing.cpp:24 |  | VSyncCallback(func): no-op. The original routes the per-vblank |
-| 0x80087A60 | LIVE | `eng_init_input` | game/scene/engine_init.cpp:161 | 0x80080890 0x800808A0 0x80085B10 0x800873F0 0x80087400 | a thin wrapper that just calls FUN_80086970; owned as eng_init_input. |
-| 0x80088B00 | LIVE | `eng_init_alloc` | game/scene/engine_init.cpp:185 | 0x80086738 0x80089160 0x8009A340 | engine ALLOCATOR / dispatch-table init. a0/a1 = a struct span (0x800bf… |
-| 0x8008A6EC | ORPHAN | `ov_cd_sync` | runtime/recomp/cd_override.cpp:66 |  | (noblock, result) CdSync -> 2 (status: complete/ready). |
-| 0x8008A96C | ORPHAN | `ov_cdreadsync` | runtime/recomp/sync_overrides.cpp:47 |  | (mode, result) — CdReadSync. Blocking path spins until the CD data-rea… |
-| 0x8008AC34 | ORPHAN | `ov_cd_command` | runtime/recomp/cd_override.cpp:41 |  | (cmd, param, result, mode) CdCommand -> 0 (success). |
-| 0x8008B2D8 | ORPHAN | `ov_cdinit` | runtime/recomp/cd_override.cpp:30 |  | low-level CdInit -> success (drive ready), no HW handshake. |
-| 0x8008B2D8 | ORPHAN | `ov_cdinit_hs` | runtime/recomp/sync_overrides.cpp:57 |  | low-level CdInit reset handshake — pokes the (unmodelled) CD HW regist… |
-| 0x8008B4B8 | ORPHAN | `ov_cddatasync` | runtime/recomp/sync_overrides.cpp:51 |  | (mode) — CdDataSync (CD DMA-done wait). Real body spins while the CD D… |
-| 0x8008C1EC | ORPHAN | `ov_cd_read` | runtime/recomp/cd_override.cpp:121 |  |  |
-| 0x800931C0 | ORPHAN | `ov_input_dispatch_931c0` | game/input/input.cpp:118 | 0x800931C0 |  |
-| 0x800931C0 | ORPHAN | `ov_input_dispatch_931c0` | game/input/input.h:7 |  |  |
-| 0x80096370 | LIVE | `ov_font_bank2_store` | game/ui/engine_font.cpp:40 |  | font-bank2 store. `*0x80105d28(sb) = a0; jr ra`. Leaf; does NOT set a … |
-| 0x800963A0 | LIVE | `ov_font_bank_select` | game/ui/engine_font.cpp:27 |  | font-bank selector. a0 = bank index. If ((a0-1)&0xff) < 24, store the … |
-| 0x80096590 | ORPHAN | `ov_bav_load` | game/ui/engine_bav.cpp:286 | 0x80096590 |  |
-| 0x8009A450 | ORPHAN | `ov_rand` | game/math/mathlib.cpp:69 | 0x8009A450 |  |
-| 0x8009A450 | ORPHAN | `ov_rand` | game/math/mathlib.h:8 |  |  |
-| 0x8009CAEC | ORPHAN | `ov_sync_ok` | runtime/recomp/sync_overrides.cpp:38 |  | DecDCTinSync / 0x8009CB80 DecDCToutSync — libmdec in/out sync. Real bo… |
-| 0x8009CB80 | ORPHAN | `ov_sync_ok` | runtime/recomp/sync_overrides.cpp:38 |  | DecDCTinSync / 0x8009CB80 DecDCToutSync — libmdec in/out sync. Real bo… |
-| 0x800A5AC8 | ORPHAN | `GpuState::gpu_native_load_vram` | runtime/recomp/gpu_native.cpp:555 |  | PC-native CPU->VRAM upload. The game's libgs-style upload library (FUN… |
-| 0x800BF842 | LIVE | `Engine::postRenderTick` | game/scene/engine_stage.cpp:1172 | 0x80074590 | Engine::postRenderTick — 3-state fx-trigger + countdown on byte 0x800B… |
-| 0x800E8008 | ORPHAN | `CutsceneCamera::initSeedGrp` | game/camera/cutscene_camera.cpp:780 |  |  |
-| 0x800E8008 | LIVE | `CutsceneCamera::update` | game/camera/cutscene_camera.cpp:786 |  |  |
-| 0x800F2418 | LIVE | `ov_ground_probe` | game/render/render_debug_probes.cpp:20 |  | DIAGNOSTIC (later-234 ground blocker): decode the GROUND scene table 0… |
-| 0x801062E4 | LIVE | `ov_demo_stage_main` | game/scene/engine_demo.cpp:355 | 0x8005082C 0x800810F0 | DEMO stage entry (0x801062E4) — own the prologue PC-native, then hand … |
-| 0x8010637C | LIVE | `ov_game_stage_prologue` | game/scene/engine_stage.cpp:1038 |  | GAME stage TOP-LEVEL ENTRY 0x8010637C — task-0's stage driver: a one-t… |
-| 0x8010637C | LIVE | `ov_game_stage_main` | game/scene/engine_stage.cpp:1068 | 0x801063F4 | OLD guest-loop entry (prologue + coro-redirect into the guest loop 0x8… |
-| 0x801063C0 | ORPHAN | `ov_demo_s0` | game/scene/engine_demo.cpp:204 | 0x801063E4 | s0 0x801063C0 — run-once INIT then loaders; FALLS THROUGH into s1 same… |
-| 0x8010641C | ORPHAN | `ov_demo_s1` | game/scene/engine_demo.cpp:60 | 0x80106F80 | s1 0x8010641C — wait/advance: v0 = inner menu input machine 0x80106f80… |
-| 0x80106464 | ORPHAN | `ov_demo_s2` | game/scene/engine_demo.cpp:80 | 0x8001CF2C 0x8010696C | s2 0x80106464 — sub-machine v0 = 0x8010696c(). Outcome 1 -> go to s7 (… |
-| 0x80106478 | ORPHAN | `ov_game_s4c` | game/scene/engine_stage.cpp:180 | 0x80106A14 | sm[0x4c] == the AREA machine (the 9-state load/intro/play scene state … |
-| 0x8010649C | LIVE | `ov_start_bin_stage` | game/scene/engine_stage.cpp:1483 |  | Stage-0 START.BIN entry (0x8010649c): own the file-table BUILDER PC-na… |
-| 0x801064E8 | ORPHAN | `ov_demo_s3` | game/scene/engine_demo.cpp:115 | 0x800750D8 0x80106AC4 | s3 0x801064E8 — sub-machine v0 = 0x80106ac4() (mirror of 0x8010696c). … |
-| 0x801065EC | ORPHAN | `ov_demo_s6` | game/scene/engine_demo.cpp:147 | 0x8007B45C 0x80106690 0x80106824 | s6 0x801065EC — page sub-machine 0x8007b45c(); if sm[0x50]==3 fire the… |
-| 0x80106728 | LIVE | `native_stage0_sm` | game/scene/engine_stage.cpp:1461 |  | Stage-0 START.BIN state machine (overlay 0x80106728), PC-native + sync… |
-| 0x80106B98 | LIVE | `ov_field_run` | game/scene/engine_stage.cpp:557 |  | FIELD RUNNING sub-machine 0x80106b98 — native control flow + state bod… |
-| 0x80106C24 | ORPHAN | `ov_demo_s7_phase` | game/scene/engine_demo.cpp:301 | 0x80074BC4 |  |
-| 0x801070B4 | LIVE | `ov_field_run_x` | game/scene/engine_stage.cpp:914 |  | FIELD RUNNING sub-machine VARIANT 0x801070b4 (sm[0x4c]==3, the mid-tra… |
-| 0x80107AFC | LIVE | `ov_transition_main` | game/scene/engine_stage.cpp:740 |  | the MAIN door/sub-scene transition (sm[0x4c]==1..4). sm[0x4e]: 0 teard… |
-| 0x80107D3C | LIVE | `ov_transition_d3c` | game/scene/engine_stage.cpp:792 |  | transition variant (sm[0x4c]==5/6). sm[0x4e]: 0 load, 1 effect 0x8003f… |
-| 0x80107E20 | LIVE | `ov_transition_e20` | game/scene/engine_stage.cpp:813 |  | transition variant (sm[0x4c]==7). sm[0x4e]: 0 setup+load, 1 effect 0x8… |
-| 0x80107F3C | LIVE | `ov_transition_f3c` | game/scene/engine_stage.cpp:839 |  | transition variant (sm[0x4c]==8), a 7-state machine. NB case 0 uses a … |
-| 0x801086E0 | ORPHAN | `ov_game_s48_0` | game/scene/engine_stage.cpp:97 | 0x8007A8E0 0x8007B38C | sm[0x48] == 0 — area INIT: advance to running (sm[0x48]=2), reset the … |
-| 0x80108720 | ORPHAN | `ov_game_s48_1` | game/scene/engine_stage.cpp:114 | 0x8007B3F4 | sm[0x48] == 1 — area RESUME-INIT (re-enter a running area, sub-mode 1)… |
-| 0x80108784 | ORPHAN | `ov_game_s48_2` | game/scene/engine_stage.cpp:145 | 0x8010881C | sm[0x48] == 2 — RUNNING: dispatch the running sub-mode sm[0x4a] (0..5)… |
-| 0x8010882C | LIVE | `ov_game_submode0` | game/scene/engine_stage.cpp:259 | 0x8005082C 0x80109450 | GAME sub-mode-0 bridge 0x8010882c (sm[0x4c]/sm[0x4e] dispatch) — nativ… |
-| 0x80108A60 | LIVE | `ov_field_transition` | game/scene/engine_stage.cpp:893 |  | sm[0x4a]==5 transition dispatcher on sm[0x4c]. 0/9 = done (return to t… |
-| 0x80108B0C | LIVE | `ov_field_frame` | game/scene/engine_stage.cpp:390 |  | FIELD PER-FRAME UPDATE 0x80108b0c — native control flow (the field fra… |
-| 0x80108BE4 | LIVE | `ov_field_frame_x` | game/scene/engine_stage.cpp:699 |  | FIELD PER-FRAME UPDATE VARIANT 0x80108be4 — the mid-TRANSITION field f… |
-| 0x801092B4 | LIVE | `ov_sop_field_update` | game/scene/sop.cpp:192 |  | SOP per-frame FIELD UPDATE — native ownership of FUN_801092b4 (decomp … |
-| 0x80109450 | LIVE | `ov_sop_field_mode` | game/scene/sop.cpp:240 |  | SOP FIELD-MODE MACHINE — native ownership of FUN_80109450 (decomp scra… |
-| 0x8010957C | LIVE | `ov_scene_fade_seq` | game/scene/engine_stage.cpp:457 |  | ov_scene_fade_seq — GAME-overlay a0l screen-fade sequencer (guest FUN_… |
-| 0x80109FE0 | LIVE | `ov_field_entity_render` | game/render/engine_submit.cpp:646 |  | FIELD ENTITY RENDER LOOP — PC-native ownership of the SOP field-overla… |
-| 0x8013E9D8 | ORPHAN | `ov_bg_render` | game/render/engine_render_walk.cpp:248 | 0x8013DD34 | NATIVE seaside-area GROUND/BG node renderer — OVERLAY 0x8013E9D8 (the … |
-| 0x80146478 | ORPHAN | `ov_gt3gt4_caller` | game/render/engine_submit.cpp:1241 |  | -- Auto-ownership of the SAME submit library when it appears in a runt… |
+| 0x8004D7EC | ORPHAN | `Bit::test7EC` | game/math/mathlib.cpp:30 | 0x8004D7EC | pure bitmap bit-test (~2%, 6.8k calls): byte = bitmap[(int16)(idx/8)] … |
+| 0x8004D868 | ORPHAN | `Bit::test868` | game/math/mathlib.cpp:53 | 0x8004D868 | sibling of FUN_8004D7EC (bit-test) against a fixed third bitmap @0x800… |
+| 0x8004FE84 | ORPHAN | `Engine::sceneRenderListBuilder` | game/scene/engine_stage.cpp:355 |  | Native FUN_8004FE84 — a 2-phase scene/render-list builder driver (stru… |
+| 0x800509B4 | ORPHAN | `Engine::initDisplay` | game/scene/engine_init.cpp:56 | 0x80050738 | engine DISPLAY + GTE-projection init, PC-native. Sets the GTE projecti… |
+| 0x80050A0C | ORPHAN | `Engine::initFrameState` | game/scene/engine_init.cpp:35 |  | engine frame-state init: zero the vblank counter and the double-buffer… |
+| 0x80050A80 | ORPHAN | `Engine::initCamera` | game/scene/engine_init.cpp:81 |  | engine CAMERA init: identity camera-rotation matrix at scratchpad 0x1F… |
+| 0x80050B08 | LIVE | `native_boot_run` | runtime/recomp/native_boot.cpp:569 |  | Wired from boot.c when PSXPORT_NATIVE_BOOT is set. Registers the main … |
+| 0x80050DE4 | ORPHAN | `Engine::sceneStateStep` | game/scene/engine_stage.cpp:1112 |  | Engine::sceneStateStep — the SCENE-INIT / SCENE-RUN state machine at g… |
+| 0x80051128 | ORPHAN | `NodeXform::propagate` | game/render/node_xform.cpp:53 |  | per-object CHILD-NODE TRANSFORM loop. RE'd from disas: |
+| 0x80051794 | ORPHAN | `eng_identity_matrix` | game/scene/engine_init.cpp:25 |  | set an identity 3x3 rotation matrix (0x1000 = 1.0 fixed on the diagona… |
+| 0x80052078 | ORPHAN | `eng_stage_transition` | game/scene/engine_level.cpp:66 |  | (stageIdx) — the cooperative STAGE TRANSITION: load the next stage's o… |
+| 0x80052078 | ORPHAN | `Engine::startStage` | game/scene/engine_stage.cpp:1409 | 0x80080870 0x80080890 0x800808A0 | switch task 0 to the given stage (load overlay + reset the display/BIO… |
+| 0x800520E0 | ORPHAN | `Engine::initEntityPool` | game/scene/engine_init.cpp:101 |  | engine SUBSYSTEM init (init-prefix slot, dispatched at native_boot.cpp… |
+| 0x80059D28 | ORPHAN | `Engine::frameStartTick` | game/scene/engine_stage.cpp:1198 |  | Engine::frameStartTick — per-frame prologue at guest 0x80059D28 (FIRST… |
+| 0x8006C80C | ORPHAN | `CutsceneCamera::yFloor` | game/camera/cutscene_camera.cpp:352 |  | ── yFloor (camera-Y floor clamp, per render mode) ────────────────────… |
+| 0x8006C988 | ORPHAN | `CutsceneCamera::shakeTail` | game/camera/cutscene_camera.cpp:684 |  | ── post-mode TAIL (0x8006C988) — the camera SHAKE state machine ──────… |
+| 0x8006CBA8 | ORPHAN | `CutsceneCamera::initSeedGrp` | game/camera/cutscene_camera.cpp:816 |  |  |
+| 0x8006D02C | ORPHAN | `CutsceneCamera::lookAt` | game/camera/cutscene_camera.cpp:541 |  |  |
+| 0x8006D2AC | ORPHAN | `CutsceneCamera::distSolve` | game/camera/cutscene_camera.cpp:235 |  | ── distSolve (distance/zoom solver) ──────────────────────────────────… |
+| 0x8006D654 | ORPHAN | `CutsceneCamera::pitch` | game/camera/cutscene_camera.cpp:389 |  | ── pitch (vertical-look height smoother) ─────────────────────────────… |
+| 0x8006D934 | ORPHAN | `CutsceneCamera::snapAccXZ` | game/camera/cutscene_camera.cpp:591 |  | ── orchestrators (per-frame camera modes) ────────────────────────────… |
+| 0x8006D950 | ORPHAN | `CutsceneCamera::snapAccY` | game/camera/cutscene_camera.cpp:595 |  |  |
+| 0x8006D960 | ORPHAN | `CutsceneCamera::trackXZ` | game/camera/cutscene_camera.cpp:69 |  | ── follow accumulators ───────────────────────────────────────────────… |
+| 0x8006DA54 | ORPHAN | `CutsceneCamera::trackY` | game/camera/cutscene_camera.cpp:83 |  |  |
+| 0x8006DAD8 | ORPHAN | `CutsceneCamera::posBuildB` | game/camera/cutscene_camera.cpp:119 |  |  |
+| 0x8006DC38 | ORPHAN | `CutsceneCamera::posBuildA` | game/camera/cutscene_camera.cpp:110 |  | ── scripted-camera look-angle builders (0x8006DC38/DAD8/DF88/DEF0 — us… |
+| 0x8006DCF4 | ORPHAN | `CutsceneCamera::heading` | game/camera/cutscene_camera.cpp:473 |  | ── heading (heading tracker) ─────────────────────────────────────────… |
+| 0x8006DEF0 | ORPHAN | `CutsceneCamera::headBuildB` | game/camera/cutscene_camera.cpp:137 |  |  |
+| 0x8006DF88 | ORPHAN | `CutsceneCamera::headBuildA` | game/camera/cutscene_camera.cpp:127 |  |  |
+| 0x8006E010 | ORPHAN | `CutsceneCamera::angleStep` | game/camera/cutscene_camera.cpp:332 |  | ── angleStep ─────────────────────────────────────────────────────────… |
+| 0x8006E0F0 | ORPHAN | `CutsceneCamera::mainFollow` | game/camera/cutscene_camera.cpp:650 |  |  |
+| 0x8006E228 | ORPHAN | `CutsceneCamera::trackFollow` | game/camera/cutscene_camera.cpp:667 |  |  |
+| 0x8006E294 | ORPHAN | `CutsceneCamera::snapFollowA` | game/camera/cutscene_camera.cpp:632 |  |  |
+| 0x8006E2FC | ORPHAN | `CutsceneCamera::snapFollowB` | game/camera/cutscene_camera.cpp:644 |  |  |
+| 0x8006E360 | ORPHAN | `CutsceneCamera::pitchFollow` | game/camera/cutscene_camera.cpp:638 |  |  |
+| 0x8006E3B0 | ORPHAN | `CutsceneCamera::snapFollow` | game/camera/cutscene_camera.cpp:598 |  |  |
+| 0x8006E3F4 | ORPHAN | `CutsceneCamera::simpleFollow` | game/camera/cutscene_camera.cpp:662 |  |  |
+| 0x8006E464 | ORPHAN | `CutsceneCamera::rotBuild` | game/camera/cutscene_camera.cpp:215 |  |  |
+| 0x8006E918 | ORPHAN | `CutsceneCamera::initPlace` | game/camera/cutscene_camera.cpp:803 |  |  |
+| 0x8006EA7C | ORPHAN | `CutsceneCamera::init` | game/camera/cutscene_camera.cpp:835 |  |  |
+| 0x8006EC44 | ORPHAN | `CutsceneCamera::update` | game/camera/cutscene_camera.cpp:822 |  |  |
+| 0x80074F24 | ORPHAN | `Pool::selectStateIndex` | game/world/pool.cpp:234 | 0x800750D8 | per-area STATE-INDEX select + apply. Early-out if scratchpad 0x1F80013… |
+| 0x80075130 | ORPHAN | `Font::init` | game/ui/engine_font.cpp:69 | 0x8008E040 0x80090700 0x80090980 0x80091B50 0x80091D70 0x80098150 … | font / text system init orchestrator. No args, no return. Mirrors the … |
+| 0x80075240 | ORPHAN | `Pool::reset75240` | game/world/pool.cpp:101 | 0x80075824 0x80075D58 0x80099490 | reset the control block at 0x800BE1F8: call 0x80075D58 leaf, seed clam… |
+| 0x800752B4 | ORPHAN | `Font::glyphClassFill` | game/ui/engine_font.cpp:50 |  | glyph-class table fill. Iterates i = 0..23 over a 24-entry table at ba… |
+| 0x80075824 | ORPHAN | `MusicCoord::musicFadeIn` | game/audio/music_coord.cpp:51 |  | Fade the ingame music IN from silence using the GAME'S OWN CD-volume r… |
+| 0x80075A80 | ORPHAN | `Engine::areaUpdateTail` | game/scene/engine_stage.cpp:1258 | 0x80074BF8 0x80074E48 0x80075824 0x8008E0C0 0x80092660 0x80098F90 … | Engine::areaUpdateTail — the last direct child of ov_field_frame at gu… |
+| 0x8007712C | ORPHAN | `Cull::performBaseCull` | game/render/cull.cpp:142 |  | Cull::performBaseCull — byte-exact PC-native FUN_8007712C body (no mar… |
+| 0x8007778C | ORPHAN | `Cull::cullWrapper` | game/render/cull.cpp:317 | 0x8007712C | camera-relative cull WRAPPER. Computes obj-cam delta (wrapping s16, si… |
+| 0x80077ACC | ORPHAN | `Cull::cullWrap77acc` | game/render/cull.cpp:334 | 0x8007712C | cull-wrapper variant, caller-supplied position in a1/a2/a3 (not obj fi… |
+| 0x80077EBC | ORPHAN | `Cull::enqueueVisibleClass4` | game/render/cull.cpp:194 |  | Cull::enqueueVisibleClass4 — PC-native FUN_80077EBC body. Manual push … |
+| 0x800783DC | ORPHAN | `Pool::setupViewScroll` | game/world/pool.cpp:118 | 0x80048D3C | per-area VIEW/SCROLL setup. Calls a leaf (0x80048D3C), builds the view… |
+| 0x80078610 | ORPHAN | `Pool::finalViewInit` | game/world/pool.cpp:190 | 0x8006D02C 0x800846F0 | final per-area view init: zero two control blocks, seed fixed view par… |
+| 0x800796DC | ORPHAN | `Pool::resetControlBlock` | game/world/pool.cpp:21 | 0x8005082C 0x800508A8 0x8009A420 | zero the 104-byte control block at 0x800BF808, seed two bytes, clear ~… |
+| 0x8007B18C | ORPHAN | `Pool::init` | game/world/pool.cpp:50 | 0x8004FB20 0x800798F8 0x8007A810 0x8007AC14 0x8007AC40 0x8007AC6C … | top-level object-pool init. Zeroes 520 68-byte slots at 0x800F2740; bu… |
+| 0x80081218 | ORPHAN | `Asset::uploadImage` | game/core/asset.cpp:167 |  | PC-native CPU->VRAM upload — replaces the game's libgs-style upload li… |
+| 0x80081218 | ORPHAN | `GpuState::gpu_native_load_vram` | runtime/recomp/gpu_native.cpp:558 |  | PC-native CPU->VRAM upload. The game's libgs-style upload library (FUN… |
+| 0x80081560 | LIVE | `Engine::drawOTag` | game/game_tomba2.cpp:179 |  | Native ownership of DrawOTag (libgpu FUN_80081560, the per-frame draw … |
+| 0x80084220 | ORPHAN | `Math::applyMatlv` | game/math/engine_math.cpp:226 |  | ──────────────────────────────────────────────────────────────────────… |
+| 0x80084D10 | ORPHAN | `Math::rotX` | game/math/engine_math.cpp:217 |  |  |
+| 0x80084EB0 | ORPHAN | `Math::rotY` | game/math/engine_math.cpp:216 |  |  |
+| 0x80085050 | ORPHAN | `Math::rotZ` | game/math/engine_math.cpp:215 |  |  |
+| 0x80085900 | ORPHAN | `Timing::vsync` | runtime/recomp/timing.cpp:38 |  | = libetc VSync(mode) reached via c->r[A0]: |
+| 0x80085BB0 | ORPHAN | `Timing::vsyncCallback` | runtime/recomp/timing.cpp:22 |  | VSyncCallback(func): no-op. The original routes the per-vblank |
+| 0x80087A60 | ORPHAN | `Engine::initInput` | game/scene/engine_init.cpp:139 | 0x80080890 0x800808A0 0x80085B10 0x800873F0 0x80087400 | a thin wrapper that just calls FUN_80086970; owned as initInput(). |
+| 0x80088B00 | ORPHAN | `Engine::initAlloc` | game/scene/engine_init.cpp:164 | 0x80086738 0x80089160 0x8009A340 | engine ALLOCATOR / dispatch-table init. `s1` / `s2` are the struct-spa… |
+| 0x80096370 | ORPHAN | `Font::bank2Store` | game/ui/engine_font.cpp:41 |  | font-bank2 store. `*0x80105d28(sb) = bank; jr ra`. Leaf; does NOT set … |
+| 0x800963A0 | ORPHAN | `Font::bankSelect` | game/ui/engine_font.cpp:28 |  | font-bank selector. If ((bank-1)&0xff) < 24, store the bank byte at |
+| 0x800A5AC8 | ORPHAN | `GpuState::gpu_native_load_vram` | runtime/recomp/gpu_native.cpp:558 |  | PC-native CPU->VRAM upload. The game's libgs-style upload library (FUN… |
+| 0x800BF842 | ORPHAN | `Engine::postRenderTick` | game/scene/engine_stage.cpp:1174 | 0x80074590 | Engine::postRenderTick — 3-state fx-trigger + countdown on byte 0x800B… |
+| 0x800E8008 | ORPHAN | `CutsceneCamera::initSeedGrp` | game/camera/cutscene_camera.cpp:816 |  |  |
+| 0x800E8008 | ORPHAN | `CutsceneCamera::update` | game/camera/cutscene_camera.cpp:822 |  |  |
+| 0x801062E4 | ORPHAN | `Demo::stageMain` | game/scene/engine_demo.cpp:356 | 0x8005082C 0x800810F0 | DEMO stage entry (0x801062E4) — own the prologue PC-native, then hand … |
+| 0x8010637C | ORPHAN | `Engine::stagePrologue` | game/scene/engine_stage.cpp:1047 |  | GAME stage TOP-LEVEL ENTRY 0x8010637C — task-0's stage driver: a one-t… |
+| 0x801063C0 | ORPHAN | `Demo::s0` | game/scene/engine_demo.cpp:205 | 0x801063E4 | s0 0x801063C0 — run-once INIT then loaders; FALLS THROUGH into s1 same… |
+| 0x801063F4 | ORPHAN | `Engine::frame` | game/scene/engine_stage.cpp:1003 |  | One native loop iteration of the guest body 0x801063F4: dispatch sm[0x… |
+| 0x801063F4 | ORPHAN | `Engine::stageMain` | game/scene/engine_stage.cpp:1077 | 0x801063F4 | OLD guest-loop entry (prologue + coro-redirect into the guest loop 0x8… |
+| 0x8010641C | ORPHAN | `Demo::s1` | game/scene/engine_demo.cpp:61 | 0x80106F80 | s1 0x8010641C — wait/advance: v0 = inner menu input machine 0x80106f80… |
+| 0x80106464 | ORPHAN | `Demo::s2` | game/scene/engine_demo.cpp:81 | 0x8001CF2C 0x8010696C | s2 0x80106464 — sub-machine v0 = 0x8010696c(). Outcome 1 -> go to s7 (… |
+| 0x80106478 | ORPHAN | `Engine::s4c` | game/scene/engine_stage.cpp:182 | 0x80106A14 | sm[0x4c] == the AREA machine (the 9-state load/intro/play scene state … |
+| 0x8010649C | ORPHAN | `native_stage0_sm` | game/scene/engine_stage.cpp:1460 |  | Stage-0 START.BIN state machine (overlay 0x80106728), PC-native. Recom… |
+| 0x8010649C | ORPHAN | `Engine::startBinStage` | game/scene/engine_stage.cpp:1482 |  | Stage-0 START.BIN entry (0x8010649c): own the file-table BUILDER PC-na… |
+| 0x8010649C | LIVE | `Engine::stage0Advance` | game/scene/engine_stage.cpp:1525 |  | stage0Advance: one step of the STAGE-0 preload SM. Called by the sched… |
+| 0x801064E8 | ORPHAN | `Demo::s3` | game/scene/engine_demo.cpp:116 | 0x800750D8 0x80106AC4 | s3 0x801064E8 — sub-machine v0 = 0x80106ac4() (mirror of 0x8010696c). … |
+| 0x801065EC | ORPHAN | `Demo::s6` | game/scene/engine_demo.cpp:148 | 0x8007B45C 0x80106690 0x80106824 | s6 0x801065EC — page sub-machine 0x8007b45c(); if sm[0x50]==3 fire the… |
+| 0x80106728 | ORPHAN | `native_stage0_sm` | game/scene/engine_stage.cpp:1460 |  | Stage-0 START.BIN state machine (overlay 0x80106728), PC-native. Recom… |
+| 0x80106B98 | ORPHAN | `Engine::fieldRun` | game/scene/engine_stage.cpp:566 |  | FIELD RUNNING sub-machine 0x80106b98 — native control flow + state bod… |
+| 0x801070B4 | ORPHAN | `Engine::fieldRunX` | game/scene/engine_stage.cpp:923 |  | FIELD RUNNING sub-machine VARIANT 0x801070b4 (sm[0x4c]==3, the mid-tra… |
+| 0x80107AFC | ORPHAN | `Engine::transitionMain` | game/scene/engine_stage.cpp:749 |  | the MAIN door/sub-scene transition (sm[0x4c]==1..4). sm[0x4e]: 0 teard… |
+| 0x80107D3C | ORPHAN | `Engine::transitionD3c` | game/scene/engine_stage.cpp:801 |  | transition variant (sm[0x4c]==5/6). sm[0x4e]: 0 load, 1 effect 0x8003f… |
+| 0x80107E20 | ORPHAN | `Engine::transitionE20` | game/scene/engine_stage.cpp:822 |  | transition variant (sm[0x4c]==7). sm[0x4e]: 0 setup+load, 1 effect 0x8… |
+| 0x80107F3C | ORPHAN | `Engine::transitionF3c` | game/scene/engine_stage.cpp:848 |  | transition variant (sm[0x4c]==8), a 7-state machine. NB case 0 uses a … |
+| 0x801086E0 | ORPHAN | `Engine::s48_0` | game/scene/engine_stage.cpp:99 | 0x8007A8E0 0x8007B38C | sm[0x48] == 0 — area INIT: advance to running (sm[0x48]=2), reset the … |
+| 0x80108720 | ORPHAN | `Engine::s48_1` | game/scene/engine_stage.cpp:116 | 0x8007B3F4 | sm[0x48] == 1 — area RESUME-INIT (re-enter a running area, sub-mode 1)… |
+| 0x80108784 | ORPHAN | `Engine::s48_2` | game/scene/engine_stage.cpp:147 | 0x8010881C | sm[0x48] == 2 — RUNNING: dispatch the running sub-mode sm[0x4a] (0..5)… |
+| 0x8010882C | ORPHAN | `Engine::s48_2_frame` | game/scene/engine_stage.cpp:244 |  | sm[0x48]==2 RUNNING, per-frame variant: dispatch sm[0x4a] handler. han… |
+| 0x8010882C | ORPHAN | `Engine::submode0` | game/scene/engine_stage.cpp:260 | 0x8005082C 0x80109450 | GAME sub-mode-0 bridge 0x8010882c (sm[0x4c]/sm[0x4e] dispatch) — nativ… |
+| 0x80108A60 | ORPHAN | `Engine::fieldTransition` | game/scene/engine_stage.cpp:902 |  | sm[0x4a]==5 transition dispatcher on sm[0x4c]. 0/9 = done (return to t… |
+| 0x80108B0C | ORPHAN | `Engine::fieldFrame` | game/scene/engine_stage.cpp:391 |  | FIELD PER-FRAME UPDATE 0x80108b0c — native control flow (the field fra… |
+| 0x80108BE4 | ORPHAN | `Engine::fieldFrameX` | game/scene/engine_stage.cpp:708 |  | FIELD PER-FRAME UPDATE VARIANT 0x80108be4 — the mid-TRANSITION field f… |
+| 0x80109164 | ORPHAN | `Sop::areaLoad` | game/scene/sop.cpp:41 | 0x8001DC40 0x80045258 | Owned synchronous area-DATA load (replaces the body of LAB_80109164 0x… |
+| 0x801092B4 | ORPHAN | `Sop::fieldUpdate` | game/scene/sop.cpp:194 |  | SOP per-frame FIELD UPDATE — native ownership of FUN_801092b4 (decomp … |
+| 0x80109450 | ORPHAN | `Sop::fieldMode` | game/scene/sop.cpp:242 |  | SOP FIELD-MODE MACHINE — native ownership of FUN_80109450 (decomp scra… |
+| 0x8010957C | ORPHAN | `Engine::fadeSequencer` | game/scene/engine_stage.cpp:466 |  | ov_scene_fade_seq — GAME-overlay a0l screen-fade sequencer (guest FUN_… |
+| 0x80109FE0 | ORPHAN | `Render::fieldEntityRender` | game/render/engine_submit.cpp:387 |  | FIELD ENTITY RENDER LOOP — PC-native ownership of the SOP field-overla… |
+| 0x8013E9D8 | ORPHAN | `Render::bgRender` | game/render/engine_render_walk.cpp:237 | 0x8013DD34 | NATIVE seaside-area GROUND/BG node renderer — OVERLAY 0x8013E9D8 (the … |

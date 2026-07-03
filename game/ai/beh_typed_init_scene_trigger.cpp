@@ -44,28 +44,13 @@
 //                    needs FUN_80040A58 + a formal `class SceneEvents` on Engine (owns the arm-slot
 //                    table 0x800BF870, stream cursor 0x800BF874, arm counter 0x800BF8A8, and ring
 //                    at 0x800ED058) — its own arc.
-//   - FUN_8007E110   SCENE-ENTITY SPAWN primitive. RE'd shape (disas 0x8007E110..0x8007E1B4):
-//                      * FUN_8007A5A8(3) — allocate a spawn slot with class=3. Returns 0 on pool
-//                        exhaustion → bail with 2 (fail sentinel; caller stores in sceneHandle and
-//                        checks nonzero to advance triggerSub).
-//                      * On success (node = a1):
-//                          node[+0x47] = 2                              (class marker byte)
-//                          node[+0x1C] = 0x8007DDE0                     (behavior handler ptr — the
-//                                                                        per-frame scene-entity tick)
-//                          node[+3]    = subtype (a1, arg 2)
-//                          node[+0x28] |= 0x80                          (alive/active flag)
-//                          base = *(u32)0x800ECF60                      (scene-entity data-table)
-//                          node[+0x48] = base                           (data head)
-//                          node[+0x4C] = base + 0x10                    (record start)
-//                          node[+0x5C] = -1                             (sentinel)
-//                          node[+0x5E] = sceneId (arg 1)                (index halfword)
-//                          node[+0x50] = base + 0x10 + hCount*4         (record end; hCount = *(u16)base)
-//                      * Returns node ptr on success, 2 on fail. Caller stores in Actor::sceneHandle
-//                        (obj+0x14) and treats nonzero as "spawned → advance triggerSub".
-//                    Native ownership needs FUN_8007A5A8 (spawn allocator class-3) + FUN_8007DDE0
-//                    (the scene-entity per-frame handler at behavior slot). Class home:
-//                    `class Spawn` already owns despawn/spawnAndInit/dispatch — this fits as
-//                    `c->engine.spawn.sceneEntity(u16 sceneId, u8 subtype)`. Its own arc.
+//   - (FUN_8007E110  SCENE-ENTITY SPAWN — NOW NATIVE via Spawn::sceneEntity, spawn.cpp. Inlined
+//                    FUN_8007A5A8 (class-3 list-1 tail-insert allocator) into the same method.
+//                    The per-frame handler FUN_8007DDE0 stays reachable via its address stored at
+//                    node[+0x1C]. Gated `sceneentityverify`. Returns node ptr on success, 0 on
+//                    freelist exhaustion (the earlier "returns 2 on fail" note in commit 0056101
+//                    was wrong — the fail path's v0=2 in the branch-delay slot is overwritten by
+//                    the j-delay's `addu v0, 0, 0` before reaching ret.)
 //   - 0x800A4C94     area-keyed CULL-RECORD SIZE table (halfword, indexed by area)
 //   - 0x800A4CA8     per-type SCENE-ID table (halfword, indexed by type)
 //   - 0x800E7E68     pad-edge bitmask (state 1 case 2 — new-frame padedge)
@@ -97,14 +82,11 @@ enum class Sta : uint8_t { Init = 0, Active = 1, Idle = 2, Despawn = 3 };
 // system; returns 1 on new arm, 0 if already armed, -1 if events gate off. The confirm flow below
 // treats nonzero as "consumed → advance triggerSub to 5".
 constexpr uint32_t SUB_EVENT_ARM        = 0x80040B48u;
-// FUN_8007E110 = Spawn::sceneEntity(u16 sceneId, u8 subtype) — allocate class-3 spawn slot,
-// install scene-entity handler (0x8007DDE0), init data-table ptrs from *(u32)0x800ECF60. Returns
-// node ptr / 2 on pool exhaustion. See top-of-file "STILL OPAQUE" for the full RE'd shape.
-constexpr uint32_t SUB_SCENE_SPAWN      = 0x8007E110u;
+// (FUN_8007E110 = Spawn::sceneEntity — NOW NATIVE, callsites use c->engine.spawn.sceneEntity.)
 
 // Data-table addresses (halfword strides, indexed by area/type).
 constexpr uint32_t TBL_AREA_SIZE  = 0x800A4C94u;   // per-area cull-record size (state-0 recordInit cls)
-constexpr uint32_t TBL_SCENE_ID   = 0x800A4CA8u;   // per-type scene-id passed to SUB_SCENE_SPAWN
+constexpr uint32_t TBL_SCENE_ID   = 0x800A4CA8u;   // per-type scene-id passed to Spawn::sceneEntity
 
 // Global inputs consulted by triggerSub cases.
 constexpr uint32_t CUR_AREA         = 0x800BF870u;   // current field area byte
@@ -246,10 +228,10 @@ void beh_typed_init_scene_trigger(Core* c) {
           }
         }
         if (use_table) sv4 = (int16_t)c->mem_r16(TBL_SCENE_ID + (uint32_t)n3 * 2);
-        c->r[4] = (uint32_t)(int32_t)sv4; c->r[5] = 0;
-        rec_dispatch(c, SUB_SCENE_SPAWN);
-        a.setSceneHandle(c->r[2]);
-        if (c->r[2] != 0) a.setTriggerSub((uint8_t)(a.triggerSub() + 1));
+        // Spawn::sceneEntity — was rec_dispatch(0x8007E110); now native (spawn.cpp).
+        uint32_t node = c->engine.spawn.sceneEntity((uint16_t)(int16_t)sv4, /*subtype=*/0);
+        a.setSceneHandle(node);
+        if (node != 0) a.setTriggerSub((uint8_t)(a.triggerSub() + 1));
         break;
       }
       case 2: {                                                  // pad-edge → advance
