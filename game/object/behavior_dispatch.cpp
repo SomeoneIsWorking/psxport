@@ -83,6 +83,10 @@ void beh_a06_spawn_subobj_8013B074(Core* c);       // 0x8013B074
 void beh_a06_fade_ramp_8013B178(Core* c);          // 0x8013B178
 void beh_a06_music_cue_8013B274(Core* c);          // 0x8013B274
 void beh_a06_timer_gate_8013B29C(Core* c);         // 0x8013B29C
+void beh_a08_scene_actor(Core* c);                 // 0x801280D0 (A08 overlay) — outer per-object
+                                                   //   scene actor + inlined 0x80127C58 cutscene
+                                                   //   director. Closes the 3rd un-owned fade
+                                                   //   caller for bug #27 (A08 FUN_80127C58 fade)
 
 namespace {
 struct NativeBeh { uint32_t addr; void (*fn)(Core*); const char* name; };
@@ -147,6 +151,7 @@ constexpr NativeBeh kTable[] = {
   { 0x8013B178u, beh_a06_fade_ramp_8013B178,        "a06_fade_ramp"          },   // 3-state simple ramp fade
   { 0x8013B274u, beh_a06_music_cue_8013B274,        "a06_music_cue"          },   // one-shot music/SFX cue
   { 0x8013B29Cu, beh_a06_timer_gate_8013B29C,       "a06_timer_gate"         },   // 60-frame counted gate
+  { 0x801280D0u, beh_a08_scene_actor,           "a08_scene_actor"      },        // A08 overlay — closes the 3rd un-owned fade caller
 };
 }  // namespace
 
