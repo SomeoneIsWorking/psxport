@@ -1299,6 +1299,18 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
         };
         dump_bt("core A (last RNG advance THIS frame)", mWwHostBtA, mWwHostBtNA);
         dump_bt("core B (last RNG advance THIS frame)", mWwHostBtB, mWwHostBtNB);
+        // Overlay .rodata content probe: many divergent writes read tables from mode-overlay .rodata
+        // (0x8010xxxx..0x8014xxxx). If A and B have different overlays resident, table reads return
+        // different values → the divergence surfaces as a VALUE-MISMATCH inside a matched code path.
+        // Dump the neighborhoods around a few common overlay .rodata addresses to name the diff.
+        {
+          fprintf(stderr, "[sbs] === overlay .rodata sample (byte@addr, A vs B) ===\n");
+          for (uint32_t addr : {0x8014AABCu, 0x8014AAC0u, 0x8014AAC4u, 0x8014AAD4u, 0x8014AAD8u, 0x8014AADCu}) {
+            uint32_t a = mA->core.mem_r32(addr), b = mB->core.mem_r32(addr);
+            fprintf(stderr, "[sbs]   [0x%08X]: A=0x%08X  B=0x%08X  %s\n",
+                    addr, a, b, a == b ? "match" : "!! DIVERGE !!");
+          }
+        }
         fprintf(stderr, "[sbs] headless: exiting after RNG-count divergence.\n");
         fflush(stderr);
         sbs_rl_shutdown();
