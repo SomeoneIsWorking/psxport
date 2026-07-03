@@ -25,6 +25,7 @@
 // only RAM+scratchpad — matching the sibling objbeh gates.
 
 #include "core.h"
+#include "render/cull.h"    // Cull::cullWrap77acc / installSceneRecord
 #include "cfg.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -106,7 +107,7 @@ void beh_record_list_scanner(Core* c) {
         ret = c->r[2];
       } else {
         c->r[4] = obj; c->r[5] = lh(c, s4 + 4); c->r[6] = lh(c, s4 + 6); c->r[7] = lh(c, s4 + 8);
-        rec_dispatch(c, 0x80077ACCu);
+        c->engine.cull.cullWrap77acc();          // FUN_80077ACC (native)
         ret = c->r[2];
       }
       if (ret != 0) c->mem_w32(s5 + 16, c->mem_r32(s5 + 16) | s1);

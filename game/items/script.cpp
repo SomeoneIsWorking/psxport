@@ -5,6 +5,7 @@
 // behavior, byte-identical) into its own module for PC-game code structure. The `scriptvm` diagnostic
 // A/B gate (full RAM+scratchpad vs rec_super_call) is a REPL channel, unchanged.
 #include "core.h"
+#include "render/cull.h"    // Cull::cullWrap77acc / installSceneRecord
 #include "cfg.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -97,7 +98,7 @@ static void script_vm_4ce14(Core* c) {
         c->r[5] = (uint32_t)c->mem_r16s(s4 + 4);
         c->r[6] = (uint32_t)c->mem_r16s(s4 + 6);
         c->r[7] = (uint32_t)c->mem_r16s(s4 + 8);
-        rec_dispatch(c, 0x80077ACCu);
+        c->engine.cull.cullWrap77acc();          // FUN_80077ACC (native)
         ret = c->r[2];
       }
       if (ret != 0) c->mem_w32(s5 + 16, c->mem_r32(s5 + 16) | mask);

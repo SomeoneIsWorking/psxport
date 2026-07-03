@@ -25,6 +25,7 @@
 // doesn't. Byte-exact A/B gate (full RAM+scratchpad vs rec_super_call) is the safety net.
 
 #include "core.h"
+#include "render/cull.h"    // Cull::cullWrap77acc / installSceneRecord
 #include "cfg.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -123,8 +124,7 @@ void beh_cube_text_spawn(Core* c) {
       c->mem_w16(c->mem_r32(s0 + 0xc0) + 8, 0);
       c->mem_w16(c->mem_r32(s0 + 0xc0) + 0xa, 0);
       c->mem_w16(c->mem_r32(s0 + 0xc0) + 0xc, 0);
-      c->r[4] = c->mem_r32(s0 + 0xc0); c->r[5] = 1; c->r[6] = uVar7;
-      rec_dispatch(c, 0x80051B04u);                            // FUN_80051b04(rec, 1, uVar7) — leaves a0=rec
+      c->engine.graphicsBind.installSceneRecord(c->mem_r32(s0 + 0xc0), 1, uVar7);   // FUN_80051B04 (native)
       c->mem_w8(c->mem_r32(s0 + 0xc0) + 0x3e, 0);
       c->mem_w8(c->mem_r32(s0 + 0xc0) + 0x3f, (uint8_t)i6);
       i6++;

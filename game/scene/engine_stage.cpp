@@ -1328,7 +1328,7 @@ void Engine::areaUpdateTail() {
   }
 
   // (4) Common tail leaves — both take a0 = 0x800BE1F8.
-  c->r[4] = S5; rec_dispatch(c, 0x80075824u);
+  c->engine.musicCoord.musicFadeIn();               // FUN_80075824 (native)
   c->r[4] = S5; rec_dispatch(c, 0x80099490u);
 
   // (5) Key2 branch: if the s16 at 0x800BED80 != -1, look up the entry hword and probe with FUN_8008E0C0.

@@ -341,7 +341,7 @@ void Cull::cullWrapper() { Core* c = core;
   c->r[6] = (uint32_t)(int32_t)(int16_t)(uint16_t)((uint16_t)c->mem_r16(obj + 0x32) - camz);
   c->r[7] = (uint32_t)(int32_t)(int16_t)(uint16_t)((uint16_t)c->mem_r16(obj + 0x36) - camy);
   c->r[4] = obj;
-  rec_dispatch(c, 0x8007712Cu);
+  performBaseCull();                           // FUN_8007712C native — was rec_dispatch
 }
 
 // FUN_80077ACC — cull-wrapper variant, caller-supplied position in a1/a2/a3 (not obj fields), flags
@@ -356,5 +356,5 @@ void Cull::cullWrap77acc() { Core* c = core;
   c->r[5] = (uint32_t)(int32_t)(int16_t)(uint16_t)((uint16_t)c->r[5] - cx);
   c->r[6] = (uint32_t)(int32_t)(int16_t)(uint16_t)((uint16_t)c->r[6] - cz);
   c->r[7] = (uint32_t)(int32_t)(int16_t)(uint16_t)((uint16_t)c->r[7] - cy);
-  rec_dispatch(c, 0x8007712Cu);
+  performBaseCull();                           // FUN_8007712C native — was rec_dispatch
 }

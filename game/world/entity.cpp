@@ -69,8 +69,7 @@ static uint32_t child_spawn_40410(Core* c) {
     c->mem_w16(node + 0xA, 0);
     c->mem_w16(node + 0xC, 0);
     uint32_t a2 = (uint32_t)c->mem_r16s(s5 + s3);
-    c->r[4] = node; c->r[5] = 1; c->r[6] = a2;
-    rec_dispatch(c, 0x80051b04u);                   // transform/geom setup
+    c->engine.graphicsBind.installSceneRecord(node, 1, a2);   // FUN_80051B04 (native)
     s1 += 6; s3 += 2; s0 += 4;
   }
   return 1;
