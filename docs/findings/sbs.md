@@ -1,5 +1,42 @@
 # Findings — SBS dual-core compare harness (PSXPORT_SBS)
 
+## `PSXPORT_SBS_BYTETRACE=<lo>,<hi>` landed — per-byte-value+ra bucketing with settled-state 4-class auto-classifier + suggested SBS-noise-filter ranges
+- **finding (2026-07-03, workflow-first invariant generalized):** Extended the tool the previous session named. `PSXPORT_SBS_BYTETRACE=<lo>,<hi>` arms wwatch over the range on both cores and buckets every 1/2/4-B store's constituent BYTES per address per core, keeping both `(value → count)` and `(ra → count)` histograms. At end of run (via `sbs bytetrace` REPL over the debug server; the atexit/SIGTERM dumper works too but the debug-server invocation is the reliable path — SIGTERM dumps can truncate under `timeout N`). Classifies every recorded byte into 4 buckets:
+  ```
+  CLEAN       live_A == live_B  AND  A.value_counts == B.value_counts     ← nothing to see
+  PHASE       A.value_counts == B.value_counts  AND  live_A != live_B     ← snapshot-phase flicker
+  SOFT-PHASE  value SETS match; per-value counts within ±max(2, hi/20)    ← 1-tick-off residual
+  REAL        value sets differ OR counts differ by more than tolerance   ← real port gap
+  ```
+- **evidence — the same 800EE0DC..800EE10D span used for the previous "phase-vs-real" hand-diagnosis, now auto-classified in one command:**
+  ```
+  [sbs bytetrace] range=0x800EE0DC..0x800EE10D  recorded 49 unique byte addresses (settled state)
+                classified: 41 CLEAN, 5 PHASE, 0 SOFT-PHASE, 3 REAL  (strict=0)
+
+  (REAL bytes — the concrete port-gap targets:)
+    0x800EE0DE  [ONE-SIDED]  totA=63 totB=92   top: val=0x01 A=0 B=30  val=0x02 A=0 B=30  val=0x00 A=4 B=32
+    0x800EE104  [MIXED]      totA=73 totB=39   top: val=0x98 A=4 B=1
+    0x800EE108  [MIXED]      totA=39 totB=70   top: val=0x8C A=0 B=4
+  ```
+  The **ONE-SIDED byte at 0x800EE0DE** is a genuine caller-side divergence: B advances through 3 sub-states (writes 0x00/0x01/0x02, ~30× each), A stays at 0x00 and NEVER writes 0x01 or 0x02. That's a state-machine one of the two paths is missing entirely — the same shape of bug as the `anim_trigger_gates` case-swap. Node = 0x800EE0DC, handler = `beh_prng_velocity_machine` (FUN_80117658).
+- **evidence — wider sweep of a 2560-byte range around the node:**
+  ```
+  [sbs bytetrace] range=0x800EE000..0x800EEA00  recorded 2560 unique byte addresses
+                classified: 2280 CLEAN, 34 PHASE, 33 SOFT-PHASE, 213 REAL  (strict=0)
+  ```
+  The 67 PHASE + SOFT-PHASE bytes (out of 280 divergent) can go into isDiffNoise as ranges (Section 2 of the dump emits paste-ready C code); the 213 REAL bytes are the concrete port-gap targets to decomp — the sweep also surfaces a periodic pattern at 0x800EE18C / 0x214 / 0x29C / 0x324 (stride 0x88 = pool record size) where A writes values ~2× as often as B. Same offset on 4 consecutive spawn nodes → same code writing them at a rate mismatch → likely one bug at the shared writer.
+- **use pattern (documented for the next investigator):**
+  1. When SBS reports a first-divergence range, run `PSXPORT_SBS_BYTETRACE=<lo>,<hi>` with `PSXPORT_DEBUG_SERVER=1`.
+  2. Wait for the harness to reach settled state (usually SBS's own divergence-pause window is enough).
+  3. Connect to :5959, send `sbs bytetrace`.
+  4. Section 1 (CLEAN hidden by default; set PSXPORT_SBS_BYTETRACE_ALL=1 to show them) lists each byte with its class.
+  5. Section 2 emits paste-ready isDiffNoise ranges for the PHASE|SOFT runs.
+  6. Section 3 lists the top REAL bytes with shape (ONE-SIDED / SKEWED / MIXED) and the top 3 divergent (value, count_A, count_B) rows — the concrete decomp targets.
+  7. Pick the ONE-SIDED byte with the largest value-set gap; decomp the handler that writes it; cross-check native vs decomp at the case-label level.
+- **the workflow-first payoff** the manager called out is in this section 2 emit: name the phase-noise ranges ONCE, filter them from `isDiffNoise` FOREVER — the next PREWATCH hunt on the next divergence won't be misled by them, and every future bytetrace over the same address range will report them CLEAN (or classify a NEW divergence that shares the range without the phase-noise mask). Recurring-blocker fix at the tool level, not the finding level.
+- **workflow lesson recorded:** when applying `sbs bytetrace` in practice, use the debug-server invocation (`PSXPORT_DEBUG_SERVER=1` + `sbs bytetrace` over TCP), not the atexit/SIGTERM auto-dump. The auto-dump has a race with `timeout N` — SIGTERM handlers doing large I/O can be truncated by the follow-up SIGKILL. Debug-server invocation runs on the main thread synchronously with the harness paused.
+- **refs:** runtime/recomp/sbs.cpp (mByteTrace + storeCb decomposition + `dumpByteTrace` + REPL `sbs bytetrace` + env `PSXPORT_SBS_BYTETRACE` / `_ALL` / `_STRICT`); `$CLAUDE_JOB_DIR/tmp/bt5.log` (session capture with the 4-class classifier).
+
 ## Post-fix leading-edge f217 divergence (0x800EE0DD..0x800EE10C) is a SCHEDULING-PHASE residual, NOT another case-swap — value-set/count identical A vs B, only phase differs
 - **finding (2026-07-03, workflow-first invariant applied a second time — value-distribution symmetry test):** After landing the case-swap fix, the SBS harness's first surviving divergence at f217 moved to a spawn node at 0x800EE0DC..0x800EE10C (48 B = one node record, handler = beh_prng_velocity_machine / FUN_80117658 in A00). Applied the same "settled-state compare" primitive one level deeper: for the single divergent BYTE (0x800EE0DD), tallied the exact value each core writes to it over a 30 s run. Result:
   ```

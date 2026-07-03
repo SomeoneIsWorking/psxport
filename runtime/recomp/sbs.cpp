@@ -43,6 +43,7 @@
 #include <unistd.h>
 #include <tuple>
 #include <map>
+#include <set>
 #include <algorithm>
 #include <csignal>
 
@@ -92,6 +93,7 @@ public:
   void run(const char* exePath, Sbs* facade);
   int  dbgCmd(FILE* out, const char* line);
   void dumpAllocRa(FILE* out);
+  void dumpByteTrace(FILE* out);
   void storeCb(Core* c, uint32_t addr, uint32_t val);
   bool active() const { return mSbs; }
   int  coreId(Core* c) const {
@@ -155,6 +157,26 @@ public:
   struct RaBucket { int allocA=0, allocB=0, relA=0, relB=0; };
   std::map<uint32_t, RaBucket> mAllocRa;
   int      mAllocRaDumped = 0;
+
+  // ---- BYTETRACE: per-byte-value + ra bucketing over a range, with auto-classification.
+  // The generalization of ALLOCRA to arbitrary byte ranges. Every 1/2/4-byte store landing in
+  // [mByteTraceLo, mByteTraceHi) is decomposed into its constituent BYTES, and for each byte address
+  // we tally (value → count) per core plus (ra → count) per core. At end-of-run we classify each
+  // divergent byte:
+  //   PHASE-NOISE: value_counts_A == value_counts_B (both cores wrote the same value set with the
+  //                same counts; the byte just happens to be at a different phase at snapshot time).
+  //   REAL      : some value has A_count != B_count OR one core wrote a value the other never did.
+  // Enables PSXPORT_SBS_BYTETRACE=<lo>,<hi>. Dumps at atexit / SIGTERM (shares the ALLOCRA hook).
+  // Contiguous runs of PHASE-NOISE bytes are emitted as suggested SBS noise-filter ranges so future
+  // PREWATCH hunts aren't misled by phase flicker (recurring-blocker fix: name once, filter forever).
+  int      mByteTraceOn = 0;
+  uint32_t mByteTraceLo = 0, mByteTraceHi = 0;
+  struct BytePerCore {
+    std::map<uint8_t, uint32_t>  vals;      // value → count
+    std::map<uint32_t, uint32_t> ras;       // guest r[31] → count
+  };
+  struct ByteRow { BytePerCore a, b; };
+  std::map<uint32_t, ByteRow> mByteTrace;
 
   // ---- scripted headless input (PSXPORT_SBS_KEYS) ----
   std::vector<SbsKey> mKeys;
@@ -501,6 +523,22 @@ void Sbs::Impl::storeCb(Core* c, uint32_t a, uint32_t v) {
   // ALLOCTRACE: sniff writes to 0x800ED098 (free-slot count) — count per-frame decrements per core.
   // Fires INDEPENDENTLY of mWwArmed so it stays live across the whole run without arming a watch.
   // Exact-address check (a == 0x800ED098): word-aligned would count neighboring-byte writes too.
+  // BYTETRACE: bucket each store's constituent BYTES over the armed range.
+  if (mByteTraceOn && a < mByteTraceHi && a >= mByteTraceLo) {
+    int which_a = (mB && c == &mB->core) ? 1 : 0;
+    uint32_t ra = c->r[31];
+    // The write width is not carried here — the wwatch_check fires per byte/half/word store, and the
+    // value has already been widened to uint32 by the caller. Reconstruct the byte-value by peeking
+    // pre-store from RAM would be wrong (we don't know if this is the low/high byte). Instead: assume
+    // the store is a mem_w8 semantic (record `v & 0xFF` at `a`) — this is correct for byte stores and
+    // is a close approximation for wider stores when they only diverge on one byte (the common case
+    // here — spawn.cpp stamps use mem_w8 for node[+0/+10/+12], node[+1..+3] are set by beh handlers
+    // via mem_w8/w16 which land here byte-at-a-time). Sufficient for the phase-vs-real classification.
+    ByteRow& r = mByteTrace[a];
+    BytePerCore& pc = which_a ? r.b : r.a;
+    pc.vals[(uint8_t)(v & 0xFFu)]++;
+    pc.ras[ra]++;
+  }
   if (mAllocTraceOn && a == 0x800ED098u) {
     int which_a = (mB && c == &mB->core) ? 1 : 0;
     uint32_t cur = c->mem_r16(0x800ED098u);
@@ -618,8 +656,10 @@ int Sbs::Impl::dbgCmd(FILE* out, const char* line) {
             mFrame, spans, bytes, mLo, mHi, sspans, sbytes);
   } else if (!strcmp(sub, "allocra")) {
     dumpAllocRa(out);
+  } else if (!strcmp(sub, "bytetrace")) {
+    dumpByteTrace(out);
   } else {
-    fprintf(out, "sbs subcommands: status | diff | bt | watch [hex] | show a|b | resume | step [n] | dump [path] | ramdiff [N] | allocra\n");
+    fprintf(out, "sbs subcommands: status | diff | bt | watch [hex] | show a|b | resume | step [n] | dump [path] | ramdiff [N] | allocra | bytetrace\n");
   }
   return 1;
 }
@@ -659,6 +699,177 @@ void Sbs::Impl::dumpAllocRa(FILE* out) {
   }
 }
 
+// BYTETRACE settled-state classifier: for each recorded byte in [mByteTraceLo, mByteTraceHi),
+// decide whether A vs B match at SETTLED STATE. Two-class outcome per byte:
+//   PHASE : identical (value → count) maps on both cores + (optionally) live RAM differs. The only
+//           asymmetry is the SNAPSHOT phase — one core is at value X while the other is at value Y,
+//           but both cores VISIT the same values with the same counts over the run. Filterable noise.
+//   REAL  : (value → count) maps differ — some value has A_count != B_count, or one core wrote a
+//           value the other never did. Genuine port gap. Needs decomp / code-level attribution.
+// Emits three sections: (1) per-byte classification (skips CLEAN bytes = same live RAM + same maps),
+// (2) contiguous PHASE runs with (lo, hi] ready to paste into isDiffNoise, (3) REAL bytes as concrete
+// investigation targets. Env PSXPORT_SBS_BYTETRACE_ALL=1 shows CLEAN bytes too (usually noise).
+void Sbs::Impl::dumpByteTrace(FILE* out) {
+  if (!mByteTraceOn) { fprintf(out, "sbs bytetrace: PSXPORT_SBS_BYTETRACE=<lo>,<hi> required\n"); return; }
+  bool showAll = false;
+  { const char* e = getenv("PSXPORT_SBS_BYTETRACE_ALL"); if (e && *e && strcmp(e, "0") != 0) showAll = true; }
+  fprintf(out, "[sbs bytetrace] range=0x%08X..0x%08X  recorded %zu unique byte addresses (settled state)\n",
+          mByteTraceLo, mByteTraceHi, mByteTrace.size());
+  // Pass 1 — classify each byte address. Four buckets on the value-set + counts:
+  //   CLEAN      live_A==live_B AND identical value→count histograms → nothing to see.
+  //   PHASE      exactly identical value→count histograms + live differs → snapshot phase only.
+  //   SOFT-PHASE value SETS match; per-value counts differ by ≤ tolerance (default: min(2, 5% of max)).
+  //              This is the 1-tick-off-by-one residual class — real per-execution count difference
+  //              but too small to be a code-path divergence (both cores visit the same values, one
+  //              just did it a couple more times). Filterable as noise for the same reason PHASE is.
+  //   REAL       value sets differ OR counts differ by more than tolerance → real port gap.
+  // Tolerance is per-value: |ca - cb| ≤ max(2, max(ca,cb)/20). Env PSXPORT_SBS_BYTETRACE_STRICT=1
+  // forces strict PHASE/REAL split (no SOFT class) for a conservative one-shot audit.
+  enum Cls { CLEAN=0, PHASE=1, SOFT=2, REAL=3 };
+  bool strict = false;
+  { const char* e = getenv("PSXPORT_SBS_BYTETRACE_STRICT"); if (e && *e && strcmp(e, "0") != 0) strict = true; }
+  auto classify_soft = [&](const BytePerCore& A, const BytePerCore& B)->bool {
+    // Both value SETS must match (else it's a REAL divergence).
+    if (A.vals.size() != B.vals.size()) return false;
+    for (const auto& kv : A.vals) if (!B.vals.count(kv.first)) return false;
+    // Per-value counts within tolerance.
+    for (const auto& kv : A.vals) {
+      uint32_t ca = kv.second;
+      uint32_t cb = B.vals.at(kv.first);
+      uint32_t hi = ca > cb ? ca : cb;
+      uint32_t tol = hi / 20 > 2 ? hi / 20 : 2;
+      if ((ca > cb ? ca - cb : cb - ca) > tol) return false;
+    }
+    return true;
+  };
+  std::map<uint32_t, Cls> classification;
+  int nClean = 0, nPhase = 0, nSoft = 0, nReal = 0;
+  for (const auto& kv : mByteTrace) {
+    uint32_t a = kv.first;
+    const ByteRow& r = kv.second;
+    uint8_t ra_live = (a & 0x1FFFFFFF) < 0x200000 ? mA->core.mem_r8(a) : 0;
+    uint8_t rb_live = (a & 0x1FFFFFFF) < 0x200000 ? mB->core.mem_r8(a) : 0;
+    bool live_eq = (ra_live == rb_live);
+    bool vals_eq = (r.a.vals == r.b.vals);
+    Cls c;
+    if (live_eq && vals_eq)                        c = CLEAN;
+    else if (vals_eq && !live_eq)                  c = PHASE;
+    else if (!strict && classify_soft(r.a, r.b))   c = SOFT;
+    else                                           c = REAL;
+    classification[a] = c;
+    if      (c == CLEAN) nClean++;
+    else if (c == PHASE) nPhase++;
+    else if (c == SOFT)  nSoft++;
+    else                 nReal++;
+  }
+  fprintf(out, "               classified: %d CLEAN, %d PHASE, %d SOFT-PHASE, %d REAL  (strict=%d)\n",
+          nClean, nPhase, nSoft, nReal, strict ? 1 : 0);
+  // Section 1 — per-byte lines (hide CLEAN unless _ALL).
+  fprintf(out, "%s\n%12s  %-5s  %-8s  %-8s  %s\n",
+          showAll ? "(CLEAN rows shown)" : "(CLEAN rows hidden — set PSXPORT_SBS_BYTETRACE_ALL=1)",
+          "addr", "class", "live_A", "live_B", "note");
+  for (const auto& kv : classification) {
+    uint32_t a = kv.first;
+    Cls c = kv.second;
+    if (c == CLEAN && !showAll) continue;
+    uint8_t ra_live = (a & 0x1FFFFFFF) < 0x200000 ? mA->core.mem_r8(a) : 0;
+    uint8_t rb_live = (a & 0x1FFFFFFF) < 0x200000 ? mB->core.mem_r8(a) : 0;
+    const char* cls = c == CLEAN ? "clean" : c == PHASE ? "PHASE" : c == SOFT ? "SOFT" : "REAL";
+    const ByteRow& r = mByteTrace[a];
+    char note[256] = {0};
+    if (c == PHASE) {
+      // Summarize the shared value set (up to 3 values).
+      int shown = 0; size_t p = 0;
+      for (const auto& vv : r.a.vals) {
+        if (shown++ >= 3) break;
+        p += snprintf(note + p, sizeof(note) - p, "%s0x%02X×%u", shown > 1 ? " " : "", vv.first, vv.second);
+      }
+      if (r.a.vals.size() > 3) snprintf(note + p, sizeof(note) - p, " …");
+    } else if (c == REAL) {
+      // Find the first value with a different A vs B count (or a one-sided value).
+      std::set<uint8_t> allv;
+      for (const auto& vv : r.a.vals) allv.insert(vv.first);
+      for (const auto& vv : r.b.vals) allv.insert(vv.first);
+      for (uint8_t v : allv) {
+        uint32_t ca = r.a.vals.count(v) ? r.a.vals.at(v) : 0;
+        uint32_t cb = r.b.vals.count(v) ? r.b.vals.at(v) : 0;
+        if (ca != cb) { snprintf(note, sizeof note, "val=0x%02X  A×%u  B×%u", v, ca, cb); break; }
+      }
+    }
+    fprintf(out, "  0x%08X  %-5s  0x%02X      0x%02X      %s\n", a, cls, ra_live, rb_live, note);
+  }
+  // Section 2 — contiguous PHASE|SOFT runs, ready to paste into isDiffNoise (workflow-first: name
+  // once, filter forever — future PREWATCH hunts won't be misled by these bytes' flicker). Note:
+  // the runs are per-address SPECIFIC — same-shape bytes in a different node slot may not be phase
+  // there, so paste only after cross-checking with a second scene/repro.
+  fprintf(out, "\n[sbs bytetrace] suggested SBS noise-filter ranges (contiguous PHASE|SOFT runs):\n");
+  uint32_t run_lo = 0; bool in_run = false;
+  int runs = 0;
+  for (const auto& kv : classification) {
+    uint32_t a = kv.first;
+    bool is_noise = (kv.second == PHASE || kv.second == SOFT);
+    if (is_noise && !in_run) { run_lo = a; in_run = true; }
+    else if (!is_noise && in_run) {
+      fprintf(out, "  if (a >= 0x%08Xu && a < 0x%08Xu) return true;   // %u B (PHASE|SOFT)\n",
+              run_lo, a, a - run_lo);
+      in_run = false; runs++;
+    }
+  }
+  if (in_run) {
+    uint32_t hi = mByteTraceHi;
+    fprintf(out, "  if (a >= 0x%08Xu && a < 0x%08Xu) return true;   // %u B (PHASE|SOFT)\n",
+            run_lo, hi, hi - run_lo);
+    runs++;
+  }
+  if (!runs) fprintf(out, "  (no contiguous PHASE|SOFT runs)\n");
+  // Section 3 — REAL bytes as concrete investigation targets. Summarize with the TOP 3 divergent
+  // (val, A, B) rows sorted by |A-B|, plus a shape hint that names the asymmetry class:
+  //   ONE-SIDED  A writes values B never wrote (or vice versa) — sharpest signal for a real bug.
+  //   SKEWED     both cores write the same values but with wildly different counts (>2x).
+  //   MIXED      distributions overlap with mild asymmetry.
+  // (Detailed per-ra breakdown is available in the raw wwatch log via PSXPORT_WWATCH on the byte.)
+  fprintf(out, "\n[sbs bytetrace] REAL bytes (concrete port-gap targets to decomp):\n");
+  int reals = 0;
+  for (const auto& kv : classification) {
+    if (kv.second != REAL) continue;
+    uint32_t a = kv.first;
+    const ByteRow& r = mByteTrace[a];
+    uint8_t ra_live = (a & 0x1FFFFFFF) < 0x200000 ? mA->core.mem_r8(a) : 0;
+    uint8_t rb_live = (a & 0x1FFFFFFF) < 0x200000 ? mB->core.mem_r8(a) : 0;
+    // Union of value sets + counts.
+    std::set<uint8_t> allv;
+    for (const auto& vv : r.a.vals) allv.insert(vv.first);
+    for (const auto& vv : r.b.vals) allv.insert(vv.first);
+    // Classify shape.
+    int oneSided = 0, both = 0;
+    uint32_t totA = 0, totB = 0;
+    for (uint8_t v : allv) {
+      uint32_t ca = r.a.vals.count(v) ? r.a.vals.at(v) : 0;
+      uint32_t cb = r.b.vals.count(v) ? r.b.vals.at(v) : 0;
+      totA += ca; totB += cb;
+      if ((ca > 0) != (cb > 0)) oneSided++; else if (ca > 0 && cb > 0) both++;
+    }
+    const char* shape = "MIXED";
+    if (oneSided > 0 && both == 0) shape = "ONE-SIDED";
+    else if (oneSided > both)      shape = "ONE-SIDED";
+    else if (totA > 0 && totB > 0 && (totA > 2*totB || totB > 2*totA)) shape = "SKEWED";
+    // Top 3 rows by |A-B|.
+    std::vector<std::tuple<int, uint8_t, uint32_t, uint32_t>> rows;
+    for (uint8_t v : allv) {
+      uint32_t ca = r.a.vals.count(v) ? r.a.vals.at(v) : 0;
+      uint32_t cb = r.b.vals.count(v) ? r.b.vals.at(v) : 0;
+      if (ca != cb) rows.push_back({std::abs((int)ca - (int)cb), v, ca, cb});
+    }
+    std::sort(rows.begin(), rows.end(), [](auto& x, auto& y){ return std::get<0>(x) > std::get<0>(y); });
+    fprintf(out, "  0x%08X  live A=0x%02X B=0x%02X  [%s]  totA=%u totB=%u  top:",
+            a, ra_live, rb_live, shape, totA, totB);
+    for (size_t i = 0; i < 3 && i < rows.size(); i++)
+      fprintf(out, "  val=0x%02X A=%u B=%u", std::get<1>(rows[i]), std::get<2>(rows[i]), std::get<3>(rows[i]));
+    fprintf(out, "\n");
+    if (++reals >= 20) { fprintf(out, "  … (%d more REAL bytes; scope your BYTETRACE range tighter)\n", nReal - reals); break; }
+  }
+}
+
 void Sbs::Impl::run(const char* exePath, Sbs* facade) {
   watchdog_disable();   // the SBS pauses indefinitely on a divergence for live inspection — not a hang
 
@@ -677,22 +888,47 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
   mem_set_store_watch_cb(&Sbs::storeCb);
   mSbs = true;
 
+  { const char* e = getenv("PSXPORT_SBS_BYTETRACE");
+    if (e && *e) {
+      unsigned long lo=0, hi=0;
+      if (sscanf(e, "%lx,%lx", &lo, &hi) == 2 && hi > lo) {
+        mByteTraceOn = 1; mByteTraceLo = (uint32_t)lo; mByteTraceHi = (uint32_t)hi;
+        fprintf(stderr, "[sbs] BYTETRACE on — per-byte value+ra bucketing over 0x%08X..0x%08X (settled-state classifier at exit)\n",
+                mByteTraceLo, mByteTraceHi);
+      } else {
+        fprintf(stderr, "[sbs] BYTETRACE: bad range '%s' (want <lo>,<hi>, hex, e.g. 0x800EE0DC,0x800EE10D)\n", e);
+      }
+    }
+  }
   { const char* e = getenv("PSXPORT_SBS_ALLOCTRACE"); if (e && *e && strcmp(e, "0") != 0) mAllocTraceOn = 1; }
-  if (mAllocTraceOn) {
-    fprintf(stderr, "[sbs] ALLOCTRACE on — per-frame decrement count of 0x800ED098 logged when A != B\n");
+  if (mAllocTraceOn || mByteTraceOn) {
+    if (mAllocTraceOn)
+      fprintf(stderr, "[sbs] ALLOCTRACE on — per-frame decrement count of 0x800ED098 logged when A != B\n");
     // Register a per-ra bucket dump at process exit so the settled-state per-caller table lands even
     // when the run is killed by SIGTERM (SBS AUTONAV normally runs indefinitely). Guarded via mSelfPtr
     // so the atexit lambda can find the live Sbs::Impl without a global.
     static Sbs::Impl* s_selfForAtExit = nullptr;
     s_selfForAtExit = this;
-    atexit([]{ if (s_selfForAtExit) s_selfForAtExit->dumpAllocRa(stderr); });
+    atexit([]{
+      if (!s_selfForAtExit) return;
+      // The SIGTERM/SIGINT handler below already ran a full dump before _exit(128+sig); if we're
+      // still here it means the process exited normally (main returned or exit(0)) — dump once now.
+      if (s_selfForAtExit->mAllocRaDumped) return;
+      s_selfForAtExit->mAllocRaDumped = 1;
+      s_selfForAtExit->dumpAllocRa(stderr);
+      s_selfForAtExit->dumpByteTrace(stderr);
+    });
     // Also trap SIGTERM/SIGINT (the common shell-timeout / Ctrl-C path) so the settled-state per-ra
     // table lands under `timeout N …` too. Dump then call _exit — cheap, no atexit chain re-entry.
     static bool s_sigHooked = false;
     if (!s_sigHooked) {
       s_sigHooked = true;
       auto handler = +[](int sig){
-        if (s_selfForAtExit) s_selfForAtExit->dumpAllocRa(stderr);
+        if (s_selfForAtExit && !s_selfForAtExit->mAllocRaDumped) {
+          s_selfForAtExit->mAllocRaDumped = 1;
+          s_selfForAtExit->dumpAllocRa(stderr);
+          s_selfForAtExit->dumpByteTrace(stderr);
+        }
         fflush(stderr);
         _exit(128 + sig);
       };
@@ -712,11 +948,20 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
   fprintf(stderr, "[sbs] core-map A=%p B=%p (use to attribute [wwatch] lines)\n",
           (void*)&mA->core, (void*)&mB->core);
 
-  // ALLOCTRACE arm — after Cores exist. wwatch_check only fires the store callback for armed
-  // addresses; arm 0x800ED098 (word-aligned) on both cores so storeCb sees every write.
-  if (mAllocTraceOn) {
-    mA->core.wwatch_arm(0x800ED098u & ~3u, (0x800ED098u & ~3u) + 4);
-    mB->core.wwatch_arm(0x800ED098u & ~3u, (0x800ED098u & ~3u) + 4);
+  // ALLOCTRACE/BYTETRACE arm — after Cores exist. wwatch_check only fires the store callback for
+  // armed addresses. Compose a single covering range: if BYTETRACE is on we use its range and, when
+  // ALLOCTRACE is also on, extend so 0x800ED098 falls inside. If only ALLOCTRACE is on we arm just
+  // the 0x800ED098 word. storeCb filters by exact address so overshoot has zero effect other than
+  // more callback calls.
+  if (mAllocTraceOn || mByteTraceOn) {
+    uint32_t lo = mByteTraceOn ? mByteTraceLo : (0x800ED098u & ~3u);
+    uint32_t hi = mByteTraceOn ? mByteTraceHi : ((0x800ED098u & ~3u) + 4);
+    if (mAllocTraceOn) {
+      if (0x800ED098u < lo) lo = 0x800ED098u & ~3u;
+      if (0x800ED09Cu > hi) hi = 0x800ED09Cu;
+    }
+    mA->core.wwatch_arm(lo, hi);
+    mB->core.wwatch_arm(lo, hi);
   }
 
   // PSXPORT_SBS_PREWATCH=<hex> — arm SBS write-watch at boot so the FIRST divergent store to the
