@@ -212,6 +212,16 @@ struct SchedulerState {
   // Not per-task since only task 0 runs SOP; using [3] for consistency with the other arrays.
   uint8_t sop_field_step[3] = {};
 
+  // ---- Native DEMO leave-substate step-spread (Slip #1 residual, docs/findings/sbs.md) ----
+  // demo.frame() with sm[0x48]==5 dispatches the LEAVE-DEMO substate which calls native_start_stage
+  // synchronously: entry rewrites from 0x801062E4 → 0x8010637C in the same scheduler tick. The coro
+  // body of 0x801062E4's substate 5 does the same work but yields at least once through FUN_80051f80
+  // before completing, so B's task-entry rewrite lands one tick LATER than A's. Defer A by one tick:
+  //   0 = fresh sm[0x48]==5 tick; set to 1 and RETURN without calling demo.frame() (entry stays 801062E4)
+  //   1 = second tick; actually dispatch substate 5 (native_start_stage rewrites entry), reset to 0
+  // Per-task since demo runs only on task 0 in practice; array indexed for consistency with siblings.
+  uint8_t demo_leave_step[3] = {};
+
   // Resident overlay per OVERLAP SLOT (0x80106228 stage / 0x80108F9C mode / 0x8018A000 area), recorded
   // by overlay_note_load() at LOAD time — when the freshly-written image still matches its raw .BIN
   // signature, BEFORE the game mutates its header pointer table at runtime. The router routes by this

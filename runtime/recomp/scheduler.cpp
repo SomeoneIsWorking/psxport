@@ -150,7 +150,19 @@ void native_scheduler_step(Core* c) {
           // the same tick, mirroring the recomp iter's dispatch step. On resume, just frame().
           // (docs/findings/sbs.md Slip #1 — stageMain used to also run s0, putting native ahead.)
           if (demo_fresh) c->engine.demo.stageMain();                // prologue only (sm[0x48]=0)
-          c->engine.demo.frame();                                    // dispatches sm[0x48] substate
+          // SLIP #1 RESIDUAL FIX (docs/findings/sbs.md): on the LEAVE-DEMO substate (sm[0x48]==5),
+          // defer dispatch by one tick to match the coro's yield cost through FUN_80051f80. Native
+          // native_start_stage rewrites base+0xc inline in one tick; coro yields at least once first,
+          // so B's entry rewrite lands one tick LATER than A's. Deferring here keeps them aligned.
+          uint16_t sm48v = c->mem_r16(c->mem_r32(0x1f800138u) + 0x48);
+          bool defer_leave = (sm48v == 5 && !demo_fresh
+                              && c->game->sched.demo_leave_step[i] == 0);
+          if (defer_leave) {
+            c->game->sched.demo_leave_step[i] = 1;                   // consumed on the next tick
+          } else {
+            c->engine.demo.frame();                                  // dispatches sm[0x48] substate
+            if (sm48v == 5) c->game->sched.demo_leave_step[i] = 0;   // re-arm after LEAVE completes
+          }
         } else if (cfg_dbg("demo")) {
           static int w = 0; if (!w++) fprintf(stderr, "[demo] caught a substate yield (async CD not yet "
                                                       "owned native+sync) — frontier\n");
