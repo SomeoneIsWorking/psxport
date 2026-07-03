@@ -1,5 +1,38 @@
 # Findings — SBS dual-core compare harness (PSXPORT_SBS)
 
+## FUN_801337E4 RE'd semantic model (2026-07-03) — full 5-way sub-state machine named; port-ready
+- **RE source:** disas 0x801337E4..0x80133C10 on `scratch/bin/field_ram_230.bin`; jumptable at 0x80109E58 (5 entries: 0x80133868 / 0x80133874 / 0x8013392C / 0x80133A3C / 0x80133AB4). Named fields on `class Actor` (game/object/actor.h) — subState / counterA / subFlagX / retryDelay / oscPhase / oscBase / renderRec / targetDelta / type / stateEcho — with docstrings that cite this handler as the naming source.
+- **role:** the state-1 tick sub-behavior called from the parent `beh_typed_table_seed_gate` handler (FUN_80133C14) every ACTIVE frame. Semantically, this is a **BACKGROUND-ACTOR oscillate + occasionally-turn state machine** — an ambient critter/prop that (a) breathes/sways via a sin-driven periodic display attribute (`renderRec[+0xC] = cos(oscPhase) >> 5`) and (b) can be triggered by a scene event (counterA / subFlagX) to compute a target-angle delta and drive a short turn/scan sub-state sequence that consults the PILOT-ACTOR region at 0x800E7E80.
+- **section A (0x801337F8..0x80133838) — reset transients when stateEcho != 0:** if `Actor::stateEcho != 0` (parent handler wrote it in a "not-triggered" gate branch last frame, then something advanced state), clear stateEcho, reset `subState=0`, `renderRec[+0xC]=0`, `targetDelta=0`, and re-seed `oscBase` from the per-type table 0x8014A6E4. This is the ONE place `stateEcho`'s consumer lives — the parent handler is its writer.
+- **section B (0x80133838..0x80133864) — 5-way sub-state dispatch:** `if subState >= 5: return; else jump *(0x80109E58 + subState*4)`. Jump-table entries:
+  - **[0] INIT (0x80133868):** `oscPhase = 0; subState = 1;` then fall through into [1]'s body with v0=2 preset in delay slot for the `bne`-driven case-2 advance.
+  - **[1] MAIN OSCILLATOR TICK (0x80133874):** the target-#4 hot path.
+      - `if counterA != 0: subState = 2; return;` (falling through to case-2 body with v0=2)
+      - `else if subFlagX != 0:` — turn-trigger path:
+          - `a1 = obj[+0x56]` (Y-signed); `a0 = obj[+0x5F] << 4`;
+          - `subState = 4;`
+          - `rec_dispatch(0x80077768)` — sub-behavior returning nonzero/zero to say TURN LEFT / TURN RIGHT
+          - `targetDelta = (v0 != 0) ? +256 : -256;`
+          - `subFlagX = 0;`
+          - exit epilogue (v0 sentinel = 1)
+      - `else (counterA == 0 && subFlagX == 0):`
+          - `if retryDelay != 0: retryDelay -= 1; return;` (throttle the oscillator tick)
+          - `else:` **THE OSCILLATOR TICK**:
+              - `cos = Trig::rcos(oscPhase)`  (`rec_dispatch 0x80083F50` — now `c->trig.rcos()`)
+              - `renderRec[+0xC] = cos >> 5`
+              - `r = c->rng.next()`  (`rec_dispatch 0x8009A450` — now `class Rng` with seed at 0x80105EE8)
+              - `oscPhase = (uint16)(oscPhase + 68 + (r >> 8));`  ← **THE TARGET-#4 ACCUMULATOR**
+  - **[2] POST-COUNTER-A (0x8013392C):** `if counterA == 0: subState = 3; return; else …` reads the pilot-actor region at 0x800E7E80: `*(0x800E7FC7)` (pilot mode byte), `*(0x800E7ED8)` (pilot yaw halfword), `*(0x800E7FE8)` (pilot state); computes `oscBase` from `(pilotState - 2) * 6 * 2` clamped against a small halfword table at 0x8014A6F4; writes `renderRec[+0xC] = ± *(0x800E7ED8)`; advances further only when pilotMode<3.
+  - **[3] TURN-DIRECTION SEED (0x80133A3C):** reads `*(0x800E7FE8)` (pilot state again) and picks one of {32, 48, 64, 128} into `targetDelta` by lookup; then reads `*(0x800E7FC7)` (pilot mode) and negates targetDelta when it's set; advances `subState=4`.
+  - **[4] TURN-EXECUTE (0x80133AB4):** counterA/subFlagX branch mirror of case [1] but WITH targetDelta consumption — reads `renderRec[+0xC]` as current angle, adds targetDelta, wraps into signed 12-bit window (±0x1000), decays targetDelta by 8 per tick (clamped to zero, whichever direction), and writes back both. When targetDelta reaches |delta| < 32 while angle |Δ| < 20, resets subState=0 (loops back to INIT).
+- **why THIS matters for target #4:** the oscillator-tick accumulator update `oscPhase += 68 + (rng >> 8)` is DIRECTLY the divergence propagator that the SBS chase named. Its ONLY non-deterministic input is `c->rng.next()`, whose seed at `0x80105EE8` is a single-word global shared across every FUN_8009A450 caller in the whole game. **If A and B ever call `Rng::next()` a different number of times before this handler runs, or in a different order, their seeds are permanently forked and every subsequent `oscPhase += ...` differs by a jittered amount every frame.** The divergence at the write site (`renderRec[+0xC] = cos(oscPhase) >> 5`) is downstream of that seed-divergence. **Next-session probe (durable):** wwatch `0x80105EE8` from boot and log the FIRST frame the two cores' seed values differ + which caller wrote the diverging value. That names the target-#4 upstream at the SEED level (not at oscPhase level), and any earlier writer is the root cause.
+- **port readiness:** the RE'd surface is captured. Full native port of FUN_801337E4 as a method (candidate: `Actor::runBackgroundActorTick()` or a free helper `background_actor_tick(Actor&)` in a `game/ai/background_actor_tick.cpp`) is the NEXT arc — it will replace the parent handler's `rec_dispatch(SUB_STATE1_TICK)` and, if the pilot-actor region 0x800E7E80 semantics get named at the same time (see below), turn the whole chain into named-field code.
+- **still-un-RE'd sub-references** (all called via rec_dispatch by FUN_801337E4 for now):
+  - `0x800E7E80` — a 512-byte region read as if it were a PILOT-ACTOR (mode / yaw / state at +0x147/+0x58/+0x168). Likely Tomba himself or the SOP camera-target actor; RE candidate for a `class PilotActor` view.
+  - `0x8014A6F4` — halfword ANGLE-CLAMP table (parallel to `oscBase` table 0x8014A6E4), indexed by `type * 4`. Per-type clamp bands.
+  - `0x80077768` — TURN-DIRECTION lookup (case 1's subFlagX path): returns nonzero to signal "turn +256", zero for "-256". Args: `(actorSlotType << 4, pilotYaw, 0)`.
+- **refs:** game/object/actor.h field docstrings; game/ai/beh_typed_table_seed_gate.cpp STILL OPAQUE list; ov_a00_gen_801337E4 substrate body (generated/ov_a00_shard_0.c line 19260-19313).
+
 ## `PSXPORT_DISPWATCH=<addr>:ra=<caller_ra>` — caller-ra-scoped dispatch trace (2026-07-03, workflow-first tool extension)
 - **finding:** Extended `PSXPORT_DISPWATCH` in runtime/recomp/overlay_router.cpp to accept a `:ra=<caller_ra>` suffix that filters by the caller's `c->r[31]` at dispatch entry. Motivation: FUN_80083F50 has ~30+ rec_dispatch call sites (grep `generated/ov_a01_shard_0.c` shows ~30 in that shard alone), so a plain `PSXPORT_DISPWATCH=0x80083F50` interleaves args from every caller and drowns the specific site we're chasing. The caller-ra filter isolates ONE call site so its per-frame per-core args are directly diffable.
 - **also emits a richer log line:** frame number (via `Sbs::frame()`), core, addr, ra, `a0/a1/a2` with `int16` sign of a0 (for LUT-lookup callers whose small-negative args are meaningful), a0-as-node summary (state/n3), and stage. Same width as before but every field a decomp trace needs.

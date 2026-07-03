@@ -22,10 +22,20 @@
 //
 // STILL OPAQUE (recorded so a future RE arc closes them; the un-owned sub-behaviors here index Actor
 // fields the RE didn't yet name completely):
-//   - FUN_801337E4   state-1 entry helper (target-#4 upstream — the oscPhase accumulator body)
+//   - FUN_801337E4   state-1 sub-state machine (5-way jumptable at 0x80109E58). RE'd in this session's
+//                    docs finding (docs/findings/sbs.md target-#4 upstream — the full semantic model of
+//                    subState 0..4, the oscillator tick body = Trig::rcos(oscPhase)>>5 into
+//                    renderRec[+0xC] + oscPhase += 68 + (c->rng.next()>>8), and the turn/scan sub-states
+//                    that consult a pilot-actor region at 0x800E7E80). Actor's subState / subFlagX /
+//                    retryDelay / targetDelta / renderRec / counterA fields are named from that RE.
+//                    NATIVE PORT PENDING: still called via rec_dispatch here so the beh_ handler stays
+//                    small; the port lands in the next RE arc using the now-named Actor surface (plus
+//                    class Rng already at c->rng.next() and class Trig at c->trig.rcos).
 //   - FUN_8004766C   per-object update called after box seed + inside render tail (matrix build?)
 //   - FUN_80077EBC   scenePhase==0x22 sub-behavior body
 //   - FUN_800778E4   spatial trigger check taking (obj, triggerParam) -> 0/nonzero (IN/OUT)
+//   - FUN_80077768   sub-behavior FUN_801337E4 calls with (obj[+0x5F]<<4, obj[+0x56], 0) —
+//                    target-direction lookup (returns nonzero → targetDelta = +256, zero → -256).
 // Kept as `rec_dispatch` (recomp substrate) — the correct escape hatch until each is RE'd on its own.
 //
 // PORTED OWNERSHIP RULES (per project CLAUDE.md): CONTROL FLOW + every named-field write owned native,

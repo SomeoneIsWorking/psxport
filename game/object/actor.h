@@ -54,16 +54,48 @@ public:
   uint8_t type() const                { return c->mem_r8(obj + 0x03); }
 
   // ── Handler-local counters/echoes (u8) ───────────────────────────────────────────────────────────
-  // counterA (obj+0x29, u8): u8 counter zero-cleared at init by beh_typed_table_seed_gate. Not yet
-  //   traced to a writer that gives it semantics.
+  // counterA (obj+0x29, u8): "trigger" flag read by FUN_801337E4's sub-state machine: when non-zero,
+  //   advance the sub-state directly (case 1 → case 2 via bne, case 4 → case 1 via bne). Zero-cleared
+  //   at init by beh_typed_table_seed_gate; a writer (still un-RE'd) sets it when a scene event fires.
+  uint8_t counterA() const            { return c->mem_r8(obj + 0x29); }
   void    setCounterA(uint8_t v)      { c->mem_w8(obj + 0x29, v); }
   // sceneMode (obj+0x2A, u8): per-handler scene-mode tag. beh_typed_table_seed_gate seeds this to 0x22
   //   at init, and its state-1 gate branches on the global scene-phase byte 0x800E7EAA == 0x22. That
   //   coupling names it: "this actor participates when the scene is in the 0x22 phase".
   void    setSceneMode(uint8_t v)     { c->mem_w8(obj + 0x2A, v); }
-  // counterB (obj+0x46, u8): u8 counter zero-cleared at init. Same status as counterA — named as a
-  //   counter because it sits next to other zeroed counters; exact semantics deferred.
+  // subState (obj+6, u8): SUB-state machine index for FUN_801337E4's 5-way dispatch (jumptable at
+  //   0x80109E58). 0 = INIT (clear oscPhase, advance to 1), 1 = MAIN OSCILLATOR TICK (Trig::rcos of
+  //   oscPhase + PRNG-jittered accumulate), 2/3/4 = TURN/SCAN sub-states that consult a pilot-actor
+  //   region at 0x800E7E80 and set targetDelta. Semantics named from FUN_801337E4 RE (2026-07-03).
+  uint8_t subState() const            { return c->mem_r8(obj + 0x06); }
+  void    setSubState(uint8_t v)      { c->mem_w8(obj + 0x06, v); }
+  // subFlagX (obj+0x2B, u8): sub-behavior trigger consumed by FUN_801337E4 cases 1 and 4. When
+  //   non-zero, dispatch calls FUN_80077768(obj[+0x5F]<<4, obj[+0x56], 0) — a target-direction lookup
+  //   from a per-actor+per-pilot table — then sets targetDelta = ±256 based on its return and clears
+  //   subFlagX. Writer for subFlagX still un-RE'd.
+  uint8_t subFlagX() const            { return c->mem_r8(obj + 0x2B); }
+  void    setSubFlagX(uint8_t v)      { c->mem_w8(obj + 0x2B, v); }
+  // counterB (obj+0x46, u8): retry-delay counter for FUN_801337E4's oscillator-tick gate. In sub-state 1
+  //   the tick only fires when counterB == 0; otherwise counterB is decremented and the tick is
+  //   skipped this frame. Zero-cleared at init by beh_typed_table_seed_gate.
+  uint8_t retryDelay() const          { return c->mem_r8(obj + 0x46); }
+  void    setRetryDelay(uint8_t v)    { c->mem_w8(obj + 0x46, v); }
+  // (old counterB setter kept for beh_typed_table_seed_gate's init reset — same field as retryDelay.)
   void    setCounterB(uint8_t v)      { c->mem_w8(obj + 0x46, v); }
+
+  // targetDelta (obj+0x44, i16): signed 16-bit "target-angle delta" set by FUN_801337E4's turn/scan
+  //   sub-states — case 1 subFlagX path writes ±256 based on the direction lookup return; case 3 seeds
+  //   from a small per-pilot-mode table (32/48/64/128); case 4 wraps it into ±0x1000 and clamps.
+  //   zero-cleared by the section-A reset (stateEcho != 0 path) at the top of FUN_801337E4.
+  int16_t targetDelta() const         { return (int16_t)c->mem_r16(obj + 0x44); }
+  void    setTargetDelta(int16_t v)   { c->mem_w16(obj + 0x44, (uint16_t)v); }
+
+  // renderRec (obj+0xC0, u32): guest pointer to the object's RENDER RECORD (allocated by
+  //   GraphicsBind::recordAlloc in the parent handler's INIT state). FUN_801337E4 writes
+  //   renderRec[+0xC] with cos(oscPhase) >> 5 in the oscillator-tick body — the display attribute
+  //   that reads as this actor's per-frame animated parameter. Not yet promoted to a typed struct;
+  //   raw pointer for now.
+  uint32_t renderRec() const          { return c->mem_r32(obj + 0xC0); }
 
   // ── Oscillation / motion (u16 / i16) ─────────────────────────────────────────────────────────────
   // oscBase (obj+0x32, u16): per-type oscillation base parameter. Seeded from the per-type halfword
