@@ -1305,7 +1305,7 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
         // Dump the neighborhoods around a few common overlay .rodata addresses to name the diff.
         {
           fprintf(stderr, "[sbs] === overlay .rodata sample (byte@addr, A vs B) ===\n");
-          for (uint32_t addr : {0x8014AABCu, 0x8014AAC0u, 0x8014AAC4u, 0x8014AAD4u, 0x8014AAD8u, 0x8014AADCu}) {
+          for (uint32_t addr : {0x80105EE8u, 0x800BFA13u, 0x800BF873u, 0x800ED098u, 0x800E7E74u, 0x800ECFD4u}) {
             uint32_t a = mA->core.mem_r32(addr), b = mB->core.mem_r32(addr);
             fprintf(stderr, "[sbs]   [0x%08X]: A=0x%08X  B=0x%08X  %s\n",
                     addr, a, b, a == b ? "match" : "!! DIVERGE !!");
