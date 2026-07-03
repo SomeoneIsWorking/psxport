@@ -172,8 +172,6 @@ public:
   // the stage-0 preload SM is stepped across subsequent scheduler ticks via stage0Advance() so
   // native matches the recomp body's per-iteration yield cadence (docs/findings/sbs.md Slip #1).
   void startBinStage();
-  void startBinStagePc();          // PC-mode fresh tick — native ISO9660, paced SM
-  void startBinStageFaithful();    // FAITHFUL fresh tick — substrate dispatch inside scoped setjmp
 
   // stage0Advance: run ONE step of the native STAGE-0 preload state machine, matching the recomp
   // body of 0x8010649C's per-iteration yield loop (see docs/findings/sbs.md Slip #1). Called by
