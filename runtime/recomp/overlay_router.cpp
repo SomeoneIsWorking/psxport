@@ -169,9 +169,11 @@ void rec_dispatch(Core* c, uint32_t addr) {
     Sbs* sbs = c->game ? c->game->sbs : 0;
     int cid = sbs ? sbs->coreId(c) : -1;
     uint32_t nd = c->r[4];
-    uint32_t s0 = (nd & 0x1FFFFFFF) < 0x200000 ? c->mem_r8(nd + 4) : 0xff;
-    fprintf(stderr, "[dispwatch] core=%c addr=%08X node=%08X s0=%u stage=%08X\n",
-            cid < 0 ? '?' : (cid ? 'B' : 'A'), addr, nd, s0, c->mem_r32(0x801fe00c));
+    bool nd_ok = (nd & 0x1FFFFFFF) < 0x200000;
+    uint32_t s0 = nd_ok ? c->mem_r8(nd + 4) : 0xff;
+    uint32_t n3 = nd_ok ? c->mem_r8(nd + 3) : 0xff;
+    fprintf(stderr, "[dispwatch] core=%c addr=%08X node=%08X s0=%u n3=%u stage=%08X\n",
+            cid < 0 ? '?' : (cid ? 'B' : 'A'), addr, nd, s0, n3, c->mem_r32(0x801fe00c));
   }
   uint32_t a = addr & 0x1FFFFFFF;
   if (a >= REC_MAIN_LO && a < REC_MAIN_HI) { main_dispatch(c, addr); return; }

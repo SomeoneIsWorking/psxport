@@ -4,7 +4,7 @@
 // 0x80129E84. Disassembled from scratch/ram/field_seaside.bin incl. its in-overlay jump table
 // (jt @0x80109C5C, 5 entries indexed by node[3]). Two-level state machine (outer node[4]):
 //   STATE 2 : nothing.   STATE 3 : FUN_8007A624(node).   >=4 : nothing.
-//   STATE 0 : node[3] -> 0/1/3 FUN_801296E0, 2 FUN_8012982C, 4 FUN_80129984, >=5 nothing.
+//   STATE 0 : node[3] -> 0/1/2 FUN_801296E0, 3 FUN_8012982C, 4 FUN_80129984, >=5 nothing.
 //   STATE 1 : dispatch jt[node[3]] (node[3]<5):
 //       case 0/1: animation-trigger gates on area bytes 0x800E7EAA/0x800E7FC7 (and 0x800E7EB6 hword for
 //                 case 0); on success node[1]=1, node[0xC0][+12] += 16, FUN_800517F8(node); case 0 also
@@ -43,16 +43,24 @@ void beh_anim_trigger_gates(Core* c) {
   uint32_t v1;
 
   uint8_t st = c->mem_r8(obj + 4);                // node[4] = outer state
+  if (getenv("PSXPORT_ANIMTG_ENTRY"))
+    fprintf(stderr, "[animtg-entry] core=%p node=%08X st=%u n3=%u stage=%08X\n",
+            (void*)c, obj, st, c->mem_r8(obj + 3), c->mem_r32(0x801fe00c));
   if (st == 1) goto Lcb0;
   if (st < 2) { if (st == 0) goto Lc50; goto Lret; }   // st<2 -> only st==0
   if (st == 2) goto Lret;
   if (st == 3) { c->engine.spawn.despawn(obj); goto Lret; }
   goto Lret;                                       // st >= 4 default
 
- Lc50:                                            // STATE 0 — node[3] dispatch
+ Lc50:                                            // STATE 0 — node[3] dispatch (per decomp FUN_80129c00
+                                                  // + recomp ov_a00_gen_80129C00). Prior version had
+                                                  // `v1 == 2 -> FUN_8012982C` which is a case-swap bug —
+                                                  // 4-record-alloc init runs on the WRONG node[3] value,
+                                                  // producing +8 extra allocations at 0x800ED098 vs the
+                                                  // recomp path. Corrected: n3==3 dispatches 0x8012982C.
   v1 = c->mem_r8(obj + 3);
-  if (v1 == 2) { leaf(c, obj, 0x8012982Cu); goto Lret; }
-  if (v1 < 4) { if ((int8_t)v1 < 0) goto Lret; leaf(c, obj, 0x801296E0u); goto Lret; }  // 0,1,3
+  if (v1 == 3) { leaf(c, obj, 0x8012982Cu); goto Lret; }
+  if (v1 < 4) { if ((int8_t)v1 < 0) goto Lret; leaf(c, obj, 0x801296E0u); goto Lret; }  // 0,1,2
   if (v1 == 4) { leaf(c, obj, 0x80129984u); goto Lret; }
   goto Lret;                                       // node[3] >= 5
 

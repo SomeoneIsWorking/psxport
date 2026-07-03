@@ -1,6 +1,37 @@
 # Findings — SBS dual-core compare harness (PSXPORT_SBS)
 
-## Per-ra bucketed ALLOCTRACE landed as a durable settled-state compare — `PSXPORT_SBS_ALLOCTRACE=1` now dumps at exit; +6 net traced to native-record_gate lump + one A-only recomp bucket ra=0x801298A4 (beh_anim_trigger_gates → FUN_8012982C init 4-alloc loop, 2 invocations)
+## +6 alloc delta at 0x800ED098 FIXED — case-swap bug in native `beh_anim_trigger_gates` STATE 0 (`v1 == 2` should be `v1 == 3`); post-fix net=+0, f240 ramdiff 4794 → 2074 B (−55%)
+- **finding (2026-07-03, root-cause named + fixed via per-ra bucketed ALLOCTRACE):** The +3 net-alloc residual at 0x800ED098 was caused by a **case-label swap** in `game/ai/beh_anim_trigger_gates.cpp:54` — the native STATE 0 dispatcher had `if (v1 == 2) leaf(c, obj, 0x8012982C)` but the decomp/recomp ground truth dispatches FUN_8012982C on `v1 == 3`, NOT `v1 == 2`. FUN_8012982C is a 4-record-alloc init loop; with the swap, A's 2 objects with node[3]==2 wrongly went into the 4-alloc init (8 A-only allocs), while B's recomp path took the correct FUN_801296E0 branch for node[3]==2 (0 allocs). The scene has no node[3]==3 objects, so B never fired FUN_8012982C at all in this window. Net: A allocated 8 extra records; other symmetric-shape sites contributed a compensating −2, netting the +6 total delta.
+- **evidence — per-ra ALLOCTRACE before vs after the fix:**
+  ```
+  BEFORE (30 s SBS FULL AUTONAV):
+    totalA=944 totalB=938 net=+6
+    0x801298A4  A=8  B=0   +8   ← FUN_8012982C 4-alloc loop, fired by beh_anim_trigger_gates on A only
+    SBS *** DIVERGENCE at lockstep frame 217: 0x800ED098..0x800ED099 ***
+    f240 ramdiff: 4794 B
+
+  AFTER (same run, one-line native fix):
+    totalA=938 totalB=938 net=+0                                 ← alloc count equal
+    0x801298A4 no longer in ALLOCRA dump (both cores 0)          ← A-only bucket closed
+    SBS *** DIVERGENCE at f217: 0x800EE0DD..0x800EE10C ***       ← 0x800ED098 no longer the first delta
+    f240 ramdiff: 2074 B                                         ← −2720 B, −55%
+  ```
+- **how the bug came to be:** the native reimplementation of FUN_80129C00 was transcribed from disas of the overlay handler; the `slti` compare against 4 for the "0/1/2 → FUN_801296E0" branch was correctly written, but the equality check that peels off the FUN_8012982C branch was hand-set to the wrong constant. The file's own header comment even wrote "0/1/3 FUN_801296E0, 2 FUN_8012982C" — which is exactly the swapped mapping (native says n3=2 branches to 8012982C; decomp says n3=3 does). Updated the header comment to match the decomp.
+- **decomp is the ground truth** (`scratch/decomp/collectables.c:1105 FUN_80129c00`, STATE 0 lines 1128-1141):
+  ```c
+  bVar1 = *(byte *)(param_1 + 3);
+  if (bVar1 != 3) {
+    if (bVar1 < 4) { FUN_801296e0(param_1); return; }   // 0/1/2 → FUN_801296E0
+    if (bVar1 != 4) return;
+    FUN_80129984(param_1); return;                       // 4 → FUN_80129984
+  }
+  FUN_8012982c(param_1);                                 // 3 → FUN_8012982C
+  ```
+- **how the ALLOCRA tool got us here** (the workflow-first invariant paying off): after the flagbit misdiagnosis burned a session on ordinal-point-in-time comparison, the settled-state per-ra table (landed this session) made this bug visible as ONE A-only bucket (0x801298A4 = 8 allocs) in a mostly-timing-symmetric table. That pointed at the recomp function containing 0x801298A4 (`ov_a00_gen_8012982C`), then its callers (`beh_anim_trigger_gates` STATE 0 node[3]==2 branch), then the diff between the native and recomp/decomp for that branch surfaced the case-label swap. The tool is meant to keep working: whenever a +N-alloc delta reopens, `PSXPORT_SBS_ALLOCTRACE=1` first, read ALLOCRA, and the A-only bucket names the caller.
+- **workflow lesson (recorded):** when a native reimplementation's own HEADER COMMENT describes the state machine, cross-check it against the decomp — if they disagree, the header/transcription IS the bug. This particular file's comment WAS wrong (matched the buggy code, not the decomp).
+- **refs:** game/ai/beh_anim_trigger_gates.cpp:5,55-60 (fix + updated header + inline citation), scratch/decomp/collectables.c:1105-1141 (FUN_80129c00 ground truth), generated/ov_a00_shard_1.c:15285 (recomp confirming decomp), $CLAUDE_JOB_DIR/tmp/fix1.log (post-fix session capture — net=+0, ramdiff 2074).
+
+## PRIOR ATTRIBUTION (kept for the trail) — Per-ra bucketed ALLOCTRACE landed as a durable settled-state compare — `PSXPORT_SBS_ALLOCTRACE=1` now dumps at exit; +6 net traced to native-record_gate lump + one A-only recomp bucket ra=0x801298A4 (beh_anim_trigger_gates → FUN_8012982C init 4-alloc loop, 2 invocations)
 - **finding (2026-07-03, workflow-first invariant landed):** Extended `PSXPORT_SBS_ALLOCTRACE=1` (runtime/recomp/sbs.cpp) to bucket every 0x800ED098 store by guest `r[31]` per core. At end of run (atexit + SIGTERM/SIGINT handler so `timeout N …` also emits), prints a settled-state per-ra table sorted by `|A-B|`. New REPL command `sbs allocra` for live inspection; env `PSXPORT_SBS_ALLOCRA_ALL=1` to show symmetric rows (hidden by default so the delta rows stand out). This ENCODES the timing-shift compensation the manager called out — ordinal-point-in-time comparison lied on the prior turn (flagbit STATE 0 read as A-only when both cores fire it 2×, 36 ordinals apart); the fix is comparing per-caller COUNTS OVER THE WHOLE RUN.
 - **evidence — 30 s SBS FULL AUTONAV run, total A=944 B=938 net=+6 (matches prior ALLOCTRACE cum + 0x800ED098 byte delta at f217):**
   ```
