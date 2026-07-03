@@ -37,4 +37,21 @@ public:
   //   the ingame music" — stops a looping ingame-music clip while a dialog tone is up; resumes
   //   the remembered clip once the dialog ends and the XA stream is free (no voice playing).
   void tick();
+
+  // voiceMixTick(voice_base): per-frame VOICE-CHANNEL VOLUME MIXER — port of FUN_80075824
+  //   (RE'd via ghidra on 2026-07-03; docs/findings/audio.md). Ramps the voice channel's current
+  //   volume (u16 at +0x2C) toward its target (u16 at +0x2A) by ±0x100/frame (±0x400 when
+  //   scratchpad 0x1F800137 == 2), applies a boost when the scratchpad "boost" flag (0x1F80027E)
+  //   is nonzero, folds in the ADSR-like second-stage smoother (u16 at +0x30 → +0x2E), and writes
+  //   the packed 16-bit volume to voice[+0x10] and voice[+0x12], the pan words voice[+0x04] and
+  //   voice[+0x06] to 0x3FFF, and OR's 0xC0 into voice[+0x00] (dirty flag).
+  //   Special short-circuits:
+  //     scratchpad[+0x19A] != 2 → shortcut: vol = base * 0x47FF >> 15 (boot / silence state).
+  //     scratchpad[+0x137] == 1 → dialog mode: vol picks a full/scaled path from DAT_800BE0E4
+  //     flags, and OR's 0x3 (extra flags) into voice[+0x00].
+  //   Also drops the fade to the "far" level (writes DAT_800BE222 = 0x47FF and pings the SPU
+  //   queue helper 0x800750D8) if the running vol falls below 0x10 while voice[+0x33] is armed.
+  //   Callable on any voice base; the field frame calls it with voice_base = 0x800BE1F8 (the
+  //   ambient/XA channel), per Engine::areaUpdateTail (game/scene/engine_stage.cpp).
+  void voiceMixTick(uint32_t voice_base);
 };

@@ -1326,7 +1326,11 @@ void Engine::areaUpdateTail() {
   }
 
   // (4) Common tail leaves — both take a0 = 0x800BE1F8.
-  c->engine.musicCoord.musicFadeIn();               // FUN_80075824 (native)
+  // Was: c->engine.musicCoord.musicFadeIn() — WRONG. FUN_80075824 was misnamed as musicFadeIn;
+  // the RE (2026-07-03, ghidra) shows it is the per-voice VOLUME MIXER tick, not a fade snap.
+  // SBS gameplay mode surfaced the divergence at 0x800BE208/A the moment we replaced the recomp
+  // dispatch with musicFadeIn; the proper port is voiceMixTick(0x800BE1F8).
+  c->engine.musicCoord.voiceMixTick(S5);            // FUN_80075824 (native)
   c->r[4] = S5; rec_dispatch(c, 0x80099490u);
 
   // (5) Key2 branch: if the s16 at 0x800BED80 != -1, look up the entry hword and probe with FUN_8008E0C0.

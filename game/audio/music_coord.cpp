@@ -22,6 +22,7 @@
 // Stays defined there (still called locally by voice_play); tick() below also needs it for
 // the resumed-music path, so it is non-static there rather than duplicated here.
 void cd_to_spu_mix(Core* c, int on);
+void rec_dispatch(Core*, uint32_t);   // still-substrate leaves called from voiceMixTick
 
 bool MusicCoord::dialogToneActive() {
   Core* c = this->core;
@@ -29,25 +30,14 @@ bool MusicCoord::dialogToneActive() {
   return s >= 4 && s <= 7;
 }
 
-// Fade the ingame music IN from silence using the GAME'S OWN CD-volume ramp. The game keeps a
-// CD-volume fade pair: target DAT_800be222 and current DAT_800be224 (the SpuCommonAttr CDVOL the
-// per-frame audio update FUN_80075824 ramps current->target by 0x100/frame, then writes to SPU
-// reg 0x1B0/0x1B2, which Beetle spu.c uses to scale the XA — see spu.c CDVol). At steady state
-// both sit at 0x7fff (full). On real hardware the area music only started after the CD-paced
-// scene load, by which point this fade had been (re)armed; with instant CD the music (re)starts
-// at the steady full level — the "starts too loud" bug. Mod: snap the fade CURRENT to 0 (leave the
-// target), so the game's own ramp climbs it back up = a ~2s fade-in. Caller MUST only do this when
-// the music is the sole XA user — CDVOL also scales the dialog VOICE (chan22), so zeroing it while
-// a voice plays would mute the voice too.
-//
-// Snapping only `cur` is NOT enough: the game's per-frame ramp FUN_80075824 writes the SPU CDVOL
-// register (0x1F801DB0/DB2 — Beetle spu.c case 0x30/0x32, CDVol[0]/[1]) from `cur` ONCE per frame,
-// and on the music-(re)start frame it already ran with the OLD (full) `cur` before this snap — so
-// that one frame still mixes the freshly-started XA at full volume (verified: PSXPORT_XA_DBG showed
-// CDVOL=25480 for the start frame, then 198 and climbing). That leading full-volume frame is the
-// audible "1-frame blip" / "starts loud then drops to zero then climbs". So ALSO write the SPU CDVOL
-// register to 0 directly here, muting the start frame's mix; the next frame the ramp rewrites it from
-// cur=0 and climbs. mem_w16 to 0x1F801DBx routes through io_write -> spu_write -> SPU_Write (mem.c).
+// PC-added helper (NOT a port of any FUN_XXXX): snap the game's CD-volume fade CURRENT (0x800be224)
+// to 0 AND zero the SPU CDVOL L/R registers directly, so THIS frame's XA mix is silent and the
+// per-frame audio ramp (voiceMixTick above) then climbs the volume back to target (~2s fade-in).
+// Fixes "music starts too loud" on instant-CD replays — real hardware masked this because the
+// area music only started after the CD-paced scene load, by which point the fade had been armed.
+// Caller MUST only invoke when the music is the sole XA user — CDVOL also scales the dialog voice.
+// Zeroing 0x800be224 alone is NOT enough: the ramp already ran this frame with the OLD `cur` before
+// this snap, mixing one frame at full volume. So also poke the SPU CDVOL register directly here.
 void MusicCoord::musicFadeIn() {
   Core* c = this->core;
   c->mem_w16(0x800be224, 0);   // game's fade CURRENT = 0 (its per-frame ramp climbs it back up)
@@ -62,6 +52,83 @@ void MusicCoord::musicFadeIn() {
 // .pending_music) so tick() resumes it when the dialog ends.
 void MusicCoord::cutIfDialog() {
   if (dialogToneActive() && xa_stream_is_looping()) xa_stream_stop();
+}
+
+// Per-frame VOICE-CHANNEL VOLUME MIXER — port of FUN_80075824 (RE'd via ghidra 2026-07-03). Called
+// from Engine::areaUpdateTail (game/scene/engine_stage.cpp) with voice_base = 0x800BE1F8 (the
+// ambient/XA channel). Was previously — INCORRECTLY — wired to musicFadeIn() there, which merely
+// zeros the fade current + SPU CDVOL; that call was based on a wrong reading of what FUN_80075824
+// does. The RE'd body is a full ramp+boost+dialog-branch mixer (see header for the shape). SBS
+// gameplay mode surfaced the resulting divergence at 0x800BE208/A (voice[+0x10]/[+0x12], the packed
+// volume word). Both writes are done every frame; if they lag or don't fire, the audio state
+// diverges downstream.
+void MusicCoord::voiceMixTick(uint32_t voice_base) {
+  Core* c = this->core;
+  const uint32_t V = voice_base;
+  const uint8_t  boost_flag = c->mem_r8(0x1F80027Eu);         // scratchpad boost byte
+  const uint8_t  state      = c->mem_r8(0x1F80019Au);         // scratchpad "active audio" state
+  const uint8_t  cutMode    = c->mem_r8(0x1F800137u);         // 0/1/2 — dialog/cut mode
+  int32_t vol;                                                // computed 16-bit volume result
+
+  if (state != 2) {
+    // Boot / silence path: scale base by a fixed 0x47FF / 0x7FFF ratio (~89%), no ramp.
+    int16_t base = (int16_t)c->mem_r16(V + 0x28u);
+    vol = ((int32_t)base * 0x47FFu) >> 15;
+  } else if (cutMode == 1) {
+    // Dialog mode: pick full-blast (0x7FFF), a base-scaled 0x7FFF, or a table-derived value
+    // depending on which bit is set in DAT_800BE0E4. Then OR extra flags into voice[+0x00].
+    vol = 0x7FFF;
+    const uint8_t flags = c->mem_r8(0x800BE0E4u);
+    if ((flags & 0x02u) == 0) {
+      if ((flags & 0x08u) == 0) {
+        int16_t base = (int16_t)c->mem_r16(V + 0x28u);
+        vol = ((int32_t)base * 0x7FFFu) >> 15;
+      } else {
+        uint32_t x = (uint32_t)c->mem_r8(0x800FB165u);
+        vol = (int32_t)((x * 0x7FFFu) / 9u);
+      }
+    }
+    c->mem_w32(V + 0u, c->mem_r32(V + 0u) | 0x3u);
+  } else {
+    // Normal ramp: cur (+0x2C) chases target (+0x2A) by ±step (0x100 or 0x400 in fast-cut mode).
+    int32_t cur    = (int16_t)c->mem_r16(V + 0x2Cu);
+    int32_t target = (int16_t)c->mem_r16(V + 0x2Au);
+    int32_t step   = (cutMode == 2) ? 0x400 : 0x100;
+    if (cur < target) {
+      cur += step; if (target < cur) cur = target;
+    } else if (target < cur) {
+      cur -= step; if (cur < target) cur = target;
+    }
+    c->mem_w16(V + 0x2Cu, (uint16_t)cur);
+
+    int16_t base = (int16_t)c->mem_r16(V + 0x28u);
+    vol = ((int32_t)base * cur) >> 15;
+    if (boost_flag != 0) {
+      vol = (vol * 5) >> 2;
+      if (vol > 0x7FFE) vol = 0x7FFF;
+    }
+    // Low-volume + armed(+0x33) + scratchpad[+0x27A]==0 → drop fade target to 0x47FF and ping the
+    // SPU queue helper 0x800750D8. Clears the arm flag.
+    if (vol < 0x11 && c->mem_r8(V + 0x33u) != 0 && c->mem_r8(0x1F80027Au) == 0) {
+      c->mem_w16(0x800BE222u, 0x47FFu);                      // FUN_80075CEC(0x47FF): fade target
+      c->r[4] = c->mem_r8(0x1F80023Bu); c->r[5] = 1;
+      rec_dispatch(c, 0x800750D8u);                          // SPU queue helper (still substrate)
+      c->mem_w8(V + 0x33u, 0);                                // disarm
+    }
+    // Smoother pass on the second-stage gain (+0x30 chases +0x2E by delta>>3).
+    int32_t g2_cur    = (uint16_t)c->mem_r16(V + 0x30u);
+    int32_t g2_target = (int16_t)c->mem_r16(V + 0x2Eu);
+    int32_t g2 = g2_cur + ((g2_target - g2_cur) >> 3);
+    c->mem_w16(V + 0x30u, (uint16_t)g2);
+    vol = (vol * (int16_t)g2) >> 13;
+  }
+
+  // Common tail: write packed vol to both +0x10/+0x12, pan to 0x3FFF at +0x04/+0x06, dirty bit.
+  c->mem_w16(V + 0x10u, (uint16_t)vol);
+  c->mem_w16(V + 0x12u, (uint16_t)vol);
+  c->mem_w16(V + 0x04u, 0x3FFFu);
+  c->mem_w16(V + 0x06u, 0x3FFFu);
+  c->mem_w32(V + 0u, c->mem_r32(V + 0u) | 0xC0u);
 }
 
 // Called once per frame (native_scheduler_step). Enforces "dialogs stop the ingame music":
