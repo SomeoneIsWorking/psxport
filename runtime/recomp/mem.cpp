@@ -61,7 +61,15 @@ using StoreWatchCb = void (*)(Core*, uint32_t, uint32_t);
 static StoreWatchCb s_store_watch_cb = nullptr;
 extern "C" void mem_set_store_watch_cb(StoreWatchCb cb) { s_store_watch_cb = cb; }
 
-void Core::wwatch_arm(uint32_t lo, uint32_t hi) { s_ww_init = 1; s_ww_lo = lo; s_ww_hi = hi; }
+// Normalize any incoming addr to kernel-segment form so callers can pass either raw scratchpad
+// (0x1F800xxx) or KSEG0/KSEG1 addrs and get the same behavior. wwatch_check ORs 0x80000000 into
+// the store's address before comparing, so lo/hi must be in the SAME form or scratchpad watches
+// silently never fire (0x1F80017C armed vs 0x9F80017C store -> miss). Pin both to KSEG1-style.
+void Core::wwatch_arm(uint32_t lo, uint32_t hi) {
+  s_ww_init = 1;
+  s_ww_lo = lo | 0x80000000u;
+  s_ww_hi = hi ? (hi | 0x80000000u) : 0u;
+}
 
 // PSXPORT_WWATCH=lo,hi — log the interpreter PC of any store landing in [lo,hi). Also fires
 // s_store_watch_cb (programmatic arm via wwatch_arm) for the SBS write-site backtrace.

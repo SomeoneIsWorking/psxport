@@ -143,6 +143,24 @@ public:
   uint32_t mWwVa = 0, mWwVb = 0;
   char     mWwBtA[4096] = {0}, mWwBtB[4096] = {0};
 
+  // ---- pre-step snapshot (for one-frame rewind on divergence) ----
+  // Fixes the "wwatch arms AFTER the divergent frame already ran" defect: we snapshot both cores'
+  // RAM+scratchpad+regs+pc BEFORE each stepCore(). When checkDivergence at frame N finds a diff,
+  // we restore both cores, arm wwatch on the divergent addr, and RE-STEP frame N. The wwatch then
+  // catches the exact divergent write(s) in-frame with both cores' stacks, in ONE pass — no manual
+  // PREWATCH re-run. SPU/GTE/MDEC state isn't rewound (they advance twice), but the RAM-diff
+  // divergence-write pin-point works because those subsystems don't write into the diff region.
+  uint8_t* mPreRamA = nullptr;
+  uint8_t* mPreRamB = nullptr;
+  uint8_t  mPreSpadA[0x400] = {0};
+  uint8_t  mPreSpadB[0x400] = {0};
+  uint32_t mPreRegsA[32]    = {0};
+  uint32_t mPreRegsB[32]    = {0};
+  uint32_t mPrePcA = 0, mPrePcB = 0;
+  bool     mPreSnapValid = false;
+  bool     mRewindActive = false;   // in the rewind re-step: don't snapshot, don't re-check divergence
+  int      mRewindDone   = 0;       // 0=not-rewound, 1=rewound-and-restepped (headless exit gate)
+
   // ---- ALLOCTRACE: per-frame count of writes to 0x800ED098 (the free-slot count) per core ----
   // Attack (a) instrumentation: names the frame(s) where A allocates more than B. If A > B on a
   // specific frame, that's where the 3-slot lead grows. Enabled with PSXPORT_SBS_ALLOCTRACE=1.
@@ -198,6 +216,8 @@ public:
   bool  navStep(Core* c, Nav& nv, uint32_t f, const char* tag);
   void  applyMode(Game* g, int which);
   void  recordDivergence(uint32_t addr);
+  void  takePreStepSnap();
+  void  rewindAndArm(uint32_t addr);
   void  checkDivergence();
   // Per-frame divergence SUMMARY: count differing bytes (excluding render noise) across main RAM
   // + scratchpad and log a one-line report each `every` frames. Doesn't pause on the first byte
@@ -344,6 +364,39 @@ void Sbs::Impl::applyMode(Game* g, int which) {
   }
 }
 
+// Take the pre-step snapshot: RAM + scratchpad + regs + pc for both cores. Called right BEFORE
+// stepCore() on both A and B each frame. If a divergence is detected at frame boundary, this
+// snapshot is the "just before frame N started" state that we rewind to.
+static void sbs_snap_core(Core& c, uint8_t* ram, uint8_t* spad, uint32_t* regs, uint32_t& pc) {
+  memcpy(ram, c.ram, 0x200000);
+  memcpy(spad, c.scratch, 0x400);
+  memcpy(regs, c.r, sizeof c.r);
+  pc = c.pc;
+}
+static void sbs_restore_core(Core& c, const uint8_t* ram, const uint8_t* spad, const uint32_t* regs, uint32_t pc) {
+  memcpy(c.ram, ram, 0x200000);
+  memcpy(c.scratch, spad, 0x400);
+  memcpy(c.r, regs, sizeof c.r);
+  c.pc = pc;
+}
+void Sbs::Impl::takePreStepSnap() {
+  if (!mPreRamA) { mPreRamA = (uint8_t*)malloc(0x200000); mPreRamB = (uint8_t*)malloc(0x200000); }
+  sbs_snap_core(mA->core, mPreRamA, mPreSpadA, mPreRegsA, mPrePcA);
+  sbs_snap_core(mB->core, mPreRamB, mPreSpadB, mPreRegsB, mPrePcB);
+  mPreSnapValid = true;
+}
+void Sbs::Impl::rewindAndArm(uint32_t addr) {
+  if (!mPreSnapValid) { fprintf(stderr, "[sbs] rewind: no snapshot — divergence surfaced pre-nav.\n"); return; }
+  fprintf(stderr, "[sbs] rewinding one frame to catch the divergent write on 0x%08X on BOTH cores.\n", addr);
+  sbs_restore_core(mA->core, mPreRamA, mPreSpadA, mPreRegsA, mPrePcA);
+  sbs_restore_core(mB->core, mPreRamB, mPreSpadB, mPreRegsB, mPrePcB);
+  mWwAddr = (addr & ~3u) | 0x80000000u; mWwArmed = true; mWwPersist = true;
+  mWwHit = 0; mWwVa = mWwVb = 0; mWwBtA[0] = mWwBtB[0] = 0;
+  mA->core.wwatch_arm(addr & ~3u, (addr & ~3u) + 4);
+  mB->core.wwatch_arm(addr & ~3u, (addr & ~3u) + 4);
+  mRewindActive = true;
+}
+
 void Sbs::Impl::recordDivergence(uint32_t addr) {
   bool spad = isSpad(addr);
   uint32_t end_addr = spad ? 0x1F800400u : mHi;
@@ -378,22 +431,17 @@ void Sbs::Impl::recordDivergence(uint32_t addr) {
   // still pinpoints the region of code that just ran on each core.
   fprintf(stderr, "[sbs] === FRAME-BOUNDARY BACKTRACE — core A ===\n%s", mBtA[0] ? mBtA : "(empty)\n");
   fprintf(stderr, "[sbs] === FRAME-BOUNDARY BACKTRACE — core B ===\n%s", mBtB[0] ? mBtB : "(empty)\n");
-  // AUTO-ARM a write-watch on the diverging address so the very next divergent write (this frame or
-  // later) fires the write-site handler and prints the exact instruction/backtrace that DID the write.
-  // This is the "diverging operation" pinpoint the user asked for — the backtrace above only names
-  // the frame-boundary caller, not the writer. Skip in PREWATCH mode (already armed at boot).
-  if (!mWwArmed) {
-    mWwAddr = mDivAddr & ~3u; mWwArmed = true; mWwPersist = true; mWwHit = 0; mWwVa = mWwVb = 0;
-    mWwBtA[0] = mWwBtB[0] = 0;
-    mA->core.wwatch_arm(mWwAddr, mWwAddr + 4);
-    mB->core.wwatch_arm(mWwAddr, mWwAddr + 4);
-    fprintf(stderr, "[sbs] auto-armed write-watch on 0x%08X — the next divergent write will print its stack.\n", mWwAddr);
-  }
+  // REWIND-AND-ARM: the diff was detected at the END of frame N. Any writes in frame N have already
+  // happened — a wwatch armed NOW would only catch frame N+1 onwards, and if only one core wrote in
+  // frame N, that write is lost forever (previously required a manual PREWATCH re-run). Instead:
+  // restore both cores to their pre-frame-N snapshot, arm wwatch, and re-step frame N. The re-step's
+  // stores fire wwatch — we get BOTH cores' write-site backtraces + values in one pass. If a core
+  // doesn't write to the addr in frame N, mask reflects that (single-side write => "the other core
+  // took a different branch"), and we still get one exact backtrace. Skip in PREWATCH mode.
+  if (!mWwArmed) rewindAndArm(mDivAddr);
   if (mHaveDbgsrv) {
     fprintf(stderr, "[sbs] paused. Inspect over the debug server: `sbs diff`, `sbs bt`, `sbs watch`.\n");
     mA->dbg_server.setPaused(true);
-  } else {
-    fprintf(stderr, "[sbs] (no debug server: watch-armed; re-run with PSXPORT_SBS_PREWATCH=0x%08X to catch this frame's WRITE)\n", mDivAddr);
   }
 }
 
@@ -1031,7 +1079,8 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
   // one frame late — you can never watch a write that already happened). Fires from frame 0.
   if (const char* w = getenv("PSXPORT_SBS_PREWATCH"); w && *w) {
     uint32_t addr = (uint32_t)strtoul(w, 0, 0);
-    mWwAddr = addr; mWwArmed = true; mWwPersist = true; mWwHit = 0; mWwBtA[0] = mWwBtB[0] = 0;
+    // Kernelize so scratchpad (0x1F80xxxx) and main-RAM addrs both match wwatch_check's kernelized store.
+    mWwAddr = addr | 0x80000000u; mWwArmed = true; mWwPersist = true; mWwHit = 0; mWwBtA[0] = mWwBtB[0] = 0;
     mA->core.wwatch_arm(addr & ~3u, (addr & ~3u) + 4);
     mB->core.wwatch_arm(addr & ~3u, (addr & ~3u) + 4);
     fprintf(stderr, "[sbs] PREWATCH armed at boot on 0x%08X — pauses at end of the first frame with a DIVERGENT store.\n", addr);
@@ -1132,6 +1181,10 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
               mFrame, tag, mA->core.mem_r8(0x800BF81Eu), mB->core.mem_r8(0x800BF81Eu));
     };
     ww_log("frame-start");
+    // Pre-step snapshot for the rewind-on-divergence fix. Only take it when we're past AUTO-NAV
+    // (before that, both cores drive through the demo asymmetrically — snapshot would rewind INTO
+    // that phase). Skip during the rewind re-step itself so we don't overwrite the good snapshot.
+    if (nav_done && !mDivFound && !mRewindActive) takePreStepSnap();
     stepCore(mA, 0);              ww_log("post-stepA");
     grabPane(mA, mRgbaA, &mWa, &mHa); ww_log("post-grabA");
     stepCore(mB, 1);              ww_log("post-stepB");
