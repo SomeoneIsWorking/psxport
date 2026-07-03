@@ -169,6 +169,24 @@ public:
     c->engine.cull.performBaseCull();                    // FUN_8007712C body — native (was rec_dispatch)
     return c->r[2];
   }
+  // boundsCullYOffset — the Y-offset variant of boundsCull (was FUN_800778E4). Identical to
+  // boundsCull but the object's posY is shifted by `yOffset` BEFORE the delta subtract, so this
+  // asks "is (posX, posY + yOffset, posZ) visible?". Used by beh_typed_table_seed_gate's spatial
+  // trigger check — the parent passes triggerParam (-200) to test whether the ground below the
+  // actor is inside the cull volume. Same performBaseCull dispatch, same return semantics.
+  uint32_t boundsCullYOffset(int16_t yOffset) {
+    int16_t dx = (int16_t)(posX_u() - c->mem_r16(0x1F8000D2u));
+    int16_t dy = (int16_t)((uint16_t)(posY_u() + (uint16_t)yOffset) - c->mem_r16(0x1F8000D6u));
+    int16_t dz = (int16_t)(posZ_u() - c->mem_r16(0x1F8000DAu));
+    c->mem_w32(0x1F800080u, 0);
+    c->mem_w32(0x1F800084u, 0);
+    c->r[4] = obj;
+    c->r[5] = (uint32_t)(int32_t)dx;
+    c->r[6] = (uint32_t)(int32_t)dy;
+    c->r[7] = (uint32_t)(int32_t)dz;
+    c->engine.cull.performBaseCull();                    // FUN_8007712C body — native (was rec_dispatch(0x800778E4))
+    return c->r[2];
+  }
 
   // ── World transform (EULER angles + a scene-entity handle) ───────────────────────────────────────
   // rotX / rotY / rotZ (obj+0x54/0x56/0x58, u16 signed as needed): the object's Euler rotation used
@@ -192,10 +210,11 @@ public:
   void    setSceneHandle(uint32_t v)  { c->mem_w32(obj + 0x14, v); }
 
   // ── Trigger box / range params ───────────────────────────────────────────────────────────────────
-  // triggerParam (obj+0x60, i16): the signed per-object parameter passed as a1 into the state-1
-  //   sub-behavior FUN_800778E4 (spatial trigger check). beh_typed_table_seed_gate seeds it to -200
-  //   at init — reads as a Y-offset / trigger distance in world units, but the exact axis has not
-  //   been RE'd yet.
+  // triggerParam (obj+0x60, i16): the signed per-object Y-offset passed into Actor::boundsCullYOffset
+  //   (was FUN_800778E4). Adds to posY BEFORE the cull delta subtract, so it asks "is (posX,
+  //   posY+triggerParam, posZ) visible?". beh_typed_table_seed_gate seeds it to -200 world units —
+  //   likely a "ground beneath the actor" probe (test whether the ground the actor stands on would
+  //   render this frame).
   int16_t triggerParam() const        { return (int16_t)c->mem_r16(obj + 0x60); }
   void    setTriggerParam(int16_t v)  { c->mem_w16(obj + 0x60, (uint16_t)v); }
   // stateEcho (obj+0x62, u16 / i16): mirror of the state byte written by beh_typed_table_seed_gate
