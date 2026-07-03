@@ -22,6 +22,11 @@
 #include "fps60_internal.h"        // Fps60 — the interpolated-60fps tier's per-instance state
 #include "render_queue.h"          // RenderQueue — the engine-owned draw-order authority
 #include "repl.h"                  // class Repl — REPL driver + auto-drive request state
+#include "spu_audio.h"             // class SpuAudio — host audio output sink (SDL3 + WAV capture)
+#include "audio/native_music.h"    // class NativeMusic — in-game real-time SEP/VAB music player
+#include "audio/music_list.h"      // class MusicList — Sound Test catalogue + area BGM driver
+#include "rmlui_overlay.h"         // class RmlOverlay — mod/debug HTML UI + world readout HUD
+#include "native_gate.h"           // class NativeGates — PC-native-layer A/B GATE registry (REPL diag)
 #include <stdint.h>
 #include <setjmp.h>
 
@@ -213,6 +218,11 @@ public:
   GpuGpuState  gpu_gpu;// Vulkan present backend: per-frame batch/depth/dirty/present state (gpu_gpu.cpp)
   RenderQueue rq;    // engine-owned render queue: the single draw-ORDER authority (render_queue.cpp)
   Fps60  fps60; // interpolated-60fps tier: capture buffers + matcher + remap (fps60.cpp)
+  SpuAudio    spu_audio;    // host audio output sink (SDL3 device + optional WAV capture)
+  NativeMusic native_music; // real-time SEP/VAB synth mixed into the SPU sink each audio frame
+  MusicList   music_list;   // Sound Test catalogue + in-game area BGM driver (uses native_music)
+  RmlOverlay  rml_overlay;  // in-app mod/debug HTML UI + live world-position HUD
+  NativeGates native_gates; // A/B gate registry: `native <name> on|off` diag (music/seqtick/…)
   GteRegs     gte{}; // GTE (COP2) register file — per-instance so two cores keep SEPARATE GTE state
                      // (Beetle gte.c bound to this via GTE_BindState; see gte_bind, gte_beetle.cpp)
   // (native-depth cache moved to `class ProjPrim` on Render — reach as `c->mRender->projprim`, 2026-07-03)
@@ -257,6 +267,8 @@ public:
   // gpu_gpu.game->core). Set once here so no file-scope global is needed.
   Game() { core.game = this; gpu.game = this; gpu_gpu.game = this; timing.game = this; pad.game = this;
            hle.game = this; rq.game = this;
+           spu_audio.game = this; native_music.game = this; music_list.game = this;
+           rml_overlay.game = this;
            spu_state = SPU_NewState(); mdec_state = MDEC_NewState();
            cdc_state_init(&cdc); xa_state_init(&xa); }   // per-instance CD-controller + XA streamer defaults
   ~Game() { SPU_FreeState(spu_state); MDEC_FreeState(mdec_state); }

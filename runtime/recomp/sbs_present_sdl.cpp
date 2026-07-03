@@ -8,8 +8,10 @@
 #include <SDL3/SDL.h>
 #include <stdint.h>
 
+class Game;
 // gpu_gpu.cpp: composite two CPU RGBA8 panes (A left, B right) to the swapchain in one window frame.
-void gpu_gpu_present_sbs2(const uint8_t* rgbaA, int wA, int hA, const uint8_t* rgbaB, int wB, int hB);
+// `game` is the Game used to reach the RmlOverlay in the shared present path (init_gpu/poll_quit).
+void gpu_gpu_present_sbs2(Game* game, const uint8_t* rgbaA, int wA, int hA, const uint8_t* rgbaB, int wB, int hB);
 
 extern "C" {
 void sbs_rl_init(void) {}        // the SDL_GPU renderer creates the window lazily on the first present
@@ -47,7 +49,8 @@ unsigned short sbs_rl_poll_input(void) {
   return m;
 }
 
-void sbs_rl_present(const unsigned char* a, int wA, int hA, const unsigned char* b, int wB, int hB) {
-  gpu_gpu_present_sbs2(a, wA, hA, b, wB, hB);
-}
+}   // extern "C"
+
+void sbs_rl_present(Game* game, const unsigned char* a, int wA, int hA, const unsigned char* b, int wB, int hB) {
+  gpu_gpu_present_sbs2(game, a, wA, hA, b, wB, hB);
 }

@@ -67,12 +67,10 @@ void Pad::fillBuffer(uint8_t* buf) {
 #include <stdio.h>   // diagnostic fprintf in pad_poll_sdl (controller-driving-directions notice)
 #include <stdlib.h>  // atoi (PSXPORT_PAD_NOPAD parse)
 
-// Provided by rmlui_overlay.cpp. Returns 1 ONLY while the user is actively typing into an RmlUi text
-// widget (io.WantTextInput) — NOT merely because the overlay is open/focused. We use it to suppress the
-// game's keyboard read in that narrow case so typed characters don't leak into gameplay (and WASD doesn't
-// leak into the text box). When the overlay is simply visible, this is 0 and WASD drives the game normally.
-// Declared here (extern "C") instead of including rmlui_overlay.h so this TU stays header-light/testable.
-extern "C" int rmlui_overlay_wants_keyboard(void);
+// The overlay's `wantsKeyboard()` reports true ONLY while the user is actively typing into an RmlUi
+// text widget — not merely because the menu is open/focused. Suppress the game's keyboard read in
+// that narrow case so typed characters don't leak into gameplay. Reached through `game->rml_overlay`
+// (Pad::game is wired in Game()).
 
 // --- Game controller (gamepad) state ----------------------------------------
 // Up to this many simultaneously-open controllers; hotswap-aware (DEVICEADDED/REMOVED handled by a
@@ -186,7 +184,7 @@ void Pad::pollSdl() {
   // from the SDL_GPU build, so there is no IME/compose widget to suppress here any more (the old GH#18
   // SDL_StopTextInput dance is unnecessary). The keyboard read is gated only by rmlui_overlay_wants_keyboard
   // (stubbed to 0 in this build), so WASD always drives the game.
-  const bool* ks = (rmlui_overlay_wants_keyboard() ? nullptr : SDL_GetKeyboardState(NULL));
+  const bool* ks = ((game && game->rml_overlay.wantsKeyboard()) ? nullptr : SDL_GetKeyboardState(NULL));
   if (ks) {
     #define KEYDOWN(sc) (ks[(sc)] != 0)
     if (KEYDOWN(SDL_SCANCODE_UP)     || KEYDOWN(SDL_SCANCODE_W)) mask &= ~0x0010u; // Up

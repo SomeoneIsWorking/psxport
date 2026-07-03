@@ -7,13 +7,13 @@
 //
 // Brought up on the port's existing SDL_GPU device via RmlRenderInterfaceGpu (records into the present
 // render pass the present path hands it). ESC toggles the menu; quit lives in the menu's "Quit Game"
-// row. All UI state lives on the `RmlOverlay` singleton (one window per process); the legacy
-// `rmlui_overlay_*` free entry points are one-liners at the bottom that dispatch through it. Built as
-// C++ and linked into the otherwise-C port.
+// row. All UI state lives on `class RmlOverlay`, embedded on Game as `game->rml_overlay` — the
+// back-pointer to Game is wired in Game() so this reaches `game->music_list` for the Sound Test.
+// One overlay per Game (one host window per process in practice).
 
 #include "rmlui_overlay.h"
 #include "rmlui_render_gpu.h"
-#include "audio/music_list.h"   // Sound Test: native music_list_play/stop (engine/audio/)
+#include "game.h"                // Game — owns music_list; overlay reaches game->music_list
 
 #include <RmlUi/Core.h>
 #include <RmlUi/Core/Input.h>
@@ -41,35 +41,34 @@ extern "C" {
 extern "C" int cfg_on(const char* name);    // cfg.c
 void gpu_gpu_video_status(int* native_w, int* ires, int* fbw, int* fbh, int* ww, int* wh, int* ires_cap);
 
-// ---- singleton -----------------------------------------------------------------------------------
-RmlOverlay& RmlOverlay::instance() {
-    static RmlOverlay inst;
-    return inst;
-}
-
 // ---- typed accessors for the void* handles stored on the class ----------------------------------
 // The header keeps RmlUi types out (so C callers can include it). Impl-side helpers cast back.
 static inline Rml::Context*         ctx_(void* p)  { return (Rml::Context*)p; }
 static inline Rml::ElementDocument* doc_(void* p)  { return (Rml::ElementDocument*)p; }
 
 // ---- per-element event listeners (implementation-only classes) ----------------------------------
-// TabClick calls back into the singleton so all UI state stays on RmlOverlay.
+// Each listener holds a pointer back to its owning RmlOverlay so the callback routes UI state
+// updates through the correct instance (no static instance() lookup).
 class TabClick : public Rml::EventListener {
 public:
-    explicit TabClick(int i) : idx(i) {}
-    void ProcessEvent(Rml::Event&) override { RmlOverlay::instance().setActiveTab(idx); }
+    TabClick(RmlOverlay* owner, int i) : owner_(owner), idx_(i) {}
+    void ProcessEvent(Rml::Event&) override { owner_->setActiveTab(idx_); }
 private:
-    int idx;
+    RmlOverlay* owner_;
+    int         idx_;
 };
 
 class RowClick : public Rml::EventListener {
 public:
+    explicit RowClick(RmlOverlay* owner) : owner_(owner) {}
     void ProcessEvent(Rml::Event& e) override {
         if (Rml::Element* el = e.GetCurrentElement()) {
             el->Focus();
-            RmlOverlay::instance().activateFocused(+1);
+            owner_->activateFocused(+1);
         }
     }
+private:
+    RmlOverlay* owner_;
 };
 
 using TabListVec = std::vector<std::unique_ptr<TabClick>>;
@@ -174,9 +173,12 @@ void RmlOverlay::refreshReadouts() {
         if (e->GetInnerRML() != buf) e->SetInnerRML(buf);
     }
     if (Rml::Element* e = d->GetElementById("music_readout")) {
-        int np = music_list_now_playing();
-        std::string txt = (np >= 0 && music_list_name(np))
-                            ? (std::string("playing: ") + music_list_name(np)) : "stopped";
+        std::string txt = "stopped";
+        if (game) {
+            int np = game->music_list.nowPlaying();
+            if (np >= 0 && game->music_list.name(np))
+                txt = std::string("playing: ") + game->music_list.name(np);
+        }
         if (e->GetInnerRML() != txt) e->SetInnerRML(txt);
     }
     if (Rml::Element* e = d->GetElementById("world_readout")) {
@@ -257,9 +259,9 @@ void RmlOverlay::activateFocused(int dir) {
         if (id == "quit")  { fprintf(stderr, "[rmlui] quit from menu\n"); exit(0); }
         if (id == "close") { mVisible = false; applyVisibility(); }
         // Sound Test: action="music_<n>" plays catalogued track n; action="music_stop" stops.
-        if (id.rfind("music_", 0) == 0) {
-            if (id == "music_stop") music_list_stop();
-            else music_list_play(atoi(id.c_str() + 6));
+        if (id.rfind("music_", 0) == 0 && game) {
+            if (id == "music_stop") game->music_list.stop();
+            else                    game->music_list.play(atoi(id.c_str() + 6));
             refreshReadouts();
         }
         return;
@@ -272,7 +274,7 @@ void RmlOverlay::attachHandlers() {
     Rml::ElementDocument* d = doc_(mDoc);
     if (!d) return;
     if (!mTabListeners) mTabListeners = new TabListVec();
-    if (!mRowListener)  mRowListener  = new RowClick();
+    if (!mRowListener)  mRowListener  = new RowClick(this);
     TabListVec* tabs_vec = (TabListVec*)mTabListeners;
     RowClick*   row_l    = (RowClick*)mRowListener;
 
@@ -280,7 +282,7 @@ void RmlOverlay::attachHandlers() {
     d->GetElementsByTagName(tabs, "tab");
     tabs_vec->clear();
     for (int i = 0; i < (int)tabs.size(); i++) {
-        auto l = std::make_unique<TabClick>(i);
+        auto l = std::make_unique<TabClick>(this, i);
         tabs[i]->AddEventListener("click", l.get());
         tabs_vec->push_back(std::move(l));
     }
@@ -450,20 +452,3 @@ void RmlOverlay::recordGpu(SDL_GPUCommandBuffer* cmd, SDL_GPURenderPass* rp, int
     r->EndFrame();
 }
 
-// ---- Legacy free-function bridges — one-liners over the singleton -------------------------------
-extern "C" {
-void rmlui_overlay_init(SDL_Window* win, SDL_GPUDevice* dev, SDL_GPUTextureFormat swap_fmt) {
-    RmlOverlay::instance().init(win, dev, swap_fmt);
-}
-void rmlui_overlay_shutdown(void)                       { RmlOverlay::instance().shutdown(); }
-void rmlui_overlay_event(const SDL_Event* e)            { RmlOverlay::instance().event(e); }
-void rmlui_overlay_new_frame(void)                      { RmlOverlay::instance().newFrame(); }
-void rmlui_overlay_record_gpu(SDL_GPUCommandBuffer* cmd, SDL_GPURenderPass* rp, int win_w, int win_h) {
-    RmlOverlay::instance().recordGpu(cmd, rp, win_w, win_h);
-}
-int  rmlui_overlay_inited(void)                         { return RmlOverlay::instance().inited() ? 1 : 0; }
-void rmlui_overlay_set_visible(int v)                   { RmlOverlay::instance().setVisible(v != 0); }
-void rmlui_overlay_set_options_mode(int v)              { RmlOverlay::instance().setOptionsMode(v != 0); }
-void rmlui_overlay_set_world(int x, int y, int z, unsigned s) { RmlOverlay::instance().setWorld(x, y, z, s); }
-int  rmlui_overlay_wants_keyboard(void)                 { return RmlOverlay::instance().wantsKeyboard() ? 1 : 0; }
-}

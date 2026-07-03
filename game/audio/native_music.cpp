@@ -1,19 +1,14 @@
 // game/audio/native_music.cpp — in-game real-time native music player. See native_music.h.
 //
-// Holds one active NaSeq driving the shared synth core. NativeMusic::render() is called from the
-// audio sink (spu_audio.c) each video frame to pull ~735 stereo frames; it advances the sequencer
-// and mixes the 24 voices. A lightweight lock guards play/stop vs render since play is triggered
-// from the game/UI thread while render runs on the audio-frame path.
+// Holds one active NaSeq driving the shared synth core. render() is called from SpuAudio's per-
+// video-frame draw path to pull ~735 stereo frames; it advances the sequencer and mixes the 24
+// voices. A lightweight lock guards play/stop vs render (play runs on the game/UI thread while
+// render runs on the audio-frame path).
 #include "native_music.h"
 #include "native_audio.h"
 #include <cstdlib>
 #include <cstring>
 #include <pthread.h>
-
-NativeMusic& NativeMusic::instance() {
-    static NativeMusic inst;
-    return inst;
-}
 
 int NativeMusic::play(const uint8_t* data, long seqOff, long vabOff) {
     pthread_mutex_lock(&mLock);
@@ -48,12 +43,4 @@ int NativeMusic::render(int16_t* out, int nframes) {
     if (got < nframes) { na_seq_free(&mSeq); mPlaying = false; }
     pthread_mutex_unlock(&mLock);
     return got;
-}
-
-// ---- Legacy free-function bridges — one-liners over the singleton -------------------------------
-extern "C" {
-int  native_music_play(const uint8_t* data, long seqOff, long vabOff) { return NativeMusic::instance().play(data, seqOff, vabOff); }
-void native_music_stop(void)                                          { NativeMusic::instance().stop(); }
-int  native_music_active(void)                                        { return NativeMusic::instance().active() ? 1 : 0; }
-int  native_music_render(int16_t* out, int nframes)                   { return NativeMusic::instance().render(out, nframes); }
 }

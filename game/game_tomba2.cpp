@@ -38,8 +38,7 @@ void rec_super_call(Core*, uint32_t);   // interpret the original PSX body (supe
 void fps60_init(void);            // fps60: read PSXPORT_FPS60
 // g_render_object retired 2026-07-03 — was defined + written by Cull::objectCull but never read; dead.
 // g_fps60_on retired — read g_mods.fps60 (mods.h)
-extern "C" void spu_audio_frame(void);        // SPU: advance the mixer one frame + feed the audio device
-extern "C" void spu_audio_frame_logic(void);  // SPU: advance XA stream for game logic only (SBS diff_mode)
+// SpuAudio methods are called via c->game->spu_audio (owner: Game, see runtime/recomp/spu_audio.h).
 void rec_dispatch(Core*, uint32_t);  // hybrid call: recomp body if emitted, else interpret
 
 #define DISPLAY_COUNTER 0x800E809Cu   // DAT_800e809c (u16) — the dwell's vblank counter
@@ -73,9 +72,7 @@ extern "C" void perf_phase_begin(int), perf_phase_end(int);
 // field. The played sequence defaults to the field theme; override with PSXPORT_FIELD_SONG=<0..9> for
 // auditioning (the USER confirms the right one by ear). This is a real PC-game feature replacing a
 // broken subsystem, not an A/B behavior gate.
-extern "C" int  music_list_play_area(const uint8_t* bundle, long len, int song);
-extern "C" void music_list_stop(void);
-extern "C" int  music_list_now_playing(void);
+// MusicList is a Game member — reach as `c->game->music_list.method()`.
 
 #define GAME_STAGE_ADDR 0x801062ECu   // current-stage cell (c->mem_r32) — 0x8010637C while in the field
 #define AREA_BUNDLE     0x182000u     // guest 0x80182000 -> RAM offset
@@ -83,25 +80,25 @@ extern "C" int  music_list_now_playing(void);
 #include "native_gate.h"
 
 static void field_bgm_director(Core* c) {
-  if (!native_gate("music")) return;   // gated off -> recomp libsnd is the (oracle) music path
+  if (!c->game->native_gates.get("music")) return;   // gated off -> recomp libsnd is the (oracle) music path
   // Are we in the field (GAME stage running)? The stage cell holds the active stage's task-0 entry.
   uint32_t stage = c->mem_r32(0x801fe00c);
   int in_field = (stage == 0x8010637Cu);
   static int s_started = 0;
   if (!in_field) {
-    if (s_started) { music_list_stop(); s_started = 0; }
+    if (s_started) { c->game->music_list.stop(); s_started = 0; }
     return;
   }
   if (s_started) {
     // Restart if the song fully drained (one-shot tail) so the field stays scored.
-    if (music_list_now_playing() < 0) s_started = 0; else return;
+    if (c->game->music_list.nowPlaying() < 0) s_started = 0; else return;
   }
   // Validate the bundle is loaded before starting (area data may not be in yet right after a load).
   const uint8_t* b = c->ram + AREA_BUNDLE;
   if (memcmp(b + 0x30, "pQES", 4) || memcmp(b + 0x26b4, "pBAV", 4)) return;
   int song = 8;                                   // default field theme (longest area seq)
   if (const char* s = cfg_str("PSXPORT_FIELD_SONG")) { int v = atoi(s); if (v >= 0 && v < 10) song = v; }
-  if (music_list_play_area(b, 0x50000, song) == 0) s_started = 1;
+  if (c->game->music_list.playArea(b, 0x50000, song) == 0) s_started = 1;
 }
 
 // Per-frame engine tick. Called DIRECTLY (a plain C call) from native_step_frame (native_boot.cpp) —
@@ -138,16 +135,16 @@ void Engine::frameUpdate() {
     // Advance THIS core's per-instance XA stream logic-only (output discarded — no double audio); run it
     // `quota` times like the real path so the clip paces at the realtime-equivalent rate. No-op when no
     // clip is streaming.
-    for (int v = 0; v < quota; v++) spu_audio_frame_logic();
+    for (int v = 0; v < quota; v++) c->game->spu_audio.frameLogic();
     return;
   }
   uint32_t seqfn = c->mem_r32(SEQ_FUNC_PTR);
-  int seq_ok = !cfg_on("PSXPORT_T2_NOSEQTICK") && native_gate("seqtick")
+  int seq_ok = !cfg_on("PSXPORT_T2_NOSEQTICK") && c->game->native_gates.get("seqtick")
                && (seqfn & 0x1FFFFFFFu) >= 0x10000u && (seqfn & 0x1FFFFFFFu) < 0x200000u;
   perf_phase_begin(1);                               // perf: AUDIO = per-vblank sequencer tick + SPU advance
   for (int v = 0; v < quota; v++) {                  // once per VBlank this logic frame spans
     if (seq_ok) rec_dispatch(c, SEQ_TICK_WRAPPER);   // libsnd per-vblank tick (user cb + SsSeqCalled)
-    spu_audio_frame();                               // advance SPU one 1/60 s field + feed device
+    c->game->spu_audio.frame();                      // advance SPU one 1/60 s field + feed device
   }
   // (native field-BGM director REMOVED — it played a HARDCODED song over everything from the menu on.
   //  Music is the recompiled libsnd path above; no native music engine, no hardcoded song.)

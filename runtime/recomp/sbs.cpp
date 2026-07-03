@@ -68,9 +68,9 @@ extern "C" {
   void sbs_rl_init(void);
   int  sbs_rl_should_close(void);
   unsigned short sbs_rl_poll_input(void);
-  void sbs_rl_present(const unsigned char* rgbaA, int wA, int hA, const unsigned char* rgbaB, int wB, int hB);
   void sbs_rl_shutdown(void);
 }
+void sbs_rl_present(Game* game, const unsigned char* rgbaA, int wA, int hA, const unsigned char* rgbaB, int wB, int hB);
 
 // ============================================================================
 // SbsHarness — the impl class. All state private, all methods private except the six re-exposed
@@ -173,7 +173,7 @@ private:
   void  checkDivergence();
   void  stepCore(Game* g, int which);
   void  grabPane(Game* g, uint8_t* rgba, int* ow, int* oh);
-  void  presentPanes() { sbs_rl_present(mRgbaA, mWa, mHa, mRgbaB, mWb, mHb); }
+  void  presentPanes() { sbs_rl_present(mA, mRgbaA, mWa, mHa, mRgbaB, mWb, mHb); }
   uint16_t btnBit(const char* n) const;
   void  parseKeys();
   void  feedInput();

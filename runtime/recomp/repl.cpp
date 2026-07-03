@@ -198,16 +198,16 @@ long Repl::read(Core* c, uint32_t f) {
         if (sp) { fwrite(c->scratch, 1, sizeof c->scratch, sp); fclose(sp); fprintf(stderr, "[repl] dumpram scratchpad -> %s\n", spath); }
       }
     }
-    else if (!strcmp(cmd, "wav")) { char path[200] = {0}; if (sscanf(line, "%*s %199s", path) == 1) spu_wav_reopen(path); }
+    else if (!strcmp(cmd, "wav")) { char path[200] = {0}; if (sscanf(line, "%*s %199s", path) == 1) c->game->spu_audio.wavReopen(path); }
     else if (!strcmp(cmd, "bgm") && sscanf(line, "%*s %u", &a) == 1) { rc1(c, 0x80074BF8u, a); fprintf(stderr, "[repl] bgm %u (song@800bed80=%04X)\n", a, c->mem_r16(0x800bed80)); }
     else if (!strcmp(cmd, "bgmstop")) { rc0(c, 0x80074E48u); fprintf(stderr, "[repl] bgmstop\n"); }
     // native <name> on|off  /  native list — gate PC-native layers (default ON) so the recomp oracle
     // runs in their place. e.g. `native music off` drops the native field-BGM engine.
     else if (!strcmp(cmd, "native")) {
       char nm[64] = {0}, st[16] = {0}; int k = sscanf(line, "%*s %63s %15s", nm, st);
-      if (k <= 0 || !strcmp(nm, "list")) native_gate_list();
-      else native_gate_set(nm, strcmp(st, "off") != 0),
-           fprintf(stderr, "[repl] native %s = %s\n", nm, strcmp(st, "off") ? "on" : "off");
+      if (k <= 0 || !strcmp(nm, "list")) c->game->native_gates.list();
+      else { c->game->native_gates.set(nm, strcmp(st, "off") != 0);
+             fprintf(stderr, "[repl] native %s = %s\n", nm, strcmp(st, "off") ? "on" : "off"); }
     }
     // gate on|off (or 1|0) — toggle PSX-fallback live: everything the frame loop calls runs as PSX recomp
     // (sync CD) instead of the native owners. Applies to tasks freshly (re)entered after the toggle; an
@@ -239,14 +239,15 @@ long Repl::read(Core* c, uint32_t f) {
     // musictest <n> — play catalogued music track <n> through the NATIVE audio engine (sound test).
     // 'musictest stop' (or n<0) stops. Bypasses the broken libsnd path entirely (engine/audio/).
     else if (!strcmp(cmd, "musictest")) {
+      MusicList& ml = c->game->music_list;
       char sub[32] = {0}; int n = -1;
-      if (sscanf(line, "%*s %31s", sub) == 1 && !strcmp(sub, "stop")) { music_list_stop(); fprintf(stderr, "[repl] musictest stop\n"); }
+      if (sscanf(line, "%*s %31s", sub) == 1 && !strcmp(sub, "stop")) { ml.stop(); fprintf(stderr, "[repl] musictest stop\n"); }
       else if (sscanf(line, "%*s %d", &n) == 1 && n >= 0) {
-        int rc = music_list_play(n);
-        fprintf(stderr, "[repl] musictest %d (%s) -> %s\n", n, music_list_name(n) ? music_list_name(n) : "?", rc ? "FAIL" : "ok");
+        int rc = ml.play(n);
+        fprintf(stderr, "[repl] musictest %d (%s) -> %s\n", n, ml.name(n) ? ml.name(n) : "?", rc ? "FAIL" : "ok");
       } else {
-        fprintf(stderr, "[repl] musictest: tracks 0..%d, or 'stop'\n", music_list_count()-1);
-        for (int i = 0; i < music_list_count(); i++) fprintf(stderr, "   %d: %s\n", i, music_list_name(i));
+        fprintf(stderr, "[repl] musictest: tracks 0..%d, or 'stop'\n", ml.count()-1);
+        for (int i = 0; i < ml.count(); i++) fprintf(stderr, "   %d: %s\n", i, ml.name(i));
       }
     }
     else if (!strcmp(cmd, "xadump")) { unsigned ch = 0, lba = 0, secs = 3; char path[200] = {0};

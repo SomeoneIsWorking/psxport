@@ -14,7 +14,7 @@
 // C subsystems (compiled as C) reached across the boundary — declare with C linkage.
 extern "C" {
   void watchdog_init(void); void mdec_init(void); void spu_init(void);
-  void spu_audio_init(void); void cdc_init(void);
+  void cdc_init(void);
 }
 
 static uint32_t rd32(const uint8_t* p) { return p[0] | p[1]<<8 | p[2]<<16 | (uint32_t)p[3]<<24; }
@@ -57,11 +57,10 @@ int main(int argc, char** argv) {
   void gpu_native_init(void);
   void mdec_init(void);
   void spu_init(void);
-  void spu_audio_init(void);
   gte_init();               // GTE (COP2) coprocessor, lifted from Beetle
   mdec_init();              // MDEC video decoder (FMV), lifted from Beetle
   spu_init();               // SPU audio core, lifted from Beetle
-  spu_audio_init();         // SDL audio output sink (PSXPORT_NOAUDIO to disable)
+  game->spu_audio.init();   // SDL audio output sink (PSXPORT_NOAUDIO to disable)
   gpu_native_init();        // native GPU renderer (parses the game's GP0 stream)
   void cdc_init(void);
   cdc_init();               // native CD controller registers (0x1F801800-3) for raw-CD code

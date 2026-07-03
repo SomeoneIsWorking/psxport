@@ -100,6 +100,8 @@ static SDL_GPUGraphicsPipeline* s_decode_pipe;  // fullscreen: packed 1555 -> fl
 static SDL_GPUGraphicsPipeline* s_encode_pipe;  // fullscreen: float RGBA -> packed 1555 (s_color_rgba -> s_vram_tex)
 static int s_have_3d;                           // 3D resources created (windowed-only, needs depth/pipes)
 static void create_3d(void);
+static void init_gpu(Game* game);
+static void poll_quit(Game* game);
 
 // ---- enable / windowed gates (mirror gpu_gpu.cpp) ----------------------------------------------------
 int gpu_gpu_enabled(void) {
@@ -333,7 +335,7 @@ static void create_3d(void) {
   fprintf(stderr, "[gpu_gpu] 3D raster up (RG8 color target + D32 depth, real HW-blend semi via float intermediate)\n");
 }
 
-static void init_gpu(void) {
+static void init_gpu(Game* game) {
   s_inited = 1;
   mods_init();
   // SDL_GPU requires the video subsystem even headless (the device is created against it; we just don't
@@ -386,13 +388,13 @@ static void init_gpu(void) {
   fprintf(stderr, "[gpu_gpu] %s renderer up (VRAM %dx%d RG8 = PSX 1555)\n", s_headless ? "headless" : "windowed", VRAM_W, VRAM_H);
   // RmlUi mod/debug overlay — windowed only (it records into the swapchain present pass). No-op if its
   // assets/fonts are missing; ESC toggles it once up.
-  if (!s_headless) overlay_glue_init(s_win, s_dev, s_swap_fmt);
+  if (!s_headless) overlay_glue_init(game, s_win, s_dev, s_swap_fmt);
 }
 
-static void poll_quit(void) {
+static void poll_quit(Game* game) {
   SDL_Event e;
   while (SDL_PollEvent(&e)) {
-    overlay_glue_event(&e);   // RmlUi overlay: ESC toggle + mouse/keyboard nav (no-op if not inited)
+    overlay_glue_event(game, &e);   // RmlUi overlay: ESC toggle + mouse/keyboard nav (no-op if not inited)
     if (e.type == SDL_EVENT_QUIT) exit(0);
   }
 }
@@ -520,7 +522,7 @@ static void render_geom(GpuGpuState& g, SDL_GPUCommandBuffer* cmd, const uint16_
 // ---- present: upload CPU VRAM, render the 3D/textured batch on top, sample [sx,sy,w,h] to the swapchain
 void GpuGpuState::present(const uint16_t* src, int sx, int sy, int w, int h) {
   if (!gpu_gpu_enabled()) return;
-  if (!s_inited) init_gpu();
+  if (!s_inited) init_gpu(game);
   mods_init();
   s_present_sx = sx; s_present_sy = sy;
   s_last_sx = sx; s_last_sy = sy; s_last_w = w; s_last_h = h;
@@ -552,7 +554,7 @@ void GpuGpuState::present(const uint16_t* src, int sx, int sy, int w, int h) {
 
   SDL_GPUTexture* swaptex = NULL; Uint32 sw = 0, sh = 0;
   if (!SDL_WaitAndAcquireGPUSwapchainTexture(cmd, s_win, &swaptex, &sw, &sh) || !swaptex) {
-    SDL_SubmitGPUCommandBuffer(cmd); poll_quit(); return;   // minimized / no swapchain image this frame
+    SDL_SubmitGPUCommandBuffer(cmd); poll_quit(game); return;   // minimized / no swapchain image this frame
   }
   SDL_GPUColorTargetInfo cti = {};
   cti.texture = swaptex; cti.clear_color = (SDL_FColor){ 0, 0, 0, 1 };
@@ -572,10 +574,10 @@ void GpuGpuState::present(const uint16_t* src, int sx, int sy, int w, int h) {
   SDL_DrawGPUPrimitives(rp, 3, 1, 0, 0);
   // RmlUi mod/debug overlay (ESC) composites ON TOP of the game frame, into the same present pass over
   // the FULL window. No-op when the menu is hidden / overlay not inited.
-  overlay_glue_record(cmd, rp, (int)sw, (int)sh);
+  overlay_glue_record(game, cmd, rp, (int)sw, (int)sh);
   SDL_EndGPURenderPass(rp);
   SDL_SubmitGPUCommandBuffer(cmd);
-  poll_quit();
+  poll_quit(game);
 }
 
 // ---- present_image: draw a plain RGBA8 image fullscreen (letterboxed 4:3), rgb scaled by `fade` -----
@@ -592,9 +594,9 @@ static void img_make_tex(int iw, int ih) {
   s_img_w = iw; s_img_h = ih;
 }
 void gpu_gpu_present_image(Core* core, const uint8_t* rgba, int iw, int ih, float fade) {
-  (void)core;
+  Game* game = core ? core->game : nullptr;
   if (!gpu_gpu_enabled() || iw <= 0 || ih <= 0) return;
-  if (!s_inited) init_gpu();
+  if (!s_inited) init_gpu(game);
   img_make_tex(iw, ih);
   if (fade < 0.0f) fade = 0.0f; if (fade > 1.0f) fade = 1.0f;
 
@@ -613,7 +615,7 @@ void gpu_gpu_present_image(Core* core, const uint8_t* rgba, int iw, int ih, floa
 
   SDL_GPUTexture* swaptex = NULL; Uint32 sw = 0, sh = 0;
   if (!SDL_WaitAndAcquireGPUSwapchainTexture(cmd, s_win, &swaptex, &sw, &sh) || !swaptex) {
-    SDL_SubmitGPUCommandBuffer(cmd); poll_quit(); return;
+    SDL_SubmitGPUCommandBuffer(cmd); poll_quit(game); return;
   }
   SDL_GPUColorTargetInfo cti = {};
   cti.texture = swaptex; cti.clear_color = (SDL_FColor){ 0, 0, 0, 1 };
@@ -630,10 +632,10 @@ void gpu_gpu_present_image(Core* core, const uint8_t* rgba, int iw, int ih, floa
   SDL_DrawGPUPrimitives(rp, 3, 1, 0, 0);
   // RmlUi mod/debug overlay (ESC) composites ON TOP of the image, same as the game present (gpu_present
   // above) — otherwise the manually-drawn SCEA splash would cover the overlay. No-op when hidden.
-  overlay_glue_record(cmd, rp, (int)sw, (int)sh);
+  overlay_glue_record(game, cmd, rp, (int)sw, (int)sh);
   SDL_EndGPURenderPass(rp);
   SDL_SubmitGPUCommandBuffer(cmd);
-  poll_quit();
+  poll_quit(game);
 }
 
 // ---- readback (shot / vram dump): download s_vram_tex → host, decode 1555 → PPM with the fade ---------
@@ -808,7 +810,7 @@ void GpuGpuState::present_sbs(const uint16_t* vramA, const uint16_t* vramB, int 
 void GpuGpuState::tritest() {
   if (!cfg_on("PSXPORT_GPU_SELFTEST")) return;
   s_headless = 1;                      // force offscreen — no window/swapchain
-  if (!s_inited) init_gpu();
+  if (!s_inited) init_gpu(game);
   const int TW = 320, TH = 240;        // 4:3 offscreen target (so present's letterbox is full-viewport)
 
   // Offscreen RGBA8 color target + its present pipeline + a download buffer.
@@ -885,7 +887,7 @@ void gpu_gpu_render_readback(Core* core, const uint16_t* vram, int sx, int sy, i
   const int s_fade_mode = f.mode;
   const uint8_t s_fade_r = f.r, s_fade_g = f.g, s_fade_b = f.b;
   if (!gpu_gpu_enabled()) { memset(rgba, 0, (size_t)w * h * 4); return; }
-  if (!s_inited) init_gpu();
+  if (!s_inited) init_gpu(core ? core->game : nullptr);
   SDL_GPUCommandBuffer* cmd = SDL_AcquireGPUCommandBuffer(s_dev); GPUCHK(cmd, "render_readback cmd");
   upload_vram(cmd, vram);
   int a, b, c; render_geom(core->game->gpu_gpu, cmd, vram, &a, &b, &c);
@@ -920,9 +922,9 @@ static void sbs_make_tex(int i, int w, int h) {
   s_sbs_xfer[i] = SDL_CreateGPUTransferBuffer(s_dev, &up); GPUCHK(s_sbs_xfer[i], "sbs xfer");
   s_sbs_w[i] = w; s_sbs_h[i] = h;
 }
-void gpu_gpu_present_sbs2(const uint8_t* rgbaA, int wA, int hA, const uint8_t* rgbaB, int wB, int hB) {
+void gpu_gpu_present_sbs2(Game* game, const uint8_t* rgbaA, int wA, int hA, const uint8_t* rgbaB, int wB, int hB) {
   if (!gpu_gpu_enabled() || s_headless) return;
-  if (!s_inited) init_gpu();
+  if (!s_inited) init_gpu(game);
   if (wA < 1) wA = 1; if (hA < 1) hA = 1; if (wB < 1) wB = 1; if (hB < 1) hB = 1;
   sbs_make_tex(0, wA, hA); sbs_make_tex(1, wB, hB);
   const uint8_t* rgb[2] = { rgbaA, rgbaB };
@@ -938,7 +940,7 @@ void gpu_gpu_present_sbs2(const uint8_t* rgbaA, int wA, int hA, const uint8_t* r
   SDL_EndGPUCopyPass(cp);
 
   SDL_GPUTexture* swaptex = NULL; Uint32 sw = 0, sh = 0;
-  if (!SDL_WaitAndAcquireGPUSwapchainTexture(cmd, s_win, &swaptex, &sw, &sh) || !swaptex) { SDL_SubmitGPUCommandBuffer(cmd); poll_quit(); return; }
+  if (!SDL_WaitAndAcquireGPUSwapchainTexture(cmd, s_win, &swaptex, &sw, &sh) || !swaptex) { SDL_SubmitGPUCommandBuffer(cmd); poll_quit(game); return; }
   SDL_GPUColorTargetInfo cti = {}; cti.texture = swaptex; cti.clear_color = (SDL_FColor){ 0, 0, 0, 1 };
   cti.load_op = SDL_GPU_LOADOP_CLEAR; cti.store_op = SDL_GPU_STOREOP_STORE;
   SDL_GPURenderPass* rp = SDL_BeginGPURenderPass(cmd, &cti, 1, NULL);
@@ -957,7 +959,7 @@ void gpu_gpu_present_sbs2(const uint8_t* rgbaA, int wA, int hA, const uint8_t* r
   }
   SDL_EndGPURenderPass(rp);
   SDL_SubmitGPUCommandBuffer(cmd);
-  poll_quit();
+  poll_quit(game);
 }
 
 // ---- Public API: thin free-function wrappers over the per-instance GpuGpuState methods ---------------

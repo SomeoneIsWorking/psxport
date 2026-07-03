@@ -31,9 +31,6 @@ void rec_dispatch(Core*, uint32_t);
 #define T2_SFX_FN      0x80074590u  // FUN_80074590 — the menu sound-effect trigger
 #define PAD_TRIANGLE   0x1000u
 #define PAD_CIRCLE     0x2000u
-extern "C" void rmlui_overlay_set_visible(int v);
-extern "C" void rmlui_overlay_set_options_mode(int v);
-extern "C" int  rmlui_overlay_inited(void);
 
 // Invoke a guest function with up to 3 args, preserving the override's a0-a2.
 static void t2_call3(Core* c, uint32_t addr, uint32_t a0, uint32_t a1, uint32_t a2) {

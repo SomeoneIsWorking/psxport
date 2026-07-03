@@ -34,9 +34,8 @@ int      mdec_dma_out_rest(uint32_t* buf, int count);
 int      mdec_dma_can_write(void);
 void     MDEC_Run(int32_t clocks);
 
-// spu_audio.c
-void spu_audio_frame(void);
-void spu_wav_reopen(const char* path);
+// (spu_audio has moved to `class SpuAudio` owned by Game — `c->game->spu_audio.method()`.
+//  No C shims; callers use the class directly via spu_audio.h.)
 
 // xa_stream.c — XA-ADPCM streaming (CD audio) + the raw-sector decoder
 void xa_stream_setmode(uint8_t mode);
