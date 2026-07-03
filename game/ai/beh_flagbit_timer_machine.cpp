@@ -67,7 +67,7 @@ void beh_flagbit_timer_machine(Core* c) {
    if (getenv("PSXPORT_FLAGBIT_TRACE"))
      fprintf(stderr, "[flagbit] core=%p S0 node=%08X cnt_before=%d stage=%08X\n",
              (void*)c, nd, (int)c->mem_r16s(0x800ED098u), c->mem_r32(0x801fe00c));
-   if (leaf4r(c, nd, 3, a2v, 0x8015aabcu, 0x800519e0u) != 0) goto Lret;   // FUN_800519E0
+   if (leaf4r(c, nd, 3, a2v, 0x8014aabcu, 0x800519e0u) != 0) goto Lret;   // FUN_800519E0 (Slip #6 fix: was 0x8015AABC — 0x1000 hex-typo, verified against recomp ov_a00_gen_8013B2E4 line 24959 which computes r[7] = (0x8015<<16) + (-21828) = 0x8014AABC)
    c->mem_w32(nd + 0x3c, c->mem_r32(0x800ecfd8u));
    if (c->mem_r8(0x800bf873u) != 0) { c->mem_w8(nd + 4, 3); goto Lret; }
    uint32_t bit = (c->mem_r8(0x800bfa13u) >> (c->mem_r8(nd + 3) & 31)) & 1u;
