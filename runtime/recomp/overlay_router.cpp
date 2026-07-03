@@ -163,17 +163,34 @@ void rec_dispatch(Core* c, uint32_t addr) {
   // Attack (a) probe: attribute rec_dispatch calls to specific overlay handlers. Env=hex address, e.g.
   // PSXPORT_DISPWATCH=0x8013B2E4. Prints per-core when reached; distinguishes "B never dispatches this
   // handler" (real gap) from "B dispatches but the resident overlay isn't A00" (loader gap).
-  static uint32_t s_dw = (uint32_t)-1;
-  if (s_dw == (uint32_t)-1) { const char* e = getenv("PSXPORT_DISPWATCH"); s_dw = e ? (uint32_t)strtoul(e, 0, 0) : 0; }
-  if (s_dw && (addr & 0x1FFFFFFF) == (s_dw & 0x1FFFFFFF)) {
+  static uint32_t s_dw = (uint32_t)-1, s_dw_ra = 0;
+  if (s_dw == (uint32_t)-1) {
+    const char* e = getenv("PSXPORT_DISPWATCH");
+    s_dw = 0;
+    if (e && *e) {
+      // Accept "0xADDR" or "0xADDR:ra=0xRA" — the :ra=... suffix filters by the CALLER's ra
+      // (c->r[31] at dispatch entry), so a target function like FUN_80083F50 with 30+ call sites
+      // can be filtered to just the one from a specific caller PC. Extension per workflow-first:
+      // an origin-revealing DISPWATCH lets a propagation-shape target-#4-style investigation
+      // name the caller's arg without hand-grepping the recomp for every rec_dispatch site.
+      s_dw = (uint32_t)strtoul(e, nullptr, 0);
+      const char* rk = strstr(e, ":ra=");
+      if (rk) s_dw_ra = (uint32_t)strtoul(rk + 4, nullptr, 0);
+    }
+  }
+  if (s_dw && (addr & 0x1FFFFFFF) == (s_dw & 0x1FFFFFFF)
+           && (!s_dw_ra || (c->r[31] & 0x1FFFFFFF) == (s_dw_ra & 0x1FFFFFFF))) {
     Sbs* sbs = c->game ? c->game->sbs : 0;
     int cid = sbs ? sbs->coreId(c) : -1;
-    uint32_t nd = c->r[4];
-    bool nd_ok = (nd & 0x1FFFFFFF) < 0x200000;
-    uint32_t s0 = nd_ok ? c->mem_r8(nd + 4) : 0xff;
-    uint32_t n3 = nd_ok ? c->mem_r8(nd + 3) : 0xff;
-    fprintf(stderr, "[dispwatch] core=%c addr=%08X node=%08X s0=%u n3=%u stage=%08X\n",
-            cid < 0 ? '?' : (cid ? 'B' : 'A'), addr, nd, s0, n3, c->mem_r32(0x801fe00c));
+    uint32_t a0 = c->r[4], a1 = c->r[5], a2 = c->r[6];
+    bool a0_addr = (a0 & 0x1FFFFFFF) < 0x200000 && a0 != 0;
+    uint32_t s0 = a0_addr ? c->mem_r8(a0 + 4) : 0xff;
+    uint32_t n3 = a0_addr ? c->mem_r8(a0 + 3) : 0xff;
+    // Origin-revealing line: caller ra + full a0/a1/a2 (raw + as-signed-int16 for LUT lookups where
+    // small negative args are meaningful). Frame number when sbs is available.
+    uint32_t frame = sbs ? sbs->frame() : 0;
+    fprintf(stderr, "[dispwatch] f%u core=%c addr=%08X ra=%08X a0=%08X (s16=%d) a1=%08X a2=%08X node.s0=%u.n3=%u stage=%08X\n",
+            frame, cid < 0 ? '?' : (cid ? 'B' : 'A'), addr, c->r[31], a0, (int)(int16_t)a0, a1, a2, s0, n3, c->mem_r32(0x801fe00c));
   }
   uint32_t a = addr & 0x1FFFFFFF;
   if (a >= REC_MAIN_LO && a < REC_MAIN_HI) { main_dispatch(c, addr); return; }

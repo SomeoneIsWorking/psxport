@@ -520,6 +520,21 @@ void Sbs::Impl::dumpPpm(const char* path) {
 // EXACT guest backtrace + value. We DON'T pause here (mid-frame is unsafe) — the lockstep loop pauses
 // after both cores finish the frame, with both write sites captured.
 void Sbs::Impl::storeCb(Core* c, uint32_t a, uint32_t v) {
+  // UPPROBE (target-#4 upstream): when a write lands on the configured address (typically the
+  // divergent rec+0x0C address, e.g. 0x800F0036), dump c->r[16] (which holds the owning obj address
+  // in ov_a00_gen_801337E4) plus obj[+0x42] (arg to FUN_80083F50) and obj[+0x46] (branch gate) on
+  // this core. Compare across A and B in the log to name the upstream write cadence.
+  static const uint32_t upprobe = []{
+    const char* e = getenv("PSXPORT_SBS_UPPROBE"); return e ? (uint32_t)strtoul(e, nullptr, 0) : 0u;
+  }();
+  if (upprobe && a == upprobe) {
+    int which_a = (mB && c == &mB->core) ? 1 : 0;
+    uint32_t obj = c->r[16];
+    uint16_t f42 = obj ? c->mem_r16(obj + 0x42) : 0;
+    uint8_t  f46 = obj ? c->mem_r8 (obj + 0x46) : 0;
+    fprintf(stderr, "[upprobe] f%u %c write [%08X]=%08X  obj=%08X obj[+42]=%04X obj[+46]=%02X  r[4]=%08X r[2]=%08X r[3]=%08X ra=%08X\n",
+            mFrame, which_a ? 'B' : 'A', a, v, obj, f42, f46, c->r[4], c->r[2], c->r[3], c->r[31]);
+  }
   // ALLOCTRACE: sniff writes to 0x800ED098 (free-slot count) — count per-frame decrements per core.
   // Fires INDEPENDENTLY of mWwArmed so it stays live across the whole run without arming a watch.
   // Exact-address check (a == 0x800ED098): word-aligned would count neighboring-byte writes too.
