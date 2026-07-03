@@ -19,6 +19,7 @@
 // what native_terrain.cpp reads; it is the engine's own composed camera, not a PSX render artifact.
 #include "core.h"
 #include "cfg.h"
+#include "../render_native.h"
 #include "scene_data.h"
 #include <stdint.h>
 #include <stdio.h>
@@ -63,7 +64,9 @@ static void read_camera(Core* c, float Rcam[3][3], float Tcam[3]) {
   Tcam[2]=(float)(int32_t)c->mem_r32(SCR+0x114);
 }
 
-int render_scene_collect(Core* c, RenderScene* out) {
+int NativeScenePass::collect() {
+  Core* c = mCore;
+  RenderScene* out = &mScene;
   out->count = 0;
 
   float Rcam[3][3], Tcam[3];

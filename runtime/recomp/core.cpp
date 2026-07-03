@@ -48,6 +48,7 @@ Core::Core() {
   mRender = new Render();
   mRender->mCore = this;
   mRender->mNodeXform.core = this;
+  mRender->mNativeScene.mCore = this;
 }
 
 Core::~Core() {

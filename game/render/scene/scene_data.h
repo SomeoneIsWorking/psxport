@@ -35,10 +35,4 @@ struct RenderScene {
   int         count;
 };
 
-struct Core;
-
-// Walk the engine's scene state and populate `out`. Returns the object count (out->count). Reads guest
-// RAM only; writes nothing. (game/render/scene/scene_build.cpp)
-int render_scene_collect(Core* c, RenderScene* out);
-
 #endif

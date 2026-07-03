@@ -26,7 +26,7 @@
 #include "../scene/scene_data.h"
 #include "../render.h"          // class Render — reach `c->mRender->projParams` for depth-normalize
 #include "../proj_params.h"     // class ProjParams — setProjH + proj_pz_to_ord (kept as free fn, per-Core state)
-#include "mesh_draw.h"
+#include "../render_native.h"   // class NativeScenePass — drawObject is a method here
 #include <stdint.h>
 #include <math.h>
 
@@ -54,7 +54,8 @@ static inline PVtx project(const SceneObject* o, const SceneCamera* cam, float H
   return p;
 }
 
-int mesh_draw_object(Core* c, const SceneObject* o, const SceneCamera* cam) {
+int NativeScenePass::drawObject(const SceneObject* o, const SceneCamera* cam) {
+  Core* c = mCore;
   uint32_t counts = c->mem_r32(o->geomblk);
   int n3 = counts & 0xFFFF, n4 = (counts >> 16) & 0xFFFF;
   if (n3 > 4096 || n4 > 4096) return 0;                  // sanity: not a geomblk

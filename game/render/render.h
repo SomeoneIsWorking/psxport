@@ -18,6 +18,7 @@
 #include "pgxp.h"
 #include "proj_params.h"
 #include "engine_project.h"     // EObjXform (per-Core active per-object xform lives on Render below)
+#include "render_native.h"      // class NativeScenePass — the decoupled native render subsystem
 class Core;
 
 class Render {
@@ -40,6 +41,7 @@ public:
   EObjXform         mActiveXform{};
   bool              mActiveXformSet = false;
   NodeXform         mNodeXform;        // scene-node WORLD-TRANSFORM builder (guest FUN_80051844)
+  NativeScenePass   mNativeScene;      // decoupled native render pass (collect + drawObject)
 
   // ---- object-render projection ops (impl in engine_project.cpp) ----------
   // Compose an EObjXform from the object's REAL WORLD coordinates: its world rotation matrix (cmd+0x18)
