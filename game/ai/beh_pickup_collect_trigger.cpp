@@ -26,6 +26,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "spawn.h"     // class Spawn (c->engine.spawn.despawn / dispatch / spawnAndInit)
+#include "bg_scene_transition_sm.h"   // BgSceneTransitionSm::readyForProgress (FUN_80042728 native)
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
@@ -94,7 +95,7 @@ bool beh_pickup_collect_trigger_body(Core* c) {
   } else if (sub < 3) {
     if (sub == 0) { do_case0(c, obj); }
     else if (sub != 1) { c->mem_w8(obj + 0x2b, 0); return true; }
-    else { rec_dispatch(c, 0x80042728u); iVar3 = (int)c->r[2]; do_inc = true; }   // case 1
+    else { iVar3 = c->engine.bgSceneTransitionSm.readyForProgress() ? 1 : 0; do_inc = true; }   // FUN_80042728 native
   } else {
     if (sub == 4) {
       // ---- case 4: emit packets + collected-bit/reward ----

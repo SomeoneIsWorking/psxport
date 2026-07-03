@@ -188,6 +188,18 @@ void Cull::coneCull2b278() { Core* c = core;
   c->r[2] = (uint32_t)cone_cull_2b278(c, 1);
 }
 
+// Cull::enqueueVisibleClass4 — PC-native FUN_80077EBC body. Manual push of `obj` onto the class-4
+// render list (list ptr @ CULL_QPTR[1] = 0x1F800148, counter @ CULL_QCNT[1] = 0x1F800150, cap 40).
+// Byte-exact match to the guest body's slti-40 gate + list-ptr decrement + write + counter bump.
+void Cull::enqueueVisibleClass4(uint32_t obj) { Core* c = core;
+  int32_t cnt = c->mem_r16s(CULL_QCNT[1]);
+  if (cnt >= CULL_QCAP[1]) return;                        // list full — do not push
+  uint32_t ptr = c->mem_r32(CULL_QPTR[1]);
+  c->mem_w32(CULL_QPTR[1], ptr - 4);
+  c->mem_w32(ptr - 4, obj);
+  c->mem_w16(CULL_QCNT[1], (uint16_t)(cnt + 1));
+}
+
 void Cull::objectCull() { Core* c = core;
   uint32_t prev = c->game->fps60.current_object;
   uint32_t o = c->r[4];                            // a0 = object* (MIPS arg register $a0)

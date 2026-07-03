@@ -181,7 +181,7 @@ void beh_typed_jumptable_pair(Core* c) {
   if (c->mem_r8(0x800BF816u) != 0) {                  // 8013927C lbu v0, 0xe(base) ; 80139284 beqz -> 0x801392b0
     // 0x80139274 branch taken: gate byte 0x800BF816 != 0
     if (c->mem_r8(0x800BF817u) == c->mem_r8(obj + 3)) {  // 8013928C lbu v1,0xf(base) ; 80139290 lbu v0,3(s0) ; 80139298 bne -> 0x801392ec
-      c->r[4] = obj; rec_dispatch(c, 0x80077EBCu);    // 801392A0 jal 0x80077ebc (a0=s0)
+      c->engine.cull.enqueueVisibleClass4(obj);       // FUN_80077EBC — Cull::enqueueVisibleClass4  (801392A0 jal 0x80077ebc)
     }
     // else j 0x801392ec
   } else {                                            // ---- 0x801392B0: gate byte == 0 ----

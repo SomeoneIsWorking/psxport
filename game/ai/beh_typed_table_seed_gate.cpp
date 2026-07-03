@@ -25,7 +25,6 @@
 //
 // STILL OPAQUE (recorded so a future RE arc closes them):
 //   - FUN_8004766C   per-object update called after box seed + inside render tail (matrix build?)
-//   - FUN_80077EBC   scenePhase==0x22 sub-behavior body
 //   - FUN_800778E4   spatial trigger check taking (obj, triggerParam) -> 0/nonzero (IN/OUT)
 //   - 0x800E7E80     "pilot-actor" region read by state_one_tick's TURN sub-states (mode @+0x147, yaw
 //                    @+0x58, state @+0x168). Likely Tomba's actor slot; future RE candidate for a
@@ -56,7 +55,6 @@ enum class Sta : uint8_t { Init = 0, Active = 1, DespawnA = 2, DespawnB = 3 };
 // Un-RE'd sub-behaviors still called via rec_dispatch by this handler. (FUN_80077768 turn-direction
 // lookup is NATIVE now — Trig::angleCmp; see run_turn_setup.)
 constexpr uint32_t SUB_OBJ_UPDATE     = 0x8004766Cu;
-constexpr uint32_t SUB_PHASE22_BODY   = 0x80077EBCu;
 constexpr uint32_t SUB_TRIGGER_CHECK  = 0x800778E4u;
 
 // Pilot-actor region (0x800E7E80..) — read by state_one_tick's TURN sub-states.
@@ -299,7 +297,7 @@ void beh_typed_table_seed_gate(Core* c) {
 
   if (phase == 0x22) {
     a.setRenderMode((uint8_t)st);                                  // "this actor's phase" branch
-    c->r[4] = a.addr(); rec_dispatch(c, SUB_PHASE22_BODY);         // scenePhase==0x22 sub-behavior (opaque)
+    c->engine.cull.enqueueVisibleClass4(a.addr());                  // FUN_80077EBC — Cull::enqueueVisibleClass4 (was rec_dispatch)
     // fall through to render tail
   } else {
     c->r[4] = a.addr(); c->r[5] = (uint32_t)(int32_t)a.triggerParam();

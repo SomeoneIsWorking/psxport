@@ -38,4 +38,11 @@ public:
   // coneCull2b278 (FUN_8002B278): standalone view-cone cull, sets node visible flag on keep. Taxi
   // c->r[4] = node. Was ov_cone_cull_2b278.
   void coneCull2b278();
+
+  // enqueueVisibleClass4 (FUN_80077EBC): MANUAL push of `obj` onto render class 4's list — the same
+  // list-add tail performBaseCull runs when the base cull KEEPS a class-4 object, but callable
+  // directly by beh_ handlers whose scene-specific logic decides an object should render this frame
+  // (bypassing the base cull test). Respects the cap-40 limit at *(0x1F800150). Callers set obj[+1]=1
+  // themselves; this method only manipulates the queue. Was rec_dispatch(0x80077EBCu) in 5+ handlers.
+  void enqueueVisibleClass4(uint32_t obj);
 };

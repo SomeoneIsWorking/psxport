@@ -28,7 +28,6 @@
 //                    mode 2). Thin wrapper FUN_8007778C is now native.
 //   - FUN_80040B48   per-type CONFIRM helper called via `confirm_set5` (returns nonzero → triggerSub=5)
 //   - FUN_8007E110   scene-entity spawn — returns a node pointer stored in Actor::sceneHandle
-//   - FUN_80042728   completion check for the FUN_8007E110 handshake
 //   - 0x800A4C94     area-keyed CULL-RECORD SIZE table (halfword, indexed by area)
 //   - 0x800A4CA8     per-type SCENE-ID table (halfword, indexed by type)
 //   - 0x800E7E68     pad-edge bitmask (state 1 case 2 — new-frame padedge)
@@ -43,6 +42,7 @@
 #include "cfg.h"
 #include "graphics_bind.h"    // GraphicsBind::recordInit / renderUpdate
 #include "spawn.h"            // class Spawn (c->engine.spawn.despawn)
+#include "bg_scene_transition_sm.h"   // BgSceneTransitionSm::readyForProgress (FUN_80042728 native)
 #include "object/actor.h"     // class Actor + named fields
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
@@ -57,7 +57,6 @@ enum class Sta : uint8_t { Init = 0, Active = 1, Idle = 2, Despawn = 3 };
 //  body it dispatches remains opaque and stays a rec_dispatch inside boundsCull.)
 constexpr uint32_t SUB_CONFIRM_HELPER   = 0x80040B48u;   // FUN_80040B48(a0): confirm; return nonzero → advance
 constexpr uint32_t SUB_SCENE_SPAWN      = 0x8007E110u;   // FUN_8007E110(a0, 0): returns sceneHandle
-constexpr uint32_t SUB_COMPLETION_CHECK = 0x80042728u;
 
 // Data-table addresses (halfword strides, indexed by area/type).
 constexpr uint32_t TBL_AREA_SIZE  = 0x800A4C94u;   // per-area cull-record size (state-0 recordInit cls)
@@ -225,8 +224,7 @@ void beh_typed_init_scene_trigger(Core* c) {
         break;
       }
       case 6: {                                                  // completion → triggerSub = 2
-        rec_dispatch(c, SUB_COMPLETION_CHECK);
-        if (c->r[2] != 0) a.setTriggerSub(2);
+        if (c->engine.bgSceneTransitionSm.readyForProgress()) a.setTriggerSub(2);   // FUN_80042728 (native)
         break;
       }
     }

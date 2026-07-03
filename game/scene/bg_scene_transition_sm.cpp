@@ -162,3 +162,6 @@ static void bg_scene_transition_sm_verify(Core* c) {
 
 #include "bg_scene_transition_sm.h"
 void BgSceneTransitionSm::step() { bg_scene_transition_sm_verify(core); }
+bool BgSceneTransitionSm::readyForProgress() const {
+  return core->mem_r8(0x800BF849u) == 0 && core->mem_r8(0x800ED06Du) == 0;
+}

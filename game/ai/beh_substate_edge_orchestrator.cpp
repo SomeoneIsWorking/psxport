@@ -60,7 +60,7 @@ void beh_substate_edge_orchestrator(Core* c) {
   c->r[4] = obj; rec_dispatch(c, 0x80130AC4u);        // FUN_80130ac4
   if (c->r[2] != 0) {                                 // beqz v0 -> 0x8012EBD8 [0x8012EBC4]
     c->mem_w8(obj + 1, st);                           // sb s0,1(s1): node[1] = state (==1) [0x8012EBCC]
-    c->r[4] = obj; rec_dispatch(c, 0x80077EBCu);      // FUN_80077ebc          [0x8012EBD0]
+    c->engine.cull.enqueueVisibleClass4(obj);         // FUN_80077EBC — Cull::enqueueVisibleClass4  [0x8012EBD0]
   }
 
   uint8_t sub = c->mem_r8(obj + 5);                   // lbu v1,5(s1): node[5] [0x8012EBD8]

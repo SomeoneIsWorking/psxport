@@ -117,7 +117,7 @@ void beh_lift_platform(Core* c) {
     leaf2(c, nd, (uint32_t)a1, 0x800778e4u);               // FUN_800778E4(node, sign16(...))
     s0 = c->mem_r32(nd + 0x10);
     if (c->mem_r8(nd + 1) == 0) {
-      if (c->mem_r8(s0 + 1) != 0) { c->mem_w8(nd + 1, 1); leaf1(c, nd, 0x80077ebcu); }  // FUN_80077EBC
+      if (c->mem_r8(s0 + 1) != 0) { c->mem_w8(nd + 1, 1); c->engine.cull.enqueueVisibleClass4(nd); }  // FUN_80077EBC — Cull::enqueueVisibleClass4
       if (c->mem_r8(nd + 1) == 0) goto L6c4;               // L508 re-check
     }
   } else {

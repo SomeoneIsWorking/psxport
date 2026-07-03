@@ -180,7 +180,7 @@ void beh_multi_record_phase_machine(Core* c) {
    }
    if (to354) {
      c->mem_w8(nd + 1, (uint8_t)st);               // node[1] = s0 = 1
-     leaf1(c, nd, 0x80077ebcu);                    // FUN_80077EBC(node)
+     c->engine.cull.enqueueVisibleClass4(nd);         // FUN_80077EBC — Cull::enqueueVisibleClass4
    } else {
      leaf4(c, nd, 0, (uint32_t)(int32_t)-400, 600, 0x800779d0u);  // FUN_800779D0(node,0,-400,600)
    }
@@ -195,7 +195,7 @@ void beh_multi_record_phase_machine(Core* c) {
    bool to394 = (m == 37) || ((uint32_t)(m - 14) < 6);
    if (to394) {
      c->mem_w8(nd + 1, (uint8_t)st);               // node[1] = 1
-     leaf1(c, nd, 0x80077ebcu);                    // FUN_80077EBC(node)
+     c->engine.cull.enqueueVisibleClass4(nd);         // FUN_80077EBC — Cull::enqueueVisibleClass4
    } else {
      leaf1(c, nd, 0x8007778cu);                    // FUN_8007778C(node)
    }
