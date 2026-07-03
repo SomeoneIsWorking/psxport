@@ -172,6 +172,8 @@ public:
   // the stage-0 preload SM is stepped across subsequent scheduler ticks via stage0Advance() so
   // native matches the recomp body's per-iteration yield cadence (docs/findings/sbs.md Slip #1).
   void startBinStage();
+  void startBinStagePc();          // PC-mode fresh tick — native ISO9660, paced SM
+  void startBinStageFaithful();    // FAITHFUL fresh tick — substrate dispatch inside scoped setjmp
 
   // stage0Advance: run ONE step of the native STAGE-0 preload state machine, matching the recomp
   // body of 0x8010649C's per-iteration yield loop (see docs/findings/sbs.md Slip #1). Called by
@@ -182,12 +184,6 @@ public:
   // Returns 1 while more steps remain, 0 when the swap has landed.
   int stage0Advance(uint8_t& step);
 
-  // fulfillTaskSpawnAndWait: FAITHFUL-mode fulfillment of the substrate's `FUN_80044BD4`
-  // (sync_preload — spawn a task, RNG-stamp caller SM slot, wait on a done flag). Under our sync
-  // port the wait resolves in-place because the caller has already done task 1's work natively;
-  // this helper reproduces the primitive's residual writes (task-1 slot init via FUN_80051F14,
-  // RNG stamp at caller_task+0x56, done flag) so B and A match at the yield boundary.
-  void fulfillTaskSpawnAndWait(uint32_t caller_task, uint32_t task1_entry, uint8_t flag2, uint8_t flag3);
 
   // task0Bootstrap: the boot-init entry that (a) resolves \BIN\START.BIN natively via disc_find_file,
   // (b) records its {LBA,size} into 0x800be1e0, and (c) enters stage 0 via startStage(0). Called once

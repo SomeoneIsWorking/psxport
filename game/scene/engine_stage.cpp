@@ -32,6 +32,9 @@
 #include "c_subsys.h"                // disc_find_file — native ISO9660 resolver (native_task0_bootstrap/ov_start_bin_stage)
 #include "asset.h"                   // class Asset — preloadTexgroup / preloadStage1 (native_stage0_sm)
 #include "math/rng.h"                // class Rng — Slip #5 RNG cadence gate under SBS
+#include "scheduler.h"               // c->game->sched.yield_jmp — scoped setjmp for FAITHFUL dispatch
+#include <cstring>
+#include <setjmp.h>
 #include <stdio.h>
 
 // dispatch a still-recomp leaf with up to 3 args set (helpers for the native stage machines).
@@ -1571,60 +1574,22 @@ static bool resolve_faithful(Core* c, uint32_t name_ptr, uint32_t buf,
   return true;
 }
 
-// FUN_80044BD4 side-effect fulfillment for FAITHFUL mode. The primitive spawns a task, waits on a
-// done flag, and RNG-stamps the caller's SM slot. Under our sync port the "wait" resolves in-place
-// (the caller has already done task 1's work), so we reproduce the residual writes so B and A match
-// byte-for-byte at the yield boundary. Semantics from Ghidra decomp of 0x80044BD4.
-//
-// Writes done DIRECTLY (not via `rec_dispatch(c, 0x80051F14)`):
-//   Dispatching FUN_80051F14 leaves task 1 with state=2 (runnable), the scheduler then runs its body
-//   0x80044F58 (a CD-loader that only ends by calling FUN_80051FB4 → ChangeThread yield). That yield
-//   longjmps back to the scheduler with r31 mid-body (0x80052000) — the next resume dispatches to
-//   that PC and misses. FUN_80051F14 also calls kernel syscalls (EnterCriticalSection / OpenTh /
-//   ExitCriticalSection) that lack HLE. Reproducing the same slot-state directly (with state=0
-//   because task 1's work was already done natively) skips both issues.
-static constexpr uint32_t kDoneFlagAddr    = 0x1F80019Bu;   // libcd load-complete flag byte
-static constexpr uint32_t kTaskFlag2Global = 0x801FE0DDu;   // FUN_80044BD4 stashes param_3 here
-static constexpr uint32_t kTaskFlag3Global = 0x801FE0DEu;   // FUN_80044BD4 stashes param_2 here
-static constexpr uint32_t kBiosTcbHandle   = 0xFF000000u;   // OpenTh return for slot 1 (observed
-                                                             // from substrate — BIOS TCB handle format)
-static constexpr uint32_t kTaskSlotStride  = 0x70u;         // task table stride (scheduler.h)
-static constexpr uint32_t kTaskTableBase   = 0x801FE000u;   // task table base
-
-void Engine::fulfillTaskSpawnAndWait(uint32_t caller_task, uint32_t task1_entry,
-                                     uint8_t flag2, uint8_t flag3) {
+void Engine::startBinStage() {
   Core* c = core;
-  const uint32_t task1 = kTaskTableBase + 1 * kTaskSlotStride;
-  // (a) clear done flag; (b) stash flag globals; (c) reproduce FUN_80051F14's slot writes with
-  // state=0 since task 1's body has effectively "already run" (its work was preloadTexgroup); (d)
-  // RNG-stamp caller's SM slot; (e) mark done so the wait loop resolves.
-  c->mem_w8(kDoneFlagAddr,    0);
-  c->mem_w8(kTaskFlag2Global, flag3);
-  c->mem_w8(kTaskFlag3Global, flag2);
-  c->mem_w16(task1 + 0x00, 0);            // state = 0 (ENDED — scheduler skips this slot)
-  c->mem_w32(task1 + 0x04, kBiosTcbHandle);
-  c->mem_w32(task1 + 0x0C, task1_entry);
-  c->mem_w32(task1 + 0x10, c->r[28]);     // FUN_80080930 returns gp
-  c->mem_w8 (task1 + 0x6F, 0);
-  c->mem_w16(caller_task + 0x56, (uint16_t)c->rng.next());
-  c->mem_w8(kDoneFlagAddr, 1);
+  if (c->game && c->game->mIsFaithful) startBinStageFaithful();
+  else                                 startBinStagePc();
 }
 
-void Engine::startBinStage() { Core* c = core;
-  const bool faithful = c->game && c->game->mIsFaithful;
-
-  // Reserve a 32-byte guest-RAM buffer on the task stack for the CdlFILE record (24 bytes,
-  // aligned). Matches the substrate's use of the task stack for its per-iteration scratch;
-  // restored below so the task's saved SP is unchanged.
+// PC-mode fresh tick: resolve filenames via native ISO9660, seed the preload SM at state 0 so
+// stage0Advance can pace preloadTexgroup / preloadStage1 / startStage(1) across subsequent ticks.
+void Engine::startBinStagePc() {
+  Core* c = core;
   const uint32_t saved_sp = c->r[29];
-  c->r[29] -= 32;
-  const uint32_t cdlfile_buf = c->r[29] + 8;
+  c->r[29] -= 32;   // transient CdlFILE-shaped buffer (unused in PC path, kept for symmetry)
 
   auto resolve = [&](uint32_t name_ptr, uint32_t* lba, uint32_t* size) {
-    return faithful ? resolve_faithful(c, name_ptr, cdlfile_buf, lba, size)
-                    : resolve_pc     (c, name_ptr,             lba, size);
+    return resolve_pc(c, name_ptr, lba, size);
   };
-
   for (const auto& L : kStartBinLoops) {
     for (uint32_t i = 0; i < L.count; i++) {
       uint32_t lba = 0, size = 0;
@@ -1638,40 +1603,34 @@ void Engine::startBinStage() { Core* c = core;
     resolve(X.name_ptr, &lba, &size);
     c->mem_w32(X.lba_dest, lba);
   }
-
   c->r[29] = saved_sp;
 
+  // Slip #5: PC mode skips FUN_80044BD4 entirely — compensate with one manual RNG advance to match
+  // B's boot cadence (the substrate FUN_80044BD4 does a single FUN_8009A450 call).
+  (void)c->rng.next();
+
   uint32_t task = c->mem_r32(CUR_TASK);
+  c->mem_w16(task + 0x48, 0);
   c->mem_w16(task + 0x4a, 0);
+  fprintf(stderr, "[start.bin] file table built (pc/iso9660); preload SM stepped across ticks via stage0Advance\n");
+}
 
-  // Slip #5: PC mode skips FUN_80044BD4 entirely, so we compensate with a single manual RNG advance
-  // to match B's boot cadence. FAITHFUL mode reproduces FUN_80044BD4 for real via
-  // fulfillTaskSpawnAndWait below (which advances the RNG once as part of its RNG stamp write) —
-  // no extra bump needed there.
-  if (!faithful) (void)c->rng.next();
-
-  // Preload cadence — see Slip #1 (docs/findings/sbs.md) + stage0Advance below.
-  //
-  // PC mode: seed sm[0x48]=0, let stage0Advance step 0 do the first preloadTexgroup one tick later.
-  // FAITHFUL mode: substrate's fresh tick reaches the SM state-0 dispatch which calls
-  //   FUN_80044BD4(entry=0x80044F58, 0, 0, 0). That primitive:
-  //     (a) clears the done flag DAT_1F80019B
-  //     (b) writes param_2/param_3 to fixed bytes DAT_801FE0DD/DE
-  //     (c) spawns task 1 via FUN_80051F14 with the given entry
-  //     (d) RNG-stamps task0+0x56 with FUN_8009A450 output
-  //     (e) yields until task 1 sets DAT_1F80019B
-  //   Under our sync port, task 1's body (the CD-loader FUN_80044F58) is what preloadTexgroup
-  //   already does natively; the yield loop resolves immediately when we mark done. Reproduce the
-  //   substrate's side effects here so the task-slot state + task0+0x56 match B byte-for-byte.
-  if (faithful) {
-    asset.preloadTexgroup(0, 0);                        // task 1's "body" — done inline
-    fulfillTaskSpawnAndWait(task, /*task1_entry=*/0x80044F58u, /*flag2=*/0, /*flag3=*/0);
-    c->mem_w16(task + 0x48, 1);
-  } else {
-    c->mem_w16(task + 0x48, 0);
+// FAITHFUL fresh tick: dispatch the substrate task-0 body 0x8010649C inside a scoped setjmp. The
+// substrate walks the same 33+3 CdSearchFile calls (populating libcd's dir cache), then reaches
+// its SM state-0 dispatch which calls FUN_80044BD4 (task-1 spawn + preload + yield). The yield
+// inside FUN_80051F80 fires ChangeThread → scheduler_yield → longjmp; installing our own jmp_buf
+// catches it locally so startBinStage returns normally. Net effect: every guest RAM byte the
+// substrate touches this tick — file tables, libcd cache, task-1 slot, task-0+0x56 RNG stamp,
+// AND task-0 stack scratch — matches B byte-for-byte, because we ran the same substrate code.
+void Engine::startBinStageFaithful() {
+  Core* c = core;
+  jmp_buf saved_jmp;
+  std::memcpy(&saved_jmp, &c->game->sched.yield_jmp, sizeof saved_jmp);
+  if (setjmp(c->game->sched.yield_jmp) == 0) {
+    rec_dispatch(c, 0x8010649Cu);   // yields inside FUN_80044BD4 → longjmp back here
   }
-  fprintf(stderr, "[start.bin] file table built (%s); preload SM stepped across ticks via stage0Advance\n",
-          faithful ? "faithful/libcd" : "pc/iso9660");
+  std::memcpy(&c->game->sched.yield_jmp, &saved_jmp, sizeof saved_jmp);
+  fprintf(stderr, "[start.bin] substrate fresh tick fulfilled (faithful)\n");
 }
 
 // stage0Advance: one step of the STAGE-0 preload SM. Called by the scheduler on each tick after the
