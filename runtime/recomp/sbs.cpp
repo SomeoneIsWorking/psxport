@@ -866,6 +866,21 @@ void Sbs::Impl::dumpByteTrace(FILE* out) {
     for (size_t i = 0; i < 3 && i < rows.size(); i++)
       fprintf(out, "  val=0x%02X A=%u B=%u", std::get<1>(rows[i]), std::get<2>(rows[i]), std::get<3>(rows[i]));
     fprintf(out, "\n");
+    // Top-RA on each side — the concrete decomp target. RA is the guest r[31] at write-time
+    // (jal delay-slot successor of the caller), which points inside the caller function body.
+    auto topRas = [&](const std::map<uint32_t,uint32_t>& ras) {
+      std::vector<std::pair<uint32_t,uint32_t>> v(ras.begin(), ras.end());
+      std::sort(v.begin(), v.end(), [](auto& x, auto& y){ return x.second > y.second; });
+      return v;
+    };
+    auto ra_a = topRas(r.a.ras), ra_b = topRas(r.b.ras);
+    fprintf(out, "                A-ras:");
+    for (size_t i = 0; i < 3 && i < ra_a.size(); i++) fprintf(out, " 0x%08X×%u", ra_a[i].first, ra_a[i].second);
+    if (ra_a.empty()) fprintf(out, " (none)");
+    fprintf(out, "\n                B-ras:");
+    for (size_t i = 0; i < 3 && i < ra_b.size(); i++) fprintf(out, " 0x%08X×%u", ra_b[i].first, ra_b[i].second);
+    if (ra_b.empty()) fprintf(out, " (none)");
+    fprintf(out, "\n");
     if (++reals >= 20) { fprintf(out, "  … (%d more REAL bytes; scope your BYTETRACE range tighter)\n", nReal - reals); break; }
   }
 }

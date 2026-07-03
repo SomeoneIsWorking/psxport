@@ -73,7 +73,7 @@ void beh_prng_velocity_machine(Core* c) {
    c->mem_w8(s1 + 0x0d, 0);
    uint32_t t = c->mem_r32(0x800ecf80u);
    c->mem_w32(s1 + 0x3c, t);                      // node[0x3c] = mem[0x800ecf80] (jal delay slot)
-   c->r[4] = s1; c->r[5] = 0x8015c808u; c->r[6] = 1; c->engine.graphicsBind.setGeom();   // FUN_80077B38(node, 0x8015C808, 1) — native
+   c->r[4] = s1; c->r[5] = 0x8014c808u; c->r[6] = 1; c->engine.graphicsBind.setGeom();   // FUN_80077B38(node, 0x8014C808, 1) — native (recomp: lui 0x8015 + addiu -14328 = 0x8014C808)
    c->mem_w32(s1 + 0x2c, 0x13d20000u);
    uint16_t v1 = c->mem_r16(s1 + 0x2e);
    c->mem_w32(s1 + 0x30, 0xf7e00000u);
@@ -337,7 +337,7 @@ void beh_prng_velocity_machine(Core* c) {
  L7c7c: {                                          // node[5]==3
    uint32_t r = call0(c, 0x8005308cu);               // FUN_8005308C()
    if (r == 0) goto Lret;
-   call3(c, s1, 0, 0x80158574u, 0x80040cdcu);        // FUN_80040CDC(node, 0, 0x80158574)
+   call3(c, s1, 0, 0x80148574u, 0x80040cdcu);        // FUN_80040CDC(node, 0, 0x80148574) — recomp: lui 0x8015 + addiu -31372 = 0x80148574
    uint32_t n5 = c->mem_r8(s1 + 5);
    c->mem_w8(s1 + 0x70, (uint8_t)s0);                // node[0x70] = s0 (== 2)
    c->mem_w8(s1 + 5, (uint8_t)(n5 + 1));
