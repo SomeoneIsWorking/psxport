@@ -32,7 +32,7 @@ from decode import decode
 # recomp identity and re-emits when the stamp on disk (generated/.recomp_version) differs, so a stale
 # generated/ on another box (which an input-content hash alone failed to catch — a box can build a
 # self-consistent-but-outdated set) is forced to regenerate. Date + a per-day counter; keep it terse.
-RECOMP_VERSION = "2026-07-04.1"
+RECOMP_VERSION = "2026-07-04.2"
 
 R = lambda n: f"c->r[{n}]"
 
@@ -1016,6 +1016,13 @@ def main():
         #     mid-function labels and did NOT emit function entries; a runtime dispatch to them then
         #     recomp-MISSes via FUN_8003CCA4's switch default. Latent until the task0 stack-leak fix
         #     (later-286) let free-roam run long enough to render the object that carries this handler.
+        # --- Mid-function COROUTINE RESUME target inside the yield primitive FUN_80051F80. When a
+        #     task calls FUN_80051F80 to yield, the substrate scheduler captures ra = the instruction
+        #     AFTER `jal 0x80080880` inside 51F80 (i.e. 0x80051FA4). Resuming the coroutine dispatches
+        #     that ra as a function entry, but 0x80051FA4 is a mid-function label — not naturally in
+        #     the fn set. Seed it so a resume-target dispatch has a body to enter. Surfaced by SBS
+        #     gameplay-mode f0 fresh-entry rec_coro_run(0x8010649C) → yield → resume-miss.
+        0x80051FA4,
         0x8003D5CC,  # FUN_8003CCA4/FUN_8003D584 perobj render sub-handler (switch case target)
         0x8003D8AC,  # FUN_8003CCA4/FUN_8003D584 perobj render sub-handler (switch case target) — the observed miss
         # --- native-override targets: seed so the func_<addr> wrapper exists and
@@ -1055,7 +1062,11 @@ def main():
     SHARDS = max(1, int(os.environ.get("PSXPORT_SHARDS", "8")))
     # NOTE: --overlays is NOT passed to the MAIN module's emit_module anymore (no `ov_dir`). The old
     # overlay_funcs() seeding (resident fns the overlays jal into) is still useful, so keep it:
-    src_files = emit_module(exe, out_dir, MAIN_NAMES, seeds, ov_dir, limit, SHARDS)
+    # Mid-function re-entry seeds — an entry inside another function whose body must fall through
+    # into the seed (not `return`). Currently just the yield-primitive resume point 0x80051FA4.
+    MAIN_REENTRY = {0x80051FA4}
+    src_files = emit_module(exe, out_dir, MAIN_NAMES, seeds, ov_dir, limit, SHARDS,
+                            reentry=MAIN_REENTRY)
 
     # The disc's boot stub (SCUS_944.54): the real PSX entry — draws SCEA, then LoadExec's MAIN.
     # It overlaps MAIN.EXE's address space, so it is emitted as a SEPARATE module (STUB_NAMES) with

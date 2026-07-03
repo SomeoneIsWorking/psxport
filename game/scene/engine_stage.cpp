@@ -1600,6 +1600,31 @@ void Engine::startBinStage() {
   //   writes + dispatches makes CdSearchFile push its own frames from the substrate's sp = matching
   //   scratch addresses. Safety cite (audit 2026-07-04): grep of 0x801FE7xx..0x801FEAxx = 0 PC
   //   readers — stack scratch is dynamic function-local; no code reads it by absolute address.
+  // The substrate task-0 body 0x8010649C prologue does:
+  //   sp -= 456
+  //   init RECT struct at sp+400..sp+407 = {x=944, y=256, w=16, h=1}
+  //   save s0..s4/ra at sp+432..sp+452
+  //   LoadImage(RECT*=sp+400, src=0x80106878)       — a 16x1 pixel strip at VRAM(944,256)
+  //   DrawSync(0)
+  //   [then the CdSearchFile file-table loops]
+  //
+  // GAME LOGIC (both paths): the 16x1 VRAM upload IS real content — the game needs it in VRAM
+  // regardless of SBS mode. Port it via Asset::uploadImage (== FUN_80081218 already RE'd) reading
+  // the RECT from a compact temp buffer + the pixel data straight from START.BIN's baked buffer.
+  //
+  // FAITHFUL-only: mimic the substrate's guest-sp allocation so the subsequent CdSearchFile
+  // dispatch's stack pushes land at addresses matching B's substrate — the CdSearchFile substrate
+  // uses this same guest stack, so aligning sp aligns its scratch region. Register spills at
+  // sp+432..452 reproduce the substrate's callee-save writes. Safety cite (audit 2026-07-04): grep
+  // of 0x801FE7xx..0x801FEAxx = 0 PC readers — the stack scratch below sp is dynamic function-
+  // local memory; no code reads it by absolute address.
+  //
+  // KNOWN RESIDUAL: LoadImage's and DrawSync's substrate bodies push their own callee-saved regs +
+  // args on the guest stack (~164 B) via a libgs fn-ptr chain that dispatches into overlay code
+  // not yet resident (miss at 0x80111A84). The native uploadImage below writes to native VRAM (not
+  // guest RAM) so those 164 B of stack scratch remain un-matched in SBS gameplay-mode. No game-
+  // state effect (region is below-sp dead memory) but SBS still flags — see docs/findings/sbs.md.
+  static constexpr uint32_t kStartBinLoadImageSrc = 0x80106878u;   // baked pixel data in START.BIN
   const uint32_t saved_sp = c->r[29];
   uint32_t cdlfile_buf_base = 0;
   if (faithful) {
@@ -1614,11 +1639,21 @@ void Engine::startBinStage() {
     c->mem_w32(c->r[29] + 444, c->r[19]);
     c->mem_w32(c->r[29] + 448, c->r[20]);
     c->mem_w32(c->r[29] + 452, c->r[31]);
-    // Note: substrate ALSO calls FUN_80081218 (LoadImage) and FUN_80080F6C (DrawSync) here — both
-    // go through libgs function-pointer tables that may reach into overlay code not resident yet
-    // (miss at 0x80111A84 observed). Skipping them costs ~135 bytes of un-matched stack scratch
-    // below sp; safety cite covers that range too (0 PC readers of absolute stack addresses).
-    cdlfile_buf_base = c->r[29] + 16;                          // per-iter buffer window: sp+16..
+    cdlfile_buf_base = c->r[29] + 16;                          // per-iter CdlFILE buffer: sp+16..
+    // Native VRAM upload from within the sp'd region so the RECT struct is where the substrate
+    // built it. Same effect as substrate's FUN_80081218(RECT*, src): the 16x1 strip lands at
+    // VRAM(944, 256). DrawSync(0) is a no-op in our synchronous GPU model.
+    asset.uploadImage(c->r[29] + 400, kStartBinLoadImageSrc);
+  } else {
+    // PC path: build a compact 8-byte RECT in scratchpad (unused header slot 0x1F800008..F is fine
+    // as a scratch buffer here — pre-render, no OT active), upload from it. Skip the sp mimicry
+    // since without CdSearchFile dispatch (PC uses native ISO9660) there's no substrate call chain
+    // to align guest stacks with.
+    c->mem_w16(0x1F800008u + 0, 944);
+    c->mem_w16(0x1F800008u + 2, 256);
+    c->mem_w16(0x1F800008u + 4, 16);
+    c->mem_w16(0x1F800008u + 6, 1);
+    asset.uploadImage(0x1F800008u, kStartBinLoadImageSrc);
   }
 
   auto resolve = [&](uint32_t iter, uint32_t name_ptr, uint32_t* lba, uint32_t* size) {
