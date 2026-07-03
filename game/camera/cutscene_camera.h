@@ -25,12 +25,16 @@
 #include <stdint.h>
 
 // Debug-teleport hook (REPL `tp X Y Z`): moves Tomba's MASTER position so the whole follow pipeline
-// tracks it naturally. Kept as free functions — they are REPL glue, not camera behaviour.
-void cam_teleport(int x, int y, int z);
-void cam_teleport_off(void);
+// tracks it naturally. Free-function REPL glue, backed by per-Core state on CutsceneCamera below.
+void cam_teleport(struct Core* c, int x, int y, int z);
+void cam_teleport_off(struct Core* c);
 
 class CutsceneCamera {
 public:
+  // Note: pending-teleport state (mCamTpPending / mCamTpX/Y/Z) lives on `Engine` instead — CutsceneCamera
+  // is instantiated per-call, so its own members can't persist across the REPL set → next-frame consume
+  // boundary. Engine is per-Core and outlives every CutsceneCamera instance.
+
   // GLOBAL camera/scene state block (master position, heading, mode selectors). One per game.
   static constexpr uint32_t G = 0x800E7E80u;
   // SCRATCHPAD camera scratch block: follow accumulators + the composed view matrix. Named offsets from

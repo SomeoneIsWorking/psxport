@@ -42,6 +42,13 @@ public:
   // Back-pointer set once by Core's constructor (same pattern as ScreenFade::core).
   Core* core = nullptr;
 
+  // One-shot debug camera-teleport (REPL `tp X Y Z`). CutsceneCamera is instantiated per-call so
+  // its own members can't persist across the set/consume boundary; live on Engine (per-Core) instead.
+  // Consumed + cleared by CutsceneCamera::trackXZ. Was file-scope s_tp_pending / s_tp_x/y/z; cross-Core
+  // shared meant an `@a tp X Y Z` teleported BOTH SBS cores (deglobalize 2026-07-03).
+  bool     mCamTpPending = false;
+  int32_t  mCamTpX = 0, mCamTpY = 0, mCamTpZ = 0;
+
   // ── Scene subsystem instances owned by Engine ─────────────────────────────────────
   // Callers reach them as `c->engine.sceneTransition.method(args)`.
   SceneTransition sceneTransition;   // area-mask trigger + sub-scene swap handshake
