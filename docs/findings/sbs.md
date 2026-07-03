@@ -1,5 +1,25 @@
 # Findings — SBS dual-core compare harness (PSXPORT_SBS)
 
+## Slip #1 residual CLOSED — defer native DEMO substate 5 (LEAVE→GAME) by one tick to match coro yield cost (2026-07-03, 550178a)
+- **finding:** After START.BIN cadence match (block below) aligned boot to f8, the DEMO→GAME transition still slipped one tick. STAGETRACE snapshot pre-fix: at f26 A entry=0x8010637C sm48=5 (native_start_stage rewrote task-0 entry synchronously inside the demo.frame() dispatch of substate 5); B still at entry=0x801062E4, catching up at f27. Both cores had reached sm[0x48]==5 together at f25 — the drift was entirely in "how long the LEAVE-GAME substate takes to actually flip the entry pointer."
+- **root cause:** Native `demo.frame()` at sm[0x48]==5 dispatches native_start_stage inline in one scheduler tick. Coro of 0x801062E4 substate 5 in the recomp body yields at least once through FUN_80051f80 before completing, so B's entry rewrite lands one tick LATER than A's. Same class as the closed Slip #2 (SOP fieldMode case 0 yield vs native inline).
+- **fix (mirror sop_field_step pattern):** New `SchedulerState.demo_leave_step[3]`. In `runtime/recomp/scheduler.cpp` DEMO native block, before calling `c->engine.demo.frame()`, read `sm[0x48]`. If it equals 5 and demo_leave_step==0, set step=1 and skip the dispatch (task saved as runnable). Next tick, actually call demo.frame() so native_start_stage runs and re-arms the step. Not applied on `demo_fresh` (prologue path) — fresh sm[0x48] is 0, never 5.
+- **evidence — STAGETRACE post-fix:** f25..f27 both cores tick sm state in lockstep:
+  ```
+  f25 A entry=801062E4 sm48=5 | B entry=801062E4 sm48=5    (both reached LEAVE)
+  f26 A entry=801062E4 sm48=5 | B entry=801062E4 sm48=5    (A DEFERRED — was 8010637C)
+  f27 A entry=8010637C sm48=5 | B entry=8010637C sm48=5    (both rewrite same tick)
+  ```
+- **evidence — BYTETRACE on the target-#3 range 0x800EE0DC..0x800EE10D:**
+  ```
+  before: classified 41 CLEAN, 5 PHASE,           3 REAL
+  after:  classified 46 CLEAN, 1 PHASE, 1 SOFT-PHASE, 1 REAL
+  ```
+  The ONE-SIDED PHASE bytes at 0x800EE0DE and 0x800EE108 (the ones the handoff named as target #3's residual) collapsed to CLEAN/SOFT-PHASE — those specific per-node animation-timer bytes were driven by the DEMO→GAME 1-tick drift.
+- **ramdiff @f218 unchanged at 1880 B** (~629 spans dominated by other pool ranges). Slip #1 owned only the specific spawn-node animation-timer bytes surfaced in BYTETRACE, not the whole ramdiff. The remaining REAL byte in the range (0x800EE104, val=0x18 A×4 B×2, A-ras=DEAD0000/native × 70 vs B-ras=8007A964/recomp × 34) matches the target-#2 architectural signature (block below): same values, different write cadence between native and PSX render walks. Not a scheduling drift; not this target's shape.
+- **workflow lesson:** the target-#3 PHASE bytes were labeled "scheduling drift, not transcription" (correct call from the handoff) — the primitive switch away from BYTETRACE-and-decomp toward STAGETRACE-and-scheduler-deferral was the right move. STAGETRACE at =2 showed the specific slip tick directly without needing a JSONL diff tool; the raw stderr trace of f22..f36 was enough to name it.
+- **refs:** runtime/recomp/scheduler.cpp DEMO native block (demo_leave_step guard around `c->engine.demo.frame()`), runtime/recomp/game.h SchedulerState.demo_leave_step[3], $CLAUDE_JOB_DIR/tmp/st_fixed.log (post-fix STAGETRACE), $CLAUDE_JOB_DIR/tmp/bt_after.log (post-fix BYTETRACE). Target #3 = CLOSED.
+
 ## Port-review bug taxonomy — three named classes of native-transcription defect (2026-07-03)
 Classes surfaced so far by the SBS BYTETRACE pipeline. When reviewing a native `beh_*` or ov subsystem file, actively hunt for these three shapes — they read as plausible C but each has a signature symptom:
 
