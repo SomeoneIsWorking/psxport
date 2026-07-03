@@ -142,6 +142,12 @@ public:
   int      mWwHit   = 0;            // bit0 = A wrote, bit1 = B wrote
   uint32_t mWwVa = 0, mWwVb = 0;
   char     mWwBtA[4096] = {0}, mWwBtB[4096] = {0};
+  // Per-core call-site metadata captured on each armed store during the rewind. Used to auto-diagnose
+  // the divergent call PATH (differing pc/ra names the split site) without hand-eyeballing the log.
+  uint32_t mWwPcA = 0,  mWwPcB = 0;
+  uint32_t mWwRaA = 0,  mWwRaB = 0;
+  uint32_t mWwSpA = 0,  mWwSpB = 0;
+  uint32_t mWwCountA = 0, mWwCountB = 0;   // #stores per core landing on mWwAddr in the rewind frame
 
   // ---- pre-step snapshot (for one-frame rewind on divergence) ----
   // Fixes the "wwatch arms AFTER the divergent frame already ran" defect: we snapshot both cores'
@@ -392,6 +398,8 @@ void Sbs::Impl::rewindAndArm(uint32_t addr) {
   sbs_restore_core(mB->core, mPreRamB, mPreSpadB, mPreRegsB, mPrePcB);
   mWwAddr = (addr & ~3u) | 0x80000000u; mWwArmed = true; mWwPersist = true;
   mWwHit = 0; mWwVa = mWwVb = 0; mWwBtA[0] = mWwBtB[0] = 0;
+  mWwPcA = mWwPcB = mWwRaA = mWwRaB = mWwSpA = mWwSpB = 0;
+  mWwCountA = mWwCountB = 0;
   mA->core.wwatch_arm(addr & ~3u, (addr & ~3u) + 4);
   mB->core.wwatch_arm(addr & ~3u, (addr & ~3u) + 4);
   mRewindActive = true;
@@ -652,12 +660,20 @@ void Sbs::Impl::storeCb(Core* c, uint32_t a, uint32_t v) {
   }
   if (!mWwArmed || (a & ~3u) != (mWwAddr & ~3u)) return;
   int which = (mB && c == &mB->core) ? 1 : 0;
-  if (which) { mWwVb = v; capBt(c, mWwBtB, sizeof mWwBtB); }
-  else       { mWwVa = v; capBt(c, mWwBtA, sizeof mWwBtA); }
+  if (which) { mWwVb = v; capBt(c, mWwBtB, sizeof mWwBtB);
+               mWwPcB = c->pc; mWwRaB = c->r[31]; mWwSpB = c->r[29]; mWwCountB++; }
+  else       { mWwVa = v; capBt(c, mWwBtA, sizeof mWwBtA);
+               mWwPcA = c->pc; mWwRaA = c->r[31]; mWwSpA = c->r[29]; mWwCountA++; }
   mWwHit |= (1 << which);
   if (mWwPersist) {  // PREWATCH's continuous logging — per-store attribution to A vs B
-    fprintf(stderr, "[sbs-ww] f%u %c wrote [%08X]=%08X (pc=%08X stage=%08X) [c=%p mA=%p mB=%p]\n",
-            mFrame, which ? 'B' : 'A', a, v, c->pc, c->mem_r32(0x801fe00c),
+    // pc = c->pc (fn entry set by the last wrapper — often STALE, reflecting the last jal-callee).
+    // ra = c->r[31] (guest return address) — points into the CALLER just past its jal, so it names
+    //      the true call site regardless of stale c->pc. If ra differs A vs B for the same address,
+    //      the two cores took different call paths to reach the write — that names the upstream
+    //      divergence without another PREWATCH chase.
+    // sp = c->r[29] — for the guest-stack backtrace we already dump on real divergence.
+    fprintf(stderr, "[sbs-ww] f%u %c wrote [%08X]=%08X (pc=%08X ra=%08X sp=%08X stage=%08X) [c=%p mA=%p mB=%p]\n",
+            mFrame, which ? 'B' : 'A', a, v, c->pc, c->r[31], c->r[29], c->mem_r32(0x801fe00c),
             (void*)c, (void*)&mA->core, (void*)&mB->core);
     // Peek AFTER the actual host write, so we see the byte the store LANDED in. (mem_w8 does wwatch_check
     // BEFORE the write, so we peek RIGHT NOW = pre-store, but the write is imminent one-line below.)
@@ -1260,6 +1276,48 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
       if (divergent || !mWwPersist) {
         fprintf(stderr, "[sbs] *** WRITE-SITE caught 0x%08X (A=%08X B=%08X, mask=%d) at frame %u ***\n",
                 mWwAddr, mWwVa, mWwVb, mWwHit, mFrame);
+        // Auto-diagnosis: compare per-core call-site metadata captured during the rewind. Reports the
+        // most likely CLASS of divergence so the operator doesn't have to eyeball the raw wwatch log.
+        //  - VALUE-MISMATCH  : both cores wrote different values via the SAME call path (same pc + ra).
+        //                       Root cause is upstream input state; probe further with BYTETRACE on the
+        //                       fields that fed this branch.
+        //  - CALLSITE-DIVERGE: cores wrote from different guest ra's — they took different call paths
+        //                       to reach the store. The ra pair NAMES the split. `python3 tools/disas.py
+        //                       <ra_a> 4` / `<ra_b>` shows the calling instructions.
+        //  - FN-DIVERGE      : cores wrote from different containing fns (differing pc). Same shape as
+        //                       CALLSITE-DIVERGE but c->pc is the fn ENTRY (or stale from the last jal),
+        //                       so it names the leaf recomp function context, not the caller.
+        //  - COUNT-MISMATCH  : one core wrote the address more times than the other in the rewind frame
+        //                       — a loop / dispatch that fires more iterations on one side. Almost
+        //                       always a state-machine or object-list divergence upstream.
+        //  - ASYMMETRIC      : only one core wrote in the rewind frame (mWwHit != 3). The other core's
+        //                       path never touches this address this tick; look at the frame BEFORE to
+        //                       find why the writer's caller was taken (state, flag, spawn count).
+        fprintf(stderr, "[sbs] === auto-diagnosis ===\n");
+        fprintf(stderr, "[sbs]   A: pc=0x%08X ra=0x%08X sp=0x%08X val=0x%08X hits=%u\n",
+                mWwPcA, mWwRaA, mWwSpA, mWwVa, mWwCountA);
+        fprintf(stderr, "[sbs]   B: pc=0x%08X ra=0x%08X sp=0x%08X val=0x%08X hits=%u\n",
+                mWwPcB, mWwRaB, mWwSpB, mWwVb, mWwCountB);
+        auto emit_class = [&](const char* cls, const char* detail) {
+          fprintf(stderr, "[sbs]   CLASS: %s — %s\n", cls, detail);
+        };
+        if (mWwHit != 3) {
+          emit_class("ASYMMETRIC", "only one core stored this frame; look at prior frames for the flag that gates the writer's caller");
+        } else if (mWwCountA != mWwCountB) {
+          char buf[128]; snprintf(buf, sizeof buf, "A wrote %u× vs B wrote %u× — loop/dispatch runs more iterations on one core",
+                                  mWwCountA, mWwCountB);
+          emit_class("COUNT-MISMATCH", buf);
+        } else if (mWwPcA != mWwPcB || mWwRaA != mWwRaB) {
+          char buf[192]; snprintf(buf, sizeof buf,
+              "A came via ra=0x%08X pc=0x%08X; B came via ra=0x%08X pc=0x%08X. Disasm ra-8 on each to see the calling jal / branch that split.",
+              mWwRaA, mWwPcA, mWwRaB, mWwPcB);
+          emit_class(mWwPcA != mWwPcB ? "FN-DIVERGE" : "CALLSITE-DIVERGE", buf);
+        } else if (mWwVa != mWwVb) {
+          emit_class("VALUE-MISMATCH",
+              "same caller/pc, different value — upstream input state differs. BYTETRACE the fields feeding the writer's branch.");
+        } else {
+          emit_class("(no signal)", "same caller/pc/value/hits — probably filtered out earlier; investigate manually");
+        }
         if (mWwHit & 1) fprintf(stderr, "[sbs] === WRITE SITE — core A wrote 0x%08X=%08X ===\n%s",
                                 mWwAddr, mWwVa, mWwBtA[0] ? mWwBtA : "(empty)\n");
         if (mWwHit & 2) fprintf(stderr, "[sbs] === WRITE SITE — core B wrote 0x%08X=%08X ===\n%s",
