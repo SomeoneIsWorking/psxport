@@ -380,10 +380,14 @@ void Demo::stageMain() { Core* c = core;
   c->r[4] = 0; c->r[5] = 0; c->r[6] = 0;
   rec_dispatch(c, 0x8005082Cu);                // input / pad-table reset (leaf — synchronous)
 
-  // --- DEMO substate s0 (0x801063C0) run-once INIT, PC-native + SYNCHRONOUS ---
-  demo_frame_s0(c);                             // load menu page resources + advance to s1 (see below)
-  // No coro-redirect: the DEMO stage now runs as a NATIVE per-frame dispatcher (ov_demo_frame), driven
-  // by the scheduler each frame. ov_demo_stage_main runs ONCE (prologue + s0); the loop is the scheduler.
+  // SLIP #1 residual fix (docs/findings/sbs.md attack (a)): do NOT dispatch s0 here. The recomp coro
+  // of 0x801062E4 spends its FRESH iteration running the prologue only (sets sm[0x48]=0), then yields
+  // via FUN_80051F80. It dispatches s0 on its NEXT iteration. If stageMain runs demo_frame_s0 inline
+  // on fresh, native does prologue+s0 in one tick vs coro's prologue-only — putting A one tick ahead
+  // for the entire DEMO progression. Leave sm[0x48]=0 for the next scheduler tick's demo.frame() to
+  // dispatch as case 0.
+  // (The old comment claiming "ov_demo_stage_main runs ONCE (prologue + s0)" was wrong for pacing
+  //  parity — the recomp body pattern says stageMain = prologue only.)
 }
 
 // ===== DEMO per-frame NATIVE dispatcher (replaces the guest root loop @0x80106388) ==============

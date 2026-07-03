@@ -145,8 +145,12 @@ void native_scheduler_step(Core* c) {
         // would hit a stale jmp_buf and corrupt the scheduler. A yield = the substate isn't fully
         // synchronous yet (a CD load to own native+sync — the frontier); treat it as frame-done.
         if (setjmp(c->game->sched.yield_jmp) == 0) {
-          if (demo_fresh) c->engine.demo.stageMain();                // prologue + s0 (sets sm[0x48]=1)
-          c->engine.demo.frame();                                    // one frame: substate dispatch + tail
+          // Native DEMO fresh entry: stageMain does prologue ONLY (matches recomp coro's fresh iter
+          // that dispatches prologue + first substate + yield). demo.frame() then dispatches s0 in
+          // the same tick, mirroring the recomp iter's dispatch step. On resume, just frame().
+          // (docs/findings/sbs.md Slip #1 — stageMain used to also run s0, putting native ahead.)
+          if (demo_fresh) c->engine.demo.stageMain();                // prologue only (sm[0x48]=0)
+          c->engine.demo.frame();                                    // dispatches sm[0x48] substate
         } else if (cfg_dbg("demo")) {
           static int w = 0; if (!w++) fprintf(stderr, "[demo] caught a substate yield (async CD not yet "
                                                       "owned native+sync) — frontier\n");
@@ -330,6 +334,29 @@ void native_scheduler_step(Core* c) {
       continue;
     }
 
+    // ---- Native STAGE-0 START.BIN step-spread (attack (a), docs/findings/sbs.md Slip #1) ----
+    // Between the fresh startBinStage tick and the final swap-to-DEMO tick, the preload SM is stepped
+    // by Engine::stage0Advance() one step per scheduler tick, matching the recomp body of 0x8010649C's
+    // per-iteration yield cadence. entry stays at 0x8010649C until the last step's native_start_stage.
+    if (native_content && st == 2 && c->game->sched.task_started[i]
+        && c->mem_r32(base + 0xc) == 0x8010649Cu && c->game->sched.stage0_step[i] < 7) {
+      c->mem_w16(base, 4);                                        // running
+      c->mem_w32(CUR_TASK, base);
+      c->game->sched.cur_slot = i;
+      static_cast<R3000&>(*c) = c->game->sched.task_ctx[i];       // restore REGISTERS
+      c->game->sched.in_stage = 1;
+      // stage0Advance's final step (5) calls native_start_stage → scheduler_yield → longjmp here.
+      if (setjmp(c->game->sched.yield_jmp) == 0) {
+        c->engine.stage0Advance(c->game->sched.stage0_step[i]);
+      }
+      c->game->sched.in_stage = 0;
+      c->game->sched.task_ctx[i] = static_cast<R3000&>(*c);
+      // If the last step ran, native_start_stage rewrote entry to DEMO + set base=3 (fresh); leave
+      // that alone so next tick enters DEMO fresh. Else keep base=2 (runnable) for the next step.
+      if (c->mem_r32(base + 0xc) == 0x8010649Cu) c->mem_w16(base, 2);
+      continue;
+    }
+
     uint32_t resume_pc;
     int fresh = 0;
     // state==3 (restart at new entry) or state==2 on a slot with no live context (freshly
@@ -395,11 +422,17 @@ void native_scheduler_step(Core* c) {
         start = c->coro_redirect_pc ? c->coro_redirect_pc : c->r[31];
         c->coro_redirect_pc = 0;
       } else if (native_content && fresh && resume_pc == 0x8010649Cu) {
-        // Stage-0 START.BIN entry: own the file-table builder native (disc_find_file), then continue
-        // the PSX stage SM in-task. Same top-down direct-call pattern as the GAME stage above.
+        // Stage-0 START.BIN fresh entry: run the file-table build (native ISO9660 resolver), seed
+        // stage0_step=0, save regs, mark runnable, and RETURN — the preload SM will be stepped
+        // across subsequent scheduler ticks via Engine::stage0Advance to match the recomp body's
+        // per-iteration yield cadence (docs/findings/sbs.md Slip #1). Do NOT rec_coro_run the
+        // recomp body — A's recomp set is a strict subset of B's (misses 0x80051FA4 among others).
         c->engine.startBinStage();
-        start = c->coro_redirect_pc ? c->coro_redirect_pc : c->r[31];
-        c->coro_redirect_pc = 0;
+        c->game->sched.stage0_step[i] = 0;
+        c->game->sched.task_ctx[i] = static_cast<R3000&>(*c);
+        c->mem_w16(base, 2);                                    // runnable next tick
+        c->game->sched.in_stage = 0;
+        goto stage0_fresh_done;                                 // skip rec_coro_run
       }
       // (The DEMO/front-end entry 0x801062E4 is handled by the native per-frame dispatcher above,
       //  never here — it `continue`s before reaching this generic coroutine path.)
@@ -408,6 +441,7 @@ void native_scheduler_step(Core* c) {
       c->game->sched.task_started[i] = 0;
     }
     c->game->sched.in_stage = 0;
+    stage0_fresh_done:;   // skip target from the native START.BIN fresh branch above
   }
   static_cast<R3000&>(*c) = loop;             // restore the frame-loop REGISTERS (shared RAM untouched)
 }

@@ -692,7 +692,7 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
       // Signature includes ALL logged fields so any change triggers a log line.
       uint32_t aSig = aE ^ (aS_<<1) ^ (a48<<4) ^ (a4a<<8) ^ (a4c<<12) ^ (a4e<<16) ^ (a50<<20) ^ (aCut<<24) ^ (aI34<<26);
       uint32_t bSig = bE ^ (bS_<<1) ^ (b48<<4) ^ (b4a<<8) ^ (b4c<<12) ^ (b4e<<16) ^ (b50<<20) ^ (bCut<<24) ^ (bI34<<26);
-      bool verbose_window = (stagetrace >= 2) && (mFrame >= 22 && mFrame <= 36);
+      bool verbose_window = (stagetrace >= 2) && ((mFrame >= 22 && mFrame <= 36) || mFrame <= 12);
       if (verbose_window || aSig != aP || bSig != bP) {
         fprintf(stderr, "[stagetrace] f%u A entry=%08X st=%u sm48=%u/4a=%u/4c=%u/4e=%u/50=%u cut=%u i34=%u | B entry=%08X st=%u sm48=%u/4a=%u/4c=%u/4e=%u/50=%u cut=%u i34=%u\n",
                 mFrame, aE, aS_, a48, a4a, a4c, a4e, a50, aCut, aI34,

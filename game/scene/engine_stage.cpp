@@ -1447,18 +1447,23 @@ static void read_guest_str(Core* c, uint32_t addr, char* out, int cap) {
 // asset-loading domain as ov_load_texgroup/ov_unpack_group. See asset.h for the two
 // cross-TU-callable entry points used below (preload_texgroup, preload_stage1).
 
-// Stage-0 START.BIN state machine (overlay 0x80106728), PC-native + synchronous. Original loop yields
-// one frame per state; synchronous, we run them in order then transition task0 to DEMO and yield (so
-// the slot keeps its state=3 restart, exactly like the GAME stage transition — a plain return would
-// hit the scheduler's task-ended path and free the slot before the restart).
+// Stage-0 START.BIN state machine (overlay 0x80106728), PC-native. Recomp body of 0x8010649C is a
+// per-iteration yield loop over 4 sm[0x48] states (see decomp of ov_start_gen_8010649C in
+// generated/ov_start_shard_0.c). We previously ran all states inline in ONE tick — that collapsed
+// ~7 recomp ticks into 1, producing the Slip #1 residual (docs/findings/sbs.md). Now split via
+// Engine::stage0Advance() which is called by the scheduler on each subsequent tick with a per-task
+// step counter, yielding after each step so native matches coro cadence.
+//
+// This static wrapper stays for the sole remaining inline path (native_task0_bootstrap in the
+// early boot init — before the scheduler is spinning); the scheduler path now uses stage0Advance.
 static void native_stage0_sm(Core* c) {
   uint32_t task = c->mem_r32(CUR_TASK);
   c->mem_w16(task + 0x48, 0);
   c->mem_w16(task + 0x4a, 0);
-  c->engine.asset.preloadTexgroup(0, 0);    // state 0: index/asset preload
-  c->engine.asset.preloadStage1();          // state 1: SWDATA + DAT + cel/sprite VRAM build
-  native_start_stage(c, 1);           // state 3: switch task0 -> stage 1 (DEMO 0x801062e4), state=3
-  scheduler_yield(c);                       // yield (longjmp to the scheduler); never returns
+  c->engine.asset.preloadTexgroup(0, 0);
+  c->engine.asset.preloadStage1();
+  native_start_stage(c, 1);
+  scheduler_yield(c);
 }
 
 // Stage-0 START.BIN entry (0x8010649c): own the file-table BUILDER PC-native, then hand the small
@@ -1501,6 +1506,34 @@ void Engine::startBinStage() { Core* c = core;
     if (disc_find_file(name, &lba, &size)) c->mem_w32(S.dest, lba);   // XA stream LBA (only LBA stored)
     else fprintf(stderr, "[start.bin] Not found file name %s\n", name);
   }
-  fprintf(stderr, "[start.bin] file table built (native); running stage-0 preload SM (native + sync)\n");
-  native_stage0_sm(c);                // own the 4-state preload + transition to DEMO; yields (no return)
+  uint32_t task = c->mem_r32(CUR_TASK);
+  c->mem_w16(task + 0x48, 0);          // seed sm[0x48]=0 (recomp state 0 entry)
+  c->mem_w16(task + 0x4a, 0);
+  fprintf(stderr, "[start.bin] file table built (native); preload SM stepped across ticks via stage0Advance\n");
+  // No native_stage0_sm here anymore — the scheduler now steps the preload SM across ticks to match
+  // the recomp body's per-iteration yield cadence (docs/findings/sbs.md Slip #1). Returns; the
+  // scheduler will yield and re-enter via the stage0Advance branch on subsequent ticks.
+}
+
+// stage0Advance: one step of the STAGE-0 preload SM. Called by the scheduler on each tick after the
+// file-table build. Matches recomp body of 0x8010649C's per-iteration yield loop (4 sm[0x48] states,
+// each preceded by FUN_80051F80). Native's preloadTexgroup / preloadStage1 run instantly, so we pace
+// with dummy yields to match B's coro cadence: measured B path = 8 ticks total (fresh + 7 advance).
+// Sizing landed empirically from stagetrace: fresh tick + 6 advances left A one tick short (entered
+// DEMO at f7 vs B at f8), so 7 advances (steps 0..6) gives an 8-tick native path matching coro.
+int Engine::stage0Advance(uint8_t& step) { Core* c = core;
+  switch (step) {
+    case 0: c->engine.asset.preloadTexgroup(0, 0); break;                          // recomp sm==0
+    case 1: /* padding: recomp FUN_80044BD4(0x800CE858) waits ~2 ticks */ break;
+    case 2: c->engine.asset.preloadStage1(); break;                                // recomp sm==1
+    case 3: /* padding: recomp FUN_80044BD4(0x800CD54C) waits ~2 ticks */ break;
+    case 4: /* recomp sm==2 (no-op advance) */ break;
+    case 5: /* extra padding to match measured 8-tick coro total (stagetrace-calibrated) */ break;
+    case 6:                                                                        // recomp sm==3
+      native_start_stage(c, 1);        // swap task0 to DEMO — rewrites task+0xc, sets state=3
+      scheduler_yield(c);              // never returns; longjmp to scheduler
+      return 0;                        // unreachable
+  }
+  step++;
+  return 1;   // more steps remain
 }

@@ -153,9 +153,19 @@ public:
   // startBinStage: task-0's START.BIN file-table builder (native ISO9660 resolver in place of the
   // PSX cooperative loader FUN_80044BD4). Populates the per-stage LBA/size tables at
   // 0x800BE118 (25 entries), 0x800BE1E0 (3 entries), 0x800BE0F0 (5 entries) + three XA scratchpad
-  // slots, then hands off to native_stage0_sm (the stage-0 preload SM). Called by the scheduler at
-  // task-0 boot (runtime/recomp/scheduler.cpp). Was ov_start_bin_stage.
+  // slots. Called by the scheduler at task-0 boot (runtime/recomp/scheduler.cpp) on FRESH entry;
+  // the stage-0 preload SM is stepped across subsequent scheduler ticks via stage0Advance() so
+  // native matches the recomp body's per-iteration yield cadence (docs/findings/sbs.md Slip #1).
   void startBinStage();
+
+  // stage0Advance: run ONE step of the native STAGE-0 preload state machine, matching the recomp
+  // body of 0x8010649C's per-iteration yield loop (see docs/findings/sbs.md Slip #1). Called by
+  // the scheduler on each subsequent tick after startBinStage() ran the file-table build (which
+  // consumes step 0). Steps 1..5 spread preloadTexgroup + preloadStage1 + swap-to-DEMO across
+  // ticks so A's cadence matches B's coro path. The FINAL step (5) calls native_start_stage(1)
+  // which rewrites task+0xc to DEMO and yields; steps 1..4 each `scheduler_yield` to end the tick.
+  // Returns 1 while more steps remain, 0 when the swap has landed.
+  int stage0Advance(uint8_t& step);
 
   // ── ov_field_frame direct children (progressive class-ification) ──────────────────────────
   // areaModeDispatch: the 22-way area-mode jump-table dispatcher at guest 0x8001CAC0. Reads the

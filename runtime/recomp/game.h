@@ -188,6 +188,20 @@ struct SchedulerState {
   Coro*   coro[3] = {};          // per-slot fiber (heap; nullptr = no live full-PSX task on this slot)
   int     cur_is_coro = 0;       // 1 while a Coro task is running -> switch yields via the fiber
 
+  // ---- Native START.BIN (0x8010649C) step-spread (attack (a), docs/findings/sbs.md Slip #1) ----
+  // The recomp body of 0x8010649C is a per-iteration yield loop over 4 sm[0x48] states; each state's
+  // FUN_80044BD4 wait costs 1..2 ticks on B's coro. Native ran them all inline in ONE tick, collapsing
+  // ~7 recomp ticks into 1 → the +1-frame residual that reasserts as Slip #1. Fix: split native work
+  // over the same tick count via this per-task step counter; the scheduler re-enters an "advance"
+  // branch each tick with stage0_step incremented, matching the recomp loop's cadence.
+  //   step 0-1: preloadTexgroup(0,0) — matches recomp sm[0x48]==0 FUN_80044BD4(0x800CE858)
+  //   step 2-3: preloadStage1()      — matches recomp sm[0x48]==1 FUN_80044BD4(0x800CD54C)
+  //   step 4  : (no-op)              — matches recomp sm[0x48]==2 (advance-only)
+  //   step 5  : native_start_stage(1)— matches recomp sm[0x48]==3 FUN_80052078(1) (swap to DEMO)
+  // Steps 0/1 and 2/3 pair up to match the ~2-tick coro cost per FUN_80044BD4 wait; step 5 is where
+  // the entry finally rewrites to DEMO (and iter ends via scheduler_yield on the swap).
+  uint8_t stage0_step[3] = {};   // per-task step counter for the native START.BIN step-spread
+
   // Resident overlay per OVERLAP SLOT (0x80106228 stage / 0x80108F9C mode / 0x8018A000 area), recorded
   // by overlay_note_load() at LOAD time — when the freshly-written image still matches its raw .BIN
   // signature, BEFORE the game mutates its header pointer table at runtime. The router routes by this
