@@ -31,8 +31,20 @@
 //                        bounds using scratch 0x1AA/0x1AC (tile origin X/Z), 0x1AE/0x1B0 (tile span),
 //                        0x1C8 (tile-record ptr), 0x1FE (last-counterA byte). Also reads Actor::counterA
 //                        and may call 0x800490E4 / 0x80048ECC / 0x80048FC4 on a threshold miss.
-//                      * FUN_80049968(counterA) — per-type table lookup keyed by Actor::counterA;
-//                        populates scratch 0x1CC (record + 0x14 ptr) + 0x1D0 (record + halfword-indexed).
+//                      * FUN_80049968(counterA) — per-type table lookup keyed by Actor::counterA.
+//                        RE'd fully (disas 0x80049968..0x800499E4 — pure address arithmetic, no calls,
+//                        no branches). Shape: base=*(u32)0x1F8001C8 (per-area tile-pool root),
+//                        record=base+*(u16)(base+counterA*2)*2 (2-level halfword indirection),
+//                        then publishes FIVE sub-pointers into the tile workspace:
+//                            0x1F8001CC = record + 20               (record TAIL, after 20-byte hdr)
+//                            0x1F8001D0 = record + *(u16)(rec+12)*2
+//                            0x1F8001D4 = record + *(u16)(rec+14)*2
+//                            0x1F8001D8 = record + *(u16)(rec+16)*2
+//                            0x1F8001DC = record + *(u16)(rec+18)*2
+//                        Consumed by FUN_80047CBC (uses 0x1CC + 0x1D0), FUN_80048034 (0x1D8), and
+//                        the command-stream pump (0x1E0/0x1E4 also loaded from record). Cleanest
+//                        port candidate of the tile-move leaves — will land as a static helper on
+//                        the future `class TileMove` when the parent (FUN_8004766C) is ported.
 //                      * FUN_80047CBC — tile-collision predicate; on 0 skip the rest and return.
 //                      * When positive: pump a command/stream at *(0x1F8001E0) whose halfword @0 masks
 //                        with 0x4000 — advances counterA (byte @[stream+0]) while set. Then call

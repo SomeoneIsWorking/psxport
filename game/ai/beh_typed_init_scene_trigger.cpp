@@ -23,9 +23,6 @@
 // records both consumers.
 //
 // STILL OPAQUE (rec_dispatch by address until each is RE'd on its own arc):
-//   - FUN_8007712C   the 5-way bounds-cull body dispatched by Actor::boundsCull (jumptable at
-//                    0x80016CC0 on scratchpad byte *(0x1F800084); mode 4 area override for cull
-//                    mode 2). Thin wrapper FUN_8007778C is now native.
 //   - (FUN_80040B48  SCENE-EVENT-ARM — NOW NATIVE via SceneEvents::arm on Engine (scene_events.cpp).
 //                    Bundles the FUN_80040A58 size-class helper as SceneEvents::classSize (public so
 //                    the multiple substrate callers of func_80040A58 also share it). Six callsites
