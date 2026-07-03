@@ -107,6 +107,31 @@ void scheduler_yield(Core* c) {
   longjmp(c->game->sched.yield_jmp, 1);   // native path: unwind to the scheduler's setjmp
 }
 
+// TODO(native-task-handler-registry): the main loop below currently checks the task-obj+0xc entry
+// PC against ~11 hard-coded addresses across DEMO / SOP-area-load / GAME / GAME-coop /
+// STAGE-0-step / STAGE-0-fresh clusters — each with its own state fields on SchedulerState
+// (demo_native[], game_native[], game_coop[], stage0_step[], demo_leave_step[], sop_field_step[])
+// and its own setjmp/task_ctx bookkeeping. Design for the follow-up (see scheduler_handler.h
+// which was drafted then removed pending this pass):
+//
+//   class NativeTaskHandler { virtual uint32_t entryPc() = 0; virtual int run(Core*, int, bool fresh) = 0; };
+//
+//   * Concrete handlers: Engine::demoHandler / gameStageHandler / sopAreaLoadHandler /
+//     startBinHandler — each wraps its existing scheduler stanza verbatim + owns the per-slot
+//     state it currently reads from SchedulerState.
+//   * Engine builds a small registry (fixed-size table keyed by entry PC) at construction.
+//   * native_scheduler_step becomes: read entry PC, lookup handler; if match run it; else fall
+//     through to Coro-fiber substrate path.
+//   * Under mIsFaithful, the fiber-path gate at line ~316 (`if (!native_content)`) becomes
+//     `if (!native_content || no_handler_for_entry_pc)` — this is what unblocks A's task-1
+//     (0x80044F58 preload wake) via fiber, letting native_task_spawn (above) actually write
+//     state=2 and have the scheduler dispatch task-1's substrate. sync_preload_completion_shim
+//     (engine_stage.cpp) then loses its state=0 override + done_flag=1 set.
+//   * SBS snap/restore of SchedulerState needs the per-handler state relocated (or kept in
+//     SchedulerState and just READ from handlers). The former is cleaner but touches sbs.cpp
+//     SbsSchedSnap; the latter is smaller.
+//
+// The primitive port above (native_task_spawn) is directly usable once the registry lands.
 // One scheduler pass over the 3 task slots (replaces FUN_80051e60).
 extern "C" void ffspan_reset_frame(void), ffspan_begin(Core*), ffspan_end(Core*, const char*);  // PSXPORT_BDTAG (engine_stage.cpp)
 void native_scheduler_step(Core* c) {
