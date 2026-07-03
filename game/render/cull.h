@@ -59,10 +59,19 @@ public:
   // old_counter + 1 (i.e. the NEW 1-based count). beh_jumptable_release_trigger uses this return.
   uint32_t enqueueQueueA(uint32_t obj);
 
+  // enqueueByClass (FUN_8007703C): CLASS-KEYED queue dispatcher. Sets obj[+1] = 1 (visible marker)
+  // unconditionally, then dispatches to the appropriate queue based on obj[+0xC]:
+  //   * class 4      → queue B (cap 40, sibling of enqueueVisibleClass4)
+  //   * class 2 or 9 → queue A (cap 24, sibling of enqueueQueueA)
+  //   * class 5      → queue C (cap 28, sibling of enqueueQueueC)
+  //   * other        → no-op (returns 0)
+  // Returns v0 = new 1-based count on push, 0 on cap-hit or unknown class (matches recomp).
+  uint32_t enqueueByClass(uint32_t obj);
+
   // enqueueVisibleClass4 (FUN_80077EBC): MANUAL push of `obj` onto render class 4's list — the same
   // list-add tail performBaseCull runs when the base cull KEEPS a class-4 object, but callable
   // directly by beh_ handlers whose scene-specific logic decides an object should render this frame
   // (bypassing the base cull test). Respects the cap-40 limit at *(0x1F800150). Callers set obj[+1]=1
   // themselves; this method only manipulates the queue. Was rec_dispatch(0x80077EBCu) in 5+ handlers.
-  void enqueueVisibleClass4(uint32_t obj);
+  uint32_t enqueueVisibleClass4(uint32_t obj);   // returns v0 (new count on push, 0 on cap-hit)
 };

@@ -191,13 +191,31 @@ void Cull::coneCull2b278() { Core* c = core;
 // Cull::enqueueVisibleClass4 — PC-native FUN_80077EBC body. Manual push of `obj` onto the class-4
 // render list (list ptr @ CULL_QPTR[1] = 0x1F800148, counter @ CULL_QCNT[1] = 0x1F800150, cap 40).
 // Byte-exact match to the guest body's slti-40 gate + list-ptr decrement + write + counter bump.
-void Cull::enqueueVisibleClass4(uint32_t obj) { Core* c = core;
+uint32_t Cull::enqueueVisibleClass4(uint32_t obj) { Core* c = core;
   int32_t cnt = c->mem_r16s(CULL_QCNT[1]);
-  if (cnt >= CULL_QCAP[1]) return;                        // list full — do not push
+  if (cnt >= CULL_QCAP[1]) return 0;                      // list full — v0 = 0 (matches recomp)
   uint32_t ptr = c->mem_r32(CULL_QPTR[1]);
   c->mem_w32(CULL_QPTR[1], ptr - 4);
   c->mem_w32(ptr - 4, obj);
-  c->mem_w16(CULL_QCNT[1], (uint16_t)(cnt + 1));
+  uint32_t newCnt = (uint32_t)cnt + 1u;
+  c->mem_w16(CULL_QCNT[1], (uint16_t)newCnt);
+  return newCnt;
+}
+
+// Cull::enqueueByClass — PC-native FUN_8007703C body. Class-keyed queue dispatcher: reads obj[+0xC]
+// and routes to the matching queue push (A for classes 2/9, B for class 4, C for class 5). Sets
+// obj[+1] = 1 (visible marker) unconditionally before the dispatch (matches the recomp's
+// unconditional `sb v0, 1(a2)` right after the prologue, before the switch on obj[+0xC]). RE'd
+// verbatim from disas 0x8007703C..0x80077128.
+uint32_t Cull::enqueueByClass(uint32_t obj) { Core* c = core;
+  c->mem_w8(obj + 1, 1);                                  // 0x8007703C..48: always mark visible
+  uint8_t cls = c->mem_r8(obj + 0xC);
+  switch (cls) {
+    case 4:          return enqueueVisibleClass4(obj);   // 0x800770B8: queue B
+    case 2: case 9:  return enqueueQueueA(obj);          // 0x80077084: queue A (v1==2 or v1==9)
+    case 5:          return enqueueQueueC(obj);          // 0x800770F0: queue C
+    default:         return 0;                            // unknown class → jr ra at 0x80077068
+  }
 }
 
 // Cull::enqueueQueueA — PC-native FUN_80077E7C body. Manual push of `obj` onto queue A (list ptr @

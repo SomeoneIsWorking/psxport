@@ -26,6 +26,7 @@
 // safety net. NO GTE (the sin is a table lookup, not gte_op).
 
 #include "core.h"
+#include "render/cull.h"    // Cull::enqueueByClass (FUN_8007703C)
 #include "object/actor.h"    // Actor::boundsCull (FUN_8007778C native)
 #include "cfg.h"
 #include <stdio.h>
@@ -262,7 +263,7 @@ void beh_sine_motion_sfx(Core* c) {
      bool e31 = (v1 != 31);
      v0 = 34;                            // delay
      if (e31) goto L4ec;
-     c->r[4] = nd; rec_dispatch(c, 0x8007703cu);   // FUN_8007703C(node)
+     c->engine.cull.enqueueByClass(nd);            // FUN_8007703C (native)
      goto L4fc;
    }
   L4ec:

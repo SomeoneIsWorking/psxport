@@ -38,6 +38,7 @@
 // when a scene drives them (same caveat as the sibling orchestrators) — see Report.
 
 #include "core.h"
+#include "render/cull.h"    // Cull::enqueueByClass (FUN_8007703C)
 #include "object/actor.h"    // Actor::boundsCull (FUN_8007778C native)
 #include "cfg.h"
 #include <stdio.h>
@@ -193,7 +194,7 @@ void beh_typed_jumptable_pair(Core* c) {
     // (An earlier version had this inverted, which mis-dispatched the leaf for obj node[3]==2 and
     //  diverged at node+1 / scratch 0x148.)
     if (c->mem_r8(obj + 3) == 2 && c->mem_r8(0x1F800207u) >= 0x1d) {  // 801392B0 bne v1,2 ; 801392C0..CC val>=0x1d
-      c->r[4] = obj; rec_dispatch(c, 0x8007703Cu);    // 801392D4 jal 0x8007703c (a0=s0)
+      c->engine.cull.enqueueByClass(obj);             // 801392D4 jal 0x8007703c — Cull::enqueueByClass (native)
     } else {
       Actor(c, obj).boundsCull();                     // 801392E4 jal 0x8007778c — Actor::boundsCull (native)
     }
