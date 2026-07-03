@@ -135,8 +135,11 @@ static CullDecision cull_decide(Core* c) {
   return R;
 }
 
-// Native body: commit the decision (the live path).
-static void cull_native_body(Core* c) {
+// Cull::performBaseCull — byte-exact PC-native FUN_8007712C body (no margin re-include). The public
+// entry Actor::boundsCull dispatches to (replaces the last rec_dispatch(0x8007712C) in the cull chain).
+// Same guest ABI as objectCull: taxi input in r[4]/r[5]/r[6]/r[7], side effects on obj[+1] +
+// per-class render-list push, return in r[2]. Was the file-scope `cull_native_body` helper.
+void Cull::performBaseCull() { Core* c = core;
   uint32_t obj = c->r[4];
   CullDecision R = cull_decide(c);
   c->mem_w8(obj + 1, 0);                                  // prologue `sb zero,1(s3)`
@@ -195,7 +198,7 @@ void Cull::objectCull() { Core* c = core;
     fprintf(stderr, "[objlog] obj=%08x type=%02x pos=(%d,%d,%d)\n", o, c->mem_r8(o + 0x0c),
             (int16_t)obj_r16(c, o + 0x2e), (int16_t)obj_r16(c, o + 0x32), (int16_t)obj_r16(c, o + 0x36));
   int p2 = (int16_t)c->r[5], p3 = (int16_t)c->r[6], p4 = (int16_t)c->r[7];   // pos - camera (s16 each)
-  cull_native_body(c);                              // PC-native cull
+  performBaseCull();                                 // PC-native cull (byte-exact FUN_8007712C body)
   // The engine OWNS this margin, so it is ALWAYS active — not gated on widescreen. Even at 4:3 the
   // stock ±34° cone over-culls (edge pop-in), so we keep the wide region in every aspect; widescreen
   // then needs no extra special-casing. Env overrides remain for diagnostics only (PSXPORT_CULL_FAR/_FOV).

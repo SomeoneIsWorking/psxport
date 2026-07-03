@@ -151,12 +151,11 @@ public:
   void     setOscBase(uint16_t v)     { setPosY(v); }
 
   // ── Bounds-cull check (was FUN_8007778C thin wrapper) ────────────────────────────────────────────
-  // Computes signed 16-bit deltas from the object's world (posX/Y/Z) to the camera position at
-  // scratchpad 0x1F8000D2/D6/DA, zeros the two cull-context slots at 0x1F800080/84 (state
-  // resets), then dispatches the actual 5-way cull check FUN_8007712C(node, dx, dy, dz) which
-  // returns the cull-mode result in c->r[2]. Direct in-header — no separate .cpp needed for such
-  // a thin call. FUN_8007712C itself is still un-RE'd (5-way dispatch on scratchpad byte
-  // 0x1F800084); the RE arc that names it turns this into fully-native code.
+  // FULL NATIVE CHAIN as of this arc: FUN_8007778C's delta-math + flag reset happens here inline,
+  // then dispatches the 5-way cull body via c->engine.cull.performBaseCull (game/render/cull.cpp —
+  // FUN_8007712C reimplemented byte-exact, was previously the file-scope `cull_native_body`, now the
+  // public entry). Result is the visibility flag returned by the cull body in c->r[2] (1 = visible,
+  // 0 = culled) — same value the guest recomp would return.
   uint32_t boundsCull() {
     int16_t dx = (int16_t)(posX_u() - c->mem_r16(0x1F8000D2u));
     int16_t dy = (int16_t)(posY_u() - c->mem_r16(0x1F8000D6u));
@@ -167,8 +166,7 @@ public:
     c->r[5] = (uint32_t)(int32_t)dx;
     c->r[6] = (uint32_t)(int32_t)dy;
     c->r[7] = (uint32_t)(int32_t)dz;
-    void rec_dispatch(Core*, uint32_t);
-    rec_dispatch(c, 0x8007712Cu);
+    c->engine.cull.performBaseCull();                    // FUN_8007712C body — native (was rec_dispatch)
     return c->r[2];
   }
 

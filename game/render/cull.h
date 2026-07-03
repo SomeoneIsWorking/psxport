@@ -20,6 +20,13 @@ public:
   // c->r[4] = object, c->r[5]/[6]/[7] = camera-relative dx/dz/dy (s16 each). Was ov_object_cull.
   void objectCull();
 
+  // performBaseCull — the byte-exact PC-native reimplementation of FUN_8007712C's body ALONE (no
+  // widescreen margin re-include). Called from Actor::boundsCull to replace the last rec_dispatch
+  // in the bounds-cull chain — same taxi convention as objectCull (r[4]=obj, r[5]/[6]/[7]=dx/dy/dz),
+  // same side effects (obj[+1] flag + per-class render-list push), same return in r[2]. Was the
+  // file-scope `cull_native_body` helper — now the public entry point Actor::boundsCull dispatches to.
+  void performBaseCull();
+
   // cullWrapper (FUN_8007778C): camera-relative delta + flag reset → cull body. Taxi c->r[4] = object.
   // Was ov_cull_wrapper.
   void cullWrapper();
