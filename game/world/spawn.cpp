@@ -329,6 +329,6 @@ uint32_t Spawn::spawnAndInit(uint32_t a0, uint32_t posSrc, uint32_t a2) {   // F
   Core* c = this->core;
   c->r[4] = a0; c->r[5] = posSrc; c->r[6] = a2;
   static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("spawninitverify") ? 1 : 0;
-  record_gate(c, spawn_and_init, 0x8003116Cu, "spawninitverify", s_v);
+  c->engine.verifyGate.run(spawn_and_init, 0x8003116Cu, "spawninitverify", s_v);
   return c->r[2];
 }

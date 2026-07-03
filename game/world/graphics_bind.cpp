@@ -80,11 +80,11 @@ void GraphicsBind::recordAlloc() { Core* c = core;
     fprintf(stderr, "[recalloc] core=%p ra=%p cnt_before=%d stage=%08X\n",
             (void*)c, ra, (int)c->mem_r16s(0x800ED098u), c->mem_r32(0x801fe00c));
   }
-  record_gate(c, record_alloc, 0x8007AAE8u, "recallocverify", s_v);
+  c->engine.verifyGate.run(record_alloc, 0x8007AAE8u, "recallocverify", s_v);
 }
 void GraphicsBind::recordInit() { Core* c = core;
   static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("recinitverify") ? 1 : 0;
-  record_gate(c, obj_record_init, 0x80051B70u, "recinitverify", s_v);
+  c->engine.verifyGate.run(obj_record_init, 0x80051B70u, "recinitverify", s_v);
 }
 
 // FUN_800517F8 — per-object RENDER-STATE UPDATE: build the object's transform, then snapshot its int16
@@ -105,7 +105,7 @@ static uint32_t obj_render_update(Core* c) {
 }
 void GraphicsBind::renderUpdate() { Core* c = core;
   static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("rendupdverify") ? 1 : 0;
-  record_gate(c, obj_render_update, 0x800517F8u, "rendupdverify", s_v);
+  c->engine.verifyGate.run(obj_render_update, 0x800517F8u, "rendupdverify", s_v);
 }
 
 // FUN_80077B38 — set an object's GEOMETRY-BLOCK pointer from a table. RE'd from disas 0x80077B38 (leaf):
@@ -120,7 +120,7 @@ static uint32_t obj_set_geom(Core* c) {
 }
 void GraphicsBind::setGeom() { Core* c = core;
   static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("setgeomverify") ? 1 : 0;
-  record_gate(c, obj_set_geom, 0x80077B38u, "setgeomverify", s_v);
+  c->engine.verifyGate.run(obj_set_geom, 0x80077B38u, "setgeomverify", s_v);
 }
 
 // FUN_8006CBD0 — copy a 6-halfword TRANSFORM BLOCK from a1 into the scratchpad camera/transform block
@@ -140,7 +140,7 @@ static uint32_t obj_set_xformblk(Core* c) {
 }
 void GraphicsBind::setXformBlk() { Core* c = core;
   static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("setxblkverify") ? 1 : 0;
-  record_gate(c, obj_set_xformblk, 0x8006CBD0u, "setxblkverify", s_v);
+  c->engine.verifyGate.run(obj_set_xformblk, 0x8006CBD0u, "setxblkverify", s_v);
 }
 
 // FUN_8004BD64 — per-object POSITION-COMPOSE + render-state refresh. RE'd from disas 0x8004BD64
@@ -182,5 +182,5 @@ static uint32_t obj_pos_compose(Core* c) {
 }
 void GraphicsBind::posCompose() { Core* c = core;
   static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("poscomposeverify") ? 1 : 0;
-  record_gate(c, obj_pos_compose, 0x8004BD64u, "poscomposeverify", s_v);
+  c->engine.verifyGate.run(obj_pos_compose, 0x8004BD64u, "poscomposeverify", s_v);
 }

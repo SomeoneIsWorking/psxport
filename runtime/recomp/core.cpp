@@ -37,6 +37,7 @@ Core::Core() {
   engine.collision.core = this;         // Engine-owned collision-grid subsystem
   engine.bit.core = this;               // Engine-owned game-flag bitmap bit-test subsystem
   engine.spawn.core = this;             // Engine-owned entity spawn/despawn subsystem
+  engine.verifyGate.core = this;        // Engine-owned A/B snapshot+diff helper (diag only)
   engine.behaviors.core = this;         // Engine-owned per-object behavior dispatcher
   engine.cull.core = this;              // Engine-owned visibility cull subsystem
   rng.core        = this;

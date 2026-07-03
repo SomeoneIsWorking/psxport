@@ -34,6 +34,7 @@
 #include "render/cull.h"         // Engine owns the Cull visibility subsystem
 #include "math/mathlib.h"        // Engine owns the Bit game-flag bitmap subsystem
 #include "world/spawn.h"         // Engine owns the Spawn entity-spawn/despawn subsystem
+#include "world/verify_gate.h"   // Engine owns the shared VerifyGate A/B diff helper
 #include "object/behavior_dispatch.h" // Engine owns the per-object BehaviorDispatch subsystem
 class Core;
 
@@ -69,6 +70,7 @@ public:
   Collision        collision;          // collision-grid family (list-scan + grid setup/query/resolve/step)
   Bit              bit;                // game progress-flag bitmap bit-test (FUN_8004D7EC / D868)
   Spawn            spawn;              // entity spawn/despawn dispatcher (FUN_8007A980 / A624 / 3116C)
+  VerifyGate       verifyGate;         // A/B snapshot-rollback + diff harness (diag only)
   BehaviorDispatch behaviors;          // per-object handler dispatch registry (50 native behaviors)
   Cull             cull;               // per-object visibility cull / margin re-include (orphaned)
 
