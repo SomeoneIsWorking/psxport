@@ -70,19 +70,20 @@ void beh_scatter_record_dither(Core* c) {
   s2 = (int)(obj + 0x50);
   s0 = (int)(obj + 0x56);
  L5cc:
-  c->r[4] = 0; c->r[5] = 128; rec_dispatch(c, 0x80032A44u); v0 = c->r[2];
+  // FUN_80032A44 = Rng::inRange (native). Each call scales the shared PSX rand() into a range.
+  v0 = c->rng.inRange(0, 128);
   s1 -= 1;
   v1 = (uint16_t)(c->mem_r16(obj + 0x2c) + v0);
   c->mem_w16((uint32_t)s2 + 0, v1);
-  c->r[4] = (uint32_t)-128; c->r[5] = 0; rec_dispatch(c, 0x80032A44u); v0 = c->r[2];
+  v0 = c->rng.inRange(-128, 0);
   v1 = (uint16_t)(c->mem_r16(obj + 0x2e) + v0);
   s2 += 8;
   c->mem_w16((uint32_t)s0 - 4, v1);
-  c->r[4] = 0; c->r[5] = 32; rec_dispatch(c, 0x80032A44u); v0 = c->r[2];
+  v0 = c->rng.inRange(0, 32);
   v1 = (uint16_t)(c->mem_r16(obj + 0x30) + v0);
   c->mem_w16((uint32_t)s0 - 2, v1);
-  c->r[4] = 224; c->r[5] = 288; rec_dispatch(c, 0x80032A44u); v0 = c->r[2];
-  c->mem_w16((uint32_t)s0 + 0, v0);
+  v0 = c->rng.inRange(224, 288);
+  c->mem_w16((uint32_t)s0 + 0, (uint16_t)v0);
   s0 += 8;                                       // c630 delay slot (always executes)
   if (s1 > 0) goto L5cc;
  L634:

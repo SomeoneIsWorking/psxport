@@ -7,7 +7,7 @@ A native may exist already. **LIVE** = reachable by direct C call from a native_
 dispatch root (actually runs). **ORPHAN** = native exists but only the REMOVED override
 table used to reach it — it is dead code until a native parent calls it directly.
 
-Totals: 139 native fns, 122 owned addresses, 7 LIVE / 132 ORPHAN.
+Totals: 140 native fns, 123 owned addresses, 7 LIVE / 133 ORPHAN.
 
 | addr | status | symbol | file:line | depends-on (still-PSX) | summary |
 |------|--------|--------|-----------|------------------------|---------|
@@ -20,6 +20,7 @@ Totals: 139 native fns, 122 owned addresses, 7 LIVE / 132 ORPHAN.
 | 0x800263E8 | ORPHAN | `Pool::seedAreaObjects` | game/world/pool.cpp:83 | 0x8007AD98 | area object-record seeding. Selects a per-area byte sequence (table 0x… |
 | 0x8003116C | ORPHAN | `Spawn::spawnAndInit` | game/world/spawn.cpp:328 |  |  |
 | 0x80031780 | ORPHAN | `Collision::listScan` | game/player/collision.cpp:24 | 0x80031780 | list-tail resolver / reset. Walks the 8-byte-stride linked list rooted… |
+| 0x80032A44 | ORPHAN | `Rng::inRange` | game/math/rng.cpp:13 |  | scaled random. Disas 0x80032A44..0x80032A84 verbatim: `sra v0, 15` on … |
 | 0x8003B588 | ORPHAN | `Render::rwalkB588` | game/render/engine_submit.cpp:512 | 0x800597AC | PSXPORT_DEBUG=rwalk — phase-2 render-walk caller counter. The per-obje… |
 | 0x8003FA44 | ORPHAN | `Render::frameX` | game/render/engine_render.cpp:67 |  | mid-transition render orchestrator twin (reduced pass set). The walk c… |
 | 0x80044BD4 | ORPHAN | `native_area_load_bd4` | game/scene/engine_stage.cpp:738 |  | Native replacement for FUN_80044bd4(0x800452c0, area, mode, 1): seed t… |
