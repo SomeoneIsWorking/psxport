@@ -75,6 +75,14 @@ void beh_script_interp_step(Core* c);         // 0x80041098 (resident) — Scrip
 void beh_a06_scripted_actor(Core* c);         // 0x8013AA14 (A06 overlay) — cutscene scripted actor,
                                               //   inlines the 0x80139C84 / 0x80139A28 chain natively
                                               //   so ScriptInterp::step actually fires (was dark)
+// Script-driven fade fns (op 0x03E fnptrs from A06 cutscene scripts) — beh_a06_script_fades.cpp.
+void beh_a06_fade_flash_ramp_80139728(Core* c);    // 0x80139728
+void beh_a06_spawn_follow_obj_8013AEF0(Core* c);   // 0x8013AEF0
+void beh_a06_sound_cmd_wait_8013AFD8(Core* c);     // 0x8013AFD8
+void beh_a06_spawn_subobj_8013B074(Core* c);       // 0x8013B074
+void beh_a06_fade_ramp_8013B178(Core* c);          // 0x8013B178
+void beh_a06_music_cue_8013B274(Core* c);          // 0x8013B274
+void beh_a06_timer_gate_8013B29C(Core* c);         // 0x8013B29C
 
 namespace {
 struct NativeBeh { uint32_t addr; void (*fn)(Core*); const char* name; };
@@ -131,6 +139,14 @@ constexpr NativeBeh kTable[] = {
   { 0x801189E8u, beh_a06_multi_actor,           "a06_multi_actor" },            // A06 overlay
   { 0x80041098u, beh_script_interp_step,        "script_interp_step" },         // resident — cutscene script dispatch loop
   { 0x8013AA14u, beh_a06_scripted_actor,        "a06_scripted_actor" },         // A06 overlay — the caller-chain root that reaches ScriptInterp
+  // Script-driven fade fnptrs (called through op 0x03E's native path via ScriptInterp::callFnptr):
+  { 0x80139728u, beh_a06_fade_flash_ramp_80139728,  "a06_fade_flash_ramp"    },   // 8-state gray flash + music trigger
+  { 0x8013AEF0u, beh_a06_spawn_follow_obj_8013AEF0, "a06_spawn_follow_obj"   },   // follow-obj spawner + hook
+  { 0x8013AFD8u, beh_a06_sound_cmd_wait_8013AFD8,   "a06_sound_cmd_wait"     },   // sound-cmd queue + wait
+  { 0x8013B074u, beh_a06_spawn_subobj_8013B074,     "a06_spawn_subobj"       },   // subobj spawn + field seed
+  { 0x8013B178u, beh_a06_fade_ramp_8013B178,        "a06_fade_ramp"          },   // 3-state simple ramp fade
+  { 0x8013B274u, beh_a06_music_cue_8013B274,        "a06_music_cue"          },   // one-shot music/SFX cue
+  { 0x8013B29Cu, beh_a06_timer_gate_8013B29C,       "a06_timer_gate"         },   // 60-frame counted gate
 };
 }  // namespace
 

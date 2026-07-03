@@ -159,6 +159,7 @@ set(PORT_SRC
   game/ai/beh_variant_overlay_lifecycle.cpp
   game/ai/beh_a06_multi_actor.cpp
   game/ai/beh_a06_scripted_actor.cpp
+  game/ai/beh_a06_script_fades.cpp
   game/scene/bg_scene_transition_sm.cpp
   game/scene/scene_transition.cpp
   game/scene/transition_state3.cpp

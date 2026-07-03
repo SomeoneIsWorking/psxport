@@ -45,12 +45,18 @@ constexpr uint16_t OP_FLAG_HAS_EXTRA = 0x2000u;  // if set, entry is 16 bytes (e
 constexpr uint16_t OP_FLAG_INIT_MODE = 0x1000u;  // init: obj[+0x71] = 2 when this bit is set
 constexpr uint16_t OP_FLAG_INIT_BIT2 = 0x4000u;  // init: obj[+0x71] |= 4 when this bit is set
 
-// step()'s return-code convention (matches the guest handler's v0):
-constexpr uint32_t RET_PAUSE            = 0u;  // set obj[+0x71] |= 2 → exit step loop
-constexpr uint32_t RET_RERUN            = 1u;  // re-run current entry (handler advanced internally)
-constexpr uint32_t RET_ADVANCE          = 2u;  // FUN_80040FA0(obj, 0) — advance
-constexpr uint32_t RET_ADVANCE_BRANCH   = 3u;  // FUN_80040FA0(obj, 1) — advance with branch bump
-// any other return value → exit step loop (matches recomp's fall-through)
+// step()'s return-code convention (VERBATIM from disas of FUN_80041098 @0x800410FC..0x80041174):
+//   ret == 0      -> set obj[+0x71] |= 2, EXIT step loop immediately (no advance)
+//   ret == 1      -> FUN_80040FA0(obj, 0), continue-if-FA0-returns-1
+//   ret == 2      -> FUN_80040FA0(obj, 1), continue-if-FA0-returns-1
+//   ret == 3      -> FUN_80040FA0(obj, 0), continue-if-FA0-returns-1  (same as ret==1 — falls into it)
+//   ret >= 4      -> no advance; exit loop (recomp defaults s0=3, loop check `s0 == 1` fails)
+// The loop continues ONLY when FA0 returns exactly 1; anything else exits with the FA0 return
+// discarded (guest fn's overall v0 is 0).
+constexpr uint32_t RET_PAUSE       = 0u;
+constexpr uint32_t RET_ADVANCE_0_A = 1u;   // FA0(obj, 0)
+constexpr uint32_t RET_ADVANCE_1   = 2u;   // FA0(obj, 1)
+constexpr uint32_t RET_ADVANCE_0_B = 3u;   // FA0(obj, 0)
 }  // namespace
 
 void ScriptInterp::init(uint32_t obj, uint32_t tableA, uint32_t scriptPtr) {
@@ -111,18 +117,20 @@ int ScriptInterp::advanceEntry(uint32_t obj, uint32_t kindArg) {
 
 int ScriptInterp::callFnptr(uint32_t obj) {
   Core* c = core;
-  // Guest 0x800412CC: `lw v0, 0x74(a0); jalr v0`. Compose the 32-bit fnptr from the two adjacent
-  // halfwords (little-endian order matches the guest lw), then route via BehaviorDispatch so any
-  // fnptr owned as a native `beh_*` runs native; unowned addresses fall through to rec_dispatch.
+  // Guest 0x800412CC: `lw v0, 0x74(a0); jalr v0; jr ra` — v0 (the ret code) is EXACTLY what the
+  // fnptr callee left there. Compose the 32-bit fnptr from the two adjacent halfwords (LE order
+  // matches the guest `lw`), route via BehaviorDispatch so any fnptr owned as native `beh_*` runs
+  // native; unowned addresses fall through to rec_dispatch (substrate).
+  //
+  // RET-CODE PRESERVATION: rec_dispatch sets c->r[2] to the substrate leaf's return, so the
+  // substrate path is transparent. Native `beh_*` handlers are `void`-returning, so a native
+  // fade fn MUST set `c->r[2] = ret` before returning (matches how the recomp body would leave
+  // v0). Every fade fn in game/ai/beh_a06_fade_*.cpp follows this convention.
   const uint16_t lo = c->mem_r16(obj + OBJ_FNPTR_LO_74);
   const uint16_t hi = c->mem_r16(obj + OBJ_FNPTR_HI_76);
   const uint32_t fnptr = ((uint32_t)hi << 16) | (uint32_t)lo;
   c->engine.behaviors.dispatchObj(obj, fnptr);
-  // The guest handler returns v0 = 2 (advance) — after the jalr it falls through to the epilogue
-  // and returns whatever the callee left in v0, but the step-loop switch only cares about the
-  // guest handler's own return convention. FUN_800412CC's disas: it does NOT re-set v0, so v0
-  // is whatever the fnptr returned. Empirically the fade fns return 2 (advance). Return 2.
-  return (int)RET_ADVANCE;
+  return (int)c->r[2];
 }
 
 // C-ABI wrapper for BehaviorDispatch::kTable registration. Takes obj from a0 (c->r[4]) — matches
@@ -161,26 +169,24 @@ void ScriptInterp::step(uint32_t obj) {
       ret = c->r[2];
     }
 
-    // ret-code switch (matches the guest disas at 0x80041100..0x80041168):
+    // ret-code switch (VERBATIM disas 0x80041100..0x80041168). The recomp calls advanceEntry with
+    // a kind byte selected by the ret code, THEN checks its return: only if FA0 returns exactly 1
+    // does the outer loop iterate (recomp's `beq s0, s2, 0x800410c0`). Any other FA0 return exits.
+    uint32_t faKind;
     switch (ret) {
-      case RET_RERUN:
-        // No advance — the handler mutated obj[+0x6C] or the script itself; re-check the loop.
-        continue;
-      case RET_ADVANCE:
-        (void)advanceEntry(obj, 0u);
-        continue;
-      case RET_ADVANCE_BRANCH:
-        (void)advanceEntry(obj, 1u);
-        continue;
       case RET_PAUSE: {
-        // OR obj[+0x71] with 2, then exit.
         uint8_t f = c->mem_r8(obj + OBJ_FLAGS_71);
         c->mem_w8(obj + OBJ_FLAGS_71, (uint8_t)(f | 0x02u));
         return;
       }
+      case RET_ADVANCE_0_A:
+      case RET_ADVANCE_0_B: faKind = 0u; break;
+      case RET_ADVANCE_1:   faKind = 1u; break;
       default:
-        // Any other return value: exit the loop (matches the recomp's fall-through case).
+        // ret >= 4: recomp falls through with s0=3 → loop check `s0 == 1` fails → exit.
         return;
     }
+    const int faRet = advanceEntry(obj, faKind);
+    if (faRet != 1) return;   // any non-1 return exits the loop (matches `beq s0, s2, LOOP`)
   }
 }
