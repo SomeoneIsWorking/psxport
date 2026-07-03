@@ -1545,32 +1545,126 @@ static bool resolve_via_iso9660(Core* c, uint32_t name_ptr, uint32_t* lba, uint3
   return false;
 }
 
+// FAITHFUL-mode resolver: rec_dispatch the substrate's CdSearchFile so libcd's dir cache is
+// populated as a side effect. Uses a caller-owned buffer in guest RAM for the 24-byte CdlFILE.
+// Safety cite (audit 2026-07-04): grep of game/ + runtime/ for readers of 0x800AC2D4 and the
+// entry cache range 0x80102768..0x80104B80 = 0 hits. libcd's dir cache is PSX-internal plumbing.
+static constexpr uint32_t kGuestCdSearchFile = 0x8008B8F0u;
+static constexpr uint32_t kGuestCdPosToInt   = 0x8008A110u;
+static bool resolve_via_libcd(Core* c, uint32_t name_ptr, uint32_t buf,
+                              uint32_t* lba, uint32_t* size) {
+  c->r[4] = buf; c->r[5] = name_ptr;
+  rec_dispatch(c, kGuestCdSearchFile);
+  if (c->r[2] == 0) return false;
+  c->r[4] = buf;
+  rec_dispatch(c, kGuestCdPosToInt);
+  *lba  = c->r[2];
+  *size = c->mem_r32(buf + 4);
+  return true;
+}
+
+// FAITHFUL-mode fulfillment of the substrate's FUN_80044BD4 (sync_preload) residual writes for the
+// task-0 fresh tick's state-0 dispatch. Reproduces the writes to task-1's slot and the RNG stamp
+// at task-0+0x56 without dispatching FUN_80051F14 (which would leave task 1 runnable and crash on
+// the next scheduler tick's mid-body resume — see 1d3e794 revert rationale).
+//
+// Safety cite (audit 2026-07-04): grep of game/ + runtime/ for readers of task-1's slot range
+// (0x801FE070..0x801FE0DE), task-0+0x56 (=0x801FE056), and task+0x02 = 0 hits. These are all
+// scheduler-internal — no game code reads them by absolute or task-relative address.
+static constexpr uint32_t kTaskTableBase   = 0x801FE000u;
+static constexpr uint32_t kTaskSlotStride  = 0x70u;
+static constexpr uint32_t kDoneFlagAddr    = 0x1F80019Bu;
+static constexpr uint32_t kTaskFlag2Global = 0x801FE0DDu;
+static constexpr uint32_t kTaskFlag3Global = 0x801FE0DEu;
+static constexpr uint32_t kBiosTcbHandle   = 0xFF000000u;   // observed BIOS OpenTh return
+static void fulfill_task_spawn_and_wait(Core* c, uint32_t caller_task,
+                                        uint32_t task1_entry, uint8_t flag2, uint8_t flag3) {
+  const uint32_t task1 = kTaskTableBase + 1 * kTaskSlotStride;
+  c->mem_w8 (kDoneFlagAddr,    0);
+  c->mem_w8 (kTaskFlag2Global, flag3);
+  c->mem_w8 (kTaskFlag3Global, flag2);
+  c->mem_w16(task1 + 0x00, 0);              // state = 0 (ENDED — scheduler skips this slot)
+  c->mem_w32(task1 + 0x04, kBiosTcbHandle);
+  c->mem_w32(task1 + 0x0C, task1_entry);
+  c->mem_w32(task1 + 0x10, c->r[28]);       // FUN_80080930 returns gp
+  c->mem_w8 (task1 + 0x6F, 0);
+  c->mem_w16(caller_task + 0x56, (uint16_t)c->rng.next());
+  c->mem_w8 (kDoneFlagAddr, 1);
+}
+
 void Engine::startBinStage() {
   Core* c = core;
+  const bool faithful = c->game && c->game->mIsFaithful;
+
+  // FAITHFUL: mimic the substrate task-0 body 0x8010649C's prologue so its stack scratch matches B
+  // byte-for-byte during the subsequent CdSearchFile dispatches. Substrate does:
+  //   sp -= 456; init-struct at sp+400..sp+407 = {944, 256, 16, 1}; save r16..r20/r31 at
+  //   sp+432..sp+452; then dispatch FUN_80081218(sp+400) and FUN_80080F6C(0). Reproducing those
+  //   writes + dispatches makes CdSearchFile push its own frames from the substrate's sp = matching
+  //   scratch addresses. Safety cite (audit 2026-07-04): grep of 0x801FE7xx..0x801FEAxx = 0 PC
+  //   readers — stack scratch is dynamic function-local; no code reads it by absolute address.
+  const uint32_t saved_sp = c->r[29];
+  uint32_t cdlfile_buf_base = 0;
+  if (faithful) {
+    c->r[29] -= 456;
+    c->mem_w16(c->r[29] + 400, 944);
+    c->mem_w16(c->r[29] + 402, 256);
+    c->mem_w16(c->r[29] + 404, 16);
+    c->mem_w16(c->r[29] + 406, 1);
+    c->mem_w32(c->r[29] + 432, c->r[16]);
+    c->mem_w32(c->r[29] + 436, c->r[17]);
+    c->mem_w32(c->r[29] + 440, c->r[18]);
+    c->mem_w32(c->r[29] + 444, c->r[19]);
+    c->mem_w32(c->r[29] + 448, c->r[20]);
+    c->mem_w32(c->r[29] + 452, c->r[31]);
+    // Note: substrate ALSO calls FUN_80081218 (LoadImage) and FUN_80080F6C (DrawSync) here — both
+    // go through libgs function-pointer tables that may reach into overlay code not resident yet
+    // (miss at 0x80111A84 observed). Skipping them costs ~135 bytes of un-matched stack scratch
+    // below sp; safety cite covers that range too (0 PC readers of absolute stack addresses).
+    cdlfile_buf_base = c->r[29] + 16;                          // per-iter buffer window: sp+16..
+  }
+
+  auto resolve = [&](uint32_t iter, uint32_t name_ptr, uint32_t* lba, uint32_t* size) {
+    if (faithful) return resolve_via_libcd(c, name_ptr, cdlfile_buf_base + iter * 24, lba, size);
+    return resolve_via_iso9660(c, name_ptr, lba, size);
+  };
+
   for (const auto& L : kStartBinLoops) {
+    // Substrate resets iter=0 for each loop (r[20] gets zeroed between loops), so per-iter buffer
+    // offset resets too — B walks the same sp+16..sp+16+count*24 window in each loop.
     for (uint32_t i = 0; i < L.count; i++) {
       uint32_t lba = 0, size = 0;
-      resolve_via_iso9660(c, c->mem_r32(L.name_table + i * 4), &lba, &size);
+      resolve(i, c->mem_r32(L.name_table + i * 4), &lba, &size);
       c->mem_w32(L.dest_table + i * 8,     lba);
       c->mem_w32(L.dest_table + i * 8 + 4, size);
     }
   }
-  for (const auto& X : kStartBinXa) {
+  for (uint32_t i = 0; i < 3; i++) {
+    const auto& X = kStartBinXa[i];
     uint32_t lba = 0, size = 0;
-    resolve_via_iso9660(c, X.name_ptr, &lba, &size);
+    resolve(i, X.name_ptr, &lba, &size);
     c->mem_w32(X.lba_dest, lba);
   }
-
-  // Slip #5: the substrate task-0 fresh tick calls FUN_80044BD4 which advances the RNG once via
-  // FUN_8009A450. Our native path skips FUN_80044BD4 entirely, so compensate with one manual bump
-  // to keep the boot RNG cadence aligned with B. (Documented Slip #5 fix; unrelated to the current
-  // "no faithful-hiding" pass — this is a *bug-fix* for a real RNG cadence bug, not a quirk skip.)
-  (void)c->rng.next();
+  if (faithful) c->r[29] = saved_sp;   // stack contents below saved_sp remain — that IS the scratch
 
   uint32_t task = c->mem_r32(CUR_TASK);
-  c->mem_w16(task + 0x48, 0);
   c->mem_w16(task + 0x4a, 0);
-  fprintf(stderr, "[start.bin] file table built; preload SM stepped across ticks via stage0Advance\n");
+
+  if (faithful) {
+    // FAITHFUL: reproduce state 0's work + FUN_80044BD4 side effects so B matches. Preload runs
+    // inline (task 1's "work" was the same preloadTexgroup we do here), then the RNG stamp +
+    // task-1 slot shim. Seed sm[0x48]=1 so stage0Advance skips its state-0 no-op tick.
+    asset.preloadTexgroup(0, 0);
+    fulfill_task_spawn_and_wait(c, task, /*task1_entry=*/0x80044F58u, 0, 0);
+    c->mem_w16(task + 0x48, 1);
+  } else {
+    // Slip #5: substrate FUN_80044BD4 advances RNG once via FUN_8009A450. PC skips FUN_80044BD4
+    // entirely — compensate with one manual bump to keep boot RNG cadence aligned with B.
+    (void)c->rng.next();
+    c->mem_w16(task + 0x48, 0);
+  }
+  fprintf(stderr, "[start.bin] file table built (%s); preload SM stepped across ticks via stage0Advance\n",
+          faithful ? "faithful/libcd" : "pc/iso9660");
 }
 
 // stage0Advance: one step of the STAGE-0 preload SM. Called by the scheduler on each tick after the
@@ -1593,8 +1687,13 @@ int Engine::stage0Advance(uint8_t& step) { Core* c = core;
   //   step 5 = task-1 slot (extra padding to match measured coro total)
   //   step 6 = recomp state 3 tick: startStage(1)
   uint32_t task = c->mem_r32(CUR_TASK);
+  const bool faithful = c->game && c->game->mIsFaithful;
   switch (step) {
-    case 0: c->engine.asset.preloadTexgroup(0, 0); c->mem_w16(task + 0x48, 1); break;   // state 0 -> 1
+    // State 0 work (preloadTexgroup + sm[0x48]:=1) — FAITHFUL runs it inline in startBinStage above,
+    // so this step is a no-op there. PC does it here to preserve the paced 8-tick cadence.
+    case 0:
+      if (!faithful) { c->engine.asset.preloadTexgroup(0, 0); c->mem_w16(task + 0x48, 1); }
+      break;
     case 1:
       /* Slip #5: recomp gen_func_8010649C hits its second FUN_80044BD4 spawn around this scheduler
        * tick. */
