@@ -255,10 +255,14 @@ void Sop::fieldMode() { Core* c = core;
       // Slot 0 is task-0 (the ONLY task that runs SOP fieldMode); array indexed for consistency.
       if (c->game && c->game->sched.sop_field_step[0] == 0) {
         c->game->sched.sop_field_step[0] = 1;
+        // Slip #5: match the FUN_80044BD4 RNG advance BEFORE the defer — the recomp fires the RNG
+        // early in FUN_80044BD4's body, BEFORE the wait-loop yield that our defer models. Firing
+        // rng.next() on the deferred re-entry (previously) put A's RNG advance one tick after
+        // B's, opening the divergence at f29. Fire before the break so tick N aligns with B's tick N.
+        (void)c->rng.next();
         break;   // defer — sm[0x50] stays 0; next tick re-enters this case
       }
       c->game->sched.sop_field_step[0] = 0;   // completing now; arm again for the next area
-      c->rng.matchBd4Cadence();                 // Slip #5: replaces a rec_dispatch(0x80044BD4).
       c->engine.sop.areaLoad();                 // INLINE sync load (replaces FUN_80044bd4) -> 1f80019b=1
       c->engine.pool.init();   // 0x8007B18C — native (via LIVE gated entry)
       c->engine.pool.resetControlBlock();       // 0x800796DC — native (via LIVE gated entry)

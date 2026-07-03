@@ -383,7 +383,7 @@ void Demo::stageMain() { Core* c = core;
   // the front-end task at 0x800CF858. Native replaces this by directly running Demo::stageMain +
   // per-frame substate dispatch instead of task-spawning — so the RNG advance from FUN_80044BD4
   // is skipped. Match it here.
-  c->rng.matchBd4Cadence();
+  (void)c->rng.next();
 
   // SLIP #1 residual fix (docs/findings/sbs.md attack (a)): do NOT dispatch s0 here. The recomp coro
   // of 0x801062E4 spends its FRESH iteration running the prologue only (sets sm[0x48]=0), then yields
@@ -662,7 +662,7 @@ static void demo_frame_s7(Core* c) {
     c->mem_w8(0x801fe0deu, entry);
     c->mem_w8(0x801fe0ddu, 1);
     c->mem_w8(0x1f80019bu, 0);
-    c->rng.matchBd4Cadence();                                       // Slip #5: replaces rec_dispatch(0x80044BD4).
+    (void)c->rng.next();                                       // Slip #5: replaces rec_dispatch(0x80044BD4).
     c->engine.sop.transitionAreaLoad();                             // = sync 0x800452c0; sets 1f80019b=1
     // reinit subsystems (all SYNC; no incoming args / self-args)
     c->engine.pool.init();       // 0x8007B18C — native (via LIVE gated entry)
