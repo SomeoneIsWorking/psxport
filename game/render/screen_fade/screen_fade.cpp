@@ -1,24 +1,18 @@
 // class ScreenFade — implementation. See screen_fade.h for the architecture note.
 #include "screen_fade.h"
 #include "core.h"
+#include "game.h"
 #include "cfg.h"
 #include <cstdio>
 #include <execinfo.h>
 #include <cstdlib>
 
-// `debug fadetrace` channel — logs every native-path fade call (`ScreenFade::set` +
-// `applyLeafCall`) with the calling context. Pairs with `PSXPORT_DISPWATCH=0x8007E9C8`
-// which surfaces every substrate-path fade call. Together they show BOTH sides of the
-// fade caller graph — essential for #27 (cutscene fadeouts stuck black), where the
-// symptom is that some fade caller doesn't reach ScreenFade at all so the HOLD latch
-// at full-black never releases. When a cutscene fades correctly, this channel shows
-// per-frame set() calls with r/g/b ramping. When it doesn't, this channel goes silent
-// while the DISPWATCH shows the substrate leaf firing = a substrate SM handler owns
-// the failing fade; RE + port it native.
-// Print the native C++ call chain for a fade caller — resolves function names via backtrace_symbols.
-// Rate-limited: only print the stack on FIRST occurrence of a given (op,mode,rgb) tuple within one
-// run so a per-frame ramp doesn't spam N identical stacks. The one-line summary still fires every
-// call so the frame cadence is visible.
+// `debug fadetrace` channel — logs every native-path fade call with the calling context. Pairs
+// with `PSXPORT_DISPWATCH=0x8007E9C8` which surfaces every substrate-path fade call. Together they
+// show both sides of the fade caller graph — essential when a substrate-side SM owns a fade and
+// the class never sees it (the HOLD then never releases). Rate-limited: only prints the C++
+// backtrace on FIRST occurrence of a given (op,mode,rgb) tuple; the one-line summary fires every
+// call so the frame cadence stays visible.
 static void fadetrace(const char* op, uint8_t mode, uint32_t rgb, const char* extra) {
   static int s_on = -1;
   if (s_on < 0) s_on = cfg_dbg("fadetrace") ? 1 : 0;
@@ -26,9 +20,6 @@ static void fadetrace(const char* op, uint8_t mode, uint32_t rgb, const char* ex
   const char* modeName = mode == 0 ? "NONE" : mode == 1 ? "ADDITIVE" : mode == 2 ? "SUBTRACTIVE" : "?";
   fprintf(stderr, "[fadetrace] %s mode=%s rgb=0x%06X%s%s\n", op, modeName, rgb,
           extra && *extra ? " " : "", extra ? extra : "");
-  // First-time-seen (op,mode,rgb) tuple gets a C++ backtrace to identify the caller. Store in a tiny
-  // fixed ring — bugged (a truly unique caller stream would overflow), but our fade caller set is
-  // small (<32 distinct tuples) so it's fine for this diagnostic.
   static uint32_t seen[64] = {0};
   static int seen_n = 0;
   uint32_t key = ((uint32_t)(uintptr_t)op * 0x9E37u) ^ ((uint32_t)mode << 24) ^ (rgb & 0xFFFFFFu);
@@ -44,64 +35,70 @@ static void fadetrace(const char* op, uint8_t mode, uint32_t rgb, const char* ex
   }
 }
 
-void ScreenFade::frameStart() {
-  // Reset only the frame-scoped state. The held fully-faded state (+4..+7) persists across frames.
-  core->mem_w8(GUEST_ADDR + 0, (uint8_t)NONE);
-  core->mem_w8(GUEST_ADDR + 1, 0);
-  core->mem_w8(GUEST_ADDR + 2, 0);
-  core->mem_w8(GUEST_ADDR + 3, 0);
+// Dispatch the substrate FUN_8007e9c8 (screen-fade packet builder) with the ABI it expects, so its
+// scratchpad + packet-pool + OT-link writes fire. Guest-call setup mirrors the d3(c, fn, a0, a1, a2)
+// helper in engine_stage.cpp: load a0..a2, invoke rec_dispatch. r[29] (sp) is preserved so the
+// callee's stack cleanup doesn't leak into the native caller's stack frame. Called ONLY under
+// mIsFaithful — the native render doesn't read what the substrate writes here.
+static constexpr uint32_t kGuestFadePacketBuilder = 0x8007E9C8u;
+static void dispatch_faithful_fade(Core* c, uint32_t color, uint32_t a1, uint32_t otSlot) {
+  uint32_t saved_sp = c->r[29];
+  c->r[4] = color;
+  c->r[5] = a1;
+  c->r[6] = otSlot;
+  rec_dispatch(c, kGuestFadePacketBuilder);
+  c->r[29] = saved_sp;
 }
 
-void ScreenFade::set(Mode mode, uint8_t r, uint8_t g, uint8_t b) {
+void ScreenFade::frameStart() {
+  // Reset only the frame-scoped state. The held fully-faded state persists across frames.
+  mFrameMode = NONE;
+  mFrameR = 0;
+  mFrameG = 0;
+  mFrameB = 0;
+}
+
+void ScreenFade::set(Mode mode, uint8_t r, uint8_t g, uint8_t b, uint32_t otSlot) {
   fadetrace("set", (uint8_t)mode, ((uint32_t)r << 16) | ((uint32_t)g << 8) | (uint32_t)b, nullptr);
-  // Frame-scoped state.
-  core->mem_w8(GUEST_ADDR + 0, (uint8_t)mode);
-  core->mem_w8(GUEST_ADDR + 1, r);
-  core->mem_w8(GUEST_ADDR + 2, g);
-  core->mem_w8(GUEST_ADDR + 3, b);
-  // Held fully-faded latch. Latched only when the fade is at or above the threshold in every channel
-  // (screen is essentially fully black for SUBTRACTIVE or fully white for ADDITIVE). Any set() below
-  // the threshold in any channel — i.e. the game has started ramping back toward "scene visible" —
+
+  // Update host-owned frame-scoped state (what the native renderer reads via get()).
+  mFrameMode = mode;
+  mFrameR = r;
+  mFrameG = g;
+  mFrameB = b;
+
+  // Held-fully-faded latch. Latched only when the fade is at or above the threshold in every
+  // channel (screen essentially fully black for SUBTRACTIVE / fully white for ADDITIVE). A set()
+  // below the threshold in any channel — i.e. game is ramping back toward "scene visible" —
   // releases the hold.
-  bool prevHeldMode = core->mem_r8(GUEST_ADDR + 4) != (uint8_t)NONE;
+  bool prevHeld = mHeldMode != NONE;
   if (mode != NONE && r >= FULLY_FADED_THRESHOLD && g >= FULLY_FADED_THRESHOLD && b >= FULLY_FADED_THRESHOLD) {
-    core->mem_w8(GUEST_ADDR + 4, (uint8_t)mode);
-    core->mem_w8(GUEST_ADDR + 5, r);
-    core->mem_w8(GUEST_ADDR + 6, g);
-    core->mem_w8(GUEST_ADDR + 7, b);
-    if (!prevHeldMode) fadetrace("HOLD latched", (uint8_t)mode,
-                                 ((uint32_t)r << 16) | ((uint32_t)g << 8) | (uint32_t)b, nullptr);
+    mHeldMode = mode; mHeldR = r; mHeldG = g; mHeldB = b;
+    if (!prevHeld) fadetrace("HOLD latched", (uint8_t)mode,
+                             ((uint32_t)r << 16) | ((uint32_t)g << 8) | (uint32_t)b, nullptr);
   } else {
-    core->mem_w8(GUEST_ADDR + 4, (uint8_t)NONE);
-    core->mem_w8(GUEST_ADDR + 5, 0);
-    core->mem_w8(GUEST_ADDR + 6, 0);
-    core->mem_w8(GUEST_ADDR + 7, 0);
-    if (prevHeldMode) fadetrace("HOLD released", 0, 0, nullptr);
+    mHeldMode = NONE; mHeldR = 0; mHeldG = 0; mHeldB = 0;
+    if (prevHeld) fadetrace("HOLD released", 0, 0, nullptr);
+  }
+
+  // Faithful side-effect: reproduce the substrate FUN_8007e9c8 guest writes so SBS sees identical
+  // scratchpad + packet-pool bytes on core-A native and core-B substrate. Skipped under normal PC
+  // play (the native renderer doesn't need those bytes).
+  if (core->game && core->game->mIsFaithful) {
+    uint32_t color = ((uint32_t)r << 16) | ((uint32_t)g << 8) | (uint32_t)b;
+    uint32_t a1    = (mode == ADDITIVE) ? 1u : 0u;
+    dispatch_faithful_fade(core, color, a1, otSlot);
   }
 }
 
-void ScreenFade::applyLeafCall(uint32_t color, uint32_t a1) {
-  // Guest ABI: color is 0x00RRGGBB in a0. a1 selects blend: !=0 additive, ==0 subtractive.
+void ScreenFade::applyLeafCall(uint32_t color, uint32_t a1, uint32_t otSlot) {
   fadetrace("applyLeafCall", (uint8_t)(a1 ? ADDITIVE : SUBTRACTIVE), color & 0xFFFFFFu, nullptr);
   set((a1 != 0u) ? ADDITIVE : SUBTRACTIVE,
-      (uint8_t)(color >> 16), (uint8_t)(color >> 8), (uint8_t)color);
+      (uint8_t)(color >> 16), (uint8_t)(color >> 8), (uint8_t)color,
+      otSlot);
 }
 
 ScreenFade::State ScreenFade::get() const {
-  Mode frame_mode = (Mode)core->mem_r8(GUEST_ADDR + 0);
-  if (frame_mode != NONE) {
-    return State{
-      frame_mode,
-      core->mem_r8(GUEST_ADDR + 1),
-      core->mem_r8(GUEST_ADDR + 2),
-      core->mem_r8(GUEST_ADDR + 3),
-    };
-  }
-  // No caller set fade this frame — return the held fully-faded state if any.
-  return State{
-    (Mode)core->mem_r8(GUEST_ADDR + 4),
-    core->mem_r8(GUEST_ADDR + 5),
-    core->mem_r8(GUEST_ADDR + 6),
-    core->mem_r8(GUEST_ADDR + 7),
-  };
+  if (mFrameMode != NONE) return State{ mFrameMode, mFrameR, mFrameG, mFrameB };
+  return State{ mHeldMode, mHeldR, mHeldG, mHeldB };
 }
