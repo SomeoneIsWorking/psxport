@@ -248,12 +248,12 @@ void rec_dispatch_miss(Core* c, uint32_t addr) {
               c->mem_r8(0x1f80019bu), c->mem_r8(0x800bf870u), c->mem_r32(0x80109450u), c->mem_r8(0x1f800234u));
     }
     fprintf(stderr,
-      "\n[recomp-MISS %d] no recompiled fn for 0x%08X  (caller ra=0x%08X, a0=0x%08X)\n"
+      "\n[recomp-MISS %d] no recompiled fn for 0x%08X  (caller ra=0x%08X, a0=0x%08X, c->pc=0x%08X)\n"
       "  resident overlay for this slot = %s (if non-A00 but addr is an A00 fn -> stale pointer /\n"
       "  wrong overlay resident; if matches but still missed -> function-discovery gap in that overlay)\n"
       "  not a recompiled MAIN fn / native override / platform-HLE leaf — likely overlay code or a\n"
       "  mid-function coroutine resume. The interpreter is removed; this is fail-fast by design.\n",
-      s_miss++, addr, c->r[31], c->r[4], resov ? resov : "(addr not in any slot range)");
+      s_miss++, addr, c->r[31], c->r[4], c->pc, resov ? resov : "(addr not in any slot range)");
     guest_backtrace_to(c, stderr);
     fflush(stderr);
     abort();
