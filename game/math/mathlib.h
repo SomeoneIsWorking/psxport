@@ -26,6 +26,16 @@ public:
   // test868 (guest FUN_8004D868): sibling — same bit-test against a fixed third bitmap
   // @0x800BFDB4 (no sel selector). Shares the `bitverify` gate.
   uint32_t test868(int32_t idx);
+
+  // testFE48 (guest FUN_8006EFF4): bit-test on the u32 flag WORD at 0x800BFE48. Returns
+  // `(*(u32)0x800BFE48 >> idx) & 1` — the recomp uses `srav v0, v0, a0` so the shift amount is
+  // masked to 5 bits by the hardware (idx & 31). Body from disas 0x8006EFF4..0x8006F008.
+  uint32_t testFE48(int32_t idx);
+
+  // setFE34 (guest FUN_8006F02C): bit-SET on the u32 flag WORD at 0x800BFE34. Does
+  // `*(u32)0x800BFE34 |= (1 << idx)` — `sllv` gives the same idx & 31 masking as above.
+  // Body from disas 0x8006F02C..0x8006F048.
+  void     setFE34(int32_t idx);
 };
 
 #endif

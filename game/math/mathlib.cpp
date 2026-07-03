@@ -69,3 +69,17 @@ uint32_t Bit::test868(int32_t idx) {
   c->r[2] = mine;
   return mine;
 }
+
+// FUN_8006EFF4 — u32 flag-bit TEST on the fixed 32-bit word at 0x800BFE48. Pure 5-instruction body:
+//   v0 = *(u32)0x800BFE48;  return (v0 >> idx) & 1;   -- srav masks idx to & 31 at the ISA level.
+uint32_t Bit::testFE48(int32_t idx) {
+  Core* c = this->core;
+  return (c->mem_r32(0x800BFE48u) >> ((uint32_t)idx & 31u)) & 1u;
+}
+
+// FUN_8006F02C — u32 flag-bit SET on the fixed 32-bit word at 0x800BFE34. 7-instruction body:
+//   *(u32)0x800BFE34 |= (1u << idx);                  -- sllv masks idx to & 31 at the ISA level.
+void Bit::setFE34(int32_t idx) {
+  Core* c = this->core;
+  c->mem_w32(0x800BFE34u, c->mem_r32(0x800BFE34u) | (1u << ((uint32_t)idx & 31u)));
+}

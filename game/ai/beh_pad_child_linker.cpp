@@ -28,6 +28,7 @@
 // per-object dispatcher ignores the handler return; the gate compares only RAM+scratchpad).
 
 #include "core.h"
+#include "mathlib.h"    // class Bit (c->engine.bit.testFE48 / setFE34)
 #include "cfg.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -234,8 +235,7 @@ void beh_pad_child_linker(Core* c) {
   { uint32_t a = c->mem_r32(obj + 0xC4); c->mem_w16(a + 2, c->mem_r16(v1 + 2)); }
  L784:
   c->r[4] = obj; rec_dispatch(c, 0x8006F138u);
-  c->r[4] = (uint32_t)((int32_t)c->mem_r8(obj + 1) - 1); rec_dispatch(c, 0x8006EFF4u);
-  v0 = c->r[2];
+  v0 = c->engine.bit.testFE48((int32_t)c->mem_r8(obj + 1) - 1);   // FUN_8006EFF4 (native)
   if (v0 == 0) goto L7cc;
   v0 = c->mem_r32(obj + 0x14);
   if (v0 == 0) goto L87c;
@@ -247,7 +247,7 @@ void beh_pad_child_linker(Core* c) {
   c->r[4] = (uint32_t)((int32_t)c->mem_r8(obj + 1) - 1); c->r[5] = 0; rec_dispatch(c, 0x8007E038u);
   v0 = c->r[2];
   c->mem_w32(obj + 0x14, v0);
-  c->r[4] = (uint32_t)((int32_t)c->mem_r8(obj + 1) - 1); rec_dispatch(c, 0x8006F02Cu);
+  c->engine.bit.setFE34((int32_t)c->mem_r8(obj + 1) - 1);         // FUN_8006F02C (native)
   goto L87c;
  L800:
   if (c->mem_r8(v0 + 4) < 2) goto L87c;
@@ -280,8 +280,7 @@ void beh_pad_child_linker(Core* c) {
   { uint32_t a = c->mem_r8(0x800BF840u);
     if ((a & 0x40) == 0) goto L970;
     s0 = a & 0x0F; }
-  c->r[4] = s0; rec_dispatch(c, 0x8006EFF4u);
-  v0 = c->r[2];
+  v0 = c->engine.bit.testFE48((int32_t)s0);                        // FUN_8006EFF4 (native)
   if (v0 != 0) goto L970;
   if ((c->mem_r8(s1 + 97) & 1) != 0) goto L970;
   v0 = c->mem_r32(obj + 0x10);
@@ -289,7 +288,7 @@ void beh_pad_child_linker(Core* c) {
   c->r[4] = s0; c->r[5] = 0; rec_dispatch(c, 0x8007E038u);
   v0 = c->r[2];
   c->mem_w32(obj + 0x10, v0);
-  c->r[4] = s0; rec_dispatch(c, 0x8006F02Cu);
+  c->engine.bit.setFE34((int32_t)s0);                              // FUN_8006F02C (native)
   c->mem_w8(obj + 0x46, (uint8_t)s0);
   goto L9ac;
  L93c:

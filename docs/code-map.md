@@ -7,7 +7,7 @@ A native may exist already. **LIVE** = reachable by direct C call from a native_
 dispatch root (actually runs). **ORPHAN** = native exists but only the REMOVED override
 table used to reach it — it is dead code until a native parent calls it directly.
 
-Totals: 145 native fns, 128 owned addresses, 7 LIVE / 138 ORPHAN.
+Totals: 147 native fns, 130 owned addresses, 7 LIVE / 140 ORPHAN.
 
 | addr | status | symbol | file:line | depends-on (still-PSX) | summary |
 |------|--------|--------|-----------|------------------------|---------|
@@ -81,6 +81,8 @@ Totals: 145 native fns, 128 owned addresses, 7 LIVE / 138 ORPHAN.
 | 0x8006E918 | ORPHAN | `CutsceneCamera::initPlace` | game/camera/cutscene_camera.cpp:803 |  |  |
 | 0x8006EA7C | ORPHAN | `CutsceneCamera::init` | game/camera/cutscene_camera.cpp:835 |  |  |
 | 0x8006EC44 | ORPHAN | `CutsceneCamera::update` | game/camera/cutscene_camera.cpp:822 |  |  |
+| 0x8006EFF4 | ORPHAN | `Bit::testFE48` | game/math/mathlib.cpp:75 |  | u32 flag-bit TEST on the fixed 32-bit word at 0x800BFE48. Pure 5-instr… |
+| 0x8006F02C | ORPHAN | `Bit::setFE34` | game/math/mathlib.cpp:82 |  | u32 flag-bit SET on the fixed 32-bit word at 0x800BFE34. 7-instruction… |
 | 0x80074F24 | ORPHAN | `Pool::selectStateIndex` | game/world/pool.cpp:234 | 0x800750D8 | per-area STATE-INDEX select + apply. Early-out if scratchpad 0x1F80013… |
 | 0x80075130 | ORPHAN | `Font::init` | game/ui/engine_font.cpp:69 | 0x8008E040 0x80090700 0x80090980 0x80091B50 0x80091D70 0x80098150 … | font / text system init orchestrator. No args, no return. Mirrors the … |
 | 0x80075240 | ORPHAN | `Pool::reset75240` | game/world/pool.cpp:101 | 0x80075824 0x80075D58 0x80099490 | reset the control block at 0x800BE1F8: call 0x80075D58 leaf, seed clam… |
