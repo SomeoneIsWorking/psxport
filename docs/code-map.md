@@ -7,7 +7,7 @@ A native may exist already. **LIVE** = reachable by direct C call from a native_
 dispatch root (actually runs). **ORPHAN** = native exists but only the REMOVED override
 table used to reach it — it is dead code until a native parent calls it directly.
 
-Totals: 138 native fns, 121 owned addresses, 7 LIVE / 131 ORPHAN.
+Totals: 139 native fns, 122 owned addresses, 7 LIVE / 132 ORPHAN.
 
 | addr | status | symbol | file:line | depends-on (still-PSX) | summary |
 |------|--------|--------|-----------|------------------------|---------|
@@ -47,6 +47,7 @@ Totals: 138 native fns, 121 owned addresses, 7 LIVE / 131 ORPHAN.
 | 0x80050DE4 | ORPHAN | `Engine::sceneStateStep` | game/scene/engine_stage.cpp:1112 |  | Engine::sceneStateStep — the SCENE-INIT / SCENE-RUN state machine at g… |
 | 0x80051128 | ORPHAN | `NodeXform::propagate` | game/render/node_xform.cpp:53 |  | per-object CHILD-NODE TRANSFORM loop. RE'd from disas: |
 | 0x80051794 | ORPHAN | `eng_identity_matrix` | game/scene/engine_init.cpp:25 |  | set an identity 3x3 rotation matrix (0x1000 = 1.0 fixed on the diagona… |
+| 0x80051B04 | ORPHAN | `GraphicsBind::installSceneRecord` | game/world/graphics_bind.cpp:93 |  | two-level scene-data-table pointer resolve. Pure address arithmetic, n… |
 | 0x80052078 | ORPHAN | `eng_stage_transition` | game/scene/engine_level.cpp:66 |  | (stageIdx) — the cooperative STAGE TRANSITION: load the next stage's o… |
 | 0x80052078 | ORPHAN | `Engine::startStage` | game/scene/engine_stage.cpp:1409 | 0x80080870 0x80080890 0x800808A0 | switch task 0 to the given stage (load overlay + reset the display/BIO… |
 | 0x800520E0 | ORPHAN | `Engine::initEntityPool` | game/scene/engine_init.cpp:101 |  | engine SUBSYSTEM init (init-prefix slot, dispatched at native_boot.cpp… |

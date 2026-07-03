@@ -90,7 +90,7 @@ void beh_lift_platform(Core* c) {
         c->engine.graphicsBind.recordAlloc();                      // FUN_8007AAE8 -> rec (a0 carried)
         uint32_t rec = c->r[2];
         c->mem_w32(base + 0xc0, rec);
-        c->r[4] = rec; c->r[5] = 0xc; c->r[6] = (uint32_t)(i + 0x26); rec_dispatch(c, 0x80051b04u);
+        c->engine.graphicsBind.installSceneRecord(rec, 0xc, (uint32_t)(i + 0x26));    // FUN_80051B04 (native)
         i++;
         base += 4;
       } while (i < (int)c->mem_r8(nd + 8));

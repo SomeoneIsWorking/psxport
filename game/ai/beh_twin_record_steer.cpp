@@ -100,7 +100,7 @@ void beh_twin_record_steer(Core* c) {
      c->mem_w32(rec + 8, 0);
      c->mem_w32(rec + 12, 0);
      // FUN_80051B04(rec, 12, iter); leaves a0=rec for the next FUN_8007AAE8
-     c->r[4] = rec; c->r[5] = 12; c->r[6] = (uint32_t)iter; rec_dispatch(c, 0x80051b04u);
+     c->engine.graphicsBind.installSceneRecord(rec, 12, (uint32_t)iter);                // FUN_80051B04 (native)
    }
    goto Lret;
  }

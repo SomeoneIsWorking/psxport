@@ -24,5 +24,13 @@ public:
   void setGeom();         // FUN_80077B38
   void setXformBlk();     // FUN_8006CBD0
   void posCompose();      // FUN_8004BD64
+
+  // installSceneRecord(rec, classArg, itemArg): FUN_80051B04 — two-level pointer resolve into the
+  //   scene-data table at 0x800ECF58 (same table Spawn::sceneEntity reads at offset +8). Reads
+  //   base = *(u32)(0x800ECF58 + classArg*4), then off = *(u32)(base + itemArg*4 + 4), stores
+  //   (base + off) at rec[+0x40] — the sceneData pointer slot on a GraphicsBind render record.
+  //   The recordInit body (FUN_80051B70) inlines the same three lines at its tail; this method is
+  //   the shared source-of-truth. All 4 direct callsites pass classArg=12.
+  void installSceneRecord(uint32_t rec, uint32_t classArg, uint32_t itemArg);
 };
 #endif

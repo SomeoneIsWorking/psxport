@@ -89,7 +89,7 @@ void beh_event_record_machine(Core* c) {
         c->mem_w32(rec + 0xc, 0);
         int16_t t4 = c->mem_r16s(tbl + 8);
         tbl += 10;
-        c->r[4] = rec; c->r[5] = 0xc; c->r[6] = (uint32_t)(int32_t)t4; rec_dispatch(c, 0x80051b04u);
+        c->engine.graphicsBind.installSceneRecord(rec, 0xc, (uint32_t)(int32_t)t4);   // FUN_80051B04 (native)
         base += 4;
       } while (i < (int)c->mem_r8(nd + 8));
     }

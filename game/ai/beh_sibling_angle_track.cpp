@@ -40,6 +40,7 @@
 #include "spawn.h"     // class Spawn (c->engine.spawn.despawn / dispatch / spawnAndInit)
 #include "graphics_bind.h"   // ov_obj_record_init
 #include "trig.h"            // class Trig — libgte rsin/rcos
+#include "object/actor.h"    // class Actor — Actor::boundsCull (FUN_8007778C native)
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
@@ -161,12 +162,11 @@ void beh_sibling_angle_track(Core* c) {
   int32_t v1 = (int32_t)(prod >> 12);                   // 801397EC sra v1,0xc  (mflo >> 12)
   uint16_t n32 = c->mem_r16(s1 + 0x32);                 // 801397E4 lhu v0, 0x32(s1)
   int32_t newv = (int32_t)(int16_t)n32 + v1 - 0x60;     // 801397F0 addu ; 801397F4 -0x60
-  // GOTCHA: node[0x32] store is the DELAY SLOT of jal 0x8007778c (0x801397F8); it stores newv (computed
-  // above) and a0=obj was set at 0x801397E0, both before the call executes.
-  c->r[4] = obj;                                        // 801397E0 move a0, s2
+  // GOTCHA: node[0x32] store is the DELAY SLOT of jal 0x8007778c (0x801397F8); the recomp stores
+  // newv (computed above) BEFORE the call runs. Keep that ordering here too — the cull body reads
+  // posY (obj+0x32) so the write must land first.
   c->mem_w16(obj + 0x32, (uint16_t)newv);              // 801397FC sh v0, 0x32(s2)  (delay slot)
-  rec_dispatch(c, 0x8007778Cu);                         // 801397F8 jal 0x8007778c (cull)
-  if (c->r[2] == 0) return;                             // 80139800 beqz v0 -> epilogue
+  if (Actor(c, obj).boundsCull() == 0) return;         // FUN_8007778C native (was rec_dispatch)
   c->r[4] = obj; c->engine.graphicsBind.renderUpdate();          // 80139808 jal 0x800517f8 (render; a0=s2 delay)
   // 80139810 j 0x80139820 (epilogue)
 }

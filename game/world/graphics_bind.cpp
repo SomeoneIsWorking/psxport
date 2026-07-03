@@ -63,9 +63,7 @@ static uint32_t obj_record_init(Core* c) {
   c->mem_w16(rec + 0, 0);  c->mem_w16(rec + 2, 0);  c->mem_w16(rec + 4, 0);
   c->mem_w16(rec + 8, 0);  c->mem_w16(rec + 0xa, 0); c->mem_w16(rec + 0xc, 0);
   c->mem_w16(rec + 0x38, 0x1000); c->mem_w16(rec + 0x3a, 0x1000); c->mem_w16(rec + 0x3c, 0x1000);
-  uint32_t base = c->mem_r32(0x800ECF58u + a1 * 4u);     // table[a1]
-  uint32_t off  = c->mem_r32(base + a2 * 4u + 4u);        // *(table[a1] + a2*4 + 4)
-  c->mem_w32(rec + 0x40, base + off);
+  c->engine.graphicsBind.installSceneRecord(rec, a1, a2);   // FUN_80051B04 inlined here in the recomp
   return 0;
 }
 void GraphicsBind::recordAlloc() { Core* c = core;
@@ -85,6 +83,18 @@ void GraphicsBind::recordAlloc() { Core* c = core;
 void GraphicsBind::recordInit() { Core* c = core;
   static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("recinitverify") ? 1 : 0;
   c->engine.verifyGate.run(obj_record_init, 0x80051B70u, "recinitverify", s_v);
+}
+
+// FUN_80051B04 — two-level scene-data-table pointer resolve. Pure address arithmetic, no branches.
+// RE'd verbatim from disas 0x80051B04..0x80051B30. Reads the sceneData table root at 0x800ECF58
+// (same table Spawn::sceneEntity reads at offset +8 = table[2]), then indexes by classArg + itemArg
+// and stashes (base + off) at rec[+0x40]. The recomp's FUN_80051B70 (recordInit) inlines the same
+// body at its tail — the extraction dedupes.
+void GraphicsBind::installSceneRecord(uint32_t rec, uint32_t classArg, uint32_t itemArg) {
+  Core* c = core;
+  uint32_t base = c->mem_r32(0x800ECF58u + classArg * 4u);
+  uint32_t off  = c->mem_r32(base + itemArg * 4u + 4u);
+  c->mem_w32(rec + 0x40, base + off);
 }
 
 // FUN_800517F8 — per-object RENDER-STATE UPDATE: build the object's transform, then snapshot its int16

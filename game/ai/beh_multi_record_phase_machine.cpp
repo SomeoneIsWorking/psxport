@@ -99,7 +99,7 @@ void beh_multi_record_phase_machine(Core* c) {
        c->mem_w16(rec + 10, 0);
        c->mem_w16(rec + 12, 0);
        s3 += 2;
-       c->r[4] = rec; c->r[5] = 12; c->r[6] = (uint32_t)(i + 52); rec_dispatch(c, 0x80051b04u);
+       c->engine.graphicsBind.installSceneRecord(rec, 12, (uint32_t)(i + 52));         // FUN_80051B04 (native)
        i += 1;
        s0 += 4;
      } while ((int32_t)i < (int32_t)c->mem_r8(nd + 8));
