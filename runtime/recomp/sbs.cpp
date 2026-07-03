@@ -1277,13 +1277,14 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
     // where one core made an extra (or missed a) RNG call vs the other. Every store to 0x80105EE8
     // increments its side's counter (via storeCb's PREWATCH path); we compare at the end of each
     // lockstep frame and dump the divergent core's stack on first mismatch.
-    if (only_on_value_diverge_ss && mWwArmed && mWwAddr == (0x80105EE8u | 0x80000000u)) {
+    if (only_on_value_diverge_ss && mWwArmed) {
       // Divergence trigger: EITHER cadence-count differs (one core advanced N times, the other M
-      // times) OR both cadences match but the end-of-frame seed values differ (which means either
-      // the counts differ silently or the STARTING seed at frame-entry differed — either way the
-      // seed's post-frame state is out of sync).
-      uint32_t seedA = mA->core.mem_r32(0x80105EE8u);
-      uint32_t seedB = mB->core.mem_r32(0x80105EE8u);
+      // times) OR both cadences match but the end-of-frame value at the armed byte differs (a
+      // VALUE-MISMATCH within matched cadence, e.g. same fn writes different data to the same
+      // address). Watch the exact armed byte, not a hardcoded RNG seed addr — this makes the
+      // probe usable for any address, not just 0x80105EE8.
+      uint32_t seedA = mA->core.mem_r8(mWwAddr & 0x1FFFFFFFu);
+      uint32_t seedB = mB->core.mem_r8(mWwAddr & 0x1FFFFFFFu);
       bool count_diverge = (mWwCountA != mWwCountB);
       bool value_diverge = (seedA != seedB);
       if ((count_diverge || value_diverge) && !mDivFound) {
