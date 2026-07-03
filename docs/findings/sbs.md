@@ -1,5 +1,24 @@
 # Findings — SBS dual-core compare harness (PSXPORT_SBS)
 
+## Target #4 (stride-0xC4 pool at 0x800F00xx) FALSIFIED as a beh_typed_table_seed_gate transcription defect — it's DOWNSTREAM propagation, not a case-swap (2026-07-03)
+- **finding:** After the wide-BYTETRACE sweep named 5 stride-0xC4 ONE-SIDED bytes at 0x800F00xx as a target-#4 candidate, applied the target-#1 primitive: cross-check native `game/ai/beh_typed_table_seed_gate.cpp` (0x80133C14) against recomp `ov_a00_gen_80133C14` (generated/ov_a00_shard_0.c:20529-20600). **No transcription defect found** — native state 0 (lines 65-83) and state 1 (lines 87-108) match the recomp writes byte-for-byte:
+  - state 0: same order, same constants (`obj+0x2a=0x22`, `obj+0x80=0x1e`, `obj+0x82=0x3c`, `obj+0x84=0x32`, `obj+4=1`, `obj+0=1`, `obj+0x29=0`, `obj+0x46=0`, `obj+0x86=0x64`, then `rec_dispatch(0x8004766Cu)`, then `obj+0x42=0`, `obj+0x60=-0xc8`, `obj+0x32=tbl[n3*2]`).
+  - state 1: same branches (`g<0x1c` → stash `obj+0x62`; `g==0x22` → `obj+1=st`, `rec_dispatch(0x80077EBC)`, render tail; else → `rec_dispatch(0x800778E4)`, if v0==0 stash `obj+0x62`, else render tail).
+  - LUI+ADDIU constant TBL_A6E4 (0x8014A6E4) = `0x80150000 + sign_extend(-0x591C)` = correct in the native file (line 46 comment agrees with the folded value).
+- **where the divergence actually lives:** the writes at rec+0x0C (which decodes to the 0x800F0036 / 0xFA / 0x1BE / 0x282 / 0x346 absolute addresses — records are stride-0xC4, laid out from 0x800F002A) come from line 19308 in `ov_a00_gen_801337E4` (the state-1 entry helper, generated/ov_a00_shard_1.c):
+  ```
+  c->r[4] = (int16_t)mem_r16(obj+0x42);       // arg to FUN_80083F50
+  rec_dispatch(c, 0x80083F50u);                // returns a value in r[2]
+  c->r[3] = mem_r32(obj + 0xC0);               // rec_ptr (render-cmd record)
+  c->r[2] = c->r[2] >> 5;
+  c->mem_w16(c->r[3] + 12, (uint16_t)c->r[2]);  // ← THE DIVERGENT WRITE (rec + 0x0C)
+  ```
+  Both A and B execute this same recomp helper via the same dispatch path (native calls `rec_dispatch(0x801337E4)`, recomp calls `ov_a00_func_801337E4(c)` — both resolve to the same body). If both cores' obj[+0x42] and obj[+0x46] were equal at the moment of dispatch, they'd write the same value. **The 5 divergent live values prove obj[+0x42] (or the obj[+0x46] gate that decides whether FUN_80083F50 runs — line 19298-19300) differs upstream between the two cores.**
+- **not a case-swap in this handler.** obj[+0x42] is initialized to 0 in state 0 by BOTH native and recomp (matches). Something ELSE writes to obj[+0x42] over the object's lifetime and puts native and recomp out of sync for these 5 objects. That "something else" could be another native handler with a transcription defect OR another target-#2-style architectural drift (native-render walk touching the field). Not narrowable without a wwatch on obj[+0x42] for one of the 5 divergent objects.
+- **fix-path recommendation for the next session:** don't attack beh_typed_table_seed_gate. Do this instead: for record #0 (rec_ptr = 0x800F002A ⇒ its owning obj), wwatch `obj[+0x42]` (halfword) on both cores over the AUTONAV window with `PSXPORT_WWATCH=<obj_addr>+0x42,+2` and settled-state RA bucketing. First writer whose ra fingerprint differs between A and B names the real target. Or (b) run BYTETRACE on the WHOLE object records of the 5 divergent nodes (find their obj addresses from cmd_ptr backpointer) and see whether obj[+0x42]/obj[+0x46] are themselves flagged as REAL — if so, that's the actual defect address.
+- **workflow lesson:** a candidate defect surfaced by BYTETRACE-shape (ONE-SIDED, live-values-differ) is a POINTER at where a divergence lands, not necessarily where it originated. When the direct handler's transcription matches, walk backward through the dispatch chain to find the actual writer. The classification stayed useful (bounded the surface, ruled out LUI+ADDIU + case-swap in this handler); it just didn't close the target in-place.
+- **refs:** game/ai/beh_typed_table_seed_gate.cpp (native, verified byte-for-byte), generated/ov_a00_shard_0.c:20529-20600 (recomp gen_80133C14 body), generated/ov_a00_shard_1.c:19242-19313 (recomp gen_801337E4 helper — the actual divergent-write site at line 19308), game/world/graphics_bind.cpp:51-70 (obj_record_init native writing rec+0..0xc, +0x38/3a/3c, +0x40 — sets up records but doesn't touch rec+0x0C).
+
 ## Post-Slip-#1 wide BYTETRACE classification (2026-07-03) — most of remaining 1880 B ramdiff is low-signal; two actionable clusters named
 - **finding:** Ran two `PSXPORT_SBS_BYTETRACE=<lo>,<hi>` sweeps to classify what fills the 1880 B ramdiff after Slip #1 closed.
   ```
