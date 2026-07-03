@@ -672,24 +672,32 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
 
     // ATTACK-(a) trace: log stage/substate per core per frame during the DEMO→GAME→cutscene window
     // where the 2-frame lead is introduced. Only enabled with PSXPORT_SBS_STAGETRACE=1.
-    static const bool stagetrace = []{ const char* e = getenv("PSXPORT_SBS_STAGETRACE"); return e && *e && strcmp(e,"0")!=0; }();
+    // On-change: normal (whole boot window). Verbose per-tick: PSXPORT_SBS_STAGETRACE=2 (dumps EVERY
+    // tick in f22..f36 so slip-window diffs are visible even when the state doesn't nominally change).
+    static const int stagetrace = []{ const char* e = getenv("PSXPORT_SBS_STAGETRACE"); return e ? atoi(e) : 0; }();
     if (stagetrace && mFrame < 250) {
       auto smState = [](Core* c) {
         uint32_t sm = c->mem_r32(0x1f800138u);
-        return std::make_tuple(c->mem_r32(0x801fe00cu),
+        return std::make_tuple(c->mem_r32(0x801fe00cu),                  // TASK0_ENTRY (base+0xc)
+                               c->mem_r16(0x801fe000u),                    // TASK0 base state (base+0)
                                c->mem_r16(sm + 0x48), c->mem_r16(sm + 0x4a),
                                c->mem_r16(sm + 0x4c), c->mem_r16(sm + 0x4e),
-                               c->mem_r8(0x1f800137u));
+                               c->mem_r16(sm + 0x50),                      // sm[0x50] (submode0's inner var)
+                               c->mem_r8(0x1f800137u),                     // cut flag
+                               c->mem_r8(0x1f800134u));                    // init48 selector
       };
-      auto [aE, a48, a4a, a4c, a4e, aCut] = smState(&mA->core);
-      auto [bE, b48, b4a, b4c, b4e, bCut] = smState(&mB->core);
+      auto [aE, aS_, a48, a4a, a4c, a4e, a50, aCut, aI34] = smState(&mA->core);
+      auto [bE, bS_, b48, b4a, b4c, b4e, b50, bCut, bI34] = smState(&mB->core);
       static uint32_t aP=0, bP=0;
-      uint32_t aS = aE ^ (a48<<4) ^ (a4a<<8) ^ (a4c<<12) ^ (a4e<<16) ^ (aCut<<20);
-      uint32_t bS = bE ^ (b48<<4) ^ (b4a<<8) ^ (b4c<<12) ^ (b4e<<16) ^ (bCut<<20);
-      if (aS != aP || bS != bP) {
-        fprintf(stderr, "[stagetrace] f%u A entry=%08X sm48=%u/4a=%u/4c=%u/4e=%u cut=%u | B entry=%08X sm48=%u/4a=%u/4c=%u/4e=%u cut=%u\n",
-                mFrame, aE, a48, a4a, a4c, a4e, aCut, bE, b48, b4a, b4c, b4e, bCut);
-        aP = aS; bP = bS;
+      // Signature includes ALL logged fields so any change triggers a log line.
+      uint32_t aSig = aE ^ (aS_<<1) ^ (a48<<4) ^ (a4a<<8) ^ (a4c<<12) ^ (a4e<<16) ^ (a50<<20) ^ (aCut<<24) ^ (aI34<<26);
+      uint32_t bSig = bE ^ (bS_<<1) ^ (b48<<4) ^ (b4a<<8) ^ (b4c<<12) ^ (b4e<<16) ^ (b50<<20) ^ (bCut<<24) ^ (bI34<<26);
+      bool verbose_window = (stagetrace >= 2) && (mFrame >= 22 && mFrame <= 36);
+      if (verbose_window || aSig != aP || bSig != bP) {
+        fprintf(stderr, "[stagetrace] f%u A entry=%08X st=%u sm48=%u/4a=%u/4c=%u/4e=%u/50=%u cut=%u i34=%u | B entry=%08X st=%u sm48=%u/4a=%u/4c=%u/4e=%u/50=%u cut=%u i34=%u\n",
+                mFrame, aE, aS_, a48, a4a, a4c, a4e, a50, aCut, aI34,
+                        bE, bS_, b48, b4a, b4c, b4e, b50, bCut, bI34);
+        aP = aSig; bP = bSig;
       }
     }
     mWwHit = 0; mWwVa = mWwVb = 0;
