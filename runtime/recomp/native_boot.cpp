@@ -208,8 +208,6 @@ static void native_crt0(Core* c) {
   game_main(c);                                   // DIRECT PC call (was: crt0 jal main -> flip)
 }
 
-void native_task0_bootstrap(Core* c);   // engine_stage.cpp
-
 // Init prefix + task-0 bootstrap (everything FUN_80050b08 does before its scheduler loop). Factored out
 // of game_main so the dual-core harness can init two cores then drive the frame loop itself.
 static void game_init(Core* c) {
@@ -264,7 +262,7 @@ static void game_init(Core* c) {
   // scheduler's "current task" ptr DAT_1f800138 is normally set by FUN_80051e60; set it to task0
   // so FUN_80052078/FUN_800450bc operate on task 0. ---
   c->mem_w32(0x1f800138, 0x801fe000);
-  native_task0_bootstrap(c);   // PC-native: was rc0(c, 0x800499e8) — CD subtree owned top-down
+  c->engine.task0Bootstrap();   // PC-native: was rc0(c, 0x800499e8) — CD subtree owned top-down
   // START.BIN loaded raw to 0x80106228: [0]=manifest count (6); entry word @0x8010649c.
   fprintf(stderr, "[native_boot] after FUN_800499e8: START.BIN count@0x80106228=%u "
                   "entry-word@0x8010649c=0x%08X (expect 0x27BDFE38); task0 state=%u entry=0x%08X\n",

@@ -1402,7 +1402,12 @@ static void native_load_overlay(Core* c, uint32_t taskfields, uint32_t stage) {
 }
 
 // FUN_80052078: switch task 0 to the given stage (load overlay + reset the display/BIOS bits).
-static void native_start_stage(Core* c, uint32_t stage) {
+// Public entry: called by DEMO's LEAVE-to-GAME substate (engine_demo.cpp s5), by task0Bootstrap after
+// the START.BIN file-table build, by native_stage0_sm (the boot-time inline preload), and by
+// stage0Advance's final step (native scheduler tick that enters DEMO). Was `native_start_stage`
+// (static) + `demo_start_stage` (public wrapper).
+void Engine::startStage(uint32_t stage) {
+  Core* c = core;
   uint32_t task = c->mem_r32(0x1f800138);            // current task (= task 0, 0x801fe000)
   native_load_overlay(c, task + 0xc, stage);
   c->mem_w16(task, 3);                               // task state = 3 (active)
@@ -1412,17 +1417,13 @@ static void native_start_stage(Core* c, uint32_t stage) {
   rec_dispatch(c, 0x80080870u);                      // B(0Fh) reset (BIOS leaf)
   rec_dispatch(c, 0x800808a0u);                      // ExitCriticalSection (BIOS leaf)
   c->r[4] = 0xff000000u;
-  scheduler_yield(c);                                      // ChangeThread — native scheduler yield
+  scheduler_yield(c);                                // ChangeThread — native scheduler yield
 }
 
-// Public entry for the front-end (engine_demo.cpp s5 = LEAVE DEMO -> GAME). FUN_80052078(2): the DEMO
-// substate s5's whole body is `jal 0x80052078(2)` — switch task 0 to stage 2 (GAME). The scheduler's
-// DEMO branch detects the entry change and hands off to GAME (see native_scheduler_step).
-void demo_start_stage(Core* c, uint32_t stage) { native_start_stage(c, stage); }
-
 // FUN_800499e8: resolve \BIN\START.BIN natively, record its {LBA,size}, switch task 0 to stage 0.
-// Non-static: called directly from native_boot.cpp's game_init (the boot-init prefix).
-void native_task0_bootstrap(Core* c) {
+// Called once from native_boot.cpp's game_init (the boot-init prefix). Was `native_task0_bootstrap`.
+void Engine::task0Bootstrap() {
+  Core* c = core;
   uint32_t lba = 0, size = 0;
   if (!disc_find_file("\\BIN\\START.BIN", &lba, &size)) {
     fprintf(stderr, "[native_boot] FATAL: cannot resolve \\BIN\\START.BIN on disc\n");
@@ -1431,7 +1432,7 @@ void native_task0_bootstrap(Core* c) {
   c->mem_w32(STAGE_FILE_TBL, lba);                   // 0x800be1e0 = START.BIN LBA
   c->mem_w32(STAGE_FILE_TBL + 4, size);              // 0x800be1e4 = START.BIN size
   fprintf(stderr, "[native_boot] START.BIN resolved: LBA %u, %u bytes\n", lba, size);
-  native_start_stage(c, 0);
+  startStage(0);
 }
 
 // Read a NUL-terminated guest string into `out` (bounded). Used to pull the START.BIN filename
@@ -1462,7 +1463,7 @@ static void native_stage0_sm(Core* c) {
   c->mem_w16(task + 0x4a, 0);
   c->engine.asset.preloadTexgroup(0, 0);
   c->engine.asset.preloadStage1();
-  native_start_stage(c, 1);
+  c->engine.startStage(1);
   scheduler_yield(c);
 }
 
@@ -1530,7 +1531,7 @@ int Engine::stage0Advance(uint8_t& step) { Core* c = core;
     case 4: /* recomp sm==2 (no-op advance) */ break;
     case 5: /* extra padding to match measured 8-tick coro total (stagetrace-calibrated) */ break;
     case 6:                                                                        // recomp sm==3
-      native_start_stage(c, 1);        // swap task0 to DEMO — rewrites task+0xc, sets state=3
+      startStage(1);                   // swap task0 to DEMO — rewrites task+0xc, sets state=3
       scheduler_yield(c);              // never returns; longjmp to scheduler
       return 0;                        // unreachable
   }

@@ -169,6 +169,18 @@ public:
   // Returns 1 while more steps remain, 0 when the swap has landed.
   int stage0Advance(uint8_t& step);
 
+  // task0Bootstrap: the boot-init entry that (a) resolves \BIN\START.BIN natively via disc_find_file,
+  // (b) records its {LBA,size} into 0x800be1e0, and (c) enters stage 0 via startStage(0). Called once
+  // from native_boot.cpp's game_init (was `native_task0_bootstrap(Core*)`).
+  void task0Bootstrap();
+
+  // startStage(stage): FUN_80052078 — switch task 0 to the given stage. Loads the stage overlay
+  // (native_load_overlay), sets task state=3, hits the three BIOS EnterCS/B0F-reset/ExitCS leaves,
+  // then yields the scheduler. Public wrapper (was the free fn `demo_start_stage(Core*, uint32_t)`)
+  // plus the previous file-scope `native_start_stage` helper. Also the tail of task0Bootstrap +
+  // stage0Advance's final step.
+  void startStage(uint32_t stage);
+
   // ── ov_field_frame direct children (progressive class-ification) ──────────────────────────
   // areaModeDispatch: the 22-way area-mode jump-table dispatcher at guest 0x8001CAC0. Reads the
   //   area RENDER-MODE byte at 0x800BF870 and dispatches to the overlay handler that owns that

@@ -545,8 +545,7 @@ static void demo_frame_s3(Core* c) {
 // GAME). Native: call the stage transition; the scheduler detects the DEMO->GAME entry change and hands
 // off to GAME next frame (native_boot.cpp). No tail render (we are leaving the front-end).
 static void demo_frame_s5(Core* c) {
-  void demo_start_stage(Core*, uint32_t);
-  demo_start_stage(c, 2);                      // = FUN_80052078(2): load GAME overlay, restart task 0
+  c->engine.startStage(2);                     // = FUN_80052078(2): load GAME overlay, restart task 0
 }
 
 // Substate s4 (0x80106580) — LOAD GAME. The body runs the load sub-machine 0x8007bf20(0,0) then routes
