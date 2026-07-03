@@ -157,10 +157,28 @@ int SceneTransition::stepSwapWaiter(uint32_t node) {
         return 0;
       }
       case 1: {
-        c->r[4] = n; rec_dispatch(c, 0x80072E60u);
-        if (c->r[2] != 0 && c->mem_r8(0x800BF816u) != 0) {
+        // FUN_80072E60 (inlined; disas 0x80072E60..0x80072EF8): ramp obj[+0x50] toward ±1024 by 64
+        // per tick, driven by direction byte obj[+0x46] (0 = decrement, 1 = increment, else no-op).
+        // Returns 1 if the clamp was reached this tick (a1 = 1 in the recomp), 0 otherwise. Tail
+        // always sets obj[+0x56] = obj[+0x5A] + obj[+0x50] (the ADD form; FUN_80072EFC is the SUB
+        // form for the completion path below).
+        uint32_t clampHit = 0;
+        uint8_t dir = c->mem_r8(n + 0x46);
+        if (dir == 0) {
+          int16_t v = (int16_t)(c->mem_r16(n + 0x50) - 64);
+          c->mem_w16(n + 0x50, (uint16_t)v);
+          if (v < -1024) { c->mem_w16(n + 0x50, (uint16_t)-1024); clampHit = 1; }
+        } else if (dir == 1) {
+          int16_t v = (int16_t)(c->mem_r16(n + 0x50) + 64);
+          c->mem_w16(n + 0x50, (uint16_t)v);
+          if (v >= 1025) { c->mem_w16(n + 0x50, (uint16_t)1024); clampHit = 1; }
+        }
+        // TAIL (always): obj[+0x56] = obj[+0x5A] + obj[+0x50] (ADD, not the sub of FUN_80072EFC)
+        c->mem_w16(n + 0x56, (uint16_t)(c->mem_r16(n + 0x5A) + c->mem_r16(n + 0x50)));
+
+        if (clampHit != 0 && c->mem_r8(0x800BF816u) != 0) {
           c->mem_w8(n + 6, (uint8_t)(case_id + 1));
-          // FUN_80072EFC: n[+0x56] = n[+0x5A] - n[+0x50]  (3-inst body, disas 0x80072EFC..0x80072F10)
+          // FUN_80072EFC: n[+0x56] = n[+0x5A] - n[+0x50]  (SUB form, disas 0x80072EFC..0x80072F10)
           c->mem_w16(n + 0x56, (uint16_t)(c->mem_r16(n + 0x5A) - c->mem_r16(n + 0x50)));
         }
         return 0;
