@@ -72,6 +72,9 @@ void beh_pos_history_trail(Core* c);          // 0x80029B40 (resident)
 void beh_variant_overlay_lifecycle(Core* c);  // 0x8007DC38 (resident)
 void beh_a06_multi_actor(Core* c);            // 0x801189E8 (A06 overlay — cutscene fade director)
 void beh_script_interp_step(Core* c);         // 0x80041098 (resident) — ScriptInterp::step wrapper
+void beh_a06_scripted_actor(Core* c);         // 0x8013AA14 (A06 overlay) — cutscene scripted actor,
+                                              //   inlines the 0x80139C84 / 0x80139A28 chain natively
+                                              //   so ScriptInterp::step actually fires (was dark)
 
 namespace {
 struct NativeBeh { uint32_t addr; void (*fn)(Core*); const char* name; };
@@ -127,6 +130,7 @@ constexpr NativeBeh kTable[] = {
   { 0x8007DC38u, beh_variant_overlay_lifecycle,"variant_overlay_lifecycle" },  // resident
   { 0x801189E8u, beh_a06_multi_actor,           "a06_multi_actor" },            // A06 overlay
   { 0x80041098u, beh_script_interp_step,        "script_interp_step" },         // resident — cutscene script dispatch loop
+  { 0x8013AA14u, beh_a06_scripted_actor,        "a06_scripted_actor" },         // A06 overlay — the caller-chain root that reaches ScriptInterp
 };
 }  // namespace
 

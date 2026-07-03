@@ -12,10 +12,13 @@
 # output C goes wherever you point <out.c> (default convention: scratch/decomp/).
 set -eu
 repo="$(cd "$(dirname "$0")/.." && pwd)"; cd "$repo"
-# Ghidra headless: use `analyzeHeadless` from $PATH (symlink at <HOME>/.local/bin, per user directive
+# Ghidra headless: use `pyghidraRun -H` from $PATH (symlink at <HOME>/.local/bin, per user directive
 # 2026-07-03 — no filesystem paths so a future upgrade only touches the symlink target).
-HEADLESS_BIN="analyzeHeadless"
-HEADLESS_ARGS=()
+# Ghidra 12 dropped bundled Jython; `analyzeHeadless` alone can't run our `ghidra_decomp.py`
+# postScript ("Ghidra was not started with PyGhidra. Python is not available"). `pyghidraRun -H`
+# invokes AnalyzeHeadless via the PyGhidra script provider so .py scripts work — same CLI shape.
+HEADLESS_BIN="pyghidraRun"
+HEADLESS_ARGS=(-H)
 PROJDIR="scratch/ghidra"
 PROC="MIPS:LE:32:default"
 mkdir -p "$PROJDIR" scratch/decomp scratch/logs
