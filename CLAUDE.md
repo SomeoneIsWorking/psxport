@@ -26,6 +26,14 @@ trackers.
   (format at the top of `tools/findings.py`: symptom / status / cause / fix / refs — record DEAD ENDS
   too), then run `tools/findings.py` to regenerate the index. A finding's home is the registry, not the
   flat journal and not this file.
+- **LIVE bug list — check at session start + before diving in:** `tools/bugs.py` (skill:
+  `bug-tracker`). This is the "known but not yet fixed" tier — port-visible symptoms the USER has
+  reported (wrong render, wrong SFX, missing behavior…) or that diagnostic tools have surfaced. Pairs
+  with the findings registry above: findings = distilled root cause + fix; bug list = live symptoms
+  awaiting one. When the USER reports a new symptom, ADD it (`## BUG-<n>: <title>` block in
+  `docs/known-bugs.md`) before you investigate — the entry IS the "we're on it" signal. When you
+  land a plausible fix, flip status to `PORTED-BUT-UNVERIFIED`; when the user confirms, PROMOTE it
+  to `docs/findings/<subsystem>.md` and mark the bug entry `FIXED`.
 - **CHECK before reimplementing any `FUN_xxxx`:** `tools/codemap.py --addr <hex>` — ~350 native
   reimplementations are indexed by guest address (`docs/code-map.md`). Don't re-derive what exists.
   Regenerate (`tools/codemap.py`) when you add/move a native.
