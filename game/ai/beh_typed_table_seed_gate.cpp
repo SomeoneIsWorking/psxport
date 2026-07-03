@@ -24,7 +24,28 @@
 // PC-native class Rng (c->rng.next() implements FUN_8009A450 with seed at 0x80105EE8).
 //
 // STILL OPAQUE (recorded so a future RE arc closes them):
-//   - FUN_8004766C   per-object update called after box seed + inside render tail (matrix build?)
+//   - FUN_8004766C   PER-OBJECT TILE-BASED MOVEMENT STEP. RE'd shape (disas 0x8004766C..0x80047774):
+//                      * SNAPSHOT posX/posY/posZ (obj+0x2E/0x32/0x36 halfwords) into the shared TILE
+//                        WORKSPACE scratchpad at 0x1F8001BC/0x1BE/0x1C0.
+//                      * FUN_80047778(obj) — tile-clamp helper; adjusts the snapshot vs current tile
+//                        bounds using scratch 0x1AA/0x1AC (tile origin X/Z), 0x1AE/0x1B0 (tile span),
+//                        0x1C8 (tile-record ptr), 0x1FE (last-counterA byte). Also reads Actor::counterA
+//                        and may call 0x800490E4 / 0x80048ECC / 0x80048FC4 on a threshold miss.
+//                      * FUN_80049968(counterA) — per-type table lookup keyed by Actor::counterA;
+//                        populates scratch 0x1CC (record + 0x14 ptr) + 0x1D0 (record + halfword-indexed).
+//                      * FUN_80047CBC — tile-collision predicate; on 0 skip the rest and return.
+//                      * When positive: pump a command/stream at *(0x1F8001E0) whose halfword @0 masks
+//                        with 0x4000 — advances counterA (byte @[stream+0]) while set. Then call
+//                        FUN_80048134 (writes delta X into 0x1C2) + FUN_80048034 (writes delta Z into
+//                        0x1C6, uses scratch 0x1D8/0x1EC).
+//                      * INTEGRATE: posX = snapX + deltaX (0x1BC + 0x1C2); posZ = snapZ + deltaZ
+//                        (0x1C0 + 0x1C6). posY (obj+0x32) is NOT written back — Y is owned by the
+//                        oscillator branch in state_one_tick. Writes both scratch slot and Actor field.
+//                    This is the same "probe-result / tile-workspace" scratchpad region (0x1F8001A0..)
+//                    that game/object/actor_sm_24448.cpp + game/ai/beh_camera_target_follow.cpp already
+//                    reference for heading/floor-type — a FIELD-WIDE SHARED SURFACE. Native ownership
+//                    of this cluster (5 leaves) needs its own arc — most likely a `class TileMove` on
+//                    Engine with `Actor::tileMoveStep()` as the thin wrapper.
 //   - 0x800E7E80     "pilot-actor" region read by state_one_tick's TURN sub-states (mode @+0x147, yaw
 //                    @+0x58, state @+0x168). Likely Tomba's actor slot; future RE candidate for a
 //                    `class PilotActor` view.
@@ -53,7 +74,10 @@ enum class Sta : uint8_t { Init = 0, Active = 1, DespawnA = 2, DespawnB = 3 };
 
 // Un-RE'd sub-behaviors still called via rec_dispatch by this handler. (FUN_80077768 turn-direction
 // lookup is NATIVE now — Trig::angleCmp; see run_turn_setup.)
-constexpr uint32_t SUB_OBJ_UPDATE     = 0x8004766Cu;
+// FUN_8004766C = per-object TILE-BASED MOVEMENT STEP (snapshot pos → tile-clamp → per-type table
+// lookup → collision predicate → command-stream pump → integrate deltaX/deltaZ back into posX/posZ).
+// See top-of-file "STILL OPAQUE" block for the full RE'd shape + leaf cluster.
+constexpr uint32_t SUB_TILE_MOVE_STEP = 0x8004766Cu;
 
 // Pilot-actor region (0x800E7E80..) — read by state_one_tick's TURN sub-states.
 constexpr uint32_t PILOT_BASE      = 0x800E7E80u;
@@ -276,7 +300,7 @@ void beh_typed_table_seed_gate(Core* c) {
     a.setAlive(1);
     a.setCounterA(0);
     a.setCounterB(0);
-    c->r[4] = a.addr(); rec_dispatch(c, SUB_OBJ_UPDATE);           // per-object update (opaque)
+    c->r[4] = a.addr(); rec_dispatch(c, SUB_TILE_MOVE_STEP);       // init snap: seed posX/posZ via tile step
     a.setOscPhase((int16_t)0);                                     // target-#4 accumulator reset
     uint16_t seed = osc_base_table(c, a.type());                   // per-type oscBase seed
     a.setTriggerParam(-0xc8);                                      // -200 world units (Y offset?)
@@ -305,7 +329,7 @@ void beh_typed_table_seed_gate(Core* c) {
     // IN: fall through to render tail
   }
 
-  // ---- render tail: per-object update + render-state update ---------------------------------------
-  c->r[4] = a.addr(); rec_dispatch(c, SUB_OBJ_UPDATE);
+  // ---- render tail: per-frame tile move (integrates posX/posZ) + render-state update ---------------
+  c->r[4] = a.addr(); rec_dispatch(c, SUB_TILE_MOVE_STEP);
   c->r[4] = a.addr(); c->engine.graphicsBind.renderUpdate();
 }
