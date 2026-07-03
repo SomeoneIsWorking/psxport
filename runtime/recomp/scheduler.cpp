@@ -107,394 +107,348 @@ void scheduler_yield(Core* c) {
   longjmp(c->game->sched.yield_jmp, 1);   // native path: unwind to the scheduler's setjmp
 }
 
-// TODO(native-task-handler-registry): the main loop below currently checks the task-obj+0xc entry
-// PC against ~11 hard-coded addresses across DEMO / SOP-area-load / GAME / GAME-coop /
-// STAGE-0-step / STAGE-0-fresh clusters — each with its own state fields on SchedulerState
-// (demo_native[], game_native[], game_coop[], stage0_step[], demo_leave_step[], sop_field_step[])
-// and its own setjmp/task_ctx bookkeeping. Design for the follow-up (see scheduler_handler.h
-// which was drafted then removed pending this pass):
-//
-//   class NativeTaskHandler { virtual uint32_t entryPc() = 0; virtual int run(Core*, int, bool fresh) = 0; };
-//
-//   * Concrete handlers: Engine::demoHandler / gameStageHandler / sopAreaLoadHandler /
-//     startBinHandler — each wraps its existing scheduler stanza verbatim + owns the per-slot
-//     state it currently reads from SchedulerState.
-//   * Engine builds a small registry (fixed-size table keyed by entry PC) at construction.
-//   * native_scheduler_step becomes: read entry PC, lookup handler; if match run it; else fall
-//     through to Coro-fiber substrate path.
-//   * Under mIsFaithful, the fiber-path gate at line ~316 (`if (!native_content)`) becomes
-//     `if (!native_content || no_handler_for_entry_pc)` — this is what unblocks A's task-1
-//     (0x80044F58 preload wake) via fiber, letting native_task_spawn (above) actually write
-//     state=2 and have the scheduler dispatch task-1's substrate. sync_preload_completion_shim
-//     (engine_stage.cpp) then loses its state=0 override + done_flag=1 set.
-//   * SBS snap/restore of SchedulerState needs the per-handler state relocated (or kept in
-//     SchedulerState and just READ from handlers). The former is cleaner but touches sbs.cpp
-//     SbsSchedSnap; the latter is smaller.
-//
-// The primitive port above (native_task_spawn) is directly usable once the registry lands.
-// One scheduler pass over the 3 task slots (replaces FUN_80051e60).
+// ---- Per-stanza task-slot processors -------------------------------------------------------------
+// native_scheduler_step's main loop is a dispatch over per-entry-PC stanzas. Each stanza returns
+// STANZA_HANDLED when it processed the tick (caller does `continue` to the next slot), or
+// STANZA_NOT_MINE to fall through to the next stanza. Extracted from the historically-scattered
+// scheduler main loop so the entry-PC dispatch surface is O(N-stanzas) rather than O(11-checks).
+
+enum StanzaResult { STANZA_NOT_MINE = 0, STANZA_HANDLED = 1 };
 extern "C" void ffspan_reset_frame(void), ffspan_begin(Core*), ffspan_end(Core*, const char*);  // PSXPORT_BDTAG (engine_stage.cpp)
+
+// DEMO 0x801062E4 — native per-frame dispatcher (no guest coroutine). Fresh: stageMain (prologue)
+// then frame() dispatches sm[0x48]==0 substate. Resume: frame(). Slip #1 leave-defer delays the
+// sm[0x48]==5 leave-to-GAME dispatch by one tick to match the substrate coro's FUN_80051f80
+// yield cost. Entry rewrite (LEAVE-DEMO -> GAME): drop demo_native, task_started=0, state=3
+// stands so the next tick enters the generic path with the new entry.
+static StanzaResult run_demo_stanza(Core* c, int i, uint32_t base, uint32_t st,
+                                    int native_content, const R3000& loop) {
+  int demo_fresh = native_content && (st == 3 || (st == 2 && !c->game->sched.task_started[i]))
+                   && c->mem_r32(base + 0xc) == 0x801062E4u;
+  if (!demo_fresh && !(c->game->sched.demo_native[i] && st == 2 && c->game->sched.task_started[i]))
+    return STANZA_NOT_MINE;
+  if (demo_fresh) {
+    c->game->sched.task_ctx[i] = loop;                          // inherit gp
+    c->game->sched.task_ctx[i].r[29] = c->mem_r32(base + 8);    // per-task PSX stack top
+    c->game->sched.task_ctx[i].r[31] = 0xDEAD0000u;
+    c->game->sched.task_started[i] = 1;
+    c->game->sched.demo_native[i] = 1;
+  }
+  c->mem_w16(base, 4);
+  c->mem_w32(CUR_TASK, base);
+  c->game->sched.cur_slot = i;
+  static_cast<R3000&>(*c) = c->game->sched.task_ctx[i];
+  c->game->sched.in_stage = 1;
+  if (setjmp(c->game->sched.yield_jmp) == 0) {
+    if (demo_fresh) c->engine.demo.stageMain();                 // prologue only (sm[0x48]=0)
+    uint16_t sm48v = c->mem_r16(c->mem_r32(0x1f800138u) + 0x48);
+    bool defer_leave = (sm48v == 5 && !demo_fresh
+                        && c->game->sched.demo_leave_step[i] == 0);
+    if (defer_leave) c->game->sched.demo_leave_step[i] = 1;     // consumed on the next tick
+    else {
+      c->engine.demo.frame();                                   // dispatches sm[0x48] substate
+      if (sm48v == 5) c->game->sched.demo_leave_step[i] = 0;    // re-arm after LEAVE completes
+    }
+  } else if (cfg_dbg("demo")) {
+    static int w = 0; if (!w++) fprintf(stderr, "[demo] caught a substate yield (async CD not yet "
+                                                "owned native+sync) — frontier\n");
+  }
+  c->game->sched.in_stage = 0;
+  if (c->mem_r32(base + 0xc) != 0x801062E4u) {                  // s5 -> GAME rewrote entry
+    c->game->sched.demo_native[i] = 0;
+    c->game->sched.task_started[i] = 0;
+    return STANZA_HANDLED;
+  }
+  c->game->sched.task_ctx[i] = static_cast<R3000&>(*c);
+  c->mem_w16(base, 2);
+  return STANZA_HANDLED;
+}
+
+// SOP area-load 0x80109164 — SOP.BIN's cooperative slot-1 loader run synchronously (all leaves are
+// sync CD reads). Fresh-only: run areaLoad, mark task done. With psx_fallback on the recomp body
+// runs as a normal cooperative task via the fiber stanza below (its FUN_80051fb4 yield is serviced).
+static StanzaResult run_sop_area_load_stanza(Core* c, int i, uint32_t base, uint32_t st,
+                                             int native_content, const R3000& loop) {
+  int sop_fresh = (st == 3 || (st == 2 && !c->game->sched.task_started[i]))
+                  && c->mem_r32(base + 0xc) == 0x80109164u;
+  if (!(sop_fresh && native_content)) return STANZA_NOT_MINE;
+  c->game->sched.task_ctx[i] = loop;
+  c->game->sched.task_ctx[i].r[29] = c->mem_r32(base + 8);
+  c->game->sched.task_ctx[i].r[31] = 0xDEAD0000u;
+  c->mem_w16(base, 4);
+  c->mem_w32(CUR_TASK, base);
+  c->game->sched.cur_slot = i;
+  static_cast<R3000&>(*c) = c->game->sched.task_ctx[i];
+  c->game->sched.in_stage = 1;
+  if (setjmp(c->game->sched.yield_jmp) == 0) {
+    c->engine.sop.areaLoad();
+  } else if (cfg_dbg("sched")) {
+    fprintf(stderr, "[sched] SOP area-load yielded unexpectedly — a leaf isn't sync yet\n");
+  }
+  c->game->sched.in_stage = 0;
+  c->mem_w16(base, 0);
+  c->game->sched.task_started[i] = 0;
+  return STANZA_HANDLED;
+}
+
+// GAME 0x8010637C — native per-frame dispatcher. Fresh: stagePrologue + frame(). Resume: frame().
+// frame() returns 0 when its current sm[0x48] state isn't owned natively — fall back to game_coop:
+// hand the task to the guest cooperative loop 0x801063F4 with the loop's callee-saved regs reset,
+// so the generic path drives it next tick. Entry rewrite (area transition): drop game_native.
+static StanzaResult run_game_stanza(Core* c, int i, uint32_t base, uint32_t st,
+                                    int native_content, const R3000& loop) {
+  int game_fresh = (st == 3 || (st == 2 && !c->game->sched.task_started[i]))
+                   && c->mem_r32(base + 0xc) == 0x8010637Cu;
+  if (!native_content && c->game->sched.game_native[i]) {       // psx_fallback toggled -> clear stale
+    c->game->sched.game_native[i] = 0;
+    c->game->sched.task_started[i] = 0;
+  }
+  if (!native_content) return STANZA_NOT_MINE;
+  if (!game_fresh && !(c->game->sched.game_native[i] && st == 2 && c->game->sched.task_started[i]))
+    return STANZA_NOT_MINE;
+  if (game_fresh) {
+    c->game->sched.task_ctx[i] = loop;
+    c->game->sched.task_ctx[i].r[29] = c->mem_r32(base + 8);
+    c->game->sched.task_ctx[i].r[31] = 0xDEAD0000u;
+    c->game->sched.task_started[i] = 1;
+    c->game->sched.game_native[i] = 1;
+  }
+  c->mem_w16(base, 4);
+  c->mem_w32(CUR_TASK, base);
+  c->game->sched.cur_slot = i;
+  static_cast<R3000&>(*c) = c->game->sched.task_ctx[i];
+  c->game->sched.in_stage = 1;
+  int handled = 1;
+  if (setjmp(c->game->sched.yield_jmp) == 0) {
+    if (game_fresh) c->engine.stagePrologue();
+    ffspan_begin(c); handled = c->engine.frame(); ffspan_end(c, "gameframe");
+  } else if (cfg_dbg("sched")) {
+    static int w = 0; if (!w++) fprintf(stderr, "[sched] caught a GAME substate yield (a leaf not "
+                                                "yet sync) — frontier\n");
+  }
+  c->game->sched.in_stage = 0;
+  if (c->mem_r32(base + 0xc) != 0x8010637Cu) {                  // area transition rewrote entry
+    c->game->sched.game_native[i] = 0;
+    c->game->sched.task_started[i] = 0;
+    return STANZA_HANDLED;
+  }
+  if (!handled) {                                                // fall back to guest cooperative loop
+    c->r[16] = 0x1f800000u; c->r[17] = 0x1f800000u; c->r[18] = 1;
+    c->r[31] = 0x801063F4u;
+    c->game->sched.task_ctx[i] = static_cast<R3000&>(*c);
+    c->game->sched.game_native[i] = 0;
+    c->game->sched.game_coop[i] = 1;
+    c->mem_w16(base, 2);
+    if (cfg_dbg("sched")) fprintf(stderr, "[sched] GAME -> cooperative guest loop (state not yet "
+                                           "owned native; field reachable)\n");
+    return STANZA_HANDLED;
+  }
+  c->game->sched.task_ctx[i] = static_cast<R3000&>(*c);
+  c->mem_w16(base, 2);
+  return STANZA_HANDLED;
+}
+
+// Entry PCs the native stanzas handle. task-1's substrate wake (0x80044F58) etc. are NOT in this
+// set, so under mIsFaithful they route through the Coro fiber path so their yielding substrate
+// bodies run on core-A too. Keep in sync with the run_*_stanza guards above.
+//
+// STAGE-0 (0x8010649C) is deliberately excluded under mIsFaithful: the substrate body pushes ~115
+// B of stack scratch via libgs LoadImage/DrawSync callee frames that the native startBinStage
+// can't reproduce. Under mIsFaithful, letting STAGE-0 route to fiber makes A run the exact same
+// substrate code B does — byte-identical stack scratch by construction, at the cost of skipping
+// A's native fresh entry (which reappears once mIsFaithful is off / SBS is not gameplay mode).
+static bool has_native_handler_for_entry(Core* c, uint32_t entry_pc) {
+  if (entry_pc == 0x801062E4u) return true;   // DEMO
+  if (entry_pc == 0x80109164u) return true;   // SOP area-load
+  if (entry_pc == 0x8010637Cu) return true;   // GAME
+  if (entry_pc == 0x8010649Cu) return !c->game->mIsFaithful;   // STAGE-0 → fiber under faithful
+  return false;
+}
+
+// FULL-PSX (psx_fallback) task — thread-fiber coroutine. The substrate can't re-enter mid-fn, so
+// each task runs on its own Coro thread that BLOCKS at a yield (preserving its C stack) and
+// CONTINUES on resume — recompiler-only, no interpreter. cur_is_coro tells scheduler_yield to
+// coro-yield vs longjmp. Active when psx_fallback is on (native_content==0) — OR, under
+// mIsFaithful (SBS gameplay/full mode on core A), when the task's entry PC has no native handler,
+// so substrate-only wakes like task-1 preload (0x80044F58) execute on A same as core B and the
+// FUN_80044BD4 spawn-and-wait cycle actually runs (dropping the completion-shim override in
+// engine_stage.cpp).
+static StanzaResult run_coro_fiber_stanza(Core* c, int i, uint32_t base, uint32_t st,
+                                          int native_content, const R3000& loop) {
+  if (native_content) {
+    if (!c->game->mIsFaithful) return STANZA_NOT_MINE;
+    if (has_native_handler_for_entry(c, c->mem_r32(base + 0xc))) return STANZA_NOT_MINE;
+  }
+  Coro*& co = c->game->sched.coro[i];
+  int co_fresh = (st == 3 || (st == 2 && !c->game->sched.task_started[i]));
+  if (co_fresh) {
+    if (co) { delete co; co = nullptr; }
+    uint32_t entry = c->mem_r32(base + 0xc);
+    c->game->sched.task_ctx[i] = loop;
+    c->game->sched.task_ctx[i].r[29] = c->mem_r32(base + 8);
+    c->game->sched.task_ctx[i].r[31] = 0xDEAD0000u;
+    c->game->sched.task_started[i] = 1;
+    c->game->sched.demo_native[i] = 0; c->game->sched.game_native[i] = 0; c->game->sched.game_coop[i] = 0;
+    Core* cc = c;
+    co = new Coro();
+    co->start([cc, entry] { rec_coro_run(cc, entry); });
+  } else if (st == 2 && co && !co->done()) {
+    /* resume the suspended fiber (regs restored below) */
+  } else if (st == 2) {
+    c->game->sched.task_started[i] = 0;
+    return STANZA_HANDLED;
+  } else {
+    return STANZA_HANDLED;                                       // sleeping this frame (state==1)
+  }
+  c->mem_w16(base, 4);
+  c->mem_w32(CUR_TASK, base);
+  c->game->sched.cur_slot = i;
+  c->game->sched.in_stage = 1;
+  c->game->sched.cur_is_coro = 1;
+  static_cast<R3000&>(*c) = c->game->sched.task_ctx[i];
+  if (cfg_dbg("sched"))
+    fprintf(stderr, "[sched] slot %d coro %s st=%u entry=0x%08X sp=0x%08X\n", i,
+            co_fresh ? "start" : "resume", st, c->mem_r32(base + 0xc), c->game->sched.task_ctx[i].r[29]);
+  co->resume();
+  c->game->sched.cur_is_coro = 0;
+  c->game->sched.in_stage = 0;
+  if (cfg_dbg("sched"))
+    fprintf(stderr, "[sched]   slot %d coro out: done=%d base.state=%u entry=0x%08X\n",
+            i, co->done() ? 1 : 0, c->mem_r16(base), c->mem_r32(base + 0xc));
+  if (co->done() || c->mem_r16(base) == 0) {
+    c->mem_w16(base, 0);
+    c->game->sched.task_started[i] = 0;
+    delete co; co = nullptr;
+  }
+  return STANZA_HANDLED;
+}
+
+// STAGE-0 START.BIN step-spread — resume path. Between the fresh startBinStage tick (handled in
+// the generic stanza below) and the final swap-to-DEMO tick, Engine::stage0Advance steps the
+// preload SM one step per scheduler tick to match the recomp coro yield cadence (docs/findings/
+// sbs.md Slip #1). Entry stays at 0x8010649C until the last step's native_start_stage swap.
+static StanzaResult run_stage0_step_stanza(Core* c, int i, uint32_t base, uint32_t st,
+                                           int native_content) {
+  if (!(native_content && st == 2 && c->game->sched.task_started[i]
+        && c->mem_r32(base + 0xc) == 0x8010649Cu && c->game->sched.stage0_step[i] < 7))
+    return STANZA_NOT_MINE;
+  // Under mIsFaithful, STAGE-0 routes through the fiber stanza above (byte-clean stack scratch).
+  if (c->game->mIsFaithful) return STANZA_NOT_MINE;
+  c->mem_w16(base, 4);
+  c->mem_w32(CUR_TASK, base);
+  c->game->sched.cur_slot = i;
+  static_cast<R3000&>(*c) = c->game->sched.task_ctx[i];
+  c->game->sched.in_stage = 1;
+  if (setjmp(c->game->sched.yield_jmp) == 0) {                   // final step yields via longjmp
+    c->engine.stage0Advance(c->game->sched.stage0_step[i]);
+  }
+  c->game->sched.in_stage = 0;
+  c->game->sched.task_ctx[i] = static_cast<R3000&>(*c);
+  // Last step's native_start_stage rewrites entry to DEMO + sets state=3 (fresh) — leave both
+  // alone. Otherwise keep state=2 (runnable) for the next step.
+  if (c->mem_r32(base + 0xc) == 0x8010649Cu) c->mem_w16(base, 2);
+  return STANZA_HANDLED;
+}
+
+// Generic dispatch — the "everything else" path. Handles: fresh entry setup (state==3 or state==2
+// with no live ctx); game_coop resume at 0x801063F4 (guest-loop re-entry with loop's callee-saved
+// regs pinned); state==2 resume from saved r31. Inside the setjmp block, fresh entries for the
+// two remaining native task entries (GAME stagePrologue and STAGE-0 startBinStage) fire before
+// rec_coro_run. DEMO/SOP/GAME-per-frame entries were consumed by the stanzas above.
+static StanzaResult run_generic_dispatch_stanza(Core* c, int i, uint32_t base, uint32_t st,
+                                                int native_content, const R3000& loop) {
+  uint32_t resume_pc;
+  int fresh = 0;
+  if (st == 3 || (st == 2 && !c->game->sched.task_started[i])) {
+    resume_pc = c->mem_r32(base + 0xc);
+    fresh = 1;
+    c->game->sched.task_ctx[i] = loop;
+    c->game->sched.task_ctx[i].r[29] = c->mem_r32(base + 8);
+    c->game->sched.task_ctx[i].r[31] = 0xDEAD0000u;
+    c->game->sched.task_started[i] = 1;
+    c->game->sched.demo_native[i] = 0;
+  } else if (st == 2 && c->game->sched.game_coop[i]
+             && c->mem_r32(base + 0xc) == 0x8010637Cu) {
+    // GAME cooperative re-entry at loop top 0x801063F4 with the callee-saved regs the loop
+    // expects; sp pinned to task-top - 0x20 (verified 0x8010637C prologue frame size, later-284c
+    // stack-leak fix) so the pre-prologue r29 leak doesn't ratchet task0's guest sp into the task
+    // table across 100+ field frames.
+    resume_pc = 0x801063F4u;
+    c->game->sched.task_ctx[i].r[16] = 0x1f800000u;
+    c->game->sched.task_ctx[i].r[17] = 0x1f800000u;
+    c->game->sched.task_ctx[i].r[18] = 1;
+    c->game->sched.task_ctx[i].r[31] = 0x801063F4u;
+    c->game->sched.task_ctx[i].r[29] = c->mem_r32(base + 8) - 0x20u;
+  } else if (st == 2) {
+    c->game->sched.game_coop[i] = 0;                             // left GAME cooperative loop
+    resume_pc = c->game->sched.task_ctx[i].r[31];
+  } else {
+    return STANZA_HANDLED;                                       // sleeping this frame (state==1)
+  }
+  c->mem_w16(base, 4);
+  if (cfg_dbg("sched"))
+    fprintf(stderr, "[sched] slot %d st_in=%u resume_pc=0x%08X ra=0x%08X sp=0x%08X\n",
+            i, st, resume_pc, c->game->sched.task_ctx[i].r[31], c->game->sched.task_ctx[i].r[29]);
+  c->mem_w32(CUR_TASK, base);
+  c->game->sched.cur_slot = i;
+  static_cast<R3000&>(*c) = c->game->sched.task_ctx[i];
+  c->game->sched.in_stage = 1;
+  if (setjmp(c->game->sched.yield_jmp) == 0) {
+    uint32_t start = resume_pc;
+    // Remaining fresh-entry native dispatches (DEMO's 0x801062E4 was handled by run_demo_stanza).
+    if (native_content && fresh && resume_pc == 0x8010637Cu) {
+      c->override_tgt = resume_pc;                               // GAME stageMain: coro-redirect
+      c->engine.stageMain();
+      start = c->coro_redirect_pc ? c->coro_redirect_pc : c->r[31];
+      c->coro_redirect_pc = 0;
+    } else if (native_content && fresh && resume_pc == 0x8010649Cu && !c->game->mIsFaithful) {
+      c->engine.startBinStage();                                 // STAGE-0 fresh; skip rec_coro_run
+      // Under mIsFaithful the fiber stanza above handles STAGE-0 (byte-clean substrate scratch);
+      // we won't reach this branch, but the `!mIsFaithful` gate is defensive.
+      c->game->sched.stage0_step[i] = 0;
+      c->game->sched.task_ctx[i] = static_cast<R3000&>(*c);
+      c->mem_w16(base, 2);
+      c->game->sched.in_stage = 0;
+      return STANZA_HANDLED;
+    }
+    ffspan_begin(c); rec_coro_run(c, start); ffspan_end(c, "coro");
+    c->mem_w16(base, 0);                                          // task returned (jr ra sentinel)
+    c->game->sched.task_started[i] = 0;
+  }
+  c->game->sched.in_stage = 0;
+  return STANZA_HANDLED;
+}
+
+// One scheduler pass over the 3 task slots (replaces FUN_80051e60). The main loop is now purely
+// slot-iteration + stanza dispatch — the historical scattered address-check chain lives in the
+// per-stanza processors above.
 void native_scheduler_step(Core* c) {
   R3000 loop = *c;                           // frame-loop REGISTERS (gp etc. for fresh tasks); slices off RAM
   for (int i = 0; i < 3; i++) {
     uint32_t base = TASKBASE + (uint32_t)i * TASKSTRIDE;
     // Task slot 2 = XA voice/BGM. When the native clip player owns it, do NOT run the (now unused)
-    // FUN_8001cfc8 recomp coroutine; instead reflect clip state into the task-2 state byte so the
-    // cutscene's `while (DAT_801fe0e0 != 0)` wait advances exactly when the clip finishes.
+    // FUN_8001cfc8 recomp coroutine; reflect clip state into task-2's state byte so the cutscene's
+    // `while (DAT_801fe0e0 != 0)` wait advances exactly when the clip finishes.
     if (i == 2 && xa_stream_owns_slot2()) {
-      if (xa_stream_voice_busy()) c->mem_w16(base, 2);     // still playing -> stay "running"
-      else { c->mem_w16(base, 0); xa_stream_voice_release(); }  // clip done -> free -> cutscene advances
+      if (xa_stream_voice_busy()) c->mem_w16(base, 2);
+      else { c->mem_w16(base, 0); xa_stream_voice_release(); }
       c->game->sched.task_started[2] = 0;
       continue;
     }
     uint32_t st = c->mem_r16(base);
-    if (st == 0) { c->game->sched.task_started[i] = 0; c->game->sched.demo_native[i] = 0; continue; }  // free
-    // GATE: with psx_fallback on, the native stage dispatchers + loaders (DEMO/GAME per-frame, START.BIN
-    // file-table builder, SOP area load) are OFF — the stage state machines and asset/area LOADING run as
-    // pure PSX recomp coroutines (the generic path; their CD reads stay sync via cd_override). The scheduler
-    // harness stays native always. Clear any stale native-dispatcher mode so a `gate` toggle re-enters the
-    // generic path cleanly.
+    if (st == 0) { c->game->sched.task_started[i] = 0; c->game->sched.demo_native[i] = 0; continue; }
+    // GATE: on `gate` toggle to psx_fallback, clear any stale native-dispatcher mode so the
+    // generic path re-enters cleanly (the native DEMO/GAME dispatchers are OFF under psx_fallback).
     int native_content = !c->game->psx_fallback;
     if (!native_content && (c->game->sched.demo_native[i] || c->game->sched.game_native[i])) {
       c->game->sched.demo_native[i] = 0; c->game->sched.game_native[i] = 0; c->game->sched.task_started[i] = 0;
     }
-    // ---- DEMO / front-end NATIVE per-frame task (no guest coroutine) ----------------------------
-    // The DEMO stage runs as a native dispatcher: ov_demo_frame is called once per frame with ALL state
-    // in guest RAM (sm[0x48] substate, sm[0x4a] sub-mode). On the FRESH entry we run the prologue + s0
-    // (ov_demo_stage_main) then the first frame; on resume, just another frame. The substates are all
-    // SYNCHRONOUS (no cross-frame yield), so no coroutine/longjmp is needed — "yield" is just returning.
-    // This replaces coro-redirecting into the guest loop (whose deep pure-PSX substate calls hit libcd/
-    // VSync busy-waits our no-IRQ runtime can't satisfy, and which the removed override table can no
-    // longer intercept). Leaving DEMO (-> GAME) re-registers the slot with a non-DEMO entry, clearing
-    // demo_native via the generic fresh path below.
-    {
-      int demo_fresh = native_content && (st == 3 || (st == 2 && !c->game->sched.task_started[i]))
-                       && c->mem_r32(base + 0xc) == 0x801062E4u;
-      if (demo_fresh || (c->game->sched.demo_native[i] && st == 2 && c->game->sched.task_started[i])) {
-        if (demo_fresh) {
-          c->game->sched.task_ctx[i] = loop;                         // inherit gp
-          c->game->sched.task_ctx[i].r[29] = c->mem_r32(base + 8);   // per-task PSX stack top
-          c->game->sched.task_ctx[i].r[31] = 0xDEAD0000u;
-          c->game->sched.task_started[i] = 1;
-          c->game->sched.demo_native[i] = 1;
-        }
-        c->mem_w16(base, 4);                                         // running
-        c->mem_w32(CUR_TASK, base);
-        c->game->sched.cur_slot = i;
-        static_cast<R3000&>(*c) = c->game->sched.task_ctx[i];        // restore REGISTERS
-        c->game->sched.in_stage = 1;
-        // Contain any cooperative yield from a rec_dispatch'd guest substate (e.g. a menu state that
-        // spawns an async CD read and FUN_80051f80-yields): without this setjmp the yield's longjmp
-        // would hit a stale jmp_buf and corrupt the scheduler. A yield = the substate isn't fully
-        // synchronous yet (a CD load to own native+sync — the frontier); treat it as frame-done.
-        if (setjmp(c->game->sched.yield_jmp) == 0) {
-          // Native DEMO fresh entry: stageMain does prologue ONLY (matches recomp coro's fresh iter
-          // that dispatches prologue + first substate + yield). demo.frame() then dispatches s0 in
-          // the same tick, mirroring the recomp iter's dispatch step. On resume, just frame().
-          // (docs/findings/sbs.md Slip #1 — stageMain used to also run s0, putting native ahead.)
-          if (demo_fresh) c->engine.demo.stageMain();                // prologue only (sm[0x48]=0)
-          // SLIP #1 RESIDUAL FIX (docs/findings/sbs.md): on the LEAVE-DEMO substate (sm[0x48]==5),
-          // defer dispatch by one tick to match the coro's yield cost through FUN_80051f80. Native
-          // native_start_stage rewrites base+0xc inline in one tick; coro yields at least once first,
-          // so B's entry rewrite lands one tick LATER than A's. Deferring here keeps them aligned.
-          uint16_t sm48v = c->mem_r16(c->mem_r32(0x1f800138u) + 0x48);
-          bool defer_leave = (sm48v == 5 && !demo_fresh
-                              && c->game->sched.demo_leave_step[i] == 0);
-          if (defer_leave) {
-            c->game->sched.demo_leave_step[i] = 1;                   // consumed on the next tick
-          } else {
-            c->engine.demo.frame();                                  // dispatches sm[0x48] substate
-            if (sm48v == 5) c->game->sched.demo_leave_step[i] = 0;   // re-arm after LEAVE completes
-          }
-        } else if (cfg_dbg("demo")) {
-          static int w = 0; if (!w++) fprintf(stderr, "[demo] caught a substate yield (async CD not yet "
-                                                      "owned native+sync) — frontier\n");
-        }
-        c->game->sched.in_stage = 0;
-        // A substate may LEAVE the DEMO stage this frame (s5 New-Game -> GAME calls native_start_stage,
-        // which rewrites this task's entry (base+0xc) to the GAME overlay + sets state=3). Detect that by
-        // the entry no longer being the DEMO root: drop native-DEMO mode and let the state=3 fresh entry
-        // stand so the next step enters GAME via the generic path (do NOT clobber state back to 2).
-        if (c->mem_r32(base + 0xc) != 0x801062E4u) {
-          c->game->sched.demo_native[i] = 0;
-          c->game->sched.task_started[i] = 0;
-          continue;
-        }
-        c->game->sched.task_ctx[i] = static_cast<R3000&>(*c);        // save REGISTERS
-        c->mem_w16(base, 2);                                         // runnable next frame (resume the
-                                                                    // native dispatcher; state==2 + the
-                                                                    // demo_native flag re-enters here)
-        continue;
-      }
-    }
-    // ---- SOP area-DATA load task: own the load body SYNCHRONOUSLY (engine/sop.cpp) ---------------
-    // SOP state-0 spawns LAB_80109164 (SOP.BIN 0x80109164) as a cooperative slot-1 task and blocks on
-    // *0x1f80019b. The task body is all-synchronous (sync CD reads + unpack + reloc patch), so we run
-    // it native+sync in one scheduler step and mark the slot done — no FUN_80051fb4 yield. Result is
-    // identical (1f80019b=1, ecf58 patched); this removes the load's cross-frame yield, the prereq for
-    // owning the SOP machine native per-frame. Keyed on the exact entry (SOP.BIN-specific address).
-    {
-      int sop_fresh = (st == 3 || (st == 2 && !c->game->sched.task_started[i]))
-                      && c->mem_r32(base + 0xc) == 0x80109164u;
-      // With psx_fallback on this native SOP load is dropped: fall through so the recomp load body 0x80109164
-      // runs as a normal cooperative task (its FUN_80051fb4 yield serviced by the harness). Its CD reads
-      // still go through the platform CD sync layer, so the load stays synchronous; only the orchestration
-      // (unpack/reloc/libsnd setup) runs as PSX — the recomp baseline.
-      if (sop_fresh && native_content) {
-        c->game->sched.task_ctx[i] = loop;                          // inherit gp
-        c->game->sched.task_ctx[i].r[29] = c->mem_r32(base + 8);    // per-task PSX stack top
-        c->game->sched.task_ctx[i].r[31] = 0xDEAD0000u;
-        c->mem_w16(base, 4);                                        // running
-        c->mem_w32(CUR_TASK, base);
-        c->game->sched.cur_slot = i;
-        static_cast<R3000&>(*c) = c->game->sched.task_ctx[i];       // restore REGISTERS
-        c->game->sched.in_stage = 1;
-        if (setjmp(c->game->sched.yield_jmp) == 0) {
-          c->engine.sop.areaLoad();                                 // synchronous (all leaves are sync)
-        } else if (cfg_dbg("sched")) {
-          fprintf(stderr, "[sched] SOP area-load yielded unexpectedly — a leaf isn't sync yet\n");
-        }
-        c->game->sched.in_stage = 0;
-        c->mem_w16(base, 0);                                        // task done -> slot free
-        c->game->sched.task_started[i] = 0;
-        continue;
-      }
-    }
-    // ---- GAME stage NATIVE per-frame dispatcher (mirrors demo_native) ---------------------------
-    // Run the GAME stage as a native per-frame task: ov_game_frame each frame (sm[0x48] dispatch +
-    // frame counter), all state in guest RAM. Fresh entry -> prologue + first frame; resume -> a frame.
-    // SOP state-0's area load is native+sync (later-217b), so no cross-frame yield; a not-yet-sync deep
-    // leaf yield is contained by setjmp = frame-done. Replaces coro-redirecting into the guest loop.
-    {
-      int game_fresh = (st == 3 || (st == 2 && !c->game->sched.task_started[i]))
-                       && c->mem_r32(base + 0xc) == 0x8010637Cu;
-      // With psx_fallback on the GAME native per-frame dispatcher is off: route the WHOLE GAME stage through the
-      // cooperative guest loop instead. The native transition area-load (native_transition_area_load, reached
-      // only inside the native dispatcher via ov_game_submode1) is bypassed, so the recomp's cooperative
-      // area-load (FUN_80044bd4 spawn-and-wait) runs with its yields serviced — the GAME stage runs as PSX
-      // recomp. Drop any stale native mode so a `gate` toggle re-enters the generic path cleanly.
-      int areaload = native_content;
-      if (!areaload && c->game->sched.game_native[i]) {
-        c->game->sched.game_native[i] = 0;
-        c->game->sched.task_started[i] = 0;
-      }
-      if (areaload &&
-          (game_fresh || (c->game->sched.game_native[i] && st == 2 && c->game->sched.task_started[i]))) {
-        if (game_fresh) {
-          c->game->sched.task_ctx[i] = loop;                        // inherit gp
-          c->game->sched.task_ctx[i].r[29] = c->mem_r32(base + 8);  // per-task PSX stack top
-          c->game->sched.task_ctx[i].r[31] = 0xDEAD0000u;
-          c->game->sched.task_started[i] = 1;
-          c->game->sched.game_native[i] = 1;
-        }
-        c->mem_w16(base, 4);                                        // running
-        c->mem_w32(CUR_TASK, base);
-        c->game->sched.cur_slot = i;
-        static_cast<R3000&>(*c) = c->game->sched.task_ctx[i];       // restore REGISTERS
-        c->game->sched.in_stage = 1;
-        int handled = 1;
-        if (setjmp(c->game->sched.yield_jmp) == 0) {
-          if (game_fresh) c->engine.stagePrologue();                // prologue (sets sm[0x48] from 0x134)
-          ffspan_begin(c); handled = c->engine.frame(); ffspan_end(c, "gameframe");  // one frame: sm[0x48] dispatch + tail
-        } else if (cfg_dbg("sched")) {
-          static int w = 0; if (!w++) fprintf(stderr, "[sched] caught a GAME substate yield (a leaf not "
-                                                      "yet sync) — frontier\n");
-        }
-        c->game->sched.in_stage = 0;
-        // A handler may LEAVE the GAME stage (area transition rewrites base+0xc). Drop native mode and
-        // let the fresh entry stand if so.
-        if (c->mem_r32(base + 0xc) != 0x8010637Cu) {
-          c->game->sched.game_native[i] = 0;
-          c->game->sched.task_started[i] = 0;
-          continue;
-        }
-        // ov_game_frame returned 0: the current GAME state isn't owned natively yet (transition sub-mode /
-        // area machine / non-SOP overlay — all yield deep). Hand the task back to the COOPERATIVE guest
-        // loop: resume it at the loop top 0x801063F4 with the regs the loop expects (s0=s1=0x1f800000,
-        // s2=1). The generic coroutine path then drives it (the coro-redirect handshake survives the deep
-        // yields). Own the area machine + field overlays to shrink this fallback (gameplay_start_flow_re.md).
-        if (!handled) {
-          c->r[16] = 0x1f800000u; c->r[17] = 0x1f800000u; c->r[18] = 1;   // guest-loop callee-saved regs
-          c->r[31] = 0x801063F4u;                                          // resume PC = guest loop top
-          c->game->sched.task_ctx[i] = static_cast<R3000&>(*c);
-          c->game->sched.game_native[i] = 0;                               // -> generic cooperative path
-          c->game->sched.game_coop[i] = 1;       // PC-game: re-enter at the loop top every frame (below)
-          c->mem_w16(base, 2);
-          if (cfg_dbg("sched")) fprintf(stderr, "[sched] GAME -> cooperative guest loop (state not yet "
-                                                 "owned native; field reachable)\n");
-          continue;
-        }
-        c->game->sched.task_ctx[i] = static_cast<R3000&>(*c);       // save REGISTERS
-        c->mem_w16(base, 2);                                        // runnable next frame
-        continue;
-      }
-    }
-    // ---- FULL-PSX (psx_fallback) task: thread-fiber coroutine — TRUE mid-function resume ----------
-    // The native dispatchers above are OFF in psx_fallback, so the stage/loader tasks run as pure
-    // recompiled PSX bodies that yield mid-function via switch. The substrate can't re-enter a fn
-    // mid-body, so run each task on its OWN Coro thread: a yield BLOCKS the thread (its whole nested C
-    // call stack is preserved) and a resume CONTINUES it exactly there — recompiler-only, no interpreter
-    // (USER 2026-06-30: "the PSX path needs to work recompiler-only; condvars with pause-resume"). The
-    // shared register file Core::r[] is save/restored around the handoff just like the longjmp path:
-    // switch saves task_ctx[i] before blocking; we restore it before resuming. The NATIVE path
-    // (native_content) is untouched — it falls through to the existing setjmp scheduler below.
-    if (!native_content) {
-      Coro*& co = c->game->sched.coro[i];
-      int co_fresh = (st == 3 || (st == 2 && !c->game->sched.task_started[i]));
-      if (co_fresh) {
-        if (co) { delete co; co = nullptr; }                       // discard an abandoned task on this slot
-        uint32_t entry = c->mem_r32(base + 0xc);                   // task entry pc
-        c->game->sched.task_ctx[i] = loop;                         // inherit gp; fresh sp/ra below
-        c->game->sched.task_ctx[i].r[29] = c->mem_r32(base + 8);   // per-task PSX stack top (obj+8)
-        c->game->sched.task_ctx[i].r[31] = 0xDEAD0000u;            // sentinel return (task fn `jr ra` => end)
-        c->game->sched.task_started[i] = 1;
-        c->game->sched.demo_native[i] = 0; c->game->sched.game_native[i] = 0; c->game->sched.game_coop[i] = 0;
-        Core* cc = c;
-        co = new Coro();
-        co->start([cc, entry] {
-          rec_coro_run(cc, entry);   // pure recompiled PSX body; switch yields/exits back to the Coro
-        });
-      } else if (st == 2 && co && !co->done()) {
-        /* resume the suspended fiber (regs restored below) */
-      } else if (st == 2) {
-        c->game->sched.task_started[i] = 0;      // state==2 but no live fiber (stale) -> drop, re-arm later
-        continue;
-      } else {
-        continue;                                // sleeping this frame (state==1)
-      }
-      c->mem_w16(base, 4);                                         // running
-      c->mem_w32(CUR_TASK, base);
-      c->game->sched.cur_slot = i;
-      c->game->sched.in_stage = 1;
-      c->game->sched.cur_is_coro = 1;
-      static_cast<R3000&>(*c) = c->game->sched.task_ctx[i];        // load regs (fresh: gp/sp/ra; resume: saved)
-      if (cfg_dbg("sched"))
-        fprintf(stderr, "[sched] slot %d coro %s st=%u entry=0x%08X sp=0x%08X\n", i,
-                co_fresh ? "start" : "resume", st, c->mem_r32(base + 0xc), c->game->sched.task_ctx[i].r[29]);
-      co->resume();                                               // run until switch yields / body returns
-      c->game->sched.cur_is_coro = 0;
-      c->game->sched.in_stage = 0;
-      if (cfg_dbg("sched"))
-        fprintf(stderr, "[sched]   slot %d coro out: done=%d base.state=%u entry=0x%08X\n",
-                i, co->done() ? 1 : 0, c->mem_r16(base), c->mem_r32(base + 0xc));
-      // A handler may LEAVE the stage (rewrite base+0xc / set state) — guest owns base state. If the body
-      // finished, or the guest ended the task (state 0), free the slot + reap the fiber.
-      if (co->done() || c->mem_r16(base) == 0) {
-        c->mem_w16(base, 0);
-        c->game->sched.task_started[i] = 0;
-        delete co; co = nullptr;
-      }
-      // else: yielded mid-body. The guest set base state (FUN_80051f80 -> 1); FUN_800506d0 re-arms 1->2.
-      continue;
-    }
-
-    // ---- Native STAGE-0 START.BIN step-spread (attack (a), docs/findings/sbs.md Slip #1) ----
-    // Between the fresh startBinStage tick and the final swap-to-DEMO tick, the preload SM is stepped
-    // by Engine::stage0Advance() one step per scheduler tick, matching the recomp body of 0x8010649C's
-    // per-iteration yield cadence. entry stays at 0x8010649C until the last step's native_start_stage.
-    if (native_content && st == 2 && c->game->sched.task_started[i]
-        && c->mem_r32(base + 0xc) == 0x8010649Cu && c->game->sched.stage0_step[i] < 7) {
-      c->mem_w16(base, 4);                                        // running
-      c->mem_w32(CUR_TASK, base);
-      c->game->sched.cur_slot = i;
-      static_cast<R3000&>(*c) = c->game->sched.task_ctx[i];       // restore REGISTERS
-      c->game->sched.in_stage = 1;
-      // stage0Advance's final step (5) calls native_start_stage → scheduler_yield → longjmp here.
-      if (setjmp(c->game->sched.yield_jmp) == 0) {
-        c->engine.stage0Advance(c->game->sched.stage0_step[i]);
-      }
-      c->game->sched.in_stage = 0;
-      c->game->sched.task_ctx[i] = static_cast<R3000&>(*c);
-      // If the last step ran, native_start_stage rewrote entry to DEMO + set base=3 (fresh); leave
-      // that alone so next tick enters DEMO fresh. Else keep base=2 (runnable) for the next step.
-      if (c->mem_r32(base + 0xc) == 0x8010649Cu) c->mem_w16(base, 2);
-      continue;
-    }
-
-    uint32_t resume_pc;
-    int fresh = 0;
-    // state==3 (restart at new entry) or state==2 on a slot with no live context (freshly
-    // registered by FUN_80051f14) => fresh entry. state==2 with a live context => resume.
-    if (st == 3 || (st == 2 && !c->game->sched.task_started[i])) {
-      resume_pc = c->mem_r32(base + 0xc);        // task entry
-      fresh = 1;
-      c->game->sched.task_ctx[i] = loop;                   // inherit gp; fresh sp/ra below
-      c->game->sched.task_ctx[i].r[29] = c->mem_r32(base + 8);// per-task PSX stack top (obj+8)
-      c->game->sched.task_ctx[i].r[31] = 0xDEAD0000u;      // sentinel return
-      c->game->sched.task_started[i] = 1;
-      c->game->sched.demo_native[i] = 0;       // a non-DEMO fresh entry (e.g. GAME): leave native-DEMO mode
-    } else if (st == 2 && c->game->sched.game_coop[i]
-               && c->mem_r32(base + 0xc) == 0x8010637Cu) {
-      // GAME cooperative loop: as a PC game, re-enter at the loop TOP every frame (not the saved mid-yield
-      // PC, which the substrate can't continue). gen_func_801063F4 runs one frame from the top — dispatch
-      // the SM, then yield — with the loop's callee-saved regs; all SM state persists in guest RAM.
-      resume_pc = 0x801063F4u;
-      c->game->sched.task_ctx[i].r[16] = 0x1f800000u;
-      c->game->sched.task_ctx[i].r[17] = 0x1f800000u;
-      c->game->sched.task_ctx[i].r[18] = 1;
-      c->game->sched.task_ctx[i].r[31] = 0x801063F4u;
-      // RESTORE the loop's STACK POINTER too (later-284c). We re-enter at 0x801063F4, which is PAST the
-      // 0x8010637C prologue `addiu sp,-0x20`, so the loop body always runs with sp = task-stack-top - 0x20.
-      // The saved r29 from the previous yield is DEEPER: the per-frame yield FUN_80051f80 does `addiu sp,-0x18`
-      // and we re-enter at the loop top BEFORE its `addiu sp,+0x18` epilogue runs, so that 0x18 is never
-      // unwound — leaking 0x18/frame off task0's ~2.5KB guest stack. Left unreset, after ~100 field frames sp
-      // reaches the task table at 0x801FE000 and a leaf's `sw`-spill clobbers sm[0x48]/sm[0x4a] -> ov_game_frame
-      // sees s4a=0 with A00 (not SOP) resident -> jal 0x80109450 into A00's jump-table data -> recomp-MISS.
-      // Pinning sp to the loop frame base every re-entry kills the leak (matches the fresh-entry sp after the
-      // prologue). 0x20 = the verified 0x8010637C prologue frame size (GAME.BIN disasm), not a fudge factor.
-      c->game->sched.task_ctx[i].r[29] = c->mem_r32(base + 8) - 0x20u;
-    } else if (st == 2) {                     // runnable: resume after the previous yield
-      c->game->sched.game_coop[i] = 0;        // left the GAME cooperative loop (e.g. area transition)
-      resume_pc = c->game->sched.task_ctx[i].r[31];
-    } else {
-      continue;                               // sleeping this frame (state==1)
-    }
-    c->mem_w16(base, 4);                         // running
-    if (cfg_dbg("sched"))
-      fprintf(stderr, "[sched] slot %d st_in=%u resume_pc=0x%08X ra=0x%08X sp=0x%08X\n",
-              i, st, resume_pc, c->game->sched.task_ctx[i].r[31], c->game->sched.task_ctx[i].r[29]);
-    c->mem_w32(CUR_TASK, base);
-    c->game->sched.cur_slot = i;
-    static_cast<R3000&>(*c) = c->game->sched.task_ctx[i];   // restore REGISTERS only (shared RAM untouched)
-    c->game->sched.in_stage = 1;
-    if (setjmp(c->game->sched.yield_jmp) == 0) {
-      uint32_t start = resume_pc;
-      // A task ENTRY may be a native override (e.g. the GAME stage prologue ov_game_stage_main).
-      // interp_flat only fires overrides on a control transfer INTO an address, never at its start
-      // pc, and nothing `jal`s a task entry — so fire the entry override here, as a native call,
-      // exactly once on a FRESH entry (NOT on a resume, whose saved pc is deep guest code that must
-      // be interpreted, not re-dispatched). The override does its prologue and either rec_coro_redirect's
-      // to where the interp should continue (coro_redirect_pc) or returns to its ra; run flat from there.
-      // With psx_fallback on, these native stage entries are OFF: the stage runs as pure PSX recomp from
-      // its entry (start == resume_pc), so the GAME stage SM and the START.BIN file-table builder + stage-0
-      // asset preload all run as PSX (sync CD via cd_override). Only fire the native owners at full native.
-      if (native_content && fresh && resume_pc == 0x8010637Cu) {
-        // The ONE native task entry: the GAME stage dispatcher (engine_stage.cpp). Called directly
-        // (top-down PC-driven) instead of via the removed address-keyed override table.
-        c->override_tgt = resume_pc;
-        c->engine.stageMain();
-        start = c->coro_redirect_pc ? c->coro_redirect_pc : c->r[31];
-        c->coro_redirect_pc = 0;
-      } else if (native_content && fresh && resume_pc == 0x8010649Cu) {
-        // Stage-0 START.BIN fresh entry: run the file-table build (native ISO9660 resolver), seed
-        // stage0_step=0, save regs, mark runnable, and RETURN — the preload SM steps across
-        // subsequent scheduler ticks via Engine::stage0Advance to match the recomp body's
-        // per-iteration yield cadence (docs/findings/sbs.md Slip #1).
-        c->engine.startBinStage();
-        c->game->sched.stage0_step[i] = 0;
-        c->game->sched.task_ctx[i] = static_cast<R3000&>(*c);
-        c->mem_w16(base, 2);                                    // runnable next tick
-        c->game->sched.in_stage = 0;
-        goto stage0_fresh_done;                                 // skip rec_coro_run
-      }
-      // (The DEMO/front-end entry 0x801062E4 is handled by the native per-frame dispatcher above,
-      //  never here — it `continue`s before reaching this generic coroutine path.)
-      ffspan_begin(c); rec_coro_run(c, start); ffspan_end(c, "coro");   // runs until ov_yield longjmps back here
-      c->mem_w16(base, 0);                        // returned (jr ra sentinel): task ended -> free
-      c->game->sched.task_started[i] = 0;
-    }
-    c->game->sched.in_stage = 0;
-    stage0_fresh_done:;   // skip target from the native START.BIN fresh branch above
+    if (run_demo_stanza(c, i, base, st, native_content, loop) == STANZA_HANDLED)          continue;
+    if (run_sop_area_load_stanza(c, i, base, st, native_content, loop) == STANZA_HANDLED) continue;
+    if (run_game_stanza(c, i, base, st, native_content, loop) == STANZA_HANDLED)          continue;
+    if (run_coro_fiber_stanza(c, i, base, st, native_content, loop) == STANZA_HANDLED)    continue;
+    if (run_stage0_step_stanza(c, i, base, st, native_content) == STANZA_HANDLED)         continue;
+    run_generic_dispatch_stanza(c, i, base, st, native_content, loop);
   }
   static_cast<R3000&>(*c) = loop;             // restore the frame-loop REGISTERS (shared RAM untouched)
 }

@@ -1563,48 +1563,23 @@ static bool resolve_via_libcd(Core* c, uint32_t name_ptr, uint32_t buf,
   return true;
 }
 
-// Sync-preload completion shim under mIsFaithful. FUN_80044BD4 (sync_preload) in the substrate:
-//   done_flag = 0
-//   flag2_global = flag3;  flag3_global = flag2
-//   FUN_80051F14(1, entry)          # SPAWN task-1 with state=2 (RUNNABLE)
-//   [caller yields; task-1 runs its body across ticks; task-1 sets done_flag=1; caller resumes]
-//   [wait loop yields until done_flag == 1]
-//   return
+// Native port of FUN_80044BD4 (sync_preload) prelude — sets the done flag + arg globals + spawns
+// task-1. The wait-loop that FUN_80044BD4 runs (yielding until done_flag becomes 1) is NOT here:
+// the caller (native path in startBinStage) already fires asset.preloadTexgroup inline as game
+// logic, so the caller doesn't need to yield-wait. Task-1's substrate at task1_entry (0x80044F58)
+// still runs via the Coro-fiber stanza (scheduler.cpp), which under mIsFaithful is unlocked on
+// core A — task-1's body then sets done_flag=1 itself, matching core B substrate byte-for-byte.
 //
-// The proper port is: call native_task_spawn(c, 1, entry) → the primitive sets state=2. The
-// scheduler picks up task-1 next tick and runs its body. On A that requires the Coro-fiber path
-// to be enabled for unregistered entries under mIsFaithful — currently gated on `!native_content`
-// in scheduler.cpp:298 — which is the follow-up NativeTaskHandler registry refactor.
-//
-// UNTIL that lands, this shim runs FUN_80044BD4's guest writes at BOTH the begin AND end of the
-// yield-loop and does the state work inline in this tick (asset.preloadTexgroup already fires
-// unconditionally at the callsite). Concretely:
-//   - Set done_flag=0 (begin)
-//   - Set flag2/3 globals (begin)
-//   - Call native_task_spawn(1, entry) — the real primitive port of FUN_80051F14 (writes state=2)
-//   - IMMEDIATELY override task-1 state back to 0 (ENDED) so the scheduler doesn't try to run
-//     task-1's substrate body on A (would hit a recomp miss until the fiber path unlock).
-//   - Set done_flag=1 (end) as if task-1 had signaled done.
 // Safety cite (audit 2026-07-04): grep of game/ + runtime/ for readers of task-1's slot range
 // (0x801FE070..0x801FE0DE) and task+0x02 = 0 hits. Scheduler-internal, no PC readers.
-static constexpr uint32_t kTaskTableBase   = 0x801FE000u;
-static constexpr uint32_t kTaskSlotStride  = 0x70u;
 static constexpr uint32_t kDoneFlagAddr    = 0x1F80019Bu;
 static constexpr uint32_t kTaskFlag2Global = 0x801FE0DDu;
 static constexpr uint32_t kTaskFlag3Global = 0x801FE0DEu;
-static void sync_preload_completion_shim(Core* c, uint32_t task1_entry,
-                                         uint8_t flag2, uint8_t flag3) {
-  const uint32_t task1 = kTaskTableBase + 1 * kTaskSlotStride;
-  c->mem_w8 (kDoneFlagAddr,    0);            // FUN_80044BD4 prelude
+static void sync_preload_spawn(Core* c, uint32_t task1_entry, uint8_t flag2, uint8_t flag3) {
+  c->mem_w8 (kDoneFlagAddr,    0);
   c->mem_w8 (kTaskFlag2Global, flag3);
   c->mem_w8 (kTaskFlag3Global, flag2);
-  native_task_spawn(c, 1, task1_entry);       // the port of FUN_80051F14 — writes state=2
-  // TODO(scheduler-refactor): once the NativeTaskHandler registry lands and A's Coro-fiber path
-  // runs for unregistered entries under mIsFaithful, DELETE this state=0 override + the
-  // kDoneFlagAddr=1 set below — task-1's substrate at 0x80044F58 will run via fiber and set
-  // done_flag itself, task-0 will yield-wait per the substrate cadence. See docs/findings/sbs.md.
-  c->mem_w16(task1 + 0x00, 0);                // state = 0 (ENDED) — collapses the yield-wait
-  c->mem_w8 (kDoneFlagAddr, 1);               // FUN_80044BD4 wait-loop exit
+  native_task_spawn(c, 1, task1_entry);
 }
 
 void Engine::startBinStage() {
@@ -1712,7 +1687,7 @@ void Engine::startBinStage() {
   // handshake (done_flag, task-1 slot fields). PC has no cooperative scheduler consuming those,
   // so PC skips them — this is the coro-vs-nothing case, analogous to resolve_via_libcd vs
   // resolve_via_iso9660 above (same effect: preload done; different scheduling strategy).
-  if (faithful) sync_preload_completion_shim(c, /*task1_entry=*/0x80044F58u, 0, 0);
+  if (faithful) sync_preload_spawn(c, /*task1_entry=*/0x80044F58u, 0, 0);
 
   fprintf(stderr, "[start.bin] file table built (%s); preload SM stepped across ticks via stage0Advance\n",
           faithful ? "faithful/libcd" : "pc/iso9660");
