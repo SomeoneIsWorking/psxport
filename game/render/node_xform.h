@@ -21,6 +21,15 @@ public:
   // euler+translation, copy the world-pos triple, and propagate to children via propagate().
   void build(uint32_t node);
 
+  // buildWithOffset (guest FUN_800518FC): sibling of build() used when the node has a LOCAL
+  // ANCHOR OFFSET (an svec at node+0x88) that must be rotated by the composed matrix and then
+  // added to the node's own world position. Same as build() through the matrix compose step
+  // (node+0x98 = rot(node+0x54) × M(node+0xB8/BA/BC)), but the world-pos triple at node+0xAC/B0/B4
+  // is computed as ApplyMatrixLV(node+0x98, node+0x88) + node+0x2E/32/36 instead of a straight
+  // copy from +0x2E/32/36. Used by AI behaviour handlers to render nodes whose rendered pivot is
+  // offset from the logical position in a rotating direction. Delegates to propagate() at the end.
+  void buildWithOffset(uint32_t node);
+
   // propagate (guest FUN_80051128): per-object CHILD-NODE TRANSFORM loop — for each child on
   // node+0xC0 build the child's world matrix at child+0x18 and its world position at child+0x2C
   // by composing rotation × parent frame + accumulating parent translation. Root children

@@ -23,6 +23,7 @@
 // A/B gate (full RAM+scratchpad vs rec_super_call) is the safety net.
 
 #include "core.h"
+#include "render/render.h"       // Core::mRender (NodeXform)
 #include "object/actor.h"     // Actor::boundsCull (FUN_8007778C — thin wrapper native)
 #include "cfg.h"
 #include <stdio.h>
@@ -140,5 +141,5 @@ void beh_actor_move_sm(Core* c) {
 
  Lcommon:
   c->mem_w8(nd + 0x29, 0);
-  if (c->mem_r8(nd + 1) != 0) leaf1(c, nd, 0x800518fcu);  // FUN_800518FC
+  if (c->mem_r8(nd + 1) != 0) c->mRender->mNodeXform.buildWithOffset(nd);   // FUN_800518FC (native)
 }

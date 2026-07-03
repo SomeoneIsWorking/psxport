@@ -7,7 +7,7 @@ A native may exist already. **LIVE** = reachable by direct C call from a native_
 dispatch root (actually runs). **ORPHAN** = native exists but only the REMOVED override
 table used to reach it — it is dead code until a native parent calls it directly.
 
-Totals: 148 native fns, 131 owned addresses, 7 LIVE / 141 ORPHAN.
+Totals: 150 native fns, 133 owned addresses, 7 LIVE / 143 ORPHAN.
 
 | addr | status | symbol | file:line | depends-on (still-PSX) | summary |
 |------|--------|--------|-----------|------------------------|---------|
@@ -46,41 +46,42 @@ Totals: 148 native fns, 131 owned addresses, 7 LIVE / 141 ORPHAN.
 | 0x80050A80 | ORPHAN | `Engine::initCamera` | game/scene/engine_init.cpp:81 |  | engine CAMERA init: identity camera-rotation matrix at scratchpad 0x1F… |
 | 0x80050B08 | LIVE | `native_boot_run` | runtime/recomp/native_boot.cpp:569 |  | Wired from boot.c when PSXPORT_NATIVE_BOOT is set. Registers the main … |
 | 0x80050DE4 | ORPHAN | `Engine::sceneStateStep` | game/scene/engine_stage.cpp:1112 |  | Engine::sceneStateStep — the SCENE-INIT / SCENE-RUN state machine at g… |
-| 0x80051128 | ORPHAN | `NodeXform::propagate` | game/render/node_xform.cpp:53 |  | per-object CHILD-NODE TRANSFORM loop. RE'd from disas: |
+| 0x80051128 | ORPHAN | `NodeXform::propagate` | game/render/node_xform.cpp:89 |  | per-object CHILD-NODE TRANSFORM loop. RE'd from disas: |
 | 0x80051794 | ORPHAN | `eng_identity_matrix` | game/scene/engine_init.cpp:25 |  | set an identity 3x3 rotation matrix (0x1000 = 1.0 fixed on the diagona… |
+| 0x800518FC | ORPHAN | `NodeXform::buildWithOffset` | game/render/node_xform.cpp:54 |  | NodeXform::buildWithOffset — PC-native reimpl of guest FUN_800518FC. |
 | 0x80051B04 | ORPHAN | `GraphicsBind::installSceneRecord` | game/world/graphics_bind.cpp:93 |  | two-level scene-data-table pointer resolve. Pure address arithmetic, n… |
 | 0x80052078 | ORPHAN | `eng_stage_transition` | game/scene/engine_level.cpp:66 |  | (stageIdx) — the cooperative STAGE TRANSITION: load the next stage's o… |
 | 0x80052078 | ORPHAN | `Engine::startStage` | game/scene/engine_stage.cpp:1426 | 0x80080870 0x80080890 0x800808A0 | switch task 0 to the given stage (load overlay + reset the display/BIO… |
 | 0x800520E0 | ORPHAN | `Engine::initEntityPool` | game/scene/engine_init.cpp:101 |  | engine SUBSYSTEM init (init-prefix slot, dispatched at native_boot.cpp… |
 | 0x80054198 | ORPHAN | `SceneTransition::clearSwapBlock` | game/scene/scene_transition.cpp:96 |  | small swap-block ephemeral clear. RE'd from disas 0x80054198..0x800541… |
 | 0x80059D28 | ORPHAN | `Engine::frameStartTick` | game/scene/engine_stage.cpp:1196 |  | Engine::frameStartTick — per-frame prologue at guest 0x80059D28 (FIRST… |
-| 0x8006C80C | ORPHAN | `CutsceneCamera::yFloor` | game/camera/cutscene_camera.cpp:352 |  | ── yFloor (camera-Y floor clamp, per render mode) ────────────────────… |
-| 0x8006C988 | ORPHAN | `CutsceneCamera::shakeTail` | game/camera/cutscene_camera.cpp:684 |  | ── post-mode TAIL (0x8006C988) — the camera SHAKE state machine ──────… |
-| 0x8006CBA8 | ORPHAN | `CutsceneCamera::initSeedGrp` | game/camera/cutscene_camera.cpp:816 |  |  |
-| 0x8006D02C | ORPHAN | `CutsceneCamera::lookAt` | game/camera/cutscene_camera.cpp:541 |  |  |
-| 0x8006D2AC | ORPHAN | `CutsceneCamera::distSolve` | game/camera/cutscene_camera.cpp:235 |  | ── distSolve (distance/zoom solver) ──────────────────────────────────… |
-| 0x8006D654 | ORPHAN | `CutsceneCamera::pitch` | game/camera/cutscene_camera.cpp:389 |  | ── pitch (vertical-look height smoother) ─────────────────────────────… |
-| 0x8006D934 | ORPHAN | `CutsceneCamera::snapAccXZ` | game/camera/cutscene_camera.cpp:591 |  | ── orchestrators (per-frame camera modes) ────────────────────────────… |
-| 0x8006D950 | ORPHAN | `CutsceneCamera::snapAccY` | game/camera/cutscene_camera.cpp:595 |  |  |
-| 0x8006D960 | ORPHAN | `CutsceneCamera::trackXZ` | game/camera/cutscene_camera.cpp:69 |  | ── follow accumulators ───────────────────────────────────────────────… |
-| 0x8006DA54 | ORPHAN | `CutsceneCamera::trackY` | game/camera/cutscene_camera.cpp:83 |  |  |
-| 0x8006DAD8 | ORPHAN | `CutsceneCamera::posBuildB` | game/camera/cutscene_camera.cpp:119 |  |  |
-| 0x8006DC38 | ORPHAN | `CutsceneCamera::posBuildA` | game/camera/cutscene_camera.cpp:110 |  | ── scripted-camera look-angle builders (0x8006DC38/DAD8/DF88/DEF0 — us… |
-| 0x8006DCF4 | ORPHAN | `CutsceneCamera::heading` | game/camera/cutscene_camera.cpp:473 |  | ── heading (heading tracker) ─────────────────────────────────────────… |
-| 0x8006DEF0 | ORPHAN | `CutsceneCamera::headBuildB` | game/camera/cutscene_camera.cpp:137 |  |  |
-| 0x8006DF88 | ORPHAN | `CutsceneCamera::headBuildA` | game/camera/cutscene_camera.cpp:127 |  |  |
-| 0x8006E010 | ORPHAN | `CutsceneCamera::angleStep` | game/camera/cutscene_camera.cpp:332 |  | ── angleStep ─────────────────────────────────────────────────────────… |
-| 0x8006E0F0 | ORPHAN | `CutsceneCamera::mainFollow` | game/camera/cutscene_camera.cpp:650 |  |  |
-| 0x8006E228 | ORPHAN | `CutsceneCamera::trackFollow` | game/camera/cutscene_camera.cpp:667 |  |  |
-| 0x8006E294 | ORPHAN | `CutsceneCamera::snapFollowA` | game/camera/cutscene_camera.cpp:632 |  |  |
-| 0x8006E2FC | ORPHAN | `CutsceneCamera::snapFollowB` | game/camera/cutscene_camera.cpp:644 |  |  |
-| 0x8006E360 | ORPHAN | `CutsceneCamera::pitchFollow` | game/camera/cutscene_camera.cpp:638 |  |  |
-| 0x8006E3B0 | ORPHAN | `CutsceneCamera::snapFollow` | game/camera/cutscene_camera.cpp:598 |  |  |
-| 0x8006E3F4 | ORPHAN | `CutsceneCamera::simpleFollow` | game/camera/cutscene_camera.cpp:662 |  |  |
-| 0x8006E464 | ORPHAN | `CutsceneCamera::rotBuild` | game/camera/cutscene_camera.cpp:215 |  |  |
-| 0x8006E918 | ORPHAN | `CutsceneCamera::initPlace` | game/camera/cutscene_camera.cpp:803 |  |  |
-| 0x8006EA7C | ORPHAN | `CutsceneCamera::init` | game/camera/cutscene_camera.cpp:835 |  |  |
-| 0x8006EC44 | ORPHAN | `CutsceneCamera::update` | game/camera/cutscene_camera.cpp:822 |  |  |
+| 0x8006C80C | ORPHAN | `CutsceneCamera::yFloor` | game/camera/cutscene_camera.cpp:351 |  | ── yFloor (camera-Y floor clamp, per render mode) ────────────────────… |
+| 0x8006C988 | ORPHAN | `CutsceneCamera::shakeTail` | game/camera/cutscene_camera.cpp:683 |  | ── post-mode TAIL (0x8006C988) — the camera SHAKE state machine ──────… |
+| 0x8006CBA8 | ORPHAN | `CutsceneCamera::initSeedGrp` | game/camera/cutscene_camera.cpp:815 |  |  |
+| 0x8006D02C | ORPHAN | `CutsceneCamera::lookAt` | game/camera/cutscene_camera.cpp:540 |  |  |
+| 0x8006D2AC | ORPHAN | `CutsceneCamera::distSolve` | game/camera/cutscene_camera.cpp:234 |  | ── distSolve (distance/zoom solver) ──────────────────────────────────… |
+| 0x8006D654 | ORPHAN | `CutsceneCamera::pitch` | game/camera/cutscene_camera.cpp:388 |  | ── pitch (vertical-look height smoother) ─────────────────────────────… |
+| 0x8006D934 | ORPHAN | `CutsceneCamera::snapAccXZ` | game/camera/cutscene_camera.cpp:590 |  | ── orchestrators (per-frame camera modes) ────────────────────────────… |
+| 0x8006D950 | ORPHAN | `CutsceneCamera::snapAccY` | game/camera/cutscene_camera.cpp:594 |  |  |
+| 0x8006D960 | ORPHAN | `CutsceneCamera::trackXZ` | game/camera/cutscene_camera.cpp:68 |  | ── follow accumulators ───────────────────────────────────────────────… |
+| 0x8006DA54 | ORPHAN | `CutsceneCamera::trackY` | game/camera/cutscene_camera.cpp:82 |  |  |
+| 0x8006DAD8 | ORPHAN | `CutsceneCamera::posBuildB` | game/camera/cutscene_camera.cpp:118 |  |  |
+| 0x8006DC38 | ORPHAN | `CutsceneCamera::posBuildA` | game/camera/cutscene_camera.cpp:109 |  | ── scripted-camera look-angle builders (0x8006DC38/DAD8/DF88/DEF0 — us… |
+| 0x8006DCF4 | ORPHAN | `CutsceneCamera::heading` | game/camera/cutscene_camera.cpp:472 |  | ── heading (heading tracker) ─────────────────────────────────────────… |
+| 0x8006DEF0 | ORPHAN | `CutsceneCamera::headBuildB` | game/camera/cutscene_camera.cpp:136 |  |  |
+| 0x8006DF88 | ORPHAN | `CutsceneCamera::headBuildA` | game/camera/cutscene_camera.cpp:126 |  |  |
+| 0x8006E010 | ORPHAN | `CutsceneCamera::angleStep` | game/camera/cutscene_camera.cpp:331 |  | ── angleStep ─────────────────────────────────────────────────────────… |
+| 0x8006E0F0 | ORPHAN | `CutsceneCamera::mainFollow` | game/camera/cutscene_camera.cpp:649 |  |  |
+| 0x8006E228 | ORPHAN | `CutsceneCamera::trackFollow` | game/camera/cutscene_camera.cpp:666 |  |  |
+| 0x8006E294 | ORPHAN | `CutsceneCamera::snapFollowA` | game/camera/cutscene_camera.cpp:631 |  |  |
+| 0x8006E2FC | ORPHAN | `CutsceneCamera::snapFollowB` | game/camera/cutscene_camera.cpp:643 |  |  |
+| 0x8006E360 | ORPHAN | `CutsceneCamera::pitchFollow` | game/camera/cutscene_camera.cpp:637 |  |  |
+| 0x8006E3B0 | ORPHAN | `CutsceneCamera::snapFollow` | game/camera/cutscene_camera.cpp:597 |  |  |
+| 0x8006E3F4 | ORPHAN | `CutsceneCamera::simpleFollow` | game/camera/cutscene_camera.cpp:661 |  |  |
+| 0x8006E464 | ORPHAN | `CutsceneCamera::rotBuild` | game/camera/cutscene_camera.cpp:214 |  |  |
+| 0x8006E918 | ORPHAN | `CutsceneCamera::initPlace` | game/camera/cutscene_camera.cpp:802 |  |  |
+| 0x8006EA7C | ORPHAN | `CutsceneCamera::init` | game/camera/cutscene_camera.cpp:834 |  |  |
+| 0x8006EC44 | ORPHAN | `CutsceneCamera::update` | game/camera/cutscene_camera.cpp:821 |  |  |
 | 0x8006EFF4 | ORPHAN | `Bit::testFE48` | game/math/mathlib.cpp:75 |  | u32 flag-bit TEST on the fixed 32-bit word at 0x800BFE48. Pure 5-instr… |
 | 0x8006F02C | ORPHAN | `Bit::setFE34` | game/math/mathlib.cpp:82 |  | u32 flag-bit SET on the fixed 32-bit word at 0x800BFE34. 7-instruction… |
 | 0x80074AF0 | ORPHAN | `Engine::areaSlotAckIfMatch` | game/scene/engine_stage.cpp:1366 |  | Engine::areaSlotAckIfMatch — FUN_80074AF0 body. Pure 21-instruction pr… |
@@ -105,10 +106,11 @@ Totals: 148 native fns, 131 owned addresses, 7 LIVE / 141 ORPHAN.
 | 0x80081218 | ORPHAN | `Asset::uploadImage` | game/core/asset.cpp:167 |  | PC-native CPU->VRAM upload — replaces the game's libgs-style upload li… |
 | 0x80081218 | ORPHAN | `GpuState::gpu_native_load_vram` | runtime/recomp/gpu_native.cpp:558 |  | PC-native CPU->VRAM upload. The game's libgs-style upload library (FUN… |
 | 0x80081560 | LIVE | `Engine::drawOTag` | game/game_tomba2.cpp:179 |  | Native ownership of DrawOTag (libgpu FUN_80081560, the per-frame draw … |
-| 0x80084220 | ORPHAN | `Math::applyMatlv` | game/math/engine_math.cpp:226 |  | ──────────────────────────────────────────────────────────────────────… |
-| 0x80084D10 | ORPHAN | `Math::rotX` | game/math/engine_math.cpp:217 |  |  |
-| 0x80084EB0 | ORPHAN | `Math::rotY` | game/math/engine_math.cpp:216 |  |  |
-| 0x80085050 | ORPHAN | `Math::rotZ` | game/math/engine_math.cpp:215 |  |  |
+| 0x80084220 | ORPHAN | `Math::applyMatlv` | game/math/engine_math.cpp:259 |  | ──────────────────────────────────────────────────────────────────────… |
+| 0x80084470 | ORPHAN | `Math::applyMatrixLV` | game/math/engine_math.cpp:125 |  | ──────────────────────────────────────────────────────────────────────… |
+| 0x80084D10 | ORPHAN | `Math::rotX` | game/math/engine_math.cpp:250 |  |  |
+| 0x80084EB0 | ORPHAN | `Math::rotY` | game/math/engine_math.cpp:249 |  |  |
+| 0x80085050 | ORPHAN | `Math::rotZ` | game/math/engine_math.cpp:248 |  |  |
 | 0x80085900 | ORPHAN | `Timing::vsync` | runtime/recomp/timing.cpp:38 |  | = libetc VSync(mode) reached via c->r[A0]: |
 | 0x80085BB0 | ORPHAN | `Timing::vsyncCallback` | runtime/recomp/timing.cpp:22 |  | VSyncCallback(func): no-op. The original routes the per-vblank |
 | 0x80087A60 | ORPHAN | `Engine::initInput` | game/scene/engine_init.cpp:139 | 0x80080890 0x800808A0 0x80085B10 0x800873F0 0x80087400 | a thin wrapper that just calls FUN_80086970; owned as initInput(). |
@@ -117,8 +119,8 @@ Totals: 148 native fns, 131 owned addresses, 7 LIVE / 141 ORPHAN.
 | 0x800963A0 | ORPHAN | `Font::bankSelect` | game/ui/engine_font.cpp:28 |  | font-bank selector. If ((bank-1)&0xff) < 24, store the bank byte at |
 | 0x800A5AC8 | ORPHAN | `GpuState::gpu_native_load_vram` | runtime/recomp/gpu_native.cpp:558 |  | PC-native CPU->VRAM upload. The game's libgs-style upload library (FUN… |
 | 0x800BF842 | ORPHAN | `Engine::postRenderTick` | game/scene/engine_stage.cpp:1174 |  | Engine::postRenderTick — 3-state fx-trigger + countdown on byte 0x800B… |
-| 0x800E8008 | ORPHAN | `CutsceneCamera::initSeedGrp` | game/camera/cutscene_camera.cpp:816 |  |  |
-| 0x800E8008 | ORPHAN | `CutsceneCamera::update` | game/camera/cutscene_camera.cpp:822 |  |  |
+| 0x800E8008 | ORPHAN | `CutsceneCamera::initSeedGrp` | game/camera/cutscene_camera.cpp:815 |  |  |
+| 0x800E8008 | ORPHAN | `CutsceneCamera::update` | game/camera/cutscene_camera.cpp:821 |  |  |
 | 0x801062E4 | ORPHAN | `Demo::stageMain` | game/scene/engine_demo.cpp:356 | 0x8005082C 0x800810F0 | DEMO stage entry (0x801062E4) — own the prologue PC-native, then hand … |
 | 0x8010637C | ORPHAN | `Engine::stagePrologue` | game/scene/engine_stage.cpp:1047 |  | GAME stage TOP-LEVEL ENTRY 0x8010637C — task-0's stage driver: a one-t… |
 | 0x801063C0 | ORPHAN | `Demo::s0` | game/scene/engine_demo.cpp:205 | 0x801063E4 | s0 0x801063C0 — run-once INIT then loaders; FALLS THROUGH into s1 same… |

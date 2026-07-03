@@ -115,6 +115,39 @@ uint32_t Math::matMul(uint32_t rPtr, uint32_t mPtr, uint32_t outPtr) { Core* c =
 }
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
+// FUN_80084470 — libgte ApplyMatrixLV. Sibling of applyMatlv (FUN_80084220) with two differences:
+//   (a) the 3x3 rotation matrix is loaded from a0 (mPtr) into GTE CR0-4 via CTC2 up front — not
+//       assumed to already be in the control regs;
+//   (b) the SWC2 output stores GTE data regs 25/26/27 (MAC1-3) — the UNCLAMPED s32 accumulator —
+//       into a2, not the clamped IR1-3 that applyMatlv writes.
+// The MVMVA opcode itself is identical to applyMatlv (sf=1, mx=ROT, v=V0, cv=Null, lm=0).
+// Same 44-bit accumulator + >>12 as matMul. Returns outPtr in v0.
+uint32_t Math::applyMatrixLV(uint32_t mPtr, uint32_t inPtr, uint32_t out) { Core* c = this->core;
+  // Load matrix into CR0-4 (faithful CTC2). Also read it as R[3][3] for the MVMVA math.
+  for (int i=0;i<5;i++) gte_write_ctrl(i, c->mem_r32(mPtr + i*4));
+  int16_t R[3][3]; load_mat3(c, mPtr, R);
+  uint32_t w0 = c->mem_r32(inPtr), w1 = c->mem_r32(inPtr+4);
+  int16_t v[3] = { (int16_t)w0, (int16_t)(w0>>16), (int16_t)w1 };
+  int32_t mac[3]; int16_t ir[3];
+  for (int i=0;i<3;i++) {
+    int64_t t=0;
+    t = sign44(t + (int32_t)R[i][0]*v[0]);
+    t = sign44(t + (int32_t)R[i][1]*v[1]);
+    t = sign44(t + (int32_t)R[i][2]*v[2]);
+    mac[i] = (int32_t)(t >> 12); ir[i] = clamp16s(mac[i]);
+  }
+  // Store MAC (unclamped s32), not IR — that's the ApplyMatrixLV signature.
+  c->mem_w32(out,   (uint32_t)mac[0]);
+  c->mem_w32(out+4, (uint32_t)mac[1]);
+  c->mem_w32(out+8, (uint32_t)mac[2]);
+  // GTE leftovers: VXY0/VZ0 = the MTC2'd input; IR1-3, MAC1-3 = the MVMVA result.
+  gte_write_data(0, w0); gte_write_data(1, w1);
+  gte_write_data(9,(uint32_t)(int32_t)ir[0]); gte_write_data(10,(uint32_t)(int32_t)ir[1]); gte_write_data(11,(uint32_t)(int32_t)ir[2]);
+  gte_write_data(25,(uint32_t)mac[0]); gte_write_data(26,(uint32_t)mac[1]); gte_write_data(27,(uint32_t)mac[2]);
+  return out;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────────
 // FUN_80085480 — libgte RotMatrix: build a 3x3 rotation matrix from 3 Euler angles. a0 = SVECTOR* of
 // angles (vx@+0, vy@+2, vz@+4, 16-bit fixed: 4096 = full turn), a1 = MATRIX* out (also returned in v0).
 // ~17% of hot interpreter time — the hottest fn after ov_mat_mul. USER 2026-06-21: GTE is PSX hardware

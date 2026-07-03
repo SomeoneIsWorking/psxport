@@ -37,6 +37,42 @@ void NodeXform::build(uint32_t node) {
   propagate(node);
 }
 
+// NodeXform::buildWithOffset — PC-native reimpl of guest FUN_800518FC.
+//
+// RE'd from disas 0x800518FC. Sibling of NodeXform::build (FUN_80051844): identical scratchpad
+// seeding + rotmat + matMul (node+0x98 = rot(node+0x54 euler) × M(sx16(node+0xB8/BA/BC) on the
+// diagonal of an 8-word source matrix)). The two diverge at the world-position step:
+//   - build():           node[+0xAC/B0/B4] = sx16(node[+0x2E/32/36])                       [direct]
+//   - buildWithOffset(): node[+0xAC/B0/B4] = ApplyMatrixLV(node+0x98, node+0x88)
+//                                            + sx16(node[+0x2E/32/36])                    [rotated]
+// i.e. the local anchor svec at node+0x88 is rotated by the composed matrix and the node's own
+// world position (node+0x2E/32/36) is then added on top. Ends with propagate(node) — same as
+// build(). All callees already native (Math::rotmat/matMul/applyMatrixLV, NodeXform::propagate).
+//
+// Callsites (5, all AI behaviour handlers): beh_cull_substate_orchestrator, beh_area_event_dispatch,
+// beh_id_compare_motion_dispatch (×3).
+void NodeXform::buildWithOffset(uint32_t node) {
+  Core* c = core;
+  const uint32_t SCR_M = 0x1F800000u;   // 8-word source matrix
+  const uint32_t SCR_R = 0x1F800020u;   // rot output
+  c->mem_w32(SCR_M +  4, 0);
+  c->mem_w32(SCR_M + 12, 0);
+  c->mem_w32(SCR_M + 20, 0);
+  c->mem_w32(SCR_M + 24, 0);
+  c->mem_w32(SCR_M + 28, 0);
+  c->mem_w32(SCR_M +  0, (uint32_t)c->mem_r16s(node + 0xB8));
+  c->mem_w32(SCR_M +  8, (uint32_t)c->mem_r16s(node + 0xBA));
+  c->mem_w32(SCR_M + 16, (uint32_t)c->mem_r16s(node + 0xBC));
+  c->math.rotmat(node + 0x54, SCR_R);
+  c->math.matMul(SCR_R, SCR_M, node + 0x98);
+  c->math.applyMatrixLV(node + 0x98, node + 0x88, node + 0xAC);
+  // pos += own world position (int16 sign-extended). Order matches disas (X, then Y+Z paired).
+  c->mem_w32(node + 0xAC, c->mem_r32(node + 0xAC) + (uint32_t)(int32_t)c->mem_r16s(node + 0x2E));
+  c->mem_w32(node + 0xB0, c->mem_r32(node + 0xB0) + (uint32_t)(int32_t)c->mem_r16s(node + 0x32));
+  c->mem_w32(node + 0xB4, c->mem_r32(node + 0xB4) + (uint32_t)(int32_t)c->mem_r16s(node + 0x36));
+  propagate(node);
+}
+
 // FUN_80051128 — per-object CHILD-NODE TRANSFORM loop. RE'd from disas:
 //   guard: if node[9]==0 -> return
 //   loop s2 in [0, node[8]) with continue-bound node[9] (dual-bound idiom):

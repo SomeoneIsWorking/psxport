@@ -32,6 +32,12 @@ public:
   //   vector at inPtr; writes 3 sign-extended s32 words at outPtr. Returns outPtr via v0.
   uint32_t applyMatlv(uint32_t inPtr, uint32_t outPtr);
 
+  // applyMatrixLV(mPtr, inPtr, outPtr): FUN_80084470 — libgte ApplyMatrixLV. Load the 3x3 rotation
+  //   matrix from mPtr into GTE CR0-4, then MVMVA the vector at inPtr by it and write the 3 MAC
+  //   words (unclamped s32) at outPtr. Differs from applyMatlv in that (a) the matrix is loaded
+  //   here (not assumed already in CR), and (b) the output is MAC1-3, not IR1-3.
+  uint32_t applyMatrixLV(uint32_t mPtr, uint32_t inPtr, uint32_t outPtr);
+
   // rotmat(anglesPtr, outPtr): FUN_80085480 — libgte RotMatrix. Build a 3x3 rotation matrix from
   //   3 Euler angles at anglesPtr (SVECTOR: vx/vy/vz s16); output written to outPtr in CR-packed
   //   layout (5 words). Also loads GTE leftovers a downstream reader consumes.

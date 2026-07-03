@@ -27,6 +27,7 @@
 //   0x1F800160 (lh  scratchpad, state-1 cull gate; signed < 0x4651 => cull)
 
 #include "core.h"
+#include "render/render.h"       // Core::mRender (NodeXform)
 #include "object/actor.h"    // Actor::boundsCull (FUN_8007778C native)
 #include "cfg.h"
 #include <stdio.h>
@@ -126,7 +127,7 @@ void beh_cull_substate_orchestrator(Core* c) {
   uint8_t n1 = c->mem_r8(obj + 1);                     // 0x801326E4  lbu v0, 1(s0)
   c->mem_w8(obj + 0x29, 0);                            // 0x801326F0  sb zero, 0x29(s0)  (delay slot @ED-style; ALWAYS runs)
   if (n1 != 0) {                                       // 0x801326EC  beqz v0 -> 0x8013271C (epilogue)
-    c->r[4] = obj; rec_dispatch(c, 0x800518FCu);       // 0x801326F4  jal FUN_800518FC (a0=s0)
+    c->mRender->mNodeXform.buildWithOffset(obj);                  // FUN_800518FC (native)         [0x801326F4]
   }
   // 0x801326FC  j 0x8013271C (epilogue)
 }

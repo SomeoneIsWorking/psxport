@@ -22,7 +22,6 @@ static constexpr uint32_t T2_ISQRT  = 0x80084080u;   // isqrt(x)      -> floor(s
 static constexpr uint32_t LA_ISQRT  = 0x80077FB0u;
 static constexpr uint32_t LA_MRINIT = 0x80051794u;   // MR_init (identity)
 static constexpr uint32_t LA_MULMAT = 0x80084250u;   // MulMatrix0(a0,a1)
-static constexpr uint32_t LA_APPLYLV= 0x80084470u;   // ApplyMatrixLV(m,v,out)
 static constexpr uint32_t LA_COPYMAT= 0x800847B0u;   // CopyMatrix(a0,a1)
 // shakeTail's helpers (a utility RNG + a sound/rumble-effect request queue — a library, kept substrate).
 static constexpr uint32_t SHAKE_RAND = 0x8009A450u;    // PSX-style rand(): next = next*0x41c64e6d+12345
@@ -583,7 +582,7 @@ void CutsceneCamera::lookAt() {   // FUN_8006D02C
   w16(0x1F8000C0u, (uint16_t)(0u - (uint32_t)r16(S + 2)));
   w16(0x1F8000C2u, (uint16_t)(0u - (uint32_t)r16(S + 6)));
   w16(0x1F8000C4u, (uint16_t)(0u - (uint32_t)r16(S + 10)));
-  call(LA_APPLYLV, (int32_t)M, 0x1F8000C0, 0x1F80010C);
+  c->math.applyMatrixLV((uint32_t)M, 0x1F8000C0u, 0x1F80010Cu);   // FUN_80084470 (native)
   call(LA_COPYMAT, (int32_t)M, (int32_t)(S + 72));
 }
 

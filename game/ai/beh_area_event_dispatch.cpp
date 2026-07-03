@@ -22,6 +22,7 @@
 // behavior gate (below) compares only RAM+scratchpad — matching the sibling objbeh gates.
 
 #include "core.h"
+#include "render/render.h"       // Core::mRender (NodeXform)
 #include "cfg.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -50,7 +51,7 @@ void beh_area_event_dispatch(Core* c) {
       break;
     case 1:
       c->r[4] = obj; rec_dispatch(c, 0x80071768u);
-      if (c->mem_r8(obj + 1) != 0) { c->r[4] = obj; rec_dispatch(c, 0x800518FCu); }
+      if (c->mem_r8(obj + 1) != 0) c->mRender->mNodeXform.buildWithOffset(obj);   // FUN_800518FC (native)
       break;
     case 3:
       c->engine.spawn.despawn(obj);
