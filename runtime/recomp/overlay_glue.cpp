@@ -24,7 +24,7 @@ void overlay_glue_frame_begin(Core* core) {
     // coords from ONE core — the `sbs show`-selected one — rather than let A and B overwrite each
     // other's readout each frame. Standalone: core is the sole core, push unconditionally.
     if (core && core->game) {
-        Core* shown = Sbs::shownCore();
+        Core* shown = core->game->sbs ? core->game->sbs->shownCore() : nullptr;
         if (!shown || shown == core) {
             core->game->rml_overlay.setWorld(
                 (int16_t)core->mem_r16(0x1F8000D2u),

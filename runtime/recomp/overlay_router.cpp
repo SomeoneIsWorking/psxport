@@ -44,8 +44,9 @@ void overlay_note_load(Core* c, uint32_t dest) {
   if (s < 0) return;
   const unsigned char* ram = c->ram + (dest & 0x1FFFFFFF);
   int dbg = cfg_dbg("ovload");
-  int      cid = dbg ? Sbs::coreId(c) : -1;
-  uint32_t fr  = dbg ? Sbs::frame()   :  0;
+  Sbs*     sbs = c->game->sbs;
+  int      cid = (dbg && sbs) ? sbs->coreId(c) : -1;
+  uint32_t fr  = (dbg && sbs) ? sbs->frame()   :  0;
   for (int i = 0; i < g_rec_overlay_count; i++) {
     const RecOverlay* o = &g_rec_overlays[i];
     if ((o->base & 0x1FFFFFFF) != (dest & 0x1FFFFFFF)) continue;

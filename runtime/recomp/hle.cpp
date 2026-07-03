@@ -230,7 +230,7 @@ void rec_dispatch_miss(Core* c, uint32_t addr) {
   // is never a call target. First honor the PLATFORM HLE table: PSX BIOS-library HW-sync leaves
   // (libcd/libetc/libmdec) that busy-spin on an unmodelled IRQ/status bit resolve natively here.
   if (a >= 0x10000 && a < 0x200000) {
-    if (auto pf = PlatformHle::instance().lookup(addr | 0x80000000u)) { pf(c); return; }
+    if (auto pf = c->game->platform_hle.lookup(addr | 0x80000000u)) { pf(c); return; }
     // FAIL FAST: the interpreter is gone. Any RAM code that is not a recompiled MAIN function, a
     // native override, or a platform-HLE leaf is a MISS — abort with call site + backtrace.
     if (c->recMissTolerant) { c->recMissed = true; return; }   // TEST: skip oracle-unavailable state

@@ -66,35 +66,28 @@ static unsigned dbg_btn(const char* n) {
   if (!strcmp(n,"left"))return 0x0080; if (!strcmp(n,"right")) return 0x0020;
   return (unsigned)strtoul(n, 0, 16);
 }
-// Held-input / pause / step / ctx / started state live on `class DbgServer` (dbg_server.h). The
-// dispatcher and thread body below reach them via a `class DbgServerInternals` friend accessor —
-// keeping the class members truly private on the public API while the impl TU sees them raw.
-DbgServer& DbgServer::instance() { static DbgServer s; return s; }
+// Held-input / pause / step / ctx / started state live on `class DbgServer` (dbg_server.h). Only
+// one endpoint per process (one host TCP port); whichever Game's `dbg_server.start(c)` wins the
+// bind claims the process-wide server. `sInstance` points at that DbgServer so the impl-TU
+// dispatcher and thread body can reach it without a static instance() singleton.
 class DbgServerInternals {
 public:
-  static unsigned short& held()   { return DbgServer::instance().mHeld;   }
-  static bool&           paused() { return DbgServer::instance().mPaused; }
-  static int&            step()   { return DbgServer::instance().mStep;   }
-  static Core*&          ctx()    { return DbgServer::instance().mCtx;    }
-  static bool&           started(){ return DbgServer::instance().mStarted;}
+  static DbgServer*      sInstance;
+  static unsigned short& held()   { return sInstance->mHeld;   }
+  static bool&           paused() { return sInstance->mPaused; }
+  static int&            step()   { return sInstance->mStep;   }
+  static Core*&          ctx()    { return sInstance->mCtx;    }
+  static bool&           started(){ return sInstance->mStarted;}
 };
-// Impl-TU shorthand so the dispatcher below (a large switch) doesn't sprout `DbgServer::instance()`
-// every three lines. Not exported — this block is impl-private.
+DbgServer* DbgServerInternals::sInstance = nullptr;
+
+// Impl-TU shorthand so the dispatcher below (a large switch) doesn't sprout accessor calls every
+// three lines. Not exported — this block is impl-private.
 #define s_held    (DbgServerInternals::held())
 #define s_paused  (DbgServerInternals::paused())
 #define s_step    (DbgServerInternals::step())
 #define s_ctx     (DbgServerInternals::ctx())
 #define s_started (DbgServerInternals::started())
-
-// Legacy free-function bridges — one line each into the singleton method.
-int  dbg_is_paused(void)    { return DbgServer::instance().isPaused() ? 1 : 0; }
-int  dbg_step_pending(void) { return DbgServer::instance().stepPending() ? 1 : 0; }
-void dbg_consume_step(void) { DbgServer::instance().consumeStep(); }
-void dbg_set_paused(int p)  { DbgServer::instance().setPaused(p != 0); }
-void dbg_toggle_pause(void) { DbgServer::instance().togglePause(); }
-void dbg_add_step(int n)    { DbgServer::instance().addStep(n); }
-void dbg_server_start(Core* c)   { DbgServer::instance().start(c); }
-void dbg_server_service(Core* c) { DbgServer::instance().service(c); }
 
 // --- main<->server handoff: a single pending request, serviced on the main thread once per frame --
 static pthread_mutex_t s_mtx  = PTHREAD_MUTEX_INITIALIZER;
@@ -118,7 +111,8 @@ static bool parse_core_target(const char*& line, Core*& saved, Core*& override_c
   if (line[0] != '@') return false;
   if (!line[1] || (line[2] != ' ' && line[2] != '\t')) return false;
   char which = line[1];
-  Core* target = Sbs::coreByLetter(which);
+  Sbs* sbs = (s_ctx && s_ctx->game) ? s_ctx->game->sbs : nullptr;
+  Core* target = sbs ? sbs->coreByLetter(which) : nullptr;
   if (!target) { line += 3; return false; }         // strip the token even if no-op
   saved = s_ctx; override_ctx = target;
   s_ctx = target;
@@ -138,7 +132,7 @@ static void dbg_exec(FILE* out, const char* line) {
   RestoreCtx rc{ s_ctx, saved_ctx, targeted };
   line = p;                                  // dispatcher sees the command WITHOUT the target token
   if (sscanf(line, "%31s", cmd) != 1) { fprintf(out, "(empty)\n"); return; }
-  if (Sbs::dbgCmd(out, line)) return;        // SBS divergence-debugger commands
+  if (s_ctx && s_ctx->game && s_ctx->game->sbs && s_ctx->game->sbs->dbgCmd(out, line)) return;   // SBS divergence-debugger commands
 
   if (!strcmp(cmd, "help")) {
     fprintf(out,
@@ -313,6 +307,7 @@ static void dbg_exec(FILE* out, const char* line) {
 // `c` is the live frame-loop CPU context, stored for the `call` command (runs guest fns at this
 // frame boundary). Pass NULL from sites without a context (the call command then reports "no context").
 void DbgServer::service(Core* c) {
+  if (DbgServerInternals::sInstance != this) return;   // another Game owns the endpoint
   s_ctx = c;
   if (!s_started) return;
   pthread_mutex_lock(&s_mtx);
@@ -416,6 +411,10 @@ void DbgServer::start(Core* c) {
   const char* e = cfg_str("PSXPORT_DEBUG_SERVER");
   if (!e || !atoi(e)) return;
   int port = atoi(e); if (port == 1) port = 5959;
+  // Claim the process-wide endpoint. In SBS the FIRST Game to reach start() wins the TCP port +
+  // the impl-TU accessors below; the other Game's start() no-ops (its listener bind would fail).
+  if (!DbgServerInternals::sInstance) DbgServerInternals::sInstance = this;
+  if (DbgServerInternals::sInstance != this) return;
   // A debug client that disconnects mid-reply makes the server's write() raise SIGPIPE; with the default
   // disposition that TERMINATES THE WHOLE GAME (a dropped/timed-out dbgclient connection killed the live
   // port — looked like a crash on entering the New-Game cutscene, but the process was merely SIGPIPE'd).

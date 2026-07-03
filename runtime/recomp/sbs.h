@@ -1,41 +1,44 @@
 // class Sbs — the LIVE two-core side-by-side divergence debugger (PSXPORT_SBS=1).
 //
-// One singleton per process. All harness state (mode, frame counter, both Game handles, per-pane
-// RGBA buffers, divergence/write-watch record, scripted-input list, dbg-server pause state) lives on
-// the instance — no file-scope globals. See sbs.cpp for the design commentary and the docs at the top
-// of that file for the mode matrix (render / gameplay / full / oracle).
+// The harness OWNS its two Games. Each Game holds a back-pointer `Game::sbs` set by the harness on
+// creation, so any code with a `Core* c` reaches the harness through `c->game->sbs` — no static
+// instance() lookup. In standalone (single-Game) `game->sbs` is nullptr.
 //
-// PUBLIC API (call sites in other TUs):
-//   Sbs::run(exePath)           process entry point from boot.cpp when PSXPORT_SBS=1
-//   Sbs::active()               true while the harness is running (native_fmv / native_boot gate off it)
-//   Sbs::coreId(c)              -1 if not active, 0 for A, 1 for B (overlay_router tag)
-//   Sbs::frame()                lockstep frame counter (overlay_router tag)
-//   Sbs::dbgCmd(out, line)      debug-server `sbs …` command dispatcher (from dbg_server.cpp)
-//   Sbs::storeCb(c, addr, val)  write-watch callback (installed on mem via mem_set_store_watch_cb)
+// Pimpl: the harness state (mode, both Game handles, per-pane RGBA buffers, divergence + write-watch
+// record, scripted-input list) lives on a private `Impl` defined in sbs.cpp so this header stays
+// light and callers only see the public interface.
 #pragma once
 #include <cstdio>
 #include <cstdint>
-struct Core;
+class Core;
+class Game;
 
 class Sbs {
 public:
-  // Process entry point — never returns (owns the process from PSXPORT_SBS=1 onward).
+  // Process entry point — never returns (owns the process from PSXPORT_SBS=1 onward). Constructs a
+  // stack Sbs, wires it into its two Games, drives them, exit(0).
   static void run(const char* exePath);
 
-  static bool     active();
-  static int      coreId(Core* c);
-  static uint32_t frame();
-  static int      dbgCmd(FILE* out, const char* line);
-  static void     storeCb(Core* c, uint32_t addr, uint32_t val);
+  Sbs();
+  ~Sbs();
+  Sbs(const Sbs&) = delete;
+  Sbs& operator=(const Sbs&) = delete;
+
+  bool     active() const;
+  int      coreId(Core* c) const;
+  uint32_t frame() const;
+  int      dbgCmd(FILE* out, const char* line);
+  // Write-watch trampoline installed on mem via mem_set_store_watch_cb — static so it fits the
+  // C callback signature. Dispatches to `c->game->sbs->…` when SBS is active.
+  static void storeCb(Core* c, uint32_t addr, uint32_t val);
 
   // Per-command core targeting for the debug server: 'a'/'A' → core A, 'b'/'B' → core B, else null.
-  // Returns nullptr when the SBS harness is NOT running (single-Core standalone), so callers can fall
-  // back to the frame-loop's current context. Enables `r@a 0x80000000` and `r@b 0x80000000` in dbg.
-  static Core*    coreByLetter(char which);
+  Core*    coreByLetter(char which) const;
 
-  // The currently `sbs show`-selected core (0 → A, 1 → B). Returns nullptr when the SBS harness is
-  // NOT running (single-Core standalone). Callers that drive a process-wide singleton (e.g. the RmlUi
-  // overlay HUD, which has one window per process) use this to display state from ONE core rather
-  // than let both cores overwrite each other's readout each frame.
-  static Core*    shownCore();
+  // The currently `sbs show`-selected core (0 → A, 1 → B).
+  Core*    shownCore() const;
+
+private:
+  class Impl;
+  Impl* mImpl;
 };

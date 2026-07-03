@@ -80,11 +80,6 @@ static void vsync_trap(Core* c) { trap_abort(c, "VSYNC", 0x80085900u); }
 
 // ---- class PlatformHle ---------------------------------------------------------------------------
 
-PlatformHle& PlatformHle::instance() {
-  static PlatformHle s;
-  return s;
-}
-
 // Two platform windows, both I/O / hardware-service, NEVER game logic:
 //   [0x8001C000,0x8001E000) — the engine's CD/SPU I/O GLUE (libcd-wrapper readers, SPU-mix).
 //   [0x80080000,0x8009E000) — the SCEI LIBRARY text (libgpu/libetc/libcd/libgs/libmdec) + the kernel
@@ -140,4 +135,4 @@ void PlatformHle::initBuiltins() {
   register_(0x80080880u, scheduler_yield);
 }
 
-// Free-function shims retired 2026-07-03 — all callers reach `PlatformHle::instance()` directly now.
+// Instance method — PlatformHle is a Game member (see game.h). Callers use `c->game->platform_hle`.

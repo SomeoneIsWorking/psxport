@@ -208,14 +208,15 @@ void Pad::pollSdl() {
   // '.' (period) freezes and advances exactly one frame. Read SDL's keyboard snapshot directly (not the
   // `ks` above) so these still work even when RmlUi suppressed gameplay keys. Handled here because
   // pad_poll_sdl runs every frame in BOTH the running loop and the paused wait. (dbg_server.c)
-  { void dbg_toggle_pause(void); void dbg_add_step(int);
+  if (game) {
     const bool* dks = SDL_GetKeyboardState(NULL);
     static int prev_p = 0, prev_step = 0;
     int p  = dks && dks[SDL_SCANCODE_P]      != 0;
     int st = dks && dks[SDL_SCANCODE_PERIOD] != 0;
-    if (p && !prev_p)   dbg_toggle_pause();
-    if (st && !prev_step) dbg_add_step(1);
-    prev_p = p; prev_step = st; }
+    if (p  && !prev_p)    game->dbg_server.togglePause();
+    if (st && !prev_step) game->dbg_server.addStep(1);
+    prev_p = p; prev_step = st;
+  }
 
   // HOTSWAP-aware controllers: open/close as devices come and go, then OR every connected pad into the
   // mask (additive with the keyboard, so both work simultaneously). Self-contained — no dependency on

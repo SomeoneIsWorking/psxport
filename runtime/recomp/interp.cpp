@@ -16,6 +16,7 @@
 // Faithful-first simplifications match the emitter: no load-delay slot; add==addu; signed
 // div/mult via cpu_div/mult helpers; GTE via gte_op/gte_read/write.
 #include "core.h"
+#include "game.h"            // c->game->platform_hle
 #include "cfg.h"
 #include "platform_hle.h"    // class PlatformHle — sync-primitive HLE lookup on an interpreted call target
 #include <stdio.h>
@@ -395,7 +396,7 @@ static int coro_native_call(Core* c, uint32_t tgt) {
   // busy-spin on an IRQ/status bit we don't model. NOT the removed game-override table — these are
   // hardware-emulation entries only (same class as the is_bios HLE above), restricted to the
   // BIOS-library address window. A `jal` to one runs the native HLE and returns to the caller.
-  { if (auto pf = PlatformHle::instance().lookup(tgt)) { pf(c); return 1; } }
+  { if (auto pf = c->game->platform_hle.lookup(tgt)) { pf(c); return 1; } }
   // No-interpreter SUBSTRATE: if `tgt` is a statically-recompiled function, run its COMPILED body
   // (rec_dispatch -> the generated addr->func_XXXX switch -> gen_func / g_override) instead of letting
   // the flat interpreter execute it. Returns "handled" so the loop resumes at the caller's return addr,

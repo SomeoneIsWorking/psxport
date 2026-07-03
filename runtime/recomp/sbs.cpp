@@ -47,13 +47,6 @@ void load_exe(const char* path, Core* c);
 void dc_boot_init(Core* c);
 void dc_step_frame(Core* c, uint32_t f);
 extern "C" int cfg_on(const char*);
-void dbg_server_start(Core* c);
-void dbg_server_service(Core* c);
-int  dbg_is_paused(void);
-int  dbg_step_pending(void);
-void dbg_consume_step(void);
-void dbg_set_paused(int p);
-void dbg_add_step(int);
 extern "C" void watchdog_disable(void);
 extern "C" void guest_backtrace_to(Core* c, FILE* out);
 extern "C" void mem_set_store_watch_cb(void (*cb)(Core*, uint32_t, uint32_t));
@@ -73,12 +66,10 @@ extern "C" {
 void sbs_rl_present(Game* game, const unsigned char* rgbaA, int wA, int hA, const unsigned char* rgbaB, int wB, int hB);
 
 // ============================================================================
-// SbsHarness — the impl class. All state private, all methods private except the six re-exposed
-// through the Sbs:: static facade at the bottom of the file. There is exactly one instance per
-// process (constructed lazily inside Sbs::run) and it never returns.
+// Sbs::Impl — the pimpl body of class Sbs. All state + dispatch lives here; Sbs's public methods
+// forward through mImpl. Exactly one instance per process (stack-allocated inside Sbs::run() and
+// destroyed on process exit).
 // ============================================================================
-
-namespace {
 
 enum Mode { M_RENDER, M_GAMEPLAY, M_FULL, M_ORACLE };
 constexpr uint32_t GAME_ENTRY  = 0x8010637Cu;  // task0 entry while the GAME stage runs (in the field)
@@ -90,18 +81,11 @@ enum Phase { REACH_GAME, AWAIT_CUT, SKIP_CUT, DONE };
 struct Nav { Phase phase = REACH_GAME; int idle = 0; };
 struct SbsKey { uint32_t from, to; uint16_t btn; };
 
-class SbsHarness {
+// Pimpl body — all Sbs state and dispatch lives here. Accessed from Sbs's public methods (below)
+// through `mImpl`; the header stays light.
+class Sbs::Impl {
 public:
-  // Singleton access — constructed lazily inside Sbs::run(). Public API queries go via `getOrNull()`
-  // so pre-run callers (native_fmv/native_boot Sbs::active checks) never trigger construction.
-  static SbsHarness* getOrNull() { return sInstance; }
-  static SbsHarness& create() {
-    if (!sInstance) sInstance = new SbsHarness();
-    return *sInstance;
-  }
-
-  // --- Public-facing entry points (re-exposed via Sbs::) ---
-  void run(const char* exePath);
+  void run(const char* exePath, Sbs* facade);
   int  dbgCmd(FILE* out, const char* line);
   void storeCb(Core* c, uint32_t addr, uint32_t val);
   bool active() const { return mSbs; }
@@ -118,9 +102,6 @@ public:
   Core* shownCore() const {
     return mSel ? (mB ? &mB->core : nullptr) : (mA ? &mA->core : nullptr);
   }
-
-private:
-  static SbsHarness* sInstance;
 
   // ---- mode + core handles ----
   Mode  mMode = M_RENDER;
@@ -180,16 +161,14 @@ private:
   void  dumpPpm(const char* path);
 };
 
-SbsHarness* SbsHarness::sInstance = nullptr;
-
-const char* SbsHarness::modeName() const {
+const char* Sbs::Impl::modeName() const {
   return mMode == M_RENDER ? "render" : mMode == M_GAMEPLAY ? "gameplay" :
          mMode == M_ORACLE ? "oracle" : "full";
 }
 
 // Legit render-only guest regions in MAIN RAM: the native vs PSX render paths write GP0 packets / OT /
 // pool pointers here (render + full mode). Divergence here is render noise, not the gameplay we hunt.
-bool SbsHarness::isRenderRegion(uint32_t a) const {
+bool Sbs::Impl::isRenderRegion(uint32_t a) const {
   if (a >= 0x800BF4F0u && a < 0x800BF54Cu) return true;   // pool ptrs + dwell
   if (a >= 0x800BFE68u && a < 0x800EA200u) return true;   // packet pool (×2) + OT (×2) + env
   return false;
@@ -203,14 +182,14 @@ bool SbsHarness::isRenderRegion(uint32_t a) const {
 // The GAP 0x1F800100..0x1F800140 is GAMEPLAY scratchpad (cutscene-active flag 0x1F800137, sub-mode bytes)
 // and is STILL diffed, so real gameplay corruption is caught. Excluded ONLY when the render paths actually
 // differ (render/full); gameplay mode renders PSX on both, so nothing here diverges — keep the FULL diff.
-bool SbsHarness::isRenderSpad(uint32_t a) const {
+bool Sbs::Impl::isRenderSpad(uint32_t a) const {
   if (mMode == M_GAMEPLAY) return false;
   if (a >= 0x1F800000u && a < 0x1F800100u) return true;
   if (a >= 0x1F800140u && a < 0x1F800160u) return true;
   return false;
 }
 
-void SbsHarness::capBt(Core* c, char* buf, size_t n) {
+void Sbs::Impl::capBt(Core* c, char* buf, size_t n) {
   buf[0] = 0;
   FILE* f = fmemopen(buf, n, "w");
   if (f) { guest_backtrace_to(c, f); fclose(f); }
@@ -219,7 +198,7 @@ void SbsHarness::capBt(Core* c, char* buf, size_t n) {
 // 3-phase navigation to gameplay-start (concurrent per-core AUTO-NAV — identical shape to AUTO_SKIP /
 // dualcore): (0) tap Cross until the GAME stage, (1) wait for the intro cutscene to begin, (2) pulse
 // Start while the cutscene flag is up, finishing once it has read 0 for 60 consecutive frames (fade settled).
-bool SbsHarness::navStep(Core* c, Nav& nv, uint32_t f, const char* tag) {
+bool Sbs::Impl::navStep(Core* c, Nav& nv, uint32_t f, const char* tag) {
   if ((f % 400u) == 0) fprintf(stderr, "[sbs-nav] %s f%u phase=%d stage=%08X cut=%u\n",
                                tag, f, (int)nv.phase, c->mem_r32(TASK0_ENTRY), c->mem_r8(CUT_FLAG));
   uint8_t cut = c->mem_r8(CUT_FLAG);
@@ -242,7 +221,7 @@ bool SbsHarness::navStep(Core* c, Nav& nv, uint32_t f, const char* tag) {
 
 // Per-core render-path config. Sets THIS core's Render::mPsxRender — no shared global. psx_fallback is
 // per-Game, set once at boot; render mode is set per core, per step.
-void SbsHarness::applyMode(Game* g, int which) {
+void Sbs::Impl::applyMode(Game* g, int which) {
   Render* r = g->core.mRender;
   switch (mMode) {
     case M_RENDER:   r->mode.setPsxRender(which != 0);    break;   // A native render (0), B PSX render (1)
@@ -252,7 +231,7 @@ void SbsHarness::applyMode(Game* g, int which) {
   }
 }
 
-void SbsHarness::recordDivergence(uint32_t addr) {
+void Sbs::Impl::recordDivergence(uint32_t addr) {
   bool spad = isSpad(addr);
   uint32_t end_addr = spad ? 0x1F800400u : mHi;
   uint32_t last = addr, gap = 0;
@@ -267,13 +246,13 @@ void SbsHarness::recordDivergence(uint32_t addr) {
           mFrame, mDivAddr, mDivEnd, modeName());
   if (mHaveDbgsrv) {
     fprintf(stderr, "[sbs] paused. Inspect over the debug server: `sbs diff`, `sbs bt`, `sbs watch`.\n");
-    dbg_set_paused(1);
+    mA->dbg_server.setPaused(true);
   } else {
     fprintf(stderr, "[sbs] (no debug server: logging and continuing; set PSXPORT_DEBUG_SERVER=1 to pause + `sbs diff`)\n");
   }
 }
 
-void SbsHarness::checkDivergence() {
+void Sbs::Impl::checkDivergence() {
   const uint8_t* a = mA->core.ram + (mLo - 0x80000000u);
   const uint8_t* b = mB->core.ram + (mLo - 0x80000000u);
   uint32_t n = mHi - mLo;
@@ -285,7 +264,7 @@ void SbsHarness::checkDivergence() {
 // Step ONE core's frame for the SBS composite: diff_mode=1 suppresses its OWN per-core present/pace/audio
 // (the SBS loop owns the single window present); sbs_render=1 re-enables the render-submit so it EMITS its
 // geometry into VK batch `which` (gpu_gpu_select_target). Neither core presents; the SBS composite does.
-void SbsHarness::stepCore(Game* g, int which) {
+void Sbs::Impl::stepCore(Game* g, int which) {
   g->core.game->diff_mode  = 1;
   g->core.game->sbs_render = 1;
   // PSXPORT_SBS intro-FMV: the OP.STR opening movie is OWNED by the native FMV player (skipped in SBS),
@@ -308,7 +287,7 @@ void SbsHarness::stepCore(Game* g, int which) {
 // Render ONE core's just-emitted frame into the shared VK target HEADLESS and read it back to its CPU RGBA
 // pane buffer (SDL_GPU window then draws it). Resets the VK geometry batch. Records the live display-region
 // size for the SDL_GPU window upload.
-void SbsHarness::grabPane(Game* g, uint8_t* rgba, int* ow, int* oh) {
+void Sbs::Impl::grabPane(Game* g, uint8_t* rgba, int* ow, int* oh) {
   int sx, sy, w, h; gpu_disp_region(&g->core, &sx, &sy, &w, &h);
   if (w < 1) w = 1; if (h < 1) h = 1;
   if (w > 1024) w = 1024; if (h > 512) h = 512;
@@ -319,7 +298,7 @@ void SbsHarness::grabPane(Game* g, uint8_t* rgba, int* ow, int* oh) {
 
 // PSXPORT_SBS_KEYS — scripted timed input for HEADLESS repro: "FROM-TO:BTN,FROM-TO:BTN,…" (btn = libpad
 // bit name: start/select/cross/circle/square/triangle/up/down/left/right).
-uint16_t SbsHarness::btnBit(const char* n) const {
+uint16_t Sbs::Impl::btnBit(const char* n) const {
   if (!strcmp(n, "start"))    return 0x0008;
   if (!strcmp(n, "select"))   return 0x0001;
   if (!strcmp(n, "cross"))    return 0x4000;
@@ -334,7 +313,7 @@ uint16_t SbsHarness::btnBit(const char* n) const {
   return 0;
 }
 
-void SbsHarness::parseKeys() {
+void Sbs::Impl::parseKeys() {
   mKeysParsed = true;
   const char* e = getenv("PSXPORT_SBS_KEYS"); if (!e || !*e) return;
   char buf[2048]; strncpy(buf, e, sizeof buf - 1); buf[sizeof buf - 1] = 0;
@@ -349,7 +328,7 @@ void SbsHarness::parseKeys() {
 }
 
 // Feed the SAME host pad mask to BOTH cores (mirrored input). PSXPORT_SBS_KEYS injects timed input.
-void SbsHarness::feedInput() {
+void Sbs::Impl::feedInput() {
   if (!mKeysParsed) parseKeys();
   uint16_t mask = (uint16_t)sbs_rl_poll_input();
   for (const SbsKey& k : mKeys)
@@ -359,7 +338,7 @@ void SbsHarness::feedInput() {
 }
 
 // PSXPORT_SBS_DUMP=path: write the two panes (A left | B right) as ONE side-by-side PPM.
-void SbsHarness::dumpPpm(const char* path) {
+void Sbs::Impl::dumpPpm(const char* path) {
   int H = mHa > mHb ? mHa : mHb; int W = mWa + mWb;
   if (W < 1 || H < 1) return;
   FILE* f = fopen(path, "wb"); if (!f) { fprintf(stderr, "[sbs] dump: cannot open %s\n", path); return; }
@@ -381,7 +360,7 @@ void SbsHarness::dumpPpm(const char* path) {
 // Write-watch callback. Fired mid-frame by whichever core writes the armed address; capture that core's
 // EXACT guest backtrace + value. We DON'T pause here (mid-frame is unsafe) — the lockstep loop pauses
 // after both cores finish the frame, with both write sites captured.
-void SbsHarness::storeCb(Core* c, uint32_t a, uint32_t v) {
+void Sbs::Impl::storeCb(Core* c, uint32_t a, uint32_t v) {
   if (!mWwArmed || (a & ~3u) != (mWwAddr & ~3u)) return;
   int which = (mB && c == &mB->core) ? 1 : 0;
   if (which) { mWwVb = v; capBt(c, mWwBtB, sizeof mWwBtB); }
@@ -390,14 +369,14 @@ void SbsHarness::storeCb(Core* c, uint32_t a, uint32_t v) {
 }
 
 // `sbs …` debug-server commands. Returns 1 if handled (dbg_exec stops), 0 otherwise.
-int SbsHarness::dbgCmd(FILE* out, const char* line) {
+int Sbs::Impl::dbgCmd(FILE* out, const char* line) {
   char cmd[16] = {0}, sub[32] = {0};
   if (sscanf(line, "%15s", cmd) != 1 || strcmp(cmd, "sbs") != 0) return 0;
   if (!mA) { fprintf(out, "sbs: harness not running (set PSXPORT_SBS=1)\n"); return 1; }
   sscanf(line, "%*s %31s", sub);
 
   if (!sub[0] || !strcmp(sub, "status")) {
-    fprintf(out, "sbs mode=%s frame=%u selected=%c paused=%d\n", modeName(), mFrame, mSel ? 'B' : 'A', dbg_is_paused());
+    fprintf(out, "sbs mode=%s frame=%u selected=%c paused=%d\n", modeName(), mFrame, mSel ? 'B' : 'A', mA->dbg_server.isPaused() ? 1 : 0);
     if (mDivFound) fprintf(out, "  divergence: frame %u 0x%08X..0x%08X\n", mDivFrame, mDivAddr, mDivEnd);
     else           fprintf(out, "  divergence: none yet\n");
     if (mWwArmed)  fprintf(out, "  write-watch ARMED on 0x%08X (hit mask=%d)\n", mWwAddr, mWwHit);
@@ -430,10 +409,10 @@ int SbsHarness::dbgCmd(FILE* out, const char* line) {
     if (w == 'b' || w == 'B') mSel = 1; else if (w == 'a' || w == 'A') mSel = 0;
     fprintf(out, "selected core %c (window + r/rw/ents target)\n", mSel ? 'B' : 'A');
   } else if (!strcmp(sub, "resume") || !strcmp(sub, "play")) {
-    dbg_set_paused(0); fprintf(out, "resumed\n");
+    mA->dbg_server.setPaused(false); fprintf(out, "resumed\n");
   } else if (!strcmp(sub, "step")) {
     unsigned n = 0; sscanf(line, "%*s %*s %u", &n); if (!n) n = 1;
-    dbg_add_step((int)n);
+    mA->dbg_server.addStep((int)n);
     fprintf(out, "step +%u\n", n);
   } else if (!strcmp(sub, "dump")) {
     char path[256] = {0}; if (sscanf(line, "%*s %*s %255s", path) != 1) snprintf(path, sizeof path, "scratch/screenshots/sbs.ppm");
@@ -474,7 +453,7 @@ int SbsHarness::dbgCmd(FILE* out, const char* line) {
   return 1;
 }
 
-void SbsHarness::run(const char* exePath) {
+void Sbs::Impl::run(const char* exePath, Sbs* facade) {
   watchdog_disable();   // the SBS pauses indefinitely on a divergence for live inspection — not a hang
 
   // Mode selection (PSXPORT_SBS_MODE)
@@ -495,8 +474,8 @@ void SbsHarness::run(const char* exePath) {
   // psx_fallback per mode: gameplay/full run PSX gameplay on core B; render runs native gameplay on both;
   // oracle runs the PURE interpreter+soft-rasterizer oracle on B (docs/oracle.md).
   int fb_b = (mMode == M_RENDER) ? 0 : 1;
-  mA = new Game(); mA->psx_fallback = 0;
-  mB = new Game(); mB->psx_fallback = fb_b;
+  mA = new Game(); mA->psx_fallback = 0; mA->sbs = facade;
+  mB = new Game(); mB->psx_fallback = fb_b; mB->sbs = facade;
   if (mMode == M_ORACLE) { mB->core.use_interp = 1; mB->gpu.soft_gpu = 1; }
   load_exe(exePath, &mA->core); dc_boot_init(&mA->core);
   load_exe(exePath, &mB->core); dc_boot_init(&mB->core);
@@ -511,7 +490,7 @@ void SbsHarness::run(const char* exePath) {
           mLo, mHi);
 
   mHaveDbgsrv = cfg_on("PSXPORT_DEBUG_SERVER") != 0;
-  dbg_server_start(&mA->core);
+  mA->dbg_server.start(&mA->core);
 
   // Concurrent boot to gameplay-start (both cores lockstep, one frame per iteration, both panes present
   // every frame). YOU drive both cores from frame 0 by default; opt into AUTO-NAV with PSXPORT_SBS_AUTONAV=1.
@@ -526,16 +505,17 @@ void SbsHarness::run(const char* exePath) {
   for (;;) {
     if (sbs_rl_should_close()) { fprintf(stderr, "[sbs] window closed — exiting.\n"); break; }
     Core* sel = mSel ? &mB->core : &mA->core;
-    dbg_server_service(sel);
+    DbgServer& dbg = mA->dbg_server;   // one endpoint per process; mA owns it
+    dbg.service(sel);
     bool nav_done = !sbsAutonav || (mNavA.phase == DONE && mNavB.phase == DONE);
     if (!nav_done) { navStep(&mA->core, mNavA, mFrame, "A"); navStep(&mB->core, mNavB, mFrame, "B"); }
     else feedInput();
-    if (dbg_is_paused() && !dbg_step_pending()) {
+    if (dbg.isPaused() && !dbg.stepPending()) {
       presentPanes();
       usleep(15000);
       continue;
     }
-    if (dbg_step_pending()) dbg_consume_step();
+    if (dbg.stepPending()) dbg.consumeStep();
 
     mWwHit = 0;
     stepCore(mA, 0); grabPane(mA, mRgbaA, &mWa, &mHa);
@@ -548,7 +528,7 @@ void SbsHarness::run(const char* exePath) {
               mWwAddr, mWwVa, mWwVb, mFrame);
       mWwArmed = false;
       mA->core.wwatch_arm(0, 0); mB->core.wwatch_arm(0, 0);
-      dbg_set_paused(1);
+      mA->dbg_server.setPaused(true);
     }
     mFrame++;
   }
@@ -556,17 +536,26 @@ void SbsHarness::run(const char* exePath) {
   exit(0);
 }
 
-} // namespace
-
 // ============================================================================
-// Public Sbs:: static facade — thin dispatch to the singleton (no external state).
+// Public Sbs — pimpl forwarders. Instance lives on the stack in Sbs::run(); every other Sbs method
+// dispatches through mImpl. Two Games each hold `game->sbs` back-pointer to this instance so any
+// code with a `Core* c` reaches the harness via `c->game->sbs`.
 // ============================================================================
 
-void Sbs::run(const char* exePath)                       { SbsHarness::create().run(exePath); }
-int  Sbs::dbgCmd(FILE* out, const char* line)            { auto* h = SbsHarness::getOrNull(); return h ? h->dbgCmd(out, line) : 0; }
-void Sbs::storeCb(Core* c, uint32_t addr, uint32_t val)  { auto* h = SbsHarness::getOrNull(); if (h) h->storeCb(c, addr, val); }
-bool Sbs::active()                                        { auto* h = SbsHarness::getOrNull(); return h && h->active(); }
-int  Sbs::coreId(Core* c)                                 { auto* h = SbsHarness::getOrNull(); return h ? h->coreId(c) : -1; }
-uint32_t Sbs::frame()                                     { auto* h = SbsHarness::getOrNull(); return h ? h->frameNum() : 0; }
-Core* Sbs::coreByLetter(char which)                       { auto* h = SbsHarness::getOrNull(); return h ? h->coreByLetter(which) : nullptr; }
-Core* Sbs::shownCore()                                    { auto* h = SbsHarness::getOrNull(); return h ? h->shownCore() : nullptr; }
+Sbs::Sbs()  : mImpl(new Impl()) {}
+Sbs::~Sbs() { delete mImpl; }
+
+void Sbs::run(const char* exePath) {
+  Sbs harness;
+  harness.mImpl->run(exePath, &harness);   // wires game->sbs on both Games inside; drives loop; exit(0)
+}
+
+bool     Sbs::active() const                                { return mImpl->active(); }
+int      Sbs::coreId(Core* c) const                         { return mImpl->coreId(c); }
+uint32_t Sbs::frame() const                                 { return mImpl->frameNum(); }
+int      Sbs::dbgCmd(FILE* out, const char* line)           { return mImpl->dbgCmd(out, line); }
+void Sbs::storeCb(Core* c, uint32_t addr, uint32_t val) {
+  if (c->game && c->game->sbs) c->game->sbs->mImpl->storeCb(c, addr, val);
+}
+Core*    Sbs::coreByLetter(char which) const                { return mImpl->coreByLetter(which); }
+Core*    Sbs::shownCore() const                             { return mImpl->shownCore(); }

@@ -1,19 +1,21 @@
 // class Memcard — the host-backed MEMORY CARD device.
 //
-// One 128 KB card file per process (no per-Core state — SBS's two cores share it by design; game
-// code is single-writer). See memcard.cpp for the docstring on how Tomba!2 accesses the card via
-// the BIOS libcard/libmcrd and file APIs, and why every I/O completes synchronously against a real
-// host file (no SIO IRQ = no spin).
+// One per Game (`c->game->memcard.method()`); 128 KB backing file. In SBS with two Games each has
+// its own memcard instance (only one actually opens the host file — the other is inert). See
+// memcard.cpp for the docstring on how Tomba!2 accesses the card via the BIOS libcard/libmcrd and
+// file APIs, and why every I/O completes synchronously against a real host file (no SIO IRQ = no
+// spin).
 #pragma once
 #include <cstdint>
 #include <cstdio>
 struct Core;
+class  Game;
 
 struct McFd { int used; int block; uint32_t pos; uint32_t size; };
 
 class Memcard {
 public:
-  static Memcard& instance();
+  Game* game = nullptr;   // back-pointer wired by Game()
 
   static constexpr uint32_t kFrameSize   = 128u;
   static constexpr uint32_t kFrames      = 1024u;                          // 16 blocks × 64 frames
@@ -60,7 +62,6 @@ private:
 };
 
 // BIOS dispatch entry points (called from hle.cpp `class Hle`'s dispatchBios via C linkage).
-// Kept as free functions because that is how the existing BIOS-dispatch machinery calls them.
 extern "C" int  card_hle_a0(uint32_t fn, Core* c);
 extern "C" int  card_hle_b0(uint32_t fn, Core* c);
-void card_overrides_init(void);
+void card_overrides_init(Game* game);

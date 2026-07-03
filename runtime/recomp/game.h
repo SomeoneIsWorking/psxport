@@ -27,6 +27,11 @@
 #include "audio/music_list.h"      // class MusicList — Sound Test catalogue + area BGM driver
 #include "rmlui_overlay.h"         // class RmlOverlay — mod/debug HTML UI + world readout HUD
 #include "native_gate.h"           // class NativeGates — PC-native-layer A/B GATE registry (REPL diag)
+#include "platform_hle.h"          // class PlatformHle — HW-sync HLE table (VSync/CdSync/…)
+#include "memcard.h"               // class Memcard — host-backed 128 KB memory card device
+#include "dbg_server.h"            // class DbgServer — live TCP debug endpoint (127.0.0.1)
+
+class Sbs;                          // forward decl — Game holds `sbs` back-pointer set by Sbs::run
 #include <stdint.h>
 #include <setjmp.h>
 
@@ -223,6 +228,10 @@ public:
   MusicList   music_list;   // Sound Test catalogue + in-game area BGM driver (uses native_music)
   RmlOverlay  rml_overlay;  // in-app mod/debug HTML UI + live world-position HUD
   NativeGates native_gates; // A/B gate registry: `native <name> on|off` diag (music/seqtick/…)
+  PlatformHle platform_hle; // HW-sync HLE dispatch table (VSync/CdSync/MDEC/ChangeThread)
+  Memcard     memcard;      // host-backed 128 KB memory card device (BIOS libcard/libmcrd)
+  DbgServer   dbg_server;   // live TCP debug endpoint (PSXPORT_DEBUG_SERVER=<port>)
+  Sbs*        sbs = nullptr;// SBS harness back-pointer (nullptr in standalone; set by Sbs::run)
   GteRegs     gte{}; // GTE (COP2) register file — per-instance so two cores keep SEPARATE GTE state
                      // (Beetle gte.c bound to this via GTE_BindState; see gte_bind, gte_beetle.cpp)
   // (native-depth cache moved to `class ProjPrim` on Render — reach as `c->mRender->projprim`, 2026-07-03)
@@ -268,7 +277,8 @@ public:
   Game() { core.game = this; gpu.game = this; gpu_gpu.game = this; timing.game = this; pad.game = this;
            hle.game = this; rq.game = this;
            spu_audio.game = this; native_music.game = this; music_list.game = this;
-           rml_overlay.game = this;
+           rml_overlay.game = this; platform_hle.game = this; memcard.game = this;
+           dbg_server.game = this;
            spu_state = SPU_NewState(); mdec_state = MDEC_NewState();
            cdc_state_init(&cdc); xa_state_init(&xa); }   // per-instance CD-controller + XA streamer defaults
   ~Game() { SPU_FreeState(spu_state); MDEC_FreeState(mdec_state); }

@@ -26,9 +26,7 @@
 #include <sys/types.h>
 #endif
 
-// ---- Memcard: singleton --------------------------------------------------------------------------
-
-Memcard& Memcard::instance() { static Memcard s; return s; }
+// class Memcard is a Game member (see memcard.h). All BIOS handlers below reach it via `c->game->memcard`.
 
 // path resolution: env override > .env > default (scratch/saves/tomba2.mcr).
 static char* mc_dup_trim(const char* s) {
@@ -226,7 +224,7 @@ void Memcard::deliverComplete(Core* c) {
 
 // B0:0x4E _card_read(chan, sector, buf).
 static void card_read(Core* c) {
-  Memcard& m = Memcard::instance();
+  Memcard& m = c->game->memcard;
   uint32_t sector = c->r[A1], buf = c->r[A2];
   uint8_t f[Memcard::kFrameSize];
   m.readFrame(sector, f);
@@ -237,7 +235,7 @@ static void card_read(Core* c) {
 
 // B0:0x4F _card_write(chan, sector, buf).
 static void card_write(Core* c) {
-  Memcard& m = Memcard::instance();
+  Memcard& m = c->game->memcard;
   uint32_t sector = c->r[A1], buf = c->r[A2];
   uint8_t f[Memcard::kFrameSize];
   for (uint32_t i = 0; i < Memcard::kFrameSize; i++) f[i] = c->mem_r8(buf + i);
@@ -251,7 +249,7 @@ static void card_status(Core* c) { c->r[V0] = 1; }
 
 // B0:0x32 open(name, mode). mode bit 0x0200 = create; block count = (mode >> 16) (Tomba uses 1).
 static void file_open(Core* c) {
-  Memcard& m = Memcard::instance();
+  Memcard& m = c->game->memcard;
   char name[0x100]; mc_read_guest_str(c, c->r[A0], name, sizeof name);
   uint32_t mode = c->r[A1];
   int blk = m.dirFind(name);
@@ -269,7 +267,7 @@ static void file_open(Core* c) {
 
 // B0:0x33 lseek(fd, off, whence).
 static void file_lseek(Core* c) {
-  Memcard& m = Memcard::instance();
+  Memcard& m = c->game->memcard;
   int fd = (int)c->r[A0]; int32_t off = (int32_t)c->r[A1]; uint32_t whence = c->r[A2];
   if (fd >= 0 && fd <= 2) { c->r[V0] = 0; return; }              // console device fds: no-op
   auto* f = m.fdAt(fd);
@@ -282,7 +280,7 @@ static void file_lseek(Core* c) {
 
 // B0:0x34 read(fd, buf, len).
 static void file_read(Core* c) {
-  Memcard& m = Memcard::instance();
+  Memcard& m = c->game->memcard;
   int fd = (int)c->r[A0]; uint32_t buf = c->r[A1], len = c->r[A2];
   if (fd >= 0 && fd <= 2) { c->r[V0] = 0; return; }
   auto* f = m.fdAt(fd);
@@ -302,7 +300,7 @@ static void file_read(Core* c) {
 
 // B0:0x35 write(fd, buf, len).
 static void file_write(Core* c) {
-  Memcard& m = Memcard::instance();
+  Memcard& m = c->game->memcard;
   int fd = (int)c->r[A0]; uint32_t buf = c->r[A1], len = c->r[A2];
   if (fd == 1 || fd == 2) {                                       // stdout/stderr
     for (uint32_t i = 0; i < len; i++) fputc(c->mem_r8(buf + i), stderr);
@@ -329,7 +327,7 @@ static void file_write(Core* c) {
 
 // B0:0x36 close(fd).
 static void file_close(Core* c) {
-  Memcard& m = Memcard::instance();
+  Memcard& m = c->game->memcard;
   int fd = (int)c->r[A0];
   if (fd >= 0 && fd <= 2) { c->r[V0] = (uint32_t)fd; return; }
   bool ok = m.fdValid(fd);
@@ -340,7 +338,7 @@ static void file_close(Core* c) {
 
 // B0:0x45 erase(name).
 static void file_erase(Core* c) {
-  Memcard& m = Memcard::instance();
+  Memcard& m = c->game->memcard;
   char name[0x100]; mc_read_guest_str(c, c->r[A0], name, sizeof name);
   int blk = m.dirFind(name);
   if (blk < 0) { c->r[V0] = 0; if (m.verbose()) fprintf(stderr, "[card] erase '%s' -> not found\n", name); return; }
@@ -362,7 +360,7 @@ static void card_info(Core* c) { Memcard::deliverComplete(c); c->r[V0] = 1; }
 
 // A0 libcard: _card_info / _card_load. Tomba2's "Checking MEMORY CARD" uses A0:0xAB.
 extern "C" int card_hle_a0(uint32_t fn, Core* c) {
-  Memcard& m = Memcard::instance();
+  Memcard& m = c->game->memcard;
   switch (fn) {
     case 0xABu:   // _card_info(port)
     case 0xACu:   // _card_load(slot)
@@ -375,7 +373,7 @@ extern "C" int card_hle_a0(uint32_t fn, Core* c) {
 // B0 libcard: _card_info/_card_read/_card_write/_card_chan/_card_status + the file API used by the
 // save/load menu (open/lseek/read/write/close/erase/firstfile).
 extern "C" int card_hle_b0(uint32_t fn, Core* c) {
-  Memcard& m = Memcard::instance();
+  Memcard& m = c->game->memcard;
   switch (fn) {
     case 0x4Cu: case 0x4Eu: case 0x4Fu: case 0x50u: case 0x5Cu:
       if (m.verbose()) fprintf(stderr, "[card] B0:0x%02X(a0=%X a1=%X a2=%X)\n", fn, c->r[A0], c->r[A1], c->r[A2]);
@@ -399,8 +397,8 @@ extern "C" int card_hle_b0(uint32_t fn, Core* c) {
   }
 }
 
-void card_overrides_init(void) {
-  Memcard& m = Memcard::instance();
+void card_overrides_init(Game* game) {
+  Memcard& m = game->memcard;
   if (cfg_dbg("card")) m.setVerbose(true);
   m.init();
   // Low-level libcard B0 frame primitives + BIOS file API dispatch through card_hle_b0 above;

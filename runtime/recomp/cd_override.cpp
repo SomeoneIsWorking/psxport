@@ -322,15 +322,15 @@ void cd_hle_init(Core* c) {
     fprintf(stderr, "[cd] HLE CdInit: drive ready (no controller, no handshake, no busy-wait)\n");
 }
 
-void cd_overrides_init(void) {
+void cd_overrides_init(Game* game) {
   if (cfg_dbg("cd")) s_cd_verbose = 1;
-  // All CD-subsystem HLE handlers register with the process-wide PlatformHle table (class in
+  // All CD-subsystem HLE handlers register with this Game's PlatformHle table (class in
   // platform_hle.h). Every entry is an I/O primitive in the platform-HLE window (0x8001Cxxx
   // engine CD glue / 0x8008xxxx libcd) — the FAIL-FAST sync model: every CD op is served
   // natively + synchronously, so the libcd IRQ/VSync busy-waits (CdSync/CdCommand) are never reached.
   //   0x8008B2D8 (CdInit handshake) is owned by PlatformHle::initBuiltins (cdinit_hs) — don't
   //   double-register here.
-  auto& hle = PlatformHle::instance();
+  PlatformHle& hle = game->platform_hle;
   hle.register_(0x8001DC40u, cd_dc40);         // FUN_8001dc40 inline async loader -> sync
   hle.register_(0x8001D2A8u, voice_play);      // voice/BGM clip player -> native xa_stream
   hle.register_(0x8001CF2Cu, voice_stop);      // stop voice/BGM -> native

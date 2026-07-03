@@ -159,7 +159,7 @@ static void native_step_frame(Core* c, uint32_t f) {
     // SBS owns BOTH panes (core A | core B); its target-1 batch is core B's render, NOT a PSX re-render of
     // THIS core — so skip the in-engine dualview second pass. g_sbs declared at file scope below.
     DualviewSnapshot& dv = c->mRender->dualviewSnapshot;
-    if (c->mRender->mode.dualview() && dv.havePre() && !Sbs::active()) {
+    if (c->mRender->mode.dualview() && dv.havePre() && !c->game->sbs) {
       dv.capturePost(c);             // save the real post-frame canonical state
       dv.restorePre(c);              // rewind to the pre-render (post-gameplay) state the PSX pass needs
       rc2(c, 0x80081458, envp, 0x800);                          // ClearOTagR(ot, 0x800)
@@ -314,8 +314,7 @@ static void game_main(Core* c) {
   if (!repl_mode && !gpu_windowed() && cfg_on("PSXPORT_DEBUG_SERVER")) nframes = 0;
   fprintf(stderr, "[native_boot] entering native frame loop (%s)\n",
           nframes ? "capped" : "interactive (until window close)");
-  void dbg_server_start(Core* c); void dbg_server_service(Core* c);
-  dbg_server_start(c);    // PSXPORT_DEBUG_SERVER: non-blocking live TCP debug server (dbg_server.c)
+  c->game->dbg_server.start(c);    // PSXPORT_DEBUG_SERVER: non-blocking live TCP debug server (dbg_server.cpp)
   long repl_budget = 0;   // frames remaining in the current REPL `run N`
   for (uint32_t f = 0; nframes == 0 || f < nframes; f++) {
     c->game->timing.logicFrame = f;
@@ -420,13 +419,14 @@ static void game_main(Core* c) {
     // PSXPORT_DEBUG_SERVER pause/step: when frozen, do NOT advance the game — just pump host input
     // (keeps the window alive) and service debug commands so `step`/`play` can arrive. A `step` runs
     // exactly one real frame then re-freezes, so transient bad frames can be inspected one at a time.
-    { int dbg_is_paused(void), dbg_step_pending(void); void dbg_consume_step(void); void gpu_repaint(Core*);
-      if (dbg_is_paused()) watchdog_suspend();   // a debug pause is intentional idle, not a hang
-      while (dbg_is_paused()) {
-        if (dbg_step_pending()) { dbg_consume_step(); break; }   // run exactly one frame
+    { void gpu_repaint(Core*);
+      DbgServer& dbg = c->game->dbg_server;
+      if (dbg.isPaused()) watchdog_suspend();   // a debug pause is intentional idle, not a hang
+      while (dbg.isPaused()) {
+        if (dbg.stepPending()) { dbg.consumeStep(); break; }   // run exactly one frame
         c->game->pad.serviceFrame();      // pump host input (keeps the window responsive)
         c->game->gpu.gpu_repaint();           // re-present current frame: window stays live + readback is accurate
-        dbg_server_service(c);    // receive step/play/capture commands
+        dbg.service(c);    // receive step/play/capture commands
         usleep(15000);
       } }
     watchdog_pet();   // re-arm the timer for THIS step (covers a step that hangs before it presents,
@@ -553,7 +553,7 @@ static void game_main(Core* c) {
                       "f135=%u\n", f, c->mem_r16(TASKBASE), c->mem_r32(TASKBASE + 0xc),
               c->mem_r16(TASKBASE + 0x48), c->mem_r16(TASKBASE + 0x70), c->mem_r16(TASKBASE + 0xe0),
               c->mem_r8(0x1f800135));
-    dbg_server_service(c);  // service one queued live-debug-server command (non-blocking)
+    c->game->dbg_server.service(c);  // service one queued live-debug-server command (non-blocking)
   }
   fprintf(stderr, "[native_boot] frame loop done; task0 state=%u entry=0x%08X obj+0x48=%u\n",
           c->mem_r16(TASKBASE), c->mem_r32(TASKBASE + 0xc), c->mem_r16(TASKBASE + 0x48));

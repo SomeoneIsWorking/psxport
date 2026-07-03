@@ -48,9 +48,9 @@ int main(int argc, char** argv) {
   void watchdog_init(void);
   watchdog_init();            // PSXPORT_WATCHDOG=<sec>: abort+backtrace if a frame stalls
   load_exe(path, c);
-  void cd_overrides_init(void);
+  void cd_overrides_init(Game*);
   void games_tomba2_init(void);
-  void card_overrides_init(void);
+  void card_overrides_init(Game*);
   void threads_init(Core*);
   void threads_register_overrides(void);
   void gte_init(void);
@@ -64,11 +64,11 @@ int main(int argc, char** argv) {
   gpu_native_init();        // native GPU renderer (parses the game's GP0 stream)
   void cdc_init(void);
   cdc_init();               // native CD controller registers (0x1F801800-3) for raw-CD code
-  cd_overrides_init();      // native CD: drive-ready + by-LBA read (S3)
+  cd_overrides_init(game);  // native CD: drive-ready + by-LBA read (S3)
   games_tomba2_init();      // Tomba2 per-game overrides (vblank pacing)
-  PlatformHle::instance().initBuiltins();   // HW sync/wait stalls -> native non-stall (VSync/CdSync/MDEC)
+  game->platform_hle.initBuiltins();   // HW sync/wait stalls -> native non-stall (VSync/CdSync/MDEC)
   c->game->pad.overridesInit();    // native controller input (per-VBlank pad read override)
-  card_overrides_init();    // native memory card (synchronous file-backed libcard I/O)
+  card_overrides_init(game);// native memory card (synchronous file-backed libcard I/O)
   threads_init(c);          // native BIOS threads (ucontext); main = slot 0
   threads_register_overrides();
   c->r[4] = 1; c->r[5] = 0;  // a0=argc-ish, a1=argv (BIOS sets these; minimal)

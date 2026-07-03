@@ -674,7 +674,7 @@ int native_fmv_play_lba(Core* core, uint32_t lba, uint32_t size_bytes) {
   // host pad (pad_poll_sdl), which the harness's auto-skip (repl-injected Start) can't drive — so leaving
   // it in would freeze both panes in the FMV. Skip it entirely (like a headless run does at the call site),
   // so the concurrent-lockstep nav reaches free-roam. Both cores skip identically, so they stay in step.
-  if (Sbs::active()) return 0;
+  if (core->game && core->game->sbs) return 0;   // SBS: skip FMV (see comment above)
   gpu_native_init();
   mdec_init();
 
