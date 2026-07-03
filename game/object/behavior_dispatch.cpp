@@ -70,6 +70,7 @@ void beh_area_transition_machine(Core* c);    // 0x80127798 (overlay)
 void beh_rand_phase_cull(Core* c);            // 0x8002918C (resident)
 void beh_pos_history_trail(Core* c);          // 0x80029B40 (resident)
 void beh_variant_overlay_lifecycle(Core* c);  // 0x8007DC38 (resident)
+void beh_a06_multi_actor(Core* c);            // 0x801189E8 (A06 overlay — cutscene fade director)
 
 namespace {
 struct NativeBeh { uint32_t addr; void (*fn)(Core*); const char* name; };
@@ -123,6 +124,7 @@ constexpr NativeBeh kTable[] = {
   { 0x8002918Cu, beh_rand_phase_cull,          "rand_phase_cull" },           // resident
   { 0x80029B40u, beh_pos_history_trail,        "pos_history_trail" },          // resident
   { 0x8007DC38u, beh_variant_overlay_lifecycle,"variant_overlay_lifecycle" },  // resident
+  { 0x801189E8u, beh_a06_multi_actor,           "a06_multi_actor" },            // A06 overlay
 };
 }  // namespace
 

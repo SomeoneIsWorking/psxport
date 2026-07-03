@@ -14,7 +14,7 @@ Statuses: `OPEN` (not yet actively worked) · `INVESTIGATING` (someone is chasin
 eyeball) · `FIXED` (verified fixed — move the write-up to `docs/findings/`).
 
 ## BUG-1: Cutscene fadeouts leave the screen dark
-- **status:** INVESTIGATING
+- **status:** PORTED-BUT-UNVERIFIED
 - **area:** render / fade
 - **symptom:** cutscene fade-out completes, screen stays fully black, never fades back in
 - **hypothesis:** any still-recomp caller of `FUN_8007E9C8` writes guest OT data our renderer no longer draws (see `game/render/screen_fade/screen_fade.h` design note). Frame-scoped ScreenFade stays NONE, and the HOLD latch at full-black never releases. Fix path: port each remaining shard caller of `func_8007E9C8` so it lands on `c->screenFade.applyLeafCall(color, a1)`.
@@ -22,6 +22,7 @@ eyeball) · `FIXED` (verified fixed — move the write-up to `docs/findings/`).
   - **GAME.BIN 5-handler cluster is DEAD CODE (not the bug).** Earlier hypothesis was that 0x80108CAC/D80/DF4/E58/EBC are the un-owned fade path. `scratch/decomp/GAME.bin.asm` confirms NO `jal` or `jr` to 0x80108E58 or 0x80108EBC exists anywhere in game.bin. The shard emits func slots for them (they're in the ov_game dispatcher switch), but the disc data never calls them — they're leftover uncalled entries. Ignore.
   - **A06 overlay is a real un-owned fade path — likely the source of the bug.** A Ghidra project `scratch/ghidra/A06` is now set up (imported at base 0x80108F9C, 484 functions decompiled via `ghidra_overlay.py`). Fade callers in A06: **FUN_801178A4** (4 fade calls, a 5-state white-flash SM on `node+6` gated on global counter `DAT_800BFA20`), **FUN_80117AAC** (2 fade calls, sibling 3-state SM), **FUN_80139728** (1 call, similar), **FUN_8013B178** (1 call). Parent object behavior installing these: **FUN_801189E8** case 10 → `if (node+5 == 0) FUN_801178A4(node); else if (node+5 == 1) FUN_80117AAC(node);` — this is A06's per-object cutscene/scene-director handler.
   - **Next session pick-up:** port FUN_801189E8 (the parent object behavior) natively. Model it after the existing `beh_*` handlers in `game/ai/`. FUN_801178A4 and FUN_80117AAC become methods (or inlined into the case-10 branch) that call `c->screenFade.applyLeafCall(...)` instead of `rec_dispatch(0x8007E9C8)`. Decomps ready at `scratch/ghidra/A06` — decompile individual fns with `tools/decomp.sh decomp A06 <out> list <addr>` (or refresh whole range with `ghidra_overlay.py`).
+  - **UPDATE 2026-07-03:** LANDED. `game/ai/beh_a06_multi_actor.cpp` reimplements FUN_801189E8 as `beh_a06_multi_actor` (added to `BehaviorDispatch::kTable`). The two fade sub-machines (FUN_801178A4 and FUN_80117AAC) are ported as static helpers `whiteFlashPhaseRamp` and `whiteFadeHold` — every call site now lands on `c->screenFade.applyLeafCall(...)`, so the frame-scoped ScreenFade state is set every frame the SM runs. Ship smoke steady. Awaiting USER visual verification: drive to any A06 area cutscene and confirm the fade-out ramps back in cleanly instead of staying black.
 - **refs:** user report 2026-07-03; `game/render/screen_fade/screen_fade.h`; `game/scene/engine_stage.cpp` fieldTransition/transitionMain/fieldRun; A06 Ghidra project in `scratch/ghidra/A06.gpr`; `scratch/decomp/GAME.bin.asm` confirms game.bin 5-cluster dead code.
 
 ## BUG-2: Score gems (AP pickups) render wrong in 3D world
