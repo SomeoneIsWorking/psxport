@@ -12,12 +12,10 @@
 # output C goes wherever you point <out.c> (default convention: scratch/decomp/).
 set -eu
 repo="$(cd "$(dirname "$0")/.." && pwd)"; cd "$repo"
-GHIDRA="${GHIDRA_HOME:-<HOME>/dev/ghidra_12.0.4_PUBLIC}"
-# Ghidra 12.x requires the pyGhidra launcher for Python scripts (analyzeHeadless alone rejects
-# `.py` scripts as "Python not available"). Use `pyghidraRun -H` which is the headless-analyzer
-# launched with pyGhidra bindings enabled — same flags, forwards everything after `-H` verbatim.
-HEADLESS_BIN="$GHIDRA/support/pyghidraRun"
-HEADLESS_ARGS=(-H)
+# Ghidra headless: use `analyzeHeadless` from $PATH (symlink at <HOME>/.local/bin, per user directive
+# 2026-07-03 — no filesystem paths so a future upgrade only touches the symlink target).
+HEADLESS_BIN="analyzeHeadless"
+HEADLESS_ARGS=()
 PROJDIR="scratch/ghidra"
 PROC="MIPS:LE:32:default"
 mkdir -p "$PROJDIR" scratch/decomp scratch/logs

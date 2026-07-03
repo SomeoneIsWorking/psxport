@@ -1109,6 +1109,38 @@ def main():
         # the FULL-PSX path (PSXPORT_SBS_MODE=both core B, psx_fallback) runs task0 under the substrate and
         # resumes at 0x8010649C, so seed it (a documented runtime-computed re-entry, like GAME's loop top).
         "START": {0x8010649C},
+        # Per-area object-init handlers indexed by DAT_800BF870 (area byte). The JT lives in
+        # resident MAIN.EXE at 0x800A45B8; caller is FUN_80058648 (Tomba state-0 init)
+        # `(*(&PTR_FUN_800A45B8)[DAT_800BF870])(&tomba)`. Each entry is a valid function prologue
+        # in its area overlay (verified: A01 0x80109F7C starts with `addiu sp,-0x20`). The recomp
+        # scan misses these because the JT is code-built via lui+addiu at the call site with the
+        # base loaded from resident RAM — the emitter's function discovery doesn't cross the
+        # resident/overlay boundary via such a computed indirection. Seeded per-overlay so the
+        # RIGHT function ends up in each area's dispatcher. Discovered 2026-07-03 chasing the SBS
+        # rec_dispatch_miss(0x80109F7C) crash — DEMO attract cursor=1 loaded A01, called the JT
+        # dispatch, missed. Fixes #31.
+        "A00": {0x8010AC20},   # jt[ 0]
+        "A01": {0x80109F7C},   # jt[ 1]
+        "A02": {0x8010F9E4},   # jt[ 2]
+        "A03": {0x801127EC},   # jt[ 3] (also jt[4] — duplicate)
+        "A04": {0x801127EC},   # jt[ 4]
+        "A05": {0x8010F0F8},   # jt[ 5]
+        "A06": {0x80112C60},   # jt[ 6]
+        "A07": {0x80112428},   # jt[ 7]
+        "A08": {0x80112238},   # jt[ 8]
+        "A09": {0x80109CA0},   # jt[ 9]
+        "A0A": {0x8010B338},   # jt[10]
+        "A0B": {0x8010BD50},   # jt[11]
+        "A0C": {0x8010CC28},   # jt[12]
+        "A0D": {0x8010AC1C},   # jt[13]
+        "A0E": {0x8010B450},   # jt[14]
+        "A0F": {0x8010B960},   # jt[15]
+        "A0G": {0x8010A16C},   # jt[16]
+        "A0H": {0x8010A1E4},   # jt[17]
+        "A0I": {0x8010A554},   # jt[18]
+        "A0J": {0x80109F50},   # jt[19]
+        "A0K": {0x8010F544},   # jt[20]
+        "A0L": {0x801092E8},   # jt[21]
     }
     overlays = []   # (tag, NAME, base, end, sig32 bytes, Names)
     if ov_dir and os.path.isdir(ov_dir):

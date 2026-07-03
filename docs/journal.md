@@ -7840,7 +7840,7 @@ draw IMMEDIATELY PC-native from world position will retire the span hack and giv
 
 ## later-215 (2026-06-22) — GHIDRA decomp pipeline (USE IT) + GAME area-load / overlay-class RE
 **GHIDRA IS SET UP — use it for any RE instead of squinting at raw disas (USER directive).**
-- Ghidra 11.0.3 headless: `/opt/ghidra_11.0.3_PUBLIC/support/analyzeHeadless`. Reusable script
+- Ghidra 12.0.4 headless: `<HOME>/dev/ghidra_12.0.4_PUBLIC/support/pyghidraRun -H` (Ghidra 12 needs the pyGhidra launcher for Python scripts). Reusable script
   `<local-notes>/skills/decomp-port/DecompDump.py` (skill `decomp-port`, SKILL.md §1-2 for usage).
 - **Full MAIN.EXE decomp already exists: `scratch/decomp/ram_f1000_all.c`** (2MB, every resident FUN_*).
   Grep it FIRST — readable C beats hand-disassembly. Overlay decomps under `scratch/decomp/{a00,game,sop}/`;
