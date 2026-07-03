@@ -677,6 +677,28 @@ void Sbs::Impl::storeCb(Core* c, uint32_t a, uint32_t v) {
                mWwPcA = c->pc; mWwRaA = c->r[31]; mWwSpA = c->r[29]; mWwCountA++;
                mWwHostBtNA = backtrace(mWwHostBtA, WW_HOST_BT_DEPTH); }
   mWwHit |= (1 << which);
+  // PSXPORT_SBS_WW_ONVALUEDIVERGE=1 — instead of pausing on the first PREWATCH fire (which normally
+  // treats an asymmetric-but-same-value store as a divergence), pause on the first store that leaves
+  // the two cores' post-write byte values DIFFERENT. Ideal for cadence probes where the address
+  // (e.g. the RNG state at 0x80105EE8) is written many times a second on both cores with matching
+  // values — the interesting moment is when the values first diverge, not the first raw fire.
+  static const int only_on_value_diverge = []{ const char* e = getenv("PSXPORT_SBS_WW_ONVALUEDIVERGE"); return e && *e && e[0] != '0' ? 1 : 0; }();
+  if (only_on_value_diverge && mWwPersist) {
+    // Track per-core: LAST write's host stack, LAST written value, and total-count-this-frame.
+    // Frame-boundary code (post-presentPanes) compares counts (& optionally end-of-frame seed
+    // values) to detect the FIRST frame where the two cores' cadence diverges. Not per-store
+    // comparison — inter-store the seeds would mismatch every advance (naturally), only the
+    // end-of-frame state matters.
+    int which_c = (mB && c == &mB->core) ? 1 : 0;
+    void** bt_buf   = which_c ? mWwHostBtB : mWwHostBtA;
+    int*   bt_count = which_c ? &mWwHostBtNB : &mWwHostBtNA;
+    *bt_count = backtrace(bt_buf, WW_HOST_BT_DEPTH);
+    uint32_t& lastV = which_c ? mWwVb : mWwVa;
+    lastV = v;
+    mWwHit |= (1 << which_c);
+    if (which_c) mWwCountB++; else mWwCountA++;
+    return;   // no mid-store pause — decision happens at frame boundary
+  }
   if (mWwPersist) {  // PREWATCH's continuous logging — per-store attribution to A vs B
     // pc = c->pc (fn entry set by the last wrapper — often STALE, reflecting the last jal-callee).
     // ra = c->r[31] (guest return address) — points into the CALLER just past its jal, so it names
@@ -1255,6 +1277,44 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
     stepCore(mB, 1);              ww_log("post-stepB");
     grabPane(mB, mRgbaB, &mWb, &mHb); ww_log("post-grabB");
     presentPanes();               ww_log("post-present");
+    static const int only_on_value_diverge_ss = []{ const char* e = getenv("PSXPORT_SBS_WW_ONVALUEDIVERGE"); return e && *e && e[0] != '0' ? 1 : 0; }();
+    // Per-lockstep-frame RNG advance-count divergence check. When PSXPORT_SBS_WW_ONVALUEDIVERGE is
+    // set on 0x80105EE8, we want the FIRST frame where A's advance count != B's — that's the frame
+    // where one core made an extra (or missed a) RNG call vs the other. Every store to 0x80105EE8
+    // increments its side's counter (via storeCb's PREWATCH path); we compare at the end of each
+    // lockstep frame and dump the divergent core's stack on first mismatch.
+    if (only_on_value_diverge_ss && mWwArmed && mWwAddr == (0x80105EE8u | 0x80000000u)) {
+      // Divergence trigger: EITHER cadence-count differs (one core advanced N times, the other M
+      // times) OR both cadences match but the end-of-frame seed values differ (which means either
+      // the counts differ silently or the STARTING seed at frame-entry differed — either way the
+      // seed's post-frame state is out of sync).
+      uint32_t seedA = mA->core.mem_r32(0x80105EE8u);
+      uint32_t seedB = mB->core.mem_r32(0x80105EE8u);
+      bool count_diverge = (mWwCountA != mWwCountB);
+      bool value_diverge = (seedA != seedB);
+      if ((count_diverge || value_diverge) && !mDivFound) {
+        fprintf(stderr, "[sbs] === RNG advance-count divergence: f%u  A_calls=%u  B_calls=%u  (delta=%d)   endA=0x%08X endB=0x%08X ===\n",
+                mFrame, mWwCountA, mWwCountB, (int)mWwCountA - (int)mWwCountB, seedA, seedB);
+        fprintf(stderr, "[sbs] Last-write host stack per core is the fn that made the EXTRA (or first missed) advance THIS FRAME.\n");
+        auto dump_bt = [&](const char* tag, void** bt, int n) {
+          if (n <= 0) { fprintf(stderr, "[sbs] === HOST BACKTRACE — %s (empty) ===\n", tag); return; }
+          fprintf(stderr, "[sbs] === HOST BACKTRACE — %s (%d frames) ===\n", tag, n);
+          char** syms = backtrace_symbols(bt, n);
+          if (syms) { for (int i = 0; i < n; i++) fprintf(stderr, "[sbs]   #%d %s\n", i, syms[i]); free(syms); }
+        };
+        dump_bt("core A (last RNG advance THIS frame)", mWwHostBtA, mWwHostBtNA);
+        dump_bt("core B (last RNG advance THIS frame)", mWwHostBtB, mWwHostBtNB);
+        fprintf(stderr, "[sbs] headless: exiting after RNG-count divergence.\n");
+        fflush(stderr);
+        sbs_rl_shutdown();
+        exit(0);
+      }
+      // Reset per-frame counters + captured stacks for the next frame's compare. Keep mWwVa/mWwVb
+      // as the last-value marker (already matched this frame, otherwise the storeCb hook would have
+      // triggered and exited).
+      mWwCountA = mWwCountB = 0;
+      mWwHostBtNA = mWwHostBtNB = 0;
+    }
     // Parity surface: with both cores past AUTO-NAV, name any RAM/scratchpad divergence. On the
     // FIRST byte that differs, `checkDivergence` records the range + backtraces + pauses (via the
     // debug server) so `sbs diff` / `sbs bt` / `sbs watch` can inspect. The 30-frame summary is
@@ -1266,7 +1326,11 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
     }
     if (sbsDumpPath && nav_done && !dumped && mWa > 0 && mWb > 0) { dumpPpm(sbsDumpPath); dumped = true; }
 
-    if (mWwArmed && mWwHit) {
+    // Under PSXPORT_SBS_WW_ONVALUEDIVERGE, the storeCb itself decides when to trigger — the WRITE-
+    // SITE post-step path here would otherwise pause on the first single-side write, missing the
+    // "wait for both cores to have written differing values" semantic. Skip this path in that mode.
+    if (only_on_value_diverge_ss) { /* handled entirely in storeCb + frame-boundary count check */ }
+    else if (mWwArmed && mWwHit) {
       // A hit is divergent if only one core wrote (mask != 3) OR both wrote different values.
       // BUT: an asymmetric store where both sides wrote the SAME value is boot-timing noise (each
       // core's boot init writes 0 to the address in a different frame — mask flips to 1 or 2 with

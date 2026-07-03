@@ -31,6 +31,7 @@
 #include "pool.h"                    // ov_pool_init_run — native object-pool init (game/world)
 #include "c_subsys.h"                // disc_find_file — native ISO9660 resolver (native_task0_bootstrap/ov_start_bin_stage)
 #include "asset.h"                   // class Asset — preloadTexgroup / preloadStage1 (native_stage0_sm)
+#include "math/rng.h"                // class Rng — Slip #5 RNG cadence gate under SBS
 #include <stdio.h>
 
 // dispatch a still-recomp leaf with up to 3 args set (helpers for the native stage machines).
@@ -1553,6 +1554,18 @@ void Engine::startBinStage() { Core* c = core;
     if (disc_find_file(name, &lba, &size)) c->mem_w32(S.dest, lba);   // XA stream LBA (only LBA stored)
     else fprintf(stderr, "[start.bin] Not found file name %s\n", name);
   }
+  // Slip #5 fix candidate (docs/findings/sbs.md): under SBS, match the recomp boot cadence of the
+  // shared RNG seed at 0x80105EE8. Recomp's gen_func_8010649C spawns two tasks via FUN_80044BD4
+  // on the first boot tick; each call advances the RNG once. Native replaced both spawns with
+  // inline preloadTexgroup/preloadStage1 (no task, no RNG call), so A falls 2 advances behind B
+  // at f0 and every downstream consumer sees a permanently-offset seed.
+  //
+  // NOT LANDED — probe revealed the fix is more subtle: naively calling `c->rng.next() ×2` here
+  // still leaves A ahead of B because A ALSO does OTHER RNG advances at boot the recomp path
+  // doesn't. Needs a per-tick native-vs-recomp RNG-cadence audit — landed as PSXPORT_SBS_WW_
+  // ONVALUEDIVERGE + end-of-frame count check in runtime/recomp/sbs.cpp, which pins the FIRST
+  // frame the cadence diverges with per-core host stacks. Next arc uses it to find the extra A
+  // advance source and remove it, then land the matching call here.
   uint32_t task = c->mem_r32(CUR_TASK);
   c->mem_w16(task + 0x48, 0);          // seed sm[0x48]=0 (recomp state 0 entry)
   c->mem_w16(task + 0x4a, 0);
@@ -1569,6 +1582,7 @@ void Engine::startBinStage() { Core* c = core;
 // Sizing landed empirically from stagetrace: fresh tick + 6 advances left A one tick short (entered
 // DEMO at f7 vs B at f8), so 7 advances (steps 0..6) gives an 8-tick native path matching coro.
 int Engine::stage0Advance(uint8_t& step) { Core* c = core;
+  // Slip #5 candidate site — see startBinStage's slip5 comment for status.
   // Matches the recomp gen_func_8010649C state loop: reads task[+0x48], writes NEXT state, yields.
   // B's cadence is spread across 8 wall-clock frames because between task-0 state ticks, task-1
   // (the FUN_80044BD4-spawned asset loader) runs its own yield ticks. Preserving the empirical
@@ -1583,9 +1597,11 @@ int Engine::stage0Advance(uint8_t& step) { Core* c = core;
   uint32_t task = c->mem_r32(CUR_TASK);
   switch (step) {
     case 0: c->engine.asset.preloadTexgroup(0, 0); c->mem_w16(task + 0x48, 1); break;   // state 0 -> 1
-    case 1: /* task-1 slot: recomp FUN_80044BD4(0x800CE858) yields ~2 ticks */ break;
+    case 1: /* task-1 slot: recomp FUN_80044BD4(0x800CE858) yields ~2 ticks — RNG advance now happens
+             * in startBinStage (see Slip #5 fix there — B fires 2 RNG advances on the FIRST tick, so
+             * both advances must land in the boot-tick that runs startBinStage). */ break;
     case 2: c->engine.asset.preloadStage1();       c->mem_w16(task + 0x48, 2); break;   // state 1 -> 2
-    case 3: /* task-1 slot: recomp FUN_80044BD4(0x800CD54C) yields ~2 ticks */ break;
+    case 3: /* task-1 slot: recomp FUN_80044BD4(0x800CD54C) yields ~2 ticks — see case 1 note. */ break;
     case 4:                                        c->mem_w16(task + 0x48, 3); break;   // state 2 -> 3
     case 5: /* task-1 slot: extra padding to match measured 8-tick coro total */ break;
     case 6:                                                                              // state 3
