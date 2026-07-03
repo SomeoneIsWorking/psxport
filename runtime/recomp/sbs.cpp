@@ -1318,6 +1318,67 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
         } else {
           emit_class("(no signal)", "same caller/pc/value/hits — probably filtered out earlier; investigate manually");
         }
+        // List-membership probe: for a divergence in the object-pool byte range, walk the two per-frame
+        // object lists on both cores and report which list(s) contain the divergent record's base. A
+        // node appearing on a list on one core but not the other names an upstream spawn/list-migration
+        // divergence — the object was moved between lists asymmetrically. Cheap: 200-node cap per list.
+        {
+          // The write addr is usually to obj+1 (T2OBJ_RENDER_FLAG at the byte after the type slot).
+          // Ok'ed to alias-strip: (mWwAddr - 1) & ~3u for u32-aligned reads.
+          uint32_t obj_base = (mWwAddr >= 1) ? (mWwAddr - 1) : mWwAddr;
+          // Show the T2 offsets, but read AT-BASE (byte read) so the offsets displayed match the
+          // T2OBJ_* constants directly. u32-aligned reads snap to obj_base & ~3.
+          uint32_t obj_r = obj_base & ~3u;
+          if (obj_base >= 0x800E0000u && obj_base < 0x80200000u) {
+            auto find_on_list = [&](Core* c, uint32_t head_addr, uint32_t target, int* pos_out) -> int {
+              uint32_t head = c->mem_r32(head_addr);
+              int idx = 0;
+              for (uint32_t n = head; n && idx < 200; idx++) {
+                // Any node whose record footprint covers the write addr counts as containing it (the
+                // record stride varies across pools, but the write is always to base+small-offset).
+                if (n <= mWwAddr && mWwAddr < n + 0x80u) { if (pos_out) *pos_out = idx; return 1; }
+                n = c->mem_r32(n + 0x24u);   // T2OBJ_NEXT
+              }
+              if (pos_out) *pos_out = -1;
+              return 0;
+            };
+            struct L { uint32_t head; const char* name; } lists[] = {
+              { 0x800FB168u, "OBJLIST_1" }, { 0x800F2624u, "OBJLIST_2" },
+              { 0x800F2738u, "OBJLIST_3" }, // AUX_LIST_HEAD candidate (walkAux uses one of these)
+            };
+            fprintf(stderr, "[sbs] === list-membership probe (write addr 0x%08X) ===\n", mWwAddr);
+            for (auto& L : lists) {
+              int pos_a = -1, pos_b = -1;
+              int on_a = find_on_list(&mA->core, L.head, mWwAddr, &pos_a);
+              int on_b = find_on_list(&mB->core, L.head, mWwAddr, &pos_b);
+              const char* verdict = (on_a == on_b) ? "match" : "!! DIVERGE !!";
+              fprintf(stderr, "[sbs]   %s (head@%08X): A=%s(idx=%d) B=%s(idx=%d) %s\n",
+                      L.name, L.head, on_a ? "on" : "off", pos_a, on_b ? "on" : "off", pos_b, verdict);
+            }
+            // Dump the object record's key fields on both cores. If the containing object is a linked-
+            // list node its per-obj handler ptr lives at obj+0x1c (T2OBJ_HANDLER); state bytes typically
+            // at obj+4/5/6/7. Divergence in these fields IS the upstream root when list membership
+            // matches — the same node has different data on each core.
+            fprintf(stderr, "[sbs] === object record dump (base 0x%08X, T2 offsets) ===\n", obj_base);
+            // Bytes at meaningful T2 offsets (byte-precise reads so we see the actual flag values,
+            // not the u32 they're packed into).
+            for (uint32_t off : {0x00u, 0x01u, 0x02u, 0x03u, 0x04u, 0x05u, 0x06u, 0x07u, 0x08u, 0x09u,
+                                  0x0Au, 0x0Bu, 0x28u}) {
+              uint32_t va = obj_base + off;
+              uint8_t a = mA->core.mem_r8(va), b = mB->core.mem_r8(va);
+              fprintf(stderr, "[sbs]   +0x%02X byte: A=0x%02X  B=0x%02X  %s\n",
+                      off, a, b, a == b ? "match" : "!! DIVERGE !!");
+            }
+            // Key u32 fields at natural alignment.
+            for (uint32_t off : {0x1Cu, 0x24u}) {
+              uint32_t va = (obj_base & ~3u) + off;
+              uint32_t a4 = mA->core.mem_r32(va), b4 = mB->core.mem_r32(va);
+              fprintf(stderr, "[sbs]   +0x%02X word (@%08X): A=0x%08X  B=0x%08X  %s%s\n",
+                      off, va, a4, b4, a4 == b4 ? "match" : "!! DIVERGE !!",
+                      off == 0x1Cu ? "  (T2OBJ_HANDLER)" : "  (T2OBJ_NEXT)");
+            }
+          }
+        }
         if (mWwHit & 1) fprintf(stderr, "[sbs] === WRITE SITE — core A wrote 0x%08X=%08X ===\n%s",
                                 mWwAddr, mWwVa, mWwBtA[0] ? mWwBtA : "(empty)\n");
         if (mWwHit & 2) fprintf(stderr, "[sbs] === WRITE SITE — core B wrote 0x%08X=%08X ===\n%s",
