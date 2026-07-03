@@ -405,28 +405,36 @@ void Engine::fieldFrame() { Core* c = core;
   // from it (the native render below consumes per-frame queues, so it is not re-runnable). No-op unless on.
   c->mRender->dualviewSnapshot.capturePre(c);
   if (c->mem_r8(0x1f800136u) < 2) c->mRender->frame();   // 0x8003f9a8 — NATIVE render orchestrator + walk
-  FFS("ff_submit810c", c->engine.submitPage810c()); // render submit (page-1 dim-fade owned; other pages recomp)
   // RENDER GUEST-MEMORY DECOUPLING (user 2026-06-24: the native renderer must leave NO guest-memory side
-  // effect — only native GAMEPLAY may write guest memory). The native render above (ov_render_frame + submit)
-  // still scribbles guest scratchpad/OT (e.g. the RotMatrix SVECTOR at 0x1F8000xx) as PSX-GTE transform
-  // workspace, which still-recomp content reads back wrong (the regression the DUALCORE harness pinned to
-  // scratchpad 0x1F8000C0). dv_restore_pre rewinds the FULL post-gameplay guest state captured by dv_snapshot
-  // above — undoing EVERY guest write the native render made — so content reads the correct PSX state.
+  // effect — only native GAMEPLAY may write guest memory). The native render above scribbles guest
+  // scratchpad/OT (e.g. the RotMatrix SVECTOR at 0x1F8000xx) as PSX-GTE transform workspace, which
+  // still-recomp content reads back wrong (the regression the DUALCORE harness pinned to scratchpad
+  // 0x1F8000C0). dualviewSnapshot.restorePre rewinds the post-gameplay guest state captured by
+  // capturePre above — undoing EVERY guest write the native render made.
+  //
+  // ORDER (2026-07-03, later-292 finding — docs/findings/sbs.md 0x800BF81E RENDER-mode divergence):
+  // restorePre runs RIGHT AFTER Render::frame(), BEFORE submitPage810c(). submitPage810c is the game's
+  // frame-submit leaf (not native render orchestration) and writes gameplay-relevant state (e.g. the
+  // 0x800BF81E clear read by later gameplay via `param_1[0x147]=DAT_800bf81f>>4`). Putting restore
+  // AFTER submitPage810c (the earlier order) rewound that legit clear on the native-render side and
+  // dropped it, while the PSX-render side kept it — exactly the byte the RENDER-mode SBS surfaced. Now
+  // only the RENDER path's side effects are undone; submitPage810c writes stick on both cores.
   //
   // later-284: we USED to also re-run the PSX render (d0(0x8003f9a8)+d0(0x8010810c)) here "to leave guest
-  // OT/packets PSX-correct." That was REDUNDANT and HARMFUL: dv_restore_pre already yields the exact
+  // OT/packets PSX-correct." That was REDUNDANT and HARMFUL: restorePre already yields the exact
   // post-gameplay guest state, and NOTHING consumes the PSX-built OT/packets (the native display,
   // ov_scene_native/ov_draw_otag, re-derives its transforms from node/entity data, not leftover OT). Proven:
-  // with the re-render removed, oraclediff stays convergent native-vs-oracle through the whole opening incl.
+  // with the re-render removed, oraclediff stayed convergent native-vs-oracle through the whole opening incl.
   // free-roam onset (only the benign baseline bytes differ). The re-render was ALSO the intro-cutscene FREEZE
   // + red-diagonal corruption: 0x8003f9a8 recurses deep (A00 object render chain) on task0's ~2KB guest stack
   // and overflowed into the task table, clobbering sm[0x48]=17 -> ov_game_frame ret 0 -> game_coop yield-loop
-  // freeze (+ the game_coop r29 SP leak that grew the red corruption). Removing it fixes all of it at once.
-  // The TRUE end-state (make ov_render_frame write ZERO guest memory so dv_snapshot/restore can go too) is a
+  // freeze (+ the game_coop r29 SP leak that grew the red corruption). Removing it fixed all of it at once.
+  // The TRUE end-state (make ov_render_frame write ZERO guest memory so capturePre/restorePre can go too) is a
   // separate perf/architecture follow-up; the rewind correctly enforces the invariant meanwhile.
   if (!c->mRender->mode.psxRender() && !c->mRender->mode.dualview() && c->mem_r8(0x1f800136u) < 2) {
     c->mRender->dualviewSnapshot.restorePre(c);
   }
+  FFS("ff_submit810c", c->engine.submitPage810c()); // render submit (page-1 dim-fade owned; other pages recomp)
   FFS("ff_77d8c", c->engine.postRenderTick());   // 0x80077d8c NATIVE (Engine::postRenderTick)
   FFS("ff_area75a80", c->engine.areaUpdateTail());   // 0x80075a80 NATIVE (Engine::areaUpdateTail)
 }
