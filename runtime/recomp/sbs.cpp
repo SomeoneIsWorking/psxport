@@ -1310,6 +1310,28 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
             fprintf(stderr, "[sbs]   [0x%08X]: A=0x%08X  B=0x%08X  %s\n",
                     addr, a, b, a == b ? "match" : "!! DIVERGE !!");
           }
+          // Scan main RAM for locations that hold the write address as a 4-byte value. A common
+          // divergence is "different object owns render-record at addr X" — search for the addr in
+          // both cores' RAM and dump any locations that hold it. Only main RAM (0x80010000..
+          // 0x80200000); scratchpad is too small to matter. Cap at 20 hits per core to keep the
+          // dump small.
+          {
+            uint32_t target = mWwAddr & 0x00FFFFFFu;   // strip kseg bits
+            target |= 0x80000000u;
+            fprintf(stderr, "[sbs] === RAM scan for the write-target ptr (0x%08X) ===\n", target);
+            auto scan = [&](const char* tag, Core* c) {
+              int hits = 0;
+              for (uint32_t a = 0x80010000u; a < 0x80200000u && hits < 20; a += 4) {
+                if (c->mem_r32(a) == target) {
+                  fprintf(stderr, "[sbs]   %s: 0x%08X holds ptr 0x%08X\n", tag, a, target);
+                  hits++;
+                }
+              }
+              if (hits == 0) fprintf(stderr, "[sbs]   %s: no matches\n", tag);
+            };
+            scan("core A", &mA->core);
+            scan("core B", &mB->core);
+          }
         }
         fprintf(stderr, "[sbs] headless: exiting after RNG-count divergence.\n");
         fflush(stderr);
