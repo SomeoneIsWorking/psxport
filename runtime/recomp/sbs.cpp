@@ -115,6 +115,9 @@ public:
     if (which == 'b' || which == 'B') return mB ? &mB->core : nullptr;
     return nullptr;
   }
+  Core* shownCore() const {
+    return mSel ? (mB ? &mB->core : nullptr) : (mA ? &mA->core : nullptr);
+  }
 
 private:
   static SbsHarness* sInstance;
@@ -566,3 +569,4 @@ bool Sbs::active()                                        { auto* h = SbsHarness
 int  Sbs::coreId(Core* c)                                 { auto* h = SbsHarness::getOrNull(); return h ? h->coreId(c) : -1; }
 uint32_t Sbs::frame()                                     { auto* h = SbsHarness::getOrNull(); return h ? h->frameNum() : 0; }
 Core* Sbs::coreByLetter(char which)                       { auto* h = SbsHarness::getOrNull(); return h ? h->coreByLetter(which) : nullptr; }
+Core* Sbs::shownCore()                                    { auto* h = SbsHarness::getOrNull(); return h ? h->shownCore() : nullptr; }

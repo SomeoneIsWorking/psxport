@@ -32,4 +32,10 @@ public:
   // Returns nullptr when the SBS harness is NOT running (single-Core standalone), so callers can fall
   // back to the frame-loop's current context. Enables `r@a 0x80000000` and `r@b 0x80000000` in dbg.
   static Core*    coreByLetter(char which);
+
+  // The currently `sbs show`-selected core (0 → A, 1 → B). Returns nullptr when the SBS harness is
+  // NOT running (single-Core standalone). Callers that drive a process-wide singleton (e.g. the RmlUi
+  // overlay HUD, which has one window per process) use this to display state from ONE core rather
+  // than let both cores overwrite each other's readout each frame.
+  static Core*    shownCore();
 };

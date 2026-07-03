@@ -3,6 +3,7 @@
 // overlay_glue.h. Built as C++ (reads guest RAM via Core); the public hooks have C linkage.
 #include "overlay_glue.h"
 #include "rmlui_overlay.h"
+#include "sbs.h"
 #include "core.h"
 
 void overlay_glue_init(SDL_Window* win, SDL_GPUDevice* dev, SDL_GPUTextureFormat swap_fmt) {
@@ -17,11 +18,19 @@ void overlay_glue_frame_begin(Core* core) {
     // Live world-position HUD: camera/Tomba position (int16 world units in scratchpad) + the current
     // stage entry pointer. These guest addresses are the same ones the engine RE established for the
     // coordinate readout; reading them here keeps gpu_gpu.cpp free of overlay concerns.
+    //
+    // In SBS mode both cores hit this per frame; the RmlUi overlay is a single process-wide UI (one
+    // window, one HUD), so we push the world coords from ONE core — the `sbs show`-selected one —
+    // rather than let A and B overwrite each other's readout each frame. Standalone: core is the sole
+    // core, push unconditionally.
     if (core) {
-        rmlui_overlay_set_world((int16_t)core->mem_r16(0x1F8000D2u),
-                                (int16_t)core->mem_r16(0x1F8000D6u),
-                                (int16_t)core->mem_r16(0x1F8000DAu),
-                                core->mem_r32(0x801FE00Cu));
+        Core* shown = Sbs::shownCore();
+        if (!shown || shown == core) {
+            rmlui_overlay_set_world((int16_t)core->mem_r16(0x1F8000D2u),
+                                    (int16_t)core->mem_r16(0x1F8000D6u),
+                                    (int16_t)core->mem_r16(0x1F8000DAu),
+                                    core->mem_r32(0x801FE00Cu));
+        }
     }
     rmlui_overlay_new_frame();
 }
