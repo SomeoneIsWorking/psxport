@@ -42,6 +42,9 @@
 #include <cstdlib>
 #include <unistd.h>
 #include <tuple>
+#include <map>
+#include <algorithm>
+#include <csignal>
 
 // --- runtime entry points reused from the normal boot path / dual-core harness ---
 void load_exe(const char* path, Core* c);
@@ -88,6 +91,7 @@ class Sbs::Impl {
 public:
   void run(const char* exePath, Sbs* facade);
   int  dbgCmd(FILE* out, const char* line);
+  void dumpAllocRa(FILE* out);
   void storeCb(Core* c, uint32_t addr, uint32_t val);
   bool active() const { return mSbs; }
   int  coreId(Core* c) const {
@@ -143,6 +147,14 @@ public:
   int      mAllocTraceOn = 0;
   int      mAllocA = 0, mAllocB = 0;   // per-frame decrement count (any write value < current)
   int      mAllocCumA = 0, mAllocCumB = 0;
+  // Per-ra bucket: {alloc, release} counts by guest r[31] at store time, split A vs B. Landed as the
+  // durable workflow-first invariant for +N-alloc attribution — ordinal-point-in-time comparison is
+  // misleading (a timing-shifted alloc reads as "A-only") and the correct compare is at SETTLED STATE
+  // (per-ra totals over the whole run). Asymmetric buckets = real caller divergence; symmetric = a
+  // timing shift. Dumped at the end of every run when ALLOCTRACE is on; opt-in REPL `sbs allocra`.
+  struct RaBucket { int allocA=0, allocB=0, relA=0, relB=0; };
+  std::map<uint32_t, RaBucket> mAllocRa;
+  int      mAllocRaDumped = 0;
 
   // ---- scripted headless input (PSXPORT_SBS_KEYS) ----
   std::vector<SbsKey> mKeys;
@@ -493,9 +505,16 @@ void Sbs::Impl::storeCb(Core* c, uint32_t a, uint32_t v) {
     int which_a = (mB && c == &mB->core) ? 1 : 0;
     uint32_t cur = c->mem_r16(0x800ED098u);
     uint32_t next = v & 0xFFFFu;
+    // Bucket alloc AND release by guest r[31] so settled-state per-caller compares surface. Recomp
+    // preserves r[31] across jal; native record_gate leaves the previous r[31] intact (typically
+    // 0xDEAD0000 or a stale value), so its bucket is a mixed-caller lump — expected asymmetry vs B.
+    uint32_t ra = c->r[31];
+    RaBucket& b = mAllocRa[ra];
     if (next < cur) {   // decrement = allocation
-      if (which_a) { mAllocB++; mAllocCumB++; }
-      else         { mAllocA++; mAllocCumA++; }
+      if (which_a) { mAllocB++; mAllocCumB++; b.allocB++; }
+      else         { mAllocA++; mAllocCumA++; b.allocA++; }
+    } else if (next > cur) {  // increment = release
+      if (which_a) b.relB++; else b.relA++;
     }
   }
   if (!mWwArmed || (a & ~3u) != (mWwAddr & ~3u)) return;
@@ -597,10 +616,47 @@ int Sbs::Impl::dbgCmd(FILE* out, const char* line) {
     fprintf(out, "sbs ramdiff @frame %u: RAM %u spans / %u B diverge (region 0x%08X..0x%08X), "
                  "scratchpad %u spans / %u B. A=PC(native) B=PSX(full-recomp).\n",
             mFrame, spans, bytes, mLo, mHi, sspans, sbytes);
+  } else if (!strcmp(sub, "allocra")) {
+    dumpAllocRa(out);
   } else {
-    fprintf(out, "sbs subcommands: status | diff | bt | watch [hex] | show a|b | resume | step [n] | dump [path] | ramdiff [N]\n");
+    fprintf(out, "sbs subcommands: status | diff | bt | watch [hex] | show a|b | resume | step [n] | dump [path] | ramdiff [N] | allocra\n");
   }
   return 1;
+}
+
+// Settled-state per-ra bucket dump — the workflow-first fix for +N-alloc attribution. Compares
+// per-caller-ra alloc+release COUNTS over the whole run (not ordinal-point-in-time), so a timing-shifted
+// caller that fires on both cores in different frames shows up as SYMMETRIC (delta=0), and a real
+// caller-side divergence shows up as ASYMMETRIC. Sorts by |A-B| net; hides symmetric rows unless
+// PSXPORT_SBS_ALLOCRA_ALL=1. Called at end-of-run (SBS AUTONAV loop exit) and by REPL `sbs allocra`.
+void Sbs::Impl::dumpAllocRa(FILE* out) {
+  if (!mAllocTraceOn) { fprintf(out, "sbs allocra: PSXPORT_SBS_ALLOCTRACE=1 required to collect buckets\n"); return; }
+  bool showAll = false;
+  { const char* e = getenv("PSXPORT_SBS_ALLOCRA_ALL"); if (e && *e && strcmp(e, "0") != 0) showAll = true; }
+  std::vector<std::pair<uint32_t, RaBucket>> v(mAllocRa.begin(), mAllocRa.end());
+  std::sort(v.begin(), v.end(), [](const std::pair<uint32_t, RaBucket>& x, const std::pair<uint32_t, RaBucket>& y){
+    int nx = std::abs((x.second.allocA - x.second.allocB) - (x.second.relA - x.second.relB));
+    int ny = std::abs((y.second.allocA - y.second.allocB) - (y.second.relA - y.second.relB));
+    return nx > ny;
+  });
+  int totA=0, totB=0;
+  for (const auto& kv : v) { totA += kv.second.allocA; totB += kv.second.allocB; }
+  fprintf(out, "[sbs allocra] ra buckets on 0x800ED098 stores (settled-state, %zu unique ra's)\n"
+               "              totalA=%d totalB=%d net=%+d\n"
+               "              ra=DEAD0000 (A-only) = native record_gate — the previous r[31] wasn't set by a JAL to the alloc.\n"
+               "%s\n"
+               "%12s  %7s %7s  %6s %6s   %s\n",
+          v.size(), totA, totB, totA - totB,
+          showAll ? "(all rows shown)" : "(SYMMETRIC rows hidden — set PSXPORT_SBS_ALLOCRA_ALL=1 to show)",
+          "ra", "A_alloc", "B_alloc", "A_rel", "B_rel", "net(A-B):alloc,rel");
+  for (const auto& kv : v) {
+    uint32_t ra = kv.first;
+    const RaBucket& b = kv.second;
+    int da = b.allocA - b.allocB;
+    int dr = b.relA - b.relB;
+    if (!showAll && da == 0 && dr == 0) continue;
+    fprintf(out, "  0x%08X  %7d %7d  %6d %6d   %+8d, %+d\n", ra, b.allocA, b.allocB, b.relA, b.relB, da, dr);
+  }
 }
 
 void Sbs::Impl::run(const char* exePath, Sbs* facade) {
@@ -622,8 +678,28 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
   mSbs = true;
 
   { const char* e = getenv("PSXPORT_SBS_ALLOCTRACE"); if (e && *e && strcmp(e, "0") != 0) mAllocTraceOn = 1; }
-  if (mAllocTraceOn)
+  if (mAllocTraceOn) {
     fprintf(stderr, "[sbs] ALLOCTRACE on — per-frame decrement count of 0x800ED098 logged when A != B\n");
+    // Register a per-ra bucket dump at process exit so the settled-state per-caller table lands even
+    // when the run is killed by SIGTERM (SBS AUTONAV normally runs indefinitely). Guarded via mSelfPtr
+    // so the atexit lambda can find the live Sbs::Impl without a global.
+    static Sbs::Impl* s_selfForAtExit = nullptr;
+    s_selfForAtExit = this;
+    atexit([]{ if (s_selfForAtExit) s_selfForAtExit->dumpAllocRa(stderr); });
+    // Also trap SIGTERM/SIGINT (the common shell-timeout / Ctrl-C path) so the settled-state per-ra
+    // table lands under `timeout N …` too. Dump then call _exit — cheap, no atexit chain re-entry.
+    static bool s_sigHooked = false;
+    if (!s_sigHooked) {
+      s_sigHooked = true;
+      auto handler = +[](int sig){
+        if (s_selfForAtExit) s_selfForAtExit->dumpAllocRa(stderr);
+        fflush(stderr);
+        _exit(128 + sig);
+      };
+      std::signal(SIGTERM, handler);
+      std::signal(SIGINT,  handler);
+    }
+  }
 
   // psx_fallback per mode: gameplay/full run PSX gameplay on core B; render runs native gameplay on both;
   // oracle runs the PURE interpreter+soft-rasterizer oracle on B (docs/oracle.md).
