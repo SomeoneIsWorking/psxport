@@ -123,6 +123,7 @@ const char* overlay_router_resident_name(Core* c, uint32_t addr) {
 // (later-275.) Returns 0 only when addr falls in a recompiled module range but is not an entry there;
 // addresses outside every recompiled range return 1 (let rec_dispatch route them — native/HLE leaves).
 extern "C" int rec_func_index(uint32_t);
+extern "C" void guest_backtrace_to(Core*, FILE*);   // sync_overrides.cpp — heuristic guest stack walk
 int rec_addr_has_entry(Core* c, uint32_t addr) {
   uint32_t a = addr & 0x1FFFFFFF;
   if (a >= REC_MAIN_LO && a < REC_MAIN_HI) return rec_func_index(addr) >= 0;
@@ -191,6 +192,11 @@ void rec_dispatch(Core* c, uint32_t addr) {
     uint32_t frame = sbs ? sbs->frame() : 0;
     fprintf(stderr, "[dispwatch] f%u core=%c addr=%08X ra=%08X a0=%08X (s16=%d) a1=%08X a2=%08X node.s0=%u.n3=%u stage=%08X\n",
             frame, cid < 0 ? '?' : (cid ? 'B' : 'A'), addr, c->r[31], a0, (int)(int16_t)a0, a1, a2, s0, n3, c->mem_r32(0x801fe00c));
+    // Also dump the guest stack so the CALLER CHAIN — not just the immediate ra — is visible. Cheap
+    // when the hit is rare (dispwatch is targeted) and doing it by hand each time is what led to the
+    // "no call stack" workflow gap (docs/known-bugs.md GAP-1). Pipe stderr through tools/symres.py to
+    // resolve addresses to FUN_/native names automatically.
+    guest_backtrace_to(c, stderr);
   }
   uint32_t a = addr & 0x1FFFFFFF;
   if (a >= REC_MAIN_LO && a < REC_MAIN_HI) { main_dispatch(c, addr); return; }
