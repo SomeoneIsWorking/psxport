@@ -237,8 +237,7 @@ second_cull:;
   {
     if (c->mem_r8(s4 + 7) == 1) {                       // lbu node[0x67]; bne 1 -> 0x80145548 [0x80145528]
       uint32_t rr = (uint32_t)c->rng.next();                 // FUN_8009A450 -> native class Rng    [0x80145530]
-      c->r[4] = 0x87; c->r[5] = (rr & 3); c->r[6] = 0;       // a0=0x87, a1=v0&3, a2=0             [0x80145538..44]
-      rec_dispatch(c, 0x80074590u);                     // FUN_80074590                [0x80145540]
+      c->engine.sfx.trigger(0x87, (int)(rr & 3), 0);   // FUN_80074590 (native) — id 0x87 hits path A (per-area)
     }
     // ---- DAT_8014bf5e countdown [0x80145548..0x801455C4] ----
     uint8_t cd = c->mem_r8(0x8014BF5Eu);                // lbu v0,DAT_8014bf5e         [0x80145548]

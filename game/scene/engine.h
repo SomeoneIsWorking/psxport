@@ -37,6 +37,7 @@
 #include "world/verify_gate.h"   // Engine owns the shared VerifyGate A/B diff helper
 #include "object/behavior_dispatch.h" // Engine owns the per-object BehaviorDispatch subsystem
 #include "scene/scene_events.h"       // Engine owns the SceneEvents arm subsystem (FUN_80040B48)
+#include "audio/sfx.h"                // Engine owns the Sfx trigger subsystem (FUN_80074590)
 class Core;
 
 class Engine {
@@ -75,6 +76,7 @@ public:
   BehaviorDispatch behaviors;          // per-object handler dispatch registry (50 native behaviors)
   Cull             cull;               // per-object visibility cull / margin re-include (orphaned)
   SceneEvents      sceneEvents;        // field-wide scene-event arm primitive (FUN_80040B48)
+  Sfx              sfx;                 // sound-FX trigger dispatcher (FUN_80074590)
 
   // ── GAME-stage entry points (called by the scheduler each frame) ────────────────────────────
   // stagePrologue: one-time prologue that runs when the GAME task enters — task-slot setup, first

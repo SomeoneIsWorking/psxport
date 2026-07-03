@@ -130,7 +130,7 @@ static void node6_phase(Core* c, uint32_t nd) {
       c->mem_w8 (G_806c, 1);                            // s3 = 1
       c->mem_w16(G_8078, 0);
       c->mem_w16(G_8074, (uint16_t)(int16_t)-1400);
-      c->r[4] = 0x25; c->r[5] = 0; c->r[6] = 0; rec_dispatch(c, 0x80074590u);  // FUN_80074590(0x25,0,0)
+      c->engine.sfx.trigger(0x25, 0, 0);       // FUN_80074590 (native)
       break;
     }
     case 3: {                                          // @0x80127ba0 — integrate camera deltas

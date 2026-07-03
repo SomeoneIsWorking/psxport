@@ -283,8 +283,7 @@ state2:
     // 2 <= node[5] < 4:
     c->inventory.giveAndFlag(0x77, 1);                  // 8012521C jal 0x8004d4c4 [native]
     c->r[4] = obj; rec_dispatch(c, 0x8004B0D8u);        // 80125224 jal 0x8004b0d8 (a0=s2)
-    c->r[4] = 0x11; c->r[5] = 0; c->r[6] = 0;           // 8012522C a0=0x11 ; 80125230 a1=0 ; 80125238 a2=a1=0
-    rec_dispatch(c, 0x80074590u);                       // 80125234 jal 0x80074590
+    c->engine.sfx.trigger(0x11, 0, 0);                  // 80125234 jal 0x80074590 (native)
     uint8_t n3 = c->mem_r8(obj + 3);                   // 8012523C lbu v1, 3(s2)
     c->mem_w8(obj + 4, 3);                              // 80125248 sb v0(=3), 4(s2)  -> state 3  (delay slot)
     // 80125244 bnez v1 -> 0x8012526c

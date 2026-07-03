@@ -170,8 +170,8 @@ void beh_scatter_ramp_machine(Core* c) {
   c->mem_w8(a3 + 4, 30);                          // node[0x54] = 30
   // fall into Lccc4
  Lccc4:
-  c->r[4] = 7;   c->r[5] = 0; c->r[6] = 0; rec_dispatch(c, 0x80074590u);
-  c->r[4] = 148; c->r[5] = 0; c->r[6] = 0; rec_dispatch(c, 0x80074590u);
+  c->engine.sfx.trigger(7, 0, 0);     // FUN_80074590 (native)
+  c->engine.sfx.trigger(148, 0, 0);   // FUN_80074590 (native; id 148 → path A per-area)
   goto Lcd60;
 
  Lcce4:                                          // sub-state 8

@@ -80,8 +80,7 @@ void SceneTransition::resetSwap(uint32_t node) {
   Core* c = core;
   c->mem_w8(node + 0, 2);
   if (c->mem_r8(node + 0xBF) != 0) {
-    c->r[4] = 0x17; c->r[5] = 0; c->r[6] = 0x0F;
-    rec_dispatch(c, 0x80074590u);
+    c->engine.sfx.trigger(0x17, 0, 0x0F);           // FUN_80074590 (native)
   }
   c->mem_w8(E7FC5_FLAG, 0);
   clearSwapBlock(SCENE_BLOCK);          // FUN_80054198 (native)
@@ -236,8 +235,7 @@ int SceneTransition::stepSwapWaiter(uint32_t node) {
         }
         // ZERO-CROSS SFX: only when clampHit && obj[+0xBF] != 0
         if (clampHit != 0 && c->mem_r8(n + 0xBF) != 0) {
-          c->r[4] = 24; c->r[5] = 0; c->r[6] = 15;
-          rec_dispatch(c, 0x80074590u);                     // sfxTrigger(24, 0, 15) — SFX cluster still substrate
+          c->engine.sfx.trigger(24, 0, 15);                 // FUN_80074590 (native)
         }
         // TAIL: obj[+0x56] = obj[+0x5A] - obj[+0x50]  (SUB form; matches FUN_80072EFC)
         c->mem_w16(n + 0x56, (uint16_t)(c->mem_r16(n + 0x5A) - c->mem_r16(n + 0x50)));

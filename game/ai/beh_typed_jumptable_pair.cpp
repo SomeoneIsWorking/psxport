@@ -291,8 +291,7 @@ void beh_typed_jumptable_pair(Core* c) {
           c->engine.sceneTransition.clearSwapBlock(0x800E7E80u);
           c->r[4] = 0x6d; c->r[5] = 0x41;            // 80139518 a0=0x6d ; 80139520 a1=0x41
           rec_dispatch(c, 0x8004ED94u);              // 8013951C jal 0x8004ed94
-          c->r[4] = 0x19; c->r[5] = 0; c->r[6] = 0xf;// 80139524 a0=0x19 ; 80139528 a1=0 ; 80139530 a2=0xf
-          rec_dispatch(c, 0x80074590u);              // 8013952C jal 0x80074590
+          c->engine.sfx.trigger(0x19, 0, 0xF);       // 8013952C jal 0x80074590 (native)
           break;                                     // 80139534 j 0x80139580
         }
         if (n6 == s5) {                              // 801394E8 beq v0,v1 (v1==node[5]==1) -> 0x8013953c

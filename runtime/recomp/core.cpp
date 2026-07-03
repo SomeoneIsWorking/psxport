@@ -41,6 +41,7 @@ Core::Core() {
   engine.behaviors.core = this;         // Engine-owned per-object behavior dispatcher
   engine.cull.core = this;              // Engine-owned visibility cull subsystem
   engine.sceneEvents.core = this;       // Engine-owned scene-event arm subsystem
+  engine.sfx.core = this;               // Engine-owned sound-FX trigger dispatcher
   rng.core        = this;
   trig.core       = this;
   math.core       = this;

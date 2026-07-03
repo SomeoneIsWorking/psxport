@@ -1177,14 +1177,12 @@ void Engine::postRenderTick() {
   if (b == 0) return;
   uint8_t low = (uint8_t)(b & 0x7F);
   if (low == 1) {
-    c->r[4] = 41; c->r[5] = 2; c->r[6] = 0xFFFFFFBFu;   // (-65) sign-extended
-    rec_dispatch(c, 0x80074590u);
+    c->engine.sfx.trigger(41, 2, -65);      // FUN_80074590 (native; pitchBend -65)
     c->mem_w8(0x800BF842u, 0x87);
     return;
   }
   if (low == 2) {
-    c->r[4] = 42; c->r[5] = 2; c->r[6] = 0xFFFFFFBFu;
-    rec_dispatch(c, 0x80074590u);
+    c->engine.sfx.trigger(42, 2, -65);      // FUN_80074590 (native; pitchBend -65)
     c->mem_w8(0x800BF842u, 0);
     return;
   }

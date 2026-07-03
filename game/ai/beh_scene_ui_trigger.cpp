@@ -45,8 +45,7 @@ inline void render_and_return(Core* c, uint32_t obj) {
 inline void sfx_advance(Core* c, uint32_t obj) {
   uint8_t v0 = c->mem_r8(obj + 5);
   c->mem_w8(obj + 5, (uint8_t)(v0 + 1));
-  c->r[4] = 0x11; c->r[5] = 0; c->r[6] = 0;
-  rec_dispatch(c, 0x80074590u);
+  c->engine.sfx.trigger(0x11, 0, 0);              // FUN_80074590 (native)
 }
 
 }  // namespace

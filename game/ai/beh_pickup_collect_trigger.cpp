@@ -114,10 +114,10 @@ bool beh_pickup_collect_trigger_body(Core* c) {
         c->mem_w8(obj + 4, 3);
         uint32_t src = c->mem_r32(c->mem_r32(obj + 0xc0) + 0x40);
         c->r[4] = src; c->r[5] = buf; c->r[6] = 0x800; c->r[7] = 0x18; rec_dispatch(c, 0x80027144u);
-        c->r[4] = 0xc; c->r[5] = 0; c->r[6] = 0; rec_dispatch(c, 0x80074590u);
+        c->engine.sfx.trigger(0xc, 0, 0);   // FUN_80074590 (native)
         src = c->mem_r32(c->mem_r32(obj + 0xc0) + 0x40);
         c->r[4] = src; c->r[5] = buf; c->r[6] = 0x800; c->r[7] = 8; rec_dispatch(c, 0x80027144u);
-        c->r[4] = 0xc; c->r[5] = 0; c->r[6] = 0; rec_dispatch(c, 0x80074590u);
+        c->engine.sfx.trigger(0xc, 0, 0);   // FUN_80074590 (native)
         c->r[4] = 0x39; rec_dispatch(c, 0x80040C00u);
         uint8_t prev = c->mem_r8(0x800BFA23u);
         uint32_t bit = 1u << (c->mem_r8(obj + 3) & 0x1f);
