@@ -1318,19 +1318,40 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
           {
             uint32_t target = mWwAddr & 0x00FFFFFFu;   // strip kseg bits
             target |= 0x80000000u;
-            fprintf(stderr, "[sbs] === RAM scan for the write-target ptr (0x%08X) ===\n", target);
-            auto scan = [&](const char* tag, Core* c) {
+            fprintf(stderr, "[sbs] === RAM scan for the write-target ptr (0x%08X, and nearby) ===\n", target);
+            auto scan_range = [&](const char* tag, Core* c, uint32_t lo, uint32_t hi) {
               int hits = 0;
               for (uint32_t a = 0x80010000u; a < 0x80200000u && hits < 20; a += 4) {
-                if (c->mem_r32(a) == target) {
-                  fprintf(stderr, "[sbs]   %s: 0x%08X holds ptr 0x%08X\n", tag, a, target);
+                uint32_t v = c->mem_r32(a);
+                if (v >= lo && v <= hi) {
+                  fprintf(stderr, "[sbs]   %s: 0x%08X holds ptr 0x%08X\n", tag, a, v);
                   hits++;
                 }
               }
-              if (hits == 0) fprintf(stderr, "[sbs]   %s: no matches\n", tag);
+              if (hits == 0) fprintf(stderr, "[sbs]   %s: no matches in [0x%08X, 0x%08X]\n", tag, lo, hi);
             };
-            scan("core A", &mA->core);
-            scan("core B", &mB->core);
+            // Broaden window ± 128 bytes — render records are 128-byte structures, the write may
+            // land at any offset inside one.
+            scan_range("core A", &mA->core, target - 128, target);
+            scan_range("core B", &mB->core, target - 128, target);
+            // For any obj+0xC0 that holds a render-rec ptr inside the target window, dump the OBJECT
+            // fields on both cores. Divergence in obj+4 (state), obj+8 (sub-count), obj+9 (active
+            // gate), obj+0x1C (handler) names why one core fires the write and the other doesn't.
+            fprintf(stderr, "[sbs] === candidate owner-object state (obj+0xC0 = render-rec ptr) ===\n");
+            for (uint32_t a = 0x80010000u; a < 0x80200000u; a += 4) {
+              uint32_t v = mA->core.mem_r32(a);
+              if (v < target - 128 || v > target) continue;
+              // Assume `a` is at obj+0xC0. obj_base = a - 0xC0.
+              uint32_t obj = a - 0xC0u;
+              fprintf(stderr, "[sbs]   obj @ 0x%08X (rec ptr 0x%08X, delta from write = 0x%X):\n",
+                      obj, v, target - v);
+              for (uint32_t off : {0x00u, 0x04u, 0x05u, 0x08u, 0x09u, 0x0Cu, 0x1Cu, 0x24u, 0x3Cu}) {
+                uint32_t va = obj + off;
+                uint32_t aval = mA->core.mem_r32(va), bval = mB->core.mem_r32(va);
+                fprintf(stderr, "[sbs]     obj+0x%02X: A=0x%08X  B=0x%08X  %s\n",
+                        off, aval, bval, aval == bval ? "match" : "!! DIVERGE !!");
+              }
+            }
           }
         }
         fprintf(stderr, "[sbs] headless: exiting after RNG-count divergence.\n");
