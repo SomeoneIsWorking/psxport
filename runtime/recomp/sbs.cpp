@@ -1181,10 +1181,15 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
               mFrame, tag, mA->core.mem_r8(0x800BF81Eu), mB->core.mem_r8(0x800BF81Eu));
     };
     ww_log("frame-start");
-    // Pre-step snapshot for the rewind-on-divergence fix. Only take it when we're past AUTO-NAV
-    // (before that, both cores drive through the demo asymmetrically — snapshot would rewind INTO
-    // that phase). Skip during the rewind re-step itself so we don't overwrite the good snapshot.
-    if (nav_done && !mDivFound && !mRewindActive) takePreStepSnap();
+    // PSXPORT_SBS_PRENAV=1: check divergence DURING autonav too (default off — during nav the DEMO
+    // stage runs native vs PSX-substrate asymmetrically and accumulates transient state diffs;
+    // the gate normally hides that). Turn on to hunt architectural DEMO/GAME stage divergences.
+    static const int prenav = []{ const char* e = getenv("PSXPORT_SBS_PRENAV"); return e && *e && strcmp(e,"0")!=0 ? 1 : 0; }();
+    // Pre-step snapshot for the rewind-on-divergence fix. Snap post-nav by default; with
+    // PSXPORT_SBS_PRENAV=1 also snap during nav so a nav-time rewind can pin an architectural
+    // stage-machine divergence. Skip during the rewind re-step itself so we don't overwrite the
+    // good snapshot.
+    if ((nav_done || prenav) && !mDivFound && !mRewindActive) takePreStepSnap();
     stepCore(mA, 0);              ww_log("post-stepA");
     grabPane(mA, mRgbaA, &mWa, &mHa); ww_log("post-grabA");
     stepCore(mB, 1);              ww_log("post-stepB");
@@ -1195,7 +1200,7 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
     // debug server) so `sbs diff` / `sbs bt` / `sbs watch` can inspect. The 30-frame summary is
     // the running "how far apart are they" metric so you see divergence GROW even before the first
     // recorded hit (in render/full modes the render regions are excluded by design).
-    if (nav_done) {
+    if (nav_done || prenav) {
       summarizeDivergence(30);
       checkDivergence();
     }

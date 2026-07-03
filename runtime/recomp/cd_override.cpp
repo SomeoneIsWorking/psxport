@@ -140,13 +140,17 @@ static void cd_read(Core* c) {
 static void cd_loadfile(Core* c) {
   uint32_t dest = c->r[A0], lba = c->r[A1], size = c->r[A2];
   uint8_t sec[2048];
-  uint32_t done = 0;
-  for (uint32_t i = 0; done < size; i++) {
-    if (!disc_read_sector(lba + i, sec)) break;
+  uint32_t done = 0, nsec = 0;
+  for (; done < size; nsec++) {
+    if (!disc_read_sector(lba + nsec, sec)) break;
     uint32_t n = size - done < 2048 ? size - done : 2048;
     for (uint32_t j = 0; j < n; j++) c->mem_w8(dest + done + j, sec[j]);
     done += n;
   }
+  // Position tracker: last sector read. Substrate's cd_async_read (the platform-HLE for the async
+  // streaming reader B goes through) writes this; without matching writes here the SBS full-mode
+  // diverges at frame 0 by two bytes at 0x800BE0E0 (native = 0, substrate = the last LBA read).
+  if (nsec) c->mem_w32(0x800be0e0, lba + nsec - 1);
   if (s_cd_verbose)
     fprintf(stderr, "[cd] loadfile %u B @ LBA %u -> 0x%08X ra=0x%08X\n", size, lba, dest, c->r[31]);
   void overlay_note_load(Core*, uint32_t);
