@@ -702,15 +702,24 @@ def func_entries_after_return(exe):
             if exe.word(a - 8) == 0x03E00008 and decode(a, exe.word(a)).kind != D.UNKNOWN}
 
 
-def pointer_table_funcs(exe):
+def pointer_table_funcs(exe, exclude=None):
     """Seed functions reached ONLY via a function pointer (jalr through a table / vtable slot) —
     invisible to direct-jal discovery. With the interpreter gone (later-254) a call to such a fn fails
     fast, so we must recompile them. Scan the WHOLE EXE image (text + data) for words that point at a
     function ENTRY in text (is_func_entry). discover_funcs then follows each one's direct-jal call
     graph. (A truly stackless leaf that is also NOT preceded by `jr ra` — e.g. the first fn after a
-    data island — still needs a manual EXTRA_SEEDS when the boot surfaces it.)"""
+    data island — still needs a manual EXTRA_SEEDS when the boot surfaces it.)
+
+    `exclude` (defaults to switch_table_spans) is SKIPPED so a switch's case-label array is not
+    mis-seeded as a vtable. Without this, JT case labels preceded by `jr ra; nop` (each prior case's
+    return) pass is_func_entry and get seeded as HARD functions, splitting the switch's containing
+    function so early that emit_func's validated JT recovery rejects the switch (targets outside
+    range) — the jr then routes through rec_dispatch and case-0 (NOT preceded by `jr ra`, so never
+    seeded) fails fast (FUN_8006C80C's 13-entry JT at 0x80016874 → miss 0x8006c844)."""
     lo, hi = exe.load, exe.text_end
-    return {exe.word(a) for a in range(lo, hi, 4) if is_func_entry(exe, exe.word(a))}
+    exclude = exclude if exclude is not None else switch_table_spans(exe)
+    return {exe.word(a) for a in range(lo, hi, 4)
+            if a not in exclude and is_func_entry(exe, exe.word(a))}
 
 
 def switch_table_spans(exe):
