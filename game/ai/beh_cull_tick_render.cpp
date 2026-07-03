@@ -24,6 +24,7 @@
 // gate; the scene-driven init is faithfully transcribed and verifies when a scene drives it.
 
 #include "core.h"
+#include "object/actor.h"    // Actor::boundsCull (FUN_8007778C native)
 #include "cfg.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -77,8 +78,7 @@ void beh_cull_tick_render(Core* c) {
   }
 
   // ---- STATE 1 [0x8012D4AC]: cull, then tick + render ----
-  c->r[4] = obj; rec_dispatch(c, 0x8007778Cu);     // 8012D4AC jal 0x8007778c (a0=s0)  cull
-  if (c->r[2] == 0) return;                         // 8012D4B4 beqz v0 -> 0x8012d4dc (culled -> epilogue)
+  if (Actor(c, obj).boundsCull() == 0) return;      // 8012D4AC jal 0x8007778c — Actor::boundsCull (native); cull → epilogue
   c->r[4] = obj; rec_dispatch(c, 0x8012D27Cu);     // 8012D4BC jal 0x8012d27c (a0=s0)  per-type tick
   c->r[4] = obj; c->engine.graphicsBind.renderUpdate();     // 8012D4C4 jal 0x800517f8 (a0=s0)  render-state update
   // 8012D4CC j 0x8012d4dc (epilogue)

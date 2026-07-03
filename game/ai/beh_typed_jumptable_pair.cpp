@@ -38,6 +38,7 @@
 // when a scene drives them (same caveat as the sibling orchestrators) — see Report.
 
 #include "core.h"
+#include "object/actor.h"    // Actor::boundsCull (FUN_8007778C native)
 #include "cfg.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -193,7 +194,7 @@ void beh_typed_jumptable_pair(Core* c) {
     if (c->mem_r8(obj + 3) == 2 && c->mem_r8(0x1F800207u) >= 0x1d) {  // 801392B0 bne v1,2 ; 801392C0..CC val>=0x1d
       c->r[4] = obj; rec_dispatch(c, 0x8007703Cu);    // 801392D4 jal 0x8007703c (a0=s0)
     } else {
-      c->r[4] = obj; rec_dispatch(c, 0x8007778Cu);    // 801392E4 jal 0x8007778c (a0=s0) cull
+      Actor(c, obj).boundsCull();                     // 801392E4 jal 0x8007778c — Actor::boundsCull (native)
     }
   }
 

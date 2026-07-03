@@ -35,6 +35,7 @@
 // + verifiable via the A/B gate the moment a transition is triggered. Byte-exact gate is the safety net.
 
 #include "core.h"
+#include "object/actor.h"    // Actor::boundsCull (FUN_8007778C native)
 #include "cfg.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -173,8 +174,7 @@ void beh_area_transition_machine(Core* c) {
     // ---------- STATE 1 (idle gate) ----------
     uint32_t d = (uint32_t)(c->mem_r8(0x1F800207u) - 29);          // scratchpad[0x207]
     if (d >= 3 && c->mem_r8(0x800BF9B5u) != 1) return;             // !((v-29)<3) && mem8(0x800bf9b5)!=1
-    c->r[4] = nd; rec_dispatch(c, 0x8007778Cu);                    // FUN_8007778c gate
-    if (c->r[2] == 0) return;
+    if (Actor(c, nd).boundsCull() == 0) return;                    // FUN_8007778C gate — Actor::boundsCull (native)
     c->mRender->mNodeXform.build(nd);                                        // was rec_dispatch 0x80051844
     return;
   }

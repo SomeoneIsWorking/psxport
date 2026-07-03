@@ -20,6 +20,7 @@
 // pad/scene-driven sub-states (incl. case 4) are faithfully transcribed and verify when a scene drives them.
 
 #include "core.h"
+#include "object/actor.h"    // Actor::boundsCull (FUN_8007778C native)
 #include "cfg.h"
 #include "graphics_bind.h"   // ov_obj_record_init — native graphics-bind (game/world)
 #include <stdio.h>
@@ -86,7 +87,7 @@ bool beh_pickup_collect_trigger_body(Core* c) {
   }
 
   // ---- STATE 1 ----
-  c->r[4] = obj; rec_dispatch(c, 0x8007778Cu);       // cull (result IGNORED)
+  Actor(c, obj).boundsCull();                        // FUN_8007778C cull (result IGNORED) — Actor::boundsCull (native)
   uint8_t sub = c->mem_r8(obj + 5);
   int iVar3 = 0; bool do_inc = false;
 

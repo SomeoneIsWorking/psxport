@@ -26,6 +26,7 @@
 // safety net. NO GTE (the sin is a table lookup, not gte_op).
 
 #include "core.h"
+#include "object/actor.h"    // Actor::boundsCull (FUN_8007778C native)
 #include "cfg.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -266,7 +267,7 @@ void beh_sine_motion_sfx(Core* c) {
    }
   L4ec:
    if (v1 == v0) goto L4fc;              // ==34 -> skip
-   c->r[4] = nd; rec_dispatch(c, 0x8007778cu);     // FUN_8007778C(node)
+   Actor(c, nd).boundsCull();                       // FUN_8007778C(node) — Actor::boundsCull (native)
   L4fc:
    v0 = (int32_t)c->mem_r8(nd + 1);      // lbu node[1]
    if (v0 == 0) goto L598;

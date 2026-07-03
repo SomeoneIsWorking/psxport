@@ -27,6 +27,7 @@
 //   0x1F800160 (lh  scratchpad, state-1 cull gate; signed < 0x4651 => cull)
 
 #include "core.h"
+#include "object/actor.h"    // Actor::boundsCull (FUN_8007778C native)
 #include "cfg.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -93,7 +94,7 @@ void beh_cull_substate_orchestrator(Core* c) {
       // 0x80132640: lh v0, 0x1F800160 (scratchpad, signed) ; slti v0,v0,0x4651 ; beqz -> 0x8013265C
       int16_t timer = c->mem_r16s(0x1F800160u);
       if (timer < 0x4651) {
-        c->r[4] = obj; rec_dispatch(c, 0x8007778Cu);   // 0x80132654  jal FUN_8007778C (a0=s0)  (cull; result IGNORED)
+        Actor(c, obj).boundsCull();                    // 0x80132654 jal FUN_8007778C (result IGNORED) — Actor::boundsCull (native)
       }
     }
   }

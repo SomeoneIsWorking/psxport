@@ -27,6 +27,7 @@
 // RAM+scratchpad A/B vs rec_super_call).
 
 #include "core.h"
+#include "object/actor.h"    // Actor::boundsCull (FUN_8007778C native)
 #include "cfg.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -63,8 +64,7 @@ void state1_gate(Core* c, uint32_t obj) {
       submit = true;                                  // falls into 0x80077efc
     }
   } else {
-    c->r[4] = obj; rec_dispatch(c, 0x8007778Cu);      // 0x8004c368: cull
-    submit = (c->r[2] == 0);                          // 0x8004c370: bne v0,zero -> skip submit
+    submit = (Actor(c, obj).boundsCull() == 0);       // 0x8004c368 cull; skip submit if VISIBLE — Actor::boundsCull (native)
   }
   if (submit) { c->r[4] = obj; rec_dispatch(c, 0x80077EFCu); }  // 0x8004c378
 }

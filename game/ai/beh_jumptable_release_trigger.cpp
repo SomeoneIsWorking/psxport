@@ -25,6 +25,7 @@
 //   0x800BF870 (base; +0x177 -> 0x800BF9E7, +0x178 -> 0x800BF9E8 bit-set tables in despawn tail)
 
 #include "core.h"
+#include "object/actor.h"    // Actor::boundsCull (FUN_8007778C native)
 #include "cfg.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -249,8 +250,7 @@ void beh_jumptable_release_trigger(Core* c) {
         goto epilogue;                                  // 8012518C j 0x801252a4
       }
       // ---- 801251bc: sub-case 1 ----
-      c->r[4] = obj; rec_dispatch(c, 0x8007778Cu);      // 801251BC jal 0x8007778c (a0=s2)  cull check
-      if (c->r[2] == 0) goto epi_done;                  // 801251C4 beqz v0 -> 0x801251e8
+      if (Actor(c, obj).boundsCull() == 0) goto epi_done;   // 801251BC jal 0x8007778c — Actor::boundsCull (native)
       c->r[4] = obj; rec_dispatch(c, 0x80123E9Cu);      // 801251CC jal 0x80123e9c (a0=s2)
       uint16_t a = c->mem_r16(obj + 0x7e);             // 801251D4 lhu v0, 0x7e(s2)
       uint16_t b = c->mem_r16(obj + 0x64);             // 801251D8 lhu v1, 0x64(s2)
@@ -276,7 +276,7 @@ state2:
   // STATE 2 (0x801251f0): cull, then node[5]-range special-area release
   // ============================================================================================
   {
-    c->r[4] = obj; rec_dispatch(c, 0x8007778Cu);      // 801251F0 jal 0x8007778c (a0=s2)  (result IGNORED)
+    Actor(c, obj).boundsCull();                       // 801251F0 jal 0x8007778c (result IGNORED) — Actor::boundsCull (native)
     int8_t sub = c->mem_r8s(obj + 5);          // 801251F8 lbu v1, 5(s2)
     // 80125200 bltz v1 -> epilogue ; 80125204 slti v0,v1,2 ; 80125208 bnez -> epilogue (v1<2)
     // 8012520C slti v0,v1,4 ; 80125210 beqz -> epilogue (v1>=4)   => active only when 2<=v1<4
