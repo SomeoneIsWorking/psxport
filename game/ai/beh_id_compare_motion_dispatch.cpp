@@ -29,6 +29,7 @@
 // s3 = 1 (const); s2 = lui 0x8015 (DAT_8014bf5e = s2-0x40a2). a0 stays 2 from 0x8014527c into state 3.
 
 #include "core.h"
+#include "render/cull.h"    // Cull::cullWrapperFlag2 (FUN_800777FC)
 #include "cfg.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -128,7 +129,7 @@ void beh_id_compare_motion_dispatch(Core* c) {
         }
         // sh node[0x56] [0x80145384]; then fall to cull tail 0x80145388
         // ---- cull tail (n2b!=0 path) [0x80145388] ----
-        c->r[4] = obj; rec_dispatch(c, 0x800777FCu);    // FUN_800777fc (cull)         [0x80145388]
+        c->r[4] = obj; c->engine.cull.cullWrapperFlag2();     // FUN_800777FC (native)
         if (c->r[2] == 0) return;                       // beqz v0 -> epilogue          [0x80145390]
         c->r[4] = obj; rec_dispatch(c, 0x800518FCu);    // FUN_800518fc (render)        [0x80145398]
         return;                                         // j 0x80145654 (epilogue)
@@ -140,7 +141,7 @@ void beh_id_compare_motion_dispatch(Core* c) {
       c->r[4] = obj; rec_dispatch(c, 0x8014047Cu);      // FUN_8014047c                [0x80145328]
       if (c->r[2] != 0) return;                         // bnez v0 -> epilogue          [0x80145330]
       // v0==0 -> 0x80145388 cull tail (NOT the node[3] dispatch). Distinct from the n2b==0 fallthrough.
-      c->r[4] = obj; rec_dispatch(c, 0x800777FCu);      // FUN_800777fc (cull)         [0x80145388]
+      c->r[4] = obj; c->engine.cull.cullWrapperFlag2();     // FUN_800777FC (native)
       if (c->r[2] == 0) return;                         // beqz v0 -> epilogue          [0x80145390]
       c->r[4] = obj; rec_dispatch(c, 0x800518FCu);      // FUN_800518fc (render)        [0x80145398]
       return;                                           // j 0x80145654 (epilogue)
@@ -231,7 +232,7 @@ n3_motion:;
 
 second_cull:;
   // ---- common tail: cull, SFX edge, countdown spawn, render [0x80145510..0x8014560C] ----
-  c->r[4] = obj; rec_dispatch(c, 0x800777FCu);          // FUN_800777fc (cull)         [0x80145510]
+  c->r[4] = obj; c->engine.cull.cullWrapperFlag2();     // FUN_800777FC (native)
   if (c->r[2] == 0) goto after_no_cull;                 // beqz v0 -> 0x8014560c        [0x80145518]
   {
     if (c->mem_r8(s4 + 7) == 1) {                       // lbu node[0x67]; bne 1 -> 0x80145548 [0x80145528]

@@ -39,6 +39,12 @@ public:
   // c->r[4] = node. Was ov_cone_cull_2b278.
   void coneCull2b278();
 
+  // cullWrapperFlag2 (FUN_800777FC): CULL WRAPPER variant of cullWrapper — same taxi shape (obj in
+  // c->r[4], camera-relative delta computed from obj+0x2E/0x32/0x36), but writes MODE flag
+  // *(u32)0x1F800084 = 2 (vs cullWrapper's 0 and cullWrap77acc's 4) before dispatching to the base
+  // cull body. Body from disas 0x800777FC..0x8007786C. 3 callers in beh_id_compare_motion_dispatch.
+  void cullWrapperFlag2();
+
   // enqueueQueueC (FUN_80077EFC): MANUAL push of `obj` onto queue C (0x1F800154/0x1F80015C, cap 28) —
   // sibling of enqueueQueueA/enqueueVisibleClass4. Same slti-N gate + push + counter bump shape.
   // Returns 0 on cap-hit, new 1-based count on success (matches recomp).

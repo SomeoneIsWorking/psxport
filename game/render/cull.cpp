@@ -358,6 +358,26 @@ void Cull::cullWrapper() { Core* c = core;
   performBaseCull();                           // FUN_8007712C native — was rec_dispatch
 }
 
+// FUN_800777FC — cull-wrapper variant: same taxi shape as cullWrapper (obj in c->r[4], deltas
+// computed from obj+0x2E/0x32/0x36 vs cam@0x1F8000D2/D6/DA), but writes 0x1F800084 = 2 (vs 0 for
+// cullWrapper). RE'd from disas 0x800777FC..0x8007786C. 3 callers in beh_id_compare_motion_dispatch.
+// Deltas match cullWrapper: coord[0] = D2, coord[1] = D6, coord[2] = DA — the local names in
+// cullWrapper (camz/camy for D6/DA) are misleading; the recomp subtracts D6 from obj+0x32 (r[6])
+// and DA from obj+0x36 (r[7]).
+void Cull::cullWrapperFlag2() { Core* c = core;
+  uint32_t obj = c->r[4];
+  uint16_t cam0 = (uint16_t)c->mem_r16(0x1F8000D2u);   // subtracted from obj+0x2E → r[5]
+  uint16_t cam1 = (uint16_t)c->mem_r16(0x1F8000D6u);   // subtracted from obj+0x32 → r[6]
+  uint16_t cam2 = (uint16_t)c->mem_r16(0x1F8000DAu);   // subtracted from obj+0x36 → r[7]
+  c->mem_w32(0x1F800080u, 0);
+  c->mem_w32(0x1F800084u, 2);
+  c->r[5] = (uint32_t)(int32_t)(int16_t)(uint16_t)((uint16_t)c->mem_r16(obj + 0x2E) - cam0);
+  c->r[6] = (uint32_t)(int32_t)(int16_t)(uint16_t)((uint16_t)c->mem_r16(obj + 0x32) - cam1);
+  c->r[7] = (uint32_t)(int32_t)(int16_t)(uint16_t)((uint16_t)c->mem_r16(obj + 0x36) - cam2);
+  c->r[4] = obj;
+  performBaseCull();                           // FUN_8007712C native
+}
+
 // FUN_80077ACC — cull-wrapper variant, caller-supplied position in a1/a2/a3 (not obj fields), flags
 // 0x1F800080=1 / 0x1F800084=4 (vs the 0/0 form above). Makes the position camera-relative then calls
 // the cull body 0x8007712C. Was ov_cull_wrap_77acc.
