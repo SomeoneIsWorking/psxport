@@ -1563,22 +1563,20 @@ static bool resolve_via_libcd(Core* c, uint32_t name_ptr, uint32_t buf,
   return true;
 }
 
-// FAITHFUL-mode fulfillment of the substrate's FUN_80044BD4 (sync_preload) residual writes for the
-// task-0 fresh tick's state-0 dispatch. Reproduces the writes to task-1's slot and the RNG stamp
-// at task-0+0x56 without dispatching FUN_80051F14 (which would leave task 1 runnable and crash on
-// the next scheduler tick's mid-body resume — see 1d3e794 revert rationale).
+// Scheduler simulation for the substrate's FUN_80044BD4 (sync_preload): reproduces its task-1 slot
+// spawn + done-flag handshake so the PSX cooperative scheduler's state matches. The RNG bump + RNG
+// stamp are NOT in here — those are game logic and fire unconditionally at the callsite.
 //
 // Safety cite (audit 2026-07-04): grep of game/ + runtime/ for readers of task-1's slot range
-// (0x801FE070..0x801FE0DE), task-0+0x56 (=0x801FE056), and task+0x02 = 0 hits. These are all
-// scheduler-internal — no game code reads them by absolute or task-relative address.
+// (0x801FE070..0x801FE0DE) and task+0x02 = 0 hits. Scheduler-internal, no PC readers.
 static constexpr uint32_t kTaskTableBase   = 0x801FE000u;
 static constexpr uint32_t kTaskSlotStride  = 0x70u;
 static constexpr uint32_t kDoneFlagAddr    = 0x1F80019Bu;
 static constexpr uint32_t kTaskFlag2Global = 0x801FE0DDu;
 static constexpr uint32_t kTaskFlag3Global = 0x801FE0DEu;
 static constexpr uint32_t kBiosTcbHandle   = 0xFF000000u;   // observed BIOS OpenTh return
-static void fulfill_task_spawn_and_wait(Core* c, uint32_t caller_task,
-                                        uint32_t task1_entry, uint8_t flag2, uint8_t flag3) {
+static void simulate_task_spawn_and_wait(Core* c, uint32_t task1_entry,
+                                         uint8_t flag2, uint8_t flag3) {
   const uint32_t task1 = kTaskTableBase + 1 * kTaskSlotStride;
   c->mem_w8 (kDoneFlagAddr,    0);
   c->mem_w8 (kTaskFlag2Global, flag3);
@@ -1588,7 +1586,6 @@ static void fulfill_task_spawn_and_wait(Core* c, uint32_t caller_task,
   c->mem_w32(task1 + 0x0C, task1_entry);
   c->mem_w32(task1 + 0x10, c->r[28]);       // FUN_80080930 returns gp
   c->mem_w8 (task1 + 0x6F, 0);
-  c->mem_w16(caller_task + 0x56, (uint16_t)c->rng.next());
   c->mem_w8 (kDoneFlagAddr, 1);
 }
 
@@ -1650,19 +1647,20 @@ void Engine::startBinStage() {
   uint32_t task = c->mem_r32(CUR_TASK);
   c->mem_w16(task + 0x4a, 0);
 
-  if (faithful) {
-    // FAITHFUL: reproduce state 0's work + FUN_80044BD4 side effects so B matches. Preload runs
-    // inline (task 1's "work" was the same preloadTexgroup we do here), then the RNG stamp +
-    // task-1 slot shim. Seed sm[0x48]=1 so stage0Advance skips its state-0 no-op tick.
-    asset.preloadTexgroup(0, 0);
-    fulfill_task_spawn_and_wait(c, task, /*task1_entry=*/0x80044F58u, 0, 0);
-    c->mem_w16(task + 0x48, 1);
-  } else {
-    // Slip #5: substrate FUN_80044BD4 advances RNG once via FUN_8009A450. PC skips FUN_80044BD4
-    // entirely — compensate with one manual bump to keep boot RNG cadence aligned with B.
-    (void)c->rng.next();
-    c->mem_w16(task + 0x48, 0);
-  }
+  // Game logic — fires on BOTH paths (per-user 2026-07-04, RNG is game logic):
+  //   preloadTexgroup(0)      — state-0 asset preload (a PC game needs this too)
+  //   task+0x56 = rng.next()  — FUN_80044BD4's RNG advance + seed stamp
+  //   sm[0x48] = 1            — advance stage-0 SM state 0 → 1
+  asset.preloadTexgroup(0, 0);
+  c->mem_w16(task + 0x56, (uint16_t)c->rng.next());
+  c->mem_w16(task + 0x48, 1);
+
+  // FAITHFUL-only fork: simulate the substrate cooperative scheduler's task-1 slot spawn + wait
+  // handshake (done_flag, task-1 slot fields). PC has no cooperative scheduler consuming those,
+  // so PC skips them — this is the coro-vs-nothing case, analogous to resolve_via_libcd vs
+  // resolve_via_iso9660 above (same effect: preload done; different scheduling strategy).
+  if (faithful) simulate_task_spawn_and_wait(c, /*task1_entry=*/0x80044F58u, 0, 0);
+
   fprintf(stderr, "[start.bin] file table built (%s); preload SM stepped across ticks via stage0Advance\n",
           faithful ? "faithful/libcd" : "pc/iso9660");
 }
@@ -1687,13 +1685,10 @@ int Engine::stage0Advance(uint8_t& step) { Core* c = core;
   //   step 5 = task-1 slot (extra padding to match measured coro total)
   //   step 6 = recomp state 3 tick: startStage(1)
   uint32_t task = c->mem_r32(CUR_TASK);
-  const bool faithful = c->game && c->game->mIsFaithful;
   switch (step) {
-    // State 0 work (preloadTexgroup + sm[0x48]:=1) — FAITHFUL runs it inline in startBinStage above,
-    // so this step is a no-op there. PC does it here to preserve the paced 8-tick cadence.
-    case 0:
-      if (!faithful) { c->engine.asset.preloadTexgroup(0, 0); c->mem_w16(task + 0x48, 1); }
-      break;
+    // State 0 work (preloadTexgroup + sm[0x48]:=1 + RNG stamp) now fires unconditionally at
+    // startBinStage exit — game logic, not gated. This tick is a pure cadence pad.
+    case 0: break;
     case 1:
       /* Slip #5: recomp gen_func_8010649C hits its second FUN_80044BD4 spawn around this scheduler
        * tick. */
