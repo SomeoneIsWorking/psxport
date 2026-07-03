@@ -172,7 +172,6 @@ set(PORT_SRC
   game/input/input.cpp
   game/ui/menu.cpp
   game/items/inventory.cpp
-  game/ui/hud.cpp
   game/render/lighting.cpp
   game/ui/engine_bav.cpp
   game/items/save.cpp

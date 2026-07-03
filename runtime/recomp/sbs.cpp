@@ -357,11 +357,43 @@ void Sbs::Impl::recordDivergence(uint32_t addr) {
   capBt(&mB->core, mBtB, sizeof mBtB);
   fprintf(stderr, "\n[sbs] *** DIVERGENCE at lockstep frame %u: 0x%08X..0x%08X (mode=%s) ***\n",
           mFrame, mDivAddr, mDivEnd, modeName());
+  // Print the diverging bytes side-by-side so it's clear WHAT differs, without needing debug server.
+  {
+    uint32_t n = mDivEnd - mDivAddr;
+    if (n > 64) n = 64;
+    fprintf(stderr, "[sbs] diff bytes (up to 64):\n");
+    fprintf(stderr, "  A @0x%08X:", mDivAddr);
+    for (uint32_t i = 0; i < n; i++) {
+      uint8_t va = isSpad(mDivAddr+i) ? mA->core.scratch[(mDivAddr+i)-0x1F800000u] : mA->core.mem_r8(mDivAddr+i);
+      fprintf(stderr, " %02X", va);
+    }
+    fprintf(stderr, "\n  B @0x%08X:", mDivAddr);
+    for (uint32_t i = 0; i < n; i++) {
+      uint8_t vb = isSpad(mDivAddr+i) ? mB->core.scratch[(mDivAddr+i)-0x1F800000u] : mB->core.mem_r8(mDivAddr+i);
+      fprintf(stderr, " %02X", vb);
+    }
+    fprintf(stderr, "\n");
+  }
+  // Print BOTH guest-stack backtraces — captured at the frame boundary AFTER the diverging write, but
+  // still pinpoints the region of code that just ran on each core.
+  fprintf(stderr, "[sbs] === FRAME-BOUNDARY BACKTRACE — core A ===\n%s", mBtA[0] ? mBtA : "(empty)\n");
+  fprintf(stderr, "[sbs] === FRAME-BOUNDARY BACKTRACE — core B ===\n%s", mBtB[0] ? mBtB : "(empty)\n");
+  // AUTO-ARM a write-watch on the diverging address so the very next divergent write (this frame or
+  // later) fires the write-site handler and prints the exact instruction/backtrace that DID the write.
+  // This is the "diverging operation" pinpoint the user asked for — the backtrace above only names
+  // the frame-boundary caller, not the writer. Skip in PREWATCH mode (already armed at boot).
+  if (!mWwArmed) {
+    mWwAddr = mDivAddr & ~3u; mWwArmed = true; mWwPersist = true; mWwHit = 0; mWwVa = mWwVb = 0;
+    mWwBtA[0] = mWwBtB[0] = 0;
+    mA->core.wwatch_arm(mWwAddr, mWwAddr + 4);
+    mB->core.wwatch_arm(mWwAddr, mWwAddr + 4);
+    fprintf(stderr, "[sbs] auto-armed write-watch on 0x%08X — the next divergent write will print its stack.\n", mWwAddr);
+  }
   if (mHaveDbgsrv) {
     fprintf(stderr, "[sbs] paused. Inspect over the debug server: `sbs diff`, `sbs bt`, `sbs watch`.\n");
     mA->dbg_server.setPaused(true);
   } else {
-    fprintf(stderr, "[sbs] (no debug server: logging and continuing; set PSXPORT_DEBUG_SERVER=1 to pause + `sbs diff`)\n");
+    fprintf(stderr, "[sbs] (no debug server: watch-armed; re-run with PSXPORT_SBS_PREWATCH=0x%08X to catch this frame's WRITE)\n", mDivAddr);
   }
 }
 
@@ -1136,11 +1168,17 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
         divergent = (v_written != v_other);              // asymmetric — pause iff writer's value ≠ other's current
       }
       if (divergent || !mWwPersist) {
-        fprintf(stderr, "[sbs] write-watch caught 0x%08X (A=%08X B=%08X, mask=%d) at frame %u — paused; see `sbs bt`.\n",
+        fprintf(stderr, "[sbs] *** WRITE-SITE caught 0x%08X (A=%08X B=%08X, mask=%d) at frame %u ***\n",
                 mWwAddr, mWwVa, mWwVb, mWwHit, mFrame);
+        if (mWwHit & 1) fprintf(stderr, "[sbs] === WRITE SITE — core A wrote 0x%08X=%08X ===\n%s",
+                                mWwAddr, mWwVa, mWwBtA[0] ? mWwBtA : "(empty)\n");
+        if (mWwHit & 2) fprintf(stderr, "[sbs] === WRITE SITE — core B wrote 0x%08X=%08X ===\n%s",
+                                mWwAddr, mWwVb, mWwBtB[0] ? mWwBtB : "(empty)\n");
         mWwArmed = false;
         mA->core.wwatch_arm(0, 0); mB->core.wwatch_arm(0, 0);
         mA->dbg_server.setPaused(true);
+        // Headless (no debug server): the write-site IS the answer — exit so the log ends with it.
+        if (!mHaveDbgsrv) { fprintf(stderr, "[sbs] headless: exiting after write-site capture.\n"); sbs_rl_shutdown(); exit(0); }
       }
       // Else: identical shared write in PREWATCH mode — silently continue and keep watching.
     }
