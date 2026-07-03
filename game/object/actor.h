@@ -66,18 +66,32 @@ public:
   //   at init, and its state-1 gate branches on the global scene-phase byte 0x800E7EAA == 0x22. That
   //   coupling names it: "this actor participates when the scene is in the 0x22 phase".
   void    setSceneMode(uint8_t v)     { c->mem_w8(obj + 0x2A, v); }
+  // triggerSub (obj+5, u8): SCENE-TRIGGER sub-state machine index for the sibling handler
+  //   beh_typed_init_scene_trigger (FUN_80073CD8). Dispatched via jumptable at 0x80016BE8 through
+  //   values 0..6: 0 = confirm-pending (subFlagX==3 gate), 1/5 = pick-scene-id + FUN_8007E110 into
+  //   sceneHandle, 2 = pad-edge trigger, 3 = release sceneHandle + go idle, 4 = enter-active, 6 =
+  //   FUN_80042728 completion. Separate axis from the oscillator subState (obj+6).
+  uint8_t triggerSub() const          { return c->mem_r8(obj + 0x05); }
+  void    setTriggerSub(uint8_t v)    { c->mem_w8(obj + 0x05, v); }
+
   // subState (obj+6, u8): SUB-state machine index for FUN_801337E4's 5-way dispatch (jumptable at
   //   0x80109E58). 0 = INIT (clear oscPhase, advance to 1), 1 = MAIN OSCILLATOR TICK (Trig::rcos of
   //   oscPhase + PRNG-jittered accumulate), 2/3/4 = TURN/SCAN sub-states that consult a pilot-actor
   //   region at 0x800E7E80 and set targetDelta. Semantics named from FUN_801337E4 RE (2026-07-03).
   uint8_t subState() const            { return c->mem_r8(obj + 0x06); }
   void    setSubState(uint8_t v)      { c->mem_w8(obj + 0x06, v); }
-  // subFlagX (obj+0x2B, u8): sub-behavior trigger consumed by FUN_801337E4 cases 1 and 4. When
-  //   non-zero, dispatch calls FUN_80077768(obj[+0x5F]<<4, obj[+0x56], 0) — a target-direction lookup
-  //   from a per-actor+per-pilot table — then sets targetDelta = ±256 based on its return and clears
-  //   subFlagX. Writer for subFlagX still un-RE'd.
-  uint8_t subFlagX() const            { return c->mem_r8(obj + 0x2B); }
-  void    setSubFlagX(uint8_t v)      { c->mem_w8(obj + 0x2B, v); }
+  // subFlag (obj+0x2B, u8): MULTI-PURPOSE byte set from OUTSIDE the handlers (writer still un-RE'd),
+  //   consumed by whichever handler owns this actor slot:
+  //     - FUN_801337E4 case [1]/[4] (background actor tick): when non-zero, dispatch FUN_80077768
+  //       (turn-direction lookup) and set targetDelta = ±256, then clear subFlag.
+  //     - beh_typed_init_scene_trigger state 1 case 0: gate on the specific value 3 as a
+  //       "confirm-pending" signal, then advance triggerSub and dispatch FUN_80040B48 per-type.
+  //   State-0 inits and various tails zero-clear it.
+  uint8_t subFlag() const             { return c->mem_r8(obj + 0x2B); }
+  void    setSubFlag(uint8_t v)       { c->mem_w8(obj + 0x2B, v); }
+  // subFlagX (legacy alias — retained for the earlier RE'd handler while callers migrate).
+  uint8_t subFlagX() const            { return subFlag(); }
+  void    setSubFlagX(uint8_t v)      { setSubFlag(v); }
   // counterB (obj+0x46, u8): retry-delay counter for FUN_801337E4's oscillator-tick gate. In sub-state 1
   //   the tick only fires when counterB == 0; otherwise counterB is decremented and the tick is
   //   skipped this frame. Zero-cleared at init by beh_typed_table_seed_gate.
@@ -117,6 +131,27 @@ public:
   uint16_t oscPhase_u() const         { return c->mem_r16(obj + 0x42); }
   void    setOscPhase(int16_t v)      { c->mem_w16(obj + 0x42, (uint16_t)v); }
   void    setOscPhase(uint16_t v)     { c->mem_w16(obj + 0x42, v); }
+
+  // ── World transform (EULER angles + a scene-entity handle) ───────────────────────────────────────
+  // rotX / rotY / rotZ (obj+0x54/0x56/0x58, u16 signed as needed): the object's Euler rotation used
+  //   by the scene walker (game/render/scene/scene_build.cpp reads these as `euler_to_R(ax,ay,az)`).
+  //   rotY (obj+0x56) is also passed as SIGNED-halfword arg into FUN_801337E4's subFlag turn-lookup
+  //   sub-behavior (state_one_tick's run_turn_setup — the "which direction is the pilot from us"
+  //   dispatch). beh_typed_init_scene_trigger's state-0 init zero-clears rotX/rotZ and writes rotY
+  //   per-type from a small set of magic angle presets (0x400/0xC00/0x4D0/…).
+  int16_t rotX() const                { return (int16_t)c->mem_r16(obj + 0x54); }
+  int16_t rotY() const                { return (int16_t)c->mem_r16(obj + 0x56); }
+  int16_t rotZ() const                { return (int16_t)c->mem_r16(obj + 0x58); }
+  void    setRotX(uint16_t v)         { c->mem_w16(obj + 0x54, v); }
+  void    setRotY(uint16_t v)         { c->mem_w16(obj + 0x56, v); }
+  void    setRotZ(uint16_t v)         { c->mem_w16(obj + 0x58, v); }
+
+  // sceneHandle (obj+0x14, u32): SCENE ENTITY handle returned by FUN_8007E110 in
+  //   beh_typed_init_scene_trigger's triggerSub == 1/5 branch. Read at case 3 as a foreign object
+  //   pointer whose obj[+4] state is written to 2 to RELEASE the linked scene entity when this
+  //   handler goes idle. Zero-cleared on release and on the state-0 init.
+  uint32_t sceneHandle() const        { return c->mem_r32(obj + 0x14); }
+  void    setSceneHandle(uint32_t v)  { c->mem_w32(obj + 0x14, v); }
 
   // ── Trigger box / range params ───────────────────────────────────────────────────────────────────
   // triggerParam (obj+0x60, i16): the signed per-object parameter passed as a1 into the state-1

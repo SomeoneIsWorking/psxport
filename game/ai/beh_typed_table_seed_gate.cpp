@@ -76,7 +76,7 @@ constexpr uint32_t TBL_A6F4 = 0x8014A6F4u;
 bool run_turn_setup(Actor& a) {
   Core* c = a.core();
   const uint32_t obj = a.addr();
-  int16_t a1v = (int16_t)c->mem_r16(obj + 0x56);
+  int16_t a1v = a.rotY();
   uint8_t a0v = c->mem_r8(obj + 0x5F);
   a.setSubState(4);
   c->r[4] = (uint32_t)a0v << 4;
