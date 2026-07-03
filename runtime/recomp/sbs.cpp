@@ -137,6 +137,13 @@ public:
   uint32_t mWwVa = 0, mWwVb = 0;
   char     mWwBtA[4096] = {0}, mWwBtB[4096] = {0};
 
+  // ---- ALLOCTRACE: per-frame count of writes to 0x800ED098 (the free-slot count) per core ----
+  // Attack (a) instrumentation: names the frame(s) where A allocates more than B. If A > B on a
+  // specific frame, that's where the 3-slot lead grows. Enabled with PSXPORT_SBS_ALLOCTRACE=1.
+  int      mAllocTraceOn = 0;
+  int      mAllocA = 0, mAllocB = 0;   // per-frame decrement count (any write value < current)
+  int      mAllocCumA = 0, mAllocCumB = 0;
+
   // ---- scripted headless input (PSXPORT_SBS_KEYS) ----
   std::vector<SbsKey> mKeys;
   bool                mKeysParsed = false;
@@ -479,6 +486,18 @@ void Sbs::Impl::dumpPpm(const char* path) {
 // EXACT guest backtrace + value. We DON'T pause here (mid-frame is unsafe) — the lockstep loop pauses
 // after both cores finish the frame, with both write sites captured.
 void Sbs::Impl::storeCb(Core* c, uint32_t a, uint32_t v) {
+  // ALLOCTRACE: sniff writes to 0x800ED098 (free-slot count) — count per-frame decrements per core.
+  // Fires INDEPENDENTLY of mWwArmed so it stays live across the whole run without arming a watch.
+  // Exact-address check (a == 0x800ED098): word-aligned would count neighboring-byte writes too.
+  if (mAllocTraceOn && a == 0x800ED098u) {
+    int which_a = (mB && c == &mB->core) ? 1 : 0;
+    uint32_t cur = c->mem_r16(0x800ED098u);
+    uint32_t next = v & 0xFFFFu;
+    if (next < cur) {   // decrement = allocation
+      if (which_a) { mAllocB++; mAllocCumB++; }
+      else         { mAllocA++; mAllocCumA++; }
+    }
+  }
   if (!mWwArmed || (a & ~3u) != (mWwAddr & ~3u)) return;
   int which = (mB && c == &mB->core) ? 1 : 0;
   if (which) { mWwVb = v; capBt(c, mWwBtB, sizeof mWwBtB); }
@@ -602,6 +621,10 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
   mem_set_store_watch_cb(&Sbs::storeCb);
   mSbs = true;
 
+  { const char* e = getenv("PSXPORT_SBS_ALLOCTRACE"); if (e && *e && strcmp(e, "0") != 0) mAllocTraceOn = 1; }
+  if (mAllocTraceOn)
+    fprintf(stderr, "[sbs] ALLOCTRACE on — per-frame decrement count of 0x800ED098 logged when A != B\n");
+
   // psx_fallback per mode: gameplay/full run PSX gameplay on core B; render runs native gameplay on both;
   // oracle runs the PURE interpreter+soft-rasterizer oracle on B (docs/oracle.md).
   int fb_b = (mMode == M_RENDER) ? 0 : 1;
@@ -610,6 +633,13 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
   if (mMode == M_ORACLE) { mB->core.use_interp = 1; mB->gpu.soft_gpu = 1; }
   load_exe(exePath, &mA->core); dc_boot_init(&mA->core);
   load_exe(exePath, &mB->core); dc_boot_init(&mB->core);
+
+  // ALLOCTRACE arm — after Cores exist. wwatch_check only fires the store callback for armed
+  // addresses; arm 0x800ED098 (word-aligned) on both cores so storeCb sees every write.
+  if (mAllocTraceOn) {
+    mA->core.wwatch_arm(0x800ED098u & ~3u, (0x800ED098u & ~3u) + 4);
+    mB->core.wwatch_arm(0x800ED098u & ~3u, (0x800ED098u & ~3u) + 4);
+  }
 
   // PSXPORT_SBS_PREWATCH=<hex> — arm SBS write-watch at boot so the FIRST divergent store to the
   // address is caught, not the first store AFTER the frame-boundary divergence pause (which happens
@@ -700,6 +730,13 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
         aP = aSig; bP = bSig;
       }
     }
+    // ALLOCTRACE: reset per-frame counters and, if A != B this frame, log both.
+    if (mAllocTraceOn && (mAllocA != mAllocB || (mAllocA + mAllocB) > 0 && (mAllocCumA != mAllocCumB))) {
+      fprintf(stderr, "[alloctrace] f%u  A: this=%d cum=%d  |  B: this=%d cum=%d  |  A-B this=%+d cum=%+d\n",
+              mFrame, mAllocA, mAllocCumA, mAllocB, mAllocCumB,
+              mAllocA - mAllocB, mAllocCumA - mAllocCumB);
+    }
+    mAllocA = 0; mAllocB = 0;
     mWwHit = 0; mWwVa = mWwVb = 0;
     // TRACE 2026-07-03: instrument where 0x800BF81E flips during a frame in RENDER mode.
     // Log the byte on both cores at each waypoint of the frame to name the exact stage.

@@ -1,6 +1,27 @@
 # Findings — SBS dual-core compare harness (PSXPORT_SBS)
 
-## FULL-mode 2-frame A→B lead ROOT-CAUSED: native DEMO/GAME dispatcher runs substates ~1 frame ahead of the coro/recomp path — introduced twice (+1 at DEMO leave, +1 at GAME cutscene entry); durable `PSXPORT_SBS_STAGETRACE=1` diagnostic landed
+## 3-slot 0x800ED098 delta ISOLATED to Sop::fieldMode case 0 spawn loop — new `PSXPORT_SBS_ALLOCTRACE=1` per-frame allocator counter landed
+- **finding (2026-07-03, attack (a) probe on FUN_8007AAE8):** Landed a per-frame per-core write-counter for 0x800ED098 in the SBS harness (`PSXPORT_SBS_ALLOCTRACE=1`). Logs every frame where A's allocation count differs from B's, with per-frame and cumulative deltas. Zero cost when off; exact-address check (a == 0x800ED098) so neighboring bytes don't false-count.
+- **result from a clean SBS FULL-mode run** (`$CLAUDE_JOB_DIR/tmp/alloctrace4.log`):
+  ```
+  f61  A: this=47  cum=47  | B: this=0   cum=0   | delta this=+47 cum=+47   (initial spawn on A)
+  f62  A: this=0   cum=47  | B: this=47  cum=47  | delta this=-47 cum=+0    (B mirrors — converged)
+  f117 A: this=343 cum=390 | B: this=0   cum=47  | delta this=+343 cum=+343 (SOP intro spawn burst — A)
+  f118 A: this=67  cum=457 | B: this=340 cum=387 | delta this=-273 cum=+70  (B mirrors 340 of 343)
+  f119 A: this=1   cum=458 | B: this=67  cum=454 | delta this=-66 cum=+4    (B still catching up)
+  f120 A: this=0   cum=458 | B: this=1   cum=455 | delta this=-1  cum=+3   <-- FIRST +3 lands here
+  f158 A: this=322 cum=780 | B: this=319 cum=774 | delta this=+3  cum=+6   <-- SECOND +3 (area transition)
+  f159..f190 A=B every frame                     | cum stays at +6
+  ```
+- **the +3 lead lands in TWO discrete events, each +3 exactly:**
+  1. **f117-f120 SOP intro window** — A spawn burst is 3 objects LARGER than B's. Cumulative goes from 0 → +3.
+  2. **f158 area transition** — A spawns 322 vs B 319, diff of exactly 3. Cumulative goes from +3 → +6.
+- **exact number 3 = Sop::fieldMode case 0's spawn loop count** (sop.cpp:252-261): `for (int i = 0; i < 3; i++) c->engine.spawn.dispatch(3, 3, 1)`. The loop spawns 3 scene objects per SOP entry. Both events are SOP case 0 entries (initial SOP intro at f117-f120 + area transition at f158). **The 3 spawn.dispatch calls on native allocate 3 slots that the corresponding recomp path (rec_dispatch(0x8007A980) inside ov_sop_gen_80109450 L_801094F8 loop) does NOT allocate on coro side.** Both codepaths do call the spawn, so the discrepancy is INSIDE the spawn implementation: native `Spawn::dispatch` decrements 0x800ED098 for its allocation, the recomp body of 0x8007A980 does something DIFFERENT (uses another pool, doesn't reach the decrement path, or the callee tree diverges).
+- **cum delta discrepancy (+6 in trace vs +3 in actual ed098 count):** allocator RELEASES (increments of 0x800ED098) also differ — A has 3 more releases than B, netting the visible +3 in current free-slot count. The trace counts decrements only.
+- **fix direction (NOT landed — needs next session):** decomp `FUN_8007A980` (the spawn function in the SOP overlay) vs native `Spawn::dispatch` and compare — find which path each takes for allocation. Likely one uses the 0x800ED098 pool via FUN_8007AAE8 (the free-slot allocator we RE'd earlier) and the other uses a different pool or skips a leaf. Once identified: align the codepaths so both allocate through the same pool for the SOP objects, and the +3 delta closes.
+- **refs:** runtime/recomp/sbs.cpp `mAllocTraceOn`/`storeCb` + arm block, game/scene/sop.cpp:252-261 (the 3-iteration spawn loop — the exact-count source), generated/ov_sop_shard_0.c L_801094F8 (recomp equivalent), scratch/decomp/functions.csv (find FUN_8007A980 + FUN_8007AAE8 bodies for the next decomp), $CLAUDE_JOB_DIR/tmp/alloctrace4.log (session capture).
+
+## FULL-mode 2-frame A→B lead ROOT-CAUSED: native DEMO/GAME dispatcher runs substates ~1 frame ahead of the coro/recomp path — introduced twice (+1 at DEMO leave, +1 at GAME cutscene entry); durable `PSXPORT_SBS_STAGETRACE=1` diagnostic landed [PARTIALLY CLOSED — Slip #2 fixed 31fa879; Slip #1 residual remains, tracked below]
 - **finding (2026-07-03, attack (a) — stagetrace of sm[0x48..0x4e] + task-entry per core per lockstep frame):** In `PSXPORT_SBS_MODE=full` with the new `PSXPORT_SBS_STAGETRACE=1` diagnostic (runtime/recomp/sbs.cpp), the 2-frame A→B lead that produces the `0x800ED098` off-by-3 divergence has TWO distinct +1-frame slips, both at NATIVE-vs-RECOMP stage-body cadence boundaries. Not a specific opcode bug — a structural pacing gap.
 - **evidence — the exact slip frames** (from `$CLAUDE_JOB_DIR/tmp/stagetrace.log`, condensed):
   ```
