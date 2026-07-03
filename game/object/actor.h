@@ -114,14 +114,6 @@ public:
   //   raw pointer for now.
   uint32_t renderRec() const          { return c->mem_r32(obj + 0xC0); }
 
-  // ── Oscillation / motion (u16 / i16) ─────────────────────────────────────────────────────────────
-  // oscBase (obj+0x32, u16): per-type oscillation base parameter. Seeded from the per-type halfword
-  //   table 0x8014A6E4 keyed by type() at init. Read+adjusted by FUN_801337E4 case [2] POST-COUNTER-A
-  //   (pilot-consult recomputes it as osc_base_table(type) ± (pilotState - 2) * 6, then clamps
-  //   against a per-type {lo, hi} table at 0x8014A6F4).
-  uint16_t oscBase_u() const          { return c->mem_r16(obj + 0x32); }
-  int16_t  oscBase() const            { return (int16_t)c->mem_r16(obj + 0x32); }
-  void    setOscBase(uint16_t v)      { c->mem_w16(obj + 0x32, v); }
   // oscPhase (obj+0x42, i16 / u16 both used): SBS TARGET-#4 accumulator — the angle-space fixed-point
   //   phase that feeds the case [1] Trig::rcos oscillator in FUN_801337E4 (accumulates +68 + rng>>8
   //   each active tick; the PRNG at FUN_8009A450 seeds off 0x80105EE8 is the almost-certain
@@ -131,6 +123,54 @@ public:
   uint16_t oscPhase_u() const         { return c->mem_r16(obj + 0x42); }
   void    setOscPhase(int16_t v)      { c->mem_w16(obj + 0x42, (uint16_t)v); }
   void    setOscPhase(uint16_t v)     { c->mem_w16(obj + 0x42, v); }
+
+  // ── World position (u16 signed as needed; halfword stride 4) ────────────────────────────────────
+  // posX / posY / posZ (obj+0x2E/0x32/0x36): the object's world position, read as HALFWORDS at
+  //   stride 4 (skipping padding at 0x2C/0x30/0x34). Confirmed from the CULL WRAPPER FUN_8007778C
+  //   (subtracts camera scratchpad 0x1F8000D2/D6/DA from these three) and from the scene walker
+  //   (game/render/scene/scene_build.cpp reads them as `P[3]` before the model->view compose).
+  //
+  //   NOTE: FUN_801337E4's section-A reset and per-type seed (osc_base_table) write posY (obj+0x32),
+  //   which had earlier been mis-named `oscBase` in this file. Its FUN_801337E4 role is a
+  //   "background-actor Y baseline" — the case [2] pilot-consult adjusts it by ±(pilotState-2)*6 and
+  //   clamps against TBL_A6F4[type], which is world-Y clamping (per-type Y range). Legacy oscBase
+  //   getters/setters retained below as aliases while the earlier commit's docstrings migrate.
+  int16_t  posX() const               { return (int16_t)c->mem_r16(obj + 0x2E); }
+  int16_t  posY() const               { return (int16_t)c->mem_r16(obj + 0x32); }
+  int16_t  posZ() const               { return (int16_t)c->mem_r16(obj + 0x36); }
+  uint16_t posX_u() const             { return c->mem_r16(obj + 0x2E); }
+  uint16_t posY_u() const             { return c->mem_r16(obj + 0x32); }
+  uint16_t posZ_u() const             { return c->mem_r16(obj + 0x36); }
+  void     setPosX(uint16_t v)        { c->mem_w16(obj + 0x2E, v); }
+  void     setPosY(uint16_t v)        { c->mem_w16(obj + 0x32, v); }
+  void     setPosZ(uint16_t v)        { c->mem_w16(obj + 0x36, v); }
+  // Legacy oscBase aliases (same field as posY) — retained for the earlier RE arc's callers while
+  // they migrate; new code should use posY / setPosY directly.
+  int16_t  oscBase() const            { return posY(); }
+  uint16_t oscBase_u() const          { return posY_u(); }
+  void     setOscBase(uint16_t v)     { setPosY(v); }
+
+  // ── Bounds-cull check (was FUN_8007778C thin wrapper) ────────────────────────────────────────────
+  // Computes signed 16-bit deltas from the object's world (posX/Y/Z) to the camera position at
+  // scratchpad 0x1F8000D2/D6/DA, zeros the two cull-context slots at 0x1F800080/84 (state
+  // resets), then dispatches the actual 5-way cull check FUN_8007712C(node, dx, dy, dz) which
+  // returns the cull-mode result in c->r[2]. Direct in-header — no separate .cpp needed for such
+  // a thin call. FUN_8007712C itself is still un-RE'd (5-way dispatch on scratchpad byte
+  // 0x1F800084); the RE arc that names it turns this into fully-native code.
+  uint32_t boundsCull() {
+    int16_t dx = (int16_t)(posX_u() - c->mem_r16(0x1F8000D2u));
+    int16_t dy = (int16_t)(posY_u() - c->mem_r16(0x1F8000D6u));
+    int16_t dz = (int16_t)(posZ_u() - c->mem_r16(0x1F8000DAu));
+    c->mem_w32(0x1F800080u, 0);
+    c->mem_w32(0x1F800084u, 0);
+    c->r[4] = obj;
+    c->r[5] = (uint32_t)(int32_t)dx;
+    c->r[6] = (uint32_t)(int32_t)dy;
+    c->r[7] = (uint32_t)(int32_t)dz;
+    void rec_dispatch(Core*, uint32_t);
+    rec_dispatch(c, 0x8007712Cu);
+    return c->r[2];
+  }
 
   // ── World transform (EULER angles + a scene-entity handle) ───────────────────────────────────────
   // rotX / rotY / rotZ (obj+0x54/0x56/0x58, u16 signed as needed): the object's Euler rotation used

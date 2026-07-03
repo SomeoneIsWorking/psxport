@@ -23,7 +23,9 @@
 // records both consumers.
 //
 // STILL OPAQUE (rec_dispatch by address until each is RE'd on its own arc):
-//   - FUN_8007778C   cull tick (state 1 head; result deliberately ignored per RE)
+//   - FUN_8007712C   the 5-way bounds-cull body dispatched by Actor::boundsCull (jumptable at
+//                    0x80016CC0 on scratchpad byte *(0x1F800084); mode 4 area override for cull
+//                    mode 2). Thin wrapper FUN_8007778C is now native.
 //   - FUN_80040B48   per-type CONFIRM helper called via `confirm_set5` (returns nonzero → triggerSub=5)
 //   - FUN_8007E110   scene-entity spawn — returns a node pointer stored in Actor::sceneHandle
 //   - FUN_80042728   completion check for the FUN_8007E110 handshake
@@ -51,7 +53,8 @@ constexpr uint32_t BEH_FN = 0x80073CD8u;
 enum class Sta : uint8_t { Init = 0, Active = 1, Idle = 2, Despawn = 3 };
 
 // Un-RE'd sub-behaviors still called via rec_dispatch.
-constexpr uint32_t SUB_CULL_TICK        = 0x8007778Cu;
+// (FUN_8007778C bounds-cull wrapper is NATIVE now via Actor::boundsCull; the 5-way FUN_8007712C
+//  body it dispatches remains opaque and stays a rec_dispatch inside boundsCull.)
 constexpr uint32_t SUB_CONFIRM_HELPER   = 0x80040B48u;   // FUN_80040B48(a0): confirm; return nonzero → advance
 constexpr uint32_t SUB_SCENE_SPAWN      = 0x8007E110u;   // FUN_8007E110(a0, 0): returns sceneHandle
 constexpr uint32_t SUB_COMPLETION_CHECK = 0x80042728u;
@@ -166,7 +169,7 @@ void beh_typed_init_scene_trigger(Core* c) {
   }
 
   // ---- STATE 1 (ACTIVE): cull tick (result ignored), then triggerSub dispatch ------------------
-  c->r[4] = a.addr(); rec_dispatch(c, SUB_CULL_TICK);            // cull; ignored
+  a.boundsCull();                                                // FUN_8007778C (thin wrapper native); result ignored per RE
 
   uint8_t sub = a.triggerSub();
   if (sub < 7) {                                                 // JT 0x80016BE8
