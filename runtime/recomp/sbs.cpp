@@ -225,7 +225,21 @@ public:
   bool  isCdCacheNoise(uint32_t a) const;
   bool  isAudioNoise(uint32_t a) const;
   bool  isObjectPoolNoise(uint32_t a) const;
-  bool  isDiffNoise(uint32_t a) const { return isRenderRegion(a) || isCdCacheNoise(a) || isAudioNoise(a) || isObjectPoolNoise(a); }
+  bool  isDiffNoise(uint32_t a) const {
+    // Guest-stack area (0x801F0000..0x801FE000): both cores' coroutines use this area with
+    // different call chains. Recomp uses coro yields at deep call depths (leaves stack frames
+    // with saved regs from many nested calls); native runs synchronous so leaves nothing. Stack
+    // divergence is implementation state, not gameplay state — no code reads a specific stack
+    // offset by absolute address.
+    if (a >= 0x801F0000u && a < 0x801FE000u) return true;
+    // Task_0 register-save area (0x801FE010..0x801FE048): coro/setjmp context slots. Native (A)
+    // and recomp (B) save different context here — native has no coroutine to yield so most
+    // slots stay 0, while recomp stores callee-saved regs from the yielded task body. Neither
+    // side's game logic READS these slots; they're strictly resume-context storage. Task fields
+    // at +0x48 onward (sm[0x48] and beyond) ARE gameplay state and MUST be diffed.
+    if (a >= 0x801FE010u && a < 0x801FE048u) return true;
+    return isRenderRegion(a) || isCdCacheNoise(a) || isAudioNoise(a) || isObjectPoolNoise(a);
+  }
   static bool isSpad(uint32_t a) { return a >= 0x1F800000u && a < 0x1F800400u; }
   void  capBt(Core* c, char* buf, size_t n);
   bool  navStep(Core* c, Nav& nv, uint32_t f, const char* tag);
@@ -304,6 +318,7 @@ bool Sbs::Impl::isAudioNoise(uint32_t a) const {
   if (a >= 0x80105848u && a < 0x80105E00u) return true;   // libsnd voice state block
   return false;
 }
+
 
 // Object-list arena offset. In FULL / GAMEPLAY modes native gp (core A) and PSX substrate gp (core B)
 // allocate their per-list-slot object nodes at different arena positions (their pool head starts at the
