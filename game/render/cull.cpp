@@ -76,7 +76,14 @@ static unsigned isqrt32(unsigned v) { unsigned r = 0, b = 1u << 30; while (b > v
 #ifndef CULL_FAR_MULT
 #define CULL_FAR_MULT 4   // ×4 the stock per-state far limits (4097..7169 → ~16388..28676)
 #endif
-static int cull_far_mult() {
+// Faithful/PC-mode split (2026-07-03): under SBS the harness compares native gameplay against the
+// recomp REFERENCE which has stock (=1) cull limits. Returning the ×4 enhancement under SBS
+// creates the seemingly-benign divergence at 0x800EE489 (Cull::coneCull2b278 writes obj+1=1 on A
+// for objects outside the stock cone but inside the extended one; recomp culls them). Live game
+// still gets the ×4 boost — the two modes deliberately do not converge. Same shape as Slip #3
+// (docs/findings/sbs.md).
+static int cull_far_mult(Core* c) {
+  if (c && c->game && c->game->sbs) return 1;   // FAITHFUL mode — stock cull for SBS parity
   static int m = -1;
   if (m < 0) { const char* s = cfg_str("PSXPORT_CULL_FAR_MULT"); int v = s ? atoi(s) : 0;
                m = (v > 0) ? v : CULL_FAR_MULT; }
@@ -117,7 +124,7 @@ static CullDecision cull_decide(Core* c) {
     }
     // Issue #22: extend the far limit (the per-state `fr` above is the byte-exact stock value;
     // we keep it readable and apply the named multiplier here so the kept set reaches further out).
-    fr *= cull_far_mult();
+    fr *= cull_far_mult(c);
     if ((int)dist < nr || (int)dist >= fr) { R.kept = 0; }
     else {
       int32_t depth = (int32_t)((uint32_t)(fx*dx) + (uint32_t)(fy*dy) + (uint32_t)(fz*dz));  // addu-wrap
@@ -176,7 +183,7 @@ static int cone_cull_2b278(Core* c, int commit) {
   // Issue #22: this standalone view-cone cull (FUN_8002B278) shares the 7169 stock far; extend it with
   // the same named CULL_FAR_MULT so distant world geometry on this path also keeps rendering. The cone
   // threshold below stays a relative dot >= dist*3424 (independent of far), so only the far gate moves.
-  uint32_t far_lim = 7169u * (uint32_t)cull_far_mult();
+  uint32_t far_lim = 7169u * (uint32_t)cull_far_mult(c);
   if (dist < 512u || dist >= far_lim) return 0;
   int32_t dot = (int32_t)((uint32_t)(fx*dx) + (uint32_t)(fy*dy) + (uint32_t)(fz*dz));  // addu-wrap
   int64_t thr = (int64_t)dist * 3424;                                                  // widened (dist now > 7169 possible)

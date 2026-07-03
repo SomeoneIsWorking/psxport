@@ -43,6 +43,7 @@
 #include <unistd.h>
 #include <tuple>
 #include <map>
+#include <execinfo.h>
 #include <set>
 #include <algorithm>
 #include <csignal>
@@ -148,6 +149,14 @@ public:
   uint32_t mWwRaA = 0,  mWwRaB = 0;
   uint32_t mWwSpA = 0,  mWwSpB = 0;
   uint32_t mWwCountA = 0, mWwCountB = 0;   // #stores per core landing on mWwAddr in the rewind frame
+  // Host-side C-stack backtrace at write time. c->pc is often STALE (reflects the last recomp fn
+  // wrapper's set, not the actual writer), so the guest-side pc/ra alone can lie about who wrote.
+  // The host backtrace names the ACTUAL C function running when mem_w8/w16/w32 fires — that's the
+  // uncontested writer. Only the LAST fire per core is retained (cheap): for a COUNT-MISMATCH it's
+  // the write whose value survives to the frame boundary; for a single fire it IS that fire.
+  static constexpr int WW_HOST_BT_DEPTH = 24;
+  void*    mWwHostBtA[WW_HOST_BT_DEPTH] = {}, *mWwHostBtB[WW_HOST_BT_DEPTH] = {};
+  int      mWwHostBtNA = 0, mWwHostBtNB = 0;
 
   // ---- pre-step snapshot (for one-frame rewind on divergence) ----
   // Fixes the "wwatch arms AFTER the divergent frame already ran" defect: we snapshot both cores'
@@ -400,6 +409,7 @@ void Sbs::Impl::rewindAndArm(uint32_t addr) {
   mWwHit = 0; mWwVa = mWwVb = 0; mWwBtA[0] = mWwBtB[0] = 0;
   mWwPcA = mWwPcB = mWwRaA = mWwRaB = mWwSpA = mWwSpB = 0;
   mWwCountA = mWwCountB = 0;
+  mWwHostBtNA = mWwHostBtNB = 0;
   mA->core.wwatch_arm(addr & ~3u, (addr & ~3u) + 4);
   mB->core.wwatch_arm(addr & ~3u, (addr & ~3u) + 4);
   mRewindActive = true;
@@ -661,9 +671,11 @@ void Sbs::Impl::storeCb(Core* c, uint32_t a, uint32_t v) {
   if (!mWwArmed || (a & ~3u) != (mWwAddr & ~3u)) return;
   int which = (mB && c == &mB->core) ? 1 : 0;
   if (which) { mWwVb = v; capBt(c, mWwBtB, sizeof mWwBtB);
-               mWwPcB = c->pc; mWwRaB = c->r[31]; mWwSpB = c->r[29]; mWwCountB++; }
+               mWwPcB = c->pc; mWwRaB = c->r[31]; mWwSpB = c->r[29]; mWwCountB++;
+               mWwHostBtNB = backtrace(mWwHostBtB, WW_HOST_BT_DEPTH); }
   else       { mWwVa = v; capBt(c, mWwBtA, sizeof mWwBtA);
-               mWwPcA = c->pc; mWwRaA = c->r[31]; mWwSpA = c->r[29]; mWwCountA++; }
+               mWwPcA = c->pc; mWwRaA = c->r[31]; mWwSpA = c->r[29]; mWwCountA++;
+               mWwHostBtNA = backtrace(mWwHostBtA, WW_HOST_BT_DEPTH); }
   mWwHit |= (1 << which);
   if (mWwPersist) {  // PREWATCH's continuous logging — per-store attribution to A vs B
     // pc = c->pc (fn entry set by the last wrapper — often STALE, reflecting the last jal-callee).
@@ -1323,12 +1335,11 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
         // node appearing on a list on one core but not the other names an upstream spawn/list-migration
         // divergence — the object was moved between lists asymmetrically. Cheap: 200-node cap per list.
         {
-          // The write addr is usually to obj+1 (T2OBJ_RENDER_FLAG at the byte after the type slot).
-          // Ok'ed to alias-strip: (mWwAddr - 1) & ~3u for u32-aligned reads.
-          uint32_t obj_base = (mWwAddr >= 1) ? (mWwAddr - 1) : mWwAddr;
-          // Show the T2 offsets, but read AT-BASE (byte read) so the offsets displayed match the
-          // T2OBJ_* constants directly. u32-aligned reads snap to obj_base & ~3.
-          uint32_t obj_r = obj_base & ~3u;
+          // Object base heuristic: the wwatch fires on obj+T2OBJ_RENDER_FLAG (=+1) for T2 nodes.
+          // mWwAddr is the WORD-aligned range the wwatch armed on (byte addr & ~3u). For a T2
+          // node whose base is word-aligned (typical), obj_base = mWwAddr. If the store target
+          // byte is offset 1 (0x800EE489) and mWwAddr = 0x800EE488, then obj = mWwAddr.
+          uint32_t obj_base = mWwAddr;
           if (obj_base >= 0x800E0000u && obj_base < 0x80200000u) {
             auto find_on_list = [&](Core* c, uint32_t head_addr, uint32_t target, int* pos_out) -> int {
               uint32_t head = c->mem_r32(head_addr);
@@ -1369,20 +1380,61 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
               fprintf(stderr, "[sbs]   +0x%02X byte: A=0x%02X  B=0x%02X  %s\n",
                       off, a, b, a == b ? "match" : "!! DIVERGE !!");
             }
-            // Key u32 fields at natural alignment.
+            // Key u32 fields at natural alignment. Read at obj_base + off (obj_base is aligned since
+            // T2 records live on aligned addresses).
             for (uint32_t off : {0x1Cu, 0x24u}) {
-              uint32_t va = (obj_base & ~3u) + off;
+              uint32_t va = obj_base + off;
               uint32_t a4 = mA->core.mem_r32(va), b4 = mB->core.mem_r32(va);
               fprintf(stderr, "[sbs]   +0x%02X word (@%08X): A=0x%08X  B=0x%08X  %s%s\n",
                       off, va, a4, b4, a4 == b4 ? "match" : "!! DIVERGE !!",
                       off == 0x1Cu ? "  (T2OBJ_HANDLER)" : "  (T2OBJ_NEXT)");
             }
+            // Object position (obj+0x2C/2E/30) — cull inputs. If they diverge, the divergence is
+            // upstream in physics/spawn, not in the cull itself.
+            fprintf(stderr, "[sbs] === object position (cull input) + camera scratchpad ===\n");
+            for (uint32_t off : {0x2Cu, 0x2Eu, 0x30u}) {
+              uint32_t va = obj_base + off;
+              int16_t a = (int16_t)mA->core.mem_r16(va), b = (int16_t)mB->core.mem_r16(va);
+              fprintf(stderr, "[sbs]   obj+0x%02X (s16): A=%d  B=%d  %s\n",
+                      off, a, b, a == b ? "match" : "!! DIVERGE !!");
+            }
+            // Camera pos + fwd vec (scratchpad, cull-cone inputs).
+            for (uint32_t va : {0x1F8000D2u, 0x1F8000D6u, 0x1F8000DAu, 0x1F8000E8u, 0x1F8000EAu, 0x1F8000ECu}) {
+              int16_t a = (int16_t)mA->core.mem_r16(va), b = (int16_t)mB->core.mem_r16(va);
+              const char* what =
+                  va == 0x1F8000D2u ? "cam.x" : va == 0x1F8000D6u ? "cam.y" : va == 0x1F8000DAu ? "cam.z" :
+                  va == 0x1F8000E8u ? "fwd.x" : va == 0x1F8000EAu ? "fwd.y" : "fwd.z";
+              fprintf(stderr, "[sbs]   @0x%08X (%s, s16): A=%d  B=%d  %s\n",
+                      va, what, a, b, a == b ? "match" : "!! DIVERGE !!");
+            }
           }
         }
-        if (mWwHit & 1) fprintf(stderr, "[sbs] === WRITE SITE — core A wrote 0x%08X=%08X ===\n%s",
-                                mWwAddr, mWwVa, mWwBtA[0] ? mWwBtA : "(empty)\n");
-        if (mWwHit & 2) fprintf(stderr, "[sbs] === WRITE SITE — core B wrote 0x%08X=%08X ===\n%s",
-                                mWwAddr, mWwVb, mWwBtB[0] ? mWwBtB : "(empty)\n");
+        // Host-side C-stack backtrace at the last-captured wwatch fire per core. Cuts through the
+        // stale-c->pc problem: the guest pc/ra can lie (a wrapper set c->pc long ago and the store
+        // happens elsewhere), but the host backtrace names the ACTUAL C function running when
+        // mem_w8/w16/w32 fired — the uncontested writer. Filter with symres or head -N as needed.
+        auto dump_host_bt = [](const char* tag, void** bt, int n) {
+          if (n <= 0) { fprintf(stderr, "[sbs] === HOST BACKTRACE — %s (empty) ===\n", tag); return; }
+          fprintf(stderr, "[sbs] === HOST BACKTRACE — %s (%d frames, last-fire) ===\n", tag, n);
+          char** syms = backtrace_symbols(bt, n);
+          if (syms) {
+            for (int i = 0; i < n; i++) fprintf(stderr, "[sbs]   #%d %s\n", i, syms[i]);
+            free(syms);
+          } else {
+            // backtrace_symbols failed (rare); fall back to raw ptrs so we still have SOMETHING.
+            for (int i = 0; i < n; i++) fprintf(stderr, "[sbs]   #%d %p (unresolved)\n", i, bt[i]);
+          }
+        };
+        if (mWwHit & 1) {
+          fprintf(stderr, "[sbs] === WRITE SITE — core A wrote 0x%08X=%08X ===\n%s",
+                  mWwAddr, mWwVa, mWwBtA[0] ? mWwBtA : "(empty)\n");
+          dump_host_bt("core A", mWwHostBtA, mWwHostBtNA);
+        }
+        if (mWwHit & 2) {
+          fprintf(stderr, "[sbs] === WRITE SITE — core B wrote 0x%08X=%08X ===\n%s",
+                  mWwAddr, mWwVb, mWwBtB[0] ? mWwBtB : "(empty)\n");
+          dump_host_bt("core B", mWwHostBtB, mWwHostBtNB);
+        }
         mWwArmed = false;
         mA->core.wwatch_arm(0, 0); mB->core.wwatch_arm(0, 0);
         mA->dbg_server.setPaused(true);
