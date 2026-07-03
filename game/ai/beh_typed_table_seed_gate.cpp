@@ -14,28 +14,25 @@
 //     - state >= 4                 no-op.
 //
 // The FIELD SEMANTICS the handler reads/writes are named on class Actor (game/object/actor.h) — no more
-// `obj[+0x42]` in the code, each access is a typed named method. Fields introduced by this handler's RE:
-//   state / alive / renderMode / type / counterA / sceneMode / counterB / oscBase / oscPhase /
-//   triggerParam / stateEcho / boxX/Y/Z/W. `oscPhase` is the SBS target-#4 accumulator; its zero-init
-//   here is the state-1-branch reset that ov_a00_gen_801337E4's PRNG (FUN_8009A450, seed at 0x80105EE8)
-//   walks each active tick.
+// `obj[+0x42]` in the code, each access is a typed named method.
 //
-// STILL OPAQUE (recorded so a future RE arc closes them; the un-owned sub-behaviors here index Actor
-// fields the RE didn't yet name completely):
-//   - FUN_801337E4   state-1 sub-state machine (5-way jumptable at 0x80109E58). RE'd in this session's
-//                    docs finding (docs/findings/sbs.md target-#4 upstream — the full semantic model of
-//                    subState 0..4, the oscillator tick body = Trig::rcos(oscPhase)>>5 into
-//                    renderRec[+0xC] + oscPhase += 68 + (c->rng.next()>>8), and the turn/scan sub-states
-//                    that consult a pilot-actor region at 0x800E7E80). Actor's subState / subFlagX /
-//                    retryDelay / targetDelta / renderRec / counterA fields are named from that RE.
-//                    NATIVE PORT PENDING: still called via rec_dispatch here so the beh_ handler stays
-//                    small; the port lands in the next RE arc using the now-named Actor surface (plus
-//                    class Rng already at c->rng.next() and class Trig at c->trig.rcos).
+// STATE-1 TICK sub-behavior (guest FUN_801337E4) IS NOW OWNED NATIVE HERE (state_one_tick, below). RE'd
+// from disas 0x801337E4..0x80133C10 on scratch/bin/field_ram_230.bin. Semantic model documented in
+// docs/findings/sbs.md ("FUN_801337E4 RE'd semantic model") — a 5-way sub-state machine on subState
+// (jumptable at 0x80109E58: INIT / MAIN OSCILLATOR / POST-COUNTER-A / TURN-DIRECTION / TURN-EXECUTE)
+// driving a background-actor oscillate + occasionally-turn animation using Trig::rcos(oscPhase) and the
+// PC-native class Rng (c->rng.next() implements FUN_8009A450 with seed at 0x80105EE8).
+//
+// STILL OPAQUE (recorded so a future RE arc closes them):
 //   - FUN_8004766C   per-object update called after box seed + inside render tail (matrix build?)
 //   - FUN_80077EBC   scenePhase==0x22 sub-behavior body
 //   - FUN_800778E4   spatial trigger check taking (obj, triggerParam) -> 0/nonzero (IN/OUT)
-//   - FUN_80077768   sub-behavior FUN_801337E4 calls with (obj[+0x5F]<<4, obj[+0x56], 0) —
-//                    target-direction lookup (returns nonzero → targetDelta = +256, zero → -256).
+//   - FUN_80077768   turn-direction lookup sub-behavior called by state_one_tick's subFlagX path
+//                    (args: obj[+0x5F]<<4, obj[+0x56], 0; returns nonzero → targetDelta=+256, else -256)
+//   - 0x800E7E80     "pilot-actor" region read by state_one_tick's TURN sub-states (mode @+0x147, yaw
+//                    @+0x58, state @+0x168). Likely Tomba's actor slot; future RE candidate for a
+//                    `class PilotActor` view.
+//   - 0x8014A6F4     per-type CLAMP-BAND table {lo, hi} for oscBase (case [2] pilot-consult clamp).
 // Kept as `rec_dispatch` (recomp substrate) — the correct escape hatch until each is RE'd on its own.
 //
 // PORTED OWNERSHIP RULES (per project CLAUDE.md): CONTROL FLOW + every named-field write owned native,
@@ -47,6 +44,8 @@
 #include "cfg.h"
 #include "spawn.h"            // class Spawn (c->engine.spawn.despawn)
 #include "graphics_bind.h"    // GraphicsBind::recordInit / renderUpdate
+#include "rng.h"              // class Rng (c->rng.next()) — FUN_8009A450 (seed 0x80105EE8)
+#include "trig.h"             // class Trig (c->trig.rcos)  — FUN_80083F50 (Q12 cos LUT)
 #include "object/actor.h"     // class Actor + scene_phase / osc_base_table
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
@@ -54,15 +53,209 @@ void rec_dispatch(Core*, uint32_t);
 namespace {
 constexpr uint32_t BEH_FN = 0x80133C14u;
 
-// State-byte enum for this handler class. Matches the sibling handlers' convention (0=init, 1=active,
-// 2/3=despawn, >=4=no-op) — named per the sceneUiTrigger / typedInitSceneTrigger RE.
 enum class Sta : uint8_t { Init = 0, Active = 1, DespawnA = 2, DespawnB = 3 };
 
-// Opaque sub-behaviors this handler still calls into via rec_dispatch (see file docstring "STILL OPAQUE").
-constexpr uint32_t SUB_STATE1_TICK    = 0x801337E4u;  // oscPhase accumulator body (SBS target-#4 upstream)
-constexpr uint32_t SUB_OBJ_UPDATE     = 0x8004766Cu;  // per-object update (matrix build?)
-constexpr uint32_t SUB_PHASE22_BODY   = 0x80077EBCu;  // scenePhase==0x22 sub-behavior
-constexpr uint32_t SUB_TRIGGER_CHECK  = 0x800778E4u;  // spatial trigger check (obj, triggerParam) -> IN/OUT
+// Un-RE'd sub-behaviors still called via rec_dispatch by this handler.
+constexpr uint32_t SUB_OBJ_UPDATE     = 0x8004766Cu;
+constexpr uint32_t SUB_PHASE22_BODY   = 0x80077EBCu;
+constexpr uint32_t SUB_TRIGGER_CHECK  = 0x800778E4u;
+constexpr uint32_t SUB_TURN_LOOKUP    = 0x80077768u;  // state_one_tick subFlagX turn-direction lookup
+
+// Pilot-actor region (0x800E7E80..) — read by state_one_tick's TURN sub-states.
+constexpr uint32_t PILOT_BASE      = 0x800E7E80u;
+constexpr uint32_t PILOT_YAW_OFF   = 0x58;   // halfword
+constexpr uint32_t PILOT_MODE_OFF  = 0x147;  // byte
+constexpr uint32_t PILOT_STATE_OFF = 0x168;  // byte
+
+// Per-type CLAMP-BAND halfword pair {lo, hi} for oscBase in case [2]. Stride 4.
+constexpr uint32_t TBL_A6F4 = 0x8014A6F4u;
+
+// state_one_tick's subFlagX turn-setup path — shared by case [1] and case [4]. Reads obj[+0x56] /
+// obj[+0x5F], sets subState=4, dispatches SUB_TURN_LOOKUP, writes targetDelta = ±256, clears subFlagX.
+// Returns true when the turn-setup ran (caller should return to epilogue).
+bool run_turn_setup(Actor& a) {
+  Core* c = a.core();
+  const uint32_t obj = a.addr();
+  int16_t a1v = (int16_t)c->mem_r16(obj + 0x56);
+  uint8_t a0v = c->mem_r8(obj + 0x5F);
+  a.setSubState(4);
+  c->r[4] = (uint32_t)a0v << 4;
+  c->r[5] = (uint32_t)(int32_t)a1v;
+  c->r[6] = 0;
+  rec_dispatch(c, SUB_TURN_LOOKUP);
+  a.setTargetDelta((c->r[2] != 0) ? (int16_t)256 : (int16_t)-256);
+  a.setSubFlagX(0);
+  return true;
+}
+
+// state_one_tick — PC-native port of FUN_801337E4 (guest overlay 0x801337E4..0x80133C10). 5-way
+// sub-state machine dispatched on Actor::subState via the guest jumptable at 0x80109E58. See file
+// docstring + docs/findings/sbs.md for the semantic model.
+void state_one_tick(Actor& a) {
+  Core* c = a.core();
+  const uint32_t obj = a.addr();
+
+  // ---- Section A — reset transients when stateEcho != 0 -----------------------------------------
+  if (a.stateEcho() != 0) {
+    uint16_t seed = osc_base_table(c, a.type());   // per-type oscBase seed
+    uint32_t rec  = a.renderRec();
+    a.setStateEcho(0);
+    a.setSubState(0);
+    a.setOscBase(seed);
+    c->mem_w16(rec + 0xC, 0);
+    a.setTargetDelta(0);
+  }
+
+  // ---- Section B — dispatch on subState ---------------------------------------------------------
+  uint8_t sub = a.subState();
+  if (sub >= 5) return;                              // no-op epilogue
+
+  // Case [0] INIT (0x80133868): clear oscPhase, advance to subState=1, then FALL INTO case [1] body.
+  if (sub == 0) {
+    a.setOscPhase((int16_t)0);
+    a.setSubState(1);
+    sub = 1;
+  }
+
+  // Case [1] MAIN OSCILLATOR TICK (0x80133874).
+  if (sub == 1) {
+    if (a.counterA() != 0) {
+      // "trigger fired" → fall through into case [2] body with subState=2 (matches guest bne fall-in
+      // at 0x8013387C with delay-slot v0=2).
+      a.setSubState(2);
+      sub = 2;
+    } else if (a.subFlagX() != 0) {
+      // Turn-setup path (case [1] subFlagX branch): sets targetDelta ± 256 and returns.
+      run_turn_setup(a);
+      return;
+    } else {
+      // Oscillator gate: throttle by retryDelay, then Trig::rcos(oscPhase) + PRNG-jittered accumulate.
+      if (a.retryDelay() != 0) {
+        a.setRetryDelay((uint8_t)(a.retryDelay() - 1));
+        return;
+      }
+      // THE OSCILLATOR TICK — target-#4 hot path.
+      int32_t cos_q12 = c->trig.rcos((int32_t)a.oscPhase());   // Trig::rcos(oscPhase) → Q12 signed
+      c->mem_w16(a.renderRec() + 0xC, (uint16_t)((uint32_t)cos_q12 >> 5));   // guest srl (unsigned)
+      int32_t r = c->rng.next();                               // Rng::next() → [0, 0x7FFF]
+      uint16_t newPhase = (uint16_t)(a.oscPhase_u() + 68 + ((uint32_t)r >> 8));
+      a.setOscPhase(newPhase);
+      return;
+    }
+  }
+
+  // Case [2] POST-COUNTER-A (0x8013392C). counterA==0 → advance to subState=3. counterA!=0 → consult
+  // the pilot-actor region, write renderRec[+0xC] as ±pilotYaw, then (if pilotState >= 3) recompute
+  // oscBase from osc_base_table ± (pilotState - 2) * 6 and clamp against the per-type CLAMP-BAND
+  // pair {lo, hi} at TBL_A6F4[type].
+  if (sub == 2) {
+    if (a.counterA() == 0) {
+      a.setSubState(3);
+      return;
+    }
+    uint8_t  pilotMode  = c->mem_r8 (PILOT_BASE + PILOT_MODE_OFF);
+    uint16_t pilotYaw   = c->mem_r16(PILOT_BASE + PILOT_YAW_OFF);
+    uint32_t rec        = a.renderRec();
+    uint16_t angleWrite = (pilotMode != 0) ? (uint16_t)(uint32_t)(-(int32_t)pilotYaw)
+                                            : pilotYaw;
+    c->mem_w16(rec + 0xC, angleWrite);
+
+    uint8_t pilotState = c->mem_r8(PILOT_BASE + PILOT_STATE_OFF);
+    if (pilotState < 3) return;
+
+    // pilotState >= 3: recompute oscBase.
+    uint16_t delta = (uint16_t)((pilotState - 2u) * 6u);
+    uint16_t newOscBase = (pilotMode != 0)
+      ? (uint16_t)(a.oscBase_u() - delta)
+      : (uint16_t)(a.oscBase_u() + delta);
+    a.setOscBase(newOscBase);
+
+    // Clamp band {lo, hi} at TBL_A6F4[type*4]. Guest logic (from disas 0x801339E0..0x80133A38):
+    //   (a) if (int16)newOscBase < (int16)hi  →  oscBase = hi
+    //   (b) if (int16)lo < (int16)oscBase     →  oscBase = lo, exit
+    uint8_t type = a.type();
+    uint32_t tblRow = TBL_A6F4 + (uint32_t)type * 4u;
+    uint16_t hi_u = c->mem_r16(tblRow + 2);
+    int16_t  hi_s = (int16_t)hi_u;
+    if ((int16_t)newOscBase < hi_s) a.setOscBase(hi_u);
+    uint16_t lo_u = c->mem_r16(tblRow + 0);
+    int16_t  lo_s = (int16_t)lo_u;
+    if (lo_s < a.oscBase()) {
+      a.setOscBase(lo_u);
+    }
+    return;
+  }
+
+  // Case [3] TURN-DIRECTION SEED (0x80133A3C). Picks targetDelta from {32, 48, 64, 128} keyed by
+  // pilotState, negates when pilotMode != 0, advances subState=4.
+  if (sub == 3) {
+    uint8_t pilotState = c->mem_r8(PILOT_BASE + PILOT_STATE_OFF);
+    int16_t seed;
+    if (pilotState == 1)      seed = 48;
+    else if (pilotState == 0) seed = 32;
+    else if (pilotState == 2) seed = 64;
+    else                      seed = 128;   // pilotState >= 3
+    a.setTargetDelta(seed);
+    uint8_t pilotMode = c->mem_r8(PILOT_BASE + PILOT_MODE_OFF);
+    if (pilotMode != 0) a.setTargetDelta((int16_t)-a.targetDelta());
+    a.setSubState(4);
+    return;
+  }
+
+  // Case [4] TURN-EXECUTE (0x80133AB4). counterA path loops back to state 1. subFlagX path runs the
+  // shared turn-setup. Else: consume targetDelta into renderRec[+0xC], wrap sum into signed 12-bit
+  // [-2048, 2047] range, decay targetDelta toward zero by 8 (clamped) then adjust by ±20 based on
+  // angle sign. When |angle|<32 && |delta|<20, reset both to 0 and subState=0 (loop back to INIT).
+  if (sub == 4) {
+    if (a.counterA() != 0) {
+      a.setSubState(1);
+      return;
+    }
+    if (a.subFlagX() != 0) {
+      run_turn_setup(a);
+      return;
+    }
+    uint32_t rec = a.renderRec();
+    uint16_t curDelta_u = (uint16_t)a.targetDelta();     // lhu 68(s0) — unsigned in guest
+    uint16_t curAngle_u = c->mem_r16(rec + 0xC);         // lhu 12(v0)
+
+    // Sum + wrap-into-signed-12-bit — v1 = a1 + a0 (unsigned add), test (v1+2048) & 0xFFFF < 4097.
+    uint16_t newAngle_u = (uint16_t)(curAngle_u + curDelta_u);
+    uint16_t testU = (uint16_t)(newAngle_u + 2048u);
+    if (!(testU < 4097u)) {
+      uint16_t masked = (uint16_t)(newAngle_u & 0x0FFFu);
+      newAngle_u = (masked >= 2049u) ? (uint16_t)(masked | 0xF000u) : masked;
+    }
+
+    // Decay targetDelta by 8 toward zero (clamp at 0 on overshoot).
+    int16_t curDelta_s = (int16_t)curDelta_u;
+    int16_t decayed;
+    if (curDelta_s > 0) {
+      int16_t stepped = (int16_t)(curDelta_s - 8);
+      decayed = (stepped >= 0) ? stepped : (int16_t)0;
+    } else {
+      int16_t stepped = (int16_t)(curDelta_s + 8);
+      decayed = (stepped <= 0) ? stepped : (int16_t)0;
+    }
+    // Additional ±20 based on angle sign — NOT clamped to zero (guest lets it cross).
+    int16_t newAngle_s = (int16_t)newAngle_u;
+    decayed = (int16_t)((newAngle_s > 0) ? (decayed - 20) : (decayed + 20));
+
+    // Reset check: |angle| < 32 && |decayed| < 20 → zero both + subState=0.
+    int16_t absA = (newAngle_s < 0) ? (int16_t)-newAngle_s : newAngle_s;
+    if (absA < 32) {
+      int16_t absD = (decayed < 0) ? (int16_t)-decayed : decayed;
+      if (absD < 20) {
+        newAngle_u = 0;
+        decayed = 0;
+        a.setSubState(0);
+      }
+    }
+    a.setTargetDelta(decayed);
+    c->mem_w16(rec + 0xC, newAngle_u);
+    return;
+  }
+}
 }  // namespace
 
 void beh_typed_table_seed_gate(Core* c) {
@@ -90,15 +283,15 @@ void beh_typed_table_seed_gate(Core* c) {
     a.setCounterA(0);
     a.setCounterB(0);
     c->r[4] = a.addr(); rec_dispatch(c, SUB_OBJ_UPDATE);           // per-object update (opaque)
-    a.setOscPhase(0);                                              // target-#4 accumulator reset
+    a.setOscPhase((int16_t)0);                                     // target-#4 accumulator reset
     uint16_t seed = osc_base_table(c, a.type());                   // per-type oscBase seed
     a.setTriggerParam(-0xc8);                                      // -200 world units (Y offset?)
     a.setOscBase(seed);
     return;
   }
 
-  // ---- STATE 1 (ACTIVE): tick oscPhase, then gate on global scene phase --------------------------
-  c->r[4] = a.addr(); rec_dispatch(c, SUB_STATE1_TICK);            // oscPhase accumulator body (opaque)
+  // ---- STATE 1 (ACTIVE): tick the sub-state machine (native), then gate on global scene phase ----
+  state_one_tick(a);                                               // native — was rec_dispatch(0x801337E4)
   const uint8_t phase = scene_phase(c);
 
   if (phase < 0x1c) {

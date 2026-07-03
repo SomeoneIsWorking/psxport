@@ -27,6 +27,9 @@ public:
   // fields, and for `rec_dispatch` sub-behavior calls that take the node in c->r[4]). Prefer named
   // accessors — this is the escape hatch for the not-yet-RE'd offsets.
   uint32_t addr() const { return obj; }
+  // Core back-pointer for helper ports that need to reach c->rng.next() / c->trig.rcos / rec_dispatch —
+  // any per-actor tick natively porting one of the beh_ handlers' sub-behaviors.
+  Core* core() const { return c; }
 
   // ── Lifecycle & state ────────────────────────────────────────────────────────────────────────────
   // state (obj+4, u8): per-object state machine byte. Common convention observed across the beh_
@@ -99,15 +102,21 @@ public:
 
   // ── Oscillation / motion (u16 / i16) ─────────────────────────────────────────────────────────────
   // oscBase (obj+0x32, u16): per-type oscillation base parameter. Seeded from the per-type halfword
-  //   table 0x8014A6E4 keyed by type() at init. Read by state-1 sub-behaviors that compose per-frame
-  //   motion (RE'd next arc).
+  //   table 0x8014A6E4 keyed by type() at init. Read+adjusted by FUN_801337E4 case [2] POST-COUNTER-A
+  //   (pilot-consult recomputes it as osc_base_table(type) ± (pilotState - 2) * 6, then clamps
+  //   against a per-type {lo, hi} table at 0x8014A6F4).
+  uint16_t oscBase_u() const          { return c->mem_r16(obj + 0x32); }
+  int16_t  oscBase() const            { return (int16_t)c->mem_r16(obj + 0x32); }
   void    setOscBase(uint16_t v)      { c->mem_w16(obj + 0x32, v); }
-  // oscPhase (obj+0x42, i16): SBS TARGET-#4 accumulator — the angle-space fixed-point phase that
-  //   feeds the state-1 body's Trig::rcos oscillator via ov_a00_gen_801337E4 (accumulates +68 +
-  //   rand()>>8 each active tick; the PRNG at FUN_8009A450 seeds off 0x80105EE8 is the almost-certain
+  // oscPhase (obj+0x42, i16 / u16 both used): SBS TARGET-#4 accumulator — the angle-space fixed-point
+  //   phase that feeds the case [1] Trig::rcos oscillator in FUN_801337E4 (accumulates +68 + rng>>8
+  //   each active tick; the PRNG at FUN_8009A450 seeds off 0x80105EE8 is the almost-certain
   //   divergence source per docs/findings/sbs.md target-#4 upstream probe). beh_typed_table_seed_gate
   //   zero-clears this at init (state 0).
+  int16_t  oscPhase() const           { return (int16_t)c->mem_r16(obj + 0x42); }
+  uint16_t oscPhase_u() const         { return c->mem_r16(obj + 0x42); }
   void    setOscPhase(int16_t v)      { c->mem_w16(obj + 0x42, (uint16_t)v); }
+  void    setOscPhase(uint16_t v)     { c->mem_w16(obj + 0x42, v); }
 
   // ── Trigger box / range params ───────────────────────────────────────────────────────────────────
   // triggerParam (obj+0x60, i16): the signed per-object parameter passed as a1 into the state-1
@@ -116,9 +125,12 @@ public:
   //   been RE'd yet.
   int16_t triggerParam() const        { return (int16_t)c->mem_r16(obj + 0x60); }
   void    setTriggerParam(int16_t v)  { c->mem_w16(obj + 0x60, (uint16_t)v); }
-  // stateEcho (obj+0x62, u16): mirror of the state byte written in non-triggered gate paths in
-  //   beh_typed_table_seed_gate state 1. Reads as a "last-tick state" latch for a downstream
-  //   consumer we haven't RE'd yet — named for its write site's semantic, not the consumer's.
+  // stateEcho (obj+0x62, u16 / i16): mirror of the state byte written by beh_typed_table_seed_gate
+  //   state-1 non-triggered gate paths. Its READER is FUN_801337E4's section A — when stateEcho is
+  //   NON-ZERO on entry, the sub-state machine resets (clear subState, targetDelta, renderRec+0xC,
+  //   and re-seed oscBase from the per-type table). So the semantic is: "parent latched a
+  //   not-in-scene tick; sub-behavior on next call must reset".
+  int16_t  stateEcho() const          { return (int16_t)c->mem_r16(obj + 0x62); }
   void    setStateEcho(uint16_t v)    { c->mem_w16(obj + 0x62, v); }
 
   // ── Bounding box / trigger volume (u16 × 4) ──────────────────────────────────────────────────────
