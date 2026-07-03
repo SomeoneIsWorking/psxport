@@ -216,6 +216,20 @@ uint32_t Cull::enqueueQueueA(uint32_t obj) { Core* c = core;
   return newCnt;                                          // v0 = old_counter + 1 (recomp: addiu v0, a1, 1)
 }
 
+// Cull::enqueueQueueC — PC-native FUN_80077EFC body. Manual push onto queue C (list ptr @
+// CULL_QPTR[2] = 0x1F800154, counter @ CULL_QCNT[2] = 0x1F80015C, cap 28). RE'd verbatim from disas
+// 0x80077EFC..0x80077F38. Return convention matches enqueueQueueA (0 on cap-hit, new count on push).
+uint32_t Cull::enqueueQueueC(uint32_t obj) { Core* c = core;
+  int32_t cnt = c->mem_r16s(CULL_QCNT[2]);
+  if (cnt >= CULL_QCAP[2]) return 0;
+  uint32_t ptr = c->mem_r32(CULL_QPTR[2]);
+  c->mem_w32(CULL_QPTR[2], ptr - 4);
+  c->mem_w32(ptr - 4, obj);
+  uint32_t newCnt = (uint32_t)cnt + 1u;
+  c->mem_w16(CULL_QCNT[2], (uint16_t)newCnt);
+  return newCnt;
+}
+
 void Cull::objectCull() { Core* c = core;
   uint32_t prev = c->game->fps60.current_object;
   uint32_t o = c->r[4];                            // a0 = object* (MIPS arg register $a0)

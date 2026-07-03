@@ -71,8 +71,7 @@ static void script_vm_4ce14(Core* c) {
       c->mem_w16(s5 + 10, (uint16_t)s3);   // obj[106] = slot count
       c->mem_w8(obj + 11, 31);
       c->mem_w8(obj + 1, 1);
-      c->r[4] = obj; rec_dispatch(c, 0x80077EFCu);
-      v0_ret = c->r[2];
+      v0_ret = c->engine.cull.enqueueQueueC(obj);           // FUN_80077EFC (native)
       break;
     }
     uint32_t mask = 1u << (s3 & 31);

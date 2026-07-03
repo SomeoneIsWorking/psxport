@@ -27,6 +27,7 @@
 // RAM+scratchpad A/B vs rec_super_call).
 
 #include "core.h"
+#include "render/cull.h"    // Cull::enqueueQueueC (FUN_80077EFC)
 #include "object/actor.h"    // Actor::boundsCull (FUN_8007778C native)
 #include "cfg.h"
 #include <stdio.h>
@@ -66,7 +67,7 @@ void state1_gate(Core* c, uint32_t obj) {
   } else {
     submit = (Actor(c, obj).boundsCull() == 0);       // 0x8004c368 cull; skip submit if VISIBLE — Actor::boundsCull (native)
   }
-  if (submit) { c->r[4] = obj; rec_dispatch(c, 0x80077EFCu); }  // 0x8004c378
+  if (submit) c->engine.cull.enqueueQueueC(obj);   // 0x8004c378 — FUN_80077EFC (native)
 }
 
 }  // namespace

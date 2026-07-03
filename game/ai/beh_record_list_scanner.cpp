@@ -84,7 +84,7 @@ void beh_record_list_scanner(Core* c) {
     if (c->mem_r8(s4) == 0xFFu) {                               // terminator
       c->mem_w16(s5 + 10, (uint16_t)s3);                        // node[0x6a] = count
       c->mem_w8(obj + 11, 31);
-      c->r[4] = obj; rec_dispatch(c, 0x80077EFCu);
+      c->engine.cull.enqueueQueueC(obj);                    // FUN_80077EFC (native; return ignored)
       c->mem_w8(obj + 1, 1);
       return;
     }

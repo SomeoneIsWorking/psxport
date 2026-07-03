@@ -39,6 +39,11 @@ public:
   // c->r[4] = node. Was ov_cone_cull_2b278.
   void coneCull2b278();
 
+  // enqueueQueueC (FUN_80077EFC): MANUAL push of `obj` onto queue C (0x1F800154/0x1F80015C, cap 28) —
+  // sibling of enqueueQueueA/enqueueVisibleClass4. Same slti-N gate + push + counter bump shape.
+  // Returns 0 on cap-hit, new 1-based count on success (matches recomp).
+  uint32_t enqueueQueueC(uint32_t obj);
+
   // enqueueQueueA (FUN_80077E7C): MANUAL push of `obj` onto queue A (0x1F80013C/0x1F800144, cap 24) —
   // the render queue for object types 2/9 that cull_decide would auto-push. Six callers across
   // game/world/entity.cpp + game/ai/beh_* use this as an unconditional queue insert (early bail if
