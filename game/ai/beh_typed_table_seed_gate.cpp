@@ -1,114 +1,116 @@
-// engine/beh_typed_table_seed_gate.cpp — PC-native per-object BEHAVIOR handler FUN_80133C14 (OVERLAY).
+// game/ai/beh_typed_table_seed_gate.cpp — PC-native per-object BEHAVIOR handler FUN_80133C14 (OVERLAY).
 //
-// An OVERLAY per-object behavior routine installed at node+0x1c by the field object driver and called
-// every frame by the entity walk with the node in a0. Same SHAPE as the resident siblings
-// FUN_800739AC (engine/the FUN_739ac handler.cpp) and FUN_80073CD8 (engine/the FUN_73cd8 handler.cpp): a small state
-// machine on the node's state byte node[4] (0 init / 1 active / 2 idle / 3 despawn), but SIMPLER than
-// either — there is no node[5] sub-machine.
+// SEMANTIC MODEL (from RE of disas 0x80133C14..0x80133D64 + sibling handlers FUN_800739AC / FUN_80073CD8):
+//   This is a "CULL-RECORD SCENE-PHASE ACTOR": a per-object handler that
+//     - at INIT (state 0)  allocates a render/cull record, seeds its trigger-box and per-type oscillation
+//                          base, then advances to ACTIVE.
+//     - while ACTIVE (state 1) reads the GLOBAL SCENE-PHASE gate byte 0x800E7EAA:
+//         - if scenePhase < 0x1C   -> latch stateEcho and skip (scene not yet in gate range)
+//         - if scenePhase == 0x22  -> "this actor's phase": mark renderMode + run the phase-specific
+//                                     sub-behavior (FUN_80077EBC) + render
+//         - else                   -> spatial trigger check FUN_800778E4(obj, triggerParam); if it
+//                                     reports OUT (0) latch stateEcho and skip; if IN, render
+//     - on DESPAWN (state 2 or 3) calls Spawn::despawn(obj) and drops.
+//     - state >= 4                 no-op.
 //
-//   state 0 (init): FUN_80051b70(obj, 0xc, 0x14) cull-record init; on success seed node fields
-//                   (node[0x2a]=0x22, box/size 0x80..0x86, node[0]=node[4]=1, clear 0x29/0x46/0x42),
-//                   call FUN_8004766c, look up a per-type halfword from data table 0x8014A6E4 indexed
-//                   by node[3]*2 -> node[0x32], set node[0x60]=-0xc8. Advances to state 1.
-//   state 1 (active): FUN_801337e4(obj); then a global gate on byte 0x800E7EAA:
-//                   if (g < 0x1c)            -> just stash node[0x62]=state, return (early field path)
-//                   else if (g == 0x22)      -> node[1]=state, FUN_80077ebc, then render tail
-//                   else                     -> FUN_800778e4(obj, (int16)node[0x60]); if it returns 0,
-//                                               stash node[0x62]=state and return; if nonzero -> render
-//                                               tail (FUN_8004766c + FUN_800517f8).
-//   state 2 / 3   : FUN_8007a624(obj)  (despawn — BOTH states 2 and 3 take this path).
-//   state >=4 / impossible: epilogue (no-op).
+// The FIELD SEMANTICS the handler reads/writes are named on class Actor (game/object/actor.h) — no more
+// `obj[+0x42]` in the code, each access is a typed named method. Fields introduced by this handler's RE:
+//   state / alive / renderMode / type / counterA / sceneMode / counterB / oscBase / oscPhase /
+//   triggerParam / stateEcho / boxX/Y/Z/W. `oscPhase` is the SBS target-#4 accumulator; its zero-init
+//   here is the state-1-branch reset that ov_a00_gen_801337E4's PRNG (FUN_8009A450, seed at 0x80105EE8)
+//   walks each active tick.
 //
-// The data at 0x8014A6E4 is a halfword DATA table (loaded via lhu, indexed node[3]*2) — NOT a jump
-// table; control flow has no computed jumps. Ownership model identical to the FUN_739ac handler/73cd8: CONTROL
-// FLOW + every node/global memory write owned native, byte-for-byte; every sub-behavior CALL stays a
-// rec_dispatch leaf (a0 set first). NO GTE, NO render packets here. RE'd 1:1 from disas 0x80133C14
-// (epilogue jr ra @0x80133D64) on field RAM dump scratch/bin/field_ram_230.bin.
+// STILL OPAQUE (recorded so a future RE arc closes them; the un-owned sub-behaviors here index Actor
+// fields the RE didn't yet name completely):
+//   - FUN_801337E4   state-1 entry helper (target-#4 upstream — the oscPhase accumulator body)
+//   - FUN_8004766C   per-object update called after box seed + inside render tail (matrix build?)
+//   - FUN_80077EBC   scenePhase==0x22 sub-behavior body
+//   - FUN_800778E4   spatial trigger check taking (obj, triggerParam) -> 0/nonzero (IN/OUT)
+// Kept as `rec_dispatch` (recomp substrate) — the correct escape hatch until each is RE'd on its own.
 //
-// Gated byte-exact (full RAM+scratchpad A/B vs rec_super_call) via channel "typed_table_seed_gateverify".
+// PORTED OWNERSHIP RULES (per project CLAUDE.md): CONTROL FLOW + every named-field write owned native,
+// byte-for-byte; every still-opaque sub-behavior CALL stays a `rec_dispatch` leaf (a0/a1 set first).
+// NO GTE, NO render packets here. Gated byte-exact (full RAM+scratchpad A/B vs rec_super_call) via
+// channel "typed_table_seed_gateverify".
 
 #include "core.h"
 #include "cfg.h"
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include "spawn.h"     // class Spawn (c->engine.spawn.despawn / dispatch / spawnAndInit)
-#include "graphics_bind.h"   // ov_obj_record_init
+#include "spawn.h"            // class Spawn (c->engine.spawn.despawn)
+#include "graphics_bind.h"    // GraphicsBind::recordInit / renderUpdate
+#include "object/actor.h"     // class Actor + scene_phase / osc_base_table
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
 namespace {
-
 constexpr uint32_t BEH_FN = 0x80133C14u;
 
-// Per-type halfword DATA table (lhu, indexed by node[3]*2). Loaded into node[0x32] in state 0
-// (and likewise by FUN_801337e4). NOT control flow.
-constexpr uint32_t TBL_A6E4 = 0x8014A6E4u;   // lui 0x8015; addiu -0x591c
+// State-byte enum for this handler class. Matches the sibling handlers' convention (0=init, 1=active,
+// 2/3=despawn, >=4=no-op) — named per the sceneUiTrigger / typedInitSceneTrigger RE.
+enum class Sta : uint8_t { Init = 0, Active = 1, DespawnA = 2, DespawnB = 3 };
 
+// Opaque sub-behaviors this handler still calls into via rec_dispatch (see file docstring "STILL OPAQUE").
+constexpr uint32_t SUB_STATE1_TICK    = 0x801337E4u;  // oscPhase accumulator body (SBS target-#4 upstream)
+constexpr uint32_t SUB_OBJ_UPDATE     = 0x8004766Cu;  // per-object update (matrix build?)
+constexpr uint32_t SUB_PHASE22_BODY   = 0x80077EBCu;  // scenePhase==0x22 sub-behavior
+constexpr uint32_t SUB_TRIGGER_CHECK  = 0x800778E4u;  // spatial trigger check (obj, triggerParam) -> IN/OUT
 }  // namespace
 
 void beh_typed_table_seed_gate(Core* c) {
-  const uint32_t obj = c->r[4];               // 80133C1C move s1,a0
-  uint8_t st = c->mem_r8(obj + 4);            // 80133C2C lbu s0,4(s1)   (state)
+  Actor a(c, c->r[4]);
+  const Sta st = (Sta)a.state();
 
-  // ---- dispatch (80133C34..80133C64) ----
-  if (st != 1) {                              // 80133C34 beq s0,1 -> state 1
-    if (st >= 2) {                            // 80133C38 slti v0,s0,2 ; 80133C3C beqz -> >=2  (s0 is lbu 0..255, so signed slti == unsigned compare here)
-      // 80133C54 slti v0,s0,4 ; 80133C58 beqz -> epilogue (state>=4: no-op)
-      if (st >= 4) return;
-      // 80133C60 j 0x80133D4C  (state 2 OR 3 -> despawn)
-      c->engine.spawn.despawn(obj);           // 80133D4C jal 0x8007a624
-      return;                                 // -> epilogue
-    }
-    if (st != 0) return;                      // 80133C44 beqz s0 -> state 0; else 80133C4C j epilogue
-    // ---- STATE 0 (80133C68..80133CE0): cull-record init + field/box setup ----
-    c->r[4] = obj; c->r[5] = 0xc; c->r[6] = 0x14;     // 80133C68 a1=0xc ; 80133C70 a2=0x14 ; a0=s1
-    c->engine.graphicsBind.recordInit();                     // 80133C6C jal 0x80051b70
-    if (c->r[2] != 0) return;                         // 80133C74 bnez v0 -> epilogue (init busy)
-    c->mem_w8 (obj + 0x2a, 0x22);            // 80133C80 sb 0x22,0x2a(s1)
-    c->mem_w16(obj + 0x80, 0x1e);            // 80133C88 sh 0x1e,0x80(s1)
-    c->mem_w16(obj + 0x82, 0x3c);            // 80133C90 sh 0x3c,0x82(s1)
-    c->mem_w16(obj + 0x84, 0x32);            // 80133C98 sh 0x32,0x84(s1)
-    c->mem_w8 (obj + 4, 1);                  // 80133CA0 sb s2(1),4(s1)   (-> state 1)
-    c->mem_w8 (obj + 0, 1);                  // 80133CA4 sb s2(1),0(s1)
-    c->mem_w8 (obj + 0x29, 0);               // 80133CA8 sb zero,0x29(s1)
-    c->mem_w8 (obj + 0x46, 0);               // 80133CAC sb zero,0x46(s1)
-    c->mem_w16(obj + 0x86, 0x64);            // 80133CB4 sh v0(0x64),0x86(s1)  (delay slot of jal; v0=0x64 from 80133C9C)
-    c->r[4] = obj; rec_dispatch(c, 0x8004766Cu);      // 80133CB0 jal 0x8004766c (a0=s1)
-    uint8_t n3 = c->mem_r8(obj + 3);                  // 80133CBC lbu v0,3(s1)
-    c->mem_w16(obj + 0x42, 0);               // 80133CC4 sh zero,0x42(s1)
-    uint16_t tv = c->mem_r16(TBL_A6E4 + (uint32_t)n3 * 2);  // 80133CC8 sll v0,v0,1 ; 80133CCC addu ; 80133CD0 lhu v1,(v0)
-    c->mem_w16(obj + 0x60, (uint16_t)(int16_t)-0xc8);// 80133CD4 v0=-0xc8 ; 80133CD8 sh v0,0x60(s1)
-    c->mem_w16(obj + 0x32, tv);              // 80133CE0 sh v1,0x32(s1)  (delay slot of j epilogue)
-    return;                                  // 80133CDC j 0x80133D54 (epilogue)
-  }
-
-  // ---- STATE 1 (80133CE4..80133D48): entry helper, then global gate ----
-  c->r[4] = obj; rec_dispatch(c, 0x801337E4u);        // 80133CE4 jal 0x801337e4 (a0=s1)
-  uint8_t g = c->mem_r8(0x800E7EAAu);                 // 80133CF0 lbu v1,0x7eaa(800e) -> 0x800E7EAA
-  if (g < 0x1c) {                                     // 80133CF8 sltiu v0,v1,0x1c ; 80133CFC bnez -> 0x80133D20
-    // 80133D20 j epilogue ; delay slot 80133D24 sh s0,0x62(s1)  (s0 = state byte = 1)
-    c->mem_w16(obj + 0x62, (uint16_t)st);
-    return;
-  }
-  if (g == 0x22) {                                    // 80133D04 beq v1,0x22 -> 0x80133D28
-    c->mem_w8(obj + 1, st);                  // 80133D28 sb s0,1(s1)  (s0 = state = 1)
-    c->r[4] = obj; rec_dispatch(c, 0x80077EBCu);      // 80133D2C jal 0x80077ebc (a0=s1)
-    // fall into render tail (80133D34)
-  } else {
-    int16_t a1v = c->mem_r16s(obj + 0x60);    // 80133D0C lh a1,0x60(s1) (sign-extend)
-    c->r[4] = obj; c->r[5] = (uint32_t)(int32_t)a1v;
-    rec_dispatch(c, 0x800778E4u);                     // 80133D10 jal 0x800778e4 (a0=s1, a1=node[0x60])
-    if (c->r[2] == 0) {                               // 80133D18 bnez v0 -> render tail ; else fall to 0x80133D20
-      // 80133D20 j epilogue ; delay slot 80133D24 sh s0,0x62(s1)
-      c->mem_w16(obj + 0x62, (uint16_t)st);
+  // ---- dispatch (state -> branch) ------------------------------------------------------------------
+  if (st != Sta::Active) {
+    if ((uint8_t)st >= (uint8_t)Sta::DespawnA) {
+      if ((uint8_t)st >= 4) return;                                // state>=4: no-op epilogue
+      c->engine.spawn.despawn(a.addr());                           // 2 or 3: despawn
       return;
     }
-    // v0 != 0 -> render tail (80133D34)
+    if (st != Sta::Init) return;                                   // impossible slot: no-op
+
+    // ---- STATE 0 (INIT): allocate cull record + seed trigger box + oscillation params ------------
+    c->r[4] = a.addr(); c->r[5] = 0xc; c->r[6] = 0x14;             // cls=0xc, sub=0x14
+    c->engine.graphicsBind.recordInit();
+    if (c->r[2] != 0) return;                                      // record pool busy — retry next tick
+
+    a.setSceneMode(0x22);                                          // participates when scene_phase()==0x22
+    a.setBoxX(0x1e); a.setBoxY(0x3c); a.setBoxZ(0x32); a.setBoxW(0x64);
+    a.setState((uint8_t)Sta::Active);
+    a.setAlive(1);
+    a.setCounterA(0);
+    a.setCounterB(0);
+    c->r[4] = a.addr(); rec_dispatch(c, SUB_OBJ_UPDATE);           // per-object update (opaque)
+    a.setOscPhase(0);                                              // target-#4 accumulator reset
+    uint16_t seed = osc_base_table(c, a.type());                   // per-type oscBase seed
+    a.setTriggerParam(-0xc8);                                      // -200 world units (Y offset?)
+    a.setOscBase(seed);
+    return;
   }
 
-  // ---- render tail (80133D34..80133D44) ----
-  c->r[4] = obj; rec_dispatch(c, 0x8004766Cu);        // 80133D34 jal 0x8004766c (a0=s1)
-  c->r[4] = obj; c->engine.graphicsBind.renderUpdate();        // 80133D3C jal 0x800517f8 (a0=s1)
-  // 80133D44 j epilogue
+  // ---- STATE 1 (ACTIVE): tick oscPhase, then gate on global scene phase --------------------------
+  c->r[4] = a.addr(); rec_dispatch(c, SUB_STATE1_TICK);            // oscPhase accumulator body (opaque)
+  const uint8_t phase = scene_phase(c);
+
+  if (phase < 0x1c) {
+    a.setStateEcho((uint16_t)(uint8_t)st);                         // scene not yet in gate range: latch and skip
+    return;
+  }
+
+  if (phase == 0x22) {
+    a.setRenderMode((uint8_t)st);                                  // "this actor's phase" branch
+    c->r[4] = a.addr(); rec_dispatch(c, SUB_PHASE22_BODY);         // scenePhase==0x22 sub-behavior (opaque)
+    // fall through to render tail
+  } else {
+    c->r[4] = a.addr(); c->r[5] = (uint32_t)(int32_t)a.triggerParam();
+    rec_dispatch(c, SUB_TRIGGER_CHECK);                            // spatial trigger check (opaque)
+    if (c->r[2] == 0) {                                            // OUT: latch stateEcho and skip
+      a.setStateEcho((uint16_t)(uint8_t)st);
+      return;
+    }
+    // IN: fall through to render tail
+  }
+
+  // ---- render tail: per-object update + render-state update ---------------------------------------
+  c->r[4] = a.addr(); rec_dispatch(c, SUB_OBJ_UPDATE);
+  c->r[4] = a.addr(); c->engine.graphicsBind.renderUpdate();
 }
