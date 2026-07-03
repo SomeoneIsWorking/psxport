@@ -160,7 +160,8 @@ int SceneTransition::stepSwapWaiter(uint32_t node) {
         c->r[4] = n; rec_dispatch(c, 0x80072E60u);
         if (c->r[2] != 0 && c->mem_r8(0x800BF816u) != 0) {
           c->mem_w8(n + 6, (uint8_t)(case_id + 1));
-          rec_dispatch(c, 0x80072EFCu);
+          // FUN_80072EFC: n[+0x56] = n[+0x5A] - n[+0x50]  (3-inst body, disas 0x80072EFC..0x80072F10)
+          c->mem_w16(n + 0x56, (uint16_t)(c->mem_r16(n + 0x5A) - c->mem_r16(n + 0x50)));
         }
         return 0;
       }

@@ -161,7 +161,8 @@ void beh_typed_jumptable_pair(Core* c) {
         if (g0f != 2) return;                         // 80139228 bne v1,2 -> 0x801395ac
         c->mem_w8(obj + 4, 1);                        // 80139234 sb a1(=1), 4(s0)
         c->mem_w8(obj + 5, 0);                        // 80139238 sb zero, 5(s0)
-        c->r[4] = obj; rec_dispatch(c, 0x80072EFCu);  // 8013923C jal 0x80072efc (a0=s0)
+        // FUN_80072EFC: obj[+0x56] = obj[+0x5A] - obj[+0x50]  (inlined; disas 0x80072EFC..0x80072F10)
+        c->mem_w16(obj + 0x56, (uint16_t)(c->mem_r16(obj + 0x5A) - c->mem_r16(obj + 0x50)));
         c->mem_w8(obj + 6, (uint8_t)g0f);             // 80139240 sb v1(=g0f), 6(s0)  (delay slot)
         return;                                       // 80139244 j 0x801395ac
       }
