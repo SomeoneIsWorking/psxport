@@ -206,9 +206,8 @@ void native_scheduler_step(Core* c) {
         c->game->sched.cur_slot = i;
         static_cast<R3000&>(*c) = c->game->sched.task_ctx[i];       // restore REGISTERS
         c->game->sched.in_stage = 1;
-        void native_sop_area_load(Core*);
         if (setjmp(c->game->sched.yield_jmp) == 0) {
-          native_sop_area_load(c);                                  // synchronous (all leaves are sync)
+          c->engine.sop.areaLoad();                                 // synchronous (all leaves are sync)
         } else if (cfg_dbg("sched")) {
           fprintf(stderr, "[sched] SOP area-load yielded unexpectedly — a leaf isn't sync yet\n");
         }

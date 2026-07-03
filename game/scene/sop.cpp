@@ -38,7 +38,8 @@ static void d3(Core* c, uint32_t fn, uint32_t a0, uint32_t a1, uint32_t a2);
 
 // Owned synchronous area-DATA load (replaces the body of LAB_80109164 0x80109164). Runs in the
 // slot-1 task register context; uses c->r[] for the dispatched leaves' args; writes guest RAM.
-void native_sop_area_load(Core* c) {
+void Sop::areaLoad() {
+  Core* c = core;
   uint32_t sm = c->mem_r32(0x1f800138u);
   c->mem_w8(sm + 0x6e, 3);                              // sm[0x6e] = 3 (area sub-index; 0x80109198)
 
@@ -102,7 +103,8 @@ void native_sop_area_load(Core* c) {
 // synchronous CD/audio runtime), and rec_dispatch the leaf callees (CD read, collision grid, unpack,
 // BGM trigger — all synchronous). Ends by writing 1f80019b=1, exactly as the recomp body leaves it.
 // Mirrors native_sop_area_load for the SOP intro load.
-void native_transition_area_load(Core* c) {
+void Sop::transitionAreaLoad() {
+  Core* c = core;
   uint32_t sm = c->mem_r32(0x1f800138u);
   if (cfg_dbg("stage"))
     fprintf(stderr, "[sop] XLOAD enter: sm6d=%u sm6e=%u bf870=%u bf872=%u bf838=%u bf839=%u bf83a=0x%04X "
@@ -256,7 +258,7 @@ void Sop::fieldMode() { Core* c = core;
         break;   // defer — sm[0x50] stays 0; next tick re-enters this case
       }
       c->game->sched.sop_field_step[0] = 0;   // completing now; arm again for the next area
-      native_sop_area_load(c);                 // INLINE sync load (replaces FUN_80044bd4) -> 1f80019b=1
+      c->engine.sop.areaLoad();                 // INLINE sync load (replaces FUN_80044bd4) -> 1f80019b=1
       c->engine.pool.init();   // 0x8007B18C — native (via LIVE gated entry)
       c->engine.pool.resetControlBlock();       // 0x800796DC — native (via LIVE gated entry)
       c->engine.pool.finalViewInit();       // 0x80078610 — native (via LIVE gated entry)

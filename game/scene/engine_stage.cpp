@@ -208,7 +208,7 @@ void Engine::s4c() { Core* c = core;
 // the SOP area load is native+synchronous, so SOP state-0 never yields.
 
 // (ov_sop_field_mode moved to Sop::fieldMode — c->engine.sop.fieldMode())
-void native_transition_area_load(Core*); // engine/sop.cpp — sync transition area-DATA load
+#include "sop.h"                              // class Sop — transitionAreaLoad (sync FIELD transition load)
 #include "render/screen_fade/screen_fade.h"   // class ScreenFade — the single fade driver
 #include "camera/cutscene_camera.h"           // class CutsceneCamera — resident driver 0x8006EC44 (native)
 void ov_game_func_801084F8(Core*);                          // generated/ov_game_disp.c — still-recomp: draw pause
@@ -740,7 +740,7 @@ static void native_area_load_bd4(Core* c, uint32_t area, uint32_t mode) {
   c->mem_w8(sm + 0x6e, (uint8_t)area);     // DAT_801fe0de = arg2 (area) == sm[0x6e]
   c->mem_w8(sm + 0x6d, (uint8_t)mode);     // DAT_801fe0dd = arg3 (mode) == sm[0x6d]
   c->mem_w8(0x1f80019bu, 0);               // DAT_1f80019b = 0 (load-done flag, set back to 1 by the load)
-  native_transition_area_load(c);          // = the slot-1 task body 0x800452c0, run inline+sync
+  c->engine.sop.transitionAreaLoad();      // = the slot-1 task body 0x800452c0, run inline+sync
 }
 
 // FUN_80107afc — the MAIN door/sub-scene transition (sm[0x4c]==1..4). sm[0x4e]: 0 teardown+fade-clear+load,
@@ -973,7 +973,7 @@ void Engine::submode1() { Core* c = core;
   switch (s4c) {
     case 0:
       rec_dispatch(c, 0x8005245cu);          // FUN_8005245c (sound/CD setup, sync leaf)
-      native_transition_area_load(c);         // INLINE sync load (replaces FUN_80044bd4) -> 1f80019b=1
+      c->engine.sop.transitionAreaLoad();     // INLINE sync load (replaces FUN_80044bd4) -> 1f80019b=1
       // FALL THROUGH to state 1: in the guest, 0x80108918 does NOT branch to the epilogue — it falls
       // into 0x8010893c, so the load AND the next-state selection both run in this one frame.
       /* fallthrough */

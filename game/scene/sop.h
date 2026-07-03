@@ -22,4 +22,13 @@ public:
   // Live-spine entry points.
   void fieldMode();     // was ov_sop_field_mode  (per-frame outer state dispatcher)
   void fieldUpdate();   // was ov_sop_field_update (per-frame gameplay body — states 1/2/3)
+
+  // Sync area-DATA load entry points (both mirror each other; both end with 1f80019b=1).
+  // areaLoad         — owned synchronous SOP area-DATA load (replaces LAB_80109164 body).
+  //                    Was the free function `native_sop_area_load(Core*)`.
+  // transitionAreaLoad — synchronous FIELD transition area-DATA load (replaces the cooperative
+  //                    FUN_80044bd4(0x800452c0, ...) spawn-and-yield used by the field area
+  //                    machine's state-0). Was `native_transition_area_load(Core*)`.
+  void areaLoad();
+  void transitionAreaLoad();
 };

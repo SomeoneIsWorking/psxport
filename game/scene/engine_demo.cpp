@@ -658,8 +658,7 @@ static void demo_frame_s7(Core* c) {
     c->mem_w8(0x801fe0deu, entry);
     c->mem_w8(0x801fe0ddu, 1);
     c->mem_w8(0x1f80019bu, 0);
-    void native_transition_area_load(Core*);
-    native_transition_area_load(c);                                 // = sync 0x800452c0; sets 1f80019b=1
+    c->engine.sop.transitionAreaLoad();                             // = sync 0x800452c0; sets 1f80019b=1
     // reinit subsystems (all SYNC; no incoming args / self-args)
     c->engine.pool.init();       // 0x8007B18C — native (via LIVE gated entry)
     c->engine.pool.resetControlBlock();           // 0x800796DC — native
