@@ -2117,6 +2117,9 @@ void Engine::startBinStage() {
       // HERE, matching substrate's FUN_80044BD4 call site.
       uint32_t task = c->mem_r32(CUR_TASK);
       c->mem_w16(task + 0x56, (uint16_t)c->rng.next());
+      // Substrate SM (L_8010678C) writes sm[0x48]:=1 BEFORE calling FUN_80044BD4 — i.e. same
+      // tick as the spawn. Do it here so A's sm write frame matches B's.
+      c->mem_w16(task + 0x48, 1);
     } else {
       c->mem_w16(0x801FE070u, 0);          // pc_skip: task-1 already ran inline
     }
@@ -2135,24 +2138,72 @@ void Engine::startBinStage() {
 //   step 4:   startStage(1) → swap task-0 to DEMO
 int Engine::stage0Advance(uint8_t& step) { Core* c = core;
   uint32_t task = c->mem_r32(CUR_TASK);
-  // pc_faithful (pc_skip=false): task-0 must wait for task-1's done_flag (0x1F80019B) before
-  // advancing the preload SM — mirrors substrate FUN_80044BD4's tail wait loop. Yield each tick
-  // until task-1 sets the flag. Then set sm[0x48]=1 (substrate does this after wait-loop exit).
-  if (c->game && !c->game->pc_skip && step == 0) {
-    if (c->mem_r8(0x1F80019Bu) == 0) return 1;   // task-1 not done yet — keep yielding
-    c->mem_w16(task + 0x48, 1);                  // wait-loop exited: substrate stamp
+
+  // pc_faithful path: mirrors substrate ov_start_gen_8010649C's tail SM loop (L_80106744..). The
+  // state machine spawns task-1 twice (FUN_80044F58 then FUN_8004514C) via FUN_80044BD4's
+  // spawn+wait pattern, yielding a tick per state.
+  //   step 0 wait  : yield until task-1 (spawned in startBinStage) sets done_flag → sm[0x48]:=1
+  //   step 1 spawn : clear done_flag, spawn task-1 with FUN_8004514C, RNG stamp (FUN_80044BD4)
+  //   step 2 wait  : yield until task-1 done → sm[0x48]:=2
+  //   step 3       : sm[0x48]:=3 (substrate L_801067D4)
+  //   step 4       : startStage(1) → swap to DEMO (substrate L_801067DC)
+  if (c->game && !c->game->pc_skip) {
+    // States match substrate's SM loop ticks (sm[0x48] already set by prior spawn call site).
+    //   step 0 : wait for task-1 (FUN_80044F58) done_flag — matches substrate f0 wait
+    //   step 1 : trailing SM-loop yield after wait exits (substrate L_801067E4 → L_80106744)
+    //   step 2 : sm=1 case → sm=2, spawn task-1 with FUN_8004514C, RNG stamp
+    //   step 3 : wait for task-1 (FUN_8004514C) done_flag
+    //   step 4 : trailing yield
+    //   step 5 : sm=2 case → sm=3
+    //   step 6 : trailing yield
+    //   step 7 : sm=3 case → startStage(1) (swap to DEMO)
+    switch (step) {
+      case 0:
+        if (c->mem_r8(0x1F80019Bu) == 0) return 1;                 // task-1 not done yet
+        step++;
+        return 1;
+      case 1:
+        step++;
+        return 1;
+      case 2: {
+        c->mem_w16(task + 0x48, 2);
+        c->mem_w8(0x1F80019Bu, 0);
+        c->mem_w8(0x801FE0DDu, 0);
+        c->mem_w8(0x801FE0DEu, 0);
+        const uint32_t saved_gp = c->r[28];
+        c->r[28] = 0x800BE0D4u;
+        native_task_spawn(c, 1, 0x8004514Cu);
+        c->r[28] = saved_gp;
+        c->mem_w16(task + 0x56, (uint16_t)c->rng.next());
+        step++;
+        return 1;
+      }
+      case 3:
+        if (c->mem_r8(0x1F80019Bu) == 0) return 1;
+        step++;
+        return 1;
+      case 4:
+        step++;
+        return 1;
+      case 5:
+        c->mem_w16(task + 0x48, 3);
+        step++;
+        return 1;
+      case 6:
+        step++;
+        return 1;
+      case 7:
+        startStage(1);
+        scheduler_yield(c);
+        return 0;
+    }
   }
+
+  // pc_skip shortcut: collapsed inline. RNG stand-in at step 1 to match B's f2 RNG advance.
   switch (step) {
     case 0: break;
     case 1:
-      if (c->game->pc_skip) {
-        // pc_skip RNG compensation ([[pc-skip-frame-counter-bump]]): substrate FUN_80044BD4 wait-
-        // loop makes an rng.next() call at f2 that pc_skip's collapsed startBinStage skips (SBS
-        // wwatch: pc=0x8009A450 ra=0x80044C64). Fire it here in step 1 (which runs at f2) so A's
-        // RNG seed aligns with B's at the same host tick. Under pc_faithful the RNG stamp fires
-        // at the spawn site in startBinStage — no compensation needed here.
-        (void)c->rng.next();
-      }
+      (void)c->rng.next();   // stand-in for substrate FUN_80044BD4 RNG at f2
       break;
     case 2:
       c->engine.asset.preloadStage1();

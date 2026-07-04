@@ -50,7 +50,9 @@ public:
   void preloadTexgroup(uint32_t mode, uint32_t set);
 
   // preloadStage1(): FUN_8004514C — SWDATA + DAT load, shared texgroup sub-load, relocation,
-  //   cel/sprite VRAM build. Second state of the boot preload chain.
-  void preloadStage1();
+  //   cel/sprite VRAM build. Second state of the boot preload chain. `run_as_task` = true when
+  //   invoked as a task-1 body under pc_faithful (sets done_flag + rec_dispatches task-end);
+  //   direct callers pass false.
+  void preloadStage1(bool run_as_task = false);
 };
 #endif

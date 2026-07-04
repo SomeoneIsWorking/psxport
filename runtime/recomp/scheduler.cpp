@@ -362,18 +362,21 @@ static StanzaResult run_coro_fiber_stanza(Core* c, int i, uint32_t base, uint32_
   return STANZA_HANDLED;
 }
 
-// TASK-1 BODY (0x80044F58) — Asset::loadTexgroup native port. Under pc_faithful task-1 actually
-// runs (Engine::startBinStage leaves it state=2 instead of closing it); the scheduler picks it up
-// on the next tick and drives its body natively so the guest-RAM writes (per-set metadata table
-// at 0x800FB170, done_flag at 0x1F80019B, and the substrate stack scratch from the leaf
-// rec_dispatch calls: 0x8001DC40 CD reads, 0x80051FB4 task-end) match core B byte-for-byte.
-// pc_skip=true never enters this stanza (Engine::startBinStage closes task-1 preemptively).
+// TASK-1 BODY under pc_faithful — dispatched by fresh-entry PC:
+//   0x80044F58 → Asset::loadTexgroup   (per-set texgroup loader)
+//   0x8004514C → Asset::preloadStage1  (SWDATA+DAT+relocation+VRAM build)
+// Both set done_flag and rec_dispatch 0x80051FB4 (task-end) so the caller of FUN_80044BD4's
+// wait-loop sees the completion in the same tick. pc_skip=true never enters this stanza —
+// Engine::startBinStage closes task-1 preemptively there.
 static StanzaResult run_task1_preload_stanza(Core* c, int i, uint32_t base, uint32_t st,
                                              int native_content, const R3000& loop) {
   if (!native_content) return STANZA_NOT_MINE;
-  int t1_fresh = (st == 3 || (st == 2 && !c->game->sched.task_started[i]))
-                 && c->mem_r32(base + 0xc) == 0x80044F58u;
+  int t1_fresh = st == 3 || (st == 2 && !c->game->sched.task_started[i]);
   if (!t1_fresh) return STANZA_NOT_MINE;
+  const uint32_t entry_pc = c->mem_r32(base + 0xc);
+  const bool is_preload_body    = entry_pc == 0x80044F58u;
+  const bool is_stage1_callback = entry_pc == 0x8004514Cu;
+  if (!is_preload_body && !is_stage1_callback) return STANZA_NOT_MINE;
   c->game->sched.task_ctx[i] = loop;
   c->game->sched.task_ctx[i].r[29] = c->mem_r32(base + 8);
   c->game->sched.task_ctx[i].r[31] = 0xDEAD0000u;
@@ -384,7 +387,8 @@ static StanzaResult run_task1_preload_stanza(Core* c, int i, uint32_t base, uint
   static_cast<R3000&>(*c) = c->game->sched.task_ctx[i];
   c->game->sched.in_stage = 1;
   if (setjmp(c->game->sched.yield_jmp) == 0) {
-    c->engine.asset.loadTexgroup();     // FUN_80044F58 — sets done_flag & rec_dispatches 0x80051FB4
+    if (is_preload_body) c->engine.asset.loadTexgroup();
+    else                 c->engine.asset.preloadStage1(/*run_as_task=*/true);
   }
   c->game->sched.in_stage = 0;
   c->game->sched.task_started[i] = 0;
@@ -398,7 +402,7 @@ static StanzaResult run_task1_preload_stanza(Core* c, int i, uint32_t base, uint
 static StanzaResult run_stage0_step_stanza(Core* c, int i, uint32_t base, uint32_t st,
                                            int native_content) {
   if (!(native_content && st == 2 && c->game->sched.task_started[i]
-        && c->mem_r32(base + 0xc) == 0x8010649Cu && c->game->sched.stage0_step[i] < 5))
+        && c->mem_r32(base + 0xc) == 0x8010649Cu && c->game->sched.stage0_step[i] < 8))
     return STANZA_NOT_MINE;
   c->mem_w16(base, 4);
   c->mem_w32(CUR_TASK, base);
