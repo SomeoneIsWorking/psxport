@@ -1250,19 +1250,25 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
   // psx_fallback per mode: gameplay/full run PSX gameplay on core B; render runs native gameplay on both;
   // oracle runs the PURE interpreter+soft-rasterizer oracle on B (docs/oracle.md).
   int fb_b = (mMode == M_RENDER) ? 0 : 1;
-  // Core A's pc_skip mode. UNIFIED FLAG (user 2026-07-04 [[sbs-two-compare-modes]]):
-  // PSXPORT_PC_SKIP=1 → pc_skip=true (shortcut path, scratch mask on) — same flag standalone
-  // `./run.sh` honors (see boot.cpp). Default here is pc_skip=false (fiber path, strict
-  // byte-exact compare) so `PSXPORT_SBS_MODE=gameplay` alone is the strict gate.
-  // Legacy alias PSXPORT_SBS_PCFAITHFUL=0 still opts into pc_skip=true (kept working).
-  bool a_pc_skip = false;
-  { const char* e = getenv("PSXPORT_PC_SKIP"); if (e && *e && strcmp(e, "0") != 0) a_pc_skip = true; }
+  // Core A's pc_skip mode. UNIFIED FLAG PSXPORT_PC_SKIP (user 2026-07-04):
+  //   PSXPORT_PC_SKIP=1 (DEFAULT for SBS) → pc_skip=true — Core A runs the NATIVE shortcut
+  //     handlers (Engine::startBinStage, Demo::stageMain, etc). This is what the SBS harness
+  //     actually surfaces: native bugs (Slip #7 libgs DMA, SFX table fill, etc). Scratch mask
+  //     applied for boot-time "runs ahead" drift.
+  //   PSXPORT_PC_SKIP=0 → pc_skip=false — Core A routes every task to the Coro fiber running
+  //     the substrate body end-to-end (scheduler.cpp:302: `has_native_handler_for_entry` returns
+  //     false). Both cores run the SAME substrate, so byte-match is TRIVIAL and doesn't test any
+  //     native code. Kept as an audit mode: "confirm the substrate scheduler is deterministic".
+  // Legacy alias PSXPORT_SBS_PCFAITHFUL=1 still opts into pc_skip=false.
+  bool a_pc_skip = true;
+  { const char* e = getenv("PSXPORT_PC_SKIP");
+    if (e && *e && strcmp(e, "0") == 0) a_pc_skip = false; }
   { const char* e = getenv("PSXPORT_SBS_PCFAITHFUL");
-    if (e && *e && strcmp(e, "0") == 0) a_pc_skip = true; }   // legacy: =0 meant pc_skip on
+    if (e && *e && strcmp(e, "0") != 0) a_pc_skip = false; }
   mA = new Game(); mA->psx_fallback = 0;     mA->sbs = facade; mA->pc_skip = a_pc_skip;
   mB = new Game(); mB->psx_fallback = fb_b;  mB->sbs = facade; mB->pc_skip = false;
-  // Scratch mask (see isPcSkipScratch above): apply ONLY under pc_skip=true.
-  // Under pc_skip=false the compare is strict byte-exact (Slip #6 CLOSED / 22,980+ frames zero-diff mode).
+  // Scratch mask (see isPcSkipScratch above): apply ONLY under pc_skip=true (shortcut branches).
+  // Under pc_skip=false native FAITHFUL branches target byte-exact — mask off, no residuals.
   mPcSkipMask = a_pc_skip;
   // Allocate per-Core SPU-write logs so audio-relevant divergences (Issue #29) surface as
   // register-write drift, not just RAM byte drift. Bound by spu_bind on every frame step.
@@ -1270,7 +1276,8 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
   mB->spu_log = spu_new_log();
   fprintf(stderr, "[sbs] core A pc_skip=%s (%s) — B recomp is the oracle\n",
           a_pc_skip ? "true" : "false",
-          a_pc_skip ? "shortcuts on, scratch-mask compare (PSXPORT_PC_SKIP=1)" : "byte-exact strict compare (default)");
+          a_pc_skip ? "NATIVE shortcuts on, scratch-mask compare (default; PSXPORT_PC_SKIP=0 for faithful)"
+                    : "NATIVE faithful branches, byte-exact strict target (per-Slip faithful required)");
   if (mMode == M_ORACLE) { mB->core.use_interp = 1; mB->gpu.soft_gpu = 1; }
   load_exe(exePath, &mA->core); dc_boot_init(&mA->core);
   load_exe(exePath, &mB->core); dc_boot_init(&mB->core);

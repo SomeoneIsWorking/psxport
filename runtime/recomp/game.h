@@ -312,11 +312,12 @@ public:
   //       Full substrate — the stage machines, loaders, and content run as the recompiled PSX body
   //       instead of the native owners. The oracle for byte-comparison.
   //
-  // Default is pc_skip=false (byte-exact fiber path). Overridden by PSXPORT_PC_SKIP=1 env var in
-  // both standalone (boot.cpp) and SBS Core A (sbs.cpp). Under SBS, the strict byte-exact target
-  // is pc_skip=false; pc_skip=true opts into the scratch-mask compare (see feedback memory
-  // sbs-two-compare-modes + isPcSkipScratch in sbs.cpp).
-  bool pc_skip = false;
+  // Default is pc_skip=true — the NATIVE shortcut path (Engine::startBinStage, Demo::stageMain,
+  // etc.). Set PSXPORT_PC_SKIP=0 to route everything through the fiber substrate (audit mode:
+  // no native handlers run, scheduler.cpp `has_native_handler_for_entry` returns false). Under
+  // SBS the DEFAULT is also pc_skip=true because that's where real native bugs are — pc_skip=false
+  // just makes A run the same substrate as B (trivial byte-match).
+  bool pc_skip = true;
 
   // ---- dual-core diff mode (dualcore.cpp) ----------------------------------------------------------
   // When set, the frame body runs ONLY the guest-state-mutating work (per-frame update + scheduler +

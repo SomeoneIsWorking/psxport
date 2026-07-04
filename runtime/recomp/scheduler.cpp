@@ -163,7 +163,8 @@ static void run_demo_body(Core* c, int i, bool demo_fresh) {
 
 static StanzaResult run_demo_stanza(Core* c, int i, uint32_t base, uint32_t st,
                                     int native_content, const R3000& loop) {
-  if (native_content && !c->game->pc_skip) return STANZA_NOT_MINE;   // pc_faithful: fiber-only
+  // Native handlers run under BOTH pc_skip modes (pc_skip=false = faithful branches; see note in
+  // has_native_handler_for_entry). No fiber-only gate.
   int demo_fresh = native_content && (st == 3 || (st == 2 && !c->game->sched.task_started[i]))
                    && c->mem_r32(base + 0xc) == 0x801062E4u;
   if (!demo_fresh && !(c->game->sched.demo_native[i] && st == 2 && c->game->sched.task_started[i]))
@@ -204,7 +205,8 @@ static StanzaResult run_demo_stanza(Core* c, int i, uint32_t base, uint32_t st,
 // runs as a normal cooperative task via the fiber stanza below (its FUN_80051fb4 yield is serviced).
 static StanzaResult run_sop_area_load_stanza(Core* c, int i, uint32_t base, uint32_t st,
                                              int native_content, const R3000& loop) {
-  if (native_content && !c->game->pc_skip) return STANZA_NOT_MINE;   // pc_faithful: fiber-only
+  // Native handlers run under BOTH pc_skip modes (pc_skip=false = faithful branches; see note in
+  // has_native_handler_for_entry). No fiber-only gate.
   int sop_fresh = (st == 3 || (st == 2 && !c->game->sched.task_started[i]))
                   && c->mem_r32(base + 0xc) == 0x80109164u;
   if (!(sop_fresh && native_content)) return STANZA_NOT_MINE;
@@ -240,13 +242,7 @@ static StanzaResult run_game_stanza(Core* c, int i, uint32_t base, uint32_t st,
     c->game->sched.task_started[i] = 0;
   }
   if (!native_content) return STANZA_NOT_MINE;
-  if (!c->game->pc_skip) {                                      // pc_faithful: fiber-only
-    if (c->game->sched.game_native[i]) {                        // clear stale native-mode flag
-      c->game->sched.game_native[i] = 0;
-      c->game->sched.task_started[i] = 0;
-    }
-    return STANZA_NOT_MINE;
-  }
+  // Native GAME stanza runs under BOTH pc_skip modes.
   if (!game_fresh && !(c->game->sched.game_native[i] && st == 2 && c->game->sched.task_started[i]))
     return STANZA_NOT_MINE;
   if (game_fresh) {
@@ -291,16 +287,16 @@ static StanzaResult run_game_stanza(Core* c, int i, uint32_t base, uint32_t st,
   return STANZA_HANDLED;
 }
 
-// Entry PCs the native stanzas handle — only under pc_skip. Under pc_faithful (Job #1), NONE of
-// the native task handlers run: DEMO/GAME/SOP/STAGE-0 all route to the Coro fiber and run their
-// substrate bodies end-to-end. That's what makes pc_faithful "byte-exact clone of recomp_path" —
-// same code path B runs. Native handlers are shortcuts (the collapsed pc_skip fork of every
-// fork): they skip FUN_80044BD4's RNG-stamp + wait-loop cadence, FUN_800506D0's sleep-decrementer
-// order-of-ops, and other cooperative-yield details that byte-match only when the substrate
-// itself runs. Running the substrate on both cores is byte-identical by construction — no manual
-// step-spread, no byte-emit hacks, no per-fork "faithful reproduce" quirks.
+// Entry PCs the native stanzas handle. Under BOTH pc_skip modes native handlers run — that's the
+// actual test surface. The two modes differ in what the handlers DO:
+//   pc_skip=true  → shortcut branches (collapsed multi-step init, scratch drift OK)
+//   pc_skip=false → FAITHFUL native branches — byte-exact reproduction of substrate cadence
+//                   (Slip #3 case-0 split, task-1 spawn cadence, RNG stamps, etc.).
+// The "fiber-only under pc_skip=false" mode (fiber runs substrate on both cores, trivial
+// byte-match, no native code tested) proved a bad design — it made SBS pc_skip=false meaningless
+// as a native-bug gate. Reverted 2026-07-04 per user directive.
 static bool has_native_handler_for_entry(Core* c, uint32_t entry_pc) {
-  if (!c->game->pc_skip) return false;   // pc_faithful: no natives, all-fiber
+  (void)c;
   return entry_pc == 0x801062E4u   // DEMO
       || entry_pc == 0x80109164u   // SOP area-load
       || entry_pc == 0x8010637Cu   // GAME
