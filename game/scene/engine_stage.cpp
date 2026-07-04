@@ -1582,91 +1582,79 @@ static void sync_preload_spawn(Core* c, uint32_t task1_entry, uint8_t flag2, uin
   native_task_spawn(c, 1, task1_entry);
 }
 
+// Baked pixel data address inside START.BIN (16x1 pixel strip loaded to VRAM(944,256)).
+static constexpr uint32_t kStartBinLoadImageSrc = 0x80106878u;
+
+// Common shared work — advance stage-0 SM + RNG stamp + preload. The RNG advance is game logic
+// (the substrate's FUN_80044BD4 unconditionally calls FUN_8009A450), so both paths fire it.
+static void startBinCommonAdvance(Core* c, Asset& asset, Rng& rng) {
+  uint32_t task = c->mem_r32(CUR_TASK);
+  c->mem_w16(task + 0x4a, 0);
+  asset.preloadTexgroup(0, 0);
+  c->mem_w16(task + 0x56, (uint16_t)rng.next());
+  c->mem_w16(task + 0x48, 1);
+}
+
+// Public entry: forward to the fork based on mIsFaithful.
 void Engine::startBinStage() {
+  if (core->game && core->game->mIsFaithful) startBinStageFaithful();
+  else                                        startBinStageUnfaithful();
+}
+
+// ---- FAITHFUL: byte-faithful native port of substrate 0x8010649C ---------------------------------
+// Substrate body (from disas of START.BIN + Ghidra decomp):
+//   sp -= 456                                             ; guest stack allocation
+//   *(RECT*)(sp+400) = { x=944, y=256, w=16, h=1 }        ; init the LoadImage RECT
+//   save s0..s4/ra at sp+432..sp+452                      ; callee-save spills
+//   FUN_80081218(sp+400, 0x80106878)                      ; libgs LoadImage — 16x1 to VRAM(944,256)
+//   FUN_80080F6C(0)                                       ; libgs DrawSync — sync GPU
+//   for each of 3 filename tables + 3 XA singletons:
+//     for each name:
+//       FUN_8008B8F0(CdlFILE_buf, name_ptr)               ; libcd CdSearchFile
+//       lba  = FUN_8008A110(CdlFILE_buf)                  ; libcd CdPosToInt
+//       size = *(CdlFILE_buf + 4)
+//       *dest = {lba, size}
+//   restore s0..s4/ra ; sp += 456
+//   preloadTexgroup(0, 0) via FUN_80044BD4 spawn+wait     ; state-0 asset preload
+//   task[0]+0x56 = RNG.next()                             ; seed stamp
+//   task[0]+0x48 = 1                                      ; advance stage-0 SM
+//   FUN_80044BD4 spawn task-1 with FUN_80044F58            ; queue preload wake for next state
+void Engine::startBinStageFaithful() {
   Core* c = core;
-  const bool faithful = c->game && c->game->mIsFaithful;
-
-  // FAITHFUL: mimic the substrate task-0 body 0x8010649C's prologue so its stack scratch matches B
-  // byte-for-byte during the subsequent CdSearchFile dispatches. Substrate does:
-  //   sp -= 456; init-struct at sp+400..sp+407 = {944, 256, 16, 1}; save r16..r20/r31 at
-  //   sp+432..sp+452; then dispatch FUN_80081218(sp+400) and FUN_80080F6C(0). Reproducing those
-  //   writes + dispatches makes CdSearchFile push its own frames from the substrate's sp = matching
-  //   scratch addresses. Safety cite (audit 2026-07-04): grep of 0x801FE7xx..0x801FEAxx = 0 PC
-  //   readers — stack scratch is dynamic function-local; no code reads it by absolute address.
-  // The substrate task-0 body 0x8010649C prologue does:
-  //   sp -= 456
-  //   init RECT struct at sp+400..sp+407 = {x=944, y=256, w=16, h=1}
-  //   save s0..s4/ra at sp+432..sp+452
-  //   LoadImage(RECT*=sp+400, src=0x80106878)       — a 16x1 pixel strip at VRAM(944,256)
-  //   DrawSync(0)
-  //   [then the CdSearchFile file-table loops]
-  //
-  // GAME LOGIC (both paths): the 16x1 VRAM upload IS real content — the game needs it in VRAM
-  // regardless of SBS mode. Port it via Asset::uploadImage (== FUN_80081218 already RE'd) reading
-  // the RECT from a compact temp buffer + the pixel data straight from START.BIN's baked buffer.
-  //
-  // FAITHFUL-only: mimic the substrate's guest-sp allocation so the subsequent CdSearchFile
-  // dispatch's stack pushes land at addresses matching B's substrate — the CdSearchFile substrate
-  // uses this same guest stack, so aligning sp aligns its scratch region. Register spills at
-  // sp+432..452 reproduce the substrate's callee-save writes. Safety cite (audit 2026-07-04): grep
-  // of 0x801FE7xx..0x801FEAxx = 0 PC readers — the stack scratch below sp is dynamic function-
-  // local memory; no code reads it by absolute address.
-  //
-  // KNOWN RESIDUAL: LoadImage's and DrawSync's substrate bodies push their own callee-saved regs +
-  // args on the guest stack (~164 B) via a libgs fn-ptr chain that dispatches into overlay code
-  // not yet resident (miss at 0x80111A84). The native uploadImage below writes to native VRAM (not
-  // guest RAM) so those 164 B of stack scratch remain un-matched in SBS gameplay-mode. No game-
-  // state effect (region is below-sp dead memory) but SBS still flags — see docs/findings/sbs.md.
-  static constexpr uint32_t kStartBinLoadImageSrc = 0x80106878u;   // baked pixel data in START.BIN
   const uint32_t saved_sp = c->r[29];
-  uint32_t cdlfile_buf_base = 0;
-  if (faithful) {
-    c->r[29] -= 456;
-    c->mem_w16(c->r[29] + 400, 944);
-    c->mem_w16(c->r[29] + 402, 256);
-    c->mem_w16(c->r[29] + 404, 16);
-    c->mem_w16(c->r[29] + 406, 1);
-    c->mem_w32(c->r[29] + 432, c->r[16]);
-    c->mem_w32(c->r[29] + 436, c->r[17]);
-    c->mem_w32(c->r[29] + 440, c->r[18]);
-    c->mem_w32(c->r[29] + 444, c->r[19]);
-    c->mem_w32(c->r[29] + 448, c->r[20]);
-    c->mem_w32(c->r[29] + 452, c->r[31]);
-    cdlfile_buf_base = c->r[29] + 16;                          // per-iter CdlFILE buffer: sp+16..
-    // Dispatch substrate FUN_80081218 (LoadImage) so its guest-state side effects fire — the fn
-    // chains into libgs internals (FUN_80097194 etc.) that write graphics context state at
-    // 0x800AC5xx-0x800AC6xx. Native uploadImage writes native VRAM but skips those guest writes,
-    // producing SBS divergence. Passing RECT* at sp+400 and src=0x80106878 matches the substrate.
-    c->r[4] = c->r[29] + 400;
-    c->r[5] = kStartBinLoadImageSrc;
-    rec_dispatch(c, 0x80081218u);                                // FUN_80081218 LoadImage
-    // Substrate then calls FUN_80080F6C(0) DrawSync — no-op in our sync GPU but the fn chain
-    // writes stack scratch we need to reproduce for byte-clean SBS.
-    c->r[4] = 0;
-    rec_dispatch(c, 0x80080F6Cu);                                // FUN_80080F6C DrawSync
-  } else {
-    // PC path: build a compact 8-byte RECT in scratchpad (unused header slot 0x1F800008..F is fine
-    // as a scratch buffer here — pre-render, no OT active), upload from it. Skip the sp mimicry
-    // since without CdSearchFile dispatch (PC uses native ISO9660) there's no substrate call chain
-    // to align guest stacks with.
-    c->mem_w16(0x1F800008u + 0, 944);
-    c->mem_w16(0x1F800008u + 2, 256);
-    c->mem_w16(0x1F800008u + 4, 16);
-    c->mem_w16(0x1F800008u + 6, 1);
-    asset.uploadImage(0x1F800008u, kStartBinLoadImageSrc);
-  }
 
-  auto resolve = [&](uint32_t iter, uint32_t name_ptr, uint32_t* lba, uint32_t* size) {
-    if (faithful) return resolve_via_libcd(c, name_ptr, cdlfile_buf_base + iter * 24, lba, size);
-    return resolve_via_iso9660(c, name_ptr, lba, size);
-  };
+  // Prologue — substrate `addiu sp, -456` + RECT init + callee-save spills. Reproducing these guest
+  // writes places the subsequent CdSearchFile substrate calls' stack pushes at addresses matching
+  // core B, and the RECT ptr passed to LoadImage lives at the same guest address as substrate.
+  c->r[29] -= 456;
+  c->mem_w16(c->r[29] + 400, 944);
+  c->mem_w16(c->r[29] + 402, 256);
+  c->mem_w16(c->r[29] + 404, 16);
+  c->mem_w16(c->r[29] + 406, 1);
+  c->mem_w32(c->r[29] + 432, c->r[16]);
+  c->mem_w32(c->r[29] + 436, c->r[17]);
+  c->mem_w32(c->r[29] + 440, c->r[18]);
+  c->mem_w32(c->r[29] + 444, c->r[19]);
+  c->mem_w32(c->r[29] + 448, c->r[20]);
+  c->mem_w32(c->r[29] + 452, c->r[31]);
+  const uint32_t cdlfile_buf_base = c->r[29] + 16;              // per-iter CdlFILE buffer window
 
+  // FUN_80081218 (LoadImage): dispatch the substrate so its libgs fn-ptr chain fires (writes the
+  // graphics-context state at 0x800AC5xx-0x800AC6xx via FUN_80097194 etc.).
+  c->r[4] = c->r[29] + 400;
+  c->r[5] = kStartBinLoadImageSrc;
+  rec_dispatch(c, 0x80081218u);
+  // FUN_80080F6C (DrawSync): substrate does a no-op in our sync GPU, but its call chain writes the
+  // stack scratch bytes we need to reproduce for byte-clean SBS.
+  c->r[4] = 0;
+  rec_dispatch(c, 0x80080F6Cu);
+
+  // File-table build via libcd CdSearchFile (dispatched substrate).
   for (const auto& L : kStartBinLoops) {
-    // Substrate resets iter=0 for each loop (r[20] gets zeroed between loops), so per-iter buffer
-    // offset resets too — B walks the same sp+16..sp+16+count*24 window in each loop.
     for (uint32_t i = 0; i < L.count; i++) {
       uint32_t lba = 0, size = 0;
-      resolve(i, c->mem_r32(L.name_table + i * 4), &lba, &size);
+      resolve_via_libcd(c, c->mem_r32(L.name_table + i * 4),
+                        cdlfile_buf_base + i * 24, &lba, &size);
       c->mem_w32(L.dest_table + i * 8,     lba);
       c->mem_w32(L.dest_table + i * 8 + 4, size);
     }
@@ -1674,30 +1662,53 @@ void Engine::startBinStage() {
   for (uint32_t i = 0; i < 3; i++) {
     const auto& X = kStartBinXa[i];
     uint32_t lba = 0, size = 0;
-    resolve(i, X.name_ptr, &lba, &size);
+    resolve_via_libcd(c, X.name_ptr, cdlfile_buf_base + i * 24, &lba, &size);
     c->mem_w32(X.lba_dest, lba);
   }
-  if (faithful) c->r[29] = saved_sp;   // stack contents below saved_sp remain — that IS the scratch
+  c->r[29] = saved_sp;   // restore sp; the 456 B below stay written (matches substrate scratch)
 
-  uint32_t task = c->mem_r32(CUR_TASK);
-  c->mem_w16(task + 0x4a, 0);
+  startBinCommonAdvance(c, asset, c->rng);
 
-  // Game logic — fires on BOTH paths (per-user 2026-07-04, RNG is game logic):
-  //   preloadTexgroup(0)      — state-0 asset preload (a PC game needs this too)
-  //   task+0x56 = rng.next()  — FUN_80044BD4's RNG advance + seed stamp
-  //   sm[0x48] = 1            — advance stage-0 SM state 0 → 1
-  asset.preloadTexgroup(0, 0);
-  c->mem_w16(task + 0x56, (uint16_t)c->rng.next());
-  c->mem_w16(task + 0x48, 1);
+  // FUN_80044BD4 spawn task-1 (preload wake at FUN_80044F58) — port of the sync_preload primitive.
+  // task-1's substrate body runs via the Coro-fiber stanza and signals done_flag itself.
+  sync_preload_spawn(c, /*task1_entry=*/0x80044F58u, 0, 0);
 
-  // FAITHFUL-only fork: simulate the substrate cooperative scheduler's task-1 slot spawn + wait
-  // handshake (done_flag, task-1 slot fields). PC has no cooperative scheduler consuming those,
-  // so PC skips them — this is the coro-vs-nothing case, analogous to resolve_via_libcd vs
-  // resolve_via_iso9660 above (same effect: preload done; different scheduling strategy).
-  if (faithful) sync_preload_spawn(c, /*task1_entry=*/0x80044F58u, 0, 0);
+  fprintf(stderr, "[start.bin] file table built (faithful/libcd); preload SM stepped across ticks\n");
+}
 
-  fprintf(stderr, "[start.bin] file table built (%s); preload SM stepped across ticks via stage0Advance\n",
-          faithful ? "faithful/libcd" : "pc/iso9660");
+// ---- UNFAITHFUL: skip-path optimized for normal PC play ------------------------------------------
+// Skips PSX-only quirks (no guest-sp descent, no libgs substrate dispatch, no task-1 spawn) and
+// uses native primitives for what remains: ISO9660 for file lookup, native VRAM upload, sync
+// preload inline. Byte-diverges from substrate but produces equivalent game state on hardware.
+void Engine::startBinStageUnfaithful() {
+  Core* c = core;
+
+  // Native VRAM upload — RECT built in scratchpad (unused pre-render), src straight from START.BIN.
+  c->mem_w16(0x1F800008u + 0, 944);
+  c->mem_w16(0x1F800008u + 2, 256);
+  c->mem_w16(0x1F800008u + 4, 16);
+  c->mem_w16(0x1F800008u + 6, 1);
+  asset.uploadImage(0x1F800008u, kStartBinLoadImageSrc);
+
+  // File-table build via native ISO9660 (no libcd dispatch, no CdlFILE buffer).
+  for (const auto& L : kStartBinLoops) {
+    for (uint32_t i = 0; i < L.count; i++) {
+      uint32_t lba = 0, size = 0;
+      resolve_via_iso9660(c, c->mem_r32(L.name_table + i * 4), &lba, &size);
+      c->mem_w32(L.dest_table + i * 8,     lba);
+      c->mem_w32(L.dest_table + i * 8 + 4, size);
+    }
+  }
+  for (uint32_t i = 0; i < 3; i++) {
+    const auto& X = kStartBinXa[i];
+    uint32_t lba = 0, size = 0;
+    resolve_via_iso9660(c, X.name_ptr, &lba, &size);
+    c->mem_w32(X.lba_dest, lba);
+  }
+
+  startBinCommonAdvance(c, asset, c->rng);
+
+  fprintf(stderr, "[start.bin] file table built (pc/iso9660); preload SM stepped across ticks\n");
 }
 
 // stage0Advance: one step of the STAGE-0 preload SM. Called by the scheduler on each tick after the

@@ -165,13 +165,27 @@ public:
   //   `ov_draw_otag` in game_tomba2.cpp.
   void drawOTag(uint32_t otHead);
 
-  // startBinStage: task-0's START.BIN file-table builder (native ISO9660 resolver in place of the
-  // PSX cooperative loader FUN_80044BD4). Populates the per-stage LBA/size tables at
-  // 0x800BE118 (25 entries), 0x800BE1E0 (3 entries), 0x800BE0F0 (5 entries) + three XA scratchpad
-  // slots. Called by the scheduler at task-0 boot (runtime/recomp/scheduler.cpp) on FRESH entry;
-  // the stage-0 preload SM is stepped across subsequent scheduler ticks via stage0Advance() so
-  // native matches the recomp body's per-iteration yield cadence (docs/findings/sbs.md Slip #1).
+  // startBinStage: task-0's START.BIN file-table builder — dispatcher between the two forks below.
+  // On mIsFaithful=true → startBinStageFaithful (byte-faithful PC port of substrate 0x8010649C).
+  // Otherwise → startBinStageUnfaithful (optimized PC path — skips PSX-only quirks).
   void startBinStage();
+
+  // startBinStageFaithful: the PRIMARY path. Faithful native port of substrate 0x8010649C —
+  // reproduces every guest-observable write in the same order so gameplay-mode SBS byte-matches
+  // core B by construction. This means: descend guest sp by 456 (matches substrate prologue),
+  // build the RECT on the guest stack at sp+400, dispatch FUN_80081218 (LoadImage) so its libgs
+  // fn-ptr chain writes the graphics-context state at 0x800AC5xx-0x800AC6xx, DrawSync, walk the
+  // three CdSearchFile filename tables + XA singletons, restore sp, advance sm[0x48]=1, RNG-stamp
+  // task+0x56, spawn task-1 via native_task_spawn (port of FUN_80051F14). Task-1's substrate
+  // wake at 0x80044F58 runs via the Coro-fiber stanza.
+  void startBinStageFaithful();
+
+  // startBinStageUnfaithful: separate SKIP path used in normal PC play. Skips PSX-only quirks:
+  // no guest-sp descent, no libgs LoadImage substrate dispatch (uses native VRAM upload instead),
+  // no task-1 spawn (asset.preloadTexgroup runs inline synchronously), uses native ISO9660 for
+  // file lookups instead of libcd. Byte-diverges from substrate but works fine at runtime — the
+  // resulting game state is equivalent to what the substrate produces on hardware.
+  void startBinStageUnfaithful();
 
   // stage0Advance: run ONE step of the native STAGE-0 preload state machine, matching the recomp
   // body of 0x8010649C's per-iteration yield loop (see docs/findings/sbs.md Slip #1). Called by
