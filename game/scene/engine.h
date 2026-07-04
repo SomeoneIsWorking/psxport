@@ -167,18 +167,27 @@ public:
   //   `ov_draw_otag` in game_tomba2.cpp.
   void drawOTag(uint32_t otHead);
 
-  // startBinStage: task-0's START.BIN file-table builder — pc_skip only (pc_faithful routes to
-  // fiber and runs the substrate func_8010649C body via run_coro_fiber_stanza). Collapsed
-  // single-tick native replacement: no guest-sp descent, no libgs LoadImage substrate dispatch
-  // (native VRAM upload instead), no task-1 spawn (asset.preloadTexgroup runs inline sync),
-  // native ISO9660 for file lookups instead of libcd.
+  // startBinStage: task-0's START.BIN file-table builder — dispatches to the pc_skip shortcut or
+  // the pc_faithful hand-port of ov_start_gen_8010649C. See the two helper methods below.
   void startBinStage();
+  // startBinStageSkip: pc_skip=true collapsed shortcut. Native VRAM upload (bypasses libgs), the
+  // libcd dir cache populated by cdlibcd_* end-state (bypasses libcd), native ISO9660 file
+  // lookups, inline asset.preloadTexgroup, task-1 slot closed with no body ever running.
+  void startBinStageSkip();
+  // startBinStageFaithful: pc_skip=false byte-exact port. Substrate prologue (sp-=456 + r16-r20+ra
+  // spills), libgs LoadImage/DrawSync via rec_dispatch, libcd file-table build via LibcdNative,
+  // task-1 spawn+RNG-stamp+sm[0x48]=1 at same tick as substrate L_8010678C.
+  void startBinStageFaithful();
 
-  // stage0Advance: one step of the STAGE-0 preload SM (pc_skip only). Called by the scheduler on
-  // each tick after startBinStage's fresh-entry file-table build. Spreads preloadStage1 + sm
-  // advances + swap-to-DEMO across a few ticks. Final step calls startStage(1) which rewrites
-  // task+0xc to DEMO and yields. Returns 1 while more steps remain, 0 when the swap has landed.
+  // stage0Advance: one step of the STAGE-0 preload SM. Called by the scheduler on each tick after
+  // startBinStage. Returns 1 while more steps remain, 0 when the DEMO swap has landed.
   int stage0Advance(uint8_t& step);
+  // stage0AdvanceSkip: pc_skip cadence — 5 steps: RNG stand-in, inline preloadStage1, sm advances,
+  // startStage(1). Collapses substrate's multi-tick spawn+wait cycles into inline calls.
+  int stage0AdvanceSkip(uint8_t& step);
+  // stage0AdvanceFaithful: substrate ov_start_gen_8010649C's L_80106744 SM loop — 8 steps that
+  // mirror sm[0x48]=1 wait → yield → sm=2 spawn+RNG → wait → yield → sm=3 → yield → startStage(1).
+  int stage0AdvanceFaithful(uint8_t& step);
 
 
   // task0Bootstrap: the boot-init entry that (a) resolves \BIN\START.BIN natively via disc_find_file,

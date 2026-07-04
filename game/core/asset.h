@@ -49,10 +49,13 @@ public:
   //   native_stage0_sm boot preload chain in engine_stage.cpp and by engine_demo's area-load.
   void preloadTexgroup(uint32_t mode, uint32_t set);
 
-  // preloadStage1(): FUN_8004514C — SWDATA + DAT load, shared texgroup sub-load, relocation,
-  //   cel/sprite VRAM build. Second state of the boot preload chain. `run_as_task` = true when
-  //   invoked as a task-1 body under pc_faithful (sets done_flag + rec_dispatches task-end);
-  //   direct callers pass false.
-  void preloadStage1(bool run_as_task = false);
+  // FUN_8004514C — SWDATA + DAT load, shared texgroup sub-load, relocation table, cel/sprite
+  // VRAM build. Two entry points for the same body:
+  //   preloadStage1()       — inline direct call (pc_skip stage0Advance, native area load)
+  //   preloadStage1AsTask() — task-1 body wrapper (pc_faithful): also sets done_flag=1 and
+  //                           rec_dispatches 0x80051FB4 (task-end) so the caller of FUN_80044BD4
+  //                           sees the wait-loop exit
+  void preloadStage1();
+  void preloadStage1AsTask();
 };
 #endif

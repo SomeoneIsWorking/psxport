@@ -388,7 +388,7 @@ static StanzaResult run_task1_preload_stanza(Core* c, int i, uint32_t base, uint
   c->game->sched.in_stage = 1;
   if (setjmp(c->game->sched.yield_jmp) == 0) {
     if (is_preload_body) c->engine.asset.loadTexgroup();
-    else                 c->engine.asset.preloadStage1(/*run_as_task=*/true);
+    else                 c->engine.asset.preloadStage1AsTask();
   }
   c->game->sched.in_stage = 0;
   c->game->sched.task_started[i] = 0;

@@ -1976,7 +1976,9 @@ static void cdlibcd_cache_file(Core* c, uint32_t dir_idx) {
 // Baked pixel data address inside START.BIN (16x1 pixel strip loaded to VRAM(944,256)).
 static constexpr uint32_t kStartBinLoadImageSrc = 0x80106878u;
 
-// Advance stage-0 SM + preload boot texgroup. pc_skip only (pc_faithful runs the substrate).
+// Advance stage-0 SM + preload boot texgroup. pc_skip only — the pc_faithful path splits these
+// writes across their real substrate call sites (task-1 spawn for preload, FUN_80044BD4 tail for
+// sm[0x48]:=1, FUN_80044BD4 body for RNG stamp).
 static void startBinCommonAdvance(Core* c, Asset& asset, Rng& rng) {
   uint32_t task = c->mem_r32(CUR_TASK);
   c->mem_w16(task + 0x4a, 0);
@@ -1985,238 +1987,210 @@ static void startBinCommonAdvance(Core* c, Asset& asset, Rng& rng) {
   c->mem_w16(task + 0x48, 1);
 }
 
-// pc_skip STAGE-0 entry — collapsed single-tick replacement for substrate 0x8010649C's file-table
-// build. Native primitives throughout: ISO9660 for file lookup, native VRAM upload, sync inline
-// preload. No guest-sp descent, no libgs dispatch, no task-1 spawn. pc_faithful never reaches
-// this — the coro fiber runs the substrate func_8010649C body directly.
+// One-line dispatchers — the pc_skip/faithful fork lives at method granularity so each path
+// reads top-to-bottom without inline branching. User rule (2026-07-04): no code blocks inside
+// if (pc_skip) / if (!pc_skip) — call one of two named methods.
 void Engine::startBinStage() {
-  Core* c = core;
+  if (core->game->pc_skip) startBinStageSkip();
+  else                     startBinStageFaithful();
+}
 
-  // VRAM upload rect (scratchpad @0x1F800008 = same guest addr both cores).
+// ── STARTBINSTAGE — pc_skip (default ./run.sh) ──────────────────────────────────────────
+// Collapsed native shortcut. Native VRAM upload (bypasses libgs LoadImage), native ISO9660 file
+// lookup (bypasses libcd — libcd's dir/file cache is written from the same ISO9660 sectors so
+// any post-boot rec_dispatch into CdSearchFile short-circuits its newmedia branch), inline
+// preloadTexgroup (bypasses task-1 spawn), task-1 slot closed with state=0 as if it ran-and-
+// completed inline. task-0's native_task_spawn mirrors the substrate's task-slot writes (BIOS
+// TCB placeholder at +0x04, entry_pc at +0x0C, caller gp at +0x10) — gp value 0x800BE0D4 is the
+// substrate's caller-of-FUN_80051F14 gp captured at the STAGE-0 call site.
+void Engine::startBinStageSkip() {
+  Core* c = core;
+  c->mem_w16(0x1F800008u + 0, 944);
+  c->mem_w16(0x1F800008u + 2, 256);
+  c->mem_w16(0x1F800008u + 4, 16);
+  c->mem_w16(0x1F800008u + 6, 1);
+  asset.uploadImage(0x1F800008u, kStartBinLoadImageSrc);
+
+  cdlibcd_new_media(c);
+  c->mem_w32(kGuestMediaCookieDst, c->mem_r32(kGuestMediaCookieSrc));
+  cdlibcd_cache_file(c, 2);
+  cdlibcd_cache_file(c, 3);
+
+  for (const auto& L : kStartBinLoops) {
+    for (uint32_t i = 0; i < L.count; i++) {
+      uint32_t lba = 0, size = 0;
+      resolve_via_iso9660(c, c->mem_r32(L.name_table + i * 4), &lba, &size);
+      c->mem_w32(L.dest_table + i * 8,     lba);
+      c->mem_w32(L.dest_table + i * 8 + 4, size);
+    }
+  }
+  for (uint32_t i = 0; i < 3; i++) {
+    const auto& X = kStartBinXa[i];
+    uint32_t lba = 0, size = 0;
+    resolve_via_iso9660(c, X.name_ptr, &lba, &size);
+    c->mem_w32(X.lba_dest, lba);
+  }
+
+  startBinCommonAdvance(c, asset, c->rng);   // inline preload + rng stamp + sm[0x48]:=1
+
+  const uint32_t saved_gp = c->r[28];
+  c->r[28] = 0x800BE0D4u;
+  native_task_spawn(c, 1, 0x80044F58u);      // slot writes only; task-1 body never runs
+  c->r[28] = saved_gp;
+  c->mem_w16(0x801FE070u, 0);                // close task-1 (already ran inline)
+
+  fprintf(stderr, "[start.bin] file table built (pc/iso9660); preload SM stepped across ticks\n");
+}
+
+// ── STARTBINSTAGE — pc_faithful (PSXPORT_PC_SKIP=0) ─────────────────────────────────────
+// Hand port of ov_start_gen_8010649C's prologue + LoadImage + libcd file-table build up to
+// (but not including) its SM loop head at L_80106728. Substrate prologue:
+//   sp -= 456; sw ra 452; sw s4 448; sw s3 444; sw s2 440; sw s1 436; sw s0 432
+// LoadImage(rect,src) + DrawSync(0). Then the three file-name tables + three XA singletons via
+// CdSearchFile+CdPosToInt (CdlFILE output at sp+400 matches substrate's caller-local buffer).
+// SM loop tail (spawn+wait cycles) is driven by Engine::stage0AdvanceFaithful; here we prime the
+// first cycle by spawning task-1 (FUN_80044F58), stamping RNG (FUN_80044BD4 param_4=0 branch),
+// and writing sm[0x48]:=1 in the same tick as substrate L_8010678C.
+void Engine::startBinStageFaithful() {
+  Core* c = core;
   c->mem_w16(0x1F800008u + 0, 944);
   c->mem_w16(0x1F800008u + 2, 256);
   c->mem_w16(0x1F800008u + 4, 16);
   c->mem_w16(0x1F800008u + 6, 1);
 
-  if (c->game && !c->game->pc_skip) {
-    // pc_faithful — hand port of ov_start_gen_8010649C. Substrate prologue:
-    //   sp -= 456
-    //   sw ra, 452(sp); sw s4, 448(sp); sw s3, 444(sp); sw s2, 440(sp); sw s1, 436(sp); sw s0, 432(sp)
-    // Then LoadImage(rect,src) + DrawSync(0). Then a loop of CdSearchFile+CdPosToInt over
-    // the three file-name tables and three XA singletons. Reproduce sp and the saved-reg
-    // writes byte-for-byte; delegate leaves via rec_dispatch (libgs, libcd via LibcdNative,
-    // CdPosToInt). The trailing yield/state-machine tail (line 208 of ov_start_shard_0.c) is
-    // deferred to a follow-up divergence (chase in later slips).
-    const uint32_t saved_sp = c->r[29];
-    c->r[29] -= 456;
-    c->mem_w32(c->r[29] + 452, c->r[31]);   // sw ra
-    c->mem_w32(c->r[29] + 448, c->r[20]);   // sw s4
-    c->mem_w32(c->r[29] + 444, c->r[19]);   // sw s3
-    c->mem_w32(c->r[29] + 440, c->r[18]);   // sw s2
-    c->mem_w32(c->r[29] + 436, c->r[17]);   // sw s1
-    c->mem_w32(c->r[29] + 432, c->r[16]);   // sw s0
+  const uint32_t saved_sp = c->r[29];
+  c->r[29] -= 456;
+  c->mem_w32(c->r[29] + 452, c->r[31]);
+  c->mem_w32(c->r[29] + 448, c->r[20]);
+  c->mem_w32(c->r[29] + 444, c->r[19]);
+  c->mem_w32(c->r[29] + 440, c->r[18]);
+  c->mem_w32(c->r[29] + 436, c->r[17]);
+  c->mem_w32(c->r[29] + 432, c->r[16]);
 
-    // libgs LoadImage + DrawSync (substrate prologue writes at 0x801FE7E8-area come from here).
-    c->r[4] = 0x1F800008u; c->r[5] = kStartBinLoadImageSrc; rec_dispatch(c, 0x80081218u);
-    c->r[4] = 0;                                            rec_dispatch(c, 0x80080F6Cu);
+  c->r[4] = 0x1F800008u; c->r[5] = kStartBinLoadImageSrc; rec_dispatch(c, 0x80081218u);
+  c->r[4] = 0;                                            rec_dispatch(c, 0x80080F6Cu);
 
-    // File-table build via libcd (native wrapper → gen_func_8008B8F0). Output CdlFILE at sp+400.
-    LibcdNative libcd(c);
-    const uint32_t buf = c->r[29] + 400;
-    for (const auto& L : kStartBinLoops) {
-      for (uint32_t i = 0; i < L.count; i++) {
-        if (libcd.searchFile(buf, c->mem_r32(L.name_table + i * 4))) {
-          c->r[4] = buf; rec_dispatch(c, kGuestCdPosToInt);
-          c->mem_w32(L.dest_table + i * 8,     c->r[2]);
-          c->mem_w32(L.dest_table + i * 8 + 4, c->mem_r32(buf + 4));
-        }
-      }
-    }
-    for (uint32_t i = 0; i < 3; i++) {
-      const auto& X = kStartBinXa[i];
-      if (libcd.searchFile(buf, X.name_ptr)) {
+  LibcdNative libcd(c);
+  const uint32_t buf = c->r[29] + 400;
+  for (const auto& L : kStartBinLoops) {
+    for (uint32_t i = 0; i < L.count; i++) {
+      if (libcd.searchFile(buf, c->mem_r32(L.name_table + i * 4))) {
         c->r[4] = buf; rec_dispatch(c, kGuestCdPosToInt);
-        c->mem_w32(X.lba_dest, c->r[2]);
+        c->mem_w32(L.dest_table + i * 8,     c->r[2]);
+        c->mem_w32(L.dest_table + i * 8 + 4, c->mem_r32(buf + 4));
       }
     }
-
-    // Epilogue: restore saved regs, sp += 456. (The substrate does this at its epilogue label
-    // 0x8010671C; we mirror the register restores as observable writes are done — no MIPS
-    // register-only writes to reproduce.)
-    c->r[16] = c->mem_r32(c->r[29] + 432);
-    c->r[17] = c->mem_r32(c->r[29] + 436);
-    c->r[18] = c->mem_r32(c->r[29] + 440);
-    c->r[19] = c->mem_r32(c->r[29] + 444);
-    c->r[20] = c->mem_r32(c->r[29] + 448);
-    c->r[31] = c->mem_r32(c->r[29] + 452);
-    c->r[29] = saved_sp;
-  } else {
-    asset.uploadImage(0x1F800008u, kStartBinLoadImageSrc);   // native pc_skip shortcut
   }
-
-  if (c->game && !c->game->pc_skip) {
-    // no-op: pc_faithful path handled everything above.
-  } else {
-    // pc_skip=true (default) — collapsed native shortcut. Bypasses libcd via native ISO9660;
-    // populates the libcd dir cache directly to match the substrate's boot-time end state,
-    // so any later substrate dispatch into CdSearchFile short-circuits its newmedia branch.
-    cdlibcd_new_media(c);
-    c->mem_w32(kGuestMediaCookieDst, c->mem_r32(kGuestMediaCookieSrc));
-    cdlibcd_cache_file(c, 2);
-    cdlibcd_cache_file(c, 3);
-    for (const auto& L : kStartBinLoops) {
-      for (uint32_t i = 0; i < L.count; i++) {
-        uint32_t lba = 0, size = 0;
-        resolve_via_iso9660(c, c->mem_r32(L.name_table + i * 4), &lba, &size);
-        c->mem_w32(L.dest_table + i * 8,     lba);
-        c->mem_w32(L.dest_table + i * 8 + 4, size);
-      }
-    }
-    for (uint32_t i = 0; i < 3; i++) {
-      const auto& X = kStartBinXa[i];
-      uint32_t lba = 0, size = 0;
-      resolve_via_iso9660(c, X.name_ptr, &lba, &size);
-      c->mem_w32(X.lba_dest, lba);
+  for (uint32_t i = 0; i < 3; i++) {
+    const auto& X = kStartBinXa[i];
+    if (libcd.searchFile(buf, X.name_ptr)) {
+      c->r[4] = buf; rec_dispatch(c, kGuestCdPosToInt);
+      c->mem_w32(X.lba_dest, c->r[2]);
     }
   }
 
-  if (c->game && c->game->pc_skip) {
-    // pc_skip shortcut: inline preload + sm[0x48]:=1 stand-in for substrate's task-1 body. Under
-    // pc_faithful, task-1 runs its native handler (Asset::loadTexgroup) instead — and sm[0x48]
-    // is advanced by substrate's FUN_80044BD4 tail via the wait loop in stage0Advance step 0.
-    startBinCommonAdvance(c, asset, c->rng);
-  } else {
-    // pc_faithful: sm[0x48]:=1 fires when FUN_80044BD4's wait loop exits (task-1 done). Mirror
-    // it AFTER the wait loop in stage0Advance step 0. Here at spawn time only reset sm[0x4A].
-    uint32_t task = c->mem_r32(CUR_TASK);
-    c->mem_w16(task + 0x4a, 0);
-  }
+  c->r[16] = c->mem_r32(c->r[29] + 432);
+  c->r[17] = c->mem_r32(c->r[29] + 436);
+  c->r[18] = c->mem_r32(c->r[29] + 440);
+  c->r[19] = c->mem_r32(c->r[29] + 444);
+  c->r[20] = c->mem_r32(c->r[29] + 448);
+  c->r[31] = c->mem_r32(c->r[29] + 452);
+  c->r[29] = saved_sp;
 
-  // Task-1 slot bookkeeping. Substrate STAGE-0 spawns task-1 (preload task body FUN_80044F58)
-  // via FUN_80044BD4 → FUN_80051F14; native_task_spawn (scheduler.cpp) is that RE'd port. pc_skip
-  // ran the preload chain inline synchronously above (asset.preloadTexgroup / preloadStage1) so
-  // task-1 has no body left to run — we just mirror the substrate's slot writes (BIOS TCB
-  // placeholder at +0x04, entry_pc at +0x0C, caller gp at +0x10) then close the slot (state=0,
-  // matching B's snapshot after task-1 ran to completion within f0). The gp value 0x800BE0D4 is
-  // the substrate's caller-of-FUN_80051F14 gp captured at the STAGE-0 call site (RE'd via SBS
-  // wwatch on 0x801FE080 = task1+0x10 which shows B writing 0x800BE0D4).
-  {
-    const uint32_t saved_gp = c->r[28];
-    c->r[28] = 0x800BE0D4u;
-    native_task_spawn(c, 1, 0x80044F58u);
-    c->r[28] = saved_gp;
-    if (c->game && !c->game->pc_skip) {
-      // pc_faithful: task-1 will actually run FUN_80044F58 (via its native handler routed to
-      // Asset::loadTexgroup — see scheduler.cpp) — leave state=2 (runnable). Task-0 waits for
-      // task-1's done_flag (0x1F80019B) via the yield loop in stage0Advance's step 0.
-      c->mem_w8(0x1F80019Bu, 0);           // FUN_80044BD4: clear done_flag before spawn
-      c->mem_w8(0x801FE0DDu, 0);           // FUN_80044BD4: param_3 = 0 (STAGE-0 call site)
-      c->mem_w8(0x801FE0DEu, 0);           // FUN_80044BD4: param_2 = 0
-      // FUN_80044BD4 with param_4==0: task+0x56 = rng.next(). This is the RNG stamp the pc_skip
-      // path emits in stage0Advance step 1 as a cadence stand-in — under pc_faithful it fires
-      // HERE, matching substrate's FUN_80044BD4 call site.
-      uint32_t task = c->mem_r32(CUR_TASK);
-      c->mem_w16(task + 0x56, (uint16_t)c->rng.next());
-      // Substrate SM (L_8010678C) writes sm[0x48]:=1 BEFORE calling FUN_80044BD4 — i.e. same
-      // tick as the spawn. Do it here so A's sm write frame matches B's.
-      c->mem_w16(task + 0x48, 1);
-    } else {
-      c->mem_w16(0x801FE070u, 0);          // pc_skip: task-1 already ran inline
-    }
-  }
+  uint32_t task = c->mem_r32(CUR_TASK);
+  c->mem_w16(task + 0x4a, 0);                // substrate L_80106728 initial task+74:=0
 
-  fprintf(stderr, "[start.bin] file table built (pc/iso9660); preload SM stepped across ticks\n");
+  // Substrate L_80106744 loop, sm=0 case (L_8010678C): task-1 spawn + RNG + sm[0x48]:=1, then
+  // FUN_80044BD4 enters its wait loop → task-0 yields (handled by stage0AdvanceFaithful step 0).
+  const uint32_t saved_gp = c->r[28];
+  c->r[28] = 0x800BE0D4u;
+  native_task_spawn(c, 1, 0x80044F58u);      // leaves task-1 state=2 runnable — body runs on same tick
+  c->r[28] = saved_gp;
+  c->mem_w8(0x1F80019Bu, 0);                 // FUN_80044BD4: clear done_flag before spawn
+  c->mem_w8(0x801FE0DDu, 0);                 // FUN_80044BD4 param_3=0
+  c->mem_w8(0x801FE0DEu, 0);                 // FUN_80044BD4 param_2=0
+  c->mem_w16(task + 0x56, (uint16_t)c->rng.next());   // FUN_80044BD4 RNG stamp (param_4==0)
+  c->mem_w16(task + 0x48, 1);                // substrate L_8010678C writes sm:=1 BEFORE spawn call
+
+  fprintf(stderr, "[start.bin] pc_faithful file table built via libcd; SM loop primed\n");
 }
 
-// stage0Advance: one step of the STAGE-0 preload SM. Called by the scheduler on each tick after the
-// file-table build. Matches recomp body of 0x8010649C's per-iteration yield loop (4 sm[0x48] states,
-// each preceded by FUN_80051F80). pc_skip only (pc_faithful runs substrate). Native's preload
-// runs instantly, so we spread the sm[0x48] state advances across a few ticks:
-//   step 0-1: state 0 (sm[0x48]=1 was set by startBinCommonAdvance at startBinStage exit)
-//   step 2:   preloadStage1 + sm[0x48]:=2
-//   step 3:   sm[0x48]:=3
-//   step 4:   startStage(1) → swap task-0 to DEMO
-int Engine::stage0Advance(uint8_t& step) { Core* c = core;
+int Engine::stage0Advance(uint8_t& step) {
+  return core->game->pc_skip ? stage0AdvanceSkip(step) : stage0AdvanceFaithful(step);
+}
+
+// ── STAGE0ADVANCE — pc_skip cadence ─────────────────────────────────────────────────────
+// 5 steps mirroring substrate's per-iteration yield loop as compact non-yielding native calls
+// (preload was done inline in startBinStageSkip; task-1 body never runs). RNG stand-in at step 1
+// matches substrate's FUN_80044BD4 rng advance at f2 without actually spawning a task.
+int Engine::stage0AdvanceSkip(uint8_t& step) {
+  Core* c = core;
   uint32_t task = c->mem_r32(CUR_TASK);
-
-  // pc_faithful path: mirrors substrate ov_start_gen_8010649C's tail SM loop (L_80106744..). The
-  // state machine spawns task-1 twice (FUN_80044F58 then FUN_8004514C) via FUN_80044BD4's
-  // spawn+wait pattern, yielding a tick per state.
-  //   step 0 wait  : yield until task-1 (spawned in startBinStage) sets done_flag → sm[0x48]:=1
-  //   step 1 spawn : clear done_flag, spawn task-1 with FUN_8004514C, RNG stamp (FUN_80044BD4)
-  //   step 2 wait  : yield until task-1 done → sm[0x48]:=2
-  //   step 3       : sm[0x48]:=3 (substrate L_801067D4)
-  //   step 4       : startStage(1) → swap to DEMO (substrate L_801067DC)
-  if (c->game && !c->game->pc_skip) {
-    // States match substrate's SM loop ticks (sm[0x48] already set by prior spawn call site).
-    //   step 0 : wait for task-1 (FUN_80044F58) done_flag — matches substrate f0 wait
-    //   step 1 : trailing SM-loop yield after wait exits (substrate L_801067E4 → L_80106744)
-    //   step 2 : sm=1 case → sm=2, spawn task-1 with FUN_8004514C, RNG stamp
-    //   step 3 : wait for task-1 (FUN_8004514C) done_flag
-    //   step 4 : trailing yield
-    //   step 5 : sm=2 case → sm=3
-    //   step 6 : trailing yield
-    //   step 7 : sm=3 case → startStage(1) (swap to DEMO)
-    switch (step) {
-      case 0:
-        if (c->mem_r8(0x1F80019Bu) == 0) return 1;                 // task-1 not done yet
-        step++;
-        return 1;
-      case 1:
-        step++;
-        return 1;
-      case 2: {
-        c->mem_w16(task + 0x48, 2);
-        c->mem_w8(0x1F80019Bu, 0);
-        c->mem_w8(0x801FE0DDu, 0);
-        c->mem_w8(0x801FE0DEu, 0);
-        const uint32_t saved_gp = c->r[28];
-        c->r[28] = 0x800BE0D4u;
-        native_task_spawn(c, 1, 0x8004514Cu);
-        c->r[28] = saved_gp;
-        c->mem_w16(task + 0x56, (uint16_t)c->rng.next());
-        step++;
-        return 1;
-      }
-      case 3:
-        if (c->mem_r8(0x1F80019Bu) == 0) return 1;
-        step++;
-        return 1;
-      case 4:
-        step++;
-        return 1;
-      case 5:
-        c->mem_w16(task + 0x48, 3);
-        step++;
-        return 1;
-      case 6:
-        step++;
-        return 1;
-      case 7:
-        startStage(1);
-        scheduler_yield(c);
-        return 0;
-    }
-  }
-
-  // pc_skip shortcut: collapsed inline. RNG stand-in at step 1 to match B's f2 RNG advance.
   switch (step) {
     case 0: break;
-    case 1:
-      (void)c->rng.next();   // stand-in for substrate FUN_80044BD4 RNG at f2
-      break;
-    case 2:
-      c->engine.asset.preloadStage1();
-      c->mem_w16(task + 0x48, 2);
-      break;
-    case 3:
-      c->mem_w16(task + 0x48, 3);
-      break;
-    case 4:
-      startStage(1);                   // swap task-0 to DEMO — rewrites task+0xc, sets state=3
-      scheduler_yield(c);              // never returns; longjmp to scheduler
-      return 0;                        // unreachable
+    case 1: (void)c->rng.next();                                     break;
+    case 2: asset.preloadStage1(); c->mem_w16(task + 0x48, 2);        break;
+    case 3: c->mem_w16(task + 0x48, 3);                              break;
+    case 4: startStage(1); scheduler_yield(c); return 0;             // unreachable
   }
   step++;
+  return 1;
+}
+
+// ── STAGE0ADVANCE — pc_faithful cadence ─────────────────────────────────────────────────
+// Substrate ov_start_gen_8010649C SM loop (L_80106744..) — spawns task-1 TWICE via FUN_80044BD4
+// spawn+wait, yielding a tick per state transition. sm[0x48]:=1 was written by
+// startBinStageFaithful before this method is first called.
+//   step 0 : wait for task-1 (FUN_80044F58, spawned by startBinStageFaithful) done_flag
+//   step 1 : L_801067E4 trailing yield after wait exit
+//   step 2 : sm=1 case → sm:=2, FUN_80044BD4 spawn task-1 with FUN_8004514C + RNG stamp
+//   step 3 : wait for task-1 (FUN_8004514C) done_flag
+//   step 4 : trailing yield
+//   step 5 : sm=2 case → sm:=3
+//   step 6 : trailing yield
+//   step 7 : sm=3 case → startStage(1) (swap to DEMO)
+int Engine::stage0AdvanceFaithful(uint8_t& step) {
+  Core* c = core;
+  uint32_t task = c->mem_r32(CUR_TASK);
+  switch (step) {
+    case 0:
+      if (c->mem_r8(0x1F80019Bu) == 0) return 1;                     // still waiting on task-1
+      step++;
+      return 1;
+    case 1:
+      step++;
+      return 1;
+    case 2: {
+      c->mem_w16(task + 0x48, 2);
+      c->mem_w8(0x1F80019Bu, 0);                                     // FUN_80044BD4: clear done_flag
+      c->mem_w8(0x801FE0DDu, 0);                                     // FUN_80044BD4: param_3=0
+      c->mem_w8(0x801FE0DEu, 0);                                     // FUN_80044BD4: param_2=0
+      const uint32_t saved_gp = c->r[28];
+      c->r[28] = 0x800BE0D4u;
+      native_task_spawn(c, 1, 0x8004514Cu);                          // stage-1 callback body
+      c->r[28] = saved_gp;
+      c->mem_w16(task + 0x56, (uint16_t)c->rng.next());              // FUN_80044BD4 RNG stamp
+      step++;
+      return 1;
+    }
+    case 3:
+      if (c->mem_r8(0x1F80019Bu) == 0) return 1;
+      step++;
+      return 1;
+    case 4:
+      step++;
+      return 1;
+    case 5:
+      c->mem_w16(task + 0x48, 3);
+      step++;
+      return 1;
+    case 6:
+      step++;
+      return 1;
+    case 7:
+      startStage(1);
+      scheduler_yield(c);
+      return 0;
+  }
   return 1;
 }

@@ -229,11 +229,9 @@ static uint32_t preload_build_vram(Core* c, uint32_t base) {
   return base + 26356;                                             // v0 = base + 0x66f4
 }
 
-// FUN_8004514C — the stage-1 callback. SWDATA + DAT load, shared texgroup sub-load, relocation table,
-// then the cel/sprite VRAM build. When invoked as a task-1 body (pc_faithful), sets done_flag and
-// rec_dispatches task-end so the caller of FUN_80044BD4 sees the wait-loop exit — the `run_as_task`
-// flag toggles that trailing block; direct callers (native area load) pass false.
-void Asset::preloadStage1(bool run_as_task) {
+// FUN_8004514C — the stage-1 callback body. SWDATA + DAT load, shared texgroup sub-load,
+// relocation table, cel/sprite VRAM build. Direct entry: no done_flag / task-end.
+void Asset::preloadStage1() {
   Core* c = this->core;
   cd_loadfile_native(c, 0x80157000u, c->mem_r32(0x800BE110u), c->mem_r32(0x800BE114u));  // SWDATA.BIN
   preloadTexgroup(1, 1);                                           // shared texgroup sub-load
@@ -249,8 +247,14 @@ void Asset::preloadStage1(bool run_as_task) {
   }
   uint32_t v0 = preload_build_vram(c, 0x80182000u);
   c->mem_w32(0x1F80022Cu, v0);
-  if (run_as_task) {
-    c->mem_w8(0x1F80019Bu, 1);                                     // done_flag=1
-    rec_dispatch(c, 0x80051FB4u);                                  // task-end (longjmp)
-  }
+}
+
+// Task-1 body wrapper — same work as preloadStage1() plus the FUN_8004514C task-body tail:
+// set done_flag=1 (unblocks task-0's FUN_80044BD4 wait loop) then rec_dispatch 0x80051FB4
+// (task-end — longjmps back into the scheduler's setjmp block).
+void Asset::preloadStage1AsTask() {
+  preloadStage1();
+  Core* c = this->core;
+  c->mem_w8(0x1F80019Bu, 1);
+  rec_dispatch(c, 0x80051FB4u);
 }
