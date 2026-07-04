@@ -255,6 +255,39 @@ public:
   // native deliberately skips, the fix is to gate the quirk on !c->game->pc_skip at the write
   // site (see cull.cpp / engine_stage.cpp) — i.e. do the faithful thing when pc_skip is off,
   // NOT to blacklist the address.
+  //
+  // EXCEPTION 2026-07-04 (user directive [[sbs-two-compare-modes]]): pc_skip=ON is ALLOWED to
+  // diverge in TRUE SCRATCH — stack-frame leftovers from substrate boot chains that native's
+  // collapsed shortcut never enters, transient scratchpad state that has no consumer on pc_skip.
+  // Shared/consumable state (libcd dir cache, task-slot fields, done_flag when a native path
+  // reads it, ...) still must match. The mask below applies ONLY when core A is pc_skip=true;
+  // under pc_skip=false (PSXPORT_SBS_PCFAITHFUL=1) the compare stays strict byte-exact.
+  // Per-frame `mMaskedBytes` counts hits so overreach is visible in the summary line.
+  bool mPcSkipMask = false;                    // set from Core A's pc_skip at init
+  uint32_t mMaskedBytes = 0;                    // per-frame counter, reset each summary
+  bool isPcSkipScratch(uint32_t addr) const {
+    if (!mPcSkipMask) return false;
+    // Task-stack window under the substrate boot chain. Task-slot control blocks live at
+    // 0x801FE000..0x801FE14F (3 × 0x70; those fields ARE state and must match — reproduced by
+    // native_task_spawn). Above that up to 0x801FF200 (0xDEAD sentinel at task-0 stack top) is
+    // task-0's stack — the substrate's boot chain (FUN_800499E8 → CdSearchFile ×30 → memcpy
+    // ×N → OpenTh initial-frame setup) writes into every byte of it. Under pc_skip, native's
+    // Engine::startBinStage skips those substrate calls entirely, so their stack scratch is
+    // absent by design.
+    if (addr >= 0x801FE150u && addr < 0x801FF200u) return true;
+    // libgs boot RECT scratch that pc_skip's Engine::startBinStage writes at 0x1F800008..F for
+    // asset.uploadImage (VRAM RECT header); substrate uses a guest-RAM RECT elsewhere so this
+    // scratchpad window differs by direction (A has extra ephemeral write, B has none).
+    if (addr >= 0x1F800008u && addr < 0x1F800010u) return true;
+    // Boot-time state whose ONLY consumer is the substrate loader chain pc_skip skips: async CD
+    // read descriptor (0x1F8001F0..F4 = lba/words/dst), scheduler current-task pointer at boot
+    // (0x1F800138, populated once the fiber scheduler starts stepping), loader done_flag
+    // (0x1F80019B, native's synchronous preload has nothing to signal).
+    if (addr == 0x1F800138u) return true;
+    if (addr == 0x1F80019Bu) return true;
+    if (addr >= 0x1F8001F0u && addr < 0x1F8001FCu) return true;
+    return false;
+  }
   static bool isSpad(uint32_t a) { return a >= 0x1F800000u && a < 0x1F800400u; }
   void  capBt(Core* c, char* buf, size_t n);
   bool  navStep(Core* c, Nav& nv, uint32_t f, const char* tag);
@@ -525,9 +558,9 @@ void Sbs::Impl::checkDivergence() {
     int hits = 0;
     uint32_t i = 0;
     while (i < sz) {
-      if (readA(i) == readB(i)) { i++; continue; }
+      if (readA(i) == readB(i) || isPcSkipScratch(base + i)) { i++; continue; }
       uint32_t run_start = i;
-      while (i < sz && readA(i) != readB(i)) i++;
+      while (i < sz && readA(i) != readB(i) && !isPcSkipScratch(base + i)) i++;
       uint32_t run_end = i;
       uint32_t addr = base + run_start;
       const char* label = addrLabel(addr);
@@ -557,13 +590,15 @@ void Sbs::Impl::checkDivergence() {
 
   if (hits > 0 && !nopause) {
     // Default (auto-pause) mode: mimic the old first-hit behavior by finding the true first address
-    // and calling recordDivergence for the interactive rewind/pause flow.
+    // and calling recordDivergence for the interactive rewind/pause flow. Skip pc_skip-masked bytes.
     const uint8_t* a = mA->core.ram + (mLo - 0x80000000u);
     const uint8_t* b = mB->core.ram + (mLo - 0x80000000u);
     uint32_t n = mHi - mLo;
-    for (uint32_t i = 0; i < n; i++) if (a[i] != b[i]) { recordDivergence(mLo + i); return; }
+    for (uint32_t i = 0; i < n; i++)
+      if (a[i] != b[i] && !isPcSkipScratch(mLo + i)) { recordDivergence(mLo + i); return; }
     for (uint32_t i = 0; i < 0x400; i++)
-      if (mA->core.scratch[i] != mB->core.scratch[i]) { recordDivergence(0x1F800000u + i); return; }
+      if (mA->core.scratch[i] != mB->core.scratch[i] && !isPcSkipScratch(0x1F800000u + i))
+        { recordDivergence(0x1F800000u + i); return; }
   }
 }
 
@@ -578,21 +613,27 @@ void Sbs::Impl::summarizeDivergence(uint32_t every) {
   constexpr uint32_t PAGE_SHIFT = 16;   // 64 KB
   constexpr uint32_t N_PAGES    = ((0x200000u) >> PAGE_SHIFT) + 1;
   uint32_t pageCount[N_PAGES] = {0};
-  uint32_t nDiff = 0, firstAddr = 0, lastAddr = 0;
+  uint32_t nDiff = 0, firstAddr = 0, lastAddr = 0, nMaskedRam = 0;
   for (uint32_t i = 0; i < n; i++) {
     if (a[i] == b[i]) continue;
+    if (isPcSkipScratch(mLo + i)) { nMaskedRam++; continue; }
     if (!nDiff) firstAddr = mLo + i;
     lastAddr = mLo + i;
     pageCount[(mLo + i - 0x80000000u) >> PAGE_SHIFT]++;
     nDiff++;
   }
-  uint32_t nSpad = 0;
+  uint32_t nSpad = 0, nMaskedSpad = 0;
   for (uint32_t i = 0; i < 0x400; i++) {
     if (mA->core.scratch[i] == mB->core.scratch[i]) continue;
+    if (isPcSkipScratch(0x1F800000u + i)) { nMaskedSpad++; continue; }
     nSpad++;
   }
   if (nDiff == 0 && nSpad == 0) {
-    fprintf(stderr, "[sbs] f%u: A/B identical (mode=%s)\n", mFrame, modeName());
+    if (mPcSkipMask && (nMaskedRam || nMaskedSpad))
+      fprintf(stderr, "[sbs] f%u: A/B identical modulo scratch mask (%u ram + %u spad masked) (mode=%s pc_skip=on)\n",
+              mFrame, nMaskedRam, nMaskedSpad, modeName());
+    else
+      fprintf(stderr, "[sbs] f%u: A/B identical (mode=%s)\n", mFrame, modeName());
     return;
   }
   // Pick top-3 pages by count for the compact per-frame report.
@@ -607,6 +648,8 @@ void Sbs::Impl::summarizeDivergence(uint32_t every) {
           mFrame, nDiff, firstAddr, lastAddr, nSpad, modeName());
   for (int k = 0; k < 3 && topCnt[k]; k++)
     fprintf(stderr, " 0x%08X:%u", 0x80000000u + (topIdx[k] << PAGE_SHIFT), topCnt[k]);
+  if (mPcSkipMask && (nMaskedRam || nMaskedSpad))
+    fprintf(stderr, " | scratch-masked: %u ram + %u spad", nMaskedRam, nMaskedSpad);
   fprintf(stderr, "\n");
 }
 
@@ -1180,22 +1223,27 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
   // psx_fallback per mode: gameplay/full run PSX gameplay on core B; render runs native gameplay on both;
   // oracle runs the PURE interpreter+soft-rasterizer oracle on B (docs/oracle.md).
   int fb_b = (mMode == M_RENDER) ? 0 : 1;
-  // Core A's pc_skip mode: default matches `./run.sh` (pc_skip=true, the actual shipping behavior
-  // that has the wrong-SFX bug + other native-code bugs we need to catch). Set PSXPORT_SBS_PCFAITHFUL=1
-  // to switch A to pc_skip=false (fiber-only substrate under the current design) — that's the "audit
-  // fiber design" mode which trivially byte-matches B but hides all native-code bugs. The DEFAULT is
-  // pc_skip=true so SBS actually surfaces bugs in the code path the user runs (Job #1 for #29).
-  bool a_pc_skip = true;
-  { const char* e = getenv("PSXPORT_SBS_PCFAITHFUL"); if (e && *e && strcmp(e, "0") != 0) a_pc_skip = false; }
+  // Core A's pc_skip mode. UNIFIED FLAG (user 2026-07-04 [[sbs-two-compare-modes]]):
+  // PSXPORT_PC_SKIP=1 → pc_skip=true (shortcut path, scratch mask on) — same flag standalone
+  // `./run.sh` honors (see boot.cpp). Default here is pc_skip=false (fiber path, strict
+  // byte-exact compare) so `PSXPORT_SBS_MODE=gameplay` alone is the strict gate.
+  // Legacy alias PSXPORT_SBS_PCFAITHFUL=0 still opts into pc_skip=true (kept working).
+  bool a_pc_skip = false;
+  { const char* e = getenv("PSXPORT_PC_SKIP"); if (e && *e && strcmp(e, "0") != 0) a_pc_skip = true; }
+  { const char* e = getenv("PSXPORT_SBS_PCFAITHFUL");
+    if (e && *e && strcmp(e, "0") == 0) a_pc_skip = true; }   // legacy: =0 meant pc_skip on
   mA = new Game(); mA->psx_fallback = 0;     mA->sbs = facade; mA->pc_skip = a_pc_skip;
   mB = new Game(); mB->psx_fallback = fb_b;  mB->sbs = facade; mB->pc_skip = false;
+  // Scratch mask (see isPcSkipScratch above): apply ONLY under pc_skip=true.
+  // Under pc_skip=false the compare is strict byte-exact (Slip #6 CLOSED / 22,980+ frames zero-diff mode).
+  mPcSkipMask = a_pc_skip;
   // Allocate per-Core SPU-write logs so audio-relevant divergences (Issue #29) surface as
   // register-write drift, not just RAM byte drift. Bound by spu_bind on every frame step.
   mA->spu_log = spu_new_log();
   mB->spu_log = spu_new_log();
   fprintf(stderr, "[sbs] core A pc_skip=%s (%s) — B recomp is the oracle\n",
           a_pc_skip ? "true" : "false",
-          a_pc_skip ? "matches ./run.sh; surfaces native-code bugs" : "fiber-only substrate; trivial byte-match");
+          a_pc_skip ? "shortcuts on, scratch-mask compare (PSXPORT_PC_SKIP=1)" : "byte-exact strict compare (default)");
   if (mMode == M_ORACLE) { mB->core.use_interp = 1; mB->gpu.soft_gpu = 1; }
   load_exe(exePath, &mA->core); dc_boot_init(&mA->core);
   load_exe(exePath, &mB->core); dc_boot_init(&mB->core);

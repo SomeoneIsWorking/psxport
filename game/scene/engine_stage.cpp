@@ -441,124 +441,402 @@ void Engine::fieldFrame() { Core* c = core;
   FFS("ff_area75a80", c->engine.areaUpdateTail());   // 0x80075a80 NATIVE (Engine::areaUpdateTail)
 }
 
-// ov_scene_fade_seq — GAME-overlay a0l screen-fade sequencer (guest FUN_8010957C / ov_a0l_gen_8010957C,
-// generated/ov_a0l_shard_1.c:146-310), reached from ov_field_run's sm[0x4e]==0xb via the FIXED global node
-// 0x800E8008 (not a walked object). This is a DISTINCT state machine from the a06 door/sub-scene fade
-// (ov_transition_main above) — it only shares the low-level screen-fade primitive engine_fade_set
-// (FUN_8007E9C8), not the SM shape: an outer 0/1 gate (node+2) wrapping a bounds-checked 6-step jump table
-// on an inner index (node+3), a ~20-tick delay counter (node+104), and a fade "level" ramp (node+106,
-// re-seeded to 31 on entry/reset).
-//
-// OPEN ISSUE (not yet resolved — flag before trusting this live): FUN_8007E9C8's real signature is
-// (color, a1, a2); every OTHER known call site (ov_transition_main, door fades) always passed a2==4, which
-// engine_fade_set's 2-arg (color, a1) signature already assumed away. THIS function's guest calls use
-// a2==0 (state-0 init) and a2==1 (every ramp step) instead — a distinct pattern engine_fade_set has no
-// parameter for. What guest a2 actually controls is unresolved; wiring onto engine_fade_set as-is silently
-// drops that distinction, so the fade blend mode here may not match the PSX reference until that's dug up.
-//
-// Callees NOT decoded (left as rec_dispatch leaves, contiguity-correct — port only after this leaf is
-// verified live): FUN_8005082C(0,0,0), FUN_8001D71C(11) [state-0 init, purpose unknown]; ov_a0l_func_8010D030
-// (a0=node) [generic per-node init helper]; ov_a0l_func_8010CC68(a0) [polled "sub-step done" helper,
-// return gates steps 0/3 by return value, steps 1/4 by fade-level reaching 0 instead].
-//
-// 0x800BF839/0x800BF83A are the SAME globals ov_field_run (below) already reads to drive its own state
-// (case 1 checks 0x800bf839==3, case 8 rewrites both) — this function and ov_field_run communicate through
-// guest memory, not a call, which is fine (guest-memory-direct is an accepted PC-native pattern here) but
-// worth knowing at both ends.
-void Engine::fadeSequencer(uint32_t node) { Core* c = core;
-  uint8_t outer = c->mem_r8(node + 2);
+// -- Small per-object leaves shared across many behavior handlers. Ghidra decomp:
+//    scratch/decomp/batch_leaves.c ----------------------------------------------------------
 
-  if (outer == 0) {
-    d3(c, 0x8005082cu, 0, 0, 0);             // FUN_8005082C(0,0,0) -- not yet decoded
-    d1(c, 0x8001d71cu, 11);                  // FUN_8001D71C(11)    -- not yet decoded
-    c->mem_w8(0x800bfa55u, 0);
-    c->mem_w8(node + 3, 0);
-    c->mem_w8(node + 2, (uint8_t)(outer + 1));   // -> outer state 1
-    d1(c, 0x8010d030u, node);                // ov_a0l_func_8010D030(node) -- not yet decoded
-    c->mem_w16(node + 106, 31);
-    c->screenFade.applyLeafCall(0x00ffffffu, 0);   // = guest FUN_8007e9c8(0xffffff, 0, ?): full black; NOTE guest a2 was 0 (see OPEN ISSUE)
+// Engine::animEnvInit — FUN_80040CDC.
+void Engine::animEnvInit(uint32_t obj, uint32_t envArg, uint32_t animData) { Core* c = core;
+  c->mem_w32(obj + 0x7Cu, envArg);
+  c->mem_w8 (obj + 0x46u, 0xFF);
+  c->mem_w32(obj + 0x10u, 0);
+  c->mem_w8 (obj + 0x70u, 0);
+  c->mem_w8 (obj + 0x78u, 0);
+  c->r[4] = obj; c->r[5] = animData; rec_dispatch(c, 0x80040DE0u);   // anim sub-setup (substrate)
+  const uint16_t bits = c->mem_r16(animData);                        // *animData (u16)
+  uint8_t f71 = 0;
+  if (bits & 0x1000) f71 |= 2;
+  if (bits & 0x4000) f71 |= 4;
+  c->mem_w8(obj + 0x71u, f71);
+}
+
+// Engine::animTick — FUN_8004190C. Ticks the animation VM (native Animation::step, which is the
+// full port of FUN_80076D68 — its 3 frame sub-leaves stay substrate) and stashes its return byte
+// into obj+0x79. Returns 1 (matches recomp v0).
+uint32_t Engine::animTick(uint32_t obj) { Core* c = core;
+  c->engine.animation.step(obj);                                     // native Animation::step
+  c->mem_w8(obj + 0x79u, (uint8_t)c->r[2]);
+  c->r[2] = 1;
+  return 1;
+}
+
+// Engine::announcerCue — FUN_8004ED94. `id` sign-extended s16, then times-2 index into u16 table
+// at *DAT_800BF7FC. That u16 offset is added to base *DAT_800BF800, then FUN_8004FA38 fires.
+void Engine::announcerCue(uint32_t id, uint8_t flag) { Core* c = core;
+  const int32_t  id32   = (int32_t)(int16_t)(uint16_t)id;              // (id << 16) >> 15 in the decomp = sext16 << 1
+  const uint32_t idxOff = (uint32_t)(id32 * 2);
+  const uint32_t tblPtr = c->mem_r32(0x800BF7FCu);
+  const uint16_t entry  = c->mem_r16(tblPtr + idxOff);
+  const uint32_t base   = c->mem_r32(0x800BF800u) + (uint32_t)entry;
+  c->r[4] = base; c->r[5] = 0xFFFFFFFFu; c->r[6] = flag;
+  rec_dispatch(c, 0x8004FA38u);                                       // announcer-cue queue push (substrate)
+}
+
+// Engine::objMatrixCompose — FUN_800518FC.
+void Engine::objMatrixCompose(uint32_t obj) { Core* c = core;
+  // scratchpad 0x1F800000..0x1F80001F: SVECTOR-like scale + zeros (rotation identity + zero translation)
+  c->mem_w32(0x1F800000u, (uint32_t)(int32_t)c->mem_r16s(obj + 0xB8u));
+  c->mem_w32(0x1F800004u, 0);
+  c->mem_w32(0x1F800008u, (uint32_t)(int32_t)c->mem_r16s(obj + 0xBAu));
+  c->mem_w32(0x1F80000Cu, 0);
+  c->mem_w32(0x1F800010u, (uint32_t)(int32_t)c->mem_r16s(obj + 0xBCu));
+  c->mem_w32(0x1F800014u, 0);
+  c->mem_w32(0x1F800018u, 0);
+  c->mem_w32(0x1F80001Cu, 0);
+  c->r[4] = obj + 0x54u; c->r[5] = 0x1F800020u; rec_dispatch(c, 0x80085480u);   // setvec (substrate)
+  c->r[4] = 0x1F800020u; c->r[5] = 0x1F800000u; c->r[6] = obj + 0x98u; rec_dispatch(c, 0x80084110u);   // matrix-mul (substrate)
+  c->r[4] = obj + 0x98u; c->r[5] = obj + 0x88u; c->r[6] = obj + 0xACu; rec_dispatch(c, 0x80084470u);   // matrix-apply (substrate)
+  // Bake world position into the translation columns (sign-extended s16 → s32 add).
+  c->mem_w32(obj + 0xACu, c->mem_r32(obj + 0xACu) + (uint32_t)(int32_t)c->mem_r16s(obj + 0x2Eu));
+  c->mem_w32(obj + 0xB0u, c->mem_r32(obj + 0xB0u) + (uint32_t)(int32_t)c->mem_r16s(obj + 0x32u));
+  c->mem_w32(obj + 0xB4u, c->mem_r32(obj + 0xB4u) + (uint32_t)(int32_t)c->mem_r16s(obj + 0x36u));
+  rec_dispatch(c, 0x80051128u);                                       // finalize (substrate)
+}
+
+// Engine::walkStart — FUN_80054D14.
+uint32_t Engine::walkStart(uint32_t obj, uint32_t mode, int16_t subMode) { Core* c = core;
+  const uint8_t cur = c->mem_r8(obj + 0x46u);
+  if ((uint32_t)cur == (mode & 0xFFu)) { c->r[2] = 0; return 0; }
+  c->mem_w8(obj + 0x46u, (uint8_t)mode);
+  c->r[4] = obj; c->r[5] = mode; rec_dispatch(c, 0x80054790u);        // pre-hook (substrate)
+  const uint32_t leaf = (subMode == 0) ? 0x80077C40u : 0x80077CFCu;   // anim-attach variants (substrate)
+  c->r[4] = obj; c->r[5] = 0x80017FE8u; c->r[6] = mode;
+  rec_dispatch(c, leaf);
+  c->r[2] = 1;
+  return 1;
+}
+
+// Engine::playerGrowthStep moved to ActorTomba::growthStep (game/player/actor_tomba.cpp).
+
+// Engine::audioDispatch3Way — native ownership of FUN_800750D8 (Ghidra decomp
+// scratch/decomp/fun_800750d8_v2.c). Returns the flag/settle result via c->r[2] as well as via
+// the C return value so the recomp `v0` semantics stay.
+uint32_t Engine::audioDispatch3Way(uint32_t idx, uint32_t arg2) { Core* c = core;
+  uint32_t v0;
+  if (idx == 0xFFu) {
+    v0 = (uint32_t)c->mem_r8(0x800BE0E4u) & 4u;
+  } else if (idx == 0xFEu) {
+    rec_dispatch(c, 0x8001CF2Cu);                 // engine tick / settle
+    v0 = c->r[2];
+  } else {
+    audioVoiceFetchBits(idx, arg2);
+    v0 = 0;
+  }
+  c->r[2] = v0;
+  return v0;
+}
+
+// Engine::audioVoiceFetchBits — native ownership of FUN_8001D364 (Ghidra decomp
+// scratch/decomp/fun_8001d364.c). See engine.h for the field layout. Table addresses are 8
+// resident u16-array pointers (ptr-to-ptr; deref once for the table, then read two u16s per
+// entry). The substrate leaf FUN_8001D2A8 (XA/voice fetch entry) stays dispatched — sister to
+// zoneTransitionSetup which uses the 0x8009D110 record table with a different index shape.
+void Engine::audioVoiceFetchBits(uint32_t bits, uint32_t flag) { Core* c = core;
+  static constexpr uint32_t TABLE_PTRS[8] = {
+    0x8001005Cu, 0x80010060u, 0x80010064u, 0x80010068u,
+    0x8001006Cu, 0x80010070u, 0x80010074u, 0x80010078u,
+  };
+  const uint32_t klass  = (bits >> 3) & 7u;         // "voice-class" selector — 0..7
+  const uint32_t sub    = bits & 7u;                // per-class entry index — 0..7
+  const uint32_t table  = c->mem_r32(TABLE_PTRS[klass]);
+  const uint32_t entry  = table + sub * 4u;         // 2 u16 fields per entry (offset, count)
+  const uint16_t offset = c->mem_r16(entry + 0u);
+  const uint16_t count  = c->mem_r16(entry + 2u);
+  const uint32_t base   = c->mem_r32(0x1F800224u) + (uint32_t)offset * 8u;
+  const uint32_t tail   = base + ((uint32_t)count - 2u) * 8u;
+
+  c->r[4] = klass;
+  c->r[5] = base;
+  c->r[6] = tail;
+  c->r[7] = (flag & 1u) | 2u;
+  rec_dispatch(c, 0x8001D2A8u);                     // XA/voice fetch entry (substrate)
+}
+
+// Engine::audioSettleField — native ownership of FUN_80074BC4 (Ghidra decomp
+// scratch/decomp/fun_80074bc4.c). Every callee stays substrate (libsnd wrappers with no PC-native
+// equivalent yet).
+void Engine::audioSettleField() { Core* c = core;
+  c->mem_w8(0x1F80027Eu, 0);            // audio-cue scratchpad flag
+  rec_dispatch(c, 0x8001CF2Cu);         // engine tick / VBlank settle (substrate)
+  rec_dispatch(c, 0x80074B44u);         // tail voices reset             (substrate)
+  rec_dispatch(c, 0x80074E48u);         // SsSeqClose + full voice reset (substrate)
+}
+
+// Engine::uploadModeSprites — native ownership of FUN_80067DA8 (Ghidra decomp
+// scratch/decomp/fun_80067da8.c). Stages a RECT struct (X=0x1F0, Y=<per-strip>, W=0x10, H=1) on
+// the guest stack and hands it to the substrate LoadImage leaf FUN_80081218 for each of the 5
+// mode-selected sprite patterns. Kept as a per-frame VRAM upload — no PC-native texture cache
+// hookup yet, since the patterns are consumed by still-substrate UI code that reads back VRAM.
+void Engine::uploadModeSprites() { Core* c = core;
+  const uint8_t mode = c->mem_r8(0x800BF88Du);
+  uint32_t p0, p1, p2, p3, p4;
+  switch (mode) {
+    case 0: p0 = 0x800A4800u; p1 = 0x800A4820u; p2 = 0x800A48C0u; p3 = 0x800A48E0u; p4 = 0x800A4980u; break;
+    case 1: p0 = 0x800A4840u; p1 = 0x800A4860u; p2 = 0x800A4900u; p3 = 0x800A4920u; p4 = 0x800A49A0u; break;
+    case 2: p0 = 0x800A4880u; p1 = 0x800A48A0u; p2 = 0x800A4940u; p3 = 0x800A4960u; p4 = 0x800A49C0u; break;
+    default: return;                                  // recomp: any other value early-exits
+  }
+
+  // Stage the shared RECT on the guest stack (X, Y, W, H = u16 × 4). Y is patched per strip. The
+  // recomp allocates a 0x30-byte frame; we mirror it so LoadImage's arg1 pointer + any deep
+  // stack use falls in the same window.
+  const uint32_t sp_save = c->r[29];
+  const uint32_t ra_save = c->r[31];
+  c->r[29] = sp_save - 0x30u;
+  const uint32_t rect = c->r[29] + 0x10u;             // sp+0x10..sp+0x18 = the RECT struct
+  c->mem_w16(rect + 0u, 0x1F0);                       // X = 496
+  c->mem_w16(rect + 4u, 0x10);                        // W = 16
+  c->mem_w16(rect + 6u, 1);                           // H = 1
+
+  auto upload = [&](uint16_t y, uint32_t data) {
+    c->mem_w16(rect + 2u, y);                         // patch Y
+    c->r[4] = rect;
+    c->r[5] = data;
+    rec_dispatch(c, 0x80081218u);                     // LoadImage(rect, data) — substrate leaf
+  };
+  upload(0x1E2, p0);
+  upload(0x1E5, p1);
+  upload(0x1C9, p2);
+  upload(0x1D0, p3);
+  upload(0x1B3, p4);
+
+  c->r[29] = sp_save;
+  c->r[31] = ra_save;
+}
+
+// Engine::gStateMutate — native ownership of FUN_80058304 (Ghidra decomp scratch/decomp/
+// fieldrun_s2_init.c). See engine.h for the semantics of each case. Two guest leaves stay
+// substrate: FUN_8004ED94(id, 0x41) (the announcer/UI cue queue) and FUN_800310F4(0x25, 0)
+// (case 1's inventory refresh) — neither has a native equivalent yet. Sfx::trigger is native
+// (Sfx class) so the alt-cue path routes there directly.
+void Engine::gStateMutate(uint32_t G, uint8_t op) { Core* c = core;
+  auto cue = [&](uint32_t id) { announcerCue(id, 0x41); };            // native FUN_8004ED94
+  const uint8_t f174 = c->mem_r8(G + 0x174u);
+  const uint8_t f0D  = c->mem_r8(G + 0x0Du);
+  uint8_t n174 = f174, n0D = f0D;
+
+  switch (op) {
+    case 0:
+      if (f174 & 0x08) break;                        // already-set fast exit
+      cue(0x3A);
+      n174 = f174 | 0x08;
+      n0D  = f0D  | 0x42;
+      c->mem_w8(G + 0x174u, n174); c->mem_w8(G + 0x0Du, n0D);
+      break;
+
+    case 1: {
+      if ((f174 & 0x08) == 0) break;
+      c->r[4] = 0x25; c->r[5] = 0; rec_dispatch(c, 0x800310F4u);
+      n174 = f174 & 0xF7;
+      n0D  = f0D  & 0xBD;
+      c->mem_w8(G + 0x174u, n174); c->mem_w8(G + 0x0Du, n0D);
+      cue(0x3B);
+      break;
+    }
+
+    case 2:
+      if ((f174 & 0x08) == 0) break;
+      cue(0x3B);
+      n174 = f174 & 0xF7;
+      n0D  = f0D  & 0xBD;
+      c->mem_w8(G + 0x174u, n174); c->mem_w8(G + 0x0Du, n0D);
+      break;
+
+    case 3:
+    case 4: {
+      const uint8_t bit = (op == 3) ? 0x20u : 0x10u;
+      n174 = f174 | bit;
+      n0D  = f0D  | 0x12;
+      c->mem_w8(G + 0x174u, n174); c->mem_w8(G + 0x0Du, n0D);
+      cue(0x4B);
+      c->mem_w8(0x1F800247u, 0);
+      break;
+    }
+
+    case 5:
+      n174 = f174 & 0xCF;
+      n0D  = f0D  & 0xED;
+      c->mem_w8(G + 0x174u, n174); c->mem_w8(G + 0x0Du, n0D);
+      cue(0x4C);
+      break;
+
+    case 6:
+    case 7: {
+      if (op == 6) n174 = f174 | 0x04;
+      else         n174 = f174 & 0xFB;
+      c->mem_w8(G + 0x174u, n174);
+      c->engine.actorTomba.growthStep((op == 6) ? 1 : 0);              // native ActorTomba::growthStep (FUN_80057DC0)
+      c->mem_w16(0x800BF89Eu, c->mem_r16(G + 0x17Eu));
+      cue(op == 6 ? 0x49u : 0x4Au);
+      break;
+    }
+
+    case 8:
+    case 0xD: {
+      if (f174 & 0x01) { c->mem_w8(0x800BF881u, f174); return; }
+      n174 = (uint8_t)((f174 & 0xFD) | 0x01);
+      c->mem_w8(G + 0x174u, n174);
+      cue(0x45);
+      if (op == 0xD) {
+        c->engine.sfx.trigger(0x39, 0, 0);           // Sfx::trigger — native (FUN_80074590 alt-cue path)
+      } else {
+        c->mem_w8(G + 5, 0x38);
+        c->mem_w8(G + 6, 2);
+      }
+      break;
+    }
+
+    case 9:
+    case 0xE: {
+      if (f174 & 0x02) { c->mem_w8(0x800BF881u, f174); return; }
+      n174 = (uint8_t)((f174 & 0xFE) | 0x02);
+      c->mem_w8(G + 0x174u, n174);
+      cue(0x47);
+      if (op == 0xE) {
+        c->engine.sfx.trigger(0x3A, 0, 0);
+      } else {
+        c->mem_w8(G + 5, 0x39);
+        c->mem_w8(G + 6, 2);
+      }
+      break;
+    }
+
+    case 10: {
+      n174 = f174 & 0xFC;
+      c->mem_w8(G + 0x174u, n174);
+      const uint8_t bf881 = c->mem_r8(0x800BF881u);
+      if      (bf881 & 0x01) cue(0x46);
+      else if (bf881 & 0x02) cue(0x48);
+      break;
+    }
+
+    case 0xB: {
+      if (f174 & 0x20) cue(0x4C);
+      n174 = f174 & 0xDF;
+      c->mem_w8(G + 0x174u, n174);
+      if ((f174 & 0x10) == 0) {
+        n0D = f0D & 0xED;
+        c->mem_w8(G + 0x0Du, n0D);
+      }
+      break;
+    }
+
+    case 0xC: {
+      c->mem_w8(G + 0x174u, 0); n174 = 0;
+      c->mem_w8(G + 0x0Du,  0); n0D  = 0;
+      const int16_t f17E = (int16_t)c->mem_r16(G + 0x17Eu);
+      if ((uint16_t)f17E & 0x8000u) {
+        const uint16_t masked = (uint16_t)(f17E & 0x7FFF);
+        c->mem_w16(0x800BF89Eu, masked);
+        c->mem_w16(G + 0x17Eu, masked);
+      }
+      if ((c->mem_r16(G + 0x17Eu) & 0x200u) != 0) {
+        c->mem_w8 (G + 0x6Fu, 0);
+        c->mem_w8 (0x800BF88Fu, 0);
+        c->mem_w16(G + 0x17Eu, 0x10);
+        c->mem_w16(0x800BF89Eu, 0x10);
+      }
+      break;
+    }
+
+    default: break;                                  // op >= 0xF: no-op
+  }
+
+  c->mem_w8(0x800BF881u, n174);                      // shared tail — mirror the post-mutation G+0x174
+}
+
+// Engine::armModeState — native ownership of FUN_8005082C (Ghidra decomp scratch/decomp/
+// bf816_leaves.c). The engine's mode-state arm primitive; see the class doc-comment (engine.h)
+// for the field layout + semantics.
+void Engine::armModeState(uint8_t a, uint8_t b, uint8_t c) { Core* c_ = core;
+  // Back up the previous payload triple before overwriting.
+  c_->mem_w8(0x800BF8A6u, c_->mem_r8(0x800EA0D7u));
+  c_->mem_w8(0x800BF8A5u, c_->mem_r8(0x800EA0D6u));
+  c_->mem_w8(0x800BF8A4u, c_->mem_r8(0x800EA0D5u));
+  const uint8_t prev_arm = c_->mem_r8(0x800EA0D4u);
+
+  c_->mem_w8(0x800EC144u, 1);
+  c_->mem_w8(0x800EA0D4u, 1);
+  c_->mem_w8(0x800EA0D5u, a);
+  c_->mem_w8(0x800EA0D6u, b);
+  c_->mem_w8(0x800EA0D7u, c);
+  c_->mem_w8(0x800EC145u, a);
+  c_->mem_w8(0x800EC146u, b);
+  c_->mem_w8(0x800EC147u, c);
+  c_->mem_w8(0x800BF8A7u, (uint8_t)((prev_arm << 7) | 1));
+}
+
+// Engine::armModeStateFromAreaTable — native ownership of FUN_800508A8 (Ghidra decomp same file).
+void Engine::armModeStateFromAreaTable() { Core* c_ = core;
+  const uint8_t  area          = c_->mem_r8 (0x800BF870u);
+  const uint16_t collected_bmp = c_->mem_r16(0x800BFE56u);
+  const uint32_t collected_bit = ((uint32_t)collected_bmp >> (area & 0x1F)) & 1u;
+  const uint32_t row           = 0x800A5500u + (uint32_t)area * 8u + collected_bit * 4u;
+
+  const uint8_t cls = c_->mem_r8(row + 0);
+  const uint8_t a   = c_->mem_r8(row + 1);
+  const uint8_t b   = c_->mem_r8(row + 2);
+  const uint8_t d   = c_->mem_r8(row + 3);
+
+  c_->mem_w8(0x800EC144u, cls);
+  c_->mem_w8(0x800EA0D5u, a);
+  c_->mem_w8(0x800EA0D6u, b);
+  c_->mem_w8(0x800EA0D7u, d);
+  c_->mem_w8(0x800EA0D4u, cls);
+  c_->mem_w8(0x800EC145u, a);
+  c_->mem_w8(0x800EC146u, b);
+  c_->mem_w8(0x800EC147u, d);
+  c_->mem_w8(0x800BF8A7u, cls == 1 ? 0x81u : 0x02u);
+  c_->mem_w8(0x800BF8A4u, a);
+  c_->mem_w8(0x800BF8A5u, b);
+  c_->mem_w8(0x800BF8A6u, d);
+}
+
+// Engine::zoneTransitionSetup — native ownership of the tiny dispatcher FUN_8001D71C. See the
+// class doc-comment (engine.h) for the record layout + branch semantics. Ghidra decomp
+// scratch/decomp/sop_tail_8001d71c.c; widths spot-checked against tools/disas.py 0x8001d71c.
+//
+// (The fade sequencer FUN_8010957C that used to live here moved to ScreenFade::sequence, since
+// it's fade-owned state — every state body drives the fade blend. See
+// game/render/screen_fade/screen_fade.cpp.)
+void Engine::zoneTransitionSetup(int16_t idx) { Core* c = core;
+  if (idx < 0) {
+    rec_dispatch(c, 0x8001CF2Cu);                     // engine tick (still substrate; SYNC)
     return;
   }
 
-  if (outer != 1) return;   // any other outer value: permanent no-op (matches reference: no default handler)
+  // Record table @0x8009D110, stride 6 bytes.
+  const uint32_t recAddr = 0x8009D110u + (uint32_t)(uint16_t)idx * 6u;
+  const uint8_t  track  = c->mem_r8 (recAddr + 0u);
+  const uint8_t  group  = c->mem_r8 (recAddr + 1u);
+  const uint16_t offRaw = c->mem_r16(recAddr + 2u);   // base offset scalar (×8 later)
+  const uint16_t spanRaw= c->mem_r16(recAddr + 4u);   // record span scalar (×8 later)
 
-  uint8_t step = c->mem_r8(node + 3);
-  if (step >= 6) return;    // bounds check -- once step reaches 6 this function is inert forever
-
-  auto ramp_level = [&](int32_t sign) -> uint32_t {
-    // v = (level << 3) [negated if sign<0] & 0xFF, replicated into R/G/B (same "gray" packing shape as the
-    // a06 reference's state-2, but here the source is level<<3, not the raw level byte).
-    int16_t level = c->mem_r16s(node + 106);
-    uint32_t v = (uint32_t)((sign < 0) ? -(level << 3) : (level << 3)) & 0xffu;
-    return (v << 16) | (v << 8) | v;
-  };
-  auto decrement_level_clamped = [&]() {
-    int16_t level = c->mem_r16s(node + 106);
-    if (level != 0) c->mem_w16(node + 106, (uint16_t)(level - 1));
-  };
-  auto advance_step = [&]() {
-    uint8_t s = c->mem_r8(node + 3);
-    c->mem_w8(node + 3, (uint8_t)(s + 1));
-  };
-
-  switch (step) {
-    case 0: {                                    // ramp UP, gated by helper return value
-      c->screenFade.applyLeafCall(ramp_level(+1), 1);      // = guest FUN_8007e9c8(color, 1, ?) additive; NOTE guest a2 was 1 (see OPEN ISSUE)
-      decrement_level_clamped();
-      d1(c, 0x8010cc68u, 0);                          // ov_a0l_func_8010CC68(0) -> result in c->r[2]
-      if (c->r[2] == 0) return;                       // not done yet
-      c->mem_w16(node + 106, 31);
-      advance_step();
-      return;
-    }
-    case 1: {                                    // ramp DOWN, gated by fade LEVEL reaching 0
-      c->screenFade.applyLeafCall(ramp_level(-1), 1);      // = guest FUN_8007e9c8(color, 1, ?) additive; NOTE guest a2 was 1 (see OPEN ISSUE)
-      decrement_level_clamped();
-      d1(c, 0x8010cc68u, 0);                          // result unused this branch
-      if (c->mem_r16s(node + 106) != 0) return;
-      advance_step();
-      c->mem_w16(node + 104, 20);                     // arm the step-2 delay counter
-      return;
-    }
-    case 2: {                                    // plain ~20-tick delay, then reset level + advance
-      uint16_t d = (uint16_t)(c->mem_r16(node + 104) - 1);
-      c->mem_w16(node + 104, d);
-      if (d != 0) return;
-      c->mem_w16(node + 106, 31);
-      advance_step();
-      return;
-    }
-    case 3: {                                    // same as case 0 but helper called with a0=1
-      c->screenFade.applyLeafCall(ramp_level(+1), 1);
-      decrement_level_clamped();
-      d1(c, 0x8010cc68u, 1);
-      if (c->r[2] == 0) return;
-      c->mem_w16(node + 106, 31);
-      advance_step();
-      return;
-    }
-    case 4: {                                    // same as case 1 but helper called with a0=1;
-                                                  // on completion does NOT reset the level to 31
-      c->screenFade.applyLeafCall(ramp_level(-1), 1);
-      decrement_level_clamped();
-      d1(c, 0x8010cc68u, 1);
-      if (c->mem_r16s(node + 106) != 0) return;
-      advance_step();
-      return;
-    }
-    case 5: {                                    // completion tail: poke the shared "sm" struct + the
-                                                  // 0x800BF839/0x800BF83A control globals, advance
-      uint32_t sm = c->mem_r32(0x1f800138u);
-      c->mem_w16(sm + 74, 1);
-      c->mem_w16(sm + 76, 2);
-      c->mem_w16(sm + 78, 6);
-      c->mem_w8(0x800bf839u, 3);
-      c->mem_w16(0x800bf83au, 0x1501);
-      advance_step();
-      return;
-    }
+  // Silent-track fast path — audio subsystem ready-latch already at 1 → just queue state 2.
+  if (group == 0 && c->mem_r8(0x800FB162u) == 1) {
+    c->mem_w8(0x800BE0E4u, 2);
+    return;
   }
+
+  const uint32_t base = c->mem_r32(0x1F800220u) + (uint32_t)offRaw * 8u;
+  const uint32_t tail = base + (uint32_t)spanRaw * 8u;
+  c->r[4] = (uint32_t)track;
+  c->r[5] = base;
+  c->r[6] = tail;
+  c->r[7] = (uint32_t)group;
+  rec_dispatch(c, 0x8001D2A8u);                       // XA/voice fetch entry (still substrate)
 }
+
+// Engine::fadeSequencer moved to ScreenFade::sequence (game/render/screen_fade/screen_fade.cpp).
 
 // FIELD RUNNING sub-machine 0x80106b98 — native control flow + state bodies (decomp:
 // scratch/decomp/game/80106b98.c). A 12-way switch on sm[0x4e]; the running states call the native
@@ -586,21 +864,21 @@ void Engine::fieldRun() { Core* c = core;
       c->engine.pool.selectStateIndex(c->mem_r8(0x800bf870u));   // OWNED native — replaces d1(0x80074f24, area)
       break;
     case 2:
-      d2(c, 0x80058304u, 0x800e7e80u, 0xc);
+      c->engine.gStateMutate(0x800E7E80u, 0xC);   // native — was rec_dispatch 0x80058304(G, 0xC)
       sm = c->mem_r32(0x1f800138u);
       c->mem_w16(sm + 0x4e, (uint16_t)(c->mem_r16(sm + 0x4e) + 1));
       /* fallthrough */
     case 3:
-      d0(c, 0x80074bc4u);
+      c->engine.audioSettleField();     // native — was rec_dispatch 0x80074BC4
       if (c->mem_r8(0x800bf870u) == 8) d0(c, 0x80114b90u);
       sm = c->mem_r32(0x1f800138u);
       c->mem_w16(sm + 0x4a, 2);
       c->mem_w16(sm + 0x4c, 0);
       c->mem_w16(sm + 0x4e, 0);
-      d3(c, 0x8005082cu, 0, 0, 0);
+      c->engine.armModeState();                  // native — was rec_dispatch 0x8005082C(0,0,0)
       break;
     case 4:
-      d0(c, 0x8006c7c4u); d0(c, 0x800508a8u);
+      d0(c, 0x8006c7c4u); c->engine.armModeStateFromAreaTable();   // native — was rec_dispatch 0x800508A8
       c->mem_w16(c->mem_r32(0x1f800138u) + 0x4e, 1);
       /* fallthrough */
     case 1: {
@@ -608,7 +886,7 @@ void Engine::fieldRun() { Core* c = core;
       sm = c->mem_r32(0x1f800138u);
       if (c->mem_r8(0x800bf80du) == 3) {        // (signed byte) special mode 3
         if (c->mem_r8(0x800bf80fu) == 0) {
-          d0(c, 0x80074bc4u);
+          c->engine.audioSettleField();     // native — was rec_dispatch 0x80074BC4
           sm = c->mem_r32(0x1f800138u);
           if (c->mem_r32(0x800e7feeu) == 0) {   // _DAT_800e7fee (read as int per decomp)
             c->mem_w16(sm + 0x4e, (uint16_t)(c->mem_r16(sm + 0x4e) + 1));    // LAB_80106f48
@@ -630,13 +908,13 @@ void Engine::fieldRun() { Core* c = core;
       break;
     }
     case 5:
-      if (c->mem_r8(0x800bf870u) == 7) { d0(c, 0x801128bcu); d0(c, 0x800508a8u); }
+      if (c->mem_r8(0x800bf870u) == 7) { d0(c, 0x801128bcu); c->engine.armModeStateFromAreaTable(); }
       c->mem_w16(c->mem_r32(0x1f800138u) + 0x4e, 1);
       c->engine.fieldFrame();
       break;
     case 6: {
       if (c->mem_r32(0x800e7feeu) != 0) { c->mem_w8(0x800bf880u, 1); c->mem_w32(0x1f800194u, c->mem_r32(0x800e7feeu)); }
-      d0(c, 0x80074bc4u);
+      c->engine.audioSettleField();     // native — was rec_dispatch 0x80074BC4
       // _DAT_800bf870 = CONCAT11(...) & 0x3f1f  — the decomp's byte-swap-and-mask of *0x800bf83a into bf870
       uint16_t b83a = c->mem_r16(0x800bf83au);
       uint32_t v = (((uint32_t)(b83a & 0xff) << 8) | (b83a >> 8)) & 0x3f1f;
@@ -694,7 +972,7 @@ void Engine::fieldRun() { Core* c = core;
       break;
     }
     case 0xb:
-      c->engine.fadeSequencer(0x800e8008u);   // OWNED native — replaces d1(0x8010957c, node) (a0l fade sequencer)
+      c->screenFade.sequence(0x800e8008u);   // OWNED native — replaces d1(0x8010957c, node) (a0l fade sequencer)
       break;
     default: break;
   }
@@ -872,7 +1150,7 @@ void Engine::transitionF3c() { Core* c = core;
       if (c->mem_r8(0x1f80019bu) != 0) {
         c->mem_w16(sm + 0x4e, (uint16_t)(c->mem_r16(sm + 0x4e) + 1));
         d0(c, 0x80074e48u);
-        d1(c, 0x8001d71cu, 9);
+        c->engine.zoneTransitionSetup(9);         // native, FUN_8001D71C
         d0(c, 0x8003fb94u);
       }
       break;
@@ -939,7 +1217,7 @@ void Engine::fieldRunX() { Core* c = core;
   c->engine.fieldFrameX();                           // 0x80108be4 per-frame (state 1, 0x80107118)
   if (c->mem_r8(0x800bf80du) == 3) {             // mode-3 exit (0x80107138)
     if (c->mem_r8(0x800bf80fu) != 0) return;
-    d0(c, 0x80074bc4u);
+    c->engine.audioSettleField();     // native — was rec_dispatch 0x80074BC4
     sm = c->mem_r32(0x1f800138u);
     c->mem_w16(sm + 0x4c, 2);                     // back to normal running handler
     int16_t  e_s = c->mem_r16s(0x800e7feeu);
@@ -1187,12 +1465,16 @@ void Engine::sceneStateStep() {
 // entry. NO bounds check in the guest — the render-mode byte is bounded by the writer sites, not
 // here. No a0 setup (the guest jalr inherits whatever a0 the caller had; ov_field_frame doesn't
 // touch a0 before the call, so handlers that read a0 are dead code in this path — none observed).
+void area_seaside_perframe(Core* c);              // FUN_80113C5C — native (game/ai/area_seaside_perframe.cpp)
+
 void Engine::modePerFrameDispatch() {
   Core* c = core;
   uint8_t idx = c->mem_r8(0x800BF870u);
   if (idx == 3) return;
   uint32_t target = c->mem_r32(0x8009D1D4u + (uint32_t)idx * 4u);
   if (!target) return;
+  // Area-0 (seaside) per-frame update is native — this is Tomba's seaside per-frame tick.
+  if (target == 0x80113C5Cu) { area_seaside_perframe(c); return; }
   rec_dispatch(c, target);
 }
 
@@ -1547,8 +1829,6 @@ static bool resolve_via_iso9660(Core* c, uint32_t name_ptr, uint32_t* lba, uint3
 
 // FAITHFUL-mode resolver: rec_dispatch the substrate's CdSearchFile so libcd's dir cache is
 // populated as a side effect. Uses a caller-owned buffer in guest RAM for the 24-byte CdlFILE.
-// Safety cite (audit 2026-07-04): grep of game/ + runtime/ for readers of 0x800AC2D4 and the
-// entry cache range 0x80102768..0x80104B80 = 0 hits. libcd's dir cache is PSX-internal plumbing.
 static constexpr uint32_t kGuestCdSearchFile = 0x8008B8F0u;
 static constexpr uint32_t kGuestCdPosToInt   = 0x8008A110u;
 static bool resolve_via_libcd(Core* c, uint32_t name_ptr, uint32_t buf,
@@ -1561,6 +1841,124 @@ static bool resolve_via_libcd(Core* c, uint32_t name_ptr, uint32_t buf,
   *lba  = c->r[2];
   *size = c->mem_r32(buf + 4);
   return true;
+}
+
+// libcd directory cache — native port of FUN_8008BBE8 (CdNewMedia) + FUN_8008BF50 (CdCacheFile),
+// the two libcd helpers that populate the game's in-memory directory cache. The pc_skip path uses
+// native ISO9660 (resolve_via_iso9660 above) for file lookup — fast, doesn't touch libcd — but the
+// substrate on B populates the libcd cache as a side effect of CdSearchFile. To keep A byte-
+// identical, reproduce the writes here from the same ISO9660 sectors, using native disc_read_sector.
+//
+// Guest state populated:
+//   0x800AC2D4  u32           currently cached dir index (0 = root loaded, else path-table 1-based idx)
+//   0x80102D68  128 × 44 B    path-table cache (index, parent, extent, name[32])
+//   0x80102768   64 × 24 B    file-entry cache for the currently-cached dir (MSF, size, name)
+//
+// RE: Ghidra headless decomp of FUN_8008BBE8 / FUN_8008BF50 (SCEI library range 0x80080000..0x8009E000).
+// ISO9660 field offsets are the standard PVD / path-table-L / dir-record layout.
+static constexpr uint32_t kGuestCurCachedDir   = 0x800AC2D4u;
+static constexpr uint32_t kGuestMediaCookieDst = 0x800AC2D8u;   // = DAT_800ABFD0 after CdSearchFile
+static constexpr uint32_t kGuestMediaCookieSrc = 0x800ABFD0u;   // libcd media-generation counter
+static constexpr uint32_t kGuestPathTableCache = 0x80102D68u;   // stride 44 B, 128 slots
+static constexpr uint32_t kGuestFileEntryCache = 0x80102768u;   // stride 24 B, 64 slots
+static constexpr uint32_t kGuestPathExtentBase = 0x80102D70u;   // = cache + 8 (extent field of slot 0)
+static constexpr uint32_t kGuestSectorScratch  = 0x80104368u;   // 2 KB scratch buffer libcd reads into
+
+// Read one 2048 B disc sector into a local buffer AND into the guest-RAM scratch at 0x80104368,
+// mirroring the substrate's per-sector read into DAT_80104368. Returns false on read failure.
+static bool cdlibcd_read_into_scratch(Core* c, uint32_t lba, uint8_t* out) {
+  if (!disc_read_sector(lba, out)) return false;
+  for (uint32_t i = 0; i < 2048; i++) c->mem_w8(kGuestSectorScratch + i, out[i]);
+  return true;
+}
+
+// FUN_8008BBE8 CdNewMedia: read PVD at LBA 16, follow to the L-path-table, walk entries into the
+// path-table cache. Sets 0x800AC2D4 = 0.
+static void cdlibcd_new_media(Core* c) {
+  uint8_t sec[2048];
+  if (!cdlibcd_read_into_scratch(c, 16, sec)) return;
+  // Verify "CD001" magic at PVD offset 1 (bytes 1..5).
+  if (sec[1] != 'C' || sec[2] != 'D' || sec[3] != '0' || sec[4] != '0' || sec[5] != '1') return;
+  // PVD offset 140 (0x8C) = L-path-table LBA (u32 LE).
+  const uint32_t pt_lba = (uint32_t)sec[0x8C] | ((uint32_t)sec[0x8D] << 8) |
+                          ((uint32_t)sec[0x8E] << 16) | ((uint32_t)sec[0x8F] << 24);
+  if (!cdlibcd_read_into_scratch(c, pt_lba, sec)) return;
+
+  // Walk path-table entries: byte name_len + byte xa_len + u32 extent LE + u16 parent LE +
+  // name[name_len] + pad-to-even.
+  uint32_t off = 0;
+  int i = 0;
+  while (off + 8 <= 2048 && sec[off] != 0 && i < 128) {
+    const uint8_t  name_len = sec[off + 0];
+    const uint32_t extent   = (uint32_t)sec[off + 2] | ((uint32_t)sec[off + 3] << 8) |
+                              ((uint32_t)sec[off + 4] << 16) | ((uint32_t)sec[off + 5] << 24);
+    const uint8_t  parent   = sec[off + 6];   // only low byte kept (max 128 dirs)
+
+    const uint32_t slot = kGuestPathTableCache + (uint32_t)i * 44u;
+    c->mem_w32(slot + 0, (uint32_t)(i + 1));   // 1-based dir index
+    c->mem_w32(slot + 4, (uint32_t)parent);    // parent idx as u32 (only low byte meaningful)
+    c->mem_w32(slot + 8, extent);              // dir extent LBA
+    for (uint32_t j = 0; j < name_len; j++) c->mem_w8(slot + 12 + j, sec[off + 8 + j]);
+    c->mem_w8(slot + 12 + name_len, 0);         // null-terminate
+
+    off += 8u + (uint32_t)name_len + ((uint32_t)name_len & 1u);
+    i++;
+  }
+  // Sentinel: next slot's parent field cleared (loop exit marker for the original FUN_8008BBE8).
+  if (i < 128) c->mem_w32(kGuestPathTableCache + (uint32_t)i * 44u + 4, 0);
+
+  c->mem_w32(kGuestCurCachedDir, 0);
+}
+
+// FUN_8008BF50 CdCacheFile(dir_idx): read the directory sector at path_cache[dir_idx-1].extent,
+// walk directory records, populate the file-entry cache. Sets 0x800AC2D4 = dir_idx. Idempotent when
+// dir_idx already matches the cached one.
+static void cdlibcd_cache_file(Core* c, uint32_t dir_idx) {
+  if (dir_idx == c->mem_r32(kGuestCurCachedDir)) return;
+  const uint32_t dir_lba = c->mem_r32(kGuestPathExtentBase + (dir_idx - 1u) * 44u);
+  uint8_t sec[2048];
+  if (!cdlibcd_read_into_scratch(c, dir_lba, sec)) {
+    c->mem_w32(kGuestCurCachedDir, dir_idx); return;
+  }
+
+  uint32_t off = 0;
+  int i = 0;
+  while (off < 2048 && sec[off] != 0 && i < 64) {
+    const uint32_t rec_len = sec[off + 0];
+    const uint32_t extent  = (uint32_t)sec[off + 2]  | ((uint32_t)sec[off + 3]  << 8) |
+                             ((uint32_t)sec[off + 4] << 16) | ((uint32_t)sec[off + 5] << 24);
+    const uint32_t size    = (uint32_t)sec[off + 10] | ((uint32_t)sec[off + 11] << 8) |
+                             ((uint32_t)sec[off + 12] << 16) | ((uint32_t)sec[off + 13] << 24);
+    const uint8_t  fn_len  = sec[off + 32];
+
+    // FUN_8008A00C: LBA -> BCD MSF (sector = LBA + 150, then split into min/sec/frame at 75 fps).
+    const int t = (int)extent + 150;
+    const int frame = t % 75, rem = t / 75, ssec = rem % 60, min = rem / 60;
+
+    const uint32_t slot = kGuestFileEntryCache + (uint32_t)i * 24u;
+    c->mem_w8(slot + 0, (uint8_t)((min  % 10) + ((min  / 10) << 4)));
+    c->mem_w8(slot + 1, (uint8_t)((ssec % 10) + ((ssec / 10) << 4)));
+    c->mem_w8(slot + 2, (uint8_t)((frame % 10) + ((frame / 10) << 4)));
+    c->mem_w32(slot + 4, size);
+    if (i == 0) {
+      // "." — DAT_8001C528 = 0x0000002E as u32 written at slot+8.
+      c->mem_w32(slot + 8, 0x0000002Eu);
+    } else if (i == 1) {
+      // ".." — DAT_8001C52C = 0x00002E2E at slot+8, DAT_8001C52E = 0x0000 (u16) at slot+10.
+      c->mem_w32(slot + 8, 0x00002E2Eu);
+      c->mem_w16(slot + 10, 0);
+    } else {
+      for (uint32_t j = 0; j < fn_len; j++) c->mem_w8(slot + 8 + j, sec[off + 33 + j]);
+      c->mem_w8(slot + 8 + fn_len, 0);
+    }
+
+    off += rec_len;
+    i++;
+  }
+  // Sentinel: null the next name slot's first byte (original: (u8)(&DAT_80102770 + iVar3*0xc) = 0).
+  if (i < 64) c->mem_w8(kGuestFileEntryCache + (uint32_t)i * 24u + 8, 0);
+
+  c->mem_w32(kGuestCurCachedDir, dir_idx);
 }
 
 
@@ -1590,6 +1988,20 @@ void Engine::startBinStage() {
   c->mem_w16(0x1F800008u + 6, 1);
   asset.uploadImage(0x1F800008u, kStartBinLoadImageSrc);
 
+  // Populate the libcd in-memory directory cache to match the substrate's boot-time end state.
+  // Native ISO9660 file lookup below bypasses libcd entirely, but the substrate (B core in SBS,
+  // and any post-boot rec_dispatch into CdSearchFile) reads this cache; without these writes,
+  // A diverges from B at f0 across ~1200 B in 0x800AC2D4 + 0x80102D68 + 0x80102768. Sequence
+  // (newMedia + cacheFile(2) + cacheFile(3)) matches the substrate's boot chain leaving the
+  // cache on \CD subdir (index 3), verified via SBS wwatch on 0x800AC2D4.
+  cdlibcd_new_media(c);
+  // CdSearchFile stamps 0x800AC2D8 = DAT_800ABFD0 (libcd media cookie) after each successful
+  // CdNewMedia call — its idempotency guard for subsequent lookups. Mirror that here so any
+  // later substrate dispatch into CdSearchFile short-circuits the newmedia branch.
+  c->mem_w32(kGuestMediaCookieDst, c->mem_r32(kGuestMediaCookieSrc));
+  cdlibcd_cache_file(c, 2);
+  cdlibcd_cache_file(c, 3);
+
   // File-table build via native ISO9660 (no libcd dispatch, no CdlFILE buffer).
   for (const auto& L : kStartBinLoops) {
     for (uint32_t i = 0; i < L.count; i++) {
@@ -1607,6 +2019,22 @@ void Engine::startBinStage() {
   }
 
   startBinCommonAdvance(c, asset, c->rng);
+
+  // Task-1 slot bookkeeping. Substrate STAGE-0 spawns task-1 (preload task body FUN_80044F58)
+  // via FUN_80044BD4 → FUN_80051F14; native_task_spawn (scheduler.cpp) is that RE'd port. pc_skip
+  // ran the preload chain inline synchronously above (asset.preloadTexgroup / preloadStage1) so
+  // task-1 has no body left to run — we just mirror the substrate's slot writes (BIOS TCB
+  // placeholder at +0x04, entry_pc at +0x0C, caller gp at +0x10) then close the slot (state=0,
+  // matching B's snapshot after task-1 ran to completion within f0). The gp value 0x800BE0D4 is
+  // the substrate's caller-of-FUN_80051F14 gp captured at the STAGE-0 call site (RE'd via SBS
+  // wwatch on 0x801FE080 = task1+0x10 which shows B writing 0x800BE0D4).
+  {
+    const uint32_t saved_gp = c->r[28];
+    c->r[28] = 0x800BE0D4u;
+    native_task_spawn(c, 1, 0x80044F58u);
+    c->r[28] = saved_gp;
+    c->mem_w16(0x801FE070u, 0);   // task-1 already ran-and-completed inline
+  }
 
   fprintf(stderr, "[start.bin] file table built (pc/iso9660); preload SM stepped across ticks\n");
 }

@@ -183,6 +183,8 @@
 8008B2D8	ov_cdinit
 8008B4B8	ov_cddatasync
 8008BBC8	ov_8008BBC8
+8008BBE8	cdlibcd_new_media
+8008BF50	cdlibcd_cache_file
 8008BEAC	ov_8008BEAC
 8008C1EC	ov_cd_read
 8008CCE0	ov_8008CCE0

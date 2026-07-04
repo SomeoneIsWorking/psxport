@@ -44,6 +44,11 @@ int main(int argc, char** argv) {
   const char* path = argc > 1 ? argv[1] : "scratch/bin/tomba2/MAIN.EXE";
   Game* game = new Game();    // the whole machine (owns the Core + every subsystem's state — no globals)
   Core* c = &game->core;      // the CPU/RAM handle threaded through the interp (2 MB RAM lives in Game)
+  // PSXPORT_PC_SKIP=1 → shortcut-heavy native path (collapses substrate multi-step init into one
+  // native step). Default is pc_skip=false (byte-exact fiber path — matches recomp byte-for-byte
+  // per SBS gameplay-mode strict compare). See memory: sbs-two-compare-modes.
+  { const char* e = getenv("PSXPORT_PC_SKIP");
+    if (e && *e && strcmp(e, "0") != 0) game->pc_skip = true; }
   c->game->gpu_gpu.tritest();                  // PSXPORT_VK_TRITEST=1: GPU triangle-rasterizer self-test, then exit (needs the GpuGpuState)
   void watchdog_init(void);
   watchdog_init();            // PSXPORT_WATCHDOG=<sec>: abort+backtrace if a frame stalls

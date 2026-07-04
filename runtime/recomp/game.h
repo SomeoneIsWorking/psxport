@@ -312,9 +312,11 @@ public:
   //       Full substrate — the stage machines, loaders, and content run as the recompiled PSX body
   //       instead of the native owners. The oracle for byte-comparison.
   //
-  // Currently pc_skip defaults to true (shortcuts on) and is forced FALSE by the SBS harness
-  // (see Sbs::run) so the faithful branch of every fork gets exercised for byte-compare.
-  bool pc_skip = true;
+  // Default is pc_skip=false (byte-exact fiber path). Overridden by PSXPORT_PC_SKIP=1 env var in
+  // both standalone (boot.cpp) and SBS Core A (sbs.cpp). Under SBS, the strict byte-exact target
+  // is pc_skip=false; pc_skip=true opts into the scratch-mask compare (see feedback memory
+  // sbs-two-compare-modes + isPcSkipScratch in sbs.cpp).
+  bool pc_skip = false;
 
   // ---- dual-core diff mode (dualcore.cpp) ----------------------------------------------------------
   // When set, the frame body runs ONLY the guest-state-mutating work (per-frame update + scheduler +
