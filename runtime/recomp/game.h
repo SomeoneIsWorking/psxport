@@ -222,6 +222,18 @@ struct SchedulerState {
   // Per-task since demo runs only on task 0 in practice; array indexed for consistency with siblings.
   uint8_t demo_leave_step[3] = {};
 
+  // ---- Native DEMO s0 preload-wait step (Slip #4, docs/findings/sbs.md) --------------------
+  // The recomp body of 0x801062E4 state s0 dispatches FUN_80044BD4 which spawns task-1 with entry
+  // FUN_80044F58 (preload) then YIELDS AT LEAST ONCE waiting for the callback. Native demo_frame_s0
+  // used to run preloadTexgroup inline and complete s0 in ONE tick — putting A ~5 ticks ahead of B's
+  // fiber (task-1 preload spans several ticks). Fix: split native s0 across ticks matching the
+  // substrate cadence:
+  //   0 = fresh s0 tick; run pre-yield (sm setup + loader + native_task_spawn(1, FUN_80044F58) +
+  //       FUN_80044BD4 latches). Set step=1, suppress frame() dispatch of sm[0x48]==1 (s1), yield.
+  //   1 = wait tick; if done_flag(0x1F80019B) == 0, yield (task-1 fiber still running); else run
+  //       s0 post-yield tail (FUN_8007982C + reset75240 + FUN_8001CF00), reset step to 0.
+  uint8_t demo_s0_step[3] = {};
+
   // Resident overlay per OVERLAP SLOT (0x80106228 stage / 0x80108F9C mode / 0x8018A000 area), recorded
   // by overlay_note_load() at LOAD time — when the freshly-written image still matches its raw .BIN
   // signature, BEFORE the game mutates its header pointer table at runtime. The router routes by this

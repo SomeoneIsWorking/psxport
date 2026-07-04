@@ -103,6 +103,7 @@ struct SbsSchedSnap {
   uint8_t  stage0_step[3]{};
   uint8_t  sop_field_step[3]{};
   uint8_t  demo_leave_step[3]{};
+  uint8_t  demo_s0_step[3]{};
   const RecOverlay* resident_ov[3]{};
 };
 
@@ -359,6 +360,7 @@ static void sbs_snap_sched(const SchedulerState& s, SbsSchedSnap& out) {
   memcpy(out.stage0_step,     s.stage0_step,     sizeof out.stage0_step);
   memcpy(out.sop_field_step,  s.sop_field_step,  sizeof out.sop_field_step);
   memcpy(out.demo_leave_step, s.demo_leave_step, sizeof out.demo_leave_step);
+  memcpy(out.demo_s0_step,    s.demo_s0_step,    sizeof out.demo_s0_step);
   memcpy(out.resident_ov,     s.resident_ov,     sizeof out.resident_ov);
 }
 // Restore scheduler bookkeeping AND tear down any live Coro fibers — a fiber's C-stack reflects
@@ -377,6 +379,7 @@ static void sbs_restore_sched(SchedulerState& s, const SbsSchedSnap& in) {
   memcpy(s.stage0_step,     in.stage0_step,     sizeof s.stage0_step);
   memcpy(s.sop_field_step,  in.sop_field_step,  sizeof s.sop_field_step);
   memcpy(s.demo_leave_step, in.demo_leave_step, sizeof s.demo_leave_step);
+  memcpy(s.demo_s0_step,    in.demo_s0_step,    sizeof s.demo_s0_step);
   memcpy(s.resident_ov,     in.resident_ov,     sizeof s.resident_ov);
   for (int i = 0; i < 3; i++) {
     if (s.coro[i]) { delete s.coro[i]; s.coro[i] = nullptr; }

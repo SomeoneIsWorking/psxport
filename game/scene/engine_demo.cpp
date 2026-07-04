@@ -36,6 +36,7 @@
 
 #include "core.h"
 #include "cfg.h"
+#include "scheduler.h"                    // native_task_spawn (FUN_80051F14 port) — Slip #4 s0 spawn
 #include "world/pool.h"          // ov_pool_init_run (FUN_8007B18C) + siblings
 #include "world/placement.h"     // ov_place_objects (FUN_80072A78)
 #include "core/asset.h"          // class Asset — preloadTexgroup (static, area-load sync)
@@ -458,30 +459,51 @@ static uint32_t demo_menu_machine(Core* c) {
 //   jal 0x80045080(a0, idx=2, task)  -> indexed file load (table 0x800BE118, stride 8) via FUN_8001DC40
 //   jal 0x80044BD4(0x80044F58, a1=2, a2=0, phase=0) -> texgroup area-load (spawn+yield-wait, sync here)
 //   jal 0x8007982C; jal 0x80075240; jal 0x8001CF00(1)  -> control-block / audio-attr / SPU-mix (SYNC)
-static void demo_frame_s0(Core* c) {
+// s0 pre-yield (Slip #4): substrate order in state 0 body up to the FUN_80044BD4 yield —
+//   sm[0x68] = 0
+//   sm[0x48]++     (0 → 1)  ← advanced EARLY, matching substrate
+//   sm[0x4a] = 0
+//   loader 0x80045080(dest=0x80108F9C, idx=2)     (leaf, synchronous)
+//   FUN_80044BD4 prelude: latch a1→0x801fe0de, a2→0x801fe0dd, clear done_flag 0x1f80019b, spawn
+//   task-1 with entry FUN_80044F58 (preload). Substrate then yields waiting for the callback.
+void Demo::s0PreYield() { Core* c = core;
   uint32_t sm = c->mem_r32(SM_PTR);
   c->mem_w8 (sm + 0x68, 0);
-  c->mem_w16(sm + 0x48, 1);                    // sm[0x48]++ : 0 -> 1
+  c->mem_w16(sm + 0x48, 1);                    // sm[0x48]++ : 0 -> 1  (mirrors substrate)
   c->mem_w16(sm + 0x4a, 0);
-  { // loader 0x80045080(dest=0x80108F9C, idx=2): tab=0x800BE118+idx*8 -> {lba,size}; sync read to dest.
-    void cd_dc40_sync(Core*, uint32_t, uint32_t, uint32_t);
+  { void cd_dc40_sync(Core*, uint32_t, uint32_t, uint32_t);
     uint32_t tab = 0x800be118u + 2u * 8u;
     cd_dc40_sync(c, 0x80108f9cu, c->mem_r32(tab), c->mem_r32(tab + 4));
   }
-  { // area-load FUN_80044BD4(callback=FUN_80044F58, a1=2, a2=0): native sync (no task spawn, no yield).
-    // FUN_80044BD4 latches a1->0x801fe0de, a2->0x801fe0dd, clears 0x1f80019b, then the callback runs and
-    // sets 0x1f80019b=1. asset.preloadTexgroup(mode,set) IS the synchronous FUN_80044F58.
-    c->mem_w8(0x801fe0deu, 2);
-    c->mem_w8(0x801fe0ddu, 0);
-    c->mem_w8(0x1f80019bu, 0);
-    c->engine.asset.preloadTexgroup(0, 2);   // FUN_80044BD4(set=2, mode=0)
-    c->mem_w8(0x1f80019bu, 1);
-  }
-  rec_dispatch(c, 0x8007982Cu);                // zero+seed the 1524B control block @0x800BF870 (SYNC)
-  c->engine.pool.reset75240();                             // 0x80075240 — native (voice/audio-attr control-block init)
-  c->r[4] = 1; rec_dispatch(c, 0x8001CF00u);   // SpuSetCommonAttr CD->SPU mix on (SYNC)
-  if (cfg_dbg("demo")) fprintf(stderr, "[demo] s0 init: menu resources loaded, sm[0x48]=1 "
+  // FUN_80044BD4 prelude: match the substrate exactly, then use native_task_spawn (scheduler.cpp) as
+  // the real port of FUN_80051F14 — task-1 runs via the Coro-fiber stanza under mIsFaithful so its
+  // FUN_80044F58 preload substrate signals done_flag=1 itself, at the same tick B does.
+  c->mem_w8(0x801fe0deu, 2);
+  c->mem_w8(0x801fe0ddu, 0);
+  c->mem_w8(0x1f80019bu, 0);                    // done_flag = 0
+  native_task_spawn(c, 1, 0x80044F58u);         // spawn task-1: FUN_80051F14 native port
+}
+
+// s0 post-yield (Slip #4): substrate order in state 0 body after FUN_80044BD4 returns —
+//   FUN_8007982C (zero+seed the 1524B control block @0x800BF870)
+//   FUN_80075240 (native pool.reset75240)
+//   FUN_8001CF00(1) (SpuSetCommonAttr CD→SPU mix on)
+// Then the substrate falls through into state 1's body; native's normal frame() resumes with s1.
+void Demo::s0PostYield() { Core* c = core;
+  rec_dispatch(c, 0x8007982Cu);
+  c->engine.pool.reset75240();
+  c->r[4] = 1; rec_dispatch(c, 0x8001CF00u);
+  if (cfg_dbg("demo")) fprintf(stderr, "[demo] s0 post-yield: sm[0x48]=1, task-1 preload done "
                                "(texgroup meta[0x800FB170]=%08X)\n", c->mem_r32(0x800fb170u));
+}
+
+// Legacy inline s0 body kept for the non-mIsFaithful path (normal PC play — where task-1 wouldn't
+// run via fiber, so we do the preload synchronously inline). Runs both halves + fake done_flag.
+static void demo_frame_s0(Core* c) {
+  c->engine.demo.s0PreYield();
+  c->engine.asset.preloadTexgroup(0, 2);       // synchronous FUN_80044F58 (task-1 callback body)
+  c->mem_w8(0x1f80019bu, 1);                    // done_flag = 1 (as if task-1 signalled)
+  c->engine.demo.s0PostYield();
 }
 
 // Substate s1 (0x8010641C) — wait/advance. Run the menu machine; on completion (v0!=0) reset sm[0x4a]

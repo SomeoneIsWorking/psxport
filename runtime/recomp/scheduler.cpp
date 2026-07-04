@@ -133,6 +133,7 @@ static StanzaResult run_demo_stanza(Core* c, int i, uint32_t base, uint32_t st,
     c->game->sched.task_ctx[i].r[31] = 0xDEAD0000u;
     c->game->sched.task_started[i] = 1;
     c->game->sched.demo_native[i] = 1;
+    c->game->sched.demo_s0_step[i] = 0;                          // arm s0 step-spread (Slip #4)
   }
   c->mem_w16(base, 4);
   c->mem_w32(CUR_TASK, base);
@@ -141,13 +142,38 @@ static StanzaResult run_demo_stanza(Core* c, int i, uint32_t base, uint32_t st,
   c->game->sched.in_stage = 1;
   if (setjmp(c->game->sched.yield_jmp) == 0) {
     if (demo_fresh) c->engine.demo.stageMain();                 // prologue only (sm[0x48]=0)
-    uint16_t sm48v = c->mem_r16(c->mem_r32(0x1f800138u) + 0x48);
-    bool defer_leave = (sm48v == 5 && !demo_fresh
-                        && c->game->sched.demo_leave_step[i] == 0);
-    if (defer_leave) c->game->sched.demo_leave_step[i] = 1;     // consumed on the next tick
-    else {
-      c->engine.demo.frame();                                   // dispatches sm[0x48] substate
-      if (sm48v == 5) c->game->sched.demo_leave_step[i] = 0;    // re-arm after LEAVE completes
+    // Slip #4 — DEMO s0 preload wait step-spread. On the fresh tick after stageMain, run s0's
+    // pre-yield (spawn task-1) and set step=1. On subsequent ticks, poll done_flag; when task-1
+    // fiber signals done_flag=1, run s0's post-yield tail and clear step so frame() dispatches
+    // s1 next tick as normal. Only fires under mIsFaithful (where task-1's fiber actually runs);
+    // non-faithful plays keeps the legacy inline demo_frame_s0 which fake-signals done_flag=1.
+    bool skip_frame_dispatch = false;
+    if (c->game->mIsFaithful) {
+      if (demo_fresh) {
+        c->engine.demo.s0PreYield();                              // spawn task-1
+        c->game->sched.demo_s0_step[i] = 1;
+        skip_frame_dispatch = true;                                // fresh tick: only pre-yield
+      } else if (c->game->sched.demo_s0_step[i] == 1) {
+        if (c->mem_r8(0x1f80019bu) == 1) {                        // done_flag set by task-1 fiber
+          c->engine.demo.s0PostYield();
+          c->game->sched.demo_s0_step[i] = 0;
+          // Fall through to frame() dispatch below — substrate does s0-tail AND s1 body in the
+          // same tick (state 0 falls through to L_8010641C = state 1). Native matches by
+          // running s0PostYield then dispatching sm[0x48]=1 (demo_frame_s1) inline this tick.
+        } else {
+          skip_frame_dispatch = true;                              // wait tick — task-1 fiber running
+        }
+      }
+    }
+    if (!skip_frame_dispatch) {
+      uint16_t sm48v = c->mem_r16(c->mem_r32(0x1f800138u) + 0x48);
+      bool defer_leave = (sm48v == 5 && !demo_fresh
+                          && c->game->sched.demo_leave_step[i] == 0);
+      if (defer_leave) c->game->sched.demo_leave_step[i] = 1;    // consumed on the next tick
+      else {
+        c->engine.demo.frame();                                  // dispatches sm[0x48] substate
+        if (sm48v == 5) c->game->sched.demo_leave_step[i] = 0;   // re-arm after LEAVE completes
+      }
     }
   } else if (cfg_dbg("demo")) {
     static int w = 0; if (!w++) fprintf(stderr, "[demo] caught a substate yield (async CD not yet "
@@ -157,6 +183,7 @@ static StanzaResult run_demo_stanza(Core* c, int i, uint32_t base, uint32_t st,
   if (c->mem_r32(base + 0xc) != 0x801062E4u) {                  // s5 -> GAME rewrote entry
     c->game->sched.demo_native[i] = 0;
     c->game->sched.task_started[i] = 0;
+    c->game->sched.demo_s0_step[i] = 0;
     return STANZA_HANDLED;
   }
   c->game->sched.task_ctx[i] = static_cast<R3000&>(*c);

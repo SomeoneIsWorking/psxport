@@ -27,6 +27,13 @@ public:
 
   // Substate handlers (called by frame() based on the current sm[0x48] substate).
   void s0();             // formerly ov_demo_s0
+
+  // Slip #4 — DEMO s0 preload-wait step-spread (mirrors substrate FUN_80044BD4 spawn+yield rhythm).
+  // s0PreYield: sm setup + loader + spawn task-1 (FUN_80044F58 preload); yields caller.
+  // s0PostYield: run s0's post-FUN_80044BD4 tail (FUN_8007982C + reset75240 + FUN_8001CF00) and
+  // advance sm[0x48] = 1. Called by run_demo_stanza's step-spread branch, not by frame() dispatch.
+  void s0PreYield();
+  void s0PostYield();
   void s1();             // formerly ov_demo_s1
   void s2();             // formerly ov_demo_s2
   void s3();             // formerly ov_demo_s3
