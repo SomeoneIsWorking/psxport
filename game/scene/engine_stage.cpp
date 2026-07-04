@@ -1660,7 +1660,11 @@ static constexpr uint32_t kStartBinLoadImageSrc = 0x80106878u;
 static void startBinCommonAdvance(Core* c, Asset& asset, Rng& rng) {
   uint32_t task = c->mem_r32(CUR_TASK);
   c->mem_w16(task + 0x4a, 0);
-  asset.preloadTexgroup(0, 0);
+  // Slip #8: under mIsFaithful the state-0 texgroup preload is done by task-1's substrate
+  // FUN_80044F58 fiber (spawned via sync_preload_spawn earlier). Native preloadTexgroup here
+  // would DUPLICATE the CD reads — the fiber's last cd_loadfile stamp to 0x800BE0E0 (position
+  // tracker) then races with native's stamp, producing an off-by-one file boundary.
+  if (!c->game->mIsFaithful) asset.preloadTexgroup(0, 0);
   c->mem_w16(task + 0x56, (uint16_t)rng.next());
   c->mem_w16(task + 0x48, 1);
 }
@@ -1882,7 +1886,19 @@ int Engine::stage0Advance(uint8_t& step) { Core* c = core;
       break;
     }
     case 4:                                        c->mem_w16(task + 0x48, 3); break;   // state 2 -> 3
-    case 5: /* task-1 slot: extra padding to match measured 8-tick coro total */ break;
+    case 5: {
+      // Slip #8 byte-match: substrate state 3 (`jal 0x80052078(1)`) on B calls FUN_800450BC
+      // which does cd_loadfile(0x80106228, DEMO.BIN LBA, size) — this write to 0x800BE0E0
+      // (last-sector position tracker) fires at THIS scheduler tick on B, one tick earlier
+      // than native's step-6 placement of startStage(1). Emit just the cd_loadfile ahead of
+      // step 6 so 0x800BE0E0 matches at f6; leave the actual stage swap (task+0xc entry
+      // rewrite + task state=3 write) for step 6 to preserve the task-slot cadence.
+      uint32_t lba  = c->mem_r32(0x800BE1E0u + 1 * 8);      // DEMO.BIN LBA (STAGE_FILE_TBL[1])
+      uint32_t size = c->mem_r32(0x800BE1E0u + 1 * 8 + 4);
+      extern void cd_loadfile_native(Core*, uint32_t, uint32_t, uint32_t);
+      cd_loadfile_native(c, 0x80106228u, lba, size);
+      break;
+    }
     case 6:                                                                              // state 3
       startStage(1);                   // swap task0 to DEMO — rewrites task+0xc, sets state=3
       scheduler_yield(c);              // never returns; longjmp to scheduler
