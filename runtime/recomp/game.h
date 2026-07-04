@@ -283,6 +283,8 @@ public:
   // (native-depth cache moved to `class ProjPrim` on Render — reach as `c->mRender->projprim`, 2026-07-03)
   void* spu_state = nullptr;  // per-instance SPU state (Beetle spu.c), heap-allocated; bound via SPU_BindState
   int   spu_powered = 0;      // SPU_Power run on this instance's state yet? (lazy power on first bind)
+  void* spu_log = nullptr;    // per-Game SPU write log (SpuWriteLog*, spu_beetle.c) — Sbs compares A vs B at
+                              // frame boundary to flag audio-relevant divergences (Issue #29). NULL when SBS off.
   void* mdec_state = nullptr; // per-instance MDEC state (Beetle mdec.c), heap-allocated; bound via MDEC_BindState
   int   mdec_powered = 0;     // MDEC_Power run on this instance's state yet? (lazy power on first bind)
 

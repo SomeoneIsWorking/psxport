@@ -305,10 +305,16 @@ bool Sbs::Impl::navStep(Core* c, Nav& nv, uint32_t f, const char* tag) {
     case AWAIT_CUT:
       if (cut) { fprintf(stderr, "[sbs] %s cutscene up @f%u\n", tag, f); nv.phase = SKIP_CUT; nv.idle = 0; }
       break;
-    case SKIP_CUT:
-      if (cut) { nv.idle = 0; if ((f % 40u) == 0) c->game->pad.driveTap((uint16_t)(BTN_NONE & ~BTN_START), 6); }
+    case SKIP_CUT: {
+      // PSXPORT_SBS_WATCH_CUT=1 — DON'T press Start during the intro cutscene; let it play out
+      // naturally so its scripted SFX (fisherman scene, etc.) actually fire on both cores. That's
+      // what makes the SFX bug (#29) surface via divergence-check. Default (=0) keeps the fast-skip
+      // behavior for rapid gameplay-start reach.
+      static const int watch_cut = []{ const char* e = getenv("PSXPORT_SBS_WATCH_CUT"); return e && *e && e[0] != '0' ? 1 : 0; }();
+      if (cut) { nv.idle = 0; if (!watch_cut && (f % 40u) == 0) c->game->pad.driveTap((uint16_t)(BTN_NONE & ~BTN_START), 6); }
       else if (++nv.idle >= 60) { fprintf(stderr, "[sbs] %s gameplay-start @f%u\n", tag, f); nv.phase = DONE; return true; }
       break;
+    }
     case DONE: return true;
   }
   return false;
@@ -458,14 +464,85 @@ void Sbs::Impl::recordDivergence(uint32_t addr) {
   }
 }
 
+// Human-readable label for a divergent address so the log names *what* diverged, not just where.
+// Audio-relevant hits (fx_table, spu-related scratchpad, area-audio-table) get a distinctive tag so
+// they stand out when scanning a flood of divergences under PSXPORT_SBS_NOPAUSE=1.
+static const char* addrLabel(uint32_t a) {
+  if (a >= 0x800A4D18u && a <  0x800A5000u) return "AUDIO fx_table[0..111]";
+  if (a >= 0x800A4EF8u && a <  0x800A4F80u) return "AUDIO fx_area_table_ptrs";
+  if (a == 0x800FB165u)                    return "AUDIO global_scale";
+  if (a >= 0x800AC000u && a <  0x800AC800u) return "libgs.gfx_ctx";
+  if (a >= 0x800BE000u && a <  0x800BF000u) return "libcd/file-table";
+  if (a >= 0x800BF4F0u && a <  0x800BF54Cu) return "packet_pool_ptrs";
+  if (a >= 0x800BF800u && a <  0x800BF900u) return "area_state";
+  if (a >= 0x800BFE68u && a <= 0x800E7E68u) return "packet_pool";
+  if (a >= 0x800E7E68u && a <  0x800E8000u) return "OT_ring";
+  if (a >= 0x800E8000u && a <  0x800E8100u) return "OT_head";
+  if (a >= 0x801FE000u && a <  0x801FE200u) return "task_slots";
+  if (a == 0x1F80019Bu)                    return "done_flag";
+  if (a == 0x1F800137u)                    return "AUDIO paused_flag";
+  if (a >= 0x1F800100u && a <  0x1F800200u) return "scratchpad_game_state";
+  return "?";
+}
+
 void Sbs::Impl::checkDivergence() {
-  if (mDivFound) return;   // first-hit only: recordDivergence already captured + paused
-  const uint8_t* a = mA->core.ram + (mLo - 0x80000000u);
-  const uint8_t* b = mB->core.ram + (mLo - 0x80000000u);
-  uint32_t n = mHi - mLo;
-  for (uint32_t i = 0; i < n; i++) if (a[i] != b[i]) { recordDivergence(mLo + i); return; }
-  for (uint32_t i = 0; i < 0x400; i++)
-    if (mA->core.scratch[i] != mB->core.scratch[i]) { recordDivergence(0x1F800000u + i); return; }
+  // PSXPORT_SBS_NOPAUSE=1 keeps SBS running past a divergence: each frame we log EVERY diverging
+  // BYTE-RUN (contiguous run of differing bytes) with a category label and per-core values, then
+  // continue. Purpose: let a native-code bug (e.g. #29 wrong SFX) surface as an AUDIO-labelled
+  // divergence even when boot cadence has already produced dozens of pre-existing diffs. Under this
+  // mode we DO NOT set mDivFound (so we re-check next frame) and we DO NOT rewind (rewind trashes
+  // fiber C-stacks). The trade-off is verbosity — the log can be long — but grep by label narrows it.
+  static const int nopause = []{ const char* e = getenv("PSXPORT_SBS_NOPAUSE"); return e && *e && e[0] != '0' ? 1 : 0; }();
+  // PSXPORT_SBS_ONLY_LABEL=<prefix> — when set, only log divergences whose category label starts
+  // with <prefix>. E.g. PSXPORT_SBS_ONLY_LABEL=AUDIO narrows the flood to audio-relevant hits so
+  // Issue #29 (wrong SFX) can surface without wading through boot-cadence noise.
+  static const char* only_label = []{ const char* e = getenv("PSXPORT_SBS_ONLY_LABEL"); return (e && *e) ? e : nullptr; }();
+  if (mDivFound && !nopause) return;   // first-hit only in default mode
+
+  auto scan = [this](uint32_t base, uint32_t sz, auto readA, auto readB) -> int {
+    int hits = 0;
+    uint32_t i = 0;
+    while (i < sz) {
+      if (readA(i) == readB(i)) { i++; continue; }
+      uint32_t run_start = i;
+      while (i < sz && readA(i) != readB(i)) i++;
+      uint32_t run_end = i;
+      uint32_t addr = base + run_start;
+      const char* label = addrLabel(addr);
+      if (only_label && strncmp(label, only_label, strlen(only_label)) != 0) continue;
+      uint32_t rlen = run_end - run_start;
+      if (rlen > 32) rlen = 32;
+      char va_hex[128] = {0}, vb_hex[128] = {0};
+      for (uint32_t j = 0; j < rlen; j++) {
+        snprintf(va_hex + j*3, 4, "%02X ", readA(run_start + j));
+        snprintf(vb_hex + j*3, 4, "%02X ", readB(run_start + j));
+      }
+      fprintf(stderr, "[sbs-div] f%u [%s] 0x%08X..0x%08X (%u B)  A=%s B=%s\n",
+              mFrame, label, addr, base + run_end, run_end - run_start, va_hex, vb_hex);
+      hits++;
+      if (!only_label && hits >= 16) { fprintf(stderr, "[sbs-div] f%u (more suppressed this frame)\n", mFrame); break; }
+    }
+    return hits;
+  };
+
+  int hits = 0;
+  hits += scan(mLo, mHi - mLo,
+               [this](uint32_t i){ return mA->core.ram[(mLo - 0x80000000u) + i]; },
+               [this](uint32_t i){ return mB->core.ram[(mLo - 0x80000000u) + i]; });
+  hits += scan(0x1F800000u, 0x400,
+               [this](uint32_t i){ return mA->core.scratch[i]; },
+               [this](uint32_t i){ return mB->core.scratch[i]; });
+
+  if (hits > 0 && !nopause) {
+    // Default (auto-pause) mode: mimic the old first-hit behavior by finding the true first address
+    // and calling recordDivergence for the interactive rewind/pause flow.
+    const uint8_t* a = mA->core.ram + (mLo - 0x80000000u);
+    const uint8_t* b = mB->core.ram + (mLo - 0x80000000u);
+    uint32_t n = mHi - mLo;
+    for (uint32_t i = 0; i < n; i++) if (a[i] != b[i]) { recordDivergence(mLo + i); return; }
+    for (uint32_t i = 0; i < 0x400; i++)
+      if (mA->core.scratch[i] != mB->core.scratch[i]) { recordDivergence(0x1F800000u + i); return; }
+  }
 }
 
 void Sbs::Impl::summarizeDivergence(uint32_t every) {
@@ -1081,10 +1158,22 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
   // psx_fallback per mode: gameplay/full run PSX gameplay on core B; render runs native gameplay on both;
   // oracle runs the PURE interpreter+soft-rasterizer oracle on B (docs/oracle.md).
   int fb_b = (mMode == M_RENDER) ? 0 : 1;
-  // SBS forces pc_skip=false so the faithful branch of every fork is exercised — that's the branch
-  // that's supposed to byte-match recomp_path.
-  mA = new Game(); mA->psx_fallback = 0;     mA->sbs = facade; mA->pc_skip = false;
+  // Core A's pc_skip mode: default matches `./run.sh` (pc_skip=true, the actual shipping behavior
+  // that has the wrong-SFX bug + other native-code bugs we need to catch). Set PSXPORT_SBS_PCFAITHFUL=1
+  // to switch A to pc_skip=false (fiber-only substrate under the current design) — that's the "audit
+  // fiber design" mode which trivially byte-matches B but hides all native-code bugs. The DEFAULT is
+  // pc_skip=true so SBS actually surfaces bugs in the code path the user runs (Job #1 for #29).
+  bool a_pc_skip = true;
+  { const char* e = getenv("PSXPORT_SBS_PCFAITHFUL"); if (e && *e && strcmp(e, "0") != 0) a_pc_skip = false; }
+  mA = new Game(); mA->psx_fallback = 0;     mA->sbs = facade; mA->pc_skip = a_pc_skip;
   mB = new Game(); mB->psx_fallback = fb_b;  mB->sbs = facade; mB->pc_skip = false;
+  // Allocate per-Core SPU-write logs so audio-relevant divergences (Issue #29) surface as
+  // register-write drift, not just RAM byte drift. Bound by spu_bind on every frame step.
+  mA->spu_log = spu_new_log();
+  mB->spu_log = spu_new_log();
+  fprintf(stderr, "[sbs] core A pc_skip=%s (%s) — B recomp is the oracle\n",
+          a_pc_skip ? "true" : "false",
+          a_pc_skip ? "matches ./run.sh; surfaces native-code bugs" : "fiber-only substrate; trivial byte-match");
   if (mMode == M_ORACLE) { mB->core.use_interp = 1; mB->gpu.soft_gpu = 1; }
   load_exe(exePath, &mA->core); dc_boot_init(&mA->core);
   load_exe(exePath, &mB->core); dc_boot_init(&mB->core);
@@ -1255,10 +1344,34 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
     // stage-machine divergence. Skip during the rewind re-step itself so we don't overwrite the
     // good snapshot.
     if ((nav_done || prenav) && !mDivFound && !mRewindActive) takePreStepSnap();
+    // Reset per-Core SPU write logs so this frame's writes accumulate cleanly.
+    spu_log_reset(mA->spu_log);
+    spu_log_reset(mB->spu_log);
     stepCore(mA, 0);              ww_log("post-stepA");
     grabPane(mA, mRgbaA, &mWa, &mHa); ww_log("post-grabA");
     stepCore(mB, 1);              ww_log("post-stepB");
     grabPane(mB, mRgbaB, &mWb, &mHb); ww_log("post-grabB");
+    // Compare per-Core SPU write logs. If A and B wrote different sequences (Issue #29: wrong SFX),
+    // print the first mismatch pair as `[AUDIO spu_write#N]`. This is the primary tool for the SFX-
+    // sample bug: the buggy caller passes wrong id → wrong voice reg values → mismatching writes.
+    {
+      uint32_t na = spu_log_count(mA->spu_log);
+      uint32_t nb = spu_log_count(mB->spu_log);
+      uint32_t nmin = na < nb ? na : nb;
+      for (uint32_t i = 0; i < nmin; i++) {
+        uint32_t aa = spu_log_entry(mA->spu_log, i, 0), va = spu_log_entry(mA->spu_log, i, 1);
+        uint32_t ab = spu_log_entry(mB->spu_log, i, 0), vb = spu_log_entry(mB->spu_log, i, 1);
+        if (aa != ab || va != vb) {
+          fprintf(stderr, "[sbs-div] f%u [AUDIO spu_write#%u] A=(0x%08X, 0x%04X)  B=(0x%08X, 0x%04X)\n",
+                  mFrame, i, aa, va & 0xFFFF, ab, vb & 0xFFFF);
+          break;
+        }
+      }
+      if (na != nb) {
+        fprintf(stderr, "[sbs-div] f%u [AUDIO spu_write_count] A=%u  B=%u  delta=%d\n",
+                mFrame, na, nb, (int)na - (int)nb);
+      }
+    }
     presentPanes();               ww_log("post-present");
     static const int only_on_value_diverge_ss = []{ const char* e = getenv("PSXPORT_SBS_WW_ONVALUEDIVERGE"); return e && *e && e[0] != '0' ? 1 : 0; }();
     // Per-lockstep-frame RNG advance-count divergence check. When PSXPORT_SBS_WW_ONVALUEDIVERGE is

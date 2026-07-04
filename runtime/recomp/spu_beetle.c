@@ -95,8 +95,32 @@ void spu_init(void)
    SPU_Power();
 }
 
+// SBS per-Core SPU-write log. spu_bind_log (called from hw_bind::spu_bind) sets this to the
+// current core's per-Game log buffer; spu_write appends (addr, val) pairs. SBS compares the
+// two cores' logs at frame boundary to flag audio-relevant divergences (Issue #29). Set to
+// NULL when SBS is not running; append is a cheap null-check.
+typedef struct SpuWriteLog_ {
+   uint32_t entries[8192];   // (addr, val) pairs; 4096 writes/frame budget
+   uint32_t count;
+} SpuWriteLog_;
+static SpuWriteLog_* s_spu_log = 0;
+void  spu_bind_log(void* log) { s_spu_log = (SpuWriteLog_*)log; }
+void  spu_log_reset(void* log) { if (log) ((SpuWriteLog_*)log)->count = 0; }
+void* spu_new_log(void) { return calloc(1, sizeof(SpuWriteLog_)); }
+uint32_t spu_log_count(void* log) { return log ? ((SpuWriteLog_*)log)->count : 0; }
+uint32_t spu_log_entry(void* log, uint32_t i, int hi) {
+  SpuWriteLog_* l = (SpuWriteLog_*)log;
+  if (!l || i >= l->count) return 0;
+  return l->entries[i*2 + (hi ? 1 : 0)];
+}
+
 void spu_write(uint32_t addr, uint32_t val)
 {
+   if (s_spu_log && s_spu_log->count * 2 + 1 < (uint32_t)(sizeof(s_spu_log->entries)/sizeof(s_spu_log->entries[0]))) {
+      s_spu_log->entries[s_spu_log->count * 2 + 0] = addr;
+      s_spu_log->entries[s_spu_log->count * 2 + 1] = val;
+      s_spu_log->count++;
+   }
    // PSXPORT_SPU_DBG: surface whether the game drives the SPU at all (silent-output triage).
    // Logs total writes, key-on (KON 0x1F801D88/8A), and SPUCNT (0x1F801DAA, bit15 = SPU enable).
    if (cfg_dbg("spu")) {

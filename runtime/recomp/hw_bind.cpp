@@ -5,10 +5,14 @@
 #include "game.h"
 #include "hw_bind.h"
 
+extern "C" void spu_bind_log(void*);   // spu_beetle.c — set per-core SPU write log (SBS diagnostic)
+
 // Bind THIS core's per-instance SPU state (Beetle spu.c), lazily powering it on first use. Like gte_bind,
 // called per core frame-step + at boot, from the explicit Core — two cores keep SEPARATE SPU state.
+// Also binds this core's SPU write log so spu_write appends to A's or B's per-Core log during SBS.
 void spu_bind(Core* c) {
   SPU_BindState(c->game->spu_state);
+  spu_bind_log(c->game->spu_log);   // NULL when SBS off — spu_write's null-check makes it a no-op
   if (!c->game->spu_powered) { SPU_Power(); c->game->spu_powered = 1; }
 }
 // Same for MDEC (per-instance; lazy power on first bind — MDEC has no separate global init).
