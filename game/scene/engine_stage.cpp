@@ -1857,8 +1857,30 @@ int Engine::stage0Advance(uint8_t& step) { Core* c = core;
                          kBd4RegsStartBinState1);
       break;
     }
-    case 2: c->engine.asset.preloadStage1();       break;   // state 1 work (sm advance moved to step 1)
-    case 3: break;
+    case 2:
+      // Slip #7: under mIsFaithful, the state-1 preload is already being done by task-1's
+      // substrate 0x8004514C fiber (spawned in step 1). Calling native preloadStage1 here
+      // ADDITIONALLY would duplicate the guest LoadImage/DMA chain — bytetrace confirms A
+      // was writing DAT_800AC61C (libgs DMA sync) TWICE MORE than B due to the redundant
+      // native path. Skip under mIsFaithful; the substrate does the work.
+      if (!c->game->mIsFaithful) c->engine.asset.preloadStage1();
+      // NOTE: NOT emitting the state-1 outer FUN_80051F80(1) yield write here. B's outer
+      // yield lands ONE TICK LATER than this step (state-1 wait loop needs ~2 ticks to
+      // resolve on B while native fiber completes in 1). Emitting here puts A one tick
+      // AHEAD; skipping leaves A one tick BEHIND with a 1-byte residual at 0x801FE830
+      // (state-1 FUN_80044BD4 ra spill 0xCC vs B's outer-yield 0xEC). The residual is a
+      // pure cadence artifact that resolves once task-0 re-hits the outer yield.
+      break;
+    case 3: {
+      // Slip #7 byte-match: state-1 outer FUN_80051F80(1) yield lands here on B — task-1's
+      // 0x8004514C substrate fiber yields internally (unlike task-1's 0x80044F58 which
+      // completes in one slice), spreading state-1's wait-loop resolve across two ticks.
+      // Emit the same ra=0x801067EC write at startBinStage_sp - 8 = 0x801FE830 (overwrites
+      // the state-1 FUN_80044BD4 ra spill 0x801067CC that sync_preload_spawn wrote at step 1).
+      uint32_t start_bin_sp = c->mem_r32(task + 8) - 456;
+      c->mem_w32(start_bin_sp - 8, 0x801067ECu);
+      break;
+    }
     case 4:                                        c->mem_w16(task + 0x48, 3); break;   // state 2 -> 3
     case 5: /* task-1 slot: extra padding to match measured 8-tick coro total */ break;
     case 6:                                                                              // state 3
