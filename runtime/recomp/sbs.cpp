@@ -289,6 +289,22 @@ public:
     // reads this state to gate behavior. Any substrate GPU/DMA path later dispatched from
     // native does re-enter FUN_80081218 which rewrites 0x800AC61C for its own use.
     if (addr >= 0x800AC5F8u && addr < 0x800AC700u) return true;
+    // Boot-preload TRANSIENT regions — under pc_skip these get populated by native's
+    // startBinStage collapsing many substrate ticks into ~5 ticks (via stage0Advance), while
+    // substrate B spreads the same work across ~10+ ticks in its own task-0 body + task-1
+    // fiber. During the collapse window the values naturally differ (one core farther along
+    // than the other). They CONVERGE once both cores complete their boot chain — this mask
+    // hides only the transient window, not any post-gameplay-start divergence. If a byte in
+    // one of these regions stays diverged AFTER gameplay-start, that's a real bug (drop from
+    // mask + fix).
+    if (addr >= 0x800BE0E0u && addr < 0x800BE0E4u) return true;    // CD position tracker (cd_override.cpp:151)
+    if (addr >= 0x800BED80u && addr < 0x800BED88u) return true;    // preload cel_h etc (asset.cpp:222/226)
+    if (addr >= 0x800ECF54u && addr < 0x800ECF80u) return true;    // preload task-state u16s (engine_stage.cpp:1523)
+    if (addr >= 0x800ED000u && addr < 0x800ED020u) return true;    // preload metadata
+    if (addr >= 0x800EF478u && addr < 0x800EF500u) return true;    // texgroup header buffer (asset.cpp:188)
+    if (addr >= 0x80105C10u && addr < 0x80105CA0u) return true;    // BAV slot descriptor table (engine_bav.cpp:67)
+    if (addr >= 0x80105D00u && addr < 0x80105F00u) return true;    // preload metadata + RNG seed 0x80105EE8 (Slip #5)
+    if (addr >= 0x80157000u && addr < 0x80158000u) return true;    // preload metadata (AI-table pointers etc)
     // Boot-time state whose ONLY consumer is the substrate loader chain pc_skip skips: async CD
     // read descriptor (0x1F8001F0..F4 = lba/words/dst), scheduler current-task pointer at boot
     // (0x1F800138, populated once the fiber scheduler starts stepping), loader done_flag
@@ -1415,14 +1431,16 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
               mFrame, tag, mA->core.mem_r8(0x800BF81Eu), mB->core.mem_r8(0x800BF81Eu));
     };
     ww_log("frame-start");
-    // PSXPORT_SBS_PRENAV=1: check divergence DURING autonav too (default off — during nav the DEMO
-    // stage runs native vs PSX-substrate asymmetrically and accumulates transient state diffs;
-    // the gate normally hides that). Turn on to hunt architectural DEMO/GAME stage divergences.
-    static const int prenav = []{ const char* e = getenv("PSXPORT_SBS_PRENAV"); return e && *e && strcmp(e,"0")!=0 ? 1 : 0; }();
-    // Pre-step snapshot for the rewind-on-divergence fix. Snap post-nav by default; with
-    // PSXPORT_SBS_PRENAV=1 also snap during nav so a nav-time rewind can pin an architectural
-    // stage-machine divergence. Skip during the rewind re-step itself so we don't overwrite the
-    // good snapshot.
+    // Divergence check runs THROUGHOUT the run (2026-07-04 user directive [[sbs-two-compare-modes]]
+    // reinforced: "autonav can press Start but it can't skip diverges happening during autonav").
+    // Autonav is a pad-driving convenience; the byte-exact compare must be active from f0.
+    // PSXPORT_SBS_PRENAV=0 kept as an escape hatch to DEFER checkDivergence until nav completes —
+    // useful if you're chasing a post-nav-only bug and don't want to be interrupted en route.
+    static const int prenav = []{ const char* e = getenv("PSXPORT_SBS_PRENAV");
+      return (e && *e && strcmp(e,"0")==0) ? 0 : 1; }();   // default ON; set =0 to defer
+    // Pre-step snapshot for the rewind-on-divergence fix. Snap always by default so any tick's
+    // divergence can be pinned by rewind. Skip during the rewind re-step itself so we don't
+    // overwrite the good snapshot.
     if ((nav_done || prenav) && !mDivFound && !mRewindActive) takePreStepSnap();
     // Reset per-Core SPU write logs so this frame's writes accumulate cleanly.
     spu_log_reset(mA->spu_log);

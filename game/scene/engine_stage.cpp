@@ -1280,7 +1280,17 @@ void Engine::submode1() { Core* c = core;
         c->engine.mSubmode1LoadDeferred = false;  // second tick — consume the defer, fall through
       } else {
         rec_dispatch(c, 0x8005245cu);
+        (void)c->rng.next();               // Slip #5: substrate makes 1 RNG call inside FUN_80044BD4
         c->engine.sop.transitionAreaLoad();
+        // pc_skip counter-bump ([[pc-skip-frame-counter-bump]]): substrate would consume 2 field-
+        // frame ticks in this case-0 body (Slip #3 in docs/findings/sbs.md — FUN_80044BD4 yields
+        // between load and fall-through), each bumping 0x1F80017C + 0x800BF878 via fieldFrame.
+        // pc_skip collapses to 1 tick and would bump those counters only once — so downstream
+        // phase-gated code (e.g. FUN_8004B374's obj+0xD gate on `0x1F80017C & 0x1F`) samples
+        // out-of-phase compared to recomp. Bump the counters here to inject the extra tick's
+        // worth of counter progression the substrate would have made.
+        c->mem_w16(0x1F80017Cu, (uint16_t)(c->mem_r16(0x1F80017Cu) + 1));
+        c->mem_w32(0x800BF878u, c->mem_r32(0x800BF878u) + 1);
       }
       /* fallthrough */
     case 1: {
