@@ -1414,6 +1414,90 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
         } else {
           emit_class("(no signal)", "same caller/pc/value/hits — probably filtered out earlier; investigate manually");
         }
+        // Struct-layout probe: registry of known guest RAM arrays. When the divergent address falls
+        // inside a registered array, dump the record INDEX + offset within-record so a caller doesn't
+        // have to hand-decode it. Every new hit that recurs across sessions ought to land here.
+        struct StructLayout { uint32_t base; uint32_t stride; uint32_t count; const char* name; };
+        static constexpr StructLayout kLayouts[] = {
+          // input-processor record table (input.cpp FUN_800931C0): iterated over records[0, N)
+          // where N = (int8)0x80105CEC. Each 56 B record holds pad/controller state; +0x00 is the
+          // h0 field written by FUN_8009A1D0. Native input_dispatch_931c0 references it verbatim.
+          { 0x801054CEu, 56u, 25u, "input.record" },
+          // Task-slot table (0x801FE000, stride 0x70, 3 slots) — scheduler state
+          { 0x801FE000u, 0x70u, 3u, "task_slot" },
+          // Object arm-slot table (0x800BE238, stride 12, 24 slots) — walked by Engine::areaUpdateTail
+          { 0x800BE238u, 12u, 24u, "area.arm_slot" },
+          // Voice/audio state at 0x800BE1F8 (single struct, 0x40 B typical)
+          { 0x800BE1F8u, 0x40u, 1u, "voice.state" },
+          // libgs graphics context struct (set by ResetGraph, mutated by LoadImage/DrawSync chain)
+          { 0x800AC5F8u, 0x100u, 1u, "libgs.gfx_ctx" },
+          // ScreenFade held-fully-faded latch (game/render/screen_fade)
+          { 0x800E7DE0u, 8u, 1u, "screen_fade.state" },
+          // Object-pool T2 node table (0x800EE480 typical — record stride 0x40)
+          // (Approximate — the pool has multiple sub-tables; treat this as a hint region)
+          { 0x800EE480u, 0x40u, 32u, "object.pool[T2]" },
+        };
+        for (const auto& L : kLayouts) {
+          uint32_t end = L.base + L.stride * L.count;
+          if (mWwAddr >= L.base && mWwAddr < end) {
+            uint32_t off  = mWwAddr - L.base;
+            uint32_t idx  = off / L.stride;
+            uint32_t roff = off % L.stride;
+            fprintf(stderr, "[sbs] === struct layout: %s[%u] + 0x%02X @ base 0x%08X (stride 0x%X, count %u) ===\n",
+                    L.name, idx, roff, L.base, L.stride, L.count);
+            break;
+          }
+        }
+
+        // Upstream state cross-check: dump a handful of commonly-diverging globals so the caller can
+        // see at a glance whether RNG or well-known state has drifted before the visible divergence.
+        // Cheap (8 words) and often decisive — if RNG matches, drift is downstream of RNG.
+        fprintf(stderr, "[sbs] === upstream state cross-check ===\n");
+        struct GlobalCheck { uint32_t addr; uint8_t width; const char* name; };
+        static constexpr GlobalCheck kUpstream[] = {
+          { 0x80105EE8u, 4, "RNG.seed" },
+          { 0x800BE358u, 4, "arm-mask" },
+          { 0x800BED84u, 2, "hword.0BED84" },
+          { 0x800A4F7Eu, 2, "hword.0A4F7E" },
+          { 0x800BF870u, 1, "area.idx" },
+          { 0x1F800137u, 1, "cutMode" },
+          { 0x1F800138u, 4, "CUR_TASK" },
+          { 0x1F80019Bu, 1, "done_flag" },
+        };
+        for (const auto& g : kUpstream) {
+          uint32_t va = 0, vb = 0;
+          if (g.width == 1) { va = mA->core.mem_r8(g.addr); vb = mB->core.mem_r8(g.addr); }
+          else if (g.width == 2) { va = mA->core.mem_r16(g.addr); vb = mB->core.mem_r16(g.addr); }
+          else { va = mA->core.mem_r32(g.addr); vb = mB->core.mem_r32(g.addr); }
+          fprintf(stderr, "[sbs]   %-14s @0x%08X (%uB): A=0x%08X B=0x%08X %s\n",
+                  g.name, g.addr, g.width, va, vb, va == vb ? "match" : "!! DIVERGE !!");
+        }
+
+        // Task-slot state dump. Each slot's state (+0x00), entry pc (+0x0C), done-mark (+0x02).
+        // Divergent slot state = task-scheduling divergence — the most common cause of a wrong
+        // CUR_TASK / wrong writer during multitask cooperative code (task-1 preload etc.).
+        fprintf(stderr, "[sbs] === task-slot state ===\n");
+        for (int slot = 0; slot < 3; slot++) {
+          uint32_t base = 0x801FE000u + (uint32_t)slot * 0x70u;
+          uint16_t sa_st = mA->core.mem_r16(base + 0x00), sb_st = mB->core.mem_r16(base + 0x00);
+          uint16_t sa_02 = mA->core.mem_r16(base + 0x02), sb_02 = mB->core.mem_r16(base + 0x02);
+          uint32_t sa_ep = mA->core.mem_r32(base + 0x0C), sb_ep = mB->core.mem_r32(base + 0x0C);
+          fprintf(stderr, "[sbs]   task[%d] @0x%08X: state A=%u B=%u %s  +2 A=0x%X B=0x%X %s  entry A=0x%08X B=0x%08X %s\n",
+                  slot, base, sa_st, sb_st, sa_st == sb_st ? "==" : "!!",
+                  sa_02, sb_02, sa_02 == sb_02 ? "==" : "!!",
+                  sa_ep, sb_ep, sa_ep == sb_ep ? "==" : "!!");
+        }
+
+        // Call-chain depth heuristic. Same pc/ra + different sp = the CALL CHAIN reaching the writer
+        // has a different depth on each core. Point that out so the caller doesn't have to eyeball sp.
+        if (mWwHit == 3 && mWwPcA == mWwPcB && mWwRaA == mWwRaB && mWwSpA != mWwSpB) {
+          int32_t delta = (int32_t)mWwSpA - (int32_t)mWwSpB;
+          fprintf(stderr, "[sbs]   CALL-CHAIN DEPTH DIFFERS: A.sp=0x%08X B.sp=0x%08X (delta %+d B — %s%s)\n",
+                  mWwSpA, mWwSpB, delta,
+                  delta > 0 ? "B is deeper" : "A is deeper",
+                  " — a caller above the writer differs; disasm the fn containing ra to find the split");
+        }
+
         // List-membership probe: for a divergence in the object-pool byte range, walk the two per-frame
         // object lists on both cores and report which list(s) contain the divergent record's base. A
         // node appearing on a list on one core but not the other names an upstream spawn/list-migration
