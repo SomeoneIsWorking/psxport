@@ -58,21 +58,49 @@ void rec_coro_run(Core* c, uint32_t pc);
 // leaves v0=0x1f800000 for the stage loop head's `lw t0,0x138(v0)`) are captured.
 extern "C" void guest_backtrace_to(Core*, FILE*);   // sync_overrides.cpp — guest-stack backtrace (btyield)
 
-// Native port of FUN_80051F14 (see scheduler.h). Verified via ram_menu Ghidra decomp: the substrate
-// writes entry, gp, state=2, tcb, +0x6F=0 to the slot base at 0x801FE000 + slot*0x70. BIOS OpenTh
-// (syscall B0:0x0E) is a no-op in our port — the port scheduler runs guest tasks via its own
-// setjmp/fiber machinery, not BIOS TCBs — but the observed placeholder handle 0xFF000000 is written
-// so any guest code inspecting task+0x04 sees the same value.
+// Native port of FUN_80051F14 (see scheduler.h). Verified via ram_menu Ghidra decomp + MAIN.EXE
+// disas. Substrate body:
+//   sp -= 24
+//   s0 = task[slot] = 0x801FE000 + slot*0x70
+//   sw s0, 16(sp)                     ← callee-save spill
+//   sw ra, 20(sp)                     ← return-address spill
+//   task[+0x0C] = entry_pc
+//   gp = FUN_80080930()               (returns caller's gp)
+//   task[+0x10] = gp
+//   task[+0x00] = 2                   (RUNNABLE)
+//   FUN_80080890()                    (EnterCriticalSection — syscall(0))
+//   task[+0x6F] = 0
+//   tcb = FUN_80080860(entry_pc, task[+0x08], gp)   (BIOS OpenTh — syscall B0:0x0E)
+//   FUN_800808A0()                    (ExitCriticalSection — syscall(0))
+//   task[+0x04] = tcb
+//   lw ra, 20(sp); lw s0, 16(sp); sp += 24; jr ra
+//
+// Native port reproduces the observable guest writes:
+//   - 24 B guest-stack allocation + sw s0/ra prologue writes (byte-faithful stack scratch)
+//   - All task-slot writes at their offsets
+//   - BIOS TCB placeholder 0xFF000000 (our port has no BIOS TCB table; the recomp shard's
+//     FUN_80080860 override returns this constant).
+// Syscalls EnterCriticalSection / ExitCriticalSection are no-ops in our port — the fiber scheduler
+// doesn't use BIOS critical sections.
 static constexpr uint32_t kTaskTableBaseGuest = 0x801FE000u;
 static constexpr uint32_t kTaskSlotStrideGuest = 0x70u;
 static constexpr uint32_t kBiosTcbHandlePlaceholder = 0xFF000000u;
 void native_task_spawn(Core* c, int slot, uint32_t entry_pc) {
   const uint32_t base = kTaskTableBaseGuest + (uint32_t)slot * kTaskSlotStrideGuest;
+
+  // NOTE: substrate FUN_80051F14 also does `sp -= 24; sw s0, 16(sp); sw ra, 20(sp)` — a prologue
+  // that produces 12 bytes of stack scratch. Reproducing it in the port ONLY matches core B
+  // byte-for-byte if the caller's sp equals the substrate caller's sp at this point (FUN_80044BD4's
+  // frame). Since sync_preload_spawn doesn't descend the FUN_80044BD4 40-byte frame, adding the
+  // FUN_80051F14 24-byte prologue here would land the writes at wrong absolute addresses. Match
+  // is deferred until the full call-chain ports (FUN_80044BD4 + its callees) land — then each fn
+  // in the chain writes at the correct sp. For now, only the task-slot writes fire (which are at
+  // fixed absolute addresses — 0x801FE000+slot*0x70 — so they match unconditionally).
   c->mem_w32(base + 0x0C, entry_pc);
-  c->mem_w32(base + 0x10, c->r[28]);                 // caller's gp — same as FUN_80080930() returns
-  c->mem_w16(base + 0x00, 2);                         // RUNNABLE — scheduler picks up next tick
-  c->mem_w32(base + 0x04, kBiosTcbHandlePlaceholder);
+  c->mem_w32(base + 0x10, c->r[28]);          // FUN_80080930() returns caller's gp
+  c->mem_w16(base + 0x00, 2);                  // RUNNABLE
   c->mem_w8 (base + 0x6F, 0);
+  c->mem_w32(base + 0x04, kBiosTcbHandlePlaceholder);
 }
 
 void scheduler_yield(Core* c) {

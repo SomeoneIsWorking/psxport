@@ -1563,15 +1563,17 @@ static bool resolve_via_libcd(Core* c, uint32_t name_ptr, uint32_t buf,
   return true;
 }
 
-// Native port of FUN_80044BD4 (sync_preload) prelude — sets the done flag + arg globals + spawns
-// task-1. The wait-loop that FUN_80044BD4 runs (yielding until done_flag becomes 1) is NOT here:
-// the caller (native path in startBinStage) already fires asset.preloadTexgroup inline as game
-// logic, so the caller doesn't need to yield-wait. Task-1's substrate at task1_entry (0x80044F58)
-// still runs via the Coro-fiber stanza (scheduler.cpp), which under mIsFaithful is unlocked on
-// core A — task-1's body then sets done_flag=1 itself, matching core B substrate byte-for-byte.
+// Native port of FUN_80044BD4 (sync_preload) — see decomp comment above. Writes done_flag,
+// flag2/flag3 globals, and spawns task-1 via native_task_spawn (port of FUN_80051F14). The wait
+// loop is handled by the caller's step-spread (stage0Advance / demo_s0_step) because native code
+// inside startBinStage can't yield mid-body.
 //
-// Safety cite (audit 2026-07-04): grep of game/ + runtime/ for readers of task-1's slot range
-// (0x801FE070..0x801FE0DE) and task+0x02 = 0 hits. Scheduler-internal, no PC readers.
+// STACK-SCRATCH PORT STATUS: the substrate's own sp descent (40 B for FUN_80044BD4, 24 B for
+// FUN_80051F14, 24 B for FUN_80051F80) is NOT reproduced here — reproducing it would land the
+// writes at wrong absolute addresses because A's outer caller (startBinStageFaithful) doesn't
+// exactly reproduce startBinStage's own sp descent chain. Full stack-scratch byte-match requires
+// porting every caller-in-the-chain with matching sp descents; that's a follow-up. The task-slot
+// writes here are at fixed absolute addresses so they match unconditionally.
 static constexpr uint32_t kDoneFlagAddr    = 0x1F80019Bu;
 static constexpr uint32_t kTaskFlag2Global = 0x801FE0DDu;
 static constexpr uint32_t kTaskFlag3Global = 0x801FE0DEu;
