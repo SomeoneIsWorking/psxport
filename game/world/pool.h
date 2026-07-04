@@ -34,5 +34,29 @@ public:
   void setupViewScroll();               // FUN_800783DC
   void finalViewInit();                 // FUN_80078610
   void selectStateIndex(uint8_t area);  // FUN_80074F24 (a0=area byte)
+
+  // -- Internal init helpers (formerly rec_dispatched from Pool::init) ---------------------
+  // Both are Pool::init's own callees; kept separate for clarity + potential re-use. Neither has
+  // a non-trivial API surface — they zero a fixed region / build a fixed pool structure.
+
+  // clearBf548Region — guest FUN_8004FB20. Zeroes the 700-byte region at 0x800BF548 (a per-area
+  //   scratch scene control block). Trivial memset wrapper; kept as a method so Pool::init's flow
+  //   stays a clean sequence of named steps instead of a `call_fn`.
+  void clearBf548Region();
+
+  // initTypedPools — guest FUN_800798F8. The heart of the object subsystem: builds the 5 typed
+  //   free-list pools (records + 208-byte nodes) chained via +0x24 next-ptr with +0x28=pool-class,
+  //   clears the 3 active list heads (T2_OBJLIST_HEAD_1, T2_OBJLIST_HEAD_2, AUX_LIST_HEAD), and
+  //   seeds the 3 aux-render list heads/tails in scratchpad (0x1F80013C/148/154). Pool bases +
+  //   strides + counts summary:
+  //     pool 0 : base 0x800ED8D8  stride 0x88   count 0x34 (52)  class 0
+  //     pool 1 : base 0x800EF478  stride 0xC4   count 0x3A (58)  class 1
+  //     pool 2 : base 0x800FE198  stride 0xD0   count 0x2A (42)  class 2    ← the 208-byte NODES
+  //     pool 3 : base 0x800FB858  stride 0x108  count 0x28 (40)  class 3
+  //     pool 4 : base 0x800FB218  stride 0x140  count 0x05       class 4
+  //   Free-list head words (u32 ptr each) live at 0x800E8098 / 0x800E80A0 / 0x800F2398 /
+  //   0x800ED8D4 / 0x800ED8D0; per-pool free counts at 0x800E7E7C / 0x800E7E7D / 0x800ED8CC /
+  //   0x800ED8C5 / 0x800ED8C4. Ghidra decomp scratch/decomp/pool_init_leads.c.
+  void initTypedPools();
 };
 #endif

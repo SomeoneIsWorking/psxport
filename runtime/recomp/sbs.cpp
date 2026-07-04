@@ -81,10 +81,10 @@ enum Mode { M_RENDER, M_GAMEPLAY, M_FULL, M_ORACLE };
 constexpr uint32_t GAME_ENTRY  = 0x8010637Cu;  // task0 entry while the GAME stage runs (in the field)
 constexpr uint32_t TASK0_ENTRY = 0x801fe00cu;  // task0 obj +0xc = current stage entry
 constexpr uint32_t CUT_FLAG    = 0x1F800137u;  // cutscene-active byte (1 = intro cutscene, 0 = free-roam)
-constexpr uint16_t BTN_CROSS = 0x4000, BTN_START = 0x0008, BTN_NONE = 0xFFFF;
+constexpr uint16_t BTN_CROSS = 0x4000, BTN_START = 0x0008, BTN_RIGHT = 0x2000, BTN_NONE = 0xFFFF;
 
 enum Phase { REACH_GAME, AWAIT_CUT, SKIP_CUT, DONE };
-struct Nav { Phase phase = REACH_GAME; int idle = 0; };
+struct Nav { Phase phase = REACH_GAME; int idle = 0; int postFrame = 0; };
 struct SbsKey { uint32_t from, to; uint16_t btn; };
 
 // One-frame rewind snapshot of the SchedulerState fields the harness must roll back alongside
@@ -310,12 +310,34 @@ bool Sbs::Impl::navStep(Core* c, Nav& nv, uint32_t f, const char* tag) {
       // naturally so its scripted SFX (fisherman scene, etc.) actually fire on both cores. That's
       // what makes the SFX bug (#29) surface via divergence-check. Default (=0) keeps the fast-skip
       // behavior for rapid gameplay-start reach.
+      // PSXPORT_SBS_CUT_PRESSES=<N> — press Start exactly N times during the cutscene, then stop
+      // (let the rest play out with its SFX). Use 3-5 to skip the intro narration text but let the
+      // fisherman scene animate + play its footstep / splash SFX so #29 surfaces (user 2026-07-04).
       static const int watch_cut = []{ const char* e = getenv("PSXPORT_SBS_WATCH_CUT"); return e && *e && e[0] != '0' ? 1 : 0; }();
-      if (cut) { nv.idle = 0; if (!watch_cut && (f % 40u) == 0) c->game->pad.driveTap((uint16_t)(BTN_NONE & ~BTN_START), 6); }
+      static const int cut_presses = []{ const char* e = getenv("PSXPORT_SBS_CUT_PRESSES"); return e && *e ? atoi(e) : -1; }();
+      if (cut) {
+        nv.idle = 0;
+        bool press_ok = !watch_cut && (cut_presses < 0 || nv.postFrame < cut_presses);
+        if (press_ok && (f % 40u) == 0) { c->game->pad.driveTap((uint16_t)(BTN_NONE & ~BTN_START), 6); nv.postFrame++; }
+      }
       else if (++nv.idle >= 60) { fprintf(stderr, "[sbs] %s gameplay-start @f%u\n", tag, f); nv.phase = DONE; return true; }
       break;
     }
-    case DONE: return true;
+    case DONE: {
+      // PSXPORT_SBS_POSTDRIVE=1 — after gameplay-start, alternate between HOLD Right (walk into
+      // things) and TAP Cross (jump — fires the jump SFX). This is what actually triggers native
+      // SFX callers so `[AUDIO spu_write#N]` divergences show a voice-reg StartAddr mismatch
+      // (Issue #29). Off by default so pc_skip=false runs stay quiet.
+      static const int postdrive = []{ const char* e = getenv("PSXPORT_SBS_POSTDRIVE"); return e && *e && e[0] != '0' ? 1 : 0; }();
+      if (postdrive) {
+        nv.postFrame++;
+        // Cycle: 30 frames walk Right, 6-frame Cross tap, repeat. Each Cross tap = jump = SFX fire.
+        int cycle = nv.postFrame % 36;
+        if (cycle == 0) c->game->pad.driveTap((uint16_t)(BTN_NONE & ~BTN_CROSS), 6);
+        else if (cycle == 6) c->game->pad.driveHold((uint16_t)(BTN_NONE & ~BTN_RIGHT));
+      }
+      return true;
+    }
   }
   return false;
 }
@@ -1351,25 +1373,51 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
     grabPane(mA, mRgbaA, &mWa, &mHa); ww_log("post-grabA");
     stepCore(mB, 1);              ww_log("post-stepB");
     grabPane(mB, mRgbaB, &mWb, &mHb); ww_log("post-grabB");
-    // Compare per-Core SPU write logs. If A and B wrote different sequences (Issue #29: wrong SFX),
-    // print the first mismatch pair as `[AUDIO spu_write#N]`. This is the primary tool for the SFX-
-    // sample bug: the buggy caller passes wrong id → wrong voice reg values → mismatching writes.
+    // Compare per-Core SPU write logs. For each SPU register touched by EITHER core this frame,
+    // compare the LAST value written to it. If A and B end this frame with different values in
+    // a given SPU register, that's an audio-relevant divergence (e.g. voice N's StartAddr / Pitch
+    // / ADSR — the #29 wrong-sample signature is `Voice[i].reg[0x06]` = sample-select halfword
+    // holding a different value on A vs B). This is order-invariant unlike the raw sequence compare,
+    // which was flagging reordered-but-identical writes to admin regs (main vol / SPUCNT / CD vol).
     {
       uint32_t na = spu_log_count(mA->spu_log);
       uint32_t nb = spu_log_count(mB->spu_log);
-      uint32_t nmin = na < nb ? na : nb;
-      for (uint32_t i = 0; i < nmin; i++) {
-        uint32_t aa = spu_log_entry(mA->spu_log, i, 0), va = spu_log_entry(mA->spu_log, i, 1);
-        uint32_t ab = spu_log_entry(mB->spu_log, i, 0), vb = spu_log_entry(mB->spu_log, i, 1);
-        if (aa != ab || va != vb) {
-          fprintf(stderr, "[sbs-div] f%u [AUDIO spu_write#%u] A=(0x%08X, 0x%04X)  B=(0x%08X, 0x%04X)\n",
-                  mFrame, i, aa, va & 0xFFFF, ab, vb & 0xFFFF);
-          break;
-        }
+      uint16_t last_a[1024] = {0}; uint32_t seen_a[32] = {0};   // seen_a bitmap over 0x000..0x3FF/16 words
+      uint16_t last_b[1024] = {0}; uint32_t seen_b[32] = {0};
+      for (uint32_t i = 0; i < na; i++) {
+        uint32_t off = spu_log_entry(mA->spu_log, i, 0) & 0x3FFu;
+        last_a[off] = (uint16_t)spu_log_entry(mA->spu_log, i, 1);
+        seen_a[(off >> 1) >> 5] |= 1u << ((off >> 1) & 31);
       }
-      if (na != nb) {
-        fprintf(stderr, "[sbs-div] f%u [AUDIO spu_write_count] A=%u  B=%u  delta=%d\n",
-                mFrame, na, nb, (int)na - (int)nb);
+      for (uint32_t i = 0; i < nb; i++) {
+        uint32_t off = spu_log_entry(mB->spu_log, i, 0) & 0x3FFu;
+        last_b[off] = (uint16_t)spu_log_entry(mB->spu_log, i, 1);
+        seen_b[(off >> 1) >> 5] |= 1u << ((off >> 1) & 31);
+      }
+      int flagged = 0;
+      for (uint32_t off = 0; off < 0x400; off += 2) {
+        uint32_t bit = (off >> 1) & 31, word = (off >> 1) >> 5;
+        bool sa = (seen_a[word] >> bit) & 1;
+        bool sb = (seen_b[word] >> bit) & 1;
+        if (!sa && !sb) continue;
+        uint16_t va = sa ? last_a[off] : 0, vb = sb ? last_b[off] : 0;
+        // If only one core touched it, only meaningful when the OTHER's stale value is different.
+        // Simple: flag any address where at least one wrote AND the two cores don't agree on end value.
+        // Cores that didn't write see whatever was there before — for a clean divergence check we
+        // only compare within writes; use "same set of addrs + same values" as the invariant.
+        if (sa != sb) {
+          // Address touched by only one core — that's an ordering/cadence hit, not a value hit. Log
+          // it but keep hunting for a real value-mismatch (which is the #29 signature).
+          fprintf(stderr, "[sbs-div] f%u [AUDIO spu_reg 0x%03X only-%c] val=0x%04X\n",
+                  mFrame, off, sa ? 'A' : 'B', sa ? va : vb);
+          if (++flagged >= 8) break;
+        } else if (va != vb) {
+          const char* voice_hint = "";
+          if (off < 0x180) { static char buf[32]; snprintf(buf, sizeof buf, "voice%u+0x%02X", off >> 4, off & 0xF); voice_hint = buf; }
+          fprintf(stderr, "[sbs-div] f%u [AUDIO spu_reg 0x%03X %s] A=0x%04X  B=0x%04X\n",
+                  mFrame, off, voice_hint, va, vb);
+          if (++flagged >= 8) break;
+        }
       }
     }
     presentPanes();               ww_log("post-present");

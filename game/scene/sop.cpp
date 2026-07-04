@@ -21,6 +21,7 @@
 #include "cfg.h"
 #include "sop.h"
 #include <stdio.h>
+#include <algorithm>   // std::swap / std::min / std::max used by scene_grid_gather
 
 // dispatch a still-recomp leaf with up to 3 args set (helpers for the SOP/transition machines).
 static void d0(Core* c, uint32_t fn);
@@ -35,6 +36,29 @@ static void d2(Core* c, uint32_t fn, uint32_t a0, uint32_t a1);
 #include "world/spawn.h"          // class Spawn (c->engine.spawn.dispatch)
 #include "world/pool.h"           // ov_pool_init_run (FUN_8007B18C)
 static void d3(Core* c, uint32_t fn, uint32_t a0, uint32_t a1, uint32_t a2);
+
+// Named guest-RAM addresses used by the SOP field-mode subsystem. Kept file-local — these are
+// SOP-specific handles, not engine-wide primitives.
+namespace SopAddr {
+  // -- scratchpad (SPAD) --
+  constexpr uint32_t TASK_SM_PTR      = 0x1f800138u;  // u32: ptr to the SOP task's state-machine struct (the `sm` base — sm[0x50]=field-mode, sm[0x52]=intro/end-scroller phase, sm[0x60]=startup delay, ...)
+  constexpr uint32_t IN_FIELD_UPDATE  = 0x1f800234u;  // u8:  gate — 1 while Sop::fieldUpdate's per-frame body runs, 0 outside (read by leaves that behave differently mid-update)
+
+  // -- SOP scene state (main RAM) --
+  constexpr uint32_t SCENE_ENT_TABLE  = 0x800f2418u;  // 0x800F2418: SCENE_STATE / entity table (count byte @+6, grid limits @+8/+A, grid ptr @+C, u16 cell-id list @+0x10)
+  constexpr uint32_t SCENE_BEAT       = 0x800bf9b4u;  // u8:  SOP intro-cutscene "beat" (0..N). Beat 5 = narration VOID (pure 2D swirl + text; no 3D world, no BG). Other beats draw the field/BG normally.
+
+  // -- BG layer sub-state machine (main RAM) --
+  constexpr uint32_t BG_LAYER_STATE   = 0x800e8008u;  // u8:  state byte for the BG layer SM (0=init → 1=running)
+  constexpr uint32_t BG_LAYER_SUB     = 0x800e806cu;  // u8:  running sub-state (0=snap-follow, 1=reset-to-0)
+  constexpr uint32_t BG_LAYER_TARGET  = 0x800e8040u;  // struct: CutsceneCamera snap-follow target
+
+  // -- Parallax BG state-machine struct (main RAM) --
+  // 60-byte scroll SM struct at 0x800ED018 — OWNED by class ParallaxBg (parallax_bg.h). The
+  // substrate BG tile scroller FUN_8010C26C still reads/writes it, so we keep the address handy
+  // for the substrate call; the state-machine mutations themselves live in the class.
+  constexpr uint32_t PARALLAX_BG_SM   = 0x800ed018u;
+}
 
 // Owned synchronous area-DATA load (replaces the body of LAB_80109164 0x80109164). Runs in the
 // slot-1 task register context; uses c->r[] for the dispatched leaves' args; writes guest RAM.
@@ -185,6 +209,174 @@ static void d3(Core* c, uint32_t fn, uint32_t a0, uint32_t a1, uint32_t a2) {
   c->r[4]=a0; c->r[5]=a1; c->r[6]=a2; rec_dispatch(c, fn);
 }
 
+// scene_grid_gather — native port of guest FUN_8010A3AC (Ghidra decomp scratch/decomp/
+// sop_a0e0_a3ac.c). Scanline TRIANGLE-RASTER over a 2D grid: given the 3 (X, Y) corners of a
+// frustum-triangle in grid-cell coords, walk every cell the triangle covers and append its u16
+// entry from the grid backing store into SCENE_STATE's u16 list (table+0x10, count byte @+6).
+//
+// Grid layout (per table pointer @+0xC): a 2-u16 header (X-limit, Y-limit) followed by cell
+// entries at +4. Cells are stored COLUMN-MAJOR — cell(x, y) = grid_base[x*height + y] — so the
+// inner loop steps horizontally in X by adding `height` to the current pointer each iteration.
+// Value 0xFFFF (u16 -1) marks an empty cell (skipped).
+//
+// Faithful to the recomp: same Y-sort of 3 vertices (3 conditional swaps), same 16.16 fixed-
+// point edge stepping, same cross-product LEFT/RIGHT edge choice, same X-clamp against the
+// grid's X-limit, same Y-guard (skip rows outside [0, Y-limit)), same 254-entry cap on the
+// output list. Signed integer division matches the MIPS `div` semantics for the ranges the
+// recomp actually feeds it (the trap paths at div-by-zero / -0x80000000/-1 are unreachable
+// with the values scenePrepass produces).
+namespace {
+
+void scene_grid_gather(Core* c, uint32_t table,
+                       int32_t x0, int32_t y0,
+                       int32_t x1, int32_t y1,
+                       int32_t x2, int32_t y2) {
+  // Skip degenerate (all-3-Ys-equal) triangle — matches the recomp's early-exit guard.
+  if (y1 == y0 && y1 == y2) return;
+
+  // Y-sort three vertices (v0, v1, v2) by Y ascending, tracking their X companions.
+  int32_t v0x = x0, v0y = y0;
+  int32_t v1x = x1, v1y = y1;
+  int32_t v2x = x2, v2y = y2;
+  if (v1y < v0y) { std::swap(v0x, v1x); std::swap(v0y, v1y); }
+  if (v2y < v0y) { std::swap(v0x, v2x); std::swap(v0y, v2y); }
+  if (v2y < v1y) { std::swap(v1x, v2x); std::swap(v1y, v2y); }
+
+  const int32_t dy01 = v1y - v0y;        // short edge Y-span (top half height)
+  const int32_t dy02 = v2y - v0y;        // long  edge Y-span (full triangle height)
+
+  // Edge accumulators (16.16 fixed): edgeA = "long" v0→v2 edge; edgeB = "short" v0→v1 then v1→v2.
+  int32_t edgeA, edgeB, stepA;
+  if (dy01 == 0) {
+    // Flat-top: no top half; both edges start on the same horizontal line at min(v0x,v1x)..max.
+    edgeA = std::max(v0x, v1x) << 16;
+    edgeB = std::min(v0x, v1x) << 16;
+    stepA = 0;
+  } else {
+    edgeA = v0x << 16;                    // both edges begin at v0.X
+    edgeB = edgeA;
+    stepA = ((v1x - v0x) << 16) / dy01;   // slope of v0→v1
+  }
+  edgeA += 0x10000;                       // recomp: `iVar5 = iVar5 + 0x10000;` (post-init +1 in 16.16)
+
+  int32_t stepC;                          // slope of v1→v2 (used in the bottom half)
+  const int32_t dy12 = v2y - v1y;
+  if (dy12 == 0) stepC = 0;
+  else           stepC = ((v2x - v1x) << 16) / dy12;
+
+  const int32_t stepB = ((v2x - v0x) << 16) / dy02;   // slope of v0→v2 (always defined; dy02>0 since not degenerate)
+
+  // Cross product picks which edge is LEFT vs RIGHT: `−dy02*(v1x−v0x) + (v2x−v0x)*dy01`.
+  const int32_t cross = -dy02 * (v1x - v0x) + (v2x - v0x) * dy01;
+  const bool crossNegOrZero = (cross < 1);   // recomp: `< 1`, i.e. <=0
+
+  const int32_t xLimit = (int32_t)(int16_t)c->mem_r16(table + 8u);   // grid X-limit (clamp)
+  const int32_t yLimit = (int32_t)(int16_t)c->mem_r16(table + 10u);  // grid Y-limit (row guard)
+  const uint32_t grid  = c->mem_r32(table + 0xCu) + 4u;              // cell array (skip 2-u16 header)
+
+  auto gatherRow = [&](int32_t row, int32_t edgeR16, int32_t edgeL16) {
+    if (row < 0 || row >= yLimit) return;
+    int32_t rightX = edgeR16 >> 16;
+    int32_t leftX  = edgeL16 >> 16;
+    if (xLimit <= rightX) rightX = xLimit - 1;
+    if (leftX < 0)        leftX  = 0;
+    // Column-major: cell(x, y) at grid + 2*(x*height + y).
+    uint32_t cellPtr = grid + 2u * ((uint32_t)leftX * (uint32_t)yLimit + (uint32_t)row);
+    for (int32_t x = leftX; x <= rightX; x++) {
+      const uint16_t cell = c->mem_r16(cellPtr);
+      if (cell != 0xFFFFu) {
+        const uint8_t cnt = c->mem_r8(table + 6u);
+        if (cnt < 0xFEu) {
+          c->mem_w8 (table + 6u, (uint8_t)(cnt + 1));
+          c->mem_w16(table + 0x10u + (uint32_t)cnt * 2u, cell);
+        }
+      }
+      cellPtr += 2u * (uint32_t)yLimit;    // step one column right (column-major)
+    }
+  };
+
+  // Top half of the triangle: y ∈ [v0y, v1y). Bottom half: y ∈ [v1y, v2y].
+  int32_t y = v0y;
+  if (crossNegOrZero) {
+    // stepA on the LEFT edge (edgeB), stepB on the RIGHT edge (edgeA).
+    for (; y < v1y; y++) { gatherRow(y, edgeA, edgeB); edgeA += stepA; edgeB += stepB; }
+    for (; y <= v2y; y++) { gatherRow(y, edgeA, edgeB); edgeB += stepB; edgeA += stepC; }
+  } else {
+    // Mirrored assignment (stepA/stepC on the right, stepB on the left).
+    for (; y < v1y; y++) { gatherRow(y, edgeA, edgeB); edgeB += stepA; edgeA += stepB; }
+    for (; y <= v2y; y++) { gatherRow(y, edgeA, edgeB); edgeB += stepC; edgeA += stepB; }
+  }
+}
+
+}  // namespace
+
+// SOP scene cam-frustum prepass — native ownership of FUN_8010A0E0 (Ghidra decomp
+// scratch/decomp/sop_a0e0_a3ac.c). Called every field frame from fieldUpdate BEFORE the list-2
+// walk. Computes 3 view-space rays (forward, forward-halfFOV, forward+halfFOV) at fixed view
+// distance 0x5780, pitch-tilts them into the ground plane, scales to grid cells (÷0x280), then
+// hands the triangle to scene_grid_gather (native port of FUN_8010A3AC, above) which scanline-
+// rasters it into SCENE_STATE.count / SCENE_STATE.list at table+6/+0x10.
+//
+// Two engine globals are set every call: 0x800A3F90=0x5780 (view distance), 0x800A3F94=0x1C7
+// (half-FOV in 12-bit angle units, ≈40°). The header at (table+8, table+0xA) is copied from
+// *(u16[2]*)(table+0xC) — the grid width/height limits used by scene_grid_gather's clamps.
+void Sop::scenePrepass(uint32_t table) { Core* c = core;
+  // Header + engine globals (identical bytes, same order as the recomp).
+  const uint32_t hdrPtr = c->mem_r32(table + 0xCu);
+  c->mem_w16(table + 8u,   c->mem_r16(hdrPtr + 0u));    // grid width limit
+  c->mem_w32(0x800A3F90u,  0x5780u);                    // view distance
+  c->mem_w16(table + 0xAu, c->mem_r16(hdrPtr + 2u));    // grid height limit
+  c->mem_w32(0x800A3F94u,  0x1C7u);                     // half-FOV (12-bit)
+
+  const int32_t camX  = (int32_t)c->mem_r16s(0x1F8000D2u);
+  const int32_t camZ  = (int32_t)c->mem_r16s(0x1F8000DAu);
+  const int32_t yaw   = (int32_t)c->mem_r16s(0x1F8000F2u);   // sign-extended 16-bit view of the 12-bit yaw
+  const int32_t pitch = (int32_t)c->mem_r16s(0x1F8000F0u);
+  const int32_t D5780 = (int32_t)c->mem_r32(0x800A3F90u);    // = 0x5780
+  const int32_t D1C7  = (int32_t)c->mem_r32(0x800A3F94u);    // = 0x1C7
+
+  // libgte rsin/rcos stay substrate (0x80083E80/0x80083F50) — keep them dispatched by address.
+  auto trig = [&](uint32_t fn, uint32_t arg) -> int32_t {
+    c->r[4] = arg; rec_dispatch(c, fn); return (int32_t)c->r[2];
+  };
+
+  // Ray A: 12-bit yaw shifted by -halfFOV
+  const uint32_t yA = ((uint32_t)(-yaw - D1C7)) & 0xFFFu;
+  const int32_t sinA = trig(0x80083E80u, yA);
+  const int32_t X1 = camX + (int32_t)((sinA * D5780) >> 12);
+  const int32_t cosA = trig(0x80083F50u, yA);
+  const int32_t Z1 = camZ + (int32_t)((cosA * D5780) >> 12);
+
+  // Ray B: 12-bit yaw shifted by +halfFOV (recomp reads D1C7 fresh here — mirror that)
+  const uint32_t yB = ((uint32_t)(D1C7 - yaw)) & 0xFFFu;
+  const int32_t sinB = trig(0x80083E80u, yB);
+  const int32_t X2 = camX + (int32_t)((sinB * D5780) >> 12);
+  const int32_t cosB = trig(0x80083F50u, yB);
+  const int32_t Z2 = camZ + (int32_t)((cosB * D5780) >> 12);
+
+  // Pitch tilt: |rsin(pitch)| × (rsin(-yaw), rcos(-yaw)) → (ry,rx), scaled ×5×D5780/65536.
+  int32_t pAbs = trig(0x80083E80u, (uint32_t)pitch);
+  if (pAbs < 0) pAbs = -pAbs;
+  const int32_t s2 = trig(0x80083E80u, (uint32_t)(-yaw));
+  const int32_t c2 = trig(0x80083F50u, (uint32_t)(-yaw));
+  const int32_t ry = ((s2 * pAbs) >> 12) * D5780 * 5 >> 16;
+  const int32_t rx = ((c2 * pAbs) >> 12) * D5780 * 5 >> 16;
+
+  // Subtract the pitch drift and rescale to grid cells (÷640 signed).
+  const int32_t X0d = (camX - ry) / 0x280;
+  const int32_t X1d = (X1   - ry) / 0x280;
+  const int32_t X2d = (X2   - ry) / 0x280;
+  const int32_t Z0d = (camZ - rx) / 0x280;
+  const int32_t Z1d = (Z1   - rx) / 0x280;
+  const int32_t Z2d = (Z2   - rx) / 0x280;
+
+  // Reset the SCENE_STATE cell-list count (was the recomp's `sb $zero, 6($a0)` delay-slot write).
+  c->mem_w8(table + 6u, 0);
+
+  // Rasterize the frustum triangle into the scene grid — appends cell ids to table+0x10 / +6.
+  scene_grid_gather(c, table, X0d, Z0d, X1d, Z1d, X2d, Z2d);
+}
+
 // SOP per-frame FIELD UPDATE — native ownership of FUN_801092b4 (decomp scratch/decomp/sop/801092b4.c).
 // The running-gameplay frame: a startup-delay countdown (sm[0x60]), then BG scene SM + entity update +
 // Tomba update + BG layer SM + entity render + GPU submit, then the sm[0x52] intro/end-scroller tail.
@@ -192,24 +384,59 @@ static void d3(Core* c, uint32_t fn, uint32_t a0, uint32_t a1, uint32_t a2) {
 // subsystems to own next: entity update 0x8010a0e0 / render 0x80109fe0, Tomba update 0x8007b008; and
 // the per-scene content). Called from ov_sop_field_mode states 1/2/3.
 void Sop::fieldUpdate() { Core* c = core;
-  uint32_t sm = c->mem_r32(0x1f800138u);
+  using namespace SopAddr;
+  uint32_t sm = c->mem_r32(TASK_SM_PTR);
   int16_t delay = c->mem_r16s(sm + 0x60);
   if (delay != 0) {
     c->mem_w16(sm + 0x60, (uint16_t)(delay - 1));          // startup delay: just count down
   } else {
-    ffspan_begin(c); c->engine.bgSceneTransitionSm.step(); ffspan_end(c, "bgscene");   // BG scene transition SM (native, FUN_8002655c)
-    ffspan_begin(c); d1(c, 0x8010a0e0u, 0x800f2418u); ffspan_end(c, "entupd");    // entity update loop
-    d0(c, 0x8007b008u);                                    // Tomba update
-    c->mem_w8(0x1f800234u, 1);
-    uint8_t bg = c->mem_r8(0x800e8008u);                   // BG layer SM
-    if (bg == 0) { c->mem_w8(0x800e8008u, 1); c->mem_w8(0x800e806cu, 0); }
-    else if (bg == 1) {
-      uint8_t sub = c->mem_r8(0x800e806cu);
-      if (sub == 0) CutsceneCamera(c, 0x800e8008u).snapFollow(0x800e8040u);   // native class CutsceneCamera (was 0x8006e3b0)
-      else if (sub == 1) c->mem_w8(0x800e806cu, 0);
+    // BG scene transition SM (native, FUN_8002655c) — the intro-cutscene fade manager.
+    ffspan_begin(c);
+    c->engine.bgSceneTransitionSm.step();
+    ffspan_end(c, "bgscene");
+
+    // Scene cam-frustum prepass (guest FUN_8010A0E0): builds the per-frame 2D frustum triangle in
+    // scene-grid space and hands it to FUN_8010A3AC (still substrate) which raster-gathers covered
+    // cell ids into the SCENE_ENT_TABLE list. Top-down layer above the list-2 walk.
+    ffspan_begin(c);
+    scenePrepass(SCENE_ENT_TABLE);
+    ffspan_end(c, "scenePrepass");
+
+    // Tomba/list-2 walk (guest FUN_8007B008): dispatches each list-2 node's +0x1c handler; Tomba
+    // is one of those nodes, so this is the top-down layer immediately above Tomba's per-frame
+    // tick. Enable `debug behhist` to enumerate the handler addrs firing here (Tomba included).
+    c->engine.objectList.walkList2();
+
+    c->mem_w8(IN_FIELD_UPDATE, 1);
+
+    // BG layer sub-SM — init once, then per-frame follow the camera onto BG_LAYER_TARGET.
+    uint8_t bg = c->mem_r8(BG_LAYER_STATE);
+    if (bg == 0) {
+      c->mem_w8(BG_LAYER_STATE, 1);
+      c->mem_w8(BG_LAYER_SUB,   0);
+    } else if (bg == 1) {
+      uint8_t sub = c->mem_r8(BG_LAYER_SUB);
+      if (sub == 0) {
+        // native CutsceneCamera (was 0x8006e3b0)
+        CutsceneCamera(c, BG_LAYER_STATE).snapFollow(BG_LAYER_TARGET);
+      } else if (sub == 1) {
+        c->mem_w8(BG_LAYER_SUB, 0);
+      }
     }
+
     c->engine.areaUpdateTail();                            // 0x80075a80 NATIVE
-    if (c->mem_r8(0x800bf9b4u) != 5) { ffspan_begin(c); d1(c, 0x8010bffcu, 0x800ed018u); ffspan_end(c, "parallaxBG"); }   // parallax BG draw
+
+    // BG DRAW GATE — SOP scene-beat byte SCENE_BEAT selects the current beat within the SOP
+    // intro cutscene. Beat 5 is the narration VOID (pure 2D swirl effect + text over black; no 3D
+    // world, no BG); for every other beat we tick the parallax BG state SM and draw the BG tiles.
+    // See docs/findings/render.md.
+    const bool bgVisible = (c->mem_r8(SCENE_BEAT) != 5);
+    if (bgVisible) {
+      // Parallax BG state machine (native, FUN_8010BFFC) — class ParallaxBg on Engine.
+      ffspan_begin(c);
+      c->engine.parallaxBg.step();
+      ffspan_end(c, "parallaxBG");
+    }
     // NOTE: no entity-render / object-walk call here. ov_scene_native (engine_render_walk.cpp) is the
     // SOLE owner of both the scene-table render (ov_field_entity_render, 0x800f2418) and the object
     // render-list walk (ov_render_walk, 0x8003c048); it runs every field-stage frame from
@@ -217,11 +444,17 @@ void Sop::fieldUpdate() { Core* c = core;
     // owns only SOP gameplay/state logic (BG transition SM, entity update, Tomba update, BG layer SM,
     // parallax/scroll) — a second render-walk call here duplicated ov_scene_native's submission
     // (fixed alongside the equivalent duplicate in ov_render_frame, step 1 of this pass).
-    if (c->mem_r8(0x800bf9b4u) != 5) { ffspan_begin(c); d1(c, 0x8010c26cu, 0x800ed018u); ffspan_end(c, "bgscroll"); }   // BG tile scroller
-    c->mem_w8(0x1f800234u, 0);
+    if (bgVisible) {
+      // BG tile scroller (substrate — emits GP0 packets; belongs to the PC-native BG renderer
+      // rewrite, not a mechanical port). See "REBUILD, don't transcribe" in CLAUDE.md.
+      ffspan_begin(c);
+      d1(c, 0x8010c26cu, PARALLAX_BG_SM);
+      ffspan_end(c, "bgscroll");
+    }
+    c->mem_w8(IN_FIELD_UPDATE, 0);
   }
   // tail — sm[0x52]: 0 = intro zone setup, 1 = end-of-area text scroller, 2+ = done
-  sm = c->mem_r32(0x1f800138u);
+  sm = c->mem_r32(TASK_SM_PTR);
   uint16_t s52 = c->mem_r16(sm + 0x52);
   if (s52 == 1) {
     d0(c, 0x8010c79cu);                                    // end-of-area scroller
@@ -229,7 +462,7 @@ void Sop::fieldUpdate() { Core* c = core;
   } else {
     if (s52 != 0) return;                                  // s52 >= 2: done
     c->mem_w16(sm + 0x62, 0);
-    d1(c, 0x8001d71cu, 0xe);                               // zone/area transition setup
+    c->engine.zoneTransitionSetup(0xE);                    // native, FUN_8001D71C — zone/area transition setup
   }
   c->mem_w16(sm + 0x52, (uint16_t)(c->mem_r16(sm + 0x52) + 1));
 }

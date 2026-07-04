@@ -48,13 +48,50 @@ static inline void fade_rect(Core* c, uint32_t color) {
   c->screenFade.applyLeafCall(color, c->mem_r8(P + 3));
 }
 
+// -- Native ports of the tiny sub-leaves this SM calls -------------------------------------------
+//
+// FUN_80075CEC — AUDIO FADE-TARGET setter. Writes 0x800BE222 (fade target) and, when its arg is
+// negative, mirrors the same value into 0x800BE224 (a "matched" pair used by the mixer to hard-
+// jump both endpoints at once). Positive values are clamped to 0x7FFF. Ghidra decomp
+// scratch/decomp/bg_scene_subleaves.c. Same primitive that music_coord.cpp inlines directly
+// (see the comment "FUN_80075CEC(0x47FF): fade target"). Kept file-local for now — will hoist to
+// a proper audio class the first time a THIRD caller shows up.
+static inline void audio_fade_target(Core* c, int32_t v) {
+  if (v < 0) {
+    c->mem_w16(0x800BE222u, (uint16_t)(int16_t)(-v));
+    c->mem_w16(0x800BE224u, (uint16_t)(int16_t)(-v));
+    return;
+  }
+  if (v > 0x7FFF) v = 0x7FFF;
+  c->mem_w16(0x800BE222u, (uint16_t)(int16_t)v);
+}
+
+// Common guard shared by FUN_80026470/80026510/800264BC — three inline audio-fade-target callers,
+// each with a different arg pattern; all three fire only when 800BF80D > 1 OR 800BF839 != 0
+// (the same "we're actually mid-transition" gate the SM's state 2/3/4 use elsewhere).
+static inline bool mid_transition_gate(Core* c) {
+  return c->mem_r8(0x800BF80Du) > 1 || c->mem_r8(0x800BF839u) != 0;
+}
+static inline void audio_stub_26470(Core* c) { if (mid_transition_gate(c)) audio_fade_target(c, 0); }
+static inline void audio_stub_26510(Core* c) { if (mid_transition_gate(c)) audio_fade_target(c, -1); }
+static inline void audio_stub_264BC(Core* c) {
+  if (mid_transition_gate(c)) { audio_fade_target(c, -1); audio_fade_target(c, 0x47FF); }
+}
+
+// FUN_80050970 — tiny dispatcher on the 800BF816 mode byte: 0 = armModeStateFromAreaTable ; else =
+// armModeState(0,0,0). Both native now (Engine::armModeState*).
+static inline void bf816_dispatch(Core* c) {
+  if (c->mem_r8(0x800BF816u) == 0) c->engine.armModeStateFromAreaTable();
+  else                             c->engine.armModeState();
+}
+
 void bg_scene_transition_sm(Core* c) {
   uint8_t st = c->mem_r8(P + 4);
   switch (st) {
     case 0: {
       c->mem_w8(P + 4, (uint8_t)(c->mem_r8(P + 4) + 1));
-      c->r[4] = 0xFFFFFFFFu; rec_dispatch(c, 0x80075CECu);
-      c->r[4] = 0x47FFu;     rec_dispatch(c, 0x80075CECu);
+      audio_fade_target(c, -1);          // native — was rec_dispatch(0x80075CEC, -1)
+      audio_fade_target(c, 0x47FF);      // native — was rec_dispatch(0x80075CEC, 0x47FF)
       uint8_t req = c->mem_r8(G_req);
       switch (req) {
         case 1: case 2: case 3: case 4: case 9:
@@ -79,7 +116,7 @@ void bg_scene_transition_sm(Core* c) {
         default: break;
       }
       fade_rect(c, 0xffffff);
-      rec_dispatch(c, 0x80050970u);
+      bf816_dispatch(c);                 // native — was rec_dispatch(0x80050970)
       break;
     }
     case 1: {
@@ -97,7 +134,7 @@ void bg_scene_transition_sm(Core* c) {
       if (c->mem_r8(0x800BF849u) == 0 && c->mem_r8(0x800ED06Du) == 0) {
         uint8_t dir = c->mem_r8(G_dir);
         if (dir == 2 || dir == 4) {
-          rec_dispatch(c, 0x80026470u);
+          audio_stub_26470(c);           // native — was rec_dispatch(0x80026470)
           c->mem_w16(P + 8, 0x1f);
           c->mem_w16(P + 0xa, 8);
           c->mem_w8(P + 3, dir == 2 ? 0 : 1);
@@ -113,7 +150,7 @@ void bg_scene_transition_sm(Core* c) {
       if (c->mem_r16s(P + 8) == 0) {
         c->mem_w8(P + 4, (uint8_t)(c->mem_r8(P + 4) + 1));
         c->mem_w8(G_dir, 0);
-        rec_dispatch(c, 0x80026510u);
+        audio_stub_26510(c);             // native — was rec_dispatch(0x80026510)
       }
       break;
     }
@@ -123,7 +160,7 @@ void bg_scene_transition_sm(Core* c) {
       if (dir != 0) {
         if (dir == 1)      c->mem_w8(P + 3, 0);
         else if (dir == 3) c->mem_w8(P + 3, 1);
-        rec_dispatch(c, 0x800264BCu);
+        audio_stub_264BC(c);             // native — was rec_dispatch(0x800264BC)
         c->mem_w8(P + 4, 1);                                  // absolute, not +=
         c->mem_w16(P + 8, 0x1f);
         c->mem_w16(P + 0xa, 8);

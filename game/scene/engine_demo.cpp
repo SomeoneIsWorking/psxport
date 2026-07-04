@@ -378,8 +378,7 @@ void Demo::stageMain() { Core* c = core;
   uint32_t sm = c->mem_r32(0x1f800138u);
   c->mem_w16(sm + 0x48, 0);                    // sm[0x48] = 0 (start at substate 0)
   c->mem_w8 (sm + 0x6e, 0);                    // sm[0x6e] = 0
-  c->r[4] = 0; c->r[5] = 0; c->r[6] = 0;
-  rec_dispatch(c, 0x8005082Cu);                // input / pad-table reset (leaf — synchronous)
+  c->engine.armModeState();                    // native — was rec_dispatch 0x8005082C(0,0,0)
   // Slip #5: the DEMO loop body (recomp ov_demo_gen_801062E4:73) dispatches FUN_80044BD4 to spawn
   // the front-end task at 0x800CF858. Native replaces this by directly running Demo::stageMain +
   // per-frame substate dispatch instead of task-spawning — so the RNG advance from FUN_80044BD4

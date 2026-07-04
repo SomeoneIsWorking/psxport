@@ -27,6 +27,7 @@ Core::Core() {
   engine.demo.core = this;              // Engine-owned front-end DEMO / MENU stage
   engine.sop.core = this;               // Engine-owned SOP intro-cutscene FIELD stage
   engine.bgSceneTransitionSm.core = this;  // Engine-owned BG scene-transition fade manager
+  engine.parallaxBg.core = this;        // Engine-owned SOP parallax-BG state machine
   engine.pool.core = this;              // Engine-owned per-area init subsystem
   engine.placement.core = this;         // Engine-owned field-placement driver
   engine.graphicsBind.core = this;      // Engine-owned per-object render-bind subsystem
@@ -43,6 +44,7 @@ Core::Core() {
   engine.sceneEvents.core = this;       // Engine-owned scene-event arm subsystem
   engine.sfx.core = this;               // Engine-owned sound-FX trigger dispatcher
   engine.script.core = this;            // Engine-owned cutscene bytecode dispatcher
+  engine.actorTomba.core = this;        // Engine-owned Tomba per-frame logic (G-block owner)
   rng.core        = this;
   trig.core       = this;
   math.core       = this;

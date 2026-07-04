@@ -79,6 +79,14 @@ public:
   // a1==0 => SUBTRACTIVE / black); `otSlot` is a2 in the substrate ABI (typically 4).
   void applyLeafCall(uint32_t color, uint32_t a1, uint32_t otSlot = DEFAULT_OT_SLOT);
 
+  // sequence(node): the GAME-overlay a0l per-node fade sequencer (guest FUN_8010957C, was
+  // ov_scene_fade_seq / Engine::fadeSequencer). Multi-step ramp SM driven by node+2 (outer
+  // state 0=init, 1=running), node+3 (running-substep 0..5), node+106 (fade level 0..31),
+  // node+104 (step-2 delay counter). Called by Engine::fieldRun's sm[0x4e]==0xb branch with
+  // node = 0x800E8008. Each substep drives `applyLeafCall` at a computed ramp level; the two
+  // still-substrate leaves it touches (0x8010CC68 helper, 0x8010D030 init poke) stay dispatched.
+  void sequence(uint32_t node);
+
   // Read this frame's effective state (native renderer's present prologue). Returns the frame-scoped
   // state if a caller set it this frame; otherwise returns the held fully-faded state (if latched),
   // otherwise NONE.

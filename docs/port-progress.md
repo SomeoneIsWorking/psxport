@@ -374,11 +374,205 @@ for content fns (call it). Do NOT mimic PSX hardware (GTE/GP0/OT) — remove Bee
     via REPL `w8`. Gate-off boot clean to GAME free-roam (sm[0x4a]=1). NB the fade is still DELIVERED as a
     PSX OT rect (FUN_8007e9c8) — owning the fade PC-native (engine brightness scalar) is a separate render
     frontier (see the FADE note below).
-  - ☐ NEXT (gameplay): descend the rest of the SOP per-frame field update `FUN_801092b4` (entity update FUN_8010a0e0,
-    Tomba update 0x8007b008, BG draw, entity render FUN_80109fe0) — own its sub-systems native, re-wiring the
-    orphaned cull/spawn/collision/object-walk natives as their callers become native. Also own the
-    remaining sm[0x4a] running sub-modes (2..5) + the area-machine RUNNING sub-states (0x80106b98 etc.,
-    currently rec_dispatched yield-free).
+  - ◐ IN PROGRESS (gameplay top-down): descending SOP per-frame field update `FUN_801092b4`. Order
+    matches call sequence in `Sop::fieldUpdate` (top → bottom):
+    - ✅ scene cam-frustum PREPASS `FUN_8010A0E0` = `Sop::scenePrepass` (sop.cpp; Ghidra decomp
+      scratch/decomp/sop_a0e0_a3ac.c). Per-frame 2D frustum triangle in scene-grid space (view dist
+      0x5780, half-FOV 0x1C7, ÷640 grid scale); hands off directly to the native scanline gatherer
+      below (no more guest-stack detour).
+    - ✅ scanline triangle-raster GRID CULL `FUN_8010A3AC` = `scene_grid_gather` (static helper in
+      sop.cpp; Ghidra decomp same file). Y-sorts 3 (X,Y) grid-cell corners, walks scanlines with
+      16.16 fixed-point edge stepping, gathers each covered cell's u16 id (column-major grid at
+      table+0xC) into SCENE_STATE.list @+0x10 / count @+6. Faithful cross-product LEFT/RIGHT edge
+      pick, X-clamp against grid X-limit, Y-guard vs Y-limit, 254-entry cap. Pure integer math —
+      no packet emit, no GTE.
+    - ✅ Tomba/list-2 walk `FUN_8007B008` = `ObjectList::walkList2` (game/object/object_list.cpp).
+      The trivial list walker on `T2_OBJLIST_HEAD_2` — clear render flag @+1, capture next @+0x24,
+      dispatch handler @+0x1c(node) with node in a0. **This is the top-down layer immediately above
+      Tomba's per-frame tick** (Tomba's node is one of these list-2 entries). Reuses the shared
+      `BehaviorDispatch::dispatchObj` so any native beh_* handlers route directly. Enable
+      `debug behhist` to enumerate the per-walk handler addrs (Tomba's included).
+    - ✅ parallax BG state machine `FUN_8010BFFC` = `ParallaxBg::step` (own class embedded on
+      Engine — game/scene/parallax_bg.{h,cpp}). Pure state SM: init from *(u16*)0x800ECF84,
+      per-frame wrapped scroll offsets from yaw/pitch. No GP0.
+    - ✅ zone-transition setup `FUN_8001D71C` = `Engine::zoneTransitionSetup` (engine_stage.cpp;
+      Ghidra decomp scratch/decomp/sop_tail_8001d71c.c). Tiny record dispatcher; two leaves
+      (FUN_8001CF2C engine tick, FUN_8001D2A8 XA/voice entry) stay substrate. Also wired into
+      Engine::fieldRun (idx=9) and ScreenFade::sequence (idx=11).
+    - ✅ organizational: `Engine::fadeSequencer` → `ScreenFade::sequence` (own the fade SM on the
+      fade class, not on Engine). Same body, uses `zoneTransitionSetup(11)` and direct
+      `rec_dispatch` for the still-substrate leaves.
+    - ☐ DEFERRED (to render rebuild): `FUN_8010C26C` BG tile scroller and `FUN_8010C79C`
+      end-of-area text scroller — both emit raw GP0 packets, belong to the PC-native BG renderer
+      rewrite ("REBUILD, don't transcribe" in CLAUDE.md), not a mechanical port.
+    - ✅ `bgSceneTransitionSm.step` sub-leaves — FUN_80075CEC (audio fade-target), FUN_80026470/
+      80026510/800264BC (3 gated audio-fade variants), FUN_80050970 (bf816 dispatcher). All owned
+      as file-local static helpers in bg_scene_transition_sm.cpp (Ghidra decomp
+      scratch/decomp/bg_scene_subleaves.c). The SM's state bodies now hold ZERO substrate calls
+      except the two innermost still-substrate leaves inside bf816_dispatch (FUN_800508A8 /
+      FUN_8005082C — their own sub-frontier). Audio-fade helper will hoist to a proper audio
+      class the first time a third caller shows up.
+    - ✅ SOP intro-cutscene scene actors (3 handlers) — `beh_sop_intro_pilot` (0x8010ACFC,
+      script-driven master-G actor; model 0x11), `beh_sop_intro_lifted` (0x8010B798, Y-lifted
+      secondary; model 0x0F), `beh_sop_intro_narration` (0x8010B990, narration-void-beat spawner;
+      model 0x0F). Each in its own game/ai/beh_sop_intro_*.cpp; registered in
+      BehaviorDispatch::kTable. These are the 3 nodes Sop::fieldMode's state-0 spawns onto HEAD_2
+      (the ONLY actors Sop::fieldUpdate/walkList2 dispatches during the SOP intro). Ghidra decomp
+      scratch/decomp/sop_scene_actors.c. Control flow + node writes native; sub-behavior leaves
+      (FUN_800519E0 model attach, FUN_80040CDC/80077C40 anim setup, FUN_8007778C bounds cull,
+      FUN_800518FC post-cull, FUN_8004190C anim/graphics, FUN_8010AE30/8010B588 SOP helpers,
+      FUN_8003116C spawn) stay rec_dispatched. ScriptInterp::step (FUN_80041098) routes directly to
+      the native beh_script_interp_step via c->engine.script.step().
+    - ✅ mode-state ARM primitives — `Engine::armModeState(a,b,c)` (guest FUN_8005082C) and
+      `Engine::armModeStateFromAreaTable()` (guest FUN_800508A8). The 3-byte payload arm/backup
+      pattern used by the intro fade sequencer, front-end DEMO prologue, scene-UI trigger's confirm
+      branch, pool.finalViewInit's fall-through, bf816_dispatch, and the SOP-side field-run
+      state 3/4/5. Widely-called; every native call site (8 total across engine_stage / pool /
+      screen_fade / bg_scene_transition_sm / beh_scene_ui_trigger / engine_demo) now routes to the
+      native methods. Ghidra decomp scratch/decomp/bf816_leaves.c.
+    - ✅ SEASIDE PLACEMENT TABLE — 100% NATIVE. Enumerated the seaside placement table at
+      0x801469BC (in the A00 overlay, area=0 index into 0x800A4C28[]): 62 records installing 22
+      distinct handlers. Every handler in that table is now native, with `beh_seaside_prox_substate`
+      (0x8013C1DC — a proximity-gated 3-way substate router; the last unowned entry) added this
+      pass. So the entire top-down chain `Engine::fieldRun state-0 → Placement::placeAreaObjects →
+      each placement record's node[+0x1c] handler` is native for seaside. Ghidra decomp
+      scratch/decomp/beh_8013c1dc.c.
+    - ✅ THIS PASS — 5 previously-RE'd but unported leaves owned as native:
+      * `Pool::clearBf548Region` (FUN_8004FB20) — 700-byte zero-init at 0x800BF548 (per-area
+        scene control block). Wired into `Pool::init`.
+      * `Pool::initTypedPools` (FUN_800798F8) — the object-subsystem heart: 5 typed free-list
+        pools built via +0x24 next-ptr chains (52/58/42/40/5 slots at strides 0x88/0xC4/0xD0/
+        0x108/0x140, classes 0-4), all 3 active list heads (T2_OBJLIST_HEAD_1/2 + AUX) zeroed,
+        3 aux-render list head/tail pairs seeded at scratchpad 0x1F80013C/148/154. Wired into
+        `Pool::init`. Pool 2 (0xD0 stride, class 2, 42 slots) is where the 208-byte NODES come
+        from that spawn.dispatch pops. Ghidra decomp scratch/decomp/pool_init_leads.c.
+      * `Engine::gStateMutate(G, op)` (FUN_80058304) — 15-case master-G flag-bit mutator with
+        associated announcer cue calls. Called from `Engine::fieldRun` state 2 with op=0xC (the
+        clear-G-flags body). Every case ported faithfully so the other callers (still-substrate
+        code paths) will get the native impl once their parents move over. Ghidra decomp
+        scratch/decomp/fieldrun_s2_init.c.
+      * `Engine::uploadModeSprites` (FUN_80067DA8) — mode-selected VRAM sprite-pattern upload:
+        5 × 16×1 BGR555 strips loaded at fixed X=0x1F0 with per-strip Y offsets, source pointers
+        picked from 3 sets at 0x800A4800/40/80..0x800A49C0 by DAT_800BF88D. Substrate leaf
+        `FUN_80081218 = LoadImage(RECT*, data)` kept dispatched. Wired into `beh_sop_intro_pilot`
+        (was `rec_dispatch(0x80067DA8)`; the guest a0 = master-G was unused by the callee). Ghidra
+        decomp scratch/decomp/fun_80067da8.c.
+      * `Engine::audioSettleField` (FUN_80074BC4) — the 4-step audio state settle used by
+        `Engine::fieldRun` (states 3 / 1's mode-3 branch / 6) + `Engine::fieldRunX`. Clears the
+        audio-cue scratchpad flag @0x1F80027E, runs 3 libsnd/BIOS-wrapping leaves that stay
+        substrate (FUN_8001CF2C / FUN_80074B44 / FUN_80074E48). 4 native call sites rewired.
+        Ghidra decomp scratch/decomp/fun_80074bc4.c + scratch/decomp/74bc4_subs.c.
+      * `Engine::audioDispatch3Way(idx, arg2)` (FUN_800750D8) — 3-branch tiny dispatcher used by
+        `Pool::selectStateIndex` (native — rewired) and area-machine state 0 (still substrate).
+        Ghidra decomp scratch/decomp/fun_800750d8_v2.c.
+      * `Engine::audioVoiceFetchBits(bits, flag)` (FUN_8001D364) — bit-packed XA/voice fetch
+        selector; sister to `zoneTransitionSetup` (same substrate leaf FUN_8001D2A8, different
+        index shape). Reached from `audioDispatch3Way`'s else-branch. Ghidra decomp
+        scratch/decomp/fun_8001d364.c.
+    - ★ **KEY FINDING (this pass): the master G block at 0x800E7E80 IS Tomba's node.** He is NOT
+      dispatched by walkAll / walkList2 / walkAux; instead his state lives on the shared G block
+      that pool_init sub-init FUN_8007A810 zeros (0x184 bytes at 0x800E7E80..0x800E8004). Verified
+      by RE'ing FUN_80057DC0 = `Engine::playerGrowthStep(G, mode)`: it toggles G+0x17E bit 0x8000
+      (grown flag) with a G+0x32 Y-compensation of ±0x46, then rescales G+0xB8/BA/BC (Q12 world
+      scale), G+0x80/82/84/86 (bounding box), G+0x62/64/66/68 (physics constants), and DAT_800E802A
+      by 1/(mode+1). That's Tomba's growth transformation directly on the G block. Callers pass
+      obj = 0x800E7E80. `beh_area_transition_machine` writes G+0x2C/0xB0/0xB4 (master pos XYZ) too,
+      consistent with G being Tomba. So walkable-Tomba's "spawn" is actually the pool-init zero of
+      the G block; his per-frame update happens via a hardcoded per-area callback (candidate:
+      `Engine::modePerFrameDispatch`'s 24-entry table @0x8009D1D4 — seaside entry [0] is the next
+      RE target).
+    - ✅ THIS PASS — 6 more small leaves owned (per-object utilities shared across many handlers):
+      * `Engine::animEnvInit(obj, envArg, animData)` — FUN_80040CDC (anim env seed + bit-decode
+        of animData bits 0x1000/0x4000 → obj+0x71).
+      * `Engine::animTick(obj)` — FUN_8004190C (anim VM stepper + obj+0x79 byte).
+      * `Engine::announcerCue(id, flag)` — FUN_8004ED94 (announcer-cue queue push, table lookup at
+        0x800BF7FC/0x800BF800).
+      * `Engine::objMatrixCompose(obj)` — FUN_800518FC (post-cull matrix compose with GTE leaves
+        kept substrate).
+      * `Engine::walkStart(obj, mode, subMode)` — FUN_80054D14 (anim-mode transition with 2
+        substrate leaf variants for the subMode split).
+      * `Engine::playerGrowthStep(G, mode)` — FUN_80057DC0 (**Tomba growth/shrink**; see key
+        finding above).
+      Rewired 8 native call sites: 3 beh_sop_intro_* handlers × 2 leaves + gStateMutate's cue
+      helper (all 12 cue call sites) + gStateMutate cases 6/7 (playerGrowthStep). Ghidra decomp
+      scratch/decomp/batch_leaves.c.
+    - ✅ SEASIDE PER-FRAME UPDATE `FUN_80113C5C` = `area_seaside_perframe(c)` — a new file
+      `game/ai/area_seaside_perframe.cpp`. Wired into `Engine::modePerFrameDispatch`: area-0
+      (seaside) special-cases into the native handler instead of `rec_dispatch`. Ownership shape:
+      control flow + mode-byte dispatch + aux-list walk owned native; all 11 sub-behavior leaves
+      (Tomba per-frame tick FUN_80022760, mode-2 sub-tick FUN_8011334C, the trio 22554/113700/
+      1138E8, per-item leaf 80112A60, post pair 112C0C/112F14, Tomba post-frame 8010E904, pre-tick
+      2288C, default-mode post 130C4) stay dispatched — each becomes its own future sub-frontier.
+      This is the top of Tomba's per-frame update tree; owning it puts the engine (not the recomp
+      body) in charge of iterating Tomba's mode/tick each seaside frame. Ghidra decomp
+      scratch/decomp/seaside_perframe_113c5c.c.
+    - ✅ MORE `ActorTomba` methods (this pass): `settleStep(mode)` = FUN_80054650 (the two-way grid
+      probe called from `velocityIntegrate`'s tail; picks probe base + fires 2 substrate probes,
+      stamps G+0x5F/0x60 on hit); `postFrameWaterCheck()` = FUN_8010E904 (water-mode Y-snap +
+      area-exit trigger; final call in `area_seaside_perframe`). Also fixed `Engine::animTick`
+      (FUN_8004190C) to route through the existing native `Animation::step` (FUN_80076D68)
+      instead of `rec_dispatch`, and dropped the missing-a0 bug (the recomp reads a0 = obj that
+      the caller left in $a0). Ghidra decomp scratch/decomp/footstep_hunt.c +
+      scratch/decomp/tomba_postframe_10e904.c + scratch/decomp/anim_event_75ff8.c.
+    - ✅ **ObjectTable::dispatch bug fix + handler port** — `game/world/object_table.{h,cpp}`.
+      Discovered a wrong constant: `HANDLER_TABLE = 0x800AD52C` in the port was off by one hex
+      digit vs the disas (`addiu s2, v0, -10964` with v0=0x800A0000 → **0x8009D52C**). The bug
+      was silent at seaside because every 40-slot pool entry has obj[0]==0 there so the
+      handler-ptr load never fires; any cutscene using this pool would have crashed. Also RE'd
+      + ported the sole handler installed in the table (`FUN_80027254`, all 4 valid slot indices
+      point at it) as `handler_27254(c, obj)` in the same file — a 4-state PARTICLE SM (INIT
+      seeds vel/gravity from per-pattern tables at 0x8009D53C/4C/5C/6C/7C using the LCG PRNG;
+      RUNNING integrates position + life countdown; DESPAWN pool-returns via FUN_8007B2AC).
+      Verified NO SFX. `dispatch()` special-cases the native handler; unknown fns fall through
+      to `rec_dispatch`. Ghidra decomp scratch/decomp/objtable_handler_27254.c.
+    - ☆ **FOOTSTEP-SFX HUNT — negative results this pass, path narrowed:** every Tomba leaf I've
+      RE'd + ported so far has NO SFX trigger. Verified by RE'ing the anim VM (FUN_80076D68 =
+      Animation::step and its 3 keyframe sub-leaves FUN_80075F0C/FF8/76904 — all pure 12-bit
+      vector unpackers, no calls to FUN_80074590), `settleStep` (grid probes only), and
+      `postFrameWaterCheck` (water snap only). Searched every still-substrate leaf in the
+      seaside per-frame chain for `jal 0x80074590`: found ONLY (a) FUN_80022554 → SFX 0x2F
+      (interaction "bonk" when Tomba touches an interactive aux item), and (b) FUN_8010E408 →
+      SFX 0x07 (splash when Tomba walks INTO pond water). Neither is footsteps. The walk-cycle
+      footstep must live in one of the still-substrate sub-callees of `area_seaside_perframe`'s
+      trio (FUN_80113700 / FUN_801138E8) or the per-aux-item leaf FUN_80112A60 (which fires for
+      each aux item Tomba interacts with each frame, potentially including invisible "ground
+      contact" triggers). Those are the next Ghidra RE targets.
+    - ✅ **class ActorTomba (game/player/actor_tomba.{h,cpp})** — one class owning every native
+      Tomba primitive over the G block (0x800E7E80). Embedded on Engine as
+      `c->engine.actorTomba`. Consolidated this pass:
+      * `interactWalk()` — FUN_80022760 (aux-list walker + 3 private sub-handlers
+        proximityCheck / type4GuardedCheck / subHitboxCheck for FUN_80022060/80114E74/80022190).
+      * `postInteractWalk()` — FUN_801130C4 (default-mode post-tick — walks the *0x1F80013C
+        render/interaction queue, type-keyed dispatch to 8 substrate sub-handlers including a
+        detailed case-4 state-transition path that stamps G+0/4/5/6/0x172/0x173/0x2B and issues
+        the announcer cue via `c->engine.announcerCue`). Ghidra decomp
+        scratch/decomp/fun_801130c4.c.
+      * `growthStep(mode)` — FUN_80057DC0 (moved from `Engine::playerGrowthStep`; grow=1, shrink=0
+        toggles G+0x17E, ±0x46 Y-comp, rescales bounds/physics by 1/(mode+1)).
+      * `velocityIntegrate(suppressY)` — FUN_80056B48 (was static `player_move_56b48` in the
+        retired `game/player/engine_player.cpp`).
+      Retired files: `game/player/engine_player.cpp` + `game/player/tomba_interact.cpp` (both
+      reduced to one-line forwarding comments; source removed from CMake). Callers rewired:
+      area_seaside_perframe → `interactWalk()` + `postInteractWalk()`; gStateMutate cases 6/7 →
+      `growthStep(mode)`.
+    - ☐ WALKABLE TOMBA — his NODE location is now known (= G block); his per-frame update fn:
+      * seaside placement table (62 records dumped, no Tomba-shaped handler).
+      * pool.init's 8 sub-inits (all zero-inits, not spawns).
+      * FUN_801088D8 GAME sub-mode-1 bridge (verified = already native as `Engine::submode1`;
+        its case 0 just runs `Sop::transitionAreaLoad` — no per-actor spawn).
+      * Engine::fieldRun state 0 init chain (pool/placement/reset/view — nothing spawns Tomba).
+      * Engine::fieldRun state 2 (FUN_80058304 case 0xC = "clear G flags", not a spawn).
+      * Engine::fieldRun state 3's `d0(0x80074BC4)` — needs RE (candidate).
+      * Area-machine `Engine::s4c` state 0 (0x801064C4 disassembled — audio-fade + sm bump +
+        FUN_8004D8B0 which is a 128-byte zero-init — NOT a spawn).
+      * Area-machine state 3 (0x801065B8) — calls FUN_8007ED5C (save-menu text render) and
+        FUN_80078824 (writes AREA START POS for the player at 0x800BF890/894/898 from per-area
+        table @PTR_DAT_800A54A8[area] + sub_area*8). This sets Tomba's spawn POSITION but the
+        node itself must already exist — pinpointing where the NODE is spawned needs a further
+        step (candidate: FUN_80074BC4 called from fieldRun state 3, still un-RE'd).
+      NEXT: RE FUN_80074BC4 (fieldRun state 3's mystery call) — most-likely remaining candidate
+      for walkable Tomba's initial spawn call. Sibling frontier: area-machine states 1/2/4..8
+      (still substrate via s4c's coro-redirect).
 
 ## D. Per-frame GAMEPLAY systems (inside the GAME stage loop)
 - ✅ `FUN_800788ac` frame update = `ov_frame_update` (pad read + present + audio kick) — game_tomba2.cpp.

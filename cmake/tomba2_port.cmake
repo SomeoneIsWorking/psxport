@@ -161,7 +161,14 @@ set(PORT_SRC
   game/ai/beh_a06_scripted_actor.cpp
   game/ai/beh_a06_script_fades.cpp
   game/ai/beh_a08_scene_actor.cpp
+  game/ai/beh_sop_intro_pilot.cpp
+  game/ai/beh_sop_intro_lifted.cpp
+  game/ai/beh_sop_intro_narration.cpp
+  game/ai/beh_seaside_prox_substate.cpp
+  game/ai/area_seaside_perframe.cpp
+  game/player/actor_tomba.cpp
   game/scene/bg_scene_transition_sm.cpp
+  game/scene/parallax_bg.cpp
   game/scene/scene_transition.cpp
   game/scene/transition_state3.cpp
   game/object/object_list.cpp
@@ -196,7 +203,7 @@ set(PORT_SRC
   game/camera/cutscene_camera.cpp
   game/camera/cutscene_camera_test.cpp
   game/math/engine_math.cpp
-  game/player/engine_player.cpp
+  # game/player/engine_player.cpp   (retired — moved into game/player/actor_tomba.cpp)
   game/render/native_terrain.cpp
   game/render/render_queue.cpp
   game/render/screen_fade/screen_fade.cpp

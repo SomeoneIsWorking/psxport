@@ -27,7 +27,14 @@ public:
   static constexpr uint32_t TABLE_BASE     = 0x800EC188u;  // slot 0 base
   static constexpr uint32_t SLOT_STRIDE    = 64u;          // 40 × 64B slots
   static constexpr int      SLOT_COUNT     = 40;
-  static constexpr uint32_t HANDLER_TABLE  = 0x800AD52Cu;  // byte[1] -> u32 handler
+  static constexpr uint32_t HANDLER_TABLE  = 0x8009D52Cu;  // byte[1] -> u32 handler
+                                                            // (was 0x800AD52C — off-by-one hex
+                                                            // digit; disas: `addiu s2, v0, -10964`
+                                                            // with v0=0x800A0000 → 0x8009D52C. In
+                                                            // seaside all slots have obj[0]==0 so
+                                                            // the bad ptr was never dereferenced,
+                                                            // but any cutscene using this pool
+                                                            // would have crashed.)
 
   // dispatch: one call = one sweep of the 40-slot table (was ov_disp_26c88 / FUN_80026C88).
   void dispatch();

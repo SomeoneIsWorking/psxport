@@ -3,6 +3,7 @@
 #include "object_table.h"
 #include "core.h"
 #include "cfg.h"
+#include "scene/engine.h"           // c->engine.animation etc (not needed here but consistent)
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -10,6 +11,127 @@
 
 void rec_dispatch(Core*, uint32_t);
 void rec_super_call(Core*, uint32_t);
+
+// FUN_80027254 — the sole handler installed in HANDLER_TABLE (all 4 slot indices point at this
+// one function). A 4-state PARTICLE STATE MACHINE (state byte @obj+4):
+//   * 0 = INIT   : read obj+1 flags, obj+2 pattern index, obj+0x33 initial life; use LCG PRNG
+//                  (FUN_8009A450) to jitter initial velocities; consult per-pattern tables at
+//                  0x8009D53C / 0x8009D54C (velocity direction lookup) + 0x8009D55C / 0x8009D56C
+//                  (dampening) + 0x8009D57C (gravity scale). Flips state → 1.
+//   * 1 = RUNNING: decay life obj+0xC by 1/128 per frame; velocity integrate positions at obj+0x1E
+//                  / 0x26 / 0x28 / 0x2A / 0x2C from deltas at obj+0x10/14/16/A/1A; run gravity
+//                  obj+0x12 += obj+0x18; scale motion by *0x100 for the 0x20 accumulator; despawn
+//                  (state → 3) when obj+0x2E + 0x800 < obj+0x12 or the obj+0x8 timer hits 1.
+//   * 2 = (unused): no-op (recomp: `if (bVar1 != 2 && bVar1 == 3)` false → nothing).
+//   * 3 = DESPAWN: dispatch FUN_8007B2AC (substrate pool return).
+// Ghidra decomp scratch/decomp/objtable_handler_27254.c. NO SFX (verified).
+namespace {
+
+constexpr uint32_t H_27254           = 0x80027254u;
+constexpr uint32_t PATTERN_TBL_A     = 0x8009D53Cu;   // (obj+1 & 2)==0 branch (walking pattern)
+constexpr uint32_t PATTERN_TBL_B     = 0x8009D54Cu;   // (obj+1 & 2)!=0 branch (running pattern)
+constexpr uint32_t DAMPEN_TBL        = 0x8009D55Cu;   // horiz-dampen  (16 s16 entries)
+constexpr uint32_t DAMPEN_TBL_2      = 0x8009D56Cu;   // vert-dampen   (16 s16 entries)
+constexpr uint32_t GRAVITY_TBL       = 0x8009D57Cu;   // gravity scale (16 s16 entries)
+constexpr uint32_t LEAF_POOL_RETURN  = 0x8007B2ACu;   // FUN_8007B2AC — pool free (substrate)
+
+inline uint32_t prng(Core* c) { return c->rng.next(); }
+
+void handler_27254(Core* c, uint32_t obj) {
+  const uint8_t st = c->mem_r8(obj + 4u);
+
+  if (st == 1) {
+    // RUNNING body — full byte-exact.
+    const uint16_t life = c->mem_r16(obj + 0xCu);
+    c->mem_w16(obj + 0xCu, (uint16_t)(life - (life >> 7)));
+    const int16_t vx  = (int16_t)c->mem_r16(obj + 0x10u);
+    const int16_t vz  = (int16_t)c->mem_r16(obj + 0x14u);
+    const int16_t vw  = (int16_t)c->mem_r16(obj + 0x16u);
+    const int16_t vy0 = (int16_t)c->mem_r16(obj + 0xAu);
+    c->mem_w16(obj + 0x1Eu, (uint16_t)((int16_t)c->mem_r16(obj + 0x1Eu) + vx));
+    c->mem_w16(obj + 0x26u, (uint16_t)((int16_t)c->mem_r16(obj + 0x26u) + vz));
+    c->mem_w16(obj + 0x28u, (uint16_t)((int16_t)c->mem_r16(obj + 0x28u) + vw));
+    c->mem_w16(obj + 0x2Au, (uint16_t)((int16_t)c->mem_r16(obj + 0x2Au) + vy0));
+    const int16_t g_prev = (int16_t)c->mem_r16(obj + 0x12u);
+    const int16_t g_add  = (int16_t)c->mem_r16(obj + 0x1Au);
+    c->mem_w16(obj + 0x2Cu, (uint16_t)((int16_t)c->mem_r16(obj + 0x2Cu) + g_add));
+    const int16_t g_new  = (int16_t)(g_prev + (int16_t)c->mem_r16(obj + 0x18u));
+    c->mem_w16(obj + 0x12u, (uint16_t)g_new);
+    c->mem_w32(obj + 0x20u, c->mem_r32(obj + 0x20u) + (uint32_t)((int32_t)g_prev * 0x100));
+
+    const int16_t threshold = (int16_t)c->mem_r16(obj + 0x2Eu);
+    const int16_t timer     = (int16_t)c->mem_r16(obj + 0x8u);
+    c->mem_w16(obj + 0x8u, (uint16_t)(timer - 1));
+    if ((int32_t)threshold + 0x800 < (int32_t)g_new || timer == 1) {
+      c->mem_w8(obj + 4u, 3);
+    }
+    return;
+  }
+
+  if (st == 0) {
+    // INIT — jitter velocities using PRNG + per-pattern tables.
+    c->mem_w8(obj + 4u, 1);
+    const uint8_t flag  = c->mem_r8(obj + 1u);
+    const uint8_t patt  = c->mem_r8(obj + 2u);
+    const int16_t seed  = (int16_t)((patt & 1) + 2);
+    c->mem_w8 (obj + 0xEu, c->mem_r8(obj + 0x33u));
+    c->mem_w16(obj + 0x14u, (uint16_t)seed);
+    c->mem_w16(obj + 0x10u, (uint16_t)seed);
+    c->mem_w16(obj + 0x10u, (uint16_t)((int16_t)c->mem_r16(obj + 0x10u) + (int16_t)(prng(c) & 3)));
+    c->mem_w16(obj + 0x14u, (uint16_t)((int16_t)c->mem_r16(obj + 0x14u) + (int16_t)(prng(c) & 3)));
+
+    const uint32_t pattTable = (flag & 2) == 0 ? PATTERN_TBL_A : PATTERN_TBL_B;
+    if ((flag & 1) == 0) {
+      // Standard pattern.
+      c->mem_w16(obj + 0x8u, 0x30);
+      const int16_t vx0 = (int16_t)c->mem_r16(obj + 0x10u);
+      const int16_t vz0 = (int16_t)c->mem_r16(obj + 0x14u);
+      const int16_t mx  = (int16_t)c->mem_r16(pattTable + (patt & 7) * 2u);
+      const int16_t mz  = (int16_t)c->mem_r16(pattTable + ((patt + 6) & 7) * 2u);
+      c->mem_w16(obj + 0x10u, (uint16_t)(vx0 * 4 * mx));
+      c->mem_w16(obj + 0x14u, (uint16_t)(vz0 * 4 * mz));
+      const int16_t jitter = (int16_t)((((prng(c) & 3) + 1) * -8) - 0x20);
+      c->mem_w16(obj + 0x12u, (uint16_t)(jitter * 0x100));
+      c->mem_w16(obj + 0x18u, 0x300);
+    } else {
+      // Fast/high pattern.
+      c->mem_w16(obj + 0x8u, 0x18);
+      c->mem_w16(obj + 0x12u, 0xE000);
+      c->mem_w16(obj + 0x18u, 0x400);
+      const int16_t vx0 = (int16_t)c->mem_r16(obj + 0x10u);
+      const int16_t vz0 = (int16_t)c->mem_r16(obj + 0x14u);
+      const int16_t mx  = (int16_t)c->mem_r16(pattTable + (patt & 7) * 2u);
+      const int16_t mz  = (int16_t)c->mem_r16(pattTable + ((patt + 6) & 7) * 2u);
+      c->mem_w16(obj + 0x10u, (uint16_t)(vx0 * 2 * mx));
+      c->mem_w16(obj + 0x14u, (uint16_t)(vz0 * 2 * mz));
+    }
+
+    // Post-pattern dampening + gravity-scale bake.
+    const int16_t combined = (int16_t)((c->mem_r16(obj + 0x10u) | c->mem_r16(obj + 0x14u)) * 0x14);
+    c->mem_w16(obj + 0x1Au, (uint16_t)combined);
+    c->mem_w16(obj + 0xAu,  (uint16_t)combined);
+    c->mem_w16(obj + 0x16u, (uint16_t)combined);
+    c->mem_w16(obj + 0x16u, (uint16_t)(combined * (int16_t)c->mem_r16(DAMPEN_TBL   + patt * 2u)));
+    c->mem_w16(obj + 0xAu,  (uint16_t)((int16_t)c->mem_r16(obj + 0xAu) * (int16_t)c->mem_r16(DAMPEN_TBL_2 + patt * 2u)));
+    const int16_t gravityScale = (int16_t)c->mem_r16(GRAVITY_TBL + patt * 2u);
+    c->mem_w16(obj + 0x28u, 0);
+    c->mem_w16(obj + 0x2Au, 0);
+    c->mem_w16(obj + 0x2Cu, 0);
+    c->mem_w16(obj + 0x2Eu, (uint16_t)(-(int16_t)c->mem_r16(obj + 0x12u)));
+    c->mem_w16(obj + 0x1Au, (uint16_t)((int16_t)c->mem_r16(obj + 0x1Au) * gravityScale));
+    return;
+  }
+
+  if (st == 3) {
+    c->r[4] = obj;
+    rec_dispatch(c, LEAF_POOL_RETURN);                                // pool free (substrate)
+    return;
+  }
+
+  // st == 2 or any other: no-op (recomp: `bVar1 != 2 && bVar1 == 3` false-branch).
+}
+
+}  // namespace
 
 void ObjectTable::dispatch() {
   Core* c = core;
@@ -21,7 +143,8 @@ void ObjectTable::dispatch() {
       uint32_t idx = c->mem_r8(obj + 1);
       uint32_t fn  = c->mem_r32(HANDLER_TABLE + (idx << 2));
       c->r[4] = obj;
-      rec_dispatch(c, fn);   // handler(obj) — stays substrate / honors its own override
+      if (fn == H_27254) { handler_27254(c, obj); continue; }         // native — the only real entry
+      rec_dispatch(c, fn);   // any other handler (defensive; the table only holds H_27254 today)
     }
   };
 

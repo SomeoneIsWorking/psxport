@@ -59,6 +59,21 @@ void ObjectList::walkAll() {
   s_walks++;
 }
 
+void ObjectList::walkList2() {
+  Core* c = core;
+  long nodes = 0;
+  walk_list(c, c->mem_r32(T2_OBJLIST_HEAD_2), &nodes);
+  // NB: no margin_render_flush here — that belongs to walkAll (walkList2 is a distinct call site
+  // from Sop::fieldUpdate, not a replacement of the whole entity walk).
+
+  static int  s_dbg   = -1;
+  static long s_walks = 0;
+  if (s_dbg < 0) s_dbg = cfg_dbg("engine") ? 1 : 0;
+  if (s_dbg && (s_walks % 300) == 0)
+    fprintf(stderr, "[engine] objwalk_l2 #%ld: %ld nodes\n", s_walks, nodes);
+  s_walks++;
+}
+
 void ObjectList::walkAux() {
   Core* c = core;
   // FUN_80069B28: does NOT clear the render flag; dispatches per handler ptr via the shared path.

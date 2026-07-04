@@ -37,20 +37,79 @@ void Pool::resetControlBlock() {
   c->mem_w8 (S + 561, 0); c->mem_w8 (S + 593, 0); c->mem_w8 (S + 562, 0);
   c->mem_w8 (S + 595, 0); c->mem_w8 (S + 563, 0); c->mem_w8 (S + 571, 0);
   c->engine.sceneTransition.areaMaskTrigger((uint8_t)a4, (uint8_t)a5);   // was rec_dispatch 0x800782F0
-  call_fn(c, 0x800508A8u);
+  c->engine.armModeStateFromAreaTable();                                  // was rec_dispatch 0x800508A8
   uint32_t v = c->mem_r8(S + 566);
-  uint32_t arg = (v == 0u || (uint32_t)(v - 7u) < 2u) ? 0u : 255u;
-  c->r[4]=arg; c->r[5]=arg; c->r[6]=arg; call_fn(c, 0x8005082Cu);
+  uint8_t arg = (v == 0u || (uint32_t)(v - 7u) < 2u) ? 0u : 0xFFu;
+  c->engine.armModeState(arg, arg, arg);                                  // was rec_dispatch 0x8005082C
   c->mem_w8(0x800BF9D4u, 0);
   c->r[2] = 0x800C0000u;   // incidental v0
+}
+
+// FUN_8004FB20 — zero 700 bytes at 0x800BF548. Trivial memset wrapper. Every field of this
+// region is a per-area scene control block that later inits fill in.
+void Pool::clearBf548Region() {
+  Core* c = core;
+  for (uint32_t off = 0; off < 700; off++) c->mem_w8(0x800BF548u + off, 0);
+}
+
+// FUN_800798F8 — the 5 typed object pools + list-head init. See pool.h for the pool table + free-
+// list head/count addresses. Each pool is built as a singly-linked free-list via slot[+0x24] =
+// next-slot (last is 0), with slot[+0x28] = pool class byte. All slot bodies are memset to 0.
+// Faithful to the recomp; the redundant slot[+0x0C] writes (memset already zeroed) are preserved
+// for byte-exact fidelity.
+void Pool::initTypedPools() {
+  Core* c = core;
+  // Active list heads (zeroed once — will be built up as objects spawn).
+  c->mem_w32(0x800FB168u, 0);   // T2_OBJLIST_HEAD_1 (list-1 walkAll first loop)
+  c->mem_w32(0x800F23A8u, 0);
+  c->mem_w32(0x800F2624u, 0);   // T2_OBJLIST_HEAD_2 (walkAll second loop + walkList2)
+  c->mem_w32(0x800F239Cu, 0);
+
+  struct PoolSpec {
+    uint32_t base;     // guest base addr
+    uint32_t stride;   // slot size in bytes
+    uint32_t count;    // slot count
+    uint8_t  klass;    // slot[+0x28] class byte
+    uint8_t  meta;     // slot[+0x0C] byte (all zero, matches recomp)
+    uint32_t headVar;  // free-list head ptr addr
+    uint32_t countVar; // free-count byte addr
+  };
+  static const PoolSpec pools[5] = {
+    { 0x800ED8D8u, 0x88u,  0x34u, 0, 0, 0x800E8098u, 0x800E7E7Cu },
+    { 0x800EF478u, 0xC4u,  0x3Au, 1, 0, 0x800E80A0u, 0x800E7E7Du },
+    { 0x800FE198u, 0xD0u,  0x2Au, 2, 0, 0x800F2398u, 0x800ED8CCu },
+    { 0x800FB858u, 0x108u, 0x28u, 3, 0, 0x800ED8D4u, 0x800ED8C5u },
+    { 0x800FB218u, 0x140u, 0x05u, 4, 0, 0x800ED8D0u, 0x800ED8C4u },
+  };
+  for (const PoolSpec& p : pools) {
+    for (uint32_t i = 0; i < p.count; i++) {
+      const uint32_t slot = p.base + i * p.stride;
+      for (uint32_t off = 0; off < p.stride; off++) c->mem_w8(slot + off, 0);
+      const uint32_t nextSlot = (i + 1 < p.count) ? (slot + p.stride) : 0u;   // last-slot next = 0
+      c->mem_w32(slot + 0x24u, nextSlot);
+      c->mem_w8 (slot + 0x28u, p.klass);
+      c->mem_w8 (slot + 0x0Cu, p.meta);              // matches the recomp's redundant write
+    }
+    c->mem_w32(p.headVar,  p.base);
+    c->mem_w8 (p.countVar, (uint8_t)p.count);
+  }
+
+  // Aux render-list heads/tails (scratchpad). Each pair is (head, tail) both pointing at the
+  // same sentinel node — the empty-list bootstrap the walkers expect.
+  c->mem_w32(0x1F80013Cu, 0x800F2410u); c->mem_w32(0x1F800140u, 0x800F2410u);
+  c->mem_w16(0x1F800146u, 0);           c->mem_w16(0x1F800144u, 0);
+  c->mem_w32(0x1F800148u, 0x800F26C8u); c->mem_w32(0x1F80014Cu, 0x800F26C8u);
+  c->mem_w16(0x1F800152u, 0);           c->mem_w16(0x1F800150u, 0);
+  c->mem_w32(0x1F800154u, 0x800F2738u); c->mem_w32(0x1F800158u, 0x800F2738u);
+  c->mem_w16(0x1F80015Eu, 0);           c->mem_w16(0x1F80015Cu, 0);
 }
 
 // 0x8007B18C — top-level object-pool init. Zeroes 520 68-byte slots at 0x800F2740; builds a
 // downward-growing free-list of slot pointers at 0x800E7E74; runs eight further sub-inits.
 void Pool::init() {
   Core* c = core;
-  call_fn(c, 0x8004FB20u);
-  call_fn(c, 0x800798F8u);
+  clearBf548Region();       // native — was call_fn(c, 0x8004FB20)
+  initTypedPools();         // native — was call_fn(c, 0x800798F8)
 
   for (int i = 0; i < 520; i++) {
     c->r[4] = 0x800F2740u + (uint32_t)i * 68u; c->r[5] = 0; c->r[6] = 68;
@@ -251,7 +310,7 @@ void Pool::selectStateIndex(uint8_t area) {
     s0 = c->mem_r8(tbl + q);
   }
 
-  c->r[4] = s0; c->r[5] = 1; call_fn(c, 0x800750D8u);
+  c->engine.audioDispatch3Way(s0, 1);   // native — was rec_dispatch 0x800750D8
   c->mem_w8(0x1F80023Bu, (uint8_t)s0);
   c->mem_w8(0x800BE22Bu, 0);
   c->r[2] = 0x800C0000u;   // incidental v0

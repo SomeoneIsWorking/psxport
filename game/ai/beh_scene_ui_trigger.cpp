@@ -130,8 +130,7 @@ void beh_scene_ui_trigger(Core* c) {
         c->mem_w8 (taskp + 0x6b, 8);
         uint8_t v0 = c->mem_r8(obj + 5);
         c->mem_w8(obj + 5, (uint8_t)(v0 + 1));
-        c->r[4] = 0; c->r[5] = 0; c->r[6] = 0;
-        rec_dispatch(c, 0x8005082Cu);
+        c->engine.armModeState();                  // native — was rec_dispatch 0x8005082C(0,0,0)
       }
       break;
     case 4:                                          // jt[4]=0x80073c90: -> state 2, advance sub

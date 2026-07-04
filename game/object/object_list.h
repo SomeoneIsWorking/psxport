@@ -32,4 +32,12 @@ public:
 
   void walkAll();
   void walkAux();
+
+  // == walkList2 (guest FUN_8007B008) ==
+  //   Same shape as walkAll's second loop: walks ONLY T2_OBJLIST_HEAD_2 (list-2), clears the
+  //   per-frame render flag @+1, dispatches handler @+0x1c(node) with node in a0. NEXT captured
+  //   before the call (handler may unlink). No margin flush (that's walkAll's responsibility).
+  //   Called by Sop::fieldUpdate as the top-down layer immediately above every list-2 object's
+  //   per-type handler — Tomba included. Behhist diagnostic mirrors walkAll's.
+  void walkList2();
 };

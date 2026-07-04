@@ -23,6 +23,7 @@
 #include "demo.h"                // Engine owns the Demo front-end MENU stage machine
 #include "sop.h"                 // Engine owns the Sop intro-cutscene field stage machine
 #include "bg_scene_transition_sm.h"  // Engine owns the BG scene-transition fade manager
+#include "parallax_bg.h"         // Engine owns the SOP parallax-BG state machine
 #include "world/pool.h"          // Engine owns the Pool per-area init subsystem
 #include "world/placement.h"     // Engine owns the Placement field-object driver
 #include "world/graphics_bind.h" // Engine owns the GraphicsBind object render-bind subsystem
@@ -39,6 +40,7 @@
 #include "scene/scene_events.h"       // Engine owns the SceneEvents arm subsystem (FUN_80040B48)
 #include "audio/sfx.h"                // Engine owns the Sfx trigger subsystem (FUN_80074590)
 #include "scene/script_interp.h"      // Engine owns the ScriptInterp cutscene-script dispatcher
+#include "player/actor_tomba.h"       // Engine owns Tomba's per-frame logic + growth/movement
 class Core;
 
 class Engine {
@@ -70,6 +72,7 @@ public:
   Demo             demo;              // front-end DEMO / MENU stage machine (docs/engine_re.md)
   Sop              sop;               // SOP intro-cutscene FIELD stage machine (guest 0x80109450)
   BgSceneTransitionSm bgSceneTransitionSm;  // BG scene-transition fade manager (guest FUN_8002655C)
+  ParallaxBg       parallaxBg;        // SOP parallax-BG state machine (guest FUN_8010BFFC)
   Pool             pool;              // per-area object-pool + control-block init (world subsystem)
   Placement        placement;         // field object-placement driver (guest FUN_80072A78/DDC)
   GraphicsBind     graphicsBind;      // per-object render-bind subsystem (guest FUN_8007AAE8 et al.)
@@ -86,6 +89,7 @@ public:
   SceneEvents      sceneEvents;        // field-wide scene-event arm primitive (FUN_80040B48)
   Sfx              sfx;                 // sound-FX trigger dispatcher (FUN_80074590)
   ScriptInterp     script;              // cutscene bytecode dispatcher (FUN_80041098 et al.)
+  ActorTomba       actorTomba;          // Tomba's per-frame logic + growth/movement over G block
 
   // ── GAME-stage entry points (called by the scheduler each frame) ────────────────────────────
   // stagePrologue: one-time prologue that runs when the GAME task enters — task-slot setup, first
@@ -145,10 +149,8 @@ public:
   // fall through to substrate 0x8010810C. Was ov_game_submit_810c in engine_stage.cpp.
   void submitPage810c();
 
-  // fadeSequencer: the GAME-overlay a0l per-node screen-fade sequencer (guest FUN_8010957C).
-  // Runs the multi-step ramp state machine at node+2 / node+3 / node+106 (level). Called by
-  // fieldRun's sm[0x4e]==0xb branch with node = 0x800E8008. Was ov_scene_fade_seq.
-  void fadeSequencer(uint32_t node);
+  // (fadeSequencer moved to ScreenFade::sequence — see game/render/screen_fade/screen_fade.h;
+  // callers reach it as `c->screenFade.sequence(node)`.)
 
   // frameUpdate: per-frame engine tick — the PC-driven game loop's frame body called directly
   //   from native_step_frame (native_boot.cpp). Runs the still-PSX per-frame update leaf, then
@@ -228,6 +230,111 @@ public:
   //   loaded overlay owns). Mode 3 (A00 fisherman village) is explicitly SKIPPED before the table
   //   read — the only special case. Replaces `d0(c, 0x80022a80u)` in the field-frame body.
   void modePerFrameDispatch();
+
+  // Small per-object leaves shared across many behavior handlers. Ghidra decomp
+  // scratch/decomp/batch_leaves.c — see each method's body for the full RE. Kept as Engine
+  // methods (not a new class) since they're each self-contained and only-recently-owned.
+
+  // animEnvInit(obj, envArg, animData): guest FUN_80040CDC. Seed the anim-env fields on an
+  //   object (obj+0x7C = envArg, obj+0x46 = 0xFF marker, obj+0x10/70/78 = 0), then delegate to
+  //   FUN_80040DE0 for the actual anim setup, and stamp obj+0x71 flag byte from *animData bits
+  //   0x1000/0x4000. Substrate leaf FUN_80040DE0 kept dispatched.
+  void animEnvInit(uint32_t obj, uint32_t envArg, uint32_t animData);
+
+  // animTick(obj): guest FUN_8004190C. Ticks the animation VM (substrate FUN_80076D68) and
+  //   stashes its returned byte into obj+0x79. Returns 1 (matches recomp v0).
+  uint32_t animTick(uint32_t obj);
+
+  // announcerCue(id, flag): guest FUN_8004ED94. Enqueues an announcer/UI cue by (id, flag) via
+  //   the substrate FUN_8004FA38 leaf — table lookup at DAT_800BF7FC then DAT_800BF800 base.
+  void announcerCue(uint32_t id, uint8_t flag);
+
+  // objMatrixCompose(obj): guest FUN_800518FC. Post-cull matrix composition; every math leaf
+  //   (FUN_80085480 / FUN_80084110 / FUN_80084470 / FUN_80051128) stays substrate.
+  void objMatrixCompose(uint32_t obj);
+
+  // walkStart(obj, mode, subMode): guest FUN_80054D14. Transitions the object into anim `mode`.
+  //   Returns 0 if already in that mode; else 1 (and delegates to FUN_80077C40 / FUN_80077CFC).
+  uint32_t walkStart(uint32_t obj, uint32_t mode, int16_t subMode);
+
+  // (playerGrowthStep moved to ActorTomba::growthStep — see game/player/actor_tomba.h; callers
+  //  reach it as `c->engine.actorTomba.growthStep(mode)` since obj is always G.)
+
+  // audioDispatch3Way(idx): guest FUN_800750D8. 3-branch dispatcher used by area-machine state 0
+  //   (idx = 0x2C) and Pool::selectStateIndex (idx = s0):
+  //     idx == 0xFF → return (DAT_800BE0E4 & 4) — an "audio-armed" flag test.
+  //     idx == 0xFE → return FUN_8001CF2C's return value — settle-poll.
+  //     else       → run audioVoiceFetchBits(idx, second_arg) (substrate leaf), return 0.
+  //   Ghidra decomp scratch/decomp/fun_800750d8_v2.c. Return in c->r[2] preserved.
+  uint32_t audioDispatch3Way(uint32_t idx, uint32_t arg2 = 0);
+
+  // audioVoiceFetchBits(bits, flag): guest FUN_8001D364. Bit-packed XA/voice fetch selector.
+  //   bits[3..5] pick one of 8 per-class descriptor tables (0x8001005C..0x80010078); bits[0..2]
+  //   index a (u16 offset, u16 count) pair inside that table. Delegates to substrate
+  //   FUN_8001D2A8(class, base, tail, flag|2) where base = *0x1F800224 + offset*8 and
+  //   tail = base + (count-2)*8. Sister to Engine::zoneTransitionSetup (same substrate leaf,
+  //   different index shape). Ghidra decomp scratch/decomp/fun_8001d364.c.
+  void audioVoiceFetchBits(uint32_t bits, uint32_t flag);
+
+  // audioSettleField(): guest FUN_80074BC4. 4-step audio state SETTLE fired by Engine::fieldRun's
+  //   state 3 (init hand-off) / state 1's mode-3 branch / state 6 (transition entry): clears the
+  //   scratchpad audio-cue flag @0x1F80027E, runs the engine-tick settle FUN_8001CF2C (task-2
+  //   kill + VBlank sync), then two voice-table cleanups (FUN_80074B44 = tail voices reset;
+  //   FUN_80074E48 = SsSeqClose + full voice reset). The 3 leaves all wrap SPU/BIOS libsnd APIs
+  //   (SsSeqClose / SsSetMVol / SsAudUpdate) that don't have PC-native equivalents yet, so they
+  //   stay dispatched. Ghidra decomp scratch/decomp/fun_80074bc4.c + scratch/decomp/74bc4_subs.c.
+  void audioSettleField();
+
+  // uploadModeSprites(): guest FUN_80067DA8. Uploads 5 sprite patterns (each a 16×1 BGR555 strip)
+  //   to VRAM at fixed (X=0x1F0, Y=0x1E2/0x1E5/0x1C9/0x1D0/0x1B3) rects. The 5 source pointers
+  //   are selected by mode byte DAT_800BF88D (0/1/2 → three distinct pattern sets in MAIN.EXE
+  //   .rodata at 0x800A4800..0x800A49C0). Any other mode value returns without touching VRAM.
+  //   Called from `beh_sop_intro_pilot`'s state-0 init; the guest passes a0 = master G but the
+  //   function ignores it, so this method takes no args. Ghidra decomp scratch/decomp/fun_80067da8.c
+  //   + disas.py of FUN_80081218 (= libgpu-style `LoadImage(RECT*, data)`; kept as substrate leaf).
+  void uploadModeSprites();
+
+  // gStateMutate(G, op): guest FUN_80058304. A 15-case dispatcher that flips flag bits on the
+  //   master G block's byte pair (G+0x174, G+0xD) and fires an SFX/announcer cue via
+  //   FUN_8004ED94(id, 0x41) for most cases (and Sfx::trigger for cases 8-9's alternate cue path).
+  //   Cases 8/9/0xD/0xE also stash G+0x174 into DAT_800BF881 on the "already-set" fast path and
+  //   otherwise pump obj[5]=<id-cue>, obj[6]=2 into a target obj (currently G). Case 0xC (called
+  //   from Engine::fieldRun state 2) is the "clear G flags" body — zeros G+0x174 / G+0xD, then
+  //   normalizes G+0x17E (clears the 0x8000 sign bit if set; force-sets to 0x10 when the 0x200
+  //   flag is set, plus clears G+0x6F and mirrors 0x800BF89E / 0x800BF88F). Every case tail
+  //   stamps DAT_800BF881 = G+0x174 (post-mutation snapshot).
+  //   Ghidra decomp scratch/decomp/fieldrun_s2_init.c. `op` is the u8 selector (a1 in the recomp).
+  void gStateMutate(uint32_t G, uint8_t op);
+
+  // armModeState(a, b, c): guest FUN_8005082C. The engine's MODE-STATE ARM primitive — writes a
+  //   3-byte payload (a, b, c) into two mirrored triples at 0x800EA0D5..D7 and 0x800EC145..147,
+  //   backs the previous payload up at 0x800BF8A4..A6, sets the twin arm flags (0x800EA0D4 = 1,
+  //   0x800EC144 = 1), and stamps 0x800BF8A7 = (previous_arm_flag << 7) | 1. Widely called with
+  //   (0, 0, 0) to "arm the null mode" (input/pad reset shape used by scene_ui trigger, ScreenFade
+  //   sequencer, engine_demo prologue, bf816_dispatch, pool.finalViewInit's fall-through).
+  //   Ghidra decomp scratch/decomp/bf816_leaves.c.
+  void armModeState(uint8_t a = 0, uint8_t b = 0, uint8_t c = 0);
+
+  // armModeStateFromAreaTable(): guest FUN_800508A8. The area-table variant of armModeState —
+  //   pulls the 4-byte (class, a, b, c) payload from the per-area lookup table at 0x800A5500,
+  //   indexed by `area * 8 + collected_bit * 4` (collected_bit = 0x800BFE56 >> area & 1), then
+  //   applies the same arm-flag stamp pattern, with 0x800BF8A7 = 0x81 when class == 1 else 2.
+  //   Called by pool.finalViewInit (0x800508A8 hop) and bf816_dispatch. No caller args.
+  void armModeStateFromAreaTable();
+
+  // zoneTransitionSetup(idx): tiny dispatcher at guest FUN_8001D71C. Called from Sop::fieldUpdate
+  //   (idx=0xE, the tail's zone-transition setup after the intro scroller finishes) and from
+  //   Engine::fadeSequencer (idx=11, the fade-in-init step). Ghidra decomp
+  //   scratch/decomp/sop_tail_8001d71c.c.
+  //     - idx < 0                       : dispatches the engine tick FUN_8001CF2C (still substrate).
+  //     - idx >= 0                      : looks up a 6-byte record at 0x8009D110[idx] with fields
+  //         +0 u8 track    +1 u8 group  +2 u16 baseOff  +4 u16 span
+  //       and either short-circuits to `*0x800BE0E4 = 2` when `group==0 && DAT_800FB162==1`
+  //       (silent-track fast path — the audio subsystem is already at ready-state 1), or dispatches
+  //       FUN_8001D2A8(track, base, base+span, group) where `base = *0x1F800220 + baseOff*8`
+  //       (still substrate — the XA/CD voice fetch entry-point that the xa_stream.c comment refers
+  //       to). Control flow + record decode owned native; the two leaves stay dispatched.
+  void zoneTransitionSetup(int16_t idx);
 
   // postRenderTick: small 3-state machine on byte 0x800BF842 at guest 0x80077D8C, called after the
   //   per-frame render submit. `b42 & 0x7F` selects: 1 = trigger FX 41 then set b42=0x87; 2 = trigger

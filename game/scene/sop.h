@@ -31,4 +31,17 @@ public:
   //                    machine's state-0). Was `native_transition_area_load(Core*)`.
   void areaLoad();
   void transitionAreaLoad();
+
+  // == scenePrepass (guest FUN_8010A0E0) ==
+  //   The immediately-next callee below fieldUpdate in the top-down chain (called RIGHT before the
+  //   list-2 walk each field frame). Computes a per-frame 2D CAMERA-FRUSTUM TRIANGLE in scene-grid
+  //   space (cam pos ± halfFOV yaw offsets, view distance 0x5780=22400, half-FOV 0x1C7=455/4096,
+  //   pitch-tilted, scaled by 1/0x280=640) and hands it to the native scanline gatherer (guest
+  //   FUN_8010A3AC — also owned; see the `scene_grid_gather` static helper in sop.cpp) which
+  //   scanline-rasters it into SCENE_STATE.count / SCENE_STATE.list at table+6/+0x10.
+  //   `table` = 0x800F2418 (SCENE_STATE). Header copy at +8/+10 comes from *(u16*)(table+0xC).
+  //   Also writes two engine globals 0x800A3F90=0x5780 (view dist) and 0x800A3F94=0x1C7 (halfFOV).
+  //   Faithful to the recomp: yaw sign/masking (12-bit wrap), signed >>12 fixed-point, signed div
+  //   by 0x280.
+  void scenePrepass(uint32_t table);
 };

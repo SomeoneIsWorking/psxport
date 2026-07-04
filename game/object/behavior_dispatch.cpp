@@ -87,6 +87,13 @@ void beh_a08_scene_actor(Core* c);                 // 0x801280D0 (A08 overlay) �
                                                    //   scene actor + inlined 0x80127C58 cutscene
                                                    //   director. Closes the 3rd un-owned fade
                                                    //   caller for bug #27 (A08 FUN_80127C58 fade)
+// SOP intro-cutscene per-object handlers — the 3 scene actors Sop::fieldMode spawns at sm[0x50]==0
+// LOAD (game/scene/sop.cpp:505-514, table @0x8010C98C). Ghidra decomp scratch/decomp/sop_scene_actors.c.
+void beh_sop_intro_pilot(Core* c);                 // 0x8010ACFC (SOP overlay) — script-driven master-G actor
+void beh_sop_intro_lifted(Core* c);                // 0x8010B798 (SOP overlay) — Y-lifted secondary actor
+void beh_sop_intro_narration(Core* c);             // 0x8010B990 (SOP overlay) — narration-beat spawner
+void beh_seaside_prox_substate(Core* c);           // 0x8013C1DC (A00 overlay) — closes the seaside
+                                                   //   placement-installed handler set (last unowned entry)
 
 namespace {
 struct NativeBeh { uint32_t addr; void (*fn)(Core*); const char* name; };
@@ -152,6 +159,10 @@ constexpr NativeBeh kTable[] = {
   { 0x8013B274u, beh_a06_music_cue_8013B274,        "a06_music_cue"          },   // one-shot music/SFX cue
   { 0x8013B29Cu, beh_a06_timer_gate_8013B29C,       "a06_timer_gate"         },   // 60-frame counted gate
   { 0x801280D0u, beh_a08_scene_actor,           "a08_scene_actor"      },        // A08 overlay — closes the 3rd un-owned fade caller
+  { 0x8010ACFCu, beh_sop_intro_pilot,           "sop_intro_pilot"      },        // SOP overlay — script-driven master-G intro actor
+  { 0x8010B798u, beh_sop_intro_lifted,          "sop_intro_lifted"     },        // SOP overlay — Y-lifted secondary intro actor
+  { 0x8010B990u, beh_sop_intro_narration,       "sop_intro_narration"  },        // SOP overlay — narration-beat spawner
+  { 0x8013C1DCu, beh_seaside_prox_substate,     "seaside_prox_substate"},        // A00 overlay — last seaside placement handler
 };
 }  // namespace
 
