@@ -39,7 +39,7 @@ static void fadetrace(const char* op, uint8_t mode, uint32_t rgb, const char* ex
 // scratchpad + packet-pool + OT-link writes fire. Guest-call setup mirrors the d3(c, fn, a0, a1, a2)
 // helper in engine_stage.cpp: load a0..a2, invoke rec_dispatch. r[29] (sp) is preserved so the
 // callee's stack cleanup doesn't leak into the native caller's stack frame. Called ONLY under
-// mIsFaithful — the native render doesn't read what the substrate writes here.
+// pc_faithful (mPcSkip=false) — the native render doesn't read what the substrate writes here.
 static constexpr uint32_t kGuestFadePacketBuilder = 0x8007E9C8u;
 static void dispatch_faithful_fade(Core* c, uint32_t color, uint32_t a1, uint32_t otSlot) {
   uint32_t saved_sp = c->r[29];
@@ -81,10 +81,10 @@ void ScreenFade::set(Mode mode, uint8_t r, uint8_t g, uint8_t b, uint32_t otSlot
     if (prevHeld) fadetrace("HOLD released", 0, 0, nullptr);
   }
 
-  // Faithful side-effect: reproduce the substrate FUN_8007e9c8 guest writes so SBS sees identical
-  // scratchpad + packet-pool bytes on core-A native and core-B substrate. Skipped under normal PC
-  // play (the native renderer doesn't need those bytes).
-  if (core->game && core->game->mIsFaithful) {
+  // pc_faithful side-effect: reproduce the substrate FUN_8007e9c8 guest writes so SBS sees
+  // identical scratchpad + packet-pool bytes on core-A native and core-B substrate. Skipped in
+  // pc_skip (the native renderer doesn't need those bytes).
+  if (core->game && !core->game->mPcSkip) {
     uint32_t color = ((uint32_t)r << 16) | ((uint32_t)g << 8) | (uint32_t)b;
     uint32_t a1    = (mode == ADDITIVE) ? 1u : 0u;
     dispatch_faithful_fade(core, color, a1, otSlot);

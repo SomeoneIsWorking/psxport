@@ -982,16 +982,16 @@ void Engine::submode1() { Core* c = core;
       // counter over the cutscene-skip window (95 vs 94 by gameplay-start), producing the 0x800EE0DD
       // periodic-flag divergence (FUN_8004B374's `& 0x1F` gate samples out-of-phase at f217).
       //
-      // PSX_FAITHFUL MODE (mIsFaithful=true, e.g. under SBS): split case 0 across two ticks to match
-      // coro cadence — run the load on tick 1 (return without falling through), consume the deferral
+      // pc_faithful (mPcSkip=false, e.g. under SBS): split case 0 across two ticks to match coro
+      // cadence — run the load on tick 1 (return without falling through), consume the deferral
       // flag on tick 2. sm[0x4c] stays 0 on tick 1, matching the recomp view where the coro is
       // suspended inside FUN_80044BD4 with the sm[0x4c] write not yet reached.
       //
-      // PC MODE (mIsFaithful=false, default): the native engine can skip the coro yield outright —
-      // fall through in one tick, no per-frame cost. The faithful/PC split is by design: substrate
-      // parity demands cadence match, live gameplay does not, and the two modes must not converge
-      // here since the recomp side lives with a real yield we don't want to inherit.
-      if (c->game && c->game->mIsFaithful) {
+      // pc_skip (mPcSkip=true, default): the native engine can skip the coro yield outright — fall
+      // through in one tick, no per-frame cost. The two branches deliberately do not converge:
+      // substrate parity demands cadence match, live gameplay does not, and pc_skip lives without
+      // the real yield.
+      if (c->game && !c->game->mPcSkip) {
         if (!c->engine.mSubmode1LoadDeferred) {
           rec_dispatch(c, 0x8005245cu);          // FUN_8005245c (sound/CD setup, sync leaf)
           (void)c->rng.next();               // Slip #5: this replaces a rec_dispatch(0x80044BD4).
@@ -1660,19 +1660,19 @@ static constexpr uint32_t kStartBinLoadImageSrc = 0x80106878u;
 static void startBinCommonAdvance(Core* c, Asset& asset, Rng& rng) {
   uint32_t task = c->mem_r32(CUR_TASK);
   c->mem_w16(task + 0x4a, 0);
-  // Slip #8: under mIsFaithful the state-0 texgroup preload is done by task-1's substrate
+  // Slip #8: under pc_faithful the state-0 texgroup preload is done by task-1's substrate
   // FUN_80044F58 fiber (spawned via sync_preload_spawn earlier). Native preloadTexgroup here
   // would DUPLICATE the CD reads — the fiber's last cd_loadfile stamp to 0x800BE0E0 (position
   // tracker) then races with native's stamp, producing an off-by-one file boundary.
-  if (!c->game->mIsFaithful) asset.preloadTexgroup(0, 0);
+  if (c->game->mPcSkip) asset.preloadTexgroup(0, 0);
   c->mem_w16(task + 0x56, (uint16_t)rng.next());
   c->mem_w16(task + 0x48, 1);
 }
 
-// Public entry: forward to the fork based on mIsFaithful.
+// Public entry: forward to the fork based on mPcSkip.
 void Engine::startBinStage() {
-  if (core->game && core->game->mIsFaithful) startBinStageFaithful();
-  else                                        startBinStageUnfaithful();
+  if (core->game && core->game->mPcSkip) startBinStageSkip();
+  else                                    startBinStageFaithful();
 }
 
 // ---- FAITHFUL: byte-faithful native port of substrate 0x8010649C ---------------------------------
@@ -1771,11 +1771,11 @@ void Engine::startBinStageFaithful() {
   fprintf(stderr, "[start.bin] file table built (faithful/libcd); preload SM stepped across ticks\n");
 }
 
-// ---- UNFAITHFUL: skip-path optimized for normal PC play ------------------------------------------
+// ---- pc_skip: shortcut path for normal PC play ---------------------------------------------------
 // Skips PSX-only quirks (no guest-sp descent, no libgs substrate dispatch, no task-1 spawn) and
 // uses native primitives for what remains: ISO9660 for file lookup, native VRAM upload, sync
 // preload inline. Byte-diverges from substrate but produces equivalent game state on hardware.
-void Engine::startBinStageUnfaithful() {
+void Engine::startBinStageSkip() {
   Core* c = core;
 
   // Native VRAM upload — RECT built in scratchpad (unused pre-render), src straight from START.BIN.
@@ -1862,12 +1862,12 @@ int Engine::stage0Advance(uint8_t& step) { Core* c = core;
       break;
     }
     case 2:
-      // Slip #7: under mIsFaithful, the state-1 preload is already being done by task-1's
-      // substrate 0x8004514C fiber (spawned in step 1). Calling native preloadStage1 here
-      // ADDITIONALLY would duplicate the guest LoadImage/DMA chain — bytetrace confirms A
-      // was writing DAT_800AC61C (libgs DMA sync) TWICE MORE than B due to the redundant
-      // native path. Skip under mIsFaithful; the substrate does the work.
-      if (!c->game->mIsFaithful) c->engine.asset.preloadStage1();
+      // Slip #7: under pc_faithful (mPcSkip=false), the state-1 preload is already being done
+      // by task-1's substrate 0x8004514C fiber (spawned in step 1). Calling native preloadStage1
+      // here ADDITIONALLY would duplicate the guest LoadImage/DMA chain — bytetrace confirms A
+      // was writing DAT_800AC61C (libgs DMA sync) TWICE MORE than B due to the redundant native
+      // path. Skip under pc_faithful; the substrate does the work. pc_skip fires it inline.
+      if (c->game->mPcSkip) c->engine.asset.preloadStage1();
       // NOTE: NOT emitting the state-1 outer FUN_80051F80(1) yield write here. B's outer
       // yield lands ONE TICK LATER than this step (state-1 wait loop needs ~2 ticks to
       // resolve on B while native fiber completes in 1). Emitting here puts A one tick

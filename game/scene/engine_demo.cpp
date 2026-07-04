@@ -476,7 +476,7 @@ void Demo::s0PreYield() { Core* c = core;
     cd_dc40_sync(c, 0x80108f9cu, c->mem_r32(tab), c->mem_r32(tab + 4));
   }
   // FUN_80044BD4 prelude: match the substrate exactly, then use native_task_spawn (scheduler.cpp) as
-  // the real port of FUN_80051F14 — task-1 runs via the Coro-fiber stanza under mIsFaithful so its
+  // the real port of FUN_80051F14 — task-1 runs via the Coro-fiber stanza under pc_faithful so its
   // FUN_80044F58 preload substrate signals done_flag=1 itself, at the same tick B does.
   c->mem_w8(0x801fe0deu, 2);
   c->mem_w8(0x801fe0ddu, 0);
@@ -497,8 +497,8 @@ void Demo::s0PostYield() { Core* c = core;
                                "(texgroup meta[0x800FB170]=%08X)\n", c->mem_r32(0x800fb170u));
 }
 
-// Legacy inline s0 body kept for the non-mIsFaithful path (normal PC play — where task-1 wouldn't
-// run via fiber, so we do the preload synchronously inline). Runs both halves + fake done_flag.
+// Legacy inline s0 body kept for the pc_skip path (normal PC play — where task-1 wouldn't run
+// via fiber, so we do the preload synchronously inline). Runs both halves + fake done_flag.
 static void demo_frame_s0(Core* c) {
   c->engine.demo.s0PreYield();
   c->engine.asset.preloadTexgroup(0, 2);       // synchronous FUN_80044F58 (task-1 callback body)

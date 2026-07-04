@@ -62,18 +62,20 @@ inspection commands above, and the F1 imgui overlay for live-tuning enhancements
 ## SBS — the DIVERGENCE GATE (use this so you NEVER flounder on "no idea why") ★ READ THIS
 The recurring failure mode — "something is wrong, no idea why", weeks lost — is now STRUCTURALLY SOLVED.
 `PSXPORT_SBS=1` (runtime/recomp/sbs.cpp) runs TWO cores in ONE process, IN-PROCESS, and mechanically
-pinpoints the FIRST place the native path diverges from the PSX path, with the exact corrupting-write
-GUEST STACK TRACE. It is the self-contained oracle the old text said we lacked. **Gate EVERY subsystem
-rebuild on it; never proceed on a vibe.**
-- `PSXPORT_SBS_MODE=render` — A = native gameplay + NATIVE render, B = native gameplay + PSX render.
-  Native render MUST leave guest RAM identical to PSX render → run it, drive `sbs diff` to ZERO. A nonzero
-  diff = the native render is RUNNING CONTENT / corrupting guest state (it must read guest data, write only
-  host memory). Each surfaced address is a leak to fix.
-- `PSXPORT_SBS_MODE=gameplay` — A = native gameplay, B = PSX gameplay (psx_fallback), render identical.
-  A native gameplay subsystem MUST match the PSX body BYTE-FOR-BYTE → `sbs diff` ZERO. First nonzero
-  address + `sbs watch` + `sbs bt` = the exact instruction that drifted. This is the gate for owning any
-  per-frame gameplay/AI/physics function.
-- `PSXPORT_SBS_MODE=full` — full native vs full PSX (`both` still accepted as a legacy alias).
+pinpoints the FIRST place pc_faithful diverges from recomp_path, with the exact corrupting-write GUEST
+STACK TRACE. It is the self-contained oracle. **Gate EVERY subsystem rebuild on it.**
+
+Vocabulary here matches CLAUDE.md: pc_faithful = default native OOP path; recomp_path = substrate
+(psx_fallback=1). Both SBS cores get `mPcSkip=false` so the faithful branch of every fork runs.
+
+- `PSXPORT_SBS_MODE=render` — A = pc_faithful + pc_render, B = pc_faithful + psx_render. pc_render MUST
+  leave guest RAM identical to psx_render → drive `sbs diff` to ZERO. Nonzero = pc_render is writing
+  guest memory (rule violation: pc_render is read-only from guest RAM). Each surfaced address is a leak.
+- `PSXPORT_SBS_MODE=gameplay` — A = pc_faithful, B = recomp_path (psx_fallback=1), render identical. A
+  native subsystem MUST byte-match the substrate → `sbs diff` ZERO. First nonzero + `sbs watch` +
+  `sbs bt` = the exact instruction that drifted. Gate for owning any per-frame gameplay/AI/physics fn.
+- `PSXPORT_SBS_MODE=full` — full pc_faithful vs full recomp_path (`both` still accepted as legacy alias).
+  **This is Job #1's harness (2026-07-04).**
 - Both cores sync at the gameplay-start flag (barrier), then lockstep on identical input; the first
   divergence AUTO-PAUSES. Inspect over the debug server (`tools/dbgclient.py --port N`):
   `sbs status | diff | bt | watch [hex] | show a|b | resume | step [n]`. `sbs watch` arms a per-core

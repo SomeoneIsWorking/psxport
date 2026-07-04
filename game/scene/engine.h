@@ -166,26 +166,26 @@ public:
   void drawOTag(uint32_t otHead);
 
   // startBinStage: task-0's START.BIN file-table builder — dispatcher between the two forks below.
-  // On mIsFaithful=true → startBinStageFaithful (byte-faithful PC port of substrate 0x8010649C).
-  // Otherwise → startBinStageUnfaithful (optimized PC path — skips PSX-only quirks).
+  // On mPcSkip=false (pc_faithful) → startBinStageFaithful (byte-exact port of substrate 0x8010649C).
+  // On mPcSkip=true  (pc_skip)     → startBinStageSkip     (collapsed PC path).
   void startBinStage();
 
-  // startBinStageFaithful: the PRIMARY path. Faithful native port of substrate 0x8010649C —
-  // reproduces every guest-observable write in the same order so gameplay-mode SBS byte-matches
-  // core B by construction. This means: descend guest sp by 456 (matches substrate prologue),
-  // build the RECT on the guest stack at sp+400, dispatch FUN_80081218 (LoadImage) so its libgs
-  // fn-ptr chain writes the graphics-context state at 0x800AC5xx-0x800AC6xx, DrawSync, walk the
-  // three CdSearchFile filename tables + XA singletons, restore sp, advance sm[0x48]=1, RNG-stamp
-  // task+0x56, spawn task-1 via native_task_spawn (port of FUN_80051F14). Task-1's substrate
-  // wake at 0x80044F58 runs via the Coro-fiber stanza.
+  // startBinStageFaithful: byte-exact native port of substrate 0x8010649C. Reproduces every
+  // guest-observable write in the same order so SBS byte-matches core B by construction. This
+  // means: descend guest sp by 456 (matches substrate prologue), build the RECT on the guest
+  // stack at sp+400, dispatch FUN_80081218 (LoadImage) so its libgs fn-ptr chain writes the
+  // graphics-context state at 0x800AC5xx-0x800AC6xx, DrawSync, walk the three CdSearchFile
+  // filename tables + XA singletons, restore sp, advance sm[0x48]=1, RNG-stamp task+0x56, spawn
+  // task-1 via native_task_spawn (port of FUN_80051F14). Task-1's substrate wake at 0x80044F58
+  // runs via the Coro-fiber stanza.
   void startBinStageFaithful();
 
-  // startBinStageUnfaithful: separate SKIP path used in normal PC play. Skips PSX-only quirks:
-  // no guest-sp descent, no libgs LoadImage substrate dispatch (uses native VRAM upload instead),
+  // startBinStageSkip: collapsed shortcut path for normal PC play. Skips PSX-only quirks: no
+  // guest-sp descent, no libgs LoadImage substrate dispatch (uses native VRAM upload instead),
   // no task-1 spawn (asset.preloadTexgroup runs inline synchronously), uses native ISO9660 for
   // file lookups instead of libcd. Byte-diverges from substrate but works fine at runtime — the
   // resulting game state is equivalent to what the substrate produces on hardware.
-  void startBinStageUnfaithful();
+  void startBinStageSkip();
 
   // stage0Advance: run ONE step of the native STAGE-0 preload state machine, matching the recomp
   // body of 0x8010649C's per-iteration yield loop (see docs/findings/sbs.md Slip #1). Called by

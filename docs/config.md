@@ -3,6 +3,19 @@
 Read this before adding a new `getenv("PSXPORT_…")`. The repo accumulated ~105 ad-hoc env flags, each
 with its own `static int x=-1; if(x<0) x=getenv(...)` boilerplate. That is now centralized.
 
+## The 5 canonical run flags (path selection) — see CLAUDE.md for full vocab
+
+| flag | selects | notes |
+|---|---|---|
+| (none) | pc_faithful + pc_render | Default. Byte-exact target for SBS. Currently broken (Job#1). |
+| `PSXPORT_GATE=1` | recomp_path + pc_render | Substrate runs gameplay; native renderer. Works, render issues. |
+| `PSXPORT_RENDER_PSX=1` | pc_faithful + psx_render | Substrate renderer only. Faithful still broken. |
+| `PSXPORT_GATE=1 PSXPORT_RENDER_PSX=1` | recomp_path + psx_render | THE REFERENCE. Works perfectly. |
+| `PSXPORT_SBS_MODE=full` | dual-core byte-compare | Core A = pc_faithful, Core B = recomp_path. Job#1 harness. |
+
+The per-fork shortcut bool is `Game::mPcSkip` — see the class comment on `runtime/recomp/game.h`. Default
+`mPcSkip=true` (shortcuts on); SBS forces it `false` so the faithful branch of every fork is exercised.
+
 **No new env GATING (2026-06-20).** The PC-native port is the only path — do NOT add a `PSXPORT_*` flag
 that branches game behavior/render/features. Visual settings (widescreen/hi-res/SSAO/light/60fps) are
 the F1 overlay + `psxport_settings.ini` (`runtime/recomp/mods.c`), not env. Diagnostics are the REPL

@@ -149,9 +149,9 @@ extern "C" void ffspan_reset_frame(void), ffspan_begin(Core*), ffspan_end(Core*,
 // sm[0x48]==5 leave-to-GAME dispatch by one tick to match the substrate coro's FUN_80051f80
 // yield cost. Entry rewrite (LEAVE-DEMO -> GAME): drop demo_native, task_started=0, state=3
 // stands so the next tick enters the generic path with the new entry.
-// DEMO body dispatch under mIsFaithful=true — Slip #4 s0 preload-wait step-spread. Substrate
-// s0 body spawns task-1 (FUN_80044F58) via FUN_80044BD4 and yields waiting for done_flag; native
-// matches by running s0 in two phases with wait ticks between.
+// DEMO body dispatch when mPcSkip=false (pc_faithful) — Slip #4 s0 preload-wait step-spread.
+// Substrate s0 body spawns task-1 (FUN_80044F58) via FUN_80044BD4 and yields waiting for
+// done_flag; native matches by running s0 in two phases with wait ticks between.
 static void run_demo_body_faithful(Core* c, int i, bool demo_fresh) {
   if (demo_fresh) {
     c->engine.demo.stageMain();                                    // prologue only (sm[0x48]=0)
@@ -173,10 +173,10 @@ static void run_demo_body_faithful(Core* c, int i, bool demo_fresh) {
   if (sm48v == 5) c->game->sched.demo_leave_step[i] = 0;
 }
 
-// DEMO body dispatch under mIsFaithful=false — unfaithful skip path. Fresh runs stageMain (Slip #1
+// DEMO body dispatch when mPcSkip=true (pc_skip shortcut path). Fresh runs stageMain (Slip #1
 // prologue-only fresh iter), then frame() dispatches sm[0x48] substates inline every tick.
 // demo_frame_s0's legacy inline path handles the preload synchronously (no task-1 spawn).
-static void run_demo_body_unfaithful(Core* c, int i, bool demo_fresh) {
+static void run_demo_body_skip(Core* c, int i, bool demo_fresh) {
   if (demo_fresh) c->engine.demo.stageMain();
   uint16_t sm48v = c->mem_r16(c->mem_r32(0x1f800138u) + 0x48);
   bool defer_leave = (sm48v == 5 && !demo_fresh
@@ -206,8 +206,8 @@ static StanzaResult run_demo_stanza(Core* c, int i, uint32_t base, uint32_t st,
   static_cast<R3000&>(*c) = c->game->sched.task_ctx[i];
   c->game->sched.in_stage = 1;
   if (setjmp(c->game->sched.yield_jmp) == 0) {
-    if (c->game->mIsFaithful) run_demo_body_faithful(c, i, demo_fresh);
-    else                       run_demo_body_unfaithful(c, i, demo_fresh);
+    if (c->game->mPcSkip) run_demo_body_skip(c, i, demo_fresh);
+    else                   run_demo_body_faithful(c, i, demo_fresh);
   } else if (cfg_dbg("demo")) {
     static int w = 0; if (!w++) fprintf(stderr, "[demo] caught a substate yield (async CD not yet "
                                                 "owned native+sync) — frontier\n");
@@ -309,14 +309,15 @@ static StanzaResult run_game_stanza(Core* c, int i, uint32_t base, uint32_t st,
 }
 
 // Entry PCs the native stanzas handle. task-1's substrate wake (0x80044F58) etc. are NOT in this
-// set, so under mIsFaithful they route through the Coro fiber path so their yielding substrate
-// bodies run on core-A too. Keep in sync with the run_*_stanza guards above.
+// set, so under pc_faithful (mPcSkip=false) they route through the Coro fiber path so their
+// yielding substrate bodies run on core-A too. Keep in sync with the run_*_stanza guards above.
 //
-// STAGE-0 (0x8010649C) is deliberately excluded under mIsFaithful: the substrate body pushes ~115
-// B of stack scratch via libgs LoadImage/DrawSync callee frames that the native startBinStage
-// can't reproduce. Under mIsFaithful, letting STAGE-0 route to fiber makes A run the exact same
-// substrate code B does — byte-identical stack scratch by construction, at the cost of skipping
-// A's native fresh entry (which reappears once mIsFaithful is off / SBS is not gameplay mode).
+// STAGE-0 (0x8010649C) is deliberately excluded under pc_faithful: the substrate body pushes
+// ~115 B of stack scratch via libgs LoadImage/DrawSync callee frames that the native
+// startBinStage can't reproduce. Under pc_faithful, letting STAGE-0 route to fiber makes A run
+// the exact same substrate code B does — byte-identical stack scratch by construction, at the
+// cost of skipping A's native fresh entry (which reappears in pc_skip mode / when SBS is not
+// gameplay mode).
 static bool has_native_handler_for_entry(Core* /*c*/, uint32_t entry_pc) {
   return entry_pc == 0x801062E4u   // DEMO
       || entry_pc == 0x80109164u   // SOP area-load
@@ -328,14 +329,14 @@ static bool has_native_handler_for_entry(Core* /*c*/, uint32_t entry_pc) {
 // each task runs on its own Coro thread that BLOCKS at a yield (preserving its C stack) and
 // CONTINUES on resume — recompiler-only, no interpreter. cur_is_coro tells scheduler_yield to
 // coro-yield vs longjmp. Active when psx_fallback is on (native_content==0) — OR, under
-// mIsFaithful (SBS gameplay/full mode on core A), when the task's entry PC has no native handler,
-// so substrate-only wakes like task-1 preload (0x80044F58) execute on A same as core B and the
-// FUN_80044BD4 spawn-and-wait cycle actually runs (dropping the completion-shim override in
-// engine_stage.cpp).
+// pc_faithful (mPcSkip=false, SBS gameplay/full mode on core A), when the task's entry PC has no
+// native handler, so substrate-only wakes like task-1 preload (0x80044F58) execute on A same as
+// core B and the FUN_80044BD4 spawn-and-wait cycle actually runs (dropping the completion-shim
+// override in engine_stage.cpp).
 static StanzaResult run_coro_fiber_stanza(Core* c, int i, uint32_t base, uint32_t st,
                                           int native_content, const R3000& loop) {
   if (native_content) {
-    if (!c->game->mIsFaithful) return STANZA_NOT_MINE;
+    if (c->game->mPcSkip) return STANZA_NOT_MINE;
     if (has_native_handler_for_entry(c, c->mem_r32(base + 0xc))) return STANZA_NOT_MINE;
   }
   Coro*& co = c->game->sched.coro[i];

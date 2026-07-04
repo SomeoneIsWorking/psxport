@@ -109,13 +109,14 @@ void Engine::frameUpdate() {
   Core* c = this->core;
   perf_phase_begin(0);                               // perf: LOGIC = all guest interpreter work + render submit
   rec_dispatch(c, 0x800788ACu);                      // real per-frame state update (still-PSX leaf)
-  // FAITHFUL: reproduce FUN_800506D0 (the substrate frame-update chain calls it via
+  // pc_faithful: reproduce FUN_800506D0 (the substrate frame-update chain calls it via
   // FUN_80050B08 → …; native frameUpdate above only calls FUN_800788AC, which skips it).
   // Loop over the 3 task slots: if state==1 (sleeping), decrement task+0x02 and re-arm state
   // to 2 (runnable) when the pre-decrement value was 1. Safety cite (audit 2026-07-04): grep
   // of game/ + runtime/ for readers of task+0x02 = 0 hits (all `+0x56` hits are on entity/node
   // objects at different addresses); task+0x00 reads are scheduler-internal only.
-  if (c->game && c->game->mIsFaithful) {
+  // Skipped in pc_skip because the shortcut path collapses the wait states this drives.
+  if (c->game && !c->game->mPcSkip) {
     for (uint32_t slot = 0; slot < 3; slot++) {
       const uint32_t task = 0x801FE000u + slot * 0x70u;
       if (c->mem_r16(task + 0x00) != 1) continue;

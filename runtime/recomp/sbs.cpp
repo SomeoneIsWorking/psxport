@@ -252,8 +252,9 @@ public:
   // isRenderSpad / isDiffNoise) were REMOVED 2026-07-03 per the standing rule: no RAM diverge may
   // be waved off as "residual/known/expected" (memory: no_residual_ram_diverges). Every diff is
   // fatal and gets root-caused, so filter ranges have no place here. If a diff is a PSX-quirk
-  // native deliberately skips, the fix is to gate the quirk on c->game->mIsFaithful at the write
-  // site (see cull.cpp / engine_stage.cpp), NOT to blacklist the address.
+  // native deliberately skips, the fix is to gate the quirk on !c->game->mPcSkip at the write
+  // site (see cull.cpp / engine_stage.cpp) — i.e. do the faithful thing when pc_skip is off,
+  // NOT to blacklist the address.
   static bool isSpad(uint32_t a) { return a >= 0x1F800000u && a < 0x1F800400u; }
   void  capBt(Core* c, char* buf, size_t n);
   bool  navStep(Core* c, Nav& nv, uint32_t f, const char* tag);
@@ -1064,8 +1065,10 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
   // psx_fallback per mode: gameplay/full run PSX gameplay on core B; render runs native gameplay on both;
   // oracle runs the PURE interpreter+soft-rasterizer oracle on B (docs/oracle.md).
   int fb_b = (mMode == M_RENDER) ? 0 : 1;
-  mA = new Game(); mA->psx_fallback = 0; mA->sbs = facade; mA->mIsFaithful = true;
-  mB = new Game(); mB->psx_fallback = fb_b; mB->sbs = facade; mB->mIsFaithful = true;
+  // SBS forces mPcSkip=false so the faithful branch of every fork is exercised — that's the branch
+  // that's supposed to byte-match recomp_path.
+  mA = new Game(); mA->psx_fallback = 0;     mA->sbs = facade; mA->mPcSkip = false;
+  mB = new Game(); mB->psx_fallback = fb_b;  mB->sbs = facade; mB->mPcSkip = false;
   if (mMode == M_ORACLE) { mB->core.use_interp = 1; mB->gpu.soft_gpu = 1; }
   load_exe(exePath, &mA->core); dc_boot_init(&mA->core);
   load_exe(exePath, &mB->core); dc_boot_init(&mB->core);
