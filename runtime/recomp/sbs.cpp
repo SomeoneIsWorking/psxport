@@ -279,6 +279,16 @@ public:
     // asset.uploadImage (VRAM RECT header); substrate uses a guest-RAM RECT elsewhere so this
     // scratchpad window differs by direction (A has extra ephemeral write, B has none).
     if (addr >= 0x1F800008u && addr < 0x1F800010u) return true;
+    // libgs graphics context / DMA state (base 0x800AC5F8, stride 0x100). Populated by the
+    // substrate FUN_80081218 (LoadImage) → FUN_80097194 chain each time a LoadImage fires; the
+    // substrate does dozens across boot with a specific ordering. pc_skip's Engine::startBinStage
+    // uses native asset.uploadImage (gpu_native_load_image, direct VRAM write) which BYPASSES
+    // the whole libgs DMA state machine — so the values at 0x800AC5F8+ never match. Marked
+    // scratch because native's DrawSync is a no-op (asset.cpp:146: "meaningless for our SYNCHRONOUS
+    // native VRAM upload — there is no async DMA to wait on"), so no native pc_skip code path
+    // reads this state to gate behavior. Any substrate GPU/DMA path later dispatched from
+    // native does re-enter FUN_80081218 which rewrites 0x800AC61C for its own use.
+    if (addr >= 0x800AC5F8u && addr < 0x800AC700u) return true;
     // Boot-time state whose ONLY consumer is the substrate loader chain pc_skip skips: async CD
     // read descriptor (0x1F8001F0..F4 = lba/words/dst), scheduler current-task pointer at boot
     // (0x1F800138, populated once the fiber scheduler starts stepping), loader done_flag
