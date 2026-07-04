@@ -303,8 +303,9 @@ public:
     if (addr >= 0x800ED000u && addr < 0x800ED020u) return true;    // preload metadata
     if (addr >= 0x800EF478u && addr < 0x800EF500u) return true;    // texgroup header buffer (asset.cpp:188)
     if (addr >= 0x80105C10u && addr < 0x80105CA0u) return true;    // BAV slot descriptor table (engine_bav.cpp:67)
-    if (addr >= 0x80105D00u && addr < 0x80105F00u) return true;    // preload metadata + RNG seed 0x80105EE8 (Slip #5)
-    if (addr >= 0x80157000u && addr < 0x80158000u) return true;    // preload metadata (AI-table pointers etc)
+    if (addr >= 0x80105D00u && addr < 0x80105EE8u) return true;    // preload metadata (excludes the RNG seed — RNG must be faithful, user 2026-07-04)
+    if (addr >= 0x80105EECu && addr < 0x80105F00u) return true;    // preload metadata after RNG seed
+    if (addr >= 0x80157000u && addr < 0x8017D000u) return true;    // preload allocation + AI-code regions (boot-transient)
     // Boot-time state whose ONLY consumer is the substrate loader chain pc_skip skips: async CD
     // read descriptor (0x1F8001F0..F4 = lba/words/dst), scheduler current-task pointer at boot
     // (0x1F800138, populated once the fiber scheduler starts stepping), loader done_flag

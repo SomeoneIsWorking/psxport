@@ -2029,6 +2029,8 @@ void Engine::startBinStage() {
   }
 
   startBinCommonAdvance(c, asset, c->rng);
+  // (RNG compensation for the FUN_80044BD4 wait-loop yield's rng.next() moved to
+  // Engine::stage0Advance step 2 so its firing frame aligns with substrate's f2.)
 
   // Task-1 slot bookkeeping. Substrate STAGE-0 spawns task-1 (preload task body FUN_80044F58)
   // via FUN_80044BD4 → FUN_80051F14; native_task_spawn (scheduler.cpp) is that RE'd port. pc_skip
@@ -2061,7 +2063,13 @@ int Engine::stage0Advance(uint8_t& step) { Core* c = core;
   uint32_t task = c->mem_r32(CUR_TASK);
   switch (step) {
     case 0: break;
-    case 1: break;
+    case 1:
+      // pc_skip RNG compensation ([[pc-skip-frame-counter-bump]]): substrate FUN_80044BD4 wait-loop
+      // makes an rng.next() call at f2 that pc_skip's collapsed startBinStage skips (SBS wwatch:
+      // pc=0x8009A450 ra=0x80044C64). Fire it here in step 1 (which runs at f2) so A's RNG seed
+      // aligns with B's at the same host tick — no transient f0/f1 divergence.
+      (void)c->rng.next();
+      break;
     case 2:
       c->engine.asset.preloadStage1();
       c->mem_w16(task + 0x48, 2);
