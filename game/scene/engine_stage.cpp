@@ -1695,6 +1695,16 @@ void Engine::startBinStageFaithful() {
   for (uint32_t i = 0; i < 3; i++) {
     const auto& X = kStartBinXa[i];
     uint32_t lba = 0, size = 0;
+    // Slip #6 byte-match: substrate startBinStage sets s0 = sp+408 (the CdlFILE buffer top pointer)
+    // and s3 = iter counter BEFORE each CdSearchFile jal. CdSearchFile's prologue spills s0, s3
+    // (and others) to guest stack. Set the substrate's per-iter register state so the spills
+    // match. See scratch/decomp/f0_writers.c + START.BIN disas around 0x801066F0.
+    c->r[16] = c->r[29] + 408;                          // s0 = sp + 408 (per substrate 0x801066E0)
+    c->r[19] = i;                                        // s3 = iter
+    if (i == 2) {
+      c->r[17] = 0x8010648Cu;                            // s1 = 0x8010648C (last XA, substrate 0x801066EC)
+      c->r[31] = 0x801066F8u;                            // ra = 0x801066F8 (jal return)
+    }
     resolve_via_libcd(c, X.name_ptr, cdlfile_buf_base + i * 24, &lba, &size);
     c->mem_w32(X.lba_dest, lba);
   }
