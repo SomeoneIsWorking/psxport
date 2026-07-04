@@ -333,7 +333,13 @@ void Pad::serviceFrame() {
   static uint32_t s_hold_at = 0;           // ...applied from this native frame onward
   s_have_window = gpu_windowed();                // a live on-screen window is up (gpu_gpu.cpp)
 #ifdef PSXPORT_SDL
-  if (s_have_window) pollSdl();                  // host keyboard/gamepad -> this->buttons
+  // Under SBS, the harness polls SDL ONCE per frame and feeds the SAME mask into both cores'
+  // Pad::buttons via feedInput() (sbs.cpp). Skipping our own pollSdl here keeps the two cores'
+  // input byte-identical — otherwise A polls first, then B polls a moment later, and a keystroke
+  // mid-press (or a controller axis update in the tiny gap) gives them different masks → real
+  // divergence downstream (area-update slot table, packet pool, etc.). Standalone runs still poll
+  // as before (game->sbs is nullptr).
+  if (s_have_window && !game->sbs) pollSdl();    // host keyboard/gamepad -> this->buttons
 #endif
   if (!s_force_init) {                           // headless test hook: pulse an active-low mask
     const char* force = cfg_str("PSXPORT_FORCE_BUTTONS");
