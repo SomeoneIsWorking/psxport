@@ -1588,6 +1588,9 @@ struct SubstrateBd4Regs {
 // ra = 0x801067A8 = PC+8 of the `jal 0x80044BD4` at 0x801067A0 (MIPS jal saves return AFTER
 // the branch-delay slot, not PC+4). The delay slot at 0x801067A4 is `sh $zero, 0x4a($t0)`.
 static constexpr SubstrateBd4Regs kBd4RegsStartBinState0 = { 3u, 2u, 1u, 5u, 0x801067A8u };
+// state-1 jal at 0x801067C4 — same s0..s3 constants (state dispatch loop doesn't touch them),
+// but ra = 0x801067CC (PC+8 of the state-1 jal).
+static constexpr SubstrateBd4Regs kBd4RegsStartBinState1 = { 3u, 2u, 1u, 5u, 0x801067CCu };
 
 static void sync_preload_spawn(Core* c, uint32_t task1_entry, uint8_t flag2, uint8_t flag3,
                                const SubstrateBd4Regs& bd4_regs = kBd4RegsStartBinState0) {
@@ -1831,12 +1834,30 @@ int Engine::stage0Advance(uint8_t& step) { Core* c = core;
       c->mem_w32(start_bin_sp - 8, 0x801067ECu);              // FUN_80051F80 outer-yield ra spill
       break;
     }
-    case 1:
-      /* Slip #5: recomp gen_func_8010649C hits its second FUN_80044BD4 spawn around this scheduler
-       * tick. */
-      (void)c->rng.next();
+    case 1: {
+      /* Slip #7 byte-match (2026-07-04): substrate at state 1 (0x801067C4) — which lands on
+       * B at this scheduler tick — writes sm[0x48]=2 IMMEDIATELY on entry (via `sh $s1, 0x48($t0)`
+       * BEFORE the FUN_80044BD4 jal) then calls FUN_80044BD4(0x8004514C, 1, 1, 0). The FUN_8004514C
+       * substrate calls guest FUN_8001DC40 (file loader) which drives the libgs LoadImage/DMA chain
+       * — updating DAT_800AC61C (Slip #7 divergent target). Native previously handled state 1 via
+       * `asset.preloadStage1()` (native asset load, no substrate) which skipped both the sm[0x48]=2
+       * write AND the guest LoadImage side effect. Doing them both HERE (not at step 2) matches
+       * B's cadence for both the state-machine byte and libgs state.
+       *
+       * The Slip #5 RNG cadence pad (`c->rng.next()`) is still needed — B's FUN_80044BD4 body
+       * unconditionally advances RNG on non-mode-1 paths.
+       */
+      c->mem_w16(task + 0x48, 2);                                         // state 1 -> 2 (early)
+      // Substrate FUN_80044BD4(mode=0) body at 0x80044C5C-C78 writes `task+0x56 = FUN_8009A450()`
+      // (rng.next result) unconditionally in the beq delay slot. On A, this is the STATE-1 rng
+      // stamp — state 0's stamp was written by startBinCommonAdvance at end of tick 0. Without
+      // it, task+0x56 stays at state-0's value while B's substrate advances it.
+      c->mem_w16(task + 0x56, (uint16_t)c->rng.next());
+      sync_preload_spawn(c, /*task1_entry=*/0x8004514Cu, /*flag2=*/1, /*flag3=*/1,
+                         kBd4RegsStartBinState1);
       break;
-    case 2: c->engine.asset.preloadStage1();       c->mem_w16(task + 0x48, 2); break;   // state 1 -> 2
+    }
+    case 2: c->engine.asset.preloadStage1();       break;   // state 1 work (sm advance moved to step 1)
     case 3: break;
     case 4:                                        c->mem_w16(task + 0x48, 3); break;   // state 2 -> 3
     case 5: /* task-1 slot: extra padding to match measured 8-tick coro total */ break;
