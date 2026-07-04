@@ -2080,9 +2080,17 @@ void Engine::startBinStage() {
     }
   }
 
-  startBinCommonAdvance(c, asset, c->rng);
-  // (RNG compensation for the FUN_80044BD4 wait-loop yield's rng.next() moved to
-  // Engine::stage0Advance step 2 so its firing frame aligns with substrate's f2.)
+  if (c->game && c->game->pc_skip) {
+    // pc_skip shortcut: inline preload + sm[0x48]:=1 stand-in for substrate's task-1 body. Under
+    // pc_faithful, task-1 runs its native handler (Asset::loadTexgroup) instead — and sm[0x48]
+    // is advanced by substrate's FUN_80044BD4 tail via the wait loop in stage0Advance step 0.
+    startBinCommonAdvance(c, asset, c->rng);
+  } else {
+    // pc_faithful: sm[0x48]:=1 fires when FUN_80044BD4's wait loop exits (task-1 done). Mirror
+    // it AFTER the wait loop in stage0Advance step 0. Here at spawn time only reset sm[0x4A].
+    uint32_t task = c->mem_r32(CUR_TASK);
+    c->mem_w16(task + 0x4a, 0);
+  }
 
   // Task-1 slot bookkeeping. Substrate STAGE-0 spawns task-1 (preload task body FUN_80044F58)
   // via FUN_80044BD4 → FUN_80051F14; native_task_spawn (scheduler.cpp) is that RE'd port. pc_skip
@@ -2097,7 +2105,21 @@ void Engine::startBinStage() {
     c->r[28] = 0x800BE0D4u;
     native_task_spawn(c, 1, 0x80044F58u);
     c->r[28] = saved_gp;
-    c->mem_w16(0x801FE070u, 0);   // task-1 already ran-and-completed inline
+    if (c->game && !c->game->pc_skip) {
+      // pc_faithful: task-1 will actually run FUN_80044F58 (via its native handler routed to
+      // Asset::loadTexgroup — see scheduler.cpp) — leave state=2 (runnable). Task-0 waits for
+      // task-1's done_flag (0x1F80019B) via the yield loop in stage0Advance's step 0.
+      c->mem_w8(0x1F80019Bu, 0);           // FUN_80044BD4: clear done_flag before spawn
+      c->mem_w8(0x801FE0DDu, 0);           // FUN_80044BD4: param_3 = 0 (STAGE-0 call site)
+      c->mem_w8(0x801FE0DEu, 0);           // FUN_80044BD4: param_2 = 0
+      // FUN_80044BD4 with param_4==0: task+0x56 = rng.next(). This is the RNG stamp the pc_skip
+      // path emits in stage0Advance step 1 as a cadence stand-in — under pc_faithful it fires
+      // HERE, matching substrate's FUN_80044BD4 call site.
+      uint32_t task = c->mem_r32(CUR_TASK);
+      c->mem_w16(task + 0x56, (uint16_t)c->rng.next());
+    } else {
+      c->mem_w16(0x801FE070u, 0);          // pc_skip: task-1 already ran inline
+    }
   }
 
   fprintf(stderr, "[start.bin] file table built (pc/iso9660); preload SM stepped across ticks\n");
@@ -2113,14 +2135,24 @@ void Engine::startBinStage() {
 //   step 4:   startStage(1) → swap task-0 to DEMO
 int Engine::stage0Advance(uint8_t& step) { Core* c = core;
   uint32_t task = c->mem_r32(CUR_TASK);
+  // pc_faithful (pc_skip=false): task-0 must wait for task-1's done_flag (0x1F80019B) before
+  // advancing the preload SM — mirrors substrate FUN_80044BD4's tail wait loop. Yield each tick
+  // until task-1 sets the flag. Then set sm[0x48]=1 (substrate does this after wait-loop exit).
+  if (c->game && !c->game->pc_skip && step == 0) {
+    if (c->mem_r8(0x1F80019Bu) == 0) return 1;   // task-1 not done yet — keep yielding
+    c->mem_w16(task + 0x48, 1);                  // wait-loop exited: substrate stamp
+  }
   switch (step) {
     case 0: break;
     case 1:
-      // pc_skip RNG compensation ([[pc-skip-frame-counter-bump]]): substrate FUN_80044BD4 wait-loop
-      // makes an rng.next() call at f2 that pc_skip's collapsed startBinStage skips (SBS wwatch:
-      // pc=0x8009A450 ra=0x80044C64). Fire it here in step 1 (which runs at f2) so A's RNG seed
-      // aligns with B's at the same host tick — no transient f0/f1 divergence.
-      (void)c->rng.next();
+      if (c->game->pc_skip) {
+        // pc_skip RNG compensation ([[pc-skip-frame-counter-bump]]): substrate FUN_80044BD4 wait-
+        // loop makes an rng.next() call at f2 that pc_skip's collapsed startBinStage skips (SBS
+        // wwatch: pc=0x8009A450 ra=0x80044C64). Fire it here in step 1 (which runs at f2) so A's
+        // RNG seed aligns with B's at the same host tick. Under pc_faithful the RNG stamp fires
+        // at the spawn site in startBinStage — no compensation needed here.
+        (void)c->rng.next();
+      }
       break;
     case 2:
       c->engine.asset.preloadStage1();

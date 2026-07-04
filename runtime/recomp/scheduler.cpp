@@ -362,6 +362,35 @@ static StanzaResult run_coro_fiber_stanza(Core* c, int i, uint32_t base, uint32_
   return STANZA_HANDLED;
 }
 
+// TASK-1 BODY (0x80044F58) — Asset::loadTexgroup native port. Under pc_faithful task-1 actually
+// runs (Engine::startBinStage leaves it state=2 instead of closing it); the scheduler picks it up
+// on the next tick and drives its body natively so the guest-RAM writes (per-set metadata table
+// at 0x800FB170, done_flag at 0x1F80019B, and the substrate stack scratch from the leaf
+// rec_dispatch calls: 0x8001DC40 CD reads, 0x80051FB4 task-end) match core B byte-for-byte.
+// pc_skip=true never enters this stanza (Engine::startBinStage closes task-1 preemptively).
+static StanzaResult run_task1_preload_stanza(Core* c, int i, uint32_t base, uint32_t st,
+                                             int native_content, const R3000& loop) {
+  if (!native_content) return STANZA_NOT_MINE;
+  int t1_fresh = (st == 3 || (st == 2 && !c->game->sched.task_started[i]))
+                 && c->mem_r32(base + 0xc) == 0x80044F58u;
+  if (!t1_fresh) return STANZA_NOT_MINE;
+  c->game->sched.task_ctx[i] = loop;
+  c->game->sched.task_ctx[i].r[29] = c->mem_r32(base + 8);
+  c->game->sched.task_ctx[i].r[31] = 0xDEAD0000u;
+  c->game->sched.task_started[i] = 1;
+  c->mem_w16(base, 4);
+  c->mem_w32(CUR_TASK, base);
+  c->game->sched.cur_slot = i;
+  static_cast<R3000&>(*c) = c->game->sched.task_ctx[i];
+  c->game->sched.in_stage = 1;
+  if (setjmp(c->game->sched.yield_jmp) == 0) {
+    c->engine.asset.loadTexgroup();     // FUN_80044F58 — sets done_flag & rec_dispatches 0x80051FB4
+  }
+  c->game->sched.in_stage = 0;
+  c->game->sched.task_started[i] = 0;
+  return STANZA_HANDLED;
+}
+
 // STAGE-0 START.BIN step-spread — resume path. Between the fresh startBinStage tick (handled in
 // the generic stanza below) and the final swap-to-DEMO tick, Engine::stage0Advance steps the
 // preload SM one step per scheduler tick to match the recomp coro yield cadence (docs/findings/
@@ -481,6 +510,8 @@ void native_scheduler_step(Core* c) {
     if (run_demo_stanza(c, i, base, st, native_content, loop) == STANZA_HANDLED)          continue;
     if (run_sop_area_load_stanza(c, i, base, st, native_content, loop) == STANZA_HANDLED) continue;
     if (run_game_stanza(c, i, base, st, native_content, loop) == STANZA_HANDLED)          continue;
+    if (!c->game->pc_skip && i == 1                                                                  // pc_faithful task-1 body
+        && run_task1_preload_stanza(c, i, base, st, native_content, loop) == STANZA_HANDLED) continue;
     if (run_coro_fiber_stanza(c, i, base, st, native_content, loop) == STANZA_HANDLED)    continue;
     if (run_stage0_step_stanza(c, i, base, st, native_content) == STANZA_HANDLED)         continue;
     run_generic_dispatch_stanza(c, i, base, st, native_content, loop);
