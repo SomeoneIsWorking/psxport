@@ -1633,10 +1633,17 @@ void Engine::startBinStage() {
     c->mem_w32(c->r[29] + 448, c->r[20]);
     c->mem_w32(c->r[29] + 452, c->r[31]);
     cdlfile_buf_base = c->r[29] + 16;                          // per-iter CdlFILE buffer: sp+16..
-    // Native VRAM upload from within the sp'd region so the RECT struct is where the substrate
-    // built it. Same effect as substrate's FUN_80081218(RECT*, src): the 16x1 strip lands at
-    // VRAM(944, 256). DrawSync(0) is a no-op in our synchronous GPU model.
-    asset.uploadImage(c->r[29] + 400, kStartBinLoadImageSrc);
+    // Dispatch substrate FUN_80081218 (LoadImage) so its guest-state side effects fire — the fn
+    // chains into libgs internals (FUN_80097194 etc.) that write graphics context state at
+    // 0x800AC5xx-0x800AC6xx. Native uploadImage writes native VRAM but skips those guest writes,
+    // producing SBS divergence. Passing RECT* at sp+400 and src=0x80106878 matches the substrate.
+    c->r[4] = c->r[29] + 400;
+    c->r[5] = kStartBinLoadImageSrc;
+    rec_dispatch(c, 0x80081218u);                                // FUN_80081218 LoadImage
+    // Substrate then calls FUN_80080F6C(0) DrawSync — no-op in our sync GPU but the fn chain
+    // writes stack scratch we need to reproduce for byte-clean SBS.
+    c->r[4] = 0;
+    rec_dispatch(c, 0x80080F6Cu);                                // FUN_80080F6C DrawSync
   } else {
     // PC path: build a compact 8-byte RECT in scratchpad (unused header slot 0x1F800008..F is fine
     // as a scratch buffer here — pre-render, no OT active), upload from it. Skip the sp mimicry
