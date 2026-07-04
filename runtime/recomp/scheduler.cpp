@@ -292,9 +292,10 @@ static StanzaResult run_game_stanza(Core* c, int i, uint32_t base, uint32_t st,
 //   pc_skip=true  → shortcut branches (collapsed multi-step init, scratch drift OK)
 //   pc_skip=false → FAITHFUL native branches — byte-exact reproduction of substrate cadence
 //                   (Slip #3 case-0 split, task-1 spawn cadence, RNG stamps, etc.).
-// The "fiber-only under pc_skip=false" mode (fiber runs substrate on both cores, trivial
-// byte-match, no native code tested) proved a bad design — it made SBS pc_skip=false meaningless
-// as a native-bug gate. Reverted 2026-07-04 per user directive.
+// Routing pc_skip=false to substrate/fiber = trivial "match" that tests nothing. Reverted
+// 2026-07-04 (and again after a second attempt) per user directive: "PC_SKIP=0 uses native
+// calls but is BYTE exact to recomp path" — the ported path RUNS, and its byte-exactness is
+// the gate, not the routing.
 static bool has_native_handler_for_entry(Core* c, uint32_t entry_pc) {
   (void)c;
   return entry_pc == 0x801062E4u   // DEMO

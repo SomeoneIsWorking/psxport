@@ -86,6 +86,7 @@ set(PORT_SRC
   runtime/recomp/mods.c
   runtime/recomp/native_gate.cpp
   game/game_tomba2.cpp
+  game/cd/libcd_native.cpp
   game/core/asset.cpp
   game/math/mathlib.cpp
   game/math/rng.cpp
@@ -263,7 +264,7 @@ set_target_properties(tomba2_port PROPERTIES
 
 target_include_directories(tomba2_port PRIVATE
   ${RT} ${CMAKE_SOURCE_DIR}/generated
-  game  game/ai  game/audio  game/camera  game/core  game/input  game/items  game/math  game/object  game/player  game/render  game/scene  game/ui
+  game  game/ai  game/audio  game/camera  game/cd  game/core  game/input  game/items  game/math  game/object  game/player  game/render  game/scene  game/ui
   game/world game/render game/render/scene game/render/mesh
   ${MED} ${MED}/psx
   vendor/beetle-psx/libretro-common/include vendor/beetle-psx

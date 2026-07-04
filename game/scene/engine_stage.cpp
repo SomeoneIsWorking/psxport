@@ -31,6 +31,7 @@
 #include "pool.h"                    // ov_pool_init_run — native object-pool init (game/world)
 #include "c_subsys.h"                // disc_find_file — native ISO9660 resolver (native_task0_bootstrap/ov_start_bin_stage)
 #include "asset.h"                   // class Asset — preloadTexgroup / preloadStage1 (native_stage0_sm)
+#include "cd/libcd_native.h"         // class LibcdNative — pc_skip=false faithful libcd (SBS byte-exact gate)
 #include "math/rng.h"                // class Rng — Slip #5 RNG cadence gate under SBS
 #include <stdio.h>
 
@@ -1991,41 +1992,92 @@ static void startBinCommonAdvance(Core* c, Asset& asset, Rng& rng) {
 void Engine::startBinStage() {
   Core* c = core;
 
-  // Native VRAM upload — RECT built in scratchpad (unused pre-render), src straight from START.BIN.
+  // VRAM upload rect (scratchpad @0x1F800008 = same guest addr both cores).
   c->mem_w16(0x1F800008u + 0, 944);
   c->mem_w16(0x1F800008u + 2, 256);
   c->mem_w16(0x1F800008u + 4, 16);
   c->mem_w16(0x1F800008u + 6, 1);
-  asset.uploadImage(0x1F800008u, kStartBinLoadImageSrc);
 
-  // Populate the libcd in-memory directory cache to match the substrate's boot-time end state.
-  // Native ISO9660 file lookup below bypasses libcd entirely, but the substrate (B core in SBS,
-  // and any post-boot rec_dispatch into CdSearchFile) reads this cache; without these writes,
-  // A diverges from B at f0 across ~1200 B in 0x800AC2D4 + 0x80102D68 + 0x80102768. Sequence
-  // (newMedia + cacheFile(2) + cacheFile(3)) matches the substrate's boot chain leaving the
-  // cache on \CD subdir (index 3), verified via SBS wwatch on 0x800AC2D4.
-  cdlibcd_new_media(c);
-  // CdSearchFile stamps 0x800AC2D8 = DAT_800ABFD0 (libcd media cookie) after each successful
-  // CdNewMedia call — its idempotency guard for subsequent lookups. Mirror that here so any
-  // later substrate dispatch into CdSearchFile short-circuits the newmedia branch.
-  c->mem_w32(kGuestMediaCookieDst, c->mem_r32(kGuestMediaCookieSrc));
-  cdlibcd_cache_file(c, 2);
-  cdlibcd_cache_file(c, 3);
+  if (c->game && !c->game->pc_skip) {
+    // pc_faithful — hand port of ov_start_gen_8010649C. Substrate prologue:
+    //   sp -= 456
+    //   sw ra, 452(sp); sw s4, 448(sp); sw s3, 444(sp); sw s2, 440(sp); sw s1, 436(sp); sw s0, 432(sp)
+    // Then LoadImage(rect,src) + DrawSync(0). Then a loop of CdSearchFile+CdPosToInt over
+    // the three file-name tables and three XA singletons. Reproduce sp and the saved-reg
+    // writes byte-for-byte; delegate leaves via rec_dispatch (libgs, libcd via LibcdNative,
+    // CdPosToInt). The trailing yield/state-machine tail (line 208 of ov_start_shard_0.c) is
+    // deferred to a follow-up divergence (chase in later slips).
+    const uint32_t saved_sp = c->r[29];
+    c->r[29] -= 456;
+    c->mem_w32(c->r[29] + 452, c->r[31]);   // sw ra
+    c->mem_w32(c->r[29] + 448, c->r[20]);   // sw s4
+    c->mem_w32(c->r[29] + 444, c->r[19]);   // sw s3
+    c->mem_w32(c->r[29] + 440, c->r[18]);   // sw s2
+    c->mem_w32(c->r[29] + 436, c->r[17]);   // sw s1
+    c->mem_w32(c->r[29] + 432, c->r[16]);   // sw s0
 
-  // File-table build via native ISO9660 (no libcd dispatch, no CdlFILE buffer).
-  for (const auto& L : kStartBinLoops) {
-    for (uint32_t i = 0; i < L.count; i++) {
-      uint32_t lba = 0, size = 0;
-      resolve_via_iso9660(c, c->mem_r32(L.name_table + i * 4), &lba, &size);
-      c->mem_w32(L.dest_table + i * 8,     lba);
-      c->mem_w32(L.dest_table + i * 8 + 4, size);
+    // libgs LoadImage + DrawSync (substrate prologue writes at 0x801FE7E8-area come from here).
+    c->r[4] = 0x1F800008u; c->r[5] = kStartBinLoadImageSrc; rec_dispatch(c, 0x80081218u);
+    c->r[4] = 0;                                            rec_dispatch(c, 0x80080F6Cu);
+
+    // File-table build via libcd (native wrapper → gen_func_8008B8F0). Output CdlFILE at sp+400.
+    LibcdNative libcd(c);
+    const uint32_t buf = c->r[29] + 400;
+    for (const auto& L : kStartBinLoops) {
+      for (uint32_t i = 0; i < L.count; i++) {
+        if (libcd.searchFile(buf, c->mem_r32(L.name_table + i * 4))) {
+          c->r[4] = buf; rec_dispatch(c, kGuestCdPosToInt);
+          c->mem_w32(L.dest_table + i * 8,     c->r[2]);
+          c->mem_w32(L.dest_table + i * 8 + 4, c->mem_r32(buf + 4));
+        }
+      }
     }
+    for (uint32_t i = 0; i < 3; i++) {
+      const auto& X = kStartBinXa[i];
+      if (libcd.searchFile(buf, X.name_ptr)) {
+        c->r[4] = buf; rec_dispatch(c, kGuestCdPosToInt);
+        c->mem_w32(X.lba_dest, c->r[2]);
+      }
+    }
+
+    // Epilogue: restore saved regs, sp += 456. (The substrate does this at its epilogue label
+    // 0x8010671C; we mirror the register restores as observable writes are done — no MIPS
+    // register-only writes to reproduce.)
+    c->r[16] = c->mem_r32(c->r[29] + 432);
+    c->r[17] = c->mem_r32(c->r[29] + 436);
+    c->r[18] = c->mem_r32(c->r[29] + 440);
+    c->r[19] = c->mem_r32(c->r[29] + 444);
+    c->r[20] = c->mem_r32(c->r[29] + 448);
+    c->r[31] = c->mem_r32(c->r[29] + 452);
+    c->r[29] = saved_sp;
+  } else {
+    asset.uploadImage(0x1F800008u, kStartBinLoadImageSrc);   // native pc_skip shortcut
   }
-  for (uint32_t i = 0; i < 3; i++) {
-    const auto& X = kStartBinXa[i];
-    uint32_t lba = 0, size = 0;
-    resolve_via_iso9660(c, X.name_ptr, &lba, &size);
-    c->mem_w32(X.lba_dest, lba);
+
+  if (c->game && !c->game->pc_skip) {
+    // no-op: pc_faithful path handled everything above.
+  } else {
+    // pc_skip=true (default) — collapsed native shortcut. Bypasses libcd via native ISO9660;
+    // populates the libcd dir cache directly to match the substrate's boot-time end state,
+    // so any later substrate dispatch into CdSearchFile short-circuits its newmedia branch.
+    cdlibcd_new_media(c);
+    c->mem_w32(kGuestMediaCookieDst, c->mem_r32(kGuestMediaCookieSrc));
+    cdlibcd_cache_file(c, 2);
+    cdlibcd_cache_file(c, 3);
+    for (const auto& L : kStartBinLoops) {
+      for (uint32_t i = 0; i < L.count; i++) {
+        uint32_t lba = 0, size = 0;
+        resolve_via_iso9660(c, c->mem_r32(L.name_table + i * 4), &lba, &size);
+        c->mem_w32(L.dest_table + i * 8,     lba);
+        c->mem_w32(L.dest_table + i * 8 + 4, size);
+      }
+    }
+    for (uint32_t i = 0; i < 3; i++) {
+      const auto& X = kStartBinXa[i];
+      uint32_t lba = 0, size = 0;
+      resolve_via_iso9660(c, X.name_ptr, &lba, &size);
+      c->mem_w32(X.lba_dest, lba);
+    }
   }
 
   startBinCommonAdvance(c, asset, c->rng);
