@@ -700,6 +700,22 @@ void Sbs::Impl::storeCb(Core* c, uint32_t a, uint32_t v) {
     // BEFORE the write, so we peek RIGHT NOW = pre-store, but the write is imminent one-line below.)
     fprintf(stderr, "[sbs-ww]     pre-store peek A[%08X]=%u  B[%08X]=%u\n",
             a, mA->core.mem_r8(a), a, mB->core.mem_r8(a));
+    // Guest stack backtrace at write time (walks c->r[29] upward looking for plausible ra values).
+    // This is often empty when sp is near stack-top (write reached from a leaf with no callers on the
+    // guest stack) — in that case the HOST backtrace below is the useful one.
+    const char* gbt = which ? mWwBtB : mWwBtA;
+    if (gbt[0]) fprintf(stderr, "[sbs-ww]     guest bt (core %c):\n%s", which ? 'B' : 'A', gbt);
+    // Host-side C backtrace — names the actual C function that called mem_w*. This is what pins a
+    // NATIVE write vs a SUBSTRATE write (line-105 native_step_frame vs func_XXXX substrate). Even
+    // when the guest stack is empty, this is populated (it's the C call stack of the store).
+    void** hbt = which ? mWwHostBtB : mWwHostBtA;
+    int    nbt = which ? mWwHostBtNB : mWwHostBtNA;
+    if (nbt > 0) {
+      char** syms = backtrace_symbols(hbt, nbt);
+      fprintf(stderr, "[sbs-ww]     host bt (core %c, %d frames):\n", which ? 'B' : 'A', nbt);
+      for (int j = 0; j < nbt && j < 12; j++) fprintf(stderr, "        %s\n", syms ? syms[j] : "?");
+      free(syms);
+    }
   }
 }
 

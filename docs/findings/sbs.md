@@ -5,7 +5,45 @@ recomp_path (substrate). Both cores get `pc_skip=false` (faithful branch of ever
 Divergences are FATAL — no residual allowlist. Older notes below refer to the pre-rename
 `mIsFaithful` flag; that's `!pc_skip`.
 
-## PC_FAITHFUL ZERO-DIFF FOR 750+ FRAMES (2026-07-04) — Slips #6/#7/#8/#9 all obsoleted
+## PC_FAITHFUL byte-exact IN GAMEPLAY (2026-07-04) — M_GAMEPLAY 22,980+ frames zero-diff
+
+After the fiber-only design (below), tested via `PSXPORT_SBS_MODE=gameplay
+PSXPORT_SBS_AUTONAV=1` — autonav navigated both cores to field gameplay-start at
+f216, then held zero-diff for **22,764+ frames of real gameplay** (~12 min of game
+time). No divergence. Job #1 verified end-to-end.
+
+**Choose SBS mode carefully:**
+- `PSXPORT_SBS_MODE=gameplay` — psx_render on BOTH cores, gameplay differs (A native,
+  B substrate). This is the correct mode to validate pc_faithful gameplay. Any
+  divergence = real gameplay bug.
+- `PSXPORT_SBS_MODE=full` — psx_render on B, pc_render on A. Suitable for testing the
+  full end-to-end path, but the two render paths produce different GP0 packet counts,
+  so the packet-pool write pointer at 0x800BF544 (and its snapshot at 0x800BF4F4)
+  legitimately diverges once real rendering begins (see f217 finding below). This
+  isn't a gameplay bug — it's the render-mode mismatch, by design.
+
+## SBS tooling: wwatch fire now prints guest + host backtrace inline
+
+Prior to 2026-07-04, wwatch captured `mWwBtA/B` (guest bt) and `mWwHostBtA/B` (host
+bt via `backtrace()`) but only surfaced them via the `sbs status` debug-server
+command — invisible in the auto-run log. Fixed: each `[sbs-ww]` fire now prints both.
+The host bt is the key one when the guest stack is unwound (sp near stack top) — it
+names the exact native C++ function that called `Core::mem_w*`. Resolve unknown
+offsets via `addr2line -Cf -e scratch/bin/tomba2_port <hex>`.
+
+### f217 (M_FULL only) — pool ptr snapshot divergence — RENDER-MODE, not gameplay
+
+Under `PSXPORT_SBS_MODE=full` + autonav, divergence appears at f217 at 0x800BF4F4.
+Root: `native_step_frame` at native_boot.cpp:105 copies the previous frame's pool
+pointer from 0x800BF544 → 0x800BF4F4. On A (pc_render), `Render::frame` gates on
+`mode.psxRender()` and skips the substrate render orchestrator (0x8003f9a8). On B
+(psx_render), the substrate builds packets and advances the pool. So end-of-frame
+0x800BF544 diverges → line 105 reads different values → 0x800BF4F4 diverges.
+
+**Expected artifact of running two different renderers.** Not a bug. Under
+M_GAMEPLAY both cores use psx_render, both advance the pool identically, no diff.
+
+## Historical (2026-07-04) — Slips #6/#7/#8/#9 all obsoleted by the fiber-only design
 
 `PSXPORT_SBS_MODE=full`: A/B byte-identical for at least 750 consecutive frames through the whole
 boot chain (SCEA → OP.STR skip → title → DEMO). **Job #1 architecturally SOLVED.**
