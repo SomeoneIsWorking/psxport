@@ -1896,7 +1896,14 @@ int Engine::stage0Advance(uint8_t& step) { Core* c = core;
       // subsequent FUN_80051F80(1) yield writes 0x80045118 (ra of the `jal 0x80051F80` at
       // 0x80045110) at FUN_80051F80's sp+16.
       uint32_t task = c->mem_r32(CUR_TASK);
-      c->r[4] = task + 0x18;         // a0 = task + 0x18 (task's restart PC/gp fields ptr, per FUN_80052078)
+      // Intentionally NOT task+0xC (the correct entry-PC field). FUN_800450BC writes
+      // `*param_1 = STAGE_ENTRY_TBL[1] = 0x801062E4` — clobbering task+0xc breaks the
+      // stage0_step stanza's routing check (`task+0xc == 0x8010649C`) so step 6 never
+      // fires. Passing task+0x18 lets FUN_800450BC write a harmless spare slot instead;
+      // step 6's `startStage(1)` does the real task+0xc rewrite. This is a targeted
+      // trade-off for the byte-match dispatch (stack scratch matches B without derailing
+      // the step-machine's own control flow).
+      c->r[4] = task + 0x18;         // a0 = harmless spare (see comment above)
       c->r[5] = 1;                    // a1 = stage index (1 = DEMO)
       rec_dispatch(c, 0x800450BCu);
       break;
