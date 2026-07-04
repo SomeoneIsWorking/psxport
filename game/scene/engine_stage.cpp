@@ -1582,6 +1582,37 @@ static void sync_preload_spawn(Core* c, uint32_t task1_entry, uint8_t flag2, uin
   c->mem_w8 (kTaskFlag2Global, flag3);
   c->mem_w8 (kTaskFlag3Global, flag2);
   native_task_spawn(c, 1, task1_entry);
+
+  // Slip #6 byte-match: substrate FUN_80044BD4 calls FUN_80051F80(1) in a wait-loop while
+  // done_flag==0. Each iteration's writes:
+  //   sp -= 24 ; sw ra, 16(sp)      (ra = 0x80044CA8, return after `jal 0x80051F80`)
+  //   task[0]+2 = 1 ; task[0]+0 = 1 (SLEEPING) ; ChangeThread ; ... ; sp += 24
+  // Task-1's substrate FUN_80044F58 runs synchronously (CD reads overridden to sync via
+  // cd_override.cpp:338), completes in ONE fiber slice, and sets done_flag=1 + calls
+  // FUN_80051FB4 (terminal yield). So on the NEXT scheduler tick task-0 fiber's wait loop reads
+  // done_flag=1 and exits. Under normal fiber flow the wait loop iterates 4× (auto-diagnosis-
+  // measured) before done_flag=1 sticks, and every iteration writes the SAME value 0x80044CA8 to
+  // the SAME sp+16 address — so memory content matches if we emit ONE fake yield with matching
+  // sp descent (startBinStage 456 + FUN_80044BD4 40 + FUN_80051F80 24 = 520) + matching ra.
+  // task[0]+0/+2 writes are the SLEEPING state — FUN_800506D0 (game_tomba2.cpp:frameUpdate) will
+  // decrement +2 and re-arm +0 next frame; under our native path task-0 doesn't actually yield,
+  // so we leave task[0]+0 alone (only the stack scratch matters for byte match here).
+  //
+  // Also reproduce FUN_80051F14's `sw ra, 20(sp)` prologue (spawn primitive's own stack scratch).
+  // FUN_80051F14 is called from FUN_80044BD4 with ra=0x80044C50 (return after `jal 0x80051F14`)
+  // at sp=FUN_80044BD4_sp - 24. sp+20 = 0x801FE80C. Substrate writes 0x80044C50 there.
+  // Auto-diagnosis confirmed: pc=0x80051F14 ra=0x80044C50 val=0x80044C50 hits=3.
+  //
+  // And FUN_80052010's `sw ra, 20(sp)` at ra=0x80044C2C. sp+20 = same address 0x801FE80C.
+  // Substrate's LAST write to 0x801FE80C is FUN_80051F14's (since it's called AFTER FUN_80052010).
+  const uint32_t save_sp = c->r[29];
+  const uint32_t save_ra = c->r[31];
+  c->r[29] -= (40 + 24);                          // FUN_80044BD4 40 + FUN_80051F80 24 sub-frames
+  c->r[31] = 0x80044CA8u;
+  c->mem_w32(c->r[29] + 16, c->r[31]);            // sw ra, 16(sp) at 0x801FE808 (FUN_80051F80 spill)
+  c->mem_w32(c->r[29] + 20, 0x80044C50u);         // sw ra, 20(sp) at 0x801FE80C (FUN_80051F14 spill)
+  c->r[29] = save_sp;
+  c->r[31] = save_ra;
 }
 
 // Baked pixel data address inside START.BIN (16x1 pixel strip loaded to VRAM(944,256)).
@@ -1667,13 +1698,16 @@ void Engine::startBinStageFaithful() {
     resolve_via_libcd(c, X.name_ptr, cdlfile_buf_base + i * 24, &lba, &size);
     c->mem_w32(X.lba_dest, lba);
   }
+  // Substrate order: FUN_80044BD4 spawn+wait fires BEFORE sp restore (it descends 40 more B from
+  // startBinStage's sp'd frame). Reproduce the sp state so sync_preload_spawn's fake-yield write
+  // lands at the same absolute address as B's substrate FUN_80051F80 sw ra: sp for the fake yield
+  // = startBinStage sp - FUN_80044BD4 40 - FUN_80051F80 24 = saved_sp - 456 - 40 - 24 = 0x801FE7F8
+  // when saved_sp = 0x801FEA00. sync_preload_spawn adds the -64 descent itself.
+  sync_preload_spawn(c, /*task1_entry=*/0x80044F58u, 0, 0);
+
   c->r[29] = saved_sp;   // restore sp; the 456 B below stay written (matches substrate scratch)
 
   startBinCommonAdvance(c, asset, c->rng);
-
-  // FUN_80044BD4 spawn task-1 (preload wake at FUN_80044F58) — port of the sync_preload primitive.
-  // task-1's substrate body runs via the Coro-fiber stanza and signals done_flag itself.
-  sync_preload_spawn(c, /*task1_entry=*/0x80044F58u, 0, 0);
 
   fprintf(stderr, "[start.bin] file table built (faithful/libcd); preload SM stepped across ticks\n");
 }
