@@ -1987,6 +1987,32 @@ static void startBinCommonAdvance(Core* c, Asset& asset, Rng& rng) {
   c->mem_w16(task + 0x48, 1);
 }
 
+// Substrate's task-0 stack-write patterns during the STAGE-0 SM loop yields — emitted here so
+// A's guest RAM byte-matches B's fiber-driven substrate wait-loop scratch. Offsets are derived
+// from the recompiled shard prologues:
+//   ov_start_gen_8010649C : sp -= 456
+//   FUN_80044BD4          : sp -= 40, saves s0-s3+ra @ sp+16..32
+//   FUN_80051F80          : sp -= 24, saves ra       @ sp+16
+// so during a FUN_80044BD4 wait-loop yield, sp = task0_sp_initial - 520 and the ra save lands
+// at task0_sp_initial - 504.
+static uint32_t task0_initial_sp(Core* c) { return c->mem_r32(0x801FE008u); }
+
+// FUN_80051F80 prologue write: `sw ra, 16(sp)`. Called from FUN_80044BD4's inner wait loop
+// (ra=0x80044CA8) and from ov_start_gen_8010649C's trailing L_801067E4 yield (ra=0x801067EC).
+static void emit_fun_80051F80_prologue(Core* c, uint32_t sp, uint32_t ra) {
+  c->mem_w32(sp + 16, ra);
+}
+
+// FUN_80044BD4 prologue writes: sw s0..s3 + ra at sp+16..32. Called ONCE per spawn+wait cycle.
+static void emit_fun_80044BD4_prologue(Core* c, uint32_t sp, uint32_t ra,
+                                       uint32_t s0, uint32_t s1, uint32_t s2, uint32_t s3) {
+  c->mem_w32(sp + 16, s0);
+  c->mem_w32(sp + 20, s1);
+  c->mem_w32(sp + 24, s2);
+  c->mem_w32(sp + 28, s3);
+  c->mem_w32(sp + 32, ra);
+}
+
 // One-line dispatchers — the pc_skip/faithful fork lives at method granularity so each path
 // reads top-to-bottom without inline branching. User rule (2026-07-04): no code blocks inside
 // if (pc_skip) / if (!pc_skip) — call one of two named methods.
@@ -2102,6 +2128,12 @@ void Engine::startBinStageFaithful() {
 
   // Substrate L_80106744 loop, sm=0 case (L_8010678C): task-1 spawn + RNG + sm[0x48]:=1, then
   // FUN_80044BD4 enters its wait loop → task-0 yields (handled by stage0AdvanceFaithful step 0).
+  // Emit FUN_80044BD4 prologue writes (once per cycle, at S0-496 offsets +16..+32). First-cycle
+  // ra=0x801067A8 (return of the first jal FUN_80044BD4 at L_8010678C), s0..s3 = params.
+  const uint32_t S0 = task0_initial_sp(c);
+  emit_fun_80044BD4_prologue(c, S0 - 496, 0x801067A8u,
+                             /*s0=*/0, /*s1=*/0, /*s2=*/0, /*s3=*/0);
+
   const uint32_t saved_gp = c->r[28];
   c->r[28] = 0x800BE0D4u;
   native_task_spawn(c, 1, 0x80044F58u);      // leaves task-1 state=2 runnable — body runs on same tick
@@ -2152,32 +2184,46 @@ int Engine::stage0AdvanceSkip(uint8_t& step) {
 int Engine::stage0AdvanceFaithful(uint8_t& step) {
   Core* c = core;
   uint32_t task = c->mem_r32(CUR_TASK);
+  const uint32_t S0 = task0_initial_sp(c);
+  const uint32_t yield_sp_wait = S0 - 520;      // FUN_80051F80 sp during FUN_80044BD4 wait loop
+  const uint32_t yield_sp_tail = S0 - 480;      // FUN_80051F80 sp for ov_start's trailing yield
   switch (step) {
     case 0:
+      emit_fun_80051F80_prologue(c, yield_sp_wait, 0x80044CA8u);     // wait-loop iter save-ra
       if (c->mem_r8(0x1F80019Bu) == 0) return 1;                     // still waiting on task-1
       step++;
       return 1;
     case 1:
+      emit_fun_80051F80_prologue(c, yield_sp_tail, 0x801067ECu);     // ov_start L_801067E4 yield
       step++;
       return 1;
     case 2: {
       c->mem_w16(task + 0x48, 2);
-      c->mem_w8(0x1F80019Bu, 0);                                     // FUN_80044BD4: clear done_flag
-      c->mem_w8(0x801FE0DDu, 0);                                     // FUN_80044BD4: param_3=0
-      c->mem_w8(0x801FE0DEu, 0);                                     // FUN_80044BD4: param_2=0
+      // FUN_80044BD4 prologue for the second spawn+wait cycle. ra=0x801067CC (return of the second
+      // jal FUN_80044BD4 in ov_start at L_801067B0). s0=param_3=0, s1=param_2=1, s2=task[1] state
+      // read at prologue (task-1 slot is state=0 after previous FUN_8004514C completion), s3=param_4=0.
+      // Actually: the FIRST FUN_80044BD4 call had ra=0x801067A8 s1=0; we emit that in startBin —
+      // here we emit the SECOND cycle's prologue.
+      emit_fun_80044BD4_prologue(c, S0 - 496, 0x801067CCu,
+                                 /*s0=*/0, /*s1=*/1, /*s2=*/0, /*s3=*/0);
+      c->mem_w8(0x1F80019Bu, 0);
+      c->mem_w8(0x801FE0DDu, 0);
+      c->mem_w8(0x801FE0DEu, 0);
       const uint32_t saved_gp = c->r[28];
       c->r[28] = 0x800BE0D4u;
-      native_task_spawn(c, 1, 0x8004514Cu);                          // stage-1 callback body
+      native_task_spawn(c, 1, 0x8004514Cu);
       c->r[28] = saved_gp;
-      c->mem_w16(task + 0x56, (uint16_t)c->rng.next());              // FUN_80044BD4 RNG stamp
+      c->mem_w16(task + 0x56, (uint16_t)c->rng.next());
       step++;
       return 1;
     }
     case 3:
+      emit_fun_80051F80_prologue(c, yield_sp_wait, 0x80044CA8u);
       if (c->mem_r8(0x1F80019Bu) == 0) return 1;
       step++;
       return 1;
     case 4:
+      emit_fun_80051F80_prologue(c, yield_sp_tail, 0x801067ECu);
       step++;
       return 1;
     case 5:
@@ -2185,6 +2231,7 @@ int Engine::stage0AdvanceFaithful(uint8_t& step) {
       step++;
       return 1;
     case 6:
+      emit_fun_80051F80_prologue(c, yield_sp_tail, 0x801067ECu);
       step++;
       return 1;
     case 7:
