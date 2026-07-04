@@ -76,13 +76,13 @@ static unsigned isqrt32(unsigned v) { unsigned r = 0, b = 1u << 30; while (b > v
 #ifndef CULL_FAR_MULT
 #define CULL_FAR_MULT 4   // ×4 the stock per-state far limits (4097..7169 → ~16388..28676)
 #endif
-// pc_faithful/pc_skip split (2026-07-03): pc_faithful (mPcSkip=false) uses the stock (=1) cull
+// pc_faithful/pc_skip split (2026-07-03): pc_faithful (pc_skip=false) uses the stock (=1) cull
 // limits so a side-by-side compare against recomp_path doesn't diverge at 0x800EE489
 // (Cull::coneCull2b278 writes obj+1=1 for objects outside the stock cone but inside the ×4
 // extended one; recomp culls them). Live pc_skip gameplay still gets the ×4 boost — the two
 // modes deliberately do not converge. Same shape as Slip #3 (docs/findings/sbs.md).
 static int cull_far_mult(Core* c) {
-  if (c && c->game && !c->game->mPcSkip) return 1;      // pc_faithful — stock cull for substrate parity
+  if (c && c->game && !c->game->pc_skip) return 1;      // pc_faithful — stock cull for substrate parity
   static int m = -1;
   if (m < 0) { const char* s = cfg_str("PSXPORT_CULL_FAR_MULT"); int v = s ? atoi(s) : 0;
                m = (v > 0) ? v : CULL_FAR_MULT; }

@@ -116,7 +116,7 @@ void Engine::frameUpdate() {
   // of game/ + runtime/ for readers of task+0x02 = 0 hits (all `+0x56` hits are on entity/node
   // objects at different addresses); task+0x00 reads are scheduler-internal only.
   // Skipped in pc_skip because the shortcut path collapses the wait states this drives.
-  if (c->game && !c->game->mPcSkip) {
+  if (c->game && !c->game->pc_skip) {
     for (uint32_t slot = 0; slot < 3; slot++) {
       const uint32_t task = 0x801FE000u + slot * 0x70u;
       if (c->mem_r16(task + 0x00) != 1) continue;

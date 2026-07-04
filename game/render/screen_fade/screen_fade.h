@@ -26,10 +26,10 @@
 //   address — that would produce a divergence in gameplay-mode SBS where B substrate never touches it.
 //   The native renderer reads this class's members via `get()` to draw the fade.
 //
-//   pc_faithful SIDE EFFECTS: when `game->mPcSkip==false` (pc_faithful branch), `set()` /
+//   pc_faithful SIDE EFFECTS: when `game->pc_skip==false` (pc_faithful branch), `set()` /
 //   `applyLeafCall()` ALSO dispatches the recomp body of FUN_8007e9c8 so the guest packet-pool +
 //   scratchpad writes fire — this is what keeps SBS byte-identical with core-B substrate. Under
-//   normal PC play (pc_skip, mPcSkip=true) only the C++ members are updated (the PSX-packet path
+//   normal PC play (pc_skip, pc_skip=true) only the C++ members are updated (the PSX-packet path
 //   is skipped — the native renderer doesn't read them anyway).
 //
 //   Still-recomp fade callers do NOT reach this class; they run the substrate FUN_8007e9c8 body
@@ -70,7 +70,7 @@ public:
 
   // Set the fade for THIS FRAME. If (mode, r, g, b) is at or above FULLY_FADED_THRESHOLD in every
   // channel the HOLD is latched; if below in any channel the hold is released. Under pc_faithful
-  // (mPcSkip=false), ALSO fires the substrate FUN_8007e9c8 body (color = (r<<16)|(g<<8)|b,
+  // (pc_skip=false), ALSO fires the substrate FUN_8007e9c8 body (color = (r<<16)|(g<<8)|b,
   // a1 = mode==ADDITIVE, a2 = otSlot) so guest packet-pool + scratchpad writes match recomp_path
   // byte-for-byte.
   void set(Mode mode, uint8_t r, uint8_t g, uint8_t b, uint32_t otSlot = DEFAULT_OT_SLOT);

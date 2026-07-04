@@ -297,22 +297,22 @@ public:
 
   // ---- pc_skip: per-fork shortcut flag (see CLAUDE.md "The 5 paths") -----------------------------
   // Per-site fork bool. Every collapsed-multi-step-init in the native path is shaped:
-  //     if (game->mPcSkip) load_in_one_step();               // shortcut, end-state only
+  //     if (game->pc_skip) load_in_one_step();               // shortcut, end-state only
   //     else               load_in_multi_step_faithfully();  // byte-exact to recomp_path
   //
-  //   pc_faithful path (mPcSkip=false, psx_fallback=0):
+  //   pc_faithful path (pc_skip=false, psx_fallback=0):
   //       Native OOP that is byte-exact to recomp_path (PSX_GATE=1). What the SBS harness compares.
   //       This is Job#1 — the "faithful" branch of every fork must match the substrate exactly.
-  //   pc_skip path (mPcSkip=true, psx_fallback=0):
+  //   pc_skip path (pc_skip=true, psx_fallback=0):
   //       Same code, shortcuts taken where they're safe (collapse recomp coroutine yields into one
   //       tick, skip redundant preloads, etc.). Default for `./run.sh`.
-  //   recomp_path (psx_fallback=1, mPcSkip ignored):
+  //   recomp_path (psx_fallback=1, pc_skip ignored):
   //       Full substrate — the stage machines, loaders, and content run as the recompiled PSX body
   //       instead of the native owners. The oracle for byte-comparison.
   //
-  // Currently mPcSkip defaults to true (shortcuts on) and is forced FALSE by the SBS harness
+  // Currently pc_skip defaults to true (shortcuts on) and is forced FALSE by the SBS harness
   // (see Sbs::run) so the faithful branch of every fork gets exercised for byte-compare.
-  bool mPcSkip = true;
+  bool pc_skip = true;
 
   // ---- dual-core diff mode (dualcore.cpp) ----------------------------------------------------------
   // When set, the frame body runs ONLY the guest-state-mutating work (per-frame update + scheduler +

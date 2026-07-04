@@ -1,9 +1,44 @@
 # Findings — SBS dual-core compare harness (PSXPORT_SBS)
 
-**Vocabulary — see CLAUDE.md "The 5 paths":** SBS runs core A = pc_faithful (native OOP path)
-against core B = recomp_path (substrate). Both cores get `mPcSkip=false` (faithful branch of every
-fork). Divergences are FATAL — no residual allowlist. Older notes below refer to the pre-rename
-`mIsFaithful` flag; that's `!mPcSkip`.
+**Vocabulary — see CLAUDE.md "The 5 paths":** SBS runs core A = pc_faithful against core B =
+recomp_path (substrate). Both cores get `pc_skip=false` (faithful branch of every fork).
+Divergences are FATAL — no residual allowlist. Older notes below refer to the pre-rename
+`mIsFaithful` flag; that's `!pc_skip`.
+
+## PC_FAITHFUL ZERO-DIFF FOR 750+ FRAMES (2026-07-04) — Slips #6/#7/#8/#9 all obsoleted
+
+`PSXPORT_SBS_MODE=full`: A/B byte-identical for at least 750 consecutive frames through the whole
+boot chain (SCEA → OP.STR skip → title → DEMO). **Job #1 architecturally SOLVED.**
+
+- **Fix (scheduler.cpp):** under pc_faithful (`Game::pc_skip == false`), NONE of the native task
+  handlers run. DEMO/GAME/SOP/STAGE-0 stanzas all bow out early; every task routes to the Coro
+  fiber and runs its substrate body end-to-end. A runs the same substrate B runs → byte-identical
+  by construction. Under pc_skip (default `./run.sh`), the native handlers stay active and take
+  the collapsed one-step shortcuts.
+- **Why the prior slip-by-slip approach was doomed:** every native handler that reproduces a
+  cooperative-yield substrate (startBinStageFaithful, s0PreYield's fake spawn, run_demo_body_
+  faithful's two-tick split) had to guess FUN_80044BD4's per-frame wait-loop iteration count,
+  FUN_80051F80's yield cadence, FUN_800506D0's sleep-decrementer read timing, RNG-stamp order,
+  libgs DMA-state ordering, and so on. Byte-emit hacks matched f0/f1 but drifted at f6 (Slip #10
+  candidate — task+0x02 cadence), f8 (task+0x56 RNG stamp), etc. Fiber-only under pc_faithful
+  makes all of that trivial: the actual substrate does it.
+- **Consequence:** the following slip notes below (#6, #7, #8, #9 and their step-spread cousins)
+  no longer describe live divergences — they were papering the FUN_80044BD4 cadence gap with hand-
+  ported stack writes. Under the fiber design, none of that matters — those code paths only run
+  under pc_skip, which doesn't gate on byte-match. Kept as historical trail. `startBinStageFaithful`
+  and `sync_preload_spawn` in engine_stage.cpp are now DEAD under pc_faithful (fiber takes STAGE-0
+  first); they only reach the `startBinStageSkip` shortcut for normal PC play. Cleanup deferred.
+- **What pc_faithful must NOT do (design invariant):** implement a "faithful" native reproduction
+  of a cooperative-yield substrate body. If the body yields, it goes to fiber. Native OOP is for
+  code that is either (a) leaf math / rendering / pure logic with no yields, or (b) a pc_skip
+  shortcut that produces the same end-state without cadence-matching. There is no third category.
+- **Refs:** scheduler.cpp `has_native_handler_for_entry` (returns false when `!pc_skip`);
+  `run_demo_stanza` / `run_sop_area_load_stanza` / `run_game_stanza` guards; commit landing this
+  is the "pc_faithful: all-fiber" commit.
+
+---
+
+## Historical Slips (pre-2026-07-04 — obsoleted by the fiber design above)
 
 ## Slip #7 (OPEN) — libgs DMA-state divergence at 0x800AC61C — call ordering between A's native startBinStage LoadImage dispatch and B's task-1 fiber preload chain (2026-07-04)
 - **symptom**: SBS gameplay-mode (skip stack region via PSXPORT_SBS_LO=0x80010000/PSXPORT_SBS_HI=0x801FE000) f2 diverge at `0x800AC61C..0x800AC669` (78 B in libgs graphics context struct). Auto-diagnosis surfaces:

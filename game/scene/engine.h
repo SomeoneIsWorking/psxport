@@ -166,8 +166,8 @@ public:
   void drawOTag(uint32_t otHead);
 
   // startBinStage: task-0's START.BIN file-table builder — dispatcher between the two forks below.
-  // On mPcSkip=false (pc_faithful) → startBinStageFaithful (byte-exact port of substrate 0x8010649C).
-  // On mPcSkip=true  (pc_skip)     → startBinStageSkip     (collapsed PC path).
+  // On pc_skip=false (pc_faithful) → startBinStageFaithful (byte-exact port of substrate 0x8010649C).
+  // On pc_skip=true  (pc_skip)     → startBinStageSkip     (collapsed PC path).
   void startBinStage();
 
   // startBinStageFaithful: byte-exact native port of substrate 0x8010649C. Reproduces every
