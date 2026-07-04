@@ -1488,6 +1488,23 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
                   sa_ep, sb_ep, sa_ep == sb_ep ? "==" : "!!");
         }
 
+        // Guest stack window near write-sp on both cores. The bytes around sp reveal the actual
+        // callee-save spills (sw ra, sw sN) that produced the divergent stack scratch — same shape
+        // as the guest-stack backtrace but showing ACTUAL bytes not just plausible-ra hits.
+        auto dump_stack_window = [&](const char* tag, Core* c, uint32_t sp) {
+          if (!sp || sp < 0x80010000u || sp >= 0x80200000u) return;
+          fprintf(stderr, "[sbs] === guest stack window %s (sp=0x%08X, sp-16..sp+64) ===\n", tag, sp);
+          for (int32_t off = -16; off <= 64; off += 4) {
+            uint32_t va = sp + (uint32_t)off;
+            if (va < 0x80010000u || va >= 0x80200000u) continue;
+            uint32_t w = c->mem_r32(va);
+            fprintf(stderr, "[sbs]   sp%+d @0x%08X = 0x%08X%s\n",
+                    off, va, w, off == 0 ? " <-- sp" : "");
+          }
+        };
+        if (mWwHit & 1) dump_stack_window("A", &mA->core, mWwSpA);
+        if (mWwHit & 2) dump_stack_window("B", &mB->core, mWwSpB);
+
         // Call-chain depth heuristic. Same pc/ra + different sp = the CALL CHAIN reaching the writer
         // has a different depth on each core. Point that out so the caller doesn't have to eyeball sp.
         if (mWwHit == 3 && mWwPcA == mWwPcB && mWwRaA == mWwRaB && mWwSpA != mWwSpB) {
