@@ -165,35 +165,17 @@ public:
   //   `ov_draw_otag` in game_tomba2.cpp.
   void drawOTag(uint32_t otHead);
 
-  // startBinStage: task-0's START.BIN file-table builder — dispatcher between the two forks below.
-  // On pc_skip=false (pc_faithful) → startBinStageFaithful (byte-exact port of substrate 0x8010649C).
-  // On pc_skip=true  (pc_skip)     → startBinStageSkip     (collapsed PC path).
+  // startBinStage: task-0's START.BIN file-table builder — pc_skip only (pc_faithful routes to
+  // fiber and runs the substrate func_8010649C body via run_coro_fiber_stanza). Collapsed
+  // single-tick native replacement: no guest-sp descent, no libgs LoadImage substrate dispatch
+  // (native VRAM upload instead), no task-1 spawn (asset.preloadTexgroup runs inline sync),
+  // native ISO9660 for file lookups instead of libcd.
   void startBinStage();
 
-  // startBinStageFaithful: byte-exact native port of substrate 0x8010649C. Reproduces every
-  // guest-observable write in the same order so SBS byte-matches core B by construction. This
-  // means: descend guest sp by 456 (matches substrate prologue), build the RECT on the guest
-  // stack at sp+400, dispatch FUN_80081218 (LoadImage) so its libgs fn-ptr chain writes the
-  // graphics-context state at 0x800AC5xx-0x800AC6xx, DrawSync, walk the three CdSearchFile
-  // filename tables + XA singletons, restore sp, advance sm[0x48]=1, RNG-stamp task+0x56, spawn
-  // task-1 via native_task_spawn (port of FUN_80051F14). Task-1's substrate wake at 0x80044F58
-  // runs via the Coro-fiber stanza.
-  void startBinStageFaithful();
-
-  // startBinStageSkip: collapsed shortcut path for normal PC play. Skips PSX-only quirks: no
-  // guest-sp descent, no libgs LoadImage substrate dispatch (uses native VRAM upload instead),
-  // no task-1 spawn (asset.preloadTexgroup runs inline synchronously), uses native ISO9660 for
-  // file lookups instead of libcd. Byte-diverges from substrate but works fine at runtime — the
-  // resulting game state is equivalent to what the substrate produces on hardware.
-  void startBinStageSkip();
-
-  // stage0Advance: run ONE step of the native STAGE-0 preload state machine, matching the recomp
-  // body of 0x8010649C's per-iteration yield loop (see docs/findings/sbs.md Slip #1). Called by
-  // the scheduler on each subsequent tick after startBinStage() ran the file-table build (which
-  // consumes step 0). Steps 1..5 spread preloadTexgroup + preloadStage1 + swap-to-DEMO across
-  // ticks so A's cadence matches B's coro path. The FINAL step (5) calls native_start_stage(1)
-  // which rewrites task+0xc to DEMO and yields; steps 1..4 each `scheduler_yield` to end the tick.
-  // Returns 1 while more steps remain, 0 when the swap has landed.
+  // stage0Advance: one step of the STAGE-0 preload SM (pc_skip only). Called by the scheduler on
+  // each tick after startBinStage's fresh-entry file-table build. Spreads preloadStage1 + sm
+  // advances + swap-to-DEMO across a few ticks. Final step calls startStage(1) which rewrites
+  // task+0xc to DEMO and yields. Returns 1 while more steps remain, 0 when the swap has landed.
   int stage0Advance(uint8_t& step);
 
 

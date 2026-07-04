@@ -35,21 +35,6 @@ static void fadetrace(const char* op, uint8_t mode, uint32_t rgb, const char* ex
   }
 }
 
-// Dispatch the substrate FUN_8007e9c8 (screen-fade packet builder) with the ABI it expects, so its
-// scratchpad + packet-pool + OT-link writes fire. Guest-call setup mirrors the d3(c, fn, a0, a1, a2)
-// helper in engine_stage.cpp: load a0..a2, invoke rec_dispatch. r[29] (sp) is preserved so the
-// callee's stack cleanup doesn't leak into the native caller's stack frame. Called ONLY under
-// pc_faithful (pc_skip=false) — the native render doesn't read what the substrate writes here.
-static constexpr uint32_t kGuestFadePacketBuilder = 0x8007E9C8u;
-static void dispatch_faithful_fade(Core* c, uint32_t color, uint32_t a1, uint32_t otSlot) {
-  uint32_t saved_sp = c->r[29];
-  c->r[4] = color;
-  c->r[5] = a1;
-  c->r[6] = otSlot;
-  rec_dispatch(c, kGuestFadePacketBuilder);
-  c->r[29] = saved_sp;
-}
-
 void ScreenFade::frameStart() {
   // Reset only the frame-scoped state. The held fully-faded state persists across frames.
   mFrameMode = NONE;
@@ -81,14 +66,7 @@ void ScreenFade::set(Mode mode, uint8_t r, uint8_t g, uint8_t b, uint32_t otSlot
     if (prevHeld) fadetrace("HOLD released", 0, 0, nullptr);
   }
 
-  // pc_faithful side-effect: reproduce the substrate FUN_8007e9c8 guest writes so SBS sees
-  // identical scratchpad + packet-pool bytes on core-A native and core-B substrate. Skipped in
-  // pc_skip (the native renderer doesn't need those bytes).
-  if (core->game && !core->game->pc_skip) {
-    uint32_t color = ((uint32_t)r << 16) | ((uint32_t)g << 8) | (uint32_t)b;
-    uint32_t a1    = (mode == ADDITIVE) ? 1u : 0u;
-    dispatch_faithful_fade(core, color, a1, otSlot);
-  }
+  (void)otSlot;   // native renderer reads via get(); no guest-side packet build here
 }
 
 void ScreenFade::applyLeafCall(uint32_t color, uint32_t a1, uint32_t otSlot) {

@@ -144,39 +144,14 @@ void scheduler_yield(Core* c) {
 enum StanzaResult { STANZA_NOT_MINE = 0, STANZA_HANDLED = 1 };
 extern "C" void ffspan_reset_frame(void), ffspan_begin(Core*), ffspan_end(Core*, const char*);  // PSXPORT_BDTAG (engine_stage.cpp)
 
-// DEMO 0x801062E4 — native per-frame dispatcher (no guest coroutine). Fresh: stageMain (prologue)
-// then frame() dispatches sm[0x48]==0 substate. Resume: frame(). Slip #1 leave-defer delays the
-// sm[0x48]==5 leave-to-GAME dispatch by one tick to match the substrate coro's FUN_80051f80
-// yield cost. Entry rewrite (LEAVE-DEMO -> GAME): drop demo_native, task_started=0, state=3
-// stands so the next tick enters the generic path with the new entry.
-// DEMO body dispatch when pc_skip=false (pc_faithful) — Slip #4 s0 preload-wait step-spread.
-// Substrate s0 body spawns task-1 (FUN_80044F58) via FUN_80044BD4 and yields waiting for
-// done_flag; native matches by running s0 in two phases with wait ticks between.
-static void run_demo_body_faithful(Core* c, int i, bool demo_fresh) {
-  if (demo_fresh) {
-    c->engine.demo.stageMain();                                    // prologue only (sm[0x48]=0)
-    c->engine.demo.s0PreYield();                                   // spawn task-1
-    c->game->sched.demo_s0_step[i] = 1;
-    return;                                                        // fresh tick ends here
-  }
-  if (c->game->sched.demo_s0_step[i] == 1) {
-    if (c->mem_r8(0x1f80019bu) != 1) return;                       // task-1 still running, wait tick
-    c->engine.demo.s0PostYield();
-    c->game->sched.demo_s0_step[i] = 0;
-    // Fall through to substate dispatch — substrate runs s0-tail AND s1 body in the same tick.
-  }
-  uint16_t sm48v = c->mem_r16(c->mem_r32(0x1f800138u) + 0x48);
-  bool defer_leave = (sm48v == 5 && !demo_fresh
-                      && c->game->sched.demo_leave_step[i] == 0);
-  if (defer_leave) { c->game->sched.demo_leave_step[i] = 1; return; }
-  c->engine.demo.frame();
-  if (sm48v == 5) c->game->sched.demo_leave_step[i] = 0;
-}
-
-// DEMO body dispatch when pc_skip=true (pc_skip shortcut path). Fresh runs stageMain (Slip #1
-// prologue-only fresh iter), then frame() dispatches sm[0x48] substates inline every tick.
-// demo_frame_s0's legacy inline path handles the preload synchronously (no task-1 spawn).
-static void run_demo_body_skip(Core* c, int i, bool demo_fresh) {
+// DEMO 0x801062E4 — native per-frame dispatcher (pc_skip only; pc_faithful routes to fiber
+// via run_coro_fiber_stanza's gate). Fresh: stageMain (prologue) then frame() dispatches
+// sm[0x48]==0 substate. Resume: frame(). Slip #1 leave-defer delays the sm[0x48]==5 leave-to-
+// GAME dispatch by one tick to match the substrate coro's FUN_80051F80 yield cost. Entry
+// rewrite (LEAVE-DEMO -> GAME): drop demo_native, task_started=0, state=3 stands so the next
+// tick enters the generic path with the new entry. demo_frame_s0's legacy inline path handles
+// s0 preload synchronously (no task-1 spawn).
+static void run_demo_body(Core* c, int i, bool demo_fresh) {
   if (demo_fresh) c->engine.demo.stageMain();
   uint16_t sm48v = c->mem_r16(c->mem_r32(0x1f800138u) + 0x48);
   bool defer_leave = (sm48v == 5 && !demo_fresh
@@ -207,8 +182,7 @@ static StanzaResult run_demo_stanza(Core* c, int i, uint32_t base, uint32_t st,
   static_cast<R3000&>(*c) = c->game->sched.task_ctx[i];
   c->game->sched.in_stage = 1;
   if (setjmp(c->game->sched.yield_jmp) == 0) {
-    if (c->game->pc_skip) run_demo_body_skip(c, i, demo_fresh);
-    else                   run_demo_body_faithful(c, i, demo_fresh);
+    run_demo_body(c, i, demo_fresh);   // reached only under pc_skip (fiber handles pc_faithful)
   } else if (cfg_dbg("demo")) {
     static int w = 0; if (!w++) fprintf(stderr, "[demo] caught a substate yield (async CD not yet "
                                                 "owned native+sync) — frontier\n");
@@ -398,7 +372,7 @@ static StanzaResult run_coro_fiber_stanza(Core* c, int i, uint32_t base, uint32_
 static StanzaResult run_stage0_step_stanza(Core* c, int i, uint32_t base, uint32_t st,
                                            int native_content) {
   if (!(native_content && st == 2 && c->game->sched.task_started[i]
-        && c->mem_r32(base + 0xc) == 0x8010649Cu && c->game->sched.stage0_step[i] < 7))
+        && c->mem_r32(base + 0xc) == 0x8010649Cu && c->game->sched.stage0_step[i] < 5))
     return STANZA_NOT_MINE;
   c->mem_w16(base, 4);
   c->mem_w32(CUR_TASK, base);
