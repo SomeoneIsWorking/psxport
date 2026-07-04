@@ -1577,40 +1577,74 @@ static bool resolve_via_libcd(Core* c, uint32_t name_ptr, uint32_t buf,
 static constexpr uint32_t kDoneFlagAddr    = 0x1F80019Bu;
 static constexpr uint32_t kTaskFlag2Global = 0x801FE0DDu;
 static constexpr uint32_t kTaskFlag3Global = 0x801FE0DEu;
-static void sync_preload_spawn(Core* c, uint32_t task1_entry, uint8_t flag2, uint8_t flag3) {
+// substrate_bd4_regs: OLD s0..s3 + ra to spill in FUN_80044BD4's prologue at sp+16..+32.
+// From RE of START.BIN state-machine dispatch at 0x80106744-0x801067F0 (sm[0x48] state 0 case
+// at 0x801067A0): startBinStage's file-table build leaves s0=3, s1=2, s2=1, s3=5 (three
+// `addiu s0/s1/s2 imm` constants at 0x8010672C..0x80106734, s3=5 from the exit of the
+// 5-iter XA loop 3), and the `jal 0x80044BD4` at 0x801067A0 sets ra=0x801067A4.
+struct SubstrateBd4Regs {
+  uint32_t s0, s1, s2, s3, ra;
+};
+// ra = 0x801067A8 = PC+8 of the `jal 0x80044BD4` at 0x801067A0 (MIPS jal saves return AFTER
+// the branch-delay slot, not PC+4). The delay slot at 0x801067A4 is `sh $zero, 0x4a($t0)`.
+static constexpr SubstrateBd4Regs kBd4RegsStartBinState0 = { 3u, 2u, 1u, 5u, 0x801067A8u };
+
+static void sync_preload_spawn(Core* c, uint32_t task1_entry, uint8_t flag2, uint8_t flag3,
+                               const SubstrateBd4Regs& bd4_regs = kBd4RegsStartBinState0) {
   c->mem_w8 (kDoneFlagAddr,    0);
   c->mem_w8 (kTaskFlag2Global, flag3);
   c->mem_w8 (kTaskFlag3Global, flag2);
   native_task_spawn(c, 1, task1_entry);
 
-  // Slip #6 byte-match: substrate FUN_80044BD4 calls FUN_80051F80(1) in a wait-loop while
-  // done_flag==0. Each iteration's writes:
-  //   sp -= 24 ; sw ra, 16(sp)      (ra = 0x80044CA8, return after `jal 0x80051F80`)
-  //   task[0]+2 = 1 ; task[0]+0 = 1 (SLEEPING) ; ChangeThread ; ... ; sp += 24
-  // Task-1's substrate FUN_80044F58 runs synchronously (CD reads overridden to sync via
-  // cd_override.cpp:338), completes in ONE fiber slice, and sets done_flag=1 + calls
-  // FUN_80051FB4 (terminal yield). So on the NEXT scheduler tick task-0 fiber's wait loop reads
-  // done_flag=1 and exits. Under normal fiber flow the wait loop iterates 4× (auto-diagnosis-
-  // measured) before done_flag=1 sticks, and every iteration writes the SAME value 0x80044CA8 to
-  // the SAME sp+16 address — so memory content matches if we emit ONE fake yield with matching
-  // sp descent (startBinStage 456 + FUN_80044BD4 40 + FUN_80051F80 24 = 520) + matching ra.
-  // task[0]+0/+2 writes are the SLEEPING state — FUN_800506D0 (game_tomba2.cpp:frameUpdate) will
-  // decrement +2 and re-arm +0 next frame; under our native path task-0 doesn't actually yield,
-  // so we leave task[0]+0 alone (only the stack scratch matters for byte match here).
+  // Slip #6 byte-match: reproduce three layers of substrate stack writes so B-vs-A matches
+  // byte-for-byte across FUN_80044BD4 + its sub-calls at their absolute guest addresses.
   //
-  // Also reproduce FUN_80051F14's `sw ra, 20(sp)` prologue (spawn primitive's own stack scratch).
-  // FUN_80051F14 is called from FUN_80044BD4 with ra=0x80044C50 (return after `jal 0x80051F14`)
-  // at sp=FUN_80044BD4_sp - 24. sp+20 = 0x801FE80C. Substrate writes 0x80044C50 there.
-  // Auto-diagnosis confirmed: pc=0x80051F14 ra=0x80044C50 val=0x80044C50 hits=3.
+  // LAYER 1 — FUN_80044BD4's OWN prologue (sp descent 40, spills at sp+16..+32):
+  //   0x80044BE0  sw s2, 24(sp)  ← spills OLD (caller's) s2
+  //   0x80044BE8  sw s3, 28(sp)  ← OLD s3
+  //   0x80044BF0  sw s1, 20(sp)  ← OLD s1
+  //   0x80044BF8  sw s0, 16(sp)  ← OLD s0
+  //   0x80044C04  sw ra, 32(sp)  ← ra (delay slot, always executed)
+  // The OLD s0..s3, ra values come from the substrate's register state at the moment of the
+  // `jal 0x80044BD4` — see SubstrateBd4Regs. For the state-0 call site (0x801067A0) that's
+  // {3, 2, 1, 5, 0x801067A4}.
   //
-  // And FUN_80052010's `sw ra, 20(sp)` at ra=0x80044C2C. sp+20 = same address 0x801FE80C.
-  // Substrate's LAST write to 0x801FE80C is FUN_80051F14's (since it's called AFTER FUN_80052010).
+  // LAYER 2 — FUN_80052010(2) sub-call from FUN_80044BD4 at 0x80044C24 (sp -= 24, sp+20 = ra):
+  //   ra = 0x80044C2C (return after `jal 0x80052010`)
+  // The FUN_80052010 body ALSO writes sp+16 (its own sw s0 spill), but FUN_80051F14 (called
+  // AFTER it at the same sub-frame sp) overwrites both sp+16 AND sp+20, so we skip modelling
+  // FUN_80052010's writes — they are shadowed.
+  //
+  // LAYER 3 — FUN_80051F14(1, task1_entry) sub-call from FUN_80044BD4 at 0x80044C48:
+  //   sp -= 24 ; sw s0, 16(sp) ; sw ra, 20(sp)   ; ra = 0x80044C50
+  //   s0 at moment of call = param_3 = flag2 (FUN_80044BD4 renamed s0 to a2 in its prologue).
+  //
+  // LAYER 4 — wait loop FUN_80051F80(1) from FUN_80044BD4 at 0x80044CB0 (mode != 1 path):
+  //   sp -= 24 ; sw ra, 16(sp)                    ; ra = 0x80044CA8
+  //   Each iteration OVERWRITES sp+16 (with same value 0x80044CA8), so one write suffices.
+  //   FUN_80051F80 does NOT touch sp+20 — layer 3's write there survives.
+  //
+  // Task-1 fiber runs FUN_80044F58 which sets done_flag=1 synchronously (CD reads sync via
+  // cd_override.cpp). On A native we don't actually yield, so we compress the loop into one
+  // fake iteration. task[0]+0/+2 SLEEPING flag not reproduced (FUN_800506D0 decrements +2
+  // next frame anyway; only stack scratch matters for byte match at f0).
   const uint32_t save_sp = c->r[29];
   const uint32_t save_ra = c->r[31];
-  c->r[29] -= (40 + 24);                          // FUN_80044BD4 40 + FUN_80051F80 24 sub-frames
-  c->r[31] = 0x80044CA8u;
-  c->mem_w32(c->r[29] + 16, c->r[31]);            // sw ra, 16(sp) at 0x801FE808 (FUN_80051F80 spill)
-  c->mem_w32(c->r[29] + 20, 0x80044C50u);         // sw ra, 20(sp) at 0x801FE80C (FUN_80051F14 spill)
+
+  // Layer 1: descend into FUN_80044BD4's own frame (40 B) and emit its prologue spills.
+  c->r[29] -= 40;                                 // FUN_80044BD4 frame sp
+  c->mem_w32(c->r[29] + 16, bd4_regs.s0);         // sw s0, 16(sp)
+  c->mem_w32(c->r[29] + 20, bd4_regs.s1);         // sw s1, 20(sp)
+  c->mem_w32(c->r[29] + 24, bd4_regs.s2);         // sw s2, 24(sp)
+  c->mem_w32(c->r[29] + 28, bd4_regs.s3);         // sw s3, 28(sp)
+  c->mem_w32(c->r[29] + 32, bd4_regs.ra);         // sw ra, 32(sp)
+
+  // Layers 3+4: descend further into FUN_80051F14/FUN_80051F80's shared sub-frame (24 B)
+  // and emit the sub-call spills (last-writer-wins at sp+16, layer-3-only at sp+20).
+  c->r[29] -= 24;                                 // FUN_80051F80 sub-frame sp
+  c->mem_w32(c->r[29] + 16, 0x80044CA8u);         // sw ra, 16(sp) — FUN_80051F80 spill (last write)
+  c->mem_w32(c->r[29] + 20, 0x80044C50u);         // sw ra, 20(sp) — FUN_80051F14 spill (survives)
+
   c->r[29] = save_sp;
   c->r[31] = save_ra;
 }
@@ -1692,20 +1726,26 @@ void Engine::startBinStageFaithful() {
       c->mem_w32(L.dest_table + i * 8 + 4, size);
     }
   }
+  // Slip #6 byte-match: substrate XA lookups (0x80106658..0x80106728) use a SINGLE FIXED
+  // buffer at `sp+0x198` — NOT the per-iter `cdlfile_buf_base + i*24` used by the earlier
+  // file-table loops. All three XA calls (VOICE/DEMO/BGM) overwrite the same buffer, and
+  // slot 0..2 of the file-table window (cdlfile_buf_base+0..48) stay owned by loop 3.
+  // Native previously reused cdlfile_buf_base for XA which clobbered slot 0..2 with XA
+  // dir entries → 78-byte diff at 0x801FE848 onwards. Use sp+0x198 to match substrate.
+  const uint32_t xa_buf = c->r[29] + 0x198;
   for (uint32_t i = 0; i < 3; i++) {
     const auto& X = kStartBinXa[i];
     uint32_t lba = 0, size = 0;
-    // Slip #6 byte-match: substrate startBinStage sets s0 = sp+408 (the CdlFILE buffer top pointer)
-    // and s3 = iter counter BEFORE each CdSearchFile jal. CdSearchFile's prologue spills s0, s3
-    // (and others) to guest stack. Set the substrate's per-iter register state so the spills
-    // match. See scratch/decomp/f0_writers.c + START.BIN disas around 0x801066F0.
-    c->r[16] = c->r[29] + 408;                          // s0 = sp + 408 (per substrate 0x801066E0)
-    c->r[19] = i;                                        // s3 = iter
+    // Set the substrate's per-iter register state before the jal so CdSearchFile's prologue
+    // spills match. Substrate reg state at 0x80106658 (start of XA sequence): s0=sp+0x198,
+    // s1=name-table ptr (loaded per iter), s2=1, s3=5 (unchanged since loop 3 exit).
+    c->r[16] = xa_buf;                                     // s0 = sp+0x198 (fixed XA buf)
+    c->r[17] = 0x80106468u + i * 16;                       // s1 = name-table ptr (per iter)
     if (i == 2) {
-      c->r[17] = 0x8010648Cu;                            // s1 = 0x8010648C (last XA, substrate 0x801066EC)
-      c->r[31] = 0x801066F8u;                            // ra = 0x801066F8 (jal return)
+      c->r[17] = 0x8010648Cu;                              // s1 = 0x8010648C (per substrate 0x801066EC)
+      c->r[31] = 0x801066F8u;                              // ra = 0x801066F8 (jal return)
     }
-    resolve_via_libcd(c, X.name_ptr, cdlfile_buf_base + i * 24, &lba, &size);
+    resolve_via_libcd(c, X.name_ptr, xa_buf, &lba, &size);
     c->mem_w32(X.lba_dest, lba);
   }
   // Substrate order: FUN_80044BD4 spawn+wait fires BEFORE sp restore (it descends 40 more B from
@@ -1714,8 +1754,10 @@ void Engine::startBinStageFaithful() {
   // = startBinStage sp - FUN_80044BD4 40 - FUN_80051F80 24 = saved_sp - 456 - 40 - 24 = 0x801FE7F8
   // when saved_sp = 0x801FEA00. sync_preload_spawn adds the -64 descent itself.
   sync_preload_spawn(c, /*task1_entry=*/0x80044F58u, 0, 0);
-
-  c->r[29] = saved_sp;   // restore sp; the 456 B below stay written (matches substrate scratch)
+  // NOTE: the substrate's tail `jal 0x80051F80(1)` at 0x801067E4 (outer state-machine yield) is
+  // NOT emitted here — its write lands ONE tick later on B (task-0 resumes from FUN_80051F80's
+  // inner yield, exits FUN_80044BD4, then runs the tail-jal). On A native we emit that write in
+  // Engine::stage0Advance step 0 to match cadence. See docs/findings/sbs.md Slip #6.
 
   startBinCommonAdvance(c, asset, c->rng);
 
@@ -1779,8 +1821,16 @@ int Engine::stage0Advance(uint8_t& step) { Core* c = core;
   uint32_t task = c->mem_r32(CUR_TASK);
   switch (step) {
     // State 0 work (preloadTexgroup + sm[0x48]:=1 + RNG stamp) now fires unconditionally at
-    // startBinStage exit — game logic, not gated. This tick is a pure cadence pad.
-    case 0: break;
+    // startBinStage exit. This tick also emits the substrate's OUTER FUN_80051F80(1) yield
+    // write (Slip #6 byte-match): on B, this is the tick where task-0 resumes from the inner
+    // wait-loop yield, exits FUN_80044BD4, runs `jal 0x80051F80(1)` at 0x801067E4, and writes
+    // ra=0x801067EC at absolute (startBinStage_sp - 24) + 16 = startBinStage_sp - 8. Native
+    // r[29] here = the task's guest sp (task+8) — same as startBinStage_sp at that moment.
+    case 0: {
+      uint32_t start_bin_sp = c->mem_r32(task + 8) - 456;    // startBinStage's own sp after `addiu sp, -0x1c8`
+      c->mem_w32(start_bin_sp - 8, 0x801067ECu);              // FUN_80051F80 outer-yield ra spill
+      break;
+    }
     case 1:
       /* Slip #5: recomp gen_func_8010649C hits its second FUN_80044BD4 spawn around this scheduler
        * tick. */
