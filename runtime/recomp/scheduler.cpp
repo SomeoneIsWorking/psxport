@@ -257,12 +257,11 @@ static StanzaResult run_game_stanza(Core* c, int i, uint32_t base, uint32_t st,
 // can't reproduce. Under mIsFaithful, letting STAGE-0 route to fiber makes A run the exact same
 // substrate code B does — byte-identical stack scratch by construction, at the cost of skipping
 // A's native fresh entry (which reappears once mIsFaithful is off / SBS is not gameplay mode).
-static bool has_native_handler_for_entry(Core* c, uint32_t entry_pc) {
-  if (entry_pc == 0x801062E4u) return true;   // DEMO
-  if (entry_pc == 0x80109164u) return true;   // SOP area-load
-  if (entry_pc == 0x8010637Cu) return true;   // GAME
-  if (entry_pc == 0x8010649Cu) return !c->game->mIsFaithful;   // STAGE-0 → fiber under faithful
-  return false;
+static bool has_native_handler_for_entry(Core* /*c*/, uint32_t entry_pc) {
+  return entry_pc == 0x801062E4u   // DEMO
+      || entry_pc == 0x80109164u   // SOP area-load
+      || entry_pc == 0x8010637Cu   // GAME
+      || entry_pc == 0x8010649Cu;  // STAGE-0 START.BIN
 }
 
 // FULL-PSX (psx_fallback) task — thread-fiber coroutine. The substrate can't re-enter mid-fn, so
@@ -332,8 +331,6 @@ static StanzaResult run_stage0_step_stanza(Core* c, int i, uint32_t base, uint32
   if (!(native_content && st == 2 && c->game->sched.task_started[i]
         && c->mem_r32(base + 0xc) == 0x8010649Cu && c->game->sched.stage0_step[i] < 7))
     return STANZA_NOT_MINE;
-  // Under mIsFaithful, STAGE-0 routes through the fiber stanza above (byte-clean stack scratch).
-  if (c->game->mIsFaithful) return STANZA_NOT_MINE;
   c->mem_w16(base, 4);
   c->mem_w32(CUR_TASK, base);
   c->game->sched.cur_slot = i;
@@ -401,10 +398,8 @@ static StanzaResult run_generic_dispatch_stanza(Core* c, int i, uint32_t base, u
       c->engine.stageMain();
       start = c->coro_redirect_pc ? c->coro_redirect_pc : c->r[31];
       c->coro_redirect_pc = 0;
-    } else if (native_content && fresh && resume_pc == 0x8010649Cu && !c->game->mIsFaithful) {
+    } else if (native_content && fresh && resume_pc == 0x8010649Cu) {
       c->engine.startBinStage();                                 // STAGE-0 fresh; skip rec_coro_run
-      // Under mIsFaithful the fiber stanza above handles STAGE-0 (byte-clean substrate scratch);
-      // we won't reach this branch, but the `!mIsFaithful` gate is defensive.
       c->game->sched.stage0_step[i] = 0;
       c->game->sched.task_ctx[i] = static_cast<R3000&>(*c);
       c->mem_w16(base, 2);
