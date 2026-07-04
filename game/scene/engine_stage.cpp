@@ -1887,16 +1887,18 @@ int Engine::stage0Advance(uint8_t& step) { Core* c = core;
     }
     case 4:                                        c->mem_w16(task + 0x48, 3); break;   // state 2 -> 3
     case 5: {
-      // Slip #8 byte-match: substrate state 3 (`jal 0x80052078(1)`) on B calls FUN_800450BC
-      // which does cd_loadfile(0x80106228, DEMO.BIN LBA, size) — this write to 0x800BE0E0
-      // (last-sector position tracker) fires at THIS scheduler tick on B, one tick earlier
-      // than native's step-6 placement of startStage(1). Emit just the cd_loadfile ahead of
-      // step 6 so 0x800BE0E0 matches at f6; leave the actual stage swap (task+0xc entry
-      // rewrite + task state=3 write) for step 6 to preserve the task-slot cadence.
-      uint32_t lba  = c->mem_r32(0x800BE1E0u + 1 * 8);      // DEMO.BIN LBA (STAGE_FILE_TBL[1])
-      uint32_t size = c->mem_r32(0x800BE1E0u + 1 * 8 + 4);
-      extern void cd_loadfile_native(Core*, uint32_t, uint32_t, uint32_t);
-      cd_loadfile_native(c, 0x80106228u, lba, size);
+      // Slip #8/#9 byte-match: substrate state 3 (`jal 0x80052078(1)` at 0x801067DC) →
+      // FUN_80052078 → FUN_800450BC(task+0x18, 1) → cd_loadfile(0x80106228, DEMO.BIN LBA,
+      // size) → FUN_80051F80(1) inner yield. All the above lands on B at THIS scheduler
+      // tick. Dispatch the SUBSTRATE FUN_800450BC directly (instead of just the sync
+      // cd_loadfile_native) so its stack scratch spills (sp descent 32, sw s0/s1/ra at
+      // sp+16/20/24) reproduce byte-identical alongside the 0x800BE0E0 stamp. The
+      // subsequent FUN_80051F80(1) yield writes 0x80045118 (ra of the `jal 0x80051F80` at
+      // 0x80045110) at FUN_80051F80's sp+16.
+      uint32_t task = c->mem_r32(CUR_TASK);
+      c->r[4] = task + 0x18;         // a0 = task + 0x18 (task's restart PC/gp fields ptr, per FUN_80052078)
+      c->r[5] = 1;                    // a1 = stage index (1 = DEMO)
+      rec_dispatch(c, 0x800450BCu);
       break;
     }
     case 6:                                                                              // state 3
