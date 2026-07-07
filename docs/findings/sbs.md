@@ -5,6 +5,25 @@ recomp_path (substrate). Both cores get `pc_skip=false` (faithful branch of ever
 Divergences are FATAL — no residual allowlist. Older notes below refer to the pre-rename
 `mIsFaithful` flag; that's `!pc_skip`.
 
+## Faithful GAME-stage fiber + ra sweep (2026-07-07, 4f0afba) — autonav frontier f28 = native submode0 vs guest
+
+GAME stage runs on the stage fiber (Engine::stageBodyFaithful); runGameStanza is pc_skip-only.
+Two divergence classes closed en route, both caught by the last-writer map in one run each:
+- **pc_render guest write** (f26): submit.cpp:537 dispatches guest transform-setup 0x800597AC
+  from the render walk — guest-stack spills from the READ-ONLY overlay. Filed as issue #32,
+  fix deferred (render directive); strict compares run PSXPORT_SBS_FORCE_PSX_RENDER=1 until
+  pc_render is clean.
+- **Missing guest call-site ra** (f27 + menu wrappers): native handlers dispatching leaves with
+  r31=DEAD0000 — the callee prologue spills r31, so every native dispatch must set the RE'd jal
+  site first (s48_0/s48_1, demo s2/s3/s6 wrappers + inner cf2c/750d8/106824/106690 sites).
+
+**OPEN FRONTIER f28 (autonav/New Game):** sm states lockstep-identical, but A's frame() takes
+the NATIVE submode0 (SOP intro, s48==2/s4a==0) while B runs guest 0x80108784 (B writer
+pc=0x8010882C ra=0x801087CC). Next arc: faithful conversion of the s48==2 sub-handlers
+(Engine::submode0 SOP intro, submode1 field area machine) — same recipe: guest frame
+discipline + call-site ras + organic yields on the fiber; per the standing directive these are
+GAME/SOP engine code and must stay native (no substrate routing).
+
 ## Faithful IDLE LOOP zero-diff 137k+ frames (2026-07-07, 2acc712) — frontier now GAME-stage entry (autonav f26)
 
 With the attract s7 dispatching the real 0x80106C24 phase machine (its FUN_80044BD4 area-load
