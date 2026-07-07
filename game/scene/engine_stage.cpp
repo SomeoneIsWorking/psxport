@@ -1696,7 +1696,6 @@ void Engine::areaSlotAckIfMatch(uint32_t arg) {
 static const uint32_t STAGE_ENTRY_TBL = 0x800a3ecc;  // [0]=0x8010649c [1]=0x801062e4 [2]=0x8010637c
 static const uint32_t STAGE_FILE_TBL  = 0x800be1e0;  // {LBA,size} per stage, stride 8
 
-void cd_loadfile_native(Core* c, uint32_t dest, uint32_t lba, uint32_t size);   // cd_override.cpp (sync 0x8001DB8C/DC40)
 
 // FUN_800450bc: load the stage overlay (if any) and point the task's restart entry at the stage code.
 static void native_load_overlay(Core* c, uint32_t taskfields, uint32_t stage) {
@@ -1706,7 +1705,7 @@ static void native_load_overlay(Core* c, uint32_t taskfields, uint32_t stage) {
   } else {
     uint32_t lba  = c->mem_r32(STAGE_FILE_TBL + stage * 8);
     uint32_t size = c->mem_r32(STAGE_FILE_TBL + stage * 8 + 4);
-    cd_loadfile_native(c, 0x80106228, lba, size);    // = FUN_8001db8c / cd_loadfile
+    c->game->cd.loadFile(0x80106228, lba, size);    // = FUN_8001db8c / cd_loadfile
     // FUN_80051f80(1) cooperative yield is a no-op with the native scheduler — skipped.
     entry = c->mem_r32(STAGE_ENTRY_TBL + stage * 4);
   }

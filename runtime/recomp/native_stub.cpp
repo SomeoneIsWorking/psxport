@@ -3,11 +3,11 @@
 // The REAL PSX boot is: BIOS -> boot executable (the SCUS stub) -> stub draws the SCEA
 // "Sony Computer Entertainment America Presents" screen, then BIOS-LoadExec's cdrom:\MAIN.EXE;1.
 // We no longer interpret that stub: its CD/VSync busy-waits depended on the override mechanism
-// (removed 2026-06-22, top-down PC-driven rebuild). Instead native_stub_run renders SCEA PC-native
+// (removed 2026-06-22, top-down PC-driven rebuild). Instead BootStub::run renders SCEA PC-native
 // from a baked asset (native_scea_splash + gpu_scea_load_asset), then loads MAIN.EXE itself and
 // enters the native MAIN boot (native_boot.cpp), which takes over for the intro FMVs + the menu.
 #include "core.h"
-#include "game.h"   // StubState lives on Game; reached via c->game->stub (de-globalization, 2026-06-19)
+#include "game.h"   // class BootStub lives on Game (game->stub); this TU implements its run()
 #include "c_subsys.h"
 #include "cfg.h"
 #include "scea_asset.h"   // SCEA_DISP_W/H (the decoded RGBA splash dims)
@@ -44,15 +44,11 @@ static uint32_t load_exe_image(const char* path, Core* c) {
   return entry;
 }
 
-// Boot-stub state (vblank counter, MAIN.EXE path, LoadExec longjmp target) now lives on the
-// instance: c->game->stub.{vblank,main_path,exit_jmp}. The former g_boot_ctx global is gone — every
-// user is an override that already carries the boot Core* c, so it reloads MAIN into `c` directly.
-
 // PC-native SCEA license screen (replaces the interpreted PSX boot stub SCUS_944.54). The stub's
 // only jobs were: draw SCEA, then CdInit + LoadExec MAIN. Its CD/VSync waits used to be unstalled by
 // the override mechanism (now removed), so we no longer interpret it. We render SCEA directly from the
 // baked asset (scea_asset.h, via gpu_scea_load_asset) with a fade-in over a fixed duration, skippable
-// with Start (loading is PC-native, so it IS skippable now), then native_stub_run LoadExec's MAIN.
+// with Start (loading is PC-native, so it IS skippable now), then BootStub::run LoadExec's MAIN.
 // Fade envelope over the splash: fade in, hold at full, fade back out (the PSX SCEA does the same).
 // Durations measured from the REAL SCUS_944.54 stub vs the oracle (docs/journal.md later-46/48):
 // total ~305 frames (~5.1s @ 60Hz) — a ~57-frame linear grey->white fade-in, a long full-bright hold,
@@ -81,7 +77,7 @@ static void native_scea_splash(Core* c) {
   void gpu_gpu_present_image(Core*, const uint8_t*, int, int, float);
   void gpu_pace_frame(Core*); void gpu_clear_display(Core*);
   // Decode the baked SCEA asset into a PC-native RGBA8 screen image ONCE (no PSX VRAM / GP0 / CLUT path).
-  static uint8_t scea_rgba[SCEA_DISP_W * SCEA_DISP_H * 4];
+  uint8_t* scea_rgba = (uint8_t*)malloc((size_t)SCEA_DISP_W * SCEA_DISP_H * 4);
   gpu_scea_decode_rgba(scea_rgba);
   int dumped = 0;
   for (int f = 0; f < SCEA_FRAMES; f++) {
@@ -105,16 +101,18 @@ static void native_scea_splash(Core* c) {
     watchdog_pet();
   }
   gpu_clear_display(c);                                   // hard black after the fade-out (clean cut to FMV)
+  free(scea_rgba);
 }
 
-void native_stub_run(Core* c, const char* main_exe_path) {
-  c->game->stub.main_path = main_exe_path;
+void BootStub::run(const char* main_exe_path) {
+  Core* c = &game->core;
+  main_path = main_exe_path;
   interp_trace_open(cfg_str("PSXPORT_INTERP_TRACE"));
 
   // PC-native boot: render SCEA natively (no interpreted PSX stub), then load MAIN.EXE ourselves and
   // enter the native MAIN boot. (The PSX stub SCUS_944.54 is no longer run — see native_scea_splash.)
   native_scea_splash(c);
-  load_exe_image(c->game->stub.main_path, c);   // load MAIN.EXE image + initial registers into the Core
+  load_exe_image(main_path, c);   // load MAIN.EXE image + initial registers into the Core
   fprintf(stderr, "[stub] entering native MAIN boot\n");
   native_boot_run(c);
 }

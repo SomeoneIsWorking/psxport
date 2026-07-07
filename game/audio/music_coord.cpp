@@ -21,10 +21,6 @@
 #include <string.h>        // memcmp (fieldBgmDirector bundle validation)
 #include <stdlib.h>        // atoi (PSXPORT_FIELD_SONG)
 
-// cd_override.cpp: enable/disable CD->SPU mixing (libsnd SpuSetCommonAttr via FUN_8001cf00(1)).
-// Stays defined there (still called locally by voice_play); tick() below also needs it for
-// the resumed-music path, so it is non-static there rather than duplicated here.
-void cd_to_spu_mix(Core* c, int on);
 void rec_dispatch(Core*, uint32_t);   // still-substrate leaves called from voiceMixTick
 
 bool MusicCoord::dialogToneActive() {
@@ -152,7 +148,7 @@ void MusicCoord::tick() {
   } else if (c->game->cd.pending_music && !xa_stream_is_active()) {
     xa_stream_play(c->game->cd.pm_chan, c->game->cd.pm_start, c->game->cd.pm_end, 1);   // dialog over: resume ingame music
     c->mem_w16(0x801fe0e0, 2);
-    cd_to_spu_mix(c, 1);
+    c->game->cd.toSpuMix(1);
     musicFadeIn();                                    // resumed music fades in from 0 (no voice now)
   }
 }

@@ -1,5 +1,5 @@
 #include "core.h"
-#include "game.h"   // FmvState lives on Game; reached via core->game->fmv (de-globalization, 2026-06-19)
+#include "game.h"   // class Fmv lives on Game (game->fmv); this TU implements its methods
 #include "c_subsys.h"
 // Native FMV player for the Tomba!2 PC port.
 //
@@ -38,7 +38,7 @@
 //   [4..5] qscale (quantization scale, applied as the DC/AC QScale)
 //   [6..7] BS version (2 here)
 //
-// Self-contained module; the PM wires native_fmv_play() into the game flow.
+// Self-contained module; the boot/front-end sequencers call game->fmv.play().
 #include <stdint.h>
 #include "cfg.h"
 #include <stdio.h>
@@ -67,11 +67,15 @@ void gpu_native_init(void);
 
 static int fmv_resolve_path(const char* path, uint32_t* out_lba, uint32_t* out_size);
 
-// Start-skip edge state now lives on the instance: core->game->fmv.start_prev. 1 = Start was down on
-// the previous polled frame; edge-detected so a Start held across one movie doesn't skip the next.
 
 #define SECTOR_USER   2048u
 #define SUBHDR_LEN    32u
+
+// decode-scratch sizes (heap members on Fmv, allocated on first play)
+#define FMV_PAYLOAD_BYTES (512u * 1024u)   // concatenated BS payload
+#define FMV_CODES_MAX     (512u * 1024u)   // MDEC run-level codes
+#define FMV_INBUF_WORDS   (128u * 1024u)   // MDEC input words
+#define FMV_OUTBUF_WORDS  (512u * 1024u)   // MDEC output words
 #define MDEC0         0x1F801820u   // data port
 #define MDEC1         0x1F801824u   // control/status port
 
@@ -273,9 +277,8 @@ static int bs_decode_ac(BitReader* b, int* run, int* level) {
 
 // Decode an entire BS frame into the MDEC run-level code stream.
 // Returns number of 16-bit codes written, or negative on error.
-// Non-static so the FMV compare harness (tools/fmv_compare) can call our exact VLC path.
-int bs_decode_frame(const uint8_t* payload, uint32_t payload_size,
-                    int width, int height, uint16_t* codes, int max_codes) {
+int Fmv::bsDecodeFrame(const uint8_t* payload, uint32_t payload_size,
+                       int width, int height, uint16_t* codes, int max_codes) {
   if (payload_size < 8) return -1;
   uint16_t bs_q = (uint16_t)(payload[4] | (payload[5] << 8));
   int qscale = bs_q & 0x3F;
@@ -283,8 +286,7 @@ int bs_decode_frame(const uint8_t* payload, uint32_t payload_size,
   if (cfg_dbg("fmv")) {
     uint16_t magic = (uint16_t)(payload[2] | (payload[3] << 8));
     uint16_t ver   = (uint16_t)(payload[6] | (payload[7] << 8));
-    static int once = 0;
-    if (!once) { once = 1;
+    if (!bs_hdr_logged) { bs_hdr_logged = 1;
       fprintf(stderr, "[fmv] BS hdr: nwords=%u magic=%04x qscale=%d version=%u\n",
               (unsigned)(payload[0] | (payload[1] << 8)), magic, qscale, ver); }
   }
@@ -308,7 +310,6 @@ int bs_decode_frame(const uint8_t* payload, uint32_t payload_size,
     if (out >= max_codes) return out;
     codes[out++] = (uint16_t)(((qscale & 0x3F) << 10) | (dc & 0x3FF));
 
-    static int dconly = -1;
     if (dconly < 0) dconly = cfg_on("PSXPORT_FMV_DCONLY") ? 1 : 0;
     for (;;) {
       int run, level;
@@ -426,8 +427,8 @@ static void mdec_upload_tables(void) {
 // ====================================================================================
 // MDEC feed (16bpp) + RGB555 extraction
 // ====================================================================================
-int mdec_decode_to_rgb555(const uint16_t* codes, int ncodes,
-                          int width, int height, uint16_t* pixels) {
+int Fmv::mdecDecodeToRgb555(const uint16_t* codes, int ncodes,
+                            int width, int height, uint16_t* pixels) {
   mdec_write(MDEC1, 0x80000000);              // reset
   mdec_write(MDEC1, (1u << 30) | (1u << 29)); // enable DMA in + out
   mdec_upload_tables();                        // load quant + IDCT (else output is black)
@@ -437,8 +438,8 @@ int mdec_decode_to_rgb555(const uint16_t* codes, int ncodes,
   uint32_t cmd = 0x30000000u | (0x3u << 27) | (uint32_t)(nwords & 0xFFFF);
   mdec_write(MDEC0, cmd);
 
-  static uint32_t inbuf[128 * 1024];
-  if (nwords > (int)(sizeof(inbuf)/sizeof(inbuf[0]))) return -1;
+  if (!inbuf) inbuf = (uint32_t*)malloc(FMV_INBUF_WORDS * 4);
+  if (nwords > (int)FMV_INBUF_WORDS) return -1;
   for (int i = 0; i < nwords; i++) {
     uint16_t lo = codes[i * 2];
     uint16_t hi = (i * 2 + 1 < ncodes) ? codes[i * 2 + 1] : 0xFE00;
@@ -451,8 +452,8 @@ int mdec_decode_to_rgb555(const uint16_t* codes, int ncodes,
   // (on real PSX the game DMAs each macroblock to its own computed address). So we drain
   // the whole stream linearly, then TILE each 16x16 block into the width x height frame.
   int total_words = (width * height) / 2;     // 16bpp: 2 px/word
-  static uint32_t outbuf[512 * 1024];
-  if (total_words > (int)(sizeof(outbuf)/sizeof(outbuf[0]))) return -2;
+  if (!outbuf) outbuf = (uint32_t*)malloc(FMV_OUTBUF_WORDS * 4);
+  if (total_words > (int)FMV_OUTBUF_WORDS) return -2;
   memset(outbuf, 0, (size_t)total_words * 4);
 
   // CRITICAL: the MDEC InFIFO is small (~0x20 words). Pushing the whole frame at once would
@@ -615,73 +616,78 @@ int xa_decode_sector(const uint8_t* raw, int16_t* out, int16_t hist[2][2], int* 
 // ---- FMV audio output (dedicated SDL device at the XA rate) + audio-master pacing --------
 #ifdef PSXPORT_SDL
 #include <SDL3/SDL.h>
-// shared: host audio-output singleton (NOT guest machine state). One physical speaker → one device;
-// a lockstep dual-core RAM diff is unaffected by it, so it stays file-scope shared by design. SDL3
-// push-model audio stream bound to the default playback device.
-static SDL_AudioStream* s_fmv_stream = 0;
-static int s_fmv_freq = 0, s_fmv_bytes_per_frame = 4;   // S16 stereo
-static void fmv_audio_open(int freq) {
+// SDL3 push-model audio stream bound to the default playback device, opened at the movie's XA rate.
+void Fmv::audioOpen(int freq) {
+  SDL_AudioStream* st = (SDL_AudioStream*)stream;
   if (cfg_on("PSXPORT_NOAUDIO")) return;
-  if (s_fmv_stream && s_fmv_freq == freq) { SDL_ClearAudioStream(s_fmv_stream); return; }
-  if (s_fmv_stream) { SDL_DestroyAudioStream(s_fmv_stream); s_fmv_stream = 0; }
+  if (st && stream_freq == freq) { SDL_ClearAudioStream(st); return; }
+  if (st) { SDL_DestroyAudioStream(st); stream = st = 0; }
   if (!SDL_InitSubSystem(SDL_INIT_AUDIO)) return;
   SDL_AudioSpec spec; SDL_memset(&spec, 0, sizeof spec);
   spec.freq = freq; spec.format = SDL_AUDIO_S16; spec.channels = 2;
-  s_fmv_stream = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, NULL, NULL);
-  if (s_fmv_stream) { s_fmv_freq = freq; SDL_ResumeAudioStreamDevice(s_fmv_stream); }
+  st = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, NULL, NULL);
+  stream = st;
+  if (st) { stream_freq = freq; SDL_ResumeAudioStreamDevice(st); }
 }
-static void fmv_audio_queue(const int16_t* pcm, int frames) {
-  if (s_fmv_stream) SDL_PutAudioStreamData(s_fmv_stream, pcm, frames * 4);
+void Fmv::audioQueue(const int16_t* pcm, int frames) {
+  if (stream) SDL_PutAudioStreamData((SDL_AudioStream*)stream, pcm, frames * 4);   // S16 stereo
 }
-static uint32_t fmv_audio_backlog_bytes(void) {
-  return s_fmv_stream ? (uint32_t)SDL_GetAudioStreamQueued(s_fmv_stream) : 0;
-}
-static void fmv_audio_close(void) { if (s_fmv_stream) { SDL_ClearAudioStream(s_fmv_stream); } }
+void Fmv::audioClose() { if (stream) { SDL_ClearAudioStream((SDL_AudioStream*)stream); } }
 
 // Pace playback to the AUDIO/media clock: media_frames audio sample-pairs at `freq` Hz define
 // the elapsed media time; sleep until wall-clock catches up. This is the real PSX rate (the
 // fixed-15fps guess was too slow). Polls input and returns 1 if Start was pressed (skip).
 // uncapped (PSXPORT_FMV_FPS=0) disables pacing for fast headless dumps.
-static int fmv_pace(Core* core, long media_frames, int freq, uint32_t t0, int uncapped) {
-  core->game->pad.pollSdl();
-  int& start_prev = core->game->fmv.start_prev;
-  int pressed = ((core->game->pad.buttons & PAD_START) == 0) && !start_prev;
-  start_prev = (core->game->pad.buttons & PAD_START) == 0;
+int Fmv::pace(long media_frames, int freq, uint32_t t0, int uncapped) {
+  game->pad.pollSdl();
+  int pressed = ((game->pad.buttons & PAD_START) == 0) && !start_prev;
+  start_prev = (game->pad.buttons & PAD_START) == 0;
   if (uncapped || freq <= 0) return pressed;
   uint32_t target = (uint32_t)((long long)media_frames * 1000 / freq);
   while ((int)(SDL_GetTicks() - t0) < (int)target) {
     SDL_Delay(2);
-    core->game->pad.pollSdl();
-    if (((core->game->pad.buttons & PAD_START) == 0) && !start_prev) pressed = 1;
-    start_prev = (core->game->pad.buttons & PAD_START) == 0;
+    game->pad.pollSdl();
+    if (((game->pad.buttons & PAD_START) == 0) && !start_prev) pressed = 1;
+    start_prev = (game->pad.buttons & PAD_START) == 0;
   }
   return pressed;
 }
 #else
-static void fmv_audio_open(int freq) { (void)freq; }
-static void fmv_audio_queue(const int16_t* p, int n) { (void)p; (void)n; }
-static uint32_t fmv_audio_backlog_bytes(void) { return 0; }
-static void fmv_audio_close(void) {}
-static int fmv_pace(Core* core, long m, int f, uint32_t t, int u) { (void)core;(void)m;(void)f;(void)t;(void)u; return 0; }
+void Fmv::audioOpen(int freq) { (void)freq; }
+void Fmv::audioQueue(const int16_t* p, int n) { (void)p; (void)n; }
+void Fmv::audioClose() {}
+int Fmv::pace(long m, int f, uint32_t t, int u) { (void)m;(void)f;(void)t;(void)u; return 0; }
 #endif
+
+Fmv::~Fmv() {
+  free(payload_buf); free(codes_buf); free(pixels_buf);
+  free(inbuf); free(outbuf); free(xa_pcm);
+}
 
 // ====================================================================================
 // STR demux + top-level play
 // ====================================================================================
-int native_fmv_play_lba(Core* core, uint32_t lba, uint32_t size_bytes) {
+int Fmv::playLba(uint32_t lba, uint32_t size_bytes) {
+  Core* core = &game->core;
   // PSXPORT_SBS: the side-by-side debugger compares the FIELD (gameplay + render); the intro movies are
   // identical pre-field content, and this player is a BLOCKING decode loop whose Start-skip reads the raw
   // host pad (pad_poll_sdl), which the harness's auto-skip (repl-injected Start) can't drive — so leaving
   // it in would freeze both panes in the FMV. Skip it entirely (like a headless run does at the call site),
   // so the concurrent-lockstep nav reaches free-roam. Both cores skip identically, so they stay in step.
-  if (core->game && core->game->sbs) return 0;   // SBS: skip FMV (see comment above)
+  if (game->sbs) return 0;   // SBS: skip FMV (see comment above)
   gpu_native_init();
   mdec_init();
 
   uint32_t nsectors = (size_bytes + SECTOR_USER - 1) / SECTOR_USER;
-  static uint8_t  payload[512 * 1024];
-  static uint16_t codes[512 * 1024];
-  static uint16_t pixels[1024 * 512];
+  if (!payload_buf) {
+    payload_buf = (uint8_t*)malloc(FMV_PAYLOAD_BYTES);
+    codes_buf   = (uint16_t*)malloc(FMV_CODES_MAX * 2);
+    pixels_buf  = (uint16_t*)malloc(1024 * 512 * 2);
+    xa_pcm      = (int16_t*)malloc(4032 * 2 * 2);   // mono sectors yield up to 4032 frames (see xa_decode_sector)
+  }
+  uint8_t*  payload = payload_buf;
+  uint16_t* codes   = codes_buf;
+  uint16_t* pixels  = pixels_buf;
 
   int frames = 0;
   uint32_t sec = 0;
@@ -705,9 +711,8 @@ int native_fmv_play_lba(Core* core, uint32_t lba, uint32_t size_bytes) {
                       else if (cfg_on("PSXPORT_VK_HEADLESS")) uncapped = 1; }
   int xa_freq = 37800;
   int16_t xa_hist[2][2] = {{0,0},{0,0}};
-  static int16_t xa_pcm[4032 * 2];   // mono sectors yield up to 4032 frames (see xa_decode_sector)
   long media_frames = 0;                       // cumulative audio sample-pairs = media clock
-  core->game->fmv.start_prev = 1;              // assume Start may be held from a prior movie
+  start_prev = 1;                              // assume Start may be held from a prior movie
   uint32_t t0 = 0;
 #ifdef PSXPORT_SDL
   t0 = SDL_GetTicks();
@@ -721,10 +726,10 @@ int native_fmv_play_lba(Core* core, uint32_t lba, uint32_t size_bytes) {
 
     if (submode & 0x04) {                       // XA-ADPCM audio sector
       int n = xa_decode_sector(raw, xa_pcm, xa_hist, &xa_freq);
-      if (sec == 1 || media_frames == 0) fmv_audio_open(xa_freq);
-      fmv_audio_queue(xa_pcm, n);
+      if (sec == 1 || media_frames == 0) audioOpen(xa_freq);
+      audioQueue(xa_pcm, n);
       media_frames += n;
-      if (fmv_pace(core, media_frames, xa_freq, t0, uncapped)) { skipped = 1; break; }
+      if (pace(media_frames, xa_freq, t0, uncapped)) { skipped = 1; break; }
       continue;
     }
 
@@ -746,24 +751,24 @@ int native_fmv_play_lba(Core* core, uint32_t lba, uint32_t size_bytes) {
     if (cur_frame != framenum) continue;        // out of sync; wait for next chunk-0
 
     uint32_t plen = SECTOR_USER - SUBHDR_LEN;
-    if (paylen + plen <= sizeof(payload)) {
+    if (paylen + plen <= FMV_PAYLOAD_BYTES) {
       memcpy(payload + paylen, sbuf + SUBHDR_LEN, plen);
       paylen += plen;
     }
     got_chunks++;
 
     if (expected_chunks > 0 && got_chunks >= expected_chunks) {
-      int ncodes = bs_decode_frame(payload, paylen, fwidth, fheight, codes,
-                                   (int)(sizeof(codes)/sizeof(codes[0])));
+      int ncodes = bsDecodeFrame(payload, paylen, fwidth, fheight, codes,
+                                 (int)FMV_CODES_MAX);
       if (cfg_dbg("fmv"))
         fprintf(stderr, "[fmv] frame %d: %dx%d, %u payload bytes, %d codes\n",
                 framenum, fwidth, fheight, paylen, ncodes);
       if (ncodes > 0) {
-        int np = mdec_decode_to_rgb555(codes, ncodes, fwidth, fheight, pixels);
+        int np = mdecDecodeToRgb555(codes, ncodes, fwidth, fheight, pixels);
         if (np > 0) {
           present_rgb555(core, pixels, fwidth, fheight); frames++;
           // Pace video to the audio/media clock (no audio sector here, so just gate on it).
-          if (fmv_pace(core, media_frames, xa_freq, t0, uncapped)) { skipped = 1; break; }
+          if (pace(media_frames, xa_freq, t0, uncapped)) { skipped = 1; break; }
         }
       }
       cur_frame = -1; expected_chunks = 0; got_chunks = 0; paylen = 0;
@@ -774,7 +779,7 @@ int native_fmv_play_lba(Core* core, uint32_t lba, uint32_t size_bytes) {
   if (cfg_dbg("fmv"))
     fprintf(stderr, "[fmv] done: %d video frames, %ld audio sample-pairs (%.2fs @ %dHz)\n",
             frames, media_frames, media_frames / (double)(xa_freq ? xa_freq : 37800), xa_freq);
-  fmv_audio_close();
+  audioClose();
   // FMV teardown (issues #7/#11): EVERY exit (normal end AND Start-skip break) leaves the FMV's last
   // (possibly partial) frame in the display FB. Black it + present once so no FMV residue is revealed
   // under the front-end's still-loading 2D layer. Engine-owned deterministic hand-off, no sleep/retry.
@@ -783,14 +788,14 @@ int native_fmv_play_lba(Core* core, uint32_t lba, uint32_t size_bytes) {
   return frames;
 }
 
-int native_fmv_play(Core* core, const char* path) {
+int Fmv::play(const char* path) {
   uint32_t lba = 0, size = 0;
   if (!fmv_resolve_path(path, &lba, &size)) {
     fprintf(stderr, "[fmv] could not resolve %s on disc\n", path);
     return -1;
   }
   fprintf(stderr, "[fmv] %s -> LBA %u, %u bytes\n", path, lba, size);
-  return native_fmv_play_lba(core, lba, size);
+  return playLba(lba, size);
 }
 
 // ---- ISO9660 path resolution (walks directories via disc_read_sector) ----------------

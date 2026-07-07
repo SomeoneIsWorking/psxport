@@ -1272,8 +1272,8 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
   mPcSkipMask = a_pc_skip;
   // Allocate per-Core SPU-write logs so audio-relevant divergences (Issue #29) surface as
   // register-write drift, not just RAM byte drift. Bound by spu_bind on every frame step.
-  mA->spu_log = spu_new_log();
-  mB->spu_log = spu_new_log();
+  mA->spu.writeLog = spu_new_log();
+  mB->spu.writeLog = spu_new_log();
   fprintf(stderr, "[sbs] core A pc_skip=%s (%s) — B recomp is the oracle\n",
           a_pc_skip ? "true" : "false",
           a_pc_skip ? "NATIVE shortcuts on, scratch-mask compare (default; PSXPORT_PC_SKIP=0 for faithful)"
@@ -1451,8 +1451,8 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
     // overwrite the good snapshot.
     if ((nav_done || prenav) && !mDivFound && !mRewindActive) takePreStepSnap();
     // Reset per-Core SPU write logs so this frame's writes accumulate cleanly.
-    spu_log_reset(mA->spu_log);
-    spu_log_reset(mB->spu_log);
+    spu_log_reset(mA->spu.writeLog);
+    spu_log_reset(mB->spu.writeLog);
     stepCore(mA, 0);              ww_log("post-stepA");
     grabPane(mA, mRgbaA, &mWa, &mHa); ww_log("post-grabA");
     stepCore(mB, 1);              ww_log("post-stepB");
@@ -1464,18 +1464,18 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
     // holding a different value on A vs B). This is order-invariant unlike the raw sequence compare,
     // which was flagging reordered-but-identical writes to admin regs (main vol / SPUCNT / CD vol).
     {
-      uint32_t na = spu_log_count(mA->spu_log);
-      uint32_t nb = spu_log_count(mB->spu_log);
+      uint32_t na = spu_log_count(mA->spu.writeLog);
+      uint32_t nb = spu_log_count(mB->spu.writeLog);
       uint16_t last_a[1024] = {0}; uint32_t seen_a[32] = {0};   // seen_a bitmap over 0x000..0x3FF/16 words
       uint16_t last_b[1024] = {0}; uint32_t seen_b[32] = {0};
       for (uint32_t i = 0; i < na; i++) {
-        uint32_t off = spu_log_entry(mA->spu_log, i, 0) & 0x3FFu;
-        last_a[off] = (uint16_t)spu_log_entry(mA->spu_log, i, 1);
+        uint32_t off = spu_log_entry(mA->spu.writeLog, i, 0) & 0x3FFu;
+        last_a[off] = (uint16_t)spu_log_entry(mA->spu.writeLog, i, 1);
         seen_a[(off >> 1) >> 5] |= 1u << ((off >> 1) & 31);
       }
       for (uint32_t i = 0; i < nb; i++) {
-        uint32_t off = spu_log_entry(mB->spu_log, i, 0) & 0x3FFu;
-        last_b[off] = (uint16_t)spu_log_entry(mB->spu_log, i, 1);
+        uint32_t off = spu_log_entry(mB->spu.writeLog, i, 0) & 0x3FFu;
+        last_b[off] = (uint16_t)spu_log_entry(mB->spu.writeLog, i, 1);
         seen_b[(off >> 1) >> 5] |= 1u << ((off >> 1) & 31);
       }
       int flagged = 0;

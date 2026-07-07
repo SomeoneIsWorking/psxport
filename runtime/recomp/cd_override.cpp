@@ -118,7 +118,6 @@ static void cd_cmd_stream(Core* c) {
 }
 
 // 0x8008C1EC FUN_8008c1ec(a0=blocks, a1=lba, a2=buf): native synchronous read.
-static int  s_cd_verbose = 0;  // PSXPORT_CD_VERBOSE=1
 static void cd_read(Core* c) {
   uint32_t blocks = c->r[A0], lba = c->r[A1], buf = c->r[A2];
   uint8_t sec[2048];
@@ -126,7 +125,7 @@ static void cd_read(Core* c) {
     if (!disc_read_sector(lba + i, sec)) { c->r[V0] = 0; return; }  // bool: 0 = failure
     for (uint32_t j = 0; j < 2048; j++) c->mem_w8(buf + i * 2048u + j, sec[j]);
   }
-  if (s_cd_verbose)
+  if (c->game->cd.verbose)
     fprintf(stderr, "[cd] read %u blk @ LBA %u -> 0x%08X\n", blocks, lba, buf);
   c->r[V0] = 1;  // bool: success
 }
@@ -151,7 +150,7 @@ static void cd_loadfile(Core* c) {
   // streaming reader B goes through) writes this; without matching writes here the SBS full-mode
   // diverges at frame 0 by two bytes at 0x800BE0E0 (native = 0, substrate = the last LBA read).
   if (nsec) c->mem_w32(0x800be0e0, lba + nsec - 1);
-  if (s_cd_verbose)
+  if (c->game->cd.verbose)
     fprintf(stderr, "[cd] loadfile %u B @ LBA %u -> 0x%08X ra=0x%08X\n", size, lba, dest, c->r[31]);
   void overlay_note_load(Core*, uint32_t);
   overlay_note_load(c, dest);   // record the resident overlay now (fresh image matches its signature)
@@ -160,7 +159,8 @@ static void cd_loadfile(Core* c) {
 
 // Direct-call native loadfile (used by the PC-native boot path, which owns the START.BIN /
 // stage-overlay load top-down instead of dispatching the PSX FUN_8001db8c). Same semantics.
-void cd_loadfile_native(Core* c, uint32_t dest, uint32_t lba, uint32_t size) {
+void Cd::loadFile(uint32_t dest, uint32_t lba, uint32_t size) {
+  Core* c = &game->core;
   c->r[A0] = dest; c->r[A1] = lba; c->r[A2] = size;
   cd_loadfile(c);
 }
@@ -181,7 +181,8 @@ void cd_loadfile_native(Core* c, uint32_t dest, uint32_t lba, uint32_t size) {
 // FUN_8001d7c4 does (dest advances by words*4, no sector padding). Then zero the remaining count
 // and advance dest/position trackers to the post-read state so FUN_8001d940's caller FUN_8001db38
 // (task+0x6c is already 1 = success) sets DAT_1f80019b and ends task1.
-void cd_async_read(Core* c) {
+void Cd::asyncRead() {
+  Core* c = &game->core;
   uint32_t lba   = c->mem_r32(0x1f8001f0);
   uint32_t words = c->mem_r32(0x1f8001f4);
   uint32_t dest  = c->mem_r32(0x1f8001f8);
@@ -197,27 +198,31 @@ void cd_async_read(Core* c) {
   c->mem_w32(0x1f8001f4, 0);                  // remaining count consumed (callback would zero it)
   c->mem_w32(0x1f8001f8, dest + done);        // dest advanced, as FUN_8001d7c4 leaves it
   if (nsec) c->mem_w32(0x800be0e0, lba + nsec - 1);  // DAT_800be0e0 = last sector read (pos tracker)
-  if (s_cd_verbose)
+  if (verbose)
     fprintf(stderr, "[cd] async read %u words (%u B) @ LBA %u -> 0x%08X\n", words, bytes, lba, dest);
   void overlay_note_load(Core*, uint32_t);
   overlay_note_load(c, dest);   // an A0* field-area code overlay may load here (MODE slot) — note it
 }
+
+// Platform-HLE entry for FUN_8001D940 (a0-less: reads the scratchpad read descriptor).
+static void cd_async_read(Core* c) { c->game->cd.asyncRead(); }
 
 // Direct-call native FUN_8001DC40(dest, lba, size_bytes): the inline (NON-spawning) sync reader the
 // indexed file loaders use (e.g. ov_80045080). FUN_8001DC40 stuffs the scratchpad read descriptor
 // (0x1f8001f8=dest, 0x1f8001f0=lba, 0x1f8001f4=ceil(size/4) words) then calls FUN_8001D940 inline; we
 // reproduce that by filling the same descriptor and running the synchronous cd_async_read. Used by
 // the top-down PC-driven loaders (e.g. DEMO substate s0) so they never enter the IRQ-driven reader.
-void cd_dc40_sync(Core* c, uint32_t dest, uint32_t lba, uint32_t size) {
+void Cd::dc40Sync(uint32_t dest, uint32_t lba, uint32_t size) {
+  Core* c = &game->core;
   c->mem_w32(0x1f8001f8, dest);
   c->mem_w32(0x1f8001f0, lba);
   c->mem_w32(0x1f8001f4, (size + 3u) >> 2);   // ceil(size/4) words, as FUN_8001DC40 computes
-  cd_async_read(c);
+  asyncRead();
   c->r[V0] = size;                            // FUN_8001DC40 returns size in v0
 }
 
 // Platform-HLE entry for FUN_8001DC40 (intercepted for any caller): (a0=dest, a1=lba, a2=size_bytes).
-void cd_dc40(Core* c) { cd_dc40_sync(c, c->r[A0], c->r[A1], c->r[A2]); }
+static void cd_dc40(Core* c) { c->game->cd.dc40Sync(c->r[A0], c->r[A1], c->r[A2]); }
 
 // 0x8001D2A8 FUN_8001d2a8(chan, start_lba, end_lba, flags): the engine's voice/BGM clip player.
 // It set task-2 fields + spawned the FUN_8001cfc8 streaming-reader coroutine (slot 2) which issued
@@ -245,15 +250,16 @@ void cd_dc40(Core* c) { cd_dc40_sync(c, c->r[A0], c->r[A1], c->r[A2]); }
 // c->engine.musicCoord.{dialogToneActive/musicFadeIn/…}.
 
 // Enable CD->SPU mixing (libsnd SpuSetCommonAttr via FUN_8001cf00(1)); needed for the SPU to
-// actually mix the decoded XA (Beetle spu.c gates on SPUControl bit0). Non-static: also called
-// from MusicCoord::tick() (game/audio/music_coord.cpp) on the dialog-end resume path.
-void cd_to_spu_mix(Core* c, int on) { c->r[A0] = on ? 1 : 0; rec_dispatch(c, 0x8001cf00u); }
+// actually mix the decoded XA (Beetle spu.c gates on SPUControl bit0). Also called from
+// MusicCoord::tick() (game/audio/music_coord.cpp) on the dialog-end resume path.
+void Cd::toSpuMix(int on) { Core* c = &game->core; c->r[A0] = on ? 1 : 0; rec_dispatch(c, 0x8001cf00u); }
 
 // Diagnostic: trace the game's CD-volume fade state + XA stream lifecycle, on change only.
 // tgt/cur = DAT_800be222/224 (fade target/current), mas = DAT_800be220 (master),
 // 19a/137 = state bytes gating FUN_80075824's ramp, song = 0x800bed80, gate = 0x801fe0e0.
 // g_bgm_frame retired — c->game->timing.logicFrame.
-void xa_audio_trace(Core* c, const char* tag) {
+void Cd::audioTrace(const char* tag) {
+  Core* c = &game->core;
   if (!cfg_str("PSXPORT_XA_DBG")) return;
   static int t=1<<30,cur,mas,s19a,s137,song,act,lp,gate;
   int nt=c->mem_r16s(0x800be222), ncur=c->mem_r16s(0x800be224), nmas=c->mem_r16s(0x800be220);
@@ -279,7 +285,7 @@ static void voice_play(Core* c) {
   }
   xa_stream_play(chan, start, end, loop);
   c->mem_w16(0x801fe0e0, 2);                            // task-2 state = running (cutscene wait gate)
-  cd_to_spu_mix(c, 1);
+  c->game->cd.toSpuMix(1);
   if (loop) c->engine.musicCoord.musicFadeIn();       // ingame music fades in from 0 (instant-CD mod)
 }
 
@@ -316,18 +322,19 @@ static void voice_stop(Core* c) {
 // pointers installed (matching the proven-good path where the low-level reset returned ready). The
 // callbacks are dead in our model (no IRQ invokes them; every command completes inline), but we
 // install them so any code that inspects the table sees the same values as on real hardware.
-void cd_hle_init(Core* c) {
+void Cd::hleInit() {
+  Core* c = &game->core;
   // FUN_800898a0 success path (0x800898c4..0x800898fc): install the CD-event callback table.
   c->mem_w32(0x800abfbcu, 0x8009996cu);   // CD-ready / sync callback
   c->mem_w32(0x800abfc0u, 0x80089994u);   // CD-ready-cb 2
   c->mem_w32(0x800abf24u, 0x800899bcu);   // CD event handler
   c->mem_w32(0x800abf28u, 0x00000000u);   // (cleared)
-  if (s_cd_verbose || cfg_dbg("cd"))
+  if (verbose || cfg_dbg("cd"))
     fprintf(stderr, "[cd] HLE CdInit: drive ready (no controller, no handshake, no busy-wait)\n");
 }
 
-void cd_overrides_init(Game* game) {
-  if (cfg_dbg("cd")) s_cd_verbose = 1;
+void Cd::overridesInit() {
+  if (cfg_dbg("cd")) verbose = 1;
   // All CD-subsystem HLE handlers register with this Game's PlatformHle table (class in
   // platform_hle.h). Every entry is an I/O primitive in the platform-HLE window (0x8001Cxxx
   // engine CD glue / 0x8008xxxx libcd) — the FAIL-FAST sync model: every CD op is served

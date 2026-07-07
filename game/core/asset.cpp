@@ -12,7 +12,6 @@
 #include "asset.h"
 #include "guest_call.h" // rc1-4 guest-call helpers (used by the preload chain below)
 void rec_dispatch(Core*, uint32_t);
-void cd_loadfile_native(Core* c, uint32_t dest, uint32_t lba, uint32_t size);  // cd_override.cpp (sync 0x8001DB8C/DC40)
 // gpu_native_load_image is declared in core.h (the native CPU->VRAM upload).
 
 // PC-owned LZ image decompressor — replaces recompiled FUN_80044D8C (0x80044D8C). Rebuilds per-frame
@@ -172,7 +171,7 @@ void Asset::uploadImage(uint32_t desc, uint32_t src) {
 }
 
 // ===== Stage-0/stage-1 area/asset PRELOAD — PC-native + SYNCHRONOUS (moved from native_boot.cpp,
-// 2026-07 restructure). Reuses the existing leaf natives above (cd_loadfile_native for the sync CD
+// 2026-07 restructure). Reuses the existing leaf natives above (Cd::loadFile for the sync CD
 // reads, unpackGroup for decompress+VRAM upload) — same content-loading domain as the texgroup loader.
 
 // FUN_80044F58 texture-group load, synchronous. (Mirrors loadTexgroup but driven by explicit
@@ -185,9 +184,9 @@ void Asset::preloadTexgroup(uint32_t mode, uint32_t set) {
     uint16_t mask = (uint16_t)c->mem_r16(0x800BFE56u);
     hdr_sector += ((mask >> (set & 31)) & 1) ? 26u : 4u;
   }
-  cd_loadfile_native(c, 0x800EF478u, hdr_sector, 2048);           // 1. 2KB header
+  c->game->cd.loadFile(0x800EF478u, hdr_sector, 2048);           // 1. 2KB header
   uint32_t h0 = c->mem_r32(0x800EF478u), h1 = c->mem_r32(0x800EF47Cu);
-  cd_loadfile_native(c, 0x8018A000u, c->mem_r32(0x800BE0F8u) + (h0 >> 11), h1 - h0);  // 2. compressed archive
+  c->game->cd.loadFile(0x8018A000u, c->mem_r32(0x800BE0F8u) + (h0 >> 11), h1 - h0);  // 2. compressed archive
   unpackGroup(0x8018A000u, 0x1FD000u);                             // 3. decompress + VRAM upload (native)
   for (uint32_t i = 0; i < 42; i++)                                // 4. per-set metadata table
     c->mem_w32(0x800FB170u + i * 4, c->mem_r32(0x800EF478u + 0x100u + i * 4));
@@ -217,7 +216,7 @@ static void preload_cel(Core* c, uint32_t out, uint32_t desc, uint32_t cbarg) {
 // sprite-cell registrations carry no CD/async wait, so run as recomp. `base` = work base 0x80182000.
 static uint32_t preload_build_vram(Core* c, uint32_t base) {
   uint32_t s0 = base + 0x51000u;                                   // descriptor table (filled by the read)
-  cd_loadfile_native(c, base, c->mem_r32(0x800BE108u), 0x51800u);  // FUN_800753ac: read SND file (idx3)
+  c->game->cd.loadFile(base, c->mem_r32(0x800BE108u), 0x51800u);  // FUN_800753ac: read SND file (idx3)
   preload_cel(c, 0x800BED84u, base + c->mem_r32(s0 + 0x28), base + c->mem_r32(s0 + 0x30));
   preload_cel(c, 0x800BED82u, base + c->mem_r32(s0 + 0x2c), base + c->mem_r32(s0 + 0x34));
   static const struct { uint32_t off, sz; } cells[10] = {
@@ -233,10 +232,10 @@ static uint32_t preload_build_vram(Core* c, uint32_t base) {
 // relocation table, cel/sprite VRAM build. Direct entry: no done_flag / task-end.
 void Asset::preloadStage1() {
   Core* c = this->core;
-  cd_loadfile_native(c, 0x80157000u, c->mem_r32(0x800BE110u), c->mem_r32(0x800BE114u));  // SWDATA.BIN
+  c->game->cd.loadFile(0x80157000u, c->mem_r32(0x800BE110u), c->mem_r32(0x800BE114u));  // SWDATA.BIN
   preloadTexgroup(1, 1);                                           // shared texgroup sub-load
   uint32_t lo = c->mem_r32(0x800EF480u), hi = c->mem_r32(0x800EF484u);
-  cd_loadfile_native(c, 0x80158000u, c->mem_r32(0x800BE100u) + (lo >> 11), hi - lo);     // DAT payload
+  c->game->cd.loadFile(0x80158000u, c->mem_r32(0x800BE100u) + (lo >> 11), hi - lo);     // DAT payload
   uint32_t dat_end = (hi - lo) + 0x80158000u;
   c->mem_w32(0x1F800228u, dat_end);
   c->mem_w32(0x800ED014u, dat_end);

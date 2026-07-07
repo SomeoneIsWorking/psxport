@@ -7,6 +7,7 @@
 #include "cfg.h"
 #include "sbs.h"           // class Sbs — the PSXPORT_SBS live-two-core divergence debugger
 #include "platform_hle.h"  // class PlatformHle — HW-sync HLE table (VSync/CdSync/MDEC/ChangeThread)
+#include "dualcore.h"      // class DualCore — NATIVE-render vs PSX-render RAM divergence harness
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -52,7 +53,6 @@ int main(int argc, char** argv) {
   void watchdog_init(void);
   watchdog_init();            // PSXPORT_WATCHDOG=<sec>: abort+backtrace if a frame stalls
   load_exe(path, c);
-  void cd_overrides_init(Game*);
   void games_tomba2_init(void);
   void card_overrides_init(Game*);
   void threads_init(Core*);
@@ -68,7 +68,7 @@ int main(int argc, char** argv) {
   gpu_native_init();        // native GPU renderer (parses the game's GP0 stream)
   void cdc_init(void);
   cdc_init();               // native CD controller registers (0x1F801800-3) for raw-CD code
-  cd_overrides_init(game);  // native CD: drive-ready + by-LBA read (S3)
+  game->cd.overridesInit(); // native CD: drive-ready + by-LBA read (S3)
   games_tomba2_init();      // Tomba2 per-game overrides (vblank pacing)
   game->platform_hle.initBuiltins();   // HW sync/wait stalls -> native non-stall (VSync/CdSync/MDEC)
   c->game->pad.overridesInit();    // native controller input (per-VBlank pad read override)
@@ -87,8 +87,8 @@ int main(int argc, char** argv) {
   // native-gameplay game twice (native render vs PSX render) and diffs guest RAM per frame to find the
   // corrupting write. It creates its own Game instances, so the primary `c`/`game` here is left unused.
   if (cfg_on("PSXPORT_DUALCORE")) {
-    void dualcore_run(const char* exe_path);
-    dualcore_run(path);
+    DualCore dc;
+    dc.run(path);
     return 0;
   }
   // PSXPORT_SELFTEST: headless TDD regression (selftest.cpp) — boots a single full-PSX (psx_fallback) core,
@@ -108,8 +108,7 @@ int main(int argc, char** argv) {
     Sbs::run(path);
     return 0;
   }
-  void native_stub_run(Core*, const char* main_exe_path);
-  native_stub_run(c, path);              // stub draws SCEA, then hands off to native MAIN boot
-  fprintf(stderr, "[boot] native_stub_run returned\n");
+  game->stub.run(path);                  // stub draws SCEA, then hands off to native MAIN boot
+  fprintf(stderr, "[boot] boot stub returned\n");
   return 0;
 }

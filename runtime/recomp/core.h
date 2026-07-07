@@ -186,7 +186,5 @@ void gpu_bg_range_add(Core* core, uint32_t lo, uint32_t hi);
 void gpu_pace_frame(Core* core);
 void gpu_pace_subframe(Core* core, int parts);
 void gpu_native_load_image(Core* core, int x, int y, int w, int h, uint32_t src);
-int  native_fmv_play(Core* core, const char* path);
-int  native_fmv_play_lba(Core* core, uint32_t lba, uint32_t size_bytes);
 
 #endif // __cplusplus

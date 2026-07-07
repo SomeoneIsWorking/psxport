@@ -123,6 +123,10 @@ or level — they can't be a bare channel:
   `POLYDUMP`/`POLYAT`, `FADEDBG`, `SEMIDUMP`, `VK_SHOT`/`VK_SHOTSEQ`, `VK_DIFF`, `GPUTRACE`,
   `VRAMDUMP`/`VRAMDUMP_AT`, `RAMDUMP`/`RAMDUMP_FRAME`, `CLOBBERDUMP`, `CLUTWATCH`, `WWATCH`, `CW`/`CW_BT`,
   `XA_DBG` (level), `BGMDBG` (level), `GPU_DUMP`, `WAV`, `SS`, `SBS`.
+- **Dual-core render-diff harness (`PSXPORT_DUALCORE=1`, class DualCore, dualcore.cpp):** `DC_N`
+  (frames after gameplay-start, default 180, `cfg_int`), `DC_LO`/`DC_HI` (focused guest region
+  base/end, default 0x800B0000..0x80110000, `cfg_str`, hex OK), `DC_ALL` (include the render-only
+  packet-pool/OT regions in the report, `cfg_on`).
 
 ## Adding a new flag
 - A new on/off **diagnostic** → add a `cfg_dbg("yourchan")` call; document the channel in the table above.

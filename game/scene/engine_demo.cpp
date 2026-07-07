@@ -427,7 +427,7 @@ static uint32_t demo_menu_machine(Core* c) {
     int skip = cfg_on("PSXPORT_NO_FMV") || cfg_on("PSXPORT_VK_HEADLESS");
     const char* nf = cfg_str("PSXPORT_NO_FMV");
     if (nf && atoi(nf) == 0 && *nf) skip = 0;                     // explicit PSXPORT_NO_FMV=0 forces FMV on
-    if (!skip) { int native_fmv_play(Core*, const char*); native_fmv_play(c, "MOVIE/OP.STR"); }
+    if (!skip) c->game->fmv.play("MOVIE/OP.STR");
     else if (cfg_dbg("demo")) { static int w=0; if(!w++) fprintf(stderr,
       "[demo] OP.STR opening movie skipped (NO_FMV/headless); running teardown -> s2\n"); }
     // state 7 (0x80107280) teardown, faithful — the CdControlB(CdlPause) busy-loop becomes a native no-op
@@ -451,7 +451,7 @@ static uint32_t demo_menu_machine(Core* c) {
 // the attract item replaced the menu area). PC-native + SYNCHRONOUS: run as pure PSX the loaders
 // descend into the IRQ-driven async CD reader (FUN_8001D940 / the FUN_80044BD4 task spawn) our no-IRQ
 // runtime can't complete → infinite spin in libcd's VSync-timed CD_cw. We reimplement s0's loads with
-// the SAME synchronous primitives stage-0 uses (cd_dc40_sync / preload_texgroup), then advance to s1.
+// the SAME synchronous primitives stage-0 uses (Cd::dc40Sync / preload_texgroup), then advance to s1.
 // Faithful to the 0x801063C0 disasm:
 //   a0=0x80108F9C (the overlay slot right after GAME.BIN); sm[0x68]=0; sm[0x48]++ (0->1); sm[0x4a]=0;
 //   jal 0x80045080(a0, idx=2, task)  -> indexed file load (table 0x800BE118, stride 8) via FUN_8001DC40
@@ -469,9 +469,8 @@ void Demo::s0PreYield() { Core* c = core;
   c->mem_w8 (sm + 0x68, 0);
   c->mem_w16(sm + 0x48, 1);                    // sm[0x48]++ : 0 -> 1  (mirrors substrate)
   c->mem_w16(sm + 0x4a, 0);
-  { void cd_dc40_sync(Core*, uint32_t, uint32_t, uint32_t);
-    uint32_t tab = 0x800be118u + 2u * 8u;
-    cd_dc40_sync(c, 0x80108f9cu, c->mem_r32(tab), c->mem_r32(tab + 4));
+  { uint32_t tab = 0x800be118u + 2u * 8u;
+    c->game->cd.dc40Sync(0x80108f9cu, c->mem_r32(tab), c->mem_r32(tab + 4));
   }
   // FUN_80044BD4 prelude: match the substrate exactly, then use native_task_spawn (scheduler.cpp) as
   // the real port of FUN_80051F14 — task-1 runs via the Coro-fiber stanza under pc_faithful so its
@@ -596,9 +595,8 @@ static void load_machine_s4(Core* c) {
     case 0:
       rec_dispatch(c, 0x8001cf2cu);                          // engine update
       { // FUN_80045558(1) = FUN_80045080(0x8018a000, idx=1) = FUN_8001dc40(dest, lba, size) — SYNC read
-        void cd_dc40_sync(Core*, uint32_t, uint32_t, uint32_t);
         uint32_t tab = 0x800be118u + 1u * 8u;               // indexed file table, stride 8 {lba,size}
-        cd_dc40_sync(c, 0x8018a000u, c->mem_r32(tab), c->mem_r32(tab + 4));
+        c->game->cd.dc40Sync(0x8018a000u, c->mem_r32(tab), c->mem_r32(tab + 4));
       }
       c->mem_w8(0x1f80019bu, 1);                              // mark the load complete (case 3 reads this)
       c->mem_w8(0x800bf84au, 1);

@@ -40,13 +40,13 @@ void Hle::deliverEvent(uint32_t evClass, uint32_t spec) {
 // ---- Heap (A0:0x33-0x39): native first-fit arena, bookkeeping outside PSX RAM -------
 enum { HEAP_MAX_BLOCKS = 4096 };
 
-void Hle::heapInit(Core* /*c*/, uint32_t addr, uint32_t size) {
+void Hle::heapInit(uint32_t addr, uint32_t size) {
   heap_base = addr; heap_size = size;
   nblk = 1; blk[0].addr = addr; blk[0].size = size; blk[0].used = 0;
   heap_ok = 1;
 }
 
-uint32_t Hle::heapAlloc(Core* /*c*/, uint32_t size) {
+uint32_t Hle::heapAlloc(uint32_t size) {
   if (!heap_ok || size == 0) return 0;
   size = (size + 7u) & ~7u;
   for (int i = 0; i < nblk; i++) {
@@ -73,13 +73,13 @@ void Hle::heapCoalesce() {
   }
 }
 
-void Hle::heapFree(Core* /*c*/, uint32_t addr) {
+void Hle::heapFree(uint32_t addr) {
   if (!addr) return;
   for (int i = 0; i < nblk; i++)
     if (blk[i].addr == addr && blk[i].used) { blk[i].used = 0; heapCoalesce(); return; }
 }
 
-uint32_t Hle::heapBlockSize(Core* /*c*/, uint32_t addr) const {
+uint32_t Hle::heapBlockSize(uint32_t addr) const {
   for (int i = 0; i < nblk; i++)
     if (blk[i].addr == addr && blk[i].used) return blk[i].size;
   return 0;
@@ -88,7 +88,8 @@ uint32_t Hle::heapBlockSize(Core* /*c*/, uint32_t addr) const {
 // ---- Native work area for GetB0Table()/GetC0Table() ---------------------------------
 // Tomba2 reads B0table[+0x16C] -> control struct; publish a self-consistent native page.
 enum { HLE_B0TABLE = 0x8000F000u, HLE_C0TABLE = 0x8000F800u, HLE_WORK_BASE = 0x8000E000u };
-void Hle::workAreaInit(Core* c) {
+void Hle::workAreaInit() {
+  Core* c = &game->core;
   if (work_ok) return;
   work_ok = 1;
   c->mem_w32(HLE_B0TABLE + 0x16Cu, HLE_WORK_BASE);
@@ -105,25 +106,26 @@ uint32_t thread_close(Core* c);
 void     thread_change(Core* c, uint32_t handle);
 
 // Dispatch one A0/B0/C0 BIOS call. Returns true if handled (c->r[V0] set), false otherwise.
-bool Hle::dispatchBios(char table, uint32_t fn, Core* c) {
+bool Hle::dispatchBios(char table, uint32_t fn) {
+  Core* c = &game->core;
   uint32_t a0 = c->r[A0], a1 = c->r[A1], a2 = c->r[A2];
   HleEvCB* s_ev = ev;   // alias so the switch bodies below read tersely
   if (table == 'A') {
     switch (fn) {
-      case 0x33: c->r[V0] = heapAlloc(c, a0); return true;               // malloc
-      case 0x34: heapFree(c, a0); c->r[V0] = 0; return true;              // free
-      case 0x37: { uint32_t n = a0 * a1, p = heapAlloc(c, n);            // calloc
+      case 0x33: c->r[V0] = heapAlloc(a0); return true;               // malloc
+      case 0x34: heapFree(a0); c->r[V0] = 0; return true;              // free
+      case 0x37: { uint32_t n = a0 * a1, p = heapAlloc(n);            // calloc
                    if (p) for (uint32_t i = 0; i < n; i++) c->mem_w8(p + i, 0);
                    c->r[V0] = p; return true; }
       case 0x38: { uint32_t old = a0, ns = a1;                           // realloc
-                   if (!old) { c->r[V0] = heapAlloc(c, ns); return true; }
-                   if (!ns) { heapFree(c, old); c->r[V0] = 0; return true; }
-                   uint32_t np = heapAlloc(c, ns), os = heapBlockSize(c, old);
+                   if (!old) { c->r[V0] = heapAlloc(ns); return true; }
+                   if (!ns) { heapFree(old); c->r[V0] = 0; return true; }
+                   uint32_t np = heapAlloc(ns), os = heapBlockSize(old);
                    if (np) { uint32_t n = os < ns ? os : ns;
                              for (uint32_t i = 0; i < n; i++) c->mem_w8(np + i, c->mem_r8(old + i));
-                             heapFree(c, old); }
+                             heapFree(old); }
                    c->r[V0] = np; return true; }
-      case 0x39: heapInit(c, a0, a1); c->r[V0] = 0; return true;          // InitHeap
+      case 0x39: heapInit(a0, a1); c->r[V0] = 0; return true;          // InitHeap
       case 0x44: c->r[V0] = 0; return true;                              // FlushCache (no-op)
       case 0x49: c->r[V0] = 0; return true;                              // GPU_cw (GP0 word — harmless)
       case 0x51: if (s_loadexec_hook) { s_loadexec_hook(c); return true; } return false;  // LoadExec
@@ -172,8 +174,8 @@ bool Hle::dispatchBios(char table, uint32_t fn, Core* c) {
       case 0x10: thread_change(c, a0); c->r[V0] = a0; return true;        // ChangeThread
       case 0x4A: c->r[V0] = 0; return true;                              // stopCard / card no-op
       case 0x4B: c->r[V0] = 1; return true;                              // cardInfo -> present
-      case 0x56: workAreaInit(c); c->r[V0] = HLE_C0TABLE; return true;    // GetC0Table
-      case 0x57: workAreaInit(c); c->r[V0] = HLE_B0TABLE; return true;    // GetB0Table
+      case 0x56: workAreaInit(); c->r[V0] = HLE_C0TABLE; return true;    // GetC0Table
+      case 0x57: workAreaInit(); c->r[V0] = HLE_B0TABLE; return true;    // GetB0Table
       case 0x5B: c->r[V0] = 0; return true;                              // ChangeClearPAD (no-op)
       default: {
         if (card_hle_b0(fn, c)) return true;
@@ -221,7 +223,7 @@ void rec_dispatch_miss(Core* c, uint32_t addr) {
   char tbl = a == 0xA0 ? 'A' : a == 0xB0 ? 'B' : a == 0xC0 ? 'C' : 0;
   if (tbl) {
     uint32_t fn = c->r[T1] & 0xFF;
-    if (c->game->hle.dispatchBios(tbl, fn, c)) return;
+    if (c->game->hle.dispatchBios(tbl, fn)) return;
     fprintf(stderr, "[hle] UNIMPL %c0:0x%02X\n", tbl, fn);
     return;
   }

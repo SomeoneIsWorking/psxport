@@ -24,6 +24,8 @@
 // (focused region guest base/end, default 0x800B0000..0x80110000).
 
 #include "game.h"
+#include "dualcore.h"
+#include "cfg.h"
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
@@ -47,15 +49,12 @@ constexpr uint16_t BTN_START = 0x0008;
 constexpr uint16_t BTN_RIGHT = 0x0020;
 constexpr uint16_t BTN_NONE  = 0xFFFF;
 
-// 3-phase machine, IDENTICAL to native_boot AUTO_SKIP (the proven nav): (0) tap Cross until GAME stage;
-// (1) wait for the intro cutscene to start (flag -> 1); (2) pulse Start every 40 frames WHILE the flag is
-// 1, and finish once the flag has read 0 for 60 CONSECUTIVE frames (the cutscene-end fade settles). The
-// single phase-2 (keep tapping Start through any brief beat-gap re-assert) is what my earlier split got
-// wrong. Frame/flag-driven only (no host input), so both cores navigate identically.
-enum Phase { REACH_GAME, AWAIT_CUT, SKIP_CUT, DONE };
-struct Nav { Phase phase = REACH_GAME; int idle = 0; };
+// (The 3-phase nav machine — REACH_GAME / AWAIT_CUT / SKIP_CUT / DONE — is DualCore::Nav; see
+// dualcore.h. Frame/flag-driven only, no host input, so both cores navigate identically.)
 
-bool nav_step(Core* c, Nav& nv, uint32_t f, const char* tag) {
+} // namespace
+
+bool DualCore::navStep(Core* c, Nav& nv, uint32_t f, const char* tag) {
   if ((f % 400u) == 0) fprintf(stderr, "[dc-nav] %s f%u phase=%d stage=%08X cut=%u\n",
                                tag, f, (int)nv.phase, c->mem_r32(TASK0_ENTRY), c->mem_r8(CUT_FLAG));
   uint8_t cut = c->mem_r8(CUT_FLAG);
@@ -78,15 +77,15 @@ bool nav_step(Core* c, Nav& nv, uint32_t f, const char* tag) {
 
 // IDENTICAL scripted gameplay input by frames-since-start k: hold Right (walk into the field), with a
 // Cross (jump) tap every 30 frames. Deterministic and the same for both cores.
-void scripted_input(Core* c, int k) {
+void DualCore::scriptedInput(Core* c, int k) {
   c->game->pad.driveHold((uint16_t)(BTN_NONE & ~BTN_RIGHT));
   if ((k % 30) == 10) c->game->pad.driveTap((uint16_t)(BTN_NONE & ~BTN_RIGHT & ~BTN_CROSS), 4);
 }
 
 // Boot one core, navigate to gameplay-start, then record `n` per-frame snapshots of [lo,hi) into `snaps`
 // (snaps[k] = malloc'd region copy) plus the scratchpad into `spads[k]`. Returns frames actually recorded.
-int run_and_record(const char* exe, int render_psx, const char* tag,
-                   int n, uint32_t lo, uint32_t hi, uint8_t** snaps, uint8_t** spads) {
+int DualCore::runAndRecord(const char* exe, int render_psx, const char* tag,
+                           int n, uint32_t lo, uint32_t hi, uint8_t** snaps, uint8_t** spads) {
   uint32_t rsz = hi - lo;
   Game* g = new Game();
   g->psx_fallback = 0;                    // NATIVE gameplay in BOTH passes — only the render path differs
@@ -99,11 +98,11 @@ int run_and_record(const char* exe, int render_psx, const char* tag,
   fprintf(stderr, "[dc] --- %s (psxRender=%d) ---\n", tag, render_psx);
   for (; f < MAXF && k < n; f++) {
     if (!started) {
-      started = nav_step(&g->core, nv, f, tag);
+      started = navStep(&g->core, nv, f, tag);
       if (!started) { dc_step_frame(&g->core, f); continue; }
       // fall through on the start frame and record k=0 as the post-start state
     }
-    scripted_input(&g->core, k);
+    scriptedInput(&g->core, k);
     dc_step_frame(&g->core, f);
     snaps[k] = (uint8_t*)malloc(rsz); memcpy(snaps[k], g->core.ram + lo - 0x80000000u, rsz);
     spads[k] = (uint8_t*)malloc(0x400); memcpy(spads[k], g->core.scratch, 0x400);
@@ -117,19 +116,18 @@ int run_and_record(const char* exe, int render_psx, const char* tag,
 // The legitimate render-only guest regions the native vs PSX render paths SHALL differ in (packet pool
 // pointers, both packet-pool pages, both ordering-table pages, env). Divergence here is render noise, not
 // the gameplay corruption we hunt. Excluded from the report unless PSXPORT_DC_ALL=1.
-bool is_render_region(uint32_t a) {
+bool DualCore::isRenderRegion(uint32_t a) {
   if (a >= 0x800BF4F0u && a < 0x800BF54Cu) return true;   // pool ptrs (0x800BF4F4/0x800BF544) + dwell
   if (a >= 0x800BFE68u && a < 0x800EA200u) return true;   // packet pool (×2 pages) + OT (×2 pages) + env
   return false;
 }
 
 // First-divergence coalesced report for two equal-length region buffers; skips render-only regions.
-void diff_frame_region(const char* name, const uint8_t* a, const uint8_t* b, uint32_t n, uint32_t gbase) {
-  static int show_all = -1; if (show_all < 0) { const char* e = getenv("PSXPORT_DC_ALL"); show_all = (e && *e && strcmp(e,"0")) ? 1 : 0; }
+void DualCore::diffFrameRegion(const char* name, const uint8_t* a, const uint8_t* b, uint32_t n, uint32_t gbase) {
   const uint32_t GAP = 64u;
   uint32_t i = 0, shown = 0;
   while (i < n && shown < 16) {
-    if (a[i] == b[i] || (!show_all && is_render_region(gbase + i))) { i++; continue; }
+    if (a[i] == b[i] || (!show_all && isRenderRegion(gbase + i))) { i++; continue; }
     uint32_t s = i, last = i, gap = 0; i++;
     while (i < n && gap < GAP) { if (a[i] != b[i]) { last = i; gap = 0; } else gap++; i++; }
     fprintf(stderr, "    %s 0x%08X..0x%08X (%uB)  A:", name, gbase + s, gbase + last + 1, last + 1 - s);
@@ -140,14 +138,13 @@ void diff_frame_region(const char* name, const uint8_t* a, const uint8_t* b, uin
   }
 }
 
-} // namespace
-
-void dualcore_run(const char* exe_path) {
+void DualCore::run(const char* exe_path) {
   watchdog_suspend();
-  int n = 180; { const char* e = getenv("PSXPORT_DC_N"); if (e && *e) n = atoi(e); }
+  show_all = cfg_on("PSXPORT_DC_ALL");
+  int n = cfg_int("PSXPORT_DC_N", 180);
   uint32_t lo = 0x800B0000u, hi = 0x80110000u;
-  { const char* e = getenv("PSXPORT_DC_LO"); if (e && *e) lo = (uint32_t)strtoul(e, 0, 0); }
-  { const char* e = getenv("PSXPORT_DC_HI"); if (e && *e) hi = (uint32_t)strtoul(e, 0, 0); }
+  { const char* e = cfg_str("PSXPORT_DC_LO"); if (e && *e) lo = (uint32_t)strtoul(e, 0, 0); }
+  { const char* e = cfg_str("PSXPORT_DC_HI"); if (e && *e) hi = (uint32_t)strtoul(e, 0, 0); }
   uint32_t rsz = hi - lo;
   fprintf(stderr, "[dualcore] NATIVE-render vs PSX-render RAM compare: N=%d region 0x%08X..0x%08X (%uKB/frame)\n",
           n, lo, hi, rsz / 1024);
@@ -155,8 +152,8 @@ void dualcore_run(const char* exe_path) {
   uint8_t** snA = (uint8_t**)calloc(n, sizeof(void*)); uint8_t** spA = (uint8_t**)calloc(n, sizeof(void*));
   uint8_t** snB = (uint8_t**)calloc(n, sizeof(void*)); uint8_t** spB = (uint8_t**)calloc(n, sizeof(void*));
 
-  int kA = run_and_record(exe_path, 0, "A(native-render)", n, lo, hi, snA, spA);
-  int kB = run_and_record(exe_path, 1, "B(PSX-render)",    n, lo, hi, snB, spB);
+  int kA = runAndRecord(exe_path, 0, "A(native-render)", n, lo, hi, snA, spA);
+  int kB = runAndRecord(exe_path, 1, "B(PSX-render)",    n, lo, hi, snB, spB);
 
   int kn = kA < kB ? kA : kB;
   fprintf(stderr, "\n========== RENDER DIFF  (A=native-render  B=PSX-render)  comparing %d frames ==========\n", kn);
@@ -164,14 +161,14 @@ void dualcore_run(const char* exe_path) {
   int first = -1;
   for (int k = 0; k < kn; k++) {
     bool ram_d = false;
-    for (uint32_t i = 0; i < rsz; i++) if (snA[k][i] != snB[k][i] && !is_render_region(lo + i)) { ram_d = true; break; }
+    for (uint32_t i = 0; i < rsz; i++) if (snA[k][i] != snB[k][i] && !isRenderRegion(lo + i)) { ram_d = true; break; }
     bool spd_d = memcmp(spA[k], spB[k], 0x400) != 0;   // scratchpad has no render-pool exclusion
     if (ram_d || spd_d) {
       if (first < 0) { first = k; fprintf(stderr, "[dc] FIRST DIVERGENCE at gameplay-frame %d:\n", k); }
       if (k < first + 6) {     // detail the first few divergent frames
         fprintf(stderr, "  frame %d:\n", k);
-        if (ram_d) diff_frame_region("ram ", snA[k], snB[k], rsz, lo);
-        if (spd_d) diff_frame_region("spad", spA[k], spB[k], 0x400, 0x1F800000u);
+        if (ram_d) diffFrameRegion("ram ", snA[k], snB[k], rsz, lo);
+        if (spd_d) diffFrameRegion("spad", spA[k], spB[k], 0x400, 0x1F800000u);
       }
     }
   }

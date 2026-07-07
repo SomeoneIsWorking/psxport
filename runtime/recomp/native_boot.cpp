@@ -39,7 +39,6 @@
 // streaming-reader coroutine. The scheduler skips slot 2 while owned and reflects clip completion
 // into the task-2 state byte (the cutscene waits `while (DAT_801fe0e0 != 0)`).
 // class MusicCoord (game/audio/music_coord.h) — reached as c->engine.musicCoord.tick() per frame
-void xa_audio_trace(Core* c, const char* tag);    // CD-vol fade + XA lifecycle trace (cd_override.cpp)
 
 // The native cooperative-task scheduler (scheduler_yield + PcScheduler::step — the FUN_80080880/
 // FUN_80051e60 replacements) lives in scheduler.cpp + game/core/pc_scheduler.cpp; TASKBASE/
@@ -103,7 +102,7 @@ static void native_step_frame(Core* c, uint32_t f) {
   c->mem_w32(0x800bf4f4, c->mem_r32(0x800bf544));             // keep last pool ptr (read by some submitters)
   c->mem_w32(0x800bf544, (parity * 0x14000 + 0x800bfe68) & 0xffffff);   // packet pool (now constant)
   c->game->pad.serviceFrame();                                       // host input -> game pad buffer (pre-read)
-  xa_audio_trace(c, "pre");                                   // CD-vol fade state BEFORE tick+mix
+  c->game->cd.audioTrace("pre");                                   // CD-vol fade state BEFORE tick+mix
   perf_mark_pre();   // perf: charge the pre-tick host work (input/IRQ/OT-clear) to `pre`
   // PC-driven frame body: per-frame state update (still-PSX leaf) + per-vblank audio + fps60 commit +
   // present + pace. Called as a plain C call (top-down PC-driven model) — NOT an override. This is where
@@ -114,7 +113,7 @@ static void native_step_frame(Core* c, uint32_t f) {
   c->game->ffspan.begin();
   c->engine.frameUpdate();                                    // tick + per-vblank audio + present + pace
   c->game->ffspan.end("frameupd");
-  xa_audio_trace(c, "post");                                  // CD-vol fade state AFTER tick+mix
+  c->game->cd.audioTrace("post");                                  // CD-vol fade state AFTER tick+mix
   perf_phase_begin(3);   // perf: SCHED-LOGIC = the cooperative scheduler step (the real per-frame GAME logic)
   // The native scheduler is the frame-loop's task-stepping HARNESS (no BIOS threads — yields are setjmp/
   // longjmp coroutines, CD loads are synchronous). It stays native at every gate level. What the gate
@@ -125,7 +124,7 @@ static void native_step_frame(Core* c, uint32_t f) {
   c->game->ffspan.end("scheduler");
   perf_phase_end(3);
   c->engine.musicCoord.tick();                                // dialogs stop/restore ingame music
-  xa_audio_trace(c, "coord");                                 // CD-vol fade state AFTER coord
+  c->game->cd.audioTrace("coord");                                 // CD-vol fade state AFTER coord
   rc1(c, 0x80080f6c, 0);                                      // draw sync
   rc0(c, 0x800506d0);                                         // task sleep-countdown (re-arm 1->2)
   // Display + OT submit (LAB_80050c6c, DAT_1f80019c==0 branch). Single-buffered, PC-native display.
@@ -217,7 +216,7 @@ static void game_init(Core* c) {
   // CD init: native HLE, NOT the recomp libcd (FUN_800898a0). The recomp CdInit busy-waits on the
   // CD-controller reset handshake (no IRQ ever acks → 5 retries → "CD timeout" → "Init failed").
   // We model no CD controller; all CD ops are native synchronous (cd_override.cpp). (was rc0 0x800898a0)
-  { void cd_hle_init(Core*); cd_hle_init(c); }
+  c->game->cd.hleInit();
   rc1(c, 0x80080bf0, 3);
   rc1(c, 0x80080d64, 0);
   rc1(c, 0x80080ed4, 1);
@@ -589,9 +588,8 @@ void native_boot_run(Core* c) {
   // SPLIT OF OWNERSHIP: only LOGO.STR (the Whoopee logo, which plays BEFORE the front-end overlay is
   // even loaded) is played at boot. OP.STR (the opening movie) is OWNED BY THE FRONT-END — the DEMO
   // menu machine's states 4..7 ARE the OP.STR sequence (engine_demo.cpp demo_menu_machine), which now
-  // plays it via native_fmv_play. Playing OP here too made it play TWICE (boot + front-end) — the
+  // plays it via fmv.play. Playing OP here too made it play TWICE (boot + front-end) — the
   // "FMV repeats" bug. Boot plays LOGO; the front-end plays OP -> SCEA->LOGO->OP->title, no repeat.
-  int native_fmv_play(Core*, const char*);
   // Skip the intro FMVs when there's no viewer: PSXPORT_NO_FMV, OR any headless run (a headless probe
   // has nobody watching — playing/decoding the intro movies just burns wall-clock; a field probe went
   // from ~77s to ~1.4s). The in-game/cutscene FMVs that still play are also auto-uncapped in headless
@@ -601,7 +599,7 @@ void native_boot_run(Core* c) {
   if (nf_ov && atoi(nf_ov) == 0 && *nf_ov) skip_fmv = 0;     // explicit PSXPORT_NO_FMV=0 forces FMVs on
   if (!skip_fmv) {
     fprintf(stderr, "[native_boot] playing boot FMV (Whoopee logo); OP.STR is the front-end's\n");
-    native_fmv_play(c, "MOVIE/LOGO.STR");
+    c->game->fmv.play("MOVIE/LOGO.STR");
   } else {
     fprintf(stderr, "[native_boot] skipping intro FMVs (headless/NO_FMV)\n");
   }

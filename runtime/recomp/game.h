@@ -15,8 +15,14 @@
 #include "gte_state.h"             // GteRegs — per-instance GTE (COP2) register file (Beetle gte.c)
 #include "cdc_state.h"             // CdcState — per-instance native CD-controller register model (cdc_native.c)
 #include "xa_state.h"              // XaState  — per-instance native XA-ADPCM CD-audio streamer (xa_stream.c)
-#include "spu_state.h"             // per-instance SPU state handle (Beetle spu.c) — SPU_NewState/Bind
-#include "mdec_state.h"            // per-instance MDEC state handle (Beetle mdec.c) — MDEC_NewState/Bind
+#include "spu_device.h"            // class SpuDevice — per-instance SPU state handle (Beetle spu.c)
+#include "mdec_device.h"           // class MdecDevice — per-instance MDEC state handle (Beetle mdec.c)
+#include "timing.h"                // class Timing — native VBlank/VSync frame clock
+#include "hle.h"                   // class Hle — BIOS HLE (events, heap, work area, A0/B0/C0 dispatch)
+#include "pad_input.h"             // class Pad — native controller input + REPL drive
+#include "cd.h"                    // class Cd — native CD subsystem (sync reads + libcd HLE + music state)
+#include "native_fmv.h"            // class Fmv — native .STR movie player
+#include "native_stub.h"           // class BootStub — SCEA splash + MAIN.EXE LoadExec hand-off
 #include "gpu_native_internal.h"   // GpuState — the native GPU's per-instance render machine state
 #include "gpu_gpu_internal.h"       // GpuGpuState — the Vulkan present backend's per-instance render state
 #include "fps60_internal.h"        // Fps60 — the interpolated-60fps tier's per-instance state
@@ -37,131 +43,13 @@ class Sbs;                          // forward decl — Game holds `sbs` back-po
 #include <stdint.h>
 #include <setjmp.h>
 
-// ---- per-subsystem state structs (former file-scope statics), migrated one phase at a time ----
-
-// timing.cpp — class Timing — native VBlank/VSync frame clock subsystem, owned by Game.
-// PROPER OOP: one instance per Game (`c->game->timing`). Back-pointer `game` wired in Game(). Owns
-// the libetc VSync counter mirror + the vsync/frame-tick behavior. Was the ov_vsync_callback /
-// ov_vsync / timing_frame_tick / timing_vblank / timing_init free functions in timing.cpp.
-class Game;
-class Timing {
-public:
-  Game* game = nullptr;
-  uint32_t vblank = 0;      // libetc VSync counter mirror (was g_vblank)
-  uint32_t logicFrame = 0;  // logic-frame counter, advanced by native_step_frame each iteration.
-                            // Read by xa_audio_trace / [bgmreq]-style diags. Was global g_bgm_frame.
-
-  // vsyncCallback(): 0x80085BB0 FUN_80085bb0 VSyncCallback(func) — no-op. Native frame loop
-  //   owns pacing; the libapi per-vblank IRQ vector isn't modeled. Was ov_vsync_callback.
-  void vsyncCallback();
-
-  // vsync(): 0x80085900 FUN_80085900 = libetc VSync(mode). Currently unreachable — sync_overrides
-  //   traps VSync (all pacing is PC-native). Kept for RE reference / future re-enable.
-  void vsync();
-
-  // frameTick(): advance the canonical libetc VSync counter once per native frame. Called from
-  //   the PC-native frame loop (native_step_frame) so recomp code reading DAT_800abde0 for
-  //   pacing/idle-timers keeps advancing.
-  void frameTick();
-};
-
-// cd_override.cpp — deferred ingame-music state (suppressed during dialog, resumed after).
-struct CdState {
-  int      pending_music = 0;   // a looping ingame-music clip is deferred/remembered (was s_pending_music)
-  uint8_t  pm_chan  = 0;        // was s_pm_chan
-  uint32_t pm_start = 0;        // was s_pm_start
-  uint32_t pm_end   = 0;        // was s_pm_end
-};
-
 // CdcState / XaState — native CD-controller register model + XA-ADPCM streamer, PER-INSTANCE so two
 // cores (native vs PSX-recomp) keep SEPARATE CD state. Plain-C structs in their own headers (like
 // gte_state.h's GteRegs) so cdc_native.c / xa_stream.c stay C; bound per frame-step via cdc_bind /
 // xa_bind (those files), exactly like gte_bind/spu_bind/mdec_bind. See cdc_state.h / xa_state.h.
 
-// hle.cpp — class Hle — BIOS HLE subsystem (event control blocks, native first-fit heap, IRQ /
-// work-area flags), owned by Game (`c->game->hle`). Back-pointer `game` wired in Game(). Was
-// struct HleState; the deliverEvent method promotes the former free function hle_deliver_event
-// (called by timing/native_boot/memcard/asset for VBlank + memcard + sound-DMA event delivery)
-// so callers do c->game->hle.deliverEvent(class, spec) — no Core* arg on the surface.
-struct HleEvCB { int open, enabled, fired; uint32_t ev_class, spec, mode, func; };  // was EvCB
-struct HleHeapBlock { uint32_t addr, size; int used; };                             // was HeapBlock
-class Hle {
-public:
-  Game* game = nullptr;
-  HleEvCB     ev[16]      = {};   // was s_ev[EVCB_MAX]
-  HleHeapBlock blk[4096]  = {};   // was s_blk[HEAP_MAX_BLOCKS]
-  int      nblk       = 0;        // was s_nblk
-  uint32_t heap_base  = 0;        // was s_heap_base
-  uint32_t heap_size  = 0;        // was s_heap_size
-  int      heap_ok    = 0;        // was s_heap_ok
-  int      work_ok    = 0;        // was s_work_ok
-  uint32_t int_handler = 0;       // was s_int_handler (B0:0x19 HookEntryInt)
-  int      irq_enabled = 1;       // was s_irq_enabled
-
-  // deliverEvent(evClass, spec): mark every open+enabled event slot whose class matches evClass
-  //   and whose spec masks against `spec` as fired. Called by the frame VBlank tick, memcard
-  //   completion, and sound-DMA completion so guest waits (TestEvent/WaitEvent) advance.
-  void deliverEvent(uint32_t evClass, uint32_t spec);
-
-  // ---- BIOS-side helpers (was file-scope free fns in hle.cpp) ------------------
-  // heap: A0:0x33-0x39 native first-fit arena (bookkeeping outside PSX RAM).
-  void     heapInit(Core* c, uint32_t addr, uint32_t size);
-  uint32_t heapAlloc(Core* c, uint32_t size);
-  void     heapFree (Core* c, uint32_t addr);
-  uint32_t heapBlockSize(Core* c, uint32_t addr) const;
-  // work area (B0:0x56/0x57 GetC0Table/GetB0Table): publish a self-consistent native page.
-  void     workAreaInit(Core* c);
-  // events: index-lookup for B0:0x08/0x09/0x0A/0x0B/0x0C/0x0D
-  int      eventIndex(uint32_t id) const;
-  // BIOS-call dispatch (A0/B0/C0). Returns true if handled (Core V0 set).
-  bool     dispatchBios(char table, uint32_t fn, Core* c);
-
-private:
-  void     heapCoalesce();   // internal free-side merge pass; only touches this instance's blk[]
-};
-
-// pad_input.cpp — class Pad — native controller input subsystem, owned by Game (c->game->pad).
-// Carries the current host button state + REPL drive control + all the pad_* behavior (host poll,
-// per-VBlank fill buffer, REPL hold/tap/release). Was the pad_init/pad_set_buttons/pad_buttons/
-// pad_fill_buffer/pad_poll_sdl/pad_overrides_init/pad_repl_hold/pad_repl_tap/pad_repl_release free
-// functions in pad_input.cpp. (Test-hook / config-cache statics inside the SDL poll path stay
-// shared per the plan policy — those are host-wide, not per-Core.)
-class Pad {
-public:
-  Game* game = nullptr;
-  uint16_t buttons    = 0xFFFF;  // current host button state, active-low (0 bit = pressed) (was s_buttons)
-  uint16_t repl_hold  = 0xFFFF;  // REPL: bits cleared = held down (was s_repl_hold)
-  uint16_t repl_tap   = 0xFFFF;  // REPL: active-low mask pressed for repl_tap_n frames (was s_repl_tap)
-  int      repl_tap_n = 0;       // REPL: tap countdown frames (was s_repl_tap_n)
-  int      repl_on    = 0;       // REPL drive active (was s_repl_on)
-
-  void init();                              // was pad_init(Core*)
-  void setButtons(uint16_t mask);           // was pad_set_buttons(Core*, mask) — feed the active-low mask
-  void fillBuffer(uint8_t* buf);            // was pad_fill_buffer(Core*, buf) — per-VBlank guest read pad
-  void pollSdl();                           // was pad_poll_sdl(Core*) — host SDL controller poll
-  void overridesInit();                     // was pad_overrides_init(Core*) — install per-VBlank pad-read override
-  void driveHold(uint16_t activeLowMask);   // was pad_repl_hold(c, mask) — REPL: hold down these bits
-  void driveTap(uint16_t activeLowMask, int nframes);  // was pad_repl_tap(c, mask, n) — press for n frames
-  void driveRelease();                      // was pad_repl_release(c) — clear REPL drive
-  void serviceFrame();                      // was pad_service_frame(c) — per-frame native pad service
-};
-
-// native_fmv.cpp — native .STR movie player. Its only per-instance mutable state is the Start-skip
-// edge flag; the SDL audio-sink handles (s_fmv_dev/freq) stay a shared host-output singleton (you
-// can't open two host audio devices for one speaker; a lockstep RAM diff is unaffected by them).
-struct FmvState {
-  int start_prev = 0;   // Start was down on the previously polled frame (skip edge-detect) (was s_fmv_start_prev)
-};
-
 #include "pc_scheduler.h"          // class PcScheduler — the PC-native cooperative task scheduler
                                    // (per-task contexts, run flags, step-spread counters, stanza dispatch)
-
-// native_stub.cpp — the native SCEA boot-stub (renders SCEA + LoadExec's MAIN.EXE). Only field
-// still in use is main_path (2 reads in native_stub_run); the old boot-stub VBlank counter and
-// LoadExec longjmp target are gone in the current PC-native boot path.
-struct StubState {
-  const char* main_path = nullptr;  // MAIN.EXE path, reloaded at LoadExec hand-off (was g_main_path)
-};
 
 class Game {
 public:
@@ -169,14 +57,14 @@ public:
 
   // ---- migrated subsystem state (one member per migrated subsystem) ----
   Timing      timing;
-  CdState     cd;
+  Cd          cd;    // native CD subsystem: sync reads + libcd HLE + deferred-music state (cd_override.cpp)
   CdcState    cdc;   // native CD-controller register model (per-instance; cdc_native.c, bound via cdc_bind)
   XaState     xa;    // native XA-ADPCM CD-audio/voice streamer (per-instance; xa_stream.c, bound via xa_bind)
   Hle         hle;
   Pad         pad;
   Repl        repl;  // interactive REPL driver + REPL-armed auto-drive requests (repl.cpp)
-  FmvState    fmv;
-  StubState   stub;
+  Fmv         fmv;   // native .STR movie player (native_fmv.cpp)
+  BootStub    stub;  // SCEA splash + MAIN.EXE LoadExec hand-off (native_stub.cpp)
   PcScheduler pcSched;   // native cooperative task scheduler (game/core/pc_scheduler.cpp)
   GpuState    gpu;   // native GPU: VRAM + draw/display state + the rasterizer (gpu_native.cpp)
   GpuGpuState  gpu_gpu;// Vulkan present backend: per-frame batch/depth/dirty/present state (gpu_gpu.cpp)
@@ -196,12 +84,8 @@ public:
   GteRegs     gte{}; // GTE (COP2) register file — per-instance so two cores keep SEPARATE GTE state
                      // (Beetle gte.c bound to this via GTE_BindState; see gte_bind, gte_beetle.cpp)
   // (native-depth cache moved to `class ProjPrim` on Render — reach as `c->mRender->projprim`, 2026-07-03)
-  void* spu_state = nullptr;  // per-instance SPU state (Beetle spu.c), heap-allocated; bound via SPU_BindState
-  int   spu_powered = 0;      // SPU_Power run on this instance's state yet? (lazy power on first bind)
-  void* spu_log = nullptr;    // per-Game SPU write log (SpuWriteLog*, spu_beetle.c) — Sbs compares A vs B at
-                              // frame boundary to flag audio-relevant divergences (Issue #29). NULL when SBS off.
-  void* mdec_state = nullptr; // per-instance MDEC state (Beetle mdec.c), heap-allocated; bound via MDEC_BindState
-  int   mdec_powered = 0;     // MDEC_Power run on this instance's state yet? (lazy power on first bind)
+  SpuDevice   spu;   // per-instance SPU device (Beetle spu.c handle + SBS write log); bound via spu.bind()
+  MdecDevice  mdec;  // per-instance MDEC device (Beetle mdec.c handle); bound via mdec.bind()
 
   // ---- PSX-fallback gate (diagnostic, user 2026-06-23) --------------------------------------------
   // ONE switch: keep BOOT (native crt0/FMV/init) and the FRAME LOOP skeleton native, but run EVERYTHING
@@ -264,11 +148,10 @@ public:
   // reach the rest of the machine (e.g. blit_src -> gpu_gpu via gpu.game; frame_via_fb -> s_seen3d via
   // gpu_gpu.game->core). Set once here so no file-scope global is needed.
   Game() { core.game = this; gpu.game = this; gpu_gpu.game = this; timing.game = this; pad.game = this;
-           hle.game = this; rq.game = this; pcSched.game = this;
+           hle.game = this; rq.game = this; pcSched.game = this; cd.game = this; fmv.game = this;
+           stub.game = this;
            spu_audio.game = this; native_music.game = this; music_list.game = this;
            rml_overlay.game = this; platform_hle.game = this; memcard.game = this;
            dbg_server.game = this; verify.core = &core; ffspan.core = &core;
-           spu_state = SPU_NewState(); mdec_state = MDEC_NewState();
            cdc_state_init(&cdc); xa_state_init(&xa); }   // per-instance CD-controller + XA streamer defaults
-  ~Game() { SPU_FreeState(spu_state); MDEC_FreeState(mdec_state); }
 };
