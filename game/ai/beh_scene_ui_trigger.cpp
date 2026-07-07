@@ -1,4 +1,4 @@
-// engine/beh_scene_ui_trigger.cpp — PC-native per-object BEHAVIOR handler FUN_800739AC.
+// game/ai/beh_scene_ui_trigger.cpp — PC-native per-object BEHAVIOR handler FUN_800739AC.
 //
 // One of the resident, GENERIC per-object behavior routines the field OBJECT-PLACEMENT DRIVER
 // (FUN_80072A78, ov_place_objects) installs at node+0x1c. The seaside field installs it on its type-01

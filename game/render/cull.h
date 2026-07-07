@@ -1,4 +1,4 @@
-// engine/cull.h — PC-native visibility CULL / LOD subsystem.
+// game/render/cull.h — PC-native visibility CULL / LOD subsystem.
 //
 // class Cull — instance subsystem owned by Engine. The engine OWNS the per-object visibility decision
 // (per CLAUDE.md: render ordering / visibility is the engine's, with its own widescreen-aware margin;

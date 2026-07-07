@@ -3,7 +3,7 @@
 // The arithmetic is the RE'd engine behaviour (docs/engine_re.md "CutsceneCamera"; later-173..176); this file
 // restructures it into methods over named state (no guest register convention). It is verified per-call
 // against the recomp oracle on the live SOP scene via `cam_snap_follow` (PSXPORT_DEBUG=camverify) and by the
-// oracle UNIT TEST over every method incl. the driver (game/camera/cutscene_camera_test.cpp).
+// oracle UNIT TEST over every method incl. the driver (game/camera/cutscene_camera_selftest.cpp).
 #include "cutscene_camera.h"
 #include "cfg.h"
 #include "game.h"      // c->game->verify — the shared A/B verify scaffold (camverify)

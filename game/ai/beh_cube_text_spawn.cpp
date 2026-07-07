@@ -1,4 +1,4 @@
-// engine/beh_cube_text_spawn.cpp — PC-native per-object BEHAVIOR handler FUN_8003AD48.
+// game/ai/beh_cube_text_spawn.cpp — PC-native per-object BEHAVIOR handler FUN_8003AD48.
 //
 // A RESIDENT MAIN.EXE per-object behavior (range 0x8003AD48..0x8003B04C; `jr ra` at 0x8003b04c). The
 // "cube letters" text actor (~x142/field-frame on seaside): measures a string and spawns one record per

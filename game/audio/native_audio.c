@@ -1,4 +1,4 @@
-// engine/audio/native_audio.c — the SHARED PC-native audio synth core.
+// game/audio/native_audio.c — the SHARED PC-native audio synth core.
 //
 // See native_audio.h. This is tools/snd_render.c's proven synth (VAB parse + PSX ADPCM decode +
 // ADSR/pitch/pan voice synth + SEP sequencer), lifted verbatim but de-globalized: every routine

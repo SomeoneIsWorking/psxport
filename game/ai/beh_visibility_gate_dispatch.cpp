@@ -1,4 +1,4 @@
-// engine/beh_visibility_gate_dispatch.cpp — PC-native per-object BEHAVIOR handler FUN_8004C238.
+// game/ai/beh_visibility_gate_dispatch.cpp — PC-native per-object BEHAVIOR handler FUN_8004C238.
 //
 // A RESIDENT MAIN.EXE per-object behavior routine (range 0x8004C238..0x8004C92C; epilogue at
 // 0x8004C920, `jr ra` at 0x8004C928; next function prologue at 0x8004C930). Same SHAPE as the

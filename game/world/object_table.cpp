@@ -4,7 +4,7 @@
 #include "game.h"        // c->game->verify — the shared A/B verify scaffold
 #include "core.h"
 #include "cfg.h"
-#include "scene/engine.h"           // c->engine.animation etc (not needed here but consistent)
+#include "core/engine.h"           // c->engine.animation etc (not needed here but consistent)
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>

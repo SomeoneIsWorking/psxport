@@ -18,7 +18,7 @@
 
 #include "scene/script_interp.h"
 #include "core.h"
-#include "scene/engine.h"
+#include "core/engine.h"
 #include "object/behavior_dispatch.h"
 #include <cstdint>
 

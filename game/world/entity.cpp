@@ -1,4 +1,4 @@
-// engine/entity.cpp — PC-native per-object ENTITY STATE-MACHINE subsystem.
+// game/world/entity.cpp — PC-native per-object ENTITY STATE-MACHINE subsystem.
 // The per-object behavior cluster that drives each entity's logic: the child-node spawn / sub-object
 // builder (FUN_80040410), the per-object dispatcher loop over the 0x800ec188 table (FUN_80026C88), the
 // state-machine head (FUN_80040558), and the oscillate / frame-toggle sub-behavior (FUN_8003FD10).
@@ -360,7 +360,7 @@ static void osc_fd10(Core* c) {
 // reachable by address via rec_dispatch (each honors its own owned override identically).
 //
 // RE'd verbatim from disas 0x8007a904 (two identical loops, list0 head 0x800FB168 then list1 head
-// 0x800F2624 — the SAME (head) vars the spawn primitive links into, entity_spawn.cpp LIST_HEAD[0]/[1]):
+// 0x800F2624 — the SAME (head) vars the spawn primitive links into, spawn.cpp LIST_HEAD[0]/[1]):
 //   for (n = *head; n != 0; n = next) {
 //     next        = u32[n + 0x24];   // NEXT captured BEFORE the handler runs (a handler may relink/free n;
 //                                    //   `next` is a callee-saved reg in the recomp body, so it survives)

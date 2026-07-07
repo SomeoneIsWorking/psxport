@@ -1,4 +1,4 @@
-// engine/beh_area_event_dispatch.cpp — PC-native per-object BEHAVIOR handler FUN_80071A3C.
+// game/ai/beh_area_event_dispatch.cpp — PC-native per-object BEHAVIOR handler FUN_80071A3C.
 //
 // A RESIDENT MAIN.EXE per-object behavior routine (prologue 0x80071A3C; `jr ra` at 0x80071B3C).
 // Same SHAPE as the sibling owned behaviors (the FUN_739ac handler / the FUN_73cd8 handler / the FUN_8004c238 handler): a state

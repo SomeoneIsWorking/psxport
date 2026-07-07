@@ -34,7 +34,7 @@
 
 #include "core.h"
 #include "spawn.h"
-#include "render/screen_fade/screen_fade.h"
+#include "render/screen_fade.h"
 #include <cstdint>
 
 void rec_dispatch(Core*, uint32_t);

@@ -6,7 +6,7 @@
 // MECHANICALLY, run the SAME game (native boot + native frame loop + NATIVE gameplay) two ways, differing
 // ONLY in the render path, and diff the guest RAM per frame:
 //   * core A = NATIVE render (g_render_psx = 0) — ov_render_frame runs the native render walks that attach
-//                                  per-object depth into guest object fields (engine_submit.cpp).
+//                                  per-object depth into guest object fields (submit.cpp).
 //   * core B = PSX render    (g_render_psx = 1) — ov_render_frame dispatches the PSX recomp render 0x8003f9a8.
 // Both run identical NATIVE gameplay, so they stay frame-synced (the FMV/load-time desync that breaks the
 // psx_fallback compare does NOT apply here). We navigate each to the gameplay-START flag, then run N frames

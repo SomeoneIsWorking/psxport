@@ -1,4 +1,4 @@
-// engine/beh_sibling_angle_track.cpp — PC-native per-object BEHAVIOR handler FUN_801395C0 (OVERLAY).
+// game/ai/beh_sibling_angle_track.cpp — PC-native per-object BEHAVIOR handler FUN_801395C0 (OVERLAY).
 //
 // An OVERLAY-resident per-object behavior routine (lives in the field overlay, immediately AFTER its
 // sibling FUN_80138FC8 — its epilogue jr ra is at 0x80139830 and the next function has its own prologue

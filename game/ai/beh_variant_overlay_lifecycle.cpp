@@ -1,4 +1,4 @@
-// engine/beh_variant_overlay_lifecycle.cpp — PC-native per-object BEHAVIOR handler FUN_8007DC38.
+// game/ai/beh_variant_overlay_lifecycle.cpp — PC-native per-object BEHAVIOR handler FUN_8007DC38.
 //
 // A RESIDENT MAIN.EXE per-object behavior (installed by FUN_8007E038, which sets node[0x1C]=this handler,
 // node[0x47]=1, node[3]=variant, node[0x28]|=0x80, and seeds the record-table pointers node[0x48]/[0x4C]/

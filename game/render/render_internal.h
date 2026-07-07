@@ -1,5 +1,5 @@
 // Shared internals of the native render path — split out so the geometry-SUBMIT subsystem
-// (engine_submit.cpp: poly submitters, the render-command dispatcher, transform/matrix orchestration)
+// (submit.cpp: poly submitters, the render-command dispatcher, transform/matrix orchestration)
 // and the render-list WALK subsystem (render_walk.cpp: ov_scene_native + the master/snapshot/aux list
 // walks + per-object render/flush + the native backdrop) can live in separate files while sharing the
 // few helpers both need (per-object depth tagging, the nesting-safe packet-span session, and the native
@@ -51,7 +51,7 @@ static inline void fps60_bb_node(Core* c, uint32_t lo, uint32_t hi, uint32_t nod
 // in pkt_span.h — reached as c->mRender->pktSpan. PktSpanSession is defined there; its ctor/close
 // implementation is in pkt_span.cpp.
 
-// Fully-native generic GT3/GT4 submit is Render::gt3gt4 (engine_submit.cpp); the per-object flush in
+// Fully-native generic GT3/GT4 submit is Render::gt3gt4 (submit.cpp); the per-object flush in
 // the walk calls it directly. Scene-table (0x800F2418) world-coord render is Render::fieldEntityRender.
 
 // DIAG (debug channel "silbbox", scratch/handoff.md 2026-07-01 "dark outline" investigation): log the

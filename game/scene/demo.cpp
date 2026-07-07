@@ -1,5 +1,5 @@
-// engine_demo.cpp — PC-native ownership of the DEMO / front-end MENU stage state machine (the
-// title/attract/menu front-end), mirroring engine_stage.cpp's GAME-stage pattern. Boundary: the
+// demo.cpp — PC-native ownership of the DEMO / front-end MENU stage state machine (the
+// title/attract/menu front-end), mirroring engine.cpp's GAME-stage pattern. Boundary: the
 // ENGINE owns the substate machine (which substate runs, what sm fields each transition writes); the
 // per-substate SYSTEM work (the inner menu input machines, loaders, SFX, render) stays dispatched to
 // the retained PSX content/system code. Full RE map: docs/engine_re.md "DEMO / front-end MENU stage".
@@ -174,7 +174,7 @@ void Demo::s6() { Core* c = core;
 // DEEP-YIELDING substates s0/s4/s5/s7 (later-183) — the ones whose substantive sub-call reaches
 // the single cooperative yield FUN_80051f80, so they CANNOT be rec_dispatch'd from inside the
 // override (a deep longjmp destroys the override's C frame and kills task 0 — later-168/169).
-// They use the coro-redirect-INTO-the-yielder handshake (ov_game_s4c shape, engine_stage.cpp):
+// They use the coro-redirect-INTO-the-yielder handshake (ov_game_s4c shape, engine.cpp):
 // the override does the ownable native work + sets up the registers/ra the guest stream expects,
 // then rec_coro_redirect to the guest address so the deep yield runs IN-CONTEXT (it longjmps to
 // the scheduler and resumes correctly; the guest stream then reaches a TAIL and yields).
@@ -338,7 +338,7 @@ void Demo::s7Phase() { Core* c = core;
 }
 
 // DEMO stage entry (0x801062E4) — own the prologue PC-native, then hand to the guest per-frame loop body
-// @0x80106388 via the coro-redirect handshake. Mirrors ov_game_stage_main (engine_stage.cpp). Called
+// @0x80106388 via the coro-redirect handshake. Mirrors ov_game_stage_main (engine.cpp). Called
 // DIRECTLY from the native scheduler (native_boot.cpp) when task 0 enters stage 1 (DEMO); the override
 // table that used to intercept 0x801062E4 is gone (2026-06-22). WHY this is needed: run as pure PSX, the
 // DEMO entry's prologue drives the libetc/libcd display+CD init which busy-waits on the vblank-IRQ VSync

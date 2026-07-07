@@ -35,7 +35,7 @@
 #include "core.h"
 #include "cfg.h"
 #include "behaviors.h"
-#include "scene/engine.h"
+#include "core/engine.h"
 void rec_dispatch(Core*, uint32_t);
 #include "player/actor_tomba.h"                // c->engine.actorTomba.interactWalk (FUN_80022760)
 

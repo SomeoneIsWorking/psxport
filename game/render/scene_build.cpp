@@ -1,4 +1,4 @@
-// game/render/scene/scene_build.cpp — NATIVE scene enumeration: engine state -> RenderScene draw list.
+// game/render/scene_build.cpp — NATIVE scene enumeration: engine state -> RenderScene draw list.
 //
 // Walks the engine's three active entity lists, and for every LIVE 3D-MESH node builds a float
 // model->view transform from the node's OWN world data (euler rotation + position + scale) composed with
@@ -19,7 +19,7 @@
 // what native_terrain.cpp reads; it is the engine's own composed camera, not a PSX render artifact.
 #include "core.h"
 #include "cfg.h"
-#include "../render_native.h"
+#include "render_native.h"
 #include "scene_data.h"
 #include <stdint.h>
 #include <stdio.h>
@@ -27,7 +27,7 @@
 
 // CR24/25/26 (projection center + H). These are the camera projection the engine configured (libgte
 // SetGeomOffset/SetGeomScreen, owned in game_tomba2.cpp). A future engine-owned camera supplies them
-// directly; for now we read them like the rest of the native projection path (engine_project.cpp).
+// directly; for now we read them like the rest of the native projection path (projection.cpp).
 uint32_t gte_read_ctrl(uint32_t reg);
 
 #define SCR 0x1F800000u

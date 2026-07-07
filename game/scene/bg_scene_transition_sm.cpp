@@ -1,4 +1,4 @@
-// engine/bg_scene_transition_sm.cpp — PC-native SOP intro BG scene-transition / screen-fade machine.
+// game/scene/bg_scene_transition_sm.cpp — PC-native SOP intro BG scene-transition / screen-fade machine.
 //
 // Owns the resident leaf FUN_8002655c (the next contiguous top-down frontier below the already-native SOP
 // field update ov_sop_field_update / FUN_801092b4, sop.cpp). It is the intro-cutscene fade manager
@@ -34,7 +34,7 @@
 #include <string.h>
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
-#include "render/screen_fade/screen_fade.h"   // class ScreenFade — the single fade driver
+#include "render/screen_fade.h"   // class ScreenFade — the single fade driver
 #include "bg_scene_transition_sm.h"
 
 namespace {

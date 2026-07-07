@@ -1,4 +1,4 @@
-// game/math/engine_math.h — the hot per-frame GTE-transform CLUSTER (rotation-matrix compose + apply).
+// game/math/gte_math.h — the hot per-frame GTE-transform CLUSTER (rotation-matrix compose + apply).
 //
 // class Math — instance subsystem owned by Core (`Core::math`), back-pointer wired in Core::Core().
 // Callers reach it as `c->math.matMul(rPtr, mPtr, outPtr)` — no Core* on the method surface. Was
@@ -7,7 +7,7 @@
 //
 // SCOPE: 3x3 matrix multiply (FUN_80084110), MVMVA apply (FUN_80084220), 3-Euler RotMatrix
 // (FUN_80085480), and the 3 axis-rotation composers RotMatrixX/Y/Z (FUN_80084D10 / EB0 / 5050).
-// All PC-native + GTE-bit-exact (verified via the `mathverify` gate in engine_math.cpp); each writes
+// All PC-native + GTE-bit-exact (verified via the `mathverify` gate in gte_math.cpp); each writes
 // the GTE data-reg leftovers a downstream still-PSX `gte_op` reader could consume, so the coupling
 // is preserved.
 //

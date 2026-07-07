@@ -25,7 +25,7 @@
 
 #include "core.h"
 #include "cfg.h"
-#include "scene/engine.h"          // c->engine.script / c->engine.spawn
+#include "core/engine.h"          // c->engine.script / c->engine.spawn
 #include "object/actor.h"          // Actor::boundsCull (FUN_8007778C, native)
 #include "spawn.h"                 // c->engine.spawn.despawn (FUN_8007A624, native)
 void rec_dispatch(Core*, uint32_t);

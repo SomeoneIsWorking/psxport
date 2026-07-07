@@ -39,7 +39,7 @@
 //   0x801398E4 — sub-check inside variant4Sm case 2 (returns 2/3 to drive state advance)
 
 #include "core.h"
-#include "scene/engine.h"
+#include "core/engine.h"
 #include "object/behavior_dispatch.h"
 #include "scene/script_interp.h"
 #include <cstdint>

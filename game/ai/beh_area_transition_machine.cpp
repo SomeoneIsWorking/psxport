@@ -1,4 +1,4 @@
-// engine/beh_area_transition_machine.cpp — PC-native per-object BEHAVIOR handler FUN_80127798.
+// game/ai/beh_area_transition_machine.cpp — PC-native per-object BEHAVIOR handler FUN_80127798.
 //
 // Overlay handler (~x774/field-frame on seaside). THE area-transition / cutscene-fade driver: node[5]==3
 // runs a node[6] phase machine that fades out, loads the next area (FUN_80054198/FUN_80054d14) and

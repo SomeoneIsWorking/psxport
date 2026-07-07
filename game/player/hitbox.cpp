@@ -1,4 +1,4 @@
-// engine/hitbox.cpp — PC-native ownership of FUN_8003B220.
+// game/player/hitbox.cpp — PC-native ownership of FUN_8003B220.
 //
 // FUN_8003B220 — per-object 2D BOX / hitbox-corner BUILDER (a pure resident leaf; ~1.64% of the seaside
 // field's sampled interpreter time, the hottest still-recomp resident CONTENT leaf that is NOT a

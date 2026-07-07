@@ -1,4 +1,4 @@
-// engine_bav.cpp — per-area BAV (effect/animation cel) LOADER, owned PC-native.
+// bav_loader.cpp — per-area BAV (effect/animation cel) LOADER, owned PC-native.
 //
 // TARGET: gen_func_80096590 -> ov_bav_load. This is the engine's per-area effect-cel loader: it
 // takes a BAV descriptor, allocates a cel SLOT, parses the descriptor's cel-record + UV tables,

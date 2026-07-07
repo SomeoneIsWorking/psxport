@@ -1,4 +1,4 @@
-// engine/beh_actor_move_sm.cpp — PC-native per-object BEHAVIOR handler FUN_8011D988.
+// game/ai/beh_actor_move_sm.cpp — PC-native per-object BEHAVIOR handler FUN_8011D988.
 //
 // Overlay handler (~x776/field-frame on seaside). Ported from the Ghidra decompile of FUN_8011D988
 // (scratch/decomp/field2/8011d988.c). A rich movement actor with two per-frame phases (outer node[4]==1

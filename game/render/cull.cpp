@@ -1,4 +1,4 @@
-// engine/cull.cpp — PC-native visibility CULL / LOD subsystem.
+// game/render/cull.cpp — PC-native visibility CULL / LOD subsystem.
 // The engine owns the per-object visibility decision (per CLAUDE.md THE BOUNDARY: render ordering /
 // visibility is the engine's, with its OWN widescreen-aware margin — it does NOT inherit the stock
 // ±34° PSX cone). This module holds the per-object cull body (FUN_8007712C / ov_object_cull) with its
@@ -34,7 +34,7 @@ static inline uint16_t obj_r16(Core* c, uint32_t a) { return (uint16_t)(c->mem_r
 // extended distance, regardless of aspect — a margin EVEN BEYOND what widescreen needs. After the recomp
 // body runs (it cleared the +1 flag for anything it culled), we re-include the dropped objects whose
 // (dist, forward-dot) fall inside the engine's own, wider kept region (collected for the post-walk margin
-// flush — no +1 poke, so gameplay stays 0-diff; see margin_render.hpp). Env overrides are diagnostic only.
+// flush — no +1 poke, so gameplay stays 0-diff; see margin_render.h). Env overrides are diagnostic only.
 static unsigned isqrt32(unsigned v) { unsigned r = 0, b = 1u << 30; while (b > v) b >>= 2;
   while (b) { if (v >= r + b) { v -= r + b; r = (r >> 1) + b; } else r >>= 1; b >>= 2; } return r; }
 

@@ -1,4 +1,4 @@
-// engine/mathlib.cpp — PC-native MATH/PRNG leaf primitives.
+// game/math/mathlib.cpp — PC-native MATH/PRNG leaf primitives.
 // The platform PRNG (rand LCG), the trig LUT lookups (sin/cos/quadrant), and the bitmap bit-test —
 // pure leaf functions over guest tables/state, hot in the per-frame transform/anim math. Extracted
 // verbatim from game_tomba2.cpp (one behavior, byte-identical) into its own module for PC-game code

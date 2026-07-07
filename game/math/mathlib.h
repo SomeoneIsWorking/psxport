@@ -1,4 +1,4 @@
-// engine/mathlib.h — game bitmap-flag bit-test subsystem.
+// game/math/mathlib.h — game bitmap-flag bit-test subsystem.
 // The trig LUTs live on `class Trig` (game/math/trig.h); the PRNG lives on `class Rng`
 // (`c->rng.next()`). This header exposes the remaining bitmap-bit-test primitives as
 // `class Bit`, an INSTANCE subsystem owned by Engine — the ops read specific per-run game

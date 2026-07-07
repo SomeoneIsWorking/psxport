@@ -1,4 +1,4 @@
-// engine/beh_anim_trigger_gates.cpp — PC-native per-object BEHAVIOR handler FUN_80129C00.
+// game/ai/beh_anim_trigger_gates.cpp — PC-native per-object BEHAVIOR handler FUN_80129C00.
 //
 // Overlay handler (~x2334/field-frame on seaside; ~130 instr), prologue 0x80129C00; `jr ra` at
 // 0x80129E84. Disassembled from scratch/ram/field_seaside.bin incl. its in-overlay jump table

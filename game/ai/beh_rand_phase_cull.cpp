@@ -1,4 +1,4 @@
-// engine/beh_rand_phase_cull.cpp — PC-native per-object BEHAVIOR handler FUN_8002918C.
+// game/ai/beh_rand_phase_cull.cpp — PC-native per-object BEHAVIOR handler FUN_8002918C.
 //
 // Resident handler (~46 lines), prologue 0x8002918C. Ported from the Ghidra decompile of FUN_8002918c
 // (scratch/decomp/ram_f1000_all.c). A small PRNG phase-accumulator + cone-cull tick driven by the outer

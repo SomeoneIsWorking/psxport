@@ -1,4 +1,4 @@
-// engine/beh_scatter_ramp_machine.cpp — PC-native per-object BEHAVIOR handler FUN_8013C9C0.
+// game/ai/beh_scatter_ramp_machine.cpp — PC-native per-object BEHAVIOR handler FUN_8013C9C0.
 //
 // 3rd-hottest still-PSX OVERLAY handler (~x4302/field-frame on seaside; ~190 instr), an area-overlay
 // routine (prologue 0x8013C9C0; `jr ra` at 0x8013CDCC). Lives only at runtime in the area overlay

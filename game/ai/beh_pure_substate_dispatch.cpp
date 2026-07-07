@@ -1,4 +1,4 @@
-// engine/beh_pure_substate_dispatch.cpp — PC-native per-object BEHAVIOR handler FUN_80125E0C.
+// game/ai/beh_pure_substate_dispatch.cpp — PC-native per-object BEHAVIOR handler FUN_80125E0C.
 //
 // Overlay handler (~x1556/field-frame on seaside; ~80 instr), prologue 0x80125E0C; `jr ra` at
 // 0x80125F48. Disassembled from scratch/ram/field_seaside.bin. PURE control-flow dispatcher — it has

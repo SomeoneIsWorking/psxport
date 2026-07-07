@@ -1,4 +1,4 @@
-// engine/beh_quad_record_table_seed.cpp — PC-native per-object BEHAVIOR handler FUN_80135D64.
+// game/ai/beh_quad_record_table_seed.cpp — PC-native per-object BEHAVIOR handler FUN_80135D64.
 //
 // Overlay handler (~x1552/field-frame on seaside; ~230 instr), prologue 0x80135D64; `jr ra` at
 // 0x801360EC. Disassembled from scratch/ram/field_seaside.bin. Outer state machine on node[4]:

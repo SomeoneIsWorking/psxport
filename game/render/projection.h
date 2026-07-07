@@ -1,4 +1,4 @@
-// engine/engine_project.h — PC-NATIVE object render transform & projection.
+// game/render/projection.h — PC-NATIVE object render transform & projection.
 //
 // A real PC game keeps its objects and camera as WORLD-SPACE data and transforms vertices in float; it
 // does not consult the PSX GTE to decide where a vertex lands or how deep it is. The projection data types

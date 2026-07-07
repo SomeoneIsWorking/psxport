@@ -1,4 +1,4 @@
-// engine/engine_project.cpp — PC-NATIVE object render transform & projection (see engine_project.h).
+// game/render/projection.cpp — PC-NATIVE object render transform & projection (see projection.h).
 //
 // The per-object render is decoupled from the PSX GTE here. Render::projComposeObject builds the camera ×
 // object transform in FLOAT from the object's real world coordinates; EObjXform::project runs the RTPT
@@ -15,7 +15,7 @@
 //   T = (Rcam · Tobj) / 4096 + Tcam   (composed view translation)
 // This is exactly view = Rcam·(Robj·v + Tobj) + Tcam — a standard model→world→view transform.
 
-#include "engine_project.h"
+#include "projection.h"
 #include "render.h"
 #include "core.h"
 #include "cfg.h"

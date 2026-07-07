@@ -128,7 +128,7 @@ public:
   // posX / posY / posZ (obj+0x2E/0x32/0x36): the object's world position, read as HALFWORDS at
   //   stride 4 (skipping padding at 0x2C/0x30/0x34). Confirmed from the CULL WRAPPER FUN_8007778C
   //   (subtracts camera scratchpad 0x1F8000D2/D6/DA from these three) and from the scene walker
-  //   (game/render/scene/scene_build.cpp reads them as `P[3]` before the model->view compose).
+  //   (game/render/scene_build.cpp reads them as `P[3]` before the model->view compose).
   //
   //   NOTE: FUN_801337E4's section-A reset and per-type seed (osc_base_table) write posY (obj+0x32),
   //   which had earlier been mis-named `oscBase` in this file. Its FUN_801337E4 role is a
@@ -190,7 +190,7 @@ public:
 
   // ── World transform (EULER angles + a scene-entity handle) ───────────────────────────────────────
   // rotX / rotY / rotZ (obj+0x54/0x56/0x58, u16 signed as needed): the object's Euler rotation used
-  //   by the scene walker (game/render/scene/scene_build.cpp reads these as `euler_to_R(ax,ay,az)`).
+  //   by the scene walker (game/render/scene_build.cpp reads these as `euler_to_R(ax,ay,az)`).
   //   rotY (obj+0x56) is also passed as SIGNED-halfword arg into FUN_801337E4's subFlag turn-lookup
   //   sub-behavior (state_one_tick's run_turn_setup — the "which direction is the pilot from us"
   //   dispatch). beh_typed_init_scene_trigger's state-0 init zero-clears rotX/rotZ and writes rotY

@@ -7,7 +7,7 @@
 // becomes the default.
 #ifndef GAME_RENDER_NATIVE_H
 #define GAME_RENDER_NATIVE_H
-#include "scene/scene_data.h"
+#include "scene_data.h"
 
 class Core;
 
@@ -19,7 +19,7 @@ public:
   void run();
 
   // Walk the engine's scene state (three entity lists + camera) and populate mScene. Reads guest RAM
-  // only; writes nothing. Returns the object count. (impl: scene/scene_build.cpp)
+  // only; writes nothing. Returns the object count. (impl: scene_build.cpp)
   int collect();
 
   // Draw one SceneObject's geomblk: transform each GT3/GT4 prim's model verts by the object's float

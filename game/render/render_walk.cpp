@@ -8,7 +8,7 @@
 // flush composes the float camera x object transform and submits generic GT3/GT4 natively (no PSX per-mode
 // dispatcher), and the native backdrop draws the sky/parallax tilemap as RQ_BACKGROUND behind the world.
 //
-// Split out of engine_submit.cpp (the geometry-SUBMIT subsystem) so the scene renderer is its own PC-game
+// Split out of submit.cpp (the geometry-SUBMIT subsystem) so the scene renderer is its own PC-game
 // file. Shared helpers (PktSpanSession, obj_world_ord/cur_render_node) live in render_internal.h.
 #include "core.h"
 #include "render.h"
@@ -16,7 +16,7 @@
 #include "cfg.h"
 #include "mods.h"
 #include "render_queue.h"
-#include "engine_project.h"   // EObjXform (per-object world-coord float projection; ops on Render)
+#include "projection.h"   // EObjXform (per-object world-coord float projection; ops on Render)
 #include "render_internal.h"
 #include <stdio.h>
 #include <string.h>

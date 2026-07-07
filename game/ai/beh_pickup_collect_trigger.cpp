@@ -1,4 +1,4 @@
-// engine/beh_pickup_collect_trigger.cpp — PC-native per-object BEHAVIOR handler FUN_800741DC.
+// game/ai/beh_pickup_collect_trigger.cpp — PC-native per-object BEHAVIOR handler FUN_800741DC.
 //
 // The third resident per-object behavior routine reached in the seaside field (sibling of FUN_800739AC /
 // FUN_80073CD8). Same state-byte shape (node[4]: 0 init / 1 active / 2 idle / 3 despawn). It is an

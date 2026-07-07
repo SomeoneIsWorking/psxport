@@ -58,7 +58,7 @@ struct GpuGpuState {
   // (semi-overlap grouping s_semi_grp[]/s_sg_* and the dirty-VRAM list s_dirty[] moved into GeomBatch —
   // see the note above; each render target owns its own.)
 
-  // (Engine-owned screen fade moved to class ScreenFade at game/render/screen_fade/; state lives in guest
+  // (Engine-owned screen fade moved to class ScreenFade at game/render/screen_fade.h; state lives in guest
   // memory so per-Core / SBS isolation comes for free. Native present path reads ScreenFade::get(core).)
 
   // This frame's faithful display origin (for the LIGHT screen map) and the last-presented region

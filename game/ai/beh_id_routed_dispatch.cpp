@@ -1,4 +1,4 @@
-// engine/beh_id_routed_dispatch.cpp — PC-native per-object BEHAVIOR handler FUN_80121978.
+// game/ai/beh_id_routed_dispatch.cpp — PC-native per-object BEHAVIOR handler FUN_80121978.
 //
 // Overlay handler (hottest still-PSX overlay handler ~x1592/field-frame on seaside; ~115 instr),
 // prologue 0x80121978; `jr ra` at 0x80121B3C. Disassembled from scratch/ram/field_seaside.bin.

@@ -130,7 +130,7 @@ void gte_probe_dump(const char* tag) {
 // the reimplementation is faithful. Gated on PSXPORT_PROJPROBE (read-only, no effect on output).
 #include <compat/intrinsics.h>   // compat_clz_u16, matching Beetle's Divide() shift-bias
 
-// ProjVtx typedef comes from engine_project.h (included via render.h above); dropped the local decl.
+// ProjVtx typedef comes from projection.h (included via render.h above); dropped the local decl.
 
 // UNR division table — deterministic, generated at compile time (was a lazily-built mutable static).
 struct ProjDivTab { uint8_t t[0x101]; };
@@ -396,7 +396,7 @@ int attach_enabled(void) { return 1; }
 //   to gte.c. That just swaps one PSX-hardware emulator for our own — it advances nothing and is the PSX
 //   mimicry CLAUDE.md forbids. (Reverted the native NCLIP/AVSZ replica then.)
 //   CORRECT (and being done — later-186): port individual gte_op CALLERS to plain C so they no longer
-//   invoke the GTE at all (e.g. engine_math.cpp ov_mat_mul = FUN_80084110's 3x3 matmul). For a RENDER
+//   invoke the GTE at all (e.g. gte_math.cpp ov_mat_mul = FUN_80084110's 3x3 matmul). For a RENDER
 //   caller the engine already owns it PC-native (proj_native_vertex — float matrices, real depth; no
 //   gte_op for render) → bypass, don't replicate. For a caller whose result feeds retained PSX CONTENT
 //   (e.g. object position), the C math MUST produce the game's fixed-point values so the content reads

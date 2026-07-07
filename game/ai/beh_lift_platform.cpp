@@ -1,4 +1,4 @@
-// engine/beh_lift_platform.cpp — PC-native per-object BEHAVIOR handler FUN_8013A330.
+// game/ai/beh_lift_platform.cpp — PC-native per-object BEHAVIOR handler FUN_8013A330.
 //
 // Overlay handler (~x778/field-frame on seaside). Ported from the Ghidra decompile of FUN_8013A330
 // (scratch/decomp/field2/8013a330.c), cross-checked against the raw disasm. A multi-segment (13-record)

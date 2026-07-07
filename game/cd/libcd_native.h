@@ -5,7 +5,7 @@
 // scratch) are the SAME writes the substrate emits — because it is literally that code running.
 //
 // This is the "two native CD readers" model (memory: pc-skip-two-cd-readers):
-//   - pc_skip=true (shortcut)   → cdlibcd_new_media / cdlibcd_cache_file in engine_stage.cpp
+//   - pc_skip=true (shortcut)   → cdlibcd_new_media / cdlibcd_cache_file in engine.cpp
 //                                 (native ISO9660, bypasses libcd, no stack scratch).
 //   - pc_skip=false (faithful)  → this class (LibcdNative). Same guest RAM as substrate B.
 //

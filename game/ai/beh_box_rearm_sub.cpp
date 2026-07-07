@@ -1,4 +1,4 @@
-// engine/beh_box_rearm_sub.cpp — PC-native per-object BEHAVIOR handler FUN_8013ADBC.
+// game/ai/beh_box_rearm_sub.cpp — PC-native per-object BEHAVIOR handler FUN_8013ADBC.
 //
 // Overlay handler (~x778/field-frame on seaside). Ported from the Ghidra decompile of FUN_8013ADBC
 // (scratch/decomp/field2/8013adbc.c). Outer state machine on node[4]:

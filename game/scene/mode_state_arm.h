@@ -20,7 +20,7 @@ public:
   //   backs the previous payload up at 0x800BF8A4..A6, sets the twin arm flags (0x800EA0D4 = 1,
   //   0x800EC144 = 1), and stamps 0x800BF8A7 = (previous_arm_flag << 7) | 1. Widely called with
   //   (0, 0, 0) to "arm the null mode" (input/pad reset shape used by scene_ui trigger, ScreenFade
-  //   sequencer, engine_demo prologue, bf816_dispatch, pool.finalViewInit's fall-through).
+  //   sequencer, demo.cpp prologue, bf816_dispatch, pool.finalViewInit's fall-through).
   //   Ghidra decomp scratch/decomp/bf816_leaves.c.
   void arm(uint8_t a = 0, uint8_t b = 0, uint8_t c = 0);
 

@@ -38,7 +38,7 @@
 
 #include "core.h"
 #include "cfg.h"
-#include "scene/engine.h"          // c->engine.spawn
+#include "core/engine.h"          // c->engine.spawn
 #include "spawn.h"                 // c->engine.spawn.despawn (FUN_8007A624, native)
 void rec_dispatch(Core*, uint32_t);
 

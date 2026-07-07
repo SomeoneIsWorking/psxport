@@ -1,4 +1,4 @@
-// engine/menu.cpp — PC-native in-game OPTIONS MENU subsystem.
+// game/ui/menu.cpp — PC-native in-game OPTIONS MENU subsystem.
 // Replaces the game's in-game Options submenu controller (FUN_8007B45C, the Messages / Sound / Screen
 // adjust / Controls page) with our PC-native (RmlUi) overlay: while the pause menu's page-3 handler
 // runs, show OUR overlay (g_mods toggles) and own the same back-navigation + menu SFX. Falls back to

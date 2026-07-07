@@ -1,4 +1,4 @@
-// engine/beh_pad_child_linker.cpp — PC-native per-object BEHAVIOR handler FUN_8006F2D0.
+// game/ai/beh_pad_child_linker.cpp — PC-native per-object BEHAVIOR handler FUN_8006F2D0.
 //
 // A RESIDENT MAIN.EXE per-object behavior routine (prologue 0x8006F2D0; `jr ra` at 0x8006F9D0). The
 // hottest still-PSX resident handler (~x777/field-frame, ~450 instrs). Same ownership model as the

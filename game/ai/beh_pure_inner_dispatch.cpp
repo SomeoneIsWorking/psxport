@@ -1,4 +1,4 @@
-// engine/beh_pure_inner_dispatch.cpp — PC-native per-object BEHAVIOR handler FUN_80136D9C.
+// game/ai/beh_pure_inner_dispatch.cpp — PC-native per-object BEHAVIOR handler FUN_80136D9C.
 //
 // Overlay handler (~x2334/field-frame on seaside; ~90 instr), prologue 0x80136D9C; `jr ra` at
 // 0x80136F00. Disassembled from scratch/ram/field_seaside.bin. A pure CONTROL-FLOW dispatcher: it

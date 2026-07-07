@@ -47,7 +47,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include "spawn.h"
-#include "world_pool.h"
 #include "game.h"       // c->game->verify — the shared A/B verify scaffold
 void rec_super_call(Core*, uint32_t);
 

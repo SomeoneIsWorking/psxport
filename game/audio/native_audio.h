@@ -1,4 +1,4 @@
-// engine/audio/native_audio.h — the SHARED PC-native audio synth core.
+// game/audio/native_audio.h — the SHARED PC-native audio synth core.
 //
 // This is the ONE codebase used by BOTH the offline renderer (tools/snd_render.c) and the
 // in-game real-time music engine (engine/audio/native_music.c). It owns: VAB ('pBAV') sound-bank

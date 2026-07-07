@@ -1,12 +1,12 @@
-// Tomba2Engine — native widescreen-margin renderer. See margin_render.hpp for the architecture.
+// Tomba2Engine — native widescreen-margin renderer. See margin_render.h for the architecture.
 // RE: docs/journal.md later-133, docs/engine_re.md "Deferred render pipeline".
-#include "margin_render.hpp"
+#include "margin_render.h"
 #include "cfg.h"
 #include <vector>
 #include <unordered_set>
 #include <cstdio>
 
-// mem_r8/mem_w8/rec_dispatch come from r3000.h (via margin_render.hpp).
+// mem_r8/mem_w8/rec_dispatch come from r3000.h (via margin_render.h).
 int gpu_frame_no(Core*);                             // present-frame counter (gpu_native.cpp)
 
 // The per-object render dispatch. RE later-133: gen_func_8003CCA4(a0=node) builds the object's transform

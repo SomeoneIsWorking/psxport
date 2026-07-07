@@ -1,4 +1,4 @@
-// engine/sop.cpp — PC-native ownership of the SOP field-gameplay-mode overlay (the per-area scene
+// game/scene/sop.cpp — PC-native ownership of the SOP field-gameplay-mode overlay (the per-area scene
 // loop reached once the GAME stage enters gameplay). The SOP field-mode machine 0x80109450 (sm[0x50]
 // LOAD->FADE->GAMEPLAY) and its per-frame handler are the gameplay-start engine systems; this file
 // owns them top-down. Map: scratch/gameplay_start_flow_re.md + scratch/sop_mode_re.md.
@@ -26,7 +26,7 @@
 // dispatch a still-recomp leaf with up to 3 args set (helpers for the SOP/transition machines).
 static void d0(Core* c, uint32_t fn);
 // (ov_bg_scene_transition_sm moved to BgSceneTransitionSm::step — c->engine.bgSceneTransitionSm.step())
-#include "render/screen_fade/screen_fade.h"   // class ScreenFade — the single fade driver
+#include "render/screen_fade.h"   // class ScreenFade — the single fade driver
 static void d1(Core* c, uint32_t fn, uint32_t a0);
 static void d2(Core* c, uint32_t fn, uint32_t a0, uint32_t a1);
 #include "camera/cutscene_camera.h"   // class CutsceneCamera — SOP/BG cutscene camera (0x8006E3B0)
@@ -433,7 +433,7 @@ void Sop::fieldUpdate() { Core* c = core;
       c->engine.parallaxBg.step();
       c->game->ffspan.end("parallaxBG");
     }
-    // NOTE: no entity-render / object-walk call here. ov_scene_native (engine_render_walk.cpp) is the
+    // NOTE: no entity-render / object-walk call here. ov_scene_native (render_walk.cpp) is the
     // SOLE owner of both the scene-table render (ov_field_entity_render, 0x800f2418) and the object
     // render-list walk (ov_render_walk, 0x8003c048); it runs every field-stage frame from
     // game_tomba2.cpp's ov_draw_otag regardless of SOP mode, SOP-mode frames included. This function

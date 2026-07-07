@@ -1,4 +1,4 @@
-// engine/beh_cull_substate_orchestrator.cpp — PC-native per-object BEHAVIOR handler FUN_8013259C (OVERLAY).
+// game/ai/beh_cull_substate_orchestrator.cpp — PC-native per-object BEHAVIOR handler FUN_8013259C (OVERLAY).
 //
 // An OVERLAY-resident per-object behavior routine (lives in the field overlay, guest 0x8013xxxx),
 // installed at node+0x1c and called every frame by the entity walk with the object node in a0. Same

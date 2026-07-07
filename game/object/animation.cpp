@@ -1,4 +1,4 @@
-// engine/animation.cpp — PC-native per-object ANIMATION-VM subsystem.
+// game/object/animation.cpp — PC-native per-object ANIMATION-VM subsystem.
 // The per-object animation-sequence VM stepper (FUN_80076D68): walks an 8-byte-stride keyframe stream,
 // counting down the per-frame duration and following tag-keyed jumps. Control flow + memory ops owned
 // native; the 3 frame sub-fns (applier / loader / executor) stay reachable by address via rec_dispatch.

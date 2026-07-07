@@ -1,4 +1,4 @@
-// engine_stage.cpp — PC-native ownership of the GAME stage state machine (the per-area scene/update
+// engine.cpp — PC-native ownership of the GAME stage state machine (the per-area scene/update
 // driver), the engine's top-level "run the game" sequencer. Boundary: the ENGINE owns the scene-state
 // machine (which state runs, what fields reset on each transition); the actual per-state system work
 // (asset load, fade, render, gameplay sub-machines) stays dispatched to the retained PSX content/system
@@ -177,7 +177,7 @@ void Engine::s4c() { Core* c = core;
 
 // (ov_sop_field_mode moved to Sop::fieldMode — c->engine.sop.fieldMode())
 #include "sop.h"                              // class Sop — transitionAreaLoad (sync FIELD transition load)
-#include "render/screen_fade/screen_fade.h"   // class ScreenFade — the single fade driver
+#include "render/screen_fade.h"   // class ScreenFade — the single fade driver
 #include "camera/cutscene_camera.h"           // class CutsceneCamera — resident driver 0x8006EC44 (native)
 void ov_game_func_801084F8(Core*);                          // generated/ov_game_disp.c — still-recomp: draw pause
                                                              // menu + cursor/page-transition handling
@@ -666,7 +666,7 @@ void Engine::gStateMutate(uint32_t G, uint8_t op) { Core* c = core;
   c->mem_w8(0x800BF881u, n174);                      // shared tail — mirror the post-mutation G+0x174
 }
 
-// Engine::fadeSequencer moved to ScreenFade::sequence (game/render/screen_fade/screen_fade.cpp).
+// Engine::fadeSequencer moved to ScreenFade::sequence (game/render/screen_fade.cpp).
 
 // FIELD RUNNING sub-machine 0x80106b98 — native control flow + state bodies (decomp:
 // scratch/decomp/game/80106b98.c). A 12-way switch on sm[0x4e]; the running states call the native
@@ -1405,7 +1405,7 @@ void Engine::frameStartTick() {
 
 // Register the GAME-stage area-init overrides when this just-loaded overlay is GAME.BIN at the stage base.
 // Detect by the fixed entry + handler signatures (START.BIN/DEMO.BIN are smaller and hold stale bytes at
-// these addresses, so they never match). Called from the overlay-load scan (engine_submit.cpp); registered
+// these addresses, so they never match). Called from the overlay-load scan (submit.cpp); registered
 // AUTO so it is flushed when GAME.BIN unloads and another overlay reuses the base (mirrors the M3 scan).
 // ===== Stage-0/START.BIN task-switch + preload state machine (moved from native_boot.cpp, 2026-07
 // restructure). Same stage-machine-orchestration domain this file already owns for the GAME stage; this
@@ -1446,7 +1446,7 @@ static void native_load_overlay(Core* c, uint32_t taskfields, uint32_t stage) {
 }
 
 // FUN_80052078: switch task 0 to the given stage (load overlay + reset the display/BIOS bits).
-// Public entry: called by DEMO's LEAVE-to-GAME substate (engine_demo.cpp s5), by task0Bootstrap after
+// Public entry: called by DEMO's LEAVE-to-GAME substate (demo.cpp s5), by task0Bootstrap after
 // the START.BIN file-table build, by native_stage0_sm (the boot-time inline preload), and by
 // stage0Advance's final step (native scheduler tick that enters DEMO). Was `native_start_stage`
 // (static) + `demo_start_stage` (public wrapper).

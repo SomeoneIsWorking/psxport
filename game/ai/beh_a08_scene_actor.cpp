@@ -36,8 +36,8 @@
 //   0x8013DD48  = sub-obj dispatcher (called from cutsceneDirector state 4/5/6)
 
 #include "core.h"
-#include "scene/engine.h"
-#include "render/screen_fade/screen_fade.h"
+#include "core/engine.h"
+#include "render/screen_fade.h"
 #include <cstdint>
 
 extern "C" void rec_dispatch(Core* c, uint32_t addr);

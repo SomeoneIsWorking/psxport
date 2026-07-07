@@ -1,4 +1,4 @@
-// engine/beh_typed_anim_spawn.cpp — PC-native per-object BEHAVIOR handler FUN_8012DA04.
+// game/ai/beh_typed_anim_spawn.cpp — PC-native per-object BEHAVIOR handler FUN_8012DA04.
 //
 // Overlay handler (~x2331/field-frame on seaside; ~200 instr), prologue 0x8012DA04; `jr ra` at
 // 0x8012DE2C. Disassembled from scratch/ram/field_seaside.bin. Outer state machine on node[4] (v1):

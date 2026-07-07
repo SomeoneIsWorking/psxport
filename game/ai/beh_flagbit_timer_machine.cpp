@@ -1,4 +1,4 @@
-// engine/beh_flagbit_timer_machine.cpp — PC-native per-object BEHAVIOR handler FUN_8013B2E4.
+// game/ai/beh_flagbit_timer_machine.cpp — PC-native per-object BEHAVIOR handler FUN_8013B2E4.
 //
 // Overlay handler (~x778/field-frame on seaside; ~150 instr), prologue 0x8013B2E4; `jr ra` at
 // 0x8013B52C. Disassembled from scratch/ram/field_seaside.bin. Outer state machine on node[4] (s0):

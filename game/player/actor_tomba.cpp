@@ -3,7 +3,7 @@
 // This file consolidates every previously-owned Tomba primitive under one class:
 //   * interactWalk + 3 collision helpers (was game/player/tomba_interact.cpp)
 //   * velocityIntegrate  (was game/player/engine_player.cpp's static player_move_56b48)
-//   * growthStep         (was Engine::playerGrowthStep in game/scene/engine_stage.cpp)
+//   * growthStep         (was Engine::playerGrowthStep in game/core/engine.cpp)
 //
 // Ghidra decomp references:
 //   scratch/decomp/tomba_perframe_22760.c   (interactWalk = FUN_80022760)
@@ -15,7 +15,7 @@
 #include "actor_tomba.h"
 #include "core.h"
 #include "cfg.h"
-#include "scene/engine.h"
+#include "core/engine.h"
 void rec_dispatch(Core*, uint32_t);
 
 namespace {

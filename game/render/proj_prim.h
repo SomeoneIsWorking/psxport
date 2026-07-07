@@ -1,6 +1,6 @@
 // class ProjPrim — per-Core vertex-depth cache used by the native depth path.
 //
-// engine_submit records each vertex's view-space Z keyed by the packet vertex word's GUEST ADDRESS
+// submit.cpp records each vertex's view-space Z keyed by the packet vertex word's GUEST ADDRESS
 // (setPz); the renderer's gp0_exec looks up the depth at each read address (lookupPz). Exact and
 // deterministic by construction — replaced the value-keyed "attach" ring that could only correlate
 // projected SXY back to a depth and was unreliable (same-pixel verts ambiguous; whole-frame staleness).
@@ -28,7 +28,7 @@ public:
   // reset: per-frame — drop last frame's depths so none are read stale.
   void reset();
 
-  // setPz: engine_submit records a vertex's view-Z keyed by the packet-vertex GUEST ADDRESS `addr`.
+  // setPz: submit.cpp records a vertex's view-Z keyed by the packet-vertex GUEST ADDRESS `addr`.
   void setPz(uint32_t addr, float pz);
 
   // lookupPz: renderer's gp0_exec asks for the depth at packet-vertex read-address `addr`. Returns

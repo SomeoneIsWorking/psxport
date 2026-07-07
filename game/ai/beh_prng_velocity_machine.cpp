@@ -1,4 +1,4 @@
-// engine/beh_prng_velocity_machine.cpp — PC-native per-object BEHAVIOR handler FUN_80117658.
+// game/ai/beh_prng_velocity_machine.cpp — PC-native per-object BEHAVIOR handler FUN_80117658.
 //
 // Overlay handler (~x1552/field-frame on seaside; ~430 instr), prologue 0x80117658; `jr ra` at
 // 0x80117CF0. Disassembled from scratch/ram/field_seaside.bin. Two-level state machine; outer

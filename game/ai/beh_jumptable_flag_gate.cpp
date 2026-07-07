@@ -1,4 +1,4 @@
-// engine/beh_jumptable_flag_gate.cpp — PC-native per-object BEHAVIOR handler FUN_8012D4EC (OVERLAY).
+// game/ai/beh_jumptable_flag_gate.cpp — PC-native per-object BEHAVIOR handler FUN_8012D4EC (OVERLAY).
 //
 // An OVERLAY-resident per-object behavior routine (lives in the field overlay, not MAIN.EXE), installed
 // at node+0x1c and called every frame by the entity walk with the object node in a0. Same SHAPE as the

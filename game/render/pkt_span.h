@@ -16,7 +16,7 @@
 //      Saves the outer session's state on open, opens a fresh empty session, and on close restores +
 //      MERGES this session's [lo,hi) into the outer so the outer's final depth-tag covers ALL packets.
 //
-//   2. Manual outer/inner snapshot — for the extern "C" ffspan_* attribution API in engine_stage.cpp
+//   2. Manual outer/inner snapshot — for the extern "C" ffspan_* attribution API in engine.cpp
 //      that has to look like C (called from native_boot's native_step_frame without a C++ context on
 //      each invocation). save() returns an opaque snapshot; open() clears + arms; restoreMerge(snap)
 //      restores the outer and merges the just-closed inner's span into it.
@@ -39,7 +39,7 @@ public:
     }
   }
 
-  // Manual outer/inner nesting primitive (used by ffspan_begin/end + the FFS macro in engine_stage).
+  // Manual outer/inner nesting primitive (used by ffspan_begin/end + the FFS macro in engine.cpp).
   struct Snapshot { int armed; uint32_t lo, hi; };
   Snapshot save() const                     { return Snapshot{ mArmed, mLo, mHi }; }
   void     restore(Snapshot s)              { mArmed = s.armed; mLo = s.lo; mHi = s.hi; }

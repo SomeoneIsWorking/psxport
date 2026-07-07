@@ -1,4 +1,4 @@
-// engine/beh_typed_variant_router.cpp — PC-native per-object BEHAVIOR handler FUN_8011C164.
+// game/ai/beh_typed_variant_router.cpp — PC-native per-object BEHAVIOR handler FUN_8011C164.
 //
 // Overlay handler (~x778/field-frame on seaside). Ported from the Ghidra decompile of FUN_8011C164
 // (scratch/decomp/field2/8011c164.c), cross-checked against the raw disas (tools/disas.py). The biggest

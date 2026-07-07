@@ -148,7 +148,7 @@ void scheduler_yield(Core* c) {
 // pc_faithful (pc_skip=false, SBS gameplay/full mode on core A), when the task's entry PC has no
 // native handler, so substrate-only wakes like task-1 preload (0x80044F58) execute on A same as
 // core B and the FUN_80044BD4 spawn-and-wait cycle actually runs (dropping the completion-shim
-// override in engine_stage.cpp).
+// override in engine.cpp).
 int recomp_run_coro_fiber_stanza(Core* c, int i, uint32_t base, uint32_t st,
                                  int native_content, const R3000& loop) {
   if (native_content) {

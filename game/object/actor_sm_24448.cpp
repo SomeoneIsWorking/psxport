@@ -1,4 +1,4 @@
-// engine/actor_sm_24448.cpp — Tomba!2 per-object actor STATE-MACHINE handler FUN_80024448, PC-native.
+// game/object/actor_sm_24448.cpp — Tomba!2 per-object actor STATE-MACHINE handler FUN_80024448, PC-native.
 //
 // SCOPE (per CLAUDE.md "FULL OWNERSHIP" + the move-and-collide RE in docs/engine_re.md): this owns ONE
 // concrete actor "move-and-collide" SM step end-to-end — its CONTROL FLOW + branch decisions + the guest

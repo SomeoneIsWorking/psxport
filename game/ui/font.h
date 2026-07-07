@@ -7,10 +7,10 @@
 // SCOPE: the FUN_80075130 boot-time font/text init orchestrator + its three engine-state
 // leaves it directly owns (font-bank select, font-bank2 store, glyph-class table fill). The
 // libgpu/sound leaves (draw-env / FntLoad / FntOpen setup, sound bring-up) stay dispatched
-// through rec_dispatch in-context — see engine_font.cpp for the full call chain.
+// through rec_dispatch in-context — see font.cpp for the full call chain.
 //
 // Was the free functions ov_font_init / ov_font_bank_select / ov_font_bank2_store /
-// ov_font_glyphclass_fill in engine_font.cpp — each taking its argument via MIPS taxi
+// ov_font_glyphclass_fill in font.cpp — each taking its argument via MIPS taxi
 // parameter c->r[4]. Now real instance methods with explicit typed arguments.
 #pragma once
 #include <stdint.h>

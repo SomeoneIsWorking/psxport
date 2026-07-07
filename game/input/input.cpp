@@ -1,4 +1,4 @@
-// engine/input.cpp — PC-native per-frame INPUT/controller-state subsystem.
+// game/input/input.cpp — PC-native per-frame INPUT/controller-state subsystem.
 // The per-frame input / controller-state processor (FUN_800931C0) — five phases over the global
 // controller tables (ring buffer, presence accumulator, coherence window, channel flushes). Control
 // flow + memory ops owned native; every sub-call (incl. the indirect fn-ptr globals) stays reachable by

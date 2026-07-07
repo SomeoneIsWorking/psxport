@@ -31,9 +31,9 @@ extern "C" {  // Beetle GTE (mednafen gte.c, compiled as C)
 // ---- per-frame projected-geometry fingerprint (rate detector input) -----------------
 
 void Fps60::fold(uint32_t v) {
-  uint64_t h = s_frame_hash;
+  uint64_t h = mFrameHash;
   for (int i = 0; i < 4; i++) { h ^= (v & 0xFF); h *= 1099511628211ull; v >>= 8; }
-  s_frame_hash = h; s_frame_geom++;
+  mFrameHash = h; mFrameGeom++;
 }
 
 // ---- SXY → object-id grid (the join) -------------------------------------------------
@@ -43,14 +43,14 @@ void Fps60::fold(uint32_t v) {
 void Fps60::grid_put(int sx, int sy, uint32_t obj) {
   int x = sx & (GW - 1), y = sy & (GH - 1);
   int i = y * GW + x;
-  s_obj_grid[i] = obj; s_obj_stamp[i] = s_epoch;
+  mObjGrid[i] = obj; mObjStamp[i] = mEpoch;
 }
 uint32_t Fps60::grid_get(int px, int py) {  // ±2px search; returns the source object's node pointer
   for (int dy = -2; dy <= 2; dy++)          // (0 = no object near here / CPU-projected → caller snaps)
     for (int dx = -2; dx <= 2; dx++) {
       int x = (px + dx) & (GW - 1), y = (py + dy) & (GH - 1);
       int i = y * GW + x;
-      if (s_obj_stamp[i] == s_epoch && s_obj_grid[i]) return s_obj_grid[i];
+      if (mObjStamp[i] == mEpoch && mObjGrid[i]) return mObjGrid[i];
     }
   return 0;
 }
@@ -70,24 +70,24 @@ static void xfold(XObj* o, uint32_t v) {     // fold a local-vertex word into th
   o->fp ^= v + 0x9E3779B97F4A7C15ull + (o->fp << 6) + (o->fp >> 2);
 }
 void Fps60::xvert(int16_t vx, int16_t vy, int16_t vz, uint32_t sxy) {
-  if (s_nv >= XV_MAX) return;
-  s_lvx[s_nv] = vx; s_lvy[s_nv] = vy; s_lvz[s_nv] = vz; s_osxy[s_nv] = (int32_t)sxy; s_nv++;
+  if (mNv >= XV_MAX) return;
+  mLvx[mNv] = vx; mLvy[mNv] = vy; mLvz[mNv] = vz; mOsxy[mNv] = (int32_t)sxy; mNv++;
 }
 
 // Called per RTPS(0x01)/RTPT(0x30) from fps60_rtp, with the GTE holding this vertex's transform.
 void Fps60::xobj_rtp(uint32_t insn) {
   uint32_t op = insn & 0x3F;
-  if (op == 0x01) s_rtps_insn = insn;          // remember the game's RTPS flags for re-projection
+  if (op == 0x01) mRtpsInsn = insn;          // remember the game's RTPS flags for re-projection
   uint32_t r0 = GTE_ReadCR(0), r1 = GTE_ReadCR(1), r2 = GTE_ReadCR(2), r3 = GTE_ReadCR(3), r4 = GTE_ReadCR(4);
   int32_t  t5 = (int32_t)GTE_ReadCR(5), t6 = (int32_t)GTE_ReadCR(6), t7 = (int32_t)GTE_ReadCR(7);
-  XObj* o = s_xb_started ? &s_xB[s_nxB - 1] : NULL;
+  XObj* o = mXbStarted ? &mXB[mNxB - 1] : NULL;
   int same = o && o->r0==r0 && o->r1==r1 && o->r2==r2 && o->r3==r3 && o->r4==r4
                && o->trx==t5 && o->try_==t6 && o->trz==t7;
   if (!same) {                                  // transform changed → new object
-    if (s_nxB >= XOBJ_MAX) return;
-    o = &s_xB[s_nxB++]; s_xb_started = 1;
+    if (mNxB >= XOBJ_MAX) return;
+    o = &mXB[mNxB++]; mXbStarted = 1;
     o->r0=r0; o->r1=r1; o->r2=r2; o->r3=r3; o->r4=r4; o->trx=t5; o->try_=t6; o->trz=t7;
-    o->fp = 1469598103934665603ull; o->nrtps = 0; o->v0 = s_nv; o->nv = 0;
+    o->fp = 1469598103934665603ull; o->nrtps = 0; o->v0 = mNv; o->nv = 0;
   }
   // Capture LOCAL input verts (model-space, frame-invariant) + each one's screen output, and fold verts
   // into the cross-frame fingerprint. RTPS: 1 vert (DR0/1) → SXY DR14. RTPT: 3 verts (DR0/1,2/3,4/5) →
@@ -110,7 +110,7 @@ void Fps60::xobj_rtp(uint32_t insn) {
 }
 
 void Fps60::xobj_commit() {                 // swap A/B at frame end; reset the per-frame vert pool
-  XObj* t = s_xA; s_xA = s_xB; s_xB = t; s_nxA = s_nxB; s_nxB = 0; s_xb_started = 0; s_nv = 0;
+  XObj* t = mXA; mXA = mXB; mXB = t; mNxA = mNxB; mNxB = 0; mXbStarted = 0; mNv = 0;
 }
 
 // average the two packed int16 halves of two GTE matrix control registers (used by fps60_compose_mid)
@@ -124,7 +124,7 @@ static uint32_t interp_packed(uint32_t a, uint32_t b) {
 // gte_op RTP tap. op 0x01 = RTPS (one new SXY, DR14); 0x30 = RTPT (three, DR12/13/14).
 void Fps60::rtp(uint32_t op) {
   if (!g_mods.fps60) return;
-  s_rtp_calls++; if (current_object) s_rtp_with_obj++;
+  mRtpCalls++; if (current_object) mRtpWithObj++;
   xobj_rtp(op);                 // capture this vertex's GTE transform-group (native object)
   unsigned lo = (op == 0x30) ? 12 : 14, hi = 14;
   for (unsigned r = lo; r <= hi; r++) {
@@ -138,7 +138,7 @@ void Fps60::rtp(uint32_t op) {
 // gp0_exec polygon tap: join the packet's lead vertex to a captured SXY.
 void Fps60::join_poly(int px, int py) {
   if (!g_mods.fps60) return;
-  if (grid_get(px, py)) s_join_hit++; else s_join_miss++;
+  if (grid_get(px, py)) mJoinHit++; else mJoinMiss++;
 }
 
 // ---- logic-rate detector (lrate_proto.c, validated) ---------------------------------
@@ -156,20 +156,20 @@ static void rate_tick(RateDet* d, uint64_t set_hash) {
 // ---- per-logic-frame fence (games_tomba2.c ov_frame_update) -------------------------
 void Fps60::frame_commit(Core* core) {
   if (!g_mods.fps60) return;
-  uint64_t set_hash = (s_frame_geom > 0) ? s_frame_hash : 0xFFFFFFFFFFFFFFFFull;
-  rate_tick(&s_rd, set_hash);
-  s_fence++;
+  uint64_t set_hash = (mFrameGeom > 0) ? mFrameHash : 0xFFFFFFFFFFFFFFFFull;
+  rate_tick(&mRd, set_hash);
+  mFence++;
 
   // The live in-between is built by fps60_present_vk → build_lerp (the ACTOR-TRANSFORM reprojection path
   // below). The legacy GTE-SXY remap and the SW re-rasterizer synth were RETIRED and removed. xobj_commit is
   // kept — it resets the per-frame local-vertex pool that the RTP tap (rtp→xobj_rtp) still appends to, so
-  // without it s_nv would grow until XV_MAX and freeze the capture.
+  // without it mNv would grow until XV_MAX and freeze the capture.
   xobj_commit();                                 // reset the per-frame local-vertex pool (RTP-tap hygiene)
   fps60_present_vk(core);       // owns presentation: VK 60fps pair (interpolated in-between + real frame)
 
-  s_frame_hash = 1469598103934665603ull;
-  s_frame_geom = 0;
-  s_epoch++;                  // reset the SXY→obj grid for the next frame
+  mFrameHash = 1469598103934665603ull;
+  mFrameGeom = 0;
+  mEpoch++;                  // reset the SXY→obj grid for the next frame
 }
 
 
@@ -209,7 +209,7 @@ void proj_native_xform_cr(const uint32_t cr[11], const int16_t mv[4][3], int nv,
 // flag). Terrain (separate float projection) + 2D/HUD carry fps_world=0 and snap (documented follow-up).
 
 // Capture hook: stamp the just-pushed world RqItem with this prim's reprojection inputs. Called by the GTE
-// submitters (engine_submit.cpp) right after RenderQueue::drawWorldQuad. No-op unless fps60 is on.
+// submitters (submit.cpp) right after RenderQueue::drawWorldQuad. No-op unless fps60 is on.
 // Capture with an EXPLICIT composed transform `cr` (cr[0..7] = CR0-7, cr[8..10] = OFX/OFY/H). The native
 // world-coord render path supplies this from its float xform (Render::projActiveCr); the GTE
 // path supplies it from the live control registers (Fps60::stampWorld below).
@@ -240,7 +240,7 @@ void Fps60::stampWorld(Core* c, const int16_t mv[4][3], int nv, uint32_t key) {
 //
 // Now that Phase 1 gives each billboard an engine-known world position (its object's composed camera×object
 // transform), we capture THAT directly and key the cross-frame match on the object's STABLE IDENTITY (the
-// node/cmd ptr), not on a fragile depth-ord reverse-match. engine_submit.cpp records, at the SAME instant it
+// node/cmd ptr), not on a fragile depth-ord reverse-match. submit.cpp records, at the SAME instant it
 // publishes the object's packet-pool depth span, an entry holding: the span [lo,hi) (so the OT walk can find
 // it by the SAME node-address test obj_depth_lookup uses), the object identity, and the live composed
 // transform. The OT walk knows the source OT-node (s_cur_node); when a billboard item is queued there it
@@ -249,18 +249,18 @@ void Fps60::stampWorld(Core* c, const int16_t mv[4][3], int nv, uint32_t key) {
 // pre-pass, no depth-ord matching. The previous frame's transform is found by fps_key out of the prev
 // RqItems (which now carry it), exactly like the mesh path — so the s_bbPrev registry is no longer needed
 // to hold prev transforms; the registry is purely the CURRENT-frame node→transform map for queue-time tagging.
-// Billboard registry (was file-scope s_bbCur / s_nBBCur here) moved onto Fps60 members in
-// fps60_internal.h — per-Core so SBS's two cores keep separate frame billboard maps.
+// Billboard registry: Fps60 members (fps60.h) — per-Core so SBS's two cores keep separate frame
+// billboard maps.
 static inline int bb_active(void) { return g_mods.fps60 || g_mods.debug_ids || cfg_dbg("objid"); }
 
-// Called from engine_submit.cpp right after gpu_obj_depth_add(lo, hi, ord). Capture this object's billboard
+// Called from submit.cpp right after gpu_obj_depth_add(lo, hi, ord). Capture this object's billboard
 // reprojection inputs: its packet-pool SPAN [lo,hi) (the key the OT walk matches the item's node against,
 // identical to GpuState::obj_depth_lookup), its stable cross-frame IDENTITY, and the live composed
 // camera×object transform (CR0-7 + the frame projection constants CR24/25/26). No-op unless bb_active.
 void Fps60::recordBillboardSpan(uint32_t lo, uint32_t hi, uint32_t ident) {
   if (!bb_active() || !ident || hi <= lo) return;
-  if (s_nBBCur >= kBbMax) return;
-  Billboard* e = &s_bbCur[s_nBBCur++];
+  if (mNBbCur >= kBbMax) return;
+  Billboard* e = &mBbCur[mNBbCur++];
   e->lo = lo | 0x80000000u; e->hi = hi | 0x80000000u; e->ident = ident;   // KSEG, matching s_cur_node form
   for (int i = 0; i < 8; i++) e->crM[i] = GTE_ReadCR(i);            // composed camera×object CR0-7 (live)
   e->crM[8] = GTE_ReadCR(24); e->crM[9] = GTE_ReadCR(25); e->crM[10] = GTE_ReadCR(26);  // OFX/OFY/H
@@ -271,10 +271,10 @@ void Fps60::recordBillboardSpan(uint32_t lo, uint32_t hi, uint32_t ident) {
 int Fps60::billboardForNode(uint32_t node, uint32_t* identOut, uint32_t crOut[11]) const {
   if (!bb_active()) return 0;
   uint32_t n = node | 0x80000000u;
-  for (int i = 0; i < s_nBBCur; i++)
-    if (n >= s_bbCur[i].lo && n < s_bbCur[i].hi) {
-      if (identOut) *identOut = s_bbCur[i].ident;
-      if (crOut) for (int k = 0; k < 11; k++) crOut[k] = s_bbCur[i].crM[k];
+  for (int i = 0; i < mNBbCur; i++)
+    if (n >= mBbCur[i].lo && n < mBbCur[i].hi) {
+      if (identOut) *identOut = mBbCur[i].ident;
+      if (crOut) for (int k = 0; k < 11; k++) crOut[k] = mBbCur[i].crM[k];
       return 1;
     }
   return 0;
@@ -310,10 +310,10 @@ void Fps60::stampBillboard(Core* c, uint32_t node) {
 }
 
 void Fps60::rq_capture(const RqItem* items, int n) {
-  if (!s_rqCur) s_rqCur = new RqItem[FPS60_RQ_MAX];
+  if (!mRqCur) mRqCur = new RqItem[FPS60_RQ_MAX];
   if (n > FPS60_RQ_MAX) n = FPS60_RQ_MAX;
-  if (n > 0) memcpy(s_rqCur, items, (size_t)n * sizeof(RqItem));
-  s_nCur = n;
+  if (n > 0) memcpy(mRqCur, items, (size_t)n * sizeof(RqItem));
+  mNCur = n;
 }
 
 // Max per-VERTEX screen motion (px, L1) we will treat as "the same vertex moved a little" and lerp.
@@ -384,15 +384,15 @@ static void fps60_compose_mid(const uint32_t a[11], const uint32_t b[11], uint32
 // (correct pan); a mover's also by its own motion → midpoint pose. 2D/HUD, terrain, unkeyed or new-this-
 // frame actors, and any prim whose reprojection jumps more than the gate (cut/teleport) SNAP unchanged.
 int Fps60::build_lerp() {
-  if (!s_rqLerp) s_rqLerp = new RqItem[FPS60_RQ_MAX];
+  if (!mRqLerp) mRqLerp = new RqItem[FPS60_RQ_MAX];
   // Billboards are now tagged at QUEUE TIME by the OT walk (gpu_native.cpp → fps60_billboard_for_node), so a
   // billboard RqItem already carries fps_world=1/fps_anchor=1/fps_key/fps_cr/fps_mv=origin on BOTH the cur and
   // prev snapshots — exactly like a mesh prim. No pre-pass and no separate prev-transform registry are needed.
   // actor key -> its composed CR0-7 LAST frame (all of an actor's prims — mesh OR billboard — share one
-  // composed transform, so first occurrence wins). Both mesh and billboard prev transforms live in s_rqPrev.
+  // composed transform, so first occurrence wins). Both mesh and billboard prev transforms live in mRqPrev.
   std::unordered_map<uint32_t, const uint32_t*> prevcr;
-  prevcr.reserve((size_t)s_nPrev * 2 + 16);
-  for (int j = 0; j < s_nPrev; j++) { const RqItem* P = &s_rqPrev[j];
+  prevcr.reserve((size_t)mNPrev * 2 + 16);
+  for (int j = 0; j < mNPrev; j++) { const RqItem* P = &mRqPrev[j];
     if (P->fps_world && P->fps_key) prevcr.emplace(P->fps_key, P->fps_cr); }
 
   // ---- BACKGROUND / SEA-ATLAS layer 60fps translation (issue #25) -----------------------------------
@@ -411,22 +411,22 @@ int Fps60::build_lerp() {
          ^ ((uint64_t)(uint32_t)it->mode  << 36) ^ ((uint64_t)(uint32_t)(it->us[0] & 0xFF) << 40)
          ^ ((uint64_t)(uint32_t)(it->vs[0] & 0xFF) << 48); };
   std::unordered_map<uint64_t, const RqItem*> prevbg;
-  prevbg.reserve((size_t)s_nPrev + 16);
-  for (int j = 0; j < s_nPrev; j++) { const RqItem* P = &s_rqPrev[j];
+  prevbg.reserve((size_t)mNPrev + 16);
+  for (int j = 0; j < mNPrev; j++) { const RqItem* P = &mRqPrev[j];
     if (P->layer == RQ_BACKGROUND) prevbg.emplace(bg_fp(P), P); }   // first occurrence per cell wins
   // collect per-tile displacements, then median each axis
-  if (!s_bgdx) { s_bgdx = new int[FPS60_RQ_MAX]; s_bgdy = new int[FPS60_RQ_MAX]; }
+  if (!mBgDx) { mBgDx = new int[FPS60_RQ_MAX]; mBgDy = new int[FPS60_RQ_MAX]; }
   int nbg = 0;
-  for (int i = 0; i < s_nCur && nbg < FPS60_RQ_MAX; i++) {
-    const RqItem* C = &s_rqCur[i]; if (C->layer != RQ_BACKGROUND) continue;
+  for (int i = 0; i < mNCur && nbg < FPS60_RQ_MAX; i++) {
+    const RqItem* C = &mRqCur[i]; if (C->layer != RQ_BACKGROUND) continue;
     auto it = prevbg.find(bg_fp(C)); if (it == prevbg.end()) continue;
-    s_bgdx[nbg] = C->xs[0] - it->second->xs[0];
-    s_bgdy[nbg] = C->ys[0] - it->second->ys[0]; nbg++;
+    mBgDx[nbg] = C->xs[0] - it->second->xs[0];
+    mBgDy[nbg] = C->ys[0] - it->second->ys[0]; nbg++;
   }
   int bg_have = 0, bg_hdx = 0, bg_hdy = 0;                // HALF-median bg translation (the midpoint shift)
   if (nbg >= 4) {                                         // need a few matches for a meaningful median
-    std::sort(s_bgdx, s_bgdx + nbg); std::sort(s_bgdy, s_bgdy + nbg);
-    int mdx = s_bgdx[nbg / 2], mdy = s_bgdy[nbg / 2];     // median per axis (robust)
+    std::sort(mBgDx, mBgDx + nbg); std::sort(mBgDy, mBgDy + nbg);
+    int mdx = mBgDx[nbg / 2], mdy = mBgDy[nbg / 2];     // median per axis (robust)
     // Snap (don't smear) on a teleport/area-cut: a huge median = the whole backdrop jumped, not a pan.
     if (abs(mdx) <= 128 && abs(mdy) <= 128) {
       bg_have = 1;
@@ -436,16 +436,16 @@ int Fps60::build_lerp() {
   }
 
   long moved = 0, snapped = 0, bgmoved = 0;
-  for (int i = 0; i < s_nCur; i++) {
-    const RqItem* C = &s_rqCur[i];
-    s_rqLerp[i] = *C;                                     // default: SNAP (real frame-B position)
+  for (int i = 0; i < mNCur; i++) {
+    const RqItem* C = &mRqCur[i];
+    mRqLerp[i] = *C;                                     // default: SNAP (real frame-B position)
     // BACKGROUND layer (#25): shift the whole backdrop by the half-median camera scroll so it pans WITH the
     // world at the midpoint instead of snapping. Uniform integer screen translate (+ the sub-pixel copy).
     if (C->layer == RQ_BACKGROUND) {
       if (bg_have && (bg_hdx || bg_hdy)) {
         for (int k = 0; k < C->nv; k++) {
-          s_rqLerp[i].xs[k] = C->xs[k] + bg_hdx; s_rqLerp[i].ys[k] = C->ys[k] + bg_hdy;
-          s_rqLerp[i].xsf[k] = C->xsf[k] + (float)bg_hdx; s_rqLerp[i].ysf[k] = C->ysf[k] + (float)bg_hdy;
+          mRqLerp[i].xs[k] = C->xs[k] + bg_hdx; mRqLerp[i].ys[k] = C->ys[k] + bg_hdy;
+          mRqLerp[i].xsf[k] = C->xsf[k] + (float)bg_hdx; mRqLerp[i].ysf[k] = C->ysf[k] + (float)bg_hdy;
         }
         bgmoved++;
       } else snapped++;
@@ -459,22 +459,22 @@ int Fps60::build_lerp() {
     // 3D-positioned 2D quad (billboard): translate by the anchor's midpoint screen delta; mesh: per-vertex reproject.
     int worst = C->fps_anchor ? fps60_reproject_anchor(C, crM, &tmp) : fps60_reproject(C, crM, &tmp);
     if (worst > FPS60_VTX_GATE) { snapped++; continue; } // cut/teleport/degenerate → snap (no smear)
-    for (int k = 0; k < C->nv; k++) { s_rqLerp[i].xs[k] = tmp.xs[k]; s_rqLerp[i].ys[k] = tmp.ys[k];
-                                      s_rqLerp[i].xsf[k] = tmp.xsf[k]; s_rqLerp[i].ysf[k] = tmp.ysf[k];
-                                      s_rqLerp[i].depth[k] = tmp.depth[k]; }
+    for (int k = 0; k < C->nv; k++) { mRqLerp[i].xs[k] = tmp.xs[k]; mRqLerp[i].ys[k] = tmp.ys[k];
+                                      mRqLerp[i].xsf[k] = tmp.xsf[k]; mRqLerp[i].ysf[k] = tmp.ysf[k];
+                                      mRqLerp[i].depth[k] = tmp.depth[k]; }
     moved++;
   }
-  if (s_lerpdbg < 0) s_lerpdbg = cfg_dbg("fps60") ? 1 : 0;
-  if (s_lerpdbg) fprintf(stderr, "[fps60] f%ld reproject: prims=%d moved=%ld bgmoved=%ld snapped=%ld actors=%zu "
+  if (mLerpDbg < 0) mLerpDbg = cfg_dbg("fps60") ? 1 : 0;
+  if (mLerpDbg) fprintf(stderr, "[fps60] f%ld reproject: prims=%d moved=%ld bgmoved=%ld snapped=%ld actors=%zu "
                          "bg(matches=%d have=%d half=%d,%d)\n",
-                         s_fence, s_nCur, moved, bgmoved, snapped, prevcr.size(), nbg, bg_have, bg_hdx, bg_hdy);
+                         mFence, mNCur, moved, bgmoved, snapped, prevcr.size(), nbg, bg_have, bg_hdx, bg_hdy);
   // MECHANICAL GATE (PSXPORT_DEBUG=fps60chk): reproject every world prim at t=1.0 (crM = its OWN captured
   // composed transform, no averaging) — this MUST reproduce the prim's real screen verts. A non-zero error
   // means the capture/recompose/round path is wrong (not a smoothness issue). Pure diagnostic, no output change.
-  if (s_chk < 0) s_chk = cfg_dbg("fps60chk") ? 1 : 0;
-  if (s_chk) {
+  if (mChk < 0) mChk = cfg_dbg("fps60chk") ? 1 : 0;
+  if (mChk) {
     long n = 0, maxe = 0; double sume = 0;
-    for (int i = 0; i < s_nCur; i++) { const RqItem* C = &s_rqCur[i];
+    for (int i = 0; i < mNCur; i++) { const RqItem* C = &mRqCur[i];
       if (!C->fps_world || !C->fps_key) continue;
       RqItem tmp = *C;
       int e = C->fps_anchor ? fps60_reproject_anchor(C, C->fps_cr, &tmp)   // t=1.0: anchor delta = 0
@@ -482,9 +482,9 @@ int Fps60::build_lerp() {
       n++; sume += e; if (e > maxe) maxe = e;
     }
     fprintf(stderr, "[fps60chk] f%ld world=%ld  t=1.0 reproject error: max=%ld avg=%.3f px (0 = exact)\n",
-            s_fence, n, maxe, n ? sume / n : 0.0);
+            mFence, n, maxe, n ? sume / n : 0.0);
   }
-  return s_nCur;
+  return mNCur;
 }
 
 void gpu_gpu_shot(Core* core, const char* path);   // diagnostic: dump the CURRENT s_tex (the just-presented frame)
@@ -492,16 +492,16 @@ void gpu_gpu_shot(Core* core, const char* path);   // diagnostic: dump the CURRE
 // items and the shadow-casting prims in a queue set. Both passes must report identical counts (the HUD and
 // the shadow are in the queue, so each pass emits them — no per-feature replay/keep_shadow).
 void Fps60::pass_stats(const char* tag, long fence, const RqItem* items, int n) {
-  if (s_passdbg < 0) s_passdbg = cfg_dbg("fps60pass") ? 1 : 0; if (!s_passdbg) return;
+  if (mPassDbg < 0) mPassDbg = cfg_dbg("fps60pass") ? 1 : 0; if (!mPassDbg) return;
   long hud = 0, shcast = 0;
   for (int i = 0; i < n; i++) { if (items[i].layer == RQ_HUD) hud++; if (items[i].sh_cast) shcast++; }
   fprintf(stderr, "[fps60pass] f%ld %s: prims=%d HUD=%ld shadow_cast=%ld\n", fence, tag, n, hud, shcast);
 }
 void Fps60::fps60_present_vk(Core* core) {
-  int nl = (s_have_prev && s_nCur > 0) ? build_lerp() : 0;
+  int nl = (mHavePrev && mNCur > 0) ? build_lerp() : 0;
   if (nl > 0) {                                           // PASS 1 — the interpolated in-between
-    pass_stats("interp", s_fence, s_rqLerp, nl);
-    for (int i = 0; i < nl; i++) core->game->rq.emitItem(core, &s_rqLerp[i]);
+    pass_stats("interp", mFence, mRqLerp, nl);
+    for (int i = 0; i < nl; i++) core->game->rq.emitItem(core, &mRqLerp[i]);
     gpu_fps60_present_pass(core);                         // show it + reset the VK batch (no s_frame++)
     // PSXPORT_FPS60_INTERPSHOT=path — one-shot: dump the INTERPOLATED in-between's s_tex (it persists until
     // the real pass overwrites it) so the 60fps in-between (mover at midpoint, shadow/SSAO/2D from the real
@@ -513,21 +513,21 @@ void Fps60::fps60_present_vk(Core* core) {
         if (armed) { const char* col = strrchr(e, ':');
           if (col) { tfence = atoi(col + 1); snprintf(path, sizeof path, "%.*s", (int)(col - e), e); }
           else snprintf(path, sizeof path, "%s", e); } }
-      if (armed == 1 && (tfence < 0 || s_fence >= tfence)) { gpu_gpu_shot(core, path); armed = 2;
-        fprintf(stderr, "[fps60] interp-frame shot (f%ld) -> %s\n", s_fence, path); } }
+      if (armed == 1 && (tfence < 0 || mFence >= tfence)) { gpu_gpu_shot(core, path); armed = 2;
+        fprintf(stderr, "[fps60] interp-frame shot (f%ld) -> %s\n", mFence, path); } }
     gpu_pace_subframe(core, 2);
   }
-  pass_stats("real  ", s_fence, s_rqCur, s_nCur);
-  for (int i = 0; i < s_nCur; i++) core->game->rq.emitItem(core, &s_rqCur[i]);   // PASS 2 — the real frame
+  pass_stats("real  ", mFence, mRqCur, mNCur);
+  for (int i = 0; i < mNCur; i++) core->game->rq.emitItem(core, &mRqCur[i]);   // PASS 2 — the real frame
   gpu_present_ex(core, 1);                                // present + per-logic-frame bookkeeping
   gpu_pace_subframe(core, nl > 0 ? 2 : 1);
-  if (!s_rqPrev) s_rqPrev = new RqItem[FPS60_RQ_MAX];     // current -> previous for next frame
-  if (s_nCur > 0) memcpy(s_rqPrev, s_rqCur, (size_t)s_nCur * sizeof(RqItem));
-  s_nPrev = s_nCur; s_have_prev = 1;
+  if (!mRqPrev) mRqPrev = new RqItem[FPS60_RQ_MAX];     // current -> previous for next frame
+  if (mNCur > 0) memcpy(mRqPrev, mRqCur, (size_t)mNCur * sizeof(RqItem));
+  mNPrev = mNCur; mHavePrev = 1;
   // Billboard registry: it is the CURRENT-frame node→transform map consumed by the OT walk while this frame's
-  // queue is built; the prev transform now lives on the prev RqItems (s_rqPrev), so we only reset the cur
-  // registry for the next frame's object-render phase (the recorder appends into s_bbCur during that phase).
-  s_nBBCur = 0;
+  // queue is built; the prev transform now lives on the prev RqItems (mRqPrev), so we only reset the cur
+  // registry for the next frame's object-render phase (the recorder appends into mBbCur during that phase).
+  mNBbCur = 0;
 }
 
 void fps60_init(void) {

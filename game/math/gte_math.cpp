@@ -1,4 +1,4 @@
-// engine_math.cpp — PC-native reimplementations of the hot libgte-style MATH helpers the engine
+// gte_math.cpp — PC-native reimplementations of the hot libgte-style MATH helpers the engine
 // calls every frame. The port is interpreter-only, so each of these pure leaf routines runs as
 // interpreted MIPS on the hot path; owning them native is the #1-priority lever (perf + 100%-PC-
 // native — they align). These are deterministic pure-integer/math leaves with NO PSX intricacy, so
@@ -10,7 +10,7 @@
 // interpreter instructions (and a frequency leader). First port here.
 #include "core.h"
 #include "cfg.h"
-#include "engine_math.h"   // class Math — static entry surface + ov_* free-fn decls for internal reuse
+#include "gte_math.h"   // class Math — static entry surface + ov_* free-fn decls for internal reuse
 #include <stdio.h>
 #include <string.h>
 

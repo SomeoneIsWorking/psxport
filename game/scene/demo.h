@@ -12,7 +12,7 @@
 // Owns the DEMO overlay's SUBSTATE MACHINE (which substate runs, the sm[0x48] transitions and
 // their field writes). The per-substate SYSTEM work (menu input machines, loaders, SFX, render)
 // stays dispatched to the retained PSX code. Full RE map: docs/engine_re.md "DEMO / front-end
-// MENU stage". Implementations + full doc-comments live in engine_demo.cpp.
+// MENU stage". Implementations + full doc-comments live in demo.cpp.
 #pragma once
 #include <cstdint>
 class Core;

@@ -131,7 +131,7 @@ static void eng_task0_boot(Core* c) {
 // This is the area-asset bring-up primitive the area-init function FUN_800451d0 (via the per-area asset
 // table walk FUN_800754f4) calls to pull one effect/animation CEL GROUP into VRAM and BLOCK until its
 // upload finishes. The cel parse/VRAM layout/upload itself is the already-native BAV loader FUN_80096590
-// (engine/engine_bav.cpp, ov_bav_load); this wrapper is the *load + completion-wait* around it.
+// (game/ui/bav_loader.cpp, ov_bav_load); this wrapper is the *load + completion-wait* around it.
 // RE (tools/disas.py 0x800753D4):
 //
 //   0x800753d4 prologue: sp-=0x20; sw s1; s1=a0(out); a0=a1(desc); a1=-1; sw s0; sw ra; s0=a2(cbarg)
@@ -156,8 +156,8 @@ static void eng_task0_boot(Core* c) {
 // (verified: after them the slot's state-byte is 1 as the recomp leaves it), so they are safe to dispatch
 // natively here. We then `rec_coro_redirect` to the loop head 0x80075410 with the MIPS frame set up
 // byte-faithfully (sp-=0x20; s0/s1/ra saved), so the recomp loop + its epilogue restore correctly and the
-// deep yield resumes exactly as the PSX path would — same handshake engine_stage.cpp uses for deep-yield
-// handlers. The cel-system callees (FUN_80096480/80096980/80096a40 — engine_bav cel loader + upload state
+// deep yield resumes exactly as the PSX path would — same handshake engine.cpp uses for deep-yield
+// handlers. The cel-system callees (FUN_80096480/80096980/80096a40 — bav_loader cel loader + upload state
 // machine + DMA-done event poll) stay dispatched: they write the guest cel-system globals still-recomp
 // content reads, and FUN_80096590 is itself an existing native override.
 // =================================================================================================

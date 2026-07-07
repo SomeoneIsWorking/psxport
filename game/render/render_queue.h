@@ -60,7 +60,7 @@ struct RqItem {
   // they cannot be per-vertex reprojected like a mesh. They reach the render queue at the DEFERRED OT walk
   // (gpu_native.cpp) as RQ_WORLD/RQ_OM_DEPTH items with NO sub-pixel float XY (has_xyf==0), inheriting the
   // object's PC-native world-position view-Z via obj_depth_lookup. They are tagged AT QUEUE TIME, in the OT
-  // walk: engine_submit.cpp recorded each object's packet-pool SPAN + identity + composed transform
+  // walk: submit.cpp recorded each object's packet-pool SPAN + identity + composed transform
   // (Fps60::recordBillboardSpan), and the OT walk — which knows the source OT-node — calls
   // Fps60::stampBillboard, which looks the node up in that span registry (Fps60::billboardForNode) and sets
   // fps_world=1, fps_anchor=1, fps_key = the object identity, fps_cr = the composed camera×object transform,

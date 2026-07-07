@@ -83,7 +83,7 @@ ScreenFade::State ScreenFade::get() const {
 // (fade LEVEL 0..31) / node+104 (step-2 delay counter). Two still-substrate leaves: the
 // per-frame helper 0x8010CC68 (returns a "ready-to-advance" boolean in v0) and the init poke
 // 0x8010D030 (per-node overlay init). See engine.h for the caller (fieldRun sm[0x4e]==0xb).
-#include "scene/engine.h"                     // Engine::zoneTransitionSetup (native)
+#include "core/engine.h"                     // Engine::zoneTransitionSetup (native)
 void ScreenFade::sequence(uint32_t node) {
   Core* c = core;
   const uint8_t outer = c->mem_r8(node + 2);

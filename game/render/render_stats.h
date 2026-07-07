@@ -33,7 +33,7 @@ public:
   // Render as `c->mRender->projprim` — bound via `ProjPrim::bind(c)` alongside gte_bind. Two SBS cores
   // keep separate caches + counters. Read via `.stats()` / `.statsReset()`.)
 
-  // Scene-native walk counters (game/render/engine_render_walk.cpp).
+  // Scene-native walk counters (game/render/render_walk.cpp).
   long snObjs = 0;
   long snCmds = 0;
 

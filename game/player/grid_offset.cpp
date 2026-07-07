@@ -1,4 +1,4 @@
-// engine/grid_offset.cpp — PC-native collision-grid CELL-RELATIVE OFFSET transform.
+// game/player/grid_offset.cpp — PC-native collision-grid CELL-RELATIVE OFFSET transform.
 //
 // FUN_80048360 — a hot collision-grid LEAF (~5% of field interp time across its internal jump-table
 // entries 0x80048360/410/594/630; ~14400 calls/run). No args, void return; returns t3 (the cell

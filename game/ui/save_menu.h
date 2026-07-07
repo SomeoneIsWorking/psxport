@@ -2,7 +2,7 @@
 //
 // PROPER OOP: an instance per Core (embedded as `Core::saveMenu`, next to Inventory), back-pointer
 // wired in Core's constructor. Owns the save/load-menu 6-state dispatch head; the page handlers
-// (cursor/page logic + libmcrd file I/O) stay PSX via rec_dispatch — see save.cpp for the full RE.
+// (cursor/page logic + libmcrd file I/O) stay PSX via rec_dispatch — see save_menu.cpp for the full RE.
 #pragma once
 #include <cstdint>
 class Core;

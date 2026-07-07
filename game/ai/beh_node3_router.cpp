@@ -1,4 +1,4 @@
-// engine/beh_node3_router.cpp — PC-native per-object BEHAVIOR handler FUN_8011CBD0.
+// game/ai/beh_node3_router.cpp — PC-native per-object BEHAVIOR handler FUN_8011CBD0.
 //
 // Overlay handler (~x778/field-frame on seaside). Ported from the Ghidra decompile of FUN_8011CBD0
 // (scratch/decomp/field2/8011cbd0.c). Outer state machine on node[4]:

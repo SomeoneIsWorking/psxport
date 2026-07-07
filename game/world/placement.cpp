@@ -1,5 +1,4 @@
-// game/world/placement.cpp — PC-native field OBJECT-PLACEMENT subsystem (relocated verbatim from
-// engine/entity_spawn.cpp). See placement.h.
+// game/world/placement.cpp — PC-native field OBJECT-PLACEMENT subsystem. See placement.h.
 #include "core.h"
 #include "cfg.h"
 #include <stdio.h>

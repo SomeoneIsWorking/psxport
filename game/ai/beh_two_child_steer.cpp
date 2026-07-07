@@ -1,4 +1,4 @@
-// engine/beh_two_child_steer.cpp — PC-native per-object BEHAVIOR handler FUN_80131D08.
+// game/ai/beh_two_child_steer.cpp — PC-native per-object BEHAVIOR handler FUN_80131D08.
 //
 // Overlay handler (~x778/field-frame on seaside; ~135 instr), prologue 0x80131D08; `jr ra` at
 // 0x80131F2C. Disassembled from scratch/ram/field_seaside.bin. Outer state machine on node[4]:

@@ -83,12 +83,12 @@ int GpuState::node_is_bg(uint32_t node) {
   for (int i = 0; i < s_bg_nrange; i++) if (n >= s_bg_lo[i] && n < s_bg_hi[i]) return 1;
   return 0;
 }
-// Public wrapper: the engine's background-drawer override (engine_submit.cpp ov_bg_tilemap) records the
+// Public wrapper: the engine's background-drawer override (submit.cpp ov_bg_tilemap) records the
 // pool span it produced so the OT-walk classifies those prims as RQ_BACKGROUND by provenance.
 void gpu_bg_range_add(Core* core, uint32_t lo, uint32_t hi) { core->game->gpu.bg_range_add(lo, hi); }
 
 // TEXPAGE-PROVENANCE backdrop test (replaces the dead packet-span ov_bg_tilemap provenance). The native
-// backdrop drawer (engine_submit.cpp ov_bg_tilemap_native) publishes the active sky/sea tilemap texpage
+// backdrop drawer (submit.cpp ov_bg_tilemap_native) publishes the active sky/sea tilemap texpage
 // here each frame; the OT-walk then recognizes the GUEST background drawer's redundant tiles (same texpage)
 // and classifies them RQ_BACKGROUND so the field's 2D-only walk DROPS them (the native backdrop owns the
 // sky/sea). Stamped per frame so a stale value from a prior frame/area is never honored. (render.md OPEN #1)
@@ -125,7 +125,7 @@ void GpuState::obj_depth_add(uint32_t lo, uint32_t hi, float ord) {
 //
 // A faceted object (barrel/container/crate) that renders through the GUEST OT walk — rather than the
 // owned per-vertex GT3/GT4 float path — has ALL of its face packets in ONE packet-pool span tagged with a
-// SINGLE whole-object world depth (object_world_view_depth, engine_submit.cpp). obj_depth_lookup then
+// SINGLE whole-object world depth (object_world_view_depth, submit.cpp). obj_depth_lookup then
 // stamped the IDENTICAL `od` on every face (gp0_exec: `for(i) dep[i]=od`). With every face at the exact
 // same D32 depth and a GREATER_OR_EQUAL test, which face wins a shared pixel is decided purely by draw
 // order WITHIN the frame — and that order is not stable across the double-buffered queue swap → the red
@@ -1375,7 +1375,7 @@ void GpuState::gpu_present_ex(Core* core, int do_blit) {
       char t[24]; snprintf(t, sizeof t, "f%d(last50)", s_frame); rtpcaller_dump(core, t); rtpcaller_reset(); } }
   // Reset the per-vertex depth table EVERY frame the native-depth path is live (NATIVE_DEPTH or SBS),
   // here — after this frame's DrawOTag/lookups, before next frame's projections record into it — so a
-  // vertex word never reads an OLD frame's depth. The engine (engine_submit.c) repopulates it each frame.
+  // vertex word never reads an OLD frame's depth. The engine (submit.cpp) repopulates it each frame.
   { int attach_enabled(void);
     if (attach_enabled()) core->mRender->projprim.reset(); }
   {

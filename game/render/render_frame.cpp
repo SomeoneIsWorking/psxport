@@ -1,10 +1,10 @@
-// engine_render.cpp — PC-native per-frame RENDER ORCHESTRATION. (See engine_render.h.)
+// render_frame.cpp — PC-native per-frame RENDER ORCHESTRATION.
 //
-// TOP-DOWN render ownership. The native field per-frame update (engine_stage.cpp ov_field_frame) calls
+// TOP-DOWN render ownership. The native field per-frame update (engine.cpp ov_field_frame) calls
 // ov_render_frame DIRECTLY (a plain C call) instead of rec_dispatching MAIN.EXE 0x8003f9a8. The render-queue
 // WALK cluster (0x8003bf00/eec0/bb50/bcf4/b588/c048 — ov_rwalk_aux_bf00, ov_rwalk_aux_eec0, ov_rwalk_b588,
 // ov_render_walk_snapshot, ov_rwalk_aux_bcf4, ov_render_walk) used to also run from HERE, but that duplicated
-// the SAME walk cluster ov_scene_native (game/render/engine_render_walk.cpp) already runs every field-stage
+// the SAME walk cluster ov_scene_native (game/render/render_walk.cpp) already runs every field-stage
 // frame via ov_draw_otag (game_tomba2.cpp) — every terrain/scene-table/object prim was projected and
 // submitted TWICE per frame, the root cause of the documented render-order/sliver bugs. The walk cluster is
 // now owned SOLELY by ov_scene_native; ov_render_frame / ov_render_frame_x below perform only the remaining
@@ -17,7 +17,6 @@
 //   0x8003fa44 (transition twin): jal 0x8004fd30, 0x80025d98, 0x8003bf00, 0x8003eec0, 0x8003b588,
 //     0x8003bb50, 0x8003bcf4, 0x8003c048, 0x8003f024.
 
-#include "engine_render.h"
 #include "render.h"    // class Render — methods live here
 #include "core.h"
 #include "cfg.h"
@@ -45,7 +44,7 @@ static inline void d1(Core* c, uint32_t fn, uint32_t a0) { c->r[4] = a0; rec_dis
 // g_dualview  REMOVED (2026-07-02, deglobalize-game): now Render::mDualview / dualview().
 
 // 0x8003f9a8 — per-frame render orchestrator. The render-queue WALK passes (0x8003bf00/eec0/b588/bb50/bcf4/
-// c048) are owned SOLELY by ov_scene_native (engine_render_walk.cpp), which ov_draw_otag already runs every
+// c048) are owned SOLELY by ov_scene_native (render_walk.cpp), which ov_draw_otag already runs every
 // field-stage frame — running them again here would double-submit every terrain/object prim. This function
 // now performs only the remaining non-walk PSX passes ov_scene_native does not cover.
 #include "game.h"      // c->game->ffspan — PSXPORT_BDTAG builder-span attribution

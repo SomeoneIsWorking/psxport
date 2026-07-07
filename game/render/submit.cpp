@@ -18,8 +18,8 @@
 //   args: a0 = primitive-record array, a1 = OT base, a2 = record count;  returns a0 advanced past the array.
 //   global packet-pool write pointer at 0x800BF544 (advanced past each committed packet).
 //
-// NOTE (2026-07 restructure): game/render/render_native.cpp (+ render/scene/scene_build.cpp +
-// render/mesh/mesh_draw.cpp) is the CLAUDE.md-mandated eventual replacement for this file.
+// NOTE (2026-07 restructure): game/render/render_native.cpp (+ render/scene_build.cpp +
+// render/mesh_draw.cpp) is the CLAUDE.md-mandated eventual replacement for this file.
 #include "core.h"
 #include "game.h"   // Fps60::current_object (was g_current_object)
 #include "cfg.h"
@@ -27,7 +27,7 @@
 #include "lighting.h" // PER-AREA light registry (sun / lava+torch); selected per frame in Render::shadeSelect
 #include "render_queue.h" // RQ_BACKGROUND + RenderQueue::push2dQuad — native backdrop tilemap path
 #include "render_internal.h" // shared render internals (PktSpanSession, obj_world_ord)
-#include "engine_math.h"     // Math:: — GTE-transform cluster (matMul/applyMatlv/rotX/Y/Z/rotmat, static)
+#include "gte_math.h"     // Math:: — GTE-transform cluster (matMul/applyMatlv/rotX/Y/Z/rotmat, static)
 #include "mtx.h"              // class Mtx — libgte helpers (identity, diagonal, ...)
 #include "trig.h"             // class Trig — libgte rsin/rcos
 #include "render.h"           // class Render — Render::fieldEntityRender lives here
@@ -112,10 +112,10 @@ float proj_obj_center_ord(void);
 // the renderer's D32 depth buffer does true per-pixel occlusion (PSXPORT_NATIVE_DEPTH / the SBS A/B
 // view) instead of OT-submission order. No correlation, no value-matching: the engine that emits the
 // vertex writes the depth for the exact address it stored the SXY to. Off (faithful) by default.
-// PC-NATIVE render path. ProjVtx + the per-object world-coord projection live in engine/engine_project.*.
+// PC-NATIVE render path. ProjVtx + the per-object world-coord projection live in game/render/projection.*.
 // proj_native_xform (gte_beetle) is the GTE-composed-transform projection still used by the resident
 // byte-packed GT4 emitter (submit_poly_gt4_bp), whose upstream compose is the still-PSX field code.
-#include "engine_project.h"
+#include "projection.h"
 void  proj_native_xform(int vx, int vy, int vz, ProjVtx* out);
 int  gpu_gpu_shadows_active(void);
 // Fill `vv` with the prim's 4 view-space verts (x=ir1=vx, y=ir2=vy, z=pz) — the shadow VBO input — and
@@ -495,7 +495,7 @@ void Render::terrain() {
 // 0x800597AC (rec_dispatch — still PSX, does NO render), then the per-object RENDER. Live, node+0xD=0 →
 // (node+0xD)&0xB=0 → render-case table 0x80014EC8[0]=0x8003CD00 = the native eproj FLUSH case, so routing
 // the render through the native submit_perobj_render gives the water world-coord FLOAT projection with REAL
-// per-vertex depth. Previously the whole pass ran as pure PSX (engine_render.cpp d0(0x8003b588)), so the
+// per-vertex depth. Previously the whole pass ran as pure PSX (render_frame.cpp d0(0x8003b588)), so the
 // inner jal 0x8003CCA4 emitted GTE packets the native renderer couldn't project (is3d=0) → the water drew
 // as a flat 2D FOREGROUND fill OVER the world (the "sea on top" bug). NB: own this TOGETHER with the native
 // ground (later-231 caveat) so both sort by real depth — a still-2D-FG ground would occlude the real-depth water.

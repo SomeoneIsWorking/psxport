@@ -1,4 +1,4 @@
-// engine/beh_substate_edge_orchestrator.cpp — PC-native per-object BEHAVIOR handler FUN_8012EB54 (OVERLAY).
+// game/ai/beh_substate_edge_orchestrator.cpp — PC-native per-object BEHAVIOR handler FUN_8012EB54 (OVERLAY).
 //
 // An OVERLAY per-object behavior routine (guest 0x8012xxxx) with the same state-byte shape as the
 // resident siblings (the FUN_739ac handler / the FUN_73cd8 handler / the FUN_741dc handler): a state machine on the node's state

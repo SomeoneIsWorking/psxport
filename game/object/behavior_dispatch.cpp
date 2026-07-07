@@ -13,7 +13,7 @@
 #include "behavior_dispatch.h"
 #include "core.h"
 #include "game.h"                 // Fps60::current_object (was g_current_object)
-#include "scene/engine.h"         // class Engine (for Core::engine)
+#include "core/engine.h"         // class Engine (for Core::engine)
 #include <cstdint>
 
 extern "C" void rec_dispatch(Core* c, uint32_t addr);   // run a function by address (override or interp)

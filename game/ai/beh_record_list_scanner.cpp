@@ -1,4 +1,4 @@
-// engine/beh_record_list_scanner.cpp — PC-native per-object BEHAVIOR handler FUN_8004CE14.
+// game/ai/beh_record_list_scanner.cpp — PC-native per-object BEHAVIOR handler FUN_8004CE14.
 //
 // A RESIDENT MAIN.EXE per-object behavior routine (prologue 0x8004CE14; `jr ra` at 0x8004D0CC).
 // Same SHAPE as the sibling owned behaviors (the FUN_80071a3c handler / the FUN_739ac handler / …): a state machine on the

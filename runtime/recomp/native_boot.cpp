@@ -46,7 +46,7 @@
 
 // ---- BGM frame counter (PSXPORT_BGMDBG trace shared with cd_override.cpp) --------------------
 // FUN_80074BF8(idx) starts BGM #idx; FUN_80074E48() stops it. These are now OWNED PC-native by
-// engine/sound.cpp (sound_register), which also carries the instant-CD dialog-music cut hook. Only
+// game/audio/sfx.cpp, which also carries the instant-CD dialog-music cut hook. Only
 // the shared frame counter remains here (cd_override.cpp externs it for its own BGM trace).
 // g_bgm_frame retired 2026-07-03 — per-Core Timing::logicFrame (c->game->timing.logicFrame).
 void rec_super_call(Core*, uint32_t);   // interpret the original PSX body (A/B oracle / super-call)
@@ -220,7 +220,7 @@ static void game_init(Core* c) {
   rc1(c, 0x80080d64, 0);
   rc1(c, 0x80080ed4, 1);
   rc1(c, 0x800865f0, 0);
-  // Engine frame-state + camera init reimplemented PC-native (engine/engine_init.cpp), replacing the
+  // Engine frame-state + camera init reimplemented PC-native (game/scene/startup.cpp), replacing the
   // 1:1 rec_dispatch transcription. FUN_800509b4 (display/GTE projection + PSX draw/disp double-buffer
   // env) stays dispatched for now — it sets DAT_801003f8 = H that eng_init_camera reads, and entangles
   // the PSX-GPU env, so it is the next target. (later-159, top-down engine port from main.)
@@ -236,7 +236,7 @@ static void game_init(Core* c) {
   // by LBA, served natively), so Setmode is a native no-op. (was rc3 0x80089bac)
   // (removed: VSync(3) display-settle wait — the PC-native frame loop owns ALL timing; boot does not
   // call libetc VSync. Any code that reaches VSync now TRAPS (sync_overrides.cpp vsync_trap).)
-  // FUN_80075130 font/text init reimplemented PC-native (engine/engine_font.cpp): owns the orchestration +
+  // FUN_80075130 font/text init reimplemented PC-native (game/ui/font.cpp): owns the orchestration +
   // direct writes + the 3 engine-state callees (FUN_800963a0/80096370/800752b4); the 8 libgpu/sound callees
   // stay rec_dispatched in-context (later-182b nested-dispatch risk). Replaces the rc0 transcription.
   c->engine.font.init();                       // was rc0(c, 0x80075130)
@@ -286,7 +286,7 @@ static void game_main(Core* c) {
   // PlatformHle::initBuiltins: FUN_80080880 (ChangeThread, the universal yield/task-end primitive that
   // FUN_80051f80/FUN_80051fb4 funnel through) -> switch, so a yield from an interpreted task
   // coroutine longjmps back to the native scheduler. (Was the removed address-keyed override table.)
-  // BGM start/stop (FUN_80074BF8 / FUN_80074E48) are now OWNED PC-native by engine/sound.cpp
+  // BGM start/stop (FUN_80074BF8 / FUN_80074E48) are now OWNED PC-native in game/audio/music_coord.cpp
   // (sound_register, called from games_tomba2_init). The instant-CD "cut looping ingame music when a
   // dialog tone starts" hook (MusicCoord::cutIfDialog) moved into ov_sound_play_bgm there. The REPL
   // `bgm`/`bgmstop` commands still rc1/rc0 those addresses directly (now routed through the overrides).
@@ -587,7 +587,7 @@ void native_boot_run(Core* c) {
   // movies are played here with our self-contained native FMV player (native_fmv.c).
   // SPLIT OF OWNERSHIP: only LOGO.STR (the Whoopee logo, which plays BEFORE the front-end overlay is
   // even loaded) is played at boot. OP.STR (the opening movie) is OWNED BY THE FRONT-END — the DEMO
-  // menu machine's states 4..7 ARE the OP.STR sequence (engine_demo.cpp demo_menu_machine), which now
+  // menu machine's states 4..7 ARE the OP.STR sequence (demo.cpp demo_menu_machine), which now
   // plays it via fmv.play. Playing OP here too made it play TWICE (boot + front-end) — the
   // "FMV repeats" bug. Boot plays LOGO; the front-end plays OP -> SCEA->LOGO->OP->title, no repeat.
   // Skip the intro FMVs when there's no viewer: PSXPORT_NO_FMV, OR any headless run (a headless probe

@@ -26,8 +26,8 @@
 //   0x800708B4  = sound-command mode (used by FUN_8013AFD8)
 
 #include "core.h"
-#include "scene/engine.h"
-#include "render/screen_fade/screen_fade.h"
+#include "core/engine.h"
+#include "render/screen_fade.h"
 #include <cstdint>
 
 extern "C" void rec_dispatch(Core* c, uint32_t addr);

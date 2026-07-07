@@ -1,4 +1,4 @@
-// engine/beh_variant_actor_sm.cpp — PC-native per-object BEHAVIOR handler FUN_8011D578.
+// game/ai/beh_variant_actor_sm.cpp — PC-native per-object BEHAVIOR handler FUN_8011D578.
 //
 // Overlay handler (~x778/field-frame on seaside). Ported from the Ghidra decompile of FUN_8011D578
 // (scratch/decomp/field2/8011d578.c), cross-checked against the raw disasm for the byte/half widths and

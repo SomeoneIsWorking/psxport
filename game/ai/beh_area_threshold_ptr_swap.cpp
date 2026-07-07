@@ -1,4 +1,4 @@
-// engine/beh_area_threshold_ptr_swap.cpp — PC-native per-object BEHAVIOR handler FUN_8013C3F4.
+// game/ai/beh_area_threshold_ptr_swap.cpp — PC-native per-object BEHAVIOR handler FUN_8013C3F4.
 //
 // 2nd-hottest still-PSX OVERLAY handler (~x4632/field-frame on seaside; ~80 instr), an area-overlay
 // routine (prologue 0x8013C3F4; `jr ra` at 0x8013C530). Lives only at runtime in the area overlay

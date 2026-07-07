@@ -1,4 +1,4 @@
-// engine/beh_typed_init_exit_poker.cpp — PC-native per-object BEHAVIOR handler FUN_80118240.
+// game/ai/beh_typed_init_exit_poker.cpp — PC-native per-object BEHAVIOR handler FUN_80118240.
 //
 // Overlay handler (~x1556/field-frame on seaside; ~370 instr, the biggest of the hot set), prologue
 // 0x80118240; `jr ra` at 0x80118844. Disassembled from scratch/ram/field_seaside.bin. Outer state

@@ -1,4 +1,4 @@
-// engine/beh_event_record_machine.cpp — PC-native per-object BEHAVIOR handler FUN_80136954.
+// game/ai/beh_event_record_machine.cpp — PC-native per-object BEHAVIOR handler FUN_80136954.
 //
 // Overlay handler (~x778/field-frame on seaside). Ported from the Ghidra decompile of FUN_80136954
 // (scratch/decomp/field2/80136954.c), cross-checked against the raw disasm. A 4-record object that fires

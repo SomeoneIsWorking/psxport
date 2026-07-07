@@ -1,4 +1,4 @@
-// engine/beh_camera_target_follow.cpp — PC-native per-object BEHAVIOR handler FUN_80059ED8.
+// game/ai/beh_camera_target_follow.cpp — PC-native per-object BEHAVIOR handler FUN_80059ED8.
 //
 // A RESIDENT MAIN.EXE per-object behavior (range 0x80059ED8..0x8005A398; `jr ra` at 0x8005a394). THE
 // hottest still-PSX RESIDENT handler on seaside (~x741/field-frame). A camera/view tracker: node[0x10]

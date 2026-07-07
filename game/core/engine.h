@@ -6,12 +6,12 @@
 //
 // SCOPE: the GAME-stage state machine (sm[0x48] handlers) and its per-frame field driver — the
 // top of the field spine that was previously exposed as the free functions `ov_game_stage_prologue`
-// / `ov_game_frame` / `ov_field_frame` / `ov_field_frame_x` in engine_stage.cpp. Those free
+// / `ov_game_frame` / `ov_field_frame` / `ov_field_frame_x` in engine.cpp. Those free
 // functions are the implementation; this class is the public interface (called by the scheduler
 // and by the state-machine handlers themselves once fully migrated).
 //
-// Migration is progressive: methods are added here as pieces of engine_stage.cpp are class-ified.
-// The existing static helpers in engine_stage.cpp keep working meanwhile — an Engine method may
+// Migration is progressive: methods are added here as pieces of engine.cpp are class-ified.
+// The existing static helpers in engine.cpp keep working meanwhile — an Engine method may
 // currently be a thin forwarder to a static ov_* function in that TU. As each is class-ified in
 // place, the forwarder collapses.
 #pragma once
@@ -117,7 +117,7 @@ public:
   // submode0 / submode1: the two sm[0x4a] state handlers under the GAME running sub-mode
   // (sm[0x48]==2). submode0 = SOP intro; submode1 = the walkable field area machine
   // (0x801088D8). Called by frame() when the corresponding sm[0x4a] is owned natively.
-  // Formerly `ov_game_submode0` / `ov_game_submode1` free functions in engine_stage.cpp.
+  // Formerly `ov_game_submode0` / `ov_game_submode1` free functions in engine.cpp.
   void submode0();
   void submode1();
   // submode1 case-0 fork (Slip #3, docs/findings/sbs.md). Faithful: two-tick load deferral matching
@@ -129,7 +129,7 @@ public:
 
   // sm[0x48] state handlers (0=area INIT, 1=area RESUME-INIT, 2=RUNNING dispatcher) and the
   // sm[0x4c] area LOAD/TRANSITION machine. Formerly `ov_game_s48_0..2` / `ov_game_s4c` /
-  // `ov_game_s48_2_frame` free statics in engine_stage.cpp. All operate on the sm task-state
+  // `ov_game_s48_2_frame` free statics in engine.cpp. All operate on the sm task-state
   // block at *0x1F800138 that Engine already owns.
   void s48_0();
   void s48_1();
@@ -147,7 +147,7 @@ public:
   // machine (guest FUN_80108A60 + FUN_80107xxx workers). fieldTransition dispatches on sm[0x4c]
   // into one of the 4 workers or the "done -> return to field" epilogue. Formerly the
   // ov_field_transition / ov_transition_main / ov_transition_d3c / ov_transition_e20 /
-  // ov_transition_f3c free statics in engine_stage.cpp.
+  // ov_transition_f3c free statics in engine.cpp.
   void fieldTransition();
   void transitionMain();
   void transitionD3c();
@@ -163,10 +163,10 @@ public:
   // submitPage810c: the sm[task+0x6b]==1 page-1 (pause-menu dim) fade branch of the master submit
   // dispatcher at guest 0x8010810C. Owns just the dim-fade shape (subtractive #808080 held on
   // page-1) + a substrate dispatch to the still-unowned menu draw at 0x801084F8; other pages
-  // fall through to substrate 0x8010810C. Was ov_game_submit_810c in engine_stage.cpp.
+  // fall through to substrate 0x8010810C. Was ov_game_submit_810c in engine.cpp.
   void submitPage810c();
 
-  // (fadeSequencer moved to ScreenFade::sequence — see game/render/screen_fade/screen_fade.h;
+  // (fadeSequencer moved to ScreenFade::sequence — see game/render/screen_fade.h;
   // callers reach it as `c->screenFade.sequence(node)`.)
 
   // frameUpdate: per-frame engine tick — the PC-driven game loop's frame body called directly
@@ -325,7 +325,7 @@ public:
   void frameStartTick();
 
   // ── Boot-time INIT (called from native_boot.cpp before the scheduler starts) ──────────────────
-  // The engine's own PC-native init prefix (was the free functions `eng_init_*` in engine_init.cpp).
+  // The engine's own PC-native init prefix (was the free functions `eng_init_*` in startup.cpp).
   // Each method reimplements the corresponding guest init leaf: frame/display/camera state, the
   // entity pool control block, the allocator + dispatch table, mode ctrl, input, and the orchestrator
   // that sequences them. Called via c->engine.initX() from native_boot.

@@ -1,4 +1,4 @@
-// engine/beh_box_seed_phase_gate.cpp — PC-native per-object BEHAVIOR handler FUN_8012A0B8.
+// game/ai/beh_box_seed_phase_gate.cpp — PC-native per-object BEHAVIOR handler FUN_8012A0B8.
 //
 // Overlay handler (~x2334/field-frame on seaside; ~135 instr), prologue 0x8012A0B8; `jr ra` at
 // 0x8012A2D0. Disassembled from scratch/ram/field_seaside.bin. Two-level state machine (outer

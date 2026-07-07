@@ -7,7 +7,7 @@
 // unchanged. The dispatched grid callees stay reachable by address (rec_dispatch).
 #include "core.h"
 #include "cfg.h"
-#include "scene/engine.h"
+#include "core/engine.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

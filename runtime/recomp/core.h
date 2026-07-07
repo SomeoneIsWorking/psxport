@@ -15,14 +15,14 @@
 #pragma once
 #include <stdint.h>
 #include "r3000.h"
-#include "render/screen_fade/screen_fade.h"   // Core owns a ScreenFade instance directly
-#include "scene/engine.h"                     // Core owns an Engine instance (GAME/STAGE driver)
+#include "render/screen_fade.h"   // Core owns a ScreenFade instance directly
+#include "core/engine.h"                     // Core owns an Engine instance (GAME/STAGE driver)
 #include "math/rng.h"                         // Core owns an Rng instance (PSX libc rand LCG)
 #include "math/trig.h"                        // Core owns a Trig instance (libgte sin/cos/atan2)
-#include "math/engine_math.h"                 // Core owns a Math instance (GTE matrix cluster)
+#include "math/gte_math.h"                 // Core owns a Math instance (GTE matrix cluster)
 #include "math/mtx.h"                         // Core owns a Mtx instance (libgte matrix leaves)
 #include "items/inventory.h"                  // Core owns an Inventory instance
-#include "items/save.h"                       // Core owns a SaveMenu instance
+#include "ui/save_menu.h"                       // Core owns a SaveMenu instance
 #include "interp_diag.h"                      // Core owns an InterpDiag (interp.cpp trace/profile state)
 
 #ifdef __cplusplus
@@ -55,7 +55,7 @@ public:
   uint32_t io_gpustat_toggle = 0;  // GPUSTAT (0x1F801814) even/odd line bit — per-instance HW state
 
   // Recomp-miss test gate (was extern "C" g_rec_miss_tolerant / g_rec_missed). Set by the oracle
-  // regression test harness (game/camera/cutscene_camera_test.cpp) around a synthetic guest state
+  // regression test harness (game/camera/cutscene_camera_selftest.cpp) around a synthetic guest state
   // that may hit an un-recompiled address: rec_dispatch_miss (hle.cpp) checks recMissTolerant, and
   // when true it flags recMissed and returns instead of the usual FAIL FAST abort. Per-Core so two
   // cores in SBS never leak the tolerance flag into each other.
@@ -76,7 +76,7 @@ public:
   // returns, consumed (and cleared) by the interp at the next control transfer. See interp.cpp.
   uint32_t coro_redirect_pc = 0;
 
-  // Set by native code (scheduler resume-across-override, engine_submit) to carry the body an override
+  // Set by native code (scheduler resume-across-override, submit.cpp) to carry the body an override
   // intercepted; the substrate consults it right before running func_<addr>. Per-Core execution state
   // (each Core has its own scheduler / dispatch). Was the process-global g_override_tgt.
   uint32_t override_tgt = 0;
@@ -191,7 +191,7 @@ void gpu_gp1(uint32_t w);
 void gpu_present(Core* core);
 void gpu_present_ex(Core* core, int do_blit);
 // M3 provenance: an owned background drawer's override records the KSEG0 packet-pool span [lo,hi) it
-// produced this frame, so the OT walk classifies those prims as RQ_BACKGROUND (engine_submit.cpp).
+// produced this frame, so the OT walk classifies those prims as RQ_BACKGROUND (submit.cpp).
 void gpu_bg_range_add(Core* core, uint32_t lo, uint32_t hi);
 void gpu_pace_frame(Core* core);
 void gpu_pace_subframe(Core* core, int parts);

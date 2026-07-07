@@ -1,4 +1,4 @@
-// engine/beh_multi_record_phase_machine.cpp — PC-native per-object BEHAVIOR handler FUN_80134FD8.
+// game/ai/beh_multi_record_phase_machine.cpp — PC-native per-object BEHAVIOR handler FUN_80134FD8.
 //
 // Overlay handler (~x778/field-frame on seaside; ~260 instr), prologue 0x80134FD8; `jr ra` at
 // 0x8013540C. Disassembled from scratch/ram/field_seaside.bin. TWO-level state machine:

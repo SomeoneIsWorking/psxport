@@ -1,4 +1,4 @@
-// engine/beh_child_trig_motion.cpp — PC-native per-object BEHAVIOR handler FUN_8013A900.
+// game/ai/beh_child_trig_motion.cpp — PC-native per-object BEHAVIOR handler FUN_8013A900.
 //
 // Overlay handler (~x1554/field-frame on seaside; ~205 instr), prologue 0x8013A900; `jr ra` at
 // 0x8013AC2C. Disassembled from scratch/ram/field_seaside.bin. Outer state machine on node[4]:

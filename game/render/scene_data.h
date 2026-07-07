@@ -1,4 +1,4 @@
-// game/render/scene/scene_data.h — the INTERMEDIATE REPRESENTATION of a frame for the NATIVE renderer.
+// game/render/scene_data.h — the INTERMEDIATE REPRESENTATION of a frame for the NATIVE renderer.
 //
 // This is the data the decoupled native render path consumes. It is built by walking the engine's own
 // scene state (the active entity lists + each node's graphics binding + the camera), NOT by reading any

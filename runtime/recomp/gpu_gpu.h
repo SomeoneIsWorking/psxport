@@ -23,7 +23,7 @@ void gpu_gpu_set_xyf(Core* core, const float* xf, const float* yf);  // sub-pixe
 // Dynamic shadow mapping: capture one OPAQUE world-geometry triangle's VIEW-SPACE positions (v0/v1/v2,
 // each {x=ir1, y=ir2, z=pz} — the metric view space the deferred pass reconstructs) into the host shadow
 // geometry stream. Rasterized from the directional light's view into a depth map, then sampled in the
-// deferred pass to darken occluded pixels. Called from the opaque world submitters (engine_submit.cpp,
+// deferred pass to darken occluded pixels. Called from the opaque world submitters (submit.cpp,
 // native_terrain.cpp). Cheap no-op when shadows are off. v0/v1/v2 point to 3 floats each.
 void gpu_gpu_shadow_push_tri(Core* core, const float* v0, const float* v1, const float* v2);
 int  gpu_gpu_shadows_active(void);   // shadows toggle (g_mods.shadows && g_mods.light) — submitters gate capture
@@ -54,7 +54,7 @@ void gpu_gpu_shot(Core* core, const char* path);
 void gpu_gpu_stats(Core* core, int* tri, int* tex, int* semi);
 
 // (Engine-owned screen fade is now the PC-native subsystem class ScreenFade at
-// game/render/screen_fade/screen_fade.h. The old gpu_set_fade / gpu_clear_fade / engine_fade_set entries
+// game/render/screen_fade.h. The old gpu_set_fade / gpu_clear_fade / engine_fade_set entries
 // lived here — deleted; native present path reads ScreenFade::get(core).)
 
 // this-/last-frame 3D status (defined in gpu_native.cpp; read by the gpu_gpu present path) — now per-instance

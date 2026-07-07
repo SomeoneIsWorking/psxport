@@ -1,4 +1,4 @@
-// engine/script.cpp — PC-native per-object SCRIPT-VM subsystem.
+// game/object/script_vm.cpp — PC-native per-object SCRIPT-VM subsystem.
 // The per-object script-VM tick (FUN_8004CE14) — the most-called field function. Control flow + object
 // memory owned native; every sub-behavior stays reachable by address via rec_dispatch (each honors its
 // own override identically). NO GTE, NO render packets. Extracted verbatim from game_tomba2.cpp (one
@@ -10,7 +10,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "script.h"
+#include "script_vm.h"
 #include "spawn.h"     // class Spawn (c->engine.spawn.despawn / dispatch / spawnAndInit)
 #include "mathlib.h"  // Bit::test7EC / test868 (FUN_8004D7EC / FUN_8004D868)
 void rec_super_call(Core*, uint32_t);

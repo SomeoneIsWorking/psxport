@@ -1,4 +1,4 @@
-// engine/beh_scatter_record_dither.cpp — PC-native per-object BEHAVIOR handler FUN_8013C538.
+// game/ai/beh_scatter_record_dither.cpp — PC-native per-object BEHAVIOR handler FUN_8013C538.
 //
 // The HOTTEST still-PSX OVERLAY handler (~x6091/field-frame on seaside), an area-overlay routine
 // (prologue 0x8013C538; `jr ra` at 0x8013C7E8). Lives only at runtime in the area overlay (NOT in

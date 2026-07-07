@@ -7,7 +7,7 @@
 #include "core.h"
 #include "cfg.h"
 #include "scene/scene_events.h"
-#include "scene/engine.h"
+#include "core/engine.h"
 #include "game.h"              // c->game->verify — the shared A/B verify scaffold
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);

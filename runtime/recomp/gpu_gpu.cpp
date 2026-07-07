@@ -1,7 +1,7 @@
 #include "core.h"
 #include "game.h"    // Game / GpuGpuState (per-instance render state)
 #include "gpu_gpu.h"  // public Core*-threaded API decls (wrappers below forward to core->game->gpu_gpu)
-#include "render/screen_fade/screen_fade.h"   // class ScreenFade — the single fade driver (present reads its state)
+#include "render/screen_fade.h"   // class ScreenFade — the single fade driver (present reads its state)
 #include "render/render.h"                    // Render::stats (RenderStats — was g_dbg_world_quads)
 // gpu_gpu.cpp — SDL3 GPU API present backend for the Tomba2Engine port.
 //
@@ -77,7 +77,7 @@ static inline GpuDevice& gdev() { return *GpuDevice::sInstance; }
 #define s_sbs_w        (gdev().s_sbs_w)
 #define s_sbs_h        (gdev().s_sbs_h)
 
-// (Engine-owned screen fade moved to class ScreenFade at game/render/screen_fade/. State lives in guest
+// (Engine-owned screen fade moved to class ScreenFade at game/render/screen_fade.h. State lives in guest
 // memory so it's per-Core / SBS-clean without needing per-instance C++ fields. Native present path
 // reads ScreenFade::get(core) directly — see readback + PresentPC uniform builders below.)
 

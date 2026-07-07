@@ -1,6 +1,6 @@
 // test_coro.cpp — unit test for the Coro fiber primitive (no game deps).
-// Build+run: c++ -std=c++17 -pthread runtime/recomp/coro.cpp runtime/recomp/test_coro.cpp -o /tmp/x && /tmp/x
-// (the repo build has a `test_coro` target; see cmake/tomba2_port.cmake usage in CI/tools).
+// Standalone (no cmake target):
+//   c++ -std=c++17 -pthread -Iruntime/recomp runtime/recomp/coro.cpp tests/test_coro.cpp -o scratch/bin/test_coro && scratch/bin/test_coro
 #include "coro.h"
 #include <cassert>
 #include <cstdio>

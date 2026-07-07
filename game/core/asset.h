@@ -46,7 +46,7 @@ public:
 
   // preloadTexgroup(mode, set): stage-0/stage-1 texgroup PRELOAD — synchronous CD read +
   //   loadTexgroup path with explicit mode/set (not read from the task struct). Used by the
-  //   native_stage0_sm boot preload chain in engine_stage.cpp and by engine_demo's area-load.
+  //   native_stage0_sm boot preload chain in engine.cpp and by demo.cpp's area-load.
   void preloadTexgroup(uint32_t mode, uint32_t set);
 
   // FUN_8004514C — SWDATA + DAT load, shared texgroup sub-load, relocation table, cel/sprite

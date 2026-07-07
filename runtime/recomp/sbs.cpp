@@ -253,7 +253,7 @@ public:
   // be waved off as "residual/known/expected" (memory: no_residual_ram_diverges). Every diff is
   // fatal and gets root-caused, so filter ranges have no place here. If a diff is a PSX-quirk
   // native deliberately skips, the fix is to gate the quirk on !c->game->pc_skip at the write
-  // site (see cull.cpp / engine_stage.cpp) — i.e. do the faithful thing when pc_skip is off,
+  // site (see cull.cpp / engine.cpp) — i.e. do the faithful thing when pc_skip is off,
   // NOT to blacklist the address.
   //
   // EXCEPTION 2026-07-04 (user directive [[sbs-two-compare-modes]]): pc_skip=ON is ALLOWED to
@@ -299,10 +299,10 @@ public:
     // mask + fix).
     if (addr >= 0x800BE0E0u && addr < 0x800BE0E4u) return true;    // CD position tracker (cd_override.cpp:151)
     if (addr >= 0x800BED80u && addr < 0x800BED88u) return true;    // preload cel_h etc (asset.cpp:222/226)
-    if (addr >= 0x800ECF54u && addr < 0x800ECF80u) return true;    // preload task-state u16s (engine_stage.cpp:1523)
+    if (addr >= 0x800ECF54u && addr < 0x800ECF80u) return true;    // preload task-state u16s (engine.cpp:1523)
     if (addr >= 0x800ED000u && addr < 0x800ED020u) return true;    // preload metadata
     if (addr >= 0x800EF478u && addr < 0x800EF500u) return true;    // texgroup header buffer (asset.cpp:188)
-    if (addr >= 0x80105C10u && addr < 0x80105CA0u) return true;    // BAV slot descriptor table (engine_bav.cpp:67)
+    if (addr >= 0x80105C10u && addr < 0x80105CA0u) return true;    // BAV slot descriptor table (bav_loader.cpp:67)
     if (addr >= 0x80105D00u && addr < 0x80105EE8u) return true;    // preload metadata (excludes the RNG seed — RNG must be faithful, user 2026-07-04)
     if (addr >= 0x80105EECu && addr < 0x80105F00u) return true;    // preload metadata after RNG seed
     if (addr >= 0x80157000u && addr < 0x8017D000u) return true;    // preload allocation + AI-code regions (boot-transient)

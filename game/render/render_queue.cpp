@@ -258,7 +258,7 @@ void RenderQueue::flush(Core* core) {
 // ---- Native render-queue EMISSION (moved from gpu_native.cpp, 2026-07 restructure): the engine's OWN
 // render-queue API (RqItem-based world/2D quad submission with real per-vertex depth + order_mode + shadow-
 // cast tagging), as distinct from gpu_native.cpp's PSX GP0-packet interpreter/rasterizer. drawWorldQuad
-// / push2dQuad are the entry points game/render (engine_submit.cpp, native_terrain.cpp, mesh_draw.cpp)
+// / push2dQuad are the entry points game/render (submit.cpp, native_terrain.cpp, mesh_draw.cpp)
 // call to submit engine-owned geometry.
 
 // PC-NATIVE world-quad draw (the render-PC-native path — NOT a PSX-packet transcription). Takes a quad
@@ -381,7 +381,7 @@ void RenderQueue::emitOrQueue(Core* core, int capture, int layer, int order_mode
   it.layer = (uint8_t)layer; it.semi = semi ? 1 : 0; it.nv = (uint8_t)nv; it.raw = raw ? 1 : 0;
   it.order_mode = (uint8_t)order_mode;
   it.fps_world = 0;   // fps60 capture: cleared here, set only by Fps60::stampWorld on GTE-composed world prims
-  // objid overlay: stamp the entity node the native render walk is currently rendering (engine_submit.cpp).
+  // objid overlay: stamp the entity node the native render walk is currently rendering (submit.cpp).
   // Every world prim an object emits gets its node, so the overlay labels ALL rendered objects. Terrain/
   // static/background prims render with no per-object scope (mDbgRenderNode==0) → correctly unlabeled.
   it.dbg_node = (layer == RQ_WORLD) ? core->mRender->diag.currentNode() : 0;

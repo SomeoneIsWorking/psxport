@@ -1,4 +1,4 @@
-// engine/beh_id_compare_motion_dispatch.cpp — PC-native per-object BEHAVIOR handler FUN_80145230 (OVERLAY).
+// game/ai/beh_id_compare_motion_dispatch.cpp — PC-native per-object BEHAVIOR handler FUN_80145230 (OVERLAY).
 //
 // An OVERLAY per-object behavior routine (guest 0x8014xxxx) with the same state-byte shape as the
 // resident/overlay siblings (the FUN_739ac handler / the FUN_73cd8 handler / the FUN_8012eb54 handler): a state machine on the

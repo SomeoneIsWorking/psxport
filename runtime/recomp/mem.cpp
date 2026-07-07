@@ -241,7 +241,7 @@ uint32_t Core::mem_r32(uint32_t a) {
   if (!p) return io_read(a, 4);
   uint32_t v; memcpy(&v, p, 4); return v;
 }
-// PC-native per-OBJECT depth: while armed (during one render-command dispatch, engine_submit ov_render_cmd),
+// PC-native per-OBJECT depth: while armed (during one render-command dispatch, submit.cpp ov_render_cmd),
 // record the address span of stores landing in the packet/OT pool [0x800BFE68,0x800E7E68) (RE'd render-buffer
 // map). The unowned overlay renderers write their GP0 packets HERE but WITHOUT advancing the pool pointer
 // 0x800BF544 — so the pointer can't bound them, but the stores can. The span is then tagged with the object's

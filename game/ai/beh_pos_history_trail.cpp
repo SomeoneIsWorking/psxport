@@ -1,4 +1,4 @@
-// engine/beh_pos_history_trail.cpp — PC-native per-object BEHAVIOR handler FUN_80029B40.
+// game/ai/beh_pos_history_trail.cpp — PC-native per-object BEHAVIOR handler FUN_80029B40.
 //
 // Resident handler (~167-line state machine). Ported from the Ghidra decompile of FUN_80029B40
 // (scratch/decomp/ram_f1000_all.c). A "trailing position history" actor: it follows a TARGET object

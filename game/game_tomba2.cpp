@@ -19,18 +19,18 @@
 #include "game.h"   // Fps60::current_object (was g_current_object)
 #include "cfg.h"
 #include "mods.h"      // g_mods (fps60 persisted with the other user settings)
-#include "margin_render.hpp"
+#include "margin_render.h"
 #include "render.h"           // class Render — c->mRender->sceneNative()
 #include "asset.h"      // PC-native asset-loading subsystem (extracted from this file)
 #include "mathlib.h"    // PC-native math/PRNG leaf primitives (rand, trig LUTs, bit-test)
 #include "cull.h"       // PC-native visibility cull / LOD subsystem
 #include "collision.h"  // PC-native collision-grid subsystem
 #include "entity.h"     // PC-native per-object entity state-machine subsystem
-#include "script.h"     // PC-native per-object script-VM subsystem
+#include "script_vm.h"     // PC-native per-object script-VM subsystem
 #include "animation.h"  // PC-native per-object animation-VM subsystem
 #include "input.h"      // PC-native per-frame input/controller subsystem
 #include "menu.h"       // PC-native in-game Options menu subsystem
-#include "scene/engine.h"  // class Engine — this file defines Engine::frameUpdate / Engine::drawOTag
+#include "core/engine.h"  // class Engine — this file defines Engine::frameUpdate / Engine::drawOTag
 #include <stdlib.h>
 #include <stdio.h>
 
@@ -171,7 +171,7 @@ void Engine::drawOTag(uint32_t otHead) {   // called directly from native_step_f
   // docs/oracle.md) PROVES the PSX renders the whole cutscene from its GP0 stream. So for the narration we
   // walk the FULL guest OT (no native field render, no 2D-only filter) — reproducing the PSX cutscene exactly.
   // The SOP intro narration is active exactly when the loaded MODE overlay is the SOP one — the SAME check
-  // the GAME submode-0 dispatcher uses to run ov_sop_field_mode (engine_stage.cpp: *(0x80109450) is the
+  // the GAME submode-0 dispatcher uses to run ov_sop_field_mode (engine.cpp: *(0x80109450) is the
   // overlay's first instruction; the SOP overlay starts `lui v0,0x1f80` == 0x3C021F80). The walkable field
   // loads a different overlay (e.g. 0x801138A4), so this cleanly separates the cutscene from free-roam
   // (sm[0x4a] does NOT — free-roam settles back to sm[0x4a]==0 like the narration).
@@ -220,7 +220,7 @@ void games_tomba2_init(void) {
   // switch, no per-override *_RECOMP / NO_* opt-outs (those were faithful-first A/B scaffolding; the user
   // directive is no gating + drive toward removing the interpreter entirely, so they are retired). Every
   // override below IS the behavior; the user verifies it via ./run.sh.
-  // Hand-written native C++ for the boot→first-cutscene path (engine/native_path.cpp).
+  // Hand-written native C++ for the boot→first-cutscene path (game_tomba2.cpp).
   // (games_native_path_init removed: native_misc.cpp was dead reference scaffolding — later-288)
   // OVERRIDE SYSTEM REMOVED (2026-06-22): the whole `_register()` scaffolding block used to install
   // rec_set_override() entries. The override table is gone; the per-subsystem register functions

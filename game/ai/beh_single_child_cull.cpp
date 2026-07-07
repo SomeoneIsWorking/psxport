@@ -1,4 +1,4 @@
-// engine/beh_single_child_cull.cpp — PC-native per-object BEHAVIOR handler FUN_80132400.
+// game/ai/beh_single_child_cull.cpp — PC-native per-object BEHAVIOR handler FUN_80132400.
 //
 // Overlay handler (~x778/field-frame on seaside; ~80 instr), prologue 0x80132400; `jr ra` at
 // 0x80132540. Disassembled from scratch/ram/field_seaside.bin. Outer state machine on node[4]:

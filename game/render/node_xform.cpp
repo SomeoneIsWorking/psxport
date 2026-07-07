@@ -15,7 +15,7 @@
 // scratchpad seeding + native-call orchestration. No rec_dispatch needed.
 #include "node_xform.h"
 #include "core.h"
-#include "engine_math.h"     // Math::rotmat, Math::matMul (static)
+#include "gte_math.h"     // Math::rotmat, Math::matMul (static)
 
 void NodeXform::build(uint32_t node) {
   Core* c = core;

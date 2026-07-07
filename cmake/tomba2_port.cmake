@@ -110,8 +110,8 @@ set(PORT_SRC
   game/world/pool.cpp
   game/world/entity.cpp
   game/render/render_native.cpp
-  game/render/scene/scene_build.cpp
-  game/render/mesh/mesh_draw.cpp
+  game/render/scene_build.cpp
+  game/render/mesh_draw.cpp
   game/object/actor_sm_24448.cpp
   game/ai/beh_scene_ui_trigger.cpp
   game/ai/beh_typed_init_scene_trigger.cpp
@@ -179,38 +179,37 @@ set(PORT_SRC
   game/object/object_list.cpp
   game/object/array8_dispatch.cpp
   game/world/object_table.cpp
-  game/items/script.cpp
+  game/object/script_vm.cpp
   game/object/animation.cpp
   game/input/input.cpp
   game/ui/menu.cpp
   game/items/inventory.cpp
   game/render/lighting.cpp
-  game/ui/engine_bav.cpp
-  game/items/save.cpp
+  game/ui/bav_loader.cpp
+  game/ui/save_menu.cpp
   game/audio/music_coord.cpp
-  game/scene/engine_init.cpp
-  game/ui/engine_font.cpp
-  game/scene/engine_level.cpp
+  game/scene/startup.cpp
+  game/ui/font.cpp
+  game/scene/level_load.cpp
   game/render/fps60.cpp
   game/object/behavior_dispatch.cpp
-  game/render/engine_submit.cpp
+  game/render/submit.cpp
   game/render/node_xform.cpp
   game/render/proj_prim.cpp
   game/render/pgxp.cpp
   game/render/proj_params.cpp
-  game/render/engine_project.cpp
-  game/render/engine_render.cpp
-  game/render/engine_render_walk.cpp
-  game/scene/engine_stage.cpp
+  game/render/projection.cpp
+  game/render/render_frame.cpp
+  game/render/render_walk.cpp
+  game/core/engine.cpp
   game/scene/sop.cpp
-  game/scene/engine_demo.cpp
+  game/scene/demo.cpp
   game/camera/cutscene_camera.cpp
-  game/camera/cutscene_camera_test.cpp
-  game/math/engine_math.cpp
-  # game/player/engine_player.cpp   (retired — moved into game/player/actor_tomba.cpp)
+  game/camera/cutscene_camera_selftest.cpp
+  game/math/gte_math.cpp
   game/render/native_terrain.cpp
   game/render/render_queue.cpp
-  game/render/screen_fade/screen_fade.cpp
+  game/render/screen_fade.cpp
   game/render/margin_render.cpp
   game/render/ffspan.cpp
   game/audio/native_audio.c
@@ -269,7 +268,7 @@ set_target_properties(tomba2_port PROPERTIES
 target_include_directories(tomba2_port PRIVATE
   ${RT} ${CMAKE_SOURCE_DIR}/generated
   game  game/ai  game/audio  game/camera  game/cd  game/core  game/input  game/items  game/math  game/object  game/player  game/render  game/scene  game/ui
-  game/world game/render game/render/scene game/render/mesh
+  game/world
   ${MED} ${MED}/psx
   vendor/beetle-psx/libretro-common/include vendor/beetle-psx
   vendor/beetle-psx/deps/libchdr/include

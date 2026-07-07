@@ -2,7 +2,7 @@
 //
 // PROPER OOP: one instance per Core, reached as `c->mRender->...`. This class exists to group the
 // per-Core render-side subsystems (currently just NodeXform; scene-graph submit / walk / project etc.
-// will migrate in here over time, out of the engine_submit.cpp / engine_render*.cpp grab-bags).
+// will migrate in here over time, out of the submit.cpp / render_frame.cpp / render_walk.cpp grab-bags).
 //
 // Owned by Core via a POINTER (`Core::mRender`) — construction/destruction lives in the Core ctor/dtor
 // in runtime/recomp/core.cpp; back-pointer `mCore` is wired there, and each embedded sub-subsystem's
@@ -17,9 +17,9 @@
 #include "proj_prim.h"
 #include "pgxp.h"
 #include "proj_params.h"
-#include "engine_project.h"     // EObjXform (per-Core active per-object xform lives on Render below)
+#include "projection.h"     // EObjXform (per-Core active per-object xform lives on Render below)
 #include "render_native.h"      // class NativeScenePass — the decoupled native render subsystem
-#include "margin_render.hpp"    // class MarginRenderer — widescreen margin collect-and-flush
+#include "margin_render.h"    // class MarginRenderer — widescreen margin collect-and-flush
 #include "lighting.h"           // class Lighting — per-area light registry (sun / lava+torch)
 class Core;
 
@@ -38,12 +38,12 @@ public:
   ProjParams        projParams;         // camview + per-frame projection constants (per-Core)
   // Active per-object xform for the GT3/GT4 submitters. Set once per render command by the per-object
   // flush (projSetActive), read by the per-vertex projection (projVertexActive), cleared by
-  // projClearActive. Was file-scope in engine_project.cpp; per-Core here so SBS's two cores don't
+  // projClearActive. Was file-scope in projection.cpp; per-Core here so SBS's two cores don't
   // share a transform between their emits (2026-07-03).
   EObjXform         mActiveXform{};
   bool              mActiveXformSet = false;
   NodeXform         mNodeXform;        // scene-node WORLD-TRANSFORM builder (guest FUN_80051844)
-  // PSXPORT_BDTAG per-node attribution names for the walk dispatch cases (engine_render_walk.cpp).
+  // PSXPORT_BDTAG per-node attribution names for the walk dispatch cases (render_walk.cpp).
   // The gp0 classify is deferred one frame, so the names live in a per-Core ring, not walk locals.
   char              mWalkTagRing[512][20] = {};
   int               mWalkTagPos = 0;
@@ -54,7 +54,7 @@ public:
   // cached pointer instead of re-reading guest RAM. Falls back to the SUN default when unset.
   const LightConfig* mShadeCfg = nullptr;
 
-  // ---- object-render projection ops (impl in engine_project.cpp) ----------
+  // ---- object-render projection ops (impl in projection.cpp) ----------
   // Compose an EObjXform from the object's REAL WORLD coordinates: its world rotation matrix (cmd+0x18)
   // and world position (cmd+0x2C), transformed by the live scene camera (scratchpad view matrix
   // 0x1F8000F8 / translation 0x1F80010C). Projection constants are the camera's (CR24-26). No gte_op.
@@ -72,8 +72,8 @@ public:
 
   // ---- per-frame render orchestrators (called by Engine::fieldFrame/X) ----
   // frame  (guest 0x8003F9A8) — the primary per-frame render orchestrator; runs the non-walk PSX
-  //   passes (the walk cluster is owned by SceneNative::render in engine_render_walk.cpp).
-  //   Was ov_render_frame in engine_render.cpp.
+  //   passes (the walk cluster is owned by SceneNative::render in render_walk.cpp).
+  //   Was ov_render_frame in render_frame.cpp.
   // frameX (guest 0x8003FA44) — the mid-transition variant (reduced pass set). Was ov_render_frame_x.
   void frame();
   void frameX();
@@ -145,7 +145,7 @@ public:
   // `es` (per-list ptr headers at es+0x10..; packed geometry base at es+0xC; count at es+6),
   // dispatches each entry through submit_poly_gt3_native / submit_poly_gt4_native under the
   // camera-composed eproj xform. Called for the ground scene table 0x800F2418 (in Render::frame
-  // groundnative diag branch and in the field object walk in engine_render_walk). Was
+  // groundnative diag branch and in the field object walk in render_walk). Was
   // ov_field_entity_render (taxi-parameter c->r[4]).
   void fieldEntityRender(uint32_t es);
 

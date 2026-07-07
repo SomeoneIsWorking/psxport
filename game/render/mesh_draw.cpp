@@ -1,4 +1,4 @@
-// game/render/mesh/mesh_draw.cpp — NATIVE 3D-mesh drawer.
+// game/render/mesh_draw.cpp — NATIVE 3D-mesh drawer.
 //
 // Parses the GEOMBLK model format (the SAME layout tools/export_model.py parses and native_terrain.cpp
 // renders), transforms each prim's model-space verts by the object's FLOAT model->view matrix, projects
@@ -6,7 +6,7 @@
 // RenderQueue::drawWorldQuad. This is the decoupled native render: no GTE compose, no gte_op, no GP0 packet, no
 // OT — the engine owns the transform, projection, and depth.
 //
-// GEOMBLK (from export_model.py docstring / engine_submit GT3/GT4 RE):
+// GEOMBLK (from export_model.py docstring / submit.cpp GT3/GT4 RE):
 //   header @geomblk+0: u32 counts -> low16 = #GT3 (textured tris), high16 = #GT4 (textured quads)
 //   records @geomblk+16: nGT3 GT3 records (36B) then nGT4 GT4 records (44B), model-space s16 verts.
 //   GT3 (36B): +0 rgb0|op +4 rgb1 +8 uv0|clut +12 uv1|tpage +16 XY0 +20 Z0|Z1
@@ -23,10 +23,10 @@
 // sampling VRAM by tpage/clut here is the documented first pass.
 #include "core.h"
 #include "cfg.h"
-#include "../scene/scene_data.h"
-#include "../render.h"          // class Render — reach `c->mRender->projParams` for depth-normalize
-#include "../proj_params.h"     // class ProjParams — setProjH + proj_pz_to_ord (kept as free fn, per-Core state)
-#include "../render_native.h"   // class NativeScenePass — drawObject is a method here
+#include "scene_data.h"
+#include "render.h"          // class Render — reach `c->mRender->projParams` for depth-normalize
+#include "proj_params.h"     // class ProjParams — setProjH + proj_pz_to_ord (kept as free fn, per-Core state)
+#include "render_native.h"   // class NativeScenePass — drawObject is a method here
 #include <stdint.h>
 #include <math.h>
 

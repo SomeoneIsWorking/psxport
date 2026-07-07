@@ -27,7 +27,7 @@
 #include "gpu_native_internal.h"   // GpuState — the native GPU's per-instance render machine state
 #include "gpu_gpu_internal.h"       // GpuGpuState — the Vulkan present backend's per-instance render state
 #include "gpu_gpu_device.h"        // class GpuDevice — the SDL3 GPU host window/device (first Game claims it)
-#include "fps60_internal.h"        // Fps60 — the interpolated-60fps tier's per-instance state
+#include "fps60.h"        // Fps60 — the interpolated-60fps tier's per-instance state
 #include "render_queue.h"          // RenderQueue — the engine-owned draw-order authority
 #include "repl.h"                  // class Repl — REPL driver + auto-drive request state
 #include "spu_audio.h"             // class SpuAudio — host audio output sink (SDL3 + WAV capture)
@@ -145,7 +145,7 @@ public:
   int sbs_render = 0;
 
   // Dual-core diff control: the per-core override-neutralize flag. The terrain override (ov_terrain,
-  // engine_submit.cpp) is in the SHARED dispatch table; each core decides ON vs neutralized by reading
+  // submit.cpp) is in the SHARED dispatch table; each core decides ON vs neutralized by reading
   // THIS flag (not divergent override tables — see docs game-deglobalize-plan P7). The harness sets it on
   // the `b` core (terrain -> recomp super-call) so an a-vs-b core.ram diff isolates submit_terrain.
   int neutralize_terrain = 0;

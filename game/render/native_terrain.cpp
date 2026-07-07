@@ -9,17 +9,17 @@
 // (camera rotation+translation, the per-object rotation matrix, the object position, the terrain model
 // geometry) and render it with FLOAT matrices + real per-pixel depth, straight to the VK rasterizer
 // (RenderQueue::drawWorldQuad). No GTE compose, no gte_op for render, no GP0 packet, no guest write beyond the
-// faithful gameplay prep. ov_terrain (engine_submit.cpp) routes here unconditionally — the ONE behavior.
+// faithful gameplay prep. ov_terrain (submit.cpp) routes here unconditionally — the ONE behavior.
 #include "core.h"
 #include "game.h"
 #include "cfg.h"
-#include "mods.h"   // g_mods — engine-native directional lighting on the terrain (matches engine_submit)
+#include "mods.h"   // g_mods — engine-native directional lighting on the terrain (matches submit.cpp)
 #include "render_internal.h"   // sil_bbox_log_node (dark-outline coverage-gap diag)
 #include <stdint.h>
 #include <stdio.h>
 #include <math.h>
 
-// Shared faithful gameplay prep (sway bytes + object rotation matrix @ SCR) — engine_submit.cpp.
+// Shared faithful gameplay prep (sway bytes + object rotation matrix @ SCR) — submit.cpp.
 // class ProjParams (per-Core) — depth-normalize + set-plane-H + camview publish. Header brings in the
 // free-function bridges (proj_pz_to_ord / proj_set_H / camview_publish) used below.
 #include "proj_params.h"
@@ -87,7 +87,7 @@ void NativeScenePass::terrainRender() {
 
   // ---- iterate the byte-packed terrain records; draw each as one quad ---------------------------------
   // X/Y are signed bytes <<8; Z is the top byte of each RGB word (also <<8). UV/CLUT/texpage/colors decode
-  // exactly like the byte-packed submitter (engine_submit.cpp submit_poly_gt4_bp), with a1=a2=a3=0 (no
+  // exactly like the byte-packed submitter (submit.cpp submit_poly_gt4_bp), with a1=a2=a3=0 (no
   // CLUT-bank / OT-Z / U offset for terrain).
   static const uint32_t XO[4] = {0x1C,0x1D,0x20,0x21}, YO[4] = {0x1E,0x1F,0x22,0x23},
                         ZO[4] = {0x0F,0x13,0x17,0x1B}, CO[4] = {0x0C,0x10,0x14,0x18};
@@ -122,7 +122,7 @@ void NativeScenePass::terrainRender() {
     u[2] = uv2 & 0xFF;        v[2] = (uv2 >> 8) & 0xFF;
     u[3] = (uv2 >> 16) & 0xFF; v[3] = (uv2 >> 24) & 0xFF;
     int semi = (ctl & 0x40000000) ? 1 : 0;
-    // Engine-native directional lighting on the ground (same model as engine_submit.cpp engine_shade_face):
+    // Engine-native directional lighting on the ground (same model as submit.cpp engine_shade_face):
     // per-face view-space normal from the quad's verts, modulate the vertex colours by ambient+diffuse·(N·L).
     if (g_mods.light && !semi) {
       float e1x = wv[1][0]-wv[0][0], e1y = wv[1][1]-wv[0][1], e1z = wv[1][2]-wv[0][2];

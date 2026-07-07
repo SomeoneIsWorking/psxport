@@ -1,5 +1,4 @@
-// game/world/graphics_bind.cpp — PC-native OBJECT RENDER-BIND subsystem (relocated verbatim from
-// engine/entity_spawn.cpp). See graphics_bind.h.
+// game/world/graphics_bind.cpp — PC-native OBJECT RENDER-BIND subsystem. See graphics_bind.h.
 #include "core.h"
 #include "cfg.h"
 #include <stdio.h>
@@ -7,7 +6,7 @@
 #include <string.h>
 #include "graphics_bind.h"
 #include "game.h"              // c->game->verify — the shared A/B verify scaffold
-#include "engine_math.h"       // Math::rotmat — libgte RotMatrix (native, static)
+#include "gte_math.h"       // Math::rotmat — libgte RotMatrix (native, static)
 
 // Forward native scene-data record the decoupled native renderer will consume (geometry + float
 // transform + texture). Populated in a later pass; the object subsystem will fill one of these per

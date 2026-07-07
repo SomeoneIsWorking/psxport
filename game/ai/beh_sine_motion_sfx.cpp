@@ -1,4 +1,4 @@
-// engine/beh_sine_motion_sfx.cpp — PC-native per-object BEHAVIOR handler FUN_80136158.
+// game/ai/beh_sine_motion_sfx.cpp — PC-native per-object BEHAVIOR handler FUN_80136158.
 //
 // Overlay handler (~x778/field-frame on seaside; ~290 instr), prologue 0x80136158; `jr ra` at
 // 0x801365BC. Disassembled from scratch/ram/field_seaside.bin. Outer state machine on node[4]:

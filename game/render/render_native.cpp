@@ -1,9 +1,9 @@
 // game/render/render_native.cpp — NativeScenePass orchestrator.
 //
 // The START of the real PC-game render subsystem. ONE pass, fully decoupled from the PSX path:
-//   1) NativeScenePass::collect (scene/scene_build.cpp): walk the engine's entity lists + camera -> the
+//   1) NativeScenePass::collect (scene_build.cpp): walk the engine's entity lists + camera -> the
 //      per-instance RenderScene draw list of float-transformed mesh objects (native intermediate rep).
-//   2) NativeScenePass::drawObject (mesh/mesh_draw.cpp): for each object, parse its geomblk, transform
+//   2) NativeScenePass::drawObject (mesh_draw.cpp): for each object, parse its geomblk, transform
 //      verts in FLOAT, project, and draw textured tris/quads into the REAL depth buffer.
 //
 // No GTE, no OT, no GP0 packet. The PSX-vanilla render path stays entirely separate and intact; this is

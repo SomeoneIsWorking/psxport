@@ -16,7 +16,10 @@
 #define GAME_WORLD_SPAWN_H
 #include <cstdint>
 struct Core;
-struct PoolDesc;
+
+// A pool free-list descriptor: the guest address of the free-list HEAD pointer (u32) and of the free
+// COUNT byte (u8). Used by the spawn variants + the despawn free-push.
+struct PoolDesc { uint32_t free_head, cnt; };
 
 class Spawn {
 public:

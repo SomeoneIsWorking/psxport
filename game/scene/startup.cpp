@@ -11,7 +11,7 @@
 // vblank counter is a halfword, the pacing/parity flags are bytes). RE source: scratch/decomp +
 // MAIN.EXE disasm (tools/recomp decode). later-159.
 //
-// Structure: methods on `class Engine` (game/scene/engine.h). Callers reach the init entry points as
+// Structure: methods on `class Engine` (game/core/engine.h). Callers reach the init entry points as
 // `c->engine.initFrameState()` etc. Was the free functions eng_init_* — promoted with the class-instance
 // arc (no Core arg on the method surface; reach Core via `this->core`).
 #include "engine.h"

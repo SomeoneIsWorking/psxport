@@ -1,4 +1,4 @@
-// engine/beh_typed_jumptable_pair.cpp — PC-native per-object BEHAVIOR handler FUN_80138FC8 (OVERLAY).
+// game/ai/beh_typed_jumptable_pair.cpp — PC-native per-object BEHAVIOR handler FUN_80138FC8 (OVERLAY).
 //
 // An OVERLAY-resident per-object behavior routine (lives in the field overlay, not MAIN.EXE), installed
 // at node+0x1c and called every frame by the entity walk with the object node in a0. Same SHAPE as the
