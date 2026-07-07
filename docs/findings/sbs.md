@@ -5,6 +5,19 @@ recomp_path (substrate). Both cores get `pc_skip=false` (faithful branch of ever
 Divergences are FATAL — no residual allowlist. Older notes below refer to the pre-rename
 `mIsFaithful` flag; that's `!pc_skip`.
 
+## SBS = strict pc_faithful, hard-wired (2026-07-07, ba4f50b) + FUTURE: pc_skip observable-output compare
+
+Core A is hard-wired to pc_skip=false — no flag; the SBS harness IS the strict oracle compare,
+no scratch mask ever. `PSXPORT_SBS_MODE=full ./run.sh` is the whole invocation.
+
+**FUTURE HARNESS MODE (user 2026-07-07, not yet built):** a separate compare for pc_skip=true
+that checks only state affecting the OBSERVABLE OUTPUT — pc_skip legitimately collapses cadence
+(different transient scratch), but everything the game/player can observe (consumable interface
+state, persistent world state, the picture, the audio) must still match the oracle. Design
+sketch: reuse the two-core lockstep but with a curated observable-state compare set (task-slot
+consumables, done flags, libcd dir cache, persistent RAM regions, fx/SPU tables) instead of the
+full byte compare — the exact opposite of an allowlist: a positive list of what MUST match.
+
 ## Faithful SOP intro byte-exact (2026-07-07, c4c27a3) — frontier f114 packet-pool pointer
 
 Sop::fieldModeFaithful (mirror of ov_sop_gen_80109450) + Sop::areaLoadFaithful (mirror of
